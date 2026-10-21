@@ -40,6 +40,11 @@ void NotifyWaiters();
 // Pad overrides. Ports are local controller ports (0-3).
 void PadSet(int port, const GCPadStatus& status);
 void PadClear(int port);
+// The port's buttons count VI fields from now: buttons[i] is bit i of the count of `rate_hz`
+// periods since the call, worked out from the host clock whenever the port is read (also for an
+// earlier time: PadOverrideAt). A time base with no jitter for timing tests. Until pad_set or
+// pad_clear.
+void PadCounter(int port, double rate_hz, std::vector<u16> buttons);
 struct ScriptTiming
 {
   u64 starts_at;

@@ -551,6 +551,12 @@ class HarnessClient:
     def pad_clear(self, port: int) -> None:
         self.call("pad_clear", port=_check_port(port))
 
+    def pad_counter(self, port: int, buttons: Sequence[str], rate: float = 60000 / 1001) -> None:
+        """The port's buttons count periods of ``rate`` Hz from now (``buttons[i]`` is bit i),
+        worked out by Dolphin from its own clock at every read: a controller with no timing
+        jitter. Until ``pad_set`` or ``pad_clear``."""
+        self.call("pad_counter", port=_check_port(port), buttons=list(buttons), rate=float(rate))
+
     def pad_script(self, port: int, frames: Sequence[PadInput | Mapping[str, Any]],
                    start: str | int = "next") -> ScriptWindow:
         if not frames:

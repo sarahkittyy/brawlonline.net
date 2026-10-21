@@ -254,6 +254,10 @@ public:
   // How far behind its schedule the throttle found the emulation at worst since the last call
   // (zero: never behind). Only throttled time counts, not re-runs.
   DT TakeMaxBehindSchedule();
+  // CPU thread, for reads of the host's controllers in a network session (bug report #70): the
+  // host time the current emulated instant is due at on the throttle's schedule. Empty while the
+  // speed is unlimited, a rollback's re-run included.
+  std::optional<TimePoint> ScheduledHostTime();
   // CPU thread: how long the throttle slept since the last call, the CPU's slack. The present hold
   // uses no more than that (PresentStats::PresentHoldUntil).
   DT TakeThrottleSleep() { return std::exchange(m_throttle_sleep, DT{}); }

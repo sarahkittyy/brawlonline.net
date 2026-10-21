@@ -7,6 +7,7 @@
 #include <atomic>
 #include <bit>
 #include <chrono>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
@@ -24,11 +25,13 @@
 #include "Core/CoreTiming.h"
 #include "Core/Debugger/OSThread.h"
 #include "Core/Harness/Harness.h"
+#include "Core/HW/GCPad.h"
 #include "Core/HW/Memmap.h"
 #include "Core/HW/SystemTimers.h"
 #include "Core/PowerPC/MMU.h"
 #include "Core/PowerPC/PowerPC.h"
 #include "Core/System.h"
+#include "InputCommon/GCAdapter.h"
 
 namespace Gprb
 {
@@ -681,6 +684,190 @@ std::vector<FrameTraceRow> FrameTraceRows(std::optional<u32> epoch, u32 since, u
 namespace Gprb
 {
 // ---------------------------------------------------------------------------------------------
+// Host controller reads on the throttle's schedule
+
+namespace
+{
+// A re-run takes the last read before it only while that is this recent: after a wait for the
+// peer (seconds, emulated time standing still) it is read anew.
+constexpr auto HOST_PAD_LATCH_MAX_AGE = std::chrono::milliseconds(100);
+// How far behind schedule a read may come and still count as on time (the throttle's wake-up).
+constexpr auto HOST_PAD_LATE = std::chrono::milliseconds(1);
+
+struct HostPadRead
+{
+  bool valid = false;
+  GCPadStatus status{};
+  Clock::time_point instant{};  // the time it stands for
+};
+
+struct HostPads
+{
+  std::atomic<bool> scheduled{false};
+  std::atomic<u32> generation{0};  // SetHostPadsScheduled(true) calls
+  // CPU thread only:
+  u32 seen_generation = 0;
+  std::array<HostPadRead, 4> last{};
+  std::array<Clock::time_point, 4> instant{};  // each channel's last read (PadsLatestSampleAgeMs)
+  HostPadReadStats stats{};
+};
+HostPads s_host_pads;
+
+// Diagnostics (PPR_GPRB_PAD_READ_LOG=<file>, %p in it a number of the process's own): one line per read of a host controller in a session
+// and per pad-thread pass, times in us of the steady clock:
+//   R chan now due|- resim kind buttons instant
+//   P now resim instant0 slot0-buttons
+std::FILE* PadReadLog()
+{
+  static std::FILE* const f = [] {
+    const char* env = std::getenv("PPR_GPRB_PAD_READ_LOG");
+    if (!env || !*env)
+      return static_cast<std::FILE*>(nullptr);
+    std::string path = env;  // %p: a number of this process's own (the time of the first line)
+    if (const size_t at = path.find("%p"); at != std::string::npos)
+      path.replace(at, 2, std::to_string(Clock::now().time_since_epoch().count()));
+    return std::fopen(path.c_str(), "w");
+  }();
+  return f;
+}
+long long Us(Clock::time_point t)
+{
+  return std::chrono::duration_cast<std::chrono::microseconds>(t.time_since_epoch()).count();
+}
+void LogRead(int chan, Clock::time_point now, std::optional<Clock::time_point> due, bool resim,
+             const char* kind, const GCPadStatus& st, Clock::time_point instant)
+{
+  if (std::FILE* f = PadReadLog())
+  {
+    std::fprintf(f, "R %d %lld %lld %d %s %04x %lld\n", chan, Us(now), due ? Us(*due) : -1LL,
+                 resim ? 1 : 0, kind, st.button, Us(instant));
+  }
+}
+
+std::array<Clock::time_point, 4> HostPadReadInstants()
+{
+  return s_host_pads.instant;
+}
+
+GCPadStatus ReadHostPadNow(int chan, HostPadSource source)
+{
+  if (source == HostPadSource::Adapter)
+  {
+    GCPadStatus status = GCAdapter::Input(chan);
+    Harness::ApplyPadOverride(chan, &status);
+    return status;
+  }
+  return Pad::GetStatus(chan);
+}
+
+// The state at `t` (a recent past), if something kept it.
+std::optional<GCPadStatus> ReadHostPadAt(int chan, HostPadSource source, Clock::time_point t)
+{
+  if (auto overridden = Harness::PadOverrideAt(chan, t))
+    return overridden;
+  if (source == HostPadSource::Adapter)
+    return GCAdapter::InputAt(chan, t);
+  return std::nullopt;
+}
+}  // namespace
+
+void SetHostPadsScheduled(bool scheduled)
+{
+  if (scheduled)
+    s_host_pads.generation.fetch_add(1, std::memory_order_relaxed);
+  s_host_pads.scheduled.store(scheduled, std::memory_order_relaxed);
+}
+
+GCPadStatus ReadHostPad(Core::System& system, int chan, HostPadSource source)
+{
+  HostPads& h = s_host_pads;
+  const Clock::time_point now = Clock::now();
+  if (chan < 0 || chan >= 4 || !h.scheduled.load(std::memory_order_relaxed))
+  {
+    if (chan >= 0 && chan < 4)
+      h.instant[chan] = now;
+    return ReadHostPadNow(chan, source);
+  }
+  if (const u32 gen = h.generation.load(std::memory_order_relaxed); gen != h.seen_generation)
+  {
+    h.seen_generation = gen;
+    h.last = {};  // nothing from an earlier session
+  }
+
+  auto& ct = system.GetCoreTiming();
+  HostPadRead& last = h.last[chan];
+  if (ct.IsRollbackResimulating())
+  {
+    if (last.valid && now - last.instant <= HOST_PAD_LATCH_MAX_AGE)
+    {
+      ++h.stats.latched;
+      h.instant[chan] = last.instant;
+      LogRead(chan, now, std::nullopt, true, "latch", last.status, last.instant);
+      return last.status;
+    }
+    // The first read of this re-run stands for it from here on.
+    ++h.stats.relatched;
+    last = {true, ReadHostPadNow(chan, source), now};
+    h.instant[chan] = now;
+    LogRead(chan, now, std::nullopt, true, "relatch", last.status, now);
+    return last.status;
+  }
+
+  GCPadStatus status{};
+  Clock::time_point instant = now;
+  const char* kind = "now";
+  const std::optional<Clock::time_point> due = ct.ScheduledHostTime();
+  if (due && *due < now)
+  {
+    const auto behind = now - *due;
+    if (const std::optional<GCPadStatus> then = ReadHostPadAt(chan, source, *due))
+    {
+      status = *then;
+      instant = *due;
+      kind = "hist";
+      if (behind > HOST_PAD_LATE)
+        ++h.stats.late_history;
+      else
+        ++h.stats.on_time;
+    }
+    else
+    {
+      status = ReadHostPadNow(chan, source);
+      kind = "live";
+      if (behind > HOST_PAD_LATE)
+        ++h.stats.late_live;
+      else
+        ++h.stats.on_time;
+    }
+    if (behind > HOST_PAD_LATE)
+    {
+      h.stats.late_max_ms = std::max(
+          h.stats.late_max_ms, std::chrono::duration<double, std::milli>(behind).count());
+    }
+  }
+  else
+  {
+    status = ReadHostPadNow(chan, source);
+    ++h.stats.on_time;
+  }
+  last = {true, status, instant};
+  h.instant[chan] = instant;
+  LogRead(chan, now, due, false, kind, status, instant);
+  return status;
+}
+
+void HostPadLogLine(const char* kind, long long a, long long b, long long c)
+{
+  if (std::FILE* f = PadReadLog())
+    std::fprintf(f, "%s %lld %lld %lld %lld\n", kind, Us(Clock::now()), a, b, c);
+}
+
+HostPadReadStats TakeHostPadReadStats()
+{
+  return std::exchange(s_host_pads.stats, HostPadReadStats{});
+}
+
+// ---------------------------------------------------------------------------------------------
 // Game-frame-anchored pads
 
 namespace
@@ -706,6 +893,14 @@ struct PadsState
   bool have_latest = false;
   PadSlots latest{};
   std::chrono::steady_clock::time_point latest_at{};
+  // The last passes' slots and the instants the reads behind them stand for (ReadHostPad).
+  struct Pass
+  {
+    PadSlots slots{};
+    std::array<Clock::time_point, 4> sampled_at{};
+  };
+  std::array<Pass, 4> recent{};
+  size_t recent_next = 0, recent_n = 0;
   u64 latest_ticks = 0;  // emulated time of that pass (the watchdog's clock)
   u32 latest_app_frame = 0;  // gfApplication's frame counter then (the watchdog's report)
   u64 passes = 0;
@@ -787,6 +982,20 @@ void PadsOnPadThreadUpdated(Core::System& system)
   memory.CopyFromEmu(s_pads.latest.data(), Addr::PAD_STATUS, s_pads.latest.size());
   s_pads.have_latest = true;
   s_pads.latest_at = std::chrono::steady_clock::now();
+  {
+    auto& pass = s_pads.recent[s_pads.recent_next];
+    pass.slots = s_pads.latest;
+    pass.sampled_at = HostPadReadInstants();
+    s_pads.recent_next = (s_pads.recent_next + 1) % s_pads.recent.size();
+    s_pads.recent_n = std::min(s_pads.recent_n + 1, s_pads.recent.size());
+    if (std::FILE* f = PadReadLog())
+    {
+      std::fprintf(f, "P %lld %d %lld %02x%02x%02x%02x\n", Us(s_pads.latest_at),
+                   system.GetCoreTiming().IsRollbackResimulating() ? 1 : 0, Us(pass.sampled_at[0]),
+                   pass.slots[0], pass.slots[1], pass.slots[2], pass.slots[3]);
+      std::fflush(f);
+    }
+  }
   s_pads.latest_ticks = system.GetCoreTiming().GetTicks();
   ++s_pads.passes;
   {
@@ -804,13 +1013,25 @@ PadSlots PadsLatestRaw()
   return s_pads.latest;
 }
 
-double PadsLatestAgeMs()
+PadSlots PadsSampledBefore(int chan, Clock::time_point t, Clock::time_point* sampled_at)
 {
   std::lock_guard lk(s_pads.mutex);
-  if (s_pads.latest_at == std::chrono::steady_clock::time_point{})
-    return -1;
-  return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - s_pads.latest_at)
-      .count();
+  *sampled_at = {};
+  if (chan < 0 || chan >= 4 || s_pads.recent_n == 0)
+    return s_pads.latest;
+  const size_t size = s_pads.recent.size();
+  for (size_t i = 0; i < s_pads.recent_n; ++i)
+  {
+    const auto& pass = s_pads.recent[(s_pads.recent_next + size - 1 - i) % size];
+    if (pass.sampled_at[chan] != Clock::time_point{} && pass.sampled_at[chan] <= t)
+    {
+      *sampled_at = pass.sampled_at[chan];
+      return pass.slots;
+    }
+  }
+  const auto& newest = s_pads.recent[(s_pads.recent_next + size - 1) % size];
+  *sampled_at = newest.sampled_at[chan];
+  return newest.slots;
 }
 
 namespace

@@ -356,6 +356,32 @@ u32 TranslateRange(u64 addr, u64 len)
 // ---------------------------------------------------------------------------------------------
 // Pads
 
+u16 ButtonMask(const picojson::value& b)
+{
+  if (!b.is<std::string>())
+    Fail("button names must be strings");
+  std::string name = b.get<std::string>();
+  Common::ToUpper(&name);
+  static const std::array<std::pair<const char*, u16>, 12> table{{
+      {"A", PAD_BUTTON_A},
+      {"B", PAD_BUTTON_B},
+      {"X", PAD_BUTTON_X},
+      {"Y", PAD_BUTTON_Y},
+      {"Z", PAD_TRIGGER_Z},
+      {"L", PAD_TRIGGER_L},
+      {"R", PAD_TRIGGER_R},
+      {"START", PAD_BUTTON_START},
+      {"DUP", PAD_BUTTON_UP},
+      {"DDOWN", PAD_BUTTON_DOWN},
+      {"DLEFT", PAD_BUTTON_LEFT},
+      {"DRIGHT", PAD_BUTTON_RIGHT},
+  }};
+  const auto it = std::ranges::find_if(table, [&](const auto& e) { return name == e.first; });
+  if (it == table.end())
+    Fail(fmt::format("unknown button '{}'", name));
+  return it->second;
+}
+
 GCPadStatus ParsePad(const Args& args)
 {
   GCPadStatus pad{};
@@ -366,30 +392,7 @@ GCPadStatus ParsePad(const Args& args)
     if (!buttons->is<picojson::array>())
       Fail("'buttons' must be a list");
     for (const auto& b : buttons->get<picojson::array>())
-    {
-      if (!b.is<std::string>())
-        Fail("button names must be strings");
-      std::string name = b.get<std::string>();
-      Common::ToUpper(&name);
-      static const std::array<std::pair<const char*, u16>, 12> table{{
-          {"A", PAD_BUTTON_A},
-          {"B", PAD_BUTTON_B},
-          {"X", PAD_BUTTON_X},
-          {"Y", PAD_BUTTON_Y},
-          {"Z", PAD_TRIGGER_Z},
-          {"L", PAD_TRIGGER_L},
-          {"R", PAD_TRIGGER_R},
-          {"START", PAD_BUTTON_START},
-          {"DUP", PAD_BUTTON_UP},
-          {"DDOWN", PAD_BUTTON_DOWN},
-          {"DLEFT", PAD_BUTTON_LEFT},
-          {"DRIGHT", PAD_BUTTON_RIGHT},
-      }};
-      const auto it = std::ranges::find_if(table, [&](const auto& e) { return name == e.first; });
-      if (it == table.end())
-        Fail(fmt::format("unknown button '{}'", name));
-      pad.button |= it->second;
-    }
+      pad.button |= ButtonMask(b);
   }
 
   auto parse_xy = [&](const char* key, u8* x, u8* y) {
@@ -717,6 +720,26 @@ Result CmdPadSet(const Args& args)
 {
   const int port = GetPadPort(args);
   PadSet(port, ParsePad(args));
+  return {};
+}
+
+Result CmdPadCounter(const Args& args)
+{
+  const int port = GetPadPort(args);
+  double rate = 60000.0 / 1001.0;
+  if (const picojson::value* v = Find(args, "rate"))
+  {
+    if (!v->is<double>() || !(v->get<double>() > 0) || v->get<double>() > 1000)
+      Fail("'rate' must be a number of Hz, 0-1000");
+    rate = v->get<double>();
+  }
+  const picojson::value* buttons_v = Find(args, "buttons");
+  if (!buttons_v || !buttons_v->is<picojson::array>() || buttons_v->get<picojson::array>().empty())
+    Fail("'buttons' must be a non-empty list");
+  std::vector<u16> buttons;
+  for (const auto& b : buttons_v->get<picojson::array>())
+    buttons.push_back(ButtonMask(b));
+  PadCounter(port, rate, std::move(buttons));
   return {};
 }
 
@@ -2037,6 +2060,7 @@ const std::vector<std::pair<std::string_view, Handler>>& Handlers()
       {"hash_mem", CmdHashMem},
       {"pad_set", CmdPadSet},
       {"pad_clear", CmdPadClear},
+      {"pad_counter", CmdPadCounter},
       {"pad_script", CmdPadScript},
       {"pad_script_status", CmdPadScriptStatus},
       {"rumble_status", CmdRumbleStatus},

@@ -18,6 +18,7 @@
 #include "Common/Logging/Log.h"
 #include "Common/Logging/LogManager.h"
 #include "Common/StringUtil.h"
+#include "Common/TimedHistory.h"
 #include "Core/Config/MainSettings.h"
 #include "Core/ConfigManager.h"
 #include "Core/Core.h"
@@ -79,9 +80,21 @@ struct PortState
   // new script starts. Empty if the port was not overridden then (real controller).
   std::optional<GCPadStatus> gap;
 
+  // pad_counter: the buttons count periods of the host clock since t0.
+  struct Counter
+  {
+    Clock::time_point t0{};
+    double rate_hz = 0;
+    std::vector<u16> buttons;
+  };
+  std::optional<Counter> counter;
+
   // Cached result for the current poll.
   bool overriding = false;
   GCPadStatus current{};
+  // That result each time it was worked out, with the host time (PadOverrideAt). Empty: the
+  // real controller then.
+  Common::TimedHistory<std::optional<GCPadStatus>, 128> history;
 };
 
 std::mutex s_pad_mutex;
@@ -91,6 +104,19 @@ GCPadStatus NeutralPad()
 {
   GCPadStatus pad{};
   pad.isConnected = true;
+  return pad;
+}
+
+GCPadStatus CounterPad(const PortState::Counter& c, Clock::time_point t)
+{
+  GCPadStatus pad = NeutralPad();
+  const double seconds = std::chrono::duration<double>(t - c.t0).count();
+  const u64 count = seconds > 0 ? static_cast<u64>(seconds * c.rate_hz) : 0;
+  for (size_t i = 0; i < c.buttons.size() && i < 64; ++i)
+  {
+    if (count & (u64{1} << i))
+      pad.button |= c.buttons[i];
+  }
   return pad;
 }
 
@@ -108,7 +134,12 @@ void RecomputePort(int port, u64 poll_index)
       state.neutral = true;
   }
 
-  if (state.script_active && poll_index >= state.script_start)
+  if (state.counter)
+  {
+    state.overriding = true;
+    state.current = CounterPad(*state.counter, Clock::now());
+  }
+  else if (state.script_active && poll_index >= state.script_start)
   {
     state.overriding = true;
     state.current = state.script[poll_index - state.script_start];
@@ -136,6 +167,9 @@ void RecomputePort(int port, u64 poll_index)
   {
     state.overriding = false;
   }
+
+  state.history.Push(Clock::now(),
+                     state.overriding ? std::optional<GCPadStatus>(state.current) : std::nullopt);
 
   const u32 bit = 1u << port;
   if (state.overriding || state.script_active)
@@ -189,8 +223,29 @@ void ApplyPadOverrideSlow(int port, GCPadStatus* status)
     return;
   std::lock_guard lk(s_pad_mutex);
   const PortState& state = s_ports[port];
-  if (state.overriding)
+  if (state.counter)
+    *status = CounterPad(*state.counter, Clock::now());
+  else if (state.overriding)
     *status = state.current;
+}
+
+std::optional<GCPadStatus> PadOverrideAtSlow(int port, Clock::time_point t)
+{
+  if (port < 0 || port > 3)
+    return std::nullopt;
+  std::lock_guard lk(s_pad_mutex);
+  const PortState& state = s_ports[port];
+  if (state.counter)
+    return CounterPad(*state.counter, t);
+  // A script steps with the game's reads, not with time: its current entry.
+  if (!state.script_active)
+  {
+    if (const std::optional<GCPadStatus>* then = state.history.At(t))
+      return *then;
+  }
+  if (state.overriding)
+    return state.current;
+  return std::nullopt;
 }
 
 // Brawl (and P+, which runs on it) reads its pads once per game frame from gf_pad's updateLow,
@@ -436,6 +491,7 @@ void PadSet(int port, const GCPadStatus& status)
   PortState& ps = s_ports[port];
   ps.set = status;
   ps.neutral = false;
+  ps.counter.reset();
   RecomputePort(port, s_current_poll_index);
 }
 
@@ -443,7 +499,18 @@ void PadClear(int port)
 {
   std::lock_guard lk(s_pad_mutex);
   PortState& ps = s_ports[port];
+  auto history = ps.history;
   ps = PortState{};
+  ps.history = history;
+  RecomputePort(port, s_current_poll_index);
+}
+
+void PadCounter(int port, double rate_hz, std::vector<u16> buttons)
+{
+  std::lock_guard lk(s_pad_mutex);
+  PortState& ps = s_ports[port];
+  ps.counter = PortState::Counter{Clock::now(), rate_hz, std::move(buttons)};
+  ps.neutral = false;
   RecomputePort(port, s_current_poll_index);
 }
 
