@@ -8,7 +8,6 @@ import LandscapeIcon from "@mui/icons-material/Landscape";
 import MoreHorizIcon from "@mui/icons-material/MoreHoriz";
 import PlayCircleOutlineIcon from "@mui/icons-material/PlayCircleOutline";
 import SportsCricket from "@mui/icons-material/SportsCricket";
-import StarBorderIcon from "@mui/icons-material/StarBorder";
 import TimerIcon from "@mui/icons-material/Timer";
 import TrackChangesIcon from "@mui/icons-material/TrackChanges";
 import type { FileResult } from "@replays/types";
@@ -16,6 +15,7 @@ import { frameToGameTimer, GameMode } from "@slippi/slippi-js";
 import { groupBy } from "common/group_by";
 import React, { useCallback, useMemo } from "react";
 
+import { ClapperboardIcon } from "@/components/clapperboard_icon";
 import { useReplayHighlight } from "@/lib/hooks/use_replay_highlight";
 import { useReplays } from "@/lib/hooks/use_replays";
 import { usePPlusVersions } from "@/lib/pplus/use_pplus_versions";
@@ -106,7 +106,7 @@ export const ReplayFileContainer = React.memo(function ReplayFileContainer({
         onClick: (e: React.MouseEvent<HTMLButtonElement, MouseEvent>) => onOpenMenu(index, e.currentTarget),
       },
       {
-        Icon: StarBorderIcon,
+        Icon: ClapperboardIcon,
         label: Messages.showHighlights(),
         onClick: onShowStats,
       },
