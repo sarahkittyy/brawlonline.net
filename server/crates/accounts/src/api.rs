@@ -137,6 +137,15 @@ fn verify_mail_budget(state: &AppState) -> ApiResult<()> {
     })
 }
 
+/// Gives back what a refused sign-up took: its IP's slot, and its verification email's.
+fn give_back_signup(state: &AppState, ip: &IpAddr, verify_mail: bool) {
+    let mut l = state.limits.lock().unwrap();
+    l.signup_ip.undo(ip);
+    if verify_mail {
+        l.verify_mail.undo(&());
+    }
+}
+
 fn bearer(headers: &HeaderMap) -> Option<&str> {
     headers.get("authorization")?.to_str().ok()?.strip_prefix("Bearer ").map(str::trim).filter(|t| !t.is_empty())
 }
@@ -206,17 +215,26 @@ pub async fn signup(
         return Err(ApiError::conflict("email_taken", CreateUserError::EmailTaken.to_string()));
     }
     // Accounts per IP, then the shared verification email budget (in that order, so one
-    // IP cannot use up the shared budget).
+    // IP cannot use up the shared budget). A sign-up refused after that gives its slots
+    // back: the per-IP limit counts accounts, so a player who tried 3 times while the
+    // budget was used up is not told their network made too many.
     limit(&state, |l, now| l.signup_ip.check(&ip, now)).map_err(|wait| {
         ApiError::rate_limited(wait).with_message("Too many new accounts from this network. Please try again later.")
     })?;
-    if state.cfg.require_email_verification {
-        verify_mail_budget(&state)?;
+    let verify = state.cfg.require_email_verification;
+    if verify {
+        verify_mail_budget(&state).inspect_err(|_| give_back_signup(&state, &ip, false))?;
     }
-    let pw_hash = password::hash_async(state.hash_params, req.password).await?;
-    let user = store::create_user(&state.pool, &email, &pw_hash, &req.display_name).await.map_err(|e| match e {
-        CreateUserError::EmailTaken => ApiError::conflict("email_taken", e.to_string()),
-        CreateUserError::Db(e) => ApiError::internal(e),
+    let refused = |e: ApiError| {
+        give_back_signup(&state, &ip, verify);
+        e
+    };
+    let pw_hash = password::hash_async(state.hash_params, req.password).await.map_err(|e| refused(e.into()))?;
+    let user = store::create_user(&state.pool, &email, &pw_hash, &req.display_name).await.map_err(|e| {
+        refused(match e {
+            CreateUserError::EmailTaken => ApiError::conflict("email_taken", e.to_string()),
+            CreateUserError::Db(e) => ApiError::internal(e),
+        })
     })?;
     tracing::info!(uid = %user.uid, "account created");
     if state.cfg.require_email_verification {

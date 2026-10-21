@@ -115,6 +115,13 @@ impl<K: Hash + Eq + Clone> RateLimiter<K> {
         Ok(())
     }
 
+    /// Takes back the latest hit for `key`, for an action refused after its check passed.
+    pub fn undo(&mut self, key: &K) {
+        if let Some(q) = self.hits.get_mut(key) {
+            q.pop_back();
+        }
+    }
+
     /// Forgets a key (for example after a successful login).
     pub fn reset(&mut self, key: &K) {
         self.hits.remove(key);
@@ -177,6 +184,9 @@ mod tests {
         assert!(rl.check(&k, t0 + Duration::from_secs(1)).is_err());
         rl.reset(&k);
         assert!(rl.check(&k, t0 + Duration::from_secs(1)).is_ok());
+        rl.undo(&k);
+        assert!(rl.check(&k, t0 + Duration::from_secs(1)).is_ok());
+        rl.undo(&99);
         for i in 0..100u64 {
             let _ = rl.check(&i, t0);
         }

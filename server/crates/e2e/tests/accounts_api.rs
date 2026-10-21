@@ -345,6 +345,12 @@ async fn signups_and_emails_are_limited() {
     let (st, retry, body) = signup("198.51.100.7", "c0@x.test").await;
     assert_eq!((st, retry), (429, true));
     assert_eq!(body["error"]["message"], "Too many sign-ups right now. Please try again later.");
+    // Those refusals cost the IP no account slot: tries 2 to 4 are still about the budget.
+    for i in 1..4 {
+        let (st, _, body) = signup("198.51.100.7", &format!("c{i}@x.test")).await;
+        assert_eq!(st, 429);
+        assert_eq!(body["error"]["message"], "Too many sign-ups right now. Please try again later.", "try {i}");
+    }
     let (_, _, login) =
         post("/v1/auth/login", "198.51.100.8", None, json!({"email": "a0@x.test", "password": PW})).await;
     let token = login["sessionToken"].as_str().unwrap().to_string();
