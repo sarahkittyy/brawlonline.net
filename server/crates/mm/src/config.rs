@@ -78,7 +78,7 @@ pub struct Config {
     pub ping_limit_ms: f64,
 
     /// ... raised by this many ms ...
-    #[arg(long, env = "MM_PING_LIMIT_STEP_MS", default_value_t = 40.0)]
+    #[arg(long, env = "MM_PING_LIMIT_STEP_MS", default_value_t = 30.0)]
     pub ping_limit_step_ms: f64,
 
     /// ... for every this many seconds the shorter-waiting player has waited ...
@@ -193,7 +193,7 @@ impl Config {
             ranked_band_step_secs: 15,
             geoip_file: None,
             ping_limit_ms: 100.0,
-            ping_limit_step_ms: 40.0,
+            ping_limit_step_ms: 30.0,
             ping_limit_step_secs: 10,
             ping_limit_open_secs: 40,
             rematch_hold_secs: 30,

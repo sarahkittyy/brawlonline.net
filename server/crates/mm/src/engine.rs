@@ -39,8 +39,8 @@
 //! Both queues hold back a pair whose estimated ping ([`crate::geo`]: GeoIP distance) is above the
 //! ping limit, `ping_limit` ms widened by `ping_limit_step` for every `ping_limit_interval` the
 //! shorter-waiting of the two has waited, and no limit at all after `ping_limit_open` (100 ms,
-//! +40 every 10 s, open at 40 s: a 200 ms pair waits until both have searched 30 s, for someone
-//! closer). The shorter wait, so a new search does not take a far opponent at once just because
+//! +30 every 10 s, open at 40 s: a 150 ms pair waits until both have searched 20 s, a 200 ms pair
+//! 40 s, for someone closer). The shorter wait, so a new search does not take a far opponent at once just because
 //! that one has searched a while (2026-10-21). A pair without an
 //! estimate (an address the database does not place, or no database) is never held back. Two
 //! players who just played each other (each one's last Unranked or Ranked opponent, within
@@ -74,7 +74,7 @@ use std::time::{Duration, Instant};
 use chrono::{DateTime, Utc};
 use common::chat::ChatRequest;
 use common::codes::{decode_search_code, ConnectCode};
-use common::db::MmUser;
+use common::db::{MmUser, SpeedCheckRecord, SpeedReportRecord};
 use common::net::{ip_key, sanitize_lan_addr, to_v4};
 use common::playkey::PlayKeySecret;
 use common::proto::{
@@ -204,7 +204,7 @@ impl Default for EngineConfig {
             ranked_band_interval: Duration::from_secs(15),
             geoip: GeoDb::default(),
             ping_limit: 100.0,
-            ping_limit_step: 40.0,
+            ping_limit_step: 30.0,
             ping_limit_interval: Duration::from_secs(10),
             ping_limit_open: Duration::from_secs(40),
             rematch_hold: Duration::from_secs(30),
@@ -354,7 +354,15 @@ pub enum Output {
         winner: Option<Uuid>,
         end_method: String,
     },
+    /// A player's game's word on its speed over a game (`speed_reports`, `common::speed`).
+    SpeedReport(Box<SpeedReportRecord>),
+    /// A waiting-room speed check (`speed_checks`).
+    SpeedCheck(Box<SpeedCheckRecord>),
 }
+
+/// `speed-check`s an account may send: 3 a minute, 60 an hour.
+const SPEED_CHECK_WINDOWS: [Window; 2] =
+    [Window::new(3, Duration::from_secs(60)), Window::new(60, Duration::from_secs(3600))];
 
 #[derive(Debug, Clone)]
 struct Pending {
@@ -461,6 +469,8 @@ pub struct Engine {
     ticket_limiter: RateLimiter<Uuid>,
     ip_limiter: RateLimiter<IpAddr>,
     hello_limiter: RateLimiter<Uuid>,
+    /// `speed-check`s per account (each search sends one): every one is a row.
+    speed_check_limiter: RateLimiter<Uuid>,
     rooms: RoomBook,
     mod_rooms: ModRoomBook,
     chat: ChatBook,
@@ -518,6 +528,7 @@ impl Engine {
             ticket_limiter,
             ip_limiter,
             hello_limiter,
+            speed_check_limiter: RateLimiter::new(&SPEED_CHECK_WINDOWS),
             mod_rooms: ModRoomBook::new(mod_rooms_cfg),
             rooms: RoomBook::new(rooms_cfg),
             chat,
@@ -924,7 +935,8 @@ impl Engine {
                 ClientMessage::Room(_)
                 | ClientMessage::Chat(_)
                 | ClientMessage::Mods(_)
-                | ClientMessage::Spectate(_),
+                | ClientMessage::Spectate(_)
+                | ClientMessage::SpeedCheck(_),
             ) => {
                 // Rooms, chat, Brawl Mods rooms and spectating need an online connection: `hello`
                 // first.
@@ -1029,7 +1041,31 @@ impl Engine {
             }
             Ok(ClientMessage::ModsEndpoint(_)) => room_error(out, common::mods::MODS_ENDPOINT, msg::INVALID_REQUEST),
             Ok(ClientMessage::Chat(req)) => self.on_chat(now, conn, &o, req, out),
-            Ok(ClientMessage::Spectate(Ok(req))) => self.live.request(now, conn, o.user.uid, req, out),
+            Ok(ClientMessage::Spectate(Ok(req))) => {
+                if let common::spectate::SpectateRequest::End(e) = &req {
+                    self.speed_report(&o, e, out);
+                }
+                self.live.request(now, conn, o.user.uid, req, out)
+            }
+            Ok(ClientMessage::SpeedCheck(Ok(check))) => {
+                // Log only for now (docs/design/speed-check.md): recorded, nothing refused.
+                if self.speed_check_limiter.check(&o.user.uid, now).is_err() {
+                    return tracing::warn!(conn, uid = %o.user.uid, "speed check dropped: too many");
+                }
+                tracing::info!(
+                    uid = %o.user.uid, mode = %check.mode, windows = ?check.windows, gaps = check.gaps,
+                    backend = %check.backend, platform = %o.client.platform, verdict = ?check.verdict(),
+                    "speed check"
+                );
+                out.push(Output::SpeedCheck(Box::new(SpeedCheckRecord {
+                    uid: o.user.uid,
+                    check,
+                    app_version: o.client.app_version.clone(),
+                    platform: o.client.platform.clone(),
+                })));
+            }
+            // A newer build's or a broken one: nothing to answer (the game expects no reply).
+            Ok(ClientMessage::SpeedCheck(Err(why))) => tracing::warn!(conn, "bad speed check: {why}"),
             Ok(ClientMessage::Spectate(Err((op, why)))) => {
                 tracing::warn!(conn, "bad spectate request: {why}");
                 Self::send(
@@ -1050,6 +1086,30 @@ impl Engine {
                 room_error(out, "invalid", msg::INVALID_REQUEST);
             }
         }
+    }
+
+    /// A `spectate-end` with this PC's speed over the game: recorded when its player plays in that
+    /// match (`speed_reports`).
+    fn speed_report(&self, o: &Online, e: &common::spectate::EndReport, out: &mut Vec<Output>) {
+        let Some(perf) = e.perf.clone() else { return };
+        let Some(mode) = self.live.speed_mode(&e.match_id, o.user.uid) else { return };
+        if perf.slow_game() {
+            tracing::info!(
+                uid = %o.user.uid, match_id = %e.match_id, mode, fps = perf.fps, own_late = perf.own_late,
+                platform = %o.client.platform, "slow game: this player's PC could not keep full speed"
+            );
+        }
+        out.push(Output::SpeedReport(Box::new(SpeedReportRecord {
+            uid: o.user.uid,
+            match_id: e.match_id.clone(),
+            mode: mode.to_string(),
+            game_uid: e.game_uid.clone(),
+            set_game: e.set_game,
+            end_method: e.end_method.clone(),
+            perf,
+            app_version: o.client.app_version.clone(),
+            platform: o.client.platform.clone(),
+        })));
     }
 
     /// A `chat-*` request on an online connection. Refusals are `chat-error`; the connection stays.
@@ -2644,7 +2704,7 @@ mod tests {
         // Sydney, then New York: about 240 ms apart, held back.
         h.unranked(16, &u[0]);
         assert!(matches(&h.unranked(1, &u[1])).is_empty());
-        // The limit is 100 ms, +40 every 10 s of the shorter wait: 220 at 30 s, not enough.
+        // The limit is 100 ms, +30 every 10 s of the shorter wait: 190 at 30 s, not enough.
         assert!(matches(&h.advance(Duration::from_secs(25))).is_empty());
         // Someone in London comes: 93 ms to New York, taken at once; Sydney keeps waiting.
         h.connect(32, 41000);
@@ -2678,10 +2738,10 @@ mod tests {
             h.connect(c, 41000);
         }
         h.connect(48, 41000);
-        // London and Los Angeles (138 ms apart) wait until both have searched 10 s ...
+        // London and Los Angeles (138 ms apart) wait until both have searched 20 s ...
         h.unranked(32, &u[0]);
         assert!(matches(&h.unranked(48, &u[1])).is_empty());
-        h.now += Duration::from_secs(10);
+        h.now += Duration::from_secs(20);
         // ... and then New York comes: London takes it (93 ms) over Los Angeles (within the limit
         // by now, but the higher one).
         h.connect(1, 41000);
@@ -2694,7 +2754,7 @@ mod tests {
     fn a_new_search_does_not_take_a_far_opponent_at_once() {
         let mut h = Harness::new(geo_rules());
         let u = h.users(4);
-        // London has searched 30 s alone: its own limit would be 220 ms by now.
+        // London has searched 30 s alone: its own limit would be 190 ms by now.
         h.connect(32, 41000);
         h.unranked(32, &u[0]);
         assert!(matches(&h.advance(Duration::from_secs(30))).is_empty());
@@ -2709,10 +2769,10 @@ mod tests {
         assert_eq!(m.len(), 1);
         assert_eq!(pair_of(&m[0]), pair_key(u[0].uid, u[2].uid));
         // Another London player for Los Angeles: the pair is held until the new one has searched
-        // 10 s (140 ms).
+        // 20 s (160 ms).
         h.connect(33, 41000);
         assert!(matches(&h.unranked(33, &u[3])).is_empty());
-        assert!(matches(&h.advance(Duration::from_secs(9))).is_empty());
+        assert!(matches(&h.advance(Duration::from_secs(19))).is_empty());
         let m = matches(&h.advance(Duration::from_secs(1)));
         assert_eq!(m.len(), 1);
         assert_eq!(pair_of(&m[0]), pair_key(u[1].uid, u[3].uid));
