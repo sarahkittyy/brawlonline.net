@@ -58,3 +58,17 @@ export type HighlightPlayItem = {
   startFrame: number;
   endFrame: number;
 };
+
+/** A replay's highlights in the Replays > Highlights tab: which replay, when it was played (ISO). */
+export type GameHighlights = {
+  path: string;
+  date: string;
+  highlights: ReplayHighlights;
+};
+
+/** The Highlights tab's fill: a replay done (`game` when it has any), and how many of all. */
+export type AllHighlightsEvent = {
+  game?: GameHighlights;
+  done: number;
+  total: number;
+};

@@ -60,7 +60,6 @@ type GameProfileHeaderProps = {
   total?: number;
   gameDetails: {
     stageName: string;
-    platform: string;
     startAtDisplay: Date;
     duration: string;
     gameMode: GameMode;

@@ -3,9 +3,9 @@
 A replay's stats page lists that game's highlights (strings the launcher finds in the recorded
 fighter memory) and L+R+Z clips, and plays them in the playback Dolphin. The decisions and the
 measurements behind them are in the prototype's DESIGN.md (D:\code\brawl-highlights, local only);
-this is what was built. Video export (single clips and the combo movie, §5) came 2026-10-21. Not
-yet: background detection over all replays, the sidebar's ★ Highlights folder (and with it combo
-movies across games), `.bhl` files, a savestate cache.
+this is what was built. Video export (single clips and the combo movie, §4-5) and the Replays >
+Highlights tab of every replay's highlights (§6) came 2026-10-21. Not yet: `.bhl` files, a
+savestate cache.
 
 ## 1. Detection (launcher main process)
 
@@ -67,9 +67,10 @@ the last frame, no checksum differing, one match armed).
 
 ## 4. Rendering, the launcher (2026-10-21)
 
-The stats page has a tick box on every row (and one for all). **Render (w/ Music)** and **Render
-(No Music)** render the ticked rows, a video each; with two or more ticked, **One combo movie**
-makes them one video, in the list's order. No Dolphin window opens: under the buttons each job
+Above the rows: **Render as Video** (a tick box; the user's wording, 2026-10-21). Ticked, every row
+gets a tick box ("N selected", Select all / Select none) and **One combo movie** can be ticked;
+untick it and the rows' ticks go. **Render (w/ Music)** and **Render (No Music)** render the
+ticked rows, a video each, or with One combo movie one video, in the list's order. No Dolphin window opens: under the buttons each job
 shows its name, w/ Music or No Music, "Waiting", "Starting...", "Rendering 45%" (a combo: "Clip 2 of
 5 · 45%") with a bar and **Cancel**, then "Saved" with **Show in folder**, or "Couldn't render it:
 <why>". Jobs belong to the launcher run (main keeps them; the page shows this replay's, a cancelled
@@ -84,9 +85,8 @@ for every file system, and ` (2)`, ` (3)`... when taken.
 Project+ versions (pplus-versions.md): a render request is decided as a play request is
 (`DolphinManager.decideRenderReleases`), so a v3.2.0 replay asks first ("This clip is from Project+
 v3.2.0", "Download and render"), with no "anyway": a clip renders on its own release or not at all
-(`withRenderVersion`). A combo whose replays are on different releases becomes one file per
-release ("... (part 1 of 2)"): a Dolphin plays one release's card (only possible once combos can
-span games).
+(`withRenderVersion`). A combo whose replays are on different releases (the Highlights tab's)
+becomes one file per release ("... (part 1 of 2)"): a Dolphin plays one release's card.
 
 `render_queue.ts` (main) runs the jobs one at a time in the **render Dolphin**: the playback
 Dolphin's command line plus `-b --render` (no window), `[Core] EmulationSpeed` 0 (as fast as the PC
@@ -161,3 +161,24 @@ and audio both 8.0417 s, ~13 s from Dolphin's start.
 Harness: `test_replay.py::test_launcher_comm_file_renders_highlights` (a recorded Direct game; two
 clips into one file, then one more in the same match into another; the frame count; with ffprobe
 on PATH, the streams and their lengths).
+
+## 6. Replays > Highlights (2026-10-21)
+
+Replays has two tabs as Home has: **Replays** (the replay browser) and **Highlights**. The header's
+Replays button always opens the Replays tab (no longer the last stats page). A replay row's stats
+button is a star, "Show highlights" (its stats page, which lists that game's highlights). The
+stats page's header no longer shows the platform ("Brawlonline" on every one of ours).
+
+The Highlights tab (`all_highlights_page.tsx`) lists every replay's highlights, then the L+R+Z
+clips, each row with its game's date; no game header, a back arrow (to the Replays tab). Sorted
+Best first (the private score, across games) or Newest first; clips newest first. Play, ↑/↓, Play
+all, Render as Video and combo movies work as on a stats page (`HighlightRows`, shared); a combo of
+several games is named after when it was made: `2026-10-21 0845 Combo movie (2 highlights)`.
+
+`all_highlights.ts` (main): the .brep files in the replay folders (root and extra, 4 levels down),
+those whose highlights are in `highlight_cache` (as the file, detector and settings are now) at
+once, the others afterwards one replay at a time in the highlights worker with 50 ms between them
+(a first run over a thousand replays never bogs the PC down), each sent as an event with the count
+done (the tab: "Finding highlights in your replays... 12 of 120"). Opening the tab again starts
+over: a fill still running stops at its next replay. Measured here: 54 replays none of which were
+cached, all found in 5.4 s.

@@ -1,4 +1,4 @@
-import type { ReplayHighlights } from "@replays/highlights/types";
+import type { AllHighlightsEvent, GameHighlights, ReplayHighlights } from "@replays/highlights/types";
 import type {
   BulkDeleteOptions,
   BulkDeleteResult,
@@ -97,6 +97,17 @@ class MockReplayClient implements ReplayService {
       highlights: [highlight(1, 2, 4200, 19.3), highlight(2, 1, 1800, 15.2), highlight(1, 2, 9100, 12.1)],
       clips: [{ kind: "clip", port: 1, frame: 6000, startFrame: 4770, endFrame: 6120 }],
     };
+  }
+
+  @delayAndMaybeError(SHOULD_ERROR)
+  async getAllHighlights(): Promise<{ games: GameHighlights[]; pending: number; total: number }> {
+    const highlights = await this.getHighlights("");
+    const path = "C:/Replays/2026-10-15 2153 Ranked G1 - sarahkitty (Link) vs Smear (Snake).brep";
+    return { games: [{ path, date: "2026-10-15T21:53:00.000Z", highlights }], pending: 0, total: 1 };
+  }
+
+  onAllHighlights(_handle: (event: AllHighlightsEvent) => void): () => void {
+    return () => void 0;
   }
 
   onReplayLoadProgressUpdate(_handle: (progress: Progress) => void): () => void {

@@ -6,14 +6,17 @@ import path from "path";
 
 import { DatabaseReplayProvider } from "./database_replay_provider/database_replay_provider";
 import { FolderTreeService } from "./folder_tree_service";
+import { AllHighlights } from "./highlights/all_highlights";
 import { HighlightService } from "./highlights/highlight_service";
 import {
+  ipc_allHighlightsEvent,
   ipc_bulkDeleteReplays,
   ipc_calculateGameStats,
   ipc_calculateStadiumStats,
   ipc_deleteReplays,
   ipc_findReplaysForMatches,
   ipc_getAllFilePaths,
+  ipc_getAllHighlights,
   ipc_getReplayHighlights,
   ipc_initializeFolderTree,
   ipc_loadProgressUpdatedEvent,
@@ -71,6 +74,19 @@ export default function setupReplaysIpc({ settingsManager }: { settingsManager: 
       return { detectHighlights: !disableHighlightDetection, clipOnLrz };
     },
   );
+
+  const allHighlights = new AllHighlights(
+    highlightService,
+    () => {
+      const { rootSlpPath, extraSlpPaths } = settingsManager.get().settings;
+      return [rootSlpPath, ...extraSlpPaths];
+    },
+    (event) => void ipc_allHighlightsEvent.main!.trigger(event).catch(log.warn),
+  );
+
+  ipc_getAllHighlights.main!.handle(async () => {
+    return await allHighlights.list();
+  });
 
   ipc_getReplayHighlights.main!.handle(async ({ filePath }) => {
     return await highlightService.getHighlights(filePath);

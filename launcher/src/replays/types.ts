@@ -1,7 +1,7 @@
 import type { ReplayFilter } from "@database/filters/types";
 import type { StadiumStatsType, StatsType } from "@slippi/slippi-js";
 
-import type { ReplayHighlights } from "./highlights/types";
+import type { AllHighlightsEvent, GameHighlights, ReplayHighlights } from "./highlights/types";
 
 /** The stats call's error for a replay whose stats are not decoded yet (.brep): the stats page says "Coming soon". */
 export const STATS_NOT_AVAILABLE = "Stats are not available for this replay format yet.";
@@ -135,6 +135,12 @@ export interface ReplayService {
   findReplaysForMatches(matchIds: string[], folders: string[]): Promise<Record<string, string[]>>;
   /** A .brep's highlights and L+R+Z clips (found the first time, then cached). */
   getHighlights(filePath: string): Promise<ReplayHighlights>;
+  /**
+   * Every replay's highlights (the Replays > Highlights tab): the ones known now; the replays not
+   * looked at yet are, one at a time, and come as `onAllHighlights` events.
+   */
+  getAllHighlights(): Promise<{ games: GameHighlights[]; pending: number; total: number }>;
+  onAllHighlights(handle: (event: AllHighlightsEvent) => void): () => void;
   onReplayLoadProgressUpdate(handle: (progress: Progress) => void): () => void;
   onStatsPageRequest(handle: (filePath: string) => void): () => void;
 }

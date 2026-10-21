@@ -1,7 +1,8 @@
 import type { StadiumStatsType, StatsType } from "@slippi/slippi-js/node";
+import type { EmptyPayload } from "utils/ipc";
 import { _, makeEndpoint } from "utils/ipc";
 
-import type { ReplayHighlights } from "./highlights/types";
+import type { AllHighlightsEvent, GameHighlights, ReplayHighlights } from "./highlights/types";
 import type {
   BulkDeleteOptions,
   BulkDeleteResult,
@@ -58,7 +59,15 @@ export const ipc_getReplayHighlights = makeEndpoint.main(
   <ReplayHighlights>_,
 );
 
+export const ipc_getAllHighlights = makeEndpoint.main(
+  "getAllHighlights",
+  <EmptyPayload>_,
+  <{ games: GameHighlights[]; pending: number; total: number }>_,
+);
+
 // Events
+
+export const ipc_allHighlightsEvent = makeEndpoint.renderer("replays_allHighlights", <AllHighlightsEvent>_);
 
 export const ipc_loadProgressUpdatedEvent = makeEndpoint.renderer("replays_loadProgressUpdated", <Progress>_);
 

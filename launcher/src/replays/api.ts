@@ -1,11 +1,14 @@
 /* eslint-disable import/no-default-export */
+import type { AllHighlightsEvent } from "./highlights/types";
 import {
+  ipc_allHighlightsEvent,
   ipc_bulkDeleteReplays,
   ipc_calculateGameStats,
   ipc_calculateStadiumStats,
   ipc_deleteReplays,
   ipc_findReplaysForMatches,
   ipc_getAllFilePaths,
+  ipc_getAllHighlights,
   ipc_getReplayHighlights,
   ipc_initializeFolderTree,
   ipc_loadProgressUpdatedEvent,
@@ -54,6 +57,16 @@ const replayApi: ReplayService = {
   async getHighlights(filePath: string) {
     const { result } = await ipc_getReplayHighlights.renderer!.trigger({ filePath });
     return result;
+  },
+  async getAllHighlights() {
+    const { result } = await ipc_getAllHighlights.renderer!.trigger({});
+    return result;
+  },
+  onAllHighlights(handle: (event: AllHighlightsEvent) => void) {
+    const { destroy } = ipc_allHighlightsEvent.renderer!.handle(async (event) => {
+      handle(event);
+    });
+    return destroy;
   },
   onReplayLoadProgressUpdate(handle: (progress: Progress) => void) {
     const { destroy } = ipc_loadProgressUpdatedEvent.renderer!.handle(async (progress) => {

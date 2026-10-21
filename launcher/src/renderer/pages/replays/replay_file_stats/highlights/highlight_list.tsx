@@ -1,10 +1,11 @@
 /**
- * A .brep's highlights and L+R+Z clips on its stats page (DESIGN.md §2): who on whom with their
- * characters, best first, nothing the detector measured. A row plays in the playback Dolphin from
- * just before the string to just after it; ↑/↓ (or Tab) plays the next one at once, and the only
- * wait (Dolphin's fast-forward to it) shows with its progress. Ticked rows render to video
- * (docs/design/highlights.md §5): Render (w/ Music) or Render (No Music), a file each, or one
- * combo movie of them all.
+ * Highlights and L+R+Z clips (DESIGN.md §2): who on whom with their characters, nothing the
+ * detector measured. A row plays in the playback Dolphin from just before the string to just after
+ * it; ↑/↓ (or Tab) plays the next one at once, and the only wait (Dolphin's fast-forward to it)
+ * shows with its progress. With "Render as Video" ticked, rows can be ticked and rendered to video
+ * (docs/design/highlights.md §4): Render (w/ Music) or Render (No Music), a file each, or one combo
+ * movie of them all. `HighlightList` is a replay's (its stats page); `HighlightRows` lists rows of
+ * any replays (the Replays > Highlights tab's, all of them).
  */
 import type { ReplayPlaybackStatus } from "@dolphin/types";
 import { DolphinEventType } from "@dolphin/types";
@@ -25,23 +26,34 @@ import { useDolphinActions } from "@/lib/dolphin/use_dolphin_actions";
 import { useMousetrap } from "@/lib/hooks/use_mousetrap";
 import { useSetting } from "@/lib/hooks/use_settings";
 import { getColor } from "@/lib/player_colors";
+import { monthDayHourFormat } from "@/lib/time";
 import { getCharacterIcon } from "@/lib/utils";
 import { useServices } from "@/services";
 
 import { HighlightListMessages as Messages } from "./highlight_list.messages";
 import styles from "./highlight_list.module.css";
 import { RenderJobs, useRenderJobs } from "./render_jobs";
-import { clipVideoName, comboVideoName } from "./render_names";
+import { clipVideoName, comboVideoName, multiGameComboName } from "./render_names";
 import { ReplayVersionNote } from "./replay_version_note";
 
 type Row = ReplayHighlight | ReplayClip;
 
+/** A row: which replay it is of (its players, when it was played) and what of it. */
+export type HighlightEntry = {
+  key: string;
+  path: string;
+  game: ReplayHighlights;
+  row: Row;
+  /** When the game was played (ISO): shown on the row when the list has several games. */
+  date?: string;
+};
+
 /** What the launcher asked the playback Dolphin for, and when (before Dolphin says anything about it). */
 type Request = { from: number; count: number; commandId: string };
 
+/** A replay's highlights and clips, on its stats page. */
 export const HighlightList = ({ filePath, pplusRelease }: { filePath: string; pplusRelease?: string }) => {
-  const { replayService, dolphinService } = useServices();
-  const { playHighlights, renderHighlights } = useDolphinActions(dolphinService);
+  const { replayService } = useServices();
   const [detectionOff] = useSetting("disableHighlightDetection");
   const [clipOnLrz] = useSetting("clipOnLrz");
   const query = useQuery({
@@ -49,30 +61,99 @@ export const HighlightList = ({ filePath, pplusRelease }: { filePath: string; pp
     queryFn: () => replayService.getHighlights(filePath),
   });
   const data = query.data;
-  const rows: Row[] = useMemo(() => (data ? [...data.highlights, ...data.clips] : []), [data]);
+  const entries: HighlightEntry[] = useMemo(
+    () =>
+      data
+        ? [...data.highlights, ...data.clips].map((row, i) => ({ key: `${i}`, path: filePath, game: data, row }))
+        : [],
+    [data, filePath],
+  );
+
+  if (query.isLoading) {
+    return <div className={styles.note}>{Messages.finding()}</div>;
+  }
+  if (query.error) {
+    return <div className={styles.note}>{Messages.couldNotLoad(String(query.error))}</div>;
+  }
+  if (!data) {
+    return null;
+  }
+  return (
+    <HighlightRows
+      entries={entries}
+      highlightCount={data.highlights.length}
+      resetKey={filePath}
+      versionNote={<ReplayVersionNote release={pplusRelease} />}
+      emptyNote={
+        data.error
+          ? Messages.noData()
+          : detectionOff
+          ? Messages.detectionOff()
+          : data.highlights.length === 0
+          ? Messages.noHighlights()
+          : null
+      }
+      hideRows={!!data.error}
+      comboName={(chosen) => comboVideoName(data.players, chosen.length, filePath)}
+    />
+  );
+};
+
+type HighlightRowsProps = {
+  entries: HighlightEntry[];
+  /** The first this many are highlights, the rest L+R+Z clips. */
+  highlightCount: number;
+  /** Changes when the list is another (a new replay): nothing of the last one's is kept. */
+  resetKey: string;
+  versionNote?: React.ReactNode;
+  /** Said above the rows (none found, detection off...). */
+  emptyNote?: string | null;
+  hideRows?: boolean;
+  /** Shows each row's game date (rows of many games). */
+  showDates?: boolean;
+  /** Above the list, right of the title (the Highlights tab's sort). */
+  headerExtra?: React.ReactNode;
+  comboName: (chosen: HighlightEntry[]) => string;
+};
+
+export const HighlightRows = ({
+  entries,
+  highlightCount,
+  resetKey,
+  versionNote,
+  emptyNote,
+  hideRows,
+  showDates,
+  headerExtra,
+  comboName,
+}: HighlightRowsProps) => {
+  const { dolphinService } = useServices();
+  const { playHighlights, renderHighlights } = useDolphinActions(dolphinService);
 
   const [selected, setSelected] = useState<number | null>(null);
   const [request, setRequest] = useState<Request | null>(null);
   const [status, setStatus] = useState<ReplayPlaybackStatus | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
-  const [ticked, setTicked] = useState<Set<number>>(new Set());
+  const [renderMode, setRenderMode] = useState(false);
+  const [ticked, setTicked] = useState<Set<string>>(new Set());
   const [combo, setCombo] = useState(false);
   const [queuing, setQueuing] = useState(false);
   const allJobs = useRenderJobs();
-  // (A cancelled one is gone: the player did it.)
+  // This list's renders (a cancelled one is gone: the player did it).
+  const paths = useMemo(() => new Set(entries.map((e) => e.path)), [entries]);
   const jobs = useMemo(
-    () => allJobs.filter((j) => j.paths.includes(filePath) && j.state !== "cancelled"),
-    [allJobs, filePath],
+    () => allJobs.filter((j) => j.state !== "cancelled" && j.paths.some((p) => paths.has(p))),
+    [allJobs, paths],
   );
 
-  // A new replay (the stats page's next/previous): nothing of the last one's.
+  // Another list (the stats page's next/previous replay): nothing of the last one's.
   useEffect(() => {
     setSelected(null);
     setRequest(null);
     setStatus(null);
     setTicked(new Set());
     setCombo(false);
-  }, [filePath]);
+  }, [resetKey]);
 
   // Only what Dolphin says about the last request (an older one's status may still come).
   const commandId = request?.commandId;
@@ -89,10 +170,10 @@ export const HighlightList = ({ filePath, pplusRelease }: { filePath: string; pp
 
   const play = useCallback(
     async (from: number, count = 1) => {
-      const items = rows.slice(from, from + count).map((r) => ({
-        path: filePath,
-        startFrame: r.startFrame,
-        endFrame: r.endFrame,
+      const items = entries.slice(from, from + count).map((e) => ({
+        path: e.path,
+        startFrame: e.row.startFrame,
+        endFrame: e.row.endFrame,
       }));
       if (!items.length) {
         return;
@@ -105,36 +186,45 @@ export const HighlightList = ({ filePath, pplusRelease }: { filePath: string; pp
         setRequest(null);
       }
     },
-    [rows, filePath, playHighlights],
+    [entries, playHighlights],
   );
 
-  const tick = (i: number, on: boolean) =>
+  const tick = (key: string, on: boolean) =>
     setTicked((t) => {
       const next = new Set(t);
       if (on) {
-        next.add(i);
+        next.add(key);
       } else {
-        next.delete(i);
+        next.delete(key);
       }
       return next;
     });
 
+  const setRender = (on: boolean) => {
+    setRenderMode(on);
+    if (!on) {
+      setTicked(new Set());
+      setCombo(false);
+    }
+  };
+
+  // (Only rows still listed count.)
+  const chosen = useMemo(() => entries.filter((e) => ticked.has(e.key)), [entries, ticked]);
+
   // The ticked rows, in the list's order, to video: a file each, or one combo movie.
   const render = useCallback(
     async (music: boolean) => {
-      if (!data || !ticked.size) {
+      if (!chosen.length) {
         return;
       }
-      const chosen = rows.filter((_, i) => ticked.has(i));
-      const players = new Map(data.players.map((p) => [p.port, p]));
       const asCombo = combo && chosen.length > 1;
       setQueuing(true);
       try {
         const queued = await renderHighlights({
-          items: chosen.map((r) => ({ path: filePath, startFrame: r.startFrame, endFrame: r.endFrame })),
+          items: chosen.map((e) => ({ path: e.path, startFrame: e.row.startFrame, endFrame: e.row.endFrame })),
           names: asCombo
-            ? [comboVideoName(data.players, chosen.length, filePath)]
-            : chosen.map((r) => clipVideoName(r, players, filePath)),
+            ? [comboName(chosen)]
+            : chosen.map((e) => clipVideoName(e.row, new Map(e.game.players.map((p) => [p.port, p])), e.path)),
           music,
           combo: asCombo,
         });
@@ -145,7 +235,7 @@ export const HighlightList = ({ filePath, pplusRelease }: { filePath: string; pp
         setQueuing(false);
       }
     },
-    [data, rows, ticked, combo, filePath, renderHighlights],
+    [chosen, combo, comboName, renderHighlights],
   );
 
   // Play all: the row playing follows Dolphin's queue.
@@ -157,11 +247,11 @@ export const HighlightList = ({ filePath, pplusRelease }: { filePath: string; pp
   }, [playing]);
 
   const step = (delta: number) => {
-    if (!rows.length) {
+    if (!entries.length) {
       return;
     }
-    const at = playing ?? (delta > 0 ? -1 : rows.length);
-    const next = Math.min(Math.max(at + delta, 0), rows.length - 1);
+    const at = playing ?? (delta > 0 ? -1 : entries.length);
+    const next = Math.min(Math.max(at + delta, 0), entries.length - 1);
     if (next !== at) {
       void play(next);
     }
@@ -179,52 +269,55 @@ export const HighlightList = ({ filePath, pplusRelease }: { filePath: string; pp
     void play(playing ?? 0);
   });
 
-  if (query.isLoading) {
-    return <div className={styles.note}>{Messages.finding()}</div>;
-  }
-  if (query.error) {
-    return <div className={styles.note}>{Messages.couldNotLoad(String(query.error))}</div>;
-  }
-  if (!data) {
-    return null;
-  }
-  const players = new Map(data.players.map((p) => [p.port, p]));
-  const highlightCount = data.highlights.length;
+  const canRender = renderMode && chosen.length > 0 && !queuing;
 
   return (
     <div className={styles.container}>
       <div className={styles.header}>
         <h2 className={styles.title}>{Messages.highlights()}</h2>
-        <Button
-          variant="contained"
-          color="primary"
-          size="small"
-          startIcon={<PlaylistPlayIcon />}
-          disabled={!rows.length}
-          onClick={() => void play(0, rows.length)}
-        >
-          {Messages.playAll()}
-        </Button>
-      </div>
-      <ReplayVersionNote release={pplusRelease} />
-      {rows.length > 0 && (
-        <div className={styles.renderBar}>
-          <Checkbox
+        <div className={styles.headerActions}>
+          {headerExtra}
+          <Button
+            variant="contained"
+            color="primary"
             size="small"
-            className={styles.tick}
-            checked={ticked.size === rows.length}
-            indeterminate={ticked.size > 0 && ticked.size < rows.length}
-            onChange={(e) => setTicked(e.target.checked ? new Set(rows.map((_, i) => i)) : new Set())}
-            inputProps={{ "aria-label": Messages.selectAll() }}
+            startIcon={<PlaylistPlayIcon />}
+            disabled={!entries.length}
+            onClick={() => void play(0, entries.length)}
+          >
+            {Messages.playAll()}
+          </Button>
+        </div>
+      </div>
+      {versionNote}
+      {entries.length > 0 && (
+        <div className={styles.renderBar}>
+          <FormControlLabel
+            className={styles.renderToggle}
+            control={<Checkbox size="small" checked={renderMode} onChange={(e) => setRender(e.target.checked)} />}
+            label={<span className={styles.renderToggleLabel}>{Messages.renderAsVideo()}</span>}
           />
           <span className={styles.renderCount}>
-            {ticked.size ? Messages.selected(ticked.size) : Messages.tickToRender()}
+            {renderMode && (
+              <>
+                {Messages.selected(chosen.length)}
+                <Button
+                  size="small"
+                  className={styles.selectAll}
+                  onClick={() =>
+                    setTicked(chosen.length === entries.length ? new Set() : new Set(entries.map((e) => e.key)))
+                  }
+                >
+                  {chosen.length === entries.length ? Messages.selectNone() : Messages.selectAll()}
+                </Button>
+              </>
+            )}
           </span>
           <FormControlLabel
             className={styles.combo}
-            disabled={ticked.size < 2}
+            disabled={!renderMode}
             control={
-              <Checkbox size="small" checked={combo && ticked.size > 1} onChange={(e) => setCombo(e.target.checked)} />
+              <Checkbox size="small" checked={renderMode && combo} onChange={(e) => setCombo(e.target.checked)} />
             }
             label={<span className={styles.comboLabel}>{Messages.comboMovie()}</span>}
           />
@@ -232,7 +325,7 @@ export const HighlightList = ({ filePath, pplusRelease }: { filePath: string; pp
             size="small"
             variant="outlined"
             startIcon={<MovieIcon />}
-            disabled={!ticked.size || queuing}
+            disabled={!canRender}
             onClick={() => void render(true)}
           >
             {Messages.renderWithMusic()}
@@ -241,7 +334,7 @@ export const HighlightList = ({ filePath, pplusRelease }: { filePath: string; pp
             size="small"
             variant="outlined"
             startIcon={<MusicOffIcon />}
-            disabled={!ticked.size || queuing}
+            disabled={!canRender}
             onClick={() => void render(false)}
           >
             {Messages.renderNoMusic()}
@@ -249,54 +342,67 @@ export const HighlightList = ({ filePath, pplusRelease }: { filePath: string; pp
         </div>
       )}
       <RenderJobs jobs={jobs} />
-      <PlaybackBanner request={request} status={status} rows={rows} />
-      {data.error ? (
-        <div className={styles.note}>{Messages.noData()}</div>
-      ) : (
+      <PlaybackBanner request={request} status={status} entries={entries} />
+      {emptyNote && <div className={styles.note}>{emptyNote}</div>}
+      {!hideRows && (
         <div className={styles.list} ref={listRef}>
-          {detectionOff ? (
-            <div className={styles.note}>{Messages.detectionOff()}</div>
-          ) : highlightCount === 0 ? (
-            <div className={styles.note}>{Messages.noHighlights()}</div>
-          ) : null}
-          {rows.map((row, i) => (
-            <React.Fragment key={i}>
-              {i === highlightCount && <h3 className={styles.section}>{Messages.clips()}</h3>}
-              <div className={styles.rowLine}>
-                <Checkbox
-                  size="small"
-                  className={styles.tick}
-                  checked={ticked.has(i)}
-                  onChange={(e) => tick(i, e.target.checked)}
-                  inputProps={{ "aria-label": Messages.tickRow() }}
-                />
-                <button
-                  type="button"
-                  data-row={i}
-                  className={`${styles.row} ${i === playing ? styles.playing : ""}`}
-                  onClick={() => void play(i)}
-                >
-                  <span className={styles.playIcon}>
-                    <PlayArrowIcon fontSize="small" />
-                  </span>
-                  {row.kind === "highlight" ? (
-                    <HighlightWho row={row} data={data} players={players} />
-                  ) : (
-                    <span className={styles.who}>
-                      <ContentCutIcon fontSize="small" className={styles.clipIcon} />
-                      <span className={styles.vs}>{Messages.clippedBy()}</span>
-                      <PlayerChip player={players.get(row.port)} isTeams={data.isTeams} />
-                    </span>
+          {entries.map((entry, i) => {
+            const { row, game } = entry;
+            const players = new Map(game.players.map((p) => [p.port, p]));
+            return (
+              <React.Fragment key={entry.key}>
+                {i === highlightCount && <h3 className={styles.section}>{Messages.clips()}</h3>}
+                <div className={styles.rowLine}>
+                  {renderMode && (
+                    <Checkbox
+                      size="small"
+                      className={styles.tick}
+                      checked={ticked.has(entry.key)}
+                      onChange={(e) => tick(entry.key, e.target.checked)}
+                      inputProps={{ "aria-label": Messages.tickRow() }}
+                    />
                   )}
-                </button>
-              </div>
-            </React.Fragment>
-          ))}
+                  <button
+                    type="button"
+                    data-row={i}
+                    className={`${styles.row} ${i === playing ? styles.playing : ""}`}
+                    onClick={() => void play(i)}
+                  >
+                    <span className={styles.playIcon}>
+                      <PlayArrowIcon fontSize="small" />
+                    </span>
+                    {row.kind === "highlight" ? (
+                      <HighlightWho row={row} data={game} players={players} />
+                    ) : (
+                      <span className={styles.who}>
+                        <ContentCutIcon fontSize="small" className={styles.clipIcon} />
+                        <span className={styles.vs}>{Messages.clippedBy()}</span>
+                        <PlayerChip player={players.get(row.port)} isTeams={game.isTeams} />
+                      </span>
+                    )}
+                    {showDates && entry.date && (
+                      <span className={styles.date}>{monthDayHourFormat(new Date(entry.date))}</span>
+                    )}
+                  </button>
+                </div>
+              </React.Fragment>
+            );
+          })}
         </div>
       )}
-      {rows.length > 0 && <div className={styles.hint}>{Messages.keyHint()}</div>}
+      {entries.length > 0 && <div className={styles.hint}>{Messages.keyHint()}</div>}
     </div>
   );
+};
+
+/** The Highlights tab's combo of rows from several games: named after when it was made. */
+export const comboOfManyName = (chosen: HighlightEntry[]) => {
+  const paths = new Set(chosen.map((e) => e.path));
+  if (paths.size === 1) {
+    const e = chosen[0];
+    return comboVideoName(e.game.players, chosen.length, e.path);
+  }
+  return multiGameComboName(chosen.length, new Date());
 };
 
 /** The attacker vs the victim; in teams, the attacker's team vs the victim's. */
@@ -351,17 +457,17 @@ const PlayerChip = ({ player, isTeams }: { player: HighlightPlayer | undefined; 
 const PlaybackBanner = ({
   request,
   status,
-  rows,
+  entries,
 }: {
   request: Request | null;
   status: ReplayPlaybackStatus | null;
-  rows: Row[];
+  entries: HighlightEntry[];
 }) => {
   if (!request) {
     return null;
   }
   const index = status?.index ?? 0;
-  const row = rows[request.from + index];
+  const row = entries[request.from + index]?.row;
   const of = request.count > 1 ? ` · ${Messages.ofTotal(index + 1, request.count)}` : "";
   const state = status?.state;
   // (A refused replay's error stays in the status after its match has gone.)

@@ -122,7 +122,6 @@ export const ReplayFileStats = (props: ReplayFileStatsProps) => {
   const stageImage = stageInfo != null ? getStageImage(stageInfo.id) : undefined;
   const stageName = stageInfo != null ? stageInfo.name : HeaderMessages.unknown();
 
-  const platform = game.consoleNickname || game.platform || HeaderMessages.unknown();
   const startAtDisplay = new Date(game.startTime ? Date.parse(game.startTime) : 0);
   const lastFrame = game.lastFrame ?? gameStats?.lastFrame;
   // Sometimes metadata doesn't exist and won't have the last frame
@@ -153,7 +152,6 @@ export const ReplayFileStats = (props: ReplayFileStatsProps) => {
         total={props.total}
         gameDetails={{
           stageName,
-          platform,
           startAtDisplay,
           duration,
           gameMode: game.mode ?? GameMode.VS,

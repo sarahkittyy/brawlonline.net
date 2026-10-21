@@ -46,3 +46,12 @@ export function comboVideoName(players: HighlightPlayer[], count: number, filePa
   const game = players.map((p) => who(p)).join(" vs ");
   return [date, game, `- combo movie (${count})`].filter(Boolean).join(" ");
 }
+
+/** A combo movie of `count` highlights from several games: named after when it was made. */
+export function multiGameComboName(count: number, made: Date): string {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const stamp = `${made.getFullYear()}-${pad(made.getMonth() + 1)}-${pad(made.getDate())} ${pad(made.getHours())}${pad(
+    made.getMinutes(),
+  )}`;
+  return `${stamp} Combo movie (${count} highlights)`;
+}

@@ -2,13 +2,13 @@ import { exists } from "@common/exists";
 import { pplusReleaseLabel } from "@common/pplus_releases";
 import { stageInfo as pplusStageInfo } from "@common/stages";
 import { css } from "@emotion/react";
-import EqualizerIcon from "@mui/icons-material/Equalizer";
 import EventIcon from "@mui/icons-material/Event";
 import HistoryIcon from "@mui/icons-material/History";
 import LandscapeIcon from "@mui/icons-material/Landscape";
 import MoreHorizIcon from "@mui/icons-material/MoreHoriz";
 import PlayCircleOutlineIcon from "@mui/icons-material/PlayCircleOutline";
 import SportsCricket from "@mui/icons-material/SportsCricket";
+import StarBorderIcon from "@mui/icons-material/StarBorder";
 import TimerIcon from "@mui/icons-material/Timer";
 import TrackChangesIcon from "@mui/icons-material/TrackChanges";
 import type { FileResult } from "@replays/types";
@@ -106,8 +106,8 @@ export const ReplayFileContainer = React.memo(function ReplayFileContainer({
         onClick: (e: React.MouseEvent<HTMLButtonElement, MouseEvent>) => onOpenMenu(index, e.currentTarget),
       },
       {
-        Icon: EqualizerIcon,
-        label: Messages.showStats(),
+        Icon: StarBorderIcon,
+        label: Messages.showHighlights(),
         onClick: onShowStats,
       },
       {

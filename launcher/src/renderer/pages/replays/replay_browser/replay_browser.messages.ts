@@ -1,4 +1,6 @@
 export const ReplayBrowserMessages = {
+  replaysTab: () => "Replays",
+  highlightsTab: () => "Highlights",
   filesDeleted: (count: number) => "{0, plural, one {# file} other {# files}} successfully deleted.",
   revealLocation: () => "Reveal location",
   currentFolder: () => "Current folder",

@@ -62,6 +62,36 @@
   margin-right: 4px;
 }
 
+.renderToggle {
+  margin-right: 4px;
+}
+
+.renderToggleLabel {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.selectAll {
+  margin-left: 6px;
+  padding: 0 6px;
+  min-width: 0;
+  font-size: 12px;
+  text-transform: none;
+}
+
+.headerActions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.date {
+  margin-left: auto;
+  font-size: 12px;
+  white-space: nowrap;
+  opacity: 0.6;
+}
+
 .comboLabel {
   font-size: 13px;
 }

@@ -41,9 +41,46 @@ export class HighlightService {
 
   constructor(private readonly db: Promise<Kysely<Database>>, private readonly settings: () => HighlightSettings) {}
 
-  async getHighlights(fullPath: string): Promise<ReplayHighlights> {
+  private options(): AnalyzeOptions {
     const s = this.settings();
-    const options: AnalyzeOptions = { highlights: s.detectHighlights, clips: s.clipOnLrz, clipPlayers: CLIP_PLAYERS };
+    return { highlights: s.detectHighlights, clips: s.clipOnLrz, clipPlayers: CLIP_PLAYERS };
+  }
+
+  /** What is cached for `fullPath` (as this file, detector and settings are now), or null: nothing is found here. */
+  async cached(fullPath: string): Promise<ReplayHighlights | null> {
+    const options = this.options();
+    if (!options.highlights && !options.clips) {
+      return null;
+    }
+    try {
+      const { size, mtimeMs } = await stat(fullPath);
+      return await this.fromCache(fullPath, size, Math.floor(mtimeMs), modeKey(options));
+    } catch {
+      return null;
+    }
+  }
+
+  private async fromCache(fullPath: string, size: number, mtime: number, mode: string) {
+    const db = await this.db;
+    try {
+      const row = await db.selectFrom("highlight_cache").selectAll().where("path", "=", fullPath).executeTakeFirst();
+      if (
+        row &&
+        row.size_bytes === size &&
+        row.mtime_ms === mtime &&
+        row.detector_version === DETECTOR_VERSION &&
+        row.mode === mode
+      ) {
+        return JSON.parse(row.result) as ReplayHighlights;
+      }
+    } catch (err) {
+      log.warn(`highlight cache: ${err}`);
+    }
+    return null;
+  }
+
+  async getHighlights(fullPath: string): Promise<ReplayHighlights> {
+    const options = this.options();
     const key = `${fullPath}\n${modeKey(options)}`;
     let p = this.inFlight.get(key);
     if (!p) {
@@ -68,19 +105,9 @@ export class HighlightService {
     const mtime = Math.floor(mtimeMs);
     const mode = modeKey(options);
     const db = await this.db;
-    try {
-      const row = await db.selectFrom("highlight_cache").selectAll().where("path", "=", fullPath).executeTakeFirst();
-      if (
-        row &&
-        row.size_bytes === size &&
-        row.mtime_ms === mtime &&
-        row.detector_version === DETECTOR_VERSION &&
-        row.mode === mode
-      ) {
-        return JSON.parse(row.result) as ReplayHighlights;
-      }
-    } catch (err) {
-      log.warn(`highlight cache: ${err}`);
+    const hit = await this.fromCache(fullPath, size, mtime, mode);
+    if (hit) {
+      return hit;
     }
     let result: ReplayHighlights;
     try {

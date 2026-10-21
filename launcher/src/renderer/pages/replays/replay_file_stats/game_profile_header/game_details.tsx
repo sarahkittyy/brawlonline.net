@@ -1,7 +1,6 @@
 import EventIcon from "@mui/icons-material/Event";
 import LandscapeIcon from "@mui/icons-material/Landscape";
 import SportsCricket from "@mui/icons-material/SportsCricket";
-import SportsEsportsIcon from "@mui/icons-material/SportsEsports";
 import Straighten from "@mui/icons-material/Straighten";
 import TimerIcon from "@mui/icons-material/Timer";
 import TrackChangesIcon from "@mui/icons-material/TrackChanges";
@@ -15,7 +14,6 @@ import { GameProfileHeaderMessages as Messages } from "./game_profile_header.mes
 
 type Props = {
   stageName: string;
-  platform: string;
   startAtDisplay: Date;
   duration: string;
   gameMode: GameMode;
@@ -23,11 +21,10 @@ type Props = {
   units?: string;
 };
 
-export const GameDetails = ({ stageName, platform, startAtDisplay, duration, gameMode, distance, units }: Props) => {
+export const GameDetails = ({ stageName, startAtDisplay, duration, gameMode, distance, units }: Props) => {
   const eventDisplay = { label: <EventIcon />, content: monthDayHourFormat(startAtDisplay) };
   const timerDisplay = { label: <TimerIcon />, content: duration };
   const stageDisplay = { label: <LandscapeIcon />, content: stageName };
-  const platformDisplay = { label: <SportsEsportsIcon />, content: platform };
   const targetTestDisplay = { label: <TrackChangesIcon />, content: Messages.targetTest() };
   const homerunDisplay = { label: <SportsCricket />, content: Messages.homeRunContest() };
   const distanceDisplay = { label: <Straighten />, content: `${distance} ${units}` };
@@ -35,15 +32,16 @@ export const GameDetails = ({ stageName, platform, startAtDisplay, duration, gam
   let displayData: { label: React.ReactNode; content: React.ReactNode }[];
   switch (gameMode) {
     case GameMode.HOME_RUN_CONTEST:
-      displayData = [eventDisplay, distanceDisplay, homerunDisplay, platformDisplay];
+      displayData = [eventDisplay, distanceDisplay, homerunDisplay];
       break;
     case GameMode.TARGET_TEST:
-      displayData = [eventDisplay, timerDisplay, stageDisplay, targetTestDisplay, platformDisplay];
+      displayData = [eventDisplay, timerDisplay, stageDisplay, targetTestDisplay];
       break;
     case GameMode.ONLINE:
     case GameMode.VS:
     default:
-      displayData = [eventDisplay, timerDisplay, stageDisplay, platformDisplay];
+      // (No platform: our replays are all Brawl Online's.)
+      displayData = [eventDisplay, timerDisplay, stageDisplay];
       break;
   }
 
