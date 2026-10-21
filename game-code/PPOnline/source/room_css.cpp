@@ -463,7 +463,9 @@ namespace RoomCss {
     // The room's two settings on the CSS's own ITEM and STAGE buttons (right end of the bar,
     // MenSelchrState0005 / 0006 at muSelCharTask +0x420 / +0x424; hidden on the other online
     // CSSs, online_menu.cpp hideHeaderArt): ITEM shows "PUBLIC" / "PRIVATE", STAGE "FFA" /
-    // "TEAMS", and the game's own press on them (hand buttons 0x19 / 0x1A, online_menu.cpp
+    // "TEAMS" in rainbow letters (P+'s rainbow team battle: any costume, a team glow) / "TEAMS"
+    // (the teams' costumes; the user's, 2026-10-21), and the game's own press on them (hand
+    // buttons 0x19 / 0x1A, online_menu.cpp
     // cssSwitchButtons) switches them. Their label textures (MenSelchrWifi00Button11 / 12, CMPR
     // 48x24: a dark rounded border, white letters with a black outline, clear inside; the
     // button's colour is its material) are copied, once per label, with the new word drawn in
@@ -472,13 +474,14 @@ namespace RoomCss {
     struct HeaderLabel {
         u32 obj;          // muSelCharTask offset
         const char* tex;
-        const char* text[2];
+        const char* text[3];   // NULL: no such state
+        int rainbow;           // the state whose letters are rainbow, -1 none
     };
     static const HeaderLabel HEADER[2] = {
-        {0x420, "MenSelchrWifi00Button11", {"PRIVATE", "PUBLIC"}},
-        {0x424, "MenSelchrWifi00Button12", {"FFA", "TEAMS"}},
+        {0x420, "MenSelchrWifi00Button11", {"PRIVATE", "PUBLIC", NULL}, -1},
+        {0x424, "MenSelchrWifi00Button12", {"FFA", "TEAMS", "TEAMS"}, 1},
     };
-    static u8* s_hdrCopy[2][2];
+    static u8* s_hdrCopy[2][3];
     static u32 s_hdrOrig[2];      // the game's image word of each
 
     static u32 imageWord(const u8* tex) { return ((u32)(tex + 0x40) & 0x1FFFFFFF) >> 5; }
@@ -492,17 +495,18 @@ namespace RoomCss {
         if (!isPtr((u32)mdl) || *(u32*)mdl != 0x4D444C30) return;
         u8* cur = Labels::boundTexture(mdl, H.tex);
         if (!cur) return;
-        bool ours = cur == s_hdrCopy[b][0] || cur == s_hdrCopy[b][1];
+        bool ours = cur == s_hdrCopy[b][0] || cur == s_hdrCopy[b][1] || cur == s_hdrCopy[b][2];
         if (!ours) {
             u32 bytes = texBytes(cur);
             if (!bytes || *(u32*)(cur + 0x10) != 0x40) return;
             s_hdrOrig[b] = imageWord(cur);
-            for (int k = 0; k < 2; k++) {
-                if (s_hdrCopy[b][k]) continue;
+            for (int k = 0; k < 3; k++) {
+                if (s_hdrCopy[b][k] || !H.text[k]) continue;
                 s_hdrCopy[b][k] = Labels::copyBlock(0x40 + bytes);
                 if (!s_hdrCopy[b][k]) return;
                 memcpy(s_hdrCopy[b][k], cur, 0x40 + bytes);
                 Labels::renderInBox(s_hdrCopy[b][k], H.text[k], 4, 4, 44, 20, 1);
+                if (k == H.rainbow) Labels::rainbowInBox(s_hdrCopy[b][k], 4, 4, 44, 20);
             }
         }
         u8* want = s_hdrCopy[b][which];
@@ -519,7 +523,8 @@ namespace RoomCss {
         u8* scn = *(u8**)(obj + 0xC);
         if (!isPtr((u32)scn)) return;
         u32 to = imageWord(want);
-        u32 from[3] = {s_hdrOrig[b], imageWord(s_hdrCopy[b][0]), s_hdrCopy[b][1] ? imageWord(s_hdrCopy[b][1]) : 0};
+        u32 from[4] = {s_hdrOrig[b], imageWord(s_hdrCopy[b][0]), s_hdrCopy[b][1] ? imageWord(s_hdrCopy[b][1]) : 0,
+                       s_hdrCopy[b][2] ? imageWord(s_hdrCopy[b][2]) : 0};
         u8* bufs[3] = {scn, *(u8**)(scn + 0x14C), *(u8**)(scn + 0x140)};
         for (int i = 0; i < 3; i++) {
             u8* p = bufs[i];
@@ -530,7 +535,8 @@ namespace RoomCss {
                 u32 r = w >> 24;
                 if (!((r >= 0x94 && r <= 0x97) || (r >= 0xB4 && r <= 0xB7))) continue;
                 u32 a = w & 0xFFFFFF;
-                if (a != to && (a == from[0] || a == from[1] || a == from[2])) *(u32*)(p + off) = (w & 0xFF000000u) | to;
+                if (a != to && a && (a == from[0] || a == from[1] || a == from[2] || a == from[3]))
+                    *(u32*)(p + off) = (w & 0xFF000000u) | to;
             }
         }
     }
@@ -542,17 +548,17 @@ namespace RoomCss {
             s_labelFrom[k] = s_labelTo[k] = 0;
         }
         for (int b = 0; b < 2; b++) {
-            s_hdrCopy[b][0] = s_hdrCopy[b][1] = NULL;
+            s_hdrCopy[b][0] = s_hdrCopy[b][1] = s_hdrCopy[b][2] = NULL;
             s_hdrOrig[b] = 0;
         }
     }
 
-    void headerButtons(bool isPublic, bool teams)
+    void headerButtons(bool isPublic, int teams)
     {
         u8* task = cssTask();
         if (!task) return;
         showHeaderLabel(task, 0, isPublic ? 1 : 0);
-        showHeaderLabel(task, 1, teams ? 1 : 0);
+        showHeaderLabel(task, 1, teams >= 0 && teams <= 2 ? teams : 0);
     }
 
     static void labelSeeking(u8* a, int ai)
@@ -970,6 +976,18 @@ namespace RoomCss {
     static const u32 HAND_X = 0x90, HAND_Y = 0x94;
     static const float PANEL_X0 = -22.0f, PANEL_STEP = 15.0f, PANEL_HALF = 7.0f;
     static const float PANEL_TOP = -1.5f, PANEL_BOTTOM = -20.0f;
+
+    void setMyCostume(int costume)
+    {
+        u8* task = cssTask();
+        u8* a = task ? area(task, 0) : NULL;
+        if (!a) return;
+        int css = *(int*)(a + 0x1B8);
+        if (css < 0 || css >= 0x40 || css == CSS_NONE || css == 0x29) return;
+        *(u32*)(a + 0x1BC) = (u32)costume;
+        SET_CHAR_PIC(a, css, 1, costume, 0, *(u32*)(a + 0x1C0), 0);
+    }
+
     // The local player's own team flag (Brawl's, top left of the panel, drawn in a team battle):
     // A on it picks the next team. The flag is no hand target of Brawl's (the panel below it,
     // target 0x1B from y -6 down, picks the next team too: OnlineMenu's cssPanelClick), so

@@ -445,6 +445,10 @@ SLOT_OPEN, SLOT_TAKEN, SLOT_READY, SLOT_HOST, SLOT_IN_GAME, SLOT_SITTING_OUT = 1
 SLOT_WATCHING = 0x40   # 2026-10-19: watching the room's game from the room CSS
 RF_IN, RF_PUBLIC, RF_TEAMS = 1, 2, 4
 RF_WATCH = 8           # 2026-10-19: SESSION holds a room game this player watches
+RF_TEAM_COLORS = 0x10  # 2026-10-21: with RF_TEAMS, every player in their team's costume
+# SESSION `teams` (2026-10-21): 0 FFA, 1 a team battle recorded before, 2 P+'s rainbow team battle
+# (own costumes, the team glow), 3 its plain one (the teams' costumes)
+TEAMS_LEGACY, TEAMS_RAINBOW, TEAMS_COLORS = 1, 2, 3
 
 
 def room_request(op: str, arg: int = 0, arg2: int = 0, code: str = "") -> bytes:

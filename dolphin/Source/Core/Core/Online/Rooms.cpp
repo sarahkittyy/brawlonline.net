@@ -114,6 +114,7 @@ struct RoomGame
   std::string match_id;
   int host = 0;
   bool teams = false;
+  bool team_colors = false;  // View::team_colors
   Clock::time_point started{};
   bool saw_session = false;
   bool saw_match = false;
@@ -560,6 +561,7 @@ void Handle(const Message& m, Actions* a, Clock::time_point now)
     // The game's host is one of its players: the room's host, or another when they sit out.
     s.rg.host = m.start_host ? m.start_host : s.view->host;
     s.rg.teams = s.view->teams;
+    s.rg.team_colors = s.view->team_colors;
     s.rg.started = now;
     ++s.games_started;
     a->start_game = true;
@@ -1103,9 +1105,11 @@ void StartGame(const RoomGame& g, u8 pickers)
   o.hand_off = true;
   o.room_host_port = g.host;
   o.room_teams = g.teams;
+  o.room_team_colors = g.teams && g.team_colors;
   o.room_pickers = pickers;
-  NOTICE_LOG_FMT(NETPLAY, "Rooms: room {} starts: ticket in mode 3, host P{}, teams {}, pickers {:#x}",
-                 g.code, g.host, g.teams, pickers);
+  NOTICE_LOG_FMT(NETPLAY,
+                 "Rooms: room {} starts: ticket in mode 3, host P{}, teams {}{}, pickers {:#x}",
+                 g.code, g.host, g.teams, g.teams && g.team_colors ? " (team colours)" : "", pickers);
   auto error = Client::FindMatch(o);
   if (error)
   {
@@ -2048,6 +2052,7 @@ picojson::object Status()
   rg["match_id"] = picojson::value(s.rg.match_id);
   rg["host"] = picojson::value(static_cast<double>(s.rg.host));
   rg["teams"] = picojson::value(s.rg.teams);
+  rg["team_colors"] = picojson::value(s.rg.team_colors);
   rg["saw_session"] = picojson::value(s.rg.saw_session);
   rg["saw_match"] = picojson::value(s.rg.saw_match);
   rg["started"] = picojson::value(static_cast<double>(s.games_started));
@@ -2062,6 +2067,7 @@ picojson::object Status()
     vo["code"] = picojson::value(v.code);
     vo["public"] = picojson::value(v.is_public);
     vo["teams"] = picojson::value(v.teams);
+    vo["team_colors"] = picojson::value(v.team_colors);
     vo["mode"] = picojson::value(ModeName(v.mode));
     vo["status"] = picojson::value(StatusName(v.status));
     vo["you"] = picojson::value(static_cast<double>(v.you));
@@ -2164,6 +2170,7 @@ std::optional<std::string> HarnessRequest(const picojson::object& args)
   {
     r.op = Op::Teams;
     r.flag = flag("on", true);
+    r.colors = flag("colors", false);
   }
   else if (op == "public")
   {

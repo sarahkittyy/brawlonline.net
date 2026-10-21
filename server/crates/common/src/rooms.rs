@@ -138,8 +138,10 @@ pub enum RoomRequest {
     Leave,
     /// `room-slot {slot, open}` (host only): slot 1-4.
     Slot { slot: u8, open: bool },
-    /// `room-teams {on}` (host only).
-    Teams { on: bool },
+    /// `room-teams {on, colors?}` (host only). `colors` (2026-10-21; missing: false): with `on`,
+    /// P+'s plain team battle, every player in their team's costume; else its rainbow team battle
+    /// (any costume, a team glow on each fighter).
+    Teams { on: bool, colors: bool },
     /// `room-public {public}` (host only).
     Public { public: bool },
     /// `room-ready {ready, character?, costume?, stocks?}`: START on the CSS (lock-in) or taking it
@@ -258,7 +260,7 @@ impl RoomRequest {
                 v
             }
             RoomRequest::Slot { slot, open } => json!({ "slot": slot, "open": open }),
-            RoomRequest::Teams { on } => json!({ "on": on }),
+            RoomRequest::Teams { on, colors } => json!({ "on": on, "colors": colors }),
             RoomRequest::Public { public } => json!({ "public": public }),
             RoomRequest::Ready { ready, character, costume, stocks } => {
                 let mut v = json!({ "ready": ready });
@@ -342,7 +344,13 @@ impl RoomRequest {
                     .ok_or_else(|| format!("{kind}: `slot` must be 1 to {ROOM_SLOTS}"))?;
                 RoomRequest::Slot { slot, open: flag("open")? }
             }
-            ROOM_TEAMS => RoomRequest::Teams { on: flag("on")? },
+            ROOM_TEAMS => RoomRequest::Teams {
+                on: flag("on")?,
+                colors: match v.get("colors") {
+                    None | Some(serde_json::Value::Null) => false,
+                    Some(_) => flag("colors")?,
+                },
+            },
             ROOM_PUBLIC => RoomRequest::Public { public: flag("public")? },
             ROOM_READY => RoomRequest::Ready {
                 ready: flag("ready")?,
@@ -561,6 +569,10 @@ pub struct RoomState {
     pub code: String,
     pub public: bool,
     pub teams: bool,
+    /// With `teams`: every player in their team's costume (P+'s plain team battle); else P+'s
+    /// rainbow team battle. Absent from servers before 2026-10-21.
+    #[serde(default)]
+    pub team_colors: bool,
     pub mode: RoomMode,
     pub status: RoomStatus,
     /// The receiving member's slot.
@@ -861,7 +873,8 @@ mod tests {
             RoomRequest::Join { code: "KFQB".into() },
             RoomRequest::Leave,
             RoomRequest::Slot { slot: 3, open: true },
-            RoomRequest::Teams { on: true },
+            RoomRequest::Teams { on: true, colors: false },
+            RoomRequest::Teams { on: true, colors: true },
             RoomRequest::Public { public: false },
             RoomRequest::Ready { ready: true, character: Some(12), costume: Some(3), stocks: None },
             RoomRequest::Ready { ready: true, character: Some(12), costume: Some(3), stocks: Some(2) },
@@ -893,6 +906,11 @@ mod tests {
             RoomRequest::parse(ROOM_CREATE, &json!({})).unwrap(),
             RoomRequest::Create { public: true, ruleset: None, remembered: false }
         );
+        // A game from before 2026-10-21: the rainbow team battle.
+        assert_eq!(
+            RoomRequest::parse(ROOM_TEAMS, &json!({"on": true})).unwrap(),
+            RoomRequest::Teams { on: true, colors: false }
+        );
     }
 
     #[test]
@@ -903,6 +921,7 @@ mod tests {
             (ROOM_SLOT, json!({"slot": 2})),
             (ROOM_SLOT, json!({"slot": "2", "open": true})),
             (ROOM_TEAMS, json!({"on": "yes"})),
+            (ROOM_TEAMS, json!({"on": true, "colors": 1})),
             (ROOM_SIT_OUT, json!({"slot": 0, "sitOut": true})),
             (ROOM_SIT_OUT, json!({"slot": 2})),
             (ROOM_BACK, json!({"pickers": 16})),

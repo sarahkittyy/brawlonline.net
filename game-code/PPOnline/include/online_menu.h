@@ -70,7 +70,12 @@ namespace RoomCss {
     // CPU / player toggle is offline), else -1.
     int plateUnderHand();
     bool handOverMyFlag();               // the local hand is over the local panel's team flag
-    void headerButtons(bool isPublic, bool teams);   // ITEM / STAGE as the room's two settings
+    // The local panel's costume set by the plugin, its picture drawn again: the room's TEAMS in the
+    // teams' costumes gives the player their team's (OnlineMenu's tickRoom). Nothing without a
+    // character on the panel (none, Random).
+    void setMyCostume(int costume);
+    void headerButtons(bool isPublic, int teams);   // ITEM / STAGE as the room's two settings (teams:
+                                                    // 0 FFA, 1 rainbow TEAMS, 2 TEAMS)
     void setLocalSlot(int slot, bool inRoom);   // the room slot the local player's panel is shown at
     int portOfArea(int area);            // the room slot an area (1-3) shows
     // (panelUnderHand: the slot (0-3, not the player's own) of the panel under the hand)
@@ -90,6 +95,10 @@ namespace OnlineMatch {
     u8 pickedAsl();
     // P+'s four alt costume words (one per slot, PPOM::COSTUME_ALT_Z / _R / 0 in alt[i])
     void setAltCostumes(const u8* alt);
+    // A player's costume in a team battle in the teams' costumes: their own if it has the team's
+    // colour, else the character's first costume of it (as P+'s CSS gives it); `costume` if the
+    // character has none.
+    u8 teamCostume(u8 charKind, u8 team, u8 costume);
     void clearPickedStage();
     void noteSssButtons(u32 held, u32 pressed);   // each frame of the online stage select
     u8 sssAsl();                      // the buttons held at the last A/START there (P+'s ASL byte)

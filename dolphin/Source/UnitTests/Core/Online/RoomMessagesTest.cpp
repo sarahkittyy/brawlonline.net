@@ -181,6 +181,30 @@ TEST(RoomMessages, ParsesTheProtocolsRoomState)
   EXPECT_TRUE(v.rules_error.empty());
 }
 
+TEST(RoomMessages, TeamColors)
+{
+  // The rainbow team battle when the server says nothing (before 2026-10-21), and teamColors only
+  // with Teams on.
+  const Message rainbow = Parse(Replace(STATE, R"("teams": false,)", R"("teams": true,)"));
+  ASSERT_EQ(rainbow.kind, Message::Kind::RoomState) << rainbow.why;
+  EXPECT_TRUE(rainbow.view->teams);
+  EXPECT_FALSE(rainbow.view->team_colors);
+  const Message colors = Parse(Replace(STATE, R"("teams": false,)", R"("teams": true, "teamColors": true,)"));
+  ASSERT_EQ(colors.kind, Message::Kind::RoomState) << colors.why;
+  EXPECT_TRUE(colors.view->team_colors);
+  const Message off = Parse(Replace(STATE, R"("teams": false,)", R"("teams": false, "teamColors": true,)"));
+  ASSERT_EQ(off.kind, Message::Kind::RoomState) << off.why;
+  EXPECT_FALSE(off.view->team_colors);
+  Request r;
+  r.op = Op::Teams;
+  r.flag = true;
+  EXPECT_EQ(RequestJson(r), R"({"colors":false,"on":true,"type":"room-teams"})");
+  r.colors = true;
+  EXPECT_EQ(RequestJson(r), R"({"colors":true,"on":true,"type":"room-teams"})");
+  r.flag = false;
+  EXPECT_EQ(RequestJson(r), R"({"colors":false,"on":false,"type":"room-teams"})");
+}
+
 TEST(RoomMessages, PickedStocks)
 {
   // Stock control: a ready player's picked stock count (1-99), missing or null when none.

@@ -201,7 +201,8 @@ namespace PPOM {
         ROOM_JOIN = 2,      // code: the room code as typed
         ROOM_LEAVE = 3,
         ROOM_SLOT = 4,      // host: arg = in-game port 0-3, arg2 = 1 open / 0 close (an occupied one: kick)
-        ROOM_TEAMS = 5,     // host: arg = 1 Teams on / 0 off
+        ROOM_TEAMS = 5,     // host: arg = 0 off, 1 Teams on (P+'s rainbow team battle), 2 Teams on
+                            // in the teams' costumes (2026-10-21; Dolphin before it: any arg on)
         ROOM_PUBLIC = 6,    // host: arg = 1 public / 0 private
         ROOM_TEAM = 7,      // arg = this player's colour (TEAM_RED..TEAM_GREEN)
         ROOM_RULES = 8,     // v6, host: RoomRulesRequest (the room's rules as the host edited them)
@@ -259,8 +260,15 @@ namespace PPOM {
     // RF_WATCH (2026-10-19): SESSION holds the room's game this player is not in, to watch (Dolphin
     // plays it as a live replay): the room CSS leaves for its match once SS_MATCH_READY, as for
     // the room's own game, and comes back after it.
-    enum RoomFlags { RF_IN = 1, RF_PUBLIC = 2, RF_TEAMS = 4, RF_WATCH = 8 };
+    // RF_TEAM_COLORS (2026-10-21): with RF_TEAMS, every player in their team's costume (P+'s plain
+    // team battle); without it P+'s rainbow team battle (any costume, a team glow in the match).
+    enum RoomFlags { RF_IN = 1, RF_PUBLIC = 2, RF_TEAMS = 4, RF_WATCH = 8, RF_TEAM_COLORS = 0x10 };
     enum RoomStatusKind { RS_WAITING = 0, RS_STARTING = 1, RS_IN_GAME = 2 };
+    // Session.teams: 0 a free-for-all; a team battle: TEAMS_LEGACY recorded before 2026-10-21 (the
+    // players' own costumes, no glow), TEAMS_RAINBOW P+'s rainbow team battle (the players' own
+    // costumes, gmSelCharData+0x33 = 2: P+'s Teams.asm gives each fighter its team's glow),
+    // TEAMS_COLORS its plain one (every player in their team's costume, no glow).
+    enum TeamsKind { TEAMS_NONE = 0, TEAMS_LEGACY = 1, TEAMS_RAINBOW = 2, TEAMS_COLORS = 3 };
     enum RoomMode { RM_1V1 = 0, RM_FFA = 1, RM_TEAMS = 2 };
 
     const int REQ_SLOTS = 4;
@@ -551,7 +559,8 @@ namespace PPOM {
         // state, so a rollback to before that frame takes the flag back with it. At the start
         // of each frame the game removes that port's fighter (OnlineMatch::tickMatch).
         u8 gone[SESSION_PLAYERS];
-        u8 teams;         // 1: the next game is a team battle (each player's `team`)
+        u8 teams;         // non-zero: the next game is a team battle (each player's `team`): Teams
+                          // below (TEAMS_LEGACY a replay from before 2026-10-21)
         u8 setupError;    // SetupError: the setup of the next game is refused
         u8 outCount;      // game, during a match: the highest `out` given so far
         // Rooms (Dolphin, while in a room and no match runs; docs/rooms-game-interface.md).

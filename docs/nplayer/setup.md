@@ -13,7 +13,7 @@ PPOM is now **version 4** (`game-code/PPOnline/include/ppom.h`, `Online/GameBrid
 | SESSION player i | +0x36 | Dolphin | yes (constant in a match) | `picksStage`: 1 = this player picks the next game's stage (the loser's pick, below). Replaces the game's own `lastWinner != me` test. |
 | SESSION player i | +0x37 | game, every frame of a match | yes | `out`: the order in which the port ran out of stocks, 1 = first; ports out on the same frame share it; 0 = still in. Dolphin reads it at the end of a game for the placings. |
 | SESSION | 0x20C | Dolphin's session, in a match | yes | `gone[4]` by in-game port (as `docs/nplayer/session.md`, "The gone flag": the same offset). |
-| SESSION | 0x210 | Dolphin | yes (constant in a match) | `teams`: 1 = the next game is a team battle. |
+| SESSION | 0x210 | Dolphin | yes (constant in a match) | `teams`: non-zero = the next game is a team battle: 2 P+'s rainbow team battle (the players' costumes, `gmSelCharData+0x33` = 2, the team glow), 3 the teams' costumes (+0x33 = 1); 1 only in replays recorded before 2026-10-21 (the players' costumes, no glow). |
 | SESSION | 0x211 | Dolphin | yes | `setupError`: why the next game is not set up (`GameSetup::SetupError`): 1 "Pick different teams", 2 "Pick a team" (3 "Waiting for players" is Dolphin's only). For the CSS's status line later. |
 | SESSION | 0x212 | game, in a match | yes | `outCount`: the highest `out` given so far. |
 

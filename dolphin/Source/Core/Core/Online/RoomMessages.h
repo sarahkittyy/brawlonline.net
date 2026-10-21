@@ -150,6 +150,9 @@ struct View
   std::string code;
   bool is_public = true;
   bool teams = false;
+  // With Teams on: P+'s plain team battle, every player in their team's costume (the user's,
+  // 2026-10-21); false is its rainbow team battle, any costume and a team glow on each fighter.
+  bool team_colors = false;
   Mode mode = Mode::OneVsOne;
   Status status = Status::Waiting;
   int you = 0;   // 1-4
@@ -269,6 +272,7 @@ struct Request
                        // SitOut: sits out
   int slot = 0;        // Slot, SitOut: 1-4
   u8 team = 0;         // Team
+  bool colors = false;  // Teams: the team colours (with `flag`), else the rainbow team battle
   std::string code;    // Join (normalised)
   std::string ruleset;  // Create (the launcher's box), Ruleset: a ruleset code, "" none
   bool remembered = false;  // Create: the game's own Create Room (the account's remembered ruleset)

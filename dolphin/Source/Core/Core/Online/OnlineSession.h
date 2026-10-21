@@ -106,9 +106,11 @@ struct Match
   // room's server, which names the pair to every member).
   std::vector<int> unreachable_ports;
   // A room's game (docs/rooms-protocol.md §3; mode 3): the room host's slot (1-4; it decides),
-  // the Teams switch and who picks the first stage. room_host_port 0: not a room game.
+  // the Teams switch (and its team colours) and who picks the first stage. room_host_port 0: not a
+  // room game.
   int room_host_port = 0;
   bool room_teams = false;
+  bool room_team_colors = false;
   u8 room_pickers = 0;
 };
 

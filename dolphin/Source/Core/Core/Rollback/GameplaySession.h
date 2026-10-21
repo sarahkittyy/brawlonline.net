@@ -181,6 +181,9 @@ struct ConnectOptions
   // The room's Teams switch (docs/nplayer/setup.md): 3-4 players play a team battle with each
   // player's lock-in team (Online::GameSetup::DecideTeams); with 2 players it has no effect.
   bool teams = false;
+  // With `teams`: P+'s plain team battle, every player in their team's costume (the room's team
+  // colours, 2026-10-21); else its rainbow team battle (any costume, a team glow).
+  bool team_colors = false;
   // Ports (bits) that pick the first game's stage: a room's game is a session of its own, and the
   // last room game's loser picks (docs/rooms-game-interface.md); every member carries the same.
   u8 initial_pickers = 0;
@@ -290,6 +293,7 @@ struct Lobby
   std::array<LobbyPlayer, MAX_LOBBY_PLAYERS> players{};  // by in-game port
   u8 last_winner = 0xFF;      // in-game port of the last game's winner, 0xFE draw, 0xFF none
   bool teams = false;         // the next game is a team battle (players[i].team)
+  bool team_colors = false;   // ... in the teams' costumes (else the rainbow team battle)
   u8 stage_pickers = 0;       // ports (bits) that pick the next stage (GameSetup::Outcome)
   u8 setup_error = 0;         // GameSetup::SetupError: why the next game is not set up
   bool after_match = false;   // a match ended and the game has not left its scene yet

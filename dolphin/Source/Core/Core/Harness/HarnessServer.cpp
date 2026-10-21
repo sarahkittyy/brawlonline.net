@@ -1361,6 +1361,7 @@ Result CmdGprbConnect(const Args& args)
   o.dedupe_resim_sounds = GetBool(args, "dedupe_resim_sounds", !o.suppress_resim_sounds);
   o.name = GetString(args, "name", std::string(""));
   o.teams = GetBool(args, "teams", false);
+  o.team_colors = o.teams && GetBool(args, "team_colors", false);
   // 2-4 players: `slot` (this player's in-game port 0-3) and `peers` [{slot, host, port}, ...]
   // (host "" / port 0: learned from that peer's first message); `host_slot` for joiners.
   if (Find(args, "slot"))

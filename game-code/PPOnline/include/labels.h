@@ -10,6 +10,10 @@ namespace Labels {
     // CMPR only: the label inside the box (4-texel aligned), the texture's own art around it
     // kept; white letters with a black outline (Brawl's button labels, e.g. the CSS's ITEM).
     bool renderInBox(u8* tex0, const char* text, int x0, int y0, int x1, int y1, int rim);
+    // After renderInBox: the letters in the box in rainbow colours, red at x0 to violet at x1, a
+    // colour per 4-texel column, the black outline kept (the room's rainbow TEAMS, as P+'s own
+    // rainbow TEAM BATTLE button).
+    bool rainbowInBox(u8* tex0, int x0, int y0, int x1, int y1);
     // The TEX0 a model's materials use under `name` (bound by the game at load), or NULL.
     u8* boundTexture(u8* mdl0, const char* name);
     // Bind `name` in a model to another TEX0 (the texture links' texture infos): for a model

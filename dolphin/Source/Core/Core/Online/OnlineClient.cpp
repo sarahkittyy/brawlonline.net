@@ -73,6 +73,7 @@ void OnConnected(u64 generation, const Match& found, P2PLink& link, bool hand_of
   Match match = found;
   match.room_host_port = room.room_host_port;
   match.room_teams = room.room_teams;
+  match.room_team_colors = room.room_team_colors;
   match.room_pickers = room.room_pickers;
   std::lock_guard gate(s_session_gate);
   if (generation != s_generation)
@@ -175,6 +176,7 @@ std::optional<std::string> FindMatch(const SearchOptions& options)
   SearchOptions room;
   room.room_host_port = options.room_host_port;
   room.room_teams = options.room_teams;
+  room.room_team_colors = options.room_team_colors;
   room.room_pickers = options.room_pickers;
   s_matchmaking = std::make_unique<Matchmaking>(
       &user, [generation, hand_off, selections, room](const Match& match, P2PLink& link) {

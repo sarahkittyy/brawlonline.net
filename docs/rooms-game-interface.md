@@ -50,7 +50,7 @@ Room fields are written whenever this player is in a room and no match runs; dur
 | Offset | v4 | v5 | Meaning |
 |---|---|---|---|
 | 0x06 `game` | the session's next game | in a room: **the room's next game number for this machine** (1, 2, ...), also while `state == SS_NONE` | Lock in with this number. It goes up by one after each room start (played, or failed), so a lock-in from before is stale and the player has to press START again ("ready cleared"). |
-| 0x213 | `_reserved[0]` | **`roomFlags`** | `RF_IN` 0x01 (in a room; the room fields are valid), `RF_PUBLIC` 0x02, `RF_TEAMS` 0x04 (the host's Teams switch), `RF_WATCH` 0x08 (2026-10-19: SESSION is the room game this player watches, below). |
+| 0x213 | `_reserved[0]` | **`roomFlags`** | `RF_IN` 0x01 (in a room; the room fields are valid), `RF_PUBLIC` 0x02, `RF_TEAMS` 0x04 (the host's Teams switch), `RF_WATCH` 0x08 (2026-10-19: SESSION is the room game this player watches, below), `RF_TEAM_COLORS` 0x10 (2026-10-21: with `RF_TEAMS`, the teams' costumes; without it the rainbow team battle). |
 | 0x214 | `_reserved[1..4]` | **`roomCode[4]`** | ASCII, upper case, no NUL (e.g. `KFQB`). |
 | 0x218 | `_reserved[5]` | **`roomHost`** | the host's slot as in-game port 0-3; 0xFF none. |
 | 0x219 | `_reserved[6]` | **`roomStatus`** | 0 waiting, 1 starting (everyone ready; tickets and P2P connect), 2 in game (until every player of the game is back). |
@@ -82,7 +82,7 @@ enum RoomOp {
     ROOM_JOIN = 2,     // code: the room code as typed (4 letters)
     ROOM_LEAVE = 3,    // leave the room (hold B: to the menus)
     ROOM_SLOT = 4,     // host: arg = in-game port 0-3, arg2 = 1 open / 0 close (close occupied = kick)
-    ROOM_TEAMS = 5,    // host: arg = 1 Teams on, 0 off
+    ROOM_TEAMS = 5,    // host: arg = 0 off, 1 Teams on (rainbow), 2 Teams on in the teams' costumes
     ROOM_PUBLIC = 6,   // host: arg = 1 public, 0 private
     ROOM_TEAM = 7,     // arg = this player's colour 0 red, 1 blue, 2 green
     ROOM_RULES = 8,    // v6, host: RoomRulesRequest {op, pad[3], Rules} (SESSION's layout);
@@ -228,7 +228,7 @@ struct SessionPlayer {             // only 0x38-0x3F change
 };
 enum RoomSlotBits { SLOT_OPEN = 1, SLOT_TAKEN = 2, SLOT_READY = 4, SLOT_HOST = 8, SLOT_IN_GAME = 0x10,
                     SLOT_SITTING_OUT = 0x20 };   // (0x20: 2026-10-18)
-enum RoomFlags { RF_IN = 1, RF_PUBLIC = 2, RF_TEAMS = 4 };
+enum RoomFlags { RF_IN = 1, RF_PUBLIC = 2, RF_TEAMS = 4, RF_WATCH = 8, RF_TEAM_COLORS = 0x10 };
 struct Session {                   // only 0x213-0x21F change
     ...
     u8 outCount;                   // 0x212

@@ -150,6 +150,10 @@ struct Room {
     code: String,
     public: bool,
     teams: bool,
+    /// With `teams`: every player in their team's costume (P+'s plain team battle), else P+'s
+    /// rainbow team battle (any costume, a team glow). The host's FFA / TEAMS button goes FFA,
+    /// rainbow TEAMS, TEAMS (the user's, 2026-10-21).
+    team_colors: bool,
     open: [bool; ROOM_SLOTS],
     slots: [Option<Member>; ROOM_SLOTS],
     /// Slot index (0-3) of the host.
@@ -492,6 +496,7 @@ impl Room {
             code: self.code.clone(),
             public: self.public,
             teams: self.teams,
+            team_colors: self.teams && self.team_colors,
             mode: self.mode(),
             status: self.status(),
             you: slot as u8 + 1,
@@ -815,6 +820,7 @@ impl RoomBook {
                 code: code.clone(),
                 public,
                 teams: false,
+                team_colors: false,
                 open: [true, true, false, false],
                 slots,
                 host: 0,
@@ -1061,7 +1067,8 @@ impl RoomBook {
                     }
                 }
             }
-            RoomRequest::Teams { on } => {
+            RoomRequest::Teams { on, colors } => {
+                let colors = on && colors;
                 if !is_host {
                     return Err(msg::HOST_ONLY);
                 }
@@ -1071,10 +1078,12 @@ impl RoomBook {
                 if room.set_on() {
                     return Err(msg::SET_ON);
                 }
-                if room.teams != on {
+                if room.teams != on || room.team_colors != colors {
                     room.teams = on;
+                    room.team_colors = colors;
                     room.set = None;
-                    // Everyone's lock-in was made for the other mode.
+                    // Everyone's lock-in was made for the other mode (with the team colours, a
+                    // costume of the team's).
                     for m in room.slots.iter_mut().flatten() {
                         m.ready = false;
                     }
@@ -2156,7 +2165,7 @@ mod tests {
         assert_eq!((s["statusText"].as_str(), s["public"].as_bool()), (Some("Set paused: player2 left"), Some(false)));
         assert_eq!(s["set"]["canResume"], false);
         assert_eq!(msgs(&join(&mut t, 3, &code), 3)[0]["error"], msg::ROOM_FULL);
-        assert_eq!(msgs(&t.req(1, RoomRequest::Teams { on: true }), 1)[0]["error"], msg::SET_ON);
+        assert_eq!(msgs(&t.req(1, RoomRequest::Teams { on: true, colors: false }), 1)[0]["error"], msg::SET_ON);
         assert_eq!(msgs(&t.req(1, RoomRequest::Set { resume: true }), 1)[0]["error"], msg::SET_NOT_RESUMABLE);
         // They come back into their slot: the set goes on by itself, the room is public again,
         // and the next start goes on at game 2 from the strikes made so far.
@@ -2591,7 +2600,7 @@ mod tests {
         let code = create(&mut t, 1);
         t.req(1, RoomRequest::Slot { slot: 3, open: true });
         t.req(1, RoomRequest::Slot { slot: 4, open: true });
-        t.req(1, RoomRequest::Teams { on: true });
+        t.req(1, RoomRequest::Teams { on: true, colors: false });
         for n in 2..=4 {
             join(&mut t, n, &code);
         }
@@ -3080,7 +3089,7 @@ mod tests {
         }
         assert_eq!(last_state(&out, 1)["status"], "starting");
         // Changes wait; nobody else fits.
-        assert_eq!(msgs(&t.req(1, RoomRequest::Teams { on: true }), 1)[0]["error"], msg::BETWEEN_GAMES);
+        assert_eq!(msgs(&t.req(1, RoomRequest::Teams { on: true, colors: false }), 1)[0]["error"], msg::BETWEEN_GAMES);
         assert_eq!(msgs(&join(&mut t, 9, &code), 9)[0]["error"], msg::ROOM_FULL);
         // Tickets: a stranger is refused, members are matched once all are in.
         let addr = |n: u8| SocketAddrV4::new([203, 0, 113, n].into(), 41000 + n as u16);
@@ -3214,11 +3223,35 @@ mod tests {
     }
 
     #[test]
+    fn team_colours_are_a_teams_setting() {
+        let mut t = T::new();
+        let code = create(&mut t, 1);
+        t.req(1, RoomRequest::Slot { slot: 3, open: true });
+        join(&mut t, 2, &code);
+        // Colours without Teams are nothing.
+        let s = last_state(&t.req(1, RoomRequest::Teams { on: false, colors: true }), 1);
+        assert_eq!((s["teams"].clone(), s["teamColors"].clone()), (serde_json::json!(false), serde_json::json!(false)));
+        // The rainbow team battle first, as the host's button goes.
+        let s = last_state(&t.req(1, RoomRequest::Teams { on: true, colors: false }), 2);
+        assert_eq!((s["teams"].clone(), s["teamColors"].clone()), (serde_json::json!(true), serde_json::json!(false)));
+        // A lock-in made in the rainbow one is taken back for the teams' costumes.
+        t.req(2, RoomRequest::Ready { ready: true, character: Some(12), costume: Some(3), stocks: None });
+        let s = last_state(&t.req(1, RoomRequest::Teams { on: true, colors: true }), 2);
+        assert_eq!((s["teams"].clone(), s["teamColors"].clone()), (serde_json::json!(true), serde_json::json!(true)));
+        assert_eq!(s["slots"][1]["player"]["ready"], serde_json::json!(false));
+        // Only the host.
+        assert_eq!(msgs(&t.req(2, RoomRequest::Teams { on: true, colors: false }), 2)[0]["error"], msg::HOST_ONLY);
+        // Teams off clears it.
+        let s = last_state(&t.req(1, RoomRequest::Teams { on: false, colors: false }), 2);
+        assert_eq!(s["teamColors"], serde_json::json!(false));
+    }
+
+    #[test]
     fn teams_split_rules() {
         let mut t = T::new();
         let code = create(&mut t, 1);
         t.req(1, RoomRequest::Slot { slot: 3, open: true });
-        t.req(1, RoomRequest::Teams { on: true });
+        t.req(1, RoomRequest::Teams { on: true, colors: false });
         join(&mut t, 2, &code);
         join(&mut t, 3, &code);
         for c in 1..=3 {
@@ -3249,7 +3282,7 @@ mod tests {
         // Slots 1 and 3, Teams on: still a 1v1.
         t.req(1, RoomRequest::Slot { slot: 3, open: true });
         t.req(1, RoomRequest::Slot { slot: 2, open: false });
-        t.req(1, RoomRequest::Teams { on: true });
+        t.req(1, RoomRequest::Teams { on: true, colors: false });
         join(&mut t, 2, &code);
         ready_all(&mut t, &[1, 2]);
         let addr = |n: u8| SocketAddrV4::new([203, 0, 113, n].into(), 41000 + n as u16);

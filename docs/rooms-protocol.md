@@ -61,7 +61,7 @@ or refuses and disconnects:
 | `{"type": "room-join", "code": "KFQB"}` | anyone | any time | Takes the lowest open, empty slot. The code is matched case- and width-insensitively (`kfqb`, `ＫＦＱＢ`). Leaves the sender's old room first. Joining the room one is in answers its state. |
 | `{"type": "room-leave"}` | member | any time | Leaves (answered with `room-left`). |
 | `{"type": "room-slot", "slot": 3, "open": true}` | host | between games | Opens or closes slot 1-4. Closing an occupied slot removes its player ("Removed from the room."), who may join again once a slot is open. |
-| `{"type": "room-teams", "on": true}` | host | between games | The Teams switch. Changing it clears everyone's ready. |
+| `{"type": "room-teams", "on": true, "colors": false}` | host | between games | The Teams switch. `colors` (2026-10-21; missing: false): with `on`, every player in their team's costume (P+'s TEAM BATTLE); else P+'s rainbow TEAM BATTLE (any costume, a team glow). Changing either clears everyone's ready. |
 | `{"type": "room-public", "public": false}` | host | any time | Public or private (a private room is joinable by code only). |
 | `{"type": "room-ready", "ready": true, "character": 12, "costume": 0, "stocks": 3}` | member | not during the start, not while still in the last game | START on the CSS (lock-in) or taking it back. `character` and `costume` are optional numbers 0-255 the server only passes on; they are shown to the others, ready or not: with `ready: false` they are the coin the player has put down on the CSS (no `character`: the coin is in the hand), so the others see the pick before START (2026-10-18; withheld from the others in a set's blind game 1). A ready also plays again (clears `sittingOut`); refused for a player outside a set that is on (`Wait for the set to end.`). `stocks` (2026-10-15, optional, 1-99): under the rules' `stockControl`, the stock count the player picked on their panel's STOCKS box (none picked: left out); shown to the others as `character` is (also withheld in a blind pick), and only while the rules have stock control. The match takes each player's count from the game's own lock-in exchange, not from here. |
 | `{"type": "room-team", "team": 1}` | member | not during the start, not while still in the last game | 0 red, 1 blue, 2 green. New members get red, blue, green, red by slot. |
@@ -96,6 +96,7 @@ A request that is refused changes nothing and is answered with `room-error`. Mal
 
 - `stocks` is there only under the rules' `stockControl`, for a ready player who picked a count (an older client ignores it).
 - `rules.stockControl` is written only when `true` (`docs/rulesets-protocol.md`).
+- `teamColors` (2026-10-21): with `teams`, every player plays in their team's costume; false (or missing, an older mm): the rainbow team battle.
 - `mode`: from the players who play (not sitting out), or the open slots while fewer than two play: `1v1` with two (the Teams switch has no effect then), `teams` with Teams on and three or four, else `ffa`.
 - `sittingOut` (each player, 2026-10-18): the player sits out (their SIT OUT, or outside a set that is on). An older mm sends none: the client then sends no pick before the ready.
 - `watching` (each player, 2026-10-19, written only when true): the player watches the room's game from the room CSS (`room-watch`); the next game does not wait for them.

@@ -375,6 +375,8 @@ std::optional<View> ParseView(const picojson::object& o, std::string* why)
   }
   v.is_public = *is_public;
   v.teams = *teams;
+  // Absent from servers before 2026-10-21: the rainbow team battle.
+  v.team_colors = *teams && Bool(o, "teamColors").value_or(false);
   if (*mode == "1v1")
     v.mode = Mode::OneVsOne;
   else if (*mode == "ffa")
@@ -774,6 +776,7 @@ std::optional<std::string> RequestJson(const Request& r)
   case Op::Teams:
     o["type"] = picojson::value("room-teams");
     o["on"] = picojson::value(r.flag);
+    o["colors"] = picojson::value(r.flag && r.colors);
     break;
   case Op::Public:
     o["type"] = picojson::value("room-public");

@@ -496,6 +496,23 @@ def status_line(g: Game) -> str:
     return g.c.call("rooms_status")["text"]
 
 
+def sel_teams(g: Game) -> int:
+    """gmSelCharData+0x33 ([[0x805A00E0]+0x10]): P+'s team battle kind, which its Teams.asm reads in
+    Fighter::start: 2 the rainbow team battle, whose fighters get their team's glow."""
+    return g.c.read_mem(_u32(g, _u32(g, 0x805A00E0) + 0x10) + 0x33, 1)[0]
+
+
+def costume_colour(g: Game, css: int, costume: int) -> int:
+    """A costume's colour in P+'s CSS slot table (0x80585B00 + css * 0x10, +8: 2-byte entries, the
+    first byte the colour; online_match.cpp costumeList)."""
+    return g.c.read_mem(_u32(g, 0x80585B08 + css * 0x10) + 2 * costume, 1)[0]
+
+
+def team_colour(g: Game, team: int) -> int:
+    """The costume colour of team 0-2 (0x805A21F0 + team: red, blue, green)."""
+    return g.c.read_mem(0x805A21F0 + team, 1)[0]
+
+
 def test_room_three_players_teams(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
                                   gpu_backend: str) -> None:
     """Three games: the host opens slot 3 with the hand and A, R turns Teams on, picks a costume
@@ -519,7 +536,8 @@ def test_room_three_players_teams(backend: OnlineBackend, dolphin: Callable[...,
     a.steps("tap A 8", "wait 30")
     until_view(a, lambda v: v["slots"][2]["bits"] & ppom.SLOT_OPEN, "slot 3 open")
     a.steps("tap R 8", "wait 30")
-    until_view(a, lambda v: v["flags"] & ppom.RF_TEAMS, "Teams on")
+    v = until_view(a, lambda v: v["flags"] & ppom.RF_TEAMS, "Teams on")
+    assert not v["flags"] & ppom.RF_TEAM_COLORS, v   # the rainbow team battle first (2026-10-21)
     # Any costume on any team (the user's, 2026-10-12): X twice, the costume after next; the team
     # stays (P+'s rainbow TEAM BATTLE, the user's, 2026-10-15: X / Y the costume, A the team).
     costume0 = _u32(a, css_area(a) + 0x1BC)
@@ -594,8 +612,10 @@ def test_room_three_players_teams(backend: OnlineBackend, dolphin: Callable[...,
     assert [s["local_slot"] for s in st] == [0, 1, 2], st
     for g in gs:
         se = ppom.read_session(g.c, ppom.find_block(g.c))
-        assert se["teams"] == 1 and se["game"] == game, se
+        assert se["teams"] == ppom.TEAMS_RAINBOW and se["game"] == game, se
         assert [pl["team"] for pl in se["players"][:3]] == [0, 0, 1], se
+        # P+'s rainbow team battle: the team glow on every fighter (Teams.asm, Fighter::start).
+        assert sel_teams(g) == 2, (g.name, sel_teams(g))
     setups = [B.read_match_setup(g.c.read_mem) for g in gs]
     assert setups[0] == setups[1] == setups[2], setups
     # Every player in the costume they locked in, not their team's.
@@ -636,6 +656,139 @@ def test_room_three_players_teams(backend: OnlineBackend, dolphin: Callable[...,
     # The history: red (A, B) first together, blue second.
     m = room_history(backend, gs, users, (0, 1, 2), "teams")
     assert [(p["team"], p["place"], p["wins"]) for p in m["players"]] == [(0, 1, 1), (0, 1, 1), (1, 2, 0)], m
+
+
+def test_room_team_colours(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
+                           gpu_backend: str) -> None:
+    """The host's FFA / TEAMS button goes FFA, TEAMS in rainbow letters, TEAMS (the user's,
+    2026-10-21). In the rainbow team battle two players pick costumes of another colour than their
+    team's and one of them readies; the host's next press (TEAMS, the teams' costumes) takes the
+    lock-in back and every panel goes back to a costume of its team's colour. A 2-against-1 team
+    battle in the teams' costumes: SESSION teams 3, gmSelCharData+0x33 1 (no glow), every player's
+    match costume of their team's colour; blue walks off, 0 checksum mismatches, back in the room,
+    and one more press is FFA."""
+    test = "team-colours"
+    users = [backend.create_user(n, n[:4].upper()) for n in ("tcara", "tcbo", "tccy")]
+    a, b, c = gs = [_boot(dolphin, f"roomtc-{x}", backend, u, gpu_backend, test, "gameplay", artifacts=ART)
+                    for x, u in zip("abc", users)]
+    _all(*[g.to_main_menu for g in gs])
+    _all(*[g.to_online_page for g in gs])
+
+    code = create_room(a)
+    pick(a)
+    hand_to(a, PANEL_X[2], -10.0)
+    a.steps("tap A 8", "wait 30")
+    until_view(a, lambda v: v["slots"][2]["bits"] & ppom.SLOT_OPEN, "slot 3 open")
+    # R: TEAMS in rainbow letters, P+'s rainbow team battle.
+    a.steps("tap R 8", "wait 30")
+    v = until_view(a, lambda v: v["flags"] & ppom.RF_TEAMS, "Teams on")
+    assert not v["flags"] & ppom.RF_TEAM_COLORS, v
+    hand_to(a, -23.0, 10.5)   # back on Fox
+    a.steps("wait 30")
+    a.shot("02-rainbow-teams")
+
+    _all(lambda: to_join_room(b), lambda: to_join_room(c))
+    pick(b, right=1)
+    pick(c, right=4)
+    for g in gs:
+        assert _u32(g, css_area(g) + 0x1B8) not in (0x28, 0x29), (g.name, hex(_u32(g, css_area(g) + 0x1B8)))
+        B.write_rules(g.c, stocks=1, minutes=1, items_off=True)
+        ppom.allow_test_rules(g.c)
+    type_room_code(b, code)
+    until_view(b, lambda v: v["flags"] & ppom.RF_IN, "B in the room")
+    type_room_code(c, code)
+    until_view(c, lambda v: v["flags"] & ppom.RF_IN, "C in the room")
+    until_view(a, lambda v: [s["team"] for s in v["slots"][:3]] == [0, 1, 2] and
+               all(s["bits"] & ppom.SLOT_TAKEN for s in v["slots"][:3]), "three players, red blue green")
+    # C to red (green -> red): red A and C against blue B.
+    hand_to(c, PANEL_X[2], -10.0)
+    c.steps("tap A 8", "wait 20")
+    until_view(a, lambda v: [s["team"] for s in v["slots"][:3]] == [0, 1, 0], "red, blue, red")
+
+    # B and C pick costumes of another colour than their team's (X until there is one): in the
+    # rainbow team battle any costume stays. B readies with its own.
+    def off_colour(g: Game, team: int) -> int:
+        for _ in range(8):
+            area = css_area(g)
+            css, cost = _u32(g, area + 0x1B8), _u32(g, area + 0x1BC)
+            if costume_colour(g, css, cost) != team_colour(g, team):
+                return cost
+            g.steps("tap X 8", "wait 20")
+        raise AssertionError(f"{g.name}: no costume of another colour than team {team}")
+    hand_to(b, PANEL_X[1], -10.0)
+    costume_b = off_colour(b, 1)
+    costume_c = off_colour(c, 0)
+    for g in (b, c):
+        g.steps("wait 30")
+        g.shot("03-rainbow-costumes")
+    b.steps("tap START 8", "wait 20")
+    until_view(a, lambda v: v["slots"][1]["bits"] & ppom.SLOT_READY, "B ready")
+    assert _u32(b, css_area(b) + 0x1BC) == costume_b and _u32(c, css_area(c) + 0x1BC) == costume_c
+
+    # R again: TEAMS in the teams' costumes. B's lock-in is taken back and every panel is in a
+    # costume of its team's colour.
+    a.steps("tap R 8", "wait 30")
+    until_view(a, lambda v: v["flags"] & ppom.RF_TEAMS and v["flags"] & ppom.RF_TEAM_COLORS, "TEAMS (colours)")
+    until_view(a, lambda v: not v["slots"][1]["bits"] & ppom.SLOT_READY, "B's lock-in taken back")
+    for g, team in ((a, 0), (b, 1), (c, 0)):
+        def on_team(g: Game = g, team: int = team) -> bool:
+            area = css_area(g)
+            return costume_colour(g, _u32(g, area + 0x1B8), _u32(g, area + 0x1BC)) == team_colour(g, team)
+        _wait(on_team, 10, f"{g.name}: a costume of team {team}'s colour")
+        g.steps("wait 30")
+        g.shot("04-team-colours")
+    assert _u32(b, css_area(b) + 0x1BC) != costume_b and _u32(c, css_area(c) + 0x1BC) != costume_c
+    # X onto another colour comes back to the team's.
+    b.steps("tap X 8", "wait 20")
+    area = css_area(b)
+    assert costume_colour(b, _u32(b, area + 0x1B8), _u32(b, area + 0x1BC)) == team_colour(b, 1)
+    css = [_u32(g, css_area(g) + 0x1B8) for g in gs]
+
+    game = room_view(a)["game"]
+    for g in gs:
+        g.steps("tap START 8", "wait 10")
+    online_set.wait(lambda: all(online_set.gstatus(g.c)["phase"] in ("running", "error", "ended") for g in gs),
+                    240, "the room's game running on all three")
+    st = [online_set.gstatus(g.c) for g in gs]
+    assert all(s["phase"] == "running" for s in st), [(s["phase"], s.get("error")) for s in st]
+    for g in gs:
+        se = ppom.read_session(g.c, ppom.find_block(g.c))
+        assert se["teams"] == ppom.TEAMS_COLORS and se["game"] == game, se
+        assert [pl["team"] for pl in se["players"][:3]] == [0, 1, 0], se
+        assert sel_teams(g) == 1, (g.name, sel_teams(g))   # P+'s plain team battle: no glow
+    setups = [B.read_match_setup(g.c.read_mem) for g in gs]
+    assert setups[0] == setups[1] == setups[2], setups
+    colours = [costume_colour(a, css[i], setups[0].players[i].color_no) for i in range(3)]
+    assert colours == [team_colour(a, t) for t in (0, 1, 0)], (colours, setups[0].players)
+    time.sleep(8)
+    for g in gs:
+        g.shot("05-team-colours-battle")
+
+    from ppharness import flows as F
+    with contextlib.suppress(Exception):
+        F.fight([F.Seat(b.c, 1, 0, "B")], 60 * 60, mode="selfdestruct", seed="tc",
+                stop=lambda: online_set.gstatus(b.c)["phase"] != "running")
+    try:
+        online_set.wait(lambda: all(online_set.gstatus(g.c)["phase"] != "running" for g in gs), 240,
+                        "the game to end")
+    except TimeoutError:
+        for g in gs:
+            g.shot("05-timeout")
+        raise AssertionError(f"the game did not end: {[online_set.gstatus(g.c) for g in gs]}")
+    st = [online_set.gstatus(g.c) for g in gs]
+    limit = min(s["current_frame"] for s in st) - online_set.CONFIRM_MARGIN
+    cks = [{r[0]: r[1] for r in g.c.call("gprb_checksums", since=0)["rows"] if r[0] <= limit} for g in gs]
+    common = sorted(set(cks[0]) & set(cks[1]) & set(cks[2]))
+    bad = [f for f in common if not cks[0][f] == cks[1][f] == cks[2][f]]
+    print(f"team colours: frames {[s['current_frame'] for s in st]}, end {[s['end_reason'] for s in st]}, "
+          f"checksums compared {len(common)}, mismatches {len(bad)}")
+    assert common and not bad, (len(common), bad[:5])
+    _wait(lambda: all(g.scene() == CSS for g in gs), 180, "all back on the room's CSS")
+    until_view(a, lambda v: v["status"] == 0 and v["game"] == game + 1, "the room waiting", timeout=60)
+    # One more press: FFA.
+    a.steps("wait 60", "tap R 8", "wait 30")
+    until_view(a, lambda v: not v["flags"] & (ppom.RF_TEAMS | ppom.RF_TEAM_COLORS), "FFA")
+    a.shot("06-ffa-again")
 
 
 def write_join(g: Game, code: str) -> str:

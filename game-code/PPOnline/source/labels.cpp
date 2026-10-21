@@ -425,6 +425,50 @@ namespace Labels {
         *b = (x & 1) ? (u8)((*b & 0xF0) | v) : (u8)((*b & 0x0F) | (v << 4));
     }
 
+    // An RGB565 colour of hue `h` (0-359), fairly saturated so the letters stay readable.
+    static u16 hueColour(int h)
+    {
+        h %= 360;
+        int f = (h % 60) * 255 / 60, lo = 64, hi = 255;
+        int up = lo + (hi - lo) * f / 255, down = hi - (hi - lo) * f / 255;
+        int r, g, b;
+        switch (h / 60) {
+            case 0: r = hi; g = up; b = lo; break;
+            case 1: r = down; g = hi; b = lo; break;
+            case 2: r = lo; g = hi; b = up; break;
+            case 3: r = lo; g = down; b = hi; break;
+            case 4: r = up; g = lo; b = hi; break;
+            default: r = hi; g = lo; b = down; break;
+        }
+        return (u16)(((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3));
+    }
+
+    bool rainbowInBox(u8* tex0, int x0, int y0, int x1, int y1)
+    {
+        if (!isPtr((u32)tex0) || *(u32*)tex0 != 0x54455830 /* TEX0 */) return false;
+        int w = *(u16*)(tex0 + 0x1C), h = *(u16*)(tex0 + 0x1E);
+        if (*(u32*)(tex0 + 0x20) != 14 || w <= 0 || h <= 0 || w > 1024 || h > 256 || x1 <= x0) return false;
+        u8* data = tex0 + *(u32*)(tex0 + 0x10);
+        const int bpr = (w + 7) / 8, bpc = (h + 7) / 8;
+        for (int by = 0; by < bpc; by++) {
+            for (int bx = 0; bx < bpr; bx++) {
+                u8* blk = data + (by * bpr + bx) * 32;
+                for (int sb = 0; sb < 4; sb++) {
+                    int sx = bx * 8 + (sb & 1) * 4, sy = by * 8 + (sb >> 1) * 4;
+                    if (sx < x0 || sy < y0 || sx + 4 > x1 || sy + 4 > y1) continue;
+                    // renderInBox's palette: c0 black (the outline), c1 white (the letters), their
+                    // mix, clear. Only c1 changes: c0 = 0 <= c1 keeps the 3-colour mode.
+                    u8* e = blk + sb * 8;
+                    if (*(u16*)e != 0x0000 || *(u16*)(e + 2) != 0xFFFF) continue;
+                    u16 c = hueColour((sx + 2 - x0) * 300 / (x1 - x0));
+                    *(u16*)(e + 2) = c ? c : 1;
+                }
+            }
+        }
+        DCFlushRange(data, (u32)(bpr * bpc * 32));
+        return true;
+    }
+
     bool mirroredIcon(u8* dst, const u8* src)
     {
         if (*(u32*)dst != 0x54455830 || *(u32*)src != 0x54455830) return false;

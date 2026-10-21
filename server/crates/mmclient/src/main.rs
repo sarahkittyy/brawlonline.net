@@ -382,7 +382,7 @@ fn run_room(a: RoomArgs) -> anyhow::Result<i32> {
             client.send(&RoomRequest::Slot { slot: s, open: false });
         }
         if a.teams {
-            client.send(&RoomRequest::Teams { on: true });
+            client.send(&RoomRequest::Teams { on: true, colors: false });
         }
     }
     if let Some(team) = a.team {

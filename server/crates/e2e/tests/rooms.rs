@@ -191,9 +191,9 @@ async fn public_list_private_rooms_and_online_count() {
     // Teams with four open slots: mode "teams"; three open without Teams: "ffa".
     a.send(&RoomRequest::Slot { slot: 3, open: true });
     a.send(&RoomRequest::Slot { slot: 4, open: true });
-    a.send(&RoomRequest::Teams { on: true });
+    a.send(&RoomRequest::Teams { on: true, colors: false });
     rooms_until(&stack, &sa, |b| b["rooms"][0]["mode"] == "teams" && b["rooms"][0]["openSlots"] == 4).await;
-    a.send(&RoomRequest::Teams { on: false });
+    a.send(&RoomRequest::Teams { on: false, colors: false });
     a.send(&RoomRequest::Slot { slot: 4, open: false });
     rooms_until(&stack, &sa, |b| b["rooms"][0]["mode"] == "ffa" && b["rooms"][0]["openSlots"] == 3).await;
 
@@ -230,7 +230,7 @@ async fn a_room_plays_with_every_member_and_takes_a_joiner_during_the_game() {
 
     let code = create(&mut a);
     a.send(&RoomRequest::Slot { slot: 3, open: true });
-    a.send(&RoomRequest::Teams { on: true });
+    a.send(&RoomRequest::Teams { on: true, colors: false });
     join(&mut b, &code);
     join(&mut c, &code);
     room_state_where(&mut c, |s| s["you"] == 3);

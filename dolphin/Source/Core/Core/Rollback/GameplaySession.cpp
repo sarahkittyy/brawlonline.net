@@ -171,6 +171,7 @@ struct MatchSetup
   int num_players = 0;
   std::array<LobbyPlayer, MAX_LOBBY_PLAYERS> players{};
   bool teams = false;  // a team battle (players[i].team)
+  bool team_colors = false;  // ... in the teams' costumes (NetOptions::team_colors)
   Restore restore;     // a desynced game played again from the agreed state (SetDesyncRecovery)
 };
 
@@ -1792,6 +1793,8 @@ picojson::value SetupJson(const MatchSetup& st)
   o["players"] = picojson::value(players);
   if (st.teams)
     o["teams"] = picojson::value(true);
+  if (st.teams && st.team_colors)
+    o["teamColors"] = picojson::value(true);
   if (st.restore.valid)
   {
     // The agreed frame, its checksum, per port the stocks and the damage (the float's bits, so
@@ -1883,6 +1886,9 @@ std::optional<MatchSetup> SetupFromJson(const picojson::object& o)
   // allowed the split; the joiner checks it the same way.
   const auto teams_it = o.find("teams");
   st.teams = teams_it != o.end() && teams_it->second.is<bool>() && teams_it->second.get<bool>();
+  const auto colors_it = o.find("teamColors");
+  st.team_colors = st.teams && colors_it != o.end() && colors_it->second.is<bool>() &&
+                   colors_it->second.get<bool>();
   std::array<Online::GameSetup::Seat, Online::GameSetup::MAX_PORTS> seats{};
   u64 index = 0;
   for (const auto& p : it->second.get<picojson::array>())
@@ -2172,6 +2178,7 @@ void MaybeDecideSetup()
   st.game = game;
   st.num_players = count;
   st.teams = teams.teams;
+  st.team_colors = teams.teams && s.net_opts.team_colors;
   for (int port = 0; port < MAX_LOBBY_PLAYERS; ++port)
   {
     if (const LockIn* l = locks[port])
@@ -6442,6 +6449,7 @@ Lobby GetLobby()
     l.asl = s.setup.asl;
     l.players = s.setup.players;
     l.teams = s.setup.teams;
+    l.team_colors = s.setup.team_colors;
     l.restore = s.setup.restore;
   }
   l.last_winner = s.last_winner;
@@ -7207,6 +7215,7 @@ picojson::value Status()
     lobby["stage_pickers"] = picojson::value(static_cast<double>(s.last_pickers));
     lobby["setup_error"] = picojson::value(static_cast<double>(s.setup_error));
     lobby["teams"] = picojson::value(s.net_opts.teams);
+    lobby["team_colors"] = picojson::value(s.net_opts.team_colors);
     lobby["last_stage"] = picojson::value(static_cast<double>(s.last_stage));
     picojson::array stages;
     for (const u16 st : AllowedStages())

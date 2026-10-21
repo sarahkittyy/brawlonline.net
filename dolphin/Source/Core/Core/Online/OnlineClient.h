@@ -40,6 +40,7 @@ struct SearchOptions
   // A room's game (Online/Rooms.h): copied into the Match handed to the backend.
   int room_host_port = 0;
   bool room_teams = false;
+  bool room_team_colors = false;  // with room_teams: every player in their team's costume
   u8 room_pickers = 0;
   // The game's own search (GameBridge's FIND_OPPONENT): the game stopping cancels it while it has
   // not connected yet, as the game leaving the CSS does (CLEANUP_CONNECTION).

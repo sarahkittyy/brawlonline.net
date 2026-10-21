@@ -2415,10 +2415,18 @@ namespace OnlineMenu {
     static const float ROOM_PLAY_SCALE2 = 0.5f, ROOM_PLAY_LINES = 17.0f;
     static char s_playPrinted[140];
 
+    // The room's Teams setting as ROOM_TEAMS takes it: 0 off, 1 the rainbow team battle, 2 the
+    // teams' costumes.
+    static int roomTeamsKind(const PPOM::Session& se)
+    {
+        if (!(se.roomFlags & PPOM::RF_TEAMS)) return 0;
+        return (se.roomFlags & PPOM::RF_TEAM_COLORS) ? 2 : 1;
+    }
+
     static void roomButtons(bool in, bool host)
     {
         const PPOM::Session& se = PPOM::g_block.session;
-        RoomCss::headerButtons(in && (se.roomFlags & PPOM::RF_PUBLIC), in && (se.roomFlags & PPOM::RF_TEAMS));
+        RoomCss::headerButtons(in && (se.roomFlags & PPOM::RF_PUBLIC), in ? roomTeamsKind(se) : 0);
         MuMsg* m = s.cssMsg;
         if (!m || !s.haveWindow) return;
         if (!s.roomBtnsShown) {
@@ -2573,6 +2581,14 @@ namespace OnlineMenu {
         RoomPlay::tick(in, host);
         // rules.md #5: a change of the rules or of the ruleset (its set length) took back every ready
         if ((RoomRules::changedNow() || RoomPlay::changedNow()) && waiting && roomLockedForNext()) unlock();
+        // So did a change of FFA / rainbow TEAMS / TEAMS (mm's room-teams): unlocked here too, or
+        // Dolphin sends the lock-in's ready again at once. With the teams' costumes the costume then
+        // goes back to the team's (below) before the player readies again (the user's, 2026-10-21).
+        static int s_teamsKindSeen = -1;
+        int teamsKind = in ? roomTeamsKind(se) : -1;
+        if (teamsKind != s_teamsKindSeen && s_teamsKindSeen >= 0 && teamsKind >= 0 && waiting && roomLockedForNext())
+            unlock();
+        s_teamsKindSeen = teamsKind;
         if (rulesOpen) {
             s_headerPress = 0;
             s.roomKickPort = -1;
@@ -2695,7 +2711,9 @@ namespace OnlineMenu {
                 playSE(1);
             }
             if (teamsSwitch) {
-                postRoom(PPOM::ROOM_TEAMS, (se.roomFlags & PPOM::RF_TEAMS) ? 0 : 1, 0, NULL);
+                // FFA, then TEAMS in rainbow letters (P+'s rainbow team battle, the first: the user's,
+                // 2026-10-21), then TEAMS in the teams' costumes, then FFA again.
+                postRoom(PPOM::ROOM_TEAMS, (u8)((roomTeamsKind(se) + 1) % 3), 0, NULL);
                 playSE(1);
             }
             // A on a slot's panel: an empty slot opens or closes at once. An occupied one closes
@@ -2748,6 +2766,19 @@ namespace OnlineMenu {
                 int cur = se.players[me].roomTeam < PPOM::TEAM_COUNT ? se.players[me].roomTeam : 0;
                 postRoom(PPOM::ROOM_TEAM, (u8)((cur + 1) % PPOM::TEAM_COUNT), 0, NULL);
                 playSE(1);
+            }
+            // TEAMS in the teams' costumes (the user's, 2026-10-21): the costume on the panel is
+            // always one of the team's, so a costume picked in the rainbow team battle, or before
+            // a team change, goes back to the team's (X / Y onto another colour come back to it
+            // too). Not while locked in: the lock-in is taken back when the host switches (mm),
+            // and the match gives every player their team's costume anyway (OnlineMatch::setupMatch).
+            u8* myArea = teamsOn && (se.roomFlags & PPOM::RF_TEAM_COLORS) && me >= 0 && !g_onlineCssLock ? playerArea() : NULL;
+            if (myArea && se.players[me].roomTeam < PPOM::TEAM_COUNT) {
+                int css = *(int*)(myArea + 0x1B8), cur = *(int*)(myArea + 0x1BC);
+                if (css >= 0 && css < 0x40 && css != 0x28 && css != 0x29 && cur >= 0 && cur < 0x20) {
+                    u8 want = OnlineMatch::teamCostume(charKindOf(css), se.players[me].roomTeam, (u8)cur);
+                    if (want != cur) RoomCss::setMyCostume(want);
+                }
             }
             roomMatch();
             roomPreview(me >= 0 && !meInGame && se.roomStatus != 1 && !g_onlineMatchGame);

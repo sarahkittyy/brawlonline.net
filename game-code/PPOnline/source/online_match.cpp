@@ -183,6 +183,27 @@ namespace OnlineMatch {
         return n;
     }
 
+    // A player's costume in a team battle in the teams' costumes (the room's TEAMS, 2026-10-21; until
+    // 2026-10-12 every room team battle): the one the CSS would give them for their team. The CSS
+    // calls muMenu::findCharTeamColorNo (0x800AF520) with the CSS character, the team and P+'s "team
+    // set" (which of the team's costumes), and P+ v3.2 replaces that function (Legacy TE
+    // UnboundedTeamEngine.asm) with a walk over the character's costume list (costumeList); a
+    // team's colour is the byte at r2 - 0x7130 + team (0x805A21F0: 0 red, 1 blue, 3 green). The
+    // same walk here: the player's own costume if it already has the team's colour (they picked
+    // that shade, e.g. P+'s second green), else the character's first costume of it.
+    u8 teamCostume(u8 charKind, u8 team, u8 costume)
+    {
+        if (team >= PPOM::TEAM_COUNT) return costume;
+        u8 colours[0x20];
+        int n = costumeList(charKind, colours);
+        u8 colour = *(u8*)(0x805A21F0 + team);
+        if (costume < n && colours[costume] == colour) return costume;
+        for (int i = 0; i < n; i++) {
+            if (colours[i] == colour) return (u8)i;
+        }
+        return costume;
+    }
+
     // Two players with the same character and costume (staging feedback 2026-10-10; in a team battle
     // too, since its costumes are the players' own, 2026-10-12): P+'s Versus never shows that. Its CSS
     // does not let a costume another player has be picked: X skips it, and a player taking a character
@@ -297,6 +318,10 @@ namespace OnlineMatch {
         // battle, where every player has one of Brawl's three team colours (Dolphin refuses a
         // team battle with everyone on one colour, "Pick different teams", before it gets here).
         const bool teams = se.teams != 0;
+        // The room's TEAMS in the teams' costumes: every player in their team's (no alts, P+'s
+        // AltZ / AltR having no team colours), and two of a character on one team the game's
+        // shading tells apart, as P+'s plain team battle.
+        const bool teamColours = se.teams == PPOM::TEAMS_COLORS;
         for (int i = 0; i < se.numPlayers; i++) {
             const PPOM::SessionPlayer& pl = se.players[i];
             if (!pl.present) continue;
@@ -335,6 +360,10 @@ namespace OnlineMatch {
                 // costume on any team; Brawl's team battle CSS would give the team's).
                 costume[i] = pl.costume & PPOM::COSTUME_COLOUR;
                 alt[i] = pl.costume & PPOM::COSTUME_ALTS;
+                if (teamColours) {
+                    costume[i] = teamCostume(pl.charKind, pl.team, costume[i]);
+                    alt[i] = 0;
+                }
                 p[0x00] = pl.charKind;
                 p[0x01] = 0;                         // human
                 p[0x05] = costume[i];                // colour number
@@ -345,7 +374,7 @@ namespace OnlineMatch {
                 p[0x01] = 3;                         // none
             }
         }
-        distinctCostumes(se, costume, alt);
+        if (!teamColours) distinctCostumes(se, costume, alt);
         for (int i = 0; i < se.numPlayers && i < 4; i++) {
             if (se.players[i].present) sel[SEL_PLAYERS + i * PLAYER_SIZE + 0x05] = costume[i];
         }
@@ -354,7 +383,12 @@ namespace OnlineMatch {
         // last offline pick's in the others, which gave this machine alone an alt costume.) Offline
         // play does not read them back: P+'s CSS writes all four again when it is left.
         setAltCostumes(alt);
-        sel[SEL_TEAMS] = teams ? 1 : 0;
+        // P+'s team battle kind (Project+/Teams.asm, which its CSS writes here from task+0x5CB): 1
+        // its plain team battle, 2 its rainbow one, where Fighter::start and ::restart give each
+        // fighter its team's glow (effect 0x88 + team), the outline of the user's request
+        // (2026-10-21). Any non-zero is a team battle to the Versus setup. A replay recorded
+        // before then (TEAMS_LEGACY) plays as it was: 1, no glow.
+        sel[SEL_TEAMS] = se.teams == PPOM::TEAMS_RAINBOW ? 2 : teams ? 1 : 0;
         se.outCount = 0;
         se.quitPorts = 0;
         se.quitStays = 0;

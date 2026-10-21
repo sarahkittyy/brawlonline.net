@@ -148,7 +148,13 @@ constexpr u8 SLOT_OPEN = 1, SLOT_TAKEN = 2, SLOT_READY = 4, SLOT_HOST = 8, SLOT_
 constexpr u8 SCREEN_ROOM_CSS = static_cast<u8>(Rooms::Screen::Room);
 // RF_WATCH (2026-10-19): SESSION holds a room game this player watches from the room CSS
 // (Online/RoomWatch.h); the room CSS leaves for its match once it is SS_MATCH_READY.
-constexpr u8 RF_IN = 1, RF_PUBLIC = 2, RF_TEAMS = 4, RF_WATCH = 8;
+// RF_TEAM_COLORS (2026-10-21): with RF_TEAMS, P+'s plain team battle (the teams' costumes); without
+// it the rainbow team battle (any costume, a team glow).
+constexpr u8 RF_IN = 1, RF_PUBLIC = 2, RF_TEAMS = 4, RF_WATCH = 8, RF_TEAM_COLORS = 0x10;
+// S_TEAMS: 0 a free-for-all; a team battle: 1 as recorded before 2026-10-21 (the players' own
+// costumes, no glow), 2 P+'s rainbow team battle (the players' own costumes and the team glow),
+// 3 its plain one (every player in their team's costume).
+constexpr u8 TEAMS_LEGACY = 1, TEAMS_RAINBOW = 2, TEAMS_COLORS = 3;
 static_assert(L_ROOM_CREATE == L_DESYNCED + 1 && L_QUIT_LEFT == L_ROOM_CREATE + 1 &&
               L_QUIT_LEFT < LOCAL_SIZE);
 static_assert(L_ROOM < L_DIRECT_JOIN && L_DIRECT_NUMBER + 2 == L_OWN &&
@@ -772,8 +778,11 @@ Response RoomResponse(const Core::CPUThreadGuard& guard, u32 payload, std::strin
     ok = arg < SESSION_PLAYERS;
     break;
   case 5:
+    // arg 0 off, 1 the rainbow team battle, 2 the teams' costumes (2026-10-21).
     r.op = Rooms::Op::Teams;
     r.flag = arg != 0;
+    r.colors = arg == 2;
+    ok = arg <= 2;
     break;
   case 6:
     r.op = Rooms::Op::Public;
@@ -1214,7 +1223,8 @@ void PutRoom(std::vector<u8>& session, const Rooms::Snapshot& room, const Gprb::
     }
     session[p + SP_ROOM_SLOT] = bits;
   }
-  session[S_ROOM_FLAGS] = RF_IN | (v.is_public ? RF_PUBLIC : 0) | (v.teams ? RF_TEAMS : 0);
+  session[S_ROOM_FLAGS] = RF_IN | (v.is_public ? RF_PUBLIC : 0) | (v.teams ? RF_TEAMS : 0) |
+                          (v.teams && v.team_colors ? RF_TEAM_COLORS : 0);
   for (size_t k = 0; k < 4; ++k)
     session[S_ROOM_CODE + k] = k < v.code.size() ? static_cast<u8>(v.code[k]) : 0;
   session[S_ROOM_HOST] = static_cast<u8>(v.host - 1);
@@ -1342,8 +1352,8 @@ std::vector<u8> PlaybackSession(const std::vector<u8>& rec, u16 version)
       std::copy(pv.begin(), pv.end(), out.begin() + p + SP_PORT_VALUES);
     }
   }
-  out[S_TEAMS] = rec[S_TEAMS] ? 1 : 0;
-  out[S_ROOM_FLAGS] = rec[S_ROOM_FLAGS] & (RF_IN | RF_PUBLIC | RF_TEAMS);
+  out[S_TEAMS] = rec[S_TEAMS] <= TEAMS_COLORS ? rec[S_TEAMS] : TEAMS_LEGACY;
+  out[S_ROOM_FLAGS] = rec[S_ROOM_FLAGS] & (RF_IN | RF_PUBLIC | RF_TEAMS | RF_TEAM_COLORS);
   for (u32 k = 0; k < 4; ++k)
   {
     const u8 c = rec[S_ROOM_CODE + k];
@@ -1742,7 +1752,7 @@ void SyncSession(const Core::CPUThreadGuard& guard, const Located& loc)
         highest = i + 1;
     }
     session[S_NUM_PLAYERS] = static_cast<u8>(highest ? highest : lobby.num_players);
-    session[S_TEAMS] = lobby.teams ? 1 : 0;
+    session[S_TEAMS] = !lobby.teams ? 0 : lobby.team_colors ? TEAMS_COLORS : TEAMS_RAINBOW;
     session[S_SETUP_ERROR] = lobby.setup_error;
     for (int i = 0; i < SESSION_PLAYERS; ++i)
     {

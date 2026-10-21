@@ -105,6 +105,7 @@ public:
                        match.is_host, match.room_host_port);
         }
         o.teams = match.room_teams;
+        o.team_colors = match.room_teams && match.room_team_colors;
         o.initial_pickers = match.room_pickers & ports;
       }
     }
