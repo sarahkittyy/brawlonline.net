@@ -1,7 +1,7 @@
 import { mkdtemp, readFile, rm, writeFile } from "fs/promises";
 import os from "os";
 import path from "path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   boxAd,
@@ -29,6 +29,7 @@ import type { SocialEvent } from "./types";
 const ME = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const BOB = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 const CAROL = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+const DAVE = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
 
 /** A player on the other end, with real keys. */
 function fakePeer(uid: string, name: string, code: string) {
@@ -169,7 +170,12 @@ describe("social client", () => {
     const carol = fakePeer(CAROL, "carol", "CA#1");
     server.send({ type: "online", member: carol.member });
     await until(() => client.getState().online.length === 2);
-    expect(client.getState().online.map((p) => p.displayName)).toEqual(["bob", "carol"]);
+    expect(
+      client
+        .getState()
+        .online.map((p) => p.displayName)
+        .sort(),
+    ).toEqual(["bob", "carol"]);
     server.send({ type: "offline", uid: BOB });
     await until(() => client.getState().online.length === 1);
     // Garbage is skipped.
@@ -185,6 +191,38 @@ describe("social client", () => {
       room: { code: "KFQB", players: 1, openSlots: 2, mode: "1v1", status: "waiting", joinable: true },
     });
     await until(() => client.getState().room?.code === "KFQB");
+  });
+
+  it("lists players in a random order that holds until they leave", async () => {
+    const carol = fakePeer(CAROL, "carol", "CA#1");
+    const dave = fakePeer(DAVE, "_dave", "DA#2");
+    const draws = [0.9, 0.5, 0.2];
+    const random = vi.spyOn(Math, "random").mockImplementation(() => draws.shift() ?? 0.99);
+    try {
+      server.send({ type: "online", member: carol.member });
+      await until(() => client.getState().online.length === 2);
+      server.send({ type: "online", member: dave.member });
+      await until(() => client.getState().online.length === 3);
+      // Bob's place was drawn at the welcome; carol 0.9, dave 0.5.
+      const names = () =>
+        client
+          .getState()
+          .online.map((p) => p.displayName)
+          .filter((n) => n !== "bob");
+      expect(names()).toEqual(["_dave", "carol"]);
+      // A renamed player keeps their place.
+      server.send({ type: "online", member: { ...carol.member, displayName: "_carol" } });
+      await until(() => names().includes("_carol"));
+      expect(names()).toEqual(["_dave", "_carol"]);
+      // One who leaves and comes back draws a new one (0.2).
+      server.send({ type: "offline", uid: CAROL });
+      await until(() => client.getState().online.length === 2);
+      server.send({ type: "online", member: carol.member });
+      await until(() => client.getState().online.length === 3);
+      expect(names()).toEqual(["carol", "_dave"]);
+    } finally {
+      random.mockRestore();
+    }
   });
 
   it("opens DMs and refuses replays, tampering and other keys", async () => {

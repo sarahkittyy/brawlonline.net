@@ -166,16 +166,19 @@ function parseRoom(v: any): SocialRoom | null | undefined {
   };
 }
 
-function byName(a: SocialPlayer, b: SocialPlayer) {
-  return a.displayName.localeCompare(b.displayName, undefined, { sensitivity: "base" }) || a.uid.localeCompare(b.uid);
-}
-
 export class SocialClient {
   private state: SocialState = emptyState();
   private uid?: string;
   private seed?: Uint8Array;
   private kxSecret?: Uint8Array;
   private peers = new Map<string, Peer>();
+  /**
+   * Each online player's place in this launcher's list: a random number drawn when they come
+   * online, so names like "_a" or "1x" can't sort to the top. Kept across reconnects while the
+   * player stays online, so the list doesn't reshuffle under the viewer; a player who leaves and
+   * comes back gets a new place.
+   */
+  private listOrder = new Map<string, number>();
   /** Next sequence number per conversation, for this stream's session key. */
   private sendSeq = new Map<string, bigint>();
   /** Highest sequence number accepted per `<uid>:<their kx hex>`. */
@@ -468,7 +471,18 @@ export class SocialClient {
   }
 
   private syncOnline() {
-    const online = [...this.peers.values()].map((p) => p.player).sort(byName);
+    for (const uid of this.listOrder.keys()) {
+      if (!this.peers.has(uid)) {
+        this.listOrder.delete(uid);
+      }
+    }
+    for (const uid of this.peers.keys()) {
+      if (!this.listOrder.has(uid)) {
+        this.listOrder.set(uid, Math.random());
+      }
+    }
+    const order = (p: SocialPlayer) => this.listOrder.get(p.uid)!;
+    const online = [...this.peers.values()].map((p) => p.player).sort((a, b) => order(a) - order(b));
     const conversations = { ...this.state.conversations };
     for (const [uid, c] of Object.entries(conversations)) {
       const peer = this.peers.get(uid);
