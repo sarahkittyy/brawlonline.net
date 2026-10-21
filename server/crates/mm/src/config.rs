@@ -81,11 +81,11 @@ pub struct Config {
     #[arg(long, env = "MM_PING_LIMIT_STEP_MS", default_value_t = 40.0)]
     pub ping_limit_step_ms: f64,
 
-    /// ... for every this many seconds the longer-waiting player has waited ...
+    /// ... for every this many seconds the shorter-waiting player has waited ...
     #[arg(long, env = "MM_PING_LIMIT_STEP_SECS", default_value_t = 10)]
     pub ping_limit_step_secs: u64,
 
-    /// ... and no limit once the longer-waiting player has waited this many seconds.
+    /// ... and no limit once the shorter-waiting player has waited this many seconds.
     #[arg(long, env = "MM_PING_LIMIT_OPEN_SECS", default_value_t = 40)]
     pub ping_limit_open_secs: u64,
 
