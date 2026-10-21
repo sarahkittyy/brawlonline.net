@@ -12,6 +12,7 @@
  * The indexer stores Slippi's `ParsedFileInfo` shape (GameStartType/MetadataType); ours fills the
  * fields the browser and the database use.
  */
+import { replayPPlusRelease } from "@common/pplus_releases";
 import type { GameStartType, MetadataType } from "@slippi/slippi-js/node";
 import { open, stat } from "node:fs/promises";
 import path from "path";
@@ -88,6 +89,8 @@ export type ReplayMeta = {
   sim: number | null;
   game: string;
   dolphin: string;
+  /** The Project+ release it was recorded on (common/pplus_releases.ts), or null when unknown. */
+  pplusRelease: string | null;
 };
 
 /** The result (ENDG), or null while the game is in progress or after a crash. */
@@ -215,6 +218,7 @@ function parseMeta(info: Record<string, unknown>): ReplayMeta {
     sim: num(build.sim, 0, 0xffffffff),
     game: text(build.game, 8),
     dolphin: text(build.dolphin, 64),
+    pplusRelease: replayPPlusRelease({ pplus: text(build.pplus, 16), dolphin: text(build.dolphin, 64) }),
   };
 }
 
@@ -325,6 +329,8 @@ export type ReplayFileInfo = {
   settings: GameStartType | undefined;
   metadata: MetadataType | undefined;
   winnerIndices: number[];
+  /** The Project+ release it was recorded on; null when unknown. */
+  pplusRelease?: string | null;
 };
 
 /** ReplayHeaderInfo in the shapes of Slippi's indexer (GameStartType, MetadataType). */
@@ -390,7 +396,7 @@ export async function readReplayFileInfo(folder: string, filename: string): Prom
   }
   try {
     const header = await readReplayHeader(fullPath);
-    return { filename, sizeBytes, birthTime, ...toSlippiShapes(header) };
+    return { filename, sizeBytes, birthTime, ...toSlippiShapes(header), pplusRelease: header.meta.pplusRelease };
   } catch {
     // Not readable as a replay (damaged, or from a newer launcher): listed by name and date.
     return { filename, sizeBytes, birthTime, settings: undefined, metadata: undefined, winnerIndices: [] };

@@ -38,6 +38,8 @@ export type GameInfo = {
   lastFrame: number | undefined;
   timerType: number | undefined;
   startingTimerSeconds: number | undefined;
+  /** Ours: the Project+ release the replay was recorded on (common/pplus_releases.ts); undefined when unknown. */
+  pplusRelease?: string;
 };
 
 export type FolderResult = {

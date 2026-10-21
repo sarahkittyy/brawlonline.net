@@ -53,6 +53,43 @@ export type ReplayPlaybackStatus = {
   seekFrom?: number;
 };
 
+/**
+ * What playing replays needs, from the Project+ release they were recorded on (docs/design/
+ * pplus-versions.md): `play` them (on their release's card, or the launcher's own: release null), or
+ * that release's files first (`needs-files`), or not at all with this launcher (`unplayable`).
+ * A request mixing releases plays the first replay's release only (`skipped` others).
+ */
+export type ReplayPlayResult =
+  | { status: "playing"; release: string | null; skipped: number; skippedRelease?: string }
+  | { status: "needs-files"; release: string; current: string; downloadBytes: number }
+  | { status: "unplayable"; release: string; current: string };
+
+/** `auto`: on the replays' own release when it is ready; `current`: on the launcher's release anyway. */
+export type ReplayPlayChoice = "auto" | "current";
+
+/** An older Project+ release on this PC (Settings > Replays, the replay version dialog). */
+/** A failed prepare says why (`offline`, `card-unknown`, ...: PPlusVersionError's codes). */
+export type PPlusPrepareResult = { ok: true; state: PPlusVersionInfo } | { ok: false; code: string; message: string };
+
+export type PPlusVersionInfo = {
+  release: string;
+  current: boolean;
+  playable: boolean;
+  filesReady: boolean;
+  cardReady: boolean;
+  downloadBytes: number;
+  filesBytes: number;
+  cardBytes: number;
+};
+
+export type PPlusPrepareProgressEvent = {
+  type: DolphinEventType.PPLUS_PREPARE_PROGRESS;
+  release: string;
+  phase: "index" | "download" | "card";
+  current: number;
+  total: number;
+};
+
 export type ReplayQueueItem = {
   path: string;
   /** Ours, `mirror`: the rest of this live game won't come (its upload stopped): what's in the file is all of it. */
@@ -91,6 +128,8 @@ export const enum DolphinEventType {
   ERROR = "ERROR",
   /** The playback Dolphin's status changed (`<comm>.status.json`; for highlights' progress). */
   PLAYBACK_STATUS = "PLAYBACK_STATUS",
+  /** An older Project+ release is downloaded or its card made (preparePPlusRelease). */
+  PPLUS_PREPARE_PROGRESS = "PPLUS_PREPARE_PROGRESS",
 }
 
 export const enum DolphinErrorType {
@@ -178,6 +217,7 @@ export type DolphinEventMap = {
   [DolphinEventType.DOWNLOAD_COMPLETE]: DolphinDownloadCompleteEvent;
   [DolphinEventType.ERROR]: DolphinNetworkErrorEvent | DolphinRosettaRequiredEvent;
   [DolphinEventType.PLAYBACK_STATUS]: DolphinPlaybackStatusEvent;
+  [DolphinEventType.PPLUS_PREPARE_PROGRESS]: PPlusPrepareProgressEvent;
 };
 
 export type DolphinEvent = DolphinEventMap[DolphinEventType];
@@ -207,13 +247,21 @@ export interface DolphinService {
   storePlayKeyFile(key: PlayKey): Promise<void>;
   checkPlayKeyExists(key: PlayKey): Promise<boolean>;
   removePlayKeyFile(): Promise<void>;
-  viewSlpReplay(files: ReplayQueueItem[]): Promise<void>;
+  viewSlpReplay(files: ReplayQueueItem[], choice?: ReplayPlayChoice): Promise<ReplayPlayResult>;
   /**
    * Plays highlights (or L+R+Z clips) one after another in the playback Dolphin, each from its
    * startFrame to its endFrame; one of the replay already playing goes on in its running match.
    * Progress: PLAYBACK_STATUS events with this `commandId`.
    */
-  playHighlights(items: HighlightPlayItem[], commandId: string): Promise<void>;
+  playHighlights(items: HighlightPlayItem[], commandId: string, choice?: ReplayPlayChoice): Promise<ReplayPlayResult>;
+  /** The launcher's Project+ release and the older ones for replays. */
+  getPPlusVersions(): Promise<{ current: string; states: PPlusVersionInfo[] }>;
+  /**
+   * Gets an older release ready for replays: downloaded, or taken from `importFrom` (a Project+
+   * folder or sd.raw of that release on this PC). Progress: PPLUS_PREPARE_PROGRESS events.
+   */
+  preparePPlusRelease(release: string, importFrom?: string): Promise<PPlusPrepareResult>;
+  removePPlusRelease(release: string): Promise<void>;
   /** `bootGame`: boot P+ even when the Play button is set to open Dolphin only. */
   launchNetplayDolphin(opts?: { bootGame?: boolean }): Promise<void>;
   /**

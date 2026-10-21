@@ -24,13 +24,14 @@ import { useServices } from "@/services";
 
 import { HighlightListMessages as Messages } from "./highlight_list.messages";
 import styles from "./highlight_list.module.css";
+import { ReplayVersionNote } from "./replay_version_note";
 
 type Row = ReplayHighlight | ReplayClip;
 
 /** What the launcher asked the playback Dolphin for, and when (before Dolphin says anything about it). */
 type Request = { from: number; count: number; commandId: string };
 
-export const HighlightList = ({ filePath }: { filePath: string }) => {
+export const HighlightList = ({ filePath, pplusRelease }: { filePath: string; pplusRelease?: string }) => {
   const { replayService, dolphinService } = useServices();
   const { playHighlights } = useDolphinActions(dolphinService);
   const [detectionOff] = useSetting("disableHighlightDetection");
@@ -146,6 +147,7 @@ export const HighlightList = ({ filePath }: { filePath: string }) => {
           {Messages.playAll()}
         </Button>
       </div>
+      <ReplayVersionNote release={pplusRelease} />
       <PlaybackBanner request={request} status={status} rows={rows} />
       {data.error ? (
         <div className={styles.note}>{Messages.noData()}</div>

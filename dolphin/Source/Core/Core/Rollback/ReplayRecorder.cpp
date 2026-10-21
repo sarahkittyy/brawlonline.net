@@ -345,6 +345,15 @@ std::string InfoJson(const BeginInfo& info)
   build["sim"] = picojson::value(static_cast<double>(SIM_VERSION));
   build["game"] = picojson::value(SConfig::GetInstance().GetGameID());
   build["revision"] = picojson::value(static_cast<double>(SConfig::GetInstance().GetRevision()));
+  // The Project+ release (the launcher's, Config ONLINE_PPLUS_RELEASE): "v" and up to 24 of
+  // [0-9a-z.], else left out.
+  if (const std::string pplus = Config::Get(Config::ONLINE_PPLUS_RELEASE);
+      pplus.size() >= 2 && pplus.size() <= 25 && pplus[0] == 'v' &&
+      std::all_of(pplus.begin() + 1, pplus.end(),
+                  [](char c) { return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || c == '.'; }))
+  {
+    build["pplus"] = picojson::value(pplus);
+  }
   o["build"] = picojson::value(build);
   picojson::object session;
   session["regionSet"] = picojson::value(info.region_set);

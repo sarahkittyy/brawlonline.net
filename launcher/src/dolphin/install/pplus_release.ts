@@ -75,6 +75,8 @@ export type PPlusTarget = {
   storeDir: string;
   /** Where the release zip is downloaded to (deleted after extraction). */
   downloadDir: string;
+  /** Before a card update writes: the old release's files are kept for its replays (pplus_versions.ts). */
+  beforeCardUpdate?: (card: string, paths: string[]) => Promise<unknown>;
 };
 
 export type PPlusMarker = { version: string; sha256: string; installedAt: string };
@@ -390,6 +392,7 @@ export async function extractProjectPlusFiles(
           update: cardUpdate,
           onProgress: (current, total) => onProgress?.({ phase: "update", current, total }),
           log,
+          beforeWrite: target.beforeCardUpdate,
         });
       } finally {
         await fs.promises.rm(newCard, { force: true });

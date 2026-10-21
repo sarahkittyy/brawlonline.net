@@ -13,7 +13,8 @@ import type { Database } from "./schema";
 /** The latest database schema version.
  *  Only increment this when we want users to re-create the database from scratch.
  */
-const DATABASE_USER_VERSION = 0;
+// 1 (2026-10-20): games know their Project+ release (game.pplus_release), read from every file again.
+const DATABASE_USER_VERSION = 1;
 
 const SHOULD_LOG_SQL = process.env.DEBUG_REPLAY_DATABASE === "1";
 

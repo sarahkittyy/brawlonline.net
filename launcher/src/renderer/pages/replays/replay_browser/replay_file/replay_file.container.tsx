@@ -3,6 +3,7 @@ import { stageInfo as pplusStageInfo } from "@common/stages";
 import { css } from "@emotion/react";
 import EqualizerIcon from "@mui/icons-material/Equalizer";
 import EventIcon from "@mui/icons-material/Event";
+import HistoryIcon from "@mui/icons-material/History";
 import LandscapeIcon from "@mui/icons-material/Landscape";
 import MoreHorizIcon from "@mui/icons-material/MoreHoriz";
 import PlayCircleOutlineIcon from "@mui/icons-material/PlayCircleOutline";
@@ -16,6 +17,7 @@ import React, { useCallback, useMemo } from "react";
 
 import { useReplayHighlight } from "@/lib/hooks/use_replay_highlight";
 import { useReplays } from "@/lib/hooks/use_replays";
+import { usePPlusVersions } from "@/lib/pplus/use_pplus_versions";
 import { convertFrameCountToDurationString, monthDayHourFormat } from "@/lib/time";
 import { getStageImage } from "@/lib/utils";
 
@@ -118,9 +120,15 @@ export const ReplayFileContainer = React.memo(function ReplayFileContainer({
     ];
   }, [index, onOpenMenu, onPlayClick, onShowStats]);
 
+  // Recorded on another Project+ release than the launcher's: said on the row (it plays on that
+  // release's files, docs/design/pplus-versions.md).
+  const currentRelease = usePPlusVersions((s) => s.current);
+  const olderRelease =
+    game.pplusRelease && currentRelease && game.pplusRelease !== currentRelease ? game.pplusRelease : undefined;
+
   const details = useMemo(() => {
     const date = new Date(game.startTime ? Date.parse(game.startTime) : 0);
-    return generateReplayDetails({
+    const list = generateReplayDetails({
       gameMode: game.mode,
       date,
       lastFrame: game.lastFrame,
@@ -128,7 +136,11 @@ export const ReplayFileContainer = React.memo(function ReplayFileContainer({
       startingTimerSeconds: game.startingTimerSeconds,
       stageName,
     });
-  }, [game.lastFrame, game.mode, game.startTime, game.startingTimerSeconds, game.timerType, stageName]);
+    if (olderRelease) {
+      list.push({ Icon: HistoryIcon, label: Messages.pplusRelease(olderRelease.replace(/^v/, "")) });
+    }
+    return list;
+  }, [game.lastFrame, game.mode, game.startTime, game.startingTimerSeconds, game.timerType, stageName, olderRelease]);
 
   const players = useMemo((): PlayerInfo[][] => {
     const teams = Object.values(groupBy(game.players, (p) => (game.isTeams ? p.teamId : p.port)));

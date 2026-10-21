@@ -6,12 +6,13 @@ import { useCallback } from "react";
 
 import { useAppStore } from "@/lib/hooks/use_app_store";
 import { useToasts } from "@/lib/hooks/use_toasts";
+import { withReplayVersion } from "@/lib/pplus/with_replay_version";
 
 import { DolphinMessages as Messages } from "./dolphin.messages";
 import { DolphinStatus, setDolphinOpened, useDolphinStore } from "./use_dolphin_store";
 
 export const useDolphinActions = (dolphinService: DolphinService) => {
-  const { showError } = useToasts();
+  const { showError, showInfo } = useToasts();
   const netplayStatus = useDolphinStore((store) => store.netplayStatus);
   const playbackStatus = useDolphinStore((store) => store.playbackStatus);
 
@@ -141,14 +142,16 @@ export const useDolphinActions = (dolphinService: DolphinService) => {
         return;
       }
 
-      dolphinService
-        .viewSlpReplay(files)
-        .then(() => {
-          setDolphinOpened(DolphinLaunchType.PLAYBACK);
+      // On the Project+ release they were recorded on (with_replay_version.ts asks for its files).
+      withReplayVersion((choice) => dolphinService.viewSlpReplay(files, choice), showInfo)
+        .then((result) => {
+          if (result?.status === "playing") {
+            setDolphinOpened(DolphinLaunchType.PLAYBACK);
+          }
         })
         .catch(showError);
     },
-    [getInstallStatus, launcherIsUpToDate, dolphinService, showError],
+    [getInstallStatus, launcherIsUpToDate, dolphinService, showError, showInfo],
   );
 
   /**
@@ -166,7 +169,10 @@ export const useDolphinActions = (dolphinService: DolphinService) => {
         return false;
       }
       try {
-        await dolphinService.playHighlights(items, commandId);
+        const result = await withReplayVersion((choice) => dolphinService.playHighlights(items, commandId, choice));
+        if (result?.status !== "playing") {
+          return false;
+        }
         setDolphinOpened(DolphinLaunchType.PLAYBACK);
         return true;
       } catch (err) {

@@ -14,6 +14,8 @@
 #                                      (downloads/ and updates/ there are left alone)
 #   sudo pp-release client DIR         publish launcher builds from DIR: the electron-updater feed
 #                                      in updates/launcher/ and the stable names in downloads/
+#   sudo pp-release pplus DIR          publish the older Project+ releases' files for replays
+#                                      (tools/pplus_packs/make_packs.py's output) to updates/pplus/
 #   pp-release list                    releases; the active one is marked with *
 #
 # DIR must be under one of SOURCE_ROOTS. Files are read from DIR with the CALLER's own
@@ -346,6 +348,63 @@ prune_client() { # updir: keep the newest KEEP_CLIENT versions and whatever a fe
 
 # ---- main ------------------------------------------------------------------------------------
 
+# Older Project+ releases for replays (docs/design/pplus-versions.md): index.json,
+# releases/<release>.json and blobs/<sha256>.zlib from DIR into updates/pplus/. Every blob is
+# checked (its name is the sha256 of its inflated bytes) and kept forever: launchers of every
+# version may still need it. The manifests come next and index.json last, so a client never sees a
+# list naming a file that is not there yet.
+MAX_PPLUS_BLOB=$((64 << 20))
+publish_pplus() { # dir
+  local src n f sha got out count=0
+  src=$(source_dir "$1")
+  new_stage
+  install -d -m 0700 "$STAGE/releases" "$STAGE/blobs"
+  stage_file "$src" index.json 262144
+  python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert d["v"] == 1 and d["blobs"] == "blobs/{sha256}.zlib"'     "$STAGE/index.json" || die "index.json is not a Project+ versions index"
+  mapfile -t names < <(as_caller find "$src/releases" -maxdepth 1 -type f -printf '%f\n' | sort)
+  for n in "${names[@]}"; do
+    [[ "$n" =~ ^v[0-9a-z.]{1,24}\.json$ ]] || die "unexpected file releases/$n"
+    as_caller head -c $((8 << 20)) -- "$src/releases/$n" >"$STAGE/releases/$n" || die "cannot read releases/$n"
+  done
+  # Every manifest the index names is here, with the sha256 it gives.
+  python3 - "$STAGE" <<'PY' || die "the manifests do not match index.json"
+import hashlib, json, os, sys
+st = sys.argv[1]
+for r in json.load(open(os.path.join(st, "index.json")))["releases"]:
+    b = open(os.path.join(st, r["manifest"]), "rb").read()
+    assert hashlib.sha256(b).hexdigest() == r["sha256"], r["release"]
+PY
+  mapfile -t names < <(as_caller find "$src/blobs" -maxdepth 1 -type f -printf '%f\n' | sort)
+  out="$WWW/updates/pplus"
+  install -d -m 0755 "$WWW/updates" "$out" "$out/releases" "$out/blobs"
+  for n in "${names[@]}"; do
+    [[ "$n" =~ ^([0-9a-f]{64})\.zlib$ ]] || die "unexpected file blobs/$n"
+    sha=${BASH_REMATCH[1]}
+    [ -f "$out/blobs/$n" ] && continue
+    f="$STAGE/blobs/$n"
+    as_caller head -c $((MAX_PPLUS_BLOB + 1)) -- "$src/blobs/$n" >"$f" || die "cannot read blobs/$n"
+    [ "$(stat -c %s "$f")" -le "$MAX_PPLUS_BLOB" ] || die "blobs/$n is too large"
+    got=$(python3 -c 'import hashlib,sys,zlib
+d = zlib.decompressobj(); b = d.decompress(open(sys.argv[1], "rb").read())
+assert d.eof and not d.unused_data
+print(hashlib.sha256(b).hexdigest())' "$f") ||
+      die "blobs/$n is not zlib data"
+    [ "$got" = "$sha" ] || die "blobs/$n: its bytes are not the file it names"
+    install -m 0644 "$f" "$out/blobs/.$n.tmp"
+    mv -f "$out/blobs/.$n.tmp" "$out/blobs/$n"
+    rm -f -- "$f"
+    count=$((count + 1))
+  done
+  for f in "$STAGE"/releases/*.json; do
+    n=$(basename "$f")
+    install -m 0644 "$f" "$out/releases/.$n.tmp"
+    mv -f "$out/releases/.$n.tmp" "$out/releases/$n"
+  done
+  install -m 0644 "$STAGE/index.json" "$out/.index.json.tmp"
+  mv -f "$out/.index.json.tmp" "$out/index.json"
+  echo "published the Project+ versions index, ${#names[@]} blobs ($count new) from $src"
+}
+
 lock() { exec 9>/run/pp-release.lock; flock -w 600 9 || die "another pp-release is running"; }
 
 case "${1:-}" in
@@ -386,6 +445,10 @@ client)
   need_root; lock
   publish_client "${2:?DIR}"
   ;;
+pplus)
+  need_root; lock
+  publish_pplus "${2:?DIR}"
+  ;;
 list)
   cur=$(readlink "$ROOT/bin" 2>/dev/null || true)
   for d in "$REL"/*/; do
@@ -394,7 +457,7 @@ list)
   done
   ;;
 *)
-  sed -n '4,22p' "$0"
+  sed -n '4,24p' "$0"
   exit 2
   ;;
 esac

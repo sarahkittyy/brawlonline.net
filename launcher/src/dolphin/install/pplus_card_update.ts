@@ -70,10 +70,16 @@ export async function updateProjectPlusCard({
   update,
   onProgress,
   log = () => undefined,
+  beforeWrite,
 }: {
   card: string;
   newCard: string;
   update: PPlusCardUpdate;
+  /**
+   * Called with the card (still on `from`) and the paths the update writes or deletes, before
+   * anything is: the files of `from` are kept for its replays (pplus_versions.ts keepReplacedFiles).
+   */
+  beforeWrite?: (card: string, paths: string[]) => Promise<unknown>;
   /** Bytes of the card copied, then files written (as bytes of the update). */
   onProgress?: ByteProgress;
   log?: (message: string) => void;
@@ -87,6 +93,13 @@ export async function updateProjectPlusCard({
     return "other";
   }
 
+  if (beforeWrite) {
+    try {
+      await beforeWrite(card, [...update.write.map((w) => w.path), ...update.remove]);
+    } catch (err) {
+      log(`Keeping ${update.from}'s files failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
   const partial = `${card}.update.partial`;
   await fs.promises.rm(partial, { force: true });
   const { size: cardSize } = await fs.promises.stat(card);

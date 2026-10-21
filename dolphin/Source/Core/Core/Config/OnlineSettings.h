@@ -50,6 +50,10 @@ extern const Info<int> ONLINE_INPUT_DELAY;
 // zeroes the music volume every frame (docs/gameplay-rollback-status.md, Phase 20).
 extern const Info<bool> ONLINE_MUSIC;
 
+// The Project+ release on the card the launcher gives this Dolphin ("v3.2.1"; empty: not said).
+// Replays record it (INFO build.pplus), so the launcher plays each on its own release's files.
+extern const Info<std::string> ONLINE_PPLUS_RELEASE;
+
 // The chat window (docs/chat-protocol.md §6): shown while a match runs, and where it was put
 // ("x y w h collapsed", the first four as fractions of the window; empty: the default place).
 extern const Info<bool> ONLINE_CHAT_IN_MATCHES;

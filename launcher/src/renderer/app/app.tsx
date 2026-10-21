@@ -9,6 +9,8 @@ import { LoginNotice } from "@/components/login_notice/login_notice";
 import { PersistentNotification } from "@/components/persistent_notification/persistent_notification";
 import { RosettaInstallDialog } from "@/components/rosetta_install_dialog/rosetta_install_dialog";
 import { SocialRoot } from "@/components/social/social_root";
+import { installReplayVersionDialogPreview, ReplayVersionDialog } from "@/lib/pplus/replay_version_dialog";
+import { refreshPPlusVersions } from "@/lib/pplus/use_pplus_versions";
 import type { AuthUser } from "@/services/auth/types";
 
 type PrivateMenuItem = MenuItem & {
@@ -27,6 +29,11 @@ export type MainMenuItem =
 
 export const App = React.memo(({ menuItems }: { menuItems: readonly MainMenuItem[] }) => {
   const defaultRoute = menuItems.find((item) => item.default);
+  // Which Project+ releases' replays can play here (the replay rows' version tags).
+  React.useEffect(() => {
+    void refreshPPlusVersions();
+    installReplayVersionDialogPreview();
+  }, []);
   return (
     <div
       style={{
@@ -54,6 +61,7 @@ export const App = React.memo(({ menuItems }: { menuItems: readonly MainMenuItem
       </div>
       <SocialRoot />
       <LoginDialog />
+      <ReplayVersionDialog />
       <PersistentNotification />
       <RosettaInstallDialog />
     </div>

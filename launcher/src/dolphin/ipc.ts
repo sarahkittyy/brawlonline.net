@@ -4,7 +4,17 @@ import type { EmptyPayload, SuccessPayload } from "utils/ipc";
 import { _, makeEndpoint } from "utils/ipc";
 
 import type { RoomHandOffResult } from "./room_handoff";
-import type { DolphinEvent, DolphinLaunchType, GameFilesMoveOutcome, PlayKey, ReplayQueueItem } from "./types";
+import type {
+  DolphinEvent,
+  DolphinLaunchType,
+  GameFilesMoveOutcome,
+  PlayKey,
+  PPlusPrepareResult,
+  PPlusVersionInfo,
+  ReplayPlayChoice,
+  ReplayPlayResult,
+  ReplayQueueItem,
+} from "./types";
 
 // Handlers
 
@@ -61,11 +71,33 @@ export const ipc_checkPlayKeyExists = makeEndpoint.main(
 
 export const ipc_removePlayKeyFile = makeEndpoint.main("removePlayKeyFile", <EmptyPayload>_, <SuccessPayload>_);
 
-export const ipc_viewSlpReplay = makeEndpoint.main("viewSlpReplay", <{ files: ReplayQueueItem[] }>_, <SuccessPayload>_);
+export const ipc_viewSlpReplay = makeEndpoint.main(
+  "viewSlpReplay",
+  <{ files: ReplayQueueItem[]; choice?: ReplayPlayChoice }>_,
+  <ReplayPlayResult>_,
+);
 
 export const ipc_playHighlights = makeEndpoint.main(
   "playHighlights",
-  <{ items: HighlightPlayItem[]; commandId: string }>_,
+  <{ items: HighlightPlayItem[]; commandId: string; choice?: ReplayPlayChoice }>_,
+  <ReplayPlayResult>_,
+);
+
+export const ipc_getPPlusVersions = makeEndpoint.main(
+  "getPPlusVersions",
+  <EmptyPayload>_,
+  <{ current: string; states: PPlusVersionInfo[] }>_,
+);
+
+export const ipc_preparePPlusRelease = makeEndpoint.main(
+  "preparePPlusRelease",
+  <{ release: string; importFrom?: string }>_,
+  <PPlusPrepareResult>_,
+);
+
+export const ipc_removePPlusRelease = makeEndpoint.main(
+  "removePPlusRelease",
+  <{ release: string }>_,
   <SuccessPayload>_,
 );
 

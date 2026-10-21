@@ -795,6 +795,7 @@ function generateNewGame(file: FileRecord, parsedInfo: ParsedFileInfo): NewGame 
     session_id: sessionId,
     game_number: settings.matchInfo?.gameNumber ?? undefined,
     tiebreak_number: settings.matchInfo?.tiebreakerNumber ?? undefined,
+    pplus_release: parsedInfo.pplusRelease ?? null,
   };
 
   return newGame;

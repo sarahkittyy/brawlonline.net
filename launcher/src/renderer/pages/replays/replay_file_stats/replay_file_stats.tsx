@@ -175,7 +175,7 @@ export const ReplayFileStats = (props: ReplayFileStatsProps) => {
           <HomeRunProfile file={file} stats={stadiumStats} />
         ) : filePath.toLowerCase().endsWith(".brep") ? (
           // Ours (.brep): no stats yet, the game's highlights and L+R+Z clips.
-          <HighlightList filePath={filePath} />
+          <HighlightList filePath={filePath} pplusRelease={game.pplusRelease} />
         ) : numPlayers !== 2 ? (
           <IconMessage Icon={ErrorIcon} label={Messages.gameStatsForTeamBattlesIsUnsupported()} />
         ) : errorMessage?.includes(STATS_NOT_AVAILABLE) ? (

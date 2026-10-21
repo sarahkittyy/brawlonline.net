@@ -21,7 +21,15 @@ export const DOLPHIN_MANIFEST_NAME = "dolphin.json";
 export const PROGRESS_BYTES_PER_FILE = 128 * 1024;
 
 /** Entries of the install folder that belong to the user or the launcher, never replaced. */
-export const PROTECTED_ENTRIES = new Set(["User", "pponline-sd", "pplus", "downloads", DOLPHIN_MANIFEST_NAME]);
+export const PROTECTED_ENTRIES = new Set([
+  "User",
+  "pponline-sd",
+  "pplus",
+  // Older Project+ releases' files and cards for replays (pplus_versions.ts).
+  "pplus-versions",
+  "downloads",
+  DOLPHIN_MANIFEST_NAME,
+]);
 /** Where an install moves the old build before deleting it (see moveAside). */
 export const OLD_DOLPHIN_DIR = ".old-dolphin";
 

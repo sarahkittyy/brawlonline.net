@@ -7,6 +7,7 @@ import { mkdir, readFile } from "node:fs/promises";
 import path from "path";
 import { fileExists } from "utils/file_exists";
 
+import { PPlusVersionError } from "./install/pplus_versions";
 import {
   ipc_cancelRoomLaunch,
   ipc_checkPlayKeyExists,
@@ -16,6 +17,7 @@ import {
   ipc_downloadDolphin,
   ipc_getChatKey,
   ipc_getDolphinPaths,
+  ipc_getPPlusVersions,
   ipc_hardResetDolphin,
   ipc_installRosetta,
   ipc_joinRoomInGame,
@@ -23,8 +25,10 @@ import {
   ipc_moveGameFiles,
   ipc_openDolphinSettingsFolder,
   ipc_playHighlights,
+  ipc_preparePPlusRelease,
   ipc_prepareRoomLaunch,
   ipc_removePlayKeyFile,
+  ipc_removePPlusRelease,
   ipc_setChatKey,
   ipc_softResetDolphin,
   ipc_storePlayKeyFile,
@@ -34,7 +38,7 @@ import type { DolphinManager } from "./manager";
 import { deletePlayKeyFile, writePlayKeyFile } from "./playkey";
 import { clearRoomRequest, handOffRoom, isHandOffCode, writeRoomRequest } from "./room_handoff";
 import { installRosettaElevated } from "./rosetta/install_rosetta";
-import { DolphinLaunchType } from "./types";
+import { DolphinEventType, DolphinLaunchType } from "./types";
 
 export default function setupDolphinIpc({ dolphinManager }: { dolphinManager: DolphinManager }) {
   dolphinManager.events.subscribe((event) => {
@@ -125,16 +129,67 @@ export default function setupDolphinIpc({ dolphinManager }: { dolphinManager: Do
     return { success: true };
   });
 
-  ipc_viewSlpReplay.main!.handle(async ({ files }) => {
-    await dolphinManager.launchPlaybackDolphin("playback", {
-      mode: "queue",
-      queue: files,
-    });
-    return { success: true };
+  // Replays play on the Project+ release they were recorded on (docs/design/pplus-versions.md):
+  // when that release's files are not here yet, the renderer is told so (and asks) instead.
+  ipc_viewSlpReplay.main!.handle(async ({ files, choice = "auto" }) => {
+    const d = await dolphinManager.decideReplayRelease(
+      files.map((f) => f.path),
+      choice,
+    );
+    if (d.result.status === "playing") {
+      await dolphinManager.launchPlaybackDolphin(
+        "playback",
+        { mode: "queue", queue: files.filter((f) => d.paths.includes(f.path)), playAnyway: d.playAnyway || undefined },
+        { pplusRelease: d.release },
+      );
+    }
+    return d.result;
   });
 
-  ipc_playHighlights.main!.handle(async ({ items, commandId }) => {
-    await dolphinManager.launchPlaybackDolphin("playback", { mode: "highlights", queue: items, commandId });
+  ipc_playHighlights.main!.handle(async ({ items, commandId, choice = "auto" }) => {
+    const d = await dolphinManager.decideReplayRelease(
+      items.map((i) => i.path),
+      choice,
+    );
+    if (d.result.status === "playing") {
+      await dolphinManager.launchPlaybackDolphin(
+        "playback",
+        {
+          mode: "highlights",
+          queue: items.filter((i) => d.paths.includes(i.path)),
+          commandId,
+          playAnyway: d.playAnyway || undefined,
+        },
+        { pplusRelease: d.release },
+      );
+    }
+    return d.result;
+  });
+
+  ipc_getPPlusVersions.main!.handle(async () => {
+    return await dolphinManager.pplusVersionStates();
+  });
+
+  ipc_preparePPlusRelease.main!.handle(async ({ release, importFrom }) => {
+    try {
+      const state = await dolphinManager.preparePPlusRelease(release, {
+        importFrom,
+        onProgress: ({ phase, current, total }) => {
+          void ipc_dolphinEvent
+            .main!.trigger({ type: DolphinEventType.PPLUS_PREPARE_PROGRESS, release, phase, current, total })
+            .catch(log.error);
+        },
+      });
+      return { ok: true as const, state };
+    } catch (err) {
+      log.error(err);
+      const code = err instanceof PPlusVersionError ? err.code : "error";
+      return { ok: false as const, code, message: err instanceof Error ? err.message : String(err) };
+    }
+  });
+
+  ipc_removePPlusRelease.main!.handle(async ({ release }) => {
+    await dolphinManager.removePPlusRelease(release);
     return { success: true };
   });
 

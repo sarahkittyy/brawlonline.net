@@ -96,3 +96,11 @@ describe("chat key", () => {
     expect(getChatKey(await IniFile.init(iniPath), bound)).toBe("`SLASH`");
   });
 });
+
+describe("online settings: Project+ release", () => {
+  it("writes [Online] PPlusRelease for replays to record (docs/design/pplus-versions.md)", async () => {
+    const ini = await IniFile.init(iniPath);
+    await setOnlineSettings(ini, { pplusRelease: "v3.2.1" });
+    expect(await fs.promises.readFile(iniPath, "utf8")).toMatch(/\[Online\][^[]*PPlusRelease = v3\.2\.1/);
+  });
+});

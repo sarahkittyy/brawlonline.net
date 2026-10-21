@@ -1,5 +1,6 @@
 import type { LauncherUpdateMode } from "@common/launcher_update";
 import { getLauncherUpdateMode } from "@common/launcher_update";
+import { readTestMode } from "@common/test_mode";
 import { app } from "electron";
 import log from "electron-log";
 import os from "os";
@@ -19,6 +20,8 @@ export type AppBootstrap = {
   updateState?: UpdateState;
   /** How a launcher update is offered: installed in place, or as a download (macOS, see MAC_SELF_UPDATE). */
   launcherUpdateMode: LauncherUpdateMode;
+  /** The launcher's test mode (common/test_mode.ts): previews for screenshots and tests. */
+  testMode: boolean;
 };
 
 export function getAppBootstrap(flags: ConfigFlags, updateState?: UpdateState): AppBootstrap {
@@ -40,6 +43,7 @@ export function getAppBootstrap(flags: ConfigFlags, updateState?: UpdateState): 
     locale: app.getLocale(),
     updateState,
     launcherUpdateMode: getLauncherUpdateMode(process.platform),
+    testMode: readTestMode(process.env, app.isPackaged).active,
   };
   return bootstrap;
 }

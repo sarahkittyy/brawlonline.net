@@ -463,3 +463,22 @@ def test_launcher_comm_file_plays_highlights(backend: OnlineBackend,
     log = inst.log.read()
     assert log.count("replay: 1 of ") == 1, "one match armed for all of them"
     print(f"states {states}; back to clip 2 in {back:.2f} s")
+
+
+@pytest.mark.slow
+def test_recording_names_its_pplus_release(backend: OnlineBackend,
+                                           dolphin: Callable[..., DolphinInstance],
+                                           gpu_backend: str) -> None:
+    """docs/design/pplus-versions.md: the launcher tells its Dolphin the Project+ release on its card
+    (`[Online] PPlusRelease`), and every replay records it in INFO's build (`pplus`), so the launcher
+    plays it on that release's files later. Without the setting there is none (the launcher then
+    goes by the build number)."""
+    ini = {"Online": {"PPlusRelease": "v3.2.1"}}
+    a, b, _, _ = _connected_direct(backend, dolphin, gpu_backend, "replay-pplus", ("pia", "quin"),
+                                   stocks=1, dolphin_ini=(ini, None))
+    online_set.play_set([a, b], games=1, mode="direct", panels={g.name: g.panel for g in (a, b)})
+    online_set.wait(lambda: not any(g.c.call("replay_recording")["recording"] for g in (a, b)), 60,
+                    "both recordings to end")
+    fa, fb = _recording(a), _recording(b)
+    assert fa.info["build"]["pplus"] == "v3.2.1", fa.info["build"]
+    assert "pplus" not in fb.info["build"], fb.info["build"]

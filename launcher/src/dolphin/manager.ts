@@ -1,6 +1,8 @@
+import { pplusReleaseLabel } from "@common/pplus_releases";
 import { Preconditions } from "@common/preconditions";
 import { DOLPHIN_ONLINE_DIR, PRODUCT_NAME } from "@common/product";
 import { readTestMode } from "@common/test_mode";
+import { readReplayHeader } from "@replays/replay_format";
 import type { SettingsManager } from "@settings/settings_manager";
 import { Mutex } from "async-mutex";
 import type { MessageBoxOptions } from "electron";
@@ -47,6 +49,13 @@ import {
   netplaySaveStore,
   PPLUS_RELEASE,
 } from "./install/pplus_release";
+import type { PPlusVersionState, PrepareProgress } from "./install/pplus_versions";
+import {
+  findProjectPlusCard,
+  PLAYABLE_PPLUS_RELEASES,
+  PPlusVersionError,
+  PPlusVersions,
+} from "./install/pplus_versions";
 import { installPluginOnSdCard, loadPlugin, SdCardInUseError } from "./install/sd_card";
 import { DolphinInstance, MacOsRosettaRequiredError, PlaybackDolphinInstance } from "./instance";
 import type { ModsRoomArg } from "./mods/mods_args";
@@ -58,7 +67,14 @@ import { buildNetplayDolphinArgs, buildPlaybackDolphinArgs } from "./netplay_arg
 import { closeIfIdle } from "./quit_if_idle";
 import { clearRoomRequest } from "./room_handoff";
 import { createProgressThrottle, runWithProgress } from "./setup_progress";
-import type { DolphinEvent, DolphinSetupPhase, ReplayCommunication, ReplayPlaybackStatus } from "./types";
+import type {
+  DolphinEvent,
+  DolphinSetupPhase,
+  ReplayCommunication,
+  ReplayPlaybackStatus,
+  ReplayPlayChoice,
+  ReplayPlayResult,
+} from "./types";
 import { DolphinErrorType, DolphinEventType, DolphinLaunchType } from "./types";
 
 /** Progress events are sent at most this often per launch type (a 2 GB step has thousands of chunks). */
@@ -84,6 +100,9 @@ const log = electronLog.scope("dolphin/manager");
 // default ISO, the way P+ does.
 export class DolphinManager {
   private playbackDolphinInstances = new Map<string, PlaybackDolphinInstance>();
+  /** The Project+ release each playback Dolphin's card is on (null: the launcher's own). */
+  private playbackReleases = new Map<string, string | null>();
+  private pplusVersionStore: PPlusVersions | null = null;
   private netplayDolphinInstance: DolphinInstance | null = null;
   private versionCache = new Map<string, string>();
   private bundledInstall: Promise<void> | null = null;
@@ -263,12 +282,27 @@ export class DolphinManager {
     return path.join(this.getInstallation(DolphinLaunchType.PLAYBACK).userFolder, "Spectate");
   }
 
-  async launchPlaybackDolphin(id: string, replayComm: ReplayCommunication): Promise<void> {
+  /**
+   * Plays `replayComm` in the playback Dolphin `id`. `pplusRelease`: the Project+ release the
+   * replays were recorded on, when it is not the launcher's own: the Dolphin then boots that
+   * release's card (pplus_versions.ts; its files must be here: preparePPlusRelease), and a running
+   * one on another release is closed first.
+   */
+  async launchPlaybackDolphin(
+    id: string,
+    replayComm: ReplayCommunication,
+    { pplusRelease = null }: { pplusRelease?: string | null } = {},
+  ): Promise<void> {
+    const release = pplusRelease && pplusRelease !== this.pplusVersions().currentRelease ? pplusRelease : null;
     // A second request waits, then finds the Dolphin the first one opened.
-    await this.sdCardStarts.runExclusive(() => this._launchPlaybackDolphin(id, replayComm));
+    await this.sdCardStarts.runExclusive(() => this._launchPlaybackDolphin(id, replayComm, release));
   }
 
-  private async _launchPlaybackDolphin(id: string, replayComm: ReplayCommunication): Promise<void> {
+  private async _launchPlaybackDolphin(
+    id: string,
+    replayComm: ReplayCommunication,
+    release: string | null,
+  ): Promise<void> {
     const playbackInstallation = this.getInstallation(DolphinLaunchType.PLAYBACK);
     this._assertNotMoving();
     const netplayInstallation = this.getInstallation(DolphinLaunchType.NETPLAY);
@@ -281,6 +315,12 @@ export class DolphinManager {
       throw new Error("Cannot open dolphin if a configuring dolphin is open.");
     }
     let playbackInstance = this.playbackDolphinInstances.get(id);
+    if (playbackInstance && (this.playbackReleases.get(id) ?? null) !== release) {
+      // Its card is another Project+ release's: the game's files are read at boot, so it starts again.
+      log.info(`Restarting the playback Dolphin for Project+ ${release ?? this.pplusVersions().currentRelease}`);
+      await this._stopPlayback(id, playbackInstance);
+      playbackInstance = undefined;
+    }
     if (!playbackInstance) {
       await this.launchGate();
       const isoPath = await this._getIsoPath();
@@ -298,8 +338,11 @@ export class DolphinManager {
       // A Play Dolphin (a game, a queue, a room) may have the card open: spectating then shares it.
       const inUse = this.netplayDolphinInstance != null || this.playbackDolphinInstances.size > 0;
       const sdCardImage = await this._withProgress(DolphinLaunchType.PLAYBACK, "prepareSdCard", (onProgress) =>
-        this._installOnlinePlugin(netplayInstallation, true, inUse, onProgress),
+        release
+          ? this._releaseCard(netplayInstallation, release, onProgress)
+          : this._installOnlinePlugin(netplayInstallation, true, inUse, onProgress),
       );
+      this.playbackReleases.set(id, release);
       const params = buildPlaybackDolphinArgs({
         userArgs: playbackInstallation.userArgs(),
         sdCardImage,
@@ -320,6 +363,7 @@ export class DolphinManager {
 
         // Remove the instance from the map on close
         this.playbackDolphinInstances.delete(id);
+        this.playbackReleases.delete(id);
       });
       playbackInstance.on("error", (err: Error) => {
         log.error(err);
@@ -861,6 +905,8 @@ export class DolphinManager {
         userFolder: installation.userFolder,
         storeDir,
         downloadDir: path.join(storeDir, "downloads"),
+        // The release before the update keeps its files for its replays: no download for them later.
+        beforeCardUpdate: (card, paths) => this.pplusVersions().keepReplacedFiles(card, paths),
       };
       const release = readTestMode(process.env, app.isPackaged).pplusRelease ?? PPLUS_RELEASE;
       this.projectPlusInstall = (async () => {
@@ -968,6 +1014,174 @@ export class DolphinManager {
   }
 
   /**
+   * Older Project+ releases for replays (pplus_versions.ts), in `<netplay>/pplus-versions`. The
+   * launcher's own release is the pinned one (or the test mode's).
+   */
+  pplusVersions(): PPlusVersions {
+    const root = path.join(this.netplayFolder(), "pplus-versions");
+    const test = readTestMode(process.env, app.isPackaged);
+    const currentRelease = (test.pplusRelease ?? PPLUS_RELEASE).version;
+    if (!this.pplusVersionStore || this.pplusVersionStore.cardDir("") !== path.join(root, "cards")) {
+      const url = test.active ? process.env.PPO_PPLUS_VERSIONS_URL?.trim() : undefined;
+      this.pplusVersionStore = new PPlusVersions({
+        root,
+        currentRelease,
+        baseUrl: url || undefined,
+        log: (message) => log.info(message),
+      });
+    }
+    return this.pplusVersionStore;
+  }
+
+  /** Closes a playback Dolphin and waits until it has gone (10 s at most). */
+  private async _stopPlayback(id: string, instance: PlaybackDolphinInstance): Promise<void> {
+    await new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, 10_000);
+      instance.once("close", () => {
+        clearTimeout(timer);
+        // (after the instance's own close handler, which removes it)
+        setImmediate(resolve);
+      });
+      instance.stop();
+    });
+    this.playbackDolphinInstances.delete(id);
+    this.playbackReleases.delete(id);
+  }
+
+  /** The playback card of another Project+ release, with the plugin on it (made or checked). */
+  private async _releaseCard(
+    installation: LocalDolphinInstallation,
+    release: string,
+    onProgress?: (current: number, total: number) => void,
+  ): Promise<string> {
+    const env = this._pathEnv();
+    const template = defaultUserTemplate(env);
+    const plugin = await loadPlugin(defaultPluginLocation({ ...env, resourcesPath: process.resourcesPath }));
+    const result = await this.pplusVersions().card(release, installation.sdCardImage, plugin, {
+      protectedPaths: template ? [template] : [],
+      onProgress,
+    });
+    log.info(`Project+ ${release} card for replays: ${result.image} (${result.action})`);
+    return result.image;
+  }
+
+  /** Every Project+ release Brawl Online knows and what of it is on this PC. */
+  async pplusVersionStates(): Promise<{ current: string; states: PPlusVersionState[] }> {
+    const versions = this.pplusVersions();
+    return { current: versions.currentRelease, states: await versions.states() };
+  }
+
+  /**
+   * Gets `release` ready for replays: its files (from `importFrom`, a card or a Project+ folder of
+   * that release on this PC, else downloaded), then its card. Progress through `onProgress`.
+   */
+  async preparePPlusRelease(
+    release: string,
+    { importFrom, onProgress }: { importFrom?: string; onProgress?: (p: PrepareProgress) => void } = {},
+  ): Promise<PPlusVersionState> {
+    const versions = this.pplusVersions();
+    const netplayInstallation = this.getInstallation(DolphinLaunchType.NETPLAY);
+    // The player's card first: an older release is made from it.
+    await this._ensureProjectPlusFiles(netplayInstallation);
+    onProgress?.({ phase: "index", current: 0, total: 1 });
+    await versions.index({ refresh: true });
+    if (importFrom) {
+      const card = await findProjectPlusCard(importFrom);
+      if (!card) {
+        throw new PPlusVersionError("damaged", `No Project+ SD card (sd.raw) was found in ${importFrom}.`);
+      }
+      const { missing } = await versions.importFromCard(release, card);
+      if (missing > 0) {
+        throw new PPlusVersionError(
+          "card-unknown",
+          `That card is not Project+ ${pplusReleaseLabel(release)}: ${missing} of its files are missing or different.`,
+        );
+      }
+    } else {
+      await versions.download(release, (current, total) => onProgress?.({ phase: "download", current, total }));
+    }
+    // The card now (2 GB copied once), unless a playback Dolphin has it open.
+    const running = [...this.playbackReleases.entries()].some(([, r]) => r === release);
+    if (!running) {
+      await this.sdCardStarts.runExclusive(() =>
+        this._releaseCard(netplayInstallation, release, (current, total) =>
+          onProgress?.({ phase: "card", current, total }),
+        ),
+      );
+    }
+    return versions.state(release);
+  }
+
+  /**
+   * Which Project+ release replays play on (docs/design/pplus-versions.md): their own when it is
+   * ready (`playing`, with the paths of the first replay's release: a request mixing releases plays
+   * those only), else what it needs first. `current` plays them on the launcher's release anyway
+   * (as recorded with another version: `playAnyway`).
+   */
+  async decideReplayRelease(
+    paths: string[],
+    choice: ReplayPlayChoice,
+  ): Promise<{ result: ReplayPlayResult; paths: string[]; release: string | null; playAnyway: boolean }> {
+    const versions = this.pplusVersions();
+    const current = versions.currentRelease;
+    const releases = await Promise.all(
+      paths.map((p) =>
+        readReplayHeader(p).then(
+          (h) => (h.meta.pplusRelease === current ? null : h.meta.pplusRelease),
+          () => null,
+        ),
+      ),
+    );
+    const first = releases[0] ?? null;
+    const group = paths.filter((_, i) => releases[i] === first);
+    const skippedAt = releases.findIndex((r) => r !== first);
+    const skipped = paths.length - group.length;
+    const skippedRelease = skippedAt >= 0 ? releases[skippedAt] ?? current : undefined;
+    const playing = (release: string | null, playAnyway: boolean) => ({
+      result: { status: "playing" as const, release, skipped, skippedRelease },
+      paths: group,
+      release,
+      playAnyway,
+    });
+    if (first == null) {
+      return playing(null, false);
+    }
+    if (choice === "current") {
+      return playing(null, true);
+    }
+    if (!PLAYABLE_PPLUS_RELEASES.includes(first)) {
+      return {
+        result: { status: "unplayable", release: first, current },
+        paths: group,
+        release: null,
+        playAnyway: false,
+      };
+    }
+    await versions.index();
+    const state = await versions.state(first);
+    if (state.filesReady) {
+      return playing(first, false);
+    }
+    return {
+      result: { status: "needs-files", release: first, current, downloadBytes: state.downloadBytes },
+      paths: group,
+      release: null,
+      playAnyway: false,
+    };
+  }
+
+  /** Deletes an older release's files and card (closing a playback Dolphin that has it open). */
+  async removePPlusRelease(release: string): Promise<void> {
+    for (const [id, r] of [...this.playbackReleases.entries()]) {
+      const instance = this.playbackDolphinInstances.get(id);
+      if (r === release && instance) {
+        await this._stopPlayback(id, instance);
+      }
+    }
+    await this.pplusVersions().remove(release);
+  }
+
+  /**
    * Puts our game plugin on a launcher-managed copy of the user's P+ SD card
    * (`<userData>/netplay/pponline-sd/sd.raw`) and returns its path for Dolphin. The user's
    * card (`<User>/Wii/sd.raw`) and the User template are never written. Without a card,
@@ -1047,6 +1261,7 @@ export class DolphinManager {
       enableMusic: this.settingsManager.getEnableMusic(),
       disableChat: this.settingsManager.getDisableChat(),
       enableStreamGames: this.settingsManager.getEnableStreamGames(),
+      pplusRelease: this.pplusVersions().currentRelease,
     });
   }
 

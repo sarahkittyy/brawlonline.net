@@ -101,6 +101,7 @@ export type GameTable = {
   session_id: string | null; // Part of composite index; NULL means single-game session
   game_number: ColumnType<number, number | undefined>; // Part of composite index; game sequence in session
   tiebreak_number: ColumnType<number, number | undefined>; // Tiebreaker game number
+  pplus_release: ColumnType<string | null, string | null | undefined>; // Project+ release it was recorded on (ours)
 };
 
 export type GameRecord = Selectable<GameTable>;

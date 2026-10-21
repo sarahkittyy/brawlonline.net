@@ -18,6 +18,7 @@ export interface ParsedFileInfo {
   settings: GameStartType | undefined;
   metadata: MetadataType | undefined;
   winnerIndices: number[];
+  pplusRelease?: string | null;
 }
 
 /**

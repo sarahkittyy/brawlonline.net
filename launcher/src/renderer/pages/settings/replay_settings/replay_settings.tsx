@@ -10,6 +10,7 @@ import { useExtraSlpPaths, useRootSlpPath } from "@/lib/hooks/use_settings";
 import { PLAYBACK_DOLPHIN_SETTINGS_PATH } from "../dolphin_settings/paths";
 import { SettingItem } from "../setting_item_section";
 import { NetplayReplayToggles } from "./netplay_replay_toggle";
+import { PPlusVersionsSetting } from "./pplus_versions_setting";
 import { ReplaySettingsMessages as Messages } from "./replay_settings.messages";
 
 export const ReplaySettings = React.memo(() => {
@@ -33,6 +34,7 @@ export const ReplaySettings = React.memo(() => {
           placeholder={Messages.noFolderSet()}
         />
       </SettingItem>
+      <PPlusVersionsSetting />
       <SettingItem name={Messages.replayGraphics()} description={Messages.replayGraphicsDescription()}>
         <Button
           variant="outlined"

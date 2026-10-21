@@ -12,6 +12,7 @@ import {
   ipc_downloadDolphin,
   ipc_getChatKey,
   ipc_getDolphinPaths,
+  ipc_getPPlusVersions,
   ipc_hardResetDolphin,
   ipc_installRosetta,
   ipc_joinRoomInGame,
@@ -19,8 +20,10 @@ import {
   ipc_moveGameFiles,
   ipc_openDolphinSettingsFolder,
   ipc_playHighlights,
+  ipc_preparePPlusRelease,
   ipc_prepareRoomLaunch,
   ipc_removePlayKeyFile,
+  ipc_removePPlusRelease,
   ipc_setChatKey,
   ipc_softResetDolphin,
   ipc_storePlayKeyFile,
@@ -32,6 +35,7 @@ import type {
   DolphinLaunchType,
   DolphinService,
   PlayKey,
+  ReplayPlayChoice,
   ReplayQueueItem,
 } from "./types";
 
@@ -73,11 +77,24 @@ const dolphinApi: DolphinService = {
   async removePlayKeyFile(): Promise<void> {
     await ipc_removePlayKeyFile.renderer!.trigger({});
   },
-  async viewSlpReplay(files: ReplayQueueItem[]): Promise<void> {
-    await ipc_viewSlpReplay.renderer!.trigger({ files });
+  async viewSlpReplay(files: ReplayQueueItem[], choice?: ReplayPlayChoice) {
+    const { result } = await ipc_viewSlpReplay.renderer!.trigger({ files, choice });
+    return result;
   },
-  async playHighlights(items: HighlightPlayItem[], commandId: string): Promise<void> {
-    await ipc_playHighlights.renderer!.trigger({ items, commandId });
+  async playHighlights(items: HighlightPlayItem[], commandId: string, choice?: ReplayPlayChoice) {
+    const { result } = await ipc_playHighlights.renderer!.trigger({ items, commandId, choice });
+    return result;
+  },
+  async getPPlusVersions() {
+    const { result } = await ipc_getPPlusVersions.renderer!.trigger({});
+    return result;
+  },
+  async preparePPlusRelease(release: string, importFrom?: string) {
+    const { result } = await ipc_preparePPlusRelease.renderer!.trigger({ release, importFrom });
+    return result;
+  },
+  async removePPlusRelease(release: string) {
+    await ipc_removePPlusRelease.renderer!.trigger({ release });
   },
   async launchNetplayDolphin(opts?: { bootGame?: boolean }): Promise<void> {
     await ipc_launchNetplayDolphin.renderer!.trigger({ bootGame: opts?.bootGame });

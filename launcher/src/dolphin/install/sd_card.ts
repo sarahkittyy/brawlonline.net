@@ -46,6 +46,8 @@ export type PatchedSdManifest = {
   version: 1;
   source: { path: string; size: number; mtimeMs: number };
   plugin: { sha256: string; size: number; sdPath: string; from: string };
+  /** The copy's `variant` (another Project+ release's files on it, pplus_versions.ts); absent: none. */
+  variant?: string;
   updatedAt: string;
 };
 
@@ -90,6 +92,11 @@ export type SdInstallOptions = {
    * (`SdCardInUseError`).
    */
   inUse?: boolean;
+  /**
+   * Changes made to a fresh copy before the plugin is patched on (another Project+ release's files
+   * for replays, pplus_versions.ts). `id` names them: a copy made with another id is made again.
+   */
+  variant?: { id: string; apply: (image: string) => Promise<void> };
 };
 
 export class SdCardError extends Error {}
@@ -358,7 +365,8 @@ export async function installPluginOnSdCard(opts: SdInstallOptions): Promise<SdI
     !manifest ||
     manifest.source.path !== source.path ||
     manifest.source.size !== source.size ||
-    manifest.source.mtimeMs !== source.mtimeMs;
+    manifest.source.mtimeMs !== source.mtimeMs ||
+    manifest.variant !== opts.variant?.id;
 
   // A failed prune leaves the copy as it was (the FAT check after it found a problem the delete
   // made, or the card could not be read): Play goes on, as before pruning existed.
@@ -384,6 +392,7 @@ export async function installPluginOnSdCard(opts: SdInstallOptions): Promise<SdI
         version: 1,
         source,
         plugin: { sha256: plugin.sha256, size: plugin.data.length, sdPath, from: plugin.source },
+        ...(opts.variant ? { variant: opts.variant.id } : {}),
         updatedAt: new Date().toISOString(),
       };
       await writeJsonAtomic(manifestFile, next);
@@ -412,6 +421,9 @@ export async function installPluginOnSdCard(opts: SdInstallOptions): Promise<SdI
       });
       const copiedIn = ((Date.now() - started) / 1000).toFixed(1);
       await prune(partial);
+      if (opts.variant) {
+        await opts.variant.apply(partial);
+      }
       await patchImage(partial, plugin.data, sdPath, { protectedPaths, log });
       how = `${how} in ${copiedIn} s`;
     } catch (err) {

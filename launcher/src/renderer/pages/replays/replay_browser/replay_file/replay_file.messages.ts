@@ -4,4 +4,5 @@ export const ReplayFileMessages = {
   showStats: () => "Show stats",
   launchReplay: () => "Launch replay",
   dolphinIsUpdating: () => "Dolphin is updating",
+  pplusRelease: (version: string) => "Project+ {0}",
 };

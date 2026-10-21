@@ -10,6 +10,10 @@ import type {
   DolphinService,
   GameFilesMoveOutcome,
   PlayKey,
+  PPlusPrepareResult,
+  PPlusVersionInfo,
+  ReplayPlayChoice,
+  ReplayPlayResult,
   ReplayQueueItem,
 } from "@dolphin/types";
 import { DolphinEventType } from "@dolphin/types";
@@ -93,13 +97,42 @@ class MockDolphinClient implements DolphinService {
   }
 
   @delayAndMaybeError(SHOULD_ERROR)
-  async viewSlpReplay(_files: ReplayQueueItem[]): Promise<void> {
+  async viewSlpReplay(_files: ReplayQueueItem[], _choice?: ReplayPlayChoice): Promise<ReplayPlayResult> {
     throw new Error("Method not implemented.");
   }
 
   @delayAndMaybeError(SHOULD_ERROR)
-  async playHighlights(_items: HighlightPlayItem[], _commandId: string): Promise<void> {
+  async playHighlights(
+    _items: HighlightPlayItem[],
+    _commandId: string,
+    _choice?: ReplayPlayChoice,
+  ): Promise<ReplayPlayResult> {
     throw new Error("Method not implemented.");
+  }
+
+  @delayAndMaybeError(SHOULD_ERROR)
+  async getPPlusVersions(): Promise<{ current: string; states: PPlusVersionInfo[] }> {
+    const state = (release: string, current: boolean): PPlusVersionInfo => ({
+      release,
+      current,
+      playable: true,
+      filesReady: current,
+      cardReady: false,
+      downloadBytes: current ? 0 : 51_400_000,
+      filesBytes: 0,
+      cardBytes: 0,
+    });
+    return { current: "v3.2.1", states: [state("v3.2.0", false), state("v3.2.1", true)] };
+  }
+
+  @delayAndMaybeError(SHOULD_ERROR)
+  async preparePPlusRelease(_release: string, _importFrom?: string): Promise<PPlusPrepareResult> {
+    return { ok: false, code: "offline", message: "Not available in the mock." };
+  }
+
+  @delayAndMaybeError(SHOULD_ERROR)
+  async removePPlusRelease(_release: string): Promise<void> {
+    return;
   }
 
   @delayAndMaybeError(SHOULD_ERROR)

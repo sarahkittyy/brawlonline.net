@@ -18,6 +18,8 @@ export type SyncedDolphinSettings = {
   disableChat: boolean;
   /** "Let others stream my games" (`[Online] StreamGames`, docs/design/spectating.md). */
   enableStreamGames: boolean;
+  /** The Project+ release on the card (`[Online] PPlusRelease`): replays record it. Written only. */
+  pplusRelease?: string;
 };
 
 export async function addGamePath(iniFile: IniFile, gameDir: string): Promise<void> {
@@ -64,6 +66,9 @@ export async function setOnlineSettings(iniFile: IniFile, options: Partial<Synce
   }
   if (options.enableStreamGames !== undefined) {
     section.set("StreamGames", convertBooleanToIniVal(options.enableStreamGames));
+  }
+  if (options.pplusRelease !== undefined) {
+    section.set("PPlusRelease", options.pplusRelease);
   }
 
   await iniFile.save();

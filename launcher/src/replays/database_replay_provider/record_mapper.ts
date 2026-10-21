@@ -38,6 +38,7 @@ export function mapGameRecordToFileResult(
       lastFrame: gameAndFileRecord.last_frame ?? undefined,
       timerType: gameAndFileRecord.timer_type ?? undefined,
       startingTimerSeconds: gameAndFileRecord.starting_timer_secs ?? undefined,
+      pplusRelease: gameAndFileRecord.pplus_release ?? undefined,
     },
   };
 }
