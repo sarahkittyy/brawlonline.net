@@ -199,6 +199,8 @@ void Uploader::ReportEnd(std::span<const u8> raw)
     o["winnerPort"] = picojson::value(static_cast<double>(*winner));
   if (const auto quitter = U32(e, "quitterPort"))
     o["quitterPort"] = picojson::value(static_cast<double>(*quitter));
+  if (g.info.set_game != 0)
+    o["setGame"] = picojson::value(static_cast<double>(g.info.set_game));
   // Kept for a while offline; a few games' at most.
   if (m_pending.size() >= 4)
     m_pending.erase(m_pending.begin());
@@ -504,7 +506,8 @@ Outgoing Uploader::Service(Clock::time_point now, bool online, size_t unacked, c
                              {"gameUid", picojson::value(Hex(g.info.uid))},
                              {"game", picojson::value(static_cast<double>(g.info.game))},
                              {"paused", picojson::value(static_cast<double>(m_last_paused))},
-                             {"rollbacks", picojson::value(m_last_rollbacks)}}));
+                             {"rollbacks", picojson::value(m_last_rollbacks)},
+                             {"listed", picojson::value(g.info.listed)}}));
     INFO_LOG_FMT(NETPLAY, "Spectate: offered game {} of {}", g.info.game, g.info.match_id);
   }
 

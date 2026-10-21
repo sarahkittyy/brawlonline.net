@@ -23,7 +23,7 @@ use std::sync::{mpsc as std_mpsc, Arc, RwLock};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use common::db;
 use common::net::EnetSocket;
 use common::playkey::PlayKeySecret;
@@ -392,6 +392,27 @@ async fn record_chat_key(pool: PgPool, uid: Uuid, key: [u8; 32]) {
     }
 }
 
+/// What mm saw of a Ranked set (best effort, like a match): accounts checks a game only one
+/// player reported against it.
+async fn record_ranked_presence(pool: PgPool, match_id: String, uid: Uuid, online: bool, at: DateTime<Utc>) {
+    if let Err(e) = db::record_ranked_presence(&pool, &match_id, uid, online, at).await {
+        tracing::error!(match_id, %uid, "recording ranked presence failed: {e}");
+    }
+}
+
+async fn record_ranked_game_result(
+    pool: PgPool,
+    match_id: String,
+    game_index: u32,
+    uid: Uuid,
+    winner: Option<Uuid>,
+    end_method: String,
+) {
+    if let Err(e) = db::record_ranked_game_result(&pool, &match_id, game_index, uid, winner, &end_method).await {
+        tracing::error!(match_id, game_index, %uid, "recording a ranked game result failed: {e}");
+    }
+}
+
 async fn count_ruleset_game(pool: PgPool, code: String) {
     if let Err(e) = db::count_ruleset_game(&pool, &code).await {
         tracing::error!(%code, "counting a ruleset game failed: {e}");
@@ -492,6 +513,13 @@ impl Loop {
             }
             Output::RulesetPlayed { code } => {
                 self.db.rt.spawn(count_ruleset_game(self.db.pool.clone(), code));
+            }
+            Output::RankedPresence { match_id, uid, online, at } => {
+                self.db.rt.spawn(record_ranked_presence(self.db.pool.clone(), match_id, uid, online, at));
+            }
+            Output::RankedGameResult { match_id, game_index, uid, winner, end_method } => {
+                let pool = self.db.pool.clone();
+                self.db.rt.spawn(record_ranked_game_result(pool, match_id, game_index, uid, winner, end_method));
             }
             Output::FetchRulesetList { conn, uid } => {
                 let (pool, done) = (self.db.pool.clone(), self.db.ruleset_lists.clone());

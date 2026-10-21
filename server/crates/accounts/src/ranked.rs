@@ -9,6 +9,11 @@
 //! `mm_matches` row, so a set is rated exactly once. Sets that wait on a grace period or go
 //! silent are settled by [`sweep`], which runs in the background.
 //!
+//! A game only one player reported is checked against what mm saw of the set (2026-10-21): mm
+//! records whether each player's game is connected to it (`ranked_presence`) and how each game
+//! ended as each player's own game told it (`ranked_game_results`); Ranked games are always
+//! streamed to mm for this. See [`common::ranked::resolve`].
+//!
 //! Unranked and Direct games, and rooms' games (with every player's place), are reported with
 //! the same endpoint and stored the same way (for the match history, [`crate::history`]); they
 //! are never settled or rated.
@@ -22,8 +27,8 @@ use axum::extract::{Query, State};
 use axum::Json;
 use chrono::{DateTime, Utc};
 use common::ranked::{
-    self, GameReport, Leave, LeaveReport, Outcome, Rank, RatedSet, Standing, TierState, Timing, MAX_GAME_INDEX,
-    MAX_SESSION_GAME_INDEX,
+    self, GameReport, Leave, LeaveReport, Outcome, Rank, RatedSet, Seen, SeenGame, Standing, TierState, Timing,
+    MAX_GAME_INDEX, MAX_SESSION_GAME_INDEX,
 };
 use serde::{Deserialize, Serialize};
 use sqlx::{PgConnection, PgPool, Postgres, Transaction};
@@ -241,6 +246,26 @@ async fn reports(
     ))
 }
 
+/// What mm saw of a set ([`Seen`]): its players' presence and their games' word on each game.
+async fn seen(tx: &mut Transaction<'_, Postgres>, match_id: &str) -> sqlx::Result<Seen> {
+    let online: Vec<(Uuid, bool)> = sqlx::query_as("SELECT uid, online FROM ranked_presence WHERE match_id = $1")
+        .bind(match_id)
+        .fetch_all(&mut **tx)
+        .await?;
+    let games: Vec<(i32, Uuid, Option<Uuid>)> =
+        sqlx::query_as("SELECT game_index, uid, winner FROM ranked_game_results WHERE match_id = $1")
+            .bind(match_id)
+            .fetch_all(&mut **tx)
+            .await?;
+    Ok(Seen {
+        online,
+        games: games
+            .into_iter()
+            .map(|(g, player, winner)| SeenGame { game_index: g.max(0) as u32, player, winner })
+            .collect(),
+    })
+}
+
 /// The rating change of one player in one set.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -277,7 +302,8 @@ pub async fn settle(
         return Ok(None);
     };
     let (games, leaves) = reports(&mut tx, match_id).await?;
-    let outcome = ranked::resolve(players, row.created_at, &games, &leaves, now, timing);
+    let seen = seen(&mut tx, match_id).await?;
+    let outcome = ranked::resolve(players, row.created_at, &games, &leaves, &seen, now, timing);
     if matches!(outcome, Outcome::InProgress { .. }) {
         tx.commit().await?;
         return Ok(Some(outcome));
@@ -434,9 +460,10 @@ async fn set_state(pool: &PgPool, match_id: &str, uid: Uuid, timing: Timing) -> 
     // Wins from the reports as they stand (the same rules that settled it).
     let mut tx = pool.begin().await?;
     let (games, leaves) = reports(&mut tx, match_id).await?;
+    let seen = seen(&mut tx, match_id).await?;
     tx.commit().await?;
     let wins = match <[Uuid; 2]>::try_from(row.players.clone()) {
-        Ok(p) => ranked::resolve(p, row.created_at, &games, &leaves, Utc::now(), timing).wins().to_vec(),
+        Ok(p) => ranked::resolve(p, row.created_at, &games, &leaves, &seen, Utc::now(), timing).wins().to_vec(),
         Err(_) => vec![0; row.players.len()],
     };
     let event: Option<(f64, f64, i32)> = sqlx::query_as(

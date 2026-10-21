@@ -24,6 +24,7 @@
 #include "Core/ConfigManager.h"
 #include "Core/HW/Memmap.h"
 #include "Core/Online/GameSetup.h"
+#include "Core/Online/Ranked.h"
 #include "Core/Online/Spectate.h"
 #include "Core/Rollback/GameplayRollback.h"
 #include "Core/System.h"
@@ -599,9 +600,18 @@ bool Saving()
   return Config::Get(Config::ONLINE_SAVE_REPLAYS);
 }
 
-bool Enabled()
+bool Streamed(const MatchMeta& meta)
 {
-  return Saving() || Config::Get(Config::ONLINE_STREAM_GAMES);
+  // Only a match mm made can be streamed (its id names it to mm).
+  if (meta.match_id.empty())
+    return false;
+  const bool ranked = meta.mode == 0 && !meta.room;
+  return ranked || Config::Get(Config::ONLINE_STREAM_GAMES);
+}
+
+bool Enabled(const MatchMeta& meta)
+{
+  return Saving() || Streamed(meta);
 }
 
 bool Begin(Core::System& system, const BeginInfo& info)
@@ -609,8 +619,7 @@ bool Begin(Core::System& system, const BeginInfo& info)
   if (s_rec.active)
     Abort();
   const bool save = Saving();
-  // Only a match mm made can be streamed (its id names it to mm).
-  const bool stream = Config::Get(Config::ONLINE_STREAM_GAMES) && !info.meta.match_id.empty();
+  const bool stream = Streamed(info.meta);
   if (!save && !stream)
     return false;
   s_rec = {};
@@ -641,7 +650,10 @@ bool Begin(Core::System& system, const BeginInfo& info)
   const std::string info_json = InfoJson(info);
   const std::string setup_json = info.setup_json;
   const std::string spec_json = save ? FighterSpecJson() : std::string();
-  const Online::Spectate::GameInfo game{info.meta.match_id, info.uid, info.game};
+  const bool ranked = info.meta.mode == 0 && !info.meta.room;
+  const Online::Spectate::GameInfo game{info.meta.match_id, info.uid, info.game,
+                                        Config::Get(Config::ONLINE_STREAM_GAMES),
+                                        ranked ? Online::Ranked::GameIndexOf(info.session_game) : 0};
   Queue(
       [dir, info_json, setup_json, spec_json, game](Output& out) {
         if (out.save)

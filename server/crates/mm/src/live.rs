@@ -15,6 +15,14 @@
 //! A **stream** is a match: a Direct, Unranked or Ranked set, or a room's games while the same
 //! players play in the same room. [`MM_SPECTATE`](crate::config::Config::spectate) is the kill
 //! switch: `off` (the default) answers every offer with `none`.
+//!
+//! **Ranked** (2026-10-21): its games are always streamed, one player's game the primary and the
+//! other's the witness, whatever `MM_SPECTATE` and the players' "Let others stream my games" say
+//! ([`LiveConfig::ranked`], `MM_RANKED_STREAM`): it is the server's record of the set. Such a
+//! stream is listed only under `on` when a player of it lets others watch (the offer's `listed`).
+//! For accounts' check of a game only one player reported, mm records whether each player's game
+//! is connected ([`Output::RankedPresence`]) and how each game ended as each player's own game
+//! said ([`Output::RankedGameResult`]).
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::str::FromStr;
@@ -30,6 +38,9 @@ use tokio::sync::watch;
 use uuid::Uuid;
 
 use crate::engine::{ConnId, MatchRecord, Output};
+
+/// A Ranked set's players' presence is recorded for this long after the set was made.
+const RANKED_PRESENCE_FOR: Duration = Duration::from_secs(3 * 3600);
 
 /// Answers to a refused `spectate-*` request (`spectate-error`). The game logs them.
 pub mod errors {
@@ -64,6 +75,9 @@ impl FromStr for SpectateMode {
 #[derive(Debug, Clone)]
 pub struct LiveConfig {
     pub mode: SpectateMode,
+    /// Ranked games are always streamed (primary and witness), whatever `mode`; listed only under
+    /// `On` (`MM_RANKED_STREAM`).
+    pub ranked: bool,
     /// Roles are given once every player offered, or this long after the first offer.
     pub decide_after: Duration,
     /// The pacer rate told to primaries, bytes per second.
@@ -99,6 +113,7 @@ impl Default for LiveConfig {
     fn default() -> Self {
         LiveConfig {
             mode: SpectateMode::Off,
+            ranked: true,
             decide_after: Duration::from_secs(2),
             rate: 2048,
             bucket_rate: 4096.0,
@@ -130,6 +145,8 @@ struct StreamSlot {
     entry: LiveEntry,
     games: Vec<GameView>,
     over: bool,
+    /// Not listed or served: a Ranked set streamed only for the server's record.
+    hidden: bool,
     tx: watch::Sender<u64>,
 }
 
@@ -164,19 +181,20 @@ impl LiveStore {
         })
     }
 
-    /// The listed streams, newest first. `Witness` streams are never in the store.
+    /// The listed streams, newest first. `Witness` streams are never in the store, hidden ones
+    /// (a Ranked set nobody lets others watch) are not listed.
     pub fn entries(&self) -> Vec<LiveEntry> {
-        let mut v: Vec<LiveEntry> = self.with(|m| m.values().map(|s| s.entry.clone()).collect());
+        let mut v: Vec<LiveEntry> = self.with(|m| m.values().filter(|s| !s.hidden).map(|s| s.entry.clone()).collect());
         v.sort_by(|a, b| b.started_at.cmp(&a.started_at).then_with(|| a.id.cmp(&b.id)));
         v
     }
 
     pub fn entry(&self, id: &str) -> Option<LiveEntry> {
-        self.with(|m| m.get(id).map(|s| s.entry.clone()))
+        self.with(|m| m.get(id).filter(|s| !s.hidden).map(|s| s.entry.clone()))
     }
 
     pub fn subscribe(&self, id: &str) -> Option<watch::Receiver<u64>> {
-        self.with(|m| m.get(id).map(|s| s.tx.subscribe()))
+        self.with(|m| m.get(id).filter(|s| !s.hidden).map(|s| s.tx.subscribe()))
     }
 
     /// The lines from `cursor` on, and whether the stream is over and fully read (the reader
@@ -184,7 +202,7 @@ impl LiveStore {
     pub fn read(&self, id: &str, cursor: &mut Cursor) -> Option<(Vec<LiveLine>, bool)> {
         use base64::Engine as _;
         self.with(|m| {
-            let s = m.get(id)?;
+            let s = m.get(id).filter(|s| !s.hidden)?;
             let mut lines = Vec::new();
             while let Some(g) = s.games.get(cursor.game) {
                 let ordinal = cursor.game as u32 + 1;
@@ -220,6 +238,7 @@ impl LiveStore {
                 entry,
                 games: Vec::new(),
                 over: false,
+                hidden: true,
                 tx: watch::channel(0).0,
             });
         })
@@ -395,6 +414,9 @@ struct StreamBook {
     players: Vec<Uuid>,
     /// Set when the stream is in the store (its first `INFO` was kept).
     listed: bool,
+    /// A player of it lets others watch (`MM_SPECTATE` on): spectators may see it. Otherwise it
+    /// is kept hidden (a Ranked set streamed only for the server's record).
+    public: bool,
     last_upload: Instant,
     last_end: Option<Instant>,
     /// The set can't go on (a game ended by a disconnect, a player leaving or an error; a Ranked
@@ -414,6 +436,7 @@ impl StreamBook {
             room_key,
             players,
             listed: false,
+            public: false,
             last_upload: now,
             last_end: None,
             set_over: false,
@@ -445,6 +468,9 @@ pub struct LiveBook {
     next_slot: u32,
     /// Room members watching their room's game on the watch channel ([`Self::feed_watchers`]).
     watchers: HashMap<ConnId, Watcher>,
+    /// The last [`Output::RankedPresence`] time: each is later than the one before, so the
+    /// database keeps the newest when they are written out of order.
+    presence_at: DateTime<Utc>,
 }
 
 /// The most of a room's game sent to one watcher per [`LiveBook::feed_watchers`] (a tick): a
@@ -500,6 +526,7 @@ impl LiveBook {
             streams: HashMap::new(),
             next_slot: 1,
             watchers: HashMap::new(),
+            presence_at: DateTime::<Utc>::MIN_UTC,
         }
     }
 
@@ -511,6 +538,41 @@ impl LiveBook {
         self.cfg.mode
     }
 
+    fn presence_time(&mut self) -> DateTime<Utc> {
+        let now = Utc::now();
+        self.presence_at =
+            if now > self.presence_at { now } else { self.presence_at + chrono::Duration::microseconds(1) };
+        self.presence_at
+    }
+
+    /// `uid`'s game opened its first online connection, or closed its last one: recorded for their
+    /// recent Ranked sets.
+    pub fn presence(&mut self, now: Instant, uid: Uuid, online: bool, out: &mut Vec<Output>) {
+        let sets: Vec<String> = self
+            .matches
+            .iter()
+            .filter(|(_, m)| {
+                m.mode == "ranked" && m.players.contains(&uid) && now.duration_since(m.made) < RANKED_PRESENCE_FOR
+            })
+            .map(|(id, _)| id.clone())
+            .collect();
+        for match_id in sets {
+            let at = self.presence_time();
+            tracing::info!(match_id, %uid, online, "ranked presence");
+            out.push(Output::RankedPresence { match_id, uid, online, at });
+        }
+    }
+
+    /// Whether `match_id`'s games are streamed with a primary: spectating on, or a Ranked set.
+    fn uploads(&self, match_id: &str) -> bool {
+        self.cfg.mode == SpectateMode::On || self.forced(match_id)
+    }
+
+    /// A Ranked set streamed for the server's record, whatever `MM_SPECTATE` says.
+    fn forced(&self, match_id: &str) -> bool {
+        self.cfg.ranked && self.matches.get(match_id).is_some_and(|m| m.mode == "ranked")
+    }
+
     pub fn stream_count(&self) -> usize {
         self.streams.len()
     }
@@ -518,7 +580,26 @@ impl LiveBook {
     /// A match mm made (a pairing or a room's start). `names`: each player's name and connect code
     /// as mm knows them (from their online connection), which the list uses instead of what an
     /// upload says.
-    pub fn register_match(&mut self, now: Instant, m: &MatchRecord, names: HashMap<Uuid, (String, String)>) {
+    /// A Ranked set's players' presence is recorded from here on ([`Self::presence`]): online when
+    /// they have an online connection (`names` has them).
+    pub fn register_match(
+        &mut self,
+        now: Instant,
+        m: &MatchRecord,
+        names: HashMap<Uuid, (String, String)>,
+        out: &mut Vec<Output>,
+    ) {
+        if m.room.is_none() && m.mode == common::proto::Mode::Ranked {
+            for p in &m.players {
+                let at = self.presence_time();
+                out.push(Output::RankedPresence {
+                    match_id: m.match_id.clone(),
+                    uid: *p,
+                    online: names.contains_key(p),
+                    at,
+                });
+            }
+        }
         let mut sorted = m.players.clone();
         sorted.sort_unstable();
         let room_key = m.room.as_ref().map(|r| (r.code.clone(), sorted.clone()));
@@ -636,7 +717,7 @@ impl LiveBook {
         let op = req.op();
         let result = match req {
             SpectateRequest::Offer(o) => self.offer(now, conn, account, o, out),
-            SpectateRequest::End(e) => self.end_report(now, account, e),
+            SpectateRequest::End(e) => self.end_report(now, account, e, out),
             SpectateRequest::Digest { slot, frms } => self.digest(now, conn, slot, frms, out),
             SpectateRequest::Pause { slot, reason } => self.pause(now, conn, slot, &reason, false, out),
             SpectateRequest::Stop { slot, reason } => self.pause(now, conn, slot, &reason, true, out),
@@ -662,7 +743,8 @@ impl LiveBook {
         if !m.players.contains(&account) {
             return Err(errors::NOT_YOUR_MATCH);
         }
-        if self.cfg.mode == SpectateMode::Off {
+        let forced = self.forced(&o.match_id);
+        if self.cfg.mode == SpectateMode::Off && !forced {
             self.send_none(out, conn, &offered);
             return Ok(());
         }
@@ -744,6 +826,15 @@ impl LiveBook {
         if game.match_id != o.match_id {
             return Err(errors::NOT_YOUR_MATCH);
         }
+        // Spectators may see the stream once a player of it lets others watch.
+        if o.listed && self.cfg.mode == SpectateMode::On {
+            let stream = game.stream.clone();
+            if let Some(b) = self.streams.get_mut(&stream).filter(|b| !b.public) {
+                b.public = true;
+                self.store.change(&stream, |s| s.hidden = false);
+            }
+        }
+        let game = self.games.get_mut(&uid).expect("just made");
         if !game.open() {
             self.send_none(out, conn, &offered);
             return Ok(());
@@ -820,6 +911,7 @@ impl LiveBook {
     /// Gives every offering player its role: the healthiest is the primary (fewest pauses last
     /// game, then fewest rollbacks, then the host), the others witnesses.
     fn decide(&mut self, now: Instant, uid: [u8; 16], out: &mut Vec<Output>) {
+        let witness_only = self.games.get(&uid).is_some_and(|g| !self.uploads(&g.match_id));
         let Some(game) = self.games.get_mut(&uid) else { return };
         game.decided = true;
         let mut order: Vec<usize> = (0..game.offers.len()).collect();
@@ -827,7 +919,6 @@ impl LiveBook {
             let (x, y) = (&game.offers[a], &game.offers[b]);
             x.paused.cmp(&y.paused).then(x.rollbacks.total_cmp(&y.rollbacks)).then(y.host.cmp(&x.host))
         });
-        let witness_only = self.cfg.mode == SpectateMode::Witness;
         for (rank, i) in order.into_iter().enumerate() {
             let role = if rank == 0 && !witness_only { Role::Primary } else { Role::Witness };
             self.give_role(now, uid, i, role, out);
@@ -838,8 +929,7 @@ impl LiveBook {
     fn assign_late(&mut self, now: Instant, uid: [u8; 16], conn: ConnId, out: &mut Vec<Output>) {
         let Some(game) = self.games.get(&uid) else { return };
         let Some(i) = game.offers.iter().position(|o| o.conn == conn) else { return };
-        let role =
-            if game.primary.is_none() && self.cfg.mode == SpectateMode::On { Role::Primary } else { Role::Witness };
+        let role = if game.primary.is_none() && self.uploads(&game.match_id) { Role::Primary } else { Role::Witness };
         self.give_role(now, uid, i, role, out);
     }
 
@@ -870,9 +960,10 @@ impl LiveBook {
     /// Hands the game to the healthiest witness (or a standby that resumed). The old primary, if
     /// still there, was already told. Without anyone left the game waits for a late offer.
     fn takeover(&mut self, now: Instant, uid: [u8; 16], why: &str, out: &mut Vec<Output>) {
+        let uploads = self.games.get(&uid).is_some_and(|g| self.uploads(&g.match_id));
         let Some(game) = self.games.get_mut(&uid) else { return };
         game.primary = None;
-        if !game.open() || self.cfg.mode != SpectateMode::On {
+        if !game.open() || !uploads {
             return;
         }
         let pick = game
@@ -1131,14 +1222,14 @@ impl LiveBook {
         let m =
             self.games.values().find(|g| g.stream == stream_id).and_then(|g| self.matches.get(&g.match_id)).cloned();
         let book = self.streams.get_mut(stream_id);
-        let (players, wins, started_at) = match book {
+        let (players, wins, started_at, public) = match book {
             Some(b) => {
                 let started = b.started_at.get_or_insert_with(|| rfc3339(wall)).clone();
                 b.listed = true;
                 b.last_end = None;
-                (b.players.clone(), b.wins.clone(), started)
+                (b.players.clone(), b.wins.clone(), started, b.public)
             }
-            None => (Vec::new(), HashMap::new(), rfc3339(wall)),
+            None => (Vec::new(), HashMap::new(), rfc3339(wall), false),
         };
         let _ = now;
         let mut entry = LiveEntry {
@@ -1193,6 +1284,7 @@ impl LiveBook {
             s.entry = entry;
             s.entry.game.place = s.games.len() as u32;
             s.over = false;
+            s.hidden = !public;
         });
         ordinal
     }
@@ -1222,11 +1314,33 @@ impl LiveBook {
     /// A player's game says how a game it offered ended (`spectate-end`). Counted at once when
     /// the game's upload is over (cut, or nothing came); while it still goes on, its `ENDG` is on
     /// the way and counts, and the report waits in case it never comes.
-    fn end_report(&mut self, now: Instant, account: Uuid, e: EndReport) -> Result<(), &'static str> {
+    fn end_report(
+        &mut self,
+        now: Instant,
+        account: Uuid,
+        e: EndReport,
+        out: &mut Vec<Output>,
+    ) -> Result<(), &'static str> {
         let offered = spectate::decode_uid(&e.game_uid).ok_or(errors::INVALID)?;
         let Some(m) = self.matches.get(&e.match_id) else { return Ok(()) };
         if !m.players.contains(&account) {
             return Err(errors::NOT_YOUR_MATCH);
+        }
+        // A Ranked game's result as this player's own game says it, for accounts' check of a
+        // game only one player reported. A desync, a disconnect and the like are no result.
+        if let Some(game_index) = e.set_game.filter(|_| m.mode == "ranked" && m.room.is_none()) {
+            if matches!(e.end_method.as_str(), "game" | "quit") {
+                let winners = EndResult::from_report(e.clone()).winners(true);
+                let winner = winners.into_iter().find(|w| m.players.contains(w));
+                tracing::info!(match_id = %e.match_id, game_index, %account, ?winner, "ranked game result from a player's game");
+                out.push(Output::RankedGameResult {
+                    match_id: e.match_id.clone(),
+                    game_index,
+                    uid: account,
+                    winner,
+                    end_method: e.end_method.clone(),
+                });
+            }
         }
         // Only a game this player offered (spectating off: there is none, and nothing to count).
         let Some(game) = self
@@ -1752,7 +1866,11 @@ mod tests {
         }
 
         fn with_match_mode(mode: SpectateMode, match_mode: Mode) -> T {
-            let mut book = LiveBook::new(LiveConfig { mode, ..Default::default() });
+            T::with_config(LiveConfig { mode, ..Default::default() }, match_mode)
+        }
+
+        fn with_config(cfg: LiveConfig, match_mode: Mode) -> T {
+            let mut book = LiveBook::new(cfg);
             let (a, b) = (Uuid::new_v4(), Uuid::new_v4());
             let now = Instant::now();
             let rec = MatchRecord {
@@ -1765,14 +1883,25 @@ mod tests {
                 room: None,
             };
             let names = HashMap::from([(a, ("alice".into(), "ALI#1".into())), (b, ("bob".into(), "BOB#2".into()))]);
-            book.register_match(now, &rec, names);
+            book.register_match(now, &rec, names, &mut vec![]);
             T { book, now, a, b }
         }
 
         fn offer(&mut self, conn: ConnId, who: Uuid, game: u8, paused: u32) -> Vec<Output> {
+            self.offer_with(conn, who, game, paused, true)
+        }
+
+        /// An offer saying whether the player lets others watch.
+        fn offer_with(&mut self, conn: ConnId, who: Uuid, game: u8, paused: u32, listed: bool) -> Vec<Output> {
             let mut out = vec![];
-            let o =
-                Offer { match_id: MATCH.into(), game_uid: uid_hex(game), game: game as u32, paused, rollbacks: 0.0 };
+            let o = Offer {
+                match_id: MATCH.into(),
+                game_uid: uid_hex(game),
+                game: game as u32,
+                paused,
+                rollbacks: 0.0,
+                listed,
+            };
             self.book.request(self.now, conn, who, SpectateRequest::Offer(o), &mut out);
             out
         }
@@ -1879,6 +2008,138 @@ mod tests {
         assert_eq!(e.players.iter().find(|p| p.uid == b.to_string()).unwrap().wins, 1);
         assert_eq!(e.players.iter().find(|p| p.uid == a.to_string()).unwrap().wins, 0);
         assert!(matches!(read_all(&t.book.store, &e.id).last(), Some(LiveLine::End { game: 1 })));
+    }
+
+    /// Ranked (2026-10-21): a set is streamed, one primary and one witness, whatever `MM_SPECTATE`
+    /// and the players' "Let others stream my games" say; it is listed only when spectating is on
+    /// and a player of it lets others watch.
+    #[test]
+    fn ranked_sets_stream_for_the_record_and_are_listed_only_when_a_player_lets_others_watch() {
+        // (spectating, A lets others watch, B lets others watch) -> listed
+        let cases = [
+            (SpectateMode::Off, true, true, false),
+            (SpectateMode::Witness, true, true, false),
+            (SpectateMode::On, false, false, false),
+            (SpectateMode::On, false, true, true),
+        ];
+        for (mode, la, lb, listed) in cases {
+            let mut t = T::with_match_mode(mode, Mode::Ranked);
+            let (a, b) = (t.a, t.b);
+            t.offer_with(A, a, 1, 0, la);
+            let out = t.offer_with(B, b, 1, 1, lb);
+            let (ra, rb) = (role(&out, A).unwrap(), role(&out, B).unwrap());
+            assert_eq!((ra["role"].as_str(), rb["role"].as_str()), (Some("primary"), Some("witness")), "{mode:?}");
+            let slot = ra["slot"].as_u64().unwrap() as u32;
+            let info = t.info(1);
+            t.send_chunk(A, slot, 0, &info);
+            t.send_chunk(A, slot, 1, &encode_chunk(b"SETP", b"{}", false));
+            t.send_chunk(A, slot, 2, &encode_chunk(b"FRMS", &frms(120, 60, 1), true));
+            let id = t.book.matches[MATCH].stream.clone();
+            assert_eq!(t.book.store.entries().len(), usize::from(listed), "{mode:?} {la} {lb}");
+            assert_eq!(t.book.store.entry(&id).is_some(), listed);
+            assert_eq!(t.book.store.read(&id, &mut Cursor::default()).is_some(), listed);
+            // Kept either way: the witness's digests are checked against it.
+            assert_eq!(t.book.games[&[1u8; 16]].hashes.len(), 1);
+        }
+        // Not Ranked: as before, spectating off streams nothing.
+        let mut t = T::with_match_mode(SpectateMode::Off, Mode::Unranked);
+        let (a, b) = (t.a, t.b);
+        t.offer(A, a, 1, 0);
+        assert_eq!(role(&t.offer(B, b, 1, 0), B).unwrap()["role"], "none");
+        // MM_RANKED_STREAM off: Ranked follows MM_SPECTATE.
+        let cfg = LiveConfig { mode: SpectateMode::Off, ranked: false, ..Default::default() };
+        let mut t = T::with_config(cfg, Mode::Ranked);
+        let (a, b) = (t.a, t.b);
+        t.offer(A, a, 1, 0);
+        assert_eq!(role(&t.offer(B, b, 1, 0), B).unwrap()["role"], "none");
+    }
+
+    fn presence(out: &[Output]) -> Vec<(Uuid, bool)> {
+        out.iter()
+            .filter_map(|o| match o {
+                Output::RankedPresence { uid, online, .. } => Some((*uid, *online)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn results(out: &[Output]) -> Vec<(u32, Uuid, Option<Uuid>)> {
+        out.iter()
+            .filter_map(|o| match o {
+                Output::RankedGameResult { game_index, uid, winner, .. } => Some((*game_index, *uid, *winner)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// What accounts checks a lone report against: whether each player's game is connected, and
+    /// each game's result as each player's own game said it.
+    #[test]
+    fn ranked_sets_record_presence_and_each_players_result() {
+        let mut book = LiveBook::new(LiveConfig::default());
+        let (a, b) = (Uuid::new_v4(), Uuid::new_v4());
+        let now = Instant::now();
+        let rec = |id: &str, mode: Mode| MatchRecord {
+            match_id: id.into(),
+            mode,
+            players: vec![a, b],
+            host: a,
+            stages: vec![],
+            region: String::new(),
+            room: None,
+        };
+        // Only A has an online connection when the set is made.
+        let names = HashMap::from([(a, ("alice".into(), "ALI#1".into()))]);
+        let mut out = vec![];
+        book.register_match(now, &rec(MATCH, Mode::Ranked), names.clone(), &mut out);
+        assert_eq!(presence(&out), vec![(a, true), (b, false)]);
+        let mut out = vec![];
+        book.register_match(now, &rec("mode.unranked-x", Mode::Unranked), names, &mut out);
+        assert!(presence(&out).is_empty(), "only Ranked");
+        // Later changes go to the recent Ranked sets only, each newer than the last.
+        let mut out = vec![];
+        book.presence(now, b, true, &mut out);
+        book.presence(now, b, false, &mut out);
+        assert_eq!(presence(&out), vec![(b, true), (b, false)]);
+        let at: Vec<DateTime<Utc>> = out
+            .iter()
+            .filter_map(|o| match o {
+                Output::RankedPresence { at, .. } => Some(*at),
+                _ => None,
+            })
+            .collect();
+        assert!(at[0] < at[1]);
+        let mut out = vec![];
+        book.presence(now + RANKED_PRESENCE_FOR, b, true, &mut out);
+        assert!(presence(&out).is_empty(), "an old set");
+
+        // Each player's game's word on how a game ended.
+        let mut t = T::with_match_mode(SpectateMode::On, Mode::Ranked);
+        let (a, b) = (t.a, t.b);
+        t.offer_with(A, a, 1, 0, false);
+        t.offer_with(B, b, 1, 0, false);
+        let out = report(&mut t, B, b, 1, json!({"endMethod": "game", "winnerPort": 1, "setGame": 2}));
+        assert_eq!(results(&out), vec![(2, b, Some(a))]);
+        // A quit loses the game for the quitter.
+        let out = report(&mut t, A, a, 1, json!({"endMethod": "quit", "quitterPort": 2, "setGame": 2}));
+        assert_eq!(results(&out), vec![(2, a, Some(a))]);
+        // A draw.
+        let out = report(&mut t, A, a, 1, json!({"endMethod": "game", "setGame": 2}));
+        assert_eq!(results(&out), vec![(2, a, None)]);
+        // No result: a desync, a disconnect, an older build without the set game.
+        for fields in [
+            json!({"endMethod": "desync", "setGame": 2}),
+            json!({"endMethod": "disconnect", "winnerPort": 1, "setGame": 2}),
+            json!({"endMethod": "game", "winnerPort": 1}),
+        ] {
+            assert!(results(&report(&mut t, B, b, 1, fields)).is_empty());
+        }
+        // Not Ranked: nothing.
+        let mut t = T::with_match_mode(SpectateMode::On, Mode::Direct);
+        let (a, b) = (t.a, t.b);
+        t.offer(A, a, 1, 0);
+        let out = report(&mut t, B, b, 1, json!({"endMethod": "game", "winnerPort": 1, "setGame": 1}));
+        assert!(results(&out).is_empty());
     }
 
     /// What a watcher got on the watch channel: (kind, the chunk index or the JSON).
@@ -2609,12 +2870,19 @@ mod tests {
         };
         let names =
             HashMap::from([(t.a, ("kyran".into(), "KYRN#1".into())), (t.b, ("manbat".into(), "MBAT#2".into()))]);
-        t.book.register_match(t.now, &rec, names);
+        t.book.register_match(t.now, &rec, names, &mut vec![]);
     }
 
     fn offer_in(t: &mut T, match_id: &str, conn: ConnId, who: Uuid, uid: u8, number: u32) -> Vec<Output> {
         let mut out = vec![];
-        let o = Offer { match_id: match_id.into(), game_uid: uid_hex(uid), game: number, paused: 0, rollbacks: 0.0 };
+        let o = Offer {
+            match_id: match_id.into(),
+            game_uid: uid_hex(uid),
+            game: number,
+            paused: 0,
+            rollbacks: 0.0,
+            listed: true,
+        };
         t.book.request(t.now, conn, who, SpectateRequest::Offer(o), &mut out);
         out
     }

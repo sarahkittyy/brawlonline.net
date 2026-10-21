@@ -121,6 +121,11 @@ pub struct Config {
     /// anything), `witness` (only digests, nothing listed) or `on`.
     #[arg(long, env = "MM_SPECTATE", default_value = "off")]
     pub spectate: String,
+
+    /// Ranked games are always streamed (primary and witness), whatever `MM_SPECTATE` says, as the
+    /// server's record of the set (2026-10-21): `on` or `off`.
+    #[arg(long, env = "MM_RANKED_STREAM", default_value = "on")]
+    pub ranked_stream: String,
 }
 
 impl Config {
@@ -160,6 +165,11 @@ impl Config {
             },
             live: crate::live::LiveConfig {
                 mode: self.spectate.parse().map_err(|e: String| anyhow::anyhow!(e))?,
+                ranked: match self.ranked_stream.trim().to_ascii_lowercase().as_str() {
+                    "" | "on" => true,
+                    "off" => false,
+                    other => anyhow::bail!("MM_RANKED_STREAM must be on or off, not {other:?}"),
+                },
                 ..defaults.live.clone()
             },
             ..defaults
@@ -193,6 +203,7 @@ impl Config {
             status_listen: "127.0.0.1:0".into(),
             room_start_timeout_secs: 15,
             spectate: "off".into(),
+            ranked_stream: "on".into(),
         }
     }
 }

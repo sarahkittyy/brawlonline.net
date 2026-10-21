@@ -20,6 +20,9 @@ on P+'s own stage select with its stage striking (Dolphin ``Online/GameSetup.cpp
   bans two stages (X), the loser picks the stage (A), and the match starts;
 - until one player has two wins. Both Dolphins report every game, the server rates the set once,
   the connection closes on the CSS after the set, and both CSSs show the rating and its change.
+- Both players have "Let others stream my games" off and mm's spectating is off: a Ranked set is
+  streamed anyway, as the server's record (2026-10-21), and each player's game tells mm how each
+  game ended (`ranked_game_results`, what accounts checks a lone report against).
 
 Instances are named ``rk-*``. Screenshots go to ``run/artifacts/game-bridge/ranked-set/``. Needs
 what ``test_online_unranked.py`` needs.
@@ -126,8 +129,9 @@ def test_ranked_set_is_rated(backend: OnlineBackend, dolphin: Callable[..., Dolp
                              gpu_backend: str) -> None:
     test = "ranked-set"
     ua, ub = backend.create_user("rhea", "RHEA"), backend.create_user("sven", "SVEN")
-    a = _boot(dolphin, "rk-a", backend, ua, gpu_backend, test, "gameplay")
-    b = _boot(dolphin, "rk-b", backend, ub, gpu_backend, test, "gameplay")
+    no_stream = {"Online": {"StreamGames": False}}
+    a = _boot(dolphin, "rk-a", backend, ua, gpu_backend, test, "gameplay", dolphin_ini=no_stream)
+    b = _boot(dolphin, "rk-b", backend, ub, gpu_backend, test, "gameplay", dolphin_ini=no_stream)
     _both(a.to_main_menu, b.to_main_menu)
     _both(a.to_online_page, b.to_online_page)
     _both(lambda: a.to_css("ranked"), lambda: b.to_css("ranked"))
@@ -318,6 +322,17 @@ def test_ranked_set_is_rated(backend: OnlineBackend, dolphin: Callable[..., Dolp
     assert "ranked set settled" in log and "ranked leave reported" not in log
     for g in players:
         assert g.bridge()["lost"] == 0
+
+    # Streamed for the record with both players' boxes off: one primary and one witness per game,
+    # never listed, and each player's game's word on each game, numbered as the reports are.
+    mm_log = re.sub(r"\x1b\[[0-9;]*m", "", backend.log_text("mm"))   # some runs' logs have colours
+    roles = re.findall(r"spectate role.*role=(Primary|Witness)", mm_log)
+    assert roles.count("Primary") >= len(games) and roles.count("Witness") >= len(games), roles
+    said = re.findall(r"ranked game result from a player's game.*game_index=(\d+) account=(\S+) winner=(\S+)",
+                      mm_log)
+    assert sorted(int(i) for i, _, _ in said) == sorted(2 * list(range(1, len(games) + 1))), said
+    assert {acc for _, acc, _ in said} == {ua.uid, ub.uid}, said
+    assert "recording ranked" not in mm_log and "recording a ranked" not in mm_log, mm_log[-3000:]
 
 
 # P+'s hold-to-pause timers (u32 at 0x80584080 + 8 * pad; NETPLAY.txt "Hold Start to Pause v3").

@@ -64,6 +64,9 @@ void OnStageSelect();
 void OnCleanup(const Match* found);
 // True from the game that decides the set until the cleanup after it.
 bool IsSetOver();
+// The set's game a session game is, as its result report numbers it (`gameIndex`: a desynced
+// game played again keeps its number); the session game itself outside a ranked set.
+u32 GameIndexOf(u32 session_game);
 
 // What GET_RANK shows: this player's rating and the change of the last ranked set.
 struct RankInfo

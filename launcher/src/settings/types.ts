@@ -50,8 +50,9 @@ export interface SettingsSchema {
   // Dolphin.ini `[Online] DisableChat`.
   disableChat: boolean;
 
-  // Online: "Let others stream my games" (docs/design/spectating.md): this player's game uploads
-  // its games' inputs for spectators. Synced to Dolphin.ini `[Online] StreamGames`.
+  // Online: "Show my games on the Spectate tab" (docs/design/spectating.md): this player's game
+  // uploads its games' inputs for spectators (Ranked's always, listed only when a player allows
+  // it). Synced to Dolphin.ini `[Online] StreamGames`.
   enableStreamGames: boolean;
 
   // Spectating: "Close Dolphin after a spectated game ends" (docs/design/spectating.md §6.2): at a stream's end the

@@ -335,6 +335,7 @@ Parameters (initial, to tune on our data): mu = 25, sigma = 25/3, beta = 25/6, t
 - `poor_performance` termination and `abnormal_completion` with desync recovery failing: **void the set, no rating change**, and log it per uid. Repeat offenders (more than 3 in 24 h) get a cooldown from ranked (Slippi's "ban warning"). Not built.
 - A desync (built 2026-10-13, the user's rules; `docs/game-code.md` §11, desync recovery): the game starts again from the last frame whose checksums both machines compared equal (stocks, damage and time left), after both ready up on the CSS (45 s), and is reported under the same set game number. The server sees nothing of it.
 - The two clients' reports must agree on winner, stocks and end method. On disagreement the game is flagged, the rating is held, and the replay is kept for admin review.
+- A game only one client reported (built 2026-10-21: before, a player could report their own wins as a set started and have them count after the 2-minute grace period): Ranked games are always streamed to mm, and each player's game tells mm how each game ended; the lone report counts when the other player's game told mm the same, voids the set as `ERROR` when it told mm another winner, and otherwise counts after the grace period only when the other player's game is gone from mm. While it is connected the report waits (the set is `ORPHANED` after 30 minutes). `docs/spectate-protocol.md` §1.1, `common::ranked::resolve`.
 
 ---
 

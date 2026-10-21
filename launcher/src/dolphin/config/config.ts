@@ -16,7 +16,7 @@ export type SyncedDolphinSettings = {
   enableMusic: boolean;
   /** No chat window in the game (`[Online] DisableChat`). */
   disableChat: boolean;
-  /** "Let others stream my games" (`[Online] StreamGames`, docs/design/spectating.md). */
+  /** "Show my games on the Spectate tab" (`[Online] StreamGames`, docs/design/spectating.md). */
   enableStreamGames: boolean;
   /** The Project+ release on the card (`[Online] PPlusRelease`): replays record it. Written only. */
   pplusRelease?: string;

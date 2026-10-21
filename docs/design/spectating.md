@@ -247,10 +247,11 @@ The ballpark: CPU, RAM and disk allow **thousands** of concurrent games, far bey
 
 - Watching requires being logged in, as joining rooms does. This allows per-account and per-IP rate limits on `/v1/live`.
 - Every mode is listed: Ranked, Unranked, Direct and rooms (the user, 2026-10-13).
-- **"Let others stream my games"** (launcher Settings, on by default; the user, 2026-10-13). Description: "Streams inputs to the server for others to spectate you. Very minimal network load. Your opponent's game may still stream the match." Behaviour:
-  - Off means this player's game uploads nothing, not even digests.
+- **"Show my games on the Spectate tab"** (launcher Settings, on by default; the user, 2026-10-13; "Let others stream my games" until 2026-10-21). Description: "Streams inputs to the server for others to spectate you. Very minimal network load. Your opponent's setting may still show the match. Ranked games are always sent to the server to check results, and shown only if a player allows it." Behaviour:
+  - Off means this player's game uploads nothing, not even digests, except in Ranked.
   - The game is still streamed from any other player who has it on.
   - Only a game where every player has it off is not listed.
+  - **Ranked** (the user, 2026-10-21): its games are always streamed, one player's game the primary and the other's the witness, as the server's record of the set; the setting only decides whether it is listed. The server checks a game only one player reported against it (`spectate-protocol.md` §1.1). `MM_RANKED_STREAM=off` turns that off.
   - The setting travels in the matchmaking ticket, so a change applies from the next match.
 
 ### 6.4 Spectator chat

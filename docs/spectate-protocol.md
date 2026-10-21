@@ -22,11 +22,11 @@ JSON goes on channel 0, like every other online message (at most 8 KiB). Chunk d
 
 ### `spectate-offer` (game → mm)
 
-Sent at the barrier of every game when the player's "Let others stream my games" is on (Dolphin.ini `[Online] StreamGames`, default true). A player with it off sends nothing at all for spectating.
+Sent at the barrier of every game when the player's "Show my games on the Spectate tab" is on (Dolphin.ini `[Online] StreamGames`, default true; "Let others stream my games" before 2026-10-21). A player with it off sends nothing at all for spectating, except in Ranked: a Ranked set's games are always offered and streamed, as the server's record of the set (2026-10-21, §1.1).
 
 ```json
 {"type": "spectate-offer", "matchId": "mode.direct-…", "gameUid": "<32 hex>", "game": 2,
- "paused": 0, "rollbacks": 1.4}
+ "paused": 0, "rollbacks": 1.4, "listed": true}
 ```
 
 | Field | Meaning |
@@ -36,6 +36,7 @@ Sent at the barrier of every game when the player's "Let others stream my games"
 | `game` | the game number the players see (INFO `gameIndex`), 1-99 |
 | `paused` | how many times this player's uploader paused in its last game (0 for the first game) |
 | `rollbacks` | its last game's average rollback depth in frames (0 for the first game) |
+| `listed` | the player's `StreamGames`: whether spectators may see the stream. Left out by older builds (which offer only when it is on): true |
 
 mm accepts an offer only:
 - from an online connection whose account plays in that match;
@@ -113,10 +114,23 @@ mm also starts a takeover when the primary has sent no chunk for 5 s while a wit
 
 ```json
 {"type": "spectate-end", "matchId": "mode.ranked-…", "gameUid": "<32 hex>", "endMethod": "game",
- "winnerPort": 2, "isTeams": false, "players": [{"port": 1, "uid": "…"}, {"port": 2, "uid": "…", "teamId": 0}]}
+ "winnerPort": 2, "isTeams": false, "players": [{"port": 1, "uid": "…"}, {"port": 2, "uid": "…", "teamId": 0}],
+ "setGame": 2}
 ```
 
+`setGame` (Ranked only, 1-99; left out by older builds and in other modes): the set's game as the player's result report numbers it (`gameIndex`: a desynced game played again keeps its number, unlike `game`). With it, mm records the game's result as this player's game says it (§1.1).
+
 How a game the player offered ended, from its own `ENDG` (`winnerPort` and `quitterPort` 1-4, left out for a draw or none; `players` from its `INFO`). Every player's game sends it once per game, whatever its role and however its upload went (not after a `none` role): an upload cut before its `ENDG` used to leave the game out of the list's score (production 2026-10-15, a Ranked set listed as "Game 3 · 1-0"). mm counts each game's result once: from the upload's `ENDG` when that comes; a report that arrives while the upload still goes on waits for it (the score doesn't run ahead of what spectators have seen), and counts when the upload is cut or the match's next game is offered. The winner's uid comes from the kept `INFO` if there is one, else from the report, players of the match only. Reports from strangers are refused; reports for a game mm doesn't know (spectating off) are ignored.
+
+### 1.1 Ranked: streamed for the record (2026-10-21)
+
+A Ranked set's games are always streamed, whatever `MM_SPECTATE` and the players' `StreamGames` say: both games offer every game (`listed` says whether the player lets others watch), mm gives one the primary and the other the witness as usual, and every player's game sends `spectate-end` with `setGame`. `MM_RANKED_STREAM=off` puts Ranked back under `MM_SPECTATE`. Such a stream is listed and served to spectators only under `MM_SPECTATE=on` and once a player of it offered with `listed` true; otherwise mm keeps it (the witness's digests are still checked against it) but `/status`'s `live` and `GET /live/{stream}` leave it out.
+
+It is what accounts checks a game only one player reported against (`common::ranked::resolve`). mm writes to the database:
+- `ranked_presence (match_id, uid, online, changed_at)`: whether each player's game has an online connection to mm, when the set is made and whenever that player's first connection opens or last one closes, for 3 hours after the set was made. A newer `changed_at` wins.
+- `ranked_game_results (match_id, game_index, uid, winner, end_method)`: each player's `spectate-end` for a Ranked game with `setGame`, ended by `game` or `quit` (a Ranked quit loses the game for the quitter); a desync, a disconnect and the like are no result. `winner` is null for a draw.
+
+A game only one player reported counts at once when the other player's game told mm the same winner, and voids the set as `ERROR` when it told mm another. Without that, it counts after the grace period (2 minutes) only when the other player's game is not connected to mm (or mm recorded nothing, as for sets from before this); while it is connected, the report waits, and the set is `ORPHANED` after 30 minutes. An `opponent_left` about a player whose game is still connected blames nobody.
 
 ## 2. Relay (mm → accounts, loopback)
 

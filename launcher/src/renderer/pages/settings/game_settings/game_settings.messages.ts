@@ -15,9 +15,9 @@ export const GameSettingsMessages = {
   enableMusicDescription: () => "Play the game's music in menus and matches.",
   disableChat: () => "Disable Chat",
   disableChatDescription: () => "Hide the chat window everywhere in the game.",
-  enableStreamGames: () => "Let others stream my games",
+  enableStreamGames: () => "Show my games on the Spectate tab",
   enableStreamGamesDescription: () =>
-    "Streams inputs to the server for others to spectate you. Very minimal network load. Your opponent's game may still stream the match.",
+    "Streams inputs to the server for others to spectate you. Very minimal network load. Your opponent's setting may still show the match. Ranked games are always sent to the server to check results, and shown only if a player allows it.",
   closeDolphinAfterSpectating: () => "Close Dolphin after a spectated game ends",
   closeDolphinAfterSpectatingDescription: () => "Auto play on the Spectate tab keeps it open.",
   chatKey: () => "Chat Key",

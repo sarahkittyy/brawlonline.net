@@ -7369,7 +7369,7 @@ MatchStart ApplyMatchStart(Core::System& system, std::string_view when)
 // (SETP; playback applies it as a joiner applies its host's, GameplayPlayback), and the metadata.
 void BeginReplay(Core::System& system)
 {
-  if (s.mode != Mode::Network || !Replay::Enabled())
+  if (s.mode != Mode::Network || !Replay::Enabled(s.net_opts.replay_meta))
     return;
   const Guest g(system.GetMemory());
   const PeerView* hp = HostPeer();
