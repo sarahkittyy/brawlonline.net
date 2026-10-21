@@ -333,6 +333,22 @@ pub enum Output {
     RulesetPlayed {
         code: String,
     },
+    /// Whether a Ranked set's player's game is connected to mm (`ranked_presence`): the newest
+    /// `at` wins.
+    RankedPresence {
+        match_id: String,
+        uid: Uuid,
+        online: bool,
+        at: DateTime<Utc>,
+    },
+    /// How a Ranked set's game ended as one player's own game said it (`ranked_game_results`).
+    RankedGameResult {
+        match_id: String,
+        game_index: u32,
+        uid: Uuid,
+        winner: Option<Uuid>,
+        end_method: String,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -627,6 +643,9 @@ impl Engine {
                     self.unindex(conn);
                     self.chat.conn_gone(conn, &mut out);
                     self.live.conn_gone(now, conn, &mut out);
+                    if let State::Online(o) = &c.state {
+                        self.online_gone(now, o.user.uid, &mut out);
+                    }
                     self.rooms.conn_gone(now, conn, &mut out);
                     self.mod_rooms.conn_gone(conn, &mut out);
                     self.fail_room_tickets(&mut out);
@@ -663,7 +682,7 @@ impl Engine {
             Input::Tick => self.on_tick(now, wall, &mut out),
         }
         self.sync_room_chat(&mut out);
-        self.register_live_matches(now, &out);
+        self.register_live_matches(now, &mut out);
         // A player who left their match's or room's chat group left the match: its stream ends
         // once no game of it is going on, instead of 120 s later.
         for (kind, group, uid) in self.chat.take_left() {
@@ -672,10 +691,20 @@ impl Engine {
         out
     }
 
+    /// `uid`'s online connection closed: if it was their last, their recent Ranked sets record
+    /// their game as gone from mm.
+    fn online_gone(&mut self, now: Instant, uid: Uuid, out: &mut Vec<Output>) {
+        let still = self.conns.values().any(|c| matches!(&c.state, State::Online(o) if o.user.uid == uid));
+        if !still {
+            self.live.presence(now, uid, false, out);
+        }
+    }
+
     /// Every match made (a pairing, a room's start) can be streamed: the live book learns its
     /// players, with the names and codes of their online connections for the spectators' list.
-    fn register_live_matches(&mut self, now: Instant, out: &[Output]) {
-        for o in out {
+    fn register_live_matches(&mut self, now: Instant, out: &mut Vec<Output>) {
+        let mut more = Vec::new();
+        for o in out.iter() {
             let Output::RecordMatch(m) = o else { continue };
             let names: HashMap<Uuid, (String, String)> = self
                 .conns
@@ -687,8 +716,9 @@ impl Engine {
                     _ => None,
                 })
                 .collect();
-            self.live.register_match(now, m, names);
+            self.live.register_match(now, m, names, &mut more);
         }
+        out.extend(more);
     }
 
     /// Keeps the chat group of every room whose players changed in step with it: the players
@@ -745,11 +775,18 @@ impl Engine {
     fn finish(&mut self, out: &mut Vec<Output>, conn: ConnId) {
         self.unindex(conn);
         self.chat.conn_gone(conn, out);
-        if matches!(self.conns.get(&conn), Some(Conn { state: State::Online(_), .. })) {
+        let online = match self.conns.get(&conn) {
+            Some(Conn { state: State::Online(o), .. }) => Some(o.user.uid),
+            _ => None,
+        };
+        if online.is_some() {
             self.live.conn_gone(Instant::now(), conn, out);
         }
         if let Some(c) = self.conns.get_mut(&conn) {
             c.state = State::Done;
+        }
+        if let Some(uid) = online {
+            self.online_gone(Instant::now(), uid, out);
         }
         out.push(Output::Disconnect { conn });
         self.rooms.conn_gone(Instant::now(), conn, out);
@@ -1226,9 +1263,11 @@ impl Engine {
         if let Some(key) = p.chat_key {
             out.push(Output::RecordChatKey { uid: user.uid, key });
         }
+        let uid = user.uid;
         if let Some(c) = self.conns.get_mut(&conn) {
             c.state = State::Online(Online { user, code, client: p.client, chat_key: p.chat_key });
         }
+        self.live.presence(now, uid, true, out);
         Self::send(out, conn, &hello_ok());
     }
 

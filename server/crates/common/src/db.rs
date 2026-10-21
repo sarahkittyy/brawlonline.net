@@ -110,6 +110,55 @@ pub const CHAT_KEYS_KEPT: i64 = 20;
 
 /// Records that `uid` used the chat identity key `key` (`hello.chatKey`): a new key is added, a
 /// known one gets a new `last_seen`, and only the [`CHAT_KEYS_KEPT`] most recent stay.
+/// Whether a Ranked set's player's game is connected to mm (`migrations/0016_ranked_seen.sql`): an
+/// older `at` than the stored one changes nothing.
+pub async fn record_ranked_presence(
+    pool: &sqlx::PgPool,
+    match_id: &str,
+    uid: Uuid,
+    online: bool,
+    at: DateTime<Utc>,
+) -> sqlx::Result<()> {
+    sqlx::query(
+        "INSERT INTO ranked_presence (match_id, uid, online, changed_at) VALUES ($1, $2, $3, $4)
+         ON CONFLICT (match_id, uid) DO UPDATE SET online = EXCLUDED.online, changed_at = EXCLUDED.changed_at
+          WHERE ranked_presence.changed_at < EXCLUDED.changed_at",
+    )
+    .bind(match_id)
+    .bind(uid)
+    .bind(online)
+    .bind(at)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// How a Ranked set's game ended as one player's own game said it (`ranked_game_results`): a later
+/// word on the same game replaces it.
+pub async fn record_ranked_game_result(
+    pool: &sqlx::PgPool,
+    match_id: &str,
+    game_index: u32,
+    uid: Uuid,
+    winner: Option<Uuid>,
+    end_method: &str,
+) -> sqlx::Result<()> {
+    sqlx::query(
+        "INSERT INTO ranked_game_results (match_id, game_index, uid, winner, end_method, created_at)
+         VALUES ($1, $2, $3, $4, $5, now())
+         ON CONFLICT (match_id, game_index, uid)
+         DO UPDATE SET winner = EXCLUDED.winner, end_method = EXCLUDED.end_method, created_at = EXCLUDED.created_at",
+    )
+    .bind(match_id)
+    .bind(game_index as i32)
+    .bind(uid)
+    .bind(winner)
+    .bind(end_method)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
 pub async fn record_chat_key(pool: &sqlx::PgPool, uid: Uuid, key: &[u8; 32]) -> sqlx::Result<()> {
     sqlx::query(
         "INSERT INTO chat_identity_keys (uid, public_key) VALUES ($1, $2)

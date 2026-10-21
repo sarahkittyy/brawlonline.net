@@ -17,6 +17,7 @@
 #include "Core/Movie.h"
 #include "Core/NetPlayClient.h"
 #include "Core/NetPlayProto.h"
+#include "Core/Rollback/GameplayRollback.h"
 #include "Core/Rollback/MachineSession.h"
 #include "Core/Rollback/ReplayPlayback.h"
 #include "Core/System.h"
@@ -149,10 +150,9 @@ GCPadStatus CSIDevice_GCController::GetPadStatus()
   if (Machine::GetPad(m_device_number, &pad_status))
     return pad_status;
 
+  // A network gameplay session reads the controller on the throttle's schedule (bug report #70).
   if (!NetPlay::IsNetPlayRunning())
-  {
-    pad_status = Pad::GetStatus(m_device_number);
-  }
+    pad_status = Gprb::ReadHostPad(m_system, m_device_number, Gprb::HostPadSource::Mapped);
 
   if (NeutralForPlayback(&pad_status))
     return pad_status;

@@ -64,6 +64,12 @@ struct GameInfo
   std::string match_id;
   std::array<u8, 16> uid{};
   u32 game = 0;  // the game number the players see
+  // This player lets others watch ([Online] StreamGames). A Ranked game is streamed either way,
+  // as the server's record of the set; mm lists it only when a player of it lets others watch.
+  bool listed = true;
+  // Ranked: the set's game as the result report numbers it (Ranked::GameIndexOf), sent with the
+  // game's end so the server can check a game only one player reported; 0 otherwise.
+  u32 set_game = 0;
 };
 
 // What the gameplay session measured (Gprb::Session::GetLinkHealth): counters since the session

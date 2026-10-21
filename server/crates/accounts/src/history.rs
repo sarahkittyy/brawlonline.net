@@ -134,7 +134,8 @@ pub fn room_wins(players: &[Uuid], games: &BTreeMap<u32, BTreeMap<Uuid, u32>>) -
 }
 
 /// Games won per player, in the order of `players`: [`ranked::resolve`]'s count for a ranked
-/// set (the rules that settle it), [`ranked::count_wins`] for the other modes.
+/// set (the rules that settle it, without what mm saw: a lone report counts after the grace
+/// period here), [`ranked::count_wins`] for the other modes.
 pub fn wins(
     mode: i16,
     players: &[Uuid],
@@ -145,7 +146,7 @@ pub fn wins(
 ) -> Vec<u32> {
     if mode == MODE_RANKED {
         if let Ok(p) = <[Uuid; 2]>::try_from(players) {
-            return ranked::resolve(p, created, games, &[], now, timing).wins().to_vec();
+            return ranked::resolve(p, created, games, &[], &Default::default(), now, timing).wins().to_vec();
         }
     }
     ranked::count_wins(players, games)

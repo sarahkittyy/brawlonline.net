@@ -299,6 +299,15 @@ pub struct Offer {
     pub paused: u32,
     #[serde(default)]
     pub rollbacks: f64,
+    /// Whether this player lets others watch their games ("Let others stream my games"). A Ranked
+    /// game is offered either way, for the server's record of the set; it is listed only when a
+    /// player of it lets others watch. Older builds offer only then: true.
+    #[serde(default = "yes")]
+    pub listed: bool,
+}
+
+fn yes() -> bool {
+    true
 }
 
 /// `spectate-end`: how a game this player offered ended, from its own `ENDG`. Every player's game
@@ -320,6 +329,10 @@ pub struct EndReport {
     /// The game's players as its `INFO` names them.
     #[serde(default)]
     pub players: Vec<EndPlayer>,
+    /// Ranked: the set's game, as the game's result report numbers it (`gameIndex`: a desynced
+    /// game played again keeps its number, unlike the stream's game number). Older builds: none.
+    #[serde(default)]
+    pub set_game: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -393,6 +406,9 @@ impl SpectateRequest {
                 }
                 if !END_METHODS.contains(&e.end_method.as_str()) {
                     return Err((op, format!("unknown endMethod {:?}", e.end_method)));
+                }
+                if e.set_game.is_some_and(|g| !(1..=99).contains(&g)) {
+                    return Err((op, "bad setGame".into()));
                 }
                 let port_ok = |p: Option<u32>| p.is_none_or(|p| (1..=4).contains(&p));
                 if !port_ok(e.winner_port)

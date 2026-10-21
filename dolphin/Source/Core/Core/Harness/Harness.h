@@ -16,9 +16,9 @@
 #include <string>
 
 #include "Common/CommonTypes.h"
+#include "InputCommon/GCPadStatus.h"
 
 struct BootParameters;
-struct GCPadStatus;
 
 namespace Core
 {
@@ -58,6 +58,7 @@ namespace detail
 extern std::atomic<bool> g_active;
 extern std::atomic<u32> g_pad_override_mask;
 void ApplyPadOverrideSlow(int port, GCPadStatus* status);
+std::optional<GCPadStatus> PadOverrideAtSlow(int port, Clock::time_point t);
 void OnSIPollSlow();
 void OnGamePadReadSlow();
 void OnVIFieldSlow(Core::System& system);
@@ -75,6 +76,17 @@ inline void ApplyPadOverride(int port, GCPadStatus* status)
 {
   if (detail::g_pad_override_mask.load(std::memory_order_relaxed) & (1u << (port & 3)))
     detail::ApplyPadOverrideSlow(port, status);
+}
+
+// What the harness presented on a local port at host time `t` (a recent past): pad_set's states
+// as they changed over time, a pad script's current entry. Empty when the port was the real
+// controller then. Used for the reads a network session takes as of an earlier time
+// (Gprb::ReadHostPad).
+inline std::optional<GCPadStatus> PadOverrideAt(int port, Clock::time_point t)
+{
+  if (!(detail::g_pad_override_mask.load(std::memory_order_relaxed) & (1u << (port & 3))))
+    return std::nullopt;
+  return detail::PadOverrideAtSlow(port, t);
 }
 
 // Whether the harness currently overrides (or has a pad script scheduled on) a local port.

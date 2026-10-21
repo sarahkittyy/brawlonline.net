@@ -291,3 +291,80 @@ async fn a_lone_report_counts_after_the_grace_period() {
     assert!(close(rank(&stack, b).await.0, DEFAULT_RATING + 100.0));
     stack.shutdown().await;
 }
+
+/// Waits for the background sweep to settle `id`; its status (`ASSIGNED` if it never did).
+async fn settled(stack: &Stack, by: &UserJson, id: &str) -> String {
+    let mut status = String::new();
+    for _ in 0..40 {
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        status = result(stack, by, id).await["status"].as_str().unwrap().to_string();
+        if status != "ASSIGNED" {
+            break;
+        }
+    }
+    status
+}
+
+fn uid(u: &UserJson) -> Uuid {
+    Uuid::parse_str(&u.uid).unwrap()
+}
+
+/// 2026-10-21: a player could report their own wins as a set started and have them count after
+/// the grace period. Now a game only one player reported waits while the other player's game is
+/// connected to mm; that game's own word to mm (`ranked_game_results`) or its leaving mm settles
+/// it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_lone_report_waits_while_the_other_players_game_is_connected() {
+    let stack = Stack::start(StackOptions {
+        engine: engine(),
+        ranked_report_grace_secs: Some(1),
+        ranked_sweep_secs: Some(1),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    let u = players(&stack, &["hal", "ivy"]).await;
+    let (a, b) = (&u[0], &u[1]);
+    let online = |id: String, p: Uuid, on: bool| {
+        let pool = stack.pool.clone();
+        async move { common::db::record_ranked_presence(&pool, &id, p, on, chrono::Utc::now()).await.unwrap() }
+    };
+
+    // A reports two wins as the set starts; B's game is connected and playing.
+    let id = direct_set(&stack, a, b, 1).await;
+    online(id.clone(), uid(a), true).await;
+    online(id.clone(), uid(b), true).await;
+    report(&stack, a, &id, 1, Some(a)).await;
+    report(&stack, a, &id, 2, Some(a)).await;
+    assert_eq!(settled(&stack, a, &id).await, "ASSIGNED", "well past the grace period");
+    // B's game tells mm game 1 went the other way: held for review, nobody rated.
+    common::db::record_ranked_game_result(&stack.pool, &id, 1, uid(b), Some(uid(b)), "game").await.unwrap();
+    assert_eq!(settled(&stack, a, &id).await, "ERROR");
+    assert_eq!(rank(&stack, a).await.1, 0);
+
+    // B's game agrees with A's lone report: counts without waiting for B's own report.
+    let id = direct_set(&stack, a, b, 2).await;
+    online(id.clone(), uid(b), true).await;
+    both(&stack, a, b, &id, 1, a).await;
+    report(&stack, a, &id, 2, Some(a)).await;
+    common::db::record_ranked_game_result(&stack.pool, &id, 2, uid(b), Some(uid(a)), "game").await.unwrap();
+    assert_eq!(settled(&stack, a, &id).await, "COMPLETE");
+
+    // B's game left mm after the game (closed, crashed): the grace period, as before.
+    let id = direct_set(&stack, a, b, 3).await;
+    online(id.clone(), uid(a), true).await;
+    both(&stack, a, b, &id, 1, b).await;
+    report(&stack, b, &id, 2, Some(b)).await;
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    assert_eq!(result(&stack, b, &id).await["status"], "ASSIGNED");
+    online(id.clone(), uid(a), false).await;
+    assert_eq!(settled(&stack, b, &id).await, "COMPLETE");
+    assert_eq!(result(&stack, b, &id).await["winner"], json!(b.uid));
+
+    // "Opponent left" about a player whose game is still connected blames nobody.
+    let id = direct_set(&stack, a, b, 4).await;
+    online(id.clone(), uid(b), true).await;
+    leave(&stack, a, &id, "opponent_left").await;
+    assert_eq!(settled(&stack, a, &id).await, "ASSIGNED");
+    stack.shutdown().await;
+}

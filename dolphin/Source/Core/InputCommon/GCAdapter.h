@@ -23,6 +23,11 @@ double ReadRate();
 // Buttons have PAD_GET_ORIGIN set on new connection
 // Netplay and CSIDevice_GCAdapter make use of this.
 GCPadStatus Input(int chan);
+// The state the controller in this port had at host time `t` (a recent past), from the read
+// thread's timestamped payloads: the last one that arrived at or before `t`. Empty when `t` is
+// older than the payloads kept, or none arrived yet (the caller reads Input). As Input otherwise:
+// the origin on a new connection, a neutral state without an adapter.
+std::optional<GCPadStatus> InputAt(int chan, Clock::time_point t);
 
 void Output(int chan, u8 rumble_command);
 bool IsDetected(const char** error_message);

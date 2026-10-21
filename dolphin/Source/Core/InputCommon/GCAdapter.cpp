@@ -31,6 +31,7 @@ using namespace std::chrono_literals;
 #include "Common/Flag.h"
 #include "Common/Logging/Log.h"
 #include "Common/Thread.h"
+#include "Common/TimedHistory.h"
 #include "Core/Config/MainSettings.h"
 #include "Core/Core.h"
 #include "Core/CoreTiming.h"
@@ -120,6 +121,14 @@ struct PortState
 
 // Only access with s_mutex held!
 static std::array<PortState, SerialInterface::MAX_SI_CHANNELS> s_port_states;
+
+// Each port's states as the read thread got them, with the host time of each payload, for
+// InputAt (s_read_mutex). 128 payloads: 128 ms at the adapter's fastest rate, 1 s at its stock
+// 125 Hz.
+constexpr std::size_t PORT_HISTORY_SIZE = 128;
+static std::array<Common::TimedHistory<GCPadStatus, PORT_HISTORY_SIZE>,
+                  SerialInterface::MAX_SI_CHANNELS>
+    s_port_history;
 
 static std::array<u8, CONTROLLER_OUTPUT_RUMBLE_PAYLOAD_SIZE> s_controller_write_payload;
 static std::atomic<int> s_controller_write_payload_size{0};
@@ -827,6 +836,8 @@ static void Reset()
   s_read_thread_has_init.Clear();
 
   s_port_states.fill({});
+  for (auto& history : s_port_history)
+    history.Clear();
 
 #if GCADAPTER_USE_LIBUSB_IMPLEMENTATION
   s_status = AdapterStatus::NotDetected;
@@ -879,6 +890,35 @@ GCPadStatus Input(int chan)
   return pad_state.status;
 }
 
+std::optional<GCPadStatus> InputAt(int chan, Clock::time_point t)
+{
+  if (!s_is_adapter_wanted.load(std::memory_order_relaxed))
+    return GCPadStatus{};
+
+#if GCADAPTER_USE_LIBUSB_IMPLEMENTATION
+  if (s_handle == nullptr || s_status != AdapterStatus::Detected)
+    return GCPadStatus{};
+#elif GCADAPTER_USE_ANDROID_IMPLEMENTATION
+  if (!s_detected || !s_fd)
+    return GCPadStatus{};
+#endif
+
+  std::lock_guard lk(s_read_mutex);
+
+  auto& pad_state = s_port_states[chan];
+
+  // As Input: the first read on a new connection is the origin.
+  if (pad_state.is_new_connection)
+  {
+    pad_state.is_new_connection = false;
+    return pad_state.origin;
+  }
+
+  if (const GCPadStatus* pad = s_port_history[chan].At(t))
+    return *pad;
+  return std::nullopt;
+}
+
 // Get ControllerType from first byte in input payload.
 static ControllerType IdentifyControllerType(u8 data)
 {
@@ -905,6 +945,7 @@ void ProcessInputPayload(const u8* data, std::size_t size)
   }
   else
   {
+    const Clock::time_point now = Clock::now();
     std::lock_guard lk(s_read_mutex);
 
     for (int chan = 0; chan != SerialInterface::MAX_SI_CHANNELS; ++chan)
@@ -972,10 +1013,12 @@ void ProcessInputPayload(const u8* data, std::size_t size)
         pad.button |= PAD_GET_ORIGIN;
         pad_state.origin = pad;
         pad_state.is_new_connection = true;
+        s_port_history[chan].Clear();  // not the controller that was there before
       }
 
       pad_state.controller_type = type;
       pad_state.status = pad;
+      s_port_history[chan].Push(now, pad);
     }
   }
 }

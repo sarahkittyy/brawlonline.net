@@ -149,6 +149,7 @@ add_library(common
   SymbolDB.h
   Thread.cpp
   Thread.h
+  TimedHistory.h
   Timer.cpp
   Timer.h
   TimeUtil.cpp

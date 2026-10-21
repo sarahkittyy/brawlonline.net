@@ -445,6 +445,7 @@ struct State
   int remote_handle = -1;  // the first remote player's (the ping line)
   // The local controller port the local player uses this game (fixed in CreateGekko).
   int local_pad = 0;
+  Clock::time_point local_sampled_at{};  // the local input's controller read (CaptureLocalInputs)
 
   // Per-frame CPU-thread state.
   PendingOps ops;
@@ -524,6 +525,7 @@ struct State
     double speed_min = 1e9, speed_max = -1e9;
     double pad_age_sum = 0, pad_age_max = 0;
     u64 pad_age_n = 0;
+    HostPadReadStats pad_reads;  // the SI's reads of the host controllers (ReadHostPad)
     Rollback::PresentStats::Cadence cadence;  // presents, and hitches on a 59.94 Hz screen
   };
   NetStats net_window, net_total;
@@ -3226,6 +3228,7 @@ void ResetRunStats()
   s.net_window_first = -1;
   s.net_window_t0 = {};
   s.prev_frame_rolled_back = false;
+  TakeHostPadReadStats();
   Core::System::GetInstance().GetCoreTiming().TakeMaxBehindSchedule();
   Rollback::PresentStats::TakeCadence();
   s.burst_open = false;
@@ -3421,6 +3424,7 @@ void EndRunning(Core::System& system, const std::string& reason)
   DestroyGekko();
   Rollback::RollbackManager::Get().EndRegionMode();
   PadsClearCurrent();
+  SetHostPadsScheduled(false);
   auto& ct = system.GetCoreTiming();
   ct.ResetThrottleToNow();  // drops a rollback burst still pending
   ct.SetRollbackResimulating(false);
@@ -3435,6 +3439,7 @@ void EndRunning(Core::System& system, const std::string& reason)
   if (s.mode == Mode::Network)
   {
     s.net_window.cadence = Rollback::PresentStats::TakeCadence();
+    s.net_window.pad_reads = TakeHostPadReadStats();
     if (s.net_window.frames)
       CloseNetWindowClock();
     NetStatsFold(s.net_total, s.net_window);
@@ -4025,6 +4030,14 @@ std::string NetStatsLine(const State::NetStats& w)
     line += fmt::format(", pad sample age avg {:.1f} ms max {:.1f} ms", w.pad_age_sum / w.pad_age_n,
                         w.pad_age_max);
   }
+  if (const HostPadReadStats& r = w.pad_reads;
+      r.on_time + r.latched + r.relatched + r.late_history + r.late_live)
+  {
+    line += fmt::format(", pad reads {} on time, {} in re-runs ({} read anew), late {} from history "
+                        "{} live (max {:.1f} ms)",
+                        r.on_time, r.latched + r.relatched, r.relatched, r.late_history,
+                        r.late_live, r.late_max_ms);
+  }
   return line;
 }
 
@@ -4064,6 +4077,12 @@ void NetStatsFold(State::NetStats& t, const State::NetStats& w)
   t.pad_age_sum += w.pad_age_sum;
   t.pad_age_max = std::max(t.pad_age_max, w.pad_age_max);
   t.pad_age_n += w.pad_age_n;
+  t.pad_reads.on_time += w.pad_reads.on_time;
+  t.pad_reads.late_history += w.pad_reads.late_history;
+  t.pad_reads.late_live += w.pad_reads.late_live;
+  t.pad_reads.latched += w.pad_reads.latched;
+  t.pad_reads.relatched += w.pad_reads.relatched;
+  t.pad_reads.late_max_ms = std::max(t.pad_reads.late_max_ms, w.pad_reads.late_max_ms);
   t.cadence.presents += w.cadence.presents;
   t.cadence.hitches += w.cadence.hitches;
   t.cadence.holds += w.cadence.holds;
@@ -4411,6 +4430,7 @@ void NetStatsOnDisplayedFrame(Core::System& system)
   if (w.frames < NET_STATS_WINDOW)
     return;
   w.cadence = Rollback::PresentStats::TakeCadence();
+  w.pad_reads = TakeHostPadReadStats();
   CloseNetWindowClock();
 
   std::string link;
@@ -4945,9 +4965,30 @@ void UpdateSlowNotice()
   });
 }
 
+// Half a VI field (59.94 Hz).
+constexpr auto HALF_FIELD = std::chrono::microseconds(8342);
+
 void CaptureLocalInputs()
 {
-  const PadSlots latest = PadsLatestRaw();
+  PadSlots latest;
+  if (s.mode == Mode::Network)
+  {
+    // The pad thread's pass and this loop top come at nearly the same emulated time, in either
+    // order: a region load puts the guest's alarm times back, not the ticks, so the order changes
+    // with rollbacks. The newest pass was then made from the SI poll just before this loop top on
+    // some frames and from the one a field before on others, and the local input took the same
+    // sample twice or skipped one, a frame apart (bug report #70). Always the pass made from the
+    // poll a field before this loop top: each frame's sample a field after the last, as old as
+    // on a frame without a rollback. (At an unlimited speed there is no schedule: the newest.)
+    if (const auto due = Core::System::GetInstance().GetCoreTiming().ScheduledHostTime())
+      latest = PadsSampledBefore(s.local_pad, *due - HALF_FIELD, &s.local_sampled_at);
+    else
+      latest = PadsSampledBefore(s.local_pad, Clock::time_point::max(), &s.local_sampled_at);
+  }
+  else
+  {
+    latest = PadsLatestRaw();
+  }
   if (s.mode == Mode::SyncTest)
   {
     std::memcpy(s.local_inputs.data(), latest.data(), latest.size());
@@ -4961,6 +5002,11 @@ void CaptureLocalInputs()
     // Real input never carries the gone marker.
     if (s.gone_enabled)
       PeerData::ClearGoneMarkerBytes(s.local_inputs.data() + port * INPUT_SIZE);
+    const u8* in = s.local_inputs.data() + port * INPUT_SIZE;
+    HostPadLogLine("C", s.current_frame, (in[0] << 24) | (in[1] << 16) | (in[2] << 8) | in[3],
+                   std::chrono::duration_cast<std::chrono::microseconds>(Clock::now() -
+                                                                         s.local_sampled_at)
+                       .count());
   }
 }
 
@@ -5364,6 +5410,8 @@ void StartRunning(Core::System& system)
   // deterministic GPU thread on for the session; the menus run without it.
   system.GetFifo().SetRollbackSessionDeterminism(true);
   system.GetCoreTiming().SetPresentPacing(true);
+  // The local controllers are read on the throttle's schedule (bug report #70).
+  SetHostPadsScheduled(s.mode == Mode::Network);
   ResetRunStats();
   // PPR_GPRB_NO_FRAME_COST=1: no frame cost profile (to measure what it costs).
   static const bool no_frame_cost = std::getenv("PPR_GPRB_NO_FRAME_COST") != nullptr;
@@ -5807,7 +5855,13 @@ bool RunFrame(const Core::CPUThreadGuard& guard)
     CaptureLocalInputs();
     if (s.mode == Mode::Network)
     {
-      if (const double age = PadsLatestAgeMs(); age >= 0)
+      // The age of the instant the controller read behind the local input stands for.
+      if (const double age = s.local_sampled_at == Clock::time_point{} ?
+                                 -1.0 :
+                                 std::chrono::duration<double, std::milli>(Clock::now() -
+                                                                           s.local_sampled_at)
+                                     .count();
+          age >= 0)
       {
         s.net_window.pad_age_sum += age;
         s.net_window.pad_age_max = std::max(s.net_window.pad_age_max, age);
@@ -5968,6 +6022,7 @@ bool RunFrame(const Core::CPUThreadGuard& guard)
     rf.count = 0;
   }
   ct.SetRollbackResimulating(s.resim_pass);
+  HostPadLogLine("L", i, s.ops.adv_count, s.resim_pass ? 1 : 0);
   ct.SetRollbackAudioWaits(PauseResimAudio());
   {
     // The audio clock waits as long as the resimulated frames took when they were presented: a
@@ -7369,7 +7424,7 @@ MatchStart ApplyMatchStart(Core::System& system, std::string_view when)
 // (SETP; playback applies it as a joiner applies its host's, GameplayPlayback), and the metadata.
 void BeginReplay(Core::System& system)
 {
-  if (s.mode != Mode::Network || !Replay::Enabled())
+  if (s.mode != Mode::Network || !Replay::Enabled(s.net_opts.replay_meta))
     return;
   const Guest g(system.GetMemory());
   const PeerView* hp = HostPeer();

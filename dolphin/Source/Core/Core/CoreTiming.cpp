@@ -521,6 +521,13 @@ void CoreTimingManager::SetRollbackSpeedAdjustment(double factor)
   UpdateSpeedLimit(GetTicks(), m_emulation_speed);
 }
 
+std::optional<TimePoint> CoreTimingManager::ScheduledHostTime()
+{
+  if (IsSpeedUnlimited())
+    return std::nullopt;
+  return CalculateTargetHostTimeInternal(GetTicks());
+}
+
 TimePoint CoreTimingManager::GetTargetHostTime(s64 target_cycle)
 {
   if (IsSpeedUnlimited())

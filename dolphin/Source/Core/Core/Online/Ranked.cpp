@@ -623,6 +623,12 @@ bool IsSetOver()
   return s_active && s_set_over;
 }
 
+u32 GameIndexOf(u32 session_game)
+{
+  std::lock_guard lk(s_mutex);
+  return s_active && GameSetup::IsActive() ? GameSetup::SetGameOf(session_game) : session_game;
+}
+
 RankInfo GetRankInfo()
 {
   RankInfo info;

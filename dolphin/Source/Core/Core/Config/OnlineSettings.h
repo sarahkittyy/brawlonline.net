@@ -74,8 +74,9 @@ extern const Info<bool> ONLINE_DISABLE_CHAT;
 extern const Info<bool> ONLINE_SAVE_REPLAYS;
 extern const Info<std::string> ONLINE_REPLAY_DIR;
 // Spectating (docs/design/spectating.md): this player's game uploads its games' inputs to the
-// server for spectators. The launcher's "Let others stream my games". Off: the game sends nothing
-// for spectating (the other players' games may still stream the match).
+// server for spectators. The launcher's "Show my games on the Spectate tab". Off: the game sends
+// nothing for spectating (the other players' games may still stream the match), except in Ranked,
+// whose games are always streamed as the server's record and listed only when a player allows it.
 extern const Info<bool> ONLINE_STREAM_GAMES;
 extern const Info<bool> ONLINE_REPLAY_MONTHLY_FOLDERS;
 

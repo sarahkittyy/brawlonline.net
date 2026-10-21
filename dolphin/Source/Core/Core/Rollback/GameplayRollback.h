@@ -18,6 +18,7 @@
 #include <vector>
 
 #include "Common/CommonTypes.h"
+#include "InputCommon/GCPadStatus.h"
 
 namespace Core
 {
@@ -208,8 +209,10 @@ void PadsOnLoopTop(Core::System& system);
 void PadsOnPadThreadUpdated(Core::System& system);
 // The newest slots the pad thread produced (the local controllers' latest sample).
 PadSlots PadsLatestRaw();
-// Milliseconds since the pad thread produced that sample (-1: none yet).
-double PadsLatestAgeMs();
+// The slots of the newest of the pad thread's recent passes whose read of SI channel `chan`
+// stands for an instant at or before `t` (ReadHostPad), and that instant in `*sampled_at`; the
+// newest pass when none is that old. A network session's local input (CaptureLocalInputs).
+PadSlots PadsSampledBefore(int chan, Clock::time_point t, Clock::time_point* sampled_at);
 
 // Pad thread watchdog (main thread, every loop top, any mode). The pad thread suspends itself after
 // every pass and the pad alarm (an OSAlarm at gfPadSystem, period one field) resumes it; players
@@ -236,6 +239,67 @@ std::optional<PadSlots> PadsInjectedFor(u32 frame);
 void PadsSetCurrent(u32 port_mask, const PadSlots& slots);
 void PadsClearCurrent();
 u32 PadsInjectedCount();
+
+// ---------------------------------------------------------------------------------------------
+// Host controller reads on the throttle's schedule (network sessions; bug report #70: "against
+// players over 100 ping my L button feels unresponsive half the time ... full hopping when I try
+// to wavedash").
+//
+// The local player's input for a frame is a pad slot Brawl's pad thread made (CaptureLocalInputs),
+// from the SI poll a field before the frame's loop top. The throttle sleeps at that poll (Rush
+// Frame Presentation, present pacing), so the controller is read at its due time, one field after
+// the last. Two things broke that with rollbacks (harness/tests/test_diag_bug70.py, 57 ms each
+// way, auto delay 2, 60% of frames rolled back: 12% of the frames took the same controller sample
+// as the frame before and 12% skipped one; on a LAN 0.1%; presses moved by a frame against each
+// other, a jump held a frame too long, a press held one frame lost):
+// - A rollback runs its re-run passes and the presented one inside one real frame, with real SI
+//   polls in each (region snapshots do not rewind the ticks), and the poll the next frame's input
+//   came from was a live read the re-run's length late (~4 ms at depth 2).
+// - The pad thread's pass and the loop top come at nearly the same emulated time, in either order
+//   (a region load puts the guest's alarm times back, not the ticks), so the newest pass was made
+//   from the poll just before the loop top on some frames and from the one a field before on
+//   others: a sample taken twice, then one skipped (PadsSampledBefore fixes that side).
+//
+// With SetHostPadsScheduled on, every read of a local controller (CSIDevice_GCController and
+// CSIDevice_GCAdapter::GetPadStatus) stands for an instant on the throttle's schedule:
+// - in a rollback's re-run: the last read before it, the one taken at the frame's due time
+//   (unless older than 100 ms, after a long wait for the peer: then read now);
+// - behind schedule (the instant was due earlier, CoreTimingManager::ScheduledHostTime): the
+//   state the controller had then, from a timestamped history: the Wii U adapter's read thread
+//   keeps one (GCAdapter::InputAt), and the harness (Harness::PadOverrideAt). Pads mapped in
+//   Dolphin (keyboard, XInput, SDL...) are read when called and have no past, so such a read is
+//   taken now ("late live"). The polls that make a local input are not behind schedule in a
+//   session (the re-run's are latched, the others come after the throttle's sleep): only a
+//   frame that ran longer than a field makes one late. A sampler thread polling every input
+//   backend would give them a past, but ControllerInterface updates its devices under one mutex,
+//   so it would hold up the SI poll itself;
+// - otherwise (on schedule or ahead of it): now, as before.
+// Each frame's sample is then one field after the last, rolled back or not, and as old as on a
+// frame without a rollback (the loop top's due time minus a field; ~17.5 ms at the loop top,
+// against ~16 ms on a LAN and 12-14 ms under rollbacks before, when the late reads were fresher).
+enum class HostPadSource
+{
+  Mapped,   // Dolphin's controller mapping (Pad::GetStatus)
+  Adapter,  // the Wii U GameCube adapter (GCAdapter::Input)
+};
+// A network session's frames run (on) or not (off: every read is taken now).
+void SetHostPadsScheduled(bool scheduled);
+// CPU thread: SI channel `chan`'s host controller, as above.
+GCPadStatus ReadHostPad(Core::System& system, int chan, HostPadSource source);
+
+struct HostPadReadStats
+{
+  u64 on_time = 0;       // read now, on schedule (or ahead of it)
+  u64 late_history = 0;  // more than 1 ms behind schedule: from the history
+  u64 late_live = 0;     // more than 1 ms behind schedule, no history: read now
+  u64 latched = 0;       // in a re-run: the last read before it
+  u64 relatched = 0;     // in a re-run, the last read too old: read now
+  double late_max_ms = 0;
+};
+// Since the last call.
+HostPadReadStats TakeHostPadReadStats();
+// Diagnostics (PPR_GPRB_PAD_READ_LOG): a line of the session's own (loop tops, captures).
+void HostPadLogLine(const char* kind, long long a, long long b, long long c);
 
 // ---------------------------------------------------------------------------------------------
 // Interpreter instruction trace (debugging). Armed by the harness (`cpu_trace`); records, for the

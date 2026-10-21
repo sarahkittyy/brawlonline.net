@@ -114,9 +114,13 @@ struct EndInfo
   u64 desyncs = 0;
 };
 
-// Whether games are recorded: saved ([Online] SaveReplays) or streamed ([Online] StreamGames).
+// Whether this match's games are recorded: saved ([Online] SaveReplays) or streamed (Streamed).
 // The settings (and ReplayDir, ReplayMonthlyFolders) are read at Begin.
-bool Enabled();
+bool Enabled(const MatchMeta& meta);
+// Whether this match's games are streamed to mm: a match mm made, with [Online] StreamGames on,
+// or a Ranked set whatever it says (the server's record of the set, 2026-10-21; mm lists it only
+// when a player of it lets others watch).
+bool Streamed(const MatchMeta& meta);
 
 // CPU thread. Begin opens the file (on the writer thread) under its final name; false when
 // recording is off.

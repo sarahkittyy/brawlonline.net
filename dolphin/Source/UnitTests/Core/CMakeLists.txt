@@ -64,6 +64,8 @@ target_compile_definitions(OnlineSecurityTest PRIVATE GEKKONET_STATIC GEKKONET_N
 # The SD card of a whole-machine session (Core/Rollback/MachineSDCard): the throwaway layer and its
 # rollback, a joiner on the session's card, and hostile manifests, requests and chunks.
 add_dolphin_test(MachineSDCardTest MachineSDCardTest.cpp)
+# A network session's reads of the local controllers (Gprb::ReadHostPad, bug report #70).
+add_dolphin_test(HostPadReadTest Rollback/HostPadReadTest.cpp)
 # Replay files (Core/Rollback/ReplayFile): round trip, cut and damaged files, hostile sizes.
 add_dolphin_test(ReplayFileTest Rollback/ReplayFileTest.cpp)
 # Spectating: the uploader's pacing, backoff and roles (Core/Online/Spectate).

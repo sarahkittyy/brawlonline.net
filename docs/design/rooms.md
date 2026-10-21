@@ -69,7 +69,7 @@ A member who is not in the room's game (sitting out, or joined during it) watche
 | 34 | Launcher | **Not busy.** A launcher click (another room, an invite, Play unranked/ranked) while watching ends the watch and goes ahead once the game is back on the room CSS. |
 | 35 | Others' cards | A watcher's card is the grey SIT OUT card with **WATCHING** on its plate (default, not asked). |
 
-How it works (`docs/rooms-protocol.md` §2 `room-watch`, `docs/rooms-game-interface.md` "Watching the room's game"): the players' games upload the game exactly as for spectators (nothing changes on their side, so their games are unaffected); mm sends the kept chunks to the room's watchers on the online connection's watch channel (ENet channel 2), and the watcher's Dolphin plays them as a live replay (`Online/RoomWatch.cpp`, the playback of `spectating.md` §6.2 in the netplay Dolphin). A game nobody streams (`MM_SPECTATE` off, or every player's "Let others stream my games" off) is not watched: the watcher stays on the CSS with "Waiting for the game to end", as before.
+How it works (`docs/rooms-protocol.md` §2 `room-watch`, `docs/rooms-game-interface.md` "Watching the room's game"): the players' games upload the game exactly as for spectators (nothing changes on their side, so their games are unaffected); mm sends the kept chunks to the room's watchers on the online connection's watch channel (ENet channel 2), and the watcher's Dolphin plays them as a live replay (`Online/RoomWatch.cpp`, the playback of `spectating.md` §6.2 in the netplay Dolphin). A game nobody streams (`MM_SPECTATE` off, or every player's "Show my games on the Spectate tab" off) is not watched: the watcher stays on the CSS with "Waiting for the game to end", as before.
 
 ## 2. Defaults (not asked)
 
