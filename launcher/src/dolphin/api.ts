@@ -4,6 +4,7 @@ import type { ChatKeyPress } from "@common/chat_key";
 import type { HighlightPlayItem } from "@replays/highlights/types";
 
 import {
+  ipc_cancelRender,
   ipc_cancelRoomLaunch,
   ipc_checkPlayKeyExists,
   ipc_closeNetplayIfIdle,
@@ -13,6 +14,7 @@ import {
   ipc_getChatKey,
   ipc_getDolphinPaths,
   ipc_getPPlusVersions,
+  ipc_getRenderJobs,
   ipc_hardResetDolphin,
   ipc_installRosetta,
   ipc_joinRoomInGame,
@@ -24,6 +26,7 @@ import {
   ipc_prepareRoomLaunch,
   ipc_removePlayKeyFile,
   ipc_removePPlusRelease,
+  ipc_renderHighlights,
   ipc_setChatKey,
   ipc_softResetDolphin,
   ipc_storePlayKeyFile,
@@ -35,6 +38,7 @@ import type {
   DolphinLaunchType,
   DolphinService,
   PlayKey,
+  RenderRequest,
   ReplayPlayChoice,
   ReplayQueueItem,
 } from "./types";
@@ -84,6 +88,20 @@ const dolphinApi: DolphinService = {
   async playHighlights(items: HighlightPlayItem[], commandId: string, choice?: ReplayPlayChoice) {
     const { result } = await ipc_playHighlights.renderer!.trigger({ items, commandId, choice });
     return result;
+  },
+  async renderHighlights(request: RenderRequest, choice?: ReplayPlayChoice) {
+    const { result } = await ipc_renderHighlights.renderer!.trigger({
+      request,
+      choice,
+    });
+    return result;
+  },
+  async cancelRender(jobId: string) {
+    await ipc_cancelRender.renderer!.trigger({ jobId });
+  },
+  async getRenderJobs() {
+    const { result } = await ipc_getRenderJobs.renderer!.trigger({});
+    return result.jobs;
   },
   async getPPlusVersions() {
     const { result } = await ipc_getPPlusVersions.renderer!.trigger({});

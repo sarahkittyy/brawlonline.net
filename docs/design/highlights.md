@@ -3,8 +3,9 @@
 A replay's stats page lists that game's highlights (strings the launcher finds in the recorded
 fighter memory) and L+R+Z clips, and plays them in the playback Dolphin. The decisions and the
 measurements behind them are in the prototype's DESIGN.md (D:\code\brawl-highlights, local only);
-this is what was built. Not yet: background detection over all replays, the sidebar's ★ Highlights
-folder, `.bhl` files, a savestate cache, video export (single clips, the combo movie).
+this is what was built. Video export (single clips and the combo movie, §5) came 2026-10-21. Not
+yet: background detection over all replays, the sidebar's ★ Highlights folder (and with it combo
+movies across games), `.bhl` files, a savestate cache.
 
 ## 1. Detection (launcher main process)
 
@@ -40,7 +41,7 @@ ends before the highlight). A double-click on a replay's row in the Replays tab 
 
 Settings > Clips: "L+R+Z to clip" (on), "Disable automatic highlight detection" (off; "Disables
 the local highlight detection for replays."), and the video output folder (default
-`<Root Replay Folder>/Highlights`, `SettingsManager.getClipsFolder`; for the render work).
+`<Root Replay Folder>/Highlights`, `SettingsManager.getClipsFolder`), where renders go (§5).
 
 ## 3. Playing (comm file `highlights`)
 
@@ -63,3 +64,100 @@ s); the next highlight of the same replay at once (back: under 0.2 s; forward: f
 Harness: `test_replay.py::test_launcher_comm_file_plays_highlights` (a recorded Direct game; three
 clips back and forth in one match, a new request in the same match, a clip past the end holding at
 the last frame, no checksum differing, one match armed).
+
+## 4. Rendering, the launcher (2026-10-21)
+
+The stats page has a tick box on every row (and one for all). **Render (w/ Music)** and **Render
+(No Music)** render the ticked rows, a video each; with two or more ticked, **One combo movie**
+makes them one video, in the list's order. No Dolphin window opens: under the buttons each job
+shows its name, w/ Music or No Music, "Waiting", "Starting...", "Rendering 45%" (a combo: "Clip 2 of
+5 · 45%") with a bar and **Cancel**, then "Saved" with **Show in folder**, or "Couldn't render it:
+<why>". Jobs belong to the launcher run (main keeps them; the page shows this replay's, a cancelled
+one not at all).
+
+Names (DESIGN.md §5, `render_names.ts`): the game's date and time from its replay's name, then who
+did what with their characters: `2026-10-20 1635 sarahkitty (Mr. Game & Watch) vs t3o7 (Lucas).mp4`
+(a highlight: attacker vs victim), `... Clip by sarahkitty (Mr. Game & Watch).mp4` (L+R+Z),
+`2026-10-15 2153 sarahkitty (Mr. Game & Watch) vs Smear (Snake) - combo movie (5).mp4`. Made safe
+for every file system, and ` (2)`, ` (3)`... when taken.
+
+Project+ versions (pplus-versions.md): a render request is decided as a play request is
+(`DolphinManager.decideRenderReleases`), so a v3.2.0 replay asks first ("This clip is from Project+
+v3.2.0", "Download and render"), with no "anyway": a clip renders on its own release or not at all
+(`withRenderVersion`). A combo whose replays are on different releases becomes one file per
+release ("... (part 1 of 2)"): a Dolphin plays one release's card (only possible once combos can
+span games).
+
+`render_queue.ts` (main) runs the jobs one at a time in the **render Dolphin**: the playback
+Dolphin's command line plus `-b --render` (no window), `[Core] EmulationSpeed` 0 (as fast as the PC
+goes: frames are never dropped, the video is timed by the game), `[DSP] Volume` 0 (the video gets
+the samples before the volume), not fullscreen, `Graphics InternalResolution` 2, and the job's
+`[Online] Music` (`buildRenderDolphinArgs`). It has its own User folder, `<userData>/render/User`
+(its own NAND, Brawl save seeded as the playback one's), so it never shares one with a playback
+Dolphin open at the same time; the SD card is shared read-only as for playback. The Dolphin stays
+open between jobs with the same release and music (a next one of the same replay goes on in its
+match) and closes when the queue is empty. Progress is read from the comm status every 250 ms: per
+clip, its fast-forward weighted at a third of a rendered frame (they run ~600 against ~200 a second
+here) and the clip itself. A job fails when Dolphin says so, closes, finishes without a file, or
+says nothing new for 3 minutes; Cancel (and a failure) closes the render Dolphin and deletes the
+file.
+
+## 5. Rendering, Dolphin (comm file `render`)
+
+`{"mode": "render", "commandId", "output": "<path>.mp4", "queue": [{"path", "startFrame",
+"endFrame"}, ...]}`: the highlights flow of §3, each clip recorded, all of them one after another
+in one file. A next request for the replay already armed (once the last file is written) goes on in
+its match. The status adds `render`, `output`, `rendered` (clips written) and `framesWritten`;
+`ended` once the file is complete, `error` with the file deleted (an encoder error, a replay that
+can't be played, the match ending before a clip); a new request or Dolphin's shutdown gives up a
+render still going, deleting its file.
+
+`Core/Rollback/ClipRecorder.h` (`Gprb::Clip`): the file is H.264 1280x720 at 60000/1001 (12 Mbit/s)
+and AAC 48 kHz stereo (192 kbit/s) in MP4, written as `<name>.mp4.part` and named `<name>.mp4` once
+complete (a render cut short, e.g. the launcher closed, leaves no half-written video under the
+real name; Cancel deletes both). The session (`SetPlaybackClip`'s `record`) opens a
+segment when the clip's first frame runs after its fast-forward and marks its end, in emulated
+ticks, at the clip's pause (or the replay's last frame). The frame dumper reads back every field the
+game presents (repeated ones too), at the XFB's aspect-corrected size fitted into 1280x720, and the
+recorder pads it to 1280x720; the DSP's samples (`Mixer::PushSamples`, big-endian R/L at the DMA
+rate, 32 kHz) are resampled to 48 kHz. Both are kept when their ticks are in the segment and timed
+by them, so audio and video stay together whatever the PC's speed; a segment's audio is padded or
+cut to its length, and the next segment starts where it ended. After a clip's pause ReplayPlayback
+waits until no frame has come for 500 ms (the dumper hands frames over a frame late) and ends the
+segment. Encoding runs on its own thread with a queue of 6 frames, which holds the emulation back
+instead of dropping frames. A render request turns Immediately Present XFB off for that Dolphin (on
+by default, for latency): it stamps a frame with an estimate of the next field's time, wrong
+whenever the GPU thread is ahead of or behind the CPU's (on macOS 228 of a clip's 300 frames came
+with an earlier frame's time and were left out). While a clip records, a readback still waiting
+for its frame's end goes to the dumper's thread before the next one is taken. Each segment's log
+line counts the frames left out (before it, after it, not newer than the last: the paused frame
+drawn again while the clip's last frames come in, ~20 a clip). The overlay and OSD are drawn on the window, not the XFB: they are not in
+the video.
+
+Encoders are the operating system's, so rendering adds nothing to the download:
+
+| | Encoder | Where |
+|---|---|---|
+| Windows | Media Foundation's sink writer: the GPU's H.264 encoder, else Microsoft's software one; its AAC encoder ("N" editions need the Media Feature Pack) | `ClipEncoderMF.cpp` (mfplat, mfreadwrite, mfuuid) |
+| macOS | AVFoundation's asset writer (VideoToolbox H.264, Apple's AAC) | `ClipEncoderAVF.mm` (ARC; AVFoundation, CoreMedia, CoreVideo) |
+| Linux | FFmpeg as Dolphin links it (the AppImage's): libx264, OpenH264 or MPEG-4 Part 2, FFmpeg's AAC | `ClipEncoderFFmpeg.cpp` |
+
+Dolphin's own Windows FFmpeg (FFmpeg-bin) has neither H.264 nor MP4, and our macOS build has none.
+
+Qt `--render` (with `--batch`): MainWindow never shows the render widget and boots with an empty
+WindowSystemInfo: D3D11 and Metal run without a swap chain, and no window appears at all; on macOS
+the process is also background-only (`Common::HideFromDock`: no Dock icon, `lsappinfo` type
+"BackgroundOnly").
+
+Measured here (Windows, D3D11, hardware encoder): the 2026-10-20 1635 Room G1 replay's clips
+3000-3300 and 6000-6180 in one file, 13.8 s from Dolphin's start to the finished file (481 frames,
+video 8.041 s, audio 8.043 s); from the launcher, one highlight 16.5 s from the click with a cold
+Dolphin; the 2026-10-15 2153 Ranked G1 (Project+ v3.2.0, on its own card) as a 5-highlight combo
+movie, No Music: 26 s after the patch was set up (1717 frames, 28.6 s of video; the first clip's
+fast-forward to frame 8334 is most of it). macOS (the M4 Max test Mac, Metal, an hl-src build over
+SSH): clips 1000-1300 and 2000-2180 of the same replay, 483 frames at exactly 60000/1001, video
+and audio both 8.0417 s, ~13 s from Dolphin's start.
+
+Harness: `test_replay.py::test_launcher_comm_file_renders_highlights` (a recorded Direct game; two
+clips into one file, then one more in the same match into another; the frame count; with ffprobe
+on PATH, the streams and their lengths).

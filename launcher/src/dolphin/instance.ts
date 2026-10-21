@@ -223,7 +223,7 @@ export class PlaybackDolphinInstance extends DolphinInstance {
   private async writeCommsFile(options: ReplayCommunication) {
     // Ours reads the whole file every 200 ms and acts on a new commandId (ReplayPlayback.cpp), so
     // highlights (the next row, at once) need no wait.
-    if (options.mode === "highlights") {
+    if (options.mode === "highlights" || options.mode === "render") {
       await writeFile(this.commPath, JSON.stringify(options));
       this.lastWriteMs = Date.now();
       return;

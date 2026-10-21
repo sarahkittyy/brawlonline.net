@@ -34,6 +34,91 @@
   flex-direction: column;
 }
 
+.rowLine {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.tick {
+  padding: 4px;
+}
+
+.renderBar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.renderCount {
+  flex: 1;
+  font-size: 13px;
+  opacity: 0.75;
+}
+
+.combo {
+  margin-right: 4px;
+}
+
+.comboLabel {
+  font-size: 13px;
+}
+
+.renders {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.renderJob {
+  padding: 6px 12px;
+  border: 1px solid rgb(159 116 192 / 15%);
+  border-radius: 10px;
+  background: rgb(0 0 0 / 25%);
+}
+
+.renderLine {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+  font-size: 14px;
+}
+
+.renderIcon {
+  opacity: 0.8;
+}
+
+.renderDoneIcon {
+  color: var(--accent-primary);
+}
+
+.renderName {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.renderMusic {
+  font-size: 12px;
+  opacity: 0.6;
+  white-space: nowrap;
+}
+
+.renderStatus {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.renderJob .progress {
+  margin-top: 6px;
+}
+
 .row {
   display: flex;
   align-items: center;

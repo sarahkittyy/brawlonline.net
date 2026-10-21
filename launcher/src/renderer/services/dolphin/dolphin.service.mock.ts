@@ -12,6 +12,9 @@ import type {
   PlayKey,
   PPlusPrepareResult,
   PPlusVersionInfo,
+  RenderJobInfo,
+  RenderRequest,
+  RenderResult,
   ReplayPlayChoice,
   ReplayPlayResult,
   ReplayQueueItem,
@@ -108,6 +111,21 @@ class MockDolphinClient implements DolphinService {
     _choice?: ReplayPlayChoice,
   ): Promise<ReplayPlayResult> {
     throw new Error("Method not implemented.");
+  }
+
+  @delayAndMaybeError(SHOULD_ERROR)
+  async renderHighlights(_request: RenderRequest, _choice?: ReplayPlayChoice): Promise<RenderResult> {
+    throw new Error("Method not implemented.");
+  }
+
+  @delayAndMaybeError(SHOULD_ERROR)
+  async cancelRender(_jobId: string): Promise<void> {
+    return;
+  }
+
+  @delayAndMaybeError(SHOULD_ERROR)
+  async getRenderJobs(): Promise<RenderJobInfo[]> {
+    return [];
   }
 
   @delayAndMaybeError(SHOULD_ERROR)

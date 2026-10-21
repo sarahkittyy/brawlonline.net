@@ -6,8 +6,12 @@ import type { DolphinVersionResponse } from "./install/fetch_latest_version";
 import type { RoomHandOffResult } from "./room_handoff";
 
 export type ReplayCommunication = {
-  /** Ours, `highlights`: the queue's replays from each item's startFrame to its endFrame (ReplayPlayback.h). */
-  mode: "normal" | "mirror" | "queue" | "highlights"; // default normal
+  /**
+   * Ours, `highlights`: the queue's replays from each item's startFrame to its endFrame (ReplayPlayback.h);
+   * `render`: the same, written to `output` (an MP4) by the render Dolphin (render_queue.ts).
+   */
+  mode: "normal" | "mirror" | "queue" | "highlights" | "render"; // default normal
+  output?: string;
   replay?: string; // path to the replay if in normal or mirror mode
   startFrame?: number; // when to start watching the replay
   endFrame?: number; // when to stop watching the replay
@@ -51,7 +55,48 @@ export type ReplayPlaybackStatus = {
   clipStart?: number;
   clipEnd?: number;
   seekFrom?: number;
+  /** Rendering (`render`): the file, the clips written to it so far, and its frames. */
+  render?: boolean;
+  output?: string;
+  rendered?: number;
+  framesWritten?: number;
 };
+
+/**
+ * Rendering highlights to video (render_queue.ts): `names[i]` is item i's file name (no folder or
+ * extension); a `combo` is one file of all the items, named `names[0]`. `music`: off renders with
+ * P+'s Music Off.
+ */
+export type RenderRequest = {
+  items: HighlightPlayItem[];
+  names: string[];
+  music: boolean;
+  combo: boolean;
+};
+
+/** A render job (one file) and how far it is. */
+export type RenderJobInfo = {
+  jobId: string;
+  /** The file's name (sanitized), and its path once it was chosen. */
+  name: string;
+  output: string | null;
+  /** The replays it renders from. */
+  paths: string[];
+  /** Its clips, and the one being rendered (1-based; 0 before the first). */
+  clips: number;
+  clip: number;
+  music: boolean;
+  release: string | null;
+  state: "queued" | "starting" | "rendering" | "done" | "error" | "cancelled";
+  /** 0..1 */
+  progress: number;
+  error?: string;
+};
+
+/** What a render request did: queued its jobs, or (as a play request) needs a Project+ release first. */
+export type RenderResult =
+  | { status: "queued"; jobs: RenderJobInfo[] }
+  | Exclude<ReplayPlayResult, { status: "playing" }>;
 
 /**
  * What playing replays needs, from the Project+ release they were recorded on (docs/design/
@@ -130,6 +175,8 @@ export const enum DolphinEventType {
   PLAYBACK_STATUS = "PLAYBACK_STATUS",
   /** An older Project+ release is downloaded or its card made (preparePPlusRelease). */
   PPLUS_PREPARE_PROGRESS = "PPLUS_PREPARE_PROGRESS",
+  /** A render job was queued, moved on, finished or failed (render_queue.ts). */
+  RENDER_PROGRESS = "RENDER_PROGRESS",
 }
 
 export const enum DolphinErrorType {
@@ -210,6 +257,11 @@ export type DolphinPlaybackStatusEvent = {
   status: ReplayPlaybackStatus;
 };
 
+export type DolphinRenderProgressEvent = {
+  type: DolphinEventType.RENDER_PROGRESS;
+  job: RenderJobInfo;
+};
+
 export type DolphinEventMap = {
   [DolphinEventType.CLOSED]: DolphinNetplayClosedEvent | DolphinPlaybackClosedEvent;
   [DolphinEventType.DOWNLOAD_START]: DolphinDownloadStartEvent;
@@ -218,6 +270,7 @@ export type DolphinEventMap = {
   [DolphinEventType.ERROR]: DolphinNetworkErrorEvent | DolphinRosettaRequiredEvent;
   [DolphinEventType.PLAYBACK_STATUS]: DolphinPlaybackStatusEvent;
   [DolphinEventType.PPLUS_PREPARE_PROGRESS]: PPlusPrepareProgressEvent;
+  [DolphinEventType.RENDER_PROGRESS]: DolphinRenderProgressEvent;
 };
 
 export type DolphinEvent = DolphinEventMap[DolphinEventType];
@@ -254,6 +307,15 @@ export interface DolphinService {
    * Progress: PLAYBACK_STATUS events with this `commandId`.
    */
   playHighlights(items: HighlightPlayItem[], commandId: string, choice?: ReplayPlayChoice): Promise<ReplayPlayResult>;
+  /**
+   * Renders highlights to video in the Clips folder (Settings > Clips), with no Dolphin window:
+   * queued jobs, their progress as RENDER_PROGRESS events. `choice` as for playing (Project+ versions).
+   */
+  renderHighlights(request: RenderRequest, choice?: ReplayPlayChoice): Promise<RenderResult>;
+  /** Stops a render job (a finished file is kept). */
+  cancelRender(jobId: string): Promise<void>;
+  /** This launcher run's render jobs. */
+  getRenderJobs(): Promise<RenderJobInfo[]>;
   /** The launcher's Project+ release and the older ones for replays. */
   getPPlusVersions(): Promise<{ current: string; states: PPlusVersionInfo[] }>;
   /**

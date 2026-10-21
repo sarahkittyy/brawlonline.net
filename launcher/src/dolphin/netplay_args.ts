@@ -91,3 +91,28 @@ export function buildPlaybackDolphinArgs(input: NetplayArgsInput): string[] {
   args.push("-C", "Dolphin.Core.WiiSDCardAllowWrites=False", "-C", "Dolphin.Online.SaveReplays=False");
   return args;
 }
+
+/**
+ * What a render Dolphin adds to the playback Dolphin's command line (render_queue.ts): no window at
+ * all (`-b --render`: the comm file's `render` mode writes the video), as fast as the PC goes
+ * (`[Core] EmulationSpeed` 0: frames are never dropped, the video is timed by the game), silent
+ * (`[DSP] Volume`: the video gets the game's samples before the volume), not fullscreen, at 2x
+ * internal resolution (the video is 1280x720), and the job's music (`[Online] Music`: off applies
+ * P+'s Music Off code).
+ */
+export function buildRenderDolphinArgs({ music }: { music: boolean }): string[] {
+  return [
+    "-b",
+    "--render",
+    "-C",
+    "Dolphin.Core.EmulationSpeed=0",
+    "-C",
+    "Dolphin.DSP.Volume=0",
+    "-C",
+    "Dolphin.Display.Fullscreen=False",
+    "-C",
+    "Graphics.Settings.InternalResolution=2",
+    "-C",
+    `Dolphin.Online.Music=${music ? "True" : "False"}`,
+  ];
+}

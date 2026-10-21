@@ -1,9 +1,9 @@
 // Plays replays on the Project+ release they were recorded on (docs/design/pplus-versions.md):
 // main says what a request needs (ReplayPlayResult); this asks the player, shows the download and
-// the card being made, and plays. Rendering (later)
-// goes through `ensureReplayRelease` the same way.
+// the card being made, and plays. Rendering goes through `withRenderVersion` the same way (with no
+// "anyway": a clip is rendered on its own release or not at all).
 import { pplusReleaseLabel } from "@common/pplus_releases";
-import type { ReplayPlayChoice, ReplayPlayResult } from "@dolphin/types";
+import type { RenderJobInfo, RenderResult, ReplayPlayChoice, ReplayPlayResult } from "@dolphin/types";
 
 import type { AskAnswer, VersionPurpose } from "./replay_version_dialog";
 import {
@@ -91,4 +91,32 @@ export async function withReplayVersion(
     result = await call(ready === "current" ? "current" : "auto");
   }
   return result;
+}
+
+/**
+ * Runs a render request (`call`) through the version checks: the releases its replays need are got
+ * ready first (asked). Resolves to the jobs queued, or null when the player cancelled or a replay's
+ * release can't be rendered.
+ */
+export async function withRenderVersion(
+  call: (choice: ReplayPlayChoice) => Promise<RenderResult>,
+): Promise<RenderJobInfo[] | null> {
+  let result = await call("auto");
+  // (One release at a time: a combo of replays from two older releases asks twice.)
+  for (let tries = 0; tries < 4; tries++) {
+    if (result.status === "queued") {
+      return result.jobs;
+    }
+    if (result.status === "unplayable") {
+      await showUnplayable({ release: result.release, current: result.current, purpose: "render" });
+      closeReleaseDialog();
+      return null;
+    }
+    const ready = await ensureReplayRelease(result, "render");
+    if (ready !== "ready") {
+      return null;
+    }
+    result = await call("auto");
+  }
+  return null;
 }

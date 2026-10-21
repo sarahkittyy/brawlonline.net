@@ -11,6 +11,9 @@ import type {
   PlayKey,
   PPlusPrepareResult,
   PPlusVersionInfo,
+  RenderJobInfo,
+  RenderRequest,
+  RenderResult,
   ReplayPlayChoice,
   ReplayPlayResult,
   ReplayQueueItem,
@@ -76,6 +79,16 @@ export const ipc_viewSlpReplay = makeEndpoint.main(
   <{ files: ReplayQueueItem[]; choice?: ReplayPlayChoice }>_,
   <ReplayPlayResult>_,
 );
+
+export const ipc_renderHighlights = makeEndpoint.main(
+  "renderHighlights",
+  <{ request: RenderRequest; choice?: ReplayPlayChoice }>_,
+  <RenderResult>_,
+);
+
+export const ipc_cancelRender = makeEndpoint.main("cancelRender", <{ jobId: string }>_, <SuccessPayload>_);
+
+export const ipc_getRenderJobs = makeEndpoint.main("getRenderJobs", <EmptyPayload>_, <{ jobs: RenderJobInfo[] }>_);
 
 export const ipc_playHighlights = makeEndpoint.main(
   "playHighlights",

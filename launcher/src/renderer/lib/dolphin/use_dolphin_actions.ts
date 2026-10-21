@@ -1,4 +1,4 @@
-import type { DolphinService, ReplayQueueItem } from "@dolphin/types";
+import type { DolphinService, RenderJobInfo, RenderRequest, ReplayQueueItem } from "@dolphin/types";
 import { DolphinLaunchType } from "@dolphin/types";
 import type { HighlightPlayItem } from "@replays/highlights/types";
 import log from "electron-log";
@@ -6,7 +6,7 @@ import { useCallback } from "react";
 
 import { useAppStore } from "@/lib/hooks/use_app_store";
 import { useToasts } from "@/lib/hooks/use_toasts";
-import { withReplayVersion } from "@/lib/pplus/with_replay_version";
+import { withRenderVersion, withReplayVersion } from "@/lib/pplus/with_replay_version";
 
 import { DolphinMessages as Messages } from "./dolphin.messages";
 import { DolphinStatus, setDolphinOpened, useDolphinStore } from "./use_dolphin_store";
@@ -183,6 +183,29 @@ export const useDolphinActions = (dolphinService: DolphinService) => {
     [getInstallStatus, launcherIsUpToDate, dolphinService, showError],
   );
 
+  /**
+   * Renders highlights to video (no Dolphin window; progress as RENDER_PROGRESS events). Resolves to
+   * the jobs queued, or null when nothing was (an error is shown, or the player cancelled).
+   */
+  const renderHighlights = useCallback(
+    async (request: RenderRequest): Promise<RenderJobInfo[] | null> => {
+      if (getInstallStatus(DolphinLaunchType.PLAYBACK) !== DolphinStatus.READY) {
+        showError(Messages.dolphinIsUpdating());
+        return null;
+      }
+      if (!(await launcherIsUpToDate())) {
+        return null;
+      }
+      try {
+        return await withRenderVersion((choice) => dolphinService.renderHighlights(request, choice));
+      } catch (err) {
+        showError(err);
+        return null;
+      }
+    },
+    [getInstallStatus, launcherIsUpToDate, dolphinService, showError],
+  );
+
   return {
     openConfigureDolphin,
     softResetDolphin,
@@ -190,6 +213,7 @@ export const useDolphinActions = (dolphinService: DolphinService) => {
     launchNetplay,
     viewReplays,
     playHighlights,
+    renderHighlights,
     updateDolphin,
   };
 };

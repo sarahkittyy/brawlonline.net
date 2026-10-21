@@ -64,8 +64,10 @@ import { buildModsDolphinArgs } from "./mods/mods_args";
 import { clearModRoomFiles } from "./mods/room_files";
 import { clearTemplateSeededSaves } from "./mods/template_saves";
 import type { ModBuild } from "./mods/types";
-import { buildNetplayDolphinArgs, buildPlaybackDolphinArgs } from "./netplay_args";
+import { buildNetplayDolphinArgs, buildPlaybackDolphinArgs, buildRenderDolphinArgs } from "./netplay_args";
 import { closeIfIdle } from "./quit_if_idle";
+import type { RenderDolphin, RenderKey } from "./render_queue";
+import { RenderQueue } from "./render_queue";
 import { clearRoomRequest } from "./room_handoff";
 import { createProgressThrottle, runWithProgress } from "./setup_progress";
 import type {
@@ -103,6 +105,8 @@ export class DolphinManager {
   private playbackDolphinInstances = new Map<string, PlaybackDolphinInstance>();
   /** The Project+ release each playback Dolphin's card is on (null: the launcher's own). */
   private playbackReleases = new Map<string, string | null>();
+  /** A render Dolphin's music (it is set on its command line). */
+  private renderMusic = new Map<string, boolean>();
   private pplusVersionStore: PPlusVersions | null = null;
   private netplayDolphinInstance: DolphinInstance | null = null;
   private versionCache = new Map<string, string>();
@@ -126,6 +130,20 @@ export class DolphinManager {
   events = Observable.from(this.eventSubject);
 
   constructor(private settingsManager: SettingsManager) {}
+
+  private renderQueue: RenderQueue | null = null;
+
+  /** Highlights rendered to video (render_queue.ts), into the Clips folder (Settings > Clips). */
+  get renders(): RenderQueue {
+    if (!this.renderQueue) {
+      this.renderQueue = new RenderQueue({
+        launch: async (key) => this.launchRenderDolphin(key),
+        folder: () => this.settingsManager.getClipsFolder(),
+        emit: (job) => this.eventSubject.next({ type: DolphinEventType.RENDER_PROGRESS, job }),
+      });
+    }
+    return this.renderQueue;
+  }
 
   /** No new Dolphin (Play, replays, Configure) starts while `gate` throws. A running one is left alone. */
   setLaunchGate(gate: () => Promise<void>): void {
@@ -306,19 +324,48 @@ export class DolphinManager {
   async launchPlaybackDolphin(
     id: string,
     replayComm: ReplayCommunication,
-    { pplusRelease = null }: { pplusRelease?: string | null } = {},
+    { pplusRelease = null, render }: { pplusRelease?: string | null; render?: { music: boolean } } = {},
   ): Promise<void> {
     const release = pplusRelease && pplusRelease !== this.pplusVersions().currentRelease ? pplusRelease : null;
     // A second request waits, then finds the Dolphin the first one opened.
-    await this.sdCardStarts.runExclusive(() => this._launchPlaybackDolphin(id, replayComm, release));
+    await this.sdCardStarts.runExclusive(() => this._launchPlaybackDolphin(id, replayComm, release, render));
+  }
+
+  /**
+   * The render Dolphin (render_queue.ts): the playback Dolphin with no window (`-b --render`),
+   * started by the first request, in its own User folder (`<userData>/render/User`) so that it never
+   * shares a NAND or a log with a playback Dolphin open at the same time.
+   */
+  launchRenderDolphin({ release, music }: RenderKey): RenderDolphin {
+    const id = "render";
+    return {
+      play: (comm) => this.launchPlaybackDolphin(id, comm, { pplusRelease: release, render: { music } }),
+      readStatus: async () => (await this.playbackDolphinInstances.get(id)?.readStatus()) ?? null,
+      isOpen: () => this.playbackDolphinInstances.has(id),
+      close: async () => {
+        const instance = this.playbackDolphinInstances.get(id);
+        if (instance) {
+          await this._stopPlayback(id, instance);
+        }
+      },
+    };
+  }
+
+  private _renderInstallation(): LocalDolphinInstallation {
+    return new LocalDolphinInstallation(
+      DolphinLaunchType.PLAYBACK,
+      this.getDolphinExecutablePath(DolphinLaunchType.PLAYBACK),
+      path.join(app.getPath("userData"), "render"),
+    );
   }
 
   private async _launchPlaybackDolphin(
     id: string,
     replayComm: ReplayCommunication,
     release: string | null,
+    render?: { music: boolean },
   ): Promise<void> {
-    const playbackInstallation = this.getInstallation(DolphinLaunchType.PLAYBACK);
+    const playbackInstallation = render ? this._renderInstallation() : this.getInstallation(DolphinLaunchType.PLAYBACK);
     this._assertNotMoving();
     const netplayInstallation = this.getInstallation(DolphinLaunchType.NETPLAY);
     await this._repairBundledDolphin();
@@ -336,6 +383,11 @@ export class DolphinManager {
       await this._stopPlayback(id, playbackInstance);
       playbackInstance = undefined;
     }
+    if (playbackInstance && render && this.renderMusic.get(id) !== render.music) {
+      // (Its music is on its command line.)
+      await this._stopPlayback(id, playbackInstance);
+      playbackInstance = undefined;
+    }
     if (!playbackInstance) {
       await this.launchGate();
       const isoPath = await this._getIsoPath();
@@ -348,8 +400,11 @@ export class DolphinManager {
       await this._ensureBrawlSave(playbackInstallation, storeDir);
       await playbackInstallation.addGamePath(path.dirname(isoPath));
       await playbackInstallation.setDefaultIso(isoPath);
-      // The launcher's Music setting: off applies P+'s Music Off code here too.
-      await playbackInstallation.updateSettings({ enableMusic: this.settingsManager.getEnableMusic() });
+      // The launcher's Music setting: off applies P+'s Music Off code here too. (A render's is the
+      // job's, on its command line.)
+      if (!render) {
+        await playbackInstallation.updateSettings({ enableMusic: this.settingsManager.getEnableMusic() });
+      }
       // A Play Dolphin (a game, a queue, a room) may have the card open: spectating then shares it.
       const inUse = this.netplayDolphinInstance != null || this.playbackDolphinInstances.size > 0;
       const sdCardImage = await this._withProgress(DolphinLaunchType.PLAYBACK, "prepareSdCard", (onProgress) =>
@@ -364,6 +419,10 @@ export class DolphinManager {
         bootFile: netplayInstallation.netplayLauncherDol,
         testMode: readTestMode(process.env, app.isPackaged),
       });
+      if (render) {
+        params.push(...buildRenderDolphinArgs({ music: render.music }));
+        this.renderMusic.set(id, render.music);
+      }
       // The playback NAND must have a Brawl save, or P+ asks to create one before every first replay
       await this._checkBrawlSave(playbackInstallation, storeDir);
       log.info(`Launching playback dolphin at path: ${dolphinPath} ${params.join(" ")}`);
@@ -379,6 +438,7 @@ export class DolphinManager {
         // Remove the instance from the map on close
         this.playbackDolphinInstances.delete(id);
         this.playbackReleases.delete(id);
+        this.renderMusic.delete(id);
       });
       playbackInstance.on("error", (err: Error) => {
         log.error(err);
@@ -386,21 +446,24 @@ export class DolphinManager {
       });
       // A replay from another version: ask, as §6.5 of docs/design/replays.md says.
       const instance = playbackInstance;
-      instance.onNeedsPlayAnyway = (status) => {
-        log.info(`Replay refused: ${status.error ?? ""}`);
-        void dialog
-          .showMessageBox({
-            type: "question",
-            buttons: ["Play anyway", "Cancel"],
-            defaultId: 1,
-            cancelId: 1,
-            title: "Replay",
-            message: "This replay may not play as it was played.",
-            detail: `${status.error ?? "It was recorded with another version."}\n\nPlay it anyway?`,
-          })
-          .then(({ response }) => (response === 0 ? instance.playAnyway() : undefined))
-          .catch((err) => log.error(err));
-      };
+      // (A render gives up instead: the player chose before it was queued.)
+      instance.onNeedsPlayAnyway = render
+        ? null
+        : (status) => {
+            log.info(`Replay refused: ${status.error ?? ""}`);
+            void dialog
+              .showMessageBox({
+                type: "question",
+                buttons: ["Play anyway", "Cancel"],
+                defaultId: 1,
+                cancelId: 1,
+                title: "Replay",
+                message: "This replay may not play as it was played.",
+                detail: `${status.error ?? "It was recorded with another version."}\n\nPlay it anyway?`,
+              })
+              .then(({ response }) => (response === 0 ? instance.playAnyway() : undefined))
+              .catch((err) => log.error(err));
+          };
 
       instance.onStatus = (status) => {
         this.eventSubject.next({ type: DolphinEventType.PLAYBACK_STATUS, instanceId: id, status });
@@ -1061,6 +1124,7 @@ export class DolphinManager {
     });
     this.playbackDolphinInstances.delete(id);
     this.playbackReleases.delete(id);
+    this.renderMusic.delete(id);
   }
 
   /** The playback card of another Project+ release, with the plugin on it (made or checked). */
@@ -1183,6 +1247,55 @@ export class DolphinManager {
       release: null,
       playAnyway: false,
     };
+  }
+
+  /**
+   * What rendering `paths` needs (render_queue.ts): each replay's Project+ release (null: the
+   * launcher's own) once all of them are here (`result` null); else, as for playing, the first
+   * release whose files are not here yet (`needs-files`) or that this launcher cannot play
+   * (`unplayable`). `current`: every one on the launcher's release, played anyway.
+   */
+  async decideRenderReleases(
+    paths: string[],
+    choice: ReplayPlayChoice,
+  ): Promise<{
+    result: Exclude<ReplayPlayResult, { status: "playing" }> | null;
+    releases: (string | null)[];
+    playAnyway: boolean;
+  }> {
+    const versions = this.pplusVersions();
+    const current = versions.currentRelease;
+    const releases = await Promise.all(
+      paths.map((p) =>
+        readReplayHeader(p).then(
+          (h) => (h.meta.pplusRelease === current ? null : h.meta.pplusRelease),
+          () => null,
+        ),
+      ),
+    );
+    if (choice === "current") {
+      return { result: null, releases: paths.map(() => null), playAnyway: releases.some((r) => r != null) };
+    }
+    const others = [...new Set(releases.filter((r): r is string => r != null))];
+    for (const release of others) {
+      if (!PLAYABLE_PPLUS_RELEASES.includes(release)) {
+        return { result: { status: "unplayable", release, current }, releases, playAnyway: false };
+      }
+    }
+    if (others.length) {
+      await versions.index();
+    }
+    for (const release of others) {
+      const state = await versions.state(release);
+      if (!state.filesReady) {
+        return {
+          result: { status: "needs-files", release, current, downloadBytes: state.downloadBytes },
+          releases,
+          playAnyway: false,
+        };
+      }
+    }
+    return { result: null, releases, playAnyway: false };
   }
 
   /** Deletes an older release's files and card (closing a playback Dolphin that has it open). */

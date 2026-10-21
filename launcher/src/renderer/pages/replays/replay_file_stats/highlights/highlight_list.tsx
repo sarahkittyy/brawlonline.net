@@ -2,14 +2,20 @@
  * A .brep's highlights and L+R+Z clips on its stats page (DESIGN.md §2): who on whom with their
  * characters, best first, nothing the detector measured. A row plays in the playback Dolphin from
  * just before the string to just after it; ↑/↓ (or Tab) plays the next one at once, and the only
- * wait (Dolphin's fast-forward to it) shows with its progress.
+ * wait (Dolphin's fast-forward to it) shows with its progress. Ticked rows render to video
+ * (docs/design/highlights.md §5): Render (w/ Music) or Render (No Music), a file each, or one
+ * combo movie of them all.
  */
 import type { ReplayPlaybackStatus } from "@dolphin/types";
 import { DolphinEventType } from "@dolphin/types";
 import ContentCutIcon from "@mui/icons-material/ContentCut";
+import MovieIcon from "@mui/icons-material/Movie";
+import MusicOffIcon from "@mui/icons-material/MusicOff";
 import PlayArrowIcon from "@mui/icons-material/PlayArrow";
 import PlaylistPlayIcon from "@mui/icons-material/PlaylistPlay";
 import Button from "@mui/material/Button";
+import Checkbox from "@mui/material/Checkbox";
+import FormControlLabel from "@mui/material/FormControlLabel";
 import LinearProgress from "@mui/material/LinearProgress";
 import type { HighlightPlayer, ReplayClip, ReplayHighlight, ReplayHighlights } from "@replays/highlights/types";
 import { useQuery } from "@tanstack/react-query";
@@ -24,6 +30,8 @@ import { useServices } from "@/services";
 
 import { HighlightListMessages as Messages } from "./highlight_list.messages";
 import styles from "./highlight_list.module.css";
+import { RenderJobs, useRenderJobs } from "./render_jobs";
+import { clipVideoName, comboVideoName } from "./render_names";
 import { ReplayVersionNote } from "./replay_version_note";
 
 type Row = ReplayHighlight | ReplayClip;
@@ -33,7 +41,7 @@ type Request = { from: number; count: number; commandId: string };
 
 export const HighlightList = ({ filePath, pplusRelease }: { filePath: string; pplusRelease?: string }) => {
   const { replayService, dolphinService } = useServices();
-  const { playHighlights } = useDolphinActions(dolphinService);
+  const { playHighlights, renderHighlights } = useDolphinActions(dolphinService);
   const [detectionOff] = useSetting("disableHighlightDetection");
   const [clipOnLrz] = useSetting("clipOnLrz");
   const query = useQuery({
@@ -47,12 +55,23 @@ export const HighlightList = ({ filePath, pplusRelease }: { filePath: string; pp
   const [request, setRequest] = useState<Request | null>(null);
   const [status, setStatus] = useState<ReplayPlaybackStatus | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  const [ticked, setTicked] = useState<Set<number>>(new Set());
+  const [combo, setCombo] = useState(false);
+  const [queuing, setQueuing] = useState(false);
+  const allJobs = useRenderJobs();
+  // (A cancelled one is gone: the player did it.)
+  const jobs = useMemo(
+    () => allJobs.filter((j) => j.paths.includes(filePath) && j.state !== "cancelled"),
+    [allJobs, filePath],
+  );
 
   // A new replay (the stats page's next/previous): nothing of the last one's.
   useEffect(() => {
     setSelected(null);
     setRequest(null);
     setStatus(null);
+    setTicked(new Set());
+    setCombo(false);
   }, [filePath]);
 
   // Only what Dolphin says about the last request (an older one's status may still come).
@@ -87,6 +106,46 @@ export const HighlightList = ({ filePath, pplusRelease }: { filePath: string; pp
       }
     },
     [rows, filePath, playHighlights],
+  );
+
+  const tick = (i: number, on: boolean) =>
+    setTicked((t) => {
+      const next = new Set(t);
+      if (on) {
+        next.add(i);
+      } else {
+        next.delete(i);
+      }
+      return next;
+    });
+
+  // The ticked rows, in the list's order, to video: a file each, or one combo movie.
+  const render = useCallback(
+    async (music: boolean) => {
+      if (!data || !ticked.size) {
+        return;
+      }
+      const chosen = rows.filter((_, i) => ticked.has(i));
+      const players = new Map(data.players.map((p) => [p.port, p]));
+      const asCombo = combo && chosen.length > 1;
+      setQueuing(true);
+      try {
+        const queued = await renderHighlights({
+          items: chosen.map((r) => ({ path: filePath, startFrame: r.startFrame, endFrame: r.endFrame })),
+          names: asCombo
+            ? [comboVideoName(data.players, chosen.length, filePath)]
+            : chosen.map((r) => clipVideoName(r, players, filePath)),
+          music,
+          combo: asCombo,
+        });
+        if (queued) {
+          setTicked(new Set());
+        }
+      } finally {
+        setQueuing(false);
+      }
+    },
+    [data, rows, ticked, combo, filePath, renderHighlights],
   );
 
   // Play all: the row playing follows Dolphin's queue.
@@ -148,6 +207,48 @@ export const HighlightList = ({ filePath, pplusRelease }: { filePath: string; pp
         </Button>
       </div>
       <ReplayVersionNote release={pplusRelease} />
+      {rows.length > 0 && (
+        <div className={styles.renderBar}>
+          <Checkbox
+            size="small"
+            className={styles.tick}
+            checked={ticked.size === rows.length}
+            indeterminate={ticked.size > 0 && ticked.size < rows.length}
+            onChange={(e) => setTicked(e.target.checked ? new Set(rows.map((_, i) => i)) : new Set())}
+            inputProps={{ "aria-label": Messages.selectAll() }}
+          />
+          <span className={styles.renderCount}>
+            {ticked.size ? Messages.selected(ticked.size) : Messages.tickToRender()}
+          </span>
+          <FormControlLabel
+            className={styles.combo}
+            disabled={ticked.size < 2}
+            control={
+              <Checkbox size="small" checked={combo && ticked.size > 1} onChange={(e) => setCombo(e.target.checked)} />
+            }
+            label={<span className={styles.comboLabel}>{Messages.comboMovie()}</span>}
+          />
+          <Button
+            size="small"
+            variant="outlined"
+            startIcon={<MovieIcon />}
+            disabled={!ticked.size || queuing}
+            onClick={() => void render(true)}
+          >
+            {Messages.renderWithMusic()}
+          </Button>
+          <Button
+            size="small"
+            variant="outlined"
+            startIcon={<MusicOffIcon />}
+            disabled={!ticked.size || queuing}
+            onClick={() => void render(false)}
+          >
+            {Messages.renderNoMusic()}
+          </Button>
+        </div>
+      )}
+      <RenderJobs jobs={jobs} />
       <PlaybackBanner request={request} status={status} rows={rows} />
       {data.error ? (
         <div className={styles.note}>{Messages.noData()}</div>
@@ -161,25 +262,34 @@ export const HighlightList = ({ filePath, pplusRelease }: { filePath: string; pp
           {rows.map((row, i) => (
             <React.Fragment key={i}>
               {i === highlightCount && <h3 className={styles.section}>{Messages.clips()}</h3>}
-              <button
-                type="button"
-                data-row={i}
-                className={`${styles.row} ${i === playing ? styles.playing : ""}`}
-                onClick={() => void play(i)}
-              >
-                <span className={styles.playIcon}>
-                  <PlayArrowIcon fontSize="small" />
-                </span>
-                {row.kind === "highlight" ? (
-                  <HighlightWho row={row} data={data} players={players} />
-                ) : (
-                  <span className={styles.who}>
-                    <ContentCutIcon fontSize="small" className={styles.clipIcon} />
-                    <span className={styles.vs}>{Messages.clippedBy()}</span>
-                    <PlayerChip player={players.get(row.port)} isTeams={data.isTeams} />
+              <div className={styles.rowLine}>
+                <Checkbox
+                  size="small"
+                  className={styles.tick}
+                  checked={ticked.has(i)}
+                  onChange={(e) => tick(i, e.target.checked)}
+                  inputProps={{ "aria-label": Messages.tickRow() }}
+                />
+                <button
+                  type="button"
+                  data-row={i}
+                  className={`${styles.row} ${i === playing ? styles.playing : ""}`}
+                  onClick={() => void play(i)}
+                >
+                  <span className={styles.playIcon}>
+                    <PlayArrowIcon fontSize="small" />
                   </span>
-                )}
-              </button>
+                  {row.kind === "highlight" ? (
+                    <HighlightWho row={row} data={data} players={players} />
+                  ) : (
+                    <span className={styles.who}>
+                      <ContentCutIcon fontSize="small" className={styles.clipIcon} />
+                      <span className={styles.vs}>{Messages.clippedBy()}</span>
+                      <PlayerChip player={players.get(row.port)} isTeams={data.isTeams} />
+                    </span>
+                  )}
+                </button>
+              </div>
             </React.Fragment>
           ))}
         </div>

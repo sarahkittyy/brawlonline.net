@@ -9,6 +9,7 @@ import { fileExists } from "utils/file_exists";
 
 import { PPlusVersionError } from "./install/pplus_versions";
 import {
+  ipc_cancelRender,
   ipc_cancelRoomLaunch,
   ipc_checkPlayKeyExists,
   ipc_closeNetplayIfIdle,
@@ -18,6 +19,7 @@ import {
   ipc_getChatKey,
   ipc_getDolphinPaths,
   ipc_getPPlusVersions,
+  ipc_getRenderJobs,
   ipc_hardResetDolphin,
   ipc_installRosetta,
   ipc_joinRoomInGame,
@@ -29,6 +31,7 @@ import {
   ipc_prepareRoomLaunch,
   ipc_removePlayKeyFile,
   ipc_removePPlusRelease,
+  ipc_renderHighlights,
   ipc_setChatKey,
   ipc_softResetDolphin,
   ipc_storePlayKeyFile,
@@ -36,6 +39,7 @@ import {
 } from "./ipc";
 import type { DolphinManager } from "./manager";
 import { deletePlayKeyFile, writePlayKeyFile } from "./playkey";
+import type { RenderJob } from "./render_queue";
 import { clearRoomRequest, handOffRoom, isHandOffCode, writeRoomRequest } from "./room_handoff";
 import { installRosettaElevated } from "./rosetta/install_rosetta";
 import { DolphinEventType, DolphinLaunchType } from "./types";
@@ -164,6 +168,46 @@ export default function setupDolphinIpc({ dolphinManager }: { dolphinManager: Do
       );
     }
     return d.result;
+  });
+
+  // Rendering (render_queue.ts): every replay on its own Project+ release, so a request whose
+  // releases are not all here yet is answered as a play request is, and the renderer asks.
+  ipc_renderHighlights.main!.handle(async ({ request, choice = "auto" }) => {
+    const { items, names, music, combo } = request;
+    if (!items.length) {
+      return { status: "queued" as const, jobs: [] };
+    }
+    const d = await dolphinManager.decideRenderReleases(
+      items.map((i) => i.path),
+      choice,
+    );
+    if (d.result) {
+      return d.result;
+    }
+    const key = (release: string | null) => ({ release, music, playAnyway: d.playAnyway });
+    let jobs: RenderJob[];
+    if (combo) {
+      // One file; a combo whose replays were recorded on different Project+ releases is one
+      // file per release (a Dolphin plays one release's card), in the order of their first clip.
+      const releases = [...new Set(d.releases)];
+      jobs = releases.map((release, i) => ({
+        items: items.filter((_, j) => d.releases[j] === release),
+        name: releases.length > 1 ? `${names[0]} (part ${i + 1} of ${releases.length})` : names[0],
+        key: key(release),
+      }));
+    } else {
+      jobs = items.map((item, i) => ({ items: [item], name: names[i] ?? names[0], key: key(d.releases[i]) }));
+    }
+    return { status: "queued" as const, jobs: dolphinManager.renders.add(jobs) };
+  });
+
+  ipc_cancelRender.main!.handle(async ({ jobId }) => {
+    await dolphinManager.renders.cancel(jobId);
+    return { success: true };
+  });
+
+  ipc_getRenderJobs.main!.handle(async () => {
+    return { jobs: dolphinManager.renders.jobs() };
   });
 
   ipc_getPPlusVersions.main!.handle(async () => {
