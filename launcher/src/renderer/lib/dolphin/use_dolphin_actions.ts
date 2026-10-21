@@ -6,6 +6,7 @@ import { useCallback } from "react";
 
 import { useAppStore } from "@/lib/hooks/use_app_store";
 import { useToasts } from "@/lib/hooks/use_toasts";
+import { showWrongPPlusBuild } from "@/lib/pplus/pplus_build_dialog";
 import { withRenderVersion, withReplayVersion } from "@/lib/pplus/with_replay_version";
 
 import { DolphinMessages as Messages } from "./dolphin.messages";
@@ -121,7 +122,12 @@ export const useDolphinActions = (dolphinService: DolphinService) => {
       }
 
       try {
-        await dolphinService.launchNetplayDolphin({ bootGame });
+        const result = await dolphinService.launchNetplayDolphin({ bootGame });
+        if (result.status === "wrongPPlusBuild") {
+          // The SD card is on another Project+ release: the popup offers the right one.
+          showWrongPPlusBuild({ cardRelease: result.cardRelease, release: result.release, bootGame });
+          return false;
+        }
         setDolphinOpened(DolphinLaunchType.NETPLAY);
         return true;
       } catch (err) {

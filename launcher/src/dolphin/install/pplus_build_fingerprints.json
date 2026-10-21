@@ -1,0 +1,62 @@
+[
+  {
+    "release": "v3.1.2-mainline-beta.1",
+    "publishedAt": "2025-06-15",
+    "netplayGct": "7d6bec15493cec97abd79f94acb693a4bc26b4de34ea777ad21233b17288f3f4",
+    "infoVersion": "3.1.2"
+  },
+  {
+    "release": "v3.1.2-mainline-beta.2",
+    "publishedAt": "2025-06-27",
+    "netplayGct": "7d6bec15493cec97abd79f94acb693a4bc26b4de34ea777ad21233b17288f3f4",
+    "infoVersion": "3.1.2"
+  },
+  {
+    "release": "v3.1.2-mainline-beta.3",
+    "publishedAt": "2025-07-08",
+    "netplayGct": "7d6bec15493cec97abd79f94acb693a4bc26b4de34ea777ad21233b17288f3f4",
+    "infoVersion": "3.1.2"
+  },
+  {
+    "release": "v3.1.2-mainline-beta.4",
+    "publishedAt": "2025-09-04",
+    "netplayGct": "7d6bec15493cec97abd79f94acb693a4bc26b4de34ea777ad21233b17288f3f4",
+    "infoVersion": "3.1.2"
+  },
+  {
+    "release": "v3.1.2-mainline-beta.5",
+    "publishedAt": "2025-09-22",
+    "netplayGct": "7d6bec15493cec97abd79f94acb693a4bc26b4de34ea777ad21233b17288f3f4",
+    "infoVersion": "3.1.2"
+  },
+  {
+    "release": "v3.1.5",
+    "publishedAt": "2025-10-12",
+    "netplayGct": "f228939b48739dc35bb1c35a5b6d899f24d1a0599862105e994bf6280bdbd410",
+    "infoVersion": "3.1.5"
+  },
+  {
+    "release": "v3.1.5-2601",
+    "publishedAt": "2026-01-27",
+    "netplayGct": "f228939b48739dc35bb1c35a5b6d899f24d1a0599862105e994bf6280bdbd410",
+    "infoVersion": "3.1.5"
+  },
+  {
+    "release": "v3.2.0",
+    "publishedAt": "2026-08-05",
+    "netplayGct": "dae3a5218b1516c5cf7c6f6d261274029f970b927c115eb010fc1dd85086883a",
+    "infoVersion": "3.2"
+  },
+  {
+    "release": "v3.2.1",
+    "publishedAt": "2026-10-19",
+    "netplayGct": "be11a32696e6c5e6b4dde6351eddde251d2cec468dc2a801bd6a50d0d9ec2b58",
+    "infoVersion": "3.2"
+  },
+  {
+    "release": "v3.2.1b",
+    "publishedAt": "2026-10-21",
+    "netplayGct": "be11a32696e6c5e6b4dde6351eddde251d2cec468dc2a801bd6a50d0d9ec2b58",
+    "infoVersion": "3.2"
+  }
+]

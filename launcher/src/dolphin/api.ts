@@ -27,6 +27,7 @@ import {
   ipc_removePlayKeyFile,
   ipc_removePPlusRelease,
   ipc_renderHighlights,
+  ipc_replaceProjectPlusCard,
   ipc_setChatKey,
   ipc_softResetDolphin,
   ipc_storePlayKeyFile,
@@ -114,8 +115,12 @@ const dolphinApi: DolphinService = {
   async removePPlusRelease(release: string) {
     await ipc_removePPlusRelease.renderer!.trigger({ release });
   },
-  async launchNetplayDolphin(opts?: { bootGame?: boolean }): Promise<void> {
-    await ipc_launchNetplayDolphin.renderer!.trigger({ bootGame: opts?.bootGame });
+  async launchNetplayDolphin(opts?: { bootGame?: boolean }) {
+    const { result } = await ipc_launchNetplayDolphin.renderer!.trigger({ bootGame: opts?.bootGame });
+    return result;
+  },
+  async replaceProjectPlusCard() {
+    await ipc_replaceProjectPlusCard.renderer!.trigger({});
   },
   async closeNetplayIfIdle() {
     const { result } = await ipc_closeNetplayIfIdle.renderer!.trigger({});

@@ -9,6 +9,7 @@ import type {
   DolphinLaunchType,
   DolphinService,
   GameFilesMoveOutcome,
+  NetplayLaunchResult,
   PlayKey,
   PPlusPrepareResult,
   PPlusVersionInfo,
@@ -154,8 +155,13 @@ class MockDolphinClient implements DolphinService {
   }
 
   @delayAndMaybeError(SHOULD_ERROR)
-  async launchNetplayDolphin(_opts?: { bootGame?: boolean }): Promise<void> {
+  async launchNetplayDolphin(_opts?: { bootGame?: boolean }): Promise<NetplayLaunchResult> {
     throw new Error("Method not implemented.");
+  }
+
+  @delayAndMaybeError(SHOULD_ERROR)
+  async replaceProjectPlusCard(): Promise<void> {
+    return;
   }
 
   @delayAndMaybeError(SHOULD_ERROR)

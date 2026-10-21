@@ -282,6 +282,14 @@ export type DolphinEventMap = {
 export type DolphinEvent = DolphinEventMap[DolphinEventType];
 
 /** What Settings > Dolphin's game files move did; `error` carries the reason to show. */
+/**
+ * What Play did: started the netplay Dolphin, or not because the SD card is on another Project+
+ * release (`cardRelease`) than the launcher's (`release`; install/pplus_builds.ts).
+ */
+export type NetplayLaunchResult =
+  | { status: "started" }
+  | { status: "wrongPPlusBuild"; cardRelease: string; release: string };
+
 export type GameFilesMoveOutcome =
   | { action: "moved" | "adopted"; folder: string; leftBehind: string | null }
   | { action: "cancelled"; folder: string }
@@ -330,8 +338,16 @@ export interface DolphinService {
    */
   preparePPlusRelease(release: string, importFrom?: string): Promise<PPlusPrepareResult>;
   removePPlusRelease(release: string): Promise<void>;
-  /** `bootGame`: boot P+ even when the Play button is set to open Dolphin only. */
-  launchNetplayDolphin(opts?: { bootGame?: boolean }): Promise<void>;
+  /**
+   * `bootGame`: boot P+ even when the Play button is set to open Dolphin only. Not started when the
+   * SD card is on another Project+ release (`wrongPPlusBuild`): replaceProjectPlusCard first.
+   */
+  launchNetplayDolphin(opts?: { bootGame?: boolean }): Promise<NetplayLaunchResult>;
+  /**
+   * Replaces an SD card of another Project+ release with the launcher's release (downloaded; the
+   * old card is kept next to it). Progress on the Play button, as P+'s first download.
+   */
+  replaceProjectPlusCard(): Promise<void>;
   /**
    * Hands a room code to the running game; `not-running` when no netplay Dolphin is open. `ruleset`:
    * a create request's ruleset code.

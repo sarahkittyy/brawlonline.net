@@ -32,6 +32,7 @@ import {
   ipc_removePlayKeyFile,
   ipc_removePPlusRelease,
   ipc_renderHighlights,
+  ipc_replaceProjectPlusCard,
   ipc_setChatKey,
   ipc_softResetDolphin,
   ipc_storePlayKeyFile,
@@ -249,7 +250,11 @@ export default function setupDolphinIpc({ dolphinManager }: { dolphinManager: Do
   });
 
   ipc_launchNetplayDolphin.main!.handle(async ({ bootGame }) => {
-    await dolphinManager.launchNetplayDolphin({ bootGame });
+    return await dolphinManager.launchNetplayDolphin({ bootGame });
+  });
+
+  ipc_replaceProjectPlusCard.main!.handle(async () => {
+    await dolphinManager.replaceProjectPlusCard();
     return { success: true };
   });
 

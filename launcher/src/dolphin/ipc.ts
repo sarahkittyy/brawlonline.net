@@ -8,6 +8,7 @@ import type {
   DolphinEvent,
   DolphinLaunchType,
   GameFilesMoveOutcome,
+  NetplayLaunchResult,
   PlayKey,
   PPlusPrepareResult,
   PPlusVersionInfo,
@@ -118,6 +119,13 @@ export const ipc_removePPlusRelease = makeEndpoint.main(
 export const ipc_launchNetplayDolphin = makeEndpoint.main(
   "launchNetplayDolphin",
   <{ bootGame?: boolean }>_,
+  <NetplayLaunchResult>_,
+);
+
+/** An SD card of another Project+ release is replaced with the launcher's release. */
+export const ipc_replaceProjectPlusCard = makeEndpoint.main(
+  "replaceProjectPlusCard",
+  <EmptyPayload>_,
   <SuccessPayload>_,
 );
 

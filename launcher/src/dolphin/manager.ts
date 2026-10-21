@@ -43,7 +43,8 @@ import {
   patchedSdCardFolder,
   projectPlusStoreFolder,
 } from "./install/paths";
-import type { PPlusProgress, PPlusTarget } from "./install/pplus_release";
+import { otherProjectPlusBuild } from "./install/pplus_builds";
+import type { PPlusProgress, PPlusRelease, PPlusTarget } from "./install/pplus_release";
 import {
   ensureNetplaySave,
   installProjectPlusFiles,
@@ -51,6 +52,7 @@ import {
   NETPLAY_SAVE_DIR,
   netplaySaveStore,
   PPLUS_RELEASE,
+  setAsideProjectPlusCard,
 } from "./install/pplus_release";
 import type { PPlusVersionState, PrepareProgress } from "./install/pplus_versions";
 import {
@@ -76,6 +78,7 @@ import { createProgressThrottle, runWithProgress } from "./setup_progress";
 import type {
   DolphinEvent,
   DolphinSetupPhase,
+  NetplayLaunchResult,
   ReplayCommunication,
   ReplayPlaybackStatus,
   ReplayPlayChoice,
@@ -503,11 +506,32 @@ export class DolphinManager {
    * when `bootGame` says so: a hand-off (an invite, a room, Create room) leaves a request only a
    * booted game reads, and closing a Dolphin that never booted takes it back.
    */
-  async launchNetplayDolphin(opts: { bootGame?: boolean } = {}) {
-    await this.sdCardStarts.runExclusive(() => this._launchNetplayDolphin(opts));
+  async launchNetplayDolphin(opts: { bootGame?: boolean } = {}): Promise<NetplayLaunchResult> {
+    return await this.sdCardStarts.runExclusive(() => this._launchNetplayDolphin(opts));
   }
 
-  private async _launchNetplayDolphin(opts: { bootGame?: boolean }) {
+  /**
+   * Puts an SD card of another Project+ release aside (kept as `sd (Project+ <release>).raw`) and
+   * gets the launcher's release instead, as on the first start (bug report #74).
+   */
+  async replaceProjectPlusCard(): Promise<void> {
+    await this.sdCardStarts.runExclusive(async () => {
+      const installation = this.getInstallation(DolphinLaunchType.NETPLAY);
+      const release = this._pplusRelease().version;
+      const other = await otherProjectPlusBuild(installation.sdCardImage, release);
+      if (other) {
+        const kept = await setAsideProjectPlusCard(installation.userFolder, other);
+        log.warn(`The SD card was on Project+ ${other}, not ${release}: kept as ${kept}; getting ${release}`);
+      }
+      try {
+        await this._ensureProjectPlusFiles(installation);
+      } finally {
+        this._onComplete(DolphinLaunchType.NETPLAY, this._cachedVersion(DolphinLaunchType.NETPLAY));
+      }
+    });
+  }
+
+  private async _launchNetplayDolphin(opts: { bootGame?: boolean }): Promise<NetplayLaunchResult> {
     // An open Dolphin without a game closes first (closeNetplayIfIdle).
     if (this.netplayDolphinInstance && !(await this.closeNetplayIfIdle())) {
       throw new Error("Dolphin is already open with a game. Close it first.");
@@ -530,6 +554,13 @@ export class DolphinManager {
       const isoPath = await this._getIsoPath();
       Preconditions.checkExists(isoPath, "No Brawl disc image set. Choose one in Settings > Game.");
       await netplayInstallation.assertProjectPlusFiles();
+      // Players on different Project+ releases desync at once (bug report #74).
+      const release = this._pplusRelease().version;
+      const other = await otherProjectPlusBuild(netplayInstallation.sdCardImage, release);
+      if (other) {
+        log.warn(`Not starting the game: the SD card is on Project+ ${other}, not ${release}`);
+        return { status: "wrongPPlusBuild", cardRelease: other, release };
+      }
       const storeDir = projectPlusStoreFolder(this.netplayFolder());
       await ensureNetplaySave(storeDir, netplayInstallation.userFolder);
       await this._ensureBrawlSave(netplayInstallation, storeDir);
@@ -588,6 +619,7 @@ export class DolphinManager {
       throw err;
     }
     this.netplayDolphinInstance = dolphinInstance;
+    return { status: "started" };
   }
 
   /**
@@ -998,7 +1030,7 @@ export class DolphinManager {
         // The release before the update keeps its files for its replays: no download for them later.
         beforeCardUpdate: (card, paths) => this.pplusVersions().keepReplacedFiles(card, paths),
       };
-      const release = readTestMode(process.env, app.isPackaged).pplusRelease ?? PPLUS_RELEASE;
+      const release = this._pplusRelease();
       this.projectPlusInstall = (async () => {
         let missing = await missingProjectPlusFiles(target, release);
         // A development build may carry its own template in Sys (Dolphin falls back to it).
@@ -1027,6 +1059,11 @@ export class DolphinManager {
       });
     }
     return this.projectPlusInstall;
+  }
+
+  /** The Project+ release Play uses (a test may pin another). */
+  private _pplusRelease(): PPlusRelease {
+    return readTestMode(process.env, app.isPackaged).pplusRelease ?? PPLUS_RELEASE;
   }
 
   /** After a run that ended abnormally, keeps its log out of Dolphin's two-run rotation (crash_log.ts). */

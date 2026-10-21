@@ -46,6 +46,8 @@ export type PPlusRelease = {
  * check that the entries below still exist, and bump `version` (installed users then download the
  * new DOLs and save template; their SD card is kept). When the release's user/Wii/sd.raw changed,
  * add a card update for it (pplus_card_update.ts), or installed users keep the old game files.
+ * Make pplus_build_fingerprints.json again too (pplus_builds_cli.ts): Play refuses a card whose
+ * release it does not know as this one.
  */
 export const PPLUS_RELEASE: PPlusRelease = {
   version: "v3.2.1",
@@ -139,6 +141,26 @@ export async function missingProjectPlusFiles(target: PPlusTarget, release = PPL
     missing.push(NETPLAY_SAVE_DIR);
   }
   return missing;
+}
+
+/**
+ * Puts a card of another P+ release (`cardRelease`, pplus_builds.ts) out of the way, so that
+ * installProjectPlusFiles gets the pinned release's own card and launcher DOLs: the card is kept
+ * next to it as `sd (Project+ <cardRelease>).raw` (what the game wrote to it, P+'s replays), the
+ * DOLs, which are the release's own files, are deleted. Returns the kept card's path.
+ */
+export async function setAsideProjectPlusCard(userFolder: string, cardRelease: string): Promise<string> {
+  const card = sdCardPath(userFolder);
+  const name = `sd (Project+ ${cardRelease.replace(/[^\w.+-]/g, "_")})`;
+  let kept = path.join(path.dirname(card), `${name}.raw`);
+  for (let n = 2; await exists(kept); n++) {
+    kept = path.join(path.dirname(card), `${name} ${n}.raw`);
+  }
+  await fs.promises.rename(card, kept);
+  for (const entry of PPLUS_LAUNCHER_DOL_ENTRIES) {
+    await fs.promises.rm(launcherDolPath(userFolder, entry), { force: true });
+  }
+  return kept;
 }
 
 /** The User folder's card is on the release before `release`, which changed the card's files. */
