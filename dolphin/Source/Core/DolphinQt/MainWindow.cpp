@@ -1009,6 +1009,12 @@ void MainWindow::TogglePause()
 void MainWindow::OnStopComplete()
 {
   m_stop_requested = false;
+  // The launcher's playback Dolphin (`-i`: replays, highlights, spectating) boots its game only
+  // when it starts: left open without it (Esc, Stop, the game window closed), the launcher's next
+  // replay waited for a boot that never came ("Starting the replay..." until the player closed
+  // Dolphin, 2026-10-21). Dolphin closes with its game, and the launcher starts it again.
+  if (Gprb::Replay::Playback::Following() && m_pending_boot == nullptr)
+    m_exit_requested = true;
   HideRenderWidget(!m_exit_requested, m_exit_requested);
 #ifdef USE_DISCORD_PRESENCE
   if (!m_netplay_dialog->isVisible())
@@ -1137,7 +1143,10 @@ bool MainWindow::RequestStop()
   // Not in a whole-machine session: the power button would be an input to this player's machine
   // only, so the game shut down there alone and the others saw desyncs until it was gone (prod
   // 2026-10-14). The build's save is kept by the Wii FS cleanup, not by the game's shutdown.
-  if (!m_stop_requested && !Machine::IsArmed() && UICommon::TriggerSTMPowerEvent())
+  // Nor in the playback Dolphin: a replay saves nothing, and its game shuts down only if it runs
+  // (a paused or held replay waits at the loop top), so it stops at once.
+  if (!m_stop_requested && !Machine::IsArmed() && !Gprb::Replay::Playback::Following() &&
+      UICommon::TriggerSTMPowerEvent())
   {
     m_stop_requested = true;
 
