@@ -9,16 +9,6 @@ export const ModsMessages = {
   addBuildTooltip: () => "A Wii or GameCube disc image.",
   addFolder: () => "Add mod folder",
   addFolderTooltip: () => "A Brawl mod's Dolphin folder, like Brawl Minus or REX.",
-  help: () => "Help",
-  faqTitle: () => "Help",
-  faq: () => [
-    {
-      question: "I have the same game as my opponent, but it won't let me join!",
-      answer:
-        "For Brawl mods, check the ISO too. If you absolutely have the same mod, but the hashes differ, it's possible you've set Rev1 and they've set Rev2.",
-    },
-  ],
-  close: () => "Close",
   noBuilds: () => "Add a game or a mod folder to play.",
   notHashed: () => "Not checked yet",
   hashTooltip: (_hash: string) => "The game's hash. All your friends need the exact same hash.",
@@ -142,11 +132,11 @@ export const ModsMessages = {
   discPart: (gameId: string | undefined) => (gameId?.startsWith("RSB") ? "Brawl" : "Disc"),
   sdPart: () => "SD card",
   partHash: (part: string, hash: string) => `${part}: ${hash.slice(0, 6)}`,
-  discMatches: () => "Your disc matches the room's.",
+  discMatches: () => "Your disc image matches the room's.",
   discDiffers: (label: string | undefined) =>
-    `Your Brawl disc isn't the room's.${label ? ` The room plays ${label}.` : ""}`,
+    `Your Brawl disc image isn't the room's.${label ? ` The room plays ${label}.` : ""}`,
   discDiffersGame: (label: string | undefined) =>
-    `The discs don't match. Make sure you both have the same version of the game.${
+    `The disc images don't match. Make sure you both have the same version of the game.${
       label ? ` The room plays ${label}.` : ""
     }`,
   sdMatches: () => "Your SD card matches the room's.",

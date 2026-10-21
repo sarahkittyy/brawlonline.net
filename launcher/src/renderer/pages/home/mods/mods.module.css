@@ -378,43 +378,13 @@
   }
 }
 
-/* The narrowest two columns: the help icon's glyph at the header's edge, as MUI's edge="end". */
+/* The narrowest two columns. */
 @container (width < 450px) {
   .addButtons {
     gap: 0;
   }
-
-  .help {
-    margin-right: -5px;
-  }
 }
 
-/* "Your games"' help, at the header's right end. */
-.help {
-  display: flex;
-  flex-shrink: 0;
-  margin-left: auto;
-}
-
-.faq {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-
-.faqQuestion {
-  margin: 0 0 6px;
-  color: var(--text-primary);
-  font-size: 15px;
-  font-weight: 600;
-}
-
-.faqAnswer {
-  margin: 0;
-  color: var(--text-secondary);
-  font-size: 14px;
-  line-height: 1.5;
-}
 
 .roomBuild {
   color: var(--text-secondary);

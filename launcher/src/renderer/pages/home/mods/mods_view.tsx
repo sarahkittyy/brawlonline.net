@@ -20,7 +20,6 @@ import CreateNewFolderOutlinedIcon from "@mui/icons-material/CreateNewFolderOutl
 import DeleteOutlineRoundedIcon from "@mui/icons-material/DeleteOutlineRounded";
 import DragIndicatorRoundedIcon from "@mui/icons-material/DragIndicatorRounded";
 import EditOutlinedIcon from "@mui/icons-material/EditOutlined";
-import HelpOutlineRoundedIcon from "@mui/icons-material/HelpOutlineRounded";
 import PersonOutlineIcon from "@mui/icons-material/PersonOutline";
 import Button from "@mui/material/Button";
 import Dialog from "@mui/material/Dialog";
@@ -95,7 +94,6 @@ export const ModsView = (props: ModsViewProps) => {
   // Why the last Dolphin closed (a kick, a failed join), until the player closes the message; a
   // new room clears it anyway.
   const [dismissed, setDismissed] = useState<string | null>(null);
-  const [faqOpen, setFaqOpen] = useState(false);
   const running = !!state?.running;
   useEffect(() => {
     if (running) {
@@ -188,13 +186,6 @@ export const ModsView = (props: ModsViewProps) => {
                     </Button>
                   </Tooltip>
                 </div>
-                <span className={styles.help}>
-                  <Tooltip title={Messages.help()}>
-                    <IconButton size="small" aria-label={Messages.help()} onClick={() => setFaqOpen(true)}>
-                      <HelpOutlineRoundedIcon fontSize="small" />
-                    </IconButton>
-                  </Tooltip>
-                </span>
               </>
             }
             content={
@@ -217,7 +208,6 @@ export const ModsView = (props: ModsViewProps) => {
           />
         </div>
       </div>
-      <FaqDialog open={faqOpen} onClose={() => setFaqOpen(false)} />
       <SdSyncDialog sync={status?.session?.sd_sync ?? null} onRequest={props.onRequest} />
     </div>
   );
@@ -366,26 +356,6 @@ const PartChip = ({
       {match === "differs" && <span className={styles.partIcon}>!</span>}
     </span>
   </Tooltip>
-);
-
-/** "Your games"' help: questions players ask. */
-const FaqDialog = ({ open, onClose }: { open: boolean; onClose: () => void }) => (
-  <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth={true}>
-    <DialogTitle>{Messages.faqTitle()}</DialogTitle>
-    <DialogContent>
-      <div className={styles.faq}>
-        {Messages.faq().map(({ question, answer }) => (
-          <div key={question}>
-            <h4 className={styles.faqQuestion}>{question}</h4>
-            <p className={styles.faqAnswer}>{answer}</p>
-          </div>
-        ))}
-      </div>
-    </DialogContent>
-    <DialogActions>
-      <Button onClick={onClose}>{Messages.close()}</Button>
-    </DialogActions>
-  </Dialog>
 );
 
 const PublicRoomsBlock = ({

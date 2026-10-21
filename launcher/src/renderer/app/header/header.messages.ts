@@ -4,9 +4,9 @@ export const HeaderMessages = {
   checkingForUpdates: () => "Checking for updates...",
   failedToGetUpdates: () => "Failed to get updates",
   noUpdateAvailable: () => "No update available",
-  noMeleeIsoFile: () => "No Brawl ISO file specified",
+  noMeleeIsoFile: () => "No Brawl disc image set. Choose one in Settings > Game.",
   isoWillNotWork: (productName: string) =>
-    "Provided ISO will not work with {0}. Please provide an unmodified NTSC-U Brawl ISO (revision 1 or 2).",
+    "Your disc image will not work with {0}. Please choose an unmodified NTSC-U Brawl disc image (revision 1 or 2) in Settings > Game.",
   settings: () => "Settings",
   discord: () => "Discord",
   toggleNotificationSounds: () => "Toggle Notification Sounds",

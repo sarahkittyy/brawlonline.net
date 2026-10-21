@@ -66,8 +66,8 @@ pub fn join_mismatch(room: &Build, joiner: &BuildKey) -> Option<String> {
     if room_disc != disc {
         let label = room.disc_label.as_deref().filter(|l| !l.is_empty());
         return Some(match label {
-            Some(l) => format!("Your game's disc is not the room's ({l}). Make sure you both have the same version of the game."),
-            None => "Your game's disc is not the room's. Make sure you both have the same version of the game.".to_string(),
+            Some(l) => format!("Your disc image is not the room's ({l}). Make sure you both have the same version of the game."),
+            None => "Your disc image is not the room's. Make sure you both have the same version of the game.".to_string(),
         });
     }
     let room_card = !room.sd.as_deref().unwrap_or("").is_empty();

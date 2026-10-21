@@ -1414,7 +1414,7 @@ export class DolphinManager {
     if (isoPath) {
       // Make sure the file actually exists
       if (!(await fileExists(isoPath))) {
-        throw new Error(`Could not find ISO file: ${isoPath}`);
+        throw new Error(`Could not find the disc image: ${isoPath}`);
       }
     }
     return isoPath;

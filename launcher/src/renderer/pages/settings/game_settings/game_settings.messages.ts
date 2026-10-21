@@ -1,6 +1,7 @@
 export const GameSettingsMessages = {
-  meleeIsoFile: () => "Brawl ISO File",
-  meleeIsoFileDescription: () => "The path to an NTSC-U Super Smash Bros. Brawl disc image (revision 1 or 2).",
+  meleeIsoFile: () => "Brawl Disc Image",
+  meleeIsoFileDescription: () =>
+    "Your NTSC-U Super Smash Bros. Brawl disc image (revision 1 or 2), as an ISO, RVZ or WBFS.",
   closeDolphinToChange: () => "Close Dolphin to change this setting",
   noFileSet: () => "No file set",
   verifying: () => "Verifying...",
