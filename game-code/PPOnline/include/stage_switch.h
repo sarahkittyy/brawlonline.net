@@ -13,6 +13,8 @@ namespace StageSwitch {
     // (send() posts it).
     bool close();
     void send();
+    // The CSS is gone: the menu's label copies are about to be freed (Labels::releaseCopies).
+    void forgetCopies();
     // The STAGE SWITCH page's input (module 18's input reader, filtered).
     u32 input(u8* page, u32 bits);
     // The hazards the host chose (sent with the room's rules).

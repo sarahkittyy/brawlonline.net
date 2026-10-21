@@ -14,9 +14,11 @@
 //          colour and alpha there);
 //   CMPR   (the panel states' "Selecting Character..." WifiInfWait05_0): white letters, a dark
 //          rim, transparent elsewhere, in CMPR's 3-colour mode (black, white, grey, clear).
-// Nothing is allocated for long: two masks from the Network heap, freed at once.
+// Drawing allocates nothing for long: two masks from the Network heap, freed at once. The texture
+// copies the menus keep come from copyBlock and are freed before fighters load (bug #75).
 #include <OS/OSCache.h>
 #include <gf/gf_heap_manager.h>
+#include <gf/gf_memory_pool.h>
 #include <memory.h>
 #include <string.h>
 #include "labels.h"
@@ -518,15 +520,58 @@ namespace Labels {
     }
     u32 imageWord(const u8* tex0) { return ((u32)(tex0 + 0x40) & 0x1FFFFFFF) >> 5; }
 
+    // The menus' texture copies (bug #75, docs/game-code.md §2 "Heap budget"). Brawl copies every
+    // costume PAC into a block of the Network heap to decompress it (P+'s CompressPAC.asm treats
+    // them all as compressed): FitSamus27.pac needs 1,096,170 bytes there. With the copies kept
+    // for good (about 94 KB once the game had been online) the block did not fit, the copy went
+    // to address 0 and the game froze while it loaded the fighters. So every copy the menus keep
+    // comes from here, and releaseCopies frees them all before a scene that loads fighters.
+    // They also sit at the bottom of the heap. gfMemoryPool::alloc (0x80025C58) takes a block
+    // from the end of the first free block that fits, so the copies sat right under the plugin
+    // (at the top) and blocks made after them for good went under the copies: Brawl's
+    // muWifiInterfaceTask (4,224 bytes, made once the ONLINE page's pill was), whose block then
+    // split the room the freed copies left from the rest (1,048,320 bytes the largest, measured).
+    // A spacer over the top of the largest free block while the copy is made puts the copy at
+    // its bottom; the spacer is freed at once.
+    static void* s_copies[48];
+    static int s_numCopies = 0;
+
+    static void* allocLow(u32 size)
+    {
+        gfMemoryPool* pool = (gfMemoryPool*)gfHeapManager::getHeap(Heaps::Network);
+        u32 room = pool ? pool->getMaxFreeBlockSize() : 0;
+        void* spacer = NULL;
+        if (room > size + 0x200) spacer = gfHeapManager::alloc(Heaps::Network, (room - size - 0x100) & ~31u);
+        void* m = gfHeapManager::alloc(Heaps::Network, size);
+        if (spacer) free(spacer);
+        return m ? m : gfHeapManager::alloc(Heaps::Network, size);
+    }
+
+    u8* copyBlock(u32 size)
+    {
+        if (s_numCopies >= (int)(sizeof(s_copies) / sizeof(s_copies[0]))) return NULL;
+        u8* m = (u8*)allocLow(size + 32);
+        if (!m) return NULL;
+        s_copies[s_numCopies++] = m;
+        return (u8*)(((u32)m + 31) & ~31u);
+    }
+
+    bool holdsCopies() { return s_numCopies > 0; }
+
+    void releaseCopies()
+    {
+        for (int i = 0; i < s_numCopies; i++) free(s_copies[i]);
+        s_numCopies = 0;
+    }
+
     u8* copyTexture(const u8* tex0)
     {
         u32 fmt = *(u32*)(tex0 + 0x20);
         if (*(u32*)(tex0 + 0x10) != 0x40 || (fmt != 0 && fmt != 2)) return NULL;   // I4, IA4
         int w = *(u16*)(tex0 + 0x1C), h = *(u16*)(tex0 + 0x1E), bh = fmt == 2 ? 4 : 8;
         u32 bytes = (u32)(((w + 7) / 8) * ((h + bh - 1) / bh) * 32);
-        u8* m = (u8*)gfHeapManager::alloc(Heaps::Network, 0x40 + bytes + 32);
-        if (!m) return NULL;
-        u8* c = (u8*)(((u32)m + 31) & ~31u);
+        u8* c = copyBlock(0x40 + bytes);
+        if (!c) return NULL;
         memcpy(c, tex0, 0x40 + bytes);
         return c;
     }

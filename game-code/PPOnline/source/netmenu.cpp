@@ -133,7 +133,7 @@ namespace NetMenu {
     // card; 0322: BASIC VERSUS's pill; 0323: TEAM BATTLE's), laid out one after the other in the
     // menu's archive and made into MuObjects when the menu is built (MuObject::create(&file,
     // model index, ...), 0x800B2404). When 0321 is made, the plugin makes it from
-    // a copy of 0322's file instead (in the Network heap, kept for the next menus). The copy
+    // a copy of 0322's file instead (Labels::copyBlock, until the menu is left). The copy
     // keeps its textures bound to the menu's (texture infos +8; the materials' GXTexObj image
     // words, physical address >> 5), except three, which it gets of its own:
     //   MenMainWifi22 (the label)   a copy, labelled CREATE / ROOM (drawButtonLabels);
@@ -155,11 +155,6 @@ namespace NetMenu {
     static u32 s_pillFrom[3], s_pillTo[3];   // the three images: the original's, ours (phys >> 5)
     static const float PILL_SHIFT_X = -28.0f;   // from BASIC VERSUS's place (found live)
 
-    static u8* alignedAlloc(u32 size)
-    {
-        u8* p = (u8*)gfHeapManager::alloc(Heaps::Network, size + 32);
-        return p ? (u8*)(((u32)p + 31) & ~31u) : NULL;
-    }
 
     // A TEX0 of our own: `src`'s header and image copied (its name offset is left as it was).
     static u8* copyTex(u8** slot, const u8* src)
@@ -170,10 +165,9 @@ namespace NetMenu {
         int bw = fmt == 5 ? 4 : 8, bh = fmt == 5 ? 4 : 8, bpp = fmt == 5 ? 16 : 4;
         u32 bytes = (u32)(((w + bw - 1) / bw) * ((h + bh - 1) / bh) * bw * bh * bpp / 8);
         if (data != 0x40 || bytes > 0x10000) return NULL;
-        // Exactly its size, once (the same texture every time): the Network heap must keep
-        // room for the HOME menu's archive, which the game loads there after a match
-        // (docs/game-code.md §2, "Heap budget").
-        if (!*slot) *slot = alignedAlloc(0x40 + bytes);
+        // Exactly its size, once per menu (the same texture every time): the Network heap must
+        // keep room for the costumes Brawl decompresses there (Labels::copyBlock, bug #75).
+        if (!*slot) *slot = Labels::copyBlock(0x40 + bytes);
         if (!*slot) return NULL;
         memcpy(*slot, src, 0x40 + bytes);
         DCFlushRange(*slot, 0x40 + bytes);
@@ -260,7 +254,7 @@ namespace NetMenu {
         const char* name = modelName(file0322);
         if (!name || strcmp(name, "MenMainIcon0322_TopN") != 0) return NULL;
         if (!s_pillFile || s_pillCap < size) {
-            s_pillFile = alignedAlloc(size);
+            s_pillFile = Labels::copyBlock(size);
             s_pillCap = s_pillFile ? size : 0;
         }
         if (!s_pillFile) return NULL;
@@ -477,6 +471,14 @@ namespace NetMenu {
     }
 
     void setReturnButton(int b) { s_returnButton = b; }
+
+    void forgetCopies()
+    {
+        s_pillFile = s_pillLabel = s_pillIcon = s_pillBlank = NULL;
+        s_pillCap = 0;
+        s_pillMade = false;
+        for (int k = 0; k < 3; k++) s_pillFrom[k] = s_pillTo[k] = 0;
+    }
 
     // muProcTop's update (vtable slot 5, sora_menu_main text+0x14FAC; vtable .data+0x1E10, name
     // "muProcTop"): the main menu's top page is one the launcher's requests can leave from.

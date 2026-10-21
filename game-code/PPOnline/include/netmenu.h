@@ -5,4 +5,6 @@ namespace NetMenu {
     // Nintendo WFC / Wiimmfi login bypass (Brawlback Gen 1 NetMenu hooks).
     void install(CoreApi* api);
     void pollPendingExit();   // per-frame (WITH FRIENDS -> CSS, delayed)
+    // The menu is gone: its texture copies are about to be freed (Labels::releaseCopies).
+    void forgetCopies();
 }

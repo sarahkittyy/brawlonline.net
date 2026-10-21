@@ -112,7 +112,7 @@ namespace RoomPlay {
     };
 
     struct RowTex {
-        u8* label;          // our TEX0 copies (32-byte aligned, Network heap, kept)
+        u8* label;          // our TEX0 copies (Labels::copyTexture, until the CSS is gone)
         u8* value[2];
         int shown;          // the value copy the model shows
         char text[40];      // ... and its text
@@ -470,6 +470,8 @@ namespace RoomPlay {
         }
         return NULL;
     }
+
+    void forgetCopies() { memset(s_rows, 0, sizeof(s_rows)); }
 
     void reset()
     {

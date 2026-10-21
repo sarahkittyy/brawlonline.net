@@ -243,6 +243,16 @@ namespace StageSwitch {
         return changed;
     }
 
+    void forgetCopies()
+    {
+        memset(&s.title, 0, sizeof(s.title));
+        memset(&s.bar, 0, sizeof(s.bar));
+        memset(&s.moreRow, 0, sizeof(s.moreRow));
+        s.strTex = NULL;
+        s.onWord = s.strWord = 0;
+        for (int i = 0; i < MAX_TILES; i++) s.onSlot[i] = NULL;
+    }
+
     void send()
     {
         PPOM::RoomStagesRequest req;

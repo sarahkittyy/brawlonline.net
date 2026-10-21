@@ -30,4 +30,5 @@ namespace RoomPlay {
     // control), or NULL (Text::overrideFor).
     const char* menuText(const void* msbin, u32 line);
     void reset();   // the CSS is gone
+    void forgetCopies();   // its texture copies are about to be freed (Labels::releaseCopies)
 }

@@ -21,6 +21,7 @@
 #include "stage_switch.h"
 #include "room_rules.h"
 #include "rules_button.h"
+#include "labels.h"
 
 extern "C" {
     extern u8 g_onlineCss;
@@ -3200,10 +3201,28 @@ namespace OnlineMenu {
         }
     }
 
+    // The menus' texture copies (the ONLINE page's pill, the room CSS's labels) are freed once the
+    // game is in any other scene than the two that make them: every scene that loads fighters
+    // (scMemoryChange before a match or the waiting room, the stage select's preload) has them
+    // gone before the costumes' files are read. Brawl decompresses each costume in a block of
+    // the Network heap, and FitSamus27.pac's did not fit beside them (bug #75, Labels::copyBlock).
+    static void releaseMenuCopies(const char* scene)
+    {
+        if (!Labels::holdsCopies() || !scene[0]) return;
+        if (strcmp(scene, "muMenuMain") == 0 || strcmp(scene, "scSelctCharacter") == 0) return;
+        NetMenu::forgetCopies();
+        RoomCss::forgetCopies();
+        RulesButton::forgetCopies();
+        RoomPlay::forgetCopies();
+        StageSwitch::forgetCopies();
+        Labels::releaseCopies();
+    }
+
     void tick()
     {
         AnyoneMenu::tick();
         const char* scene = Online::currentSceneName();
+        releaseMenuCopies(scene);
         reportScreen(scene);
         if (TrainingRoom::active() && strcmp(scene, "scSelctCharacter") != 0) {
             // The CSS has left for the room: the room's tick, also on its load screens. Anywhere

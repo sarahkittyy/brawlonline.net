@@ -20,8 +20,15 @@ namespace Labels {
     bool mirroredIcon(u8* dst, const u8* srcHalf);
     // A TEX0's image word (its physical address >> 5), as the GXTexObjs and display lists hold it.
     u32 imageWord(const u8* tex0);
-    // A copy of an I4 or IA4 TEX0 (header and image, 32-byte aligned, Network heap, kept), or NULL.
+    // A copy of an I4 or IA4 TEX0 (header and image, 32-byte aligned, a copyBlock), or NULL.
     u8* copyTexture(const u8* tex0);
+    // A 32-byte aligned block of `size` bytes in the Network heap for a copy the menus keep, or
+    // NULL. Kept until releaseCopies, which frees every one (OnlineMenu::tick, before any scene
+    // that loads fighters: Brawl decompresses costumes in the Network heap, bug #75); the
+    // modules forget theirs first (forgetCopies) and make them again on the next menu.
+    u8* copyBlock(u32 size);
+    bool holdsCopies();
+    void releaseCopies();
     // Point a MuObject's model `name` at `want` (the MDL0's texture links and lists), and its
     // ScnMdl's own copies of the texture objects (ScnMdl and its material buffers +0x14C / +0x140)
     // from any of `from` to it. Call every frame: the ScnMdl fills its copies after it is made.

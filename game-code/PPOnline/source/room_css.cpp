@@ -383,9 +383,8 @@ namespace RoomCss {
             u32 bytes = texBytes(tex);
             if (!bytes || *(u32*)(tex + 0x10) != 0x40) continue;
             if (!s_labelCopy[k]) {
-                u8* m = (u8*)gfHeapManager::alloc(Heaps::Network, 0x40 + bytes + 32);
-                if (!m) continue;
-                s_labelCopy[k] = (u8*)(((u32)m + 31) & ~31u);
+                s_labelCopy[k] = Labels::copyBlock(0x40 + bytes);
+                if (!s_labelCopy[k]) continue;
                 memcpy(s_labelCopy[k], tex, 0x40 + bytes);
                 Labels::render(s_labelCopy[k], L.text, L.box[0], L.box[1], L.box[2], L.box[3], L.rim);
             }
@@ -500,9 +499,8 @@ namespace RoomCss {
             s_hdrOrig[b] = imageWord(cur);
             for (int k = 0; k < 2; k++) {
                 if (s_hdrCopy[b][k]) continue;
-                u8* m = (u8*)gfHeapManager::alloc(Heaps::Network, 0x40 + bytes + 32);
-                if (!m) return;
-                s_hdrCopy[b][k] = (u8*)(((u32)m + 31) & ~31u);
+                s_hdrCopy[b][k] = Labels::copyBlock(0x40 + bytes);
+                if (!s_hdrCopy[b][k]) return;
                 memcpy(s_hdrCopy[b][k], cur, 0x40 + bytes);
                 Labels::renderInBox(s_hdrCopy[b][k], H.text[k], 4, 4, 44, 20, 1);
             }
@@ -534,6 +532,18 @@ namespace RoomCss {
                 u32 a = w & 0xFFFFFF;
                 if (a != to && (a == from[0] || a == from[1] || a == from[2])) *(u32*)(p + off) = (w & 0xFF000000u) | to;
             }
+        }
+    }
+
+    void forgetCopies()
+    {
+        for (int k = 0; k < 5; k++) {
+            s_labelCopy[k] = NULL;
+            s_labelFrom[k] = s_labelTo[k] = 0;
+        }
+        for (int b = 0; b < 2; b++) {
+            s_hdrCopy[b][0] = s_hdrCopy[b][1] = NULL;
+            s_hdrOrig[b] = 0;
         }
     }
 

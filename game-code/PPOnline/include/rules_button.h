@@ -15,6 +15,8 @@ namespace RulesButton {
     // Never while the rules menu is open (muSelCharTask+0x630). The caller opens the menu
     // (online_menu.cpp tickRoom: RoomRules::open(), which also plays the decide sound).
     bool pressed();
+    // The CSS is gone: both buttons' label copies are about to be freed (Labels::releaseCopies).
+    void forgetCopies();
 }
 
 namespace SitOutButton {

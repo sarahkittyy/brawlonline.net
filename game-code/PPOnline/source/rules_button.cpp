@@ -159,9 +159,8 @@ namespace {
         for (int st = 0; st < 2; st++) {
             for (int k = 0; k < 2; k++) {
                 if (b.label[st][k]) continue;
-                u8* m = (u8*)gfHeapManager::alloc(Heaps::Network, 0x40 + bytes + 32);
-                if (!m) return false;
-                b.label[st][k] = (u8*)(((u32)m + 31) & ~31u);
+                b.label[st][k] = Labels::copyBlock(0x40 + bytes);
+                if (!b.label[st][k]) return false;
                 memcpy(b.label[st][k], cur, 0x40 + bytes);
                 Labels::renderInBox(b.label[st][k], b.words[st], BOX[0], BOX[1], BOX[2], BOX[3], 1);
                 if (k == 1) greyLetters(b.label[st][k]);
@@ -419,6 +418,13 @@ namespace RulesButton {
 
     void tick(bool show, bool enabled) { tickButton(s_buttons[0], show, enabled, false); }
     bool pressed() { return takePressed(s_buttons[0]); }
+
+    void forgetCopies()
+    {
+        for (int i = 0; i < 2; i++) {
+            for (int st = 0; st < 2; st++) s_buttons[i].label[st][0] = s_buttons[i].label[st][1] = NULL;
+        }
+    }
 
     void install(CoreApi* api)
     {

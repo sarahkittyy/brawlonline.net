@@ -57,6 +57,7 @@ namespace RoomCss {
     void prepareRecords();               // before the CSS is built: four full panels
     void releaseRecords();               // a room's CSS built again as another: records as before
     void reset();                        // the CSS is gone
+    void forgetCopies();                 // its label copies are about to be freed (Labels::releaseCopies)
     // stockControl: the room's rules have P+'s STOCK CONTROL in a stock match (the STOCKS boxes);
     // lockedStocks: while locked in, the count the lock-in carries (the local box is kept at it), -1.
     // meSittingOut: the local player sits out (their own card grey, "SIT OUT" on its plate).
