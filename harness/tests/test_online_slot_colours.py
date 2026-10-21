@@ -25,9 +25,10 @@ from ppharness.client import PadInput
 from ppharness.instance import DolphinInstance
 
 from test_online_alt_costumes import _running
-from test_online_game import Game, _confirmed_checksums, _connected_direct, backend  # noqa: F401 (fixture)
-from test_rooms_game import hand, hand_to
+from test_online_game import Game, _boot, _confirmed_checksums, _connected_direct, backend  # noqa: F401 (fixture)
+from test_rooms_game import ART, create_room, hand, hand_to, pick, room_view, until_view
 import online_set  # noqa: E402  (test_online_game put harness/tools on the path)
+import ppom  # noqa: E402
 
 pytestmark = [pytest.mark.dolphin, pytest.mark.server, pytest.mark.gpu, pytest.mark.slow]
 
@@ -57,9 +58,10 @@ def _offline_lines(values: dict[int, int]) -> Callable[[Game], None]:
     return write
 
 
-def _press_on_player_box(trigger: str, times: int) -> Callable[[Game], None]:
+def _press_on_player_box(trigger: str, times: int, digital: bool = False) -> Callable[[Game], None]:
     """P+'s own control on the online CSS: the hand on the local panel's player box, then the
-    trigger `times` times, each until P1's line steps (L down, R up, 0-12 wrapping)."""
+    trigger `times` times, each until P1's line steps (L down, R up, 0-12 wrapping). `digital`: a
+    full press, its button as well as the analog value, as a real controller sends."""
     def press(g: Game) -> None:
         hand_to(g, *PLAYER_BOX)
         area = g.c.read_u32(g.c.read_u32(g.c.read_u32(g.c.read_u32(0x805A0060) + 4) + 0x400) + 0x44)
@@ -68,7 +70,8 @@ def _press_on_player_box(trigger: str, times: int) -> Callable[[Game], None]:
             want = (lines(g)[0] + (-1 if trigger == "L" else 1)) % 13
             for _ in range(10):
                 assert g.c.read_u32(h + 0xAC) in (0, PLAYER_KIND_BUTTON), hex(g.c.read_u32(h + 0xAC))
-                pad = PadInput(l=255, hold=4) if trigger == "L" else PadInput(r=255, hold=4)
+                buttons = (trigger,) if digital else ()
+                pad = PadInput(buttons, l=255, hold=4) if trigger == "L" else PadInput(buttons, r=255, hold=4)
                 g.c.pad_script(0, [pad, PadInput(hold=8)])
                 g.steps("wait 14")
                 if lines(g)[0] == want:
@@ -131,3 +134,35 @@ def test_unpicked_colour_moves_off_a_pick(backend: OnlineBackend, dolphin: Calla
     print(r)
     for g in (a, b):
         g.c.mm_cancel()
+
+
+def test_room_host_colour_keeps_the_room_settings(backend: OnlineBackend,
+                                                  dolphin: Callable[..., DolphinInstance],
+                                                  gpu_backend: str) -> None:
+    """A room's host changing colour (a player's report, 2026-10-21): the host's R switches FFA /
+    TEAMS and L Public / Private, and on the player box they step the colour too, so every colour
+    change went through the room's modes. On the box R and L now step only the colour; off it they
+    still switch the room's settings."""
+    u = backend.create_user("scroom", "SCRM")
+    a = _boot(dolphin, "scroom-a", backend, u, gpu_backend, "slot-colour-room", "gameplay", artifacts=ART)
+    a.to_main_menu()
+    a.to_online_page()
+    create_room(a)
+    pick(a)
+    settings = ppom.RF_PUBLIC | ppom.RF_TEAMS | ppom.RF_TEAM_COLORS
+    before = room_view(a)["flags"] & settings
+    start = lines(a)[0]
+    for trigger, step in (("R", 1), ("R", 2), ("L", 1)):
+        _press_on_player_box(trigger, 1, digital=True)(a)
+        a.steps("wait 30")   # (R switched on its release)
+        assert lines(a)[0] == (start + step) % 13, (trigger, lines(a), start)
+        assert room_view(a)["flags"] & settings == before, (trigger, room_view(a), before)
+    a.shot("01-colour-changed")
+    # Off the box they are the room's again.
+    hand_to(a, -23.0, 10.5)
+    a.steps("tap R 8", "wait 30")
+    until_view(a, lambda v: v["flags"] & ppom.RF_TEAMS, "R: Teams on")
+    a.steps("tap L 8", "wait 30")
+    until_view(a, lambda v: (v["flags"] & ppom.RF_PUBLIC) != (before & ppom.RF_PUBLIC), "L: Public switched")
+    assert lines(a)[0] == (start + 1) % 13, lines(a)
+    a.shot("02-room-settings")

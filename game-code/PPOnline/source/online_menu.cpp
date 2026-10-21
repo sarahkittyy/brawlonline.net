@@ -2725,8 +2725,13 @@ namespace OnlineMenu {
             s_headerPress = 0;
             // R switches TEAMS when it is let go, unless START was pressed while it was down: that
             // is P+'s "hold R for AltR" lock-in (s.startAlt), which the room's switch must not eat.
+            // Neither L nor R switches anything with the hand on the player box: there they step
+            // the player's colour (P+'s slot colours, 2026-10-20), and a host changing colour went
+            // through FFA / TEAMS and Public / Private with it (a player's report, 2026-10-21).
             bool teamsSwitch = false;
-            if ((pressed & BTN_R) && host && waiting) s.roomRHeld = true;
+            const bool colourBox = RoomCss::handOnMyPlayerBox();
+            bool publicSwitch = (pressed & BTN_L) && !colourBox;
+            if ((pressed & BTN_R) && host && waiting && !colourBox) s.roomRHeld = true;
             if (s.roomRHeld && (pressed & BTN_START)) s.roomRHeld = false;
             if (s.roomRHeld && !(held & BTN_R) && !(pressed & BTN_R)) {
                 s.roomRHeld = false;
@@ -2734,11 +2739,11 @@ namespace OnlineMenu {
             }
             if (hdr) {
                 if (host && hdr == 0x1A && waiting) teamsSwitch = true;   // as R
-                else if (host && hdr == 0x19) pressed |= BTN_L;           // as L
+                else if (host && hdr == 0x19) publicSwitch = true;        // as L
                 else playSE(SE_ERROR);
             }
             if (RulesButton::pressed()) RoomRules::open(!waiting);   // host edits, others view; End set
-            if ((pressed & BTN_L) && host) {
+            if (publicSwitch && host) {
                 postRoom(PPOM::ROOM_PUBLIC, (se.roomFlags & PPOM::RF_PUBLIC) ? 0 : 1, 0, NULL);
                 playSE(1);
             }

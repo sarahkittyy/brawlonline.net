@@ -805,8 +805,11 @@ def test_room_team_colours(backend: OnlineBackend, dolphin: Callable[..., Dolphi
     assert common and not bad, (len(common), bad[:5])
     _wait(lambda: all(g.scene() == CSS for g in gs), 180, "all back on the room's CSS")
     until_view(a, lambda v: v["status"] == 0 and v["game"] == game + 1, "the room waiting", timeout=60)
-    # One more press: FFA.
-    a.steps("wait 60", "tap R 8", "wait 30")
+    # One more press: FFA, with the hand off the player box (R there is P+'s player colour only).
+    a.steps("wait 60")
+    print(f"A's hand after the game: {hand(a)}, button {hex(_u32(a, _u32(a, css_area(a) + 0x1A8) + 0xAC))}")
+    hand_to(a, -23.0, 10.5)
+    a.steps("tap R 8", "wait 30")
     until_view(a, lambda v: not v["flags"] & (ppom.RF_TEAMS | ppom.RF_TEAM_COLORS), "FFA")
     a.shot("06-ffa-again")
 

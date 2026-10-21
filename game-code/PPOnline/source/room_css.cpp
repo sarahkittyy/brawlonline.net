@@ -1030,6 +1030,16 @@ namespace RoomCss {
         return -1;
     }
 
+    // The hand on the local card's player box (pencil and plate, Brawl's button 0x1C), where P+'s
+    // slot colour hook (0x8068B168) steps the player's colour with L / R and resets it with Z.
+    bool handOnMyPlayerBox()
+    {
+        u8* task = cssTask();
+        u8* a0 = task ? area(task, 0) : NULL;
+        u8* hand = a0 ? *(u8**)(a0 + 0x1A8) : NULL;
+        return isPtr((u32)hand) && *(int*)(hand + HAND_BUTTON) == BUTTON_TAGS;
+    }
+
     int panelUnderHand()
     {
         u8* task = cssTask();

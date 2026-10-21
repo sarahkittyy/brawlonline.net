@@ -70,6 +70,7 @@ namespace RoomCss {
     // CPU / player toggle is offline), else -1.
     int plateUnderHand();
     bool handOverMyFlag();               // the local hand is over the local panel's team flag
+    bool handOnMyPlayerBox();            // on the local card's player box (P+'s L / R colour)
     // The local panel's costume set by the plugin, its picture drawn again: the room's TEAMS in the
     // teams' costumes gives the player their team's (OnlineMenu's tickRoom). Nothing without a
     // character on the panel (none, Random).
