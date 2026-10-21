@@ -29,29 +29,36 @@ export async function ensureReplayRelease(
   purpose: VersionPurpose = "play",
 ): Promise<"ready" | "current" | "cancel"> {
   const { release, current } = need;
-  const auto = useSettingsStore.getState().settings.pplusAutoDownload;
-  const ask: AskAnswer = auto ? { action: "download" } : await askForRelease({ ...need, purpose });
-  if (ask.action === "cancel") {
-    closeReleaseDialog();
-    return "cancel";
-  }
-  if (ask.action === "current") {
-    closeReleaseDialog();
-    return "current";
-  }
-  const importFrom = ask.action === "import" ? ask.path : undefined;
+  let auto = useSettingsStore.getState().settings.pplusAutoDownload;
   for (;;) {
-    showWorking({ release, current, purpose, importing: importFrom != null });
-    const result = await window.electron.dolphin.preparePPlusRelease(release, importFrom);
-    void refreshPPlusVersions();
-    if (result.ok) {
+    const ask: AskAnswer = auto ? { action: "download" } : await askForRelease({ ...need, purpose });
+    auto = false;
+    if (ask.action === "cancel") {
       closeReleaseDialog();
-      return "ready";
+      return "cancel";
     }
-    const next = await showReleaseError({ release, current, purpose, code: result.code, message: result.message });
-    if (next !== "retry") {
+    if (ask.action === "current") {
       closeReleaseDialog();
-      return next === "current" && purpose === "play" ? "current" : "cancel";
+      return "current";
+    }
+    const importFrom = ask.action === "import" ? ask.path : undefined;
+    for (;;) {
+      showWorking({ release, current, purpose, importing: importFrom != null });
+      const result = await window.electron.dolphin.preparePPlusRelease(release, importFrom);
+      void refreshPPlusVersions();
+      if (result.ok) {
+        closeReleaseDialog();
+        return "ready";
+      }
+      const next = await showReleaseError({ release, current, purpose, code: result.code, message: result.message });
+      if (next !== "retry") {
+        closeReleaseDialog();
+        return next === "current" && purpose === "play" ? "current" : "cancel";
+      }
+      // A folder that was not that release: back to the choice (download, or another folder).
+      if (importFrom) {
+        break;
+      }
     }
   }
 }
