@@ -31,6 +31,13 @@
 # feed is published in push order. A job waiting for its turn is replaced by a newer push's.
 #
 # Runs only on pushes to main and by hand, never on pull requests (self-hosted runners).
+#
+# Finishing a run whose Linux job failed (by hand, inputs version and windows_from_run): builds
+# only Linux, stamped with that run's version, and publishes it with that run's Windows build
+# (its launcher-windows artifact, kept 1 day); Windows and macOS are not built again and no new
+# version number is used. Dispatch it on a ref with the fix, e.g. a branch of the failed run's
+# commit plus the fix (only pushes to main start this workflow by themselves):
+#   gh workflow run client.yml --ref <branch> -f version=0.1.91 -f windows_from_run=<run id>
 name: client
 
 on:
@@ -45,12 +52,21 @@ on:
       - ".github/workflows/client.yml"
       - ".github/scripts/**"
   workflow_dispatch:
+    inputs:
+      version:
+        description: "Finishing a run: its version (e.g. 0.1.91). Empty: 0.1.<this run's number>"
+        required: false
+        default: ""
+      windows_from_run:
+        description: "Finishing a run: its run id. Only Linux is built; that run's Windows build is published with it"
+        required: false
+        default: ""
 
 permissions:
   contents: read
 
 env:
-  VERSION: 0.1.${{ github.run_number }}
+  VERSION: ${{ inputs.version || format('0.1.{0}', github.run_number) }}
   NODE_VERSION: "24"
 
 jobs:
@@ -196,6 +212,8 @@ jobs:
           df -h / | tail -n 1
 
   windows:
+    # Not when finishing another run (windows_from_run): its Windows build is published.
+    if: ${{ !inputs.windows_from_run }}
     needs: plugin
     concurrency:
       group: client-windows
@@ -362,7 +380,8 @@ jobs:
     # APPLE_API_KEY_ID, APPLE_API_ISSUER). The job fails without them: the launcher updates itself
     # on macOS (MAC_SELF_UPDATE in launcher/src/common/product.ts), and an ad-hoc build in the
     # feed could not be installed over a signed one. npm ci runs before the signing keychain exists.
-    if: ${{ vars.DISABLE_MACOS != 'true' }}
+    # Not when finishing another run (windows_from_run): that run's macOS build is its own.
+    if: ${{ vars.DISABLE_MACOS != 'true' && !inputs.windows_from_run }}
     needs: plugin
     concurrency:
       group: client-macos
@@ -482,9 +501,11 @@ jobs:
 
   publish:
     # Linux and Windows. The macOS build is published by client-mac-publish.yml once Apple
-    # accepts it.
+    # accepts it. Finishing another run (windows_from_run): that run's Windows build.
     needs: [linux, windows]
-    if: ${{ !cancelled() && needs.linux.result == 'success' && needs.windows.result == 'success' }}
+    if: >-
+      ${{ !cancelled() && needs.linux.result == 'success' && (needs.windows.result == 'success' ||
+      (inputs.windows_from_run && needs.windows.result == 'skipped')) }}
     concurrency:
       group: client-publish
       cancel-in-progress: false
@@ -499,12 +520,25 @@ jobs:
           name: launcher-linux
           path: ${{ runner.temp }}/client
       - uses: actions/download-artifact@v7
+        if: ${{ !inputs.windows_from_run }}
         with:
           name: launcher-windows
           path: ${{ runner.temp }}/client
+      - uses: actions/download-artifact@v7
+        if: ${{ inputs.windows_from_run }}
+        with:
+          name: launcher-windows
+          path: ${{ runner.temp }}/client
+          run-id: ${{ inputs.windows_from_run }}
+          github-token: ${{ github.token }}
       - name: Publish
         run: |
           ls -l "$RUNNER_TEMP/client"
+          # Both feeds must name this run's version (another run's Windows build: its version).
+          for f in latest.yml latest-linux.yml; do
+            got=$(sed -n 's/^version: //p' "$RUNNER_TEMP/client/$f")
+            [ "$got" = "$VERSION" ] || { echo "$f is $got, not $VERSION" >&2; exit 1; }
+          done
           sudo -n /usr/local/sbin/pp-release client "$RUNNER_TEMP/client"
       - name: Check
         env:
@@ -525,10 +559,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           NAMES: launcher-linux launcher-windows
+          RUNS: ${{ github.run_id }} ${{ inputs.windows_from_run }}
         run: |
           api="$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions"
-          ids=$(curl -fsS -H "Authorization: Bearer $GH_TOKEN" "$api/runs/$GITHUB_RUN_ID/artifacts?per_page=100" |
-            python3 -c 'import json,os,sys; names=os.environ["NAMES"].split(); print(" ".join(str(a["id"]) for a in json.load(sys.stdin)["artifacts"] if a["name"] in names))')
+          ids=$(for run in $RUNS; do
+            curl -fsS -H "Authorization: Bearer $GH_TOKEN" "$api/runs/$run/artifacts?per_page=100" |
+              python3 -c 'import json,os,sys; names=os.environ["NAMES"].split(); print(" ".join(str(a["id"]) for a in json.load(sys.stdin)["artifacts"] if a["name"] in names))'
+          done)
           for id in $ids; do
             curl -fsS -X DELETE -H "Authorization: Bearer $GH_TOKEN" "$api/artifacts/$id" && echo "deleted artifact $id"
           done
