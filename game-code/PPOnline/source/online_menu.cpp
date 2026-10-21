@@ -39,8 +39,8 @@ extern "C" {
     // notes it in g_cssPanelTeam, tickRoom sends it).
     u8 g_cssTeamRoom = 0;
     u8 g_cssPanelTeam = 0;
-    // TEAMS in the teams' costumes (tickRoom): the costume buttons step the team instead of the
-    // costume, as P+'s TEAM BATTLE (cssCostume notes a press in g_cssTeamStep: 1 next, 0xFF back).
+    // TEAMS in the teams' costumes (tickRoom): the costume buttons go through the shades of the
+    // team's colour only (cssCostume notes a press in g_cssTeamStep: 1 next, 0xFF back).
     u8 g_cssTeamColours = 0;
     u8 g_cssTeamStep = 0;
     extern u8 g_onlineMatchGame;
@@ -1411,10 +1411,10 @@ namespace OnlineMenu {
     // +0x7280 `cmpwi r27,0`: r27/r3 are the two costume buttons (X/Y on the GameCube pad,
     // sel_char+0x19508/+0x19604); +0x7290..+0x74F0 changes the costume. Slippi blocks that too
     // while locked in (PreventColorChange.asm): go straight to the B part at +0x74F4. In TEAMS
-    // with the teams' costumes the press is noted for tickRoom (r27 the next team, as Brawl's
-    // team battle calls incTeamColor for it at +0x72F4, r3 the one before, decTeamColor) and the
-    // costume is left alone too. (r0 is dead here: loaded at +0x7264 for +0x726C, again at +0x729C
-    // and +0x74FC.)
+    // with the teams' costumes the press is noted for tickRoom, which picks the next or previous
+    // shade of the team's colour (r27 the next, the button Brawl's team battle calls incTeamColor
+    // for at +0x72F4, r3 the previous, decTeamColor's), and Brawl's costume change is skipped.
+    // (r0 is dead here: loaded at +0x7264 for +0x726C, again at +0x729C and +0x74FC.)
     __attribute__((naked)) void cssCostume()
     {
         asm volatile(
@@ -2799,23 +2799,16 @@ namespace OnlineMenu {
                 postRoom(PPOM::ROOM_TEAM, (u8)((cur + 1) % PPOM::TEAM_COUNT), 0, NULL);
                 playSE(1);
             }
-            // TEAMS in the teams' costumes (the user's, 2026-10-21), as P+'s TEAM BATTLE (Legacy TE
-            // UnboundedTeamEngine.asm): X / Y step the team, red, blue, green, and each time it
-            // goes round past green to red (or back past red) the shade of the team's colour too
-            // (P+'s "team set": a character's second green and so on). The team goes to mm
-            // (ROOM_TEAM) as A on the panel does; the costume follows it below.
+            // TEAMS in the teams' costumes (the user's, 2026-10-21): every player plays in their
+            // team's colour. A on the panel (above) is the only way to change team; X / Y go through
+            // the shades of the team's colour the character has (P+'s "team set": a second green
+            // and so on), wrapping, and stay on the team. (P+'s own TEAM BATTLE steps the team with
+            // them, which the user did not want: a P+ player after another shade changed team, as
+            // in bug #22.) In the rainbow team battle they stay Brawl's, every costume.
             const bool teamColours = teamsOn && (se.roomFlags & PPOM::RF_TEAM_COLORS);
             g_cssTeamColours = teamColours ? 1 : 0;
             u8 step = g_cssTeamStep;
             g_cssTeamStep = 0;
-            if (teamColours && step && me >= 0 && waiting && !roomLockedForNext()) {
-                int cur = se.players[me].roomTeam < PPOM::TEAM_COUNT ? se.players[me].roomTeam : 0;
-                int next = step == 1 ? (cur + 1) % PPOM::TEAM_COUNT : (cur + PPOM::TEAM_COUNT - 1) % PPOM::TEAM_COUNT;
-                if (step == 1 && next == 0) s_teamShade++;
-                if (step != 1 && cur == 0) s_teamShade--;
-                postRoom(PPOM::ROOM_TEAM, (u8)next, 0, NULL);
-                playSE(1);
-            }
             // The costume on the panel is always one of the team's: a costume picked in the rainbow
             // team battle, or the old team's after a team change, goes to the team's colour in the
             // shade picked (one the player already has of the team's colour stays, and is the shade).
@@ -2827,11 +2820,12 @@ namespace OnlineMenu {
                 if (css >= 0 && css < 0x40 && css != 0x28 && css != 0x29 && cur >= 0 && cur < 0x20) {
                     u8 kind = charKindOf(css), team = se.players[me].roomTeam;
                     int shade = OnlineMatch::teamShadeOf(kind, team, (u8)cur);
-                    if (shade >= 0) {
-                        s_teamShade = shade;
-                    } else {
-                        u8 want = OnlineMatch::teamShadeCostume(kind, team, s_teamShade, (u8)cur);
-                        if (want != cur) RoomCss::setMyCostume(want);
+                    if (shade >= 0) s_teamShade = shade;
+                    if (step && waiting) s_teamShade += step == 1 ? 1 : -1;
+                    u8 want = OnlineMatch::teamShadeCostume(kind, team, s_teamShade, (u8)cur);
+                    if (want != cur) {
+                        RoomCss::setMyCostume(want);
+                        if (step) playSE(1);
                     }
                 }
             }
