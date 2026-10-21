@@ -249,6 +249,31 @@ namespace OnlineMatch {
     }
     u8 sssAsl() { return s_sssAsl; }
 
+    // P+'s slot colours for the match (online_menu.cpp, PortValues.slotColour), the same on every
+    // machine: each player's pick on their port, a player without one their port's own colour,
+    // or, when a pick has it (P1 picked blue, P2 did not), the first of red, blue, yellow, green
+    // nobody has. Two who picked the same colour keep it, as offline. A team battle is drawn in
+    // the team colours whatever the lines say (P+'s code reads their defaults then).
+    static void slotColours(const PPOM::Session& se)
+    {
+        s8 colour[4] = {-1, -1, -1, -1};
+        bool used[PPOM::SLOT_COLOURS] = {};
+        for (int i = 0; i < se.numPlayers && i < 4; i++) {
+            u8 c = se.players[i].pv.slotColour;
+            if (!se.players[i].present || c == 0 || c > PPOM::SLOT_COLOURS) continue;
+            colour[i] = (s8)(c - 1);
+            used[c - 1] = true;
+        }
+        for (int i = 0; i < se.numPlayers && i < 4; i++) {
+            if (!se.players[i].present || colour[i] >= 0) continue;
+            int c = i;
+            for (int d = 0; d < 4 && used[c]; d++) c = d;
+            colour[i] = (s8)c;
+            used[c] = true;
+        }
+        OnlineMenu::setSlotColours(colour);
+    }
+
     // Fill gmSelCharData from SESSION and run the Versus setup.
     static bool setupMatch(u8* seq)
     {
@@ -343,6 +368,7 @@ namespace OnlineMatch {
         // machine since the Wi-Fi sequence started (or left over from offline play) gets in.
         // (Team attack is on in P+'s set rule; it only matters in a team battle.)
         OnlineMenu::applyRules();
+        slotColours(se);
         ((VsSetupFn)VS_SETUP)(seq, se.stageKind);
         // The match's controller numbers follow the in-game ports on both machines.
         for (int i = 0; i < se.numPlayers && i < 4; i++) {

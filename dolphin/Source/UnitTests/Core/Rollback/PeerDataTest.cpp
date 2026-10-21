@@ -325,6 +325,18 @@ TEST(PeerData, PortValuesAndNames)
   pv[0x39] = 100;
   SanitizePortValues(pv);
   EXPECT_EQ(pv[0x39], 0);
+  // P+'s slot colour picked on the CSS (1-13, 0 none) is kept; the last byte is padding.
+  pv[0x3A] = 1;
+  pv[0x3B] = 0xFF;
+  SanitizePortValues(pv);
+  EXPECT_EQ(pv[0x3A], 1);
+  EXPECT_EQ(pv[0x3B], 0);
+  pv[0x3A] = MAX_SLOT_COLOUR;
+  SanitizePortValues(pv);
+  EXPECT_EQ(pv[0x3A], 13);
+  pv[0x3A] = 14;
+  SanitizePortValues(pv);
+  EXPECT_EQ(pv[0x3A], 0);
 
   EXPECT_EQ(TruncateName("abc"), "abc");
   EXPECT_EQ(TruncateName(std::string(1000, 'x')).size(), MAX_NAME_LEN);

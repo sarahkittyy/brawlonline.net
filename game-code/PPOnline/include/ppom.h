@@ -314,8 +314,14 @@ namespace PPOM {
         // The stock count picked on the panel's STOCKS box under the rules' stock control (P+'s
         // handicap list: 1 = 10%), 0 none (the rules' stocks); still v8, this was padding.
         u8 stocks;        // 0x39
-        u8 _pad[2];
+        // P+'s slot colour (its Code Menu's PlayerSlotColorChangers, online_menu.cpp) + 1: the
+        // colour the player picked with L / R on the CSS's player box (0-12); 0 none (the port's
+        // own). The match gives the player's port that colour on every machine. Still v8, this
+        // was padding.
+        u8 slotColour;    // 0x3A
+        u8 _pad;
     };                    // 0x3C
+    const u8 SLOT_COLOURS = 13;   // P+'s slot colours 0-12 (PortValues.slotColour 1-13)
 
     // ---- LOCAL ----
 

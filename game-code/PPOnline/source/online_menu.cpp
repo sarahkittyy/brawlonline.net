@@ -470,6 +470,10 @@ namespace OnlineMenu {
         u16Name(out, name);
     }
 
+    static void noteOwnSlotColour();   // P+'s slot colours (below, with the Code Menu)
+    static u8 lockSlotColour();
+    static void cssSlotColours();
+
     static void portValuesOf(int tag, PPOM::PortValues* pv)
     {
         memset(pv, 0, sizeof(*pv));
@@ -496,6 +500,10 @@ namespace OnlineMenu {
         // setup gives this player (online_match.cpp).
         pv.stocks = roomCss() && roomStockControl() ? RoomCss::myStocks() : 0;
         s.lockedStocks = pv.stocks;
+        // P+'s slot colour, P1's line on this CSS (cssSlotColours), which the match gives this
+        // player's port on every machine (online_match.cpp).
+        noteOwnSlotColour();
+        pv.slotColour = lockSlotColour();
         // The coin's CSS id (RANDOM's when on it, which Dolphin shows the others instead of the
         // character drawn: COSTUME_RANDOM), the character drawn.
         PPOM::writeLockIn(true, (u8)coin, charKindOf(css), (u8)(costume | s.startAlt), stagePick, asl,
@@ -550,6 +558,7 @@ namespace OnlineMenu {
     void restoreCss()
     {
         prepareCss();
+        if (s.mode >= 0) cssSlotColours();   // the match's colours out of the lines
         if (s.mode < 0 || s.lastCss < 0) return;
         u32 gg = *(u32*)0x805A00E0;
         if (!isPtr(gg)) return;
@@ -792,6 +801,61 @@ namespace OnlineMenu {
         }
     }
 
+    // P+'s slot colours (QuickLava's PlayerSlotColorChangers, Net-CodeMenu.asm): each port's
+    // colour is a Code Menu value line, found through the pointer at 0x804E02F4 + port * 4 (its
+    // value at +8, 0-12; its default at +0x10, the port's own: 0 red, 1 blue, 2 yellow, 3 green).
+    // L / R on a CSS panel's player box steps that panel's line, Z resets it (the hook at
+    // 0x8068B168, also on the online CSS, where the local panel is area 0: P1's line); the CSS
+    // panels and the match HUD (name tags, stock icons, damage, magnifier) are drawn from them,
+    // a team battle from the defaults. Online every Code Menu line goes to its default
+    // (applyRules), and the match shows each port's line: everyone was red, blue, yellow, green.
+    // Now the player's colour is P1's line on the online CSS (what they had as P1 offline when
+    // they went online, then their L / R there); it travels with the lock-in's port values and
+    // the match setup writes all four lines from SESSION on every machine (OnlineMatch). Purely
+    // visual: only the materials' colour animation reads them.
+    static const u32 SLOT_COLOUR_LINES = 0x804E02F4;
+    static u32 s_ownSlotColour = 0;   // the value P1's line has on the online CSS
+
+    static u32* slotColourLine(int port)
+    {
+        u32 l = *(u32*)(SLOT_COLOUR_LINES + 4 * port);
+        if (l < CODE_MENU || l + 0x14 > CODE_MENU + CODE_MENU_SIZE || (l & 3)) return NULL;
+        return (u32*)l;
+    }
+
+    static void setSlotColour(int port, int colour)
+    {
+        u32* l = slotColourLine(port);
+        if (l) l[2] = colour >= 0 && colour < PPOM::SLOT_COLOURS ? (u32)colour : l[4];
+    }
+
+    // The online CSS's lines: P1's (the local panel's) is the player's colour, the others their
+    // defaults (a match may have left the players' colours in them).
+    static void cssSlotColours()
+    {
+        setSlotColour(0, (int)s_ownSlotColour);
+        for (int i = 1; i < 4; i++) setSlotColour(i, -1);
+    }
+
+    static void noteOwnSlotColour()
+    {
+        u32* l = slotColourLine(0);
+        if (l && l[2] < (u32)PPOM::SLOT_COLOURS) s_ownSlotColour = l[2];
+    }
+
+    // The lock-in's PortValues.slotColour: 0 for the line's default (P1's red, which the player
+    // did not pick: that player gets their port's colour), else the colour + 1.
+    static u8 lockSlotColour()
+    {
+        u32* l = slotColourLine(0);
+        return l && s_ownSlotColour != l[4] ? (u8)(s_ownSlotColour + 1) : 0;
+    }
+
+    void setSlotColours(const s8* colour)
+    {
+        for (int i = 0; i < 4; i++) setSlotColour(i, colour[i]);
+    }
+
     static void codeMenuOff()
     {
         codeMenuSelect("Code Menu Activation", 2);
@@ -831,6 +895,7 @@ namespace OnlineMenu {
         memcpy(s.savedItemSwitch, m + ITEM_SWITCH, sizeof(s.savedItemSwitch));
         s.savedHazard = st[HAZARD];
         s_codeMenuSavedCount = codeMenuLines(0);
+        noteOwnSlotColour();   // the player's P1 colour offline
         s_runbackSaved[0] = *(u8*)CM_RUNBACK_OFF;
         s_runbackSaved[1] = *(u8*)CM_SKIP_RESULTS_OFF;
         s.haveSavedRules = true;
@@ -907,9 +972,12 @@ namespace OnlineMenu {
             r[4] = stocks;
             r[8] = stockTime;
         }
+        // (On the CSS, as when a room's rules menu opens, P1's line has the player's colour.)
+        if (strcmp(Online::currentSceneName(), "scSelctCharacter") == 0) noteOwnSlotColour();
         int lines = codeMenuLines(1);                      // every Code Menu line at its default
         codeMenuOff();                                     // except activation and autosave: OFF
         runbackOff();                                      // and P+'s salty runback
+        cssSlotColours();                                  // and the player's slot colour on P1
         PPOM::g_block.debug.scratch[3] = ((u32)lines << 16) | ((PPOM::g_block.debug.scratch[3] + 1) & 0xFFFF);
     }
 

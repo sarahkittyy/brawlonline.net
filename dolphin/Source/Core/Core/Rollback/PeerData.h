@@ -226,20 +226,26 @@ constexpr size_t PAD_SIZE = 0x40;
 void SanitizePad(u8* pad);
 
 // Port values (ppom.h PortValues, 0x3C bytes) from the peer: only the flag the game knows
-// (PV_TAG) is kept, the rumble byte (local only) and the padding are cleared, and a picked stock
-// count (stock control) above MAX_PICKED_STOCKS is none. The controls layout itself is sanitised
-// by the game (online_match.cpp layoutByte), the same on both machines.
+// (PV_TAG) is kept, the rumble byte (local only) and the padding are cleared, a picked stock
+// count (stock control) above MAX_PICKED_STOCKS and a slot colour above MAX_SLOT_COLOUR are none.
+// The controls layout itself is sanitised by the game (online_match.cpp layoutByte), the same on
+// both machines.
 constexpr u8 MAX_PICKED_STOCKS = 99;
+// P+'s slot colours 0-12 as PortValues.slotColour 1-13 (ppom.h SLOT_COLOURS; 0 none).
+constexpr u8 MAX_SLOT_COLOUR = 13;
 template <size_t N>
 void SanitizePortValues(std::array<u8, N>& pv)
 {
   static_assert(N == 0x3C);
   pv[0] &= 0x01;      // flags: PV_TAG
   pv[1] = 0;          // rumble
-  // The stock count picked on the STOCKS box (the rules' stock control; 0 none), then padding.
+  // The stock count picked on the STOCKS box (the rules' stock control; 0 none).
   if (pv[0x39] > MAX_PICKED_STOCKS)
     pv[0x39] = 0;
-  pv[0x3A] = pv[0x3B] = 0;
+  // The slot colour picked on the CSS (L / R on the player box; 0 none), then padding.
+  if (pv[0x3A] > MAX_SLOT_COLOUR)
+    pv[0x3A] = 0;
+  pv[0x3B] = 0;
 }
 
 std::string TruncateName(const std::string& name);
