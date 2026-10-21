@@ -11,6 +11,7 @@ vi.mock("@/pages/home/overview/overview", () => ({ HomeOverview: () => <div>over
 vi.mock("@/pages/home/spectate/spectate", () => ({ Spectate: () => <div>spectate page</div> }));
 vi.mock("@/pages/home/mods/mods_tab", () => ({ ModsTab: () => <div>mods page</div> }));
 vi.mock("@/pages/home/play_buttons/play_buttons", () => ({ PlayButtons: () => null }));
+vi.mock("@/lib/social/use_room_list", () => ({ useRoomList: () => ({ uid: undefined, query: { data: undefined } }) }));
 
 const Icon = () => null;
 const menuItems = [
