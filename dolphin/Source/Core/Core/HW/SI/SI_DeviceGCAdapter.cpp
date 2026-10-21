@@ -14,6 +14,7 @@
 #include "Core/HW/GCPad.h"
 #include "Core/Harness/Harness.h"
 #include "Core/NetPlayProto.h"
+#include "Core/Rollback/GameplayRollback.h"
 #include "Core/Rollback/MachineSession.h"
 #include "Core/System.h"
 #include "InputCommon/GCAdapter.h"
@@ -41,11 +42,9 @@ GCPadStatus CSIDevice_GCAdapter::GetPadStatus()
 
   // For netplay, the local controllers are polled in GetNetPads(), and
   // the remote controllers receive their status there as well
+  // (A network gameplay session reads them on the throttle's schedule: Gprb::ReadHostPad.)
   if (!NetPlay::IsNetPlayRunning())
-  {
-    pad_status = GCAdapter::Input(m_device_number);
-    Harness::ApplyPadOverride(m_device_number, &pad_status);
-  }
+    pad_status = Gprb::ReadHostPad(m_system, m_device_number, Gprb::HostPadSource::Adapter);
 
   if (NeutralForPlayback(&pad_status))
     return pad_status;
