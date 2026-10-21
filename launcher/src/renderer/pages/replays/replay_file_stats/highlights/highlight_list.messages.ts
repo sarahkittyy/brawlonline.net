@@ -11,6 +11,9 @@ export const HighlightListMessages = {
   couldNotLoad: (error: string) => "Highlights could not be found: {0}",
   keyHint: () => "↑ ↓ or Tab: the next one · Enter: play",
   startingDolphin: () => "Starting the replay...",
+  slowStart: () =>
+    "Still starting. If the Dolphin window is asking something, answer it there; or close it and try again.",
+  dismiss: () => "Dismiss",
   loadingReplay: () => "Loading the replay...",
   fastForwarding: () => "Fast-forwarding to the highlight",
   fastForwardingClip: () => "Fast-forwarding to the clip",
@@ -34,6 +37,7 @@ export const HighlightListMessages = {
   comboMovie: () => "One combo movie",
   renderWithMusic: () => "Render (w/ Music)",
   renderNoMusic: () => "Render (No Music)",
+  resolution: (height: number) => "{0}p",
   withMusic: () => "w/ Music",
   noMusic: () => "No Music",
   renderQueued: () => "Waiting",

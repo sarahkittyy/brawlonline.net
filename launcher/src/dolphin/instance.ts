@@ -139,6 +139,8 @@ export class DolphinInstance extends EventEmitter {
 const STATUS_POLL_MS = 250;
 
 export class PlaybackDolphinInstance extends DolphinInstance {
+  /** Closed to start again (another Project+ release's card): its CLOSED event says so. */
+  replaced = false;
   private commPath: string;
   private lastWriteMs: number;
   private lastOptions: ReplayCommunication | null = null;

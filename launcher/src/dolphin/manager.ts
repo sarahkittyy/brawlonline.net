@@ -1,3 +1,5 @@
+import type { ClipResolution } from "@common/clip_resolution";
+import { clipResolution } from "@common/clip_resolution";
 import { pplusReleaseLabel } from "@common/pplus_releases";
 import { Preconditions } from "@common/preconditions";
 import { DOLPHIN_ONLINE_DIR, PRODUCT_NAME } from "@common/product";
@@ -64,6 +66,7 @@ import { buildModsDolphinArgs } from "./mods/mods_args";
 import { clearModRoomFiles } from "./mods/room_files";
 import { clearTemplateSeededSaves } from "./mods/template_saves";
 import type { ModBuild } from "./mods/types";
+import type { RenderDolphinSettings } from "./netplay_args";
 import { buildNetplayDolphinArgs, buildPlaybackDolphinArgs, buildRenderDolphinArgs } from "./netplay_args";
 import { closeIfIdle } from "./quit_if_idle";
 import type { RenderDolphin, RenderKey } from "./render_queue";
@@ -105,8 +108,8 @@ export class DolphinManager {
   private playbackDolphinInstances = new Map<string, PlaybackDolphinInstance>();
   /** The Project+ release each playback Dolphin's card is on (null: the launcher's own). */
   private playbackReleases = new Map<string, string | null>();
-  /** A render Dolphin's music (it is set on its command line). */
-  private renderMusic = new Map<string, boolean>();
+  /** A render Dolphin's music and video height (set on its command line). */
+  private renderSettings = new Map<string, string>();
   private pplusVersionStore: PPlusVersions | null = null;
   private netplayDolphinInstance: DolphinInstance | null = null;
   private versionCache = new Map<string, string>();
@@ -132,6 +135,11 @@ export class DolphinManager {
   constructor(private settingsManager: SettingsManager) {}
 
   private renderQueue: RenderQueue | null = null;
+
+  /** The rendered videos' height (Settings > Clips). */
+  clipResolution(): ClipResolution {
+    return clipResolution(this.settingsManager.get().settings.clipResolution);
+  }
 
   /** Highlights rendered to video (render_queue.ts), into the Clips folder (Settings > Clips). */
   get renders(): RenderQueue {
@@ -324,7 +332,7 @@ export class DolphinManager {
   async launchPlaybackDolphin(
     id: string,
     replayComm: ReplayCommunication,
-    { pplusRelease = null, render }: { pplusRelease?: string | null; render?: { music: boolean } } = {},
+    { pplusRelease = null, render }: { pplusRelease?: string | null; render?: RenderDolphinSettings } = {},
   ): Promise<void> {
     const release = pplusRelease && pplusRelease !== this.pplusVersions().currentRelease ? pplusRelease : null;
     // A second request waits, then finds the Dolphin the first one opened.
@@ -336,10 +344,10 @@ export class DolphinManager {
    * started by the first request, in its own User folder (`<userData>/render/User`) so that it never
    * shares a NAND or a log with a playback Dolphin open at the same time.
    */
-  launchRenderDolphin({ release, music }: RenderKey): RenderDolphin {
+  launchRenderDolphin({ release, music, resolution }: RenderKey): RenderDolphin {
     const id = "render";
     return {
-      play: (comm) => this.launchPlaybackDolphin(id, comm, { pplusRelease: release, render: { music } }),
+      play: (comm) => this.launchPlaybackDolphin(id, comm, { pplusRelease: release, render: { music, resolution } }),
       readStatus: async () => (await this.playbackDolphinInstances.get(id)?.readStatus()) ?? null,
       isOpen: () => this.playbackDolphinInstances.has(id),
       close: async () => {
@@ -363,7 +371,7 @@ export class DolphinManager {
     id: string,
     replayComm: ReplayCommunication,
     release: string | null,
-    render?: { music: boolean },
+    render?: RenderDolphinSettings,
   ): Promise<void> {
     const playbackInstallation = render ? this._renderInstallation() : this.getInstallation(DolphinLaunchType.PLAYBACK);
     this._assertNotMoving();
@@ -380,11 +388,13 @@ export class DolphinManager {
     if (playbackInstance && (this.playbackReleases.get(id) ?? null) !== release) {
       // Its card is another Project+ release's: the game's files are read at boot, so it starts again.
       log.info(`Restarting the playback Dolphin for Project+ ${release ?? this.pplusVersions().currentRelease}`);
+      playbackInstance.replaced = true;
       await this._stopPlayback(id, playbackInstance);
       playbackInstance = undefined;
     }
-    if (playbackInstance && render && this.renderMusic.get(id) !== render.music) {
-      // (Its music is on its command line.)
+    if (playbackInstance && render && this.renderSettings.get(id) !== JSON.stringify(render)) {
+      // (Its music and resolution are on its command line.)
+      playbackInstance.replaced = true;
       await this._stopPlayback(id, playbackInstance);
       playbackInstance = undefined;
     }
@@ -420,25 +430,27 @@ export class DolphinManager {
         testMode: readTestMode(process.env, app.isPackaged),
       });
       if (render) {
-        params.push(...buildRenderDolphinArgs({ music: render.music }));
-        this.renderMusic.set(id, render.music);
+        params.push(...buildRenderDolphinArgs(render));
+        this.renderSettings.set(id, JSON.stringify(render));
       }
       // The playback NAND must have a Brawl save, or P+ asks to create one before every first replay
       await this._checkBrawlSave(playbackInstallation, storeDir);
       log.info(`Launching playback dolphin at path: ${dolphinPath} ${params.join(" ")}`);
       playbackInstance = new PlaybackDolphinInstance(dolphinPath, params);
+      const created = playbackInstance;
       playbackInstance.on("close", async (exitCode) => {
         this.eventSubject.next({
           type: DolphinEventType.CLOSED,
           instanceId: id,
           dolphinType: DolphinLaunchType.PLAYBACK,
           exitCode,
+          replaced: created.replaced || undefined,
         });
 
         // Remove the instance from the map on close
         this.playbackDolphinInstances.delete(id);
         this.playbackReleases.delete(id);
-        this.renderMusic.delete(id);
+        this.renderSettings.delete(id);
       });
       playbackInstance.on("error", (err: Error) => {
         log.error(err);
@@ -1124,7 +1136,7 @@ export class DolphinManager {
     });
     this.playbackDolphinInstances.delete(id);
     this.playbackReleases.delete(id);
-    this.renderMusic.delete(id);
+    this.renderSettings.delete(id);
   }
 
   /** The playback card of another Project+ release, with the plugin on it (made or checked). */

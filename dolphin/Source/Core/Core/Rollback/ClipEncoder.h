@@ -27,6 +27,12 @@ public:
   virtual std::string Error() const = 0;
 };
 
+// The video's bitrate for its height: about what keeps 60 frames a second sharp in motion.
+inline int VideoBitrate(int height)
+{
+  return height <= 480 ? 5'000'000 : height <= 720 ? 12'000'000 : height <= 1080 ? 20'000'000 : 32'000'000;
+}
+
 std::unique_ptr<Encoder> CreateEncoder(const std::string& path, int width, int height,
                                        int audio_rate, std::string* error);
 }  // namespace Gprb::Clip

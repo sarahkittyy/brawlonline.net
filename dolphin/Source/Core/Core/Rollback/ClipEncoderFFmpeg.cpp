@@ -34,7 +34,6 @@ namespace Gprb::Clip
 #if defined(HAVE_FFMPEG)
 namespace
 {
-constexpr int VIDEO_BITRATE = 12'000'000;
 constexpr int AUDIO_BITRATE = 192'000;
 // Video timestamps: 90 kHz (MP4's usual), from 100 ns units.
 constexpr AVRational VIDEO_TB{1, 90000};
@@ -154,7 +153,7 @@ private:
     m_vctx->height = m_height;
     m_vctx->time_base = VIDEO_TB;
     m_vctx->framerate = AVRational{60000, 1001};
-    m_vctx->bit_rate = VIDEO_BITRATE;
+    m_vctx->bit_rate = VideoBitrate(m_height);
     m_vctx->gop_size = 120;
     m_vctx->pix_fmt = codec->pix_fmts ? codec->pix_fmts[0] : AV_PIX_FMT_YUV420P;
     for (const AVPixelFormat* f = codec->pix_fmts; f && *f != AV_PIX_FMT_NONE; ++f)

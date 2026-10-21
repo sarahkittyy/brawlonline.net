@@ -3,7 +3,7 @@ import os from "os";
 import path from "path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import type { RenderDolphin, RenderKey } from "./render_queue";
+import type { RenderDolphin, RenderJob, RenderKey } from "./render_queue";
 import { renderProgress, RenderQueue, safeFileName } from "./render_queue";
 import type { RenderJobInfo, ReplayCommunication, ReplayPlaybackStatus } from "./types";
 
@@ -104,7 +104,10 @@ describe("RenderQueue", () => {
     await rm(folder, { recursive: true, force: true });
   });
 
-  const setup = (fail?: (key: RenderKey) => string | undefined) => {
+  const setup = (
+    fail?: (key: RenderKey) => string | undefined,
+    concat?: (pieces: string[], output: string) => Promise<void>,
+  ) => {
     const dolphins: FakeDolphin[] = [];
     const events: RenderJobInfo[] = [];
     let idle!: () => void;
@@ -124,6 +127,7 @@ describe("RenderQueue", () => {
         }
       },
       sleep: async () => undefined,
+      concat,
     });
     return { queue, dolphins, events, finished: () => done };
   };
@@ -132,15 +136,22 @@ describe("RenderQueue", () => {
     startFrame,
     endFrame: startFrame + 60,
   });
-  const key = (music: boolean, release: string | null = null): RenderKey => ({ release, music, playAnyway: false });
+  type Item = ReturnType<typeof item>;
+  const job = (name: string, music: boolean, ...pieces: [string | null, Item[]][]): RenderJob => ({
+    name,
+    music,
+    playAnyway: false,
+    resolution: 720,
+    pieces: pieces.map(([release, items]) => ({ release, items })),
+  });
 
   it("renders jobs one after another in one Dolphin while they need the same one", async () => {
     const { queue, dolphins, finished } = setup();
     const wait = finished();
     queue.add([
-      { items: [item(100)], name: "a vs b", key: key(true) },
-      { items: [item(400)], name: "a vs b", key: key(true) },
-      { items: [item(700), item(900)], name: "combo", key: key(false) },
+      job("a vs b", true, [null, [item(100)]]),
+      job("a vs b", true, [null, [item(400)]]),
+      job("combo", false, [null, [item(700), item(900)]]),
     ]);
     await wait;
     const jobs = queue.jobs();
@@ -153,16 +164,16 @@ describe("RenderQueue", () => {
       [true, 2],
       [false, 1],
     ]);
-    expect(dolphins[1].requests[0]).toMatchObject({ mode: "render", queue: [item(700), item(900)] });
+    expect(dolphins[1].requests[0]).toMatchObject({ mode: "render", height: 720, queue: [item(700), item(900)] });
     expect(dolphins.every((d) => !d.open)).toBe(true);
   });
 
   it("reports progress, then an error, and deletes the failed file", async () => {
     const { queue, events, finished } = setup(() => "setup differs");
     const wait = finished();
-    const [job] = queue.add([{ items: [item(100), item(300)], name: "combo", key: key(true) }]);
+    const [added] = queue.add([job("combo", true, [null, [item(100), item(300)]])]);
     await wait;
-    const mine = events.filter((e) => e.jobId === job.jobId);
+    const mine = events.filter((e) => e.jobId === added.jobId);
     expect(mine.map((e) => e.state)).toContain("rendering");
     expect(Math.max(...mine.map((e) => e.progress))).toBeGreaterThan(0.5);
     expect(queue.jobs()[0]).toMatchObject({ state: "error", error: "setup differs" });
@@ -172,13 +183,34 @@ describe("RenderQueue", () => {
   it("cancels a queued job before it starts", async () => {
     const { queue, finished } = setup();
     const wait = finished();
-    const [, second] = queue.add([
-      { items: [item(100)], name: "one", key: key(true) },
-      { items: [item(200)], name: "two", key: key(true) },
-    ]);
+    const [, second] = queue.add([job("one", true, [null, [item(100)]]), job("two", true, [null, [item(200)]])]);
     await queue.cancel(second.jobId);
     await wait;
     expect(queue.jobs().map((j) => j.state)).toEqual(["done", "cancelled"]);
     expect(await readdir(folder)).toEqual(["one.mp4"]);
+  });
+
+  it("renders a combo of two Project+ releases in pieces and joins them into one file", async () => {
+    const joined: string[][] = [];
+    const { queue, dolphins, finished } = setup(undefined, async (pieces, output) => {
+      joined.push(pieces.map((p) => path.basename(p)));
+      await writeFile(output, "joined");
+    });
+    const wait = finished();
+    const [added] = queue.add([
+      job("combo", true, ["v3.2.0", [item(100), item(300)]], [null, [item(500)]], ["v3.2.0", [item(700)]]),
+    ]);
+    await wait;
+    expect(queue.jobs()[0]).toMatchObject({ state: "done", clips: 4, clip: 4, progress: 1 });
+    // A Dolphin for each run of one release, in the list's order.
+    expect(dolphins.map((d) => [d.key.release, d.requests[0].queue?.length])).toEqual([
+      ["v3.2.0", 2],
+      [null, 1],
+      ["v3.2.0", 1],
+    ]);
+    expect(joined).toEqual([["combo.mp4.piece1.mp4", "combo.mp4.piece2.mp4", "combo.mp4.piece3.mp4"]]);
+    // One movie, nothing else left.
+    expect(await readdir(folder)).toEqual(["combo.mp4"]);
+    expect(path.basename(added.name)).toBe("combo");
   });
 });

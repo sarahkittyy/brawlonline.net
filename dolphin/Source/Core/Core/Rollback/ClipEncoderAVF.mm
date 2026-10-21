@@ -23,7 +23,6 @@ namespace Gprb::Clip
 {
 namespace
 {
-constexpr int VIDEO_BITRATE = 12'000'000;
 constexpr int AUDIO_BITRATE = 192'000;
 // Timestamps come in 100 ns units.
 constexpr int32_t TIMESCALE = 10'000'000;
@@ -75,7 +74,7 @@ public:
         AVVideoWidthKey : @(width),
         AVVideoHeightKey : @(height),
         AVVideoCompressionPropertiesKey : @{
-          AVVideoAverageBitRateKey : @(VIDEO_BITRATE),
+          AVVideoAverageBitRateKey : @(VideoBitrate(height)),
           AVVideoProfileLevelKey : AVVideoProfileLevelH264HighAutoLevel,
           AVVideoExpectedSourceFrameRateKey : @60,
           AVVideoMaxKeyFrameIntervalKey : @120,

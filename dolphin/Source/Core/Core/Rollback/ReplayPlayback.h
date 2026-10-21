@@ -28,7 +28,7 @@
 // state "seeking" (on the way to the clip's start; "playing" is the clip, "ended" the last one's end).
 //
 // Ours, `render` (docs/design/highlights.md section 5): highlights as above, written to a video
-// instead of watched: {"mode": "render", "output": "<path>.mp4", "queue": [...]}
+// instead of watched: {"mode": "render", "output": "<path>.mp4", "height": 720, "queue": [...]}
 // (Rollback/ClipRecorder.h). Every clip is a part of the file, one after another. The status adds
 // "render", "output", "rendered" (the clips written so far) and "framesWritten"; "ended" once the
 // file is complete, "error" (the file deleted) when it could not be. A new request gives up a

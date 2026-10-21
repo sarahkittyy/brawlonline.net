@@ -303,7 +303,7 @@ void Presenter::ProcessFrameDumping(u64 ticks) const
   {
     MathUtil::Rectangle<int> target_rect;
     // A replay's clip being rendered (Rollback/ClipRecorder.h): the frame with its aspect ratio
-    // corrected, scaled to fit 1280x720 (the recorder pads it).
+    // corrected, scaled to fit the video's size (the recorder pads it).
     if (Gprb::Clip::WantsFrames())
     {
       const bool allow_stretch = false;

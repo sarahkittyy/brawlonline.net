@@ -1,6 +1,8 @@
+import { CLIP_RESOLUTIONS, clipResolution } from "@common/clip_resolution";
 import Button from "@mui/material/Button";
 import React from "react";
 
+import { Dropdown } from "@/components/form/dropdown";
 import { Toggle } from "@/components/form/toggle";
 import { PathInput } from "@/components/path_input/path_input";
 import { useSetting } from "@/lib/hooks/use_settings";
@@ -19,6 +21,7 @@ export const ClipsSettings = React.memo(() => {
   const [disableDetection, setDisableDetection] = useSetting("disableHighlightDetection");
   const [clipsFolder, setClipsFolder] = useSetting("clipsFolder");
   const [rootSlpPath] = useSetting("rootSlpPath");
+  const [resolution, setResolution] = useSetting("clipResolution");
 
   return (
     <div>
@@ -36,6 +39,13 @@ export const ClipsSettings = React.memo(() => {
           onChange={(checked) => setDisableDetection(checked)}
           label={Messages.disableHighlightDetection()}
           description={Messages.disableHighlightDetectionDescription()}
+        />
+      </SettingItem>
+      <SettingItem name={Messages.resolution()} description={Messages.resolutionDescription()}>
+        <Dropdown
+          value={clipResolution(resolution)}
+          options={CLIP_RESOLUTIONS.map((r) => ({ value: r, label: Messages.resolutionOption(r) }))}
+          onChange={(r) => void setResolution(r)}
         />
       </SettingItem>
       <SettingItem name={Messages.videoFolder()} description={Messages.videoFolderDescription()}>

@@ -65,6 +65,8 @@ export interface SettingsSchema {
   clipOnLrz: boolean;
   disableHighlightDetection: boolean;
   clipsFolder: string | null;
+  /** The rendered videos' height: 480, 720 (the default), 1080 or 1440 (@common/clip_resolution). */
+  clipResolution: number;
 
   // Dolphin settings: the executable of our Dolphin build (null = default, see dolphin/install/paths.ts)
   netplayDolphinPath: string | null;

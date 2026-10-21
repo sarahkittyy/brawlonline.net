@@ -184,19 +184,30 @@ export default function setupDolphinIpc({ dolphinManager }: { dolphinManager: Do
     if (d.result) {
       return d.result;
     }
-    const key = (release: string | null) => ({ release, music, playAnyway: d.playAnyway });
+    const resolution = dolphinManager.clipResolution();
+    const job = (name: string, pieces: RenderJob["pieces"]): RenderJob => ({
+      name,
+      music,
+      playAnyway: d.playAnyway,
+      resolution,
+      pieces,
+    });
     let jobs: RenderJob[];
     if (combo) {
-      // One file; a combo whose replays were recorded on different Project+ releases is one
-      // file per release (a Dolphin plays one release's card), in the order of their first clip.
-      const releases = [...new Set(d.releases)];
-      jobs = releases.map((release, i) => ({
-        items: items.filter((_, j) => d.releases[j] === release),
-        name: releases.length > 1 ? `${names[0]} (part ${i + 1} of ${releases.length})` : names[0],
-        key: key(release),
-      }));
+      // One movie, in the list's order: a run of clips recorded on another Project+ release than
+      // the one before is another piece (a Dolphin plays one release's card), the pieces joined.
+      const pieces: RenderJob["pieces"] = [];
+      items.forEach((item, i) => {
+        const last = pieces[pieces.length - 1];
+        if (last && last.release === d.releases[i]) {
+          last.items.push(item);
+        } else {
+          pieces.push({ release: d.releases[i], items: [item] });
+        }
+      });
+      jobs = [job(names[0], pieces)];
     } else {
-      jobs = items.map((item, i) => ({ items: [item], name: names[i] ?? names[0], key: key(d.releases[i]) }));
+      jobs = items.map((item, i) => job(names[i] ?? names[0], [{ release: d.releases[i], items: [item] }]));
     }
     return { status: "queued" as const, jobs: dolphinManager.renders.add(jobs) };
   });

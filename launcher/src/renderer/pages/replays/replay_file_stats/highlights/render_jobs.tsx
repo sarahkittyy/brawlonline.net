@@ -96,7 +96,9 @@ const RenderJobRow = ({ job, cancel }: { job: RenderJobInfo; cancel: () => void 
         <span className={styles.renderName} title={output ?? name}>
           {name}
         </span>
-        <span className={styles.renderMusic}>{job.music ? Messages.withMusic() : Messages.noMusic()}</span>
+        <span className={styles.renderMusic}>
+          {Messages.resolution(job.resolution)} · {job.music ? Messages.withMusic() : Messages.noMusic()}
+        </span>
         <span className={styles.renderStatus}>{statusText(job)}</span>
         {active && (
           <Button size="small" onClick={cancel}>

@@ -3,11 +3,13 @@
 // started with `-b --render`, no window, its own User folder) through the comm file's `render`
 // mode (Dolphin's ReplayPlayback.h). The Dolphin stays open between jobs that need the same one
 // (the same Project+ release and music), so a next clip of the same replay goes on in its match.
+import type { ClipResolution } from "@common/clip_resolution";
 import type { HighlightPlayItem } from "@replays/highlights/types";
 import electronLog from "electron-log";
-import { mkdir, stat, unlink } from "fs/promises";
+import { mkdir, rename, stat, unlink } from "fs/promises";
 import path from "path";
 
+import { concatMp4 } from "./mp4_concat";
 import type { RenderJobInfo, ReplayCommunication, ReplayPlaybackStatus } from "./types";
 
 const log = electronLog.scope("dolphin/render");
@@ -31,14 +33,24 @@ export type RenderDolphin = {
   close(): Promise<void>;
 };
 
-export type RenderKey = { release: string | null; music: boolean; playAnyway: boolean };
+/** What a render Dolphin is started with: one Project+ release's card, music, the video's height. */
+export type RenderKey = { release: string | null; music: boolean; playAnyway: boolean; resolution: ClipResolution };
 
+/**
+ * One file: its clips in pieces, each piece the clips (in order) of one Project+ release (a Dolphin
+ * plays one release's card); a file of several pieces is rendered piece by piece and joined into
+ * one (mp4_concat.ts).
+ */
 export type RenderJob = {
-  items: HighlightPlayItem[];
   /** The file's name, without folder or extension (made safe and unique here). */
   name: string;
-  key: RenderKey;
+  music: boolean;
+  playAnyway: boolean;
+  resolution: ClipResolution;
+  pieces: { release: string | null; items: HighlightPlayItem[] }[];
 };
+
+const jobItems = (job: RenderJob) => job.pieces.flatMap((p) => p.items);
 
 export type RenderQueueDeps = {
   launch(key: RenderKey): Promise<RenderDolphin>;
@@ -46,6 +58,8 @@ export type RenderQueueDeps = {
   emit(job: RenderJobInfo): void;
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
+  /** Joins a file's pieces (mp4_concat.ts; tests give another). */
+  concat?: (pieces: string[], output: string) => Promise<void>;
 };
 
 /** A name usable as a file name on every OS: no reserved characters, no trailing dot or space, not too long. */
@@ -102,6 +116,9 @@ async function removeOutput(output: string): Promise<void> {
   await Promise.all([output, `${output}.part`].map((f) => unlink(f).catch(() => undefined)));
 }
 
+/** Where piece `i` of a file of several is written before they are joined. */
+const pieceFile = (output: string, i: number) => `${output}.piece${i + 1}.mp4`;
+
 const FINISHED: RenderJobInfo["state"][] = ["done", "error", "cancelled"];
 
 export class RenderQueue {
@@ -116,15 +133,17 @@ export class RenderQueue {
   /** Queues `jobs`; their states come as `emit` calls (and from `jobs()`). */
   add(jobs: RenderJob[]): RenderJobInfo[] {
     const added = jobs.map((job) => {
+      const items = jobItems(job);
       const info: RenderJobInfo = {
         jobId: `render-${Date.now().toString(36)}-${this.nextId++}`,
         name: safeFileName(job.name),
         output: null,
-        paths: [...new Set(job.items.map((i) => i.path))],
-        clips: job.items.length,
+        paths: [...new Set(items.map((i) => i.path))],
+        clips: items.length,
         clip: 0,
-        music: job.key.music,
-        release: job.key.release,
+        music: job.music,
+        resolution: job.resolution,
+        release: job.pieces[0]?.release ?? null,
         state: "queued",
         progress: 0,
       };
@@ -204,91 +223,135 @@ export class RenderQueue {
 
   private async render(entry: Entry) {
     const { job, info } = entry;
-    const now = this.deps.now ?? Date.now;
-    const sleep = this.deps.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+    const items = jobItems(job);
     let output: string | null = null;
+    const pieces: string[] = [];
     try {
       this.update(entry, { state: "starting" });
       output = await this.uniqueOutput(info.name);
       this.update(entry, { output });
-      const open = this.dolphin;
-      const same =
-        open != null &&
-        open.d.isOpen() &&
-        open.key.release === job.key.release &&
-        open.key.music === job.key.music &&
-        open.key.playAnyway === job.key.playAnyway;
-      if (!same) {
-        await this.closeDolphin();
-        this.dolphin = { key: job.key, d: await this.deps.launch(job.key) };
-      }
-      const dolphin = this.dolphin!.d;
-      const commandId = info.jobId;
-      await dolphin.play({
-        mode: "render",
-        output,
-        queue: job.items,
-        commandId,
-        playAnyway: job.key.playAnyway || undefined,
-      });
-      let lastText = "";
-      let lastChange = now();
-      for (;;) {
-        if (entry.cancelled) {
-          // A render is only given up with its Dolphin; then the file is deleted.
-          await this.closeDolphin();
-          await removeOutput(output);
+      let before = 0;
+      for (const [i, piece] of job.pieces.entries()) {
+        const file = job.pieces.length > 1 ? pieceFile(output, i) : output;
+        if (job.pieces.length > 1) {
+          pieces.push(file);
+        }
+        const key: RenderKey = {
+          release: piece.release,
+          music: job.music,
+          playAnyway: job.playAnyway,
+          resolution: job.resolution,
+        };
+        const commandId = `${info.jobId}-${i + 1}`;
+        if (!(await this.renderPiece(entry, key, piece.items, file, commandId, before, items.length))) {
+          // Cancelled: its Dolphin is closed.
+          await Promise.all([removeOutput(output), ...pieces.map(removeOutput)]);
           this.update(entry, { state: "cancelled" });
           return;
         }
-        if (!dolphin.isOpen()) {
-          throw new Error("Dolphin closed while rendering.");
-        }
-        const status = await dolphin.readStatus();
-        const text = JSON.stringify(status);
-        if (text !== lastText) {
-          lastText = text;
-          lastChange = now();
-        } else if (now() - lastChange > STALL_MS) {
-          throw new Error("The render stopped making progress.");
-        }
-        if (status?.commandId === commandId) {
-          if (status.state === "error") {
-            throw new Error(status.error || "Dolphin could not render it.");
-          }
-          if (status.state === "ended") {
-            const size = await stat(output).then(
-              (s) => s.size,
-              () => 0,
-            );
-            if (size <= 0) {
-              throw new Error("Dolphin finished without writing the video.");
-            }
-            this.update(entry, { state: "done", progress: 1, clip: job.items.length });
-            log.info(`Rendered ${output} (${job.items.length} clips, ${size} bytes)`);
-            return;
-          }
-          const progress = renderProgress(status, job.items.length);
-          const clip = Math.min(job.items.length, Math.max(status.index ?? 0, status.rendered ?? 0) + 1);
-          if (info.state !== "rendering" || Math.abs(progress - info.progress) >= 0.005 || clip !== info.clip) {
-            this.update(entry, { state: "rendering", progress, clip });
-          }
-        }
-        await sleep(POLL_MS);
+        before += piece.items.length;
       }
+      if (pieces.length) {
+        // One movie: the pieces joined (written as .part, then named), then gone.
+        await (this.deps.concat ?? concatMp4)(pieces, `${output}.part`);
+        await rename(`${output}.part`, output);
+        await Promise.all(pieces.map(removeOutput));
+      }
+      const size = await stat(output).then(
+        (s) => s.size,
+        () => 0,
+      );
+      if (size <= 0) {
+        throw new Error("Dolphin finished without writing the video.");
+      }
+      this.update(entry, { state: "done", progress: 1, clip: items.length });
+      log.info(`Rendered ${output} (${items.length} clips in ${job.pieces.length} pieces, ${size} bytes)`);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       log.error(`Render ${info.jobId} failed: ${message}`);
       // A Dolphin that failed a render may be anywhere: the next job starts a new one.
       await this.closeDolphin();
       if (output) {
-        await removeOutput(output);
+        await Promise.all([removeOutput(output), ...pieces.map(removeOutput)]);
       }
       this.update(entry, entry.cancelled ? { state: "cancelled" } : { state: "error", error: message });
     } finally {
       if (output) {
         this.outputs.delete(output);
       }
+    }
+  }
+
+  /**
+   * Renders `items` to `file` in the render Dolphin for `key` (`before` of the job's `total` clips
+   * done already, for the progress). False when the job was cancelled meanwhile.
+   */
+  private async renderPiece(
+    entry: Entry,
+    key: RenderKey,
+    items: HighlightPlayItem[],
+    file: string,
+    commandId: string,
+    before: number,
+    total: number,
+  ): Promise<boolean> {
+    const { info } = entry;
+    const now = this.deps.now ?? Date.now;
+    const sleep = this.deps.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+    const open = this.dolphin;
+    const same =
+      open != null &&
+      open.d.isOpen() &&
+      open.key.release === key.release &&
+      open.key.music === key.music &&
+      open.key.playAnyway === key.playAnyway &&
+      open.key.resolution === key.resolution;
+    if (!same) {
+      await this.closeDolphin();
+      this.dolphin = { key, d: await this.deps.launch(key) };
+    }
+    const dolphin = this.dolphin!.d;
+    await dolphin.play({
+      mode: "render",
+      output: file,
+      height: key.resolution,
+      queue: items,
+      commandId,
+      playAnyway: key.playAnyway || undefined,
+    });
+    let lastText = "";
+    let lastChange = now();
+    for (;;) {
+      if (entry.cancelled) {
+        // A render is only given up with its Dolphin.
+        await this.closeDolphin();
+        return false;
+      }
+      if (!dolphin.isOpen()) {
+        throw new Error("Dolphin closed while rendering.");
+      }
+      const status = await dolphin.readStatus();
+      const text = JSON.stringify(status);
+      if (text !== lastText) {
+        lastText = text;
+        lastChange = now();
+      } else if (now() - lastChange > STALL_MS) {
+        throw new Error("The render stopped making progress.");
+      }
+      if (status?.commandId === commandId) {
+        if (status.state === "error") {
+          throw new Error(status.error || "Dolphin could not render it.");
+        }
+        if (status.state === "ended") {
+          return true;
+        }
+        const progress = (before + renderProgress(status, items.length) * items.length) / total;
+        const clip = before + Math.min(items.length, Math.max(status.index ?? 0, status.rendered ?? 0) + 1);
+        if (info.state !== "rendering" || Math.abs(progress - info.progress) >= 0.005 || clip !== info.clip) {
+          this.update(entry, { state: "rendering", progress, clip });
+        }
+      }
+      await sleep(POLL_MS);
     }
   }
 }

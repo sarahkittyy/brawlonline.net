@@ -60,6 +60,8 @@ struct Request
   // Rendering (`render`): highlights whose clips are written, one after another, to `output`.
   bool render = false;
   std::string output;
+  // The video's height (Settings > Clips; ClipRecorder.h).
+  int height = Clip::DEFAULT_HEIGHT;
 };
 
 // A spectated game's end: how long the last frame shows before Dolphin closes.
@@ -180,6 +182,8 @@ std::optional<Request> ReadComm(const std::string& path)
   if (r.render)
   {
     r.output = str("output");
+    if (const auto h = o.find("height"); h != o.end() && h->second.is<double>())
+      r.height = static_cast<int>(h->second.get<double>());
     if (r.output.size() > 4096)
       r.output.clear();
   }
@@ -585,7 +589,7 @@ std::optional<std::string> OpenRender()
     if (Config::GetLayer(layer))
       Config::Set(layer, Config::GFX_HACK_IMMEDIATE_XFB, false);
   }
-  if (auto e = Clip::Open(s_request.output))
+  if (auto e = Clip::Open(s_request.output, s_request.height))
     return e;
   s_render_open = true;
   return std::nullopt;

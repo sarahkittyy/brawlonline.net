@@ -12,6 +12,8 @@ export type ReplayCommunication = {
    */
   mode: "normal" | "mirror" | "queue" | "highlights" | "render"; // default normal
   output?: string;
+  /** Ours, `render`: the video's height (Settings > Clips). */
+  height?: number;
   replay?: string; // path to the replay if in normal or mirror mode
   startFrame?: number; // when to start watching the replay
   endFrame?: number; // when to stop watching the replay
@@ -86,6 +88,8 @@ export type RenderJobInfo = {
   clips: number;
   clip: number;
   music: boolean;
+  /** The video's height. */
+  resolution: number;
   release: string | null;
   state: "queued" | "starting" | "rendering" | "done" | "error" | "cancelled";
   /** 0..1 */
@@ -195,6 +199,8 @@ export type DolphinPlaybackClosedEvent = {
   dolphinType: DolphinLaunchType.PLAYBACK;
   instanceId: string;
   exitCode: number | null;
+  /** Closed by the launcher to start it again (on another Project+ release's card), not by the player. */
+  replaced?: boolean;
 };
 
 export type DolphinDownloadStartEvent = {

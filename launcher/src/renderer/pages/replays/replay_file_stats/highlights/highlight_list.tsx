@@ -8,7 +8,8 @@
  * any replays (the Replays > Highlights tab's, all of them).
  */
 import type { ReplayPlaybackStatus } from "@dolphin/types";
-import { DolphinEventType } from "@dolphin/types";
+import { DolphinEventType, DolphinLaunchType } from "@dolphin/types";
+import CloseIcon from "@mui/icons-material/Close";
 import ContentCutIcon from "@mui/icons-material/ContentCut";
 import MovieIcon from "@mui/icons-material/Movie";
 import MusicOffIcon from "@mui/icons-material/MusicOff";
@@ -17,6 +18,7 @@ import PlaylistPlayIcon from "@mui/icons-material/PlaylistPlay";
 import Button from "@mui/material/Button";
 import Checkbox from "@mui/material/Checkbox";
 import FormControlLabel from "@mui/material/FormControlLabel";
+import IconButton from "@mui/material/IconButton";
 import LinearProgress from "@mui/material/LinearProgress";
 import type { HighlightPlayer, ReplayClip, ReplayHighlight, ReplayHighlights } from "@replays/highlights/types";
 import { useQuery } from "@tanstack/react-query";
@@ -37,6 +39,9 @@ import { clipVideoName, comboVideoName, multiGameComboName } from "./render_name
 import { ReplayVersionNote } from "./replay_version_note";
 
 type Row = ReplayHighlight | ReplayClip;
+
+/** Starting for this long: the banner says where to look. */
+const STARTING_HINT_MS = 20_000;
 
 /** A row: which replay it is of (its players, when it was played) and what of it. */
 export type HighlightEntry = {
@@ -154,6 +159,25 @@ export const HighlightRows = ({
     setTicked(new Set());
     setCombo(false);
   }, [resetKey]);
+
+  // The playback Dolphin closed (the player closed its window, or it crashed) before or while
+  // playing: nothing is coming any more, so the banner goes. (Not when the launcher closed it to
+  // start it again on another Project+ release's card: the request goes on there.)
+  useEffect(
+    () =>
+      dolphinService.onEvent(DolphinEventType.CLOSED, (event) => {
+        if (
+          event.dolphinType === DolphinLaunchType.PLAYBACK &&
+          "instanceId" in event &&
+          event.instanceId === "playback" &&
+          !event.replaced
+        ) {
+          setRequest(null);
+          setStatus(null);
+        }
+      }),
+    [dolphinService],
+  );
 
   // Only what Dolphin says about the last request (an older one's status may still come).
   const commandId = request?.commandId;
@@ -342,7 +366,15 @@ export const HighlightRows = ({
         </div>
       )}
       <RenderJobs jobs={jobs} />
-      <PlaybackBanner request={request} status={status} entries={entries} />
+      <PlaybackBanner
+        request={request}
+        status={status}
+        entries={entries}
+        onDismiss={() => {
+          setRequest(null);
+          setStatus(null);
+        }}
+      />
       {emptyNote && <div className={styles.note}>{emptyNote}</div>}
       {!hideRows && (
         <div className={styles.list} ref={listRef}>
@@ -458,25 +490,57 @@ const PlaybackBanner = ({
   request,
   status,
   entries,
+  onDismiss,
 }: {
   request: Request | null;
   status: ReplayPlaybackStatus | null;
   entries: HighlightEntry[];
+  onDismiss: () => void;
 }) => {
+  // How long it has been starting (a Dolphin answering a question in its window, a slow PC).
+  const [slow, setSlow] = useState(false);
+  const starting = !!request && (!status || ["loading", "idle", "waiting"].includes(status.state ?? ""));
+  useEffect(() => {
+    setSlow(false);
+    if (!starting) {
+      return;
+    }
+    const timer = setTimeout(() => setSlow(true), STARTING_HINT_MS);
+    return () => clearTimeout(timer);
+  }, [starting, request?.commandId]);
   if (!request) {
     return null;
   }
+  const dismiss = (
+    <IconButton size="small" className={styles.dismiss} onClick={onDismiss} aria-label={Messages.dismiss()}>
+      <CloseIcon fontSize="small" />
+    </IconButton>
+  );
   const index = status?.index ?? 0;
   const row = entries[request.from + index]?.row;
   const of = request.count > 1 ? ` · ${Messages.ofTotal(index + 1, request.count)}` : "";
   const state = status?.state;
   // (A refused replay's error stays in the status after its match has gone.)
   if (state === "error" || (status?.error && state !== "seeking" && state !== "playing")) {
-    return <div className={`${styles.banner} ${styles.error}`}>{Messages.playbackError(status?.error ?? "")}</div>;
+    return (
+      <div className={`${styles.banner} ${styles.error}`}>
+        <div className={styles.bannerText}>
+          {Messages.playbackError(status?.error ?? "")}
+          {dismiss}
+        </div>
+      </div>
+    );
   }
   // Its match ended before the clip came (a replay that plays differently here, played anyway).
   if (state === "ended" && status?.frame != null && status.clipStart != null && status.frame < status.clipStart) {
-    return <div className={`${styles.banner} ${styles.error}`}>{Messages.endedBefore()}</div>;
+    return (
+      <div className={`${styles.banner} ${styles.error}`}>
+        <div className={styles.bannerText}>
+          {Messages.endedBefore()}
+          {dismiss}
+        </div>
+      </div>
+    );
   }
   if (!status || state === "loading" || state === "idle" || state === "waiting") {
     return (
@@ -484,7 +548,9 @@ const PlaybackBanner = ({
         <div className={styles.bannerText}>
           {status && state === "waiting" ? Messages.loadingReplay() : Messages.startingDolphin()}
           {of}
+          {dismiss}
         </div>
+        {slow && <div className={styles.bannerHint}>{Messages.slowStart()}</div>}
         <LinearProgress className={styles.progress} />
       </div>
     );
@@ -502,6 +568,7 @@ const PlaybackBanner = ({
           {of}
           {/* (Back to an earlier one: a keyframe is put back first, in a moment.) */}
           {frame <= target && <span className={styles.frames}>{Messages.frameOf(Math.max(frame, 0), target)}</span>}
+          {dismiss}
         </div>
         <LinearProgress
           key={`seek-${request.commandId}-${index}`}
@@ -522,6 +589,7 @@ const PlaybackBanner = ({
       <div className={styles.bannerText}>
         {state === "ended" ? Messages.done() : Messages.playing()}
         {of}
+        {dismiss}
       </div>
       <LinearProgress
         key={`play-${request.commandId}-${index}`}

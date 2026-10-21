@@ -31,7 +31,6 @@ namespace Gprb::Clip
 {
 namespace
 {
-constexpr UINT32 VIDEO_BITRATE = 12'000'000;  // 720p60 that stays sharp in motion
 constexpr UINT32 AUDIO_BYTES_PER_SECOND = 24'000;  // 192 kbit/s AAC
 
 std::string HrText(HRESULT hr)
@@ -154,7 +153,7 @@ private:
     MFCreateMediaType(&out);
     out->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Video);
     out->SetGUID(MF_MT_SUBTYPE, MFVideoFormat_H264);
-    out->SetUINT32(MF_MT_AVG_BITRATE, VIDEO_BITRATE);
+    out->SetUINT32(MF_MT_AVG_BITRATE, static_cast<UINT32>(VideoBitrate(m_height)));
     out->SetUINT32(MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive);
     out->SetUINT32(MF_MT_MPEG2_PROFILE, eAVEncH264VProfile_High);
     MFSetAttributeSize(out.Get(), MF_MT_FRAME_SIZE, m_width, m_height);

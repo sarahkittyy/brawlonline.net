@@ -1,3 +1,4 @@
+import type { ClipResolution } from "@common/clip_resolution";
 import type { TestModeOptions } from "@common/test_mode";
 import path from "path";
 
@@ -92,15 +93,20 @@ export function buildPlaybackDolphinArgs(input: NetplayArgsInput): string[] {
   return args;
 }
 
+export type RenderDolphinSettings = { music: boolean; resolution: ClipResolution };
+
+/** The internal resolution a video's height needs: the game's 528 lines scaled to at least it. */
+export const renderInternalResolution = (resolution: ClipResolution) => Math.ceil(resolution / 528);
+
 /**
  * What a render Dolphin adds to the playback Dolphin's command line (render_queue.ts): no window at
  * all (`-b --render`: the comm file's `render` mode writes the video), as fast as the PC goes
  * (`[Core] EmulationSpeed` 0: frames are never dropped, the video is timed by the game), silent
- * (`[DSP] Volume`: the video gets the game's samples before the volume), not fullscreen, at 2x
- * internal resolution (the video is 1280x720), and the job's music (`[Online] Music`: off applies
- * P+'s Music Off code).
+ * (`[DSP] Volume`: the video gets the game's samples before the volume), not fullscreen, at the
+ * internal resolution the video's height needs (480: 1x, 720 and 1080: 2x and 3x... ), and the
+ * job's music (`[Online] Music`: off applies P+'s Music Off code).
  */
-export function buildRenderDolphinArgs({ music }: { music: boolean }): string[] {
+export function buildRenderDolphinArgs({ music, resolution }: RenderDolphinSettings): string[] {
   return [
     "-b",
     "--render",
@@ -111,7 +117,7 @@ export function buildRenderDolphinArgs({ music }: { music: boolean }): string[] 
     "-C",
     "Dolphin.Display.Fullscreen=False",
     "-C",
-    "Graphics.Settings.InternalResolution=2",
+    `Graphics.Settings.InternalResolution=${renderInternalResolution(resolution)}`,
     "-C",
     `Dolphin.Online.Music=${music ? "True" : "False"}`,
   ];

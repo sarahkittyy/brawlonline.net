@@ -85,18 +85,37 @@ for every file system, and ` (2)`, ` (3)`... when taken.
 Project+ versions (pplus-versions.md): a render request is decided as a play request is
 (`DolphinManager.decideRenderReleases`), so a v3.2.0 replay asks first ("This clip is from Project+
 v3.2.0", "Download and render"), with no "anyway": a clip renders on its own release or not at all
-(`withRenderVersion`). A combo whose replays are on different releases (the Highlights tab's)
-becomes one file per release ("... (part 1 of 2)"): a Dolphin plays one release's card.
+(`withRenderVersion`). A combo is always one movie (the user, 2026-10-21: "I don't want two video
+files"). When its replays are on different releases (the Highlights tab's), each run of clips of
+one release in the list's order is a piece rendered in that release's Dolphin (a Dolphin plays one
+release's card) to `<name>.mp4.pieceN.mp4`, and the pieces are joined into `<name>.mp4` without
+re-encoding (`mp4_concat.ts`), then deleted.
+
+**Joining** (`mp4_concat.ts`): each track's samples one piece after another, copied byte for byte
+into one `mdat` after a rebuilt `moov` (one sample a chunk, 64-bit offsets, the tracks
+interleaved by time; ftyp+moov+mdat, so it plays as it loads). The three encoders' files differ:
+Media Foundation's have no edit list and no B-frames; AVFoundation's and x264's have edit lists for
+the encoder's delay (video, B-frames) and the AAC priming and padding, and end their last video
+sample's decode duration short of its frame. So: a piece's video lasts from its first frame shown
+to its last one's end (its last decode duration made up) and is shown from where the first piece's
+first frame is (composition offsets shifted); a later piece's audio drops the priming samples its
+edit list skipped, and every piece's audio ends where its edit list ends (last sample shortened);
+the first piece's edit list stays, covering the whole. A piece whose sample description differs
+adds an `stsd` entry. Measured on real renders joined with themselves: Windows, macOS and Linux
+2 and 3 pieces, every frame decoded (966 = 2 x 483, 1449 = 3 x 483), no decode error; audio
+within 3 ms of the video after 3 pieces on Windows and macOS; on Linux the video runs one frame
+(17 ms) longer per piece than its audio (Dolphin's video has a frame more than its segment).
 
 `render_queue.ts` (main) runs the jobs one at a time in the **render Dolphin**: the playback
 Dolphin's command line plus `-b --render` (no window), `[Core] EmulationSpeed` 0 (as fast as the PC
 goes: frames are never dropped, the video is timed by the game), `[DSP] Volume` 0 (the video gets
-the samples before the volume), not fullscreen, `Graphics InternalResolution` 2, and the job's
-`[Online] Music` (`buildRenderDolphinArgs`). It has its own User folder, `<userData>/render/User`
+the samples before the volume), not fullscreen, the internal resolution the video's height needs
+(`Graphics InternalResolution`: 480p 1x, 720p 2x, 1080p and 1440p 3x: the game's 528 lines scaled
+to at least the video's), and the job's `[Online] Music` (`buildRenderDolphinArgs`). It has its own User folder, `<userData>/render/User`
 (its own NAND, Brawl save seeded as the playback one's), so it never shares one with a playback
 Dolphin open at the same time; the SD card is shared read-only as for playback. The Dolphin stays
-open between jobs with the same release and music (a next one of the same replay goes on in its
-match) and closes when the queue is empty. Progress is read from the comm status every 250 ms: per
+open between jobs with the same release, music and resolution (a next one of the same replay goes
+on in its match) and closes when the queue is empty. Progress is read from the comm status every 250 ms: per
 clip, its fast-forward weighted at a third of a rendered frame (they run ~600 against ~200 a second
 here) and the clip itself. A job fails when Dolphin says so, closes, finishes without a file, or
 says nothing new for 3 minutes; Cancel (and a failure) closes the render Dolphin and deletes the
@@ -112,8 +131,9 @@ its match. The status adds `render`, `output`, `rendered` (clips written) and `f
 can't be played, the match ending before a clip); a new request or Dolphin's shutdown gives up a
 render still going, deleting its file.
 
-`Core/Rollback/ClipRecorder.h` (`Gprb::Clip`): the file is H.264 1280x720 at 60000/1001 (12 Mbit/s)
-and AAC 48 kHz stereo (192 kbit/s) in MP4, written as `<name>.mp4.part` and named `<name>.mp4` once
+`Core/Rollback/ClipRecorder.h` (`Gprb::Clip`): the file is H.264 at 60000/1001, 16:9 at the height
+the comm file's `height` says (Settings > Clips > Video Resolution: 854x480 at 5 Mbit/s, 1280x720 at
+12, the default, 1920x1080 at 20, 2560x1440 at 32), and AAC 48 kHz stereo (192 kbit/s) in MP4, written as `<name>.mp4.part` and named `<name>.mp4` once
 complete (a render cut short, e.g. the launcher closed, leaves no half-written video under the
 real name; Cancel deletes both). The session (`SetPlaybackClip`'s `record`) opens a
 segment when the clip's first frame runs after its fast-forward and marks its end, in emulated
@@ -182,3 +202,16 @@ once, the others afterwards one replay at a time in the highlights worker with 5
 done (the tab: "Finding highlights in your replays... 12 of 120"). Opening the tab again starts
 over: a fill still running stops at its next replay. Measured here: 54 replays none of which were
 cached, all found in 5.4 s.
+
+## 7. Settings > Clips > Video Resolution, and a playback that never starts (2026-10-21)
+
+Video Resolution (the user's request): a dropdown of 480p, 720p (the default), 1080p and 1440p
+(`clipResolution`, @common/clip_resolution). A render job takes it when queued; its row says it
+("720p · w/ Music").
+
+"Starting the replay..." could stay forever (the user, 2026-10-21): the playback Dolphin's window
+closed while it was starting (seen here: two closed while booting, the banner stayed), so no
+status ever came. The playback Dolphin's CLOSED event now clears the list's banner, unless the
+launcher closed it itself to start it again on another Project+ release's card (`replaced`: the
+request goes on there). The banner has a close button, and after 20 s of starting it adds "Still
+starting. If the Dolphin window is asking something, answer it there; or close it and try again."

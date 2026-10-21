@@ -45,7 +45,7 @@ struct Job
     Video,
     Audio,
   } kind;
-  std::vector<u8> video;  // WIDTH x HEIGHT, BGRA, top-down
+  std::vector<u8> video;  // the video's width x height, BGRA, top-down
   std::vector<s16> audio;  // left, right, ... at AUDIO_RATE
   s64 pts = 0;
 };
@@ -54,9 +54,11 @@ class Writer
 {
 public:
   // Starts the encoder thread, which makes the encoder for `path`; the error when it could not.
-  std::optional<std::string> Start(const std::string& path)
+  std::optional<std::string> Start(const std::string& path, int width, int height)
   {
     m_path = path;
+    m_width = width;
+    m_height = height;
     std::promise<std::optional<std::string>> made;
     auto result = made.get_future();
     m_thread = std::thread([this, made = std::move(made)]() mutable { Run(std::move(made)); });
@@ -113,7 +115,7 @@ private:
     // with it) leaves no half-written video under the real name.
     const std::string part = m_path + ".part";
     std::string error;
-    std::unique_ptr<Encoder> encoder = CreateEncoder(part, WIDTH, HEIGHT, AUDIO_RATE, &error);
+    std::unique_ptr<Encoder> encoder = CreateEncoder(part, m_width, m_height, AUDIO_RATE, &error);
     if (!encoder)
     {
       File::Delete(part);
@@ -144,7 +146,7 @@ private:
         continue;
       if (job.kind == Job::Kind::Video)
       {
-        ok = encoder->WriteVideo(job.video.data(), WIDTH * 4, job.pts, FRAME_UNITS);
+        ok = encoder->WriteVideo(job.video.data(), m_width * 4, job.pts, FRAME_UNITS);
         if (ok)
           m_frames_written.fetch_add(1, std::memory_order_relaxed);
       }
@@ -180,6 +182,7 @@ private:
   }
 
   std::string m_path;
+  int m_width = 0, m_height = 0;
   std::thread m_thread;
   std::mutex m_mutex;
   std::condition_variable m_work;
@@ -196,6 +199,9 @@ private:
 std::mutex s_mutex;
 std::unique_ptr<Writer> s_writer;
 std::atomic<bool> s_open{false};
+// The open file's size (set before its first frame can come).
+std::atomic<int> s_width{1280};
+std::atomic<int> s_height{DEFAULT_HEIGHT};
 
 // The open segment (under s_mutex).
 struct Segment
@@ -242,12 +248,22 @@ void FlushAudio(bool all)
 }
 }  // namespace
 
-std::optional<std::string> Open(const std::string& path)
+int WidthFor(int height)
+{
+  return (height * 16 / 9 + 1) & ~1;
+}
+
+std::optional<std::string> Open(const std::string& path, int height)
 {
   Close(true);
+  if (height != 480 && height != 720 && height != 1080 && height != 1440)
+    height = DEFAULT_HEIGHT;
+  const int width = WidthFor(height);
   auto writer = std::make_unique<Writer>();
-  if (auto error = writer->Start(path))
+  if (auto error = writer->Start(path, width, height))
     return error;
+  s_width = width;
+  s_height = height;
   std::lock_guard lk(s_mutex);
   s_writer = std::move(writer);
   s_offset = 0;
@@ -348,14 +364,14 @@ void FitSize(int src_width, int src_height, int* width, int* height)
 {
   if (src_width <= 0 || src_height <= 0)
   {
-    *width = WIDTH;
-    *height = HEIGHT;
+    *width = s_width;
+    *height = s_height;
     return;
   }
-  const double scale = std::min(static_cast<double>(WIDTH) / src_width,
-                                static_cast<double>(HEIGHT) / src_height);
-  *width = std::clamp(static_cast<int>(src_width * scale + 0.5) & ~1, 2, WIDTH);
-  *height = std::clamp(static_cast<int>(src_height * scale + 0.5) & ~1, 2, HEIGHT);
+  const int out_w = s_width, out_h = s_height;
+  const double scale = std::min(static_cast<double>(out_w) / src_width, static_cast<double>(out_h) / src_height);
+  *width = std::clamp(static_cast<int>(src_width * scale + 0.5) & ~1, 2, out_w);
+  *height = std::clamp(static_cast<int>(src_height * scale + 0.5) & ~1, 2, out_h);
 }
 
 void AddVideoFrame(const u8* rgba, int width, int height, int stride, u64 ticks)
@@ -376,13 +392,14 @@ void AddVideoFrame(const u8* rgba, int width, int height, int stride, u64 ticks)
   }
   // Centred on black, RGBA -> BGRA.
   Job job{Job::Kind::Video};
-  job.video.assign(static_cast<size_t>(WIDTH) * HEIGHT * 4, 0);
-  const int w = std::min(width, WIDTH), h = std::min(height, HEIGHT);
-  const int x0 = (WIDTH - w) / 2, y0 = (HEIGHT - h) / 2;
+  const int out_w = s_width, out_h = s_height;
+  job.video.assign(static_cast<size_t>(out_w) * out_h * 4, 0);
+  const int w = std::min(width, out_w), h = std::min(height, out_h);
+  const int x0 = (out_w - w) / 2, y0 = (out_h - h) / 2;
   for (int y = 0; y < h; ++y)
   {
     const u8* src = rgba + static_cast<size_t>(y) * stride;
-    u8* dst = job.video.data() + (static_cast<size_t>(y0 + y) * WIDTH + x0) * 4;
+    u8* dst = job.video.data() + (static_cast<size_t>(y0 + y) * out_w + x0) * 4;
     for (int x = 0; x < w; ++x, src += 4, dst += 4)
     {
       dst[0] = src[2];
