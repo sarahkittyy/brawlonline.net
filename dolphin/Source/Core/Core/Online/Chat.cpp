@@ -47,6 +47,8 @@ constexpr size_t MAX_NAME_BYTES = 64;
 constexpr size_t MAX_CODE_BYTES = 32;
 constexpr size_t MAX_ERROR_BYTES = 200;
 constexpr size_t MAX_REASON_BYTES = 200;
+// A notice from this machine (AddNotice), e.g. the SD card one with a name and a size.
+constexpr size_t MAX_NOTICE_CODE_POINTS = 300;
 constexpr size_t MAX_HIDDEN_FILE = 64 * 1024;
 constexpr size_t MAX_PENDING = 8;
 constexpr size_t MAX_OUTBOX = 32;
@@ -1071,7 +1073,8 @@ SendResult Send(const std::string& text)
 
 void AddNotice(std::string_view text)
 {
-  auto clean = ChatText::Clean(text);
+  // Our own text, not a typed message: the 100-character cap cut the SD card notice short.
+  auto clean = ChatText::Clean(text, MAX_NOTICE_CODE_POINTS, MAX_NOTICE_CODE_POINTS * 4);
   if (!clean)
     return;
   std::lock_guard lk(s_mutex);
