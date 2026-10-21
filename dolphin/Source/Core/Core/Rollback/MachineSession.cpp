@@ -66,6 +66,7 @@
 #include "Core/HW/WiimoteCommon/WiimoteHid.h"
 #include "Core/HW/WiimoteEmu/DesiredWiimoteState.h"
 #include "Core/HW/WiimoteEmu/Extension/Nunchuk.h"
+#include "Core/HW/WiimoteReal/WiimoteReal.h"
 #include "Core/HW/WiimoteEmu/WiimoteEmu.h"
 #include "Core/IOS/FS/HostBackend/FS.h"
 #include "Core/IOS/IOS.h"
@@ -6501,6 +6502,24 @@ std::shared_ptr<SDCard::SessionCard> CreateSDCard(const std::string& image_path)
     s.sd_files_wire = std::move(files_wire);
   }
   return card;
+}
+
+// Only with a Real one set up: with the setting on, Dolphin opens every Wii Remote-like Bluetooth
+// device it finds, a Wii U Pro Controller driven by WiinUSoft too, which then lost it for as long as
+// Dolphin ran (bug #77, 2026-10-21). The player's own setting (the base layer) is kept either way.
+void ConnectRealWiimotesIfSetUp()
+{
+  if (Config::Get(Config::MAIN_CONNECT_WIIMOTES_FOR_CONTROLLER_INTERFACE))
+    return;
+  for (int i = 0; i < MAX_WIIMOTES; ++i)
+  {
+    if (Config::GetBase(Config::GetInfoForWiimoteSource(i)) == WiimoteSource::Real)
+    {
+      Config::SetCurrent(Config::MAIN_CONNECT_WIIMOTES_FOR_CONTROLLER_INTERFACE, true);
+      WiimoteReal::HandleWiimotesInControllerInterfaceSettingChange();
+      return;
+    }
+  }
 }
 
 NetPlay::NetSettings MakeNetSettings()

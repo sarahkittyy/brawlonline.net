@@ -210,6 +210,10 @@ bool LoadImageStateForTest(Core::System& system, std::vector<u8> state);
 
 // The configuration every player runs with (ConfigLoaders::GenerateNetPlayConfigLoader).
 NetPlay::NetSettings MakeNetSettings();
+// Turns on "Connect Wii Remotes for Emulated Controllers" (the current-run layer) when one of the
+// player's Wii Remotes is set up as Real (BootManager at boot, the Wii Remote settings when the
+// player sets one up mid-run); once on, it stays on for the run.
+void ConnectRealWiimotesIfSetUp();
 // The SD card this boot plays on (Core, before the hardware starts; the card in the SD
 // configuration, `image_path`). Everyone plays the session's card: the player who starts the
 // session plays its own (its manifest goes to joiners with the machine image), and a joiner,

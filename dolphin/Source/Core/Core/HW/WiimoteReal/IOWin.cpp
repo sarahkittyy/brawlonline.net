@@ -653,6 +653,13 @@ static std::vector<WiimoteScannerWindows::EnumeratedWiimoteInterface> GetAllWiim
     // Alternatively, it might be easier to just request a status report
     //  to read back the current LED state.
 
+    // A Wii U Pro Controller has a Wii Remote Plus's VID:PID: its name keeps it out.
+    if (bluetooth_name.transform(IsWiiUProName).value_or(false) ||
+        device_description.transform(IsWiiUProName).value_or(false))
+    {
+      continue;
+    }
+
     // Sometimes we can determine this from the device description.
     std::optional<bool> is_balance_board;
 

@@ -1014,7 +1014,14 @@ bool IsValidDeviceName(std::string_view name)
 bool IsWiimoteName(std::string_view name)
 {
   // Wii software similarly checks just the start of the name.
-  return name.starts_with("Nintendo RVL-CNT");
+  return name.starts_with("Nintendo RVL-CNT") && !IsWiiUProName(name);
+}
+
+bool IsWiiUProName(std::string_view name)
+{
+  // Opened as a Wii Remote it was set up as one under WiinUSoft, which then lost it until Dolphin
+  // closed (bug #77, 2026-10-21).
+  return name.starts_with("Nintendo RVL-CNT-01-UC");
 }
 
 bool IsBalanceBoardName(std::string_view name)

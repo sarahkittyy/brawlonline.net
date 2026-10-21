@@ -547,6 +547,10 @@ void WiimoteControllersWidget::SaveSettings()
   }
 
   SConfig::GetInstance().SaveSettings();
+
+  // A Wii Remote set up as Real mid-session plays through the controller interface too.
+  if (Machine::IsArmed())
+    Machine::ConnectRealWiimotesIfSetUp();
 }
 
 #if defined(_WIN32)

@@ -240,6 +240,9 @@ void AddWiimoteToPool(std::unique_ptr<Wiimote>);
 bool IsValidDeviceName(std::string_view name);
 bool IsWiimoteName(std::string_view name);
 bool IsBalanceBoardName(std::string_view name);
+// A Wii U Pro Controller ("Nintendo RVL-CNT-01-UC", 057e:0330 like a Wii Remote Plus): not a Wii
+// Remote, and no Wii game reads one. Left alone so the tool that drives it (WiinUSoft) keeps it.
+bool IsWiiUProName(std::string_view name);
 
 bool IsNewWiimote(const std::string& identifier);
 

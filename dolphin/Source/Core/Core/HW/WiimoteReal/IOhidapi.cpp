@@ -112,7 +112,8 @@ auto WiimoteScannerHidapi::FindAttachedWiimotes() -> FindResults
   {
     const std::string name = device->product_string ? WStringToUTF8(device->product_string) : "";
     const bool is_wiimote =
-        IsValidDeviceName(name) || IsKnownDeviceId({device->vendor_id, device->product_id});
+        !IsWiiUProName(name) &&
+        (IsValidDeviceName(name) || IsKnownDeviceId({device->vendor_id, device->product_id}));
     if (!is_wiimote || !IsNewWiimote(device->path) || !IsDeviceUsable(device->path))
       continue;
 
