@@ -9,6 +9,7 @@ import { useReplayHighlight } from "@/lib/hooks/use_replay_highlight";
 
 import { ReplayFileContainer } from "../replay_file/replay_file.container";
 import { FileListMessages as Messages } from "./file_list.messages";
+import { useMatchRenders } from "./use_match_renders";
 
 // Small hook to persist scroll position across component unmounts
 const useScrollPosition = create<{
@@ -49,6 +50,7 @@ const FileListResults = ({
   const loadMoreSentinelRef = React.useRef<HTMLDivElement | null>(null);
   const lastFolderRef = React.useRef(folderPath);
   const currentScrollOffsetRef = React.useRef(initialScrollOffset);
+  const matchRenders = useMatchRenders();
 
   // Restore scroll position on mount
   React.useEffect(() => {
@@ -165,6 +167,7 @@ const FileListResults = ({
           onClick={onClick}
           onPlay={onPlay}
           selectedFilesSet={selectedFilesSet}
+          matchRender={matchRenders.get(file.fullPath)}
           {...file}
         />
       ))}

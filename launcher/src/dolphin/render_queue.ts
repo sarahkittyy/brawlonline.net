@@ -48,6 +48,8 @@ export type RenderJob = {
   playAnyway: boolean;
   resolution: ClipResolution;
   pieces: { release: string | null; items: HighlightPlayItem[] }[];
+  /** A whole match (RenderRequest.wholeMatch). */
+  wholeMatch?: boolean;
 };
 
 const jobItems = (job: RenderJob) => job.pieces.flatMap((p) => p.items);
@@ -139,6 +141,7 @@ export class RenderQueue {
         name: safeFileName(job.name),
         output: null,
         paths: [...new Set(items.map((i) => i.path))],
+        wholeMatch: job.wholeMatch === true,
         clips: items.length,
         clip: 0,
         music: job.music,

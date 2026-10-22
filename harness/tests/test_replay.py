@@ -535,6 +535,51 @@ def test_launcher_comm_file_renders_highlights(backend: OnlineBackend,
 
 
 @pytest.mark.slow
+def test_launcher_comm_file_renders_whole_match(backend: OnlineBackend,
+                                               dolphin: Callable[..., DolphinInstance],
+                                               gpu_backend: str) -> None:
+    """The replays list's Render to video: the whole match as one clip, from ENDG's firstFrame to
+    its lastFrame (the launcher's match_frames.ts), which are the frames recorded. The render runs
+    from the first frame (no fast-forward) to the last and ends (not "the replay ended before its
+    clip"), every frame in the file."""
+    fa, out = _recorded_direct_game(backend, dolphin, gpu_backend, "render-match", ("tess", "ugo"))
+    assert fa.endg is not None
+    first, last = int(fa.endg["firstFrame"]), int(fa.endg["lastFrame"])
+    assert (first, last) == (fa.first_frame, fa.last_frame), (fa.endg, fa.first_frame, fa.last_frame)
+    v, inst, file_status = _comm_viewer(backend, dolphin, gpu_backend, fa, out)
+    comm = out / "playback-comms.json"
+    video = out / "match.mp4"
+    video.unlink(missing_ok=True)
+    started = time.monotonic()
+    comm.write_text(json.dumps({"mode": "render", "commandId": "m1", "output": str(video), "queue": [
+        {"path": str(fa.path), "startFrame": first, "endFrame": last}]}))
+
+    def done() -> dict[str, Any] | None:
+        fs = file_status()
+        if fs.get("commandId") != "m1":
+            return None
+        assert fs.get("state") != "error", fs
+        return fs if fs.get("state") == "ended" else None
+    fs = _wait(done, 900, "the match's render to finish")
+    took = time.monotonic() - started
+    assert fs["render"] and fs["rendered"] == 1, fs
+    frames = [int(m) for m in re.findall(r"clip: written \((\d+) frames\)", inst.log.read())]
+    expected = last - first + 1
+    assert frames and abs(frames[0] - expected) <= 2, (frames, expected)
+    assert video.stat().st_size > 1_000_000, video
+    ffprobe = shutil.which("ffprobe")
+    if ffprobe:
+        probe = json.loads(subprocess.run(
+            [ffprobe, "-v", "error", "-show_entries", "stream=codec_type,nb_frames,duration", "-of", "json",
+             str(video)], check=True, capture_output=True, text=True).stdout)
+        streams = {st["codec_type"]: st for st in probe["streams"]}
+        seconds = expected * 1001 / 60000
+        assert abs(float(streams["video"]["duration"]) - seconds) < 0.25, (streams, seconds)
+        assert abs(float(streams["audio"]["duration"]) - seconds) < 0.25, (streams, seconds)
+    print(f"rendered {frames} of frames {first}-{last} in {took:.1f} s")
+
+
+@pytest.mark.slow
 def test_recording_names_its_pplus_release(backend: OnlineBackend,
                                            dolphin: Callable[..., DolphinInstance],
                                            gpu_backend: str) -> None:

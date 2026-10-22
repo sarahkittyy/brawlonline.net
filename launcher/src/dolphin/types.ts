@@ -74,6 +74,8 @@ export type RenderRequest = {
   names: string[];
   music: boolean;
   combo: boolean;
+  /** Each item is its whole match (the replays list's Render to video): its frames are ignored and read from the file. */
+  wholeMatch?: boolean;
 };
 
 /** A render job (one file) and how far it is. */
@@ -84,6 +86,8 @@ export type RenderJobInfo = {
   output: string | null;
   /** The replays it renders from. */
   paths: string[];
+  /** A whole match (RenderRequest.wholeMatch), not highlights. */
+  wholeMatch: boolean;
   /** Its clips, and the one being rendered (1-based; 0 before the first). */
   clips: number;
   clip: number;

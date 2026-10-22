@@ -1,6 +1,7 @@
 import { exists } from "@common/exists";
 import { css, keyframes } from "@emotion/react";
 import styled from "@emotion/styled";
+import CircularProgress from "@mui/material/CircularProgress";
 import IconButton from "@mui/material/IconButton";
 import Tooltip from "@mui/material/Tooltip";
 import React from "react";
@@ -24,6 +25,8 @@ export type ReplayFileAction = {
   label: string;
   onClick: (e: React.MouseEvent<HTMLButtonElement, MouseEvent>) => void;
   isDolphinAction?: boolean; // Flag to indicate this button needs Dolphin status
+  /** A ring around the icon: 0..1, or null for one still waiting to start. */
+  progress?: number | null;
 };
 
 type ReplayFileProps = {
@@ -221,7 +224,7 @@ type ReplayActionButtonProps = Omit<React.ComponentProps<typeof IconButton>, "co
 
 // Wrapper component that handles dynamic Dolphin status for play button
 const ActionButton = React.memo(({ action }: { action: ReplayFileAction }) => {
-  const { label, onClick, Icon, disabled, primary, isDolphinAction } = action;
+  const { label, onClick, Icon, disabled, primary, isDolphinAction, progress } = action;
 
   // Only subscribe to Dolphin status if this is a Dolphin action
   const playbackStatus = useDolphinStore((store) => store.playbackStatus);
@@ -242,6 +245,19 @@ const ActionButton = React.memo(({ action }: { action: ReplayFileAction }) => {
       disabled={finalDisabled}
     >
       <Icon />
+      {progress !== undefined && (
+        <CircularProgress
+          size={34}
+          thickness={2.5}
+          variant={progress === null ? "indeterminate" : "determinate"}
+          value={progress === null ? undefined : Math.max(progress * 100, 3)}
+          css={css`
+            position: absolute;
+            inset: 0;
+            color: inherit;
+          `}
+        />
+      )}
     </ReplayActionButton>
   );
 });

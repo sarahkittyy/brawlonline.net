@@ -1,6 +1,7 @@
 import { exists } from "@common/exists";
 import { pplusReleaseLabel } from "@common/pplus_releases";
 import { stageInfo as pplusStageInfo } from "@common/stages";
+import type { RenderJobInfo } from "@dolphin/types";
 import { css } from "@emotion/react";
 import EventIcon from "@mui/icons-material/Event";
 import HistoryIcon from "@mui/icons-material/History";
@@ -16,11 +17,14 @@ import { groupBy } from "common/group_by";
 import React, { useCallback, useMemo } from "react";
 
 import { ClapperboardIcon } from "@/components/clapperboard_icon";
+import { RenderVideoIcon } from "@/components/render_video_icon";
+import { useDolphinActions } from "@/lib/dolphin/use_dolphin_actions";
 import { useReplayHighlight } from "@/lib/hooks/use_replay_highlight";
 import { useReplays } from "@/lib/hooks/use_replays";
 import { usePPlusVersions } from "@/lib/pplus/use_pplus_versions";
 import { convertFrameCountToDurationString, monthDayHourFormat } from "@/lib/time";
 import { getStageImage } from "@/lib/utils";
+import { useServices } from "@/services";
 
 import { DraggableFile } from "./draggable_file";
 import type { ReplayDetail, ReplayFileAction } from "./replay_file";
@@ -36,6 +40,8 @@ type ReplayFileContainerProps = FileResult & {
   onOpenMenu: (index: number, element: HTMLElement) => void;
   onClick: (index: number, isShiftHeld: boolean) => void;
   selectedFilesSet: Set<string>;
+  /** This replay's whole-match render still going (Render to video), if any. */
+  matchRender?: RenderJobInfo;
 };
 
 export const ReplayFileContainer = React.memo(function ReplayFileContainer({
@@ -49,6 +55,7 @@ export const ReplayFileContainer = React.memo(function ReplayFileContainer({
   game,
   fullPath,
   selectedFilesSet,
+  matchRender,
 }: ReplayFileContainerProps) {
   // Our replays name P+'s stage ids (the stage select's, @common/stages), not Melee's.
   const stageInfo = game.stageId != null ? pplusStageInfo(game.stageId) : undefined;
@@ -80,6 +87,28 @@ export const ReplayFileContainer = React.memo(function ReplayFileContainer({
   );
   const onPlayClick = useCallback(() => onPlay(index), [onPlay, index]);
 
+  // Render to video: the whole match, as highlights are rendered (Settings > Clips' resolution, into
+  // its folder), with the game's music, named as the replay is. While it renders the button shows
+  // how far it is and cancels it.
+  const { dolphinService } = useServices();
+  const { renderHighlights } = useDolphinActions(dolphinService);
+  const matchRenderId = matchRender?.jobId;
+  const onRenderClick = useCallback(() => {
+    if (matchRenderId) {
+      void dolphinService.cancelRender(matchRenderId);
+      return;
+    }
+    void renderHighlights({
+      items: [{ path: fullPath, startFrame: 0, endFrame: 0 }],
+      names: [fileName.replace(/\.brep$/i, "")],
+      music: true,
+      combo: false,
+      wholeMatch: true,
+    });
+  }, [matchRenderId, dolphinService, renderHighlights, fullPath, fileName]);
+  const renderState = matchRender?.state;
+  const renderProgress = matchRender?.progress ?? 0;
+
   // Drag handler for the entire replay item (drags all selected files)
   const onReplayDragStart = useMemo(() => {
     if (dragPaths.length === 0) {
@@ -106,6 +135,18 @@ export const ReplayFileContainer = React.memo(function ReplayFileContainer({
         onClick: (e: React.MouseEvent<HTMLButtonElement, MouseEvent>) => onOpenMenu(index, e.currentTarget),
       },
       {
+        Icon: RenderVideoIcon,
+        label:
+          renderState === "queued"
+            ? Messages.renderWaiting()
+            : renderState
+            ? Messages.renderingToVideo(Math.round(renderProgress * 100))
+            : Messages.renderToVideo(),
+        onClick: onRenderClick,
+        progress: renderState === "rendering" ? renderProgress : renderState ? null : undefined,
+        isDolphinAction: !renderState,
+      },
+      {
         Icon: ClapperboardIcon,
         label: Messages.showHighlights(),
         onClick: onShowStats,
@@ -119,7 +160,7 @@ export const ReplayFileContainer = React.memo(function ReplayFileContainer({
         isDolphinAction: true,
       },
     ];
-  }, [index, onOpenMenu, onPlayClick, onShowStats]);
+  }, [index, onOpenMenu, onPlayClick, onShowStats, onRenderClick, renderState, renderProgress]);
 
   // Recorded on another Project+ release than the launcher's: said on the row (it plays on that
   // release's files, docs/design/pplus-versions.md).

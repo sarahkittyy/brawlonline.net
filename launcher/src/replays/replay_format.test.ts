@@ -47,6 +47,7 @@ const INFO = {
 };
 const ENDG = {
   endMethod: "game",
+  firstFrame: 0,
   lastFrame: 5000,
   finalFrame: 4992,
   winnerPort: 1,
@@ -102,6 +103,9 @@ describe("replay format", () => {
     expect(h.meta.players[0].displayName).toBe("Alice");
     expect(h.end?.winnerPort).toBe(1);
     expect(h.end?.endMethod).toBe("game");
+    // The frames recorded, as playback seeks them (a whole match rendered to video).
+    expect(h.end?.firstFrame).toBe(0);
+    expect(h.end?.lastFrame).toBe(5000);
     const s = toSlippiShapes(h);
     expect(s.winnerIndices).toEqual([0]);
     expect(s.settings?.matchInfo?.sessionId).toBe(INFO.matchId);

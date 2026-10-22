@@ -1,5 +1,6 @@
 import { chatKeyExpression } from "@common/chat_key";
 import { DOLPHIN_ONLINE_DIR } from "@common/product";
+import { matchFrames } from "@replays/highlights/match_frames";
 import { shell } from "electron";
 import log from "electron-log";
 import isEqual from "lodash/isEqual";
@@ -174,7 +175,9 @@ export default function setupDolphinIpc({ dolphinManager }: { dolphinManager: Do
   // Rendering (render_queue.ts): every replay on its own Project+ release, so a request whose
   // releases are not all here yet is answered as a play request is, and the renderer asks.
   ipc_renderHighlights.main!.handle(async ({ request, choice = "auto" }) => {
-    const { items, names, music, combo } = request;
+    const { names, music, combo, wholeMatch } = request;
+    // (A whole match: its frames from the file.)
+    const items = wholeMatch ? await Promise.all(request.items.map((i) => matchFrames(i.path))) : request.items;
     if (!items.length) {
       return { status: "queued" as const, jobs: [] };
     }
@@ -192,6 +195,7 @@ export default function setupDolphinIpc({ dolphinManager }: { dolphinManager: Do
       playAnyway: d.playAnyway,
       resolution,
       pieces,
+      wholeMatch,
     });
     let jobs: RenderJob[];
     if (combo) {

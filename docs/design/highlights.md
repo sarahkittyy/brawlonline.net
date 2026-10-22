@@ -215,3 +215,21 @@ status ever came. The playback Dolphin's CLOSED event now clears the list's bann
 launcher closed it itself to start it again on another Project+ release's card (`replaced`: the
 request goes on there). The banner has a close button, and after 20 s of starting it adds "Still
 starting. If the Dolphin window is asking something, answer it there; or close it and try again."
+
+## 8. Render to video, a whole match (2026-10-21)
+
+The user's request: a replay row has a button left of Show highlights, a film strip with a pencil
+(`render_video_icon.tsx`, drawn in the clapperboard's stroke with Lucide's pencil), tooltip
+"Render to video". It renders the whole match as highlights are rendered: one render job, the
+match as one clip, Settings > Clips' Video Resolution and folder, with the game's music, the
+video named as the replay is (`2026-10-12 2040 Ranked G1 - sarahkitty2 (Snake) vs sarahkitty
+(Lucas).mp4`). `RenderRequest.wholeMatch`: main reads each replay's frames (`match_frames.ts`):
+ENDG's `firstFrame` to `lastFrame`, the frames recorded, else (a game that crashed has no ENDG)
+the frames decoded. On this PC's 56 replays both give the same frames (9 have no ENDG).
+
+While it renders, the button has a progress ring ("Rendering to video... 42% (click to cancel)";
+queued: "Waiting to render"), and a click cancels it. Once done a toast says "Rendered
+<name>.mp4"; a failure says why. The job is also listed on the replay's stats page with Show in
+folder (`RenderJobInfo.wholeMatch`; the list's hook is `use_match_renders.ts`).
+
+Harness: `test_replay.py::test_launcher_comm_file_renders_whole_match`.

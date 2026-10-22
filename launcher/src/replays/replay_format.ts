@@ -96,6 +96,8 @@ export type ReplayMeta = {
 /** The result (ENDG), or null while the game is in progress or after a crash. */
 export type ReplayEnd = {
   endMethod: string;
+  /** The first and last frames recorded (the frames playback seeks: FRAM's), -1 when unknown. */
+  firstFrame: number;
   lastFrame: number;
   finalFrame: number;
   winnerPort: number | null; // 1-4; null: none or a draw
@@ -241,6 +243,7 @@ function parseEnd(endg: Record<string, unknown>): ReplayEnd {
   }
   return {
     endMethod: text(endg.endMethod, 16) || "unknown",
+    firstFrame: num(endg.firstFrame, -1, 1_000_000) ?? -1,
     lastFrame: num(endg.lastFrame, -1, 1_000_000) ?? -1,
     finalFrame: num(endg.finalFrame, -1, 1_000_000) ?? -1,
     winnerPort: num(winner, 1, 4),
