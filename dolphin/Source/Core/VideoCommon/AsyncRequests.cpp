@@ -3,6 +3,7 @@
 
 #include "VideoCommon/AsyncRequests.h"
 
+#include "Core/Rollback/MachineSession.h"
 #include "Core/Rollback/RollbackManager.h"
 #include "Core/System.h"
 
@@ -39,7 +40,11 @@ void AsyncRequests::QueueEvent(Event&& event)
   // Not while a whole-machine snapshot is saved or loaded (its video state is restored on the video
   // thread from here): RunGpu schedules the GPU-sync event when syncing is suspended, an event the
   // saved state did not have, and its ForceExceptionCheck cut the slice the load had just restored.
-  if (!Rollback::InSnapshotDoState())
+  // Nor while a machine image is saved or loaded: the image then held a GPU-sync event (and the
+  // event order one higher) that the players' own snapshots of that frame did not, so a player
+  // who rolled back past the epoch and one who did not (or a joiner) saved different images at the
+  // next epoch, and the joiner refused it (bug 90: "player 2 does not vouch for this machine").
+  if (!Rollback::InSnapshotDoState() && !Machine::InImageDoState())
     system.GetFifo().RunGpu();
   system.GetFifo().WakeGpuThread();
 }

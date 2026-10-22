@@ -193,7 +193,7 @@ FSCore::ScopedFd FSCore::Open(FS::Uid uid, FS::Gid gid, const std::string& path,
 
   if (path == "/dev/fs")
   {
-    m_fd_map[fd] = {gid, uid, INVALID_FD};
+    m_fd_map[fd] = {.gid = gid, .uid = uid, .fs_fd = INVALID_FD};
     return {this, static_cast<s64>(fd), ticks};
   }
 
@@ -204,7 +204,7 @@ FSCore::ScopedFd FSCore::Open(FS::Uid uid, FS::Gid gid, const std::string& path,
   if (!backend_fd)
     return {this, ConvertResult(backend_fd.error()), ticks};
 
-  auto& handle = m_fd_map[fd] = {gid, uid, backend_fd->Release()};
+  auto& handle = m_fd_map[fd] = {.gid = gid, .uid = uid, .fs_fd = backend_fd->Release()};
   std::strncpy(handle.name.data(), path.c_str(), handle.name.size());
   return {this, static_cast<s64>(fd), ticks};
 }

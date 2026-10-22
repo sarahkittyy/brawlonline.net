@@ -4212,6 +4212,9 @@ std::vector<u8> BuildImage(const ImageParts& parts, u32 sum, u64* raw_size)
   return packed;
 }
 
+s64 s_schedule_log_until = -1;  // PPR_MACHINE_SCHEDULE_LOG (StartScheduleLog)
+void StartScheduleLog(Core::System& system, s64 frame, std::string_view why);
+
 // A joiner, at its loop top: replaces its machine with the image (every value bounded: it came
 // from a peer). Its own boot is gone; it is at the epoch's frame, as every player.
 bool LoadImage(Core::System& system, std::string* error, bool self = false)
@@ -4405,6 +4408,7 @@ bool LoadImage(Core::System& system, std::string* error, bool self = false)
     }
   }
 
+  StartScheduleLog(system, frame, "image load");
   auto& rb = Rollback::RollbackManager::Get();
   // The ring and its base snapshot hold this machine's own boot: start them again after. (A
   // self-load, a diagnostic, loads the state the ring already ends with.)
@@ -4441,6 +4445,9 @@ bool LoadImage(Core::System& system, std::string* error, bool self = false)
     *error = "the machine image's state does not load (" + state_failure + ")";
     return false;
   }
+  if (s_schedule_log_until >= 0)
+    INFO_LOG_FMT(BRAWLBACK, "machine: schedule log: image state loaded, event order {}",
+                 system.GetCoreTiming().GetEventFifoId());
   if (!UnpackNand(system, raw.data() + nand_pos, nand_size, error))
     return false;
   u8* gpu = Rollback::GPUWrittenBitmap::Get().entries;
@@ -4510,7 +4517,13 @@ void DumpEpochState(Core::System& system, s64 frame, const char* who)
     return;
   Rollback::RollbackManager::SyncGPUForDoState(system);
   Common::UniqueBuffer<u8> state(192u << 20);
+  // In image mode, as MakeImageParts saves: a plain save kicked the GPU and scheduled an event the
+  // machine would not have had without the dump.
+  s_image_dostate = true;
+  VideoCommon_SetSkipGPUReadbackForRollback(true);
   const size_t n = ::State::SaveToBuffer(system, state);
+  VideoCommon_SetSkipGPUReadbackForRollback(false);
+  s_image_dostate = false;
   const std::string path = fmt::format("{}/state-{}-p{}-{}.bin", dir, frame, s.opts.local_slot + 1, who);
   if (std::FILE* f = std::fopen(path.c_str(), "wb"))
   {
@@ -4723,6 +4736,7 @@ void EnterEpoch()
   }
   s_image_parts.reset();
   s.epoch_digest.clear();
+  StartScheduleLog(Core::System::GetInstance(), s.plan.frame, "epoch");
   if (admitting)
   {
     ImageParts parts;
@@ -5787,6 +5801,23 @@ void CheckLoadedTime(Core::System& system)
   }
 }
 
+// Diagnostics (PPR_MACHINE_SCHEDULE_LOG=N): from an epoch (or a joiner's image load) for N frames,
+// every CoreTiming event scheduled and each frame's event order, to line the players up.
+void StartScheduleLog(Core::System& system, s64 frame, std::string_view why)
+{
+  static const s64 frames = [] {
+    const char* e = std::getenv("PPR_MACHINE_SCHEDULE_LOG");
+    return e ? std::strtoll(e, nullptr, 10) : 0;
+  }();
+  if (frames <= 0)
+    return;
+  auto& ct = system.GetCoreTiming();
+  s_schedule_log_until = frame + frames;
+  ct.m_log_schedules = true;
+  INFO_LOG_FMT(BRAWLBACK, "machine: schedule log: {} at frame {}, event order {}", why, frame,
+               ct.GetEventFifoId());
+}
+
 void BeginPass(Core::System& system)
 {
   // The inputs this pass runs with, for the SI (GetPad) and the Wii Remotes (GetWiimote).
@@ -5794,6 +5825,17 @@ void BeginPass(Core::System& system)
   s.current_frame = s.ops.frame[s.iteration];
   s.pass_open = true;
   s.resim = s.ops.count > 1 && s.iteration != s.ops.count - 1;
+  if (s_schedule_log_until >= 0) [[unlikely]]
+  {
+    auto& ct = system.GetCoreTiming();
+    INFO_LOG_FMT(BRAWLBACK, "machine: schedule log: frame {}{} begins, event order {}",
+                 s.current_frame, s.resim ? " (re-run)" : "", ct.GetEventFifoId());
+    if (s.current_frame > s_schedule_log_until)
+    {
+      ct.m_log_schedules = false;
+      s_schedule_log_until = -1;
+    }
+  }
   SyncWiimotes(system);
   PlanEpoch(s.current_frame);
   CheckLoadedTime(system);

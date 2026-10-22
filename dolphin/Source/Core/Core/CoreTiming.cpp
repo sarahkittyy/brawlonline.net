@@ -196,12 +196,33 @@ void CoreTimingManager::DoState(PointerWrap& p)
   p.Do(m_globals.fake_TB_start_ticks);
   p.Do(m_last_oc_factor);
   m_globals.last_OC_factor_inverted = 1.0f / m_last_oc_factor;
-  p.Do(m_event_fifo_id);
+
+  // A machine image (a whole-machine session's joiner) saves the queue numbered by its order, the
+  // count after it: how many events a machine ever scheduled is its own history (a player who
+  // rolled back past a frame, or joined, counted other events than one who did not), and every
+  // player saves the image of an epoch to vouch for it (bug 90: "player 2 does not vouch for this
+  // machine", only these numbers differing). Only the events' order counts, and it is kept.
+  std::vector<Event> canonical;
+  const bool image = Machine::InImageDoState() && !p.IsReadMode();
+  if (image)
+  {
+    MoveEvents();
+    canonical = m_event_queue;
+    std::ranges::sort(canonical);
+    for (size_t i = 0; i < canonical.size(); ++i)
+      canonical[i].fifo_order = i;
+    u64 count = canonical.size();
+    p.Do(count);
+  }
+  else
+  {
+    p.Do(m_event_fifo_id);
+  }
 
   p.DoMarker("CoreTimingData");
 
   MoveEvents();
-  p.DoEachElement(m_event_queue, [this](PointerWrap& pw, Event& ev) {
+  p.DoEachElement(image ? canonical : m_event_queue, [this](PointerWrap& pw, Event& ev) {
     pw.Do(ev.time);
     pw.Do(ev.fifo_order);
 
@@ -296,6 +317,9 @@ void CoreTimingManager::ScheduleEvent(s64 cycles_into_future, EventType* event_t
     if (!m_is_global_timer_sane)
       ForceExceptionCheck(cycles_into_future);
 
+    if (m_log_schedules) [[unlikely]]
+      INFO_LOG_FMT(POWERPC, "schedule: {} order {} at {} (+{})", *event_type->name, m_event_fifo_id,
+                   timeout, cycles_into_future);
     m_event_queue.emplace_back(Event{timeout, m_event_fifo_id++, userdata, event_type});
     std::ranges::push_heap(m_event_queue, std::ranges::greater{});
   }
@@ -309,6 +333,9 @@ void CoreTimingManager::ScheduleEvent(s64 cycles_into_future, EventType* event_t
                     *event_type->name);
     }
 
+    if (m_log_schedules) [[unlikely]]
+      INFO_LOG_FMT(POWERPC, "schedule: {} from another thread (+{})", *event_type->name,
+                   cycles_into_future);
     std::lock_guard lk(m_ts_write_lock);
     m_ts_queue.Push(Event{cycles_into_future, 0, userdata, event_type});
   }
@@ -354,6 +381,9 @@ void CoreTimingManager::MoveEvents()
 
     ev.fifo_order = m_event_fifo_id++;
     ev.time += m_globals.global_timer;
+    if (m_log_schedules) [[unlikely]]
+      INFO_LOG_FMT(POWERPC, "schedule: {} moved in, order {} at {}", *ev.type->name, ev.fifo_order,
+                   ev.time);
 
     std::ranges::push_heap(m_event_queue, std::ranges::greater{});
   }

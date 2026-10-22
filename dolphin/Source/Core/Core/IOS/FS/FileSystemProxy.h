@@ -86,15 +86,22 @@ public:
   std::shared_ptr<FS::FileSystem> GetFS() const { return m_ios.GetFS(); }
 
 private:
+  // Saved as its bytes (PointerWrap's map of PODs), so its padding is spelled out and zeroed: an
+  // implicit pad kept whatever bytes the heap had, so two machines with the same open files saved
+  // different states, and a machine session's players refused each other's images (bug 90,
+  // NSMB Wii: "player 2 does not vouch for this machine"). The layout is the one before.
   struct Handle
   {
     u16 gid = 0;
+    std::array<u8, 2> pad_gid{};
     u32 uid = 0;
     FS::Fd fs_fd = INVALID_FD;
     // We use a std::array to keep this savestate friendly.
     std::array<char, 64> name{};
     bool superblock_flush_needed = false;
+    std::array<u8, 3> pad_end{};
   };
+  static_assert(sizeof(Handle) == 80);  // the members add up to it: no implicit padding
 
   u64 EstimateTicksForReadWrite(const Handle& handle, u64 fd, IPCCommandType command, u32 size);
   u64 SimulatePopulateFileCache(u64 fd, u32 offset, u32 file_size);

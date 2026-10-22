@@ -111,6 +111,10 @@ public:
   std::vector<TracedEvent>* m_event_trace = nullptr;
   // The event whose callback Advance is running (diagnostics: Machine::IoLogWrite).
   const std::string* m_current_event = nullptr;
+  // Diagnostics (PPR_MACHINE_SCHEDULE_LOG): while set, every event scheduled is logged with its
+  // order (fifo_order), to find the one a machine scheduled and another did not.
+  bool m_log_schedules = false;
+  u64 GetEventFifoId() const { return m_event_fifo_id; }
 
   // CoreTiming begins at the boundary of timing slice -1. An initial call to Advance() is
   // required to end slice -1 and start slice 0 before the first cycle of code is executed.
