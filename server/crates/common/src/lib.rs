@@ -18,6 +18,7 @@ pub mod ratelimit;
 pub mod rooms;
 pub mod rules;
 pub mod spectate;
+pub mod speed;
 
 /// The product name shown to users: email subjects and bodies, the web pages, the default sender
 /// name. Hostnames are configuration (`PUBLIC_BASE_URL`, `MAIL_FROM`, the Caddyfile).

@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <condition_variable>
 #include <deque>
 #include <functional>
@@ -792,6 +793,21 @@ void End(const EndInfo& info)
   o["rollbacks"] = picojson::value(static_cast<double>(info.rollbacks));
   o["maxRollback"] = picojson::value(static_cast<double>(info.max_rollback));
   o["desyncs"] = picojson::value(static_cast<double>(info.desyncs));
+  if (info.perf.frames)
+  {
+    // Rounded: three digits are all anyone reads (and the ENDG stays short).
+    const auto round = [](double v, double scale) { return std::round(v * scale) / scale; };
+    picojson::object perf;
+    perf["frames"] = picojson::value(static_cast<double>(info.perf.frames));
+    perf["fps"] = picojson::value(round(info.perf.fps, 100));
+    perf["ownLate"] = picojson::value(round(info.perf.own_late, 1000));
+    perf["followed"] = picojson::value(round(info.perf.followed, 1000));
+    if (info.perf.followed > 0)
+      perf["peerFps"] = picojson::value(round(info.perf.peer_fps, 100));
+    perf["slow"] = picojson::value(info.perf.slow);
+    perf["peerSlow"] = picojson::value(info.perf.peer_slow);
+    o["perf"] = picojson::value(std::move(perf));
+  }
   const std::string endg = picojson::value(o).serialize();
   const u32 last_frame = static_cast<u32>(std::max<s64>(last, 0));
   if (s_rec.out && !s_rec.overflowed)

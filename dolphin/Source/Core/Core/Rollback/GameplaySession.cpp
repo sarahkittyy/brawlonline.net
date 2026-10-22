@@ -7566,6 +7566,18 @@ void EndReplay(Core::System& system, const std::string& reason, const GameResult
   e.rollbacks = s.rollbacks;
   e.max_rollback = s.max_rollback;
   e.desyncs = s.desyncs;
+  // EndRunning folded the last window into net_total before this. The tests are LogPerfVerdict's.
+  if (const State::NetStats& t = s.net_total; s.mode == Mode::Network && t.frames)
+  {
+    const double n = static_cast<double>(t.frames);
+    e.perf.frames = t.frames;
+    e.perf.fps = t.wall_ms > 0 ? n * 1000.0 / t.wall_ms : 0.0;
+    e.perf.own_late = static_cast<double>(t.late - t.late_after_rollback) / n;
+    e.perf.followed = static_cast<double>(t.followed) / n;
+    e.perf.peer_fps = t.followed ? t.peer_fps_sum / static_cast<double>(t.followed) : 0.0;
+    e.perf.slow = s.slow_shown;
+    ForEachPeer([&](int, const PeerView& p) { e.perf.peer_slow |= p.slow_shown; });
+  }
   const GameResult r = result ? *result : ReadGameResult(system);
   e.winner = result ? r.winner : 0xFF;
   e.quitter = r.quitter;

@@ -3032,6 +3032,98 @@ mod tests {
         assert!(!disconnected(&out, 3));
     }
 
+    fn speed_reports(out: &[Output]) -> Vec<SpeedReportRecord> {
+        out.iter()
+            .filter_map(|o| match o {
+                Output::SpeedReport(r) => Some((**r).clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn speed_checks(out: &[Output]) -> Vec<SpeedCheckRecord> {
+        out.iter()
+            .filter_map(|o| match o {
+                Output::SpeedCheck(r) => Some((**r).clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// A Ranked game's `spectate-end` with `perf`: recorded for the match's players only, with
+    /// the connection's build; one without `perf` (or a broken one) records nothing and still
+    /// counts as a game's end.
+    #[test]
+    fn speed_reports_come_from_the_matchs_players() {
+        let mut h = Harness::new(default_rules());
+        let u = h.rated(&[1500.0, 1500.0]);
+        let stranger = user("ST#1", "st");
+        h.add(&stranger);
+        h.connect(1, 41001);
+        h.connect(2, 41002);
+        h.ranked(1, &u[0]);
+        let m = matches(&h.ranked(2, &u[1])).remove(0);
+        for (conn, who) in [(3, &u[0]), (4, &u[1]), (5, &stranger)] {
+            h.connect(conn, 50000 + conn as u16);
+            h.hello(conn, who, "3.4.0");
+        }
+        let end = |perf: Value| {
+            json!({"type": "spectate-end", "matchId": m.match_id, "gameUid": "00112233445566778899aabbccddeeff",
+                   "endMethod": "game", "winnerPort": 1, "setGame": 1, "perf": perf})
+        };
+        let slow = json!({"frames": 7000, "fps": 44.5, "ownLate": 0.9, "followed": 0.0, "slow": true, "peerSlow": false});
+        let out = h.room(3, end(slow.clone()));
+        let r = speed_reports(&out);
+        assert_eq!(r.len(), 1, "{out:?}");
+        assert_eq!((r[0].uid, r[0].mode.as_str(), r[0].set_game), (u[0].uid, "ranked", Some(1)));
+        assert_eq!(r[0].app_version, "3.4.0");
+        assert!(r[0].perf.slow_game());
+        // The other player's game: slowed by the first one's PC, not its own.
+        let followed = json!({"frames": 7000, "fps": 44.6, "ownLate": 0.02, "followed": 0.95, "peerFps": 44.5,
+                              "slow": false, "peerSlow": true});
+        let r = speed_reports(&h.room(4, end(followed)));
+        assert_eq!(r.len(), 1);
+        assert!(!r[0].perf.slow_game() && r[0].perf.peer_slow);
+        // Someone else's match: nothing.
+        assert!(speed_reports(&h.room(5, end(slow))).is_empty());
+        // No perf (older builds) or a broken one: nothing, and no error.
+        for perf in [Value::Null, json!({"frames": "many"})] {
+            let out = h.room(3, end(perf));
+            assert!(speed_reports(&out).is_empty());
+            assert!(sent(&out, 3).iter().all(|m| m["type"] != "spectate-error"), "{out:?}");
+        }
+    }
+
+    /// `speed-check` on an online connection: recorded with the connection's build, at most 3 a
+    /// minute; a bad one is dropped without an answer; without `hello` it is refused.
+    #[test]
+    fn speed_checks_are_recorded_and_limited() {
+        let mut h = Harness::new(EngineConfig::default());
+        let a = user("AA#1", "a");
+        h.add(&a);
+        h.connect(1, 1);
+        h.hello(1, &a, "3.4.0");
+        let check = json!({"type": "speed-check", "mode": "ranked", "windows": [59.9, 44.0, 43.5], "gaps": 1,
+                           "backend": "Vulkan"});
+        let out = h.room(1, check.clone());
+        let c = speed_checks(&out);
+        assert_eq!(c.len(), 1);
+        assert_eq!((c[0].uid, c[0].check.verdict()), (a.uid, common::speed::Check::Slow));
+        assert_eq!((c[0].check.backend.as_str(), c[0].app_version.as_str()), ("Vulkan", "3.4.0"));
+        assert!(sent(&out, 1).is_empty());
+        h.room(1, check.clone());
+        h.room(1, check.clone());
+        assert!(speed_checks(&h.room(1, check.clone())).is_empty());
+        h.now += Duration::from_secs(61);
+        assert_eq!(speed_checks(&h.room(1, check.clone())).len(), 1);
+        let out = h.room(1, json!({"type": "speed-check", "mode": "direct", "windows": [59.9]}));
+        assert!(speed_checks(&out).is_empty() && sent(&out, 1).is_empty() && !disconnected(&out, 1));
+        h.connect(2, 2);
+        let out = h.raw(2, check.to_string().as_bytes());
+        assert!(speed_checks(&out).is_empty());
+        assert_eq!(sent(&out, 2)[0]["error"], msg::NOT_LOGGED_IN);
+    }
+
     /// `pp-admin user ban` while the player is in a room and another of their games searches:
     /// both connections are told and closed, the room goes on without them, and the next hello
     /// is refused.

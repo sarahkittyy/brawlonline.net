@@ -713,6 +713,13 @@ impl LiveBook {
     }
 
     /// A `spectate-*` request from an online connection (`account`).
+    /// Match `match_id`'s mode as speed reports name it (`room` for a room's game), when `account`
+    /// plays in it.
+    pub fn speed_mode(&self, match_id: &str, account: Uuid) -> Option<&'static str> {
+        let m = self.matches.get(match_id).filter(|m| m.players.contains(&account))?;
+        Some(if m.room.is_some() { "room" } else { m.mode })
+    }
+
     pub fn request(&mut self, now: Instant, conn: ConnId, account: Uuid, req: SpectateRequest, out: &mut Vec<Output>) {
         let op = req.op();
         let result = match req {

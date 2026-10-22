@@ -333,6 +333,10 @@ pub struct EndReport {
     /// game played again keeps its number, unlike the stream's game number). Older builds: none.
     #[serde(default)]
     pub set_game: Option<u32>,
+    /// This player's PC's speed over the game (`crate::speed`). Older builds: none; one that does
+    /// not read as valid is none too, and the report counts as without it.
+    #[serde(default, deserialize_with = "crate::speed::lenient_perf")]
+    pub perf: Option<crate::speed::GamePerf>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]

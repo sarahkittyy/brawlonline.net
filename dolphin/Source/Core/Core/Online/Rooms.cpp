@@ -30,6 +30,7 @@
 #include "Core/Online/ModsRoom.h"
 #include "Core/Online/OnlineClient.h"
 #include "Core/Online/RoomWatch.h"
+#include "Core/Online/SpeedCheck.h"
 #include "Core/Online/Spectate.h"
 #include "Core/Online/User.h"
 #include "Core/Rollback/GameplaySession.h"
@@ -1545,7 +1546,7 @@ void Thread()
         Chat::AddNotice(line);
 
       // Chat's outgoing messages, signed and encrypted outside the room lock; a Brawl Mods
-      // room's requests.
+      // room's requests; the waiting room's speed checks.
       bool online;
       u64 connection;
       {
@@ -1558,6 +1559,8 @@ void Thread()
       if (online)
       {
         for (std::string& m : ModsRoom::TakeOutbox(connection))
+          chat_out.push_back(std::move(m));
+        for (std::string& m : SpeedCheck::TakeOutbox())
           chat_out.push_back(std::move(m));
       }
       // Spectating's upload (Online/Spectate.h): it backs off on the game's health and on what

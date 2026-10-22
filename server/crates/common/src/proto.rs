@@ -284,6 +284,8 @@ pub enum ClientMessage {
     /// A `spectate-*` message (`docs/spectate-protocol.md` §1), or why it could not be read: the
     /// `op` to answer in `spectate-error` and the reason.
     Spectate(Result<crate::spectate::SpectateRequest, (&'static str, String)>),
+    /// `speed-check`: the waiting room's frame rate (`crate::speed`), or why it could not be read.
+    SpeedCheck(Result<crate::speed::SpeedCheck, String>),
     /// Valid JSON object with a `type` we do not handle.
     Unknown(String),
 }
@@ -323,6 +325,7 @@ pub fn parse_client_message(data: &[u8]) -> Result<ClientMessage, ParseError> {
         k if k.starts_with("spectate-") => {
             Ok(ClientMessage::Spectate(crate::spectate::SpectateRequest::parse(k, &value)))
         }
+        crate::speed::SPEED_CHECK => Ok(ClientMessage::SpeedCheck(crate::speed::SpeedCheck::parse(&value))),
         _ => Ok(ClientMessage::Unknown(kind)),
     }
 }

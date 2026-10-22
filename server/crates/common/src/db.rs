@@ -181,6 +181,76 @@ pub async fn record_ranked_game_result(
     Ok(())
 }
 
+/// One player's game's word on its speed over an online game (`speed_reports`,
+/// `crate::speed`). A second word on the same game from the same player is ignored.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SpeedReportRecord {
+    pub uid: Uuid,
+    pub match_id: String,
+    /// The match's mode (`ranked`, `unranked`, `direct`, ...), `room` for a room's game.
+    pub mode: String,
+    pub game_uid: String,
+    pub set_game: Option<u32>,
+    pub end_method: String,
+    pub perf: crate::speed::GamePerf,
+    pub app_version: String,
+    pub platform: String,
+}
+
+pub async fn record_speed_report(pool: &sqlx::PgPool, r: &SpeedReportRecord) -> sqlx::Result<()> {
+    sqlx::query(
+        "INSERT INTO speed_reports (uid, match_id, mode, game_uid, set_game, end_method, frames, fps, own_late,
+                                    followed, peer_fps, slow, peer_slow, app_version, platform)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+         ON CONFLICT (game_uid, uid) DO NOTHING",
+    )
+    .bind(r.uid)
+    .bind(&r.match_id)
+    .bind(&r.mode)
+    .bind(&r.game_uid)
+    .bind(r.set_game.map(|g| g as i32))
+    .bind(&r.end_method)
+    .bind(r.perf.frames as i32)
+    .bind(r.perf.fps as f32)
+    .bind(r.perf.own_late as f32)
+    .bind(r.perf.followed as f32)
+    .bind(r.perf.peer_fps.map(|f| f as f32))
+    .bind(r.perf.slow)
+    .bind(r.perf.peer_slow)
+    .bind(&r.app_version)
+    .bind(&r.platform)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// A waiting-room speed check (`speed_checks`, `crate::speed`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct SpeedCheckRecord {
+    pub uid: Uuid,
+    pub check: crate::speed::SpeedCheck,
+    pub app_version: String,
+    pub platform: String,
+}
+
+pub async fn record_speed_check(pool: &sqlx::PgPool, r: &SpeedCheckRecord) -> sqlx::Result<()> {
+    let windows: Vec<f32> = r.check.windows.iter().map(|w| *w as f32).collect();
+    sqlx::query(
+        "INSERT INTO speed_checks (uid, mode, windows, gaps, backend, app_version, platform)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)",
+    )
+    .bind(r.uid)
+    .bind(&r.check.mode)
+    .bind(&windows)
+    .bind(r.check.gaps as i32)
+    .bind(&r.check.backend)
+    .bind(&r.app_version)
+    .bind(&r.platform)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
 pub async fn record_chat_key(pool: &sqlx::PgPool, uid: Uuid, key: &[u8; 32]) -> sqlx::Result<()> {
     sqlx::query(
         "INSERT INTO chat_identity_keys (uid, public_key) VALUES ($1, $2)

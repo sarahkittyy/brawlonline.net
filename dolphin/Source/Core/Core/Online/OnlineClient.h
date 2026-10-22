@@ -69,6 +69,9 @@ struct MatchState
   SessionStatus session;
 };
 MatchState GetMatchState();
+// The mode of the search running (or connected, until Cleanup), if any. Lock-free: the loop top
+// reads it every frame (SpeedCheck).
+std::optional<Matchmaking::Mode> SearchMode();
 
 // JSON for the harness (docs/harness-protocol.md, "Online").
 picojson::object OnlineStatus();

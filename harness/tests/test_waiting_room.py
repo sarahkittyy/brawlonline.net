@@ -9,6 +9,7 @@ Instances are named ``wr-*`` (``ppharness clean --prefix wr-``). Screenshots go 
 from __future__ import annotations
 
 import json
+import re
 from typing import Callable, Iterator
 
 import pytest
@@ -272,6 +273,56 @@ def test_waiting_room_cancels(backend: OnlineBackend, dolphin: Callable[..., Dol
     a.shot("02-room-after-hold-b")
     assert _in_room(a), "holding B does not leave the room"
     assert a.c.mm_status()["state"] == "matchmaking", "nor cancel the search"
+
+
+@pytest.mark.slow
+def test_waiting_room_speed_check(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
+                                  gpu_backend: str) -> None:
+    """The room's speed check (docs/design/speed-check.md, log only): a search that waits in the
+    room has its frame rate measured in 300-frame windows after the room's first 120 frames, and
+    after four windows one `speed-check` goes to mm, which records it (`pp-admin speed show`). A
+    search cancelled after one window sends that one; one cancelled before a whole window sends
+    nothing."""
+    test = "waiting-room-speed"
+    ua = backend.create_user("tess", "TESS")
+    a = _boot(dolphin, "wr-s", backend, ua, gpu_backend, test, "gameplay")
+    a.to_main_menu()
+    a.to_online_page()
+    a.to_css("unranked")
+
+    _search(a, 1)
+    assert _in_room(a)
+    # 120 + 4 x 300 frames, with some to spare.
+    a.steps("wait 1500")
+    m = a.inst.wait_for_log(r"Speed check \(unranked\): ([\d.]+) frames a second over 4 windows", timeout=30)
+    assert 57.0 < float(m.group(1)) < 61.0, m.group(0)
+    assert _in_room(a) and a.c.mm_status()["state"] == "matchmaking", "the check changes nothing"
+    _wait(lambda: "speed check" in backend.log_text("mm"), 20, "mm's record of the check")
+    a.steps("tap START 40")
+    _back_on_css(a, "back on the CSS")
+    _wait(lambda: a.c.mm_status()["state"] == "idle", 10, "the search cancelled")
+
+    # Cancelled after one window (120 + 300 frames, and less than a second window).
+    _search(a, 1)
+    assert _in_room(a)
+    a.steps("wait 560", "tap START 40")
+    _back_on_css(a, "back on the CSS")
+    a.inst.wait_for_log(r"Speed check \(unranked\): [\d.]+ frames a second over 1 windows", timeout=30)
+    # Cancelled at once: nothing.
+    _wait(lambda: a.c.mm_status()["state"] == "idle", 10, "the search cancelled")
+    _search(a, 1)
+    a.steps("wait 60", "tap START 40")
+    _back_on_css(a, "back on the CSS")
+    a.inst.wait_for_log(r"Speed check: the room ended before a whole window", timeout=30)
+
+    def checks() -> list[str]:
+        return [l for l in backend.admin("speed", "show", ua.email).splitlines() if "  check unranked" in l]
+    _wait(lambda: len(checks()) == 2, 20, "both checks recorded")
+    shown = checks()
+    assert shown[0].count(",") == 3 and " Pass " in shown[0], shown
+    assert " Unsure " in shown[1], shown
+    mm_log = re.sub(r"\x1b\[[0-9;]*m", "", backend.log_text("mm"))
+    assert "bad speed check" not in mm_log and "recording a speed check failed" not in mm_log, mm_log[-3000:]
 
 
 @pytest.mark.slow

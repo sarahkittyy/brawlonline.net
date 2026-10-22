@@ -17,6 +17,7 @@
 #include "Core/Host.h"
 #include "Core/NetPlayClient.h"
 #include "Core/Online/GameBridge.h"
+#include "Core/Online/SpeedCheck.h"
 #include "Core/PowerPC/MMU.h"
 #include "Core/PowerPC/PowerPC.h"
 #include "Core/Rollback/GameplayRollback.h"
@@ -172,6 +173,8 @@ void BrawlbackGekkoNetUnconditionalFrame(const Core::CPUThreadGuard& guard)
     Gprb::CpuTraceOnLoopTop(system);
   Gprb::PadsOnLoopTop(system);
   Gprb::PadsWatchdog(guard);
+  // The waiting room's frame rate (no session runs there).
+  Online::SpeedCheck::OnLoopTop(guard);
   // Gameplay-only rollback session (Core/Rollback/GameplaySession.h). Never together with a
   // Dolphin netplay rollback session.
   if (!NetPlay::IsNetPlayRunning() && Gprb::Session::OnLoopTop(guard))

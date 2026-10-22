@@ -177,8 +177,11 @@ void Uploader::KeepPlayers(std::span<const u8> raw)
 void Uploader::ReportEnd(std::span<const u8> raw)
 {
   Game& g = *m_game;
-  // mm said not to stream this game (spectating off): it keeps nothing of it.
-  if (g.role == Role::None)
+  // mm said not to stream this game (spectating off): it keeps nothing of it. A `none` after a
+  // role is a paused primary made a standby: mm has the game, and wants its end (a Ranked game's
+  // result as this player's game saw it, and its speed). Before, a Ranked game whose upload had
+  // paused for the PC's speed was left out of ranked_game_results (harness, 2026-10-22).
+  if (g.role == Role::None && !g.had_role)
     return;
   picojson::value v;
   const std::string text(raw.begin(), raw.end());
@@ -201,6 +204,9 @@ void Uploader::ReportEnd(std::span<const u8> raw)
     o["quitterPort"] = picojson::value(static_cast<double>(*quitter));
   if (g.info.set_game != 0)
     o["setGame"] = picojson::value(static_cast<double>(g.info.set_game));
+  // This PC's speed over the game, as the ENDG has it (mm keeps it: speed_reports).
+  if (const auto perf = e.find("perf"); perf != e.end() && perf->second.is<picojson::object>())
+    o["perf"] = perf->second;
   // Kept for a while offline; a few games' at most.
   if (m_pending.size() >= 4)
     m_pending.erase(m_pending.begin());
@@ -284,6 +290,7 @@ bool Uploader::OnMessage(const picojson::object& o)
   if (!slot || *slot == 0 || (*role != "primary" && *role != "witness"))
     return true;
   g.slot = *slot;
+  g.had_role = true;
   if (*role == "witness")
   {
     g.role = Role::Witness;

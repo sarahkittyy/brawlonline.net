@@ -589,3 +589,177 @@ pub async fn rename_ruleset(
     tx.commit().await?;
     Ok(change)
 }
+
+// ---- Speed (`common::speed`, docs/design/speed-check.md): log only, nothing is refused ----
+
+/// One thing a player's PC did, as `speed_reports` and `speed_checks` have it.
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct SpeedEventRow {
+    pub at: chrono::DateTime<chrono::Utc>,
+    /// `game` (a speed report) or `check` (the waiting room).
+    pub kind: String,
+    pub mode: String,
+    pub match_id: Option<String>,
+    pub frames: Option<i32>,
+    pub fps: Option<f32>,
+    pub own_late: Option<f32>,
+    pub followed: Option<f32>,
+    pub peer_fps: Option<f32>,
+    pub windows: Option<Vec<f32>>,
+    pub backend: Option<String>,
+    pub platform: String,
+    pub app_version: String,
+}
+
+impl SpeedEventRow {
+    /// A game's speed as its game sent it.
+    pub fn perf(&self) -> Option<common::speed::GamePerf> {
+        (self.kind == "game").then(|| common::speed::GamePerf {
+            frames: self.frames.unwrap_or(0).max(0) as u32,
+            fps: self.fps.unwrap_or(0.0) as f64,
+            own_late: self.own_late.unwrap_or(0.0) as f64,
+            followed: self.followed.unwrap_or(0.0) as f64,
+            peer_fps: self.peer_fps.map(f64::from),
+            slow: false,
+            peer_slow: false,
+        })
+    }
+
+    pub fn check(&self) -> Option<common::speed::Check> {
+        let w: Vec<f64> = self.windows.as_ref()?.iter().map(|w| *w as f64).collect();
+        Some(common::speed::check_verdict(&w))
+    }
+
+    /// What the lock rule reads: Ranked games and every check.
+    pub fn event(&self) -> Option<common::speed::Event> {
+        match self.kind.as_str() {
+            "game" if self.mode == "ranked" => {
+                Some(common::speed::Event::RankedGame { slow: self.perf()?.slow_game() })
+            }
+            "check" => Some(common::speed::Event::Check(self.check()?)),
+            _ => None,
+        }
+    }
+}
+
+/// A player's games and checks of the last `days` days, oldest first.
+pub async fn speed_events(pool: &PgPool, uid: uuid::Uuid, days: i64) -> anyhow::Result<Vec<SpeedEventRow>> {
+    Ok(sqlx::query_as::<_, SpeedEventRow>(
+        "SELECT created_at AS at, 'game' AS kind, mode, match_id, frames, fps, own_late, followed, peer_fps,
+                NULL::real[] AS windows, NULL::text AS backend, platform, app_version
+           FROM speed_reports WHERE uid = $1 AND created_at > now() - make_interval(days => $2::int)
+         UNION ALL
+         SELECT created_at, 'check', mode, NULL, NULL, NULL, NULL, NULL, NULL, windows, backend, platform, app_version
+           FROM speed_checks WHERE uid = $1 AND created_at > now() - make_interval(days => $2::int)
+         ORDER BY at",
+    )
+    .bind(uid)
+    .bind(days as i32)
+    .fetch_all(pool)
+    .await?)
+}
+
+/// A player the rule would lock out of Ranked now.
+#[derive(Debug, Clone)]
+pub struct SpeedLocked {
+    pub uid: uuid::Uuid,
+    pub connect_code: Option<String>,
+    pub display_name: Option<String>,
+    /// Slow Ranked games in a row with no passing check since.
+    pub streak: u32,
+    /// The last Ranked game.
+    pub last: SpeedEventRow,
+}
+
+/// Everyone with a slow Ranked game in the last `days` days whom the rule would lock now, by
+/// their history over those days, latest first.
+pub async fn speed_locked(pool: &PgPool, days: i64) -> anyhow::Result<Vec<SpeedLocked>> {
+    use common::speed::{MIN_GAME_FRAMES, SLOW_FPS, SLOW_OWN_LATE};
+    let candidates: Vec<(uuid::Uuid, Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT DISTINCT r.uid, u.connect_code, u.display_name
+           FROM speed_reports r LEFT JOIN users u ON u.uid = r.uid
+          WHERE r.mode = 'ranked' AND r.frames >= $1 AND r.fps < $2 AND r.own_late > $3
+            AND r.created_at > now() - make_interval(days => $4::int)",
+    )
+    .bind(MIN_GAME_FRAMES as i32)
+    .bind(SLOW_FPS as f32)
+    .bind(SLOW_OWN_LATE as f32)
+    .bind(days as i32)
+    .fetch_all(pool)
+    .await?;
+    let mut out = Vec::new();
+    for (uid, connect_code, display_name) in candidates {
+        let rows = speed_events(pool, uid, days).await?;
+        let events: Vec<_> = rows.iter().filter_map(SpeedEventRow::event).collect();
+        if !common::speed::locked(&events) {
+            continue;
+        }
+        let streak = common::speed::slow_streak(&events);
+        if let Some(last) = rows.into_iter().rev().find(|r| r.kind == "game" && r.mode == "ranked") {
+            out.push(SpeedLocked { uid, connect_code, display_name, streak, last });
+        }
+    }
+    out.sort_by(|a, b| b.last.at.cmp(&a.last.at));
+    Ok(out)
+}
+
+/// Waiting-room checks of one platform and video backend.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct SpeedCheckCounts {
+    pub platform: String,
+    pub backend: String,
+    pub pass: i64,
+    pub slow: i64,
+    pub unsure: i64,
+    pub players: i64,
+}
+
+/// The numbers over the last `days` days.
+#[derive(Debug, Clone, Default)]
+pub struct SpeedSummary {
+    /// Per mode: games reported, slow ones (this PC's own), players with a slow one.
+    pub games: Vec<(String, i64, i64, i64)>,
+    pub checks: Vec<SpeedCheckCounts>,
+    /// Players the Ranked rule would lock now.
+    pub locked: usize,
+}
+
+pub async fn speed_summary(pool: &PgPool, days: i64) -> anyhow::Result<SpeedSummary> {
+    use common::speed::{Check, MIN_GAME_FRAMES, SLOW_FPS, SLOW_OWN_LATE};
+    let games: Vec<(String, i64, i64, i64)> = sqlx::query_as(
+        "SELECT mode, count(*),
+                count(*) FILTER (WHERE frames >= $1 AND fps < $2 AND own_late > $3),
+                count(DISTINCT uid) FILTER (WHERE frames >= $1 AND fps < $2 AND own_late > $3)
+           FROM speed_reports WHERE created_at > now() - make_interval(days => $4::int)
+          GROUP BY mode ORDER BY count(*) DESC",
+    )
+    .bind(MIN_GAME_FRAMES as i32)
+    .bind(SLOW_FPS as f32)
+    .bind(SLOW_OWN_LATE as f32)
+    .bind(days as i32)
+    .fetch_all(pool)
+    .await?;
+    let rows: Vec<(uuid::Uuid, String, String, Vec<f32>)> = sqlx::query_as(
+        "SELECT uid, platform, backend, windows FROM speed_checks
+          WHERE created_at > now() - make_interval(days => $1::int)",
+    )
+    .bind(days as i32)
+    .fetch_all(pool)
+    .await?;
+    type Counts = (SpeedCheckCounts, std::collections::HashSet<uuid::Uuid>);
+    let mut by: std::collections::BTreeMap<(String, String), Counts> = Default::default();
+    for (uid, platform, backend, windows) in rows {
+        let w: Vec<f64> = windows.iter().map(|w| *w as f64).collect();
+        let (c, who) = by.entry((platform.clone(), backend.clone())).or_insert_with(|| {
+            (SpeedCheckCounts { platform, backend, ..Default::default() }, Default::default())
+        });
+        match common::speed::check_verdict(&w) {
+            Check::Pass => c.pass += 1,
+            Check::Slow => c.slow += 1,
+            Check::Unsure => c.unsure += 1,
+        }
+        who.insert(uid);
+    }
+    let checks = by.into_values().map(|(c, who)| SpeedCheckCounts { players: who.len() as i64, ..c }).collect();
+    Ok(SpeedSummary { games, checks, locked: speed_locked(pool, days).await?.len() })
+}

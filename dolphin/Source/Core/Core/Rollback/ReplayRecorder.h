@@ -112,6 +112,20 @@ struct EndInfo
   u64 rollbacks = 0;
   u64 max_rollback = 0;
   u64 desyncs = 0;
+  // This PC's speed over the game (network play; 0 frames: not measured), ENDG's `perf`: frames a
+  // second, the share of frames late without a rollback before them (this PC's own speed), the
+  // share run at the speed of a peer that could not keep up and that peer's frame rate, and
+  // whether the game showed "can't keep up" for this PC / a peer (UpdateSlowNotice).
+  struct Perf
+  {
+    u64 frames = 0;
+    double fps = 0;
+    double own_late = 0;
+    double followed = 0;
+    double peer_fps = 0;
+    bool slow = false;
+    bool peer_slow = false;
+  } perf;
 };
 
 // Whether this match's games are recorded: saved ([Online] SaveReplays) or streamed (Streamed).

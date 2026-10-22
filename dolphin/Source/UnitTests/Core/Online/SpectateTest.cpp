@@ -642,4 +642,19 @@ TEST(Spectate, EveryPlayerReportsTheGamesEndWhateverItsRole)
   n.Role("none", 0);
   n.Add(Replay::CHUNK_ENDG, endg(R"({"endMethod":"game","winnerPort":1})"));
   EXPECT_TRUE(n.Tick().json.empty());
+
+  // A primary that paused and was handed on gets `none` (a standby): mm has the game and wants
+  // its end, with this PC's speed from the ENDG (harness 2026-10-22: a Ranked game at 48 fps
+  // lost the paused player's result this way).
+  Rig p;
+  p.Tick();
+  p.Role("primary", 5);
+  p.Role("none", 0);
+  p.Add(Replay::CHUNK_ENDG,
+        endg(R"({"endMethod":"game","winnerPort":1,"perf":{"frames":2272,"fps":48.1,"ownLate":0.12}})"));
+  out = p.Tick();
+  ASSERT_EQ(Types(out), std::vector<std::string>{"spectate-end"});
+  e = Parse(out.json[0]);
+  ASSERT_TRUE(e["perf"].is<picojson::object>());
+  EXPECT_EQ(e["perf"].get<picojson::object>().at("fps").get<double>(), 48.1);
 }

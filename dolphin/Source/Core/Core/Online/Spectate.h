@@ -183,6 +183,9 @@ private:
     bool too_big = false;
     bool offered = false;
     Role role = Role::Offering;
+    // mm gave this game a primary or witness role at some point: it knows the game, and its end
+    // is reported even after a later `none` (a paused primary handed on as a standby).
+    bool had_role = false;
     u32 slot = 0;
     std::optional<u32> from;
     bool headers = true;

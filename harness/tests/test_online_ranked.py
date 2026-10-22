@@ -333,6 +333,12 @@ def test_ranked_set_is_rated(backend: OnlineBackend, dolphin: Callable[..., Dolp
     assert sorted(int(i) for i, _, _ in said) == sorted(2 * list(range(1, len(games) + 1))), said
     assert {acc for _, acc, _ in said} == {ua.uid, ub.uid}, said
     assert "recording ranked" not in mm_log and "recording a ranked" not in mm_log, mm_log[-3000:]
+    # Each player's game's word on its speed over each game (docs/design/speed-check.md, log
+    # only), recorded by mm; this PC holds full speed, so none is slow.
+    for u in (ua, ub):
+        shown = [l for l in backend.admin("speed", "show", u.email).splitlines() if "  game  ranked" in l]
+        assert len(shown) == len(games) and not any("SLOW" in l for l in shown), shown
+    assert "recording a speed report failed" not in mm_log, mm_log[-3000:]
 
 
 # P+'s hold-to-pause timers (u32 at 0x80584080 + 8 * pad; NETPLAY.txt "Hold Start to Pause v3").

@@ -3,6 +3,7 @@
 
 #include "Core/Online/OnlineClient.h"
 
+#include <atomic>
 #include <chrono>
 #include <cstdlib>
 #include <memory>
@@ -31,6 +32,8 @@ std::unique_ptr<User> s_user;
 std::unique_ptr<Matchmaking> s_matchmaking;
 SearchOptions s_last_search;
 bool s_searched = false;
+// s_last_search's mode while s_searched, else -1 (SearchMode, without s_mutex).
+std::atomic<int> s_search_mode{-1};
 // Old matchmakings being torn down (their destructor waits for the matchmaking thread).
 std::vector<std::thread> s_cleanup_threads;
 
@@ -185,6 +188,7 @@ std::optional<std::string> FindMatch(const SearchOptions& options)
   SetHandoff("");
   s_last_search = options;
   s_searched = true;
+  s_search_mode = static_cast<int>(options.settings.mode);
   NOTICE_LOG_FMT(NETPLAY, "Online: searching ({}) for '{}'",
                  Matchmaking::ModeName(options.settings.mode), options.settings.connect_code);
   s_matchmaking->FindMatch(options.settings);
@@ -198,6 +202,7 @@ void Cleanup()
     std::lock_guard lk(s_mutex);
     old = std::move(s_matchmaking);
     s_searched = false;
+    s_search_mode = -1;
     s_cancel_on_stop = 0;
   }
   const std::optional<Match> found = old ? old->GetMatch() : std::nullopt;
@@ -317,6 +322,14 @@ picojson::object OnlineStatus()
   r["sets_played"] = picojson::value(static_cast<double>(rank.sets_played));
   o["ranked"] = picojson::value(r);
   return o;
+}
+
+std::optional<Matchmaking::Mode> SearchMode()
+{
+  const int mode = s_search_mode.load(std::memory_order_relaxed);
+  if (mode < 0)
+    return std::nullopt;
+  return static_cast<Matchmaking::Mode>(mode);
 }
 
 MatchState GetMatchState()
