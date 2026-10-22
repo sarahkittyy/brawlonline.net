@@ -23,6 +23,11 @@ export const BUILT_ON: Credit[] = [
     note: "Brawlback rollback fork",
   },
   {
+    name: "Orca",
+    url: "https://github.com/yougame-co/orca-netplay",
+    note: "YouGame",
+  },
+  {
     name: "Syriinge",
     url: "https://github.com/Sammi-Husky/Syriinge",
     note: "Sammi Husky",
