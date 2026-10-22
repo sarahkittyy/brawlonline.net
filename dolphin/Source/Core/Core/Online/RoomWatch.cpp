@@ -228,9 +228,9 @@ std::string WatchJson(std::optional<bool> want, std::optional<bool> watching)
 // Any controller's START or B (the local controllers' newest sample, never the replay's inputs).
 bool LeavePressed(bool* released)
 {
-  const Gprb::PadSlots latest = Gprb::PadsLatestRaw();
+  const Gprb::RawPads latest = Gprb::PadsLatestRaw();
   bool down = false;
-  for (u32 port = 0; port < 4; ++port)
+  for (u32 port = 0; port < 8; ++port)  // the GameCube ports and the Wii Remotes
   {
     const u8* pad = latest.data() + port * Gprb::Addr::PAD_STRIDE;
     if (pad[0x38] != 0)  // gfPadError: no controller

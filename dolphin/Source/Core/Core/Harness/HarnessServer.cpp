@@ -21,6 +21,7 @@
 #include <atomic>
 #include <cmath>
 #include <cstring>
+#include <map>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -52,6 +53,11 @@
 #include "Core/CoreTiming.h"
 #include "Core/HW/ProcessorInterface.h"
 #include "Core/HW/SI/SI_Device.h"
+#include "Core/HW/Wiimote.h"
+#include "Core/HW/WiimoteEmu/ExtensionPort.h"
+#include "Core/HW/WiimoteEmu/WiimoteEmu.h"
+#include "InputCommon/ControllerEmu/ControlGroup/Attachments.h"
+#include "InputCommon/InputConfig.h"
 #include "Core/Harness/Harness.h"
 #include "Core/Harness/HarnessInternal.h"
 #include "Core/Host.h"
@@ -1516,6 +1522,97 @@ Result CmdMachineWiimote(const Args& args)
   return {};
 }
 
+// wiimote_input: what emulated Wii Remote `index` (0-3) and its extension read, outside machine
+// sessions too (Dolphin's input override, as the TAS window uses). "extension": "none",
+// "nunchuk" or "classic" plugs that extension in. "wiimote", "nunchuk", "classic": objects of
+// "Group/Control" -> value (a button 1, a stick axis -1..1, a trigger 0..1), e.g.
+// {"Buttons/+": 1, "Left Stick/X": -1}. Every button, D-pad direction, stick and trigger left out
+// reads 0 (nothing from the host's devices); motion and IR keep their mapping. {"clear": true}
+// gives the Wii Remote back to its mapping.
+namespace WiiInput
+{
+struct State
+{
+  // per target (0 Wii Remote, 1 Nunchuk, 2 Classic): "Group/Control" -> value
+  std::array<std::map<std::string, double, std::less<>>, 3> values;
+};
+std::mutex s_mutex;
+std::array<State, 4> s_state;
+
+ControllerEmu::InputOverrideFunction Override(int index, int target)
+{
+  return [index, target](std::string_view group, std::string_view control,
+                         ControlState) -> std::optional<ControlState> {
+    std::lock_guard lk(s_mutex);
+    const auto& values = s_state[index].values[target];
+    const std::string key = fmt::format("{}/{}", group, control);
+    if (const auto it = values.find(key); it != values.end())
+      return it->second;
+    if (group == "Buttons" || group == "D-Pad" || group == "Triggers" || group == "Stick" ||
+        group == "Left Stick" || group == "Right Stick")
+      return 0.0;
+    return std::nullopt;
+  };
+}
+}  // namespace WiiInput
+
+Result CmdWiimoteInput(const Args& args)
+{
+  const u64 index = GetU64(args, "index", 0);
+  if (index > 3)
+    Fail("'index' must be 0-3");
+  const int i = static_cast<int>(index);
+  auto* wiimote = static_cast<WiimoteEmu::Wiimote*>(::Wiimote::GetConfig()->GetController(i));
+  auto* attachments = static_cast<ControllerEmu::Attachments*>(
+      wiimote->GetWiimoteGroup(WiimoteEmu::WiimoteGroup::Attachments));
+  auto& list = attachments->GetAttachmentList();
+  if (GetBool(args, "clear", false))
+  {
+    wiimote->ClearInputOverrideFunction();
+    list[WiimoteEmu::ExtensionNumber::NUNCHUK]->ClearInputOverrideFunction();
+    list[WiimoteEmu::ExtensionNumber::CLASSIC]->ClearInputOverrideFunction();
+    return {};
+  }
+  WiiInput::State next;
+  static constexpr std::array<const char*, 3> TARGETS = {"wiimote", "nunchuk", "classic"};
+  for (int t = 0; t < 3; ++t)
+  {
+    const picojson::value* v = Find(args, TARGETS[t]);
+    if (!v)
+      continue;
+    if (!v->is<picojson::object>())
+      Fail(fmt::format("'{}' must be an object", TARGETS[t]));
+    for (const auto& [key, value] : v->get<picojson::object>())
+    {
+      if (!value.is<double>())
+        Fail(fmt::format("'{}' of '{}' must be a number", key, TARGETS[t]));
+      next.values[t][key] = value.get<double>();
+    }
+  }
+  {
+    std::lock_guard lk(WiiInput::s_mutex);
+    WiiInput::s_state[i] = std::move(next);
+  }
+  if (const picojson::value* ext = Find(args, "extension"))
+  {
+    const std::string name = ext->is<std::string>() ? ext->get<std::string>() : "";
+    if (name == "none")
+      attachments->SetSelectedAttachment(WiimoteEmu::ExtensionNumber::NONE);
+    else if (name == "nunchuk")
+      attachments->SetSelectedAttachment(WiimoteEmu::ExtensionNumber::NUNCHUK);
+    else if (name == "classic")
+      attachments->SetSelectedAttachment(WiimoteEmu::ExtensionNumber::CLASSIC);
+    else
+      Fail("'extension' must be \"none\", \"nunchuk\" or \"classic\"");
+  }
+  wiimote->SetInputOverrideFunction(WiiInput::Override(i, 0));
+  list[WiimoteEmu::ExtensionNumber::NUNCHUK]->SetInputOverrideFunction(WiiInput::Override(i, 1));
+  list[WiimoteEmu::ExtensionNumber::CLASSIC]->SetInputOverrideFunction(WiiInput::Override(i, 2));
+  Result r;
+  r["extension"] = Num(attachments->GetSelectedAttachment());
+  return r;
+}
+
 Result CmdMachineDigest(const Args& args)
 {
   std::vector<u32> addrs;
@@ -2118,6 +2215,7 @@ const std::vector<std::pair<std::string_view, Handler>>& Handlers()
       {"machine_history", CmdMachineHistory},
       {"machine_stop", CmdMachineStop},
       {"machine_wiimote", CmdMachineWiimote},
+      {"wiimote_input", CmdWiimoteInput},
       {"machine_digest", CmdMachineDigest},
       {"machine_image_state_save", CmdMachineImageStateSave},
       {"machine_image_state_load", CmdMachineImageStateLoad},

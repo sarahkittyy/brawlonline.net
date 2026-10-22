@@ -293,8 +293,9 @@ bool IsPermutation(const std::array<u32, 4>& mine, const std::array<u32, 4>& the
 
 void SanitizePad(u8* pad)
 {
-  if (pad[0x3C] > 3)
-    pad[0x3C] = 0;
+  // The type is a u32 (guest byte order): 0-3, else GameCube.
+  if (pad[0x3C] != 0 || pad[0x3D] != 0 || pad[0x3E] != 0 || pad[0x3F] > 3)
+    std::memset(pad + 0x3C, 0, 4);
   const u8 err = pad[0x38];
   if (err != 0x00 && err != 0xFF && err != 0xFE && err != 0xFD)
     pad[0x38] = 0;
@@ -502,7 +503,8 @@ std::vector<std::string> SetupKeyDiff(const std::vector<u8>& mine, const std::ve
     if (teams)
       field(1, fmt::format("P{} team", p));
   }
-  // g_PadConfig: each GameCube pad's layout, then player -> pad.
+  // g_PadConfig: each GameCube pad's layout (or, for a port whose player plays its Wii Remote
+  // pad, their Wii layouts folded into the same 12 bytes), then player -> pad.
   static constexpr const char* PAD_BYTES[12] = {"L",       "R", "Z", "D-pad up", "D-pad side",
                                                 "D-pad down", "A", "B", "C-stick",  "Y",
                                                 "X",       "flags"};

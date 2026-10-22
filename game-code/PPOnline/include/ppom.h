@@ -327,8 +327,13 @@ namespace PPOM {
         // own). The match gives the player's port that colour on every machine. Still v8, this
         // was padding.
         u8 slotColour;    // 0x3A
-        u8 _pad;
+        // PV_WII when the player locked in with a Wii Remote (alone, with a Nunchuk or with a
+        // Classic Controller), set by Dolphin from lockPad: every machine's match gives their
+        // port that controller (controller number port + 5, the Wii Remote pads), so the game
+        // reads their input from it with their tag's Wii layouts. Still v8, this was padding.
+        u8 controller;    // 0x3B
     };                    // 0x3C
+    const u8 PV_WII = 0x01;
     const u8 SLOT_COLOURS = 13;   // P+'s slot colours 0-12 (PortValues.slotColour 1-13)
 
     // ---- LOCAL ----
@@ -364,8 +369,9 @@ namespace PPOM {
         LockIn lockIn;    // written by the game
         u8 lockTeam;      // written by the game with the lock-in: the player's team colour
                           // (TEAM_RED..TEAM_GREEN) for a team battle, TEAM_NONE none
-        u8 lockPad;       // game: the controller port (0-3) whose START locked in, with the
-                          // lock-in (its seq covers it); the match reads that controller
+        u8 lockPad;       // game: the controller whose START locked in, with the lock-in (its
+                          // seq covers it): its pad, GameCube ports 0-3, Wii Remotes 4-7; the
+                          // match reads that controller
         u8 screen;        // game: Screen, every frame (rooms: launcher joins, game-status.json)
         u8 roomJoin;      // Dolphin: bumped when it accepted a launcher join and sent it: go to
                           // the room CSS

@@ -463,7 +463,7 @@ A shared replay comes from a stranger. Every byte is validated before use. Value
 
 A constant in `Gprb` (new), bumped by any change to the simulation path of a match: sync writes, pacing, the IO wait, anchoring, `CountdownSlots` (was `NeutralSlots`), `start_frame` handling, `SanitizePad`. A golden-replay check in the nightly harness (11, test 9) catches a missed bump: the same stored replay must still give the same trace.
 
-Versions so far: 1, the first; 2 (2026-10-14), the countdown runs with each player's buttons held at the barrier (start-of-match hotkeys such as Samus's ice mode; `SETP` gains `holds`, the countdown's buttons per port). A version 1 file has no `holds` and its countdown ran neutral, which is what playback does without them, so playback takes 1 and 2 (`Replay::SimVersionPlays`); a version 2 file on an older build is refused, with "Play anyway".
+Versions so far: 1, the first; 2 (2026-10-14), the countdown runs with each player's buttons held at the barrier (start-of-match hotkeys such as Samus's ice mode; `SETP` gains `holds`, the countdown's buttons per port). A version 1 file has no `holds` and its countdown ran neutral, which is what playback does without them, so playback takes 1 and 2 (`Replay::SimVersionPlays`); a version 2 file on an older build is refused, with "Play anyway". 3 (2026-10-22), Wii Remotes: each player's record goes into their port's GameCube or Wii Remote pad by its controller type, and the countdown's holds carry the type (bits 12-13). A game where everyone played on GameCube controllers simulates as version 2 did and is still written as 2, so that older builds play it; a game with a Wii Remote is written as 3, which they refuse. Playback takes 1-3.
 
 ## 9. Launcher integration
 

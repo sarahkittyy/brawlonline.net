@@ -287,11 +287,24 @@ TEST(PeerData, PadSanitising)
   pad[0x30] = 0x7F;          // stick x
   pad[0x38] = 0xFF;          // NO_CONTROLLER
   pad[0x39] = pad[0x3A] = pad[0x3B] = 0xCC;
-  pad[0x3C] = 3;             // Nunchuk
+  pad[0x3F] = 3;             // controller type (u32): Nunchuk
   PutFloatBE(&pad[0x18], 0.5f);
   auto copy = pad;
   SanitizePad(copy.data());
   EXPECT_EQ(copy, pad);
+
+  // Every Wii type passes; one past them is a GameCube controller.
+  for (u8 type : {u8{1}, u8{2}})
+  {
+    copy = pad;
+    copy[0x3F] = type;
+    SanitizePad(copy.data());
+    EXPECT_EQ(copy[0x3F], type);
+  }
+  copy = pad;
+  copy[0x3F] = 4;
+  SanitizePad(copy.data());
+  EXPECT_EQ(copy[0x3F], 0);
 
   // Hostile values.
   pad[0x3C] = 0xFE;
@@ -300,7 +313,7 @@ TEST(PeerData, PadSanitising)
   PutFloatBE(&pad[0x1C], std::numeric_limits<float>::infinity());
   PutFloatBE(&pad[0x2C], 3e30f);
   SanitizePad(pad.data());
-  EXPECT_EQ(pad[0x3C], 0);
+  EXPECT_EQ(pad[0x3C] | pad[0x3D] | pad[0x3E] | pad[0x3F], 0);
   EXPECT_EQ(pad[0x38], 0);
   for (size_t off : {size_t{0x18}, size_t{0x1C}, size_t{0x2C}})
     EXPECT_EQ(pad[off] | pad[off + 1] | pad[off + 2] | pad[off + 3], 0) << off;
@@ -315,7 +328,8 @@ TEST(PeerData, PortValuesAndNames)
   SanitizePortValues(pv);
   EXPECT_EQ(pv[0], 0x01);
   EXPECT_EQ(pv[1], 0x00);
-  EXPECT_EQ(pv[0x39] | pv[0x3A] | pv[0x3B], 0);
+  EXPECT_EQ(pv[0x39] | pv[0x3A], 0);
+  EXPECT_EQ(pv[0x3B], 0x01);  // the controller: only its Wii bit
   EXPECT_EQ(pv[0x10], 0xFF);  // the layout is the game's to sanitise
   // The stock count picked on the STOCKS box (stock control) is kept up to 99.
   pv[0x39] = 3;
@@ -327,9 +341,10 @@ TEST(PeerData, PortValuesAndNames)
   pv[0x39] = 100;
   SanitizePortValues(pv);
   EXPECT_EQ(pv[0x39], 0);
-  // P+'s slot colour picked on the CSS (1-13, 0 none) is kept; the last byte is padding.
+  // P+'s slot colour picked on the CSS (1-13, 0 none) is kept; of the controller byte only its
+  // Wii bit.
   pv[0x3A] = 1;
-  pv[0x3B] = 0xFF;
+  pv[0x3B] = 0xFE;
   SanitizePortValues(pv);
   EXPECT_EQ(pv[0x3A], 1);
   EXPECT_EQ(pv[0x3B], 0);

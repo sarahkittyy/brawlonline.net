@@ -11,9 +11,10 @@ namespace Online {
     const char* currentSceneName();
     bool inScene(const char* name);
 
-    // Rumble (online.cpp, PADControlMotor): mapped, only in-game port `port`'s rumble reaches a
-    // controller, the one in port `pad` (0-3); port 0xFF: none. Not mapped: every port's own.
-    void setRumblePorts(bool mapped, u8 port, u8 pad);
+    // Rumble (online.cpp, PADControlMotor and WPADControlMotor): mapped, only pad `from`'s
+    // rumble (the local player's port's pad in the match: GameCube 0-3, Wii Remote 4-7) reaches a
+    // controller, pad `to` (theirs, 0-7); `from` 0xFF: none. Not mapped: every pad's own.
+    void setRumblePorts(bool mapped, u8 from, u8 to);
 
     // Message system.
     const char* msbinLine(const void* msbin, int line, int* outLen);

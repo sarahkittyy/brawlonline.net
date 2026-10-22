@@ -526,7 +526,8 @@ namespace StageSwitch {
         u32 ps = *(u32*)0x805A0040;   // g_gfPadSystem: the sys pads' pressed field (+0xC)
         if (!isPtr(ps)) return 0;
         u32 b = 0;
-        for (int p = 0; p < 4; p++) b |= *(volatile u32*)(ps + 0x244 + 0x40 * p + 0xC);
+        // GameCube ports 0-3, Wii Remotes 4-7
+        for (int p = 0; p < 8; p++) b |= *(volatile u32*)(ps + 0x244 + 0x40 * p + 0xC);
         return b;
     }
 

@@ -571,6 +571,25 @@ class HarnessClient:
         r = self.call("pad_script_status", port=_check_port(port))
         return ScriptStatus(bool(r["active"]), int(r["remaining"]))
 
+    def wiimote_input(self, index: int = 0, *, extension: str | None = None,
+                      wiimote: Mapping[str, float] | None = None,
+                      nunchuk: Mapping[str, float] | None = None,
+                      classic: Mapping[str, float] | None = None, clear: bool = False) -> None:
+        """What emulated Wii Remote ``index`` (0-3) and its extension read until the next call:
+        ``"Group/Control" -> value`` per part, e.g. ``classic={"Buttons/+": 1, "Left Stick/X": -1}``
+        (buttons 1, stick axes -1..1, triggers 0..1). Every button, direction, stick and trigger
+        left out reads 0. ``extension`` ("none", "nunchuk", "classic") plugs that one in;
+        ``clear`` hands the Wii Remote back to its mapping."""
+        args: dict[str, Any] = {"index": index}
+        if clear:
+            args["clear"] = True
+        if extension is not None:
+            args["extension"] = extension
+        for k, v in (("wiimote", wiimote), ("nunchuk", nunchuk), ("classic", classic)):
+            if v is not None:
+                args[k] = dict(v)
+        self.call("wiimote_input", **args)
+
     def rumble_status(self) -> list[dict[str, Any]]:
         """Per local controller port 0-3: ``{"starts": motor starts since the boot, "on": bool}``."""
         return list(self.call("rumble_status")["pads"])

@@ -398,11 +398,12 @@ namespace TrainingRoom {
         // tag the CSS was built with (OnlineMenu::restoreTag): the last lock-in's, none on the
         // boot's first CSS, so the room played a search behind (bug report #73).
         rec[0x18] = OnlineMenu::lockedTagRecord();
-        // The controller that searched (LOCAL lockPad, 0-3), as the match's controller numbers
-        // are (OnlineMatch's setup: 1-4). State 5 copies the record's byte as it is; the Wi-Fi
-        // CSS leaves 0 there, which is no controller: the room's fighter stood still.
+        // The controller that searched (LOCAL lockPad: GameCube ports 0-3, Wii Remotes 4-7), as
+        // the match's controller numbers are (the pad + 1: GameCube 1-4, Wii Remotes 5-8). State 5
+        // copies the record's byte as it is; the Wi-Fi CSS leaves 0 there, which is no
+        // controller: the room's fighter stood still.
         const u8 pad = PPOM::g_block.local.lockPad;
-        rec[0x07] = (u8)((pad < 4 ? pad : 0) + 1);
+        rec[0x07] = (u8)((pad < 8 ? pad : 0) + 1);
     }
 
     int onSelStage(u8* seq)

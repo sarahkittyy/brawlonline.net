@@ -162,31 +162,45 @@ namespace Online {
     // in port 1 got P1's rumble, and none of their own (bug report, 2026-10-20). In an online
     // match (setRumblePorts) only this player's in-game port rumbles, on their controller; every
     // other port's commands are dropped (also in a replay or a watched game: nobody's).
+    // A Wii Remote's rumble goes the same way through the SDK's WPADControlMotor(chan, command)
+    // (0x8021A558), which gfPadSystem calls for its pads 4-7 (chan = pad - 4): a player on a Wii
+    // Remote has their port's Wii Remote pad in the match (OnlineMatch's setup), and their
+    // controller may be a Wii Remote or a GameCube port of this machine.
     typedef void (*PadMotorFn)(int, u32);
     static PadMotorFn s_origPadControlMotor = NULL;
+    static PadMotorFn s_origWpadControlMotor = NULL;
     static volatile u8 s_rumbleMapped = 0;
-    static volatile u8 s_rumblePort = 0xFF;
-    static volatile u8 s_rumblePad = 0xFF;
+    static volatile u8 s_rumbleFrom = 0xFF;   // the pad (0-7) the local player's port rumbles
+    static volatile u8 s_rumbleTo = 0xFF;     // their controller (LOCAL lockPad, 0-7)
 
-    static void hkPadControlMotor(int chan, u32 command)
+    static void motor(int pad, u32 command)
     {
-        if (s_rumbleMapped) {
-            if ((u32)chan != s_rumblePort || s_rumblePad >= 4) return;
-            chan = s_rumblePad;
-        }
-        s_origPadControlMotor(chan, command);
+        if (pad >= 0 && pad < 4) s_origPadControlMotor(pad, command);
+        else if (pad >= 4 && pad < 8) s_origWpadControlMotor(pad - 4, command);
     }
 
-    void setRumblePorts(bool mapped, u8 port, u8 pad)
+    static void routeMotor(int pad, u32 command)
     {
-        if (!mapped) port = pad = 0xFF;
-        if ((mapped ? 1 : 0) == s_rumbleMapped && port == s_rumblePort && pad == s_rumblePad) return;
+        if (s_rumbleMapped) {
+            if ((u32)pad != s_rumbleFrom || s_rumbleTo >= 8) return;
+            pad = s_rumbleTo;
+        }
+        motor(pad, command);
+    }
+
+    static void hkPadControlMotor(int chan, u32 command) { routeMotor(chan, command); }
+    static void hkWpadControlMotor(int chan, u32 command) { routeMotor(chan + 4, command); }
+
+    void setRumblePorts(bool mapped, u8 from, u8 to)
+    {
+        if (!mapped) from = to = 0xFF;
+        if ((mapped ? 1 : 0) == s_rumbleMapped && from == s_rumbleFrom && to == s_rumbleTo) return;
         // A change (into or out of an online match): stop every motor, so none started under the
         // old mapping keeps running (its stop would now go elsewhere or be dropped).
         s_rumbleMapped = 0;
-        for (int c = 0; c < 4; c++) s_origPadControlMotor(c, 0);
-        s_rumblePort = port;
-        s_rumblePad = pad;
+        for (int pad = 0; pad < 8; pad++) motor(pad, 0);
+        s_rumbleFrom = from;
+        s_rumbleTo = to;
         s_rumbleMapped = mapped ? 1 : 0;
     }
 
@@ -224,6 +238,7 @@ namespace Online {
         api->syReplaceFunc(0x8002AA8C, reinterpret_cast<void*>(hkStopMotor), (void**)&s_origStopMotor);
         api->syReplaceFunc(0x8002AB00, reinterpret_cast<void*>(hkStopMotorH), (void**)&s_origStopMotorH);
         api->syReplaceFunc(0x802162A4, reinterpret_cast<void*>(hkPadControlMotor), (void**)&s_origPadControlMotor);
+        api->syReplaceFunc(0x8021A558, reinterpret_cast<void*>(hkWpadControlMotor), (void**)&s_origWpadControlMotor);
         NetMenu::install(api);
         OnlineMenu::install(api);
         StageLegal::install(api);

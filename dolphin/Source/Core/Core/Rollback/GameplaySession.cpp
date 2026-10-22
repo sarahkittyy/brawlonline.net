@@ -802,6 +802,7 @@ void EndReplay(Core::System& system, const std::string& reason, const GameResult
 
 namespace
 {
+void KeepPortType(u8* rec, int port);  // below, with the countdown's holds
 // Sound bookkeeping (defined with OnSoundAlloc below).
 bool RunSoundStops(const Core::CPUThreadGuard& guard);
 void CommitSoundPass();
@@ -984,11 +985,29 @@ std::vector<u8> SetupKey(const Guest& g)
       key.push_back(pl[0x0B]);
   }
   // Each controller's layout (ipPadConfig, g_PadConfig 0x805B7480: GameCube pads 12 bytes each,
-  // then player -> pad at +0xB5). Every player plays with their own name tag's controls, which
-  // the game applies from SESSION at the match start (docs/game-code.md, per-player controls).
+  // Wii Remote pads 0x21 bytes each from +0x30, then player -> pad at +0xB5). Every player plays
+  // with their own name tag's controls, which the game applies from SESSION at the match start
+  // (docs/game-code.md, per-player controls). A port whose player plays its Wii Remote pad has
+  // their Wii layouts here instead, folded into the port's 12 bytes (XXH3): the port's GameCube
+  // layout is then nobody's and may differ between the machines. The key keeps its size, and a
+  // match on GameCube controllers alone has the key it always had (replays compare it).
   if (const u8* cfg = g.Ptr(PAD_CONFIG, PAD_CONFIG_KEY_SIZE))
   {
-    key.insert(key.end(), cfg, cfg + 0x30);
+    for (u32 pad = 0; pad < 4; ++pad)
+    {
+      const u8* layout = cfg + pad * 12;
+      std::array<u8, 12> folded{};
+      if (std::any_of(cfg + 0xB5, cfg + 0xB9, [pad](u8 p) { return p == Addr::WII_PADS + pad; }))
+      {
+        const XXH128_hash_t h = XXH3_128bits(cfg + 0x30 + pad * 0x21, 0x21);
+        for (int k = 0; k < 8; ++k)
+          folded[k] = static_cast<u8>(h.high64 >> (56 - 8 * k));
+        for (int k = 0; k < 4; ++k)
+          folded[8 + k] = static_cast<u8>(h.low64 >> (56 - 8 * k));
+        layout = folded.data();
+      }
+      key.insert(key.end(), layout, layout + 12);
+    }
     key.insert(key.end(), cfg + 0xB5, cfg + 0xB9);
   }
   // The rules as applied (docs/design/room-rules.md §1 #5): a machine that applied other rules
@@ -3027,10 +3046,19 @@ void DestroyGekko()
   }
 }
 
-// The controller that pressed START to lock in plays this game (Slippi-style: any port).
+// A local controller by its pad (GameCube ports 0-3, Wii Remotes 4-7), for the log.
+std::string PadName(int pad)
+{
+  if (pad < 0 || pad >= 8)
+    return "none";
+  return pad >= 4 ? fmt::format("Wii Remote {}", pad - 3) : fmt::format("port {}", pad + 1);
+}
+
+// The controller that pressed START to lock in plays this game (Slippi-style: any port): its pad,
+// GameCube ports 0-3, Wii Remotes 4-7 (Addr::WII_PADS).
 int LocalPad()
 {
-  return s.local_lock.local_pad < 4 ? s.local_lock.local_pad :
+  return s.local_lock.local_pad < 8 ? s.local_lock.local_pad :
                                       std::clamp(s.net_opts.local_pad, 0, 3);
 }
 
@@ -3119,9 +3147,9 @@ bool CreateGekko(bool stress, int num_players)
     s.local_pad = LocalPad();
     INFO_LOG_FMT(BRAWLBACK,
                  "gprb: input delay {} ({}, round trip {:.0f} ms, in game {:.0f} ms), controller "
-                 "port {}",
+                 "{}",
                  s.input_delay, s.net_opts.delay ? "set" : "auto", rtt, GameRoundTrip(rtt),
-                 s.local_pad + 1);
+                 PadName(s.local_pad));
     if (s.gone_enabled)
     {
       // A player who leaves a 3-4 player match gets the gone marker as its input from the frame
@@ -4658,6 +4686,7 @@ bool ProcessGekkoUpdate(Core::System& system, GekkoGameEvent** events, int count
               // The remote player's bytes come straight from the network: every player's input
               // is sanitised the same way on both machines before it reaches the pad slots.
               PeerData::SanitizePad(slots.data() + port * INPUT_SIZE);
+              KeepPortType(slots.data() + port * INPUT_SIZE, port);
             }
           }
         }
@@ -4978,7 +5007,7 @@ constexpr auto HALF_FIELD = std::chrono::microseconds(8342);
 
 void CaptureLocalInputs()
 {
-  PadSlots latest;
+  RawPads latest;
   if (s.mode == Mode::Network)
   {
     // The pad thread's pass and this loop top come at nearly the same emulated time, in either
@@ -4999,7 +5028,7 @@ void CaptureLocalInputs()
   }
   if (s.mode == Mode::SyncTest)
   {
-    std::memcpy(s.local_inputs.data(), latest.data(), latest.size());
+    std::memcpy(s.local_inputs.data(), latest.data(), s.local_inputs.size());
   }
   else
   {
@@ -5201,19 +5230,43 @@ u32 StartFrame()
 // gfPadButtons (as the game reads them; D-pad left 0x1, right 0x2, down 0x4, up 0x8): the D-pad,
 // Z, R, L, A, B, X, Y; not START (0x1000) nor 0x80.
 constexpr u16 HOLD_BUTTONS = 0x0F7F;
+// The hold's bits 12-13 (never a held button: START and 0x2000 are not in HOLD_BUTTONS) carry the
+// player's controller type (gfPadType 0-3: GameCube, Classic, Wii Remote, Nunchuk), so that the
+// countdown gives every player's port the controller they play on. A hold without it (a build
+// before Wii Remotes, a replay before them) is a GameCube controller's.
+constexpr u32 HOLD_TYPE_SHIFT = 12;
+constexpr u16 HOLD_TYPE_MASK = 0x3000;
+// What a hold may carry (a peer's, the host's, a replay's): the held buttons and the type.
+constexpr u16 HOLD_MASK = HOLD_BUTTONS | HOLD_TYPE_MASK;
 
 u16 SampleHold()
 {
-  const PadSlots latest = PadsLatestRaw();
+  const RawPads latest = PadsLatestRaw();
   const u8* pad = latest.data() + LocalPad() * INPUT_SIZE;
+  const u16 type = IsWiiPad(pad) ? static_cast<u16>(pad[Addr::PAD_TYPE_OFF] << HOLD_TYPE_SHIFT) : 0;
   if (pad[0x38] != 0)  // gfPadError: no controller (or not ready)
-    return 0;
-  return static_cast<u16>((pad[2] << 8 | pad[3]) & HOLD_BUTTONS);
+    return type;
+  return static_cast<u16>(((pad[2] << 8 | pad[3]) & HOLD_BUTTONS) | type);
 }
 
-// Countdown: every port reads as a connected GameCube controller holding its player's sampled
-// buttons (else neutral; ports nobody plays as unplugged), identically on every machine, and
-// nothing is rolled back.
+// A Wii Remote player's input is a Wii Remote's on every frame: the input GekkoNet has for frames
+// nobody sent (the input delay's first frames, a prediction before the first input came) is all
+// zero, a GameCube controller's, which would leave their Wii Remote pad with no controller for
+// those frames. The type is the one the barrier agreed on (the holds), the same on every machine.
+void KeepPortType(u8* rec, int port)
+{
+  if (!s.holds_valid || port < 0 || port >= MAX_LOBBY_PLAYERS)
+    return;
+  const u8 type = static_cast<u8>((s.holds[port] & HOLD_TYPE_MASK) >> HOLD_TYPE_SHIFT);
+  if (type == 0 || IsWiiPad(rec))
+    return;
+  std::memset(rec + 0x3C, 0, 4);
+  rec[Addr::PAD_TYPE_OFF] = type;
+}
+
+// Countdown: every port reads as a connected controller of its player's type holding their
+// sampled buttons (else neutral; ports nobody plays as unplugged), identically on every machine,
+// and nothing is rolled back.
 PadSlots CountdownSlots()
 {
   PadSlots slots{};
@@ -5232,6 +5285,8 @@ PadSlots CountdownSlots()
       pad[off + 2] = static_cast<u8>(hold >> 8);
       pad[off + 3] = static_cast<u8>(hold);
     }
+    if (s.holds_valid)
+      pad[Addr::PAD_TYPE_OFF] = static_cast<u8>((s.holds[port] & HOLD_TYPE_MASK) >> HOLD_TYPE_SHIFT);
   }
   return slots;
 }
@@ -6328,9 +6383,11 @@ void SetLocalLock(const LockIn& lock_in)
   if (changed)
   {
     INFO_LOG_FMT(BRAWLBACK,
-                 "gprb lobby: local lock-in {} for game {} (char {:#x}/{}, stage {:#x}, tag {})",
+                 "gprb lobby: local lock-in {} for game {} (char {:#x}/{}, stage {:#x}, tag {}, "
+                 "controller {})",
                  lock.ready ? "ready" : "not ready", lock.game, lock.char_kind, lock.costume,
-                 lock.stage_pick, (lock.port_values[0] & 1) ? "yes" : "no");
+                 lock.stage_pick, (lock.port_values[0] & 1) ? "yes" : "no",
+                 PadName(lock.local_pad));
   }
   MaybeDecideSetup();
 }
@@ -6646,7 +6703,7 @@ std::optional<std::string> ArmPlayback(std::shared_ptr<const Replay::File> file,
       const auto n = PeerData::JsonUInt(&a[i], 0xFFFF);
       if (!n)
         return "the replay's match setup is damaged";
-      pb.holds[i] = static_cast<u16>(*n & HOLD_BUTTONS);
+      pb.holds[i] = static_cast<u16>(*n & HOLD_MASK);
     }
   }
   // A live game may be armed from its setup alone: its match loads while its first frames come,
@@ -7449,9 +7506,15 @@ void BeginReplay(Core::System& system)
   const auto& tasks = host ? s.task_order : hp->task_order;
   const std::vector<u8>& init = host ? s.init_block : hp->init_block;
 
+  // A Wii Remote in the game (its player's countdown hold carries its type) makes it a version 3
+  // file; GameCube controllers alone simulate as version 2 did, and are written so.
+  const bool wii = s.holds_valid && std::any_of(s.holds.begin(), s.holds.end(), [](u16 h) {
+                     return (h & HOLD_TYPE_MASK) != 0;
+                   });
+  const u32 sim = wii ? Replay::SIM_VERSION : Replay::SIM_VERSION_GC;
   picojson::object o;
   o["v"] = picojson::value(1.0);
-  o["sim"] = picojson::value(static_cast<double>(Replay::SIM_VERSION));
+  o["sim"] = picojson::value(static_cast<double>(sim));
   o["start_frame"] = picojson::value(static_cast<double>(StartFrame()));
   o["match_index"] = picojson::value(static_cast<double>(s.match_index));
   o["seed"] = picojson::value(static_cast<double>(s.session_seed));
@@ -7544,6 +7607,7 @@ void BeginReplay(Core::System& system)
     }
   }
   info.setup_json = picojson::value(o).serialize();
+  info.sim_version = sim;
   Replay::Begin(system, info);
 }
 
@@ -8398,7 +8462,7 @@ bool OnLoopTop(const Core::CPUThreadGuard& guard)
       if (all_holds)
       {
         for (int port = 0; port < MAX_LOBBY_PLAYERS; ++port)
-          s.holds[port] = (s.match_ports >> port) & 1 ? holds[port] & HOLD_BUTTONS : 0;
+          s.holds[port] = (s.match_ports >> port) & 1 ? holds[port] & HOLD_MASK : 0;
         s.holds_valid = true;
         INFO_LOG_FMT(BRAWLBACK, "gprb: countdown buttons {:#06x} {:#06x} {:#06x} {:#06x}",
                      s.holds[0], s.holds[1], s.holds[2], s.holds[3]);
@@ -8410,7 +8474,7 @@ bool OnLoopTop(const Core::CPUThreadGuard& guard)
     {
       s.holds = hp->holds;
       for (u16& h : s.holds)
-        h &= HOLD_BUTTONS;
+        h &= HOLD_MASK;
       s.holds_valid = true;
       INFO_LOG_FMT(BRAWLBACK,
                    "gprb: countdown buttons {:#06x} {:#06x} {:#06x} {:#06x} (the host's)",

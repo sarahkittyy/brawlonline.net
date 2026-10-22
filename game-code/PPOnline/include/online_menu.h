@@ -91,6 +91,7 @@ namespace OnlineMatch {
     void onFrameDrawn();              // every drawn frame (MatchHud's hook)
     bool disconnectShown();
     bool quitHintShown();             // Unranked: this player's START shows the quit hint
+    const char* quitHintText();       // its text: this player's controller's quit buttons
     u16 pickedStage();                // the loser's stage pick (0xFFFF none, PICK_CANCELLED)
     const u16 PICK_CANCELLED = 0xFFFD; // the stage select was left without a pick (B)
     u8 pickedAsl();

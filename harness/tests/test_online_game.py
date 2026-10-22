@@ -390,6 +390,7 @@ def _boot(dolphin: Callable[..., DolphinInstance], name: str, be: OnlineBackend,
           gcpad_ini: dict[str, dict[str, Any]] | None = None,
           dolphin_ini: dict[str, dict[str, Any]] | None = None,
           standard_controllers: tuple[int, ...] = (0, 1),
+          wiimote_ini: dict[str, dict[str, Any]] | None = None,
           before_launch: Callable[[Path], Any] | None = None,
           env: dict[str, str] | None = None) -> Game:
     if not PLUGIN.exists():
@@ -399,7 +400,7 @@ def _boot(dolphin: Callable[..., DolphinInstance], name: str, be: OnlineBackend,
     for section, values in (dolphin_ini or {}).items():
         ini.setdefault(section, {}).update(values)
     cfg = InstanceConfig(cpu_thread=True, video_backend=video, dolphin_ini=ini, gcpad_ini=gcpad_ini or {},
-                         standard_controllers=standard_controllers)
+                         standard_controllers=standard_controllers, wiimote_ini=wiimote_ini or {})
     inst = dolphin(name, config=cfg, client_timeout=60.0, env=env)
     d = inst.create()
     patch_sd.patch_image(d / "Wii" / "sd.raw",

@@ -123,6 +123,10 @@ namespace OnlineMatch {
     // the same on both machines, so are these). Applied by the ipPadConfig hook below.
     static u8 s_portLayout[4][PPOM::LAYOUT_SIZE];
     static u8 s_portHasLayout[4];
+    // Each port's controller in this match (SESSION's port values, the same on every machine):
+    // its pad, the port's GameCube pad (0-3) or, for a player who locked in with a Wii Remote
+    // (PV_WII), the port's Wii Remote pad (4-7). The match's controller number is the pad + 1.
+    static u8 s_portPad[4] = {0, 1, 2, 3};
 
     // A layout from another machine reaches the game only as its own menus could have set it
     // (Orca's NameTags.cpp LayoutByte): actions up to 0xE ("none"), the flag bytes only their
@@ -382,6 +386,15 @@ namespace OnlineMatch {
         memcpy(tmpl, TEMPLATE, PLAYER_SIZE);
         u8 costume[4];
         u8 alt[4] = {0, 0, 0, 0};
+        // Each port's controller (s_portPad): the port's GameCube pad, or its Wii Remote pad for
+        // a player who locked in with a Wii Remote (Dolphin writes each player's input into that
+        // pad by its controller type). The Versus setup takes the record's controller (+0x07)
+        // into the match player's controller numbers, and the game's controls setter
+        // (fn_8004A2C8) gives a Wii Remote pad the Wii layouts of the player's tag.
+        for (int i = 0; i < 4; i++) {
+            const bool wii = i < se.numPlayers && (se.players[i].pv.controller & PPOM::PV_WII);
+            s_portPad[i] = (u8)(wii ? i + 4 : i);
+        }
         for (int i = 0; i < 4; i++) {
             u8* p = sel + SEL_PLAYERS + i * PLAYER_SIZE;
             memcpy(p, tmpl, PLAYER_SIZE);
@@ -400,7 +413,7 @@ namespace OnlineMatch {
                 p[0x00] = pl.charKind;
                 p[0x01] = 0;                         // human
                 p[0x05] = costume[i];                // colour number
-                p[0x07] = (u8)i;                     // controller
+                p[0x07] = s_portPad[i];              // controller (its pad)
                 p[0x0B] = teams ? pl.team : 0;       // team
             } else {
                 p[0x00] = 0x28;
@@ -437,9 +450,10 @@ namespace OnlineMatch {
         OnlineMenu::applyRules();
         slotColours(se);
         ((VsSetupFn)VS_SETUP)(seq, se.stageKind);
-        // The match's controller numbers follow the in-game ports on both machines.
+        // The match's controller numbers follow the in-game ports on both machines: the pad + 1
+        // (gmPlayerInitData +0x07: GameCube 1-4, Wii Remotes 5-8).
         for (int i = 0; i < se.numPlayers && i < 4; i++) {
-            if (se.players[i].present) mm[MM_PLAYERS + i * PLAYER_SIZE + 0x07] = (u8)(i + 1);
+            if (se.players[i].present) mm[MM_PLAYERS + i * PLAYER_SIZE + 0x07] = (u8)(s_portPad[i] + 1);
         }
         // Stock control (the rules' stockControl, in a stock match: set rule +5 = 2, applyRules):
         // each player's count, picked on their panel's STOCKS box and carried by their lock-in's
@@ -859,11 +873,13 @@ namespace OnlineMatch {
     {
         PPOM::Debug& dbg = PPOM::g_block.debug;
         s_inMatch = true;
-        // Rumble: only this player's port, on their controller (online.cpp, PADControlMotor). It
-        // differs between the machines but only reaches the controllers, never the game.
+        // Rumble: only this player's port (its pad in the match), on their controller
+        // (online.cpp, PADControlMotor / WPADControlMotor). It differs between the machines but
+        // only reaches the controllers, never the game.
         const PPOM::Local& me = PPOM::g_block.local;
-        Online::setRumblePorts(g_onlineCss && g_onlineMatchGame,
-                               OnlineMenu::nobodyPlaysHere() ? 0xFF : me.localPort, me.lockPad);
+        const u8 mePort = OnlineMenu::nobodyPlaysHere() ? 0xFF : me.localPort;
+        Online::setRumblePorts(g_onlineCss && g_onlineMatchGame, mePort < 4 ? s_portPad[mePort] : 0xFF,
+                               me.lockPad);
         if (g_onlineCss && g_onlineMatchGame) {
             banHomeMenu(true);
             noPause();
@@ -966,6 +982,31 @@ namespace OnlineMatch {
     // every machine sees the same.
     static const u32 RUNBACK_BUTTONS = 0x0860;
 
+    // The game's pause-screen quit per controller type (gfPadType: GameCube, Classic Controller,
+    // Wii Remote, Nunchuk), its table at 0x80408C28 that the pause screen's quit check
+    // (0x800F0A2C) compares the pauser's buttons (gfPadStatus +0x4) with: L+R+A+START on a
+    // GameCube or Classic Controller (0x1160), B+1+2+PLUS on a Wii Remote alone (0x1340), and
+    // 1+B+Z+PLUS with a Nunchuk (0x11210), in the game's button bits.
+    static const u32 QUIT_MASKS = 0x80408C28;
+    static const u32 BTN_PLUS = 0x1000;     // START, a Wii Remote's and a Classic's +
+    static const u32 BTN_MINUS = 0x80000;   // a Wii Remote's -
+    static u32 quitButtons(u32 type)
+    {
+        return ((const u32*)QUIT_MASKS)[type < 4 ? type : 0];
+    }
+    // The runback's: L+R+Y on a GameCube or Classic Controller; a Wii Remote has no Y, so its
+    // quit's buttons (but PLUS) and MINUS.
+    static u32 runbackButtons(u32 type)
+    {
+        if (type != 2 && type != 3) return RUNBACK_BUTTONS;
+        return (quitButtons(type) & ~BTN_PLUS) | BTN_MINUS;
+    }
+    // A pad's controller type (gfPadStatus +0x3C) in gfPadSystem's first pad array.
+    static u32 padType(u32 ps, int pad)
+    {
+        return *(volatile u32*)(ps + 0x40 + 0x40 * pad + 0x3C);
+    }
+
     typedef void (*PlaySEArgsFn)(void*, int, int, int, int, int);
 
     static void playQuitSound(int result)
@@ -1002,6 +1043,16 @@ namespace OnlineMatch {
         return *(volatile u32*)(ps + 0x44 + 0x40 * pad);
     }
 
+    // The pauser held their controller's runback buttons.
+    static bool pauserRunback(u8* op)
+    {
+        u32 ps = *(u32*)0x805A0040;
+        s32 pad = *(s32*)(op + OP_PAUSE_PAD);
+        if (!isPtr(ps) || pad < 0 || pad >= 8) return false;
+        const u32 want = runbackButtons(padType(ps, pad));
+        return (pauserHeld(op) & want) == want;
+    }
+
     extern "C" int pponline_pauseResult(int result, u8* op)
     {
         if (!g_onlineCss || !g_onlineMatchGame) return result;
@@ -1021,7 +1072,7 @@ namespace OnlineMatch {
             // match cannot start again, and the runback is this player's own quit.
             bool allIn = se.quitPorts == 0;
             for (int p = 0; p < PPOM::SESSION_PLAYERS; p++) allIn = allIn && !(se.players[p].present && se.gone[p]);
-            if (!allIn || (pauserHeld(op) & RUNBACK_BUTTONS) != RUNBACK_BUTTONS) {
+            if (!allIn || !pauserRunback(op)) {
                 if (sidesLeftWithout(bit) <= 1) se.quitStays |= bit;
                 se.quitPorts |= bit;
                 s_matchQuitPorts = se.quitPorts;
@@ -1038,8 +1089,7 @@ namespace OnlineMatch {
             op[0x11B] |= result == 3 ? 0x30 : 0x20;
             PPOM::Session& se = PPOM::g_block.session;
             se.quitBy = pauser >= 0 && pauser < 4 ? (u8)(pauser + 1) : 0;
-            u32 held = pauserHeld(op);
-            se.quitRunback = (held & RUNBACK_BUTTONS) == RUNBACK_BUTTONS ? 1 : 0;
+            se.quitRunback = pauserRunback(op) ? 1 : 0;
             s_matchQuitBy = se.quitBy;
             s_matchQuitRunback = se.quitRunback;
             if (se.quitRunback) dbg.scratch[10] |= 0x1000000;
@@ -1132,18 +1182,20 @@ namespace OnlineMatch {
     // actually pause"); the user's, 2026-10-14: neither does ours, and nothing about the game
     // changes for a pause (Brawl's pause moves the camera, and screen KOs depend on the camera).
     // Every frame of an Unranked match, from the session's inputs in gfPadSystem's first pad
-    // array (port p's input in pad p, as the session writes the slots), so every machine and
-    // every resimulation does the same:
-    //  - any player holding L+R+A+START quits, as Slippi's LRAS in its client pause (no pause
-    //    first). The operator's quit bits (0x30) are set without its stop: Dolphin ends the
-    //    session on them as on the pause screen's quit (IsQuitRequested), with SESSION's quitBy
-    //    and quitRunback (L+R+Y held too: P+'s salty runback, as on the pause screen), and the
-    //    game plays on until then (MAX_ROLLBACK_FRAMES + 12 frames); tickMatch then ends the match.
+    // array (port p's input in its pad, s_portPad: the port's GameCube or Wii Remote pad, as the
+    // session writes the slots), so every machine and every resimulation does the same:
+    //  - any player holding their controller's quit buttons (the game's own, quitButtons:
+    //    L+R+A+START on a GameCube or Classic Controller, B+1+2+PLUS on a Wii Remote alone,
+    //    1+B+Z+PLUS with a Nunchuk) quits, as Slippi's LRAS in its client pause (no pause first).
+    //    The operator's quit bits (0x30) are set without its stop: Dolphin ends the session on
+    //    them as on the pause screen's quit (IsQuitRequested), with SESSION's quitBy and
+    //    quitRunback (runbackButtons held too: P+'s salty runback, as on the pause screen), and
+    //    the game plays on until then (MAX_ROLLBACK_FRAMES + 12 frames); tickMatch then ends
+    //    the match.
     //  - a START press switches that port's quit hint (s_hintPorts; MatchHud draws the local
     //    player's), Slippi's client pause screen, drawn only, nothing in the game changes;
     //  - START is taken out of every pad the game reads, so nothing pauses.
     static const u32 BTN_START = 0x1000;
-    static const u32 QUIT_BUTTONS = 0x1160;   // L 0x40, R 0x20, A 0x100, START 0x1000
     static const u32 PAD_SYSTEM = 0x805A0040;
 
     static void clientPause()
@@ -1157,18 +1209,22 @@ namespace OnlineMatch {
         bool live = PPOM::g_block.local.state == PPOM::LS_IN_MATCH;
         for (int p = 0; p < se.numPlayers && p < 4; p++) {
             if (!se.players[p].present) continue;
-            const u32* pad = (const u32*)(ps + 0x44 + 0x40 * p);
+            const int padNo = s_portPad[p];
+            const u32* pad = (const u32*)(ps + 0x44 + 0x40 * padNo);
             u32 held = pad[0];
+            const u32 type = padType(ps, padNo);
+            const u32 quit = quitButtons(type);
+            const u32 runback = runbackButtons(type);
             u8 bit = (u8)(1u << p);
             // the press from the held buttons (this array's pressed words were never seen set)
             if ((held & BTN_START) && !(s_startPorts & bit)) s_hintPorts ^= bit;
             s_startPorts = (u8)((held & BTN_START) ? s_startPorts | bit : s_startPorts & ~bit);
-            if (!live || s_clientQuit || !oi || (oi[0x11B] & 0x70) || (held & QUIT_BUTTONS) != QUIT_BUTTONS) continue;
+            if (!live || s_clientQuit || !oi || (oi[0x11B] & 0x70) || (held & quit) != quit) continue;
             oi[0x11B] |= 0x30;
             s_clientQuit = 1;
             s_clientQuitFrames = 0;
             se.quitBy = (u8)(p + 1);
-            se.quitRunback = (held & RUNBACK_BUTTONS) == RUNBACK_BUTTONS ? 1 : 0;
+            se.quitRunback = (held & runback) == runback ? 1 : 0;
             s_matchQuitBy = se.quitBy;
             s_matchQuitRunback = se.quitRunback;
             if (se.quitRunback) PPOM::g_block.debug.scratch[10] |= 0x1000000;
@@ -1180,6 +1236,19 @@ namespace OnlineMatch {
         for (u32 off = 0x44; off < 0x944; off += 0x40) {
             u32* f = (u32*)(ps + off);
             for (int i = 0; i < 6; i++) f[i] &= ~BTN_START;
+        }
+    }
+
+    const char* quitHintText()
+    {
+        u8 me = PPOM::g_block.local.localPort;
+        u32 ps = *(u32*)PAD_SYSTEM;
+        const u32 type = me < 4 && isPtr(ps) ? padType(ps, s_portPad[me]) : 0;
+        switch (type) {
+        case 1: return "L+R+A+PLUS to quit";    // Classic Controller
+        case 2: return "B+1+2+PLUS to quit";    // Wii Remote alone
+        case 3: return "1+B+Z+PLUS to quit";    // Wii Remote and Nunchuk
+        default: return "L+R+A+START to quit";
         }
     }
 

@@ -80,6 +80,9 @@ class InstanceConfig:
     #: Extra ``{section: {key: value}}`` for Dolphin.ini / GCPadNew.ini.
     dolphin_ini: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
     gcpad_ini: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
+    #: Extra ``{section: {key: value}}`` for WiimoteNew.ini, e.g. ``{"Wiimote1": {"Source": 1,
+    #: "Extension": "Classic"}}`` for an emulated Wii Remote the harness drives (wiimote_input).
+    wiimote_ini: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
     #: Extra ``-C System.Section.Key=Value`` overrides (not saved to disk by Dolphin).
     config_args: Sequence[str] = ()
     #: Extra raw command-line arguments.
@@ -422,6 +425,16 @@ class DolphinInstance:
                 pad.replace_section(f"GCPad{p + 1}", {"Device": "Harness/0/None"})
         pad.update(cfg.gcpad_ini)
         pad.save(pad_path)
+
+        wii_path = d / "Config" / "WiimoteNew.ini"
+        wii = IniFile.load(wii_path)
+        if cfg.isolate_input:
+            for i in range(4):
+                # No Wii Remote unless a test asks for one (this fork's default source is None),
+                # and none of the template's keyboard bindings.
+                wii.replace_section(f"Wiimote{i + 1}", {"Device": "Harness/0/None", "Source": 0})
+        wii.update(cfg.wiimote_ini)
+        wii.save(wii_path)
 
     # ---------------------------------------------------------------- launch
 

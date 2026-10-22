@@ -48,10 +48,16 @@ namespace Gprb::Replay
 // 2 (2026-10-14): the countdown runs with each player's buttons held at the barrier (SETP "holds",
 // GameplaySession's CountdownSlots). A version 1 file has no holds and plays as recorded (a
 // neutral countdown), so playback takes both (SimVersionPlays).
-constexpr u32 SIM_VERSION = 2;
+// 3 (2026-10-22): Wii Remotes (alone, with a Nunchuk, with a Classic Controller). Each player's
+// input record goes into their port's GameCube or Wii Remote pad by its controller type
+// (GameplayRollback WriteSlots), and the countdown's holds carry the type. A game where everyone
+// plays on GameCube controllers simulates as before and is still written as 2 (SIM_VERSION_GC),
+// so that older builds play it; a game with a Wii Remote is 3, which they refuse.
+constexpr u32 SIM_VERSION = 3;
+constexpr u32 SIM_VERSION_GC = 2;
 constexpr bool SimVersionPlays(u64 sim)
 {
-  return sim == 1 || sim == SIM_VERSION;
+  return sim >= 1 && sim <= SIM_VERSION;
 }
 
 // Who played, by in-game port (the session's view of matchmaking's players).
@@ -93,6 +99,8 @@ struct BeginInfo
   std::string region_set;
   // The SETP chunk (JSON, built by the session: GameplaySession.cpp ReplaySetup).
   std::string setup_json;
+  // SIM_VERSION, or SIM_VERSION_GC for a game without Wii Remotes.
+  u32 sim_version = SIM_VERSION;
   // game_uid: the same on every player's file of this game.
   std::array<u8, 16> uid{};
 };

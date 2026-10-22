@@ -182,14 +182,18 @@ namespace OnlineMenu {
     // gfPadSystem (g_gfPadSystem 0x805A0040, BrawlHeaders gf_pad_system.h): gfPadStatus arrays
     // of 8 pads at +0x244 (debug = "sys", what getSysPadStatus returns), +0x444 (game), +0x644
     // (menu), and the merged pads at +0x844/+0x884/+0x8C4/+0x904. Button fields are the first
-    // six words (current, current2, held, pressed, released, pressed2), START = 0x1000.
+    // six words (current, current2, held, pressed, released, pressed2), START = 0x1000 (a Wii
+    // Remote's and a Classic Controller's +). Pads 0-3 are the GameCube ports, 4-7 the Wii Remotes
+    // (alone, with a Nunchuk or a Classic Controller), each in the game's own button bits.
     static u8* padSystem()
     {
         u32 p = *(u32*)0x805A0040;
         return isPtr(p) ? (u8*)p : NULL;
     }
 
-    // Buttons of the four GameCube ports, read before maskStart() below: `field` 0x8 = held,
+    static const int PADS = 8;   // GameCube ports 0-3, Wii Remotes 4-7
+
+    // Buttons of every controller, read before maskStart() below: `field` 0x8 = held,
     // 0xC = pressed this frame (the pad system's own trigger, as the menus use it, so a short
     // press is not lost when a game frame spans several pad reads).
     static u32 padButtons(u32 field)
@@ -197,18 +201,19 @@ namespace OnlineMenu {
         u8* ps = padSystem();
         if (!ps) return 0;
         u32 b = 0;
-        for (int p = 0; p < 4; p++) {
+        for (int p = 0; p < PADS; p++) {
             b |= *(volatile u32*)(ps + 0x244 + 0x40 * p + field);
         }
         return b;
     }
 
-    // The lowest port whose pressed field (0xC) has `mask` this frame, -1 none.
+    // The lowest pad whose pressed field (0xC) has `mask` this frame (GameCube ports first, then
+    // the Wii Remotes), -1 none.
     static int pressedPort(u32 mask)
     {
         u8* ps = padSystem();
         if (!ps) return -1;
-        for (int p = 0; p < 4; p++) {
+        for (int p = 0; p < PADS; p++) {
             if (*(volatile u32*)(ps + 0x244 + 0x40 * p + 0xC) & mask) return p;
         }
         return -1;
@@ -261,12 +266,12 @@ namespace OnlineMenu {
         }
     }
 
-    // Adds `mask` to this frame's presses (pressed, pressed2) of one controller port, in each of
-    // its pad statuses (sys, game, menu), as if it had been pressed there.
+    // Adds `mask` to this frame's presses (pressed, pressed2) of one controller (its pad 0-7), in
+    // each of its pad statuses (sys, game, menu), as if it had been pressed there.
     static void addPressed(int port, u32 mask)
     {
         u8* ps = padSystem();
-        if (!ps || port < 0 || port > 3) return;
+        if (!ps || port < 0 || port >= PADS) return;
         for (u32 off = 0x244; off < 0x844; off += 0x200) {
             u32* f = (u32*)(ps + off + 0x40 * port);
             f[3] |= mask;
@@ -344,15 +349,15 @@ namespace OnlineMenu {
     // AltR; a Nunchuk Z / C; a Wii Remote alone none. The online CSS never leaves that way (P+'s
     // flags are written by the match setup from SESSION, online_match.cpp), so the buttons are read
     // here, on the START that locks in, from that controller (gfPadStatus +0x0, the fresh read P+
-    // uses), with the controller type P+ takes from the player's area (+0x1E0: 2 Wii Remote,
-    // 3 Nunchuk, else GameCube / Classic).
+    // uses), with its controller type (P+ takes the player area's, +0x1E0, the same gfPadType;
+    // the online CSS's area is the panel's, so the pad's own, +0x3C: 2 Wii Remote, 3 Nunchuk,
+    // else GameCube / Classic).
     static u8 altHeld(int port)
     {
         u8* ps = padSystem();
-        if (!ps || port < 0 || port > 3) return 0;
+        if (!ps || port < 0 || port >= PADS) return 0;
         u32 b = *(volatile u32*)(ps + 0x244 + 0x40 * port);
-        u8* area = playerArea();
-        int type = area ? *(volatile int*)(area + 0x1E0) : 0;
+        int type = *(volatile int*)(ps + 0x244 + 0x40 * port + 0x3C);
         if (type == 2) return 0;
         if (b & 0x10) return PPOM::COSTUME_ALT_Z;
         if (b & (type == 3 ? 0x400u : 0x20u)) return PPOM::COSTUME_ALT_R;

@@ -891,13 +891,15 @@ struct PadsState
   bool session = false;
   u32 anchor_ports = 0;
   bool have_latest = false;
-  PadSlots latest{};
+  RawPads latest{};
   std::chrono::steady_clock::time_point latest_at{};
-  // The last passes' slots and the instants the reads behind them stand for (ReadHostPad).
+  // The last passes' pads and the instants the reads behind them stand for (ReadHostPad for the
+  // GameCube ports; the pass itself for the Wii Remotes).
   struct Pass
   {
-    PadSlots slots{};
+    RawPads pads{};
     std::array<Clock::time_point, 4> sampled_at{};
+    Clock::time_point at{};
   };
   std::array<Pass, 4> recent{};
   size_t recent_next = 0, recent_n = 0;
@@ -907,17 +909,57 @@ struct PadsState
 };
 PadsState s_pads;
 
+// A pad with no controller, as the pad thread leaves an empty GameCube port or a Wii Remote that is
+// not connected (error 0xFF, the port's own type).
+std::array<u8, Addr::PAD_STRIDE> EmptyPad(bool wii)
+{
+  std::array<u8, Addr::PAD_STRIDE> pad{};
+  pad[Addr::PAD_ERROR_OFF] = 0xFF;
+  pad[Addr::PAD_TYPE_OFF] = wii ? 2 : 0;
+  return pad;
+}
+
+// Each port's record into its GameCube or Wii Remote pad (PadSlots), the other one empty.
 void WriteSlots(Memory::MemoryManager& memory, u32 port_mask, const PadSlots& slots)
 {
+  static const auto empty_gc = EmptyPad(false);
+  static const auto empty_wii = EmptyPad(true);
   for (u32 port = 0; port < 4; ++port)
   {
     if (!(port_mask & (1u << port)))
       continue;
-    memory.CopyToEmu(Addr::PAD_STATUS + port * Addr::PAD_STRIDE,
-                     slots.data() + port * Addr::PAD_STRIDE, Addr::PAD_STRIDE);
+    const u8* rec = slots.data() + port * Addr::PAD_STRIDE;
+    const bool wii = IsWiiPad(rec);
+    const u32 gc_addr = Addr::PAD_STATUS + port * Addr::PAD_STRIDE;
+    const u32 wii_addr = Addr::PAD_STATUS + (Addr::WII_PADS + port) * Addr::PAD_STRIDE;
+    memory.CopyToEmu(wii ? wii_addr : gc_addr, rec, Addr::PAD_STRIDE);
+    memory.CopyToEmu(wii ? gc_addr : wii_addr, wii ? empty_gc.data() : empty_wii.data(),
+                     Addr::PAD_STRIDE);
   }
 }
+
+// The players' records from the pads in memory: each port's GameCube pad, or its Wii Remote pad
+// when that one has a controller and the GameCube pad has none (what WriteSlots wrote).
+PadSlots SlotsFromPads(const u8* pads)
+{
+  PadSlots slots;
+  for (u32 port = 0; port < 4; ++port)
+  {
+    const u8* gc = pads + port * Addr::PAD_STRIDE;
+    const u8* wii = pads + (Addr::WII_PADS + port) * Addr::PAD_STRIDE;
+    const bool use_wii = gc[Addr::PAD_ERROR_OFF] != 0 && wii[Addr::PAD_ERROR_OFF] == 0;
+    std::memcpy(slots.data() + port * Addr::PAD_STRIDE, use_wii ? wii : gc, Addr::PAD_STRIDE);
+  }
+  return slots;
+}
 }  // namespace
+
+bool IsWiiPad(const u8* pad)
+{
+  const u8 type = pad[Addr::PAD_TYPE_OFF];
+  return pad[Addr::PAD_TYPE_OFF - 3] == 0 && pad[Addr::PAD_TYPE_OFF - 2] == 0 &&
+         pad[Addr::PAD_TYPE_OFF - 1] == 0 && type >= 1 && type <= 3;
+}
 
 void PadsOnLoopTop(Core::System& system)
 {
@@ -942,7 +984,8 @@ void PadsOnLoopTop(Core::System& system)
         memory.CopyFromEmu(s_pads.latest.data(), Addr::PAD_STATUS, s_pads.latest.size());
         s_pads.have_latest = true;
       }
-      s_pads.current = s_pads.latest;
+      // The GameCube ports (the harness's anchor).
+      std::memcpy(s_pads.current.data(), s_pads.latest.data(), s_pads.current.size());
       s_pads.current_ports = s_pads.anchor_ports;
       s_pads.current_valid = true;
     }
@@ -969,9 +1012,9 @@ void PadsOnLoopTop(Core::System& system)
   }
   if (s_pads.recording && IsSceneMelee(g))
   {
-    PadSlots slots;
-    memory.CopyFromEmu(slots.data(), Addr::PAD_STATUS, slots.size());
-    s_pads.recorded[frame % PADS_CAPACITY] = {frame, slots};
+    RawPads pads;
+    memory.CopyFromEmu(pads.data(), Addr::PAD_STATUS, pads.size());
+    s_pads.recorded[frame % PADS_CAPACITY] = {frame, SlotsFromPads(pads.data())};
   }
 }
 
@@ -984,15 +1027,16 @@ void PadsOnPadThreadUpdated(Core::System& system)
   s_pads.latest_at = std::chrono::steady_clock::now();
   {
     auto& pass = s_pads.recent[s_pads.recent_next];
-    pass.slots = s_pads.latest;
+    pass.pads = s_pads.latest;
     pass.sampled_at = HostPadReadInstants();
+    pass.at = s_pads.latest_at;
     s_pads.recent_next = (s_pads.recent_next + 1) % s_pads.recent.size();
     s_pads.recent_n = std::min(s_pads.recent_n + 1, s_pads.recent.size());
     if (std::FILE* f = PadReadLog())
     {
       std::fprintf(f, "P %lld %d %lld %02x%02x%02x%02x\n", Us(s_pads.latest_at),
                    system.GetCoreTiming().IsRollbackResimulating() ? 1 : 0, Us(pass.sampled_at[0]),
-                   pass.slots[0], pass.slots[1], pass.slots[2], pass.slots[3]);
+                   pass.pads[0], pass.pads[1], pass.pads[2], pass.pads[3]);
       std::fflush(f);
     }
   }
@@ -1007,31 +1051,34 @@ void PadsOnPadThreadUpdated(Core::System& system)
     WriteSlots(memory, s_pads.current_ports, s_pads.current);
 }
 
-PadSlots PadsLatestRaw()
+RawPads PadsLatestRaw()
 {
   std::lock_guard lk(s_pads.mutex);
   return s_pads.latest;
 }
 
-PadSlots PadsSampledBefore(int chan, Clock::time_point t, Clock::time_point* sampled_at)
+RawPads PadsSampledBefore(int chan, Clock::time_point t, Clock::time_point* sampled_at)
 {
   std::lock_guard lk(s_pads.mutex);
   *sampled_at = {};
-  if (chan < 0 || chan >= 4 || s_pads.recent_n == 0)
+  if (chan < 0 || chan >= 8 || s_pads.recent_n == 0)
     return s_pads.latest;
+  const auto instant = [chan](const PadsState::Pass& pass) {
+    return chan < 4 ? pass.sampled_at[chan] : pass.at;
+  };
   const size_t size = s_pads.recent.size();
   for (size_t i = 0; i < s_pads.recent_n; ++i)
   {
     const auto& pass = s_pads.recent[(s_pads.recent_next + size - 1 - i) % size];
-    if (pass.sampled_at[chan] != Clock::time_point{} && pass.sampled_at[chan] <= t)
+    if (instant(pass) != Clock::time_point{} && instant(pass) <= t)
     {
-      *sampled_at = pass.sampled_at[chan];
-      return pass.slots;
+      *sampled_at = instant(pass);
+      return pass.pads;
     }
   }
   const auto& newest = s_pads.recent[(s_pads.recent_next + size - 1) % size];
-  *sampled_at = newest.sampled_at[chan];
-  return newest.slots;
+  *sampled_at = instant(newest);
+  return newest.pads;
 }
 
 namespace
@@ -1091,7 +1138,7 @@ void ReportPadStall(const Core::CPUThreadGuard& guard, double seconds)
   // What the controllers did up to the stop: the pad slots of the thread's last pass (gfPadStatus,
   // per port: current, current2, held, pressed, released, pressed2, then the sticks and triggers)
   // and the sys pads' held buttons now (gfPadSystem+0x244 + 0x40 * port, +8).
-  PadSlots last_slots;
+  RawPads last_slots;
   u64 passes;
   u32 last_frame;
   {

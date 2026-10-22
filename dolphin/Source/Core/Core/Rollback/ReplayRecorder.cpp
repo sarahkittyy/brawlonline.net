@@ -365,7 +365,7 @@ std::string InfoJson(const BeginInfo& info)
   o["recorder"] = picojson::value(recorder);
   picojson::object build;
   build["dolphin"] = picojson::value(Common::GetScmDescStr());
-  build["sim"] = picojson::value(static_cast<double>(SIM_VERSION));
+  build["sim"] = picojson::value(static_cast<double>(info.sim_version));
   build["game"] = picojson::value(SConfig::GetInstance().GetGameID());
   build["revision"] = picojson::value(static_cast<double>(SConfig::GetInstance().GetRevision()));
   // The Project+ release (the launcher's, Config ONLINE_PPLUS_RELEASE): "v" and up to 24 of

@@ -53,8 +53,16 @@ constexpr u32 GAME_GLOBAL_PTR = 0x805A00E0;  // GameGlobal*
 constexpr u32 GG_MODE_MELEE = 0x08;          // -> gmGlobalModeMelee (0x320 bytes)
 constexpr u32 MODE_MELEE_SIZE = 0x320;
 constexpr u32 PAD_SYSTEM_PTR = 0x805A0040;  // gfPadSystem* (0x805BACC0)
-constexpr u32 PAD_STATUS = 0x805BAD00;  // gfPadStatus[4], stride 0x40, what the game uses
+// gfPadSystem's system pads (+0x40), what the game uses: gfPadStatus[8], stride 0x40, GameCube
+// ports 0-3 then Wii Remotes 0-3 (a Wii Remote alone, with a Nunchuk or with a Classic
+// Controller). A match player's gmPlayerInitData controller number is the pad + 1.
+constexpr u32 PAD_STATUS = 0x805BAD00;
 constexpr u32 PAD_STRIDE = 0x40;
+constexpr u32 WII_PADS = 4;  // the first Wii Remote's pad
+// gfPadStatus +0x38 the error (0 none, 0xFF no controller), +0x3C the controller type (u32:
+// 0 GameCube, 1 Classic Controller, 2 Wii Remote, 3 Nunchuk; the game's gfPadType).
+constexpr u32 PAD_ERROR_OFF = 0x38;
+constexpr u32 PAD_TYPE_OFF = 0x3F;  // the type's low byte
 constexpr u32 PAD_THREAD = 0x805BA108;           // OSThread of Brawl's pad thread (object at -8)
 constexpr u32 PAD_THREAD_RUN = 0x805BA440;       // u8: the thread's loop runs while non-zero
 constexpr u32 PAD_SYS_THREAD_OFF = 0xB54;        // gfPadSystem+0xB54: the thread the alarm resumes
@@ -198,8 +206,18 @@ u32 FrameTraceEpoch();
 // The harness uses this to give two instances bit-identical per-frame input (record on one,
 // inject into the other); the gameplay rollback session uses it for GekkoNet's input.
 
+// The players' input, one gfPadStatus per in-game port (0-3). A record whose controller type is
+// a Wii one (1-3) is written into the port's Wii Remote pad (WII_PADS + port) and the port's
+// GameCube pad is left with no controller; any other into the GameCube pad, the Wii Remote pad
+// left with none. So a player keeps the controller they locked in with on every machine, and no
+// pad of the eight holds this machine's own controllers while the slots are in force.
 constexpr u32 PAD_SLOTS_SIZE = 4 * Addr::PAD_STRIDE;
 using PadSlots = std::array<u8, PAD_SLOTS_SIZE>;
+// All eight pads as the pad thread made them (GameCube 0-3, Wii Remotes 4-7): the local controllers.
+constexpr u32 RAW_PADS_SIZE = 8 * Addr::PAD_STRIDE;
+using RawPads = std::array<u8, RAW_PADS_SIZE>;
+// A record's controller type is a Wii Remote's (alone, Nunchuk, Classic Controller).
+bool IsWiiPad(const u8* pad);
 
 // Main thread, top of every game-loop iteration (any mode). `frame` is the game frame the
 // iteration produces (g_GameFrame.frameCounter + 1 in a match).
@@ -207,12 +225,14 @@ void PadsOnLoopTop(Core::System& system);
 // Pad thread, after updateLow and P+'s post-processing wrote the slots (GprbPadThreadLoopHook):
 // keeps the newest sample (PadsLatestRaw) and puts the frame's slots back.
 void PadsOnPadThreadUpdated(Core::System& system);
-// The newest slots the pad thread produced (the local controllers' latest sample).
-PadSlots PadsLatestRaw();
-// The slots of the newest of the pad thread's recent passes whose read of SI channel `chan`
-// stands for an instant at or before `t` (ReadHostPad), and that instant in `*sampled_at`; the
-// newest pass when none is that old. A network session's local input (CaptureLocalInputs).
-PadSlots PadsSampledBefore(int chan, Clock::time_point t, Clock::time_point* sampled_at);
+// The newest pads the pad thread produced (the local controllers' latest sample).
+RawPads PadsLatestRaw();
+// The pads of the newest of the pad thread's recent passes whose read of pad `chan` stands for an
+// instant at or before `t`, and that instant in `*sampled_at`; the newest pass when none is that
+// old. A GameCube port's read is the SI read behind it (ReadHostPad); a Wii Remote's (`chan` 4-7)
+// is the pass itself, as Wii Remote reports come over the emulated Bluetooth on their own clock.
+// A network session's local input (CaptureLocalInputs).
+RawPads PadsSampledBefore(int chan, Clock::time_point t, Clock::time_point* sampled_at);
 
 // Pad thread watchdog (main thread, every loop top, any mode). The pad thread suspends itself after
 // every pass and the pad alarm (an OSAlarm at gfPadSystem, period one field) resumes it; players

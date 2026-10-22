@@ -289,6 +289,7 @@ PORT_VALUES_SIZE = 0x3C
 LAYOUT_SIZE = 0x2D
 PV_STOCKS = 0x39   # (still v8) the count picked on the STOCKS box under stock control, 0 none
 PV_SLOT_COLOUR = 0x3A   # (still v8) P+'s slot colour picked on the CSS + 1, 0 none
+PV_CONTROLLER = 0x3B    # (still v8) 1: the player locked in with a Wii Remote (PV_WII)
 
 
 def port_values(d: bytes) -> dict:
@@ -296,7 +297,7 @@ def port_values(d: bytes) -> dict:
     flags, rumble = d[0], d[1]
     return {"tag": bool(flags & 1), "rumble": rumble, "tag_name": from_u16s(d[2:12]),
             "layout": d[12:12 + LAYOUT_SIZE].hex(), "tap_jump": bool(d[12 + 11] & 0x80),
-            "stocks": d[PV_STOCKS], "slot_colour": d[PV_SLOT_COLOUR]}
+            "stocks": d[PV_STOCKS], "slot_colour": d[PV_SLOT_COLOUR], "wii": bool(d[PV_CONTROLLER] & 1)}
 
 
 def read_local(c: HarnessClient, b: Block) -> dict:
@@ -310,7 +311,7 @@ def read_local(c: HarnessClient, b: Block) -> dict:
             "lock": {"seq": lseq, "ready": ready, "css": css, "char_kind": kind, "costume": costume,
                      "stage_pick": stage, "asl": asl, "game": game,
                      **({"team": d[0x34]} if b.version >= 4 else {})},
-            "lock_pad": d[0x35],   # the controller port whose START locked in
+            "lock_pad": d[0x35],   # the controller whose START locked in: GameCube 0-3, Wii Remotes 4-7
             **({"own": port_values(d[0x40:0x40 + PORT_VALUES_SIZE]),
                 "hud_disconnected": d[0x7C], "desynced": d[0x7D], "quit_left": d[0x7F]}
                if len(d) >= 0x80 else {})}

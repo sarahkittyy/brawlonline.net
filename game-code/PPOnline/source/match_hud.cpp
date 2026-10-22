@@ -257,11 +257,14 @@ namespace MatchHud {
         if (names) drawNames();
         if (!s_on) {
             // Unranked: START shows how to quit (Slippi's client pause screen, which shows only
-            // L+R+A+START), white where DISCONNECTED would be; START again hides it.
+            // L+R+A+START; here the player's own controller's buttons), white where DISCONNECTED
+            // would be; START again hides it.
             if (hint) {
-                static const char HINT[] = "L+R+A+START to quit";
-                u16 text[sizeof(HINT)];
-                for (u32 i = 0; i < sizeof(HINT); i++) text[i] = (u8)HINT[i];
+                const char* s = OnlineMatch::quitHintText();
+                u16 text[24];
+                int n = 0;
+                for (; s[n] && n < 23; n++) text[n] = (u8)s[n];
+                text[n] = 0;
                 printCentred(text, SCREEN_W * 0.5f, TOP, HINT_SCALE, 0xFFFFFFFF);
                 PPOM::g_block.debug.scratch[10] |= 0x10000000;   // tests: the hint was drawn
             }

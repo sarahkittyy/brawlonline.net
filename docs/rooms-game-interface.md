@@ -201,7 +201,7 @@ enum Screen { SCREEN_UNKNOWN = 0, SCREEN_MENUS = 1, SCREEN_ONLINE_CSS = 2, SCREE
 
 struct Local {                     // only 0x36-0x3F and 0x7E change (0x39-0x3F, 0x7E: 2026-10-10)
     ...
-    u8 lockPad;                    // 0x35
+    u8 lockPad;                    // 0x35 game: the controller that locked in (GameCube 0-3, Wii Remotes 4-7)
     u8 screen;                     // 0x36 game: Screen
     u8 roomJoin;                   // 0x37 Dolphin: bumped on an accepted launcher join
     u8 room;                       // 0x38 Dolphin: RoomPhase

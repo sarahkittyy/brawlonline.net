@@ -219,15 +219,17 @@ bool IsPermutation(const std::array<u32, 4>& mine, const std::array<u32, 4>& the
 // One gfPadStatus (0x40 bytes, guest byte order) as GekkoNet delivers it for any player. Applied
 // to every player's input on both machines (the same bytes give the same result), before the
 // pad slots are written into the game:
-//  - controller type (+0x3C) outside GameCube/Classic/Wii Remote/Nunchuk -> GameCube;
+//  - controller type (+0x3C, a u32) outside GameCube/Classic/Wii Remote/Nunchuk (0-3) -> GameCube
+//    (it decides whether the record goes into the port's GameCube or Wii Remote pad);
 //  - error (+0x38) outside NONE/NO_CONTROLLER/NOT_READY/TRANSFER -> NONE;
 //  - the motion floats (+0x18..+0x2C) not finite or beyond +-1e6 -> 0.
 constexpr size_t PAD_SIZE = 0x40;
 void SanitizePad(u8* pad);
 
 // Port values (ppom.h PortValues, 0x3C bytes) from the peer: only the flag the game knows
-// (PV_TAG) is kept, the rumble byte (local only) and the padding are cleared, a picked stock
-// count (stock control) above MAX_PICKED_STOCKS and a slot colour above MAX_SLOT_COLOUR are none.
+// (PV_TAG) is kept, the rumble byte (local only) is cleared, a picked stock count (stock
+// control) above MAX_PICKED_STOCKS and a slot colour above MAX_SLOT_COLOUR are none, and of the
+// controller byte only PV_WII (the player plays on a Wii Remote: their match controller is it).
 // The controls layout itself is sanitised by the game (online_match.cpp layoutByte), the same on
 // both machines.
 constexpr u8 MAX_PICKED_STOCKS = 99;
@@ -242,10 +244,11 @@ void SanitizePortValues(std::array<u8, N>& pv)
   // The stock count picked on the STOCKS box (the rules' stock control; 0 none).
   if (pv[0x39] > MAX_PICKED_STOCKS)
     pv[0x39] = 0;
-  // The slot colour picked on the CSS (L / R on the player box; 0 none), then padding.
+  // The slot colour picked on the CSS (L / R on the player box; 0 none).
   if (pv[0x3A] > MAX_SLOT_COLOUR)
     pv[0x3A] = 0;
-  pv[0x3B] = 0;
+  // The controller: PV_WII.
+  pv[0x3B] &= 0x01;
 }
 
 std::string TruncateName(const std::string& name);

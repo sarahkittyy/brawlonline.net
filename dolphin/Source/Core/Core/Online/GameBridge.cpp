@@ -80,7 +80,8 @@ constexpr u32 L_SEQ = 0x00, L_STATE = 0x04, L_LOCAL_PORT = 0x05, L_REMOTE_READY 
 // The player's port values (name tag and controls, ppom.h PortValues), game-written with the
 // lock-in.
 constexpr u32 L_OWN = 0x40;
-// Game: the controller port (0-3) whose START locked in, written with the lock-in.
+// Game: the controller whose START locked in, written with the lock-in: its pad, GameCube ports
+// 0-3, Wii Remotes 4-7.
 constexpr u32 L_LOCK_PAD = 0x35;
 // Game: 1 once it draws DISCONNECTED in the match HUD.
 constexpr u32 L_HUD_DISCONNECTED = 0x7C;
@@ -203,6 +204,10 @@ constexpr int TAG_CHARS = 5;
 constexpr u32 PV_TAG_NAME = 2;
 // PortValues' stock count picked on the STOCKS box (stock control; 0 none; still v8, was padding)
 constexpr u32 PV_STOCKS = 0x39;
+// PortValues.controller: PV_WII when the player locked in with a Wii Remote (alone, Nunchuk or
+// Classic Controller); every machine's match setup then gives their port that controller.
+constexpr u32 PV_CONTROLLER = 0x3B;
+constexpr u8 PV_WII = 0x01;
 // CodeSuggestionRequest payload: mode, scroll, inputLen, pad, index u32, input u16[9]
 constexpr u32 CSQ_INDEX = 4, CSQ_INPUT = 8;
 // CodeSuggestion response payload: found, len, pad[2], index u32, code u16[9]
@@ -1576,6 +1581,8 @@ void SyncSession(const Core::CPUThreadGuard& guard, const Located& loc)
     for (u32 i = 0; i < l.port_values.size(); ++i)
       l.port_values[i] = R8(guard, loc.local + L_OWN + i);
     l.local_pad = R8(guard, loc.local + L_LOCK_PAD);
+    // Set from the controller itself, whatever the game wrote there.
+    l.port_values[PV_CONTROLLER] = l.local_pad >= 4 && l.local_pad < 8 ? PV_WII : 0;
     Rooms::SetLocalLock(l.ready, l.game, l.char_kind, RandomShown(l), l.port_values[PV_STOCKS]);
     if (room.game_active)
     {
