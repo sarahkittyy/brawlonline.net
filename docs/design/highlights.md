@@ -218,9 +218,9 @@ starting. If the Dolphin window is asking something, answer it there; or close i
 
 ## 8. Render to video, a whole match (2026-10-21)
 
-The user's request: a replay row has a button left of Show highlights, a film strip with a pencil
-(`render_video_icon.tsx`, drawn in the clapperboard's stroke with Lucide's pencil), tooltip
-"Render to video". A click opens Render (w/ Music) / Render (No Music), as highlights have. It
+The user's request: a replay row has a button left of Show highlights, the clapperboard with a
+download arrow taped to its corner (`render_video_icon.tsx`: ClapperboardIcon's board and Lucide's
+arrow-down-to-line, the board cut away around the arrow), tooltip "Render to video". A click opens Render (w/ Music) / Render (No Music), as highlights have. It
 renders the whole match as highlights are rendered: one render job, the match as one clip,
 Settings > Clips' Video Resolution and folder, the video named as the replay is (`2026-10-12 2040 Ranked G1 - sarahkitty2 (Snake) vs sarahkitty
 (Lucas).mp4`). `RenderRequest.wholeMatch`: main reads each replay's frames (`match_frames.ts`):
