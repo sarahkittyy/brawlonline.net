@@ -251,6 +251,9 @@ struct PeerView
   // whether this match showed the notice.
   double slow_fps = 0;
   bool slow_shown = false;
+  // Its PC missed its own schedule on most frames of its last time sync (its state's "behind",
+  // UpdatePeerFollow); unset from builds before 2026-10-22, which do not say.
+  std::optional<bool> behind;
   // Its state says it takes GekkoNet's messages bundled ('B', PeerData::AppendGekkoBundle);
   // builds before 2026-10-13 do not.
   bool gekko_bundles = false;
@@ -474,6 +477,8 @@ struct State
   Clock::time_point follow_t{};
   double peer_fps = 0;
   u64 own_late = 0;  // displayed frames late without a rollback before them (this PC's own speed)
+  // This PC missed its own schedule on most frames of the last time sync (sent to the peers).
+  bool behind = false;
   // "Falling behind" (UpdateSlowNotice): the last check of this PC's own speed, the checks in a
   // row that found it slow, its frame rate once it is (0: not; sent to the peers), and whether
   // this match showed the notice.
@@ -2301,6 +2306,7 @@ void SendState(bool tick = false)
     o["winner"] = picojson::value(static_cast<double>(s.last_winner));
     if (s.slow_fps > 0)
       o["slow"] = picojson::value(std::round(s.slow_fps * 10) / 10);
+    o["behind"] = picojson::value(s.behind);
     if (!s_local_extra.empty())
       o["x"] = picojson::value(s_local_extra);
     if (s.recovery.pending)
@@ -2534,6 +2540,8 @@ void HandleControl(std::string_view text, const sf::IpAddress& from, u16 from_po
                      x->get<double>() :
                      0;
   }
+  if (const auto* x = get("behind"); x && x->is<bool>())
+    p.behind = x->get<bool>();
   if (const auto* x = get("gb"); x && x->is<double>())
     p.gekko_bundles = x->get<double>() >= 1;
   // The decider: the first peer that says it is, unless the host was configured.
@@ -3246,6 +3254,7 @@ void ResetRunStats()
   s.follow_t = {};
   s.peer_fps = 0;
   s.own_late = 0;
+  s.behind = false;
   s.slow_check_frame = -1;
   s.slow_check_own_late = 0;
   s.slow_check_t = {};
@@ -3472,6 +3481,7 @@ void EndRunning(Core::System& system, const std::string& reason)
   s.end_reason = reason;
   s_health_running.store(false, std::memory_order_relaxed);
   s.slow_fps = 0;  // the peers stop showing this PC as falling behind
+  s.behind = false;
   if (s.mode == Mode::Network)
   {
     s.net_window.cadence = Rollback::PresentStats::TakeCadence();
@@ -4802,6 +4812,18 @@ constexpr s64 HARD_SYNC_UNTIL = 120;
 // peer's frame rate (GekkoNet averages the gap over 26 frames, so the estimate trails a change of
 // this peer's speed, by up to 2-3 frames a second).
 //
+// Only a peer that says it misses its own schedule is followed (its state's "behind": more than
+// half of its last time sync's frames late without a rollback before them, the test this PC makes
+// of itself here), and following ends once no peer says so for FOLLOW_RELEASE time syncs. The gap
+// alone cannot tell a slow peer from a slow link, nor from this PC's own following: a followed peer
+// can run no faster than GekkoNet's prediction window ahead of this PC, so its frame rate read here
+// comes to this PC's own, and a peer at full speed never shows. Bug report #101 (2026-10-22,
+// SOUP#886 on a 5G home connection, round trip 160-370 ms, jitter 70-190 ms): in all 4 Unranked
+// games of its logs both PCs followed each other while each kept its own schedule (0-12% of frames
+// late), down to 32-37 frames a second for 2.5 minutes of one game, at the 0.5 floor; each opponent
+// ran at 59.8-59.9 against everyone else. Builds before 2026-10-22 send no "behind": such a peer is
+// followed on the gap alone, as before.
+//
 // The target gap: the peer behind rolls back about (one-way latency - this peer's input delay -
 // gap) frames, so a gap of that much, and the link's jitter on top, spares the slow PC its
 // rollbacks (19 ms each on the laptop; without the jitter a harness peer still rolled back on 2.6%
@@ -4825,12 +4847,18 @@ double FollowTargetGap()
   return std::clamp(one_way_frames - s.input_delay, FOLLOW_TARGET_MIN, FOLLOW_TARGET_MAX);
 }
 
+// A peer in the match says its PC misses its own schedule, or does not say (an older build).
+bool PeerBehind()
+{
+  bool any = false;
+  ForEachPeer([&](int, const PeerView& p) { any |= !p.left && p.behind.value_or(true); });
+  return any;
+}
+
 void UpdatePeerFollow()
 {
-  // Test (PPR_GPRB_TEST_NO_FOLLOW=1): Slippi's sync alone, for A/B runs.
+  // Test (PPR_GPRB_TEST_NO_FOLLOW=1): Slippi's sync alone, for A/B runs (still saying "behind").
   static const bool off = std::getenv("PPR_GPRB_TEST_NO_FOLLOW") != nullptr;
-  if (off)
-    return;
   const auto now = Clock::now();
   const double gap = s.frames_ahead;
   const double change = gap - s.follow_prev_gap;
@@ -4845,14 +4873,18 @@ void UpdatePeerFollow()
   s.follow_t = now;
   if (dt <= 0 || frames <= 0 || s.current_frame <= HARD_SYNC_UNTIL)
     return;
+  s.behind = own_late * 2 > frames;
+  if (off)
+    return;
   const double peer_fps = std::max(0.0, (frames - change) / dt);
   s.peer_fps = s.peer_fps > 0 ? (s.peer_fps + peer_fps) / 2 : peer_fps;
 
   const double target = FollowTargetGap();
   const double over = gap - target;
+  const bool peer_behind = PeerBehind();
   if (!s.following)
   {
-    if (over <= FOLLOW_ENGAGE || change < -FOLLOW_CLOSING || own_late * 2 > frames)
+    if (!peer_behind || over <= FOLLOW_ENGAGE || change < -FOLLOW_CLOSING || s.behind)
       return;
     s.following = true;
     s.follow_speed = 1.0;
@@ -4869,14 +4901,17 @@ void UpdatePeerFollow()
       std::clamp(want, s.follow_speed - FOLLOW_MAX_STEP, s.follow_speed + FOLLOW_MAX_STEP),
       FOLLOW_MIN, 1.0);
   s.follow_release =
-      peer_speed >= 1.0 && s.follow_speed >= 1.0 && over <= 0 ? s.follow_release + 1 : 0;
+      !peer_behind || (peer_speed >= 1.0 && s.follow_speed >= 1.0 && over <= 0) ?
+          s.follow_release + 1 :
+          0;
   if (s.follow_release >= FOLLOW_RELEASE)
   {
     s.following = false;
     INFO_LOG_FMT(BRAWLBACK,
                  "gprb: following the peer's speed ends at frame {}: {:.2f} frames ahead (target "
-                 "{:.2f}), the peer at {:.1f} frames a second",
-                 s.current_frame, gap, target, s.peer_fps);
+                 "{:.2f}), the peer at {:.1f} frames a second{}",
+                 s.current_frame, gap, target, s.peer_fps,
+                 peer_behind ? "" : ", keeping its own schedule");
   }
 }
 
@@ -7145,6 +7180,8 @@ picojson::value Status()
   o["time_sync_speed"] = picojson::value(s.speed_factor);
   o["following_peer"] = picojson::value(s.following);
   o["peer_fps"] = picojson::value(s.peer_fps);
+  o["behind"] = picojson::value(s.behind);
+  o["peer_behind"] = picojson::value(PeerBehind());
   o["region_bytes"] = picojson::value(static_cast<double>(s.region_bytes));
   o["region_ranges"] = picojson::value(static_cast<double>(s.ranges.size()));
   o["end_reason"] = picojson::value(s.end_reason);
