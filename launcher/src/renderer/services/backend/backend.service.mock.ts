@@ -98,6 +98,10 @@ function mockRankOverride(): Pick<RankedProfile, "rank" | "setsToPlace"> | undef
   return { rank: { tier: m[1] as RankTier, division }, setsToPlace: 0 };
 }
 
+const mockRankOverrides = mockRankOverride();
+/** `?mockRank=placing-N`: the mock user is placing, as the server shows it (off the leaderboard, rating hidden). */
+const mockPlacing = (mockRankOverrides?.setsToPlace ?? 0) > 0;
+
 const mockRankedProfile: RankedProfile = {
   rating: 1523.4,
   setsPlayed: 42,
@@ -105,7 +109,12 @@ const mockRankedProfile: RankedProfile = {
   rankedPlayers: 137,
   rank: mockRank(1523.4),
   setsToPlace: 0,
-  ...mockRankOverride(),
+  ...mockRankOverrides,
+  ...(mockPlacing && {
+    setsPlayed: 5 - (mockRankOverrides?.setsToPlace ?? 0),
+    position: null,
+    rankedPlayers: 136,
+  }),
 };
 
 const MOCK_PAGE_SIZE = 50;
@@ -152,8 +161,8 @@ export function mockRoomList(): RoomList {
   };
 }
 
-// 137 players; the mock user (`DEMO#0`) is 23rd, as in `mockRankedProfile`.
-const mockLeaderboard: LeaderboardEntry[] = Array.from({ length: 137 }, (_, i) => {
+// 137 placed players; the mock user (`DEMO#0`) is 23rd, as in `mockRankedProfile`, or not listed while placing.
+const mockLeaderboard: LeaderboardEntry[] = Array.from({ length: 137 }, (_, i): LeaderboardEntry => {
   const setsPlayed = 5 + ((i * 37) % 120);
   const wins = Math.round(setsPlayed * (0.75 - i / 400));
   return {
@@ -165,14 +174,12 @@ const mockLeaderboard: LeaderboardEntry[] = Array.from({ length: 137 }, (_, i) =
     setsPlayed,
     wins,
     losses: setsPlayed - wins,
-    ...(i !== 22 && i % 13 === 6
-      ? { rank: null, setsToPlace: 1 + (i % 4) }
-      : {
-          rank: i === 22 ? mockRankedProfile.rank : mockRank(2300 - i * 10.5),
-          setsToPlace: i === 22 ? mockRankedProfile.setsToPlace : 0,
-        }),
+    rank: i === 22 ? mockRankedProfile.rank : mockRank(2300 - i * 10.5),
+    setsToPlace: 0,
   };
-});
+})
+  .filter((e) => !(mockPlacing && e.uid === fakeUserId))
+  .map((e, i) => ({ ...e, position: i + 1 }));
 
 function mockMatchHistory(): MatchHistoryItem[] {
   const opponents = mockLeaderboard.filter((e) => e.uid !== fakeUserId);
@@ -226,9 +233,10 @@ function mockMatchHistory(): MatchHistoryItem[] {
         {
           ...me,
           wins: abandoned ? 1 : won ? 2 : i % 2,
-          ratingBefore: before,
-          ratingAfter: before + change,
-          ratingChange: change,
+          // While placing the server hides the player's own numbers.
+          ...(mockPlacing
+            ? { ratingBefore: null, ratingAfter: null, ratingChange: null, ratingHidden: true }
+            : { ratingBefore: before, ratingAfter: before + change, ratingChange: change }),
         },
         {
           ...them,
