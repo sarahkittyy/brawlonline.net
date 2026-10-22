@@ -12,6 +12,7 @@ import path from "path";
 import type { ByteProgress, CopyOptions } from "utils/copy_file";
 import { copyFileWithProgress } from "utils/copy_file";
 
+import { asDiskSpaceError } from "./disk_space";
 import type { PluginLocation } from "./paths";
 import { PLUGIN_SD_PATH } from "./paths";
 
@@ -428,7 +429,8 @@ export async function installPluginOnSdCard(opts: SdInstallOptions): Promise<SdI
       how = `${how} in ${copiedIn} s`;
     } catch (err) {
       await fs.promises.rm(partial, { force: true }).catch(() => undefined);
-      throw err;
+      // Measured after the partial copy is gone. Not checked before: a clone needs no space.
+      throw await asDiskSpaceError(err, opts.outputDir, "the SD card copy", { needBytes: srcStat.size });
     }
     await fs.promises.rename(partial, image);
     log(`SD card ${how}, patched; ${((Date.now() - started) / 1000).toFixed(1)} s in all`);

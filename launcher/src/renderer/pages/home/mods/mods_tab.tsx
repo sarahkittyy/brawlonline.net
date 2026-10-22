@@ -1,3 +1,4 @@
+import { withoutIpcPrefix } from "@common/disk_space";
 import type {
   ModBuild,
   ModBuildInput,
@@ -32,11 +33,7 @@ import { ModsView, SD_BIG_DIFFERENCE_BYTES, SdCardDialog } from "./mods_view";
 const STALE_AFTER_MS = 15_000;
 
 // The main process's message, without Electron's "Error invoking remote method '…': Error: ".
-const errorText = (err: unknown) =>
-  (err instanceof Error ? err.message : String(err)).replace(
-    /^Error invoking remote method '[^']*': (\w*Error: )?/,
-    "",
-  );
+const errorText = (err: unknown) => withoutIpcPrefix(err instanceof Error ? err.message : String(err));
 
 /** Home > Other Games: the games, mods and the room, from the main process's ModsManager. */
 export const ModsTab = React.memo(function ModsTab() {

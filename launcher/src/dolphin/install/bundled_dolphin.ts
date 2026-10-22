@@ -15,6 +15,9 @@
 import fs from "fs";
 import path from "path";
 
+import type { FreeBytes } from "./disk_space";
+import { ensureFreeSpace, freeDiskBytes } from "./disk_space";
+
 export const BUNDLED_DOLPHIN_DIR = "dolphin";
 export const DOLPHIN_MANIFEST_NAME = "dolphin.json";
 /** What one file counts for in the install progress, on top of its size. */
@@ -172,11 +175,14 @@ export async function installBundledDolphin({
   destDir,
   onProgress,
   log = () => undefined,
+  freeBytes = freeDiskBytes,
 }: {
   sourceDir: string;
   destDir: string;
   onProgress?: (current: number, total: number) => void;
   log?: (message: string) => void;
+  /** Test hook: the free space on the disk of `destDir`. */
+  freeBytes?: FreeBytes;
 }): Promise<{ action: "unchanged" | "installed"; manifest: DolphinBundleManifest }> {
   const manifest = await readDolphinManifest(sourceDir);
   if (!manifest) {
@@ -222,6 +228,8 @@ export async function installBundledDolphin({
     }
   }
   await removeOldBuilds(destDir, log);
+  // The old build is gone by now: the new one needs its whole size.
+  await ensureFreeSpace(destDir, manifest.size || 0, "Dolphin", freeBytes);
 
   // Progress counts each file as its bytes plus a fixed cost: most of the bundle's ~1000 files are
   // small, and creating them takes longer than copying their bytes (by bytes alone the last 7 %

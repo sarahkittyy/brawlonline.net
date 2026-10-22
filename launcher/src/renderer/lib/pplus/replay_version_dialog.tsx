@@ -4,6 +4,7 @@
  * shows the download and the card being made, says why it failed, or that this launcher can't play
  * that release at all. Promise-based: play, highlights and (later) rendering await the answer.
  */
+import { formatBytes } from "@common/disk_space";
 import { pplusReleaseLabel } from "@common/pplus_releases";
 import { DolphinEventType } from "@dolphin/types";
 import CheckCircleIcon from "@mui/icons-material/CheckCircle";
@@ -68,12 +69,7 @@ export const showWorking = (v: Omit<Extract<View, { kind: "working" }>, "kind">)
   useReplayVersionDialog.getState().setView({ kind: "working", ...v });
 export const closeReleaseDialog = () => useReplayVersionDialog.getState().setView(null);
 
-export const formatBytes = (n: number): string =>
-  n >= 1e9
-    ? `${(n / 1e9).toFixed(1)} GB`
-    : n >= 1e6
-    ? `${Math.max(1, Math.round(n / 1e6))} MB`
-    : `${Math.ceil(n / 1e3)} KB`;
+export { formatBytes };
 
 type Progress = { phase: string; current: number; total: number } | null;
 

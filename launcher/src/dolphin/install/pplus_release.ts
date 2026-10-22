@@ -25,6 +25,8 @@ import type { ByteProgress } from "utils/copy_file";
 import { hashFileWithProgress } from "utils/copy_file";
 import { download as httpDownload } from "utils/download";
 
+import type { FreeBytes } from "./disk_space";
+import { ensureFreeSpace, freeDiskBytes } from "./disk_space";
 import { cardRelease, cardUpdateTo, updateProjectPlusCard } from "./pplus_card_update";
 
 export type PPlusRelease = {
@@ -33,6 +35,12 @@ export type PPlusRelease = {
   url: string;
   size: number;
   sha256: string;
+  /**
+   * Bytes of what we extract (sd.raw, the launcher DOLs, the save template): with the download,
+   * what the first install needs free before it starts (disk_space.ts). Unset (a test's release):
+   * only the download is checked before it.
+   */
+  unpackedSize?: number;
 };
 
 /**
@@ -43,9 +51,10 @@ export type PPlusRelease = {
  * Linux and macOS assets wrap the same files in an AppImage/Flatpak/app bundle).
  *
  * To move to a newer P+ release: take the asset's URL, size and sha256 ("digest") from that API,
- * check that the entries below still exist, and bump `version` (installed users then download the
- * new DOLs and save template; their SD card is kept). When the release's user/Wii/sd.raw changed,
- * add a card update for it (pplus_card_update.ts), or installed users keep the old game files.
+ * check that the entries below still exist, set `unpackedSize`, and bump `version` (installed
+ * users then download the new DOLs and save template; their SD card is kept). When the release's
+ * user/Wii/sd.raw changed, add a card update for it (pplus_card_update.ts), or installed users
+ * keep the old game files.
  * Make pplus_build_fingerprints.json again too (pplus_builds_cli.ts): Play refuses a card whose
  * release it does not know as this one.
  */
@@ -54,6 +63,8 @@ export const PPLUS_RELEASE: PPlusRelease = {
   url: "https://github.com/Project-Plus-Development-Team/Project-Plus-Dolphin/releases/download/v3.2.1/Project%2B.v3.2.1.Netplay.Windows.zip",
   size: 1854400373,
   sha256: "f55fb3307c6dfdbc62a85e76df846093d1a9ca1c5b1c8712a677e8675a0520ec",
+  // sd.raw 2,097,152,000 + 2 DOLs of 354,624 + Sys/NetplaySave 16,694,812.
+  unpackedSize: 2114556060,
 };
 
 export const PPLUS_SD_CARD_ENTRY = "user/Wii/sd.raw";
@@ -276,6 +287,7 @@ export async function installProjectPlusFiles({
   log = () => undefined,
   downloadFile = httpDownload,
   downloadOptions,
+  freeBytes = freeDiskBytes,
 }: {
   target: PPlusTarget;
   release?: PPlusRelease;
@@ -283,6 +295,8 @@ export async function installProjectPlusFiles({
   log?: (message: string) => void;
   downloadFile?: Downloader;
   downloadOptions?: PPlusDownloadOptions;
+  /** Test hook: the free space on the disk of the User folder. */
+  freeBytes?: FreeBytes;
 }): Promise<"present" | "installed"> {
   const missing = await missingProjectPlusFiles(target, release);
   if (missing.length === 0) {
@@ -309,6 +323,14 @@ export async function installProjectPlusFiles({
     }
   }
   if (!haveZip) {
+    // Before 1.9 GB come down: room for the rest of the download and, on a first install, the
+    // files it unpacks (the zip stays until they are out). The extraction checks again exactly.
+    const have = await fs.promises.stat(partPath).then(
+      (s) => s.size,
+      () => 0,
+    );
+    const unpacking = (await exists(sdCardPath(target.userFolder))) ? 0 : release.unpackedSize ?? 0;
+    await ensureFreeSpace(target.downloadDir, release.size - have + unpacking, "Project+'s game files", freeBytes);
     await downloadRelease(release, partPath, downloadFile, onProgress, log, downloadOptions);
     try {
       await verifyReleaseZip(partPath, release, verifyProgress);
@@ -320,7 +342,7 @@ export async function installProjectPlusFiles({
     log(`Verified ${zipPath} (sha256 ${release.sha256})`);
   }
 
-  await extractProjectPlusFiles(zipPath, target, release, onProgress, log);
+  await extractProjectPlusFiles(zipPath, target, release, onProgress, log, freeBytes);
   await fs.promises.rm(zipPath, { force: true });
   return "installed";
 }
@@ -332,6 +354,7 @@ export async function extractProjectPlusFiles(
   release: PPlusRelease,
   onProgress?: (progress: PPlusProgress) => void,
   log: (message: string) => void = () => undefined,
+  freeBytes: FreeBytes = freeDiskBytes,
 ): Promise<void> {
   const zip = new AsyncStreamZip({ file: zipPath, storeEntries: true });
   try {
@@ -380,6 +403,8 @@ export async function extractProjectPlusFiles(
     }
 
     const total = jobs.reduce((sum, j) => sum + entries[j.entry].size, 0);
+    // The User folder and the store are both in the install folder: one disk.
+    await ensureFreeSpace(target.userFolder, total, "Project+'s game files", freeBytes);
     let done = 0;
     onProgress?.({ phase: "extract", current: 0, total });
     for (const job of jobs) {

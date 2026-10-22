@@ -1,3 +1,4 @@
+import { formatBytes } from "@common/disk_space";
 import crypto from "crypto";
 import fs from "fs";
 import http from "http";
@@ -7,6 +8,7 @@ import path from "path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import zlib from "zlib";
 
+import { DISK_SPACE_MARGIN, DiskSpaceError } from "./disk_space";
 import type { PPlusProgress, PPlusRelease, PPlusTarget } from "./pplus_release";
 import {
   ensureNetplaySave,
@@ -354,6 +356,35 @@ describe("installProjectPlusFiles", () => {
     await fs.promises.writeFile(path.join(target.downloadDir, `pplus-${release.version}.zip`), zip.subarray(0, 100));
     await installProjectPlusFiles({ target, release });
     expect(requests).toEqual([`/p${n}.zip`]);
+  });
+
+  it("refuses before downloading when the disk lacks room for the download and its files", async () => {
+    const release = await serve(makeZip(releaseFiles()), undefined, { unpackedSize: 3e9 });
+    const asked: string[] = [];
+    const freeBytes = async (dir: string) => {
+      asked.push(dir);
+      return 3e9;
+    };
+    const err = await installProjectPlusFiles({ target, release, freeBytes }).catch((e) => e);
+    expect(err).toBeInstanceOf(DiskSpaceError);
+    // The rest of the download + the unpacked files + the margin.
+    expect(err.message).toContain(`${formatBytes(release.size + 3e9 + DISK_SPACE_MARGIN)} needed, 3.0 GB free`);
+    expect(asked).toEqual([target.downloadDir]);
+    expect(requests).toEqual([]);
+  });
+
+  it("checks the unpacked files' exact size before extracting a kept download", async () => {
+    const zip = makeZip(releaseFiles());
+    const release = await serve(zip);
+    await fs.promises.mkdir(target.downloadDir, { recursive: true });
+    await fs.promises.writeFile(path.join(target.downloadDir, `pplus-${release.version}.zip`), zip);
+    const err = await installProjectPlusFiles({ target, release, freeBytes: async () => 1000 }).catch((e) => e);
+    expect(err).toBeInstanceOf(DiskSpaceError);
+    const extractTotal = SD.length + NETPLAY_DOL.length + OFFLINE_DOL.length + SAVE_TMD.length + SAVE_DATA.length;
+    expect(err.message).toContain(`${formatBytes(extractTotal + DISK_SPACE_MARGIN)} needed, 1 KB free`);
+    expect(exists(path.join(target.userFolder, "Wii", "sd.raw"))).toBe(false);
+    // The verified download stays for the next try.
+    expect(exists(path.join(target.downloadDir, `pplus-${release.version}.zip`))).toBe(true);
   });
 });
 

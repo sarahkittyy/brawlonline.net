@@ -1,3 +1,4 @@
+import { isDiskSpaceError } from "@common/disk_space";
 import { PRODUCT_NAME } from "@common/product";
 import { DolphinLaunchType } from "@dolphin/types";
 import log from "electron-log";
@@ -53,7 +54,8 @@ export async function initializeApp(services: Services) {
       log.error(err);
       const dolphinTypeName =
         dolphinType === DolphinLaunchType.NETPLAY ? Messages.netplayDolphin() : Messages.playbackDolphin();
-      showError(Messages.failedToInstallDolphin(dolphinTypeName));
+      // A full disk says which drive and how much to free (bug report #91), not "close Dolphin".
+      showError(isDiskSpaceError(err) ? err : Messages.failedToInstallDolphin(dolphinTypeName));
     });
   });
 

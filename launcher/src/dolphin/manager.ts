@@ -21,6 +21,7 @@ import { isAbnormalExit, keepCrashLog } from "./crash_log";
 import { clearInputDelayRequest, writeInputDelayRequest } from "./input_delay_handoff";
 import { brawlSaveDir, ensureBrawlSave, isUsableBrawlSave } from "./install/brawl_save";
 import { bundledDolphinSource, installBundledDolphin } from "./install/bundled_dolphin";
+import { asDiskSpaceError } from "./install/disk_space";
 import { fetchLatestVersion } from "./install/fetch_latest_version";
 import { LocalDolphinInstallation } from "./install/local_installation";
 import type { GameFilesTarget } from "./install/move_game_files";
@@ -117,6 +118,8 @@ export class DolphinManager {
   private netplayDolphinInstance: DolphinInstance | null = null;
   private versionCache = new Map<string, string>();
   private bundledInstall: Promise<void> | null = null;
+  /** Whether bundledInstall finished: one that did is redone when the executable has gone since. */
+  private bundledInstallDone = false;
   private projectPlusInstall: Promise<void> | null = null;
   /** True while Settings moves the game files (moveGameFiles): nothing may start Dolphin. */
   private movingGameFiles = false;
@@ -274,7 +277,7 @@ export class DolphinManager {
       log.error(err);
       // Still mark it as ready so Play shows the real error (missing executable) when pressed.
       this._onComplete(dolphinType, undefined);
-      throw err;
+      throw await asDiskSpaceError(err, this.netplayFolder(), "Dolphin's set-up");
     }
 
     const isoPath = this.settingsManager.get().settings.isoPath;
@@ -507,7 +510,11 @@ export class DolphinManager {
    * booted game reads, and closing a Dolphin that never booted takes it back.
    */
   async launchNetplayDolphin(opts: { bootGame?: boolean } = {}): Promise<NetplayLaunchResult> {
-    return await this.sdCardStarts.runExclusive(() => this._launchNetplayDolphin(opts));
+    try {
+      return await this.sdCardStarts.runExclusive(() => this._launchNetplayDolphin(opts));
+    } catch (err) {
+      throw await asDiskSpaceError(err, this.netplayFolder(), "the game");
+    }
   }
 
   /**
@@ -525,6 +532,8 @@ export class DolphinManager {
       }
       try {
         await this._ensureProjectPlusFiles(installation);
+      } catch (err) {
+        throw await asDiskSpaceError(err, this.netplayFolder(), "Project+'s game files");
       } finally {
         this._onComplete(DolphinLaunchType.NETPLAY, this._cachedVersion(DolphinLaunchType.NETPLAY));
       }
@@ -964,7 +973,15 @@ export class DolphinManager {
     if (!source) {
       return Promise.resolve();
     }
+    // A finished install whose executable has gone since (bug report #91: the disk filled up and
+    // things were deleted) is done again, instead of Play failing until the launcher restarts.
+    const exe = this.getDolphinExecutablePath(DolphinLaunchType.NETPLAY);
+    if (this.bundledInstall && this.bundledInstallDone && !existsSync(exe)) {
+      log.warn(`${exe} has gone since the bundled Dolphin was installed: installing it again`);
+      this.bundledInstall = null;
+    }
     if (!this.bundledInstall) {
+      this.bundledInstallDone = false;
       let started = false;
       this.bundledInstall = installBundledDolphin({
         sourceDir: source,
@@ -980,6 +997,7 @@ export class DolphinManager {
       })
         .then(({ action, manifest }) => {
           log.info(`Bundled Dolphin ${manifest.version}: ${action}`);
+          this.bundledInstallDone = true;
         })
         .catch((err) => {
           this.bundledInstall = null;
@@ -1000,8 +1018,9 @@ export class DolphinManager {
 
   /**
    * Start-up's install of the bundled Dolphin removes the old build before it copies the new one,
-   * so one that stopped half-way (a file in use) leaves no executable. Play then installs it
-   * again, with the set-up progress, instead of failing until the launcher restarts.
+   * so one that stopped half-way (a file in use) leaves no executable; a finished one can lose it
+   * later. Play then installs it again, with the set-up progress, instead of failing until the
+   * launcher restarts.
    */
   private async _repairBundledDolphin(): Promise<void> {
     if (await fileExists(this.getDolphinExecutablePath(DolphinLaunchType.NETPLAY))) {

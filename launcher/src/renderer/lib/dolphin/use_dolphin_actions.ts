@@ -1,3 +1,4 @@
+import { isDiskSpaceError } from "@common/disk_space";
 import type { DolphinService, RenderJobInfo, RenderRequest, ReplayQueueItem } from "@dolphin/types";
 import { DolphinLaunchType } from "@dolphin/types";
 import type { HighlightPlayItem } from "@replays/highlights/types";
@@ -59,7 +60,7 @@ export const useDolphinActions = (dolphinService: DolphinService) => {
           log.error(err);
           const dolphinTypeName =
             dolphinType === DolphinLaunchType.NETPLAY ? Messages.netplayDolphin() : Messages.playbackDolphin();
-          showError(Messages.failedToInstallDolphin(dolphinTypeName));
+          showError(isDiskSpaceError(err) ? err : Messages.failedToInstallDolphin(dolphinTypeName));
         });
       }),
     );

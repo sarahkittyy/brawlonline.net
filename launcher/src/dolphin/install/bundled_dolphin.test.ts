@@ -10,6 +10,7 @@ import {
   PROGRESS_BYTES_PER_FILE,
   readDolphinManifest,
 } from "./bundled_dolphin";
+import { DiskSpaceError } from "./disk_space";
 
 let root: string;
 let n = 0;
@@ -190,6 +191,25 @@ describe("installBundledDolphin", () => {
 
     const bad = await makeBundle("0.1.4", { "Dolphin.exe": "x", "User/evil": "x" });
     await expect(installBundledDolphin({ sourceDir: bad, destDir: dest })).rejects.toThrow(/Bad entry/);
+  });
+
+  it("refuses to copy without room for the build, and installs it once there is room", async () => {
+    const src = await makeBundle("0.1.5", { "Dolphin.exe": "exe-5", "Sys/a.ini": "ini" });
+    const asked: string[] = [];
+    const full = async (dir: string) => {
+      asked.push(dir);
+      return 50 * 1024 * 1024;
+    };
+    const err = await installBundledDolphin({ sourceDir: src, destDir: dest, freeBytes: full }).catch((e) => e);
+    expect(err).toBeInstanceOf(DiskSpaceError);
+    expect(err.message).toMatch(/^Not enough disk space on .+ for Dolphin: \d+ MB needed, 52 MB free\. /);
+    expect(asked).toEqual([dest]);
+    expect(fs.existsSync(path.join(dest, "Dolphin.exe"))).toBe(false);
+    expect(await readDolphinManifest(dest)).toBeNull();
+
+    const roomy = async () => 10 * 1024 * 1024 * 1024;
+    expect((await installBundledDolphin({ sourceDir: src, destDir: dest, freeBytes: roomy })).action).toBe("installed");
+    expect(await read("Dolphin.exe")).toBe("exe-5");
   });
 });
 
