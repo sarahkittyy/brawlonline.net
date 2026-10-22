@@ -8,7 +8,13 @@
 //! while ratings change between requests. Positions are counted (rows ahead of the cursor) in
 //! the same snapshot as the page, so they are right on every page; the count is one pass over
 //! the placed players, which is cheap at this scale.
+//!
+//! Each row also says how far its player moved in the last [`CHANGE_WINDOW`]: the leaderboard as
+//! it stood then is rebuilt from `rating_events` (each player's rating and sets after their last
+//! rated set before then), so a voided set (`pp-admin ranked void`, which deletes its events and
+//! re-rates the later ones) changes the old positions too and no snapshot goes stale.
 
+use std::collections::HashMap;
 use std::net::SocketAddr;
 
 use axum::extract::{ConnectInfo, Query, State};
@@ -28,6 +34,9 @@ use crate::AppState;
 
 pub const DEFAULT_LIMIT: u32 = 50;
 pub const MAX_LIMIT: u32 = 100;
+
+/// How far back `positionChange` compares, as a Postgres interval.
+pub const CHANGE_WINDOW: &str = "24 hours";
 
 /// Where a page starts: after this row.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -74,6 +83,9 @@ pub struct Entry {
     /// Rated sets left before the player places: always 0 here (only placed players are listed),
     /// kept for older launchers.
     pub sets_to_place: u32,
+    /// Places moved up (positive) or down (negative) since [`CHANGE_WINDOW`] ago; null if the
+    /// player was not on the leaderboard then (placed since).
+    pub position_change: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -145,6 +157,21 @@ pub async fn page(pool: &PgPool, after: Option<Key>, limit: u32) -> sqlx::Result
     .bind(after.map(|k| k.uid))
     .fetch_one(&mut *tx)
     .await?;
+    let page_uids: Vec<Uuid> = rows.iter().take(limit as usize).map(|r| r.uid).collect();
+    let before: HashMap<Uuid, i64> = sqlx::query_as::<_, (Uuid, i64)>(&format!(
+        "SELECT uid, pos FROM (
+             SELECT uid, row_number() OVER (ORDER BY rating DESC, uid) AS pos FROM (
+                 SELECT DISTINCT ON (uid) uid, rating_after AS rating, sets_before + 1 AS sets
+                   FROM rating_events WHERE created_at <= now() - interval '{CHANGE_WINDOW}'
+                  ORDER BY uid, created_at DESC, id DESC) last
+              WHERE sets >= {PLACED}) board
+          WHERE uid = ANY($1)"
+    ))
+    .bind(&page_uids)
+    .fetch_all(&mut *tx)
+    .await?
+    .into_iter()
+    .collect();
     tx.commit().await?;
 
     let more = rows.len() as i64 > limit;
@@ -154,10 +181,12 @@ pub async fn page(pool: &PgPool, after: Option<Key>, limit: u32) -> sqlx::Result
         .into_iter()
         .enumerate()
         .map(|(i, r)| {
+            let position = ahead.max(0) as u64 + 1 + i as u64;
             let tier = stored_tier(r.rank, r.rd);
             let sets_played = r.sets_played.max(0) as u32;
             Entry {
-                position: ahead.max(0) as u64 + 1 + i as u64,
+                position,
+                position_change: before.get(&r.uid).map(|&was| was - position as i64),
                 uid: r.uid,
                 display_name: r.display_name,
                 connect_code: r.connect_code.unwrap_or_default(),

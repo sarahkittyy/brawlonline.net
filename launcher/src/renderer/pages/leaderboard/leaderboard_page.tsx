@@ -3,6 +3,7 @@ import TableBody from "@mui/material/TableBody";
 import TableCell from "@mui/material/TableCell";
 import TableHead from "@mui/material/TableHead";
 import TableRow from "@mui/material/TableRow";
+import Tooltip from "@mui/material/Tooltip";
 import Typography from "@mui/material/Typography";
 import React, { useCallback } from "react";
 
@@ -12,7 +13,7 @@ import { RankBadge } from "@/components/rank_badge/rank_badge";
 import { useAccount } from "@/lib/hooks/use_account";
 import type { CursorPage } from "@/lib/hooks/use_cursor_pages";
 import { useCursorPages } from "@/lib/hooks/use_cursor_pages";
-import { formatRating, formatRecord } from "@/lib/ranked_format";
+import { formatRating, formatRecord, RATING_DOWN_COLOR, RATING_UP_COLOR } from "@/lib/ranked_format";
 import { useServices } from "@/services";
 import type { LeaderboardEntry } from "@/services/backend/types";
 
@@ -57,20 +58,7 @@ export const LeaderboardPage = React.memo(function LeaderboardPage() {
         >
           {pages.error && pages.items.length === 0 ? null : (
             <Table size="small" stickyHeader={true}>
-              <TableHead>
-                <TableRow>
-                  <TableCell align="right" sx={{ width: 64 }}>
-                    {Messages.position()}
-                  </TableCell>
-                  <TableCell align="center" sx={{ width: 96 }}>
-                    {Messages.rank()}
-                  </TableCell>
-                  <TableCell>{Messages.player()}</TableCell>
-                  <TableCell>{Messages.connectCode()}</TableCell>
-                  <TableCell align="right">{Messages.rating()}</TableCell>
-                  <TableCell align="right">{Messages.record()}</TableCell>
-                </TableRow>
-              </TableHead>
+              <LeaderboardHead />
               <TableBody>
                 {pages.items.map((e) => (
                   <LeaderboardRow key={e.uid} entry={e} isMe={e.uid === myUid} />
@@ -90,6 +78,25 @@ export const LeaderboardPage = React.memo(function LeaderboardPage() {
   );
 });
 
+export const LeaderboardHead = React.memo(function LeaderboardHead() {
+  return (
+    <TableHead>
+      <TableRow>
+        <TableCell sx={{ width: 84 }}>
+          <span style={positionStyle}>{Messages.position()}</span>
+        </TableCell>
+        <TableCell align="center" sx={{ width: 96 }}>
+          {Messages.rank()}
+        </TableCell>
+        <TableCell>{Messages.player()}</TableCell>
+        <TableCell>{Messages.connectCode()}</TableCell>
+        <TableCell align="right">{Messages.rating()}</TableCell>
+        <TableCell align="right">{Messages.record()}</TableCell>
+      </TableRow>
+    </TableHead>
+  );
+});
+
 export const LeaderboardRow = React.memo(function LeaderboardRow({
   entry,
   isMe,
@@ -100,8 +107,9 @@ export const LeaderboardRow = React.memo(function LeaderboardRow({
   const strong = isMe ? { fontWeight: "bold" } : undefined;
   return (
     <TableRow data-me={isMe || undefined} sx={isMe ? { backgroundColor: "rgba(255, 255, 255, 0.1)" } : undefined}>
-      <TableCell align="right" sx={strong}>
-        {entry.position}
+      <TableCell sx={{ whiteSpace: "nowrap", ...strong }}>
+        <span style={positionStyle}>{entry.position}</span>
+        <PositionChange change={entry.positionChange} />
       </TableCell>
       <TableCell align="center" sx={{ paddingY: "4px" }}>
         <RankBadge rank={entry.rank} setsToPlace={entry.setsToPlace} size="small" />
@@ -115,5 +123,51 @@ export const LeaderboardRow = React.memo(function LeaderboardRow({
         {formatRecord(entry.wins, entry.losses)}
       </TableCell>
     </TableRow>
+  );
+});
+
+/** The position, right-aligned in a fixed width so the change fits beside it. */
+const positionStyle: React.CSSProperties = { display: "inline-block", width: 34, textAlign: "right" };
+
+const changeStyle: React.CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 3,
+  marginLeft: 8,
+  fontSize: 11,
+  fontWeight: 600,
+};
+
+/**
+ * How far a player moved in the last 24 hours, small beside the position: a green triangle up and
+ * the places, a red one down and `-places`, `NEW` for a player who placed since; nothing when
+ * the player did not move (or from an older server).
+ */
+export const PositionChange = React.memo(function PositionChange({ change }: { change?: number | null }) {
+  if (change === null) {
+    return (
+      <Tooltip title={Messages.newEntryTooltip()}>
+        <span
+          data-testid="position-change"
+          style={{ ...changeStyle, color: RATING_UP_COLOR, fontSize: 9, letterSpacing: 0.5 }}
+        >
+          {Messages.newEntry().toUpperCase()}
+        </span>
+      </Tooltip>
+    );
+  }
+  if (change === undefined || change === 0) {
+    return null;
+  }
+  const up = change > 0;
+  return (
+    <Tooltip title={up ? Messages.movedUp(change) : Messages.movedDown(-change)}>
+      <span data-testid="position-change" style={{ ...changeStyle, color: up ? RATING_UP_COLOR : RATING_DOWN_COLOR }}>
+        <svg width={7} height={6} viewBox="0 0 7 6" aria-hidden={true}>
+          <path d={up ? "M3.5 0L7 6H0z" : "M0 0h7L3.5 6z"} fill="currentColor" />
+        </svg>
+        {up ? change : `-${-change}`}
+      </span>
+    </Tooltip>
   );
 });

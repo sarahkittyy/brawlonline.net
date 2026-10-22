@@ -231,6 +231,38 @@ describe("LeaderboardRow", () => {
     expect(placing.container.querySelector("img")).toBeNull();
     expect(placing.container.querySelectorAll("td")[1].textContent).toBe("3 more");
   });
+
+  it("shows the last day's move beside the position: up green, down red, NEW, nothing when still", () => {
+    const entry = {
+      position: 4,
+      uid: "x",
+      displayName: "cy",
+      connectCode: "CY#3",
+      rating: 1500,
+      setsPlayed: 9,
+      wins: 5,
+      losses: 4,
+    };
+    const change = (positionChange?: number | null) => {
+      const { container } = render(inTable(<LeaderboardRow entry={{ ...entry, positionChange }} isMe={false} />));
+      const el = container.querySelector<HTMLElement>("[data-testid=position-change]");
+      return {
+        text: container.querySelector("td")!.textContent,
+        color: el?.style.color,
+        arrow: el?.querySelector("svg"),
+      };
+    };
+    const up = change(11);
+    expect(up.text).toBe("411");
+    expect(up.color).toBe(hexToRgb(RATING_UP_COLOR));
+    expect(up.arrow).not.toBeNull();
+    const down = change(-2);
+    expect(down.text).toBe("4-2");
+    expect(down.color).toBe(hexToRgb(RATING_DOWN_COLOR));
+    expect(change(null)).toMatchObject({ text: "4NEW", arrow: null });
+    expect(change(0)).toEqual({ text: "4", color: undefined, arrow: undefined });
+    expect(change(undefined)).toEqual({ text: "4", color: undefined, arrow: undefined });
+  });
 });
 
 function hexToRgb(hex: string): string {

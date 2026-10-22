@@ -82,6 +82,11 @@ export type LeaderboardEntry = {
   rank?: Rank | null;
   /** Rated sets left before the rank shows; 0 once placed. */
   setsToPlace?: number;
+  /**
+   * Places moved in the last 24 hours (positive up); null if the player placed since. Absent from
+   * an older server.
+   */
+  positionChange?: number | null;
 };
 
 /** `GET /v1/ranked/leaderboard?limit=&after=`: `next` is the `after` of the next page, null on the last. */

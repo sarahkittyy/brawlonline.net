@@ -7,5 +7,9 @@ export const LeaderboardPageMessages = {
   connectCode: () => "Connect code",
   rating: () => "Rating",
   record: () => "W-L",
+  movedUp: (n: number) => (n === 1 ? "Up 1 place in the last 24 hours" : `Up ${n} places in the last 24 hours`),
+  movedDown: (n: number) => (n === 1 ? "Down 1 place in the last 24 hours" : `Down ${n} places in the last 24 hours`),
+  newEntry: () => "New",
+  newEntryTooltip: () => "Placed in the last 24 hours",
   empty: () => "Nobody has played a ranked set yet.",
 };

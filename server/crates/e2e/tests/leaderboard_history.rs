@@ -188,6 +188,72 @@ async fn leaderboard_pages_positions_and_ties() {
     stack.shutdown().await;
 }
 
+/// A rated set's rating change for `uid`, `hours` ago: the rating after it and the rated sets
+/// before it.
+async fn rating_event(pool: &PgPool, uid: Uuid, rating_after: f64, sets_before: i32, hours: f64) {
+    let id = format!("lb-{}", Uuid::new_v4());
+    sqlx::query("INSERT INTO mm_matches (match_id, mode, players, is_host, status) VALUES ($1, 0, $2, $3, 'COMPLETE')")
+        .bind(&id)
+        .bind(vec![uid])
+        .bind(uid)
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO rating_events (uid, match_id, score, rating_before, rating_after, opponent_rating, k,
+                                    sets_before, created_at)
+         VALUES ($1, $2, 1, $3, $3, 1500, 32, $4, now() - make_interval(secs => $5))",
+    )
+    .bind(uid)
+    .bind(&id)
+    .bind(rating_after)
+    .bind(sets_before)
+    .bind(hours * 3600.0)
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn leaderboard_position_change_over_a_day() {
+    let stack = Stack::start(StackOptions::default()).await.unwrap();
+    let placed = PLACEMENT_SETS as i32;
+    // A day ago (25 h): a 1600, b 1500, c 1400, e 1300 placed; d one set short.
+    // Since (1 h ago): c climbed to 1700, d placed at 1550; a, b and e did not play.
+    let a = rated(&stack.pool, 0, Some(1600.0), placed).await;
+    let b = rated(&stack.pool, 1, Some(1500.0), placed).await;
+    let c = rated(&stack.pool, 2, Some(1700.0), placed + 1).await;
+    let d = rated(&stack.pool, 3, Some(1550.0), placed).await;
+    let e = rated(&stack.pool, 4, Some(1300.0), placed).await;
+    for (uid, rating) in [(a, 1600.0), (b, 1500.0), (c, 1400.0), (e, 1300.0)] {
+        rating_event(&stack.pool, uid, rating, placed - 1, 25.0).await;
+    }
+    rating_event(&stack.pool, d, 1450.0, placed - 2, 25.0).await;
+    rating_event(&stack.pool, c, 1700.0, placed, 1.0).await;
+    rating_event(&stack.pool, d, 1550.0, placed - 1, 1.0).await;
+
+    // Was a1 b2 c3 e4, now c1 a2 d3 b4 e5; pages of 2 count the same.
+    let mut got = vec![];
+    let mut after = String::new();
+    loop {
+        let page = board(&stack, &format!("?limit=2{after}")).await;
+        for x in page["entries"].as_array().unwrap() {
+            got.push((uid_of(x), x["position"].as_u64().unwrap(), x["positionChange"].as_i64()));
+        }
+        match page["next"].as_str() {
+            Some(n) => after = format!("&after={n}"),
+            None => break,
+        }
+    }
+    assert_eq!(
+        got,
+        vec![(c, 1, Some(2)), (a, 2, Some(-1)), (d, 3, None), (b, 4, Some(-2)), (e, 5, Some(-1))],
+        "a {a} b {b} c {c} d {d} e {e}"
+    );
+    assert!(board(&stack, "").await["entries"][2]["positionChange"].is_null(), "placed since: null, not absent");
+    stack.shutdown().await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn leaderboard_and_history_are_rate_limited() {
     let stack = Stack::start(StackOptions { rate_limits: true, trust_proxy_headers: true, ..Default::default() })

@@ -176,6 +176,8 @@ const mockLeaderboard: LeaderboardEntry[] = Array.from({ length: 137 }, (_, i): 
     losses: setsPlayed - wins,
     rank: i === 22 ? mockRankedProfile.rank : mockRank(2300 - i * 10.5),
     setsToPlace: 0,
+    // Moved since yesterday: mostly a place or two, some still, a few big climbs, a few new.
+    positionChange: i % 11 === 6 ? null : [0, 2, -1, 0, 5, -3, 1, 0, -1, 11, 1][i % 11],
   };
 })
   .filter((e) => !(mockPlacing && e.uid === fakeUserId))

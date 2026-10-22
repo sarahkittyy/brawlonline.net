@@ -1,13 +1,9 @@
 import Table from "@mui/material/Table";
 import TableBody from "@mui/material/TableBody";
-import TableCell from "@mui/material/TableCell";
-import TableHead from "@mui/material/TableHead";
-import TableRow from "@mui/material/TableRow";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
 
-import { LeaderboardRow } from "@/pages/leaderboard/leaderboard_page";
-import { LeaderboardPageMessages } from "@/pages/leaderboard/leaderboard_page.messages";
+import { LeaderboardHead, LeaderboardRow } from "@/pages/leaderboard/leaderboard_page";
 import { createServiceProvider } from "@/services";
 import type { LeaderboardEntry, Rank, RankedProfile, RankTier } from "@/services/backend/types";
 import type { Services } from "@/services/types";
@@ -105,6 +101,7 @@ export const Leaderboard = () => {
     losses: 10 + i,
     rank,
     setsToPlace: 0,
+    positionChange: [11, 5, 13, -2, 9, 0, -1, 1, null, -4][i % 10],
   }));
   rows.splice(4, 0, { ...rows[4], uid: "placing-a", displayName: "NEWB", rank: null, setsToPlace: 3 });
   rows.splice(9, 0, { ...rows[9], uid: "placing-b", displayName: "Fresh", rank: null, setsToPlace: 1 });
@@ -112,20 +109,7 @@ export const Leaderboard = () => {
   return (
     <div style={{ width: 900 }}>
       <Table size="small">
-        <TableHead>
-          <TableRow>
-            <TableCell align="right" sx={{ width: 64 }}>
-              {LeaderboardPageMessages.position()}
-            </TableCell>
-            <TableCell align="center" sx={{ width: 96 }}>
-              {LeaderboardPageMessages.rank()}
-            </TableCell>
-            <TableCell>{LeaderboardPageMessages.player()}</TableCell>
-            <TableCell>{LeaderboardPageMessages.connectCode()}</TableCell>
-            <TableCell align="right">{LeaderboardPageMessages.rating()}</TableCell>
-            <TableCell align="right">{LeaderboardPageMessages.record()}</TableCell>
-          </TableRow>
-        </TableHead>
+        <LeaderboardHead />
         <TableBody>
           {rows.map((e) => (
             <LeaderboardRow key={e.uid} entry={e} isMe={e.uid === "p12"} />
