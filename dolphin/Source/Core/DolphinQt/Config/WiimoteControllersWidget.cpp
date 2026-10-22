@@ -3,6 +3,8 @@
 
 #include "DolphinQt/Config/WiimoteControllersWidget.h"
 
+#include <initializer_list>
+
 #include <QAction>
 #include <QApplication>
 #include <QCheckBox>
@@ -248,6 +250,17 @@ void WiimoteControllersWidget::CreateLayout()
   m_wiimote_layout->addWidget(m_wiimote_pt_labels[1], reset_row, 1, 1, 2);
   m_wiimote_layout->addWidget(m_wiimote_reset, reset_row, 3);
 
+  // Brawl Online's Dolphin always emulates the Wii's Bluetooth (BootManager::BootCore, bug #99):
+  // passthrough Wii Remotes never reach Dolphin's input, so online games and replays cannot use
+  // them. The passthrough rows stay built (the code below drives them) but are never shown.
+  for (QWidget* const widget : std::initializer_list<QWidget*>{
+           m_wiimote_passthrough, m_bluetooth_adapters_label, m_bluetooth_adapters,
+           m_bluetooth_adapters_refresh, m_wiimote_sync, m_wiimote_reset, m_wiimote_pt_labels[0],
+           m_wiimote_pt_labels[1]})
+  {
+    widget->hide();
+  }
+
   // Emulated BT
   m_wiimote_layout->addWidget(m_wiimote_emu, m_wiimote_layout->rowCount(), 0, 1, -1);
 
@@ -478,10 +491,8 @@ void WiimoteControllersWidget::LoadSettings(Core::State state)
   SignalBlocking(m_wiimote_continuous_scanning)
       ->setChecked(Shown(Config::MAIN_WIIMOTE_CONTINUOUS_SCANNING));
 
-  if (Shown(Config::MAIN_BLUETOOTH_PASSTHROUGH_ENABLED))
-    SignalBlocking(m_wiimote_passthrough)->setChecked(true);
-  else
-    SignalBlocking(m_wiimote_emu)->setChecked(true);
+  // Always emulated here (see CreateLayout): saving the pane writes passthrough off to the file.
+  SignalBlocking(m_wiimote_emu)->setChecked(true);
 
   // Make sure continuous scanning setting is applied.
   WiimoteReal::Initialize(::Wiimote::InitializeMode::DO_NOT_WAIT_FOR_WIIMOTES);

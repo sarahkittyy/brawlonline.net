@@ -22,6 +22,7 @@
 #include "Common/CommonTypes.h"
 #include "Common/Config/Config.h"
 #include "Common/FileUtil.h"
+#include "Common/Logging/Log.h"
 
 #include "Core/AchievementManager.h"
 #include "Core/Boot/Boot.h"
@@ -110,6 +111,19 @@ bool BootCore(Core::System& system, std::unique_ptr<BootParameters> boot,
                          settings.pad_map[i] > 0 ? SerialInterface::SIDEVICE_GC_CONTROLLER :
                                                    SerialInterface::SIDEVICE_NONE);
     }
+  }
+
+  // Bluetooth passthrough hands the Bluetooth adapter to the game, so its Wii Remotes never reach
+  // Dolphin's input: online games, rooms and replays cannot read or send them. And an adapter
+  // libusb cannot open (Windows' own driver on it) stops the emulated console at boot: every P+
+  // launch ended there, "The game did not reach its menus in time" (bug #99, launcher 0.1.91, Intel
+  // 8087:0033). Brawl Online's Dolphin always emulates the Wii's Bluetooth; real Wii Remotes play
+  // through "Real Wii Remote" or the controller interface. The player's file keeps its setting.
+  if (Config::Get(Config::MAIN_BLUETOOTH_PASSTHROUGH_ENABLED))
+  {
+    WARN_LOG_FMT(BOOT, "Bluetooth passthrough is on in the settings: emulating the Wii's "
+                       "Bluetooth instead (Brawl Online reads Wii Remotes through Dolphin)");
+    Config::SetCurrent(Config::MAIN_BLUETOOTH_PASSTHROUGH_ENABLED, false);
   }
 
   // Override out-of-region languages/countries to prevent games from crashing or behaving oddly
