@@ -8,7 +8,6 @@
  */
 
 import { spawn } from "child_process";
-import { createHash } from "crypto";
 import path from "path";
 import type { ByteProgress } from "utils/copy_file";
 
@@ -38,20 +37,8 @@ export type GameData = {
 
 export type GameDataFn = (discPath: string, onProgress?: ByteProgress) => Promise<GameData>;
 
-/** NTSC-U Super Smash Bros. Brawl's game data, Rev 1 and Rev 2 (the redump dumps, read with
- * DolphinTool gamedata; any other format of them has the same). */
-export const BRAWL_NTSC_U_GAME_DATA: ReadonlyMap<string, string> = new Map([
-  ["0d79fc54ef81e223b65eb8d4b1854643fc677554", "NTSC-U Rev 1"],
-  ["e6ae2404f96cff10be1c4dda8559001c3a7dfd34", "NTSC-U Rev 2"],
-]);
-
-/**
- * NTSC-U Brawl Rev 1 and Rev 2 as one disc, as Other Games rooms compare discs: the two revisions
- * have the same game files and their main.dol differs in one word, the disc revision the game
- * checks at boot. A whole-machine session's checksums leave out the bytes that revision leaves in
- * RAM (Dolphin's MachineSession, BRAWL_DISC_REVISION), so Rev 1 and Rev 2 players play together.
- */
-export const BRAWL_NTSC_U_DISC = createHash("sha1").update("disc: NTSC-U Brawl, Rev 1 or Rev 2").digest("hex");
+// (In brawl_disc.ts, which the renderer can bundle.)
+export { BRAWL_NTSC_U_DISC, BRAWL_NTSC_U_GAME_DATA } from "./brawl_disc";
 
 const num = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null);
 const hex40 = (v: unknown): string | null => (typeof v === "string" && /^[0-9a-f]{40}$/.test(v) ? v : null);

@@ -6,7 +6,7 @@
  * plays it.
  */
 
-import { BRAWL_NTSC_U_DISC } from "../game_data";
+import { BRAWL_NTSC_U_DISC } from "../brawl_disc";
 import type { ModBuild, ModRoomBuild } from "./types";
 
 /** How one part of the player's game compares with the room's. */

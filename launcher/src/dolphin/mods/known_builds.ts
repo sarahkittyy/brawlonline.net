@@ -1,4 +1,4 @@
-import { BRAWL_NTSC_U_DISC } from "../game_data";
+import { BRAWL_NTSC_U_DISC } from "../brawl_disc";
 
 /**
  * Names for common discs and mods (docs/design/brawl-mods.md §4). Only names: an unknown disc or
