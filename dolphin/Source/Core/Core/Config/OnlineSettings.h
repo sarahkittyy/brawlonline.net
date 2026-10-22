@@ -3,8 +3,10 @@
 
 #pragma once
 
+#include <optional>
 #include <string>
 
+#include "Common/CommonTypes.h"
 #include "Common/Config/Config.h"
 
 namespace Config
@@ -28,7 +30,8 @@ extern const Info<std::string> ONLINE_DEV_ACCOUNTS_URL;
 // random one in 41000-50999.
 extern const Info<bool> ONLINE_FORCE_NETPLAY_PORT;
 extern const Info<int> ONLINE_NETPLAY_PORT;
-// "Force LAN IP": report this address as ipAddressLan instead of the detected one.
+// "Force LAN IP": report this address as ipAddressLan instead of the detected one. The launcher's
+// "Network for online games" sets it to an adapter's "a.b.c.d/prefix" (GetChosenNetwork).
 extern const Info<bool> ONLINE_FORCE_LAN_IP;
 extern const Info<std::string> ONLINE_LAN_IP;
 // Ask the router (UPnP) to forward that port while searching, for routers that change the port
@@ -85,4 +88,21 @@ std::string GetMatchmakingHost();
 int GetMatchmakingPort();
 // The accounts base URL in effect, without a trailing slash.
 std::string GetAccountsUrl();
+
+// The network the player chose in the launcher ("Network for online games": a VPN adapter's,
+// such as ZeroTier's, for players whose NAT lets no one in): with Force LAN IP on and LanIP
+// "a.b.c.d/prefix", the address to report as ours and its network. Players picked by name
+// (Direct, rooms, Brawl Mods rooms) whose reported LAN address is on that network are reached
+// there. A plain "a.b.c.d" (a hand-set Force LAN IP, as Slippi's) has no network (mask 0).
+struct ChosenNetwork
+{
+  std::string address;  // empty: not forced
+  u32 network = 0;
+  u32 mask = 0;
+  // Whether "a.b.c.d" is on the network.
+  bool Contains(const std::string& ip) const;
+};
+ChosenNetwork GetChosenNetwork();
+// "a.b.c.d" -> the address as a number (a in the top byte), nullopt for anything else.
+std::optional<u32> ParseIpv4(const std::string& text);
 }  // namespace Config

@@ -55,6 +55,12 @@ export interface SettingsSchema {
   // it). Synced to Dolphin.ini `[Online] StreamGames`.
   enableStreamGames: boolean;
 
+  // Online: "Network for online games": "" = automatic (the way to the internet), else one of the
+  // PC's addresses as "a.b.c.d/prefix", a VPN adapter's such as ZeroTier's, which friends in
+  // Direct and rooms on the same network reach this PC by. Synced to Dolphin.ini `[Online]
+  // ForceLanIP` and `LanIP` (Config::GetChosenNetwork).
+  netplayNetwork: string;
+
   // Spectating: "Close Dolphin after a spectated game ends" (docs/design/spectating.md §6.2): at a stream's end the
   // playback Dolphin holds the last frame for 5 s, then closes. Auto play overrides it.
   closeDolphinAfterSpectating: boolean;

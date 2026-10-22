@@ -1457,6 +1457,7 @@ export class DolphinManager {
       enableMusic: this.settingsManager.getEnableMusic(),
       disableChat: this.settingsManager.getDisableChat(),
       enableStreamGames: this.settingsManager.getEnableStreamGames(),
+      netplayNetwork: this.settingsManager.getNetplayNetwork(),
       pplusRelease: this.pplusVersions().currentRelease,
     });
     if (launchType === DolphinLaunchType.NETPLAY && !this.netplayDolphinInstance) {

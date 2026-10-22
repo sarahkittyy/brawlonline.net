@@ -15,6 +15,7 @@ import {
   ipc_launcherUpdateFailedEvent,
   ipc_launcherUpdateFoundEvent,
   ipc_launcherUpdateReadyEvent,
+  ipc_listNetplayNetworks,
   ipc_openInNewBrowserWindow,
   ipc_requiredLauncherUpdate,
   ipc_runNetworkDiagnostics,
@@ -69,6 +70,10 @@ export default {
   async runNetworkDiagnostics() {
     const { result } = await ipc_runNetworkDiagnostics.renderer!.trigger({});
     return result;
+  },
+  async listNetplayNetworks() {
+    const { result } = await ipc_listNetplayNetworks.renderer!.trigger({});
+    return result.networks;
   },
   async openInNewBrowserWindow(url: string): Promise<void> {
     await ipc_openInNewBrowserWindow.renderer!.trigger({ url });

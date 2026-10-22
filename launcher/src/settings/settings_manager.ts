@@ -143,6 +143,10 @@ export class SettingsManager extends EventEmitter {
     return this.get().settings.enableStreamGames;
   }
 
+  getNetplayNetwork(): string {
+    return this.get().settings.netplayNetwork;
+  }
+
   getCloseDolphinAfterSpectating(): boolean {
     return this.get().settings.closeDolphinAfterSpectating;
   }

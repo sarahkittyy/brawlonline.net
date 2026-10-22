@@ -33,6 +33,7 @@
 #include <picojson.h>
 
 #include "Common/CommonTypes.h"
+#include "Core/Config/OnlineSettings.h"
 #include "Core/Online/OnlineSession.h"
 
 namespace Online
@@ -155,6 +156,9 @@ private:
   // The server saw us at another port than m_host_port: our router picks a port per
   // destination (matchmaking thread only; for the log of a failed connect).
   bool m_router_changed_port = false;
+  // The network chosen in the launcher (Config::GetChosenNetwork): Direct and room players whose
+  // LAN address is on it are reached there (matchmaking thread only).
+  Config::ChosenNetwork m_chosen_network;
   u64 m_ticket_sent_ms = 0;  // when the last create-ticket was sent (matchmaking thread only)
   std::atomic<int> m_ticket_count{0};
   std::atomic<int> m_connect_attempts{0};

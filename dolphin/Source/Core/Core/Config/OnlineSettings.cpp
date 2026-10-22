@@ -3,11 +3,26 @@
 
 #include "Core/Config/OnlineSettings.h"
 
+#include <algorithm>
+
+#include "Common/StringUtil.h"
+
 namespace Config
 {
 namespace
 {
 constexpr char DEV_HOST[] = "127.0.0.1";
+
+bool IsAsciiDigit(char c)
+{
+  return c >= '0' && c <= '9';
+}
+
+bool AllDigits(const std::string& text, size_t max_size)
+{
+  return !text.empty() && text.size() <= max_size &&
+         std::all_of(text.begin(), text.end(), IsAsciiDigit);
+}
 }  // namespace
 
 const Info<std::string> ONLINE_MM_HOST{{System::Main, "Online", "MatchmakingHost"},
@@ -61,4 +76,48 @@ std::string GetAccountsUrl()
     url.pop_back();
   return url;
 }
+
+std::optional<u32> ParseIpv4(const std::string& text)
+{
+  const auto parts = SplitString(text, '.');
+  if (parts.size() != 4)
+    return std::nullopt;
+  u32 v = 0;
+  for (const auto& p : parts)
+  {
+    if (!AllDigits(p, 3) || std::stoi(p) > 255)
+      return std::nullopt;
+    v = (v << 8) | static_cast<u32>(std::stoi(p));
+  }
+  return v;
+}
+
+bool ChosenNetwork::Contains(const std::string& ip) const
+{
+  const std::optional<u32> v = ParseIpv4(ip);
+  return mask != 0 && v && (*v & mask) == network;
+}
+
+ChosenNetwork GetChosenNetwork()
+{
+  ChosenNetwork n;
+  if (!Get(ONLINE_FORCE_LAN_IP))
+    return n;
+  const auto parts = SplitString(Get(ONLINE_LAN_IP), '/');
+  n.address = parts.empty() ? std::string() : parts[0];
+  const std::optional<u32> ip = ParseIpv4(n.address);
+  if (parts.size() != 2 || !ip || !AllDigits(parts[1], 2))
+    return n;
+  int prefix = std::stoi(parts[1]);
+  // Tailscale's adapter has a /32 address out of 100.64.0.0/10, the range all its peers get.
+  if (prefix == 32 && (*ip & 0xFFC00000) == 0x64400000)
+    prefix = 10;
+  // No network of one address, nor one as wide as the internet.
+  if (prefix < 8 || prefix > 30)
+    return n;
+  n.mask = ~u32{0} << (32 - prefix);
+  n.network = *ip & n.mask;
+  return n;
+}
+
 }  // namespace Config

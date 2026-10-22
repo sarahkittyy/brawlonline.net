@@ -31,6 +31,7 @@ import { DISC_IMAGE_EXTENSIONS } from "../../quick_start/steps/iso_selection_ste
 import { SettingItem } from "../setting_item_section";
 import { ChatKeySetting } from "./chat_key_setting";
 import { GameSettingsMessages as Messages } from "./game_settings.messages";
+import { NetplayNetworkSetting } from "./netplay_network_setting";
 
 const renderValidityStatus = (isoValidity: IsoValidity) => {
   switch (isoValidity) {
@@ -181,6 +182,7 @@ export const GameSettings = React.memo(() => {
           </div>
         </Tooltip>
       </SettingItem>
+      <NetplayNetworkSetting />
       <SettingItem>
         <Toggle
           value={closeAfterSpectating}

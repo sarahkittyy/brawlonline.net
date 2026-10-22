@@ -18,6 +18,11 @@ export type SyncedDolphinSettings = {
   disableChat: boolean;
   /** "Show my games on the Spectate tab" (`[Online] StreamGames`, docs/design/spectating.md). */
   enableStreamGames: boolean;
+  /**
+   * "Network for online games" (`[Online] ForceLanIP` and `LanIP`): "" = automatic, else
+   * "a.b.c.d/prefix". Written only.
+   */
+  netplayNetwork?: string;
   /** The Project+ release on the card (`[Online] PPlusRelease`): replays record it. Written only. */
   pplusRelease?: string;
 };
@@ -69,6 +74,14 @@ export async function setOnlineSettings(iniFile: IniFile, options: Partial<Synce
   }
   if (options.pplusRelease !== undefined) {
     section.set("PPlusRelease", options.pplusRelease);
+  }
+  if (options.netplayNetwork) {
+    section.set("ForceLanIP", "True");
+    section.set("LanIP", options.netplayNetwork);
+  } else if (options.netplayNetwork !== undefined && section.get("LanIP", "").includes("/")) {
+    // Automatic: undo the launcher's own choice, not a Force LAN IP set by hand (no prefix).
+    section.set("ForceLanIP", "False");
+    section.set("LanIP", "");
   }
 
   await iniFile.save();

@@ -11,9 +11,10 @@ type DropdownProps<T> = {
     label: string;
   }[];
   onChange: (val: T) => void;
+  disabled?: boolean;
 };
 
-export function Dropdown<T>({ value, options, onChange }: DropdownProps<T>) {
+export function Dropdown<T>({ value, options, onChange, disabled }: DropdownProps<T>) {
   const handleChange = React.useCallback(
     (event: any) => {
       onChange(JSON.parse(event.target.value));
@@ -26,6 +27,7 @@ export function Dropdown<T>({ value, options, onChange }: DropdownProps<T>) {
       variant="outlined"
       value={JSON.stringify(value)}
       onChange={handleChange}
+      disabled={disabled}
       IconComponent={KeyboardArrowDownIcon}
     >
       {options.map(({ value, label }) => {

@@ -104,3 +104,27 @@ describe("online settings: Project+ release", () => {
     expect(await fs.promises.readFile(iniPath, "utf8")).toMatch(/\[Online\][^[]*PPlusRelease = v3\.2\.1/);
   });
 });
+
+describe("online settings: network for online games", () => {
+  it("writes the chosen network as a forced LAN address with its prefix", async () => {
+    const ini = await IniFile.init(iniPath);
+    await setOnlineSettings(ini, { netplayNetwork: "10.147.17.5/24" });
+    const text = await fs.promises.readFile(iniPath, "utf8");
+    expect(text).toMatch(/\[Online\][^[]*ForceLanIP = True/);
+    expect(text).toMatch(/\[Online\][^[]*LanIP = 10\.147\.17\.5\/24/);
+
+    await setOnlineSettings(ini, { netplayNetwork: "" });
+    const after = await fs.promises.readFile(iniPath, "utf8");
+    expect(after).toMatch(/\[Online\][^[]*ForceLanIP = False/);
+    expect(after).not.toMatch(/10\.147\.17\.5/);
+  });
+
+  it("leaves a Force LAN IP set by hand (no prefix) alone on Automatic", async () => {
+    await fs.promises.writeFile(iniPath, "[Online]\nForceLanIP = True\nLanIP = 192.168.5.5\n");
+    const ini = await IniFile.init(iniPath);
+    await setOnlineSettings(ini, { netplayNetwork: "" });
+    const text = await fs.promises.readFile(iniPath, "utf8");
+    expect(text).toMatch(/ForceLanIP = True/);
+    expect(text).toMatch(/LanIP = 192\.168\.5\.5/);
+  });
+});

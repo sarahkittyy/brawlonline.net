@@ -45,6 +45,7 @@ export const defaultAppSettings: AppSettings = {
     enableMusic: true,
     disableChat: false,
     enableStreamGames: true,
+    netplayNetwork: "",
     closeDolphinAfterSpectating: true,
     clipOnLrz: true,
     disableHighlightDetection: false,

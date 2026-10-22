@@ -4,6 +4,8 @@ import type { IsoValidity, NatType, PortMapping, Presence } from "@common/types"
 import type { EmptyPayload, SuccessPayload } from "utils/ipc";
 import { _, makeEndpoint } from "utils/ipc";
 
+import type { NetplayNetwork } from "./netplay_networks";
+
 export const ipc_checkValidIso = makeEndpoint.main(
   "checkValidIso",
   <{ path: string }>_,
@@ -47,6 +49,13 @@ export const ipc_runNetworkDiagnostics = makeEndpoint.main(
   "runNetworkDiagnostics",
   <EmptyPayload>_,
   <{ address: string; cgnat: Presence; natType: NatType; portMapping: PortMapping }>_,
+);
+
+/** The PC's IPv4 addresses, for Settings' "Network for online games" (main/netplay_networks.ts). */
+export const ipc_listNetplayNetworks = makeEndpoint.main(
+  "listNetplayNetworks",
+  <EmptyPayload>_,
+  <{ networks: NetplayNetwork[] }>_,
 );
 
 // Events

@@ -763,10 +763,21 @@ void Matchmaking::StartMatchmaking()
   // - we are connected to the same VPN node
   // - we are behind the same CGNAT"
   std::string lan_addr;
+  m_chosen_network = Config::GetChosenNetwork();
   if (Config::Get(Config::ONLINE_FORCE_LAN_IP))
   {
-    WARN_LOG_FMT(NETPLAY, "[Matchmaking] Overwriting LAN IP sent with configured address");
-    lan_addr = fmt::format("{}:{}", Config::Get(Config::ONLINE_LAN_IP), m_host_port.load());
+    if (m_chosen_network.mask != 0)
+    {
+      INFO_LOG_FMT(NETPLAY,
+                   "[Matchmaking] Network chosen in the launcher: {} (Direct and room players on "
+                   "it are reached there)",
+                   Config::Get(Config::ONLINE_LAN_IP));
+    }
+    else
+    {
+      WARN_LOG_FMT(NETPLAY, "[Matchmaking] Overwriting LAN IP sent with configured address");
+    }
+    lan_addr = fmt::format("{}:{}", m_chosen_network.address, m_host_port.load());
   }
   else
   {
@@ -988,6 +999,21 @@ void Matchmaking::HandleMatchmaking()
 
       const std::string& ext_ip = player.ip_address;
       const std::string& lan_ip = player.ip_address_lan;
+
+      // A friend on the network we chose (a VPN such as ZeroTier, for players whose NAT lets no
+      // one in): only in Direct and rooms, where players pick each other, as strangers' VPNs
+      // can number their networks alike. They chose theirs too, or their LAN address (the one
+      // toward the server) would not be on it, so each side picks the other's.
+      if (m_chosen_network.Contains(HostPart(lan_ip)) &&
+          (m_search_settings.mode == Mode::Direct || m_search_settings.mode == Mode::Teams))
+      {
+        INFO_LOG_FMT(NETPLAY,
+                     "[Matchmaking] P{} {} ({}): internet {}, LAN {}; using LAN (on the network "
+                     "chosen in the launcher)",
+                     player.port, player.display_name, player.connect_code, ext_ip, lan_ip);
+        remote_ips.push_back(lan_ip);
+        continue;
+      }
 
       if (HostPart(ext_ip) != local_external_ip || lan_ip.empty())
       {

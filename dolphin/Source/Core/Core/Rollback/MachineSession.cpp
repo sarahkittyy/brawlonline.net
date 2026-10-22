@@ -43,6 +43,7 @@
 #include "Core/Brawlback/include/gekkonet/GekkoLib/include/gekkonet.h"
 #include "Core/Config/GraphicsSettings.h"
 #include "Core/Config/MainSettings.h"
+#include "Core/Config/OnlineSettings.h"
 #include "Core/Config/SYSCONFSettings.h"
 #include "Core/Config/SessionSettings.h"
 #include "Core/Config/WiimoteSettings.h"
@@ -1464,7 +1465,9 @@ void SendProbe(ENetPeer* peer)
   picojson::object m;
   m["type"] = picojson::value("mods-endpoint");
   m["token"] = picojson::value(s.probe.token);
-  const std::string lan = LanHost(peer->address);
+  // A Force LAN IP or the network chosen in the launcher (Config::GetChosenNetwork) replaces it.
+  const std::string chosen = Config::GetChosenNetwork().address;
+  const std::string lan = !chosen.empty() ? chosen : LanHost(peer->address);
   if (!lan.empty() && s.host)
   {
     picojson::object l;
@@ -6443,9 +6446,11 @@ void SetRoom(int local_slot, const std::vector<RoomMember>& members)
       p.last_connect = {};
     }
     p.name = m->name;
-    // Its address: on this player's network (the same public address), its LAN one.
+    // Its address: on this player's network (the same public address) or on the network chosen
+    // in the launcher (a VPN such as ZeroTier, Config::GetChosenNetwork), its LAN one.
     const bool same_net =
-        self && !self->host.empty() && self->host == m->host && !m->lan_host.empty();
+        (self && !self->host.empty() && self->host == m->host && !m->lan_host.empty()) ||
+        Config::GetChosenNetwork().Contains(m->lan_host);
     const std::string& host = same_net ? m->lan_host : m->host;
     const u16 port = same_net ? m->lan_port : m->port;
     if (host != p.host || port != p.port)

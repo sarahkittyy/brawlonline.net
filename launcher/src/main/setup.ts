@@ -25,6 +25,7 @@ import {
   ipc_launcherUpdateDownloadingEvent,
   ipc_launcherUpdateFoundEvent,
   ipc_launcherUpdateReadyEvent,
+  ipc_listNetplayNetworks,
   ipc_openInNewBrowserWindow,
   ipc_requiredLauncherUpdate,
   ipc_runNetworkDiagnostics,
@@ -39,6 +40,7 @@ import {
   logsArchiveBuffer,
   writeLogsArchive,
 } from "./logs_archive";
+import { listNetplayNetworks } from "./netplay_networks";
 import { getNetworkDiagnostics } from "./network_diagnostics";
 import { BUG_REPORT_NETWORK_TIMEOUT_MS, networkReportText } from "./network_report";
 import { clearTempFolder } from "./util";
@@ -184,6 +186,10 @@ export default function setupMainIpc({
 
   ipc_runNetworkDiagnostics.main!.handle(async () => {
     return getNetworkDiagnostics();
+  });
+
+  ipc_listNetplayNetworks.main!.handle(async () => {
+    return { networks: listNetplayNetworks() };
   });
 
   ipc_openInNewBrowserWindow.main!.handle(async ({ url }: { url: string }) => {
