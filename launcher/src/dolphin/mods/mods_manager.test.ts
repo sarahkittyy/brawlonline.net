@@ -14,7 +14,7 @@ vi.mock("./disc_info", async (importOriginal) => ({
 import type { SettingsManager } from "@settings/settings_manager";
 
 import type { DolphinManager } from "../manager";
-import { buildHashKey, combineBuildHash } from "./build_hash";
+import { BUILD_HASH_VERSION, buildHashKey, combineBuildHash } from "./build_hash";
 import { ModsManager } from "./mods_manager";
 import type { ModBuild } from "./types";
 
@@ -53,8 +53,10 @@ async function oldBuild(id: string, over: Partial<ModBuild> = {}): Promise<ModBu
   };
 }
 
-function manager(builds: ModBuild[]): { mods: ModsManager; builds: () => ModBuild[] } {
-  const settings: Record<string, unknown> = { modBuilds: builds };
+function manager(
+  builds: ModBuild[],
+  settings: Record<string, unknown> = { modBuilds: builds },
+): { mods: ModsManager; builds: () => ModBuild[]; settings: Record<string, unknown> } {
   const settingsManager = {
     get: () => settings,
     updateSetting: async (key: string, value: unknown) => {
@@ -63,7 +65,7 @@ function manager(builds: ModBuild[]): { mods: ModsManager; builds: () => ModBuil
   } as unknown as SettingsManager;
   const dolphin = { netplayUserFolder: () => tmp } as unknown as DolphinManager;
   const mods = new ModsManager(settingsManager, dolphin, async () => "DolphinTool");
-  return { mods, builds: () => settings.modBuilds as ModBuild[] };
+  return { mods, builds: () => settings.modBuilds as ModBuild[], settings };
 }
 
 describe("rehashChanged", () => {
@@ -74,16 +76,33 @@ describe("rehashChanged", () => {
     expect(build.parts?.disc).toBe(BRAWL_NTSC_U_DISC);
     expect(build.hash).toBe(combineBuildHash({ disc: BRAWL_NTSC_U_DISC, launcher: null, sd: false }));
     expect(build.hashKey).toBe(await buildHashKey(build));
+    expect(discIdentity).toHaveBeenCalledTimes(1);
   });
 
-  it("leaves a game hashed by this launcher, and one whose files are gone", async () => {
+  it("runs once: not at the next start, even for a game whose files changed or that failed", async () => {
+    const pplus = await oldBuild("pplus");
+    const gone = await oldBuild("gone", { discPath: path.join(tmp, "unplugged", "gone.iso") });
+    const first = manager([pplus, gone]);
+    await first.mods.rehashChanged();
+    expect(discIdentity).toHaveBeenCalledTimes(1);
+    expect(first.settings.modsHashVersion).toBe(BUILD_HASH_VERSION);
+    expect(first.builds()[1]).toEqual(gone);
+
+    // The next start: P+'s disc changed since (it is hashed at its next Host or Join, not now).
+    await writeFile(pplus.discPath, "changed");
+    discIdentity.mockClear();
+    const next = manager(first.builds(), first.settings);
+    await next.mods.rehashChanged();
+    expect(discIdentity).not.toHaveBeenCalled();
+  });
+
+  it("leaves a game hashed by this launcher", async () => {
     const current = await oldBuild("current");
     current.hashKey = await buildHashKey(current);
-    const gone = await oldBuild("gone", { discPath: path.join(tmp, "unplugged", "gone.iso") });
-    const { mods, builds } = manager([current, gone]);
+    const { mods, builds } = manager([current]);
     await mods.rehashChanged();
     expect(discIdentity).not.toHaveBeenCalled();
-    expect(builds()).toEqual([current, gone]);
+    expect(builds()).toEqual([current]);
   });
 
   it("keeps both of two games that are now one disc (Brawl Rev 1 and Rev 2)", async () => {

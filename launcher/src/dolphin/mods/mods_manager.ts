@@ -8,7 +8,7 @@ import { throttleProgress } from "utils/copy_file";
 
 import type { DolphinManager } from "../manager";
 import { DolphinLaunchType } from "../types";
-import { buildHashKey, combineBuildHash, computeBuildParts, sdHashKey } from "./build_hash";
+import { BUILD_HASH_VERSION, buildHashKey, combineBuildHash, computeBuildParts, sdHashKey } from "./build_hash";
 import { defaultControllerKind, readDolphinControllers } from "./controllers";
 import { discIdentity, readDiscInfo } from "./disc_info";
 import { findModParts } from "./folder_import";
@@ -368,27 +368,28 @@ export class ModsManager {
   }
 
   /**
-   * Hashes again, one at a time in the background, every game hashed before whose files changed
-   * since or whose hash an older launcher computed (`buildHashKey`'s version: v3 named a disc by
-   * its contents' SHA-1, v4 by its game data, 82db6b5e). Rooms are matched by the stored hash, so
-   * without this a game added before an update showed every room of its disc as another disc
-   * until the player removed it and added it again. A game whose files are missing is left as it
-   * is (an unplugged drive), for the next start.
+   * Once per build hash version (settings `modsHashVersion`), at the first start of a launcher
+   * with a new one: hashes again, one at a time in the background, every game an older launcher
+   * hashed (`buildHashKey`'s version: v3 named a disc by its contents' SHA-1, v4 by its game data,
+   * 82db6b5e). Rooms are matched by the stored hash, so without this a game added before the
+   * update showed every room of its disc as another disc until the player removed it and added it
+   * again. A game that fails then (its files missing: an unplugged drive) is hashed at its next
+   * Host or Join, as a game whose files changed always is.
    */
   rehashChanged(): Promise<void> {
+    if (this.settings.get().modsHashVersion === BUILD_HASH_VERSION) {
+      return this.rehashing;
+    }
     this.rehashing = (async () => {
       for (const build of this.builds()) {
-        if (!build.hash) {
+        if (!build.hash || build.hashKey?.startsWith(`${BUILD_HASH_VERSION}|`)) {
           continue;
         }
-        const key = await buildHashKey(build).catch(() => null);
-        if (key === null || key === build.hashKey) {
-          continue;
-        }
-        log.info(`${build.name} changed since it was hashed (${build.hashKey ?? "-"} -> ${key}): hashing it again`);
+        log.info(`${build.name} was hashed by an older launcher (${build.hashKey ?? "-"}): hashing it again`);
         await this.hashBuild(build.id).catch((err) => log.warn(`hashing ${build.name} again: ${err}`));
       }
-    })();
+      await this.settings.updateSetting("modsHashVersion", BUILD_HASH_VERSION);
+    })().catch((err) => log.warn(`hashing the games again: ${err}`));
     return this.rehashing;
   }
 

@@ -21,6 +21,10 @@ import type { ModBuild, ModBuildParts } from "./types";
 
 export const BUILD_HASH_PREFIX = "brawl-mods-build-v4\n";
 
+/** `buildHashKey`'s version: a game whose key has another was hashed by an older launcher.
+ * v4: the disc is its game data (disc_info.ts discIdentity), not its contents' SHA-1. */
+export const BUILD_HASH_VERSION = "v4";
+
 type PathsOf = Pick<ModBuild, "discPath" | "launcherPath" | "sdPath">;
 
 /** The disc's part (`disc_info.ts` discIdentity), reporting the disc's bytes done if it can. */
@@ -39,8 +43,7 @@ export async function buildHashKey(build: PathsOf): Promise<string> {
     keys.push(`${s.size}:${Math.floor(s.mtimeMs)}`);
   }
   keys.push(build.sdPath ? "card" : "-");
-  // v4: the disc is its game data (disc_info.ts discIdentity), not its contents' SHA-1.
-  return `v4|${keys.join("|")}`;
+  return `${BUILD_HASH_VERSION}|${keys.join("|")}`;
 }
 
 /** "<size>:<mtimeMs>" of the SD card ("-" for none): when it changes, its root is taken again
