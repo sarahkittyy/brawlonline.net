@@ -1266,7 +1266,7 @@ namespace OnlineMenu {
     // of the bar, right-aligned against it. The code comes from GET_ONLINE_STATUS (Dolphin
     // reads it from user.json), which the menus ask for.
     // In Ranked the same window shows the player's rating instead (Slippi's CSS shows the rank
-    // there): the Elo number and, after a set, its change, e.g. "1523 (+14)".
+    // there): the Elo number and, after a set, its change, e.g. "1523 (+14)"; "????" while placing.
     static const u32 OWN_WINDOW = 1;
     static const float OWN_X1 = -640.0f, OWN_X2 = -395.0f;
     static char s_roomTop[24];
@@ -1945,11 +1945,17 @@ namespace OnlineMenu {
         lockIn(game, picksStage() ? PPOM::STAGE_PENDING : 0xFFFF, 0);
     }
 
-    // Ranked: the rating, rounded ("1523"), and after a set its change ("1523 (+14)").
+    // Ranked: the rating, rounded ("1523"), and after a set its change ("1523 (+14)"); "????"
+    // while placing (fewer than common::ranked::PLACEMENT_SETS rated sets), as the launcher shows it.
+    static const u32 PLACEMENT_SETS = 5;
     static void onRank(const PPOM::RankInfo& r)
     {
         if (r.state == PPOM::RANK_UNKNOWN || !(r.rating > -100000.0f && r.rating < 100000.0f)) {
             s.rankText[0] = 0;
+            return;
+        }
+        if (r.setsPlayed < PLACEMENT_SETS) {
+            strcpy(s.rankText, "????");
             return;
         }
         int rating = (int)(r.rating + (r.rating < 0 ? -0.5f : 0.5f));

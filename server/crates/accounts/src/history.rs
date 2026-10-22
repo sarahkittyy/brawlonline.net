@@ -182,10 +182,14 @@ pub struct MatchPlayer {
     pub wins: u32,
     /// The rating change this set caused; null for Unranked and Direct, and for a set that
     /// did not change this player's rating (undecided, void, or abandoned by the opponent
-    /// before the first game).
+    /// before the first game). Also null while the player is still placing (fewer than
+    /// [`common::ranked::PLACEMENT_SETS`] rated sets now), whose rating nobody sees yet.
     pub rating_before: Option<f64>,
     pub rating_after: Option<f64>,
     pub rating_change: Option<f64>,
+    /// The set changed this player's rating, but they are still placing, so it is not shown
+    /// (the launcher shows `????`).
+    pub rating_hidden: bool,
     /// A room's game: the player's slot (1-4, the in-game port); null for the other modes.
     pub port: Option<u8>,
     /// A room's team battle: 0 red, 1 blue, 2 green.
@@ -335,11 +339,14 @@ pub async fn matches(
     let mut uids: Vec<Uuid> = rows.iter().flat_map(|r| r.players.iter().copied()).collect();
     uids.sort();
     uids.dedup();
-    let users: Vec<(Uuid, String, Option<String>)> =
-        sqlx::query_as("SELECT uid, display_name, connect_code FROM users WHERE uid = ANY($1)")
-            .bind(&uids)
-            .fetch_all(&mut *tx)
-            .await?;
+    let users: Vec<(Uuid, String, Option<String>, i32)> = sqlx::query_as(
+        "SELECT u.uid, u.display_name, u.connect_code, coalesce(r.sets_played, 0)
+           FROM users u LEFT JOIN ratings r ON r.uid = u.uid
+          WHERE u.uid = ANY($1)",
+    )
+    .bind(&uids)
+    .fetch_all(&mut *tx)
+    .await?;
     tx.commit().await?;
 
     let mut games: HashMap<String, Vec<GameReport>> = HashMap::new();
@@ -352,8 +359,8 @@ pub async fn matches(
     }
     let events: HashMap<(String, Uuid), (f64, f64)> =
         events.into_iter().map(|(id, u, before, after)| ((id, u), (before, after))).collect();
-    let users: HashMap<Uuid, (String, Option<String>)> =
-        users.into_iter().map(|(u, name, code)| (u, (name, code))).collect();
+    let users: HashMap<Uuid, (String, Option<String>, bool)> =
+        users.into_iter().map(|(u, name, code, sets)| (u, (name, code, ranked::placed(sets.max(0) as u32)))).collect();
 
     let matches = rows
         .into_iter()
@@ -384,8 +391,10 @@ pub async fn matches(
                 .zip(won)
                 .enumerate()
                 .map(|(i, (p, wins))| {
-                    let (name, code) = users.get(p).cloned().unwrap_or_default();
-                    let event = events.get(&(r.match_id.clone(), *p)).copied();
+                    // A deleted account keeps its rating changes, as before.
+                    let (name, code, placed) = users.get(p).cloned().unwrap_or((String::new(), None, true));
+                    let rated = events.get(&(r.match_id.clone(), *p)).copied();
+                    let event = rated.filter(|_| placed);
                     MatchPlayer {
                         uid: *p,
                         display_name: name,
@@ -394,6 +403,7 @@ pub async fn matches(
                         rating_before: event.map(|e| e.0),
                         rating_after: event.map(|e| e.1),
                         rating_change: event.map(|(before, after)| after - before),
+                        rating_hidden: rated.is_some() && !placed,
                         port: nth(&r.ports, i),
                         team: nth(&r.teams, i),
                         place: last.and_then(|g| g.get(p).copied()),

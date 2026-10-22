@@ -82,6 +82,20 @@ describe("MatchRow", () => {
     expect(cells[3]).toBe("0 - 0");
   });
 
+  it("shows ???? for a player still placing", () => {
+    const placing: MatchHistoryItem = {
+      ...rankedSet,
+      players: [
+        rankedSet.players[0],
+        { ...rankedSet.players[1], ratingBefore: null, ratingAfter: null, ratingChange: null, ratingHidden: true },
+      ],
+    };
+    const { container } = render(inTable(<MatchRow item={placing} myUid="me" />));
+    const cells = Array.from(container.querySelectorAll("td")).map((td) => td.textContent);
+    expect(cells[2]).toBe("annANN#1????");
+    expect(cells[4]).toBe("bobBOB#21500.0 -16.0");
+  });
+
   it("shows Unranked and Direct matches without ratings", () => {
     const direct: MatchHistoryItem = {
       ...rankedSet,

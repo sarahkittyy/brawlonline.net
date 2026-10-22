@@ -24,8 +24,10 @@ import {
   formatMatchScore,
   formatPlace,
   formatPosition,
+  formatProfileRating,
   formatRating,
   formatRatingChange,
+  HIDDEN_RATING,
   matchNote,
   matchSides,
   modeLabel,
@@ -94,10 +96,12 @@ const RankedSummary = ({ uid }: { uid: string }) => {
             data-testid="profile-rating"
             style={{ color: "var(--accent-primary)", fontWeight: "bold", fontSize: 24 }}
           >
-            {formatRating(profile.rating)}
+            {formatProfileRating(profile)}
           </span>
           <span style={{ color: "var(--text-secondary)" }}>{Messages.setsPlayed(profile.setsPlayed)}</span>
-          <span style={{ color: "var(--text-secondary)" }}>{position ?? Messages.notRankedYet()}</span>
+          <span style={{ color: "var(--text-secondary)" }}>
+            {position ?? (profile.setsToPlace ? Messages.notPlacedYet(profile.setsToPlace) : Messages.notRankedYet())}
+          </span>
         </div>
       )}
     </div>
@@ -315,6 +319,11 @@ const PlayerCell = ({ player, showPlace = false }: { player: MatchHistoryPlayer;
       )}
       {showPlace && player.place != null && (
         <span style={{ marginLeft: 8, fontWeight: "bold" }}>{formatPlace(player.place)}</span>
+      )}
+      {player.ratingHidden && (
+        <div style={{ fontSize: 12, color: "var(--text-secondary)" }} title={Messages.ratingHidden()}>
+          {HIDDEN_RATING}
+        </div>
       )}
       {player.ratingBefore != null && player.ratingChange != null && (
         <div style={{ fontSize: 12 }}>

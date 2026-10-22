@@ -106,6 +106,9 @@ export type MatchHistoryPlayer = {
   ratingBefore: number | null;
   ratingAfter: number | null;
   ratingChange: number | null;
+  /** The set changed this player's rating, but they are still placing: the rating fields are null and the
+   * launcher shows `????` (from 2026-10-21; absent from an older server). */
+  ratingHidden?: boolean;
   /** A room's game: the player's slot (1-4); null for the other modes. */
   port?: number | null;
   /** A room's team battle: 0 red, 1 blue, 2 green. */

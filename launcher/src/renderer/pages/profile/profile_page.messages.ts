@@ -3,6 +3,9 @@ export const ProfilePageMessages = {
   rating: () => "Rating",
   setsPlayed: (sets: number) => (sets === 1 ? "1 ranked set" : `${sets} ranked sets`),
   notRankedYet: () => "Not on the leaderboard yet: play a ranked set.",
+  notPlacedYet: (sets: number) =>
+    sets === 1 ? "On the leaderboard after 1 more ranked set." : `On the leaderboard after ${sets} more ranked sets.`,
+  ratingHidden: () => "Still placing: the rating shows after their placement sets",
   matchHistory: () => "Match history",
   all: () => "All",
   ranked: () => "Ranked",

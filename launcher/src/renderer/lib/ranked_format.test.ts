@@ -6,6 +6,7 @@ import {
   formatMatchScore,
   formatPlace,
   formatPosition,
+  formatProfileRating,
   formatRating,
   formatRatingChange,
   formatRecord,
@@ -54,6 +55,14 @@ describe("ranked formatting", () => {
     expect(ratingChangeColor(-0.04)).toBeUndefined();
     expect(ratingChangeColor(3)).toBe(RATING_UP_COLOR);
     expect(ratingChangeColor(-3)).toBe(RATING_DOWN_COLOR);
+  });
+
+  it("hides a player's own rating until they place", () => {
+    expect(formatProfileRating({ rating: 1611.25, setsToPlace: 3 })).toBe("????");
+    expect(formatProfileRating({ rating: 1611.25, setsToPlace: 1 })).toBe("????");
+    expect(formatProfileRating({ rating: 1611.25, setsToPlace: 0 })).toBe("1611.3");
+    // An older server sends no setsToPlace.
+    expect(formatProfileRating({ rating: 1611.25 })).toBe("1611.3");
   });
 
   it("formats records, positions and scores", () => {

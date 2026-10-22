@@ -91,6 +91,7 @@ Each player has a **held rank**, which changes only after a rated set:
 - The server still keeps the RD beside the rating (350 at the start, `1/RD'² = 1/RD² + 1/d²` after each set) and stores it, but it decides nothing.
 - Accounts replays the rating history at startup and recomputes the stored ranks whenever one differs from what today's rules give (`backfill_tiers`), so a rule change (this one, the buffer) applies itself on deploy.
 - While placing, the badge is the dotted outline of the emblem's silhouette with a dashed "3 more sets" tag. The buffer starts once placed.
+- **Hidden while placing** (the user's, 2026-10-21): a player is not on the leaderboard (`GET /v1/ranked/leaderboard`, the website's top 10) and has no `position` in `/user/{uid}` until placed; `rankedPlayers` and the leaderboard's `total` count placed players. Their Elo shows as `????`: Home's ranked box and the Profile page (`formatProfileRating`), the Ranked CSS's rank box in game (plugin `onRank`, by `setsPlayed`), and the match history, where the server nulls `ratingBefore` / `ratingAfter` / `ratingChange` of every player in the list who is still placing now and sets `ratingHidden`. Once placed, their earlier sets show their numbers. `/user/{uid}`'s `ratingOrdinal` is still the real rating (Dolphin and mm read it).
 - Not done, possible later: RD growing during long inactivity, so a returning player re-places.
 
 ## 5. The badge (built)

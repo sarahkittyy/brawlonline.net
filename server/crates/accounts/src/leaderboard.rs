@@ -1,12 +1,13 @@
 //! The ranked leaderboard (`GET /v1/ranked/leaderboard`) and a player's position on it
 //! (`rank.position` of `GET /user/{uid}`).
 //!
-//! The leaderboard lists every player with at least one rated set, by rating (highest first),
-//! ties by uid. Pages are keyset-paginated: the cursor is the last row's (rating, uid), so a
+//! The leaderboard lists every placed player ([`ranked::PLACEMENT_SETS`] rated sets), by rating
+//! (highest first), ties by uid; a player still placing is not on it and has no position (the
+//! user's, 2026-10-21: the launcher shows their rating as `????` until they place). Pages are keyset-paginated: the cursor is the last row's (rating, uid), so a
 //! deep page costs the same index range scan as the first and no row is skipped or repeated
 //! while ratings change between requests. Positions are counted (rows ahead of the cursor) in
 //! the same snapshot as the page, so they are right on every page; the count is one pass over
-//! the rated players, which is cheap at this scale.
+//! the placed players, which is cheap at this scale.
 
 use std::net::SocketAddr;
 
@@ -68,9 +69,10 @@ pub struct Entry {
     /// Sets won and lost.
     pub wins: u32,
     pub losses: u32,
-    /// The rank held (docs/design/ranked-tiers.md); null while placing.
+    /// The rank held (docs/design/ranked-tiers.md).
     pub rank: Option<RankView>,
-    /// Rated sets left before the player places; 0 once placed.
+    /// Rated sets left before the player places: always 0 here (only placed players are listed),
+    /// kept for older launchers.
     pub sets_to_place: u32,
 }
 
@@ -80,7 +82,7 @@ pub struct Page {
     pub entries: Vec<Entry>,
     /// The cursor for the next page (`after`), or null on the last page.
     pub next: Option<String>,
-    /// Players with at least one rated set.
+    /// Placed players.
     pub total: u64,
 }
 
@@ -97,10 +99,17 @@ struct Row {
     rd: Option<f64>,
 }
 
-const PAGE_SQL: &str = "SELECT r.uid, u.display_name, u.connect_code, r.rating, r.sets_played, r.wins, r.losses,
-                               r.rank, r.rd
-                          FROM ratings r JOIN users u ON u.uid = r.uid
-                         WHERE r.sets_played > 0";
+/// The rated sets that place a player. It goes into the SQL as a literal, so the planner can
+/// prove it implies `ratings_leaderboard_idx`'s `sets_played > 0` and keep reading the index.
+const PLACED: u32 = ranked::PLACEMENT_SETS;
+
+fn page_sql() -> String {
+    format!(
+        "SELECT r.uid, u.display_name, u.connect_code, r.rating, r.sets_played, r.wins, r.losses, r.rank, r.rd
+           FROM ratings r JOIN users u ON u.uid = r.uid
+          WHERE r.sets_played >= {PLACED}"
+    )
+}
 
 /// One page of `limit` rows after `after` (from the top without it).
 pub async fn page(pool: &PgPool, after: Option<Key>, limit: u32) -> sqlx::Result<Page> {
@@ -110,15 +119,16 @@ pub async fn page(pool: &PgPool, after: Option<Key>, limit: u32) -> sqlx::Result
     sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY").execute(&mut *tx).await?;
     let mut rows: Vec<Row> = match after {
         None => {
-            sqlx::query_as(&format!("{PAGE_SQL} ORDER BY r.rating DESC, r.uid LIMIT $1"))
+            sqlx::query_as(&format!("{} ORDER BY r.rating DESC, r.uid LIMIT $1", page_sql()))
                 .bind(limit + 1)
                 .fetch_all(&mut *tx)
                 .await?
         }
         Some(k) => {
             sqlx::query_as(&format!(
-            "{PAGE_SQL} AND (r.rating < $2 OR (r.rating = $2 AND r.uid > $3)) ORDER BY r.rating DESC, r.uid LIMIT $1"
-        ))
+                "{} AND (r.rating < $2 OR (r.rating = $2 AND r.uid > $3)) ORDER BY r.rating DESC, r.uid LIMIT $1",
+                page_sql()
+            ))
             .bind(limit + 1)
             .bind(k.rating)
             .bind(k.uid)
@@ -127,10 +137,10 @@ pub async fn page(pool: &PgPool, after: Option<Key>, limit: u32) -> sqlx::Result
         }
     };
     // Rows up to and including the cursor's (none without one), and everyone.
-    let (ahead, total): (i64, i64) = sqlx::query_as(
+    let (ahead, total): (i64, i64) = sqlx::query_as(&format!(
         "SELECT count(*) FILTER (WHERE rating > $1 OR (rating = $1 AND uid <= $2)), count(*)
-           FROM ratings WHERE sets_played > 0",
-    )
+           FROM ratings WHERE sets_played >= {PLACED}"
+    ))
     .bind(after.map(|k| k.rating))
     .bind(after.map(|k| k.uid))
     .fetch_one(&mut *tx)
@@ -163,18 +173,18 @@ pub async fn page(pool: &PgPool, after: Option<Key>, limit: u32) -> sqlx::Result
     Ok(Page { entries, next, total: total.max(0) as u64 })
 }
 
-/// A player's leaderboard position (`None` before their first rated set) and the number of
-/// players on the leaderboard.
+/// A player's leaderboard position (`None` while placing) and the number of players on the
+/// leaderboard.
 pub async fn placement(pool: &PgPool, uid: Uuid, standing: Standing) -> sqlx::Result<(Option<u64>, u64)> {
-    let (ahead, total): (i64, i64) = sqlx::query_as(
+    let (ahead, total): (i64, i64) = sqlx::query_as(&format!(
         "SELECT count(*) FILTER (WHERE rating > $1 OR (rating = $1 AND uid < $2)), count(*)
-           FROM ratings WHERE sets_played > 0",
-    )
+           FROM ratings WHERE sets_played >= {PLACED}"
+    ))
     .bind(standing.rating)
     .bind(uid)
     .fetch_one(pool)
     .await?;
-    let position = (standing.sets_played > 0).then_some(ahead.max(0) as u64 + 1);
+    let position = ranked::placed(standing.sets_played).then_some(ahead.max(0) as u64 + 1);
     Ok((position, total.max(0) as u64))
 }
 

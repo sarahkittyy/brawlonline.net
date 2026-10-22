@@ -505,10 +505,9 @@ pub struct PublicRank {
     pub rating_update_count: u32,
     pub daily_global_placement: Option<u16>,
     pub daily_regional_placement: Option<u16>,
-    /// 1-based position on the leaderboard (`GET /v1/ranked/leaderboard`), null before the
-    /// first rated set.
+    /// 1-based position on the leaderboard (`GET /v1/ranked/leaderboard`), null while placing.
     pub position: Option<u64>,
-    /// Players on the leaderboard (at least one rated set).
+    /// Players on the leaderboard (placed players).
     pub ranked_players: u64,
     /// The rank held (docs/design/ranked-tiers.md); null while placing.
     pub tier: Option<crate::ranked::RankView>,

@@ -56,10 +56,10 @@ async fn user_rank(stack: &Stack, u: &UserJson) -> Value {
     body["rank"].clone()
 }
 
-async fn board_entry(stack: &Stack, u: &UserJson) -> Value {
+async fn board_entry(stack: &Stack, u: &UserJson) -> Option<Value> {
     let (st, body) = stack.get("/v1/ranked/leaderboard?limit=100", None).await;
     assert_eq!(st, 200, "{body}");
-    body["entries"].as_array().unwrap().iter().find(|e| e["uid"] == u.uid.as_str()).cloned().unwrap()
+    body["entries"].as_array().unwrap().iter().find(|e| e["uid"] == u.uid.as_str()).cloned()
 }
 
 fn view(rank: Option<Rank>) -> Value {
@@ -90,10 +90,15 @@ async fn sets_place_players_and_the_settle_matches_the_replay() {
         let played = n as u32 + 1;
         assert_eq!(left, u64::from(ranked::PLACEMENT_SETS.saturating_sub(played)), "set {n}: {r}");
         assert_eq!(r["tier"] == Value::Null, left > 0, "set {n}: {r}");
-        // The leaderboard says the same.
-        let e = board_entry(&stack, &a).await;
-        assert_eq!(e["rank"], r["tier"], "set {n}");
-        assert_eq!(e["setsToPlace"], r["setsToPlace"], "set {n}");
+        // The leaderboard lists her only once she places, with the same rank.
+        match board_entry(&stack, &a).await {
+            None => assert!(left > 0, "set {n}: placed but not on the leaderboard"),
+            Some(e) => {
+                assert_eq!(left, 0, "set {n}: on the leaderboard while placing");
+                assert_eq!(e["rank"], r["tier"], "set {n}");
+                assert_eq!(e["setsToPlace"], 0, "set {n}");
+            }
+        }
     }
 
     // Stored: every rating change has its ranks and RD; ratings has the player's.

@@ -1,10 +1,11 @@
 //! End-to-end: the ranked leaderboard (pages, positions, ties, cursors that stay put while
-//! ratings change), the leaderboard position in `/user/{uid}`, a player's match history
-//! (Ranked, Unranked, Direct, an abandoned set; filters, fields, pages), game reports for
+//! ratings change; players still placing are not on it), the leaderboard position in
+//! `/user/{uid}`, a player's match history (Ranked, Unranked, Direct, an abandoned set; filters,
+//! fields, pages; a placing player's rating changes hidden), game reports for
 //! Unranked and Direct matches (stored, never rated), and the rate limits of both endpoints.
 
 use chrono::{DateTime, Duration, Utc};
-use common::ranked::{updated, DEFAULT_RATING};
+use common::ranked::{updated, DEFAULT_RATING, PLACEMENT_SETS};
 use e2e::{Stack, StackOptions, UserJson};
 use serde_json::{json, Value};
 use sqlx::PgPool;
@@ -42,10 +43,13 @@ async fn rated(pool: &PgPool, n: usize, rating: Option<f64>, sets: i32) -> Uuid 
     uid
 }
 
-/// Every rated player in leaderboard order: rating, highest first, then uid.
+/// Every placed player in leaderboard order: rating, highest first, then uid.
 async fn expected_order(pool: &PgPool) -> Vec<(Uuid, f64)> {
-    let mut rows: Vec<(Uuid, f64)> =
-        sqlx::query_as("SELECT uid, rating FROM ratings WHERE sets_played > 0").fetch_all(pool).await.unwrap();
+    let mut rows: Vec<(Uuid, f64)> = sqlx::query_as("SELECT uid, rating FROM ratings WHERE sets_played >= $1")
+        .bind(PLACEMENT_SETS as i32)
+        .fetch_all(pool)
+        .await
+        .unwrap();
     rows.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap().then(a.0.cmp(&b.0)));
     rows
 }
@@ -85,13 +89,16 @@ fn uid_of(e: &Value) -> Uuid {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn leaderboard_pages_positions_and_ties() {
     let stack = Stack::start(StackOptions::default()).await.unwrap();
-    // 25 rated players in groups of three with the same rating, one player whose ratings row
-    // has no rated set, and one with no row: neither is on the leaderboard.
+    // 25 placed players in groups of three with the same rating, one player whose ratings row
+    // has no rated set, one with no row, and one still placing (one set short, rated above
+    // everyone): none of those three is on the leaderboard.
+    let placed = PLACEMENT_SETS as usize;
     for n in 0..25 {
-        rated(&stack.pool, n, Some(1700.0 - (n / 3) as f64 * 12.5), (n % 4 + 1) as i32).await;
+        rated(&stack.pool, n, Some(1700.0 - (n / 3) as f64 * 12.5), (placed + n % 4) as i32).await;
     }
     let unrated_row = rated(&stack.pool, 100, Some(1400.0), 0).await;
     let no_row = rated(&stack.pool, 101, None, 0).await;
+    let placing = rated(&stack.pool, 102, Some(2000.0), placed as i32 - 1).await;
     let want = expected_order(&stack.pool).await;
     assert_eq!(want.len(), 25);
 
@@ -117,7 +124,7 @@ async fn leaderboard_pages_positions_and_ties() {
     assert_eq!(got, want);
     let positions: Vec<u64> = entries.iter().map(|e| e["position"].as_u64().unwrap()).collect();
     assert_eq!(positions, (1..=25).collect::<Vec<u64>>());
-    assert!(!got.iter().any(|(u, _)| *u == unrated_row || *u == no_row));
+    assert!(!got.iter().any(|(u, _)| [unrated_row, no_row, placing].contains(u)));
     // A page size that divides the total: the last page is full and has no `next`.
     let (entries5, pages5) = all_pages(&stack, 5).await;
     assert_eq!((entries5.len(), pages5), (25, 5));
@@ -130,12 +137,12 @@ async fn leaderboard_pages_positions_and_ties() {
         assert_eq!(u["rank"]["position"], i as u64 + 1, "{u}");
         assert_eq!(u["rank"]["rankedPlayers"], 25);
     }
-    for uid in [unrated_row, no_row] {
+    for uid in [unrated_row, no_row, placing] {
         let (_, u) = stack.get(&format!("/user/{uid}"), None).await;
         assert!(u["rank"]["position"].is_null(), "{u}");
         assert_eq!(u["rank"]["rankedPlayers"], 25);
         // The existing fields are still there.
-        assert_eq!(u["rank"]["ratingUpdateCount"], 0);
+        assert_eq!(u["rank"]["ratingUpdateCount"], if uid == placing { placed - 1 } else { 0 });
         assert!(u["rank"]["ratingOrdinal"].is_number());
     }
 
@@ -412,6 +419,30 @@ async fn match_history_and_unrated_reports() {
         accounts::ranked::sweep(&stack.pool, Utc::now() + Duration::hours(2), Default::default()).await.unwrap(),
         1
     );
+    // a and b are still placing (one and two rated sets): not on the leaderboard, and their rating
+    // changes are hidden in the history (the launcher shows ????).
+    for u in [a, b] {
+        let (_, pu) = stack.get(&format!("/user/{}", u.uid), None).await;
+        assert!(pu["rank"]["position"].is_null(), "{pu}");
+        assert_eq!(pu["rank"]["rankedPlayers"], 0);
+    }
+    assert_eq!(board(&stack, "").await["total"], 0);
+    let placing = history(&stack, sa, "").await;
+    for u in [a, b] {
+        let p = player(item(&placing, &m1), u);
+        assert!(p["ratingBefore"].is_null() && p["ratingAfter"].is_null() && p["ratingChange"].is_null(), "{p}");
+        assert_eq!(p["ratingHidden"], true, "{p}");
+    }
+    // Not rated at all: nothing to hide.
+    assert_eq!(player(item(&placing, &m2), a)["ratingHidden"], false);
+    assert_eq!(player(item(&placing, &m3), a)["ratingHidden"], false);
+    // Both place.
+    sqlx::query("UPDATE ratings SET sets_played = sets_played + $1 WHERE uid = ANY($2)")
+        .bind(PLACEMENT_SETS as i32)
+        .bind([uuid(a), uuid(b)])
+        .execute(&stack.pool)
+        .await
+        .unwrap();
     let (_, uc) = stack.get(&format!("/user/{}", c.uid), None).await;
     assert_eq!(uc["rank"]["ratingUpdateCount"], 0);
     assert!(uc["rank"]["position"].is_null());
@@ -445,6 +476,7 @@ async fn match_history_and_unrated_reports() {
     assert!(close(pa["ratingAfter"].as_f64().unwrap(), rating_a));
     assert!(close(pa["ratingChange"].as_f64().unwrap(), 100.0));
     assert!(close(pb["ratingChange"].as_f64().unwrap(), -100.0));
+    assert_eq!((pa["ratingHidden"].as_bool(), pb["ratingHidden"].as_bool()), (Some(false), Some(false)));
 
     let r2 = item(&all, &m2);
     assert_eq!(r2["status"], "ABANDONED");

@@ -1,10 +1,18 @@
-import type { MatchHistoryItem, MatchHistoryPlayer, RoomMode } from "@/services/backend/types";
+import type { MatchHistoryItem, MatchHistoryPlayer, RankedProfile, RoomMode } from "@/services/backend/types";
 
 import { RankedFormatMessages as Messages } from "./ranked_format.messages";
 
 /** A rating as the launcher shows it everywhere: one decimal. */
 export function formatRating(rating: number): string {
   return rating.toFixed(1);
+}
+
+/** What a rating shows while its player is placing: nobody sees it until they place (the user's, 2026-10-21). */
+export const HIDDEN_RATING = "????";
+
+/** A player's own rating: `1523.4`, or `????` while placing. */
+export function formatProfileRating(profile: Pick<RankedProfile, "rating" | "setsToPlace">): string {
+  return (profile.setsToPlace ?? 0) > 0 ? HIDDEN_RATING : formatRating(profile.rating);
 }
 
 /** Rounds to the one decimal shown, so the sign always matches the digits. */
@@ -40,7 +48,7 @@ export function formatRecord(wins: number, losses: number): string {
   return `${wins}-${losses}`;
 }
 
-/** `#23 of 137`, or null before the first rated set. */
+/** `#23 of 137`, or null while placing. */
 export function formatPosition(position: number | null | undefined, total: number | null | undefined): string | null {
   if (position == null || position < 1) {
     return null;
