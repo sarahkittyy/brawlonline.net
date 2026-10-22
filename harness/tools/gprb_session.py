@@ -54,6 +54,18 @@ def delay_opts(args) -> Dict[str, int]:
     return {} if args.delay is None else {"delay": args.delay}
 
 
+def delay_opts_peer(args, peer: str) -> Dict[str, int]:
+    """Per-peer delay (``--delay-a`` / ``--delay-b``), else ``--delay`` for both.
+
+    Each peer's delay applies to its own inputs only (GekkoNet local delay), so the two may
+    differ: that is how asymmetric-delay behaviour is measured.
+    """
+    v = getattr(args, f"delay_{peer}", None)
+    if v is None:
+        v = args.delay
+    return {} if v is None else {"delay": v}
+
+
 def free_udp_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
         s.bind(("127.0.0.1", 0))
@@ -291,6 +303,8 @@ def play_match(ca, cb, sim, args, preset: str, cpu: str, run: int, mi: int, sel,
                 st = [c.call("gprb_status") for c in (ca, cb)]
                 print(f"  [{preset}/{cpu} match {mi}] frames {[s['current_frame'] for s in st]} rollbacks "
                       f"{[s['rollbacks'] for s in st]} desyncs {[s['desyncs_detected'] for s in st]} "
+                      f"ahead {[round(s.get('frames_ahead', 0), 2) for s in st]} "
+                      f"delay {[s.get('input_delay') for s in st]} "
                       f"phase {[s['phase'] for s in st]}", flush=True)
                 if any(s["phase"] != "running" for s in st):
                     stop_flag.set()
@@ -345,7 +359,10 @@ def play_match(ca, cb, sim, args, preset: str, cpu: str, run: int, mi: int, sel,
 def run_session(preset: str, cpu: str, args: argparse.Namespace, run: int) -> Dict[str, Any]:
     p1, p2, stage = args.p1, args.p2, args.stage
     rep: Dict[str, Any] = {"preset": preset, "cpu": cpu, "run": run, "p1": p1, "p2": p2, "stage": stage,
-                           "delay": args.delay, "region_set": args.region_set}
+                           "delay": args.delay,
+                           "delay_a": args.delay_a if getattr(args, "delay_a", None) is not None else args.delay,
+                           "delay_b": args.delay_b if getattr(args, "delay_b", None) is not None else args.delay,
+                           "region_set": args.region_set}
     t0 = time.monotonic()
     sim: Optional[NetSim] = None
     specs = [(f"{args.name_prefix}-host-{preset}-{cpu}", dict(cpu_thread=cpu == "dc", gpu_determinism=args.gpu,
@@ -396,11 +413,11 @@ def run_session(preset: str, cpu: str, args: argparse.Namespace, run: int) -> Di
                 for c in (ca, cb):
                     c.call("gprb_samples", every=args.sample_every, watch=watch)
             host_port = free_udp_port()
-            ca.call("gprb_connect", role="host", port=host_port, region_set=args.region_set, **delay_opts(args),
+            ca.call("gprb_connect", role="host", port=host_port, region_set=args.region_set, **delay_opts_peer(args, "a"),
                     name="A", hash_regions=False, start_frame=args.start_frame, **sound_opts(args))
             sim = NetSim(("127.0.0.1", host_port), ("127.0.0.1", 0), preset, seed=f"gprb-{run}").start()
             cb.call("gprb_connect", role="join", host="127.0.0.1", remote_port=sim.listen_port,
-                    region_set=args.region_set, **delay_opts(args), name="B", hash_regions=False,
+                    region_set=args.region_set, **delay_opts_peer(args, "b"), name="B", hash_regions=False,
                     start_frame=args.start_frame, **sound_opts(args))
             wait(lambda: ca.call("gprb_status")["phase"] == "connected" and cb.call("gprb_status")["phase"] == "connected",
                  30, "the peers to connect")
@@ -745,6 +762,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ap.add_argument("--stage", default="battlefield")
     ap.add_argument("--delay", type=lambda v: None if v == "auto" else int(v), default=2,
                     help="input delay in frames, or auto (from the round trip, as players get it)")
+    ap.add_argument("--delay-a", type=lambda v: None if v == "auto" else int(v), default=None,
+                    help="host A's input delay in frames (overrides --delay for A only)")
+    ap.add_argument("--delay-b", type=lambda v: None if v == "auto" else int(v), default=None,
+                    help="joiner B's input delay in frames (overrides --delay for B only)")
     ap.add_argument("--region-set", default="gp-v23")
     ap.add_argument("--start-frame", type=int, default=120)
     ap.add_argument("--frames", type=int, default=30000)

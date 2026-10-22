@@ -1366,7 +1366,9 @@ f32 Gekko::AdvantageHistory::GetAverageAdvantage()
 	f32 avg_local = sum_local / HISTORY_SIZE;
 	f32 avg_remote = sum_remote / HISTORY_SIZE;
 
-	// return the frames ahead (halved: each peer corrects its share of the gap)
+	// return the frames ahead (halved: each peer corrects its share of the gap): the frame gap
+	// plus this peer's delay minus its peer's, as each advantage adds its own delay
+	// (game_session.cpp), so a peer with more delay runs that much behind.
 	return (avg_local - avg_remote) / 2.f;
 }
 

@@ -616,7 +616,10 @@ void Gekko::GameSession::HandleReceivedInputs()
             // one ack for the newest frame: acks are cumulative and the peer only takes a newer
             // one (and its frame advantage), so an ack per frame added nothing but packets.
             if (acked != GameInput::NULL_FRAME) {
-                const i8 local_adv = (i8)(current_frame - acked - local_delay);
+                // + delay (as upstream GekkoNet): the frame advantage then carries this
+                // player's delay, so time sync runs a high-delay player behind its peer and
+                // each peer rolls back about (latency - its own delay), not its peer's.
+                const i8 local_adv = (i8)(current_frame - acked + local_delay);
                 _msg.SendInputAck(handle, acked, local_adv);
             }
         }
@@ -642,7 +645,8 @@ void Gekko::GameSession::SendLocalInputs()
                 const Frame current_frame = _sync.GetCurrentFrame();
                 for (auto& remote : _msg.remotes) {
                     if (remote->GetStatus() == Connected) {
-                        const i8 local_adv = (i8)(current_frame - _sync.GetLastReceivedFrom(remote->handle) - (Frame)delay);
+                        // + delay, as the ack's advantage (HandleReceivedInputs).
+                        const i8 local_adv = (i8)(current_frame - _sync.GetLastReceivedFrom(remote->handle) + (Frame)delay);
                         remote->adv_history.SetLocalAdvantage(local_adv);
                         remote->adv_history.Update(frame);
                     }
