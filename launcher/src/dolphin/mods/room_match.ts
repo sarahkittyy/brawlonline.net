@@ -69,9 +69,12 @@ export function matchRoom(room: ModRoomBuild, builds: ModBuild[]): RoomMatch {
     }
     return { build: best, joinable: sd !== "wrong", disc: "same", sd, hasParts: true };
   }
-  // No game on that disc: the closest one is the one to fix (the same game ID, then the exact build).
+  // No game on that disc: the closest one is the one to fix (the exact build, then the same game
+  // ID with an SD card as the room's: a REX room shows the player's REX, not their plain Brawl
+  // disc as "add an SD card").
   const gameId = room.discLabel?.split(" ")[0];
-  const near = exact ?? (gameId ? builds.find((b) => b.gameId === gameId) : undefined) ?? null;
+  const sameGame = gameId ? builds.filter((b) => b.gameId === gameId) : [];
+  const near = exact ?? sameGame.find((b) => roomCard === !!b.sdPath) ?? sameGame[0] ?? null;
   let sd: PartMatch | null = null;
   if (near) {
     if (roomCard && near.sdPath) {

@@ -132,6 +132,8 @@ export class ModsManager {
   private controllersRead = false;
   /** The SD card listings this launcher put on the server (by root), not sent again. */
   private readonly listingsSent = new Set<string>();
+  /** The games hashed again at start (rehashChanged), which a join by code waits for. */
+  private rehashing: Promise<void> = Promise.resolve();
 
   /** `toolPath` resolves DolphinTool (the bundled Dolphin's, once it is installed). */
   constructor(
@@ -155,7 +157,9 @@ export class ModsManager {
     if (!room) {
       throw new Error("Room not found.");
     }
-    // The player's game on the room's disc (another SD card is synced before the join).
+    // The player's game on the room's disc (another SD card is synced before the join), by its
+    // hash of today's launcher.
+    await this.rehashing;
     const match = matchRoom(room.build, this.builds());
     const build = match.joinable ? match.build : null;
     if (!build) {
@@ -361,6 +365,31 @@ export class ModsManager {
     });
     this.hashing.set(id, job);
     return job;
+  }
+
+  /**
+   * Hashes again, one at a time in the background, every game hashed before whose files changed
+   * since or whose hash an older launcher computed (`buildHashKey`'s version: v3 named a disc by
+   * its contents' SHA-1, v4 by its game data, 82db6b5e). Rooms are matched by the stored hash, so
+   * without this a game added before an update showed every room of its disc as another disc
+   * until the player removed it and added it again. A game whose files are missing is left as it
+   * is (an unplugged drive), for the next start.
+   */
+  rehashChanged(): Promise<void> {
+    this.rehashing = (async () => {
+      for (const build of this.builds()) {
+        if (!build.hash) {
+          continue;
+        }
+        const key = await buildHashKey(build).catch(() => null);
+        if (key === null || key === build.hashKey) {
+          continue;
+        }
+        log.info(`${build.name} changed since it was hashed (${build.hashKey ?? "-"} -> ${key}): hashing it again`);
+        await this.hashBuild(build.id).catch((err) => log.warn(`hashing ${build.name} again: ${err}`));
+      }
+    })();
+    return this.rehashing;
   }
 
   async host(options: ModsHostOptions): Promise<void> {
@@ -598,7 +627,9 @@ export class ModsManager {
       // The same files as a game already in the list (another copy, an ISO and an RVZ of one
       // disc): this one goes again.
       const twin = this.builds().find((b) => b.id !== id && b.hash === hash);
-      if (twin) {
+      // Not a game hashed before (by an older launcher: rehashChanged): two of the player's games
+      // that are now one disc (Brawl Rev 1 and Rev 2) both stay, as they were added.
+      if (twin && !latest.hash) {
         await this.saveBuilds(this.builds().filter((b) => b.id !== id));
         this.emit({ type: "duplicate", name: twin.name });
         throw new Error(`You already have this game: ${twin.name}.`);

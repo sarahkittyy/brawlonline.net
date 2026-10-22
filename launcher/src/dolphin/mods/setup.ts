@@ -79,6 +79,8 @@ export default function setupModsIpc({
   mods.onEvent((event) => {
     void ipc_modsEvent.main!.trigger(event).catch(log.error);
   });
+  // Games hashed by an older launcher, or whose files changed: hashed again for the room list.
+  void mods.rehashChanged();
 
   ipc_modsGetState.main!.handle(async () => mods.getState());
   ipc_modsAddBuild.main!.handle(async ({ input }) => ({ build: await mods.addBuild(input) }));

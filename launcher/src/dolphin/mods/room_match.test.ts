@@ -98,6 +98,19 @@ describe("matchRoom", () => {
     expect(match).toMatchObject({ build: rev1, joinable: true, disc: "same", sd: "same" });
   });
 
+  it("names the game with a card as the one to fix when no game is on the room's disc", () => {
+    // A plain Brawl disc listed before REX, both hashed by an older launcher (their disc parts
+    // another kind of hash): the room's disc is REX's to fix, not "add an SD card" to the plain one.
+    const vanilla = build("vanilla", {
+      sdPath: null,
+      parts: { disc: OTHER_DISC, launcher: null, sd: false, sdCard: null },
+    });
+    const rex = build("rex", { parts: { disc: OTHER_DISC, launcher: null, sd: true, sdCard: CARD } });
+    const m = matchRoom(room, [vanilla, rex]);
+    expect(m).toMatchObject({ joinable: false, disc: "wrong", sd: "same" });
+    expect(m.build?.id).toBe("rex");
+  });
+
   it("has nothing to offer without a game of that kind", () => {
     const zelda = build("zelda", {
       gameId: "RZDE01",
