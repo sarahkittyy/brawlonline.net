@@ -1,7 +1,9 @@
 import { getLauncherUpdateMode } from "@common/launcher_update";
 import type { DolphinManager } from "@dolphin/manager";
-import { DolphinLaunchType } from "@dolphin/types";
+import { DolphinEventType, DolphinLaunchType } from "@dolphin/types";
+import { withOwnReplayFolder } from "@replays/own_replay_folder";
 import { ipcMain } from "electron";
+import log from "electron-log";
 import { autoUpdater } from "electron-updater";
 import path from "path";
 
@@ -18,6 +20,7 @@ export default function setupSettingsIpc({
   // NEW: Subscribe to setting changes for side effects
   // This inverts the dependency - SettingsManager doesn't need to know about DolphinManager
   setupSettingsSubscriptions(settingsManager, dolphinManager);
+  listOwnReplayFolder(settingsManager, dolphinManager);
 
   // Synchronous getter
   ipcMain.on("getAppSettingsSync", (event) => {
@@ -110,5 +113,25 @@ function setupSettingsSubscriptions(settingsManager: SettingsManager, dolphinMan
   settingsManager.onSettingChange("autoUpdateLauncher", (autoUpdateLauncher) => {
     // Nothing is downloaded in "download" mode (macOS, see main/app_updater.ts), so nothing to install on quit.
     autoUpdater.autoInstallOnAppQuit = autoUpdateLauncher && getLauncherUpdateMode(process.platform) === "install";
+  });
+}
+
+// Games Dolphin saved in its own folder because the replay folder refused them are listed with the
+// rest: checked at start and whenever the netplay Dolphin closes.
+function listOwnReplayFolder(settingsManager: SettingsManager, dolphinManager: DolphinManager) {
+  const check = async () => {
+    const { rootSlpPath, extraSlpPaths } = settingsManager.get().settings;
+    const userFolder = dolphinManager.getInstallation(DolphinLaunchType.NETPLAY).userFolder;
+    const extra = await withOwnReplayFolder(userFolder, rootSlpPath, extraSlpPaths);
+    if (extra) {
+      log.warn(`Replays were saved in Dolphin's own folder (the replay folder refused them): listing ${extra.at(-1)}`);
+      await settingsManager.updateSetting("extraSlpPaths", extra);
+    }
+  };
+  void check().catch(log.error);
+  dolphinManager.events.subscribe((event) => {
+    if (event.type === DolphinEventType.CLOSED && event.dolphinType === DolphinLaunchType.NETPLAY) {
+      void check().catch(log.error);
+    }
   });
 }

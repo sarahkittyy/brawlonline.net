@@ -4,6 +4,7 @@
 #include "Core/Rollback/ReplayRecorder.h"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
@@ -289,11 +290,17 @@ std::string FileStem(const BeginInfo& info)
   return fmt::format("{} {} G{} - {}", when, ModeLabel(info.meta), std::max<u32>(info.game, 1), who);
 }
 
-std::string ReplayDir()
+// Dolphin's own replay folder, inside its User folder: the default, and where a game goes when the
+// replay folder refuses the file (the launcher lists it then: replays/own_replay_folder.ts).
+std::string OwnReplayDir()
 {
-  std::string dir = Config::Get(Config::ONLINE_REPLAY_DIR);
+  return ::File::GetUserPath(D_USER_IDX) + "Replays";
+}
+
+std::string ReplayDir(std::string dir)
+{
   if (dir.empty())
-    dir = ::File::GetUserPath(D_USER_IDX) + "Replays";
+    dir = OwnReplayDir();
   while (!dir.empty() && (dir.back() == '/' || dir.back() == '\\'))
     dir.pop_back();
   if (Config::Get(Config::ONLINE_REPLAY_MONTHLY_FOLDERS))
@@ -302,6 +309,20 @@ std::string ReplayDir()
       dir += fmt::format("/{:04}-{:02}", t->tm_year + 1900, t->tm_mon + 1);
   }
   return dir + "/";
+}
+
+std::string ReplayDir()
+{
+  return ReplayDir(Config::Get(Config::ONLINE_REPLAY_DIR));
+}
+
+// The first free name for stem in dir.
+std::string FreePath(const std::string& dir, const std::string& stem)
+{
+  std::string path = dir + stem + EXTENSION;
+  for (int n = 2; ::File::Exists(path) && n < 100; ++n)
+    path = fmt::format("{}{} ({}){}", dir, stem, n, EXTENSION);
+  return path;
 }
 
 std::string InfoJson(const BeginInfo& info)
@@ -630,14 +651,15 @@ bool Begin(Core::System& system, const BeginInfo& info)
     s_rec.num_ports += (s_rec.ports >> p) & 1;
   if (s_rec.num_ports == 0)
     return false;
-  std::string dir, path;
+  std::string dir, path, stem, fallback_dir;
   if (save)
   {
     dir = ReplayDir();
-    const std::string stem = FileStem(info);
-    path = dir + stem + EXTENSION;
-    for (int n = 2; ::File::Exists(path) && n < 100; ++n)
-      path = fmt::format("{}{} ({}){}", dir, stem, n, EXTENSION);
+    stem = FileStem(info);
+    path = FreePath(dir, stem);
+    fallback_dir = ReplayDir(OwnReplayDir());
+    if (fallback_dir == dir)
+      fallback_dir.clear();
     std::lock_guard lk(s_path_mutex);
     s_last_path = path;
   }
@@ -656,12 +678,38 @@ bool Begin(Core::System& system, const BeginInfo& info)
                                         Config::Get(Config::ONLINE_STREAM_GAMES),
                                         ranked ? Online::Ranked::GameIndexOf(info.session_game) : 0};
   Queue(
-      [dir, info_json, setup_json, spec_json, game](Output& out) {
+      [dir, stem, fallback_dir, info_json, setup_json, spec_json, game](Output& out) {
         if (out.save)
         {
           ::File::CreateFullPath(dir);
           std::string error;
-          if (!out.writer.Open(out.path, game.uid, &error))
+          bool open = out.writer.Open(out.path, game.uid, &error);
+          // A folder that refuses us (Windows' Controlled folder access or an antivirus guarding
+          // Documents, bug report #96: every game of two players lost) keeps no replay at all, so
+          // the game goes to Dolphin's own folder, which the launcher then lists.
+          if (!open && !fallback_dir.empty())
+          {
+            WARN_LOG_FMT(BRAWLBACK, "replay: {} ({}); saving it in {} instead", error, out.path,
+                         fallback_dir);
+            ::File::CreateFullPath(fallback_dir);
+            std::string path = FreePath(fallback_dir, stem);
+            {
+              std::lock_guard lk(s_path_mutex);
+              if (s_last_path == out.path)
+                s_last_path = path;
+            }
+            out.path = std::move(path);
+            open = out.writer.Open(out.path, game.uid, &error);
+            // Once a run: it says so at every game's start otherwise.
+            static std::atomic_bool s_told;
+            if (open && !s_told.exchange(true))
+            {
+              OSD::AddMessage("Your replay folder refused the replay: it is saved in Brawl Online's "
+                              "own folder instead.",
+                              OSD::Duration::VERY_LONG, OSD::Color::YELLOW);
+            }
+          }
+          if (!open)
             Fail(out, fmt::format("cannot create the replay file: {}", error));
         }
         if (out.stream)

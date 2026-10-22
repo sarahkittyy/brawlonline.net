@@ -10,6 +10,7 @@
 #include <picojson.h>
 #include <zlib.h>
 
+#include "Common/CommonFuncs.h"
 #include "Common/FileUtil.h"
 #include "Common/IOFile.h"
 #include "Core/Rollback/PeerData.h"
@@ -317,7 +318,9 @@ bool Writer::Open(const std::string& path, const std::array<u8, 16>& uid, std::s
   }
   if (!m_file.Open(path, "wb"))
   {
-    *error = "cannot create the file";
+    // fopen's errno: EACCES in a folder the user owns is Windows' Controlled folder access or an
+    // antivirus's folder shield refusing this program (bug report #96).
+    *error = fmt::format("cannot create the file: {}", Common::LastStrerrorString());
     return false;
   }
   m_offset = 0;
