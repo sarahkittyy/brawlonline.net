@@ -75,6 +75,7 @@ DEFAULTS = {
     "mac_user": "sarahkitty",
     "mac_key": "~/.ssh/brawlmac",
     "mac_qt": "~/brawl-dev/qt/6.8.3/macos",
+    "mac_ssh": "",  # the ssh to use; scp is the one next to it. Empty: Git's on Windows, else PATH's
 }
 # Inside double quotes on the Mac ("~" would not expand there).
 MAC_HOME = "$HOME/brawl-staging"
@@ -679,8 +680,26 @@ def win_reset(args: argparse.Namespace) -> None:
 # --------------------------------------------------------------------------- macOS client
 
 
+def ssh_tool(cfg: dict, name: str) -> str:
+    """The ssh or scp to run. On Windows, Git's (OpenSSH 10.5) before System32's: Windows' own
+    OpenSSH 9.5 stopped passing on a remote command's output after its first chunk and never
+    exited, from Python or PowerShell, with or without -n, so `mac build` hung after the Mac
+    finished. config.json "mac_ssh" names another ssh."""
+    if cfg.get("mac_ssh"):
+        ssh = Path(os.path.expanduser(cfg["mac_ssh"]))
+        return str(ssh) if name == "ssh" else str(ssh.with_name(name + ssh.suffix))
+    if IS_WINDOWS:
+        g = shutil.which("git")
+        if g:
+            for root in (Path(g).parent.parent, Path(g).parent.parent.parent):
+                cand = root / "usr" / "bin" / f"{name}.exe"
+                if cand.exists():
+                    return str(cand)
+    return name
+
+
 def mac_target(cfg: dict) -> list[str]:
-    return ["ssh", "-i", os.path.expanduser(cfg["mac_key"]), "-o", "BatchMode=yes",
+    return [ssh_tool(cfg, "ssh"), "-n", "-i", os.path.expanduser(cfg["mac_key"]), "-o", "BatchMode=yes",
             "-o", "ConnectTimeout=10", f"{cfg['mac_user']}@{cfg['mac_host']}"]
 
 
@@ -751,7 +770,8 @@ def mac_build(args: argparse.Namespace) -> None:
     # 1. The commit, pushed into a bare repository on the Mac.
     mac(cfg, f"mkdir -p {MAC_HOME}; [ -d {MAC_HOME}/repo.git ] || git init -q --bare {MAC_HOME}/repo.git")
     key = os.path.expanduser(cfg["mac_key"]).replace("\\", "/")
-    env = dict(os.environ, GIT_SSH_COMMAND=f'ssh -i "{key}" -o BatchMode=yes')
+    ssh = ssh_tool(cfg, "ssh").replace("\\", "/")
+    env = dict(os.environ, GIT_SSH_COMMAND=f'"{ssh}" -i "{key}" -o BatchMode=yes')
     run(["git", "push", "--quiet", "--force",
          f"ssh://{cfg['mac_user']}@{cfg['mac_host']}/~/brawl-staging/repo.git", f"{sha}:refs/heads/staging"],
         env=env, log=log)
@@ -763,14 +783,14 @@ def mac_build(args: argparse.Namespace) -> None:
         below_normal_priority()
         prepare_worktree(sha)
         run([bash(), "./build.sh"], cwd=SRC / "game-code", log=log)
-    run(["scp", "-q", "-i", key, "-o", "BatchMode=yes", str(plugin),
+    run([ssh_tool(cfg, "scp"), "-q", "-i", key, "-o", "BatchMode=yes", str(plugin),
          f"{cfg['mac_user']}@{cfg['mac_host']}:brawl-staging/PPOnline.rel"], log=log)
     rank_badges_here(log)
     badges = STAGE / "rank-badges.tar"
     with tarfile.open(badges, "w") as tar:
         for d in RANK_BADGE_DIRS:
             tar.add(ROOT / d, arcname=d)
-    run(["scp", "-q", "-i", key, "-o", "BatchMode=yes", str(badges),
+    run([ssh_tool(cfg, "scp"), "-q", "-i", key, "-o", "BatchMode=yes", str(badges),
          f"{cfg['mac_user']}@{cfg['mac_host']}:brawl-staging/rank-badges.tar"], log=log)
     # 3. Dolphin and the launcher with CI's own scripts, ad-hoc signed (no identity, no notary).
     h = MAC_HOME

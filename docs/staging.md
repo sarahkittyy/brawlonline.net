@@ -81,7 +81,11 @@ Logs: `run/staging/logs/` (`win-build.log`, `mac-build.log`, `accounts.log`, `mm
   this PC.
 - A fresh profile goes through the real first run: pick the Brawl ISO, download P+, sign up. Sign-up
   needs the verification link: `server mail` prints it, or `server verify <email>` skips it.
-- The Mac connection settings (`mac_host`, `mac_user`, `mac_key`, `mac_qt`) are in the config file.
+- The Mac connection settings (`mac_host`, `mac_user`, `mac_key`, `mac_qt`, `mac_ssh`) are in the
+  config file. On Windows the Mac commands use Git's `ssh`/`scp` (`<Git>\usr\bin`), not Windows'
+  own: its OpenSSH 9.5 stopped passing on a remote command's output after the first chunk and never
+  exited, so `mac build` hung after the Mac had finished. `"mac_ssh"` names another `ssh.exe` (its
+  `scp` is the one beside it); empty picks Git's, else the one on PATH.
 
 ## Tear down
 
