@@ -82,6 +82,11 @@ function setupSettingsSubscriptions(settingsManager: SettingsManager, dolphinMan
     await dolphinManager.sendInputDelayToGame(inputDelay);
   });
 
+  settingsManager.onSettingChange("pingLimit", async (pingLimit) => {
+    const installation = dolphinManager.getInstallation(DolphinLaunchType.NETPLAY);
+    await installation.updateSettings({ pingLimit });
+  });
+
   // Replays and spectated games play with the same music setting as the game.
   settingsManager.onSettingChange("enableMusic", async (enableMusic) => {
     await Promise.all(

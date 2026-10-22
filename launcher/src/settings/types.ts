@@ -43,6 +43,11 @@ export interface SettingsSchema {
   // else 1-4 frames. Synced to Dolphin.ini `[Online] InputDelay`.
   inputDelay: number;
 
+  // Online: "Matchmaking Ping Limit": Unranked and Ranked pair the player with no one whose
+  // estimated ping is above it, in ms (100, 150 or 200). Synced to Dolphin.ini `[Online]
+  // MatchmakingPingLimit`, sent in the game's tickets.
+  pingLimit: number;
+
   // Online: the game's music in matches and menus. Synced to Dolphin.ini `[Online] Music`.
   enableMusic: boolean;
 

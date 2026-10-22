@@ -79,6 +79,7 @@ export const useEnableMonthlySubfolders = () => useSetting("useMonthlySubfolders
 export const useExtraSlpPaths = () => useSetting("extraSlpPaths");
 
 export const useInputDelay = () => useSetting("inputDelay");
+export const usePingLimit = () => useSetting("pingLimit");
 
 export const useEnableMusic = () => useSetting("enableMusic");
 export const useDisableChat = () => useSetting("disableChat");

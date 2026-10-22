@@ -49,6 +49,11 @@ extern const Info<std::string> ONLINE_SESSION_BACKEND;
 // inputs, as Slippi's delay frames do.
 extern const Info<int> ONLINE_INPUT_DELAY;
 
+// The launcher's "Matchmaking Ping Limit" (ms; 100, 150 or 200): Unranked and Ranked tickets send
+// it as pingLimit, and mm pairs this player with no one whose estimated ping is above it. 0 or
+// less: no limit of our own.
+extern const Info<int> ONLINE_MM_PING_LIMIT;
+
 // The game's music (the launcher's setting). Off applies P+'s "[P+] Music Off" patch, which
 // zeroes the music volume every frame (docs/gameplay-rollback-status.md, Phase 20).
 extern const Info<bool> ONLINE_MUSIC;

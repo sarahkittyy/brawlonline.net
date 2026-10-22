@@ -68,7 +68,7 @@ Client: `I/Slippi/SlippiMatchmaking.cpp`. Server: closed (`mm.slippi.gg`, dev `m
 1. The game sends EXI 0xB4 FIND_OPPONENT: mode (1 byte) + Shift-JIS connect code (18 bytes) (`I/HW/EXI_DeviceSlippi.cpp:1916`).
 2. Fixed-rules modes (ranked, unranked, party) require the ISO MD5 check first: "Cannot queue for this mode with a modded ISO known to desync" (`SlippiMatchmaking.cpp:284-307`).
 3. The client binds a local UDP port `41000 + rand()%10000`, or the user's forced port, and **reuses that port for P2P**. Talking to the mm server opens the NAT mapping, and that is the hole punch (`:313-331`, comment `:321-324`; `SlippiNetplay.cpp:101-115`).
-4. `create-ticket` (`:426-436`): `{type:"create-ticket", user:{uid, playKey, connectCode, displayName}, search:{mode, connectCode:[Shift-JIS bytes]}, appVersion, ipAddressLan:"a.b.c.d:port"}`. The reply `create-ticket-resp` may carry `error`, which is shown in-game.
+4. `create-ticket` (`:426-436`): `{type:"create-ticket", user:{uid, playKey, connectCode, displayName}, search:{mode, connectCode:[Shift-JIS bytes]}, appVersion, ipAddressLan:"a.b.c.d:port"}`. Ours also sends `pingLimit` (Unranked and Ranked: the player's "Matchmaking Ping Limit" in ms, `[Online] MatchmakingPingLimit`; server/README.md, Ping limit). The reply `create-ticket-resp` may carry `error`, which is shown in-game.
 5. `get-ticket-resp` (`:473-660`): `{matchId, isHost, players:[{uid, displayName, connectCode, port(1-4), isLocalPlayer, ipAddress, ipAddressLan, chatMessages[16], rank{...}, isBot}], stages:[ids], items, latestVersion}`.
    - If both players share an external IP, the LAN address is used (`:590-609`).
    - `isHost` is the decider.

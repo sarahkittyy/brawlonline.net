@@ -128,3 +128,14 @@ describe("online settings: network for online games", () => {
     expect(text).toMatch(/LanIP = 192\.168\.5\.5/);
   });
 });
+
+describe("online settings: matchmaking ping limit", () => {
+  it("writes [Online] MatchmakingPingLimit, and the default for a value that is not a choice", async () => {
+    const ini = await IniFile.init(iniPath);
+    await setOnlineSettings(ini, { pingLimit: 200 });
+    expect(await fs.promises.readFile(iniPath, "utf8")).toMatch(/\[Online\][^[]*MatchmakingPingLimit = 200/);
+
+    await setOnlineSettings(ini, { pingLimit: 75 });
+    expect(await fs.promises.readFile(iniPath, "utf8")).toMatch(/\[Online\][^[]*MatchmakingPingLimit = 150/);
+  });
+});

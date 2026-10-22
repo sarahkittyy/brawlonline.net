@@ -131,6 +131,10 @@ export class SettingsManager extends EventEmitter {
     return this.get().settings.inputDelay;
   }
 
+  getPingLimit(): number {
+    return this.get().settings.pingLimit;
+  }
+
   getEnableMusic(): boolean {
     return this.get().settings.enableMusic;
   }

@@ -41,7 +41,9 @@
 //! shorter-waiting of the two has waited, and no limit at all after `ping_limit_open` (100 ms,
 //! +30 every 10 s, open at 40 s: a 150 ms pair waits until both have searched 20 s, a 200 ms pair
 //! 40 s, for someone closer). The shorter wait, so a new search does not take a far opponent at once just because
-//! that one has searched a while (2026-10-21). A pair without an
+//! that one has searched a while (2026-10-21). Each player's own limit (the ticket's `pingLimit`,
+//! the launcher's "Matchmaking Ping Limit": 100, 150 or 200) caps that, however long either has
+//! waited: a pair above the lower of the two is never made (2026-10-22). A pair without an
 //! estimate (an address the database does not place, or no database) is never held back. Two
 //! players who just played each other (each one's last Unranked or Ranked opponent, within
 //! `rematch_memory`) are held back the same way until the longer-waiting has waited
@@ -382,6 +384,8 @@ struct Pending {
     /// Direct: the code typed in-game. Unranked: none (Slippi sends `[]`).
     target: Option<ConnectCode>,
     lan: String,
+    /// The ticket's `pingLimit`, if it sent a usable one.
+    ping_cap: Option<f64>,
     /// A `hello` (opens an online connection) rather than a ticket.
     hello: bool,
     /// A room game ticket (mode 3): the room code.
@@ -412,6 +416,8 @@ struct Waiting {
     region: String,
     /// Where the ticket's address is (GeoIP), for the ping estimate.
     loc: Option<Loc>,
+    /// The player's own ping limit (`pingLimit`): no pair above it, however long either waits.
+    ping_cap: Option<f64>,
 }
 
 /// An online connection: a running, logged-in game (rooms, the online count).
@@ -1249,6 +1255,7 @@ impl Engine {
             mode: Mode::Direct,
             target: None,
             lan: String::new(),
+            ping_cap: None,
             hello: true,
             room: None,
             client,
@@ -1333,6 +1340,7 @@ impl Engine {
             mode,
             target,
             lan: sanitize_lan_addr(&t.ip_address_lan),
+            ping_cap: t.ping_limit.filter(|p| p.is_finite() && *p > 0.0),
             hello: false,
             room,
             client,
@@ -1418,6 +1426,7 @@ impl Engine {
             lan: p.lan,
             region: region.clone(),
             loc,
+            ping_cap: p.ping_cap,
         });
         if p.mode == Mode::Unranked {
             tracing::info!(conn, %code, %region, ?loc, queued = self.unranked.len() + 1, "unranked ticket waiting");
@@ -1524,6 +1533,7 @@ impl Engine {
                 lan: p.lan,
                 region,
                 loc: None,
+                ping_cap: None,
             });
         }
         if let Some(old) = outcome.replaced {
@@ -1749,7 +1759,8 @@ impl Engine {
                 let longer = waited(wa).max(waited(wb));
                 let shorter = waited(wa).min(waited(wb));
                 let ping = wa.loc.zip(wb.loc).map(|(la, lb)| estimate_rtt_ms(la, lb));
-                if ping.is_some_and(|p| p > self.ping_limit(shorter)) {
+                let limit = [wa.ping_cap, wb.ping_cap].into_iter().flatten().fold(self.ping_limit(shorter), f64::min);
+                if ping.is_some_and(|p| p > limit) {
                     continue;
                 }
                 let diff =
@@ -2539,6 +2550,12 @@ mod tests {
             let v = self.ticket_json(u, "", 1);
             self.raw(conn, v.to_string().as_bytes())
         }
+        /// An Unranked (mode 1) or Ranked (0) ticket with the player's own ping limit.
+        fn capped(&mut self, conn: ConnId, u: &MmUser, mode: u8, ping_limit: f64) -> Vec<Output> {
+            let mut v = self.ticket_json(u, "", mode);
+            v["pingLimit"] = json!(ping_limit);
+            self.raw(conn, v.to_string().as_bytes())
+        }
         fn users(&mut self, n: usize) -> Vec<MmUser> {
             (0..n)
                 .map(|i| {
@@ -2894,6 +2911,51 @@ mod tests {
         h.connect(2, 41000);
         // A New York player 20 points away beats the equal rating 240 ms away.
         let m = matches(&h.ranked(2, &u[2]));
+        assert_eq!(pair_of(&m[0]), pair_key(u[0].uid, u[2].uid));
+    }
+
+    #[test]
+    fn a_players_ping_limit_holds_however_long_they_wait() {
+        let mut h = Harness::new(geo_rules());
+        let u = h.users(4);
+        for c in [32, 48] {
+            h.connect(c, 41000);
+        }
+        // London (limit 100) and Los Angeles (200), 138 ms apart: without London's limit they
+        // would be paired at 20 s, and at any ping after 40 s.
+        h.capped(32, &u[0], 1, 100.0);
+        assert!(matches(&h.capped(48, &u[1], 1, 200.0)).is_empty());
+        assert!(matches(&h.advance(Duration::from_secs(60))).is_empty());
+        // New York (150), 93 ms from London: taken at once.
+        h.connect(1, 41000);
+        let m = matches(&h.capped(1, &u[2], 1, 150.0));
+        assert_eq!(m.len(), 1);
+        assert_eq!(pair_of(&m[0]), pair_key(u[0].uid, u[2].uid));
+        // Another London player (150) for Los Angeles: the widening limit of the new search
+        // (100, 130, then 160 at 20 s) under the lower of the two players' own (150).
+        h.connect(33, 41000);
+        assert!(matches(&h.capped(33, &u[3], 1, 150.0)).is_empty());
+        assert!(matches(&h.advance(Duration::from_secs(19))).is_empty());
+        let m = matches(&h.advance(Duration::from_secs(1)));
+        assert_eq!(m.len(), 1);
+        assert_eq!(pair_of(&m[0]), pair_key(u[1].uid, u[3].uid));
+    }
+
+    #[test]
+    fn ranked_keeps_a_players_ping_limit_too() {
+        let mut h = Harness::new(geo_rules());
+        let u = h.users(3);
+        for c in [1, 16] {
+            h.connect(c, 41000);
+        }
+        // New York (200) and Sydney (no limit of its own, an older build): about 240 ms apart.
+        h.capped(1, &u[0], 0, 200.0);
+        assert!(matches(&h.ranked(16, &u[1])).is_empty());
+        assert!(matches(&h.advance(Duration::from_secs(120))).is_empty());
+        // A second New York player is paired with the first at once.
+        h.connect(2, 41000);
+        let m = matches(&h.capped(2, &u[2], 0, 100.0));
+        assert_eq!(m.len(), 1);
         assert_eq!(pair_of(&m[0]), pair_key(u[0].uid, u[2].uid));
     }
 
