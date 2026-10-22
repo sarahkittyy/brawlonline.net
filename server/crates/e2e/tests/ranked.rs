@@ -327,7 +327,7 @@ async fn a_lone_report_waits_while_the_other_players_game_is_connected() {
     let (a, b) = (&u[0], &u[1]);
     let online = |id: String, p: Uuid, on: bool| {
         let pool = stack.pool.clone();
-        async move { common::db::record_ranked_presence(&pool, &id, p, on, chrono::Utc::now()).await.unwrap() }
+        async move { common::db::record_ranked_presence(&pool, &id, p, on, None, chrono::Utc::now()).await.unwrap() }
     };
 
     // A reports two wins as the set starts; B's game is connected and playing.
@@ -366,5 +366,78 @@ async fn a_lone_report_waits_while_the_other_players_game_is_connected() {
     online(id.clone(), uid(b), true).await;
     leave(&stack, a, &id, "opponent_left").await;
     assert_eq!(settled(&stack, a, &id).await, "ASSIGNED");
+    stack.shutdown().await;
+}
+
+/// Bug report #105 (2026-10-22): the opponent's game froze 18 s into game 2 and kept its online
+/// connection up for 19 minutes; the other player's "opponent left" waited all that time (and
+/// would have been orphaned at 30). Through mm: a game whose `hello` says it sends `game-alive`
+/// and that stops sending it while connected is recorded as stopped (`stalled_since`), and an
+/// "opponent left" about it made after that abandons the set for it at the next sweep, not after
+/// the grace period (here 10 minutes).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn opponent_left_about_a_frozen_game_counts_at_once() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+
+    let stack = Stack::start(StackOptions {
+        engine: EngineConfig { game_stall: Duration::from_secs(2), ..engine() },
+        ranked_report_grace_secs: Some(600),
+        ranked_sweep_secs: Some(1),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    let u = players(&stack, &["lou", "max"]).await;
+    let (a, b) = (&u[0], &u[1]);
+    // Max's game: online, kept serviced, sending game-alive while `running`.
+    let (mut game, hello) =
+        mmclient::room::OnlineClient::connect_game_alive(stack.mm_addr, &creds(b), "0.1.0").unwrap();
+    assert_eq!(hello["type"], "hello-resp");
+    let (running, stop) = (Arc::new(AtomicBool::new(true)), Arc::new(AtomicBool::new(false)));
+    let pump = {
+        let (running, stop) = (running.clone(), stop.clone());
+        std::thread::spawn(move || {
+            while !stop.load(Ordering::Relaxed) {
+                if running.load(Ordering::Relaxed) {
+                    game.send_game_alive();
+                }
+                game.drain(Duration::from_millis(250));
+            }
+        })
+    };
+    let (id, _, _) = ranked_match(&stack, a, b).await;
+    both(&stack, a, b, &id, 1, a).await;
+    let stalled = || async {
+        let row: Option<Option<chrono::DateTime<chrono::Utc>>> =
+            sqlx::query_scalar("SELECT stalled_since FROM ranked_presence WHERE match_id = $1 AND uid = $2")
+                .bind(&id)
+                .bind(uid(b))
+                .fetch_optional(&stack.pool)
+                .await
+                .unwrap();
+        row.flatten()
+    };
+    // Running for longer than game_stall: not stopped.
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    assert_eq!(stalled().await, None);
+    // Frozen: its connection stays up, its game-alive stops.
+    running.store(false, Ordering::Relaxed);
+    let mut since = None;
+    for _ in 0..40 {
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        since = stalled().await;
+        if since.is_some() {
+            break;
+        }
+    }
+    assert!(since.is_some(), "max's game was never recorded as stopped");
+    let (st, _) = leave(&stack, a, &id, "opponent_left").await;
+    assert_eq!(st, 200);
+    assert_eq!(settled(&stack, a, &id).await, "ABANDONED");
+    let r = result(&stack, a, &id).await;
+    assert_eq!(r["winner"], json!(a.uid), "{r}");
+    stop.store(true, Ordering::Relaxed);
+    pump.join().unwrap();
     stack.shutdown().await;
 }

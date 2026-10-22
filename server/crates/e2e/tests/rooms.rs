@@ -17,7 +17,7 @@ const WAIT: Duration = Duration::from_secs(5);
 /// A game that is running and logged in.
 fn online(stack: &Stack, user: &UserJson) -> OnlineClient {
     let (client, hello) = OnlineClient::connect(stack.mm_addr, &creds(user), "0.1.0").expect("connect");
-    assert_eq!(hello, json!({"type": "hello-resp"}));
+    assert_eq!(hello, json!({"type": "hello-resp", "gameAlive": true}));
     client
 }
 
@@ -334,9 +334,9 @@ async fn each_platform_needs_its_newest_build_from_the_update_feed() {
     let (_, hello) = OnlineClient::connect_on(stack.mm_addr, &creds(&alice), "0.1.0", "win").unwrap();
     assert_eq!(hello, json!({"type": "hello-resp", "error": msg::update_to("0.2.0"), "latestVersion": "0.2.0"}));
     let (mut a, hello) = OnlineClient::connect_on(stack.mm_addr, &creds(&alice), "0.2.0", "win").unwrap();
-    assert_eq!(hello, json!({"type": "hello-resp"}));
+    assert_eq!(hello, json!({"type": "hello-resp", "gameAlive": true}));
     let (mut b, hello) = OnlineClient::connect_on(stack.mm_addr, &creds(&bob), "0.1.0", "mac").unwrap();
-    assert_eq!(hello, json!({"type": "hello-resp"}));
+    assert_eq!(hello, json!({"type": "hello-resp", "gameAlive": true}));
     let code = create(&mut a);
     join(&mut b, &code);
     room_state_where(&mut a, |s| s["slots"][1]["player"].is_object());
@@ -384,7 +384,7 @@ async fn hello_needs_a_current_game_and_a_valid_login() {
     let (_, hello) = OnlineClient::connect(stack.mm_addr, &forged, "0.2.0").unwrap();
     assert_eq!(hello["error"], msg::LOGIN_EXPIRED);
     let (mut a, hello) = OnlineClient::connect(stack.mm_addr, &creds(&alice), "0.2.0").unwrap();
-    assert_eq!(hello, json!({"type": "hello-resp"}));
+    assert_eq!(hello, json!({"type": "hello-resp", "gameAlive": true}));
     // Bad room requests are answered; the connection stays.
     a.send_json(&json!({"type": "room-slot", "slot": 9, "open": true}));
     assert_eq!(room_error(&mut a)["error"], msg::INVALID_REQUEST);

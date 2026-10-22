@@ -57,6 +57,32 @@ impl OnlineClient {
         platform: &str,
         chat_key: &str,
     ) -> anyhow::Result<(Self, Value)> {
+        Self::open(server, creds, app_version, platform, chat_key, false)
+    }
+
+    /// [`Self::connect`] as a game that sends `game-alive` while it runs (`hello.gameAlive`): mm
+    /// takes it as frozen once it sends none for a while ([`Self::send_game_alive`]).
+    pub fn connect_game_alive(
+        server: SocketAddr,
+        creds: &Credentials,
+        app_version: &str,
+    ) -> anyhow::Result<(Self, Value)> {
+        Self::open(server, creds, app_version, "", "", true)
+    }
+
+    /// `game-alive`: this game runs.
+    pub fn send_game_alive(&mut self) {
+        self.send_json(&serde_json::json!({"type": common::proto::GAME_ALIVE}));
+    }
+
+    fn open(
+        server: SocketAddr,
+        creds: &Credentials,
+        app_version: &str,
+        platform: &str,
+        chat_key: &str,
+        game_alive: bool,
+    ) -> anyhow::Result<(Self, Value)> {
         let sock = EnetSocket::bind(SocketAddr::from((Ipv4Addr::UNSPECIFIED, 0)))?;
         let local_port = sock.local_addr()?.port();
         let mut host =
@@ -81,6 +107,7 @@ impl OnlineClient {
             app_version: app_version.into(),
             platform: platform.into(),
             chat_key: chat_key.into(),
+            game_alive,
         };
         client.send_json(&serde_json::to_value(&hello)?);
         let resp = client.wait_for(Duration::from_secs(5), |m| m["type"] == "hello-resp")?;

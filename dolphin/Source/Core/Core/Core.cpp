@@ -67,6 +67,7 @@
 #include "Core/Movie.h"
 #include "Core/NetPlayClient.h"
 #include "Core/NetPlayProto.h"
+#include "Core/Online/GameAlive.h"
 #include "Core/Rollback/MachineSDCard.h"
 #include "Core/Rollback/MachineSession.h"
 #include "Core/PatchEngine.h"
@@ -926,6 +927,8 @@ void Callback_FramePresented(const PresentInfo& present_info)
 void Callback_NewField(Core::System& system)
 {
   StallTracer::OnField();
+  // The emulation runs: mm's `game-alive` (Online/GameAlive.h).
+  Online::GameAlive::Beat();
   if (s_frame_step)
   {
     // To ensure that s_stop_frame_step is up to date, wait for the GPU thread queue to empty,

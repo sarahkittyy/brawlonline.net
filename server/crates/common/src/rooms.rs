@@ -115,6 +115,11 @@ pub struct Hello {
     /// empty (a malformed key is ignored, never a reason to refuse the `hello`).
     #[serde(default, skip_serializing_if = "String::is_empty", deserialize_with = "string_or_empty")]
     pub chat_key: String,
+    /// The game sends `game-alive` ([`crate::proto::GAME_ALIVE`]) while its emulation runs (bug
+    /// report #105, 2026-10-22): mm takes a connection that sends none for a while as a frozen
+    /// game. Builds before it leave it out and are never taken so.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub game_alive: bool,
 }
 
 fn string_or_empty<'de, D: serde::Deserializer<'de>>(d: D) -> Result<String, D::Error> {
@@ -736,6 +741,10 @@ pub struct HelloResp {
     pub error: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub latest_version: Option<String>,
+    /// This mm takes `game-alive` ([`crate::proto::GAME_ALIVE`]): a game sends it only then (an
+    /// older mm answers an unknown message with a `room-error`, which the game shows).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub game_alive: bool,
 }
 
 /// One public room in the launcher's list.
@@ -990,8 +999,14 @@ mod tests {
             app_version: "0.1.0".into(),
             platform: String::new(),
             chat_key: String::new(),
+            game_alive: false,
         };
         assert!(serde_json::to_value(&hello).unwrap().get("chatKey").is_none());
+        assert!(serde_json::to_value(&hello).unwrap().get("gameAlive").is_none());
+        let mut v = base.clone();
+        v["gameAlive"] = json!(true);
+        assert!(serde_json::from_value::<Hello>(v).unwrap().game_alive);
+        assert!(!serde_json::from_value::<Hello>(base.clone()).unwrap().game_alive);
     }
 
     #[test]

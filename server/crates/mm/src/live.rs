@@ -21,7 +21,8 @@
 //! ([`LiveConfig::ranked`], `MM_RANKED_STREAM`): it is the server's record of the set. Such a
 //! stream is listed only under `on` when a player of it lets others watch (the offer's `listed`).
 //! For accounts' check of a game only one player reported, mm records whether each player's game
-//! is connected ([`Output::RankedPresence`]) and how each game ended as each player's own game
+//! is connected ([`Output::RankedPresence`], and since when it stopped running if it froze while
+//! connected: the engine's `game-alive` check) and how each game ended as each player's own game
 //! said ([`Output::RankedGameResult`]).
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
@@ -558,9 +559,17 @@ impl LiveBook {
         self.presence_at
     }
 
-    /// `uid`'s game opened its first online connection, or closed its last one: recorded for their
-    /// recent Ranked sets.
-    pub fn presence(&mut self, now: Instant, uid: Uuid, online: bool, out: &mut Vec<Output>) {
+    /// `uid`'s game opened its first online connection, or closed its last one, or stopped
+    /// running while connected (`stalled_since`: its last `game-alive`), or runs again: recorded
+    /// for their recent Ranked sets.
+    pub fn presence(
+        &mut self,
+        now: Instant,
+        uid: Uuid,
+        online: bool,
+        stalled_since: Option<DateTime<Utc>>,
+        out: &mut Vec<Output>,
+    ) {
         let sets: Vec<String> = self
             .matches
             .iter()
@@ -571,8 +580,8 @@ impl LiveBook {
             .collect();
         for match_id in sets {
             let at = self.presence_time();
-            tracing::info!(match_id, %uid, online, "ranked presence");
-            out.push(Output::RankedPresence { match_id, uid, online, at });
+            tracing::info!(match_id, %uid, online, stalled_since = ?stalled_since, "ranked presence");
+            out.push(Output::RankedPresence { match_id, uid, online, stalled_since, at });
         }
     }
 
@@ -609,6 +618,7 @@ impl LiveBook {
                     match_id: m.match_id.clone(),
                     uid: *p,
                     online: names.contains_key(p),
+                    stalled_since: None,
                     at,
                 });
             }
@@ -669,6 +679,7 @@ impl LiveBook {
                     match_id: r.match_id.clone(),
                     uid: *p,
                     online: names.contains_key(p),
+                    stalled_since: None,
                     at,
                 });
             }
@@ -2171,8 +2182,8 @@ mod tests {
         assert!(presence(&out).is_empty(), "only Ranked");
         // Later changes go to the recent Ranked sets only, each newer than the last.
         let mut out = vec![];
-        book.presence(now, b, true, &mut out);
-        book.presence(now, b, false, &mut out);
+        book.presence(now, b, true, None, &mut out);
+        book.presence(now, b, false, None, &mut out);
         assert_eq!(presence(&out), vec![(b, true), (b, false)]);
         let at: Vec<DateTime<Utc>> = out
             .iter()
@@ -2183,7 +2194,7 @@ mod tests {
             .collect();
         assert!(at[0] < at[1]);
         let mut out = vec![];
-        book.presence(now + RANKED_PRESENCE_FOR, b, true, &mut out);
+        book.presence(now + RANKED_PRESENCE_FOR, b, true, None, &mut out);
         assert!(presence(&out).is_empty(), "an old set");
 
         // Each player's game's word on how a game ended.
@@ -2255,7 +2266,7 @@ mod tests {
         // B's game is back online: its presence, and its name in the list.
         let mut out = vec![];
         t.book.named(b, "bob", "BOB#2");
-        t.book.presence(t.now, b, true, &mut out);
+        t.book.presence(t.now, b, true, None, &mut out);
         assert_eq!(presence(&out), vec![(b, true)], "the recent Ranked set only");
 
         // The game under way is offered again: roles as for any match, a new stream with mm's names.

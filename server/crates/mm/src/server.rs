@@ -442,8 +442,15 @@ async fn record_chat_key(pool: PgPool, uid: Uuid, key: [u8; 32]) {
 
 /// What mm saw of a Ranked set (best effort, like a match): accounts checks a game only one
 /// player reported against it.
-async fn record_ranked_presence(pool: PgPool, match_id: String, uid: Uuid, online: bool, at: DateTime<Utc>) {
-    if let Err(e) = db::record_ranked_presence(&pool, &match_id, uid, online, at).await {
+async fn record_ranked_presence(
+    pool: PgPool,
+    match_id: String,
+    uid: Uuid,
+    online: bool,
+    stalled_since: Option<DateTime<Utc>>,
+    at: DateTime<Utc>,
+) {
+    if let Err(e) = db::record_ranked_presence(&pool, &match_id, uid, online, stalled_since, at).await {
         tracing::error!(match_id, %uid, "recording ranked presence failed: {e}");
     }
 }
@@ -574,8 +581,9 @@ impl Loop {
             Output::RulesetPlayed { code } => {
                 self.db.rt.spawn(count_ruleset_game(self.db.pool.clone(), code));
             }
-            Output::RankedPresence { match_id, uid, online, at } => {
-                self.db.rt.spawn(record_ranked_presence(self.db.pool.clone(), match_id, uid, online, at));
+            Output::RankedPresence { match_id, uid, online, stalled_since, at } => {
+                let pool = self.db.pool.clone();
+                self.db.rt.spawn(record_ranked_presence(pool, match_id, uid, online, stalled_since, at));
             }
             Output::RankedGameResult { match_id, game_index, uid, winner, end_method } => {
                 let pool = self.db.pool.clone();

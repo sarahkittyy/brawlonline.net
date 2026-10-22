@@ -581,6 +581,7 @@ Message Parse(const std::string& packet)
     m.kind = Message::Kind::HelloResp;
     m.error = Str(o, "error", MAX_TEXT_BYTES).value_or("");
     m.latest_version = Str(o, "latestVersion", 32).value_or("");
+    m.game_alive = Bool(o, "gameAlive").value_or(false);
   }
   else if (m.type == "room-state")
   {
@@ -714,6 +715,8 @@ std::string HelloJson(const std::string& uid, const std::string& play_key,
   o["platform"] = picojson::value(platform);
   if (!chat_key.empty())
     o["chatKey"] = picojson::value(chat_key);
+  // This build sends `game-alive` while its emulation runs (Online/GameAlive.h).
+  o["gameAlive"] = picojson::value(true);
   return picojson::value(o).serialize();
 }
 

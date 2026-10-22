@@ -51,6 +51,7 @@
 #include "Core/HW/VideoInterface.h"
 #include "Core/Online/Chat.h"
 #include "Core/Online/ChatText.h"
+#include "Core/Online/GameAlive.h"
 #include "Core/Online/GameBridge.h"
 #include "Core/Online/GameSetup.h"
 #include "Core/PowerPC/MMU.h"
@@ -5131,6 +5132,7 @@ bool HostWait(Core::System& system, Pred pred, std::chrono::milliseconds max)
   const auto deadline = Clock::now() + max;
   while (!pred())
   {
+    Online::GameAlive::Beat();
     if (!CpuRunning(system) || Clock::now() > deadline)
       return false;
     s.mutex.unlock();
@@ -7406,6 +7408,9 @@ std::string WaitText()
 // Every WAIT_LOG_INTERVAL of a barrier's wait: what it still waits for (under s.mutex).
 void LogWait(std::string_view where, Clock::time_point since)
 {
+  // Every round of the waits that block in one loop top call (the barriers, the host's setup):
+  // waiting on the peer, the game still runs (Online/GameAlive.h).
+  Online::GameAlive::Beat();
   const auto waited = Clock::now() - since;
   if (waited < WAIT_LOG_INTERVAL * (s.wait_logs + 1))
     return;

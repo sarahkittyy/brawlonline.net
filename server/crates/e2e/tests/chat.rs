@@ -29,7 +29,7 @@ impl Chatter {
         let key = chat.identity().public_hex();
         let (client, hello) =
             OnlineClient::connect_with_chat(stack.mm_addr, &creds(user), "0.1.0", "", &key).expect("connect");
-        assert_eq!(hello, json!({"type": "hello-resp"}));
+        assert_eq!(hello, json!({"type": "hello-resp", "gameAlive": true}));
         Chatter { client, chat, uid: user.uid.clone() }
     }
 

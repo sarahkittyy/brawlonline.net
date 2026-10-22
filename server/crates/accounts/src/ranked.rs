@@ -12,7 +12,9 @@
 //! A game only one player reported is checked against what mm saw of the set (2026-10-21): mm
 //! records whether each player's game is connected to it (`ranked_presence`) and how each game
 //! ended as each player's own game told it (`ranked_game_results`); Ranked games are always
-//! streamed to mm for this. See [`common::ranked::resolve`].
+//! streamed to mm for this. A game connected to mm but no longer running (frozen: no `game-alive`
+//! for 30 s, `ranked_presence.stalled_since`, 2026-10-22) counts as gone for reports made after
+//! it stopped. See [`common::ranked::resolve`].
 //!
 //! Unranked and Direct games, and rooms' games (with every player's place), are reported with
 //! the same endpoint and stored the same way (for the match history, [`crate::history`]); they
@@ -248,17 +250,19 @@ async fn reports(
 
 /// What mm saw of a set ([`Seen`]): its players' presence and their games' word on each game.
 async fn seen(tx: &mut Transaction<'_, Postgres>, match_id: &str) -> sqlx::Result<Seen> {
-    let online: Vec<(Uuid, bool)> = sqlx::query_as("SELECT uid, online FROM ranked_presence WHERE match_id = $1")
-        .bind(match_id)
-        .fetch_all(&mut **tx)
-        .await?;
+    let presence: Vec<(Uuid, bool, Option<DateTime<Utc>>)> =
+        sqlx::query_as("SELECT uid, online, stalled_since FROM ranked_presence WHERE match_id = $1")
+            .bind(match_id)
+            .fetch_all(&mut **tx)
+            .await?;
     let games: Vec<(i32, Uuid, Option<Uuid>)> =
         sqlx::query_as("SELECT game_index, uid, winner FROM ranked_game_results WHERE match_id = $1")
             .bind(match_id)
             .fetch_all(&mut **tx)
             .await?;
     Ok(Seen {
-        online,
+        online: presence.iter().map(|(u, on, _)| (*u, *on)).collect(),
+        stalled: presence.iter().filter_map(|(u, _, since)| Some((*u, (*since)?))).collect(),
         games: games
             .into_iter()
             .map(|(g, player, winner)| SeenGame { game_index: g.max(0) as u32, player, winner })

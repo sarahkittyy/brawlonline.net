@@ -22,18 +22,20 @@ All messages are JSON in reliable ENet packets on channel 0, like tickets (`serv
 ### `hello` (client → server)
 
 ```json
-{"type": "hello", "user": {"uid": "…", "playKey": "…"}, "appVersion": "0.1.0", "platform": "win", "chatKey": "3d40…"}
+{"type": "hello", "user": {"uid": "…", "playKey": "…"}, "appVersion": "0.1.0", "platform": "win", "chatKey": "3d40…", "gameAlive": true}
 ```
 
 `chatKey` (optional): the install's chat identity key, 64 hex digits; chat on this connection is `docs/chat-protocol.md`.
 
+`gameAlive` (optional, `true` from builds after 2026-10-22): the game sends `game-alive` while its emulation runs (below).
+
 The same checks as a ticket, in the same order: the build (below), the uid and play key, the ban, a connect code. Then mm answers and keeps the connection:
 
 ```json
-{"type": "hello-resp"}
+{"type": "hello-resp", "gameAlive": true}
 ```
 
-or refuses and disconnects:
+(`gameAlive`: this mm takes `game-alive`; the game sends it only then, since an older mm answers an unknown message with a `room-error` that the game would show) or refuses and disconnects:
 
 ```json
 {"type": "hello-resp", "error": "Close Dolphin and update to 0.2.1", "latestVersion": "0.2.1"}
@@ -44,6 +46,7 @@ or refuses and disconnects:
 - **One per account.** A second `hello` from the same account (another game) closes the older connection with `{"type": "error", "error": "Signed in from another game."}`; the older one leaves its room.
 - **Heartbeat.** ENet's own keepalive: mm drops a peer it has not heard from for 10 s (`set_timeout(32, 5000, 10000)`, as for tickets). The game must keep servicing this host (also during matches; it is a separate ENet host from the P2P one). Nothing else is sent while idle.
 - Online connections never hit the 10 s "no ticket" idle timeout.
+- **`game-alive`** (bug report #105, 2026-10-22). `{"type": "game-alive"}`, no answer, every 2 s while the game's emulation runs, from a game whose `hello` said `gameAlive` to an mm whose `hello-resp` did. The ENet keepalive above comes from Rooms' own thread, so a game whose emulation froze (or was paused) kept its connection up: a Ranked opponent's game froze 18 s into a game and stayed connected for 19 minutes, and the other player's "opponent left" waited all that time (it blames nobody while the opponent's game is connected). The CPU thread ticks it at every emulated field, every game frame (the loop top hook) and every round of a gameplay session's wait on its peer (the barriers, the host's match setup, a host wait), so a game waiting on a slow or silent peer still sends it (`Online/GameAlive.h`). A game that said `gameAlive` and sent none for 30 s (`EngineConfig::game_stall`, counted from its `hello` until the first) has **stopped running**: its recent Ranked sets record it (`ranked_presence.stalled_since`, its last `game-alive`, `docs/spectate-protocol.md` §1.1) until the next one comes. A game without `gameAlive` is never taken so.
 - `hello` is limited to 10 per minute per account and shares the per-address ticket limit (30 per 10 s).
 - A `create-ticket` on an online connection is answered `create-ticket-resp {error: "Invalid matchmaking request"}`; the connection stays. A room request before `hello` gets `{"type": "error", "error": "Log in again in the launcher."}` and a disconnect.
 

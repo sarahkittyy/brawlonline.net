@@ -72,6 +72,8 @@ add_dolphin_test(ReplayFileTest Rollback/ReplayFileTest.cpp)
 add_dolphin_test(SpectateTest Online/SpectateTest.cpp)
 # 3-4 player matches: teams and who picks the next stage (Core/Online/GameSetup).
 add_dolphin_test(NPlayerSetupTest Online/NPlayerSetupTest.cpp)
+# The online connection's game-alive while the game runs (Core/Online/GameAlive).
+add_dolphin_test(GameAliveTest Online/GameAliveTest.cpp)
 # Rooms: the mm server's room messages, validated before they reach the game (Core/Online/RoomMessages).
 add_dolphin_test(RoomMessagesTest Online/RoomMessagesTest.cpp)
 # Watching the room's game: the watch channel's packets into a live replay (Core/Online/RoomWatch).

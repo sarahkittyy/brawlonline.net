@@ -16,6 +16,7 @@
 #include "Core/Harness/Harness.h"
 #include "Core/Host.h"
 #include "Core/NetPlayClient.h"
+#include "Core/Online/GameAlive.h"
 #include "Core/Online/GameBridge.h"
 #include "Core/Online/SpeedCheck.h"
 #include "Core/PowerPC/MMU.h"
@@ -163,6 +164,10 @@ void BrawlbackGekkoNetUnconditionalFrame(const Core::CPUThreadGuard& guard)
   static bool gekko_sync_activated = false;
   auto& system = guard.GetSystem();
   auto& ppc_state = system.GetPPCState();
+
+  // The game runs (Online/GameAlive.h): every game frame, also every round of a gameplay
+  // session's wait that spins on the loop top (no field comes then).
+  Online::GameAlive::Beat();
 
   // A whole-machine session (Brawl Mods) owns the loop when armed.
   if (Machine::OnLoopTop(guard))

@@ -590,6 +590,8 @@ add_library(core
   Online/ChatCrypto.h
   Online/ChatText.cpp
   Online/ChatText.h
+  Online/GameAlive.cpp
+  Online/GameAlive.h
   Online/GameBridge.cpp
   Online/GameBridge.h
   Online/GameSetup.cpp

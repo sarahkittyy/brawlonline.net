@@ -25,6 +25,7 @@
 #include "Core/Config/OnlineSettings.h"
 #include "Core/Core.h"
 #include "Core/Online/Chat.h"
+#include "Core/Online/GameAlive.h"
 #include "Core/Online/GameSetup.h"
 #include "Core/Online/Matchmaking.h"
 #include "Core/Online/ModsRoom.h"
@@ -164,6 +165,9 @@ struct State
   int attempts = 0;
   Clock::time_point next_attempt{};
   Clock::time_point online_since{};
+  // The connection's mm takes `game-alive` (hello-resp): an older one answers it with a
+  // room-error, which would be shown.
+  bool mm_game_alive = false;
   std::string conn_uid;
   u64 connects = 0, hellos = 0, drops = 0, sent = 0, received = 0, invalid = 0;
 
@@ -436,6 +440,7 @@ void Handle(const Message& m, Actions* a, Clock::time_point now)
     }
     s.conn = Conn::Online;
     s.online_since = now;
+    s.mm_game_alive = m.game_alive;
     s.conn_error.clear();
     ++s.serial;
     Log("online");
@@ -1548,10 +1553,12 @@ void Thread()
       // Chat's outgoing messages, signed and encrypted outside the room lock; a Brawl Mods
       // room's requests; the waiting room's speed checks.
       bool online;
+      bool game_alive;
       u64 connection;
       {
         std::lock_guard lk(s_mutex);
         online = host && s.conn == Conn::Online;
+        game_alive = online && s.mm_game_alive;
         connection = s.connects;
       }
       std::vector<std::string> chat_out =
@@ -1563,6 +1570,9 @@ void Thread()
         for (std::string& m : SpeedCheck::TakeOutbox())
           chat_out.push_back(std::move(m));
       }
+      // While the game runs (Online/GameAlive.h); none once it froze, with this thread still up.
+      if (auto alive = GameAlive::Service(now, game_alive, connection))
+        chat_out.push_back(std::move(*alive));
       // Spectating's upload (Online/Spectate.h): it backs off on the game's health and on what
       // is still unacknowledged to mm, before the game feels anything. The round trip is ENet's
       // smoothed one (roundTripTime); lastRoundTripTime is the lowest of the last 5 s throttle

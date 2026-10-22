@@ -421,6 +421,9 @@ TEST(RoomMessages, OtherMessages)
   Message m = Parse(R"({"type": "hello-resp"})");
   EXPECT_EQ(m.kind, Message::Kind::HelloResp);
   EXPECT_TRUE(m.error.empty());
+  EXPECT_FALSE(m.game_alive) << "an older mm: no game-alive";
+  EXPECT_TRUE(Parse(R"({"type": "hello-resp", "gameAlive": true})").game_alive);
+  EXPECT_FALSE(Parse(R"({"type": "hello-resp", "gameAlive": 1})").game_alive);
   m = Parse(R"({"type": "hello-resp", "error": "Update to 0.2.1 to play online.", "latestVersion": "0.2.1"})");
   EXPECT_EQ(m.error, "Update to 0.2.1 to play online.");
   EXPECT_EQ(m.latest_version, "0.2.1");
@@ -566,9 +569,10 @@ TEST(RoomMessages, Requests)
   r.op = Op::Poll;
   EXPECT_EQ(RequestJson(r), std::nullopt);
   EXPECT_EQ(HelloJson("u", "k", "0.1.0", "mac"),
-            R"({"appVersion":"0.1.0","platform":"mac","type":"hello","user":{"playKey":"k","uid":"u"}})");
+            R"({"appVersion":"0.1.0","gameAlive":true,"platform":"mac","type":"hello","user":{"playKey":"k","uid":"u"}})");
   EXPECT_EQ(HelloJson("u", "k", "0.1.0", "win", "ab12"),
-            R"({"appVersion":"0.1.0","chatKey":"ab12","platform":"win","type":"hello","user":{"playKey":"k","uid":"u"}})");
+            R"({"appVersion":"0.1.0","chatKey":"ab12","gameAlive":true,"platform":"win","type":"hello",)"
+            R"("user":{"playKey":"k","uid":"u"}})");
 }
 
 TEST(RoomMessages, RulesetCodesAndRequests)

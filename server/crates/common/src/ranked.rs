@@ -240,6 +240,11 @@ pub struct Seen {
     /// Whether each player's game is connected to mm. A player missing here is unknown (mm
     /// recorded nothing: a set from before this, or from a test without mm).
     pub online: Vec<(Uuid, bool)>,
+    /// A player's game that stopped running while it stayed connected to mm (bug report #105,
+    /// 2026-10-22: frozen, its emulation stopped), and since when: its last `game-alive`. mm marks
+    /// a game so once it sent no `game-alive` for its `game_stall` (30 s); a game that runs again
+    /// is no longer here. Builds without `game-alive` are never here.
+    pub stalled: Vec<(Uuid, DateTime<Utc>)>,
     /// How games ended as each player's own game told mm (`spectate-end`): only Ranked games that
     /// ended by a game set or a quit.
     pub games: Vec<SeenGame>,
@@ -259,6 +264,12 @@ impl Seen {
     /// The player's game is known to be connected to mm.
     fn online(&self, player: Uuid) -> bool {
         self.online.iter().any(|(p, on)| *p == player && *on)
+    }
+
+    /// The player's game had already stopped running at `at` (and still has): frozen when a
+    /// report about it was made.
+    fn stalled_by(&self, player: Uuid, at: DateTime<Utc>) -> bool {
+        self.stalled.iter().any(|(p, since)| *p == player && *since <= at)
     }
 
     /// The winner of `game` as `player`'s game told mm.
@@ -328,17 +339,21 @@ impl Outcome {
 ///   only one client reported counts on that report when the other player's game told mm the
 ///   same result (`seen`; another result: `ERROR`), or once `report_grace` has passed while the
 ///   other player's game is not connected to mm (it crashed or was closed after the game; also
-///   when mm recorded nothing). While the other's game is connected and said nothing, the lone
-///   report waits: it may be for a game still being played. Waiting `stale_after` voids the set
-///   as `ORPHANED`. Games count in order: a game still waiting for its second report holds back
-///   the ones after it. A draw counts for nobody and is replayed.
+///   when mm recorded nothing), or at once when the other player's game had stopped running
+///   (`seen.stalled`) before the report: connected to mm, but frozen. While the other's game is
+///   connected, running and said nothing, the lone report waits: it may be for a game still being
+///   played. Waiting `stale_after` voids the set as `ORPHANED`. Games count in order: a game
+///   still waiting for its second report holds back the ones after it. A draw counts for nobody
+///   and is replayed.
 /// - The first player to [`WINS_NEEDED`] counted games wins the set.
 /// - Otherwise a leave decides it: a player who reports [`Leave::Left`] abandoned it. A player
 ///   whose opponent reports [`Leave::OpponentLeft`] and who does not report the same within
 ///   `report_grace` abandoned it (their game crashed or was closed). Both reporting
 ///   `OpponentLeft` is a broken connection: void as `TERMINATED`, nobody is blamed. An
-///   `OpponentLeft` about a player whose game is still connected to mm blames nobody (it may be
-///   untrue); the set is orphaned if nothing more comes.
+///   `OpponentLeft` about a player whose game is still connected to mm and running blames nobody
+///   (it may be untrue); the set is orphaned if nothing more comes. One about a player whose game
+///   had stopped running before it was made abandons the set for that player at once: a frozen
+///   game can't report anything, and one that runs again is no longer stalled.
 /// - A set with no report for `stale_after` is void as `ORPHANED`.
 ///
 /// Reports from anyone but the two players, and winners who are not one of them, are ignored
@@ -384,6 +399,7 @@ pub fn resolve(
                             wins,
                         };
                     }
+                    None if seen.stalled_by(other, r.at) => r.winner,
                     None if !seen.online(other) && now - r.at >= timing.report_grace => r.winner,
                     None if now - r.at >= timing.stale_after => {
                         return Outcome::Void {
@@ -451,6 +467,10 @@ pub fn resolve(
         // Player 0 says player 1 left; player 1 has had `report_grace` to say the same, and their
         // game is not connected to mm. A player whose game is still connected did not leave (or
         // the report is untrue): nobody is blamed, and the set is orphaned if nothing more comes.
+        // Unless that game had already stopped running when the report was made (bug report #105:
+        // frozen 19 minutes with its mm connection up): abandoned at once.
+        [Some(r), None] if seen.stalled_by(players[1], r.at) => return abandon(1),
+        [None, Some(r)] if seen.stalled_by(players[0], r.at) => return abandon(0),
         [Some(_), None] if seen.online(players[1]) => {}
         [None, Some(_)] if seen.online(players[0]) => {}
         [Some(r), None] if now - r.at >= timing.report_grace => return abandon(1),
@@ -828,6 +848,12 @@ mod tests {
             self.seen.online.push((u, on));
             self
         }
+        /// Player `p`'s game stopped running (still connected to mm) at minute `min`.
+        fn stalled(&mut self, p: usize, min: i64) -> &mut Self {
+            let (u, since) = (self.p[p], self.at(min));
+            self.seen.stalled.push((u, since));
+            self
+        }
         /// Player `by`'s game told mm game `g` was won by `w` (None: draw).
         fn told_mm(&mut self, by: usize, g: u32, w: Option<usize>) -> &mut Self {
             self.seen.games.push(SeenGame { game_index: g, player: self.p[by], winner: w.map(|i| self.p[i]) });
@@ -960,6 +986,45 @@ mod tests {
         s.online(0, true).online(1, false).both(1, Some(0), 1).leave(0, Leave::OpponentLeft, 2);
         assert_eq!(s.at_min(3), Outcome::InProgress { wins: [1, 0] });
         assert_eq!(s.at_min(4), Outcome::Abandoned { leaver: s.p[1], other: s.p[0], credit_other: true, wins: [1, 0] });
+    }
+
+    /// Bug report #105 (2026-10-22): the opponent's game froze 18 s into game 2 and stayed
+    /// connected to mm for 19 minutes; the set waited all that time (and was orphaned had the
+    /// window stayed open 30). A game that had stopped running when the report was made is gone.
+    #[test]
+    fn opponent_left_about_a_frozen_game_abandons_at_once() {
+        let mut s = Set::new();
+        s.online(0, true).online(1, true).both(1, Some(0), 1).stalled(1, 4).leave(0, Leave::OpponentLeft, 4);
+        assert_eq!(s.at_min(4), Outcome::Abandoned { leaver: s.p[1], other: s.p[0], credit_other: true, wins: [1, 0] });
+        // Either player.
+        let mut s = Set::new();
+        s.online(0, true).online(1, true).stalled(0, 2).leave(1, Leave::OpponentLeft, 3);
+        assert_eq!(
+            s.at_min(3),
+            Outcome::Abandoned { leaver: s.p[0], other: s.p[1], credit_other: false, wins: [0, 0] }
+        );
+        // A game that stopped running only after the report was running when it was made: the
+        // report may be untrue, so nobody is blamed, as for any connected game.
+        let mut s = Set::new();
+        s.online(0, true).online(1, true).leave(0, Leave::OpponentLeft, 4).stalled(1, 5);
+        assert_eq!(s.at_min(6), Outcome::InProgress { wins: [0, 0] });
+        assert!(matches!(s.at_min(34), Outcome::Void { status: "ORPHANED", .. }));
+        // Its own "opponent left" (it ran again, saw the link gone) is the broken connection.
+        let mut s = Set::new();
+        s.online(0, true).online(1, true).stalled(1, 4).leave(0, Leave::OpponentLeft, 4);
+        s.leave(1, Leave::OpponentLeft, 5);
+        assert!(matches!(s.at_min(5), Outcome::Void { status: "TERMINATED", .. }));
+    }
+
+    #[test]
+    fn a_lone_report_counts_at_once_when_the_other_players_game_is_frozen() {
+        let mut s = Set::new();
+        s.online(0, true).online(1, true).both(1, Some(0), 5).stalled(1, 9).game(0, 2, Some(0), 10);
+        assert_eq!(s.at_min(10), Outcome::Complete { winner: s.p[0], loser: s.p[1], wins: [2, 0] });
+        // Frozen only after the report: it waits, as for a running game.
+        let mut s = Set::new();
+        s.online(0, true).online(1, true).both(1, Some(0), 5).game(0, 2, Some(0), 10).stalled(1, 11);
+        assert_eq!(s.at_min(12), Outcome::InProgress { wins: [1, 0] });
     }
 
     #[test]

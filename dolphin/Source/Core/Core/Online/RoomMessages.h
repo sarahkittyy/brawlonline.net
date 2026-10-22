@@ -207,6 +207,7 @@ struct Message
   std::string why;         // Invalid: what was wrong
   std::string error;       // HelloResp / RoomError / Error
   std::string latest_version;  // HelloResp
+  bool game_alive = false;     // HelloResp: this mm takes `game-alive` (Online/GameAlive.h)
   std::string op;          // RoomError
   std::string code;        // RoomLeft / RoomStart
   std::string reason;      // RoomLeft

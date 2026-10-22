@@ -167,6 +167,22 @@ async fn mm_queries_work_as_pp_mm() {
     let err = sqlx::query("UPDATE rulesets SET hidden = true").execute(&pool).await.unwrap_err();
     assert!(err.to_string().contains("permission denied"), "{err}");
 
+    // A Ranked set's presence (0016, 0018) with a frozen game's stalled_since (0021), written again
+    // (the upsert reads the row), and how a game ended.
+    let id = format!("mode.ranked-grants-seen-{}", Uuid::new_v4());
+    let t = chrono::Utc::now();
+    db::record_ranked_presence(&pool, &id, a, true, None, t).await.unwrap();
+    db::record_ranked_presence(&pool, &id, a, true, Some(t), t + chrono::Duration::seconds(30)).await.unwrap();
+    let stalled: Option<chrono::DateTime<chrono::Utc>> =
+        sqlx::query_scalar("SELECT stalled_since FROM ranked_presence WHERE match_id = $1 AND uid = $2")
+            .bind(&id)
+            .bind(a)
+            .fetch_one(&stack.pool)
+            .await
+            .unwrap();
+    assert!(stalled.is_some_and(|s| (s - t).num_milliseconds().abs() < 1), "{stalled:?}");
+    db::record_ranked_game_result(&pool, &id, 1, a, Some(a), "game").await.unwrap();
+
     // And nothing else: no password hashes or emails.
     let err = sqlx::query("SELECT email FROM users LIMIT 1").execute(&pool).await.unwrap_err();
     assert!(err.to_string().contains("permission denied"), "{err}");

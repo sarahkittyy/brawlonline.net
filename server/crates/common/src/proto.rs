@@ -286,6 +286,8 @@ pub enum ClientMessage {
     Spectate(Result<crate::spectate::SpectateRequest, (&'static str, String)>),
     /// `speed-check`: the waiting room's frame rate (`crate::speed`), or why it could not be read.
     SpeedCheck(Result<crate::speed::SpeedCheck, String>),
+    /// `game-alive`: the game's emulation is running ([`GAME_ALIVE`]).
+    GameAlive,
     /// Valid JSON object with a `type` we do not handle.
     Unknown(String),
 }
@@ -301,6 +303,17 @@ pub enum ParseError {
     #[error("malformed {0}: {1}")]
     Malformed(&'static str, String),
 }
+
+/// `game-alive`, client → server on an online connection, no other fields: the game's emulation
+/// ran in the last [`GAME_ALIVE_EVERY`], sent that often while it does (bug report #105,
+/// 2026-10-22). The game ticks it from its CPU thread at every emulated field, every game frame
+/// and every round of a wait on its peer, so a game waiting on a slow or silent peer still sends
+/// it; one whose emulation froze (or was paused) does not, while its online connection, served by
+/// another thread, stays up. A `hello` with `gameAlive` says the game sends it.
+pub const GAME_ALIVE: &str = "game-alive";
+
+/// How often a running game sends [`GAME_ALIVE`].
+pub const GAME_ALIVE_EVERY: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// Parses one client packet. Never panics on any input.
 pub fn parse_client_message(data: &[u8]) -> Result<ClientMessage, ParseError> {
@@ -326,6 +339,7 @@ pub fn parse_client_message(data: &[u8]) -> Result<ClientMessage, ParseError> {
             Ok(ClientMessage::Spectate(crate::spectate::SpectateRequest::parse(k, &value)))
         }
         crate::speed::SPEED_CHECK => Ok(ClientMessage::SpeedCheck(crate::speed::SpeedCheck::parse(&value))),
+        GAME_ALIVE => Ok(ClientMessage::GameAlive),
         _ => Ok(ClientMessage::Unknown(kind)),
     }
 }

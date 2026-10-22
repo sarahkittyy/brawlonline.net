@@ -160,23 +160,27 @@ pub const CHAT_KEYS_KEPT: i64 = 20;
 
 /// Records that `uid` used the chat identity key `key` (`hello.chatKey`): a new key is added, a
 /// known one gets a new `last_seen`, and only the [`CHAT_KEYS_KEPT`] most recent stay.
-/// Whether a Ranked set's player's game is connected to mm (`migrations/0016_ranked_seen.sql`): an
-/// older `at` than the stored one changes nothing.
+/// Whether a Ranked set's player's game is connected to mm (`migrations/0016_ranked_seen.sql`) and,
+/// if it stopped running while connected, since when (`stalled_since`, 0021): an older `at` than
+/// the stored one changes nothing.
 pub async fn record_ranked_presence(
     pool: &sqlx::PgPool,
     match_id: &str,
     uid: Uuid,
     online: bool,
+    stalled_since: Option<DateTime<Utc>>,
     at: DateTime<Utc>,
 ) -> sqlx::Result<()> {
     sqlx::query(
-        "INSERT INTO ranked_presence (match_id, uid, online, changed_at) VALUES ($1, $2, $3, $4)
-         ON CONFLICT (match_id, uid) DO UPDATE SET online = EXCLUDED.online, changed_at = EXCLUDED.changed_at
+        "INSERT INTO ranked_presence (match_id, uid, online, stalled_since, changed_at) VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT (match_id, uid) DO UPDATE
+           SET online = EXCLUDED.online, stalled_since = EXCLUDED.stalled_since, changed_at = EXCLUDED.changed_at
           WHERE ranked_presence.changed_at < EXCLUDED.changed_at",
     )
     .bind(match_id)
     .bind(uid)
     .bind(online)
+    .bind(stalled_since)
     .bind(at)
     .execute(pool)
     .await?;

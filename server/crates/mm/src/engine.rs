@@ -179,6 +179,10 @@ pub struct EngineConfig {
     pub chat: ChatConfig,
     /// Spectating: the kill switch and the upload limits.
     pub live: LiveConfig,
+    /// A game that sends `game-alive` and sent none for this long stopped running (frozen, or its
+    /// emulation paused) while its online connection stayed up: its recent Ranked sets record it
+    /// (`ranked_presence.stalled_since`), so an "opponent left" about it counts (bug report #105).
+    pub game_stall: Duration,
 }
 
 impl Default for EngineConfig {
@@ -214,6 +218,7 @@ impl Default for EngineConfig {
             hello_window: Window::new(10, Duration::from_secs(60)),
             chat: ChatConfig::default(),
             live: LiveConfig::default(),
+            game_stall: Duration::from_secs(30),
         }
     }
 }
@@ -341,12 +346,13 @@ pub enum Output {
     RulesetPlayed {
         code: String,
     },
-    /// Whether a Ranked set's player's game is connected to mm (`ranked_presence`): the newest
-    /// `at` wins.
+    /// Whether a Ranked set's player's game is connected to mm (`ranked_presence`), and since when
+    /// it stopped running if it did (`stalled_since`): the newest `at` wins.
     RankedPresence {
         match_id: String,
         uid: Uuid,
         online: bool,
+        stalled_since: Option<DateTime<Utc>>,
         at: DateTime<Utc>,
     },
     /// How a Ranked set's game ended as one player's own game said it (`ranked_game_results`).
@@ -383,6 +389,8 @@ struct Pending {
     client: ClientBuild,
     /// `hello`: the chat identity key, if it sent a valid one.
     chat_key: Option<[u8; 32]>,
+    /// `hello`: the game sends `game-alive` while its emulation runs.
+    game_alive: bool,
 }
 
 /// The build a game says it is (`appVersion`, `platform`).
@@ -415,9 +423,20 @@ struct Online {
     client: ClientBuild,
     /// The chat identity key of the `hello`; without one the connection can't chat.
     chat_key: Option<[u8; 32]>,
+    /// A game that sends `game-alive` (its `hello` said so): when the last one came (from the
+    /// `hello` until the first), on both clocks. `None`: an older build, never taken as frozen.
+    alive: Option<(Instant, DateTime<Utc>)>,
+    /// No `game-alive` for [`EngineConfig::game_stall`]: the game stopped running while its
+    /// connection stayed up (frozen, or its emulation paused). Recorded for its recent Ranked sets.
+    stalled: bool,
 }
 
 impl Online {
+    /// Since when its game had stopped running (its last `game-alive`), if it has.
+    fn stalled_since(&self) -> Option<DateTime<Utc>> {
+        self.alive.filter(|_| self.stalled).map(|(_, wall)| wall)
+    }
+
     /// This connection as a chat member, if it can chat.
     fn candidate(&self, conn: ConnId) -> Option<Candidate> {
         Some(Candidate {
@@ -487,7 +506,7 @@ pub struct Engine {
 }
 
 fn hello_ok() -> HelloResp {
-    HelloResp { kind: common::rooms::HELLO_RESP.into(), error: None, latest_version: None }
+    HelloResp { kind: common::rooms::HELLO_RESP.into(), error: None, latest_version: None, game_alive: true }
 }
 
 fn pair_key(a: Uuid, b: Uuid) -> (Uuid, Uuid) {
@@ -663,14 +682,14 @@ impl Engine {
                     self.chat.conn_gone(conn, &mut out);
                     self.live.conn_gone(now, conn, &mut out);
                     if let State::Online(o) = &c.state {
-                        self.online_gone(now, o.user.uid, &mut out);
+                        self.online_gone(now, o, &mut out);
                     }
                     self.rooms.conn_gone(now, conn, &mut out);
                     self.mod_rooms.conn_gone(conn, &mut out);
                     self.fail_room_tickets(&mut out);
                 }
             }
-            Input::Packet { conn, data } => self.on_packet(now, conn, &data, &mut out),
+            Input::Packet { conn, data } => self.on_packet(now, wall, conn, &data, &mut out),
             Input::Data { conn, data } => {
                 // Only an online connection uploads; anything else on the data channel is dropped.
                 if matches!(self.conns.get(&conn), Some(Conn { state: State::Online(_), .. })) {
@@ -744,12 +763,44 @@ impl Engine {
         tracing::info!(matches = n, "matches read back from the database");
     }
 
-    /// `uid`'s online connection closed: if it was their last, their recent Ranked sets record
-    /// their game as gone from mm.
-    fn online_gone(&mut self, now: Instant, uid: Uuid, out: &mut Vec<Output>) {
+    /// `uid`'s online connection (`o`) closed: if it was their last, their recent Ranked sets
+    /// record their game as gone from mm (and since when it had stopped running, if it had).
+    fn online_gone(&mut self, now: Instant, o: &Online, out: &mut Vec<Output>) {
+        let uid = o.user.uid;
         let still = self.conns.values().any(|c| matches!(&c.state, State::Online(o) if o.user.uid == uid));
         if !still {
-            self.live.presence(now, uid, false, out);
+            self.live.presence(now, uid, false, o.stalled_since(), out);
+        }
+    }
+
+    /// `game-alive` on an online connection: its game runs. One that had stopped running runs
+    /// again: its recent Ranked sets record it.
+    fn game_alive(&mut self, now: Instant, wall: DateTime<Utc>, conn: ConnId, out: &mut Vec<Output>) {
+        let Some(Conn { state: State::Online(o), .. }) = self.conns.get_mut(&conn) else { return };
+        o.alive = Some((now, wall));
+        if std::mem::take(&mut o.stalled) {
+            let uid = o.user.uid;
+            tracing::info!(conn, code = %o.code, "the game runs again");
+            self.live.presence(now, uid, true, None, out);
+        }
+    }
+
+    /// Games that sent no `game-alive` for `game_stall` while connected: stopped running.
+    fn find_stalled_games(&mut self, now: Instant, out: &mut Vec<Output>) {
+        let stall = self.cfg.game_stall;
+        let mut stalled = Vec::new();
+        for (conn, c) in self.conns.iter_mut() {
+            let State::Online(o) = &mut c.state else { continue };
+            let Some((at, wall)) = o.alive else { continue };
+            if o.stalled || now.saturating_duration_since(at) < stall {
+                continue;
+            }
+            o.stalled = true;
+            tracing::warn!(conn, code = %o.code, last_alive = %wall, "the game stopped running (no game-alive)");
+            stalled.push((o.user.uid, wall));
+        }
+        for (uid, since) in stalled {
+            self.live.presence(now, uid, true, Some(since), out);
         }
     }
 
@@ -829,7 +880,7 @@ impl Engine {
         self.unindex(conn);
         self.chat.conn_gone(conn, out);
         let online = match self.conns.get(&conn) {
-            Some(Conn { state: State::Online(o), .. }) => Some(o.user.uid),
+            Some(Conn { state: State::Online(o), .. }) => Some(o.clone()),
             _ => None,
         };
         if online.is_some() {
@@ -838,8 +889,8 @@ impl Engine {
         if let Some(c) = self.conns.get_mut(&conn) {
             c.state = State::Done;
         }
-        if let Some(uid) = online {
-            self.online_gone(Instant::now(), uid, out);
+        if let Some(o) = online {
+            self.online_gone(Instant::now(), &o, out);
         }
         out.push(Output::Disconnect { conn });
         self.rooms.conn_gone(Instant::now(), conn, out);
@@ -934,7 +985,7 @@ impl Engine {
         self.conns.insert(conn, Conn { addr, since: now, state: State::Idle });
     }
 
-    fn on_packet(&mut self, now: Instant, conn: ConnId, data: &[u8], out: &mut Vec<Output>) {
+    fn on_packet(&mut self, now: Instant, wall: DateTime<Utc>, conn: ConnId, data: &[u8], out: &mut Vec<Output>) {
         let Some(c) = self.conns.get(&conn) else { return };
         let online = match &c.state {
             State::Done => return,
@@ -953,7 +1004,7 @@ impl Engine {
         }
         let parsed = parse_client_message(data);
         if let Some(o) = online {
-            return self.on_online_packet(now, conn, o, parsed, out);
+            return self.on_online_packet(now, wall, conn, o, parsed, out);
         }
         let ticket = match parsed {
             Ok(ClientMessage::CreateTicket(t)) => t,
@@ -968,7 +1019,8 @@ impl Engine {
                 | ClientMessage::Chat(_)
                 | ClientMessage::Mods(_)
                 | ClientMessage::Spectate(_)
-                | ClientMessage::SpeedCheck(_),
+                | ClientMessage::SpeedCheck(_)
+                | ClientMessage::GameAlive,
             ) => {
                 // Rooms, chat, Brawl Mods rooms and spectating need an online connection: `hello`
                 // first.
@@ -1009,6 +1061,7 @@ impl Engine {
     fn on_online_packet(
         &mut self,
         now: Instant,
+        wall: DateTime<Utc>,
         conn: ConnId,
         o: Online,
         parsed: Result<ClientMessage, common::proto::ParseError>,
@@ -1098,6 +1151,7 @@ impl Engine {
             }
             // A newer build's or a broken one: nothing to answer (the game expects no reply).
             Ok(ClientMessage::SpeedCheck(Err(why))) => tracing::warn!(conn, "bad speed check: {why}"),
+            Ok(ClientMessage::GameAlive) => self.game_alive(now, wall, conn, out),
             Ok(ClientMessage::Spectate(Err((op, why)))) => {
                 tracing::warn!(conn, "bad spectate request: {why}");
                 Self::send(
@@ -1200,6 +1254,7 @@ impl Engine {
             client,
             // A malformed key is ignored: the connection works, it just can't chat.
             chat_key: common::chat::parse_identity_key(&h.chat_key),
+            game_alive: h.game_alive,
         };
         if let Some(c) = self.conns.get_mut(&conn) {
             c.state = State::Validating(pending);
@@ -1217,6 +1272,7 @@ impl Engine {
                 kind: common::rooms::HELLO_RESP.into(),
                 error: Some(clamp_error(msg.into())),
                 latest_version: latest,
+                game_alive: false,
             },
         );
         self.finish(out, conn);
@@ -1281,6 +1337,7 @@ impl Engine {
             room,
             client,
             chat_key: None,
+            game_alive: false,
         };
         if let Some(c) = self.conns.get_mut(&conn) {
             c.state = State::Validating(pending);
@@ -1422,12 +1479,19 @@ impl Engine {
         let uid = user.uid;
         self.chat.set_muted(uid, user.chat_muted);
         if let Some(c) = self.conns.get_mut(&conn) {
-            c.state = State::Online(Online { user, code, client: p.client, chat_key: p.chat_key });
+            c.state = State::Online(Online {
+                user,
+                code,
+                client: p.client,
+                chat_key: p.chat_key,
+                alive: p.game_alive.then_some((now, wall)),
+                stalled: false,
+            });
         }
         if let Some(Conn { state: State::Online(o), .. }) = self.conns.get(&conn) {
             self.live.named(uid, &o.user.display_name, &o.code);
         }
-        self.live.presence(now, uid, true, out);
+        self.live.presence(now, uid, true, None, out);
         Self::send(out, conn, &hello_ok());
     }
 
@@ -1546,6 +1610,7 @@ impl Engine {
         self.mod_rooms.tick(now);
         self.fail_room_tickets(out);
         self.live.tick(now, out);
+        self.find_stalled_games(now, out);
         // Room members watching their room's game (`room-watch`): its chunks as they are kept.
         let stops = self.rooms.take_watch_stops();
         let targets = self.rooms.watch_targets();
@@ -3044,7 +3109,7 @@ mod tests {
         h.connect(1, 1);
         h.connect(2, 2);
         let out = h.hello(1, &a, "3.4.0");
-        assert_eq!(sent(&out, 1), vec![json!({"type": "hello-resp"})]);
+        assert_eq!(sent(&out, 1), vec![json!({"type": "hello-resp", "gameAlive": true})]);
         assert!(!disconnected(&out, 1));
         h.hello(2, &b, "3.4.0");
         assert_eq!(h.e.online_count(), 2);
@@ -3289,12 +3354,12 @@ mod tests {
         assert!(disconnected(&out, 1));
         h.connect(2, 2);
         let out = hello_on(&mut h, 2, &b, "3.5.0", "mac");
-        assert_eq!(sent(&out, 2), vec![json!({"type": "hello-resp"})]);
+        assert_eq!(sent(&out, 2), vec![json!({"type": "hello-resp", "gameAlive": true})]);
         // A build older than the platform field is held to the oldest feed it can be from: a 3.5.0
         // may be a macOS build, a 3.5.5 cannot (the macOS feed has not reached it).
         h.connect(3, 3);
         let out = h.hello(3, &c, "3.5.0");
-        assert_eq!(sent(&out, 3), vec![json!({"type": "hello-resp"})]);
+        assert_eq!(sent(&out, 3), vec![json!({"type": "hello-resp", "gameAlive": true})]);
         h.connect(6, 6);
         let out = h.hello(6, &c, "3.5.5");
         assert_eq!(sent(&out, 6)[0]["error"], msg::update_to("3.6.0"));
@@ -3321,7 +3386,7 @@ mod tests {
         h.add(&b);
         for (conn, u) in [(1, &a), (2, &b)] {
             h.connect(conn, conn as u16);
-            assert_eq!(sent(&hello_on(&mut h, conn, u, "3.5.0", "win"), conn), vec![json!({"type": "hello-resp"})]);
+            assert_eq!(sent(&hello_on(&mut h, conn, u, "3.5.0", "win"), conn), vec![json!({"type": "hello-resp", "gameAlive": true})]);
         }
         let out = h.room(1, json!({"type": "room-create"}));
         let code = state_of(&out, 1)["code"].as_str().unwrap().to_string();
@@ -3360,7 +3425,7 @@ mod tests {
         assert_eq!(sent(&hello_on(&mut h, 2, &a, "3.5.0", "win"), 2)[0]["error"], msg::update_to("3.6.0"));
         h.advance(FEED_REFRESH);
         h.connect(3, 3);
-        assert_eq!(sent(&hello_on(&mut h, 3, &a, "3.5.0", "win"), 3), vec![json!({"type": "hello-resp"})]);
+        assert_eq!(sent(&hello_on(&mut h, 3, &a, "3.5.0", "win"), 3), vec![json!({"type": "hello-resp", "gameAlive": true})]);
         // A feed folder that reads empty keeps the last versions.
         std::fs::remove_dir_all(&dir).unwrap();
         h.advance(FEED_REFRESH);
@@ -3501,7 +3566,7 @@ mod tests {
             self.add(u);
             self.connect(conn, conn as u16);
             let out = self.hello_key(conn, u, json!(hex::encode(id_key(u))));
-            assert_eq!(sent(&out, conn), vec![json!({"type": "hello-resp"})]);
+            assert_eq!(sent(&out, conn), vec![json!({"type": "hello-resp", "gameAlive": true})]);
             out
         }
         /// `chat-key` with a made-up group key.
@@ -3568,7 +3633,7 @@ mod tests {
             h.add(&b);
             h.connect(conn, conn as u16);
             let out = h.hello_key(conn, &b, bad.clone());
-            assert_eq!(sent(&out, conn), vec![json!({"type": "hello-resp"})], "{bad}");
+            assert_eq!(sent(&out, conn), vec![json!({"type": "hello-resp", "gameAlive": true})], "{bad}");
             assert!(!out.iter().any(|o| matches!(o, Output::RecordChatKey { .. })), "{bad}");
             let out = h.chat_key(conn, "room-KFQB-1");
             assert_eq!(chat_errors(&out, conn), [("chat-key".to_string(), msg::CHAT_UPDATE.to_string())]);
@@ -3934,6 +3999,81 @@ mod tests {
             let role = sent(&out, conn).into_iter().find(|m| m["type"] == "spectate-role").unwrap();
             assert!(role["role"] == "primary" || role["role"] == "witness", "{role}");
         }
+    }
+
+    /// Bug report #105 (2026-10-22): the opponent's game froze 18 s into a Ranked game and kept its
+    /// online connection up for 19 minutes, so the other player's "opponent left" waited. A game
+    /// whose `hello` says it sends `game-alive` and that sent none for `game_stall` is recorded as
+    /// stopped in its Ranked sets, since its last one; it runs again on the next.
+    #[test]
+    fn a_game_that_stops_sending_game_alive_is_recorded_stalled_in_its_ranked_sets() {
+        let mut h = Harness::new(EngineConfig::default());
+        let (a, b, c) = (user("AA#1", "a"), user("BB#1", "b"), user("CC#1", "c"));
+        for (conn, u, alive) in [(1, &a, true), (2, &b, true), (3, &c, false)] {
+            h.add(u);
+            h.connect(conn, conn as u16);
+            let mut v = json!({
+                "type": "hello",
+                "user": {"uid": u.uid.to_string(), "playKey": h.secret.derive(u.uid, u.play_key_version)},
+                "appVersion": "3.4.0",
+            });
+            if alive {
+                v["gameAlive"] = json!(true);
+            }
+            h.raw(conn, v.to_string().as_bytes());
+        }
+        let set = |id: &str, players: Vec<Uuid>| common::db::RecentMatch {
+            match_id: id.into(),
+            mode: Mode::Ranked.as_u8() as i16,
+            is_host: players[0],
+            players,
+            room_code: None,
+            age_ms: 60 * 1000,
+        };
+        h.input(Input::MatchesRestored(vec![set("ab", vec![a.uid, b.uid]), set("ac", vec![a.uid, c.uid])]));
+        // (match, uid, online, stalled)
+        let presence = |out: &[Output]| -> Vec<(String, Uuid, bool, bool)> {
+            let mut v: Vec<_> = out
+                .iter()
+                .filter_map(|o| match o {
+                    Output::RankedPresence { match_id, uid, online, stalled_since, .. } => {
+                        Some((match_id.clone(), *uid, *online, stalled_since.is_some()))
+                    }
+                    _ => None,
+                })
+                .collect();
+            v.sort();
+            v
+        };
+        let alive = json!({"type": "game-alive"}).to_string();
+        // a's game runs; b's sent one, then nothing; c's build sends none and is never judged.
+        h.raw(2, alive.as_bytes());
+        let mut seen = Vec::new();
+        for _ in 0..14 {
+            h.raw(1, alive.as_bytes());
+            seen.extend(presence(&h.advance(Duration::from_secs(2))));
+        }
+        assert!(seen.is_empty(), "28 s without one is not a stall yet: {seen:?}");
+        for _ in 0..30 {
+            h.raw(1, alive.as_bytes());
+            seen.extend(presence(&h.advance(Duration::from_secs(2))));
+        }
+        assert_eq!(seen, vec![("ab".to_string(), b.uid, true, true)], "once, b's set only");
+        // b's game runs again.
+        let out = h.raw(2, alive.as_bytes());
+        assert_eq!(presence(&out), vec![("ab".to_string(), b.uid, true, false)]);
+        assert!(presence(&h.raw(2, alive.as_bytes())).is_empty());
+        // Stopped again and then closed: gone, and since when it had stopped.
+        h.advance(Duration::from_secs(31));
+        let out = h.input(Input::Disconnected { conn: 2 });
+        assert_eq!(presence(&out), vec![("ab".to_string(), b.uid, false, true)]);
+        // A connection that ran when it closed is gone without a stall.
+        h.raw(1, alive.as_bytes());
+        let out = h.input(Input::Disconnected { conn: 1 });
+        assert_eq!(
+            presence(&out),
+            vec![("ab".to_string(), a.uid, false, false), ("ac".to_string(), a.uid, false, false)]
+        );
     }
 
     #[test]
