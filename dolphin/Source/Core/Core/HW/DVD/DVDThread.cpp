@@ -35,6 +35,26 @@
 
 namespace DVD
 {
+namespace
+{
+// A disc read this slow holds the game up for as long (online play waits for each read at once):
+// most likely a hard drive that had spun down, or a busy or failing one. Logged so a player's log
+// shows it (bug report #97: the opponent's loads took 10 s longer at the first disc read after
+// each long game, and never at a short one).
+constexpr u64 SLOW_READ_US = 1'000'000;
+
+void LogSlowRead(u64 dvd_offset, u32 length, u64 started_us)
+{
+  const u64 took_us = Common::Timer::NowUs() - started_us;
+  if (took_us < SLOW_READ_US)
+    return;
+  WARN_LOG_FMT(CORE,
+               "DVD: reading {} bytes at {:#x} of the disc image took {} ms (the drive it is on "
+               "may have been asleep)",
+               length, dvd_offset, took_us / 1000);
+}
+}  // namespace
+
 DVDThread::DVDThread(Core::System& system) : m_system(system)
 {
 }
@@ -234,6 +254,7 @@ void DVDThread::StartReadInternal(bool copy_to_ram, u32 output_address, u64 dvd_
     if (!m_disc->Read(request.dvd_offset, request.length, buffer.data(), request.partition))
       buffer.resize(0);
     request.realtime_done_us = Common::Timer::NowUs();
+    LogSlowRead(request.dvd_offset, request.length, request.realtime_started_us);
 
     // FinishRead() normally does this copy, but not until its CoreTiming event actually fires.
     // Our HLE hooks for the guest's DI wait loops (see HLE_Misc.cpp) can force the guest to
@@ -333,9 +354,11 @@ void DVDThread::ProcessReadRequest(ReadRequest&& request)
 
   m_file_logger.Log(*m_disc, request.partition, request.dvd_offset);
 
+  const u64 read_started_us = Common::Timer::NowUs();
   std::vector<u8> buffer(request.length);
   if (!m_disc->Read(request.dvd_offset, request.length, buffer.data(), request.partition))
     buffer.resize(0);
+  LogSlowRead(request.dvd_offset, request.length, read_started_us);
 
   request.realtime_done_us = Common::Timer::NowUs();
 
