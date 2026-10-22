@@ -7,6 +7,8 @@ import EventIcon from "@mui/icons-material/Event";
 import HistoryIcon from "@mui/icons-material/History";
 import LandscapeIcon from "@mui/icons-material/Landscape";
 import MoreHorizIcon from "@mui/icons-material/MoreHoriz";
+import MusicNoteIcon from "@mui/icons-material/MusicNote";
+import MusicOffIcon from "@mui/icons-material/MusicOff";
 import PlayCircleOutlineIcon from "@mui/icons-material/PlayCircleOutline";
 import SportsCricket from "@mui/icons-material/SportsCricket";
 import TimerIcon from "@mui/icons-material/Timer";
@@ -14,9 +16,10 @@ import TrackChangesIcon from "@mui/icons-material/TrackChanges";
 import type { FileResult } from "@replays/types";
 import { frameToGameTimer, GameMode } from "@slippi/slippi-js";
 import { groupBy } from "common/group_by";
-import React, { useCallback, useMemo } from "react";
+import React, { useCallback, useMemo, useState } from "react";
 
 import { ClapperboardIcon } from "@/components/clapperboard_icon";
+import { IconMenu } from "@/components/icon_menu";
 import { RenderVideoIcon } from "@/components/render_video_icon";
 import { useDolphinActions } from "@/lib/dolphin/use_dolphin_actions";
 import { useReplayHighlight } from "@/lib/hooks/use_replay_highlight";
@@ -88,24 +91,35 @@ export const ReplayFileContainer = React.memo(function ReplayFileContainer({
   const onPlayClick = useCallback(() => onPlay(index), [onPlay, index]);
 
   // Render to video: the whole match, as highlights are rendered (Settings > Clips' resolution, into
-  // its folder), with the game's music, named as the replay is. While it renders the button shows
-  // how far it is and cancels it.
+  // its folder), named as the replay is. The button opens Render (w/ Music) / Render (No Music);
+  // while it renders it shows how far it is and cancels it.
   const { dolphinService } = useServices();
   const { renderHighlights } = useDolphinActions(dolphinService);
+  const [renderMenu, setRenderMenu] = useState<HTMLElement | null>(null);
   const matchRenderId = matchRender?.jobId;
-  const onRenderClick = useCallback(() => {
-    if (matchRenderId) {
-      void dolphinService.cancelRender(matchRenderId);
-      return;
-    }
-    void renderHighlights({
-      items: [{ path: fullPath, startFrame: 0, endFrame: 0 }],
-      names: [fileName.replace(/\.brep$/i, "")],
-      music: true,
-      combo: false,
-      wholeMatch: true,
-    });
-  }, [matchRenderId, dolphinService, renderHighlights, fullPath, fileName]);
+  const onRenderClick = useCallback(
+    (e: React.MouseEvent<HTMLButtonElement, MouseEvent>) => {
+      if (matchRenderId) {
+        void dolphinService.cancelRender(matchRenderId);
+      } else {
+        setRenderMenu(e.currentTarget);
+      }
+    },
+    [matchRenderId, dolphinService],
+  );
+  const renderMatch = useCallback(
+    (music: boolean) => {
+      setRenderMenu(null);
+      void renderHighlights({
+        items: [{ path: fullPath, startFrame: 0, endFrame: 0 }],
+        names: [fileName.replace(/\.brep$/i, "")],
+        music,
+        combo: false,
+        wholeMatch: true,
+      });
+    },
+    [renderHighlights, fullPath, fileName],
+  );
   const renderState = matchRender?.state;
   const renderProgress = matchRender?.progress ?? 0;
 
@@ -226,6 +240,28 @@ export const ReplayFileContainer = React.memo(function ReplayFileContainer({
           highlightKey={highlightKey}
         />
       </div>
+      {/* (Its clicks are kept from the row, which would select it: the menu is in a portal.) */}
+      <IconMenu
+        anchorEl={renderMenu}
+        open={renderMenu != null}
+        onClose={() => setRenderMenu(null)}
+        onClick={(e) => e.stopPropagation()}
+        onDoubleClick={(e) => e.stopPropagation()}
+        anchorOrigin={{ vertical: "bottom", horizontal: "center" }}
+        transformOrigin={{ vertical: "top", horizontal: "center" }}
+        items={[
+          {
+            label: Messages.renderWithMusic(),
+            icon: <MusicNoteIcon fontSize="small" />,
+            onClick: () => renderMatch(true),
+          },
+          {
+            label: Messages.renderNoMusic(),
+            icon: <MusicOffIcon fontSize="small" />,
+            onClick: () => renderMatch(false),
+          },
+        ]}
+      />
     </DraggableFile>
   );
 });

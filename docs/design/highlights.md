@@ -220,9 +220,9 @@ starting. If the Dolphin window is asking something, answer it there; or close i
 
 The user's request: a replay row has a button left of Show highlights, a film strip with a pencil
 (`render_video_icon.tsx`, drawn in the clapperboard's stroke with Lucide's pencil), tooltip
-"Render to video". It renders the whole match as highlights are rendered: one render job, the
-match as one clip, Settings > Clips' Video Resolution and folder, with the game's music, the
-video named as the replay is (`2026-10-12 2040 Ranked G1 - sarahkitty2 (Snake) vs sarahkitty
+"Render to video". A click opens Render (w/ Music) / Render (No Music), as highlights have. It
+renders the whole match as highlights are rendered: one render job, the match as one clip,
+Settings > Clips' Video Resolution and folder, the video named as the replay is (`2026-10-12 2040 Ranked G1 - sarahkitty2 (Snake) vs sarahkitty
 (Lucas).mp4`). `RenderRequest.wholeMatch`: main reads each replay's frames (`match_frames.ts`):
 ENDG's `firstFrame` to `lastFrame`, the frames recorded, else (a game that crashed has no ENDG)
 the frames decoded. On this PC's 56 replays both give the same frames (9 have no ENDG).
