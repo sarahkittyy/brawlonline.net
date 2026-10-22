@@ -66,6 +66,22 @@ struct Heard
 std::vector<Heard> s_heard;
 constexpr size_t MAX_HEARD = 16;
 
+// The data of a player's P2P connect (ENet's connect data, which Slippi leaves 0): the match and
+// the player's port and address as the server saw them, which both sides have from the
+// get-ticket-resp. A NAT that gives each destination its own public address (some carriers' NAT;
+// bug report #109: five searches, five addresses in 170.83.118.0/24) connects from an address
+// the server never saw, so the peer cannot tell it by address; it can by this. Never 0.
+u32 ConnectToken(const std::string& match_id, const PlayerInfo& player)
+{
+  u32 h = 2166136261u;  // FNV-1a
+  for (const char c : fmt::format("{}|{}|{}", match_id, player.port, player.ip_address))
+  {
+    h ^= static_cast<u8>(c);
+    h *= 16777619u;
+  }
+  return h != 0 ? h : 1;
+}
+
 int ENET_CALLBACK OnP2PReceive(ENetHost* host, ENetEvent*)
 {
   const ENetAddress& from = host->receivedAddress;
@@ -1162,6 +1178,13 @@ void Matchmaking::HandleConnecting()
     return;
   }
 
+  u32 own_token = 0;
+  for (const auto& p : match.players)
+  {
+    if (p.is_local)
+      own_token = ConnectToken(match.match_id, p);
+  }
+
   std::vector<ENetPeer*> servers;
   std::vector<ENetAddress> remote_addrs;
   for (const auto& r : match.remotes)
@@ -1169,7 +1192,7 @@ void Matchmaking::HandleConnecting()
     ENetAddress addr{};
     enet_address_set_host(&addr, r.ip.c_str());
     addr.port = r.port;
-    ENetPeer* peer = enet_host_connect(client.get(), &addr, MM_CHANNELS, 0);
+    ENetPeer* peer = enet_host_connect(client.get(), &addr, MM_CHANNELS, own_token);
     if (!peer)
     {
       ERROR_LOG_FMT(NETPLAY, "[Matchmaking] Couldn't create peer for {}", r.ToString());
@@ -1278,6 +1301,28 @@ void Matchmaking::HandleConnecting()
             matched = true;
             break;
           }
+        }
+        // Their connect from an address the server did not see them at: theirs if it carries
+        // their token (ConnectToken; an older build sends 0, and our own connects' events have
+        // 0). Before 2026-10-22 it was dropped, while their side had its connect answered and
+        // went on alone (bug report #109).
+        for (size_t i = 0; !matched && net_event.data != 0 && i < servers.size(); i++)
+        {
+          const size_t p = static_cast<int>(i) >= match.local_player_index ? i + 1 : i;
+          if (connections[i] || p >= match.players.size() ||
+              ConnectToken(match.match_id, match.players[p]) != net_event.data)
+          {
+            continue;
+          }
+          INFO_LOG_FMT(NETPLAY,
+                       "[Matchmaking] P{} {} connects from {}:{}, not the {} the server saw "
+                       "(their NAT gives each destination its own address); their token matches",
+                       match.players[p].port, match.players[p].connect_code,
+                       IpToString(net_event.peer->address.host), net_event.peer->address.port,
+                       match.players[p].ip_address);
+          servers[i] = net_event.peer;
+          connections[i] = true;
+          matched = true;
         }
         if (!matched)
         {
