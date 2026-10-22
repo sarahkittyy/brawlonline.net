@@ -483,6 +483,29 @@ async fn main() -> anyhow::Result<()> {
                         if p.slow_game() { "  SLOW" } else { "" },
                         r.match_id.as_deref().unwrap_or("")
                     );
+                    if let Some(d) = &p.delay {
+                        println!(
+                            "{:>22}delay {} {} (asked {}{}), ping {:.0} ms (jitter {:.1}, {:.0} at the pick), rollbacks {:.0}% \
+                             {:.2} deep {:.1} ms, late after a rollback {:.0}%, hitches {:.0}%, waits {} ({:.0} ms), \
+                             re-run frame {:.2} ms",
+                            "",
+                            d.delay,
+                            d.delay_profile,
+                            d.delay_asked,
+                            if d.delay_fixed { ", a set number" } else { "" },
+                            d.ping,
+                            d.jitter,
+                            d.rtt_start,
+                            100.0 * d.rollbacks,
+                            d.depth,
+                            d.rollback_ms,
+                            100.0 * d.late_after_rollback,
+                            100.0 * d.hitches,
+                            d.waits,
+                            d.wait_ms,
+                            d.resim_ms
+                        );
+                    }
                 } else if let Some(c) = r.check() {
                     println!(
                         "{when}  check {:<9} {:?} {c:?}  {} {}",

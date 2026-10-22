@@ -1,4 +1,9 @@
-import { INPUT_DELAY_AUTO, INPUT_DELAY_CHOICES } from "@common/input_delay";
+import {
+  INPUT_DELAY_AGGRESSIVE,
+  INPUT_DELAY_CHOICES,
+  INPUT_DELAY_PROFILES,
+  INPUT_DELAY_SMOOTH,
+} from "@common/input_delay";
 import { PING_LIMIT_CHOICES } from "@common/ping_limit";
 import { GAME_NAME } from "@common/product";
 import { IsoValidity } from "@common/types";
@@ -34,6 +39,13 @@ import { SettingItem } from "../setting_item_section";
 import { ChatKeySetting } from "./chat_key_setting";
 import { GameSettingsMessages as Messages } from "./game_settings.messages";
 import { NetplayNetworkSetting } from "./netplay_network_setting";
+
+const inputDelayProfileLabel = (profile: number) =>
+  profile === INPUT_DELAY_AGGRESSIVE
+    ? Messages.inputDelayAggressive()
+    : profile === INPUT_DELAY_SMOOTH
+    ? Messages.inputDelaySmooth()
+    : Messages.inputDelayNormal();
 
 const renderValidityStatus = (isoValidity: IsoValidity) => {
   switch (isoValidity) {
@@ -135,7 +147,14 @@ export const GameSettings = React.memo(() => {
       </SettingItem>
       <SettingItem name={Messages.inputDelay()} description={Messages.inputDelayDescription()}>
         <RadioGroup row={true} value={inputDelay} onChange={(_event, value) => setInputDelay(Number(value))}>
-          <FormControlLabel value={INPUT_DELAY_AUTO} label={Messages.inputDelayAuto()} control={<Radio />} />
+          {INPUT_DELAY_PROFILES.map((profile) => (
+            <FormControlLabel
+              key={profile}
+              value={profile}
+              label={inputDelayProfileLabel(profile)}
+              control={<Radio />}
+            />
+          ))}
           {INPUT_DELAY_CHOICES.map((frames) => (
             <FormControlLabel
               key={frames}

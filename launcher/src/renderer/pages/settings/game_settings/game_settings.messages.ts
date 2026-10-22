@@ -9,8 +9,13 @@ export const GameSettingsMessages = {
   launchMelee: (gameName: string) => "Launch {0}",
   launchDolphin: () => "Launch Dolphin",
   inputDelay: () => "Input Delay",
-  inputDelayDescription: () => "Takes effect right away, even in the middle of a game.",
-  inputDelayAuto: () => "Auto",
+  inputDelayDescription: () =>
+    "More input delay = less rollbacks. Increase this if your games are stuttering / teleporting around. " +
+    "Aggressive and Smooth only apply when every player in the game picks the same one; otherwise everyone plays " +
+    "Normal. A number of frames applies in Direct and rooms only. Takes effect right away, even in the middle of a game.",
+  inputDelayAggressive: () => "Aggressive",
+  inputDelayNormal: () => "Normal",
+  inputDelaySmooth: () => "Smooth",
   inputDelayFrames: (frames: number) => (frames === 1 ? "1 frame" : `${frames} frames`),
   pingLimit: () => "Matchmaking Ping Limit",
   pingLimitMs: (ms: number) => "{0} ms",

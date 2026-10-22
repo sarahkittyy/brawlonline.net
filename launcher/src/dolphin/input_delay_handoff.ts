@@ -2,9 +2,10 @@
  * The Input Delay setting, changed while the game runs (docs/rooms-protocol.md §5).
  *
  * `input-delay.json`, launcher -> game, in Dolphin's online folder (`<User>/Online/`, next to
- * `join-room.json`): `{version, id, inputDelay, createdAt}`, `inputDelay` 0 (automatic) or 1-9
- * frames. The game reads it within half a second, deletes it, keeps the setting (its Dolphin.ini,
- * which the launcher writes too) and plays a running game with it from its next frame: a P+ game
+ * `join-room.json`): `{version, id, inputDelay, createdAt}`, `inputDelay` a profile (0 Normal, -1
+ * Aggressive, -2 Smooth; common/input_delay.ts) or 1-9 frames. The game reads it within half a
+ * second, deletes it, keeps the setting (its Dolphin.ini, which the launcher writes too) and
+ * plays a running game with it from its next frame: a P+ game
  * or an Other Games room alike. `game-status.json` then says `inputDelay: {setting, current,
  * request}` (`current`: the running game's delay, null without one; `request`: this file's `id`).
  *
@@ -12,6 +13,7 @@
  * setting is already in Dolphin.ini; the launcher removes it before each start.
  */
 
+import { INPUT_DELAY_SMOOTH } from "@common/input_delay";
 import { randomUUID } from "crypto";
 import { rename, unlink, writeFile } from "fs/promises";
 import path from "path";
@@ -30,7 +32,7 @@ export async function writeInputDelayRequest(
   inputDelay: number,
   now = new Date(),
 ): Promise<InputDelayRequest> {
-  if (!Number.isInteger(inputDelay) || inputDelay < 0 || inputDelay > 9) {
+  if (!Number.isInteger(inputDelay) || inputDelay < INPUT_DELAY_SMOOTH || inputDelay > 9) {
     throw new Error(`Not an input delay: ${inputDelay}`);
   }
   const req: InputDelayRequest = { version: 1, id: randomUUID(), inputDelay, createdAt: now.toISOString() };

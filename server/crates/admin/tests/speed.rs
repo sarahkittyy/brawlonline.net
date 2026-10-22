@@ -3,7 +3,7 @@
 
 use accounts::store;
 use common::db::{self, SpeedCheckRecord, SpeedReportRecord};
-use common::speed::{GamePerf, SpeedCheck};
+use common::speed::{GameDelay, GamePerf, SpeedCheck};
 
 async fn run(url: &str, args: &[&str]) -> (bool, String) {
     let out = tokio::process::Command::new(env!("CARGO_BIN_EXE_admin"))
@@ -18,7 +18,7 @@ async fn run(url: &str, args: &[&str]) -> (bool, String) {
 }
 
 fn perf(fps: f64, own_late: f64) -> GamePerf {
-    GamePerf { frames: 7000, fps, own_late, followed: 0.0, peer_fps: None, slow: false, peer_slow: false }
+    GamePerf { frames: 7000, fps, own_late, followed: 0.0, peer_fps: None, slow: false, peer_slow: false, delay: None }
 }
 
 async fn game(pool: &sqlx::PgPool, uid: uuid::Uuid, mode: &str, n: u32, perf: GamePerf, minutes_ago: i32) {
@@ -77,7 +77,25 @@ async fn summary_locked_and_show() {
     game(&pool, alice.uid, "ranked", 2, perf(45.0, 0.85), 40).await;
     // Bob: slow, then one at full speed, then slow: no two in a row.
     game(&pool, bob.uid, "ranked", 1, perf(46.0, 0.8), 50).await;
-    game(&pool, bob.uid, "ranked", 2, perf(59.9, 0.01), 40).await;
+    // (with the delay fields of builds from 2026-10-22)
+    let delay = GameDelay {
+        delay: 2,
+        delay_profile: "normal".into(),
+        delay_asked: "aggressive".into(),
+        delay_fixed: false,
+        rtt_start: 117.0,
+        ping: 121.4,
+        jitter: 6.0,
+        rollbacks: 0.41,
+        depth: 1.55,
+        rollback_ms: 6.3,
+        late_after_rollback: 0.08,
+        hitches: 0.07,
+        waits: 1,
+        wait_ms: 20.0,
+        resim_ms: 3.92,
+    };
+    game(&pool, bob.uid, "ranked", 2, GamePerf { delay: Some(Box::new(delay)), ..perf(59.9, 0.01) }, 40).await;
     game(&pool, bob.uid, "ranked", 3, perf(46.0, 0.8), 30).await;
     // Carol: slowed by the other player's PC, never her own; and a slow Unranked game.
     game(&pool, carol.uid, "ranked", 1, GamePerf { followed: 0.9, peer_fps: Some(44.0), ..perf(44.0, 0.02) }, 50).await;
@@ -104,6 +122,13 @@ async fn summary_locked_and_show() {
     assert_eq!(text.matches("SLOW").count(), 2, "{text}");
     assert!(text.contains("[59.9, 45.0, 44.0] Slow"), "{text}");
     assert!(text.contains("3 event(s); 2 slow Ranked game(s) in a row: the rule would lock them"), "{text}");
+
+    let (ok, text) = run(&url, &["speed", "show", "zz-speed-b@example.test"]).await;
+    assert!(ok, "{text}");
+    assert!(text.contains("delay 2 normal (asked aggressive), ping 121 ms (jitter 6.0, 117 at the pick)"), "{text}");
+    assert!(text.contains("rollbacks 41% 1.55 deep 6.3 ms, late after a rollback 8%, hitches 7%"), "{text}");
+    assert!(text.contains("waits 1 (20 ms), re-run frame 3.92 ms"), "{text}");
+    assert_eq!(text.matches(" delay ").count(), 1, "{text}");
 
     // A passing check unlocks her.
     check(&pool, alice.uid, &[59.9, 59.8, 59.9], 10).await;

@@ -230,10 +230,15 @@ pub struct SpeedReportRecord {
 }
 
 pub async fn record_speed_report(pool: &sqlx::PgPool, r: &SpeedReportRecord) -> sqlx::Result<()> {
+    let d = r.perf.delay.as_ref();
     sqlx::query(
         "INSERT INTO speed_reports (uid, match_id, mode, game_uid, set_game, end_method, frames, fps, own_late,
-                                    followed, peer_fps, slow, peer_slow, app_version, platform)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+                                    followed, peer_fps, slow, peer_slow, app_version, platform,
+                                    delay, delay_profile, delay_asked, delay_fixed, rtt_start, ping, jitter,
+                                    rollbacks, depth, rollback_ms, late_after_rollback, hitches, waits, wait_ms,
+                                    resim_ms)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
+                 $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30)
          ON CONFLICT (game_uid, uid) DO NOTHING",
     )
     .bind(r.uid)
@@ -251,6 +256,21 @@ pub async fn record_speed_report(pool: &sqlx::PgPool, r: &SpeedReportRecord) -> 
     .bind(r.perf.peer_slow)
     .bind(&r.app_version)
     .bind(&r.platform)
+    .bind(d.map(|d| d.delay as i16))
+    .bind(d.map(|d| d.delay_profile.as_str()))
+    .bind(d.map(|d| d.delay_asked.as_str()))
+    .bind(d.map(|d| d.delay_fixed))
+    .bind(d.map(|d| d.rtt_start as f32))
+    .bind(d.map(|d| d.ping as f32))
+    .bind(d.map(|d| d.jitter as f32))
+    .bind(d.map(|d| d.rollbacks as f32))
+    .bind(d.map(|d| d.depth as f32))
+    .bind(d.map(|d| d.rollback_ms as f32))
+    .bind(d.map(|d| d.late_after_rollback as f32))
+    .bind(d.map(|d| d.hitches as f32))
+    .bind(d.map(|d| d.waits as i32))
+    .bind(d.map(|d| d.wait_ms as f32))
+    .bind(d.map(|d| d.resim_ms as f32))
     .execute(pool)
     .await?;
     Ok(())

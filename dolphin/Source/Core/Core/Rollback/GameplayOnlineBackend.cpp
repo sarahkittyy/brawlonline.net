@@ -110,13 +110,16 @@ public:
       }
     }
     o.region_set = options.region_set;
-    // The harness's option, else the player's setting (0: automatic).
+    // The harness's option, else the player's setting: a number of frames in Direct and rooms
+    // only (Ranked and Unranked play Normal for it), else a profile (Session::DelayLevel).
     o.delay = options.delay;
+    o.fixed_delay_allowed = match.mode == 2 || match.mode == 3 || room;
     if (const int delay = Config::Get(Config::ONLINE_INPUT_DELAY);
-        !o.delay && delay > 0 && delay <= Session::MAX_INPUT_DELAY)
+        !o.delay && delay > 0 && delay <= Session::MAX_INPUT_DELAY && o.fixed_delay_allowed)
     {
       o.delay = delay;
     }
+    o.delay_level = Session::DelayLevel(Config::Get(Config::ONLINE_INPUT_DELAY));
     o.dedupe_resim_sounds = options.dedupe_resim_sounds;
     // The match's stages: the server's list for this mode (get-ticket-resp `stages`), else P+'s
     // legal list (the session's DefaultStages(), as Slippi falls back to its default list).

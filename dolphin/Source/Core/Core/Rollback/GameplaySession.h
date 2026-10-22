@@ -22,6 +22,7 @@
 
 #pragma once
 
+#include <algorithm>
 #include <array>
 
 #include <functional>
@@ -43,9 +44,14 @@ class CPUThreadGuard;
 
 namespace Gprb::Session
 {
-// Input delay in frames. Each player picks the delay of their own inputs, as on Slippi (in every
-// mode, ranked too): a set value, or automatic, from the round trip to the peer when the game's
-// GekkoNet session starts: 1 frame below 90 ms, 2 below 140 ms, 3 below 190 ms, else 4, in
+// Input delay in frames. Each player's setting is a profile (Aggressive, Normal, Smooth; Normal
+// the default), or a number of frames, which applies to that player's own inputs in Direct and
+// rooms only (Ranked and Unranked play Normal for it). A profile picks the delay from the round
+// trip when the game's GekkoNet session starts (ProfileInputDelay). Every player of a match plays
+// the same profile: Aggressive or Smooth when all of them asked for it, else Normal (AgreedLevel),
+// so nobody gets more delay, or deeper rollbacks on their screen, than Normal because of another
+// player (the user's call, 2026-10-22; docs/gameplay-rollback-status.md, "Delay profiles").
+// Normal (AutoInputDelay): 1 frame below 90 ms, 2 below 140 ms, 3 below 190 ms, else 4, in
 // GekkoNet's ping (what players see in game; GameRoundTrip). Low delay is what players feel, but
 // the rollbacks it costs must fit in the frame: a re-run frame is 3.7-4.2 ms on an i7-10700KF, and
 // at delay 1 and ~95 ms its ~1.7-deep rollbacks took 7-9 ms, past the present hold (bug #27,
@@ -77,6 +83,66 @@ static_assert(AutoInputDelay(-1) == 2 && AutoInputDelay(0) == 1 && AutoInputDela
 static_assert(AutoInputDelay(GameRoundTrip(-1)) == 2 && AutoInputDelay(GameRoundTrip(30)) == 1 &&
               AutoInputDelay(GameRoundTrip(73)) == 1 && AutoInputDelay(GameRoundTrip(74)) == 2 &&
               AutoInputDelay(GameRoundTrip(90)) == 2);
+
+// The input delay setting ([Online] InputDelay, the launcher's; SetInputDelay): a profile, or
+// 1-MAX_INPUT_DELAY frames.
+constexpr int DELAY_NORMAL = 0;
+constexpr int DELAY_AGGRESSIVE = -1;
+constexpr int DELAY_SMOOTH = -2;
+// A profile as a level: -1 Aggressive, 0 Normal, 1 Smooth (a number of frames: Normal).
+constexpr int DelayLevel(int setting)
+{
+  return setting == DELAY_AGGRESSIVE ? -1 : setting == DELAY_SMOOTH ? 1 : 0;
+}
+constexpr const char* DelayLevelName(int level)
+{
+  return level < 0 ? "aggressive" : level > 0 ? "smooth" : "normal";
+}
+
+// The rollback a delay leaves on the other player's screen, measured in prod games (1,126 games of
+// 44 players' bug reports, 2026-10-22; 14 with both players' logs): about (ping in game / 33.4 ms
+// - 0.5 - that player's delay) frames deep on a steady link, half the round trip in frames. How
+// deep a screen can roll back before frames are shown late depends on its PC's cost of a re-run
+// frame (median 3.3 ms, 10% of PCs above 5.8 ms): about 2 frames on a fast PC, 1.3 on the others.
+constexpr double ROUND_TRIP_FRAME_MS = 2 * 1000.0 * 1001.0 / 60000.0;
+// The smallest whole number at least x (std::ceil is not constexpr before C++23).
+constexpr int CeilFrames(double x)
+{
+  const int i = static_cast<int>(x);
+  return x > i ? i + 1 : i;
+}
+// The delay that leaves rollbacks at most `depth` frames deep on a steady link (at least 1).
+constexpr int DelayForDepth(double rtt_ms, double depth)
+{
+  return std::clamp(CeilFrames(rtt_ms / ROUND_TRIP_FRAME_MS - 0.5 - depth), 1, MAX_INPUT_DELAY);
+}
+// A profile's delay from GekkoNet's ping (GameRoundTrip; -1 not measured: the default).
+// Aggressive: rollbacks up to 3 frames deep, the most a ~4 ms re-run frame PC redoes at full speed
+// (frames shown late on about 15% of frames even on a fast one). Normal: AutoInputDelay, and never
+// less than Aggressive (above ~250 ms it follows it rather than stopping at 4). Smooth: a frame
+// more than Normal, but no more than the delay at which a steady link has no rollbacks left.
+constexpr int ProfileInputDelay(int level, double rtt_ms)
+{
+  if (rtt_ms < 0)
+    return DEFAULT_INPUT_DELAY;
+  const int aggressive = DelayForDepth(rtt_ms, 3);
+  const int normal = std::max(AutoInputDelay(rtt_ms), aggressive);
+  if (level < 0)
+    return std::min(aggressive, normal);
+  if (level == 0)
+    return normal;
+  return std::clamp(std::min(normal + 1, DelayForDepth(rtt_ms, 0)), normal, MAX_INPUT_DELAY);
+}
+static_assert(ProfileInputDelay(0, 80) == 1 && ProfileInputDelay(0, 120) == 2 &&
+              ProfileInputDelay(0, 150) == 3 && ProfileInputDelay(0, 200) == 4 &&
+              ProfileInputDelay(0, 250) == 4 && ProfileInputDelay(0, 300) == 6);
+static_assert(ProfileInputDelay(-1, 80) == 1 && ProfileInputDelay(-1, 150) == 1 &&
+              ProfileInputDelay(-1, 151) == 2 && ProfileInputDelay(-1, 184) == 3 &&
+              ProfileInputDelay(-1, 250) == 4 && ProfileInputDelay(-1, 251) == 5);
+static_assert(ProfileInputDelay(1, 30) == 1 && ProfileInputDelay(1, 60) == 2 &&
+              ProfileInputDelay(1, 100) == 3 && ProfileInputDelay(1, 150) == 4 &&
+              ProfileInputDelay(1, 184) == 4 && ProfileInputDelay(1, 300) == 7);
+static_assert(ProfileInputDelay(-1, -1) == 2 && ProfileInputDelay(1, -1) == 2);
 
 // The game frame the rollback starts at. The match's first frames are the countdown, during which
 // the game loads RNG-chosen resources (Pokemon, Assist Trophies) and each fighter's HUD portrait
@@ -149,9 +215,14 @@ struct ConnectOptions
   // The game frame the rollback starts at (DEFAULT_START_FRAME). Every peer must use the same:
   // it is part of the setup hash the first barrier compares.
   u32 start_frame = DEFAULT_START_FRAME;
-  // This player's input delay in frames (0-MAX_INPUT_DELAY). Unset: automatic, per game
-  // (AutoInputDelay).
+  // This player's input delay in frames (0-MAX_INPUT_DELAY): the harness's, or the player's set
+  // number in Direct and rooms. Unset: the profile, per game (ProfileInputDelay, AgreedLevel).
   std::optional<int> delay;
+  // The player's profile: -1 Aggressive, 0 Normal, 1 Smooth (DelayLevel).
+  int delay_level = 0;
+  // Whether a number the player sets applies (Direct and rooms); else it plays Normal (Ranked,
+  // Unranked), mid-game changes (SetInputDelay) included.
+  bool fixed_delay_allowed = true;
   int local_pad = 0;         // local controller port the local player uses, when the game's
                              // lock-in names none (LockIn::local_pad)
   bool sync_task_order = true;
@@ -343,8 +414,9 @@ void SetGameResultCallback(std::function<void(const GameResult&)> callback);
 // every machine, and the game goes straight into it.
 void SetQuitLoses(bool loses);
 // The player's input delay setting changed while Dolphin runs (any thread; the launcher's
-// input-delay.json, Online::Rooms): 0 automatic, 1-MAX_INPUT_DELAY frames. A running game takes
-// it from its next frame, and so does every later game, over an option the session started with.
+// input-delay.json, Online::Rooms): a profile (DELAY_NORMAL, DELAY_AGGRESSIVE, DELAY_SMOOTH) or
+// 1-MAX_INPUT_DELAY frames. A running game takes it from its next frame, and so does every later
+// game, over an option the session started with.
 void SetInputDelay(int setting);
 // This player's input delay in the running game (any thread), -1 when none runs.
 int CurrentInputDelay();

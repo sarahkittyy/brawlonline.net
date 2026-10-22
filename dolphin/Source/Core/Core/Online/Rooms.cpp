@@ -846,20 +846,25 @@ void PollInputDelayRequest()
       !id->is<std::string>() || id->get<std::string>().empty() ||
       id->get<std::string>().size() > 100 || !delay || !delay->is<double>() ||
       delay->get<double>() != static_cast<int>(delay->get<double>()) ||
-      delay->get<double>() < 0 || delay->get<double>() > Gprb::Session::MAX_INPUT_DELAY)
+      delay->get<double>() < Gprb::Session::DELAY_SMOOTH ||
+      delay->get<double>() > Gprb::Session::MAX_INPUT_DELAY)
   {
-    Log("input-delay.json: not version 1 with an id and an inputDelay of 0-9: ignored");
+    Log("input-delay.json: not version 1 with an id and an inputDelay of -2-9: ignored");
     return;
   }
+  // 1-9 frames, else a profile: 0 Normal, -1 Aggressive, -2 Smooth (Gprb::Session::DELAY_*).
   const int setting = static_cast<int>(delay->get<double>());
   s.delay_request = CleanText(id->get<std::string>(), 100);
-  Log(setting == 0 ? fmt::format("launcher: input delay automatic (request {})", s.delay_request) :
-                     fmt::format("launcher: input delay {} (request {})", setting, s.delay_request));
+  Log(setting <= 0 ?
+          fmt::format("launcher: input delay {} (request {})",
+                      Gprb::Session::DelayLevelName(Gprb::Session::DelayLevel(setting)),
+                      s.delay_request) :
+          fmt::format("launcher: input delay {} (request {})", setting, s.delay_request));
   // Outside s_mutex: the config's change callbacks run here.
   lk.unlock();
   Config::SetBaseOrCurrent(Config::ONLINE_INPUT_DELAY, setting);
   Gprb::Session::SetInputDelay(setting);
-  Machine::SetInputDelay(setting == 0 ? Machine::AUTO_DELAY : setting);
+  Machine::SetInputDelay(Machine::DelayFromSetting(setting));
 }
 
 bool BusyScreen(u8 screen)

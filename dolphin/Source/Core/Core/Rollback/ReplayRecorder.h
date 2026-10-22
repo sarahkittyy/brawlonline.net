@@ -133,6 +133,27 @@ struct EndInfo
     double peer_fps = 0;
     bool slow = false;
     bool peer_slow = false;
+    // The input delay at the game's end, the profile the players agreed on and the one this player
+    // asked for ("aggressive", "normal", "smooth"), whether it played a number of frames, and the
+    // round trip in game it was picked from (ms; -1: none). GekkoNet's ping and jitter over the
+    // game (ms; 0: none). The share of frames that rolled back, their average depth and cost (ms),
+    // the share shown late after a rollback, the share of presents that were screen hitches, the
+    // waits for the peer (count, ms) and the cost of a re-run frame (ms) on this PC.
+    int delay = 0;
+    std::string delay_profile;
+    std::string delay_asked;
+    bool delay_fixed = false;
+    double rtt_start = -1;
+    double ping = 0;
+    double jitter = 0;
+    double rollbacks = 0;
+    double depth = 0;
+    double rollback_ms = 0;
+    double late_after_rollback = 0;
+    double hitches = 0;
+    u64 waits = 0;
+    double wait_ms = 0;
+    double resim_ms = 0;
   } perf;
 };
 

@@ -44,9 +44,10 @@ extern const Info<bool> ONLINE_UPNP;
 // after a synchronized reboot, the fallback) or "none" (keep the P2P link; nothing starts).
 extern const Info<std::string> ONLINE_SESSION_BACKEND;
 
-// This player's input delay in online matches (the launcher's setting): 0 picks it per game from
-// the round trip (Gprb::Session::AutoInputDelay), 1-9 sets it. Each player's applies to their own
-// inputs, as Slippi's delay frames do.
+// This player's input delay in online matches (the launcher's setting): a profile, picked per game
+// from the round trip (Gprb::Session::ProfileInputDelay): 0 Normal, -1 Aggressive, -2 Smooth
+// (Gprb::Session::DELAY_*); or 1-9 frames for this player's own inputs, as Slippi's delay frames,
+// in Direct and rooms only (Ranked and Unranked play Normal for it).
 extern const Info<int> ONLINE_INPUT_DELAY;
 
 // The launcher's "Matchmaking Ping Limit" (ms; 100, 150 or 200): Unranked and Ranked tickets send

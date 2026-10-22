@@ -854,6 +854,24 @@ void End(const EndInfo& info)
       perf["peerFps"] = picojson::value(round(info.perf.peer_fps, 100));
     perf["slow"] = picojson::value(info.perf.slow);
     perf["peerSlow"] = picojson::value(info.perf.peer_slow);
+    if (!info.perf.delay_profile.empty())
+    {
+      perf["delay"] = picojson::value(static_cast<double>(info.perf.delay));
+      perf["delayProfile"] = picojson::value(info.perf.delay_profile);
+      perf["delayAsked"] = picojson::value(info.perf.delay_asked);
+      perf["delayFixed"] = picojson::value(info.perf.delay_fixed);
+      perf["rttStart"] = picojson::value(round(info.perf.rtt_start, 10));
+      perf["ping"] = picojson::value(round(info.perf.ping, 10));
+      perf["jitter"] = picojson::value(round(info.perf.jitter, 10));
+      perf["rollbacks"] = picojson::value(round(info.perf.rollbacks, 1000));
+      perf["depth"] = picojson::value(round(info.perf.depth, 100));
+      perf["rollbackMs"] = picojson::value(round(info.perf.rollback_ms, 100));
+      perf["lateAfterRollback"] = picojson::value(round(info.perf.late_after_rollback, 1000));
+      perf["hitches"] = picojson::value(round(info.perf.hitches, 1000));
+      perf["waits"] = picojson::value(static_cast<double>(info.perf.waits));
+      perf["waitMs"] = picojson::value(round(info.perf.wait_ms, 1));
+      perf["resimMs"] = picojson::value(round(info.perf.resim_ms, 100));
+    }
     o["perf"] = picojson::value(std::move(perf));
   }
   const std::string endg = picojson::value(o).serialize();

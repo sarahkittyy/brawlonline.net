@@ -609,6 +609,23 @@ pub struct SpeedEventRow {
     pub backend: Option<String>,
     pub platform: String,
     pub app_version: String,
+    // The game's input delay and what it cost on this screen (`common::speed::GameDelay`; games
+    // of builds before 2026-10-22 have none).
+    pub delay: Option<i16>,
+    pub delay_profile: Option<String>,
+    pub delay_asked: Option<String>,
+    pub delay_fixed: Option<bool>,
+    pub rtt_start: Option<f32>,
+    pub ping: Option<f32>,
+    pub jitter: Option<f32>,
+    pub rollbacks: Option<f32>,
+    pub depth: Option<f32>,
+    pub rollback_ms: Option<f32>,
+    pub late_after_rollback: Option<f32>,
+    pub hitches: Option<f32>,
+    pub waits: Option<i32>,
+    pub wait_ms: Option<f32>,
+    pub resim_ms: Option<f32>,
 }
 
 impl SpeedEventRow {
@@ -622,7 +639,29 @@ impl SpeedEventRow {
             peer_fps: self.peer_fps.map(f64::from),
             slow: false,
             peer_slow: false,
+            delay: self.game_delay(),
         })
+    }
+
+    fn game_delay(&self) -> Option<Box<common::speed::GameDelay>> {
+        let f = |v: Option<f32>| v.unwrap_or(0.0) as f64;
+        Some(Box::new(common::speed::GameDelay {
+            delay: self.delay?.max(0) as u32,
+            delay_profile: self.delay_profile.clone()?,
+            delay_asked: self.delay_asked.clone().unwrap_or_default(),
+            delay_fixed: self.delay_fixed.unwrap_or(false),
+            rtt_start: self.rtt_start.map_or(-1.0, f64::from),
+            ping: f(self.ping),
+            jitter: f(self.jitter),
+            rollbacks: f(self.rollbacks),
+            depth: f(self.depth),
+            rollback_ms: f(self.rollback_ms),
+            late_after_rollback: f(self.late_after_rollback),
+            hitches: f(self.hitches),
+            waits: self.waits.unwrap_or(0).max(0) as u32,
+            wait_ms: f(self.wait_ms),
+            resim_ms: f(self.resim_ms),
+        }))
     }
 
     pub fn check(&self) -> Option<common::speed::Check> {
@@ -646,10 +685,13 @@ impl SpeedEventRow {
 pub async fn speed_events(pool: &PgPool, uid: uuid::Uuid, days: i64) -> anyhow::Result<Vec<SpeedEventRow>> {
     Ok(sqlx::query_as::<_, SpeedEventRow>(
         "SELECT created_at AS at, 'game' AS kind, mode, match_id, frames, fps, own_late, followed, peer_fps,
-                NULL::real[] AS windows, NULL::text AS backend, platform, app_version
+                NULL::real[] AS windows, NULL::text AS backend, platform, app_version,
+                delay, delay_profile, delay_asked, delay_fixed, rtt_start, ping, jitter, rollbacks, depth,
+                rollback_ms, late_after_rollback, hitches, waits, wait_ms, resim_ms
            FROM speed_reports WHERE uid = $1 AND created_at > now() - make_interval(days => $2::int)
          UNION ALL
-         SELECT created_at, 'check', mode, NULL, NULL, NULL, NULL, NULL, NULL, windows, backend, platform, app_version
+         SELECT created_at, 'check', mode, NULL, NULL, NULL, NULL, NULL, NULL, windows, backend, platform, app_version,
+                NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL
            FROM speed_checks WHERE uid = $1 AND created_at > now() - make_interval(days => $2::int)
          ORDER BY at",
     )

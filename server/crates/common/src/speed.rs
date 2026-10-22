@@ -49,6 +49,68 @@ pub struct GamePerf {
     pub slow: bool,
     #[serde(default)]
     pub peer_slow: bool,
+    /// The game's input delay and what it cost on this screen (builds from 2026-10-22; none
+    /// before, or when it does not read as valid).
+    #[serde(flatten)]
+    pub delay: Option<Box<GameDelay>>,
+}
+
+/// `perf`'s input delay fields (GameplaySession's EndReplay): for tuning the delay profiles
+/// (GameplaySession.h, ProfileInputDelay) from every player's games.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GameDelay {
+    /// Frames, at the game's end.
+    pub delay: u32,
+    /// The profile the players agreed on, and the one this player asked for: `aggressive`,
+    /// `normal` or `smooth`.
+    pub delay_profile: String,
+    pub delay_asked: String,
+    /// It played a number of frames (Direct, rooms) instead of a profile.
+    #[serde(default)]
+    pub delay_fixed: bool,
+    /// GekkoNet's ping the delay was picked from (ms; -1: none), and its average and jitter over
+    /// the game (ms; 0: none).
+    pub rtt_start: f64,
+    pub ping: f64,
+    pub jitter: f64,
+    /// The share of frames that rolled back, their average depth (frames) and cost (ms).
+    pub rollbacks: f64,
+    pub depth: f64,
+    pub rollback_ms: f64,
+    /// The share of frames shown late after a rollback, and of presents that were screen hitches.
+    pub late_after_rollback: f64,
+    pub hitches: f64,
+    /// Waits for the peer: how many, and how long in all (ms).
+    pub waits: u32,
+    pub wait_ms: f64,
+    /// A re-run frame's cost on this PC (ms).
+    pub resim_ms: f64,
+}
+
+pub const DELAY_PROFILES: [&str; 3] = ["aggressive", "normal", "smooth"];
+
+impl GameDelay {
+    fn valid(&self) -> bool {
+        let share = |v: f64| v.is_finite() && (0.0..=1.0).contains(&v);
+        let ms = |v: f64| v.is_finite() && (0.0..=100_000.0).contains(&v);
+        self.delay <= 30
+            && DELAY_PROFILES.contains(&self.delay_profile.as_str())
+            && DELAY_PROFILES.contains(&self.delay_asked.as_str())
+            && self.rtt_start.is_finite()
+            && (-1.0..=10_000.0).contains(&self.rtt_start)
+            && ms(self.ping)
+            && ms(self.jitter)
+            && share(self.rollbacks)
+            && self.depth.is_finite()
+            && (0.0..=100.0).contains(&self.depth)
+            && ms(self.rollback_ms)
+            && share(self.late_after_rollback)
+            && share(self.hitches)
+            && self.wait_ms.is_finite()
+            && (0.0..=1e9).contains(&self.wait_ms)
+            && ms(self.resim_ms)
+    }
 }
 
 impl GamePerf {
@@ -73,7 +135,11 @@ impl GamePerf {
 /// valid [`GamePerf`] is none, never an error.
 pub fn lenient_perf<'de, D: Deserializer<'de>>(d: D) -> Result<Option<GamePerf>, D::Error> {
     let v = Option::<serde_json::Value>::deserialize(d)?;
-    Ok(v.and_then(|v| serde_json::from_value::<GamePerf>(v).ok()).filter(GamePerf::valid))
+    Ok(v.and_then(|v| serde_json::from_value::<GamePerf>(v).ok()).filter(GamePerf::valid).map(|mut p| {
+        // Delay fields that do not read as valid are left out; the speed itself still counts.
+        p.delay = p.delay.filter(|d| d.valid());
+        p
+    }))
 }
 
 /// `speed-check` (game → mm, online connection): the waiting room's frame rate.
@@ -174,7 +240,7 @@ mod tests {
     use serde_json::json;
 
     fn perf(frames: u32, fps: f64, own_late: f64) -> GamePerf {
-        GamePerf { frames, fps, own_late, followed: 0.0, peer_fps: None, slow: false, peer_slow: false }
+        GamePerf { frames, fps, own_late, followed: 0.0, peer_fps: None, slow: false, peer_slow: false, delay: None }
     }
 
     #[test]
@@ -238,5 +304,36 @@ mod tests {
         assert_eq!(read(json!({})), None);
         assert_eq!(read(json!({"perf": "fast"})), None);
         assert_eq!(read(json!({"perf": {"frames": 7000, "fps": 59.9, "ownLate": 2.0, "followed": 0.0}})), None);
+    }
+
+    #[test]
+    fn the_delay_fields_are_read_when_valid() {
+        #[derive(Deserialize)]
+        struct M {
+            #[serde(default, deserialize_with = "lenient_perf")]
+            perf: Option<GamePerf>,
+        }
+        let read = |v: serde_json::Value| serde_json::from_value::<M>(v).unwrap().perf.unwrap();
+        let mut perf = json!({"frames": 7000, "fps": 59.9, "ownLate": 0.01, "followed": 0.0, "slow": false,
+            "peerSlow": false, "delay": 2, "delayProfile": "normal", "delayAsked": "aggressive",
+            "delayFixed": false, "rttStart": 117.2, "ping": 121.5, "jitter": 6.1, "rollbacks": 0.41,
+            "depth": 1.55, "rollbackMs": 6.3, "lateAfterRollback": 0.08, "hitches": 0.071, "waits": 0,
+            "waitMs": 0, "resimMs": 3.92});
+        let d = read(json!({ "perf": perf })).delay.unwrap();
+        assert_eq!((d.delay, d.delay_profile.as_str(), d.delay_asked.as_str()), (2, "normal", "aggressive"));
+        assert_eq!((d.depth, d.resim_ms), (1.55, 3.92));
+        // Older builds send none; a broken field leaves them out, and the speed still counts.
+        let old = json!({"perf": {"frames": 7000, "fps": 59.9, "ownLate": 0.01, "followed": 0.0}});
+        assert_eq!(read(old).delay, None);
+        perf["delayProfile"] = json!("fastest");
+        let p = read(json!({ "perf": perf.clone() }));
+        assert_eq!((p.frames, p.delay), (7000, None));
+        perf["delayProfile"] = json!("normal");
+        perf["hitches"] = json!(1.5);
+        assert_eq!(read(json!({ "perf": perf.clone() })).delay, None);
+        perf["hitches"] = json!(0.07);
+        perf["delay"] = json!("two");
+        let p = read(json!({ "perf": perf }));
+        assert_eq!((p.frames, p.delay), (7000, None));
     }
 }

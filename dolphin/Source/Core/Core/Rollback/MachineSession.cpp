@@ -188,7 +188,7 @@ constexpr size_t HISTORY_SIZE = 1 << 14;
 // carries its request: more than GekkoNet's prediction window, so every machine has run that
 // frame with its real input before it can get to the epoch, and all of them stop at the same one.
 constexpr s64 EPOCH_LEAD = MAX_ROLLBACK_FRAMES + 3;
-constexpr int NO_DELAY_REQUEST = -2;  // State::requested_delay
+constexpr int NO_DELAY_REQUEST = -100;  // State::requested_delay
 // How long the players wait at an epoch for the image to reach a joiner and load there.
 constexpr auto EPOCH_TIMEOUT = std::chrono::seconds(120);
 // A joiner gives up after this long without being admitted.
@@ -623,8 +623,8 @@ struct State
   Clock::time_point desync_notice_at{};  // the last desync the players were told of
   float frames_ahead = 0;
   int input_delay = 0;  // this player's, in the current GekkoNet session
-  // The player's setting changed while the session runs (SetInputDelay, any thread): AUTO_DELAY
-  // or 0-9, NO_DELAY_REQUEST for none.
+  // The player's setting changed while the session runs (SetInputDelay, any thread): a profile
+  // (AUTO_DELAY...) or 0-9, NO_DELAY_REQUEST for none.
   std::atomic<int> requested_delay{NO_DELAY_REQUEST};
   std::vector<HistoryEntry> history = std::vector<HistoryEntry>(HISTORY_SIZE);
   // The NAND journal mark of each snapshot in RollbackManager's ring, oldest first: a load drops
@@ -2510,14 +2510,15 @@ void DestroyGekko()
 }
 
 // This player's input delay for the GekkoNet session starting now: the set value, else from the
-// round trip to the furthest player in it, as P+ picks it (Gprb::Session::AutoInputDelay); none
+// round trip to the furthest player in it, by the player's profile as P+ picks it
+// (Gprb::Session::ProfileInputDelay, without P+'s agreement between players); none
 // measured (no other player yet): P+'s default. Each connection's lowest round trip: a join's
 // machine image has just been sent when an epoch starts, and the inputs waiting behind it are still
 // in ENet's mean round trip.
 int PickInputDelay(double* rtt_ms)
 {
   *rtt_ms = -1;
-  if (s.opts.delay != AUTO_DELAY)
+  if (s.opts.delay >= 0)
     return s.opts.delay;
   {
     std::lock_guard lk(s.net_mutex);
@@ -2527,7 +2528,8 @@ int PickInputDelay(double* rtt_ms)
         *rtt_ms = std::max(*rtt_ms, p.min_rtt_ms);
     }
   }
-  return Gprb::Session::AutoInputDelay(Gprb::Session::GameRoundTrip(*rtt_ms));
+  return Gprb::Session::ProfileInputDelay(AutoDelayLevel(s.opts.delay),
+                                          Gprb::Session::GameRoundTrip(*rtt_ms));
 }
 
 // A Wii Remote at rest, no extension (the struct has no assignment).
@@ -2624,10 +2626,10 @@ bool CreateGekko()
     double rtt = -1;
     s.input_delay = PickInputDelay(&rtt);
     gekko_set_local_delay(s.gekko, s.local_handle, static_cast<unsigned char>(s.input_delay));
-    AddLog(s.opts.delay != AUTO_DELAY ?
-               fmt::format("input delay {} (set)", s.input_delay) :
-           rtt < 0 ? fmt::format("input delay {} (auto, no round trip yet)", s.input_delay) :
-                     fmt::format("input delay {} (auto, round trip {:.0f} ms)", s.input_delay, rtt));
+    AddLog(
+        s.opts.delay >= 0 ? fmt::format("input delay {} (set)", s.input_delay) :
+        rtt < 0           ? fmt::format("input delay {} (auto, no round trip yet)", s.input_delay) :
+                  fmt::format("input delay {} (auto, round trip {:.0f} ms)", s.input_delay, rtt));
     gekko_set_disconnect_timeout(s.gekko, DISCONNECT_TIMEOUT_MS);
     static const Input unplugged{};
     gekko_set_disconnected_input(s.gekko, unplugged.data());
@@ -3239,9 +3241,9 @@ void ApplyRequestedDelay()
   const int delay = PickInputDelay(&rtt);
   if (delay == s.input_delay)
     return;
-  AddLog(requested != AUTO_DELAY ?
-             fmt::format("input delay {} -> {} (set)", s.input_delay, delay) :
-         rtt < 0 ? fmt::format("input delay {} -> {} (auto, no round trip yet)", s.input_delay, delay) :
+  AddLog(requested >= 0 ? fmt::format("input delay {} -> {} (set)", s.input_delay, delay) :
+         rtt < 0 ? fmt::format("input delay {} -> {} (auto, no round trip yet)", s.input_delay,
+                               delay) :
                    fmt::format("input delay {} -> {} (auto, round trip {:.0f} ms)", s.input_delay,
                                delay, rtt));
   s.input_delay = delay;
@@ -6221,10 +6223,13 @@ bool Arm(const Options& options, std::string* error)
   // Copies kept in VRAM leave guest RAM alone from the boot on (PresentStats.h).
   Rollback::PresentStats::SetCopiesLeaveGuestRAM(true);
   s.phase = Phase::Armed;
-  AddLog(fmt::format("armed: slot {}, {} peer(s), port {}, delay {}{}", options.local_slot,
-                     options.peers.size(), options.local_port,
-                     options.delay == AUTO_DELAY ? "auto" : std::to_string(options.delay),
-                     options.synctest ? fmt::format(", sync test {}", options.synctest) : ""));
+  AddLog(fmt::format(
+      "armed: slot {}, {} peer(s), port {}, delay {}{}", options.local_slot, options.peers.size(),
+      options.local_port,
+      options.delay < 0 ?
+          fmt::format("auto, {}", Gprb::Session::DelayLevelName(AutoDelayLevel(options.delay))) :
+          std::to_string(options.delay),
+      options.synctest ? fmt::format(", sync test {}", options.synctest) : ""));
   return true;
 }
 
@@ -6500,7 +6505,8 @@ void SetSDSyncChoice(SDSyncChoice choice)
 
 void SetInputDelay(int delay)
 {
-  s.requested_delay = delay == AUTO_DELAY ? AUTO_DELAY : std::clamp(delay, 0, 9);
+  s.requested_delay =
+      delay < 0 ? std::clamp(delay, AUTO_DELAY_SMOOTH, AUTO_DELAY) : std::clamp(delay, 0, 9);
 }
 
 int CurrentInputDelay()
@@ -6604,8 +6610,7 @@ NetPlay::NetSettings MakeNetSettings()
 {
   NetPlay::NetSettings ns{};
   ns.m_RollbackMode = true;
-  ns.rollback_delay =
-      s.opts.delay == AUTO_DELAY ? Gprb::Session::DEFAULT_INPUT_DELAY : s.opts.delay;
+  ns.rollback_delay = s.opts.delay < 0 ? Gprb::Session::DEFAULT_INPUT_DELAY : s.opts.delay;
   // The CPU thread is the player's choice: with the deterministic GPU thread (forced for rollback
   // by the netplay layer) single and dual core compute the same.
   ns.cpu_thread = Config::Get(Config::MAIN_CPU_THREAD);

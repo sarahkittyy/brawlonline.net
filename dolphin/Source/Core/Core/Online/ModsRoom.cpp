@@ -343,7 +343,8 @@ std::optional<Machine::Options> FromEnvironment(std::string* error)
   }
   const std::string controller = o.count("controller") ? Str(o, "controller", 16) : "gc";
   // The input delay: the room's "delay" (the harness), else the player's setting, as on Play
-  // ([Online] InputDelay, the launcher's). 0 is automatic (Machine::AUTO_DELAY).
+  // ([Online] InputDelay, the launcher's): 1-9 frames, else its profile
+  // (Machine::DelayFromSetting).
   const int setting = Config::Get(Config::ONLINE_INPUT_DELAY);
   const double delay = Num(o, "delay", setting > 0 && setting <= 9 ? setting : 0);
   const double port = Num(o, "port", 0), pad = Num(o, "pad", 0);
@@ -366,7 +367,8 @@ std::optional<Machine::Options> FromEnvironment(std::string* error)
   opts.sd_sync = *sd_sync;
   opts.local_slot = 0;  // a joiner's comes with the room
   opts.local_port = static_cast<u16>(port);
-  opts.delay = delay == 0 ? Machine::AUTO_DELAY : static_cast<int>(delay);
+  opts.delay =
+      delay == 0 ? Machine::DelayFromSetting(std::min(setting, 0)) : static_cast<int>(delay);
   opts.local_pad = static_cast<int>(pad);
   // No "pad": the first plugged-in controller of the kind (the launcher's way).
   opts.auto_pad = o.count("pad") == 0;

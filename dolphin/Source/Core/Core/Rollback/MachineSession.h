@@ -58,7 +58,26 @@ class SessionCard;
 }
 
 constexpr int MAX_PLAYERS = 4;
-constexpr int AUTO_DELAY = -1;  // Options::delay
+// Options::delay below 0: picked from the round trip each time a GekkoNet session starts, by a
+// profile of the launcher's (Gprb::Session::ProfileInputDelay). In an Other Games room each
+// player's own profile applies to their own inputs, as a number of frames does.
+constexpr int AUTO_DELAY = -1;  // Normal
+constexpr int AUTO_DELAY_AGGRESSIVE = -2;
+constexpr int AUTO_DELAY_SMOOTH = -3;
+// The profile of an Options::delay below 0: -1 Aggressive, 0 Normal, 1 Smooth.
+constexpr int AutoDelayLevel(int delay)
+{
+  return delay == AUTO_DELAY_AGGRESSIVE ? -1 : delay == AUTO_DELAY_SMOOTH ? 1 : 0;
+}
+// The player's setting ([Online] InputDelay: 1-9 frames, 0 Normal, -1 Aggressive, -2 Smooth,
+// Gprb::Session::DELAY_*) as an Options::delay.
+constexpr int DelayFromSetting(int setting)
+{
+  return setting > 0   ? setting :
+         setting == -1 ? AUTO_DELAY_AGGRESSIVE :
+         setting == -2 ? AUTO_DELAY_SMOOTH :
+                         AUTO_DELAY;
+}
 
 // One player's input for one frame (docs/design/brawl-mods.md §6.2).
 //   0      flags (INPUT_*)
@@ -124,8 +143,9 @@ struct Options
   int local_slot = 0;          // this player's in-game port (0-3)
   std::vector<Peer> peers;     // every other player
   u16 local_port = 0;          // UDP port to bind (0: any)
-  // This player's input delay in frames (0-9), or AUTO_DELAY: picked from the round trip each time
-  // a GekkoNet session starts (the session's start and every epoch), as P+ picks it.
+  // This player's input delay in frames (0-9), or AUTO_DELAY (or another profile's): picked from
+  // the round trip each time a GekkoNet session starts (the session's start and every epoch), as
+  // P+ picks it.
   int delay = 2;
   Boundary boundary = Boundary::Auto;  // "boundary": "auto", "brawl" or "vi"
   // The session's wall clock at boot, in seconds since 1970-01-01 (as Dolphin's custom RTC and
@@ -283,8 +303,8 @@ void SetLocalController(Controller controller);
 // A joiner's player answered the SD card's dialog (any thread).
 void SetSDSyncChoice(SDSyncChoice choice);
 // The player's input delay setting changed (any thread; the launcher's input-delay.json,
-// Online::Rooms): AUTO_DELAY or 0-9 frames, as Options::delay. The running GekkoNet session
-// takes it from the next frame, and so does every later one (each epoch).
+// Online::Rooms): a profile (AUTO_DELAY...) or 0-9 frames, as Options::delay. The running GekkoNet
+// session takes it from the next frame, and so does every later one (each epoch).
 void SetInputDelay(int delay);
 // This player's input delay in the running GekkoNet session (any thread), -1 when none runs.
 int CurrentInputDelay();
