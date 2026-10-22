@@ -9,7 +9,11 @@
 //!   ([`ChatBook::sync_room`] after every change of a room's players).
 //! - **Match** groups (the `matchId` of a Direct, Unranked or Ranked match): the matched players
 //!   that have an online connection with a key ([`ChatBook::start_match`]). A member leaves on
-//!   `chat-leave`, a new ticket, `room-create` or `room-join`, or when its connection drops.
+//!   `chat-leave`, a new ticket, `room-create` or `room-join`, or when its connection drops. One
+//!   whose connection dropped comes back with `chat-rejoin` on its next connection
+//!   ([`ChatBook::rejoin`]); when mm no longer has the group (it restarted, or every member's
+//!   connection dropped), the group is made again once each member it names asked for it with
+//!   the same members.
 //!
 //! Entering a group leaves the previous one; a group nobody is in is forgotten. After every change
 //! each member gets `chat-group` (personalised by `you`), and a connection that left (and is still
@@ -104,6 +108,35 @@ struct Group {
     /// A match group's mode (Direct, Unranked, Ranked); `None` for a room's.
     mode: Option<Mode>,
     members: Vec<Member>,
+    /// A match group's players that may come back with `chat-rejoin`: its members, and those
+    /// whose connection dropped (one that left otherwise is out). Empty for a room's.
+    players: Vec<Uuid>,
+}
+
+/// A `chat-rejoin` for a match group mm doesn't have: kept until every member it names asked for
+/// the same group with the same members (for [`CLAIM_FOR`], or until the connection goes or the
+/// account searches again or goes to a room).
+#[derive(Debug, Clone)]
+struct Claim {
+    group: String,
+    /// The members as the sender's game knew them, its own uid included, in the group's order.
+    members: Vec<Uuid>,
+    who: Candidate,
+    at: Instant,
+}
+
+/// How long a [`Claim`] waits for the other members' (their games reconnect within seconds of
+/// each other after a restart, but each backs off on its own).
+pub const CLAIM_FOR: Duration = Duration::from_secs(90);
+
+/// The mode of a match group id (`mode.<mode>-<time>-<n>`, as the engine makes them) for a
+/// Direct, Unranked or Ranked match; `None` otherwise (a room's game has no match group).
+fn match_mode(group: &str) -> Option<Mode> {
+    let (name, rest) = group.strip_prefix("mode.")?.split_once('-')?;
+    if rest.is_empty() {
+        return None;
+    }
+    [Mode::Direct, Mode::Unranked, Mode::Ranked].into_iter().find(|m| m.name() == name)
 }
 
 pub struct ChatBook {
@@ -120,6 +153,8 @@ pub struct ChatBook {
     left: Vec<(GroupKind, String, Uuid)>,
     /// Shadowbanned accounts (`pp-admin mute`): their `chat-send` is accepted and goes nowhere.
     muted: HashSet<Uuid>,
+    /// Account → its `chat-rejoin` for a match group mm doesn't have.
+    claims: HashMap<Uuid, Claim>,
 }
 
 fn send(out: &mut Vec<Output>, conn: ConnId, m: &impl serde::Serialize) {
@@ -143,6 +178,7 @@ impl ChatBook {
             key_limiter: RateLimiter::new(&cfg.key_windows),
             left: Vec::new(),
             muted: HashSet::new(),
+            claims: HashMap::new(),
         }
     }
 
@@ -194,10 +230,15 @@ impl ChatBook {
             if present {
                 continue;
             }
-            self.detach(w.uid, false, out, &mut dirty);
+            self.detach(w.uid, false, false, out, &mut dirty);
             self.groups
                 .entry(id.to_string())
-                .or_insert_with(|| Group { kind: GroupKind::Room, mode: None, members: Vec::new() })
+                .or_insert_with(|| Group {
+                    kind: GroupKind::Room,
+                    mode: None,
+                    members: Vec::new(),
+                    players: Vec::new(),
+                })
                 .members
                 .push(Member { who: w.clone(), kx: None });
             self.group_of.insert(w.uid, id.to_string());
@@ -235,26 +276,29 @@ impl ChatBook {
         }
         let mut members = Vec::new();
         for p in players.iter().take(MAX_GROUP_MEMBERS) {
-            self.detach(p.uid, false, out, &mut dirty);
+            self.detach(p.uid, false, false, out, &mut dirty);
             members.push(Member { who: p.clone(), kx: None });
             self.group_of.insert(p.uid, id.to_string());
             self.uid_of_conn.insert(p.conn, p.uid);
         }
         tracing::info!(group = %id, members = members.len(), "match chat started");
-        self.groups.insert(id.to_string(), Group { kind: GroupKind::Match, mode: Some(mode), members });
+        let seats = members.iter().map(|m| m.who.uid).collect();
+        self.groups.insert(id.to_string(), Group { kind: GroupKind::Match, mode: Some(mode), members, players: seats });
         dirty.push(id.to_string());
         self.settle(dirty, out);
     }
 
     /// Takes an account out of its group (only if the group is of kind `only`, when given).
-    /// `notify` sends it `chat-group` null. Returns whether it left a group.
+    /// `notify` sends it `chat-group` null. Returns whether it left a group. A waiting
+    /// `chat-rejoin` of the account ends too (it searched again, or went to a room).
     pub fn leave(&mut self, uid: Uuid, only: Option<GroupKind>, notify: bool, out: &mut Vec<Output>) -> bool {
+        self.claims.remove(&uid);
         let Some(id) = self.group_of.get(&uid) else { return false };
         if only.is_some_and(|k| self.groups.get(id).map(|g| g.kind) != Some(k)) {
             return false;
         }
         let mut dirty = Vec::new();
-        self.detach(uid, notify, out, &mut dirty);
+        self.detach(uid, notify, false, out, &mut dirty);
         self.settle(dirty, out);
         true
     }
@@ -285,18 +329,105 @@ impl ChatBook {
     }
 
     /// An online connection went away (closed, dropped or replaced): it leaves its group, nobody
-    /// tells it.
+    /// tells it. A match group keeps its seat: its next connection may `chat-rejoin`.
     pub fn conn_gone(&mut self, conn: ConnId, out: &mut Vec<Output>) {
+        self.claims.retain(|_, c| c.who.conn != conn);
         if let Some(uid) = self.uid_of_conn.get(&conn).copied() {
-            self.leave(uid, None, false, out);
+            let mut dirty = Vec::new();
+            self.detach(uid, false, true, out, &mut dirty);
+            self.settle(dirty, out);
         }
     }
 
+    /// `chat-rejoin` from `who`'s online connection: back into the match group `group` that its
+    /// connection dropped out of, `members` the group's members as its game knew them. mm still
+    /// has the group: `who` goes back in if it is one of its players. mm doesn't (it restarted, or
+    /// every member's connection dropped): the request waits ([`CLAIM_FOR`]) until every one of
+    /// `members` asked for `group` with the same members, then the group is made with them. Already
+    /// in `group`, it only pushes the group again. Refused: `chat-error`.
+    pub fn rejoin(&mut self, now: Instant, who: &Candidate, group: &str, members: &[String], out: &mut Vec<Output>) {
+        if let Err(e) = self.try_rejoin(now, who, group, members, out) {
+            tracing::debug!(conn = who.conn, group, "chat rejoin refused: {e}");
+            chat_error(out, who.conn, chat::CHAT_REJOIN, e);
+        }
+    }
+
+    fn try_rejoin(
+        &mut self,
+        now: Instant,
+        who: &Candidate,
+        group: &str,
+        members: &[String],
+        out: &mut Vec<Output>,
+    ) -> Result<(), &'static str> {
+        let members: Vec<Uuid> =
+            members.iter().map(|m| Uuid::parse_str(m)).collect::<Result<_, _>>().map_err(|_| msg::CHAT_INVALID)?;
+        if !members.contains(&who.uid) {
+            return Err(msg::CHAT_INVALID);
+        }
+        if self.key_limiter.check(&who.uid, now).is_err() {
+            return Err(msg::TOO_MANY_REQUESTS);
+        }
+        if let Some(current) = self.group_of.get(&who.uid) {
+            if current != group {
+                return Err(msg::CHAT_NOT_IN_GROUP);
+            }
+            self.push(group, out);
+            return Ok(());
+        }
+        self.claims.retain(|_, c| now.duration_since(c.at) < CLAIM_FOR);
+        if let Some(g) = self.groups.get_mut(group) {
+            if g.kind != GroupKind::Match || !g.players.contains(&who.uid) || g.members.len() >= MAX_GROUP_MEMBERS {
+                return Err(msg::CHAT_NOT_IN_GROUP);
+            }
+            g.members.push(Member { who: who.clone(), kx: None });
+            self.group_of.insert(who.uid, group.to_string());
+            self.uid_of_conn.insert(who.conn, who.uid);
+            self.claims.remove(&who.uid);
+            tracing::info!(conn = who.conn, group, "rejoined match chat");
+            self.push(group, out);
+            return Ok(());
+        }
+        let mode = match_mode(group).ok_or(msg::CHAT_NOT_IN_GROUP)?;
+        self.claims
+            .insert(who.uid, Claim { group: group.to_string(), members: members.clone(), who: who.clone(), at: now });
+        let mut wanted = members.clone();
+        wanted.sort_unstable();
+        let agreed = |c: &Claim| {
+            let mut theirs = c.members.clone();
+            theirs.sort_unstable();
+            c.group == group && theirs == wanted
+        };
+        if !members.iter().all(|u| self.claims.get(u).is_some_and(agreed)) {
+            tracing::debug!(conn = who.conn, group, "chat rejoin waits for the other members");
+            return Ok(());
+        }
+        let back: Vec<Member> =
+            members.iter().filter_map(|u| self.claims.remove(u)).map(|c| Member { who: c.who, kx: None }).collect();
+        for m in &back {
+            self.group_of.insert(m.who.uid, group.to_string());
+            self.uid_of_conn.insert(m.who.conn, m.who.uid);
+        }
+        tracing::info!(group, members = back.len(), "match chat made again");
+        self.groups.insert(
+            group.to_string(),
+            Group { kind: GroupKind::Match, mode: Some(mode), members: back, players: members },
+        );
+        self.push(group, out);
+        Ok(())
+    }
+
     /// Removes `uid` from its group without telling the others yet (`dirty` collects the groups
-    /// to push).
-    fn detach(&mut self, uid: Uuid, notify: bool, out: &mut Vec<Output>, dirty: &mut Vec<String>) {
+    /// to push). `dropped`: its connection went away, so a match group keeps its seat.
+    fn detach(&mut self, uid: Uuid, notify: bool, dropped: bool, out: &mut Vec<Output>, dirty: &mut Vec<String>) {
+        if !dropped {
+            self.claims.remove(&uid);
+        }
         let Some(id) = self.group_of.remove(&uid) else { return };
         if let Some(g) = self.groups.get_mut(&id) {
+            if !dropped {
+                g.players.retain(|p| *p != uid);
+            }
             if let Some(i) = g.members.iter().position(|m| m.who.uid == uid) {
                 self.left.push((g.kind, id.clone(), uid));
                 let m = g.members.remove(i);
@@ -391,7 +522,13 @@ impl ChatBook {
                 m.kx = Some((kx, sig));
                 self.push(&group, out);
             }
+            // The engine passes these to `rejoin`, which needs the connection's member.
+            ChatRequest::Rejoin { .. } => return Err(msg::CHAT_INVALID),
             ChatRequest::Leave { group } => {
+                // A waiting `chat-rejoin` of the group ends (the game's session ended meanwhile).
+                if self.claims.get(&uid).is_some_and(|c| c.group == group) {
+                    self.claims.remove(&uid);
+                }
                 // Ignored for room groups and for a group the sender is not in.
                 let is_match = self.current(uid, &group).is_ok_and(|g| g.kind == GroupKind::Match);
                 if is_match {
@@ -752,6 +889,117 @@ mod tests {
         // No players that can chat: no group.
         book.start_match("mode.unranked-x-2", Mode::Unranked, &[], &mut vec![]);
         assert_eq!(book.group_count(), 1);
+    }
+
+    /// Player `n` on another connection (its game reconnected).
+    fn again(n: u8, conn: ConnId) -> Candidate {
+        Candidate { conn, ..cand(n) }
+    }
+
+    fn rejoin(book: &mut ChatBook, now: Instant, who: &Candidate, group: &str, members: &[u8]) -> Vec<Output> {
+        let mut out = vec![];
+        let members: Vec<String> = members.iter().map(|n| cand(*n).uid.to_string()).collect();
+        book.rejoin(now, who, group, &members, &mut out);
+        out
+    }
+
+    #[test]
+    fn a_dropped_connection_rejoins_its_match_group() {
+        let mut book = ChatBook::new(ChatConfig::default());
+        let now = Instant::now();
+        let id = "mode.unranked-2026-10-21T14:42:55.233Z-4cd";
+        book.start_match(id, Mode::Unranked, &[cand(1), cand(2)], &mut vec![]);
+        key(&mut book, now, 1, id);
+        key(&mut book, now, 2, id);
+        book.conn_gone(1, &mut vec![]);
+        assert_eq!(book.members(id), [cand(2).uid]);
+
+        // 1's game is back on connection 11: in again, its group key to send again.
+        let out = rejoin(&mut book, now, &again(1, 11), id, &[1, 2]);
+        let g = last_group(&out, 11);
+        assert_eq!((g["group"].as_str(), g["kind"].as_str()), (Some(id), Some("match")));
+        assert_eq!(uids(&g), [2, 1].map(|i| cand(i).uid.to_string()));
+        assert!(g["members"][1]["kx"].is_null() && !g["members"][0]["kx"].is_null());
+        assert_eq!(uids(&last_group(&out, 2)).len(), 2);
+        assert_eq!(book.group_of(cand(1).uid), Some(id));
+        let out = say(&mut book, now, 2, id, &[1]);
+        assert!(errors(&out, 2).contains(&msg::CHAT_NO_KEY.to_string()), "1 has no key in it yet");
+        // Asked again while in it: the group again, nothing else.
+        let out = rejoin(&mut book, now, &again(1, 11), id, &[1, 2]);
+        assert!(errors(&out, 11).is_empty());
+        assert_eq!(uids(&last_group(&out, 11)).len(), 2);
+
+        // Not a player of the match; not naming oneself.
+        let out = rejoin(&mut book, now, &cand(3), id, &[3, 2]);
+        assert_eq!(errors(&out, 3), [msg::CHAT_NOT_IN_GROUP]);
+        let out = rejoin(&mut book, now, &cand(3), id, &[1, 2]);
+        assert_eq!(errors(&out, 3), [msg::CHAT_INVALID]);
+        // One that left on purpose (chat-leave, a ticket, a room) doesn't come back.
+        book.request(now, 2, cand(2).uid, ChatRequest::Leave { group: id.into() }, &mut vec![]);
+        let out = rejoin(&mut book, now, &again(2, 12), id, &[1, 2]);
+        assert_eq!(errors(&out, 12), [msg::CHAT_NOT_IN_GROUP]);
+        assert_eq!(book.members(id), [cand(1).uid]);
+        // In another group (a room's): refused, that group is kept.
+        book.sync_room("room-KFQB-1", &[again(1, 11)], &mut vec![]);
+        let out = rejoin(&mut book, now, &again(1, 11), id, &[1, 2]);
+        assert_eq!(errors(&out, 11), [msg::CHAT_NOT_IN_GROUP]);
+        assert_eq!(book.group_of(cand(1).uid), Some("room-KFQB-1"));
+    }
+
+    #[test]
+    fn match_groups_are_made_again_when_every_member_asks() {
+        // mm restarted: it has no groups.
+        let mut book = ChatBook::new(ChatConfig::default());
+        let now = Instant::now();
+        let id = "mode.ranked-2026-10-21T14:42:55.233Z-4cd";
+        let out = rejoin(&mut book, now, &cand(1), id, &[1, 2]);
+        assert!(out.is_empty(), "waits for 2");
+        // Someone else naming 1 with other members doesn't make it.
+        assert!(rejoin(&mut book, now, &cand(3), id, &[3, 1]).is_empty());
+        assert_eq!(book.group_count(), 0);
+        let out = rejoin(&mut book, now, &cand(2), id, &[2, 1]);
+        for n in [1, 2] {
+            let g = last_group(&out, n);
+            assert_eq!((g["group"].as_str(), g["kind"].as_str()), (Some(id), Some("match")));
+            assert_eq!(uids(&g), [2, 1].map(|i| cand(i).uid.to_string()));
+        }
+        assert!(msgs(&out, 3).is_empty());
+        assert_eq!(book.match_players(Mode::Ranked), 2);
+        assert!(!book.claims.contains_key(&cand(1).uid) && !book.claims.contains_key(&cand(2).uid));
+        // It is a match group like any: a dropped connection rejoins it.
+        book.conn_gone(1, &mut vec![]);
+        let out = rejoin(&mut book, now, &again(1, 11), id, &[2, 1]);
+        assert_eq!(uids(&last_group(&out, 11)).len(), 2);
+
+        // A claim ends with its connection, its chat-leave, a new search or room, or after
+        // CLAIM_FOR.
+        let mut book = ChatBook::new(ChatConfig::default());
+        rejoin(&mut book, now, &cand(1), id, &[1, 2]);
+        book.conn_gone(1, &mut vec![]);
+        rejoin(&mut book, now, &cand(2), id, &[1, 2]);
+        assert_eq!(book.group_count(), 0);
+        let mut book = ChatBook::new(ChatConfig::default());
+        rejoin(&mut book, now, &cand(1), id, &[1, 2]);
+        book.request(now, 1, cand(1).uid, ChatRequest::Leave { group: id.into() }, &mut vec![]);
+        rejoin(&mut book, now, &cand(2), id, &[1, 2]);
+        assert_eq!(book.group_count(), 0);
+        let mut book = ChatBook::new(ChatConfig::default());
+        rejoin(&mut book, now, &cand(1), id, &[1, 2]);
+        book.leave(cand(1).uid, Some(GroupKind::Match), true, &mut vec![]);
+        rejoin(&mut book, now, &cand(2), id, &[1, 2]);
+        assert_eq!(book.group_count(), 0);
+        let mut book = ChatBook::new(ChatConfig::default());
+        rejoin(&mut book, now, &cand(1), id, &[1, 2]);
+        rejoin(&mut book, now + CLAIM_FOR + Duration::from_secs(1), &cand(2), id, &[1, 2]);
+        assert_eq!(book.group_count(), 0);
+
+        // Only a Direct, Unranked or Ranked match's id.
+        let mut book = ChatBook::new(ChatConfig::default());
+        for bad in ["mode.room-GMHP-2026-10-21T14:37:43.060Z-4a0", "room-KFQB-1", "mode.ranked-", "x"] {
+            let out = rejoin(&mut book, now, &cand(1), bad, &[1, 2]);
+            assert_eq!(errors(&out, 1), [msg::CHAT_NOT_IN_GROUP], "{bad}");
+        }
+        assert!(book.claims.is_empty());
     }
 
     #[test]

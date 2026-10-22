@@ -59,6 +59,9 @@ constexpr auto SEND_BURST_WINDOW = std::chrono::seconds(5);
 constexpr size_t SEND_PER_MINUTE = 30;
 constexpr auto KEY_RESEND = std::chrono::seconds(3);
 constexpr auto MATCH_STATE_EVERY = std::chrono::milliseconds(250);
+// How long a match group waits for mm's answer to chat-rejoin before it ends (mm keeps a rejoin
+// 90 s for the other members' after a restart; their games back off on their own).
+constexpr auto REJOIN_WAIT = std::chrono::seconds(100);
 // How often the Rooms thread looks whether the launcher changed chat-hidden.json.
 constexpr auto IGNORE_FILE_EVERY = std::chrono::seconds(1);
 constexpr size_t MAX_PAST_KEYS = 8;
@@ -136,6 +139,13 @@ struct State
   // can still say gg. A failed connect requeues and the next ticket ends the group unseen.
   bool match_connected = false;
   Clock::time_point match_checked{};
+
+  // The connection dropped while in a match group (mm restarted, or the network): the group is
+  // kept, lines included, its other members' keys put aside, and chat-rejoin is sent as soon as
+  // the connection is online again (TakeOutbox). mm answers with the group (the keys are
+  // exchanged again), or chat-error, which ends it, as does REJOIN_WAIT without an answer.
+  bool rejoin_due = false;
+  std::optional<Clock::time_point> rejoin_sent_at;
 
   bool hidden_loaded = false;
   std::set<std::string> hidden;
@@ -365,6 +375,40 @@ void LeaveLocked(const char* why)
   s.pending.clear();
   s.lines.clear();
   s.match_connected = false;
+  s.rejoin_due = false;
+  s.rejoin_sent_at.reset();
+  Touch();
+}
+
+// The connection dropped in a match group: kept for chat-rejoin. Nobody can read what is sent
+// until mm has the group again; each member's key is put aside with its sequence number, so the
+// same key coming back goes on from there.
+void AwaitRejoinLocked()
+{
+  // under s_mutex
+  if (!s.rejoin_due && !s.rejoin_sent_at)
+  {
+    Log(fmt::format("connection lost in {}; rejoining when back online", s.group));
+    AddSystemLine("Lost the connection to the server. Reconnecting...");
+  }
+  s.rejoin_due = true;
+  s.rejoin_sent_at.reset();
+  s.key_sent_at.reset();
+  for (MemberState& m : s.members)
+  {
+    if (m.kx)
+    {
+      std::erase_if(m.past_keys, [&](const auto& e) { return e.first == *m.kx; });
+      m.past_keys.emplace_back(*m.kx, m.last_seq);
+      if (m.past_keys.size() > MAX_PAST_KEYS)
+        m.past_keys.erase(m.past_keys.begin());
+    }
+    m.kx.reset();
+    if (m.pair)
+      CC::Wipe(m.pair->data(), m.pair->size());
+    m.pair.reset();
+    m.last_seq = 0;
+  }
   Touch();
 }
 
@@ -533,6 +577,22 @@ void QueueKeyLocked(Clock::time_point now)
   s.key_sent_at = now;
 }
 
+void QueueRejoinLocked(Clock::time_point now)
+{
+  // under s_mutex
+  picojson::array uids;
+  for (const MemberState& m : s.members)
+    uids.emplace_back(m.uid);
+  picojson::object o;
+  o["type"] = picojson::value("chat-rejoin");
+  o["group"] = picojson::value(s.group);
+  o["members"] = picojson::value(uids);
+  QueueOutbox(o);
+  s.rejoin_due = false;
+  s.rejoin_sent_at = now;
+  Log(fmt::format("asked to rejoin {} ({} members)", s.group, s.members.size()));
+}
+
 // ---- chat-group ----
 
 struct ParsedMember
@@ -644,6 +704,12 @@ void OnGroup(const picojson::object& o, Clock::time_point now)
   }
 
   const bool fresh = s.kind == GroupKind::None || *group != s.group;
+  if (!fresh && s.rejoin_sent_at)
+  {
+    s.rejoin_sent_at.reset();
+    Log(fmt::format("rejoined {}", s.group));
+    AddSystemLine("Reconnected.");
+  }
   if (fresh)
   {
     // The launcher may have changed the ignore list since the last look: the window starts a
@@ -934,8 +1000,16 @@ bool OnServerMessage(const std::string& packet)
   else if (*type == "chat-error")
   {
     const auto error = Str(o, "error", MAX_ERROR_BYTES);
-    if (s.kind != GroupKind::None && error)
+    if (Str(o, "op", 32) == "chat-rejoin")
+    {
+      // mm doesn't have the group for this player any more (it ended meanwhile).
+      if (s.rejoin_sent_at)
+        LeaveLocked("rejoin refused");
+    }
+    else if (s.kind != GroupKind::None && error)
+    {
       AddSystemLine(CleanOr(*error, ChatText::MAX_MESSAGE_CODE_POINTS, "Chat error."));
+    }
   }
   else if (*type == "chat-reported")
   {
@@ -973,11 +1047,17 @@ std::vector<std::string> TakeOutbox()
       Touch();
     }
   }
-  if (const auto now = Clock::now(); now - s.hidden_checked >= IGNORE_FILE_EVERY)
+  const auto now = Clock::now();
+  if (now - s.hidden_checked >= IGNORE_FILE_EVERY)
   {
     s.hidden_checked = now;
     RefreshHiddenLocked(false);
   }
+  // Online again after a drop in a match group: ask for it back.
+  if (s.kind == GroupKind::Match && s.rejoin_due)
+    QueueRejoinLocked(now);
+  else if (s.rejoin_sent_at && now - *s.rejoin_sent_at > REJOIN_WAIT)
+    LeaveLocked("rejoin timed out");
   ProcessPendingLocked();
   std::vector<std::string> out(std::make_move_iterator(s.outbox.begin()),
                                std::make_move_iterator(s.outbox.end()));
@@ -989,7 +1069,10 @@ void OnConnectionLost()
 {
   std::lock_guard lk(s_mutex);
   s.outbox.clear();
-  LeaveLocked("connection lost");
+  if (s.kind == GroupKind::Match)
+    AwaitRejoinLocked();
+  else
+    LeaveLocked("connection lost");
 }
 
 void LeaveMatchGroup()
@@ -1180,6 +1263,7 @@ picojson::object Status()
   o["you"] = picojson::value(s.you);
   o["title"] = picojson::value(s.kind == GroupKind::None ? std::string() : Title());
   o["match_connected"] = picojson::value(s.match_connected);
+  o["rejoining"] = picojson::value(s.rejoin_due || s.rejoin_sent_at.has_value());
   o["seq"] = picojson::value(static_cast<double>(s.seq));
   picojson::array members;
   for (const MemberState& m : s.members)

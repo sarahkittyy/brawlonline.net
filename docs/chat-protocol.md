@@ -23,7 +23,7 @@ mm puts each online connection in **at most one** chat group:
 |---|---|---|---|
 | Room | `room-<CODE>-<n>` (`n` counts rooms since mm started) | The room's players (every occupied slot) whose online connection has a `chatKey` | They leave or are removed from the room, or their connection drops |
 | Brawl Mods room | `mods-<CODE>-<n>` (`n` counts mod rooms since mm started) | The mod room's members, in joining order, whose online connection has a `chatKey`; `kind` is `room` | They leave or are removed from the mod room, or their connection drops |
-| Match | the match's `matchId` (Direct, Unranked, Ranked; never a room's game) | The matched players that have an online connection with a `chatKey` | They send `chat-leave`, a ticket (any mode), `room-create` or `room-join`, or their connection drops |
+| Match | the match's `matchId` (Direct, Unranked, Ranked; never a room's game) | The matched players that have an online connection with a `chatKey` | They send `chat-leave`, a ticket (any mode), `room-create` or `room-join`, or their connection drops (they may come back with `chat-rejoin`) |
 
 Entering a group leaves the previous one. A group with no members is forgotten. Ids are at most 96 characters of `A-Z a-z 0-9 . _ : + -`. A room's game (mode-3 tickets) changes nothing in the chat: the room's group goes on. A ticket ends the account's match group only after its play key checked out, and a new `hello` from the same account (another game) takes the old connection out of its group like a drop.
 
@@ -53,7 +53,21 @@ The sender's X25519 public key for this group, made fresh for the group, and its
 
 ### `chat-leave` (client → server)
 
-`{"type": "chat-leave", "group": "…"}`: leaves a match group (Dolphin sends it when the online session is cleaned up). Ignored for room groups and for a group the sender is not in.
+`{"type": "chat-leave", "group": "…"}`: leaves a match group (Dolphin sends it when the online session is cleaned up). Ignored for room groups and for a group the sender is not in. A `chat-rejoin` of that group still waiting ends too.
+
+### `chat-rejoin` (client → server)
+
+```json
+{"type": "chat-rejoin", "group": "mode.unranked-2026-10-21T14:42:55.233Z-4cd", "members": ["<uid>", "<uid>"]}
+```
+
+Back into a match group after the online connection dropped (2026-10-22, bug report #80: an mm restart during a set left both games online in no group, so the chat was gone for the rest of the set). `members` is the group's members as the sender's game last knew them, in order, its own uid included: 2 to 4 uids, none twice. Dolphin sends it once, as soon as its connection is online again after a drop in a match group. mm:
+
+- The sender is already in `group`: `chat-group` again, nothing else. In another group: refused.
+- mm has `group`: the sender goes back in if it is one of the match's players whose connection dropped (one that left with `chat-leave`, a ticket or a room is not), with `kx` null; every member gets `chat-group`.
+- mm doesn't have it (it restarted, or every member's connection dropped): the request waits, up to 90 s, until every one of `members` sent `chat-rejoin` for `group` with the same members (in any order). Then the group is made with them, in the order of the last request, and each gets `chat-group`. Only ids of the form `mode.direct-…`, `mode.unranked-…` and `mode.ranked-…` are made again. A waiting request ends with its connection, its `chat-leave`, a ticket, `room-create` or `room-join`.
+
+The game keeps the group while it waits (its lines, and each member's last sequence number under the key it had), shows "Lost the connection to the server. Reconnecting..." then "Reconnected.", and sends `chat-key` again with the same group key; nobody can read what is sent until the keys are back (`Send` answers `NoReaders`). The group ends on `chat-error` for `chat-rejoin` or after 100 s without an answer. Room groups end with the connection as before: the room is joined again, and its group with it.
 
 ## 3. Messages
 
@@ -82,18 +96,18 @@ Each message's `text` is the text exactly as it came out of the box (before the 
 
 ### `chat-error` (server → client)
 
-`{"type": "chat-error", "op": "chat-send", "error": "You're sending messages too fast."}`. The connection stays. `op` is the request's type (`chat-key`, `chat-send`, `chat-leave`, `chat-report`), or `invalid` for another `chat-*` type.
+`{"type": "chat-error", "op": "chat-send", "error": "You're sending messages too fast."}`. The connection stays. `op` is the request's type (`chat-key`, `chat-send`, `chat-leave`, `chat-rejoin`, `chat-report`), or `invalid` for another `chat-*` type.
 
 | Situation | `error` |
 |---|---|
 | The connection's `hello` had no valid `chatKey` | `Update the game to chat.` |
-| The request names a group the sender is not in | `You are not in this chat.` |
+| The request names a group the sender is not in; `chat-rejoin` of a group the sender can't come back to, or from a sender in another group | `You are not in this chat.` |
 | A box for the sender or a non-member | `That player isn't in this chat.` |
 | A box for a member without `kx` | `That player can't read chat yet.` |
 | Malformed (types, lengths, hex, uids, group id charset, a report about oneself) | `Invalid chat message.` |
 | `chat-send` over 5 in 5 s or 30 a minute | `You're sending messages too fast.` |
 | `chat-report` over 5 an hour | `Too many reports. Try later.` |
-| `chat-key` / `chat-leave` over 10 in 10 s | `Too many requests. Wait a moment.` |
+| `chat-key` / `chat-leave` / `chat-rejoin` over 10 in 10 s | `Too many requests. Wait a moment.` |
 
 ## 4. Crypto
 

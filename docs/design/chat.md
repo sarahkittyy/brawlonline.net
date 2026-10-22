@@ -44,7 +44,7 @@ Drawing uses `ImGui::TextUnformatted` only (never a printf-style call with peer 
 ## 4. Lifetime
 
 - **Rooms:** one group per room, for as long as the player is in it. Joins and leaves show as grey lines.
-- **Matches:** one group per match, from the moment mm pairs the players. Dolphin shows it once the peer-to-peer session is up (a failed connect requeues and the next ticket ends the group). It ends when either player searches again, joins a room, leaves the online CSS, or quits.
+- **Matches:** one group per match, from the moment mm pairs the players. Dolphin shows it once the peer-to-peer session is up (a failed connect requeues and the next ticket ends the group). It ends when either player searches again, joins a room, leaves the online CSS, or quits. A dropped connection to mm (the network, or mm restarting for an update) does not end it: the game asks for the group back once it is online again (`chat-rejoin`), and mm makes it again from both players' requests when it no longer has it (bug report #80, 2026-10-22).
 - A new group starts with an empty history. Nothing is stored on disk except the ignore list and the identity key.
 
 ## 5. Not in scope

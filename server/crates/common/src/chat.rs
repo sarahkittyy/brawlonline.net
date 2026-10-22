@@ -26,6 +26,7 @@ use x25519_dalek::{PublicKey, StaticSecret};
 pub const CHAT_KEY: &str = "chat-key";
 pub const CHAT_SEND: &str = "chat-send";
 pub const CHAT_LEAVE: &str = "chat-leave";
+pub const CHAT_REJOIN: &str = "chat-rejoin";
 pub const CHAT_REPORT: &str = "chat-report";
 pub const CHAT_GROUP: &str = "chat-group";
 pub const CHAT_MSG: &str = "chat-msg";
@@ -112,13 +113,14 @@ pub fn parse_identity_key(s: &str) -> Option<[u8; 32]> {
 // ---------------------------------------------------------------------------------------------
 // Client → server
 
-/// The `op` a `chat-error` names for a request of type `kind`: the type itself for the four
+/// The `op` a `chat-error` names for a request of type `kind`: the type itself for the five
 /// requests, `invalid` for anything else (never an echo of what the peer sent).
 pub fn op_of(kind: &str) -> &'static str {
     match kind {
         CHAT_KEY => CHAT_KEY,
         CHAT_SEND => CHAT_SEND,
         CHAT_LEAVE => CHAT_LEAVE,
+        CHAT_REJOIN => CHAT_REJOIN,
         CHAT_REPORT => CHAT_REPORT,
         _ => "invalid",
     }
@@ -142,6 +144,10 @@ pub enum ChatRequest {
     Send { group: String, boxes: Vec<(String, Vec<u8>)> },
     /// `chat-leave {group}`.
     Leave { group: String },
+    /// `chat-rejoin {group, members}`: back into the match group `group` after the connection
+    /// dropped (or mm restarted); `members` are its members as the game last knew them (uids, the
+    /// sender's included, 2 to [`MAX_GROUP_MEMBERS`], none twice).
+    Rejoin { group: String, members: Vec<String> },
     /// `chat-report {group, from, reason, messages}`.
     Report { group: String, from: String, reason: String, messages: Vec<ReportedMessage> },
 }
@@ -153,6 +159,7 @@ impl ChatRequest {
             ChatRequest::Key { .. } => CHAT_KEY,
             ChatRequest::Send { .. } => CHAT_SEND,
             ChatRequest::Leave { .. } => CHAT_LEAVE,
+            ChatRequest::Rejoin { .. } => CHAT_REJOIN,
             ChatRequest::Report { .. } => CHAT_REPORT,
         }
     }
@@ -163,6 +170,7 @@ impl ChatRequest {
             ChatRequest::Key { group, .. }
             | ChatRequest::Send { group, .. }
             | ChatRequest::Leave { group }
+            | ChatRequest::Rejoin { group, .. }
             | ChatRequest::Report { group, .. } => group,
         }
     }
@@ -179,6 +187,7 @@ impl ChatRequest {
                 json!({"group": group, "boxes": boxes})
             }
             ChatRequest::Leave { group } => json!({"group": group}),
+            ChatRequest::Rejoin { group, members } => json!({"group": group, "members": members}),
             ChatRequest::Report { group, from, reason, messages } => json!({
                 "group": group,
                 "from": from,
@@ -240,6 +249,24 @@ impl ChatRequest {
                 ChatRequest::Send { group, boxes }
             }
             CHAT_LEAVE => ChatRequest::Leave { group: group()? },
+            CHAT_REJOIN => {
+                let group = group()?;
+                let list =
+                    v.get("members").and_then(|m| m.as_array()).ok_or_else(|| format!("{kind}: `members` missing"))?;
+                if list.len() < 2 || list.len() > MAX_GROUP_MEMBERS {
+                    return Err(format!("{kind}: 2 to {MAX_GROUP_MEMBERS} members"));
+                }
+                let mut members: Vec<String> = Vec::with_capacity(list.len());
+                for m in list {
+                    let uid =
+                        m.as_str().filter(|u| is_uid(u)).ok_or_else(|| format!("{kind}: a member is not a uid"))?;
+                    if members.iter().any(|x| x == uid) {
+                        return Err(format!("{kind}: a member twice"));
+                    }
+                    members.push(uid.to_string());
+                }
+                ChatRequest::Rejoin { group, members }
+            }
             CHAT_REPORT => {
                 let group = group()?;
                 let from = string("from")?;
@@ -846,6 +873,7 @@ mod tests {
                 boxes: vec![(SENDER.into(), vec![3; MIN_BOX_BYTES]), (RECIPIENT.into(), vec![4; MAX_BOX_BYTES])],
             },
             ChatRequest::Leave { group: "mode.ranked-x-1".into() },
+            ChatRequest::Rejoin { group: "mode.ranked-x-1".into(), members: vec![RECIPIENT.into(), SENDER.into()] },
             ChatRequest::Report {
                 group: GROUP.into(),
                 from: SENDER.into(),
@@ -889,6 +917,12 @@ mod tests {
             ),
             (CHAT_LEAVE, json!({})),
             (CHAT_LEAVE, json!({"group": "x".repeat(97)})),
+            (CHAT_REJOIN, json!({"group": GROUP})),
+            (CHAT_REJOIN, json!({"group": GROUP, "members": [SENDER]})),
+            (CHAT_REJOIN, json!({"group": GROUP, "members": [SENDER, SENDER]})),
+            (CHAT_REJOIN, json!({"group": GROUP, "members": [SENDER, "bob"]})),
+            (CHAT_REJOIN, json!({"group": GROUP, "members": [SENDER, 5]})),
+            (CHAT_REJOIN, json!({"group": GROUP, "members": vec![SENDER; 5]})),
             (CHAT_REPORT, json!({"group": GROUP, "from": "bob"})),
             (CHAT_REPORT, json!({"group": GROUP, "from": SENDER, "reason": "x".repeat(201)})),
             (CHAT_REPORT, json!({"group": GROUP, "from": SENDER, "reason": 5})),

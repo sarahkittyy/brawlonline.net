@@ -1128,10 +1128,13 @@ impl Engine {
                 return chat_error(out, conn, op, msg::CHAT_INVALID);
             }
         };
-        if o.chat_key.is_none() {
+        let Some(who) = o.candidate(conn) else {
             return chat_error(out, conn, req.op(), msg::CHAT_UPDATE);
+        };
+        match req {
+            ChatRequest::Rejoin { group, members } => self.chat.rejoin(now, &who, &group, &members, out),
+            req => self.chat.request(now, conn, o.user.uid, req, out),
         }
-        self.chat.request(now, conn, o.user.uid, req, out);
     }
 
     /// `hello`: the same checks as a ticket (version, uid, play key), then the connection stays
@@ -3805,6 +3808,56 @@ mod tests {
         assert_eq!(g["kind"], "room");
         assert_eq!(sent(&out, 1).iter().filter(|m| **m == null_group()).count(), 1);
         assert_eq!(h.e.chat_group_count(), 1);
+    }
+
+    #[test]
+    fn match_chat_comes_back_after_a_reconnect_and_a_restart() {
+        // Bug report #80: mm restarted during an Unranked set and the games came back online in
+        // no group, so the chat was gone for the rest of the set.
+        let mut h = Harness::new(EngineConfig::default());
+        let (a, b) = (user("AA#1", "a"), user("BB#1", "b"));
+        h.chatter(1, &a);
+        h.chatter(2, &b);
+        h.connect(11, 11);
+        h.connect(12, 12);
+        h.ticket(11, &a, "BB#1");
+        h.ticket(12, &b, "AA#1");
+        let match_id = h.e.chat.group_of(a.uid).unwrap().to_string();
+        let rejoin = json!({"type": "chat-rejoin", "group": match_id, "members": uid_list(&[&a, &b])});
+        // a's online connection drops; its game comes back on another.
+        let out = h.input(Input::Disconnected { conn: 1 });
+        assert_eq!(chat_members(&chat_group(&out, 2).unwrap()), uid_list(&[&b]));
+        h.connect(5, 5);
+        h.hello_key(5, &a, json!(hex::encode(id_key(&a))));
+        let out = h.raw(5, rejoin.to_string().as_bytes());
+        assert!(chat_errors(&out, 5).is_empty());
+        for conn in [5, 2] {
+            let g = chat_group(&out, conn).unwrap();
+            assert_eq!((g["group"].as_str(), g["kind"].as_str()), (Some(match_id.as_str()), Some("match")));
+            assert_eq!(chat_members(&g), uid_list(&[&b, &a]));
+        }
+        h.chat_key(5, &match_id);
+        assert_eq!(chat_msgs(&h.chat_send(2, &match_id, &[&a]), 5).len(), 1);
+
+        // mm restarts: both games come back online and ask for the group.
+        let mut h = Harness::new(EngineConfig::default());
+        h.chatter(1, &a);
+        h.chatter(2, &b);
+        let out = h.raw(1, rejoin.to_string().as_bytes());
+        assert!(sent(&out, 1).is_empty(), "waits for b");
+        let b_rejoin = json!({"type": "chat-rejoin", "group": match_id, "members": uid_list(&[&b, &a])});
+        let out = h.raw(2, b_rejoin.to_string().as_bytes());
+        for conn in [1, 2] {
+            assert_eq!(chat_members(&chat_group(&out, conn).unwrap()), uid_list(&[&b, &a]), "b's order");
+        }
+        assert_eq!(h.e.status(Utc::now()).playing, QueueCounts { unranked: 0, ranked: 0 }, "a direct match");
+        // A game that can't chat is told so.
+        let c = user("CC#1", "c");
+        h.add(&c);
+        h.connect(3, 3);
+        h.hello(3, &c, "3.4.0");
+        let out = h.raw(3, rejoin.to_string().as_bytes());
+        assert_eq!(chat_errors(&out, 3), [("chat-rejoin".to_string(), msg::CHAT_UPDATE.to_string())]);
     }
 
     #[test]

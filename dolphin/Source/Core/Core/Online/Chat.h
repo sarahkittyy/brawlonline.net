@@ -47,7 +47,9 @@ bool OnServerMessage(const std::string& packet);
 // tick; it also notices when a match's session has connected (the group is shown from then), and
 // re-reads the ignore list if the launcher changed it (CheckIgnoreFile, at most once a second).
 std::vector<std::string> TakeOutbox();
-// The connection dropped or was closed: the group is gone (mm sends it again after a reconnect).
+// The connection dropped or was closed. A room's group is gone (mm sends it again once the room
+// is joined again); a match's group is kept and asked back with chat-rejoin by the first
+// TakeOutbox once the connection is online again (docs/chat-protocol.md).
 void OnConnectionLost();
 
 // ---- The online session (OnlineClient) ----

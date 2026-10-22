@@ -665,3 +665,95 @@ TEST_F(ChatTest, ReportFitsInOnePacket)
     EXPECT_EQ(static_cast<u64>(msgs.back().get<picojson::object>().at("seq").get<double>()), 8u);
   }
 }
+
+namespace
+{
+constexpr char MATCH[] = "mode.unranked-2026-10-21T14:42:55.233Z-4cd";
+
+// The messages of `type` in what TakeOutbox returns now.
+std::vector<picojson::object> Outbox(const char* type)
+{
+  std::vector<picojson::object> out;
+  for (const std::string& json : Chat::TakeOutbox())
+  {
+    picojson::value v;
+    EXPECT_TRUE(picojson::parse(v, json).empty());
+    if (v.get<picojson::object>().at("type").get<std::string>() == type)
+      out.push_back(v.get<picojson::object>());
+  }
+  return out;
+}
+}  // namespace
+
+// Bug report #80: mm restarted during an Unranked set, and the games came back online in no
+// group, so the chat was gone for the rest of the set.
+TEST_F(ChatTest, AMatchGroupIsRejoinedAfterTheConnectionDrops)
+{
+  Peer bob(BOB, 2);
+  ASSERT_TRUE(Chat::OnServerMessage(Group(
+      {picojson::value(MyMember()), picojson::value(bob.Member(MATCH, "bob"))}, MATCH, "match")));
+  const auto keys = Outbox("chat-key");
+  ASSERT_EQ(keys.size(), 1u);
+  const auto my_kx = CC::FromHexFixed<32>(keys[0].at("kx").get<std::string>());
+  ASSERT_TRUE(my_kx);
+  const std::string first = bob.Box(MATCH, *my_kx, ME, "first");
+  ASSERT_TRUE(Chat::OnServerMessage(Msg(BOB, first, MATCH)));
+
+  // The connection drops: the group and its lines stay, nobody can read what is sent.
+  Chat::OnConnectionLost();
+  EXPECT_EQ(Status()["kind"].get<std::string>(), "match");
+  EXPECT_TRUE(Status()["rejoining"].get<bool>());
+  EXPECT_EQ(Texts(), (std::vector<std::string>{"first",
+                                               "Lost the connection to the server. Reconnecting..."}));
+  EXPECT_EQ(Chat::Send("hi"), Chat::SendResult::NoReaders);
+
+  // Online again: chat-rejoin with the members in the group's order.
+  const auto rejoins = Outbox("chat-rejoin");
+  ASSERT_EQ(rejoins.size(), 1u);
+  EXPECT_EQ(rejoins[0].at("group").get<std::string>(), MATCH);
+  const auto& uids = rejoins[0].at("members").get<picojson::array>();
+  ASSERT_EQ(uids.size(), 2u);
+  EXPECT_EQ(uids[0].get<std::string>(), ME);
+  EXPECT_EQ(uids[1].get<std::string>(), BOB);
+  EXPECT_TRUE(Outbox("chat-rejoin").empty());  // once
+
+  // mm has the group again, without keys: this player's (the same) goes again.
+  picojson::object bob_no_key = bob.Member(MATCH, "bob");
+  bob_no_key["kx"] = picojson::value();
+  bob_no_key["kxSig"] = picojson::value();
+  ASSERT_TRUE(Chat::OnServerMessage(
+      Group({picojson::value(MyMember()), picojson::value(bob_no_key)}, MATCH, "match")));
+  EXPECT_EQ(Texts().back(), "Reconnected.");
+  EXPECT_FALSE(Status()["rejoining"].get<bool>());
+  const auto again = Outbox("chat-key");
+  ASSERT_EQ(again.size(), 1u);
+  EXPECT_EQ(CC::FromHexFixed<32>(again[0].at("kx").get<std::string>()), my_kx);
+
+  // Bob's key is back: what he sent before can't be played again, his next message reads.
+  ASSERT_TRUE(Chat::OnServerMessage(Group(
+      {picojson::value(MyMember()), picojson::value(bob.Member(MATCH, "bob"))}, MATCH, "match")));
+  Chat::OnServerMessage(Msg(BOB, first, MATCH));
+  EXPECT_EQ(Counter("drop_replay"), 1);
+  ASSERT_TRUE(Chat::OnServerMessage(Msg(BOB, bob.Box(MATCH, *my_kx, ME, "second"), MATCH)));
+  EXPECT_EQ(Texts().back(), "second");
+  EXPECT_EQ(Chat::Send("hi"), Chat::SendResult::Sent);
+}
+
+TEST_F(ChatTest, ARefusedRejoinEndsTheGroupAndRoomsEndOnADrop)
+{
+  Peer bob(BOB, 2);
+  ASSERT_TRUE(Chat::OnServerMessage(Group(
+      {picojson::value(MyMember()), picojson::value(bob.Member(MATCH, "bob"))}, MATCH, "match")));
+  Chat::TakeOutbox();
+  Chat::OnConnectionLost();
+  ASSERT_EQ(Outbox("chat-rejoin").size(), 1u);
+  ASSERT_TRUE(Chat::OnServerMessage(
+      R"({"type":"chat-error","op":"chat-rejoin","error":"You are not in this chat."})"));
+  EXPECT_EQ(Status()["kind"].get<std::string>(), "none");
+
+  // A room's group ends with the connection (the room itself is joined again).
+  Join({&bob});
+  Chat::OnConnectionLost();
+  EXPECT_EQ(Status()["kind"].get<std::string>(), "none");
+  EXPECT_TRUE(Outbox("chat-rejoin").empty());
+}
