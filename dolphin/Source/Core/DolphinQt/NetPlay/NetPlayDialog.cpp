@@ -13,7 +13,6 @@
 #include <QGroupBox>
 #include <QHeaderView>
 #include <QLabel>
-#include <QLineEdit>
 #include <QMenu>
 #include <QPushButton>
 #include <QSignalBlocker>
@@ -64,7 +63,6 @@
 #include "UICommon/GameFile.h"
 #include "UICommon/UICommon.h"
 
-#include "VideoCommon/NetPlayChatUI.h"
 #include "VideoCommon/NetPlayGolfUI.h"
 
 bool copyCode;
@@ -107,7 +105,7 @@ NetPlayDialog::NetPlayDialog(const GameListModel& game_list_model,
   m_chunked_progress_dialog = new ChunkedProgressDialog(this);
 
   ResetExternalIP();
-  CreateChatLayout();
+  CreateMessagesLayout();
   CreatePlayersLayout();
   CreateMainLayout();
   LoadSettings();
@@ -265,7 +263,7 @@ void NetPlayDialog::CreateMainLayout()
   m_main_layout->addWidget(m_game_button, 0, 0, 1, -1);
   m_main_layout->addWidget(m_splitter, 1, 0, 1, -1);
 
-  m_splitter->addWidget(m_chat_box);
+  m_splitter->addWidget(m_messages_box);
   m_splitter->addWidget(m_players_box);
 
   auto* options_widget = new QGridLayout;
@@ -288,27 +286,18 @@ void NetPlayDialog::CreateMainLayout()
   setLayout(m_main_layout);
 }
 
-void NetPlayDialog::CreateChatLayout()
+// Brawl Online: no chat here (players chat in the client's own chat), only the session's
+// messages.
+void NetPlayDialog::CreateMessagesLayout()
 {
-  m_chat_box = new QGroupBox(tr("Chat"));
-  m_chat_edit = new QTextBrowser;
-  m_chat_type_edit = new QLineEdit;
-  m_chat_send_button = new QPushButton(tr("Send"));
-
-  // This button will get re-enabled when something gets entered into the chat box
-  m_chat_send_button->setEnabled(false);
-  m_chat_send_button->setDefault(false);
-  m_chat_send_button->setAutoDefault(false);
-
-  m_chat_edit->setReadOnly(true);
+  m_messages_box = new QGroupBox(tr("Messages"));
+  m_messages_edit = new QTextBrowser;
+  m_messages_edit->setReadOnly(true);
 
   auto* layout = new QGridLayout;
+  layout->addWidget(m_messages_edit, 0, 0);
 
-  layout->addWidget(m_chat_edit, 0, 0, 1, -1);
-  layout->addWidget(m_chat_type_edit, 1, 0);
-  layout->addWidget(m_chat_send_button, 1, 1);
-
-  m_chat_box->setLayout(layout);
+  m_messages_box->setLayout(layout);
 }
 
 void NetPlayDialog::CreatePlayersLayout()
@@ -371,12 +360,6 @@ void NetPlayDialog::ConnectWidgets()
     Settings::Instance().GetNetPlayServer()->SetGBAConfig(m_pad_mapping->GetGBAArray(), true);
     Settings::Instance().GetNetPlayServer()->SetWiimoteMapping(m_pad_mapping->GetWiimoteArray());
   });
-
-  // Chat
-  connect(m_chat_send_button, &QPushButton::clicked, this, &NetPlayDialog::OnChat);
-  connect(m_chat_type_edit, &QLineEdit::returnPressed, this, &NetPlayDialog::OnChat);
-  connect(m_chat_type_edit, &QLineEdit::textChanged, this,
-          [this] { m_chat_send_button->setEnabled(!m_chat_type_edit->text().isEmpty()); });
 
   // Other
   connect(m_minimum_buffer_size_box, &QSpinBox::valueChanged, [this](int value) {
@@ -475,35 +458,12 @@ void NetPlayDialog::ConnectWidgets()
   connect(m_spectator_mode, &QCheckBox::toggled, this, &NetPlayDialog::SaveSettings);
 }
 
-void NetPlayDialog::SendMessage(const std::string& msg)
-{
-  Settings::Instance().GetNetPlayClient()->SendChatMessage(msg);
-
-  DisplayMessage(
-      QStringLiteral("%1: %2").arg(QString::fromStdString(m_nickname), QString::fromStdString(msg)),
-      "");
-}
-
 bool NetPlayDialog::IsSpectator()
 {
   if (m_spectator_mode->isChecked())
     return true;
   else
     return false;
-}
-
-void NetPlayDialog::OnChat()
-{
-  QueueOnObject(this, [this] {
-    const auto msg = m_chat_type_edit->text().toStdString();
-
-    if (msg.empty())
-      return;
-
-    m_chat_type_edit->clear();
-
-    SendMessage(msg);
-  });
 }
 
 void NetPlayDialog::IsSpectatorEnabled(bool enabled)
@@ -578,8 +538,7 @@ void NetPlayDialog::show(std::string nickname, bool use_traversal)
   m_old_player_count = 0;
 
   m_room_box->clear();
-  m_chat_edit->clear();
-  m_chat_type_edit->clear();
+  m_messages_edit->clear();
 
   const bool is_hosting = Settings::Instance().GetNetPlayServer() != nullptr;
 
@@ -860,8 +819,8 @@ void NetPlayDialog::Update()
 
 void NetPlayDialog::DisplayMessage(const QString& msg, const std::string& color, int duration)
 {
-  QueueOnObject(m_chat_edit, [this, color, msg] {
-    m_chat_edit->append(QStringLiteral("<font color='%1'>%2</font>")
+  QueueOnObject(m_messages_edit, [this, color, msg] {
+    m_messages_edit->append(QStringLiteral("<font color='%1'>%2</font>")
                             .arg(QString::fromStdString(color), msg.toHtmlEscaped()));
   });
 
@@ -870,9 +829,7 @@ void NetPlayDialog::DisplayMessage(const QString& msg, const std::string& color,
   if (Config::Get(Config::GFX_SHOW_NETPLAY_MESSAGES) &&
       Core::IsRunning(Core::System::GetInstance()))
   {
-    g_netplay_chat_ui->AppendChat(msg.toStdString(),
-                                  {static_cast<float>(c.redF()), static_cast<float>(c.greenF()),
-                                   static_cast<float>(c.blueF())});
+    OSD::AddMessage(msg.toStdString(), duration, c.rgba());
   }
 }
 
@@ -943,9 +900,6 @@ void NetPlayDialog::OnMsgStartGame()
 {
   DisplayMessage(tr("Started game"), "green");
 
-  g_netplay_chat_ui =
-      std::make_unique<NetPlayChatUI>([this](const std::string& message) { SendMessage(message); });
-
   if (m_host_input_authority && Settings::Instance().GetNetPlayClient()->GetNetSettings().golf_mode)
   {
     g_netplay_golf_ui = std::make_unique<NetPlayGolfUI>(Settings::Instance().GetNetPlayClient());
@@ -967,7 +921,6 @@ void NetPlayDialog::OnMsgStartGame()
 
 void NetPlayDialog::OnMsgStopGame()
 {
-  g_netplay_chat_ui.reset();
   g_netplay_golf_ui.reset();
   QueueOnObject(this, [this] { UpdateDiscordPresence(); });
 }

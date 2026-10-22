@@ -117,8 +117,6 @@ add_library(videocommon
   LightingShaderGen.h
   LookUpTables.h
   NativeVertexFormat.h
-  NetPlayChatUI.cpp
-  NetPlayChatUI.h
   OnlineChatUI.cpp
   OnlineChatUI.h
   ReplayOverlayUI.cpp

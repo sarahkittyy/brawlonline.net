@@ -45,8 +45,7 @@ Java_org_dolphinemu_dolphinemu_features_netplay_NetplaySession_nativeSendMessage
                                                                                  jobject obj,
                                                                                  jstring jmessage)
 {
-  if (auto* client = GetClientPointer(env, obj))
-    client->SendChatMessage(GetJString(env, jmessage));
+  // Brawl Online: no chat in Dolphin's netplay.
 }
 
 JNIEXPORT void JNICALL

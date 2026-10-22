@@ -252,12 +252,6 @@ void HotkeyScheduler::Run()
       if (IsHotkey(HK_ACTIVATE_CHAT))
         emit ActivateChat();
 
-      if (IsHotkey(HK_COLLAPSE_CHAT))
-        emit CollapseChat();
-
-      if (IsHotkey(HK_EXPAND_CHAT))
-        emit ExpandChat();
-
       if (IsHotkey(HK_REQUEST_GOLF_CONTROL))
         emit RequestGolfControl();
 

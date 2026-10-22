@@ -523,7 +523,7 @@ void NetPlayClient::OnData(sf::Packet& packet)
     break;
 
   case MessageID::ChatMessage:
-    OnChatMessage(packet);
+    // Brawl Online: no chat in Dolphin's netplay (the client has its own); dropped.
     break;
 
   case MessageID::ChunkedDataStart:
@@ -694,22 +694,6 @@ void NetPlayClient::OnPlayerLeave(sf::Packet& packet)
   }
 
   m_dialog->Update();
-}
-
-void NetPlayClient::OnChatMessage(sf::Packet& packet)
-{
-  PlayerId pid;
-  packet >> pid;
-  std::string msg;
-  packet >> msg;
-
-  // don't need lock to read in this thread
-  const Player& player = m_players[pid];
-
-  INFO_LOG_FMT(NETPLAY, "Player {} ({}) wrote: {}", player.name, player.pid, msg);
-
-  // add to gui
-  m_dialog->AppendChat(fmt::format("{}[{}]: {}", player.name, pid, msg));
 }
 
 void NetPlayClient::OnChunkedDataStart(sf::Packet& packet)
@@ -2973,16 +2957,6 @@ std::vector<const Player*> NetPlayClient::GetPlayers()
 const NetSettings& NetPlayClient::GetNetSettings() const
 {
   return m_net_settings;
-}
-
-// called from ---GUI--- thread
-void NetPlayClient::SendChatMessage(const std::string& msg)
-{
-  sf::Packet packet;
-  packet << MessageID::ChatMessage;
-  packet << msg;
-
-  SendAsync(std::move(packet));
 }
 
 // called from ---CPU--- thread

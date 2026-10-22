@@ -830,19 +830,8 @@ unsigned int NetPlayServer::OnData(sf::Packet& packet, Client& player)
   switch (mid)
   {
   case MessageID::ChatMessage:
-  {
-    std::string msg;
-    packet >> msg;
-
-    // send msg to other clients
-    sf::Packet spac;
-    spac << MessageID::ChatMessage;
-    spac << player.pid;
-    spac << msg;
-
-    SendToClients(spac, player.pid);
-  }
-  break;
+    // Brawl Online: no chat in Dolphin's netplay (the client has its own); not relayed.
+    break;
   case MessageID::PadBufferPlayer:
   {
     u32 buffer;
@@ -1365,17 +1354,6 @@ void NetPlayServer::OnTraversalStateChanged()
 void NetPlayServer::OnTtlDetermined(u8 ttl)
 {
   m_dialog->OnTtlDetermined(ttl);
-}
-
-// called from ---GUI--- thread
-void NetPlayServer::SendChatMessage(const std::string& msg)
-{
-  sf::Packet spac;
-  spac << MessageID::ChatMessage;
-  spac << PlayerId{0};  // server ID always 0
-  spac << msg;
-
-  SendAsyncToClients(std::move(spac));
 }
 
 // called from ---GUI--- thread

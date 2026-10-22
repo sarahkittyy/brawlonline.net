@@ -149,7 +149,6 @@
 
 #include "UICommon/UICommon.h"
 
-#include "VideoCommon/NetPlayChatUI.h"
 #include "VideoCommon/OnlineChatUI.h"
 
 #ifdef HAVE_XRANDR
@@ -696,8 +695,6 @@ void MainWindow::ConnectHotkeys()
   connect(m_hotkey_scheduler, &HotkeyScheduler::UnlockCursor, this, &MainWindow::UnlockCursor);
   connect(m_hotkey_scheduler, &HotkeyScheduler::TogglePauseHotkey, this, &MainWindow::TogglePause);
   connect(m_hotkey_scheduler, &HotkeyScheduler::ActivateChat, this, &MainWindow::OnActivateChat);
-  connect(m_hotkey_scheduler, &HotkeyScheduler::CollapseChat, this, &MainWindow::OnCollapseChat);
-  connect(m_hotkey_scheduler, &HotkeyScheduler::ExpandChat, this, &MainWindow::OnExpandChat);
   connect(m_hotkey_scheduler, &HotkeyScheduler::RequestGolfControl, this,
           &MainWindow::OnRequestGolfControl);
   connect(m_hotkey_scheduler, &HotkeyScheduler::RefreshGameListHotkey, this,
@@ -2223,22 +2220,7 @@ void MainWindow::OnExportRecording()
 
 void MainWindow::OnActivateChat()
 {
-  if (g_netplay_chat_ui)
-    g_netplay_chat_ui->Activate();
-  else
-    VideoCommon::OnlineChatUI::Activate();
-}
-
-void MainWindow::OnCollapseChat()
-{
-  if (g_netplay_chat_ui)
-    g_netplay_chat_ui->Collapse();
-}
-
-void MainWindow::OnExpandChat()
-{
-  if (g_netplay_chat_ui)
-    g_netplay_chat_ui->Expand();
+  VideoCommon::OnlineChatUI::Activate();
 }
 
 void MainWindow::OnRequestGolfControl()

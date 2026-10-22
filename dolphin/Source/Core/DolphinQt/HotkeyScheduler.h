@@ -28,8 +28,6 @@ signals:
   void ExitHotkey();
   void UnlockCursor();
   void ActivateChat();
-  void CollapseChat();
-  void ExpandChat();
   void RequestGolfControl();
   void FullScreenHotkey();
   void StopHotkey();

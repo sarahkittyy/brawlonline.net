@@ -24,7 +24,6 @@
 #include "VideoCommon/AbstractShader.h"
 #include "VideoCommon/AbstractStagingTexture.h"
 #include "VideoCommon/FramebufferShaderGen.h"
-#include "VideoCommon/NetPlayChatUI.h"
 #include "VideoCommon/NetPlayGolfUI.h"
 #include "VideoCommon/OnScreenDisplay.h"
 #include "VideoCommon/OnlineChatUI.h"
@@ -343,10 +342,6 @@ void OnScreenUI::DrawDebugText()
 
   if (g_ActiveConfig.bOverlayStats)
     g_stats.Display();
-
-  if (Config::Get(Config::GFX_SHOW_NETPLAY_MESSAGES) && g_netplay_chat_ui &&
-      !Config::Get(Config::ONLINE_DISABLE_CHAT))
-    g_netplay_chat_ui->Display();
 
   if (Config::Get(Config::NETPLAY_GOLF_MODE_OVERLAY) && g_netplay_golf_ui)
     g_netplay_golf_ui->Display();

@@ -45,7 +45,6 @@ public:
   bool ChangeGame(const SyncIdentifier& sync_identifier, const std::string& netplay_name);
   bool ComputeGameDigest(const SyncIdentifier& sync_identifier);
   bool AbortGameDigest();
-  void SendChatMessage(const std::string& msg);
 
   bool DoAllPlayersHaveIPLDump() const;
   bool DoAllPlayersHaveHardwareFMA() const;

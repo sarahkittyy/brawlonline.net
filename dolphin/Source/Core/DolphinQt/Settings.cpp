@@ -40,7 +40,6 @@
 
 #include "InputCommon/ControllerInterface/ControllerInterface.h"
 
-#include "VideoCommon/NetPlayChatUI.h"
 #include "VideoCommon/NetPlayGolfUI.h"
 
 static std::unique_ptr<QPalette> s_default_palette;
@@ -694,7 +693,6 @@ void Settings::ResetNetPlayClient(NetPlay::NetPlayClient* client)
 {
   m_client.reset(client);
 
-  g_netplay_chat_ui.reset();
   g_netplay_golf_ui.reset();
 }
 

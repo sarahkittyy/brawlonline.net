@@ -167,7 +167,6 @@ public:
   bool StopGame();
   void Stop();
   bool ChangeGame(const std::string& game);
-  void SendChatMessage(const std::string& msg);
   void RequestStopGame();
   void SendPowerButtonEvent();
   void RequestGolfControl(PlayerId pid);
@@ -468,7 +467,6 @@ private:
   void OnData(sf::Packet& packet);
   void OnPlayerJoin(sf::Packet& packet);
   void OnPlayerLeave(sf::Packet& packet);
-  void OnChatMessage(sf::Packet& packet);
   void OnChunkedDataStart(sf::Packet& packet);
   void OnChunkedDataEnd(sf::Packet& packet);
   void OnChunkedDataPayload(sf::Packet& packet);

@@ -26,7 +26,6 @@ class QComboBox;
 class QGridLayout;
 class QGroupBox;
 class QLabel;
-class QLineEdit;
 class QPushButton;
 class QSpinBox;
 class QSplitter;
@@ -109,11 +108,10 @@ signals:
   void Stop();
 
 private:
-  void CreateChatLayout();
+  void CreateMessagesLayout();
   void CreatePlayersLayout();
   void CreateMainLayout();
   void ConnectWidgets();
-  void OnChat();
   void OnStart();
   void DisplayMessage(const QString& msg, const std::string& color,
                       int duration = OSD::Duration::NORMAL);
@@ -123,13 +121,9 @@ private:
   void GameStatusChanged(bool running);
   void SetOptionsEnabled(bool enabled);
 
-  void SendMessage(const std::string& message);
-
-  // Chat
-  QGroupBox* m_chat_box;
-  QTextEdit* m_chat_edit;
-  QLineEdit* m_chat_type_edit;
-  QPushButton* m_chat_send_button;
+  // Messages
+  QGroupBox* m_messages_box;
+  QTextEdit* m_messages_edit;
 
   // Players
   QGroupBox* m_players_box;
