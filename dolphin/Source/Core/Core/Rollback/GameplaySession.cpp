@@ -759,8 +759,9 @@ struct State
     bool catch_up_at_start = false;  // ArmPlayback's `catch_up`
     bool join_catch_up = false;      // ... and the barrier started that catch-up
     bool catch_up = false;
-    // The catch-up a spectator starts with (not Go Live's) runs muted: the sound stream's volume
-    // is 0 meanwhile and comes back from the user's settings after (UpdateSoundStream).
+    // The catch-up a spectator starts with (not Go Live's) runs muted, as does a seek's
+    // fast-forward made during it: the sound stream's volume is 0 meanwhile and comes back from
+    // the user's settings after (UpdateSoundStream).
     bool joining = false;
     bool muted = false;
     s64 catch_frames = 0;
@@ -5776,13 +5777,15 @@ PlaybackStep PlaybackLoopTopControls(Core::System& system)
     const s64 f = first + static_cast<s64>(pb.next);
     if (pb.live)
       LiveLoopTop(f);
-    // Muted while the spectator's first catch-up runs (the user, 2026-10-14).
-    if (!pb.catch_up)
-      pb.joining = false;
+    // Muted while the spectator's first catch-up runs (the user, 2026-10-14), and through the
+    // fast-forward of a seek or jump made during it (a click on the bar stops the catch-up: bug
+    // report #103, the skipped frames' sound effects played in bursts), until normal play.
     const bool ff = f < pb.ff_until;
+    if (!pb.catch_up && !ff)
+      pb.joining = false;
     if (!ff)
       pb.clip_ff = false;
-    PlaybackMute(system, (pb.catch_up && pb.joining) || pb.clip_ff);
+    PlaybackMute(system, pb.joining || pb.clip_ff);
     const bool waiting = !ff && LiveWaiting(f);
     // A highlight's end: paused there (the launcher plays the next one, or it stays).
     if (pb.clip_end >= 0 && !ff && f > pb.clip_end && !pb.paused)
