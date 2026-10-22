@@ -4,6 +4,7 @@ import type {
   BulkDeleteResult,
   FileResult,
   FolderResult,
+  MatchReplay,
   Progress,
   ReplayService,
   SearchGamesOptions,
@@ -66,7 +67,7 @@ class MockReplayClient implements ReplayService {
   }
 
   @delayAndMaybeError(SHOULD_ERROR)
-  async findReplaysForMatches(_matchIds: string[], _folders: string[]): Promise<Record<string, string[]>> {
+  async findReplaysForMatches(_matchIds: string[], _folders: string[]): Promise<Record<string, MatchReplay[]>> {
     return {};
   }
 

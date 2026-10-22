@@ -15,6 +15,10 @@ vi.mock("@/lib/hooks/use_settings", () => {
   return { useSettings };
 });
 
+// The replays button opens Replays (the presenter and the router are the app's).
+vi.mock("@/lib/hooks/use_replays", () => ({ useReplayPresenter: () => ({ loadFolder: async () => undefined }) }));
+vi.mock("react-router-dom", () => ({ useNavigate: () => () => undefined }));
+
 const inTable = (row: React.ReactNode) => (
   <table>
     <tbody>{row}</tbody>
@@ -110,6 +114,47 @@ describe("MatchRow", () => {
     expect(cells[0]).toBe("Direct");
     expect(cells[2]).toBe("annANN#1");
     expect(cells[4]).toBe("bobBOB#2");
+  });
+
+  it("says which games on this computer added no win, so the score adds up with the replays", () => {
+    // Bug report #95: Unranked 0 - 2 beside "Show 3 games"; the second game was quit (not counted).
+    const unranked: MatchHistoryItem = {
+      ...rankedSet,
+      mode: "unranked",
+      ranked: false,
+      players: rankedSet.players.map((p) => ({
+        ...p,
+        wins: p.uid === "me" ? 0 : 2,
+        ratingBefore: null,
+        ratingAfter: null,
+        ratingChange: null,
+      })),
+    };
+    const replays = [
+      { path: "C:/r/G1.brep", ending: "won" as const },
+      { path: "C:/r/G2.brep", ending: "quit" as const },
+      { path: "C:/r/G3.brep", ending: "won" as const },
+    ];
+    const { container } = render(inTable(<MatchRow item={unranked} myUid="me" replays={replays} />));
+    const cells = Array.from(container.querySelectorAll("td")).map((td) => td.textContent);
+    expect(cells[3]).toBe("0 - 21 quit, not counted");
+    expect(cells[5]).toBe("Show 3 games");
+
+    const mixed = [
+      { path: "C:/r/G1.brep", ending: "draw" as const },
+      { path: "C:/r/G2.brep", ending: "desync" as const },
+      { path: "C:/r/G3.brep", ending: "quit" as const },
+      { path: "C:/r/G4.brep", ending: "quit" as const },
+      { path: "C:/r/G5.brep", ending: "unfinished" as const },
+    ];
+    const other = render(inTable(<MatchRow item={unranked} myUid="me" replays={mixed} />));
+    expect(other.container.querySelectorAll("td")[3].textContent).toBe(
+      "0 - 21 draw · 2 quit, not counted · 1 desynced, not counted · 1 unfinished",
+    );
+
+    // Every game won: the score is the whole story.
+    const plain = render(inTable(<MatchRow item={unranked} myUid="me" replays={[replays[0], replays[2]]} />));
+    expect(plain.container.querySelectorAll("td")[3].textContent).toBe("0 - 2");
   });
 
   const roomPlayer = (uid: string, name: string, place: number | null, port: number, team: number | null = null) => ({

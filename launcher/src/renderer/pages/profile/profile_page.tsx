@@ -8,6 +8,7 @@ import ToggleButton from "@mui/material/ToggleButton";
 import ToggleButtonGroup from "@mui/material/ToggleButtonGroup";
 import Tooltip from "@mui/material/Tooltip";
 import Typography from "@mui/material/Typography";
+import type { GameEnding, MatchReplay } from "@replays/types";
 import { useQuery } from "@tanstack/react-query";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
@@ -204,7 +205,7 @@ const replayRootOf = (file: string, roots: string[]): string => {
 };
 
 /** A match's replays: the button opens Replays, refreshed, with them pulsing gold (a set's games are one file each). */
-const ReplaysCell = ({ replays }: { replays: string[] | null }) => {
+const ReplaysCell = ({ replays }: { replays: MatchReplay[] | null }) => {
   if (!replays || replays.length === 0) {
     return (
       <Tooltip title={Messages.noReplaysHint()}>
@@ -212,7 +213,28 @@ const ReplaysCell = ({ replays }: { replays: string[] | null }) => {
       </Tooltip>
     );
   }
-  return <ShowReplaysButton replays={replays} />;
+  return <ShowReplaysButton replays={replays.map((r) => r.path)} />;
+};
+
+/** Under the score: the games on this computer that added no win, so 0 - 2 beside 3 replays adds up. */
+const NoWinGamesNote = ({ replays }: { replays: MatchReplay[] | null }) => {
+  const count = (ending: GameEnding) => replays?.filter((r) => r.ending === ending).length ?? 0;
+  const text = Messages.noWinGames({
+    draw: count("draw"),
+    quit: count("quit"),
+    desync: count("desync"),
+    unfinished: count("unfinished"),
+  });
+  if (!text) {
+    return null;
+  }
+  return (
+    <Tooltip title={Messages.noWinGamesHint()}>
+      <div style={{ fontSize: 12, fontWeight: "normal", whiteSpace: "normal", color: "var(--text-secondary)" }}>
+        {text}
+      </div>
+    </Tooltip>
+  );
 };
 
 const ShowReplaysButton = ({ replays }: { replays: string[] }) => {
@@ -245,7 +267,7 @@ export const MatchRow = React.memo(function MatchRow({
 }: {
   item: MatchHistoryItem;
   myUid: string;
-  replays?: string[] | null;
+  replays?: MatchReplay[] | null;
 }) {
   // A room's team battle: my teammates on my side. A free-for-all: everyone else's place.
   const [mine, others] = matchSides(item, myUid);
@@ -266,6 +288,7 @@ export const MatchRow = React.memo(function MatchRow({
       </TableCell>
       <TableCell align="center" sx={{ fontWeight: "bold", whiteSpace: "nowrap" }}>
         {formatMatchScore(item, myUid)}
+        <NoWinGamesNote replays={replays} />
       </TableCell>
       <TableCell>
         {others.map((p) => (

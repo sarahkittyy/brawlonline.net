@@ -6,6 +6,17 @@ import type { AllHighlightsEvent, GameHighlights, ReplayHighlights } from "./hig
 /** The stats call's error for a replay whose stats are not decoded yet (.brep): the stats page says "Coming soon". */
 export const STATS_NOT_AVAILABLE = "Stats are not available for this replay format yet.";
 
+/**
+ * How a match's game ended, from its replay (the ENDG): with a winner (a Ranked quit's too), a
+ * draw, a quit or runback, a desync, or neither (a disconnect, a crash, a file still recording).
+ * Outside Ranked a quit and a desync do not count, and a draw adds no win: the match history
+ * says so beside a score that has fewer wins than games.
+ */
+export type GameEnding = "won" | "draw" | "quit" | "desync" | "unfinished";
+
+/** A replay of a match's game on this computer (findReplaysForMatches). */
+export type MatchReplay = { path: string; ending: GameEnding };
+
 export type PlayerInfo = {
   playerIndex: number;
   port: number;
@@ -88,7 +99,7 @@ export interface ReplayProvider {
       excludeFilePaths?: string[];
     },
   ): Promise<{ deletedCount: number }>;
-  findReplaysForMatches(matchIds: string[], folders: string[]): Promise<Record<string, string[]>>;
+  findReplaysForMatches(matchIds: string[], folders: string[]): Promise<Record<string, MatchReplay[]>>;
 }
 
 export type SearchGamesOptions = {
@@ -129,10 +140,10 @@ export interface ReplayService {
   bulkDeleteReplays(options: BulkDeleteOptions): Promise<BulkDeleteResult>;
   /**
    * The replays on this computer of each online match (the server's match id: a set's games, a
-   * runback), oldest first, from the replay folders (`folders` and their month folders, indexed
-   * first). A match without any is left out.
+   * runback), oldest first, with how each game ended, from the replay folders (`folders` and their
+   * month folders, indexed first). A match without any is left out.
    */
-  findReplaysForMatches(matchIds: string[], folders: string[]): Promise<Record<string, string[]>>;
+  findReplaysForMatches(matchIds: string[], folders: string[]): Promise<Record<string, MatchReplay[]>>;
   /** A .brep's highlights and L+R+Z clips (found the first time, then cached). */
   getHighlights(filePath: string): Promise<ReplayHighlights>;
   /**

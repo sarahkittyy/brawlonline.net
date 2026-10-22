@@ -8,6 +8,7 @@ import type {
   BulkDeleteResult,
   FileResult,
   FolderResult,
+  MatchReplay,
   Progress,
   SearchGamesOptions,
   SearchGamesResult,
@@ -50,7 +51,7 @@ export const ipc_bulkDeleteReplays = makeEndpoint.main("bulkDeleteReplays", <Bul
 export const ipc_findReplaysForMatches = makeEndpoint.main(
   "findReplaysForMatches",
   <{ matchIds: string[]; folders: string[] }>_,
-  <Record<string, string[]>>_,
+  <Record<string, MatchReplay[]>>_,
 );
 
 export const ipc_getReplayHighlights = makeEndpoint.main(

@@ -5,18 +5,19 @@ import { GameRepository } from "@database/repositories/game_repository";
 import { PlayerRepository } from "@database/repositories/player_repository";
 import type { Database, FileRecord, GameRecord, NewFile, NewGame, NewPlayer, PlayerRecord } from "@database/schema";
 import { boolToInt, boolToIntOrNull } from "@database/utils";
-import type { FileResult, Progress, ReplayProvider } from "@replays/types";
+import type { FileResult, GameEnding, MatchReplay, Progress, ReplayProvider } from "@replays/types";
 import { STATS_NOT_AVAILABLE } from "@replays/types";
 import type { StadiumStatsType, StatsType } from "@slippi/slippi-js/node";
 import { shell } from "electron";
 import log from "electron-log";
 import { pathExists } from "fs-extra";
 import type { Kysely, Transaction } from "kysely";
-import { readdir } from "node:fs/promises";
+import { readdir, stat } from "node:fs/promises";
 import path from "path";
 
 import { extractPlayerNames } from "../extract_player_names";
-import { readReplayFileInfo } from "../replay_format";
+import type { ReplayEnd } from "../replay_format";
+import { readReplayFileInfo, readReplayHeader } from "../replay_format";
 import type { ParsedFileInfo } from "../replay_indexing_pool/replay_indexing.worker.interface";
 import type { ReplayIndexingPoolManager } from "../replay_indexing_pool/replay_indexing_pool_manager";
 import { Continuation } from "./continuation";
@@ -39,6 +40,8 @@ export class DatabaseReplayProvider implements ReplayProvider {
   private currentSearchRequestId = 0;
   /** loadFile calls in progress by path: the stats page's two calls load the same file at once. */
   private readonly loadingFiles = new Map<string, Promise<FileResult>>();
+  /** findReplaysForMatches' game endings by path, while the file keeps its size and time. */
+  private readonly endings = new Map<string, { key: string; ending: GameEnding }>();
 
   constructor(private readonly db: Kysely<Database>, private readonly workerPool?: ReplayIndexingPoolManager) {}
 
@@ -171,7 +174,7 @@ export class DatabaseReplayProvider implements ReplayProvider {
     };
   }
 
-  async findReplaysForMatches(matchIds: string[], folders: string[]): Promise<Record<string, string[]>> {
+  async findReplaysForMatches(matchIds: string[], folders: string[]): Promise<Record<string, MatchReplay[]>> {
     // The replay folders and their month folders (Dolphin's ReplayMonthlyFolders), indexed first:
     // only files the database has can be found by match.
     for (const folder of folders.slice(0, 16)) {
@@ -179,7 +182,7 @@ export class DatabaseReplayProvider implements ReplayProvider {
         await this.syncFolderTree(folder);
       }
     }
-    const found: Record<string, string[]> = {};
+    const found: Record<string, MatchReplay[]> = {};
     for (const matchId of matchIds.slice(0, 200)) {
       if (!matchId) {
         continue;
@@ -191,10 +194,34 @@ export class DatabaseReplayProvider implements ReplayProvider {
         { field: "startTime", direction: "asc" },
       );
       if (records.length > 0) {
-        found[matchId] = records.map((record) => path.resolve(record.folder, record.name));
+        found[matchId] = await Promise.all(
+          records.map(async (record) => {
+            const file = path.resolve(record.folder, record.name);
+            return { path: file, ending: await this.gameEnding(file) };
+          }),
+        );
       }
     }
     return found;
+  }
+
+  /** How a replay's game ended (its ENDG), read again only when the file changed. */
+  private async gameEnding(file: string): Promise<GameEnding> {
+    let key = "";
+    try {
+      const info = await stat(file);
+      key = `${info.size}:${info.mtimeMs}`;
+      const known = this.endings.get(file);
+      if (known && known.key === key) {
+        return known.ending;
+      }
+      const ending = gameEndingOf((await readReplayHeader(file)).end);
+      this.endings.set(file, { key, ending });
+      return ending;
+    } catch {
+      // Gone or not readable as a replay: no result to show.
+      return "unfinished";
+    }
   }
 
   async getAllFilePaths(
@@ -827,4 +854,27 @@ function generateNewPlayers(gameId: number, parsedInfo: ParsedFileInfo): NewPlay
     };
     return newPlayer;
   });
+}
+
+/** A replay's ENDG as the match history counts it (GameEnding). */
+export function gameEndingOf(end: ReplayEnd | null): GameEnding {
+  if (!end) {
+    return "unfinished";
+  }
+  if (end.winnerPort != null) {
+    return "won";
+  }
+  if (end.draw) {
+    return "draw";
+  }
+  switch (end.endMethod) {
+    case "quit":
+    case "quit-left":
+    case "runback":
+      return "quit";
+    case "desync":
+      return "desync";
+    default:
+      return "unfinished";
+  }
 }
