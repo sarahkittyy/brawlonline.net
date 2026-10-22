@@ -5,14 +5,62 @@
   min-height: 0;
 }
 
-.top {
+.outer > * {
+  min-height: 0;
+}
+
+/* As Replays' folders: darker than the page, and the open one is the page's own background, joined to the list. */
+.sidebar {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.sideItem {
   display: flex;
   align-items: center;
-  padding: 8px 12px 0;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 14px;
+  border: none;
+  background: rgb(0 0 0 / 30%);
+  color: rgb(255 255 255 / 50%);
+  font: inherit;
+  font-size: 14px;
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.sideItem:hover {
+  color: var(--off-white);
+}
+
+.sideItem:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: -2px;
+}
+
+.sideSelected {
+  background: transparent;
+  color: var(--off-white);
+  font-weight: bold;
+}
+
+.sideLabel {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sideRest {
+  flex: 1;
+  background: rgb(0 0 0 / 30%);
 }
 
 .content {
   flex: 1;
+  min-width: 0;
   overflow-y: auto;
 }
 

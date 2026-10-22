@@ -190,7 +190,7 @@ button is a star, "Show highlights" (its stats page, which lists that game's hig
 stats page's header no longer shows the platform ("Brawlonline" on every one of ours).
 
 The Highlights tab (`all_highlights_page.tsx`) lists every replay's highlights, then the L+R+Z
-clips, each row with its game's date; no game header, a back arrow (to the Replays tab). Sorted
+clips, each row with its game's date; no game header. Sorted
 Best first (the private score, across games) or Newest first; clips newest first. Play, ↑/↓, Play
 all, Render as Video and combo movies work as on a stats page (`HighlightRows`, shared); a combo of
 several games is named after when it was made: `2026-10-21 0845 Combo movie (2 highlights)`.
@@ -202,6 +202,15 @@ once, the others afterwards one replay at a time in the highlights worker with 5
 done (the tab: "Finding highlights in your replays... 12 of 120"). Opening the tab again starts
 over: a fill still running stops at its next replay. Measured here: 54 replays none of which were
 cached, all found in 5.4 s.
+
+**Favorites** (the user, 2026-10-22). Every row (here and on a stats page) ends with a star, hollow
+until clicked, then filled: a favorite. They are kept in the settings (`favoriteHighlights`), each
+as `<replay path>|<highlight or clip>|<start frame>` (`favorites.ts`), so a moved or renamed replay
+loses its stars, as does a highlight whose start a new detector version moves. The back arrow went
+(the page starts right below the tabs); on the left a sidebar as Replays' folders, the same darker
+background, the open entry the page's own so it joins the list: **All highlights** (open on
+arriving) and **Favorites**, the same list of the starred rows only. A row unstarred in Favorites
+stays (hollow) until Favorites is opened again, so the rows under it don't move while playing.
 
 ## 7. Settings > Clips > Video Resolution, and a playback that never starts (2026-10-21)
 

@@ -50,6 +50,7 @@ export const defaultAppSettings: AppSettings = {
     disableHighlightDetection: false,
     clipsFolder: null,
     clipResolution: 720,
+    favoriteHighlights: [],
     autoUpdateLauncher: true,
     hardwareAcceleration: true,
     netplayDolphinPath: null,

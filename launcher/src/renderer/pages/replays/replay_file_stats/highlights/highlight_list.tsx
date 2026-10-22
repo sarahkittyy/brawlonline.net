@@ -5,7 +5,8 @@
  * shows with its progress. With "Render as Video" ticked, rows can be ticked and rendered to video
  * (docs/design/highlights.md §4): Render (w/ Music) or Render (No Music), a file each, or one combo
  * movie of them all. `HighlightList` is a replay's (its stats page); `HighlightRows` lists rows of
- * any replays (the Replays > Highlights tab's, all of them).
+ * any replays (the Replays > Highlights tab's, all of them). The star at a row's end makes it a
+ * favorite (favorites.ts).
  */
 import type { ReplayPlaybackStatus } from "@dolphin/types";
 import { DolphinEventType, DolphinLaunchType } from "@dolphin/types";
@@ -15,6 +16,8 @@ import MovieIcon from "@mui/icons-material/Movie";
 import MusicOffIcon from "@mui/icons-material/MusicOff";
 import PlayArrowIcon from "@mui/icons-material/PlayArrow";
 import PlaylistPlayIcon from "@mui/icons-material/PlaylistPlay";
+import StarIcon from "@mui/icons-material/Star";
+import StarBorderIcon from "@mui/icons-material/StarBorder";
 import Button from "@mui/material/Button";
 import Checkbox from "@mui/material/Checkbox";
 import FormControlLabel from "@mui/material/FormControlLabel";
@@ -32,6 +35,7 @@ import { monthDayHourFormat } from "@/lib/time";
 import { getCharacterIcon } from "@/lib/utils";
 import { useServices } from "@/services";
 
+import { favoriteKey, useFavoriteHighlights } from "./favorites";
 import { HighlightListMessages as Messages } from "./highlight_list.messages";
 import styles from "./highlight_list.module.css";
 import { RenderJobs, useRenderJobs } from "./render_jobs";
@@ -134,6 +138,7 @@ export const HighlightRows = ({
 }: HighlightRowsProps) => {
   const { dolphinService } = useServices();
   const { playHighlights, renderHighlights } = useDolphinActions(dolphinService);
+  const { favorites, toggle: toggleFavorite } = useFavoriteHighlights();
 
   const [selected, setSelected] = useState<number | null>(null);
   const [request, setRequest] = useState<Request | null>(null);
@@ -381,6 +386,7 @@ export const HighlightRows = ({
           {entries.map((entry, i) => {
             const { row, game } = entry;
             const players = new Map(game.players.map((p) => [p.port, p]));
+            const favorite = favorites.has(favoriteKey(entry));
             return (
               <React.Fragment key={entry.key}>
                 {i === highlightCount && <h3 className={styles.section}>{Messages.clips()}</h3>}
@@ -394,28 +400,40 @@ export const HighlightRows = ({
                       inputProps={{ "aria-label": Messages.tickRow() }}
                     />
                   )}
-                  <button
-                    type="button"
-                    data-row={i}
-                    className={`${styles.row} ${i === playing ? styles.playing : ""}`}
-                    onClick={() => void play(i)}
-                  >
-                    <span className={styles.playIcon}>
-                      <PlayArrowIcon fontSize="small" />
-                    </span>
-                    {row.kind === "highlight" ? (
-                      <HighlightWho row={row} data={game} players={players} />
-                    ) : (
-                      <span className={styles.who}>
-                        <ContentCutIcon fontSize="small" className={styles.clipIcon} />
-                        <span className={styles.vs}>{Messages.clippedBy()}</span>
-                        <PlayerChip player={players.get(row.port)} isTeams={game.isTeams} />
+                  <div className={styles.rowBox}>
+                    <button
+                      type="button"
+                      data-row={i}
+                      className={`${styles.row} ${i === playing ? styles.playing : ""}`}
+                      onClick={() => void play(i)}
+                    >
+                      <span className={styles.playIcon}>
+                        <PlayArrowIcon fontSize="small" />
                       </span>
-                    )}
-                    {showDates && entry.date && (
-                      <span className={styles.date}>{monthDayHourFormat(new Date(entry.date))}</span>
-                    )}
-                  </button>
+                      {row.kind === "highlight" ? (
+                        <HighlightWho row={row} data={game} players={players} />
+                      ) : (
+                        <span className={styles.who}>
+                          <ContentCutIcon fontSize="small" className={styles.clipIcon} />
+                          <span className={styles.vs}>{Messages.clippedBy()}</span>
+                          <PlayerChip player={players.get(row.port)} isTeams={game.isTeams} />
+                        </span>
+                      )}
+                      {showDates && entry.date && (
+                        <span className={styles.date}>{monthDayHourFormat(new Date(entry.date))}</span>
+                      )}
+                    </button>
+                    {/* (Over the row, not in it: a button can't hold another.) */}
+                    <IconButton
+                      size="small"
+                      className={`${styles.star} ${favorite ? styles.starred : ""}`}
+                      onClick={() => toggleFavorite(entry)}
+                      aria-label={favorite ? Messages.unfavorite() : Messages.favorite()}
+                      aria-pressed={favorite}
+                    >
+                      {favorite ? <StarIcon fontSize="small" /> : <StarBorderIcon fontSize="small" />}
+                    </IconButton>
+                  </div>
                 </div>
               </React.Fragment>
             );
