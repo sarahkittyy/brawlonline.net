@@ -41,6 +41,20 @@ false) hung the build before the fix (6914e018) on the 2nd switch, its hang watc
 bug #62; with the fix it passed 12 checks, as did --solo-at menus --solo-gpu fake-completion and
 the session mode.
 
+Bug reports #86 (BUDS#979, 0.1.90, Stop hotkey in a REX room) and #92 (0.1.91, game window closed
+in an NSMB Wii room), D3D11 exclusive fullscreen: the UI thread stopped the core (CPUManager::Stop,
+an untimed wait for the CPU thread), the CPU thread waited in FifoManager::SyncGPU for the video
+thread, and the video thread in DXGI's SetFullscreenState for the UI thread (5685c5ae moved the
+fullscreen change there). RequestStop asks to leave fullscreen itself, right before Core::Stop.
+--stop (with --solo) does the player's Stop with the render window in front and checks that the
+stop ends and the main window answers; --solo-machine runs the host in a whole-machine session
+(an Other Games room), --machine-joiner adds a windowed second player over a --machine-rtt link.
+2026-10-21, the build before b93c9c66 (run/bin/stopfs-before, Dolphin.exe of 18:25): PASS at the
+menus, in a lone machine session and with a joiner (stop done in 0.25 s). The hang needs the UI
+thread busy for more than a frame between RequestStop's fullscreen change and the stop (the
+player's room leave took ~150 ms; here 16 ms), so these runs do not reproduce it: they check that
+a Stop in exclusive fullscreen still ends.
+
 Run it from a shell on the interactive desktop: a process in a service window station (as
 Claude Code's tool shells are) gets no visible windows and Dolphin.exe never boots. A scheduled
 task with /IT runs on the desktop of the signed-in user (schtasks /Create /TN ... /TR <a .cmd>
@@ -56,6 +70,7 @@ import ctypes
 import ctypes.wintypes as wt
 import json
 import re
+import socket
 import sys
 import threading
 import time
@@ -66,10 +81,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import gameplay_rollback as G  # noqa: E402
 import gprb_session as S  # noqa: E402
+from machine_pace import free_port  # noqa: E402
 from ppharness import brawl as B  # noqa: E402
 from ppharness import paths  # noqa: E402
 from ppharness.instance import DolphinInstance  # noqa: E402
 from ppharness.inifile import IniFile  # noqa: E402
+from ppharness.netsim import LinkProfile, NetProfile, NetSim  # noqa: E402
 
 user32 = ctypes.windll.user32
 WM_NULL = 0
@@ -190,13 +207,53 @@ def focus_cycles(host: DolphinInstance, args: argparse.Namespace, rep: Dict[str,
                 return
 
 
+def stop_check(host: DolphinInstance, args: argparse.Namespace, rep: Dict[str, Any]) -> None:
+    """--stop: with the render window in front, the player's Stop and then how the stop ends. The
+    harness's stop_game (Host_Message WMUserStop) reaches MainWindow::RequestStop on the UI thread
+    as the Stop hotkey does (an injected Escape does not reach the hotkeys). RequestStop leaves
+    fullscreen itself (MainWindow::FullScreen) before Core::Stop, so the video thread's
+    SetFullscreenState runs while the UI thread waits for the CPU thread. stop_game returns at once;
+    no other harness requests to the host from here on."""
+    time.sleep(args.settle_s)
+    wins = windows_of(host.process.pid)
+    rep["windows"] = [{"title": w["title"], "rect": w["rect"]} for w in wins]
+    if len(wins) < 2:
+        rep["focus_error"] = f"expected the render and the main window, got {rep['windows']}"
+        return
+    wins.sort(key=lambda w: (w["rect"][2] - w["rect"][0]) * (w["rect"][3] - w["rect"][1]), reverse=True)
+    render, main = wins[0]["hwnd"], wins[1]["hwnd"]
+    st: Dict[str, Any] = {"switched": to_foreground(render)}
+    rep["stop"] = st
+    time.sleep(args.hold_s)
+    st["render_responds_before"] = responds(render, args.hang_s)
+    host.client.stop_game()
+    t0 = time.monotonic()
+    # The stall tracer ends a stop that has not finished in 10 s (exit code 70).
+    while time.monotonic() - t0 < 30:
+        log = host.log_path.read_text(errors="replace") if host.log_path.exists() else ""
+        if "Wii FS Cleanup" in log or host.process.poll() is not None:
+            break
+        time.sleep(0.25)
+    st["stop_s"] = round(time.monotonic() - t0, 2)
+    st["asked"] = "Stopping the game: the emulation" in log
+    # The last of a clean stop's lines (Core's EmuThread, after the CPU and video threads ended).
+    st["shutdown_complete"] = "Wii FS Cleanup" in log
+    st["exit_code"] = host.process.poll()
+    st["main_responds_after"] = st["exit_code"] is None and responds(main, args.hang_s)
+    st["stopped"] = st["shutdown_complete"] and st["main_responds_after"]
+    rep["hung"] = "did not stop 10 s after the stop" in log or st["exit_code"] == 70
+    print(f"  stop: {'asked' if st['asked'] else 'NOT asked'}, after {st['stop_s']} s "
+          f"{'shutdown complete' if st['shutdown_complete'] else 'NOT complete'}, exit code {st['exit_code']}, "
+          f"main window {'responds' if st['main_responds_after'] else 'does not respond'}", flush=True)
+
+
 def solo(a: argparse.Namespace, rep: Dict[str, Any]) -> None:
     """The host alone, at Brawl's menus or the Versus CSS: no session and no harness requests while
     the focus moves (the harness's own memory reads pause the core from its thread). ``--solo-gpu``
     picks the GPU determinism mode: unset (the installs' default, a non-deterministic video thread
     outside a session, as at bug #62's CSS) or fake-completion (the deterministic one, as in a
     match)."""
-    name = f"ffocus-solo-{a.solo_at}-{a.solo_gpu}"
+    name = f"ffocus-solo-{a.solo_at}-{a.solo_gpu}{'-machine' if a.solo_machine else ''}{'-stop' if a.stop else ''}"
     # Logs.VIDEO: FifoManager's "deterministic GPU thread true/false" line, read back below.
     inst = G.make_instance(name, cpu_thread=True, video="D3D11", gpu_determinism=a.solo_gpu,
                            config=["Dolphin.Display.Fullscreen=True", "Logger.Logs.VIDEO=True"])
@@ -210,22 +267,74 @@ def solo(a: argparse.Namespace, rep: Dict[str, Any]) -> None:
     inst.__class__ = QtInstance
     inst.command_prefix = [str(Path(a.exe) if a.exe else paths.dolphin_gui())]
     inst.client_timeout = a.client_timeout_s
+    joiner: Optional[DolphinInstance] = None
+    sims: List[NetSim] = []
+    joiner_session: Dict[str, Any] = {}
+    if a.solo_machine:
+        # A whole-machine session (as in an Other Games room). Alone (the other player never
+        # joins) the host saves a snapshot every frame; with --machine-joiner a headless joiner
+        # comes in over a --machine-rtt link and the host rolls back, each load's SyncGPU waiting
+        # for the video thread while the CPU thread holds the session's lock.
+        p0, p1 = free_port(socket.SOCK_DGRAM), free_port(socket.SOCK_DGRAM)
+        link = LinkProfile(latency_ms=a.machine_rtt / 2, jitter_ms=1.0)
+        sims = [NetSim(("127.0.0.1", p1), ("127.0.0.1", 0), NetProfile(up=link, down=link)).start(),
+                NetSim(("127.0.0.1", p0), ("127.0.0.1", 0), NetProfile(up=link, down=link)).start()]
+        t1, t0 = sims[0].listen_addr[1], sims[1].listen_addr[1]
+        inst.env["PPR_MACHINE_SESSION"] = json.dumps(
+            {"slot": 0, "port": p0, "peers": [{"slot": 1, "host": "127.0.0.1", "port": t1, "late": True}]})
+        joiner_session = {"slot": 1, "port": p1, "join": True, "sd_sync": "yes",
+                          "peers": [{"slot": 0, "host": "127.0.0.1", "port": t0}]}
     try:
         inst.launch()
         inst.connect()
         inst.client.wait_state("running", timeout=120)
-        if a.solo_at == "css":
+        if a.solo_machine:
+            t0 = time.monotonic()
+            while (inst.client.call("machine_status").get("frame") or 0) < 600:
+                if time.monotonic() - t0 > 240:
+                    raise SystemExit("the machine session's game did not start")
+                time.sleep(1)
+            rep["machine_session"] = True
+            if a.machine_joiner:
+                joiner = G.make_instance(f"{name}-joiner", cpu_thread=True, video="Null",
+                                         gpu_determinism=a.solo_gpu)
+                joiner.env["PPR_MACHINE_SESSION"] = json.dumps(joiner_session)
+                # The host's own Dolphin.exe, windowed: the same build, or the session refuses it
+                # ("another version"), and a tree's DolphinNoGUI.exe can be newer than its Dolphin.exe.
+                joiner.__class__ = QtInstance
+                joiner.command_prefix = list(inst.command_prefix)
+                joiner.launch()
+                joiner.connect()
+                t0 = time.monotonic()
+                while joiner.client.call("machine_status").get("phase") != "running":
+                    if time.monotonic() - t0 > 180 or not joiner.is_running():
+                        raise SystemExit("the joiner did not get into the session")
+                    time.sleep(1)
+                rep["joined_s"] = round(time.monotonic() - t0, 1)
+                print(f"  joiner in after {rep['joined_s']} s", flush=True)
+        elif a.solo_at == "css":
             B.boot_to_css(inst.client, 0, timeout_frames=60 * 180)
             B.neutral(inst.client, 0)
             rep["at_css"] = True
         log = inst.log_path.read_text(errors="replace")
         modes = re.findall(r"deterministic GPU thread (true|false)", log)
         rep["deterministic_gpu_thread"] = modes[-1] == "true" if modes else None
-        focus_cycles(inst, a, rep, threading.Event(), wait_for="Booting from executable")
+        if a.stop:
+            stop_check(inst, a, rep)
+        else:
+            focus_cycles(inst, a, rep, threading.Event(), wait_for="Booting from executable")
         rep["hang_watchdog"] = "Hang watchdog" in inst.log_path.read_text(errors="replace")
     finally:
         with contextlib.suppress(Exception):
             inst.kill()
+        if joiner is not None:
+            with contextlib.suppress(Exception):
+                joiner.kill()
+            with contextlib.suppress(Exception):
+                joiner.cleanup(True)
+        for sim in sims:
+            with contextlib.suppress(Exception):
+                sim.stop()
         if a.log_dir:
             with contextlib.suppress(Exception):
                 Path(a.log_dir).mkdir(parents=True, exist_ok=True)
@@ -249,6 +358,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ap.add_argument("--solo-gpu", choices=("unset", "fake-completion"), default="unset",
                     help="--solo: GPU determinism; unset = the installs' default (not deterministic "
                          "outside a session), fake-completion = deterministic as in a match")
+    ap.add_argument("--solo-machine", action="store_true",
+                    help="--solo: in a whole-machine session (an Other Games room) whose other player "
+                         "never joins; implies --solo-at menus")
+    ap.add_argument("--machine-joiner", action="store_true",
+                    help="--solo-machine: a headless second player joins before the check")
+    ap.add_argument("--machine-rtt", type=float, default=80, help="--machine-joiner: the link's RTT, ms")
+    ap.add_argument("--stop", action="store_true",
+                    help="--solo: the player's Stop in exclusive fullscreen instead of the switches "
+                         "(bug reports #86 and #92)")
     ap.add_argument("--json", default=None)
     a, rest = ap.parse_known_args(argv)
     a.log_dir = next((rest[i + 1] for i, x in enumerate(rest[:-1]) if x == "--log-dir"), None)
@@ -295,6 +413,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 return cm.__exit__(*exc)
         return _Cm()
 
+    if a.stop and not a.solo:
+        ap.error("--stop needs --solo")
     if a.solo:
         solo(a, rep)
     else:
@@ -305,6 +425,16 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         finally:
             G.make_instance, G.instances = orig, orig_instances
     hung = bool(rep.get("hung"))
+    if a.stop:
+        st = rep.get("stop", {})
+        ok = bool(st.get("stopped") and st.get("asked") and st.get("switched") and not hung)
+        where = "in a machine session" if a.solo_machine else f"at the {a.solo_at}"
+        print(f"fullscreen_focus (stop {where}, deterministic GPU thread "
+              f"{rep.get('deterministic_gpu_thread')}): {'PASS' if ok else 'FAIL'}: hung {hung}"
+              f"{', ' + rep['focus_error'] if rep.get('focus_error') else ''}")
+        if a.json:
+            Path(a.json).write_text(json.dumps(rep, indent=1))
+        return 0 if ok else 1
     # A switch that did not take tested nothing.
     ok = (not hung and not rep.get("focus_error") and len(rep.get("cycles", [])) == 2 * a.cycles
           and all(c["switched"] for c in rep["cycles"]))

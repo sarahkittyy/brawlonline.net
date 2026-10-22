@@ -6233,7 +6233,22 @@ void Stop()
   // lock) sees it and lets go.
   if (Active())
     s.phase = Phase::Stopped;
+#ifdef _WIN32
+  // The UI thread stops the session (the room's stop callback, then Core::Stop) right after
+  // MainWindow::RequestStop asked to leave exclusive fullscreen. The CPU thread can hold the lock
+  // at a frame boundary while a rollback's load waits for the video thread (SyncGPU), and the
+  // video thread be in DXGI's SetFullscreenState waiting for this thread to answer a message sent
+  // to the render window: take the lock in tries and answer those messages between them, as
+  // CPUManager::Stop waits (bug report #86).
+  std::unique_lock lk(s.mutex, std::defer_lock);
+  while (!lk.try_lock())
+  {
+    Common::AnswerSentMessages();
+    Common::SleepCurrentThread(1);
+  }
+#else
   std::lock_guard lk(s.mutex);
+#endif
   {
     std::lock_guard nlk(s.net_mutex);
     picojson::object msg;

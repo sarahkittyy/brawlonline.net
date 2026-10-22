@@ -73,6 +73,12 @@ void SwitchCurrentThread()
   SwitchToThread();
 }
 
+void AnswerSentMessages()
+{
+  MSG msg;
+  PeekMessageW(&msg, nullptr, 0, 0, PM_NOREMOVE | PM_QS_SENDMESSAGE);
+}
+
 // Sets the debugger-visible name of the current thread.
 // Uses trick documented in:
 // https://docs.microsoft.com/en-us/visualstudio/debugger/how-to-set-a-thread-name-in-native-code

@@ -44,6 +44,14 @@ void SetCurrentThreadName(const char* name);
 // priority; macOS: the utility QoS class; Linux: nice 10 for this thread.
 void SetCurrentThreadBackgroundPriority();
 
+#ifdef _WIN32
+// Runs the messages that other threads sent (SendMessage) to this thread's windows, and nothing
+// else: no posted messages, no Qt events. For a UI thread waiting on the emulation: DXGI's
+// SetFullscreenState and Present on the video thread send the render window a message and wait
+// for the answer, while the CPU thread waits for the video thread (bug reports #86, #92).
+void AnswerSentMessages();
+#endif
+
 #ifndef _WIN32
 // Returns the lowest address of the stack and the size of the stack
 std::tuple<void*, size_t> GetCurrentThreadStack();
