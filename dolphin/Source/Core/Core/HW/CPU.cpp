@@ -3,9 +3,14 @@
 
 #include "Core/HW/CPU.h"
 
+#include <chrono>
 #include <condition_variable>
 #include <mutex>
 #include <queue>
+
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 #include "AudioCommon/AudioCommon.h"
 #include "Common/Event.h"
@@ -241,7 +246,24 @@ void CPUManager::Stop()
 
   while (m_state_cpu_thread_active)
   {
+#ifdef _WIN32
+    // The UI thread stops the core from its window's close event. In a session the CPU thread can
+    // be in SyncGPU, waiting for the video thread, while that thread's SetFullscreenState (D3D
+    // exclusive fullscreen, the focus left the window) sends a message to the render window and
+    // waits for this thread to answer it: all three hung until the stop timeout ended Dolphin
+    // (bug report #92, launcher 0.1.91). Answer the messages sent to this thread's windows while
+    // waiting; only those, nothing posted and no Qt events, so nothing else runs inside the stop.
+    if (m_state_cpu_idle_cvar.wait_for(state_lock, std::chrono::milliseconds(10)) ==
+        std::cv_status::timeout)
+    {
+      state_lock.unlock();
+      MSG msg;
+      PeekMessageW(&msg, nullptr, 0, 0, PM_NOREMOVE | PM_QS_SENDMESSAGE);
+      state_lock.lock();
+    }
+#else
     m_state_cpu_idle_cvar.wait(state_lock);
+#endif
   }
 
   RunAdjacentSystems(false);
