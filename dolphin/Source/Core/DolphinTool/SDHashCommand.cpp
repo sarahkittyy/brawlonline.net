@@ -10,6 +10,10 @@
 //
 // `sdcompare`: what a joiner would download of a room's card, from the host's listing and the
 // joiner's own card, so its launcher can ask its player before Dolphin starts.
+//
+// Both run beside the netplay Dolphin, in its User folder, so they set the User folder and nothing
+// else (bug #86): UICommon::Init would open that Dolphin's log (on Windows, unable to move the open
+// file away, it truncates it) and restore its Wii settings backup as after a crash.
 
 #include "DolphinTool/SDHashCommand.h"
 
@@ -75,7 +79,6 @@ int SDHashCommand(const std::vector<std::string>& args)
 
   const optparse::Values& options = parser.parse_args(args);
   UICommon::SetUserDirectory(options["user"]);
-  UICommon::Init();
 
   if (!options.is_set("input"))
   {
@@ -145,7 +148,6 @@ int SDCompareCommand(const std::vector<std::string>& args)
 
   const optparse::Values& options = parser.parse_args(args);
   UICommon::SetUserDirectory(options["user"]);
-  UICommon::Init();
 
   if (!options.is_set("listing") || !options.is_set("root"))
   {

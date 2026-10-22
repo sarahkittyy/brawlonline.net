@@ -32,6 +32,10 @@ Accounts writes them to `BUG_REPORTS_DIR` (default `bug-reports` in its working 
 
 Until both are in place, reports still arrive (the text is a small JSON body) and their zips fail with 413 or 503; the launcher tells the player the report was sent without its logs.
 
+## SD card listings
+
+Other Games room hosts upload their card's listing (a few MB) to `PUT /v1/sd-cards/<root>/listing`. nginx needs its own location for it: `^/v1/sd-cards/<64 hex>/listing$` with `client_max_body_size 72m` (accounts' `SD_LISTING_MAX_BYTES` is 64 MiB), streamed, 300 s timeouts (`sarahvps2/nginx-brawl-online.conf`). Without it every upload gets nginx's 413 and joiners are asked about a different card without its size or files (bug #86: missing in production until 2026-10-22).
+
 ## Steps (Debian 12/13)
 
 ```sh

@@ -3,14 +3,18 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
+#include <cstdio>
 #include <memory>
 #include <optional>
 #include <string>
+#include <thread>
 
 #include <gtest/gtest.h>
 
 #include "Common/CommonTypes.h"
 #include "Common/FileUtil.h"
+#include "Common/StringUtil.h"
 #include "Core/IOS/FS/FileSystem.h"
 #include "Core/IOS/IOS.h"
 #include "UICommon/UICommon.h"
@@ -469,3 +473,24 @@ TEST_F(FileSystemTest, CreateFullPath)
   EXPECT_EQ(m_fs->CreateFullPath(Uid{0x1000}, Gid{1}, "/shared2/wc24/mbox/Readme.txt", 0, modes),
             ResultCode::Success);
 }
+
+#ifdef _WIN32
+// Bug #86: another program holding fst.bin open for a moment (an antivirus, the search indexer)
+// must not fail the FST's save. A handle from fopen does not share delete, so while it is open
+// Windows refuses to replace the file.
+TEST_F(FileSystemTest, SaveFstWaitsForAnotherHandle)
+{
+  ASSERT_EQ(m_fs->CreateFile(Uid{0}, Gid{0}, "/tmp/a", 0, modes), ResultCode::Success);
+  const std::string fst = File::GetUserPath(D_SESSION_WIIROOT_IDX) + "fst.bin";
+  std::FILE* held = _wfopen(UTF8ToWString(fst).c_str(), L"rb");
+  ASSERT_NE(held, nullptr);
+  std::thread release([held] {
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    std::fclose(held);
+  });
+  EXPECT_EQ(m_fs->CreateFile(Uid{0}, Gid{0}, "/tmp/b", 0, modes), ResultCode::Success);
+  release.join();
+  EXPECT_TRUE(m_fs->GetMetadata(Uid{0}, Gid{0}, "/tmp/b").has_value());
+  EXPECT_FALSE(File::Exists(fst + ".xxx"));
+}
+#endif

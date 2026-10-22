@@ -6,10 +6,12 @@
 #include "Core/Rollback/RollbackManager.h"
 
 #include <algorithm>
+#include <chrono>
 #include <expected>
 #include <optional>
 #include <source_location>
 #include <string_view>
+#include <thread>
 #include <type_traits>
 #include <unordered_map>
 #include <utility>
@@ -266,7 +268,19 @@ bool HostFileSystem::SaveFst()
       return false;
     }
   }
-  if (!File::RenameSync(temp_path, dest_path))
+  // On Windows the replace fails while anything else has fst.bin open, which an antivirus or the
+  // search indexer does for a moment after each write (bug #86, BUDS#979 booting REX): retried for
+  // up to a second before giving up. A save whose rename works at once waits for nothing.
+  bool renamed = File::RenameSync(temp_path, dest_path);
+  int retries = 0;
+  for (; !renamed && retries < 20; ++retries)
+  {
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    renamed = File::RenameSync(temp_path, dest_path);
+  }
+  if (renamed && retries > 0)
+    WARN_LOG_FMT(IOS_FS, "Renamed the temporary FST file after {} ms", retries * 50);
+  if (!renamed)
   {
     PanicAlertFmt("IOS_FS: Failed to rename temporary FST file");
     File::Delete(temp_path);
