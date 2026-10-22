@@ -256,6 +256,19 @@ impl LiveStore {
 
 // ---------------------------------------------------------------- bookkeeping (engine thread)
 
+/// A match read back from the database when mm starts ([`LiveBook::restore_match`]).
+#[derive(Debug, Clone, PartialEq)]
+pub struct RestoredMatch {
+    pub match_id: String,
+    pub mode: common::proto::Mode,
+    pub players: Vec<Uuid>,
+    pub host: Uuid,
+    /// A room's game: the room's code.
+    pub room: Option<String>,
+    /// How long ago it was made.
+    pub age: Duration,
+}
+
 #[derive(Debug, Clone)]
 struct MatchInfo {
     mode: &'static str,
@@ -632,6 +645,50 @@ impl LiveBook {
         );
     }
 
+    /// A match an earlier mm made, read back from the database when this one started
+    /// ([`common::db::recent_matches`]: mm keeps matches in memory only, and a restart, every
+    /// deploy, forgot the sets under way, bug report #80). Offers for its games are taken again;
+    /// its first one starts a new stream (its score so far is not known). A Ranked set's players'
+    /// presence is recorded from here on, as for a new match: online when `names` has them (their
+    /// game is back online), offline until it is. A match this mm knows already is left alone.
+    pub fn restore_match(
+        &mut self,
+        now: Instant,
+        r: RestoredMatch,
+        names: HashMap<Uuid, (String, String)>,
+        out: &mut Vec<Output>,
+    ) {
+        if self.matches.contains_key(&r.match_id) || r.age >= self.cfg.match_ttl {
+            return;
+        }
+        let made = now.checked_sub(r.age).unwrap_or(now);
+        if r.room.is_none() && r.mode == common::proto::Mode::Ranked && r.age < RANKED_PRESENCE_FOR {
+            for p in &r.players {
+                let at = self.presence_time();
+                out.push(Output::RankedPresence {
+                    match_id: r.match_id.clone(),
+                    uid: *p,
+                    online: names.contains_key(p),
+                    at,
+                });
+            }
+        }
+        let mode = if r.room.is_some() { "room" } else { r.mode.name() };
+        // No stream yet: the next offer makes one (fresh_stream).
+        self.matches.insert(
+            r.match_id,
+            MatchInfo { mode, room: r.room, players: r.players, host: r.host, names, made, stream: String::new() },
+        );
+    }
+
+    /// `uid`'s game came online as `name` / `code`: the matches it plays in that didn't know its
+    /// name yet (a match read back after a restart, made while it was offline) list it so.
+    pub fn named(&mut self, uid: Uuid, name: &str, code: &str) {
+        for m in self.matches.values_mut().filter(|m| m.players.contains(&uid)) {
+            m.names.entry(uid).or_insert_with(|| (name.to_string(), code.to_string()));
+        }
+    }
+
     /// `uid` left the chat group `group` (a match group's id is its match id; a room's is
     /// `room-<CODE>-<n>`): they left the match or the room (their game's online session ended, a
     /// new search, another room, their connection dropped). Its stream can't go on with the same
@@ -664,7 +721,16 @@ impl LiveBook {
         let id = new_stream_id();
         let old = self.matches.get(match_id).and_then(|m| self.streams.get(&m.stream));
         let players = self.matches.get(match_id).map(|m| m.players.clone()).unwrap_or_default();
-        let mut book = StreamBook::new(now, old.and_then(|b| b.room_key.clone()), players);
+        // A match read back after a restart has no stream before this one: its room's key is made
+        // as register_match makes it.
+        let room_key = old.map(|b| b.room_key.clone()).unwrap_or_else(|| {
+            self.matches.get(match_id).and_then(|m| m.room.clone()).map(|code| {
+                let mut sorted = players.clone();
+                sorted.sort_unstable();
+                (code, sorted)
+            })
+        });
+        let mut book = StreamBook::new(now, room_key, players);
         if let Some(b) = old {
             book.wins = b.wins.clone();
             book.last_game = b.last_game;
@@ -2147,6 +2213,89 @@ mod tests {
         t.offer(A, a, 1, 0);
         let out = report(&mut t, B, b, 1, json!({"endMethod": "game", "winnerPort": 1, "setGame": 1}));
         assert!(results(&out).is_empty());
+    }
+
+    /// Bug report #80: mm restarted during a set (a deploy), and every offer of the set's games
+    /// from then on was refused ("That match isn't yours to stream"). The matches read back from
+    /// the database take offers again, and a Ranked set's presence is recorded again.
+    #[test]
+    fn matches_read_back_after_a_restart_take_offers_again() {
+        let restored = |id: &str, mode: Mode, players: Vec<Uuid>, room: Option<&str>, age: u64| RestoredMatch {
+            match_id: id.into(),
+            mode,
+            players: players.clone(),
+            host: players[0],
+            room: room.map(str::to_string),
+            age: Duration::from_secs(age),
+        };
+        // A fresh book: mm restarted. Only A's game is online again when the matches are read.
+        let mut t = T::new(SpectateMode::On);
+        t.book = LiveBook::new(LiveConfig { mode: SpectateMode::On, ..Default::default() });
+        let (a, b) = (t.a, t.b);
+        let names = HashMap::from([(a, ("alice".into(), "ALI#1".into()))]);
+        let mut out = vec![];
+        t.book.restore_match(t.now, restored(MATCH, Mode::Ranked, vec![a, b], None, 1800), names.clone(), &mut out);
+        assert_eq!(presence(&out), vec![(a, true), (b, false)]);
+        // Not Ranked, or a Ranked set older than RANKED_PRESENCE_FOR: no presence.
+        let mut out = vec![];
+        t.book.restore_match(
+            t.now,
+            restored("mode.unranked-x-1", Mode::Unranked, vec![a, b], None, 60),
+            names.clone(),
+            &mut out,
+        );
+        let old = RANKED_PRESENCE_FOR.as_secs() + 1;
+        t.book.restore_match(
+            t.now,
+            restored("mode.ranked-x-2", Mode::Ranked, vec![a, b], None, old),
+            names.clone(),
+            &mut out,
+        );
+        assert!(presence(&out).is_empty());
+        // B's game is back online: its presence, and its name in the list.
+        let mut out = vec![];
+        t.book.named(b, "bob", "BOB#2");
+        t.book.presence(t.now, b, true, &mut out);
+        assert_eq!(presence(&out), vec![(b, true)], "the recent Ranked set only");
+
+        // The game under way is offered again: roles as for any match, a new stream with mm's names.
+        t.offer(A, a, 3, 0);
+        let out = t.offer(B, b, 3, 1);
+        let ra = role(&out, A).unwrap();
+        assert_eq!((ra["role"].as_str(), ra["headers"].as_bool()), (Some("primary"), Some(true)));
+        assert_eq!(role(&out, B).unwrap()["role"], "witness");
+        let slot = ra["slot"].as_u64().unwrap() as u32;
+        t.send_chunk(A, slot, 0, &t.info(3));
+        let e = &t.book.store.entries()[0];
+        assert_eq!((e.mode.as_str(), e.game.number), ("ranked", 3));
+        let name = |u: Uuid| e.players.iter().find(|p| p.uid == u.to_string()).unwrap().display_name.clone();
+        assert_eq!((name(a), name(b)), ("alice".to_string(), "bob".to_string()));
+
+        // A match this mm made itself is not replaced; one older than match_ttl is not read back.
+        let mut out = vec![];
+        let stream = t.book.matches[MATCH].stream.clone();
+        t.book.restore_match(t.now, restored(MATCH, Mode::Ranked, vec![a, b], None, 10), HashMap::new(), &mut out);
+        assert!(out.is_empty());
+        assert_eq!(t.book.matches[MATCH].stream, stream);
+        let ttl = t.book.cfg.match_ttl.as_secs();
+        t.book.restore_match(
+            t.now,
+            restored("mode.direct-x-3", Mode::Direct, vec![a, b], None, ttl),
+            HashMap::new(),
+            &mut out,
+        );
+        assert!(!t.book.matches.contains_key("mode.direct-x-3"));
+
+        // A room's game read back: its stream has the room's key, so the room's next game goes on
+        // in it.
+        let room_id = "mode.room-TLSZ-2026-10-21T14:37:43.060Z-4a0";
+        t.book.restore_match(t.now, restored(room_id, Mode::Teams, vec![b, a], Some("TLSZ"), 30), names, &mut out);
+        offer_in(&mut t, room_id, A, a, 9, 4);
+        let stream = t.book.matches[room_id].stream.clone();
+        let mut sorted = vec![a, b];
+        sorted.sort_unstable();
+        assert_eq!(t.book.streams[&stream].room_key, Some(("TLSZ".to_string(), sorted)));
+        assert_eq!(t.book.matches[room_id].mode, "room");
     }
 
     /// What a watcher got on the watch channel: (kind, the chunk index or the JSON).

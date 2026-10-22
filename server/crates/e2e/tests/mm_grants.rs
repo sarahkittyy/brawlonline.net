@@ -99,6 +99,13 @@ async fn mm_queries_work_as_pp_mm() {
             .await
             .unwrap();
     assert_eq!(row, ("ABCD".into(), "teams".into(), vec![1, 3], Some(vec![0, 1])));
+    // mm reads its recent matches back when it starts (0020_mm_reads_matches.sql).
+    let recent = db::recent_matches(&pool, std::time::Duration::from_secs(6 * 3600)).await.unwrap();
+    let room_game = recent.iter().find(|m| m.match_id == id).expect("the room's game");
+    assert_eq!((room_game.mode, room_game.is_host), (3, a));
+    assert_eq!((room_game.players.as_slice(), room_game.room_code.as_deref()), (&[a, b][..], Some("ABCD")));
+    assert!((0..60_000).contains(&room_game.age_ms), "{}", room_game.age_ms);
+    assert!(recent.iter().any(|m| m.match_id.starts_with("mode.ranked-grants-") && m.room_code.is_none()));
 
     // Chat (0006_chat.sql): identity keys recorded (again, and pruned past 20), read, a report
     // stored, also one about a uid that is no account.

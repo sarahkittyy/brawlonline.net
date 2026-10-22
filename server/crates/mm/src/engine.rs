@@ -88,7 +88,7 @@ use uuid::Uuid;
 
 use crate::chat::{chat_error, Candidate, ChatBook, ChatConfig, ChatReportRecord, GroupKind};
 use crate::geo::{estimate_rtt_ms, GeoDb, Loc};
-use crate::live::{LiveBook, LiveConfig, LiveStore};
+use crate::live::{LiveBook, LiveConfig, LiveStore, RestoredMatch};
 use crate::messages as msg;
 use crate::mod_rooms::{ModRoomBook, ModRoomsConfig};
 use crate::region::RegionMap;
@@ -273,6 +273,9 @@ pub enum Input {
     /// Accounts whose row changed in the database (`common::db::changed_users`): a ban ends
     /// everything the account has on mm, a rename and a mute apply to its connections at once.
     AccountsChanged(Vec<MmUser>),
+    /// The matches made in the last `LiveConfig::match_ttl`, read back from the database once
+    /// when mm starts (`common::db::recent_matches`): the sets under way go on being streamed.
+    MatchesRestored(Vec<common::db::RecentMatch>),
     Tick,
 }
 
@@ -680,6 +683,7 @@ impl Engine {
                     self.on_account_changed(now, wall, u, &mut out);
                 }
             }
+            Input::MatchesRestored(rows) => self.on_matches_restored(now, rows, &mut out),
             Input::RulesetFetched(f, result) => self.rooms.ruleset_fetched(f, result, &mut out),
             Input::RulesetListFetched { conn, result } => match result {
                 Ok(rulesets) => Self::send(
@@ -710,6 +714,34 @@ impl Engine {
             self.live.player_left(kind == crate::chat::GroupKind::Room, &group, uid);
         }
         out
+    }
+
+    /// The recent matches an earlier mm made (it restarted): back in the live book, with the names
+    /// of the players whose game is online again already.
+    fn on_matches_restored(&mut self, now: Instant, rows: Vec<common::db::RecentMatch>, out: &mut Vec<Output>) {
+        let online: HashMap<Uuid, (String, String)> = self
+            .conns
+            .values()
+            .filter_map(|c| match &c.state {
+                State::Online(o) => Some((o.user.uid, (o.user.display_name.clone(), o.code.clone()))),
+                _ => None,
+            })
+            .collect();
+        let n = rows.len();
+        for r in rows {
+            let Some(mode) = u8::try_from(r.mode).ok().and_then(Mode::from_u8) else { continue };
+            let names = online.iter().filter(|(u, _)| r.players.contains(u)).map(|(u, n)| (*u, n.clone())).collect();
+            let restored = RestoredMatch {
+                match_id: r.match_id,
+                mode,
+                players: r.players,
+                host: r.is_host,
+                room: r.room_code,
+                age: Duration::from_millis(r.age_ms.max(0) as u64),
+            };
+            self.live.restore_match(now, restored, names, out);
+        }
+        tracing::info!(matches = n, "matches read back from the database");
     }
 
     /// `uid`'s online connection closed: if it was their last, their recent Ranked sets record
@@ -1391,6 +1423,9 @@ impl Engine {
         self.chat.set_muted(uid, user.chat_muted);
         if let Some(c) = self.conns.get_mut(&conn) {
             c.state = State::Online(Online { user, code, client: p.client, chat_key: p.chat_key });
+        }
+        if let Some(Conn { state: State::Online(o), .. }) = self.conns.get(&conn) {
+            self.live.named(uid, &o.user.display_name, &o.code);
         }
         self.live.presence(now, uid, true, out);
         Self::send(out, conn, &hello_ok());
@@ -3858,6 +3893,47 @@ mod tests {
         h.hello(3, &c, "3.4.0");
         let out = h.raw(3, rejoin.to_string().as_bytes());
         assert_eq!(chat_errors(&out, 3), [("chat-rejoin".to_string(), msg::CHAT_UPDATE.to_string())]);
+    }
+
+    #[test]
+    fn matches_read_back_after_a_restart_are_streamed_and_ranked_presence_goes_on() {
+        // Bug report #80: after mm's restart every offer of the set's games was refused.
+        let mut h = Harness::new(EngineConfig::default());
+        let (a, b) = (user("AA#1", "a"), user("BB#1", "b"));
+        h.chatter(1, &a);
+        let match_id = "mode.ranked-2026-10-21T14:42:55.233Z-4cd";
+        let offer = json!({"type": "spectate-offer", "matchId": match_id, "gameUid": "ab".repeat(16), "game": 3});
+        let out = h.raw(1, offer.to_string().as_bytes());
+        assert_eq!(sent(&out, 1)[0]["error"], crate::live::errors::NOT_YOUR_MATCH, "not read back yet");
+
+        // Read back: a's game is online (recorded online), b's not yet (offline until it is).
+        let row = common::db::RecentMatch {
+            match_id: match_id.into(),
+            mode: Mode::Ranked.as_u8() as i16,
+            players: vec![a.uid, b.uid],
+            is_host: a.uid,
+            room_code: None,
+            age_ms: 20 * 60 * 1000,
+        };
+        let presence = |out: &[Output]| -> Vec<(Uuid, bool)> {
+            out.iter()
+                .filter_map(|o| match o {
+                    Output::RankedPresence { uid, online, .. } => Some((*uid, *online)),
+                    _ => None,
+                })
+                .collect()
+        };
+        let out = h.input(Input::MatchesRestored(vec![row]));
+        assert_eq!(presence(&out), vec![(a.uid, true), (b.uid, false)]);
+        let out = h.chatter(2, &b);
+        assert_eq!(presence(&out), vec![(b.uid, true)]);
+        // Both games offer the game under way again: a Ranked set is streamed for the record.
+        h.raw(1, offer.to_string().as_bytes());
+        let out = h.raw(2, offer.to_string().as_bytes());
+        for conn in [1, 2] {
+            let role = sent(&out, conn).into_iter().find(|m| m["type"] == "spectate-role").unwrap();
+            assert!(role["role"] == "primary" || role["role"] == "witness", "{role}");
+        }
     }
 
     #[test]

@@ -127,6 +127,34 @@ pub async fn insert_match(
     .map(|_| ())
 }
 
+/// A match mm made, as mm reads it back when it starts ([`recent_matches`]).
+#[derive(Debug, Clone, PartialEq, sqlx::FromRow)]
+pub struct RecentMatch {
+    pub match_id: String,
+    /// `Mode::as_u8`.
+    pub mode: i16,
+    pub players: Vec<Uuid>,
+    pub is_host: Uuid,
+    /// A room's game: the room.
+    pub room_code: Option<String>,
+    /// How long ago it was made, by the database's clock.
+    pub age_ms: i64,
+}
+
+/// The matches made in the last `within` (oldest first): mm keeps its matches in memory, so after
+/// a restart it reads back the ones whose sets may still be going on (`migrations/0020`).
+pub async fn recent_matches(pool: &sqlx::PgPool, within: std::time::Duration) -> sqlx::Result<Vec<RecentMatch>> {
+    sqlx::query_as(
+        "SELECT match_id, mode, players, is_host, room_code,
+                (extract(epoch FROM now() - created_at) * 1000)::bigint AS age_ms
+           FROM mm_matches WHERE created_at > now() - make_interval(secs => $1)
+          ORDER BY created_at",
+    )
+    .bind(within.as_secs_f64())
+    .fetch_all(pool)
+    .await
+}
+
 /// Identity keys kept per account: older ones are deleted when a new one is recorded.
 pub const CHAT_KEYS_KEPT: i64 = 20;
 

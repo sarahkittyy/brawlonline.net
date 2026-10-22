@@ -69,7 +69,7 @@ The alternative, streaming state, has two problems. A playable state is the roll
 
 ### 3.2 mm (relay)
 
-- **Live store:** each live game holds its chunks in memory, plus the match's earlier games, so a set can be scrubbed. A game stays listed while it plays and for 10 min after its set ends. Nothing is written to disk.
+- **Live store:** each live game holds its chunks in memory, plus the match's earlier games, so a set can be scrubbed. A game stays listed while it plays and for 10 min after its set ends. Nothing is written to disk. A restart of mm loses the streams; it reads the matches of the last 6 h back from the database, so the sets under way stream again from their next offer, each as a new stream (bug report #80).
 - **Limits** (uploads are untrusted): a chunk ≤ 64 KB; a game ≤ 2 MB; an uploader ≤ 4 KB/s; frames contiguous. Headers, CRCs and sizes are checked as `ReplayFile` reads them (`replays.md` §8.1).
 - **No server delay** (the user, 2026-10-13: not for Ranked either). mm relays each chunk as soon as it is validated. The only delay is the spectator's own buffer (§6.2), about 4-5 s behind the players in all: up to 1 s for a chunk to fill, the network, and the 3 s buffer.
 - **Fan-out** runs in a tokio task, off mm's ENet thread. The ENet thread only hands each validated chunk to a `tokio::sync::broadcast`.

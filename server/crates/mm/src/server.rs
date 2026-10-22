@@ -142,6 +142,8 @@ pub fn start(
     let (lists_tx, lists_rx) = std_mpsc::channel::<RulesetListFetched>();
     let (accounts_tx, accounts_rx) = std_mpsc::channel::<Vec<db::MmUser>>();
     rt.spawn(watch_accounts(pool.clone(), accounts_tx));
+    let (restored_tx, restored_rx) = std_mpsc::channel::<Vec<db::RecentMatch>>();
+    rt.spawn(restore_matches(pool.clone(), engine_cfg.live.match_ttl, restored_tx));
     let fetch_pool = pool.clone();
     rt.spawn(fetch_worker(
         move |uid| fetch_user(fetch_pool.clone(), uid),
@@ -170,9 +172,9 @@ pub fn start(
     let stop = Arc::new(AtomicBool::new(false));
     let stop2 = stop.clone();
     let db = Db { fetches: job_tx, fetched: done_tx, rulesets: rulesets_tx, ruleset_lists: lists_tx, pool, rt };
-    let thread = std::thread::Builder::new()
-        .name("mm-enet".into())
-        .spawn(move || event_loop(host, engine, db, done_rx, rulesets_rx, lists_rx, accounts_rx, stop2, status))?;
+    let thread = std::thread::Builder::new().name("mm-enet".into()).spawn(move || {
+        event_loop(host, engine, db, done_rx, rulesets_rx, lists_rx, accounts_rx, restored_rx, stop2, status)
+    })?;
     tracing::info!("mm listening on udp://{addr}");
     Ok(MmHandle { addr, status_addr, stop, thread: Some(thread), status_task })
 }
@@ -408,6 +410,28 @@ async fn record_match(pool: PgPool, m: MatchRecord) {
         tracing::error!(match_id = %m.match_id, "recording match failed: {e}");
     }
 }
+
+/// Reads back the matches of the last `within` once, when mm starts (`Input::MatchesRestored`): a
+/// restart forgot the sets under way. accounts, restarted with mm by a deploy, may still be
+/// running the migration that grants mm the columns, so a failure is tried again for a minute.
+async fn restore_matches(pool: PgPool, within: Duration, done: std_mpsc::Sender<Vec<db::RecentMatch>>) {
+    for attempt in 1..=RESTORE_ATTEMPTS {
+        match db::recent_matches(&pool, within).await {
+            Ok(rows) => {
+                let _ = done.send(rows);
+                return;
+            }
+            Err(e) if attempt < RESTORE_ATTEMPTS => {
+                tracing::warn!(attempt, "reading back recent matches failed (trying again): {e}");
+                tokio::time::sleep(Duration::from_secs(1)).await;
+            }
+            Err(e) => tracing::error!("reading back recent matches failed: {e}"),
+        }
+    }
+}
+
+/// [`restore_matches`] tries this many times, a second apart.
+const RESTORE_ATTEMPTS: u32 = 60;
 
 /// Records a chat identity key (best effort, like a match).
 async fn record_chat_key(pool: PgPool, uid: Uuid, key: [u8; 32]) {
@@ -648,6 +672,7 @@ fn event_loop(
     rulesets: std_mpsc::Receiver<RulesetFetched>,
     ruleset_lists: std_mpsc::Receiver<RulesetListFetched>,
     accounts: std_mpsc::Receiver<Vec<db::MmUser>>,
+    restored: std_mpsc::Receiver<Vec<db::RecentMatch>>,
     stop: Arc<AtomicBool>,
     status: SharedStatus,
 ) {
@@ -695,6 +720,10 @@ fn event_loop(
         while let Ok(users) = accounts.try_recv() {
             busy = true;
             lp.feed(Input::AccountsChanged(users));
+        }
+        while let Ok(rows) = restored.try_recv() {
+            busy = true;
+            lp.feed(Input::MatchesRestored(rows));
         }
         if lp.run_pending_disconnects(Instant::now()) {
             busy = true;
