@@ -216,13 +216,10 @@ struct ConnectOptions
   // it is part of the setup hash the first barrier compares.
   u32 start_frame = DEFAULT_START_FRAME;
   // This player's input delay in frames (0-MAX_INPUT_DELAY): the harness's, or the player's set
-  // number in Direct and rooms. Unset: the profile, per game (ProfileInputDelay).
+  // number. Unset: the profile, per game (ProfileInputDelay).
   std::optional<int> delay;
   // The player's profile: -1 Aggressive, 0 Normal, 1 Smooth (DelayLevel).
   int delay_level = 0;
-  // Whether a number the player sets applies (Direct and rooms); else it plays Normal (Ranked,
-  // Unranked), mid-game changes (SetInputDelay) included.
-  bool fixed_delay_allowed = true;
   int local_pad = 0;         // local controller port the local player uses, when the game's
                              // lock-in names none (LockIn::local_pad)
   bool sync_task_order = true;

@@ -110,12 +110,12 @@ public:
       }
     }
     o.region_set = options.region_set;
-    // The harness's option, else the player's setting: a number of frames in Direct and rooms
-    // only (Ranked and Unranked play Normal for it), else a profile (Session::DelayLevel).
+    // The harness's option, else the player's setting: a number of frames, in every mode (a
+    // player's delay costs only their own screen; until 2026-10-23 Direct and rooms only), else a
+    // profile (Session::DelayLevel).
     o.delay = options.delay;
-    o.fixed_delay_allowed = match.mode == 2 || match.mode == 3 || room;
     if (const int delay = Config::Get(Config::ONLINE_INPUT_DELAY);
-        !o.delay && delay > 0 && delay <= Session::MAX_INPUT_DELAY && o.fixed_delay_allowed)
+        !o.delay && delay > 0 && delay <= Session::MAX_INPUT_DELAY)
     {
       o.delay = delay;
     }

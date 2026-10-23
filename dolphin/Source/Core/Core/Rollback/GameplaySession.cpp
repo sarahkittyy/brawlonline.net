@@ -3015,7 +3015,7 @@ int OwnDelayLevel()
   return s.net_opts.delay ? 0 : std::clamp(s.net_opts.delay_level, -1, 1);
 }
 
-// This player's input delay for a game: the set number (Direct and rooms; the harness's), else
+// This player's input delay for a game: the set number (or the harness's), else
 // their profile's from the round trip (`rtt_ms`, -1 for none), as GekkoNet will see it in the
 // game (ProfileInputDelay).
 int PickInputDelay(double* rtt_ms)
@@ -3026,8 +3026,7 @@ int PickInputDelay(double* rtt_ms)
 }
 
 // A change of the player's setting since this session last looked (SetInputDelay) becomes the
-// session's: this game's from its next frame, and every later game's. A number of frames where
-// none applies (Ranked, Unranked) plays Normal. False when none.
+// session's: this game's from its next frame, and every later game's. False when none.
 bool TakeLiveDelay()
 {
   const u32 live = s_live_delay.load();
@@ -3035,8 +3034,7 @@ bool TakeLiveDelay()
     return false;
   s.live_delay_seq = live >> 8;
   const int setting = static_cast<int>(live & 0xFF) + DELAY_SMOOTH;
-  s.net_opts.delay =
-      setting > 0 && s.net_opts.fixed_delay_allowed ? std::optional<int>(setting) : std::nullopt;
+  s.net_opts.delay = setting > 0 ? std::optional<int>(setting) : std::nullopt;
   s.net_opts.delay_level = DelayLevel(setting);
   return true;
 }

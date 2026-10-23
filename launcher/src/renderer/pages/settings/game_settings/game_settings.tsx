@@ -1,9 +1,3 @@
-import {
-  INPUT_DELAY_AGGRESSIVE,
-  INPUT_DELAY_PROFILES,
-  INPUT_DELAY_SMOOTH,
-  normalizeInputDelay,
-} from "@common/input_delay";
 import { PING_LIMIT_CHOICES } from "@common/ping_limit";
 import { GAME_NAME } from "@common/product";
 import { IsoValidity } from "@common/types";
@@ -28,7 +22,6 @@ import {
   useDisableChat,
   useEnableMusic,
   useEnableStreamGames,
-  useInputDelay,
   useIsoPath,
   useLaunchGameOnPlay,
   usePingLimit,
@@ -38,14 +31,8 @@ import { DISC_IMAGE_EXTENSIONS } from "../../quick_start/steps/iso_selection_ste
 import { SettingItem } from "../setting_item_section";
 import { ChatKeySetting } from "./chat_key_setting";
 import { GameSettingsMessages as Messages } from "./game_settings.messages";
+import { InputDelaySetting } from "./input_delay_setting";
 import { NetplayNetworkSetting } from "./netplay_network_setting";
-
-const inputDelayProfileLabel = (profile: number) =>
-  profile === INPUT_DELAY_AGGRESSIVE
-    ? Messages.inputDelayAggressive()
-    : profile === INPUT_DELAY_SMOOTH
-    ? Messages.inputDelaySmooth()
-    : Messages.inputDelayNormal();
 
 const renderValidityStatus = (isoValidity: IsoValidity) => {
   switch (isoValidity) {
@@ -84,7 +71,6 @@ export const GameSettings = React.memo(() => {
   const [isoPath, setIsoPath] = useIsoPath();
   const verifyFraction = useIsoVerificationFraction(verifying ? isoPath : null);
   const [launchMeleeOnPlay, setLaunchMelee] = useLaunchGameOnPlay();
-  const [inputDelay, setInputDelay] = useInputDelay();
   const [pingLimit, setPingLimit] = usePingLimit();
   const [enableMusic, setEnableMusic] = useEnableMusic();
   const [disableChat, setDisableChat] = useDisableChat();
@@ -145,22 +131,7 @@ export const GameSettings = React.memo(() => {
           <FormControlLabel value={false} label={Messages.launchDolphin()} control={<Radio />} />
         </RadioGroup>
       </SettingItem>
-      <SettingItem name={Messages.inputDelay()} description={Messages.inputDelayDescription()}>
-        <RadioGroup
-          row={true}
-          value={normalizeInputDelay(inputDelay)}
-          onChange={(_event, value) => setInputDelay(Number(value))}
-        >
-          {INPUT_DELAY_PROFILES.map((profile) => (
-            <FormControlLabel
-              key={profile}
-              value={profile}
-              label={inputDelayProfileLabel(profile)}
-              control={<Radio />}
-            />
-          ))}
-        </RadioGroup>
-      </SettingItem>
+      <InputDelaySetting />
       <SettingItem name={Messages.pingLimit()}>
         <Tooltip title={netplayDolphinOpen ? Messages.closeDolphinToChange() : ""} placement="bottom-start">
           <RadioGroup row={true} value={pingLimit} onChange={(_event, value) => setPingLimit(Number(value))}>

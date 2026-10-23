@@ -47,7 +47,7 @@ extern const Info<std::string> ONLINE_SESSION_BACKEND;
 // This player's input delay in online matches (the launcher's setting): a profile, picked per game
 // from the round trip (Gprb::Session::ProfileInputDelay): 0 Normal, -1 Aggressive, -2 Smooth
 // (Gprb::Session::DELAY_*); or 1-9 frames for this player's own inputs, as Slippi's delay frames,
-// in Direct and rooms only (Ranked and Unranked play Normal for it).
+// in every mode (until 2026-10-23 Direct and rooms only).
 extern const Info<int> ONLINE_INPUT_DELAY;
 
 // The launcher's "Matchmaking Ping Limit" (ms; 100, 150 or 200): Unranked and Ranked tickets send

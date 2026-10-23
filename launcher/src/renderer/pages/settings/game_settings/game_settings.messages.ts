@@ -11,10 +11,13 @@ export const GameSettingsMessages = {
   inputDelay: () => "Input Delay",
   inputDelayDescription: () =>
     "More input delay = less rollbacks. Increase this if your games are stuttering / teleporting around. " +
-    "Takes effect right away, even in the middle of a game.",
+    "Automatic picks it from your ping at the start of each game. Takes effect right away, even in the middle of a game.",
+  inputDelayAutomatic: () => "Automatic",
+  inputDelayFixed: () => "Fixed",
   inputDelayAggressive: () => "Aggressive",
   inputDelayNormal: () => "Normal",
   inputDelaySmooth: () => "Smooth",
+  inputDelayFrames: (frames: number) => (frames === 1 ? "1 frame" : `${frames} frames`),
   pingLimit: () => "Matchmaking Ping Limit",
   pingLimitMs: (ms: number) => "{0} ms",
   enableMusic: () => "Music",

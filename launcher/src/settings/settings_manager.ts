@@ -129,7 +129,6 @@ export class SettingsManager extends EventEmitter {
   }
 
   getInputDelay(): number {
-    // A number of frames saved before 2026-10-23 plays Normal.
     return normalizeInputDelay(this.get().settings.inputDelay);
   }
 
