@@ -6,6 +6,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { DolphinBundleManifest } from "./bundled_dolphin";
 import {
   bundledDolphinSource,
+  bundleTotals,
   installBundledDolphin,
   PROGRESS_BYTES_PER_FILE,
   readDolphinManifest,
@@ -140,6 +141,43 @@ describe("installBundledDolphin", () => {
     await fs.promises.writeFile(path.join(dest, "Sys", "GameSettings", "RSBE01.ini"), "ini");
     expect((await installBundledDolphin({ sourceDir: src, destDir: dest })).action).toBe("installed");
     expect(await read("Sys", "GameSettings", "RSBE01.ini")).toBe("ini-5");
+  });
+
+  it("refuses a bundle short of its manifest's files and keeps a complete install of its version", async () => {
+    // Bug report #111: an update that did not finish left the launcher's bundle without
+    // Sys/Rollback/gp-v23.json; installing it copied the gap, and every match failed to start.
+    const files = { "Dolphin.exe": "exe-10", "Sys/Rollback/gp-v23.json": "{}", "Sys/a.ini": "ini" };
+    const src = await makeBundle("0.1.10", files);
+    expect(await bundleTotals(src, ["Dolphin.exe", "Sys"])).toEqual({ files: 3, size: 11 });
+    await installBundledDolphin({ sourceDir: src, destDir: dest });
+
+    await fs.promises.rm(path.join(src, "Sys", "Rollback", "gp-v23.json"));
+    const logs: string[] = [];
+    // The installed copy is whole: it stays and plays.
+    expect((await installBundledDolphin({ sourceDir: src, destDir: dest, log: (m) => logs.push(m) })).action).toBe(
+      "unchanged",
+    );
+    expect(logs.join(" ")).toContain("2 of 3 files");
+
+    // The installed copy lacks it too (installed from the short bundle): no install, the error says
+    // to reinstall the launcher, and nothing of the install folder is touched.
+    await fs.promises.rm(path.join(dest, "Sys", "Rollback", "gp-v23.json"));
+    await expect(installBundledDolphin({ sourceDir: src, destDir: dest })).rejects.toThrow(
+      /copy of Dolphin 0\.1\.10 is incomplete \(2 of its 3 files\).*install it over this one/,
+    );
+    expect(await read("Dolphin.exe")).toBe("exe-10");
+    expect((await readDolphinManifest(dest))?.version).toBe("0.1.10");
+
+    // A short bundle of a new version is never installed over an older build either.
+    const v2 = await makeBundle("0.1.11", { "Dolphin.exe": "exe-11", "Sys/a.ini": "ini-11" });
+    await fs.promises.writeFile(path.join(v2, "Sys", "a.ini"), "i");
+    await expect(installBundledDolphin({ sourceDir: v2, destDir: dest })).rejects.toThrow(/is incomplete/);
+    expect(await read("Dolphin.exe")).toBe("exe-10");
+
+    // Extra files in the bundle (macOS signing adds some) are fine.
+    const v3 = await makeBundle("0.1.12", { "Dolphin.exe": "exe-12", "Sys/a.ini": "ini-12" });
+    await fs.promises.writeFile(path.join(v3, "Sys", "_CodeSignature"), "x");
+    expect((await installBundledDolphin({ sourceDir: v3, destDir: dest })).action).toBe("installed");
   });
 
   it("updates while another program holds the old Dolphin.exe open, and deletes it on a later start", async () => {

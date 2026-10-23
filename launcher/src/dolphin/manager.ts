@@ -971,6 +971,8 @@ export class DolphinManager {
       resourcesPath: process.resourcesPath,
     });
     if (!source) {
+      // Development: the build next to the repository, nothing to install.
+      this.bundledInstallDone = true;
       return Promise.resolve();
     }
     // A finished install whose executable has gone since (bug report #91: the disk filled up and
@@ -993,7 +995,8 @@ export class DolphinManager {
           }
           this._onProgress(DolphinLaunchType.NETPLAY, current, total, "installDolphin");
         },
-        log: (message) => log.info(message),
+        // Once per launcher update: kept in the warn-level main.log a bug report sends.
+        log: (message) => log.warn(message),
       })
         .then(({ action, manifest }) => {
           log.info(`Bundled Dolphin ${manifest.version}: ${action}`);
@@ -1020,10 +1023,12 @@ export class DolphinManager {
    * Start-up's install of the bundled Dolphin removes the old build before it copies the new one,
    * so one that stopped half-way (a file in use) leaves no executable; a finished one can lose it
    * later. Play then installs it again, with the set-up progress, instead of failing until the
-   * launcher restarts.
+   * launcher restarts. An install that failed with the executable still there (a bundle short of
+   * files, bug report #111) is tried again too, so Play shows its error rather than starting a
+   * Dolphin that cannot start a match.
    */
   private async _repairBundledDolphin(): Promise<void> {
-    if (await fileExists(this.getDolphinExecutablePath(DolphinLaunchType.NETPLAY))) {
+    if (this.bundledInstallDone && (await fileExists(this.getDolphinExecutablePath(DolphinLaunchType.NETPLAY)))) {
       return;
     }
     try {

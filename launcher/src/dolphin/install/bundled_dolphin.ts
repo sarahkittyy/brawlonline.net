@@ -8,10 +8,14 @@
 // .github/scripts/dolphin-manifest.sh. The installed copy keeps it, so a matching version means
 // nothing to do, as long as every file of the bundle is still there with its size: an install
 // that lost a file afterwards (prod 2026-10-13: Sys/Rollback/gp-v22.json gone, so every session
-// that player started failed) is installed again.
+// that player started failed) is installed again. The bundle itself is checked against its own
+// manifest's file count and size first: a launcher update that did not finish can leave it short
+// of files (bug report #111: no Sys/Rollback/gp-v23.json, so every match ended in "Could not start
+// the game"), and copying it would install the same gap, which the check above cannot see.
 //
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+import { BASE_DOMAIN, PRODUCT_NAME } from "@common/product";
 import fs from "fs";
 import path from "path";
 
@@ -124,6 +128,48 @@ export async function firstMissingFile(sourceDir: string, destDir: string, entri
 }
 
 /**
+ * The files and bytes under `entries` of `dir`, counted as dolphin-manifest.sh counts them: every
+ * entry that is not a directory is a file (a symbolic link too), its size that of what it points to.
+ */
+export async function bundleTotals(dir: string, entries: string[]): Promise<{ files: number; size: number }> {
+  let files = 0;
+  let size = 0;
+  const count = async (p: string, isDirectory: boolean) => {
+    if (isDirectory) {
+      for (const child of await fs.promises.readdir(p, { withFileTypes: true })) {
+        await count(path.join(p, child.name), child.isDirectory());
+      }
+      return;
+    }
+    files += 1;
+    size += (await fs.promises.stat(p).catch(() => fs.promises.lstat(p))).size;
+  };
+  for (const name of entries) {
+    const st = await fs.promises.lstat(path.join(dir, name)).catch(() => null);
+    if (st) {
+      await count(path.join(dir, name), st.isDirectory());
+    }
+  }
+  return { files, size };
+}
+
+/**
+ * Whether `totals` fall short of the manifest's. Only short: signing on macOS may add to a bundle
+ * after its manifest is written, never take away. A manifest without totals is not checked.
+ */
+function shortOf(manifest: DolphinBundleManifest, totals: { files: number; size: number }): boolean {
+  return manifest.files > 0 && (totals.files < manifest.files || totals.size < (manifest.size || 0));
+}
+
+function incompleteBundleMessage(files: number, manifest: DolphinBundleManifest): string {
+  return (
+    `The launcher's copy of Dolphin ${manifest.version} is incomplete (${files} of its ${manifest.files} ` +
+    `files): its last update or install did not finish. Download ${PRODUCT_NAME} again from ` +
+    `https://${BASE_DOMAIN} and install it over this one; your settings, games and save are kept.`
+  );
+}
+
+/**
  * Takes an old entry of the build out of the way of the new one. On Windows, a file that another
  * program has open (an antivirus scan, an overlay or recorder) is only marked for deletion: its name
  * stays taken until that program lets go, so copying the new file fails and so does every later
@@ -193,15 +239,30 @@ export async function installBundledDolphin({
   manifest.entries.forEach(checkEntryName);
   await removeOldBuilds(destDir, log);
   const installed = await readDolphinManifest(destDir);
-  if (
-    installed &&
+  const sameVersion =
+    installed !== null &&
     installed.version === manifest.version &&
     installed.size === manifest.size &&
     (await fs.promises.access(path.join(destDir, manifest.executable)).then(
       () => true,
       () => false,
-    ))
-  ) {
+    ));
+  const bundled = await bundleTotals(sourceDir, manifest.entries);
+  if (shortOf(manifest, bundled)) {
+    // A complete install of this version (the bundle lost a file since) still plays.
+    if (sameVersion && !shortOf(manifest, await bundleTotals(destDir, manifest.entries))) {
+      log(
+        `The bundled Dolphin ${manifest.version} has ${bundled.files} of ${manifest.files} files; the installed one is complete`,
+      );
+      return { action: "unchanged", manifest };
+    }
+    log(
+      `The bundled Dolphin ${manifest.version} (${sourceDir}) has ${bundled.files} of ${manifest.files} files, ` +
+        `${bundled.size} of ${manifest.size} bytes: not installing it`,
+    );
+    throw new Error(incompleteBundleMessage(bundled.files, manifest));
+  }
+  if (sameVersion) {
     const missing = await firstMissingFile(sourceDir, destDir, manifest.entries);
     if (!missing) {
       return { action: "unchanged", manifest };
