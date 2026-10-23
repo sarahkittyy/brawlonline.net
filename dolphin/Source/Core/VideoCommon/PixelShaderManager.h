@@ -17,6 +17,15 @@ public:
   void Init();
   void Dirty();
   void DoState(PointerWrap& p);
+  // A whole-machine session's machine image (Machine::InImageDoState) leaves the constants out
+  // (each machine's are its own GPU thread's). Each is set only when the game writes its BP
+  // register, so the joiner kept its own boot's (bug report #114: wrong colours until the game
+  // wrote them again). This sets every one from bpmem again, as the writes would have.
+  void SetAllFromRegisters();
+  // The machine image's TEV colour registers: each holds a colour and a konst colour, and bpmem
+  // only the one the game wrote last, so the image carries the sender's both (not vouched for;
+  // clamped to the registers' 11 bits).
+  void DoImageTevColors(PointerWrap& p);
 
   void SetConstants();  // sets pixel shader constants
 

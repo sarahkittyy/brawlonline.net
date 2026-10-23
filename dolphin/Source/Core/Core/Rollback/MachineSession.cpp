@@ -162,9 +162,10 @@ constexpr auto SD_SLOWDOWN_HOLD = std::chrono::milliseconds(800);
 constexpr auto SD_DELAY_WINDOW = std::chrono::milliseconds(500);
 // What a hello says this build speaks: 2 since the SD card is synced before the join and its
 // chunks are hashed with BLAKE2b (a build before says nothing: 1), 3 since a Brawl session's
-// checksums leave out the disc revision (BRAWL_DISC_REVISION). Players of different versions
-// refuse each other's joins.
-constexpr int PROTOCOL_VERSION = 3;
+// checksums leave out the disc revision (BRAWL_DISC_REVISION), 4 since a machine image carries
+// what only drawing uses (image version 4). Players of different versions refuse each other's
+// joins.
+constexpr int PROTOCOL_VERSION = 4;
 // The disc revision a Brawl disc leaves in RAM: the only bytes a Rev 1 and a Rev 2 disc leave
 // different (both booted to the same frame and diffed, docs/design/disc-images.md): the disc ID's
 // revision in low memory, in the DVD library's copy and in the game's, and the operand of
@@ -199,7 +200,9 @@ constexpr size_t IMAGE_CHUNK = 256 * 1024;
 constexpr size_t MAX_IMAGE_PACKED = 256u << 20;
 constexpr size_t MAX_IMAGE_RAW = 768u << 20;
 constexpr u32 IMAGE_MAGIC = 0x424D4931;  // "BMI1"
-constexpr u32 IMAGE_VERSION = 3;
+// 4: what only drawing uses (ImageParts::copies: EFB copies, TEV colours), after the SD card's
+// chunks.
+constexpr u32 IMAGE_VERSION = 4;
 // The reliable data ENet keeps unacknowledged on a link. Its own is 64 KB (unless the hosts set
 // bandwidths), so a machine image or SD card chunks went at 64 KB per round trip: 1.3 MB/s at
 // 50 ms, a 22.5 MB image in 23 s with the whole room waiting (prod 2026-10-14), and a joiner's
@@ -4090,6 +4093,15 @@ struct ImageParts
   std::vector<u8> nand;
   // The session's SD card's manifest, canonical form (empty: no card).
   std::vector<u8> sd;
+  // Not vouched for (not in the digest): what only drawing uses, for the image this machine sends
+  // (VideoCommon_DoImageDrawState): the EFB copies its texture cache keeps in VRAM and the TEV
+  // colour registers' both halves. A session's copies never reach guest RAM, so without them a
+  // joiner drew every copy the game made before the join from whatever that RAM held; and bpmem
+  // holds only the half of a colour register written last (bug report #114, wrong UI on the
+  // joiner). Each GPU draws the copies its own way (and at its own resolution), so the players'
+  // would differ; neither is ever read by the game.
+  std::vector<u8> copies;
+  u32 copies_count = 0;
 };
 
 std::string ImageDigest(s64 frame, u32 mem1, u32 mem2, const std::array<Input, MAX_PLAYERS>& last,
@@ -4124,7 +4136,35 @@ std::string ImageDigest(s64 frame, u32 mem1, u32 mem2, const std::array<Input, M
   return hex;
 }
 
-bool MakeImageParts(Core::System& system, s64 frame, ImageParts* parts)
+// The image's draw state (ImageParts::copies), in image mode on the video thread. Measured first
+// (no readback), then read back from the GPU. PPR_MACHINE_IMAGE_COPIES=0 leaves them out (the
+// joiner keeps its own cache, as before image version 4), for comparisons.
+std::vector<u8> SaveImageCopies(u32* count)
+{
+  *count = 0;
+  if (const char* env = std::getenv("PPR_MACHINE_IMAGE_COPIES"); env && std::string_view(env) == "0")
+    return {};
+  s_image_dostate = true;
+  u8 dummy = 0;
+  u8* ptr = &dummy;
+  PointerWrap measure(&ptr, 0, PointerWrap::Mode::Measure);
+  VideoCommon_DoImageDrawState(measure);
+  std::vector<u8> out(measure.GetOffsetFromPreviousPosition(&dummy));
+  ptr = out.data();
+  PointerWrap write(&ptr, out.size(), PointerWrap::Mode::Write);
+  *count = VideoCommon_DoImageDrawState(write);
+  s_image_dostate = false;
+  if (!write.IsWriteMode())
+  {
+    *count = 0;
+    return {};
+  }
+  out.resize(write.GetOffsetFromPreviousPosition(out.data()));
+  return out;
+}
+
+// `copies`: this player sends the image (ImageParts::copies).
+bool MakeImageParts(Core::System& system, s64 frame, ImageParts* parts, bool copies)
 {
   auto& memory = system.GetMemory();
   Rollback::RollbackManager::SyncGPUForDoState(system);
@@ -4148,6 +4188,8 @@ bool MakeImageParts(Core::System& system, s64 frame, ImageParts* parts)
     std::lock_guard lk(s.net_mutex);
     parts->sd = s.sd_manifest_canon;
   }
+  if (copies)
+    parts->copies = SaveImageCopies(&parts->copies_count);
   return true;
 }
 
@@ -4198,6 +4240,8 @@ std::vector<u8> BuildImage(const ImageParts& parts, u32 sum, u64* raw_size)
   Put32(&raw, static_cast<u32>(hot.size()));
   for (const u32 c : hot)
     Put32(&raw, c);
+  Put32(&raw, static_cast<u32>(parts.copies.size()));
+  raw.insert(raw.end(), parts.copies.begin(), parts.copies.end());
   *raw_size = raw.size();
 
   ZSTD_CCtx* cctx = ZSTD_createCCtx();
@@ -4336,6 +4380,14 @@ bool LoadImage(Core::System& system, std::string* error, bool self = false)
   std::vector<u32> sd_hot(hot_count);
   std::memcpy(sd_hot.data(), raw.data() + pos, size_t{hot_count} * 4);
   pos += size_t{hot_count} * 4;
+  u32 copies_size;
+  if (!get32(&copies_size) || raw.size() - pos < copies_size)
+  {
+    *error = "the machine image is cut short";
+    return false;
+  }
+  const size_t copies_pos = pos;
+  pos += copies_size;
   // The session's SD card (checked like everything a peer sends; the players vouch for it below).
   std::shared_ptr<const SDCard::Manifest> sd_manifest;
   std::vector<u8> sd_canon;
@@ -4437,6 +4489,17 @@ bool LoadImage(Core::System& system, std::string* error, bool self = false)
   const bool ok = ::State::LoadFromBuffer(
       system, std::span<u8>(raw.data() + state_pos, static_cast<size_t>(state_size)), &state_failure);
   VideoCommon_SetSkipGPUReadbackForRollback(false);
+  // The sender's EFB copies replace this machine's texture cache (its own boot's copies are of
+  // another machine). Only drawn, so one that does not load leaves the game as it is.
+  u32 copies = 0;
+  bool copies_ok = true;
+  if (ok && copies_size > 0)
+  {
+    u8* ptr = raw.data() + copies_pos;
+    PointerWrap p(&ptr, copies_size, PointerWrap::Mode::Read);
+    copies = VideoCommon_DoImageDrawState(p);
+    copies_ok = p.IsReadMode();
+  }
   s_image_dostate = false;
   rb.m_skip_jit_clear_in_dostate.store(false, std::memory_order_seq_cst);
   fifo.RestoreState(true);
@@ -4453,6 +4516,11 @@ bool LoadImage(Core::System& system, std::string* error, bool self = false)
   if (s_schedule_log_until >= 0)
     INFO_LOG_FMT(BRAWLBACK, "machine: schedule log: image state loaded, event order {}",
                  system.GetCoreTiming().GetEventFifoId());
+  if (!self)
+  {
+    AddLog(fmt::format("machine image: {} EFB copies ({:.1f} MB){}", copies,
+                       copies_size / 1048576.0, copies_ok ? "" : ", which did not load"));
+  }
   if (!UnpackNand(system, raw.data() + nand_pos, nand_size, error))
     return false;
   u8* gpu = Rollback::GPUWrittenBitmap::Get().entries;
@@ -4492,7 +4560,7 @@ void SelfLoad(Core::System& system, s64 frame)
   u64 raw = 0;
   const u32 sum = Rollback::RollbackManager::Get().FullChecksum();
   ImageParts parts;
-  if (!MakeImageParts(system, frame, &parts))
+  if (!MakeImageParts(system, frame, &parts, true))
     return;
   std::vector<u8> image = BuildImage(parts, sum, &raw);
   {
@@ -4745,7 +4813,8 @@ void EnterEpoch()
   if (admitting)
   {
     ImageParts parts;
-    if (MakeImageParts(Core::System::GetInstance(), s.plan.frame, &parts))
+    if (MakeImageParts(Core::System::GetInstance(), s.plan.frame, &parts,
+                       s.plan.from == s.opts.local_slot))
     {
       s.epoch_digest = ImageDigest(parts);
       // Diagnostics (PPR_MACHINE_DUMP_DIR): the parts, to compare players whose digests differ.
@@ -4877,6 +4946,8 @@ void EpochStep(Core::System& system)
     u64 raw = 0;
     std::vector<u8> image =
         s_image_parts ? BuildImage(*s_image_parts, s.epoch_sum, &raw) : std::vector<u8>{};
+    const u32 copies_count = s_image_parts ? s_image_parts->copies_count : 0;
+    const size_t copies_bytes = s_image_parts ? s_image_parts->copies.size() : 0;
     s_image_parts.reset();
     s.image_ms = std::chrono::duration<double, std::milli>(Clock::now() - t0).count();
     s.image_packed = image.size();
@@ -4888,8 +4959,10 @@ void EpochStep(Core::System& system)
     }
     else
     {
-      AddLog(fmt::format("machine image for player {}: {:.1f} MB ({:.1f} MB raw) in {:.0f} ms",
-                         joiner + 1, image.size() / 1048576.0, raw / 1048576.0, s.image_ms));
+      AddLog(fmt::format("machine image for player {}: {:.1f} MB ({:.1f} MB raw, {} EFB copies "
+                         "{:.1f} MB) in {:.0f} ms",
+                         joiner + 1, image.size() / 1048576.0, raw / 1048576.0, copies_count,
+                         copies_bytes / 1048576.0, s.image_ms));
       std::string name;
       {
         std::lock_guard lk(s.net_mutex);

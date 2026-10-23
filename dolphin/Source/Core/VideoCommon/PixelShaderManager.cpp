@@ -3,6 +3,8 @@
 
 #include "VideoCommon/PixelShaderManager.h"
 
+#include <algorithm>
+#include <array>
 #include <iterator>
 
 #include "Common/ChunkFile.h"
@@ -524,6 +526,88 @@ void PixelShaderManager::SetBoundingBoxActive(bool active)
 
   constants.bounding_box = active;
   dirty = true;
+}
+
+void PixelShaderManager::SetAllFromRegisters()
+{
+  // As BPWritten calls them for each register.
+  const u32* raw = reinterpret_cast<const u32*>(&bpmem);
+  SetGenModeChanged();
+  for (int i = 0; i < 3; i++)
+    SetIndMatrixChanged(i);
+  SetIndTexScaleChanged(false);
+  SetIndTexScaleChanged(true);
+  SetZModeControl();
+  SetBlendModeChanged();
+  SetAlpha();
+  SetDestAlphaChanged();
+  SetFogRangeAdjustChanged();
+  SetFogParamChanged();
+  SetFogColorChanged();
+  SetAlphaTestChanged();
+  SetZTextureBias();
+  if (bpmem.ztex2.type == ZTexFormat::U8 || bpmem.ztex2.type == ZTexFormat::U16 ||
+      bpmem.ztex2.type == ZTexFormat::U24)
+  {
+    SetZTextureTypeChanged();
+  }
+  SetZTextureOpChanged();
+  SetTevIndirectChanged();
+  for (int i = 0; i < 8; i++)
+  {
+    SetTevKSel(i, raw[BPMEM_TEV_KSEL + i]);
+    SetTevOrder(i, raw[BPMEM_TREF + i]);
+    SetTexCoordChanged(i);
+  }
+  for (int i = 0; i < 16; i++)
+  {
+    SetTevCombiner(i, 0, raw[BPMEM_TEV_COLOR_ENV + 2 * i]);
+    SetTevCombiner(i, 1, raw[BPMEM_TEV_COLOR_ENV + 2 * i + 1]);
+  }
+  // The colour registers: the half of each that bpmem holds (DoImageTevColors sets both).
+  for (int i = 0; i < 4; i++)
+  {
+    const TevReg& reg = bpmem.tevregs[i];
+    if (reg.ra.type == TevRegType::Constant)
+    {
+      SetTevKonstColor(i, 0, reg.ra.red);
+      SetTevKonstColor(i, 3, reg.ra.alpha);
+    }
+    else
+    {
+      SetTevColor(i, 0, reg.ra.red);
+      SetTevColor(i, 3, reg.ra.alpha);
+    }
+    if (reg.bg.type == TevRegType::Constant)
+    {
+      SetTevKonstColor(i, 1, reg.bg.green);
+      SetTevKonstColor(i, 2, reg.bg.blue);
+    }
+    else
+    {
+      SetTevColor(i, 1, reg.bg.green);
+      SetTevColor(i, 2, reg.bg.blue);
+    }
+  }
+  dirty = true;
+}
+
+void PixelShaderManager::DoImageTevColors(PointerWrap& p)
+{
+  std::array<int4, 4> colors = constants.colors;
+  std::array<int4, 4> kcolors = constants.kcolors;
+  p.Do(colors);
+  p.Do(kcolors);
+  if (!p.IsReadMode())
+    return;
+  for (int i = 0; i < 4; i++)
+  {
+    for (int c = 0; c < 4; c++)
+    {
+      SetTevColor(i, c, std::clamp(colors[i][c], -1024, 1023));
+      SetTevKonstColor(i, c, std::clamp(kcolors[i][c], -1024, 1023));
+    }
+  }
 }
 
 void PixelShaderManager::DoState(PointerWrap& p)

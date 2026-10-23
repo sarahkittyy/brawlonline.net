@@ -306,6 +306,13 @@ public:
 
   // Save States
   void DoState(PointerWrap& p);
+  // A whole-machine session's machine image (Core/Rollback/MachineSession.cpp): the EFB copies
+  // this cache keeps in VRAM. A session's copies never reach guest RAM
+  // (Rollback::PresentStats::CopiesLeaveGuestRAM), so a joiner's own cache, which never saw them,
+  // drew a copy made before its join from whatever that RAM held. Loading checks every value (the
+  // image is another player's data) and drops an entry it refuses. Returns how many copies it
+  // saved or loaded.
+  u32 DoImageCopiesState(PointerWrap& p);
 
   static bool AllCopyFilterCoefsNeeded(const std::array<u32, 3>& coefficients);
   static bool CopyFilterCanOverflow(const std::array<u32, 3>& coefficients);
@@ -407,6 +414,9 @@ private:
   bool CheckReadbackTexture(u32 width, u32 height, AbstractTextureFormat format);
   void DoSaveState(PointerWrap& p);
   void DoLoadState(PointerWrap& p);
+  // DoImageCopiesState: DoState of the EFB copies alone, every value checked on load.
+  bool m_image_copies = false;
+  u32 m_image_copies_count = 0;
 
   void ApplyMaterialToCacheEntry(const VideoCommon::MaterialResource& material, TCacheEntry* entry);
 

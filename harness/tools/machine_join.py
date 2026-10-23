@@ -14,6 +14,10 @@ A joiner whose SD card differs from the host's (docs/design/brawl-mods.md §6.5)
 its card, ``--sd-sync`` its answer to the download (yes, overwrite, no). It gets the host's card
 before it asks to join; ``--play-seconds`` keeps the game going after the join and reports any read
 of the card that still had to wait for the network (there must be none).
+
+What the joiner draws (bug report #114: a joiner drew the EFB copies made before its join from RAM):
+``--shots N`` takes N screenshots of the host and the joiner while they play (``--play-seconds``
+apart in all), into ``<out>/shots``; they need a real ``--video`` (D3D11 renders headless).
 """
 
 from __future__ import annotations
@@ -48,6 +52,8 @@ def main() -> int:
     ap.add_argument("--joiner-sd", help="the joiner's SD card image (default: --sd)")
     ap.add_argument("--sd-sync", default="yes", choices=["ask", "yes", "overwrite", "no"],
                     help="the joiner's answer when its SD card differs from the host's")
+    ap.add_argument("--shots", type=int, default=0,
+                    help="screenshots of host and joiner while they play (needs --video D3D11)")
     ap.add_argument("--play-seconds", type=float, default=5,
                     help="how long both play after a join before their state is read")
     ap.add_argument("--iso", help="the disc (default: PPHARNESS_ISO or <root>/game/SSBB_NTSC.iso)")
@@ -192,13 +198,31 @@ def main() -> int:
             results.append((outcome, took, sent[-1] if sent else "?", max(gaps, default=0) / 1000))
             print(f"join {k + 1}: {outcome} in {took:.1f} s (image {sent[-1] if sent else '?'} MB, "
                   f"longest stall between progress lines {max(gaps, default=0) / 1000:.1f} s)", flush=True)
+            # The EFB copies the image carried (image version 4) and how many the joiner loaded.
+            sent_copies = re.findall(r"machine image for player 2: .*?(\d+ EFB copies [\d.]+ MB)", hlog)
+            got_copies = re.findall(r"machine image: (\d+ EFB copies .*)", log_of(joiner))
+            if sent_copies or got_copies:
+                print(f"  EFB copies: sent {sent_copies[-1] if sent_copies else '?'}, "
+                      f"loaded {got_copies[-1] if got_copies else '?'}", flush=True)
             # The joiner's SD card before its join, and any read that still waited while it played.
             for line in re.findall(r"SD card: (?:\d+ chunks of this|[\d.]+ MB of the session|this player's card is "
                                    r"the session's|got [\d.]+ MB|wrote the host's|downloading).*", log_of(joiner)):
                 print(f"  joiner: SD card: {line.split('SD card: ', 1)[-1][:160]}", flush=True)
             if outcome == "joined":
                 logs_at = {inst.name: len(log_of(inst)) for inst in (host, joiner)}
-                time.sleep(a.play_seconds)
+                if a.shots:
+                    shots = out / "shots"
+                    shots.mkdir(exist_ok=True)
+                    for i in range(a.shots):
+                        time.sleep(a.play_seconds / a.shots)
+                        for inst in (host, joiner):
+                            try:
+                                inst.client.screenshot(shots / f"join{k + 1}-{i + 1:02d}-{inst.name}.png", timeout=30)
+                            except Exception as e:  # noqa: BLE001
+                                print(f"  {inst.name}: screenshot {i + 1} failed: {e}", flush=True)
+                    print(f"  screenshots in {shots}", flush=True)
+                else:
+                    time.sleep(a.play_seconds)
                 # Freezes while they played (StallTracer: no emulated field for 250 ms or more).
                 for inst in (host, joiner):
                     stalls = [int(x) for x in re.findall(r"Stall over: (\d+) ms", log_of(inst)[logs_at[inst.name]:])]

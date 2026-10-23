@@ -6,6 +6,7 @@
 #include "Common/ChunkFile.h"
 #include "Core/Rollback/MachineSession.h"
 #include "Core/System.h"
+#include "VideoCommon/AsyncRequests.h"
 #include "VideoCommon/BPMemory.h"
 #include "VideoCommon/BPStructs.h"
 #include "VideoCommon/BoundingBox.h"
@@ -125,6 +126,21 @@ bool VideoCommon_GetSkipVertexFlushForRollback()
   return s_skip_vertex_flush_for_rollback;
 }
 
+unsigned VideoCommon_DoImageDrawState(PointerWrap& p)
+{
+  auto& system = Core::System::GetInstance();
+  auto run = [&] {
+    system.GetPixelShaderManager().DoImageTevColors(p);
+    p.DoMarker("TEV colors");
+    return g_texture_cache->DoImageCopiesState(p);
+  };
+  if (!system.IsDualCoreMode())
+    return run();
+  const u32 count = AsyncRequests::GetInstance()->PushBlockingEvent(run);
+  system.GetFifo().GpuMaySleep();
+  return count;
+}
+
 void VideoCommon_DoState(PointerWrap& p)
 {
   bool software = false;
@@ -235,10 +251,16 @@ void VideoCommon_DoState(PointerWrap& p)
   {
     if (image)
     {
-      // Recomputed from the registers just loaded.
+      // Recomputed from the registers just loaded. The pixel and geometry shaders' constants
+      // that a BP register's write sets are set from bpmem again: Dirty() keeps the old ones.
       system.GetXFStateManager().SetAllChanged();
+      system.GetPixelShaderManager().SetAllFromRegisters();
       system.GetPixelShaderManager().Dirty();
-      system.GetGeometryShaderManager().Dirty();
+      auto& geometry_shader_manager = system.GetGeometryShaderManager();
+      geometry_shader_manager.SetViewportChanged();
+      for (u8 i = 0; i < 8; i++)
+        geometry_shader_manager.SetTexCoordChanged(i);
+      geometry_shader_manager.Dirty();
       system.GetVertexShaderManager().dirty = true;
     }
     // Inform backend of new state from registers.

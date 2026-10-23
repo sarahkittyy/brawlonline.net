@@ -63,6 +63,11 @@ static const u64 TEXHASH_INVALID = 0;
 // Sonic the Fighters (inside Sonic Gems Collection) loops a 64 frames animation
 static const int TEXTURE_KILL_THRESHOLD = 64;
 static const int TEXTURE_POOL_KILL_THRESHOLD = 3;
+// A machine image's copies (DoImageCopiesState): the longest side one may have (an EFB copy is at
+// most 1024 texels a side, times the internal resolution), and how many bytes of them an image
+// carries at most (the rest are left out: the joiner draws those from RAM, as before).
+static constexpr u32 IMAGE_COPY_MAX_SIZE = 8192;
+static constexpr u64 IMAGE_COPIES_MAX_BYTES = 256ull << 20;
 
 static int xfb_count = 0;
 
@@ -516,6 +521,21 @@ std::optional<TextureCacheBase::TexPoolEntry> TextureCacheBase::DeserializeTextu
 
   if (!p.IsReadMode() || total_size == 0)
     return std::nullopt;
+  // An image's copy: the shape CopyRenderTargetToTexture gives one, nothing else (a crafted size
+  // or level count would have the backend read past the data).
+  if (m_image_copies &&
+      (config.width == 0 || config.height == 0 ||
+       config.width > std::min(g_backend_info.MaxTextureSize, IMAGE_COPY_MAX_SIZE) ||
+       config.height > std::min(g_backend_info.MaxTextureSize, IMAGE_COPY_MAX_SIZE) ||
+       config.levels != 1 || config.layers == 0 || config.layers > 2 || config.samples != 1 ||
+       config.format != AbstractTextureFormat::RGBA8 ||
+       config.flags != AbstractTextureFlag_RenderTarget ||
+       config.type != AbstractTextureType::Texture_2DArray ||
+       total_size != u64{AbstractTexture::CalculateStrideForFormat(config.format, config.width)} *
+                         config.height * config.layers))
+  {
+    return std::nullopt;
+  }
 
   auto tex = AllocateTexture(config);
   if (!tex)
@@ -560,6 +580,34 @@ void TextureCacheBase::DoState(PointerWrap& p)
     DoLoadState(p);
 }
 
+u32 TextureCacheBase::DoImageCopiesState(PointerWrap& p)
+{
+  m_image_copies = true;
+  m_image_copies_count = 0;
+  DoState(p);
+  m_image_copies = false;
+  return m_image_copies_count;
+}
+
+// An image's copy entry: an EFB copy as CopyRenderTargetToTexture makes one, over guest RAM (its
+// hash is of that RAM, which the joiner has the same).
+static bool IsImageCopyEntry(const TCacheEntry& entry)
+{
+  if (!entry.is_efb_copy || entry.is_xfb_copy || entry.is_xfb_container || entry.is_custom_tex ||
+      entry.invalidated || entry.native_levels != 1 || entry.native_width == 0 ||
+      entry.native_width > 1024 || entry.native_height == 0 || entry.native_height > 1024 ||
+      !IsValidTextureFormat(entry.format.texfmt) || !IsValidTLUTFormat(entry.format.tlutfmt) ||
+      entry.memory_stride < entry.BytesPerRow() || entry.memory_stride > 0x10000 ||
+      u64{entry.memory_stride} * entry.NumBlocksY() != entry.size_in_bytes)
+  {
+    return false;
+  }
+  auto& memory = Core::System::GetInstance().GetMemory();
+  // Not GetPointerForRange: it raises a panic dialog for a range past the end.
+  const std::span<u8> span = memory.GetSpanForAddress(entry.addr);
+  return span.data() && span.size() >= entry.size_in_bytes;
+}
+
 void TextureCacheBase::DoSaveState(PointerWrap& p)
 {
   // Flush all stale binds
@@ -567,7 +615,21 @@ void TextureCacheBase::DoSaveState(PointerWrap& p)
 
   std::map<const TCacheEntry*, u32> entry_map;
   std::vector<TCacheEntry*> entries_to_save;
-  auto ShouldSaveEntry = [](const RcTcacheEntry& entry) {
+  u64 image_bytes = 0;
+  auto ShouldSaveEntry = [this, &image_bytes](const RcTcacheEntry& entry) {
+    // A machine image: only the EFB copies (the joiner presents its own next XFB copy), up to
+    // IMAGE_COPIES_MAX_BYTES.
+    if (m_image_copies)
+    {
+      if (!IsImageCopyEntry(*entry))
+        return false;
+      const TextureConfig& config = entry->texture->GetConfig();
+      const u64 bytes = u64{config.width} * config.height * config.layers * 4;
+      if (image_bytes + bytes > IMAGE_COPIES_MAX_BYTES)
+        return false;
+      image_bytes += bytes;
+      return true;
+    }
     // We skip non-copies as they can be decoded from RAM when the state is loaded.
     // Storing them would duplicate data in the save state file, adding to decompression time.
     // We also need to store invalidated entries, as they can't be restored from RAM.
@@ -596,7 +658,21 @@ void TextureCacheBase::DoSaveState(PointerWrap& p)
   std::vector<std::pair<u32, u32>> textures_by_address_list;
   std::vector<std::pair<u64, u32>> textures_by_hash_list;
   std::vector<std::pair<u32, u32>> bound_textures_list;
-  if (Config::Get(Config::GFX_SAVE_TEXTURE_CACHE_TO_STATE))
+  if (m_image_copies)
+  {
+    // By address alone, each copy once at its own: a copy is never in the hash map, and the
+    // joiner binds its own textures.
+    for (const auto& it : m_textures_by_address)
+    {
+      if (it.first == it.second->addr && !entry_map.contains(it.second.get()) &&
+          ShouldSaveEntry(it.second))
+      {
+        const u32 id = AddCacheEntryToMap(it.second);
+        textures_by_address_list.emplace_back(it.first, id);
+      }
+    }
+  }
+  else if (Config::Get(Config::GFX_SAVE_TEXTURE_CACHE_TO_STATE))
   {
     for (const auto& it : m_textures_by_address)
     {
@@ -627,6 +703,7 @@ void TextureCacheBase::DoSaveState(PointerWrap& p)
 
   // Save the texture cache entries out in the order the were referenced.
   u32 size = static_cast<u32>(entries_to_save.size());
+  m_image_copies_count = size;
   p.Do(size);
   for (TCacheEntry* entry : entries_to_save)
   {
@@ -691,29 +768,58 @@ void TextureCacheBase::DoLoadState(PointerWrap& p)
   // Only clear out state when actually restoring/loading.
   // Since we throw away entries when not in loading mode now, we don't need to check
   // before inserting entries into the cache, as GetEntry will always return null.
-  const bool commit_state = p.IsReadMode();
+  // An image's copies on a backend that keeps no copies in VRAM: this machine has none of its own
+  // either (it draws them from RAM), so they are read and dropped.
+  const bool commit_state =
+      p.IsReadMode() && (!m_image_copies || (g_backend_info.bSupportsCopyToVram &&
+                                             !g_ActiveConfig.bDisableCopyToVRAM));
   if (commit_state)
     Invalidate();
+
+  // Every count is checked against the bytes left (a crafted one would loop billions of times):
+  // the least an entry or a list item takes.
+  constexpr size_t MIN_ENTRY_BYTES = sizeof(TextureConfig) + 4;
+  constexpr size_t MIN_PAIR_BYTES = 8;
 
   // Preload all cache entries.
   u32 size = 0;
   p.Do(size);
+  if (!p.CheckReadCount(size, MIN_ENTRY_BYTES))
+    size = 0;
+  u32 refused = 0;
   for (u32 i = 0; i < size; i++)
   {
     // Even if the texture isn't valid, we still need to create the cache entry object
     // to update the point in the state state. We'll just throw it away if it's invalid.
     auto tex = DeserializeTexture(p);
-    auto entry =
-        std::make_shared<TCacheEntry>(std::move(tex->texture), std::move(tex->framebuffer));
+    auto entry = tex ? std::make_shared<TCacheEntry>(std::move(tex->texture),
+                                                     std::move(tex->framebuffer)) :
+                       std::make_shared<TCacheEntry>(nullptr, nullptr);
     entry->textures_by_hash_iter = m_textures_by_hash.end();
     entry->DoState(p);
+    if (m_image_copies && p.IsReadMode())
+    {
+      if (!entry->texture || !IsImageCopyEntry(*entry))
+      {
+        entry->texture.reset();
+        entry->framebuffer.reset();
+        refused++;
+      }
+      // This machine's frame count: the copy counts as just made.
+      entry->frameCount = FRAMECOUNT_INVALID;
+    }
     if (entry->texture && commit_state)
       id_map.emplace(i, entry);
   }
   p.DoMarker("TextureCacheEntries");
+  m_image_copies_count = static_cast<u32>(id_map.size());
+  if (refused > 0)
+    WARN_LOG_FMT(VIDEO, "Machine image: {} of its EFB copies refused", refused);
 
   // Link all cache entry references.
   p.Do(size);
+  if (!p.CheckReadCount(size, MIN_PAIR_BYTES))
+    size = 0;
   for (u32 i = 0; i < size; i++)
   {
     u32 id1 = 0, id2 = 0;
@@ -721,12 +827,16 @@ void TextureCacheBase::DoLoadState(PointerWrap& p)
     p.Do(id2);
     auto e1 = GetEntry(id1);
     auto e2 = GetEntry(id2);
-    if (e1 && e2)
+    // An image has copies only, which never reference each other.
+    if (e1 && e2 && !m_image_copies)
       e1->CreateReference(e2.get());
   }
 
   // Fill in address map.
   p.Do(size);
+  if (!p.CheckReadCount(size, MIN_PAIR_BYTES))
+    size = 0;
+  std::set<u32> placed;
   for (u32 i = 0; i < size; i++)
   {
     u32 addr = 0;
@@ -735,12 +845,17 @@ void TextureCacheBase::DoLoadState(PointerWrap& p)
     p.Do(id);
 
     auto& entry = GetEntry(id);
+    // An image's copy goes in once, at its own address (the cache finds overlaps by the key).
+    if (entry && m_image_copies && (addr != entry->addr || !placed.insert(id).second))
+      continue;
     if (entry)
       m_textures_by_address.emplace(addr, entry);
   }
 
   // Fill in hash map.
   p.Do(size);
+  if (!p.CheckReadCount(size, 12))
+    size = 0;
   for (u32 i = 0; i < size; i++)
   {
     u64 hash = 0;
@@ -749,7 +864,7 @@ void TextureCacheBase::DoLoadState(PointerWrap& p)
     p.Do(id);
 
     auto& entry = GetEntry(id);
-    if (entry)
+    if (entry && !m_image_copies)
       entry->textures_by_hash_iter = m_textures_by_hash.emplace(hash, entry);
   }
 
@@ -759,6 +874,8 @@ void TextureCacheBase::DoLoadState(PointerWrap& p)
 
   // Fill in bound textures
   p.Do(size);
+  if (!p.CheckReadCount(size, MIN_PAIR_BYTES))
+    size = 0;
   for (u32 i = 0; i < size; i++)
   {
     u32 index = 0;
@@ -767,7 +884,7 @@ void TextureCacheBase::DoLoadState(PointerWrap& p)
     p.Do(id);
 
     auto& entry = GetEntry(id);
-    if (entry)
+    if (entry && !m_image_copies && index < m_bound_textures.size())
       m_bound_textures[index] = entry;
   }
 }

@@ -7,6 +7,14 @@ class PointerWrap;
 
 void VideoCommon_DoState(PointerWrap& p);
 
+// A whole-machine session's machine image: what only drawing uses and the image's digest leaves
+// out (each machine's GPU has its own): the TEV colour registers' both halves
+// (PixelShaderManager::DoImageTevColors) and the EFB copies the texture cache keeps in VRAM
+// (TextureCacheBase::DoImageCopiesState). On the video thread, as for a savestate; the caller is
+// in image mode (Machine::InImageDoState), so the request does not kick the GPU. Returns how many
+// EFB copies it saved or loaded.
+unsigned VideoCommon_DoImageDrawState(PointerWrap& p);
+
 // Skips GPU readbacks (texture cache, framebuffer, bounding box) in DoState.
 // Register state (BP/XF/FIFO) is always saved. Must match between save and load.
 void VideoCommon_SetSkipGPUReadbackForRollback(bool skip);
