@@ -1252,12 +1252,14 @@ namespace OnlineMatch {
         }
     }
 
+    // Only for a player of the match: a replay (also a spectated game and a rendered clip) or a
+    // watched room game replays the recorder's START presses, and the hint is for the player.
     bool quitHintShown()
     {
         const PPOM::Session& se = PPOM::g_block.session;
         u8 me = PPOM::g_block.local.localPort;
         return g_onlineCss && g_onlineMatchGame && se.mode == PPOM::MODE_UNRANKED && !s_clientQuit &&
-               me < 4 && ((s_hintPorts >> me) & 1);
+               !OnlineMenu::nobodyPlaysHere() && me < 4 && ((s_hintPorts >> me) & 1);
     }
 
     // ---- Each player's own controls (the design's port values) ----

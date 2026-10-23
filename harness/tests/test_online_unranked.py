@@ -23,6 +23,7 @@ from __future__ import annotations
 import json
 import re
 import time
+from pathlib import Path
 from typing import Any, Callable, Iterator
 
 import pytest
@@ -318,6 +319,7 @@ def test_unranked_quits_without_a_pause(backend: OnlineBackend,
     # The quit hint, on A's screen only (drawn: scratch[10] 0x10000000).
     assert a.debug_scratch()[10] & 0x10000000, hex(a.debug_scratch()[10])
     assert not b.debug_scratch()[10] & 0x10000000, hex(b.debug_scratch()[10])
+    first_file = a.c.call("replay_recording")["path"]
     # P+'s salty runback with no pause either (L+R+Y held with the quit): straight into the same
     # match on both, never the CSS (scratch[10]: the quit marked as a runback, state 10 into it).
     first = online_set.gstatus(a.c)["match_index"]
@@ -347,6 +349,14 @@ def test_unranked_quits_without_a_pause(backend: OnlineBackend,
     a.to_css("direct")
     a.open_keypad()
     a.shot("04-direct-keypad")
+    # A's replay of the first match plays A's START press again, but the hint is for the player,
+    # not for a replay (a player's report, 2026-10-23: it showed in replays and rendered videos).
+    from test_replay import _play, _viewer
+    v = _viewer(dolphin, backend, gpu_backend, test)
+    B.write_rules(v.c, stocks=4, minutes=8, items_off=True)
+    st = _play(v, Path(first_file))
+    assert st["phase"] != "error" and st["desync_frame"] == -1, st
+    assert not v.debug_scratch()[10] & 0x10000000, hex(v.debug_scratch()[10])
 
 
 def test_unranked_search_ends_with_the_server_error(backend: OnlineBackend,
