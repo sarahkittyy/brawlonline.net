@@ -4115,12 +4115,14 @@ std::string NetStatsLine(const State::NetStats& w)
                         w.pad_age_max);
   }
   if (const HostPadReadStats& r = w.pad_reads;
-      r.on_time + r.latched + r.relatched + r.late_history + r.late_live)
+      r.on_time + r.latched + r.relatched + r.late_history + r.late_live + r.late_far)
   {
     line += fmt::format(", pad reads {} on time, {} in re-runs ({} read anew), late {} from history "
-                        "{} live (max {:.1f} ms)",
+                        "{} live, {} far behind read now (max {:.1f} ms); host decode used {}, "
+                        "declined {}, checked {}, differed {}",
                         r.on_time, r.latched + r.relatched, r.relatched, r.late_history,
-                        r.late_live, r.late_max_ms);
+                        r.late_live, r.late_far, r.late_max_ms, r.decode_used, r.decode_declined,
+                        r.decode_checked, r.decode_mismatched);
   }
   return line;
 }
@@ -4164,6 +4166,11 @@ void NetStatsFold(State::NetStats& t, const State::NetStats& w)
   t.pad_reads.on_time += w.pad_reads.on_time;
   t.pad_reads.late_history += w.pad_reads.late_history;
   t.pad_reads.late_live += w.pad_reads.late_live;
+  t.pad_reads.late_far += w.pad_reads.late_far;
+  t.pad_reads.decode_used += w.pad_reads.decode_used;
+  t.pad_reads.decode_declined += w.pad_reads.decode_declined;
+  t.pad_reads.decode_checked += w.pad_reads.decode_checked;
+  t.pad_reads.decode_mismatched += w.pad_reads.decode_mismatched;
   t.pad_reads.latched += w.pad_reads.latched;
   t.pad_reads.relatched += w.pad_reads.relatched;
   t.pad_reads.late_max_ms = std::max(t.pad_reads.late_max_ms, w.pad_reads.late_max_ms);
@@ -5093,10 +5100,24 @@ void CaptureLocalInputs()
     // sample twice or skipped one, a frame apart (bug report #70). Always the pass made from the
     // poll a field before this loop top: each frame's sample a field after the last, as old as
     // on a frame without a rollback. (At an unlimited speed there is no schedule: the newest.)
-    if (const auto due = Core::System::GetInstance().GetCoreTiming().ScheduledHostTime())
+    const auto due = Core::System::GetInstance().GetCoreTiming().ScheduledHostTime();
+    if (due)
       latest = PadsSampledBefore(s.local_pad, *due - HALF_FIELD, &s.local_sampled_at);
     else
       latest = PadsSampledBefore(s.local_pad, Clock::time_point::max(), &s.local_sampled_at);
+    // A GameCube controller: the read the SI made just before this loop top, made into the pad
+    // the pad thread will make of it after the loop top (host decode): a field fresher than that
+    // pass. Only a read newer than the pass's and at most a field and a half old by the schedule
+    // (else after a wait the decode is no fresher).
+    std::array<u8, Addr::PAD_STRIDE> decoded;
+    Clock::time_point decoded_at{};
+    if (s.local_pad < 4 && PadsHostDecoded(s.local_pad, &decoded, &decoded_at) &&
+        decoded_at > s.local_sampled_at &&
+        (!due || decoded_at > *due - 3 * HALF_FIELD))
+    {
+      std::memcpy(latest.data() + s.local_pad * INPUT_SIZE, decoded.data(), INPUT_SIZE);
+      s.local_sampled_at = decoded_at;
+    }
   }
   else
   {

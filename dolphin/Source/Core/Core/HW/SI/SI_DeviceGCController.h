@@ -55,6 +55,8 @@ protected:
   u64 m_timer_button_combo_start = 0;
   // Type of button combo from the last/current poll
   EButtonCombo m_last_button_combo = COMBO_NONE;
+  // PPR_GPRB_TEST_ORIGIN, at the first read of a network session (GetPadStatus).
+  int m_test_origin_state = 0;  // reads unplugged so far; -1 done
 
 public:
   // Constructor

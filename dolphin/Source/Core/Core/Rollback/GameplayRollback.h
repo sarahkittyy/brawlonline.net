@@ -284,6 +284,8 @@ u32 PadsInjectedCount();
 // CSIDevice_GCAdapter::GetPadStatus) stands for an instant on the throttle's schedule:
 // - in a rollback's re-run: the last read before it, the one taken at the frame's due time
 //   (unless older than 100 ms, after a long wait for the peer: then read now);
+// - more than a field behind schedule (a PC that cannot keep full speed runs up to MaxFallback
+//   behind on every frame): the controller now, standing for its due instant (HostPadFarLate);
 // - behind schedule (the instant was due earlier, CoreTimingManager::ScheduledHostTime): the
 //   state the controller had then, from a timestamped history: the Wii U adapter's read thread
 //   keeps one (GCAdapter::InputAt), and the harness (Harness::PadOverrideAt). Pads mapped in
@@ -304,6 +306,7 @@ enum class HostPadSource
 };
 // A network session's frames run (on) or not (off: every read is taken now).
 void SetHostPadsScheduled(bool scheduled);
+bool HostPadsScheduled();
 // CPU thread: SI channel `chan`'s host controller, as above.
 GCPadStatus ReadHostPad(Core::System& system, int chan, HostPadSource source);
 
@@ -312,6 +315,13 @@ struct HostPadReadStats
   u64 on_time = 0;       // read now, on schedule (or ahead of it)
   u64 late_history = 0;  // more than 1 ms behind schedule: from the history
   u64 late_live = 0;     // more than 1 ms behind schedule, no history: read now
+  u64 late_far = 0;      // more than a field behind schedule: read now (stands for its due time)
+  // Host decode (PadsHostDecoded): local inputs taken from it, declined (none, too old, off or
+  // turned off), and pad-thread passes compared with it (and how many differed).
+  u64 decode_used = 0;
+  u64 decode_declined = 0;
+  u64 decode_checked = 0;
+  u64 decode_mismatched = 0;
   u64 latched = 0;       // in a re-run: the last read before it
   u64 relatched = 0;     // in a re-run, the last read too old: read now
   double late_max_ms = 0;
@@ -320,6 +330,25 @@ struct HostPadReadStats
 HostPadReadStats TakeHostPadReadStats();
 // Diagnostics (PPR_GPRB_PAD_READ_LOG): a line of the session's own (loop tops, captures).
 void HostPadLogLine(const char* kind, long long a, long long b, long long c);
+
+// Host decode (GitHub issue #1, DHNishi): a GameCube controller's read made into the gfPadStatus
+// Brawl's pad thread makes of it (updateLowGC and P+'s post-processing: buttons at +0 and +4,
+// sticks at +0x30, triggers at +0x34, the error at +0x38, all else 0), so the loop top can take
+// the read the SI made just before it instead of the pass of a field earlier, which the pad
+// thread makes only after the loop top: the local input a field fresher, at the same point and
+// with the same delay. The sticks and triggers go through the SDK's origin (its PADRead clamps
+// them against the origin the controller reported, which a Wii U adapter takes from the
+// controller at rest), as reported to the game (HostPadOriginReported). Every pad-thread pass of a
+// decoded read is compared with the decode; after a few that differ, decoding stops for the
+// session (PPR_GPRB_HOST_DECODE=0: never decode). CPU thread.
+// SI channel `chan`'s controller told the game this origin (CMD_ORIGIN, CMD_RECALIBRATE).
+void HostPadOriginReported(int chan, u8 stick_x, u8 stick_y, u8 substick_x, u8 substick_y,
+                           u8 trigger_left, u8 trigger_right);
+// The decode of the newest read of `chan` (0-3) and the instant it stands for; false when there is
+// none (or decoding is off or turned off for the session).
+bool PadsHostDecoded(int chan, std::array<u8, Addr::PAD_STRIDE>* pad, Clock::time_point* instant);
+// The decode itself (tests).
+void HostDecodePadSlot(const GCPadStatus& st, const std::array<u8, 6>& origin, u8* pad);
 
 // ---------------------------------------------------------------------------------------------
 // Interpreter instruction trace (debugging). Armed by the harness (`cpu_trace`); records, for the
