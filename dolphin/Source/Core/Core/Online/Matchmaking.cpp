@@ -82,6 +82,31 @@ u32 ConnectToken(const std::string& match_id, const PlayerInfo& player)
   return h != 0 ? h : 1;
 }
 
+// The ports some carriers' NAT gives each new destination, from the bottom of the range: it
+// keeps the player's own port toward mm, but every peer hears them from 1024 (bug reports #115,
+// #122, #123: KZH#419 at 166.114.170.169, mm saw 45491, 44999, 49442, ...). A peer whose router
+// lets in only the ports it sent to dropped their connect, having sent only to the port mm saw,
+// so neither side heard the other. A datagram from our P2P port to these ports opens our router
+// for theirs; their connect's next resend then gets through. One byte: ENet drops anything
+// shorter than its header, on every build (and MachineSession's InterceptAcks too).
+constexpr u16 PUNCH_PORT_FIRST = 1024;
+constexpr u16 PUNCH_PORT_COUNT = 8;
+constexpr u64 PUNCH_INTERVAL_MS = 1000;
+
+void PunchLowPorts(ENetHost* host, const ENetAddress& to)
+{
+  u8 byte = 0;
+  ENetBuffer buffer{};
+  buffer.data = &byte;
+  buffer.dataLength = 1;
+  for (u16 i = 0; i < PUNCH_PORT_COUNT; i++)
+  {
+    ENetAddress a = to;
+    a.port = static_cast<enet_uint16>(PUNCH_PORT_FIRST + i);
+    enet_socket_send(host->socket, &a, &buffer, 1);
+  }
+}
+
 int ENET_CALLBACK OnP2PReceive(ENetHost* host, ENetEvent*)
 {
   const ENetAddress& from = host->receivedAddress;
@@ -1230,8 +1255,21 @@ void Matchmaking::HandleConnecting()
     }
   }
 
+  // Not in Slippi: the low ports of a peer at its internet address (PunchLowPorts), until it
+  // connects. Not to a LAN or chosen-network address, where no carrier NAT is in the way, nor to
+  // this machine (a server here: the tests).
+  std::vector<bool> punch(remote_player_count, false);
+  for (size_t i = 0; i < remote_player_count; i++)
+  {
+    const size_t p = static_cast<int>(i) >= match.local_player_index ? i + 1 : i;
+    punch[i] = p < match.players.size() &&
+               match.remotes[i].ToString() == match.players[p].ip_address &&
+               reinterpret_cast<const u8*>(&remote_addrs[i].host)[0] != 127;
+  }
+
   // --- SlippiNetplayClient::ThreadFunc, connect phase ---
   const u64 start_time = Common::Timer::NowMs();
+  u64 next_punch = start_time;
   std::vector<bool> connections(remote_player_count, false);
   bool connected = false;
   while (!connected)
@@ -1239,6 +1277,16 @@ void Matchmaking::HandleConnecting()
     // Deal with class shut down
     if (m_state != State::OpponentConnecting || m_is_mm_terminated)
       return;
+
+    if (Common::Timer::NowMs() >= next_punch)
+    {
+      next_punch = Common::Timer::NowMs() + PUNCH_INTERVAL_MS;
+      for (size_t i = 0; i < remote_player_count; i++)
+      {
+        if (punch[i] && !connections[i])
+          PunchLowPorts(client.get(), remote_addrs[i]);
+      }
+    }
 
     // This will confirm that connection went through successfully
     ENetEvent net_event;
