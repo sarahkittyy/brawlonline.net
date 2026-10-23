@@ -605,7 +605,8 @@ void RollbackManager::Init(Core::System& system)
   m_mem1_ptr = memory.GetRAM();
   m_mem1_size = memory.GetRamSize();
   m_mem2_ptr = memory.GetEXRAM();
-  m_mem2_size = memory.GetExRamSize();
+  // A GameCube game has no MEM2, but its size still reads as the Wii's (bug report #113).
+  m_mem2_size = m_mem2_ptr ? memory.GetExRamSize() : 0;
   m_l1_cache_ptr = memory.GetL1Cache();
   m_l1_cache_size = memory.GetL1CacheSize();
 
