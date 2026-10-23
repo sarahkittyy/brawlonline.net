@@ -28,6 +28,7 @@ import shutil
 import socket
 import statistics as st
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -93,11 +94,14 @@ def run(a: argparse.Namespace) -> int:
     def boot_one(name: str, session: dict, disc: Path = iso) -> None:
         if a.delay is not None:
             session["delay"] = a.delay if a.delay == "auto" else int(a.delay)
+        if a.controller == "wiimote":
+            session["controller"] = "wiimote"
         env = dict(kv.split("=", 1) for kv in a.env)
         env["PPR_MACHINE_PACE_LOG"] = "1"
         env["PPR_MACHINE_SESSION"] = json.dumps(session)
         cfg = InstanceConfig(cpu_thread=not a.single_core, video_backend=a.video, emulation_speed=a.speed,
                              standard_controllers=(0,), other_ports="none",
+                             wiimote_ini={"Wiimote1": {"Source": 1}} if a.controller == "wiimote" else {},
                              config_args=sd_cfg + [f"Dolphin.Core.DefaultISO={disc}",
                                                    "Logger.Options.WriteToFile=True", "Logger.Options.Verbosity=4",
                                                    "Logger.Logs.Brawlback=True", "Logger.Logs.CORE=True"]
@@ -120,11 +124,14 @@ def run(a: argparse.Namespace) -> int:
         inst.connect()
         insts[name] = inst
 
+    rpc_lock = threading.Lock()  # one RPC at a time on the harness connections (the Wii Remote thread)
+
     def call(name: str, cmd: str, **kw):
         inst = insts[name]
         for attempt in range(4):
             try:
-                return inst.client.call(cmd, timeout=30, **kw)
+                with rpc_lock:
+                    return inst.client.call(cmd, timeout=30, **kw)
             except Exception:  # noqa: BLE001
                 if attempt == 3 or not inst.is_running():
                     raise
@@ -145,7 +152,7 @@ def run(a: argparse.Namespace) -> int:
             p0, p1 = free_port(socket.SOCK_DGRAM), free_port(socket.SOCK_DGRAM)
             t0, t1 = p0, p1
             if a.rtt > 0:
-                link = LinkProfile(latency_ms=a.rtt / 2, jitter_ms=1.0)
+                link = LinkProfile(latency_ms=a.rtt / 2, jitter_ms=a.jitter)
                 s01 = NetSim(("127.0.0.1", p1), ("127.0.0.1", 0), NetProfile(up=link, down=link)).start()
                 s10 = NetSim(("127.0.0.1", p0), ("127.0.0.1", 0), NetProfile(up=link, down=link)).start()
                 sims += [s01, s10]
@@ -161,13 +168,31 @@ def run(a: argparse.Namespace) -> int:
         print("running; warming up", flush=True)
         t_end = time.time() + a.warmup + a.seconds
         last_pad, stuck = 0.0, {n: [None, 0] for n in names}
+        wii_threads: list = []
         while time.time() < t_end:
             if not all(i.is_running() for i in insts.values()):
                 raise SystemExit("a Dolphin exited")
             # Not before frame 2400 (past the boot, with a real video backend too): buttons
             # pressed at Brawl's boot message can hold a session's game there for good.
             booted = all((call(n, "machine_status").get("frame") or 0) >= 2400 for n in names)
-            if a.input == "random" and booted and time.time() - last_pad > 9:
+            if a.input == "random" and booted and a.controller == "wiimote" and not wii_threads:
+                def wii_random(n: str, seed: int) -> None:
+                    r = random.Random(seed)
+                    names_ = ["Buttons/A", "Buttons/B", "Buttons/1", "Buttons/2", "D-Pad/Up", "D-Pad/Down",
+                              "D-Pad/Left", "D-Pad/Right"]
+                    while time.time() < t_end:
+                        held = {r.choice(names_): 1.0} if r.random() < 0.6 else {}
+                        try:
+                            with rpc_lock:
+                                insts[n].client.wiimote_input(0, wiimote=held)
+                        except Exception:  # noqa: BLE001
+                            pass
+                        time.sleep(r.uniform(0.03, 0.03 * a.hold_max))
+                for i, n in enumerate(names):
+                    th = threading.Thread(target=wii_random, args=(n, a.seed * 10 + i), daemon=True)
+                    th.start()
+                    wii_threads.append(th)
+            if a.input == "random" and booted and a.controller != "wiimote" and time.time() - last_pad > 9:
                 for n in names:
                     try:
                         insts[n].client.pad_script(0, random_script(rng, 600, a.hold_max))
@@ -282,8 +307,11 @@ def main() -> int:
     r.add_argument("--speed", type=float, default=None, help="emulation speed (0: unlimited)")
     r.add_argument("--single-core", action="store_true")
     r.add_argument("--rtt", type=float, default=0)
+    r.add_argument("--jitter", type=float, default=1.0, help="each way, ms (normal, sd)")
     r.add_argument("--delay", help="each player's input delay: 0-9 or auto (default: the session's, 2)")
     r.add_argument("--input", choices=["random", "none"], default="random")
+    r.add_argument("--controller", choices=["gc", "wiimote"], default="gc",
+                   help="what the players play (wiimote: emulated Wii Remote 1, driven by wiimote_input)")
     r.add_argument("--hold-max", type=int, default=20)
     r.add_argument("--seed", type=int, default=3)
     r.add_argument("--seconds", type=float, default=60)
