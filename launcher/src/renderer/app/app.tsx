@@ -6,7 +6,6 @@ import { LoginDialog } from "@/app/header/login_dialog";
 import type { MenuItem } from "@/app/header/main_menu";
 import { AuthGuard } from "@/components/auth_guard";
 import { LoginNotice } from "@/components/login_notice/login_notice";
-import { PersistentNotification } from "@/components/persistent_notification/persistent_notification";
 import { RosettaInstallDialog } from "@/components/rosetta_install_dialog/rosetta_install_dialog";
 import { SocialRoot } from "@/components/social/social_root";
 import { installPPlusBuildDialogPreview, PPlusBuildDialog } from "@/lib/pplus/pplus_build_dialog";
@@ -65,7 +64,6 @@ export const App = React.memo(({ menuItems }: { menuItems: readonly MainMenuItem
       <LoginDialog />
       <ReplayVersionDialog />
       <PPlusBuildDialog />
-      <PersistentNotification />
       <RosettaInstallDialog />
     </div>
   );

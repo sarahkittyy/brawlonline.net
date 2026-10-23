@@ -128,3 +128,61 @@ export const UpdatingButton = React.memo(({ phase, ...props }: UpdatingButtonPro
     </MainButton>
   );
 });
+
+type LauncherUpdateButtonProps = Omit<MainButtonProps, "children" | "dimWhenDisabled"> & {
+  /** The running launcher's version and the one that is out ("0.1.98", "0.1.99"). */
+  currentVersion: string;
+  newVersion: string;
+  /** Set while the new version downloads (0 to 1): filled like a set-up step, with its percentage. */
+  downloadProgress?: number;
+};
+
+/**
+ * The Play button while a newer launcher is out (no Dolphin starts until it is installed): "Update"
+ * and the versions under it, filled as the update downloads, as Project+'s first download is.
+ */
+export const LauncherUpdateButton = React.memo(
+  ({ currentVersion, newVersion, downloadProgress, ...props }: LauncherUpdateButtonProps) => {
+    const downloading = downloadProgress !== undefined;
+    const percent = Math.floor(Math.min(1, Math.max(0, downloadProgress ?? 0)) * 100);
+    return (
+      <MainButton
+        {...props}
+        disabled={downloading || props.disabled}
+        dimWhenDisabled={!downloading}
+        fillPercent={downloading ? Math.min(1, Math.max(0, downloadProgress)) : undefined}
+      >
+        <span
+          css={css`
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            line-height: 1.15;
+            color: #fff;
+            text-shadow: 0 0 2px #000, 0 1px 2px #000, 1px 0 1px #000, -1px 0 1px #000;
+          `}
+        >
+          <span
+            css={css`
+              font-size: 16px;
+            `}
+          >
+            {downloading ? `${Messages.update()} ${percent}%` : Messages.update()}
+          </span>
+          <span
+            css={css`
+              font-family: ${bodyFont};
+              text-transform: none;
+              font-size: 12px;
+              max-width: 156px;
+              overflow: hidden;
+              text-overflow: ellipsis;
+            `}
+          >
+            {`v${currentVersion} → v${newVersion}`}
+          </span>
+        </span>
+      </MainButton>
+    );
+  },
+);

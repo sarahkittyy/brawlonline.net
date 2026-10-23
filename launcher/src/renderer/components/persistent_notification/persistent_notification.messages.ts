@@ -1,9 +1,0 @@
-export const PersistentNotificationMessages = {
-  downloadingVersion: (version: string) => `Downloading version {0}...`,
-  downloadingVersionProgress: (version: string, percent: string) => `Downloading version {0}... {1}%`,
-  installUpdate: () => "Install update",
-  versionIsNowAvailable: (version: string) => `Version {0} is now available!`,
-  installFailed: () => "Installation failed.",
-  downloadManually: () => "Download manually",
-  downloadProduct: (productName: string) => "Download {0}",
-};

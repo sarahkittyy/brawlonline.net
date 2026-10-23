@@ -31,6 +31,7 @@ import { BugReportButton } from "./bug_report/bug_report_button";
 import { HeaderMessages as Messages } from "./header.messages";
 import type { MenuItem } from "./main_menu";
 import { MainMenu } from "./main_menu";
+import { LauncherUpdate, useLauncherUpdateVersion } from "./play_button/launcher_update";
 import { PlayButton as PlayButtonImpl, UpdatingButton } from "./play_button/play_button";
 import { StartGameOfflineDialog } from "./start_game_offline_dialog";
 import { UserMenu } from "./user_menu/user_menu";
@@ -195,6 +196,14 @@ const PlayButton = ({ onClick }: { onClick: () => void }) => {
     }
     return 0;
   }, [installProgress, installStatus]);
+  const launcherUpdateVersion = useLauncherUpdateVersion();
+  const settingUp = installStatus === DolphinStatus.DOWNLOADING && installProgress?.phase !== undefined;
+
+  // A newer launcher is out: no Dolphin starts until it is installed, so the button offers it
+  // (after a running set-up step such as Project+'s first download, whose progress it shows first).
+  if (launcherUpdateVersion && !settingUp) {
+    return <LauncherUpdate />;
+  }
 
   if (installStatus === DolphinStatus.READY) {
     return <PlayButtonImpl onClick={onClick} />;
