@@ -120,6 +120,21 @@ void Gekko::InputBuffer::AddInput(Frame frame, u8* input)
     _last_received_input++;
 }
 
+bool Gekko::InputBuffer::AcceptLateInput(Frame frame)
+{
+    if (frame > _last_received_input) {
+        return false;
+    }
+    if (_incorrent_predicted_inputs.empty()) {
+        return true;
+    }
+    if (_incorrent_predicted_inputs.size() == 1 && _incorrent_predicted_inputs.front() == frame) {
+        _incorrent_predicted_inputs.clear();
+        return true;
+    }
+    return false;
+}
+
 void Gekko::InputBuffer::OverwriteInput(Frame frame, u8* input)
 {
     // only inputs the buffer already received can be replaced.

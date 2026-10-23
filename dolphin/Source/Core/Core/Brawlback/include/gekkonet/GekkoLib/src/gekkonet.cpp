@@ -106,6 +106,46 @@ void gekko_add_local_input(GekkoSession* session, int player, void* input)
     session->AddLocalInput(player, input);
 }
 
+bool gekko_add_local_input_at(GekkoSession* session, int player, int frame, void* input)
+{
+    return session->AddLocalInputAt(player, input, frame);
+}
+
+void gekko_send_local_inputs(GekkoSession* session)
+{
+    session->SendLocalInputsNow();
+}
+
+int gekko_local_input_frame(GekkoSession* session, int player)
+{
+    return session->LocalInputFrame(player);
+}
+
+int gekko_current_frame(GekkoSession* session)
+{
+    return session->CurrentFrame();
+}
+
+void gekko_receive(GekkoSession* session)
+{
+    session->ReceiveOnly();
+}
+
+bool gekko_received_input(GekkoSession* session, int player, int frame, void* input)
+{
+    return session->ReceivedInput(player, frame, input);
+}
+
+bool gekko_accept_late_input(GekkoSession* session, int player, int frame)
+{
+    return session->AcceptLateInput(player, frame);
+}
+
+void gekko_set_advantage_delay_bias(GekkoSession* session, int frames)
+{
+    session->SetAdvantageDelayBias(frames);
+}
+
 GekkoGameEvent** gekko_update_session(GekkoSession* session, int* count)
 {
     return session->UpdateSession(count);

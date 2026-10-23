@@ -148,6 +148,84 @@ void Gekko::GameSession::AddLocalInput(i32 player, void* input)
     }
 }
 
+bool Gekko::GameSession::AddLocalInputAt(i32 player, void* input, i32 frame)
+{
+    for (u32 i = 0; i < _msg.locals.size(); i++) {
+        if (_msg.locals[i]->handle == player) {
+            return _sync.AddLocalInputAt(player, (u8*)input, frame);
+        }
+    }
+    return false;
+}
+
+void Gekko::GameSession::SendLocalInputsNow()
+{
+    if (!_host || !_started) {
+        return;
+    }
+    const Frame first = _msg.GetLastAddedInput(false) + 1;
+    if (!QueueLocalInputs()) {
+        return;
+    }
+    // the frame advantage of these frames is recorded at the next poll, once the peer's inputs
+    // that came by then are in (recorded here, between polls, it counts the peer a frame behind).
+    if (_adv_unrecorded_from == GameInput::NULL_FRAME) {
+        _adv_unrecorded_from = first;
+    }
+    _msg.SendInputsToRemotes(_host);
+}
+
+i32 Gekko::GameSession::LocalInputFrame(i32 player)
+{
+    return _sync.GetLastLocalInput(player);
+}
+
+i32 Gekko::GameSession::CurrentFrame()
+{
+    return _sync.GetCurrentFrame();
+}
+
+void Gekko::GameSession::ReceiveOnly()
+{
+    if (!_host) {
+        return;
+    }
+    _msg.session_events.ResetIfRetrieved();
+    int length = 0;
+    auto data = _host->receive_data(&length);
+    _msg.HandleData(_host, data, length);
+    HandleReceivedInputs();
+}
+
+bool Gekko::GameSession::ReceivedInput(i32 player, i32 frame, void* input)
+{
+    for (auto& remote : _msg.remotes) {
+        if (remote->handle == player) {
+            return _sync.GetReceivedInput(player, frame, (u8*)input);
+        }
+    }
+    return false;
+}
+
+void Gekko::GameSession::SetAdvantageDelayBias(i32 frames)
+{
+    _adv_delay_bias = frames;
+}
+
+bool Gekko::GameSession::AcceptLateInput(i32 player, i32 frame)
+{
+    // a disconnected player's inputs are settled by claims, not by arrival.
+    if (_msg.GetDisconnectHoldFrame() != INT32_MAX) {
+        return false;
+    }
+    for (auto& remote : _msg.remotes) {
+        if (remote->handle == player) {
+            return _sync.AcceptLateInput(player, frame);
+        }
+    }
+    return false;
+}
+
 void Gekko::GameSession::SetLocalDelayInput(i32 player, const void* input)
 {
     for (u32 i = 0; i < _msg.locals.size(); i++) {
@@ -597,7 +675,7 @@ void Gekko::GameSession::HandleReceivedInputs()
             auto& input_q = _msg.GetNetPlayerQueue(handle);
             const Frame min_frame = last_added - (i32)input_q.size() + 1;
             const Frame current_frame = _sync.GetCurrentFrame();
-            const Frame local_delay = (Frame)GetMinLocalDelay();
+            const Frame local_delay = (Frame)GetMinLocalDelay() + _adv_delay_bias;
             if (last_recv < min_frame && last_recv <= last_added) {
                 WARN_LOG_FMT(BRAWLBACK,
                              "GekkoNet: inputs {}..{} from player {} are gone from the queue "
@@ -629,31 +707,55 @@ void Gekko::GameSession::HandleReceivedInputs()
 void Gekko::GameSession::SendLocalInputs()
 {
     if (!_msg.locals.empty() && _started) {
-        const Frame current = _msg.GetLastAddedInput(false) + 1;
+        const Frame first_new = _msg.GetLastAddedInput(false) + 1;
         const Frame delay = GetMinLocalDelay();
+        const bool queued = QueueLocalInputs();
 
-        auto input = std::make_unique<u8[]>(_config.input_size);
-        for (Frame frame = current; frame <= current + delay; frame++) {
-            for (auto& player : _msg.locals) {
-                if (!_sync.GetLocalInput(player->handle, input, frame)) {
-                    return;
-                }
-                _msg.AddInput(frame, player->handle, input.get());
-            }
-            // Record per-peer advantage snapshot once per actual game frame
-            if (frame == current) {
-                const Frame current_frame = _sync.GetCurrentFrame();
-                for (auto& remote : _msg.remotes) {
-                    if (remote->GetStatus() == Connected) {
-                        // + delay, as the ack's advantage (HandleReceivedInputs).
-                        const i8 local_adv = (i8)(current_frame - _sync.GetLastReceivedFrom(remote->handle) + (Frame)delay);
-                        remote->adv_history.SetLocalAdvantage(local_adv);
-                        remote->adv_history.Update(frame);
-                    }
-                }
+        // the advantage snapshot once per new local input frame: inputs SendLocalInputsNow sent
+        // since the last poll get theirs now.
+        Frame current;
+        if (_adv_unrecorded_from != GameInput::NULL_FRAME) {
+            current = _adv_unrecorded_from;
+            _adv_unrecorded_from = GameInput::NULL_FRAME;
+        } else if (queued) {
+            current = first_new;
+        } else {
+            return;
+        }
+
+        // Record per-peer advantage snapshot once per actual game frame
+        const Frame current_frame = _sync.GetCurrentFrame();
+        for (auto& remote : _msg.remotes) {
+            if (remote->GetStatus() == Connected) {
+                const i8 local_adv = (i8)(current_frame - _sync.GetLastReceivedFrom(remote->handle) + (Frame)delay + _adv_delay_bias);
+                remote->adv_history.SetLocalAdvantage(local_adv);
+                remote->adv_history.Update(current);
             }
         }
     }
+}
+
+bool Gekko::GameSession::QueueLocalInputs()
+{
+    if (_msg.locals.empty()) {
+        return false;
+    }
+    const Frame first = _msg.GetLastAddedInput(false) + 1;
+    auto input = std::make_unique<u8[]>(_config.input_size);
+    bool queued = false;
+    for (Frame frame = first; frame <= first + 255; frame++) {
+        for (auto& player : _msg.locals) {
+            if (!_sync.GetLocalInput(player->handle, input, frame)) {
+                return queued;
+            }
+        }
+        for (auto& player : _msg.locals) {
+            _sync.GetLocalInput(player->handle, input, frame);
+            _msg.AddInput(frame, player->handle, input.get());
+        }
+        queued = true;
+    }
+    return queued;
 }
 
 u8 Gekko::GameSession::GetMinLocalDelay()

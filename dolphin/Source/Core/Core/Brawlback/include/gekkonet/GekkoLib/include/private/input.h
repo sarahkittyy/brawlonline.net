@@ -38,6 +38,9 @@ namespace Gekko {
 
 		void AddInput(Frame frame, u8* input);
 
+		// a misprediction of `frame` alone is forgotten (the frame had not used the input yet).
+		bool AcceptLateInput(Frame frame);
+
 		void OverwriteInput(Frame frame, u8* input);
 
 		void SetDelay(u8 delay);

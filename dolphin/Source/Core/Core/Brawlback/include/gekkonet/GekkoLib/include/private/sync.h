@@ -15,6 +15,14 @@ namespace Gekko {
 
 		void AddLocalInput(Handle player, u8* input);
 
+		bool AddLocalInputAt(Handle player, u8* input, Frame frame);
+
+		Frame GetLastLocalInput(Handle player);
+
+		bool GetReceivedInput(Handle player, Frame frame, u8* input);
+
+		bool AcceptLateInput(Handle player, Frame frame);
+
 		void AddRemoteInput(Handle player, u8* input, Frame frame);
 
 		void OverwriteInput(Handle player, u8* input, Frame frame);

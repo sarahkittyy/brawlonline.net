@@ -233,6 +233,39 @@ GEKKONET_API void gekko_set_runahead(GekkoSession* session, unsigned char runahe
 // hands the input of a local player to the session, once per player per frame.
 GEKKONET_API void gekko_add_local_input(GekkoSession* session, int player, void* input);
 
+// hands the input of a local player to the session for an explicit frame (no delay added): only
+// the frame right after the newest local input is taken (false otherwise, and before the first
+// gekko_add_local_input). Inputs already taken never change.
+GEKKONET_API bool gekko_add_local_input_at(GekkoSession* session, int player, int frame, void* input);
+
+// sends the local inputs added since the last send to the remotes now, without a network poll
+// (nothing is received; their frame advantage is recorded at the next poll).
+GEKKONET_API void gekko_send_local_inputs(GekkoSession* session);
+
+// the frame of the player's newest local input (-1: none).
+GEKKONET_API int gekko_local_input_frame(GekkoSession* session, int player);
+
+// the frame the next update advances.
+GEKKONET_API int gekko_current_frame(GekkoSession* session);
+
+// receives what the network has for the session and takes the inputs in it (acks go out with the
+// next send); nothing is sent and no frame advantage is recorded.
+GEKKONET_API void gekko_receive(GekkoSession* session);
+
+// the input of a remote player for a frame, if it arrived (false: not yet, a prediction stands).
+GEKKONET_API bool gekko_received_input(GekkoSession* session, int player, int frame, void* input);
+
+// the frame running now (the last one advanced) had not used the player's input yet when it
+// arrived: a misprediction of that frame alone is forgotten (no rollback), as if the frame had run
+// with the input. False when an earlier frame of the player is mispredicted too.
+GEKKONET_API bool gekko_accept_late_input(GekkoSession* session, int player, int frame);
+
+// frames added to the local delay in the frame advantage this session reports and records: a
+// session that hands its local input over a frame before the update that used to (one frame less
+// GekkoNet delay for the same lead, gekko_add_local_input_at) passes 1, so its advantage reads as
+// a session without that does (a peer of either kind sees the same).
+GEKKONET_API void gekko_set_advantage_delay_bias(GekkoSession* session, int frames);
+
 // advances the session and returns the events the game has to handle in order.
 GEKKONET_API GekkoGameEvent** gekko_update_session(GekkoSession* session, int* count);
 

@@ -14,6 +14,14 @@ struct GekkoSession {
     virtual void SetDisconnectTimeout(u32 timeout) {}
     virtual void SetDisconnectedInput(const void* input) {}
     virtual void AddLocalInput(i32 player, void* input) {}
+    virtual bool AddLocalInputAt(i32 player, void* input, i32 frame) { return false; }
+    virtual void SendLocalInputsNow() {}
+    virtual i32 LocalInputFrame(i32 player) { return -1; }
+    virtual i32 CurrentFrame() { return -1; }
+    virtual void ReceiveOnly() {}
+    virtual bool ReceivedInput(i32 player, i32 frame, void* input) { return false; }
+    virtual bool AcceptLateInput(i32 player, i32 frame) { return false; }
+    virtual void SetAdvantageDelayBias(i32 frames) {}
     virtual void SetFrameLimit(i32 frame) {}
     virtual void SetLocalDelayInput(i32 player, const void* input) {}
     virtual i32 ConfirmedFrame() { return -1; }

@@ -23,6 +23,7 @@
 #include "Common/Swap.h"
 #include "Core/Core.h"
 #include "Core/CoreTiming.h"
+#include "Core/Rollback/GameplaySession.h"
 #include "Core/Debugger/OSThread.h"
 #include "Core/Harness/Harness.h"
 #include "Core/HW/GCPad.h"
@@ -1208,7 +1209,7 @@ void PadsOnLoopTop(Core::System& system)
 void PadsOnPadThreadUpdated(Core::System& system)
 {
   auto& memory = system.GetMemory();
-  std::lock_guard lk(s_pads.mutex);
+  std::unique_lock lk(s_pads.mutex);
   memory.CopyFromEmu(s_pads.latest.data(), Addr::PAD_STATUS, s_pads.latest.size());
   s_pads.have_latest = true;
   s_pads.latest_at = std::chrono::steady_clock::now();
@@ -1284,6 +1285,11 @@ void PadsOnPadThreadUpdated(Core::System& system)
   }
   if (s_pads.current_valid)
     WriteSlots(memory, s_pads.current_ports, s_pads.current);
+  // A network session's early local input (a Wii controller's pad, the pass as it is made).
+  const RawPads pass_pads = s_pads.latest;
+  const Clock::time_point pass_at = s_pads.latest_at;
+  lk.unlock();
+  Session::OnPadPass(system, pass_pads, pass_at);
 }
 
 RawPads PadsLatestRaw()
