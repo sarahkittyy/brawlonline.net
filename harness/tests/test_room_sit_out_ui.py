@@ -8,9 +8,9 @@ tools/gamecode/roomsim.py (as test_rooms_ui.py). The user's, 2026-10-18 (docs/de
   and another player's placed coin shows on their card, "Choosing...".
 - SIT OUT / PLAY (under RULES, level with FFA) or START sits the player out or back in; sitting
   out takes a ready back, and START while sitting out plays again without readying. A on one's
-  own name plate opens the name tags, as its pencil does, and sits nobody out (the user's,
-  2026-10-23: changing a tag sat them out). The host's A on another's plate (Brawl's player /
-  CPU switch offline) sits them out or back in; anyone else's is refused.
+  own name plate (Brawl's player / CPU switch offline) does too; the pencil's backdrop left of
+  and below it opens the name tags (the user's, 2026-10-23: changing a tag sat them out). The
+  host's A on another's plate sits them out or back in; anyone else's is refused.
 - A card sitting out is a CPU's grey with "SIT OUT" on its plate and no state box.
 
 Screenshots: run/artifacts/game-code/rooms/sit-out/.
@@ -33,6 +33,7 @@ ART = ROOT / "run" / "artifacts" / "game-code" / "rooms" / "sit-out"
 BUTTON_SIT_OUT = 0x31
 BUTTON_TAGS = 0x1C                    # the local card's pencil (and plate) on the Wi-Fi CSS
 PLATE_Y = -20.0                       # the cards' name plates (x a little right of the centres)
+BELOW_PLATE_Y = -21.5                 # the pencil's backdrop under the local card's plate (the hand's lowest)
 ST_NONE, ST_SELECTING, ST_READY = 0, 2, 4
 GREY_BACKPLATE = 9.0                  # a CPU's card colour frame (room_css.cpp GREY_FRAMES)
 
@@ -119,33 +120,34 @@ def test_sit_out_and_the_placed_coin(game: Game) -> None:
     assert backplate_frame(g, 0) != GREY_BACKPLATE
     g.shot("05-start-plays-again")
 
-    # A on one's own plate opens the name tags, no SIT OUT (the user's, 2026-10-23).
-    hand_mode = g.u32(g.u32(g.area(0) + 0x1A8) + 0xA4)
-    n = len(sit_ops(g))
+    # A on one's own plate (the name) sits out and back in; the pencil's backdrop below it and
+    # left of it opens the name tags (the user's, 2026-10-23: changing a tag sat them out).
     g.hand_to(PANEL_X[0] + 1.5, PLATE_Y, tol=0.6)
     g.wait(5)
     assert hand_button(g) == BUTTON_TAGS, hex(hand_button(g))
     g.tap("A")
     g.wait(40)
-    g.shot("05a-plate-opens-tags")
-    assert len(sit_ops(g)) == n and not me.sitting_out
-    assert g.u32(g.u32(g.area(0) + 0x1A8) + 0xA4) != hand_mode, "the name tag list opened"
-    g.tap("B")
-    g.wait(40)
-    assert g.u32(g.u32(g.area(0) + 0x1A8) + 0xA4) == hand_mode
-    assert not me.sitting_out
-    # The pencil left of it opens them too.
-    g.hand_to(PANEL_X[0] - 7.0, PLATE_Y, tol=0.5)
-    g.wait(5)
-    assert hand_button(g) == BUTTON_TAGS, hex(hand_button(g))
+    g.shot("05a-plate-sits-out")
+    assert sit_ops(g)[-1] == (0, 1) and me.sitting_out
     g.tap("A")
     g.wait(40)
-    g.shot("05b-pencil-opens-tags")
-    assert len(sit_ops(g)) == n
-    assert g.u32(g.u32(g.area(0) + 0x1A8) + 0xA4) != hand_mode, "the name tag list opened"
-    g.tap("B")
-    g.wait(40)
-    assert g.u32(g.u32(g.area(0) + 0x1A8) + 0xA4) == hand_mode
+    assert sit_ops(g)[-1] == (0, 0) and not me.sitting_out
+    hand_mode = g.u32(g.u32(g.area(0) + 0x1A8) + 0xA4)
+    n = len(sit_ops(g))
+    for name, pos in (("05b-below-plate-opens-tags", (PANEL_X[0] + 1.5, BELOW_PLATE_Y)),
+                      ("05c-pencil-opens-tags", (PANEL_X[0] - 7.0, PLATE_Y))):
+        g.hand_to(*pos, tol=0.3)
+        g.wait(5)
+        assert hand_button(g) == BUTTON_TAGS, hex(hand_button(g))
+        g.tap("A")
+        g.wait(40)
+        g.shot(name)
+        assert len(sit_ops(g)) == n and not me.sitting_out, name
+        assert g.u32(g.u32(g.area(0) + 0x1A8) + 0xA4) != hand_mode, f"{name}: the name tag list opened"
+        g.tap("B")
+        g.wait(40)
+        assert g.u32(g.u32(g.area(0) + 0x1A8) + 0xA4) == hand_mode
+        assert not me.sitting_out
 
     # The host's A on alice's plate: she sits out (grey, "SIT OUT", no state box), and back.
     alice = sim.room.members[1]

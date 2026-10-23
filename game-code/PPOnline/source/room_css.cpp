@@ -1004,14 +1004,18 @@ namespace RoomCss {
     }
 
     // A card's name plate under the hand. Offline the plate is Brawl's hand button 0x1D (a slot to
-    // player / CPU / none) and its pencil 0x1C (the name tags); on the Wi-Fi CSS the local card's
-    // pencil and plate are both 0x1C and the others' cards have no button there (found live,
-    // harness probes 2026-10-18: offline the plate x -26..-16 and the pencil -30..-28 on P1's card,
-    // y -18.5..-22). So the plate is hit-tested here, from just right of the pencil to the plate's
-    // end; the pencil keeps opening the name tags (the user's: "you can still change the controls as
-    // normal"), and the hand on anything else of Brawl's (the tag list's rows) is not on a plate.
+    // player / CPU / none) and the pencil's backdrop around it, left of it and below it, is 0x1C
+    // (the name tags); on the Wi-Fi CSS the local card's plate and backdrop are both 0x1C and the
+    // others' cards have no button there. So the plate is hit-tested here, where offline has 0x1D
+    // (found live, harness probes 2026-10-23, a quarter unit apart: x -27.5..-15.5 on P1's card, a
+    // slot 16 further on each, y -17.75..-21; the backdrop x -34..-27.75 beside it and from
+    // y -21.25 down to the hand's lowest, -21.5, under it to x -16). The backdrop keeps opening
+    // the name tags (the user's, 2026-10-23: the plate reached into the strip below, and they sat
+    // out going to change their tag), and the hand on anything else of Brawl's (the tag list's
+    // rows) is not on a plate.
     static const int BUTTON_TAGS = 0x1C;
-    static const float PLATE_DX0 = -4.5f, PLATE_DX1 = 6.5f, PLATE_TOP = -18.5f, PLATE_BOTTOM = -22.5f;
+    static const float PLATE_X0 = -21.5f, PLATE_STEP = 16.0f, PLATE_HALF = 6.0f;
+    static const float PLATE_TOP = -17.75f, PLATE_BOTTOM = -21.1f;
     int plateUnderHand()
     {
         u8* task = cssTask();
@@ -1024,8 +1028,8 @@ namespace RoomCss {
         float x = *(float*)(hand + HAND_X), y = *(float*)(hand + HAND_Y);
         if (y > PLATE_TOP || y < PLATE_BOTTOM) return -1;
         for (int i = 0; i < 4; i++) {
-            float dx = x - (PANEL_X0 + PANEL_STEP * i);
-            if (dx >= PLATE_DX0 && dx <= PLATE_DX1) return i;
+            float dx = x - (PLATE_X0 + PLATE_STEP * i);
+            if (dx >= -PLATE_HALF && dx <= PLATE_HALF) return i;
         }
         return -1;
     }

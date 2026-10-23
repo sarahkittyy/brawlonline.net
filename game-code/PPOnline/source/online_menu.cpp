@@ -2704,17 +2704,16 @@ namespace OnlineMenu {
                     lockIn(roomGame(), roomPicksStage() ? PPOM::STAGE_PENDING : 0xFFFF, 0);
                 }
             }
-            // SIT OUT / PLAY, and the host's A on another card's name plate (Brawl's player / CPU
-            // switch offline). Not the player's own plate: on the Wi-Fi CSS it is Brawl's name tag
-            // button, and players changing their tag sat out with it (the user's, 2026-10-23).
+            // SIT OUT / PLAY, and A on a card's name plate (Brawl's player / CPU switch offline):
+            // the player's own, or the host's on anyone's. Only the plate with the name: the
+            // pencil's backdrop beside and below it opens the name tags (RoomCss::plateUnderHand).
             // Sitting out takes a ready back first.
             int plate = (pressed & BTN_A) ? RoomCss::plateUnderHand() : -1;
-            if (plate == me) plate = -1;   // (Brawl opens the name tags)
             if (plate >= 0 && !(se.players[plate].roomSlot & PPOM::SLOT_TAKEN)) plate = -1;   // (an empty slot: the host's open / close below)
             int sitSlot = SitOutButton::pressed() && !(s_sitPressHeld & BTN_A) ? me : -1;
             if (plate >= 0) {
                 maskPressed(BTN_A);
-                if (host) sitSlot = plate;
+                if (plate == me || host) sitSlot = plate;
                 else playSE(SE_ERROR);
             }
             if (sitSlot >= 0) {
