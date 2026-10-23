@@ -640,7 +640,7 @@ struct State
   };
   std::array<LatFrame, 64> lat{};
   Clock::time_point local_read_at{};
-  // Late input (prototype, PPR_MACHINE_LATE_INPUT=1). The game reads a frame's inputs at its own
+  // Late input (off; PPR_MACHINE_LATE_INPUT=1: on). The game reads a frame's inputs at its own
   // SI polls and Wii Remote reports, and the throttle's one sleep a frame often comes between the
   // frame's start and those reads, so the local controller read at the boundary was up to a field
   // old when the game took it. Now: the local controller is read when the game first reads the
@@ -2720,7 +2720,7 @@ bool CreateGekko()
     s.input_delay = PickInputDelay(&rtt);
     {
       const char* env = std::getenv("PPR_MACHINE_LATE_INPUT");
-      s.late_input = env && env[0] == '1';
+      s.late_input = env && env[0] == '1';  // off unless PPR_MACHINE_LATE_INPUT=1 (the boundary sleep took its place)
       const char* direct = std::getenv("PPR_MACHINE_DIRECT_SEND");
       s.direct_send = s.late_input && direct && direct[0] == '1';
       s.consumed = {};
@@ -5766,12 +5766,13 @@ Wait WaitForFrames(Core::System& system)
   // Each limit counts from the start of its own phase: an epoch (or a joiner's wait for the
   // machine image) can take up to EPOCH_TIMEOUT inside this same wait, and the handshake after it
   // gets its own CONNECT_LIMIT.
-  // PPR_MACHINE_BOUNDARY_SLEEP=1 (prototype): at a VI-field boundary the throttle's sleep comes
-  // before the local controller is read, not at the frame's first SI poll after it, so the read
-  // is as fresh as the game's own and still sent at the frame's start.
+  // The boundary sleep (on; PPR_MACHINE_BOUNDARY_SLEEP=0: off): at a VI-field boundary the
+  // throttle's sleep comes before the local controller is read, not at the frame's first SI poll
+  // or Wii Remote update after it, so the read is as fresh as the game's own and still sent at the
+  // frame's start (docs/design/brawl-mods.md 6.2).
   static const bool boundary_sleep = [] {
     const char* e = std::getenv("PPR_MACHINE_BOUNDARY_SLEEP");
-    return e && *e == '1';
+    return !(e && *e == '0');
   }();
   if (boundary_sleep && s.phase == Phase::Running && SessionBoundary() == Boundary::ViField)
   {
