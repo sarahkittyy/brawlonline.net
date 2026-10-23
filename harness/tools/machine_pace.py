@@ -149,16 +149,35 @@ def run(a: argparse.Namespace) -> int:
             boot_one("m0", {"slot": 0, "port": free_port(socket.SOCK_DGRAM), "peers": [],
                             **({"synctest": a.synctest} if a.synctest else {})})
         else:
-            p0, p1 = free_port(socket.SOCK_DGRAM), free_port(socket.SOCK_DGRAM)
-            t0, t1 = p0, p1
-            if a.rtt > 0:
-                link = LinkProfile(latency_ms=a.rtt / 2, jitter_ms=a.jitter)
-                s01 = NetSim(("127.0.0.1", p1), ("127.0.0.1", 0), NetProfile(up=link, down=link)).start()
-                s10 = NetSim(("127.0.0.1", p0), ("127.0.0.1", 0), NetProfile(up=link, down=link)).start()
-                sims += [s01, s10]
-                t1, t0 = s01.listen_addr[1], s10.listen_addr[1]
-            boot_one("m0", {"slot": 0, "port": p0, "peers": [{"slot": 1, "host": "127.0.0.1", "port": t1}]})
-            boot_one("m1", {"slot": 1, "port": p1, "peers": [{"slot": 0, "host": "127.0.0.1", "port": t0}]}, iso2)
+            # --players N: every machine reaches every other one, each way through its own netsim.
+            n = a.players
+            ports = [free_port(socket.SOCK_DGRAM) for _ in range(n)]
+            to = {(i, j): ports[j] for i in range(n) for j in range(n) if i != j}
+            if a.rtt > 0 or a.loss > 0:
+                link = LinkProfile(latency_ms=a.rtt / 2, jitter_ms=a.jitter, loss=a.loss)
+                for i, j in list(to):
+                    sim = NetSim(("127.0.0.1", ports[j]), ("127.0.0.1", 0),
+                                 NetProfile(up=link, down=link)).start()
+                    sims.append(sim)
+                    to[(i, j)] = sim.listen_addr[1]
+            # All at once: each machine waits only so long for the others (one boot takes ~20 s).
+            failures: list[BaseException] = []
+
+            def boot(i: int) -> None:
+                peers = [{"slot": j, "host": "127.0.0.1", "port": to[(i, j)]} for j in range(n) if j != i]
+                try:
+                    boot_one(f"m{i}", {"slot": i, "port": ports[i], "peers": peers}, iso if i == 0 else iso2)
+                except BaseException as e:  # noqa: BLE001
+                    failures.append(e)
+
+            boots = [threading.Thread(target=boot, args=(i,)) for i in range(n)]
+            for t in boots:
+                t.start()
+            for t in boots:
+                t.join()
+            if failures:
+                raise failures[0]
+            insts = dict(sorted(insts.items()))
         names = list(insts)
         deadline = time.time() + 240
         while not all(call(n, "machine_status").get("phase") == "running" for n in names):
@@ -308,6 +327,8 @@ def main() -> int:
     r.add_argument("--single-core", action="store_true")
     r.add_argument("--rtt", type=float, default=0)
     r.add_argument("--jitter", type=float, default=1.0, help="each way, ms (normal, sd)")
+    r.add_argument("--loss", type=float, default=0.0, help="each way, the share of datagrams lost (0-1)")
+    r.add_argument("--players", type=int, choices=[2, 3, 4], default=2, help="pair: machines in the session")
     r.add_argument("--delay", help="each player's input delay: 0-9 or auto (default: the session's, 2)")
     r.add_argument("--input", choices=["random", "none"], default="random")
     r.add_argument("--controller", choices=["gc", "wiimote"], default="gc",

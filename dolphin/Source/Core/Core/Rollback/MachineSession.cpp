@@ -652,8 +652,11 @@ struct State
   struct LateStats
   {
     u64 early = 0, fallback = 0, dup = 0, skipped = 0, accepted = 0, refused = 0, missed = 0,
-        unread = 0;
+        unread = 0, outside = 0;
   } late{}, late_window{};
+  // A controller read while no frame's pass is open (none is expected): it took the inputs of the
+  // frame that ended without marking them read, so that frame takes no late input at its end.
+  bool read_outside_pass = false;
   s64 late_window_from = -1;
   std::vector<Clock::time_point> gekko_tx_at;  // when each gekko_tx packet was queued
   // PPR_MACHINE_DIRECT_SEND=1 (prototype): the CPU thread sends a frame's GekkoNet packets itself
@@ -6135,6 +6138,7 @@ void BeginPass(Core::System& system)
   {
     LatOnForwardPass(s.current_frame);
     s.consumed = {};
+    s.read_outside_pass = false;
   }
   SyncWiimotes(system);
   PlanEpoch(s.current_frame);
@@ -7045,10 +7049,11 @@ void LateLogWindow()
   INFO_LOG_FMT(BRAWLBACK,
                "machine: input frames {}-{}: late input {}: early {}, fallback {}, dup {}, skipped "
                "{}; remote late accepted {}, refused {}, missed {}; gekko packets waited avg {:.2f} "
-               "ms max {:.2f} ms ({}), net loop gap max {:.2f} ms; unread devices accepted {}",
+               "ms max {:.2f} ms ({}), net loop gap max {:.2f} ms; unread devices accepted {}; "
+               "reads outside a pass {}",
                s.late_window_from, s.current_frame, s.late_input ? "on" : "off", w.early,
                w.fallback, w.dup, w.skipped, w.accepted, w.refused, w.missed, tx_avg, tx_max, tx_n,
-               gap_max, w.unread);
+               gap_max, w.unread, w.outside);
   s.late_window = {};
   s.late_window_from = s.current_frame;
 }
@@ -7152,6 +7157,8 @@ void LateEndOfFrame()
   }
   s_late_end_done = s.current_frame;
   LateLogWindow();
+  if (s.read_outside_pass)
+    return;
   const int frame = static_cast<int>(s.current_frame - s.frame_base);
   bool received = false;
   for (int slot = 0; slot < MAX_PLAYERS; ++slot)
@@ -7182,6 +7189,12 @@ void LateEndOfFrame()
 // The game reads `device` of the player in `slot` (GetPad, GetWiimote).
 void LateInputAt(u8 device, int slot)
 {
+  if (s.phase == Phase::Running && !s.pass_open)
+  {
+    s.read_outside_pass = true;
+    ++s.late.outside;
+    ++s.late_window.outside;
+  }
   if (s.phase != Phase::Running || !s.pass_open || s.resim || !s.gekko || slot < 0 ||
       slot >= MAX_PLAYERS || (s.consumed[slot] & device))
   {
