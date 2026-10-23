@@ -87,6 +87,10 @@ def main() -> int:
     ap.add_argument("--hold-max", type=int, default=20)
     ap.add_argument("--seed", type=int, default=3)
     ap.add_argument("--env", action="append", default=[])
+    ap.add_argument("--host-env", action="append", default=[], help="KEY=VALUE for the host only")
+    ap.add_argument("--joiner-env", action="append", default=[], help="KEY=VALUE for the joiner only")
+    ap.add_argument("--config", action="append", default=[],
+                    help="another Dolphin config setting, as System.Section.Key=Value (e.g. Logger.Logs.PI=True)")
     ap.add_argument("--no-diag", action="store_true", help="without the digests")
     ap.add_argument("--match", action="store_true",
                     help="the host goes to the character select, the joiner joins there (as in bug 16), both "
@@ -119,11 +123,13 @@ def main() -> int:
     def make(name: str, session: dict, disc: Path = iso) -> DolphinInstance:
         env = {} if a.no_diag else {"PPR_MACHINE_DIGESTS": "2" if a.bytes else "1"}
         env.update(dict(kv.split("=", 1) for kv in a.env))
+        env.update(dict(kv.split("=", 1) for kv in (a.host_env if name.startswith("host") else a.joiner_env)))
         env["PPR_MACHINE_SESSION"] = json.dumps({**session, "delay": a.delay})
         cfg = InstanceConfig(video_backend=a.video, standard_controllers=(0,), other_ports="none",
                              config_args=sd_cfg + [f"Dolphin.Core.DefaultISO={disc}",
                                                    "Logger.Options.WriteToFile=True", "Logger.Options.Verbosity=4",
-                                                   "Logger.Logs.Brawlback=True", "Logger.Logs.CORE=True"])
+                                                   "Logger.Logs.Brawlback=True", "Logger.Logs.CORE=True"]
+                                         + a.config)
         inst = DolphinInstance(name, port=free_port(socket.SOCK_STREAM), exe=a.exe, config=cfg,
                                boot=a.boot or str(disc),
                                instances_root=out, keep=True, platform=a.platform, connect_timeout=120,

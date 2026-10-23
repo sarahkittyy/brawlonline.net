@@ -38,4 +38,16 @@ export const NoSaveYet = () => <Edit section={save({ folder, files: 0, bytes: 0,
 
 export const NotCheckedYet = () => <Edit section={save("not-ready")} />;
 
-export const GameCube = () => <Edit section={null} />;
+export const GameCube = () => (
+  <Edit
+    section={{
+      ...save({
+        folder: "C:/Users/me/AppData/Roaming/Brawl Online/netplay/User/Saves/14e34197d0329e2e/GC",
+        files: 1,
+        bytes: 90_176,
+        modified: "2026-10-23T02:50:07.000Z",
+      }),
+      gamecube: true,
+    }}
+  />
+);

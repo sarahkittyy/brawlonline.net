@@ -12,6 +12,7 @@ import { BUILD_HASH_VERSION, buildHashKey, combineBuildHash, computeBuildParts, 
 import { defaultControllerKind, readDolphinControllers } from "./controllers";
 import { discIdentity, readDiscInfo } from "./disc_info";
 import { findModParts } from "./folder_import";
+import { gcSaveDir, importGcSave, summarizeGcSave } from "./gc_save";
 import { knownDiscName, knownModName } from "./known_builds";
 import type { ModsRoomArg } from "./mods_args";
 import { readModRoomStatus, writeModRoomRequest } from "./room_files";
@@ -489,14 +490,15 @@ export class ModsManager {
     await writeModRoomRequest(this.dolphin.netplayOnlineDir(), request);
   }
 
-  /** The game's save in rooms: null for a GameCube game (memory cards are not kept) or a game
-   * not hashed yet (its store is named by its hash). */
+  /** The game's save in rooms: null for a game not hashed yet (its store is named by its hash). A
+   * GameCube game's is its memory card's saves (`gc_save.ts`). */
   async saveInfo(id: string): Promise<ModSaveInfo | null> {
     const build = this.findBuild(id);
-    if (build.platform === "gamecube" || !build.hash) {
+    if (!build.hash) {
       return null;
     }
-    return summarizeSave(await this.saveDataDir(id));
+    const folder = await this.saveDataDir(id);
+    return build.platform === "gamecube" ? summarizeGcSave(folder) : summarizeSave(folder);
   }
 
   /** The save's folder, made if it is not there yet (an empty one plays as no save). */
@@ -513,12 +515,20 @@ export class ModsManager {
     }
     const folder = await this.saveDataDir(id);
     const build = this.findBuild(id);
-    const result = await importSave({
-      source,
-      titleId: build.titleId!,
-      userFolder: this.dolphin.netplayUserFolder(),
-      buildHash: build.hash!,
-    });
+    const result =
+      build.platform === "gamecube"
+        ? await importGcSave({
+            source,
+            gameId: build.gameId!,
+            userFolder: this.dolphin.netplayUserFolder(),
+            buildHash: build.hash!,
+          })
+        : await importSave({
+            source,
+            titleId: build.titleId!,
+            userFolder: this.dolphin.netplayUserFolder(),
+            buildHash: build.hash!,
+          });
     log.info(
       `Imported a save of ${build.name} (${result.save.files} files) into ${folder}` +
         (result.backup ? `; the one before is in ${result.backup}` : ""),
@@ -526,23 +536,21 @@ export class ModsManager {
     return result;
   }
 
-  /** The build's save folder in its store (`title/<hi>/<lo>/data`): its title ID read from the
-   * disc's header for a game added before the launcher kept it. */
+  /** The build's save folder in its store: a Wii game's `title/<hi>/<lo>/data`, a GameCube game's
+   * memory card (`GC`, its `.gci` files). The disc's title ID (Wii) or game ID (GameCube) is read
+   * from its header for a game added before the launcher kept it. */
   private async saveDataDir(id: string): Promise<string> {
     let build = this.findBuild(id);
-    if (build.platform === "gamecube") {
-      throw new Error("GameCube games keep their saves on memory cards, which rooms don't keep.");
-    }
     if (!build.hash) {
       throw new Error(`${build.name} is still being checked. Try again when that is done.`);
     }
-    if (!build.titleId) {
+    if (build.platform === "gamecube" ? !build.gameId : !build.titleId) {
       const info = await readDiscInfo(await this.toolPath(), build.discPath);
-      if (!info.titleId) {
-        throw new Error("GameCube games keep their saves on memory cards, which rooms don't keep.");
-      }
-      build = { ...this.findBuild(id), titleId: info.titleId };
+      build = { ...this.findBuild(id), gameId: info.gameId, titleId: info.titleId, platform: info.platform };
       await this.saveBuilds(this.builds().map((b) => (b.id === id ? build : b)));
+    }
+    if (build.platform === "gamecube") {
+      return gcSaveDir(this.dolphin.netplayUserFolder(), build.hash!);
     }
     return titleDataDir(saveStoreDir(this.dolphin.netplayUserFolder(), build.hash!), build.titleId!);
   }

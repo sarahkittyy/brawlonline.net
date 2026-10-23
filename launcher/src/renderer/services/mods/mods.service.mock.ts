@@ -258,10 +258,11 @@ class MockModsClient implements ModsService {
 
   async saveInfo(id: string): Promise<ModSaveInfo | null> {
     const build = this.builds.find((b) => b.id === id);
-    if (!build?.hash || build.platform === "gamecube") {
+    if (!build?.hash) {
       return null;
     }
-    const folder = `C:/Users/me/AppData/Roaming/Brawl Online/netplay/User/Saves/${build.hash.slice(0, 16)}`;
+    const store = `C:/Users/me/AppData/Roaming/Brawl Online/netplay/User/Saves/${build.hash.slice(0, 16)}`;
+    const folder = build.platform === "gamecube" ? `${store}/GC` : store;
     return this.saves[id] ?? { folder, files: 0, bytes: 0, modified: null };
   }
 

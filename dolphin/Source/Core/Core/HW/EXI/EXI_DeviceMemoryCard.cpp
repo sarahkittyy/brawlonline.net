@@ -4,6 +4,7 @@
 #include "Core/HW/EXI/EXI_DeviceMemoryCard.h"
 
 #include <array>
+#include <cstdlib>
 #include <functional>
 #include <memory>
 #include <string>
@@ -32,6 +33,8 @@
 #include "Core/HW/Sram.h"
 #include "Core/HW/SystemTimers.h"
 #include "Core/Movie.h"
+#include "Core/Online/ModsRoom.h"
+#include "Core/Rollback/MachineSession.h"
 #include "Core/System.h"
 #include "DiscIO/Enums.h"
 
@@ -178,6 +181,41 @@ void CEXIMemoryCard::SetupGciFolder(const Memcard::HeaderData& header_data)
       SConfig::GetInstance().GetTitleID() != Titles::SYSTEM_MENU)
   {
     current_game_id = Common::swap32(reinterpret_cast<const u8*>(game_id.c_str()));
+  }
+
+  if (Machine::IsArmed())
+  {
+    // A whole-machine session (docs/design/brawl-mods.md §6.5): the card holds this build's saves
+    // of the game, `<User>/Saves/<16 hex digits of the build hash>/GC/`, the store a Wii game's
+    // NAND save has. Only the player who booted the game writes it back, when the session ends; a
+    // joiner plays the host's card, which comes with the machine image. A session outside a room
+    // (tests) has no store and plays an empty card.
+    const std::string hash = Online::ModsRoom::BuildHash();
+    std::string session_dir;
+    bool write_back = false;
+    if (const char* test_dir = std::getenv("PPR_MACHINE_CARD_DIR"); test_dir && *test_dir)
+    {
+      // Tests: that folder plays as the build's store.
+      session_dir = std::string(test_dir) + DIR_SEP;
+      write_back = !Machine::JoinsRunningSession();
+    }
+    else if (hash.size() >= 16)
+    {
+      session_dir =
+          File::GetUserPath(D_USER_IDX) + "Saves" DIR_SEP + hash.substr(0, 16) + DIR_SEP "GC" DIR_SEP;
+      write_back = !Machine::JoinsRunningSession();
+    }
+    else
+    {
+      session_dir = File::GetUserPath(D_GCUSER_IDX) + "Session" DIR_SEP;
+      File::DeleteDirRecursively(session_dir);
+    }
+    File::CreateFullPath(session_dir);
+    INFO_LOG_FMT(EXPANSIONINTERFACE, "Memory card {}: the session's, {}{}", m_card_slot, session_dir,
+                 write_back ? "" : " (not written back)");
+    m_memory_card = std::make_unique<GCMemcardDirectory>(session_dir, m_card_slot, header_data,
+                                                         current_game_id, true, write_back);
+    return;
   }
 
   const auto [dir_path, migrate] =
@@ -501,7 +539,10 @@ void CEXIMemoryCard::DoState(PointerWrap& p)
   // otherwise, we'll assume the user wants to keep their memcards and saves separate,
   // unless we're loading (in which case we let the savestate contents decide, in order to stay
   // aligned with them).
-  bool storeContents = m_system.GetMovie().IsMovieActive();
+  // A whole-machine session's rollbacks and machine images carry the card too
+  // (docs/design/brawl-mods.md §6.5): a rollback past a save must undo it, and a joiner plays the
+  // host's card.
+  bool storeContents = m_system.GetMovie().IsMovieActive() || Machine::IsArmed();
   p.Do(storeContents);
 
   if (storeContents)
