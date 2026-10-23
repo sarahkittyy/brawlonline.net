@@ -35,6 +35,22 @@ namespace Gekko {
 
         void AddLocalInput(i32 player, void* input) override;
 
+        bool AddLocalInputAt(i32 player, void* input, i32 frame) override;
+
+        void SendLocalInputsNow() override;
+
+        i32 LocalInputFrame(i32 player) override;
+
+        i32 CurrentFrame() override;
+
+        void ReceiveOnly() override;
+
+        bool ReceivedInput(i32 player, i32 frame, void* input) override;
+
+        bool AcceptLateInput(i32 player, i32 frame) override;
+
+        void SetAdvantageDelayBias(i32 frames) override;
+
         void SetFrameLimit(i32 frame) override;
 
         void SetLocalDelayInput(i32 player, const void* input) override;
@@ -67,6 +83,15 @@ namespace Gekko {
 		void HandleReceivedInputs();
 
 		void SendLocalInputs();
+
+		// moves the local inputs not in the network queue yet into it; true if any moved.
+		bool QueueLocalInputs();
+
+		// the first frame SendLocalInputsNow queued whose frame advantage is not recorded yet.
+		Frame _adv_unrecorded_from = GameInput::NULL_FRAME;
+
+		// gekko_set_advantage_delay_bias
+		Frame _adv_delay_bias = 0;
 
 		u8 GetMinLocalDelay();
 

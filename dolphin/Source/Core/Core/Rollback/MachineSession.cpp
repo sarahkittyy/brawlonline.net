@@ -61,6 +61,7 @@
 #include "VideoCommon/CommandProcessor.h"
 #include "Core/HW/AudioInterface.h"
 #include "Core/HW/SI/SI.h"
+#include "Core/HW/SystemTimers.h"
 #include "Core/HW/VideoInterface.h"
 #include "Core/HW/ProcessorInterface.h"
 #include "Core/HW/Wiimote.h"
@@ -626,6 +627,46 @@ struct State
   Clock::time_point desync_notice_at{};  // the last desync the players were told of
   float frames_ahead = 0;
   int input_delay = 0;  // this player's, in the current GekkoNet session
+  // Input latency trace (PPR_MACHINE_INPUT_LAT_LOG): per frame, when its first run began, when
+  // the local controller behind its local input was read, and the game's first reads of it.
+  struct LatFrame
+  {
+    s64 frame = -1;
+    Clock::time_point begin{}, first_si{}, first_bt{};
+    int si_n = 0, bt_n = 0;
+    s64 read_frame = -1;
+    Clock::time_point read{};
+  };
+  std::array<LatFrame, 64> lat{};
+  Clock::time_point local_read_at{};
+  // Late input (prototype, PPR_MACHINE_LATE_INPUT=1). The game reads a frame's inputs at its own
+  // SI polls and Wii Remote reports, and the throttle's one sleep a frame often comes between the
+  // frame's start and those reads, so the local controller read at the boundary was up to a field
+  // old when the game took it. Now: the local controller is read when the game first reads the
+  // local player's device in a frame (LateLocalInput), for the frame `delay` later, and sent at
+  // once (GekkoNet's delay is one less, so the boundary's own add, the fallback, gives the same
+  // frame); and a remote player's input that arrives before the game first read their device in
+  // the frame it is for replaces the prediction there, without a rollback (LateRemoteInput).
+  bool late_input = false;
+  std::array<u8, MAX_PLAYERS> consumed{};  // this frame's first run: 1 GC pad read, 2 Wii Remote
+  struct LateStats
+  {
+    u64 early = 0, fallback = 0, dup = 0, skipped = 0, accepted = 0, refused = 0, missed = 0,
+        unread = 0, outside = 0;
+  } late{}, late_window{};
+  // A controller read while no frame's pass is open (none is expected): it took the inputs of the
+  // frame that ended without marking them read, so that frame takes no late input at its end.
+  bool read_outside_pass = false;
+  s64 late_window_from = -1;
+  std::vector<Clock::time_point> gekko_tx_at;  // when each gekko_tx packet was queued
+  // PPR_MACHINE_DIRECT_SEND=1 (prototype): the CPU thread sends a frame's GekkoNet packets itself
+  // with its early local input (FlushGekkoNow), the net thread only those older than
+  // DIRECT_SEND_HOLD (a frame without an early input: its boundary's acks), and it waits on the
+  // socket instead of sleeping, so packets that come are taken at once.
+  bool direct_send = false;
+  double tx_wait_sum = 0, tx_wait_max = 0;
+  u64 tx_n = 0;
+  double loop_gap_max = 0;
   // The player's setting changed while the session runs (SetInputDelay, any thread): a profile
   // (AUTO_DELAY...) or 0-9, NO_DELAY_REQUEST for none.
   std::atomic<int> requested_delay{NO_DELAY_REQUEST};
@@ -2130,6 +2171,30 @@ void PaceSD(PeerLink& p, State::SDPace& pace, Clock::time_point now)
   pace.limited = false;
 }
 
+constexpr auto DIRECT_SEND_HOLD = std::chrono::milliseconds(2);
+
+// Under net_mutex: GekkoNet's queued packets to ENet (sent with the host's next flush or service).
+void SendQueuedGekko(Clock::time_point now)
+{
+  for (const auto& at : s.gekko_tx_at)
+  {
+    const double w = std::chrono::duration<double, std::milli>(now - at).count();
+    s.tx_wait_sum += w;
+    s.tx_wait_max = std::max(s.tx_wait_max, w);
+    ++s.tx_n;
+  }
+  s.gekko_tx_at.clear();
+  for (auto& [slot, data] : s.gekko_tx)
+  {
+    PeerLink& p = s.peers[slot];
+    if (!p.peer || !p.hello)
+      continue;
+    ENetPacket* packet = enet_packet_create(data.data(), data.size(), ENET_PACKET_FLAG_UNSEQUENCED);
+    enet_peer_send(p.peer, CHANNEL_GEKKO, packet);
+  }
+  s.gekko_tx.clear();
+}
+
 void NetThread()
 {
   Common::SetCurrentThreadName("Machine session");
@@ -2181,16 +2246,11 @@ void NetThread()
       }
     }
     // Outgoing: GekkoNet's packets queued by the CPU thread.
-    for (auto& [slot, data] : s.gekko_tx)
+    if (!s.direct_send ||
+        (!s.gekko_tx_at.empty() && now - s.gekko_tx_at.front() >= DIRECT_SEND_HOLD))
     {
-      PeerLink& p = s.peers[slot];
-      if (!p.peer || !p.hello)
-        continue;
-      ENetPacket* packet =
-          enet_packet_create(data.data(), data.size(), ENET_PACKET_FLAG_UNSEQUENCED);
-      enet_peer_send(p.peer, CHANNEL_GEKKO, packet);
+      SendQueuedGekko(now);
     }
-    s.gekko_tx.clear();
     // A machine image for a joiner: a few chunks at a time, so ENet's queue stays short.
     if (!s.image_tx.empty() && s.image_to >= 0)
     {
@@ -2411,9 +2471,30 @@ void NetThread()
       if (p.min_rtt_ms < 0 || p.rtt_ms < p.min_rtt_ms)
         p.min_rtt_ms = p.rtt_ms;
     }
+    ENetSocket sock = s.host->socket;
     lk.unlock();
-    // ~1 ms: GekkoNet's packets go out at most this late.
-    std::this_thread::sleep_for(std::chrono::microseconds(500));
+    if (s.direct_send)
+    {
+      // Wakes when a packet comes, else after 1 ms (ENet's resends, pings, the queue's hold).
+      enet_uint32 cond = ENET_SOCKET_WAIT_RECEIVE;
+      enet_socket_wait(sock, &cond, 1);
+    }
+    else
+    {
+      // ~1 ms: GekkoNet's packets go out at most this late.
+      std::this_thread::sleep_for(std::chrono::microseconds(500));
+    }
+    {
+      static Clock::time_point last{};
+      const auto t = Clock::now();
+      if (last != Clock::time_point{})
+      {
+        const double gap = std::chrono::duration<double, std::milli>(t - last).count();
+        std::lock_guard lk2(s.net_mutex);
+        s.loop_gap_max = std::max(s.loop_gap_max, gap);
+      }
+      last = t;
+    }
   }
 }
 
@@ -2473,6 +2554,7 @@ void GekkoSend(GekkoNetAddress* addr, const char* data, int length)
     return;
   std::lock_guard lk(s.net_mutex);
   s.gekko_tx.emplace_back(slot, std::vector<u8>(data, data + length));
+  s.gekko_tx_at.push_back(Clock::now());
 }
 
 GekkoNetResult** GekkoReceive(int* length)
@@ -2574,6 +2656,13 @@ Input RestingInput(Controller kind)
   return in;
 }
 
+// GekkoNet's local delay for an input delay: one less with late input (the local input is read in
+// the frame before the one whose boundary would have read it).
+int GekkoDelayFor(int delay)
+{
+  return s.late_input ? std::max(delay - 1, 0) : delay;
+}
+
 bool CreateGekko()
 {
   DestroyGekko();
@@ -2628,7 +2717,17 @@ bool CreateGekko()
   {
     double rtt = -1;
     s.input_delay = PickInputDelay(&rtt);
-    gekko_set_local_delay(s.gekko, s.local_handle, static_cast<unsigned char>(s.input_delay));
+    {
+      const char* env = std::getenv("PPR_MACHINE_LATE_INPUT");
+      s.late_input = env && env[0] == '1';
+      const char* direct = std::getenv("PPR_MACHINE_DIRECT_SEND");
+      s.direct_send = s.late_input && direct && direct[0] == '1';
+      s.consumed = {};
+      AddLog(fmt::format("late input {}", s.late_input ? "on" : "off"));
+      gekko_set_advantage_delay_bias(s.gekko, s.late_input ? 1 : 0);
+    }
+    gekko_set_local_delay(s.gekko, s.local_handle,
+                          static_cast<unsigned char>(GekkoDelayFor(s.input_delay)));
     AddLog(
         s.opts.delay >= 0 ? fmt::format("input delay {} (set)", s.input_delay) :
         rtt < 0           ? fmt::format("input delay {} (auto, no round trip yet)", s.input_delay) :
@@ -3149,6 +3248,7 @@ Input ReadLocalInput()
 
 void CaptureLocalInput()
 {
+  s.local_read_at = Clock::now();
   Input in = ReadLocalInput();
   AddLocalRequest(&in);
   s.local_input = in;
@@ -3250,7 +3350,7 @@ void ApplyRequestedDelay()
                    fmt::format("input delay {} -> {} (auto, round trip {:.0f} ms)", s.input_delay,
                                delay, rtt));
   s.input_delay = delay;
-  gekko_set_local_delay(s.gekko, s.local_handle, static_cast<unsigned char>(delay));
+  gekko_set_local_delay(s.gekko, s.local_handle, static_cast<unsigned char>(GekkoDelayFor(delay)));
 }
 
 // Polls GekkoNet with this frame's local input and turns its events into the passes to run.
@@ -3259,7 +3359,30 @@ void Update(Core::System& system)
   s.ops.Clear();
   gekko_network_poll(s.gekko);
   ApplyRequestedDelay();
-  gekko_add_local_input(s.gekko, s.local_handle, s.local_input.data());
+  {
+    const int target = gekko_current_frame(s.gekko) + GekkoDelayFor(s.input_delay);
+    if (s.late_input && gekko_local_input_frame(s.gekko, s.local_handle) >= target)
+    {
+      // Read and sent at the game's read in the frame before (LateLocalInput).
+    }
+    else
+    {
+      const s64 global = s.frame_base + target;
+      if (global >= 0)
+      {
+        auto& l = s.lat[static_cast<size_t>(global) % s.lat.size()];
+        l.read_frame = global;
+        l.read = s.local_read_at;
+      }
+      const int before = gekko_local_input_frame(s.gekko, s.local_handle);
+      gekko_add_local_input(s.gekko, s.local_handle, s.local_input.data());
+      if (s.late_input && gekko_local_input_frame(s.gekko, s.local_handle) > before)
+      {
+        ++s.late.fallback;
+        ++s.late_window.fallback;
+      }
+    }
+  }
   int count = 0;
   GekkoGameEvent** events = gekko_update_session(s.gekko, &count);
   ProcessSessionEvents();
@@ -5629,6 +5752,8 @@ void RedrawWhileWaiting(Core::System& system, Clock::duration waited_for)
   system.GetFifo().GpuMaySleep();
 }
 
+void LateEndOfFrame();
+
 Wait WaitForFrames(Core::System& system)
 {
   // A peer that sends nothing for this long is gone (GekkoNet drops one after 5 s of silence; a
@@ -5710,6 +5835,8 @@ Wait WaitForFrames(Core::System& system)
     {
       DropLeftPeers();
       UpdateLocalRequest();
+      if (s.late_input)
+        LateEndOfFrame();
       CaptureLocalInput();
       Update(system);
       if (s.phase == Phase::Error)
@@ -5896,6 +6023,99 @@ void StartScheduleLog(Core::System& system, s64 frame, std::string_view why)
                ct.GetEventFifoId());
 }
 
+std::FILE* LatLog()
+{
+  static std::FILE* const f = [] {
+    const char* env = std::getenv("PPR_MACHINE_INPUT_LAT_LOG");
+    if (!env || !*env)
+      return static_cast<std::FILE*>(nullptr);
+    std::string path = env;
+    if (const size_t at = path.find("%p"); at != std::string::npos)
+      path.replace(at, 2, std::to_string(Clock::now().time_since_epoch().count()));
+    return std::fopen(path.c_str(), "w");
+  }();
+  return f;
+}
+
+double LatMs(Clock::time_point a, Clock::time_point b)
+{
+  if (a == Clock::time_point{} || b == Clock::time_point{})
+    return -1;
+  return std::chrono::duration<double, std::milli>(b - a).count();
+}
+
+// A frame's first run: the line of the frame before it, and this one's start.
+}  // namespace
+Boundary SessionBoundary();
+GCPadStatus DecodePad(const Input& in);
+namespace
+{
+
+void LatOnForwardPass(s64 frame)
+{
+  std::FILE* f = LatLog();
+  if (!f)
+    return;
+  const auto now = Clock::now();
+  const auto& prev = s.lat[static_cast<size_t>(frame - 1 + s.lat.size()) % s.lat.size()];
+  if (frame > 0 && prev.frame == frame - 1)
+  {
+    // F frame | begin->first SI read ms | SI reads | begin->first Wii Remote update ms | updates |
+    // local read->first SI read ms | local read->begin ms | frame length ms
+    const bool has_read = prev.read_frame == prev.frame;
+    std::fprintf(f, "F %lld %.3f %d %.3f %d %.3f %.3f %.3f\n", static_cast<long long>(prev.frame),
+                 LatMs(prev.begin, prev.first_si), prev.si_n, LatMs(prev.begin, prev.first_bt),
+                 prev.bt_n, has_read ? LatMs(prev.read, prev.first_si) : -1.0,
+                 has_read ? LatMs(prev.read, prev.begin) : -1.0, LatMs(prev.begin, now));
+    std::fflush(f);
+  }
+  static const bool reads = std::getenv("PPR_MACHINE_INPUT_LAT_READS") != nullptr;
+  if (reads && SessionBoundary() == Boundary::BrawlLoop)
+  {
+    // P frame | Brawl's gfPadStatus slots' buttons at this loop top (0x805BAD00, 0x40 apart) |
+    // the buttons of the inputs this frame runs with
+    auto& memory = Core::System::GetInstance().GetMemory();
+    std::fprintf(f, "P %lld", static_cast<long long>(frame));
+    for (u32 p = 0; p < 4; ++p)
+      std::fprintf(f, " %04x", memory.Read_U16(0x805BAD00 + p * 0x40));
+    for (int p = 0; p < 4; ++p)
+      std::fprintf(f, " %04x", DecodePad(s.latched[p]).button);
+    std::fprintf(f, "\n");
+  }
+  auto& l = s.lat[static_cast<size_t>(frame) % s.lat.size()];
+  const s64 read_frame = l.read_frame;
+  const auto read = l.read;
+  l = {};
+  l.frame = frame;
+  l.begin = now;
+  l.read_frame = read_frame;
+  l.read = read;
+}
+
+void LatOnRead(bool si, int port)
+{
+  if (s.phase != Phase::Running || !s.pass_open || s.resim || !LatLog())
+    return;
+  auto& l = s.lat[static_cast<size_t>(s.current_frame) % s.lat.size()];
+  if (l.frame != s.current_frame)
+    return;
+  auto& first = si ? l.first_si : l.first_bt;
+  if (first == Clock::time_point{})
+    first = Clock::now();
+  ++(si ? l.si_n : l.bt_n);
+  static const bool reads = std::getenv("PPR_MACHINE_INPUT_LAT_READS") != nullptr;
+  if (reads)
+  {
+    // R frame kind(S/B) port | real ms since the frame's start | emulated ms since its start
+    auto& system = Core::System::GetInstance();
+    const auto& h = s.history[static_cast<size_t>(s.current_frame) % HISTORY_SIZE];
+    const double emu_ms = static_cast<double>(system.GetCoreTiming().GetTicks() - h.ticks) *
+                          1000.0 / static_cast<double>(system.GetSystemTimers().GetTicksPerSecond());
+    std::fprintf(LatLog(), "R %lld %c %d %.3f %.3f\n", static_cast<long long>(s.current_frame),
+                 si ? 'S' : 'B', port, LatMs(l.begin, Clock::now()), emu_ms);
+  }
+}
+
 void BeginPass(Core::System& system)
 {
   // The inputs this pass runs with, for the SI (GetPad) and the Wii Remotes (GetWiimote).
@@ -5913,6 +6133,12 @@ void BeginPass(Core::System& system)
       ct.m_log_schedules = false;
       s_schedule_log_until = -1;
     }
+  }
+  if (!s.resim)
+  {
+    LatOnForwardPass(s.current_frame);
+    s.consumed = {};
+    s.read_outside_pass = false;
   }
   SyncWiimotes(system);
   PlanEpoch(s.current_frame);
@@ -6784,6 +7010,212 @@ bool IsResimulationPass()
   return Active() && s.resim;
 }
 
+namespace
+{
+// The bytes of an input that belong to a device (1: the GameCube pad, 2: the Wii Remote).
+bool SameOutside(const Input& a, const Input& b, u8 devices)
+{
+  for (int i = 0; i < INPUT_SIZE; ++i)
+  {
+    const bool gc = i >= 1 && i <= 8;
+    const bool wii = i >= 9 && i <= 40;
+    if ((gc && (devices & 1)) || (wii && (devices & 2)))
+      continue;
+    if (a[i] != b[i])
+      return false;
+  }
+  return true;
+}
+
+void LateLogWindow()
+{
+  if (s.late_window_from < 0)
+    s.late_window_from = s.current_frame;
+  if (s.current_frame - s.late_window_from < 600)
+    return;
+  double tx_avg, tx_max, gap_max;
+  u64 tx_n;
+  {
+    std::lock_guard lk(s.net_mutex);
+    tx_avg = s.tx_n ? s.tx_wait_sum / static_cast<double>(s.tx_n) : -1;
+    tx_max = s.tx_wait_max;
+    tx_n = s.tx_n;
+    gap_max = s.loop_gap_max;
+    s.tx_wait_sum = s.tx_wait_max = 0;
+    s.tx_n = 0;
+    s.loop_gap_max = 0;
+  }
+  const auto& w = s.late_window;
+  INFO_LOG_FMT(BRAWLBACK,
+               "machine: input frames {}-{}: late input {}: early {}, fallback {}, dup {}, skipped "
+               "{}; remote late accepted {}, refused {}, missed {}; gekko packets waited avg {:.2f} "
+               "ms max {:.2f} ms ({}), net loop gap max {:.2f} ms; unread devices accepted {}; "
+               "reads outside a pass {}",
+               s.late_window_from, s.current_frame, s.late_input ? "on" : "off", w.early,
+               w.fallback, w.dup, w.skipped, w.accepted, w.refused, w.missed, tx_avg, tx_max, tx_n,
+               gap_max, w.unread, w.outside);
+  s.late_window = {};
+  s.late_window_from = s.current_frame;
+}
+
+// CPU thread: everything GekkoNet queued since the boundary goes now, in one datagram a peer.
+void FlushGekkoNow()
+{
+  std::lock_guard lk(s.net_mutex);
+  if (!s.host)
+    return;
+  SendQueuedGekko(Clock::now());
+  enet_host_flush(s.host);
+}
+
+// The local controller, read now (the game's first read of the local player's device in this
+// frame's first run), for the frame `input_delay` later, and sent at once.
+void LateLocalInput()
+{
+  const int h = s.local_handle;
+  const int target = static_cast<int>(s.current_frame - s.frame_base) + s.input_delay;
+  const int last = gekko_local_input_frame(s.gekko, h);
+  if (target <= last)
+  {
+    ++s.late.dup;
+    ++s.late_window.dup;
+    return;
+  }
+  if (target != last + 1)
+  {
+    ++s.late.skipped;
+    ++s.late_window.skipped;
+    return;
+  }
+  const auto read_at = Clock::now();
+  Input in = ReadLocalInput();
+  AddLocalRequest(&in);
+  if (!gekko_add_local_input_at(s.gekko, h, target, in.data()))
+  {
+    ++s.late.skipped;
+    ++s.late_window.skipped;
+    return;
+  }
+  gekko_send_local_inputs(s.gekko);
+  if (s.direct_send)
+    FlushGekkoNow();
+  const s64 global = s.frame_base + target;
+  auto& l = s.lat[static_cast<size_t>(global) % s.lat.size()];
+  l.read_frame = global;
+  l.read = read_at;
+  ++s.late.early;
+  ++s.late_window.early;
+}
+
+// A remote player's input for this frame, if it came since the frame began and the game has not
+// read the parts of it that differ from the prediction: it replaces the prediction.
+void LateRemoteInput(int slot, u8 device)
+{
+  const int h = s.slot_handle[slot];
+  if (h < 0)
+    return;
+  const int frame = static_cast<int>(s.current_frame - s.frame_base);
+  Input real{};
+  if (!gekko_received_input(s.gekko, h, frame, real.data()))
+  {
+    gekko_receive(s.gekko);
+    if (!gekko_received_input(s.gekko, h, frame, real.data()))
+    {
+      ++s.late.missed;
+      ++s.late_window.missed;
+      return;
+    }
+  }
+  if (real == s.latched[slot])
+    return;
+  // Only parts of it the game has not read in this frame (this device, and others not yet read).
+  const u8 unread = static_cast<u8>(~s.consumed[slot] & 3);
+  if (!SameOutside(real, s.latched[slot], unread) || !gekko_accept_late_input(s.gekko, h, frame))
+  {
+    ++s.late.refused;
+    ++s.late_window.refused;
+    return;
+  }
+  s.latched[slot] = real;
+  RecordHistory(s.current_frame, s.latched, 0);
+  ++s.late.accepted;
+  ++s.late_window.accepted;
+}
+
+// At the boundary after a frame's run, before GekkoNet's update: a remote player's input for that
+// frame that came since and differs from the prediction only in a device the game never read in
+// the frame (a Wii Remote it got no report for, in a menu that reads only player 1) changed
+// nothing, so it is the frame's input without a rollback. Whether a frame reads a device is the
+// same on every machine (the machines run the same emulation).
+s64 s_late_end_done = -1;
+void LateEndOfFrame()
+{
+  if (s.phase != Phase::Running || !s.gekko || s.current_frame < 0 ||
+      s_late_end_done == s.current_frame)
+  {
+    return;
+  }
+  s_late_end_done = s.current_frame;
+  LateLogWindow();
+  if (s.read_outside_pass)
+    return;
+  const int frame = static_cast<int>(s.current_frame - s.frame_base);
+  bool received = false;
+  for (int slot = 0; slot < MAX_PLAYERS; ++slot)
+  {
+    const int h = s.slot_handle[slot];
+    if (h < 0 || slot == s.opts.local_slot)
+      continue;
+    const u8 unread = static_cast<u8>(~s.consumed[slot] & 3);
+    if (!unread)
+      continue;
+    if (!received)
+    {
+      gekko_receive(s.gekko);
+      received = true;
+    }
+    Input real{};
+    if (!gekko_received_input(s.gekko, h, frame, real.data()) || real == s.latched[slot])
+      continue;
+    if (!SameOutside(real, s.latched[slot], unread) || !gekko_accept_late_input(s.gekko, h, frame))
+      continue;
+    s.latched[slot] = real;
+    RecordHistory(s.current_frame, s.latched, 0);
+    ++s.late.unread;
+    ++s.late_window.unread;
+  }
+}
+
+// The game reads `device` of the player in `slot` (GetPad, GetWiimote).
+void LateInputAt(u8 device, int slot)
+{
+  if (s.phase == Phase::Running && !s.pass_open)
+  {
+    s.read_outside_pass = true;
+    ++s.late.outside;
+    ++s.late_window.outside;
+  }
+  if (s.phase != Phase::Running || !s.pass_open || s.resim || !s.gekko || slot < 0 ||
+      slot >= MAX_PLAYERS || (s.consumed[slot] & device))
+  {
+    return;
+  }
+  std::lock_guard lk(s.mutex);
+  if (slot == s.opts.local_slot)
+  {
+    const bool mine = device == 1 ? s.controller[slot] == Controller::GameCube :
+                                    s.controller[slot] == Controller::WiiRemote;
+    if (mine)
+      LateLocalInput();
+  }
+  else if (s.slot_handle[slot] >= 0)
+  {
+    LateRemoteInput(slot, device);
+  }
+  s.consumed[slot] |= device;
+}
+}  // namespace
+
 bool GetPad(int port, GCPadStatus* status)
 {
   if (!IsArmed())
@@ -6792,7 +7224,10 @@ bool GetPad(int port, GCPadStatus* status)
     return false;
   // Every port is a standard controller on every machine; whether one is plugged in this frame is
   // its player's input (before the session runs: nothing, or the boot's player, LatchBootInput).
+  if (s.late_input)
+    LateInputAt(1, port);
   *status = DecodePad(s.latched[port]);
+  LatOnRead(true, port);
   return true;
 }
 
@@ -6812,7 +7247,10 @@ bool GetWiimote(int index, WiimoteEmu::DesiredWiimoteState* state)
   if (!IsArmed() || index < 0 || index >= MAX_PLAYERS)
     return false;
   // Every Wii Remote is the session's: one nobody plays is at rest (no button connects it).
+  if (s.late_input)
+    LateInputAt(2, index);
   const Input& in = s.latched[index];
+  LatOnRead(false, index);
   ResetWiimoteState(state);
   // Before the session runs (unless the boot's player plays one), or a player who sent nothing
   // yet: a Wii Remote at rest.

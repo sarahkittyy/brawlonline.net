@@ -454,6 +454,33 @@ struct State
   // The local controller port the local player uses this game (fixed in CreateGekko).
   int local_pad = 0;
   Clock::time_point local_sampled_at{};  // the local input's controller read (CaptureLocalInputs)
+  // Early local input for a Wii controller (a GameCube controller has the host decode). The pass of
+  // the pad thread that the next loop top's CaptureLocalInputs would take is made on most frames
+  // just after the loop top before it, so its pad waited a field for nothing. It is handed to
+  // GekkoNet as soon as it is made (OnPadPass), for the frame that loop top would give it, and
+  // sent at once; GekkoNet's delay is one less (GekkoDelayFor), so the loop top's own add, kept as
+  // the fallback and the check, gives the same frame. The loop top's GekkoBatch is held open until
+  // that send, so a frame stays one datagram. PPR_GPRB_EARLY_INPUT=0: never.
+  bool early_input = false;
+  bool ei_batch_held = false;
+  std::optional<Clock::time_point> ei_loop_due;  // the last loop top's due time
+  int ei_loop_frame = -1;                        // the GekkoNet frame that loop top advanced
+  struct EiFrame
+  {
+    int frame = -1;
+    Clock::time_point read{};  // the pass that made the pad
+    Clock::time_point sent{};
+    bool early = false;
+    bool checked = false;
+    std::array<u8, INPUT_SIZE> in{};
+  };
+  std::array<EiFrame, 64> ei_frames{};
+  struct EiStats
+  {
+    u64 early = 0, fallback = 0, mismatch = 0, dup = 0, skipped = 0, used = 0;
+    double lat_sum = 0, lead_sum = 0;
+  } ei, ei_window;
+  std::vector<double> ei_lat, ei_lead;  // this window's
 
   // Per-frame CPU-thread state.
   PendingOps ops;
@@ -806,6 +833,7 @@ double s_rollback_ema = 0;
 constexpr double ROLLBACK_EMA_ALPHA = 1.0 / 120;
 
 std::string NetStatsLine(const State::NetStats& w);
+void LogEarlyInputWindow();
 void CloseNetWindowClock();
 void NetStatsFold(State::NetStats& t, const State::NetStats& w);
 void LogPerfVerdict(const State::NetStats& t);
@@ -1602,6 +1630,20 @@ struct GekkoBatch
   GekkoBatch(const GekkoBatch&) = delete;
   GekkoBatch& operator=(const GekkoBatch&) = delete;
 };
+
+// The loop top's held GekkoBatch (State::ei_batch_held) goes now.
+void EiReleaseBatch()
+{
+  std::lock_guard<std::recursive_timed_mutex> lk(s.mutex);
+  if (!s.ei_batch_held)
+    return;
+  s.ei_batch_held = false;
+  if (--s.gekko_batch == 0)
+  {
+    for (int slot = 0; slot < MAX_LOBBY_PLAYERS; ++slot)
+      FlushGekkoBundle(slot);
+  }
+}
 
 GekkoNetResult** GekkoReceive(int* length)
 {
@@ -3018,6 +3060,13 @@ int OwnDelayLevel()
 // This player's input delay for a game: the set number (or the harness's), else
 // their profile's from the round trip (`rtt_ms`, -1 for none), as GekkoNet will see it in the
 // game (ProfileInputDelay).
+// GekkoNet's local delay for an input delay: one less with early local input (the pass that
+// carries the sample comes a frame before the loop top that took it).
+int GekkoDelayFor(int delay)
+{
+  return s.early_input ? std::max(delay - 1, 0) : delay;
+}
+
 int PickInputDelay(double* rtt_ms)
 {
   *rtt_ms = OwnRoundTrip();
@@ -3064,7 +3113,7 @@ void ApplyLiveDelay()
                s.delay_rtt, DelayLevelName(level));
   s.input_delay = delay;
   s_current_delay = delay;
-  gekko_set_local_delay(s.gekko, s.local_handles[0], static_cast<unsigned char>(delay));
+  gekko_set_local_delay(s.gekko, s.local_handles[0], static_cast<unsigned char>(GekkoDelayFor(delay)));
   gekko_set_disconnect_timeout(s.gekko, Online::PeerSilenceTimeoutMs(delay));
 }
 
@@ -3189,6 +3238,25 @@ bool CreateGekko(bool stress, int num_players)
     gekko_set_local_delay(s.gekko, s.local_handles[0], static_cast<unsigned char>(s.input_delay));
     gekko_set_disconnect_timeout(s.gekko, Online::PeerSilenceTimeoutMs(s.input_delay));
     s.local_pad = LocalPad();
+    {
+      // A Wii controller's pad goes to GekkoNet early (a GameCube one's read is decoded at the loop
+      // top instead: PadsHostDecoded).
+      const char* env = std::getenv("PPR_GPRB_EARLY_INPUT");
+      s.early_input = s.local_pad >= 4 && !(env && env[0] == '0');
+      s.ei_batch_held = false;
+      s.ei_loop_due.reset();
+      s.ei_loop_frame = -1;
+      s.ei_frames = {};
+      s.ei = {};
+      s.ei_window = {};
+      s.ei_lat.clear();
+      s.ei_lead.clear();
+      gekko_set_local_delay(s.gekko, s.local_handles[0],
+                            static_cast<unsigned char>(GekkoDelayFor(s.input_delay)));
+      // The frame advantage counts the delay as without early input (its lead is the same).
+      gekko_set_advantage_delay_bias(s.gekko, s.early_input ? 1 : 0);
+      INFO_LOG_FMT(BRAWLBACK, "gprb: early local input {}", s.early_input ? "on" : "off");
+    }
     INFO_LOG_FMT(BRAWLBACK,
                  "gprb: input delay {} ({}, round trip {:.0f} ms, in game {:.0f} ms), controller "
                  "{}, profile {}",
@@ -3502,6 +3570,7 @@ void PlaybackMute(Core::System& system, bool mute)
 
 void EndRunning(Core::System& system, const std::string& reason)
 {
+  EiReleaseBatch();
   CostSessionEnd();
   PassLogClose();
   DestroyGekko();
@@ -4535,9 +4604,107 @@ void NetStatsOnDisplayedFrame(Core::System& system)
   }
   INFO_LOG_FMT(BRAWLBACK, "gprb net: frames {}-{}: {}{}", s.net_window_first, s.current_frame,
                NetStatsLine(w), link);
+  LogEarlyInputWindow();
   NetStatsFold(s.net_total, w);
   w = {};
   s.net_window_first = -1;
+}
+
+// Network: the loop top's local input (CaptureLocalInputs) for GekkoNet, unless the pass that
+// carries it was handed over early (OnPadPass): then it is compared with that one.
+void AddLocalInputAtLoopTop(int h, u8* in)
+{
+  const int before = gekko_local_input_frame(s.gekko, h);
+  const int target = gekko_current_frame(s.gekko) + GekkoDelayFor(s.input_delay);
+  if (s.early_input && before >= target)
+  {
+    State::EiFrame& f = s.ei_frames[static_cast<size_t>(target) % s.ei_frames.size()];
+    if (f.frame == target && f.early && !f.checked)
+    {
+      f.checked = true;
+      if (std::memcmp(f.in.data(), in, INPUT_SIZE) != 0)
+      {
+        ++s.ei.mismatch;
+        ++s.ei_window.mismatch;
+      }
+    }
+    return;
+  }
+  gekko_add_local_input(s.gekko, h, in);
+  const int after = gekko_local_input_frame(s.gekko, h);
+  if (after > before)
+  {
+    State::EiFrame& f = s.ei_frames[static_cast<size_t>(after) % s.ei_frames.size()];
+    f.frame = after;
+    f.read = s.local_sampled_at;
+    f.sent = Clock::now();
+    f.early = false;
+    f.checked = true;
+    std::memcpy(f.in.data(), in, INPUT_SIZE);
+    if (s.early_input)
+    {
+      ++s.ei.fallback;
+      ++s.ei_window.fallback;
+    }
+  }
+}
+
+// GekkoNet advanced `frame` (forward) at this loop top: how long ago the local input it used was
+// read and sent (PPR_GPRB_INPUT_LAT_LOG: a line a frame).
+void NoteLocalInputUsed(int frame)
+{
+  if (frame < 0)
+    return;
+  const State::EiFrame& f = s.ei_frames[static_cast<size_t>(frame) % s.ei_frames.size()];
+  if (f.frame != frame || f.read == Clock::time_point{})
+    return;
+  const auto now = Clock::now();
+  const double lat = std::chrono::duration<double, std::milli>(now - f.read).count();
+  const double lead = std::chrono::duration<double, std::milli>(now - f.sent).count();
+  ++s.ei.used;
+  s.ei.lat_sum += lat;
+  s.ei.lead_sum += lead;
+  s.ei_lat.push_back(lat);
+  s.ei_lead.push_back(lead);
+  static std::FILE* const log = [] {
+    const char* env = std::getenv("PPR_GPRB_INPUT_LAT_LOG");
+    if (!env || !*env)
+      return static_cast<std::FILE*>(nullptr);
+    std::string path = env;
+    if (const size_t at = path.find("%p"); at != std::string::npos)
+      path.replace(at, 2, std::to_string(Clock::now().time_since_epoch().count()));
+    return std::fopen(path.c_str(), "w");
+  }();
+  if (log)
+  {
+    // frame, read->use ms, send->use ms, early, the input's first 4 bytes
+    std::fprintf(log, "U %d %.3f %.3f %d %02x%02x%02x%02x\n", frame, lat, lead, f.early ? 1 : 0,
+                 f.in[0], f.in[1], f.in[2], f.in[3]);
+    std::fflush(log);
+  }
+}
+
+double Median(std::vector<double> v)
+{
+  if (v.empty())
+    return -1;
+  std::nth_element(v.begin(), v.begin() + v.size() / 2, v.end());
+  return v[v.size() / 2];
+}
+
+void LogEarlyInputWindow()
+{
+  if (s.mode != Mode::Network)
+    return;
+  INFO_LOG_FMT(BRAWLBACK,
+               "gprb input: early {} ({}), fallback {}, mismatch {}, dup {}, skipped {}; read->use "
+               "median {:.2f} ms, send->use median {:.2f} ms ({} frames)",
+               s.early_input ? "on" : "off", s.ei_window.early, s.ei_window.fallback,
+               s.ei_window.mismatch, s.ei_window.dup, s.ei_window.skipped, Median(s.ei_lat),
+               Median(s.ei_lead), s.ei_lat.size());
+  s.ei_window = {};
+  s.ei_lat.clear();
+  s.ei_lead.clear();
 }
 
 bool HandleGekkoFrame(Core::System& system)
@@ -4548,14 +4715,34 @@ bool HandleGekkoFrame(Core::System& system)
   int count = 0;
   GekkoGameEvent** events;
   {
+    // An earlier loop top's batch still held (no pass came): it goes first.
+    EiReleaseBatch();
     // This frame's messages to each peer in one datagram (GekkoBatch).
     GekkoBatch batch;
     if (s.mode == Mode::Network)
       gekko_network_poll(s.gekko);
     ApplyLiveDelay();
     for (int h : s.local_handles)
-      gekko_add_local_input(s.gekko, h, s.local_inputs.data() + s.handle_port[h] * INPUT_SIZE);
+    {
+      u8* in = s.local_inputs.data() + s.handle_port[h] * INPUT_SIZE;
+      if (s.mode == Mode::Network)
+        AddLocalInputAtLoopTop(h, in);
+      else
+        gekko_add_local_input(s.gekko, h, in);
+    }
+    const int frame_before = s.mode == Mode::Network ? gekko_current_frame(s.gekko) : -1;
     events = gekko_update_session(s.gekko, &count);
+    if (s.mode == Mode::Network && gekko_current_frame(s.gekko) > frame_before)
+    {
+      NoteLocalInputUsed(frame_before);
+      if (s.early_input)
+      {
+        // Held until the early input goes with it (OnPadPass), at the latest the next loop top.
+        std::lock_guard<std::recursive_timed_mutex> lk(s.mutex);
+        ++s.gekko_batch;
+        s.ei_batch_held = true;
+      }
+    }
   }
   return ProcessGekkoUpdate(system, events, count);
 }
@@ -5105,6 +5292,8 @@ void CaptureLocalInputs()
       latest = PadsSampledBefore(s.local_pad, *due - HALF_FIELD, &s.local_sampled_at);
     else
       latest = PadsSampledBefore(s.local_pad, Clock::time_point::max(), &s.local_sampled_at);
+    s.ei_loop_due = due;
+    s.ei_loop_frame = s.gekko ? gekko_current_frame(s.gekko) : -1;
     // A GameCube controller: the read the SI made just before this loop top, made into the pad
     // the pad thread will make of it after the loop top (host decode): a field fresher than that
     // pass. Only a read newer than the pass's and at most a field and a half old by the schedule
@@ -5142,6 +5331,66 @@ void CaptureLocalInputs()
                                                                          s.local_sampled_at)
                        .count());
   }
+}
+
+// Early local input (a Wii controller): a pass of the pad thread outside a re-run carries the pad
+// the next loop top's CaptureLocalInputs takes (the newest pass made at least half a field before
+// that loop top's due time), on most frames a field before that loop top. It goes to GekkoNet
+// now, for the frame that loop top would give it (its GekkoNet frame + GekkoDelayFor), and is
+// sent at once. Which loop top takes it follows from the pass's time and the schedule alone, not
+// from the order of the pass and the loop top (bug report #70). Not from a re-run's pass: a Wii
+// controller's pad is the game's own processing of the Bluetooth reports (KPAD, with its
+// smoothing), which a re-run does from an earlier frame's state.
+void OnPadPassLocked(Core::System& system, const RawPads& pads, Clock::time_point at)
+{
+  if (!s.early_input || s.mode != Mode::Network || s.phase != Phase::Running || !s.gekko ||
+      !s.gekko_started || s.local_handles.empty() || !s.ei_loop_due || s.ei_loop_frame < 0 ||
+      s.local_pad < 4 || system.GetCoreTiming().IsRollbackResimulating())
+  {
+    return;
+  }
+  const double field_us = FRAME_US / std::max(s.speed_factor, 0.25);
+  const double rel_us =
+      std::chrono::duration<double, std::micro>(at - (*s.ei_loop_due - HALF_FIELD)).count();
+  if (rel_us <= 0)
+    return;  // the last loop top's own pad (or older)
+  const int k = static_cast<int>(std::ceil(rel_us / field_us));
+  const int h = s.local_handles[0];
+  if (k > 2)
+  {
+    ++s.ei.skipped;
+    ++s.ei_window.skipped;
+    return;
+  }
+  const int target = s.ei_loop_frame + k + GekkoDelayFor(s.input_delay);
+  const int last = gekko_local_input_frame(s.gekko, h);
+  if (target <= last)
+  {
+    ++s.ei.dup;
+    ++s.ei_window.dup;
+    return;
+  }
+  std::array<u8, INPUT_SIZE> in;
+  std::memcpy(in.data(), pads.data() + s.local_pad * INPUT_SIZE, INPUT_SIZE);
+  if (s.gone_enabled)
+    PeerData::ClearGoneMarkerBytes(in.data());
+  if (target != last + 1 || !gekko_add_local_input_at(s.gekko, h, target, in.data()))
+  {
+    ++s.ei.skipped;
+    ++s.ei_window.skipped;
+    return;
+  }
+  gekko_send_local_inputs(s.gekko);
+  EiReleaseBatch();
+  State::EiFrame& f = s.ei_frames[static_cast<size_t>(target) % s.ei_frames.size()];
+  f.frame = target;
+  f.read = at;
+  f.sent = Clock::now();
+  f.early = true;
+  f.checked = false;
+  f.in = in;
+  ++s.ei.early;
+  ++s.ei_window.early;
 }
 
 void SetLoopDefault(PowerPC::PowerPCState& ppc)
@@ -6016,6 +6265,7 @@ bool RunFrame(const Core::CPUThreadGuard& guard)
   }
   else if (s.iteration == 0)
   {
+    EiReleaseBatch();
     ApplyPeerDrops();
     HardTimeSync(system);
     CaptureLocalInputs();
@@ -8140,6 +8390,17 @@ static void LogSetupDifference(int slot, const PeerView& p)
   ERROR_LOG_FMT(BRAWLBACK, "gprb: P{}'s setup differs from ours in: {}", slot + 1,
                 fmt::join(lines, "; "));
   INFO_LOG_FMT(BRAWLBACK, "gprb: P{}'s setup: {}", slot + 1, Hex(p.setup_key));
+}
+
+void OnPadPass(Core::System& system, const RawPads& pads, Clock::time_point at)
+{
+  if (!s.early_input)
+    return;
+  std::lock_guard<std::recursive_timed_mutex> lk(s.mutex);
+  OnPadPassLocked(system, pads, at);
+  // The forward pass's pass: whatever happened, the loop top's batch goes now.
+  if (!system.GetCoreTiming().IsRollbackResimulating())
+    EiReleaseBatch();
 }
 
 bool OnLoopTop(const Core::CPUThreadGuard& guard)

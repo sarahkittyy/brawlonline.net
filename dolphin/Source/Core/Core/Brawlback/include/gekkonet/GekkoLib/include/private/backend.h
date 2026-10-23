@@ -126,6 +126,9 @@ namespace Gekko {
 
 		void SendPendingOutput(GekkoNetAdapter* host);
 
+		// the local players' queued inputs to every remote, nothing else.
+		void SendInputsToRemotes(GekkoNetAdapter* host);
+
 		void HandleData(GekkoNetAdapter* host, GekkoNetResult** data, u32 length);
 
 		void SendInputAck(Handle player, Frame frame, i8 local_advantage);

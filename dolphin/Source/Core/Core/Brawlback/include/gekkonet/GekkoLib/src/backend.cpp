@@ -88,6 +88,16 @@ void Gekko::MessageSystem::AddSpectatorInput(Frame input_frame, u8 input[])
     input_q.TrimToAck(GetMinLastAckedFrame(true), MAX_INPUT_QUEUE_SIZE);
 }
 
+void Gekko::MessageSystem::SendInputsToRemotes(GekkoNetAdapter* host)
+{
+	if (remotes.empty() || locals.empty()) {
+		return;
+	}
+	for (auto& peer : remotes) {
+		SendInputsToPeer(peer.get(), host, false);
+	}
+}
+
 void Gekko::MessageSystem::SendPendingOutput(GekkoNetAdapter* host)
 {
 	// send per-peer input packets to remotes

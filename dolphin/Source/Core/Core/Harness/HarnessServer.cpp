@@ -1529,10 +1529,17 @@ Result CmdMachineWiimote(const Args& args)
 // {"Buttons/+": 1, "Left Stick/X": -1}. Every button, D-pad direction, stick and trigger left out
 // reads 0 (nothing from the host's devices); motion and IR keep their mapping. {"clear": true}
 // gives the Wii Remote back to its mapping.
+//
+// The override functions are set once and never assigned again: the CPU thread calls them while
+// it reads the Wii Remote, and assigning a std::function there (as every call did before) could
+// leave it empty between the CPU thread's check and its call: std::bad_function_call, which killed
+// the process outright (thrown under JIT code, nothing catches it), or for one read the host's
+// mapping instead of the override. A call changes only s_state, under s_mutex.
 namespace WiiInput
 {
 struct State
 {
+  bool active = false;  // false: everything reads its mapping ({"clear": true})
   // per target (0 Wii Remote, 1 Nunchuk, 2 Classic): "Group/Control" -> value
   std::array<std::map<std::string, double, std::less<>>, 3> values;
 };
@@ -1544,6 +1551,8 @@ ControllerEmu::InputOverrideFunction Override(int index, int target)
   return [index, target](std::string_view group, std::string_view control,
                          ControlState) -> std::optional<ControlState> {
     std::lock_guard lk(s_mutex);
+    if (!s_state[index].active)
+      return std::nullopt;
     const auto& values = s_state[index].values[target];
     const std::string key = fmt::format("{}/{}", group, control);
     if (const auto it = values.find(key); it != values.end())
@@ -1568,12 +1577,12 @@ Result CmdWiimoteInput(const Args& args)
   auto& list = attachments->GetAttachmentList();
   if (GetBool(args, "clear", false))
   {
-    wiimote->ClearInputOverrideFunction();
-    list[WiimoteEmu::ExtensionNumber::NUNCHUK]->ClearInputOverrideFunction();
-    list[WiimoteEmu::ExtensionNumber::CLASSIC]->ClearInputOverrideFunction();
+    std::lock_guard lk(WiiInput::s_mutex);
+    WiiInput::s_state[i] = {};
     return {};
   }
   WiiInput::State next;
+  next.active = true;
   static constexpr std::array<const char*, 3> TARGETS = {"wiimote", "nunchuk", "classic"};
   for (int t = 0; t < 3; ++t)
   {
@@ -1605,9 +1614,14 @@ Result CmdWiimoteInput(const Args& args)
     else
       Fail("'extension' must be \"none\", \"nunchuk\" or \"classic\"");
   }
-  wiimote->SetInputOverrideFunction(WiiInput::Override(i, 0));
-  list[WiimoteEmu::ExtensionNumber::NUNCHUK]->SetInputOverrideFunction(WiiInput::Override(i, 1));
-  list[WiimoteEmu::ExtensionNumber::CLASSIC]->SetInputOverrideFunction(WiiInput::Override(i, 2));
+  const std::array<ControllerEmu::ControlGroupContainer*, 3> targets = {
+      wiimote, list[WiimoteEmu::ExtensionNumber::NUNCHUK].get(),
+      list[WiimoteEmu::ExtensionNumber::CLASSIC].get()};
+  for (int t = 0; t < 3; ++t)
+  {
+    if (!targets[t]->HasInputOverrideFunction())
+      targets[t]->SetInputOverrideFunction(WiiInput::Override(i, t));
+  }
   Result r;
   r["extension"] = Num(attachments->GetSelectedAttachment());
   return r;

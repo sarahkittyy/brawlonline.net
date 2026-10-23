@@ -24,6 +24,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 
 #include <functional>
 #include <memory>
@@ -590,6 +591,9 @@ picojson::value Checksums(s64 since);
 // CPU thread, from the Brawl game-loop hooks. Each returns true when it handled the hook (and set
 // npc); false lets the hook do its default.
 bool OnLoopTop(const Core::CPUThreadGuard& guard);
+// CPU thread: a pass of the game's pad thread (early local input for a Wii controller).
+void OnPadPass(Core::System& system, const std::array<u8, 8 * 0x40>& pads,
+               std::chrono::steady_clock::time_point at);
 bool OnFrameEnd(const Core::CPUThreadGuard& guard);
 bool OnLoopEnd(const Core::CPUThreadGuard& guard);
 // True during resimulated (not presented) iterations of a running session.

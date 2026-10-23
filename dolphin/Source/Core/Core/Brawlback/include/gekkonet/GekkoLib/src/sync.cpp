@@ -35,6 +35,59 @@ void Gekko::SyncSystem::AddLocalInput(Handle player, u8* input)
 	_input_buffers[player].AddLocalInput(_current_frame, input);
 }
 
+bool Gekko::SyncSystem::AddLocalInputAt(Handle player, u8* input, Frame frame)
+{
+    if (player >= _num_players || player < 0) {
+        return false;
+    }
+    auto& buffer = _input_buffers[player];
+    // sequential only, never a frame already advanced, and never the first input (the delay
+    // fill comes with AddLocalInput).
+    const Frame last = buffer.GetLastReceivedFrame();
+    if (last == GameInput::NULL_FRAME || frame != last + 1 || frame < _current_frame) {
+        return false;
+    }
+    buffer.AddInput(frame, input);
+    return buffer.GetLastReceivedFrame() == frame;
+}
+
+Frame Gekko::SyncSystem::GetLastLocalInput(Handle player)
+{
+    if (player >= _num_players || player < 0) {
+        return GameInput::NULL_FRAME;
+    }
+    return _input_buffers[player].GetLastReceivedFrame();
+}
+
+bool Gekko::SyncSystem::GetReceivedInput(Handle player, Frame frame, u8* input)
+{
+    if (player >= _num_players || player < 0 || frame < 0) {
+        return false;
+    }
+    auto& buffer = _input_buffers[player];
+    if (buffer.GetLastReceivedFrame() < frame) {
+        return false;
+    }
+    auto inp = buffer.GetInput(frame, false);
+    if (inp->frame != frame) {
+        return false;
+    }
+    std::memcpy(input, inp->input.get(), _input_size);
+    return true;
+}
+
+bool Gekko::SyncSystem::AcceptLateInput(Handle player, Frame frame)
+{
+    if (player >= _num_players || player < 0) {
+        return false;
+    }
+    // only the frame running now: the last one advanced.
+    if (frame != _current_frame - 1) {
+        return false;
+    }
+    return _input_buffers[player].AcceptLateInput(frame);
+}
+
 void Gekko::SyncSystem::AddRemoteInput(Handle player, u8* input, Frame frame)
 {
 	// drop inputs from incorrect handles
