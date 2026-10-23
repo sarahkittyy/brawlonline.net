@@ -639,7 +639,7 @@ struct State
   };
   std::array<LatFrame, 64> lat{};
   Clock::time_point local_read_at{};
-  // Late input (prototype, PPR_MACHINE_LATE_INPUT=1). The game reads a frame's inputs at its own
+  // Late input (on; PPR_MACHINE_LATE_INPUT=0: off). The game reads a frame's inputs at its own
   // SI polls and Wii Remote reports, and the throttle's one sleep a frame often comes between the
   // frame's start and those reads, so the local controller read at the boundary was up to a field
   // old when the game took it. Now: the local controller is read when the game first reads the
@@ -2719,7 +2719,7 @@ bool CreateGekko()
     s.input_delay = PickInputDelay(&rtt);
     {
       const char* env = std::getenv("PPR_MACHINE_LATE_INPUT");
-      s.late_input = env && env[0] == '1';
+      s.late_input = !(env && env[0] == '0');  // on unless PPR_MACHINE_LATE_INPUT=0
       const char* direct = std::getenv("PPR_MACHINE_DIRECT_SEND");
       s.direct_send = s.late_input && direct && direct[0] == '1';
       s.consumed = {};
