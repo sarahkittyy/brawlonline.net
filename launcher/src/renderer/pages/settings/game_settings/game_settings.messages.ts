@@ -27,8 +27,7 @@ export const GameSettingsMessages = {
   enableStreamGamesDescription: () =>
     "Streams inputs to the server for others to spectate you. Very minimal network load. Your opponent's setting may still show the match. Ranked games are always sent to the server to check results, and shown only if a player allows it.",
   netplayNetwork: () => "Network for online games",
-  netplayNetworkDescription: () =>
-    "Automatic uses your internet connection. If you can't connect to a friend, you can both join the same VPN, such as ZeroTier, and pick it here. Used in Direct and rooms with players who picked the same network.",
+  netplayNetworkDescription: () => "The network interface you connect to peers with.",
   netplayNetworkAuto: () => "Automatic",
   netplayNetworkMissing: (address: string) => "{0} (not connected)",
   closeDolphinAfterSpectating: () => "Close Dolphin after a spectated game ends",
