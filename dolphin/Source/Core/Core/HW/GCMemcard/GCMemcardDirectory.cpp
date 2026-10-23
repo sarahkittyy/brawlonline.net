@@ -178,10 +178,12 @@ std::vector<std::string> GCMemcardDirectory::GetFileNamesForGameID(const std::st
 }
 
 GCMemcardDirectory::GCMemcardDirectory(std::string directory, ExpansionInterface::Slot slot,
-                                       const Memcard::HeaderData& header_data, u32 game_id)
+                                       const Memcard::HeaderData& header_data, u32 game_id,
+                                       bool session, bool write_back)
     : MemoryCardBase(slot, header_data.m_size_mb), m_game_id(game_id), m_last_block(-1),
       m_hdr(header_data), m_bat1(header_data.m_size_mb), m_saves(0),
-      m_save_directory(std::move(directory)), m_exiting(false)
+      m_save_directory(std::move(directory)), m_session(session),
+      m_session_write_back(session && write_back), m_exiting(false)
 {
   // Use existing header data if available
   {
@@ -255,12 +257,15 @@ GCMemcardDirectory::GCMemcardDirectory(std::string directory, ExpansionInterface
   m_dir2 = m_dir1;
   m_bat2 = m_bat1;
 
+  for (const Memcard::GCIFile& save : m_saves)
+    m_own_files.insert(save.m_filename);
+
   m_flush_thread = std::thread(&GCMemcardDirectory::FlushThread, this);
 }
 
 void GCMemcardDirectory::FlushThread()
 {
-  if (!Config::Get(Config::SESSION_SAVE_DATA_WRITABLE))
+  if (m_session || !Config::Get(Config::SESSION_SAVE_DATA_WRITABLE))
   {
     return;
   }
@@ -292,7 +297,8 @@ GCMemcardDirectory::~GCMemcardDirectory()
   m_flush_trigger.Set();
   m_flush_thread.join();
 
-  FlushToFile();
+  if (!m_session || m_session_write_back)
+    FlushToFile();
 }
 
 s32 GCMemcardDirectory::Read(u32 src_address, s32 length, u8* dest_address)
@@ -721,13 +727,27 @@ void GCMemcardDirectory::DoState(PointerWrap& p)
   std::unique_lock l(m_write_mutex);
   m_last_block = -1;
   m_last_block_address = nullptr;
-  p.Do(m_save_directory);
+  // A session's card keeps its own folder, and of the saves' files only those it loaded itself:
+  // a joiner's state is another player's, and a flush or a read must never reach a path a peer
+  // sent.
+  std::string save_directory = m_save_directory;
+  p.Do(save_directory);
+  if (!m_session)
+    m_save_directory = std::move(save_directory);
   p.Do(m_hdr);
   p.Do(m_dir1);
   p.Do(m_dir2);
   p.Do(m_bat1);
   p.Do(m_bat2);
   p.DoEachElement(m_saves, [](PointerWrap& p_, Memcard::GCIFile& save) { save.DoState(p_); });
+  if (m_session && p.IsReadMode())
+  {
+    for (Memcard::GCIFile& save : m_saves)
+    {
+      if (!m_own_files.contains(save.m_filename))
+        save.m_filename.clear();
+    }
+  }
 }
 
 void MigrateFromMemcardFile(const std::string& directory_name, ExpansionInterface::Slot card_slot,

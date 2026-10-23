@@ -35,9 +35,11 @@ export type AddBuildInitial = {
   highlight?: "disc" | "sd";
 };
 
-/** The edit window's save data of a Wii game (`save_import.ts`): what rooms play, imported from a
- * data.bin or a Dolphin folder, and its folder. */
+/** The edit window's save data (`save_import.ts`, a GameCube game's `gc_save.ts`): what rooms play,
+ * imported from a data.bin (a .gci or a memory card) or a Dolphin folder, and its folder. */
 export type SaveSectionProps = {
+  /** A GameCube game: its memory card's saves. */
+  gamecube?: boolean;
   /** "loading", "not-ready" (the game is not hashed yet: its store is named by its hash), or the
    * save as it is. */
   info: ModSaveInfo | "loading" | "not-ready";
@@ -49,7 +51,7 @@ export type SaveSectionProps = {
 export const formatSaveSummary = (info: ModSaveInfo) =>
   Messages.saveSummary(info.files, info.modified ? new Date(info.modified).toLocaleString() : "");
 
-const SaveSection = ({ info, busy, onImport, onOpenFolder }: SaveSectionProps) => {
+const SaveSection = ({ gamecube, info, busy, onImport, onOpenFolder }: SaveSectionProps) => {
   const [menuAnchor, setMenuAnchor] = useState<HTMLElement | null>(null);
   const ready = info !== "loading" && info !== "not-ready";
   let line: string;
@@ -84,7 +86,9 @@ const SaveSection = ({ info, busy, onImport, onOpenFolder }: SaveSectionProps) =
         </Button>
       </div>
       <Menu anchorEl={menuAnchor} open={menuAnchor !== null} onClose={() => setMenuAnchor(null)}>
-        <MenuItem onClick={() => pick("file")}>{Messages.importSaveFile()}</MenuItem>
+        <MenuItem onClick={() => pick("file")}>
+          {gamecube ? Messages.importGcSaveFile() : Messages.importSaveFile()}
+        </MenuItem>
         <MenuItem onClick={() => pick("folder")}>{Messages.importSaveFolder()}</MenuItem>
       </Menu>
     </div>
@@ -92,7 +96,7 @@ const SaveSection = ({ info, busy, onImport, onOpenFolder }: SaveSectionProps) =
 };
 
 /** "Add a game" / "Add a mod" / "Edit game" (docs/design/brawl-mods.md §8): a name, the disc, an
- * optional launcher and SD card; editing a Wii game, its save data too. */
+ * optional launcher and SD card; editing a game, its save data too. */
 export const AddBuildDialog = ({
   initial,
   onClose,
@@ -103,7 +107,7 @@ export const AddBuildDialog = ({
   initial: AddBuildInitial | null;
   onClose: () => void;
   onAdd: (input: ModBuildInput) => Promise<void>;
-  /** The edited game's save (a Wii game); absent otherwise. */
+  /** The edited game's save; absent otherwise. */
   save?: SaveSectionProps | null;
 }) => {
   const open = initial !== null;

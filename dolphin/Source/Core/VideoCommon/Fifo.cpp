@@ -691,6 +691,18 @@ int FifoManager::RunGpuOnCpu(int ticks)
     }
 
     fifo.CPReadWriteDistance.fetch_sub(GPFifo::GATHER_PIPE_SIZE, std::memory_order_relaxed);
+    // In dual core the game reads the read pointer and the read-write distance from
+    // SafeCPReadPointer, which only the non-deterministic GPU loop moved, so with the
+    // deterministic GPU thread (every rollback session) the GPU never seemed to read anything.
+    // Super Monkey Ball 2, which switches between two GP FIFOs and waits for the GPU through them,
+    // waited forever ("GP WAIT Timeout"), reset its FIFOs and handed the GPU garbage, and both
+    // machines crashed in LoadIndexedXF. The bytes up to CPReadPointer are already copied to the
+    // video buffer, so the guest may reuse them.
+    if (m_use_deterministic_gpu_thread)
+    {
+      fifo.SafeCPReadPointer.store(fifo.CPReadPointer.load(std::memory_order_relaxed),
+                                   std::memory_order_relaxed);
+    }
   }
 
   command_processor.SetCPStatusFromGPU();

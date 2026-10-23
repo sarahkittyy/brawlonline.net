@@ -677,6 +677,7 @@ void RollbackManager::Shutdown()
       if (t.joinable())
         t.join();
     m_worker_threads.clear();
+    m_job_ctx.release_workers();
     m_dispatch_thread = nullptr;
   }
 

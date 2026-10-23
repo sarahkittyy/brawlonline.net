@@ -2,7 +2,15 @@ import { readFileSync } from "fs";
 import path from "path";
 import { describe, expect, it } from "vitest";
 
-import { APP_ID, BASE_DOMAIN, defaultServiceUrls, LEGACY_PRODUCT_NAMES, PRODUCT_NAME, PRODUCT_SLUG } from "./product";
+import {
+  APP_ID,
+  BASE_DOMAIN,
+  defaultServiceUrls,
+  launcherDownloadUrl,
+  LEGACY_PRODUCT_NAMES,
+  PRODUCT_NAME,
+  PRODUCT_SLUG,
+} from "./product";
 
 const root = path.resolve(__dirname, "..", "..");
 const readJson = (rel: string) => JSON.parse(readFileSync(path.join(root, rel), "utf8"));
@@ -30,6 +38,17 @@ describe("product identity", () => {
 
   it("publishes launcher updates to the configured feed", () => {
     expect(readJson("electron-builder.json").publish.url).toBe(defaultServiceUrls.launcherUpdates);
+  });
+
+  it("offers the website downloads the release workflow checks as the manual download", () => {
+    const workflow = readFileSync(path.join(root, "..", ".github", "workflows", "client.yml"), "utf8");
+    const downloads = /^\s*DOWNLOADS: (.+)$/m.exec(workflow)![1].trim().split(/\s+/);
+    for (const platform of ["win32", "linux"]) {
+      const url = launcherDownloadUrl(platform);
+      expect(url.startsWith("https://brawlonline.net/downloads/")).toBe(true);
+      expect(downloads).toContain(url.slice("https://brawlonline.net/downloads/".length));
+    }
+    expect(launcherDownloadUrl("darwin")).toBe("https://brawlonline.net/downloads/BrawlOnline.dmg");
   });
 
   it("defaults every host to the brawlonline.net domain", () => {

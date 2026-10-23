@@ -170,6 +170,25 @@ export class DolphinManager {
   }
 
   /**
+   * True while quitting the launcher would cut something off: a Dolphin it started is open (a game,
+   * a replay, Configure, a render), a render waits for its turn, or Dolphin, Project+ or the game
+   * files are being installed or moved. A downloaded launcher update waits for this to clear before
+   * it installs itself (AppUpdater.installWhenIdle).
+   */
+  isBusy(): boolean {
+    const rendering = this.renderQueue?.jobs().some((job) => !["done", "error", "cancelled"].includes(job.state));
+    return (
+      this.netplayDolphinInstance != null ||
+      this.playbackDolphinInstances.size > 0 ||
+      (this.bundledInstall != null && !this.bundledInstallDone) ||
+      this.projectPlusInstall != null ||
+      this.movingGameFiles ||
+      this.installFolderRescue != null ||
+      rendering === true
+    );
+  }
+
+  /**
    * Closes the open netplay Dolphin if it has no game (its main window only, after the game was
    * stopped, or Configure), so Play, a room or Other Games can start one without the player closing
    * it first (quit_if_idle.ts). True when no netplay Dolphin is open (any more); false while one is

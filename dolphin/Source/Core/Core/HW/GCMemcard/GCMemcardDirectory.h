@@ -4,6 +4,7 @@
 #pragma once
 
 #include <mutex>
+#include <set>
 #include <string>
 #include <thread>
 #include <vector>
@@ -22,8 +23,12 @@ void MigrateFromMemcardFile(const std::string& directory_name, ExpansionInterfac
 class GCMemcardDirectory : public MemoryCardBase
 {
 public:
+  // A whole-machine session's card (`session`, docs/design/brawl-mods.md §6.5) is written to
+  // `directory` only when the session ends, and only with `write_back` (the player who booted the
+  // game); nothing is written while the game runs, since rollbacks rewrite the card's past.
   GCMemcardDirectory(std::string directory, ExpansionInterface::Slot slot,
-                     const Memcard::HeaderData& header_data, u32 game_id);
+                     const Memcard::HeaderData& header_data, u32 game_id, bool session = false,
+                     bool write_back = false);
   ~GCMemcardDirectory() override;
 
   GCMemcardDirectory(const GCMemcardDirectory&) = delete;
@@ -61,6 +66,11 @@ private:
   std::vector<Memcard::GCIFile> m_saves;
 
   std::string m_save_directory;
+  bool m_session = false;
+  bool m_session_write_back = false;
+  // The files this card loaded itself: in a session, a loaded state keeps only these names (a
+  // joiner's state comes from another player, whose paths are theirs).
+  std::set<std::string> m_own_files;
   Common::Event m_flush_trigger;
   std::mutex m_write_mutex;
   Common::Flag m_exiting;

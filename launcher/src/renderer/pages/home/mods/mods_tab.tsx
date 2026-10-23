@@ -234,10 +234,6 @@ export const ModsTab = React.memo(function ModsTab() {
       highlight,
     });
     saveFor.current = build.id;
-    if (build.platform === "gamecube") {
-      setSaveInfo(null);
-      return;
-    }
     setSaveInfo("loading");
     modsService
       .saveInfo(build.id)
@@ -268,11 +264,14 @@ export const ModsTab = React.memo(function ModsTab() {
     }
   };
 
+  const editingGameCube = state?.builds.find((b) => b.id === editingId)?.platform === "gamecube";
+
   const onImportSave = async (from: "file" | "folder") => {
+    const filter = editingGameCube
+      ? { name: Messages.gcSaveFileFilter(), extensions: ["gci", "raw", "gcp"] }
+      : { name: Messages.saveFileFilter(), extensions: ["bin"] };
     const result = await window.electron.common.showOpenDialog(
-      from === "file"
-        ? { properties: ["openFile"], filters: [{ name: Messages.saveFileFilter(), extensions: ["bin"] }] }
-        : { properties: ["openDirectory"] },
+      from === "file" ? { properties: ["openFile"], filters: [filter] } : { properties: ["openDirectory"] },
     );
     const source = result.canceled ? null : result.filePaths[0];
     if (!source) {
@@ -329,6 +328,7 @@ export const ModsTab = React.memo(function ModsTab() {
         save={
           saveInfo && editingId
             ? {
+                gamecube: editingGameCube,
                 info: saveInfo,
                 busy: saveBusy,
                 onImport: (from) => void onImportSave(from).catch((err) => showError(errorText(err))),

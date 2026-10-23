@@ -24,10 +24,11 @@ vi.mock("./ipc", () => ({ ipc_launcherUpdateFailedEvent: { main: { trigger: fail
 
 import { autoUpdater as realAutoUpdater } from "electron-updater";
 
-import { AppUpdater, LauncherUpdateRequiredError, UPDATE_CHECK_INTERVAL_MS } from "./app_updater";
+import { AppUpdater, INSTALL_IDLE_POLL_MS, LauncherUpdateRequiredError, UPDATE_CHECK_INTERVAL_MS } from "./app_updater";
 
 const autoUpdater = realAutoUpdater as unknown as EventEmitter & {
   checkForUpdates: Mock;
+  quitAndInstall: Mock;
 };
 
 const settingsManager = { get: () => ({ settings: { autoUpdateLauncher: true } }) } as any;
@@ -51,6 +52,7 @@ describe("AppUpdater", () => {
     vi.useFakeTimers();
     autoUpdater.removeAllListeners();
     autoUpdater.checkForUpdates.mockReset();
+    autoUpdater.quitAndInstall.mockReset();
     failedEvent.mockClear();
     updater = new AppUpdater(settingsManager);
   });
@@ -104,5 +106,103 @@ describe("AppUpdater", () => {
     await updater.checkForUpdates();
     await vi.advanceTimersByTimeAsync(0);
     expect(failedEvent).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("AppUpdater installing a downloaded update by itself", () => {
+  /** Settings with auto updates `autoUpdate` and 0.2.0 downloaded (pendingUpdateVersion). */
+  function settingsWith(autoUpdate: boolean) {
+    const state: { settings: { autoUpdateLauncher: boolean }; pendingUpdateVersion?: string } = {
+      settings: { autoUpdateLauncher: autoUpdate },
+      pendingUpdateVersion: "0.2.0",
+    };
+    return {
+      state,
+      get: () => state,
+      updateSetting: vi.fn(async (key: "pendingUpdateVersion", value: string | undefined) => {
+        state[key] = value;
+      }),
+    } as any;
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    autoUpdater.removeAllListeners();
+    autoUpdater.quitAndInstall.mockReset();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("installs and restarts as soon as it is downloaded while nothing runs", () => {
+    const updater = new AppUpdater(settingsWith(true));
+    updater.installWhenIdle("0.2.0");
+    expect(autoUpdater.quitAndInstall).toHaveBeenCalledTimes(1);
+    // Not silent, and the new launcher starts after (the same as Install update).
+    expect(autoUpdater.quitAndInstall).toHaveBeenCalledWith(false, true);
+  });
+
+  it("waits for Dolphin (or an install) to finish first", async () => {
+    const updater = new AppUpdater(settingsWith(true));
+    let busy = true;
+    updater.setBusyCheck(() => busy);
+    updater.installWhenIdle("0.2.0");
+    await vi.advanceTimersByTimeAsync(INSTALL_IDLE_POLL_MS * 3);
+    expect(autoUpdater.quitAndInstall).not.toHaveBeenCalled();
+
+    busy = false;
+    await vi.advanceTimersByTimeAsync(INSTALL_IDLE_POLL_MS);
+    expect(autoUpdater.quitAndInstall).toHaveBeenCalledTimes(1);
+  });
+
+  it("installs once, however often the download is found again", async () => {
+    const updater = new AppUpdater(settingsWith(true));
+    let busy = true;
+    updater.setBusyCheck(() => busy);
+    // The periodic checks find the same download each time (update-downloaded again).
+    updater.installWhenIdle("0.2.0");
+    updater.installWhenIdle("0.2.0");
+    busy = false;
+    updater.installWhenIdle("0.2.0");
+    await vi.advanceTimersByTimeAsync(INSTALL_IDLE_POLL_MS * 2);
+    updater.installWhenIdle("0.2.0");
+    expect(autoUpdater.quitAndInstall).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves it to Install update while auto updates are off", async () => {
+    const settings = settingsWith(false);
+    const updater = new AppUpdater(settings);
+    updater.installWhenIdle("0.2.0");
+    await vi.advanceTimersByTimeAsync(INSTALL_IDLE_POLL_MS * 2);
+    expect(autoUpdater.quitAndInstall).not.toHaveBeenCalled();
+  });
+
+  it("stops waiting when auto updates are turned off meanwhile", async () => {
+    const settings = settingsWith(true);
+    const updater = new AppUpdater(settings);
+    let busy = true;
+    updater.setBusyCheck(() => busy);
+    updater.installWhenIdle("0.2.0");
+    settings.state.settings.autoUpdateLauncher = false;
+    busy = false;
+    await vi.advanceTimersByTimeAsync(INSTALL_IDLE_POLL_MS * 2);
+    expect(autoUpdater.quitAndInstall).not.toHaveBeenCalled();
+  });
+
+  it("does not install a version by itself again after it failed to install", async () => {
+    // Started on 0.1.0 though 0.2.0 was to be installed: that install failed.
+    const settings = settingsWith(true);
+    const updater = new AppUpdater(settings);
+    await updater.verifyPendingUpdate();
+    expect(updater.getUpdateState()).toEqual({ status: "failed", version: "0.2.0" });
+
+    // The start's check finds the same download: no restart (it could fail at every start).
+    await settings.updateSetting("pendingUpdateVersion", "0.2.0");
+    updater.installWhenIdle("0.2.0");
+    expect(autoUpdater.quitAndInstall).not.toHaveBeenCalled();
+    // A newer one is installed by itself.
+    updater.installWhenIdle("0.3.0");
+    expect(autoUpdater.quitAndInstall).toHaveBeenCalledTimes(1);
   });
 });

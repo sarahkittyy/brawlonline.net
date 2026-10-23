@@ -379,6 +379,16 @@ struct JobAllocBlock
     if (left == 1)
       delete this;
   }
+  /* the owning thread lets go of its current block: its own reference and the jobs it never
+   * handed out; the block goes once the jobs it did hand out have finished */
+  void release_unused(void)
+  {
+    const uint32_t unused = this->avail_count + 1;
+    this->avail_count = 0;
+    uint32_t left = this->ref_count.fetch_sub(unused, std::memory_order_acq_rel);
+    if (left == unused)
+      delete this;
+  }
 };
 
 /* the global state for the tasking system */
@@ -390,6 +400,8 @@ struct JobSysCtx
   std::atomic<bool> is_sys_active;  /* threads exit when false */
 
   JobTaskThread* initialize_worker(int64_t seed, void* data);
+  /* free every worker and empty task[]; only once all of their threads have exited */
+  void release_workers(void);
 
   /* bumped after every kick; idle workers block on it instead of spinning */
   std::atomic<uint32_t> work_epoch{0};
@@ -413,12 +425,31 @@ struct JobSysCtx
 inline JobTaskThread* JobSysCtx::initialize_worker(int64_t seed, void* data)
 {
   uint32_t count = this->task_count.load(std::memory_order_relaxed);
+  assert(count < MAX_TASKS);
   /* align task queues and index on a 64 byte cache line */
   void* m = JOB_ALIGNED_ALLOC(64, sizeof(JobTaskThread));
   JobTaskThread* thr = new (m) JobTaskThread(*this, count, seed, data);
   this->task[count] = thr;
   this->task_count.store(count + 1, std::memory_order_relaxed);
   return thr;
+}
+
+/* GitHub issue #3: a stopped pool's workers stayed in task[] and in memory, so every Init after a
+ * Shutdown added its workers after them, until the tenth wrote past task[MAX_TASKS - 1] */
+inline void JobSysCtx::release_workers(void)
+{
+  uint32_t count = this->task_count.load(std::memory_order_acquire);
+  for (uint32_t k = 0; k < count; k++)
+  {
+    JobTaskThread* thr = this->task[k];
+    if (thr->cur_block != nullptr)
+      thr->cur_block->release_unused();
+    delete thr;
+    this->task[k] = nullptr;
+  }
+  this->task_count.store(0, std::memory_order_relaxed);
+  /* a worker that exits while idle never takes itself off the waiting count */
+  this->wait_count.store(0, std::memory_order_relaxed);
 }
 
 inline void* JobTaskThread::alloc_job(void)

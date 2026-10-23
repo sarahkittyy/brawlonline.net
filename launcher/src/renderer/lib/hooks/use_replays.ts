@@ -187,7 +187,8 @@ export class ReplayPresenter {
     };
 
     const loadFolderDetails = async () => {
-      if (currentFolder === folderToLoad && !forceReload) {
+      // (A load still running for it is superseded by this one, which must finish it.)
+      if (currentFolder === folderToLoad && !forceReload && !useReplays.getState().loading) {
         console.warn(`${currentFolder} is already loaded. Set forceReload to true to reload anyway.`);
         return;
       }
@@ -291,14 +292,16 @@ export class ReplayPresenter {
   }
 
   async loadMoreReplays(): Promise<void> {
-    // Increment request ID for this load more operation
-    const requestId = ++this.currentLoadRequestId;
-    const { continuation, loadingMore, hasMoreReplays, currentFolder } = useReplays.getState();
+    const { continuation, loading, loadingMore, hasMoreReplays, currentFolder } = useReplays.getState();
 
-    // Don't load more if already loading or no more replays
-    if (loadingMore || !hasMoreReplays || !continuation) {
+    // Don't load more if already loading or no more replays. While a folder (re)load runs, the list and its
+    // continuation are the old one's, and that load lists the first page anyway.
+    if (loading || loadingMore || !hasMoreReplays || !continuation) {
       return;
     }
+    // A page belongs to the folder load that listed the ones before it: a newer load drops it. It does not
+    // supersede that load itself, whose result would be dropped with `loading` left on (bug report #118).
+    const requestId = this.currentLoadRequestId;
 
     useReplays.setState((state) => {
       state.loadingMore = true;

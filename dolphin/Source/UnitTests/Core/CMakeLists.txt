@@ -66,6 +66,8 @@ target_compile_definitions(OnlineSecurityTest PRIVATE GEKKONET_STATIC GEKKONET_N
 add_dolphin_test(MachineSDCardTest MachineSDCardTest.cpp)
 # A network session's reads of the local controllers (Gprb::ReadHostPad, bug report #70).
 add_dolphin_test(HostPadReadTest Rollback/HostPadReadTest.cpp)
+# The rollback job pool (Core/Rollback/job.h) stopped and started again (GitHub issue #3).
+add_dolphin_test(JobPoolTest Rollback/JobPoolTest.cpp)
 # Replay files (Core/Rollback/ReplayFile): round trip, cut and damaged files, hostile sizes.
 add_dolphin_test(ReplayFileTest Rollback/ReplayFileTest.cpp)
 # Spectating: the uploader's pacing, backoff and roles (Core/Online/Spectate).

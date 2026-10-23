@@ -1,4 +1,4 @@
-import { defaultServiceUrls, MAC_DOWNLOAD_URL } from "@common/product";
+import { launcherDownloadUrl, MAC_DOWNLOAD_URL } from "@common/product";
 import { fireEvent, render } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -11,7 +11,12 @@ const { openExternal, installAppUpdate, bootstrap } = vi.hoisted(() => {
   const stub = {
     openExternal: vi.fn(async (_url: string) => undefined),
     installAppUpdate: vi.fn(async () => ({ success: true })),
-    bootstrap: { locale: "en-US", launcherUpdateMode: "install" as "install" | "download" },
+    bootstrap: {
+      locale: "en-US",
+      launcherUpdateMode: "install" as "install" | "download",
+      isMac: false,
+      isLinux: false,
+    },
   };
   (window as any).electron = {
     bootstrap: stub.bootstrap,
@@ -64,6 +69,12 @@ describe("PersistentNotification", () => {
     useAppStore.setState({ updateVersion: "0.1.30" });
     const { container } = render(<PersistentNotification />);
     expect(container.textContent).toMatch(/^Downloading version/);
+    expect(container.textContent).not.toContain("%");
+
+    // The percentage, once electron-updater reports progress, so a slow download is seen to move.
+    useAppStore.setState({ updateDownloadProgress: 42.7 });
+    const { container: downloading } = render(<PersistentNotification />);
+    expect(downloading.textContent).toMatch(/^Downloading version .*%$/);
 
     useAppStore.setState({ updateReady: true });
     const { container: ready } = render(<PersistentNotification />);
@@ -74,13 +85,20 @@ describe("PersistentNotification", () => {
 
   it("offers the website's download when downloading the update failed", () => {
     stubElectron("install");
+    bootstrap.isLinux = false;
     useAppStore.setState({ updateVersion: "0.1.30", updateDownloadFailed: true });
     const { container } = render(<PersistentNotification />);
     expect(container.textContent).toContain("is now available!");
     expect(container.querySelector("button")!.textContent).toBe("Download manually");
 
     fireEvent.click(container.querySelector("button")!);
-    expect(openExternal).toHaveBeenCalledWith(defaultServiceUrls.launcherUpdates);
+    // The website's installer: the update feed's folder answers 403 (bug report #117).
+    expect(openExternal).toHaveBeenCalledWith("https://brawlonline.net/downloads/BrawlOnline-Setup.exe");
     expect(installAppUpdate).not.toHaveBeenCalled();
+
+    bootstrap.isLinux = true;
+    fireEvent.click(container.querySelector("button")!);
+    expect(openExternal).toHaveBeenLastCalledWith(launcherDownloadUrl("linux"));
+    bootstrap.isLinux = false;
   });
 });

@@ -225,7 +225,9 @@ jobs:
       CCACHE_BASEDIR: ${{ github.workspace }}
       CCACHE_NOHASHDIR: "1"
       CCACHE_COMPRESS: "1"
-      CCACHE_MAXSIZE: 1500M
+      # One full build is ~2.3 GB (/Z7 puts the debug info in every object): at 1.5 GB a cold
+      # build kept only ~1200 of its ~2000 entries, and the next run missed the rest again.
+      CCACHE_MAXSIZE: 3G
       NODE_OPTIONS: --max-old-space-size=8192
       USE_HARD_LINKS: "false"
       # Code signing is deferred. To sign later: add the repository secrets WIN_CSC_LINK (base64
@@ -273,11 +275,37 @@ jobs:
           if ((Get-FileHash $zip -Algorithm SHA256).Hash.ToLower() -ne $sha) { throw "ccache sha256 mismatch" }
           Expand-Archive $zip "$env:RUNNER_TEMP\ccache"
           (Get-ChildItem "$env:RUNNER_TEMP\ccache" -Directory)[0].FullName | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+      # The compiler as ccache sees it: a hash of the MSVC toolset's binaries and the INCLUDE path
+      # vcvars64 sets (Windows SDK, STL). ccache's default (cl.exe's mtime and size) changed with
+      # every runner image, as Visual Studio is installed afresh, so the first run on each new
+      # image missed everything (0 of 2018, ~45 min) with the same 14.51.36231 toolset, and while
+      # GitHub rolled an image out, runs on the old and new image evicted each other's entries.
+      # The ccache key carries it too: each compiler restores its own newest cache.
+      - name: Compiler
+        id: compiler
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          $vcenv = @{}
+          cmd /c "`"$vs\VC\Auxiliary\Build\vcvars64.bat`" >nul && set" | ForEach-Object {
+            if ($_ -match '^([^=]+)=(.*)$') { $vcenv[$Matches[1]] = $Matches[2] }
+          }
+          $bin = Join-Path $vcenv["VCToolsInstallDir"] "bin\Hostx64\x64"
+          $lines = @("INCLUDE=$($vcenv["INCLUDE"])")
+          $lines += Get-ChildItem "$bin\*" -File -Include *.exe, *.dll | Sort-Object Name |
+            ForEach-Object { "$($_.Name) $((Get-FileHash $_.FullName -Algorithm SHA256).Hash)" }
+          $bytes = [Text.Encoding]::UTF8.GetBytes(($lines -join "`n"))
+          $hash = -join ([Security.Cryptography.SHA256]::HashData($bytes)[0..7] | ForEach-Object { $_.ToString("x2") })
+          $id = "$($vcenv["VCToolsVersion"])-$hash"
+          Write-Host "MSVC $id ($($lines.Count - 1) files in $bin)"
+          "CCACHE_COMPILERCHECK=string:msvc-$id" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          "id=$id" | Out-File -Append -Encoding utf8 $env:GITHUB_OUTPUT
       - uses: actions/cache/restore@v5
         with:
           path: .ccache
-          key: win-ccache-${{ github.run_id }}
-          restore-keys: win-ccache-
+          key: win-ccache-${{ steps.compiler.outputs.id }}-${{ github.run_id }}
+          restore-keys: win-ccache-${{ steps.compiler.outputs.id }}-
       - uses: actions/cache@v5
         with:
           path: ~/AppData/Local/electron/Cache
@@ -309,7 +337,7 @@ jobs:
         if: ${{ !cancelled() }}
         with:
           path: .ccache
-          key: win-ccache-${{ github.run_id }}
+          key: win-ccache-${{ steps.compiler.outputs.id }}-${{ github.run_id }}
       - uses: actions/cache/save@v5
         if: ${{ steps.dolphin.outcome == 'success' && steps.cmake-cache.outputs.cache-hit != 'true' }}
         with:

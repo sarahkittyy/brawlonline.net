@@ -111,6 +111,14 @@ bool BootCore(Core::System& system, std::unique_ptr<BootParameters> boot,
                          settings.pad_map[i] > 0 ? SerialInterface::SIDEVICE_GC_CONTROLLER :
                                                    SerialInterface::SIDEVICE_NONE);
     }
+    // A GameCube game gets a memory card in slot A with this build's saves of the game
+    // (CEXIMemoryCard::SetupGciFolder, docs/design/brawl-mods.md §6.5); a Wii game keeps its saves
+    // on the NAND and has no card, as before.
+    if (!system.IsWii())
+    {
+      Config::SetCurrent(Config::GetInfoForEXIDevice(ExpansionInterface::Slot::A),
+                         ExpansionInterface::EXIDeviceType::MemoryCardFolder);
+    }
   }
 
   // Bluetooth passthrough hands the Bluetooth adapter to the game: its Wii Remotes bypass Dolphin's
