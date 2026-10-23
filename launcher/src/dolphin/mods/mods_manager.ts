@@ -371,7 +371,7 @@ export class ModsManager {
    * Once per build hash version (settings `modsHashVersion`), at the first start of a launcher
    * with a new one: hashes again, one at a time in the background, every game an older launcher
    * hashed (`buildHashKey`'s version: v3 named a disc by its contents' SHA-1, v4 by its game data,
-   * 82db6b5e). Rooms are matched by the stored hash, so without this a game added before the
+   * 82db6b5e, v5 a USB Loader GX WBFS by its game data too, bug report #110). Rooms are matched by the stored hash, so without this a game added before the
    * update showed every room of its disc as another disc until the player removed it and added it
    * again. A game that fails then (its files missing: an unplugged drive) is hashed at its next
    * Host or Join, as a game whose files changed always is.

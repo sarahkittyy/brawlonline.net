@@ -40,6 +40,7 @@ private:
   bool ReadFromVolume(const Volume& disc, u64 offset, u32& buffer, const Partition& partition);
   bool ReadFromVolume(const Volume& disc, u64 offset, u64& buffer, const Partition& partition);
   bool ParseDisc(const Volume& disc);
+  bool ParsePartition(const Volume& disc, const Partition& partition);
   bool ParsePartitionData(const Volume& disc, const Partition& partition);
   void ParseFileSystemData(u64 partition_data_offset, const FileInfo& directory);
 

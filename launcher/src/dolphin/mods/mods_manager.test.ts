@@ -48,7 +48,7 @@ async function oldBuild(id: string, over: Partial<ModBuild> = {}): Promise<ModBu
     platform: "wii",
     hash: `${id}-v3`.padEnd(64, "0"),
     parts: { disc: OLD_DISC, launcher: null, sd: false, sdCard: null },
-    hashKey: key.replace(/^v4\|/, "v3|"),
+    hashKey: key.replace(/^v\d+\|/, "v3|"),
     ...over,
   };
 }

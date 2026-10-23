@@ -121,41 +121,63 @@ bool DiscScrubber::ParseDisc(const Volume& disc)
   // Mark the header as used - it's mostly 0s anyways
   MarkAsUsed(0, 0x50000);
 
+  // A partition other than the game's that cannot be read is skipped instead of failing the whole
+  // scrub: libwbfs (USB Loader GX, Wii Backup Manager) copies only the first partition group, so a
+  // WBFS of Brawl has none of the Masterpieces partitions in its second group, though the disc's
+  // table still lists them. Failing there left the verifier with no scrubber, and every block the
+  // WBFS left out counted as damaged game data.
+  const Partition game_partition = disc.GetGamePartition();
   for (const Partition& partition : disc.GetPartitions())
   {
-    u32 tmd_size;
-    u64 tmd_offset;
-    u32 cert_chain_size;
-    u64 cert_chain_offset;
-    u64 h3_offset;
-    // The H3 size is always 0x18000
-
-    if (!ReadFromVolume(disc, partition.offset + WII_PARTITION_TMD_SIZE_ADDRESS, tmd_size,
-                        PARTITION_NONE) ||
-        !ReadFromVolume(disc, partition.offset + WII_PARTITION_TMD_OFFSET_ADDRESS, tmd_offset,
-                        PARTITION_NONE) ||
-        !ReadFromVolume(disc, partition.offset + WII_PARTITION_CERT_CHAIN_SIZE_ADDRESS,
-                        cert_chain_size, PARTITION_NONE) ||
-        !ReadFromVolume(disc, partition.offset + WII_PARTITION_CERT_CHAIN_OFFSET_ADDRESS,
-                        cert_chain_offset, PARTITION_NONE) ||
-        !ReadFromVolume(disc, partition.offset + WII_PARTITION_H3_OFFSET_ADDRESS, h3_offset,
-                        PARTITION_NONE))
+    if (game_partition == PARTITION_NONE || partition == game_partition)
     {
-      return false;
+      if (!ParsePartition(disc, partition))
+        return false;
+      continue;
     }
 
-    MarkAsUsed(partition.offset, 0x2c0);
-
-    MarkAsUsed(partition.offset + tmd_offset, tmd_size);
-    MarkAsUsed(partition.offset + cert_chain_offset, cert_chain_size);
-    MarkAsUsed(partition.offset + h3_offset, WII_PARTITION_H3_SIZE);
-
-    // Parse Data! This is where the big gain is
-    if (!ParsePartitionData(disc, partition))
-      return false;
+    std::vector<u8> free_table = m_free_table;
+    if (!ParsePartition(disc, partition))
+    {
+      WARN_LOG_FMT(DISCIO, "Skipping the unreadable partition at {:#x}", partition.offset);
+      m_free_table = std::move(free_table);
+    }
   }
 
   return true;
+}
+
+bool DiscScrubber::ParsePartition(const Volume& disc, const Partition& partition)
+{
+  u32 tmd_size;
+  u64 tmd_offset;
+  u32 cert_chain_size;
+  u64 cert_chain_offset;
+  u64 h3_offset;
+  // The H3 size is always 0x18000
+
+  if (!ReadFromVolume(disc, partition.offset + WII_PARTITION_TMD_SIZE_ADDRESS, tmd_size,
+                      PARTITION_NONE) ||
+      !ReadFromVolume(disc, partition.offset + WII_PARTITION_TMD_OFFSET_ADDRESS, tmd_offset,
+                      PARTITION_NONE) ||
+      !ReadFromVolume(disc, partition.offset + WII_PARTITION_CERT_CHAIN_SIZE_ADDRESS,
+                      cert_chain_size, PARTITION_NONE) ||
+      !ReadFromVolume(disc, partition.offset + WII_PARTITION_CERT_CHAIN_OFFSET_ADDRESS,
+                      cert_chain_offset, PARTITION_NONE) ||
+      !ReadFromVolume(disc, partition.offset + WII_PARTITION_H3_OFFSET_ADDRESS, h3_offset,
+                      PARTITION_NONE))
+  {
+    return false;
+  }
+
+  MarkAsUsed(partition.offset, 0x2c0);
+
+  MarkAsUsed(partition.offset + tmd_offset, tmd_size);
+  MarkAsUsed(partition.offset + cert_chain_offset, cert_chain_size);
+  MarkAsUsed(partition.offset + h3_offset, WII_PARTITION_H3_SIZE);
+
+  // Parse Data! This is where the big gain is
+  return ParsePartitionData(disc, partition);
 }
 
 // Operations dealing with encrypted space are done here

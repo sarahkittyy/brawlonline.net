@@ -29,7 +29,17 @@ Measured with this PC's discs (2026-10-21):
 
 Reading a whole Brawl disc took 22 s from a cold file (the MD5 took ~25 s), 2-4 s from the OS cache. `-p` prints `progress <done> <total>` lines on stderr, so the launcher shows a bar for every format.
 
-Not tested: NKit images (no NKit tool here). Whatever they are, the same rule decides: an NKit image whose game partition is where the disc has it and checks out is accepted; one that moved it is not. Some WBFS tools scrub Brawl's Masterpieces partitions entirely; those are not part of `game_data`, so such a WBFS is accepted, and a player who opens Vault > Masterpieces in a room with it would desync.
+Not tested: NKit images (no NKit tool here). Whatever they are, the same rule decides: an NKit image whose game partition is where the disc has it and checks out is accepted; one that moved it is not.
+
+**A real USB Loader GX WBFS** (bug report #110, 2026-10-22: DRSH#214's backup said "verification failed"). The WBFS above was made by a script, not by a loader. libwbfs, the library USB Loader GX and Wii Backup Manager write a WBFS with, copies only the disc's first partition group (`wiidisc.c` `do_disc`) and, with the default "game partition only", rewrites that group to list only the game partition. Brawl also has a second group: 12 channel-installer partitions (the Masterpieces, from 0x1DA550000), which the table still lists and the WBFS does not have. Dolphin's `DiscScrubber::ParseDisc` failed on the first of them and gave up the whole scrub, so `VolumeVerifier` had no scrubber and every block the WBFS left out counted as a used block failing: a perfect dump got `game_data` null. Now `ParseDisc` skips a partition other than the game partition that it cannot read (with the free table as it was before it), and still fails when the game partition cannot be read. Measured with USB Loader GX's own libwbfs (`source/libs/libwbfs`, built for the PC, "game partition only", 2 MiB sectors, trimmed, split at 4 GiB - 32 KiB into `.wbfs` + `.wbf1` as on a FAT32 drive) from the Rev 2 redump ISO:
+
+| Image | Before | After |
+|---|---|---|
+| that WBFS, one file or split | null (8000 used blocks fail, 0 unused) | `e6ae2404…`, 8000 unused |
+| the split WBFS with one byte of game data changed | null | null (1 used block fails), 8000 unused |
+| the redump ISO / the scrubbed ISO | `e6ae2404…` | `e6ae2404…` (0 / 8088 unused) |
+
+The Masterpieces are not part of `game_data`, so such a WBFS is accepted, and a player who opens Vault > Masterpieces in a room with it would desync. The launcher's verification cache is version 3 so that a WBFS rejected before is checked again (an image accepted under version 2 stays accepted), and Brawl Mods' `BUILD_HASH_VERSION` is v5 so its games are hashed again once (a WBFS game's disc becomes `BRAWL_NTSC_U_DISC`; until both players update, a room between an older launcher and a newer one with such a WBFS shows another disc). The reporter's WBFS failed 8041 blocks and their ISO (converted from a WBFS: 3795 x 2 MiB) 41 used blocks besides 8088 unused: about 41 blocks of their dump are damaged, as libwbfs writes the last buffer again where the disc does not read and goes on, so that backup is still refused.
 
 ## 3. P+ (Settings > Game, quick start)
 

@@ -163,8 +163,10 @@ export async function verifyIso(
 }
 
 /** 2 since images are checked by their game data: an older entry (an RVZ refused by its name, a
- * scrubbed image refused by its MD5) is checked again. */
-const CACHE_VERSION = 2;
+ * scrubbed image refused by its MD5) is checked again. 3 since the DolphinTool that reads a WBFS
+ * without Brawl's Masterpieces partitions (USB Loader GX, bug report #110): a rejection from
+ * before is checked again, an accepted v2 image stays accepted. */
+const CACHE_VERSION = 3;
 
 type CacheEntry = {
   v?: number;
@@ -174,6 +176,10 @@ type CacheEntry = {
   detail?: string;
   checkedAt?: string;
 };
+
+function isCurrent(entry: CacheEntry): boolean {
+  return entry.v === CACHE_VERSION || (entry.v === 2 && entry.valid === IsoValidity.VALID);
+}
 
 /**
  * `verifyIsoDetailed` with a small on-disk cache keyed by path, size and modification
@@ -194,7 +200,7 @@ export async function verifyIsoCached(
     cache = {};
   }
   const hit = cache[isoPath];
-  if (hit && hit.v === CACHE_VERSION && hit.size === stat.size && hit.mtimeMs === stat.mtimeMs) {
+  if (hit && isCurrent(hit) && hit.size === stat.size && hit.mtimeMs === stat.mtimeMs) {
     const detail = `cached ${hit.checkedAt ?? "result"}: ${hit.detail ?? `${hit.size} bytes`}`;
     return { valid: hit.valid, detail, cached: true };
   }

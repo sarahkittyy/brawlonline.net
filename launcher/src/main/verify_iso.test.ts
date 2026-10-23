@@ -167,6 +167,28 @@ describe("verifyIso", () => {
     expect((await verifyIsoCached(wbfs, cache, undefined, gameData())).cached).toBe(true);
   });
 
+  it("checks again a v2 rejection, not a v2 acceptance", async () => {
+    const wbfs = path.join(dir, "RSBE01.wbfs");
+    await writeFile(wbfs, Buffer.concat([Buffer.from("WBFS", "latin1"), Buffer.alloc(60)]));
+    const rvz = path.join(dir, "brawl.rvz");
+    await writeFile(rvz, Buffer.concat([Buffer.from("RVZ\x01", "latin1"), Buffer.alloc(60)]));
+    const cache = path.join(dir, "cache.json");
+    const entry = async (p: string, valid: IsoValidity) => {
+      const s = await stat(p);
+      return { v: 2, size: s.size, mtimeMs: s.mtimeMs, valid, detail: "v2" };
+    };
+    await writeFile(
+      cache,
+      JSON.stringify({ [wbfs]: await entry(wbfs, IsoValidity.INVALID), [rvz]: await entry(rvz, IsoValidity.VALID) }),
+    );
+    const rechecked = await verifyIsoCached(wbfs, cache, undefined, gameData());
+    expect(rechecked.cached).toBe(false);
+    expect(rechecked.valid).toBe(IsoValidity.VALID);
+    const kept = await verifyIsoCached(rvz, cache, undefined, gameData());
+    expect(kept.cached).toBe(true);
+    expect(kept.valid).toBe(IsoValidity.VALID);
+  });
+
   // Hashing an 8.5 GB image takes a while: opt in with PPO_TEST_REAL_ISO=<path to a Brawl ISO>.
   it.skipIf(!process.env.PPO_TEST_REAL_ISO)(
     "accepts a real Brawl image",

@@ -108,13 +108,13 @@ describe("build hash", () => {
       launcherPath: null,
       sdPath: null,
     });
-    expect(before).toMatch(/^v4\|10:1700000000000\|-\|-$/);
+    expect(before).toMatch(/^v5\|10:1700000000000\|-\|-$/);
     const withCard = await buildHashKey({
       discPath: disc,
       launcherPath: null,
       sdPath: sd,
     });
-    expect(withCard).toMatch(/^v4\|10:1700000000000\|-\|card$/);
+    expect(withCard).toMatch(/^v5\|10:1700000000000\|-\|card$/);
     await writeFile(sd, "the card, written to");
     expect(await buildHashKey({ discPath: disc, launcherPath: null, sdPath: sd })).toBe(withCard);
     await utimes(disc, 1_700_000_100, 1_700_000_100);

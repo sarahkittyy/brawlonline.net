@@ -22,8 +22,9 @@ import type { ModBuild, ModBuildParts } from "./types";
 export const BUILD_HASH_PREFIX = "brawl-mods-build-v4\n";
 
 /** `buildHashKey`'s version: a game whose key has another was hashed by an older launcher.
- * v4: the disc is its game data (disc_info.ts discIdentity), not its contents' SHA-1. */
-export const BUILD_HASH_VERSION = "v4";
+ * v4: the disc is its game data (disc_info.ts discIdentity), not its contents' SHA-1. v5: a WBFS
+ * without Brawl's Masterpieces partitions (USB Loader GX) has its game data too (bug report #110). */
+export const BUILD_HASH_VERSION = "v5";
 
 type PathsOf = Pick<ModBuild, "discPath" | "launcherPath" | "sdPath">;
 
