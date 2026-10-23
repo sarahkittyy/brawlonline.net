@@ -21,6 +21,8 @@ export const UPDATE_CHECK_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 const LAUNCH_CHECK_MAX_AGE_MS = 60 * 1000; // 1 minute
 /** How long a start waits for that check; past it (offline, feed down) Dolphin starts on what is known. */
 const LAUNCH_CHECK_TIMEOUT_MS = 5000; // 5 seconds
+/** How often a downloaded update looks again whether the launcher is free to restart (installWhenIdle). */
+export const INSTALL_IDLE_POLL_MS = 15 * 1000; // 15 seconds
 
 /** Thrown when Dolphin is asked to start while a newer launcher is out. */
 export class LauncherUpdateRequiredError extends Error {
@@ -36,6 +38,11 @@ export class AppUpdater {
   private availableVersion: string | undefined;
   private lastCheckAt = 0;
   private checkTimer: NodeJS.Timeout | undefined;
+  private installTimer: NodeJS.Timeout | undefined;
+  /** Set once the launcher installed (or tried to install) a downloaded update by itself. */
+  private autoInstallStarted = false;
+  /** True while the launcher must not restart (DolphinManager.isBusy: a Dolphin open, an install). */
+  private isBusy: () => boolean = () => false;
 
   /** "download" on macOS while the build cannot update itself (MAC_SELF_UPDATE in @common/product). */
   readonly mode: LauncherUpdateMode = getLauncherUpdateMode(process.platform);
@@ -122,6 +129,49 @@ export class AppUpdater {
     if (version) {
       throw new LauncherUpdateRequiredError(version);
     }
+  }
+
+  /** What installWhenIdle waits for: true while the launcher must not quit (a Dolphin is open...). */
+  setBusyCheck(isBusy: () => boolean): void {
+    this.isBusy = isBusy;
+  }
+
+  /**
+   * The update is downloaded (pendingUpdateVersion written): with auto updates on, it installs and
+   * restarts the launcher by itself once nothing is running (no Dolphin open, no install or move),
+   * looking again every INSTALL_IDLE_POLL_MS until then. No Dolphin starts until the launcher is
+   * updated anyway, and installing it only on quit left players stuck on "update the launcher"
+   * (bug reports #116 and #117: "doesnt auto update on startup", "how do i update this? do i just
+   * restart it?"). Install update in the bar and the install on quit stay as they were.
+   */
+  installWhenIdle(version: string): void {
+    if (this.mode !== "install" || this.autoInstallStarted || this.installTimer) {
+      return;
+    }
+    // Installing this version failed last time (verifyPendingUpdate): trying again at every start
+    // could restart the launcher over and over, so the bar's Install update is left to the player.
+    if (this.updateState?.status === "failed" && this.updateState.version === version) {
+      log.warn(`Launcher update ${version} failed to install last time: not installing it by itself`);
+      return;
+    }
+    const attempt = () => {
+      this.installTimer = undefined;
+      if (!this.settingsManager.get().settings.autoUpdateLauncher) {
+        return;
+      }
+      if (this.isBusy()) {
+        this.installTimer = setTimeout(attempt, INSTALL_IDLE_POLL_MS);
+        return;
+      }
+      this.autoInstallStarted = true;
+      // The installer shows its progress and starts the new launcher (quitAndInstall(false, true)).
+      log.warn(`Launcher update ${version} downloaded and nothing is running: installing it and restarting`);
+      this.quitAndInstall().catch((err) => {
+        // Not tried again by itself: the bar's Install update (and Download manually) remain.
+        log.error(`Installing launcher update ${version} by itself failed:`, err);
+      });
+    };
+    attempt();
   }
 
   async verifyPendingUpdate(): Promise<void> {

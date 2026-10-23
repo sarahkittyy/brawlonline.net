@@ -146,8 +146,12 @@ export default function setupMainIpc({
   });
 
   autoUpdater.on("update-downloaded", (info: UpdateInfo) => {
-    settingsManager.updateSetting("pendingUpdateVersion", info.version).catch(log.error);
     ipc_launcherUpdateReadyEvent.main!.trigger({}).catch(log.warn);
+    // Installing needs pendingUpdateVersion (and the next start checks it), so it is written first.
+    settingsManager
+      .updateSetting("pendingUpdateVersion", info.version)
+      .then(() => appUpdater.installWhenIdle(info.version))
+      .catch(log.error);
   });
 
   ipc_installUpdate.main!.handle(async () => {

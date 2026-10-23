@@ -20,6 +20,7 @@ export function installModules(flags: ConfigFlags) {
   const appUpdater = new AppUpdater(settingsManager);
   const dolphinManager = new DolphinManager(settingsManager);
   dolphinManager.setLaunchGate(() => appUpdater.assertUpToDate());
+  appUpdater.setBusyCheck(() => dolphinManager.isBusy());
   setupDolphinIpc({ dolphinManager });
   const { accountsManager, serviceUrls } = setupAccountsIpc();
   setupSocialIpc({ accountsManager, accountsApi: serviceUrls.accountsApi, dolphinManager });
