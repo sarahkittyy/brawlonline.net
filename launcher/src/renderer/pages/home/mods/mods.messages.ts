@@ -134,7 +134,7 @@ export const ModsMessages = {
   partHash: (part: string, hash: string) => `${part}: ${hash.slice(0, 6)}`,
   discMatches: () => "Your disc image matches the room's.",
   discDiffers: (label: string | undefined) =>
-    `Your Brawl disc image isn't the room's.${label ? ` The room plays ${label}.` : ""}`,
+    `You don't have a disc image that matches this room.${label ? ` The room plays ${label}.` : ""}`,
   discDiffersGame: (label: string | undefined) =>
     `The disc images don't match. Make sure you both have the same version of the game.${
       label ? ` The room plays ${label}.` : ""
