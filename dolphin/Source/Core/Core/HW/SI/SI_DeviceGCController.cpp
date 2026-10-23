@@ -3,6 +3,9 @@
 
 #include "Core/HW/SI/SI_DeviceGCController.h"
 
+#include <cstdio>
+#include <cstdlib>
+
 #include "Common/ChunkFile.h"
 #include "Common/CommonTypes.h"
 #include "Common/Logging/Log.h"
@@ -77,6 +80,9 @@ int CSIDevice_GCController::RunBuffer(u8* buffer, int request_length)
   case EBufferCommands::CMD_ORIGIN:
   {
     INFO_LOG_FMT(SERIALINTERFACE, "PAD - Get Origin");
+    Gprb::HostPadOriginReported(m_device_number, m_origin.origin_stick_x, m_origin.origin_stick_y,
+                                m_origin.substick_x, m_origin.substick_y, m_origin.trigger_left,
+                                m_origin.trigger_right);
 
     const u8* calibration = reinterpret_cast<u8*>(&m_origin);
     for (int i = 0; i < (int)sizeof(SOrigin); i++)
@@ -90,6 +96,9 @@ int CSIDevice_GCController::RunBuffer(u8* buffer, int request_length)
   case EBufferCommands::CMD_RECALIBRATE:
   {
     INFO_LOG_FMT(SERIALINTERFACE, "PAD - Recalibrate");
+    Gprb::HostPadOriginReported(m_device_number, m_origin.origin_stick_x, m_origin.origin_stick_y,
+                                m_origin.substick_x, m_origin.substick_y, m_origin.trigger_left,
+                                m_origin.trigger_right);
 
     const u8* calibration = reinterpret_cast<u8*>(&m_origin);
     for (int i = 0; i < (int)sizeof(SOrigin); i++)
@@ -158,6 +167,38 @@ GCPadStatus CSIDevice_GCController::GetPadStatus()
     return pad_status;
 
   HandleMoviePadStatus(m_system.GetMovie(), m_device_number, &pad_status);
+
+  // Tests: PPR_GPRB_TEST_ORIGIN=stick x,y,C-stick x,y,L,R (0-255): once a network session's
+  // schedule runs, this controller is unplugged for 20 reads and plugged back in resting there, as
+  // a Wii U adapter's controller re-plugged (the game probes it again and takes its origin): the
+  // host decode's check with an origin off centre (the menus before keep a centred one).
+  if (m_test_origin_state >= 0 && Gprb::HostPadsScheduled())
+  {
+    static const char* const env = std::getenv("PPR_GPRB_TEST_ORIGIN");
+    int v[6] = {};
+    if (!env || std::sscanf(env, "%d,%d,%d,%d,%d,%d", &v[0], &v[1], &v[2], &v[3], &v[4], &v[5]) != 6)
+    {
+      m_test_origin_state = -1;
+    }
+    else if (m_test_origin_state < 20)
+    {
+      ++m_test_origin_state;
+      pad_status = {};
+      pad_status.isConnected = false;
+      return pad_status;
+    }
+    else
+    {
+      m_test_origin_state = -1;
+      pad_status.stickX = static_cast<u8>(v[0]);
+      pad_status.stickY = static_cast<u8>(v[1]);
+      pad_status.substickX = static_cast<u8>(v[2]);
+      pad_status.substickY = static_cast<u8>(v[3]);
+      pad_status.triggerLeft = static_cast<u8>(v[4]);
+      pad_status.triggerRight = static_cast<u8>(v[5]);
+      pad_status.button |= PAD_GET_ORIGIN;
+    }
+  }
 
   // Our GCAdapter code sets PAD_GET_ORIGIN when a new device has been connected.
   // Watch for this to calibrate real controllers on connection.

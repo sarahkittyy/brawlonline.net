@@ -1358,6 +1358,34 @@ So a skipped pass cost about half a rendered one, and rollbacks of depth ~2 got 
 
 **Results.** Slow joiner, on and off: `2400 far behind read now` against `2400 from history`, 0 checksum mismatches in both; on the prototype branch the same change took the joiner's input from 156 to 51.5 ms old at use (34 ms with early local input). `test_diag_bug70.py` lan 99.78% one-step frames, rtt130 99.61% (Phase 31: 99.83-99.91 / 99.68-99.72), 0 far reads in either. gtests `HostPadReadTest.*` (4, new: ReadsFarBehindScheduleTakeTheControllerNow; ReadsStandForTheirScheduledInstant's 10 ms late read now waits by spinning: two `sleep_for`s on Windows can take a scheduler quantum each and came over a field late) and `TimedHistory.*`, 5 repeats each. Not tested: a real adapter on a slow PC.
 
+## Phase 33: host decode, the local input a field fresher (GitHub issue #1, 2026-10-23)
+
+**Waste.** Since Phase 31 a frame's local input is the pad-thread pass made from the SI read a field before the loop top: the read just before the loop top is processed by the pad thread only after it, so the sample was ~17.5 ms old at the loop top and delay N cost N+1 frames over offline Brawl. Issue #1 (DHNishi) proposed making that newest read into the pad the pad thread would make of it, on the host, at the loop top (`HostDecodePadSlot`): the same submission point and delay, a field fresher. (The prototype branch `claude/early-input` got the same frame by handing the pass to GekkoNet as soon as it existed, for an explicit frame; the decode needs no GekkoNet change, loses no lead and keeps the send before a rollback's re-runs, so it replaces that for GameCube controllers.)
+
+**Change.**
+- `Gprb::HostDecodePadSlot`: buttons at +0 and +4 (the standard ones, `& 0x1F7F`: not the SI's origin bits), sticks at +0x30 and triggers at +0x34 through the SDK's origin (PADRead's `ClampS8` / `ClampU8`), the error at +0x38, all else 0, as `updateLowGC` and P+'s post-processing make it.
+- The origin is the one each controller **reported to the game** (`HostPadOriginReported`, from the SI device's `CMD_ORIGIN` / `CMD_RECALIBRATE`): a Dolphin-mapped pad's is centred, a Wii U adapter's controller reports its rest position. Without it an off-centre adapter stick would read a few units off at rest.
+- Every scheduled read (`ReadHostPad`) is decoded and kept (a re-run's latched read once); `CaptureLocalInputs` takes the newest one for a GameCube controller when it is newer than the pass Phase 31's rule picks and at most a field and a half old by the schedule. Wii Remotes and Classic Controllers stay on the pass.
+- **Self-check:** every pad-thread pass of a decoded read is compared with the decode byte for byte. While the game's own pad says no controller (its error byte: none plugged, or one just plugged in that the SDK is still probing) the decode is not used and not counted. A pass that differs suspends the decode for that channel until 120 passes match again; after 10 in a session it is off for the session. A wrong decode never desyncs (both machines play the bytes sent); it would only change how the local player's input reads, so it must not stay. `PPR_GPRB_HOST_DECODE=0` never decodes.
+- `pad reads ... host decode used N, declined N, checked N, differed N` in the `gprb net:` line; `gprb: pad N origin reported to the game: ...` when one changes.
+- Tests: `PPR_GPRB_TEST_ORIGIN=x,y,cx,cy,l,r` makes a standard controller, once the session runs, unplugged for 20 reads and plugged back in resting there (as an adapter's controller re-plugged: the game probes it again and takes that origin mid-match; the menus before keep a centred one, else the harness's centred stick moves their cursor).
+
+**Results** (`gprb_session.py`, dual core, Null video, on top of Phase 32):
+
+| run | pad sample age at the loop top | decode checked / differed | checksums |
+|---|---:|---|---|
+| lan, decode off | 17.5 ms | - | 0 mismatches |
+| lan | 0.8 ms | 13,196 / 0 | 0 |
+| bad_wifi x2 | 0.9-1.1 ms | 23,992 / 0 each | 0 |
+| typical, 3 players | 1.1 ms | 19,794 / 0 each player | 0 |
+| long_haul, CPU-limited joiner | (far reads, Phase 32) | 9,582 / 0 | 0 |
+| lan, origin 134,123 / 131,125 / L15 R12 | 0.7 ms | 13,246 / 0 | 0 |
+| lan, origin 150,106 / 140,116 / L40 R35 | 0.9 ms | 10,108 / 0 | 0 |
+
+So a frame's local input is ~1 ms old at the loop top instead of ~17.5: read -> game use at delay 2 about 34 ms instead of 51 (issue #1 measured 51.40 -> 35.15 ms). bad_wifi rollbacks are unchanged (first 1,800 frames 4.9-6.2% on, 4.9-7.1% off, two runs each): the input goes out when it did. `test_diag_bug70.py` lan 99.78% one-step frames, rtt130 (65% of frames rolled back) 99.54%, 0 decodes differed in either. The first origin runs (before the not-ready rule) turned the decode off after three passes of the SDK's re-probe (`+38: ff/00`, the game's pad not ready while the SI read was): a controller plugged in mid-match no longer does. gtests `HostDecodePadSlot.*` (3: a centred controller, an off-centre origin clamped as the SDK does, no controller) and `HostPadReadTest.TheNewestScheduledReadIsDecoded`.
+
+**Not tested:** a real Wii U adapter (its origin goes the same way, from `CMD_ORIGIN`), single core, macOS / Linux builds.
+
 ## Open issues
 
 Resolved in Phase 6: the dual-core divergence (ground-collision list heads, gp-v11), the Peach article crash and the `GXWaitDrawDone` stalls (the GX FIFO ring tail), the 11-frame sync-test bursts (camera quake controller, gp-v12), stopping and re-attaching sounds. Resolved in Phase 8: every failure of the coverage sweep (gp-v13 to gp-v19, the file IO wait). Resolved in Phase 9: the nondeterministic render/effect hang (a load read the base snapshot while the eviction job was still merging into it). Resolved in Phase 12: the Smashville desync from frame 0 (issue 7).

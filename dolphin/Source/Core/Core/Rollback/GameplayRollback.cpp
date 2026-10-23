@@ -735,6 +735,64 @@ struct HostPads
 };
 HostPads s_host_pads;
 
+// Host decode (PadsHostDecoded). CPU thread only.
+struct HostDecodeEntry
+{
+  bool valid = false;
+  Clock::time_point instant{};
+  std::array<u8, Addr::PAD_STRIDE> pad{};
+};
+struct HostDecodeState
+{
+  // Each channel's origin as reported to the game: stick x/y, C-stick x/y, triggers L/R (a
+  // standard controller's own until the game asks: centred sticks, triggers 0).
+  std::array<std::array<u8, 6>, 4> origin{{{0x80, 0x80, 0x80, 0x80, 0, 0},
+                                           {0x80, 0x80, 0x80, 0x80, 0, 0},
+                                           {0x80, 0x80, 0x80, 0x80, 0, 0},
+                                           {0x80, 0x80, 0x80, 0x80, 0, 0}}};
+  // Each channel's recent decodes (newest at next - 1), for the passes' check.
+  std::array<std::array<HostDecodeEntry, 8>, 4> ring{};
+  std::array<size_t, 4> next{};
+  u32 mismatches = 0;  // this session's
+  bool off = false;    // turned off for the session (too many mismatches)
+  // Each channel's state by the game's own passes: the game had no ready controller there (its
+  // pad's error byte: none plugged, or one just plugged in that the SDK is still probing); a
+  // decode differed and the channel waits for HOST_DECODE_RESUME passes that match.
+  std::array<bool, 4> guest_error{};
+  std::array<bool, 4> suspended{};
+  std::array<u32, 4> clean{};
+};
+HostDecodeState s_decode;
+constexpr u32 HOST_DECODE_MAX_MISMATCHES = 10;
+constexpr u32 HOST_DECODE_RESUME = 120;
+
+bool HostDecodeEnabled()
+{
+  static const bool enabled = [] {
+    const char* env = std::getenv("PPR_GPRB_HOST_DECODE");
+    return !(env && env[0] == '0');
+  }();
+  return enabled;
+}
+
+// A read the game gets (ReadHostPad, a session's schedule): its decode, kept for the loop top and
+// the passes' check. A re-run's latched read is the same read: kept once.
+void HostDecodeKeep(int chan, const GCPadStatus& st, Clock::time_point instant)
+{
+  if (chan < 0 || chan >= 4 || !HostDecodeEnabled())
+    return;
+  auto& ring = s_decode.ring[chan];
+  const size_t newest = (s_decode.next[chan] + ring.size() - 1) % ring.size();
+  if (ring[newest].valid && ring[newest].instant == instant)
+    return;
+  HostDecodeEntry& e = ring[s_decode.next[chan]];
+  s_decode.next[chan] = (s_decode.next[chan] + 1) % ring.size();
+  e.instant = instant;
+  e.valid = st.isConnected;
+  if (e.valid)
+    HostDecodePadSlot(st, s_decode.origin[chan], e.pad.data());
+}
+
 // Diagnostics (PPR_GPRB_PAD_READ_LOG=<file>, %p in it a number of the process's own): one line per read of a host controller in a session
 // and per pad-thread pass, times in us of the steady clock:
 //   R chan now due|- resim kind buttons instant
@@ -793,6 +851,11 @@ std::optional<GCPadStatus> ReadHostPadAt(int chan, HostPadSource source, Clock::
 }
 }  // namespace
 
+bool HostPadsScheduled()
+{
+  return s_host_pads.scheduled.load(std::memory_order_relaxed);
+}
+
 void SetHostPadsScheduled(bool scheduled)
 {
   if (scheduled)
@@ -814,6 +877,12 @@ GCPadStatus ReadHostPad(Core::System& system, int chan, HostPadSource source)
   {
     h.seen_generation = gen;
     h.last = {};  // nothing from an earlier session
+    s_decode.ring = {};
+    s_decode.mismatches = 0;
+    s_decode.off = false;
+    s_decode.guest_error = {};
+    s_decode.suspended = {};
+    s_decode.clean = {};
   }
 
   auto& ct = system.GetCoreTiming();
@@ -883,8 +952,95 @@ GCPadStatus ReadHostPad(Core::System& system, int chan, HostPadSource source)
   }
   last = {true, status, instant, data_at};
   h.instant[chan] = instant;
+  HostDecodeKeep(chan, status, instant);
   LogRead(chan, now, due, false, kind, status, instant);
   return status;
+}
+
+namespace
+{
+// The SDK's PADRead against the origin (PAD.c ClampS8 / ClampU8).
+s8 ClampS8(s8 var, s8 org)
+{
+  if (org > 0)
+  {
+    const s8 min = static_cast<s8>(-128 + org);
+    if (var < min)
+      var = min;
+  }
+  else if (org < 0)
+  {
+    const s8 max = static_cast<s8>(127 + org);
+    if (var > max)
+      var = max;
+  }
+  return static_cast<s8>(var - org);
+}
+
+u8 ClampU8(u8 var, u8 org)
+{
+  if (var < org)
+    var = org;
+  return static_cast<u8>(var - org);
+}
+}  // namespace
+
+void HostDecodePadSlot(const GCPadStatus& st, const std::array<u8, 6>& origin, u8* pad)
+{
+  std::memset(pad, 0, Addr::PAD_STRIDE);
+  // PADStatus's buttons: the standard ones (the SI's origin bits are the SDK's own).
+  const u16 buttons = st.button & 0x1F7F;
+  pad[2] = static_cast<u8>(buttons >> 8);
+  pad[3] = static_cast<u8>(buttons);
+  pad[6] = pad[2];
+  pad[7] = pad[3];
+  const auto stick = [](u8 v, u8 org) {
+    return static_cast<u8>(ClampS8(static_cast<s8>(v - 128), static_cast<s8>(org - 128)));
+  };
+  pad[0x30] = stick(st.stickX, origin[0]);
+  pad[0x31] = stick(st.stickY, origin[1]);
+  pad[0x32] = stick(st.substickX, origin[2]);
+  pad[0x33] = stick(st.substickY, origin[3]);
+  pad[0x34] = ClampU8(st.triggerLeft, origin[4]);
+  pad[0x35] = ClampU8(st.triggerRight, origin[5]);
+  pad[Addr::PAD_ERROR_OFF] = st.isConnected ? 0 : 0xFF;
+}
+
+void HostPadOriginReported(int chan, u8 stick_x, u8 stick_y, u8 substick_x, u8 substick_y,
+                           u8 trigger_left, u8 trigger_right)
+{
+  if (chan < 0 || chan >= 4)
+    return;
+  const std::array<u8, 6> o{stick_x, stick_y, substick_x, substick_y, trigger_left, trigger_right};
+  if (o != s_decode.origin[chan])
+  {
+    INFO_LOG_FMT(BRAWLBACK, "gprb: pad {} origin reported to the game: stick {},{} C {},{} L {} R {}",
+                 chan, stick_x, stick_y, substick_x, substick_y, trigger_left, trigger_right);
+  }
+  s_decode.origin[chan] = o;
+}
+
+bool PadsHostDecoded(int chan, std::array<u8, Addr::PAD_STRIDE>* pad, Clock::time_point* instant)
+{
+  HostPads& h = s_host_pads;
+  if (chan < 0 || chan >= 4 || !HostDecodeEnabled() || s_decode.off ||
+      s_decode.guest_error[chan] || s_decode.suspended[chan] ||
+      !h.scheduled.load(std::memory_order_relaxed))
+  {
+    ++h.stats.decode_declined;
+    return false;
+  }
+  const auto& ring = s_decode.ring[chan];
+  const HostDecodeEntry& e = ring[(s_decode.next[chan] + ring.size() - 1) % ring.size()];
+  if (!e.valid)
+  {
+    ++h.stats.decode_declined;
+    return false;
+  }
+  *pad = e.pad;
+  *instant = e.instant;
+  ++h.stats.decode_used;
+  return true;
 }
 
 void HostPadLogLine(const char* kind, long long a, long long b, long long c)
@@ -1069,6 +1225,54 @@ void PadsOnPadThreadUpdated(Core::System& system)
                    system.GetCoreTiming().IsRollbackResimulating() ? 1 : 0, Us(pass.sampled_at[0]),
                    pass.pads[0], pass.pads[1], pass.pads[2], pass.pads[3]);
       std::fflush(f);
+    }
+  }
+  // Host decode: the pass of a decoded read must be its decode, byte for byte.
+  if (HostDecodeEnabled() && !s_decode.off && !system.GetCoreTiming().IsRollbackResimulating() &&
+      s_host_pads.scheduled.load(std::memory_order_relaxed))
+  {
+    const auto sampled = HostPadReadInstants();
+    for (int chan = 0; chan < 4; ++chan)
+    {
+      const u8* guest = s_pads.latest.data() + chan * Addr::PAD_STRIDE;
+      s_decode.guest_error[chan] = guest[Addr::PAD_ERROR_OFF] != 0;
+      for (const HostDecodeEntry& e : s_decode.ring[chan])
+      {
+        if (!e.valid || e.instant != sampled[chan])
+          continue;
+        // The SDK still probing a controller just plugged in: the game's pad says none yet.
+        if (s_decode.guest_error[chan])
+          break;
+        ++s_host_pads.stats.decode_checked;
+        if (std::memcmp(guest, e.pad.data(), Addr::PAD_STRIDE) == 0)
+        {
+          if (s_decode.suspended[chan] && ++s_decode.clean[chan] >= HOST_DECODE_RESUME)
+          {
+            s_decode.suspended[chan] = false;
+            INFO_LOG_FMT(BRAWLBACK, "gprb: host decode of pad {} matches again: in use", chan);
+          }
+          break;
+        }
+        ++s_host_pads.stats.decode_mismatched;
+        std::string diff;
+        for (u32 i = 0; i < Addr::PAD_STRIDE; ++i)
+        {
+          if (guest[i] != e.pad[i])
+            diff += fmt::format(" +{:02x}:{:02x}/{:02x}", i, guest[i], e.pad[i]);
+        }
+        WARN_LOG_FMT(BRAWLBACK,
+                     "gprb: host decode of pad {} differs from the pad thread's (game/decode):{}",
+                     chan, diff);
+        s_decode.suspended[chan] = true;
+        s_decode.clean[chan] = 0;
+        if (++s_decode.mismatches >= HOST_DECODE_MAX_MISMATCHES)
+        {
+          s_decode.off = true;
+          WARN_LOG_FMT(BRAWLBACK, "gprb: host decode off for this session ({} mismatches)",
+                       s_decode.mismatches);
+        }
+        break;
+      }
     }
   }
   s_pads.latest_ticks = system.GetCoreTiming().GetTicks();
