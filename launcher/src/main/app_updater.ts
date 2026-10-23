@@ -4,7 +4,7 @@ import { getLauncherUpdateMode } from "@common/launcher_update";
 import type { SettingsManager } from "@settings/settings_manager";
 import { app } from "electron";
 import log from "electron-log";
-import type { UpdateInfo } from "electron-updater";
+import type { ProgressInfo, UpdateInfo } from "electron-updater";
 import { autoUpdater } from "electron-updater";
 
 import { ipc_launcherUpdateFailedEvent } from "./ipc";
@@ -23,6 +23,16 @@ const LAUNCH_CHECK_MAX_AGE_MS = 60 * 1000; // 1 minute
 const LAUNCH_CHECK_TIMEOUT_MS = 5000; // 5 seconds
 /** How often a downloaded update looks again whether the launcher is free to restart (installWhenIdle). */
 export const INSTALL_IDLE_POLL_MS = 15 * 1000; // 15 seconds
+/**
+ * A download that has received nothing for this long is cancelled and started again. electron-updater
+ * has no timeout of its own here: its 60 s socket timeout hooks a "socket" event that Electron's net
+ * requests never emit, so a stalled download waited until the network itself gave up (bug report #119).
+ */
+export const DOWNLOAD_STALL_MS = 60 * 1000; // 1 minute
+/** How long after each failed download it is tried again; past the last, the bar offers the manual download. */
+export const DOWNLOAD_RETRY_DELAYS_MS = [5 * 1000, 30 * 1000, 2 * 60 * 1000];
+
+type UpdateDownload = { promise: Promise<unknown>; cancel: () => void; stalled: boolean; announced: boolean };
 
 /** Thrown when Dolphin is asked to start while a newer launcher is out. */
 export class LauncherUpdateRequiredError extends Error {
@@ -43,6 +53,14 @@ export class AppUpdater {
   private autoInstallStarted = false;
   /** True while the launcher must not restart (DolphinManager.isBusy: a Dolphin open, an install). */
   private isBusy: () => boolean = () => false;
+  /** The download electron-updater is running, from the check that started it (later checks join it). */
+  private download: UpdateDownload | undefined;
+  private stallTimer: NodeJS.Timeout | undefined;
+  private retryTimer: NodeJS.Timeout | undefined;
+  /** Failed downloads in a row, each tried again after DOWNLOAD_RETRY_DELAYS_MS. */
+  private downloadFailures = 0;
+  /** The version whose download was last logged as done (the periodic checks find it again every time). */
+  private loggedDownloaded: string | undefined;
 
   /** "download" on macOS while the build cannot update itself (MAC_SELF_UPDATE in @common/product). */
   readonly mode: LauncherUpdateMode = getLauncherUpdateMode(process.platform);
@@ -80,6 +98,13 @@ export class AppUpdater {
     autoUpdater.on("update-not-available", () => {
       this.availableVersion = undefined;
     });
+    autoUpdater.on("download-progress", (progress: ProgressInfo) => this.onDownloadProgress(progress));
+    autoUpdater.on("update-downloaded", (info: UpdateInfo) => {
+      if (this.loggedDownloaded !== info.version) {
+        this.loggedDownloaded = info.version;
+        log.warn(`Launcher update ${info.version} downloaded`);
+      }
+    });
   }
 
   /**
@@ -94,12 +119,94 @@ export class AppUpdater {
       notify && this.mode === "install"
         ? await autoUpdater.checkForUpdatesAndNotify()
         : await autoUpdater.checkForUpdates();
-    // Rejects with the download's error (already logged); the bar then offers the website's download.
-    result?.downloadPromise?.catch(() => this.onDownloadFailed());
+    // A check while a download runs gets that download's promise again, already watched.
+    const downloadPromise = result?.downloadPromise;
+    if (downloadPromise && downloadPromise !== this.download?.promise) {
+      this.watchDownload(downloadPromise, () => result?.cancellationToken?.cancel());
+    }
     return { updateAvailable: result?.isUpdateAvailable ?? false };
   }
 
+  /**
+   * Restarts the download when it stalls (DOWNLOAD_STALL_MS) and tries a failed one again
+   * (DOWNLOAD_RETRY_DELAYS_MS) before the bar offers the website's download: a 100-150 MB download
+   * over a flaky line or QUIC failed once and stayed failed until the next periodic check (#119).
+   */
+  private watchDownload(promise: Promise<unknown>, cancel: () => void): void {
+    const download: UpdateDownload = { promise, cancel, stalled: false, announced: false };
+    this.download = download;
+    const settle = () => {
+      if (this.download === download) {
+        this.download = undefined;
+        this.clearStallTimer();
+      }
+    };
+    promise
+      .then(() => {
+        settle();
+        this.downloadFailures = 0;
+      })
+      .catch((err: unknown) => {
+        settle();
+        this.onDownloadError(download, err);
+      });
+  }
+
+  private onDownloadProgress(progress: ProgressInfo): void {
+    const download = this.download;
+    if (!download) {
+      return;
+    }
+    if (!download.announced) {
+      // Logged at the first data, so the periodic checks finding a finished download again log nothing.
+      download.announced = true;
+      log.warn(`Launcher update ${this.availableVersion ?? ""} downloading (${progress.total} bytes)`);
+    }
+    this.clearStallTimer();
+    // Watched from the first data to the last: on macOS Squirrel.Mac then installs the downloaded zip
+    // (no progress events), which is not a stall.
+    if (progress.transferred < progress.total) {
+      this.stallTimer = setTimeout(() => {
+        this.stallTimer = undefined;
+        log.warn(
+          `Launcher update download received nothing for ${DOWNLOAD_STALL_MS / 1000} s ` +
+            `at ${Math.floor(progress.percent)}%: starting it again`,
+        );
+        download.stalled = true;
+        download.cancel();
+      }, DOWNLOAD_STALL_MS);
+    }
+  }
+
+  private clearStallTimer(): void {
+    if (this.stallTimer) {
+      clearTimeout(this.stallTimer);
+      this.stallTimer = undefined;
+    }
+  }
+
+  private onDownloadError(download: UpdateDownload, err: unknown): void {
+    const reason = download.stalled ? "stalled" : err instanceof Error ? err.message : String(err);
+    if (this.downloadFailures < DOWNLOAD_RETRY_DELAYS_MS.length) {
+      const delay = DOWNLOAD_RETRY_DELAYS_MS[this.downloadFailures];
+      this.downloadFailures += 1;
+      log.warn(`Launcher update download failed (${reason}): trying again in ${delay / 1000} s`);
+      if (!this.retryTimer) {
+        this.retryTimer = setTimeout(() => {
+          this.retryTimer = undefined;
+          this.checkForUpdates().catch(() => undefined);
+        }, delay);
+      }
+      return;
+    }
+    log.error(`Launcher update download failed ${this.downloadFailures + 1} times in a row (${reason})`);
+    // The next periodic check starts over with its own retries.
+    this.downloadFailures = 0;
+    this.onDownloadFailed();
+  }
+
   private onDownloadFailed(): void {
+    // The bar then offers the website's download.
     ipc_launcherUpdateFailedEvent.main!.trigger({}).catch(log.warn);
   }
 

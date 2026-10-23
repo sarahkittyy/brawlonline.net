@@ -24,7 +24,14 @@ vi.mock("./ipc", () => ({ ipc_launcherUpdateFailedEvent: { main: { trigger: fail
 
 import { autoUpdater as realAutoUpdater } from "electron-updater";
 
-import { AppUpdater, INSTALL_IDLE_POLL_MS, LauncherUpdateRequiredError, UPDATE_CHECK_INTERVAL_MS } from "./app_updater";
+import {
+  AppUpdater,
+  DOWNLOAD_RETRY_DELAYS_MS,
+  DOWNLOAD_STALL_MS,
+  INSTALL_IDLE_POLL_MS,
+  LauncherUpdateRequiredError,
+  UPDATE_CHECK_INTERVAL_MS,
+} from "./app_updater";
 
 const autoUpdater = realAutoUpdater as unknown as EventEmitter & {
   checkForUpdates: Mock;
@@ -34,15 +41,42 @@ const autoUpdater = realAutoUpdater as unknown as EventEmitter & {
 const settingsManager = { get: () => ({ settings: { autoUpdateLauncher: true } }) } as any;
 
 /** The feed offers `version` (newer than 0.1.0) on the next checks. */
-function feedOffers(version: string | null, downloadPromise: Promise<unknown> | null = null) {
+function feedOffers(
+  version: string | null,
+  downloadPromise: Promise<unknown> | null = null,
+  cancellationToken?: { cancel: () => void },
+) {
   autoUpdater.checkForUpdates.mockImplementation(async () => {
     if (version) {
       autoUpdater.emit("update-available", { version });
     } else {
       autoUpdater.emit("update-not-available", { version: "0.1.0" });
     }
-    return { isUpdateAvailable: version != null, downloadPromise };
+    return { isUpdateAvailable: version != null, downloadPromise, cancellationToken };
   });
+}
+
+/** A download the test settles, with the cancellation token electron-updater hands out for it. */
+function pendingDownload() {
+  let settle!: { resolve: () => void; reject: (err: Error) => void };
+  const promise = new Promise<void>((resolve, reject) => {
+    settle = { resolve, reject };
+  });
+  const token = { cancel: vi.fn(() => settle.reject(new Error("cancelled"))) };
+  return { promise, resolve: () => settle.resolve(), reject: (err: Error) => settle.reject(err), token };
+}
+
+/** Every check from now on starts a new download that fails at once. */
+function downloadsFail() {
+  autoUpdater.checkForUpdates.mockImplementation(async () => {
+    autoUpdater.emit("update-available", { version: "0.2.0" });
+    return { isUpdateAvailable: true, downloadPromise: Promise.reject(new Error("net::ERR_QUIC_PROTOCOL_ERROR")) };
+  });
+}
+
+function progress(percent: number) {
+  const total = 145_000_000;
+  autoUpdater.emit("download-progress", { percent, total, transferred: (total * percent) / 100 });
 }
 
 describe("AppUpdater", () => {
@@ -101,11 +135,71 @@ describe("AppUpdater", () => {
     await expect(updater.assertUpToDate()).resolves.toBeUndefined();
   });
 
-  it("tells the renderer when downloading the update failed", async () => {
-    feedOffers("0.2.0", Promise.reject(new Error("download failed")));
+  it("tries a failed download again before telling the renderer it failed", async () => {
+    downloadsFail();
     await updater.checkForUpdates();
+    for (const delay of DOWNLOAD_RETRY_DELAYS_MS) {
+      await vi.advanceTimersByTimeAsync(delay - 1);
+      expect(failedEvent).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+    }
     await vi.advanceTimersByTimeAsync(0);
+    expect(autoUpdater.checkForUpdates).toHaveBeenCalledTimes(1 + DOWNLOAD_RETRY_DELAYS_MS.length);
     expect(failedEvent).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not tell the renderer when a download tried again succeeds", async () => {
+    downloadsFail();
+    await updater.checkForUpdates();
+    feedOffers("0.2.0", Promise.resolve());
+    await vi.advanceTimersByTimeAsync(DOWNLOAD_RETRY_DELAYS_MS[0]);
+    expect(autoUpdater.checkForUpdates).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(10 * 60 * 1000);
+    expect(failedEvent).not.toHaveBeenCalled();
+  });
+
+  it("starts a stalled download again (bug report #119)", async () => {
+    const first = pendingDownload();
+    feedOffers("0.2.0", first.promise, first.token);
+    await updater.checkForUpdates();
+    progress(10);
+    await vi.advanceTimersByTimeAsync(DOWNLOAD_STALL_MS - 1000);
+    progress(11);
+    await vi.advanceTimersByTimeAsync(DOWNLOAD_STALL_MS - 1000);
+    expect(first.token.cancel).not.toHaveBeenCalled();
+
+    const second = pendingDownload();
+    feedOffers("0.2.0", second.promise, second.token);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(first.token.cancel).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(DOWNLOAD_RETRY_DELAYS_MS[0]);
+    expect(autoUpdater.checkForUpdates).toHaveBeenCalledTimes(2);
+    expect(failedEvent).not.toHaveBeenCalled();
+    second.resolve();
+  });
+
+  it("does not cancel a download once all of it has arrived (macOS then installs it, with no progress)", async () => {
+    const download = pendingDownload();
+    feedOffers("0.2.0", download.promise, download.token);
+    await updater.checkForUpdates();
+    progress(100);
+    await vi.advanceTimersByTimeAsync(DOWNLOAD_STALL_MS * 3);
+    expect(download.token.cancel).not.toHaveBeenCalled();
+    download.resolve();
+  });
+
+  it("handles a download once when another check joins it", async () => {
+    const download = pendingDownload();
+    // electron-updater hands a check made during a download the same promise (a new, unused token).
+    feedOffers("0.2.0", download.promise, download.token);
+    await updater.checkForUpdates();
+    feedOffers("0.2.0", download.promise, { cancel: vi.fn() });
+    await updater.checkForUpdates();
+    downloadsFail();
+    download.reject(new Error("net::ERR_QUIC_PROTOCOL_ERROR"));
+    await vi.advanceTimersByTimeAsync(DOWNLOAD_RETRY_DELAYS_MS[0]);
+    // One retry, not one per check.
+    expect(autoUpdater.checkForUpdates).toHaveBeenCalledTimes(3);
   });
 });
 
