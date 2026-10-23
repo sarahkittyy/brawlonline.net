@@ -106,6 +106,7 @@ bool IsBootScene(const Core::CPUThreadGuard& guard, u32 app_ptr);
 
 namespace Machine
 {
+Boundary SessionBoundary();
 namespace
 {
 using Clock = std::chrono::steady_clock;
@@ -5765,6 +5766,26 @@ Wait WaitForFrames(Core::System& system)
   // Each limit counts from the start of its own phase: an epoch (or a joiner's wait for the
   // machine image) can take up to EPOCH_TIMEOUT inside this same wait, and the handshake after it
   // gets its own CONNECT_LIMIT.
+  // PPR_MACHINE_BOUNDARY_SLEEP=1 (prototype): at a VI-field boundary the throttle's sleep comes
+  // before the local controller is read, not at the frame's first SI poll after it, so the read
+  // is as fresh as the game's own and still sent at the frame's start.
+  static const bool boundary_sleep = [] {
+    const char* e = std::getenv("PPR_MACHINE_BOUNDARY_SLEEP");
+    return e && *e == '1';
+  }();
+  if (boundary_sleep && s.phase == Phase::Running && SessionBoundary() == Boundary::ViField)
+  {
+    auto& ct = system.GetCoreTiming();
+    if (const auto due = ct.ScheduledHostTime(); due && *due > Clock::now())
+    {
+      s.mutex.unlock();
+      {
+        Rollback::FrameProfile::Scope sleep_scope{Rollback::FrameProfile::AddThrottle};
+        ct.SleepUntil(*due);
+      }
+      s.mutex.lock();
+    }
+  }
   Phase timed_phase = s.phase;
   auto since = Clock::now();
   for (;;)
