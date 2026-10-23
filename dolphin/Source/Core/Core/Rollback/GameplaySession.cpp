@@ -255,13 +255,6 @@ struct PeerView
   // Its PC missed its own schedule on most frames of its last time sync (its state's "behind",
   // UpdatePeerFollow); unset from builds before 2026-10-22, which do not say.
   std::optional<bool> behind;
-  // Its input delay profile (its state's "dl": -1 Aggressive, 0 Normal, 1 Smooth) and whether it
-  // plays a number of frames instead ("dfx"); unset from builds before 2026-10-22: Normal there
-  // (AgreedLevel). Its round trip to its furthest peer as it measured it ("drtt", ms; -1: none),
-  // so that every machine picks the delay from the same round trip (DelayRoundTrip).
-  std::optional<int> delay_level;
-  bool delay_fixed = false;
-  double delay_rtt = -1;
   // Its state says it takes GekkoNet's messages bundled ('B', PeerData::AppendGekkoBundle);
   // builds before 2026-10-13 do not.
   bool gekko_bundles = false;
@@ -422,10 +415,8 @@ struct State
   // This player's input delay for the current game, picked when its GekkoNet session is created
   // and changed mid-game by the player's setting (ApplyLiveDelay).
   int input_delay = DEFAULT_INPUT_DELAY;
-  // The profile every player plays in the current game (AgreedLevel) and the round trip its delay
-  // was picked from (DelayRoundTrip), both when its GekkoNet session is created: a player changing
-  // profile mid-game picks it again from the same round trip, on every machine alike.
-  int agreed_level = 0;
+  // The round trip this player's delay was picked from when the game's GekkoNet session was
+  // created: a change of profile mid-game picks it again from the same round trip.
   double delay_rtt = -1;
   // The last change of the setting this session took (s_live_delay's sequence number).
   u32 live_delay_seq = 0;
@@ -2284,9 +2275,6 @@ void MaybeDecideSetup()
 constexpr int STATE_REPEATS = 2;
 constexpr auto STATE_KEEPALIVE = std::chrono::milliseconds(500);
 
-int OwnDelayLevel();
-double OwnRoundTrip();
-
 // `tick`: from the network thread's 50 ms tick (else: a step a peer waits for, sent at once).
 void SendState(bool tick = false)
 {
@@ -2328,12 +2316,6 @@ void SendState(bool tick = false)
     if (s.slow_fps > 0)
       o["slow"] = picojson::value(std::round(s.slow_fps * 10) / 10);
     o["behind"] = picojson::value(s.behind);
-    // The delay profile this player asks for, whether it plays a number of frames instead, and its
-    // round trip (AgreedLevel, DelayRoundTrip).
-    o["dl"] = picojson::value(static_cast<double>(OwnDelayLevel()));
-    if (s.net_opts.delay)
-      o["dfx"] = picojson::value(true);
-    o["drtt"] = picojson::value(std::round(OwnRoundTrip() * 10) / 10);
     if (!s_local_extra.empty())
       o["x"] = picojson::value(s_local_extra);
     if (s.recovery.pending)
@@ -2569,14 +2551,6 @@ void HandleControl(std::string_view text, const sf::IpAddress& from, u16 from_po
   }
   if (const auto* x = get("behind"); x && x->is<bool>())
     p.behind = x->get<bool>();
-  if (const auto* x = get("dl"); x && x->is<double>())
-  {
-    p.delay_level = std::clamp(static_cast<int>(x->get<double>()), -1, 1);
-    const auto* fx = get("dfx");
-    p.delay_fixed = fx && fx->is<bool>() && fx->get<bool>();
-  }
-  if (const auto* x = get("drtt"); x && x->is<double>() && x->get<double>() < 10000)
-    p.delay_rtt = std::max(-1.0, x->get<double>());
   if (const auto* x = get("gb"); x && x->is<double>())
     p.gekko_bundles = x->get<double>() >= 1;
   // The decider: the first peer that says it is, unless the host was configured.
@@ -3033,49 +3007,22 @@ double OwnRoundTrip()
   return rtt;
 }
 
-// The round trip a game's delay is picked from: the longest any player still in the session
-// measured (its state's "drtt"), so that every machine picks the same delay from it.
-double DelayRoundTrip()
-{
-  double rtt = OwnRoundTrip();
-  ForEachPeer([&](int, const PeerView& p) {
-    if (!p.left)
-      rtt = std::max(rtt, p.delay_rtt);
-  });
-  return rtt;
-}
-
-// The profile this machine asks for (-1 Aggressive, 0 Normal, 1 Smooth): Normal while it plays a
-// number of frames.
+// The profile this player plays (-1 Aggressive, 0 Normal, 1 Smooth): Normal while it plays a
+// number of frames. Each player plays their own and the others' need not be known: a player's
+// delay smooths their own screen only (5be14305; the user's call, 2026-10-22).
 int OwnDelayLevel()
 {
   return s.net_opts.delay ? 0 : std::clamp(s.net_opts.delay_level, -1, 1);
 }
 
-// The profile every player plays: Aggressive or Smooth when every player still in the session
-// asked for it, else Normal. A player on a number of frames, or on a build that does not say
-// (before 2026-10-22), counts as Normal. So one player's choice never gives another more delay, or
-// deeper rollbacks, than Normal (the user's call, 2026-10-22).
-int AgreedLevel()
-{
-  const int level = OwnDelayLevel();
-  bool all = true;
-  ForEachPeer([&](int, const PeerView& p) {
-    if (!p.left && (p.delay_fixed ? 0 : p.delay_level.value_or(0)) != level)
-      all = false;
-  });
-  return all ? level : 0;
-}
-
 // This player's input delay for a game: the set number (Direct and rooms; the harness's), else
-// the agreed profile's (`level`) from the round trip (`rtt_ms`, -1 for none), as GekkoNet will see
-// it in the game (ProfileInputDelay).
-int PickInputDelay(double* rtt_ms, int* level)
+// their profile's from the round trip (`rtt_ms`, -1 for none), as GekkoNet will see it in the
+// game (ProfileInputDelay).
+int PickInputDelay(double* rtt_ms)
 {
-  *rtt_ms = DelayRoundTrip();
-  *level = AgreedLevel();
+  *rtt_ms = OwnRoundTrip();
   return s.net_opts.delay ? std::clamp(*s.net_opts.delay, 0, MAX_INPUT_DELAY) :
-                            ProfileInputDelay(*level, GameRoundTrip(*rtt_ms));
+                            ProfileInputDelay(OwnDelayLevel(), GameRoundTrip(*rtt_ms));
 }
 
 // A change of the player's setting since this session last looked (SetInputDelay) becomes the
@@ -3095,31 +3042,28 @@ bool TakeLiveDelay()
 }
 
 // CPU thread, before the frame's local input: a running game takes a new delay at once, after the
-// player's setting changed or the profile the players agree on did (a peer's state). GekkoNet
-// repeats this player's last input for the frames a higher delay adds, and drops its next inputs
-// for the frames a lower one takes away (they already went out); every machine gets the same
-// inputs either way. Only this player's own inputs are delayed, so the others need not know.
+// player's setting changed. GekkoNet repeats this player's last input for the frames a higher
+// delay adds, and drops its next inputs for the frames a lower one takes away (they already went
+// out); every machine gets the same inputs either way. Only this player's own inputs are delayed, so the others need not know.
 void ApplyLiveDelay()
 {
   const bool changed = TakeLiveDelay();
   if (s.mode != Mode::Network || !s.gekko || s.local_handles.empty())
     return;
-  std::lock_guard<std::recursive_timed_mutex> lk(s.mutex);
-  const int level = AgreedLevel();
-  if (!changed && level == s.agreed_level)
+  if (!changed)
     return;
-  s.agreed_level = level;
+  std::lock_guard<std::recursive_timed_mutex> lk(s.mutex);
+  const int level = OwnDelayLevel();
   if (s.delay_rtt < 0)
-    s.delay_rtt = DelayRoundTrip();
+    s.delay_rtt = OwnRoundTrip();
   const int delay = s.net_opts.delay ? std::clamp(*s.net_opts.delay, 0, MAX_INPUT_DELAY) :
                                        ProfileInputDelay(level, GameRoundTrip(s.delay_rtt));
   if (delay == s.input_delay)
     return;
   INFO_LOG_FMT(BRAWLBACK,
-               "gprb: input delay {} -> {} at frame {} ({}, round trip {:.0f} ms), profile {} "
-               "(asked {})",
+               "gprb: input delay {} -> {} at frame {} ({}, round trip {:.0f} ms), profile {}",
                s.input_delay, delay, s.current_frame, s.net_opts.delay ? "set" : "auto",
-               s.delay_rtt, DelayLevelName(level), DelayLevelName(OwnDelayLevel()));
+               s.delay_rtt, DelayLevelName(level));
   s.input_delay = delay;
   s_current_delay = delay;
   gekko_set_local_delay(s.gekko, s.local_handles[0], static_cast<unsigned char>(delay));
@@ -3235,13 +3179,13 @@ bool CreateGekko(bool stress, int num_players)
       DestroyGekko();
       return false;
     }
-    // Each player sets the delay of their own inputs (Slippi): the set number, else the profile
-    // every player agrees on, from the longest round trip any of them measured now to the
-    // furthest player still in the session, as GekkoNet will see it in the game (GameRoundTrip).
-    // The players' settings may change it mid-game (ApplyLiveDelay).
+    // Each player sets the delay of their own inputs (Slippi): the set number, else their own
+    // profile's, from this machine's round trip now to the furthest player still in the session,
+    // as GekkoNet will see it in the game (GameRoundTrip). The player's setting may change it
+    // mid-game (ApplyLiveDelay).
     TakeLiveDelay();
     double rtt = -1;
-    s.input_delay = PickInputDelay(&rtt, &s.agreed_level);
+    s.input_delay = PickInputDelay(&rtt);
     s.delay_rtt = rtt;
     s_current_delay = s.input_delay;
     gekko_set_local_delay(s.gekko, s.local_handles[0], static_cast<unsigned char>(s.input_delay));
@@ -3249,10 +3193,9 @@ bool CreateGekko(bool stress, int num_players)
     s.local_pad = LocalPad();
     INFO_LOG_FMT(BRAWLBACK,
                  "gprb: input delay {} ({}, round trip {:.0f} ms, in game {:.0f} ms), controller "
-                 "{}, profile {} (asked {})",
+                 "{}, profile {}",
                  s.input_delay, s.net_opts.delay ? "set" : "auto", rtt, GameRoundTrip(rtt),
-                 PadName(s.local_pad), DelayLevelName(s.agreed_level),
-                 DelayLevelName(OwnDelayLevel()));
+                 PadName(s.local_pad), DelayLevelName(OwnDelayLevel()));
     if (s.gone_enabled)
     {
       // A player who leaves a 3-4 player match gets the gone marker as its input from the frame
@@ -6453,7 +6396,6 @@ std::optional<std::string> Connect(const ConnectOptions& options)
   s.init_match = -1;
   s.setup = {};
   s.input_delay = DEFAULT_INPUT_DELAY;
-  s.agreed_level = 0;
   s.delay_rtt = -1;
   s.last_winner = 0xFF;
   s.last_pickers = options.initial_pickers & 0x0F;
@@ -7405,8 +7347,7 @@ picojson::value Status()
     o["selections"] = picojson::value(s.local_selections);
     o["setup_hash"] = picojson::value(fmt::format("{:016x}", s.setup_hash));
     o["input_delay"] = picojson::value(static_cast<double>(s.input_delay));
-    o["delay_profile"] = picojson::value(DelayLevelName(s.agreed_level));
-    o["delay_asked"] = picojson::value(DelayLevelName(OwnDelayLevel()));
+    o["delay_profile"] = picojson::value(DelayLevelName(OwnDelayLevel()));
     picojson::object lobby;
     lobby["game"] = picojson::value(static_cast<double>(NextGame()));
     lobby["lock"] = LockJson(s.local_lock);
@@ -7792,8 +7733,9 @@ void EndReplay(Core::System& system, const std::string& reason, const GameResult
     // The delay and what it cost on this screen, for tuning the profiles from every player's
     // games (2026-10-22: before, only bug reports' logs had them).
     e.perf.delay = s.input_delay;
-    e.perf.delay_profile = DelayLevelName(s.agreed_level);
-    e.perf.delay_asked = DelayLevelName(OwnDelayLevel());
+    // delayAsked dates from when the players agreed on a profile: now the same, each plays their own.
+    e.perf.delay_profile = DelayLevelName(OwnDelayLevel());
+    e.perf.delay_asked = e.perf.delay_profile;
     e.perf.delay_fixed = s.net_opts.delay.has_value();
     e.perf.rtt_start = s.delay_rtt < 0 ? -1 : GameRoundTrip(s.delay_rtt);
     if (s.ping_windows)

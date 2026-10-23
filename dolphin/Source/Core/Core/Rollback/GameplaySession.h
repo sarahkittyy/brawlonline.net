@@ -47,10 +47,10 @@ namespace Gprb::Session
 // Input delay in frames. Each player's setting is a profile (Aggressive, Normal, Smooth; Normal
 // the default), or a number of frames, which applies to that player's own inputs in Direct and
 // rooms only (Ranked and Unranked play Normal for it). A profile picks the delay from the round
-// trip when the game's GekkoNet session starts (ProfileInputDelay). Every player of a match plays
-// the same profile: Aggressive or Smooth when all of them asked for it, else Normal (AgreedLevel),
-// so nobody gets more delay, or deeper rollbacks on their screen, than Normal because of another
-// player (the user's call, 2026-10-22; docs/gameplay-rollback-status.md, "Delay profiles").
+// trip when the game's GekkoNet session starts (ProfileInputDelay). Each player plays their own
+// profile: a player's delay smooths their own screen only (5be14305), so one player's choice costs
+// another nothing (the user's call, 2026-10-22; docs/gameplay-rollback-status.md, "Delay
+// profiles").
 // Normal (AutoInputDelay): 1 frame below 90 ms, 2 below 140 ms, 3 below 190 ms, else 4, in
 // GekkoNet's ping (what players see in game; GameRoundTrip). Low delay is what players feel, but
 // the rollbacks it costs must fit in the frame: a re-run frame is 3.7-4.2 ms on an i7-10700KF, and
@@ -216,7 +216,7 @@ struct ConnectOptions
   // it is part of the setup hash the first barrier compares.
   u32 start_frame = DEFAULT_START_FRAME;
   // This player's input delay in frames (0-MAX_INPUT_DELAY): the harness's, or the player's set
-  // number in Direct and rooms. Unset: the profile, per game (ProfileInputDelay, AgreedLevel).
+  // number in Direct and rooms. Unset: the profile, per game (ProfileInputDelay).
   std::optional<int> delay;
   // The player's profile: -1 Aggressive, 0 Normal, 1 Smooth (DelayLevel).
   int delay_level = 0;

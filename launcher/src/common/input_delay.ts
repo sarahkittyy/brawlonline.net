@@ -5,8 +5,8 @@
  *
  * A profile (0 Normal, the default; -1 Aggressive; -2 Smooth) has Dolphin pick the frames from the
  * ping at the start of each game (`Gprb::Session::ProfileInputDelay`), and in an Other Games room
- * each time someone joins (`Machine::PickInputDelay`). In a P+ game every player plays the same
- * profile: Aggressive or Smooth only when all of them picked it, else Normal (`AgreedLevel`).
+ * each time someone joins (`Machine::PickInputDelay`). Each player plays their own profile: a
+ * player's delay smooths their own screen only.
  * A number of frames (1-4) applies in Direct and rooms only; Ranked and Unranked play Normal for it.
  */
 export const INPUT_DELAY_NORMAL = 0;
