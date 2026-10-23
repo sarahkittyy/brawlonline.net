@@ -127,7 +127,16 @@ def _check_wii_port(players: tuple[Game, ...], port: int, kind: int) -> None:
         se = ppom.read_session(g.c, ppom.find_block(g.c))
         assert se["players"][port]["pv"]["wii"], (g.name, se["players"][port])
         assert _controller_numbers(g)[port] == port + 5, (g.name, _controller_numbers(g))
-        wii, gc = _pad(g, 4 + port), _pad(g, port)
+        # A read can catch the pads as Brawl's pad thread made them from this machine's own
+        # controllers (its Wii Remote is channel 0 whatever its port, the harness's GameCube
+        # controller is in port 1), before the session writes the frame's inputs over them in
+        # the same pass: the game never reads them there, but `wait` ends at an input poll, just
+        # before that pass. Read again.
+        for _ in range(5):
+            wii, gc = _pad(g, 4 + port), _pad(g, port)
+            if wii[0x38] == 0 and wii[0x3F] == kind and gc[0x38] == 0xFF:
+                break
+            time.sleep(0.03)
         assert wii[0x38] == 0 and wii[0x3F] == kind, (g.name, wii.hex())
         assert gc[0x38] == 0xFF, (g.name, gc.hex())
 
