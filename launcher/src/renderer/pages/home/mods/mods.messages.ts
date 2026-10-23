@@ -3,7 +3,7 @@ export const ModsMessages = {
   /** The tab with the number of public rooms, once the room list has loaded. */
   tabLabelWithCount: (count: number) => `Other Games (${count})`,
   intro: () =>
-    "Play any Wii game with rollback (ex. NSMB Wii, REX, Brawl Minus, vBrawl). The whole game is shared. Players can drop in and out whenever they'd like, like plugging in a controller. Everyone in a room needs the exact same game.",
+    "Play any Wii/GCN game with rollback (ex. NSMB Wii, REX, Brawl Minus, vBrawl). The whole game is shared. Players can drop in and out whenever they'd like, like plugging in a controller. Everyone in a room needs the exact same game.",
   yourBuilds: () => "Your games",
   addBuild: () => "Add game",
   addBuildTooltip: () => "A Wii or GameCube disc image.",
@@ -116,7 +116,7 @@ export const ModsMessages = {
   noGame: () => "No game",
   yourRoomLabel: () => "Your room",
   dragTooltip: () => "Drag to another slot to move this player.",
-  betaLine1: () => "Wii Rollback is in beta.",
+  betaLine1: () => "Wii/GCN Rollback is in beta.",
   betaLine2Before: () => "Report issues on the ",
   discord: () => "Discord",
   yourRoomTooltip: () => "You're in this room.",

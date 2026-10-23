@@ -80,7 +80,7 @@ export type ModsViewProps = {
 
 const fileName = (p: string | null) => (p ? p.split(/[\\/]/).pop() ?? p : null);
 
-/** Where Wii Rollback's beta feedback goes. */
+/** Where Wii/GCN Rollback's beta feedback goes. */
 const FEEDBACK_URL = "https://brawlonline.net/discord";
 /** How long the public switch shows a click the room file does not say yet. */
 const PUBLIC_WAIT_MS = 5000;
