@@ -1,4 +1,4 @@
-import { defaultServiceUrls, MAC_DOWNLOAD_URL, PRODUCT_NAME } from "@common/product";
+import { launcherDownloadUrl, MAC_DOWNLOAD_URL, PRODUCT_NAME } from "@common/product";
 import { css } from "@emotion/react";
 import styled from "@emotion/styled";
 import ButtonBase from "@mui/material/ButtonBase";
@@ -13,6 +13,7 @@ import { PersistentNotificationMessages as Messages } from "./persistent_notific
 export const PersistentNotification = React.memo(() => {
   const updateVersion = useAppStore((store) => store.updateVersion);
   const updateReady = useAppStore((store) => store.updateReady);
+  const updateDownloadProgress = useAppStore((store) => store.updateDownloadProgress);
   const updateDownloadFailed = useAppStore((store) => store.updateDownloadFailed);
 
   const { installAppUpdate } = useAppUpdate();
@@ -31,8 +32,11 @@ export const PersistentNotification = React.memo(() => {
     }
   }, [installAppUpdate]);
 
+  // The website's installer for this platform (the update feed's folder is not browsable).
   const handleManualDownload = useCallback(() => {
-    window.electron.shell.openExternal(defaultServiceUrls.launcherUpdates).catch(log.error);
+    const { isMac, isLinux } = window.electron.bootstrap;
+    const url = launcherDownloadUrl(isMac ? "darwin" : isLinux ? "linux" : "win32");
+    window.electron.shell.openExternal(url).catch(log.error);
   }, []);
 
   const handleDownload = useCallback(() => {
@@ -104,7 +108,10 @@ export const PersistentNotification = React.memo(() => {
             justify-content: center;
           `}
         >
-          {Messages.downloadingVersion(updateVersion)}
+          {/* The percentage shows the download is moving (a ~100 MB installer takes a while on a slow line). */}
+          {updateDownloadProgress > 0
+            ? Messages.downloadingVersionProgress(updateVersion, Math.floor(updateDownloadProgress).toString())
+            : Messages.downloadingVersion(updateVersion)}
         </div>
       </Outer>
     );

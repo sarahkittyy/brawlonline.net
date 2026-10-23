@@ -57,7 +57,7 @@ export const defaultServiceUrls = {
    * verification, password reset; proxied to the accounts service).
    */
   website: `https://${BASE_DOMAIN}`,
-  /** electron-updater "generic" feed with the launcher releases (latest.yml etc.); also the manual download page. */
+  /** electron-updater "generic" feed with the launcher releases (latest.yml etc.); not browsable (403). */
   launcherUpdates: `https://${BASE_DOMAIN}/updates/launcher`,
 };
 
@@ -76,6 +76,21 @@ export const MAC_SELF_UPDATE = true;
 
 /** The website's macOS download, offered for updates while MAC_SELF_UPDATE is false. */
 export const MAC_DOWNLOAD_URL = `https://${BASE_DOMAIN}/downloads/BrawlOnline.dmg`;
+
+/**
+ * The website's download of the newest launcher for a platform (process.platform), which the
+ * release workflow keeps current (client.yml's DOWNLOADS): the update bar's "Download manually".
+ */
+export function launcherDownloadUrl(platform: string): string {
+  switch (platform) {
+    case "darwin":
+      return MAC_DOWNLOAD_URL;
+    case "linux":
+      return `https://${BASE_DOMAIN}/downloads/BrawlOnline.AppImage`;
+    default:
+      return `https://${BASE_DOMAIN}/downloads/BrawlOnline-Setup.exe`;
+  }
+}
 
 /**
  * Contract with our Dolphin fork (keep in sync with its CommonPaths.h / settings):
