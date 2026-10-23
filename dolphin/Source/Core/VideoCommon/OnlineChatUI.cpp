@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <deque>
@@ -15,9 +16,11 @@
 #include <set>
 #include <string>
 #include <string_view>
+#include <utility>
 
 #include <fmt/format.h>
 #include <imgui.h>
+#include <imgui_internal.h>
 
 #include "Common/CommonTypes.h"
 #include "Common/Config/Config.h"
@@ -48,6 +51,8 @@ constexpr int GEOMETRY_UNIT = 10000;
 // Frames the box may take to get the keyboard back after a message is sent (SetKeyboardFocusHere
 // activates it a frame or two later); the game's keyboard stays blocked meanwhile.
 constexpr int REFOCUS_FRAMES = 4;
+// The window's ImGui id (its title changes: "Chat (T) - 2 unread").
+constexpr const char* WINDOW_ID = "###OnlineChat";
 
 // Port colours (P1 red, P2 blue, P3 yellow, P4 green), by joining order.
 constexpr std::array<ImU32, 4> NAME_COLORS = {
@@ -80,6 +85,14 @@ constexpr const char* SHORTCUT_PREFIX = "Ctrl+";
 std::atomic<bool> s_activate{false};
 std::atomic<bool> s_typing{false};
 ImFont* s_font = nullptr;
+
+// The chat key's label for the title ("T": Dolphin's default binding, until LoadConfig says).
+std::mutex s_key_mutex;
+std::string s_key_label = "T";
+// The FPS box's right edge this frame (0: none in the corner), and the folded title bar's bottom
+// when it took the corner itself (ImGui lock).
+float s_top_left_right = 0;
+float s_corner_bar_bottom = 0;
 
 // The clipboard (SetClipboard), and ImGui's own functions for when there is none.
 std::mutex s_clipboard_mutex;
@@ -133,6 +146,14 @@ struct UiState
   ImVec2 display{};
   Geometry applied;
   bool interacting = false;
+
+  // Folded to the title bar (at the top of the screen): what the last frame drew; opened by the
+  // chat key while folded, until the box lets go of the keyboard (the saved state stays folded);
+  // folding back next frame. read_up_to: the newest line the open window showed.
+  bool drawn_collapsed = false;
+  bool peek = false;
+  bool fold_back = false;
+  u64 read_up_to = 0;
 
   // Collapsed because every other member is ignored: the group it was decided for, and whether the
   // window is collapsed by that (not by the player) so the next group can open it again.
@@ -316,6 +337,35 @@ bool AllOthersIgnored(const Online::Chat::View& v)
     anyone = true;
   }
   return anyone;
+}
+
+// Other players' messages that came while the window was folded (an ignored player's don't count).
+int UnreadCount()
+{
+  int unread = 0;
+  for (auto it = s.view->lines.rbegin(); it != s.view->lines.rend() && it->id > s.read_up_to; ++it)
+  {
+    if (it->kind != Line::Kind::Message)
+      continue;
+    const Online::Chat::Member* m = FindMember(it->uid);
+    if (!(m ? m->hidden : Online::Chat::IsHidden(it->uid)))
+      ++unread;
+  }
+  return unread;
+}
+
+// "Chat (T)", and "Chat (T) - 2 unread" while folded with messages waiting ("Chat": no key).
+std::string Title(int unread)
+{
+  std::string key;
+  {
+    std::lock_guard lk(s_key_mutex);
+    key = s_key_label;
+  }
+  std::string title = key.empty() ? "Chat" : fmt::format("Chat ({})", key);
+  if (unread > 0)
+    title += fmt::format(" - {} unread", unread);
+  return title;
 }
 
 ImU32 ColorOf(int color)
@@ -842,6 +892,80 @@ void Activate()
   s_activate = true;
 }
 
+std::string KeyLabel(std::string_view expression)
+{
+  constexpr std::string_view SPACES = " \t\r\n";
+  const size_t first = expression.find_first_not_of(SPACES);
+  if (first == std::string_view::npos)
+    return "";
+  expression = expression.substr(first, expression.find_last_not_of(SPACES) - first + 1);
+  // One key: `name` or a bare name, its device qualifier ("DInput/0/Keyboard Mouse:") dropped.
+  std::string_view name;
+  if (expression.size() >= 2 && expression.front() == '`' && expression.back() == '`' &&
+      expression.substr(1, expression.size() - 2).find('`') == std::string_view::npos)
+  {
+    name = expression.substr(1, expression.size() - 2);
+  }
+  else if (std::ranges::all_of(expression, [](char c) {
+             return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') ||
+                    c == '_';
+           }))
+  {
+    name = expression;
+  }
+  else
+  {
+    return std::string(expression);
+  }
+  name = name.substr(name.rfind(':') + 1);
+  if (name.size() == 1 && std::isalnum(static_cast<unsigned char>(name[0])))
+    return std::string(1, static_cast<char>(std::toupper(static_cast<unsigned char>(name[0]))));
+  // DirectInput's (Windows), Quartz's (macOS) and XInput2's (Linux, XKeysymToString) names; a name
+  // that is its own label ("-", "F5", "ESCAPE") is shown as it is.
+  using Name = std::pair<std::string_view, std::string_view>;
+  static constexpr Name NAMES[] = {
+      {"RETURN", "Enter"},   {"Return", "Enter"},      {"TAB", "Tab"},
+      {"SPACE", "Space"},    {"space", "Space"},       {"GRAVE", "`"},
+      {"Tilde", "`"},        {"grave", "`"},           {"MINUS", "-"},
+      {"minus", "-"},        {"EQUALS", "="},          {"equal", "="},
+      {"LBRACKET", "["},     {"bracketleft", "["},     {"RBRACKET", "]"},
+      {"bracketright", "]"}, {"BACKSLASH", "\\"},      {"backslash", "\\"},
+      {"SEMICOLON", ";"},    {"semicolon", ";"},       {"APOSTROPHE", "'"},
+      {"apostrophe", "'"},   {"COMMA", ","},           {"comma", ","},
+      {"PERIOD", "."},       {"period", "."},          {"SLASH", "/"},
+      {"slash", "/"},        {"exclam", "!"},          {"quotedbl", "\""},
+      {"numbersign", "#"},   {"dollar", "$"},          {"percent", "%"},
+      {"ampersand", "&"},    {"parenleft", "("},       {"parenright", ")"},
+      {"asterisk", "*"},     {"plus", "+"},            {"colon", ":"},
+      {"less", "<"},         {"greater", ">"},         {"question", "?"},
+      {"at", "@"},           {"asciicircum", "^"},     {"underscore", "_"},
+      {"braceleft", "{"},    {"bar", "|"},             {"braceright", "}"},
+      {"asciitilde", "~"},
+  };
+  const auto it = std::ranges::find(NAMES, name, &Name::first);
+  return std::string(it != std::end(NAMES) ? it->second : name);
+}
+
+void SetChatKey(std::string_view expression)
+{
+  std::string label = KeyLabel(expression);
+  // Never "##" in the window's title (ImGui reads it as an id).
+  if (label.find("##") != std::string::npos)
+    label.clear();
+  std::lock_guard lk(s_key_mutex);
+  s_key_label = std::move(label);
+}
+
+void SetTopLeftBoxRight(float right)
+{
+  s_top_left_right = right;
+}
+
+float CornerBarBottom()
+{
+  return s_corner_bar_bottom;
+}
+
 bool IsTyping()
 {
   return s_typing;
@@ -924,75 +1048,146 @@ void DisplayFrame(float scale)
     OnNewView();
   }
   const bool in_match = Online::Rooms::GetScreen() == Online::Rooms::Screen::Match;
-  const bool shown = s.view && s.view->active && !Config::Get(Config::ONLINE_DISABLE_CHAT) &&
-                     (!in_match || Config::Get(Config::ONLINE_CHAT_IN_MATCHES));
+  s_corner_bar_bottom = 0;
+  const bool shown = s.view && s.view->active && !Config::Get(Config::ONLINE_DISABLE_CHAT);
   if (!shown)
   {
     s_activate = false;
     StopTyping();
+    // Opened by the chat key when it went: folded again when it comes back.
+    if (s.peek)
+    {
+      s.peek = false;
+      s.fold_back = true;
+    }
     return;
   }
 
   const ImGuiIO& io = ImGui::GetIO();
   const u64 now = Common::Timer::NowMs();
   const float font_px = FontPx(io.DisplaySize.y, scale) * TextSizePercent() / 100.0f;
+  // PushFont's size is before the style's scale (the backbuffer scale).
+  const float main_scale = ImGui::GetStyle().FontScaleMain > 0 ? ImGui::GetStyle().FontScaleMain : 1.0f;
+  ImGui::PushFont(s_font, font_px / main_scale);
+
+  // Folded or not as ImGui will draw it unless told otherwise: a click on the collapse arrow last
+  // frame takes effect in this Begin. That is the player's: the chat key's opening ends.
+  const ImGuiWindow* const window = ImGui::FindWindowByName(WINDOW_ID);
+  bool collapsed = window && window->Collapsed != window->WantCollapseToggle;
+  if (window && window->WantCollapseToggle)
+    s.peek = false;
 
   // Where: the saved place (fractions of the window), else the default; again when the window
   // changes size.
+  bool place = false;
   if (!s.placed || io.DisplaySize.x != s.display.x || io.DisplaySize.y != s.display.y)
   {
     s.display = io.DisplaySize;
     s.applied =
         LoadGeometry(io.DisplaySize).value_or(DefaultGeometry(io.DisplaySize, scale, font_px));
-    ImGui::SetNextWindowPos(s.applied.pos, ImGuiCond_Always);
-    ImGui::SetNextWindowSize(s.applied.size, ImGuiCond_Always);
-    ImGui::SetNextWindowCollapsed(s.applied.collapsed || s.auto_collapsed, ImGuiCond_Always);
+    if (!Config::Get(Config::ONLINE_CHAT_IN_MATCHES))
+    {
+      // "Show during matches" was turned off, an option there is no more: folded instead.
+      s.applied.collapsed = true;
+      Config::DeleteKey(Config::GetActiveLayerForConfig(Config::ONLINE_CHAT_IN_MATCHES),
+                        Config::ONLINE_CHAT_IN_MATCHES);
+      SaveGeometry(s.applied, io.DisplaySize);
+    }
+    collapsed = (s.applied.collapsed || s.auto_collapsed) && !s.peek;
     s.placed = true;
+    place = true;
+  }
+  if (s.fold_back)
+  {
+    collapsed = true;
+    s.fold_back = false;
   }
   if (s.collapse)
   {
     // Not saved: the next group opens as the player left it.
-    ImGui::SetNextWindowCollapsed(true, ImGuiCond_Always);
+    collapsed = true;
     s.auto_collapsed = true;
     s.collapse = false;
+    s.peek = false;
   }
   else if (s.expand)
   {
-    ImGui::SetNextWindowCollapsed(s.applied.collapsed, ImGuiCond_Always);
+    collapsed = s.applied.collapsed && !s.peek;
     s.auto_collapsed = false;
     s.expand = false;
   }
   if (s_activate.exchange(false))
   {
-    ImGui::SetNextWindowCollapsed(false, ImGuiCond_Always);
+    // Folded: open until the box lets go of the keyboard.
+    if (collapsed)
+      s.peek = true;
+    collapsed = false;
     // The hotkey's own key press must not land in the box.
     ImGui::GetIO().ClearInputKeys();
     s.focus_input = true;
     s.refocus_frames = REFOCUS_FRAMES;
   }
-  ImGui::SetNextWindowSizeConstraints(ImVec2(8.0f * font_px, 5.0f * font_px), io.DisplaySize);
+
+  const int unread = collapsed ? UnreadCount() : 0;
+  const std::string title = Title(unread);
+  ImGui::SetNextWindowCollapsed(collapsed, ImGuiCond_Always);
+  if (collapsed)
+  {
+    // The title bar alone, as wide as its text, at the top of the screen right of the FPS box
+    // (PerformanceMetrics' 8 px from the edges), as a taskbar's entry.
+    const ImGuiStyle& style = ImGui::GetStyle();
+    const float pad = 8.0f * scale;
+    const float w = 3.0f * style.FramePadding.x + ImGui::GetFontSize() + style.ItemInnerSpacing.x +
+                    ImGui::CalcTextSize(title.c_str()).x;
+    ImGui::SetNextWindowPos(ImVec2(s_top_left_right > 0 ? s_top_left_right + pad : pad, pad),
+                            ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(std::ceil(w), ImGui::GetFrameHeight()), ImGuiCond_Always);
+  }
+  else
+  {
+    // Opened: back where the player put it.
+    if (place || s.drawn_collapsed)
+    {
+      ImGui::SetNextWindowPos(s.applied.pos, ImGuiCond_Always);
+      ImGui::SetNextWindowSize(s.applied.size, ImGuiCond_Always);
+    }
+    ImGui::SetNextWindowSizeConstraints(ImVec2(8.0f * font_px, 5.0f * font_px), io.DisplaySize);
+  }
 
   // Not while the mouse is over the window or the player holds it (a press on a name, the
-  // scrollbar or the resize grip, or a drag that left the window).
-  const bool faded = in_match && !s.was_typing && !s.hovered && !s.interacting &&
+  // scrollbar or the resize grip, or a drag that left the window), nor folded.
+  const bool faded = in_match && !collapsed && !s.was_typing && !s.hovered && !s.interacting &&
                      now - s.view->last_message_ms >= s_fade_after_ms &&
                      !ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId);
   if (faded)
     ImGui::PushStyleVar(ImGuiStyleVar_Alpha, FADED_ALPHA);
   ImGui::SetNextWindowBgAlpha(in_match ? 0.55f : 0.85f);
-  // PushFont's size is before the style's scale (the backbuffer scale).
-  const float main_scale = ImGui::GetStyle().FontScaleMain > 0 ? ImGui::GetStyle().FontScaleMain : 1.0f;
-  ImGui::PushFont(s_font, font_px / main_scale);
 
-  constexpr ImGuiWindowFlags flags = ImGuiWindowFlags_NoFocusOnAppearing |
-                                     ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_MenuBar |
-                                     ImGuiWindowFlags_NoNav;
+  // Folded, it stays at the top.
+  const ImGuiWindowFlags flags =
+      ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoSavedSettings |
+      ImGuiWindowFlags_MenuBar | ImGuiWindowFlags_NoNav |
+      (collapsed ? ImGuiWindowFlags_NoMove : ImGuiWindowFlags_None);
   bool typing = false;
-  const bool open = ImGui::Begin("Chat###OnlineChat", nullptr, flags);
+  const bool open = ImGui::Begin(fmt::format("{}{}", title, WINDOW_ID).c_str(), nullptr, flags);
+  // A double click on the title bar folds or unfolds it in this Begin, not foreseen above (the
+  // player's too). Unfolded from the top: where the player put it (its size from the next frame).
+  const bool now_collapsed = ImGui::IsWindowCollapsed();
+  if (now_collapsed != collapsed)
+  {
+    s.peek = false;
+    if (!now_collapsed)
+    {
+      ImGui::SetWindowPos(s.applied.pos, ImGuiCond_Always);
+      ImGui::SetWindowSize(s.applied.size, ImGuiCond_Always);
+    }
+  }
   if (open)
   {
-    // Opened by the player (or the hotkey): it is theirs again.
-    s.auto_collapsed = false;
+    // Opened by the player (or the hotkey, for good): it is theirs again.
+    if (!s.peek)
+      s.auto_collapsed = false;
+    s.read_up_to = s.newest_line;
 
     if (ImGui::BeginMenuBar())
     {
@@ -1006,13 +1201,6 @@ void DisplayFrame(float scale)
       {
         if (s_recording)
           s_frame.options_menu_open = true;
-        bool in_matches = Config::Get(Config::ONLINE_CHAT_IN_MATCHES);
-        if (ImGui::Checkbox("Show during matches", &in_matches))
-        {
-          Config::SetBaseOrCurrent(Config::ONLINE_CHAT_IN_MATCHES, in_matches);
-          Config::Save();
-        }
-        ImGui::Separator();
         DrawTextSizeItems();
         ImGui::EndMenu();
       }
@@ -1104,9 +1292,27 @@ void DisplayFrame(float scale)
     s_frame.focused = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
     s_frame.alpha = ImGui::GetStyle().Alpha;
     s_frame.font_px = font_px;
+    s_frame.title = title;
+    s_frame.unread = unread;
   }
-  const Geometry now_geometry{ImGui::GetWindowPos(), ImGui::GetWindowSize(),
-                              s.auto_collapsed ? s.applied.collapsed : ImGui::IsWindowCollapsed()};
+  // Folded, the window is at the top: the place it opens at stays the saved one. The fold is saved
+  // at once (a click on the arrow is no drag), unless it is for ignored players or the chat key
+  // opened it.
+  Geometry now_geometry = s.applied;
+  if (!now_collapsed)
+  {
+    now_geometry.pos = ImGui::GetWindowPos();
+    now_geometry.size = ImGui::GetWindowSize();
+  }
+  if (!s.auto_collapsed && !s.peek && now_collapsed != s.applied.collapsed)
+  {
+    s.applied.collapsed = now_collapsed;
+    SaveGeometry(s.applied, io.DisplaySize);
+  }
+  now_geometry.collapsed = s.applied.collapsed;
+  s.drawn_collapsed = now_collapsed;
+  if (now_collapsed && s_top_left_right <= 0)
+    s_corner_bar_bottom = ImGui::GetWindowPos().y + ImGui::GetWindowSize().y;
   // Hovered also while one of its items is held: without that, a press on a name (or anywhere that
   // makes an item active) read as the mouse leaving, and a faded window flashed back to faded
   // for as long as the button was down.
@@ -1138,8 +1344,17 @@ void DisplayFrame(float scale)
   const bool guard = s.was_typing && !typing &&
                      (ImGui::IsKeyDown(ImGuiKey_Enter) || ImGui::IsKeyDown(ImGuiKey_KeypadEnter) ||
                       ImGui::IsKeyDown(ImGuiKey_Escape));
+  const bool was_typing = s.was_typing;
   s.was_typing = typing || guard;
   s_typing = s.was_typing;
+  // The box let go of the keyboard after the chat key opened the folded window: folded again,
+  // unless that was a click in the window (a name, the lines: the player wants it open).
+  if (s.peek && was_typing && !s.was_typing)
+  {
+    s.peek = false;
+    s.fold_back = !(s.hovered && (ImGui::IsMouseDown(ImGuiMouseButton_Left) ||
+                                  ImGui::IsMouseReleased(ImGuiMouseButton_Left)));
+  }
   ciface::Core::SetKeyboardMouseBlocked(s.was_typing);
 }
 }  // namespace

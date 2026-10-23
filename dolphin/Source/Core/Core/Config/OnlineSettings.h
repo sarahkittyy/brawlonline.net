@@ -63,8 +63,9 @@ extern const Info<bool> ONLINE_MUSIC;
 // Replays record it (INFO build.pplus), so the launcher plays each on its own release's files.
 extern const Info<std::string> ONLINE_PPLUS_RELEASE;
 
-// The chat window (docs/chat-protocol.md §6): shown while a match runs, and where it was put
-// ("x y w h collapsed", the first four as fractions of the window; empty: the default place).
+// The chat window (docs/chat-protocol.md §6): where it was put and whether it is folded to its
+// title bar ("2 x y w h collapsed", the four as fractions of the window; empty: the default place).
+// ChatInMatches: the old "Show during matches"; off is read once as folded, and the key deleted.
 extern const Info<bool> ONLINE_CHAT_IN_MATCHES;
 extern const Info<std::string> ONLINE_CHAT_WINDOW;
 // The chat's text size, a percentage of its usual size (Options > Increase / Decrease font size).

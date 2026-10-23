@@ -114,7 +114,7 @@ void PerformanceMetrics::SetLatestFrameBufferSize(u32 width, u32 height)
   m_frame_buffer_size.store(FrameBufferSize{width, height}, std::memory_order_relaxed);
 }
 
-float PerformanceMetrics::DrawImGuiStats(const float backbuffer_scale)
+PerformanceMetrics::TopLeftBox PerformanceMetrics::DrawImGuiStats(const float backbuffer_scale)
 {
   m_vps_counter.UpdateStats();
   m_fps_counter.UpdateStats();
@@ -160,7 +160,7 @@ float PerformanceMetrics::DrawImGuiStats(const float backbuffer_scale)
   float window_y_left = window_padding;
   float window_x = display_size.x - window_padding;
   float window_x_left = window_padding;
-  float top_left_bottom = 0.f;
+  TopLeftBox top_left;
 
   const auto clamp_window_position = [&] {
     const ImVec2 position = ImGui::GetWindowPos();
@@ -313,7 +313,10 @@ float PerformanceMetrics::DrawImGuiStats(const float backbuffer_scale)
       // OSD messages (the netplay ping) go under the box while it sits in its corner, as in Slippi.
       const ImVec2 position = ImGui::GetWindowPos();
       if (std::abs(position.x - window_x_left) < 1.f && std::abs(position.y - window_y_left) < 1.f)
-        top_left_bottom = position.y + ImGui::GetWindowHeight();
+      {
+        top_left.right = position.x + ImGui::GetWindowWidth();
+        top_left.bottom = position.y + ImGui::GetWindowHeight();
+      }
       if (g_ActiveConfig.bShowFPS)
         ImGui::TextColored(ImVec4(r, g, b, 1.0f), "FPS:%7.2lf", fps);
       if (g_ActiveConfig.bShowFTimes)
@@ -380,5 +383,5 @@ float PerformanceMetrics::DrawImGuiStats(const float backbuffer_scale)
   }
 
   ImGui::PopStyleVar(2);
-  return top_left_bottom;
+  return top_left;
 }

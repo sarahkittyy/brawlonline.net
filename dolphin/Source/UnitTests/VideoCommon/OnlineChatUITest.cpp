@@ -52,18 +52,23 @@ std::string Json(const picojson::object& o)
 class SavedLayer final : public Config::ConfigLayerLoader
 {
 public:
-  explicit SavedLayer(std::optional<std::string>* chat_text_size)
-      : ConfigLayerLoader(Config::LayerType::Base), m_chat_text_size(chat_text_size)
+  explicit SavedLayer(std::optional<std::string>* chat_text_size,
+                      std::optional<std::string>* chat_window = nullptr)
+      : ConfigLayerLoader(Config::LayerType::Base), m_chat_text_size(chat_text_size),
+        m_chat_window(chat_window)
   {
   }
   void Load(Config::Layer*) override {}
   void Save(Config::Layer* layer) override
   {
     *m_chat_text_size = layer->Get<std::string>(Config::ONLINE_CHAT_TEXT_SIZE.GetLocation());
+    if (m_chat_window)
+      *m_chat_window = layer->Get<std::string>(Config::ONLINE_CHAT_WINDOW.GetLocation());
   }
 
 private:
   std::optional<std::string>* m_chat_text_size;
+  std::optional<std::string>* m_chat_window;
 };
 
 class OnlineChatUITest : public ::testing::Test
@@ -121,7 +126,7 @@ protected:
   // A room with Bob, who has said something.
   void JoinWithBob()
   {
-    const CC::Identity bob_id(Fill(2));
+    const CC::Identity& bob_id = m_bob_id;
     const CC::GroupKey bob_kx = CC::GroupKeyFromSecret(Fill(102));
     const auto bob = Member(BOB, "bob", CC::ToHex(bob_id.PublicKey()), bob_kx.public_key,
                             bob_id.Sign(CC::KxSigMessage(GROUP, bob_kx.public_key)));
@@ -137,16 +142,21 @@ protected:
         my_kx = CC::FromHexFixed<32>(o["kx"].get<std::string>());
     }
     ASSERT_TRUE(my_kx);
-    const std::string text = "hello";
-    const CC::Sig64 sig = bob_id.Sign(CC::MessageSigMessage(GROUP, BOB, 1, text));
-    const auto key = *CC::PairKey(bob_kx, *my_kx, GROUP);
+    m_bob_key = *CC::PairKey(bob_kx, *my_kx, GROUP);
+    BobSays("hello");
+  }
+
+  void BobSays(const std::string& text)
+  {
+    const u64 seq = ++m_bob_seq;
+    const CC::Sig64 sig = m_bob_id.Sign(CC::MessageSigMessage(GROUP, BOB, seq, text));
     picojson::object msg;
     msg["type"] = picojson::value("chat-msg");
     msg["group"] = picojson::value(GROUP);
     msg["from"] = picojson::value(BOB);
-    msg["box"] = picojson::value(CC::ToHex(CC::Seal(key, CC::RandomNonce(),
+    msg["box"] = picojson::value(CC::ToHex(CC::Seal(m_bob_key, CC::RandomNonce(),
                                                     CC::AssociatedData(GROUP, BOB, ME),
-                                                    CC::EncodePlaintext(1, sig, text))));
+                                                    CC::EncodePlaintext(seq, sig, text))));
     ASSERT_TRUE(Chat::OnServerMessage(Json(msg)));
   }
 
@@ -187,9 +197,23 @@ protected:
     Frame();
   }
 
+  // The title bar's collapse arrow (on the left, FramePadding in): clicked, and two frames after.
+  void ClickArrow()
+  {
+    const UI::TestFrame& f = m_frames.back();
+    const ImGuiStyle& style = ImGui::GetStyle();
+    Click(f.x + style.FramePadding.x + f.font_px / 2, f.y + style.FramePadding.y + f.font_px / 2,
+          0);
+    Frame();
+    Frame();
+  }
+
   std::string m_dir;
   std::string m_my_id;
   std::vector<UI::TestFrame> m_frames;
+  const CC::Identity m_bob_id{Fill(2)};
+  CC::Key32 m_bob_key{};
+  u64 m_bob_seq = 0;
 };
 }  // namespace
 
@@ -399,4 +423,232 @@ TEST_F(OnlineChatUITest, OptionsMenuChangesTheTextSizeAndKeepsIt)
   Config::SetBaseOrCurrent(Config::ONLINE_CHAT_TEXT_SIZE, 0);
   Frame();
   EXPECT_NEAR(m_frames.back().font_px, base * 0.7f, 0.01f);
+}
+
+// The collapse arrow folds the window to its title bar at the top of the screen, right of the FPS
+// box, saying how many messages came meanwhile; the arrow again opens it where it was. The fold is
+// saved ([Online] ChatWindow), so the next game's window starts folded.
+TEST_F(OnlineChatUITest, FoldingPutsTheTitleBarAtTheTopWithUnreadMessages)
+{
+  std::optional<std::string> text_size, window;
+  Config::AddLayer(std::make_unique<SavedLayer>(&text_size, &window));
+  struct ConfigBack
+  {
+    ~ConfigBack()
+    {
+      Config::Shutdown();
+      UI::SetTopLeftBoxRight(0);
+    }
+  } config_back;
+  UI::SetTopLeftBoxRight(100);
+
+  JoinWithBob();
+  for (int i = 0; i < 5; ++i)
+    Frame();
+  const UI::TestFrame open = m_frames.back();
+  ASSERT_FALSE(open.collapsed);
+  EXPECT_EQ(open.title, "Chat (T)");
+  EXPECT_EQ(open.unread, 0);
+
+  ClickArrow();
+  UI::TestFrame f = m_frames.back();
+  ASSERT_TRUE(f.collapsed);
+  EXPECT_EQ(f.x, 108.0f);  // 8 px right of the FPS box
+  EXPECT_EQ(f.y, 8.0f);
+  EXPECT_LT(f.w, open.w / 2);
+  EXPECT_LT(f.h, open.h / 2);
+  EXPECT_EQ(f.title, "Chat (T)");
+  ASSERT_TRUE(window);
+  EXPECT_TRUE(window->ends_with(" 1")) << *window;
+  const float narrow = f.w;
+
+  BobSays("one");
+  BobSays("two");
+  Frame();
+  f = Frame();
+  EXPECT_TRUE(f.collapsed);
+  EXPECT_EQ(f.unread, 2);
+  EXPECT_EQ(f.title, "Chat (T) - 2 unread");
+  EXPECT_EQ(f.x, 108.0f);
+  EXPECT_GT(f.w, narrow);  // the whole title shows
+
+  // With no FPS box, the corner itself, and the OSD messages go under it.
+  UI::SetTopLeftBoxRight(0);
+  f = Frame();
+  EXPECT_EQ(f.x, 8.0f);
+  EXPECT_EQ(UI::CornerBarBottom(), f.y + f.h);
+  UI::SetTopLeftBoxRight(100);
+  Frame();
+  EXPECT_EQ(UI::CornerBarBottom(), 0.0f);
+
+  // Dragging the folded bar doesn't move it.
+  ImGuiIO& io = ImGui::GetIO();
+  f = Frame();
+  io.AddMousePosEvent(f.x + f.w - 4, f.y + f.h / 2);
+  Frame();
+  io.AddMouseButtonEvent(0, true);
+  Frame();
+  io.AddMousePosEvent(400, 300);
+  Frame();
+  Frame();
+  io.AddMouseButtonEvent(0, false);
+  Frame();
+  f = Frame();
+  EXPECT_TRUE(f.collapsed);
+  EXPECT_EQ(f.x, 108.0f);
+  EXPECT_EQ(f.y, 8.0f);
+
+  ClickArrow();
+  f = m_frames.back();
+  EXPECT_FALSE(f.collapsed);
+  EXPECT_EQ(f.x, open.x);
+  EXPECT_EQ(f.y, open.y);
+  EXPECT_EQ(f.w, open.w);
+  EXPECT_EQ(f.h, open.h);
+  EXPECT_EQ(f.unread, 0);
+  EXPECT_EQ(f.title, "Chat (T)");
+  EXPECT_TRUE(window->ends_with(" 0")) << *window;
+
+  // Read: folding again counts from here.
+  ClickArrow();
+  f = m_frames.back();
+  EXPECT_TRUE(f.collapsed);
+  EXPECT_EQ(f.unread, 0);
+  EXPECT_EQ(f.title, "Chat (T)");
+
+  // The next game's window (the same Dolphin.ini) starts folded at the top, and opens where it was.
+  UI::ResetForTesting();
+  ImGui::DestroyContext();
+  ImGui::CreateContext();
+  ImGui::GetIO().IniFilename = nullptr;
+  ImGui::GetIO().DisplaySize = ImVec2(1280, 720);
+  ImGui::GetIO().BackendFlags |= ImGuiBackendFlags_RendererHasTextures;
+  ImGui::GetIO().Fonts->AddFontDefault();
+  for (int i = 0; i < 3; ++i)
+    f = Frame();
+  EXPECT_TRUE(f.collapsed);
+  EXPECT_EQ(f.x, 108.0f);
+  EXPECT_EQ(f.y, 8.0f);
+  ClickArrow();
+  f = m_frames.back();
+  EXPECT_FALSE(f.collapsed);
+  EXPECT_NEAR(f.x, open.x, 1.0f);
+  EXPECT_NEAR(f.y, open.y, 1.0f);
+  EXPECT_NEAR(f.w, open.w, 1.0f);
+  EXPECT_NEAR(f.h, open.h, 1.0f);
+}
+
+// The chat key on a folded window opens it with the box focused; leaving the box folds it again,
+// and the saved state stays folded. On an open window it changes nothing.
+TEST_F(OnlineChatUITest, ChatKeyOpensAFoldedWindowUntilTypingEnds)
+{
+  std::optional<std::string> text_size, window;
+  Config::AddLayer(std::make_unique<SavedLayer>(&text_size, &window));
+  struct ConfigBack
+  {
+    ~ConfigBack() { Config::Shutdown(); }
+  } config_back;
+
+  JoinWithBob();
+  for (int i = 0; i < 5; ++i)
+    Frame();
+  const UI::TestFrame open = m_frames.back();
+  ClickArrow();
+  ASSERT_TRUE(m_frames.back().collapsed);
+  ASSERT_TRUE(window && window->ends_with(" 1"));
+
+  ImGuiIO& io = ImGui::GetIO();
+  const auto escape = [&] {
+    io.AddKeyEvent(ImGuiKey_Escape, true);
+    Frame();
+    Frame();
+    io.AddKeyEvent(ImGuiKey_Escape, false);
+    for (int i = 0; i < 4; ++i)
+      Frame();
+    return m_frames.back();
+  };
+
+  UI::Activate();
+  UI::TestFrame f;
+  for (int i = 0; i < 4; ++i)
+    f = Frame();
+  EXPECT_FALSE(f.collapsed);
+  EXPECT_EQ(f.x, open.x);
+  EXPECT_EQ(f.w, open.w);
+  EXPECT_TRUE(f.typing);
+  EXPECT_TRUE(window->ends_with(" 1")) << *window;
+
+  f = escape();
+  EXPECT_FALSE(f.typing);
+  EXPECT_TRUE(f.collapsed);
+  EXPECT_EQ(f.y, 8.0f);
+  EXPECT_TRUE(window->ends_with(" 1")) << *window;
+
+  // Open, the key leaves it open.
+  ClickArrow();
+  ASSERT_FALSE(m_frames.back().collapsed);
+  EXPECT_TRUE(window->ends_with(" 0")) << *window;
+  UI::Activate();
+  for (int i = 0; i < 4; ++i)
+    f = Frame();
+  EXPECT_TRUE(f.typing);
+  f = escape();
+  EXPECT_FALSE(f.typing);
+  EXPECT_FALSE(f.collapsed);
+  EXPECT_TRUE(window->ends_with(" 0")) << *window;
+}
+
+// The old "Show during matches" turned off reads as folded, once.
+TEST_F(OnlineChatUITest, ShowDuringMatchesOffStartsFolded)
+{
+  std::optional<std::string> text_size, window;
+  Config::AddLayer(std::make_unique<SavedLayer>(&text_size, &window));
+  struct ConfigBack
+  {
+    ~ConfigBack() { Config::Shutdown(); }
+  } config_back;
+  Config::SetBaseOrCurrent(Config::ONLINE_CHAT_IN_MATCHES, false);
+
+  JoinWithBob();
+  UI::TestFrame f;
+  for (int i = 0; i < 3; ++i)
+    f = Frame();
+  EXPECT_TRUE(f.collapsed);
+  EXPECT_EQ(f.unread, 1);  // Bob's hello
+  EXPECT_EQ(f.title, "Chat (T) - 1 unread");
+  EXPECT_TRUE(Config::Get(Config::ONLINE_CHAT_IN_MATCHES));  // the key is gone
+  ASSERT_TRUE(window);
+  EXPECT_TRUE(window->ends_with(" 1")) << *window;
+}
+
+TEST_F(OnlineChatUITest, TitleNamesTheChatKey)
+{
+  struct KeyBack
+  {
+    ~KeyBack() { UI::SetChatKey("T"); }
+  } key_back;
+  JoinWithBob();
+  UI::SetChatKey("`RETURN`");
+  EXPECT_EQ(Frame().title, "Chat (Enter)");
+  UI::SetChatKey("");
+  EXPECT_EQ(Frame().title, "Chat");
+  UI::SetChatKey("`numbersign`");
+  EXPECT_EQ(Frame().title, "Chat (#)");
+}
+
+TEST(OnlineChatKeyLabel, NamesTheKeyAsTheLauncherDoes)
+{
+  EXPECT_EQ(UI::KeyLabel("T"), "T");
+  EXPECT_EQ(UI::KeyLabel("`T`"), "T");
+  EXPECT_EQ(UI::KeyLabel("`t`"), "T");
+  EXPECT_EQ(UI::KeyLabel(" `RETURN` "), "Enter");
+  EXPECT_EQ(UI::KeyLabel("`Return`"), "Enter");
+  EXPECT_EQ(UI::KeyLabel("`DInput/0/Keyboard Mouse:GRAVE`"), "`");
+  EXPECT_EQ(UI::KeyLabel("`slash`"), "/");
+  EXPECT_EQ(UI::KeyLabel("`/`"), "/");
+  EXPECT_EQ(UI::KeyLabel("`numbersign`"), "#");
+  EXPECT_EQ(UI::KeyLabel("`space`"), "Space");
+  EXPECT_EQ(UI::KeyLabel("F5"), "F5");
+  EXPECT_EQ(UI::KeyLabel(""), "");
+  EXPECT_EQ(UI::KeyLabel("@(`Ctrl`+`T`)"), "@(`Ctrl`+`T`)");
 }

@@ -46,8 +46,13 @@ public:
   void SetLatestFrameBufferSize(u32 width, u32 height);
 
   // ImGui Functions
-  // Returns the bottom edge of the top-left FPS box, or 0 when there is none there.
-  float DrawImGuiStats(const float backbuffer_scale);
+  // The FPS box in the top-left corner: its right and bottom edges, both 0 when none is there.
+  struct TopLeftBox
+  {
+    float right = 0.f;
+    float bottom = 0.f;
+  };
+  TopLeftBox DrawImGuiStats(const float backbuffer_scale);
 
 private:
   struct FrameBufferSize

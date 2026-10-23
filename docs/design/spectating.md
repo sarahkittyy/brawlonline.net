@@ -272,7 +272,7 @@ So spectator chat is **in the clear to mm, and encrypted on the wire by TLS** (i
 - mm refuses to let a player watch a stream they are playing in ("You're playing in this game."). The launcher shows no Watch button on the player's own rows, so they can't read it from the launcher either. Players' own chat stays end-to-end encrypted between them; spectators never get it.
 - The rule can't stop a friend from relaying spectator chat to a player some other way. That's out of scope.
 
-**Where it's drawn:** in the playback Dolphin, with the same `OnlineChatUI` window players know: the same look, hotkey, typing, Ignore/Report menu, and drag, resize and collapse. "Show during matches" doesn't apply, because spectating is the match.
+**Where it's drawn:** in the playback Dolphin, with the same `OnlineChatUI` window players know: the same look, hotkey, typing, Ignore/Report menu, and drag, resize and folding to the title bar at the top.
 - The playback Dolphin stays without credentials and without an internet connection (`replays.md` §6.2). The launcher owns the WebSocket and passes chat to Dolphin over a **loopback-only** channel: `127.0.0.1`, a random port, and a per-launch token on Dolphin's command line, so no other program can inject lines.
 - Lines the spectator types go back the same way, and the launcher sends them.
 - Ignoring uses the same shared `chat-hidden.json`. The launcher reads it from the netplay User folder, and Dolphin's Ignore goes back to the launcher, which writes it as today.

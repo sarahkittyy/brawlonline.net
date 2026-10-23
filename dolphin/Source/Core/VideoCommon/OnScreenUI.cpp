@@ -3,6 +3,8 @@
 
 #include "VideoCommon/OnScreenUI.h"
 
+#include <algorithm>
+
 #include "Common/CommonPaths.h"
 #include "Common/EnumMap.h"
 #include "Common/FileUtil.h"
@@ -464,9 +466,11 @@ void OnScreenUI::Finalize()
   auto lock = GetImGuiLock();
 
   auto& perf_metrics = Core::System::GetInstance().GetPerfMetrics();
-  const float top_left_bottom = perf_metrics.DrawImGuiStats(m_backbuffer_scale);
+  const auto top_left = perf_metrics.DrawImGuiStats(m_backbuffer_scale);
+  // The folded chat window sits right of the FPS box, or in its corner with the messages under it.
+  OnlineChatUI::SetTopLeftBoxRight(top_left.right);
   DrawDebugText();
-  OSD::DrawMessages(top_left_bottom);
+  OSD::DrawMessages(std::max(top_left.bottom, OnlineChatUI::CornerBarBottom()));
   DrawChallengesAndLeaderboards();
   ImGui::Render();
 

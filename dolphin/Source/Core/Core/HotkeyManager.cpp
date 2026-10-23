@@ -22,6 +22,7 @@
 #include "InputCommon/ControllerEmu/ControlGroup/Buttons.h"
 #include "InputCommon/ControllerEmu/ControlGroup/ControlGroup.h"
 #include "InputCommon/ControllerInterface/ControllerInterface.h"
+#include "VideoCommon/OnlineChatUI.h"
 
 // clang-format off
 constexpr std::array<const char*, NUM_HOTKEYS> s_hotkey_labels{{
@@ -301,6 +302,8 @@ void LoadConfig()
     ChatHotkey().SetExpression(chat_key);
     s_config.GetController(0)->UpdateReferences(g_controller_interface);
   }
+  // The chat window's title names it: "Chat (T)".
+  VideoCommon::OnlineChatUI::SetChatKey(ChatHotkey().GetExpression());
 }
 
 void SaveChatKey()

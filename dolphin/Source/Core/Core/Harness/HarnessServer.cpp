@@ -2018,6 +2018,8 @@ Result CmdChatUi(const Args& args)
     o["focused"] = picojson::value(f.focused);
     o["alpha"] = num(f.alpha);
     o["typing"] = picojson::value(f.typing);
+    o["title"] = picojson::value(f.title);
+    o["unread"] = num(f.unread);
     o["member_menu"] = picojson::value(f.member_menu_open ? f.menu_uid : std::string());
     o["ignore_item"] = picojson::value(picojson::array{num(f.ignore_item[0]), num(f.ignore_item[1]),
                                                        num(f.ignore_item[2]), num(f.ignore_item[3])});

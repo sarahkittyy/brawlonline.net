@@ -13,6 +13,7 @@
 #include <array>
 #include <functional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 struct ImFont;
@@ -37,8 +38,21 @@ void SetFont(ImFont* font);
 // Draws the window if the player is in a chat group and chat is not disabled ([Online]
 // DisableChat). Under the ImGui lock, once per frame.
 void Display(float scale);
-// The "Activate NetPlay Chat" hotkey: open the box (any thread).
+// The "Activate NetPlay Chat" hotkey: open the box (any thread). A folded window opens until the
+// box lets go of the keyboard.
 void Activate();
+// The hotkey's binding (HotkeyManagerEmu::LoadConfig), for the title bar's "Chat (T)". Any thread.
+void SetChatKey(std::string_view expression);
+// What the title shows for a binding: the key's label for a single key of any input backend
+// ("`T`", "RETURN", "`DInput/0/Keyboard Mouse:GRAVE`" read T, Enter, `), the expression itself for
+// anything else, "" for none. The launcher's chatKeyLabel (launcher/src/common/chat_key.ts).
+std::string KeyLabel(std::string_view expression);
+// Folded, the window is only its title bar, at the top of the screen right of the FPS box. Before
+// Display, each frame: that box's right edge, 0 when there is none in the top-left corner.
+void SetTopLeftBoxRight(float right);
+// After Display: the folded title bar's bottom edge when it sits in the top-left corner itself (no
+// FPS box there), for the OSD messages to go under it; else 0.
+float CornerBarBottom();
 // The box has the keyboard (any thread): the game gets no keyboard or mouse input meanwhile.
 bool IsTyping();
 
@@ -71,6 +85,8 @@ struct TestFrame
   bool focused = false;
   float alpha = 1;
   bool typing = false;
+  std::string title;  // the title bar's text
+  int unread = 0;     // messages that came while it was folded
 };
 // Any thread. At most the last 600 frames are kept.
 void SetRecording(bool on);
