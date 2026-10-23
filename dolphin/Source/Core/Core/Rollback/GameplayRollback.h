@@ -284,6 +284,8 @@ u32 PadsInjectedCount();
 // CSIDevice_GCAdapter::GetPadStatus) stands for an instant on the throttle's schedule:
 // - in a rollback's re-run: the last read before it, the one taken at the frame's due time
 //   (unless older than 100 ms, after a long wait for the peer: then read now);
+// - more than a field behind schedule (a PC that cannot keep full speed runs up to MaxFallback
+//   behind on every frame): the controller now, standing for its due instant (HostPadFarLate);
 // - behind schedule (the instant was due earlier, CoreTimingManager::ScheduledHostTime): the
 //   state the controller had then, from a timestamped history: the Wii U adapter's read thread
 //   keeps one (GCAdapter::InputAt), and the harness (Harness::PadOverrideAt). Pads mapped in
@@ -312,6 +314,7 @@ struct HostPadReadStats
   u64 on_time = 0;       // read now, on schedule (or ahead of it)
   u64 late_history = 0;  // more than 1 ms behind schedule: from the history
   u64 late_live = 0;     // more than 1 ms behind schedule, no history: read now
+  u64 late_far = 0;      // more than a field behind schedule: read now (stands for its due time)
   u64 latched = 0;       // in a re-run: the last read before it
   u64 relatched = 0;     // in a re-run, the last read too old: read now
   double late_max_ms = 0;

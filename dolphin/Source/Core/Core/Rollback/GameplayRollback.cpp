@@ -693,12 +693,34 @@ namespace
 constexpr auto HOST_PAD_LATCH_MAX_AGE = std::chrono::milliseconds(100);
 // How far behind schedule a read may come and still count as on time (the throttle's wake-up).
 constexpr auto HOST_PAD_LATE = std::chrono::milliseconds(1);
+// Further behind than this (a field), a read takes the controller as it is now; it still stands
+// for its due instant. A PC that cannot keep full speed runs up to MaxFallback (100 ms and more)
+// behind its schedule on every frame, and the history gave its player the controller of that long
+// ago (156 ms from read to use at delay 2, against 52 ms read now). The few ms a frame comes late
+// after a rollback stay within it, so bug #70's regular samples are unchanged.
+// PPR_GPRB_PAD_FAR_LATE_MS sets it (0: never).
+std::chrono::microseconds HostPadFarLate()
+{
+  static const std::chrono::microseconds value = [] {
+    const char* env = std::getenv("PPR_GPRB_PAD_FAR_LATE_MS");
+    if (env && *env)
+    {
+      const double ms = std::atof(env);
+      // (not microseconds::max(): compared with a steady_clock duration it overflows)
+      return ms <= 0 ? std::chrono::microseconds(std::chrono::hours(24)) :
+                       std::chrono::microseconds(static_cast<s64>(ms * 1000));
+    }
+    return std::chrono::microseconds(16683);
+  }();
+  return value;
+}
 
 struct HostPadRead
 {
   bool valid = false;
   GCPadStatus status{};
   Clock::time_point instant{};  // the time it stands for
+  Clock::time_point data_at{};  // when that state was the controller's (instant, or later if far late)
 };
 
 struct HostPads
@@ -798,7 +820,7 @@ GCPadStatus ReadHostPad(Core::System& system, int chan, HostPadSource source)
   HostPadRead& last = h.last[chan];
   if (ct.IsRollbackResimulating())
   {
-    if (last.valid && now - last.instant <= HOST_PAD_LATCH_MAX_AGE)
+    if (last.valid && now - last.data_at <= HOST_PAD_LATCH_MAX_AGE)
     {
       ++h.stats.latched;
       h.instant[chan] = last.instant;
@@ -807,7 +829,7 @@ GCPadStatus ReadHostPad(Core::System& system, int chan, HostPadSource source)
     }
     // The first read of this re-run stands for it from here on.
     ++h.stats.relatched;
-    last = {true, ReadHostPadNow(chan, source), now};
+    last = {true, ReadHostPadNow(chan, source), now, now};
     h.instant[chan] = now;
     LogRead(chan, now, std::nullopt, true, "relatch", last.status, now);
     return last.status;
@@ -815,15 +837,24 @@ GCPadStatus ReadHostPad(Core::System& system, int chan, HostPadSource source)
 
   GCPadStatus status{};
   Clock::time_point instant = now;
+  Clock::time_point data_at = now;
   const char* kind = "now";
   const std::optional<Clock::time_point> due = ct.ScheduledHostTime();
   if (due && *due < now)
   {
     const auto behind = now - *due;
-    if (const std::optional<GCPadStatus> then = ReadHostPadAt(chan, source, *due))
+    if (behind > HostPadFarLate())
+    {
+      // Far behind: the controller now, standing for its due instant.
+      status = ReadHostPadNow(chan, source);
+      instant = *due;
+      kind = "far";
+      ++h.stats.late_far;
+    }
+    else if (const std::optional<GCPadStatus> then = ReadHostPadAt(chan, source, *due))
     {
       status = *then;
-      instant = *due;
+      instant = data_at = *due;
       kind = "hist";
       if (behind > HOST_PAD_LATE)
         ++h.stats.late_history;
@@ -850,7 +881,7 @@ GCPadStatus ReadHostPad(Core::System& system, int chan, HostPadSource source)
     status = ReadHostPadNow(chan, source);
     ++h.stats.on_time;
   }
-  last = {true, status, instant};
+  last = {true, status, instant, data_at};
   h.instant[chan] = instant;
   LogRead(chan, now, due, false, kind, status, instant);
   return status;

@@ -63,6 +63,14 @@ protected:
 
   u16 Read() { return Gprb::ReadHostPad(m_system, 0, Gprb::HostPadSource::Adapter).button; }
 
+  static void Spin(std::chrono::microseconds d)
+  {
+    const auto until = std::chrono::steady_clock::now() + d;
+    while (std::chrono::steady_clock::now() < until)
+    {
+    }
+  }
+
   Core::System& m_system = Core::System::GetInstance();
   std::string m_profile_path;
 };
@@ -82,10 +90,11 @@ TEST_F(HostPadReadTest, ReadsStandForTheirScheduledInstant)
   EXPECT_EQ(Read(), PAD_BUTTON_A);
 
   // B pressed after the instant was due, and the read comes 10 ms late (a frame that ran long):
-  // it gets what was held at the due time.
-  std::this_thread::sleep_for(4ms);
+  // it gets what was held at the due time. (Waits that spin: a short sleep_for can take a
+  // scheduler quantum on Windows, and a read more than a field late reads now.)
+  Spin(4ms);
   Harness::Internal::PadSet(0, Pad(PAD_BUTTON_B));
-  std::this_thread::sleep_for(6ms);
+  Spin(6ms);
   EXPECT_EQ(Read(), PAD_BUTTON_A);
 
   // A rollback's re-run: every read is the last one before it, whatever is held now.
@@ -106,6 +115,36 @@ TEST_F(HostPadReadTest, ReadsStandForTheirScheduledInstant)
   EXPECT_EQ(st.latched, 2u);
   EXPECT_EQ(st.relatched, 0u);
   EXPECT_GE(st.late_max_ms, 9.0);
+}
+
+TEST_F(HostPadReadTest, ReadsFarBehindScheduleTakeTheControllerNow)
+{
+  auto& ct = m_system.GetCoreTiming();
+  Gprb::SetHostPadsScheduled(true);
+  Gprb::TakeHostPadReadStats();
+  Harness::Internal::PadSet(0, Pad(PAD_BUTTON_A));
+  ct.ResetThrottleToNow();
+  EXPECT_EQ(Read(), PAD_BUTTON_A);
+
+  // A PC that cannot keep full speed: the read comes 40 ms (over a field) behind its due instant.
+  // Not the controller of then (A) but the one now (B).
+  std::this_thread::sleep_for(10ms);
+  Harness::Internal::PadSet(0, Pad(PAD_BUTTON_B));
+  std::this_thread::sleep_for(30ms);
+  EXPECT_EQ(Read(), PAD_BUTTON_B);
+
+  // The re-run right after takes that read (it is fresh, whatever instant it stands for).
+  ct.SetRollbackResimulating(true);
+  Harness::Internal::PadSet(0, Pad(PAD_BUTTON_X));
+  EXPECT_EQ(Read(), PAD_BUTTON_B);
+  ct.SetRollbackResimulating(false);
+
+  const Gprb::HostPadReadStats st = Gprb::TakeHostPadReadStats();
+  EXPECT_EQ(st.on_time, 1u);
+  EXPECT_EQ(st.late_far, 1u);
+  EXPECT_EQ(st.late_history, 0u);
+  EXPECT_EQ(st.latched, 1u);
+  EXPECT_EQ(st.relatched, 0u);
 }
 
 TEST_F(HostPadReadTest, AReRunAfterALongWaitReadsAnew)

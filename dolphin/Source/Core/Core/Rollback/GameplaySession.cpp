@@ -4174,12 +4174,12 @@ std::string NetStatsLine(const State::NetStats& w)
                         w.pad_age_max);
   }
   if (const HostPadReadStats& r = w.pad_reads;
-      r.on_time + r.latched + r.relatched + r.late_history + r.late_live)
+      r.on_time + r.latched + r.relatched + r.late_history + r.late_live + r.late_far)
   {
     line += fmt::format(", pad reads {} on time, {} in re-runs ({} read anew), late {} from history "
-                        "{} live (max {:.1f} ms)",
+                        "{} live, {} far behind read now (max {:.1f} ms)",
                         r.on_time, r.latched + r.relatched, r.relatched, r.late_history,
-                        r.late_live, r.late_max_ms);
+                        r.late_live, r.late_far, r.late_max_ms);
   }
   return line;
 }
@@ -4223,6 +4223,7 @@ void NetStatsFold(State::NetStats& t, const State::NetStats& w)
   t.pad_reads.on_time += w.pad_reads.on_time;
   t.pad_reads.late_history += w.pad_reads.late_history;
   t.pad_reads.late_live += w.pad_reads.late_live;
+  t.pad_reads.late_far += w.pad_reads.late_far;
   t.pad_reads.latched += w.pad_reads.latched;
   t.pad_reads.relatched += w.pad_reads.relatched;
   t.pad_reads.late_max_ms = std::max(t.pad_reads.late_max_ms, w.pad_reads.late_max_ms);
