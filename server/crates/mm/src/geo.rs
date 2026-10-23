@@ -21,10 +21,18 @@ use std::time::SystemTime;
 use common::net::to_v4;
 use maxminddb::{path, Mmap, Reader};
 
-/// What a round trip costs before distance: both players' home networks and the routers between.
-pub const RTT_BASE_MS: f64 = 15.0;
-/// How much longer the cables are than the great circle.
-pub const ROUTE_FACTOR: f64 = 1.4;
+// Fitted to what games measured (2026-10-23, 507 prod Unranked, Ranked and Direct matches: the
+// speed reports' in-game ping against the distance mm placed the pair at). The first constants
+// (15 ms, 1.4) read the pure line cost and were far too low: matches estimated at 80-100 ms played
+// at 146 ms (median), so a "Matchmaking Ping Limit" of 100 paired players at 130 and more. Now
+// about two thirds of games play at or under the estimate (median 7 ms under); what is left over
+// is mostly a few players' own connections, which no distance shows.
+
+/// What a round trip costs before distance: both players' home networks, the routers between and
+/// the game's own frame of polling (the in-game ping is a frame longer than the network's).
+pub const RTT_BASE_MS: f64 = 55.0;
+/// How much longer the routes are than the great circle.
+pub const ROUTE_FACTOR: f64 = 1.65;
 /// Light in fibre: about 200 km per millisecond.
 pub const FIBER_KM_PER_MS: f64 = 200.0;
 
@@ -46,8 +54,8 @@ pub fn distance_km(a: Loc, b: Loc) -> f64 {
 }
 
 /// The round trip (the game's "ping") two players at `a` and `b` can expect, in milliseconds.
-/// Roughly: the same city 15-20, New York to Los Angeles 70, New York to London 95, Los Angeles to
-/// Sydney 184.
+/// Roughly: the same city 55-60, New York to Dallas 91, New York to Los Angeles 120, New York to
+/// London 147, Los Angeles to Sydney 254.
 pub fn estimate_rtt_ms(a: Loc, b: Loc) -> f64 {
     RTT_BASE_MS + 2.0 * distance_km(a, b) * ROUTE_FACTOR / FIBER_KM_PER_MS
 }
@@ -186,9 +194,9 @@ mod tests {
         assert_eq!(distance_km(LONDON, LONDON), 0.0);
         assert_eq!(estimate_rtt_ms(LONDON, LONDON), RTT_BASE_MS);
         let rtt = |a, b| estimate_rtt_ms(a, b).round();
-        assert_eq!(rtt(NEW_YORK, LOS_ANGELES), 70.0);
-        assert_eq!(rtt(NEW_YORK, LONDON), 93.0);
-        assert_eq!(rtt(LOS_ANGELES, SYDNEY), 184.0);
+        assert_eq!(rtt(NEW_YORK, LOS_ANGELES), 120.0);
+        assert_eq!(rtt(NEW_YORK, LONDON), 147.0);
+        assert_eq!(rtt(LOS_ANGELES, SYDNEY), 254.0);
         assert_eq!(rtt(SYDNEY, LOS_ANGELES), rtt(LOS_ANGELES, SYDNEY));
     }
 

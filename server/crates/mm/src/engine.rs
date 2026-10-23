@@ -2802,14 +2802,15 @@ mod tests {
         assert_eq!(m[0].region, "eu+na");
     }
 
-    /// conn n connects from 203.0.113.n: 1-15 in New York, 16-31 in Sydney, 32-47 in London
-    /// (New York to Sydney about 240 ms, Sydney to London 250, New York to London 93).
+    /// conn n connects from 203.0.113.n: 1-15 in New York, 16-31 in Sydney, 32-47 in Dallas,
+    /// 48-63 in Anchorage (New York to Sydney about 319 ms, Sydney to Dallas 283, New York to
+    /// Dallas 91, Dallas to Anchorage 136, New York to Anchorage 144).
     fn geo_rules() -> EngineConfig {
         let geoip = GeoDb::from_table(&[
             ("203.0.113.0/28", 40.71, -74.01),
             ("203.0.113.16/28", -33.87, 151.21),
-            ("203.0.113.32/28", 51.51, -0.13),
-            ("203.0.113.48/28", 34.05, -118.24),
+            ("203.0.113.32/28", 32.78, -96.80),
+            ("203.0.113.48/28", 61.22, -149.90),
         ]);
         EngineConfig { geoip, ..Default::default() }
     }
@@ -2821,12 +2822,12 @@ mod tests {
         for c in [1, 16] {
             h.connect(c, 41000);
         }
-        // Sydney, then New York: about 240 ms apart, held back.
+        // Sydney, then New York: about 319 ms apart, held back.
         h.unranked(16, &u[0]);
         assert!(matches(&h.unranked(1, &u[1])).is_empty());
         // The limit is 100 ms, +30 every 10 s of the shorter wait: 190 at 30 s, not enough.
         assert!(matches(&h.advance(Duration::from_secs(25))).is_empty());
-        // Someone in London comes: 93 ms to New York, taken at once; Sydney keeps waiting.
+        // Someone in Dallas comes: 91 ms to New York, taken at once; Sydney keeps waiting.
         h.connect(32, 41000);
         let m = matches(&h.unranked(32, &u[2]));
         assert_eq!(m.len(), 1);
@@ -2858,11 +2859,11 @@ mod tests {
             h.connect(c, 41000);
         }
         h.connect(48, 41000);
-        // London and Los Angeles (138 ms apart) wait until both have searched 20 s ...
+        // Dallas and Anchorage (136 ms apart) wait until both have searched 20 s ...
         h.unranked(32, &u[0]);
         assert!(matches(&h.unranked(48, &u[1])).is_empty());
         h.now += Duration::from_secs(20);
-        // ... and then New York comes: London takes it (93 ms) over Los Angeles (within the limit
+        // ... and then New York comes: Dallas takes it (91 ms) over Anchorage (within the limit
         // by now, but the higher one).
         h.connect(1, 41000);
         let m = matches(&h.unranked(1, &u[2]));
@@ -2874,21 +2875,21 @@ mod tests {
     fn a_new_search_does_not_take_a_far_opponent_at_once() {
         let mut h = Harness::new(geo_rules());
         let u = h.users(4);
-        // London has searched 30 s alone: its own limit would be 190 ms by now.
+        // Dallas has searched 30 s alone: its own limit would be 190 ms by now.
         h.connect(32, 41000);
         h.unranked(32, &u[0]);
         assert!(matches(&h.advance(Duration::from_secs(30))).is_empty());
-        // Los Angeles searches, 138 ms from London: held back, as Los Angeles has only just
-        // started (100 ms).
+        // Anchorage searches, 136 ms from Dallas: held back, as Anchorage has only just started
+        // (100 ms).
         h.connect(48, 41000);
         assert!(matches(&h.unranked(48, &u[1])).is_empty());
-        // New York comes 5 s later, 93 ms from London: taken at once.
+        // New York comes 5 s later, 91 ms from Dallas: taken at once.
         h.now += Duration::from_secs(5);
         h.connect(1, 41000);
         let m = matches(&h.unranked(1, &u[2]));
         assert_eq!(m.len(), 1);
         assert_eq!(pair_of(&m[0]), pair_key(u[0].uid, u[2].uid));
-        // Another London player for Los Angeles: the pair is held until the new one has searched
+        // Another Dallas player for Anchorage: the pair is held until the new one has searched
         // 20 s (160 ms).
         h.connect(33, 41000);
         assert!(matches(&h.unranked(33, &u[3])).is_empty());
@@ -2909,7 +2910,7 @@ mod tests {
         assert!(matches(&h.ranked(16, &u[1])).is_empty()); // Sydney, the same rating
         assert!(matches(&h.advance(Duration::from_secs(20))).is_empty());
         h.connect(2, 41000);
-        // A New York player 20 points away beats the equal rating 240 ms away.
+        // A New York player 20 points away beats the equal rating 319 ms away.
         let m = matches(&h.ranked(2, &u[2]));
         assert_eq!(pair_of(&m[0]), pair_key(u[0].uid, u[2].uid));
     }
@@ -2921,17 +2922,17 @@ mod tests {
         for c in [32, 48] {
             h.connect(c, 41000);
         }
-        // London (limit 100) and Los Angeles (200), 138 ms apart: without London's limit they
-        // would be paired at 20 s, and at any ping after 40 s.
+        // Dallas (limit 100) and Anchorage (200), 136 ms apart: without Dallas's limit they would
+        // be paired at 20 s, and at any ping after 40 s.
         h.capped(32, &u[0], 1, 100.0);
         assert!(matches(&h.capped(48, &u[1], 1, 200.0)).is_empty());
         assert!(matches(&h.advance(Duration::from_secs(60))).is_empty());
-        // New York (150), 93 ms from London: taken at once.
+        // New York (150), 91 ms from Dallas: taken at once.
         h.connect(1, 41000);
         let m = matches(&h.capped(1, &u[2], 1, 150.0));
         assert_eq!(m.len(), 1);
         assert_eq!(pair_of(&m[0]), pair_key(u[0].uid, u[2].uid));
-        // Another London player (150) for Los Angeles: the widening limit of the new search
+        // Another Dallas player (150) for Anchorage: the widening limit of the new search
         // (100, 130, then 160 at 20 s) under the lower of the two players' own (150).
         h.connect(33, 41000);
         assert!(matches(&h.capped(33, &u[3], 1, 150.0)).is_empty());
@@ -2948,7 +2949,7 @@ mod tests {
         for c in [1, 16] {
             h.connect(c, 41000);
         }
-        // New York (200) and Sydney (no limit of its own, an older build): about 240 ms apart.
+        // New York (200) and Sydney (no limit of its own, an older build): about 319 ms apart.
         h.capped(1, &u[0], 0, 200.0);
         assert!(matches(&h.ranked(16, &u[1])).is_empty());
         assert!(matches(&h.advance(Duration::from_secs(120))).is_empty());
