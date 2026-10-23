@@ -48,9 +48,6 @@ fi
       submodule update --init --recursive --depth 1 --jobs 4 -- dolphin
 )
 
-if [ -f "$build/CMakeCache.txt" ] && ! grep -qx "CMAKE_HOME_DIRECTORY:INTERNAL=$src" "$build/CMakeCache.txt"; then
-  rm -rf "$build"
-fi
 # Vulkan (MoltenVK) is off for now: Metal and OpenGL remain. Dolphin's own code signing is off
 # because the bundle is changed below; it is signed once at the end.
 # Qt 6.8.3's FindWrapOpenGL.cmake links "-framework AGL" unless find_library finds it, and the
@@ -62,19 +59,33 @@ fi
 # failed to start on every Mac (bug #34) and the copies needed macOS 26. iconv, bzip2 and curl
 # are macOS's own.
 sdk="$(xcrun --sdk macosx --show-sdk-path)"
-cmake -S "$src" -B "$build" -G Ninja \
-  -DWrapOpenGL_AGL="$sdk/System/Library/Frameworks/OpenGL.framework" \
-  -DCMAKE_BUILD_TYPE=Release \
-  -DCMAKE_OSX_ARCHITECTURES="$arch" -DCMAKE_OSX_DEPLOYMENT_TARGET="$min_macos" \
-  -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
-  -DCMAKE_OBJC_COMPILER_LAUNCHER=ccache -DCMAKE_OBJCXX_COMPILER_LAUNCHER=ccache \
-  -DCMAKE_PREFIX_PATH="$qt_dir" \
-  -DUSE_SYSTEM_LIBS=OFF -DUSE_SYSTEM_ICONV=ON -DUSE_SYSTEM_BZIP2=ON -DUSE_SYSTEM_CURL=ON \
-  -DENABLE_VULKAN=OFF -DMACOS_CODE_SIGNING=OFF -DPOSTPROCESS_BUNDLE=OFF \
-  -DENABLE_AUTOUPDATE=OFF -DENABLE_ANALYTICS=OFF -DUSE_DISCORD_PRESENCE=OFF \
-  -DENABLE_LLVM=OFF -DENABLE_TESTS=OFF -DENABLE_NOGUI=OFF \
-  -DDISTRIBUTOR=brawlonline.net \
+configure=(
+  -DWrapOpenGL_AGL="$sdk/System/Library/Frameworks/OpenGL.framework"
+  -DCMAKE_BUILD_TYPE=Release
+  -DCMAKE_OSX_ARCHITECTURES="$arch" -DCMAKE_OSX_DEPLOYMENT_TARGET="$min_macos"
+  -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+  -DCMAKE_OBJC_COMPILER_LAUNCHER=ccache -DCMAKE_OBJCXX_COMPILER_LAUNCHER=ccache
+  -DCMAKE_PREFIX_PATH="$qt_dir"
+  -DUSE_SYSTEM_LIBS=OFF -DUSE_SYSTEM_ICONV=ON -DUSE_SYSTEM_BZIP2=ON -DUSE_SYSTEM_CURL=ON
+  -DENABLE_VULKAN=OFF -DMACOS_CODE_SIGNING=OFF -DPOSTPROCESS_BUNDLE=OFF
+  -DENABLE_AUTOUPDATE=OFF -DENABLE_ANALYTICS=OFF -DUSE_DISCORD_PRESENCE=OFF
+  -DENABLE_LLVM=OFF -DENABLE_TESTS=OFF -DENABLE_NOGUI=OFF
+  -DDISTRIBUTOR=brawlonline.net
+)
+# A build tree configured for another source folder or with other options starts over: CMake
+# keeps a library's earlier choice in its cache. The cache volume once handed a job a tree from
+# before USE_SYSTEM_LIBS=OFF (7d1a5980), whose LibLZMA was Homebrew's: Dolphin's CMake refuses
+# the switch to Externals ("The selection for LibLZMA changed from 'System' to 'Bundled'"), and
+# its pkg-config libraries (fmt, xxhash) still read as found on the system.
+stamp="$build/brawl-configure.txt"
+if [ -f "$build/CMakeCache.txt" ] && { ! grep -qx "CMAKE_HOME_DIRECTORY:INTERNAL=$src" "$build/CMakeCache.txt" ||
+    ! printf '%s\n' "${configure[@]}" | cmp -s - "$stamp"; }; then
+  echo "Configuring a new build tree (other source folder or options)"
+  rm -rf "$build"
+fi
+cmake -S "$src" -B "$build" -G Ninja "${configure[@]}" \
   >"$build.configure.log" 2>&1 || { tail -n 60 "$build.configure.log"; exit 1; }
+printf '%s\n' "${configure[@]}" >"$stamp"
 
 ccache -z >/dev/null
 cmake --build "$build" --parallel "$jobs" --target project-plus-dolphin dolphin-tool
