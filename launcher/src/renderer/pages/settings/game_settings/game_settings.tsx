@@ -1,8 +1,8 @@
 import {
   INPUT_DELAY_AGGRESSIVE,
-  INPUT_DELAY_CHOICES,
   INPUT_DELAY_PROFILES,
   INPUT_DELAY_SMOOTH,
+  normalizeInputDelay,
 } from "@common/input_delay";
 import { PING_LIMIT_CHOICES } from "@common/ping_limit";
 import { GAME_NAME } from "@common/product";
@@ -146,20 +146,16 @@ export const GameSettings = React.memo(() => {
         </RadioGroup>
       </SettingItem>
       <SettingItem name={Messages.inputDelay()} description={Messages.inputDelayDescription()}>
-        <RadioGroup row={true} value={inputDelay} onChange={(_event, value) => setInputDelay(Number(value))}>
+        <RadioGroup
+          row={true}
+          value={normalizeInputDelay(inputDelay)}
+          onChange={(_event, value) => setInputDelay(Number(value))}
+        >
           {INPUT_DELAY_PROFILES.map((profile) => (
             <FormControlLabel
               key={profile}
               value={profile}
               label={inputDelayProfileLabel(profile)}
-              control={<Radio />}
-            />
-          ))}
-          {INPUT_DELAY_CHOICES.map((frames) => (
-            <FormControlLabel
-              key={frames}
-              value={frames}
-              label={Messages.inputDelayFrames(frames)}
               control={<Radio />}
             />
           ))}

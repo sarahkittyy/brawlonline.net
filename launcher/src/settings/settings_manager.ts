@@ -1,3 +1,4 @@
+import { normalizeInputDelay } from "@common/input_delay";
 import { DolphinLaunchType } from "@dolphin/types";
 import { Mutex } from "async-mutex";
 import electronSettings from "electron-settings";
@@ -128,7 +129,8 @@ export class SettingsManager extends EventEmitter {
   }
 
   getInputDelay(): number {
-    return this.get().settings.inputDelay;
+    // A number of frames saved before 2026-10-23 plays Normal.
+    return normalizeInputDelay(this.get().settings.inputDelay);
   }
 
   getPingLimit(): number {

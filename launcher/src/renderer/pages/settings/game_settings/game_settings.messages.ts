@@ -11,12 +11,10 @@ export const GameSettingsMessages = {
   inputDelay: () => "Input Delay",
   inputDelayDescription: () =>
     "More input delay = less rollbacks. Increase this if your games are stuttering / teleporting around. " +
-    "Aggressive, Normal and Smooth work everywhere. A number of frames works in Direct and rooms only (Unranked and Ranked play Normal). " +
     "Takes effect right away, even in the middle of a game.",
   inputDelayAggressive: () => "Aggressive",
   inputDelayNormal: () => "Normal",
   inputDelaySmooth: () => "Smooth",
-  inputDelayFrames: (frames: number) => (frames === 1 ? "1 frame" : `${frames} frames`),
   pingLimit: () => "Matchmaking Ping Limit",
   pingLimitMs: (ms: number) => "{0} ms",
   enableMusic: () => "Music",
