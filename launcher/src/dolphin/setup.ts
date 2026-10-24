@@ -17,6 +17,7 @@ import {
   ipc_configureDolphin,
   ipc_dolphinEvent,
   ipc_downloadDolphin,
+  ipc_findMissingDlls,
   ipc_getChatKey,
   ipc_getDolphinPaths,
   ipc_getPPlusVersions,
@@ -40,6 +41,7 @@ import {
   ipc_viewSlpReplay,
 } from "./ipc";
 import type { DolphinManager } from "./manager";
+import { findMissingDlls } from "./missing_dlls";
 import { deletePlayKeyFile, writePlayKeyFile } from "./playkey";
 import type { RenderJob } from "./render_queue";
 import { clearRoomRequest, handOffRoom, isHandOffCode, writeRoomRequest } from "./room_handoff";
@@ -236,6 +238,17 @@ export default function setupDolphinIpc({ dolphinManager }: { dolphinManager: Do
 
   ipc_getRenderJobs.main!.handle(async () => {
     return { jobs: dolphinManager.renders.jobs() };
+  });
+
+  ipc_findMissingDlls.main!.handle(async ({ dolphinType }) => {
+    const exe = await dolphinManager.getInstallation(dolphinType).findDolphinExecutable();
+    const dlls = await findMissingDlls(exe);
+    log.warn(
+      `Dolphin could not load: ${
+        dlls.map((d) => `${d.name} (${d.problem}, imported by ${d.importedBy})`).join(", ") || "no missing DLL found"
+      }`,
+    );
+    return { dlls };
   });
 
   ipc_getPPlusVersions.main!.handle(async () => {

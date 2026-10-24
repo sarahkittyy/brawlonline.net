@@ -1,7 +1,9 @@
 import { type DolphinService, DolphinErrorType, DolphinEventType, DolphinLaunchType } from "@dolphin/types";
+import log from "electron-log";
 
 import { useRosettaDialog } from "@/components/rosetta_install_dialog/use_rosetta_dialog";
 import { handleDolphinExitCode } from "@/lib/dolphin/handle_dolphin_exit_code";
+import { DLL_EXIT_CODES, missingDllMessage } from "@/lib/dolphin/missing_dll_message";
 import {
   DolphinStatus,
   setDolphinOpened,
@@ -27,9 +29,21 @@ export function installDolphinListeners({
 
     // Check if it exited cleanly
     const errMsg = handleDolphinExitCode(exitCode);
-    if (errMsg) {
-      showError(errMsg);
+    if (!errMsg) {
+      return;
     }
+    if (exitCode == null || !window.electron.bootstrap.isWindows || !DLL_EXIT_CODES.includes(exitCode)) {
+      showError(errMsg);
+      return;
+    }
+    // Windows couldn't load a DLL: name it, and what installs it, when the import tables say which.
+    dolphinService
+      .findMissingDlls(dolphinType)
+      .then((dlls) => showError(missingDllMessage(dlls) ?? errMsg))
+      .catch((err: unknown) => {
+        log.error(err);
+        showError(errMsg);
+      });
   });
 
   dolphinService.onEvent(DolphinEventType.DOWNLOAD_START, (event) => {

@@ -8,6 +8,7 @@ import type {
   DolphinEvent,
   DolphinLaunchType,
   GameFilesMoveOutcome,
+  MissingDll,
   NetplayLaunchResult,
   PlayKey,
   PPlusPrepareResult,
@@ -98,6 +99,12 @@ export const ipc_renderHighlights = makeEndpoint.main(
 export const ipc_cancelRender = makeEndpoint.main("cancelRender", <{ jobId: string }>_, <SuccessPayload>_);
 
 export const ipc_getRenderJobs = makeEndpoint.main("getRenderJobs", <EmptyPayload>_, <{ jobs: RenderJobInfo[] }>_);
+
+export const ipc_findMissingDlls = makeEndpoint.main(
+  "findMissingDlls",
+  <{ dolphinType: DolphinLaunchType }>_,
+  <{ dlls: MissingDll[] }>_,
+);
 
 export const ipc_playHighlights = makeEndpoint.main(
   "playHighlights",

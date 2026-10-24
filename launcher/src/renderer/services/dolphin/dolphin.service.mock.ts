@@ -9,6 +9,7 @@ import type {
   DolphinLaunchType,
   DolphinService,
   GameFilesMoveOutcome,
+  MissingDll,
   NetplayLaunchResult,
   PlayKey,
   PPlusPrepareResult,
@@ -136,6 +137,10 @@ class MockDolphinClient implements DolphinService {
 
   @delayAndMaybeError(SHOULD_ERROR)
   async getRenderJobs(): Promise<RenderJobInfo[]> {
+    return [];
+  }
+
+  async findMissingDlls(): Promise<MissingDll[]> {
     return [];
   }
 

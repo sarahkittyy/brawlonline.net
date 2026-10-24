@@ -11,6 +11,7 @@ import {
   ipc_configureDolphin,
   ipc_dolphinEvent,
   ipc_downloadDolphin,
+  ipc_findMissingDlls,
   ipc_getChatKey,
   ipc_getDolphinPaths,
   ipc_getPPlusVersions,
@@ -112,6 +113,10 @@ const dolphinApi: DolphinService = {
   async getRenderJobs() {
     const { result } = await ipc_getRenderJobs.renderer!.trigger({});
     return result.jobs;
+  },
+  async findMissingDlls(dolphinType: DolphinLaunchType) {
+    const { result } = await ipc_findMissingDlls.renderer!.trigger({ dolphinType });
+    return result.dlls;
   },
   async getPPlusVersions() {
     const { result } = await ipc_getPPlusVersions.renderer!.trigger({});

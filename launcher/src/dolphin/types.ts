@@ -206,6 +206,15 @@ export const enum DolphinEventType {
   RENDER_PROGRESS = "RENDER_PROGRESS",
 }
 
+/** A DLL Dolphin imports that Windows cannot load (missing_dlls.ts). */
+export type MissingDll = {
+  name: string;
+  /** Who imports it (a file beside Dolphin.exe, or Dolphin.exe itself). */
+  importedBy: string;
+  /** "missing": not found; "not-x64": found but not a 64-bit DLL. */
+  problem: "missing" | "not-x64";
+};
+
 export const enum DolphinErrorType {
   NETWORK_ERROR = "NETWORK_ERROR",
   ROSETTA_REQUIRED = "ROSETTA_REQUIRED",
@@ -361,6 +370,8 @@ export interface DolphinService {
   cancelRender(jobId: string): Promise<void>;
   /** This launcher run's render jobs. */
   getRenderJobs(): Promise<RenderJobInfo[]>;
+  /** Windows: the DLLs that kept this Dolphin from starting (exit 0xC0000135 / 0xC000007B). */
+  findMissingDlls(dolphinType: DolphinLaunchType): Promise<MissingDll[]>;
   /** The launcher's Project+ release and the older ones for replays. */
   getPPlusVersions(): Promise<{ current: string; states: PPlusVersionInfo[] }>;
   /**
