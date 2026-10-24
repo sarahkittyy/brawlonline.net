@@ -47,4 +47,5 @@ export const HighlightListMessages = {
   renderError: (error: string) => "Couldn't render it: {0}",
   cancel: () => "Cancel",
   showInFolder: () => "Show in folder",
+  close: () => "Close",
 };

@@ -138,7 +138,10 @@ in the list's order; queued, the selection clears. No Dolphin window opens: unde
 shows its name, w/ Music or No Music, "Waiting", "Starting...", "Rendering 45%" (a combo: "Clip 2 of
 5 · 45%") with a bar and **Cancel**, then "Saved" with **Show in folder**, or "Couldn't render it:
 <why>". Jobs belong to the launcher run (main keeps them; the page shows this replay's, a cancelled
-one not at all).
+one not at all). A finished row goes (2026-10-24, the user: they never cleared): "Saved" by itself
+10 s after it was first shown (the mouse over it holds it, and leaving gives it 10 s again), an
+error only with its X; a "Saved" can be closed with its X too. Gone is gone for the launcher run,
+whichever replay's page shows it.
 
 Names (DESIGN.md §5, `render_names.ts`): the game's date and time from its replay's name, then who
 did what with their characters: `2026-10-20 1635 sarahkitty (Mr. Game & Watch) vs t3o7 (Lucas).mp4`

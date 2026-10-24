@@ -1,15 +1,19 @@
 /**
  * The stats page's renders (docs/design/highlights.md §5): this replay's render jobs, newest
  * first, with their progress (rendering has no Dolphin window: this is all the player sees of it),
- * and once done where the video is.
+ * and once done where the video is. A finished one goes: "Saved" by itself DONE_SHOWN_MS after it
+ * was first shown (the mouse over it holds it), an error once its X is clicked.
  */
 import type { RenderJobInfo } from "@dolphin/types";
 import { DolphinEventType } from "@dolphin/types";
 import CheckCircleIcon from "@mui/icons-material/CheckCircle";
+import CloseIcon from "@mui/icons-material/Close";
 import ErrorOutlineIcon from "@mui/icons-material/ErrorOutline";
 import MovieIcon from "@mui/icons-material/Movie";
 import Button from "@mui/material/Button";
+import IconButton from "@mui/material/IconButton";
 import LinearProgress from "@mui/material/LinearProgress";
+import Tooltip from "@mui/material/Tooltip";
 import { useEffect, useState } from "react";
 
 import { useServices } from "@/services";
@@ -40,15 +44,69 @@ export function useRenderJobs(): RenderJobInfo[] {
   return [...jobs.values()];
 }
 
+/** How long a "Saved" row stays after it is first shown. */
+const DONE_SHOWN_MS = 10_000;
+
+// Kept for the launcher run, across pages (main keeps every job; coming back to a replay doesn't
+// bring its old renders back): the rows closed with their X, and when each "Saved" was first shown.
+const closed = new Set<string>();
+const doneSince = new Map<string, number>();
+
 export const RenderJobs = ({ jobs }: { jobs: RenderJobInfo[] }) => {
   const { dolphinService } = useServices();
-  if (!jobs.length) {
+  const [hovered, setHovered] = useState<string | null>(null);
+  const [, setTick] = useState(0);
+  const now = Date.now();
+  for (const job of jobs) {
+    if (job.state === "done" && !doneSince.has(job.jobId)) {
+      doneSince.set(job.jobId, now);
+    }
+  }
+  const shown = jobs.filter(
+    (j) =>
+      !closed.has(j.jobId) &&
+      !(j.state === "done" && j.jobId !== hovered && now - (doneSince.get(j.jobId) ?? now) >= DONE_SHOWN_MS),
+  );
+  // The next "Saved" to go: draw again when it does.
+  const nextGone = Math.min(
+    ...shown
+      .filter((j) => j.state === "done" && j.jobId !== hovered)
+      .map((j) => doneSince.get(j.jobId)! + DONE_SHOWN_MS),
+  );
+  useEffect(() => {
+    if (!Number.isFinite(nextGone)) {
+      return;
+    }
+    const timer = setTimeout(() => setTick((t) => t + 1), Math.max(0, nextGone - Date.now()));
+    return () => clearTimeout(timer);
+  }, [nextGone]);
+
+  if (!shown.length) {
     return null;
   }
   return (
     <div className={styles.renders}>
-      {[...jobs].reverse().map((job) => (
-        <RenderJobRow key={job.jobId} job={job} cancel={() => void dolphinService.cancelRender(job.jobId)} />
+      {[...shown].reverse().map((job) => (
+        <RenderJobRow
+          key={job.jobId}
+          job={job}
+          cancel={() => void dolphinService.cancelRender(job.jobId)}
+          close={() => {
+            closed.add(job.jobId);
+            setTick((t) => t + 1);
+          }}
+          hover={(over) => {
+            if (over) {
+              setHovered(job.jobId);
+            } else {
+              // (A "Saved" left gets its time again from here.)
+              if (doneSince.has(job.jobId)) {
+                doneSince.set(job.jobId, Date.now());
+              }
+              setHovered((h) => (h === job.jobId ? null : h));
+            }
+          }}
+        />
       ))}
     </div>
   );
@@ -78,13 +136,27 @@ function fileBaseName(file: string): string {
   return (file.split(/[\\/]/).pop() ?? file).replace(/\.mp4$/, "");
 }
 
-const RenderJobRow = ({ job, cancel }: { job: RenderJobInfo; cancel: () => void }) => {
+const RenderJobRow = ({
+  job,
+  cancel,
+  close,
+  hover,
+}: {
+  job: RenderJobInfo;
+  cancel: () => void;
+  close: () => void;
+  hover: (over: boolean) => void;
+}) => {
   const active = job.state === "queued" || job.state === "starting" || job.state === "rendering";
   const output = job.output;
   // (The file's own name once it is chosen: " (2)" when the name was taken.)
   const name = output ? fileBaseName(output) : job.name;
   return (
-    <div className={`${styles.renderJob} ${job.state === "error" ? styles.error : ""}`}>
+    <div
+      className={`${styles.renderJob} ${job.state === "error" ? styles.error : ""}`}
+      onMouseEnter={() => hover(true)}
+      onMouseLeave={() => hover(false)}
+    >
       <div className={styles.renderLine}>
         {job.state === "done" ? (
           <CheckCircleIcon fontSize="small" className={styles.renderDoneIcon} />
@@ -109,6 +181,13 @@ const RenderJobRow = ({ job, cancel }: { job: RenderJobInfo; cancel: () => void 
           <Button size="small" onClick={() => window.electron.shell.showItemInFolder(output)}>
             {Messages.showInFolder()}
           </Button>
+        )}
+        {!active && (
+          <Tooltip title={Messages.close()}>
+            <IconButton size="small" onClick={close} aria-label={Messages.close()}>
+              <CloseIcon sx={{ fontSize: 18 }} />
+            </IconButton>
+          </Tooltip>
         )}
       </div>
       {active && (
