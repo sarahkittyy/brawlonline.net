@@ -92,13 +92,6 @@ export interface ReplayProvider {
     },
     filters?: ReplayFilter[],
   ): Promise<string[]>;
-  bulkDeleteReplays(
-    folder: string | undefined,
-    filters?: ReplayFilter[],
-    options?: {
-      excludeFilePaths?: string[];
-    },
-  ): Promise<{ deletedCount: number }>;
   findReplaysForMatches(matchIds: string[], folders: string[]): Promise<Record<string, MatchReplay[]>>;
 }
 
@@ -119,16 +112,6 @@ export type SearchGamesResult = {
   totalCount?: number;
 };
 
-export type BulkDeleteOptions = {
-  folderPath?: string; // If undefined, searches all files in database
-  filters?: ReplayFilter[];
-  excludeFilePaths?: string[];
-};
-
-export type BulkDeleteResult = {
-  deletedCount: number;
-};
-
 export interface ReplayService {
   initializeFolderTree(folders: readonly string[]): Promise<readonly FolderResult[]>;
   selectTreeFolder(folderPath: string): Promise<readonly FolderResult[]>;
@@ -137,7 +120,6 @@ export interface ReplayService {
   calculateGameStats(filePath: string): Promise<{ file: FileResult; stats: StatsType | undefined }>;
   calculateStadiumStats(filePath: string): Promise<{ file: FileResult; stadiumStats: StadiumStatsType | undefined }>;
   deleteReplays(fileIds: string[]): Promise<void>;
-  bulkDeleteReplays(options: BulkDeleteOptions): Promise<BulkDeleteResult>;
   /**
    * The replays on this computer of each online match (the server's match id: a set's games, a
    * runback), oldest first, with how each game ended, from the replay folders (`folders` and their

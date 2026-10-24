@@ -1,6 +1,6 @@
 import { chunk } from "@common/chunk";
 import type { ReplayFilter } from "@database/filters/types";
-import { FileRepository, inFolderTree } from "@database/repositories/file_repository";
+import { FileRepository } from "@database/repositories/file_repository";
 import { GameRepository } from "@database/repositories/game_repository";
 import { PlayerRepository } from "@database/repositories/player_repository";
 import type { Database, FileRecord, GameRecord, NewFile, NewGame, NewPlayer, PlayerRecord } from "@database/schema";
@@ -318,81 +318,6 @@ export class DatabaseReplayProvider implements ReplayProvider {
 
     const totalDuration = Date.now() - deleteStartTime;
     log.info(`Deleted ${fileRecords.length} replay(s) in ${totalDuration}ms total`);
-  }
-
-  async bulkDeleteReplays(
-    folder: string | undefined,
-    filters: ReplayFilter[] = [],
-    options?: {
-      excludeFilePaths?: string[];
-    },
-  ): Promise<{ deletedCount: number }> {
-    const bulkDeleteStartTime = Date.now();
-    log.info(
-      `Starting bulk delete with ${filters.length} filter(s) and ${options?.excludeFilePaths?.length ?? 0} exclusions`,
-    );
-
-    // Sync the database first to ensure we're working with up-to-date data
-    // Only sync if folder is specified and exists on disk
-    if (folder !== undefined && (await pathExists(folder))) {
-      const syncStartTime = Date.now();
-      await this.syncFolderTree(folder);
-      const syncDuration = Date.now() - syncStartTime;
-      log.info(`Pre-delete sync completed in ${syncDuration}ms`);
-    }
-
-    // Convert file paths to file IDs for exclusion
-    // Batch the query to stay under SQLite's 999 parameter limit
-    const excludeFileIds: number[] = [];
-    if (options?.excludeFilePaths && options.excludeFilePaths.length > 0) {
-      const excludeQueryStartTime = Date.now();
-      const excludeFilenames = options.excludeFilePaths.map((p) => path.basename(p));
-      const chunkedFilenames = chunk(excludeFilenames, SQLITE_PARAM_LIMIT_BATCH_SIZE);
-
-      for (const batch of chunkedFilenames) {
-        let excludeQuery = this.db.selectFrom("file");
-
-        // Apply folder filter if specified
-        if (folder !== undefined) {
-          excludeQuery = excludeQuery.where(inFolderTree(folder));
-        }
-
-        const excludeRecords = await excludeQuery.where("name", "in", batch).select("_id").execute();
-        excludeFileIds.push(...excludeRecords.map((r) => r._id));
-      }
-
-      const excludeQueryDuration = Date.now() - excludeQueryStartTime;
-      log.info(`Exclude query completed in ${excludeQueryDuration}ms (found ${excludeFileIds.length} exclusions)`);
-    }
-
-    // Get all file IDs matching the filters
-    const filterQueryStartTime = Date.now();
-    const fileIdsToDelete = await GameRepository.getFileIdsForBulkDelete(
-      this.db,
-      folder ?? null,
-      filters,
-      excludeFileIds.length > 0 ? excludeFileIds : undefined,
-    );
-    const filterQueryDuration = Date.now() - filterQueryStartTime;
-    log.info(`Filter query completed in ${filterQueryDuration}ms (found ${fileIdsToDelete.length} files to delete)`);
-
-    if (fileIdsToDelete.length === 0) {
-      log.info("No files to delete");
-      return { deletedCount: 0 };
-    }
-
-    // Get the file records to get the file paths
-    const fileRecords = await this.queryFileRecordsByIds(fileIdsToDelete);
-
-    // Delete the records from the database first (cascades to game and player records)
-    await this.deleteFileRecordsFromDatabase(fileIdsToDelete);
-
-    // Delete files from the filesystem
-    await this.deleteFilesFromFilesystem(fileRecords);
-
-    const totalDuration = Date.now() - bulkDeleteStartTime;
-    log.info(`Bulk deleted ${fileRecords.length} replay(s) in ${totalDuration}ms total`);
-    return { deletedCount: fileRecords.length };
   }
 
   private async mapGameAndFileRecordsToFileResult(records: (GameRecord & FileRecord)[]): Promise<FileResult[]> {

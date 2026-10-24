@@ -1,5 +1,4 @@
 import type { FileResult, FolderResult, Progress, ReplayService } from "@replays/types";
-import { useState } from "react";
 import { create } from "zustand";
 import { immer } from "zustand/middleware/immer";
 
@@ -7,7 +6,6 @@ import { useSettings } from "@/lib/hooks/use_settings";
 import { useServices } from "@/services";
 import type { AuthService } from "@/services/auth/types";
 
-import { useReplayBrowserList } from "./use_replay_browser_list";
 import { buildReplayFilters, useReplayFilter } from "./use_replay_filter";
 
 const REPLAY_BATCH_SIZE = 50;
@@ -48,9 +46,6 @@ type StoreState = {
   files: FileResult[];
   currentRoot: string | undefined;
   currentFolder: string;
-  selectedFiles: string[];
-  selectAllMode: boolean;
-  deselectedFiles: string[]; // Files explicitly deselected from select-all mode
   totalFilesInFolder: number | undefined;
   folderTree: FolderResult[];
   collapsedFolders: string[];
@@ -72,9 +67,6 @@ const initialState: StoreState = {
   collapsedFolders: [],
   currentRoot: undefined,
   currentFolder: getInitialFolder(),
-  selectedFiles: [],
-  selectAllMode: false,
-  deselectedFiles: [],
   totalFilesInFolder: undefined,
   selectedFile: {
     index: undefined,
@@ -167,9 +159,6 @@ export class ReplayPresenter {
 
     useReplays.setState((state) => {
       state.currentFolder = folderToLoad;
-      state.selectedFiles = [];
-      state.selectAllMode = false;
-      state.deselectedFiles = [];
       state.loadingMore = false;
     });
 
@@ -252,45 +241,6 @@ export class ReplayPresenter {
     });
   }
 
-  setSelectedFiles(filePaths: string[], resetSelectAllMode = true) {
-    useReplays.setState((state) => {
-      state.selectedFiles = filePaths;
-      // Reset selectAllMode when manually changing selection
-      if (resetSelectAllMode) {
-        state.selectAllMode = false;
-        state.deselectedFiles = [];
-      }
-    });
-  }
-
-  setSelectAllMode(enabled: boolean) {
-    useReplays.setState((state) => {
-      state.selectAllMode = enabled;
-      if (!enabled) {
-        state.deselectedFiles = [];
-      }
-    });
-  }
-
-  toggleFileInSelectAllMode(filePath: string) {
-    useReplays.setState((state) => {
-      const isDeselected = state.deselectedFiles.includes(filePath);
-      if (isDeselected) {
-        // Re-select the file (remove from deselected list)
-        state.deselectedFiles = state.deselectedFiles.filter((f) => f !== filePath);
-        // Also add to selectedFiles for immediate visual feedback
-        if (!state.selectedFiles.includes(filePath)) {
-          state.selectedFiles = [...state.selectedFiles, filePath];
-        }
-      } else {
-        // Deselect the file (add to deselected list)
-        state.deselectedFiles = [...state.deselectedFiles, filePath];
-        // Remove from selectedFiles for immediate visual feedback
-        state.selectedFiles = state.selectedFiles.filter((f) => f !== filePath);
-      }
-    });
-  }
-
   async loadMoreReplays(): Promise<void> {
     const { continuation, loading, loadingMore, hasMoreReplays, currentFolder } = useReplays.getState();
 
@@ -337,14 +287,6 @@ export class ReplayPresenter {
         state.continuation = result.continuation;
         state.hasMoreReplays = result.continuation !== undefined;
         state.loadingMore = false;
-
-        // If in select-all mode, automatically add newly loaded files to selection
-        // (unless they're in the deselected list)
-        if (state.selectAllMode) {
-          const deselectedSet = new Set(state.deselectedFiles);
-          const newFilePaths = result.files.map((f) => f.fullPath).filter((path) => !deselectedSet.has(path));
-          state.selectedFiles = [...state.selectedFiles, ...newFilePaths];
-        }
       });
     } catch (err) {
       console.error("Failed to load more replays:", err);
@@ -376,106 +318,4 @@ export const getReplayPresenter = (replayService: ReplayService, authService: Au
 export const useReplayPresenter = () => {
   const { replayService, authService } = useServices();
   return getReplayPresenter(replayService, authService);
-};
-
-export const useReplaySelection = () => {
-  const presenter = useReplayPresenter();
-  const { files } = useReplayBrowserList();
-  const selectedFiles = useReplays((store) => store.selectedFiles);
-
-  const [lastClickIndex, setLastClickIndex] = useState<number | undefined>();
-
-  const toggleFiles = (fileNames: string[], mode: "toggle" | "select" | "deselect" = "toggle") => {
-    const { selectAllMode } = useReplays.getState();
-
-    // If in select-all mode, use the exclusion pattern
-    if (selectAllMode) {
-      fileNames.forEach((fileName) => {
-        presenter.toggleFileInSelectAllMode(fileName);
-      });
-      return;
-    }
-
-    // Normal selection mode
-    const newSelection = Array.from(selectedFiles);
-
-    fileNames.forEach((fileName) => {
-      const alreadySelectedIndex = newSelection.findIndex((f) => f === fileName);
-      switch (mode) {
-        case "toggle": {
-          if (alreadySelectedIndex !== -1) {
-            newSelection.splice(alreadySelectedIndex, 1);
-          } else {
-            newSelection.push(fileName);
-          }
-          break;
-        }
-        case "select": {
-          if (alreadySelectedIndex === -1) {
-            newSelection.push(fileName);
-          }
-          break;
-        }
-        case "deselect": {
-          if (alreadySelectedIndex !== -1) {
-            newSelection.splice(alreadySelectedIndex, 1);
-          }
-          break;
-        }
-      }
-    });
-
-    presenter.setSelectedFiles(newSelection);
-  };
-
-  const onFileClick = (index: number, isShiftHeld: boolean) => {
-    const isCurrentSelected = selectedFiles.includes(files[index].fullPath);
-    if (lastClickIndex != null && isShiftHeld) {
-      // Shift is held
-      // Find all the files between the last clicked file and the current one
-      const startIndex = Math.min(index, lastClickIndex);
-      const endIndex = Math.max(index, lastClickIndex);
-
-      const filesToToggle: string[] = [];
-      for (let i = startIndex; i <= endIndex; i++) {
-        filesToToggle.push(files[i].fullPath);
-      }
-
-      if (lastClickIndex > index) {
-        filesToToggle.reverse();
-      }
-
-      if (isCurrentSelected) {
-        toggleFiles(filesToToggle, "deselect");
-      } else {
-        toggleFiles(filesToToggle, "select");
-      }
-    } else {
-      toggleFiles([files[index].fullPath]);
-    }
-
-    // Update the click index when we're done
-    setLastClickIndex(index);
-  };
-
-  const clearSelection = () => {
-    presenter.setSelectedFiles([], true); // Reset selectAllMode and deselectedFiles
-  };
-
-  const selectAll = () => {
-    const currentlySelected = new Set(selectedFiles);
-    const remainingFiles = files.filter((f) => !currentlySelected.has(f.fullPath)).map((f) => f.fullPath);
-
-    // Preserve order: manually selected files first, then remaining files
-    const allFiles = [...selectedFiles, ...remainingFiles];
-
-    presenter.setSelectedFiles(allFiles, false); // Don't reset selectAllMode
-    presenter.setSelectAllMode(true);
-  };
-
-  return {
-    onFileClick,
-    clearSelection,
-    selectAll,
-  };
 };

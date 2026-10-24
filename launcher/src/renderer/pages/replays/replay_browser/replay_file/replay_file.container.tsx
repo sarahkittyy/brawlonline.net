@@ -23,14 +23,12 @@ import { IconMenu } from "@/components/icon_menu";
 import { RenderVideoIcon } from "@/components/render_video_icon";
 import { useDolphinActions } from "@/lib/dolphin/use_dolphin_actions";
 import { useReplayHighlight } from "@/lib/hooks/use_replay_highlight";
-import { useReplays } from "@/lib/hooks/use_replays";
 import { usePPlusVersions } from "@/lib/pplus/use_pplus_versions";
 import { convertFrameCountToDurationString, monthDayHourFormat } from "@/lib/time";
 import { getStageImage } from "@/lib/utils";
 import { REPLAY_LIST, usePlaylistStore } from "@/pages/replays/replay_file_stats/highlights/highlight_nav";
 import { useServices } from "@/services";
 
-import { DraggableFile } from "./draggable_file";
 import type { ReplayDetail, ReplayFileAction } from "./replay_file";
 import { ReplayFile as ReplayFileImpl } from "./replay_file";
 import { ReplayFileMessages as Messages } from "./replay_file.messages";
@@ -42,8 +40,6 @@ type ReplayFileContainerProps = FileResult & {
   onSelect: (index: number) => void;
   onPlay: (index: number) => void;
   onOpenMenu: (index: number, element: HTMLElement) => void;
-  onClick: (index: number, isShiftHeld: boolean) => void;
-  selectedFilesSet: Set<string>;
   /** This replay's whole-match render still going (Render to video), if any. */
   matchRender?: RenderJobInfo;
 };
@@ -53,12 +49,10 @@ export const ReplayFileContainer = React.memo(function ReplayFileContainer({
   onOpenMenu,
   onSelect,
   onPlay,
-  onClick,
   id,
   fileName,
   game,
   fullPath,
-  selectedFilesSet,
   matchRender,
 }: ReplayFileContainerProps) {
   // Our replays name P+'s stage ids (the stage select's, @common/stages), not Melee's.
@@ -66,31 +60,12 @@ export const ReplayFileContainer = React.memo(function ReplayFileContainer({
   const stageImageUrl = stageInfo != null ? getStageImage(stageInfo.id) : undefined;
   const stageName = stageInfo != null ? stageInfo.name : Messages.unknownStage();
 
-  // Use Set for O(1) lookup instead of O(n) indexOf
-  const selected = selectedFilesSet.has(fullPath);
   const highlightKey = useReplayHighlight((store) => (store.paths.includes(fullPath) ? store.nonce : 0));
   // The replay the playback Dolphin plays from this list (its << >> follow).
   const playing = usePlaylistStore((store) => store.source === REPLAY_LIST && store.current?.path === fullPath);
 
-  // Only calculate index if actually selected (for display purposes)
-  const selectedFiles = useReplays((store) => store.selectedFiles);
-  const selectedIndex = useMemo(
-    () => (selected ? selectedFiles.indexOf(fullPath) : -1),
-    [selected, selectedFiles, fullPath],
-  );
-
-  // Pre-compute drag paths to avoid recreating array
-  const dragPaths = useMemo(
-    () => (selected && selectedFiles.length > 0 ? selectedFiles : []),
-    [selected, selectedFiles],
-  );
-
   const fileDrag = useFileDrag();
   const onShowStats = useCallback(() => onSelect(index), [onSelect, index]);
-  const onReplayClick = useCallback(
-    (e: React.MouseEvent<HTMLDivElement, MouseEvent>) => onClick(index, e.shiftKey),
-    [onClick, index],
-  );
   const onPlayClick = useCallback(() => onPlay(index), [onPlay, index]);
 
   // Render to video: the whole match, as highlights are rendered (Settings > Clips' resolution, into
@@ -125,16 +100,6 @@ export const ReplayFileContainer = React.memo(function ReplayFileContainer({
   );
   const renderState = matchRender?.state;
   const renderProgress = matchRender?.progress ?? 0;
-
-  // Drag handler for the entire replay item (drags all selected files)
-  const onReplayDragStart = useMemo(() => {
-    if (dragPaths.length === 0) {
-      return undefined;
-    }
-    return (event: React.DragEvent<HTMLDivElement>) => {
-      fileDrag(event, dragPaths);
-    };
-  }, [fileDrag, dragPaths]);
 
   // Drag handler for just the filename (drags only this file)
   const onFileNameDragStart = useCallback(
@@ -221,21 +186,18 @@ export const ReplayFileContainer = React.memo(function ReplayFileContainer({
   }, [game.isTeams, game.players]);
 
   return (
-    <DraggableFile onDragStart={onReplayDragStart}>
+    <div>
+      {/* A click opens the replay's stats page, as its highlights button does. */}
       <div
         key={id}
         css={css`
           cursor: pointer;
         `}
-        onClick={onReplayClick}
-        // A double-click opens the stats page, as the stats button does (its two clicks select
-        // and deselect the row, leaving the selection as it was).
-        onDoubleClick={onShowStats}
+        onClick={onShowStats}
       >
         <ReplayFileImpl
           fileName={fileName}
           backgroundImage={stageImageUrl}
-          selectedIndex={selected ? selectedIndex : undefined}
           players={players}
           actions={actions}
           details={details}
@@ -244,13 +206,12 @@ export const ReplayFileContainer = React.memo(function ReplayFileContainer({
           playing={playing}
         />
       </div>
-      {/* (Its clicks are kept from the row, which would select it: the menu is in a portal.) */}
+      {/* (Its clicks are kept from the row, which would open the stats page: the menu is in a portal.) */}
       <IconMenu
         anchorEl={renderMenu}
         open={renderMenu != null}
         onClose={() => setRenderMenu(null)}
         onClick={(e) => e.stopPropagation()}
-        onDoubleClick={(e) => e.stopPropagation()}
         anchorOrigin={{ vertical: "bottom", horizontal: "center" }}
         transformOrigin={{ vertical: "top", horizontal: "center" }}
         items={[
@@ -266,7 +227,7 @@ export const ReplayFileContainer = React.memo(function ReplayFileContainer({
           },
         ]}
       />
-    </DraggableFile>
+    </div>
   );
 });
 

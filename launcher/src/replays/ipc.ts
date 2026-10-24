@@ -3,16 +3,7 @@ import type { EmptyPayload } from "utils/ipc";
 import { _, makeEndpoint } from "utils/ipc";
 
 import type { AllHighlightsEvent, GameHighlights, ReplayHighlights } from "./highlights/types";
-import type {
-  BulkDeleteOptions,
-  BulkDeleteResult,
-  FileResult,
-  FolderResult,
-  MatchReplay,
-  Progress,
-  SearchGamesOptions,
-  SearchGamesResult,
-} from "./types";
+import type { FileResult, FolderResult, MatchReplay, Progress, SearchGamesOptions, SearchGamesResult } from "./types";
 
 // Handlers
 
@@ -45,8 +36,6 @@ export const ipc_calculateStadiumStats = makeEndpoint.main(
 );
 
 export const ipc_deleteReplays = makeEndpoint.main("deleteReplays", <{ fileIds: string[] }>_, <{ success: boolean }>_);
-
-export const ipc_bulkDeleteReplays = makeEndpoint.main("bulkDeleteReplays", <BulkDeleteOptions>_, <BulkDeleteResult>_);
 
 export const ipc_findReplaysForMatches = makeEndpoint.main(
   "findReplaysForMatches",

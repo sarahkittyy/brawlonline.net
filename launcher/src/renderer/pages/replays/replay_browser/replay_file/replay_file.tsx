@@ -1,4 +1,3 @@
-import { exists } from "@common/exists";
 import { css, keyframes } from "@emotion/react";
 import styled from "@emotion/styled";
 import CircularProgress from "@mui/material/CircularProgress";
@@ -34,7 +33,6 @@ type ReplayFileProps = {
   players: PlayerInfo[][];
   details: ReplayDetail[];
   actions: ReplayFileAction[];
-  selectedIndex?: number;
   backgroundImage?: string;
   onFileNameDragStart?: (event: React.DragEvent<HTMLDivElement>) => void;
   /** Non-zero: pulse gold (a new value pulses again); the replays the match history asked for. */
@@ -44,7 +42,6 @@ type ReplayFileProps = {
 };
 
 export const ReplayFile = React.memo(function ReplayFile({
-  selectedIndex,
   backgroundImage,
   actions,
   players,
@@ -54,11 +51,10 @@ export const ReplayFile = React.memo(function ReplayFile({
   highlightKey = 0,
   playing = false,
 }: ReplayFileProps) {
-  const selected = exists(selectedIndex) && selectedIndex >= 0;
   return (
     <Outer
       backgroundImage={backgroundImage}
-      selected={selected || playing}
+      selected={playing}
       data-replay-highlight={highlightKey ? highlightKey : undefined}
     >
       {highlightKey > 0 && <HighlightPulse key={highlightKey} />}
@@ -69,11 +65,10 @@ export const ReplayFile = React.memo(function ReplayFile({
           flex-direction: column;
           justify-content: center;
           padding: 10px;
-          background-color: ${selected || playing ? "rgba(180, 130, 176, 0.1)" : "transparent"};
+          background-color: ${playing ? "rgba(180, 130, 176, 0.1)" : "transparent"};
           width: 100%;
         `}
       >
-        {selected && <SelectedNumber num={selectedIndex + 1} />}
         <div
           css={css`
             display: flex;
@@ -286,46 +281,3 @@ const ReplayActionButton = React.memo(({ label, color, onClick, ...rest }: Repla
     </Tooltip>
   );
 });
-
-const SelectedNumber = ({ num }: { num: number }) => {
-  // Scale the font size based on the length of the number string
-  const chars = num.toString().length;
-  // Base font size is 30px, scale down for longer numbers
-  const svgFontSize = chars > 2 ? 60 / chars : 30;
-  const maskId = `selected-number-mask-${num}`;
-
-  return (
-    <div
-      css={css`
-        position: absolute;
-        width: 50px;
-        height: 50px;
-        margin-left: auto;
-        margin-right: auto;
-        left: 0;
-        right: 0;
-        z-index: 1;
-      `}
-    >
-      <svg width="50" height="50" viewBox="0 0 50 50">
-        <defs>
-          <mask id={maskId}>
-            <circle cx="25" cy="25" r="25" fill="white" />
-            <text
-              x="50%"
-              y="50%"
-              textAnchor="middle"
-              dominantBaseline="central"
-              fontSize={svgFontSize}
-              fontWeight="bold"
-              fill="black"
-            >
-              {num}
-            </text>
-          </mask>
-        </defs>
-        <circle cx="25" cy="25" r="25" fill="rgba(255, 255, 255, 0.9)" mask={`url(#${maskId})`} />
-      </svg>
-    </div>
-  );
-};

@@ -163,7 +163,7 @@ Endpoint names follow backend-design.md 2.4. **New** marks endpoints that do not
   - "Hide sets without replays".
   - Opponent code search.
   - The footer shows totals and the replay folder used for matching.
-- **Watch set:** queues the set's local replays in the playback Dolphin (Slippi's `viewReplays(...files)` already takes several, as "Play all" does) and skips missing ones.
+- **Watch set:** queues the set's local replays in the playback Dolphin (Slippi's `viewReplays(...files)` already takes several) and skips missing ones.
 - **Data:** per set `{matchId, mode, startedAt, opponent(s) {uid, name, code, rank}, score, won, ratingChange, games[{gameIndex, tiebreakIndex, stageId, characters, stocksLeft, durationFrames, winner, endMethod}]}`. The server already stores these in `mm_matches`, `games` and `rating_events` (2.2).
 - **Source:**
   - **New:** `GET /v1/me/sets?mode=&opponent=&character=&before=&limit=` (session, cursor paged).

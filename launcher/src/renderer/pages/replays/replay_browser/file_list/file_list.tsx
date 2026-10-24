@@ -28,22 +28,18 @@ const FileListResults = ({
   onSelect,
   onPlay,
   onOpenMenu,
-  onClick,
   onLoadMore,
   onScrollPositionChange,
-  selectedFilesSet,
   hasMoreReplays,
 }: {
   folderPath: string;
   files: FileResult[];
   initialScrollOffset: number;
-  onClick: (index: number, isShiftHeld: boolean) => void;
   onOpenMenu: (index: number, element: HTMLElement) => void;
   onSelect: (index: number) => void;
   onPlay: (index: number) => void;
   onLoadMore: () => void;
   onScrollPositionChange: (rowIndex: number) => void;
-  selectedFilesSet: Set<string>;
   hasMoreReplays: boolean;
 }) => {
   const scrollContainerRef = React.useRef<HTMLDivElement | null>(null);
@@ -164,9 +160,7 @@ const FileListResults = ({
           onOpenMenu={onOpenMenu}
           index={index}
           onSelect={onSelect}
-          onClick={onClick}
           onPlay={onPlay}
-          selectedFilesSet={selectedFilesSet}
           matchRender={matchRenders.get(file.fullPath)}
           {...file}
         />
@@ -184,19 +178,14 @@ export const FileList = React.memo(
     onSelect,
     onPlay,
     onDelete,
-    onFileClick,
     folderPath,
     onLoadMore,
-    selectedFilesSet,
     hasMoreReplays,
   }: {
     folderPath: string;
     files: FileResult[];
     onDelete: (filepath: string) => void;
     onSelect: (index: number) => void;
-    onFileClick: (index: number, isShiftHeld: boolean) => void;
-    selectedFiles: Array<string>;
-    selectedFilesSet: Set<string>;
     onPlay: (index: number) => void;
     onLoadMore: () => void;
     loadingMore: boolean;
@@ -251,12 +240,10 @@ export const FileList = React.memo(
           onOpenMenu={onOpenMenu}
           onSelect={onSelect}
           onPlay={onPlay}
-          onClick={onFileClick}
           files={files}
           initialScrollOffset={initialScrollOffset.current}
           onLoadMore={onLoadMore}
           onScrollPositionChange={handleScrollPositionChange}
-          selectedFilesSet={selectedFilesSet}
           hasMoreReplays={hasMoreReplays}
         />
         <IconMenu

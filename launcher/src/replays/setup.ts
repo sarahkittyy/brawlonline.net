@@ -13,7 +13,6 @@ import { HighlightService } from "./highlights/highlight_service";
 import { ManualClips } from "./highlights/manual_clips";
 import {
   ipc_allHighlightsEvent,
-  ipc_bulkDeleteReplays,
   ipc_calculateGameStats,
   ipc_calculateStadiumStats,
   ipc_deleteReplays,
@@ -168,13 +167,5 @@ export default function setupReplaysIpc({
   ipc_findReplaysForMatches.main!.handle(async ({ matchIds, folders }) => {
     const replayProvider = await replayProviderPromise;
     return await replayProvider.findReplaysForMatches(matchIds, folders);
-  });
-
-  ipc_bulkDeleteReplays.main!.handle(async (options) => {
-    const replayProvider = await replayProviderPromise;
-
-    return await replayProvider.bulkDeleteReplays(options.folderPath, options.filters, {
-      excludeFilePaths: options.excludeFilePaths,
-    });
   });
 }

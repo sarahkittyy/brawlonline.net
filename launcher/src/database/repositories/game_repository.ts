@@ -1,5 +1,4 @@
 /* eslint-disable @typescript-eslint/no-empty-object-type */
-import { chunk } from "@common/chunk";
 import type { ExpressionOrFactory, Kysely, OperandValueExpressionOrList, SqlBool, StringReference } from "kysely";
 
 import { applyFilters } from "../filters/apply";
@@ -8,8 +7,6 @@ import type { Database, GameRecord, NewGame } from "../schema";
 import { inFolderTree } from "./file_repository";
 
 type DB = Kysely<Database>;
-
-const SQLITE_PARAM_LIMIT_BATCH_SIZE = 500;
 
 export class GameRepository {
   static async insertGame(db: DB, game: NewGame): Promise<GameRecord> {
@@ -112,53 +109,6 @@ export class GameRepository {
       .execute();
 
     return res;
-  }
-
-  /**
-   * Get file IDs for games matching filters (for bulk deletion)
-   *
-   * @param db Database connection
-   * @param folder Folder to search in, with its subfolders (if empty/null, searches all folders)
-   * @param filters Array of filters to apply (AND logic between filters)
-   * @param excludeFileIds Optional file IDs to exclude from the results
-   * @returns Array of file IDs
-   */
-  static async getFileIdsForBulkDelete(
-    db: DB,
-    folder: string | null,
-    filters: ReplayFilter[],
-    excludeFileIds?: number[],
-  ): Promise<number[]> {
-    let query = db.selectFrom("file").innerJoin("game", "game.file_id", "file._id");
-
-    // Apply folder filter if specified
-    if (folder != null && folder !== "") {
-      query = query.where(inFolderTree(folder));
-    }
-
-    // Apply all filters (AND logic)
-    query = applyFilters(query, filters);
-
-    // Exclude specific file IDs if provided
-    // For large exclude lists (>999), we need to batch the NOT IN clauses
-    // to stay under SQLite's parameter limit
-    if (excludeFileIds && excludeFileIds.length > 0) {
-      if (excludeFileIds.length <= SQLITE_PARAM_LIMIT_BATCH_SIZE) {
-        // Small list: use single NOT IN clause
-        query = query.where("file._id", "not in", excludeFileIds);
-      } else {
-        // Large list: apply NOT IN in batches using AND conditions
-        // Each batch adds a NOT IN constraint, all must be satisfied
-        const batches = chunk(excludeFileIds, SQLITE_PARAM_LIMIT_BATCH_SIZE);
-        for (const batch of batches) {
-          query = query.where("file._id", "not in", batch);
-        }
-      }
-    }
-
-    const res = await query.select("file._id").execute();
-
-    return res.map((row) => row._id);
   }
 
   /**

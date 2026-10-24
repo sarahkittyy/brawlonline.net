@@ -74,7 +74,7 @@ Project+ X replays yet", with "Play on <current> anyway".
 ## 4. Playing
 
 **Main.** Every play request goes through main's `decideReplayRelease`: Launch replay, the replay
-list's Play and Play All, highlights and highlights' Play all. It returns one of:
+list's Play, highlights and highlights' Play all. It returns one of:
 - `playing`: on the replays' release when its files are here, or on the launcher's own;
 - `needs-files`: with the download size;
 - `unplayable`.

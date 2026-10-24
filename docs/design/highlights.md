@@ -46,7 +46,8 @@ The row playing is shown selected, and follows the playback Dolphin's buttons an
 says what the playback Dolphin does:
 starting, loading the replay, **fast-forwarding to the highlight (frame N / target, a progress
 bar)**, playing, done, or why it can't (a refused replay; a replay that plays differently here and
-ends before the highlight). A double-click on a replay's row in the Replays tab opens the page.
+ends before the highlight). A click on a replay's row in the Replays tab opens the page (rows can't
+be selected: multi-select and its Delete / Select All / Play All bar went 2026-10-24).
 
 Settings > Clips: "L+R+Z to clip" (on), "Disable automatic highlight detection" (off; "Disables
 the local highlight detection for replays."), and the video output folder (default

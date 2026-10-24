@@ -2,7 +2,6 @@
 import type { AllHighlightsEvent } from "./highlights/types";
 import {
   ipc_allHighlightsEvent,
-  ipc_bulkDeleteReplays,
   ipc_calculateGameStats,
   ipc_calculateStadiumStats,
   ipc_deleteReplays,
@@ -16,7 +15,7 @@ import {
   ipc_selectTreeFolder,
   ipc_statsPageRequestedEvent,
 } from "./ipc";
-import type { BulkDeleteOptions, Progress, ReplayService, SearchGamesOptions } from "./types";
+import type { Progress, ReplayService, SearchGamesOptions } from "./types";
 
 const replayApi: ReplayService = {
   async initializeFolderTree(folders: readonly string[]) {
@@ -45,10 +44,6 @@ const replayApi: ReplayService = {
   },
   async deleteReplays(fileIds: string[]) {
     await ipc_deleteReplays.renderer!.trigger({ fileIds });
-  },
-  async bulkDeleteReplays(options: BulkDeleteOptions) {
-    const { result } = await ipc_bulkDeleteReplays.renderer!.trigger(options);
-    return result;
   },
   async findReplaysForMatches(matchIds: string[], folders: string[]) {
     const { result } = await ipc_findReplaysForMatches.renderer!.trigger({ matchIds, folders });

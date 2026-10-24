@@ -1,7 +1,5 @@
 import type { AllHighlightsEvent, GameHighlights, ReplayHighlights } from "@replays/highlights/types";
 import type {
-  BulkDeleteOptions,
-  BulkDeleteResult,
   FileResult,
   FolderResult,
   MatchReplay,
@@ -59,11 +57,6 @@ class MockReplayClient implements ReplayService {
   @delayAndMaybeError(SHOULD_ERROR)
   async deleteReplays(_fileIds: string[]): Promise<void> {
     return;
-  }
-
-  @delayAndMaybeError(SHOULD_ERROR)
-  async bulkDeleteReplays(_options: BulkDeleteOptions): Promise<BulkDeleteResult> {
-    return { deletedCount: 4 };
   }
 
   @delayAndMaybeError(SHOULD_ERROR)
