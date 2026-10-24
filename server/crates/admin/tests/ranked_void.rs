@@ -109,8 +109,9 @@ async fn voiding_a_set_rerates_every_later_set() {
         u.push(store::create_user(&pool, &format!("zz-void-{i}@example.test"), "x", n).await.unwrap().uid);
     }
     let (a, b, c, d) = (u[0], u[1], u[2], u[3]);
-    // Ann abandons the set to void before any game (only she is rated); her later sets, and
-    // through them Bo's, Cy's and Di's, were rated from the lower rating.
+    // Ann abandons the set to void before any game (only she is rated, as such a set was until
+    // 2026-10-23); her later sets, and through them Bo's, Cy's and Di's, were rated from the lower
+    // rating.
     let mut sets = vec![won("v-1", a, b), won("v-2", c, d), won("v-3", b, c), won("v-4", a, d), won("v-5", d, b)];
     sets.push(("v-void", "ABANDONED", vec![(a, b, 0.0)]));
     sets.extend([won("v-6", a, c), won("v-7", c, b), won("v-8", b, a), won("v-9", d, c), won("v-10", a, d)]);

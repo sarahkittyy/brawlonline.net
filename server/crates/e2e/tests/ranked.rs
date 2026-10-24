@@ -189,14 +189,17 @@ async fn abandoning_disagreeing_and_bad_reports() {
     let u = players(&stack, &["carla", "dmitri", "eve"]).await;
     let (a, b, c) = (&u[0], &u[1], &u[2]);
 
-    // Leaving before any game: the leaver loses, the other player gets nothing.
+    // Leaving before any game (quitting game 1): the leaver loses, the other player wins.
     let id = direct_set(&stack, a, b, 1).await;
     let (st, s) = leave(&stack, a, &id, "left").await;
     assert_eq!(st, 200);
     assert_eq!(s["status"], "ABANDONED", "{s}");
     assert!(close(s["rating"]["change"].as_f64().unwrap(), -100.0), "{s}");
-    assert!(result(&stack, b, &id).await["rating"].is_null());
-    assert_eq!(rank(&stack, b).await, (DEFAULT_RATING, 0));
+    let rb = result(&stack, b, &id).await;
+    assert_eq!(rb["winner"], json!(b.uid), "{rb}");
+    assert!(close(rb["rating"]["change"].as_f64().unwrap(), 100.0), "{rb}");
+    let (rating_b, sets_b) = rank(&stack, b).await;
+    assert!(close(rating_b, DEFAULT_RATING + 100.0) && sets_b == 1, "{rating_b} {sets_b}");
 
     // After a game: the one who stays wins the set.
     let id = direct_set(&stack, a, b, 2).await;
@@ -204,7 +207,7 @@ async fn abandoning_disagreeing_and_bad_reports() {
     let (_, s) = leave(&stack, b, &id, "left").await;
     assert_eq!(s["status"], "ABANDONED");
     let ra = result(&stack, a, &id).await;
-    let want = updated(DEFAULT_RATING - 100.0, 1, DEFAULT_RATING, 1.0);
+    let want = updated(DEFAULT_RATING - 100.0, 1, DEFAULT_RATING + 100.0, 1.0);
     assert!(close(ra["rating"]["after"].as_f64().unwrap(), want), "{ra}");
 
     // Leaving before the stage select with no game played (the search cancelled as the match was

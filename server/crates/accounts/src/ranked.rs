@@ -389,9 +389,7 @@ pub async fn settle(
     }
     let (winner, reason) = match &outcome {
         Outcome::Complete { winner, .. } => (Some(*winner), None),
-        Outcome::Abandoned { leaver, other, credit_other, .. } => {
-            (credit_other.then_some(*other), Some(format!("abandoned by {leaver}")))
-        }
+        Outcome::Abandoned { leaver, other, .. } => (Some(*other), Some(format!("abandoned by {leaver}"))),
         Outcome::Void { reason, .. } => (None, Some(reason.clone())),
         Outcome::InProgress { .. } => unreachable!(),
     };

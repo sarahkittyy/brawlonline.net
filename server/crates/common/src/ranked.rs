@@ -135,7 +135,7 @@ impl RecomputedChange {
 ///
 /// Each player starts from their first change in the window (a voided set's players from before
 /// it). A player who has no change of their own in a set (the other player of an abandon before any
-/// game) stands at the stored opponent rating until a change of theirs is replayed. Both changes of
+/// game, settled before 2026-10-23 when such a set rated only the leaver) stands at the stored opponent rating until a change of theirs is replayed. Both changes of
 /// a set use the ratings from before the set, as `settle` does.
 ///
 /// Returns every change of `window` not in `removed`, in order, and each player's rating and
@@ -302,9 +302,10 @@ pub enum Outcome {
     InProgress { wins: [u32; 2] },
     /// A player won [`WINS_NEEDED`] games. Both ratings change.
     Complete { winner: Uuid, loser: Uuid, wins: [u32; 2] },
-    /// A player abandoned the set before it was decided. The leaver takes a set loss; the other
-    /// player gets the win only once at least one game was played (`credit_other`).
-    Abandoned { leaver: Uuid, other: Uuid, credit_other: bool, wins: [u32; 2] },
+    /// A player abandoned the set before it was decided. The leaver takes a set loss and the other
+    /// player the win, also before any game was played (the user's, 2026-10-23: quitting game 1
+    /// gave the one who stayed nothing).
+    Abandoned { leaver: Uuid, other: Uuid, wins: [u32; 2] },
     /// No rating change. `status` is the `mm_matches.status` (Slippi's set states):
     /// `TERMINATED` (the connection broke and nobody can be blamed), `ERROR` (the reports
     /// disagree; held for review), `ORPHANED` (nothing more was reported).
@@ -346,7 +347,9 @@ impl Outcome {
 ///   still waiting for its second report holds back the ones after it. A draw counts for nobody
 ///   and is replayed.
 /// - The first player to [`WINS_NEEDED`] counted games wins the set.
-/// - Otherwise a leave decides it: a player who reports [`Leave::Left`] abandoned it. A player
+/// - Otherwise a leave decides it, the other player winning the set even with no game played: a
+///   player who reports [`Leave::Left`] abandoned it (unless it was before the stage select with
+///   no game played: void, nobody rated). A player
 ///   whose opponent reports [`Leave::OpponentLeft`] and who does not report the same within
 ///   `report_grace` abandoned it (their game crashed or was closed). Both reporting
 ///   `OpponentLeft` is a broken connection: void as `TERMINATED`, nobody is blamed. An
@@ -432,12 +435,7 @@ pub fn resolve(
     let left = [reported(0, Leave::Left), reported(1, Leave::Left)];
     let opp_left = [reported(0, Leave::OpponentLeft), reported(1, Leave::OpponentLeft)];
     let played = wins.iter().sum::<u32>() > 0 || games.iter().any(|g| g.winner.is_none());
-    let abandon = |leaver: usize| Outcome::Abandoned {
-        leaver: players[leaver],
-        other: players[1 - leaver],
-        credit_other: played,
-        wins,
-    };
+    let abandon = |leaver: usize| Outcome::Abandoned { leaver: players[leaver], other: players[1 - leaver], wins };
     // A player who left before their game was sent to the stage select, with no game played,
     // abandoned nothing: the search was cancelled as the match was made, or the connection never
     // came up (bug report #37, 2026-10-16). Nobody is rated.
@@ -528,15 +526,7 @@ pub fn scores(players: [Uuid; 2], outcome: &Outcome) -> [Option<f64>; 2] {
     let score_of = |winner: Uuid, p: Uuid| if p == winner { 1.0 } else { 0.0 };
     match outcome {
         Outcome::Complete { winner, .. } => players.map(|p| Some(score_of(*winner, p))),
-        Outcome::Abandoned { leaver, credit_other, .. } => players.map(|p| {
-            if p == *leaver {
-                Some(0.0)
-            } else if *credit_other {
-                Some(1.0)
-            } else {
-                None
-            }
-        }),
+        Outcome::Abandoned { other, .. } => players.map(|p| Some(score_of(*other, p))),
         Outcome::InProgress { .. } | Outcome::Void { .. } => [None, None],
     }
 }
@@ -985,7 +975,7 @@ mod tests {
         let mut s = Set::new();
         s.online(0, true).online(1, false).both(1, Some(0), 1).leave(0, Leave::OpponentLeft, 2);
         assert_eq!(s.at_min(3), Outcome::InProgress { wins: [1, 0] });
-        assert_eq!(s.at_min(4), Outcome::Abandoned { leaver: s.p[1], other: s.p[0], credit_other: true, wins: [1, 0] });
+        assert_eq!(s.at_min(4), Outcome::Abandoned { leaver: s.p[1], other: s.p[0], wins: [1, 0] });
     }
 
     /// Bug report #105 (2026-10-22): the opponent's game froze 18 s into game 2 and stayed
@@ -995,13 +985,13 @@ mod tests {
     fn opponent_left_about_a_frozen_game_abandons_at_once() {
         let mut s = Set::new();
         s.online(0, true).online(1, true).both(1, Some(0), 1).stalled(1, 4).leave(0, Leave::OpponentLeft, 4);
-        assert_eq!(s.at_min(4), Outcome::Abandoned { leaver: s.p[1], other: s.p[0], credit_other: true, wins: [1, 0] });
+        assert_eq!(s.at_min(4), Outcome::Abandoned { leaver: s.p[1], other: s.p[0], wins: [1, 0] });
         // Either player.
         let mut s = Set::new();
         s.online(0, true).online(1, true).stalled(0, 2).leave(1, Leave::OpponentLeft, 3);
         assert_eq!(
             s.at_min(3),
-            Outcome::Abandoned { leaver: s.p[0], other: s.p[1], credit_other: false, wins: [0, 0] }
+            Outcome::Abandoned { leaver: s.p[0], other: s.p[1], wins: [0, 0] }
         );
         // A game that stopped running only after the report was running when it was made: the
         // report may be untrue, so nobody is blamed, as for any connected game.
@@ -1042,15 +1032,16 @@ mod tests {
         let mut s = Set::new();
         s.both(1, Some(0), 5).leave(0, Leave::Left, 6);
         let o = s.at_min(6);
-        assert_eq!(o, Outcome::Abandoned { leaver: s.p[0], other: s.p[1], credit_other: true, wins: [1, 0] });
+        assert_eq!(o, Outcome::Abandoned { leaver: s.p[0], other: s.p[1], wins: [1, 0] });
         assert_eq!(o.status(), "ABANDONED");
         assert_eq!(scores(s.p, &o), [Some(0.0), Some(1.0)]);
-        // Before any game: the leaver still loses, the other player gets nothing.
+        // Before any game (quitting game 1, or leaving once the opponent's name shows): the leaver
+        // still loses, and the other player wins.
         let mut s = Set::new();
         s.leave(1, Leave::Left, 1);
         let o = s.at_min(1);
-        assert_eq!(o, Outcome::Abandoned { leaver: s.p[1], other: s.p[0], credit_other: false, wins: [0, 0] });
-        assert_eq!(scores(s.p, &o), [None, Some(0.0)]);
+        assert_eq!(o, Outcome::Abandoned { leaver: s.p[1], other: s.p[0], wins: [0, 0] });
+        assert_eq!(scores(s.p, &o), [Some(1.0), Some(0.0)]);
     }
 
     #[test]
@@ -1059,7 +1050,7 @@ mod tests {
         let mut s = Set::new();
         s.both(1, Some(1), 5).leave(1, Leave::OpponentLeft, 7);
         assert_eq!(s.at_min(8), Outcome::InProgress { wins: [0, 1] });
-        assert_eq!(s.at_min(9), Outcome::Abandoned { leaver: s.p[0], other: s.p[1], credit_other: true, wins: [0, 1] });
+        assert_eq!(s.at_min(9), Outcome::Abandoned { leaver: s.p[0], other: s.p[1], wins: [0, 1] });
         // Both say the other left: the connection broke, nobody is blamed.
         let mut s = Set::new();
         s.both(1, Some(1), 5).leave(1, Leave::OpponentLeft, 7).leave(0, Leave::OpponentLeft, 7);
@@ -1068,7 +1059,7 @@ mod tests {
         // Their own "left" settles it at once.
         let mut s = Set::new();
         s.leave(1, Leave::OpponentLeft, 7).leave(0, Leave::Left, 7);
-        assert!(matches!(s.at_min(7), Outcome::Abandoned { credit_other: false, .. }));
+        assert_eq!(s.at_min(7), Outcome::Abandoned { leaver: s.p[0], other: s.p[1], wins: [0, 0] });
     }
 
     #[test]
@@ -1088,16 +1079,16 @@ mod tests {
         // select anyway).
         let mut s = Set::new();
         s.both(1, Some(0), 5).leave_early(1, 6);
-        assert_eq!(s.at_min(6), Outcome::Abandoned { leaver: s.p[1], other: s.p[0], credit_other: true, wins: [1, 0] });
+        assert_eq!(s.at_min(6), Outcome::Abandoned { leaver: s.p[1], other: s.p[0], wins: [1, 0] });
         // A drawn game counts as played.
         let mut s = Set::new();
         s.both(1, None, 5).leave_early(1, 6);
-        assert!(matches!(s.at_min(6), Outcome::Abandoned { credit_other: true, .. }));
+        assert_eq!(s.at_min(6), Outcome::Abandoned { leaver: s.p[1], other: s.p[0], wins: [0, 0] });
         // Without the leaver's own report (an old client, a crash) the opponent's report decides,
         // as before.
         let mut s = Set::new();
         s.leave(1, Leave::OpponentLeft, 1);
-        assert_eq!(s.at_min(3), Outcome::Abandoned { leaver: s.p[0], other: s.p[1], credit_other: false, wins: [0, 0] });
+        assert_eq!(s.at_min(3), Outcome::Abandoned { leaver: s.p[0], other: s.p[1], wins: [0, 0] });
     }
 
     #[test]
@@ -1288,7 +1279,7 @@ mod tests {
             sets.push(win(m, a, c, t(-200 + n as i64)));
         }
         sets.push(win("ab", a, b, t(-50)));
-        // The set to void: b abandons before any game, only b is rated.
+        // The set to void: b abandons before any game, only b is rated (as until 2026-10-23).
         sets.push(("void", vec![(b, a, 0.0)], t(-40)));
         sets.push(win("bc", b, c, t(-30)));
         sets.push(win("ac", a, c, t(10)));

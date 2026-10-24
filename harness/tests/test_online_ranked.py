@@ -366,7 +366,7 @@ def test_ranked_has_no_pause_and_closing_abandons(backend: OnlineBackend, dolphi
     (`window`: emulation stops, as the window's X does) or the whole app (`app`: the harness's
     quit, as Cmd-Q). A reports its own leave right away, so the server settles the set as
     abandoned by A at once, not after the opponent's report and the 2-minute grace; A takes the
-    set loss (no game was played, so B is credited nothing)."""
+    set loss and B the win, though no game was played (since 2026-10-23)."""
     test = f"ranked-no-pause-{how}"
     ua, ub = backend.create_user(f"rnp{how[0]}a", f"RNA{how[0].upper()}"), backend.create_user(f"rnp{how[0]}b", f"RNB{how[0].upper()}")
     a = _boot(dolphin, f"rnp{how[0]}-a", backend, ua, gpu_backend, test, "gameplay")
@@ -432,7 +432,8 @@ def test_ranked_has_no_pause_and_closing_abandons(backend: OnlineBackend, dolphi
     pub_a = backend._http("GET", f"/user/{ua.uid}?additionalFields=chatMessages,rank")
     assert pub_a["rank"]["ratingUpdateCount"] == 1 and pub_a["rank"]["ratingOrdinal"] < DEFAULT_RATING, pub_a
     pub_b = backend._http("GET", f"/user/{ub.uid}?additionalFields=chatMessages,rank")
-    assert (pub_b.get("rank") or {}).get("ratingUpdateCount", 0) == 0, pub_b
+    assert pub_b["rank"]["ratingUpdateCount"] == 1 and pub_b["rank"]["ratingOrdinal"] > DEFAULT_RATING, pub_b
+    assert res["winner"] == ub.uid and res["rating"]["change"] > 0, res
     if how == "app":
         assert a.inst.process is None or a.inst.process.poll() is not None
     else:

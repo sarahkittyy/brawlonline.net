@@ -337,7 +337,7 @@ Parameters (initial, to tune on our data): mu = 25, sigma = 25/3, beta = 25/6, t
 
 ### 4.4 Disconnects and desyncs (Slippi-equivalent)
 
-- Abandon (a player closes Dolphin, or holds Z to disconnect in ranked): reported `abandoned` by the remaining side. The leaver takes a set loss; the remaining player gets a win only if at least one game has been played, otherwise the set is voided.
+- Abandon (a player closes Dolphin, or holds Z to disconnect in ranked): reported `abandoned` by the remaining side. The leaver takes a set loss and the remaining player the set win, also when no game has been played yet (the user's, 2026-10-23: a player who quit game 1 cost the one who stayed nothing; until then such a set rated only the leaver). Only a leave before game 1's setup began (before the opponent's name shows), with no game played, voids the set.
 - `poor_performance` termination and `abnormal_completion` with desync recovery failing: **void the set, no rating change**, and log it per uid. Repeat offenders (more than 3 in 24 h) get a cooldown from ranked (Slippi's "ban warning"). Not built.
 - A desync (built 2026-10-13, the user's rules; `docs/game-code.md` §11, desync recovery): the game starts again from the last frame whose checksums both machines compared equal (stocks, damage and time left), after both ready up on the CSS (45 s), and is reported under the same set game number. The server sees nothing of it.
 - The two clients' reports must agree on winner, stocks and end method. On disagreement the game is flagged, the rating is held, and the replay is kept for admin review.

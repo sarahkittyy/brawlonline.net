@@ -381,7 +381,7 @@ async fn match_history_and_unrated_reports() {
         ok_report(&stack, a, &m1, g, Some(a)).await;
         ok_report(&stack, b, &m1, g, Some(a)).await;
     }
-    // 2. Ranked, b leaves before any game: b loses rating, a gets nothing.
+    // 2. Ranked, b leaves before any game: b loses rating, a wins the set.
     let m2 = mm_match(&stack, 0, a, b, t0, 2).await;
     let (st, s) = stack
         .post(
@@ -485,7 +485,7 @@ async fn match_history_and_unrated_reports() {
         accounts::ranked::sweep(&stack.pool, Utc::now() + Duration::hours(2), Default::default()).await.unwrap(),
         1
     );
-    // a and b are still placing (one and two rated sets): not on the leaderboard, and their rating
+    // a and b are still placing (two rated sets each): not on the leaderboard, and their rating
     // changes are hidden in the history (the launcher shows ????).
     for u in [a, b] {
         let (_, pu) = stack.get(&format!("/user/{}", u.uid), None).await;
@@ -494,13 +494,12 @@ async fn match_history_and_unrated_reports() {
     }
     assert_eq!(board(&stack, "").await["total"], 0);
     let placing = history(&stack, sa, "").await;
-    for u in [a, b] {
-        let p = player(item(&placing, &m1), u);
+    for (m, u) in [(&m1, a), (&m1, b), (&m2, a), (&m2, b)] {
+        let p = player(item(&placing, m), u);
         assert!(p["ratingBefore"].is_null() && p["ratingAfter"].is_null() && p["ratingChange"].is_null(), "{p}");
         assert_eq!(p["ratingHidden"], true, "{p}");
     }
     // Not rated at all: nothing to hide.
-    assert_eq!(player(item(&placing, &m2), a)["ratingHidden"], false);
     assert_eq!(player(item(&placing, &m3), a)["ratingHidden"], false);
     // Both place.
     sqlx::query("UPDATE ratings SET sets_played = sets_played + $1 WHERE uid = ANY($2)")
@@ -546,11 +545,13 @@ async fn match_history_and_unrated_reports() {
 
     let r2 = item(&all, &m2);
     assert_eq!(r2["status"], "ABANDONED");
-    assert!(r2["winner"].is_null());
+    assert_eq!(r2["winner"], a.uid.as_str());
     assert!(r2["endReason"].as_str().unwrap().starts_with("abandoned by"), "{r2}");
     let (pa, pb) = (player(r2, a), player(r2, b));
     assert_eq!((pa["wins"].as_u64(), pb["wins"].as_u64()), (Some(0), Some(0)));
-    assert!(pa["ratingBefore"].is_null() && pa["ratingChange"].is_null());
+    assert!(close(pa["ratingBefore"].as_f64().unwrap(), rating_a));
+    let want = updated(rating_a, 1, rating_b, 1.0) - rating_a;
+    assert!(close(pa["ratingChange"].as_f64().unwrap(), want), "{pa}");
     assert!(close(pb["ratingBefore"].as_f64().unwrap(), rating_b));
     let want = updated(rating_b, 1, rating_a, 0.0) - rating_b;
     assert!(close(pb["ratingChange"].as_f64().unwrap(), want), "{pb}");
