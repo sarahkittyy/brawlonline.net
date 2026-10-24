@@ -180,15 +180,16 @@ describe("replay highlights", () => {
     expect(v1([7, 7, 7, 7, 7])).toBeCloseTo(v1([1, 2, 3, 4, 5]));
   });
 
-  it("marks an L+R+Z press of 5 frames as a clip of 20 s before and 2 s after", () => {
+  it("marks an L+R+Z press as a clip of 20 s before and 2 s after", () => {
     const t = decodeTimeline(encode(game([1, 2, 3, 4], 40)));
     const clips = findLrzClips(t, [0, 1]);
     expect(clips).toHaveLength(1);
     const done = 400 + HOLD_FRAMES - 1;
     expect(clips[0]).toEqual({ player: 0, frame: done, start: 0, end: Math.min(done + CLIP_AFTER, 599) });
     expect(CLIP_BEFORE).toBe(1200);
-    // 4 frames (as long as the three were ever down together in play) is not a clip.
-    expect(findLrzClips(decodeTimeline(encode(game([1, 2, 3, 4], HOLD_FRAMES - 1))), [0, 1])).toHaveLength(0);
+    // A press of one frame is one too; no press, none.
+    expect(findLrzClips(decodeTimeline(encode(game([1, 2, 3, 4], 1))), [0, 1])).toHaveLength(1);
+    expect(findLrzClips(decodeTimeline(encode(game([1, 2, 3, 4], 0))), [0, 1])).toHaveLength(0);
   });
 
   it("counts only the recording player's L+R+Z by default", () => {

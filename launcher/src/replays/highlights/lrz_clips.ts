@@ -1,14 +1,15 @@
 /**
- * L+R+Z clips (Project Clippi's button-input highlights; DESIGN.md, 2026-10-20): a player holding
- * L, R and Z together for HOLD_FRAMES marks a clip of the CLIP_BEFORE frames before the hold and
+ * L+R+Z clips (Project Clippi's button-input highlights; DESIGN.md, 2026-10-20): a player pressing
+ * L, R and Z together, for a frame or more, marks a clip of the CLIP_BEFORE frames before the hold and
  * CLIP_AFTER after it, and the next one counts only LOCKOUT frames later. Found after the game in
  * the recorded pads, so every replay's presses count, those made before this was written too:
  * nothing runs in the match, and the game shows nothing.
  *
- * Over 167 replays (2.6 M player-frames) the three were down together 5 times in play, 4 frames at
- * most. A press meant as a clip is a tap: the user's 7 in 122 replays (2026-10-24) were down 6 to 16
- * frames, none 30 (half a second, the first threshold, which found none of them), and nothing
- * else in those replays was down 3 frames.
+ * A press meant as a clip is a tap: the user's 7 in 122 replays (2026-10-24) were down 6 to 16
+ * frames, none 30 (half a second, the first threshold, which found none of them). Any press counts
+ * (the user, 2026-10-24: "i can't imagine an actual game situation where you press all 3 and dont
+ * intend to clip"); in those replays nothing else had the three down at all, and over the first
+ * research's 167 replays they were down together in play 5 times, 4 frames at most.
  */
 import type { Timeline } from "./replay_frames";
 import { PAD_KEPT } from "./replay_frames";
@@ -19,7 +20,7 @@ const L = 0x40;
 const R = 0x20;
 const Z = 0x10;
 const LRZ = L | R | Z;
-export const HOLD_FRAMES = 5;
+export const HOLD_FRAMES = 1;
 // Project Clippi's defaults: 20 s before, 2 s after, a 5 s lockout.
 export const CLIP_BEFORE = CLIP_BEFORE_SECONDS * 60;
 export const CLIP_AFTER = 2 * 60;
