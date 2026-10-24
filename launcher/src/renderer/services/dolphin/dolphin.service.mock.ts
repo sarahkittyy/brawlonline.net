@@ -21,7 +21,7 @@ import type {
   ReplayQueueItem,
 } from "@dolphin/types";
 import { DolphinEventType } from "@dolphin/types";
-import type { HighlightPlayItem } from "@replays/highlights/types";
+import type { HighlightListView, HighlightPlayItem } from "@replays/highlights/types";
 import { Observable, Subject } from "observable-fns";
 
 import { delayAndMaybeError } from "../utils";
@@ -111,6 +111,11 @@ class MockDolphinClient implements DolphinService {
     _commandId: string,
     _choice?: ReplayPlayChoice,
   ): Promise<ReplayPlayResult> {
+    throw new Error("Method not implemented.");
+  }
+
+  @delayAndMaybeError(SHOULD_ERROR)
+  async updateHighlightList(_item: HighlightPlayItem, _commandId: string, _list: HighlightListView): Promise<void> {
     throw new Error("Method not implemented.");
   }
 

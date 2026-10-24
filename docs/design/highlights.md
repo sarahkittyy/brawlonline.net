@@ -41,7 +41,9 @@ looked at again).
 `replay_file_stats/highlights/highlight_list.tsx`: rows of the attacker's character icon and name
 vs the victim's (teams: the attacker's team vs the victim's), best first, then "Clips (L+R+Z)" with
 who clipped each. A click plays it; ↑/↓ or Tab/Shift+Tab plays the next one at once; Enter plays the
-selected one; **Play all** plays the list in order. A banner says what the playback Dolphin does:
+selected one (Play all went 2026-10-24: the playback Dolphin's list buttons, §3, took its place).
+The row playing is shown selected, and follows the playback Dolphin's buttons and stars. A banner
+says what the playback Dolphin does:
 starting, loading the replay, **fast-forwarding to the highlight (frame N / target, a progress
 bar)**, playing, done, or why it can't (a refused replay; a replay that plays differently here and
 ends before the highlight). A double-click on a replay's row in the Replays tab opens the page.
@@ -65,13 +67,36 @@ to the highlight... 45%", "(2 of 5)") shows. The status file adds `highlights`, 
 for its own `commandId`.
 
 The playback Dolphin's overlay is the replay one (the same seek bar, buttons and hotkeys): a
-highlight is its replay with a seek to the clip's start and a pause at its end, so a click on the
-bar leaves the highlight and the replay plays on from there. Each highlight asked for in the
-replay playing (one for a row's click; Play all: every one of that replay) is marked on the bar
-with a gold line and a star above it (2026-10-24, the user's request); a click on the star or the
-line plays that highlight again from its start (`Session::SetPlaybackMarks`, `PlaybackCommand::
-PlayHighlight`), and the queue goes on from that one (the list's row follows `index`). The render
-Dolphin has no marks.
+highlight is its replay with a seek to the clip's start and a pause at its end. The end is a line
+(2026-10-24, the user: "whenever the end of a highlight is hit ... it should pause"): playing
+pauses each time it gets there, also after a seek back to before it, and the bar shows it as a
+white line while it is ahead; a seek past it, or Play once paused there, plays on (the replay,
+until another highlight). Each highlight of the replay playing is marked on the bar with a gold
+line and a star above it (2026-10-24, the user's request); hovering a star shows where its
+highlight ends; a click on the star or the line plays it from its start (`Session::
+SetPlaybackMarks`, `PlaybackCommand::PlayHighlight`). The render Dolphin has no marks.
+
+**The list's buttons** (2026-10-24, the user's request). A list's row asks for that one highlight
+and adds the list: `"marks": [{"startFrame", "endFrame", "position"}]` (the list's highlights of
+that replay, the stars) and `"nav": {"position", "total", "hasPrevReplay", "hasNextReplay"}`.
+The overlay's title row then ends with "3/40" and **<< < > >>** ("Previous replay", "Previous
+clip", "Next clip", "Next replay"). Their order (`highlight_nav.ts`): the list's replays in the
+order they first come in it, each one's highlights by their start, so with Best first the count
+and the row playing jump about the list (with Newest first it is the list's own order). < and >
+go to the highlight before / after the frame shown in this replay, Dolphin itself from the stars
+(a < more than 1 s into a highlight plays it again from its start, as media players' Previous),
+and past this replay's first / last one to the replay before's last / the next replay's first;
+<< and >> to the replay before / after, its first highlight. What needs another replay is asked
+of the launcher in the status, `"navRequest": {"seq", "action", "frame"}`, which plays the one it
+picks as a new request; a star or < > played here is told, `"highlightPick": {"seq",
+"startFrame", "endFrame"}`, and the list's row follows (both count from 1 for each commandId).
+The list is the one played from last: the Highlights tab's section or a replay's stats page.
+Another section opened doesn't change what plays, but the buttons go by it from then on; the same
+commandId is written again with its stars and count (at most every 400 ms), and Dolphin updates
+them without touching the clip (a highlight not in it shows "-/40"; from it the buttons go to the
+list's first or last). The launcher answers with any page open (`useHighlightNavigation`, mounted
+for the whole window). A replay of another Project+ release asks as a row's click does, in the
+launcher's window. Spectating and the Replays tab's replays have no list buttons.
 
 Measured here (Qt Dolphin, D3D11, other sessions' harness Dolphins running): a cold start to the
 first highlight's fast-forward ~7 s; the fast-forward 330-680 frames a second (8,160 frames in 12-25
@@ -80,7 +105,8 @@ s); the next highlight of the same replay at once (back: under 0.2 s; forward: f
 Harness: `test_replay.py::test_launcher_comm_file_plays_highlights` (a recorded Direct game; three
 clips back and forth in one match, a seek away and a click on the second clip's mark, then on to
 the third, a new request in the same match, a clip past the end holding at the last frame, no
-checksum differing, one match armed).
+checksum differing, one match armed); `test_launcher_comm_file_saves_manual_clips` (end lines,
+the list's stars, count, picks, nav requests and updates). Launcher: `highlight_nav.test.ts`.
 
 ## 4. Rendering, the launcher (2026-10-21)
 
@@ -283,11 +309,15 @@ Clips"".
 **Dolphin** (`VideoCommon/ReplayOverlayUI.cpp`). The replay overlay's time row has a **Clip**
 button left of the time, in the launcher's playback Dolphin whenever a replay of its request is
 armed (a replay, a highlight, a spectated game; not the render Dolphin, nor a replay opened
-without the launcher: `Replay::Playback::CanSaveClip`). A click pauses and enters clip mode: the
-clip ends at the frame shown and starts 20 s before it (the match's start at the earliest; at
-least 1 s long), drawn on the bar as a blue span with a handle at each end, taller than the bar.
-Dragging a handle moves that end (hovered: "Clip start (1:03)"); letting it go seeks there, so the
-screen shows the frame chosen. A press elsewhere on the bar still seeks. The row says "Clip 1:03 -
+without the launcher: `Replay::Playback::CanSaveClip`). A click enters clip mode: the clip ends at
+the frame shown and starts 20 s before it (the match's start at the earliest; at least 1 s long),
+drawn on the bar as a blue span with a handle at each end, taller than the bar, and the replay is
+paused at the clip's start (2026-10-24), so Play plays it: its end pauses as a highlight's does
+(`Session::SetPlaybackStop`). A handle moves only once dragged 4 px (scaled); from then on it
+follows the mouse's movement since the press, never jumping to the mouse, so it can be nudged
+back a pixel; a press and release within that is a click and seeks to that end. Letting a dragged
+handle go seeks there too, so the screen shows the frame chosen (hovered: "Clip start (1:03)"). A
+press elsewhere on the bar still seeks. The row says "Clip 1:03 -
 1:23 (20 s): drag its ends", and the buttons are **Cancel clip** and **Save as highlight** ("Clip
 saved to Replays > Highlights > Manual Clips" on screen). Clip mode ends with either, or when
 another replay is armed (a spectated set's next game). A live game's clip ends at the live edge at
@@ -296,7 +326,9 @@ the latest.
 **Handing it over** (`Rollback/ReplayPlayback.cpp` `SaveClip`): the clip is of the replay armed
 (its path as the comm file gave it; the session's replay must still be the one armed). Every clip
 saved in the Dolphin's run is in the status file, `"savedClips": [{"path", "startFrame",
-"endFrame"}]` (the same frames again are one; 500 at most), written at once. The launcher reads the
+"endFrame"}]` (the same frames again are one; 500 at most), written at once. Its star is on the
+bar at once and stays for that replay while the Dolphin runs (spectating: that game, until the
+window closes or the set's next game; it is a highlight of the game's kept copy afterwards). The launcher reads the
 status every 250 ms and once more as the Dolphin closes (`instance.ts`), so a clip saved just
 before closing is not lost.
 

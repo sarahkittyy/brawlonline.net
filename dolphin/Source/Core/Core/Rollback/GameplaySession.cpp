@@ -781,6 +781,12 @@ struct State
     s64 clip_start = -1;
     s64 clip_end = -1;
     bool clip_done = false;
+    // Its end pauses when playing gets there: set by StartClip and a seek to before it, cleared once
+    // it is passed (paused there, stepped past) or a seek goes past it.
+    bool clip_armed = false;
+    // The overlay's clip mode (SetPlaybackStop): its end, the same way (-1: none).
+    s64 stop_end = -1;
+    bool stop_armed = false;
     bool clip_ff = false;
     bool clip_record = false;
     bool clip_recording = false;
@@ -6031,6 +6037,9 @@ void PlaybackSeek(Core::System& system)
   const s64 target = std::clamp(pb.seek_to, first, last);
   pb.seek_to = -1;
   pb.at_end = false;
+  // A clip's end ahead of the frame sought pauses there again; past it, playing goes on.
+  pb.clip_armed = pb.clip_end >= 0 && target <= pb.clip_end;
+  pb.stop_armed = pb.stop_end >= 0 && target <= pb.stop_end;
   const s64 next = first + static_cast<s64>(pb.next);
   const auto key = s.pb_keys->AtOrBefore(target);
   if (target >= next && (!key || *key <= next))
@@ -6108,14 +6117,25 @@ PlaybackStep PlaybackLoopTopControls(Core::System& system)
       pb.clip_ff = false;
     PlaybackMute(system, pb.joining || pb.clip_ff);
     const bool waiting = !ff && LiveWaiting(f);
-    // A highlight's end: paused there (the launcher plays the next one, or it stays).
-    if (pb.clip_end >= 0 && !ff && f > pb.clip_end && !pb.paused)
+    // A highlight's end, or clip mode's: paused there (the launcher plays the next one, or it
+    // stays). Stepped past while paused, it is passed all the same.
+    const bool clip_reached = pb.clip_armed && pb.clip_end >= 0 && !ff && f > pb.clip_end;
+    const bool stop_reached = pb.stop_armed && pb.stop_end >= 0 && !ff && f > pb.stop_end;
+    if (clip_reached || stop_reached)
     {
-      pb.clip_end = -1;
-      pb.clip_done = true;
-      pb.paused = true;
-      pb.step = 0;
-      EndClipSegment(system);
+      if (clip_reached)
+      {
+        pb.clip_armed = false;
+        pb.clip_done = true;
+        EndClipSegment(system);
+      }
+      if (stop_reached)
+        pb.stop_armed = false;
+      if (!pb.paused)
+      {
+        pb.paused = true;
+        pb.step = 0;
+      }
     }
     if (f > last && !ff && !waiting)
     {
@@ -7233,6 +7253,7 @@ void StartClip(s64 start, s64 end, bool record)
   pb.clip_start = start;
   pb.clip_end = std::max(end, start);
   pb.clip_done = false;
+  pb.clip_armed = true;
   pb.clip_ff = true;
   pb.clip_record = record;
   pb.clip_recording = false;
@@ -7257,8 +7278,22 @@ bool SetPlaybackClip(s64 start, s64 end, bool record)
 void SetPlaybackMarks(std::vector<PlaybackMark> marks)
 {
   std::lock_guard<std::recursive_timed_mutex> lk(s.mutex);
-  if (s.mode == Mode::Playback && s.pb.file && !s.pb.live)
+  if (s.mode == Mode::Playback && s.pb.file)
     s.pb.marks = std::move(marks);
+}
+
+void SetPlaybackStop(s64 end)
+{
+  std::lock_guard<std::recursive_timed_mutex> lk(s.mutex);
+  auto& pb = s.pb;
+  if (s.mode != Mode::Playback || !pb.file)
+    return;
+  pb.stop_end = end;
+  // (Set from where it is shown: a line ahead of it pauses there.)
+  const s64 shown = s.phase == Phase::Running ? PlaybackShown() : static_cast<s64>(pb.file->first_frame);
+  const s64 from = pb.seek_to >= 0 ? pb.seek_to : shown;
+  pb.stop_armed = end >= 0 && from <= end;
+  s_pb_wake.notify_all();
 }
 
 void PlaybackControl(PlaybackCommand command, double arg)
@@ -7282,9 +7317,10 @@ void PlaybackControl(PlaybackCommand command, double arg)
   {
   case PlaybackCommand::PlayHighlight:
   {
-    // (A clip being rendered is never one of them: the render Dolphin has no marks.)
+    // (A clip being rendered is never one of them: the render Dolphin has no marks. Spectating,
+    // the marks are clips saved while watching, behind the live edge.)
     const double i = std::isfinite(arg) ? arg : -1.0;
-    if (i < 0 || i >= static_cast<double>(pb.marks.size()) || pb.clip_record || pb.live)
+    if (i < 0 || i >= static_cast<double>(pb.marks.size()) || pb.clip_record)
       break;
     const PlaybackMark mark = pb.marks[static_cast<size_t>(i)];
     StartClip(mark.start, mark.end, false);
@@ -7415,6 +7451,8 @@ PlaybackInfo GetPlaybackInfo()
   info.marks = s.pb.marks;
   info.clip_start = s.pb.clip_end >= 0 ? s.pb.clip_start : -1;
   info.clip_end = s.pb.clip_end;
+  info.clip_armed = s.pb.clip_armed && s.pb.clip_end >= 0;
+  info.stop_end = s.pb.stop_end;
   return info;
 }
 
@@ -7510,6 +7548,9 @@ picojson::object PlaybackStatus()
   o["clip_start"] = picojson::value(static_cast<double>(s.pb.clip_start));
   o["clip_end"] = picojson::value(static_cast<double>(s.pb.clip_end));
   o["clip_done"] = picojson::value(s.pb.clip_done);
+  o["clip_armed"] = picojson::value(s.pb.clip_armed);
+  o["stop_end"] = picojson::value(static_cast<double>(s.pb.stop_end));
+  o["stop_armed"] = picojson::value(s.pb.stop_armed);
   o["highlight_picks"] = picojson::value(static_cast<double>(s.pb.mark_picks));
   o["highlight_pick"] = picojson::value(static_cast<double>(s.pb.mark_pick));
   o["shown"] = picojson::value(static_cast<double>(

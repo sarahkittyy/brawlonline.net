@@ -19,6 +19,7 @@ import { ProfilePage } from "@/pages/profile/profile_page";
 import { createQuickStartPage } from "@/pages/quick_start/create";
 import { useQuickStartStore } from "@/pages/quick_start/use_quick_start";
 import { createReplaysPage } from "@/pages/replays/create";
+import { useHighlightNavigation } from "@/pages/replays/replay_file_stats/highlights/highlight_playlist";
 import { RulesetsPage } from "@/pages/rulesets/rulesets_page";
 import { createSettingsPage } from "@/pages/settings/create";
 import { createServiceProvider } from "@/services";
@@ -101,6 +102,9 @@ export function createApp({ services }: { services: Services }): {
 
     // Then add the page request listeners
     usePageRequestListeners();
+
+    // The playback Dolphin's highlight list buttons and stars (highlight_playlist.ts), with any page open.
+    useHighlightNavigation();
 
     return (
       <Routes key={currentLanguage}>

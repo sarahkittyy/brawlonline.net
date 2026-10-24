@@ -1,5 +1,5 @@
 import type { ChatKeyPress } from "@common/chat_key";
-import type { HighlightPlayItem } from "@replays/highlights/types";
+import type { HighlightListView, HighlightPlayItem } from "@replays/highlights/types";
 
 import type { SyncedDolphinSettings } from "./config/config";
 import type { DolphinVersionResponse } from "./install/fetch_latest_version";
@@ -34,6 +34,9 @@ export type ReplayCommunication = {
   streamOver?: boolean;
   closeOnEnd?: boolean;
   banner?: string;
+  /** Ours, `highlights` from a list (highlight_playlist.ts): its stars on the seek bar and the overlay's list buttons. */
+  marks?: HighlightListView["marks"];
+  nav?: HighlightListView["nav"];
 };
 
 /** What the playback Dolphin writes to `<comm file>.status.json` (Core/Rollback/ReplayPlayback.h). */
@@ -68,6 +71,13 @@ export type ReplayPlaybackStatus = {
    * (replays/highlights/manual_clips.ts).
    */
   savedClips?: { path: string; startFrame: number; endFrame: number }[];
+  /**
+   * A list's highlights (`nav` asked for), each counted from 1 for the commandId: a list button that
+   * needs another replay ("<<", ">>", or "<" / ">" past this replay's stars) at the frame shown, and
+   * the last star (or "<" / ">") Dolphin played itself.
+   */
+  navRequest?: { seq: number; action: "prevReplay" | "prevClip" | "nextClip" | "nextReplay"; frame: number };
+  highlightPick?: { seq: number; startFrame: number; endFrame: number };
 };
 
 /**
@@ -330,7 +340,14 @@ export interface DolphinService {
    * startFrame to its endFrame; one of the replay already playing goes on in its running match.
    * Progress: PLAYBACK_STATUS events with this `commandId`.
    */
-  playHighlights(items: HighlightPlayItem[], commandId: string, choice?: ReplayPlayChoice): Promise<ReplayPlayResult>;
+  playHighlights(
+    items: HighlightPlayItem[],
+    commandId: string,
+    choice?: ReplayPlayChoice,
+    list?: HighlightListView,
+  ): Promise<ReplayPlayResult>;
+  /** The list changed while its highlight plays: the same request (`commandId`) with its new stars and count, if Dolphin is open. */
+  updateHighlightList(item: HighlightPlayItem, commandId: string, list: HighlightListView): Promise<void>;
   /**
    * Renders highlights to video in the Clips folder (Settings > Clips), with no Dolphin window:
    * queued jobs, their progress as RENDER_PROGRESS events. `choice` as for playing (Project+ versions).

@@ -495,25 +495,34 @@ void SetPlaybackBanner(std::string text);
 // Highlights (the launcher's stats page, ReplayPlayback.h `highlights`): plays frames `start` to
 // `end` of the armed replay. A seek to `start` (a fast-forward, or a keyframe put back when it is
 // behind; while the match is still loading, it runs once frames do), then play, paused at `end`
-// (PlaybackStatus' `clip_done`; a clip past the replay's last frame holds there, `at_end`). While
+// (PlaybackStatus' `clip_done`; a clip past the replay's last frame holds there, `at_end`). `end`
+// is a line (the user, 2026-10-24: "whenever the end of a highlight is hit ... it should pause"):
+// playing pauses each time it reaches it, also after a seek back to before it; a seek past it, or
+// Play once paused there, plays on (until another clip). While
 // the fast-forward runs the game is muted and every CLIP_SHOW_EVERY-th frame is presented, so the
 // screen visibly moves and the progress line shows. `record`: the clip's frames, from its first
 // to the pause, are a segment of the video being rendered (ClipRecorder.h). false: no replay is
 // armed.
 bool SetPlaybackClip(s64 start, s64 end, bool record = false);
-// The highlights asked for in the armed replay (ReplayPlayback.h `highlights`, not a render): the
-// overlay marks each on the seek bar (a line, a star above it), and a click on one plays it
-// (PlaybackControl's PlayHighlight with the mark's index: SetPlaybackClip's seek to its start,
-// then play, paused at its end). `item` is its place in the comm file's queue, given back in
-// PlaybackStatus' `highlight_pick` (with `highlight_picks`, a count of the clicks) so that the
-// queue goes on from there. A new replay armed has none.
+// The highlights of the armed replay (ReplayPlayback.h: the launcher's list's, and the clips
+// saved in this Dolphin; not in a render): the overlay marks each on the seek bar (a line, a star
+// above it), and a click on one plays it (PlaybackControl's PlayHighlight with the mark's index:
+// SetPlaybackClip's seek to its start, then play, paused at its end). `item` is ReplayPlayback's,
+// given back in PlaybackStatus' `highlight_pick` (with `highlight_picks`, a count of the clicks).
+// `position`: its place in the launcher's list (1-based; 0: not in it), which the overlay shows;
+// `saved`: a clip saved here (Clip, Save as highlight). A new replay armed has none.
 struct PlaybackMark
 {
   s64 start = 0;
   s64 end = 0;
   size_t item = 0;
+  int position = 0;
+  bool saved = false;
 };
 void SetPlaybackMarks(std::vector<PlaybackMark> marks);
+// The overlay's clip mode (Clip): playing pauses each time it reaches frame `end` as at a clip's
+// end, also after a seek back to before it (-1: none).
+void SetPlaybackStop(s64 end);
 // Ends a playback (its match ends at the next loop top, and the game then leaves it).
 void StopPlayback();
 // A stopped playback's game is still in its match: the next replay arms once this is false
@@ -584,9 +593,12 @@ struct PlaybackInfo
   double catch_rate = 0;     // frames run per real frame while catching up (0: not measured yet)
   s64 catch_from = -1;       // the frame the catch-up started from (-1: not running yet)
   std::string banner;
-  // Highlights: the marks on the bar, and the clip playing (-1: none, or its end has run).
+  // Highlights: the marks on the bar, and the clip playing (-1: none); `clip_armed`: playing pauses
+  // at its end (it is ahead, not sought past); `stop_end`: clip mode's end (SetPlaybackStop).
   std::vector<PlaybackMark> marks;
   s64 clip_start = -1, clip_end = -1;
+  bool clip_armed = false;
+  s64 stop_end = -1;
 };
 PlaybackInfo GetPlaybackInfo();
 

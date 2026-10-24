@@ -57,6 +57,17 @@ struct Request
   // next one; the same replay as the one before goes on in the running match.
   bool highlights = false;
   std::vector<std::pair<s64, s64>> clips;
+  // The launcher's list (`marks`, `nav`): its highlights of the replay, each with its place in the
+  // list, marked instead of the queue's; the overlay's list buttons.
+  struct ListMark
+  {
+    s64 start = 0;
+    s64 end = 0;
+    int position = 0;
+  };
+  bool has_marks = false;
+  std::vector<ListMark> marks;
+  Playback::NavView nav;
   // Rendering (`render`): highlights whose clips are written, one after another, to `output`.
   bool render = false;
   std::string output;
@@ -134,6 +145,29 @@ struct SavedClip
 std::vector<SavedClip> s_saved_clips;
 // CanSaveClip, as of the loop's last step (the overlay asks every frame, without s_mutex).
 std::atomic<bool> s_can_save_clip{false};
+// The marks given to the session (their index is the session's `item`): a queue item, one of the
+// list's, or a clip saved here.
+struct MarkSource
+{
+  s64 start = 0;
+  s64 end = 0;
+  size_t queue_item = SIZE_MAX;  // SIZE_MAX: not the queue's
+  int position = 0;
+  bool saved = false;
+};
+std::vector<MarkSource> s_marks;
+// For the launcher, counted from 1 for each commandId: the last star (or < >) played here, and the
+// last list button that needs it.
+u64 s_pick_seq = 0;
+s64 s_pick_start = 0, s_pick_end = 0;
+u64 s_nav_seq = 0;
+std::string s_nav_action;
+s64 s_nav_frame = 0;
+// GetNav's view, as of the loop's last step.
+std::mutex s_nav_mutex;
+Playback::NavView s_nav_view;
+constexpr size_t MAX_MARKS = 500;
+void ApplyMarks();
 // (A run saves a few; this many is far more than anyone makes, and keeps the status small.)
 constexpr size_t MAX_SAVED_CLIPS = 500;
 
@@ -205,18 +239,18 @@ std::optional<Request> ReadComm(const std::string& path)
   }
   if (r.highlights)
   {
+    const auto frame = [](const picojson::object& io, const char* k) -> std::optional<s64> {
+      const auto it = io.find(k);
+      if (it == io.end() || !it->second.is<double>())
+        return std::nullopt;
+      const double v = it->second.get<double>();
+      if (!std::isfinite(v) || v < 0 || v > static_cast<double>(MAX_FRAMES))
+        return std::nullopt;
+      return static_cast<s64>(v);
+    };
     const auto q = o.find("queue");
     if (q != o.end() && q->second.is<picojson::array>())
     {
-      const auto frame = [](const picojson::object& io, const char* k) -> std::optional<s64> {
-        const auto it = io.find(k);
-        if (it == io.end() || !it->second.is<double>())
-          return std::nullopt;
-        const double v = it->second.get<double>();
-        if (!std::isfinite(v) || v < 0 || v > static_cast<double>(MAX_FRAMES))
-          return std::nullopt;
-        return static_cast<s64>(v);
-      };
       for (const auto& item : q->second.get<picojson::array>())
       {
         if (r.paths.size() >= MAX_QUEUE || !item.is<picojson::object>())
@@ -230,6 +264,43 @@ std::optional<Request> ReadComm(const std::string& path)
         r.paths.push_back(p->second.get<std::string>());
         r.clips.emplace_back(*start, *end);
       }
+    }
+    const auto m = o.find("marks");
+    if (!r.render && m != o.end() && m->second.is<picojson::array>())
+    {
+      r.has_marks = true;
+      for (const auto& item : m->second.get<picojson::array>())
+      {
+        if (r.marks.size() >= MAX_MARKS || !item.is<picojson::object>())
+          continue;
+        const auto& io = item.get<picojson::object>();
+        const auto start = frame(io, "startFrame");
+        const auto end = frame(io, "endFrame");
+        const auto pos = io.find("position");
+        if (!start || !end || *end < *start)
+          continue;
+        const double p = pos != io.end() && pos->second.is<double>() ? pos->second.get<double>() : 0;
+        r.marks.push_back({*start, *end, std::isfinite(p) ? static_cast<int>(std::clamp(p, 0.0, 1e6)) : 0});
+      }
+    }
+    const auto n = o.find("nav");
+    if (!r.render && n != o.end() && n->second.is<picojson::object>())
+    {
+      const auto& no = n->second.get<picojson::object>();
+      const auto num = [&](const char* k) {
+        const auto it = no.find(k);
+        const double v = it != no.end() && it->second.is<double>() ? it->second.get<double>() : 0;
+        return std::isfinite(v) ? static_cast<int>(std::clamp(v, 0.0, 1e6)) : 0;
+      };
+      const auto yes = [&](const char* k) {
+        const auto it = no.find(k);
+        return it != no.end() && it->second.is<bool>() && it->second.get<bool>();
+      };
+      r.nav.shown = true;
+      r.nav.position = num("position");
+      r.nav.total = num("total");
+      r.nav.prev_replay = yes("hasPrevReplay");
+      r.nav.next_replay = yes("hasNextReplay");
     }
   }
   else if (str("mode") == "queue" || r.mirror)
@@ -423,6 +494,10 @@ void ArmCurrent()
   const auto st = Session::PlaybackStatus();
   if (const auto it = st.find("serial"); it != st.end() && it->second.is<double>())
     s_armed_serial = static_cast<u32>(it->second.get<double>());
+  // (Highlights: once its clip is given, StepHighlights. Replays and spectated games: the clips
+  // saved of it in this run.)
+  if (!s_request.highlights)
+    ApplyMarks();
   NOTICE_LOG_FMT(BRAWLBACK, "replay: {} of {}: {}", s_index + 1, s_request.paths.size(), path);
 }
 
@@ -437,6 +512,22 @@ picojson::object StatusLocked()
   o["error"] = picojson::value(s_error);
   o["needsPlayAnyway"] = picojson::value(s_needs_play_anyway);
   o["mirror"] = picojson::value(s_request.mirror);
+  if (s_nav_seq > 0)
+  {
+    picojson::object nav;
+    nav["seq"] = picojson::value(static_cast<double>(s_nav_seq));
+    nav["action"] = picojson::value(s_nav_action);
+    nav["frame"] = picojson::value(static_cast<double>(s_nav_frame));
+    o["navRequest"] = picojson::value(std::move(nav));
+  }
+  if (s_pick_seq > 0)
+  {
+    picojson::object pick;
+    pick["seq"] = picojson::value(static_cast<double>(s_pick_seq));
+    pick["startFrame"] = picojson::value(static_cast<double>(s_pick_start));
+    pick["endFrame"] = picojson::value(static_cast<double>(s_pick_end));
+    o["highlightPick"] = picojson::value(std::move(pick));
+  }
   if (!s_saved_clips.empty())
   {
     picojson::array clips;
@@ -657,18 +748,34 @@ void StepHighlights(const picojson::object& st)
   }
   // A click on a highlight's mark on the seek bar: the session plays it already, and the queue
   // goes on from there (the launcher's list follows `index`).
+  // (One of the launcher's list, or a clip saved here: it says which, and the queue stays.)
   if (const s64 picks = get_num("highlight_picks"); picks > static_cast<s64>(s_mark_picks))
   {
     s_mark_picks = static_cast<u64>(picks);
-    const s64 item = get_num("highlight_pick");
-    if (!s_request.render && item >= 0 && static_cast<size_t>(item) < s_request.clips.size() &&
-        s_request.paths[item] == s_request.paths[s_index])
+    const s64 mark = get_num("highlight_pick");
+    if (!s_request.render && mark >= 0 && static_cast<size_t>(mark) < s_marks.size())
     {
-      s_index = static_cast<size_t>(item);
-      s_clip_applied = true;
-      s_seek_from = -1;
-      s_state = "seeking";
-      return;
+      const MarkSource& m = s_marks[static_cast<size_t>(mark)];
+      const size_t item = m.queue_item;
+      if (item < s_request.clips.size() && s_request.paths[item] == s_request.paths[s_index])
+      {
+        s_index = item;
+        s_clip_applied = true;
+        s_seek_from = -1;
+        s_state = "seeking";
+        return;
+      }
+      if (item == SIZE_MAX)
+      {
+        // (Now the request's clip: the status' clipStart / clipEnd follow it.)
+        ++s_pick_seq;
+        s_pick_start = m.start;
+        s_pick_end = m.end;
+        s_request.clips[s_index] = {m.start, m.end};
+        s_seek_from = -1;
+        s_state = "seeking";
+        return;
+      }
     }
   }
   const auto [start, end] = s_request.clips[s_index];
@@ -682,16 +789,7 @@ void StepHighlights(const picojson::object& st)
       return;
     }
     // Watched (not rendered): the highlights of this replay asked for, marked on the seek bar.
-    if (!s_request.render)
-    {
-      std::vector<Session::PlaybackMark> marks;
-      for (size_t i = 0; i < s_request.clips.size(); ++i)
-      {
-        if (s_request.paths[i] == s_request.paths[s_index])
-          marks.push_back({s_request.clips[i].first, s_request.clips[i].second, i});
-      }
-      Session::SetPlaybackMarks(std::move(marks));
-    }
+    ApplyMarks();
     // (The session takes it at its next loop top: until then it is on the way there.)
     s_state = get_bool("started") && get_num("shown") >= 0 ? "seeking" : "waiting";
     return;
@@ -842,6 +940,52 @@ void Step()
   s_state = get_bool("started") ? "playing" : "waiting";
 }
 
+// Under s_mutex: GetNav's view as the request and the armed replay are now.
+void UpdateNavView()
+{
+  Playback::NavView v;
+  if (s_request.highlights && !s_request.render && s_request.nav.shown && s_armed)
+    v = s_request.nav;
+  std::lock_guard nk(s_nav_mutex);
+  s_nav_view = v;
+}
+
+// Under s_mutex: the armed replay's marks to the session: the launcher's list's (or, without one,
+// the queue's of this replay), then the clips saved of it in this run that aren't among them.
+void ApplyMarks()
+{
+  if (!s_armed || s_request.render)
+    return;
+  s_marks.clear();
+  if (s_request.highlights && s_request.has_marks)
+  {
+    for (const auto& m : s_request.marks)
+      s_marks.push_back({m.start, m.end, SIZE_MAX, m.position, false});
+  }
+  else if (s_request.highlights)
+  {
+    for (size_t i = 0; i < s_request.clips.size(); ++i)
+    {
+      if (s_request.paths[i] == s_armed_path)
+        s_marks.push_back({s_request.clips[i].first, s_request.clips[i].second, i, 0, false});
+    }
+  }
+  for (const auto& c : s_saved_clips)
+  {
+    if (c.path != s_armed_path || s_marks.size() >= MAX_MARKS)
+      continue;
+    const bool listed = std::any_of(s_marks.begin(), s_marks.end(), [&](const MarkSource& m) {
+      return m.start == c.start && m.end == c.end;
+    });
+    if (!listed)
+      s_marks.push_back({c.start, c.end, SIZE_MAX, 0, true});
+  }
+  std::vector<Session::PlaybackMark> marks;
+  for (size_t i = 0; i < s_marks.size(); ++i)
+    marks.push_back({s_marks[i].start, s_marks[i].end, i, s_marks[i].position, s_marks[i].saved});
+  Session::SetPlaybackMarks(std::move(marks));
+}
+
 // Under s_mutex: the armed replay is the session's (not one that ended, nor the next one's yet).
 bool CanSaveClipLocked()
 {
@@ -889,6 +1033,30 @@ void Loop()
           s_request.close_on_end = r->close_on_end;
           s_request.banner = std::move(r->banner);
         }
+        else if (r && r->command_id == last_command && r->highlights && !r->render &&
+                 s_request.highlights && !s_request.render)
+        {
+          // The same request written again: the launcher's list changed (its marks, the count).
+          const auto same = [](const Request::ListMark& a, const Request::ListMark& b) {
+            return a.start == b.start && a.end == b.end && a.position == b.position;
+          };
+          const bool marks_changed =
+              r->has_marks != s_request.has_marks ||
+              !std::equal(r->marks.begin(), r->marks.end(), s_request.marks.begin(), s_request.marks.end(), same);
+          const auto& a = r->nav;
+          const auto& b = s_request.nav;
+          if (a.shown != b.shown || a.position != b.position || a.total != b.total ||
+              a.prev_replay != b.prev_replay || a.next_replay != b.next_replay)
+          {
+            s_request.nav = r->nav;
+          }
+          if (marks_changed)
+          {
+            s_request.has_marks = r->has_marks;
+            s_request.marks = std::move(r->marks);
+            ApplyMarks();
+          }
+        }
         else if (r && r->command_id != last_command && r->highlights && !r->paths.empty() &&
                  s_armed && !s_request.mirror && !s_render_open && s_index < s_request.paths.size() &&
                  s_request.paths[s_index] == r->paths[0] && !Session::PlaybackStopping())
@@ -901,6 +1069,16 @@ void Loop()
           s_index = 0;
           s_clip_applied = false;
           s_seek_from = -1;
+          s_pick_seq = 0;
+          s_nav_seq = 0;
+          // (The stars clicked before this request, e.g. while it played as a replay, are not its.)
+          {
+            const auto st = Session::PlaybackStatus();
+            const auto picks = st.find("highlight_picks");
+            s_mark_picks = picks != st.end() && picks->second.is<double>() ?
+                               static_cast<u64>(picks->second.get<double>()) :
+                               0;
+          }
           s_error.clear();
           s_render_draining = false;
           s_rendered = 0;
@@ -930,6 +1108,8 @@ void Loop()
           s_rendered = 0;
           s_request = std::move(*r);
           s_index = 0;
+          s_pick_seq = 0;
+          s_nav_seq = 0;
           s_mirror_started = false;
           s_wait_index = SIZE_MAX;
           s_error.clear();
@@ -970,6 +1150,7 @@ void Loop()
         Step();
       WriteStatus();
       s_can_save_clip.store(CanSaveClipLocked(), std::memory_order_relaxed);
+      UpdateNavView();
     }
     std::this_thread::sleep_for(POLL);
   }
@@ -1022,6 +1203,25 @@ bool CanSaveClip()
   return s_can_save_clip.load(std::memory_order_relaxed);
 }
 
+NavView GetNav()
+{
+  std::lock_guard nk(s_nav_mutex);
+  return s_nav_view;
+}
+
+void RequestNav(NavAction action, s64 frame)
+{
+  std::lock_guard lk(s_mutex);
+  if (!s_request.highlights || s_request.render || !s_request.nav.shown)
+    return;
+  static constexpr const char* NAMES[] = {"prevReplay", "prevClip", "nextClip", "nextReplay"};
+  ++s_nav_seq;
+  s_nav_action = NAMES[static_cast<int>(action)];
+  s_nav_frame = frame;
+  NOTICE_LOG_FMT(BRAWLBACK, "replay: the list's {} asked for at frame {}", s_nav_action, frame);
+  WriteStatus();
+}
+
 bool SaveClip(s64 start, s64 end)
 {
   std::lock_guard lk(s_mutex);
@@ -1032,7 +1232,11 @@ bool SaveClip(s64 start, s64 end)
     return c.path == s_armed_path && c.start == start && c.end == end;
   });
   if (!known)
+  {
     s_saved_clips.push_back({s_armed_path, start, end});
+    // Its star at once (the user, 2026-10-24).
+    ApplyMarks();
+  }
   NOTICE_LOG_FMT(BRAWLBACK, "replay: clip saved, frames {} to {} of {}", start, end, s_armed_path);
   WriteStatus();
   return true;

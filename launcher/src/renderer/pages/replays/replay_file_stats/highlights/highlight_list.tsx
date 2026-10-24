@@ -2,7 +2,8 @@
  * Highlights and L+R+Z clips (DESIGN.md §2): who on whom with their characters, nothing the
  * detector measured. A row plays in the playback Dolphin from just before the string to just after
  * it; ↑/↓ (or Tab) plays the next one at once, and the only wait (Dolphin's fast-forward to it)
- * shows with its progress. With "Render as Video" ticked, rows can be ticked and rendered to video
+ * shows with its progress. The list played from is the playback Dolphin's "<< < > >>"
+ * (highlight_playlist.ts), and the row playing follows them. With "Render as Video" ticked, rows can be ticked and rendered to video
  * (docs/design/highlights.md §4): Render (w/ Music) or Render (No Music), a file each, or one combo
  * movie of them all. `HighlightList` is a replay's (its stats page); `HighlightRows` lists rows of
  * any replays (the Replays > Highlights tab's, all of them). The star at a row's end makes it a
@@ -10,7 +11,7 @@
  * button that removes it.
  */
 import type { ReplayPlaybackStatus } from "@dolphin/types";
-import { DolphinEventType, DolphinLaunchType } from "@dolphin/types";
+import { DolphinEventType } from "@dolphin/types";
 import CloseIcon from "@mui/icons-material/Close";
 import ContentCutIcon from "@mui/icons-material/ContentCut";
 import CropIcon from "@mui/icons-material/Crop";
@@ -18,7 +19,6 @@ import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
 import MovieIcon from "@mui/icons-material/Movie";
 import MusicOffIcon from "@mui/icons-material/MusicOff";
 import PlayArrowIcon from "@mui/icons-material/PlayArrow";
-import PlaylistPlayIcon from "@mui/icons-material/PlaylistPlay";
 import StarIcon from "@mui/icons-material/Star";
 import StarBorderIcon from "@mui/icons-material/StarBorder";
 import Button from "@mui/material/Button";
@@ -48,6 +48,9 @@ import { useServices } from "@/services";
 import { favoriteKey, useFavoriteHighlights } from "./favorites";
 import { HighlightListMessages as Messages } from "./highlight_list.messages";
 import styles from "./highlight_list.module.css";
+import type { PlaylistEntry } from "./highlight_nav";
+import { setPlaylistEntries, usePlaylistStore } from "./highlight_nav";
+import { useHighlightPlayer } from "./highlight_playlist";
 import { manualClipEntry, useManualClips } from "./manual_clips";
 import { RenderJobs, useRenderJobs } from "./render_jobs";
 import { clipVideoName, comboVideoName, multiGameComboName } from "./render_names";
@@ -67,9 +70,6 @@ export type HighlightEntry = {
   /** When the game was played (ISO): shown on the row when the list has several games. */
   date?: string;
 };
-
-/** What the launcher asked the playback Dolphin for, and when (before Dolphin says anything about it). */
-type Request = { from: number; count: number; commandId: string };
 
 /** A replay's highlights and clips, on its stats page. */
 export const HighlightList = ({ filePath, pplusRelease }: { filePath: string; pplusRelease?: string }) => {
@@ -113,6 +113,7 @@ export const HighlightList = ({ filePath, pplusRelease }: { filePath: string; pp
   }
   return (
     <HighlightRows
+      sourceId={`stats:${filePath}`}
       entries={entries}
       resetKey={filePath}
       versionNote={<ReplayVersionNote release={pplusRelease} />}
@@ -132,6 +133,8 @@ export const HighlightList = ({ filePath, pplusRelease }: { filePath: string; pp
 };
 
 type HighlightRowsProps = {
+  /** Which list this is (the Highlights tab, a replay's stats page): the playback Dolphin's buttons go by the one played from. */
+  sourceId: string;
   /** Highlights, then L+R+Z clips, then manual clips (each kind after the first has a heading). */
   entries: HighlightEntry[];
   /** Changes when the list is another (a new replay): nothing of the last one's is kept. */
@@ -148,6 +151,7 @@ type HighlightRowsProps = {
 };
 
 export const HighlightRows = ({
+  sourceId,
   entries,
   resetKey,
   versionNote,
@@ -158,13 +162,19 @@ export const HighlightRows = ({
   comboName,
 }: HighlightRowsProps) => {
   const { dolphinService } = useServices();
-  const { playHighlights, renderHighlights } = useDolphinActions(dolphinService);
+  const { renderHighlights } = useDolphinActions(dolphinService);
+  const playEntry = useHighlightPlayer();
   const { favorites, toggle: toggleFavorite } = useFavoriteHighlights();
   const { remove: removeManualClip } = useManualClips();
 
   const [selected, setSelected] = useState<number | null>(null);
-  const [request, setRequest] = useState<Request | null>(null);
   const [status, setStatus] = useState<ReplayPlaybackStatus | null>(null);
+  const [dismissed, setDismissed] = useState<string | null>(null);
+  // What the playback Dolphin plays, if from this list.
+  const mine = usePlaylistStore((s) => s.source === sourceId);
+  const current = usePlaylistStore((s) => s.current);
+  const commandId = usePlaylistStore((s) => s.commandId);
+  const request = mine && commandId && dismissed !== commandId ? commandId : null;
   const listRef = useRef<HTMLDivElement>(null);
   const [renderMode, setRenderMode] = useState(false);
   const [ticked, setTicked] = useState<Set<string>>(new Set());
@@ -181,63 +191,44 @@ export const HighlightRows = ({
   // Another list (the stats page's next/previous replay): nothing of the last one's.
   useEffect(() => {
     setSelected(null);
-    setRequest(null);
-    setStatus(null);
     setTicked(new Set());
     setCombo(false);
   }, [resetKey]);
 
-  // The playback Dolphin closed (the player closed its window, or it crashed) before or while
-  // playing: nothing is coming any more, so the banner goes. (Not when the launcher closed it to
-  // start it again on another Project+ release's card: the request goes on there.)
-  useEffect(
-    () =>
-      dolphinService.onEvent(DolphinEventType.CLOSED, (event) => {
-        if (
-          event.dolphinType === DolphinLaunchType.PLAYBACK &&
-          "instanceId" in event &&
-          event.instanceId === "playback" &&
-          !event.replaced
-        ) {
-          setRequest(null);
-          setStatus(null);
-        }
-      }),
-    [dolphinService],
+  // The rows as the playback Dolphin's list: the one played from follows what this one shows
+  // now (another section, another sort, more rows found).
+  const playlist: PlaylistEntry[] = useMemo(
+    () => entries.map((e) => ({ key: e.key, path: e.path, startFrame: e.row.startFrame, endFrame: e.row.endFrame })),
+    [entries],
   );
+  useEffect(() => setPlaylistEntries(sourceId, playlist, dolphinService), [sourceId, playlist, dolphinService]);
 
-  // Only what Dolphin says about the last request (an older one's status may still come).
-  const commandId = request?.commandId;
+  // Only what Dolphin says about the request playing (an older one's status may still come; Play
+  // anyway, for a replay of another version, asks again as `<id>+anyway`). It closing ends it
+  // (highlight_playlist.ts), and the banner goes.
+  const baseCommand = request?.split("+")[0] ?? null;
+  useEffect(() => setStatus(null), [baseCommand]);
   useEffect(
     () =>
       dolphinService.onEvent(DolphinEventType.PLAYBACK_STATUS, ({ status }) => {
-        // (Play anyway, for a replay of another version, asks again as `<id>+anyway`.)
-        if (commandId && status.commandId?.startsWith(commandId)) {
+        if (baseCommand && status.commandId?.startsWith(baseCommand)) {
           setStatus(status);
         }
       }),
-    [dolphinService, commandId],
+    [dolphinService, baseCommand],
   );
 
   const play = useCallback(
-    async (from: number, count = 1) => {
-      const items = entries.slice(from, from + count).map((e) => ({
-        path: e.path,
-        startFrame: e.row.startFrame,
-        endFrame: e.row.endFrame,
-      }));
-      if (!items.length) {
+    async (index: number) => {
+      const entry = playlist[index];
+      if (!entry) {
         return;
       }
-      const commandId = `hl-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-      setSelected(from);
-      setRequest({ from, count: items.length, commandId });
-      setStatus(null);
-      if (!(await playHighlights(items, commandId))) {
-        setRequest(null);
-      }
+      setSelected(index);
+      setDismissed(null);
+      await playEntry(sourceId, playlist, entry);
     },
-    [entries, playHighlights],
+    [playlist, playEntry, sourceId],
   );
 
   const tick = (key: string, on: boolean) =>
@@ -289,8 +280,16 @@ export const HighlightRows = ({
     [chosen, combo, comboName, renderHighlights],
   );
 
-  // Play all: the row playing follows Dolphin's queue.
-  const playing = request && status && status.index != null ? request.from + status.index : selected;
+  // The row playing follows Dolphin's buttons and stars; with nothing of this list playing, the one
+  // last clicked.
+  const playingIndex =
+    mine && current
+      ? entries.findIndex(
+          (e) =>
+            e.path === current.path && e.row.startFrame === current.startFrame && e.row.endFrame === current.endFrame,
+        )
+      : -1;
+  const playing = mine && current ? (playingIndex >= 0 ? playingIndex : null) : selected;
   useEffect(() => {
     if (playing != null) {
       listRef.current?.querySelector(`[data-row="${playing}"]`)?.scrollIntoView({ block: "nearest" });
@@ -326,19 +325,7 @@ export const HighlightRows = ({
     <div className={styles.container}>
       <div className={styles.header}>
         <h2 className={styles.title}>{Messages.highlights()}</h2>
-        <div className={styles.headerActions}>
-          {headerExtra}
-          <Button
-            variant="contained"
-            color="primary"
-            size="small"
-            startIcon={<PlaylistPlayIcon />}
-            disabled={!entries.length}
-            onClick={() => void play(0, entries.length)}
-          >
-            {Messages.playAll()}
-          </Button>
-        </div>
+        <div className={styles.headerActions}>{headerExtra}</div>
       </div>
       {versionNote}
       {entries.length > 0 && (
@@ -396,11 +383,8 @@ export const HighlightRows = ({
       <PlaybackBanner
         request={request}
         status={status}
-        entries={entries}
-        onDismiss={() => {
-          setRequest(null);
-          setStatus(null);
-        }}
+        row={playing != null ? entries[playing]?.row : undefined}
+        onDismiss={() => setDismissed(commandId)}
       />
       {emptyNote && <div className={styles.note}>{emptyNote}</div>}
       {!hideRows && (
@@ -586,12 +570,13 @@ const PlayerChip = ({ player, isTeams }: { player: HighlightPlayer | undefined; 
 const PlaybackBanner = ({
   request,
   status,
-  entries,
+  row,
   onDismiss,
 }: {
-  request: Request | null;
+  /** The request's commandId (null: nothing of this list plays, or the banner was closed). */
+  request: string | null;
   status: ReplayPlaybackStatus | null;
-  entries: HighlightEntry[];
+  row: Row | undefined;
   onDismiss: () => void;
 }) => {
   // How long it has been starting (a Dolphin answering a question in its window, a slow PC).
@@ -604,7 +589,7 @@ const PlaybackBanner = ({
     }
     const timer = setTimeout(() => setSlow(true), STARTING_HINT_MS);
     return () => clearTimeout(timer);
-  }, [starting, request?.commandId]);
+  }, [starting, request]);
   if (!request) {
     return null;
   }
@@ -613,9 +598,6 @@ const PlaybackBanner = ({
       <CloseIcon fontSize="small" />
     </IconButton>
   );
-  const index = status?.index ?? 0;
-  const row = entries[request.from + index]?.row;
-  const of = request.count > 1 ? ` · ${Messages.ofTotal(index + 1, request.count)}` : "";
   const state = status?.state;
   // (A refused replay's error stays in the status after its match has gone.)
   if (state === "error" || (status?.error && state !== "seeking" && state !== "playing")) {
@@ -644,7 +626,6 @@ const PlaybackBanner = ({
       <div className={styles.banner}>
         <div className={styles.bannerText}>
           {status && state === "waiting" ? Messages.loadingReplay() : Messages.startingDolphin()}
-          {of}
           {dismiss}
         </div>
         {slow && <div className={styles.bannerHint}>{Messages.slowStart()}</div>}
@@ -662,13 +643,12 @@ const PlaybackBanner = ({
         <div className={styles.bannerText}>
           <span className={styles.ff}>⏩</span>
           {row && row.kind !== "highlight" ? Messages.fastForwardingClip() : Messages.fastForwarding()}
-          {of}
           {/* (Back to an earlier one: a keyframe is put back first, in a moment.) */}
           {frame <= target && <span className={styles.frames}>{Messages.frameOf(Math.max(frame, 0), target)}</span>}
           {dismiss}
         </div>
         <LinearProgress
-          key={`seek-${request.commandId}-${index}`}
+          key={`seek-${request}-${status.clipStart}`}
           className={styles.progress}
           variant="determinate"
           value={frame <= target ? value : 0}
@@ -685,11 +665,10 @@ const PlaybackBanner = ({
     <div className={styles.banner}>
       <div className={styles.bannerText}>
         {state === "ended" ? Messages.done() : Messages.playing()}
-        {of}
         {dismiss}
       </div>
       <LinearProgress
-        key={`play-${request.commandId}-${index}`}
+        key={`play-${request}-${status.clipStart}`}
         className={styles.progress}
         variant="determinate"
         value={state === "ended" ? 100 : value}

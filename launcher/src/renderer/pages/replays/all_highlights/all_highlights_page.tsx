@@ -277,6 +277,7 @@ export const AllHighlightsPage = React.memo(() => {
               </div>
             )}
             <HighlightRows
+              sourceId="highlights"
               entries={entries}
               resetKey={view}
               emptyNote={emptyNote}

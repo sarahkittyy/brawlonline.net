@@ -1720,9 +1720,10 @@ Result CmdReplayComm(const Args& args)
   return Gprb::Replay::Playback::Status();
 }
 
-// replay_control {action: pause|play|toggle|step|back|jump|seek|speed|faster|slower|live|highlight,
-// arg}: the playback controls (seconds for jump, a frame for seek, a factor for speed; live: Go
-// live; highlight: a click on the seek bar's mark `arg`).
+// replay_control {action: pause|play|toggle|step|back|jump|seek|speed|faster|slower|live|highlight|
+// stop, arg}: the playback controls (seconds for jump, a frame for seek, a factor for speed; live:
+// Go live; highlight: a click on the seek bar's mark `arg`; stop: clip mode's end at frame `arg`,
+// -1 none, Session::SetPlaybackStop).
 Result CmdReplayControl(const Args& args)
 {
   using Gprb::Session::PlaybackCommand;
@@ -1742,6 +1743,11 @@ Result CmdReplayControl(const Args& args)
       {"faster", PlaybackCommand::Faster},      {"slower", PlaybackCommand::Slower},
       {"live", PlaybackCommand::GoLive},       {"highlight", PlaybackCommand::PlayHighlight},
   };
+  if (cmd == "stop")
+  {
+    Gprb::Session::SetPlaybackStop(static_cast<s64>(arg));
+    return Gprb::Session::PlaybackStatus();
+  }
   for (const auto& [name, command] : COMMANDS)
   {
     if (cmd == name)
@@ -1751,6 +1757,29 @@ Result CmdReplayControl(const Args& args)
     }
   }
   Fail("unknown replay command " + cmd);
+}
+
+// replay_nav {action: prevReplay|prevClip|nextClip|nextReplay}: the overlay's list button that asks
+// the launcher (ReplayPlayback.h `nav`), at the frame shown. Returns the comm status.
+Result CmdReplayNav(const Args& args)
+{
+  using Gprb::Replay::Playback::NavAction;
+  const std::string action = GetString(args, "action");
+  static const std::pair<const char*, NavAction> ACTIONS[] = {
+      {"prevReplay", NavAction::PrevReplay},
+      {"prevClip", NavAction::PrevClip},
+      {"nextClip", NavAction::NextClip},
+      {"nextReplay", NavAction::NextReplay},
+  };
+  for (const auto& [name, a] : ACTIONS)
+  {
+    if (action == name)
+    {
+      Gprb::Replay::Playback::RequestNav(a, Gprb::Session::GetPlaybackInfo().shown);
+      return Gprb::Replay::Playback::Status();
+    }
+  }
+  Fail("unknown list button " + action);
 }
 
 // replay_save_clip {start, end}: the overlay's Clip, then "Save as highlight" (ReplayPlayback.h's
@@ -1776,6 +1805,26 @@ Result CmdReplayStatus(const Args&)
 {
   Result r = Gprb::Session::PlaybackStatus();
   r["comm"] = picojson::value(Gprb::Replay::Playback::Status());
+  // What the overlay draws: the stars (with their place in the launcher's list) and the list buttons.
+  picojson::array marks;
+  for (const auto& m : Gprb::Session::GetPlaybackInfo().marks)
+  {
+    picojson::object o;
+    o["start"] = picojson::value(static_cast<double>(m.start));
+    o["end"] = picojson::value(static_cast<double>(m.end));
+    o["position"] = picojson::value(static_cast<double>(m.position));
+    o["saved"] = picojson::value(m.saved);
+    marks.emplace_back(std::move(o));
+  }
+  r["marks"] = picojson::value(std::move(marks));
+  const auto nav = Gprb::Replay::Playback::GetNav();
+  picojson::object n;
+  n["shown"] = picojson::value(nav.shown);
+  n["position"] = picojson::value(static_cast<double>(nav.position));
+  n["total"] = picojson::value(static_cast<double>(nav.total));
+  n["prev_replay"] = picojson::value(nav.prev_replay);
+  n["next_replay"] = picojson::value(nav.next_replay);
+  r["nav"] = picojson::value(std::move(n));
   return r;
 }
 
@@ -2260,6 +2309,7 @@ const std::vector<std::pair<std::string_view, Handler>>& Handlers()
       {"replay_status", CmdReplayStatus},
       {"replay_control", CmdReplayControl},
       {"replay_save_clip", CmdReplaySaveClip},
+      {"replay_nav", CmdReplayNav},
       {"replay_recording", CmdReplayRecording},
       {"spectate_status", CmdSpectateStatus},
       {"spectate_config", CmdSpectateConfig},

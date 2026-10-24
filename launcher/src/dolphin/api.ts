@@ -1,7 +1,7 @@
 /* eslint-disable import/no-default-export */
 
 import type { ChatKeyPress } from "@common/chat_key";
-import type { HighlightPlayItem } from "@replays/highlights/types";
+import type { HighlightListView, HighlightPlayItem } from "@replays/highlights/types";
 
 import {
   ipc_cancelRender,
@@ -86,9 +86,17 @@ const dolphinApi: DolphinService = {
     const { result } = await ipc_viewSlpReplay.renderer!.trigger({ files, choice });
     return result;
   },
-  async playHighlights(items: HighlightPlayItem[], commandId: string, choice?: ReplayPlayChoice) {
-    const { result } = await ipc_playHighlights.renderer!.trigger({ items, commandId, choice });
+  async playHighlights(
+    items: HighlightPlayItem[],
+    commandId: string,
+    choice?: ReplayPlayChoice,
+    list?: HighlightListView,
+  ) {
+    const { result } = await ipc_playHighlights.renderer!.trigger({ items, commandId, choice, list });
     return result;
+  },
+  async updateHighlightList(item: HighlightPlayItem, commandId: string, list: HighlightListView) {
+    await ipc_playHighlights.renderer!.trigger({ items: [item], commandId, list, updateOnly: true });
   },
   async renderHighlights(request: RenderRequest, choice?: ReplayPlayChoice) {
     const { result } = await ipc_renderHighlights.renderer!.trigger({

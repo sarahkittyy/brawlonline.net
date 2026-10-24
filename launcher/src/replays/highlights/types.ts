@@ -97,6 +97,16 @@ export type HighlightPlayItem = {
   endFrame: number;
 };
 
+/**
+ * What the playback Dolphin shows of the launcher's list (highlight_playlist.ts, ReplayPlayback.h):
+ * the list's highlights of the replay playing, as stars on the seek bar with their place in the list
+ * (1-based), and "position/total  << < > >>" (whether there is a replay before or after this one).
+ */
+export type HighlightListView = {
+  marks: { startFrame: number; endFrame: number; position: number }[];
+  nav: { position: number; total: number; hasPrevReplay: boolean; hasNextReplay: boolean };
+};
+
 /** A replay's highlights in the Replays > Highlights tab: which replay, when it was played (ISO). */
 export type GameHighlights = {
   path: string;

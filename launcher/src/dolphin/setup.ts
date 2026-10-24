@@ -152,7 +152,11 @@ export default function setupDolphinIpc({ dolphinManager }: { dolphinManager: Do
     return d.result;
   });
 
-  ipc_playHighlights.main!.handle(async ({ items, commandId, choice = "auto" }) => {
+  ipc_playHighlights.main!.handle(async ({ items, commandId, choice = "auto", list, updateOnly }) => {
+    // (An update of the list's stars and count: only to a Dolphin playing it, on its release already.)
+    if (updateOnly && !dolphinManager.isPlaybackOpen("playback")) {
+      return { status: "playing" as const, release: null, skipped: 0 };
+    }
     const d = await dolphinManager.decideReplayRelease(
       items.map((i) => i.path),
       choice,
@@ -165,6 +169,8 @@ export default function setupDolphinIpc({ dolphinManager }: { dolphinManager: Do
           queue: items.filter((i) => d.paths.includes(i.path)),
           commandId,
           playAnyway: d.playAnyway || undefined,
+          marks: list?.marks,
+          nav: list?.nav,
         },
         { pplusRelease: d.release },
       );

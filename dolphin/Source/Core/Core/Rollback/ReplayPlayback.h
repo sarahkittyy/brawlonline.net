@@ -29,6 +29,16 @@
 // The seek bar marks the clips of the replay playing; a click on one plays it, and the queue goes
 // on from there (`index` changes to it, even after "ended").
 //
+// The launcher's lists (docs/design/highlights.md section 3) play one highlight a request and add
+// "marks": [{"startFrame", "endFrame", "position"}] (the list's highlights of that replay, marked
+// on the seek bar instead of the queue's) and "nav": {"position", "total", "hasPrevReplay",
+// "hasNextReplay"}: the overlay's "3/40  << < > >>". A star or < > within the replay plays it
+// here at once; the status says so, "highlightPick": {"seq", "startFrame", "endFrame"}. A button
+// that needs another replay (<< >>, or < > past this replay's marks) is asked of the launcher,
+// "navRequest": {"seq", "action": "prevReplay" | "prevClip" | "nextClip" | "nextReplay",
+// "frame"}, which plays the one it picks as a new request. Both count from 1 for each commandId.
+// The same commandId written again with other marks or nav (the list changed) updates them.
+//
 // Ours, `render` (docs/design/highlights.md section 5): highlights as above, written to a video
 // instead of watched: {"mode": "render", "output": "<path>.mp4", "height": 720, "queue": [...]}
 // (Rollback/ClipRecorder.h). Every clip is a part of the file, one after another. The status adds
@@ -64,6 +74,26 @@ picojson::object Status();
 // Whether a clip can be saved: a launcher follows this Dolphin (the comm file) and a replay of its
 // request is armed, not rendered.
 bool CanSaveClip();
+// The overlay's list buttons (the request's "nav"): shown, "position/total", and whether there is
+// a replay before or after this one in the list. Any thread, without the playback lock.
+struct NavView
+{
+  bool shown = false;
+  int position = 0;
+  int total = 0;
+  bool prev_replay = false;
+  bool next_replay = false;
+};
+NavView GetNav();
+enum class NavAction
+{
+  PrevReplay,
+  PrevClip,
+  NextClip,
+  NextReplay,
+};
+// Asks the launcher for another replay of its list (status "navRequest"); `frame`: the one shown.
+void RequestNav(NavAction action, s64 frame);
 // Saves frames `start` to `end` of the replay armed (any thread: the overlay's); false when
 // CanSaveClip is not, or the session's replay is no longer the armed one.
 bool SaveClip(s64 start, s64 end);

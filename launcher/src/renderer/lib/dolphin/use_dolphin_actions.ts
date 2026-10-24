@@ -1,7 +1,7 @@
 import { isDiskSpaceError } from "@common/disk_space";
 import type { DolphinService, RenderJobInfo, RenderRequest, ReplayQueueItem } from "@dolphin/types";
 import { DolphinLaunchType } from "@dolphin/types";
-import type { HighlightPlayItem } from "@replays/highlights/types";
+import type { HighlightListView, HighlightPlayItem } from "@replays/highlights/types";
 import log from "electron-log";
 import { useCallback } from "react";
 
@@ -163,11 +163,11 @@ export const useDolphinActions = (dolphinService: DolphinService) => {
 
   /**
    * Plays highlights in the playback Dolphin (the next one at once: an open Dolphin is not started
-   * again, so the launcher's update check is only made when it is not open). Resolves to whether the
-   * request was made.
+   * again, so the launcher's update check is only made when it is not open); `list`: the stars and
+   * count of the list it is from (highlight_playlist.ts). Resolves to whether the request was made.
    */
   const playHighlights = useCallback(
-    async (items: HighlightPlayItem[], commandId: string): Promise<boolean> => {
+    async (items: HighlightPlayItem[], commandId: string, list?: HighlightListView): Promise<boolean> => {
       if (getInstallStatus(DolphinLaunchType.PLAYBACK) !== DolphinStatus.READY) {
         showError(Messages.dolphinIsUpdating());
         return false;
@@ -176,7 +176,9 @@ export const useDolphinActions = (dolphinService: DolphinService) => {
         return false;
       }
       try {
-        const result = await withReplayVersion((choice) => dolphinService.playHighlights(items, commandId, choice));
+        const result = await withReplayVersion((choice) =>
+          dolphinService.playHighlights(items, commandId, choice, list),
+        );
         if (result?.status !== "playing") {
           return false;
         }

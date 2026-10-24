@@ -34,19 +34,32 @@ float s_drag_at = 0;
 int s_mark_held = -1;
 // Clip mode (Clip, then "Save as highlight" or "Cancel clip"): the clip's first and last frames,
 // the replay it is of (its title and first frame: another replay armed ends it), and the handle
-// held (0: none, 1: the start, 2: the end).
+// held (0: none, 1: the start, 2: the end): where it was pressed, its frame then, and whether it
+// has been dragged (past HANDLE_DRAG_PX; until then a release is a click, which seeks there).
 bool s_clip_mode = false;
 s64 s_clip_start = 0;
 s64 s_clip_end = 0;
 std::string s_clip_title;
 s64 s_clip_first = 0;
 int s_clip_handle = 0;
+float s_handle_press_x = 0;
+s64 s_handle_press_frame = 0;
+bool s_handle_moved = false;
+// The session's clip mode end as last set (Session::SetPlaybackStop; -1: none).
+s64 s_stop_sent = -1;
 
 constexpr auto SHOW_AFTER_MOUSE = std::chrono::seconds(3);
 // A clip starts this long before the frame Clip was clicked on (as L+R+Z's, the launcher's
 // CLIP_BEFORE_SECONDS) and is at least MIN_CLIP_FRAMES long.
 constexpr s64 CLIP_BEFORE_FRAMES = 20 * 60;
 constexpr s64 MIN_CLIP_FRAMES = 60;
+// A press on a clip's handle moves it only once the mouse has gone this far (scaled); from then on
+// the handle follows the mouse's movement from the press (it never jumps to the mouse), so it can
+// still be nudged back by a pixel.
+constexpr float HANDLE_DRAG_PX = 4.0f;
+// < (previous clip) this far into a highlight plays it again from its start; nearer its start, the
+// one before it (as media players' Previous).
+constexpr s64 PREV_RESTARTS_AFTER = 60;
 
 std::string Clock60(s64 frames)
 {
@@ -67,6 +80,39 @@ std::string Players(const Gprb::Session::PlaybackInfo& info)
                        Online::GameSetup::CharacterName(info.chars[port]));
   }
   return out;
+}
+
+void SetStop(s64 end)
+{
+  if (end != s_stop_sent)
+  {
+    s_stop_sent = end;
+    Gprb::Session::SetPlaybackStop(end);
+  }
+}
+
+void EndClipMode()
+{
+  s_clip_mode = false;
+  s_clip_handle = 0;
+  SetStop(-1);
+}
+
+// The list buttons' arrows: `count` triangles pointing left or right, centred in [a, z].
+void Arrows(ImDrawList* dl, ImVec2 a, ImVec2 z, int count, bool left, ImU32 col)
+{
+  const float h = (z.y - a.y) * 0.55f;
+  const float w = h * 0.75f;
+  const float total = w * count;
+  float x = (a.x + z.x - total) * 0.5f;
+  const float cy = (a.y + z.y) * 0.5f;
+  for (int i = 0; i < count; ++i, x += w)
+  {
+    if (left)
+      dl->AddTriangleFilled(ImVec2(x + w, cy - h * 0.5f), ImVec2(x + w, cy + h * 0.5f), ImVec2(x, cy), col);
+    else
+      dl->AddTriangleFilled(ImVec2(x, cy - h * 0.5f), ImVec2(x, cy + h * 0.5f), ImVec2(x + w, cy), col);
+  }
 }
 
 // A highlight's star (the seek bar's marks), its points at radius r around c.
@@ -100,16 +146,12 @@ void Display(float scale)
   {
     s_dragging = false;
     s_mark_held = -1;
-    s_clip_mode = false;
-    s_clip_handle = 0;
+    EndClipMode();
     return;
   }
   // (A clip is of one replay: another one armed, e.g. a spectated set's next game, ends it.)
   if (s_clip_mode && (info.title != s_clip_title || info.first != s_clip_first))
-  {
-    s_clip_mode = false;
-    s_clip_handle = 0;
-  }
+    EndClipMode();
   const ImGuiIO& io = ImGui::GetIO();
   const auto now = Clock::now();
   if (io.MousePos.x != s_last_mouse.x || io.MousePos.y != s_last_mouse.y)
@@ -160,6 +202,41 @@ void Display(float scale)
                                      ImGuiWindowFlags_AlwaysAutoResize;
   if (ImGui::Begin("##ReplayOverlay", nullptr, flags))
   {
+    // The launcher's list (highlights, not spectating): "3/40  << < > >>" right of the title (the
+    // user, 2026-10-24). < > go to the previous / next highlight from the frame shown, in this
+    // replay at once (its marks), past them in the replay before / after it (the launcher picks
+    // it); << >> to the replay before / after.
+    const Gprb::Replay::Playback::NavView nav = Gprb::Replay::Playback::GetNav();
+    const float line_h = ImGui::GetTextLineHeight();
+    const float nav_button = line_h * 1.4f;
+    // (On the way to a highlight, it is where the frame shown is going.)
+    const s64 cursor = info.seeking && info.clip_armed ? info.clip_start : info.shown;
+    int prev_mark = -1, next_mark = -1, playing_position = 0;
+    for (size_t i = 0; i < info.marks.size(); ++i)
+    {
+      const auto& m = info.marks[i];
+      if (m.position <= 0)
+        continue;
+      if (m.start < cursor - PREV_RESTARTS_AFTER && (prev_mark < 0 || m.start > info.marks[prev_mark].start))
+        prev_mark = static_cast<int>(i);
+      if (m.start > cursor && (next_mark < 0 || m.start < info.marks[next_mark].start))
+        next_mark = static_cast<int>(i);
+      if (m.start == info.clip_start && m.end == info.clip_end)
+        playing_position = m.position;
+    }
+    const int position = playing_position > 0 ? playing_position : nav.position;
+    const std::string count =
+        nav.shown ? fmt::format("{}/{}", position > 0 ? std::to_string(position) : std::string("-"), nav.total) :
+                    std::string();
+    const float nav_w = nav.shown ? ImGui::CalcTextSize(count.c_str()).x + ImGui::GetStyle().ItemSpacing.x +
+                                        nav_button * 4.0f + 2.0f * scale * 3.0f :
+                                    0.0f;
+    const ImVec2 title0 = ImGui::GetCursorScreenPos();
+    if (nav.shown)
+    {
+      ImGui::PushClipRect(title0, ImVec2(title0.x + std::max(0.0f, ImGui::GetContentRegionAvail().x - nav_w - 8.0f * scale),
+                                         title0.y + line_h + 2.0f), true);
+    }
     // What is playing (display text from the file: drawn, never formatted or used as a label).
     ImGui::TextUnformatted(info.title.c_str());
     const std::string players = Players(info);
@@ -169,6 +246,55 @@ void Display(float scale)
       ImGui::TextDisabled("|");
       ImGui::SameLine();
       ImGui::TextUnformatted(players.c_str());
+    }
+    if (nav.shown)
+    {
+      ImGui::PopClipRect();
+      ImGui::SameLine(width - ImGui::GetStyle().WindowPadding.x - nav_w);
+      ImGui::TextUnformatted(count.c_str());
+      using Gprb::Replay::Playback::NavAction;
+      struct Button
+      {
+        const char* id;
+        const char* tip;
+        int arrows;
+        bool left;
+        bool enabled;
+        NavAction action;
+        int mark;  // a mark of this replay to play instead (-1: ask the launcher)
+      };
+      const Button buttons[] = {
+          {"##navprevreplay", "Previous replay", 2, true, nav.prev_replay, NavAction::PrevReplay, -1},
+          {"##navprevclip", "Previous clip", 1, true, prev_mark >= 0 || nav.prev_replay, NavAction::PrevClip,
+           prev_mark},
+          {"##navnextclip", "Next clip", 1, false, next_mark >= 0 || nav.next_replay, NavAction::NextClip,
+           next_mark},
+          {"##navnextreplay", "Next replay", 2, false, nav.next_replay, NavAction::NextReplay, -1},
+      };
+      for (const Button& b : buttons)
+      {
+        ImGui::SameLine(0.0f, 2.0f * scale);
+        const ImVec2 b0 = ImGui::GetCursorScreenPos();
+        const ImVec2 b1(b0.x + nav_button, b0.y + line_h);
+        const bool pressed = ImGui::InvisibleButton(b.id, ImVec2(nav_button, line_h));
+        const bool over = ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled);
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        if (over && b.enabled)
+          dl->AddRectFilled(b0, b1, IM_COL32(255, 255, 255, 40), 3.0f * scale);
+        Arrows(dl, b0, b1, b.arrows, b.left,
+               !b.enabled ? IM_COL32(230, 230, 230, 70) :
+               over       ? IM_COL32(255, 255, 255, 255) :
+                            IM_COL32(230, 230, 230, 220));
+        if (over)
+          ImGui::SetTooltip("%s", b.tip);
+        if (pressed && b.enabled)
+        {
+          if (b.mark >= 0)
+            Gprb::Session::PlaybackControl(Gprb::Session::PlaybackCommand::PlayHighlight, b.mark);
+          else
+            Gprb::Replay::Playback::RequestNav(b.action, cursor);
+        }
+      }
     }
 
     if (!info.banner.empty())
@@ -218,10 +344,10 @@ void Display(float scale)
     // what is saved (ReplayPlayback.h, manual clips).
     const bool can_clip = Gprb::Replay::Playback::CanSaveClip();
     if (!can_clip)
-    {
-      s_clip_mode = false;
-      s_clip_handle = 0;
-    }
+      EndClipMode();
+    // Clip mode's end pauses playing as a highlight's does (the user, 2026-10-24).
+    if (s_clip_mode)
+      SetStop(s_clip_end);
     const ImGuiStyle& style = ImGui::GetStyle();
     const auto button_w = [&](const char* label) {
       return ImGui::CalcTextSize(label).x + style.FramePadding.x * 2.0f;
@@ -239,7 +365,9 @@ void Display(float scale)
       {
         if (ImGui::SmallButton(CLIP))
         {
-          // Ends at the frame shown, starts 20 s before it; paused there to set its ends.
+          // Ends at the frame shown, starts 20 s before it; paused at its start (the user,
+          // 2026-10-24: "creating a clip should seek to the start of the clip"), so Play plays it
+          // and pauses at its end.
           s_clip_mode = true;
           s_clip_handle = 0;
           s_clip_title = info.title;
@@ -248,6 +376,8 @@ void Display(float scale)
           s_clip_start = std::max(info.first, s_clip_end - CLIP_BEFORE_FRAMES);
           if (!info.paused)
             Gprb::Session::PlaybackControl(Gprb::Session::PlaybackCommand::Pause, 0);
+          Gprb::Session::PlaybackControl(Gprb::Session::PlaybackCommand::Seek, static_cast<double>(s_clip_start));
+          SetStop(s_clip_end);
         }
         if (ImGui::IsItemHovered())
         {
@@ -258,10 +388,7 @@ void Display(float scale)
       else
       {
         if (ImGui::SmallButton(CANCEL))
-        {
-          s_clip_mode = false;
-          s_clip_handle = 0;
-        }
+          EndClipMode();
         ImGui::SameLine();
         if (ImGui::SmallButton(SAVE))
         {
@@ -274,8 +401,7 @@ void Display(float scale)
           {
             OSD::AddMessage("The clip could not be saved", OSD::Duration::NORMAL, OSD::Color::RED);
           }
-          s_clip_mode = false;
-          s_clip_handle = 0;
+          EndClipMode();
         }
         if (ImGui::IsItemHovered())
           ImGui::SetTooltip("Keep it in the launcher's Replays > Highlights > Manual Clips");
@@ -397,20 +523,39 @@ void Display(float scale)
     {
       s_clip_handle = handle_hovered;
       s_mark_held = handle_hovered ? -1 : mark_hovered;
+      if (handle_hovered)
+      {
+        s_handle_press_x = io.MousePos.x;
+        s_handle_press_frame = handle_hovered == 1 ? s_clip_start : s_clip_end;
+        s_handle_moved = false;
+      }
     }
     if (s_clip_mode && (handle_hovered || s_clip_handle))
       ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
-    if (active && s_clip_handle == 1)
+    if (active && s_clip_handle)
     {
-      s_clip_start = std::clamp(frame_at(io.MousePos.x), info.first, s_clip_end - MIN_CLIP_FRAMES);
-    }
-    else if (active && s_clip_handle == 2)
-    {
-      s_clip_end = std::clamp(frame_at(io.MousePos.x), s_clip_start + MIN_CLIP_FRAMES,
-                              std::max(end, s_clip_start + MIN_CLIP_FRAMES));
+      // Moved only once clearly dragged; then by the mouse's movement since the press.
+      const float dx = io.MousePos.x - s_handle_press_x;
+      if (!s_handle_moved && std::abs(dx) >= HANDLE_DRAG_PX * scale)
+        s_handle_moved = true;
+      if (s_handle_moved)
+      {
+        const s64 frame = s_handle_press_frame +
+                          static_cast<s64>(std::lround(dx / std::max(bar_w, 1.0f) * static_cast<float>(span)));
+        if (s_clip_handle == 1)
+        {
+          s_clip_start = std::clamp(frame, info.first, s_clip_end - MIN_CLIP_FRAMES);
+        }
+        else
+        {
+          s_clip_end = std::clamp(frame, s_clip_start + MIN_CLIP_FRAMES, std::max(end, s_clip_start + MIN_CLIP_FRAMES));
+          SetStop(s_clip_end);
+        }
+      }
     }
     else if (!active && s_clip_handle)
     {
+      // A click on a handle goes there; a drag shows the frame it was left at.
       Gprb::Session::PlaybackControl(Gprb::Session::PlaybackCommand::Seek,
                                      static_cast<double>(s_clip_handle == 1 ? s_clip_start : s_clip_end));
       s_clip_handle = 0;
@@ -462,6 +607,17 @@ void Display(float scale)
         dl->AddRect(a, z, IM_COL32(30, 90, 170, 255), 2.0f * scale, 0, 1.0f * scale);
       }
     }
+    // Where a highlight ends: the one playing while its end is ahead (it pauses there), the
+    // hovered star's while hovered (the user, 2026-10-24).
+    const auto end_line = [&](s64 frame, ImU32 col) {
+      const float x = bar_x + bar_frac(frame) * bar_w;
+      dl->AddRectFilled(ImVec2(x - 1.0f * scale, p0.y - 3.0f * scale), ImVec2(x + 1.0f * scale, p1.y + 3.0f * scale),
+                        col);
+    };
+    if (info.clip_armed && info.clip_end >= 0)
+      end_line(info.clip_end, IM_COL32(255, 255, 255, 230));
+    if (mark_hovered >= 0 && static_cast<size_t>(mark_hovered) < info.marks.size())
+      end_line(info.marks[mark_hovered].end, IM_COL32(255, 230, 120, 230));
     for (size_t i = 0; i < info.marks.size(); ++i)
     {
       const auto& mark = info.marks[i];

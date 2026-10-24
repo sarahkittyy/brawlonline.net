@@ -1,5 +1,5 @@
 import type { ChatKeyPress } from "@common/chat_key";
-import type { HighlightPlayItem } from "@replays/highlights/types";
+import type { HighlightListView, HighlightPlayItem } from "@replays/highlights/types";
 import type { EmptyPayload, SuccessPayload } from "utils/ipc";
 import { _, makeEndpoint } from "utils/ipc";
 
@@ -93,7 +93,16 @@ export const ipc_getRenderJobs = makeEndpoint.main("getRenderJobs", <EmptyPayloa
 
 export const ipc_playHighlights = makeEndpoint.main(
   "playHighlights",
-  <{ items: HighlightPlayItem[]; commandId: string; choice?: ReplayPlayChoice }>_,
+  <
+    {
+      items: HighlightPlayItem[];
+      commandId: string;
+      choice?: ReplayPlayChoice;
+      list?: HighlightListView;
+      /** Only an open playback Dolphin's request updated (the same commandId): never starts one. */
+      updateOnly?: boolean;
+    }
+  >_,
   <ReplayPlayResult>_,
 );
 

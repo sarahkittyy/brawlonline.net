@@ -497,7 +497,17 @@ def test_launcher_comm_file_saves_manual_clips(backend: OnlineBackend,
     then "Save as highlight", in the launcher's playback Dolphin. Once the comm file's replay is
     armed a clip can be saved (the overlay shows Clip); each one saved is listed in the status file's
     `savedClips` with the replay's path and its frames, the same frames saved again are one, and an
-    empty clip is refused. The replay plays on with no checksum differing."""
+    empty clip is refused; each is a star on the seek bar at once.
+
+    End lines (2026-10-24): clip mode's end pauses playing there, and Play then goes past it; a
+    highlight's end pauses again after a seek back to before it, never after a seek past it.
+
+    The launcher's list (section 3): a highlights request with `marks` and `nav` marks the list's
+    stars with their places (a saved clip among them is the list's), shows "2/5" and both replay
+    buttons; a star played here and a button that needs the launcher are in the status file
+    (`highlightPick`, `navRequest`); the same request written again with another count and stars
+    changes them without starting the clip again, and a new request starts both counts again.
+    The replay plays on to its end with no checksum differing."""
     fa, out = _recorded_direct_game(backend, dolphin, gpu_backend, "manual-clips", ("mona", "nils"))
     first, last = fa.first_frame, fa.last_frame
     assert last - first > 1500, (first, last)
@@ -522,6 +532,88 @@ def test_launcher_comm_file_saves_manual_clips(backend: OnlineBackend,
     assert not r["saved"] and len(r["comm"]["savedClips"]) == 2, r
     # The launcher reads them from the status file.
     _wait(lambda: file_status().get("savedClips") == [want_a, want_b] or None, 10, "the status file's clips")
+    # Each a star (the overlay's view: once the match runs).
+    want_marks = [(*a, True), (*b, True)]
+    st = _wait(lambda: (lambda s: s if [(m["start"], m["end"], m["saved"]) for m in s["marks"]] == want_marks
+                        else None)(_status(v)), 300, "the saved clips' stars")
+    assert not st["nav"]["shown"], st["nav"]
+
+    def wait_paused_at(frame: int, what: str) -> dict[str, Any]:
+        return _wait(lambda: (lambda s: s if s["paused"] and not s["seeking"] and s["shown"] == frame else None)(
+            _status(v)), 120, what)
+
+    def wait_past(frame: int, what: str) -> dict[str, Any]:
+        st = _wait(lambda: (lambda s: s if not s["seeking"] and s["shown"] > frame else None)(_status(v)), 120, what)
+        assert not st["paused"], st
+        return st
+
+    # Clip mode's end: paused there; Play goes past it.
+    stop = a[0] + 120
+    v.c.call("replay_control", action="seek", arg=a[0])
+    v.c.call("replay_control", action="stop", arg=stop)
+    v.c.call("replay_control", action="play")
+    wait_paused_at(stop, "clip mode's end")
+    v.c.call("replay_control", action="play")
+    wait_past(stop + 60, "playing on past clip mode's end")
+    v.c.call("replay_control", action="stop", arg=-1)
+    # A star: its highlight plays and pauses at its end; again after a seek back to before it;
+    # not after a seek past it.
+    v.c.call("replay_control", action="highlight", arg=0)
+    st = wait_paused_at(a[1], "the star's end")
+    assert st["clip_done"] and not st["clip_armed"], st
+    v.c.call("replay_control", action="seek", arg=a[0] - 60)
+    v.c.call("replay_control", action="play")
+    wait_paused_at(a[1], "the star's end, after a seek back")
+    v.c.call("replay_control", action="seek", arg=a[1] + 120)
+    v.c.call("replay_control", action="play")
+    wait_past(a[1] + 240, "playing on after a seek past the star's end")
+
+    # The launcher's list: one highlight a request, its stars and count.
+    comm = out / "playback-comms.json"
+    c = (first + 2000, first + 2300)
+    serial = _status(v)["serial"]
+
+    def request(command: str, marks: list[tuple[int, int, int]], position: int, total: int) -> None:
+        comm.write_text(json.dumps({
+            "mode": "highlights", "commandId": command,
+            "queue": [{"path": str(fa.path), "startFrame": c[0], "endFrame": c[1]}],
+            "marks": [{"startFrame": s0, "endFrame": e0, "position": p} for s0, e0, p in marks],
+            "nav": {"position": position, "total": total, "hasPrevReplay": True, "hasNextReplay": True}}))
+
+    request("L1", [(*c, 2), (*a, 3)], 2, 5)
+    _wait(lambda: (lambda fs: fs if fs.get("commandId") == "L1" and fs.get("state") == "playing" else None)(
+        file_status()), 120, "the list's highlight to play")
+    st = _status(v)
+    assert st["serial"] == serial, "the same match"
+    assert [(m["start"], m["position"], m["saved"]) for m in st["marks"]] == [
+        (c[0], 2, False), (a[0], 3, False), (b[0], 0, True)], st["marks"]
+    assert st["nav"] == {"shown": True, "position": 2, "total": 5, "prev_replay": True, "next_replay": True}, st["nav"]
+    fs = file_status()
+    assert "navRequest" not in fs and "highlightPick" not in fs, fs
+    # A star of the list, played here: the launcher is told which.
+    v.c.call("replay_control", action="highlight", arg=1)
+    fs = _wait(lambda: (lambda fs: fs if "highlightPick" in fs else None)(file_status()), 10, "the pick")
+    assert fs["highlightPick"] == {"seq": 1, "startFrame": a[0], "endFrame": a[1]}, fs
+    _wait(lambda: file_status().get("clipStart") == a[0] or None, 10, "the status' clip to follow the pick")
+    # A button that needs another replay: asked of the launcher.
+    v.c.call("replay_nav", action="nextReplay")
+    fs = _wait(lambda: (lambda fs: fs if "navRequest" in fs else None)(file_status()), 10, "the list button")
+    assert fs["navRequest"]["seq"] == 1 and fs["navRequest"]["action"] == "nextReplay", fs
+    # The same request again, the list changed: the count and stars follow, the clip goes on.
+    shown = _status(v)["shown"]
+    request("L1", [(*a, 4)], 4, 7)
+    st = _wait(lambda: (lambda s: s if s["nav"]["total"] == 7 else None)(_status(v)), 10, "the list's update")
+    assert [(m["start"], m["position"]) for m in st["marks"]] == [(a[0], 4), (b[0], 0)], st["marks"]
+    assert st["shown"] >= shown and st["serial"] == serial and st["clip_start"] == a[0], st
+    fs = file_status()
+    assert fs["highlightPick"]["seq"] == 1 and fs["navRequest"]["seq"] == 1, fs
+    # A new request: both counts start again.
+    request("L2", [(*c, 1)], 1, 1)
+    _wait(lambda: (lambda fs: fs if fs.get("commandId") == "L2" and "navRequest" not in fs and
+                   "highlightPick" not in fs else None)(file_status()), 30, "a new request's counts")
+    # On to the replay's end (past every end line).
+    v.c.call("replay_control", action="seek", arg=last - 120)
+    v.c.call("replay_control", action="play")
     st = _wait(lambda: (lambda s: s if s["at_end"] or s["finished"] else None)(_status(v)), 900,
                "the replay's last frame")
     assert st["phase"] != "error" and st["desync_frame"] == -1, st
