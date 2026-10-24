@@ -26,6 +26,14 @@ import { SessionExpiredError } from "./types";
 
 const MAX_ACCOUNTS_TO_RESTORE = 5;
 
+/**
+ * How long the start waits for the active account's record. Past it the launcher opens with the
+ * stored details (like offline) and the record takes their place when it comes: a server that
+ * doesn't answer at all (some Spanish ISPs drop Cloudflare's addresses during football matches)
+ * kept the window on its loading screen for each request's whole timeout.
+ */
+const RESTORE_WAIT_MS = 4000;
+
 const accounts = () => window.electron.accounts;
 
 function isSessionExpired(err: unknown): boolean {
@@ -60,7 +68,7 @@ class MultiAccountClient implements MultiAccountService {
       if (this._activeAccountId) {
         const activeAccount = this._accounts.find((acc) => acc.id === this._activeAccountId);
         if (activeAccount) {
-          await this._restoreAccount(activeAccount);
+          await this._restoreAtStart(activeAccount);
         }
       }
 
@@ -162,6 +170,38 @@ class MultiAccountClient implements MultiAccountService {
 
   private _notifyActiveUserChanged(): void {
     this._activeUserSubject.next(this.getActiveUser());
+  }
+
+  /**
+   * `_restoreAccount`, waited for at most RESTORE_WAIT_MS. Past that the account goes on with the
+   * stored details if it has a session, and a later answer that changes its record is announced
+   * (a real record, or none once the session turns out expired).
+   */
+  private async _restoreAtStart(account: StoredAccount): Promise<void> {
+    const restore = this._restoreAccount(account).catch((err: unknown) => {
+      log.error(`Could not restore account ${account.id}:`, err);
+      return false;
+    });
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timedOut = new Promise<true>((resolve) => {
+      timer = setTimeout(() => resolve(true), RESTORE_WAIT_MS);
+    });
+    const late = await Promise.race([restore.then(() => false), timedOut]);
+    clearTimeout(timer);
+    if (!late) {
+      return;
+    }
+
+    log.warn(`No answer from the account server in ${RESTORE_WAIT_MS} ms, starting with the stored account details`);
+    if (!this._records.has(account.id) && (await accounts().hasSession(account.id))) {
+      this._records.set(account.id, offlineRecord(account));
+    }
+    const record = this._records.get(account.id);
+    void restore.then(() => {
+      if (this._records.get(account.id) !== record && this._activeAccountId === account.id) {
+        this._notifyActiveUserChanged();
+      }
+    });
   }
 
   /**
