@@ -1268,10 +1268,9 @@ void SessionCard::CheckLocal(std::span<const u32> chunks)
   }
 }
 
-bool SessionCard::ReadBase(u32 index, u8* dst)
+bool SessionCard::ReadBase(u32 index, u64 from, u64 len, u8* dst)
 {
-  const u64 len = ChunkBytes(index);
-  const u64 start = u64{index} * CHUNK_SIZE;
+  const u64 start = u64{index} * CHUNK_SIZE + from;
   switch (m_mode)
   {
   case Mode::OwnCard:
@@ -1300,7 +1299,7 @@ bool SessionCard::ReadBase(u32 index, u8* dst)
     {
       const auto it = m_fetched_offsets.find(index);
       return it != m_fetched_offsets.end() &&
-             m_fetched_file.Seek(static_cast<s64>(it->second), File::SeekOrigin::Begin) &&
+             m_fetched_file.Seek(static_cast<s64>(it->second + from), File::SeekOrigin::Begin) &&
              m_fetched_file.ReadBytes(dst, len);
     }
     case Source::Unchecked:
@@ -1313,11 +1312,11 @@ bool SessionCard::ReadBase(u32 index, u8* dst)
   return false;
 }
 
-bool SessionCard::ReadChunk(u32 index, u8* dst)
+bool SessionCard::ReadChunk(u32 index, u64 from, u64 len, u8* dst)
 {
   if (const auto it = m_overlay.find(index); it != m_overlay.end())
   {
-    std::memcpy(dst, it->second->data(), it->second->size());
+    std::memcpy(dst, it->second->data() + from, len);
     return true;
   }
   if (m_mode == Mode::GuestCard)
@@ -1327,7 +1326,7 @@ bool SessionCard::ReadChunk(u32 index, u8* dst)
     if (!WaitForChunks(chunk, true))
       return false;
   }
-  return ReadBase(index, dst);
+  return ReadBase(index, from, len, dst);
 }
 
 bool SessionCard::Read(u64 offset, u8* dst, u64 size)
@@ -1399,16 +1398,19 @@ bool SessionCard::Read(u64 offset, u8* dst, u64 size)
     }
   }
 
-  std::vector<u8> chunk(CHUNK_SIZE);
+  // Only the bytes asked for, straight into the game's buffer: the game's FAT code reads a 512-byte
+  // sector at a time, thousands a second while it opens files (directories, the FAT), and a re-run
+  // frame reads them all again. Each sector cost a zeroed 64 KiB buffer and a 64 KiB read of the
+  // image before (bug report #125: Cobalt's lookup of a BrawlEx fighter's HUD face, 5,334 sector
+  // reads in its 71 frames).
   u64 done = 0;
   for (u32 c = first; c <= last; ++c)
   {
     const u64 chunk_start = u64{c} * CHUNK_SIZE;
     const u64 from = std::max(offset, chunk_start) - chunk_start;
     const u64 to = std::min(offset + size, chunk_start + ChunkBytes(c)) - chunk_start;
-    if (!ReadChunk(c, chunk.data()))
+    if (!ReadChunk(c, from, to - from, dst + done))
       return false;
-    std::memcpy(dst + done, chunk.data() + from, to - from);
     done += to - from;
   }
   return true;
@@ -1465,7 +1467,7 @@ bool SessionCard::Write(u64 offset, const u8* src, u64 size)
     const u64 to = std::min(offset + size, chunk_start + len) - chunk_start;
 
     auto buffer = std::make_shared<std::vector<u8>>(len);
-    if ((from != 0 || to != len) && !ReadChunk(c, buffer->data()))
+    if ((from != 0 || to != len) && !ReadChunk(c, 0, len, buffer->data()))
     {
       ERROR_LOG_FMT(BRAWLBACK, "SD card: could not read chunk {} to write part of it", c);
       return false;

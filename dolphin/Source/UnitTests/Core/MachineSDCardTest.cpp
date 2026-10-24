@@ -583,6 +583,49 @@ TEST_F(MachineSDCardTest, GuestWithoutACardFetchesEverythingButZeroes)
     EXPECT_NE(c, 5u) << "an all-zero chunk is never fetched";
 }
 
+// The game reads a 512-byte sector at a time (bug report #125): each read returns just those bytes,
+// wherever they come from (the image, a write, a zero chunk, a fetched chunk) and across a chunk's
+// end.
+TEST_F(MachineSDCardTest, SectorReadsSeeTheWholeCard)
+{
+  const auto check = [](SessionCard& card, const std::vector<u8>& expected) {
+    std::vector<u8> sector(512);
+    for (u64 at = 0; at + sector.size() <= expected.size(); at += 512 * 37 + 3)
+    {
+      std::ranges::fill(sector, u8{0xCD});
+      ASSERT_TRUE(card.Read(at, sector.data(), sector.size())) << at;
+      ASSERT_TRUE(std::equal(sector.begin(), sector.end(), expected.begin() + at)) << at;
+    }
+    for (u64 c = 1; c * CHUNK_SIZE < expected.size(); ++c)
+    {
+      const u64 at = c * CHUNK_SIZE - 200;
+      ASSERT_TRUE(card.Read(at, sector.data(), sector.size())) << at;
+      ASSERT_TRUE(std::equal(sector.begin(), sector.end(), expected.begin() + at)) << at;
+    }
+  };
+
+  // The player's own card, with a write over parts of chunks 1 and 2.
+  const std::string path = Path("card.raw");
+  const std::vector<u8> original = PatternCard(4, 3);
+  WriteFile(path, original);
+  auto own = SessionCard::CreateOwnCard(path);
+  own->SetClockForTesting([] { return u64{0}; }, 100);
+  std::vector<u8> w(3000, 0x5E);
+  ASSERT_TRUE(own->Write(2 * CHUNK_SIZE - 1000, w.data(), w.size()));
+  std::vector<u8> written = original;
+  std::copy(w.begin(), w.end(), written.begin() + 2 * CHUNK_SIZE - 1000);
+  check(*own, written);
+
+  // A joiner: chunk 1 its own, chunk 2 fetched (it differs), chunk 3 all zero.
+  std::vector<u8> host = PatternCard(4, 8);
+  std::fill_n(host.begin() + 3 * CHUNK_SIZE, CHUNK_SIZE, u8{0});
+  std::vector<u8> guest = host;
+  guest[2 * CHUNK_SIZE + 5] ^= 0x10;
+  GuestSetup g = MakeGuest(host, &guest);
+  check(*g.card, host);
+  EXPECT_EQ(g.host->Requested(), std::vector<u32>({2}));
+}
+
 TEST_F(MachineSDCardTest, PartialWriteFetchesTheRestOfTheChunk)
 {
   const std::vector<u8> host = PatternCard(4, 6);

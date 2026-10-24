@@ -367,9 +367,10 @@ private:
   // Guest: compares this card's chunks among `chunks` that are not checked yet with the manifest
   // (any thread): each becomes Local or Missing.
   void CheckLocal(std::span<const u32> chunks);
-  // The chunk's current contents (the session's writes included), fetching it if needed.
-  bool ReadChunk(u32 index, u8* dst);
-  bool ReadBase(u32 index, u8* dst);
+  // Bytes [from, from + len) of the chunk's current contents (the session's writes included),
+  // fetching it if needed.
+  bool ReadChunk(u32 index, u64 from, u64 len, u8* dst);
+  bool ReadBase(u32 index, u64 from, u64 len, u8* dst);
   // Waits until every listed chunk has arrived (guest). False on timeout, detach or a chunk no
   // player could send.
   bool WaitForChunks(std::span<const u32> chunks, bool keep_alive);

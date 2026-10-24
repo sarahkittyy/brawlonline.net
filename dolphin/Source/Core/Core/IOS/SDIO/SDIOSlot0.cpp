@@ -334,6 +334,10 @@ s32 SDIOSlot0Device::ExecuteCommand(const Request& request, u32 buffer_in, u32 b
       {
         ERROR_LOG_FMT(IOS_SD, "Read of {} bytes at {:#x} failed", size, address);
         ret = RET_FAIL;
+        // A session's card reads straight into the buffer: a read that failed partway may have
+        // written some of it.
+        if (dst)
+          memory.MarkRangeDirty(req.addr, size);
       }
   }
     memory.Write_U32(0x900, buffer_out);
