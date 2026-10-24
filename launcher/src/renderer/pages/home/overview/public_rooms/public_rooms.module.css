@@ -221,16 +221,32 @@
   }
 }
 
-.titleActions {
+/* The row under the header: the room code box and Join on the left, the ruleset box and Create room on the right.
+   Only the ruleset's name shrinks (cut with "..."): the boxes and buttons keep their size, on one line. */
+.toolbar {
   flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  min-width: 0;
+}
+
+.joinCode {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.createActions {
+  flex: 0 1 auto;
+  margin-left: auto;
   display: flex;
   align-items: center;
   gap: 10px;
   min-width: 0;
 }
 
-/* The header shrinks the ruleset's name (cut with "...") and nothing else: the code box and Create room keep
-   their size, on one line. */
 .createRoom {
   flex-shrink: 0;
 }
@@ -264,16 +280,10 @@
   flex-shrink: 0;
 }
 
-/* A narrow window: the header gives up the ruleset's name (the code box keeps the code) and then the players
-   in game, rather than squeezing them. A code that was not taken still says why. */
-@container (width < 760px) {
+/* A narrow window: the row gives up the ruleset's name (the code box keeps the code) rather than squeezing it.
+   A code that was not taken still says why. */
+@container (width < 680px) {
   .rulesetName:not(:has(.rulesetError)) {
-    display: none;
-  }
-}
-
-@container (width < 670px) {
-  .online {
     display: none;
   }
 }

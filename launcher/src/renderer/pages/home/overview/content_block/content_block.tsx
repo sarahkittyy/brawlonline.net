@@ -9,12 +9,15 @@ export const ContentBlock = ({
   fill,
   endIcon,
   titleAction,
+  toolbar,
   overflowY = "auto",
 }: {
   fill?: boolean;
   title?: string;
   /** Shown right after the title (a button). */
   titleAction?: React.ReactNode;
+  /** A row under the header that doesn't scroll with the content (buttons, boxes). */
+  toolbar?: React.ReactNode;
   content: React.ReactNode;
   onClick?: () => void;
   endIcon?: React.ReactNode;
@@ -31,6 +34,7 @@ export const ContentBlock = ({
           {endIcon}
         </div>
       )}
+      {toolbar && <div className={styles.toolbar}>{toolbar}</div>}
       <div className={styles.content} style={{ overflowY }}>
         {content}
       </div>

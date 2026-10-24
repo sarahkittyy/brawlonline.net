@@ -26,6 +26,8 @@ export const PublicRooms = React.memo(function PublicRooms() {
   const { ruleset } = useRememberedRuleset();
   /** The ruleset whose rules are shown (a click on a room's ruleset). */
   const [showRuleset, setShowRuleset] = useState<string | null>(null);
+  /** The join in progress came from the room code box. */
+  const [joiningByCode, setJoiningByCode] = useState(false);
   const [hasCreatedRoom, setHasCreatedRoom] = useLocalStorage(CREATED_ROOM_STORAGE_KEY, false);
   // The room starts with the ruleset in the box (docs/rulesets-protocol.md §4).
   const create = () => {
@@ -52,7 +54,20 @@ export const PublicRooms = React.memo(function PublicRooms() {
       <PublicRoomsView
         state={state}
         joiningCode={joiningCode}
-        onJoin={(room) => void join(room)}
+        onJoin={(room) => {
+          if (room.joinable) {
+            void join(room.code);
+          }
+        }}
+        onJoinCode={async (code) => {
+          setJoiningByCode(true);
+          try {
+            return await join(code);
+          } finally {
+            setJoiningByCode(false);
+          }
+        }}
+        joiningByCode={joiningByCode}
         onRetry={() => void query.refetch()}
         onLogIn={openLogin}
         onCreate={create}

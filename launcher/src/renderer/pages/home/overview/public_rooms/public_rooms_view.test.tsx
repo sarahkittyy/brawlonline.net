@@ -1,5 +1,5 @@
-import { fireEvent, render } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { act, cleanup, fireEvent, render } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { PublicRoom } from "@/services/backend/types";
 
@@ -44,6 +44,8 @@ const view = (state: PublicRoomsState, onJoin = vi.fn(), joiningCode?: string) =
   render(
     <PublicRoomsView state={state} joiningCode={joiningCode} onJoin={onJoin} onRetry={vi.fn()} onLogIn={vi.fn()} />,
   );
+
+afterEach(cleanup);
 
 describe("PublicRoomsView", () => {
   it("lists every room with its host, players, mode, status and names", () => {
@@ -96,5 +98,66 @@ describe("PublicRoomsView", () => {
     expect(view({ kind: "ready", online: 1, rooms: [] }).getAllByText("1 player in-game").length).toBeGreaterThan(0);
     expect(view({ kind: "logged-out" }).getByText(Messages.logIn())).toBeTruthy();
     expect(view({ kind: "unreachable" }).getByText(Messages.retry())).toBeTruthy();
+  });
+
+  const codeView = (onJoinCode: (code: string) => Promise<boolean> | void, state?: PublicRoomsState) =>
+    render(
+      <PublicRoomsView
+        state={state ?? { kind: "ready", online: 1, rooms }}
+        onJoin={vi.fn()}
+        onJoinCode={onJoinCode}
+        onRetry={vi.fn()}
+        onLogIn={vi.fn()}
+        onCreate={vi.fn()}
+      />,
+    );
+
+  it("joins a typed room code, uppercased, with Join or Enter, once it is a room code", async () => {
+    const onJoinCode = vi.fn().mockResolvedValue(false);
+    const { getByTestId } = codeView(onJoinCode);
+    const box = getByTestId("room-code") as HTMLInputElement;
+    const button = getByTestId("join-code") as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+
+    fireEvent.change(box, { target: { value: "k f-q" } });
+    expect(box.value).toBe("KFQ");
+    expect(button.disabled).toBe(true);
+    fireEvent.keyDown(box, { key: "Enter" });
+    expect(onJoinCode).not.toHaveBeenCalled();
+
+    // Four letters with a vowel (or a Y) are no room's code: red, no join.
+    fireEvent.change(box, { target: { value: "KFQA" } });
+    expect(box.getAttribute("aria-invalid")).toBe("true");
+    expect(button.disabled).toBe(true);
+    fireEvent.keyDown(box, { key: "Enter" });
+    expect(onJoinCode).not.toHaveBeenCalled();
+
+    fireEvent.change(box, { target: { value: "kfqb" } });
+    expect(box.getAttribute("aria-invalid")).toBe("false");
+    await act(async () => {
+      fireEvent.keyDown(box, { key: "Enter" });
+    });
+    await act(async () => {
+      fireEvent.click(button);
+    });
+    expect(onJoinCode.mock.calls).toEqual([["KFQB"], ["KFQB"]]);
+    // Not taken by the game: the code stays to try again.
+    expect(box.value).toBe("KFQB");
+  });
+
+  it("clears the code once the game takes it", async () => {
+    const { getByTestId } = codeView(vi.fn().mockResolvedValue(true));
+    const box = getByTestId("room-code") as HTMLInputElement;
+    fireEvent.change(box, { target: { value: "MXWW" } });
+    await act(async () => {
+      fireEvent.click(getByTestId("join-code"));
+    });
+    expect(box.value).toBe("");
+  });
+
+  it("offers the code box with the list unreachable, not logged out", () => {
+    expect(codeView(vi.fn(), { kind: "unreachable" }).queryByTestId("room-code")).toBeTruthy();
+    cleanup();
+    expect(codeView(vi.fn(), { kind: "logged-out" }).queryByTestId("room-code")).toBeNull();
   });
 });

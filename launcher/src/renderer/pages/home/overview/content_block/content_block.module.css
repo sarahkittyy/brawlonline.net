@@ -49,6 +49,17 @@
   border-bottom: 1px solid rgb(159 116 192 / 10%);
 }
 
+.toolbar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-height: 52px;
+  padding: 8px 20px;
+  box-sizing: border-box;
+  border-bottom: 1px solid rgb(159 116 192 / 10%);
+}
+
 .header.active {
   cursor: pointer;
   transition: background-color 0.2s ease-in-out;

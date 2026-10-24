@@ -13,6 +13,7 @@ import React from "react";
 import type { PublicRoom, RoomMode } from "@/services/backend/types";
 
 import { ContentBlock } from "../content_block/content_block";
+import { JoinCodeBox } from "./join_code_box";
 import { PublicRoomsMessages as Messages } from "./public_rooms.messages";
 import styles from "./public_rooms.module.css";
 
@@ -28,6 +29,10 @@ export type PublicRoomsViewProps = {
   /** The room whose join is in progress (its row shows a spinner, the others wait). */
   joiningCode?: string;
   onJoin: (room: PublicRoom) => void;
+  /** A code typed in the room code box (any room, private ones too); resolves to whether the game took it. */
+  onJoinCode?: (code: string) => Promise<boolean> | void;
+  /** The box's join is being handed to the game (`joiningCode` is its code). */
+  joiningByCode?: boolean;
   onRetry: () => void;
   onLogIn: () => void;
   /** Home's "Create room": the game creates a room as WITH FRIENDS > Create Room does. */
@@ -45,7 +50,9 @@ export type PublicRoomsViewProps = {
 };
 
 /**
- * Home > Overview's room list: players online and the public rooms (docs/design/rooms.md §1.1).
+ * Home > Overview's room list: players online and the public rooms (docs/design/rooms.md §1.1). The header holds only
+ * the title and the players in game; the row under it joins a room by its code (left) and creates one with the
+ * ruleset box (right).
  * A full room is shown but cannot be clicked; a room in game can be clicked while an open slot is
  * empty (the player waits in the room until the game ends).
  */
@@ -53,6 +60,8 @@ export const PublicRoomsView = ({
   state,
   joiningCode,
   onJoin,
+  onJoinCode,
+  joiningByCode = false,
   onRetry,
   onLogIn,
   onCreate,
@@ -75,28 +84,50 @@ export const PublicRoomsView = ({
       <ContentBlock
         fill={true}
         title={Messages.publicRooms()}
-        titleAction={
-          onCreate && state.kind !== "logged-out" ? (
-            <div className={styles.titleActions}>
-              {rulesetBox}
-              <Tooltip title={Messages.createRoomTooltip()} placement="top" enterDelay={400} disableInteractive={true}>
-                <span className={styles.createRoom}>
-                  <Button
-                    variant="contained"
-                    color="secondary"
-                    size="small"
-                    disableElevation={true}
-                    disabled={creating || joiningCode != null}
-                    startIcon={creating ? <CircularProgress color="inherit" size={14} /> : <AddRoundedIcon />}
-                    onClick={onCreate}
-                    className={clsx(highlightCreate && !creating && styles.createHighlight)}
-                    data-testid="create-room"
-                    sx={{ textTransform: "none", fontWeight: 600, borderRadius: "8px", px: 1.5, whiteSpace: "nowrap" }}
+        toolbar={
+          state.kind !== "logged-out" && (onJoinCode || onCreate) ? (
+            <div className={styles.toolbar}>
+              {onJoinCode && (
+                <JoinCodeBox
+                  onJoin={onJoinCode}
+                  joining={joiningByCode}
+                  disabled={creating || (joiningCode != null && !joiningByCode)}
+                />
+              )}
+              {onCreate && (
+                <div className={styles.createActions}>
+                  {rulesetBox}
+                  <Tooltip
+                    title={Messages.createRoomTooltip()}
+                    placement="top"
+                    enterDelay={400}
+                    disableInteractive={true}
                   >
-                    {Messages.createRoom()}
-                  </Button>
-                </span>
-              </Tooltip>
+                    <span className={styles.createRoom}>
+                      <Button
+                        variant="contained"
+                        color="secondary"
+                        size="small"
+                        disableElevation={true}
+                        disabled={creating || joiningCode != null}
+                        startIcon={creating ? <CircularProgress color="inherit" size={14} /> : <AddRoundedIcon />}
+                        onClick={onCreate}
+                        className={clsx(highlightCreate && !creating && styles.createHighlight)}
+                        data-testid="create-room"
+                        sx={{
+                          textTransform: "none",
+                          fontWeight: 600,
+                          borderRadius: "8px",
+                          px: 1.5,
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        {Messages.createRoom()}
+                      </Button>
+                    </span>
+                  </Tooltip>
+                </div>
+              )}
             </div>
           ) : undefined
         }

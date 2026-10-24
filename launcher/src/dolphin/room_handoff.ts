@@ -31,9 +31,16 @@ import { randomUUID } from "crypto";
 import { readFile, rename, unlink, writeFile } from "fs/promises";
 import path from "path";
 
-import { type QueueTarget, CREATE_ROOM, isQueueTarget, QUEUE_RANKED, QUEUE_UNRANKED } from "./hand_off_target";
+import {
+  type QueueTarget,
+  CREATE_ROOM,
+  isQueueTarget,
+  isRoomCode,
+  QUEUE_RANKED,
+  QUEUE_UNRANKED,
+} from "./hand_off_target";
 
-export { CREATE_ROOM, QUEUE_RANKED, QUEUE_UNRANKED };
+export { CREATE_ROOM, isRoomCode, QUEUE_RANKED, QUEUE_UNRANKED };
 
 export const ROOM_REQUEST_FILE = "join-room.json";
 export const GAME_STATUS_FILE = "game-status.json";
@@ -83,11 +90,6 @@ export type StatusRead =
   | { kind: "missing" }
   | { kind: "stale"; status: GameStatus }
   | { kind: "fresh"; status: GameStatus };
-
-/** Room codes: 4 letters without vowels (and without Y). */
-export function isRoomCode(code: string): boolean {
-  return /^[BCDFGHJKLMNPQRSTVWXZ]{4}$/.test(code);
-}
 
 export function requestPath(onlineDir: string): string {
   return path.join(onlineDir, ROOM_REQUEST_FILE);

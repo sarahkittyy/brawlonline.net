@@ -2,11 +2,11 @@ import type { RulesetView } from "@accounts/types";
 import { enqueueSnackbar } from "notistack";
 import React from "react";
 
+import { SocialMessages } from "@/components/social/social.messages";
 import { ToastProvider } from "@/components/toast_provider";
 import type { PublicRoom } from "@/services/backend/types";
 
 import overviewStyles from "../overview.module.css";
-import { PublicRoomsMessages as Messages } from "./public_rooms.messages";
 import type { PublicRoomsState, PublicRoomsViewProps } from "./public_rooms_view";
 import { PublicRoomsView } from "./public_rooms_view";
 import { RulesetBoxView } from "./ruleset_box";
@@ -117,7 +117,14 @@ const Frame = ({
 }: Partial<PublicRoomsViewProps> & { state: PublicRoomsState; width?: number }) => (
   <div style={{ width, height: 560, background: "var(--theme-page-background)" }}>
     <div className={overviewStyles.container}>
-      <PublicRoomsView onJoin={noop} onRetry={noop} onLogIn={noop} onShowRuleset={showRuleset} {...props} />
+      <PublicRoomsView
+        onJoin={noop}
+        onJoinCode={noop}
+        onRetry={noop}
+        onLogIn={noop}
+        onShowRuleset={showRuleset}
+        {...props}
+      />
       <div className={overviewStyles.rankedSidebar} />
     </div>
   </div>
@@ -179,7 +186,7 @@ export const Joining = () => <Frame state={{ kind: "ready", online: 128, rooms: 
 /** The game is in a match: the launcher refuses with its message (a toast, as Play's errors are). */
 export const GameBusy = () => {
   React.useEffect(() => {
-    enqueueSnackbar(Messages.finishGameFirst(), { variant: "warning", persist: true });
+    enqueueSnackbar(SocialMessages.finishGameFirst(), { variant: "warning", persist: true });
   }, []);
   return (
     <ToastProvider>

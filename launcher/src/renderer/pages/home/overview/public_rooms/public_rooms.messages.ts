@@ -26,9 +26,10 @@ export const PublicRoomsMessages = {
   joinTooltip: () => "Join this room",
   joinInGameTooltip: () => "Join this room. You'll wait in it until the game ends.",
   fullTooltip: () => "This room is full.",
-  finishGameFirst: () => "Finish your current game first.",
-  joiningInGame: () => "Your game is going to the room.",
-  startingForRoom: () => "Starting the game. It will open the room.",
-  gameRefused: () => "Your game can't join a room right now.",
-  noResponse: (code: string) => `Your game didn't respond. Join in game with the code ${code}.`,
+  roomCodeLabel: () => "Room code",
+  roomCodePlaceholder: () => "Room code",
+  roomCodeTooltip: () =>
+    "The 4 letters at the top of a room's character select. Private rooms too, as Online > With Friends > Join Room.",
+  notARoomCode: () => "Room codes are 4 letters without vowels or Y, like KFQB.",
+  joinCode: () => "Join",
 };

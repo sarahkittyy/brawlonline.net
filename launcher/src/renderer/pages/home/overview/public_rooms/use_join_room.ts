@@ -1,64 +1,27 @@
-import log from "electron-log";
 import { useCallback, useState } from "react";
 
-import { usePlay } from "@/lib/dolphin/use_play";
-import { useToasts } from "@/lib/hooks/use_toasts";
-import { useServices } from "@/services";
-import type { PublicRoom } from "@/services/backend/types";
-
-import { PublicRoomsMessages as Messages } from "./public_rooms.messages";
+import { useHandOff } from "@/lib/social/use_hand_off";
 
 /**
- * Clicking a room (docs/rooms-protocol.md, "Launcher and game"): a running game gets the code
- * (or the launcher says it is busy); otherwise the launcher leaves the code for the game and
- * starts it the way the Play button does.
+ * Joining a room by its code: a click on a public room, or a code typed in Home's room code box
+ * (docs/rooms-protocol.md, "Launcher and game"): a running game gets the code (or the launcher says
+ * it is busy); otherwise the launcher leaves the code for the game and starts it the way the Play
+ * button does. Resolves to whether the game took it (or is starting with it).
  */
 export const useJoinRoom = () => {
-  const { dolphinService } = useServices();
-  const { showError, showInfo, showWarning } = useToasts();
-  const play = usePlay();
+  const handOff = useHandOff();
   const [joiningCode, setJoiningCode] = useState<string>();
 
   const join = useCallback(
-    async (room: PublicRoom) => {
-      if (!room.joinable) {
-        return;
-      }
-      setJoiningCode(room.code);
+    async (code: string): Promise<boolean> => {
+      setJoiningCode(code);
       try {
-        const result = await dolphinService.joinRoomInGame(room.code);
-        switch (result.outcome) {
-          case "accepted":
-            showInfo(Messages.joiningInGame());
-            break;
-          case "busy":
-            showWarning(Messages.finishGameFirst());
-            break;
-          case "refused":
-            showWarning(result.message || Messages.gameRefused());
-            break;
-          case "no-response":
-            showWarning(Messages.noResponse(room.code));
-            break;
-          case "not-running": {
-            const { id } = await dolphinService.prepareRoomLaunch(room.code);
-            const started = await play({ bootGame: true });
-            if (started) {
-              showInfo(Messages.startingForRoom());
-            } else {
-              await dolphinService.cancelRoomLaunch(id);
-            }
-            break;
-          }
-        }
-      } catch (err) {
-        log.error(err);
-        showError(err);
+        return await handOff(code);
       } finally {
         setJoiningCode(undefined);
       }
     },
-    [dolphinService, play, showError, showInfo, showWarning],
+    [handOff],
   );
 
   return { join, joiningCode };
