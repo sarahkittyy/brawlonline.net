@@ -11,6 +11,8 @@ import { spawn } from "child_process";
 import path from "path";
 import type { ByteProgress } from "utils/copy_file";
 
+import { withScratchUserFolder } from "./dolphin_tool";
+
 /** A dual-layer disc in a slow format on a USB hard drive. */
 const GAME_DATA_TIMEOUT_MS = 30 * 60_000;
 
@@ -107,8 +109,17 @@ export function describeGameData(d: GameData): string {
 
 /** Runs `DolphinTool gamedata` on any disc image Dolphin reads, reporting the bytes read. */
 export function readGameData(toolPath: string, discPath: string, onProgress?: ByteProgress): Promise<GameData> {
+  return withScratchUserFolder((userDir) => runGameData(toolPath, discPath, userDir, onProgress));
+}
+
+function runGameData(
+  toolPath: string,
+  discPath: string,
+  userDir: string,
+  onProgress?: ByteProgress,
+): Promise<GameData> {
   return new Promise((resolve, reject) => {
-    const child = spawn(toolPath, ["gamedata", "-i", discPath, "-p"], { windowsHide: true });
+    const child = spawn(toolPath, ["gamedata", "-u", userDir, "-i", discPath, "-p"], { windowsHide: true });
     let out = "";
     let err = "";
     let pending = "";

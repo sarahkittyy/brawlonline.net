@@ -18,7 +18,7 @@ import type { ByteProgress } from "utils/copy_file";
 import { hashFileWithProgress } from "utils/copy_file";
 
 import type { ExecFn } from "../dolphin_tool";
-import { execTool } from "../dolphin_tool";
+import { execTool, withScratchUserFolder } from "../dolphin_tool";
 import type { GameData } from "../game_data";
 import { BRAWL_NTSC_U_DISC, BRAWL_NTSC_U_GAME_DATA, readGameData } from "../game_data";
 import { titleIdHex } from "./save_import";
@@ -107,7 +107,9 @@ export async function discContentSha1WithProgress(
 
 /** The SHA-1 (hex) of the disc's contents, from DolphinTool (any format). */
 export async function discContentSha1(toolPath: string, discPath: string, exec: ExecFn = execTool): Promise<string> {
-  const out = await exec(toolPath, ["verify", "-i", discPath, "-a", "sha1"], VERIFY_TIMEOUT_MS);
+  const out = await withScratchUserFolder((userDir) =>
+    exec(toolPath, ["verify", "-u", userDir, "-i", discPath, "-a", "sha1"], VERIFY_TIMEOUT_MS),
+  );
   const hash = out.trim().toLowerCase();
   if (!/^[0-9a-f]{40}$/.test(hash)) {
     throw new Error(`Could not check the disc: ${out.trim().slice(0, 200)}`);

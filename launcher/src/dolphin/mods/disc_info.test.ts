@@ -51,7 +51,7 @@ describe("disc info", () => {
     expect(await discContentSha1("tool", disc, exec)).toBe("9ac7242a5feebe1d0a6e2775c21f482c471b2240");
     expect(calls).toEqual([
       ["tool", "header", "-i", disc, "-j"],
-      ["tool", "verify", "-i", disc, "-a", "sha1"],
+      ["tool", "verify", "-u", expect.any(String), "-i", disc, "-a", "sha1"],
     ]);
     await expect(discContentSha1("tool", disc, async () => "Error: no hash")).rejects.toThrow(/Could not check/);
   });
@@ -97,7 +97,7 @@ describe("disc info", () => {
       expect(await discContentSha1WithProgress("tool", files.rvz, undefined, exec)).toBe(
         "0e95949ac585f357e79fcd34b20670b5dca97ac2",
       );
-      expect(calls).toEqual([["verify", "-i", files.rvz, "-a", "sha1"]]);
+      expect(calls).toEqual([["verify", "-u", expect.any(String), "-i", files.rvz, "-a", "sha1"]]);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

@@ -1,4 +1,6 @@
 import { execFile } from "child_process";
+import { mkdtemp, rm } from "fs/promises";
+import os from "os";
 import path from "path";
 
 /** DolphinTool next to a Dolphin executable (the bundled install has both). */
@@ -34,3 +36,19 @@ export const execTool: ExecFn = (file, args, timeoutMs) =>
       },
     );
   });
+
+/**
+ * Runs `fn` with a new, empty User folder for a DolphinTool command that sets one up (`verify`,
+ * `gamedata`: UICommon::Init loads and saves its config, SYSCONF included), then deletes it.
+ * Without `-u`, DolphinTool uses the player's own Dolphin's folder (Documents\Dolphin Emulator on
+ * Windows), and two of these at once (two launchers, two discs) both write its SYSCONF: one stops
+ * at Dolphin's "SYSCONF could not be opened" until someone answers it.
+ */
+export async function withScratchUserFolder<T>(fn: (userDir: string) => Promise<T>): Promise<T> {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "brawl-dolphintool-"));
+  try {
+    return await fn(dir);
+  } finally {
+    await rm(dir, { recursive: true, force: true, maxRetries: 3 }).catch(() => undefined);
+  }
+}
