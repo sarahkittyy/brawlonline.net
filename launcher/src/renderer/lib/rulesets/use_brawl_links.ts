@@ -17,7 +17,7 @@ import { rememberedRulesetKey, rulesetTitle } from "./use_remembered_ruleset";
 /**
  * Acts on `brawlonline://` links (src/common/brawl_link.ts) while the main page is up:
  * `room/create?ruleset=<code>` makes the code the account's remembered ruleset (Home's box shows
- * it from then on) and creates a room with it, as Create room does. Links that came in before the
+ * it from then on) and creates a room with it, as Create room does; `&private=1`: a private room. Links that came in before the
  * page was up are taken when it mounts.
  */
 export const useBrawlLinks = () => {
@@ -55,7 +55,7 @@ export const useBrawlLinks = () => {
         showError(status === 404 && link.ruleset ? Messages.unknownRuleset(link.ruleset) : err);
         return;
       }
-      await create(code);
+      await create(code, link.isPrivate);
     },
     [backendService, create, navigate, openLogin, queryClient, showError, showInfo, showWarning],
   );

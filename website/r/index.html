@@ -28,16 +28,19 @@
 </header>
 
 <main>
+  <section class="card actions" id="actions" hidden>
+    <div class="creates">
+      <a class="create" id="create-public" href="#">Create public room</a>
+      <a class="create" id="create-private" href="#">Create private room</a>
+    </div>
+    <p class="hint">Opens Brawl Online, and creates a room with this ruleset. Private rooms can only be joined via the in-game room code. (Top Left).</p>
+    <p class="hint" id="no-launcher">Don't have the launcher? <a href="/">Download Brawl Online</a>.</p>
+  </section>
+
   <!-- Filled by ruleset.js. Without JavaScript only this shows. -->
   <section class="card" id="card" aria-live="polite">
     <p class="status" id="status">Loading the ruleset...</p>
     <noscript><p class="status">This page needs JavaScript to show the ruleset.</p></noscript>
-  </section>
-
-  <section class="card actions" id="actions" hidden>
-    <a class="create" id="create" href="#">Create room with this ruleset</a>
-    <p class="hint">Opens the Brawl Online launcher, which makes this your room ruleset and creates a room in your game.</p>
-    <p class="hint" id="no-launcher">Don't have the launcher? <a href="/">Download Brawl Online</a>.</p>
   </section>
 </main>
 

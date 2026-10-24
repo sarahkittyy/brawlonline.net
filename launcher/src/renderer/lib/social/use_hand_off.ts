@@ -12,7 +12,7 @@ import { useServices } from "@/services";
  * to a new room of its own (`CREATE_ROOM`) or to the Unranked or Ranked character select (`QUEUE_UNRANKED`,
  * `QUEUE_RANKED`), the way clicking a public room does (docs/rooms-protocol.md §5): a running game gets the code,
  * else the launcher leaves it for the game and starts it like Play. A create can carry a ruleset code
- * (docs/rulesets-protocol.md §4). Resolves to whether the game took it (or is starting with it).
+ * (docs/rulesets-protocol.md §4) and make the room private. Resolves to whether the game took it (or is starting with it).
  */
 export const useHandOff = () => {
   const { dolphinService } = useServices();
@@ -20,7 +20,7 @@ export const useHandOff = () => {
   const play = usePlay();
 
   return useCallback(
-    async (code: string, ruleset?: string): Promise<boolean> => {
+    async (code: string, ruleset?: string, isPrivate?: boolean): Promise<boolean> => {
       const kind =
         code === CREATE_ROOM ? "create" : isQueueTarget(code) ? "queue" : code.includes("#") ? "direct" : "room";
       const queue = code === QUEUE_RANKED ? "Ranked" : "Unranked";
@@ -45,7 +45,7 @@ export const useHandOff = () => {
         },
       };
       try {
-        const result = await dolphinService.joinRoomInGame(code, ruleset);
+        const result = await dolphinService.joinRoomInGame(code, ruleset, isPrivate);
         switch (result.outcome) {
           case "accepted":
             showInfo(text.accepted[kind]);
@@ -60,7 +60,7 @@ export const useHandOff = () => {
             showWarning(text.noResponse[kind]);
             break;
           case "not-running": {
-            const { id } = await dolphinService.prepareRoomLaunch(code, ruleset);
+            const { id } = await dolphinService.prepareRoomLaunch(code, ruleset, isPrivate);
             if (await play({ bootGame: true })) {
               showInfo(text.starting[kind]);
               return true;

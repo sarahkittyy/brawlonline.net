@@ -159,14 +159,14 @@ export const ipc_closeNetplayIfIdle = makeEndpoint.main("closeNetplayIfIdle", <E
 /** A room in the list was clicked while the game may be running (docs/rooms-protocol.md). */
 export const ipc_joinRoomInGame = makeEndpoint.main(
   "joinRoomInGame",
-  <{ code: string; ruleset?: string }>_,
+  <{ code: string; ruleset?: string; isPrivate?: boolean }>_,
   <RoomHandOffResult>_,
 );
 
 /** Writes the room request a game that is about to start reads once it reaches the menus. */
 export const ipc_prepareRoomLaunch = makeEndpoint.main(
   "prepareRoomLaunch",
-  <{ code: string; ruleset?: string }>_,
+  <{ code: string; ruleset?: string; isPrivate?: boolean }>_,
   <{ id: string }>_,
 );
 

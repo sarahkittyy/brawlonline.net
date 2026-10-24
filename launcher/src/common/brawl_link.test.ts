@@ -7,13 +7,30 @@ describe("brawlonline:// links", () => {
     expect(parseBrawlLink("brawlonline://room/create?ruleset=KFQBTR")).toEqual({
       kind: "create-room",
       ruleset: "KFQBTR",
+      isPrivate: false,
     });
     expect(parseBrawlLink("brawlonline://room/create/?ruleset=kfqbtr")).toEqual({
       kind: "create-room",
       ruleset: "KFQBTR",
+      isPrivate: false,
     });
     expect(parseBrawlLink("BRAWLONLINE://Room/Create?ruleset=KFQBTR&x=1")?.ruleset).toBe("KFQBTR");
-    expect(parseBrawlLink("brawlonline://room/create")).toEqual({ kind: "create-room", ruleset: null });
+    expect(parseBrawlLink("brawlonline://room/create")).toEqual({
+      kind: "create-room",
+      ruleset: null,
+      isPrivate: false,
+    });
+  });
+
+  it("reads a private create (the website's CREATE PRIVATE ROOM)", () => {
+    expect(parseBrawlLink("brawlonline://room/create?ruleset=KFQBTR&private=1")).toEqual({
+      kind: "create-room",
+      ruleset: "KFQBTR",
+      isPrivate: true,
+    });
+    expect(parseBrawlLink("brawlonline://room/create?private=true")?.isPrivate).toBe(true);
+    expect(parseBrawlLink("brawlonline://room/create?ruleset=KFQBTR&private=0")?.isPrivate).toBe(false);
+    expect(parseBrawlLink("brawlonline://room/create?ruleset=KFQBTR&private=")?.isPrivate).toBe(false);
   });
 
   it("drops everything else", () => {

@@ -18,7 +18,8 @@
  * also takes a connect code (`ABCD#123`) for that, and `CREATE_ROOM` for a create request
  * (`{version, id, kind: "create", ruleset?, createdAt}`: the game creates a room as WITH FRIENDS >
  * Create Room does, from Home's "Create room" button or a `brawlonline://room/create` link;
- * `ruleset` is the code in Home's ruleset box, absent for P+ default; docs/rulesets-protocol.md §4).
+ * `ruleset` is the code in Home's ruleset box, absent for P+ default; docs/rulesets-protocol.md §4;
+ * `public: false` makes the room private (the website's CREATE PRIVATE ROOM), absent public).
  * `QUEUE_UNRANKED` / `QUEUE_RANKED` make a queue request (`{version, id, kind: "queue", queue,
  * createdAt}`, Home's Play unranked / Play ranked): the game goes to that mode's character select.
  *
@@ -58,7 +59,7 @@ export const FAILED_WATCH_MS = 3_000;
 export type RoomRequest =
   | { version: 1; id: string; code: string; createdAt: string }
   | { version: 1; id: string; kind: "direct"; connectCode: string; createdAt: string }
-  | { version: 1; id: string; kind: "create"; ruleset?: string; createdAt: string }
+  | { version: 1; id: string; kind: "create"; ruleset?: string; public?: false; createdAt: string }
   | { version: 1; id: string; kind: "queue"; queue: QueueTarget; createdAt: string };
 
 export type GameStatus = {
@@ -124,6 +125,7 @@ export async function writeRoomRequest(
   code: string,
   now = new Date(),
   ruleset?: string,
+  isPrivate?: boolean,
 ): Promise<RoomRequest> {
   if (!isHandOffCode(code)) {
     throw new Error(`Not a room or connect code: ${code}`);
@@ -131,13 +133,21 @@ export async function writeRoomRequest(
   if (ruleset !== undefined && (code !== CREATE_ROOM || !isRulesetCode(ruleset))) {
     throw new Error(`Not a ruleset code for a create request: ${ruleset}`);
   }
+  if (isPrivate && code !== CREATE_ROOM) {
+    throw new Error(`Only a create request can be private: ${code}`);
+  }
   const id = randomUUID();
   const createdAt = now.toISOString();
   const req: RoomRequest =
     code === CREATE_ROOM
-      ? ruleset !== undefined
-        ? { version: 1, id, kind: "create", ruleset, createdAt }
-        : { version: 1, id, kind: "create", createdAt }
+      ? {
+          version: 1,
+          id,
+          kind: "create",
+          ...(ruleset !== undefined ? { ruleset } : {}),
+          ...(isPrivate ? { public: false as const } : {}),
+          createdAt,
+        }
       : isQueueTarget(code)
       ? { version: 1, id, kind: "queue", queue: code, createdAt }
       : isRoomCode(code)
@@ -188,6 +198,8 @@ export async function readGameStatus(onlineDir: string, now = Date.now()): Promi
 export type HandOffOptions = {
   /** A create request's ruleset code (absent: P+ default). */
   ruleset?: string;
+  /** A create request makes a private room. */
+  isPrivate?: boolean;
   ackTimeoutMs?: number;
   /** How long to keep watching after `accepted` (default: a create's FAILED_WATCH_MS, else 0). */
   watchAfterAcceptMs?: number;
@@ -212,7 +224,7 @@ export async function handOffRoom(
   if (before.kind === "fresh" && before.status.state === "busy") {
     return { outcome: "busy" };
   }
-  const req = await writeRoomRequest(onlineDir, code, new Date(now()), opts.ruleset);
+  const req = await writeRoomRequest(onlineDir, code, new Date(now()), opts.ruleset, opts.isPrivate);
   const deadline = now() + (opts.ackTimeoutMs ?? ACK_TIMEOUT_MS);
   while (now() < deadline) {
     await sleep(opts.pollMs ?? ACK_POLL_MS);

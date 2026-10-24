@@ -48,6 +48,12 @@ import { clearRoomRequest, handOffRoom, isHandOffCode, writeRoomRequest } from "
 import { installRosettaElevated } from "./rosetta/install_rosetta";
 import { DolphinEventType, DolphinLaunchType } from "./types";
 
+/** A create request's extras for the log: " (ruleset BCDFGH, private)". */
+const roomDetails = (ruleset?: string, isPrivate?: boolean) => {
+  const parts = [ruleset ? `ruleset ${ruleset}` : "", isPrivate ? "private" : ""].filter(Boolean);
+  return parts.length > 0 ? ` (${parts.join(", ")})` : "";
+};
+
 export default function setupDolphinIpc({ dolphinManager }: { dolphinManager: DolphinManager }) {
   dolphinManager.events.subscribe((event) => {
     void ipc_dolphinEvent.main!.trigger(event).catch(log.error);
@@ -291,7 +297,7 @@ export default function setupDolphinIpc({ dolphinManager }: { dolphinManager: Do
     return { closed: await dolphinManager.closeNetplayIfIdle() };
   });
 
-  ipc_joinRoomInGame.main!.handle(async ({ code, ruleset }) => {
+  ipc_joinRoomInGame.main!.handle(async ({ code, ruleset, isPrivate }) => {
     if (!isHandOffCode(code)) {
       throw new Error(`Not a room or connect code: ${code}`);
     }
@@ -305,16 +311,16 @@ export default function setupDolphinIpc({ dolphinManager }: { dolphinManager: Do
       return { outcome: "not-running" };
     }
     const onlineDir = dolphinManager.netplayOnlineDir();
-    const result = await handOffRoom(onlineDir, code, { ruleset });
-    log.info(`Room ${code}${ruleset ? ` (ruleset ${ruleset})` : ""} handed to the running game: ${result.outcome}`);
+    const result = await handOffRoom(onlineDir, code, { ruleset, isPrivate });
+    log.info(`Room ${code}${roomDetails(ruleset, isPrivate)} handed to the running game: ${result.outcome}`);
     return result;
   });
 
-  ipc_prepareRoomLaunch.main!.handle(async ({ code, ruleset }) => {
+  ipc_prepareRoomLaunch.main!.handle(async ({ code, ruleset, isPrivate }) => {
     const onlineDir = dolphinManager.netplayOnlineDir();
     await mkdir(onlineDir, { recursive: true });
-    const req = await writeRoomRequest(onlineDir, code, new Date(), ruleset);
-    log.info(`Room ${code}${ruleset ? ` (ruleset ${ruleset})` : ""} requested for the game about to start (${req.id})`);
+    const req = await writeRoomRequest(onlineDir, code, new Date(), ruleset, isPrivate);
+    log.info(`Room ${code}${roomDetails(ruleset, isPrivate)} requested for the game about to start (${req.id})`);
     return { id: req.id };
   });
 

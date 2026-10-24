@@ -1,7 +1,8 @@
 /**
  * `brawlonline://` links (docs/rulesets-protocol.md §4). The website's `/r/<code>` page opens
  * `brawlonline://room/create?ruleset=<code>`: the launcher makes the code the account's remembered
- * ruleset and creates a room with it, as Home's Create room does. The OS hands the link to the
+ * ruleset and creates a room with it, as Home's Create room does; `&private=1` (the page's CREATE
+ * PRIVATE ROOM) makes the room private. The OS hands the link to the
  * launcher on the command line (Windows, Linux; a running launcher gets it as `second-instance`) or
  * as `open-url` (macOS). Nothing else is acted on; anything else in the scheme is logged and dropped.
  */
@@ -13,6 +14,8 @@ export type BrawlLink = {
   kind: "create-room";
   /** The ruleset code, normalized; null: the remembered one stays. */
   ruleset: string | null;
+  /** `private=1` (or `true`): a private room, joinable by its code only. */
+  isPrivate: boolean;
 };
 
 /** Whether a command-line argument (or an open-url) is one of our links. */
@@ -41,10 +44,12 @@ export function parseBrawlLink(link: string): BrawlLink | null {
   if (target !== "room/create") {
     return null;
   }
+  const priv = (url.searchParams.get("private") ?? "").toLowerCase();
+  const isPrivate = priv === "1" || priv === "true";
   const raw = url.searchParams.get("ruleset");
   if (raw === null || raw === "") {
-    return { kind: "create-room", ruleset: null };
+    return { kind: "create-room", ruleset: null, isPrivate };
   }
   const ruleset = parseRulesetCode(raw);
-  return ruleset ? { kind: "create-room", ruleset } : null;
+  return ruleset ? { kind: "create-room", ruleset, isPrivate } : null;
 }

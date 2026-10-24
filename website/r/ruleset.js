@@ -1,5 +1,6 @@
 // brawlonline.net/r/<code>: shows a published ruleset (GET /v1/rulesets/<code>) and opens the
-// launcher with brawlonline://room/create?ruleset=<code> (docs/rulesets-protocol.md §4).
+// launcher with brawlonline://room/create?ruleset=<code> (&private=1 for a private room;
+// docs/rulesets-protocol.md §4).
 // Everything from the server goes into the page as text (textContent), never as HTML: names are
 // typed by whoever published the ruleset.
 "use strict";
@@ -195,18 +196,20 @@
     card.appendChild(grid);
 
     document.title = `${r.name} v${r.version} by ${r.by} · Brawl Online`;
-    const create = document.getElementById("create");
-    create.href = `brawlonline://room/create?ruleset=${view.code}`;
-    // If nothing takes the link (no launcher), the page keeps focus: point at the download.
-    create.addEventListener("click", () => {
-      let left = false;
-      const away = () => (left = true);
-      window.addEventListener("blur", away, { once: true });
-      setTimeout(() => {
-        window.removeEventListener("blur", away);
-        if (!left && !document.hidden) document.getElementById("no-launcher").classList.add("show");
-      }, 1500);
-    });
+    for (const [id, query] of [["create-public", ""], ["create-private", "&private=1"]]) {
+      const create = document.getElementById(id);
+      create.href = `brawlonline://room/create?ruleset=${view.code}${query}`;
+      // If nothing takes the link (no launcher), the page keeps focus: point at the download.
+      create.addEventListener("click", () => {
+        let left = false;
+        const away = () => (left = true);
+        window.addEventListener("blur", away, { once: true });
+        setTimeout(() => {
+          window.removeEventListener("blur", away);
+          if (!left && !document.hidden) document.getElementById("no-launcher").classList.add("show");
+        }, 1500);
+      });
+    }
     document.getElementById("actions").hidden = false;
   }
 

@@ -193,6 +193,14 @@ dd {
   text-align: center;
 }
 
+/* CREATE PUBLIC ROOM on the left, CREATE PRIVATE ROOM on the right; one above the other when narrow. */
+.creates {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 12px;
+}
+
 /* The green menu-button look of the landing page's download button, drawn in CSS (no game textures). */
 .create {
   display: inline-block;

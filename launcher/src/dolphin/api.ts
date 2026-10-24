@@ -140,12 +140,12 @@ const dolphinApi: DolphinService = {
     const { result } = await ipc_closeNetplayIfIdle.renderer!.trigger({});
     return result.closed;
   },
-  async joinRoomInGame(code: string, ruleset?: string) {
-    const { result } = await ipc_joinRoomInGame.renderer!.trigger({ code, ruleset });
+  async joinRoomInGame(code: string, ruleset?: string, isPrivate?: boolean) {
+    const { result } = await ipc_joinRoomInGame.renderer!.trigger({ code, ruleset, isPrivate });
     return result;
   },
-  async prepareRoomLaunch(code: string, ruleset?: string) {
-    const { result } = await ipc_prepareRoomLaunch.renderer!.trigger({ code, ruleset });
+  async prepareRoomLaunch(code: string, ruleset?: string, isPrivate?: boolean) {
+    const { result } = await ipc_prepareRoomLaunch.renderer!.trigger({ code, ruleset, isPrivate });
     return result;
   },
   async cancelRoomLaunch(id: string) {

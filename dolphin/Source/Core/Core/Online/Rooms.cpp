@@ -152,6 +152,7 @@ struct Launch
   std::string code;       // the room code (Room), the connect code (Direct, canonical), "" (Create),
                           // "unranked" or "ranked" (Queue)
   std::string ruleset;    // Create: the launcher box's ruleset code (normalised), "" none
+  bool is_public = true;  // Create: false for a private room ("public": false)
   s64 created_ms = 0;     // its createdAt
   bool answered = false;  // "accepted" already (held during the game's boot)
 };
@@ -745,9 +746,13 @@ void PollJoinRequest()
     launch_kind = LaunchKind::Queue;
   std::optional<std::string> target;
   std::string ruleset;
+  bool is_public = true;
   if (launch_kind == LaunchKind::Create)
   {
     target = std::string();
+    // The website's CREATE PRIVATE ROOM (brawlonline://room/create?private=1): "public": false.
+    if (const picojson::value* pub = get("public"); pub && pub->is<bool>())
+      is_public = pub->get<bool>();
     // The launcher's ruleset box (docs/rooms-game-interface.md): the room plays it.
     if (const picojson::value* rs = get("ruleset"); rs && !rs->is<picojson::null>())
     {
@@ -807,7 +812,8 @@ void PollJoinRequest()
                     *target, age / 1000));
     return;
   }
-  s.launch = Launch{CleanText(id->get<std::string>(), 100), launch_kind, *target, ruleset, *at};
+  s.launch = Launch{CleanText(id->get<std::string>(), 100), launch_kind, *target, ruleset, is_public,
+                    *at};
   const char* what = launch_kind == LaunchKind::Direct ? "play Direct with " :
                      launch_kind == LaunchKind::Create ? "create a room" :
                      launch_kind == LaunchKind::Queue  ? "go to the CSS of " :
@@ -993,13 +999,14 @@ void DecideLaunch(const DolphinBusy& busy, bool logged_in, const std::string& ow
     AnswerLaunch(l.id, "accepted", "");
   if (l.kind == LaunchKind::Create)
   {
-    // As WITH FRIENDS > Create Room (public, the in-game default): out of any room first, then
-    // room-create; the game goes to the new room's CSS (LOCAL.roomCreate) and does not send a
-    // create of its own. mm's refusal ("Too many rooms. Wait a moment.", "No rooms free. Try
-    // later.") answers the request `failed` (Handle, RoomError).
+    // As WITH FRIENDS > Create Room (public, the in-game default, unless the request says
+    // private): out of any room first, then room-create; the game goes to the new room's CSS
+    // (LOCAL.roomCreate) and does not send a create of its own. mm's refusal ("Too many rooms.
+    // Wait a moment.", "No rooms free. Try later.") answers the request `failed` (Handle,
+    // RoomError).
     Request r;
     r.op = Op::Create;
-    r.flag = true;
+    r.flag = l.is_public;
     r.ruleset = l.ruleset;
     s.error.clear();
     s.rejoin.clear();

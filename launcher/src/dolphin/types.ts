@@ -392,13 +392,13 @@ export interface DolphinService {
   replaceProjectPlusCard(): Promise<void>;
   /**
    * Hands a room code to the running game; `not-running` when no netplay Dolphin is open. `ruleset`:
-   * a create request's ruleset code.
+   * a create request's ruleset code; `isPrivate`: the create makes a private room.
    */
-  joinRoomInGame(code: string, ruleset?: string): Promise<RoomHandOffResult>;
+  joinRoomInGame(code: string, ruleset?: string, isPrivate?: boolean): Promise<RoomHandOffResult>;
   /** Closes the netplay Dolphin if it is open without a game; true when none is open now. */
   closeNetplayIfIdle(): Promise<boolean>;
   /** Leaves a room request (a create with its ruleset code, if any) for the game that Play is about to start. */
-  prepareRoomLaunch(code: string, ruleset?: string): Promise<{ id: string }>;
+  prepareRoomLaunch(code: string, ruleset?: string, isPrivate?: boolean): Promise<{ id: string }>;
   /** Takes a prepared room request back. */
   cancelRoomLaunch(id: string): Promise<void>;
   /** The key that opens the chat box, as an expression (common/chat_key.ts). */

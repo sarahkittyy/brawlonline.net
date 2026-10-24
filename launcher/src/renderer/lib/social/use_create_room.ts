@@ -9,7 +9,7 @@ import { useSocial } from "./use_social";
 
 /**
  * Creates a room in the game (Home's Create room, `brawlonline://room/create` links), with a
- * ruleset code or P+ default. Invites sent before the room shows up wait for it (SocialRoot sends
+ * ruleset code or P+ default, public unless `isPrivate` (the website's CREATE PRIVATE ROOM). Invites sent before the room shows up wait for it (SocialRoot sends
  * them); if the game doesn't take the create, the player is told whose invites were dropped.
  */
 export const useCreateRoom = () => {
@@ -18,11 +18,11 @@ export const useCreateRoom = () => {
   const [creating, setCreating] = useState(false);
 
   const create = useCallback(
-    async (ruleset?: string): Promise<boolean> => {
+    async (ruleset?: string, isPrivate?: boolean): Promise<boolean> => {
       setCreating(true);
       useSocial.getState().startPendingRoom();
       try {
-        const taken = await handOff(CREATE_ROOM, ruleset);
+        const taken = await handOff(CREATE_ROOM, ruleset, isPrivate);
         if (!taken) {
           const waiting = useSocial.getState().endPendingRoom();
           if (waiting.length > 0) {

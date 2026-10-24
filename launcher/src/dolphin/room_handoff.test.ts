@@ -98,6 +98,31 @@ describe("room hand-off", () => {
     expect(isRulesetCode("BCDFG")).toBe(false);
   });
 
+  it("writes a private create request", async () => {
+    const at = new Date("2026-10-24T12:00:00Z");
+    let req = await writeRoomRequest(dir, CREATE_ROOM, at, "KFQBTR", true);
+    expect(await readRequest()).toEqual({
+      version: 1,
+      id: req.id,
+      kind: "create",
+      ruleset: "KFQBTR",
+      public: false,
+      createdAt: "2026-10-24T12:00:00.000Z",
+    });
+    req = await writeRoomRequest(dir, CREATE_ROOM, at, undefined, true);
+    expect(await readRequest()).toEqual({
+      version: 1,
+      id: req.id,
+      kind: "create",
+      public: false,
+      createdAt: "2026-10-24T12:00:00.000Z",
+    });
+    // A public create says nothing (the game's default); only a create can be private.
+    await writeRoomRequest(dir, CREATE_ROOM, at, "KFQBTR", false);
+    expect(await readRequest()).not.toHaveProperty("public");
+    await expect(writeRoomRequest(dir, "KFQB", at, undefined, true)).rejects.toThrow();
+  });
+
   it("writes a queue request for Play unranked and Play ranked", async () => {
     for (const queue of [QUEUE_UNRANKED, QUEUE_RANKED]) {
       const req = await writeRoomRequest(dir, queue, new Date("2026-10-12T12:00:00Z"));
@@ -121,6 +146,18 @@ describe("room hand-off", () => {
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
     expect(req).toMatchObject({ kind: "create", ruleset: "MNPQRS" });
+    await writeStatus({ lastRequest: { id: req.id, result: "accepted" } });
+    expect(await pending).toEqual({ outcome: "accepted" });
+  });
+
+  it("hands a private create to a running game", async () => {
+    await writeStatus({});
+    const pending = handOffRoom(dir, CREATE_ROOM, { ...fast, watchAfterAcceptMs: 50, isPrivate: true });
+    let req: RoomRequest | null = null;
+    while (!(req = await readRequest())) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    expect(req).toMatchObject({ kind: "create", public: false });
     await writeStatus({ lastRequest: { id: req.id, result: "accepted" } });
     expect(await pending).toEqual({ outcome: "accepted" });
   });
