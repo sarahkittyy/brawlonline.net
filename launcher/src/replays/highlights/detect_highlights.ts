@@ -27,7 +27,7 @@ import type { Timeline } from "./replay_frames";
 import { PAD_KEPT } from "./replay_frames";
 
 /** Bumped whenever what is found or its score changes: cached results of another version are found again. */
-export const DETECTOR_VERSION = 2;
+export const DETECTOR_VERSION = 3;
 
 const RESET_FRAMES = 45; // Slippi's COMBO_STRING_RESET_FRAMES
 const DEAD = 189; // Status_Dead (then P+'s post-KO 267, seen before every stock loss)

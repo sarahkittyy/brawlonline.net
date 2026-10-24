@@ -14,7 +14,7 @@ cache.
 |---|---|
 | `launcher/src/replays/highlights/replay_frames.ts` | Decodes only what the detector needs from a `.brep` (CRC-checked, bounded): per player and frame damage, stocks, status kind, animation frame, motion kind, the attacker's ftEntry id, the player's own id (28 of the 2,248 fighter bytes, XOR-accumulated byte by byte within each `FTRM` chunk) and 10 pad bytes from `FRMS`. |
 | `detect_highlights.ts` | The prototype's `timeline.py` + `highlights.py`: conversions (the victim never escapes; 45 free frames end one, or a KO), features, tags (`combo`, `zero-to-death` / `low-to-death`, `fast`, `clean`) and the score. A highlight is a conversion tagged other than `clean`. |
-| `lrz_clips.ts` | L+R+Z (gfPadStatus +0x0: L 0x40, R 0x20, Z 0x10) held 30 frames marks a clip: 20 s before the hold, 2 s after it, the next one 5 s later at the earliest (Project Clippi's defaults). Only the recording player's presses count (`CLIP_PLAYERS` in `highlight_service.ts`). |
+| `lrz_clips.ts` | L+R+Z (gfPadStatus +0x0: L 0x40, R 0x20, Z 0x10) held 5 frames marks a clip: 20 s before the hold, 2 s after it, the next one 5 s later at the earliest (Project Clippi's defaults). Only the recording player's presses count (`CLIP_PLAYERS` in `highlight_service.ts`). |
 | `analyze_replay.ts` | The list's rows: a highlight plays from 1.5 s before its first hit to 1 s after the string (a KO: after the stock is lost). |
 | `highlights.worker.ts`, `highlight_service.ts` | On demand when a stats page opens, one replay at a time in a `worker_threads` worker (gone after 2 minutes idle), cached in replays.sqlite `highlight_cache` (path, size, mtime, detector version, what was looked for). |
 
@@ -28,7 +28,11 @@ Checked against the Python prototype with version 1's score (`noVariety`): the 5
 Documents\Brawl Online\2026-10 give the same 1,528 conversions (94 highlights) with every feature
 and score equal. The TS decoder takes 1.5 s for all 56 (about 27 ms a replay; 120 ms in the worker
 for a 1.5-minute game with the file read). L+R+Z: over those 768 k player-frames the three were
-never down together.
+never down together. The threshold was 30 frames (half a second) until 2026-10-24: the user's
+clips never showed, as a press meant as a clip is a tap. In 122 replays (2.6 M player-frames) their
+7 presses were down 6 to 16 frames, an opponent's 28 and 131, and nothing else 3 frames or more,
+so 5 frames it is. The clips come from the replay's pads, so a lower threshold finds the presses of
+every replay already recorded (DETECTOR_VERSION 3 has the cached ones looked at again).
 
 ## 2. The stats page
 
