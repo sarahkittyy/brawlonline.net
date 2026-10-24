@@ -591,6 +591,9 @@ struct State
   // The local controller played the boot (LatchBootInput): the session starts with it plugged in.
   bool boot_local = false;
   s64 current_frame = -1;
+  // When UpdatePingDisplay shows the ping next (a second after GekkoNet starts: it has no round
+  // trip before its first health messages, and would say "Ping: 0").
+  Clock::time_point next_ping_display{};
   // GekkoNet's sessions start at frame 0; a session after an epoch continues the global frame
   // count from the epoch's frame.
   s64 frame_base = 0;
@@ -2720,6 +2723,7 @@ bool CreateGekko()
   cfg.desync_detection = true;
   cfg.check_distance = stress ? static_cast<unsigned int>(s.opts.synctest) : 0;
   gekko_start(s.gekko, &cfg);
+  s.next_ping_display = Clock::now() + std::chrono::seconds(1);
   if (!stress)
   {
     s.adapter.send_data = GekkoSend;
@@ -3955,6 +3959,42 @@ void DropLeftPeers()
       AddLog(fmt::format("player {} left", slot + 1));
       OSD::AddMessage(fmt::format("Player {} left", slot + 1), 4000, OSD::Color::YELLOW);
     }
+  }
+}
+
+// Slippi's ping line, as P+ online has it (GameplaySession's UpdatePingDisplay): GekkoNet's last
+// round trip in ms to the player with the highest average ping, cyan, under the FPS box. Refreshed
+// once a second while the session runs and left up for Duration::NORMAL, so it fades out after
+// the session. Dolphin's "Show NetPlay Ping" (on by default) turns it off.
+void UpdatePingDisplay()
+{
+  if (!s.gekko || s.opts.synctest > 0)
+    return;
+  const Clock::time_point now = Clock::now();
+  if (now < s.next_ping_display)
+    return;
+  s.next_ping_display = now + std::chrono::seconds(1);
+  if (!Config::Get(Config::GFX_SHOW_NETPLAY_PING))
+    return;
+  GekkoNetworkStats worst{};
+  bool any = false;
+  const u32 players = s.players.load();
+  const u32 gone = s.gone.load();
+  for (int slot = 0; slot < MAX_PLAYERS; ++slot)
+  {
+    const int h = s.slot_handle[slot];
+    if (slot == s.opts.local_slot || h < 0 || !((players >> slot) & 1) || ((gone >> slot) & 1))
+      continue;
+    GekkoNetworkStats st{};
+    gekko_network_stats(s.gekko, h, &st);
+    if (!any || st.avg_ping > worst.avg_ping)
+      worst = st;
+    any = true;
+  }
+  if (any)
+  {
+    OSD::AddTypedMessage(OSD::MessageType::NetPlayPing, fmt::format("Ping: {}", worst.last_ping),
+                         OSD::Duration::NORMAL, OSD::Color::CYAN);
   }
 }
 
@@ -5900,6 +5940,7 @@ Wait WaitForFrames(Core::System& system)
       Update(system);
       if (s.phase == Phase::Error)
         return Wait::Ended;
+      UpdatePingDisplay();
       if (s.ops.count > 0)
         break;
       // At the epoch's frame: every frame before it ran with confirmed inputs (GekkoNet holds
