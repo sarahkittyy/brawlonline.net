@@ -9,7 +9,15 @@ import { useDolphinActions } from "@/lib/dolphin/use_dolphin_actions";
 import { useServices } from "@/services";
 
 import type { PlaylistEntry } from "./highlight_nav";
-import { followStatus, listView, newCommandId, usePlaylistStore } from "./highlight_nav";
+import {
+  followStatus,
+  listView,
+  newCommandId,
+  REPLAY_LIST,
+  replayEntry,
+  replayListNav,
+  usePlaylistStore,
+} from "./highlight_nav";
 
 /** Plays an entry of a list in the playback Dolphin, that list then being the buttons'. Resolves to whether it was asked. */
 export const useHighlightPlayer = () => {
@@ -31,10 +39,48 @@ export const useHighlightPlayer = () => {
   );
 };
 
+/** Plays a replay of the Replays tab's list (`paths`, in its order), that list then being the buttons'. */
+export const useReplayListPlayer = () => {
+  const { dolphinService } = useServices();
+  const { playReplayInList } = useDolphinActions(dolphinService);
+
+  return useCallback(
+    async (paths: readonly string[], path: string): Promise<boolean> => {
+      const entries = paths.map(replayEntry);
+      const commandId = newCommandId();
+      usePlaylistStore.setState({
+        source: REPLAY_LIST,
+        entries,
+        current: replayEntry(path),
+        commandId,
+        navSeq: 0,
+        pickSeq: 0,
+      });
+      const ok = await playReplayInList(path, { commandId, nav: replayListNav(entries, path) });
+      if (!ok && usePlaylistStore.getState().commandId === commandId) {
+        usePlaylistStore.setState({ current: null, commandId: null });
+      }
+      return ok;
+    },
+    [playReplayInList],
+  );
+};
+
 /** Answers the playback Dolphin's list buttons and stars; mounted once for the whole window. */
 export const useHighlightNavigation = () => {
   const { dolphinService } = useServices();
-  const play = useHighlightPlayer();
+  const playHighlight = useHighlightPlayer();
+  const playReplay = useReplayListPlayer();
+  const play = useCallback(
+    (source: string, entries: PlaylistEntry[], entry: PlaylistEntry) =>
+      source === REPLAY_LIST
+        ? playReplay(
+            entries.map((e) => e.path),
+            entry.path,
+          )
+        : playHighlight(source, entries, entry),
+    [playHighlight, playReplay],
+  );
 
   useEffect(
     () =>

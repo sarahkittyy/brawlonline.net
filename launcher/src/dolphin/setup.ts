@@ -137,7 +137,7 @@ export default function setupDolphinIpc({ dolphinManager }: { dolphinManager: Do
 
   // Replays play on the Project+ release they were recorded on (docs/design/pplus-versions.md):
   // when that release's files are not here yet, the renderer is told so (and asks) instead.
-  ipc_viewSlpReplay.main!.handle(async ({ files, choice = "auto" }) => {
+  ipc_viewSlpReplay.main!.handle(async ({ files, choice = "auto", commandId, nav }) => {
     const d = await dolphinManager.decideReplayRelease(
       files.map((f) => f.path),
       choice,
@@ -145,7 +145,13 @@ export default function setupDolphinIpc({ dolphinManager }: { dolphinManager: Do
     if (d.result.status === "playing") {
       await dolphinManager.launchPlaybackDolphin(
         "playback",
-        { mode: "queue", queue: files.filter((f) => d.paths.includes(f.path)), playAnyway: d.playAnyway || undefined },
+        {
+          mode: "queue",
+          queue: files.filter((f) => d.paths.includes(f.path)),
+          playAnyway: d.playAnyway || undefined,
+          commandId,
+          nav,
+        },
         { pplusRelease: d.release },
       );
     }

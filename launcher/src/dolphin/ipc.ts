@@ -77,7 +77,15 @@ export const ipc_removePlayKeyFile = makeEndpoint.main("removePlayKeyFile", <Emp
 
 export const ipc_viewSlpReplay = makeEndpoint.main(
   "viewSlpReplay",
-  <{ files: ReplayQueueItem[]; choice?: ReplayPlayChoice }>_,
+  <
+    {
+      files: ReplayQueueItem[];
+      choice?: ReplayPlayChoice;
+      /** Ours: the request's id, and the Replays tab's list (the playback Dolphin's "12/340 << >>"). */
+      commandId?: string;
+      nav?: HighlightListView["nav"];
+    }
+  >_,
   <ReplayPlayResult>_,
 );
 

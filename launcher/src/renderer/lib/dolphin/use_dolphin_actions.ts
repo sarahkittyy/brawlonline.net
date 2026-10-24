@@ -1,5 +1,5 @@
 import { isDiskSpaceError } from "@common/disk_space";
-import type { DolphinService, RenderJobInfo, RenderRequest, ReplayQueueItem } from "@dolphin/types";
+import type { DolphinService, RenderJobInfo, RenderRequest, ReplayListPlay, ReplayQueueItem } from "@dolphin/types";
 import { DolphinLaunchType } from "@dolphin/types";
 import type { HighlightListView, HighlightPlayItem } from "@replays/highlights/types";
 import log from "electron-log";
@@ -162,6 +162,37 @@ export const useDolphinActions = (dolphinService: DolphinService) => {
   );
 
   /**
+   * Plays one replay of the Replays tab's list, with the playback Dolphin's "12/340 << >>"
+   * (highlight_nav.ts). Resolves to whether it plays.
+   */
+  const playReplayInList = useCallback(
+    async (path: string, list: ReplayListPlay): Promise<boolean> => {
+      if (getInstallStatus(DolphinLaunchType.PLAYBACK) !== DolphinStatus.READY) {
+        showError(Messages.dolphinIsUpdating());
+        return false;
+      }
+      if (!useDolphinStore.getState().playbackOpened && !(await launcherIsUpToDate())) {
+        return false;
+      }
+      try {
+        const result = await withReplayVersion(
+          (choice) => dolphinService.viewSlpReplay([{ path }], choice, list),
+          showInfo,
+        );
+        if (result?.status !== "playing") {
+          return false;
+        }
+        setDolphinOpened(DolphinLaunchType.PLAYBACK);
+        return true;
+      } catch (err) {
+        showError(err);
+        return false;
+      }
+    },
+    [getInstallStatus, launcherIsUpToDate, dolphinService, showError, showInfo],
+  );
+
+  /**
    * Plays highlights in the playback Dolphin (the next one at once: an open Dolphin is not started
    * again, so the launcher's update check is only made when it is not open); `list`: the stars and
    * count of the list it is from (highlight_playlist.ts). Resolves to whether the request was made.
@@ -221,6 +252,7 @@ export const useDolphinActions = (dolphinService: DolphinService) => {
     hardResetDolphin,
     launchNetplay,
     viewReplays,
+    playReplayInList,
     playHighlights,
     renderHighlights,
     updateDolphin,

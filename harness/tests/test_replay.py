@@ -507,7 +507,9 @@ def test_launcher_comm_file_saves_manual_clips(backend: OnlineBackend,
     buttons; a star played here and a button that needs the launcher are in the status file
     (`highlightPick`, `navRequest`); the same request written again with another count and stars
     changes them without starting the clip again, and a new request starts both counts again.
-    The replay plays on to its end with no checksum differing."""
+    The Replays tab's list (a `queue` request with "nav" "clips": false) shows its count and the
+    replay buttons only, asked of the launcher the same way. The replay plays on to its end with no
+    checksum differing."""
     fa, out = _recorded_direct_game(backend, dolphin, gpu_backend, "manual-clips", ("mona", "nils"))
     first, last = fa.first_frame, fa.last_frame
     assert last - first > 1500, (first, last)
@@ -587,7 +589,8 @@ def test_launcher_comm_file_saves_manual_clips(backend: OnlineBackend,
     assert st["serial"] == serial, "the same match"
     assert [(m["start"], m["position"], m["saved"]) for m in st["marks"]] == [
         (c[0], 2, False), (a[0], 3, False), (b[0], 0, True)], st["marks"]
-    assert st["nav"] == {"shown": True, "position": 2, "total": 5, "prev_replay": True, "next_replay": True}, st["nav"]
+    assert st["nav"] == {"shown": True, "position": 2, "total": 5, "prev_replay": True, "next_replay": True,
+                         "clips": True}, st["nav"]
     fs = file_status()
     assert "navRequest" not in fs and "highlightPick" not in fs, fs
     # A star of the list, played here: the launcher is told which.
@@ -611,6 +614,19 @@ def test_launcher_comm_file_saves_manual_clips(backend: OnlineBackend,
     request("L2", [(*c, 1)], 1, 1)
     _wait(lambda: (lambda fs: fs if fs.get("commandId") == "L2" and "navRequest" not in fs and
                    "highlightPick" not in fs else None)(file_status()), 30, "a new request's counts")
+    # The Replays tab's list: the replay with "12/340  << >>" (no clip buttons).
+    comm.write_text(json.dumps({"mode": "queue", "commandId": "R1", "queue": [{"path": str(fa.path)}],
+                                "nav": {"position": 12, "total": 340, "hasPrevReplay": True,
+                                        "hasNextReplay": True, "clips": False}}))
+    st = _wait(lambda: (lambda s: s if s["started"] and s["nav"]["shown"] and s["serial"] != serial else None)(
+        _status(v)), 300, "the replay list's replay")
+    assert st["nav"] == {"shown": True, "position": 12, "total": 340, "prev_replay": True, "next_replay": True,
+                         "clips": False}, st["nav"]
+    assert "navRequest" not in v.c.call("replay_nav", action="nextClip"), "no clips in a replay list"
+    v.c.call("replay_nav", action="prevReplay")
+    fs = _wait(lambda: (lambda fs: fs if fs.get("commandId") == "R1" and "navRequest" in fs else None)(file_status()),
+               10, "the replay list's button")
+    assert fs["navRequest"]["seq"] == 1 and fs["navRequest"]["action"] == "prevReplay", fs
     # On to the replay's end (past every end line).
     v.c.call("replay_control", action="seek", arg=last - 120)
     v.c.call("replay_control", action="play")

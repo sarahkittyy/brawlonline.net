@@ -16,6 +16,7 @@ import type {
   RenderJobInfo,
   RenderRequest,
   RenderResult,
+  ReplayListPlay,
   ReplayPlayChoice,
   ReplayPlayResult,
   ReplayQueueItem,
@@ -101,7 +102,11 @@ class MockDolphinClient implements DolphinService {
   }
 
   @delayAndMaybeError(SHOULD_ERROR)
-  async viewSlpReplay(_files: ReplayQueueItem[], _choice?: ReplayPlayChoice): Promise<ReplayPlayResult> {
+  async viewSlpReplay(
+    _files: ReplayQueueItem[],
+    _choice?: ReplayPlayChoice,
+    _list?: ReplayListPlay,
+  ): Promise<ReplayPlayResult> {
     throw new Error("Method not implemented.");
   }
 

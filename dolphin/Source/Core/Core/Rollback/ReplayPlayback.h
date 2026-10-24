@@ -39,6 +39,9 @@
 // "frame"}, which plays the one it picks as a new request. Both count from 1 for each commandId.
 // The same commandId written again with other marks or nav (the list changed) updates them.
 //
+// The Replays tab's replays (`normal` / `queue`) may have "nav" too, with "clips": false: the
+// overlay then shows "12/340  << >>" (the replay list's), asked of the launcher as above.
+//
 // Ours, `render` (docs/design/highlights.md section 5): highlights as above, written to a video
 // instead of watched: {"mode": "render", "output": "<path>.mp4", "height": 720, "queue": [...]}
 // (Rollback/ClipRecorder.h). Every clip is a part of the file, one after another. The status adds
@@ -74,8 +77,9 @@ picojson::object Status();
 // Whether a clip can be saved: a launcher follows this Dolphin (the comm file) and a replay of its
 // request is armed, not rendered.
 bool CanSaveClip();
-// The overlay's list buttons (the request's "nav"): shown, "position/total", and whether there is
-// a replay before or after this one in the list. Any thread, without the playback lock.
+// The overlay's list buttons (the request's "nav"): shown, "position/total", whether there is a
+// replay before or after this one in the list, and whether < > (clips) are there too (a list of
+// highlights; a list of replays has << >> only). Any thread, without the playback lock.
 struct NavView
 {
   bool shown = false;
@@ -83,6 +87,7 @@ struct NavView
   int total = 0;
   bool prev_replay = false;
   bool next_replay = false;
+  bool clips = true;
 };
 NavView GetNav();
 enum class NavAction

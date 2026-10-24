@@ -10,6 +10,10 @@
  * section): another section opened there doesn't change what plays, but the buttons then go by
  * it, and Dolphin's count and stars follow it at once.
  *
+ * The Replays tab's replays are a list too (`REPLAY_LIST`, its folder as filtered and sorted, a
+ * replay an entry): Dolphin shows "12/340  << >>" (the user, 2026-10-24: "replays should get those
+ * buttons too, just two of them, for next and previous replay, and count of all replays").
+ *
  * The store lives as long as the launcher's window, so the buttons work with the Highlights page
  * closed: `useHighlightNavigation` (highlight_playlist.ts, mounted once in app/create.tsx) answers
  * Dolphin.
@@ -103,6 +107,24 @@ export function navTarget(
   }
 }
 
+/** The Replays tab's list's source id: its entries are replays (frames 0), the buttons << >> only. */
+export const REPLAY_LIST = "replays";
+
+/** A replay list's entry. */
+export const replayEntry = (path: string): PlaylistEntry => ({ key: path, path, startFrame: 0, endFrame: 0 });
+
+/** The playback Dolphin's buttons for replay `path` of the Replays tab's list. */
+export function replayListNav(entries: readonly PlaylistEntry[], path: string): HighlightListView["nav"] {
+  const i = entries.findIndex((e) => e.path === path);
+  return {
+    position: i + 1,
+    total: entries.length,
+    hasPrevReplay: i >= 0 ? i > 0 : entries.length > 0,
+    hasNextReplay: i >= 0 ? i < entries.length - 1 : entries.length > 0,
+    clips: false,
+  };
+}
+
 type PlaylistState = {
   /** Which list (HighlightRows' `sourceId`) it is, and its rows in the list's order. */
   source: string | null;
@@ -135,7 +157,8 @@ export function setPlaylistEntries(source: string, entries: PlaylistEntry[], dol
     return;
   }
   usePlaylistStore.setState({ entries });
-  if (!state.commandId || !state.current || updateTimer) {
+  // (A replay list's count follows at the next replay.)
+  if (source === REPLAY_LIST || !state.commandId || !state.current || updateTimer) {
     return;
   }
   updateTimer = setTimeout(() => {

@@ -27,6 +27,7 @@ import { FileListSkeleton } from "./file_list/file_list_skeleton";
 import { FileSelectionToolbar } from "./file_selection_toolbar/file_selection_toolbar";
 import { FilterToolbar } from "./filter_toolbar/filter_toolbar";
 import { FolderTreeNode } from "./folder_tree_node";
+import { useFollowReplayList, usePlayFromReplayList } from "./play_from_list";
 import { ReplayBrowserMessages as Messages } from "./replay_browser.messages";
 
 export const ReplayBrowser = React.memo(() => {
@@ -86,9 +87,11 @@ export const ReplayBrowser = React.memo(() => {
     presenter.loadFolder(fullPath).catch(showError);
   };
 
+  // With the list as the playback Dolphin's << >> (play_from_list.ts).
+  const playFromList = usePlayFromReplayList();
+  useFollowReplayList();
   const playSelectedFile = (index: number) => {
-    const filePath = filteredFiles[index].fullPath;
-    viewReplays({ path: filePath });
+    void playFromList(filteredFiles[index].fullPath);
   };
 
   const handleLoadMore = React.useCallback(() => {
@@ -137,10 +140,10 @@ export const ReplayBrowser = React.memo(() => {
         const remainingFiles = filesToPlay.filter((path) => !manuallySelectedSet.has(path));
         const orderedPaths = [...manuallySelected, ...remainingFiles];
 
-        viewReplays(...orderedPaths.map((path) => ({ path })));
+        void viewReplays(...orderedPaths.map((path) => ({ path })));
       } else {
         // Just play the selected files
-        viewReplays(...selectedFiles.map((path) => ({ path })));
+        void viewReplays(...selectedFiles.map((path) => ({ path })));
       }
     } catch (err) {
       showError(err);

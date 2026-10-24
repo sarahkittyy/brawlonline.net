@@ -104,7 +104,8 @@ export type HighlightPlayItem = {
  */
 export type HighlightListView = {
   marks: { startFrame: number; endFrame: number; position: number }[];
-  nav: { position: number; total: number; hasPrevReplay: boolean; hasNextReplay: boolean };
+  /** `clips` false: a list of replays (the Replays tab's), << >> only. */
+  nav: { position: number; total: number; hasPrevReplay: boolean; hasNextReplay: boolean; clips?: boolean };
 };
 
 /** A replay's highlights in the Replays > Highlights tab: which replay, when it was played (ISO). */

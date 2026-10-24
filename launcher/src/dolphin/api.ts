@@ -40,6 +40,7 @@ import type {
   DolphinService,
   PlayKey,
   RenderRequest,
+  ReplayListPlay,
   ReplayPlayChoice,
   ReplayQueueItem,
 } from "./types";
@@ -82,8 +83,8 @@ const dolphinApi: DolphinService = {
   async removePlayKeyFile(): Promise<void> {
     await ipc_removePlayKeyFile.renderer!.trigger({});
   },
-  async viewSlpReplay(files: ReplayQueueItem[], choice?: ReplayPlayChoice) {
-    const { result } = await ipc_viewSlpReplay.renderer!.trigger({ files, choice });
+  async viewSlpReplay(files: ReplayQueueItem[], choice?: ReplayPlayChoice, list?: ReplayListPlay) {
+    const { result } = await ipc_viewSlpReplay.renderer!.trigger({ files, choice, ...list });
     return result;
   },
   async playHighlights(

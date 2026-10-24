@@ -1824,6 +1824,7 @@ Result CmdReplayStatus(const Args&)
   n["total"] = picojson::value(static_cast<double>(nav.total));
   n["prev_replay"] = picojson::value(nav.prev_replay);
   n["next_replay"] = picojson::value(nav.next_replay);
+  n["clips"] = picojson::value(nav.clips);
   r["nav"] = picojson::value(std::move(n));
   return r;
 }

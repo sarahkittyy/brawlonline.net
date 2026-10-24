@@ -1,14 +1,13 @@
 import React from "react";
 import { Navigate, Outlet, Route, Routes, useLocation, useNavigate, useParams } from "react-router-dom";
 
-import { useDolphinActions } from "@/lib/dolphin/use_dolphin_actions";
 import { useReplayBrowserList, useReplayBrowserNavigation } from "@/lib/hooks/use_replay_browser_list";
 import { useReplayPresenter, useReplays } from "@/lib/hooks/use_replays";
 import { useSettings } from "@/lib/hooks/use_settings";
 import { Tabs } from "@/pages/home/tabs/tabs";
-import { useServices } from "@/services";
 
 import { AllHighlightsPage } from "./all_highlights/all_highlights_page";
+import { usePlayFromReplayList } from "./replay_browser/play_from_list";
 import { ReplayBrowser } from "./replay_browser/replay_browser";
 import { ReplayBrowserMessages } from "./replay_browser/replay_browser.messages";
 import { ReplayFileStats } from "./replay_file_stats/replay_file_stats";
@@ -69,13 +68,12 @@ const ChildPage = () => {
   const { filePath } = useParams<Record<string, any>>();
   const selectedFile = useReplays((store) => store.selectedFile);
   const decodedFilePath = decodeURIComponent(filePath);
-  const { dolphinService } = useServices();
-  const { viewReplays } = useDolphinActions(dolphinService);
   const nav = useReplayBrowserList();
   const { goToReplayList } = useReplayBrowserNavigation();
 
+  const playFromList = usePlayFromReplayList();
   const onPlay = () => {
-    void viewReplays({ path: decodedFilePath });
+    void playFromList(decodedFilePath);
   };
 
   return (

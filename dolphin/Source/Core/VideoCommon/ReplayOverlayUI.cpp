@@ -205,7 +205,7 @@ void Display(float scale)
     // The launcher's list (highlights, not spectating): "3/40  << < > >>" right of the title (the
     // user, 2026-10-24). < > go to the previous / next highlight from the frame shown, in this
     // replay at once (its marks), past them in the replay before / after it (the launcher picks
-    // it); << >> to the replay before / after.
+    // it); << >> to the replay before / after. The Replays tab's replays: "12/340  << >>".
     const Gprb::Replay::Playback::NavView nav = Gprb::Replay::Playback::GetNav();
     const float line_h = ImGui::GetTextLineHeight();
     const float nav_button = line_h * 1.4f;
@@ -228,8 +228,9 @@ void Display(float scale)
     const std::string count =
         nav.shown ? fmt::format("{}/{}", position > 0 ? std::to_string(position) : std::string("-"), nav.total) :
                     std::string();
+    const int nav_buttons = nav.clips ? 4 : 2;
     const float nav_w = nav.shown ? ImGui::CalcTextSize(count.c_str()).x + ImGui::GetStyle().ItemSpacing.x +
-                                        nav_button * 4.0f + 2.0f * scale * 3.0f :
+                                        nav_button * nav_buttons + 2.0f * scale * (nav_buttons - 1) :
                                     0.0f;
     const ImVec2 title0 = ImGui::GetCursorScreenPos();
     if (nav.shown)
@@ -273,6 +274,9 @@ void Display(float scale)
       };
       for (const Button& b : buttons)
       {
+        // (A list of replays: << >> only.)
+        if (!nav.clips && (b.action == NavAction::PrevClip || b.action == NavAction::NextClip))
+          continue;
         ImGui::SameLine(0.0f, 2.0f * scale);
         const ImVec2 b0 = ImGui::GetCursorScreenPos();
         const ImVec2 b1(b0.x + nav_button, b0.y + line_h);

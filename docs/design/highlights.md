@@ -96,7 +96,17 @@ commandId is written again with its stars and count (at most every 400 ms), and 
 them without touching the clip (a highlight not in it shows "-/40"; from it the buttons go to the
 list's first or last). The launcher answers with any page open (`useHighlightNavigation`, mounted
 for the whole window). A replay of another Project+ release asks as a row's click does, in the
-launcher's window. Spectating and the Replays tab's replays have no list buttons.
+launcher's window. Spectating has no list buttons.
+
+**The Replays tab's replays** (2026-10-24, the user: "replays should get those buttons too, just
+two of them, for next and previous replay, and count of all replays"). A replay played from the
+Replays list (a row's play button, or the play button of its stats page) is a `queue` request with
+`nav` and `"clips": false`: the title row ends with "12/340  << >>", the count of the folder's
+replays as the browser lists them (its filters and sort, every one, not only the rows loaded:
+`getAllFilePaths`, as Play selected with Select all), and << >> play the replay before / after it
+(`play_from_list.ts`, the same `navRequest`). Its row in the list is shown selected and follows.
+Another folder, filter or sort while it plays is the buttons' list from then on (the count shows
+it at the next replay). A replay not in the list (opened from a file) plays without buttons.
 
 Measured here (Qt Dolphin, D3D11, other sessions' harness Dolphins running): a cold start to the
 first highlight's fast-forward ~7 s; the fast-forward 330-680 frames a second (8,160 frames in 12-25

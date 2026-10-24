@@ -27,6 +27,7 @@ import { useReplays } from "@/lib/hooks/use_replays";
 import { usePPlusVersions } from "@/lib/pplus/use_pplus_versions";
 import { convertFrameCountToDurationString, monthDayHourFormat } from "@/lib/time";
 import { getStageImage } from "@/lib/utils";
+import { REPLAY_LIST, usePlaylistStore } from "@/pages/replays/replay_file_stats/highlights/highlight_nav";
 import { useServices } from "@/services";
 
 import { DraggableFile } from "./draggable_file";
@@ -68,6 +69,8 @@ export const ReplayFileContainer = React.memo(function ReplayFileContainer({
   // Use Set for O(1) lookup instead of O(n) indexOf
   const selected = selectedFilesSet.has(fullPath);
   const highlightKey = useReplayHighlight((store) => (store.paths.includes(fullPath) ? store.nonce : 0));
+  // The replay the playback Dolphin plays from this list (its << >> follow).
+  const playing = usePlaylistStore((store) => store.source === REPLAY_LIST && store.current?.path === fullPath);
 
   // Only calculate index if actually selected (for display purposes)
   const selectedFiles = useReplays((store) => store.selectedFiles);
@@ -238,6 +241,7 @@ export const ReplayFileContainer = React.memo(function ReplayFileContainer({
           details={details}
           onFileNameDragStart={onFileNameDragStart}
           highlightKey={highlightKey}
+          playing={playing}
         />
       </div>
       {/* (Its clicks are kept from the row, which would select it: the menu is in a portal.) */}

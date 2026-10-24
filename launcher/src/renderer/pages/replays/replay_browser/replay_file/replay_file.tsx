@@ -39,6 +39,8 @@ type ReplayFileProps = {
   onFileNameDragStart?: (event: React.DragEvent<HTMLDivElement>) => void;
   /** Non-zero: pulse gold (a new value pulses again); the replays the match history asked for. */
   highlightKey?: number;
+  /** The playback Dolphin plays it (from this list): shown as selected. */
+  playing?: boolean;
 };
 
 export const ReplayFile = React.memo(function ReplayFile({
@@ -50,12 +52,13 @@ export const ReplayFile = React.memo(function ReplayFile({
   details,
   onFileNameDragStart,
   highlightKey = 0,
+  playing = false,
 }: ReplayFileProps) {
   const selected = exists(selectedIndex) && selectedIndex >= 0;
   return (
     <Outer
       backgroundImage={backgroundImage}
-      selected={selected}
+      selected={selected || playing}
       data-replay-highlight={highlightKey ? highlightKey : undefined}
     >
       {highlightKey > 0 && <HighlightPulse key={highlightKey} />}
@@ -66,7 +69,7 @@ export const ReplayFile = React.memo(function ReplayFile({
           flex-direction: column;
           justify-content: center;
           padding: 10px;
-          background-color: ${selected ? "rgba(180, 130, 176, 0.1)" : "transparent"};
+          background-color: ${selected || playing ? "rgba(180, 130, 176, 0.1)" : "transparent"};
           width: 100%;
         `}
       >

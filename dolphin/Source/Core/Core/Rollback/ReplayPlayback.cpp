@@ -283,25 +283,6 @@ std::optional<Request> ReadComm(const std::string& path)
         r.marks.push_back({*start, *end, std::isfinite(p) ? static_cast<int>(std::clamp(p, 0.0, 1e6)) : 0});
       }
     }
-    const auto n = o.find("nav");
-    if (!r.render && n != o.end() && n->second.is<picojson::object>())
-    {
-      const auto& no = n->second.get<picojson::object>();
-      const auto num = [&](const char* k) {
-        const auto it = no.find(k);
-        const double v = it != no.end() && it->second.is<double>() ? it->second.get<double>() : 0;
-        return std::isfinite(v) ? static_cast<int>(std::clamp(v, 0.0, 1e6)) : 0;
-      };
-      const auto yes = [&](const char* k) {
-        const auto it = no.find(k);
-        return it != no.end() && it->second.is<bool>() && it->second.get<bool>();
-      };
-      r.nav.shown = true;
-      r.nav.position = num("position");
-      r.nav.total = num("total");
-      r.nav.prev_replay = yes("hasPrevReplay");
-      r.nav.next_replay = yes("hasNextReplay");
-    }
   }
   else if (str("mode") == "queue" || r.mirror)
   {
@@ -326,6 +307,28 @@ std::optional<Request> ReadComm(const std::string& path)
   else if (!str("replay").empty())
   {
     r.paths.push_back(str("replay"));
+  }
+  // The launcher's list (a list's highlights, or the Replays tab's replays: "clips": false, only
+  // << >>); never spectating.
+  const auto n = o.find("nav");
+  if (!r.render && !r.mirror && n != o.end() && n->second.is<picojson::object>())
+  {
+    const auto& no = n->second.get<picojson::object>();
+    const auto num = [&](const char* k) {
+      const auto it = no.find(k);
+      const double v = it != no.end() && it->second.is<double>() ? it->second.get<double>() : 0;
+      return std::isfinite(v) ? static_cast<int>(std::clamp(v, 0.0, 1e6)) : 0;
+    };
+    const auto yes = [&](const char* k, bool otherwise = false) {
+      const auto it = no.find(k);
+      return it != no.end() && it->second.is<bool>() ? it->second.get<bool>() : otherwise;
+    };
+    r.nav.shown = true;
+    r.nav.position = num("position");
+    r.nav.total = num("total");
+    r.nav.prev_replay = yes("hasPrevReplay");
+    r.nav.next_replay = yes("hasNextReplay");
+    r.nav.clips = yes("clips", r.highlights);
   }
   return r;
 }
@@ -944,7 +947,7 @@ void Step()
 void UpdateNavView()
 {
   Playback::NavView v;
-  if (s_request.highlights && !s_request.render && s_request.nav.shown && s_armed)
+  if (!s_request.render && !s_request.mirror && s_request.nav.shown && s_armed)
     v = s_request.nav;
   std::lock_guard nk(s_nav_mutex);
   s_nav_view = v;
@@ -1033,8 +1036,8 @@ void Loop()
           s_request.close_on_end = r->close_on_end;
           s_request.banner = std::move(r->banner);
         }
-        else if (r && r->command_id == last_command && r->highlights && !r->render &&
-                 s_request.highlights && !s_request.render)
+        else if (r && r->command_id == last_command && !r->render && !s_request.render && !r->mirror &&
+                 !s_request.mirror && r->highlights == s_request.highlights)
         {
           // The same request written again: the launcher's list changed (its marks, the count).
           const auto same = [](const Request::ListMark& a, const Request::ListMark& b) {
@@ -1046,7 +1049,7 @@ void Loop()
           const auto& a = r->nav;
           const auto& b = s_request.nav;
           if (a.shown != b.shown || a.position != b.position || a.total != b.total ||
-              a.prev_replay != b.prev_replay || a.next_replay != b.next_replay)
+              a.prev_replay != b.prev_replay || a.next_replay != b.next_replay || a.clips != b.clips)
           {
             s_request.nav = r->nav;
           }
@@ -1212,7 +1215,10 @@ NavView GetNav()
 void RequestNav(NavAction action, s64 frame)
 {
   std::lock_guard lk(s_mutex);
-  if (!s_request.highlights || s_request.render || !s_request.nav.shown)
+  if (s_request.render || s_request.mirror || !s_request.nav.shown)
+    return;
+  // (A replay list has no clips: its buttons are the replay ones.)
+  if (!s_request.nav.clips && (action == NavAction::PrevClip || action == NavAction::NextClip))
     return;
   static constexpr const char* NAMES[] = {"prevReplay", "prevClip", "nextClip", "nextReplay"};
   ++s_nav_seq;

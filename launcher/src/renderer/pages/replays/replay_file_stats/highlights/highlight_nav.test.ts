@@ -1,7 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { PlaylistEntry } from "./highlight_nav";
-import { followStatus, listView, navOrder, navTarget, usePlaylistStore } from "./highlight_nav";
+import {
+  followStatus,
+  listView,
+  navOrder,
+  navTarget,
+  REPLAY_LIST,
+  replayEntry,
+  replayListNav,
+  usePlaylistStore,
+} from "./highlight_nav";
 
 const e = (path: string, startFrame: number, endFrame = startFrame + 300): PlaylistEntry => ({
   key: `${path}@${startFrame}`,
@@ -116,5 +125,37 @@ describe("following Dolphin", () => {
       vi.fn(),
     );
     expect(usePlaylistStore.getState().current).toMatchObject({ key: "", path: "a", startFrame: 10 });
+  });
+});
+
+describe("the Replays tab's list", () => {
+  const REPLAYS = ["r1", "r2", "r3"].map(replayEntry);
+
+  it("counts its replays, << >> only", () => {
+    expect(replayListNav(REPLAYS, "r1")).toEqual({
+      position: 1,
+      total: 3,
+      hasPrevReplay: false,
+      hasNextReplay: true,
+      clips: false,
+    });
+    expect(replayListNav(REPLAYS, "r3")).toMatchObject({ position: 3, hasPrevReplay: true, hasNextReplay: false });
+    expect(replayListNav(REPLAYS, "zz")).toMatchObject({ position: 0, hasPrevReplay: true, hasNextReplay: true });
+  });
+
+  it("plays the replay before or after the one playing", () => {
+    usePlaylistStore.setState({
+      source: REPLAY_LIST,
+      entries: REPLAYS,
+      current: REPLAYS[1],
+      commandId: "hl-2",
+      navSeq: 0,
+      pickSeq: 0,
+    });
+    const play = vi.fn();
+    followStatus({ commandId: "hl-2", replay: "r2", navRequest: { seq: 1, action: "nextReplay", frame: 900 } }, play);
+    expect(play).toHaveBeenCalledWith(REPLAY_LIST, REPLAYS, REPLAYS[2]);
+    followStatus({ commandId: "hl-2", replay: "r2", navRequest: { seq: 2, action: "prevReplay", frame: 900 } }, play);
+    expect(play).toHaveBeenLastCalledWith(REPLAY_LIST, REPLAYS, REPLAYS[0]);
   });
 });

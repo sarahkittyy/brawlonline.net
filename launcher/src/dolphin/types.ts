@@ -128,6 +128,9 @@ export type RenderResult =
  * that release's files first (`needs-files`), or not at all with this launcher (`unplayable`).
  * A request mixing releases plays the first replay's release only (`skipped` others).
  */
+/** A replay played from the Replays tab's list: its request's id and the list's buttons. */
+export type ReplayListPlay = { commandId: string; nav: HighlightListView["nav"] };
+
 export type ReplayPlayResult =
   | { status: "playing"; release: string | null; skipped: number; skippedRelease?: string }
   | { status: "needs-files"; release: string; current: string; downloadBytes: number }
@@ -334,7 +337,8 @@ export interface DolphinService {
   storePlayKeyFile(key: PlayKey): Promise<void>;
   checkPlayKeyExists(key: PlayKey): Promise<boolean>;
   removePlayKeyFile(): Promise<void>;
-  viewSlpReplay(files: ReplayQueueItem[], choice?: ReplayPlayChoice): Promise<ReplayPlayResult>;
+  /** `list`: one replay of the Replays tab's list, with its place in it (highlight_nav.ts). */
+  viewSlpReplay(files: ReplayQueueItem[], choice?: ReplayPlayChoice, list?: ReplayListPlay): Promise<ReplayPlayResult>;
   /**
    * Plays highlights (or L+R+Z clips) one after another in the playback Dolphin, each from its
    * startFrame to its endFrame; one of the replay already playing goes on in its running match.
