@@ -17,7 +17,7 @@ export const AllHighlightsMessages = {
   highlightsOff: () => "Highlight detection is off (Settings > Clips).",
   clipsOff: () => "L+R+Z clips are off (Settings > Clips).",
   noManual: () =>
-    "No manual clips yet. While watching a replay or a spectated game, click Clip on the seek bar, drag its ends, then Save as highlight.",
+    "No manual clips yet. While watching a replay or a spectated game, click Clip on the seek bar, move the start and end position, then Save as highlight.",
   noFavorites: () => "No favorites yet. Click the star on a highlight to add it here.",
   detectionOff: () => "Highlight detection and L+R+Z clips are off (Settings > Clips).",
   couldNotLoad: (error: string) => "Highlights could not be found: {0}",

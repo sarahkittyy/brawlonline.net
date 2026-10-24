@@ -7428,7 +7428,12 @@ PlaybackInfo GetPlaybackInfo()
 {
   PlaybackInfo info;
   std::unique_lock<std::recursive_timed_mutex> lk(s.mutex, std::chrono::milliseconds(5));
-  if (!lk.owns_lock() || s.mode != Mode::Playback || !s.pb.file || !s.pb.started ||
+  if (!lk.owns_lock())
+  {
+    info.busy = true;
+    return info;
+  }
+  if (s.mode != Mode::Playback || !s.pb.file || !s.pb.started ||
       (s.phase != Phase::Running && s.phase != Phase::Countdown))
   {
     return info;

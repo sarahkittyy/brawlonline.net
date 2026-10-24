@@ -7,11 +7,13 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <functional>
 #include <string>
 
 #include <fmt/format.h>
 #include <imgui.h>
 
+#include "Common/WorkQueueThread.h"
 #include "Core/Online/GameSetup.h"
 #include "Core/Rollback/GameplaySession.h"
 #include "Core/Rollback/ReplayPlayback.h"
@@ -82,12 +84,28 @@ std::string Players(const Gprb::Session::PlaybackInfo& info)
   return out;
 }
 
+// The overlay is drawn on the GPU thread, which must never wait on the session's lock (nor the
+// comm file follower's, held while it takes the session's): the CPU thread holds it while it waits
+// for the GPU (a match's start flushes it, StartRunning), so Clip clicked as a highlight loaded
+// hung Dolphin (the user, 2026-10-24). What the overlay asks of them runs on this thread, in order.
+// (Never joined: at exit it may still be waiting on the session.)
+void Send(std::function<void()> f)
+{
+  static auto* const worker = new Common::AsyncWorkThread("Replay overlay");
+  worker->Push(std::move(f));
+}
+
+void Control(Gprb::Session::PlaybackCommand command, double arg = 0)
+{
+  Send([command, arg] { Gprb::Session::PlaybackControl(command, arg); });
+}
+
 void SetStop(s64 end)
 {
   if (end != s_stop_sent)
   {
     s_stop_sent = end;
-    Gprb::Session::SetPlaybackStop(end);
+    Send([end] { Gprb::Session::SetPlaybackStop(end); });
   }
 }
 
@@ -141,7 +159,14 @@ void SetFont(ImFont* font)
 
 void Display(float scale)
 {
-  const Gprb::Session::PlaybackInfo info = Gprb::Session::GetPlaybackInfo();
+  // (The session busy for a moment, e.g. a match's start or a seek's step, is not the replay gone:
+  // the last info stands in, so clip mode, a drag and the overlay stay.)
+  static Gprb::Session::PlaybackInfo s_last_info;
+  Gprb::Session::PlaybackInfo info = Gprb::Session::GetPlaybackInfo();
+  if (info.busy)
+    info = s_last_info;
+  else
+    s_last_info = info;
   if (!info.active)
   {
     s_dragging = false;
@@ -168,9 +193,8 @@ void Display(float scale)
   if (io.MouseClicked[0] && !s_dragging && !info.at_end &&
       !ImGui::IsWindowHovered(ImGuiHoveredFlags_AnyWindow))
   {
-    Gprb::Session::PlaybackControl(catching_up ? Gprb::Session::PlaybackCommand::Play :
-                                                 Gprb::Session::PlaybackCommand::TogglePause,
-                                   0);
+    Control(catching_up ? Gprb::Session::PlaybackCommand::Play :
+                          Gprb::Session::PlaybackCommand::TogglePause);
   }
   // The catch-up's progress at the top, as a highlight's fast-forward has it.
   if (catching_up)
@@ -294,9 +318,9 @@ void Display(float scale)
         if (pressed && b.enabled)
         {
           if (b.mark >= 0)
-            Gprb::Session::PlaybackControl(Gprb::Session::PlaybackCommand::PlayHighlight, b.mark);
+            Control(Gprb::Session::PlaybackCommand::PlayHighlight, b.mark);
           else
-            Gprb::Replay::Playback::RequestNav(b.action, cursor);
+            Send([action = b.action, cursor] { Gprb::Replay::Playback::RequestNav(action, cursor); });
         }
       }
     }
@@ -339,8 +363,9 @@ void Display(float scale)
     {
       s_clip_end = std::clamp(s_clip_end, info.first + MIN_CLIP_FRAMES, std::max(end, info.first + MIN_CLIP_FRAMES));
       s_clip_start = std::clamp(s_clip_start, info.first, s_clip_end - MIN_CLIP_FRAMES);
-      state = fmt::format("Clip {} - {} ({} s): drag its ends", Clock60(s_clip_start - info.first),
-                          Clock60(s_clip_end - info.first), (s_clip_end - s_clip_start + 30) / 60);
+      state = fmt::format("Clip {} - {} ({} s): Move the start and end position.",
+                          Clock60(s_clip_start - info.first), Clock60(s_clip_end - info.first),
+                          (s_clip_end - s_clip_start + 30) / 60);
     }
     const std::string time = fmt::format("{} / {}", Clock60(shown - info.first), Clock60(span));
     ImGui::TextUnformatted(state.c_str());
@@ -379,13 +404,13 @@ void Display(float scale)
           s_clip_end = std::clamp(shown, info.first + MIN_CLIP_FRAMES, std::max(end, info.first + MIN_CLIP_FRAMES));
           s_clip_start = std::max(info.first, s_clip_end - CLIP_BEFORE_FRAMES);
           if (!info.paused)
-            Gprb::Session::PlaybackControl(Gprb::Session::PlaybackCommand::Pause, 0);
-          Gprb::Session::PlaybackControl(Gprb::Session::PlaybackCommand::Seek, static_cast<double>(s_clip_start));
+            Control(Gprb::Session::PlaybackCommand::Pause);
+          Control(Gprb::Session::PlaybackCommand::Seek, static_cast<double>(s_clip_start));
           SetStop(s_clip_end);
         }
         if (ImGui::IsItemHovered())
         {
-          ImGui::SetTooltip("Clip the last %d seconds, then drag its ends",
+          ImGui::SetTooltip("Clip the last %d seconds, then move the start and end position",
                             static_cast<int>(CLIP_BEFORE_FRAMES / 60));
         }
       }
@@ -396,15 +421,17 @@ void Display(float scale)
         ImGui::SameLine();
         if (ImGui::SmallButton(SAVE))
         {
-          if (Gprb::Replay::Playback::SaveClip(s_clip_start, s_clip_end))
-          {
-            OSD::AddMessage("Clip saved to Replays > Highlights > Manual Clips", OSD::Duration::NORMAL,
-                            OSD::Color::GREEN);
-          }
-          else
-          {
-            OSD::AddMessage("The clip could not be saved", OSD::Duration::NORMAL, OSD::Color::RED);
-          }
+          Send([start = s_clip_start, end = s_clip_end] {
+            if (Gprb::Replay::Playback::SaveClip(start, end))
+            {
+              OSD::AddMessage("Clip saved to Replays > Highlights > Manual Clips", OSD::Duration::NORMAL,
+                              OSD::Color::GREEN);
+            }
+            else
+            {
+              OSD::AddMessage("The clip could not be saved", OSD::Duration::NORMAL, OSD::Color::RED);
+            }
+          });
           EndClipMode();
         }
         if (ImGui::IsItemHovered())
@@ -466,7 +493,7 @@ void Display(float scale)
       if (ImGui::InvisibleButton("##replaymarks", ImVec2(std::max(bar_w, 1.0f), mark_r * 2.0f)))
       {
         if (const int m = mark_at(io.MousePos.x); m >= 0)
-          Gprb::Session::PlaybackControl(Gprb::Session::PlaybackCommand::PlayHighlight, m);
+          Control(Gprb::Session::PlaybackCommand::PlayHighlight, m);
       }
       if (ImGui::IsItemHovered())
         mark_hovered = mark_at(io.MousePos.x);
@@ -475,7 +502,7 @@ void Display(float scale)
     {
       const ImVec2 b0 = ImGui::GetCursorScreenPos();
       if (ImGui::InvisibleButton("##replayplay", ImVec2(row_h, row_h)))
-        Gprb::Session::PlaybackControl(Gprb::Session::PlaybackCommand::TogglePause, 0);
+        Control(Gprb::Session::PlaybackCommand::TogglePause);
       const bool over = ImGui::IsItemHovered();
       ImDrawList* dl = ImGui::GetWindowDrawList();
       const ImU32 col = over ? IM_COL32(255, 255, 255, 255) : IM_COL32(230, 230, 230, 220);
@@ -560,8 +587,8 @@ void Display(float scale)
     else if (!active && s_clip_handle)
     {
       // A click on a handle goes there; a drag shows the frame it was left at.
-      Gprb::Session::PlaybackControl(Gprb::Session::PlaybackCommand::Seek,
-                                     static_cast<double>(s_clip_handle == 1 ? s_clip_start : s_clip_end));
+      Control(Gprb::Session::PlaybackCommand::Seek,
+              static_cast<double>(s_clip_handle == 1 ? s_clip_start : s_clip_end));
       s_clip_handle = 0;
     }
     else if (active && s_mark_held < 0)
@@ -571,14 +598,13 @@ void Display(float scale)
     }
     else if (!active && s_mark_held >= 0)
     {
-      Gprb::Session::PlaybackControl(Gprb::Session::PlaybackCommand::PlayHighlight, s_mark_held);
+      Control(Gprb::Session::PlaybackCommand::PlayHighlight, s_mark_held);
       s_mark_held = -1;
     }
     else if (!active && s_dragging)
     {
       s_dragging = false;
-      Gprb::Session::PlaybackControl(Gprb::Session::PlaybackCommand::Seek,
-                                     static_cast<double>(info.first + s_drag_at * span));
+      Control(Gprb::Session::PlaybackCommand::Seek, static_cast<double>(info.first + s_drag_at * span));
     }
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const ImVec2 p1(p0.x + bar_w, p0.y + bar_h);
@@ -656,7 +682,7 @@ void Display(float scale)
       const ImVec2 b0 = ImGui::GetCursorScreenPos();
       const float w = live_w - ImGui::GetStyle().ItemSpacing.x;
       if (ImGui::InvisibleButton("##replaylive", ImVec2(w, row_h)) && !info.at_live)
-        Gprb::Session::PlaybackControl(Gprb::Session::PlaybackCommand::GoLive, 0);
+        Control(Gprb::Session::PlaybackCommand::GoLive);
       const bool over = ImGui::IsItemHovered();
       const ImU32 bg = info.at_live ? IM_COL32(200, 40, 40, 230) :
                        over         ? IM_COL32(255, 255, 255, 70) :

@@ -572,6 +572,8 @@ void PlaybackControl(PlaybackCommand command, double arg = 0);
 struct PlaybackInfo
 {
   bool active = false;     // a replay's match runs (or holds at its end)
+  bool busy = false;       // the session was busy (its lock held over 5 ms): nothing read, which is
+                           // not "no replay" (the overlay keeps the last info)
   s64 first = 0, last = 0;  // its frames
   s64 shown = 0;           // the frame on screen
   bool paused = false;

@@ -338,10 +338,18 @@ follows the mouse's movement since the press, never jumping to the mouse, so it 
 back a pixel; a press and release within that is a click and seeks to that end. Letting a dragged
 handle go seeks there too, so the screen shows the frame chosen (hovered: "Clip start (1:03)"). A
 press elsewhere on the bar still seeks. The row says "Clip 1:03 -
-1:23 (20 s): drag its ends", and the buttons are **Cancel clip** and **Save as highlight** ("Clip
+1:23 (20 s): Move the start and end position.", and the buttons are **Cancel clip** and **Save as highlight** ("Clip
 saved to Replays > Highlights > Manual Clips" on screen). Clip mode ends with either, or when
 another replay is armed (a spectated set's next game). A live game's clip ends at the live edge at
 the latest.
+
+The overlay is drawn on the GPU thread, so it never waits on the session's lock: the CPU thread
+holds that lock while it waits for the GPU (a match's start flushes the GPU in `StartRunning`). A
+Clip click while a highlight's replay loaded hung Dolphin that way (2026-10-24). Every control the
+overlay sends (play/pause, seeks, the clip's end line, Save as highlight, the list buttons) is
+queued on its own thread ("Replay overlay") and runs in order. When `GetPlaybackInfo` can't get
+the lock within 5 ms it says `busy` and the overlay draws the last info it got. Before, a busy
+session looked like "no replay", which ended clip mode and dropped a drag.
 
 **Handing it over** (`Rollback/ReplayPlayback.cpp` `SaveClip`): the clip is of the replay armed
 (its path as the comm file gave it; the session's replay must still be the one armed). Every clip
