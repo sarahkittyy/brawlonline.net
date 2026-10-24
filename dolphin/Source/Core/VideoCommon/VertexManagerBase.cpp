@@ -903,6 +903,18 @@ void VertexManagerBase::UpdatePipelineObject()
   case ShaderCompilationMode::AsynchronousUberShaders:
   case ShaderCompilationMode::AsynchronousSkipRendering:
   {
+    if (g_ActiveConfig.iShaderCompilationMode == ShaderCompilationMode::AsynchronousSkipRendering &&
+        reinterpret_cast<const u32*>(&bpmem)[BPMEM_NO_SKIP_DRAWS] == NO_SKIP_DRAWS_ON)
+    {
+      // A draw the game makes once and copies into a texture (Brawl's name tags, marked by the
+      // P+ plugin): left out, it would be missing until the game draws it again. Wait for its
+      // background compile (not a compile here: bug reports #131/#132, ShaderCache.cpp).
+      m_current_pipeline_object = g_shader_cache->WaitForPipelineForUid(m_current_pipeline_config);
+      if (!m_current_pipeline_object)
+        m_pipeline_config_changed = true;
+      return;
+    }
+
     // Can we background compile shaders? If so, get the pipeline asynchronously.
     auto res = g_shader_cache->GetPipelineForUidAsync(m_current_pipeline_config);
     if (res)
@@ -917,12 +929,6 @@ void VertexManagerBase::UpdatePipelineObject()
       // Specialized shaders not ready, use the ubershaders.
       m_current_pipeline_object =
           g_shader_cache->GetUberPipelineForUid(m_current_uber_pipeline_config);
-    }
-    else if (reinterpret_cast<const u32*>(&bpmem)[BPMEM_NO_SKIP_DRAWS] == NO_SKIP_DRAWS_ON)
-    {
-      // A draw the game makes once and copies into a texture (Brawl's name tags, marked by the
-      // P+ plugin): left out, it would be missing until the game draws it again. Wait for it.
-      m_current_pipeline_object = g_shader_cache->GetPipelineForUid(m_current_pipeline_config);
     }
     else
     {

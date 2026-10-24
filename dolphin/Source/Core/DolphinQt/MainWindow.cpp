@@ -270,7 +270,8 @@ MainWindow::MainWindow(Core::System& system, std::unique_ptr<BootParameters> boo
     // close it first. A Dolphin in a game stays (the launcher hands rooms to the game). Either
     // way it answers in quit-if-idle-answer.json ({version, id, result: "closing" | "in-game"}):
     // the launcher cannot tell from game-status.json, which the rooms thread keeps writing after
-    // the game stopped.
+    // the game stopped. With "force": true (the launcher is quitting in its Launch Project+ mode)
+    // a Dolphin in a game closes too, its game stopped as when its window is closed.
     {
       const std::string online_dir = File::GetUserPath(D_ONLINE_IDX);
       const std::string quit_file = online_dir + "quit-if-idle.json";
@@ -282,12 +283,14 @@ MainWindow::MainWindow(Core::System& system, std::unique_ptr<BootParameters> boo
         picojson::value request;
         picojson::parse(request, text);
         const bool idle = Core::IsUninitialized(m_system);
+        const bool force = request.is<picojson::object>() && request.get("force").is<bool>() &&
+                           request.get("force").get<bool>();
         picojson::object answer;
         answer["version"] = picojson::value(1.0);
         answer["id"] = request.is<picojson::object>() && request.get("id").is<std::string>() ?
                            request.get("id") :
                            picojson::value();
-        answer["result"] = picojson::value(idle ? "closing" : "in-game");
+        answer["result"] = picojson::value(idle || force ? "closing" : "in-game");
         const std::string answer_file = online_dir + "quit-if-idle-answer.json";
         if (!File::WriteStringToFile(answer_file + ".tmp", picojson::value(answer).serialize()) ||
             !File::Rename(answer_file + ".tmp", answer_file))
@@ -299,6 +302,11 @@ MainWindow::MainWindow(Core::System& system, std::unique_ptr<BootParameters> boo
           INFO_LOG_FMT(CORE, "The launcher asked this Dolphin, which has no game, to close");
           m_exit_requested = true;
           RequestStop();
+        }
+        else if (force)
+        {
+          m_exit_requested = true;
+          ForceStopFor("the launcher was closed");
         }
       }
     }

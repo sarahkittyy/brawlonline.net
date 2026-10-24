@@ -205,6 +205,31 @@ export class DolphinManager {
   }
 
   /**
+   * The launcher is quitting: in its Launch Project+ mode (`launchGameOnPlay`) the open netplay
+   * Dolphin closes with it, game or not (the user, 2026-10-24: "When you close out of the launcher
+   * from this mode, have it exit dolphin as well"). It is asked first, so it leaves its room and
+   * writes its saves as when its window is closed; one that has not closed by then is ended. In the
+   * Launch Dolphin mode, and for a playback Dolphin (a replay, a spectated game), nothing changes.
+   */
+  async closeNetplayForQuit(): Promise<void> {
+    const instance = this.netplayDolphinInstance;
+    if (!instance || !this.settingsManager.get().settings.launchGameOnPlay) {
+      return;
+    }
+    log.info("The launcher is quitting: closing the netplay Dolphin");
+    const dir = this.netplayOnlineDir();
+    await mkdir(dir, { recursive: true });
+    const closed = await closeIfIdle(dir, () => this.netplayDolphinInstance === instance, {
+      force: true,
+      log: (message) => log.info(message),
+    });
+    if (!closed) {
+      log.warn("The netplay Dolphin did not close: ending it");
+      instance.stop();
+    }
+  }
+
+  /**
    * The Input Delay setting changed: a running netplay Dolphin (Play, a room, Other Games) takes
    * it from the next frame of its game (input_delay_handoff.ts). Its Dolphin.ini has it already.
    */

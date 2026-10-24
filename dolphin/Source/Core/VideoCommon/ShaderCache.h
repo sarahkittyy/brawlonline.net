@@ -4,6 +4,7 @@
 #pragma once
 
 #include <array>
+#include <chrono>
 #include <cstddef>
 #include <cstring>
 #include <map>
@@ -81,6 +82,11 @@ public:
   // Accesses ShaderGen shader caches asynchronously.
   // The optional will be empty if this pipeline is now background compiling.
   std::optional<const AbstractPipeline*> GetPipelineForUidAsync(const GXPipelineUid& uid);
+
+  // As GetPipelineForUidAsync, but waits (up to 2 s) for the background compile,
+  // queued ahead of the other on-demand ones. nullptr if it is still compiling then (or failed).
+  // For a draw that must not be skipped (BPMEM_NO_SKIP_DRAWS) in the asynchronous modes.
+  const AbstractPipeline* WaitForPipelineForUid(const GXPipelineUid& uid);
 
   // Shared shaders
   const AbstractShader* GetScreenQuadVertexShader() const
@@ -199,6 +205,7 @@ private:
   // for as few frames as possible, otherwise we risk framerate drops.
   enum : u32
   {
+    COMPILE_PRIORITY_WAITED_PIPELINE = 50,  // WaitForPipelineForUid's: the GPU thread waits on it
     COMPILE_PRIORITY_ONDEMAND_PIPELINE = 100,
     COMPILE_PRIORITY_UBERSHADER_PIPELINE = 200,
     COMPILE_PRIORITY_SHADERCACHE_PIPELINE = 300
@@ -208,6 +215,8 @@ private:
   APIType m_api_type;
   ShaderHostConfig m_host_config = {};
   std::unique_ptr<AsyncShaderCompiler> m_async_shader_compiler;
+  // WaitForPipelineForUid doesn't wait before this (set when a wait ran out).
+  std::chrono::steady_clock::time_point m_no_pipeline_wait_until{};
 
   // Shared shaders
   std::unique_ptr<AbstractShader> m_screen_quad_vertex_shader;

@@ -20,7 +20,7 @@ import { registerGameAssetScheme } from "@game_assets/protocol";
 import { ipc_statsPageRequestedEvent } from "@replays/ipc";
 import { ipc_openSettingsModalEvent } from "@settings/ipc";
 import type CrossProcessExports from "electron";
-import { app, BrowserWindow, shell } from "electron";
+import { app, autoUpdater, BrowserWindow, shell } from "electron";
 import log from "electron-log";
 import get from "lodash/get";
 import last from "lodash/last";
@@ -293,6 +293,32 @@ app.on("window-all-closed", () => {
   }
 
   app.quit();
+});
+
+// In the Launch Project+ mode the game's Dolphin closes with the launcher (closeNetplayForQuit):
+// the quit waits for it, then goes ahead. An update's install quits as before (electron-updater
+// emits before-quit-for-update first on every platform).
+let netplayClosedForQuit = false;
+let closingNetplayForQuit = false;
+autoUpdater.on("before-quit-for-update", () => {
+  netplayClosedForQuit = true;
+});
+app.on("before-quit", (event) => {
+  if (netplayClosedForQuit || !dolphinManager.isNetplayRunning()) {
+    return;
+  }
+  event.preventDefault();
+  if (closingNetplayForQuit) {
+    return;
+  }
+  closingNetplayForQuit = true;
+  dolphinManager
+    .closeNetplayForQuit()
+    .catch((err) => log.error("Could not close the netplay Dolphin on quit:", err))
+    .finally(() => {
+      netplayClosedForQuit = true;
+      app.quit();
+    });
 });
 
 const waitForMainWindow = async () => {

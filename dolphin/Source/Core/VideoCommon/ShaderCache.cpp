@@ -5,6 +5,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <thread>
 #include <utility>
 
 #include <fmt/format.h>
@@ -204,6 +205,48 @@ std::optional<const AbstractPipeline*> ShaderCache::GetPipelineForUidAsync(const
   AppendGXPipelineUID(uid);
   QueuePipelineCompile(uid, COMPILE_PRIORITY_ONDEMAND_PIPELINE);
   return {};
+}
+
+const AbstractPipeline* ShaderCache::WaitForPipelineForUid(const GXPipelineUid& uid)
+{
+  // The shaders are still compiled and linked on the compiler threads, as every other GX
+  // pipeline in these modes; only the GPU thread waits. Compiling them here instead
+  // (GetPipelineForUid, 0bf79323) put the same shaders on the GPU thread's GL context while the
+  // compiler threads' shared contexts were compiling them, which Mesa's OpenGL did not survive:
+  // "Failed to link shaders: fragment shader lacks `main'" as the name tags rendered, or the
+  // playback Dolphin crashed there (bug reports #131, #132; Linux, radeonsi).
+  auto found = m_gx_pipeline_cache.find(uid);
+  if (found != m_gx_pipeline_cache.end() && !found->second.second)
+    return found->second.first.get();
+  if (found == m_gx_pipeline_cache.end())
+  {
+    AppendGXPipelineUID(uid);
+    QueuePipelineCompile(uid, COMPILE_PRIORITY_WAITED_PIPELINE);
+  }
+  // After a wait that ran out, the next few seconds' draws don't wait (they are skipped as any
+  // other), so a compile that hangs stalls the GPU thread once, not at every draw.
+  if (std::chrono::steady_clock::now() < m_no_pipeline_wait_until)
+    return nullptr;
+
+  SyncCompileTimer timer;  // counted with the synchronous compiles: the GPU thread stalls alike
+  constexpr auto TIMEOUT = std::chrono::seconds(2);
+  const auto deadline = std::chrono::steady_clock::now() + TIMEOUT;
+  for (;;)
+  {
+    // Also re-queues a pipeline whose shaders were not compiled yet (PipelineWorkItem).
+    m_async_shader_compiler->RetrieveWorkItems();
+    auto it = m_gx_pipeline_cache.find(uid);
+    if (it != m_gx_pipeline_cache.end() && !it->second.second)
+      return it->second.first.get();
+    if (std::chrono::steady_clock::now() >= deadline)
+    {
+      WARN_LOG_FMT(VIDEO, "A draw that must not be skipped waited {} s for its shaders: skipped",
+                   TIMEOUT.count());
+      m_no_pipeline_wait_until = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+      return nullptr;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
 }
 
 const AbstractPipeline* ShaderCache::GetUberPipelineForUid(const GXUberPipelineUid& uid)

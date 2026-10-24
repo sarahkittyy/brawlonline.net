@@ -10,6 +10,10 @@
  * (the user, 2026-10-18: "it says 'sending you there', and then i have to close dolphin and click
  * again"). Dolphins before the answer only delete the request (and close without a game), so for
  * them the wait runs out while a game runs.
+ *
+ * `force` (the launcher is quitting in its Launch Project+ mode, closeNetplayForQuit) asks a Dolphin
+ * in a game to close too: it stops the game, as when its window is closed, and answers `closing`.
+ * A Dolphin before `force` answers `in-game` as before.
  */
 
 import { randomUUID } from "crypto";
@@ -27,6 +31,8 @@ const POLL_MS = 100;
 export type QuitIfIdleAnswer = { version: number; id: string | null; result: "closing" | "in-game" };
 
 export type QuitIfIdleOptions = {
+  /** Close even with a game. */
+  force?: boolean;
   answerTimeoutMs?: number;
   closingTimeoutMs?: number;
   pollMs?: number;
@@ -63,7 +69,8 @@ export async function closeIfIdle(
   const id = randomUUID();
   await unlink(answerFile).catch(() => undefined);
   const tmp = `${file}.${id}.tmp`;
-  await writeFile(tmp, JSON.stringify({ version: 1, id, createdAt: new Date(now()).toISOString() }), "utf8");
+  const request = { version: 1, id, createdAt: new Date(now()).toISOString(), ...(opts.force ? { force: true } : {}) };
+  await writeFile(tmp, JSON.stringify(request), "utf8");
   await rename(tmp, file);
   let deadline = now() + (opts.answerTimeoutMs ?? ANSWER_TIMEOUT_MS);
   let answered = false;

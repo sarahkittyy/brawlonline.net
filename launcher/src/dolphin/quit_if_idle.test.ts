@@ -9,11 +9,11 @@ import { GAME_STATUS_FILE } from "./room_handoff";
 /**
  * A fake Dolphin main window: every poll it reads quit-if-idle.json as MainWindow's timer does,
  * deletes it, answers (or not, as an older build) and, without a game, closes `closeAfterPolls`
- * polls later.
+ * polls later. Asked with `force`, it closes with a game too, unless it is a build before `force`.
  */
 function fakeDolphin(
   dir: string,
-  opts: { inGame: boolean; answers?: boolean; closeAfterPolls?: number; neverCloses?: boolean },
+  opts: { inGame: boolean; answers?: boolean; closeAfterPolls?: number; neverCloses?: boolean; noForce?: boolean },
 ) {
   let open = true;
   let closingIn: number | null = null;
@@ -34,11 +34,12 @@ function fakeDolphin(
     await rm(file);
     const request = JSON.parse(text);
     seen.push(request);
+    const stays = opts.inGame && !(request.force === true && !opts.noForce);
     if (opts.answers !== false) {
-      const answer = { version: 1, id: request.id, result: opts.inGame ? "in-game" : "closing" };
+      const answer = { version: 1, id: request.id, result: stays ? "in-game" : "closing" };
       await writeFile(path.join(dir, QUIT_IF_IDLE_ANSWER_FILE), JSON.stringify(answer));
     }
-    if (!opts.inGame && !opts.neverCloses) {
+    if (!stays && !opts.neverCloses) {
       closingIn = opts.closeAfterPolls ?? 1;
     }
   };
@@ -101,6 +102,25 @@ describe("quit if idle", () => {
     const inGame = fakeDolphin(dir, { inGame: true, answers: false });
     expect(await closeIfIdle(dir, inGame.isOpen, { ...inGame, answerTimeoutMs: 1000 })).toBe(false);
     expect(inGame.elapsed()).toBeGreaterThanOrEqual(1000);
+  });
+
+  it("with force (the launcher quitting) closes a Dolphin in a game too", async () => {
+    const dolphin = fakeDolphin(dir, { inGame: true, closeAfterPolls: 5 });
+    expect(await closeIfIdle(dir, dolphin.isOpen, { ...dolphin, force: true })).toBe(true);
+    expect(dolphin.isOpen()).toBe(false);
+    expect(dolphin.seen).toEqual([expect.objectContaining({ force: true })]);
+  });
+
+  it("without force asks no Dolphin to close its game", async () => {
+    const dolphin = fakeDolphin(dir, { inGame: true });
+    expect(await closeIfIdle(dir, dolphin.isOpen, dolphin)).toBe(false);
+    expect(dolphin.seen).toEqual([expect.not.objectContaining({ force: true })]);
+  });
+
+  it("with force, a Dolphin before force answers in-game at once (the launcher then ends it)", async () => {
+    const dolphin = fakeDolphin(dir, { inGame: true, noForce: true });
+    expect(await closeIfIdle(dir, dolphin.isOpen, { ...dolphin, force: true })).toBe(false);
+    expect(dolphin.elapsed()).toBeLessThan(500);
   });
 
   it("ignores an answer left from an earlier request", async () => {
