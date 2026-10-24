@@ -79,6 +79,11 @@ enum
   BPMEM_PERF1 = 0x67,
   BPMEM_FIELDMODE = 0x68,
   BPMEM_BUSCLOCK1 = 0x69,
+  // Not a hardware register: the P+ plugin (game-code match_hud.cpp) writes NO_SKIP_DRAWS_ON here
+  // around Brawl's name tag render, which runs once and copies its draws into a texture. While it
+  // holds that value, a draw whose shader is not compiled yet waits for it instead of being left
+  // out in the "Skip Drawing" shader mode (VertexManagerBase::UpdatePipelineObject).
+  BPMEM_NO_SKIP_DRAWS = 0x7F,
   BPMEM_TX_SETMODE0 = 0x80,     // 0x80 + 4
   BPMEM_TX_SETMODE1 = 0x84,     // 0x84 + 4
   BPMEM_TX_SETIMAGE0 = 0x88,    // 0x88 + 4
@@ -109,6 +114,9 @@ enum
   BPMEM_TEV_KSEL = 0xF6,  // 0xF6 + 8
   BPMEM_BP_MASK = 0xFE,
 };
+
+// BPMEM_NO_SKIP_DRAWS's value while draws must not be skipped ("PPN"); anything else is off.
+constexpr u32 NO_SKIP_DRAWS_ON = 0x50504E;
 
 // Tev/combiner things
 

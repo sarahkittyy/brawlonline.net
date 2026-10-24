@@ -110,8 +110,8 @@ const Info<bool> GFX_WAIT_FOR_SHADERS_BEFORE_STARTING{
 // Skip drawing: a draw whose shader is still compiling is left out. Hybrid ubershaders (the
 // default for a while on 2026-10-14) were turned off again by the user. The cost: with an empty
 // shader cache (a first run), what a game draws only once and copies into a texture can come out
-// with parts missing until the game draws it again, as Brawl's name tags (black, no text) and
-// Mario Kart Wii's guest Miis.
+// with parts missing until the game draws it again, as Mario Kart Wii's guest Miis. Brawl's name
+// tags were the same (an empty box) until the P+ plugin marked their render (BPMEM_NO_SKIP_DRAWS).
 const Info<ShaderCompilationMode> GFX_SHADER_COMPILATION_MODE{
     {System::GFX, "Settings", "ShaderCompilationMode"}, ShaderCompilationMode::AsynchronousSkipRendering};
 const Info<int> GFX_SHADER_COMPILER_THREADS{{System::GFX, "Settings", "ShaderCompilerThreads"}, 1};

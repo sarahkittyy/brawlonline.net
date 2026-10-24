@@ -918,6 +918,12 @@ void VertexManagerBase::UpdatePipelineObject()
       m_current_pipeline_object =
           g_shader_cache->GetUberPipelineForUid(m_current_uber_pipeline_config);
     }
+    else if (reinterpret_cast<const u32*>(&bpmem)[BPMEM_NO_SKIP_DRAWS] == NO_SKIP_DRAWS_ON)
+    {
+      // A draw the game makes once and copies into a texture (Brawl's name tags, marked by the
+      // P+ plugin): left out, it would be missing until the game draws it again. Wait for it.
+      m_current_pipeline_object = g_shader_cache->GetPipelineForUid(m_current_pipeline_config);
+    }
     else
     {
       // Ensure we try again next draw. Otherwise, if no registers change between frames, the

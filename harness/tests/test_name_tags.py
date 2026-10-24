@@ -1,5 +1,6 @@
 """The player's name tag on the online CSSs (game-code online_menu.cpp, room_css.cpp; Dolphin
-GameBridge.cpp, Online/last-tag.json).
+GameBridge.cpp, Online/last-tag.json), and over the fighters in the match (online_match.cpp,
+match_hud.cpp; Dolphin VertexManagerBase.cpp).
 
 Staging feedback 2026-10-11: on a room's CSS the player's own plate showed the account name, so
 the tag picked there was not to be seen, and every online CSS started without a tag. Now the plate
@@ -21,7 +22,8 @@ from ppharness.backend import OnlineBackend
 from ppharness.instance import DolphinInstance
 
 from test_online import _wait
-from test_online_game import ROOT, Game, _boot, backend  # noqa: F401  (the backend fixture)
+from test_online_game import ROOT, Game, _boot, _connected_direct, online_set
+from test_online_game import backend  # noqa: F401  (the backend fixture)
 from test_rooms_game import CSS, create_room, lock_of, menu_state, pick, room_view
 
 pytestmark = [pytest.mark.dolphin, pytest.mark.server, pytest.mark.gpu]
@@ -95,3 +97,44 @@ def test_tag_from_the_last_boot(backend: OnlineBackend, dolphin: Callable[..., D
     assert g.tag() == want, (g.tag(), room_view(g))
     g.steps("wait 30")
     g.shot("03-room-css")
+
+
+NTAP2 = "ＮＴａｐ２"   # run/template-user's save: the second tag in the CSS's list (slot 1)
+
+
+def match_names(g: Game) -> list[str]:
+    """The match players' names (gmGlobalModeMelee [[0x805A00E0]+8] +0x98 + 0x5C * port, +0x0C:
+    5 UTF-16 characters and a 0), the name Brawl renders into the tag over the fighter."""
+    mm = g.c.read_u32(g.c.read_u32(0x805A00E0) + 8)
+    out = []
+    for port in range(4):
+        raw = g.c.read_mem(mm + 0x98 + 0x5C * port + 0x0C, 12)
+        out.append(raw.decode("utf-16-be").split("\0")[0])
+    return out
+
+
+def test_tags_over_the_fighters(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
+                                gpu_backend: str) -> None:
+    """Sarah, 2026-10-23: "can we get the tags you pick in the css to show up above everyone's
+    head". A Direct match where A picked NoTap and B NTap2: on both machines each port's match
+    player has its player's tag as its name (Brawl's own name tag over the fighter), from the
+    lock-ins' port values. The shots show the tags drawn in full on a fresh instance (no shader
+    cache: before the plugin marked the tag render for Dolphin, Skip Drawing left an empty grey
+    box). Screenshots: run/artifacts/game-bridge/tags-over-fighters/."""
+    a, b, ua, ub = _connected_direct(backend, dolphin, gpu_backend, "tags-over-fighters", ("tagov", "tagow"),
+                                     stocks=4, tags=(1, 2))
+    online_set.wait(lambda: all(online_set.gstatus(g.c)["phase"] == "running" for g in (a, b)), 240,
+                    "the match to run on both")
+    want = {ua.display_name: NOTAP, ub.display_name: NTAP2}
+    for g in (a, b):
+        se = online_set.session(g.c)
+        names = match_names(g)
+        for port, pl in enumerate(se["players"]):
+            assert pl["pv"]["tag_name"] == want[pl["name"]], pl
+            assert names[port] == want[pl["name"]], (g.name, names, se["players"])
+        assert names[len(se["players"]):] == [""] * (4 - len(se["players"])), names
+    a.steps("wait 120")
+    for g in (a, b):
+        g.shot("01-match")
+    for g in (a, b):
+        g.c.mm_cancel()

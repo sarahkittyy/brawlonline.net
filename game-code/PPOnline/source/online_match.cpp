@@ -71,6 +71,7 @@ namespace OnlineMatch {
     static const u32 MM_PLAYERS = 0x98;        // gmGlobalModeMelee players
     static const u32 MM_TIME_LIMIT = 0x20;     // gmGlobalModeMelee: the time limit (s32 frames)
     static const u32 MM_HANDICAP = 0x26;       // gmPlayerInitData: the handicap (u16; P+: tenths of a stock)
+    static const u32 MM_NAME = 0x0C;           // gmPlayerInitData: the name tag's name (wchar[5] + 0)
     static const u32 ASL_BUTTONS = 0x800B9EA2; // P+: buttons held on the stage select (u16)
     // P+'s alt costume word per slot (LegacyTE/AltCostume.asm: gmSelCharData + 0x43AD8 + slot *
     // 0x5C, which its Gecko lines read as 0x90180F20 + 0x436F8): 1 AltZ, 2 AltR, else none. Every
@@ -454,6 +455,24 @@ namespace OnlineMatch {
         // (gmPlayerInitData +0x07: GameCube 1-4, Wii Remotes 5-8).
         for (int i = 0; i < se.numPlayers && i < 4; i++) {
             if (se.players[i].present) mm[MM_PLAYERS + i * PLAYER_SIZE + 0x07] = (u8)(s_portPad[i] + 1);
+        }
+        // Each player's name tag over their fighter, as offline (Sarah, 2026-10-23): the tag picked
+        // on the CSS, carried by the lock-in's port values, as the match player's name
+        // (gmPlayerInitData +0x0C, 5 UTF-16 characters and a 0), which the HUD renders into the
+        // tag over the fighter (fn_800E10B0; match_hud.cpp makes sure it is drawn). The tag index
+        // (+0x18) stays 0x78: nothing reads this machine's save for another player's tag, and no
+        // tag records are written. The name is another machine's bytes and the HUD prints it as a
+        // format string, so '%' and control characters become spaces.
+        for (int i = 0; i < se.numPlayers && i < 4; i++) {
+            if (!se.players[i].present) continue;
+            u16* name = (u16*)(mm + MM_PLAYERS + i * PLAYER_SIZE + MM_NAME);
+            const PPOM::PortValues& pv = se.players[i].pv;
+            int n = 0;
+            for (; (pv.flags & PPOM::PV_TAG) && n < PPOM::TAG_CHARS && pv.tag[n]; n++) {
+                u16 c = pv.tag[n];
+                name[n] = (c < 0x20 || c == '%') ? (u16)' ' : c;
+            }
+            for (; n <= PPOM::TAG_CHARS; n++) name[n] = 0;
         }
         // Stock control (the rules' stockControl, in a stock match: set rule +5 = 2, applyRules):
         // each player's count, picked on their panel's STOCKS box and carried by their lock-in's

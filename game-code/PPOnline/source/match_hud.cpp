@@ -134,7 +134,7 @@ namespace MatchHud {
     // is the panel's place in HUD units. Mapped to the 640-wide space: x * 7.688 + 279.7 (fitted
     // live from the damage digits, the name centred under the panel as before). Without a HUD
     // object (never seen) the panels are taken as packed and evenly spread, 154 apart.
-    // The names are as small as Melee's; a name wider than its panel is made narrower to fit.
+    // A name wider than its panel is made narrower to fit.
     // That node is the damage digits, and they move when the player is KO'd: they fly off (x
     // drifts for about 15 frames) and snap back at the respawn (staging feedback 2026-10-10: the
     // name slid with them). So each port's place is read once per match, the first frame it is
@@ -185,7 +185,11 @@ namespace MatchHud {
     }
     static const float NAME_MAX_W = 130.0f;   // four panels are about 147 apart: a gap between names
     static const float NAME_TOP = 449.0f;
-    static const float NAME_SCALE = 0.55f;
+    // 0.45 of the system font (0.55 until 2026-10-23; Sarah: "is there a smaller font we can use
+    // for the usernames below the players in the vod, that's still readable even at 480? like
+    // slippi's looks a lot cleaner"). The game's other resident fonts (kinds 2 and 7) are bolder or
+    // miss glyphs; the system font at 0.45 still reads in a 480p render (1x internal resolution).
+    static const float NAME_SCALE = 0.45f;
 
     static void drawNames()
     {
@@ -350,6 +354,40 @@ namespace MatchHud {
         }
     }
 
+    // Brawl's name tags over the fighters are drawn once, when the HUD is made: fn_800E10B0
+    // prints the tag on a box into the EFB and copies it into a texture (fn_8007270C), which the
+    // tag model shows for the whole match. Dolphin's default
+    // shader mode leaves out a draw whose shader is still compiling ("Skip Drawing"), so with
+    // those shaders not cached yet (a first run, a new Dolphin, every harness instance) the tag
+    // came out as an empty grey box for the whole match, offline too (Sarah: "oftentimes the
+    // 'skip drawing' thing makes the tags not show up in the first game. it's a known bug").
+    // Around the call the plugin sets a BP register no GX code uses (0x7F, BPMEM_NO_SKIP_DRAWS in
+    // Dolphin's BPMemory.h) through the FIFO, so it reaches Dolphin's GPU thread in order with
+    // the tag's own draws: while it holds NO_SKIP_DRAWS_ON, Dolphin compiles a missing shader
+    // and waits for it instead of leaving the draw out. Only these few draws, as the HUD loads.
+    // A Dolphin without it ignores the register (an unknown BP register is logged and kept).
+    typedef void (*TagRenderFn)(void* tex, const u16* name, void* col0, void* col1, int flag,
+                                int w, int h, int r10, int stackArg);
+    static TagRenderFn s_origTagRender = NULL;
+    static const u32 BP_NO_SKIP_DRAWS = 0x7F;
+    static const u32 NO_SKIP_DRAWS_ON = 0x50504E;   // "PPN"
+
+    static void writeBP(u32 reg, u32 value)
+    {
+        volatile u8* fifo8 = (volatile u8*)0xCC008000;   // the GX write-gather pipe
+        volatile u32* fifo32 = (volatile u32*)0xCC008000;
+        *fifo8 = 0x61;   // load BP register
+        *fifo32 = (reg << 24) | (value & 0xFFFFFF);
+    }
+
+    static void hkTagRender(void* tex, const u16* name, void* col0, void* col1, int flag, int w,
+                            int h, int r10, int stackArg)
+    {
+        writeBP(BP_NO_SKIP_DRAWS, NO_SKIP_DRAWS_ON);
+        s_origTagRender(tex, name, col0, col1, flag, w, h, r10, stackArg);
+        writeBP(BP_NO_SKIP_DRAWS, 0);
+    }
+
     // Inline hook at 0x8001792C (gfApplication frame loop, `addi r3, r30, 0x118`).
     static void onFrameDrawn()
     {
@@ -361,5 +399,6 @@ namespace MatchHud {
     void install(CoreApi* api)
     {
         api->syInlineHook(0x8001792C, reinterpret_cast<void*>(onFrameDrawn));
+        api->syReplaceFunc(0x800E10B0, reinterpret_cast<void*>(hkTagRender), (void**)&s_origTagRender);
     }
 }

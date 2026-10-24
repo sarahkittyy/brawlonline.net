@@ -508,6 +508,8 @@ static void BPWritten(PixelShaderManager& pixel_shader_manager, XFStateManager& 
   case BPMEM_PERF0_QUAD:  // Perf: Quads
   case BPMEM_PERF1:       // Perf: Some Clock, Texels, TX, TC
     return;
+  case BPMEM_NO_SKIP_DRAWS:  // the P+ plugin's mark (BPMemory.h): read from bpmem by draws
+    return;
   // ----------------
   // EFB Copy config
   // ----------------
@@ -1184,6 +1186,9 @@ std::pair<std::string, std::string> GetBPRegInfo(u8 cmd, u32 cmddata)
   case BPMEM_BUSCLOCK1:  // 0x69
     return DescriptionlessReg(BPMEM_BUSCLOCK1);
     // TODO: Description
+
+  case BPMEM_NO_SKIP_DRAWS:  // 0x7F
+    return DescriptionlessReg(BPMEM_NO_SKIP_DRAWS);
 
   case BPMEM_TX_SETMODE0:  // 0x80
   case BPMEM_TX_SETMODE0 + 1:
