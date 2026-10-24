@@ -48,7 +48,8 @@ user); ↑/↓ or Tab/Shift+Tab plays the next one at once; Enter plays the
 selected one (Play all went 2026-10-24: the playback Dolphin's list buttons, §3, took its place).
 A row starts with its favorite star and ends with a Play button (as the Replays page's), which plays
 it without touching the selection (2026-10-24, the user).
-The row playing is shown selected, and follows the playback Dolphin's buttons and stars. A banner
+The row playing is shown selected, and follows the playback Dolphin's buttons and stars; it is
+shown only while the playback Dolphin is open (2026-10-24, the user). A banner
 says what the playback Dolphin does:
 starting, loading the replay, **fast-forwarding to the highlight (frame N / target, a progress
 bar)**, playing, done, or why it can't (a refused replay; a replay that plays differently here and

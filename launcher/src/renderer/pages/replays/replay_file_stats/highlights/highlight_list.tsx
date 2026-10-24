@@ -313,8 +313,9 @@ export const HighlightRows = ({
     [chosen, combo, comboName, renderHighlights],
   );
 
-  // The row playing follows Dolphin's buttons and stars; with nothing of this list playing, the one
-  // last clicked.
+  // The row playing follows Dolphin's buttons and stars, and is shown only while Dolphin is open (the
+  // user, 2026-10-24); ↑/↓ and Enter go from it, or with nothing of this list playing, from the one
+  // last played.
   const playingIndex =
     mine && current
       ? entries.findIndex(
@@ -322,7 +323,8 @@ export const HighlightRows = ({
             e.path === current.path && e.row.startFrame === current.startFrame && e.row.endFrame === current.endFrame,
         )
       : -1;
-  const playing = mine && current ? (playingIndex >= 0 ? playingIndex : null) : selected;
+  const playing = playingIndex >= 0 ? playingIndex : null;
+  const cursor = mine && current ? playing : selected;
   useEffect(() => {
     if (playing != null) {
       listRef.current?.querySelector(`[data-row="${playing}"]`)?.scrollIntoView({ block: "nearest" });
@@ -333,7 +335,7 @@ export const HighlightRows = ({
     if (!entries.length) {
       return;
     }
-    const at = playing ?? (delta > 0 ? -1 : entries.length);
+    const at = cursor ?? (delta > 0 ? -1 : entries.length);
     const next = Math.min(Math.max(at + delta, 0), entries.length - 1);
     if (next !== at) {
       open(next);
@@ -349,7 +351,7 @@ export const HighlightRows = ({
   });
   useMousetrap("enter", (e) => {
     e.preventDefault();
-    open(playing ?? 0);
+    open(cursor ?? 0);
   });
   useMousetrap("mod+a", (e) => {
     e.preventDefault();
