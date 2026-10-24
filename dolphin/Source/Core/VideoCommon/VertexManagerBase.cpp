@@ -935,6 +935,7 @@ void VertexManagerBase::UpdatePipelineObject()
       // Ensure we try again next draw. Otherwise, if no registers change between frames, the
       // object will never be drawn, even when the shader is ready.
       m_pipeline_config_changed = true;
+      g_shader_cache->NoteSkippedDraw();
     }
   }
   break;

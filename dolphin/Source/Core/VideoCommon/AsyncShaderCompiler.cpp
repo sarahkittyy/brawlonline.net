@@ -62,6 +62,12 @@ bool AsyncShaderCompiler::HasPendingWork()
   return !m_pending_work.empty() || m_busy_workers.load() != 0;
 }
 
+bool AsyncShaderCompiler::HasPendingWorkFrom(u32 priority)
+{
+  std::lock_guard guard(m_pending_work_lock);
+  return m_pending_work.lower_bound(priority) != m_pending_work.end();
+}
+
 bool AsyncShaderCompiler::HasCompletedWork()
 {
   std::lock_guard guard(m_completed_work_lock);

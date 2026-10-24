@@ -27,6 +27,8 @@ enum class MessageType
   RoomWatch,
   // Highlights (Rollback/ReplayPlayback.h): loading or fast-forwarding to the next one.
   HighlightSeek,
+  // Draws are left out while the shaders a new build doesn't have on disk compile (ShaderCache).
+  CompilingShaders,
 
   // This entry must be kept last so that persistent typed messages are
   // displayed before other messages

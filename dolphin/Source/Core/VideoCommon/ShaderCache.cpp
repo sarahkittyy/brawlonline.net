@@ -20,6 +20,7 @@
 #include "VideoCommon/DriverDetails.h"
 #include "VideoCommon/FramebufferManager.h"
 #include "VideoCommon/FramebufferShaderGen.h"
+#include "VideoCommon/OnScreenDisplay.h"
 #include "VideoCommon/PipelineUtils.h"
 #include "VideoCommon/Present.h"
 #include "VideoCommon/Statistics.h"
@@ -73,7 +74,9 @@ void ShaderCache::InitializeShaderCache()
     QueueUberShaderPipelines();
 
   // Compile all known UIDs.
+  const size_t shaders_on_disk = GetSpecializedShaderCount();
   CompileMissingPipelines();
+  m_compiling_missing_shaders = GetSpecializedShaderCount() > shaders_on_disk;
   if (g_ActiveConfig.bWaitForShadersBeforeStarting)
     WaitForAsyncCompiler();
 
@@ -99,7 +102,9 @@ void ShaderCache::Reload()
   // We don't need to explicitly recompile the individual ubershaders here, as the pipelines
   // UIDs are still be in the map. Therefore, when these are rebuilt, the shaders will also
   // be recompiled.
+  const size_t shaders_on_disk = GetSpecializedShaderCount();
   CompileMissingPipelines();
+  m_compiling_missing_shaders = GetSpecializedShaderCount() > shaders_on_disk;
   if (g_ActiveConfig.bWaitForShadersBeforeStarting)
     WaitForAsyncCompiler();
   m_async_shader_compiler->ResizeWorkerThreads(g_ActiveConfig.GetShaderCompilerThreads());
@@ -251,6 +256,25 @@ const AbstractPipeline* ShaderCache::WaitForPipelineForUid(const GXPipelineUid& 
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
   }
+}
+
+void ShaderCache::NoteSkippedDraw()
+{
+  // After an update the menus show within a second (HurryPendingPipeline), but that second is
+  // white, and draws are left out here and there until the rest has compiled: the message says
+  // why, and goes about 1.5 s after the last draw left out.
+  if (!m_compiling_missing_shaders)
+    return;
+  const auto now = std::chrono::steady_clock::now();
+  if (now < m_next_compiling_message)
+    return;
+  m_next_compiling_message = now + std::chrono::milliseconds(500);
+  if (!m_async_shader_compiler->HasPendingWorkFrom(COMPILE_PRIORITY_SHADERCACHE_PIPELINE))
+  {
+    m_compiling_missing_shaders = false;
+    return;
+  }
+  OSD::AddTypedMessage(OSD::MessageType::CompilingShaders, "Compiling shaders...", 1500);
 }
 
 const AbstractPipeline* ShaderCache::GetUberPipelineForUid(const GXUberPipelineUid& uid)
@@ -521,6 +545,11 @@ void ShaderCache::ClearCaches()
   SETSTAT(g_stats.num_pixel_shaders_alive, 0);
   SETSTAT(g_stats.num_vertex_shaders_created, 0);
   SETSTAT(g_stats.num_vertex_shaders_alive, 0);
+}
+
+size_t ShaderCache::GetSpecializedShaderCount() const
+{
+  return m_vs_cache.shader_map.size() + m_ps_cache.shader_map.size();
 }
 
 void ShaderCache::CompileMissingPipelines()

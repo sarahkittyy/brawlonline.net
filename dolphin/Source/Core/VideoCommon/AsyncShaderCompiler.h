@@ -47,6 +47,8 @@ public:
   void QueueWorkItem(WorkItemPtr item, u32 priority);
   void RetrieveWorkItems();
   bool HasPendingWork();
+  // Whether work queued at this priority or a later one is still waiting for a thread.
+  bool HasPendingWorkFrom(u32 priority);
   bool HasCompletedWork();
 
   // Clears both pending and completed work

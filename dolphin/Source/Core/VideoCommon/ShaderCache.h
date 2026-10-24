@@ -88,6 +88,10 @@ public:
   // For a draw that must not be skipped (BPMEM_NO_SKIP_DRAWS) in the asynchronous modes.
   const AbstractPipeline* WaitForPipelineForUid(const GXPipelineUid& uid);
 
+  // A draw was left out, its pipeline still compiling ("Skip Drawing"). While the shaders that
+  // were not on disk (a new build's first boot) compile, shows "Compiling shaders..." on screen.
+  void NoteSkippedDraw();
+
   // Shared shaders
   const AbstractShader* GetScreenQuadVertexShader() const
   {
@@ -141,6 +145,7 @@ private:
   void LoadPipelineUIDCache();
   void ClosePipelineUIDCache();
   void CompileMissingPipelines();
+  size_t GetSpecializedShaderCount() const;
   void QueueUberShaderPipelines();
   bool CompileSharedPipelines();
 
@@ -220,6 +225,10 @@ private:
   std::unique_ptr<AsyncShaderCompiler> m_async_shader_compiler;
   // WaitForPipelineForUid doesn't wait before this (set when a wait ran out).
   std::chrono::steady_clock::time_point m_no_pipeline_wait_until{};
+  // Shaders missing from the disk cache were queued with the UID cache's pipelines
+  // (CompileMissingPipelines) and may not all be compiled yet: NoteSkippedDraw's message.
+  bool m_compiling_missing_shaders = false;
+  std::chrono::steady_clock::time_point m_next_compiling_message{};
 
   // Shared shaders
   std::unique_ptr<AbstractShader> m_screen_quad_vertex_shader;
