@@ -22,7 +22,7 @@ import LinearProgress from "@mui/material/LinearProgress";
 import MenuItem from "@mui/material/MenuItem";
 import Select from "@mui/material/Select";
 import Tooltip from "@mui/material/Tooltip";
-import type { GameHighlights, ReplayHighlights } from "@replays/highlights/types";
+import type { GameHighlights, HighlightPlayer, ReplayHighlights } from "@replays/highlights/types";
 import { CLIP_BEFORE_SECONDS } from "@replays/highlights/types";
 import React, { useEffect, useMemo, useState } from "react";
 
@@ -52,9 +52,25 @@ const sameSide = (game: ReplayHighlights, a: number, b: number) => {
   return team(a) != null && team(a) === team(b);
 };
 
+const named = (p: HighlightPlayer, query: string) =>
+  p.displayName.toLowerCase().includes(query) || p.connectCode.toLowerCase().includes(query);
+
 /** A player of the game has `query` (lower case) in their name or code. */
-const hasPlayer = (game: ReplayHighlights, query: string) =>
-  game.players.some((p) => p.displayName.toLowerCase().includes(query) || p.connectCode.toLowerCase().includes(query));
+const hasPlayer = (game: ReplayHighlights, query: string) => game.players.some((p) => named(p, query));
+
+/**
+ * A player the row shows has `query`: a highlight's attacker and victim (in teams, with their
+ * teammates), an L+R+Z clip's player; not the others in the game (a free-for-all's third player).
+ * (A manual clip's row shows every player: hasPlayer.)
+ */
+const rowHasPlayer = (e: HighlightEntry, query: string) => {
+  const { row, game } = e;
+  if (row.kind === "manual") {
+    return hasPlayer(game, query);
+  }
+  const ports = row.kind === "highlight" ? [row.attackerPort, row.victimPort] : [row.port];
+  return game.players.some((p) => ports.some((port) => sameSide(game, port, p.port)) && named(p, query));
+};
 
 export const AllHighlightsPage = React.memo(() => {
   const { replayService } = useServices();
@@ -111,7 +127,7 @@ export const AllHighlightsPage = React.memo(() => {
 
   const query = search.trim().toLowerCase();
   const entries = useMemo(() => {
-    const all = [...games.values()].filter((g) => !query || hasPlayer(g.highlights, query));
+    const all = [...games.values()];
     let highlights: HighlightEntry[] = all.flatMap((g) =>
       g.highlights.highlights.map((row, i) => ({
         key: `${g.path}#h${i}`,
@@ -163,6 +179,10 @@ export const AllHighlightsPage = React.memo(() => {
     const newest = (a: HighlightEntry, b: HighlightEntry) =>
       (b.date ?? "").localeCompare(a.date ?? "") || a.row.startFrame - b.row.startFrame;
     const score = (e: HighlightEntry) => (e.row.kind === "highlight" ? e.row.score : 0);
+    if (query) {
+      highlights = highlights.filter((e) => rowHasPlayer(e, query));
+      clips = clips.filter((e) => rowHasPlayer(e, query));
+    }
     highlights.sort(sort === "best" ? (a, b) => score(b) - score(a) || newest(a, b) : newest);
     clips.sort(newest);
     return [...highlights, ...clips, ...manual];

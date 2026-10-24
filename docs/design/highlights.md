@@ -224,7 +224,9 @@ arriving) and **Favorites**, the same list of the starred rows only. A row unsta
 stays (hollow) until Favorites is opened again, so the rows under it don't move while playing.
 
 **Search and more sections** (the user, 2026-10-24). Left of the sort, a search box keeps the
-rows of games with a player whose name or code has the text (any case), in every section. Between
+rows showing a player whose name or code has the text (any case), in every section: a highlight's
+attacker and victim (in teams, their teammates too), an L+R+Z clip's player, any player of a manual
+clip (its row shows them all). A free-for-all's third player doesn't bring up A vs B's rows. Between
 All highlights and Favorites the sidebar has **My Highlights** (highlights whose attacker is this
 machine's player: the replay's recorder port, kept in each replay's highlights as `recorderPort`),
 **Opponent Highlights** (attacker not me, nor my teammate in a team battle) and **L+R+Z
