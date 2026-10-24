@@ -4,8 +4,8 @@
  * it; ↑/↓ (or Tab) plays the next one at once, and the only wait (Dolphin's fast-forward to it)
  * shows with its progress. The list played from is the playback Dolphin's "<< < > >>"
  * (highlight_playlist.ts), and the row playing follows them. A click only selects the row (Ctrl+click
- * adds or removes one, Shift+click a range); the selected rows render to video (docs/design/highlights.md
- * §4): Render (w/ Music) or Render (No Music), a file each, or one combo movie of them all.
+ * adds or removes one, Shift+click a range), a double click plays it; the selected rows render to
+ * video (docs/design/highlights.md §4): Render (w/ Music) or Render (No Music), a file each, or one combo movie of them all.
  * `HighlightList` is a replay's (its stats page); `HighlightRows` lists rows of any replays (the
  * Replays > Highlights tab's, all of them). The star at a row's start makes it a favorite
  * (favorites.ts), the Play button at its end plays it. Manual clips (the seek bar's, manual_clips.ts)
@@ -240,8 +240,9 @@ export const HighlightRows = ({
     [playlist, playEntry, sourceId],
   );
 
-  // A click selects the row alone (only its Play button, ↑/↓ and Enter play); Ctrl+click adds or removes
-  // it, Shift+click selects the rows from the last one clicked to it (with Ctrl: as well as those selected).
+  // A click selects the row alone (a double click, its Play button, ↑/↓ and Enter play); Ctrl+click adds
+  // or removes it, Shift+click selects the rows from the last one clicked to it (with Ctrl: as well as
+  // those selected).
   const selectOnly = (index: number) => {
     const key = entries[index]?.key;
     if (key != null) {
@@ -420,6 +421,7 @@ export const HighlightRows = ({
                       ticked.has(entry.key) ? styles.selected : ""
                     } ${row.kind === "manual" ? styles.removable : ""}`}
                     onClick={(e) => clickRow(i, e)}
+                    onDoubleClick={() => void play(i)}
                   >
                     {row.kind === "highlight" ? (
                       <HighlightWho row={row} data={game} players={players} />

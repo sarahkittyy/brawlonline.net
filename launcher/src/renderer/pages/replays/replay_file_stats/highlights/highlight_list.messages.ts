@@ -9,7 +9,8 @@ export const HighlightListMessages = {
   detectionOff: () => "Highlight detection is off (Settings > Clips).",
   noData: () => "This replay has no highlight data (recorded with an older version).",
   couldNotLoad: (error: string) => "Highlights could not be found: {0}",
-  keyHint: () => "↑ ↓ or Tab: the next one · Enter: play · Ctrl or Shift+click: select several · Ctrl+A: select all",
+  keyHint: () =>
+    "↑ ↓ or Tab: the next one · Enter or double click: play · Ctrl or Shift+click: select several · Ctrl+A: select all",
   startingDolphin: () => "Starting the replay...",
   slowStart: () =>
     "Still starting. If the Dolphin window is asking something, answer it there; or close it and try again.",

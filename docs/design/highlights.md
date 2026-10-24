@@ -43,7 +43,8 @@ vs the victim's (teams: the attacker's team vs the victim's), best first, then "
 each a scissors icon and the game's players, X vs Y (as a manual clip's row; not "Clipped by"
 the recorder any more, 2026-10-24, the user: only the recording player's presses are clips, so
 it was always you). A click only selects it (2026-10-24, the user: clicking is for selecting, only
-the Play button starts it); ↑/↓ or Tab/Shift+Tab plays the next one at once; Enter plays the
+the Play button starts it), a double click plays it as the Play button does (2026-10-24, the
+user); ↑/↓ or Tab/Shift+Tab plays the next one at once; Enter plays the
 selected one (Play all went 2026-10-24: the playback Dolphin's list buttons, §3, took its place).
 A row starts with its favorite star and ends with a Play button (as the Replays page's), which plays
 it without touching the selection (2026-10-24, the user).
