@@ -86,6 +86,11 @@ Logs: `run/staging/logs/` (`win-build.log`, `mac-build.log`, `accounts.log`, `mm
   own: its OpenSSH 9.5 stopped passing on a remote command's output after the first chunk and never
   exited, so `mac build` hung after the Mac had finished. `"mac_ssh"` names another `ssh.exe` (its
   `scp` is the one beside it); empty picks Git's, else the one on PATH.
+- Start the staging commands (and the agent board's staging buttons) from the same kind of window
+  each time. A server started from an administrator window can't be stopped from a normal one, so
+  `win build` (which stops it to replace `accounts.exe`/`mm.exe`) says which pid to stop from an
+  administrator PowerShell. `server up` finds a running `accounts.exe`/`mm.exe` from the staging
+  ports when `pids.json` has lost it, and keeps it.
 
 ## Tear down
 

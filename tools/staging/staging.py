@@ -170,12 +170,15 @@ def urls(cfg: dict) -> dict[str, str]:
 
 def pid_alive(pid: int) -> bool:
     if IS_WINDOWS:
-        h = ctypes.windll.kernel32.OpenProcess(0x1000, False, pid)  # QUERY_LIMITED_INFORMATION
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        h = k32.OpenProcess(0x1000, False, pid)  # QUERY_LIMITED_INFORMATION
         if not h:
-            return False
+            # Access denied: it runs, started from an administrator window (an elevated token's
+            # processes only let administrators open them), so it can't be stopped from this one.
+            return ctypes.get_last_error() == 5
         code = ctypes.c_ulong()
-        ok = ctypes.windll.kernel32.GetExitCodeProcess(h, ctypes.byref(code))
-        ctypes.windll.kernel32.CloseHandle(h)
+        ok = k32.GetExitCodeProcess(h, ctypes.byref(code))
+        k32.CloseHandle(h)
         return bool(ok) and code.value == 259  # STILL_ACTIVE
     try:
         os.kill(pid, 0)
@@ -297,8 +300,53 @@ def ensure_database(cfg: dict) -> None:
     die(f"could not create the staging database; see {LOGS / 'postgres.log'}")
 
 
+def process_name(pid: int) -> str | None:
+    """A running process's image name (Windows), also of one this window may not open."""
+    out = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
+                         capture_output=True, text=True).stdout.strip()
+    m = re.match(r'"([^"]+)","(\d+)"', out)
+    return m.group(1) if m and int(m.group(2)) == pid else None
+
+
+def port_owners() -> dict[tuple[str, int], int]:
+    """(TCP|UDP, port) -> the pid listening on it (Windows; netstat shows every user's)."""
+    out = subprocess.run(["netstat", "-ano"], capture_output=True, text=True).stdout
+    owners: dict[tuple[str, int], int] = {}
+    for parts in (line.split() for line in out.splitlines()):
+        if len(parts) < 4 or parts[0] not in ("TCP", "UDP") or not parts[-1].isdigit():
+            continue
+        if parts[0] == "TCP" and parts[3] != "LISTENING":
+            continue
+        port = parts[1].rsplit(":", 1)[-1]
+        if port.isdigit():
+            owners.setdefault((parts[0], int(port)), int(parts[-1]))
+    return owners
+
+
 def load_pids() -> dict[str, int]:
-    return json.loads(PIDS.read_text()) if PIDS.exists() else {}
+    """The staging server's accounts and mm. On Windows, when pids.json has lost a running one (it
+    was started from another window, or a start that failed on its port wrote its own pid over
+    it), the accounts.exe / mm.exe holding the staging port: a build stops it, `server up` keeps
+    it instead of starting a second one that can't bind."""
+    pids = json.loads(PIDS.read_text()) if PIDS.exists() else {}
+    if not IS_WINDOWS or not CONFIG.exists():
+        return pids
+    cfg = load_config()
+    found = dict(pids)
+    owners = None
+    for name, proto, port in (("accounts", "TCP", cfg["accounts_port"]), ("mm", "UDP", cfg["mm_port"])):
+        pid = pids.get(name)
+        if pid and pid_alive(pid) and process_name(pid) == f"{name}.exe":
+            continue
+        owners = port_owners() if owners is None else owners
+        held = owners.get((proto, int(port)))
+        if held and process_name(held) == f"{name}.exe":
+            found[name] = held
+        else:
+            found.pop(name, None)
+    if found != pids:
+        PIDS.write_text(json.dumps(found))
+    return found
 
 
 def spawn_service(name: str, env: dict[str, str]) -> int:
@@ -361,6 +409,14 @@ def server_down(_args: argparse.Namespace | None = None) -> None:
         if pid and pid_alive(pid):
             say(f"stopping {name} ({pid})")
             kill_tree(pid)
+            deadline = time.monotonic() + 5
+            while pid_alive(pid) and time.monotonic() < deadline:
+                time.sleep(0.2)
+            if pid_alive(pid):
+                die(f"could not stop {name} (pid {pid}): it was started from an administrator "
+                    "window (an elevated board or shell) and this one isn't. Stop it from an "
+                    f"administrator PowerShell (Stop-Process -Id {pid} -Force), or run this "
+                    "from the same kind of window that started it.")
     if STAGE.exists():
         PIDS.write_text(json.dumps(pids))
     if (STAGE / "pgdata").exists() and pg_running():
