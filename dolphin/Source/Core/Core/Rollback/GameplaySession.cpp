@@ -784,6 +784,11 @@ struct State
     bool clip_ff = false;
     bool clip_record = false;
     bool clip_recording = false;
+    // The highlights marked on the seek bar (SetPlaybackMarks), and the clicks on them: how many,
+    // and the queue item of the last one.
+    std::vector<PlaybackMark> marks;
+    u64 mark_picks = 0;
+    size_t mark_pick = 0;
     // For the overlay: who played (INFO), the mode and game.
     std::array<std::string, MAX_LOBBY_PLAYERS> names{};
     std::array<u8, MAX_LOBBY_PLAYERS> chars{};
@@ -7219,12 +7224,10 @@ void SetPlaybackBanner(std::string text)
   s.pb.banner = std::move(text);
 }
 
-bool SetPlaybackClip(s64 start, s64 end, bool record)
+// Under s.mutex: a highlight's clip (SetPlaybackClip, a mark's click).
+void StartClip(s64 start, s64 end, bool record)
 {
-  std::lock_guard<std::recursive_timed_mutex> lk(s.mutex);
   auto& pb = s.pb;
-  if (s.mode != Mode::Playback || !pb.file || pb.stopped || pb.live)
-    return false;
   const s64 first = pb.file->first_frame;
   start = std::clamp<s64>(start, first, Replay::MAX_FRAMES);
   pb.clip_start = start;
@@ -7238,8 +7241,24 @@ bool SetPlaybackClip(s64 start, s64 end, bool record)
   pb.seek_to = start;
   ++pb.controls;
   INFO_LOG_FMT(BRAWLBACK, "replay: clip {}-{}{}", start, pb.clip_end, record ? " (rendered)" : "");
+}
+
+bool SetPlaybackClip(s64 start, s64 end, bool record)
+{
+  std::lock_guard<std::recursive_timed_mutex> lk(s.mutex);
+  auto& pb = s.pb;
+  if (s.mode != Mode::Playback || !pb.file || pb.stopped || pb.live)
+    return false;
+  StartClip(start, end, record);
   s_pb_wake.notify_all();
   return true;
+}
+
+void SetPlaybackMarks(std::vector<PlaybackMark> marks)
+{
+  std::lock_guard<std::recursive_timed_mutex> lk(s.mutex);
+  if (s.mode == Mode::Playback && s.pb.file && !s.pb.live)
+    s.pb.marks = std::move(marks);
 }
 
 void PlaybackControl(PlaybackCommand command, double arg)
@@ -7261,6 +7280,18 @@ void PlaybackControl(PlaybackCommand command, double arg)
   }
   switch (command)
   {
+  case PlaybackCommand::PlayHighlight:
+  {
+    // (A clip being rendered is never one of them: the render Dolphin has no marks.)
+    const double i = std::isfinite(arg) ? arg : -1.0;
+    if (i < 0 || i >= static_cast<double>(pb.marks.size()) || pb.clip_record || pb.live)
+      break;
+    const PlaybackMark mark = pb.marks[static_cast<size_t>(i)];
+    StartClip(mark.start, mark.end, false);
+    pb.mark_pick = mark.item;
+    ++pb.mark_picks;
+    break;
+  }
   case PlaybackCommand::GoLive:
     if (!pb.live)
       break;
@@ -7381,6 +7412,9 @@ PlaybackInfo GetPlaybackInfo()
                    info.shown >= info.live_edge - LIVE_NEAR;
   }
   info.banner = s.pb.banner;
+  info.marks = s.pb.marks;
+  info.clip_start = s.pb.clip_end >= 0 ? s.pb.clip_start : -1;
+  info.clip_end = s.pb.clip_end;
   return info;
 }
 
@@ -7476,6 +7510,8 @@ picojson::object PlaybackStatus()
   o["clip_start"] = picojson::value(static_cast<double>(s.pb.clip_start));
   o["clip_end"] = picojson::value(static_cast<double>(s.pb.clip_end));
   o["clip_done"] = picojson::value(s.pb.clip_done);
+  o["highlight_picks"] = picojson::value(static_cast<double>(s.pb.mark_picks));
+  o["highlight_pick"] = picojson::value(static_cast<double>(s.pb.mark_pick));
   o["shown"] = picojson::value(static_cast<double>(
       playback && s.pb.file && s.phase == Phase::Running ? PlaybackShown() : -1));
   o["keyframes"] = picojson::value(static_cast<double>(s.pb_keys->Count()));

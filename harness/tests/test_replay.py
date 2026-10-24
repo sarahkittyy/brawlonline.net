@@ -455,6 +455,24 @@ def test_launcher_comm_file_plays_highlights(backend: OnlineBackend,
     assert st["paused"] and st["clip_done"] and st["shown"] == clips[2][1], st
     assert fs["clipStart"] == clips[2][0] and fs["clipEnd"] == clips[2][1], fs
     v.shot("clip3-end")
+    # The seek bar's marks (a star and a line for each clip of this replay, in the queue's order):
+    # after a seek away from the highlights (the replay just plays), a click on the second one
+    # plays it again in the same match, and the queue goes on from there to its end.
+    assert st["highlight_picks"] == 0, st
+    v.c.call("replay_control", action="seek", arg=early - 300)
+    v.c.call("replay_control", action="play")
+    _wait(lambda: (lambda s: s if not s["seeking"] and s["shown"] > early - 300 else None)(_status(v)),
+          60, "the replay to play on from the seek")
+    st = v.c.call("replay_control", action="highlight", arg=1)
+    assert st["highlight_picks"] == 1 and st["highlight_pick"] == 1, st
+    assert st["clip_start"] == clips[1][0] and st["clip_end"] == clips[1][1], st
+    follow(1, "playing", 120)
+    follow(2, "ended", 300)
+    st = _status(v)
+    assert st["paused"] and st["clip_done"] and st["shown"] == clips[2][1], st
+    # (No such mark: nothing happens.)
+    st = v.c.call("replay_control", action="highlight", arg=3)
+    assert st["highlight_picks"] == 1 and st["paused"], st
     # A new request for the replay already playing: the same match seeks back, plays, pauses.
     request("h2", [(early + 30, early + 60)])
     follow(0, "ended", 60, "h2")

@@ -1720,8 +1720,9 @@ Result CmdReplayComm(const Args& args)
   return Gprb::Replay::Playback::Status();
 }
 
-// replay_control {action: pause|play|toggle|step|back|jump|seek|speed|faster|slower|live, arg}:
-// the playback controls (seconds for jump, a frame for seek, a factor for speed; live: Go live).
+// replay_control {action: pause|play|toggle|step|back|jump|seek|speed|faster|slower|live|highlight,
+// arg}: the playback controls (seconds for jump, a frame for seek, a factor for speed; live: Go
+// live; highlight: a click on the seek bar's mark `arg`).
 Result CmdReplayControl(const Args& args)
 {
   using Gprb::Session::PlaybackCommand;
@@ -1739,7 +1740,7 @@ Result CmdReplayControl(const Args& args)
       {"back", PlaybackCommand::StepBack},      {"jump", PlaybackCommand::Jump},
       {"seek", PlaybackCommand::Seek},          {"speed", PlaybackCommand::Speed},
       {"faster", PlaybackCommand::Faster},      {"slower", PlaybackCommand::Slower},
-      {"live", PlaybackCommand::GoLive},
+      {"live", PlaybackCommand::GoLive},       {"highlight", PlaybackCommand::PlayHighlight},
   };
   for (const auto& [name, command] : COMMANDS)
   {

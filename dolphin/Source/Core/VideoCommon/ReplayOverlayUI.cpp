@@ -29,6 +29,8 @@ Clock::time_point s_mouse_moved{};
 // A drag on the bar: where it would seek (the seek happens on release).
 bool s_dragging = false;
 float s_drag_at = 0;
+// A press on a highlight's mark in the bar: which (-1: none); it plays on release, never seeks.
+int s_mark_held = -1;
 
 constexpr auto SHOW_AFTER_MOUSE = std::chrono::seconds(3);
 
@@ -52,6 +54,19 @@ std::string Players(const Gprb::Session::PlaybackInfo& info)
   }
   return out;
 }
+
+// A highlight's star (the seek bar's marks), its points at radius r around c.
+void Star(ImDrawList* dl, ImVec2 c, float r, ImU32 col)
+{
+  ImVec2 pts[10];
+  for (int i = 0; i < 10; ++i)
+  {
+    const float a = -1.5707964f + i * 0.62831855f;
+    const float k = i % 2 == 0 ? r : r * 0.45f;
+    pts[i] = ImVec2(c.x + std::cos(a) * k, c.y + std::sin(a) * k);
+  }
+  dl->AddConcavePolyFilled(pts, 10, col);
+}
 }  // namespace
 
 void ToggleHidden()
@@ -70,6 +85,7 @@ void Display(float scale)
   if (!info.active)
   {
     s_dragging = false;
+    s_mark_held = -1;
     return;
   }
   const ImGuiIO& io = ImGui::GetIO();
@@ -103,7 +119,7 @@ void Display(float scale)
                          OSD::Color::CYAN);
   }
   // Spectating: also while catching up, buffering, or with something to say (the banner).
-  const bool wanted = info.paused || info.seeking || s_dragging || info.catching_up ||
+  const bool wanted = info.paused || info.seeking || s_dragging || s_mark_held >= 0 || info.catching_up ||
                       info.buffering || !info.banner.empty() || now - s_mouse_moved < SHOW_AFTER_MOUSE;
   if (s_hidden || !wanted)
     return;
@@ -170,10 +186,64 @@ void Display(float scale)
     ImGui::SameLine(width - ImGui::CalcTextSize(time.c_str()).x - ImGui::GetStyle().WindowPadding.x);
     ImGui::TextUnformatted(time.c_str());
 
+    // Spectating: LIVE (red, playing at the live edge) or GO LIVE with how far behind, right of
+    // the bar (End, or a click).
+    std::string live_label;
+    if (live)
+    {
+      const s64 behind = std::max<s64>(info.live_edge - shown, 0) / 60;
+      live_label = info.at_live || behind == 0 ? std::string("LIVE") :
+                                                 fmt::format("GO LIVE  -{} s", behind);
+    }
+    const float live_w =
+        live ? ImGui::CalcTextSize(live_label.c_str()).x + 16.0f * scale + ImGui::GetStyle().ItemSpacing.x : 0.0f;
+
     // Play / pause, left of the bar: a triangle while paused (or held at the end), two bars while
     // playing.
     const float row_h = 24.0f * scale;
     const float bar_h = 14.0f * scale;
+    // Where the bar goes (right of the button, left of Go Live).
+    const float bar_x = ImGui::GetCursorScreenPos().x + row_h + ImGui::GetStyle().ItemSpacing.x;
+    const float bar_w = ImGui::GetContentRegionAvail().x - row_h - ImGui::GetStyle().ItemSpacing.x - live_w;
+    const auto bar_frac = [&](s64 frame) {
+      return std::clamp(static_cast<float>(frame - info.first) / span, 0.0f, 1.0f);
+    };
+
+    // Highlights: each one asked for in this replay is a line on the bar with a star above it; a
+    // click on either plays it from its start (the user, 2026-10-24: a click on the bar leaves the
+    // highlight for the replay, this goes back).
+    const float mark_r = 6.0f * scale;
+    const float mark_grab = 7.0f * scale;
+    const auto mark_at = [&](float x) {
+      int best = -1;
+      float best_d = mark_grab;
+      for (size_t i = 0; i < info.marks.size(); ++i)
+      {
+        const float d = std::abs(bar_x + bar_frac(info.marks[i].start) * bar_w - x);
+        if (d <= best_d)
+        {
+          best = static_cast<int>(i);
+          best_d = d;
+        }
+      }
+      return best;
+    };
+    int mark_hovered = -1;
+    float stars_y = 0;
+    if (!info.marks.empty())
+    {
+      const ImVec2 s0 = ImGui::GetCursorScreenPos();
+      stars_y = s0.y + mark_r;
+      ImGui::SetCursorScreenPos(ImVec2(bar_x, s0.y));
+      if (ImGui::InvisibleButton("##replaymarks", ImVec2(std::max(bar_w, 1.0f), mark_r * 2.0f)))
+      {
+        if (const int m = mark_at(io.MousePos.x); m >= 0)
+          Gprb::Session::PlaybackControl(Gprb::Session::PlaybackCommand::PlayHighlight, m);
+      }
+      if (ImGui::IsItemHovered())
+        mark_hovered = mark_at(io.MousePos.x);
+    }
+
     {
       const ImVec2 b0 = ImGui::GetCursorScreenPos();
       if (ImGui::InvisibleButton("##replayplay", ImVec2(row_h, row_h)))
@@ -201,33 +271,30 @@ void Display(float scale)
       ImGui::SameLine();
     }
 
-    // Spectating: LIVE (red, playing at the live edge) or GO LIVE with how far behind, right of
-    // the bar (End, or a click).
-    std::string live_label;
-    if (live)
-    {
-      const s64 behind = std::max<s64>(info.live_edge - shown, 0) / 60;
-      live_label = info.at_live || behind == 0 ? std::string("LIVE") :
-                                                 fmt::format("GO LIVE  -{} s", behind);
-    }
-    const float live_w =
-        live ? ImGui::CalcTextSize(live_label.c_str()).x + 16.0f * scale + ImGui::GetStyle().ItemSpacing.x : 0.0f;
-
     // The bar: click or drag to seek (the whole row's height takes the click; the bar is drawn
     // in its middle).
     const ImVec2 row0 = ImGui::GetCursorScreenPos();
-    const float bar_w = ImGui::GetContentRegionAvail().x - live_w;
-    ImGui::InvisibleButton("##replayseek", ImVec2(bar_w, row_h));
+    ImGui::InvisibleButton("##replayseek", ImVec2(std::max(bar_w, 1.0f), row_h));
     const ImVec2 p0(row0.x, row0.y + (row_h - bar_h) * 0.5f);
     const bool hovered = ImGui::IsItemHovered();
     const bool active = ImGui::IsItemActive();
     const auto at = [&](float x) { return std::clamp((x - p0.x) / std::max(bar_w, 1.0f), 0.0f, 1.0f); };
-    if (active)
+    if (hovered && !s_dragging && mark_hovered < 0)
+      mark_hovered = mark_at(io.MousePos.x);
+    // A press on a mark's line plays its highlight once released (no drag, no seek).
+    if (ImGui::IsItemActivated())
+      s_mark_held = mark_hovered;
+    if (active && s_mark_held < 0)
     {
       s_dragging = true;
       s_drag_at = at(io.MousePos.x);
     }
-    else if (s_dragging)
+    else if (!active && s_mark_held >= 0)
+    {
+      Gprb::Session::PlaybackControl(Gprb::Session::PlaybackCommand::PlayHighlight, s_mark_held);
+      s_mark_held = -1;
+    }
+    else if (!active && s_dragging)
     {
       s_dragging = false;
       Gprb::Session::PlaybackControl(Gprb::Session::PlaybackCommand::Seek,
@@ -246,7 +313,24 @@ void Display(float scale)
       dl->AddRectFilled(ImVec2(x - 1.0f * scale, p0.y), ImVec2(x + 1.0f * scale, p1.y),
                         IM_COL32(230, 60, 60, 255));
     }
-    if (hovered || s_dragging)
+    for (size_t i = 0; i < info.marks.size(); ++i)
+    {
+      const auto& mark = info.marks[i];
+      const float x = bar_x + bar_frac(mark.start) * bar_w;
+      const bool lit = static_cast<int>(i) == mark_hovered || static_cast<int>(i) == s_mark_held;
+      const bool playing = info.clip_end >= 0 && mark.end == info.clip_end;
+      const ImU32 col = lit ? IM_COL32(255, 230, 120, 255) :
+                        playing ? IM_COL32(255, 200, 50, 255) :
+                                  IM_COL32(255, 200, 50, 200);
+      dl->AddRectFilled(ImVec2(x - 1.0f * scale, stars_y + mark_r * 0.5f), ImVec2(x + 1.0f * scale, p1.y), col);
+      Star(dl, ImVec2(x, stars_y), lit ? mark_r * 1.2f : mark_r, col);
+    }
+    if (mark_hovered >= 0 && !s_dragging)
+    {
+      ImGui::SetTooltip("Play this highlight (%s)",
+                        Clock60(info.marks[mark_hovered].start - info.first).c_str());
+    }
+    else if (hovered || s_dragging)
     {
       const float hx = s_dragging ? s_drag_at : at(io.MousePos.x);
       ImGui::SetTooltip("%s", Clock60(static_cast<s64>(hx * span)).c_str());

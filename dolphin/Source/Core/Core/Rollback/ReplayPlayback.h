@@ -26,6 +26,8 @@
 // its progress on screen. Every replay holds at its last frame. The status adds "highlights",
 // "clipStart", "clipEnd", "seekFrom" (the frame the fast-forward started from; -1 not yet) and the
 // state "seeking" (on the way to the clip's start; "playing" is the clip, "ended" the last one's end).
+// The seek bar marks the clips of the replay playing; a click on one plays it, and the queue goes
+// on from there (`index` changes to it, even after "ended").
 //
 // Ours, `render` (docs/design/highlights.md section 5): highlights as above, written to a video
 // instead of watched: {"mode": "render", "output": "<path>.mp4", "height": 720, "queue": [...]}

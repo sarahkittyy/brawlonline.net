@@ -501,6 +501,19 @@ void SetPlaybackBanner(std::string text);
 // to the pause, are a segment of the video being rendered (ClipRecorder.h). false: no replay is
 // armed.
 bool SetPlaybackClip(s64 start, s64 end, bool record = false);
+// The highlights asked for in the armed replay (ReplayPlayback.h `highlights`, not a render): the
+// overlay marks each on the seek bar (a line, a star above it), and a click on one plays it
+// (PlaybackControl's PlayHighlight with the mark's index: SetPlaybackClip's seek to its start,
+// then play, paused at its end). `item` is its place in the comm file's queue, given back in
+// PlaybackStatus' `highlight_pick` (with `highlight_picks`, a count of the clicks) so that the
+// queue goes on from there. A new replay armed has none.
+struct PlaybackMark
+{
+  s64 start = 0;
+  s64 end = 0;
+  size_t item = 0;
+};
+void SetPlaybackMarks(std::vector<PlaybackMark> marks);
 // Ends a playback (its match ends at the next loop top, and the game then leaves it).
 void StopPlayback();
 // A stopped playback's game is still in its match: the next replay arms once this is false
@@ -543,6 +556,7 @@ enum class PlaybackCommand
   Faster,
   Slower,
   GoLive,  // spectating: catch up to the live edge and play live
+  PlayHighlight,  // the mark `arg` (SetPlaybackMarks) from its start
 };
 void PlaybackControl(PlaybackCommand command, double arg = 0);
 // What the overlay shows (the playback's view, any thread).
@@ -570,6 +584,9 @@ struct PlaybackInfo
   double catch_rate = 0;     // frames run per real frame while catching up (0: not measured yet)
   s64 catch_from = -1;       // the frame the catch-up started from (-1: not running yet)
   std::string banner;
+  // Highlights: the marks on the bar, and the clip playing (-1: none, or its end has run).
+  std::vector<PlaybackMark> marks;
+  s64 clip_start = -1, clip_end = -1;
 };
 PlaybackInfo GetPlaybackInfo();
 

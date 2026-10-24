@@ -57,13 +57,23 @@ to the highlight... 45%", "(2 of 5)") shows. The status file adds `highlights`, 
 `clipEnd`, `seekFrom` and the state `seeking`; the launcher shows it from `PLAYBACK_STATUS` events
 for its own `commandId`.
 
+The playback Dolphin's overlay is the replay one (the same seek bar, buttons and hotkeys): a
+highlight is its replay with a seek to the clip's start and a pause at its end, so a click on the
+bar leaves the highlight and the replay plays on from there. Each highlight asked for in the
+replay playing (one for a row's click; Play all: every one of that replay) is marked on the bar
+with a gold line and a star above it (2026-10-24, the user's request); a click on the star or the
+line plays that highlight again from its start (`Session::SetPlaybackMarks`, `PlaybackCommand::
+PlayHighlight`), and the queue goes on from that one (the list's row follows `index`). The render
+Dolphin has no marks.
+
 Measured here (Qt Dolphin, D3D11, other sessions' harness Dolphins running): a cold start to the
 first highlight's fast-forward ~7 s; the fast-forward 330-680 frames a second (8,160 frames in 12-25
 s); the next highlight of the same replay at once (back: under 0.2 s; forward: from where it is).
 
 Harness: `test_replay.py::test_launcher_comm_file_plays_highlights` (a recorded Direct game; three
-clips back and forth in one match, a new request in the same match, a clip past the end holding at
-the last frame, no checksum differing, one match armed).
+clips back and forth in one match, a seek away and a click on the second clip's mark, then on to
+the third, a new request in the same match, a clip past the end holding at the last frame, no
+checksum differing, one match armed).
 
 ## 4. Rendering, the launcher (2026-10-21)
 

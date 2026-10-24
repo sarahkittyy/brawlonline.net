@@ -110,6 +110,9 @@ constexpr auto WAIT_EXPLAINED_AFTER = std::chrono::seconds(15);
 // started from (-1: not seen yet), for the progress.
 bool s_clip_applied = false;
 s64 s_seek_from = -1;
+// Highlights: the clicks on the seek bar's marks already followed (the session's count, from 0 for
+// each replay armed).
+u64 s_mark_picks = 0;
 // Rendering: the output is open; the clip that ended, its frames still coming (the frame dumper
 // hands them over a frame late; while paused the last one is shown again) since when, and how many
 // had come; clips written.
@@ -249,6 +252,7 @@ void ArmCurrent()
   s_armed = false;
   s_clip_applied = false;
   s_seek_from = -1;
+  s_mark_picks = 0;
   s_needs_play_anyway = false;
   s_mirror_pending = false;
   s_close_at.reset();
@@ -619,12 +623,28 @@ void StepHighlights(const picojson::object& st)
   // (A render whose file is written, or was given up: nothing more to do.)
   if (s_request.render && !s_render_open)
     return;
-  const auto [start, end] = s_request.clips[s_index];
   if (s_render_draining)
   {
     RenderDrain();
     return;
   }
+  // A click on a highlight's mark on the seek bar: the session plays it already, and the queue
+  // goes on from there (the launcher's list follows `index`).
+  if (const s64 picks = get_num("highlight_picks"); picks > static_cast<s64>(s_mark_picks))
+  {
+    s_mark_picks = static_cast<u64>(picks);
+    const s64 item = get_num("highlight_pick");
+    if (!s_request.render && item >= 0 && static_cast<size_t>(item) < s_request.clips.size() &&
+        s_request.paths[item] == s_request.paths[s_index])
+    {
+      s_index = static_cast<size_t>(item);
+      s_clip_applied = true;
+      s_seek_from = -1;
+      s_state = "seeking";
+      return;
+    }
+  }
+  const auto [start, end] = s_request.clips[s_index];
   if (!s_clip_applied)
   {
     s_clip_applied = Session::SetPlaybackClip(start, end, s_request.render);
@@ -633,6 +653,17 @@ void StepHighlights(const picojson::object& st)
     {
       s_state = "waiting";
       return;
+    }
+    // Watched (not rendered): the highlights of this replay asked for, marked on the seek bar.
+    if (!s_request.render)
+    {
+      std::vector<Session::PlaybackMark> marks;
+      for (size_t i = 0; i < s_request.clips.size(); ++i)
+      {
+        if (s_request.paths[i] == s_request.paths[s_index])
+          marks.push_back({s_request.clips[i].first, s_request.clips[i].second, i});
+      }
+      Session::SetPlaybackMarks(std::move(marks));
     }
     // (The session takes it at its next loop top: until then it is on the way there.)
     s_state = get_bool("started") && get_num("shown") >= 0 ? "seeking" : "waiting";
