@@ -39,8 +39,10 @@ looked at again).
 ## 2. The stats page
 
 `replay_file_stats/highlights/highlight_list.tsx`: rows of the attacker's character icon and name
-vs the victim's (teams: the attacker's team vs the victim's), best first, then "Clips (L+R+Z)" with
-who clipped each. A click plays it and selects it; ↑/↓ or Tab/Shift+Tab plays the next one at once; Enter plays the
+vs the victim's (teams: the attacker's team vs the victim's), best first, then "Clips (L+R+Z)",
+each a scissors icon and the game's players, X vs Y (as a manual clip's row; not "Clipped by"
+the recorder any more, 2026-10-24, the user: only the recording player's presses are clips, so
+it was always you). A click plays it and selects it; ↑/↓ or Tab/Shift+Tab plays the next one at once; Enter plays the
 selected one (Play all went 2026-10-24: the playback Dolphin's list buttons, §3, took its place).
 A row starts with its favorite star and ends with a Play button (as the Replays page's), which plays
 it without touching the selection (2026-10-24, the user).

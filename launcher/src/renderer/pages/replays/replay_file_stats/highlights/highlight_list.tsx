@@ -429,8 +429,7 @@ export const HighlightRows = ({
                     ) : (
                       <span className={styles.who}>
                         <ContentCutIcon fontSize="small" className={styles.clipIcon} />
-                        <span className={styles.vs}>{Messages.clippedBy()}</span>
-                        <PlayerChip player={players.get(row.port)} isTeams={game.isTeams} />
+                        <GameWho data={game} />
                       </span>
                     )}
                     {showDates && entry.date && (

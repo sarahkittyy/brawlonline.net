@@ -4,7 +4,6 @@ export const HighlightListMessages = {
   manualClip: (length: string) => "Clip ({0})",
   removeClip: () => "Remove this clip",
   vs: () => "vs",
-  clippedBy: () => "Clipped by",
   finding: () => "Finding highlights...",
   noHighlights: () => "No highlights in this game.",
   detectionOff: () => "Highlight detection is off (Settings > Clips).",
