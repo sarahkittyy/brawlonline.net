@@ -4,6 +4,7 @@
 #pragma once
 
 #include <memory>
+#include <vector>
 
 #include "Common/CommonTypes.h"
 
@@ -36,6 +37,22 @@ enum
 {
   ARAM_SIZE = 0x01000000,  // 16 MB
   ARAM_MASK = 0x00FFFFFF,
+};
+
+// Whole-machine rollback (Core/Rollback/DeltaSaveSlot.cpp): a snapshot's copy of the GameCube's
+// ARAM, outside the savestate. Each chunk of the copy holds the content of one version (see
+// DSPManager::SaveARAMSnapshot); a save or load copies only the chunks whose version differs.
+constexpr u32 ARAM_CHUNK_SHIFT = 12;  // 4 KiB
+constexpr u32 ARAM_CHUNK_COUNT = ARAM_SIZE >> ARAM_CHUNK_SHIFT;
+struct ARAMSnapshot
+{
+  std::unique_ptr<u8[]> data;
+  std::vector<u64> versions;  // per chunk; 0: the copy holds nothing yet
+  void Reset()
+  {
+    data.reset();
+    versions.clear();
+  }
 };
 
 // UDSPControl
@@ -98,6 +115,15 @@ public:
   // Debugger Helper
   u8* GetARAMPtr() const;
   u32 GetARAMSize() const;
+
+  // Whole-machine rollback: ARAM is not in its snapshots' savestate (the rollback DoState skips
+  // it, 16 MiB a save and a load); these keep a snapshot's own copy instead. Both return the bytes
+  // copied. A GameCube only; on the Wii ARAM is MEM2, which the snapshots track themselves.
+  size_t SaveARAMSnapshot(ARAMSnapshot& snapshot);
+  size_t LoadARAMSnapshot(const ARAMSnapshot& snapshot);
+  // Anything writing ARAM other than through WriteARAM and the ARAM DMA (the debugger's memory
+  // view) says so here, or a rollback could keep the old bytes.
+  void MarkARAMWritten(u32 address, u32 size);
 
   void UpdateAudioDMA();
   void UpdateDSPSlice(int cycles);
@@ -169,7 +195,13 @@ private:
     };
   };
 
+  void FlushARAMWrites();
+
   ARAMInfo m_aram;
+  // Per ARAM chunk (GameCube only): written since the last snapshot save or load, and the version
+  // of its content (a new one for each content the snapshots see, never reused).
+  std::vector<u8> m_aram_written;
+  std::vector<u64> m_aram_versions;
   AudioDMA m_audio_dma;
   ARAM_DMA m_aram_dma;
   UDSPControl m_dsp_control;

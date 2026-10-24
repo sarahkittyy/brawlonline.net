@@ -20,6 +20,7 @@
 #include "Common/Logging/Log.h"
 #include "Common/Swap.h"
 #include "Core/CoreTiming.h"
+#include "Core/HW/DSP.h"
 #include "Core/HW/Memmap.h"
 #include "Core/PowerPC/JitInterface.h"
 #include "Core/PowerPC/PowerPC.h"
@@ -1667,6 +1668,7 @@ bool RollbackManager::LoadFrame(Core::System& system, int frames_back)
     if (deltaSave.m_split_video)
       deltaSave.RestoreVideoState();
     EndDoState();
+    m_last_load_aram_bytes = system.GetDSP().LoadARAMSnapshot(deltaSave.m_aram);
     m_last_load_dostate_us = static_cast<u64>(std::chrono::duration_cast<std::chrono::microseconds>(
                                                   std::chrono::steady_clock::now() - dostate_start)
                                                   .count()) -

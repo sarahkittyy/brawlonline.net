@@ -69,6 +69,8 @@ add_dolphin_test(MachineSDCardTest MachineSDCardTest.cpp)
 add_dolphin_test(GCMemcardDirectoryTest GCMemcardDirectoryTest.cpp)
 # A network session's reads of the local controllers (Gprb::ReadHostPad, bug report #70).
 add_dolphin_test(HostPadReadTest Rollback/HostPadReadTest.cpp)
+# A GameCube's ARAM in whole-machine rollback snapshots, outside the savestate (bug report #135).
+add_dolphin_test(ARAMSnapshotTest Rollback/ARAMSnapshotTest.cpp)
 # The rollback job pool (Core/Rollback/job.h) stopped and started again (GitHub issue #3).
 add_dolphin_test(JobPoolTest Rollback/JobPoolTest.cpp)
 # Replay files (Core/Rollback/ReplayFile): round trip, cut and damaged files, hostile sizes.

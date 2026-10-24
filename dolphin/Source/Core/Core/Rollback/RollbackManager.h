@@ -196,6 +196,7 @@ public:
   // granules it restored and, of those, the ones whose bytes it changed, and (whole-machine mode)
   // its JIT step and whether that dropped the restored granules' blocks.
   u64 m_last_load_sync_us = 0, m_last_load_dostate_us = 0, m_last_load_jit_us = 0;
+  u64 m_last_load_aram_bytes = 0;  // a GameCube's ARAM chunks the last load copied back
   u32 m_last_load_granules = 0, m_last_load_changed = 0;
   bool m_last_load_jit_dropped = false;
   mutable std::mutex m_sample_mutex;

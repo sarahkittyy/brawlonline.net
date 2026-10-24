@@ -7,6 +7,7 @@
 #include <cstdint>
 
 #include "Common/Buffer.h"
+#include "Core/HW/DSP.h"
 #include "Core/Rollback/IRollbackSaveSlot.h"
 
 namespace Rollback
@@ -37,6 +38,7 @@ private:
   Common::UniqueBuffer<uint8_t> m_l1_cache_snapshot;
 
   Common::UniqueBuffer<uint8_t> m_save_buffer;
+  DSP::ARAMSnapshot m_aram;  // a GameCube's ARAM, not in m_save_buffer
 
   bool m_has_state = false;
 };

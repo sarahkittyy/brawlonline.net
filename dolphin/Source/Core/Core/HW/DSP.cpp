@@ -23,6 +23,9 @@
 
 #include "Core/HW/DSP.h"
 
+#include <algorithm>
+#include <cstdlib>
+#include <cstring>
 #include <memory>
 
 #include "AudioCommon/AudioCommon.h"
@@ -38,6 +41,7 @@
 #include "Core/HW/Memmap.h"
 #include "Core/HW/ProcessorInterface.h"
 #include "Core/PowerPC/PowerPC.h"
+#include "Core/Rollback/RollbackManager.h"
 #include "Core/System.h"
 
 namespace DSP
@@ -76,10 +80,32 @@ DSPManager::~DSPManager() = default;
 // time given to LLE DSP on every read of the high bits in a mailbox
 constexpr int DSP_MAIL_SLICE = 72;
 
+// PPR_MACHINE_ARAM_IN_STATE=1: rollback snapshots keep ARAM in their savestate, all 16 MiB in each
+// save and load, as before bug report #135 (A/B).
+static bool ARAMInRollbackState()
+{
+  static const bool on = [] {
+    const char* e = std::getenv("PPR_MACHINE_ARAM_IN_STATE");
+    return e && *e == '1';
+  }();
+  return on;
+}
+
+// The version of each content an ARAM chunk has had since Dolphin started, also across boots:
+// a snapshot's copy outlives the DSPManager's ARAM.
+static u64 s_aram_next_version = 1;
+
 void DSPManager::DoState(PointerWrap& p)
 {
-  if (!m_aram.wii_mode)
+  // A rollback snapshot (RollbackManager::BeginDoState) keeps ARAM itself (SaveARAMSnapshot).
+  const bool rollback =
+      Rollback::RollbackManager::Get().m_skip_ram_in_dostate.load(std::memory_order_seq_cst);
+  if (!m_aram.wii_mode && (!rollback || ARAMInRollbackState()))
+  {
     p.DoArray(m_aram.ptr, m_aram.size);
+    if (p.IsReadMode())
+      MarkARAMWritten(0, m_aram.size);
+  }
   p.Do(m_dsp_control);
   p.Do(m_audio_dma);
   p.Do(m_aram_dma);
@@ -128,6 +154,8 @@ void DSPManager::Reinit(bool hle)
     m_aram.size = memory.GetExRamSizeReal();
     m_aram.mask = memory.GetExRamMask();
     m_aram.ptr = memory.GetEXRAM();
+    m_aram_written.clear();
+    m_aram_versions.clear();
   }
   else
   {
@@ -136,6 +164,8 @@ void DSPManager::Reinit(bool hle)
     m_aram.size = ARAM_SIZE;
     m_aram.mask = ARAM_MASK;
     m_aram.ptr = static_cast<u8*>(Common::AllocateMemoryPages(m_aram.size));
+    m_aram_written.assign(ARAM_CHUNK_COUNT, 1);
+    m_aram_versions.assign(ARAM_CHUNK_COUNT, 0);
   }
 
   m_audio_dma = {};
@@ -155,6 +185,8 @@ void DSPManager::Shutdown()
   {
     Common::FreeMemoryPages(m_aram.ptr, m_aram.size);
     m_aram.ptr = nullptr;
+    m_aram_written.clear();
+    m_aram_versions.clear();
   }
 
   m_dsp_emulator->Shutdown();
@@ -540,6 +572,8 @@ void DSPManager::Do_ARAM_DMA()
     {
       while (m_aram_dma.Cnt.count)
       {
+        if (!m_aram_written.empty())
+          m_aram_written[(m_aram_dma.ARAddr & m_aram.mask) >> ARAM_CHUNK_SHIFT] = 1;
         if ((m_aram_info.Hex & 0xf) == 3)
         {
           *(u64*)&m_aram.ptr[m_aram_dma.ARAddr & m_aram.mask] =
@@ -549,6 +583,8 @@ void DSPManager::Do_ARAM_DMA()
         {
           if (m_aram_dma.ARAddr < 0x400000)
           {
+            if (!m_aram_written.empty())
+              m_aram_written[((m_aram_dma.ARAddr + 0x400000) & m_aram.mask) >> ARAM_CHUNK_SHIFT] = 1;
             *(u64*)&m_aram.ptr[(m_aram_dma.ARAddr + 0x400000) & m_aram.mask] =
                 Common::swap64(memory.Read_U64(m_aram_dma.MMAddr));
           }
@@ -614,6 +650,92 @@ void DSPManager::WriteARAM(u8 value, u32 address)
 {
   // TODO: verify this on Wii
   m_aram.ptr[address & m_aram.mask] = value;
+  if (!m_aram_written.empty())
+    m_aram_written[(address & m_aram.mask) >> ARAM_CHUNK_SHIFT] = 1;
+}
+
+void DSPManager::MarkARAMWritten(u32 address, u32 size)
+{
+  if (m_aram_written.empty() || size == 0)
+    return;
+  if (size >= m_aram.size)
+  {
+    std::fill(m_aram_written.begin(), m_aram_written.end(), u8{1});
+    return;
+  }
+  // ARAM addresses wrap at its size.
+  const u32 first = (address & m_aram.mask) >> ARAM_CHUNK_SHIFT;
+  const u32 last = ((address + size - 1) & m_aram.mask) >> ARAM_CHUNK_SHIFT;
+  for (u32 c = first;; c = (c + 1) % ARAM_CHUNK_COUNT)
+  {
+    m_aram_written[c] = 1;
+    if (c == last)
+      break;
+  }
+}
+
+// Each chunk written since the last save or load has new content: give it a new version.
+void DSPManager::FlushARAMWrites()
+{
+  for (u32 c = 0; c < ARAM_CHUNK_COUNT; ++c)
+  {
+    if (m_aram_written[c])
+    {
+      m_aram_versions[c] = s_aram_next_version++;
+      m_aram_written[c] = 0;
+    }
+  }
+}
+
+// A version names one content of one chunk: two copies with the same version hold the same bytes.
+// So a save copies the chunks whose content changed since the snapshot's copy was last brought up
+// to date (usually written in the last few frames), and a load the chunks that differ from it.
+size_t DSPManager::SaveARAMSnapshot(ARAMSnapshot& snapshot)
+{
+  if (m_aram.wii_mode || m_aram_versions.empty() || ARAMInRollbackState())
+    return 0;
+  FlushARAMWrites();
+  if (!snapshot.data)
+  {
+    snapshot.data = std::make_unique<u8[]>(ARAM_SIZE);
+    snapshot.versions.assign(ARAM_CHUNK_COUNT, 0);
+  }
+  constexpr u32 chunk_size = 1u << ARAM_CHUNK_SHIFT;
+  size_t copied = 0;
+  for (u32 c = 0; c < ARAM_CHUNK_COUNT; ++c)
+  {
+    if (snapshot.versions[c] == m_aram_versions[c])
+      continue;
+    std::memcpy(snapshot.data.get() + static_cast<size_t>(c) * chunk_size,
+                m_aram.ptr + static_cast<size_t>(c) * chunk_size, chunk_size);
+    snapshot.versions[c] = m_aram_versions[c];
+    copied += chunk_size;
+  }
+  return copied;
+}
+
+size_t DSPManager::LoadARAMSnapshot(const ARAMSnapshot& snapshot)
+{
+  if (m_aram.wii_mode || m_aram_versions.empty() || ARAMInRollbackState())
+    return 0;
+  if (!snapshot.data)
+  {
+    ERROR_LOG_FMT(DSPINTERFACE, "Rollback: the snapshot has no ARAM; ARAM not restored");
+    return 0;
+  }
+  FlushARAMWrites();
+  constexpr u32 chunk_size = 1u << ARAM_CHUNK_SHIFT;
+  size_t copied = 0;
+  for (u32 c = 0; c < ARAM_CHUNK_COUNT; ++c)
+  {
+    if (snapshot.versions[c] == m_aram_versions[c])
+      continue;
+    std::memcpy(m_aram.ptr + static_cast<size_t>(c) * chunk_size,
+                snapshot.data.get() + static_cast<size_t>(c) * chunk_size, chunk_size);
+    m_aram_versions[c] = snapshot.versions[c];
+    copied += chunk_size;
+  }
+  return copied;
 }
 
 u8* DSPManager::GetARAMPtr() const
