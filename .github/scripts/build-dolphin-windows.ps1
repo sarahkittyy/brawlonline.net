@@ -47,14 +47,27 @@ New-Item -ItemType Directory -Force $Out | Out-Null
 Get-ChildItem $bin | Where-Object {
   $_.Name -notin @("Tests", "Updater.exe", "DolphinNoGUI.exe", "portable.txt") -and $_.Extension -notin @(".pdb", ".ilk", ".exp", ".lib")
 } | Copy-Item -Destination $Out -Recurse
-# The Visual C++ runtime (msvcp140.dll, vcruntime140.dll, ...) beside Dolphin.exe, from the toolset
-# that built it: Dolphin and Qt link it as DLLs, and Windows doesn't come with it, so without it
-# Dolphin doesn't start (exit 0xC0000135, "Required DLLs for launching Dolphin are missing").
+# The Visual C++ runtime DLLs Dolphin, Qt and the runtime itself import (msvcp140.dll,
+# vcruntime140.dll, ...; 6 of the 10), beside Dolphin.exe, from the toolset that built it: Windows
+# doesn't come with them, so without them Dolphin doesn't start (exit 0xC0000135, "Required DLLs for
+# launching Dolphin are missing"), and an older installed runtime than the toolset may not work.
 $crt = Get-ChildItem (Join-Path $env:VCToolsRedistDir "x64") -Directory -Filter "Microsoft.VC*.CRT" |
   Sort-Object Name | Select-Object -Last 1
 if (-not $crt) { throw "the Visual C++ runtime was not found in $env:VCToolsRedistDir" }
-Write-Host "Visual C++ runtime: $($crt.FullName)"
-Copy-Item (Join-Path $crt.FullName "*.dll") $Out
+$scan = @(Get-ChildItem $Out -Recurse -File -Include *.exe, *.dll)
+while ($scan.Count) {
+  $names = $scan | ForEach-Object { & dumpbin /nologo /dependents $_.FullName } |
+    Where-Object { $_ -match '^\s+((msvcp|vcruntime|concrt|vccorlib)140[\w]*\.dll)\s*$' } | ForEach-Object { $Matches[1] }
+  $scan = @()
+  foreach ($name in ($names | Sort-Object -Unique)) {
+    if (Test-Path (Join-Path $Out $name)) { continue }
+    $dll = Get-ChildItem $crt.FullName -Filter $name   # the file's own name (imports are upper case)
+    if (-not $dll) { throw "$name is imported but not in $($crt.FullName)" }
+    Copy-Item $dll.FullName $Out
+    $scan += Get-Item (Join-Path $Out $dll.Name)
+  }
+}
+Write-Host "Visual C++ runtime from $($crt.FullName): $((Get-ChildItem $Out -Filter *140*.dll).Name -join ', ')"
 if (-not (Test-Path (Join-Path $Out "COPYING"))) { Copy-Item (Join-Path $src "COPYING") $Out }
 if (-not (Test-Path (Join-Path $Out "Licenses"))) { Copy-Item -Recurse (Join-Path $src "LICENSES") (Join-Path $Out "Licenses") }
 

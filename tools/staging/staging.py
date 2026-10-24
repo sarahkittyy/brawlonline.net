@@ -46,6 +46,7 @@ import secrets
 import shlex
 import shutil
 import socket
+import struct
 import subprocess
 import sys
 import tarfile
@@ -612,6 +613,48 @@ def vc_runtime_dir(build_dir: Path) -> Path:
     return crt[-1]
 
 
+def pe_imports(path: Path) -> list[str]:
+    """The DLLs a PE file imports at load time (its import directory's names)."""
+    data = path.read_bytes()
+    pe = struct.unpack_from("<I", data, 0x3C)[0]
+    sections, optional_size = struct.unpack_from("<H", data, pe + 6)[0], struct.unpack_from("<H", data, pe + 20)[0]
+    optional = pe + 24
+    dirs = optional + (112 if struct.unpack_from("<H", data, optional)[0] == 0x20B else 96)
+    rva = struct.unpack_from("<I", data, dirs + 8)[0]
+    # (virtual size, virtual address, raw size, raw offset) of each section
+    table = [struct.unpack_from("<IIII", data, optional + optional_size + i * 40 + 8) for i in range(sections)]
+
+    def offset(r: int) -> int | None:
+        for vsize, va, raw_size, raw in table:
+            if va <= r < va + max(vsize, raw_size):
+                return r - va + raw
+        return None
+
+    names, at = [], offset(rva) if rva else None
+    while at is not None and (name_rva := struct.unpack_from("<I", data, at + 12)[0]):
+        if (o := offset(name_rva)) is not None:
+            names.append(data[o:data.index(0, o)].decode("latin-1"))
+        at += 20
+    return names
+
+
+def copy_vc_runtime(out: Path, crt: Path) -> None:
+    """build-dolphin-windows.ps1's runtime step: the runtime DLLs the bundle (and they) import."""
+    scan = [p for p in out.rglob("*") if p.suffix.lower() in (".exe", ".dll")]
+    while scan:
+        names = {n for p in scan for n in pe_imports(p)
+                 if re.fullmatch(r"(msvcp|vcruntime|concrt|vccorlib)140\w*\.dll", n, re.I)}
+        scan = []
+        for name in sorted(names):
+            if (out / name).exists():
+                continue
+            src = next((f for f in crt.iterdir() if f.name.lower() == name.lower()), None)
+            if not src:
+                die(f"{name} is imported but not in {crt}")
+            shutil.copy2(src, out / src.name)
+            scan.append(out / src.name)
+
+
 def win_build(args: argparse.Namespace) -> None:
     if not IS_WINDOWS:
         die("`win build` runs on Windows")
@@ -686,8 +729,7 @@ def stage_windows_dolphin(binaries: Path, out: Path, dsrc: Path, sha: str, log: 
         if p.name in skip_names or p.suffix in (".pdb", ".ilk", ".exp", ".lib"):
             continue
         (shutil.copytree if p.is_dir() else shutil.copy2)(p, out / p.name)
-    for dll in crt.glob("*.dll"):
-        shutil.copy2(dll, out / dll.name)
+    copy_vc_runtime(out, crt)
     if not (out / "COPYING").exists():
         shutil.copy2(dsrc / "COPYING", out / "COPYING")
     if not (out / "Licenses").exists():
