@@ -121,4 +121,15 @@ ChosenNetwork GetChosenNetwork()
   return n;
 }
 
+ChosenNetwork GetChosenNetwork(const std::string& internet_address)
+{
+  ChosenNetwork n = GetChosenNetwork();
+  if (n.mask != 0 && n.address == internet_address)
+  {
+    n.network = 0;
+    n.mask = 0;
+  }
+  return n;
+}
+
 }  // namespace Config

@@ -110,6 +110,11 @@ struct ChosenNetwork
   bool Contains(const std::string& ip) const;
 };
 ChosenNetwork GetChosenNetwork();
+// The same, with no network (mask 0) when its address is `internet_address`, this PC's address on
+// the adapter toward the internet: that is the home LAN, numbered as many other homes' are
+// (10.0.0.0/24, 192.168.1.0/24), and another home's LAN address on it would be dialled here, where
+// nobody answers (bug report #133). The address is still the one to report.
+ChosenNetwork GetChosenNetwork(const std::string& internet_address);
 // "a.b.c.d" -> the address as a number (a in the top byte), nullopt for anything else.
 std::optional<u32> ParseIpv4(const std::string& text);
 }  // namespace Config

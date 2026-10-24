@@ -807,7 +807,22 @@ void Matchmaking::StartMatchmaking()
   m_chosen_network = Config::GetChosenNetwork();
   if (Config::Get(Config::ONLINE_FORCE_LAN_IP))
   {
+    bool home_lan = false;
     if (m_chosen_network.mask != 0)
+    {
+      // The adapter toward the internet (the home LAN) chosen: as Automatic (bug report #133).
+      const enet_uint32 internet = GetLocalAddress(&addr);
+      m_chosen_network = Config::GetChosenNetwork(internet ? IpToString(internet) : std::string());
+      home_lan = m_chosen_network.mask == 0;
+    }
+    if (home_lan)
+    {
+      INFO_LOG_FMT(NETPLAY,
+                   "[Matchmaking] Network chosen in the launcher: {}, the adapter toward the "
+                   "internet: players are reached as with Automatic",
+                   Config::Get(Config::ONLINE_LAN_IP));
+    }
+    else if (m_chosen_network.mask != 0)
     {
       INFO_LOG_FMT(NETPLAY,
                    "[Matchmaking] Network chosen in the launcher: {} (Direct and room players on "

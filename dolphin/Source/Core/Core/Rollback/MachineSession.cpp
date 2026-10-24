@@ -436,6 +436,9 @@ struct State
   std::string join_refused_why;
   // A room session (Options::room): the room's members arrived (SetRoom).
   bool room_known = false;
+  // The network chosen in the launcher whose members are reached at their LAN address, from the
+  // room's first state (SetRoom): none when it is the home LAN (Config::GetChosenNetwork).
+  Config::ChosenNetwork room_network;
   // The endpoint probe to mm (ProbeEndpoint), on the session's socket.
   struct Probe
   {
@@ -6517,6 +6520,7 @@ bool Arm(const Options& options, std::string* error)
     s.epoch_go.reset();
     s.join_refused = false;
     s.room_known = false;
+    s.room_network = {};
     s.probe = {};
     s.image_rx = {};
     s.image_tx.clear();
@@ -6690,7 +6694,20 @@ void SetRoom(int local_slot, const std::vector<RoomMember>& members)
     s.opts.local_slot = local_slot;
   }
   if (!s.room_known)
+  {
     AddLog(fmt::format("room: this player is in slot {}", local_slot + 1));
+    // The adapter toward the internet: the one a UDP "connect" to a public address picks.
+    ENetAddress internet{};
+    enet_address_set_host_ip(&internet, "1.1.1.1");
+    internet.port = 53;
+    s.room_network = Config::GetChosenNetwork(LanHost(internet));
+    if (s.room_network.mask == 0 && Config::GetChosenNetwork().mask != 0)
+    {
+      AddLog(fmt::format("the network chosen in the launcher ({}) is the one toward the internet: "
+                         "players are reached as with Automatic",
+                         Config::GetChosenNetwork().address));
+    }
+  }
   s.room_known = true;
   std::array<const RoomMember*, MAX_PLAYERS> by_slot{};
   for (const RoomMember& m : members)
@@ -6773,10 +6790,10 @@ void SetRoom(int local_slot, const std::vector<RoomMember>& members)
     }
     p.name = m->name;
     // Its address: on this player's network (the same public address) or on the network chosen
-    // in the launcher (a VPN such as ZeroTier, Config::GetChosenNetwork), its LAN one.
+    // in the launcher (a VPN such as ZeroTier, room_network), its LAN one.
     const bool same_net =
         (self && !self->host.empty() && self->host == m->host && !m->lan_host.empty()) ||
-        Config::GetChosenNetwork().Contains(m->lan_host);
+        s.room_network.Contains(m->lan_host);
     const std::string& host = same_net ? m->lan_host : m->host;
     const u16 port = same_net ? m->lan_port : m->port;
     if (host != p.host || port != p.port)
