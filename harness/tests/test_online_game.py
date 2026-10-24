@@ -34,7 +34,7 @@ from ppharness import paths
 from ppharness.backend import OnlineBackend, OnlineUser
 from ppharness.client import HarnessClient, PadInput
 from ppharness.instance import DolphinInstance, InstanceConfig
-from ppharness.netsim import LinkProfile, NetSim
+from ppharness.netsim import LinkProfile, NetSim, Spike
 
 from test_online import _logged_in, _make_backend, _wait
 
@@ -935,6 +935,51 @@ def test_direct_match_on_a_path_that_drops_ip_fragments(backend: OnlineBackend,
             (g.inst.user_dir / "Logs" / "dolphin.log").read_text(errors="replace"))]
         print(split)
         assert split, "no state message was split"
+        for g in (a, b):
+            g.c.mm_cancel()
+    finally:
+        for sim in sims:
+            sim.stop()
+
+
+_PEER_WAIT = re.compile(r"gprb: waited (\d+) ms at frame (\d+) for the other players' inputs; "
+                        r"nothing came for up to: P(\d) (\S*) (\d+) ms")
+
+
+def test_a_wait_for_inputs_names_the_silent_player(backend: OnlineBackend,
+                                                   dolphin: Callable[..., DolphinInstance],
+                                                   gpu_backend: str) -> None:
+    """Bug report #126: three players' games froze together for 5.5 s near the end of a game,
+    each one waiting for the others' inputs, and no log said whose packets had stopped. A wait
+    of 500 ms or more now logs how long each other player sent nothing. Here a's packets to b
+    are dropped for 3 s mid-match (b's still reach a): b waits on a silent a (the whole outage);
+    a waits too, once b stops advancing, but b's packets keep coming, so a's line has b silent
+    for only a fraction of it. The match plays on afterwards."""
+    sims, inis = _p2p_through_netsim(LinkProfile())
+    try:
+        a, b, _, _ = _connected_direct(backend, dolphin, gpu_backend, "gameplay-wait-names",
+                                       ("ruth", "saul"), dolphin_ini=inis)
+        online_set.wait(lambda: all(online_set.gstatus(g.c)["phase"] == "running"
+                                    for g in (a, b)), 120, "the match to run on both")
+        a.steps("wait 300")
+        # NetSim's "up" is its client's (a's) packets to b.
+        sims[0].add_spike(Spike(at=sims[0].elapsed() + 0.2, duration=3.0, loss=1.0, direction="up"))
+        time.sleep(3.2)
+        a.steps("wait 300")
+        assert all(online_set.gstatus(g.c)["phase"] == "running" for g in (a, b))
+
+        def waits(g: Game) -> list[tuple[int, int, int]]:
+            text = (g.inst.user_dir / "Logs" / "dolphin.log").read_text(errors="replace")
+            return [(int(m[1]), int(m[3]), int(m[5])) for m in _PEER_WAIT.finditer(text)]
+
+        wa, wb = waits(a), waits(b)
+        print("a:", wa, "\nb:", wb, "\n", sims[0].format_stats())
+        # b: about 3 s of waits (2 s at most each), a silent for most of them.
+        assert sum(ms for ms, _, _ in wb) > 2500, wb
+        assert max(silent for _, _, silent in wb) > 2500, wb
+        # a: waited as well, while b was not silent for long.
+        assert sum(ms for ms, _, _ in wa) > 1500, wa
+        assert max(silent for _, _, silent in wa) < 1000, wa
         for g in (a, b):
             g.c.mm_cancel()
     finally:

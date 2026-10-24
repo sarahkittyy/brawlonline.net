@@ -246,6 +246,9 @@ struct PeerView
   std::vector<u8> init_block;
   s64 init_match = -1;
   Clock::time_point last_heard{};
+  // Its last datagram of any kind (control, ping or GekkoNet's, these about every frame in a
+  // match): a long wait for the other players' inputs logs how long each was silent.
+  Clock::time_point last_packet{};
   double rtt_ms = -1;
   bool oversize_logged = false;  // a control message over MAX_CONTROL_SIZE came from it
   // Its PC is falling behind (its own check, UpdateSlowNotice): its frame rate, 0 if not; and
@@ -2851,6 +2854,8 @@ void NetThread()
           slot = SlotOf(*from, from_port);
           if (slot >= 0 && s.peers[slot].left)
             slot = -1;
+          if (slot >= 0)
+            s.peers[slot].last_packet = Clock::now();
           if (slot < 0 && buf[0] != 'C' && buf[0] != 'F')
             ++s.foreign_packets;
         }
@@ -6197,6 +6202,40 @@ PlaybackStep PlaybackLoopTopControls(Core::System& system)
   return PlaybackStep::Run;
 }
 
+// A wait for the other players' inputs this long is logged with how long each was silent (bug
+// report #126: three players froze 5.5 s together, each waiting, and no log said whose packets
+// had stopped). A player whose own link drops sees every other player silent; the others see
+// only that one. A player whose game stopped while its link did not still sends its state
+// messages (at least every STATE_KEEPALIVE, from its network thread): silent up to about that.
+constexpr double LOGGED_PEER_WAIT_MS = 500;
+
+// Each other player's longest time without a datagram so far in a wait.
+void NotePeerSilence(std::array<double, MAX_LOBBY_PLAYERS>* silent_ms)
+{
+  const auto now = Clock::now();
+  ForEachPeer([&](int slot, const PeerView& p) {
+    if (p.last_packet == Clock::time_point{})
+      return;
+    auto& m = (*silent_ms)[slot];
+    m = std::max(m, std::chrono::duration<double, std::milli>(now - p.last_packet).count());
+  });
+}
+
+void LogPeerWait(double ms, const std::array<double, MAX_LOBBY_PLAYERS>& silent_ms)
+{
+  std::string peers;
+  ForEachPeer([&](int slot, const PeerView& p) {
+    if (p.left)
+      return;
+    peers += fmt::format("{}P{} {} {:.0f} ms", peers.empty() ? "" : ", ", slot + 1, p.name,
+                         silent_ms[slot]);
+  });
+  WARN_LOG_FMT(BRAWLBACK,
+               "gprb: waited {:.0f} ms at frame {} for the other players' inputs; nothing came "
+               "for up to: {}",
+               ms, s.current_frame, peers);
+}
+
 bool RunFrame(const Core::CPUThreadGuard& guard)
 {
   CostPassEnd();
@@ -6299,9 +6338,11 @@ bool RunFrame(const Core::CPUThreadGuard& guard)
     {
       // The peer is behind: wait on the host, polling GekkoNet, instead of spinning guest code.
       const auto wait_t0 = Clock::now();
+      std::array<double, MAX_LOBBY_PLAYERS> silent_ms{};
       HostWait(
           system,
           [&] {
+            NotePeerSilence(&silent_ms);
             if (!HandleGekkoFrame(system))
               return true;
             return s.ops.adv_count > 0;
@@ -6312,6 +6353,8 @@ bool RunFrame(const Core::CPUThreadGuard& guard)
       ++s.net_window.stalls;
       s.net_window.stall_ms += ms;
       s.net_window.stall_ms_max = std::max(s.net_window.stall_ms_max, ms);
+      if (ms >= LOGGED_PEER_WAIT_MS)
+        LogPeerWait(ms, silent_ms);
     }
     UpdateTimeSync(system);
     UpdateSlowNotice();
