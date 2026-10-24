@@ -9,16 +9,18 @@
   width: 100%;
 }
 
+/* Stays at the top as the rows scroll under it (the body's background over them). */
 .header {
+  position: sticky;
+  top: 0;
+  z-index: 2;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  margin-bottom: 12px;
-}
-
-.title {
-  margin: 0;
-  font-size: 22px;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: -20px -20px 12px;
+  padding: 14px 20px 10px;
+  background: var(--surface-0);
 }
 
 .section {
@@ -35,49 +37,16 @@
   flex-direction: column;
 }
 
-.rowLine {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.tick {
-  padding: 4px;
-}
-
 .renderBar {
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
   gap: 8px;
-  margin-bottom: 10px;
-}
-
-.renderCount {
-  flex: 1;
-  font-size: 13px;
-  opacity: 0.75;
+  margin-left: auto;
 }
 
 .combo {
-  margin-right: 4px;
-}
-
-.renderToggle {
-  margin-right: 4px;
-}
-
-.renderToggleLabel {
-  font-size: 13px;
-  font-weight: 600;
-}
-
-.selectAll {
-  margin-left: 6px;
-  padding: 0 6px;
-  min-width: 0;
-  font-size: 12px;
-  text-transform: none;
+  margin-right: 0;
+  white-space: nowrap;
 }
 
 .headerActions {
@@ -173,22 +142,33 @@
   min-width: 0;
 }
 
-/* Room on the right for the star (.star). */
+/* Room on the left for the star (.star), on the right for Play (.play). */
 .rowBox .row {
-  padding-right: 44px;
+  padding-left: 46px;
+  padding-right: 52px;
 }
 
-/* A manual clip's row: room for its remove button too (.remove, left of the star). */
+/* A manual clip's row: room for its remove button too (.remove, left of Play). */
 .rowBox .row.removable {
-  padding-right: 80px;
+  padding-right: 88px;
 }
 
 .rowBox .remove {
   position: absolute;
   top: 50%;
-  right: 44px;
+  right: 50px;
   transform: translateY(-50%);
   color: rgb(255 255 255 / 45%);
+}
+
+/* As the Replays page's play button. */
+.rowBox .play {
+  position: absolute;
+  top: 50%;
+  right: 8px;
+  padding: 5px;
+  transform: translateY(-50%);
+  color: var(--accent-primary-dark);
 }
 
 .rowBox .remove:hover {
@@ -199,7 +179,7 @@
 .rowBox .star {
   position: absolute;
   top: 50%;
-  right: 8px;
+  left: 8px;
   transform: translateY(-50%);
   color: rgb(255 255 255 / 45%);
 }
@@ -226,14 +206,10 @@
   background: rgb(180 130 176 / 18%);
 }
 
-.playIcon {
-  display: flex;
-  opacity: 0.5;
-}
-
-.playing .playIcon {
-  opacity: 1;
-  color: var(--accent-primary);
+/* Selected (to render): a brighter outline. */
+.row.selected {
+  border-color: var(--off-white);
+  box-shadow: 0 0 0 1px var(--off-white);
 }
 
 .who {

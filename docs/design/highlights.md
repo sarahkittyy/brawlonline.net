@@ -40,8 +40,10 @@ looked at again).
 
 `replay_file_stats/highlights/highlight_list.tsx`: rows of the attacker's character icon and name
 vs the victim's (teams: the attacker's team vs the victim's), best first, then "Clips (L+R+Z)" with
-who clipped each. A click plays it; ↑/↓ or Tab/Shift+Tab plays the next one at once; Enter plays the
+who clipped each. A click plays it and selects it; ↑/↓ or Tab/Shift+Tab plays the next one at once; Enter plays the
 selected one (Play all went 2026-10-24: the playback Dolphin's list buttons, §3, took its place).
+A row starts with its favorite star and ends with a Play button (as the Replays page's), which plays
+it without touching the selection (2026-10-24, the user).
 The row playing is shown selected, and follows the playback Dolphin's buttons and stars. A banner
 says what the playback Dolphin does:
 starting, loading the replay, **fast-forwarding to the highlight (frame N / target, a progress
@@ -121,10 +123,13 @@ the list's stars, count, picks, nav requests and updates). Launcher: `highlight_
 
 ## 4. Rendering, the launcher (2026-10-21)
 
-Above the rows: **Render as Video** (a tick box; the user's wording, 2026-10-21). Ticked, every row
-gets a tick box ("N selected", Select all / Select none) and **One combo movie** can be ticked;
-untick it and the rows' ticks go. **Render (w/ Music)** and **Render (No Music)** render the
-ticked rows, a video each, or with One combo movie one video, in the list's order. No Dolphin window opens: under the buttons each job
+Above the rows, one line that stays as the rows scroll (2026-10-24, the user: no "Highlights"
+title, no Render as Video tick box): the Highlights tab's search and sort, then **One combo movie**,
+**Render (w/ Music)** and **Render (No Music)**, enabled once a row is selected. A click selects
+a row (and plays it), shown with a brighter outline; Ctrl+click adds or removes one, Shift+click
+selects a range from the last one clicked (Ctrl+Shift adds it), neither playing; Ctrl+A selects
+all. The render buttons render the selected rows, a video each, or with One combo movie one video,
+in the list's order; queued, the selection clears. No Dolphin window opens: under the buttons each job
 shows its name, w/ Music or No Music, "Waiting", "Starting...", "Rendering 45%" (a combo: "Clip 2 of
 5 · 45%") with a bar and **Cancel**, then "Saved" with **Show in folder**, or "Couldn't render it:
 <why>". Jobs belong to the launcher run (main keeps them; the page shows this replay's, a cancelled
@@ -245,8 +250,8 @@ stats page's header no longer shows the platform ("Brawlonline" on every one of 
 
 The Highlights tab (`all_highlights_page.tsx`) lists every replay's highlights, then the L+R+Z
 clips, each row with its game's date; no game header. Sorted
-Best first (the private score, across games) or Newest first; clips newest first. Play, ↑/↓, Play
-all, Render as Video and combo movies work as on a stats page (`HighlightRows`, shared); a combo of
+Best first (the private score, across games) or Newest first; clips newest first. Play, ↑/↓,
+selecting, rendering and combo movies work as on a stats page (`HighlightRows`, shared); a combo of
 several games is named after when it was made: `2026-10-21 0845 Combo movie (2 highlights)`.
 
 `all_highlights.ts` (main): the .brep files in the replay folders (root and extra, 4 levels down),
@@ -257,7 +262,7 @@ done (the tab: "Finding highlights in your replays... 12 of 120"). Opening the t
 over: a fill still running stops at its next replay. Measured here: 54 replays none of which were
 cached, all found in 5.4 s.
 
-**Favorites** (the user, 2026-10-22). Every row (here and on a stats page) ends with a star, hollow
+**Favorites** (the user, 2026-10-22). Every row (here and on a stats page) starts with a star (it ended with it until 2026-10-24), hollow
 until clicked, then filled: a favorite. They are kept in the settings (`favoriteHighlights`), each
 as `<replay path>|<highlight or clip>|<start frame>` (`favorites.ts`), so a moved or renamed replay
 loses its stars, as does a highlight whose start a new detector version moves. The back arrow went
@@ -359,7 +364,7 @@ highlight.") lists them newest saved first; All highlights lists them last, unde
 and Favorites the starred ones; the player search applies. A row: a crop icon, "Clip (0:20)" and
 every player of the game (teams: team vs team), the game's date; it plays, renders (named
 `<date> Clip - sarahkitty (Snake) vs t3o7 (Lucas).mp4`) and stars as the others do, and has a
-remove button left of the star (no undo). A replay's stats page lists its manual clips too, also
+remove button left of its Play button (no undo). A replay's stats page lists its manual clips too, also
 when it has no highlight data (a spectated game's copy). My and Opponent Highlights don't list
 them.
 

@@ -3,12 +3,13 @@
  * detector measured. A row plays in the playback Dolphin from just before the string to just after
  * it; ↑/↓ (or Tab) plays the next one at once, and the only wait (Dolphin's fast-forward to it)
  * shows with its progress. The list played from is the playback Dolphin's "<< < > >>"
- * (highlight_playlist.ts), and the row playing follows them. With "Render as Video" ticked, rows can be ticked and rendered to video
- * (docs/design/highlights.md §4): Render (w/ Music) or Render (No Music), a file each, or one combo
- * movie of them all. `HighlightList` is a replay's (its stats page); `HighlightRows` lists rows of
- * any replays (the Replays > Highlights tab's, all of them). The star at a row's end makes it a
- * favorite (favorites.ts). Manual clips (the seek bar's, manual_clips.ts) come last, each with a
- * button that removes it.
+ * (highlight_playlist.ts), and the row playing follows them. A click also selects the row (Ctrl+click
+ * adds or removes one, Shift+click a range); the selected rows render to video (docs/design/highlights.md
+ * §4): Render (w/ Music) or Render (No Music), a file each, or one combo movie of them all.
+ * `HighlightList` is a replay's (its stats page); `HighlightRows` lists rows of any replays (the
+ * Replays > Highlights tab's, all of them). The star at a row's start makes it a favorite
+ * (favorites.ts), the Play button at its end plays it. Manual clips (the seek bar's, manual_clips.ts)
+ * come last, each with a button that removes it.
  */
 import type { ReplayPlaybackStatus } from "@dolphin/types";
 import { DolphinEventType } from "@dolphin/types";
@@ -18,7 +19,7 @@ import CropIcon from "@mui/icons-material/Crop";
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
 import MovieIcon from "@mui/icons-material/Movie";
 import MusicOffIcon from "@mui/icons-material/MusicOff";
-import PlayArrowIcon from "@mui/icons-material/PlayArrow";
+import PlayCircleOutlineIcon from "@mui/icons-material/PlayCircleOutline";
 import StarIcon from "@mui/icons-material/Star";
 import StarBorderIcon from "@mui/icons-material/StarBorder";
 import Button from "@mui/material/Button";
@@ -145,7 +146,7 @@ type HighlightRowsProps = {
   hideRows?: boolean;
   /** Shows each row's game date (rows of many games). */
   showDates?: boolean;
-  /** Above the list, right of the title (the Highlights tab's sort). */
+  /** On the list's top bar, left of the render buttons (the Highlights tab's search and sort). */
   headerExtra?: React.ReactNode;
   comboName: (chosen: HighlightEntry[]) => string;
 };
@@ -176,8 +177,9 @@ export const HighlightRows = ({
   const commandId = usePlaylistStore((s) => s.commandId);
   const request = mine && commandId && dismissed !== commandId ? commandId : null;
   const listRef = useRef<HTMLDivElement>(null);
-  const [renderMode, setRenderMode] = useState(false);
+  // The rows selected (to render), and the one a Shift+click's range starts from.
   const [ticked, setTicked] = useState<Set<string>>(new Set());
+  const [anchor, setAnchor] = useState<string | null>(null);
   const [combo, setCombo] = useState(false);
   const [queuing, setQueuing] = useState(false);
   const allJobs = useRenderJobs();
@@ -192,13 +194,20 @@ export const HighlightRows = ({
   useEffect(() => {
     setSelected(null);
     setTicked(new Set());
+    setAnchor(null);
     setCombo(false);
   }, [resetKey]);
 
   // The rows as the playback Dolphin's list: the one played from follows what this one shows
   // now (another section, another sort, more rows found).
   const playlist: PlaylistEntry[] = useMemo(
-    () => entries.map((e) => ({ key: e.key, path: e.path, startFrame: e.row.startFrame, endFrame: e.row.endFrame })),
+    () =>
+      entries.map((e) => ({
+        key: e.key,
+        path: e.path,
+        startFrame: e.row.startFrame,
+        endFrame: e.row.endFrame,
+      })),
     [entries],
   );
   useEffect(() => setPlaylistEntries(sourceId, playlist, dolphinService), [sourceId, playlist, dolphinService]);
@@ -231,22 +240,38 @@ export const HighlightRows = ({
     [playlist, playEntry, sourceId],
   );
 
-  const tick = (key: string, on: boolean) =>
-    setTicked((t) => {
-      const next = new Set(t);
-      if (on) {
-        next.add(key);
-      } else {
-        next.delete(key);
+  // A click selects the row alone and plays it (as ↑/↓ do); Ctrl+click adds or removes it, Shift+click
+  // selects the rows from the last one clicked to it (with Ctrl: as well as those selected), neither playing.
+  const open = (index: number) => {
+    const key = entries[index]?.key;
+    if (key != null) {
+      setTicked(new Set([key]));
+      setAnchor(key);
+    }
+    void play(index);
+  };
+  const clickRow = (index: number, e: React.MouseEvent) => {
+    const key = entries[index].key;
+    const ctrl = e.ctrlKey || e.metaKey;
+    if (e.shiftKey) {
+      const from = anchor != null ? entries.findIndex((x) => x.key === anchor) : -1;
+      const [lo, hi] = from < 0 ? [index, index] : [Math.min(from, index), Math.max(from, index)];
+      const range = entries.slice(lo, hi + 1).map((x) => x.key);
+      setTicked((t) => new Set(ctrl ? [...t, ...range] : range));
+      if (from < 0) {
+        setAnchor(key);
       }
-      return next;
-    });
-
-  const setRender = (on: boolean) => {
-    setRenderMode(on);
-    if (!on) {
-      setTicked(new Set());
-      setCombo(false);
+    } else if (ctrl) {
+      setTicked((t) => {
+        const next = new Set(t);
+        if (!next.delete(key)) {
+          next.add(key);
+        }
+        return next;
+      });
+      setAnchor(key);
+    } else {
+      open(index);
     }
   };
 
@@ -263,7 +288,11 @@ export const HighlightRows = ({
       setQueuing(true);
       try {
         const queued = await renderHighlights({
-          items: chosen.map((e) => ({ path: e.path, startFrame: e.row.startFrame, endFrame: e.row.endFrame })),
+          items: chosen.map((e) => ({
+            path: e.path,
+            startFrame: e.row.startFrame,
+            endFrame: e.row.endFrame,
+          })),
           names: asCombo
             ? [comboName(chosen)]
             : chosen.map((e) => clipVideoName(e.row, new Map(e.game.players.map((p) => [p.port, p])), e.path)),
@@ -303,7 +332,7 @@ export const HighlightRows = ({
     const at = playing ?? (delta > 0 ? -1 : entries.length);
     const next = Math.min(Math.max(at + delta, 0), entries.length - 1);
     if (next !== at) {
-      void play(next);
+      open(next);
     }
   };
   useMousetrap(["down", "tab"], (e) => {
@@ -316,69 +345,50 @@ export const HighlightRows = ({
   });
   useMousetrap("enter", (e) => {
     e.preventDefault();
-    void play(playing ?? 0);
+    open(playing ?? 0);
+  });
+  useMousetrap("mod+a", (e) => {
+    e.preventDefault();
+    setTicked(new Set(entries.map((x) => x.key)));
   });
 
-  const canRender = renderMode && chosen.length > 0 && !queuing;
+  const canRender = chosen.length > 0 && !queuing;
 
   return (
     <div className={styles.container}>
+      {/* One line, staying as the rows scroll under it. */}
       <div className={styles.header}>
-        <h2 className={styles.title}>{Messages.highlights()}</h2>
         <div className={styles.headerActions}>{headerExtra}</div>
+        {entries.length > 0 && (
+          <div className={styles.renderBar}>
+            <FormControlLabel
+              className={styles.combo}
+              disabled={chosen.length === 0}
+              control={<Checkbox size="small" checked={combo} onChange={(e) => setCombo(e.target.checked)} />}
+              label={<span className={styles.comboLabel}>{Messages.comboMovie()}</span>}
+            />
+            <Button
+              size="small"
+              variant="outlined"
+              startIcon={<MovieIcon />}
+              disabled={!canRender}
+              onClick={() => void render(true)}
+            >
+              {Messages.renderWithMusic()}
+            </Button>
+            <Button
+              size="small"
+              variant="outlined"
+              startIcon={<MusicOffIcon />}
+              disabled={!canRender}
+              onClick={() => void render(false)}
+            >
+              {Messages.renderNoMusic()}
+            </Button>
+          </div>
+        )}
       </div>
       {versionNote}
-      {entries.length > 0 && (
-        <div className={styles.renderBar}>
-          <FormControlLabel
-            className={styles.renderToggle}
-            control={<Checkbox size="small" checked={renderMode} onChange={(e) => setRender(e.target.checked)} />}
-            label={<span className={styles.renderToggleLabel}>{Messages.renderAsVideo()}</span>}
-          />
-          <span className={styles.renderCount}>
-            {renderMode && (
-              <>
-                {Messages.selected(chosen.length)}
-                <Button
-                  size="small"
-                  className={styles.selectAll}
-                  onClick={() =>
-                    setTicked(chosen.length === entries.length ? new Set() : new Set(entries.map((e) => e.key)))
-                  }
-                >
-                  {chosen.length === entries.length ? Messages.selectNone() : Messages.selectAll()}
-                </Button>
-              </>
-            )}
-          </span>
-          <FormControlLabel
-            className={styles.combo}
-            disabled={!renderMode}
-            control={
-              <Checkbox size="small" checked={renderMode && combo} onChange={(e) => setCombo(e.target.checked)} />
-            }
-            label={<span className={styles.comboLabel}>{Messages.comboMovie()}</span>}
-          />
-          <Button
-            size="small"
-            variant="outlined"
-            startIcon={<MovieIcon />}
-            disabled={!canRender}
-            onClick={() => void render(true)}
-          >
-            {Messages.renderWithMusic()}
-          </Button>
-          <Button
-            size="small"
-            variant="outlined"
-            startIcon={<MusicOffIcon />}
-            disabled={!canRender}
-            onClick={() => void render(false)}
-          >
-            {Messages.renderNoMusic()}
-          </Button>
-        </div>
-      )}
       <RenderJobs jobs={jobs} />
       <PlaybackBanner
         request={request}
@@ -399,70 +409,66 @@ export const HighlightRows = ({
                 {heading && (
                   <h3 className={styles.section}>{row.kind === "clip" ? Messages.clips() : Messages.manualClips()}</h3>
                 )}
-                <div className={styles.rowLine}>
-                  {renderMode && (
-                    <Checkbox
-                      size="small"
-                      className={styles.tick}
-                      checked={ticked.has(entry.key)}
-                      onChange={(e) => tick(entry.key, e.target.checked)}
-                      inputProps={{ "aria-label": Messages.tickRow() }}
-                    />
-                  )}
-                  <div className={styles.rowBox}>
-                    <button
-                      type="button"
-                      data-row={i}
-                      className={`${styles.row} ${i === playing ? styles.playing : ""} ${
-                        row.kind === "manual" ? styles.removable : ""
-                      }`}
-                      onClick={() => void play(i)}
-                    >
-                      <span className={styles.playIcon}>
-                        <PlayArrowIcon fontSize="small" />
+                <div className={styles.rowBox}>
+                  <button
+                    type="button"
+                    data-row={i}
+                    className={`${styles.row} ${i === playing ? styles.playing : ""} ${
+                      ticked.has(entry.key) ? styles.selected : ""
+                    } ${row.kind === "manual" ? styles.removable : ""}`}
+                    onClick={(e) => clickRow(i, e)}
+                  >
+                    {row.kind === "highlight" ? (
+                      <HighlightWho row={row} data={game} players={players} />
+                    ) : row.kind === "manual" ? (
+                      <span className={styles.who}>
+                        <CropIcon fontSize="small" className={styles.clipIcon} />
+                        <span className={styles.vs}>{Messages.manualClip(clipLength(row))}</span>
+                        <GameWho data={game} />
                       </span>
-                      {row.kind === "highlight" ? (
-                        <HighlightWho row={row} data={game} players={players} />
-                      ) : row.kind === "manual" ? (
-                        <span className={styles.who}>
-                          <CropIcon fontSize="small" className={styles.clipIcon} />
-                          <span className={styles.vs}>{Messages.manualClip(clipLength(row))}</span>
-                          <GameWho data={game} />
-                        </span>
-                      ) : (
-                        <span className={styles.who}>
-                          <ContentCutIcon fontSize="small" className={styles.clipIcon} />
-                          <span className={styles.vs}>{Messages.clippedBy()}</span>
-                          <PlayerChip player={players.get(row.port)} isTeams={game.isTeams} />
-                        </span>
-                      )}
-                      {showDates && entry.date && (
-                        <span className={styles.date}>{monthDayHourFormat(new Date(entry.date))}</span>
-                      )}
-                    </button>
-                    {/* (Over the row, not in it: a button can't hold another.) */}
+                    ) : (
+                      <span className={styles.who}>
+                        <ContentCutIcon fontSize="small" className={styles.clipIcon} />
+                        <span className={styles.vs}>{Messages.clippedBy()}</span>
+                        <PlayerChip player={players.get(row.port)} isTeams={game.isTeams} />
+                      </span>
+                    )}
+                    {showDates && entry.date && (
+                      <span className={styles.date}>{monthDayHourFormat(new Date(entry.date))}</span>
+                    )}
+                  </button>
+                  {/* (Over the row, not in it: a button can't hold another.) */}
+                  <IconButton
+                    size="small"
+                    className={`${styles.star} ${favorite ? styles.starred : ""}`}
+                    onClick={() => toggleFavorite(entry)}
+                    aria-label={favorite ? Messages.unfavorite() : Messages.favorite()}
+                    aria-pressed={favorite}
+                  >
+                    {favorite ? <StarIcon fontSize="small" /> : <StarBorderIcon fontSize="small" />}
+                  </IconButton>
+                  <Tooltip title={Messages.play()} arrow={true}>
                     <IconButton
                       size="small"
-                      className={`${styles.star} ${favorite ? styles.starred : ""}`}
-                      onClick={() => toggleFavorite(entry)}
-                      aria-label={favorite ? Messages.unfavorite() : Messages.favorite()}
-                      aria-pressed={favorite}
+                      className={styles.play}
+                      onClick={() => void play(i)}
+                      aria-label={Messages.play()}
                     >
-                      {favorite ? <StarIcon fontSize="small" /> : <StarBorderIcon fontSize="small" />}
+                      <PlayCircleOutlineIcon />
                     </IconButton>
-                    {row.kind === "manual" && (
-                      <Tooltip title={Messages.removeClip()} arrow={true}>
-                        <IconButton
-                          size="small"
-                          className={styles.remove}
-                          onClick={() => removeManualClip(entry)}
-                          aria-label={Messages.removeClip()}
-                        >
-                          <DeleteOutlineIcon fontSize="small" />
-                        </IconButton>
-                      </Tooltip>
-                    )}
-                  </div>
+                  </Tooltip>
+                  {row.kind === "manual" && (
+                    <Tooltip title={Messages.removeClip()} arrow={true}>
+                      <IconButton
+                        size="small"
+                        className={styles.remove}
+                        onClick={() => removeManualClip(entry)}
+                        aria-label={Messages.removeClip()}
+                      >
+                        <DeleteOutlineIcon fontSize="small" />
+                      </IconButton>
+                    </Tooltip>
+                  )}
                 </div>
               </React.Fragment>
             );
