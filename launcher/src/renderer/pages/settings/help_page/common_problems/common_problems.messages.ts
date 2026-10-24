@@ -1,8 +1,7 @@
 export const CommonProblemsMessages = {
   commonProblems: () => "Common problems",
   dllsMissing: () => '"Required DLLs for launching Dolphin are missing"',
-  installRedist: () =>
-    "Windows is missing a part Dolphin needs. Install the Microsoft Visual C++ Redistributable (x64), then start the game again:",
+  installRedist: () => "Try installing the Microsoft Visual C++ Redistributable (x64):",
   windowsN: () =>
     'On a Windows "N" edition (Settings > System > About), also install the Media Feature Pack: Settings > Apps > Optional features > View features.',
   antivirus: () =>
