@@ -208,6 +208,12 @@ impl Room {
     fn sits_out(&self, m: &Member) -> bool {
         m.sitting_out || self.set.as_ref().is_some_and(|s| s.on() && s.side_of(m.info.uid).is_none())
     }
+    /// Played the room's game going on: one who is back on the CSS before the others (`room-back`,
+    /// no longer `in_game`) still never watches it (the user, 2026-10-24: "my room game ended and
+    /// then suddenly i was spectating my own room").
+    fn played_game(&self, m: &Member) -> bool {
+        matches!(&self.phase, Phase::InGame { players, .. } if players.iter().any(|(_, uid)| *uid == m.info.uid))
+    }
     /// The slots of the members who play the next game.
     /// A member watching the room's game (a few seconds behind its players) is not waited for (the
     /// user's, 2026-10-19: "finish, never block"): the next game starts without them.
@@ -1150,6 +1156,7 @@ impl RoomBook {
                 }
             }
             RoomRequest::Watch { want, watching } => {
+                let played = room.slots[me].as_ref().is_some_and(|m| room.played_game(m));
                 let m = room.slots[me].as_mut().ok_or(msg::NOT_IN_ROOM)?;
                 if let Some(w) = want {
                     if m.watch && !w {
@@ -1164,9 +1171,9 @@ impl RoomBook {
                 if w != m.watching.is_some() {
                     tracing::info!(%code, slot = me + 1, watching = w, "room watch");
                 }
-                // A player of the game is in it, not watching it.
+                // A player of the game is in it (or played it), not watching it.
                 let since = m.watching.unwrap_or(now);
-                m.watching = (w && !m.in_game).then_some(since);
+                m.watching = (w && !m.in_game && !played).then_some(since);
                 // Their game shows the match, not the CSS: no ready from before stays.
                 if m.watching.is_some() {
                     m.ready = false;
@@ -1487,14 +1494,14 @@ impl RoomBook {
     }
 
     /// The room games to send to watchers now: each member who wants them (`room-watch` `want`)
-    /// and is not in their room's game, with that game's match id. The live book sends each one
+    /// and did not play their room's game, with that game's match id. The live book sends each one
     /// that game's kept chunks, also after the game is over (the upload runs behind the players).
     pub fn watch_targets(&self) -> Vec<(ConnId, String)> {
         let mut v = Vec::new();
         for room in self.rooms.values() {
             let Phase::InGame { match_id, .. } = &room.phase else { continue };
             for (_, m) in room.members() {
-                if m.watch && !m.in_game {
+                if m.watch && !m.in_game && !room.played_game(m) {
                     v.push((m.conn, match_id.clone()));
                 }
             }
@@ -2790,8 +2797,12 @@ mod tests {
         assert!(targets[0].1.starts_with(&format!("mode.room-{code}-")));
         let out = t.req(3, RoomRequest::Watch { want: None, watching: Some(true) });
         assert_eq!(last_state(&out, 1)["slots"][2]["player"]["watching"], true);
-        // The players are back while it still watches: the next game starts without it.
+        // The players are back while it still watches: the next game starts without it. One back
+        // before the other never watches the game they played.
         t.req(1, RoomRequest::Back { pickers: None });
+        assert_eq!(t.book.watch_targets().len(), 1, "player 1 is back, player 2 still plays");
+        let out = t.req(1, RoomRequest::Watch { want: None, watching: Some(true) });
+        assert!(last_state(&out, 1)["slots"][0]["player"].get("watching").is_none());
         let out = t.req(2, RoomRequest::Back { pickers: None });
         assert_eq!(last_state(&out, 1)["statusText"], msg::waiting_on(&["player1", "player2"]));
         let out = ready_all(&mut t, &[1, 2]);
