@@ -62,6 +62,12 @@ export type ReplayPlaybackStatus = {
   output?: string;
   rendered?: number;
   framesWritten?: number;
+  /**
+   * Manual clips saved in this Dolphin's run (the seek bar's Clip, then "Save as highlight"): the
+   * replay (a spectated game's file too) and its frames. The launcher keeps each once
+   * (replays/highlights/manual_clips.ts).
+   */
+  savedClips?: { path: string; startFrame: number; endFrame: number }[];
 };
 
 /**

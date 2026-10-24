@@ -490,6 +490,45 @@ def test_launcher_comm_file_plays_highlights(backend: OnlineBackend,
 
 
 @pytest.mark.slow
+def test_launcher_comm_file_saves_manual_clips(backend: OnlineBackend,
+                                              dolphin: Callable[..., DolphinInstance],
+                                              gpu_backend: str) -> None:
+    """Manual clips (docs/design/highlights.md section 9, ReplayPlayback.h): the seek bar's Clip,
+    then "Save as highlight", in the launcher's playback Dolphin. Once the comm file's replay is
+    armed a clip can be saved (the overlay shows Clip); each one saved is listed in the status file's
+    `savedClips` with the replay's path and its frames, the same frames saved again are one, and an
+    empty clip is refused. The replay plays on with no checksum differing."""
+    fa, out = _recorded_direct_game(backend, dolphin, gpu_backend, "manual-clips", ("mona", "nils"))
+    first, last = fa.first_frame, fa.last_frame
+    assert last - first > 1500, (first, last)
+    v, inst, file_status = _comm_viewer(backend, dolphin, gpu_backend, fa, out)
+    a = (first + 300, first + 1500)
+    b = (last - 600, last - 60)
+
+    def save(clip: tuple[int, int]) -> dict[str, Any]:
+        return v.c.call("replay_save_clip", start=clip[0], end=clip[1])
+
+    r = _wait(lambda: (lambda r: r if r["can_save"] else None)(save(a)), 300, "a clip to be saveable")
+    assert r["saved"], r
+    v.shot("clip-saved")
+    want_a = {"path": str(fa.path), "startFrame": a[0], "endFrame": a[1]}
+    assert r["comm"]["savedClips"] == [want_a], r["comm"]
+    assert save(a)["saved"], "the same frames again"
+    r = save(b)
+    assert r["saved"], r
+    want_b = {"path": str(fa.path), "startFrame": b[0], "endFrame": b[1]}
+    assert r["comm"]["savedClips"] == [want_a, want_b], r["comm"]
+    r = save((b[1], b[1]))
+    assert not r["saved"] and len(r["comm"]["savedClips"]) == 2, r
+    # The launcher reads them from the status file.
+    _wait(lambda: file_status().get("savedClips") == [want_a, want_b] or None, 10, "the status file's clips")
+    st = _wait(lambda: (lambda s: s if s["at_end"] or s["finished"] else None)(_status(v)), 900,
+               "the replay's last frame")
+    assert st["phase"] != "error" and st["desync_frame"] == -1, st
+    assert inst.log.read().count("replay: clip saved") == 3
+
+
+@pytest.mark.slow
 def test_launcher_comm_file_renders_highlights(backend: OnlineBackend,
                                               dolphin: Callable[..., DolphinInstance],
                                               gpu_backend: str) -> None:

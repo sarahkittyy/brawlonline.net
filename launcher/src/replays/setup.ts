@@ -1,4 +1,6 @@
 import { createDatabase } from "@database/create_database";
+import type { DolphinManager } from "@dolphin/manager";
+import { DolphinEventType } from "@dolphin/types";
 import type { SettingsManager } from "@settings/settings_manager";
 import { app } from "electron";
 import log from "electron-log";
@@ -8,6 +10,7 @@ import { DatabaseReplayProvider } from "./database_replay_provider/database_repl
 import { FolderTreeService } from "./folder_tree_service";
 import { AllHighlights } from "./highlights/all_highlights";
 import { HighlightService } from "./highlights/highlight_service";
+import { ManualClips } from "./highlights/manual_clips";
 import {
   ipc_allHighlightsEvent,
   ipc_bulkDeleteReplays,
@@ -63,7 +66,13 @@ async function createReplayProvider() {
   }
 }
 
-export default function setupReplaysIpc({ settingsManager }: { settingsManager: SettingsManager }) {
+export default function setupReplaysIpc({
+  settingsManager,
+  dolphinManager,
+}: {
+  settingsManager: SettingsManager;
+  dolphinManager: DolphinManager;
+}) {
   const treeService = new FolderTreeService();
   const created = createReplayProvider();
   const replayProviderPromise = created.then(({ provider }) => provider);
@@ -83,6 +92,19 @@ export default function setupReplaysIpc({ settingsManager }: { settingsManager: 
     },
     (event) => void ipc_allHighlightsEvent.main!.trigger(event).catch(log.warn),
   );
+
+  // The playback Dolphin's seek bar clips (Clip, then "Save as highlight"): Replays > Highlights > Manual Clips.
+  const manualClips = new ManualClips({
+    clips: () => settingsManager.get().settings.manualClips,
+    save: (clips) => settingsManager.updateSetting("manualClips", clips),
+    spectateDir: () => dolphinManager.spectateDir(),
+    replayDir: () => settingsManager.getRootSlpPath(),
+  });
+  dolphinManager.events.subscribe((event) => {
+    if (event.type === DolphinEventType.PLAYBACK_STATUS) {
+      manualClips.onStatus(event.status);
+    }
+  });
 
   ipc_getAllHighlights.main!.handle(async () => {
     return await allHighlights.list();

@@ -4,6 +4,8 @@ export const AllHighlightsMessages = {
   opponentHighlights: () => "Opponent Highlights",
   lrzHighlights: () => "L+R+Z Highlights",
   lrzHint: (seconds: number) => "Press L+R+Z in-game to clip the last {0} seconds.",
+  manualClips: () => "Manual Clips",
+  manualHint: () => "Click Clip on the seek bar of a replay or a spectated game, then Save as highlight.",
   favorites: () => "Favorites",
   finding: () => "Finding highlights...",
   findingOf: (done: number, total: number) => "Finding highlights in your replays... {0} of {1}",
@@ -14,6 +16,8 @@ export const AllHighlightsMessages = {
   noMatch: (name: string) => 'No highlights with a player named "{0}".',
   highlightsOff: () => "Highlight detection is off (Settings > Clips).",
   clipsOff: () => "L+R+Z clips are off (Settings > Clips).",
+  noManual: () =>
+    "No manual clips yet. While watching a replay or a spectated game, click Clip on the seek bar, drag its ends, then Save as highlight.",
   noFavorites: () => "No favorites yet. Click the star on a highlight to add it here.",
   detectionOff: () => "Highlight detection and L+R+Z clips are off (Settings > Clips).",
   couldNotLoad: (error: string) => "Highlights could not be found: {0}",

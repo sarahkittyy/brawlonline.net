@@ -167,6 +167,8 @@ export class PlaybackDolphinInstance extends DolphinInstance {
         clearInterval(this.statusTimer);
         this.statusTimer = null;
       }
+      // Its last status first: a clip saved just before it closed (manual_clips.ts) is in it.
+      await this.readStatus();
       for (const file of [this.commPath, `${this.commPath}.status.json`]) {
         try {
           if (await fileExists(file)) {

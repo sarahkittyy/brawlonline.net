@@ -25,7 +25,7 @@ export function installModules(flags: ConfigFlags) {
   const { accountsManager, serviceUrls } = setupAccountsIpc();
   setupSocialIpc({ accountsManager, accountsApi: serviceUrls.accountsApi, dolphinManager });
   setupSpectateIpc({ accountsManager, accountsApi: serviceUrls.accountsApi, dolphinManager, settingsManager });
-  setupReplaysIpc({ settingsManager });
+  setupReplaysIpc({ settingsManager, dolphinManager });
   setupSettingsIpc({ settingsManager, dolphinManager });
   setupModsIpc({ settingsManager, dolphinManager, accountsManager });
   const isoGameData = isoGameDataReader(dolphinManager);

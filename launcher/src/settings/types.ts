@@ -1,4 +1,5 @@
 import type { ModBuild, ModsController } from "@dolphin/mods/types";
+import type { ManualClip } from "@replays/highlights/types";
 
 /**
  * Stored account information (for multi-account support)
@@ -80,6 +81,8 @@ export interface SettingsSchema {
   clipResolution: number;
   /** Replays > Highlights' starred rows, by favoriteKey (src/renderer/.../highlights/favorites.ts): replay path, kind, start frame. */
   favoriteHighlights: string[];
+  /** Replays > Highlights > Manual Clips: the seek bar's clips (replays/highlights/manual_clips.ts), oldest first. */
+  manualClips: ManualClip[];
 
   // Dolphin settings: the executable of our Dolphin build (null = default, see dolphin/install/paths.ts)
   netplayDolphinPath: string | null;

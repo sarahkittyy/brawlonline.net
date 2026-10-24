@@ -4,8 +4,9 @@ A replay's stats page lists that game's highlights (strings the launcher finds i
 fighter memory) and L+R+Z clips, and plays them in the playback Dolphin. The decisions and the
 measurements behind them are in the prototype's DESIGN.md (D:\code\brawl-highlights, local only);
 this is what was built. Video export (single clips and the combo movie, §4-5) and the Replays >
-Highlights tab of every replay's highlights (§6) came 2026-10-21. Not yet: `.bhl` files, a
-savestate cache.
+Highlights tab of every replay's highlights (§6) came 2026-10-21; manual clips, made on the
+seek bar of a replay or a spectated game (§9), 2026-10-24. Not yet: `.bhl` files, a savestate
+cache.
 
 ## 1. Detection (launcher main process)
 
@@ -262,3 +263,57 @@ queued: "Waiting to render"), and a click cancels it. Once done a toast says "Re
 folder (`RenderJobInfo.wholeMatch`; the list's hook is `use_match_renders.ts`).
 
 Harness: `test_replay.py::test_launcher_comm_file_renders_whole_match`.
+
+## 9. Manual clips (2026-10-24)
+
+The user's request: "clipping to highlights / replays / spectator views ... as segments. like you
+click a "clip" button, and then the replay ui shows you a left and right point, ending at the point
+you clicked "clip" and starting 20s earlier by default, when you're in clip mode the buttons become
+"cancel clip", "save as highlight" -- we can categorize them in the highlights menu as "Manual
+Clips"".
+
+**Dolphin** (`VideoCommon/ReplayOverlayUI.cpp`). The replay overlay's time row has a **Clip**
+button left of the time, in the launcher's playback Dolphin whenever a replay of its request is
+armed (a replay, a highlight, a spectated game; not the render Dolphin, nor a replay opened
+without the launcher: `Replay::Playback::CanSaveClip`). A click pauses and enters clip mode: the
+clip ends at the frame shown and starts 20 s before it (the match's start at the earliest; at
+least 1 s long), drawn on the bar as a blue span with a handle at each end, taller than the bar.
+Dragging a handle moves that end (hovered: "Clip start (1:03)"); letting it go seeks there, so the
+screen shows the frame chosen. A press elsewhere on the bar still seeks. The row says "Clip 1:03 -
+1:23 (20 s): drag its ends", and the buttons are **Cancel clip** and **Save as highlight** ("Clip
+saved to Replays > Highlights > Manual Clips" on screen). Clip mode ends with either, or when
+another replay is armed (a spectated set's next game). A live game's clip ends at the live edge at
+the latest.
+
+**Handing it over** (`Rollback/ReplayPlayback.cpp` `SaveClip`): the clip is of the replay armed
+(its path as the comm file gave it; the session's replay must still be the one armed). Every clip
+saved in the Dolphin's run is in the status file, `"savedClips": [{"path", "startFrame",
+"endFrame"}]` (the same frames again are one; 500 at most), written at once. The launcher reads the
+status every 250 ms and once more as the Dolphin closes (`instance.ts`), so a clip saved just
+before closing is not lost.
+
+**Launcher** (`replays/highlights/manual_clips.ts`, main): each clip of a status not seen yet is
+kept once in the settings, `manualClips` (oldest first), with what its rows show: the players from
+the replay's header, teams, the recorder's port, the game's date, when it was saved. A clip of a
+**spectated** game (a file under the playback User folder's `Spectate`, cleared at every start)
+keeps a copy of the game in `<Root Replay Folder>/Spectated/<date> Spectated <Mode> G<n> - <names>.brep`
+and points at it (`spectated: true`, no recorder). The game may still be going: the copy is cut
+after its last whole chunk (it plays as a replay that ended there, as a crashed game's does) and
+copied again every 5 s while the file grows, until its trailer is there (or 15 minutes without a
+change). The copy is a replay like any other, in the Replays list too.
+
+**Replays > Highlights**: the sidebar's **Manual Clips** (between L+R+Z Highlights and Favorites;
+hovering it: "Click Clip on the seek bar of a replay or a spectated game, then Save as
+highlight.") lists them newest saved first; All highlights lists them last, under "Manual clips",
+and Favorites the starred ones; the player search applies. A row: a crop icon, "Clip (0:20)" and
+every player of the game (teams: team vs team), the game's date; it plays, renders (named
+`<date> Clip - sarahkitty (Snake) vs t3o7 (Lucas).mp4`) and stars as the others do, and has a
+remove button left of the star (no undo). A replay's stats page lists its manual clips too, also
+when it has no highlight data (a spectated game's copy). My and Opponent Highlights don't list
+them.
+
+Tests: `manual_clips.test.ts` (a clip kept once with its players; a spectated game copied up to
+its last whole chunk, then whole once it ended); harness
+`test_replay.py::test_launcher_comm_file_saves_manual_clips` (clips saved in a comm file
+playback, listed in the status file, the same frames once, an empty clip refused, the replay
+playing on with no checksum differing).

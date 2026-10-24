@@ -6,12 +6,15 @@
  * (docs/design/highlights.md §4): Render (w/ Music) or Render (No Music), a file each, or one combo
  * movie of them all. `HighlightList` is a replay's (its stats page); `HighlightRows` lists rows of
  * any replays (the Replays > Highlights tab's, all of them). The star at a row's end makes it a
- * favorite (favorites.ts).
+ * favorite (favorites.ts). Manual clips (the seek bar's, manual_clips.ts) come last, each with a
+ * button that removes it.
  */
 import type { ReplayPlaybackStatus } from "@dolphin/types";
 import { DolphinEventType, DolphinLaunchType } from "@dolphin/types";
 import CloseIcon from "@mui/icons-material/Close";
 import ContentCutIcon from "@mui/icons-material/ContentCut";
+import CropIcon from "@mui/icons-material/Crop";
+import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
 import MovieIcon from "@mui/icons-material/Movie";
 import MusicOffIcon from "@mui/icons-material/MusicOff";
 import PlayArrowIcon from "@mui/icons-material/PlayArrow";
@@ -23,7 +26,14 @@ import Checkbox from "@mui/material/Checkbox";
 import FormControlLabel from "@mui/material/FormControlLabel";
 import IconButton from "@mui/material/IconButton";
 import LinearProgress from "@mui/material/LinearProgress";
-import type { HighlightPlayer, ReplayClip, ReplayHighlight, ReplayHighlights } from "@replays/highlights/types";
+import Tooltip from "@mui/material/Tooltip";
+import type {
+  HighlightPlayer,
+  ReplayClip,
+  ReplayHighlight,
+  ReplayHighlights,
+  ReplayManualClip,
+} from "@replays/highlights/types";
 import { useQuery } from "@tanstack/react-query";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
@@ -38,11 +48,12 @@ import { useServices } from "@/services";
 import { favoriteKey, useFavoriteHighlights } from "./favorites";
 import { HighlightListMessages as Messages } from "./highlight_list.messages";
 import styles from "./highlight_list.module.css";
+import { manualClipEntry, useManualClips } from "./manual_clips";
 import { RenderJobs, useRenderJobs } from "./render_jobs";
 import { clipVideoName, comboVideoName, multiGameComboName } from "./render_names";
 import { ReplayVersionNote } from "./replay_version_note";
 
-type Row = ReplayHighlight | ReplayClip;
+type Row = ReplayHighlight | ReplayClip | ReplayManualClip;
 
 /** Starting for this long: the banner says where to look. */
 const STARTING_HINT_MS = 20_000;
@@ -70,12 +81,25 @@ export const HighlightList = ({ filePath, pplusRelease }: { filePath: string; pp
     queryFn: () => replayService.getHighlights(filePath),
   });
   const data = query.data;
+  const { clips: manualClips } = useManualClips();
+  // (A replay without highlight data, e.g. a spectated game kept for a clip, lists its manual clips only.)
   const entries: HighlightEntry[] = useMemo(
     () =>
       data
-        ? [...data.highlights, ...data.clips].map((row, i) => ({ key: `${i}`, path: filePath, game: data, row }))
+        ? [
+            ...(data.error ? [] : [...data.highlights, ...data.clips]).map((row, i) => ({
+              key: `${i}`,
+              path: filePath,
+              game: data,
+              row,
+            })),
+            ...manualClips
+              .filter((c) => c.path === filePath)
+              .sort((a, b) => a.startFrame - b.startFrame)
+              .map(manualClipEntry),
+          ]
         : [],
-    [data, filePath],
+    [data, filePath, manualClips],
   );
 
   if (query.isLoading) {
@@ -90,7 +114,6 @@ export const HighlightList = ({ filePath, pplusRelease }: { filePath: string; pp
   return (
     <HighlightRows
       entries={entries}
-      highlightCount={data.highlights.length}
       resetKey={filePath}
       versionNote={<ReplayVersionNote release={pplusRelease} />}
       emptyNote={
@@ -102,16 +125,15 @@ export const HighlightList = ({ filePath, pplusRelease }: { filePath: string; pp
           ? Messages.noHighlights()
           : null
       }
-      hideRows={!!data.error}
+      hideRows={entries.length === 0}
       comboName={(chosen) => comboVideoName(data.players, chosen.length, filePath)}
     />
   );
 };
 
 type HighlightRowsProps = {
+  /** Highlights, then L+R+Z clips, then manual clips (each kind after the first has a heading). */
   entries: HighlightEntry[];
-  /** The first this many are highlights, the rest L+R+Z clips. */
-  highlightCount: number;
   /** Changes when the list is another (a new replay): nothing of the last one's is kept. */
   resetKey: string;
   versionNote?: React.ReactNode;
@@ -127,7 +149,6 @@ type HighlightRowsProps = {
 
 export const HighlightRows = ({
   entries,
-  highlightCount,
   resetKey,
   versionNote,
   emptyNote,
@@ -139,6 +160,7 @@ export const HighlightRows = ({
   const { dolphinService } = useServices();
   const { playHighlights, renderHighlights } = useDolphinActions(dolphinService);
   const { favorites, toggle: toggleFavorite } = useFavoriteHighlights();
+  const { remove: removeManualClip } = useManualClips();
 
   const [selected, setSelected] = useState<number | null>(null);
   const [request, setRequest] = useState<Request | null>(null);
@@ -387,9 +409,12 @@ export const HighlightRows = ({
             const { row, game } = entry;
             const players = new Map(game.players.map((p) => [p.port, p]));
             const favorite = favorites.has(favoriteKey(entry));
+            const heading = row.kind !== "highlight" && (i === 0 || entries[i - 1].row.kind !== row.kind);
             return (
               <React.Fragment key={entry.key}>
-                {i === highlightCount && <h3 className={styles.section}>{Messages.clips()}</h3>}
+                {heading && (
+                  <h3 className={styles.section}>{row.kind === "clip" ? Messages.clips() : Messages.manualClips()}</h3>
+                )}
                 <div className={styles.rowLine}>
                   {renderMode && (
                     <Checkbox
@@ -404,7 +429,9 @@ export const HighlightRows = ({
                     <button
                       type="button"
                       data-row={i}
-                      className={`${styles.row} ${i === playing ? styles.playing : ""}`}
+                      className={`${styles.row} ${i === playing ? styles.playing : ""} ${
+                        row.kind === "manual" ? styles.removable : ""
+                      }`}
                       onClick={() => void play(i)}
                     >
                       <span className={styles.playIcon}>
@@ -412,6 +439,12 @@ export const HighlightRows = ({
                       </span>
                       {row.kind === "highlight" ? (
                         <HighlightWho row={row} data={game} players={players} />
+                      ) : row.kind === "manual" ? (
+                        <span className={styles.who}>
+                          <CropIcon fontSize="small" className={styles.clipIcon} />
+                          <span className={styles.vs}>{Messages.manualClip(clipLength(row))}</span>
+                          <GameWho data={game} />
+                        </span>
                       ) : (
                         <span className={styles.who}>
                           <ContentCutIcon fontSize="small" className={styles.clipIcon} />
@@ -433,6 +466,18 @@ export const HighlightRows = ({
                     >
                       {favorite ? <StarIcon fontSize="small" /> : <StarBorderIcon fontSize="small" />}
                     </IconButton>
+                    {row.kind === "manual" && (
+                      <Tooltip title={Messages.removeClip()} arrow={true}>
+                        <IconButton
+                          size="small"
+                          className={styles.remove}
+                          onClick={() => removeManualClip(entry)}
+                          aria-label={Messages.removeClip()}
+                        >
+                          <DeleteOutlineIcon fontSize="small" />
+                        </IconButton>
+                      </Tooltip>
+                    )}
                   </div>
                 </div>
               </React.Fragment>
@@ -453,6 +498,40 @@ export const comboOfManyName = (chosen: HighlightEntry[]) => {
     return comboVideoName(e.game.players, chosen.length, e.path);
   }
   return multiGameComboName(chosen.length, new Date());
+};
+
+/** A manual clip's length, "0:20". */
+const clipLength = (row: ReplayManualClip) => {
+  const seconds = Math.max(0, Math.round((row.endFrame - row.startFrame) / 60));
+  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+};
+
+/** Everyone in the game: one vs another; in teams, team vs team. */
+const GameWho = ({ data }: { data: ReplayHighlights }) => {
+  const sides: HighlightPlayer[][] = [];
+  if (data.isTeams) {
+    const teams = new Map<number | null, HighlightPlayer[]>();
+    for (const p of data.players) {
+      teams.set(p.teamId, [...(teams.get(p.teamId) ?? []), p]);
+    }
+    sides.push(...teams.values());
+  } else {
+    sides.push(...data.players.map((p) => [p]));
+  }
+  return (
+    <>
+      {sides.map((side, i) => (
+        <React.Fragment key={i}>
+          {i > 0 && <span className={styles.vs}>{Messages.vs()}</span>}
+          <span className={styles.side}>
+            {side.map((p) => (
+              <PlayerChip key={p.port} player={p} isTeams={data.isTeams} />
+            ))}
+          </span>
+        </React.Fragment>
+      ))}
+    </>
+  );
 };
 
 /** The attacker vs the victim; in teams, the attacker's team vs the victim's. */
@@ -582,7 +661,7 @@ const PlaybackBanner = ({
       <div className={`${styles.banner} ${styles.seeking}`}>
         <div className={styles.bannerText}>
           <span className={styles.ff}>⏩</span>
-          {row?.kind === "clip" ? Messages.fastForwardingClip() : Messages.fastForwarding()}
+          {row && row.kind !== "highlight" ? Messages.fastForwardingClip() : Messages.fastForwarding()}
           {of}
           {/* (Back to an earlier one: a keyframe is put back first, in a moment.) */}
           {frame <= target && <span className={styles.frames}>{Messages.frameOf(Math.max(frame, 0), target)}</span>}

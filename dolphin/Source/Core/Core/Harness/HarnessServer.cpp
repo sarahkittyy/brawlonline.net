@@ -1753,6 +1753,25 @@ Result CmdReplayControl(const Args& args)
   Fail("unknown replay command " + cmd);
 }
 
+// replay_save_clip {start, end}: the overlay's Clip, then "Save as highlight" (ReplayPlayback.h's
+// manual clips): `saved`, and the comm status with its `savedClips`.
+Result CmdReplaySaveClip(const Args& args)
+{
+  const auto frame = [&](const char* k) {
+    const picojson::value* v = Find(args, k);
+    if (!v || !v->is<double>())
+      Fail(std::string("argument '") + k + "' must be a frame");
+    return static_cast<s64>(v->get<double>());
+  };
+  const s64 start = frame("start");
+  const s64 end = frame("end");
+  Result r;
+  r["can_save"] = picojson::value(Gprb::Replay::Playback::CanSaveClip());
+  r["saved"] = picojson::value(Gprb::Replay::Playback::SaveClip(start, end));
+  r["comm"] = picojson::value(Gprb::Replay::Playback::Status());
+  return r;
+}
+
 Result CmdReplayStatus(const Args&)
 {
   Result r = Gprb::Session::PlaybackStatus();
@@ -2240,6 +2259,7 @@ const std::vector<std::pair<std::string_view, Handler>>& Handlers()
       {"replay_comm", CmdReplayComm},
       {"replay_status", CmdReplayStatus},
       {"replay_control", CmdReplayControl},
+      {"replay_save_clip", CmdReplaySaveClip},
       {"replay_recording", CmdReplayRecording},
       {"spectate_status", CmdSpectateStatus},
       {"spectate_config", CmdSpectateConfig},

@@ -83,6 +83,7 @@ Request s_request;
 size_t s_index = 0;
 bool s_armed = false;     // s_request's replay s_index is armed
 u32 s_armed_serial = 0;   // the session's serial of it
+std::string s_armed_path;  // its file
 std::string s_state = "idle";
 std::string s_error;
 bool s_needs_play_anyway = false;
@@ -123,6 +124,18 @@ u64 s_drain_frames = 0;
 size_t s_rendered = 0;
 // A clip's frames have all come once none has for this long.
 constexpr auto DRAIN_QUIET = std::chrono::milliseconds(500);
+// Manual clips saved in this run (the overlay's "Save as highlight"): the replay, its frames.
+struct SavedClip
+{
+  std::string path;
+  s64 start = 0;
+  s64 end = 0;
+};
+std::vector<SavedClip> s_saved_clips;
+// CanSaveClip, as of the loop's last step (the overlay asks every frame, without s_mutex).
+std::atomic<bool> s_can_save_clip{false};
+// (A run saves a few; this many is far more than anyone makes, and keeps the status small.)
+constexpr size_t MAX_SAVED_CLIPS = 500;
 
 // The game is running with our plugin (GameBridge found its block). The launcher's playback
 // Dolphin starts the comm file follower before it boots, and boots P+'s launcher DOL, whose game
@@ -404,6 +417,7 @@ void ArmCurrent()
     return;
   }
   s_armed = true;
+  s_armed_path = path;
   s_error.clear();
   s_state = "waiting";
   const auto st = Session::PlaybackStatus();
@@ -423,6 +437,19 @@ picojson::object StatusLocked()
   o["error"] = picojson::value(s_error);
   o["needsPlayAnyway"] = picojson::value(s_needs_play_anyway);
   o["mirror"] = picojson::value(s_request.mirror);
+  if (!s_saved_clips.empty())
+  {
+    picojson::array clips;
+    for (const auto& c : s_saved_clips)
+    {
+      picojson::object clip;
+      clip["path"] = picojson::value(c.path);
+      clip["startFrame"] = picojson::value(static_cast<double>(c.start));
+      clip["endFrame"] = picojson::value(static_cast<double>(c.end));
+      clips.emplace_back(std::move(clip));
+    }
+    o["savedClips"] = picojson::value(std::move(clips));
+  }
   if (s_request.highlights && s_index < s_request.clips.size())
   {
     o["highlights"] = picojson::value(true);
@@ -815,6 +842,17 @@ void Step()
   s_state = get_bool("started") ? "playing" : "waiting";
 }
 
+// Under s_mutex: the armed replay is the session's (not one that ended, nor the next one's yet).
+bool CanSaveClipLocked()
+{
+  if (s_comm_path.empty() || !s_armed || s_request.render || s_armed_path.empty())
+    return false;
+  const auto st = Session::PlaybackStatus();
+  const auto serial = st.find("serial");
+  return serial != st.end() && serial->second.is<double>() &&
+         static_cast<u32>(serial->second.get<double>()) == s_armed_serial;
+}
+
 void WriteStatus()
 {
   if (s_comm_path.empty())
@@ -931,6 +969,7 @@ void Loop()
       if (!stopping)
         Step();
       WriteStatus();
+      s_can_save_clip.store(CanSaveClipLocked(), std::memory_order_relaxed);
     }
     std::this_thread::sleep_for(POLL);
   }
@@ -976,6 +1015,27 @@ std::optional<std::string> PlayFile(const std::string& path, bool play_anyway, b
   if (!s_armed)
     return s_error.empty() ? std::string("cannot play") : s_error;
   return std::nullopt;
+}
+
+bool CanSaveClip()
+{
+  return s_can_save_clip.load(std::memory_order_relaxed);
+}
+
+bool SaveClip(s64 start, s64 end)
+{
+  std::lock_guard lk(s_mutex);
+  if (!CanSaveClipLocked() || end <= start || s_saved_clips.size() >= MAX_SAVED_CLIPS)
+    return false;
+  // (The same frames saved again are one clip.)
+  const bool known = std::any_of(s_saved_clips.begin(), s_saved_clips.end(), [&](const SavedClip& c) {
+    return c.path == s_armed_path && c.start == start && c.end == end;
+  });
+  if (!known)
+    s_saved_clips.push_back({s_armed_path, start, end});
+  NOTICE_LOG_FMT(BRAWLBACK, "replay: clip saved, frames {} to {} of {}", start, end, s_armed_path);
+  WriteStatus();
+  return true;
 }
 
 picojson::object Status()

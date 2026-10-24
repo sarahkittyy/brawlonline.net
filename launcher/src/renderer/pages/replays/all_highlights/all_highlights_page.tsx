@@ -3,12 +3,13 @@
  * finds them: the ones already known at once, the others as they are found, one replay at a time),
  * playable and renderable as on a replay's stats page. A sidebar as Replays' folders: All
  * highlights, My Highlights (this machine's player's: the replay's recorder), Opponent Highlights
- * (anyone's not on my side), L+R+Z Highlights (the clips), or Favorites (the starred ones,
- * favorites.ts), the same list of fewer rows. The search above the list keeps the games with a
- * player whose name or code has it.
+ * (anyone's not on my side), L+R+Z Highlights (the clips), Manual Clips (the playback Dolphin's
+ * seek bar clips, manual_clips.ts), or Favorites (the starred ones, favorites.ts), the same list of
+ * fewer rows. The search above the list keeps the games with a player whose name or code has it.
  */
 import CloseIcon from "@mui/icons-material/Close";
 import ContentCutIcon from "@mui/icons-material/ContentCut";
+import CropIcon from "@mui/icons-material/Crop";
 import GroupIcon from "@mui/icons-material/Group";
 import PersonIcon from "@mui/icons-material/Person";
 import SearchIcon from "@mui/icons-material/Search";
@@ -30,13 +31,14 @@ import { useSetting } from "@/lib/hooks/use_settings";
 import { favoriteKey, useFavoriteHighlights } from "@/pages/replays/replay_file_stats/highlights/favorites";
 import type { HighlightEntry } from "@/pages/replays/replay_file_stats/highlights/highlight_list";
 import { comboOfManyName, HighlightRows } from "@/pages/replays/replay_file_stats/highlights/highlight_list";
+import { manualClipEntry, useManualClips } from "@/pages/replays/replay_file_stats/highlights/manual_clips";
 import { useServices } from "@/services";
 
 import { AllHighlightsMessages as Messages } from "./all_highlights_page.messages";
 import styles from "./all_highlights_page.module.css";
 
 type Sort = "best" | "newest";
-type View = "all" | "mine" | "opponents" | "clips" | "favorites";
+type View = "all" | "mine" | "opponents" | "clips" | "manual" | "favorites";
 
 /** `a` and `b` are on the same side: the same player, or teammates in a team battle. */
 const sameSide = (game: ReplayHighlights, a: number, b: number) => {
@@ -66,6 +68,7 @@ export const AllHighlightsPage = React.memo(() => {
   const [view, setView] = useState<View>("all");
   const [search, setSearch] = useState("");
   const { favorites } = useFavoriteHighlights();
+  const { clips: manualClips } = useManualClips();
   // Favorites keeps the rows unstarred while it is open (starred again in a click), not moving the others up.
   const [shown, setShown] = useState<ReadonlySet<string>>(new Set());
   const openView = (next: View) => {
@@ -107,7 +110,7 @@ export const AllHighlightsPage = React.memo(() => {
   }, [replayService, detectionOff, clipOnLrz]);
 
   const query = search.trim().toLowerCase();
-  const { entries, highlightCount } = useMemo(() => {
+  const entries = useMemo(() => {
     const all = [...games.values()].filter((g) => !query || hasPlayer(g.highlights, query));
     let highlights: HighlightEntry[] = all.flatMap((g) =>
       g.highlights.highlights.map((row, i) => ({
@@ -127,37 +130,55 @@ export const AllHighlightsPage = React.memo(() => {
         date: g.date,
       })),
     );
+    // Newest saved first.
+    let manual: HighlightEntry[] = [...manualClips]
+      .sort((a, b) => b.savedAt.localeCompare(a.savedAt))
+      .map(manualClipEntry)
+      .filter((e) => !query || hasPlayer(e.game, query));
     // (A replay that doesn't say which player recorded it is in neither mine nor my opponents'.)
     const attacker = (e: HighlightEntry) => (e.row.kind === "highlight" ? e.row.attackerPort : 0);
     if (view === "mine") {
       highlights = highlights.filter((e) => e.game.recorderPort != null && attacker(e) === e.game.recorderPort);
       clips = [];
+      manual = [];
     } else if (view === "opponents") {
       highlights = highlights.filter((e) => {
         const me = e.game.recorderPort;
         return me != null && !sameSide(e.game, attacker(e), me);
       });
       clips = [];
+      manual = [];
     } else if (view === "clips") {
       highlights = [];
+      manual = [];
+    } else if (view === "manual") {
+      highlights = [];
+      clips = [];
     } else if (view === "favorites") {
       const listed = (e: HighlightEntry) => favorites.has(favoriteKey(e)) || shown.has(favoriteKey(e));
       highlights = highlights.filter(listed);
       clips = clips.filter(listed);
+      manual = manual.filter(listed);
     }
     const newest = (a: HighlightEntry, b: HighlightEntry) =>
       (b.date ?? "").localeCompare(a.date ?? "") || a.row.startFrame - b.row.startFrame;
     const score = (e: HighlightEntry) => (e.row.kind === "highlight" ? e.row.score : 0);
     highlights.sort(sort === "best" ? (a, b) => score(b) - score(a) || newest(a, b) : newest);
     clips.sort(newest);
-    return { entries: [...highlights, ...clips], highlightCount: highlights.length };
-  }, [games, sort, view, favorites, shown, query]);
+    return [...highlights, ...clips, ...manual];
+  }, [games, sort, view, favorites, shown, query, manualClips]);
 
   const finding = progress != null && progress.done < progress.total;
   const emptyNote =
-    error != null
+    view === "manual"
+      ? entries.length === 0
+        ? query
+          ? Messages.noMatch(search.trim())
+          : Messages.noManual()
+        : null
+      : error != null
       ? Messages.couldNotLoad(error)
-      : detectionOff && !clipOnLrz
+      : detectionOff && !clipOnLrz && entries.length === 0
       ? Messages.detectionOff()
       : (view === "mine" || view === "opponents") && detectionOff
       ? Messages.highlightsOff()
@@ -217,6 +238,7 @@ export const AllHighlightsPage = React.memo(() => {
               Messages.lrzHighlights(),
               Messages.lrzHint(CLIP_BEFORE_SECONDS),
             )}
+            {sidebarItem("manual", <CropIcon fontSize="small" />, Messages.manualClips(), Messages.manualHint())}
             {sidebarItem("favorites", <StarIcon fontSize="small" />, Messages.favorites())}
             <div className={styles.sideRest} />
           </div>
@@ -236,7 +258,6 @@ export const AllHighlightsPage = React.memo(() => {
             )}
             <HighlightRows
               entries={entries}
-              highlightCount={highlightCount}
               resetKey={view}
               emptyNote={emptyNote}
               showDates={true}

@@ -53,6 +53,35 @@ export type ReplayHighlights = {
   error?: string;
 };
 
+/**
+ * A manual clip (docs/design/highlights.md §9): frames of a replay or a spectated game the player
+ * chose on the playback Dolphin's seek bar (Clip, then "Save as highlight"). Kept in the settings
+ * (`manualClips`) with what its rows show of the game, as the replay's highlights aren't always
+ * found (a spectated game has no fighter memory).
+ */
+export type ManualClip = {
+  /** The replay (a spectated game: its copy in <Root Replay Folder>/Spectated). */
+  path: string;
+  startFrame: number;
+  endFrame: number;
+  /** When it was saved, and when the game was played (ISO). */
+  savedAt: string;
+  date: string;
+  players: HighlightPlayer[];
+  isTeams: boolean;
+  recorderPort: number | null;
+  /** Clipped while spectating. */
+  spectated?: boolean;
+};
+
+/** A manual clip as a row of the lists. */
+export type ReplayManualClip = {
+  kind: "manual";
+  startFrame: number;
+  endFrame: number;
+  savedAt: string;
+};
+
 /** An L+R+Z clip is of the last this many seconds before the hold (lrz_clips.ts). */
 export const CLIP_BEFORE_SECONDS = 20;
 

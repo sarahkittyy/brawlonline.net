@@ -178,6 +178,23 @@
   padding-right: 44px;
 }
 
+/* A manual clip's row: room for its remove button too (.remove, left of the star). */
+.rowBox .row.removable {
+  padding-right: 80px;
+}
+
+.rowBox .remove {
+  position: absolute;
+  top: 50%;
+  right: 44px;
+  transform: translateY(-50%);
+  color: rgb(255 255 255 / 45%);
+}
+
+.rowBox .remove:hover {
+  color: var(--off-white);
+}
+
 /* (.rowBox first: over MUI's own IconButton styles.) */
 .rowBox .star {
   position: absolute;

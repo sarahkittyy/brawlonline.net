@@ -35,6 +35,12 @@
 // "render", "output", "rendered" (the clips written so far) and "framesWritten"; "ended" once the
 // file is complete, "error" (the file deleted) when it could not be. A new request gives up a
 // render still going.
+//
+// Manual clips (docs/design/highlights.md section 9): the overlay's Clip on the seek bar, then
+// "Save as highlight", keeps the replay playing's frames from one handle to the other (SaveClip).
+// The status lists every clip saved in this Dolphin's run, "savedClips": [{"path", "startFrame",
+// "endFrame"}, ...] (path: the replay armed, a spectated game's file too); the launcher keeps each
+// once, as a Manual Clip.
 
 #pragma once
 
@@ -42,6 +48,8 @@
 #include <string>
 
 #include <picojson.h>
+
+#include "Common/CommonTypes.h"
 
 namespace Gprb::Replay::Playback
 {
@@ -53,6 +61,12 @@ bool Following();
 // Plays one file at once (the harness); an error when it cannot be played.
 std::optional<std::string> PlayFile(const std::string& path, bool play_anyway, bool hold_at_end = false);
 picojson::object Status();
+// Whether a clip can be saved: a launcher follows this Dolphin (the comm file) and a replay of its
+// request is armed, not rendered.
+bool CanSaveClip();
+// Saves frames `start` to `end` of the replay armed (any thread: the overlay's); false when
+// CanSaveClip is not, or the session's replay is no longer the armed one.
+bool SaveClip(s64 start, s64 end);
 // Stops following the comm file (emulation shutdown).
 void Shutdown();
 }  // namespace Gprb::Replay::Playback

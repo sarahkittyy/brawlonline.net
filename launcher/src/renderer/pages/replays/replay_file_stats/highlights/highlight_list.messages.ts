@@ -1,6 +1,9 @@
 export const HighlightListMessages = {
   highlights: () => "Highlights",
   clips: () => "Clips (L+R+Z)",
+  manualClips: () => "Manual clips",
+  manualClip: (length: string) => "Clip ({0})",
+  removeClip: () => "Remove this clip",
   playAll: () => "Play all",
   vs: () => "vs",
   clippedBy: () => "Clipped by",
