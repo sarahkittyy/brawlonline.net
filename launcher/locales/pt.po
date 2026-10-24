@@ -231,10 +231,6 @@ msgstr ""
 msgid "CGNAT or Double NAT"
 msgstr "CGNAT ou NAT Duplo"
 
-#: src/renderer/components/activate_online_form/activate_online_form.messages.ts:5:23
-msgid "Can be changed once later on request"
-msgstr ""
-
 #: src/renderer/components/verify_email_form/verify_email_form.messages.ts:4:24
 msgid "Can't find the email? Check your spam folder. Still missing? "
 msgstr "Não encontra o e-mail? Verifique sua pasta de spam. Ainda não aparece? "
@@ -405,7 +401,7 @@ msgstr "Confirmar"
 msgid "Confirm File Deletion"
 msgstr "Confirmar Exclusão de Arquivo"
 
-#: src/renderer/components/activate_online_form/activate_online_form.messages.ts:6:22
+#: src/renderer/components/activate_online_form/activate_online_form.messages.ts:5:22
 msgid "Confirm code"
 msgstr "Confirmar código"
 

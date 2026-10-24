@@ -75,7 +75,6 @@ const ConnectCodeSetter = ({ displayName, onSuccess }: ConnectCodeSetterProps) =
         <ul>
           <li>{Messages.twoToFourCharacters()}</li>
           <li>{Messages.trailingNumbers()}</li>
-          <li>{Messages.canBeChanged()}</li>
         </ul>
       </Typography>
       <Controller
