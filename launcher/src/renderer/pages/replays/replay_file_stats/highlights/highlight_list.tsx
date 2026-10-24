@@ -3,7 +3,7 @@
  * detector measured. A row plays in the playback Dolphin from just before the string to just after
  * it; ↑/↓ (or Tab) plays the next one at once, and the only wait (Dolphin's fast-forward to it)
  * shows with its progress. The list played from is the playback Dolphin's "<< < > >>"
- * (highlight_playlist.ts), and the row playing follows them. A click also selects the row (Ctrl+click
+ * (highlight_playlist.ts), and the row playing follows them. A click only selects the row (Ctrl+click
  * adds or removes one, Shift+click a range); the selected rows render to video (docs/design/highlights.md
  * §4): Render (w/ Music) or Render (No Music), a file each, or one combo movie of them all.
  * `HighlightList` is a replay's (its stats page); `HighlightRows` lists rows of any replays (the
@@ -240,14 +240,17 @@ export const HighlightRows = ({
     [playlist, playEntry, sourceId],
   );
 
-  // A click selects the row alone and plays it (as ↑/↓ do); Ctrl+click adds or removes it, Shift+click
-  // selects the rows from the last one clicked to it (with Ctrl: as well as those selected), neither playing.
-  const open = (index: number) => {
+  // A click selects the row alone (only its Play button, ↑/↓ and Enter play); Ctrl+click adds or removes
+  // it, Shift+click selects the rows from the last one clicked to it (with Ctrl: as well as those selected).
+  const selectOnly = (index: number) => {
     const key = entries[index]?.key;
     if (key != null) {
       setTicked(new Set([key]));
       setAnchor(key);
     }
+  };
+  const open = (index: number) => {
+    selectOnly(index);
     void play(index);
   };
   const clickRow = (index: number, e: React.MouseEvent) => {
@@ -271,7 +274,7 @@ export const HighlightRows = ({
       });
       setAnchor(key);
     } else {
-      open(index);
+      selectOnly(index);
     }
   };
 

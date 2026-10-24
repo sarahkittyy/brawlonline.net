@@ -42,7 +42,8 @@ looked at again).
 vs the victim's (teams: the attacker's team vs the victim's), best first, then "Clips (L+R+Z)",
 each a scissors icon and the game's players, X vs Y (as a manual clip's row; not "Clipped by"
 the recorder any more, 2026-10-24, the user: only the recording player's presses are clips, so
-it was always you). A click plays it and selects it; ↑/↓ or Tab/Shift+Tab plays the next one at once; Enter plays the
+it was always you). A click only selects it (2026-10-24, the user: clicking is for selecting, only
+the Play button starts it); ↑/↓ or Tab/Shift+Tab plays the next one at once; Enter plays the
 selected one (Play all went 2026-10-24: the playback Dolphin's list buttons, §3, took its place).
 A row starts with its favorite star and ends with a Play button (as the Replays page's), which plays
 it without touching the selection (2026-10-24, the user).
@@ -128,7 +129,7 @@ the list's stars, count, picks, nav requests and updates). Launcher: `highlight_
 Above the rows, one line that stays as the rows scroll (2026-10-24, the user: no "Highlights"
 title, no Render as Video tick box): the Highlights tab's search and sort, then **One combo movie**,
 **Render (w/ Music)** and **Render (No Music)**, enabled once a row is selected. A click selects
-a row (and plays it), shown with a brighter outline; Ctrl+click adds or removes one, Shift+click
+a row (not playing it), shown with a brighter outline; Ctrl+click adds or removes one, Shift+click
 selects a range from the last one clicked (Ctrl+Shift adds it), neither playing; Ctrl+A selects
 all. The render buttons render the selected rows, a video each, or with One combo movie one video,
 in the list's order; queued, the selection clears. No Dolphin window opens: under the buttons each job
