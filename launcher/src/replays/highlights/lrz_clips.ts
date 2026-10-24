@@ -9,6 +9,7 @@
  */
 import type { Timeline } from "./replay_frames";
 import { PAD_KEPT } from "./replay_frames";
+import { CLIP_BEFORE_SECONDS } from "./types";
 
 // gfPadStatus +0x0 (u32, big-endian): the low byte holds L, R and Z.
 const L = 0x40;
@@ -17,7 +18,7 @@ const Z = 0x10;
 const LRZ = L | R | Z;
 export const HOLD_FRAMES = 30;
 // Project Clippi's defaults: 20 s before, 2 s after, a 5 s lockout.
-export const CLIP_BEFORE = 20 * 60;
+export const CLIP_BEFORE = CLIP_BEFORE_SECONDS * 60;
 export const CLIP_AFTER = 2 * 60;
 export const LOCKOUT = 5 * 60;
 

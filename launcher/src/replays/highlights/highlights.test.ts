@@ -197,6 +197,8 @@ describe("replay highlights", () => {
     expect(analyzeTimeline(decodeTimeline(encode(game([1, 2, 3, 4], 40), 2)), options).clips).toHaveLength(0);
     const all = analyzeTimeline(decodeTimeline(encode(game([1, 2, 3, 4], 40), 2)), { ...options, clipPlayers: "all" });
     expect(all.clips.map((c) => c.port)).toEqual([1]);
+    // (Replays > Highlights > My Highlights: the recorder's.)
+    expect(all.recorderPort).toBe(2);
   });
 
   it("plays a highlight from 1.5 s before its first hit to 1 s after the string", async () => {

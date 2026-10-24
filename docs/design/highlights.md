@@ -212,6 +212,16 @@ background, the open entry the page's own so it joins the list: **All highlights
 arriving) and **Favorites**, the same list of the starred rows only. A row unstarred in Favorites
 stays (hollow) until Favorites is opened again, so the rows under it don't move while playing.
 
+**Search and more sections** (the user, 2026-10-24). Left of the sort, a search box keeps the
+rows of games with a player whose name or code has the text (any case), in every section. Between
+All highlights and Favorites the sidebar has **My Highlights** (highlights whose attacker is this
+machine's player: the replay's recorder port, kept in each replay's highlights as `recorderPort`),
+**Opponent Highlights** (attacker not me, nor my teammate in a team battle) and **L+R+Z
+Highlights** (the clips only; hovering it says "Press L+R+Z in-game to clip the last 20 seconds.",
+from `CLIP_BEFORE_SECONDS`). A replay without a recorder port is in neither mine nor my opponents'.
+Highlights cached before `recorderPort` was kept get it from the replay's header the first time
+they are read (`highlight_service.ts`), written back to the cache, so no replay is analysed again.
+
 ## 7. Settings > Clips > Video Resolution, and a playback that never starts (2026-10-21)
 
 Video Resolution (the user's request): a dropdown of 480p, 720p (the default), 1080p and 1440p

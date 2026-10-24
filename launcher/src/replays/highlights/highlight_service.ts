@@ -4,6 +4,7 @@
  * (path, size, modification time), detector version and what was looked for.
  */
 import type { Database } from "@database/schema";
+import { readReplayHeader } from "@replays/replay_format";
 import electronLog from "electron-log";
 import type { Kysely } from "kysely";
 import { stat } from "node:fs/promises";
@@ -71,7 +72,20 @@ export class HighlightService {
         row.detector_version === DETECTOR_VERSION &&
         row.mode === mode
       ) {
-        return JSON.parse(row.result) as ReplayHighlights;
+        const result = JSON.parse(row.result) as ReplayHighlights;
+        // Cached before the recorder was kept: from the replay's header, once.
+        if (result.recorderPort === undefined && !result.error) {
+          result.recorderPort = await readReplayHeader(fullPath).then(
+            (h) => h.meta.recorderPort,
+            () => null,
+          );
+          await db
+            .updateTable("highlight_cache")
+            .set({ result: JSON.stringify(result) })
+            .where("path", "=", fullPath)
+            .execute();
+        }
+        return result;
       }
     } catch (err) {
       log.warn(`highlight cache: ${err}`);

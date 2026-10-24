@@ -39,6 +39,12 @@ export type ReplayHighlights = {
   detectorVersion: number;
   players: HighlightPlayer[];
   isTeams: boolean;
+  /**
+   * This machine's player (the replay's recorder), whose highlights are "mine" in Replays >
+   * Highlights; null when the replay doesn't say. (Results cached before it was kept get it from
+   * the replay's header as they are read: highlight_service.ts.)
+   */
+  recorderPort?: number | null;
   /** Sorted by score, best first. */
   highlights: ReplayHighlight[];
   /** In game order. */
@@ -46,6 +52,9 @@ export type ReplayHighlights = {
   /** Why nothing could be found (an older replay without fighter memory, a damaged file). */
   error?: string;
 };
+
+/** An L+R+Z clip is of the last this many seconds before the hold (lrz_clips.ts). */
+export const CLIP_BEFORE_SECONDS = 20;
 
 /** What the stats page asks for. */
 export type HighlightsRequest = {

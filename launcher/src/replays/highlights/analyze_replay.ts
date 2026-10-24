@@ -59,6 +59,7 @@ export function analyzeTimeline(t: Timeline, options: AnalyzeOptions): ReplayHig
       teamId,
     })),
     isTeams: t.isTeams,
+    recorderPort: t.recorderPort,
     highlights,
     clips,
   };

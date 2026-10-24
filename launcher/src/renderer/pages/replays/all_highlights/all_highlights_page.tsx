@@ -2,14 +2,27 @@
  * Replays > Highlights: every replay's highlights and L+R+Z clips in one list (all_highlights.ts
  * finds them: the ones already known at once, the others as they are found, one replay at a time),
  * playable and renderable as on a replay's stats page. A sidebar as Replays' folders: All
- * highlights, or Favorites (the starred ones, favorites.ts), the same list of fewer rows.
+ * highlights, My Highlights (this machine's player's: the replay's recorder), Opponent Highlights
+ * (anyone's not on my side), L+R+Z Highlights (the clips), or Favorites (the starred ones,
+ * favorites.ts), the same list of fewer rows. The search above the list keeps the games with a
+ * player whose name or code has it.
  */
+import CloseIcon from "@mui/icons-material/Close";
+import ContentCutIcon from "@mui/icons-material/ContentCut";
+import GroupIcon from "@mui/icons-material/Group";
+import PersonIcon from "@mui/icons-material/Person";
+import SearchIcon from "@mui/icons-material/Search";
 import StarIcon from "@mui/icons-material/Star";
 import VideoLibraryIcon from "@mui/icons-material/VideoLibrary";
+import IconButton from "@mui/material/IconButton";
+import InputAdornment from "@mui/material/InputAdornment";
+import InputBase from "@mui/material/InputBase";
 import LinearProgress from "@mui/material/LinearProgress";
 import MenuItem from "@mui/material/MenuItem";
 import Select from "@mui/material/Select";
-import type { GameHighlights } from "@replays/highlights/types";
+import Tooltip from "@mui/material/Tooltip";
+import type { GameHighlights, ReplayHighlights } from "@replays/highlights/types";
+import { CLIP_BEFORE_SECONDS } from "@replays/highlights/types";
 import React, { useEffect, useMemo, useState } from "react";
 
 import { DualPane } from "@/components/dual_pane";
@@ -23,7 +36,23 @@ import { AllHighlightsMessages as Messages } from "./all_highlights_page.message
 import styles from "./all_highlights_page.module.css";
 
 type Sort = "best" | "newest";
-type View = "all" | "favorites";
+type View = "all" | "mine" | "opponents" | "clips" | "favorites";
+
+/** `a` and `b` are on the same side: the same player, or teammates in a team battle. */
+const sameSide = (game: ReplayHighlights, a: number, b: number) => {
+  if (a === b) {
+    return true;
+  }
+  if (!game.isTeams) {
+    return false;
+  }
+  const team = (port: number) => game.players.find((p) => p.port === port)?.teamId ?? null;
+  return team(a) != null && team(a) === team(b);
+};
+
+/** A player of the game has `query` (lower case) in their name or code. */
+const hasPlayer = (game: ReplayHighlights, query: string) =>
+  game.players.some((p) => p.displayName.toLowerCase().includes(query) || p.connectCode.toLowerCase().includes(query));
 
 export const AllHighlightsPage = React.memo(() => {
   const { replayService } = useServices();
@@ -35,6 +64,7 @@ export const AllHighlightsPage = React.memo(() => {
   const [error, setError] = useState<string | null>(null);
   const [sort, setSort] = useState<Sort>("best");
   const [view, setView] = useState<View>("all");
+  const [search, setSearch] = useState("");
   const { favorites } = useFavoriteHighlights();
   // Favorites keeps the rows unstarred while it is open (starred again in a click), not moving the others up.
   const [shown, setShown] = useState<ReadonlySet<string>>(new Set());
@@ -76,8 +106,9 @@ export const AllHighlightsPage = React.memo(() => {
     };
   }, [replayService, detectionOff, clipOnLrz]);
 
+  const query = search.trim().toLowerCase();
   const { entries, highlightCount } = useMemo(() => {
-    const all = [...games.values()];
+    const all = [...games.values()].filter((g) => !query || hasPlayer(g.highlights, query));
     let highlights: HighlightEntry[] = all.flatMap((g) =>
       g.highlights.highlights.map((row, i) => ({
         key: `${g.path}#h${i}`,
@@ -96,7 +127,20 @@ export const AllHighlightsPage = React.memo(() => {
         date: g.date,
       })),
     );
-    if (view === "favorites") {
+    // (A replay that doesn't say which player recorded it is in neither mine nor my opponents'.)
+    const attacker = (e: HighlightEntry) => (e.row.kind === "highlight" ? e.row.attackerPort : 0);
+    if (view === "mine") {
+      highlights = highlights.filter((e) => e.game.recorderPort != null && attacker(e) === e.game.recorderPort);
+      clips = [];
+    } else if (view === "opponents") {
+      highlights = highlights.filter((e) => {
+        const me = e.game.recorderPort;
+        return me != null && !sameSide(e.game, attacker(e), me);
+      });
+      clips = [];
+    } else if (view === "clips") {
+      highlights = [];
+    } else if (view === "favorites") {
       const listed = (e: HighlightEntry) => favorites.has(favoriteKey(e)) || shown.has(favoriteKey(e));
       highlights = highlights.filter(listed);
       clips = clips.filter(listed);
@@ -107,7 +151,7 @@ export const AllHighlightsPage = React.memo(() => {
     highlights.sort(sort === "best" ? (a, b) => score(b) - score(a) || newest(a, b) : newest);
     clips.sort(newest);
     return { entries: [...highlights, ...clips], highlightCount: highlights.length };
-  }, [games, sort, view, favorites, shown]);
+  }, [games, sort, view, favorites, shown, query]);
 
   const finding = progress != null && progress.done < progress.total;
   const emptyNote =
@@ -115,23 +159,44 @@ export const AllHighlightsPage = React.memo(() => {
       ? Messages.couldNotLoad(error)
       : detectionOff && !clipOnLrz
       ? Messages.detectionOff()
+      : (view === "mine" || view === "opponents") && detectionOff
+      ? Messages.highlightsOff()
+      : view === "clips" && !clipOnLrz
+      ? Messages.clipsOff()
       : !loading && !finding && entries.length === 0
-      ? view === "favorites"
+      ? query
+        ? Messages.noMatch(search.trim())
+        : view === "favorites"
         ? Messages.noFavorites()
+        : view === "mine"
+        ? Messages.noMine()
+        : view === "opponents"
+        ? Messages.noOpponents()
+        : view === "clips"
+        ? Messages.noClips(CLIP_BEFORE_SECONDS)
         : Messages.none()
       : null;
 
-  const sidebarItem = (id: View, icon: React.ReactNode, label: string) => (
-    <button
-      type="button"
-      className={`${styles.sideItem} ${view === id ? styles.sideSelected : ""}`}
-      onClick={() => openView(id)}
-      aria-current={view === id}
-    >
-      {icon}
-      <span className={styles.sideLabel}>{label}</span>
-    </button>
-  );
+  const sidebarItem = (id: View, icon: React.ReactNode, label: string, hint?: string) => {
+    const item = (
+      <button
+        type="button"
+        className={`${styles.sideItem} ${view === id ? styles.sideSelected : ""}`}
+        onClick={() => openView(id)}
+        aria-current={view === id}
+      >
+        {icon}
+        <span className={styles.sideLabel}>{label}</span>
+      </button>
+    );
+    return hint ? (
+      <Tooltip title={hint} placement="right" arrow={true}>
+        {item}
+      </Tooltip>
+    ) : (
+      item
+    );
+  };
 
   return (
     <div className={styles.outer}>
@@ -144,6 +209,14 @@ export const AllHighlightsPage = React.memo(() => {
         leftSide={
           <div className={styles.sidebar}>
             {sidebarItem("all", <VideoLibraryIcon fontSize="small" />, Messages.allHighlights())}
+            {sidebarItem("mine", <PersonIcon fontSize="small" />, Messages.myHighlights())}
+            {sidebarItem("opponents", <GroupIcon fontSize="small" />, Messages.opponentHighlights())}
+            {sidebarItem(
+              "clips",
+              <ContentCutIcon fontSize="small" />,
+              Messages.lrzHighlights(),
+              Messages.lrzHint(CLIP_BEFORE_SECONDS),
+            )}
             {sidebarItem("favorites", <StarIcon fontSize="small" />, Messages.favorites())}
             <div className={styles.sideRest} />
           </div>
@@ -169,16 +242,32 @@ export const AllHighlightsPage = React.memo(() => {
               showDates={true}
               comboName={comboOfManyName}
               headerExtra={
-                <Select
-                  size="small"
-                  value={sort}
-                  onChange={(e) => setSort(e.target.value as Sort)}
-                  className={styles.sort}
-                  inputProps={{ "aria-label": Messages.sort() }}
-                >
-                  <MenuItem value="best">{Messages.bestFirst()}</MenuItem>
-                  <MenuItem value="newest">{Messages.newestFirst()}</MenuItem>
-                </Select>
+                <>
+                  <InputBase
+                    className={styles.search}
+                    placeholder={Messages.search()}
+                    value={search}
+                    onChange={(e) => setSearch(e.target.value)}
+                    inputProps={{ "aria-label": Messages.search() }}
+                    endAdornment={
+                      <InputAdornment position="end">
+                        <IconButton size="small" onClick={() => setSearch("")} disabled={search.length === 0}>
+                          {search.length > 0 ? <CloseIcon fontSize="inherit" /> : <SearchIcon fontSize="inherit" />}
+                        </IconButton>
+                      </InputAdornment>
+                    }
+                  />
+                  <Select
+                    size="small"
+                    value={sort}
+                    onChange={(e) => setSort(e.target.value as Sort)}
+                    className={styles.sort}
+                    inputProps={{ "aria-label": Messages.sort() }}
+                  >
+                    <MenuItem value="best">{Messages.bestFirst()}</MenuItem>
+                    <MenuItem value="newest">{Messages.newestFirst()}</MenuItem>
+                  </Select>
+                </>
               }
             />
           </div>
