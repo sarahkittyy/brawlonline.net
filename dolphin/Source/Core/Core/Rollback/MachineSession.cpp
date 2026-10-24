@@ -288,6 +288,13 @@ struct PeerLink
   std::string code;
   std::string name;
   std::vector<enet_uint32> ips;
+  // While a room member has no link (LogNoLink): since when, this side's connection attempts, its
+  // hellos on a connection this side does not keep (only the one the lower slot started is kept),
+  // and the lines logged.
+  Clock::time_point link_wanted{};
+  int attempts = 0;
+  int unkept_hellos = 0;
+  int no_link_logs = 0;
   // A joiner: how much of its machine image it has (tenths), for the image of `image_epoch`.
   int image_epoch = -1;
   int image_tenths = -1;
@@ -876,7 +883,10 @@ void OnHello(ENetPeer* peer, const picojson::object& msg)
   const bool this_is_mine = (reinterpret_cast<intptr_t>(peer->data) & OUTGOING) != 0;
   const bool keep = lower_is_me ? this_is_mine : !this_is_mine;
   if (!keep)
+  {
+    ++p.unkept_hellos;
     return;  // the other connection is the one both keep; this one idles until it drops
+  }
   if (p.peer && p.peer != peer)
     enet_peer_disconnect_later(p.peer, 0);
   if (p.peer != peer)
@@ -2199,6 +2209,27 @@ void SendQueuedGekko(Clock::time_point now)
   s.gekko_tx.clear();
 }
 
+// Net thread, under net_mutex: a room member still without a link 10 s and 30 s after it came,
+// once each, with how far this side got, so a joiner that never connects says why in its log
+// (bug report #133: three REX joins with no "peer connected" and nothing else).
+void LogNoLink(PeerLink& p, Clock::time_point now)
+{
+  if (p.slot < 0 || p.hello || p.link_wanted == Clock::time_point{} || p.no_link_logs >= 2)
+    return;
+  const auto after = std::chrono::seconds(p.no_link_logs == 0 ? 10 : 30);
+  if (now - p.link_wanted < after)
+    return;
+  ++p.no_link_logs;
+  const char* latest = !p.connecting                                  ? "none under way" :
+                       p.connecting->state == ENET_PEER_STATE_CONNECTING ? "no answer" :
+                       p.connecting->state == ENET_PEER_STATE_CONNECTED  ? "connected, no hello" :
+                                                                           "answered, not connected";
+  AddLog(fmt::format("no link to player {} ({}) at {}:{} after {} s: {} attempts from here "
+                     "(latest: {}), {} hellos on the other connection (only the lower slot's is kept)",
+                     p.slot + 1, p.code, p.host, p.port, after.count(), p.attempts, latest,
+                     p.unkept_hellos));
+}
+
 void NetThread()
 {
   Common::SetCurrentThreadName("Machine session");
@@ -2336,8 +2367,11 @@ void NetThread()
       {
         peer->data = reinterpret_cast<void*>(static_cast<intptr_t>(p.slot + 1) | OUTGOING);
         p.connecting = peer;
+        ++p.attempts;
       }
     }
+    for (PeerLink& p : s.peers)
+      LogNoLink(p, now);
     ENetEvent ev;
     int r = enet_host_service(s.host, &ev, 0);
     while (r > 0)
@@ -6787,17 +6821,27 @@ void SetRoom(int local_slot, const std::vector<RoomMember>& members)
       // A session's player takes a new member for a joiner; a joiner waits for its hello to know.
       p.late = !(s.opts.join && !LocalPlays());
       p.last_connect = {};
+      p.link_wanted = Clock::now();
+      p.attempts = 0;
+      p.unkept_hellos = 0;
+      p.no_link_logs = 0;
     }
     p.name = m->name;
     // Its address: on this player's network (the same public address) or on the network chosen
     // in the launcher (a VPN such as ZeroTier, room_network), its LAN one.
-    const bool same_net =
-        (self && !self->host.empty() && self->host == m->host && !m->lan_host.empty()) ||
-        s.room_network.Contains(m->lan_host);
+    const bool same_public =
+        self && !self->host.empty() && self->host == m->host && !m->lan_host.empty();
+    const bool on_chosen = s.room_network.Contains(m->lan_host);
+    const bool same_net = same_public || on_chosen;
     const std::string& host = same_net ? m->lan_host : m->host;
     const u16 port = same_net ? m->lan_port : m->port;
     if (host != p.host || port != p.port)
     {
+      AddLog(fmt::format("room: player {} ({}) is reached at {}:{} ({})", slot + 1, m->code, host,
+                         port,
+                         same_public ? "LAN: the same internet address as ours" :
+                         on_chosen   ? "LAN: on the network chosen in the launcher" :
+                                       "internet"));
       p.host = host;
       p.port = port;
       p.last_connect = {};
