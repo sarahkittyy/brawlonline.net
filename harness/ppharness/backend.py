@@ -114,7 +114,7 @@ class OnlineBackend:
         # mm's spectating kill switch (MM_SPECTATE: off, witness, on); None: mm's default (off).
         self.spectate = spectate
         # MM_REMATCH_HOLD_SECS: tests pair the same two players again and again, so no hold by
-        # default; None: mm's own (30 s).
+        # default; None: mm's own (60 s).
         self.rematch_hold_secs = rematch_hold_secs
         self.pg_mode = ""
         self.admin_url = ""

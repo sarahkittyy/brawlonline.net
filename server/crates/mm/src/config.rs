@@ -91,7 +91,7 @@ pub struct Config {
 
     /// Two players who just played each other are paired again only once the longer-waiting of
     /// the two has waited this many seconds.
-    #[arg(long, env = "MM_REMATCH_HOLD_SECS", default_value_t = 30)]
+    #[arg(long, env = "MM_REMATCH_HOLD_SECS", default_value_t = 60)]
     pub rematch_hold_secs: u64,
 
     /// Maximum simultaneous ENet peers.
@@ -196,7 +196,7 @@ impl Config {
             ping_limit_step_ms: 30.0,
             ping_limit_step_secs: 10,
             ping_limit_open_secs: 40,
-            rematch_hold_secs: 30,
+            rematch_hold_secs: 60,
             max_peers: 64,
             ticket_interval_secs: 2,
             max_conns_per_ip: 8,

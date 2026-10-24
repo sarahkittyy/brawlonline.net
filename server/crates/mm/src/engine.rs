@@ -47,7 +47,7 @@
 //! estimate (an address the database does not place, or no database) is never held back. Two
 //! players who just played each other (each one's last Unranked or Ranked opponent, within
 //! `rematch_memory`) are held back the same way until the longer-waiting has waited
-//! `rematch_hold` (30 s), so anyone else searching meanwhile is paired first.
+//! `rematch_hold` (60 s), so anyone else searching meanwhile is paired first.
 //!
 //! Rooms (`crate::rooms`, `docs/rooms-protocol.md`) live on **online connections**: a game that
 //! is running and logged in keeps one connection open (`hello`, then `room-*` requests), which is
@@ -213,7 +213,7 @@ impl Default for EngineConfig {
             ping_limit_step: 30.0,
             ping_limit_interval: Duration::from_secs(10),
             ping_limit_open: Duration::from_secs(40),
-            rematch_hold: Duration::from_secs(30),
+            rematch_hold: Duration::from_secs(60),
             rematch_memory: Duration::from_secs(30 * 60),
             rooms: RoomsConfig::default(),
             mod_rooms: ModRoomsConfig::default(),
@@ -2990,13 +2990,13 @@ mod tests {
         assert_eq!(m.len(), 1);
         assert_eq!(pair_of(&m[0]), pair_key(u[0].uid, u[1].uid));
 
-        // u0 and u1 just played: alone in the queue, they meet once the longer wait is 30 s.
+        // u0 and u1 just played: alone in the queue, they meet once the longer wait is 60 s.
         h.now += Duration::from_secs(300);
         h.advance(Duration::ZERO);
         search(&mut h, &u[1]);
         h.now += Duration::from_secs(5);
         assert!(matches(&search(&mut h, &u[0])).is_empty());
-        assert!(matches(&h.advance(Duration::from_secs(24))).is_empty());
+        assert!(matches(&h.advance(Duration::from_secs(54))).is_empty());
         let m = matches(&h.advance(Duration::from_secs(1)));
         assert_eq!(m.len(), 1);
         assert_eq!(pair_of(&m[0]), pair_key(u[0].uid, u[1].uid));
@@ -3014,12 +3014,13 @@ mod tests {
         };
         search(&mut h, &u[0]);
         assert_eq!(matches(&search(&mut h, &u[1])).len(), 1);
-        // A set later: held back for 30 s.
+        // A set later: held back for 60 s.
         h.now += Duration::from_secs(900);
         h.advance(Duration::ZERO);
         search(&mut h, &u[0]);
         assert!(matches(&search(&mut h, &u[1])).is_empty());
-        assert_eq!(matches(&h.advance(Duration::from_secs(30))).len(), 1);
+        assert!(matches(&h.advance(Duration::from_secs(59))).is_empty());
+        assert_eq!(matches(&h.advance(Duration::from_secs(1))).len(), 1);
         // Over half an hour later they are strangers again.
         h.now += Duration::from_secs(31 * 60);
         h.advance(Duration::ZERO);
