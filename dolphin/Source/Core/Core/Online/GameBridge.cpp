@@ -324,6 +324,43 @@ std::vector<u16> ToUtf16(const std::string& s, size_t max_units)
   return out;
 }
 
+// A ruleset's name for the game's byte fields (RoomPlay, RulesetList): UTF-8, as the game prints
+// it (the server allows printable ASCII, Hiragana and Katakana, which the game's font has), with no
+// control or bidi characters, at most max_bytes - 1 bytes and no character cut off.
+void WriteUtf8Name(u8* out, const std::string& s, size_t max_bytes)
+{
+  size_t o = 0;
+  for (u16 c : ToUtf16(s, max_bytes))
+  {
+    if (c < 0x20 || c == 0x7F || (c >= 0x80 && c < 0xA0) || (c >= 0xD800 && c < 0xE000) ||
+        (c >= 0x202A && c <= 0x202E) || (c >= 0x2066 && c <= 0x2069) || c == 0xFEFF)
+    {
+      c = '?';
+    }
+    const size_t n = c < 0x80 ? 1 : c < 0x800 ? 2 : 3;
+    if (o + n >= max_bytes)
+      break;
+    if (n == 1)
+    {
+      out[o] = static_cast<u8>(c);
+    }
+    else if (n == 2)
+    {
+      out[o] = static_cast<u8>(0xC0 | (c >> 6));
+      out[o + 1] = static_cast<u8>(0x80 | (c & 0x3F));
+    }
+    else
+    {
+      out[o] = static_cast<u8>(0xE0 | (c >> 12));
+      out[o + 1] = static_cast<u8>(0x80 | ((c >> 6) & 0x3F));
+      out[o + 2] = static_cast<u8>(0x80 | (c & 0x3F));
+    }
+    o += n;
+  }
+  for (; o < max_bytes; ++o)
+    out[o] = 0;
+}
+
 void WriteU16Text(std::vector<u8>& buf, u32 off, const std::string& s, size_t max_units)
 {
   const auto units = ToUtf16(s, max_units);
@@ -1074,11 +1111,7 @@ void Service(const Core::CPUThreadGuard& guard, u32 mailbox)
         const u32 at = RL_ENTRIES + static_cast<u32>(i) * RL_ENTRY;
         for (size_t k = 0; k < e.code.size() && k < 6; ++k)
           r.payload[at + RL_CODE + k] = static_cast<u8>(e.code[k]);
-        for (size_t k = 0; k + 1 < RL_NAME_LEN && k < e.name.size(); ++k)
-        {
-          const u8 c = static_cast<u8>(e.name[k]);
-          r.payload[at + RL_NAME + k] = c >= 0x20 && c < 0x7F ? c : '?';
-        }
+        WriteUtf8Name(&r.payload[at + RL_NAME], e.name, RL_NAME_LEN);
       }
       r.summary = fmt::format("RULESETS state={} n={}", static_cast<int>(list.state), n);
       request = "RULESETS";
@@ -1386,11 +1419,10 @@ std::vector<u8> PlaybackSession(const std::vector<u8>& rec, u16 version)
         const u8 c = rec[rp + RP_CODE + k];
         out[rp + RP_CODE + k] = (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ? c : 0;
       }
+      std::string name;
       for (u32 k = 0; k + 1 < RP_NAME_LEN && rec[rp + RP_NAME + k]; ++k)
-      {
-        const u8 c = rec[rp + RP_NAME + k];
-        out[rp + RP_NAME + k] = c >= 0x20 && c < 0x7F ? c : '?';
-      }
+        name.push_back(static_cast<char>(rec[rp + RP_NAME + k]));
+      WriteUtf8Name(&out[rp + RP_NAME], name, RP_NAME_LEN);
       out[rp + RP_SET_ON] = rec[rp + RP_SET_ON] ? 1 : 0;
       out[rp + RP_SET_GAME] = rec[rp + RP_SET_GAME];
       out[rp + RP_SCORE] = rec[rp + RP_SCORE];
@@ -1802,11 +1834,7 @@ void SyncSession(const Core::CPUThreadGuard& guard, const Located& loc)
     session[p + RP_CUSTOM] = v.ruleset.code.empty() && v.ruleset.name != "P+ default" ? 1 : 0;
     for (size_t i = 0; i < 6 && i < v.ruleset.code.size(); ++i)
       session[p + RP_CODE + i] = static_cast<u8>(v.ruleset.code[i]);
-    for (size_t i = 0; i + 1 < RP_NAME_LEN && i < v.ruleset.name.size(); ++i)
-    {
-      const u8 c = static_cast<u8>(v.ruleset.name[i]);
-      session[p + RP_NAME + i] = c >= 0x20 && c < 0x7F ? c : '?';
-    }
+    WriteUtf8Name(&session[p + RP_NAME], v.ruleset.name, RP_NAME_LEN);
     session[p + RP_WINNER] = 0xFF;
     if (const auto& st = v.set)
     {

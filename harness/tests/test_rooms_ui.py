@@ -685,20 +685,23 @@ class RoomPlayView:
 
     def read(self) -> dict:
         d = self.g.c.read_mem(self.addr, 0x64)
-        text = lambda b: b.split(b"\0")[0].decode("ascii", "replace")  # noqa: E731
+        text = lambda b: b.split(b"\0")[0].decode("utf-8", "replace")  # noqa: E731
         return {"posts": struct.unpack_from(">I", d, 0)[0], "op": d[4], "arg": d[5], "browse": d[6],
                 "choice": d[7], "code": text(d[8:16]), "ruleset": text(d[20:60]), "set": text(d[60:100])}
 
     def line(self) -> str:
-        return self.g.c.read_mem(self.line_addr, 128).split(b"\0")[0].decode("ascii", "replace")
+        return self.g.c.read_mem(self.line_addr, 200).split(b"\0")[0].decode("utf-8", "replace")
+
+
+SHOWN_SIZE = 7 + 46   # room_css.cpp Shown: 7 bytes, then name[NAME_SIZE] (15 characters as UTF-8)
 
 
 def panel_stars(g: Game) -> list[int]:
     """The stars each panel shows, in slot order with the local player in slot 0 (room_css.cpp:
-    s_myStarsShown for the local panel, s_shown[area].stars, Shown +4, 23 bytes each)."""
+    s_myStarsShown for the local panel, s_shown[area].stars, Shown +4, 7 + NAME_SIZE (46) bytes each)."""
     me = struct.unpack(">i", g.c.read_mem(ppom_sym(g, "s_myStarsShown__7RoomCss"), 4))[0]
-    shown = g.c.read_mem(ppom_sym(g, "s_shown__7RoomCss"), 23 * 4)
-    return [me] + [shown[23 * i + 4] for i in range(1, 4)]
+    shown = g.c.read_mem(ppom_sym(g, "s_shown__7RoomCss"), SHOWN_SIZE * 4)
+    return [me] + [shown[SHOWN_SIZE * i + 4] for i in range(1, 4)]
 
 
 def open_rules_line(g: Game, line: int) -> None:
@@ -1085,6 +1088,34 @@ def test_room_play_line_long_names(play_game: Game) -> None:
     create_room(g)
     long_set_line(g)
     g.shot("20-long-ruleset-16x9")
+
+
+KANA_NAMES = ("にゃwにゃ", "サクラサクラサクラサクラサクラ")
+KANA_RULESET = "ルール"   # 9 bytes as UTF-8
+
+
+def test_kana_names_on_the_plates(play_game: Game) -> None:
+    """Display names and ruleset names may have Hiragana and Katakana (the server's is_name_char:
+    what the game's font draws), and the plates showed them as "?" (board card 2026-10-24: "??w??").
+    The plugin prints them as UTF-8, a 15-kana name (45 bytes) whole."""
+    g = play_game
+    g.c.game_bridge_config(enabled=False)
+    create_room(g)
+    sim = g.sim
+    sim.name = KANA_NAMES[0]
+    r = sim.room
+    r.members[0].name = KANA_NAMES[0]
+    sim.add_player(1, KANA_NAMES[1])
+    r.ruleset_name, r.ruleset_code, r.best_of = KANA_RULESET, "NQRBTW", 3
+    r.set_on, r.score, r.sides = True, [1, 0], [0, 1]
+    g.wait(60)
+    g.hand_to(20.0, 12.0, tol=0.5)
+    g.wait(10)
+    g.shot("30-kana-names")
+    assert RoomPlayView(g).line() == "Ruleset: %s   Bo3: %s 1 - 0 %s" % ((KANA_RULESET,) + KANA_NAMES), RoomPlayView(g).line()
+    shown = g.c.read_mem(ppom_sym(g, "s_shown__7RoomCss"), SHOWN_SIZE * 4)
+    names = [shown[SHOWN_SIZE * i + 7:SHOWN_SIZE * (i + 1)].split(b"\0")[0].decode("utf-8") for i in range(4)]
+    assert KANA_NAMES[1] in names, names
 
 
 # The keypad's letter keys by (row, column), as test_online_game.ALPHA_KEYS (room-code mode takes

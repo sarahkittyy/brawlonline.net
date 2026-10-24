@@ -188,11 +188,18 @@ namespace RoomPlay {
     static int listCount() { return s.haveList && s.list.state == PPOM::LIST_READY ? (s.list.count > 15 ? 15 : s.list.count) : 0; }
     static int entryCount() { return listCount() + 2; }   // P+ default, the list, Enter code
 
+    // A ruleset's name from Dolphin (UTF-8: ASCII and kana, as the game's font draws), checked again.
     static void copyName(char* out, int size, const char* in, int max)
     {
+        char name[40];
         int n = 0;
-        for (; n < max && n < size - 1 && in[n]; n++) out[n] = in[n] >= 0x20 && in[n] < 0x7F ? in[n] : '?';
-        out[n] = 0;
+        for (; n < max && n < (int)sizeof(name) - 1 && in[n]; n++) name[n] = in[n];
+        name[n] = 0;
+        int o = 0;
+        for (int i = 0; i < n;) {
+            if (!PPOM::putUtf8(out, &o, size, PPOM::utf8Next(name, &i))) break;
+        }
+        out[o] = 0;
     }
 
     static void entryText(int i, char* out, int size)

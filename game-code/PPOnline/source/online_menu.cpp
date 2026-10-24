@@ -57,22 +57,22 @@ namespace OnlineMenu {
         char code[PPOM::CODE_LEN + 1];      // Direct/Teams: the code searched for
         bool codePreset;                    // Direct: `code` is the launcher's invite (LOCAL
                                             // directJoin): the first START searches it, no keypad
-        char peerName[PPOM::NAME_LEN + 1];
+        char peerName[PPOM::NAME_LEN * 3 + 1];
         char peerCode[PPOM::CODE_LEN + 1];
-        char error[PPOM::ERROR_LEN + 1];
+        char error[128];
         char ownCode[PPOM::CODE_LEN + 1];   // this player's connect code (GET_ONLINE_STATUS)
-        char ownName[RoomCss::NAME_CHARS + 1];   // and display name (printable ASCII)
+        char ownName[RoomCss::NAME_SIZE];   // and display name (UTF-8, u16Name)
         int appState;                       // GET_ONLINE_STATUS state (-1 = no answer yet)
         u32 statusFrames;                   // frames since the menus last asked for it
         bool ownShown;                      // the own-code window is attached on this CSS
         bool roomBtnsShown;                 // the room's settings windows are attached
-        char roomBtnPrinted[3][40];         // what they show
+        char roomBtnPrinted[3][64];         // what they show
         s8 roomBtnHover;                    // the one the hand is on (-1 none)
         char ownPrinted[24];                // what that window shows
         char rankText[24];                  // Ranked: the rating (GET_RANK), "" until known
         u32 rankFrames;                     // Ranked: frames until GET_RANK is asked again
         PPOM::GameStep step;                // Ranked: the game setup step (GP_FETCH_STEP)
-        char stepText[64];
+        char stepText[128];
         bool stepPending;
         u32 stepFrames;
         u32 stepSeq;                        // Ranked: seq of the last GP_FETCH_STEP sent
@@ -81,7 +81,7 @@ namespace OnlineMenu {
         char status[128];
         bool statusRed;
         bool statusDirty;
-        char quitNotice[PPOM::NAME_LEN + 8];   // "<name> quit": the last game ended by a quit
+        char quitNotice[PPOM::NAME_LEN * 3 + 8];   // "<name> quit": the last game ended by a quit
         u32 quitNoticeFrames;               // frames left to show it on the CSS
         u8 quitNoticePort;                  // whose quit it is
         bool quitHold;                      // Ranked / a room's set: on the CSS after a quit until
@@ -143,7 +143,7 @@ namespace OnlineMenu {
         u32 roomPollFrames;
         u8 roomPhase;                       // RoomStatus.phase of the last answer
         bool roomError;
-        char roomText[96];                  // the status line Dolphin gave (ASCII)
+        char roomText[128];                 // the status line Dolphin gave (UTF-8)
         u8 roomTaken;                       // SLOT_TAKEN bits seen (sounds)
         bool roomSeen;                      // roomTaken is from this room's view
         bool roomReload;                    // a launcher join on an online CSS: build it again
@@ -163,7 +163,7 @@ namespace OnlineMenu {
     // pad's pressed field can still have it on the next frame, when the room may already say
     // otherwise (with Dolphin answering at once, START played again and then readied).
     static u32 s_sitPressHeld = 0;
-    void u16Name(char* out, const u16* in);   // a name from SESSION / Dolphin: printable ASCII
+    void u16Name(char* out, const u16* in);   // a name from SESSION / Dolphin: UTF-8, NAME_SIZE
 
     static const u32 BTN_START = 0x1000;
     static const u32 BTN_Z = 0x0010;
@@ -470,7 +470,7 @@ namespace OnlineMenu {
         return -1;
     }
 
-    // The tag's name as the plate prints it (printable ASCII, as u16Name), "" for none.
+    // The tag's name as the plate prints it (as u16Name), "" for none.
     static void tagName(int tag, char* out)
     {
         u16 name[PPOM::TAG_CHARS + 1];
@@ -1007,14 +1007,15 @@ namespace OnlineMenu {
 
     static void setStatus(const char* text, bool red)
     {
-        // Texts from Dolphin, the server and the opponent's name: printable ASCII only (the
-        // message system reads control bytes as commands; u16ToAscii already made the rest '?').
+        // Texts from Dolphin, the server and the opponent's name, UTF-8 (u16ToUtf8): no control
+        // bytes (the message system reads them as commands), no character cut off at the end.
         char clean[sizeof(s.status)];
         int n = 0;
         for (; text[n] && n < (int)sizeof(clean) - 1; n++) {
             u8 c = (u8)text[n];
-            clean[n] = (c < 0x20 || c >= 0x7F) ? ' ' : (char)c;
+            clean[n] = (c < 0x20 || c == 0x7F) ? ' ' : (char)c;
         }
+        if (text[n]) n = PPOM::utf8Fit(clean, n);
         clean[n] = 0;
         text = clean;
         if (strcmp(text, s.status) == 0 && red == s.statusRed) return;
@@ -1175,23 +1176,30 @@ namespace OnlineMenu {
     }
 
     // Width of `text` in the status font's units, and the advance of each character into `adv`.
+    // (UTF-8: a character's advance is on its first byte, its other bytes advance 0)
     static int statusWidths(const char* text, int len, int* adv)
     {
         void* message = s.cssMsg ? s.cssMsg->m_message : NULL;
         void* font = message ? *(void**)((u8*)message + 0x48) : NULL;
         if (!isPtr((u32)font) || !isPtr(*(u32*)font)) font = NULL;
         int w = 0;
-        for (int i = 0; i < len; i++) {
+        for (int i = 0; i < len;) {
+            int at = i;
+            u16 ch = PPOM::utf8Next(text, &i);
+            if (i > len) i = len;
             int a = 30;   // no font yet: a typical glyph
             if (font) {
                 typedef void (*GetGlyphFn)(void* font, void* out, u16 ch);
                 GetGlyphFn getGlyph = (GetGlyphFn)(*(u32*)(*(u32*)font + 0x50));
                 u8 glyph[0x40];
                 memset(glyph, 0, sizeof(glyph));
-                getGlyph(font, glyph, (u16)(u8)text[i]);
+                getGlyph(font, glyph, ch);
                 a = (s8)glyph[6];
             }
-            if (adv) adv[i] = a;
+            if (adv) {
+                adv[at] = a;
+                for (int k = at + 1; k < i; k++) adv[k] = 0;
+            }
             w += a;
         }
         return w;
@@ -1210,7 +1218,7 @@ namespace OnlineMenu {
         static const int MAX = 159;
         int adv[MAX];
         int len = (int)strlen(text);
-        if (len > MAX) len = MAX;
+        if (len > MAX) len = PPOM::utf8Fit(text, MAX);
         int total = statusWidths(text, len, adv);
         memcpy(out, text, len);
         out[len] = 0;
@@ -1825,7 +1833,7 @@ namespace OnlineMenu {
     static void onMatchState(const PPOM::MatchState& m)
     {
         int before = s.phase;
-        PPOM::u16ToAscii(s.peerName, m.peerName, sizeof(s.peerName));
+        PPOM::u16ToUtf8(s.peerName, sizeof(s.peerName), m.peerName, PPOM::NAME_LEN);
         PPOM::u16ToAscii(s.peerCode, m.peerCode, sizeof(s.peerCode));
         switch (m.mmState) {
         case PPOM::MM_IDLE:
@@ -1848,7 +1856,7 @@ namespace OnlineMenu {
         case PPOM::MM_ERROR:
         default:
             s.phase = PH_ERROR;
-            PPOM::u16ToAscii(s.error, m.errorText, sizeof(s.error));
+            PPOM::u16ToUtf8(s.error, sizeof(s.error), m.errorText, PPOM::ERROR_LEN);
             break;
         }
         // Slippi's CSS sounds (HandleInputsOnCSS.asm:39-78): error on entering the error
@@ -2052,7 +2060,7 @@ namespace OnlineMenu {
         if (r->cmd == PPOM::CMD_GP_FETCH_STEP) {
             memcpy(&s.step, r->payload, sizeof(s.step));
             if (s.step.nKinds > sizeof(s.step.kinds)) s.step.nKinds = sizeof(s.step.kinds);
-            PPOM::u16ToAscii(s.stepText, s.step.text, sizeof(s.stepText));
+            PPOM::u16ToUtf8(s.stepText, sizeof(s.stepText), s.step.text, sizeof(s.step.text) / 2);
             s.stepPending = false;
             s.stepAnswered = r->seq;
             // Not connected (any more): no step, whatever the answer was.
@@ -2221,13 +2229,14 @@ namespace OnlineMenu {
 
     void u16Name(char* out, const u16* in)
     {
-        int n = 0;
-        for (; n < RoomCss::NAME_CHARS && in[n]; n++) {
+        // (the game's font has Latin-1 and kana; kanji, hangul and the like print as its ■)
+        int o = 0;
+        for (int n = 0; n < RoomCss::NAME_CHARS && in[n]; n++) {
             u16 c = in[n];
             if (c >= 0xFF01 && c <= 0xFF5E) c = (u16)(c - 0xFEE0);
-            out[n] = (c >= 0x20 && c < 0x7F) ? (char)c : '?';
+            PPOM::putUtf8(out, &o, RoomCss::NAME_SIZE, c);
         }
-        out[n] = 0;
+        out[o] = 0;
     }
 
     // The CSS id of a gmCharacterKind (the inverse of charKindOf over the CSS's ids).
@@ -2335,7 +2344,7 @@ namespace OnlineMenu {
         if (r.status != 0) return;
         const PPOM::RoomStatus& st = *(const PPOM::RoomStatus*)r.payload;
         char text[sizeof(s.roomText)];
-        PPOM::u16ToAscii(text, st.text, sizeof(text));
+        PPOM::u16ToUtf8(text, sizeof(text), st.text, sizeof(st.text) / 2);
         bool error = st.error != 0;
         // The error sound when an error appears (Slippi's CSS; rooms-game-interface.md).
         if (error && (!s.roomError || strcmp(text, s.roomText) != 0)) playSE(SE_ERROR);
@@ -2452,7 +2461,7 @@ namespace OnlineMenu {
     // lines at ROOM_PLAY_SCALE2, smaller still if a line is wider than the window.
     static const int ROOM_PLAY_FIT = 900;
     static const float ROOM_PLAY_SCALE2 = 0.5f, ROOM_PLAY_LINES = 17.0f;
-    static char s_playPrinted[140];
+    static char s_playPrinted[200];
 
     // The room's Teams setting as ROOM_TEAMS takes it: 0 off, 1 the rainbow team battle, 2 the
     // teams' costumes.
@@ -2507,10 +2516,10 @@ namespace OnlineMenu {
             s.roomBtnsShown = true;
         }
         // The ruleset and the set: the sides' players by their in-game ports (the room's slots).
-        char play[128];
+        char play[192];
         play[0] = 0;
         if (in && !RoomRules::isOpen()) {   // (under the rules menu it showed below the STAGE SWITCH)
-            char side[2][RoomCss::NAME_CHARS + 1];
+            char side[2][RoomCss::NAME_SIZE];
             for (int i = 0; i < 2; i++) {
                 u8 port = se.play.sides[i];
                 side[i][0] = 0;
@@ -2522,7 +2531,7 @@ namespace OnlineMenu {
         // One line ("Ruleset: X   Bo3: a 1 - 0 b") when it fits, else two.
         char* nl = NULL;   // (the DOL has no strchr)
         for (char* q = play; *q && !nl; q++) if (*q == '\n') nl = q;
-        char line[140];
+        char line[200];
         float scale = ROOM_PLAY_SCALE;
         bool two = false;
         if (nl) {
@@ -2553,11 +2562,11 @@ namespace OnlineMenu {
             m->printf(ROOM_PLAY_WINDOW, "%s", line);
             strcpy(s_playPrinted, line);
         }
-        char text[40];
+        char text[64];
         text[0] = 0;
         // (not under the rules menu, where it read as the menu's own help)
         if (in && !RoomRules::isOpen()) {
-            char hostName[RoomCss::NAME_CHARS + 1];
+            char hostName[RoomCss::NAME_SIZE];
             hostName[0] = 0;
             if (se.roomHost < PPOM::SESSION_PLAYERS) u16Name(hostName, se.players[se.roomHost].name);
             if (host) strcpy(text, "A: open/close\nHold A: remove");
@@ -2858,7 +2867,7 @@ namespace OnlineMenu {
         // The local plate: the name tag picked on it (staging feedback 2026-10-11: with the
         // account name there the tag was not to be seen), else the name the room has for us,
         // else the account's (Join Room). The others see the account name.
-        char myName[RoomCss::NAME_CHARS + 1];
+        char myName[RoomCss::NAME_SIZE];
         tagName(selectedTag(), myName);
         if (!myName[0]) {
             if (in && me >= 0) u16Name(myName, se.players[me].name);
@@ -3524,8 +3533,8 @@ namespace OnlineMenu {
     void noteQuit(int port)
     {
         if (port < 0 || port >= PPOM::SESSION_PLAYERS) return;
-        char name[PPOM::NAME_LEN + 1];
-        PPOM::u16ToAscii(name, PPOM::g_block.session.players[port].name, sizeof(name));
+        char name[PPOM::NAME_LEN * 3 + 1];
+        PPOM::u16ToUtf8(name, sizeof(name), PPOM::g_block.session.players[port].name, PPOM::NAME_LEN);
         if (!name[0]) sprintf(name, "P%d", port + 1);
         sprintf(s.quitNotice, "%s quit", name);
         s.quitNoticeFrames = QUIT_NOTICE_FRAMES;

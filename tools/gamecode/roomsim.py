@@ -73,6 +73,18 @@ class Room:
     counterpicks: list = field(default_factory=lambda: [0x03, 0x04, 0x05, 0x06, 0x09, 0x0C, 0x0D, 0x1C, 0x1F, 0x23])
 
 
+def utf8_field(s: str, n: int) -> bytes:
+    """A ruleset's name as GameBridge writes it (WriteUtf8Name): UTF-8, at most n - 1 bytes with
+    no character cut off, NUL padded."""
+    out = b""
+    for ch in s:
+        e = ch.encode("utf-8")
+        if len(out) + len(e) > n - 1:
+            break
+        out += e
+    return out.ljust(n, b"\0")
+
+
 def stage_mask(ids) -> bytes:
     """A RoomStages mask (ppom.h, v7): bit k of byte k / 8 for stage id k."""
     m = bytearray(0x20)
@@ -348,7 +360,7 @@ class RoomSim:
             if r and self.phase == 2:
                 pl[0:4] = bytes([1, r.best_of, r.stage_choice, 1 if r.custom else 0])
                 pl[4:0xC] = r.ruleset_code.encode("ascii")[:6].ljust(8, b"\0")
-                pl[0xC:0x2C] = r.ruleset_name.encode("ascii")[:31].ljust(32, b"\0")
+                pl[0xC:0x2C] = utf8_field(r.ruleset_name, 32)
                 pl[0x2C:0x36] = bytes([1 if r.set_on else 0, r.set_game, r.score[0], r.score[1],
                                        r.sides[0], r.sides[1], r.set_flags,
                                        r.side_slots[0], r.side_slots[1], r.winner])
@@ -413,7 +425,7 @@ class RoomSim:
                     struct.pack_into(">BBH", body, 0, self.rulesets_state, n, len(self.rulesets))
                     for i, (rc, rn) in enumerate(self.rulesets[:n]):
                         body[4 + 32 * i:4 + 32 * i + 8] = rc.encode("ascii")[:6].ljust(8, b"\0")
-                        body[4 + 32 * i + 8:4 + 32 * i + 32] = rn.encode("ascii")[:23].ljust(24, b"\0")
+                        body[4 + 32 * i + 8:4 + 32 * i + 32] = utf8_field(rn, 24)
                     self.pending.append((seq, cmd, bytes(body)))
                 else:
                     self.pending.append((seq, cmd, b""))

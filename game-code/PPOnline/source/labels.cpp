@@ -22,6 +22,7 @@
 #include <memory.h>
 #include <string.h>
 #include "labels.h"
+#include "ppom.h"
 
 namespace Labels {
 
@@ -149,14 +150,15 @@ namespace Labels {
         Width wd[MAX_LINES][MAX_CHARS];
         int len[MAX_LINES] = {0, 0};
         int width[MAX_LINES] = {0, 0};
-        for (const char* p = text; *p; p++) {
-            if (*p == '\n') {
+        for (int i = 0; text[i];) {
+            u16 ch = PPOM::utf8Next(text, &i);   // (UTF-8: a ruleset's name may have kana)
+            if (ch == '\n') {
                 if (nl < MAX_LINES) nl++;
                 continue;
             }
             int l = nl - 1;
             if (len[l] >= MAX_CHARS) continue;
-            int g = glyphIndex((u8)*p);
+            int g = glyphIndex(ch);
             idx[l][len[l]] = g;
             wd[l][len[l]] = glyphWidth(g);
             width[l] += wd[l][len[l]].advance + (len[l] ? TRACK : 0);

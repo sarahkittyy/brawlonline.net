@@ -42,6 +42,7 @@ namespace RoomCss {
     // The other players' panels on a room's CSS (room_css.cpp).
     enum PanelKind { PV_CLOSED = 0, PV_SEARCHING = 1, PV_CHOOSING = 2, PV_READY = 3, PV_IN_GAME = 4 };
     const int NAME_CHARS = 15;
+    const int NAME_SIZE = NAME_CHARS * 3 + 1;   // a name as UTF-8 (BMP: at most 3 bytes a character)
     struct PanelView {
         u8 kind;          // PanelKind
         u8 css;           // CSS id of the character (PV_READY; PV_CHOOSING: the coin placed), else 0x28
@@ -52,7 +53,7 @@ namespace RoomCss {
         u8 stocks;        // stock control: the count the player picked (shown once ready), 0 none
         u8 sittingOut;    // SIT OUT: a CPU's grey card, "SIT OUT" on the plate; 2: "WATCHING"
                           // (watching the room's game), the same card
-        char name[NAME_CHARS + 1];
+        char name[NAME_SIZE];
     };
     void prepareRecords();               // before the CSS is built: four full panels
     void releaseRecords();               // a room's CSS built again as another: records as before

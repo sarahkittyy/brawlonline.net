@@ -164,4 +164,71 @@ namespace PPOM {
         }
         dst[i] = 0;
     }
+
+    // Names and lines from Dolphin, the server and other players in the game's own text: MuMsg::printf
+    // prints UTF-8 (the keypad's text is full-width UTF-8), and the game's font draws what it has
+    // (Latin-1, kana) and its ■ for the rest (kanji, hangul). Control characters (the message
+    // system reads them as commands), lone surrogates and the bidi controls become '?'.
+    bool putUtf8(char* dst, int* o, int size, u16 c)
+    {
+        if (c < 0x20 || c == 0x7F || (c >= 0x80 && c < 0xA0) || (c >= 0xD800 && c < 0xE000) ||
+            (c >= 0x202A && c <= 0x202E) || (c >= 0x2066 && c <= 0x2069) || c == 0xFEFF) {
+            c = '?';
+        }
+        int n = c < 0x80 ? 1 : c < 0x800 ? 2 : 3;
+        if (*o + n >= size) return false;
+        char* d = dst + *o;
+        if (n == 1) {
+            d[0] = (char)c;
+        } else if (n == 2) {
+            d[0] = (char)(0xC0 | (c >> 6));
+            d[1] = (char)(0x80 | (c & 0x3F));
+        } else {
+            d[0] = (char)(0xE0 | (c >> 12));
+            d[1] = (char)(0x80 | ((c >> 6) & 0x3F));
+            d[2] = (char)(0x80 | (c & 0x3F));
+        }
+        *o += n;
+        return true;
+    }
+
+    void u16ToUtf8(char* dst, int size, const u16* src, int units)
+    {
+        int o = 0;
+        for (int i = 0; i < units && src[i]; i++) {
+            u16 c = src[i];
+            if (c == 0xFF03) c = '#';   // full-width number sign, as Slippi uses
+            if (!putUtf8(dst, &o, size, c)) break;
+        }
+        dst[o] = 0;
+    }
+
+    int utf8Fit(const char* s, int n)
+    {
+        int p = n;
+        while (p > 0 && ((u8)s[p - 1] & 0xC0) == 0x80) p--;
+        if (p == 0 || (p == n && (u8)s[p - 1] < 0x80)) return n;
+        u8 lead = (u8)s[p - 1];
+        int len = lead >= 0xF0 ? 4 : lead >= 0xE0 ? 3 : lead >= 0xC0 ? 2 : 1;
+        return p - 1 + len > n ? p - 1 : n;
+    }
+
+    u16 utf8Next(const char* s, int* i)
+    {
+        const u8* p = (const u8*)s + *i;
+        if (p[0] < 0x80) {
+            *i += 1;
+            return p[0];
+        }
+        if ((p[0] & 0xE0) == 0xC0 && (p[1] & 0xC0) == 0x80) {
+            *i += 2;
+            return (u16)(((p[0] & 0x1F) << 6) | (p[1] & 0x3F));
+        }
+        if ((p[0] & 0xF0) == 0xE0 && (p[1] & 0xC0) == 0x80 && (p[2] & 0xC0) == 0x80) {
+            *i += 3;
+            return (u16)(((p[0] & 0x0F) << 12) | ((p[1] & 0x3F) << 6) | (p[2] & 0x3F));
+        }
+        *i += 1;
+        return '?';
+    }
 }

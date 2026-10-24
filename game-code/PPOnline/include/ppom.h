@@ -483,7 +483,7 @@ namespace PPOM {
     enum ListState { LIST_NONE = 0, LIST_LOADING = 1, LIST_READY = 2, LIST_FAILED = 3 };
     struct RulesetListEntry {
         char code[8];     // 6 letters, NUL padded
-        char name[24];    // printable ASCII, NUL ended
+        char name[24];    // UTF-8 (printable ASCII and kana), NUL ended
     };
     struct RulesetList {
         u8 state;         // ListState
@@ -506,7 +506,7 @@ namespace PPOM {
         u8 stageChoice;   // StageChoice (no set)
         u8 custom;        // 1: custom rules (edited by the host)
         char code[8];     // the published ruleset's code (6 letters), NUL padded; "" none
-        char name[32];    // its name ("P+ default", "Custom", ...), printable ASCII, NUL ended
+        char name[32];    // its name ("P+ default", "Custom", ...), UTF-8, NUL ended
         u8 setOn;         // 1: the room has a set (on, paused or finished)
         u8 setGame;       // the set's game being played or next
         u8 score[2];      // wins by side (side 0: the lower slot)
@@ -677,4 +677,12 @@ namespace PPOM {
     // UTF-16 helpers.
     void asciiToU16(u16* dst, const char* src, int max);
     void u16ToAscii(char* dst, const u16* src, int max);
+    // UTF-16 text (at most `units`, NUL-terminated) as UTF-8 in `size` bytes, for MuMsg::printf.
+    void u16ToUtf8(char* dst, int size, const u16* src, int units);
+    // A BMP character as UTF-8 at dst[*o], if it and a NUL fit in `size` (else false).
+    bool putUtf8(char* dst, int* o, int size, u16 c);
+    // The length of s[0..n) without a character cut off at its end.
+    int utf8Fit(const char* s, int n);
+    // The character at s[*i] (UTF-8, BMP), *i moved past it.
+    u16 utf8Next(const char* s, int* i);
 }

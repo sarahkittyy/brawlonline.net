@@ -113,7 +113,7 @@ struct RoomStatus {    // CMD_ROOM response payload (cmd 0xD0, status 0), for ev
 };                     // 0x88
 ```
 
-Every `CMD_ROOM` gets one response (the mailbox's usual rules: in order, one per frame). Its `RoomStatus` is the state right after the request was taken, so a `ROOM_JOIN` is answered `phase 1, "Joining room KFQB"`; the outcome shows in later polls and in SESSION. The game routes it by `r->cmd == CMD_ROOM` like the other answers and may copy `text` into its existing status buffer (`s.error`, ASCII).
+Every `CMD_ROOM` gets one response (the mailbox's usual rules: in order, one per frame). Its `RoomStatus` is the state right after the request was taken, so a `ROOM_JOIN` is answered `phase 1, "Joining room KFQB"`; the outcome shows in later polls and in SESSION. The game routes it by `r->cmd == CMD_ROOM` like the other answers and may copy `text` into its existing status buffer (`s.error`, UTF-8).
 
 A request the server refuses changes nothing and turns the line red with the server's text (`docs/rooms-protocol.md` §2, Errors: "Room not found.", "This room is full.", "Only the host can do that.", "You can't close your own slot.", "At least 2 slots stay open.", "Wait for the game to end.", "Too many tries. Wait a moment.", ...). An error stays until the next request, or for 5 s while in a room (then the room's line comes back). Dolphin refuses some requests itself with the same texts (a code that is not 4 of the 20 letters: "Room not found.", without asking the server).
 

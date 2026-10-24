@@ -120,7 +120,7 @@ namespace RoomCss {
     struct Shown {
         u8 kind;          // PanelView kind shown (0xFF: not set up yet)
         u8 css, costume, team, stars, inRoom, sittingOut;
-        char name[NAME_CHARS + 1];
+        char name[NAME_SIZE];
     };
 
     // SIT OUT (the user's, 2026-10-18: "the sitting out player's portrait nameplate turns grey,
@@ -145,7 +145,7 @@ namespace RoomCss {
     static bool s_hidden[4];
     // The local plate: the tag or the account name, printed again a few frames after Brawl may have
     // printed its own (the name tag or "PLAYER 1": a tag picked, the tag list closed).
-    static char s_myPlate[NAME_CHARS + 1];
+    static char s_myPlate[NAME_SIZE];
     static int s_myTagShown = -2;
     static int s_myHandMode = -1;
     static int s_myPlateDelay = 0;
@@ -643,8 +643,8 @@ namespace RoomCss {
             sh.css = v.css;
             sh.costume = v.costume;
             sh.team = v.team;
-            strncpy(sh.name, v.name, NAME_CHARS);
-            sh.name[NAME_CHARS] = 0;
+            strncpy(sh.name, v.name, NAME_SIZE - 1);
+            sh.name[NAME_SIZE - 1] = 0;
         }
         if (so) STATE_UPDATE(so);
         // In a room a closed slot stays on screen with "Closed" on it, so that the host sees
@@ -790,8 +790,8 @@ namespace RoomCss {
         if (mode != s_myHandMode || tag != s_myTagShown || strcmp(s_myPlate, myName) != 0) {
             s_myHandMode = mode;
             s_myTagShown = tag;
-            strncpy(s_myPlate, myName, NAME_CHARS);
-            s_myPlate[NAME_CHARS] = 0;
+            strncpy(s_myPlate, myName, NAME_SIZE - 1);
+            s_myPlate[NAME_SIZE - 1] = 0;
             s_myPlateDelay = 3;
         }
         if (s_myPlateDelay > 0 && --s_myPlateDelay == 0) plate(a0, s_myPlate);

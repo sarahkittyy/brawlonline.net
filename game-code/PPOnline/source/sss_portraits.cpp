@@ -348,8 +348,8 @@ namespace SssPortraits {
         MSG_ATTACH(s_msg, side, mdl, 0, 0.0625f);
         MSG_SET_FACE(s_msg, side, 1);
         s_msgCallback[side] = *(u32*)(mdl + 0xD4);
-        char name[PPOM::NAME_LEN + 1];
-        PPOM::u16ToAscii(name, pv.name, sizeof(name));
+        char name[PPOM::NAME_LEN * 3 + 1];
+        PPOM::u16ToUtf8(name, sizeof(name), pv.name, PPOM::NAME_LEN);
         if (!name[0]) strcpy(name, pv.local ? "You" : "Opponent");
         s_msg->printf(side, "%s", name);
     }
