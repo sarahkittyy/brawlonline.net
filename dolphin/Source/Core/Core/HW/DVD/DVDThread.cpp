@@ -4,6 +4,7 @@
 #include "Core/HW/DVD/DVDThread.h"
 
 #include <chrono>
+#include <cstring>
 #include <map>
 #include <memory>
 #include <optional>
@@ -95,6 +96,29 @@ void DVDThread::DoState(PointerWrap& p)
   while (m_result_queue.Pop(result))
     m_result_map.emplace(result.first.id, std::move(result));
 
+  // A pending read's request is saved as its bytes, so its padding and its real times (only
+  // logged) went into the state as this machine had them: a whole-machine session's image digest
+  // covers the state, and with a read pending at the epoch's frame no other player vouched for the
+  // host's machine (bug report #130: Shrek 2's third player was refused). Saved with zero padding
+  // and no real times; the layout is unchanged.
+  if (!p.IsReadMode())
+  {
+    for (auto& [id, pending] : m_result_map)
+    {
+      const ReadRequest& r = pending.first;
+      ReadRequest clean;
+      std::memset(&clean, 0, sizeof(clean));
+      clean.copy_to_ram = r.copy_to_ram;
+      clean.output_address = r.output_address;
+      clean.dvd_offset = r.dvd_offset;
+      clean.length = r.length;
+      clean.partition = r.partition;
+      clean.reply_type = r.reply_type;
+      clean.id = r.id;
+      clean.time_started_ticks = r.time_started_ticks;
+      std::memcpy(&pending.first, &clean, sizeof(clean));
+    }
+  }
   p.Do(m_result_map);
   p.Do(m_next_id);
 
