@@ -788,6 +788,10 @@ struct State
     s64 stop_end = -1;
     bool stop_armed = false;
     bool clip_ff = false;
+    // A replay's long seek forward (past the frames played, so no keyframe near it): its
+    // fast-forward is shown and muted as a highlight's is (the user, 2026-10-24: "skimming through
+    // replays no longer shows the game fast forwarding? it just freezes until it's done").
+    bool seek_ff = false;
     bool clip_record = false;
     bool clip_recording = false;
     // The highlights marked on the seek bar (SetPlaybackMarks), and the clicks on them: how many,
@@ -6045,11 +6049,14 @@ void PlaybackSeek(Core::System& system)
   if (target >= next && (!key || *key <= next))
   {
     pb.ff_until = target;  // straight on
+    // (A short one, as a jump's 5 s, runs unseen: about half a second.)
+    pb.seek_ff = !pb.live && target - next > KEYFRAME_EVERY;
   }
   else if (key && s.pb_keys->Restore(system, *key))
   {
     pb.next = static_cast<size_t>(*key - first);
     pb.ff_until = target;
+    pb.seek_ff = false;  // at most KEYFRAME_EVERY frames from the keyframe
     // What the session keeps about frames that ran: as if they had not yet.
     s.current_frame = *key - 1;
     s.game_set_frame = -1;
@@ -6114,8 +6121,11 @@ PlaybackStep PlaybackLoopTopControls(Core::System& system)
     if (!pb.catch_up && !ff)
       pb.joining = false;
     if (!ff)
+    {
       pb.clip_ff = false;
-    PlaybackMute(system, pb.joining || pb.clip_ff);
+      pb.seek_ff = false;
+    }
+    PlaybackMute(system, pb.joining || pb.clip_ff || pb.seek_ff);
     const bool waiting = !ff && LiveWaiting(f);
     // A highlight's end, or clip mode's: paused there (the launcher plays the next one, or it
     // stays). Stepped past while paused, it is passed all the same.
@@ -6400,11 +6410,13 @@ bool RunFrame(const Core::CPUThreadGuard& guard)
   // A replay's seek runs the frames before its target unpresented (as a rollback's resimulation).
   // A live playback running ahead (catching up, a seek, a jump) shows a frame in
   // CATCH_UP_SHOW_EVERY, so the game visibly moves instead of freezing until its target.
-  // A highlight's fast-forward shows a frame in CLIP_SHOW_EVERY the same way.
+  // A highlight's fast-forward, and a replay's long seek forward, show a frame in CLIP_SHOW_EVERY
+  // the same way.
   s.resim_pass = s.mode == Mode::Playback ?
                      static_cast<s64>(s.ops.adv_frame[i]) < s.pb.ff_until &&
                          !(s.pb.live && s.ops.adv_frame[i] % CATCH_UP_SHOW_EVERY == 0) &&
-                         !(s.pb.clip_ff && s.ops.adv_frame[i] % CLIP_SHOW_EVERY == 0) :
+                         !((s.pb.clip_ff || s.pb.seek_ff) &&
+                           s.ops.adv_frame[i] % CLIP_SHOW_EVERY == 0) :
                      s.ops.adv_count > 1 && i != s.ops.adv_count - 1;
 
   if (s.force_final_at_active)
