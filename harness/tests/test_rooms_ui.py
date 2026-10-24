@@ -415,6 +415,62 @@ def to_join_room(g: Game, pick: tuple[float, float] = FOX) -> None:
     g.wait(20)
 
 
+def header_buttons_shown(g: Game) -> tuple[bool, bool]:
+    """ITEM / STAGE (PUBLIC / FFA in a room: muSelCharTask +0x420 / +0x424) visible, as
+    banner_shown reads the READY TO FIGHT banner."""
+    task = css_task(g)
+    return tuple(not g.u32(g.u32(g.u32(task + o) + 0xC) + 0xCC) & 0x60 for o in (0x420, 0x424))
+
+
+@pytest.fixture
+def slow_create_game(dolphin_exe):
+    g = Game("rooms-ui-slow-create")
+    yield g
+    g.close()
+
+
+def test_room_buttons_after_a_slow_create(slow_create_game: Game) -> None:
+    """WITH FRIENDS > Create Room on a slow connection (a player's report, 2026-10-24: "if you
+    create a room from the ingame menu ... private and team/ffa options don't appear"): the CSS is
+    up seconds before Dolphin says the room is there. PUBLIC / FFA are hidden while there is no
+    room and show once there is one (they stayed hidden: hideHeaderArt only skipped them)."""
+    g = slow_create_game
+    g.c.game_bridge_config(enabled=False)
+    g.steps("until muMenuMain 3000", "wait 60")
+    g.sim = sim = roomsim.RoomSim(g.c)
+    # Dolphin's side: the create answered "joining" and the room only there when released.
+    handle = sim.handle_room
+
+    def slow(seq: int, p: bytes) -> None:
+        if p[0] == ppom.ROOM_OPS["create"]:
+            sim.phase = 1
+            sim.respond_room(seq)
+            return
+        handle(seq, p)
+
+    sim.handle_room = slow
+    g.wait(60)
+    g.tap("A")
+    g.wait(60)
+    g.tap("DLEFT", 4)
+    g.wait(20)
+    g.tap("A")
+    sim.service(400, until=lambda: g.scene() == "scSelctCharacter" and sim.room_ops("create"))
+    g.wait(180)
+    assert sim.room is None
+    assert header_buttons_shown(g) == (False, False), "PUBLIC / FFA with no room yet"
+    g.shot("40-slow-create-creating")
+    sim.create()
+    g.wait(60)
+    assert header_buttons_shown(g) == (True, True), "no PUBLIC / FFA once the room is there"
+    g.shot("41-slow-create-room")
+    # They work: the FFA button switches Teams.
+    g.hand_to(*MODE_BUTTON, tol=0.5)
+    g.tap("A")
+    g.wait(40)
+    assert sim.room.teams
+
+
 def test_host_holds_a_on_a_player_to_remove_them(game: Game) -> None:
     """The host removes a player by holding A on their panel (rooms.md #10). Player feedback
     2026-10-12: nothing happened, with three slots open and one other player (the held field has

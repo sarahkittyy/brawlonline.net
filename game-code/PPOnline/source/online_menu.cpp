@@ -675,14 +675,17 @@ namespace OnlineMenu {
         typedef void (*SetVisFn)(void* scnMdl, bool vis);
         u8* task = cssTask();
         if (!task) return;
-        bool roomButtons = roomCss() && roomIn();   // ITEM / STAGE are the room's buttons
+        // ITEM / STAGE are the room's buttons while in the room, and shown again then: Create
+        // Room's CSS is up before the room is ("Creating room"), and on a slow connection they
+        // were hidden first and stayed hidden (a player's report, 2026-10-24).
+        bool roomButtons = roomCss() && roomIn();
         for (u32 i = 0; i < sizeof(OBJS) / sizeof(OBJS[0]); i++) {
-            if (roomButtons && (OBJS[i] == 0x420 || OBJS[i] == 0x424)) continue;
             u32 obj = *(u32*)(task + OBJS[i]);
             if (!isPtr(obj)) continue;
             u32 mdl = *(u32*)(obj + 0xC);   // MuObject::m_scnMdl
             if (!isPtr(mdl)) continue;
-            bool vis = OBJS[i] == 0x3C4 && startReadies();
+            bool header = OBJS[i] == 0x420 || OBJS[i] == 0x424;
+            bool vis = OBJS[i] == 0x3C4 ? startReadies() : header && roomButtons;
             ((SetVisFn)0x80043D20)((void*)mdl, vis);   // nwSMSetVisibility
         }
     }
