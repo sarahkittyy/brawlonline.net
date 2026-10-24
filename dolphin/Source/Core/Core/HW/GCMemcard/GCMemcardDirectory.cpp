@@ -257,8 +257,11 @@ GCMemcardDirectory::GCMemcardDirectory(std::string directory, ExpansionInterface
   m_dir2 = m_dir1;
   m_bat2 = m_bat1;
 
-  for (const Memcard::GCIFile& save : m_saves)
-    m_own_files.insert(save.m_filename);
+  if (m_session)
+  {
+    for (Memcard::GCIFile& save : m_saves)
+      m_session_files.push_back(std::exchange(save.m_filename, {}));
+  }
 
   m_flush_thread = std::thread(&GCMemcardDirectory::FlushThread, this);
 }
@@ -297,6 +300,13 @@ GCMemcardDirectory::~GCMemcardDirectory()
   m_flush_trigger.Set();
   m_flush_thread.join();
 
+  if (m_session_write_back)
+  {
+    // Each index gets back the file it was loaded from, as a card that flushed only now would
+    // have it (a deleted save stays at its index as a cleared entry).
+    for (size_t i = 0; i < m_saves.size() && i < m_session_files.size(); ++i)
+      m_saves[i].m_filename = m_session_files[i];
+  }
   if (!m_session || m_session_write_back)
     FlushToFile();
 }
@@ -727,10 +737,11 @@ void GCMemcardDirectory::DoState(PointerWrap& p)
   std::unique_lock l(m_write_mutex);
   m_last_block = -1;
   m_last_block_address = nullptr;
-  // A session's card keeps its own folder, and of the saves' files only those it loaded itself:
-  // a joiner's state is another player's, and a flush or a read must never reach a path a peer
-  // sent.
-  std::string save_directory = m_save_directory;
+  // A session's state holds no paths: its folder and its saves' files are this machine's, so
+  // every player's machine saves the same bytes here (the image digest the players vouch with,
+  // bug report #128: Shrek 2's third player was refused, the folder's path in it), and a flush or
+  // a read never reaches a path a peer sent (m_session_files keeps them).
+  std::string save_directory = m_session ? std::string() : m_save_directory;
   p.Do(save_directory);
   if (!m_session)
     m_save_directory = std::move(save_directory);
@@ -743,10 +754,7 @@ void GCMemcardDirectory::DoState(PointerWrap& p)
   if (m_session && p.IsReadMode())
   {
     for (Memcard::GCIFile& save : m_saves)
-    {
-      if (!m_own_files.contains(save.m_filename))
-        save.m_filename.clear();
-    }
+      save.m_filename.clear();
   }
 }
 

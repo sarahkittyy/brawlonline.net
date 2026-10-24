@@ -4,7 +4,6 @@
 #pragma once
 
 #include <mutex>
-#include <set>
 #include <string>
 #include <thread>
 #include <vector>
@@ -68,9 +67,11 @@ private:
   std::string m_save_directory;
   bool m_session = false;
   bool m_session_write_back = false;
-  // The files this card loaded itself: in a session, a loaded state keeps only these names (a
-  // joiner's state comes from another player, whose paths are theirs).
-  std::set<std::string> m_own_files;
+  // A session's card: the file each save at that index was loaded from. The saves themselves hold
+  // no paths while the session runs, so its state is the same bytes on every player's machine
+  // (the image digest the players vouch with, bug report #128) and a path a peer sent is never
+  // used; the paths are put back for the write-back when the session ends.
+  std::vector<std::string> m_session_files;
   Common::Event m_flush_trigger;
   std::mutex m_write_mutex;
   Common::Flag m_exiting;

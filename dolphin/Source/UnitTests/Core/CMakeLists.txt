@@ -64,6 +64,9 @@ target_compile_definitions(OnlineSecurityTest PRIVATE GEKKONET_STATIC GEKKONET_N
 # The SD card of a whole-machine session (Core/Rollback/MachineSDCard): the throwaway layer and its
 # rollback, a joiner on the session's card, and hostile manifests, requests and chunks.
 add_dolphin_test(MachineSDCardTest MachineSDCardTest.cpp)
+# The GameCube memory card of a whole-machine session: the same state on every machine (bug report
+# #128), written back by the host only, to its own files.
+add_dolphin_test(GCMemcardDirectoryTest GCMemcardDirectoryTest.cpp)
 # A network session's reads of the local controllers (Gprb::ReadHostPad, bug report #70).
 add_dolphin_test(HostPadReadTest Rollback/HostPadReadTest.cpp)
 # The rollback job pool (Core/Rollback/job.h) stopped and started again (GitHub issue #3).
