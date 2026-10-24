@@ -3,7 +3,12 @@ import os from "os";
 import path from "path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { brawlSaveDir, ensureBrawlSave, nandRootFor } from "./brawl_save";
+import { BRAWL_BANNER_SIZE, brawlSaveDir, ensureBrawlSave, nandRootFor } from "./brawl_save";
+
+/** A banner.bin of the size the game writes (P+ refuses any other), its text `fill` repeated. */
+function banner(fill: string): string {
+  return fill.repeat(BRAWL_BANNER_SIZE / fill.length + 1).slice(0, BRAWL_BANNER_SIZE);
+}
 
 let tmp: string;
 
@@ -62,7 +67,11 @@ describe("ensureBrawlSave", () => {
 
   it("never touches a save the game wrote, and a second Play keeps it", async () => {
     const template = path.join(tmp, "NetplaySave");
-    await makeTemplate(template, { "advsv0.bin": "template", "autosv0.bin": "template", "banner.bin": "template" });
+    await makeTemplate(template, {
+      "advsv0.bin": "template",
+      "autosv0.bin": "template",
+      "banner.bin": banner("template"),
+    });
     const nand = path.join(tmp, "Wii");
     expect((await ensureBrawlSave({ nandRoot: nand, templateRoots: [template] })).action).toBe("seeded");
 
@@ -75,7 +84,7 @@ describe("ensureBrawlSave", () => {
     expect(await readDir(brawlSaveDir(nand))).toEqual({
       "advsv0.bin": "template",
       "autosv0.bin": "written by the game",
-      "banner.bin": "template",
+      "banner.bin": banner("template"),
       "net0.bin": "new",
     });
   });
@@ -84,7 +93,11 @@ describe("ensureBrawlSave", () => {
     // The user's PC 2026-10-15: what an old machine session left of P+'s save. Brawl deleted its
     // own files, then "There is not enough available space in Wii system memory" on every boot.
     const template = path.join(tmp, "NetplaySave");
-    await makeTemplate(template, { "banner.bin": "banner", "filelist.dat": "template", "wc24pubk.mod": "template" });
+    await makeTemplate(template, {
+      "banner.bin": banner("banner"),
+      "filelist.dat": "template",
+      "wc24pubk.mod": "template",
+    });
     const nand = path.join(tmp, "Wii");
     await fs.promises.mkdir(brawlSaveDir(nand), { recursive: true });
     await fs.promises.writeFile(path.join(brawlSaveDir(nand), "filelist.dat"), "left");
@@ -94,7 +107,7 @@ describe("ensureBrawlSave", () => {
     const result = await ensureBrawlSave({ nandRoot: nand, templateRoots: [template], log: (m) => messages.push(m) });
     expect(result).toMatchObject({ action: "seeded", removed: ["filelist.dat", "wc24pubk.mod"] });
     expect(await readDir(brawlSaveDir(nand))).toEqual({
-      "banner.bin": "banner",
+      "banner.bin": banner("banner"),
       "filelist.dat": "template",
       "wc24pubk.mod": "template",
     });
@@ -114,10 +127,53 @@ describe("ensureBrawlSave", () => {
     await makeTemplate(template, { "advsv0.bin": "template" });
     const nand = path.join(tmp, "Wii");
     await fs.promises.mkdir(brawlSaveDir(nand), { recursive: true });
-    await fs.promises.writeFile(path.join(brawlSaveDir(nand), "banner.bin"), "mine");
+    await fs.promises.writeFile(path.join(brawlSaveDir(nand), "banner.bin"), banner("mine"));
 
     expect((await ensureBrawlSave({ nandRoot: nand, templateRoots: [template] })).action).toBe("present");
-    expect(await readDir(brawlSaveDir(nand))).toEqual({ "banner.bin": "mine" });
+    expect(await readDir(brawlSaveDir(nand))).toEqual({ "banner.bin": banner("mine") });
+  });
+
+  it("moves away a save whose banner P+ refuses and seeds the template (bug report #138)", async () => {
+    // A 61600-byte banner (eight icons) in the playback NAND: P+ asked "Create save file for
+    // Project+?" at every replay, which the playback Dolphin can't answer.
+    const template = path.join(tmp, "NetplaySave");
+    await makeTemplate(template, { "advsv0.bin": "template", "banner.bin": banner("template") });
+    const user = path.join(tmp, "playback", "User");
+    const nand = path.join(user, "Wii");
+    await fs.promises.mkdir(brawlSaveDir(nand), { recursive: true });
+    await fs.promises.writeFile(path.join(brawlSaveDir(nand), "advsv0.bin"), "theirs");
+    await fs.promises.writeFile(path.join(brawlSaveDir(nand), "banner.bin"), "8".repeat(61600));
+    const messages: string[] = [];
+
+    const result = await ensureBrawlSave({ nandRoot: nand, templateRoots: [template], log: (m) => messages.push(m) });
+
+    expect(result).toMatchObject({ action: "seeded", removed: [] });
+    expect(await readDir(brawlSaveDir(nand))).toEqual({ "advsv0.bin": "template", "banner.bin": banner("template") });
+    const backupRoot = path.join(user, "SaveBackups", "RSBE");
+    const backups = await fs.promises.readdir(backupRoot);
+    expect(backups).toHaveLength(1);
+    expect(result.action === "seeded" && result.backup).toBe(path.join(backupRoot, backups[0]));
+    expect(await readDir(path.join(backupRoot, backups[0]))).toEqual({
+      "advsv0.bin": "theirs",
+      "banner.bin": "8".repeat(61600),
+    });
+    expect(messages.join("\n")).toContain("61600 bytes");
+
+    // The seeded save is kept from then on.
+    expect((await ensureBrawlSave({ nandRoot: nand, templateRoots: [template] })).action).toBe("present");
+    expect(await fs.promises.readdir(backupRoot)).toHaveLength(1);
+  });
+
+  it("never seeds from a template whose banner P+ refuses", async () => {
+    const bad = path.join(tmp, "bad");
+    await makeTemplate(bad, { "advsv0.bin": "bad", "banner.bin": "short" });
+    const good = path.join(tmp, "good");
+    await makeTemplate(good, { "advsv0.bin": "good", "banner.bin": banner("good") });
+    const nand = path.join(tmp, "Wii");
+
+    const result = await ensureBrawlSave({ nandRoot: nand, templateRoots: [bad, good] });
+    expect(result).toMatchObject({ action: "seeded", from: brawlSaveDir(good) });
+    expect(await readDir(brawlSaveDir(nand))).toEqual({ "advsv0.bin": "good", "banner.bin": banner("good") });
   });
 
   it("fills the empty save folder Dolphin creates at a disc boot", async () => {

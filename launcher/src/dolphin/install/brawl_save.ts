@@ -13,7 +13,7 @@
 // Dolphin writes the title's TMD itself when the disc boots, and the template's would be the
 // TMD of one disc revision.
 //
-// Never overwrites a save that has its banner.bin, so what the game writes (name tags, rules,
+// Never overwrites a save that has its banner.bin (of the game's size), so what the game writes (name tags, rules,
 // records) stays. A save folder with files but no banner.bin is replaced: Brawl takes such a save
 // for broken, deletes its own files and makes a new save, which it then refuses as "not enough
 // available space in Wii system memory" because the files it left (filelist.dat, wc24pubk.mod)
@@ -22,6 +22,14 @@
 // CleanUpWiiFileSystemContents; the user's PC 2026-10-15). The copy goes to a staging folder that
 // is renamed into place, so an interrupted copy never leaves a partial save that would count as
 // present.
+//
+// A save whose banner.bin is not the 29344 bytes (one icon) the game writes is replaced too: P+
+// takes it for no save and asks "Create save file for Project+?" at every boot (bug report #138,
+// 2026-10-24: a 61600-byte banner, eight icons, in the playback NAND, likely written by another
+// Brawl build booted from that Dolphin). The playback Dolphin can't answer the prompt (the replay
+// has the controllers), so every replay and spectated game stayed on it. Only the size counts:
+// banners of that size with other pixels or text boot. That save is moved to
+// `<NAND root's folder>/SaveBackups/RSBE/<time>`, not deleted.
 //
 // SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -34,27 +42,76 @@ export const BRAWL_SAVE_DIR = ["title", "00010000", "52534245", "data"] as const
 const STAGING_SUFFIX = ".seeding";
 /** Brawl writes it last when it makes its save, and treats a save without it as broken. */
 const BANNER = "banner.bin";
+/**
+ * The size of the banner.bin the game writes (0xA0 header, 192x64 banner, one 48x48 icon). P+
+ * asks to create a save when banner.bin has any other size (bug report #138).
+ */
+export const BRAWL_BANNER_SIZE = 0x72a0;
+
+export type BrawlSaveFile = { name: string; size: number };
 
 export type BrawlSaveResult =
   | { action: "present"; dir: string }
-  | { action: "seeded"; dir: string; from: string; files: number; bytes: number; removed: string[] }
-  | { action: "no-template"; dir: string; removed: string[] };
+  | {
+      action: "seeded";
+      dir: string;
+      from: string;
+      files: number;
+      bytes: number;
+      removed: string[];
+      /** Where a save P+ refuses was moved, or null. */
+      backup: string | null;
+    }
+  | { action: "no-template"; dir: string; removed: string[]; backup: string | null };
 
 export function brawlSaveDir(nandRoot: string): string {
   return path.join(nandRoot, ...BRAWL_SAVE_DIR);
 }
 
-/** Whether a save folder's files are a save Brawl keeps (it has its banner). */
-export function isUsableBrawlSave(files: string[]): boolean {
-  return files.some((name) => name.toLowerCase() === BANNER);
+function findBanner(files: BrawlSaveFile[]): BrawlSaveFile | undefined {
+  return files.find((f) => f.name.toLowerCase() === BANNER);
 }
 
-async function listFiles(dir: string): Promise<fs.Dirent[] | null> {
+/** Whether a save folder's files are a save P+ boots with (it has its banner, of the game's size). */
+export function isUsableBrawlSave(files: BrawlSaveFile[]): boolean {
+  return findBanner(files)?.size === BRAWL_BANNER_SIZE;
+}
+
+/** The files of a save folder with their sizes, or null when there is no folder. */
+export async function listBrawlSaveFiles(dir: string): Promise<BrawlSaveFile[] | null> {
+  let entries: fs.Dirent[];
   try {
-    return (await fs.promises.readdir(dir, { withFileTypes: true })).filter((e) => e.isFile());
+    entries = (await fs.promises.readdir(dir, { withFileTypes: true })).filter((e) => e.isFile());
   } catch {
     return null;
   }
+  const files: BrawlSaveFile[] = [];
+  for (const e of entries) {
+    const size = await fs.promises
+      .stat(path.join(dir, e.name))
+      .then((st) => st.size)
+      .catch(() => -1);
+    files.push({ name: e.name, size });
+  }
+  return files;
+}
+
+/** Moves the save folder `dir` to a new folder under `backupRoot`; returns it. */
+async function moveToBackup(dir: string, backupRoot: string): Promise<string> {
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  let backup = path.join(backupRoot, stamp);
+  for (let n = 1; fs.existsSync(backup); n++) {
+    backup = path.join(backupRoot, `${stamp}-${n}`);
+  }
+  await fs.promises.mkdir(backupRoot, { recursive: true });
+  try {
+    await fs.promises.rename(dir, backup);
+  } catch {
+    // Another volume, or a file held open: copy, then empty the folder
+    await fs.promises.cp(dir, backup, { recursive: true });
+    await fs.promises.rm(dir, { recursive: true, force: true });
+  }
+  return backup;
 }
 
 /**
@@ -65,16 +122,27 @@ async function listFiles(dir: string): Promise<fs.Dirent[] | null> {
 export async function ensureBrawlSave({
   nandRoot,
   templateRoots,
+  backupRoot = path.join(path.dirname(nandRoot), "SaveBackups", "RSBE"),
   log = () => undefined,
 }: {
   nandRoot: string;
   templateRoots: string[];
+  /** Where a save P+ refuses is moved (a folder per time). */
+  backupRoot?: string;
   log?: (message: string) => void;
 }): Promise<BrawlSaveResult> {
   const dir = brawlSaveDir(nandRoot);
-  const existing = await listFiles(dir);
-  if (existing && isUsableBrawlSave(existing.map((e) => e.name))) {
+  let existing = await listBrawlSaveFiles(dir);
+  if (existing && isUsableBrawlSave(existing)) {
     return { action: "present", dir };
+  }
+  // A banner of another size: a whole save, which P+ still takes for none
+  let backup: string | null = null;
+  const banner = existing && findBanner(existing);
+  if (banner) {
+    backup = await moveToBackup(dir, backupRoot);
+    log(`Moved a Brawl save P+ refuses (${BANNER} of ${banner.size} bytes, not ${BRAWL_BANNER_SIZE}) to ${backup}`);
+    existing = null;
   }
   // Files without a banner: what is left of a broken save, which only stops Brawl making a new one
   const removed = (existing ?? []).map((e) => e.name).sort();
@@ -87,8 +155,13 @@ export async function ensureBrawlSave({
 
   for (const root of templateRoots) {
     const from = brawlSaveDir(root);
-    const files = await listFiles(from);
+    const files = await listBrawlSaveFiles(from);
     if (!files || files.length === 0) {
+      continue;
+    }
+    const templateBanner = findBanner(files);
+    if (templateBanner && templateBanner.size !== BRAWL_BANNER_SIZE) {
+      log(`Skipped the Brawl save template ${from}: P+ refuses its ${BANNER} (${templateBanner.size} bytes)`);
       continue;
     }
     const staging = dir + STAGING_SUFFIX;
@@ -100,8 +173,8 @@ export async function ensureBrawlSave({
       bytes += (await fs.promises.stat(path.join(staging, f.name))).size;
     }
     // The game (or another Play) may have written a save meanwhile: then keep that one.
-    const now = await listFiles(dir);
-    if (now && isUsableBrawlSave(now.map((e) => e.name))) {
+    const now = await listBrawlSaveFiles(dir);
+    if (now && isUsableBrawlSave(now)) {
       await fs.promises.rm(staging, { recursive: true, force: true });
       return { action: "present", dir };
     }
@@ -111,10 +184,10 @@ export async function ensureBrawlSave({
     }
     await fs.promises.rename(staging, dir);
     log(`Seeded the Brawl save in ${dir} from ${from} (${files.length} files, ${bytes} bytes)`);
-    return { action: "seeded", dir, from, files: files.length, bytes, removed };
+    return { action: "seeded", dir, from, files: files.length, bytes, removed, backup };
   }
   log(`No Brawl save template found (${templateRoots.join(", ")}); P+ will offer to create a save`);
-  return { action: "no-template", dir, removed };
+  return { action: "no-template", dir, removed, backup };
 }
 
 /**

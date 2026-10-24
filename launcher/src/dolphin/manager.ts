@@ -11,7 +11,7 @@ import type { MessageBoxOptions } from "electron";
 import { app, BrowserWindow, dialog } from "electron";
 import electronLog from "electron-log";
 import { existsSync } from "fs";
-import { mkdir, readdir } from "fs/promises";
+import { mkdir } from "fs/promises";
 import { Observable, Subject } from "observable-fns";
 import path from "path";
 import { fileExists } from "utils/file_exists";
@@ -19,7 +19,7 @@ import { isSubdirectory } from "utils/is_subdirectory";
 
 import { isAbnormalExit, keepCrashLog } from "./crash_log";
 import { clearInputDelayRequest, writeInputDelayRequest } from "./input_delay_handoff";
-import { brawlSaveDir, ensureBrawlSave, isUsableBrawlSave } from "./install/brawl_save";
+import { brawlSaveDir, ensureBrawlSave, isUsableBrawlSave, listBrawlSaveFiles } from "./install/brawl_save";
 import { bundledDolphinSource, installBundledDolphin } from "./install/bundled_dolphin";
 import { asDiskSpaceError } from "./install/disk_space";
 import { fetchLatestVersion } from "./install/fetch_latest_version";
@@ -1170,6 +1170,9 @@ export class DolphinManager {
         ],
         log: (message) => log.info(message),
       });
+      if (result.action !== "present" && result.backup) {
+        log.warn(`Brawl save: moved one P+ refuses (its banner's size) from ${result.dir} to ${result.backup}`);
+      }
       if (result.action !== "present" && result.removed.length > 0) {
         log.warn(`Brawl save: replaced one without its banner in ${result.dir} (${result.removed.join(", ")})`);
       }
@@ -1191,12 +1194,8 @@ export class DolphinManager {
   private async _checkBrawlSave(installation: LocalDolphinInstallation, storeDir: string): Promise<void> {
     const hasSave = async () => {
       const dir = brawlSaveDir(await installation.nandRoot());
-      try {
-        const files = (await readdir(dir, { withFileTypes: true })).filter((e) => e.isFile());
-        return { dir, ok: isUsableBrawlSave(files.map((e) => e.name)) };
-      } catch {
-        return { dir, ok: false };
-      }
+      const files = await listBrawlSaveFiles(dir);
+      return { dir, ok: files !== null && isUsableBrawlSave(files) };
     };
     const before = await hasSave();
     if (before.ok) {
