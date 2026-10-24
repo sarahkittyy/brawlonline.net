@@ -198,8 +198,8 @@ std::optional<const AbstractPipeline*> ShaderCache::GetPipelineForUidAsync(const
     // .second is the pending flag, i.e. compiling in the background.
     if (!it->second.second)
       return it->second.first.get();
-    else
-      return {};
+    HurryPendingPipeline(uid, COMPILE_PRIORITY_ONDEMAND_PIPELINE);
+    return {};
   }
 
   AppendGXPipelineUID(uid);
@@ -222,6 +222,10 @@ const AbstractPipeline* ShaderCache::WaitForPipelineForUid(const GXPipelineUid& 
   {
     AppendGXPipelineUID(uid);
     QueuePipelineCompile(uid, COMPILE_PRIORITY_WAITED_PIPELINE);
+  }
+  else
+  {
+    HurryPendingPipeline(uid, COMPILE_PRIORITY_WAITED_PIPELINE);
   }
   // After a wait that ran out, the next few seconds' draws don't wait (they are skipped as any
   // other), so a compile that hangs stalls the GPU thread once, not at every draw.
@@ -487,6 +491,7 @@ void ShaderCache::LoadCaches()
 void ShaderCache::ClearCaches()
 {
   ClearPipelineCache(m_gx_pipeline_cache, m_gx_pipeline_disk_cache);
+  m_gx_pipeline_queued_priority.clear();
   ClearShaderCache(m_vs_cache);
   ClearShaderCache(m_gs_cache);
   ClearShaderCache(m_ps_cache);
@@ -843,6 +848,7 @@ const AbstractPipeline* ShaderCache::InsertGXPipeline(const GXPipelineUid& confi
 {
   auto& entry = m_gx_pipeline_cache[config];
   entry.second = false;
+  m_gx_pipeline_queued_priority.erase(config);
   if (!entry.first && pipeline)
   {
     entry.first = std::move(pipeline);
@@ -1020,7 +1026,9 @@ void ShaderCache::QueueVertexShaderCompile(const VertexShaderUid& uid, u32 prior
     VertexShaderUid uid;
   };
 
-  m_vs_cache.shader_map[uid].pending = true;
+  auto& entry = m_vs_cache.shader_map[uid];
+  entry.pending = true;
+  entry.priority = priority;
   auto wi = m_async_shader_compiler->CreateWorkItem<VertexShaderWorkItem>(this, uid);
   m_async_shader_compiler->QueueWorkItem(std::move(wi), priority);
 }
@@ -1078,7 +1086,9 @@ void ShaderCache::QueuePixelShaderCompile(const PixelShaderUid& uid, u32 priorit
     PixelShaderUid uid;
   };
 
-  m_ps_cache.shader_map[uid].pending = true;
+  auto& entry = m_ps_cache.shader_map[uid];
+  entry.pending = true;
+  entry.priority = priority;
   auto wi = m_async_shader_compiler->CreateWorkItem<PixelShaderWorkItem>(this, uid);
   m_async_shader_compiler->QueueWorkItem(std::move(wi), priority);
 }
@@ -1120,10 +1130,23 @@ void ShaderCache::QueuePipelineCompile(const GXPipelineUid& uid, u32 priority)
     PipelineWorkItem(ShaderCache* shader_cache_, GXPipelineUid uid_, u32 priority_)
         : shader_cache(shader_cache_), uid(std::move(uid_)), priority(priority_)
     {
+      // A copy queued at another priority (HurryPendingPipeline) may have compiled it already:
+      // then this one does nothing.
+      if (IsCompiled())
+      {
+        stages_ready = true;
+        return;
+      }
       // Check if all the stages required for this pipeline have been compiled.
       // If not, this work item becomes a no-op, and re-queues the pipeline for the next frame.
       if (SetStagesReady())
         config = shader_cache->GetGXPipelineConfig(uid);
+    }
+
+    bool IsCompiled() const
+    {
+      auto it = shader_cache->m_gx_pipeline_cache.find(uid);
+      return it != shader_cache->m_gx_pipeline_cache.end() && it->second.first;
     }
 
     bool SetStagesReady()
@@ -1132,18 +1155,26 @@ void ShaderCache::QueuePipelineCompile(const GXPipelineUid& uid, u32 priority)
 
       GXPipelineUid actual_uid = ApplyDriverBugs(uid);
 
+      // A stage still pending at a lower priority (the shader cache's) is queued again at this
+      // pipeline's: the copy compiled first is kept (InsertVertexShader / InsertPixelShader).
       auto vs_it = shader_cache->m_vs_cache.shader_map.find(actual_uid.vs_uid);
       stages_ready &= vs_it != shader_cache->m_vs_cache.shader_map.end() && !vs_it->second.pending;
-      if (vs_it == shader_cache->m_vs_cache.shader_map.end())
+      if (vs_it == shader_cache->m_vs_cache.shader_map.end() ||
+          (vs_it->second.pending && priority < vs_it->second.priority))
+      {
         shader_cache->QueueVertexShaderCompile(actual_uid.vs_uid, priority);
+      }
 
       PixelShaderUid ps_uid = actual_uid.ps_uid;
       ClearUnusedPixelShaderUidBits(shader_cache->m_api_type, shader_cache->m_host_config, &ps_uid);
 
       auto ps_it = shader_cache->m_ps_cache.shader_map.find(ps_uid);
       stages_ready &= ps_it != shader_cache->m_ps_cache.shader_map.end() && !ps_it->second.pending;
-      if (ps_it == shader_cache->m_ps_cache.shader_map.end())
+      if (ps_it == shader_cache->m_ps_cache.shader_map.end() ||
+          (ps_it->second.pending && priority < ps_it->second.priority))
+      {
         shader_cache->QueuePixelShaderCompile(ps_uid, priority);
+      }
 
       return stages_ready;
     }
@@ -1161,7 +1192,7 @@ void ShaderCache::QueuePipelineCompile(const GXPipelineUid& uid, u32 priority)
       {
         shader_cache->InsertGXPipeline(uid, std::move(pipeline));
       }
-      else
+      else if (!IsCompiled())
       {
         // Re-queue for next frame.
         auto wi = shader_cache->m_async_shader_compiler->CreateWorkItem<PipelineWorkItem>(
@@ -1182,6 +1213,23 @@ void ShaderCache::QueuePipelineCompile(const GXPipelineUid& uid, u32 priority)
   auto wi = m_async_shader_compiler->CreateWorkItem<PipelineWorkItem>(this, uid, priority);
   m_async_shader_compiler->QueueWorkItem(std::move(wi), priority);
   m_gx_pipeline_cache[uid].second = true;
+  auto [queued, inserted] = m_gx_pipeline_queued_priority.try_emplace(uid, priority);
+  if (!inserted)
+    queued->second = std::min(queued->second, priority);
+}
+
+void ShaderCache::HurryPendingPipeline(const GXPipelineUid& uid, u32 priority)
+{
+  // The pipelines of the UID cache are all queued at the start (CompileMissingPipelines) at the
+  // lowest priority, and with one compiler thread they compile one after another. With the shader
+  // binaries kept (the same build) that is fast; after an update (a new build: LinearDiskCache's
+  // header holds the git revision) every shader of every game played compiles again, many seconds,
+  // and a draw whose pipeline was among them was skipped until all were done: Brawl's menus stayed
+  // white 3-10 s at the first boot after each update, with sound and a working cursor.
+  auto it = m_gx_pipeline_queued_priority.find(uid);
+  if (it != m_gx_pipeline_queued_priority.end() && it->second <= priority)
+    return;
+  QueuePipelineCompile(uid, priority);
 }
 
 void ShaderCache::QueueUberPipelineCompile(const GXUberPipelineUid& uid, u32 priority)

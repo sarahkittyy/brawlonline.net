@@ -186,6 +186,9 @@ private:
   void QueuePixelShaderCompile(const PixelShaderUid& uid, u32 priority);
   void QueuePixelUberShaderCompile(const UberShader::PixelShaderUid& uid, u32 priority);
   void QueuePipelineCompile(const GXPipelineUid& uid, u32 priority);
+  // A draw needs a pipeline that is still pending: queues it again at the draw's priority if it
+  // was queued at a lower one (the shader cache's, see CompileMissingPipelines).
+  void HurryPendingPipeline(const GXPipelineUid& uid, u32 priority);
   void QueueUberPipelineCompile(const GXUberPipelineUid& uid, u32 priority);
 
   // Populating various caches.
@@ -235,6 +238,7 @@ private:
     {
       std::unique_ptr<AbstractShader> shader;
       bool pending = false;
+      u32 priority = 0;  // while pending, the lowest priority it was queued at
     };
     std::map<Uid, Shader> shader_map;
     Common::LinearDiskCache<Uid, u8> disk_cache;
@@ -249,6 +253,8 @@ private:
   std::map<GXPipelineUid, std::pair<std::unique_ptr<AbstractPipeline>, bool>> m_gx_pipeline_cache;
   std::map<GXUberPipelineUid, std::pair<std::unique_ptr<AbstractPipeline>, bool>>
       m_gx_uber_pipeline_cache;
+  // While a GX pipeline is pending, the lowest priority it was queued at.
+  std::map<GXPipelineUid, u32> m_gx_pipeline_queued_priority;
   File::IOFile m_gx_pipeline_uid_cache_file;
   Common::LinearDiskCache<SerializedGXPipelineUid, u8> m_gx_pipeline_disk_cache;
   Common::LinearDiskCache<SerializedGXUberPipelineUid, u8> m_gx_uber_pipeline_disk_cache;
