@@ -105,6 +105,17 @@ async fn a_direct_game_is_listed_watched_and_chatted_about() {
     a.upload_chunk(slot, 1, &encode_chunk(b"SETP", b"{\"setup\":1}", true));
     a.upload_chunk(slot, 2, &encode_chunk(b"FRMS", &frms(120, 60), true));
 
+    // alice is placed, bob still placing: only alice's rating is listed (the launcher sorts by it).
+    for (uid, rating, sets) in [(&alice.uid, 1600.0, 5), (&bob.uid, 1700.0, 2)] {
+        sqlx::query("INSERT INTO ratings (uid, rating, sets_played) VALUES ($1::uuid, $2, $3)")
+            .bind(uid.to_string())
+            .bind(rating)
+            .bind(sets)
+            .execute(&stack.pool)
+            .await
+            .unwrap();
+    }
+
     // Listed for carol, with mm's names (not INFO's) and INFO's characters.
     let mut games = Value::Null;
     let deadline = Instant::now() + WAIT;
@@ -126,6 +137,7 @@ async fn a_direct_game_is_listed_watched_and_chatted_about() {
     );
     assert_eq!(g["players"][0]["displayName"], "alice");
     assert_eq!(g["players"][0]["characterId"], 17);
+    assert_eq!((g["players"][0]["rating"].as_f64(), g["players"][1].get("rating")), (Some(1600.0), None));
     assert_eq!(g["spectators"], 0);
     let id = g["id"].as_str().unwrap().to_string();
 

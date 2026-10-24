@@ -8,13 +8,15 @@ import { useLiveGames, useNow, useSpectateState } from "@/lib/spectate/use_spect
 
 import { SpectateMessages as Messages } from "./spectate.messages";
 import styles from "./spectate.module.css";
-import type { SpectateListState } from "./spectate_view";
+import type { LiveSort, SpectateListState } from "./spectate_view";
 import { SpectateView } from "./spectate_view";
 
 /** How long a list stays shown while polls fail (as Public Rooms). */
 const STALE_AFTER_MS = 15_000;
 /** Auto play, remembered on this computer (off by default, the user 2026-10-13). */
 const AUTO_PLAY_STORAGE_KEY = "SPECTATE_AUTO_PLAY";
+/** The list's sort, remembered on this computer. Only the list: Auto play still picks the newest live game. */
+const SORT_STORAGE_KEY = "SPECTATE_SORT";
 
 /** Home > Spectate (docs/design/spectating.md §6.1): the live games, polled every 3 s while the tab is open. */
 export const Spectate = React.memo(function Spectate() {
@@ -24,6 +26,7 @@ export const Spectate = React.memo(function Spectate() {
   const watching = useSpectateState();
   const now = useNow(1000);
   const [autoPlay, setAutoPlay] = useLocalStorage(AUTO_PLAY_STORAGE_KEY, false);
+  const [sort, setSort] = useLocalStorage<LiveSort>(SORT_STORAGE_KEY, "newest");
   const [startingId, setStartingId] = useState<string | undefined>();
   const freshIds = useFreshIds(query.data?.games);
 
@@ -76,6 +79,8 @@ export const Spectate = React.memo(function Spectate() {
         onLogIn={openLogin}
         now={now}
         freshIds={freshIds}
+        sort={sort === "elo" ? "elo" : "newest"}
+        onSortChange={setSort}
       />
     </div>
   );

@@ -29,6 +29,7 @@ use common::spectate::LiveEntry;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tokio::sync::mpsc;
+use uuid::Uuid;
 
 use crate::api::{current_user, limit, me};
 use crate::error::{ApiError, ApiResult};
@@ -399,7 +400,7 @@ pub async fn list(State(state): State<AppState>, headers: HeaderMap) -> ApiResul
     })?;
     let status = state.mm_status.get().await.map_err(mm_unavailable)?;
     let counts = state.live.counts();
-    let games: Vec<LiveEntry> = status
+    let mut games: Vec<LiveEntry> = status
         .live
         .into_iter()
         .map(|mut e| {
@@ -407,7 +408,37 @@ pub async fn list(State(state): State<AppState>, headers: HeaderMap) -> ApiResul
             e
         })
         .collect();
+    // The list still goes out without them if the ratings can't be read.
+    match placed_ratings(&state.pool, &games).await {
+        Ok(ratings) => fill_ratings(&mut games, &ratings),
+        Err(e) => tracing::warn!("reading the live players' ratings failed: {e}"),
+    }
     Ok(Json(json!({ "games": games })))
+}
+
+/// The Ranked ratings of the live games' placed players (a player still placing has none, as on
+/// the leaderboard).
+async fn placed_ratings(pool: &sqlx::PgPool, games: &[LiveEntry]) -> sqlx::Result<HashMap<Uuid, f64>> {
+    let mut uids: Vec<Uuid> =
+        games.iter().flat_map(|g| &g.players).filter_map(|p| Uuid::parse_str(&p.uid).ok()).collect();
+    uids.sort_unstable();
+    uids.dedup();
+    if uids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let rows: Vec<(Uuid, f64)> =
+        sqlx::query_as("SELECT uid, rating FROM ratings WHERE uid = ANY($1) AND sets_played >= $2")
+            .bind(&uids)
+            .bind(common::ranked::PLACEMENT_SETS as i32)
+            .fetch_all(pool)
+            .await?;
+    Ok(rows.into_iter().collect())
+}
+
+fn fill_ratings(games: &mut [LiveEntry], ratings: &HashMap<Uuid, f64>) {
+    for p in games.iter_mut().flat_map(|g| &mut g.players) {
+        p.rating = Uuid::parse_str(&p.uid).ok().and_then(|uid| ratings.get(&uid).copied());
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -747,5 +778,23 @@ mod tests {
         assert!(valid_stream_id("0123456789ab"));
         assert!(!valid_stream_id("0123456789aB"));
         assert!(!valid_stream_id("../status"));
+    }
+
+    #[test]
+    fn placed_players_get_their_rating_and_the_others_none() {
+        use common::spectate::LivePlayer;
+        let placed = Uuid::from_bytes([1; 16]);
+        let placing = Uuid::from_bytes([2; 16]);
+        let player = |uid: String| LivePlayer { uid, rating: Some(1.0), ..Default::default() };
+        let mut games = vec![LiveEntry {
+            players: vec![player(placed.to_string()), player(placing.to_string()), player("not-a-uid".into())],
+            ..Default::default()
+        }];
+        fill_ratings(&mut games, &HashMap::from([(placed, 1523.5)]));
+        let ratings: Vec<_> = games[0].players.iter().map(|p| p.rating).collect();
+        assert_eq!(ratings, [Some(1523.5), None, None]);
+        let json = serde_json::to_value(&games[0].players).unwrap();
+        assert_eq!(json[0]["rating"], 1523.5);
+        assert!(json[1].get("rating").is_none(), "no rating, no key: {json}");
     }
 }

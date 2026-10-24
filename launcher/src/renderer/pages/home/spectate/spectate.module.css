@@ -36,6 +36,29 @@
   white-space: nowrap;
 }
 
+/* The watch status, the player search and the sort at the header's right end (the search as Replays > Highlights'). */
+.headerEnd {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.search {
+  width: 170px;
+  height: 30px;
+  padding: 0 4px 0 10px;
+  border-radius: 10px;
+  background-color: black;
+  font-size: 13px;
+}
+
+.sort {
+  flex-shrink: 0;
+  height: 30px;
+  font-size: 13px;
+}
+
 .centered {
   display: flex;
   flex-direction: column;

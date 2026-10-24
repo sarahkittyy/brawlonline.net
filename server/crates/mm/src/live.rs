@@ -1352,6 +1352,7 @@ impl LiveBook {
                     costume: num("costume").unwrap_or(0),
                     team_id: num("teamId"),
                     wins: wins.get(&uid).copied().unwrap_or(0),
+                    rating: None,
                 });
             }
         }

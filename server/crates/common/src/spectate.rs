@@ -548,6 +548,10 @@ pub struct LivePlayer {
     pub costume: u32,
     pub team_id: Option<u32>,
     pub wins: u32,
+    /// The player's Ranked rating once placed, filled in by accounts for `GET /v1/live` (mm
+    /// doesn't read ratings): the launcher sorts the list by it and never shows it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rating: Option<f64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]

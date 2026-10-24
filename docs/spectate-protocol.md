@@ -177,13 +177,14 @@ Every endpoint needs a session (`Authorization: Bearer`).
   "startedAt": "2026-10-13T18:03:12.345Z", "spectators": 4,
   "game": {"number": 2, "place": 2, "startedAt": "…", "stageId": 3, "state": "playing"},
   "players": [{"uid": "…", "displayName": "Drsmsh", "connectCode": "DRS#1",
-               "characterId": 17, "costume": 0, "teamId": null, "wins": 1}]
+               "characterId": 17, "costume": 0, "teamId": null, "wins": 1, "rating": 1523.4}]
 }]}
 ```
 
 - The order is newest first (`startedAt`).
 - `place` is the current game's place in the stream (the `game` of §2's lines). A launcher joining a set mid-way watches from `?game=<place>` (`place + 1` between games), so it starts with the game being played.
 - `state` is `playing`, `between` (waiting for the set's next game) or `over`.
+- `rating` is the player's Ranked rating once placed, read by accounts for each answer (mm's entries don't have it); a player still placing, or one who never played Ranked, has no `rating` key. The launcher only sorts by it and doesn't show it (the user, 2026-10-24). If the ratings can't be read, the list goes out without them.
 - A game marked bad is listed with `state: "over"`.
 - The answer comes from a snapshot about a second old (mm refreshes it every 0.5 s and accounts keeps it for 1 s). It's limited like `/v1/rooms`.
 

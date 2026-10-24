@@ -1,6 +1,6 @@
 import type { LiveGameEntry } from "@spectate/types";
-import { fireEvent, render } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { SpectateMessages as Messages } from "./spectate.messages";
 import type { SpectateListState } from "./spectate_view";
@@ -58,6 +58,9 @@ const view = (state: SpectateListState, props: Partial<Parameters<typeof Spectat
   );
 
 describe("SpectateView", () => {
+  // (Menus and tooltips render into the body: one view at a time.)
+  afterEach(cleanup);
+
   it("lists the live games newest first, with who plays, the game, its time and how many watch", () => {
     const { container } = view({ kind: "ready", games });
     const rows = Array.from(container.querySelectorAll("button[data-stream]"));
@@ -145,6 +148,55 @@ describe("SpectateView", () => {
     expect(time.className).toMatch(/ended/);
     fireEvent.click(container.querySelector('[data-stream="dddddddddddd"]')!);
     expect(onWatch.mock.calls.map((c) => c[0].id)).toEqual(["dddddddddddd"]);
+  });
+
+  it("sorts by Elo: the players' average, games without a placed player next, ended streams last", () => {
+    const rated = (id: string, ratings: (number | undefined)[], patch: Partial<LiveGameEntry> = {}) => {
+      const g = game(id, "2026-10-14T02:00:00Z", patch);
+      return { ...g, players: g.players.map((p, i) => ({ ...p, rating: ratings[i] })) };
+    };
+    const list = [
+      rated("aaaaaaaaaaaa", [1500, 1500]),
+      rated("bbbbbbbbbbbb", [1900, 1300]),
+      // The only placed player's rating: 1550.
+      rated("cccccccccccc", [1550, undefined], {
+        game: { number: 2, place: 2, startedAt: "2026-10-14T02:05:00Z", stageId: 0x02, state: "between" },
+      }),
+      rated("dddddddddddd", [undefined, undefined]),
+      rated("eeeeeeeeeeee", [2400, 2400], {
+        game: { number: 1, place: 1, startedAt: "2026-10-14T02:00:00Z", stageId: 0x02, state: "over" },
+      }),
+    ];
+    const order = (c: HTMLElement) =>
+      Array.from(c.querySelectorAll("button[data-stream]")).map((r) => r.getAttribute("data-stream"));
+    const { container } = view({ kind: "ready", games: list }, { sort: "elo" });
+    expect(order(container)).toEqual(["bbbbbbbbbbbb", "cccccccccccc", "aaaaaaaaaaaa", "dddddddddddd", "eeeeeeeeeeee"]);
+    // The Elo isn't shown anywhere.
+    expect(container.textContent).not.toMatch(/1600|1550|1500/);
+  });
+
+  it("changes the sort from the menu", () => {
+    const onSortChange = vi.fn();
+    const v = view({ kind: "ready", games }, { onSortChange });
+    fireEvent.mouseDown(v.getByRole("combobox", { name: Messages.sort() }));
+    fireEvent.click(v.getByRole("option", { name: Messages.sortElo() }));
+    expect(onSortChange).toHaveBeenCalledWith("elo");
+  });
+
+  it("searches the players by name or connect code, in any case", () => {
+    const v = view({ kind: "ready", games });
+    const search = v.container.querySelector('input[data-testid="search"]')!;
+    const order = () =>
+      Array.from(v.container.querySelectorAll("button[data-stream]")).map((r) => r.getAttribute("data-stream"));
+    fireEvent.change(search, { target: { value: "  CY " } });
+    expect(order()).toEqual(["bbbbbbbbbbbb"]);
+    fireEvent.change(search, { target: { value: "bob#" } });
+    expect(order()).toEqual(["aaaaaaaaaaaa", "cccccccccccc"]);
+    fireEvent.change(search, { target: { value: "zed" } });
+    expect(order()).toEqual([]);
+    expect(v.getByText(Messages.noMatch("zed"))).toBeTruthy();
+    fireEvent.click(v.getByRole("button", { name: Messages.clearSearch() }));
+    expect(order()).toHaveLength(3);
   });
 
   it("shows the empty, logged-out and unreachable states", () => {

@@ -15,6 +15,8 @@ export type LivePlayer = {
   teamId: number | null;
   /** Games won in the set so far. */
   wins: number;
+  /** Their Ranked rating, once placed (none while placing): only the list's Elo sort uses it, nothing shows it. */
+  rating?: number;
 };
 
 export type LiveGameEntry = {
