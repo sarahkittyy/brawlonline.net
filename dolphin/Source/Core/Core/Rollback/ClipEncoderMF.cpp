@@ -4,7 +4,9 @@
 // ClipEncoder on Windows: Media Foundation's sink writer writes the MP4 with the system's H.264
 // encoder (the graphics card's when it has one, else Microsoft's software one) and AAC encoder,
 // converting the BGRA frames to the encoder's format itself. Nothing ships for it: the encoders
-// are part of Windows (an "N" edition needs the Media Feature Pack).
+// are part of Windows (an "N" edition needs the Media Feature Pack). mfplat.dll and mfreadwrite.dll
+// are delay-loaded (Core/CMakeLists.txt): an N edition without the pack has neither, and as plain
+// imports they kept Dolphin from starting at all ("Required DLLs ... are missing").
 
 #ifdef _WIN32
 
@@ -55,6 +57,16 @@ public:
     m_width = width;
     m_height = height;
     m_audio_rate = audio_rate;
+    // Before the first MF call, which would load them: a missing delay-loaded DLL is an exception.
+    for (const wchar_t* dll : {L"mfplat.dll", L"mfreadwrite.dll"})
+    {
+      if (!LoadLibraryExW(dll, nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32))
+      {
+        *error = "Media Foundation is not installed (a Windows \"N\" edition needs the Media "
+                 "Feature Pack)";
+        return false;
+      }
+    }
     const HRESULT co = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
     m_com = SUCCEEDED(co);
     HRESULT hr = MFStartup(MF_VERSION, MFSTARTUP_LITE);

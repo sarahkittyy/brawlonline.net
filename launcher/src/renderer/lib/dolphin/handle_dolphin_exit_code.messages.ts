@@ -1,6 +1,6 @@
 export const HandleDolphinExitCodeMessages = {
   requiredDllsMissing: () =>
-    "Required DLLs for launching Dolphin are missing. Check the Help section in the settings page to fix this issue.",
+    "Required DLLs for launching Dolphin are missing. Install the Microsoft Visual C++ Redistributable (x64): Settings > Help has the link.",
   dolphinCrashed: () =>
     'Dolphin has crashed. Please go to the Help section of the settings page, click "Download logs", and send us the zip with some context regarding the crash.',
   tryDifferentVideoBackend: () =>

@@ -890,7 +890,11 @@ endif()
 
 # Rendering replays to video (Rollback/ClipRecorder.h): Media Foundation on Windows, FFmpeg elsewhere.
 if(WIN32)
-  target_link_libraries(core PRIVATE mfplat mfreadwrite mfuuid)
+  # Delay-loaded (ClipEncoderMF.cpp checks for them first): a Windows "N" edition without the Media
+  # Feature Pack has no mfplat.dll or mfreadwrite.dll, and plain imports stopped Dolphin starting.
+  target_link_libraries(core PRIVATE mfplat mfreadwrite mfuuid delayimp)
+  # /IGNORE:4199: the executables that never encode (DolphinTool) import neither.
+  target_link_options(core INTERFACE /DELAYLOAD:mfplat.dll /DELAYLOAD:mfreadwrite.dll /IGNORE:4199)
 elseif(APPLE)
   target_sources(core PRIVATE Rollback/ClipEncoderAVF.mm)
   set_source_files_properties(Rollback/ClipEncoderAVF.mm PROPERTIES COMPILE_OPTIONS -fobjc-arc)

@@ -584,15 +584,32 @@ def find_vcvars() -> Path:
     raise AssertionError
 
 
-def msvc(cmd: str, cwd: Path, log: Path, build_dir: Path | None = None) -> None:
-    """Runs `cmd` with the MSVC environment of the compiler the build dir was configured with."""
+def build_vcvars(build_dir: Path | None) -> Path:
+    """vcvars64.bat of the compiler the build dir was configured with (else the latest)."""
     vcvars = find_vcvars()
     cache = build_dir / "CMakeCache.txt" if build_dir else None
     if cache and cache.exists():
         m = re.search(r"^CMAKE_CXX_COMPILER:\w+=(.+?)/VC/Tools/", cache.read_text(errors="replace"), re.M)
         if m:
             vcvars = Path(m.group(1)) / "VC" / "Auxiliary" / "Build" / "vcvars64.bat"
-    run(f'call "{vcvars}" >nul && {cmd}', cwd=cwd, log=log, shell=True)
+    return vcvars
+
+
+def msvc(cmd: str, cwd: Path, log: Path, build_dir: Path | None = None) -> None:
+    """Runs `cmd` with the MSVC environment of the compiler the build dir was configured with."""
+    run(f'call "{build_vcvars(build_dir)}" >nul && {cmd}', cwd=cwd, log=log, shell=True)
+
+
+def vc_runtime_dir(build_dir: Path) -> Path:
+    """The x64 Visual C++ runtime DLLs (msvcp140.dll, vcruntime140.dll, ...) of the build's compiler."""
+    # `set`, not `echo %VCToolsRedistDir%`: cmd expands %...% before vcvars runs.
+    out = subprocess.run(f'call "{build_vcvars(build_dir)}" >nul && set VCToolsRedistDir',
+                         shell=True, capture_output=True, text=True).stdout
+    m = re.search(r"^VCToolsRedistDir=(.+?)\s*$", out, re.M)
+    crt = sorted((Path(m.group(1)) / "x64").glob("Microsoft.VC*.CRT")) if m else []
+    if not crt:
+        die(f"the Visual C++ runtime was not found ({m.group(1) if m else 'no VCToolsRedistDir'})")
+    return crt[-1]
 
 
 def win_build(args: argparse.Namespace) -> None:
@@ -639,7 +656,8 @@ def win_build(args: argparse.Namespace) -> None:
         marker.write_text(lock)
     run("npm run stage:plugin", cwd=launcher, log=log, shell=True)
     run("npm run build", cwd=launcher, log=log, shell=True)
-    stage_windows_dolphin(build / "Binaries", launcher / "release" / "dolphin", dsrc, sha, log)
+    stage_windows_dolphin(build / "Binaries", launcher / "release" / "dolphin", dsrc, sha, log,
+                          vc_runtime_dir(build))
     shutil.rmtree(launcher / "release" / "build", ignore_errors=True)
     run("npx electron-builder build --win dir --publish never", cwd=launcher, log=log, shell=True)
     unpacked = launcher / "release" / "build" / "win-unpacked"
@@ -658,7 +676,8 @@ def win_build(args: argparse.Namespace) -> None:
         say("the staging server runs this commit's binaries from the next `server up`")
 
 
-def stage_windows_dolphin(binaries: Path, out: Path, dsrc: Path, sha: str, log: Path) -> None:
+def stage_windows_dolphin(binaries: Path, out: Path, dsrc: Path, sha: str, log: Path,
+                          crt: Path) -> None:
     """build-dolphin-windows.ps1's staging part: what Dolphin needs at run time, then the manifest."""
     shutil.rmtree(out, ignore_errors=True)
     out.mkdir(parents=True)
@@ -667,6 +686,8 @@ def stage_windows_dolphin(binaries: Path, out: Path, dsrc: Path, sha: str, log: 
         if p.name in skip_names or p.suffix in (".pdb", ".ilk", ".exp", ".lib"):
             continue
         (shutil.copytree if p.is_dir() else shutil.copy2)(p, out / p.name)
+    for dll in crt.glob("*.dll"):
+        shutil.copy2(dll, out / dll.name)
     if not (out / "COPYING").exists():
         shutil.copy2(dsrc / "COPYING", out / "COPYING")
     if not (out / "Licenses").exists():
