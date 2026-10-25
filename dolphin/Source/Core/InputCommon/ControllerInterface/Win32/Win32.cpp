@@ -78,6 +78,7 @@ InputBackend::InputBackend(ControllerInterface* controller_interface)
 {
   XInput::Init();
   WGInput::Init();
+  DInput::Init();
 
   CM_NOTIFY_FILTER notify_filter{.cbSize = sizeof(notify_filter),
                                  .FilterType = CM_NOTIFY_FILTER_TYPE_DEVICEINTERFACE,

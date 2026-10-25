@@ -22,6 +22,7 @@
 
 #ifdef _WIN32
 #include "Common/WindowsDevice.h"
+#include "InputCommon/ControllerInterface/DInput/DInput.h"
 #endif
 
 #include "Common/Event.h"
@@ -241,6 +242,15 @@ InputBackend::InputBackend(ControllerInterface* controller_interface)
   }
 
 #ifdef _WIN32
+  // The Win32 backend, created before this one, gave up on DirectInput's device list: SDL's
+  // DirectInput would wait on the same unanswering device in SDL_Init below, and the UI on it.
+  // Dolphin's own DirectInput devices come in when DirectInput answers again.
+  if (!DInput::IsResponding())
+  {
+    WARN_LOG_FMT(CONTROLLERINTERFACE, "SDL without DirectInput: DirectInput is not answering");
+    SDL_SetHint(SDL_HINT_JOYSTICK_DIRECTINPUT, "0");
+  }
+
   if (Config::Get(Config::MAIN_SDL_HINT_HIDAPI_LIBUSB) == "auto")
   {
     // Decided once: SDL reads the hint at SDL_Init only, so a Switch 2 controller plugged in later

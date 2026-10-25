@@ -36,12 +36,12 @@ static std::mutex s_guids_mutex;
 
 void InitJoystick(IDirectInput8* const idi8, HWND hwnd)
 {
-  std::list<DIDEVICEINSTANCE> joysticks;
-  idi8->EnumDevices(DI8DEVCLASS_GAMECTRL, DIEnumDevicesCallback, (LPVOID)&joysticks,
-                    DIEDFL_ATTACHEDONLY);
+  const std::optional<std::list<DIDEVICEINSTANCE>> joysticks = EnumGameControllers(idi8);
+  if (!joysticks)
+    return;
 
   std::unordered_set<DWORD> xinput_guids = GetXInputGUIDS();
-  for (DIDEVICEINSTANCE& joystick : joysticks)
+  for (const DIDEVICEINSTANCE& joystick : *joysticks)
   {
     // Skip XInput Devices
     if (xinput_guids.contains(joystick.guidProduct.Data1))
