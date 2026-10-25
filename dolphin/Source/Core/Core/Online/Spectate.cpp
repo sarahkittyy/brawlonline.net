@@ -258,6 +258,7 @@ void Uploader::ConnectionLost()
   m_game->offered = false;
   m_game->role = Role::Offering;
   m_game->slot = 0;
+  m_game->standby = false;
 }
 
 bool Uploader::OnMessage(const picojson::object& o)
@@ -281,6 +282,11 @@ bool Uploader::OnMessage(const picojson::object& o)
   Game& g = *m_game;
   if (*role == "none")
   {
+    // A paused primary handed on becomes a standby (bug report #145: the witness it went to
+    // paused too, and with nobody telling mm it was healthy again the room's watchers froze).
+    g.standby = g.role == Role::Primary && g.paused && !g.stopped;
+    if (g.standby)
+      g.standby_slot = g.slot;
     g.role = Role::None;
     g.slot = 0;
     INFO_LOG_FMT(NETPLAY, "Spectate: game {}: no upload", g.info.game);
@@ -291,6 +297,7 @@ bool Uploader::OnMessage(const picojson::object& o)
     return true;
   g.slot = *slot;
   g.had_role = true;
+  g.standby = false;
   if (*role == "witness")
   {
     g.role = Role::Witness;
@@ -518,6 +525,26 @@ Outgoing Uploader::Service(Clock::time_point now, bool online, size_t unacked, c
     INFO_LOG_FMT(NETPLAY, "Spectate: offered game {} of {}", g.info.game, g.info.match_id);
   }
 
+  if (g.role == Role::None && g.standby && !g.ended)
+  {
+    // A standby resumes as a paused primary does, after `resume_after` without any signal; mm
+    // then hands it the game back if the upload it went to is paused too, or keeps it for later.
+    if (!Unhealthy(g, now, unacked, health))
+    {
+      if (now - g.clean_since >= m_options.resume_after)
+      {
+        g.standby = false;
+        INFO_LOG_FMT(NETPLAY, "Spectate: game {}: healthy again on standby", g.info.game);
+        out.json.push_back(
+            Json({{"type", picojson::value("spectate-resume")},
+                  {"slot", picojson::value(static_cast<double>(g.standby_slot))}}));
+      }
+    }
+    else
+    {
+      g.clean_since = now;
+    }
+  }
   if (g.role != Role::Primary && g.role != Role::Witness)
     return out;
   const auto slot = picojson::value(static_cast<double>(g.slot));

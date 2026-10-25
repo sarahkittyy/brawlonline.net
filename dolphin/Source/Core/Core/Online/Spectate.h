@@ -14,6 +14,8 @@
 // the game's first 10 s, and while too much upload is still
 // unacknowledged, the primary pauses (spectate-pause; mm hands the game to a witness if there is
 // one) and resumes only after 10 s without any of it; after three pauses it stops for the game.
+// A paused primary mm handed on (a standby) says so too once it has had 10 s without any of it
+// (spectate-resume), so mm can give it the game back when the upload it went to pauses as well.
 // A witness sends nothing while unhealthy either. Each game is measured against its own start, so
 // a PC that always shows some late frames (a slower PC, a busy one) is not held to a stranger's
 // normal; the start itself (its hitch at GO) is that normal.
@@ -207,6 +209,10 @@ private:
     Clock::time_point clean_since{};
     int pauses = 0;
     bool stopped = false;
+    // A paused primary mm handed on: it sends spectate-resume (for the slot it had) once healthy
+    // again, and mm may give it the game back.
+    bool standby = false;
+    u32 standby_slot = 0;
     std::deque<Sample> samples;
     // The game's normal (its first `baseline` of running).
     std::optional<Clock::time_point> running_since;

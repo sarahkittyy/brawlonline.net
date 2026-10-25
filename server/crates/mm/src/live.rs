@@ -299,6 +299,9 @@ struct Offerer {
     standby: bool,
     /// Sent `spectate-resume` while on standby: can take the game back.
     resumable: bool,
+    /// The primary, paused with nobody to take over: keeps its role but sends nothing until it
+    /// resumes, or a standby that resumed takes the game back.
+    held: bool,
     /// Stopped, failed or gone: never chosen again for this game.
     out: bool,
 }
@@ -805,7 +808,7 @@ impl LiveBook {
             SpectateRequest::Digest { slot, frms } => self.digest(now, conn, slot, frms, out),
             SpectateRequest::Pause { slot, reason } => self.pause(now, conn, slot, &reason, false, out),
             SpectateRequest::Stop { slot, reason } => self.pause(now, conn, slot, &reason, true, out),
-            SpectateRequest::Resume { slot } => self.resume(conn, slot),
+            SpectateRequest::Resume { slot } => self.resume(now, conn, slot, out),
         };
         if let Err(e) = result {
             error(out, conn, op, e);
@@ -848,6 +851,7 @@ impl LiveBook {
             slot: None,
             standby: false,
             resumable: false,
+            held: false,
             out: false,
         };
         if !self.games.contains_key(&uid) {
@@ -1027,6 +1031,7 @@ impl LiveBook {
         let conn = game.offers[i].conn;
         game.offers[i].slot = Some(slot);
         game.offers[i].standby = false;
+        game.offers[i].held = false;
         let (from, headers) = if role == Role::Primary {
             game.primary = Some(slot);
             game.progress = now;
@@ -1626,7 +1631,11 @@ impl LiveBook {
         let is_primary = s.role == Role::Primary;
         let Some(game) = self.games.get_mut(&uid) else { return Ok(()) };
         tracing::info!(match_id = %game.match_id, game = game.number, slot, reason, stop, "spectate upload paused");
-        let has_witness = game.offers.iter().any(|o| !o.out && !o.standby && o.slot.is_some() && o.slot != Some(slot));
+        // Someone to take over: a witness, or a standby that resumed.
+        let has_witness = game
+            .offers
+            .iter()
+            .any(|o| !o.out && o.slot != Some(slot) && if o.standby { o.resumable } else { o.slot.is_some() });
         let o = game.offerer_of_slot(slot).ok_or(errors::NOT_YOUR_SLOT)?;
         if stop {
             o.out = true;
@@ -1644,21 +1653,57 @@ impl LiveBook {
             }
             self.send_none(out, conn, &uid);
             self.takeover(now, uid, if stop { "stopped" } else { "paused" }, out);
+        } else if is_primary {
+            // A paused primary with nobody to take over keeps its role and resumes by itself,
+            // unless a standby resumes first (`resume`).
+            o.held = true;
         }
-        // A paused primary with nobody to take over keeps its role and resumes by itself.
         Ok(())
     }
 
-    fn resume(&mut self, conn: ConnId, slot: u32) -> Result<(), &'static str> {
-        // A primary that kept its role just goes on. A standby (its slot ended) may be chosen
-        // again by a later takeover.
-        if self.slots.contains_key(&slot) {
+    fn resume(&mut self, now: Instant, conn: ConnId, slot: u32, out: &mut Vec<Output>) -> Result<(), &'static str> {
+        // A primary that kept its role just goes on.
+        if let Some(uid) = self.slots.get(&slot).filter(|s| s.conn == conn).map(|s| s.game) {
+            if let Some(o) = self.games.get_mut(&uid).and_then(|g| g.offerer_of_slot(slot)) {
+                o.held = false;
+            }
             return Ok(());
         }
+        // A standby (its slot ended) may be chosen again by a later takeover, and takes the game
+        // back at once when its primary paused too with nobody to take over, or it has none. Before,
+        // it waited for that primary to resume by itself: bug report #145, a room's game whose
+        // primary paused, and the witness it went to paused 50 ms later; its watchers froze for 40 s.
+        let mut back = Vec::new();
         for g in self.games.values_mut() {
-            for o in g.offers.iter_mut().filter(|o| o.conn == conn && o.standby) {
+            let mut resumed = false;
+            for o in g.offers.iter_mut().filter(|o| o.conn == conn && o.standby && !o.out) {
                 o.resumable = true;
+                resumed = true;
             }
+            if !resumed || !g.open() || !g.decided {
+                continue;
+            }
+            tracing::info!(match_id = %g.match_id, game = g.number, "spectate upload resumed on standby");
+            let held = g.primary.and_then(|p| g.offers.iter().position(|o| o.slot == Some(p) && o.held));
+            if g.primary.is_none() || held.is_some() {
+                back.push((g.uid, held));
+            }
+        }
+        for (uid, held) in back {
+            if let Some(i) = held {
+                // The held primary becomes a standby in turn: it gets the game again by resuming.
+                let Some(g) = self.games.get_mut(&uid) else { continue };
+                let o = &mut g.offers[i];
+                let (old, conn, offered) = (o.slot.take(), o.conn, o.uid);
+                o.held = false;
+                o.standby = true;
+                o.resumable = false;
+                if let Some(old) = old {
+                    self.slots.remove(&old);
+                }
+                self.send_none(out, conn, &offered);
+            }
+            self.takeover(now, uid, "resumed", out);
         }
         Ok(())
     }
@@ -2488,6 +2533,68 @@ mod tests {
         let id = stream_id(&t);
         let chunks = read_all(&t.book.store, &id).iter().filter(|l| matches!(l, LiveLine::Chunk { .. })).count();
         assert_eq!(chunks, 4);
+    }
+
+    /// The primary pauses and the witness it goes to pauses too (bug report #145: 50 ms later,
+    /// and the room's watchers froze for 40 s): the first one to resume uploads. A standby that
+    /// resumes takes the game back from the held primary, which becomes the standby.
+    #[test]
+    fn a_resumed_standby_takes_the_game_back_from_a_paused_primary() {
+        let mut t = T::new(SpectateMode::On);
+        let (a, b) = (t.a, t.b);
+        t.offer(A, a, 1, 0);
+        let out = t.offer(B, b, 1, 0);
+        let slot_a = role(&out, A).unwrap()["slot"].as_u64().unwrap() as u32;
+        let info = t.info(1);
+        t.send_chunk(A, slot_a, 0, &info);
+        t.send_chunk(A, slot_a, 1, &encode_chunk(b"SETP", b"{}", false));
+        t.send_chunk(A, slot_a, 2, &encode_chunk(b"FRMS", &frms(120, 60, 1), true));
+        let mut out = vec![];
+        t.book.request(t.now, A, a, SpectateRequest::Pause { slot: slot_a, reason: "frame".into() }, &mut out);
+        let slot_b = role(&out, B).unwrap()["slot"].as_u64().unwrap() as u32;
+        let mut out = vec![];
+        t.book.request(t.now, B, b, SpectateRequest::Pause { slot: slot_b, reason: "frame".into() }, &mut out);
+        assert!(out.is_empty(), "nobody to take over: B keeps the game");
+        let out = t.advance(Duration::from_secs(5));
+        assert!(role(&out, A).is_none() && role(&out, B).is_none());
+        // A is healthy again first.
+        let mut out = vec![];
+        t.book.request(t.now, A, a, SpectateRequest::Resume { slot: slot_a }, &mut out);
+        assert_eq!(role(&out, B).unwrap()["role"], "none");
+        let ra = role(&out, A).unwrap();
+        assert_eq!((ra["role"].as_str(), ra["from"].as_u64()), (Some("primary"), Some(180)));
+        let slot_a = ra["slot"].as_u64().unwrap() as u32;
+        assert!(t.send_chunk(B, slot_b, 0, &encode_chunk(b"FRMS", &frms(180, 60, 1), true)).is_empty());
+        assert!(t.send_chunk(A, slot_a, 0, &encode_chunk(b"FRMS", &frms(180, 60, 1), true)).is_empty());
+        let id = stream_id(&t);
+        let chunks = read_all(&t.book.store, &id).iter().filter(|l| matches!(l, LiveLine::Chunk { .. })).count();
+        assert_eq!(chunks, 4);
+        // A pauses again: B, which resumed meanwhile, gets it back.
+        let mut out = vec![];
+        t.book.request(t.now, B, b, SpectateRequest::Resume { slot: slot_b }, &mut out);
+        assert!(out.is_empty(), "A uploads: B waits as a standby");
+        t.book.request(t.now, A, a, SpectateRequest::Pause { slot: slot_a, reason: "frame".into() }, &mut out);
+        assert_eq!(role(&out, A).unwrap()["role"], "none");
+        assert_eq!(role(&out, B).unwrap()["role"], "primary");
+        assert_eq!(role(&out, B).unwrap()["from"], 240);
+    }
+
+    /// A held primary that resumes by itself just goes on; nobody else's role changes.
+    #[test]
+    fn a_held_primary_resumes_by_itself() {
+        let mut t = T::new(SpectateMode::On);
+        let a = t.a;
+        t.offer(A, a, 1, 0);
+        let out = t.advance(Duration::from_secs(3));
+        let slot = role(&out, A).unwrap()["slot"].as_u64().unwrap() as u32;
+        let info = t.info(1);
+        t.send_chunk(A, slot, 0, &info);
+        t.send_chunk(A, slot, 1, &encode_chunk(b"SETP", b"{}", false));
+        let mut out = vec![];
+        t.book.request(t.now, A, a, SpectateRequest::Pause { slot, reason: "rtt".into() }, &mut out);
+        t.book.request(t.now, A, a, SpectateRequest::Resume { slot }, &mut out);
+        assert!(out.is_empty());
+        assert!(t.send_chunk(A, slot, 2, &encode_chunk(b"FRMS", &frms(120, 60, 1), true)).is_empty());
     }
 
     #[test]

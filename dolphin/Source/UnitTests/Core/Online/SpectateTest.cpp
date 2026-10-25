@@ -421,6 +421,56 @@ TEST(Spectate, TheThirdPauseStops)
   }
 }
 
+// Bug report #145: the primary paused, mm handed the game to the witness, which paused too, and
+// the paused primary never told mm it was healthy again: the watchers froze. A standby says so
+// once (for its old slot), after the same 10 clean seconds as a primary, and takes the game back
+// when mm hands it over.
+TEST(Spectate, APausedPrimaryHandedOnSaysWhenItIsHealthyAgain)
+{
+  Rig t;
+  t.AddGame(4);
+  t.health.running = true;
+  t.Tick();
+  t.Role("primary", 7);
+  t.Learn();  // no late frames
+  t.health.late_frames += 5;
+  ASSERT_EQ(Types(t.Tick()), std::vector<std::string>{"spectate-pause"});
+  t.Role("none", 0);
+  // Still late: nothing.
+  for (int i = 0; i < 30; ++i)
+  {
+    t.health.late_frames += 5;
+    EXPECT_TRUE(t.Tick(100ms).json.empty()) << i;
+  }
+  // Clean: the signal clears 2 s later, then 10 s more.
+  for (int i = 0; i < 110; ++i)
+    EXPECT_TRUE(t.Tick(100ms).json.empty()) << i;
+  auto out = t.Tick(1500ms);
+  ASSERT_EQ(Types(out), std::vector<std::string>{"spectate-resume"});
+  EXPECT_EQ(Parse(out.json[0])["slot"].get<double>(), 7.0);
+  EXPECT_TRUE(out.data.empty());
+  for (int i = 0; i < 20; ++i)
+    EXPECT_TRUE(t.Tick(1s).json.empty()) << "once";
+  // mm gives it the game back from frame 180.
+  t.Role("primary", 9, 180, false);
+  out = t.Tick(1s);
+  EXPECT_TRUE(out.json.empty());
+  const auto got = Rig::Join(out.data, 9);
+  ASSERT_FALSE(got.empty());
+  EXPECT_EQ(got[0], t.chunks[3]);
+
+  // A primary handed on without a pause (a stall) or after its third pause stays quiet.
+  Rig s;
+  s.AddGame(2);
+  s.health.running = true;
+  s.Tick();
+  s.Role("primary", 7);
+  s.Learn();
+  s.Role("none", 0);
+  for (int i = 0; i < 30; ++i)
+    EXPECT_TRUE(s.Tick(1s).json.empty()) << i;
+}
+
 TEST(Spectate, RollbacksAndPingAboveTheGamesNormalPause)
 {
   Rig t;
