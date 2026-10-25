@@ -776,9 +776,33 @@ bool HostDecodeEnabled()
   return enabled;
 }
 
+// The buttons P+'s light trigger presses make on channel `chan` (HostDecodePadSlot's `light`):
+// P+'s hook replaces updateLowGC's store of the trigger (a branch to it in place of
+// `stb r0,0x34(r31)` / `stb r0,0x35(r31)`) and reads the trigger's action in the channel's layout
+// (g_PadConfig, which the match start sets from each player's name tag).
+u16 HostDecodeLightPresses(const Memory::MemoryManager& memory, int chan)
+{
+  constexpr u32 HOOK_L = 0x80029700, HOOK_R = 0x80029708;
+  const Guest g(memory);
+  const u8* layout = g.Ptr(Addr::PAD_CONFIG + chan * 0xC, 2);
+  if (!layout)
+    return 0;
+  const auto hooked = [&g](u32 at) {
+    const std::optional<u32> op = g.U32(at);
+    return op && (*op >> 26) == 18;  // b
+  };
+  u16 light = 0;
+  if (layout[0] != Addr::PAD_ACTION_SHIELD && hooked(HOOK_L))
+    light |= PAD_TRIGGER_L;
+  if (layout[1] != Addr::PAD_ACTION_SHIELD && hooked(HOOK_R))
+    light |= PAD_TRIGGER_R;
+  return light;
+}
+
 // A read the game gets (ReadHostPad, a session's schedule): its decode, kept for the loop top and
 // the passes' check. A re-run's latched read is the same read: kept once.
-void HostDecodeKeep(int chan, const GCPadStatus& st, Clock::time_point instant)
+void HostDecodeKeep(const Memory::MemoryManager& memory, int chan, const GCPadStatus& st,
+                    Clock::time_point instant)
 {
   if (chan < 0 || chan >= 4 || !HostDecodeEnabled())
     return;
@@ -791,7 +815,10 @@ void HostDecodeKeep(int chan, const GCPadStatus& st, Clock::time_point instant)
   e.instant = instant;
   e.valid = st.isConnected;
   if (e.valid)
-    HostDecodePadSlot(st, s_decode.origin[chan], e.pad.data());
+  {
+    HostDecodePadSlot(st, s_decode.origin[chan], HostDecodeLightPresses(memory, chan),
+                      e.pad.data());
+  }
 }
 
 // Diagnostics (PPR_GPRB_PAD_READ_LOG=<file>, %p in it a number of the process's own): one line per read of a host controller in a session
@@ -953,7 +980,7 @@ GCPadStatus ReadHostPad(Core::System& system, int chan, HostPadSource source)
   }
   last = {true, status, instant, data_at};
   h.instant[chan] = instant;
-  HostDecodeKeep(chan, status, instant);
+  HostDecodeKeep(system.GetMemory(), chan, status, instant);
   LogRead(chan, now, due, false, kind, status, instant);
   return status;
 }
@@ -986,7 +1013,7 @@ u8 ClampU8(u8 var, u8 org)
 }
 }  // namespace
 
-void HostDecodePadSlot(const GCPadStatus& st, const std::array<u8, 6>& origin, u8* pad)
+void HostDecodePadSlot(const GCPadStatus& st, const std::array<u8, 6>& origin, u16 light, u8* pad)
 {
   std::memset(pad, 0, Addr::PAD_STRIDE);
   // PADStatus's buttons: the standard ones (the SI's origin bits are the SDK's own).
@@ -1004,6 +1031,15 @@ void HostDecodePadSlot(const GCPadStatus& st, const std::array<u8, 6>& origin, u
   pad[0x33] = stick(st.substickY, origin[3]);
   pad[0x34] = ClampU8(st.triggerLeft, origin[4]);
   pad[0x35] = ClampU8(st.triggerRight, origin[5]);
+  // P+'s light trigger presses (its hooks run only for a pad with no error).
+  if (st.isConnected)
+  {
+    if ((light & PAD_TRIGGER_L) && pad[0x34] >= HOST_DECODE_LIGHT_PRESS)
+      pad[3] |= PAD_TRIGGER_L;
+    if ((light & PAD_TRIGGER_R) && pad[0x35] >= HOST_DECODE_LIGHT_PRESS)
+      pad[3] |= PAD_TRIGGER_R;
+    pad[7] = pad[3];
+  }
   pad[Addr::PAD_ERROR_OFF] = st.isConnected ? 0 : 0xFF;
 }
 

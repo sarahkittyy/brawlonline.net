@@ -918,7 +918,6 @@ void PinScreenSetting(Core::System& system)
   INFO_LOG_FMT(BRAWLBACK, "gprb: screen setting {:02x} -> {:02x} (16:9) for the match", was, now);
 }
 
-constexpr u32 PAD_CONFIG = 0x805B7480;  // g_PadConfig (ipPadConfig, 0x1AC bytes)
 constexpr u32 PAD_CONFIG_KEY_SIZE = 0xB9;
 
 // The match's rules as the game applied them (OnlineMenu::applyRules, from SESSION's Rules):
@@ -1051,7 +1050,7 @@ std::vector<u8> SetupKey(const Guest& g)
   // their Wii layouts here instead, folded into the port's 12 bytes (XXH3): the port's GameCube
   // layout is then nobody's and may differ between the machines. The key keeps its size, and a
   // match on GameCube controllers alone has the key it always had (replays compare it).
-  if (const u8* cfg = g.Ptr(PAD_CONFIG, PAD_CONFIG_KEY_SIZE))
+  if (const u8* cfg = g.Ptr(Addr::PAD_CONFIG, PAD_CONFIG_KEY_SIZE))
   {
     for (u32 pad = 0; pad < 4; ++pad)
     {

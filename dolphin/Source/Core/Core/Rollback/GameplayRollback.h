@@ -63,6 +63,11 @@ constexpr u32 WII_PADS = 4;  // the first Wii Remote's pad
 // 0 GameCube, 1 Classic Controller, 2 Wii Remote, 3 Nunchuk; the game's gfPadType).
 constexpr u32 PAD_ERROR_OFF = 0x38;
 constexpr u32 PAD_TYPE_OFF = 0x3F;  // the type's low byte
+// g_PadConfig (ipPadConfig, 0x1AC bytes): each controller's layout, GameCube pads 12 bytes each
+// at pad * 0xC (+0 L's action, +1 R's; 3 Shield, the default), Wii Remote pads 0x21 bytes each
+// from +0x30, player -> pad at +0xB5.
+constexpr u32 PAD_CONFIG = 0x805B7480;
+constexpr u8 PAD_ACTION_SHIELD = 3;
 constexpr u32 PAD_THREAD = 0x805BA108;           // OSThread of Brawl's pad thread (object at -8)
 constexpr u32 PAD_THREAD_RUN = 0x805BA440;       // u8: the thread's loop runs while non-zero
 constexpr u32 PAD_SYS_THREAD_OFF = 0xB54;        // gfPadSystem+0xB54: the thread the alarm resumes
@@ -341,6 +346,11 @@ void HostPadLogLine(const char* kind, long long a, long long b, long long c);
 // controller at rest), as reported to the game (HostPadOriginReported). Every pad-thread pass of a
 // decoded read is compared with the decode; after a few that differ, decoding stops for the
 // session (PPR_GPRB_HOST_DECODE=0: never decode). CPU thread.
+// P+'s "Light LR Button Presses when not Set to Shield" (ButtonPresses.asm, hooks at 0x80029700
+// and 0x80029708 in updateLowGC): a trigger pressed to 45 or more (after the origin) whose action
+// in the controller's layout is not Shield also presses its button (L 0x40, R 0x20) at +0 and +4.
+// The decode does the same for the buttons in `light` (bug report #143: a player with L on another
+// action lost its light presses whenever the decode was in use).
 // SI channel `chan`'s controller told the game this origin (CMD_ORIGIN, CMD_RECALIBRATE).
 void HostPadOriginReported(int chan, u8 stick_x, u8 stick_y, u8 substick_x, u8 substick_y,
                            u8 trigger_left, u8 trigger_right);
@@ -348,7 +358,8 @@ void HostPadOriginReported(int chan, u8 stick_x, u8 stick_y, u8 substick_x, u8 s
 // none (or decoding is off or turned off for the session).
 bool PadsHostDecoded(int chan, std::array<u8, Addr::PAD_STRIDE>* pad, Clock::time_point* instant);
 // The decode itself (tests).
-void HostDecodePadSlot(const GCPadStatus& st, const std::array<u8, 6>& origin, u8* pad);
+constexpr u8 HOST_DECODE_LIGHT_PRESS = 45;
+void HostDecodePadSlot(const GCPadStatus& st, const std::array<u8, 6>& origin, u16 light, u8* pad);
 
 // ---------------------------------------------------------------------------------------------
 // Interpreter instruction trace (debugging). Armed by the harness (`cpu_trace`); records, for the

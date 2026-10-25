@@ -205,7 +205,7 @@ TEST(HostDecodePadSlot, ACentredControllerIsItsRawValuesLessTheCentre)
   st.triggerRight = 0;
   st.isConnected = true;
   std::array<u8, 0x40> pad{};
-  Gprb::HostDecodePadSlot(st, {0x80, 0x80, 0x80, 0x80, 0, 0}, pad.data());
+  Gprb::HostDecodePadSlot(st, {0x80, 0x80, 0x80, 0x80, 0, 0}, 0, pad.data());
   const u16 buttons = PAD_BUTTON_A | PAD_TRIGGER_Z | PAD_BUTTON_START;  // not the SI's origin bits
   EXPECT_EQ(pad[2], buttons >> 8);
   EXPECT_EQ(pad[3], buttons & 0xFF);
@@ -236,7 +236,7 @@ TEST(HostDecodePadSlot, AnOffCentreOriginIsTakenOutAsTheSdkDoes)
   st.substickY = 128;
   st.triggerLeft = 20;
   st.triggerRight = 10;
-  Gprb::HostDecodePadSlot(st, origin, pad.data());
+  Gprb::HostDecodePadSlot(st, origin, 0, pad.data());
   EXPECT_EQ(static_cast<s8>(pad[0x30]), 0);
   EXPECT_EQ(static_cast<s8>(pad[0x31]), 0);
   EXPECT_EQ(pad[0x34], 0);
@@ -244,7 +244,7 @@ TEST(HostDecodePadSlot, AnOffCentreOriginIsTakenOutAsTheSdkDoes)
   st.stickX = 0;    // -128 + 6: held at -122, then less the origin: -128
   st.stickY = 255;  // 127 - 8: held at 119, less the origin: 127
   st.triggerLeft = 255;
-  Gprb::HostDecodePadSlot(st, origin, pad.data());
+  Gprb::HostDecodePadSlot(st, origin, 0, pad.data());
   EXPECT_EQ(static_cast<s8>(pad[0x30]), -128);
   EXPECT_EQ(static_cast<s8>(pad[0x31]), 127);
   EXPECT_EQ(pad[0x34], 235);
@@ -256,8 +256,47 @@ TEST(HostDecodePadSlot, NoControllerIsTheErrorByte)
   st.isConnected = false;
   std::array<u8, 0x40> pad{};
   pad.fill(0x55);
-  Gprb::HostDecodePadSlot(st, {0x80, 0x80, 0x80, 0x80, 0, 0}, pad.data());
+  Gprb::HostDecodePadSlot(st, {0x80, 0x80, 0x80, 0x80, 0, 0}, 0, pad.data());
   EXPECT_EQ(pad[0x38], 0xFF);
+}
+
+// Bug report #143: P+ presses L (R) for a trigger at 45 or more, after the origin, when the
+// controller's layout has it on another action than Shield; the decode must too.
+TEST(HostDecodePadSlot, ALightTriggerPressesItsButtonOffShieldAsPPlusDoes)
+{
+  const std::array<u8, 6> origin{0x80, 0x80, 0x80, 0x80, 6, 0};
+  GCPadStatus st{};
+  st.isConnected = true;
+  st.button = PAD_BUTTON_A;
+  st.triggerLeft = 6 + 45;
+  st.triggerRight = 44;
+  std::array<u8, 0x40> pad{};
+  // L on another action: L's press at 45; R at 44 stays off.
+  Gprb::HostDecodePadSlot(st, origin, PAD_TRIGGER_L | PAD_TRIGGER_R, pad.data());
+  EXPECT_EQ(pad[2], PAD_BUTTON_A >> 8);
+  EXPECT_EQ(pad[3], PAD_TRIGGER_L);
+  EXPECT_EQ(pad[6], pad[2]);
+  EXPECT_EQ(pad[7], pad[3]);
+  EXPECT_EQ(pad[0x34], 45);
+  EXPECT_EQ(pad[0x35], 44);
+  // At 44 after the origin, no press.
+  st.triggerLeft = 6 + 44;
+  Gprb::HostDecodePadSlot(st, origin, PAD_TRIGGER_L | PAD_TRIGGER_R, pad.data());
+  EXPECT_EQ(pad[3], 0);
+  // R at 45 on another action presses R.
+  st.triggerRight = 45;
+  Gprb::HostDecodePadSlot(st, origin, PAD_TRIGGER_R, pad.data());
+  EXPECT_EQ(pad[3], PAD_TRIGGER_R);
+  EXPECT_EQ(pad[7], PAD_TRIGGER_R);
+  // Both on Shield (or no P+): the analog values only.
+  st.triggerLeft = 255;
+  Gprb::HostDecodePadSlot(st, origin, 0, pad.data());
+  EXPECT_EQ(pad[3], 0);
+  EXPECT_EQ(pad[0x34], 249);
+  // A digital press stays a press either way.
+  st.button = PAD_TRIGGER_L;
+  Gprb::HostDecodePadSlot(st, origin, 0, pad.data());
+  EXPECT_EQ(pad[3], PAD_TRIGGER_L);
 }
 
 TEST_F(HostPadReadTest, TheNewestScheduledReadIsDecoded)
