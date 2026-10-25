@@ -140,7 +140,8 @@ namespace TrainingRoom {
         fadeOut();
         // tests: the room's flow: 0xF the step (State, 7 after the room), 0xF0 the room's
         // exit code, 0xF00 how it was ended, 0x10000 banner seen, 0x20000 Sandbag made, 0x40000
-        // a Sandbag refused. (scratch[5] is otherwise the keypad's, which never runs meanwhile.)
+        // a Sandbag refused, 0x80000 the room's song played. (scratch[5] is otherwise the
+        // keypad's, which never runs meanwhile.)
         PPOM::g_block.debug.scratch[5] = 1;
     }
 
@@ -535,6 +536,46 @@ namespace TrainingRoom {
             "bctr\n\t");
     }
 
+    // ---- The room's song (Sarah, 2026-10-24: "the original brawl online waiting room music") ----
+    // Brawl's own "With Anyone" room plays "Online Training Room" (X07, snd_bgm_X07_ONLINE). On P+
+    // the stage's song comes from its tracklist (Training_Room.tlst: seven songs, X07 one of
+    // them), read to 0x8053F200 with the stage's files: "TLST", +4 the count, entries from +0xC
+    // of 16 bytes, +0 the song id, +7 its frequency. Brawl's song pick (0x8007923C, its "PlayID"
+    // report) draws one by frequency in P+'s code (NETBOOST.GCT hooks 0x80079290-0x80079370),
+    // which also sets that entry's stream file and title up. For the room (its pick runs in state
+    // 5, before ST_SETUP; the scene asks again later with that id in r6) every entry but X07's
+    // has frequency 0 during the pick, so P+ itself draws X07; as a vanilla song (no file name) it
+    // streams from the disc, which every player has. The frequencies are put back after it. A
+    // card whose tracklist has no X07 keeps its own pick. Brawl's Music setting and ours (the
+    // volume) still apply; the match after the room picks from its stage's list (s_state is none
+    // by then). (The stage's song is started from the pick, not through sndSystem::playBGM.)
+    static const u32 ROOM_BGM = 0x26FF;   // snd_bgm_X07_ONLINE
+    static const u32 TLST = 0x8053F200, TLST_MAGIC = 0x544C5354, TLST_MAX = 128;
+    typedef int (*PickBgmFn)(void* rate, int a, int b, int c);
+    static PickBgmFn s_origPickBgm = NULL;
+    static u8 s_tlstFrequency[TLST_MAX];
+
+    static int hkPickBgm(void* rate, int a, int b, int c)
+    {
+        u8* tl = (u8*)TLST;
+        const u32 n = *(u32*)(tl + 4);
+        bool forced = false;
+        if (s_state != ST_NONE && s_end == END_NONE && *(u32*)tl == TLST_MAGIC && n <= TLST_MAX) {
+            for (u32 i = 0; i < n && !forced; i++) forced = *(u32*)(tl + 0xC + 16 * i) == ROOM_BGM && tl[0xC + 16 * i + 7] != 0;
+            for (u32 i = 0; forced && i < n; i++) {
+                u8* e = tl + 0xC + 16 * i;
+                s_tlstFrequency[i] = e[7];
+                if (*(u32*)e != ROOM_BGM) e[7] = 0;
+            }
+        }
+        const int id = s_origPickBgm(rate, a, b, c);
+        if (forced) {
+            for (u32 i = 0; i < n; i++) tl[0xC + 16 * i + 7] = s_tlstFrequency[i];
+            if (id == (int)ROOM_BGM) PPOM::g_block.debug.scratch[5] |= 0x80000;   // tests: the room's song
+        }
+        return id;
+    }
+
     // The room's scMelee is the scene: the room runs (state 6 set it as the next scene).
     static void noteScene()
     {
@@ -549,5 +590,6 @@ namespace TrainingRoom {
         api->sySimpleHookRel(0x000371C4, reinterpret_cast<void*>(hookAfterSetup), 1 /* SORA_SCENE */);
         api->sySimpleHookRel(0x000371FC, reinterpret_cast<void*>(hookState7), 1);
         api->sySimpleHookRel(0x0023F73C, reinterpret_cast<void*>(hookStageModuleName), 27 /* SORA_MELEE */);
+        api->syReplaceFunc(0x8007923C, reinterpret_cast<void*>(hkPickBgm), (void**)&s_origPickBgm);
     }
 }

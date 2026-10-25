@@ -34,10 +34,11 @@ UNRANKED_STAGES = [0x21, 0x2D]   # Smashville, Dream Land (a two-stage test list
 WIFIPR_HUD = 0x805A0300          # ifWifiprTask's HUD: the banner and the player panels
 SCREEN_ONLINE_BUSY = 4           # PPOM: an online search (the launcher shows no "In game")
 # training_room.cpp's debug word (scratch[5]): 0xF the step (3 in the room, 7 after it), 0xF0
-# the room's exit code, 0xF00 how it ended (1 the match, 2 the CSS), 0x10000 the banner seen, 0x20000 a Sandbag made.
+# the room's exit code, 0xF00 how it ended (1 the match, 2 the CSS), 0x10000 the banner seen, 0x20000 a Sandbag made,
+# 0x80000 the room's song (Brawl's "Online Training Room", X07) played.
 SCR_ROOM = 5
 ROOM_RUNNING, ROOM_ENDED = 3, 7
-ROOM_BANNER, ROOM_SANDBAG = 0x10000, 0x20000
+ROOM_BANNER, ROOM_SANDBAG, ROOM_SONG = 0x10000, 0x20000, 0x80000
 
 
 def _fade(g: Game) -> int:
@@ -121,6 +122,12 @@ def _check_room(g: Game, shot: str) -> None:
     _wait(lambda: _fade(g) == 0, 5, "the room out of the fade")
     _wait(lambda: _room(g) & ROOM_BANNER, 10, "the banner line")
     _wait(lambda: _room(g) & ROOM_SANDBAG, 10, "the Sandbag")
+    # Brawl's own waiting room song, whatever P+'s tracklist drew (Sarah, 2026-10-24): X07
+    # streams from the disc, so P+'s SD stream open of it fails (the log's last song).
+    assert _room(g) & ROOM_SONG, hex(_room(g))
+    text = (g.inst.user_dir / "Logs" / "dolphin.log").read_text(errors="replace")
+    songs = re.findall(r"SDStreamOpen[^\n]*/strm/([^\n]*)\.brstm", text)
+    assert songs and songs[-1] == "X07", songs[-3:]
     x0 = _fighter_x(g)
     g.steps("stick left 30", "wait 10")
     x1 = _fighter_x(g)
