@@ -12,6 +12,7 @@ import path from "path";
 import type { ByteProgress } from "utils/copy_file";
 import { copyFileWithProgress } from "utils/copy_file";
 import { isSubdirectory } from "utils/is_subdirectory";
+import { removeTree } from "utils/remove_tree";
 
 import { DOLPHIN_MANIFEST_NAME, OLD_DOLPHIN_DIR, PROTECTED_ENTRIES, readDolphinManifest } from "./bundled_dolphin";
 import { patchedSdCardFolder } from "./paths";
@@ -229,7 +230,7 @@ export async function removeGameFiles(dir: string): Promise<void> {
     if (!name || name.includes("/") || name.includes("\\") || name === "." || name === "..") {
       continue;
     }
-    await fs.promises.rm(path.join(dir, name), { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+    await removeTree(path.join(dir, name));
   }
   const left = await entries(dir);
   if (left != null && left.length === 0) {

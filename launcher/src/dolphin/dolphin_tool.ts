@@ -1,7 +1,8 @@
 import { execFile } from "child_process";
-import { mkdtemp, rm } from "fs/promises";
+import { mkdtemp } from "fs/promises";
 import os from "os";
 import path from "path";
+import { removeTree } from "utils/remove_tree";
 
 /** DolphinTool next to a Dolphin executable (the bundled install has both). */
 export function dolphinToolNextTo(dolphinExecutable: string): string {
@@ -49,6 +50,6 @@ export async function withScratchUserFolder<T>(fn: (userDir: string) => Promise<
   try {
     return await fn(dir);
   } finally {
-    await rm(dir, { recursive: true, force: true, maxRetries: 3 }).catch(() => undefined);
+    await removeTree(dir, { tries: 4, delayMs: 100 }).catch(() => undefined);
   }
 }

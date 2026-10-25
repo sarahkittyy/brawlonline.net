@@ -18,6 +18,7 @@
 import { BASE_DOMAIN, PRODUCT_NAME } from "@common/product";
 import fs from "fs";
 import path from "path";
+import { removeTree } from "utils/remove_tree";
 
 import type { FreeBytes } from "./disk_space";
 import { ensureFreeSpace, freeDiskBytes } from "./disk_space";
@@ -190,7 +191,7 @@ async function moveAside(from: string, to: string, log: (message: string) => voi
   }
   try {
     // A DolphinTool run that is ending gets about 10 s (linear backoff) before the install gives up.
-    await fs.promises.rm(from, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+    await removeTree(from);
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
     if (code === "EPERM" || code === "EBUSY" || code === "EACCES") {
