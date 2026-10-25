@@ -295,6 +295,10 @@ struct PeerLink
   int attempts = 0;
   int unkept_hellos = 0;
   int no_link_logs = 0;
+  // A joiner: a member already in the room when it came (a player, or an earlier joiner), whose
+  // link it waits for (JoinNoLinkStep), and whether it told its player.
+  bool no_link_watch = false;
+  bool no_link_shown = false;
   // A joiner: how much of its machine image it has (tenths), for the image of `image_epoch`.
   int image_epoch = -1;
   int image_tenths = -1;
@@ -1769,10 +1773,35 @@ void OnAck(PeerLink& p, enet_uint32 service_time, u8 channel, u16 seq, u16 echo)
   }
 }
 
+// Tests (the harness): PPR_TEST_P2P_BLOCK=<connect code>[,<connect code>...], as for Unranked
+// (Online/Matchmaking.cpp): every datagram from those room members is dropped, as between two
+// NATs that cannot reach each other. Set on both players of the pair. Net thread.
+bool TestBlocked(const ENetAddress& from)
+{
+  static const std::string blocked = [] {
+    const char* e = std::getenv("PPR_TEST_P2P_BLOCK");
+    return e && *e ? fmt::format(",{},", e) : std::string();
+  }();
+  if (blocked.empty())
+    return false;
+  for (const PeerLink& p : s.peers)
+  {
+    if (p.slot >= 0 && !p.code.empty() && p.port == from.port &&
+        std::find(p.ips.begin(), p.ips.end(), from.host) != p.ips.end() &&
+        blocked.find(fmt::format(",{},", p.code)) != std::string::npos)
+    {
+      return true;
+    }
+  }
+  return false;
+}
+
 // Net thread, ENet's intercept: each datagram the session's host receives, before ENet reads it.
 // It reads the acknowledgements in it (OnAck) and leaves the datagram to ENet as ever.
 int ENET_CALLBACK InterceptAcks(ENetHost* host, ENetEvent*)
 {
+  if (TestBlocked(host->receivedAddress))
+    return 1;
   const u8* d = host->receivedData;
   const size_t size = host->receivedDataLength;
   auto u16_at = [&](size_t at) { return static_cast<u16>((d[at] << 8) | d[at + 1]); };
@@ -5504,6 +5533,48 @@ bool SDSyncStep()
   return false;
 }
 
+// A room joiner hears from every member before it checks its SD card or asks to join, and its
+// game shows nothing while it waits. A member it still has no link to is named in the chat after
+// NO_LINK_NOTICE, and after NO_LINK_LIMIT the join gives up saying who, rather than a frozen game
+// until JOIN_TIMEOUT's "Not admitted" (bug report #149: three joins of a REX room whose host never
+// answered, 30 attempts and no hello either way, each after the player said Yes to downloading
+// the host's SD card; the download waits for that link, so it never started). Under net_mutex:
+// returns why to fail, or "".
+constexpr auto NO_LINK_NOTICE = std::chrono::seconds(10);
+constexpr auto NO_LINK_LIMIT = std::chrono::seconds(60);
+
+std::string JoinNoLinkStep(Clock::time_point now, std::vector<std::string>* notices)
+{
+  std::vector<std::string> shown, given_up;
+  for (PeerLink& p : s.peers)
+  {
+    if (p.slot < 0 || !p.no_link_watch || p.hello || p.left)
+      continue;
+    if (now - p.link_wanted >= NO_LINK_LIMIT)
+      given_up.push_back(NameOf(p.slot));
+    else if (now - p.link_wanted >= NO_LINK_NOTICE && !p.no_link_shown)
+      shown.push_back(NameOf(p.slot));
+    if (now - p.link_wanted >= NO_LINK_NOTICE)
+      p.no_link_shown = true;
+  }
+  if (!given_up.empty())
+  {
+    return fmt::format("no connection to {} after {} s: your network or theirs blocks a direct "
+                       "connection between you",
+                       fmt::join(given_up, ", "), NO_LINK_LIMIT.count());
+  }
+  if (!shown.empty())
+  {
+    const auto choice = static_cast<SDSyncChoice>(s.sd_sync.choice.load());
+    notices->push_back(fmt::format(
+        "Can't connect to {} yet. {}", fmt::join(shown, ", "),
+        choice == SDSyncChoice::Yes || choice == SDSyncChoice::Overwrite ?
+            "The SD card download starts once connected." :
+            "Joining waits for it."));
+  }
+  return "";
+}
+
 void JoinStep(Core::System& system)
 {
   if (Clock::now() - s.join_since > JOIN_TIMEOUT)
@@ -5514,12 +5585,15 @@ void JoinStep(Core::System& system)
   std::optional<State::EpochGo> go;
   bool image = false;
   std::optional<std::string> refused;
+  std::string no_link;
   std::vector<std::string> notices;
   bool ready_to_sync = false;
   {
     std::lock_guard lk(s.net_mutex);
     if (s.join_refused)
       refused = s.join_refused_why;
+    if (s.opts.room && !s.join_sent)
+      no_link = JoinNoLinkStep(Clock::now(), &notices);
     // The image's progress, in the chat window at every tenth (the game waits for it: across an
     // ocean a REX image took about a minute), and to the players for theirs.
     const State::ImageRx& rx = s.image_rx;
@@ -5577,6 +5651,11 @@ void JoinStep(Core::System& system)
   if (refused)
   {
     Fail("Could not join: " + *refused);
+    return;
+  }
+  if (!no_link.empty())
+  {
+    Fail(no_link);
     return;
   }
   // The SD card first (its player may take a while to answer, and a download as long as it
@@ -6783,6 +6862,7 @@ void SetRoom(int local_slot, const std::vector<RoomMember>& members)
                          Config::GetChosenNetwork().address));
     }
   }
+  const bool first_view = !s.room_known;
   s.room_known = true;
   std::array<const RoomMember*, MAX_PLAYERS> by_slot{};
   for (const RoomMember& m : members)
@@ -6866,6 +6946,8 @@ void SetRoom(int local_slot, const std::vector<RoomMember>& members)
       p.attempts = 0;
       p.unkept_hellos = 0;
       p.no_link_logs = 0;
+      p.no_link_watch = first_view && s.opts.join;
+      p.no_link_shown = false;
     }
     p.name = m->name;
     // Its address: on this player's network (the same public address) or on the network chosen
