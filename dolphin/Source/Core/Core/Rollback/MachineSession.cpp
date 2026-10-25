@@ -110,6 +110,11 @@ Boundary SessionBoundary();
 namespace
 {
 using Clock = std::chrono::steady_clock;
+// A rollback's load and re-runs per frame back (State::burst_ms_per_frame): the estimate before
+// the session has measured one (a re-run frame of a REX room took about 3.4 ms, its load 1.2,
+// docs/design/brawl-mods.md 6.4), and the weight of each new rollback in the average.
+constexpr double BURST_MS_PER_FRAME_START = 5.0;
+constexpr double BURST_AVERAGE_WEIGHT = 0.25;
 
 // The Brawl game loop (main.dol; the same in every Brawl build).
 constexpr u32 BRAWL_LOOP_TOP = 0x800171b4;      // li r25,1
@@ -641,6 +646,11 @@ struct State
   s64 last_desync_frame = -1;
   // The rollback just loaded (the pass after it must start when that frame's last run started).
   std::optional<std::pair<int, int>> loaded;  // frames back, the ring's count
+  // A rollback's time from its load to the start of the pass after its re-runs, per frame it
+  // went back (an average): the boundary sleep ends that much early when one is pending.
+  Clock::time_point burst_start{};
+  int burst_frames = 0;
+  double burst_ms_per_frame = BURST_MS_PER_FRAME_START;
   u64 load_mismatches = 0;
   Clock::time_point desync_notice_at{};  // the last desync the players were told of
   float frames_ahead = 0;
@@ -3556,6 +3566,8 @@ void Update(Core::System& system)
       AfterLoad(system, frames_back);
       PaceLoad(Clock::now() - load_start);
       s.rollbacks++;
+      s.burst_start = load_start;
+      s.burst_frames = frames_back;
       // Diagnostics (PPR_MACHINE_DIGESTS): the first rollbacks of each epoch, to line up with the
       // first desync after a join.
       static int s_logged_epoch = -1, s_logged = 0;
@@ -5911,6 +5923,50 @@ void RedrawWhileWaiting(Core::System& system, Clock::duration waited_for)
 
 void LateEndOfFrame();
 
+// The boundary sleep, until `due` (the boundary's scheduled host time). A rollback's load and
+// re-runs come after it, and the presented frame after them keeps its schedule
+// (BeginRollbackBurst), so what they take past `due` makes that frame late, the more so in a
+// game that copies its frame early in the field (bug report #152: Naruto: Super Clash of Ninja 4
+// at 200 ms "feels like frame skip", a Wii game with the same player smooth; Mario Party 4 at
+// 200 ms showed a third of its frames after a rollback late). Without the sleep the CPU thread
+// reached the boundary ahead of schedule by the rest of the field, which the re-runs used. Now
+// the sleep ends early by what the pending rollback is expected to take (the frames it re-runs
+// at the session's average per frame, and a margin), looked at again as remote inputs come in
+// during it; with none pending it sleeps to `due` as before. PPR_MACHINE_RERUN_IN_SLEEP=0: the
+// whole sleep always (A/B).
+void BoundarySleep(CoreTiming::CoreTimingManager& ct, Clock::time_point due)
+{
+  static const bool rerun_in_sleep = [] {
+    const char* e = std::getenv("PPR_MACHINE_RERUN_IN_SLEEP");
+    return !(e && *e == '0');
+  }();
+  constexpr auto SLICE = std::chrono::milliseconds(2);
+  constexpr auto MARGIN = std::chrono::milliseconds(1);
+  for (;;)
+  {
+    auto wake = due;
+    if (rerun_in_sleep && s.gekko)
+    {
+      gekko_receive(s.gekko);
+      if (const int frames = gekko_rollback_frames(s.gekko); frames > 0)
+      {
+        wake -= std::chrono::duration_cast<Clock::duration>(
+                    std::chrono::duration<double, std::milli>(frames * s.burst_ms_per_frame)) +
+                MARGIN;
+      }
+    }
+    const auto now = Clock::now();
+    if (now >= wake)
+      return;
+    s.mutex.unlock();
+    {
+      Rollback::FrameProfile::Scope sleep_scope{Rollback::FrameProfile::AddThrottle};
+      ct.SleepUntil(rerun_in_sleep ? std::min(wake, now + SLICE) : wake);
+    }
+    s.mutex.lock();
+  }
+}
+
 Wait WaitForFrames(Core::System& system)
 {
   // A peer that sends nothing for this long is gone (GekkoNet drops one after 5 s of silence; a
@@ -5934,14 +5990,7 @@ Wait WaitForFrames(Core::System& system)
   {
     auto& ct = system.GetCoreTiming();
     if (const auto due = ct.ScheduledHostTime(); due && *due > Clock::now())
-    {
-      s.mutex.unlock();
-      {
-        Rollback::FrameProfile::Scope sleep_scope{Rollback::FrameProfile::AddThrottle};
-        ct.SleepUntil(*due);
-      }
-      s.mutex.lock();
-    }
+      BoundarySleep(ct, *due);
   }
   Phase timed_phase = s.phase;
   auto since = Clock::now();
@@ -6312,6 +6361,14 @@ void BeginPass(Core::System& system)
       ct.m_log_schedules = false;
       s_schedule_log_until = -1;
     }
+  }
+  if (!s.resim && s.burst_frames > 0)
+  {
+    const double ms =
+        std::chrono::duration<double, std::milli>(Clock::now() - s.burst_start).count() /
+        s.burst_frames;
+    s.burst_ms_per_frame += (ms - s.burst_ms_per_frame) * BURST_AVERAGE_WEIGHT;
+    s.burst_frames = 0;
   }
   if (!s.resim)
   {
@@ -6686,6 +6743,8 @@ bool Arm(const Options& options, std::string* error)
   s.start_at.reset();
   s.rollbacks = s.max_rollback = s.frames_resimulated = s.stall_polls = s.skipped_loads = 0;
   s.loaded.reset();
+  s.burst_frames = 0;
+  s.burst_ms_per_frame = BURST_MS_PER_FRAME_START;
   s.load_mismatches = 0;
   s.desyncs = s.saves = 0;
   s.last_desync_frame = -1;

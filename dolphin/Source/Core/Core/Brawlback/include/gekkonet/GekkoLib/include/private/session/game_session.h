@@ -57,6 +57,8 @@ namespace Gekko {
 
         i32 ConfirmedFrame() override;
 
+        i32 RollbackFrames() override;
+
         GekkoGameEvent** UpdateSession(i32* count) override;
 
         GekkoSessionEvent** Events(i32* count) override;

@@ -91,6 +91,11 @@ int gekko_confirmed_frame(GekkoSession* session)
     return session->ConfirmedFrame();
 }
 
+int gekko_rollback_frames(GekkoSession* session)
+{
+    return session->RollbackFrames();
+}
+
 void gekko_set_local_delay(GekkoSession* session, int player, unsigned char delay)
 {
     session->SetLocalDelay(player, delay);

@@ -222,6 +222,10 @@ GEKKONET_API void gekko_set_frame_limit(GekkoSession* session, int frame);
 // earlier (-1 before the session runs or while nothing is confirmed).
 GEKKONET_API int gekko_confirmed_frame(GekkoSession* session);
 
+// the frames the next update re-runs for a rollback, from the inputs received so far (0: no
+// rollback is pending). The inputs that arrive before that update can only add to them.
+GEKKONET_API int gekko_rollback_frames(GekkoSession* session);
+
 // holds a local players input back by the given amount of frames before the
 // session uses it, trading input lag for less mispredictions.
 GEKKONET_API void gekko_set_local_delay(GekkoSession* session, int player, unsigned char delay);

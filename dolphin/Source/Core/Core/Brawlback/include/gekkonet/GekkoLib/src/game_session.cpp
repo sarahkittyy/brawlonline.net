@@ -1,5 +1,6 @@
 #include "session/game_session.h"
 
+#include <algorithm>
 #include <cassert>
 #include <cstring>
 
@@ -246,6 +247,15 @@ i32 Gekko::GameSession::ConfirmedFrame()
         return GameInput::NULL_FRAME;
     }
     return GetConfirmedFrame();
+}
+
+i32 Gekko::GameSession::RollbackFrames()
+{
+    if (!_started || !RollbackPending()) {
+        return 0;
+    }
+    // HandleRollback re-runs the frames from the first mispredicted one to the last one run.
+    return std::max<i32>(1, _sync.GetCurrentFrame() - _sync.GetMinIncorrectFrame());
 }
 
 GekkoGameEvent** Gekko::GameSession::UpdateSession(i32* count)
