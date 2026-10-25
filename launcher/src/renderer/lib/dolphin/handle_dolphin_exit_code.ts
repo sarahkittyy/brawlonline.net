@@ -36,6 +36,11 @@ const handleWindowsExitCode = (exitCode: number): string | undefined => {
     case 0xc0000005: {
       return Messages.tryDifferentVideoBackend();
     }
+    case 0xcfffffff: {
+      // Windows closed it while "Not responding" (the player chose Close the program). Dolphin's
+      // hang watchdog left a dump of what it was stuck on in its Logs, which a bug report uploads.
+      return Messages.dolphinStoppedResponding();
+    }
     default: {
       const errorCode = `0x${exitCode.toString(16)}`;
       return Messages.dolphinExitedWithErrorCode(errorCode);

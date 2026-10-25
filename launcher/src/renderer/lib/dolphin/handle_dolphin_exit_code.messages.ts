@@ -5,6 +5,8 @@ export const HandleDolphinExitCodeMessages = {
     'Dolphin has crashed. Please go to the Help section of the settings page, click "Download logs", and send us the zip with some context regarding the crash.',
   tryDifferentVideoBackend: () =>
     "Try a different video backend in Dolphin. If the issue persists, install the latest Windows update available and then restart your computer.",
+  dolphinStoppedResponding: () =>
+    "Dolphin stopped responding and was closed. Please send a bug report with the bug button at the top of the launcher, saying what you were doing when it froze: it uploads what Dolphin was stuck on.",
   dolphinExitedWithErrorCode: (exitCode: string) =>
     "Dolphin exited with error code: {0}. " +
     "If you're in need of assistance, screenshot this and send it to us with some context regarding the crash.",
