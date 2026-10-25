@@ -322,9 +322,21 @@ export type NetplayLaunchResult =
   | { status: "started" }
   | { status: "wrongPPlusBuild"; cardRelease: string; release: string };
 
-export type GameFilesMoveOutcome =
-  | { action: "moved" | "adopted"; folder: string; leftBehind: string | null }
-  | { action: "cancelled"; folder: string }
+/**
+ * Settings > Dolphin's Brawl Online folder move (DolphinManager.moveMainFolder): where everything
+ * is now, whether the replays moved (`kept`: a replay folder the player chose, or already there;
+ * `failed`: they stay where they were, `replaysError` says why) and old folders some of whose
+ * files could not be deleted.
+ */
+export type MainFolderMoveOutcome =
+  | {
+      action: "moved";
+      folder: string;
+      replays: "moved" | "kept" | "failed";
+      replaysError: string | null;
+      leftBehind: string[];
+    }
+  | { action: "cancelled" }
   | { action: "error"; message: string };
 
 export interface DolphinService {
@@ -337,8 +349,8 @@ export interface DolphinService {
   getDolphinPaths(
     dolphinType: DolphinLaunchType,
   ): Promise<{ executable: string; userFolder: string; playKeyFile: string; gameFilesFolder: string }>;
-  /** Moves the game files (the netplay folder) to `folder`, or back to the default with null. */
-  moveGameFiles(folder: string | null): Promise<GameFilesMoveOutcome>;
+  /** Moves the game files and the launcher's replay folder into the Brawl Online folder `folder` (or one inside it). */
+  moveMainFolder(folder: string): Promise<MainFolderMoveOutcome>;
   configureDolphin(dolphinType: DolphinLaunchType): Promise<void>;
   softResetDolphin(dolphinType: DolphinLaunchType): Promise<void>;
   hardResetDolphin(dolphinType: DolphinLaunchType): Promise<void>;

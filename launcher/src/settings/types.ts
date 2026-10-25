@@ -92,6 +92,11 @@ export interface SettingsSchema {
   // SD card; null = <userData>/netplay). Only DolphinManager.moveGameFiles changes it, after moving them.
   gameFilesFolder: string | null;
 
+  // The Brawl Online folder (dolphin/install/main_folder.ts): the folder the player chose to keep
+  // the game files and the replays in, null until they choose one (everything where it was). Only
+  // DolphinManager.moveMainFolder changes it, after moving them.
+  mainFolder: string | null;
+
   // Appearance settings
   enableRankDisplay: boolean;
 

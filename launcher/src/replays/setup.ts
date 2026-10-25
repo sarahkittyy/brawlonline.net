@@ -25,6 +25,7 @@ import {
   ipc_searchGames,
   ipc_selectTreeFolder,
 } from "./ipc";
+import { rebaseReplayPaths } from "./rebase_replay_paths";
 import { createManagedReplayIndexingPool } from "./replay_indexing_pool/replay_indexing_pool_manager";
 import type { Progress } from "./types";
 
@@ -75,6 +76,8 @@ export default function setupReplaysIpc({
   const treeService = new FolderTreeService();
   const created = createReplayProvider();
   const replayProviderPromise = created.then(({ provider }) => provider);
+  // A replay folder moved into the Brawl Online folder keeps its indexed games and highlights.
+  dolphinManager.setReplayPathRebaser(async (move) => rebaseReplayPaths((await created).database, move));
   const highlightService = new HighlightService(
     created.then(({ database }) => database),
     () => {

@@ -20,7 +20,7 @@ import {
   ipc_installRosetta,
   ipc_joinRoomInGame,
   ipc_launchNetplayDolphin,
-  ipc_moveGameFiles,
+  ipc_moveMainFolder,
   ipc_openDolphinSettingsFolder,
   ipc_playHighlights,
   ipc_preparePPlusRelease,
@@ -55,8 +55,8 @@ const dolphinApi: DolphinService = {
     const { result } = await ipc_getDolphinPaths.renderer!.trigger({ dolphinType });
     return result;
   },
-  async moveGameFiles(folder: string | null) {
-    const { result } = await ipc_moveGameFiles.renderer!.trigger({ folder });
+  async moveMainFolder(folder: string) {
+    const { result } = await ipc_moveMainFolder.renderer!.trigger({ folder });
     return result;
   },
   async downloadDolphin(dolphinType: DolphinLaunchType) {

@@ -101,7 +101,7 @@ export const useNotificationVolume = () => useSetting("notificationVolume");
 
 export const useInterfaceZoom = () => useSetting("interfaceZoom");
 
-/** Read only: DolphinManager.moveGameFiles sets it after moving the files. */
+/** Read only: DolphinManager.moveMainFolder (and moveGameFiles) set it after moving the files. */
 export const useGameFilesFolder = () => useSetting("gameFilesFolder")[0];
 
 export const useDolphinPath = (dolphinType: DolphinLaunchType) =>

@@ -26,7 +26,7 @@ import {
   ipc_installRosetta,
   ipc_joinRoomInGame,
   ipc_launchNetplayDolphin,
-  ipc_moveGameFiles,
+  ipc_moveMainFolder,
   ipc_openDolphinSettingsFolder,
   ipc_playHighlights,
   ipc_preparePPlusRelease,
@@ -102,10 +102,14 @@ export default function setupDolphinIpc({ dolphinManager }: { dolphinManager: Do
     };
   });
 
-  ipc_moveGameFiles.main!.handle(async ({ folder }) => {
+  ipc_moveMainFolder.main!.handle(async ({ folder }) => {
     try {
-      const result = await dolphinManager.moveGameFiles(folder);
-      return result.action === "cancelled" ? { action: "cancelled", folder: result.folder } : result;
+      const result = await dolphinManager.moveMainFolder(folder);
+      if (!result) {
+        return { action: "cancelled" };
+      }
+      const { folder: moved, replays, replaysError, leftBehind } = result;
+      return { action: "moved", folder: moved, replays, replaysError, leftBehind };
     } catch (err) {
       log.error(err);
       return { action: "error", message: err instanceof Error ? err.message : String(err) };

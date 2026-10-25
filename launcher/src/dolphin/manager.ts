@@ -5,17 +5,19 @@ import { Preconditions } from "@common/preconditions";
 import { DOLPHIN_ONLINE_DIR, PRODUCT_NAME } from "@common/product";
 import { readTestMode } from "@common/test_mode";
 import { readReplayHeader } from "@replays/replay_format";
+import { defaultAppSettings } from "@settings/default_settings";
 import type { SettingsManager } from "@settings/settings_manager";
 import { Mutex } from "async-mutex";
 import type { MessageBoxOptions } from "electron";
 import { app, BrowserWindow, dialog } from "electron";
 import electronLog from "electron-log";
 import { existsSync } from "fs";
-import { mkdir } from "fs/promises";
+import { mkdir, readdir, rmdir } from "fs/promises";
 import { Observable, Subject } from "observable-fns";
 import path from "path";
 import { fileExists } from "utils/file_exists";
 import { isSubdirectory } from "utils/is_subdirectory";
+import { removeTree } from "utils/remove_tree";
 
 import { isAbnormalExit, keepCrashLog } from "./crash_log";
 import { clearInputDelayRequest, writeInputDelayRequest } from "./input_delay_handoff";
@@ -24,11 +26,22 @@ import { bundledDolphinSource, installBundledDolphin } from "./install/bundled_d
 import { asDiskSpaceError } from "./install/disk_space";
 import { fetchLatestVersion } from "./install/fetch_latest_version";
 import { LocalDolphinInstallation } from "./install/local_installation";
+import type { FolderMove } from "./install/main_folder";
+import {
+  chooseMainFolder,
+  isOwnReplayFolder,
+  MAIN_FOLDER_GAME_FILES,
+  MAIN_FOLDER_REPLAYS,
+  rebaseSettings,
+  samePath,
+} from "./install/main_folder";
 import type { GameFilesTarget } from "./install/move_game_files";
 import {
+  checkGameFilesTarget,
   chooseGameFilesTarget,
   GameFilesMoveError,
   isInInstallFolder,
+  moveEntries,
   moveGameFiles,
   removeGameFiles,
 } from "./install/move_game_files";
@@ -123,6 +136,8 @@ export class DolphinManager {
   private projectPlusInstall: Promise<void> | null = null;
   /** True while Settings moves the game files (moveGameFiles): nothing may start Dolphin. */
   private movingGameFiles = false;
+  /** Points the replay database's rows at moved folders (setReplayPathRebaser). */
+  private replayPathRebaser: ((move: FolderMove) => Promise<void>) | null = null;
   /** Start-up's move of game files out of the launcher's install folder, while it runs. */
   private installFolderRescue: Promise<boolean> | null = null;
   private eventSubject = new Subject<DolphinEvent>();
@@ -839,12 +854,7 @@ export class DolphinManager {
   }
 
   private async _moveGameFiles(picked: string | null): Promise<GameFilesMoveResult> {
-    if (this.netplayDolphinInstance || this.playbackDolphinInstances.size > 0) {
-      throw new GameFilesMoveError("Close Dolphin first.");
-    }
-    if (this.projectPlusInstall) {
-      throw new GameFilesMoveError("Wait for the Project+ download to finish first.");
-    }
+    this._assertCanMoveGameFiles();
     const from = this.netplayFolder();
     const defaultFolder = defaultNetplayFolder(app.getPath("userData"));
     const target: GameFilesTarget =
@@ -859,22 +869,44 @@ export class DolphinManager {
 
     this._onStart(DolphinLaunchType.NETPLAY);
     try {
-      if (target.kind === "move") {
-        await moveGameFiles({
-          from,
-          to: target.folder,
-          onProgress: (current, total) => this._onProgress(DolphinLaunchType.NETPLAY, current, total, "moveGameFiles"),
-          log: (message) => log.info(message),
-        });
-      } else {
-        log.info(`Using the game files already in ${target.folder}; deleting the ones in ${from}`);
-      }
-      const isDefault = path.relative(target.folder, defaultFolder) === "";
-      await this.settingsManager.updateSetting("gameFilesFolder", isDefault ? null : target.folder);
+      await this._relocateGameFiles(from, target);
     } catch (err) {
       this._onComplete(DolphinLaunchType.NETPLAY, this._cachedVersion(DolphinLaunchType.NETPLAY));
       throw err;
     }
+    const leftBehind = await this._finishGameFilesMove(from);
+    return { action: target.kind === "move" ? "moved" : "adopted", folder: target.folder, leftBehind };
+  }
+
+  private _assertCanMoveGameFiles(): void {
+    if (this.netplayDolphinInstance || this.playbackDolphinInstances.size > 0) {
+      throw new GameFilesMoveError("Close Dolphin first.");
+    }
+    if (this.projectPlusInstall) {
+      throw new GameFilesMoveError("Wait for the Project+ download to finish first.");
+    }
+  }
+
+  /**
+   * Moves the game files from `from` into `target` (or takes the ones there) and points the
+   * settings at them: the game files folder, and paths that were inside the old folder (Dolphin's
+   * own replay folder is in its User folder). The old folder's files are still there.
+   */
+  private async _relocateGameFiles(from: string, target: GameFilesTarget): Promise<void> {
+    if (target.kind === "move") {
+      await moveGameFiles({
+        from,
+        to: target.folder,
+        onProgress: (current, total) => this._onProgress(DolphinLaunchType.NETPLAY, current, total, "moveGameFiles"),
+        log: (message) => log.info(message),
+      });
+    } else {
+      log.info(`Using the game files already in ${target.folder}; deleting the ones in ${from}`);
+    }
+    const defaultFolder = defaultNetplayFolder(app.getPath("userData"));
+    const isDefault = path.relative(target.folder, defaultFolder) === "";
+    await this.settingsManager.updateSetting("gameFilesFolder", isDefault ? null : target.folder);
+    await this._rebasePaths({ from, to: target.folder });
 
     // An executable set to the old folder is gone, and one set to the new folder is the default now.
     const settings = this.settingsManager.get().settings;
@@ -886,7 +918,10 @@ export class DolphinManager {
     if (inMovedFolder(settings.playbackDolphinPath)) {
       await this.settingsManager.updateSetting("playbackDolphinPath", null);
     }
+  }
 
+  /** Deletes the old game files and installs the bundled Dolphin into the new folder. The old folder when some files stayed. */
+  private async _finishGameFilesMove(from: string): Promise<string | null> {
     let leftBehind: string | null = null;
     try {
       await removeGameFiles(from);
@@ -899,7 +934,168 @@ export class DolphinManager {
     for (const dolphinType of [DolphinLaunchType.NETPLAY, DolphinLaunchType.PLAYBACK]) {
       void this.installDolphin(dolphinType).catch((err) => log.error(err));
     }
-    return { action: target.kind === "move" ? "moved" : "adopted", folder: target.folder, leftBehind };
+    return leftBehind;
+  }
+
+  /** Points the settings and the replay database (setReplayPathRebaser) at `move.to` for what was in `move.from`. */
+  private async _rebasePaths(move: FolderMove): Promise<void> {
+    const updates = rebaseSettings(this.settingsManager.get().settings, [move]);
+    if (updates.length > 0) {
+      log.info(`Settings with paths in ${move.from} now point to ${move.to}: ${updates.map((u) => u.key).join(", ")}`);
+      await this.settingsManager.updateSettings(updates);
+    }
+    await this.replayPathRebaser?.(move).catch((err) => {
+      log.warn(`Could not update the replay database: ${err instanceof Error ? err.message : JSON.stringify(err)}`);
+    });
+  }
+
+  /** The replay database's paths (replays/setup.ts): rows of files in a moved folder get its new path. */
+  setReplayPathRebaser(rebase: (move: FolderMove) => Promise<void>): void {
+    this.replayPathRebaser = rebase;
+  }
+
+  /**
+   * Settings > Dolphin's Brawl Online folder (main_folder.ts): moves the game files into
+   * `<folder>/Game Files` and the launcher's own replay folder (with its Highlights clips and
+   * Spectated games; a replay folder the player chose stays) into `<folder>/Replays`, then
+   * remembers the folder. Everything is checked before anything moves. When the replays fail to
+   * move after the game files did, they stay where they were (`replaysError`).
+   */
+  async moveMainFolder(picked: string): Promise<MainFolderMoveResult> {
+    if (this.movingGameFiles) {
+      throw new GameFilesMoveError("The game files are already being moved.");
+    }
+    this.movingGameFiles = true;
+    try {
+      return await this._moveMainFolder(picked);
+    } finally {
+      this.movingGameFiles = false;
+    }
+  }
+
+  private async _moveMainFolder(picked: string): Promise<MainFolderMoveResult> {
+    this._assertCanMoveGameFiles();
+    if (this.renderQueue?.jobs().some((job) => !["done", "error", "cancelled"].includes(job.state))) {
+      throw new GameFilesMoveError("Wait for the videos being rendered to finish first.");
+    }
+    const settings = this.settingsManager.get().settings;
+    const oldMainFolder = settings.mainFolder;
+    const installFolder = this._launcherInstallFolder();
+    const root = await chooseMainFolder(picked, PRODUCT_NAME);
+    if (isInInstallFolder(root, installFolder)) {
+      throw new GameFilesMoveError(
+        `${root} is inside the launcher's install folder (${installFolder}), which every launcher ` +
+          `update deletes. Choose a folder outside it.`,
+      );
+    }
+
+    const gameFrom = this.netplayFolder();
+    const gameTo = path.join(root, MAIN_FOLDER_GAME_FILES);
+    let gameTarget: GameFilesTarget | null = null;
+    if (!samePath(gameFrom, gameTo)) {
+      gameTarget = await checkGameFilesTarget(gameTo, gameFrom, installFolder);
+      if (!gameTarget) {
+        throw new GameFilesMoveError(`${gameTo} already exists and is not empty.`);
+      }
+    }
+
+    const replaysFrom = settings.rootSlpPath;
+    const replaysTo = path.join(root, MAIN_FOLDER_REPLAYS);
+    let replaysMove: FolderMove | null = null;
+    if (
+      isOwnReplayFolder(replaysFrom, defaultAppSettings.settings.rootSlpPath, oldMainFolder) &&
+      !samePath(replaysFrom, replaysTo)
+    ) {
+      if (samePath(replaysFrom, root) || isSubdirectory(replaysFrom, root)) {
+        throw new GameFilesMoveError(`Choose a folder outside ${replaysFrom}: your replays are there.`);
+      }
+      const there = await readdir(replaysTo).catch(() => [] as string[]);
+      if (there.length > 0) {
+        throw new GameFilesMoveError(`${replaysTo} already exists and is not empty.`);
+      }
+      replaysMove = { from: replaysFrom, to: replaysTo };
+    }
+
+    if (!gameTarget && !replaysMove) {
+      if (oldMainFolder != null && samePath(oldMainFolder, root)) {
+        throw new GameFilesMoveError(`Everything is already in ${root}.`);
+      }
+      await this.settingsManager.updateSetting("mainFolder", root);
+      return { folder: root, gameFiles: "same", replays: "kept", replaysError: null, leftBehind: [] };
+    }
+    if (gameTarget?.kind === "adopt" && !(await confirmAdoptGameFiles(gameTarget.folder, gameFrom))) {
+      return null;
+    }
+    log.info(
+      `Moving to the Brawl Online folder ${root}: game files ${gameTarget ? `from ${gameFrom}` : "already there"}, ` +
+        `replays ${replaysMove ? `from ${replaysFrom}` : `stay in ${replaysFrom}`}`,
+    );
+    // The bundled Dolphin's install must not write into the old folder while it is moved.
+    await this.bundledDolphinReady();
+
+    this._onStart(DolphinLaunchType.NETPLAY);
+    if (gameTarget) {
+      try {
+        await this._relocateGameFiles(gameFrom, gameTarget);
+      } catch (err) {
+        this._onComplete(DolphinLaunchType.NETPLAY, this._cachedVersion(DolphinLaunchType.NETPLAY));
+        throw err;
+      }
+    }
+
+    const leftBehind: string[] = [];
+    let replaysError: string | null = null;
+    if (replaysMove) {
+      try {
+        const { copied } = await moveEntries({
+          from: replaysMove.from,
+          to: replaysMove.to,
+          names: await readdir(replaysMove.from).catch(() => [] as string[]),
+          onProgress: (current, total) => this._onProgress(DolphinLaunchType.NETPLAY, current, total, "moveGameFiles"),
+          log: (message) => log.info(message),
+        });
+        // (The database first: the replay browser reads the new folder as soon as it is the setting.)
+        await this._rebasePaths(replaysMove);
+        await this.settingsManager.updateSetting("rootSlpPath", replaysMove.to);
+        log.info(`Replays moved from ${replaysMove.from} to ${replaysMove.to}`);
+        try {
+          for (const name of copied) {
+            await removeTree(path.join(replaysMove.from, name));
+          }
+          await rmdir(replaysMove.from).catch(() => undefined);
+        } catch (err) {
+          leftBehind.push(replaysMove.from);
+          log.warn(`Could not delete the old replays in ${replaysMove.from}: ${err}`);
+        }
+      } catch (err) {
+        replaysError = err instanceof Error ? err.message : String(err);
+        log.warn(`The replays stay in ${replaysMove.from}: ${replaysError}`);
+      }
+    }
+
+    if (gameTarget) {
+      const left = await this._finishGameFilesMove(gameFrom);
+      if (left) {
+        leftBehind.push(left);
+      }
+    } else {
+      this._onComplete(DolphinLaunchType.NETPLAY, this._cachedVersion(DolphinLaunchType.NETPLAY));
+    }
+    if (!gameTarget && replaysError) {
+      throw new GameFilesMoveError(`The replays could not be moved: ${replaysError}`);
+    }
+    await this.settingsManager.updateSetting("mainFolder", root);
+    // The old Brawl Online folder, if nothing is left in it.
+    if (oldMainFolder != null && !samePath(oldMainFolder, root)) {
+      await rmdir(oldMainFolder).catch(() => undefined);
+    }
+    return {
+      folder: root,
+      gameFiles: !gameTarget ? "same" : gameTarget.kind === "move" ? "moved" : "adopted",
+      replays: !replaysMove ? "kept" : replaysError ? "failed" : "moved",
+      replaysError,
+      leftBehind,
+    };
   }
 
   /** The folder every launcher update deletes or replaces (paths.ts launcherInstallFolder). */
@@ -1594,6 +1790,20 @@ export type GameFilesMoveResult = {
   /** The old folder, when some of its files could not be deleted. */
   leftBehind: string | null;
 };
+
+/**
+ * A Brawl Online folder move (null: cancelled). `gameFiles`: moved, the copy there taken, or
+ * already there. `replays`: moved, kept (a folder the player chose, or already there) or failed
+ * to move (`replaysError`: they stay where they were). `leftBehind`: old folders some of whose
+ * files could not be deleted.
+ */
+export type MainFolderMoveResult = {
+  folder: string;
+  gameFiles: "moved" | "adopted" | "same";
+  replays: "moved" | "kept" | "failed";
+  replaysError: string | null;
+  leftBehind: string[];
+} | null;
 
 /** Moving back to `<userData>/netplay`: files left there (the launcher's own) are replaced. */
 async function defaultGameFilesTarget(defaultFolder: string, current: string): Promise<GameFilesTarget> {

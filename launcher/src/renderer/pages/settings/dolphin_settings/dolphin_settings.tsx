@@ -16,7 +16,7 @@ import { useServices } from "@/services";
 
 import { SettingItem } from "../setting_item_section";
 import { DolphinSettingsMessages as Messages } from "./dolphin_settings.messages";
-import { GameFilesFolder } from "./game_files_folder";
+import { MainFolder } from "./main_folder";
 import { PLAYBACK_DOLPHIN_SETTINGS_PATH } from "./paths";
 
 enum ResetType {
@@ -101,7 +101,7 @@ export const DolphinSettings = ({ dolphinType }: { dolphinType: DolphinLaunchTyp
       <Typography variant="h5">{getDolphinSettingsName(dolphinType)}</Typography>
       <Typography variant="caption">{Messages.version(versionString)}</Typography>
 
-      {dolphinType === DolphinLaunchType.NETPLAY && <GameFilesFolder />}
+      {dolphinType === DolphinLaunchType.NETPLAY && <MainFolder />}
       <SettingItem
         name={Messages.dolphinExecutable(dolphinTypeName)}
         description={Messages.dolphinExecutableDescription()}

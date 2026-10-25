@@ -63,12 +63,42 @@ export function isInInstallFolder(folder: string, installFolder: string | null):
 }
 
 /**
- * Where the game files go when the player picks `picked`: the folder itself when it is empty (or
- * missing) or already holds game files, else a `<subfolderName>` folder inside it (picking
- * `D:\Games` gives `D:\Games\Brawl Online`). `current` is the netplay folder in use. Never the
+ * What `folder` would be as the game files' folder (`current` is the netplay folder in use): a
+ * move into it when it is missing or empty, the game files in it when it holds a copy, null when
+ * it has other things. Throws for the folder in use, a folder inside it or around it, and the
  * launcher's install folder or a folder inside it (`installFolder`): a player report 2026-10-19
  * lost the custom textures, Dolphin settings, hotkeys and controller settings in the User folder
  * to an update.
+ */
+export async function checkGameFilesTarget(
+  folder: string,
+  current: string,
+  installFolder: string | null = null,
+): Promise<GameFilesTarget | null> {
+  if (samePath(folder, current)) {
+    throw new GameFilesMoveError(`The game files are already in ${folder}.`);
+  }
+  if (isSubdirectory(current, folder) || isSubdirectory(folder, current)) {
+    throw new GameFilesMoveError(`Choose a folder outside ${current}.`);
+  }
+  if (isInInstallFolder(folder, installFolder)) {
+    throw new GameFilesMoveError(
+      `${folder} is inside the launcher's install folder (${installFolder}), which every launcher ` +
+        `update deletes. Choose a folder outside it.`,
+    );
+  }
+  if (await holdsGameFiles(folder)) {
+    return { folder, kind: "adopt" };
+  }
+  const names = await entries(folder);
+  return names == null || names.length === 0 ? { folder, kind: "move" } : null;
+}
+
+/**
+ * Where the game files go when the player picks `picked`: the folder itself when it is empty (or
+ * missing) or already holds game files, else a `<subfolderName>` folder inside it (picking
+ * `D:\Games` gives `D:\Games\Brawl Online`). `current` is the netplay folder in use. Never the
+ * launcher's install folder or a folder inside it (checkGameFilesTarget).
  */
 export async function chooseGameFilesTarget(
   picked: string,
@@ -76,27 +106,10 @@ export async function chooseGameFilesTarget(
   subfolderName: string,
   installFolder: string | null = null,
 ): Promise<GameFilesTarget> {
-  const check = async (folder: string): Promise<GameFilesTarget | null> => {
-    if (samePath(folder, current)) {
-      throw new GameFilesMoveError(`The game files are already in ${folder}.`);
-    }
-    if (isSubdirectory(current, folder) || isSubdirectory(folder, current)) {
-      throw new GameFilesMoveError(`Choose a folder outside ${current}.`);
-    }
-    if (isInInstallFolder(folder, installFolder)) {
-      throw new GameFilesMoveError(
-        `${folder} is inside the launcher's install folder (${installFolder}), which every launcher ` +
-          `update deletes. Choose a folder outside it.`,
-      );
-    }
-    if (await holdsGameFiles(folder)) {
-      return { folder, kind: "adopt" };
-    }
-    const names = await entries(folder);
-    return names == null || names.length === 0 ? { folder, kind: "move" } : null;
-  };
   const folder = path.resolve(picked);
-  const target = (await check(folder)) ?? (await check(path.join(folder, subfolderName)));
+  const target =
+    (await checkGameFilesTarget(folder, current, installFolder)) ??
+    (await checkGameFilesTarget(path.join(folder, subfolderName), current, installFolder));
   if (!target) {
     throw new GameFilesMoveError(`${path.join(folder, subfolderName)} already exists and is not empty.`);
   }
@@ -138,27 +151,28 @@ async function copyTree(from: string, to: string, onBytes: (fileDone: number) =>
 }
 
 /**
- * Moves the game data entries (GAME_DATA_ENTRIES) of `from` into `to`: renamed where both are on
+ * Moves the entries `names` of `from` (those that are there) into `to`: renamed where both are on
  * one drive (instant), else copied with byte progress. On failure everything already moved is put
  * back and the copies are removed, so `from` is whole again. The sources of copied entries stay
- * until the caller removes the old folder (removeGameFiles), once the new one is in use.
+ * for the caller to remove once the new folder is in use.
  */
-export async function moveGameFiles({
+export async function moveEntries({
   from,
   to,
+  names,
   onProgress,
   log = () => undefined,
   rename = fs.promises.rename,
 }: {
   from: string;
   to: string;
+  names: readonly string[];
   onProgress?: ByteProgress;
   log?: (message: string) => void;
   /** Test hook: fails with EXDEV between drives. */
   rename?: (from: string, to: string) => Promise<void>;
 }): Promise<{ renamed: string[]; copied: string[] }> {
-  const present = ((await entries(from)) ?? []).filter((name) => GAME_DATA_ENTRIES.includes(name));
-  const sdBefore = await statSdSource(sdCardOf(from));
+  const present = ((await entries(from)) ?? []).filter((name) => names.includes(name));
   await fs.promises.mkdir(to, { recursive: true });
 
   const renamed: string[] = [];
@@ -193,9 +207,7 @@ export async function moveGameFiles({
       onProgress?.(total, total);
     }
   } catch (err) {
-    log(
-      `Moving the game files to ${to} failed (${err instanceof Error ? err.message : String(err)}); putting them back`,
-    );
+    log(`Moving ${from} to ${to} failed (${err instanceof Error ? err.message : String(err)}); putting it back`);
     for (const name of copied) {
       await fs.promises.rm(path.join(to, name), { recursive: true, force: true }).catch(() => undefined);
     }
@@ -206,6 +218,30 @@ export async function moveGameFiles({
     }
     throw err;
   }
+  return { renamed, copied };
+}
+
+/**
+ * Moves the game data entries (GAME_DATA_ENTRIES) of `from` into `to` (moveEntries). The sources
+ * of copied entries stay until the caller removes the old folder (removeGameFiles), once the new
+ * one is in use.
+ */
+export async function moveGameFiles({
+  from,
+  to,
+  onProgress,
+  log = () => undefined,
+  rename = fs.promises.rename,
+}: {
+  from: string;
+  to: string;
+  onProgress?: ByteProgress;
+  log?: (message: string) => void;
+  /** Test hook: fails with EXDEV between drives. */
+  rename?: (from: string, to: string) => Promise<void>;
+}): Promise<{ renamed: string[]; copied: string[] }> {
+  const sdBefore = await statSdSource(sdCardOf(from));
+  const { renamed, copied } = await moveEntries({ from, to, names: GAME_DATA_ENTRIES, onProgress, log, rename });
 
   if (sdBefore && (await relocatePatchedSdSource(patchedSdCardFolder(to), sdBefore, sdCardOf(to)))) {
     log("The patched SD card now refers to the moved card");

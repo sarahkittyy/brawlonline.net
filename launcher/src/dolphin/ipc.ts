@@ -7,7 +7,7 @@ import type { RoomHandOffResult } from "./room_handoff";
 import type {
   DolphinEvent,
   DolphinLaunchType,
-  GameFilesMoveOutcome,
+  MainFolderMoveOutcome,
   MissingDll,
   NetplayLaunchResult,
   PlayKey,
@@ -59,12 +59,8 @@ export const ipc_getDolphinPaths = makeEndpoint.main(
   <{ executable: string; userFolder: string; playKeyFile: string; gameFilesFolder: string }>_,
 );
 
-/** Settings > Dolphin: moves the netplay folder (`folder` null: back to `<userData>/netplay`). */
-export const ipc_moveGameFiles = makeEndpoint.main(
-  "moveGameFiles",
-  <{ folder: string | null }>_,
-  <GameFilesMoveOutcome>_,
-);
+/** Settings > Dolphin: moves the game files and the replays into the Brawl Online folder `folder` (main_folder.ts). */
+export const ipc_moveMainFolder = makeEndpoint.main("moveMainFolder", <{ folder: string }>_, <MainFolderMoveOutcome>_);
 
 export const ipc_storePlayKeyFile = makeEndpoint.main("storePlayKeyFile", <{ key: PlayKey }>_, <SuccessPayload>_);
 

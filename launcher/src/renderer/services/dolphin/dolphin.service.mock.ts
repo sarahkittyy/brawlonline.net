@@ -8,7 +8,7 @@ import type {
   DolphinEventMap,
   DolphinLaunchType,
   DolphinService,
-  GameFilesMoveOutcome,
+  MainFolderMoveOutcome,
   MissingDll,
   NetplayLaunchResult,
   PlayKey,
@@ -44,8 +44,8 @@ class MockDolphinClient implements DolphinService {
     };
   }
 
-  async moveGameFiles(folder: string | null): Promise<GameFilesMoveOutcome> {
-    return { action: "moved", folder: folder ?? "netplay", leftBehind: null };
+  async moveMainFolder(folder: string): Promise<MainFolderMoveOutcome> {
+    return { action: "moved", folder, replays: "moved", replaysError: null, leftBehind: [] };
   }
 
   @delayAndMaybeError(SHOULD_ERROR)

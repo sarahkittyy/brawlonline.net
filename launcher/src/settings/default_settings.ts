@@ -60,6 +60,7 @@ export const defaultAppSettings: AppSettings = {
     netplayDolphinPath: null,
     playbackDolphinPath: null,
     gameFilesFolder: null,
+    mainFolder: null,
     enableRankDisplay: true,
     notificationSounds: true,
     notificationVolume: 15,
