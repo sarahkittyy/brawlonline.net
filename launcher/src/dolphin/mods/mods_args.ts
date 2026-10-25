@@ -2,6 +2,7 @@ import type { TestModeOptions } from "@common/test_mode";
 import path from "path";
 
 import { LOGGING_CONFIG_ARGS } from "../netplay_args";
+import type { ModTextures } from "./mod_textures";
 import type { ModBuild, ModRoomBuild, ModsController, ModsSdChoice } from "./types";
 
 /** What Dolphin's `--mods-room` takes (the JSON of PPR_MODS_ROOM, docs/design/brawl-mods.md §3),
@@ -17,6 +18,8 @@ export type ModsArgsInput = {
   /** Arguments selecting the User folder (`-u <User>`), shared with Play (the login, the settings). */
   userArgs: string[];
   build: Pick<ModBuild, "discPath" | "launcherPath" | "sdPath">;
+  /** The mod's own Dolphin folder's HD textures (mod_textures.ts), or null for the User folder's. */
+  textures?: ModTextures | null;
   room: ModsRoomArg;
   testMode: Pick<TestModeOptions, "active" | "harnessPort" | "dolphinExtraArgs">;
 };
@@ -31,10 +34,10 @@ function configPath(file: string, what: string): string {
 }
 
 /**
- * Dolphin's command line for a Brawl Mods room: the build's SD card (or none), the disc as the
- * default ISO (a launcher `.dol` boots it), the launcher or the disc itself as what to boot, and
- * the room. Settings go in Dolphin's command-line config layer (`-C`), not its ini files, so Play
- * keeps P+'s.
+ * Dolphin's command line for a Brawl Mods room: the build's SD card (or none), the mod folder's
+ * `Load` folder with custom textures on when it has a pack for the game, the disc as the default
+ * ISO (a launcher `.dol` boots it), the launcher or the disc itself as what to boot, and the room.
+ * Settings go in Dolphin's command-line config layer (`-C`), not its ini files, so Play keeps P+'s.
  */
 export function buildModsDolphinArgs(input: ModsArgsInput): string[] {
   const { build } = input;
@@ -50,6 +53,11 @@ export function buildModsDolphinArgs(input: ModsArgsInput): string[] {
     );
   } else {
     args.push("-C", "Dolphin.Core.WiiSDCard=False");
+  }
+  // A path with "=" would be cut short: the textures are left out rather than the room.
+  const load = input.textures ? path.resolve(input.textures.loadPath) : null;
+  if (load && !load.includes("=")) {
+    args.push("-C", `Dolphin.General.LoadPath=${load}`, "-C", "GFX.Settings.HiresTextures=True");
   }
   const disc = configPath(build.discPath, "disc");
   args.push("-C", `Dolphin.Core.DefaultISO=${disc}`);

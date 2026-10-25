@@ -77,6 +77,7 @@ import {
 } from "./install/pplus_versions";
 import { installPluginOnSdCard, loadPlugin, SdCardInUseError } from "./install/sd_card";
 import { DolphinInstance, MacOsRosettaRequiredError, PlaybackDolphinInstance } from "./instance";
+import { findModTextures } from "./mods/mod_textures";
 import type { ModsRoomArg } from "./mods/mods_args";
 import { buildModsDolphinArgs } from "./mods/mods_args";
 import { clearModRoomFiles } from "./mods/room_files";
@@ -709,9 +710,17 @@ export class DolphinManager {
     await clearTemplateSeededSaves(installation.userFolder, (message) => log.warn(message)).catch((err) =>
       log.error(`Could not clear the builds' saves made from P+'s save: ${err}`),
     );
+    const textures = await findModTextures(build, installation.userFolder).catch((err) => {
+      log.warn(`Could not look for the mod folder's HD textures: ${err}`);
+      return null;
+    });
+    if (textures) {
+      log.info(`HD textures from the mod's own Dolphin folder: ${textures.loadPath}`);
+    }
     const params = buildModsDolphinArgs({
       userArgs: installation.userArgs(),
       build,
+      textures,
       room,
       testMode: readTestMode(process.env, app.isPackaged),
     });

@@ -87,6 +87,47 @@ describe("buildModsDolphinArgs", () => {
     ).toThrow(/cannot contain "="/);
   });
 
+  it("loads the mod folder's HD textures with custom textures on", () => {
+    const load = path.resolve("/games/Minus/User/Load");
+    const args = buildModsDolphinArgs({
+      userArgs,
+      build: { discPath: disc, launcherPath: dol, sdPath: sd },
+      textures: { loadPath: load },
+      room: { join: "KFQB", build: { hash, name: "" }, controller: "gc" },
+      testMode: INACTIVE_TEST_MODE,
+    });
+    const at = args.indexOf(`Dolphin.General.LoadPath=${load}`);
+    expect(at).toBeGreaterThan(0);
+    expect(args.slice(at - 1, at + 3)).toEqual([
+      "-C",
+      `Dolphin.General.LoadPath=${load}`,
+      "-C",
+      "GFX.Settings.HiresTextures=True",
+    ]);
+    expect(args.slice(-4)).toEqual(["-e", dol, "--mods-room", args[args.length - 1]]);
+  });
+
+  it("leaves the textures out, not the room, for a Load path with '='", () => {
+    const args = buildModsDolphinArgs({
+      userArgs,
+      build: { discPath: disc, launcherPath: null, sdPath: null },
+      textures: { loadPath: path.resolve("/games/a=b/User/Load") },
+      room: { join: "KFQB", build: { hash, name: "" }, controller: "gc" },
+      testMode: INACTIVE_TEST_MODE,
+    });
+    expect(args.some((a) => a.startsWith("Dolphin.General.LoadPath=") || a.startsWith("GFX."))).toBe(false);
+  });
+
+  it("sets no Load path or textures without a pack in the mod folder", () => {
+    const args = buildModsDolphinArgs({
+      userArgs,
+      build: { discPath: disc, launcherPath: dol, sdPath: sd },
+      room: { join: "KFQB", build: { hash, name: "" }, controller: "gc" },
+      testMode: INACTIVE_TEST_MODE,
+    });
+    expect(args.some((a) => a.startsWith("Dolphin.General.LoadPath=") || a.startsWith("GFX."))).toBe(false);
+  });
+
   it("puts the harness port last in test mode", () => {
     const args = buildModsDolphinArgs({
       userArgs,
