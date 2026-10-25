@@ -188,6 +188,29 @@ describe("moveGameFiles", () => {
     expect(await exists(from)).toBe(false);
   });
 
+  it("keeps a linked texture pack linked between drives, and never deletes it", async () => {
+    const from = path.join(dir, "netplay");
+    const to = path.join(dir, "D", "Brawl Online");
+    await makeNetplayFolder(from);
+    const pack = path.join(dir, "E", "Textures", "RSBE01");
+    await write(path.join(pack, "tex1_64x64_abc.png"), "png");
+    const link = path.join(from, "User", "Load", "Textures", "RSBE01");
+    await fs.promises.mkdir(path.dirname(link), { recursive: true });
+    // (As players make them: a junction on Windows, which needs no administrator rights.)
+    await fs.promises.symlink(pack, link, process.platform === "win32" ? "junction" : "dir");
+    const exdev = async () => {
+      throw Object.assign(new Error("cross-device link not permitted"), { code: "EXDEV" });
+    };
+
+    await moveGameFiles({ from, to, rename: exdev });
+    await removeGameFiles(from);
+
+    const moved = path.join(to, "User", "Load", "Textures", "RSBE01");
+    expect((await fs.promises.lstat(moved)).isSymbolicLink()).toBe(true);
+    expect(await read(path.join(moved, "tex1_64x64_abc.png"))).toBe("png");
+    expect(await read(path.join(pack, "tex1_64x64_abc.png"))).toBe("png");
+  });
+
   it("puts everything back when a move fails half-way", async () => {
     const from = path.join(dir, "netplay");
     const to = path.join(dir, "D", "Brawl Online");

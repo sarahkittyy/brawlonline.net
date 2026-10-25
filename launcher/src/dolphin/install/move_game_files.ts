@@ -137,7 +137,20 @@ async function copyTree(from: string, to: string, onBytes: (fileDone: number) =>
       await copyTree(path.join(from, child), path.join(to, child), onBytes);
     }
   } else if (st.isSymbolicLink()) {
-    await fs.promises.symlink(await fs.promises.readlink(from), to);
+    // A link to a folder (a texture pack kept on another drive, linked into User/Load/Textures) is
+    // made again as a junction on Windows: a folder symbolic link needs administrator rights or
+    // Developer Mode there. (A junction's target is absolute: a relative one is taken from where
+    // the link now is, as it would be read there.)
+    const target = await fs.promises.readlink(from);
+    const isFolder = await fs.promises.stat(from).then(
+      (s) => s.isDirectory(),
+      () => false,
+    );
+    if (process.platform === "win32" && isFolder) {
+      await fs.promises.symlink(path.resolve(path.dirname(to), target), to, "junction");
+    } else {
+      await fs.promises.symlink(target, to);
+    }
   } else if (st.isFile()) {
     let last = 0;
     await copyFileWithProgress(from, to, {
