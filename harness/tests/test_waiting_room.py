@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import json
 import re
+import struct
+from pathlib import Path
 from typing import Callable, Iterator
 
 import pytest
@@ -24,6 +26,8 @@ from test_online import _make_backend, _wait
 from test_online_game import NOTAP_TAG, Game, _boot, _both, _find_logged, _peer_shown, online_set, ppom
 from test_online_ranked import STARTERS, _ranked, _strike_to, _wait_view
 from test_online_alt_costumes import ALT_R, ALT_Z, COSTUME_ALT_R, COSTUME_ALT_Z, _alt_words, _check_match, _mm_costumes, _stale_words
+
+import patch_sd  # noqa: E402  (tools/sdcard, on the path from test_online_game)
 
 pytestmark = [pytest.mark.dolphin, pytest.mark.server, pytest.mark.gpu]
 
@@ -237,6 +241,62 @@ def test_waiting_room_again_after_unranked(backend: OnlineBackend, dolphin: Call
     assert _in_room(a)
     _check_room(a, "03-room-again")
     _logs_clean(a)
+
+
+def _x07_tracklist() -> bytes:
+    """A P+ tracklist (tools/sdcard/tlst.py's format) whose one song is the room's own, X07, a
+    vanilla song (no file name: 0xFFFF)."""
+    title = b"Online Training Room\0"
+    entry = struct.pack(">IHBBHHI", 0x26FF, 0, 0x50, 0x28, 0xFFFF, 0, 0)
+    return b"TLST" + struct.pack(">IHH", 1, 28 + len(title), 28) + entry + title
+
+
+def _x07_streams(g: Game) -> int:
+    text = (g.inst.user_dir / "Logs" / "dolphin.log").read_text(errors="replace")
+    return len(re.findall(r"SDStreamOpen[^\n]*/strm/X07\.brstm", text))
+
+
+@pytest.mark.slow
+def test_waiting_room_song_ends_with_the_room(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
+                                              gpu_backend: str) -> None:
+    """Bug report #147 (2026-10-25: "music from waiting room sometimes carries over into the
+    game"). sndSystem::playBGM keeps the song that plays when it is asked for the same id, and
+    the room ends straight into game 1 with no menu between: when game 1's song had the room's
+    id (P+ numbers each tracklist's SD songs F000, F001...: the room's F002 and Battlefield's
+    F002 are two songs), the room's song went on through the match. Both test stages get a
+    tracklist with only the room's X07: the match must start its own stream of it."""
+    test = "waiting-room-song"
+    tlst = _x07_tracklist()
+    adds = [(tlst, f"/Project+/pf/sound/{d}/{s}.tlst") for d in ("tracklist", "netplaylist")
+            for s in ("Smashville", "Dream_Land")]
+
+    def same_song(d: Path) -> None:
+        patch_sd.patch_image(d / "Wii" / "sd.raw", adds)
+
+    ua, ub = backend.create_user("kai", "KAI"), backend.create_user("lou", "LOU")
+    a = _boot(dolphin, "wr-sa", backend, ua, gpu_backend, test, "gameplay", before_launch=same_song)
+    b = _boot(dolphin, "wr-sb", backend, ub, gpu_backend, test, "gameplay", before_launch=same_song)
+    _both(a.to_main_menu, b.to_main_menu)
+    _both(a.to_online_page, b.to_online_page)
+    _both(lambda: a.to_css("unranked"), lambda: b.to_css("unranked"))
+    for g in (a, b):
+        B.write_rules(g.c, stocks=1, minutes=2, items_off=True)
+        ppom.allow_test_rules(g.c)
+
+    _search(a, 1)
+    assert _in_room(a)
+    _check_room(a, "01-room-searching")
+    _search(b, 1)
+    for g in (a, b):
+        _wait(lambda: g.scene() == "scMelee" and (_room(g) & 0xF0F) == 0x100 | ROOM_ENDED, 60,
+              f"{g.inst.name} in game 1")
+    # The room's stream, then game 1's own (before: none, the room's song played on).
+    for g in (a, b):
+        _wait(lambda: _x07_streams(g) >= 2, 15, f"{g.inst.name}: game 1's song stream")
+        assert _x07_streams(g) == 2, (g.inst.name, _x07_streams(g))
+    a.shot("02-game-1")
+    for g in (a, b):
+        g.c.mm_cancel()
 
 
 @pytest.mark.slow

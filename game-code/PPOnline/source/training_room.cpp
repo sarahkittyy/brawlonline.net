@@ -443,6 +443,23 @@ namespace TrainingRoom {
             "bctr\n\t");
     }
 
+    // The room's song ends with the room (bug report #147, 2026-10-25: "music from waiting room
+    // sometimes carries over into the game"). sndSystem keeps the song that plays when it is asked
+    // for the same id (playBGM 0x80073DB0 and its twin at 0x80074018 return at once when the id is
+    // its +0x6E4), and the room goes straight into game 1, with no menu song between. P+ numbers
+    // each tracklist's SD songs from F000, so the room's F002 (Lights, Camera, Action!) and
+    // Battlefield's F002 are two songs with one id: game 1 then played on with the room's. Its
+    // stopBGM (0x80073F84: the handle at +0x6E0 stopped over this many frames, +0x6E4 = -1) runs
+    // before the next scene's pick, which then always starts its own song. (Offline P+ never goes
+    // from one stage to another without a menu, whose songs are FC00..)
+    static const int ROOM_SONG_FADE_FRAMES = 30;
+    typedef void (*StopBgmFn)(void* snd, int fadeFrames);
+    static void stopRoomSong()
+    {
+        void* snd = *(void**)0x805A01D0;   // g_sndSystem
+        if (isPtr((u32)snd)) ((StopBgmFn)0x80073F84)(snd, ROOM_SONG_FADE_FRAMES);
+    }
+
     // State 6 (text+0x371E0) starts the room's scMelee: the room runs once it is the scene.
     // State 7 (text+0x371FC `lwz r0,0x284(r19)`): the room's scMelee has ended. Ours goes on by
     // how it was ended; 1 = state set (loop), 0 = Brawl's own.
@@ -457,6 +474,7 @@ namespace TrainingRoom {
         s_bannerMsg = NULL;
         PPOM::g_block.debug.scratch[5] = (PPOM::g_block.debug.scratch[5] & 0xFFFF0F00u) | 7 | ((u32)(code & 0xF) << 4);
         restoreSlotFlags();
+        stopRoomSong();
         OnlineMenu::waitingRoomEnded(how);
         if (how == END_MATCH && g_onlineMatchGame) {
             *(u32*)(seq + 8) = 3;   // OnlineMatch's setup (onSelStage), then the match
