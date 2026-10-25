@@ -161,11 +161,19 @@ class MultiAccountClient implements MultiAccountService {
    */
   private _notifyAccountsChanged(): void {
     this._accountsSubject.next({
-      // Deep clone the array and their objects to prevent external modification.
-      // e.g. using the array in a zustand store with immer causes the same objects to be frozen since the reference is the same.
-      accounts: this._accounts.map((acc) => ({ ...acc, lastActive: new Date(acc.lastActive) })),
+      accounts: this._copyAccounts(),
       activeId: this._activeAccountId,
     });
+  }
+
+  /**
+   * Copies of the accounts, never the objects this service changes: the account store (useAccount)
+   * keeps what it is given, and its immer update (updateRanking) freezes the whole state, so a
+   * shared account could no longer be switched to ("Cannot assign to read only property
+   * 'lastActive'", bug #140).
+   */
+  private _copyAccounts(): StoredAccount[] {
+    return this._accounts.map((acc) => ({ ...acc, lastActive: new Date(acc.lastActive) }));
   }
 
   private _notifyActiveUserChanged(): void {
@@ -343,7 +351,7 @@ class MultiAccountClient implements MultiAccountService {
 
   getAccounts(): readonly StoredAccount[] {
     // Return sorted by last active (most recent first)
-    return [...this._accounts].sort((a, b) => b.lastActive.getTime() - a.lastActive.getTime());
+    return this._copyAccounts().sort((a, b) => b.lastActive.getTime() - a.lastActive.getTime());
   }
 
   getActiveAccountId(): string | null {

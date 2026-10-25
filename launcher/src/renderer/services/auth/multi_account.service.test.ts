@@ -1,5 +1,6 @@
 import type { AccountsMe } from "@accounts/types";
 import { AccountsError } from "@accounts/types";
+import { produce } from "immer";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createMultiAccountService } from "./multi_account.service";
@@ -109,5 +110,29 @@ describe("MultiAccountService start", () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(service.getActiveUser()?.displayName).toBe("Stored Name");
     expect(seen).toEqual([]);
+  });
+});
+
+describe("MultiAccountService switching", () => {
+  it("switches after the account store froze the accounts it was given (bug #140)", async () => {
+    const other = { ...stored, id: "uid2", email: "b@example.com", displayName: "Other" };
+    (window as any).electron.settings.getAppSettingsSync = () => ({
+      accounts: { activeId: "uid1", list: [stored, other] },
+    });
+    (window as any).electron.accounts.me = async (uid: string) => ({ ...record, uid, email: `${uid}@example.com` });
+    const service = createMultiAccountService();
+    await service.init();
+
+    // What useAccount does: keep getAccounts()'s list, then an immer update (updateRanking)
+    // freezes the whole state, the accounts in it too.
+    const state = produce({ accounts: service.getAccounts(), ranked: 0 }, (draft) => {
+      draft.ranked = 1;
+    });
+    expect(Object.isFrozen(state.accounts[0])).toBe(true);
+
+    await service.switchAccount("uid2");
+    expect(service.getActiveAccountId()).toBe("uid2");
+    expect(service.getAccounts()[0].id).toBe("uid2");
+    expect(service.getActiveUser()?.email).toBe("uid2@example.com");
   });
 });
