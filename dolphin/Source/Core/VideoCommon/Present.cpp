@@ -659,7 +659,11 @@ void Presenter::ChangeSurface(void* new_surface_handle)
 
 void Presenter::ResizeSurface()
 {
-  std::lock_guard<std::mutex> lock(m_swap_mutex);
+  // No m_swap_mutex here (the flag is atomic, and a resize is picked up at the next frame either
+  // way). The UI thread calls this from the render window's resize, which Qt can deliver inside
+  // the UI thread's own SetWindowPos (showNormal leaving fullscreen), while the video thread holds
+  // m_swap_mutex in Present and DXGI, leaving exclusive fullscreen there, waits for that same UI
+  // thread to answer its SetWindowPos: both waited for good (bug report #150).
   m_surface_resized.Set();
 }
 
