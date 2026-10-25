@@ -244,6 +244,36 @@ export async function findNandSave(folder: string, titleId: string): Promise<str
   );
 }
 
+/**
+ * The title's save in the Dolphin a build's files sit in: a mod's Dolphin folder holds its
+ * launcher (`<root>/User/Launcher/`, `<root>/Launcher/`) and SD card (`<root>/User/Wii/sd.raw`)
+ * next to the NAND its own Dolphin plays (bug report #144: Cobalt's save, played in its own
+ * Dolphin, never reached the room). Null when none of the folders up to three above a file has one.
+ */
+export async function findDolphinSaveNear(
+  files: (string | null | undefined)[],
+  titleId: string,
+): Promise<string | null> {
+  for (const file of files) {
+    if (!file) {
+      continue;
+    }
+    let dir = path.dirname(file);
+    for (let up = 0; up < 3; up++) {
+      const found = await findNandSave(dir, titleId).catch(() => null);
+      if (found && (await summarizeSave(found)).files > 0) {
+        return found;
+      }
+      const parent = path.dirname(dir);
+      if (parent === dir) {
+        break;
+      }
+      dir = parent;
+    }
+  }
+  return null;
+}
+
 /** Copies a save folder's files and folders (no links), refusing what is too big to be a save. */
 async function copySaveTree(from: string, to: string, count = { files: 0, bytes: 0 }): Promise<typeof count> {
   await mkdir(to, { recursive: true });

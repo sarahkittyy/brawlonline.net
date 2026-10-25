@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
   escapeNandName,
+  findDolphinSaveNear,
   findNandSave,
   importSave,
   KEEP_BACKUPS,
@@ -239,6 +240,24 @@ describe("save import", () => {
     await expect(findNandSave(path.join(tmp, "nothing"), "000100045a5a4345")).rejects.toThrow(
       "Wii/title/00010004/5a5a4345/data",
     );
+  });
+
+  it("finds the save of the Dolphin a mod's launcher or SD card is in (bug report #144)", async () => {
+    const BRAWL = "0001000052534245";
+    const root = path.join(tmp, "Cobalt 1.33b");
+    const launcher = path.join(root, "User", "Launcher", "Project+ Netplay Launcher.dol");
+    const sd = path.join(root, "User", "Wii", "sd.raw");
+    const data = path.join(root, "User", "Wii", "title", "00010000", "52534245", "data");
+    await mkdir(path.dirname(launcher), { recursive: true });
+    await mkdir(data, { recursive: true });
+    // An empty save folder is no save.
+    expect(await findDolphinSaveNear([launcher, sd], BRAWL)).toBeNull();
+    await writeFile(path.join(data, "autosv0.bin"), "rules");
+    expect(await findDolphinSaveNear([launcher], BRAWL)).toBe(data);
+    expect(await findDolphinSaveNear([null, sd], BRAWL)).toBe(data);
+    // Another game's save, or none near the files, finds nothing.
+    expect(await findDolphinSaveNear([launcher, sd], NSMBW)).toBeNull();
+    expect(await findDolphinSaveNear([path.join(tmp, "elsewhere", "a", "b", "launcher.dol")], BRAWL)).toBeNull();
   });
 
   it("refuses an empty save and a folder too big to be one, and leaves the store as it was", async () => {

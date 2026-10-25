@@ -17,7 +17,14 @@ import { knownDiscName, knownModName } from "./known_builds";
 import type { ModsRoomArg } from "./mods_args";
 import { readModRoomStatus, writeModRoomRequest } from "./room_files";
 import { discLabel, matchRoom } from "./room_match";
-import { importSave, moveSaveStore, saveStoreDir, summarizeSave, titleDataDir } from "./save_import";
+import {
+  findDolphinSaveNear,
+  importSave,
+  moveSaveStore,
+  saveStoreDir,
+  summarizeSave,
+  titleDataDir,
+} from "./save_import";
 import type { SdHashFn } from "./sd_hash";
 import { sdCardRoot } from "./sd_hash";
 import type { SdListingStore } from "./sd_listing";
@@ -661,7 +668,35 @@ export class ModsManager {
       }
     }
     await this.saveBuilds(this.builds().map((b) => (b.id === id ? updated : b)));
+    if (updated.hash && updated.hash !== latest.hash) {
+      await this.importSaveNearBuild(updated).catch((err) => log.warn(`importing the save of ${updated.name}: ${err}`));
+    }
     return updated;
+  }
+
+  /**
+   * A Wii game with no save in its store yet starts from the one in the Dolphin folder its
+   * launcher or SD card is in, when there is one: the save the player has played the mod with
+   * (bug report #144). Without it the room's game made a new save, its rules and unlocks the
+   * game's defaults. A store with a save is left alone, as is any game while a room runs (its
+   * game writes its save back when it closes).
+   */
+  private async importSaveNearBuild(build: ModBuild): Promise<void> {
+    if (build.platform !== "wii" || !build.titleId || !build.hash || this.running) {
+      return;
+    }
+    const userFolder = this.dolphin.netplayUserFolder();
+    if ((await summarizeSave(titleDataDir(saveStoreDir(userFolder, build.hash), build.titleId))).files > 0) {
+      return;
+    }
+    const source = await findDolphinSaveNear([build.launcherPath, build.sdPath], build.titleId);
+    // Not P+'s own save (a card in the netplay User folder): no build starts from it (template_saves.ts).
+    const fromUser = source ? path.relative(userFolder, source) : "";
+    if (!source || !(fromUser.startsWith("..") || path.isAbsolute(fromUser))) {
+      return;
+    }
+    const result = await importSave({ source, titleId: build.titleId, userFolder, buildHash: build.hash });
+    log.warn(`${build.name} starts from the save in its Dolphin folder: ${source} (${result.save.files} files)`);
   }
 
   /** The SD card's root (DolphinTool sdhash), its hashes cached in the netplay User folder. */

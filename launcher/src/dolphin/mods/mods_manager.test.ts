@@ -1,4 +1,5 @@
-import { mkdtemp, rm, writeFile } from "fs/promises";
+import { createHash } from "crypto";
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "fs/promises";
 import os from "os";
 import path from "path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -16,6 +17,7 @@ import type { SettingsManager } from "@settings/settings_manager";
 import type { DolphinManager } from "../manager";
 import { BUILD_HASH_VERSION, buildHashKey, combineBuildHash } from "./build_hash";
 import { ModsManager } from "./mods_manager";
+import { saveStoreDir, titleDataDir } from "./save_import";
 import type { ModBuild } from "./types";
 
 let tmp: string;
@@ -63,8 +65,14 @@ function manager(
       settings[key] = value;
     },
   } as unknown as SettingsManager;
-  const dolphin = { netplayUserFolder: () => tmp } as unknown as DolphinManager;
-  const mods = new ModsManager(settingsManager, dolphin, async () => "DolphinTool");
+  const dolphin = { netplayUserFolder: () => path.join(tmp, "netplay", "User") } as unknown as DolphinManager;
+  const mods = new ModsManager(
+    settingsManager,
+    dolphin,
+    async () => "DolphinTool",
+    undefined,
+    async () => "card",
+  );
   return { mods, builds: () => settings.modBuilds as ModBuild[], settings };
 }
 
@@ -110,5 +118,69 @@ describe("rehashChanged", () => {
     await mods.rehashChanged();
     expect(builds().map((b) => b.id)).toEqual(["rev1", "rev2"]);
     expect(builds().every((b) => b.parts?.disc === BRAWL_NTSC_U_DISC)).toBe(true);
+  });
+});
+
+describe("a new Wii game's save", () => {
+  const BRAWL = "0001000052534245";
+  const brawlData = (root: string) => path.join(root, "Wii", "title", "00010000", "52534245", "data");
+
+  /** A Brawl mod's Dolphin folder: its launcher, maybe its SD card, and its own Brawl save. */
+  async function modFolder(name: string, save: string | null): Promise<{ launcherPath: string; sdPath: string }> {
+    const user = path.join(tmp, name, "User");
+    const launcherPath = path.join(user, "Launcher", "Netplay Launcher.dol");
+    await mkdir(path.dirname(launcherPath), { recursive: true });
+    await writeFile(launcherPath, name);
+    await mkdir(brawlData(user), { recursive: true });
+    if (save !== null) {
+      await writeFile(path.join(brawlData(user), "autosv0.bin"), save);
+    }
+    const sdPath = path.join(user, "Wii", "sd.raw");
+    await writeFile(sdPath, "sd");
+    return { launcherPath, sdPath };
+  }
+
+  async function newBuild(id: string, over: Partial<ModBuild>): Promise<ModBuild> {
+    const build = await oldBuild(id, { titleId: BRAWL, ...over });
+    return { ...build, hash: null, parts: null, hashKey: null };
+  }
+
+  const store = (hash: string) => titleDataDir(saveStoreDir(path.join(tmp, "netplay", "User"), hash), BRAWL);
+
+  it("starts from the save in the mod's Dolphin folder (bug report #144)", async () => {
+    const { mods, builds } = manager([await newBuild("cobalt", await modFolder("Cobalt 1.33b", "my rules"))]);
+    await mods.hashBuild("cobalt");
+    expect(await readFile(path.join(store(builds()[0].hash!), "autosv0.bin"), "utf8")).toBe("my rules");
+  });
+
+  it("leaves a save the store has, and a mod folder with no save", async () => {
+    const { mods, builds } = manager([
+      await newBuild("cobalt", await modFolder("Cobalt", "theirs")),
+      await newBuild("fresh", { launcherPath: (await modFolder("Fresh", null)).launcherPath }),
+    ]);
+    const hash = combineBuildHash({
+      disc: BRAWL_NTSC_U_DISC,
+      launcher: createHash("sha256").update("Cobalt").digest("hex"),
+      sd: true,
+    });
+    await mkdir(store(hash), { recursive: true });
+    await writeFile(path.join(store(hash), "autosv0.bin"), "from rooms");
+    await mods.hashBuild("cobalt");
+    await mods.hashBuild("fresh");
+    const [cobalt, fresh] = builds();
+    expect(cobalt.hash).toBe(hash);
+    expect(await readFile(path.join(store(hash), "autosv0.bin"), "utf8")).toBe("from rooms");
+    expect(await readdir(store(fresh.hash!)).catch(() => [])).toEqual([]);
+  });
+
+  it("never starts from P+'s save (a card in the netplay User folder)", async () => {
+    const pplus = path.join(tmp, "netplay", "User");
+    await mkdir(brawlData(pplus), { recursive: true });
+    await writeFile(path.join(brawlData(pplus), "autosv0.bin"), "NoTap");
+    const sdPath = path.join(pplus, "Wii", "sd.raw");
+    await writeFile(sdPath, "sd");
+    const { mods, builds } = manager([await newBuild("brawl", { sdPath })]);
+    await mods.hashBuild("brawl");
+    expect(await readdir(store(builds()[0].hash!)).catch(() => [])).toEqual([]);
   });
 });
