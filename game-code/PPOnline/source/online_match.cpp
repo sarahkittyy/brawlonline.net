@@ -1315,6 +1315,53 @@ namespace OnlineMatch {
             "bctr\n\t");
     }
 
+    // ---- This player's own rumble setting ----
+    // When a match is set up (sora_scene, the Versus setup's loop over the four players, then
+    // fn_80110410), fn_80110368(gmPlayerInitData*) gives a player its rumble bit (+0x1B, 0x40): a
+    // human with a controller (+0x3E bit 0x80, controller number +0x3D = pad + 1) gets its name
+    // tag's Rumble (+0x18 the tag; fn_8004D9A8: the tag's +0x0C == 1) or, with no tag, the save's
+    // Rumble option of that pad (*(GameGlobal+0x24) + 0x820 + pad); the others none. Then
+    // fn_80110410(gmGlobalModeMelee*) masks the motors of every pad whose player has it off
+    // (gfPadSystem::maskMotor). (fn_8011058C, other modes', does both in one; an online match
+    // never calls it.) Online the match has no name tags, so a player's rumble was the save's
+    // option of their in-game port, not the Rumble of the tag they picked, which the waiting
+    // room's fighter has (training_room.cpp): a player whose tag rumbles, or who plays P2 with
+    // only port 1's option on, felt it only in the waiting room (Sarah's board, 2026-10-25). Now,
+    // after the game's own pass, this player's port gets their own setting, as offline: the
+    // lock-in's tag's Rumble, or with no tag the save's option of the pad they locked in with
+    // (lockPad), and the mask follows from the bits as before. Only this machine's motors follow
+    // from it (online.cpp routes nobody else's port to a controller); the bit already came from
+    // each machine's own save, and the setup key does not compare it.
+    typedef void (*PlayerRumbleFn)(u8* player);
+    static PlayerRumbleFn s_origPlayerRumble = NULL;
+    static const u32 PI_FLAGS_1B = 0x1B;       // gmPlayerInitData: bit 0x40 rumble
+    static const u32 PI_RUMBLE_PAD = 0x3D;     // gmPlayerInitData: the controller number rumble uses (pad + 1)
+    static const u32 PI_HAS_PAD = 0x3E;        // gmPlayerInitData: bit 0x80 a controller plays it
+    static const u8 PI_RUMBLE = 0x40;
+
+    static bool ownRumble()
+    {
+        const PPOM::Local& me = PPOM::g_block.local;
+        // As the game reads them: the tag's byte is on when 1, the save's option of pad p is
+        // +0x820 + p for any pad 0-7 (a Wii Remote's past the four ports', as offline).
+        if (me.own.flags & PPOM::PV_TAG) return me.own.rumble == 1;
+        u8* save = gg(0x24);
+        return save && me.lockPad < 8 && save[0x820 + me.lockPad] != 0;
+    }
+
+    static void hkPlayerRumble(u8* pl)
+    {
+        s_origPlayerRumble(pl);
+        const u8 me = PPOM::g_block.local.localPort;
+        if (!pl || !g_onlineCss || !g_onlineMatchGame || TrainingRoom::active() ||
+            OnlineMenu::nobodyPlaysHere() || me >= 4) return;
+        u8* mm = gg(0x08);
+        if (!mm || pl != mm + MM_PLAYERS + me * PLAYER_SIZE) return;
+        if (pl[0x01] != 0 || !(pl[PI_HAS_PAD] & 0x80) || pl[PI_RUMBLE_PAD] == 0) return;
+        pl[PI_FLAGS_1B] = (u8)((pl[PI_FLAGS_1B] & ~PI_RUMBLE) | (ownRumble() ? PI_RUMBLE : 0));
+        PPOM::g_block.debug.scratch[13] |= 0x100u << me;   // tests: this player's rumble applied
+    }
+
     // ---- sora_scene hooks (module hooks: the module is loaded after the plugins) ----
     // Each runs at the first instruction of a state of the decide function, where only its
     // non-volatile registers are live (r15 = the sequence, r17 = "loop again", r19 = the scene
@@ -1376,6 +1423,7 @@ namespace OnlineMatch {
         api->sySimpleHookRel(0x00036FDC, reinterpret_cast<void*>(hookState5), 1);
         api->sySimpleHookRel(0x00037580, reinterpret_cast<void*>(hookState10), 1);
         api->sySimpleHook(0x80110550, reinterpret_cast<void*>(hookPadConfigSet));
+        api->syReplaceFunc(0x80110368, reinterpret_cast<void*>(hkPlayerRumble), (void**)&s_origPlayerRumble);
         api->sySimpleHook(0x800F16DC, reinterpret_cast<void*>(hookSnapshot));
         api->sySimpleHookRel(0x00256EF0, reinterpret_cast<void*>(hookPauseResult), 27 /* SORA_MELEE */);
     }

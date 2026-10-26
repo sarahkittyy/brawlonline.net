@@ -316,7 +316,7 @@ namespace PPOM {
 
     struct PortValues {
         u8 flags;         // PortValueFlags
-        u8 rumble;        // the tag's rumble byte (local only; not applied online)
+        u8 rumble;        // the tag's rumble byte (local only: this machine's own player, hkPlayerRumble)
         u16 tag[TAG_CHARS];          // the tag's name (UTF-16, as the save keeps it)
         u8 layout[LAYOUT_SIZE];      // the tag's controls layout
         // The stock count picked on the panel's STOCKS box under the rules' stock control (P+'s
