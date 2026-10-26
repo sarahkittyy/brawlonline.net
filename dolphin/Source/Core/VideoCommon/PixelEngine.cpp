@@ -3,7 +3,9 @@
 
 #include "VideoCommon/PixelEngine.h"
 
+#include <cstdlib>
 #include <mutex>
+#include <string_view>
 
 #include "Common/BitField.h"
 #include "Common/ChunkFile.h"
@@ -15,6 +17,7 @@
 #include "Core/CoreTiming.h"
 #include "Core/HW/MMIO.h"
 #include "Core/HW/ProcessorInterface.h"
+#include "Core/Rollback/MachineSession.h"
 #include "Core/System.h"
 
 #include "VideoCommon/BoundingBox.h"
@@ -179,6 +182,20 @@ void PixelEngineManager::SetTokenFinish_OnMainThread_Static(Core::System& system
 
 void PixelEngineManager::SetTokenFinish_OnMainThread(u64 userdata, s64 cycles_late)
 {
+  // The deterministic GPU thread signals a draw done or a token when the CPU thread preprocesses
+  // it, before the GPU thread has run the draws ahead of it, so a game that refills a texture or
+  // vertex buffer once the GPU is done with it refilled it under the draws that still had to read
+  // it (Wii Sports's Mii faces, bug report #151). In a whole-machine session the CPU now waits
+  // here for the GPU thread, as it does on the console and in Dolphin's other dual core modes; the
+  // interrupt still comes at the same emulated time. PPR_MACHINE_GPU_DRAW_SYNC=0: no wait.
+  static const bool draw_sync = [] {
+    const char* v = std::getenv("PPR_MACHINE_GPU_DRAW_SYNC");
+    return !v || std::string_view(v) != "0";
+  }();
+  auto& fifo = m_system.GetFifo();
+  if (draw_sync && fifo.UseDeterministicGPUThread() && Machine::IsArmed())
+    fifo.SyncGPU(Fifo::SyncGPUReason::Other, false);
+
   std::unique_lock lk(m_token_finish_mutex);
   m_event_raised = false;
 
