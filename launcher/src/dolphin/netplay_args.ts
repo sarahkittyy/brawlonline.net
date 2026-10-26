@@ -103,8 +103,12 @@ export const renderInternalResolution = (resolution: ClipResolution) => Math.cei
  * all (`-b --render`: the comm file's `render` mode writes the video), as fast as the PC goes
  * (`[Core] EmulationSpeed` 0: frames are never dropped, the video is timed by the game), silent
  * (`[DSP] Volume`: the video gets the game's samples before the volume), not fullscreen, at the
- * internal resolution the video's height needs (480: 1x, 720 and 1080: 2x and 3x... ), and the
- * job's music (`[Online] Music`: off applies P+'s Music Off code).
+ * internal resolution the video's height needs (480: 1x, 720 and 1080: 2x and 3x... ), the
+ * job's music (`[Online] Music`: off applies P+'s Music Off code), and shaders compiled before the
+ * draw that needs them (`ShaderCompilationMode` 0, synchronous): the default skip-drawing mode
+ * leaves out every draw whose shader is still compiling, which a render, running faster than real
+ * time from its own shader cache, put in its videos as fighters, HUD and stage parts missing from
+ * the first second of a clip.
  */
 export function buildRenderDolphinArgs({ music, resolution }: RenderDolphinSettings): string[] {
   return [
@@ -120,5 +124,7 @@ export function buildRenderDolphinArgs({ music, resolution }: RenderDolphinSetti
     `Graphics.Settings.InternalResolution=${renderInternalResolution(resolution)}`,
     "-C",
     `Dolphin.Online.Music=${music ? "True" : "False"}`,
+    "-C",
+    "Graphics.Settings.ShaderCompilationMode=0",
   ];
 }

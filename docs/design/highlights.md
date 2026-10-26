@@ -178,7 +178,9 @@ Dolphin's command line plus `-b --render` (no window), `[Core] EmulationSpeed` 0
 goes: frames are never dropped, the video is timed by the game), `[DSP] Volume` 0 (the video gets
 the samples before the volume), not fullscreen, the internal resolution the video's height needs
 (`Graphics InternalResolution`: 480p 1x, 720p 2x, 1080p and 1440p 3x: the game's 528 lines scaled
-to at least the video's), and the job's `[Online] Music` (`buildRenderDolphinArgs`). It has its own User folder, `<userData>/render/User`
+to at least the video's), the job's `[Online] Music`, and synchronous shader compiling
+(`Graphics ShaderCompilationMode` 0: the players' skip-drawing default left fighters, HUD and stage
+parts out of a clip's first second while the render's own shader cache filled) (`buildRenderDolphinArgs`). It has its own User folder, `<userData>/render/User`
 (its own NAND, Brawl save seeded as the playback one's), so it never shares one with a playback
 Dolphin open at the same time; the SD card is shared read-only as for playback. The Dolphin stays
 open between jobs with the same release, music and resolution (a next one of the same replay goes

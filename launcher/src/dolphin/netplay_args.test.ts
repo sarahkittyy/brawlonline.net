@@ -2,7 +2,12 @@ import { INACTIVE_TEST_MODE, readTestMode } from "@common/test_mode";
 import path from "path";
 import { describe, expect, it } from "vitest";
 
-import { buildNetplayDolphinArgs, LOGGING_CONFIG_ARGS, WII_SETTINGS_CONFIG_ARGS } from "./netplay_args";
+import {
+  buildNetplayDolphinArgs,
+  buildRenderDolphinArgs,
+  LOGGING_CONFIG_ARGS,
+  WII_SETTINGS_CONFIG_ARGS,
+} from "./netplay_args";
 
 const sd = path.resolve("/data/netplay/pponline-sd/sd.raw");
 const dol = path.resolve("/data/netplay/User/Launcher/Project+ Netplay Launcher.dol");
@@ -92,5 +97,13 @@ describe("buildNetplayDolphinArgs", () => {
       testMode: readTestMode({ ...env, PPO_TEST_MODE: "1" }, true),
     });
     expect(optedIn.slice(-tail.length)).toEqual(tail);
+  });
+});
+
+describe("buildRenderDolphinArgs", () => {
+  it("compiles every shader before its draw, so a video never has draws left out", () => {
+    const args = buildRenderDolphinArgs({ music: true, resolution: 720 });
+    expect(args).toContain("Graphics.Settings.ShaderCompilationMode=0");
+    expect(args).toContain("Graphics.Settings.InternalResolution=2");
   });
 });
