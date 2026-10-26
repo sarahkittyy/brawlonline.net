@@ -3,9 +3,7 @@ import type { SettingsManager } from "@settings/settings_manager";
 import { shell } from "electron";
 import electronLog from "electron-log";
 
-import { dolphinToolNextTo } from "../dolphin_tool";
 import type { DolphinManager } from "../manager";
-import { DolphinLaunchType } from "../types";
 import {
   ipc_modsAddBuild,
   ipc_modsConfigureControllers,
@@ -44,7 +42,7 @@ export default function setupModsIpc({
     async () => {
       // DolphinTool runs from the bundled Dolphin's install folder (as for the game assets).
       await dolphinManager.bundledDolphinReady();
-      return dolphinToolNextTo(dolphinManager.getDolphinExecutablePath(DolphinLaunchType.NETPLAY));
+      return dolphinManager.dolphinToolPath();
     },
     async (uid, code) => {
       const result = await accountsManager.modRoom(uid, code);

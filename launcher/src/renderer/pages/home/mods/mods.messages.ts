@@ -127,6 +127,9 @@ export const ModsMessages = {
   noMatchingGameTitle: () => "You don't have any game matching this hash!",
   noMatchingGame: (name: string, hash: string) =>
     `This room plays ${name || "a game"} (${hash.slice(0, 8)}). Add the exact same game (or mod) to join it.`,
+  // A code typed in whose room plays the player's game with another disc or SD card (bug #158).
+  gameDiffersTitle: () => "Your game is different from the room's",
+  changeGame: () => "Change it",
   ok: () => "OK",
   joinPublicTooltip: (build: string) => `Start Dolphin with ${build} and join this room.`,
 

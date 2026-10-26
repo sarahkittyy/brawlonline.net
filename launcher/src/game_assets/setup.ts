@@ -1,5 +1,4 @@
 import { IsoValidity } from "@common/types";
-import { dolphinToolNextTo } from "@dolphin/dolphin_tool";
 import type { DolphinManager } from "@dolphin/manager";
 import { DolphinEventType, DolphinLaunchType } from "@dolphin/types";
 import type { SettingsManager } from "@settings/settings_manager";
@@ -97,7 +96,7 @@ export default function setupGameAssetsIpc({
         : {
             kind: "iso",
             path: isoPath,
-            dolphinToolPath: dolphinToolNextTo(dolphinManager.getDolphinExecutablePath(DolphinLaunchType.NETPLAY)),
+            dolphinToolPath: dolphinManager.dolphinToolPath(),
           };
       return { disc, sdRawPath: sdCardSeen ? sdRawPath : undefined };
     },

@@ -12,6 +12,7 @@ vi.mock("./disc_info", async (importOriginal) => ({
   discIdentity: (...args: unknown[]) => discIdentity(...(args as [])),
 }));
 
+import type { PublicModRoom } from "@accounts/types";
 import type { SettingsManager } from "@settings/settings_manager";
 
 import type { DolphinManager } from "../manager";
@@ -58,6 +59,7 @@ async function oldBuild(id: string, over: Partial<ModBuild> = {}): Promise<ModBu
 function manager(
   builds: ModBuild[],
   settings: Record<string, unknown> = { modBuilds: builds },
+  room: PublicModRoom | null = null,
 ): { mods: ModsManager; builds: () => ModBuild[]; settings: Record<string, unknown> } {
   const settingsManager = {
     get: () => settings,
@@ -70,7 +72,7 @@ function manager(
     settingsManager,
     dolphin,
     async () => "DolphinTool",
-    undefined,
+    async () => room,
     async () => "card",
   );
   return { mods, builds: () => settings.modBuilds as ModBuild[], settings };
@@ -182,5 +184,60 @@ describe("a new Wii game's save", () => {
     const { mods, builds } = manager([await newBuild("brawl", { sdPath })]);
     await mods.hashBuild("brawl");
     expect(await readdir(store(builds()[0].hash!)).catch(() => [])).toEqual([]);
+  });
+});
+
+describe("joinByCode", () => {
+  /** A game just added: not checked yet (its check runs in the background). */
+  async function unchecked(id: string, over: Partial<ModBuild> = {}): Promise<ModBuild> {
+    return { ...(await oldBuild(id, over)), hash: null, parts: null, hashKey: null };
+  }
+
+  const brawlRoom = (build: Partial<PublicModRoom["build"]> = {}): PublicModRoom => ({
+    code: "BKSD",
+    build: {
+      hash: combineBuildHash({ disc: BRAWL_NTSC_U_DISC, launcher: null, sd: false }),
+      name: "Brawl",
+      disc: BRAWL_NTSC_U_DISC,
+      discLabel: "RSBE01",
+      ...build,
+    },
+    hostName: "ANGE",
+    players: 1,
+    open: 4,
+  });
+
+  it("checks a game not checked yet and joins with it", async () => {
+    const { mods } = manager([await unchecked("brawl")], undefined, brawlRoom());
+    const join = vi.spyOn(mods, "join").mockResolvedValue({ outcome: "joining" });
+    expect(await mods.joinByCode({ uid: "u", code: "bksd" })).toEqual({ outcome: "joining" });
+    expect(join).toHaveBeenCalledWith({ buildId: "brawl", code: "BKSD", uid: "u" });
+  });
+
+  it("names the player's game when only its SD card keeps it out (bug report #158)", async () => {
+    const { mods } = manager([await unchecked("rex")], undefined, brawlRoom({ name: "REX", sd: "card" }));
+    const join = vi.spyOn(mods, "join");
+    expect(await mods.joinByCode({ uid: "u", code: "BKSD" })).toEqual({
+      outcome: "no-game",
+      name: "REX",
+      hash: brawlRoom().build.hash,
+      discLabel: "RSBE01",
+      closest: { buildId: "rex", part: "sd", roomHasCard: true },
+    });
+    expect(join).not.toHaveBeenCalled();
+  });
+
+  it("names the player's game on another disc of the room's game", async () => {
+    discIdentity.mockResolvedValueOnce("ff".repeat(20));
+    const { mods } = manager([await unchecked("dump")], undefined, brawlRoom());
+    const result = await mods.joinByCode({ uid: "u", code: "BKSD" });
+    expect(result).toMatchObject({ outcome: "no-game", closest: { buildId: "dump", part: "disc" } });
+  });
+
+  it("says there is no game when the player has none of the room's, without reading other games", async () => {
+    const { mods } = manager([await unchecked("mkwii", { gameId: "RMCE01" })], undefined, brawlRoom());
+    const result = await mods.joinByCode({ uid: "u", code: "BKSD" });
+    expect(result).toEqual({ outcome: "no-game", name: "Brawl", hash: brawlRoom().build.hash, discLabel: "RSBE01" });
+    expect(discIdentity).not.toHaveBeenCalled();
   });
 });

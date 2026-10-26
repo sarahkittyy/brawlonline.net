@@ -263,8 +263,16 @@ export type ModsJoinResult =
 export type ModsJoinByCodeOptions = { uid: string; code: string };
 export type ModsJoinByCodeResult =
   | ModsJoinResult
-  /** No game in the list has the room's hash. */
-  | { outcome: "no-game"; name: string; hash: string };
+  /** No game in the list plays the room. `closest`: the player's game of it whose `part` keeps it
+   * out (the disc differs, or an SD card is on one side only), to change; none when they have no
+   * such game. */
+  | {
+      outcome: "no-game";
+      name: string;
+      hash: string;
+      discLabel?: string;
+      closest?: { buildId: string; part: "disc" | "sd"; roomHasCard: boolean };
+    };
 
 export interface ModsService {
   getState(): Promise<ModsState>;

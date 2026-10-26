@@ -1,9 +1,7 @@
 import { IsoValidity } from "@common/types";
-import { dolphinToolNextTo } from "@dolphin/dolphin_tool";
 import type { GameDataFn } from "@dolphin/game_data";
 import { readGameData } from "@dolphin/game_data";
 import type { DolphinManager } from "@dolphin/manager";
-import { DolphinLaunchType } from "@dolphin/types";
 import { app } from "electron";
 import electronLog from "electron-log";
 import path from "path";
@@ -20,7 +18,7 @@ const running = new Map<string, Promise<IsoValidity>>();
 export function isoGameDataReader(dolphinManager: DolphinManager): GameDataFn {
   return async (discPath, onProgress) => {
     await dolphinManager.bundledDolphinReady();
-    const tool = dolphinToolNextTo(dolphinManager.getDolphinExecutablePath(DolphinLaunchType.NETPLAY));
+    const tool = dolphinManager.dolphinToolPath();
     return readGameData(tool, discPath, onProgress);
   };
 }

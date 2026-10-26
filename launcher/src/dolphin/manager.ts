@@ -20,6 +20,7 @@ import { isSubdirectory } from "utils/is_subdirectory";
 import { removeTree } from "utils/remove_tree";
 
 import { isAbnormalExit, keepCrashLog } from "./crash_log";
+import { dolphinToolNextTo } from "./dolphin_tool";
 import { clearInputDelayRequest, writeInputDelayRequest } from "./input_delay_handoff";
 import { brawlSaveDir, ensureBrawlSave, isUsableBrawlSave, listBrawlSaveFiles } from "./install/brawl_save";
 import { bundledDolphinSource, installBundledDolphin } from "./install/bundled_dolphin";
@@ -286,6 +287,15 @@ export class DolphinManager {
   /** The configured executable, or the default for this machine. */
   getDolphinExecutablePath(launchType: DolphinLaunchType): string {
     return this.settingsManager.getDolphinPath(launchType) ?? defaultDolphinExecutable(launchType, this._pathEnv());
+  }
+
+  /**
+   * DolphinTool: the bundled Dolphin's, also when Settings name another Dolphin. Another build's
+   * folder may have none (bug report #158: a mod's own Dolphin, so adding a game failed with
+   * "spawn ...DolphinTool.exe ENOENT"), or one without our commands (gamedata, sdhash).
+   */
+  dolphinToolPath(): string {
+    return dolphinToolNextTo(defaultDolphinExecutable(DolphinLaunchType.NETPLAY, this._pathEnv()));
   }
 
   getInstallation(launchType: DolphinLaunchType): LocalDolphinInstallation {

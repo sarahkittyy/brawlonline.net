@@ -168,12 +168,52 @@ export class ModsManager {
     // The player's game on the room's disc (another SD card is synced before the join), by its
     // hash of today's launcher.
     await this.rehashing;
+    await this.hashGamesOf(room.build);
     const match = matchRoom(room.build, this.builds());
     const build = match.joinable ? match.build : null;
     if (!build) {
-      return { outcome: "no-game", name: room.build.name, hash: room.build.hash };
+      // A game of the room's with a part that differs is named, not said to be missing (bug
+      // report #158: "it says that I don't have any game matching this hash and yet it is the
+      // EXACT same game/mod"), as the public rooms' list shows it.
+      const closest =
+        match.build && match.hasParts
+          ? {
+              buildId: match.build.id,
+              part: match.disc === "wrong" ? ("disc" as const) : ("sd" as const),
+              roomHasCard: !!room.build.sd,
+            }
+          : undefined;
+      // Warn: kept in the main.log a bug report sends.
+      log.warn(
+        `room ${code} (${room.build.name}, ${room.build.discLabel ?? "-"}, card ${
+          room.build.sd?.slice(0, 12) ?? "-"
+        }): no game plays it${closest ? `; ${match.build!.name}'s ${closest.part} differs` : ""}`,
+      );
+      return {
+        outcome: "no-game",
+        name: room.build.name,
+        hash: room.build.hash,
+        discLabel: room.build.discLabel,
+        closest,
+      };
     }
     return await this.join({ buildId: build.id, code, uid: options.uid });
+  }
+
+  /**
+   * Checks the games that could play the room (of its game ID, or all for a room that names
+   * none) before they are matched with it: one still being checked (just added) or never checked
+   * (its check failed) has no hash yet, so it never matched. A game checked since its files last
+   * changed is not read again.
+   */
+  private async hashGamesOf(room: ModRoomBuild): Promise<void> {
+    const gameId = room.discLabel?.split(" ")[0];
+    for (const build of this.builds()) {
+      if (gameId && build.gameId && build.gameId !== gameId) {
+        continue;
+      }
+      await this.hashBuild(build.id).catch((err) => log.warn(`hashing ${build.name}: ${err}`));
+    }
   }
 
   onEvent(listener: (event: ModsEvent) => void): () => void {

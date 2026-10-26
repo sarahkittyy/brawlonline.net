@@ -113,6 +113,20 @@ export const DolphinSettings = ({ dolphinType }: { dolphinType: DolphinLaunchTyp
           disabled={dolphinIsOpen}
           tooltipText={dolphinIsOpen ? Messages.closeDolphinToChange() : ""}
         />
+        {/* Back to the bundled Dolphin: the field itself cannot be emptied (bug report #158). */}
+        {dolphinPath && (
+          <Button
+            size="small"
+            color="secondary"
+            disabled={dolphinIsOpen}
+            onClick={() => void setDolphinPath(null)}
+            css={css`
+              margin-top: 6px;
+            `}
+          >
+            {Messages.defaultDolphinButton()}
+          </Button>
+        )}
         {!isBrawlOnlineDolphinVersion(dolphinVersion) && (
           <Typography
             variant="body2"

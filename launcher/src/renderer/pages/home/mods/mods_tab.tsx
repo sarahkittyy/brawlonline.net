@@ -5,6 +5,7 @@ import type {
   ModRoomRequest,
   ModSaveInfo,
   ModSdCardCheck,
+  ModsJoinByCodeResult,
   ModsSdChoice,
   ModsState,
 } from "@dolphin/mods/types";
@@ -35,6 +36,26 @@ const STALE_AFTER_MS = 15_000;
 // The main process's message, without Electron's "Error invoking remote method '…': Error: ".
 const errorText = (err: unknown) => withoutIpcPrefix(err instanceof Error ? err.message : String(err));
 
+type MissingGame = Pick<
+  Extract<ModsJoinByCodeResult, { outcome: "no-game" }>,
+  "name" | "hash" | "discLabel" | "closest"
+>;
+
+/** What keeps the player out of a room: their game's part that differs (as the public rooms'
+ * chips say it), or no game of it at all. */
+function missingText(missing: MissingGame): string {
+  const closest = missing.closest;
+  if (!closest) {
+    return Messages.noMatchingGame(missing.name, missing.hash);
+  }
+  if (closest.part === "sd") {
+    return closest.roomHasCard ? Messages.sdMissing() : Messages.sdExtra();
+  }
+  return missing.discLabel?.startsWith("RSB")
+    ? Messages.discDiffers(missing.discLabel)
+    : Messages.discDiffersGame(missing.discLabel);
+}
+
 /** Home > Other Games: the games, mods and the room, from the main process's ModsManager. */
 export const ModsTab = React.memo(function ModsTab() {
   const { modsService, backendService } = useServices();
@@ -58,8 +79,9 @@ export const ModsTab = React.memo(function ModsTab() {
   const [replacing, setReplacing] = useState<{ source: string; current: ModSaveInfo } | null>(null);
   // The game whose save is being read: an answer for another one (opened before) is dropped.
   const saveFor = useRef<string | null>(null);
-  // A room whose game the player does not have (a code typed in, or a public room).
-  const [missing, setMissing] = useState<{ name: string; hash: string } | null>(null);
+  // A room whose game the player does not have (a code typed in, or a public room), or has with
+  // a part that differs (`closest`: a code typed in; the public rooms' list shows that itself).
+  const [missing, setMissing] = useState<MissingGame | null>(null);
   // A room whose SD card differs from the player's: asked before Dolphin starts (sd_listing.ts).
   const [sdAsk, setSdAsk] = useState<{ buildId: string; code: string; check: ModSdCardCheck } | null>(null);
   const openLogin = useLoginModal((s) => s.openModal);
@@ -160,7 +182,7 @@ export const ModsTab = React.memo(function ModsTab() {
       }
       const result = await modsService.joinByCode({ uid, code });
       if (result.outcome === "no-game") {
-        setMissing({ name: result.name, hash: result.hash });
+        setMissing(result);
       } else if (result.outcome === "sd-card") {
         setSdAsk({ buildId: result.buildId, code: result.code, check: result.check });
       }
@@ -289,6 +311,9 @@ export const ModsTab = React.memo(function ModsTab() {
     void modsService.request(request).catch(showError);
   };
 
+  // The player's game of the room that differs from it (still in the list).
+  const missingGame = (missing?.closest && state?.builds.find((b) => b.id === missing.closest!.buildId)) || null;
+
   return (
     <>
       <ModsView
@@ -366,9 +391,20 @@ export const ModsTab = React.memo(function ModsTab() {
         onAnswer={onSdAnswer}
       />
       <Dialog open={missing !== null} onClose={() => setMissing(null)} maxWidth="xs" fullWidth={true}>
-        <DialogTitle>{Messages.noMatchingGameTitle()}</DialogTitle>
-        <DialogContent>{missing && Messages.noMatchingGame(missing.name, missing.hash)}</DialogContent>
+        <DialogTitle>{missingGame ? Messages.gameDiffersTitle() : Messages.noMatchingGameTitle()}</DialogTitle>
+        <DialogContent>{missing && missingText(missing)}</DialogContent>
         <DialogActions>
+          {missingGame && missing?.closest && (
+            <Button
+              onClick={() => {
+                const part = missing.closest!.part;
+                setMissing(null);
+                openEdit(missingGame, part);
+              }}
+            >
+              {Messages.changeGame()}
+            </Button>
+          )}
           <Button onClick={() => setMissing(null)}>{Messages.ok()}</Button>
         </DialogActions>
       </Dialog>

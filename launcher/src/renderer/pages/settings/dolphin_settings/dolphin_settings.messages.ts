@@ -20,6 +20,7 @@ export const DolphinSettingsMessages = {
   dolphinExecutable: (dolphinTypeName: string) => `{0} Executable`,
   dolphinExecutableDescription: () => "The Dolphin build to launch. Leave empty to use the default shown.",
   closeDolphinToChange: () => "Close Dolphin to change this setting",
+  defaultDolphinButton: () => "Use the default",
   notBrawlOnlineDolphin: () =>
     "Requires Brawl Online's specific dolphin build to function. Any regular dolphin install will not work.",
   mainFolder: () => "Brawl Online Folder",
