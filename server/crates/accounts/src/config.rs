@@ -160,6 +160,49 @@ impl MailConfig {
     }
 }
 
+/// [`SlurFilterConfig::slur_filter_models`]'s default (chosen on prod's names, 2026-10-26).
+pub const DEFAULT_SLUR_FILTER_MODELS: &str = "mistralai/Mistral-Small-3.2-24B-Instruct-2506";
+
+/// The racial slur check of display names and connect codes (`crate::slur_filter`). Shared by
+/// `accounts` and the admin CLI (`user slur-scan`). Off while DEEPINFRA_API_KEY is unset.
+#[derive(Debug, Clone, Args)]
+pub struct SlurFilterConfig {
+    /// DeepInfra API key. Unset or empty: names and codes are not checked.
+    #[arg(long, env = "DEEPINFRA_API_KEY", hide_env_values = true)]
+    pub deepinfra_api_key: Option<Secret>,
+
+    /// DeepInfra chat models, comma-separated: asked in turn, a slur only when every one says
+    /// YES (more models: fewer false alarms, and only flagged names cost the extra requests).
+    #[arg(long, env = "SLUR_FILTER_MODELS", value_delimiter = ',', default_value = DEFAULT_SLUR_FILTER_MODELS)]
+    pub slur_filter_models: Vec<String>,
+
+    /// DeepInfra's OpenAI-compatible chat completions URL.
+    #[arg(long, env = "SLUR_FILTER_URL", default_value = "https://api.deepinfra.com/v1/openai/chat/completions")]
+    pub slur_filter_url: String,
+
+    /// Seconds before each background re-check of a name or code stored while DeepInfra did not
+    /// answer (tests shorten them).
+    #[arg(
+        long,
+        env = "SLUR_FILTER_RECHECK_SECS",
+        value_delimiter = ',',
+        default_value = "30,120,600,3600",
+        hide = true
+    )]
+    pub slur_filter_recheck_secs: Vec<u64>,
+}
+
+impl Default for SlurFilterConfig {
+    fn default() -> Self {
+        SlurFilterConfig {
+            deepinfra_api_key: None,
+            slur_filter_models: DEFAULT_SLUR_FILTER_MODELS.split(',').map(String::from).collect(),
+            slur_filter_url: "http://127.0.0.1:9/never".into(),
+            slur_filter_recheck_secs: vec![30, 120, 600, 3600],
+        }
+    }
+}
+
 #[derive(Debug, Clone, Parser)]
 #[command(name = "accounts", about = "Accounts web service", version)]
 pub struct Config {
@@ -182,6 +225,9 @@ pub struct Config {
 
     #[command(flatten)]
     pub mail: MailConfig,
+
+    #[command(flatten)]
+    pub slur_filter: SlurFilterConfig,
 
     /// Require a verified email before a connect code and play key are issued.
     #[arg(long, env = "REQUIRE_EMAIL_VERIFICATION", default_value_t = true, action = clap::ArgAction::Set)]
@@ -277,6 +323,7 @@ impl Config {
             play_key_secret: "11".repeat(32),
             public_base_url: "http://127.0.0.1:0".into(),
             mail: MailConfig::for_tests(),
+            slur_filter: SlurFilterConfig::default(),
             require_email_verification: true,
             latest_version: "0.1.0".into(),
             trust_proxy_headers: false,

@@ -127,6 +127,8 @@ pub struct StackOptions {
     pub ranked_sweep_secs: Option<u64>,
     /// `BUG_REPORT_MAX_LOGS_BYTES` (default: the service's).
     pub bug_report_max_logs_bytes: Option<u64>,
+    /// `SLUR_FILTER_URL` (a stand-in for DeepInfra), with a test `DEEPINFRA_API_KEY`; default off.
+    pub slur_filter_url: Option<String>,
 }
 
 /// accounts + mm + a database, all for one test.
@@ -177,6 +179,11 @@ impl Stack {
         }
         if let Some(n) = opts.bug_report_max_logs_bytes {
             cfg.bug_report_max_logs_bytes = n;
+        }
+        if let Some(url) = opts.slur_filter_url {
+            cfg.slur_filter.slur_filter_url = url;
+            cfg.slur_filter.deepinfra_api_key = Some(accounts::config::Secret::new("di_e2e"));
+            cfg.slur_filter.slur_filter_recheck_secs = vec![1, 1];
         }
         let bug_reports_dir = std::env::temp_dir().join(format!("pp-e2e-bug-reports-{db_name}"));
         cfg.bug_reports_dir = bug_reports_dir.clone();

@@ -17,6 +17,7 @@ pub mod ranked;
 pub mod rooms;
 pub mod rulesets;
 pub mod sd_cards;
+pub mod slur_filter;
 pub mod social;
 pub mod store;
 
@@ -53,6 +54,8 @@ pub struct AppState {
     pub social: Arc<social::SocialHub>,
     /// Spectators and spectator chat (`/v1/live`).
     pub live: Arc<live::LiveHub>,
+    /// The racial slur check of names and codes (off without `DEEPINFRA_API_KEY`).
+    pub slur_filter: Arc<slur_filter::SlurFilter>,
 }
 
 impl AppState {
@@ -69,6 +72,7 @@ impl AppState {
             mm_status: Arc::new(rooms::MmStatusSource::new(&cfg.mm_status_url)),
             social: Arc::new(social::SocialHub::new(!cfg.disable_rate_limits)),
             live: Arc::new(live::LiveHub::new(!cfg.disable_rate_limits)),
+            slur_filter: Arc::new(slur_filter::SlurFilter::new(&cfg.slur_filter)?),
             cfg: Arc::new(cfg),
         })
     }
@@ -251,6 +255,7 @@ pub async fn run(cfg: Config) -> anyhow::Result<()> {
     let listener = tokio::net::TcpListener::bind(cfg.listen).await?;
     tracing::info!("listening on http://{}", listener.local_addr()?);
     let state = AppState::new(pool, cfg, mailer)?;
+    tracing::info!("slur filter {}", state.slur_filter.describe());
     serve(listener, state).await
 }
 

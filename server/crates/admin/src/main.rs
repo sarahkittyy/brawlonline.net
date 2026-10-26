@@ -4,7 +4,7 @@
 
 use std::time::Duration as StdDuration;
 
-use accounts::config::MailConfig;
+use accounts::config::{MailConfig, SlurFilterConfig};
 use accounts::mail;
 use accounts::store::{self, UserRow};
 use chrono::{Duration, Utc};
@@ -217,6 +217,31 @@ enum UserCmd {
         ident: String,
         code: String,
     },
+    /// Stop the account from changing its display name (the launcher's rename is refused) until
+    /// `unlock-name`. Only ever set by hand; the slur filter never locks anyone.
+    LockName {
+        ident: String,
+        /// Why (kept in audit_log).
+        #[arg(long)]
+        reason: Option<String>,
+    },
+    /// Lift a `lock-name`.
+    UnlockName {
+        ident: String,
+    },
+    /// Ask the slur filter (DEEPINFRA_API_KEY, as accounts) about every account's display name and
+    /// connect code start, and list the ones it calls a racial slur. With --apply, give those a
+    /// kind name or code start, as accounts does at sign-up. Banned accounts are skipped.
+    SlurScan {
+        /// Replace the flagged names and codes (default: only list them).
+        #[arg(long)]
+        apply: bool,
+        /// Requests to DeepInfra at once.
+        #[arg(long, default_value_t = 16)]
+        concurrency: usize,
+        #[command(flatten)]
+        filter: Box<SlurFilterConfig>,
+    },
     /// Delete an account with its sessions and email tokens. Its connect code is free again
     /// at once. Cannot be undone.
     Delete {
@@ -323,6 +348,10 @@ fn print_user(u: &UserRow) {
     match u.chat_muted_at {
         Some(t) => println!("chat muted:     since {}", t.format("%Y-%m-%d %H:%M UTC")),
         None => println!("chat muted:     no"),
+    }
+    match u.rename_locked_at {
+        Some(t) => println!("name locked:    since {}", t.format("%Y-%m-%d %H:%M UTC")),
+        None => println!("name locked:    no"),
     }
 }
 
@@ -666,6 +695,38 @@ async fn main() -> anyhow::Result<()> {
             .await?;
             println!("{} now has connect code {code}", u.email);
         }
+        Cmd::User(UserCmd::LockName { ident, reason }) => {
+            let u = find(&pool, &ident).await?;
+            store::set_rename_locked(&pool, u.uid, true).await?;
+            store::audit(
+                &pool,
+                &actor,
+                "user.lock_name",
+                Some(&u.uid.to_string()),
+                serde_json::json!({"name": u.display_name, "reason": reason}),
+            )
+            .await?;
+            println!(
+                "{} ({}) can no longer change their name{}",
+                u.display_name,
+                u.connect_code.as_deref().unwrap_or("-"),
+                if u.rename_locked_at.is_some() { "; it already was locked" } else { "" }
+            );
+        }
+        Cmd::User(UserCmd::UnlockName { ident }) => {
+            let u = find(&pool, &ident).await?;
+            store::set_rename_locked(&pool, u.uid, false).await?;
+            store::audit(&pool, &actor, "user.unlock_name", Some(&u.uid.to_string()), serde_json::json!({})).await?;
+            println!(
+                "{} ({}) can change their name again{}",
+                u.display_name,
+                u.connect_code.as_deref().unwrap_or("-"),
+                if u.rename_locked_at.is_none() { "; it was not locked" } else { "" }
+            );
+        }
+        Cmd::User(UserCmd::SlurScan { apply, concurrency, filter }) => {
+            slur_scan(&pool, &actor, &filter, apply, concurrency.max(1)).await?;
+        }
         Cmd::User(UserCmd::Delete { ident, yes }) => {
             let u = find(&pool, &ident).await?;
             anyhow::ensure!(yes, "this deletes {} ({}) for good; add --yes to confirm", u.email, u.uid);
@@ -682,6 +743,98 @@ async fn main() -> anyhow::Result<()> {
         }
     }
     Ok(())
+}
+
+/// `user slur-scan`: the slur filter over every account that is not banned; the flagged ones
+/// are listed, and with `apply` replaced (only if unchanged since the read).
+async fn slur_scan(
+    pool: &PgPool,
+    actor: &str,
+    cfg: &SlurFilterConfig,
+    apply: bool,
+    concurrency: usize,
+) -> anyhow::Result<()> {
+    use accounts::slur_filter::{SlurFilter, What};
+    use std::sync::Arc;
+    let filter = Arc::new(SlurFilter::new(cfg)?);
+    anyhow::ensure!(filter.enabled(), "the slur filter is off: set DEEPINFRA_API_KEY");
+    let users: Vec<UserRow> = store::list_users(pool).await?.into_iter().filter(|u| !u.is_banned()).collect();
+    let gate = Arc::new(tokio::sync::Semaphore::new(concurrency));
+    let mut checks = tokio::task::JoinSet::new();
+    for u in &users {
+        let mut asks = vec![(What::DisplayName, u.display_name.clone())];
+        if let Some((prefix, _)) = u.connect_code.as_deref().and_then(|c| c.split_once('#')) {
+            asks.push((What::CodeStart, prefix.to_string()));
+        }
+        for (what, text) in asks {
+            let (filter, gate, uid) = (filter.clone(), gate.clone(), u.uid);
+            checks.spawn(async move {
+                let _permit = gate.acquire_owned().await;
+                let mut answer = filter.is_slur(what, &text).await;
+                for _ in 0..2 {
+                    if answer.is_ok() {
+                        break;
+                    }
+                    tokio::time::sleep(StdDuration::from_secs(2)).await;
+                    answer = filter.is_slur(what, &text).await;
+                }
+                (uid, what, text, answer)
+            });
+        }
+    }
+    let (mut flagged, mut failed) = (Vec::new(), 0);
+    while let Some(done) = checks.join_next().await {
+        match done? {
+            (uid, what, text, Ok(true)) => flagged.push((uid, what, text)),
+            (_, _, _, Ok(false)) => {}
+            (uid, _, text, Err(e)) => {
+                failed += 1;
+                eprintln!("{uid} {text:?}: no answer ({e:#})");
+            }
+        }
+    }
+    flagged.sort_by_key(|(uid, what, _)| (*uid, *what == What::CodeStart));
+    let by_uid: std::collections::HashMap<_, _> = users.iter().map(|u| (u.uid, u)).collect();
+    for (uid, what, text) in &flagged {
+        let u = by_uid[uid];
+        let code = u.connect_code.as_deref().unwrap_or("-");
+        let (kind, change) = match what {
+            What::DisplayName => ("name", if apply { rename_slur(pool, actor, u).await? } else { None }),
+            What::CodeStart => ("code", if apply { recode_slur(pool, actor, u).await? } else { None }),
+        };
+        match change {
+            Some(to) => println!("{uid} {code:<10} {kind} {text:?} -> {to:?}"),
+            None => println!("{uid} {code:<10} {kind} {text:?}{}", if apply { " (changed since; left)" } else { "" }),
+        }
+    }
+    println!(
+        "{} account(s) checked, {} flagged, {failed} without an answer{}",
+        users.len(),
+        flagged.len(),
+        if apply || flagged.is_empty() { "" } else { "; --apply replaces them" }
+    );
+    Ok(())
+}
+
+async fn rename_slur(pool: &PgPool, actor: &str, u: &UserRow) -> anyhow::Result<Option<String>> {
+    let to = accounts::slur_filter::kind_name();
+    if !store::rename_if(pool, u.uid, &u.display_name, to).await? {
+        return Ok(None);
+    }
+    accounts::slur_filter::audit_replacement(pool, actor, "user.rename", u.uid, &u.display_name, to).await?;
+    Ok(Some(to.to_string()))
+}
+
+async fn recode_slur(pool: &PgPool, actor: &str, u: &UserRow) -> anyhow::Result<Option<String>> {
+    let Some(from) = u.connect_code.as_deref() else { return Ok(None) };
+    match store::reassign_connect_code(pool, u.uid, from, accounts::slur_filter::kind_prefix()).await {
+        Ok(to) => {
+            accounts::slur_filter::audit_replacement(pool, actor, "user.set_code", u.uid, from, &to).await?;
+            Ok(Some(to))
+        }
+        Err(store::AssignCodeError::AlreadyAssigned) => Ok(None),
+        Err(e) => Err(e.into()),
+    }
 }
 
 fn print_other_versions(others: &[(String, i32)]) {

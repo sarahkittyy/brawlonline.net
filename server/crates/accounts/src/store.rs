@@ -23,6 +23,8 @@ pub struct UserRow {
     pub created_at: DateTime<Utc>,
     /// Chat shadowban (`pp-admin mute`): its chat messages and DMs go nowhere, unknown to it.
     pub chat_muted_at: Option<DateTime<Utc>>,
+    /// Rename lock (`pp-admin user lock-name`): `/v1/me/rename` refuses.
+    pub rename_locked_at: Option<DateTime<Utc>>,
 }
 
 impl UserRow {
@@ -35,7 +37,7 @@ impl UserRow {
 }
 
 const USER_COLS: &str = "uid, email, email_verified_at, pw_hash, display_name, connect_code, \
-                         play_key_version, rules_version, role, banned_until, ban_reason, created_at,                          chat_muted_at";
+                         play_key_version, rules_version, role, banned_until, ban_reason, created_at,                          chat_muted_at, rename_locked_at";
 
 /// "Banned forever" is stored as a far-future timestamp.
 pub fn permanent_ban() -> DateTime<Utc> {
@@ -312,6 +314,28 @@ pub enum AssignCodeError {
 /// in 1..=999, then 1000..=9999 if the prefix leaves room. Retries if another
 /// sign-up takes the same code concurrently.
 pub async fn assign_connect_code(pool: &PgPool, uid: Uuid, prefix: &str) -> Result<String, AssignCodeError> {
+    assign_code_where(pool, uid, prefix, None).await
+}
+
+/// Gives an account that still has `current` a new code with `prefix` (the slur filter's
+/// replacement, `crate::slur_filter`). [`AssignCodeError::AlreadyAssigned`] if its code is no
+/// longer `current`.
+pub async fn reassign_connect_code(
+    pool: &PgPool,
+    uid: Uuid,
+    current: &str,
+    prefix: &str,
+) -> Result<String, AssignCodeError> {
+    assign_code_where(pool, uid, prefix, Some(current)).await
+}
+
+/// [`assign_connect_code`] when the account's code is `current` (NULL: none yet).
+async fn assign_code_where(
+    pool: &PgPool,
+    uid: Uuid,
+    prefix: &str,
+    current: Option<&str>,
+) -> Result<String, AssignCodeError> {
     for _attempt in 0..8 {
         let taken: Vec<String> = sqlx::query_scalar("SELECT connect_code FROM users WHERE connect_code LIKE $1")
             .bind(format!("{prefix}#%"))
@@ -325,10 +349,12 @@ pub async fn assign_connect_code(pool: &PgPool, uid: Uuid, prefix: &str) -> Resu
         };
         let code = ConnectCode::new(prefix, number).map_err(|_| AssignCodeError::Exhausted)?.to_string();
         let res = sqlx::query_scalar::<_, String>(
-            "UPDATE users SET connect_code = $2, updated_at = now() WHERE uid = $1 AND connect_code IS NULL RETURNING connect_code",
+            "UPDATE users SET connect_code = $2, updated_at = now()
+              WHERE uid = $1 AND connect_code IS NOT DISTINCT FROM $3 RETURNING connect_code",
         )
         .bind(uid)
         .bind(&code)
+        .bind(current)
         .fetch_optional(pool)
         .await;
         match res {
@@ -358,6 +384,30 @@ pub async fn rename(pool: &PgPool, uid: Uuid, name: &str) -> sqlx::Result<()> {
         .execute(pool)
         .await
         .map(|_| ())
+}
+
+/// Renames the account if its name is still `from` (the slur filter's late replacement, which
+/// must not undo a rename made since). Whether it did.
+pub async fn rename_if(pool: &PgPool, uid: Uuid, from: &str, to: &str) -> sqlx::Result<bool> {
+    sqlx::query("UPDATE users SET display_name = $3, updated_at = now() WHERE uid = $1 AND display_name = $2")
+        .bind(uid)
+        .bind(from)
+        .bind(to)
+        .execute(pool)
+        .await
+        .map(|r| r.rows_affected() == 1)
+}
+
+/// Locks (`pp-admin user lock-name`) or unlocks the account's display name.
+pub async fn set_rename_locked(pool: &PgPool, uid: Uuid, locked: bool) -> sqlx::Result<()> {
+    sqlx::query(
+        "UPDATE users SET rename_locked_at = CASE WHEN $2 THEN COALESCE(rename_locked_at, now()) END WHERE uid = $1",
+    )
+    .bind(uid)
+    .bind(locked)
+    .execute(pool)
+    .await
+    .map(|_| ())
 }
 
 pub async fn accept_rules(pool: &PgPool, uid: Uuid, version: i32) -> sqlx::Result<()> {

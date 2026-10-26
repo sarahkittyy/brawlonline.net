@@ -391,8 +391,8 @@ impl SocialHub {
     }
 
     /// Accounts changed in the database (`common::db::changed_users`). A banned one's stream gets
-    /// `banned` and ends, and the rest see it go offline. A renamed one is listed again with the
-    /// new name (`online`), and its own launcher gets `account` to read `/v1/me` again (its name,
+    /// `banned` and ends, and the rest see it go offline. A renamed one (or one with a new connect code,
+    /// the slur filter's) is listed again with the new name (`online`), and its own launcher gets `account` to read `/v1/me` again (its name,
     /// and the `user.json` its game reads). A mute changes nothing here: [`Self::dm`] reads it from
     /// the sender's account with each DM, and the muted player must not be able to tell.
     pub fn accounts_changed(&self, users: &[common::db::MmUser], wall: chrono::DateTime<chrono::Utc>) {
@@ -408,10 +408,16 @@ impl SocialHub {
                 Self::broadcast(&mut hub, &uid, &json!({"type": "offline", "uid": uid}).to_string());
                 continue;
             }
-            let Some(c) = hub.clients.get_mut(&uid).filter(|c| c.member.display_name != u.display_name) else {
+            let code = u.connect_code.clone().unwrap_or_default();
+            let Some(c) = hub
+                .clients
+                .get_mut(&uid)
+                .filter(|c| c.member.display_name != u.display_name || c.member.connect_code != code)
+            else {
                 continue;
             };
             c.member.display_name = u.display_name.clone();
+            c.member.connect_code = code;
             let listed = json!({"type": "online", "member": c.member}).to_string();
             Self::broadcast(&mut hub, &uid, &listed);
             Self::send_to(&mut hub, &uid, json!({"type": "account"}).to_string());

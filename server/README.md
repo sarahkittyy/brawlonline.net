@@ -104,8 +104,8 @@ JSON in and out. Errors are `{"error": {"code": "...", "message": "..."}}`. Auth
 | `POST /v1/auth/password-reset/confirm {token, newPassword}`, `GET/POST /reset-password` | | The page is the emailed link's form. Rotates the play key and ends all sessions. |
 | `POST /v1/auth/change-password {currentPassword, newPassword}` | | Same rotation; returns a new session. |
 | `GET /v1/me` | `getUser` | Includes `playKey` and `userJson` once the email is verified and a code is set. |
-| `POST /v1/me/netplay {codeStart}` | `userInitNetplay` | Assigns the connect code (once). |
-| `POST /v1/me/rename {displayName}` | `userRename` | |
+| `POST /v1/me/netplay {codeStart}` | `userInitNetplay` | Assigns the connect code (once). A code start the slur filter flags gets a kind one (below). |
+| `POST /v1/me/rename {displayName}` | `userRename` | A name the slur filter flags is stored as a kind one (below). 403 `rename_locked` while `admin user lock-name` holds the account. |
 | `POST /v1/me/accept-rules {num}` | `userAcceptRules` | |
 | `GET /v1/me/user-json` | launcher `user.json` | Exactly `{uid, playKey, connectCode, displayName, latestVersion}`. |
 | `GET /v1/me/matches?mode=all\|ranked\|unranked\|rooms&limit=&before=` | | The player's match history, newest first (see "Match history"). `{matches: [{matchId, mode, createdAt, status, ranked, players: [{uid, displayName, connectCode, wins, ratingBefore, ratingAfter, ratingChange, port, team, place}], winner, endReason, room}], next}`. `mode` is `ranked`, `unranked`, `direct` or `room`; a room's game has `room: {code, mode}` (`1v1`, `ffa`, `teams`) and each player's `port` (slot), `team` (team battles: 0 red, 1 blue, 2 green) and `place`, all null for the other modes. `limit` 20 by default, at most 50; `before` is the previous page's `next`. |
@@ -124,6 +124,7 @@ JSON in and out. Errors are `{"error": {"code": "...", "message": "..."}}`. Auth
 Rules:
 - **Connect codes**: the user picks 2-4 letters (`/^[a-zA-Z]+$/`, stored uppercase). The server appends `#N`, the lowest free number from a random start in 1-999, falling back to 1000-9999 only if all 999 are taken and the code stays at most 8 characters (so a 4-letter prefix never gets 4 digits). Codes are unique and immutable (`admin user set-code` for the one approved change). Codes typed in-game are matched case- and width-insensitively, and leading zeros in the number are ignored (`ＡＢ＃００７` = `AB#7`).
 - **Display names**: 1-15 characters of printable ASCII, Hiragana or Katakana, without `\` or `` ` `` (the Slippi launcher rule).
+- **Racial slurs** (`crates/accounts/src/slur_filter.rs`, 2026-10-26): every display name at sign-up and rename, and every code start, goes to a small LLM on DeepInfra (`DEEPINFRA_API_KEY`; `SLUR_FILTER_MODELS`, default `mistralai/Mistral-Small-3.2-24B-Instruct-2506`; with a comma-separated list every model must say YES) that answers YES only for a racial or ethnic slur, spelled out, disguised or inside a longer word, and NO for profanity, sexual words and other insults (left to the admins). Chosen on prod's 3715 names and 3039 code starts (2026-10-26, all at once): with this prompt it flagged exactly the 6 n-word/chink names an admin had found and renamed that day plus the codes `NIG`, `NIGA`, `NIGG`, `NIGR`, nothing else (it missed `NIQQ`); Qwen3-Next-80B also flagged `GOO`, `IKE`, ZoomZike; an earlier, looser prompt made every model flag 50-180 innocent names (Japenis, Chang9, TANG), Llama 3.1 8B the most. About 275 tokens a check (US$0.00002), ~0.8 s. A YES stores a kind name instead ("happy friend", "whimsy and love", ...) or a kind code start (`JOY`, `LOVE`, ...), the player is not told why. The request waits for the answer (5 s at most); when DeepInfra fails the text is stored as typed and checked again in the background after 30 s, 2, 10 and 60 minutes, replaced only if the account still has it. Late replacements are in `audit_log` (actor `slur-filter`) and reach the launcher and rooms within seconds, as an admin rename. Answers are cached in memory. Off while the key is unset. `admin user slur-scan` checks the existing accounts. The filter never locks anyone; `admin user lock-name` does, by hand.
 - **Passwords**: 8-256 characters, Argon2id with m = 64 MiB, t = 3, p = 1.
 - **Rate limits** (in memory, per process; `common::ratelimit` and `accounts::Limits`). Sign-up is open to everyone, so every path that sends an email is limited, and neither one client nor one kind of email can use up the email quota (Brevo's free plan: 300 a day). The client IP is the last `X-Forwarded-For` entry behind the proxy, and an IPv6 /64 counts as one address. A refusal is 429 `rate_limited` with `Retry-After`.
 
@@ -304,6 +305,9 @@ admin user verify-email IDENT
 admin user rotate-play-key IDENT
 admin user rename IDENT NAME                   # the launcher's name rule; rooms, chat, the online list and the player's launcher show it within seconds
 admin user set-code IDENT CODE
+admin user lock-name IDENT [--reason TEXT]     # the player can no longer rename (403 rename_locked); never automatic
+admin user unlock-name IDENT
+admin user slur-scan [--apply]                 # the slur filter (DEEPINFRA_API_KEY) over every unbanned account's name and code start; --apply replaces the flagged ones
 admin user delete IDENT --yes                  # with its sessions and email tokens; the connect code is free again at once
 admin chat-reports [--limit N]                 # unhandled chat reports, newest first: who, group, reason, verified/total, the texts
 admin chat-report-done ID                      # mark a chat report handled

@@ -365,3 +365,90 @@ async fn signups_and_emails_are_limited() {
     }
     s.shutdown().await;
 }
+
+/// A stand-in for DeepInfra's chat completions: YES for texts with "badword" or "BADW" in them,
+/// NO otherwise; a text with "flaky" or "FLAK" gets a 503 the first time and YES after.
+async fn fake_deepinfra() -> String {
+    use axum::{extract::State, http::StatusCode, routing::post, Json, Router};
+    use std::sync::{Arc, Mutex};
+    type Seen = Arc<Mutex<std::collections::HashSet<String>>>;
+    async fn chat(
+        State(seen): State<Seen>,
+        Json(body): Json<serde_json::Value>,
+    ) -> (StatusCode, Json<serde_json::Value>) {
+        let text = body["messages"][1]["content"].as_str().unwrap_or_default().to_string();
+        let flaky = text.contains("flaky") || text.contains("FLAK");
+        if flaky && seen.lock().unwrap().insert(text.clone()) {
+            return (StatusCode::SERVICE_UNAVAILABLE, Json(json!({"error": "busy"})));
+        }
+        let yes = flaky || text.contains("badword") || text.contains("BADW");
+        let word = if yes { "YES" } else { "NO" };
+        (StatusCode::OK, Json(json!({"choices": [{"message": {"role": "assistant", "content": word}}]})))
+    }
+    let app = Router::new().route("/chat", post(chat)).with_state(Seen::default());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    format!("http://{addr}/chat")
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn racial_slurs_in_names_and_codes_are_replaced() {
+    use accounts::slur_filter::{KIND_NAMES, KIND_PREFIXES};
+    let url = fake_deepinfra().await;
+    let s = Stack::start(StackOptions { slur_filter_url: Some(url), ..Default::default() }).await.unwrap();
+    let kind_name = |v: &serde_json::Value| KIND_NAMES.contains(&v.as_str().unwrap());
+    let kind_code = |v: &serde_json::Value| KIND_PREFIXES.contains(&v.as_str().unwrap().split_once('#').unwrap().0);
+
+    // Sign-up: the slur is never stored; a clean name is kept as typed.
+    let (st, body) = s
+        .post(
+            "/v1/auth/signup",
+            None,
+            json!({"email": "a@x.test", "password": "correct horse battery", "displayName": "xXbadwordXx"}),
+        )
+        .await;
+    assert_eq!(st, 201, "{body}");
+    assert!(kind_name(&body["user"]["displayName"]), "{body}");
+    let session = body["sessionToken"].as_str().unwrap().to_string();
+    let (session_b, _) = s.create_player("b@x.test", "Night", "NIGH").await;
+    assert_eq!(s.get("/v1/me", Some(&session_b)).await.1["displayName"], "Night");
+    assert!(s.get("/v1/me", Some(&session_b)).await.1["connectCode"].as_str().unwrap().starts_with("NIGH#"));
+
+    // Code start.
+    let token = s.mailed_token("a@x.test");
+    assert_eq!(s.post("/v1/auth/verify-email", None, json!({"token": token})).await.0, 200);
+    let (st, body) = s.post("/v1/me/netplay", Some(&session), json!({"codeStart": "BADW"})).await;
+    assert_eq!(st, 200, "{body}");
+    assert!(kind_code(&body["connectCode"]), "{body}");
+
+    // Rename.
+    let (st, body) = s.post("/v1/me/rename", Some(&session_b), json!({"displayName": "badword 2"})).await;
+    assert_eq!(st, 200, "{body}");
+    assert!(kind_name(&body["displayName"]), "{body}");
+
+    // DeepInfra failing: stored as typed, replaced by the background re-check a second later.
+    let (st, body) = s.post("/v1/me/rename", Some(&session_b), json!({"displayName": "flaky"})).await;
+    assert_eq!((st, body["displayName"].as_str()), (200, Some("flaky")), "{body}");
+    let (session_c, _) = s.create_player("c@x.test", "carol", "FLAK").await;
+    let code_c = s.get("/v1/me", Some(&session_c)).await.1["connectCode"].as_str().unwrap().to_string();
+    assert!(code_c.starts_with("FLAK#"), "{code_c}");
+    tokio::time::sleep(std::time::Duration::from_millis(2500)).await;
+    assert!(kind_name(&s.get("/v1/me", Some(&session_b)).await.1["displayName"]));
+    assert!(kind_code(&s.get("/v1/me", Some(&session_c)).await.1["connectCode"]));
+    let audits: i64 = sqlx::query_scalar("SELECT count(*) FROM audit_log WHERE actor = 'slur-filter'")
+        .fetch_one(&s.pool)
+        .await
+        .unwrap();
+    assert_eq!(audits, 2);
+
+    // A rename lock (pp-admin user lock-name) refuses every rename.
+    let uid_b = s.get("/v1/me", Some(&session_b)).await.1["uid"].as_str().unwrap().parse().unwrap();
+    accounts::store::set_rename_locked(&s.pool, uid_b, true).await.unwrap();
+    let (st, body) = s.post("/v1/me/rename", Some(&session_b), json!({"displayName": "anything"})).await;
+    assert_eq!((st, body["error"]["code"].as_str()), (403, Some("rename_locked")), "{body}");
+    accounts::store::set_rename_locked(&s.pool, uid_b, false).await.unwrap();
+    let (st, body) = s.post("/v1/me/rename", Some(&session_b), json!({"displayName": "anything"})).await;
+    assert_eq!((st, body["displayName"].as_str()), (200, Some("anything")), "{body}");
+    s.shutdown().await;
+}

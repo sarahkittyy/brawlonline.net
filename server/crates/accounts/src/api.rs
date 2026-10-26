@@ -16,6 +16,7 @@ use uuid::Uuid;
 use crate::error::{ApiError, ApiResult};
 use crate::mail;
 use crate::password::{self, validate_password};
+use crate::slur_filter;
 use crate::store::{self, CreateUserError, TokenPurpose, UserRow};
 use crate::{AppState, Limits};
 
@@ -230,13 +231,17 @@ pub async fn signup(
         e
     };
     let pw_hash = password::hash_async(state.hash_params, req.password).await.map_err(|e| refused(e.into()))?;
-    let user = store::create_user(&state.pool, &email, &pw_hash, &req.display_name).await.map_err(|e| {
+    let (name, recheck) = slur_filter::screen_name(&state, &req.display_name).await;
+    let user = store::create_user(&state.pool, &email, &pw_hash, &name).await.map_err(|e| {
         refused(match e {
             CreateUserError::EmailTaken => ApiError::conflict("email_taken", e.to_string()),
             CreateUserError::Db(e) => ApiError::internal(e),
         })
     })?;
     tracing::info!(uid = %user.uid, "account created");
+    if recheck {
+        slur_filter::recheck_name(&state, user.uid, name);
+    }
     if state.cfg.require_email_verification {
         send_verification(&state, &user).await?;
     }
@@ -437,12 +442,16 @@ pub async fn init_netplay(
     }
     let prefix =
         validate_code_start(&req.code_start).map_err(|e| ApiError::bad_request("invalid_code", e.to_string()))?;
+    let (prefix, recheck) = slur_filter::screen_code_start(&state, &prefix).await;
     let code = store::assign_connect_code(&state.pool, user.uid, &prefix).await.map_err(|e| match e {
         store::AssignCodeError::AlreadyAssigned => ApiError::conflict("code_already_set", e.to_string()),
         store::AssignCodeError::Exhausted => ApiError::conflict("prefix_exhausted", e.to_string()),
         store::AssignCodeError::Db(e) => ApiError::internal(e),
     })?;
     tracing::info!(uid = %user.uid, %code, "connect code assigned");
+    if recheck {
+        slur_filter::recheck_code(&state, user.uid, code);
+    }
     let user = store::user_by_uid(&state.pool, user.uid).await?.ok_or_else(ApiError::not_found)?;
     Ok(Json(me(&state, &user)))
 }
@@ -462,7 +471,14 @@ pub async fn rename(
     let user = current_user(&state, &headers).await?;
     validate_display_name(&req.display_name)
         .map_err(|e| ApiError::bad_request("invalid_display_name", e.to_string()))?;
-    store::rename(&state.pool, user.uid, &req.display_name).await?;
+    if user.rename_locked_at.is_some() {
+        return Err(ApiError::forbidden("rename_locked", "Your name can't be changed. Contact the admins."));
+    }
+    let (name, recheck) = slur_filter::screen_name(&state, &req.display_name).await;
+    store::rename(&state.pool, user.uid, &name).await?;
+    if recheck {
+        slur_filter::recheck_name(&state, user.uid, name);
+    }
     let user = store::user_by_uid(&state.pool, user.uid).await?.ok_or_else(ApiError::not_found)?;
     Ok(Json(me(&state, &user)))
 }
