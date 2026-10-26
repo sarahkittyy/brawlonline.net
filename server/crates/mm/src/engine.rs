@@ -63,7 +63,9 @@
 //!
 //! The queues share the failed-connect rule: Slippi's 1v1 client requeues with a new ticket when
 //! its 8 s P2P window fails, so a pair matched again within `requeue_window` is taken to have
-//! failed. Direct holds such a pair back (P2P window + `repair_backoff` × failures) and errors
+//! failed when one of them searched again within `FAILED_REQUEUE` (12 s) of that match (a later
+//! search means the two connected and played: Unranked and Ranked hold them back as a rematch).
+//! Direct holds such a pair back (P2P window + `repair_backoff` × failures) and errors
 //! after `max_connect_failures`; Unranked and Ranked pair each of them with someone else when they
 //! can, re-pair them only after the same backoff, and after `max_connect_failures` stop pairing
 //! them with each other (they keep searching) until the window has passed.
@@ -111,6 +113,12 @@ pub const MAX_PACKET: usize = 8 * 1024;
 /// Slippi's P2P connect window: 8 s, after which a 1v1 client requeues
 /// with a new ticket (`SlippiNetplay.cpp:778-779`, `SlippiMatchmaking.cpp:891-898`).
 pub const P2P_CONNECT_WINDOW: Duration = Duration::from_secs(8);
+
+/// A pair matched again within `requeue_window` failed its P2P connect only if one of the two
+/// searched again within this long of that match. Prod's failed connects requeue 8.0-8.8 s after
+/// "matched"; a pair whose tickets both came later connected and played (a quick quit, a short
+/// game), so the rematch hold applies to it, not the re-pair backoff (board card 229).
+pub const FAILED_REQUEUE: Duration = Duration::from_secs(12);
 
 #[derive(Debug, Clone)]
 pub struct EngineConfig {
@@ -1633,9 +1641,10 @@ impl Engine {
         let Some(Conn { state: State::Waiting(them), .. }) = self.conns.get(&other) else { return };
         let key = pair_key(me.user.uid, them.user.uid);
         let (my_code, their_code) = (me.code.clone(), them.code.clone());
+        let searched = me.since.min(them.since);
 
         if let Some(h) = self.history.get(&key).copied() {
-            if now.saturating_duration_since(h.last_match) < self.cfg.requeue_window {
+            if self.failed_connect(now, &h, searched) {
                 // Both searched for each other again right after a match: the
                 // P2P connect failed. Space the retries out, and give up after a few.
                 let failures = h.failures + 1;
@@ -1713,6 +1722,15 @@ impl Engine {
         self.cfg.ping_limit + self.cfg.ping_limit_step * steps
     }
 
+    /// Whether a pair with this history, the earlier of whose current tickets came at `searched`,
+    /// is retrying a failed P2P connect: matched within `requeue_window`, and one of them searched
+    /// again within `FAILED_REQUEUE` of that match. Otherwise the two connected (or it was long
+    /// ago) and the pair is fresh.
+    fn failed_connect(&self, now: Instant, h: &PairHistory, searched: Instant) -> bool {
+        now.saturating_duration_since(h.last_match) < self.cfg.requeue_window
+            && searched.saturating_duration_since(h.last_match) < FAILED_REQUEUE
+    }
+
     /// Whether `a` and `b` were each other's last opponent (within `rematch_memory`).
     fn just_played(&self, now: Instant, a: Uuid, b: Uuid) -> bool {
         let last = |x: Uuid, y: Uuid| {
@@ -1729,10 +1747,10 @@ impl Engine {
     /// such ticket (no estimate counts as `ping_limit`; ties: arrival order); Ranked the
     /// closest-rated one within the rating band of the longer-waiting of the two (ties: arrival
     /// order). Two who just played each other wait until the longer-waiting has waited
-    /// `rematch_hold`. A pair matched within `requeue_window` failed its P2P connect (Slippi
-    /// requeues with a new ticket): anyone else in the queue goes first; the same two again only
-    /// after the backoff, and not at all after `max_connect_failures`. Returns (older, newer,
-    /// failures so far).
+    /// `rematch_hold`. A pair matched within `requeue_window` whose new search came within
+    /// `FAILED_REQUEUE` of it failed its P2P connect (Slippi requeues with a new ticket): anyone
+    /// else in the queue goes first; the same two again only after the backoff, and not at all
+    /// after `max_connect_failures`. Returns (older, newer, failures so far).
     fn next_queue_pair(&self, mode: Mode, now: Instant) -> Option<(ConnId, ConnId, u32)> {
         let ranked = mode == Mode::Ranked;
         let queue: Vec<(ConnId, &Waiting)> = self
@@ -1771,7 +1789,7 @@ impl Engine {
                 let recent = self
                     .history
                     .get(&pair_key(wa.user.uid, wb.user.uid))
-                    .filter(|h| now.saturating_duration_since(h.last_match) < self.cfg.requeue_window);
+                    .filter(|h| self.failed_connect(now, h, wa.since.min(wb.since)));
                 let Some(h) = recent else {
                     if longer < self.cfg.rematch_hold && self.just_played(now, wa.user.uid, wb.user.uid) {
                         continue;
@@ -3000,6 +3018,63 @@ mod tests {
         let m = matches(&h.advance(Duration::from_secs(1)));
         assert_eq!(m.len(), 1);
         assert_eq!(pair_of(&m[0]), pair_key(u[0].uid, u[1].uid));
+    }
+
+    /// A game over within the failed-connect window (a quick quit) is a rematch, not a failed
+    /// connect: the two searched again well after Slippi's 8 s window, so the rematch hold applies
+    /// (board card 229: re-paired 13-55 s after a short game, the hold never ran).
+    #[test]
+    fn a_short_game_is_held_back_like_any_rematch() {
+        let mut h = Harness::new(EngineConfig::default());
+        let u = h.users(2);
+        let mut conn = 0;
+        let mut search = |h: &mut Harness, who: &MmUser| -> Vec<Output> {
+            conn += 1;
+            h.connect(conn, 41000);
+            h.unranked(conn, who)
+        };
+        search(&mut h, &u[0]);
+        assert_eq!(matches(&search(&mut h, &u[1])).len(), 1);
+        let first = h.now;
+
+        // One quits 20 s in; both search again: not paired at the failed-connect backoff ...
+        h.now = first + Duration::from_secs(20);
+        search(&mut h, &u[0]);
+        h.now = first + Duration::from_secs(22);
+        assert!(matches(&search(&mut h, &u[1])).is_empty());
+        assert!(matches(&h.advance(Duration::from_secs(30))).is_empty());
+        // ... but once the longer-waiting has waited 60 s.
+        h.now = first + Duration::from_secs(79);
+        assert!(matches(&h.advance(Duration::ZERO)).is_empty());
+        h.now = first + Duration::from_secs(80);
+        let m = matches(&h.advance(Duration::ZERO));
+        assert_eq!(m.len(), 1);
+        assert_eq!(pair_of(&m[0]), pair_key(u[0].uid, u[1].uid));
+    }
+
+    /// Direct: friends who played a short game and search for each other again are paired at
+    /// once, not backed off as a failed connect (and never told they cannot connect).
+    #[test]
+    fn direct_short_game_rematch_is_immediate() {
+        let mut h = Harness::new(EngineConfig::default());
+        let (a, b) = (user("AA#1", "a"), user("BB#1", "b"));
+        h.add(&a);
+        h.add(&b);
+        let mut conn = 0;
+        let mut pair = |h: &mut Harness| -> Vec<Output> {
+            conn += 2;
+            h.connect(conn - 1, 1);
+            h.connect(conn, 2);
+            let mut out = h.ticket(conn - 1, &a, "BB#1");
+            out.extend(h.ticket(conn, &b, "AA#1"));
+            out
+        };
+        let matched = |out: &[Output]| out.iter().any(|o| matches!(o, Output::RecordMatch(_)));
+        for _ in 0..4 {
+            assert!(matched(&pair(&mut h)));
+            h.now += Duration::from_secs(15);
+            h.advance(Duration::ZERO);
+        }
     }
 
     #[test]
