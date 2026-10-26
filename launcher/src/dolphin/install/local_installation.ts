@@ -21,6 +21,7 @@ import type { DolphinInstallation, DolphinLaunchType } from "../types";
 import { nandRootFor } from "./brawl_save";
 import { executeCommand } from "./execute_command";
 import type { DolphinVersionResponse } from "./fetch_latest_version";
+import { notProjectPlusCard } from "./pplus_release";
 
 const log = electronLog.scope("dolphin/localInstallation");
 
@@ -208,6 +209,12 @@ export class LocalDolphinInstallation implements DolphinInstallation {
         `Project+ files are missing from the Dolphin User folder (${this.userFolder}): ${missing.join(", ")}. ` +
           `They are downloaded from Project+'s official release when the launcher starts; ` +
           `check your connection and restart the launcher.`,
+      );
+    }
+    if (await notProjectPlusCard(sd)) {
+      throw new Error(
+        `The SD card ${sd} is not Project+'s. The launcher gets Project+'s card from Project+'s ` +
+          `official release when it starts; check your connection and restart the launcher.`,
       );
     }
   }

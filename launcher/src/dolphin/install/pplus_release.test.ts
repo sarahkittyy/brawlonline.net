@@ -1,3 +1,5 @@
+import { Fat32Volume } from "@brawl_assets/fat32_writer";
+import { makeEmptyFat32Image } from "@brawl_assets/testing/fat_image";
 import { formatBytes } from "@common/disk_space";
 import crypto from "crypto";
 import fs from "fs";
@@ -14,6 +16,7 @@ import {
   ensureNetplaySave,
   installProjectPlusFiles,
   missingProjectPlusFiles,
+  notProjectPlusCard,
   PPLUS_RELEASE,
   readMarker,
   sha256File,
@@ -334,6 +337,52 @@ describe("installProjectPlusFiles", () => {
     await installProjectPlusFiles({ target, release });
     expect(await read(path.join(target.userFolder, "Wii", "sd.raw"))).toEqual(mine);
     expect(await read(path.join(target.userFolder, "Launcher", "Project+ Netplay Launcher.dol"))).toEqual(NETPLAY_DOL);
+  });
+
+  it("replaces a blank SD card Dolphin made before the release came (bug report #157)", async () => {
+    // Dolphin's own card (SDCardUtil.cpp): an empty FAT32 volume at <User>/Wii/sd.raw.
+    const sd = path.join(target.userFolder, "Wii", "sd.raw");
+    await fs.promises.mkdir(path.dirname(sd), { recursive: true });
+    await makeEmptyFat32Image(sd);
+    expect(await notProjectPlusCard(sd)).toBe("blank");
+    const release = await serve(makeZip(releaseFiles()));
+
+    expect(await missingProjectPlusFiles(target, release)).toContain("Wii/sd.raw (not a Project+ card)");
+    await installProjectPlusFiles({ target, release });
+    expect(await read(sd)).toEqual(SD);
+    expect(fs.readdirSync(path.dirname(sd))).toEqual(["sd.raw"]);
+  });
+
+  it("keeps a card with files of its own but no Project+ next to the release's", async () => {
+    const sd = path.join(target.userFolder, "Wii", "sd.raw");
+    await fs.promises.mkdir(path.dirname(sd), { recursive: true });
+    await makeEmptyFat32Image(sd);
+    const vol = await Fat32Volume.open(sd, { writable: true });
+    await vol.writeFile("/private/wii/app/RSBE/st/st_001.bin", filled(700, 8));
+    await vol.close();
+    const theirs = await sha256File(sd);
+    expect(await notProjectPlusCard(sd)).toBe("other");
+    const release = await serve(makeZip(releaseFiles()));
+
+    await installProjectPlusFiles({ target, release });
+    expect(await read(sd)).toEqual(SD);
+    expect(await sha256File(path.join(path.dirname(sd), "sd (not Project+).raw"))).toBe(theirs);
+  });
+
+  it("takes a FAT card with a Project+ folder for Project+'s", async () => {
+    const sd = path.join(target.userFolder, "Wii", "sd.raw");
+    await fs.promises.mkdir(path.dirname(sd), { recursive: true });
+    await makeEmptyFat32Image(sd);
+    const vol = await Fat32Volume.open(sd, { writable: true });
+    await vol.writeFile("/Project+/info.xml", Buffer.from("<version>3.2</version>"));
+    await vol.close();
+    const mine = await sha256File(sd);
+    expect(await notProjectPlusCard(sd)).toBeNull();
+    const release = await serve(makeZip(releaseFiles()));
+
+    expect(await missingProjectPlusFiles(target, release)).not.toContainEqual(expect.stringMatching(/sd\.raw/));
+    await installProjectPlusFiles({ target, release });
+    expect(await sha256File(sd)).toBe(mine);
   });
 
   it("reuses a verified download left by an interrupted extraction", async () => {

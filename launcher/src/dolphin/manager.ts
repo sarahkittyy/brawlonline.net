@@ -24,7 +24,7 @@ import { dolphinToolNextTo } from "./dolphin_tool";
 import { clearInputDelayRequest, writeInputDelayRequest } from "./input_delay_handoff";
 import { brawlSaveDir, ensureBrawlSave, isUsableBrawlSave, listBrawlSaveFiles } from "./install/brawl_save";
 import { bundledDolphinSource, installBundledDolphin } from "./install/bundled_dolphin";
-import { asDiskSpaceError } from "./install/disk_space";
+import { asDiskSpaceError, DiskSpaceError, isDiskFull } from "./install/disk_space";
 import { fetchLatestVersion } from "./install/fetch_latest_version";
 import { LocalDolphinInstallation } from "./install/local_installation";
 import type { FolderMove } from "./install/main_folder";
@@ -632,6 +632,19 @@ export class DolphinManager {
       // virtual SD card, then boots Dolphin's default ISO (the Brawl disc).
       const isoPath = await this._getIsoPath();
       Preconditions.checkExists(isoPath, "No Brawl disc image set. Choose one in Settings > Game.");
+      // P+'s files start-up could not get, or a card that is not P+'s (a blank one Dolphin made,
+      // bug report #157): got now, as at start-up. When that fails (no connection), the check
+      // below says what is missing; a full disk says so itself.
+      try {
+        await this._ensureProjectPlusFiles(netplayInstallation);
+      } catch (err) {
+        if (err instanceof DiskSpaceError || isDiskFull(err)) {
+          throw err;
+        }
+        log.error(`Could not get Project+'s files: ${err instanceof Error ? err.message : String(err)}`);
+      } finally {
+        this._onComplete(DolphinLaunchType.NETPLAY, this._cachedVersion(DolphinLaunchType.NETPLAY));
+      }
       await netplayInstallation.assertProjectPlusFiles();
       // Players on different Project+ releases desync at once (bug report #74).
       const release = this._pplusRelease().version;

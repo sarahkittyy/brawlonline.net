@@ -11,12 +11,15 @@
 //
 // The zip is checked against the pinned size and sha256 before anything is extracted, and every
 // entry's CRC is checked while it is extracted. Files already in the User folder are never
-// overwritten: the SD card holds what the game wrote to it. A card on the previous P+ release is
+// overwritten: the SD card holds what the game wrote to it. A card that is not Project+'s (no
+// /Project+ folder, see notProjectPlusCard) is replaced by the release's: deleted when blank, else
+// kept next to it. A card on the previous P+ release is
 // updated instead (pplus_card_update.ts: only the files P+ changed), from the new release's card,
 // which is extracted to the download folder for that and deleted afterwards.
 //
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+import { FatImage } from "@brawl_assets/fat32";
 import fs from "fs";
 import { async as AsyncStreamZip } from "node-stream-zip";
 import path from "path";
@@ -139,6 +142,8 @@ export async function missingProjectPlusFiles(target: PPlusTarget, release = PPL
   const missing: string[] = [];
   if (!(await exists(sdCardPath(target.userFolder)))) {
     missing.push("Wii/sd.raw");
+  } else if (await notProjectPlusCard(sdCardPath(target.userFolder))) {
+    missing.push("Wii/sd.raw (not a Project+ card)");
   } else if (await cardNeedsUpdate(target, release)) {
     missing.push(`Wii/sd.raw (update to Project+ ${release.version})`);
   }
@@ -161,17 +166,46 @@ export async function missingProjectPlusFiles(target: PPlusTarget, release = PPL
  * DOLs, which are the release's own files, are deleted. Returns the kept card's path.
  */
 export async function setAsideProjectPlusCard(userFolder: string, cardRelease: string): Promise<string> {
-  const card = sdCardPath(userFolder);
-  const name = `sd (Project+ ${cardRelease.replace(/[^\w.+-]/g, "_")})`;
+  const kept = await keepCardAside(sdCardPath(userFolder), `sd (Project+ ${cardRelease.replace(/[^\w.+-]/g, "_")})`);
+  for (const entry of PPLUS_LAUNCHER_DOL_ENTRIES) {
+    await fs.promises.rm(launcherDolPath(userFolder, entry), { force: true });
+  }
+  return kept;
+}
+
+/** Renames `card` to `<name>.raw` next to it (`<name> 2.raw`, ... when taken); returns the new path. */
+async function keepCardAside(card: string, name: string): Promise<string> {
   let kept = path.join(path.dirname(card), `${name}.raw`);
   for (let n = 2; await exists(kept); n++) {
     kept = path.join(path.dirname(card), `${name} ${n}.raw`);
   }
   await fs.promises.rename(card, kept);
-  for (const entry of PPLUS_LAUNCHER_DOL_ENTRIES) {
-    await fs.promises.rm(launcherDolPath(userFolder, entry), { force: true });
-  }
   return kept;
+}
+
+/**
+ * Whether the SD card at `card` is not Project+'s: a FAT volume with no /Project+ folder.
+ * Dolphin makes a blank 128 MB card at its default path (`<User>/Wii/sd.raw`) whenever a game
+ * opens the SD slot and there is no card, also with the card set to removed (SDIOSlot0.cpp): a
+ * Dolphin opened from the launcher without P+'s SD path (controller set-up, Play without the
+ * game) that booted a game before P+'s release was downloaded left one, which then counted as the
+ * card, so the release's card was never extracted and Play booted Brawl without Project+ (bug
+ * report #157). `blank`: nothing in its root (Dolphin's own); `other`: files of its own; null: a
+ * Project+ card, or one that cannot be read as FAT (left to the other checks).
+ */
+export async function notProjectPlusCard(card: string): Promise<"blank" | "other" | null> {
+  let image: FatImage | null = null;
+  try {
+    image = await FatImage.open(card);
+    if (await image.exists("/Project+")) {
+      return null;
+    }
+    return (await image.readdir("/")).length === 0 ? "blank" : "other";
+  } catch {
+    return null;
+  } finally {
+    await image?.close();
+  }
 }
 
 /** The User folder's card is on the release before `release`, which changed the card's files. */
@@ -329,7 +363,8 @@ export async function installProjectPlusFiles({
       (s) => s.size,
       () => 0,
     );
-    const unpacking = (await exists(sdCardPath(target.userFolder))) ? 0 : release.unpackedSize ?? 0;
+    const card = sdCardPath(target.userFolder);
+    const unpacking = (await exists(card)) && !(await notProjectPlusCard(card)) ? 0 : release.unpackedSize ?? 0;
     await ensureFreeSpace(target.downloadDir, release.size - have + unpacking, "Project+'s game files", freeBytes);
     await downloadRelease(release, partPath, downloadFile, onProgress, log, downloadOptions);
     try {
@@ -373,13 +408,15 @@ export async function extractProjectPlusFiles(
     }
 
     // Plan: only what is missing in the User folder; the save template always (it is ours). A card
-    // on the previous release gets the new release's card next to the zip, to update it from.
+    // on the previous release gets the new release's card next to the zip, to update it from. A
+    // card that is not Project+'s is replaced by the release's.
     const jobs: { entry: string; dest: string }[] = [];
     const sd = sdCardPath(target.userFolder);
     const cardUpdate = cardUpdateTo(release.version);
     const newCard = path.join(target.downloadDir, `sd-${release.version}.raw`);
     let updateCard = false;
-    if (!(await exists(sd))) {
+    const notPPlus = (await exists(sd)) ? await notProjectPlusCard(sd) : null;
+    if (!(await exists(sd)) || notPPlus) {
       jobs.push({ entry: PPLUS_SD_CARD_ENTRY, dest: sd });
     } else if (cardUpdate && (await cardRelease(sd, cardUpdate)) === "from") {
       jobs.push({ entry: PPLUS_SD_CARD_ENTRY, dest: newCard });
@@ -405,6 +442,12 @@ export async function extractProjectPlusFiles(
     const total = jobs.reduce((sum, j) => sum + entries[j.entry].size, 0);
     // The User folder and the store are both in the install folder: one disk.
     await ensureFreeSpace(target.userFolder, total, "Project+'s game files", freeBytes);
+    if (notPPlus === "blank") {
+      await fs.promises.rm(sd);
+      log(`Deleted ${sd}: a blank SD card, not Project+'s`);
+    } else if (notPPlus === "other") {
+      log(`${sd} is not a Project+ SD card: kept as ${await keepCardAside(sd, "sd (not Project+)")}`);
+    }
     let done = 0;
     onProgress?.({ phase: "extract", current: 0, total });
     for (const job of jobs) {
