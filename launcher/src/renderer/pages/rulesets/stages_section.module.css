@@ -55,7 +55,7 @@
   position: relative;
   display: -webkit-box;
   min-width: 0;
-  margin-right: 6px;
+  padding-right: 20px;
   overflow: hidden;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
@@ -65,24 +65,24 @@
   text-shadow: 0 1px 3px rgb(0 0 0 / 90%);
 }
 
-/* The hazard button, right of the name. A stage with its own hazards shows them; one that follows the default only
-   shows the icon while the tile is hovered or the button has focus. */
+/* The hazard button: a warning sign cut into the banner's top right corner, bordered only on its left and bottom (the
+   tile's rounded corner clips the rest). Yellow when the stage has hazards, a crossed-out grey outline when not. A stage
+   with its own hazards always shows it; one that follows the default only while the tile is hovered or the button has
+   focus. */
 .hazard {
-  position: relative;
+  position: absolute;
+  top: 0;
+  right: 0;
   display: flex;
-  flex-shrink: 0;
   align-items: center;
-  gap: 3px;
-  margin-left: auto;
-  padding: 2px 6px;
-  border: 1px solid transparent;
-  border-radius: 10px;
-  background: rgb(0 0 0 / 45%);
-  color: var(--text-secondary);
-  font: inherit;
-  font-size: 11px;
-  font-weight: 600;
-  white-space: nowrap;
+  justify-content: center;
+  padding: 3px 5px 4px 6px;
+  border: none;
+  border-left: 1px solid rgb(255 255 255 / 22%);
+  border-bottom: 1px solid rgb(255 255 255 / 22%);
+  border-bottom-left-radius: 8px;
+  background: rgb(15 15 15 / 80%);
+  color: #9a9a9a;
   cursor: pointer;
 }
 
@@ -91,7 +91,24 @@
 }
 
 .hazardIcon {
-  font-size: 15px !important;
+  font-size: 16px !important;
+}
+
+/* Off: the outline crossed out. */
+.hazard:not(.hazardOn)::after {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 17px;
+  height: 1.5px;
+  background: currentcolor;
+  border-radius: 1px;
+  transform: translate(-50%, -50%) rotate(-45deg);
+  content: "";
+}
+
+.hazardOn {
+  color: #f5c518;
 }
 
 .hazardDefault {
@@ -100,23 +117,16 @@
 
 .tile:hover .hazardDefault,
 .hazardDefault:focus-visible {
-  opacity: 0.85;
+  opacity: 0.7;
 }
 
 .hazard:not(:disabled):hover {
-  border-color: rgb(255 255 255 / 30%);
-  color: inherit;
+  border-color: rgb(255 255 255 / 45%);
+  background: rgb(40 40 40 / 90%);
 }
 
-.hazardOwn {
-  border-color: rgb(255 255 255 / 25%);
-  color: inherit;
-}
-
-.hazardOwn.hazardOn {
-  border-color: transparent;
-  background: #f2b33d;
-  color: #2a1c00;
+.tile:hover .hazardDefault:not(:disabled):hover {
+  opacity: 1;
 }
 
 .off .name {
