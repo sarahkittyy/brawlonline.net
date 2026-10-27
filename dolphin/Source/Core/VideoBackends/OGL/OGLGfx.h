@@ -101,6 +101,7 @@ private:
   void ApplyRasterizationState(const RasterizationState state);
   void ApplyDepthState(const DepthState state);
   void ApplyBlendingState(const BlendingState state);
+  void UpdateDebugOutput();
 
   std::unique_ptr<GLContext> m_main_gl_context;
   std::unique_ptr<OGLFramebuffer> m_system_framebuffer;
@@ -114,6 +115,8 @@ private:
   u32 m_shared_read_framebuffer = 0;
   u32 m_shared_draw_framebuffer = 0;
   float m_backbuffer_scale;
+  // GL_DEBUG_OUTPUT as last set: -1 not set yet, else 0 or 1.
+  int m_debug_output = -1;
 };
 
 inline OGLGfx* GetOGLGfx()
