@@ -49,7 +49,8 @@ constexpr u32 MAX_BUNDLE = 0x80000;
 constexpr u64 MAX_ARCHIVE = 32ull << 20;
 
 // Starts building the bundle from the SD card image at `image_path` (once; later calls do nothing
-// while it is Loading or Ready). Returns the state now.
+// while it is Loading or Ready, and build again a few seconds after it was Unavailable). Returns
+// the state now.
 State Request(const std::string& image_path);
 State GetState();
 // The bundle, once Ready (empty otherwise).

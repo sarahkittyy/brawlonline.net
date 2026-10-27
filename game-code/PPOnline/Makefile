@@ -158,7 +158,10 @@ boot_menu.o ppom.o match_hud.o: CXXFLAGS += -Oz
 # boot log). They hold no frame-layout tricks (their hooks are naked functions).
 code_entry.o online_menu.o online_match.o stage_legal.o anyone_menu.o online.o rel.o netmenu.o: CXXFLAGS += -Oz
 # The rules menu's MATCH SETUP and SPECIAL pages and All-Star (2026-10-27; docs/design/special-rules.md).
-rules_pages.o special_box.o all_star.o: CXXFLAGS += -Oz
+rules_pages.o special_box.o all_star.o page_hints.o: CXXFLAGS += -Oz
+# The room CSS and its rules menu (2026-10-27: with the rules menu's pages the plugin no longer left
+# the Network heap room for the biggest costume, bug #75; test_online_big_costumes.py).
+room_css.o room_rules.o room_play.o rules_button.o: CXXFLAGS += -Oz
 
 %.o: %.cpp
 #	$(info $<)

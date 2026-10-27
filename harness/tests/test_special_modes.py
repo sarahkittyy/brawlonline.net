@@ -251,3 +251,32 @@ def test_stamina_hp(backend: OnlineBackend, dolphin: Callable[..., DolphinInstan
     assert setups[0] == setups[1], setups
     assert [p["hp"] for p in setups[0]["players"]] == [200, 120], setups[0]
     assert rep["checksums"]["mismatches"] == 0, rep
+
+
+def plugin_sym(g: Game, name: str) -> int:
+    """A plugin symbol's address in `g` (test_rooms_ui.ppom_sym, for this module's Game)."""
+    import test_rooms_ui
+    shim = type("Shim", (), {"c": g.c, "u32": lambda self, a: u32(g, a)})()
+    return test_rooms_ui.ppom_sym(shim, name)
+
+
+def test_special_box_loads_in_a_room(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
+                                     gpu_backend: str) -> None:
+    """The SPECIAL page's box from Dolphin's own SD card reading (Online/SpecialAssets, while the
+    game has the card open: staging 2026-10-27, "needs Project+'s menu files" because the card could
+    not be opened a second time): the host opens RULES and turns to SPECIAL, the box is made."""
+    a, b, _code = special_room(backend, dolphin, gpu_backend, "sp-box", ruleset_with("Box", special={"body": "metal"}))
+    ppom.set_cfg_bits(a.c, ppom.CFG_TEST_OPEN_RULES)
+    task = lambda: u32(a, u32(a, u32(a, 0x805A0060) + 4) + 0x400)
+    _wait(lambda: u32(a, task() + 0x630) != 0, 20, "A's rules menu open")
+    a.steps("wait 60")
+    for _ in range(3):
+        a.steps("tap R 4", "wait 40")
+    box = plugin_sym(a, "g_specialBox")
+    _wait(lambda: a.c.read_mem(box, 4) == b"\0\0\0\2" and u32(a, box + 8) >= 1, 30, "the Special Versus box made")
+    d = a.c.read_mem(box, 0x28)
+    assert list(d[0x14:0x1C]) == [0, 0, 0, 1, 0, 0, 0, 0], d.hex()
+    assert struct.unpack_from(">I", d, 0x20)[0] == 0, d.hex()   # no model failed
+    a.shot("special-box")
+    hints = plugin_sym(a, "g_pageHints")
+    assert u32(a, hints) > 0, "the L / R hints were not drawn"

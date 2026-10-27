@@ -276,6 +276,8 @@ namespace RoomRules {
         }
         if (s.opened && !menuOpen) {
             bool edits = s.asHost && !s.setOnly && host && inRoom && waiting;
+            // (the set length first: mm makes the MATCH SETUP page's set rows for it, then takes them)
+            if (edits) RoomPlay::flushBestOf();
             if (edits) sendEdits();                  // (with the STAGE SWITCH's hazards)
             RulesPages::close(edits);                // (ROOM_FORMAT: the MATCH SETUP page)
             bool stages = StageSwitch::close();
@@ -313,6 +315,7 @@ namespace RoomRules {
         u8* rt = rulesTask();
         if (!rt) return bits;
         u32 line = *(u16*)(page + 0x42);
+        RulesPages::notePage(page == *(u32*)(rt + RULES_PAGE1) ? 0 : page == *(u32*)(rt + RULES_PAGE2) ? 1 : 2);
         // L / R: the pages (rules_pages.cpp), and our pages over P+'s MORE RULES.
         if (page == *(u32*)(rt + RULES_PAGE1) && (bits & (0x40 | 0x80))) return RulesPages::input(rt, (u8*)page, true, bits);
         if (page == *(u32*)(rt + RULES_PAGE2)) {

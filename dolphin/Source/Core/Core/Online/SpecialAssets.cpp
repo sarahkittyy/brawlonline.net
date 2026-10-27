@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstring>
 #include <mutex>
 #include <string_view>
@@ -26,6 +27,10 @@ constexpr std::array<std::string_view, 2> ARCHIVE_PATHS = {"Project+/pf/menu2/mu
 
 std::mutex s_mutex;
 State s_state = State::None;
+// When the last build failed: a request a few seconds later tries again (the launcher may still
+// be writing the card, or the card was replaced).
+std::chrono::steady_clock::time_point s_failed_at;
+constexpr auto RETRY_AFTER = std::chrono::seconds(3);
 std::vector<u8> s_bundle;
 std::string s_error;
 
@@ -88,7 +93,9 @@ void Build(std::string path)
 {
   std::string why;
   std::optional<std::vector<u8>> bundle;
-  File::IOFile image(path, "rb");
+  // Shared: the emulated SD slot has the image open for reading and writing (SDCardFileStorage);
+  // a plain open asks to deny writers and fails while the game runs (staging, 2026-10-27).
+  File::IOFile image(path, "rb", File::SharedAccess::ReadWrite);
   if (!image.IsOpen())
   {
     why = fmt::format("no SD card image at {}", path);
@@ -125,6 +132,7 @@ void Build(std::string path)
   {
     s_error = why;
     s_state = State::Unavailable;
+    s_failed_at = std::chrono::steady_clock::now();
     WARN_LOG_FMT(NETPLAY, "SpecialAssets: no Special Versus box: {}", why);
   }
 }
@@ -302,7 +310,8 @@ std::optional<std::vector<u8>> BuildBundle(std::span<const u8> archive, std::str
 State Request(const std::string& image_path)
 {
   std::lock_guard lk(s_mutex);
-  if (s_state == State::None)
+  if (s_state == State::None ||
+      (s_state == State::Unavailable && std::chrono::steady_clock::now() - s_failed_at >= RETRY_AFTER))
   {
     s_state = State::Loading;
     std::thread(Build, image_path).detach();
