@@ -869,13 +869,6 @@ void Matchmaking::StartMatchmaking()
   request["appVersion"] = picojson::value(APP_VERSION);
   request["platform"] = picojson::value(APP_PLATFORM);
   request["ipAddressLan"] = picojson::value(lan_addr);
-  const int ping_limit = Config::Get(Config::ONLINE_MM_PING_LIMIT);
-  if ((m_search_settings.mode == Mode::Unranked || m_search_settings.mode == Mode::Ranked) &&
-      ping_limit > 0)
-  {
-    request["pingLimit"] = picojson::value(static_cast<double>(ping_limit));
-    INFO_LOG_FMT(NETPLAY, "[Matchmaking] Ping limit: {} ms", ping_limit);
-  }
   SendMmMessage(picojson::value(std::move(request)));
   m_ticket_count++;
   m_ticket_sent_ms = Common::Timer::NowMs();

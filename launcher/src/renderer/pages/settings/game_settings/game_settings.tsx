@@ -1,4 +1,3 @@
-import { PING_LIMIT_CHOICES } from "@common/ping_limit";
 import { GAME_NAME } from "@common/product";
 import { IsoValidity } from "@common/types";
 import { css } from "@emotion/react";
@@ -24,7 +23,6 @@ import {
   useEnableStreamGames,
   useIsoPath,
   useLaunchGameOnPlay,
-  usePingLimit,
 } from "@/lib/hooks/use_settings";
 
 import { DISC_IMAGE_EXTENSIONS } from "../../quick_start/steps/iso_selection_step/iso_file";
@@ -71,7 +69,6 @@ export const GameSettings = React.memo(() => {
   const [isoPath, setIsoPath] = useIsoPath();
   const verifyFraction = useIsoVerificationFraction(verifying ? isoPath : null);
   const [launchMeleeOnPlay, setLaunchMelee] = useLaunchGameOnPlay();
-  const [pingLimit, setPingLimit] = usePingLimit();
   const [enableMusic, setEnableMusic] = useEnableMusic();
   const [disableChat, setDisableChat] = useDisableChat();
   const [enableStreamGames, setEnableStreamGames] = useEnableStreamGames();
@@ -132,21 +129,6 @@ export const GameSettings = React.memo(() => {
         </RadioGroup>
       </SettingItem>
       <InputDelaySetting />
-      <SettingItem name={Messages.pingLimit()}>
-        <Tooltip title={netplayDolphinOpen ? Messages.closeDolphinToChange() : ""} placement="bottom-start">
-          <RadioGroup row={true} value={pingLimit} onChange={(_event, value) => setPingLimit(Number(value))}>
-            {PING_LIMIT_CHOICES.map((ms) => (
-              <FormControlLabel
-                key={ms}
-                value={ms}
-                label={Messages.pingLimitMs(ms)}
-                control={<Radio />}
-                disabled={netplayDolphinOpen}
-              />
-            ))}
-          </RadioGroup>
-        </Tooltip>
-      </SettingItem>
       <SettingItem>
         <Tooltip title={netplayDolphinOpen ? Messages.closeDolphinToChange() : ""} placement="bottom-start">
           <div>

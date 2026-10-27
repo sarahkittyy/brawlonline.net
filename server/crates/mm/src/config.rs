@@ -78,16 +78,16 @@ pub struct Config {
     pub ping_limit_ms: f64,
 
     /// ... raised by this many ms ...
-    #[arg(long, env = "MM_PING_LIMIT_STEP_MS", default_value_t = 30.0)]
+    #[arg(long, env = "MM_PING_LIMIT_STEP_MS", default_value_t = 20.0)]
     pub ping_limit_step_ms: f64,
 
     /// ... for every this many seconds the shorter-waiting player has waited ...
     #[arg(long, env = "MM_PING_LIMIT_STEP_SECS", default_value_t = 10)]
     pub ping_limit_step_secs: u64,
 
-    /// ... and no limit once the shorter-waiting player has waited this many seconds.
-    #[arg(long, env = "MM_PING_LIMIT_OPEN_SECS", default_value_t = 40)]
-    pub ping_limit_open_secs: u64,
+    /// ... up to this many ms, however long either has waited.
+    #[arg(long, env = "MM_PING_LIMIT_MAX_MS", default_value_t = 200.0)]
+    pub ping_limit_max_ms: f64,
 
     /// Two players who just played each other are paired again only once the longer-waiting of
     /// the two has waited this many seconds.
@@ -156,7 +156,7 @@ impl Config {
             ping_limit: self.ping_limit_ms.max(0.0),
             ping_limit_step: self.ping_limit_step_ms.max(0.0),
             ping_limit_interval: Duration::from_secs(self.ping_limit_step_secs),
-            ping_limit_open: Duration::from_secs(self.ping_limit_open_secs),
+            ping_limit_max: self.ping_limit_max_ms.max(0.0),
             rematch_hold: Duration::from_secs(self.rematch_hold_secs),
             max_conns_per_ip: self.max_conns_per_ip.max(1),
             rooms: crate::rooms::RoomsConfig {
@@ -193,9 +193,9 @@ impl Config {
             ranked_band_step_secs: 15,
             geoip_file: None,
             ping_limit_ms: 100.0,
-            ping_limit_step_ms: 30.0,
+            ping_limit_step_ms: 20.0,
             ping_limit_step_secs: 10,
-            ping_limit_open_secs: 40,
+            ping_limit_max_ms: 200.0,
             rematch_hold_secs: 60,
             max_peers: 64,
             ticket_interval_secs: 2,

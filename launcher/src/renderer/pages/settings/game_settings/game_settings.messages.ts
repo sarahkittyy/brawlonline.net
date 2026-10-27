@@ -18,8 +18,6 @@ export const GameSettingsMessages = {
   inputDelayNormal: () => "Normal",
   inputDelaySmooth: () => "Smooth",
   inputDelayFrames: (frames: number) => (frames === 1 ? "1 frame" : `${frames} frames`),
-  pingLimit: () => "Matchmaking Ping Limit",
-  pingLimitMs: (ms: number) => "{0} ms",
   enableMusic: () => "Music",
   enableMusicDescription: () => "Play the game's music in menus and matches.",
   disableChat: () => "Disable Chat",
