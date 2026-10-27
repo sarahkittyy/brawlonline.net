@@ -323,15 +323,23 @@ f32 Gekko::GameSession::FramesAhead()
         return 0.f;
     }
 
-    f32 sum = 0.f;
-    i32 count = 0;
+    // with 3+ players an average divided one peer's gap by the number of remotes (upstream
+    // GekkoNet #59). Ahead of some peer by more than half a frame: the largest advantage, the gap to
+    // the slowest peer, as upstream's #60. Otherwise the smallest, the gap to the peer furthest
+    // ahead (Slippi's CalcTimeOffsetUs takes the smallest always), so the peers behind one that ran
+    // ahead catch up instead of reading ~0 against each other. 2 players: the one advantage.
+    constexpr f32 AHEAD_OF_SOME_PEER = 0.5f;
+    bool found = false;
+    f32 most = 0.f, least = 0.f;
     for (auto& remote : _msg.remotes) {
         if (remote->GetStatus() == Connected) {
-            sum += remote->adv_history.GetAverageAdvantage();
-            count++;
+            const f32 adv = remote->adv_history.GetAverageAdvantage();
+            most = found ? std::max(most, adv) : adv;
+            least = found ? std::min(least, adv) : adv;
+            found = true;
         }
     }
-    return count > 0 ? sum / (f32)count : 0.f;
+    return most > AHEAD_OF_SOME_PEER ? most : least;
 }
 
 void Gekko::GameSession::NetworkStats(i32 player, GekkoNetworkStats* stats)

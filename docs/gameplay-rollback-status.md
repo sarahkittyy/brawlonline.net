@@ -1414,6 +1414,27 @@ So a frame's local input is ~1 ms old at the loop top instead of ~17.5: read -> 
 
 **Test.** gtest `HostDecodePadSlot.ALightTriggerPressesItsButtonOffShieldAsPPlusDoes`. A two-instance `gprb_session.py` (lan, dual core, 3,600 frames) with both pads' L action set to 2 once the match runs (`--poke-match 0x805B7480=02 --poke-match 0x805B748C=02`) and half the random macros an analog-only L (60-200, no digital L; a scratch wrapper over `gentle_macro`): the build before logs the report's `+03:40/00 +07:40/00` 10 times on each machine and turns the decode off (used 53 / 18 of 7,200), the fix 0 of 14,396 checks differed, the decode used for 7,199 frames on each; 0 checksum mismatches in both. Not tested: a real controller, Wii Remote / Classic Controller players (they never use the decode; P+'s Classic Controller version at 57 needs nothing here), macOS / Linux. The stick mismatches in the report's logs (mostly one-unit differences, likely the pass taking another read than the decode it is paired with; not looked into) are left as they are: the check suspends the decode for them, which costs a field of freshness, never an input.
 
+## Frames ahead with 3-4 players: the slowest peer, or the one furthest ahead (GitHub issue #4, 2026-10-27)
+
+**Report.** GitHub issue #4 on brawlonline.net (and upstream GekkoNet #59, by the same reporter): `GameSession::FramesAhead` averaged the advantage over every connected remote, so in a 4-player game one peer's gap read a third as large on the other three. Upstream fixed it in GekkoNet #60 (merged 2026-10-24) by returning the largest advantage, the gap to the slowest peer.
+
+**Cause, and why not upstream's alone.** Time sync (`HardTimeSync`, `UpdateTimeSync`, `UpdatePeerFollow`; `MachineSession::UpdateTimeSync`) drives frames ahead to 0. With the average, the peers ahead of a slow PC barely slowed down and the slow-peer follow never engaged, so they sat at GekkoNet's prediction window and stalled. The largest advantage fixes that, but when one peer runs *ahead* of the other three, those three read about 0 against each other and neither speed up nor catch up (with the average they at least saw a third of it), so only the leader's 0.5% slow-down closes the gap. Slippi's `CalcTimeOffsetUs` does the opposite, the smallest offset (the peer furthest ahead). Now: the largest advantage when this peer is ahead of some peer by more than half a frame (about the time sync's dead zones: 8 ms speed, 10 ms halt), else the smallest. With 2 players both are the one advantage, so 1v1 is unchanged.
+
+**Tests.** The vendored GekkoLib compiled alone (steady_clock replaced by a simulated clock, logging stubbed) into a scratch exe running 3-4 sessions in one process over simulated links (RTT ± uniform jitter, inputs changing on a tenth of frames, delay 2), each paced by a copy of GameplaySession's time sync and follow with its constants, a Dolphin-like throttle (MaxFallback 100 ms, a stall's wait resets it) and a slow PC as a fixed cost per frame; old (average), upstream (largest), new (this); 3-5 seeds each, means:
+
+| Scenario | Measure | Average | Largest | This |
+|---|---|---:|---:|---:|
+| 4p, P4 at 52 fps, 90 ms ± 5 | gap to P4 / stalls (4 peers, 40 s) / rollback depth / P1 following | 7.54 f / 15.2 s / 2.28 / 0% | 2.36 f / 0.71 s / 1.62 / 97% | 2.39 f / 0.73 s / 1.62 / 97% |
+| 4p, P4 at 52 fps, 110 ms ± 15 | same | 6.55 f / 15.4 s / 2.55 / 0% | 3.04 f / 0.90 s / 2.18 / 97% | 3.04 f / 0.93 s / 2.18 / 97% |
+| 3p, P3 at 52 fps, 90 ms ± 5 | same | 4.16 f / 0.64 s / 2.06 / 97% | 2.43 f / 0.45 s / 1.82 / 97% | 2.35 f / 0.47 s / 1.73 / 97% |
+| 4p, nobody slow, 90 ms ± 5 | spread at GO (frame 120) / depth | 2.00 f / 1.17 | 0.76 f / 1.22 | 0.66 f / 1.08 |
+| 4p, P4 starts 4 frames late, 60 ms | spread at GO | 2.01 f | 0.99 f | 0.78 f |
+| 4p, P1 4.2 frames ahead at frame 200 | frames until all within 0.5 f | 856 | 1,226 | 67 |
+| 4p, P1 6 frames ahead at frame 200 | same | 791 | 1,574 (one seed never in 30 s) | 136 |
+| 2p, nobody slow / P2 at 52 fps | everything | identical in all three | | |
+
+A threshold of 0 left one seed of the 4.2-frame jump at 1,328 frames (a ~0 advantage to an in-sync peer read just above 0); 0.25, 0.5 and 1.0 all closed it in under 400. Not tested: no Dolphin built or run (the shared build tree was left alone), so no real 3-4 player match, Other Games room or harness test; the slow PC in the simulator costs the same every frame, a real one does not.
+
 ## Open issues
 
 Resolved in Phase 6: the dual-core divergence (ground-collision list heads, gp-v11), the Peach article crash and the `GXWaitDrawDone` stalls (the GX FIFO ring tail), the 11-frame sync-test bursts (camera quake controller, gp-v12), stopping and re-attaching sounds. Resolved in Phase 8: every failure of the coverage sweep (gp-v13 to gp-v19, the file IO wait). Resolved in Phase 9: the nondeterministic render/effect hang (a load read the base snapshot while the eviction job was still merging into it). Resolved in Phase 12: the Smashville desync from frame 0 (issue 7).
