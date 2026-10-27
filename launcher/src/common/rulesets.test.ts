@@ -4,6 +4,7 @@ import type { MatchRules, Ruleset, SpecialRules } from "./rulesets";
 import {
   defaultRuleset,
   hazardsOn,
+  newRuleset,
   normalizeRuleset,
   parseRulesetCode,
   rulesetFromJson,
@@ -176,6 +177,16 @@ describe("rulesets", () => {
     expect(JSON.parse(rulesetToJson(fod)).rules.hazardStages).toEqual([31]);
     expect(rulesetFromJson(rulesetToJson(fod))).toEqual(fod);
     expect(() => rulesetFromJson(`{"rules": {"hazardStages": [true]}}`)).toThrow("bad value");
+  });
+
+  it("starts a new ruleset with Fountain of Dreams' hazards on", () => {
+    const r = newRuleset();
+    expect([r.name, r.rules.hazards, r.rules.hazardStages]).toEqual(["", false, [0x1f]]);
+    expect(hazardsOn(r.rules, 0x1f)).toBe(true);
+    expect(rulesetProblem({ ...r, name: "x" })).toBeNull();
+    // A missing key stays no stages: published rulesets without it keep FoD's hazards off.
+    expect(defaultRuleset().rules.hazardStages).toEqual([]);
+    expect(rulesetFromJson(`{"name": "x"}`).rules.hazardStages).toEqual([]);
   });
 
   it("has per-stage hazards", () => {
