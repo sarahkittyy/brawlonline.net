@@ -54,12 +54,89 @@ describe("PublicRoomsView", () => {
     const rows = container.querySelectorAll("button[data-room]");
     expect(rows.length).toBe(3);
     const text = (code: string) => container.querySelector(`[data-room="${code}"]`)!.textContent;
-    expect(text("KFQB")).toBe("annann1v11/2WaitingJoin");
+    expect(text("KFQB")).toBe("ann's room♛ ann1v11/2WaitingJoin");
     expect(text("PLNX")).toContain("bob · cy · dee");
     expect(text("PLNX")).toContain("3/4");
     expect(text("PLNX")).toContain("In game");
     expect(text("HBPL")).toContain("Teams");
     expect(text("HBPL")).toContain("Full");
+  });
+
+  it("shows a room's name, or its host's room in grey, and crowns the host", () => {
+    const named = [{ ...rooms[1], name: "chill ffa", names: ["cy", "bob", "dee"] }, rooms[0]];
+    const { container } = view({ kind: "ready", online: 1, rooms: named });
+    const title = (code: string) => container.querySelector(`[data-room="${code}"] > div > div`)!;
+    expect(title("PLNX").textContent).toBe("chill ffa");
+    expect(title("KFQB").textContent).toBe("ann's room");
+    expect(title("KFQB").className).toMatch(/unnamed/);
+    expect(title("PLNX").className).not.toMatch(/unnamed/);
+    expect(container.querySelector('[data-room="PLNX"]')!.textContent).toContain("cy · ♛ bob · dee");
+  });
+
+  it("pins the player's room first, which its host names in place", async () => {
+    const onRename = vi.fn(() => Promise.resolve());
+    const onJoin = vi.fn();
+    const own = (host: boolean) => (
+      <PublicRoomsView
+        state={{ kind: "ready", online: 1, rooms }}
+        onJoin={onJoin}
+        onRetry={vi.fn()}
+        onLogIn={vi.fn()}
+        yourRoom={{ kind: "pplus", code: "PLNX", host, name: null }}
+        onRenameRoom={onRename}
+      />
+    );
+    const { container, getByTestId, queryByTestId, rerender } = render(own(true));
+    const first = container.querySelector("[data-room]")!;
+    expect(first.getAttribute("data-room")).toBe("PLNX");
+    expect(first.tagName).toBe("DIV");
+    expect(first.textContent).toContain("Yours");
+    fireEvent.click(first);
+    expect(onJoin).not.toHaveBeenCalled();
+
+    // Esc goes back without saving.
+    fireEvent.click(getByTestId("room-name-pencil"));
+    fireEvent.change(getByTestId("room-name-input"), { target: { value: "nope" } });
+    fireEvent.keyDown(getByTestId("room-name-input"), { key: "Escape" });
+    expect(queryByTestId("room-name-input")).toBeNull();
+    expect(onRename).not.toHaveBeenCalled();
+
+    // A click on the name opens it too; Enter saves.
+    fireEvent.click(getByTestId("room-name"));
+    expect(first.textContent).toContain("Enter saves");
+    fireEvent.change(getByTestId("room-name-input"), { target: { value: "  friday   doubles " } });
+    await act(async () => {
+      fireEvent.keyDown(getByTestId("room-name-input"), { key: "Enter" });
+    });
+    expect(onRename).toHaveBeenCalledWith("PLNX", "friday doubles");
+    expect(queryByTestId("room-name-input")).toBeNull();
+
+    // A member who doesn't host it has no pencil.
+    rerender(own(false));
+    expect(queryByTestId("room-name-pencil")).toBeNull();
+    fireEvent.click(getByTestId("room-name"));
+    expect(queryByTestId("room-name-input")).toBeNull();
+  });
+
+  it("keeps the box open with the text when the server refuses the name", async () => {
+    const onRename = vi.fn(() => Promise.reject(new Error("Room names are at most 32 characters.")));
+    const { getByTestId } = render(
+      <PublicRoomsView
+        state={{ kind: "ready", online: 1, rooms }}
+        onJoin={vi.fn()}
+        onRetry={vi.fn()}
+        onLogIn={vi.fn()}
+        yourRoom={{ kind: "pplus", code: "KFQB", host: true, name: null }}
+        onRenameRoom={onRename}
+      />,
+    );
+    fireEvent.click(getByTestId("room-name-pencil"));
+    fireEvent.change(getByTestId("room-name-input"), { target: { value: "too long" } });
+    await act(async () => {
+      fireEvent.keyDown(getByTestId("room-name-input"), { key: "Enter" });
+    });
+    expect(onRename).toHaveBeenCalledTimes(1);
+    expect((getByTestId("room-name-input") as HTMLInputElement).value).toBe("too long");
   });
 
   it("joins open rooms (also in game) but not full ones", () => {

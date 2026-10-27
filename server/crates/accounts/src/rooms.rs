@@ -11,11 +11,14 @@ use std::time::{Duration, Instant};
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::Json;
-use common::rooms::MmStatus;
+use common::rooms::{clean_room_name, MmStatus, RoomKind, YourRoom};
+use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
 use crate::api::{current_user, limit};
 use crate::error::{ApiError, ApiResult};
+use crate::slur_filter;
+use crate::store;
 use crate::AppState;
 
 /// How long one snapshot from mm is served.
@@ -72,8 +75,10 @@ impl MmStatusSource {
 }
 
 /// `GET /v1/rooms`: `{online, rooms: [{code, host, players, openSlots, mode, status, names,
-/// joinable}], updatedAt}`. Session auth (the list names players); limited per account
-/// ([`common::ratelimit::ROOMS_WINDOWS`]). 503 `mm_unavailable` when mm does not answer.
+/// joinable, name}], updatedAt, yourRoom}`. Session auth (the list names players); limited per
+/// account ([`common::ratelimit::ROOMS_WINDOWS`]). 503 `mm_unavailable` when mm does not answer.
+/// `yourRoom`: the room the caller is in, P+ or Brawl Mods, private ones too (their launcher pins
+/// it and lets its host name it).
 pub async fn rooms(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<Json<MmStatus>> {
     let user = current_user(&state, &headers).await?;
     limit(&state, |l, now| l.rooms.check(&user.uid, now)).map_err(|wait| {
@@ -83,7 +88,16 @@ pub async fn rooms(State(state): State<AppState>, headers: HeaderMap) -> ApiResu
     match state.mm_status.get().await {
         // Where each player is stays between mm and accounts (it names private rooms), as does
         // the index of every Brawl Mods room.
-        Ok(s) => Ok(Json(MmStatus { members: Vec::new(), mod_room_index: Vec::new(), ..s })),
+        Ok(s) => {
+            let your_room = your_room(&s, &user.uid.to_string());
+            Ok(Json(MmStatus {
+                members: Vec::new(),
+                mod_room_index: Vec::new(),
+                mod_members: Vec::new(),
+                your_room,
+                ..s
+            }))
+        }
         Err(e) => {
             tracing::warn!("mm status unavailable: {e}");
             Err(ApiError::new(
@@ -124,4 +138,64 @@ pub async fn mod_room(
         .find(|r| r.code == code)
         .map(Json)
         .ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "unknown_room", "Room not found."))
+}
+
+/// The room `uid` is in, from mm's internal member lists.
+fn your_room(s: &MmStatus, uid: &str) -> Option<YourRoom> {
+    if let Some(m) = s.members.iter().find(|m| m.uid == uid) {
+        return Some(YourRoom { kind: RoomKind::Pplus, code: m.code.clone(), host: m.host, name: m.name.clone() });
+    }
+    s.mod_members.iter().find(|m| m.uid == uid).map(|m| YourRoom {
+        kind: RoomKind::Mods,
+        code: m.code.clone(),
+        host: m.host,
+        name: m.name.clone(),
+    })
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SetRoomNameReq {
+    /// P+ rooms or Brawl Mods rooms: each has its own name.
+    pub kind: RoomKind,
+    /// As typed; empty or null: no name.
+    pub name: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RoomNameView {
+    pub kind: RoomKind,
+    /// What was stored: the name cleaned up, or a kind one if it was a racial slur.
+    pub name: Option<String>,
+}
+
+/// `PUT /v1/me/room-name` `{kind, name}`: the name of the rooms the account hosts
+/// (`docs/design/rooms.md` §1.4), kept for its next rooms of that kind. mm renames the room it
+/// hosts now within a few seconds (its account poll). A racial slur is replaced by a kind name at
+/// once (the answer says what was stored). 400 `invalid_room_name`; limited per account
+/// ([`common::ratelimit::ROOM_NAME_WINDOWS`]).
+pub async fn set_room_name(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<SetRoomNameReq>,
+) -> ApiResult<Json<RoomNameView>> {
+    let user = current_user(&state, &headers).await?;
+    let name = clean_room_name(req.name.as_deref().unwrap_or_default())
+        .map_err(|e| ApiError::bad_request("invalid_room_name", e))?;
+    limit(&state, |l, now| l.room_name.check(&user.uid, now)).map_err(|wait| {
+        ApiError::rate_limited(wait)
+            .with_message(format!("Too many name changes. Try again in {} s.", wait.as_secs().max(1)))
+    })?;
+    let (name, recheck) = match name {
+        Some(n) => {
+            let (n, recheck) = slur_filter::screen_room_name(&state, &n).await;
+            (Some(n), recheck)
+        }
+        None => (None, false),
+    };
+    store::set_room_name(&state.pool, user.uid, req.kind, name.as_deref()).await?;
+    if let (true, Some(n)) = (recheck, &name) {
+        slur_filter::recheck_room_name(&state, user.uid, req.kind, n.clone());
+    }
+    Ok(Json(RoomNameView { kind: req.kind, name }))
 }

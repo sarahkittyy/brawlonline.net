@@ -667,6 +667,8 @@ impl Engine {
             mod_room_index: self.mod_rooms.all_rooms(4000),
             members: self.rooms.member_rooms(4000),
             live: self.live.store().entries(),
+            mod_members: self.mod_rooms.member_rooms(4000),
+            your_room: None,
         }
     }
 
@@ -960,6 +962,8 @@ impl Engine {
         }
         self.chat.set_muted(user.uid, user.chat_muted);
         let mut renamed = false;
+        let mut room_named = false;
+        let mut mods_room_named = false;
         for (conn, _) in mine {
             let Some(c) = self.conns.get_mut(&conn) else { continue };
             let held = match &mut c.state {
@@ -968,9 +972,21 @@ impl Engine {
                 _ => continue,
             };
             renamed |= held.display_name != user.display_name;
+            room_named |= held.room_name != user.room_name;
+            mods_room_named |= held.mods_room_name != user.mods_room_name;
             // The rest (play key version, rating) is read again with the next ticket.
             held.display_name = user.display_name.clone();
             held.chat_muted = user.chat_muted;
+            held.room_name = user.room_name.clone();
+            held.mods_room_name = user.mods_room_name.clone();
+        }
+        // The launcher named the account's rooms (`PUT /v1/me/room-name`): the room it hosts
+        // shows the name in the room lists at the next status snapshot.
+        if room_named {
+            self.rooms.set_name(user.uid, user.room_name.as_deref());
+        }
+        if mods_room_named {
+            self.mod_rooms.set_name(user.uid, user.mods_room_name.as_deref());
         }
         if renamed {
             tracing::info!(uid = %user.uid, "account renamed: its room and chat show the new name");
@@ -1102,6 +1118,7 @@ impl Engine {
                     uid: o.user.uid,
                     display_name: o.user.display_name.clone(),
                     connect_code: o.code.clone(),
+                    room_name: o.user.room_name.clone(),
                 };
                 // Going to a room ends the match chat (the room's own group comes with the room).
                 if matches!(req, RoomRequest::Create { .. } | RoomRequest::Join { .. }) {
@@ -1119,6 +1136,7 @@ impl Engine {
                     uid: o.user.uid,
                     display_name: o.user.display_name.clone(),
                     connect_code: o.code.clone(),
+                    room_name: o.user.mods_room_name.clone(),
                 };
                 // One room at a time: a mod room leaves the P+ room.
                 if matches!(req, common::mods::ModsRequest::Create { .. } | common::mods::ModsRequest::Join { .. })
@@ -1949,6 +1967,8 @@ mod tests {
             rating: common::ranked::DEFAULT_RATING,
             ranked_sets: 0,
             chat_muted: false,
+            room_name: None,
+            mods_room_name: None,
         }
     }
 
@@ -3424,6 +3444,68 @@ mod tests {
         let s = state_of(&out, 1);
         assert!(s["slots"].as_array().unwrap().iter().any(|sl| sl["player"]["displayName"] == "Bee"), "{s}");
         assert!(h.input(Input::AccountsChanged(vec![renamed])).is_empty());
+    }
+
+    /// Room names (`docs/design/rooms.md` §1.4): a room takes its creator's name for rooms of its
+    /// kind; the host's new name (seen by the account poll) renames the room they host, a member's
+    /// does not, and the room keeps its name when the host leaves.
+    #[test]
+    fn rooms_take_the_hosts_room_name() {
+        const HASH: &str = "3f9a1c07aa00000000000000000000000000000000000000000000000000beef";
+        let mut h = Harness::new(EngineConfig::default());
+        let (mut a, b, mut c) = (user("AA#1", "a"), user("BB#1", "b"), user("CC#1", "c"));
+        a.room_name = Some("friday doubles".into());
+        a.mods_room_name = Some("NSMB races".into());
+        c.mods_room_name = Some("REX nights".into());
+        for (conn, u) in [(1, &a), (2, &b), (3, &c)] {
+            h.add(u);
+            h.connect(conn, conn as u16);
+            h.hello(conn, u, "3.4.0");
+        }
+        let out = h.room(1, json!({"type": "room-create"}));
+        let code = state_of(&out, 1)["code"].as_str().unwrap().to_string();
+        h.room(2, json!({"type": "room-join", "code": code}));
+        let st = h.e.status(Utc::now());
+        assert_eq!(st.rooms[0].name.as_deref(), Some("friday doubles"));
+        let host_of = |st: &MmStatus, u: &MmUser| {
+            st.members.iter().find(|m| m.uid == u.uid.to_string()).map(|m| (m.host, m.name.clone()))
+        };
+        assert_eq!(host_of(&st, &a), Some((true, Some("friday doubles".into()))));
+        assert_eq!(host_of(&st, &b), Some((false, Some("friday doubles".into()))));
+
+        // A member's name is theirs for their own rooms: this one keeps its name.
+        let mut b2 = b.clone();
+        b2.room_name = Some("mine now".into());
+        h.input(Input::AccountsChanged(vec![b2.clone()]));
+        assert_eq!(h.e.status(Utc::now()).rooms[0].name.as_deref(), Some("friday doubles"));
+        // The host's renames it, and clearing it leaves no name.
+        let mut a2 = a.clone();
+        a2.room_name = None;
+        h.input(Input::AccountsChanged(vec![a2.clone()]));
+        assert_eq!(h.e.status(Utc::now()).rooms[0].name, None);
+        a2.room_name = Some("chill ffa".into());
+        // Their Brawl Mods name is another one: it changes nothing here.
+        a2.mods_room_name = Some("Mario Kart".into());
+        h.input(Input::AccountsChanged(vec![a2.clone()]));
+        assert_eq!(h.e.status(Utc::now()).rooms[0].name.as_deref(), Some("chill ffa"));
+        // The host leaves: b hosts the room, which keeps its name.
+        h.room(1, json!({"type": "room-leave"}));
+        let st = h.e.status(Utc::now());
+        assert_eq!(st.rooms[0].name.as_deref(), Some("chill ffa"));
+        assert_eq!(host_of(&st, &b2), Some((true, Some("chill ffa".into()))));
+
+        // Brawl Mods rooms take the Brawl Mods name.
+        let out = h.room(3, json!({"type": "mods-create", "build": {"hash": HASH, "name": "REX"}}));
+        assert!(sent(&out, 3).iter().any(|m| m["type"] == "mods-state"));
+        let st = h.e.status(Utc::now());
+        assert_eq!(st.mod_rooms[0].name.as_deref(), Some("REX nights"));
+        assert_eq!(st.mod_members.iter().find(|m| m.uid == c.uid.to_string()).map(|m| m.host), Some(true));
+        let mut c2 = c.clone();
+        c2.mods_room_name = Some("REX tuesdays".into());
+        h.input(Input::AccountsChanged(vec![c2]));
+        let st = h.e.status(Utc::now());
+        assert_eq!(st.mod_rooms[0].name.as_deref(), Some("REX tuesdays"));
+        assert_eq!(st.mod_room_index[0].name.as_deref(), Some("REX tuesdays"));
     }
 
     #[test]

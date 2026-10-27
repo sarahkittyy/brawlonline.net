@@ -13,7 +13,7 @@ use common::mods::{
     self, Build, Controller, Endpoint, ModsPlayer, ModsRequest, ModsSlot, ModsState, PublicModRoom,
 };
 use common::ratelimit::{RateLimiter, Window};
-use common::rooms::RoomError;
+use common::rooms::{ModRoomMember, RoomError};
 use rand::Rng;
 use uuid::Uuid;
 
@@ -75,6 +75,8 @@ struct Room {
     /// (`mods-<CODE>-<n>`), so a new room that reuses a code gets a group of its own.
     serial: u64,
     build: Build,
+    /// The name its host gave it (`users.mods_room_name`), as P+ rooms' (`rooms.rs`).
+    name: Option<String>,
     public: bool,
     /// Index of the host's slot.
     host: usize,
@@ -195,6 +197,7 @@ impl ModRoomBook {
                 host_name: r.slots[r.host].as_ref().map(|m| m.info.display_name.clone()).unwrap_or_default(),
                 players: r.members().count() as u8,
                 open: r.open.iter().filter(|&&o| o).count() as u8,
+                name: r.name.clone(),
             })
             .collect();
         // Fuller first (a room about to fill), then by code so the list stays put.
@@ -214,6 +217,7 @@ impl ModRoomBook {
                 host_name: r.slots[r.host].as_ref().map(|m| m.info.display_name.clone()).unwrap_or_default(),
                 players: r.members().count() as u8,
                 open: r.open.iter().filter(|&&o| o).count() as u8,
+                name: r.name.clone(),
             })
             .collect()
     }
@@ -264,7 +268,16 @@ impl ModRoomBook {
                 let serial = self.room_seq;
                 self.rooms.insert(
                     code.clone(),
-                    Room { code: code.clone(), serial, build, public, host: 0, slots, open: [true; mods::MAX_PLAYERS] },
+                    Room {
+                        code: code.clone(),
+                        serial,
+                        build,
+                        name: who.room_name.clone(),
+                        public,
+                        host: 0,
+                        slots,
+                        open: [true; mods::MAX_PLAYERS],
+                    },
                 );
                 self.member_of.insert(conn, code.clone());
                 tracing::info!(conn, %code, "mod room created");
@@ -466,6 +479,36 @@ impl ModRoomBook {
         }
     }
 
+    /// The account named its rooms (`users.mods_room_name`): the room it hosts takes the name.
+    pub fn set_name(&mut self, uid: Uuid, name: Option<&str>) {
+        for room in self.rooms.values_mut() {
+            let hosts = room.slots[room.host].as_ref().is_some_and(|h| h.info.uid == uid);
+            if hosts && room.name.as_deref() != name {
+                tracing::info!(code = %room.code, ?name, "mod room named");
+                room.name = name.map(str::to_string);
+            }
+        }
+    }
+
+    /// Every member's room, for accounts (`MmStatus::mod_members`), at most `limit`.
+    pub fn member_rooms(&self, limit: usize) -> Vec<ModRoomMember> {
+        let mut list = Vec::new();
+        for room in self.rooms.values() {
+            for (i, m) in room.members() {
+                if list.len() >= limit {
+                    return list;
+                }
+                list.push(ModRoomMember {
+                    uid: m.info.uid.to_string(),
+                    code: room.code.clone(),
+                    host: i == room.host,
+                    name: room.name.clone(),
+                });
+            }
+        }
+        list
+    }
+
     /// The rooms whose members changed since the last call (each once), for their chat groups.
     pub fn take_changed(&mut self) -> Vec<(String, u64)> {
         let mut changed = std::mem::take(&mut self.changed);
@@ -504,6 +547,7 @@ mod tests {
             uid: Uuid::from_bytes([n; 16]),
             display_name: format!("player{n}"),
             connect_code: format!("P{n}#1"),
+            room_name: None,
         }
     }
 

@@ -6,6 +6,7 @@ import type {
   PublishRulesetRequest,
   Rank,
   RecentRuleset,
+  RoomKind,
   RoomList,
   RulesetDraft,
   RulesetDraftRequest,
@@ -28,6 +29,7 @@ export type {
   Rank,
   RankTier,
   RecentRuleset,
+  RoomKind,
   RoomList,
   RoomMode,
   RoomRuleset,
@@ -36,6 +38,7 @@ export type {
   RulesetDraftRequest,
   RulesetPage,
   RulesetView,
+  YourRoom,
 } from "@accounts/types";
 
 /** The ranked rating: an Elo number on Slippi's scale (server/crates/common/src/ranked.rs), and the rank
@@ -69,6 +72,9 @@ export interface BackendService {
   fetchMatchHistory(mode: MatchHistoryFilter, before?: string): Promise<MatchHistoryPage>;
   /** Players online and the public rooms (Home > Overview); needs a login. */
   fetchRooms(): Promise<RoomList>;
+  /** Names the rooms of this kind the player hosts, the one they host now too (null: no name;
+   * docs/design/rooms.md §1.4). Resolves to what was stored: a racial slur comes back as a kind name. */
+  setRoomName(kind: RoomKind, name: string | null): Promise<string | null>;
   /** A published ruleset by code (anyone's; docs/rulesets-protocol.md). */
   fetchRuleset(code: string): Promise<RulesetView>;
   /** A page of the public list, newest first; `q` searches the name, publisher and code. */

@@ -3,6 +3,7 @@
 use chrono::{DateTime, Duration, Utc};
 use common::codes::{candidate_numbers, ConnectCode};
 use common::playkey::{hash_token, random_token};
+use common::rooms::RoomKind;
 use rand::Rng;
 use sqlx::{PgPool, Postgres, Transaction};
 use uuid::Uuid;
@@ -390,6 +391,39 @@ pub async fn rename(pool: &PgPool, uid: Uuid, name: &str) -> sqlx::Result<()> {
 /// must not undo a rename made since). Whether it did.
 pub async fn rename_if(pool: &PgPool, uid: Uuid, from: &str, to: &str) -> sqlx::Result<bool> {
     sqlx::query("UPDATE users SET display_name = $3, updated_at = now() WHERE uid = $1 AND display_name = $2")
+        .bind(uid)
+        .bind(from)
+        .bind(to)
+        .execute(pool)
+        .await
+        .map(|r| r.rows_affected() == 1)
+}
+
+/// The column of the account's name for that kind of room.
+fn room_name_column(kind: RoomKind) -> &'static str {
+    match kind {
+        RoomKind::Pplus => "room_name",
+        RoomKind::Mods => "mods_room_name",
+    }
+}
+
+/// Sets the name the account gives its rooms of that kind (`None`: no name). mm sees the change
+/// (`updated_at`) and renames the room the account hosts.
+pub async fn set_room_name(pool: &PgPool, uid: Uuid, kind: RoomKind, name: Option<&str>) -> sqlx::Result<()> {
+    let col = room_name_column(kind);
+    sqlx::query(&format!("UPDATE users SET {col} = $2, updated_at = now() WHERE uid = $1"))
+        .bind(uid)
+        .bind(name)
+        .execute(pool)
+        .await
+        .map(|_| ())
+}
+
+/// [`set_room_name`] if the name is still `from` (the slur filter's late replacement). Whether it
+/// did.
+pub async fn set_room_name_if(pool: &PgPool, uid: Uuid, kind: RoomKind, from: &str, to: &str) -> sqlx::Result<bool> {
+    let col = room_name_column(kind);
+    sqlx::query(&format!("UPDATE users SET {col} = $3, updated_at = now() WHERE uid = $1 AND {col} = $2"))
         .bind(uid)
         .bind(from)
         .bind(to)

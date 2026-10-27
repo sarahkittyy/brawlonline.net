@@ -22,6 +22,7 @@ import { useLoginModal } from "@/lib/hooks/use_login_modal";
 import { useSettings } from "@/lib/hooks/use_settings";
 import { useToasts } from "@/lib/hooks/use_toasts";
 import { useRoomList } from "@/lib/social/use_room_list";
+import { useRoomName } from "@/lib/social/use_room_name";
 import { useServices } from "@/services";
 
 import type { AddBuildInitial, SaveSectionProps } from "./add_build_dialog";
@@ -73,6 +74,7 @@ export const ModsTab = React.memo(function ModsTab() {
   const [adding, setAdding] = useState<AddBuildInitial | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const { uid, query } = useRoomList();
+  const { rename: renameRoom, shown: shownRoomName } = useRoomName("mods");
   // The edited Wii game's save in rooms (null: no save section), and a save picked to replace it.
   const [saveInfo, setSaveInfo] = useState<SaveSectionProps["info"] | null>(null);
   const [saveBusy, setSaveBusy] = useState(false);
@@ -90,7 +92,9 @@ export const ModsTab = React.memo(function ModsTab() {
   if (!uid) {
     publicRooms = { kind: "logged-out" };
   } else if (query.data && !outdated) {
-    publicRooms = { kind: "ready", rooms: query.data.modRooms ?? [] };
+    // A name just given shows at once, before mm has it in the list.
+    const rooms = (query.data.modRooms ?? []).map((r) => ({ ...r, name: shownRoomName(r.code, r.name) }));
+    publicRooms = { kind: "ready", rooms };
   } else if (query.isError) {
     publicRooms = { kind: "unreachable" };
   } else {
@@ -342,6 +346,12 @@ export const ModsTab = React.memo(function ModsTab() {
         // The room's part that differs: the game's edit window, that field pulsing gold.
         onFixBuild={(build, part) => openEdit(build, part)}
         onRequest={onRequest}
+        yourRoom={
+          query.data?.yourRoom?.kind === "mods"
+            ? { ...query.data.yourRoom, name: shownRoomName(query.data.yourRoom.code, query.data.yourRoom.name) }
+            : null
+        }
+        onRenameRoom={renameRoom}
         onCopyCode={(code) => {
           void navigator.clipboard.writeText(code).then(() => showSuccess(Messages.copied()));
         }}

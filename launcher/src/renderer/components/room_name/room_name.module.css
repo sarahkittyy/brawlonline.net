@@ -1,0 +1,67 @@
+.display {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A room nobody named: "alice's room" in grey, so a real name stands out. */
+.fallback {
+  color: var(--text-secondary);
+}
+
+.editable {
+  cursor: text;
+}
+
+.editable:focus-visible {
+  outline: 2px solid var(--accent-primary-dark);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+
+.edit {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.input {
+  min-width: 0;
+  width: 260px;
+  max-width: 100%;
+  box-sizing: border-box;
+  padding: 3px 8px;
+  border: 1.5px solid var(--accent-primary);
+  border-radius: 6px;
+  background-color: rgb(0 0 0 / 25%);
+  color: var(--text-primary);
+  font: inherit;
+  outline: none;
+}
+
+.input::placeholder {
+  color: var(--text-very-dim);
+}
+
+.input:disabled {
+  opacity: 0.7;
+}
+
+.count {
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--text-very-dim);
+  font-variant-numeric: tabular-nums;
+}

@@ -46,6 +46,7 @@ const mockRooms: PublicRoom[] = [
     status: "waiting",
     names: ["Wario Fan", "Ness"],
     joinable: true,
+    name: "chill ffa, no camping",
   },
   {
     code: "PLNX",
@@ -85,6 +86,7 @@ const mockRooms: PublicRoom[] = [
     status: "in-game",
     names: ["Mango", "Zain", "Cody", "Hungrybox"],
     joinable: false,
+    name: "Friday doubles (all welcome)",
     ruleset: {
       code: null,
       name: "Custom",
@@ -131,6 +133,34 @@ const Frame = ({
 );
 
 export const SeveralRooms = () => <Frame state={{ kind: "ready", online: 128, rooms: mockRooms }} />;
+
+/** The player's room (PLNX, which they host) first, marked, with the pencil. */
+export const YourRoom = () => (
+  <Frame
+    state={{ kind: "ready", online: 128, rooms: mockRooms }}
+    yourRoom={{ kind: "pplus", code: "PLNX", host: true, name: null }}
+    onRenameRoom={() => Promise.resolve()}
+  />
+);
+
+/** The host typing its name. */
+export const NamingYourRoom = () => (
+  <Frame
+    state={{ kind: "ready", online: 128, rooms: mockRooms }}
+    yourRoom={{ kind: "pplus", code: "PLNX", host: true, name: null }}
+    onRenameRoom={() => Promise.resolve()}
+    forceEditText="lucas mains only"
+  />
+);
+
+/** A member's room, named by its host: no pencil. */
+export const YourRoomAsMember = () => (
+  <Frame
+    state={{ kind: "ready", online: 128, rooms: mockRooms }}
+    yourRoom={{ kind: "pplus", code: "TRZM", host: false, name: "chill ffa, no camping" }}
+    onRenameRoom={() => Promise.resolve()}
+  />
+);
 
 export const OneRoom = () => <Frame state={{ kind: "ready", online: 1, rooms: mockRooms.slice(0, 1) }} />;
 

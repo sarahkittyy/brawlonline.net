@@ -392,6 +392,49 @@ async fn fake_deepinfra() -> String {
     format!("http://{addr}/chat")
 }
 
+/// A room name with a racial slur is stored as a kind name at once (the answer says so, and the
+/// launcher shows it); one the model could not check is replaced by the background re-check.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn racial_slurs_in_room_names_are_replaced() {
+    use accounts::slur_filter::KIND_NAMES;
+    let url = fake_deepinfra().await;
+    let s = Stack::start(StackOptions { slur_filter_url: Some(url), ..Default::default() }).await.unwrap();
+    let (session, user) = s.create_player("a@x.test", "alice", "ALIC").await;
+    let uid: uuid::Uuid = user.uid.parse().unwrap();
+    let stored = |kind: &'static str| {
+        let pool = s.pool.clone();
+        async move {
+            sqlx::query_scalar::<_, Option<String>>(&format!("SELECT {kind} FROM users WHERE uid = $1"))
+                .bind(uid)
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+        }
+    };
+
+    let (st, body) = s.put("/v1/me/room-name", Some(&session), json!({"kind": "pplus", "name": "Night owls"})).await;
+    assert_eq!((st, body["name"].as_str()), (200, Some("Night owls")), "{body}");
+    let (st, body) = s.put("/v1/me/room-name", Some(&session), json!({"kind": "pplus", "name": "badword ffa"})).await;
+    assert_eq!(st, 200, "{body}");
+    let kind = body["name"].as_str().unwrap().to_string();
+    assert!(KIND_NAMES.contains(&kind.as_str()), "{body}");
+    assert_eq!(stored("room_name").await.as_deref(), Some(kind.as_str()));
+
+    // DeepInfra failing: stored as typed, replaced a second later.
+    let (st, body) = s.put("/v1/me/room-name", Some(&session), json!({"kind": "mods", "name": "flaky races"})).await;
+    assert_eq!((st, body["name"].as_str()), (200, Some("flaky races")), "{body}");
+    tokio::time::sleep(std::time::Duration::from_millis(2500)).await;
+    let late = stored("mods_room_name").await.unwrap();
+    assert!(KIND_NAMES.contains(&late.as_str()), "{late}");
+    assert_eq!(stored("room_name").await.as_deref(), Some(kind.as_str()));
+    let audits: i64 = sqlx::query_scalar("SELECT count(*) FROM audit_log WHERE action = 'user.room-name'")
+        .fetch_one(&s.pool)
+        .await
+        .unwrap();
+    assert_eq!(audits, 1);
+    s.shutdown().await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn racial_slurs_in_names_and_codes_are_replaced() {
     use accounts::slur_filter::{KIND_NAMES, KIND_PREFIXES};

@@ -88,6 +88,9 @@ pub struct MemberInfo {
     pub uid: Uuid,
     pub display_name: String,
     pub connect_code: String,
+    /// The name the account gives the rooms of this kind it hosts (`users.room_name` or
+    /// `users.mods_room_name`): a room it creates gets it.
+    pub room_name: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -148,6 +151,9 @@ enum Phase {
 #[derive(Debug, Clone)]
 struct Room {
     code: String,
+    /// The name its host gave it (`docs/design/rooms.md` §1.4): the creator's at the start, then
+    /// the host's whenever the host renames (the room keeps it when the host leaves).
+    name: Option<String>,
     public: bool,
     teams: bool,
     /// With `teams`: every player in their team's costume (P+'s plain team battle), else P+'s
@@ -553,6 +559,7 @@ impl Room {
             names: self.members().map(|(_, m)| m.info.display_name.clone()).collect(),
             joinable: self.free_slot().is_some(),
             ruleset: self.ruleset_view(),
+            name: self.name.clone(),
         }
     }
 }
@@ -687,7 +694,7 @@ impl RoomBook {
         let mut list = Vec::new();
         for room in self.rooms.values() {
             let entry = room.public_entry();
-            for (_, m) in room.members() {
+            for (i, m) in room.members() {
                 if list.len() >= limit {
                     return list;
                 }
@@ -699,6 +706,8 @@ impl RoomBook {
                     mode: entry.mode,
                     status: entry.status,
                     joinable: entry.joinable,
+                    host: i == room.host,
+                    name: entry.name.clone(),
                 });
             }
         }
@@ -824,6 +833,7 @@ impl RoomBook {
             code.clone(),
             Room {
                 code: code.clone(),
+                name: who.room_name.clone(),
                 public,
                 teams: false,
                 team_colors: false,
@@ -1741,6 +1751,18 @@ impl RoomBook {
         }
     }
 
+    /// The account named its rooms (`PUT /v1/me/room-name`, seen in `users.room_name`): the room
+    /// it hosts takes the name, for the launchers' lists (the games do not show it).
+    pub fn set_name(&mut self, uid: Uuid, name: Option<&str>) {
+        for room in self.rooms.values_mut() {
+            let hosts = room.slots[room.host].as_ref().is_some_and(|h| h.info.uid == uid);
+            if hosts && room.name.as_deref() != name {
+                tracing::info!(code = %room.code, ?name, "room named");
+                room.name = name.map(str::to_string);
+            }
+        }
+    }
+
     /// The account on this online connection was banned: it leaves its room as a removed player
     /// does (its side forfeits a set that is on) rather than as a dropped connection (waited for).
     pub fn banned(&mut self, now: Instant, conn: ConnId, out: &mut Vec<Output>) {
@@ -1837,6 +1859,7 @@ mod tests {
             uid: Uuid::from_bytes([n; 16]),
             display_name: format!("player{n}"),
             connect_code: format!("P#{n}"),
+            room_name: None,
         }
     }
 

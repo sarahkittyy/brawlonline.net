@@ -7,6 +7,7 @@ import type {
   MyRulesets,
   PublishRulesetRequest,
   RecentRuleset,
+  RoomKind,
   RoomList,
   RulesetDraft,
   RulesetDraftRequest,
@@ -129,6 +130,10 @@ class AccountsBackendClient implements BackendService {
 
   async fetchRooms(): Promise<RoomList> {
     return await this._api.rooms(this._activeUid());
+  }
+
+  async setRoomName(kind: RoomKind, name: string | null): Promise<string | null> {
+    return await this._api.setRoomName(this._activeUid(), kind, name);
   }
 
   async fetchRuleset(code: string): Promise<RulesetView> {

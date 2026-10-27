@@ -29,8 +29,8 @@ use axum::Router;
 use common::playkey::PlayKeySecret;
 use common::ratelimit::{
     RateLimiter, Window, AUTH_WINDOWS, BUG_REPORT_IP_WINDOWS, DAY, HISTORY_WINDOWS, LEADERBOARD_IP_WINDOWS,
-    MAIL_RECIPIENT_WINDOWS, ROOMS_WINDOWS, RULESET_EDIT_WINDOWS, RULESET_LOOKUP_IP_WINDOWS, RULESET_PUBLISH_WINDOWS,
-    SD_LISTING_FETCH_WINDOWS, SD_LISTING_UPLOAD_WINDOWS, SIGNUP_IP_WINDOWS,
+    MAIL_RECIPIENT_WINDOWS, ROOMS_WINDOWS, ROOM_NAME_WINDOWS, RULESET_EDIT_WINDOWS, RULESET_LOOKUP_IP_WINDOWS,
+    RULESET_PUBLISH_WINDOWS, SD_LISTING_FETCH_WINDOWS, SD_LISTING_UPLOAD_WINDOWS, SIGNUP_IP_WINDOWS,
 };
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
@@ -96,6 +96,8 @@ pub struct Limits {
     pub history: RateLimiter<uuid::Uuid>,
     /// Room list requests per account: [`ROOMS_WINDOWS`].
     pub rooms: RateLimiter<uuid::Uuid>,
+    /// Room names set per account: [`ROOM_NAME_WINDOWS`].
+    pub room_name: RateLimiter<uuid::Uuid>,
     /// Live game list requests per account: [`ROOMS_WINDOWS`] as well.
     pub live: RateLimiter<uuid::Uuid>,
     /// Rulesets published per account: [`RULESET_PUBLISH_WINDOWS`].
@@ -129,6 +131,7 @@ impl Limits {
             leaderboard_ip: RateLimiter::new(&LEADERBOARD_IP_WINDOWS),
             history: RateLimiter::new(&HISTORY_WINDOWS),
             rooms: RateLimiter::new(&ROOMS_WINDOWS),
+            room_name: RateLimiter::new(&ROOM_NAME_WINDOWS),
             live: RateLimiter::new(&ROOMS_WINDOWS),
             ruleset_publish: RateLimiter::new(&RULESET_PUBLISH_WINDOWS),
             ruleset_lookup_ip: RateLimiter::new(&RULESET_LOOKUP_IP_WINDOWS),
@@ -182,6 +185,7 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/ranked/leaderboard", get(leaderboard::leaderboard))
         .route("/v1/rooms", get(rooms::rooms))
         .route("/v1/mod-rooms/{code}", get(rooms::mod_room))
+        .route("/v1/me/room-name", put(rooms::set_room_name))
         .route("/v1/rulesets", get(rulesets::browse).post(rulesets::publish))
         .route("/v1/rulesets/{code}", get(rulesets::lookup))
         .route("/v1/rulesets/{code}/preview", get(rulesets::preview))

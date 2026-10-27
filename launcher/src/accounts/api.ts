@@ -22,6 +22,7 @@ import {
   ipc_accountsRuleset,
   ipc_accountsServiceUrls,
   ipc_accountsSetRememberedRuleset,
+  ipc_accountsSetRoomName,
   ipc_accountsSetRulesetHidden,
   ipc_accountsSignUp,
   ipc_accountsUpdateRulesetDraft,
@@ -76,6 +77,9 @@ const accountsApi: AccountsApi = {
   },
   async rooms(uid) {
     return unwrap(await ipc_accountsRooms.renderer!.trigger({ uid }));
+  },
+  async setRoomName(uid, kind, name) {
+    return unwrap(await ipc_accountsSetRoomName.renderer!.trigger({ uid, kind, name }));
   },
   async ruleset(code) {
     return unwrap(await ipc_accountsRuleset.renderer!.trigger({ code }));

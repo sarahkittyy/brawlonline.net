@@ -111,6 +111,7 @@ const Frame = ({ state, ...props }: Omit<Partial<ModsViewProps>, "state"> & { st
             hostName: "Keiko",
             players: 3,
             open: 4,
+            name: "REX nights",
           },
           {
             code: "QRHQ",
@@ -175,6 +176,15 @@ export const CheckingCompressedDisc = () => (
 );
 
 export const Hosting = () => <Frame state={{ builds, running: true, status: room(1) }} />;
+
+/** The host's room named, with the pencil. */
+export const HostingNamed = () => (
+  <Frame
+    state={{ builds, running: true, status: room(1) }}
+    yourRoom={{ kind: "mods", code: room(1).room!.code, host: true, name: "sunday NSMB races, all welcome!!" }}
+    onRenameRoom={() => Promise.resolve()}
+  />
+);
 
 export const Member = () => <Frame state={{ builds, running: true, status: room(2) }} />;
 

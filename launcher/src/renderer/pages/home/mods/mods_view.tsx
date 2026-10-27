@@ -1,4 +1,4 @@
-import type { PublicModRoom } from "@accounts/types";
+import type { PublicModRoom, YourRoom } from "@accounts/types";
 import type { PartMatch } from "@dolphin/mods/room_match";
 import { matchRoom } from "@dolphin/mods/room_match";
 import type {
@@ -36,6 +36,8 @@ import type { ReactNode } from "react";
 import { useEffect, useState } from "react";
 
 import { ExternalLink } from "@/components/external_link";
+import { RoomNameMessages } from "@/components/room_name/room_name.messages";
+import { RoomNameField } from "@/components/room_name/room_name_field";
 
 import { ContentBlock } from "../overview/content_block/content_block";
 import { ControllerMenu } from "./controller_menu";
@@ -76,6 +78,10 @@ export type ModsViewProps = {
   onFixBuild: (build: ModBuild, part: "disc" | "sd") => void;
   onRequest: (request: ModRoomRequest) => void;
   onCopyCode: (code: string) => void;
+  /** The room the player is in, as the server lists it (its name; whether they host it). */
+  yourRoom?: YourRoom | null;
+  /** The host names their room (empty: no name); throws when the server refused it. */
+  onRenameRoom?: (code: string, name: string) => Promise<void>;
 };
 
 const fileName = (p: string | null) => (p ? p.split(/[\\/]/).pop() ?? p : null);
@@ -142,7 +148,13 @@ export const ModsView = (props: ModsViewProps) => {
         <div className={styles.column}>
           {state?.running && (
             <div className={styles.roomSlot}>
-              <RoomPanel status={status} onRequest={props.onRequest} onCopyCode={props.onCopyCode} />
+              <RoomPanel
+                status={status}
+                onRequest={props.onRequest}
+                onCopyCode={props.onCopyCode}
+                yourRoom={props.yourRoom}
+                onRename={props.onRenameRoom}
+              />
             </div>
           )}
           <PublicRoomsBlock
@@ -455,8 +467,16 @@ const PublicRoomsBlock = ({
                   }}
                 >
                   <div className={styles.roomMain}>
-                    <div className={styles.roomHost}>{Messages.roomHost(room.hostName)}</div>
-                    <div className={styles.roomGame}>{label}</div>
+                    {/* A room its host didn't name: "alice's room" in grey, so a real name stands out. */}
+                    <div className={clsx(styles.roomHost, !room.name && styles.roomUnnamed)}>
+                      {room.name ?? Messages.roomHost(room.hostName)}
+                    </div>
+                    <div className={styles.roomGame}>
+                      <span className={styles.crown} title={Messages.hostLabel()}>
+                        {"♛ "}
+                      </span>
+                      {room.hostName} · {label}
+                    </div>
                     {match.hasParts && room.build.disc && (
                       <div className={styles.partChips}>
                         <PartChip
@@ -666,10 +686,14 @@ const RoomPanel = ({
   status,
   onRequest,
   onCopyCode,
+  yourRoom,
+  onRename,
 }: {
   status: ModRoomStatus | null;
   onRequest: (request: ModRoomRequest) => void;
   onCopyCode: (code: string) => void;
+  yourRoom?: YourRoom | null;
+  onRename?: (code: string, name: string) => Promise<void>;
 }) => {
   const [dragFrom, setDragFrom] = useState<number | null>(null);
   // The public switch moves at the click: the room file says it only after Dolphin and the
@@ -702,9 +726,19 @@ const RoomPanel = ({
       Messages.duration(sync.eta_s),
     );
   }
-  let title: string = Messages.yourRoom();
+  let title: ReactNode = Messages.yourRoom();
   if (room) {
-    title = Messages.inRoom(room.code);
+    // The room's name (the server's, once it lists this room), the host's pencil next to it.
+    const hostName = room.slots.find((s) => s.slot === room.host)?.player?.displayName;
+    const listed = yourRoom?.kind === "mods" && yourRoom.code === room.code ? yourRoom : null;
+    title = (
+      <RoomNameField
+        name={listed?.name ?? null}
+        fallback={hostName ? RoomNameMessages.defaultName(hostName) : Messages.inRoom(room.code)}
+        canEdit={isHost && !!listed && !!onRename}
+        onSave={async (name) => onRename?.(room.code, name)}
+      />
+    );
   } else if (status?.kind === "join") {
     title = Messages.joiningRoom();
   } else if (!status) {
@@ -717,9 +751,15 @@ const RoomPanel = ({
         room ? (
           <div className={styles.roomActions}>
             <Tooltip title={Messages.copyCode()}>
-              <IconButton size="small" aria-label={Messages.copyCode()} onClick={() => onCopyCode(room.code)}>
-                <ContentCopyRoundedIcon fontSize="small" />
-              </IconButton>
+              <button
+                type="button"
+                className={styles.codeChip}
+                aria-label={Messages.copyCode()}
+                onClick={() => onCopyCode(room.code)}
+              >
+                {room.code}
+                <ContentCopyRoundedIcon style={{ fontSize: 13 }} />
+              </button>
             </Tooltip>
             {isHost && (
               <Tooltip title={Messages.publicRoomTooltip()}>

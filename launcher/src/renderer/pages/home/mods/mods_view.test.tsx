@@ -159,8 +159,11 @@ describe("ModsView", () => {
 
   it("shows the room to its host, with a kick for the other player and an open slot to close", () => {
     const p = props({ builds: [minus], running: true, status: room(1) });
-    const { getByText, getAllByText } = render(<ModsView {...p} />);
-    expect(getByText(Messages.inRoom("KFQB"))).toBeTruthy();
+    const { getByText, getAllByText, getByTestId } = render(<ModsView {...p} />);
+    // Not named: the host's room, and its code (a click copies it).
+    expect(getByTestId("room-name").textContent).toBe("Ann's room");
+    fireEvent.click(getByText("KFQB"));
+    expect(p.onCopyCode).toHaveBeenCalledWith("KFQB");
     expect(getByText("Bob")).toBeTruthy();
     expect(getByText(Messages.ping(41.6))).toBeTruthy();
     fireEvent.click(getByText(Messages.kick()));
@@ -408,12 +411,53 @@ describe("ModsView", () => {
         },
       },
     );
-    const { getByText } = render(<ModsView {...p} />);
-    const row = getByText(Messages.roomHost("Ann")).closest("button") as HTMLButtonElement;
+    const { container } = render(<ModsView {...p} />);
+    const row = container.querySelector('button[data-room="KFQB"]') as HTMLButtonElement;
+    expect(row.textContent).toContain(Messages.roomHost("Ann"));
     expect(row.textContent).toContain(Messages.yourRoomLabel());
     expect(row.getAttribute("aria-disabled")).toBe("true");
     fireEvent.click(row);
     expect(p.onJoin).not.toHaveBeenCalled();
+  });
+
+  it("lets the host name the room from its panel once the server lists it", async () => {
+    const onRenameRoom = vi.fn(() => Promise.resolve());
+    const yourRoom = { kind: "mods" as const, code: "KFQB", host: true, name: "REX nights" };
+    // Before the server has the room: no pencil.
+    const p = props({ builds: [minus], running: true, status: room(1) }, { onRenameRoom });
+    const { getByTestId, queryByTestId, rerender } = render(<ModsView {...p} />);
+    expect(queryByTestId("room-name-pencil")).toBeNull();
+    rerender(<ModsView {...p} yourRoom={yourRoom} />);
+    expect(getByTestId("room-name").textContent).toBe("REX nights");
+    fireEvent.click(getByTestId("room-name-pencil"));
+    fireEvent.change(getByTestId("room-name-input"), { target: { value: "REX tuesdays" } });
+    await act(async () => {
+      fireEvent.keyDown(getByTestId("room-name-input"), { key: "Enter" });
+    });
+    expect(onRenameRoom).toHaveBeenCalledWith("KFQB", "REX tuesdays");
+    // A joiner sees the name without the pencil.
+    const joiner = props({ builds: [minus], running: true, status: room(2) });
+    rerender(<ModsView {...joiner} yourRoom={{ ...yourRoom, host: false }} />);
+    expect(getByTestId("room-name").textContent).toBe("REX nights");
+    expect(queryByTestId("room-name-pencil")).toBeNull();
+  });
+
+  it("shows a public room's name over its host and game", () => {
+    const named = {
+      code: "PLNX",
+      build: { hash: minus.hash!, name: "Brawl Minus" },
+      hostName: "Cy",
+      players: 1,
+      open: 4,
+    };
+    const p = props(
+      { builds: [minus], running: false, status: null },
+      { publicRooms: { kind: "ready", rooms: [{ ...named, name: "minus madness" }] } },
+    );
+    const { container } = render(<ModsView {...p} />);
+    const row = container.querySelector('button[data-room="PLNX"]')!;
+    expect(row.textContent).toContain("minus madness");
+    expect(row.textContent).toContain("♛ Cy · Brawl Minus");
   });
 
   it("keeps saying why a join failed after Dolphin closed", () => {

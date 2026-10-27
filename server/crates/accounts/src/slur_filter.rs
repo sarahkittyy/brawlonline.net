@@ -1,5 +1,6 @@
-//! Racial slurs in display names and connect codes: a small LLM on DeepInfra reads each name a
-//! player picks (sign-up, rename) and each code start (`/v1/me/netplay`), and one it calls a
+//! Racial slurs in display names, connect codes and room names: a small LLM on DeepInfra reads
+//! each name a player picks (sign-up, rename), each code start (`/v1/me/netplay`) and each room
+//! name (`/v1/me/room-name`), and one it calls a
 //! racial or ethnic slur is replaced by a kind one ("happy friend", `JOY#123`) before it is
 //! stored. Only racial slurs: profanity, sexual words and other insults are left to the admins.
 //! With several models (`SLUR_FILTER_MODELS`) every one must say YES. The prompt and the default
@@ -19,6 +20,8 @@ use anyhow::Context;
 use rand::seq::SliceRandom;
 use serde_json::json;
 use uuid::Uuid;
+
+use common::rooms::RoomKind;
 
 use crate::config::SlurFilterConfig;
 use crate::store;
@@ -74,6 +77,8 @@ Reply with one word: YES or NO.";
 pub enum What {
     DisplayName,
     CodeStart,
+    /// The name a host gives their rooms (`PUT /v1/me/room-name`).
+    RoomName,
 }
 
 impl What {
@@ -81,6 +86,7 @@ impl What {
         match self {
             What::DisplayName => "display name",
             What::CodeStart => "connect code start",
+            What::RoomName => "room name",
         }
     }
 }
@@ -195,7 +201,7 @@ impl SlurFilter {
         match self.is_slur(what, text).await {
             Ok(false) => Screened::Clean,
             Ok(true) => Screened::Replace(match what {
-                What::DisplayName => kind_name(),
+                What::DisplayName | What::RoomName => kind_name(),
                 What::CodeStart => kind_prefix(),
             }),
             Err(e) => {
@@ -240,6 +246,19 @@ pub async fn screen_code_start(state: &AppState, prefix: &str) -> (String, bool)
     }
 }
 
+/// The room name to store for `name` (a kind one if it is a slur), and whether it still has to
+/// be checked ([`recheck_room_name`] once it is stored).
+pub async fn screen_room_name(state: &AppState, name: &str) -> (String, bool) {
+    match state.slur_filter.screen(What::RoomName, name).await {
+        Screened::Clean => (name.to_string(), false),
+        Screened::Replace(kind) => {
+            tracing::info!(from = name, to = kind, "racial slur in a room name replaced");
+            (kind.to_string(), false)
+        }
+        Screened::Unchecked => (name.to_string(), true),
+    }
+}
+
 /// Logs a replacement made after the text was stored (the background re-check, `slur-scan`).
 pub async fn audit_replacement(
     pool: &sqlx::PgPool,
@@ -281,6 +300,38 @@ pub fn recheck_name(state: &AppState, uid: Uuid, name: String) {
             }
         }
         tracing::warn!(%uid, "display name left unchecked: the slur filter did not answer");
+    });
+}
+
+/// [`recheck_name`] for a room name stored unchecked: replaced if it is a slur and still the
+/// account's name for that kind of room (mm renames the room it hosts).
+pub fn recheck_room_name(state: &AppState, uid: Uuid, kind: RoomKind, name: String) {
+    let state = state.clone();
+    tokio::spawn(async move {
+        for wait in state.slur_filter.recheck_waits.clone() {
+            tokio::time::sleep(wait).await;
+            match state.slur_filter.is_slur(What::RoomName, &name).await {
+                Ok(false) => return,
+                Ok(true) => {
+                    let kind_text = kind_name();
+                    match store::set_room_name_if(&state.pool, uid, kind, &name, kind_text).await {
+                        Ok(true) => {
+                            tracing::info!(%uid, from = %name, to = kind_text, "racial slur in a room name replaced");
+                            if let Err(e) =
+                                audit_replacement(&state.pool, ACTOR, "user.room-name", uid, &name, kind_text).await
+                            {
+                                tracing::warn!("audit of a slur room name failed: {e}");
+                            }
+                        }
+                        Ok(false) => {}
+                        Err(e) => tracing::warn!(%uid, "slur room name replacement failed: {e}"),
+                    }
+                    return;
+                }
+                Err(e) => tracing::warn!(%uid, "slur re-check of a room name failed: {e:#}"),
+            }
+        }
+        tracing::warn!(%uid, "room name left unchecked: the slur filter did not answer");
     });
 }
 

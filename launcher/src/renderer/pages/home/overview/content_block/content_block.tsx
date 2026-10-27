@@ -13,7 +13,8 @@ export const ContentBlock = ({
   overflowY = "auto",
 }: {
   fill?: boolean;
-  title?: string;
+  /** Text, or a room's name field (Other Games' room panel). */
+  title?: React.ReactNode;
   /** Shown right after the title (a button). */
   titleAction?: React.ReactNode;
   /** A row under the header that doesn't scroll with the content (buttons, boxes). */
@@ -28,7 +29,7 @@ export const ContentBlock = ({
       {title && (
         <div className={clsx(styles.header, onClick && styles.active)} onClick={onClick}>
           <div className={styles.titleRow}>
-            <h3 className={styles.title}>{title}</h3>
+            <h3 className={clsx(styles.title, typeof title !== "string" && styles.shrinks)}>{title}</h3>
             {titleAction}
           </div>
           {endIcon}

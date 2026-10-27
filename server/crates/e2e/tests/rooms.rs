@@ -429,3 +429,52 @@ async fn admin_renames_and_bans_reach_a_room_at_once() {
             .is_some_and(|sl| sl.iter().all(|x| x["player"]["connectCode"] != bob.connect_code.as_str()))
     });
 }
+
+/// Room names (`docs/design/rooms.md` §1.4): the host names their room from the launcher
+/// (`PUT /v1/me/room-name`), the list shows it once mm's account poll saw it, each member's
+/// `yourRoom` says whether they host it, the room keeps it when the host leaves, and the host's
+/// next room gets it again.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn hosts_name_their_rooms_from_the_launcher() {
+    let stack = Stack::start(StackOptions::default()).await.unwrap();
+    let (sa, alice) = stack.create_player("alice@example.test", "alice", "alic").await;
+    let (sb, bob) = stack.create_player("bob@example.test", "bob", "bo").await;
+    let mut a = online(&stack, &alice);
+    let mut b = online(&stack, &bob);
+    let code = create(&mut a);
+    join(&mut b, &code);
+    room_state_where(&mut a, |s| s["slots"][1]["player"].is_object());
+    let body = rooms_until(&stack, &sa, |r| r["yourRoom"]["code"] == code.as_str()).await;
+    assert_eq!(body["yourRoom"], json!({"kind": "pplus", "code": code, "host": true, "name": null}));
+    assert!(body["rooms"][0].get("name").is_none(), "{body}");
+
+    let (st, body) =
+        stack.put("/v1/me/room-name", Some(&sa), json!({"kind": "pplus", "name": "  friday   doubles "})).await;
+    assert_eq!((st, &body), (200, &json!({"kind": "pplus", "name": "friday doubles"})));
+    let body = rooms_until(&stack, &sa, |r| r["rooms"][0]["name"] == "friday doubles").await;
+    assert_eq!(body["yourRoom"]["name"], "friday doubles");
+    assert!(body.get("members").is_none() && body.get("modMembers").is_none(), "{body}");
+    let body = rooms_until(&stack, &sb, |r| r["yourRoom"]["name"] == "friday doubles").await;
+    assert_eq!(body["yourRoom"]["host"], false);
+
+    // Too long, or the other kind's name: this room keeps its name.
+    let (st, body) = stack.put("/v1/me/room-name", Some(&sa), json!({"kind": "pplus", "name": "x".repeat(33)})).await;
+    assert_eq!((st, body["error"]["code"].as_str()), (400, Some("invalid_room_name")), "{body}");
+    let (st, _) = stack.put("/v1/me/room-name", Some(&sa), json!({"kind": "mods", "name": "Mario Kart"})).await;
+    assert_eq!(st, 200);
+
+    // The host leaves: bob hosts it, named as before.
+    a.send(&RoomRequest::Leave);
+    let body = rooms_until(&stack, &sb, |r| r["yourRoom"]["host"] == true).await;
+    assert_eq!(body["yourRoom"]["name"], "friday doubles");
+    assert_eq!(body["rooms"][0]["name"], "friday doubles");
+
+    // Alice's next room has her name again.
+    let code2 = create(&mut a);
+    let body = rooms_until(&stack, &sa, |r| r["yourRoom"]["code"] == code2.as_str()).await;
+    assert_eq!(body["yourRoom"]["name"], "friday doubles");
+    // An empty name takes it off.
+    let (st, body) = stack.put("/v1/me/room-name", Some(&sa), json!({"kind": "pplus", "name": " "})).await;
+    assert_eq!((st, &body), (200, &json!({"kind": "pplus", "name": null})));
+    rooms_until(&stack, &sa, |r| r["yourRoom"]["code"] == code2.as_str() && r["yourRoom"]["name"].is_null()).await;
+}

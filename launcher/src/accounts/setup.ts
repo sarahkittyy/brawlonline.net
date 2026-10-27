@@ -29,6 +29,7 @@ import {
   ipc_accountsRuleset,
   ipc_accountsServiceUrls,
   ipc_accountsSetRememberedRuleset,
+  ipc_accountsSetRoomName,
   ipc_accountsSetRulesetHidden,
   ipc_accountsSignUp,
   ipc_accountsUpdateRulesetDraft,
@@ -59,6 +60,7 @@ export default function setupAccountsIpc() {
     async ({ uid, mode, limit, before }) => await manager.matchHistory(uid, { mode, limit, before }),
   );
   ipc_accountsRooms.main!.handle(async ({ uid }) => await manager.rooms(uid));
+  ipc_accountsSetRoomName.main!.handle(async ({ uid, kind, name }) => await manager.setRoomName(uid, kind, name));
   ipc_accountsRuleset.main!.handle(async ({ code }) => await manager.ruleset(code));
   ipc_accountsBrowseRulesets.main!.handle(
     async ({ q, limit, after }) => await manager.browseRulesets({ q, limit, after }),

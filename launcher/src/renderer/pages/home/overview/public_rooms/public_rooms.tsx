@@ -5,6 +5,7 @@ import { useLoginModal } from "@/lib/hooks/use_login_modal";
 import { useRememberedRuleset } from "@/lib/rulesets/use_remembered_ruleset";
 import { useCreateRoom } from "@/lib/social/use_create_room";
 import { useRoomList } from "@/lib/social/use_room_list";
+import { useRoomName } from "@/lib/social/use_room_name";
 import { RulesetPreviewDialog } from "@/pages/rulesets/ruleset_preview_dialog";
 
 import type { PublicRoomsState } from "./public_rooms_view";
@@ -24,6 +25,7 @@ export const PublicRooms = React.memo(function PublicRooms() {
   const { join, joiningCode } = useJoinRoom();
   const { create: createRoom, creating } = useCreateRoom();
   const { ruleset } = useRememberedRuleset();
+  const { rename, shown } = useRoomName("pplus");
   /** The ruleset whose rules are shown (a click on a room's ruleset). */
   const [showRuleset, setShowRuleset] = useState<string | null>(null);
   /** The join in progress came from the room code box. */
@@ -42,17 +44,23 @@ export const PublicRooms = React.memo(function PublicRooms() {
   if (!uid) {
     state = { kind: "logged-out" };
   } else if (query.data && !outdated) {
-    state = { kind: "ready", online: query.data.online, rooms: query.data.rooms };
+    // A name just given shows at once, before mm has it in the list.
+    const rooms = query.data.rooms.map((r) => ({ ...r, name: shown(r.code, r.name) }));
+    state = { kind: "ready", online: query.data.online, rooms };
   } else if (query.isError) {
     state = { kind: "unreachable" };
   } else {
     state = { kind: "loading" };
   }
 
+  const yourRoom = query.data?.yourRoom?.kind === "pplus" ? query.data.yourRoom : null;
+
   return (
     <>
       <PublicRoomsView
         state={state}
+        yourRoom={yourRoom}
+        onRenameRoom={rename}
         joiningCode={joiningCode}
         onJoin={(room) => {
           if (room.joinable) {
