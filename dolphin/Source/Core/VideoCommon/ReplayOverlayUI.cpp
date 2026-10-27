@@ -189,9 +189,14 @@ void Display(float scale)
   // Play ends the replay, a click does nothing (the button and Space still end it). Catching up to
   // live, a click stops the catch-up and plays on from there (the user, 2026-10-21: "Click to
   // watch"), not paused.
+  // Not a click on another window (the chat, drawn before this, has already made the item under it
+  // active, which IsWindowHovered alone takes as not hovered), nor one that closes a menu.
   const bool catching_up = info.live && !info.ended && info.catching_up;
   if (io.MouseClicked[0] && !s_dragging && !info.at_end &&
-      !ImGui::IsWindowHovered(ImGuiHoveredFlags_AnyWindow))
+      !ImGui::IsWindowHovered(ImGuiHoveredFlags_AnyWindow |
+                              ImGuiHoveredFlags_AllowWhenBlockedByActiveItem |
+                              ImGuiHoveredFlags_AllowWhenBlockedByPopup) &&
+      !ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId))
   {
     Control(catching_up ? Gprb::Session::PlaybackCommand::Play :
                           Gprb::Session::PlaybackCommand::TogglePause);
