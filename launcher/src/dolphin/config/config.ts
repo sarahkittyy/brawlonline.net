@@ -1,6 +1,5 @@
 import { DEFAULT_CHAT_KEY } from "@common/chat_key";
 import { normalizeInputDelay } from "@common/input_delay";
-import { normalizePingLimit } from "@common/ping_limit";
 import { DOLPHIN_INI_SECTION } from "@common/product";
 import { defaultAppSettings } from "@settings/default_settings";
 
@@ -13,8 +12,6 @@ export type SyncedDolphinSettings = {
   enableMonthlySubfolders: boolean;
   /** 0: automatic, else frames (`[Online] InputDelay`). */
   inputDelay: number;
-  /** "Matchmaking Ping Limit", ms (`[Online] MatchmakingPingLimit`). Written only. */
-  pingLimit?: number;
   /** The game's music (`[Online] Music`; off applies P+'s Music Off code). */
   enableMusic: boolean;
   /** No chat window in the game (`[Online] DisableChat`). */
@@ -65,9 +62,6 @@ export async function setOnlineSettings(iniFile: IniFile, options: Partial<Synce
   }
   if (options.inputDelay !== undefined) {
     section.set("InputDelay", String(normalizeInputDelay(options.inputDelay)));
-  }
-  if (options.pingLimit !== undefined) {
-    section.set("MatchmakingPingLimit", String(normalizePingLimit(options.pingLimit)));
   }
   if (options.enableMusic !== undefined) {
     section.set("Music", convertBooleanToIniVal(options.enableMusic));

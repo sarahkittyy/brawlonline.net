@@ -1,5 +1,4 @@
 import { INPUT_DELAY_NORMAL } from "@common/input_delay";
-import { PING_LIMIT_DEFAULT } from "@common/ping_limit";
 import { LEGACY_PRODUCT_NAMES, PRODUCT_NAME } from "@common/product";
 import { app } from "electron";
 import log from "electron-log";
@@ -43,7 +42,6 @@ export const defaultAppSettings: AppSettings = {
     extraSlpPaths: [],
     launchGameOnPlay: true,
     inputDelay: INPUT_DELAY_NORMAL,
-    pingLimit: PING_LIMIT_DEFAULT,
     enableMusic: true,
     disableChat: false,
     enableStreamGames: true,

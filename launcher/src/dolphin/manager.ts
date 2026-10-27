@@ -1730,7 +1730,6 @@ export class DolphinManager {
       enableNetplayReplays: this.settingsManager.getEnableNetplayReplays(),
       enableMonthlySubfolders: this.settingsManager.getEnableMonthlySubfolders(),
       inputDelay: this.settingsManager.getInputDelay(),
-      pingLimit: this.settingsManager.getPingLimit(),
       enableMusic: this.settingsManager.getEnableMusic(),
       disableChat: this.settingsManager.getDisableChat(),
       enableStreamGames: this.settingsManager.getEnableStreamGames(),

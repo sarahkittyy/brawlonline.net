@@ -45,7 +45,6 @@ const Info<bool> ONLINE_UPNP{{System::Main, "Online", "UPnP"}, true};
 const Info<std::string> ONLINE_SESSION_BACKEND{{System::Main, "Online", "SessionBackend"},
                                                "gameplay"};
 const Info<int> ONLINE_INPUT_DELAY{{System::Main, "Online", "InputDelay"}, 0};
-const Info<int> ONLINE_MM_PING_LIMIT{{System::Main, "Online", "MatchmakingPingLimit"}, 150};
 const Info<bool> ONLINE_MUSIC{{System::Main, "Online", "Music"}, true};
 const Info<bool> ONLINE_CHAT_IN_MATCHES{{System::Main, "Online", "ChatInMatches"}, true};
 const Info<std::string> ONLINE_CHAT_WINDOW{{System::Main, "Online", "ChatWindow"}, ""};

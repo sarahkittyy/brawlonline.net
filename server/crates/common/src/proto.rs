@@ -95,11 +95,6 @@ pub struct CreateTicket {
     pub platform: String,
     #[serde(default)]
     pub ip_address_lan: String,
-    /// Unranked and Ranked: the highest estimated ping (ms) this player will be paired at, the
-    /// launcher's "Matchmaking Ping Limit" (100, 150 or 200). Absent from builds older than the
-    /// field: no limit of their own.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub ping_limit: Option<f64>,
 }
 
 /// `create-ticket.user`. Brawlback's client sends only `uid` and `playKey`;
