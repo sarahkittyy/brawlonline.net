@@ -15,6 +15,24 @@ export type RulePause = "normal" | "hold";
  */
 export type StageChoice = "loser-picks" | "loser-picks-list" | "strike" | "random";
 
+/**
+ * P+'s Special Versus box (docs/design/special-rules.md): its rows in the box's order, each OFF or one of its two
+ * values (`common::rules::SpecialRules`, the set rule's +0x18..+0x1F).
+ */
+export const SPECIAL_ROWS = [
+  { key: "stamina", values: ["300", "stamina"] },
+  { key: "size", values: ["mega", "mini"] },
+  { key: "attack", values: ["element", "regen"] },
+  { key: "body", values: ["metal", "clear"] },
+  { key: "status", values: ["turbo", "bunny"] },
+  { key: "gravity", values: ["light", "heavy"] },
+  { key: "speed", values: ["wild", "fast"] },
+  { key: "other", values: ["meter", "all-star"] },
+] as const;
+export type SpecialRow = (typeof SPECIAL_ROWS)[number]["key"];
+/** The rows that are on, by name (a row that is off is left out, as the server writes it). */
+export type SpecialRules = Partial<Record<SpecialRow, string>>;
+
 /** `common::rules::MatchRules`. */
 export type MatchRules = {
   style: RuleStyle;
@@ -26,7 +44,7 @@ export type MatchRules = {
   damageRatio: number;
   teamAttack: boolean;
   pause: RulePause;
-  /** 0 none, 1 low, 2 medium, 3 high. */
+  /** 0 none, 1 low, 2 medium, 3 high, then P+'s 4 very high, 5 intense, 6 bomb rain. */
   itemFrequency: number;
   /** The item switch screen's 8 bytes. */
   itemSwitch: number[];
@@ -44,6 +62,13 @@ export type MatchRules = {
    * Stock matches only. The server writes it only when on, so older rulesets (and their hashes) stay the same.
    */
   stockControl?: boolean;
+  /**
+   * P+'s Special Versus box: the rows that are on. Not written while every row is off, so older rulesets (and their
+   * hashes) stay the same and an older launcher or game refuses rules that use it.
+   */
+  special?: SpecialRules;
+  /** P+'s STAMINA TYPE 1-5 (blast zones and knockback), with `special.stamina` "stamina" only; 1 is not written. */
+  staminaType?: number;
 };
 
 export type StageLists = {
@@ -83,6 +108,10 @@ export type Ruleset = {
 export const RULESET_FORMAT = 1;
 export const MAX_RULESET_NAME_LEN = 32;
 export const MAX_BANS = 3;
+/** P+'s item frequencies (`common::rules::MAX_ITEM_FREQUENCY`): Brawl's four, then very high, intense, bomb rain. */
+export const MAX_ITEM_FREQUENCY = 6;
+/** P+'s stamina types (`common::rules::STAMINA_TYPES`). */
+export const STAMINA_TYPES = 5;
 /** The most stages whose hazards can differ from the default (the game keeps 8: `common::rules::MAX_HAZARD_STAGES`). */
 export const MAX_HAZARD_STAGES = 8;
 export const BEST_OF_CHOICES = [0, 3, 5, 7] as const;
@@ -147,7 +176,21 @@ export function defaultMatchRules(): MatchRules {
     autoLCancel: false,
     inputAssist: false,
     stockControl: false,
+    special: {},
+    staminaType: 1,
   };
+}
+
+/** The rows of `special` that are on, keyed by row (an unknown or "off" value dropped). */
+export function specialOn(special: SpecialRules | undefined): SpecialRules {
+  const out: SpecialRules = {};
+  for (const row of SPECIAL_ROWS) {
+    const v = special?.[row.key];
+    if (v && (row.values as readonly string[]).includes(v)) {
+      out[row.key] = v;
+    }
+  }
+  return out;
 }
 
 /** Whether stage `id` plays with its hazards (`MatchRules::hazards_on`). */
@@ -233,7 +276,10 @@ export function normalizeRuleset(r: Ruleset): Ruleset {
     n.alternateStages = false;
   }
   const hazardStages = [...new Set(n.rules.hazardStages ?? [])].sort((a, b) => a - b);
-  n.rules = { ...n.rules, hazardStages };
+  // `MatchRules::normalize`: the stamina type only in stamina matches; a row that is off is left out.
+  const special = Object.fromEntries(Object.entries(n.rules.special ?? {}).filter(([, v]) => v !== "off"));
+  const staminaType = special.stamina === "stamina" ? n.rules.staminaType ?? 1 : 1;
+  n.rules = { ...n.rules, hazardStages, special, staminaType };
   return n;
 }
 
@@ -262,8 +308,24 @@ export function validateMatchRules(m: MatchRules): string | null {
   ) {
     return `damageRatio ${m.damageRatio} is not 0.5-2.0 in steps of 0.1`;
   }
-  if (!Number.isInteger(m.itemFrequency) || m.itemFrequency < 0 || m.itemFrequency > 3) {
-    return `itemFrequency ${m.itemFrequency} is not 0-3`;
+  if (!Number.isInteger(m.itemFrequency) || m.itemFrequency < 0 || m.itemFrequency > MAX_ITEM_FREQUENCY) {
+    return `itemFrequency ${m.itemFrequency} is not 0-${MAX_ITEM_FREQUENCY}`;
+  }
+  const staminaType = m.staminaType ?? 1;
+  if (!Number.isInteger(staminaType) || staminaType < 1 || staminaType > STAMINA_TYPES) {
+    return `staminaType ${staminaType} is not 1-${STAMINA_TYPES}`;
+  }
+  if (staminaType !== 1 && m.special?.stamina !== "stamina") {
+    return "The stamina type is for stamina matches";
+  }
+  for (const [k, v] of Object.entries(m.special ?? {})) {
+    const row = SPECIAL_ROWS.find((r) => r.key === k);
+    if (!row) {
+      return `special.${k} is not a special row`;
+    }
+    if (v !== "off" && !(row.values as readonly string[]).includes(v ?? "")) {
+      return `special.${k} ${v} is not off, ${row.values.join(" or ")}`;
+    }
   }
   const hazardStages = m.hazardStages ?? [];
   if (hazardStages.length > MAX_HAZARD_STAGES) {
@@ -418,11 +480,29 @@ export function rulesetFromJson(text: string): Ruleset {
   return r;
 }
 
+/**
+ * The ruleset as sent to the server (a draft, a publish): P+'s special rows only when one is on and the stamina type
+ * only when not 1, as the server writes them, so that a server from before them (which refuses rules fields it does not
+ * know) still takes every ruleset that does not use them.
+ */
+export function rulesetForServer(r: Ruleset): Ruleset {
+  const { special, staminaType, ...rules } = r.rules;
+  const on = specialOn(special);
+  return {
+    ...r,
+    rules: {
+      ...rules,
+      ...(Object.keys(on).length ? { special: on } : {}),
+      ...(staminaType !== undefined && staminaType !== 1 ? { staminaType } : {}),
+    },
+  };
+}
+
 /** The JSON Export writes: the ruleset without `by` (the server fills it), indented. */
 export function rulesetToJson(r: Ruleset): string {
-  const { by: _by, alternateStages, ...rest } = r;
-  // Stock control, alternate stages and per-stage hazards only when used, as the server writes them: a file without
-  // them still opens in an older launcher.
+  const { by: _by, alternateStages, ...rest } = rulesetForServer(r);
+  // Stock control, alternate stages, per-stage hazards and the special rows only when used, as the server writes them:
+  // a file without them still opens in an older launcher.
   const { stockControl, hazardStages, ...rules } = rest.rules;
   const out = { ...rest, ...(alternateStages ? { alternateStages } : {}) };
   const outRules = {
@@ -477,6 +557,12 @@ function checkTypes(r: Ruleset): string | null {
   }
   if (!isIntArray(m.hazardStages ?? [])) {
     return "hazardStages";
+  }
+  if (!isObject(m.special ?? {}) || Object.values(m.special ?? {}).some((v) => typeof v !== "string")) {
+    return "special";
+  }
+  if (!isInt(m.staminaType ?? 1)) {
+    return "staminaType";
   }
   return null;
 }

@@ -23,6 +23,7 @@
 #include "online_menu.h"
 #include "ppom.h"
 #include "room_play.h"
+#include "rules_pages.h"
 #include "stage_switch.h"
 
 namespace RoomRules {
@@ -136,6 +137,7 @@ namespace RoomRules {
 
     void reset()
     {
+        RulesPages::close(false);
         StageSwitch::close();   // (P+'s switch put back)
         s.opened = s.asHost = s.readOnly = s.setOnly = false;
         s.haveRules = false;
@@ -184,6 +186,7 @@ namespace RoomRules {
         // switch the room's stages.
         OnlineMenu::applyRules();
         StageSwitch::open(!s.readOnly);
+        RulesPages::open(!s.readOnly);
         pponline_callPreserving(OPEN_RULES, (u32)task, 0);
         s.opened = isOpen();
         if (s.opened) playSE(1);
@@ -217,13 +220,21 @@ namespace RoomRules {
         ru.itemFrequency = m[0];
         memcpy(ru.itemSwitch, m + 8, sizeof(ru.itemSwitch));
         StageSwitch::hazards(ru);   // the STAGE SWITCH's Z (every stage, or one)
-        if (same(&ru, &cur, sizeof(ru))) return;
+        // The MATCH SETUP page's stock control and the SPECIAL page's rows (rules_pages.cpp).
+        const PPOM::Special& sp = PPOM::g_block.session.special;
+        memcpy(req.special, sp.rows, sizeof(req.special));
+        req.staminaType = sp.staminaType ? sp.staminaType : 1;
+        RulesPages::rulesEdits(ru, req.special, &req.staminaType);
+        if (req.special[PPOM::SR_STAMINA] != 2) req.staminaType = 1;
+        bool specialSame = same(req.special, sp.rows, sizeof(req.special)) &&
+                           req.staminaType == (sp.staminaType ? sp.staminaType : 1);
+        if (same(&ru, &cur, sizeof(ru)) && specialSame) return;
         if (ru.style != PPOM::STYLE_STOCK && ru.timeMinutes == 0) {
             say("A time match needs a time limit.", true);
             playSE(3);
             return;
         }
-        if (ru.itemFrequency > 3) {
+        if (ru.itemFrequency > 6) {
             say("That item frequency isn't online yet.", true);
             playSE(3);
             return;
@@ -255,6 +266,7 @@ namespace RoomRules {
         if (s.opened && menuOpen) {
             u8* rt = rulesTask();
             if (rt) StageSwitch::tick(rt);
+            if (rt) RulesPages::tick(rt);
             // Close it for a game, for a host who no longer is one, and for a viewer whose screens
             // are out of date (they can open it again).
             // (Between a set's games it stays open while that lasts, or until the set's session
@@ -265,6 +277,7 @@ namespace RoomRules {
         if (s.opened && !menuOpen) {
             bool edits = s.asHost && !s.setOnly && host && inRoom && waiting;
             if (edits) sendEdits();                  // (with the STAGE SWITCH's hazards)
+            RulesPages::close(edits);                // (ROOM_FORMAT: the MATCH SETUP page)
             bool stages = StageSwitch::close();
             s.opened = false;
             s.readOnly = false;
@@ -300,6 +313,13 @@ namespace RoomRules {
         u8* rt = rulesTask();
         if (!rt) return bits;
         u32 line = *(u16*)(page + 0x42);
+        // L / R: the pages (rules_pages.cpp), and our pages over P+'s MORE RULES.
+        if (page == *(u32*)(rt + RULES_PAGE1) && (bits & (0x40 | 0x80))) return RulesPages::input(rt, (u8*)page, true, bits);
+        if (page == *(u32*)(rt + RULES_PAGE2)) {
+            bool ours = RulesPages::ours();
+            bits = RulesPages::input(rt, (u8*)page, false, bits);
+            if (ours || RulesPages::ours()) return bits;
+        }
         if (page == *(u32*)(rt + RULES_PAGE1)) {
             if (line >= 5) return bits & (IN_MOVE | IN_SIDE | IN_A | IN_B);   // the page buttons
             // STOCK CONTROL and STAGE CHOICE are the room's SET and RULESET lines (room_play.cpp)

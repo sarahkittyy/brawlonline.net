@@ -10,6 +10,8 @@ import {
 import Button from "@mui/material/Button";
 import MenuItem from "@mui/material/MenuItem";
 import Switch from "@mui/material/Switch";
+import Tab from "@mui/material/Tab";
+import Tabs from "@mui/material/Tabs";
 import TextField from "@mui/material/TextField";
 import ToggleButton from "@mui/material/ToggleButton";
 import ToggleButtonGroup from "@mui/material/ToggleButtonGroup";
@@ -19,6 +21,7 @@ import React, { useEffect, useState } from "react";
 import { ItemsSection } from "./items_section";
 import { RulesetEditorMessages as Messages } from "./rulesets_page.messages";
 import styles from "./rulesets_page.module.css";
+import { SpecialSection } from "./special_section";
 import type { StageRole } from "./stages_section";
 import { StagesSection } from "./stages_section";
 
@@ -27,6 +30,12 @@ export const RulesetEditor = ({ value, onChange }: { value: Ruleset; onChange: (
   const r = value;
   const set = (patch: Partial<Ruleset>) => onChange({ ...r, ...patch });
   const setRules = (patch: Partial<MatchRules>) => onChange({ ...r, rules: { ...r.rules, ...patch } });
+  // Under the rules, tabs (Sarah's board, 2026-10-27: "Where Items is now ... tabs: Items, Stages, Special").
+  const [tab, setTab] = useState<"stages" | "items" | "special">("stages");
+  // P+'s STOCK CONTROL: stock matches, or any style as regen's FRAME CONTROL; with stamina the box is the HP.
+  const regen = r.rules.special?.attack === "regen";
+  const stamina = r.rules.special?.stamina === "stamina";
+  const stockControlUsable = (r.rules.style === "stock" || regen) && !stamina;
 
   const setBestOf = (bestOf: number) => {
     const next: Ruleset = { ...r, bestOf };
@@ -173,12 +182,20 @@ export const RulesetEditor = ({ value, onChange }: { value: Ruleset; onChange: (
           <NumberInput value={r.rules.stocks} min={1} max={99} onChange={(stocks) => setRules({ stocks })} />
         </Row>
         <Row
-          label={Messages.stockControl()}
-          help={r.rules.style === "stock" ? Messages.stockControlHelp() : Messages.stockControlStockOnly()}
+          label={regen ? Messages.frameControl() : Messages.stockControl()}
+          help={
+            stamina
+              ? Messages.stockControlStamina()
+              : regen
+              ? Messages.frameControlHelp()
+              : r.rules.style === "stock"
+              ? Messages.stockControlHelp()
+              : Messages.stockControlStockOnly()
+          }
         >
           <Switch
             checked={r.rules.stockControl ?? false}
-            disabled={r.rules.style !== "stock"}
+            disabled={!stockControlUsable}
             onChange={(e) => setRules({ stockControl: e.target.checked })}
           />
         </Row>
@@ -227,33 +244,50 @@ export const RulesetEditor = ({ value, onChange }: { value: Ruleset; onChange: (
         </Row>
       </Section>
 
-      <ItemsSection
-        frequency={r.rules.itemFrequency}
-        itemSwitch={r.rules.itemSwitch}
-        onChange={(itemFrequency, itemSwitch) => setRules({ itemFrequency, itemSwitch })}
-      />
-
-      <Section title={Messages.stages()}>
-        <Typography variant="caption" color="text.secondary">
-          {Messages.stagesHelp()} {Messages.stageCount(r.stages.starters.length, r.stages.counterpicks.length)}
-        </Typography>
-        <Row label={Messages.hazardsDefault()} help={Messages.hazardsDefaultHelp()}>
-          <Switch
-            checked={r.rules.hazards}
-            onChange={(e) => setRules({ hazards: e.target.checked })}
-            inputProps={{ "aria-label": Messages.hazardsDefault() }}
+      <section className={styles.section}>
+        <Tabs
+          value={tab}
+          onChange={(_, v: typeof tab) => setTab(v)}
+          variant="fullWidth"
+          sx={{ minHeight: 36, "& .MuiTab-root": { minHeight: 36, textTransform: "none" } }}
+        >
+          <Tab value="stages" label={Messages.stages()} data-testid="ruleset-tab-stages" />
+          <Tab value="items" label={Messages.items()} data-testid="ruleset-tab-items" />
+          <Tab value="special" label={Messages.special()} data-testid="ruleset-tab-special" />
+        </Tabs>
+        {tab === "stages" && (
+          <>
+            <Typography variant="caption" color="text.secondary">
+              {Messages.stagesHelp()} {Messages.stageCount(r.stages.starters.length, r.stages.counterpicks.length)}
+            </Typography>
+            <Row label={Messages.hazardsDefault()} help={Messages.hazardsDefaultHelp()}>
+              <Switch
+                checked={r.rules.hazards}
+                onChange={(e) => setRules({ hazards: e.target.checked })}
+                inputProps={{ "aria-label": Messages.hazardsDefault() }}
+              />
+            </Row>
+            <StagesSection
+              stages={r.stages}
+              onRole={setStageRole}
+              hazards={{
+                default: r.rules.hazards,
+                stages: r.rules.hazardStages ?? [],
+                onToggle: (id) => onChange({ ...r, rules: withStageHazards(r.rules, id) }),
+              }}
+            />
+          </>
+        )}
+        {tab === "items" && (
+          <ItemsSection
+            bare={true}
+            frequency={r.rules.itemFrequency}
+            itemSwitch={r.rules.itemSwitch}
+            onChange={(itemFrequency, itemSwitch) => setRules({ itemFrequency, itemSwitch })}
           />
-        </Row>
-        <StagesSection
-          stages={r.stages}
-          onRole={setStageRole}
-          hazards={{
-            default: r.rules.hazards,
-            stages: r.rules.hazardStages ?? [],
-            onToggle: (id) => onChange({ ...r, rules: withStageHazards(r.rules, id) }),
-          }}
-        />
-      </Section>
+        )}
+        {tab === "special" && <SpecialSection rules={r.rules} onChange={setRules} />}
+      </section>
     </div>
   );
 };

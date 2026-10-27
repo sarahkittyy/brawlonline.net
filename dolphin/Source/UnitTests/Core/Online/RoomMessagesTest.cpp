@@ -232,6 +232,69 @@ TEST(RoomMessages, PickedStocks)
   EXPECT_EQ(RequestJson(r), std::nullopt);
 }
 
+// A stamina match: a ready player's picked HP (1-999), as the stocks.
+TEST(RoomMessages, PickedHp)
+{
+  const auto with = [](const std::string& v) {
+    return Parse(Replace(STATE, R"("costume": 3,)", R"("costume": 3, "hp": )" + v + ","));
+  };
+  const Message m = with("250");
+  ASSERT_EQ(m.kind, Message::Kind::RoomState) << m.why;
+  EXPECT_EQ(m.view->slots[0].player->hp, 250);
+  EXPECT_EQ(with("null").view->slots[0].player->hp, std::nullopt);
+  for (const char* bad : {"0", "1000", "-1", "\"3\""})
+    EXPECT_EQ(with(bad).kind, Message::Kind::Invalid) << bad;
+  Request r;
+  r.op = Op::Ready;
+  r.flag = true;
+  r.character = 12;
+  r.costume = 2;
+  r.hp = 300;
+  EXPECT_EQ(RequestJson(r), R"({"character":12,"costume":2,"hp":300,"ready":true,"type":"room-ready"})");
+  r.flag = false;
+  EXPECT_EQ(RequestJson(r), R"({"character":12,"costume":2,"ready":false,"type":"room-ready"})");
+  r.flag = true;
+  r.hp = 1000;
+  EXPECT_EQ(RequestJson(r), std::nullopt);
+}
+
+// The rules menu's MATCH SETUP page (room-format) and what room-state shows of it.
+TEST(RoomMessages, Format)
+{
+  Request r;
+  r.op = Op::Format;
+  r.stage_choice = "strike";
+  r.strikes = {1, 2, 1};
+  r.bans = 2;
+  r.dsr = true;
+  r.alternate_stages = true;
+  EXPECT_EQ(RequestJson(r), R"({"alternateStages":true,"bans":2,"dsr":true,"stageChoice":"strike",)"
+                            R"("strikes":[1,2,1],"type":"room-format"})");
+  r.stage_choice = "rps";
+  EXPECT_EQ(RequestJson(r), std::nullopt);
+  r.stage_choice = "random";
+  r.bans = 4;
+  EXPECT_EQ(RequestJson(r), std::nullopt);
+  r.bans = 0;
+  r.strikes = {1, 0};
+  EXPECT_EQ(RequestJson(r), std::nullopt);
+
+  const auto with = [](const std::string& ruleset) {
+    return Parse(Replace(STATE, R"("statusText")", R"("ruleset": )" + ruleset + R"(, "statusText")"));
+  };
+  const Message m = with(R"({"name": "x", "bestOf": 3, "strikes": [2, 2], "bans": 3, "dsr": true, "alternateStages": true})");
+  ASSERT_EQ(m.kind, Message::Kind::RoomState) << m.why;
+  EXPECT_EQ(m.view->ruleset.strikes, (std::vector<u8>{2, 2}));
+  EXPECT_EQ(m.view->ruleset.bans, 3);
+  EXPECT_TRUE(m.view->ruleset.dsr);
+  EXPECT_TRUE(m.view->ruleset.alternate_stages);
+  // A pattern with a bad turn is not shown; too many bans are none.
+  const Message bad = with(R"({"name": "x", "strikes": [1, 0], "bans": 9})");
+  ASSERT_EQ(bad.kind, Message::Kind::RoomState) << bad.why;
+  EXPECT_TRUE(bad.view->ruleset.strikes.empty());
+  EXPECT_EQ(bad.view->ruleset.bans, 0);
+}
+
 TEST(RoomMessages, RoomRules)
 {
   // The room's rules come with room-state (docs/design/room-rules.md); checked as a ticket's.

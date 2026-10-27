@@ -113,7 +113,7 @@ def _parse_block(c: HarnessClient, a: int):
     if hdr[:4] != MAGIC:
         return None
     ver, sz, mbo, mbs, so, ss, lo, ls, dbo, dbs = struct.unpack_from(">HHHHHHHHHH", hdr, 4)
-    if ver in (1, 2, 3, 4, 5, 6, 7, 8) and 0x100 < sz < 0x4000 and mbo and dbo:
+    if ver in (1, 2, 3, 4, 5, 6, 7, 8, 9) and 0x100 < sz < 0x4000 and mbo and dbo:
         return Block(a, ver, sz, a + mbo, mbs, a + dbo, dbs, a + so if ss else 0, ss,
                      a + lo if ls else 0, ls)
     return None
@@ -345,7 +345,49 @@ def read_session(c: HarnessClient, b: Block) -> dict:
         se["play"] = read_play(d[S_PLAY:S_PLAY + 0x40])
     if len(d) >= S_STAGES + 0x40:        # v7: the room's stages
         se["stages"] = read_room_stages(d[S_STAGES:S_STAGES + 0x40])
+    if len(d) >= S_EXTRA + 4 * PORT_EXTRA_SIZE:   # v9: the special modes
+        se["special"] = read_special(d[S_SPECIAL:S_SPECIAL + SPECIAL_SIZE])
+        se["extra"] = [read_port_extra(d[S_EXTRA + i * PORT_EXTRA_SIZE:S_EXTRA + (i + 1) * PORT_EXTRA_SIZE])
+                       for i in range(4)]
     return se
+
+
+# ---- v9: P+'s special modes (docs/design/special-rules.md) ----
+S_SPECIAL, SPECIAL_SIZE = 0x2C0, 0x40
+S_EXTRA, PORT_EXTRA_SIZE = 0x300, 0x48
+L_OWN_EXTRA = 0x80
+# The Special Versus rows in the set rule's order and their values as the server names them.
+SPECIAL_ROWS = [("stamina", ("300", "stamina")), ("size", ("mega", "mini")), ("attack", ("element", "regen")),
+                ("body", ("metal", "clear")), ("status", ("turbo", "bunny")), ("gravity", ("light", "heavy")),
+                ("speed", ("wild", "fast")), ("other", ("meter", "all-star"))]
+
+
+def read_special(d: bytes) -> dict:
+    """SESSION's Special (v9): the rows as the server's `special` object (only those on), the
+    stamina type, and the room's MATCH SETUP values and picked HP."""
+    rows = {k: vals[d[i] - 1] for i, (k, vals) in enumerate(SPECIAL_ROWS) if d[i] in (1, 2)}
+    return {"rows": list(d[0:8]), "special": rows, "stamina_type": d[8], "bans": d[9], "dsr": bool(d[0xA]),
+            "strikes": list(d[0xC:0xC + d[0xB]]),
+            "room_hp": list(struct.unpack_from(">4H", d, 0x1C)), "alternates": bool(d[0x24])}
+
+
+def read_port_extra(d: bytes) -> dict:
+    """PortExtra (v9): a player's picked HP and All-Star roster, entries (character, P+'s colour,
+    the CSS's costume, CSS id)."""
+    n = min(d[2], 16)
+    return {"hp": struct.unpack_from(">H", d, 0)[0],
+            "roster": [tuple(d[8 + 4 * i:8 + 4 * i + 4]) for i in range(n)]}
+
+
+def write_own_extra(c: HarnessClient, b: Block, hp: int = 0, roster: list | None = None) -> None:
+    """Tests: LOCAL's PortExtra (v9) as the game writes it with the lock-in (the lock-in's seq is
+    not bumped). Roster entries (character, colour, costume[, CSS id])."""
+    d = bytearray(PORT_EXTRA_SIZE)
+    struct.pack_into(">H", d, 0, hp)
+    for i, e in enumerate(roster or []):
+        d[8 + 4 * i:8 + 4 * i + len(e)] = bytes(e)
+    d[2] = len(roster or [])
+    c.write_mem(b.local + L_OWN_EXTRA, bytes(d))
 
 
 # ---- v6: the match's rules (ppom.h Rules, docs/design/room-rules.md section 3) ----
@@ -432,7 +474,8 @@ def write_session(c: HarnessClient, b: Block, *, game: int, stage: int, players:
 CMD_ROOM = 0xD0
 CMD_RULESETS = 0xD1   # v6: the Ruleset line's list (RulesetList)
 ROOM_OPS = {"poll": 0, "create": 1, "join": 2, "leave": 3, "slot": 4, "teams": 5, "public": 6,
-            "team": 7, "rules": 8, "set": 9, "ruleset": 10, "best_of": 11, "stages": 12, "sit_out": 13}
+            "team": 7, "rules": 8, "set": 9, "ruleset": 10, "best_of": 11, "stages": 12, "sit_out": 13,
+            "format": 14}
 L_SCREEN, L_ROOM_JOIN, L_ROOM = 0x36, 0x37, 0x38
 # The launcher's Direct invite (still v5): counter, the code's letters (4, NUL-padded), its number.
 L_DIRECT_JOIN, L_DIRECT_PREFIX, L_DIRECT_NUMBER = 0x39, 0x3A, 0x3E

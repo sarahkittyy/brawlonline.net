@@ -1016,6 +1016,41 @@ std::vector<PeerData::ReplayCodeMenuLine> ReplayCodeMenuLines(const Guest& g,
   return out;
 }
 
+// P+'s special modes (docs/design/special-rules.md): with any of the set rule's Special Versus
+// rows (+0x18..+0x1F) on, the rows, what Brawl's Special setup made of them for each player
+// (start damage +0x22, HP +0x24, the flower / bunny / metal / clear flags +0x1B (but its rumble
+// bit, 0x40, which is each machine's own setting) and +0x1C, size +0x3C, scale +0x40, gravity
+// +0x48) and the match's speed (+0x50), and with All-Star P+'s roster tables. Only then, so
+// that every other game's key is as before (replays compare it).
+constexpr u32 SPECIAL_ROWS_AT = 0x18, SPECIAL_ROWS = 8, SPECIAL_OTHER = 7, OTHER_ALL_STAR = 2;
+constexpr u32 ALL_STAR_TABLE = 0x80588000, ALL_STAR_SIZE = 4 * 0xA0;
+constexpr u32 ALL_STAR_TABLE2 = 0x80588300, ALL_STAR_SIZE2 = 4 * 0x70;
+void AppendSpecialModes(const Guest& g, u32 game_global, const u8* mm, std::vector<u8>& key)
+{
+  const auto rule = g.Ptr32(game_global + GG_SET_RULE);
+  const u8* r = rule ? g.Ptr(*rule + SPECIAL_ROWS_AT, SPECIAL_ROWS) : nullptr;
+  if (!r || std::all_of(r, r + SPECIAL_ROWS, [](u8 b) { return b == 0; }))
+    return;
+  key.insert(key.end(), r, r + SPECIAL_ROWS);
+  for (u32 i = 0; i < 4; ++i)
+  {
+    const u8* pl = mm + 0x98 + i * 0x5C;
+    key.push_back(static_cast<u8>(pl[0x1B] & ~0x40));
+    key.insert(key.end(), pl + 0x1C, pl + 0x1D);
+    key.insert(key.end(), pl + 0x22, pl + 0x26);
+    key.insert(key.end(), pl + 0x3C, pl + 0x44);
+    key.insert(key.end(), pl + 0x48, pl + 0x4C);
+  }
+  key.insert(key.end(), mm + 0x50, mm + 0x54);
+  if (r[SPECIAL_OTHER] == OTHER_ALL_STAR)
+  {
+    if (const u8* t = g.Ptr(ALL_STAR_TABLE, ALL_STAR_SIZE))
+      key.insert(key.end(), t, t + ALL_STAR_SIZE);
+    if (const u8* t = g.Ptr(ALL_STAR_TABLE2, ALL_STAR_SIZE2))
+      key.insert(key.end(), t, t + ALL_STAR_SIZE2);
+  }
+}
+
 // gmGlobalModeMelee fields both peers must agree on: rules/stage block and per player the
 // character, state, stocks and costume.
 std::vector<u8> SetupKey(const Guest& g)
@@ -1113,6 +1148,7 @@ std::vector<u8> SetupKey(const Guest& g)
     if (const u8* t = g.Ptr(session + GB::SESSION_RESTORE_FRAMES, 4))
       key.insert(key.end(), t, t + 4);
   }
+  AppendSpecialModes(g, *gg, p, key);
   return key;
 }
 
@@ -1788,7 +1824,25 @@ picojson::value LockJson(const LockIn& l)
   o["game"] = picojson::value(static_cast<double>(l.game));
   o["pv"] = picojson::value(Hex({l.port_values.begin(), l.port_values.end()}));
   o["team"] = picojson::value(static_cast<double>(l.team));
+  // The special-mode picks (docs/design/special-rules.md), only when there are any: every other
+  // lock-in is as before.
+  if (std::any_of(l.port_extra.begin(), l.port_extra.end(), [](u8 b) { return b != 0; }))
+    o["px"] = picojson::value(Hex({l.port_extra.begin(), l.port_extra.end()}));
   return picojson::value(o);
+}
+
+// Special-mode picks from the peer: exactly PORT_EXTRA_SIZE bytes of hex, else none.
+PortExtra PortExtraFromHex(const picojson::value* v)
+{
+  PortExtra px{};
+  if (!v || !v->is<std::string>())
+    return px;
+  const auto bytes = PeerData::ParseHex(v->get<std::string>(), px.size());
+  if (!bytes)
+    return px;
+  std::copy(bytes->begin(), bytes->end(), px.begin());
+  PeerData::SanitizePortExtra(px);
+  return px;
 }
 
 // A team from the peer: 0-3 or none.
@@ -1827,6 +1881,8 @@ LockIn LockFromJson(const picojson::object& o)
   l.port_values = PortValuesFromHex(pv != o.end() ? &pv->second : nullptr);
   const auto team = o.find("team");
   l.team = TeamFromJson(team != o.end() ? &team->second : nullptr);
+  const auto px = o.find("px");
+  l.port_extra = PortExtraFromHex(px != o.end() ? &px->second : nullptr);
   // A character, costume or stage the game cannot produce is not a lock-in: the peer is not
   // ready, and nothing of it reaches SESSION (the game would index its tables with it).
   if (!PeerData::ValidCharKind(l.char_kind) || !PeerData::ValidCostume(l.costume))
@@ -1883,6 +1939,16 @@ picojson::value SetupJson(const MatchSetup& st)
     players.emplace_back(p);
   }
   o["players"] = picojson::value(players);
+  // The players' special-mode picks, by port, only for those who have any.
+  picojson::object extra;
+  for (int port = 0; port < MAX_LOBBY_PLAYERS; ++port)
+  {
+    const auto& pl = st.players[port];
+    if (pl.present && std::any_of(pl.port_extra.begin(), pl.port_extra.end(), [](u8 b) { return b != 0; }))
+      extra[std::to_string(port)] = picojson::value(Hex({pl.port_extra.begin(), pl.port_extra.end()}));
+  }
+  if (!extra.empty())
+    o["px"] = picojson::value(extra);
   if (st.teams)
     o["teams"] = picojson::value(true);
   if (st.teams && st.team_colors)
@@ -2024,6 +2090,16 @@ std::optional<MatchSetup> SetupFromJson(const picojson::object& o)
     if (!r)
       return std::nullopt;
     st.restore = *r;
+  }
+  if (const auto px = o.find("px"); px != o.end() && px->second.is<picojson::object>())
+  {
+    for (int port = 0; port < MAX_LOBBY_PLAYERS; ++port)
+    {
+      const auto& xo = px->second.get<picojson::object>();
+      const auto x = xo.find(std::to_string(port));
+      if (x != xo.end() && st.players[port].present)
+        st.players[port].port_extra = PortExtraFromHex(&x->second);
+    }
   }
   return st;
 }
@@ -2274,7 +2350,7 @@ void MaybeDecideSetup()
   for (int port = 0; port < MAX_LOBBY_PLAYERS; ++port)
   {
     if (const LockIn* l = locks[port])
-      st.players[port] = {true, l->char_kind, l->costume, l->port_values, teams.team[port]};
+      st.players[port] = {true, l->char_kind, l->costume, l->port_values, teams.team[port], l->port_extra};
   }
   const LockIn* pick = pick_port >= 0 ? locks[pick_port] : nullptr;
   if (pick && s.net_opts.pick_from_stages)
@@ -6804,11 +6880,13 @@ void SetLocalLock(const LockIn& lock_in)
   // The same port value bytes on both machines: the peer's are sanitised on receipt.
   LockIn lock = lock_in;
   PeerData::SanitizePortValues(lock.port_values);
+  PeerData::SanitizePortExtra(lock.port_extra);
   std::lock_guard<std::recursive_timed_mutex> lk(s.mutex);
   const bool changed = lock.ready != s.local_lock.ready || lock.game != s.local_lock.game ||
                        lock.char_kind != s.local_lock.char_kind ||
                        lock.stage_pick != s.local_lock.stage_pick ||
-                       lock.port_values != s.local_lock.port_values || lock.team != s.local_lock.team;
+                       lock.port_values != s.local_lock.port_values || lock.team != s.local_lock.team ||
+                       lock.port_extra != s.local_lock.port_extra;
   s.local_lock = lock;
   if (changed)
   {

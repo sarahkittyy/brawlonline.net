@@ -163,7 +163,7 @@ constexpr u32 DEFAULT_START_FRAME = 120;
 struct SyncTestOptions
 {
   int distance = 2;                 // frames rolled back on every frame (1..MAX_ROLLBACK_FRAMES)
-  std::string region_set = "gp-v23";  // Sys/Rollback/<name>.json or a path
+  std::string region_set = "gp-v24";  // Sys/Rollback/<name>.json or a path
   bool hash_regions = true;          // also compare a hash of the whole region set per frame
   u32 start_frame = DEFAULT_START_FRAME;  // game frame the rollback starts at
   u32 ports = 3;                     // local controller ports that play (bit per port)
@@ -212,7 +212,7 @@ struct ConnectOptions
   std::vector<Peer> peers;
   // The deciding player's port as the joiners know it (-1: learned from the peers' messages).
   int host_slot = -1;
-  std::string region_set = "gp-v23";
+  std::string region_set = "gp-v24";
   // The game frame the rollback starts at (DEFAULT_START_FRAME). Every peer must use the same:
   // it is part of the setup hash the first barrier compares.
   u32 start_frame = DEFAULT_START_FRAME;
@@ -290,6 +290,11 @@ constexpr u16 STAGE_PENDING = 0xFFFE;
 // same controls to that player's port.
 constexpr size_t PORT_VALUES_SIZE = 0x3C;
 using PortValues = std::array<u8, PORT_VALUES_SIZE>;
+// A player's picks for P+'s special modes (docs/design/special-rules.md; ppom.h PortExtra, PPOM
+// v9): the stamina HP picked on their panel and their All-Star roster. Opaque to the session as
+// the port values are (PeerData::SanitizePortExtra checks a peer's); all zero for every other game.
+constexpr size_t PORT_EXTRA_SIZE = 0x48;
+using PortExtra = std::array<u8, PORT_EXTRA_SIZE>;
 
 struct LockIn
 {
@@ -303,6 +308,7 @@ struct LockIn
   u32 game = 0;           // the game (1-based) this lock-in is for
   PortValues port_values{};  // the player's name tag and controls (all zero: the defaults)
   u8 team = NO_TEAM;      // the player's team colour for a team battle (0-2), NO_TEAM none
+  PortExtra port_extra{};  // the player's special-mode picks (all zero: none)
   // The controller port (0-3) whose START locked in; the match plays the local player from it.
   // Local only (not sent to the peer). Anything else: none (ConnectOptions::local_pad).
   u8 local_pad = 0xFF;
@@ -316,6 +322,7 @@ struct LobbyPlayer
   u8 costume = 0;
   PortValues port_values{};
   u8 team = NO_TEAM;  // in a team battle (MatchSetup / Lobby `teams`), else NO_TEAM
+  PortExtra port_extra{};
 };
 
 // A game that starts again after a desync (SetDesyncRecovery; docs/game-code.md, desync

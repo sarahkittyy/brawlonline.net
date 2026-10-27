@@ -46,6 +46,10 @@
 // stock), which leaves the pick in area+0x1D0 and the box showing it; the others' boxes show
 // their picks the way the picker's close does (sel_char text+0x184D4): the box's frames set to
 // the count (MuObject 0x800B7900, 0x800B7798, 0x800B7A18) and area+0x1D0.
+// Stamina (the room's STAMINA row 2, docs/design/special-rules.md): the same box is Brawl's HP box,
+// as on its Special Brawl CSS, which sets task+0x5D0 when it starts with stamina (text+0x2AC);
+// with it the box shows HP and A opens Brawl's HP list (list kind 3, P+'s 100 entries), whose pick
+// in area+0x1D0 is the HP / 10 (the CSS reads a record's +0x24 / 10 into it, text+0x1C44).
 #include <OS/OSCache.h>
 #include <gf/gf_heap_manager.h>
 #include <memory.h>
@@ -157,10 +161,19 @@ namespace RoomCss {
     static int s_colorShown[4] = {-1, -1, -1, -1};   // the slot colour each area was given
     static int s_boxShown[4] = {-1, -1, -1, -1};     // each area's STOCKS box: 1 shown, 0 not, -1 not set
     static int s_boxCount[4] = {-1, -1, -1, -1};     // the count shown on another player's box
-    static bool s_stockControl = false;
+    static bool s_stockControl = false;  // a box is shown on the local panel (STOCKS or HP)
+    static int s_boxKind = BOX_NONE;     // the boxes' kind as last shown
     // The local player's pick, kept across the room's games (the CSS is built again after each
     // one, its picks at 0), as Slippi keeps the character.
     static u8 s_myStocks = 0;
+    static u16 s_myHp = 0;
+    static const u32 TASK_STAMINA = 0x5D0;   // muSelCharTask: Brawl's stamina flag (byte)
+    static const int HP_DEFAULT_PICK = 15;   // the box's start in a stamina room: 150 HP
+    // The box's label (P+'s "STOCKS", I4 80x16 in its model MenSelchrChandicap4) and a copy drawn
+    // "HP" for stamina's boxes.
+    static const char* const BOX_LABEL = "MenSelchrCardHandicap";
+    static u8* s_boxLabel = NULL;
+    static u8* s_hpLabel = NULL;
 
     static u8* cssTask()
     {
@@ -236,6 +249,8 @@ namespace RoomCss {
         s_localSlot = 0;
         for (int i = 0; i < 4; i++) s_colorShown[i] = s_boxShown[i] = s_boxCount[i] = -1;
         s_stockControl = false;
+        s_boxKind = BOX_NONE;
+        s_boxLabel = NULL;   // (the CSS's archive goes with it)
         s_meSitShown = -1;
         for (int i = 0; i < 4; i++) {
             s_shown[i].kind = 0xFF;
@@ -545,6 +560,7 @@ namespace RoomCss {
 
     void forgetCopies()
     {
+        s_hpLabel = NULL;
         for (int k = 0; k < 5; k++) {
             s_labelCopy[k] = NULL;
             s_labelFrom[k] = s_labelTo[k] = 0;
@@ -846,6 +862,26 @@ namespace RoomCss {
         *(int*)(a + AREA_STOCKS) = n;
     }
 
+    // A box's label: P+'s STOCKS, or "HP x10" for stamina's (a copy of it drawn with the game's font).
+    static void boxLabel(u8* a, bool hp)
+    {
+        u8* box = *(u8**)(a + AREA_STOCK_BOX);
+        u8* mdl = isPtr((u32)box) ? *(u8**)(box + 8) : NULL;
+        if (!isPtr((u32)mdl) || (!hp && !s_hpLabel)) return;
+        if (!s_boxLabel) s_boxLabel = Labels::boundTexture(mdl, BOX_LABEL);
+        if (!s_boxLabel) return;
+        if (hp && !s_hpLabel) {
+            s_hpLabel = Labels::copyTexture(s_boxLabel);
+            if (s_hpLabel) {
+                Labels::render(s_hpLabel, "HP x10", 2, 1, 78, 15, 0);   // (the box shows HP / 10)
+                DCFlushRange(s_hpLabel, Labels::textureSize(s_hpLabel));
+            }
+        }
+        if (hp && !s_hpLabel) return;
+        u32 from[2] = {Labels::imageWord(s_boxLabel), s_hpLabel ? Labels::imageWord(s_hpLabel) : 0};
+        Labels::bindTexture(box, BOX_LABEL, hp ? s_hpLabel : s_boxLabel, from, s_hpLabel ? 2 : 1);
+    }
+
     // The local hand's picker closed, as the CSS closes it when the handicap mode goes off
     // (sel_char text+0x10874's loop).
     static void closePickers(u8* task)
@@ -864,11 +900,28 @@ namespace RoomCss {
     // The boxes: the local panel's (the player picks there) and every taken slot's (the count that
     // player picked, once ready), with the room's stock control; the set rule's handicap mode and the
     // CSS's own (task+0x5CC) follow it, as P+'s rules menu leaves them.
-    static void stockBoxes(u8* task, const PanelView views[3], bool on, int lockedStocks)
+    static void stockBoxes(u8* task, const PanelView views[3], int kind, int lockedStocks)
     {
+        const bool on = kind != BOX_NONE;
+        const bool hp = kind == BOX_HP;
         u8* rule = setRule();
-        u8 mode = on ? HANDICAP_STOCK_CONTROL : 0;
+        u8 mode = kind == BOX_STOCKS ? HANDICAP_STOCK_CONTROL : 0;
         if (rule && rule[5] != mode) rule[5] = mode;
+        // The box's kind changed (stamina on or off): Brawl's stamina flag, the boxes shown again
+        // and the local pick of the new kind back on its box.
+        const bool kindChanged = kind != s_boxKind;
+        if (kindChanged) {
+            closePickers(task);
+            task[TASK_STAMINA] = hp ? 1 : 0;
+            for (int i = 0; i < 4; i++) {
+                if (s_boxShown[i] == 1) {
+                    u8* a = area(task, i);
+                    if (a) SHOW_STOCK_BOX(a, 0);
+                }
+                s_boxShown[i] = -1;
+            }
+            s_boxKind = kind;
+        }
         // (The CSS shows or takes away every box itself when P+'s rules menu closes with another
         // mode than task+0x5CC, e.g. the host's style change to time: then all of them again.)
         if (*(int*)(task + TASK_HANDICAP_MODE) != mode) {
@@ -896,15 +949,22 @@ namespace RoomCss {
                 }
                 s_boxShown[i] = want;
                 s_boxCount[i] = -1;
-                // A new CSS (after a game) starts with no pick: the player's own comes back.
-                if (want && i == 0 && s_myStocks && *(int*)(a + AREA_STOCKS) == 0) showCount(a, s_myStocks);
+                // A new CSS (after a game) starts with no pick: the player's own comes back (an HP
+                // box with none yet: 150, the match's own).
+                int mine = hp ? (s_myHp ? s_myHp / 10 : HP_DEFAULT_PICK) : s_myStocks;
+                if (want && i == 0 && mine && (kindChanged || *(int*)(a + AREA_STOCKS) == 0)) showCount(a, mine);
             }
             if (!want) continue;
+            boxLabel(a, hp);
             if (i == 0) {
                 int n = *(int*)(a + AREA_STOCKS);
                 // Locked in: the pick the lock-in carries (Brawl's picker still opened while ready).
                 if (lockedStocks >= 0 && n != lockedStocks) showCount(a, n = lockedStocks);
-                if (n >= 0 && n <= PPOM::MAX_PICKED_STOCKS) s_myStocks = (u8)n;
+                if (hp) {
+                    if (n >= 1 && n * 10 <= PPOM::MAX_PICKED_HP) s_myHp = (u16)(n * 10);
+                } else if (n >= 0 && n <= PPOM::MAX_PICKED_STOCKS) {
+                    s_myStocks = (u8)n;
+                }
             } else if (s_boxCount[i] != v->stocks) {
                 showCount(a, v->stocks);
                 s_boxCount[i] = v->stocks;
@@ -916,6 +976,7 @@ namespace RoomCss {
     // #35, 2026-10-16), where reset() has turned s_stockControl off; with it here that lock-in
     // carried 0, the rules' stocks. The caller checks the rules (roomStockControl).
     u8 myStocks() { return s_myStocks; }
+    u16 myHp() { return s_myHp; }
 
     bool handOnMyStocks()
     {
@@ -926,7 +987,7 @@ namespace RoomCss {
     }
 
     void tick(const PanelView views[3], bool teams, int myTeam, int myStars, const char* myName, bool meReady,
-              bool stockControl, int lockedStocks, bool meSittingOut)
+              int boxKind, int lockedStocks, bool meSittingOut)
     {
         u8* task = cssTask();
         if (!task) return;
@@ -978,7 +1039,7 @@ namespace RoomCss {
         if (a0) myPlate(a0, meSittingOut ? SIT_OUT_PLATE : myName);
         if (a0) myReady(a0, meReady && !meSittingOut, teams, myTeam);
         for (int i = 0; i < 3; i++) apply(task, i + 1, views[i], teams);
-        stockBoxes(task, views, stockControl, lockedStocks);
+        stockBoxes(task, views, boxKind, lockedStocks);
     }
 
     // Which of the other players' panels (1-3) the local hand points at, -1 none. The hand's

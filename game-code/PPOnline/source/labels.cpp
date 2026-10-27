@@ -610,6 +610,22 @@ namespace Labels {
         s_numCopies = 0;
     }
 
+    u32 textureSize(const u8* tex0)
+    {
+        u32 fmt = *(u32*)(tex0 + 0x20);
+        if (*(u32*)(tex0 + 0x10) != 0x40 || (fmt != 0 && fmt != 2)) return 0;   // I4, IA4
+        int w = *(u16*)(tex0 + 0x1C), h = *(u16*)(tex0 + 0x1E), bh = fmt == 2 ? 4 : 8;
+        return 0x40 + (u32)(((w + 7) / 8) * ((h + bh - 1) / bh) * 32);
+    }
+
+    u8* copyTextureTo(const u8* tex0, u8* dst, u32 room)
+    {
+        u32 n = textureSize(tex0);
+        if (!n || !dst || n > room || ((u32)dst & 31)) return NULL;
+        memcpy(dst, tex0, n);
+        return dst;
+    }
+
     u8* copyTexture(const u8* tex0)
     {
         u32 fmt = *(u32*)(tex0 + 0x20);

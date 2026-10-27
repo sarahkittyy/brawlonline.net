@@ -412,6 +412,151 @@ bool ValidName(std::string_view name)
 }
 }  // namespace
 
+std::optional<std::vector<u8>> ReadCardFile(File::IOFile& image, u64 image_size,
+                                            std::string_view path, u64 max_size)
+{
+  const std::optional<OpenedFat> opened = OpenFat(image, image_size);
+  if (!opened)
+    return std::nullopt;
+  const FatVolume& v = opened->volume;
+  const u64 cluster_bytes = v.ClusterBytes();
+  const u64 last_cluster = v.cluster_count + 1;
+  auto cluster_offset = [&](u32 c) { return v.data_offset + u64{c - 2} * cluster_bytes; };
+  // A chain's clusters, at most `limit` (a loop or a crafted chain ends there).
+  auto chain = [&](u32 first, u64 limit) {
+    std::vector<u32> out;
+    u32 c = first;
+    while (c >= 2 && c <= last_cluster && out.size() < limit)
+    {
+      out.push_back(c);
+      const u32 e = opened->Entry(c);
+      if (opened->EndOfChain(e))
+        break;
+      c = e;
+    }
+    return out;
+  };
+  auto read_clusters = [&](const std::vector<u32>& clusters, u64 bytes) -> std::optional<std::vector<u8>> {
+    std::vector<u8> out(static_cast<size_t>(bytes));
+    u64 done = 0;
+    for (const u32 c : clusters)
+    {
+      if (done >= bytes)
+        break;
+      const u64 n = std::min(cluster_bytes, bytes - done);
+      if (!image.Seek(static_cast<s64>(cluster_offset(c)), File::SeekOrigin::Begin) ||
+          !image.ReadBytes(out.data() + done, static_cast<size_t>(n)))
+      {
+        return std::nullopt;
+      }
+      done += n;
+    }
+    if (done < bytes)
+      return std::nullopt;
+    return out;
+  };
+  const auto lower = [](std::string s) {
+    for (char& c : s)
+      c = static_cast<char>(c >= 'A' && c <= 'Z' ? c + 32 : c);
+    return s;
+  };
+
+  // The directory being searched: FAT16's fixed root (cluster 0) or a cluster chain.
+  u32 dir_cluster = v.fat32 ? v.root_cluster : 0;
+  std::string_view rest = path;
+  while (!rest.empty())
+  {
+    const size_t slash = rest.find('/');
+    const std::string want = lower(std::string(rest.substr(0, slash)));
+    rest = slash == std::string_view::npos ? std::string_view{} : rest.substr(slash + 1);
+    const bool last = rest.empty();
+    std::vector<u8> dir;
+    if (dir_cluster == 0)
+    {
+      if (v.fat32 || v.root_dir_bytes == 0 || v.root_dir_bytes > (2ull << 20))
+        return std::nullopt;
+      dir.resize(static_cast<size_t>(v.root_dir_bytes));
+      if (!image.Seek(static_cast<s64>(v.root_dir_offset), File::SeekOrigin::Begin) ||
+          !image.ReadBytes(dir.data(), dir.size()))
+      {
+        return std::nullopt;
+      }
+    }
+    else
+    {
+      const auto clusters = chain(dir_cluster, (2ull << 20) / cluster_bytes + 1);
+      auto bytes = read_clusters(clusters, clusters.size() * cluster_bytes);
+      if (!bytes)
+        return std::nullopt;
+      dir = std::move(*bytes);
+    }
+    std::optional<std::pair<u32, u64>> found;  // first cluster, size
+    bool found_dir = false;
+    std::u16string long_name;
+    for (size_t pos = 0; pos + 32 <= dir.size() && !found; pos += 32)
+    {
+      const u8* e = &dir[pos];
+      if (e[0] == 0x00)
+        break;
+      if (e[0] == 0xE5)
+      {
+        long_name.clear();
+        continue;
+      }
+      const u8 attr = e[11];
+      if (attr == 0x0F)
+      {
+        std::u16string part;
+        bool ended = false;
+        for (const auto& [offset, n] : {std::pair{1, 5}, std::pair{14, 6}, std::pair{28, 2}})
+        {
+          for (int i = 0; i < n && !ended; ++i)
+          {
+            const char16_t ch = static_cast<char16_t>(LE16(e + offset + 2 * i));
+            if (ch == 0x0000 || ch == 0xFFFF)
+              ended = true;
+            else
+              part.push_back(ch);
+          }
+        }
+        long_name = (e[0] & 0x40) ? part : part + long_name;
+        continue;
+      }
+      if (attr & 0x08)
+      {
+        long_name.clear();
+        continue;
+      }
+      std::string base(reinterpret_cast<const char*>(e), 8);
+      std::string ext(reinterpret_cast<const char*>(e + 8), 3);
+      base.erase(base.find_last_not_of(' ') + 1);
+      ext.erase(ext.find_last_not_of(' ') + 1);
+      const std::string short_name = ext.empty() ? base : base + "." + ext;
+      const std::string name = long_name.empty() ? short_name : UTF16ToUTF8(long_name);
+      long_name.clear();
+      if (lower(name) != want && lower(short_name) != want)
+        continue;
+      const u32 first = (v.fat32 ? (u32{LE16(e + 20)} << 16) : 0) | LE16(e + 26);
+      found = std::pair{first, u64{LE32(e + 28)}};
+      found_dir = (attr & 0x10) != 0;
+    }
+    if (!found || found_dir == last)
+      return std::nullopt;
+    if (!last)
+    {
+      dir_cluster = found->first;
+      if (dir_cluster < 2)
+        return std::nullopt;
+      continue;
+    }
+    const u64 size = found->second;
+    if (size > max_size)
+      return std::nullopt;
+    return read_clusters(chain(found->first, size / cluster_bytes + 1), size);
+  }
+  return std::nullopt;
+}
+
 std::optional<std::vector<CardFile>> ListCardFiles(File::IOFile& image, u64 image_size)
 {
   const std::optional<OpenedFat> opened = OpenFat(image, image_size);

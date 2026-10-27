@@ -92,9 +92,17 @@ std::optional<Player> ParsePlayer(const picojson::object& o, std::string* why)
   const auto character = OptByte(o, "character", &bad);
   const auto costume = OptByte(o, "costume", &bad);
   const auto stocks = OptByte(o, "stocks", &bad);
+  std::optional<u16> hp;
+  if (const picojson::value* h = Find(o, "hp"); h && !h->is<picojson::null>())
+  {
+    const auto n = Int(*h, 1, MAX_PICKED_HP);
+    bad = bad || !n;
+    if (n)
+      hp = static_cast<u16>(*n);
+  }
   if (bad || (stocks && (*stocks < 1 || *stocks > MAX_PICKED_STOCKS)))
   {
-    *why = "a player's character, costume or stocks is out of range";
+    *why = "a player's character, costume, stocks or hp is out of range";
     return std::nullopt;
   }
   p.name = *name;
@@ -109,7 +117,10 @@ std::optional<Player> ParsePlayer(const picojson::object& o, std::string* why)
   p.character = character;
   p.costume = character ? costume : std::nullopt;
   if (p.ready)
+  {
     p.stocks = stocks;
+    p.hp = hp;
+  }
   return p;
 }
 
@@ -438,6 +449,22 @@ std::optional<View> ParseView(const picojson::object& o, std::string* why)
       ids("starters", &v.ruleset.starters);
       ids("counterpicks", &v.ruleset.counterpicks);
     }
+    if (const picojson::value* a = Find(ro, "strikes"); a && a->is<picojson::array>())
+    {
+      for (const picojson::value& e : a->get<picojson::array>())
+      {
+        const auto n = Int(e, 1, 0xFF);
+        if (!n || v.ruleset.strikes.size() >= MAX_STRIKE_TURNS)
+        {
+          v.ruleset.strikes.clear();
+          break;
+        }
+        v.ruleset.strikes.push_back(static_cast<u8>(*n));
+      }
+    }
+    v.ruleset.bans = static_cast<u8>(Int(ro, "bans", 0, MAX_BANS).value_or(0));
+    v.ruleset.dsr = Bool(ro, "dsr").value_or(false);
+    v.ruleset.alternate_stages = Bool(ro, "alternateStages").value_or(false);
   }
   if (const picojson::value* sv = Find(o, "set"); sv && sv->is<picojson::object>())
   {
@@ -805,6 +832,12 @@ std::optional<std::string> RequestJson(const Request& r)
         return std::nullopt;
       o["stocks"] = picojson::value(static_cast<double>(*r.stocks));
     }
+    if (r.flag && r.hp)
+    {
+      if (*r.hp < 1 || *r.hp > MAX_PICKED_HP)
+        return std::nullopt;
+      o["hp"] = picojson::value(static_cast<double>(*r.hp));
+    }
     break;
   case Op::Back:
     o["type"] = picojson::value("room-back");
@@ -915,6 +948,30 @@ std::optional<std::string> RequestJson(const Request& r)
       return std::nullopt;
     break;
   }
+  case Op::Format:
+  {
+    if (r.stage_choice != "loser-picks" && r.stage_choice != "loser-picks-list" &&
+        r.stage_choice != "strike" && r.stage_choice != "random")
+    {
+      return std::nullopt;
+    }
+    if (r.strikes.size() > MAX_STRIKE_TURNS || r.bans > MAX_BANS)
+      return std::nullopt;
+    picojson::array strikes;
+    for (const u8 n : r.strikes)
+    {
+      if (n == 0)
+        return std::nullopt;
+      strikes.emplace_back(static_cast<double>(n));
+    }
+    o["type"] = picojson::value("room-format");
+    o["stageChoice"] = picojson::value(r.stage_choice);
+    o["strikes"] = picojson::value(strikes);
+    o["bans"] = picojson::value(static_cast<double>(r.bans));
+    o["dsr"] = picojson::value(r.dsr);
+    o["alternateStages"] = picojson::value(r.alternate_stages);
+    break;
+  }
   case Op::SetAction:
     o["type"] = picojson::value("room-set");
     o["action"] = picojson::value(r.flag ? "resume" : "restart");
@@ -958,6 +1015,8 @@ const char* OpName(Op op)
     return "back";
   case Op::SitOut:
     return "sit-out";
+  case Op::Format:
+    return "format";
   case Op::Watch:
     return "watch";
   case Op::Rules:

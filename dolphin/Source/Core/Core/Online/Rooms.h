@@ -83,9 +83,10 @@ struct RulesetListSnapshot
 RulesetListSnapshot RulesetList();
 // LOCAL.screen, every frame.
 void SetScreen(u8 screen);
-// The game's lock-in, every frame: ready for `game` with the character and costume, and the stock
-// count picked on the panel (stock control; 0 none).
-void SetLocalLock(bool ready, u32 game, u8 char_kind, u8 costume, u8 stocks);
+// The game's lock-in, every frame: ready for `game` with the character and costume, the stock
+// count picked on the panel (stock control; 0 none) and the HP picked on it (a stamina match;
+// 0 none; docs/design/special-rules.md).
+void SetLocalLock(bool ready, u32 game, u8 char_kind, u8 costume, u8 stocks, u16 hp = 0);
 
 // What GameBridge writes into the PPOM block.
 struct Snapshot

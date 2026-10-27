@@ -1,3 +1,5 @@
+import { rulesetForServer } from "@common/rulesets";
+
 import type {
   AccountsErrorBody,
   AccountsMe,
@@ -150,7 +152,8 @@ export class AccountsHttpClient {
   }
 
   publishRuleset(token: string, req: PublishRulesetRequest): Promise<RulesetView> {
-    return this._request("POST", "/v1/rulesets", { token, body: req });
+    const body = "ruleset" in req ? { ...req, ruleset: rulesetForServer(req.ruleset) } : req;
+    return this._request("POST", "/v1/rulesets", { token, body });
   }
 
   async setRulesetHidden(token: string, code: string, hidden: boolean): Promise<void> {
@@ -158,11 +161,13 @@ export class AccountsHttpClient {
   }
 
   createRulesetDraft(token: string, req: RulesetDraftRequest): Promise<RulesetDraft> {
-    return this._request("POST", "/v1/me/ruleset-drafts", { token, body: req });
+    const body = { ...req, ruleset: rulesetForServer(req.ruleset) };
+    return this._request("POST", "/v1/me/ruleset-drafts", { token, body });
   }
 
   updateRulesetDraft(token: string, id: string, req: RulesetDraftRequest): Promise<RulesetDraft> {
-    return this._request("PUT", `/v1/me/ruleset-drafts/${encodeURIComponent(id)}`, { token, body: req });
+    const body = { ...req, ruleset: rulesetForServer(req.ruleset) };
+    return this._request("PUT", `/v1/me/ruleset-drafts/${encodeURIComponent(id)}`, { token, body });
   }
 
   async deleteRulesetDraft(token: string, id: string): Promise<void> {

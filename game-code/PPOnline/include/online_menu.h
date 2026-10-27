@@ -12,6 +12,13 @@ namespace OnlineMenu {
     // sqNetAnyOkiraku start: online rules into the set rule; `stageKind` the match's stage (its
     // hazards: the rules' per-stage ones), 0 none yet
     void applyRules(int stageKind = 0);
+    // The session's rules turn on one of P+'s special modes (docs/design/special-rules.md).
+    bool specialOn();
+    // P+'s STOCK CONTROL (set rule +5 = 2, each player's handicap box): the rules' stockControl in a
+    // stock match, or with regen (ATTACK row 2) P+'s FRAME CONTROL in any style; never in stamina,
+    // where the box is each player's HP (staminaOn).
+    bool stockControlOn();
+    bool staminaOn();                    // the STAMINA row is 2: each player picks their HP
     void codeEntered(const char* code);  // from CodeEntry: set the code and start the search
     int currentMode();                  // PPOM::Mode of the online CSS, -1 outside it
     bool modesLocked();                 // logged out or update required: no online mode
@@ -55,7 +62,8 @@ namespace RoomCss {
         u8 team;          // PPOM::Team
         u8 stars;         // Brawl's win stars by the name plate: the side's set wins during a set,
                           // else 1 for the room's host (rooms.md #8)
-        u8 stocks;        // stock control: the count the player picked (shown once ready), 0 none
+        u8 stocks;        // the box's count the player picked (shown once ready), 0 none: stock control's
+                          // stocks, or in stamina the HP / 10
         u8 sittingOut;    // SIT OUT: a CPU's grey card, "SIT OUT" on the plate; 2: "WATCHING"
                           // (watching the room's game), the same card
         char name[NAME_SIZE];
@@ -64,12 +72,16 @@ namespace RoomCss {
     void releaseRecords();               // a room's CSS built again as another: records as before
     void reset();                        // the CSS is gone
     void forgetCopies();                 // its label copies are about to be freed (Labels::releaseCopies)
-    // stockControl: the room's rules have P+'s STOCK CONTROL in a stock match (the STOCKS boxes);
-    // lockedStocks: while locked in, the count the lock-in carries (the local box is kept at it), -1.
+    // boxKind: the panels' boxes: BOX_STOCKS with the room's P+ STOCK CONTROL (a stock match, or
+    // any with regen's FRAME CONTROL), BOX_HP in stamina (each player's HP), else BOX_NONE;
+    // lockedStocks: while locked in, the box's count the lock-in carries (the local box is kept at
+    // it), -1.
     // meSittingOut: the local player sits out (their own card grey, "SIT OUT" on its plate).
     void tick(const PanelView views[3], bool teams, int myTeam, int myStars, const char* myName, bool meReady,
-              bool stockControl, int lockedStocks, bool meSittingOut);
+              int boxKind, int lockedStocks, bool meSittingOut);
+    enum BoxKind { BOX_NONE = 0, BOX_STOCKS = 1, BOX_HP = 2 };
     u8 myStocks();                       // the count picked on the local panel's STOCKS box, 0 none
+    u16 myHp();                          // stamina: the HP picked on the local panel's box, 0 none (150)
     bool handOnMyStocks();               // the local hand is on its panel's STOCKS box
     int panelUnderHand();                // 1-3: the local hand is over that panel, else -1
     // The slot (0-3) whose name plate the local hand is on (Brawl's hand button 0x1D, the plate a

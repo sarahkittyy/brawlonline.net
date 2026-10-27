@@ -20,12 +20,18 @@ import { useState } from "react";
 import { assetUrl, useGameAssets } from "@/styles/game_theme";
 
 import { ItemsMessages as Messages } from "./items_section.messages";
+
+/** P+'s BOMB RAIN frequency (BombRain.asm): sudden death's Bob-omb drops. */
+const BOMB_RAIN = 6;
 import styles from "./items_section.module.css";
 
 /** "Off", "All items · Medium", "12 items · Low" (frequency None or no item on: off, as P+ plays it). */
 export function itemsLine(frequency: number, itemSwitch: readonly number[]): string {
   const s = itemsSummary(frequency, itemSwitch);
   const freq = ITEM_FREQUENCIES[frequency] ?? String(frequency);
+  if (frequency === BOMB_RAIN) {
+    return freq; // (sudden death's bombs, whatever the item switch)
+  }
   if (s === "none") {
     return Messages.off();
   }
@@ -86,37 +92,43 @@ const ItemCell = ({
 /**
  * The rules' items as P+'s ITEM SWITCH shows them (src/common/items.ts): the frequency, ALL ON / ALL OFF and every
  * item with its icon from the game files, then P+'s item settings (Stage Items, EX Items...). Collapsed to a summary
- * line until opened. Without `onChange` it is read-only.
+ * line until opened (`bare`: always open, without its header: the editor's Items tab). Without `onChange` it is
+ * read-only.
  */
 export const ItemsSection = ({
   frequency,
   itemSwitch,
   onChange,
   defaultOpen = false,
+  bare = false,
 }: {
   frequency: number;
   itemSwitch: readonly number[];
   onChange?: (frequency: number, itemSwitch: number[]) => void;
   defaultOpen?: boolean;
+  bare?: boolean;
 }) => {
-  const [open, setOpen] = useState(defaultOpen);
+  const [toggled, setOpen] = useState(defaultOpen);
+  const open = bare || toggled;
   const icon = useItemIcon();
   const editable = onChange !== undefined;
   const set = (sw: number[]) => onChange?.(frequency, sw);
 
   return (
     <div className={styles.section} data-testid="items-section">
-      <button
-        type="button"
-        className={styles.header}
-        aria-expanded={open}
-        onClick={() => setOpen(!open)}
-        data-testid="items-toggle"
-      >
-        <span className={styles.headerTitle}>{Messages.items()}</span>
-        <span className={styles.headerSummary}>{itemsLine(frequency, itemSwitch)}</span>
-        <ExpandMoreIcon className={clsx(styles.chevron, open && styles.chevronOpen)} fontSize="small" />
-      </button>
+      {!bare && (
+        <button
+          type="button"
+          className={styles.header}
+          aria-expanded={open}
+          onClick={() => setOpen(!open)}
+          data-testid="items-toggle"
+        >
+          <span className={styles.headerTitle}>{Messages.items()}</span>
+          <span className={styles.headerSummary}>{itemsLine(frequency, itemSwitch)}</span>
+          <ExpandMoreIcon className={clsx(styles.chevron, open && styles.chevronOpen)} fontSize="small" />
+        </button>
+      )}
       {open && (
         <div className={styles.body}>
           <div className={styles.controls}>
@@ -148,7 +160,10 @@ export const ItemsSection = ({
               </span>
             )}
           </div>
-          {frequency > 0 && itemsOn(itemSwitch).length === 0 && <p className={styles.note}>{Messages.noneOn()}</p>}
+          {frequency > 0 && frequency !== BOMB_RAIN && itemsOn(itemSwitch).length === 0 && (
+            <p className={styles.note}>{Messages.noneOn()}</p>
+          )}
+          {frequency === BOMB_RAIN && <p className={styles.note}>{Messages.bombRain()}</p>}
           {frequency === 0 && itemsOn(itemSwitch).length > 0 && (
             <p className={styles.note}>{Messages.frequencyNone()}</p>
           )}
