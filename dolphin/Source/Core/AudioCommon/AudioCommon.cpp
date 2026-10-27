@@ -205,11 +205,7 @@ void SendAIBuffer(Core::System& system, const short* samples, unsigned int num_s
   else if (!Config::Get(Config::MAIN_DUMP_AUDIO) && system.IsAudioDumpStarted())
     StopAudioDump(system);
 
-  // Rollback netplay: resimulated frames were already heard when they first ran. Their audio
-  // would play the same span again, at unthrottled speed, so drop it. Not when the audio clock
-  // waits for them (gameplay sessions): what plays during a pass then is the presented timeline's.
-  const auto& core_timing = system.GetCoreTiming();
-  if (core_timing.IsRollbackResimulating() && !core_timing.RollbackAudioWaits())
+  if (DropsResimulatedAudio(system))
     return;
 
   Mixer* mixer = sound_stream->GetMixer();
@@ -218,6 +214,19 @@ void SendAIBuffer(Core::System& system, const short* samples, unsigned int num_s
   {
     mixer->PushSamples(samples, num_samples);
   }
+}
+
+// Rollback netplay: resimulated frames were already heard when they first ran. Their audio
+// would play the same span again, at unthrottled speed, so drop it. Not when the audio clock
+// waits for them (gameplay sessions): what plays during a pass then is the presented timeline's.
+// The DSP's samples (SendAIBuffer), the disc's streamed music (DTK) and a Wii Remote's speaker
+// all go through this: Other Games sessions re-run GameCube games that stream their music from the
+// disc (Super Monkey Ball 2), whose streaming samples went to the mixer in re-runs too, so every
+// rollback played its frames' music again and the mixer then skipped ahead to catch up.
+bool DropsResimulatedAudio(const Core::System& system)
+{
+  const auto& core_timing = system.GetCoreTiming();
+  return core_timing.IsRollbackResimulating() && !core_timing.RollbackAudioWaits();
 }
 
 void StartAudioDump(Core::System& system)
