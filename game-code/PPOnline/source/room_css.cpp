@@ -149,6 +149,7 @@ namespace RoomCss {
     static int s_myTagShown = -2;
     static int s_myHandMode = -1;
     static int s_myPlateDelay = 0;
+    static int s_myColourShown = -2;  // OnlineMenu::localColourKey when the plate was printed
     static int s_meReadyShown = -1;   // myReady's last state (ready | teams | team)
     static int s_meSitShown = -1;     // the local card's SIT OUT as last shown (1 / 0)
     static int s_localSlot = 0;       // the slot the local player's panel (area 0) is shown at
@@ -230,6 +231,7 @@ namespace RoomCss {
         s_myTagShown = -2;
         s_myHandMode = -1;
         s_myPlateDelay = 0;
+        s_myColourShown = -2;
         s_meReadyShown = -1;
         s_localSlot = 0;
         for (int i = 0; i < 4; i++) s_colorShown[i] = s_boxShown[i] = s_boxCount[i] = -1;
@@ -666,7 +668,11 @@ namespace RoomCss {
     // the offset d * 16 / 0.99. Brawl's own hit tests (the panel under the hand, the name
     // tag's pencil) go by the models, so they follow.
     // The panel's colour (area+0x1B0, applied by showTeam: the panel, its hand and coin) and the
-    // "P<n>" of its state box (state object +4) are the slot's.
+    // "P<n>" of its state box (state object +4) are the slot's. With P+'s slot colours, out of a
+    // team battle, each area is drawn in its own line and the lines hold the slots' colours
+    // (OnlineMenu's cssSlotColours): P+'s L / R / Z step the line of the area under the hand, area
+    // 0's for the local panel. (A team battle's panels are drawn in the lines of the teams' ports,
+    // red P1's, blue P2's, green P4's, which keep their own colours there.)
     static const float SLOT_POS = 16.0f / 0.99f;
     // Every model of an area (MuObjects at +0xB0..+0x14C: the panel, picture, plate, flag,
     // stars, ...; +0x204..+0x230: the name tag list and its rows; the keypad's at
@@ -723,8 +729,9 @@ namespace RoomCss {
     static void showTeamAt(u8* ar, int a)
     {
         u32 own = *(u32*)(ar + 0x1B0);
-        *(u32*)(ar + 0x1B0) = (u32)areaSlot(a);
-        g_cssPicHold = own != (u32)areaSlot(a) ? 1 : 0;
+        u32 colour = !s_teams && OnlineMenu::localColourKey() >= 0 ? own : (u32)areaSlot(a);
+        *(u32*)(ar + 0x1B0) = colour;
+        g_cssPicHold = own != colour ? 1 : 0;
         // Sitting out: showTeam draws a CPU's grey card (its kind for the call only).
         int kind = *(int*)(ar + AREA_PLAYER_KIND);
         if (s_grey[a]) *(int*)(ar + AREA_PLAYER_KIND) = KIND_CPU;
@@ -773,6 +780,7 @@ namespace RoomCss {
         s_inRoom = inRoom;
     }
     int portOfArea(int a) { return areaSlot(a); }
+    bool teamsShown() { return s_teams; }
 
     // The local panel's plate: `myName` is the name tag picked on it, else the account name
     // (Slippi shows the player's name; others see the account name on their panels). The tag's
@@ -787,9 +795,13 @@ namespace RoomCss {
         // (showTeam prints the plate again too: the team is part of the key)
         int tag = (*(int*)(a0 + 0x1C8) & 0xFFFF) | ((*(int*)(a0 + 0x1C0) & 0xFF) << 16) | (s_teams ? 1 << 24 : 0) |
                   ((*(int*)(a0 + 0x1B0) & 0xF) << 25);
-        if (mode != s_myHandMode || tag != s_myTagShown || strcmp(s_myPlate, myName) != 0) {
+        // (P+'s L / R / Z on the player box print "PLAYER 1" too: after the colour, P+ presses the
+        // panel's player kind button for it, which prints the plate)
+        int colour = OnlineMenu::localColourKey();
+        if (mode != s_myHandMode || tag != s_myTagShown || colour != s_myColourShown || strcmp(s_myPlate, myName) != 0) {
             s_myHandMode = mode;
             s_myTagShown = tag;
+            s_myColourShown = colour;
             strncpy(s_myPlate, myName, NAME_SIZE - 1);
             s_myPlate[NAME_SIZE - 1] = 0;
             s_myPlateDelay = 3;

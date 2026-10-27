@@ -483,6 +483,7 @@ namespace OnlineMenu {
     static void noteOwnSlotColour();   // P+'s slot colours (below, with the Code Menu)
     static u8 lockSlotColour();
     static void cssSlotColours();
+    static void followLocalSlot(u32 pressed);
 
     static void portValuesOf(int tag, PPOM::PortValues* pv)
     {
@@ -832,8 +833,18 @@ namespace OnlineMenu {
     // they went online, then their L / R there); it travels with the lock-in's port values and
     // the match setup writes all four lines from SESSION on every machine (OnlineMatch). Purely
     // visual: only the materials' colour animation reads them.
+    // A room's CSS shows the local panel (area 0) at the player's slot L and area L at slot 0
+    // (RoomCss): each area is drawn in its own line (area 0 in P1's, the one P+'s L / R / Z step,
+    // whose index is the area under the hand), and the lines hold the slots' colours: P1's the
+    // player's, line L P1's red, the others their own. (Drawn in the slot's line, the local panel
+    // at P3 was yellow until L / R stepped P1's line, which recoloured the P1 card and then, as
+    // Brawl redraws the stepped panel in its own line, the local one too: Sarah's board,
+    // 2026-10-26.)
     static const u32 SLOT_COLOUR_LINES = 0x804E02F4;
-    static u32 s_ownSlotColour = 0;   // the value P1's line has on the online CSS
+    static int s_ownSlotColour = -1;   // the player's colour (0-12), -1 none: their port's own
+    static int s_colourSlot = 0;       // the slot the lines are set for (the local panel's)
+    static int s_colourReset = 0;      // frames left in which P1's line at its default is Z's reset
+    static u8 s_colourPresses = 0;     // L / R / Z on the player box (localColourKey)
 
     static u32* slotColourLine(int port)
     {
@@ -848,26 +859,70 @@ namespace OnlineMenu {
         if (l) l[2] = colour >= 0 && colour < PPOM::SLOT_COLOURS ? (u32)colour : l[4];
     }
 
-    // The online CSS's lines: P1's (the local panel's) is the player's colour, the others their
+    // A port's own colour (its line's default).
+    static int slotDefault(int port)
+    {
+        u32* l = slotColourLine(port);
+        return l ? (int)l[4] : port;
+    }
+
+    // The online CSS's lines: P1's (the local panel's) is the player's colour, else the colour of
+    // the slot it is shown at; line L (a room's area at slot 0) P1's red; the others their
     // defaults (a match may have left the players' colours in them).
     static void cssSlotColours()
     {
-        setSlotColour(0, (int)s_ownSlotColour);
-        for (int i = 1; i < 4; i++) setSlotColour(i, -1);
+        int L = s_colourSlot;
+        setSlotColour(0, s_ownSlotColour >= 0 ? s_ownSlotColour : slotDefault(L));
+        for (int i = 1; i < 4; i++) setSlotColour(i, i == L ? slotDefault(0) : -1);
     }
 
+    // The player's colour from P1's line: the colour of the slot it is shown at is none (red as
+    // P1, yellow as P3), which gives the player their port's colour in the match.
     static void noteOwnSlotColour()
     {
         u32* l = slotColourLine(0);
-        if (l && l[2] < (u32)PPOM::SLOT_COLOURS) s_ownSlotColour = l[2];
+        if (!l || l[2] >= (u32)PPOM::SLOT_COLOURS) return;
+        s_ownSlotColour = (int)l[2] == slotDefault(s_colourSlot) ? -1 : (int)l[2];
     }
 
-    // The lock-in's PortValues.slotColour: 0 for the line's default (P1's red, which the player
-    // did not pick: that player gets their port's colour), else the colour + 1.
+    // The lock-in's PortValues.slotColour: 0 for none (that player gets their port's colour),
+    // else the colour + 1.
     static u8 lockSlotColour()
     {
+        return s_ownSlotColour >= 0 ? (u8)(s_ownSlotColour + 1) : 0;
+    }
+
+    // Every frame on the online CSS: the lines follow the local panel's slot (a free-for-all
+    // room's; 0 on the other CSSs). P+'s Z on the player box sets P1's line to its default, red, which at another
+    // slot would be a red pick: there it is none, the slot's own colour, as Z is offline.
+    static void followLocalSlot(u32 pressed)
+    {
+        // (A team room's panels are drawn in the lines of the teams' ports: as at P1 there.)
+        int L = roomCss() && !RoomCss::teamsShown() ? RoomCss::portOfArea(0) : 0;
+        if (L != s_colourSlot) {
+            noteOwnSlotColour();
+            s_colourSlot = L;
+            cssSlotColours();
+        }
+        const u32 BTN_L = 0x40, BTN_R = 0x20;
+        bool onBox = (pressed & (BTN_L | BTN_R | BTN_Z)) && RoomCss::handOnMyPlayerBox();
+        if (onBox) ++s_colourPresses;
+        if (onBox && (pressed & BTN_Z)) s_colourReset = 4;
+        if (s_colourReset > 0) {
+            --s_colourReset;
+            u32* l = slotColourLine(0);
+            if (l && L != 0 && l[2] == l[4]) {
+                s_ownSlotColour = -1;
+                cssSlotColours();
+                s_colourReset = 0;
+            }
+        }
+    }
+
+    int localColourKey()
+    {
         u32* l = slotColourLine(0);
-        return l && s_ownSlotColour != l[4] ? (u8)(s_ownSlotColour + 1) : 0;
+        return l ? (int)((l[2] & 0xFF) | ((u32)s_colourPresses << 8)) : -1;
     }
 
     void setSlotColours(const s8* colour)
@@ -914,6 +969,7 @@ namespace OnlineMenu {
         memcpy(s.savedItemSwitch, m + ITEM_SWITCH, sizeof(s.savedItemSwitch));
         s.savedHazard = st[HAZARD];
         s_codeMenuSavedCount = codeMenuLines(0);
+        s_colourSlot = 0;
         noteOwnSlotColour();   // the player's P1 colour offline
         s_runbackSaved[0] = *(u8*)CM_RUNBACK_OFF;
         s_runbackSaved[1] = *(u8*)CM_SKIP_RESULTS_OFF;
@@ -3521,6 +3577,7 @@ namespace OnlineMenu {
                 tickConnected(pressed);
             }
         }
+        followLocalSlot(pressed);   // the slot colour lines for the local panel's slot
         g_onlineCssLock = (lockedIn() || waitsForCharTurn() || resumeStep()) ? 1 : 0;
         PPOM::g_block.debug.scratch[1] = (u32)g_onlineCssLock | ((u32)s.phase << 4);   // harness/tests
         if (s.quitNoticeFrames) --s.quitNoticeFrames;
