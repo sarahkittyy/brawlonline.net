@@ -11,6 +11,7 @@ import type {
   PublicModRoom,
   PublishRulesetRequest,
   RecentRuleset,
+  RoomKind,
   RoomList,
   RulesetDraft,
   RulesetDraftRequest,
@@ -110,6 +111,15 @@ export class AccountsHttpClient {
 
   rooms(token: string): Promise<RoomList> {
     return this._request("GET", "/v1/rooms", { token });
+  }
+
+  /** `PUT /v1/me/room-name`: what was stored. */
+  async setRoomName(token: string, kind: RoomKind, name: string | null): Promise<string | null> {
+    const res = await this._request<{ kind: RoomKind; name: string | null }>("PUT", "/v1/me/room-name", {
+      token,
+      body: { kind, name },
+    });
+    return res.name;
   }
 
   /** The Other Games room with this exact code, private ones too (which game it needs). */

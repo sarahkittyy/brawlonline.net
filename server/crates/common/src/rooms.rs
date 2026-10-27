@@ -767,6 +767,10 @@ pub struct PublicRoom {
     /// What the room plays (its ruleset's code, name and set), for the room list.
     #[serde(default)]
     pub ruleset: RoomRuleset,
+    /// The name its host gave it (`users.room_name`, `docs/design/rooms.md` §1.4); `None`: the
+    /// launcher shows "alice's room". Absent from an older mm.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
 }
 
 /// What mm publishes for the launcher (`GET /status` on mm's local status listener, served to
@@ -806,6 +810,73 @@ pub struct MmStatus {
     /// accounts serves them as `GET /v1/live`, never with `/v1/rooms`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub live: Vec<crate::spectate::LiveEntry>,
+    /// Every Brawl Mods room player's room. Internal, as [`MmStatus::members`]: accounts reads it
+    /// for [`MmStatus::your_room`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mod_members: Vec<ModRoomMember>,
+    /// The room the asking player is in (P+ or Brawl Mods, public or private), so their launcher
+    /// pins it and lets its host name it. Only accounts fills it in, per launcher, from
+    /// [`MmStatus::members`] and [`MmStatus::mod_members`]; mm never sends it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub your_room: Option<YourRoom>,
+}
+
+/// The longest room name, in characters (`users.room_name`'s check).
+pub const MAX_ROOM_NAME_LEN: usize = 32;
+
+/// A room name as typed, made what is stored: spaces at the ends dropped and runs of them made
+/// one; empty is `None` (no name: "alice's room"). Control characters, and invisible ones that
+/// reorder or hide text, are refused, as are names over [`MAX_ROOM_NAME_LEN`].
+pub fn clean_room_name(typed: &str) -> Result<Option<String>, &'static str> {
+    let name = typed.split_whitespace().collect::<Vec<_>>().join(" ");
+    if name.is_empty() {
+        return Ok(None);
+    }
+    let hidden = |c: char| {
+        c.is_control()
+            || matches!(c, '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2060}'..='\u{206F}' | '\u{FEFF}')
+    };
+    if name.chars().any(hidden) {
+        return Err("Room names can't have that character.");
+    }
+    if name.chars().count() > MAX_ROOM_NAME_LEN {
+        return Err("Room names are at most 32 characters.");
+    }
+    Ok(Some(name))
+}
+
+/// One Brawl Mods room player's room, for [`MmStatus::mod_members`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModRoomMember {
+    /// The player's account (hyphenated lowercase UUID).
+    pub uid: String,
+    pub code: String,
+    /// The player hosts the room.
+    pub host: bool,
+    pub name: Option<String>,
+}
+
+/// Which kind of room [`YourRoom`] is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RoomKind {
+    /// A P+ room (`rooms.rs`).
+    Pplus,
+    /// A Brawl Mods (Other Games) room (`mod_rooms.rs`).
+    Mods,
+}
+
+/// [`MmStatus::your_room`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct YourRoom {
+    pub kind: RoomKind,
+    pub code: String,
+    /// The player hosts it: only the host names it.
+    pub host: bool,
+    /// Its name; `None`: none given.
+    pub name: Option<String>,
 }
 
 /// A count per queue, for [`MmStatus::queues`] and [`MmStatus::playing`].
@@ -830,12 +901,30 @@ pub struct RoomMember {
     pub status: RoomStatus,
     /// An open slot is empty.
     pub joinable: bool,
+    /// The player hosts the room. Absent from an older mm: false.
+    #[serde(default)]
+    pub host: bool,
+    /// The room's name ([`PublicRoom::name`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn room_names_are_cleaned() {
+        assert_eq!(clean_room_name("  friday   doubles "), Ok(Some("friday doubles".into())));
+        assert_eq!(clean_room_name("   "), Ok(None));
+        assert_eq!(clean_room_name(""), Ok(None));
+        assert_eq!(clean_room_name("Marth dittos only ⚔"), Ok(Some("Marth dittos only ⚔".into())));
+        assert_eq!(clean_room_name(&"x".repeat(32)), Ok(Some("x".repeat(32))));
+        assert!(clean_room_name(&"x".repeat(33)).is_err());
+        assert!(clean_room_name("evil\u{202E}name").is_err());
+        assert!(clean_room_name("bell\u{7}").is_err());
+    }
 
     #[test]
     fn room_codes() {

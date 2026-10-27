@@ -25,6 +25,12 @@
   color: var(--accent-primary-bright);
 }
 
+/* A title that is not text (a room's name, Other Games' room panel) gives way to the buttons beside it. */
+.title.shrinks {
+  flex-shrink: 1;
+  min-width: 0;
+}
+
 .titleRow {
   flex: 1;
   display: flex;

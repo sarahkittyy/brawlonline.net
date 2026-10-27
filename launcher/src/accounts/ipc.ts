@@ -11,6 +11,7 @@ import type {
   MyRulesets,
   PublishRulesetRequest,
   RecentRuleset,
+  RoomKind,
   RoomList,
   RulesetDraft,
   RulesetDraftRequest,
@@ -78,6 +79,12 @@ export const ipc_accountsMatchHistory = makeEndpoint.main(
 );
 
 export const ipc_accountsRooms = makeEndpoint.main("accounts_rooms", <{ uid: string }>_, <R<RoomList>>_);
+
+export const ipc_accountsSetRoomName = makeEndpoint.main(
+  "accounts_setRoomName",
+  <{ uid: string; kind: RoomKind; name: string | null }>_,
+  <R<string | null>>_,
+);
 
 export const ipc_accountsRuleset = makeEndpoint.main("accounts_ruleset", <{ code: string }>_, <R<RulesetView>>_);
 

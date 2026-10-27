@@ -315,6 +315,10 @@ pub struct PublicModRoom {
     pub host_name: String,
     pub players: u8,
     pub open: u8,
+    /// The host's name for it (`users.mods_room_name`); `None`: the launcher shows "alice's room".
+    /// Absent from an older mm.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
 }
 
 #[cfg(test)]

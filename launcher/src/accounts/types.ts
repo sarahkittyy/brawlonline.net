@@ -172,6 +172,20 @@ export type PublicRoom = {
   joinable: boolean;
   /** What the room plays (common::rooms::RoomRuleset). Absent from an older server. */
   ruleset?: RoomRuleset;
+  /** The name its host gave it (docs/design/rooms.md §1.4); absent: none ("alice's room"). */
+  name?: string | null;
+};
+
+/** P+ rooms or Other Games (Brawl Mods) rooms: each has its own room name. */
+export type RoomKind = "pplus" | "mods";
+
+/** The room the player is in (`GET /v1/rooms`'s `yourRoom`), public or private. */
+export type YourRoom = {
+  kind: RoomKind;
+  code: string;
+  /** The player hosts it: only the host names it. */
+  host: boolean;
+  name: string | null;
 };
 
 /** A room's ruleset as the room list has it: a published one (`code`), custom rules (`basedOn`) or P+ default. */
@@ -202,6 +216,8 @@ export type RoomList = {
   updatedAt: string;
   /** Public Brawl Mods rooms (docs/design/brawl-mods.md §5), fuller first. Absent from an older server. */
   modRooms?: PublicModRoom[];
+  /** The room the player is in; absent when in none (or from an older server). */
+  yourRoom?: YourRoom | null;
 };
 
 /** A public Brawl Mods room: its build, its host and how full it is. */
@@ -213,6 +229,8 @@ export type PublicModRoom = {
   players: number;
   /** Open slots (the room's size). */
   open: number;
+  /** The name its host gave it; absent: none. */
+  name?: string | null;
 };
 
 /** A published ruleset (docs/rulesets-protocol.md §3). */
@@ -308,6 +326,9 @@ export interface AccountsApi {
   ): Promise<MatchHistoryPage>;
   /** Players online and the public rooms. */
   rooms(uid: string): Promise<RoomList>;
+  /** Names the rooms of this kind the player hosts (null: no name); what was stored comes back
+   * (a racial slur is replaced by a kind name). */
+  setRoomName(uid: string, kind: RoomKind, name: string | null): Promise<string | null>;
   /** A published ruleset by code (public). */
   ruleset(code: string): Promise<RulesetView>;
   /** A page of the public list (`q` searches the name, publisher and code). */

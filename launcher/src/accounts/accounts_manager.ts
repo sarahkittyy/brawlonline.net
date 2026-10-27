@@ -14,6 +14,7 @@ import type {
   PublicModRoom,
   PublishRulesetRequest,
   RecentRuleset,
+  RoomKind,
   RoomList,
   RulesetDraft,
   RulesetDraftRequest,
@@ -104,6 +105,10 @@ export class AccountsManager {
 
   rooms(uid: string): Promise<AccountsResult<RoomList>> {
     return this._withSession(uid, (token) => this.client.rooms(token));
+  }
+
+  setRoomName(uid: string, kind: RoomKind, name: string | null): Promise<AccountsResult<string | null>> {
+    return this._withSession(uid, (token) => this.client.setRoomName(token, kind, name));
   }
 
   modRoom(uid: string, code: string): Promise<AccountsResult<PublicModRoom>> {

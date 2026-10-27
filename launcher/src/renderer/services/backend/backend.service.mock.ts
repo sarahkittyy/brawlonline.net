@@ -17,6 +17,7 @@ import type {
   RankedProfile,
   RankTier,
   RecentRuleset,
+  RoomKind,
   RoomList,
   RulesetDraft,
   RulesetDraftRequest,
@@ -404,6 +405,11 @@ class MockBackendClient implements BackendService {
   @delayAndMaybeError(SHOULD_ERROR)
   async fetchRooms(): Promise<RoomList> {
     return mockRoomList();
+  }
+
+  @delayAndMaybeError(SHOULD_ERROR)
+  async setRoomName(_kind: RoomKind, name: string | null): Promise<string | null> {
+    return name?.trim() || null;
   }
 
   @delayAndMaybeError(SHOULD_ERROR)

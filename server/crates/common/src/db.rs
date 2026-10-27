@@ -22,6 +22,10 @@ pub struct MmUser {
     pub ranked_sets: i32,
     /// Chat shadowban (`pp-admin mute`): mm drops the account's chat messages without a word.
     pub chat_muted: bool,
+    /// The name of the P+ rooms the account hosts (`users.room_name`); `None`: "alice's room".
+    pub room_name: Option<String>,
+    /// The same for its Brawl Mods (Other Games) rooms (`users.mods_room_name`).
+    pub mods_room_name: Option<String>,
 }
 
 impl MmUser {
@@ -33,7 +37,7 @@ impl MmUser {
 const MM_USER_SELECT: &str = "SELECT u.uid, u.display_name, u.connect_code, u.play_key_version, u.banned_until,
         u.email_verified_at IS NOT NULL AS email_verified,
         COALESCE(r.rating, $2) AS rating, COALESCE(r.sets_played, 0) AS ranked_sets,
-        u.chat_muted_at IS NOT NULL AS chat_muted
+        u.chat_muted_at IS NOT NULL AS chat_muted, u.room_name, u.mods_room_name
    FROM users u LEFT JOIN ratings r ON r.uid = u.uid";
 
 pub async fn fetch_mm_user(pool: &sqlx::PgPool, uid: Uuid) -> sqlx::Result<Option<MmUser>> {

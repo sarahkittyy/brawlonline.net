@@ -69,6 +69,21 @@ A member who is not in the room's game (sitting out, or joined during it) watche
 | 34 | Launcher | **Not busy.** A launcher click (another room, an invite, Play unranked/ranked) while watching ends the watch and goes ahead once the game is back on the room CSS. |
 | 35 | Others' cards | A watcher's card is the grey SIT OUT card with **WATCHING** on its plate (default, not asked). |
 
+### 1.4 Room names (the user's, 2026-10-27)
+
+Hosts name their rooms in the launcher, P+ rooms and Other Games rooms alike. The design was a mockup the user approved ("little pencil icon").
+
+| # | Topic | Decision |
+|---|---|---|
+| 36 | Where | **The name is edited where it is shown**, not in a box at Create room (P+ rooms are mostly made in game, where nothing can be typed). Home's room list **pins the player's own room on top** (a tinted row with an accent edge, "Yours" where the others say Join; not clickable); Other Games' room panel has the name as its title, the code in a small chip (a click copies it). |
+| 37 | Who | **Only the room's host**: a small pencil next to the name, and a click on the name, open a box in place: Enter or a click elsewhere saves, Esc goes back, empty is no name. At most 32 characters (a counter beside the box). |
+| 38 | Shown | The name is the row's bold line; a room nobody named reads **"alice's room" in grey**, so a real name stands out. The players line under it puts a crown before the host's name. The game does not show it (default, not asked: the list is where rooms are chosen). |
+| 39 | Remembered | The name is the account's, **one for P+ rooms and one for Other Games rooms**: the host's next room of that kind gets it too, rooms created in game included (default: a P+ room's name would rarely fit a Mario Kart room). |
+| 40 | Host leaves | **The room keeps its name**; the new host's pencil renames it. |
+| 41 | Slurs | Through the racial slur filter of display names (`server/README.md`): a flagged name is **replaced by a kind one at once** and the box shows it; DeepInfra failing, it is stored as typed and replaced by the background re-check. |
+
+How it works: `PUT /v1/me/room-name {kind, name}` (accounts, `server/README.md`) stores `users.room_name` / `users.mods_room_name`; mm reads them with the account (a room takes its creator's at creation) and through its account poll (`changed_users`, every 3 s) renames the room the account hosts. The lists (`GET /v1/rooms`, `docs/rooms-protocol.md` §4) carry each room's `name` and the caller's own room (`yourRoom`: code, whether they host it, its name), private ones too. The launcher shows a saved name at once, before the list has it (`use_room_name.ts`).
+
 How it works (`docs/rooms-protocol.md` §2 `room-watch`, `docs/rooms-game-interface.md` "Watching the room's game"): the players' games upload the game exactly as for spectators (nothing changes on their side, so their games are unaffected); mm sends the kept chunks to the room's watchers on the online connection's watch channel (ENet channel 2), and the watcher's Dolphin plays them as a live replay (`Online/RoomWatch.cpp`, the playback of `spectating.md` §6.2 in the netplay Dolphin). A game nobody streams (`MM_SPECTATE` off, or every player's "Show my games on the Spectate tab" off) is not watched: the watcher stays on the CSS with "Waiting for the game to end", as before.
 
 ## 2. Defaults (not asked)

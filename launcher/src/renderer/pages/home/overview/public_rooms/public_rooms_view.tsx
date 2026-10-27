@@ -8,9 +8,11 @@ import Button from "@mui/material/Button";
 import CircularProgress from "@mui/material/CircularProgress";
 import Tooltip from "@mui/material/Tooltip";
 import { clsx } from "clsx";
-import React from "react";
+import React, { useState } from "react";
 
-import type { PublicRoom, RoomMode } from "@/services/backend/types";
+import { RoomNameMessages } from "@/components/room_name/room_name.messages";
+import { RoomNameField } from "@/components/room_name/room_name_field";
+import type { PublicRoom, RoomMode, YourRoom } from "@/services/backend/types";
 
 import { ContentBlock } from "../content_block/content_block";
 import { JoinCodeBox } from "./join_code_box";
@@ -47,6 +49,12 @@ export type PublicRoomsViewProps = {
   onShowRuleset?: (room: PublicRoom) => void;
   /** Stories and screenshots: show this row as hovered or pressed. */
   forceRowState?: { code: string; state: "hover" | "pressed" };
+  /** The P+ room the player is in: listed first, marked, and named by its host. */
+  yourRoom?: YourRoom | null;
+  /** The host names their room (empty: no name); throws when the server refused it. */
+  onRenameRoom?: (code: string, name: string) => Promise<void>;
+  /** Stories and screenshots: your room's name box open with this text. */
+  forceEditText?: string;
 };
 
 /**
@@ -70,6 +78,9 @@ export const PublicRoomsView = ({
   highlightCreate = false,
   onShowRuleset,
   forceRowState,
+  yourRoom,
+  onRenameRoom,
+  forceEditText,
 }: PublicRoomsViewProps) => {
   const online =
     state.kind === "ready" ? (
@@ -185,18 +196,30 @@ export const PublicRoomsView = ({
         }
         return (
           <ul className={styles.list}>
-            {state.rooms.map((room) => (
-              <li key={room.code}>
-                <RoomRow
-                  room={room}
-                  joining={joiningCode === room.code}
-                  busy={joiningCode != null}
-                  onJoin={onJoin}
-                  onShowRuleset={onShowRuleset}
-                  forceState={forceRowState?.code === room.code ? forceRowState.state : undefined}
-                />
-              </li>
-            ))}
+            {pinOwn(state.rooms, yourRoom?.code).map((room) =>
+              room.code === yourRoom?.code ? (
+                <li key={room.code}>
+                  <OwnRoomRow
+                    room={room}
+                    host={yourRoom.host}
+                    onRename={onRenameRoom}
+                    onShowRuleset={onShowRuleset}
+                    forceEditText={forceEditText}
+                  />
+                </li>
+              ) : (
+                <li key={room.code}>
+                  <RoomRow
+                    room={room}
+                    joining={joiningCode === room.code}
+                    busy={joiningCode != null}
+                    onJoin={onJoin}
+                    onShowRuleset={onShowRuleset}
+                    forceState={forceRowState?.code === room.code ? forceRowState.state : undefined}
+                  />
+                </li>
+              ),
+            )}
           </ul>
         );
     }
@@ -212,6 +235,80 @@ const modeLabel = (mode: RoomMode): string => {
     case "teams":
       return Messages.modeTeams();
   }
+};
+
+/** The player's own room first, the others in the server's order. */
+const pinOwn = (rooms: PublicRoom[], own: string | undefined): PublicRoom[] => {
+  const mine = rooms.find((r) => r.code === own);
+  return mine ? [mine, ...rooms.filter((r) => r !== mine)] : rooms;
+};
+
+/** The room's players, the host's name with a crown. */
+const PlayerNames = ({ room }: { room: PublicRoom }) => {
+  const hostAt = room.names.indexOf(room.host);
+  return (
+    <div className={styles.names}>
+      {room.names.map((n, i) => (
+        <React.Fragment key={i}>
+          {i > 0 && " · "}
+          {i === hostAt && (
+            <span className={styles.crown} title={Messages.hostTooltip()}>
+              {"♛ "}
+            </span>
+          )}
+          {n}
+        </React.Fragment>
+      ))}
+    </div>
+  );
+};
+
+/** The player's own room: not a button (they are in it), marked, and its host's pencil names it. */
+const OwnRoomRow = ({
+  room,
+  host,
+  onRename,
+  onShowRuleset,
+  forceEditText,
+}: {
+  room: PublicRoom;
+  host: boolean;
+  onRename?: (code: string, name: string) => Promise<void>;
+  onShowRuleset?: (room: PublicRoom) => void;
+  forceEditText?: string;
+}) => {
+  const [editing, setEditing] = useState(forceEditText !== undefined);
+  const inGame = room.status === "in-game";
+  return (
+    <div className={clsx(styles.row, styles.own)} data-room={room.code} data-own-room="true">
+      <div className={styles.main}>
+        <div className={styles.host}>
+          <RoomNameField
+            name={room.name ?? null}
+            fallback={RoomNameMessages.defaultName(room.host)}
+            canEdit={host && !!onRename}
+            onSave={async (name) => onRename?.(room.code, name)}
+            onEditingChange={setEditing}
+            initialEditText={forceEditText}
+          />
+        </div>
+        {editing ? <div className={styles.names}>{RoomNameMessages.editHint()}</div> : <PlayerNames room={room} />}
+      </div>
+      <RulesetCell room={room} onShow={onShowRuleset} />
+      <span className={styles.mode}>{modeLabel(room.mode)}</span>
+      <span className={styles.players}>
+        <PersonOutlineIcon style={{ fontSize: 16 }} />
+        {Messages.playersInRoom(room.players, room.openSlots)}
+      </span>
+      <span className={clsx(styles.status, inGame ? styles.inGame : styles.waiting)}>
+        <span className={styles.statusDot} />
+        {inGame ? Messages.statusInGame() : Messages.statusWaiting()}
+      </span>
+      <Tooltip title={Messages.yoursTooltip()} placement="top" enterDelay={400} disableInteractive={true}>
+        <span className={clsx(styles.action, styles.yours)}>{Messages.yours()}</span>
+      </Tooltip>
+    </div>
+  );
 };
 
 export const RoomRow = React.memo(function RoomRow({
@@ -253,8 +350,11 @@ export const RoomRow = React.memo(function RoomRow({
         }}
       >
         <div className={styles.main}>
-          <div className={styles.host}>{room.host}</div>
-          <div className={styles.names}>{room.names.join(" · ")}</div>
+          {/* A room its host didn't name: "alice's room" in grey, so a real name stands out. */}
+          <div className={clsx(styles.host, !room.name && styles.unnamed)}>
+            {room.name ?? RoomNameMessages.defaultName(room.host)}
+          </div>
+          <PlayerNames room={room} />
         </div>
         <RulesetCell room={room} onShow={onShowRuleset} />
         <span className={styles.mode}>{modeLabel(room.mode)}</span>

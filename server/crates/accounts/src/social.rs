@@ -674,6 +674,8 @@ mod tests {
             rating: 0.0,
             ranked_sets: 0,
             chat_muted: false,
+            room_name: None,
+            mods_room_name: None,
         }
     }
 
@@ -727,6 +729,8 @@ mod tests {
             mode: RoomMode::OneVsOne,
             status: RoomStatus::Waiting,
             joinable,
+            host: false,
+            name: None,
         }
     }
 

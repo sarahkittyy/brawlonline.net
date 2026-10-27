@@ -50,6 +50,10 @@ pub const HISTORY_WINDOWS: [Window; 1] = [Window::new(60, MINUTE)];
 /// every 4 s while Home is open (15 a minute), so this leaves room for a second launcher.
 pub const ROOMS_WINDOWS: [Window; 1] = [Window::new(60, MINUTE)];
 
+/// Room names set per account (`PUT /v1/me/room-name`): 10 per minute and 60 per hour. Each new
+/// one asks the slur filter's model and is read by mm's account poll.
+pub const ROOM_NAME_WINDOWS: [Window; 2] = [Window::new(10, MINUTE), Window::new(60, HOUR)];
+
 /// Rulesets published per account (`POST /v1/rulesets`): 10 per hour and 30 per day. Each one is
 /// a row that is never deleted, so the limit is the store's growth.
 pub const RULESET_PUBLISH_WINDOWS: [Window; 2] = [Window::new(10, HOUR), Window::new(30, DAY)];

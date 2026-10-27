@@ -142,6 +142,31 @@
   white-space: nowrap;
 }
 
+/* A room its host didn't name ("alice's room"). */
+.unnamed {
+  color: var(--text-secondary);
+}
+
+.crown {
+  color: var(--accent-primary);
+}
+
+/* The player's own room, first in the list: a tinted row with an accent edge. Not a button (they are in it). */
+.row.own {
+  cursor: default;
+  background-color: rgb(255 255 255 / 4%);
+  box-shadow: inset 3px 0 0 var(--accent-primary);
+}
+
+.row.own:hover,
+.row.own:active {
+  background-color: rgb(255 255 255 / 4%);
+}
+
+.action.yours {
+  color: var(--text-secondary);
+}
+
 .names {
   margin-top: 2px;
   color: var(--text-dim);
