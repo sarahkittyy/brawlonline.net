@@ -1,7 +1,8 @@
 import type { StageLists } from "@common/rulesets";
-import { PPLUS_LEGAL_STAGES, stageName } from "@common/rulesets";
+import { MAX_HAZARD_STAGES, PPLUS_LEGAL_STAGES, stageName } from "@common/rulesets";
 import { PPLUS_STAGES } from "@common/stages";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
+import WarningAmberRoundedIcon from "@mui/icons-material/WarningAmberRounded";
 import { clsx } from "clsx";
 import { useState } from "react";
 
@@ -32,21 +33,66 @@ export const useStageIcon = () => {
   };
 };
 
+/**
+ * Per-stage hazards: the rules' default, and the stages that go the other way (`hazardStages`). The editor passes it;
+ * without it the tiles show no hazards.
+ */
+export type StageHazards = {
+  default: boolean;
+  stages: number[];
+  onToggle: (id: number) => void;
+};
+
+/**
+ * A tile's hazard button, right of its name. A stage with its own hazards shows them (the hazard icon and "On" / "Off");
+ * one that follows the default shows only the icon, and only while the tile is hovered, so the grid stays as clean as it
+ * was with one switch for every stage.
+ */
+const HazardButton = ({ id, hazards }: { id: number; hazards: StageHazards }) => {
+  const own = hazards.stages.includes(id);
+  const on = hazards.default !== own;
+  const full = !own && hazards.stages.length >= MAX_HAZARD_STAGES;
+  const title = full
+    ? Messages.hazardsFull(MAX_HAZARD_STAGES)
+    : own
+    ? Messages.hazardsOwnTitle(on)
+    : Messages.hazardsDefaultTitle(on);
+  return (
+    <button
+      type="button"
+      className={clsx(styles.hazard, own ? styles.hazardOwn : styles.hazardDefault, on && styles.hazardOn)}
+      title={title}
+      aria-label={title}
+      aria-pressed={own}
+      disabled={full}
+      data-hazards={on ? "on" : "off"}
+      data-hazards-own={own}
+      onClick={() => hazards.onToggle(id)}
+    >
+      <WarningAmberRoundedIcon className={styles.hazardIcon} />
+      {own && <span>{on ? Messages.hazardsOn() : Messages.hazardsOff()}</span>}
+    </button>
+  );
+};
+
 const StageTile = ({
   id,
   role,
   icon,
   onRole,
+  hazards,
 }: {
   id: number;
   role: StageRole;
   icon?: string;
   onRole: (role: StageRole) => void;
+  hazards?: StageHazards;
 }) => (
   <div className={clsx(styles.tile, styles[role])} data-stage={id} data-role={role}>
     <div className={styles.banner}>
       {icon && <img className={styles.art} src={icon} alt="" draggable={false} />}
       <span className={styles.name}>{stageName(id)}</span>
+      {hazards && <HazardButton id={id} hazards={hazards} />}
     </div>
     <div className={styles.roles} role="group" aria-label={stageName(id)}>
       {ROLES.map((r) => (
@@ -74,9 +120,12 @@ export const StagesSection = ({
   stages,
   onRole,
   icon,
+  hazards,
 }: {
   stages: StageLists;
   onRole: (id: number, role: StageRole) => void;
+  /** Per-stage hazards (the editor's); none: the tiles show no hazards. */
+  hazards?: StageHazards;
   /** The stage's icon URL; the extracted P+ icons by default. */
   icon?: (id: number) => string | undefined;
 }) => {
@@ -89,7 +138,8 @@ export const StagesSection = ({
     ...listed.filter((id) => !legalIds.includes(id) && !PPLUS_STAGES.some((s) => s.id === id)),
   ];
   const otherOn = otherIds.filter((id) => listed.includes(id)).length;
-  const [open, setOpen] = useState(otherOn > 0);
+  const otherOwnHazards = otherIds.some((id) => hazards?.stages.includes(id));
+  const [open, setOpen] = useState(otherOn > 0 || otherOwnHazards);
 
   const tiles = (ids: number[]) => (
     <div className={styles.grid}>
@@ -100,6 +150,7 @@ export const StagesSection = ({
           role={stageRole(stages, id)}
           icon={iconOf(id)}
           onRole={(role) => onRole(id, role)}
+          hazards={hazards}
         />
       ))}
     </div>

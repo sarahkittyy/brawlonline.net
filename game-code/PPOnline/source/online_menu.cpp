@@ -1009,7 +1009,7 @@ namespace OnlineMenu {
     // (OnlineMatch::setupMatch), so a setting changed in between (or left over from offline play)
     // never reaches an online match. Dolphin compares the result on every machine before the match
     // (GameplaySession SetupKey).
-    void applyRules()
+    void applyRules(int stageKind)
     {
         static const u8 PPLUS_RULE[16] = {0x00, 0x00, 0x01, 0x00, 0x04, 0x00, 0x0A, 0x00,
                                           0x08, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00};
@@ -1035,7 +1035,8 @@ namespace OnlineMenu {
             r[5] = ru.stockControl && ru.style == PPOM::STYLE_STOCK ? 2 : 0;
             m[0] = ru.itemFrequency;
             memcpy(m + ITEM_SWITCH, ru.itemSwitch, sizeof(ru.itemSwitch));
-            if (st) st[HAZARD] = ru.hazards ? 0 : 1;
+            // (the match's stage's own when the rules give it one: hazardStages)
+            if (st) st[HAZARD] = PPOM::hazardsOn(ru, stageKind) ? 0 : 1;
         } else {
             r[0xA] = (s.mode == PPOM::MODE_DIRECT) ? 1 : 0;   // m_allowPause
             m[0] = 0;                                          // item frequency: none

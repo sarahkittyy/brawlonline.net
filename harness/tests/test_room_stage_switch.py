@@ -4,8 +4,9 @@ stages (SESSION RoomStages) and the host edits them; tools/gamecode/roomsim.py p
 
 - The host: the page shows the room's stages (P+'s switch is the room's while the menu is open, the
   player's own after), starters labelled STR; A cycles a stage Off -> Counterpick -> Starter, A on
-  the top bar switches the loser to the list, Z the hazards; closing the menu sends ROOM_STAGES
-  and the hazards with the rules.
+  the top bar switches the loser to the list, Z on the top row the default hazards and Z on a stage
+  that stage's own (the rules' hazardStages, 2026-10-26); closing the menu sends ROOM_STAGES and
+  the hazards with the rules.
 - Another player: the same page, read-only; nothing is sent.
 - The cursor's frame is on its own tile on every frame of a move (it showed for a frame over
   another stage, staging feedback 2026-10-12).
@@ -183,6 +184,17 @@ def test_host_edits_the_rooms_stages(game: Game) -> None:
     g.c.pad_script(0, [PadInput(buttons=["Z"], hold=3), PadInput(hold=6)])
     g.wait(15)
     g.shot("02-edited")
+    # Z on a stage: its own hazards. Fountain of Dreams (the room's one stage the other way) goes
+    # back to the default (now on); Yoshi's Story twice: its own, then not; FD its own (off).
+    for kind, times in ((FOD, 1), (YS, 2), (FD, 1)):
+        goto_stage(g, kind)
+        for _ in range(times):
+            g.c.pad_script(0, [PadInput(buttons=["Z"], hold=3), PadInput(hold=6)])
+            g.wait(15)
+    g.shot("02b-hazards-off-on-fd")   # the footer: "Hazards here (Z): OFF"
+    to_bar(g)
+    g.wait(10)
+    g.shot("02c-hazards-default")     # "Hazards (Z): ON, OFF on 1 stage"
     # Rows of 7: from the first stage, down is the 8th (Yoshi's Island), then the 15th (Temple of
     # Time), then the bar; down again keeps the column; left from the first wraps to the 7th.
     goto_stage(g, YS)
@@ -222,6 +234,7 @@ def test_host_edits_the_rooms_stages(game: Game) -> None:
     assert starters == sorted([BF, FOD, SV, DL, PS2]), starters
     assert YS in counterpicks and FD not in counterpicks and FD not in starters, counterpicks
     assert sim.room.rules[0x10] == 1, "the hazards did not go with the rules"
+    assert sim.room.rules[0x18:0x20] == bytes([FD]).ljust(8, b"\0"), sim.room.rules[0x18:0x20].hex()
     # The page shows the room's new stages when it opens again.
     open_switch(g)
     assert switch_bits(g) == page1_bits(starters + counterpicks)

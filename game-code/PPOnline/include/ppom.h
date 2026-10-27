@@ -466,7 +466,7 @@ namespace PPOM {
         u8 pause;         // 1 NORMAL, 0 HOLD (P+: START held 50 frames)
         u8 itemFrequency; // 0 none .. 3 high
         u8 itemSwitch[8]; // the ITEM SWITCH screen's switches (the menu record's +0x818)
-        u8 hazards;       // 1 on
+        u8 hazards;       // 1 on: every stage but hazardStages'
         u8 autoLCancel;   // MORE RULES' AUTO L-CANCEL (set rule +0xB)
         u8 inputAssist;   // MORE RULES' INPUT ASSIST (set rule +0xC, P+'s 3-frame buffer)
         // RULES' STOCK CONTROL (set rule +5 = 2): each player's own stock count (their port
@@ -475,8 +475,21 @@ namespace PPOM {
         // Dolphin, with Session.restore: the restarted game's time limit in frames (0: the rules'
         // own; the match timer left at the agreed frame, at least 1).
         u32 restoreFrames;     // +0x14
-        u8 _reserved[8];
+        // The stages (srStageKind) whose hazards are the other way from `hazards`, 0 after the
+        // last (2026-10-26, still v8: these were reserved, 0 from an older Dolphin).
+        u8 hazardStages[8];    // +0x18
     };                    // 0x20
+
+    static const int MAX_HAZARD_STAGES = 8;
+    // Whether stage `kind` plays with its hazards.
+    inline bool hazardsOn(const Rules& ru, int kind)
+    {
+        bool listed = false;
+        for (int i = 0; i < MAX_HAZARD_STAGES && ru.hazardStages[i]; i++) {
+            if (ru.hazardStages[i] == kind) listed = true;
+        }
+        return (ru.hazards != 0) != listed;
+    }
 
     // CMD_RULESETS response payload (v6): the player's recent and own published rulesets, for the
     // room's Ruleset line (Dolphin asks mm again when its list is older than 5 s).

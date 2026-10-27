@@ -30,7 +30,13 @@ export type MatchRules = {
   itemFrequency: number;
   /** The item switch screen's 8 bytes. */
   itemSwitch: number[];
+  /** Stage hazards, for every stage but `hazardStages` (the editor's "Stage hazards (default)"). */
   hazards: boolean;
+  /**
+   * The stages whose hazards are the other way from `hazards`: at most MAX_HAZARD_STAGES, each once. The server writes
+   * it only when not empty, so older rulesets (and their hashes) stay the same.
+   */
+  hazardStages?: number[];
   autoLCancel: boolean;
   inputAssist: boolean;
   /**
@@ -77,6 +83,8 @@ export type Ruleset = {
 export const RULESET_FORMAT = 1;
 export const MAX_RULESET_NAME_LEN = 32;
 export const MAX_BANS = 3;
+/** The most stages whose hazards can differ from the default (the game keeps 8: `common::rules::MAX_HAZARD_STAGES`). */
+export const MAX_HAZARD_STAGES = 8;
 export const BEST_OF_CHOICES = [0, 3, 5, 7] as const;
 
 /** P+ v3.2's item switch after a fresh boot: Stage Items and EX Items on. */
@@ -135,10 +143,23 @@ export function defaultMatchRules(): MatchRules {
     itemSwitch: [...DEFAULT_ITEM_SWITCH],
     // Off by default (the user's decision, 2026-10-12), as the server's MatchRules::default.
     hazards: false,
+    hazardStages: [],
     autoLCancel: false,
     inputAssist: false,
     stockControl: false,
   };
+}
+
+/** Whether stage `id` plays with its hazards (`MatchRules::hazards_on`). */
+export function hazardsOn(m: MatchRules, id: number): boolean {
+  return m.hazards !== (m.hazardStages ?? []).includes(id);
+}
+
+/** Stage `id`'s hazards the other way: in or out of `hazardStages` (kept sorted). */
+export function withStageHazards(m: MatchRules, id: number): MatchRules {
+  const list = m.hazardStages ?? [];
+  const hazardStages = list.includes(id) ? list.filter((s) => s !== id) : [...list, id].sort((a, b) => a - b);
+  return { ...m, hazardStages };
 }
 
 /** P+ default (`Ruleset::default()`): what a room plays without a ruleset. */
@@ -208,6 +229,8 @@ export function normalizeRuleset(r: Ruleset): Ruleset {
   if (!picksUsed(n)) {
     n.alternateStages = false;
   }
+  const hazardStages = [...new Set(n.rules.hazardStages ?? [])].sort((a, b) => a - b);
+  n.rules = { ...n.rules, hazardStages };
   return n;
 }
 
@@ -238,6 +261,18 @@ export function validateMatchRules(m: MatchRules): string | null {
   }
   if (!Number.isInteger(m.itemFrequency) || m.itemFrequency < 0 || m.itemFrequency > 3) {
     return `itemFrequency ${m.itemFrequency} is not 0-3`;
+  }
+  const hazardStages = m.hazardStages ?? [];
+  if (hazardStages.length > MAX_HAZARD_STAGES) {
+    return `At most ${MAX_HAZARD_STAGES} stages can have their own hazards`;
+  }
+  for (const [i, s] of hazardStages.entries()) {
+    if (!Number.isInteger(s) || s < 1 || s > 255) {
+      return `Stage id ${s} is out of range`;
+    }
+    if (hazardStages.indexOf(s) !== i) {
+      return `Stage id ${s} is listed twice`;
+    }
   }
   return null;
 }
@@ -383,11 +418,16 @@ export function rulesetFromJson(text: string): Ruleset {
 /** The JSON Export writes: the ruleset without `by` (the server fills it), indented. */
 export function rulesetToJson(r: Ruleset): string {
   const { by: _by, alternateStages, ...rest } = r;
-  // Stock control and alternate stages only when on, as the server writes them: a file without them still opens in an
-  // older launcher.
-  const { stockControl, ...rules } = rest.rules;
+  // Stock control, alternate stages and per-stage hazards only when used, as the server writes them: a file without
+  // them still opens in an older launcher.
+  const { stockControl, hazardStages, ...rules } = rest.rules;
   const out = { ...rest, ...(alternateStages ? { alternateStages } : {}) };
-  return JSON.stringify({ ...out, rules: stockControl ? { ...rules, stockControl } : rules }, null, 2) + "\n";
+  const outRules = {
+    ...rules,
+    ...(hazardStages?.length ? { hazardStages } : {}),
+    ...(stockControl ? { stockControl } : {}),
+  };
+  return JSON.stringify({ ...out, rules: outRules }, null, 2) + "\n";
 }
 
 function isObject(v: unknown): v is Record<string, any> {
@@ -431,6 +471,9 @@ function checkTypes(r: Ruleset): string | null {
   }
   if (!isIntArray(m.itemSwitch) || m.itemSwitch.length !== 8 || m.itemSwitch.some((b) => b < 0 || b > 255)) {
     return "itemSwitch";
+  }
+  if (!isIntArray(m.hazardStages ?? [])) {
+    return "hazardStages";
   }
   return null;
 }

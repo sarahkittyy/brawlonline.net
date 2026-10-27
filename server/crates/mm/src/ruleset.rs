@@ -5,7 +5,8 @@
 //! every client applies: style, stocks, time, items, hazards, auto L-cancel...,
 //! `common::rules::MatchRules`) as `rules`. The user chose the P+ competitive ruleset: 4 stocks,
 //! 8 minutes, items off, P+'s legal stages; P+'s normal pause only in Direct (and rooms, which play
-//! Direct's rules), elsewhere P+'s hold-START pause, as the game always did.
+//! Direct's rules), elsewhere P+'s hold-START pause, as the game always did. Stage hazards off but
+//! on Fountain of Dreams (`hazardStages`, the user's, 2026-10-26: the Midwest ruleset's).
 //!
 //! **Stage ids** are Brawl's `srStageKind` values, the ids the game's own match setup and P+'s
 //! stage file loader key on (`docs/game-code.md` section 11, "Stages"). The list in
@@ -122,9 +123,10 @@ mod tests {
             stages.sort();   // Ranked's are in its stage select's order
             assert_eq!(stages, nine_stages(), "{mode:?}");
             assert_eq!(m.items, 0, "{mode:?}");
-            // P+'s competitive set; normal pause only in Direct, else hold START.
+            // P+'s competitive set; normal pause only in Direct, else hold START; hazards off but
+            // on Fountain of Dreams (the user's, 2026-10-26: the Midwest ruleset's).
             let pause = if mode == Mode::Direct { Pause::Normal } else { Pause::Hold };
-            assert_eq!(m.rules, MatchRules { pause, ..Default::default() }, "{mode:?}");
+            assert_eq!(m.rules, MatchRules { pause, hazard_stages: vec![0x1F], ..Default::default() }, "{mode:?}");
         }
         // Ranked's stage select's bottom row, left to right (the user's, 2026-10-16).
         assert_eq!(r.for_mode(Mode::Ranked).starters, [9, 0x21, 1, 0x2E, 4]);

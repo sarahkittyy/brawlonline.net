@@ -71,7 +71,8 @@ ParsedRules ParseRules(const picojson::object& resp)
   static constexpr const char* KNOWN[] = {"style",         "stocks",     "timeMinutes",
                                           "damageRatio",   "teamAttack", "pause",
                                           "itemFrequency", "itemSwitch", "hazards",
-                                          "autoLCancel",   "inputAssist", "stockControl"};
+                                          "autoLCancel",   "inputAssist", "stockControl",
+                                          "hazardStages"};
   for (const auto& [key, value] : o)
   {
     if (std::find(std::begin(KNOWN), std::end(KNOWN), key) == std::end(KNOWN))
@@ -161,6 +162,29 @@ ParsedRules ParseRules(const picojson::object& resp)
       r.item_switch[i] = *b;
     }
   }
+  if (const auto hs = o.find("hazardStages"); hs != o.end())
+  {
+    const bool ok = hs->second.is<picojson::array>() &&
+                    hs->second.get<picojson::array>().size() <= MAX_HAZARD_STAGES;
+    if (!ok)
+    {
+      out.detail = fmt::format("hazardStages is not a list of up to {} stages", MAX_HAZARD_STAGES);
+      return fail(INVALID_TEXT);
+    }
+    for (const auto& v : hs->second.get<picojson::array>())
+    {
+      picojson::object probe{{"hazardStages", v}};
+      const auto id = GetByte(probe, "hazardStages", 1, 0xFF, 0, &out.detail);
+      if (!id)
+        return fail(INVALID_TEXT);
+      if (std::find(r.hazard_stages.begin(), r.hazard_stages.end(), *id) != r.hazard_stages.end())
+      {
+        out.detail = fmt::format("hazardStages lists stage {} twice", *id);
+        return fail(INVALID_TEXT);
+      }
+      r.hazard_stages.push_back(*id);
+    }
+  }
   out.rules = r;
   return out;
 }
@@ -185,6 +209,8 @@ std::array<u8, RULES_SIZE> SessionBytes(const std::optional<MatchRules>& rules)
   b[RU_AUTO_L_CANCEL] = r.auto_l_cancel ? 1 : 0;
   b[RU_INPUT_ASSIST] = r.input_assist ? 1 : 0;
   b[RU_STOCK_CONTROL] = r.stock_control ? 1 : 0;
+  for (size_t i = 0; i < r.hazard_stages.size() && i < MAX_HAZARD_STAGES; ++i)
+    b[RU_HAZARD_STAGES + i] = r.hazard_stages[i];
   return b;
 }
 
@@ -216,6 +242,15 @@ std::optional<MatchRules> FromSessionBytes(const std::array<u8, RULES_SIZE>& b)
   r.auto_l_cancel = b[RU_AUTO_L_CANCEL] != 0;
   r.input_assist = b[RU_INPUT_ASSIST] != 0;
   r.stock_control = b[RU_STOCK_CONTROL] != 0;
+  for (u32 i = 0; i < MAX_HAZARD_STAGES; ++i)
+  {
+    const u8 id = b[RU_HAZARD_STAGES + i];
+    if (id == 0)
+      break;
+    if (std::find(r.hazard_stages.begin(), r.hazard_stages.end(), id) != r.hazard_stages.end())
+      return std::nullopt;
+    r.hazard_stages.push_back(id);
+  }
   return r;
 }
 
@@ -241,6 +276,13 @@ picojson::object ToJson(const MatchRules& r)
   // Only when on, as the server writes it (an older server refuses a key it does not know).
   if (r.stock_control)
     o["stockControl"] = picojson::value(true);
+  if (!r.hazard_stages.empty())
+  {
+    picojson::array hs;
+    for (u8 id : r.hazard_stages)
+      hs.emplace_back(static_cast<double>(id));
+    o["hazardStages"] = picojson::value(hs);
+  }
   return o;
 }
 }  // namespace Online

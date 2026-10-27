@@ -134,6 +134,42 @@ TEST(MatchRules, StockControl)
   EXPECT_FALSE(Parse(R"({"stockControl": 1})").rules);
 }
 
+TEST(MatchRules, HazardStages)
+{
+  // The stages whose hazards are the other way from `hazards` (Fountain of Dreams in Ranked,
+  // 2026-10-26); sent only when there are some.
+  const auto p = Parse(R"({"hazards": false, "hazardStages": [31, 1]})");
+  ASSERT_TRUE(p.rules) << p.detail;
+  EXPECT_EQ(p.rules->hazard_stages, (std::vector<u8>{31, 1}));
+  const auto b = SessionBytes(p.rules);
+  EXPECT_EQ(b[RU_HAZARD_STAGES], 31);
+  EXPECT_EQ(b[RU_HAZARD_STAGES + 1], 1);
+  EXPECT_EQ(b[RU_HAZARD_STAGES + 2], 0);
+  EXPECT_EQ(FromSessionBytes(b), p.rules);
+  EXPECT_EQ(ToJson(*p.rules).at("hazardStages").get<picojson::array>().size(), 2u);
+  EXPECT_EQ(ToJson(MatchRules{}).count("hazardStages"), 0u);
+  const auto eight = Parse(R"({"hazardStages": [1, 2, 3, 4, 5, 6, 7, 8]})");
+  ASSERT_TRUE(eight.rules) << eight.detail;
+  EXPECT_EQ(FromSessionBytes(SessionBytes(eight.rules)), eight.rules);
+  for (const char* json : {R"({"hazardStages": [1, 2, 3, 4, 5, 6, 7, 8, 9]})",
+                           R"({"hazardStages": [0]})", R"({"hazardStages": [256]})",
+                           R"({"hazardStages": [31, 31]})", R"({"hazardStages": 31})",
+                           R"({"hazardStages": ["31"]})"})
+  {
+    const auto bad = Parse(json);
+    EXPECT_FALSE(bad.rules) << json;
+    EXPECT_EQ(bad.error, "Invalid rules from the server.") << json;
+  }
+  // The game's edits: a stage twice is refused; ids stop at the first 0.
+  auto twice = SessionBytes(MatchRules{});
+  twice[RU_HAZARD_STAGES] = twice[RU_HAZARD_STAGES + 1] = 31;
+  EXPECT_FALSE(FromSessionBytes(twice));
+  auto gap = SessionBytes(MatchRules{});
+  gap[RU_HAZARD_STAGES + 1] = 31;
+  ASSERT_TRUE(FromSessionBytes(gap));
+  EXPECT_TRUE(FromSessionBytes(gap)->hazard_stages.empty());
+}
+
 TEST(MatchRules, UnknownRuleRefusesTheMatch)
 {
   // A rule this client cannot apply: playing without it would not be the match the server set up.

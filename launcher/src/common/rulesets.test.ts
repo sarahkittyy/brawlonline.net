@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { Ruleset } from "./rulesets";
 import {
   defaultRuleset,
+  hazardsOn,
   normalizeRuleset,
   parseRulesetCode,
   rulesetFromJson,
@@ -10,6 +11,7 @@ import {
   rulesetToJson,
   suggestStrikes,
   validateRuleset,
+  withStageHazards,
 } from "./rulesets";
 
 /** The Bo3 of the server's tests (server/crates/common/src/rules.rs `weekly`). */
@@ -42,6 +44,7 @@ describe("rulesets", () => {
       itemFrequency: 0,
       itemSwitch: [0, 4, 0, 0, 0, 0, 0, 0],
       hazards: false,
+      hazardStages: [],
       autoLCancel: false,
       inputAssist: false,
       stockControl: false,
@@ -165,5 +168,29 @@ describe("rulesets", () => {
     expect(rulesetFromJson(rulesetToJson(alts))).toEqual(alts);
     expect(rulesetFromJson(`{"name": "x", "alternateStages": true}`).alternateStages).toBe(true);
     expect(() => rulesetFromJson(`{"alternateStages": "yes"}`)).toThrow("bad value");
+    // Per-stage hazards: written only when a stage has its own, read back.
+    expect("hazardStages" in JSON.parse(text).rules).toBe(false);
+    const fod = weekly({ rules: { ...defaultRuleset().rules, hazardStages: [0x1f] } });
+    expect(JSON.parse(rulesetToJson(fod)).rules.hazardStages).toEqual([31]);
+    expect(rulesetFromJson(rulesetToJson(fod))).toEqual(fod);
+    expect(() => rulesetFromJson(`{"rules": {"hazardStages": [true]}}`)).toThrow("bad value");
+  });
+
+  it("has per-stage hazards", () => {
+    const m = withStageHazards(defaultRuleset().rules, 0x1f);
+    expect(m.hazardStages).toEqual([0x1f]);
+    expect([hazardsOn(m, 0x1f), hazardsOn(m, 0x01)]).toEqual([true, false]);
+    // The default flipped: the stage with its own stays the other way.
+    expect([hazardsOn({ ...m, hazards: true }, 0x1f), hazardsOn({ ...m, hazards: true }, 0x01)]).toEqual([false, true]);
+    // Kept sorted; a second click gives the stage back to the default.
+    expect(withStageHazards(m, 0x01).hazardStages).toEqual([0x01, 0x1f]);
+    expect(withStageHazards(m, 0x1f).hazardStages).toEqual([]);
+    // As the server: at most 8, each once, in range; a ruleset keeps them sorted.
+    const rules = (hazardStages: number[]) => weekly({ rules: { ...defaultRuleset().rules, hazardStages } });
+    expect(rulesetProblem(rules([1, 2, 3, 4, 5, 6, 7, 8]))).toBeNull();
+    expect(rulesetProblem(rules([1, 2, 3, 4, 5, 6, 7, 8, 9]))).toContain("At most 8");
+    expect(validateRuleset(rules([31, 31]))).toContain("twice");
+    expect(validateRuleset(rules([0]))).toContain("range");
+    expect(normalizeRuleset(rules([31, 1, 31])).rules.hazardStages).toEqual([1, 31]);
   });
 });

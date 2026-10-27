@@ -53,13 +53,70 @@
 
 .name {
   position: relative;
+  display: -webkit-box;
   min-width: 0;
+  margin-right: 6px;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-height: 1.2;
   font-weight: 600;
   font-size: 14px;
   text-shadow: 0 1px 3px rgb(0 0 0 / 90%);
+}
+
+/* The hazard button, right of the name. A stage with its own hazards shows them; one that follows the default only
+   shows the icon while the tile is hovered or the button has focus. */
+.hazard {
+  position: relative;
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 3px;
+  margin-left: auto;
+  padding: 2px 6px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: rgb(0 0 0 / 45%);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.hazard:disabled {
+  cursor: default;
+}
+
+.hazardIcon {
+  font-size: 15px !important;
+}
+
+.hazardDefault {
+  opacity: 0;
+}
+
+.tile:hover .hazardDefault,
+.hazardDefault:focus-visible {
+  opacity: 0.85;
+}
+
+.hazard:not(:disabled):hover {
+  border-color: rgb(255 255 255 / 30%);
+  color: inherit;
+}
+
+.hazardOwn {
+  border-color: rgb(255 255 255 / 25%);
+  color: inherit;
+}
+
+.hazardOwn.hazardOn {
+  border-color: transparent;
+  background: #f2b33d;
+  color: #2a1c00;
 }
 
 .off .name {

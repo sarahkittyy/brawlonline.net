@@ -2,17 +2,17 @@
   "direct": {
     "stages": [1, 4, 9, 12, 31, 33, 35, 45, 46],
     "items": 0,
-    "rules": {"style": "stock", "stocks": 4, "timeMinutes": 8, "pause": "normal", "hazards": false}
+    "rules": {"style": "stock", "stocks": 4, "timeMinutes": 8, "pause": "normal", "hazards": false, "hazardStages": [31]}
   },
   "unranked": {
     "stages": [1, 4, 9, 12, 31, 33, 35, 45, 46],
     "items": 0,
-    "rules": {"style": "stock", "stocks": 4, "timeMinutes": 8, "pause": "hold", "hazards": false}
+    "rules": {"style": "stock", "stocks": 4, "timeMinutes": 8, "pause": "hold", "hazards": false, "hazardStages": [31]}
   },
   "ranked": {
     "stages": [35, 31, 12, 45, 9, 33, 1, 46, 4],
     "starters": [9, 33, 1, 46, 4],
     "items": 0,
-    "rules": {"style": "stock", "stocks": 4, "timeMinutes": 8, "pause": "hold", "hazards": false}
+    "rules": {"style": "stock", "stocks": 4, "timeMinutes": 8, "pause": "hold", "hazards": false, "hazardStages": [31]}
   }
 }

@@ -1,5 +1,12 @@
 import type { MatchRules, Ruleset, StageChoice } from "@common/rulesets";
-import { MAX_BANS, MAX_RULESET_NAME_LEN, picksUsed, strikesUsed, suggestStrikes } from "@common/rulesets";
+import {
+  MAX_BANS,
+  MAX_RULESET_NAME_LEN,
+  picksUsed,
+  strikesUsed,
+  suggestStrikes,
+  withStageHazards,
+} from "@common/rulesets";
 import Button from "@mui/material/Button";
 import MenuItem from "@mui/material/MenuItem";
 import Switch from "@mui/material/Switch";
@@ -230,10 +237,22 @@ export const RulesetEditor = ({ value, onChange }: { value: Ruleset; onChange: (
         <Typography variant="caption" color="text.secondary">
           {Messages.stagesHelp()} {Messages.stageCount(r.stages.starters.length, r.stages.counterpicks.length)}
         </Typography>
-        <Row label={Messages.hazards()}>
-          <Switch checked={r.rules.hazards} onChange={(e) => setRules({ hazards: e.target.checked })} />
+        <Row label={Messages.hazardsDefault()} help={Messages.hazardsDefaultHelp()}>
+          <Switch
+            checked={r.rules.hazards}
+            onChange={(e) => setRules({ hazards: e.target.checked })}
+            inputProps={{ "aria-label": Messages.hazardsDefault() }}
+          />
         </Row>
-        <StagesSection stages={r.stages} onRole={setStageRole} />
+        <StagesSection
+          stages={r.stages}
+          onRole={setStageRole}
+          hazards={{
+            default: r.rules.hazards,
+            stages: r.rules.hazardStages ?? [],
+            onToggle: (id) => onChange({ ...r, rules: withStageHazards(r.rules, id) }),
+          }}
+        />
       </Section>
     </div>
   );

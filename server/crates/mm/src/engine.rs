@@ -2650,9 +2650,15 @@ mod tests {
             // The ruleset's stage list, as Slippi's server sends it for the mode.
             assert_eq!(g["stages"], json!([1, 4, 9, 12, 31, 33, 35, 45, 46]));
             assert_eq!(g["items"], 0);
-            // The mode's rules: P+'s competitive set, hold-START pause in Unranked.
+            // The mode's rules: P+'s competitive set, hold-START pause in Unranked, hazards on
+            // Fountain of Dreams only.
             let rules: common::rules::MatchRules = serde_json::from_value(g["rules"].clone()).unwrap();
-            assert_eq!(rules, common::rules::MatchRules { pause: common::rules::Pause::Hold, ..Default::default() });
+            let want = common::rules::MatchRules {
+                pause: common::rules::Pause::Hold,
+                hazard_stages: vec![0x1F],
+                ..Default::default()
+            };
+            assert_eq!(rules, want);
             for p in g["players"].as_array().unwrap() {
                 assert_eq!(p["chatMessages"].as_array().unwrap().len(), 16);
                 assert!(p["ipAddress"].as_str().unwrap().starts_with("203.0.113."));
@@ -3731,8 +3737,9 @@ mod tests {
             assert_eq!(local["port"], port);
             assert_eq!(players[1]["ipAddress"], "203.0.113.12:41012");
             assert_eq!(resp["stages"].as_array().unwrap().len(), 9);
-            // Direct's rules (normal pause).
-            assert_eq!(resp["rules"], serde_json::to_value(common::rules::MatchRules::default()).unwrap());
+            // Direct's rules (normal pause; hazards on Fountain of Dreams only).
+            let want = common::rules::MatchRules { hazard_stages: vec![0x1F], ..Default::default() };
+            assert_eq!(resp["rules"], serde_json::to_value(want).unwrap());
             assert!(disconnected(&out, conn));
         }
         // Recorded for the match history, as mode 3 with the room.
