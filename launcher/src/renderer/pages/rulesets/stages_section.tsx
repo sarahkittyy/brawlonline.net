@@ -3,6 +3,7 @@ import { MAX_HAZARD_STAGES, PPLUS_LEGAL_STAGES, stageName } from "@common/rulese
 import { PPLUS_STAGES } from "@common/stages";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import WarningAmberRoundedIcon from "@mui/icons-material/WarningAmberRounded";
+import WarningRoundedIcon from "@mui/icons-material/WarningRounded";
 import { clsx } from "clsx";
 import { useState } from "react";
 
@@ -44,9 +45,10 @@ export type StageHazards = {
 };
 
 /**
- * A tile's hazard button, right of its name. A stage with its own hazards shows them (the hazard icon and "On" / "Off");
- * one that follows the default shows only the icon, and only while the tile is hovered, so the grid stays as clean as it
- * was with one switch for every stage.
+ * A tile's hazard button: a small warning sign cut into the banner's top right corner (borders only on its left and
+ * bottom). The sign is the stage's hazards: a yellow triangle on, a grey outline crossed out off. A stage with its own
+ * hazards always shows it; one that follows the default only while the tile is hovered, so the grid stays as clean as
+ * it was with one switch for every stage.
  */
 const HazardButton = ({ id, hazards }: { id: number; hazards: StageHazards }) => {
   const own = hazards.stages.includes(id);
@@ -60,7 +62,7 @@ const HazardButton = ({ id, hazards }: { id: number; hazards: StageHazards }) =>
   return (
     <button
       type="button"
-      className={clsx(styles.hazard, own ? styles.hazardOwn : styles.hazardDefault, on && styles.hazardOn)}
+      className={clsx(styles.hazard, !own && styles.hazardDefault, on && styles.hazardOn)}
       title={title}
       aria-label={title}
       aria-pressed={own}
@@ -69,8 +71,11 @@ const HazardButton = ({ id, hazards }: { id: number; hazards: StageHazards }) =>
       data-hazards-own={own}
       onClick={() => hazards.onToggle(id)}
     >
-      <WarningAmberRoundedIcon className={styles.hazardIcon} />
-      {own && <span>{on ? Messages.hazardsOn() : Messages.hazardsOff()}</span>}
+      {on ? (
+        <WarningRoundedIcon className={styles.hazardIcon} />
+      ) : (
+        <WarningAmberRoundedIcon className={styles.hazardIcon} />
+      )}
     </button>
   );
 };

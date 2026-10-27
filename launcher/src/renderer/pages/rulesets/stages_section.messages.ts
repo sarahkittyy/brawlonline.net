@@ -4,8 +4,6 @@ export const StagesMessages = {
   off: () => "Off",
   otherStages: () => "Other stages",
   otherOn: (n: number) => (n === 0 ? "All off" : `${n} on`),
-  hazardsOn: () => "On",
-  hazardsOff: () => "Off",
   hazardsOwnTitle: (on: boolean) =>
     on
       ? "Hazards on for this stage. Click: back to the default."
