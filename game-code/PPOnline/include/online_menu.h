@@ -9,7 +9,9 @@ namespace OnlineMenu {
     void install(CoreApi* api);
     void tick();
     void enter(int mode);               // PPOM::Mode, picked on the ONLINE page
-    void applyRules();                  // sqNetAnyOkiraku start: online rules into the set rule
+    // sqNetAnyOkiraku start: online rules into the set rule; `stageKind` the match's stage (its
+    // hazards: the rules' per-stage ones), 0 none yet
+    void applyRules(int stageKind = 0);
     void codeEntered(const char* code);  // from CodeEntry: set the code and start the search
     int currentMode();                  // PPOM::Mode of the online CSS, -1 outside it
     bool modesLocked();                 // logged out or update required: no online mode

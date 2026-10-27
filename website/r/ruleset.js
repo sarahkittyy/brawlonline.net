@@ -63,6 +63,13 @@
   };
   const onOff = (b) => (b ? "On" : "Off");
 
+  // The default, and the stages with their own (`hazardStages`, the other way): "Off (on: Fountain of Dreams)".
+  function hazardsText(rules) {
+    const own = rules.hazardStages || [];
+    if (own.length === 0) return onOff(rules.hazards);
+    return `${onOff(rules.hazards)} (${rules.hazards ? "off" : "on"}: ${own.map(stageName).join(", ")})`;
+  }
+
   function rulesRows(rules) {
     const style = { stock: "Stock", time: "Time", coin: "Coin" }[rules.style] || rules.style;
     const time = rules.timeMinutes === 0 ? "No limit" : `${rules.timeMinutes} min`;
@@ -74,7 +81,7 @@
       ["Damage ratio", Number(rules.damageRatio).toFixed(1)],
       ["Team attack", onOff(rules.teamAttack)],
       ["Pause", rules.pause === "hold" ? "Hold START" : "On"],
-      ["Stage hazards", onOff(rules.hazards)],
+      ["Stage hazards", hazardsText(rules)],
       ["Auto L-cancel", onOff(rules.autoLCancel)],
       ["Input assist", onOff(rules.inputAssist)],
     );

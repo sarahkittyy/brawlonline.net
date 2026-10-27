@@ -48,7 +48,12 @@ function ruleRows(r: Ruleset): [string, string][] {
     [Messages.damageRatio(), m.damageRatio.toFixed(1)],
     [Messages.teamAttack(), onOff(m.teamAttack)],
     [Messages.pause(), m.pause === "hold" ? Messages.holdStart() : Messages.on()],
-    [Messages.hazards(), onOff(m.hazards)],
+    [
+      Messages.hazards(),
+      m.hazardStages?.length
+        ? Messages.hazardsExcept(m.hazards, m.hazardStages.map(stageName).join(", "))
+        : onOff(m.hazards),
+    ],
     [Messages.autoLCancel(), onOff(m.autoLCancel)],
     [Messages.inputAssist(), onOff(m.inputAssist)],
   );

@@ -31,6 +31,7 @@ namespace PPOM {
     static_assert(sizeof(RulesetList) <= sizeof(((Response*)0)->payload), "ruleset list");
     static_assert(sizeof(Rules) == 0x20 && __builtin_offsetof(Session, rules) == 0x220, "session rules");
     static_assert(__builtin_offsetof(Rules, hazards) == 0x10, "rules hazards");
+    static_assert(__builtin_offsetof(Rules, hazardStages) == 0x18, "rules hazard stages");
     static_assert(__builtin_offsetof(Session, gone) == 0x20C, "session gone flags");
     static_assert(__builtin_offsetof(SessionPlayer, picksStage) == 0x36, "session player stage pick");
     static_assert(__builtin_offsetof(Local, lockTeam) == 0x34, "lock-in team");

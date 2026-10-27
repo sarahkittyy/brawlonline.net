@@ -385,8 +385,9 @@ def read_rules(r: bytes) -> dict | None:
             "damageRatio": r[4] / 10, "teamAttack": bool(r[5]), "pause": "normal" if r[6] else "hold",
             "itemFrequency": r[7], "itemSwitch": list(r[8:0x10]), "hazards": bool(r[0x10]),
             "autoLCancel": bool(r[0x11]), "inputAssist": bool(r[0x12]),
-            # (written only when on, as the server's JSON)
-            **({"stockControl": True} if r[0x13] else {})}
+            # (written only when on / not empty, as the server's JSON)
+            **({"stockControl": True} if r[0x13] else {}),
+            **({"hazardStages": hs} if (hs := list(r[0x18:0x20].split(b"\0")[0])) else {})}
 
 
 # ---- v4: 3-4 player matches (docs/nplayer/setup.md) ----

@@ -50,7 +50,15 @@ pub struct MatchRules {
     pub item_frequency: u8,
     /// The ITEM SWITCH screen's 8 bytes (the menu record's switches, `+0x818`).
     pub item_switch: [u8; 8],
+    /// Stage hazards, for every stage but [`MatchRules::hazard_stages`] (the launcher's "Stage
+    /// hazards (default)").
     pub hazards: bool,
+    /// The stages whose hazards are the other way from `hazards` (P+'s hazard switch keeps a bit
+    /// per stage; the game sets the played stage's at the match setup). At most
+    /// [`MAX_HAZARD_STAGES`], each once. Not written when empty, so the hash of every ruleset from
+    /// before it (2026-10-26) stays the same and an older client still reads them.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub hazard_stages: Vec<u16>,
     /// MORE RULES' AUTO L-CANCEL (for every player).
     pub auto_l_cancel: bool,
     /// MORE RULES' INPUT ASSIST (P+'s 3-frame input buffer, for every player).
@@ -89,6 +97,7 @@ impl Default for MatchRules {
             // Stage hazards off (the user's, 2026-10-12): new rulesets, rooms' P+ default and
             // Unranked, Ranked and Direct.
             hazards: false,
+            hazard_stages: Vec::new(),
             auto_l_cancel: false,
             input_assist: false,
             stock_control: false,
@@ -101,6 +110,10 @@ impl Default for MatchRules {
 /// 0 is "none picked" (the rules' stock count). Online the pick travels as a byte, refused above
 /// this.
 pub const MAX_PICKED_STOCKS: u8 = 99;
+
+/// The most stages whose hazards can differ from the rules' `hazards`: the game's SESSION rules
+/// keep them as 8 stage ids (`ppom.h` `Rules::hazardStages`).
+pub const MAX_HAZARD_STAGES: usize = 8;
 
 impl MatchRules {
     /// The damage ratio as Brawl keeps it (times 10, 5-20).
@@ -127,7 +140,23 @@ impl MatchRules {
         if self.item_frequency > 3 {
             return Err(format!("itemFrequency {} is not 0-3", self.item_frequency));
         }
+        if self.hazard_stages.len() > MAX_HAZARD_STAGES {
+            return Err(format!("At most {MAX_HAZARD_STAGES} stages can have their own hazards"));
+        }
+        for (i, &s) in self.hazard_stages.iter().enumerate() {
+            if s == 0 || s > MAX_STAGE_ID {
+                return Err(format!("Stage id {s} is out of range"));
+            }
+            if self.hazard_stages[..i].contains(&s) {
+                return Err(format!("Stage id {s} is listed twice"));
+            }
+        }
         Ok(())
+    }
+
+    /// Whether stage `stage` (`srStageKind`) plays with its hazards.
+    pub fn hazards_on(&self, stage: u16) -> bool {
+        self.hazards != self.hazard_stages.contains(&stage)
     }
 }
 
@@ -321,6 +350,8 @@ impl Ruleset {
         if !self.picks_used() {
             self.alternate_stages = false;
         }
+        self.rules.hazard_stages.sort_unstable();
+        self.rules.hazard_stages.dedup();
     }
 
     /// Checks everything a published ruleset must satisfy. Expects [`Ruleset::normalize`]d input:
@@ -501,6 +532,11 @@ mod tests {
         assert_eq!(serde_json::to_value(&sc).unwrap()["stockControl"], serde_json::json!(true));
         let back: MatchRules = serde_json::from_value(serde_json::to_value(&sc).unwrap()).unwrap();
         assert_eq!(back, sc);
+        // Per-stage hazards, the same: written only when a stage has its own.
+        let hz = MatchRules { hazard_stages: vec![0x1F], ..Default::default() };
+        assert_eq!(serde_json::to_value(&hz).unwrap()["hazardStages"], serde_json::json!([31]));
+        let back: MatchRules = serde_json::from_value(serde_json::to_value(&hz).unwrap()).unwrap();
+        assert_eq!(back, hz);
         // Missing fields take the defaults; unknown ones are refused.
         let partial: MatchRules = serde_json::from_str(r#"{"stocks": 3, "style": "time"}"#).unwrap();
         assert_eq!((partial.stocks, partial.style, partial.time_minutes), (3, Style::Time, 8));
@@ -519,6 +555,10 @@ mod tests {
             MatchRules { damage_ratio: 1.05, ..Default::default() },
             MatchRules { damage_ratio: f64::NAN, ..Default::default() },
             MatchRules { item_frequency: 4, ..Default::default() },
+            MatchRules { hazard_stages: vec![0], ..Default::default() },
+            MatchRules { hazard_stages: vec![256], ..Default::default() },
+            MatchRules { hazard_stages: vec![31, 31], ..Default::default() },
+            MatchRules { hazard_stages: (1..=9).collect(), ..Default::default() },
         ];
         for r in bad {
             assert!(r.validate().is_err(), "{r:?}");
@@ -526,6 +566,20 @@ mod tests {
         MatchRules { time_minutes: 0, ..Default::default() }.validate().unwrap();
         MatchRules { damage_ratio: 0.5, ..Default::default() }.validate().unwrap();
         MatchRules { damage_ratio: 2.0, style: Style::Coin, time_minutes: 2, ..Default::default() }.validate().unwrap();
+        MatchRules { hazard_stages: (1..=8).collect(), ..Default::default() }.validate().unwrap();
+    }
+
+    #[test]
+    fn hazard_stages_flip_the_default() {
+        let fod = MatchRules { hazard_stages: vec![0x1F], ..Default::default() };
+        assert!(fod.hazards_on(0x1F) && !fod.hazards_on(0x01));
+        let on = MatchRules { hazards: true, ..fod };
+        assert!(!on.hazards_on(0x1F) && on.hazards_on(0x01));
+        // A ruleset keeps them sorted, so the same stages hash the same.
+        let mut r = Ruleset { name: "x".into(), ..Default::default() };
+        r.rules.hazard_stages = vec![0x1F, 0x01, 0x1F];
+        r.normalize();
+        assert_eq!(r.rules.hazard_stages, [0x01, 0x1F]);
     }
 
     /// A Bo3 like a tournament's: 5 starters struck 1-2-1, 2 bans, DSR.

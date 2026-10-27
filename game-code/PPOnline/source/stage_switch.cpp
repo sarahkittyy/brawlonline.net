@@ -16,13 +16,16 @@
 //    (P+'s TOGGLE PAGE, MenMainSwitch11Panel) "LOSER PICKS FROM LIST", and MORE RULES' row "STAGE
 //    SWITCH". The footer is two smaller lines: the stage hovered (P+'s name), or on the top row
 //    what the bar or the page button does, and under it a legend: what ON, STR and OFF mean, and
-//    the room's hazards, one switch for every stage. (In the room CSS's ruleset line under the
+//    the hazards: on a tile that stage's, on the top row the room's default and how many stages
+//    have their own (2026-10-26, the rules' hazardStages). (In the room CSS's ruleset line under the
 //    grid it was dimmed by the menu and hidden by the START banner; that window attached to the
 //    page's frame model drew over both but crashed the GPU after a few seconds, and the footer's
 //    MuMsg has no second window.) P+'s hazard switch button (the page's object 0x80) is never in
 //    the page's scene and is not usable: put in the scene group, the next draw crashed.
 //  - The host: A on a tile cycles Off -> Counterpick -> Starter, A on the bar switches the loser
-//    between any stage and the list (only for a ruleset whose loser picks), Z the stage hazards;
+//    between any stage and the list (only for a ruleset whose loser picks), Z on a tile that
+//    stage's hazards (at most PPOM::MAX_HAZARD_STAGES differ from the default), Z on the top row
+//    the default for every other stage;
 //    P+'s presets (L/R) and its whole-page toggle do nothing. When the menu closes, the changes go
 //    to the server (ROOM_STAGES; the hazards with the room's rules, RoomRules::sendEdits).
 //  - Everyone else (and the host during a set) only looks: the directions, B, and A on the page
@@ -112,7 +115,8 @@ namespace StageSwitch {
         u8 roomStarters[32], roomCounterpicks[32];  // the room's, when the menu opened
         u8 choice, roomChoice;                      // CHOICE_LOSER_PICKS(_LIST), 0xFF: not the loser's
         u8 fixedChoice;                             // with 0xFF: CHOICE_STRIKE, CHOICE_RANDOM, or 0xFF a set
-        bool hazards, roomHazards;
+        bool hazards;                               // the default
+        u8 hazStages[PPOM::MAX_HAZARD_STAGES];      // the stages the other way, 0 after the last
         u8 savedSwitch[PAGE_BYTES];
         bool saved;
         int activeFrames;     // the switch page's input was read lately: it is the page shown
@@ -200,7 +204,8 @@ namespace StageSwitch {
         s.choice = se.play.bestOf == 0 && (c == PPOM::CHOICE_LOSER_PICKS || c == PPOM::CHOICE_LOSER_PICKS_LIST) ? c : 0xFF;
         s.roomChoice = s.choice;
         s.fixedChoice = se.play.bestOf == 0 && (c == PPOM::CHOICE_STRIKE || c == PPOM::CHOICE_RANDOM) ? c : 0xFF;
-        s.hazards = s.roomHazards = se.rules.hazards != 0;
+        s.hazards = se.rules.hazards != 0;
+        memcpy(s.hazStages, se.rules.hazardStages, sizeof(s.hazStages));
         s.canEdit = canEdit;
         // P+'s switch for the menu: the room's stages on.
         memcpy(s.savedSwitch, (const void*)RSS_EXDATA, PAGE_BYTES);
@@ -221,7 +226,56 @@ namespace StageSwitch {
         }
     }
 
-    bool hazards() { return s.on ? s.hazards : PPOM::g_block.session.rules.hazards != 0; }
+    void hazards(PPOM::Rules& ru)
+    {
+        if (!s.on) return;   // (the room's, as `ru` has them)
+        ru.hazards = s.hazards ? 1 : 0;
+        memcpy(ru.hazardStages, s.hazStages, sizeof(ru.hazardStages));
+    }
+
+    static int hazardCount()
+    {
+        int n = 0;
+        while (n < PPOM::MAX_HAZARD_STAGES && s.hazStages[n]) n++;
+        return n;
+    }
+
+    static int hazardIndex(int kind)
+    {
+        for (int i = 0; i < PPOM::MAX_HAZARD_STAGES && s.hazStages[i]; i++) {
+            if (s.hazStages[i] == kind) return i;
+        }
+        return -1;
+    }
+
+    static bool hazardsOn(int kind) { return s.hazards != (hazardIndex(kind) >= 0); }
+
+    // Z on a stage: its hazards the other way. False when it can't (every slot taken).
+    static bool flipHazards(int kind)
+    {
+        if (kind <= 0 || kind > 255) return false;
+        int i = hazardIndex(kind), n = hazardCount();
+        if (i >= 0) {
+            for (; i + 1 < n; i++) s.hazStages[i] = s.hazStages[i + 1];
+            s.hazStages[n - 1] = 0;
+            return true;
+        }
+        if (n >= PPOM::MAX_HAZARD_STAGES) return false;
+        // (kept sorted, as a ruleset's: the same stages read as the same rules)
+        for (i = n; i > 0 && s.hazStages[i - 1] > kind; i--) s.hazStages[i] = s.hazStages[i - 1];
+        s.hazStages[i] = (u8)kind;
+        return true;
+    }
+
+    // The stage under the page's cursor, or 0 (the top row).
+    static int hoveredKind(u8* page)
+    {
+        if (!isPtr((u32)page)) return 0;
+        int col = *(int*)(page + PAGE_COL), row = *(int*)(page + PAGE_ROW);
+        int tile = row >= 1 ? (row - 1) * COLS + col : -1;
+        if (tile < 0 || tile >= *(int*)(page + PAGE_TILES) || tile >= MAX_TILES) return 0;
+        return StageLegal::kindAt(*(u8*)(page + PAGE_NUMBER), tile);
+    }
 
     static void unlabel(LabelTex& L, const char* name);
 
@@ -573,8 +627,13 @@ namespace StageSwitch {
             }
         }
         if (padPressed() & PAD_Z) {
-            s.hazards = !s.hazards;
-            playSE(SE_TOGGLE);
+            // On a stage its own hazards, on the top row the default (the stages with their own
+            // stay the other way).
+            int kind = hoveredKind(page);
+            bool ok = true;
+            if (kind > 0) ok = flipHazards(kind);
+            else s.hazards = !s.hazards;
+            playSE(ok ? SE_TOGGLE : SE_ERROR);
             reprintFooter();   // its legend says the hazards
         }
         return keep;
@@ -650,9 +709,19 @@ namespace StageSwitch {
                 strcpy(buf, row);
                 n = (int)strlen(buf);
             }
-            sprintf(buf + n, s.canEdit ? "\nON = counterpick   STR = starter   OFF = not played   Hazards (Z): %s, all stages"
-                                       : "\nON = counterpick   STR = starter   OFF = not played   Hazards: %s, all stages",
-                    s.hazards ? "ON" : "OFF");
+            // The hazards: on a stage its own, on the top row the default.
+            const char* z = s.canEdit ? " (Z)" : "";
+            int kind = line >= 8 ? hoveredKind(s.page) : 0;
+            int other = hazardCount();
+            n += sprintf(buf + n, "\nON = counterpick   STR = starter   OFF = not played   ");
+            if (kind > 0) {
+                sprintf(buf + n, "Hazards here%s: %s", z, hazardsOn(kind) ? "ON" : "OFF");
+            } else if (other == 0) {
+                sprintf(buf + n, "Hazards%s: %s, all stages", z, s.hazards ? "ON" : "OFF");
+            } else {
+                sprintf(buf + n, "Hazards%s: %s, %s on %d stage%s", z, s.hazards ? "ON" : "OFF",
+                        s.hazards ? "OFF" : "ON", other, other == 1 ? "" : "s");
+            }
             footerTwoLines(msg);
             return buf;
         }

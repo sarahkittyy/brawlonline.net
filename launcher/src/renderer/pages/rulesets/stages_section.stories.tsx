@@ -13,8 +13,18 @@ export default {
 /** No stage art: Storybook has no extracted P+ files, as before the launcher extracts them. */
 const noIcon = () => undefined;
 
-const Editable = ({ initial, width = 560 }: { initial: StageLists; width?: number }) => {
+const Editable = ({
+  initial,
+  width = 560,
+  hazards: initialHazards,
+}: {
+  initial: StageLists;
+  width?: number;
+  /** Per-stage hazards: the default and the stages the other way. */
+  hazards?: { default: boolean; stages: number[] };
+}) => {
   const [stages, setStages] = useState(initial);
+  const [hazardStages, setHazardStages] = useState(initialHazards?.stages ?? []);
   const onRole = (id: number, role: StageRole) => {
     const starters = stages.starters.filter((s) => s !== id);
     const counterpicks = stages.counterpicks.filter((s) => s !== id);
@@ -27,7 +37,19 @@ const Editable = ({ initial, width = 560 }: { initial: StageLists; width?: numbe
   };
   return (
     <div style={{ width }}>
-      <StagesSection stages={stages} onRole={onRole} icon={noIcon} />
+      <StagesSection
+        stages={stages}
+        onRole={onRole}
+        icon={noIcon}
+        hazards={
+          initialHazards && {
+            default: initialHazards.default,
+            stages: hazardStages,
+            onToggle: (id) =>
+              setHazardStages(hazardStages.includes(id) ? hazardStages.filter((s) => s !== id) : [...hazardStages, id]),
+          }
+        }
+      />
     </div>
   );
 };
@@ -43,6 +65,16 @@ export const OtherStagesOn = () => (
       counterpicks: [0x2a, 0x07, 0x4f],
     }}
   />
+);
+
+/** Hazards off but on Fountain of Dreams (Ranked's, 2026-10-26); hover a tile for its hazard button. */
+export const HazardsOnFountainOfDreams = () => (
+  <Editable initial={defaultRuleset().stages} hazards={{ default: false, stages: [0x1f] }} />
+);
+
+/** Hazards on but off on two stages. */
+export const HazardsOffOnTwo = () => (
+  <Editable initial={defaultRuleset().stages} hazards={{ default: true, stages: [0x1f, 0x23] }} />
 );
 
 /** The editor column at the narrowest the Rulesets page makes it. */

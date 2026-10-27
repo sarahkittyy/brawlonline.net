@@ -448,7 +448,7 @@ namespace OnlineMatch {
         // The online ruleset, written again right before the setup reads it: nothing set on this
         // machine since the Wi-Fi sequence started (or left over from offline play) gets in.
         // (Team attack is on in P+'s set rule; it only matters in a team battle.)
-        OnlineMenu::applyRules();
+        OnlineMenu::applyRules(se.stageKind);
         slotColours(se);
         ((VsSetupFn)VS_SETUP)(seq, se.stageKind);
         // The match's controller numbers follow the in-game ports on both machines: the pad + 1

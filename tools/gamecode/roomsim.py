@@ -38,7 +38,9 @@ class Member:
     sitting_out: bool = False  # SIT OUT (ROOM_SIT_OUT): the room's games start without them
 
 
-DIRECT_RULES = bytes([1, 1, 4, 8, 10, 1, 1, 0, 0, 6, 0, 0, 0, 0, 0, 0, 1, 0, 0]).ljust(ppom.RULES_SIZE, b"\0")
+# (hazards off but on Fountain of Dreams: hazardStages at +0x18, 2026-10-26)
+DIRECT_RULES = (bytes([1, 1, 4, 8, 10, 1, 1, 0, 0, 6, 0, 0, 0, 0, 0, 0, 0, 0, 0]).ljust(0x18, b"\0")
+                + bytes([0x1F]).ljust(8, b"\0"))
 
 
 @dataclass

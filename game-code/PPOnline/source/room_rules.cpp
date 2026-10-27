@@ -191,8 +191,8 @@ namespace RoomRules {
 
 
     // The host's edits as SESSION's Rules: what the rules menu wrote back into the set rule and
-    // the menu record (game-code.md §14's table). The rest of the record (hazards, stock control)
-    // stays the room's. Lines that are not room rules here (P+'s score to win, stage choice; stock
+    // the menu record (game-code.md §14's table), and the STAGE SWITCH's hazards. The rest of the
+    // record (stock control) stays the room's. Lines that are not room rules here (P+'s score to win, stage choice; stock
     // control, whose row is the SET line, is set in a ruleset) are not taken: applyRules writes
     // the match's values there for every match.
     static void sendEdits()
@@ -216,7 +216,7 @@ namespace RoomRules {
         ru.inputAssist = r[0xC] ? 1 : 0;
         ru.itemFrequency = m[0];
         memcpy(ru.itemSwitch, m + 8, sizeof(ru.itemSwitch));
-        ru.hazards = StageSwitch::hazards() ? 1 : 0;   // the STAGE SWITCH's Z
+        StageSwitch::hazards(ru);   // the STAGE SWITCH's Z (every stage, or one)
         if (same(&ru, &cur, sizeof(ru))) return;
         if (ru.style != PPOM::STYLE_STOCK && ru.timeMinutes == 0) {
             say("A time match needs a time limit.", true);
