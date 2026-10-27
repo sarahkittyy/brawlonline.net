@@ -14,6 +14,11 @@ namespace SpecialBox {
     void tick(u8* rt, bool showing);
     // The page's input (P+'s bits); `canEdit`: the host's menu between games, no set on.
     void input(u32 bits, bool canEdit);
+    // The box's MuObject `i` (0..9: MenMainSpecial0001..0010), NULL none (page_hints.cpp draws
+    // from its models' callbacks).
+    u8* object(int i);
+    // The page sliding in: every model of the box moved `dx` menu units sideways (0: in place).
+    void slide(float dx);
     // The menu closed: the box's objects and models go.
     void close();
     // The host's edits (the 8 rows, the stamina type): false when untouched.

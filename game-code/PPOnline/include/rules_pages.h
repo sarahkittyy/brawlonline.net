@@ -23,6 +23,9 @@ namespace RulesPages {
     // The host's edits of what goes with the room's rules (ROOM_RULES): stock control and the
     // special rows. False when nothing of them was touched.
     bool rulesEdits(PPOM::Rules& ru, u8 special[8], u8* staminaType);
+    // P+'s page that got this frame's input (room_rules.cpp's input filter): 0 RULES, 1 MORE RULES
+    // (our pages are over it), 2 another (the item or stage switch).
+    void notePage(int kind);
     // The menu's footer while one of our pages shows, or NULL.
     const char* menuText(void* msg, const void* msbin, u32 line);
     // Our pages are showing (P+'s MORE RULES page is under them).

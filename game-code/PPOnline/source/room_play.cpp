@@ -372,6 +372,16 @@ namespace RoomPlay {
 
     bool changedNow() { return s.changed; }
 
+    int pendingBestOf() { return s.bestOf; }
+
+    void flushBestOf()
+    {
+        if (s.bestOf >= 0 && s.host && play().valid && s.bestOf != play().bestOf && lengthEditable()) {
+            post(PPOM::ROOM_BEST_OF, (u8)s.bestOf, NULL);
+        }
+        s.bestOf = -1;
+    }
+
     void tick(bool inRoom, bool host)
     {
         s.host = host;

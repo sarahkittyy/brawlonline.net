@@ -148,6 +148,7 @@ namespace SpecialBox {
             s.raw = (u8*)HEAP_ALLOC(HEAP_FIGHTER1, CAPACITY + 32);
             if (!s.raw) {
                 s.state = PPOM::SA_UNAVAILABLE;
+                s.askIn = 120;
                 return;
             }
             s.buf = (u8*)(((u32)s.raw + 31) & ~31u);
@@ -175,6 +176,8 @@ namespace SpecialBox {
             s.written = *(u32*)s.buf == MAGIC && *(u32*)(s.buf + 4) == size && size <= CAPACITY;
         } else if (s.state == PPOM::SA_LOADING || s.state == PPOM::SA_READY) {
             s.askIn = 20;
+        } else {
+            s.askIn = 120;   // Dolphin builds it again a few seconds after a failure (the card busy)
         }
     }
 
@@ -360,6 +363,22 @@ namespace SpecialBox {
         }
     }
 
+    u8* object(int i) { return i >= 0 && i < MODELS ? s.obj[i] : NULL; }
+
+    void slide(float dx)
+    {
+        // (MuObject::setPos, 0x800B6838: an offset from where the models' animations put them)
+        typedef void (*SetPosFn)(u8*, float*);
+        for (int i = 0; i < MODELS; i++) {
+            u8* o = s.obj[i];
+            if (!o) continue;
+            float* pos = (float*)(o + 0x3C);
+            if (pos[0] == dx) continue;
+            float p[3] = {dx, pos[1], pos[2]};
+            ((SetPosFn)0x800B6838)(o, p);
+        }
+    }
+
     void show(bool on)
     {
         s.showing = on;
@@ -472,7 +491,6 @@ namespace SpecialBox {
     const char* footer()
     {
         static char buf[120];
-        if (s.state == PPOM::SA_UNAVAILABLE) return "The Special Versus box needs Project+'s menu files.";
         if (!s.written) return "Loading Special Versus...";
         if (s.cursorRow == OK_ROW) return s.canEdit ? "B: back to the rules." : "The room's special rules (the host sets them).";
         if (s.cursorRow == PPOM::SR_STAMINA && s.rows[0] == 2) {

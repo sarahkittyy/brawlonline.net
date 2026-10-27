@@ -27,7 +27,8 @@ def pages(g: Game) -> dict:
     d = g.c.read_mem(ppom_sym(g, "g_rulesPages"), 0x20)
     view, turns, drawn, posts, failed = struct.unpack_from(">5I", d, 0)
     return {"view": view, "turns": turns, "posts": posts, "failed": failed, "bans": d[0x14], "dsr": d[0x15],
-            "choice": d[0x16], "alternates": d[0x17], "stock_control": d[0x18]}
+            "choice": d[0x16], "alternates": d[0x17], "stock_control": d[0x18],
+            "strikes": list(d[0x1A:0x1A + min(d[0x19], 6)])}
 
 
 def box(g: Game) -> dict:
@@ -129,6 +130,8 @@ def test_host_edits_match_setup_and_special(game: Game) -> None:
     until(g, lambda: box(g)["made"] >= 2, 300, "the box again")
     assert box(g)["rows"][:2] == [1, 2], box(g)
     g.shot("06-special-again")
+    # The pages' L / R hints (page_hints.cpp) were drawn.
+    assert g.u32(ppom_sym(g, "g_pageHints")) > 0, "the L / R hints were not drawn"
 
 
 def test_viewer_sees_the_pages_read_only(game: Game) -> None:
@@ -172,3 +175,48 @@ def test_viewer_sees_the_pages_read_only(game: Game) -> None:
     until(g, lambda: not menu_open(g), 200, "the menu closes")
     g.wait(30)
     assert not sim.room_ops("format") and not sim.room_ops("rules"), (sim.room_ops("format"), sim.room_ops("rules"))
+
+
+def test_set_length_counts_on_match_setup(game: Game) -> None:
+    """Best of 3 picked on RULES' SET line counts on MATCH SETUP in the same menu (Sarah's board,
+    2026-10-27: bans, stage choice and strikes did nothing until the menu was closed and opened
+    again): the set's rows as mm makes them for a set (two bans, DSR, the 1-2-1 pattern) and
+    editable; on close the set length goes before the page's format, which keeps the edit."""
+    g = game
+    g.c.game_bridge_config(enabled=False)
+    create_room(g)
+    sim = g.sim
+    sim.add_player(1, "alice")
+    g.wait(40)
+    ppom.set_cfg_bits(g.c, ppom.CFG_TEST_OPEN_RULES)
+    until(g, lambda: menu_open(g), 200, "the rules menu opens")
+    g.wait(60)
+    for _ in range(2):
+        g.tap("DDOWN", 4)
+        g.wait(8)
+    g.tap("DRIGHT", 4)          # SET: Best of 3 (sent when the menu closes)
+    g.wait(20)
+    g.shot("10-set-bo3")
+    g.tap("R", 4)
+    g.wait(60)
+    g.tap("R", 4)
+    g.wait(40)
+    p = pages(g)
+    assert p["view"] == V_SETUP and (p["bans"], p["dsr"], p["strikes"]) == (2, 1, [1, 2, 1]), p
+    g.shot("11-setup-in-a-set")
+    g.tap("DLEFT", 4)           # BANS: 1
+    g.wait(20)
+    assert pages(g)["bans"] == 1, pages(g)
+    for _ in range(4):
+        if not menu_open(g):
+            break
+        g.tap("B", 4)
+        g.wait(40)
+    until(g, lambda: not menu_open(g), 200, "the menu closes")
+    g.wait(30)
+    ops = [(i, p) for i, (_s, cmd, p) in enumerate(sim.requests) if cmd == ppom.CMD_ROOM and p[0] in (11, 14)]
+    kinds = [p[0] for _i, p in ops]
+    assert kinds[:2] == [11, 14], kinds          # ROOM_BEST_OF, then ROOM_FORMAT
+    fmt = ops[1][1]
+    assert (ops[0][1][1], fmt[2], fmt[3], list(fmt[8:8 + fmt[5]])) == (3, 1, 1, [1, 2, 1]), fmt[:12].hex()
+

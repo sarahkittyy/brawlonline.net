@@ -29,6 +29,11 @@ namespace RoomPlay {
     // The rules menu's description line for RULESET / SET (P+'s are for stage choice and stock
     // control), or NULL (Text::overrideFor).
     const char* menuText(const void* msbin, u32 line);
+    // The set length the host picked on the SET line in the open menu (sent when it closes), -1 none.
+    int pendingBestOf();
+    // That length to the room now (ROOM_BEST_OF), before the menu's other edits that need it (the
+    // MATCH SETUP page's bans, DSR and strikes are for a set); nothing more is sent for it at close.
+    void flushBestOf();
     void reset();   // the CSS is gone
     void forgetCopies();   // its texture copies are about to be freed (Labels::releaseCopies)
 }

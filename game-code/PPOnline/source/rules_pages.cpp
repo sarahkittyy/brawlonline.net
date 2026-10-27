@@ -25,6 +25,8 @@
 #include "labels.h"
 #include "online.h"
 #include "ppom.h"
+#include "page_hints.h"
+#include "room_play.h"
 #include "special_box.h"
 
 extern "C" int sprintf(char* buf, const char* fmt, ...);
@@ -119,6 +121,12 @@ namespace RulesPages {
         float digitX;        // the minutes digit's x (its scene model's local matrix)
         bool digitsSaved;
         int restoreFrames;   // frames left binding P+'s own textures back
+        // Which of P+'s pages takes the input (notePage) and since when (ticks).
+        int pageKind;
+        u32 ticks, pageSeen;
+        // Turning to MATCH SETUP or SPECIAL (or back to MORE RULES): the page's rows slide in from the
+        // side it comes from (frames left, +1 from the right, -1 from the left), as P+'s own turn does.
+        int slideLeft, slideDir;
         // The footer (P+'s MuMsg printing MORE RULES' descriptions).
         void* footMsg;
         const void* footMsbin;
@@ -328,6 +336,8 @@ namespace RulesPages {
         Labels::bindTexture(obj, name, ours ? T.copy[T.shown] : T.orig, from, T.copy[1] ? 3 : 2);
     }
 
+    static float slideOffset();
+
     // ---- TIME LIMIT's digits as BANS ----------------------------------------------------------
     static u8* digitObj(int i)
     {
@@ -381,7 +391,7 @@ namespace RulesPages {
                 float* f = patFrame(o);
                 float* x = modelX(o);
                 if (f) *f = (float)s.bans;
-                if (x && cx) *x = *cx;
+                if (x && cx) *x = *cx + slideOffset();
             }
             setShown(o, i == 1);
         }
@@ -445,10 +455,40 @@ namespace RulesPages {
     }
 
     // ---- Pages --------------------------------------------------------------------------------
+    static const int SLIDE_FRAMES = 9;
+    static const float SLIDE_DISTANCE = 64.0f;   // menu units: from off the screen's edge
+
+    // A MuObject's offset from where its animations put it (MuObject::setPos, 0x800B6838; the
+    // offset kept at +0x3C): x set, y and z kept.
+    static void setOffsetX(u8* obj, float x)
+    {
+        float* pos = (float*)(obj + 0x3C);
+        if (pos[0] == x) return;
+        float p[3] = {x, pos[1], pos[2]};
+        typedef void (*SetPosFn)(u8*, float*);
+        ((SetPosFn)0x800B6838)(obj, p);
+    }
+
+    // How far the sliding page is from its place now (0: in place).
+    static float slideOffset()
+    {
+        if (s.slideLeft <= 0) return 0.0f;
+        float t = (float)s.slideLeft / SLIDE_FRAMES;
+        return s.slideDir * SLIDE_DISTANCE * t * t;
+    }
+
+    void notePage(int kind)
+    {
+        s.pageKind = kind;
+        s.pageSeen = s.ticks;
+    }
+
     static void setView(View v)
     {
         if (v == s.view) return;
         View old = s.view;
+        s.slideDir = v > old ? 1 : -1;
+        s.slideLeft = SLIDE_FRAMES;
         s.view = v;
         g_rulesPages.view = v;
         g_rulesPages.turns++;
@@ -473,12 +513,30 @@ namespace RulesPages {
         reprintFooter();
     }
 
-    void open(bool canEdit)
+    static bool pattern(int n, int k, u8* out, u8* count);
+
+    // mm's default strike pattern for `n` starters (room_set.rs default_strikes, the launcher's
+    // suggestStrikes): 1, then 2s, then what is left (5: 1-2-1, 7: 1-2-2-1, 3: 1-1).
+    static void defaultStrikes(int n, u8* out, u8* count)
+    {
+        int left = n - 1, k = 0;
+        if (left > 0) {
+            out[k++] = 1;
+            left--;
+        }
+        while (left > 2 && k < PPOM::MAX_STRIKE_TURNS) {
+            out[k++] = 2;
+            left -= 2;
+        }
+        if (left > 0 && k < PPOM::MAX_STRIKE_TURNS) out[k++] = (u8)left;
+        *count = (u8)k;
+    }
+
+    // The room's values (SESSION): when the menu opens, and again when the room's ruleset changes
+    // under it (the host picked another on RULESET).
+    static void fromSession()
     {
         const PPOM::Session& se = PPOM::g_block.session;
-        memset(&s, 0, sizeof(s));
-        s.opened = true;
-        s.canEdit = canEdit;
         s.bestOf = se.play.bestOf;
         s.setOn = se.play.setOn && !(se.play.setFlags & PPOM::SET_FINISHED);
         s.choice = se.play.stageChoice <= PPOM::CHOICE_LOSER_PICKS_LIST ? se.play.stageChoice : 0;
@@ -492,8 +550,38 @@ namespace RulesPages {
         u8 all[32];
         for (int i = 0; i < 32; i++) all[i] = se.stages.starters[i] | se.stages.counterpicks[i];
         s.stages = (u8)bitCount(all);
+        s.formatEdited = s.rulesEdited = false;
+    }
+
+    void open(bool canEdit)
+    {
+        memset(&s, 0, sizeof(s));
+        s.opened = true;
+        s.canEdit = canEdit;
+        fromSession();
         SpecialBox::open(canEdit);
+        PageHints::open();
         g_rulesPages.view = V_PPLUS;
+    }
+
+    // The set length the page counts with: the one the host just picked on RULES' SET line (sent
+    // when the menu closes, before this page's edits), else the room's. A set starting gets what
+    // mm's room-best-of gives it (rooms.rs with_best_of): the default strike pattern if there is
+    // none, two bans (fewer with few stages) and DSR.
+    static void followBestOf()
+    {
+        int pend = RoomPlay::pendingBestOf();
+        u8 want = pend >= 0 ? (u8)pend : PPOM::g_block.session.play.bestOf;
+        if (want == s.bestOf) return;
+        if (want > 0) {
+            if (s.strikeCount == 0) defaultStrikes(s.starters, s.strikes, &s.strikeCount);
+            if (s.bestOf == 0) {
+                s.bans = s.stages > 2 ? (s.stages - 2 < 2 ? s.stages - 2 : 2) : 0;
+                s.dsr = 1;
+            }
+        }
+        s.bestOf = want;
+        reprintFooter();
     }
 
     // The strike patterns over `n` starters (n - 1 struck), turns of 1-3, fewest turns first
@@ -571,7 +659,7 @@ namespace RulesPages {
             while (i < 4 && ORDER[i] != s.choice) i++;
             i = (i + (dir < 0 ? 3 : 1)) % 4;
             s.choice = ORDER[i];
-            if (s.choice == PPOM::CHOICE_STRIKE && s.strikeCount == 0) pattern(s.starters, 0, s.strikes, &s.strikeCount);
+            if (s.choice == PPOM::CHOICE_STRIKE && s.strikeCount == 0) defaultStrikes(s.starters, s.strikes, &s.strikeCount);
             s.formatEdited = true;
             break;
         }
@@ -658,6 +746,26 @@ namespace RulesPages {
         s.rt = rt;
         g_rulesPages.rt = (u32)rt;
         if (!s.opened) return;
+        s.ticks++;
+        if (RoomPlay::changedNow()) {
+            fromSession();
+            reprintFooter();
+        }
+        followBestOf();
+        // The page sliding in: MORE RULES' rows (MATCH SETUP's too) and the box, from the side.
+        if (s.slideLeft > 0) {
+            s.slideLeft--;
+            float dx = slideOffset();
+            for (int r = 0; r < ROWS; r++) {
+                u8* o = rowObj(r);
+                if (o) setOffsetX(o, s.view == V_SPECIAL ? 0.0f : dx);
+            }
+            SpecialBox::slide(s.view == V_SPECIAL ? dx : 0.0f);
+        }
+        // L / R: which ways a page is, while P+'s RULES or MORE RULES (with ours) takes the input.
+        bool onPages = s.ticks - s.pageSeen <= 2;
+        bool rulesPage = onPages && s.pageKind == 0, morePage = onPages && s.pageKind == 1;
+        PageHints::tick(rt, morePage, rulesPage || (morePage && s.view != V_SPECIAL));
         if (s.view == V_SETUP && s.block) {
             char buf[32];
             for (int r = 0; r < ROWS; r++) {
@@ -713,6 +821,7 @@ namespace RulesPages {
             task = isPtr(t) ? (u8*)t : NULL;
         }
         bool menuThere = task && *(u32*)(task + 0x630) != 0 && *(u8**)(task + 0x62C) == s.rt;
+        PageHints::close(menuThere);
         if (menuThere && s.block) {
             for (int r = 0; r < ROWS; r++) {
                 bind(r, s.label[r], ROW[r].labelTex, false);
