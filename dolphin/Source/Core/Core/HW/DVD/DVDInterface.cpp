@@ -222,8 +222,11 @@ void DVDInterface::DTKStreamingCallback(DIInterruptType interrupt_type,
     ProcessDTKSamples(temp_pcm.data(), pending_blocks, audio_data);
 
     SoundStream* sound_stream = m_system.GetSoundStream();
-    sound_stream->GetMixer()->PushStreamingSamples(temp_pcm.data(),
-                                                   pending_blocks * StreamADPCM::SAMPLES_PER_BLOCK);
+    if (!AudioCommon::DropsResimulatedAudio(m_system))
+    {
+      sound_stream->GetMixer()->PushStreamingSamples(
+          temp_pcm.data(), pending_blocks * StreamADPCM::SAMPLES_PER_BLOCK);
+    }
 
     if (m_stream && ai.IsPlaying())
     {

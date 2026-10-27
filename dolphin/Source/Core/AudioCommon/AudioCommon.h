@@ -31,6 +31,8 @@ bool SupportsVolumeChanges(std::string_view backend);
 void UpdateSoundStream(Core::System& system);
 void SetSoundStreamRunning(Core::System& system, bool running);
 void SendAIBuffer(Core::System& system, const short* samples, unsigned int num_samples);
+// Rollback netplay: a resimulated frame's audio is not to be played (AudioCommon.cpp).
+bool DropsResimulatedAudio(const Core::System& system);
 void StartAudioDump(Core::System& system);
 void StopAudioDump(Core::System& system);
 void IncreaseVolume(Core::System& system, unsigned short offset);

@@ -127,6 +127,8 @@ void SpeakerLogic::SpeakerData(const u8* data, int length, float speaker_pan)
   const u32 r_volume = std::min(u32(std::min(1.f + speaker_pan, 1.f) * volume), 255u);
 
   auto& system = Core::System::GetInstance();
+  if (AudioCommon::DropsResimulatedAudio(system))
+    return;
   SoundStream* sound_stream = system.GetSoundStream();
 
   sound_stream->GetMixer()->SetWiimoteSpeakerVolume(m_wiimote_index, l_volume, r_volume);
