@@ -210,6 +210,7 @@ Notes:
 - **Version 2** (gameplay session): MAILBOX, then LOCAL right after it (Dolphin excludes both from rollback as one range), SESSION and DEBUG. §11 has SESSION and LOCAL.
 - **Version 4** (2026-10-09, 3-4 player matches, `docs/nplayer/setup.md`): SESSION grows to 0x220 with each player's team, the stage pickers, the elimination order, the per-port gone flags and the teams switch; LOCAL+0x34 is the lock-in's team.
 - **Version 6** (2026-10-11, the match's rules, `docs/design/room-rules.md` §3): SESSION grows to 0x240 with `Rules` at +0x220 (0x20 bytes: `valid`, style, stocks, timeMinutes, damageRatio ×10, teamAttack, pause, itemFrequency, itemSwitch[8] at +8, hazards at +0x10, autoLCancel at +0x11, inputAssist at +0x12; still v8, 2026-10-15: stockControl at +0x13). Dolphin writes the server's rules there (Rules, below); `valid` 0 = none (an older server). Dolphin still takes v4 and v5 plugins (their SESSION is 0x220; no rules).
+- **Version 9** (2026-10-27, Special Versus in rooms, `docs/design/special-rules.md`): SESSION grows to 0x420 with `Special` at +0x2C0 and `PortExtra extra[4]` at +0x300; LOCAL to 0xC8 with `ownExtra` at +0x80 (`docs/rooms-game-interface.md`). Dolphin still takes v8 plugins.
 - **Version 3** (2026-10-07): each player's port values (name tag and its controls, `PortValues`, 0x3C bytes) in LOCAL (`own`, game-written with the lock-in) and in SESSION (`players[i].pv`); LOCAL grows to 0x80 (with `hudDisconnected` at +0x7C), a SESSION player to 0x80 and SESSION to 0x210. Dolphin and the plugin must speak the same version: GameBridge refuses another (`PPHARNESS_PLUGIN` in the tests picks a plugin build for an older Dolphin).
 
 **Mailbox.**
@@ -904,6 +905,10 @@ Dolphin joins the room the launcher asked for (`join-room.json`) and bumps `LOCA
 - The keypad still prints Brawl's letters on its keys; codes with letters the server never uses just come back "Room not found.".
 - The Create Room pill's icon is the spectator card's megaphone redrawn in the circle (mirrored and tilted), not an icon the game draws there itself.
 - Not tested on staging (PC + Mac) yet; the team flag click, the slot order and the costume rule were tested only in the harness.
+
+### The rules menu's pages and Special Versus (2026-10-27)
+
+`docs/design/special-rules.md` has it all: L / R page tabs (RULES, MORE RULES, MATCH SETUP, SPECIAL; `rules_pages.cpp`), P+'s own Special Versus box over the room CSS (`special_box.cpp`, its files from Dolphin's `Online/SpecialAssets.cpp` through `CMD_SPECIAL_ASSETS`), the special rows live in the set rule on the room CSS (`cssSpecialRows`, so P+'s All-Star CSS code builds the roster; X / Y with the coin in the hand take the last one off), stamina's HP boxes (`room_css.cpp`, task +0x5D0, "HP x10"), the match through Brawl's Special setup with each player's HP and P+'s All-Star tables (`all_star.cpp`), and rollback region set gp-v24 for those tables.
 
 ### Room rules RE (2026-10-11)
 

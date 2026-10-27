@@ -21,10 +21,16 @@ namespace PPOM {
     static_assert(sizeof(Mailbox) == 0x410, "mailbox");
     static_assert(sizeof(LockIn) == 0x0C, "lock-in");
     static_assert(sizeof(PortValues) == 0x3C, "port values");
-    static_assert(sizeof(Local) == 0x80, "local");
+    static_assert(sizeof(Local) == 0xC8 && __builtin_offsetof(Local, ownExtra) == 0x80, "local");
+    static_assert(sizeof(PortExtra) == 0x48 && __builtin_offsetof(PortExtra, roster) == 8, "port extra");
+    static_assert(sizeof(Special) == 0x40 && __builtin_offsetof(Special, bans) == 9 &&
+                  __builtin_offsetof(Special, strikes) == 0x0C && __builtin_offsetof(Special, roomHp) == 0x1C &&
+                  __builtin_offsetof(Special, alternates) == 0x24, "special");
+    static_assert(__builtin_offsetof(Session, special) == 0x2C0 && __builtin_offsetof(Session, extra) == 0x300, "session special");
+    static_assert(sizeof(RoomFormatRequest) == 0x18 && __builtin_offsetof(RoomRulesRequest, special) == 0x24, "room format");
     static_assert(__builtin_offsetof(Local, lockPad) == 0x35, "lock pad");
     static_assert(sizeof(SessionPlayer) == 0x80, "session player");
-    static_assert(sizeof(Session) == 0x2C0, "session");
+    static_assert(sizeof(Session) == 0x420, "session");
     static_assert(sizeof(RoomStages) == 0x40 && __builtin_offsetof(Session, stages) == 0x280, "session room stages");
     static_assert(sizeof(RoomPlay) == 0x40 && __builtin_offsetof(Session, play) == 0x240, "session room play");
     static_assert(__builtin_offsetof(RoomPlay, setOn) == 0x2C, "room play set");
@@ -115,14 +121,25 @@ namespace PPOM {
         return true;
     }
 
+    static bool sameBytes(const void* a, const void* b, u32 n)
+    {
+        const u8* x = (const u8*)a;
+        const u8* y = (const u8*)b;
+        for (u32 i = 0; i < n; i++) {
+            if (x[i] != (b ? y[i] : 0)) return false;
+        }
+        return true;
+    }
+
     void writeLockIn(bool ready, u8 cssChar, u8 charKind, u8 costume, u16 stagePick, u8 asl, u8 game,
-                     const PortValues* pv, u8 pad)
+                     const PortValues* pv, u8 pad, const PortExtra* ex)
     {
         LockIn& l = g_block.local.lockIn;
         PortValues& own = g_block.local.own;
+        PortExtra& ownExtra = g_block.local.ownExtra;
         if (l.seq && l.ready == (ready ? 1 : 0) && l.cssChar == cssChar && l.charKind == charKind &&
             l.costume == costume && l.stagePick == stagePick && l.asl == asl && l.game == game &&
-            samePv(own, pv) && g_block.local.lockPad == pad) {
+            samePv(own, pv) && sameBytes(&ownExtra, ex, sizeof(ownExtra)) && g_block.local.lockPad == pad) {
             return;
         }
         g_block.local.lockPad = pad;
@@ -130,6 +147,9 @@ namespace PPOM {
         if (pv) memcpy(&own, (void*)pv, sizeof(own));
         else memset(&own, 0, sizeof(own));
         flushRange(&own, sizeof(own));
+        if (ex) memcpy(&ownExtra, (void*)ex, sizeof(ownExtra));
+        else memset(&ownExtra, 0, sizeof(ownExtra));
+        flushRange(&ownExtra, sizeof(ownExtra));
         l.ready = ready ? 1 : 0;
         l.cssChar = cssChar;
         l.charKind = charKind;

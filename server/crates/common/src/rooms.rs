@@ -40,6 +40,9 @@ pub const ROOM_SET: &str = "room-set";
 pub const ROOM_STEP: &str = "room-step";
 pub const ROOM_BEST_OF: &str = "room-best-of";
 pub const ROOM_STAGES: &str = "room-stages";
+/// The rules menu's MATCH SETUP page (docs/design/special-rules.md §4): the ruleset's stage choice,
+/// strike pattern, bans, DSR and alternate stages.
+pub const ROOM_FORMAT: &str = "room-format";
 /// Client → server and server → every member: players of the room's game that could not connect
 /// to each other.
 pub const ROOM_UNREACHABLE: &str = "room-unreachable";
@@ -153,8 +156,10 @@ pub enum RoomRequest {
     /// back. `stocks`: with the rules' stock control, the count the player picked on their panel
     /// (1-99; missing: none picked, the rules' stocks). With `ready: false` the character and
     /// costume are the coin placed on the CSS (missing: the coin is in the hand), shown to the
-    /// others before the player readies.
-    Ready { ready: bool, character: Option<u8>, costume: Option<u8>, stocks: Option<u8> },
+    /// others before the player readies. `hp`: in a stamina match (the rules' special stamina),
+    /// the HP the player picked on their panel (1-[`crate::rules::MAX_PICKED_HP`]; missing: P+'s
+    /// default), shown as `stocks` is (docs/design/special-rules.md).
+    Ready { ready: bool, character: Option<u8>, costume: Option<u8>, stocks: Option<u8>, hp: Option<u16> },
     /// `room-sit-out {slot, sitOut}`: the player in slot 1-4 sits out the room's next games (the
     /// others start without them) or plays again. A player for themselves, the host for anyone.
     SitOut { slot: u8, sit_out: bool },
@@ -194,6 +199,11 @@ pub enum RoomRequest {
     /// (`loser-picks` / `loser-picks-list`; absent: as it is). Like a rules edit it makes the
     /// room's ruleset custom.
     Stages { stages: crate::rules::StageLists, stage_choice: Option<crate::rules::StageChoice> },
+    /// `room-format {stageChoice, strikes, bans, dsr, alternateStages}` (host, between games, no set
+    /// on; docs/design/special-rules.md §4): the rules menu's MATCH SETUP page. What the room's
+    /// set length leaves unused is normalized away; a format that does not fit its stages is
+    /// refused. Like a rules edit it makes the room's ruleset custom.
+    Format(RoomFormat),
     /// `room-ruleset {code}` (host, between games, no set on): play a published ruleset (a code),
     /// or P+'s default (`code` null). The code also becomes the host's remembered ruleset.
     Ruleset { code: Option<String> },
@@ -227,6 +237,7 @@ impl RoomRequest {
             RoomRequest::Step { .. } => ROOM_STEP,
             RoomRequest::BestOf { .. } => ROOM_BEST_OF,
             RoomRequest::Stages { .. } => ROOM_STAGES,
+            RoomRequest::Format(_) => ROOM_FORMAT,
             RoomRequest::Ruleset { .. } => ROOM_RULESET,
             RoomRequest::RulesetList => ROOM_RULESETS,
             RoomRequest::Unreachable { .. } => ROOM_UNREACHABLE,
@@ -267,8 +278,11 @@ impl RoomRequest {
             RoomRequest::Slot { slot, open } => json!({ "slot": slot, "open": open }),
             RoomRequest::Teams { on, colors } => json!({ "on": on, "colors": colors }),
             RoomRequest::Public { public } => json!({ "public": public }),
-            RoomRequest::Ready { ready, character, costume, stocks } => {
+            RoomRequest::Ready { ready, character, costume, stocks, hp } => {
                 let mut v = json!({ "ready": ready });
+                if let Some(n) = hp {
+                    v["hp"] = json!(n);
+                }
                 if let Some(c) = character {
                     v["character"] = json!(c);
                 }
@@ -294,6 +308,7 @@ impl RoomRequest {
                 Some(c) => json!({ "stages": stages, "stageChoice": c }),
                 None => json!({ "stages": stages }),
             },
+            RoomRequest::Format(f) => serde_json::to_value(f).expect("a format serializes"),
             RoomRequest::Ruleset { code } => json!({ "code": code }),
             RoomRequest::Unreachable { match_id, slots } => json!({ "matchId": match_id, "slots": slots }),
         };
@@ -365,6 +380,15 @@ impl RoomRequest {
                     Some(0) => return Err(format!("{kind}: `stocks` must be 1 to {}", crate::rules::MAX_PICKED_STOCKS)),
                     n => n,
                 },
+                hp: match v.get("hp") {
+                    None | Some(serde_json::Value::Null) => None,
+                    Some(h) => Some(
+                        h.as_u64()
+                            .filter(|h| (1..=crate::rules::MAX_PICKED_HP as u64).contains(h))
+                            .ok_or_else(|| format!("{kind}: `hp` must be 1 to {}", crate::rules::MAX_PICKED_HP))?
+                            as u16,
+                    ),
+                },
             },
             ROOM_TEAM => RoomRequest::Team {
                 team: small("team", (TEAM_COUNT - 1) as u64)?.ok_or_else(|| format!("{kind}: `team` is missing"))?,
@@ -385,10 +409,22 @@ impl RoomRequest {
             }
             ROOM_RULES => {
                 let raw = v.get("rules").ok_or_else(|| format!("{kind}: `rules` is missing"))?;
-                let rules: crate::rules::MatchRules =
+                let mut rules: crate::rules::MatchRules =
                     serde_json::from_value(raw.clone()).map_err(|e| format!("{kind}: {e}"))?;
+                rules.normalize();
                 rules.validate().map_err(|e| format!("{kind}: {e}"))?;
                 RoomRequest::Rules { rules }
+            }
+            ROOM_FORMAT => {
+                let mut f: RoomFormat = serde_json::from_value(v.clone()).map_err(|e| format!("{kind}: {e}"))?;
+                f.kind = None;
+                if f.strikes.len() > crate::rules::MAX_STRIKE_TURNS || f.strikes.contains(&0) {
+                    return Err(format!("{kind}: bad `strikes`"));
+                }
+                if f.bans > crate::rules::MAX_BANS {
+                    return Err(format!("{kind}: `bans` must be 0 to {}", crate::rules::MAX_BANS));
+                }
+                RoomRequest::Format(f)
             }
             ROOM_BEST_OF => RoomRequest::BestOf {
                 best_of: small("bestOf", 7)?
@@ -544,6 +580,9 @@ pub struct RoomPlayer {
     /// the lock-in is (missing: none picked, or not shown yet).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stocks: Option<u8>,
+    /// In a stamina match: the HP the player picked on their panel, shown as `stocks` is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hp: Option<u16>,
     /// Still in the last game (not back on the room's CSS).
     pub in_game: bool,
     /// Sits out the room's games (the panel's SIT OUT), by choice or outside a set that is on.
@@ -603,6 +642,24 @@ pub struct RoomState {
     pub pickers: Option<u8>,
 }
 
+/// `room-format`'s fields (docs/design/special-rules.md §4).
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RoomFormat {
+    /// The message's `type` (read and dropped).
+    #[serde(rename = "type", default, skip_serializing)]
+    pub kind: Option<String>,
+    pub stage_choice: crate::rules::StageChoice,
+    #[serde(default)]
+    pub strikes: Vec<u8>,
+    #[serde(default)]
+    pub bans: u8,
+    #[serde(default)]
+    pub dsr: bool,
+    #[serde(default)]
+    pub alternate_stages: bool,
+}
+
 /// What a room plays, as its members see it (`room-state.ruleset`).
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -622,6 +679,18 @@ pub struct RoomRuleset {
     /// The picks play P+'s alternate stages (`Ruleset::alternate_stages`).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub alternate_stages: bool,
+    /// The strike pattern, the winner's bans and DSR (2026-10-27, for the rules menu's MATCH
+    /// SETUP page; absent from an older mm: none).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub strikes: Vec<u8>,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub bans: u8,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub dsr: bool,
+}
+
+fn is_zero(n: &u8) -> bool {
+    *n == 0
 }
 
 /// A room's set (`room-state.set`): the score by side, side 0 being the lower slot.
@@ -965,6 +1034,15 @@ mod tests {
                 stage_choice: Some(crate::rules::StageChoice::LoserPicksList),
             },
             RoomRequest::Stages { stages: crate::rules::StageLists::default(), stage_choice: None },
+            RoomRequest::Format(RoomFormat {
+                kind: None,
+                stage_choice: crate::rules::StageChoice::Strike,
+                strikes: vec![1, 2, 1],
+                bans: 2,
+                dsr: true,
+                alternate_stages: true,
+            }),
+            RoomRequest::Format(RoomFormat::default()),
             RoomRequest::RulesetList,
             RoomRequest::Unreachable { match_id: "mode.room-KFQB-1".into(), slots: vec![4] },
             RoomRequest::Unreachable { match_id: "mode.room-KFQB-1".into(), slots: vec![1, 2, 3] },
@@ -974,9 +1052,10 @@ mod tests {
             RoomRequest::Teams { on: true, colors: false },
             RoomRequest::Teams { on: true, colors: true },
             RoomRequest::Public { public: false },
-            RoomRequest::Ready { ready: true, character: Some(12), costume: Some(3), stocks: None },
-            RoomRequest::Ready { ready: true, character: Some(12), costume: Some(3), stocks: Some(2) },
-            RoomRequest::Ready { ready: false, character: None, costume: None, stocks: None },
+            RoomRequest::Ready { ready: true, character: Some(12), costume: Some(3), stocks: None, hp: None },
+            RoomRequest::Ready { ready: true, character: Some(12), costume: Some(3), stocks: Some(2), hp: None },
+            RoomRequest::Ready { ready: true, character: Some(12), costume: Some(3), stocks: None, hp: Some(250) },
+            RoomRequest::Ready { ready: false, character: None, costume: None, stocks: None, hp: None },
             RoomRequest::Team { team: 2 },
             RoomRequest::Back { pickers: None },
             RoomRequest::Back { pickers: Some(2) },
@@ -985,7 +1064,7 @@ mod tests {
             RoomRequest::Watch { want: Some(true), watching: None },
             RoomRequest::Watch { want: Some(false), watching: Some(false) },
             RoomRequest::Watch { want: None, watching: Some(true) },
-            RoomRequest::Ready { ready: false, character: Some(7), costume: Some(1), stocks: None },
+            RoomRequest::Ready { ready: false, character: Some(7), costume: Some(1), stocks: None, hp: None },
             RoomRequest::Rules { rules: crate::rules::MatchRules::default() },
             RoomRequest::Rules {
                 rules: crate::rules::MatchRules {
@@ -1053,6 +1132,8 @@ mod tests {
             (ROOM_READY, json!({"ready": true, "costume": -1})),
             (ROOM_READY, json!({"ready": true, "stocks": 0})),
             (ROOM_READY, json!({"ready": true, "stocks": 100})),
+            (ROOM_READY, json!({"ready": true, "hp": 0})),
+            (ROOM_READY, json!({"ready": true, "hp": 1000})),
             (ROOM_TEAM, json!({"team": 3})),
             (ROOM_TEAM, json!({})),
             (ROOM_JOIN, json!({"code": 5})),

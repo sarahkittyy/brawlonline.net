@@ -70,11 +70,161 @@ pub struct MatchRules {
     /// (one that doesn't know the key refuses the rules: "Update to play with these rules.").
     #[serde(skip_serializing_if = "is_false")]
     pub stock_control: bool,
+    /// P+'s Special Versus box (docs/design/special-rules.md): the set rule's +0x18..+0x1F. Not
+    /// written while every row is off, and a row that is off is left out, so every ruleset from
+    /// before it (2026-10-27) keeps its JSON and hash, and an older client refuses rules that use it.
+    #[serde(skip_serializing_if = "SpecialRules::is_off")]
+    pub special: SpecialRules,
+    /// P+'s STAMINA TYPE (its RULES page with stamina on), 1-5: blast zones and knockback in a
+    /// stamina match (set rule +7 = type - 1). 1 unless `special.stamina` is stamina, and then
+    /// not written.
+    #[serde(skip_serializing_if = "is_one")]
+    pub stamina_type: u8,
 }
 
 fn is_false(b: &bool) -> bool {
     !*b
 }
+
+fn is_one(n: &u8) -> bool {
+    *n == 1
+}
+
+/// The values of one row of P+'s Special Versus box: off (P+'s OFF) or one of its two values,
+/// kept by the game as 0, 1 or 2 in the row's byte of the set rule.
+macro_rules! special_row {
+    ($(#[$m:meta])* $name:ident { $(#[$m1:meta])* $one:ident = $s1:literal, $(#[$m2:meta])* $two:ident = $s2:literal }) => {
+        $(#[$m])*
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+        pub enum $name {
+            #[default]
+            #[serde(rename = "off")]
+            Off,
+            $(#[$m1])*
+            #[serde(rename = $s1)]
+            $one,
+            $(#[$m2])*
+            #[serde(rename = $s2)]
+            $two,
+        }
+
+        impl $name {
+            /// The row's byte in the set rule.
+            pub fn byte(self) -> u8 {
+                self as u8
+            }
+            pub fn from_byte(b: u8) -> Option<Self> {
+                match b {
+                    0 => Some(Self::Off),
+                    1 => Some(Self::$one),
+                    2 => Some(Self::$two),
+                    _ => None,
+                }
+            }
+            pub fn is_off(&self) -> bool {
+                *self == Self::Off
+            }
+        }
+    };
+}
+
+special_row!(
+    /// STAMINA: everyone starts at 300%, or P+'s stamina (each player's HP, picked on their panel).
+    Stamina { Start300 = "300", Stamina = "stamina" }
+);
+special_row!(
+    /// SIZE: giant or tiny fighters.
+    Size { Mega = "mega", Mini = "mini" }
+);
+special_row!(
+    /// ATTACK: P+'s random element hits, or regen (P+'s zero-to-death: damage heals after a second
+    /// without being hit; the RULES page's STOCK CONTROL is then its FRAME CONTROL).
+    Attack { Element = "element", Regen = "regen" }
+);
+special_row!(
+    /// BODY: metal or invisible fighters.
+    Body { Metal = "metal", Clear = "clear" }
+);
+special_row!(
+    /// STATUS: P+'s Turbo (Brawl's curry) or the bunny hood.
+    Status { Turbo = "turbo", Bunny = "bunny" }
+);
+special_row!(
+    /// GRAVITY: light or heavy.
+    Gravity { Light = "light", Heavy = "heavy" }
+);
+special_row!(
+    /// SPEED: P+'s Wild (Brawl's slow) or fast.
+    Speed { Wild = "wild", Fast = "fast" }
+);
+special_row!(
+    /// OTHER: P+'s Final Smash meter (Brawl's fixed camera) or All-Star (a different character
+    /// for each stock, each player's roster picked on the character select).
+    Other { Meter = "meter", AllStar = "all-star" }
+);
+
+/// P+'s Special Versus box: one value per row, in the box's order (the set rule's +0x18..+0x1F).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default, deny_unknown_fields)]
+pub struct SpecialRules {
+    #[serde(skip_serializing_if = "Stamina::is_off")]
+    pub stamina: Stamina,
+    #[serde(skip_serializing_if = "Size::is_off")]
+    pub size: Size,
+    #[serde(skip_serializing_if = "Attack::is_off")]
+    pub attack: Attack,
+    #[serde(skip_serializing_if = "Body::is_off")]
+    pub body: Body,
+    #[serde(skip_serializing_if = "Status::is_off")]
+    pub status: Status,
+    #[serde(skip_serializing_if = "Gravity::is_off")]
+    pub gravity: Gravity,
+    #[serde(skip_serializing_if = "Speed::is_off")]
+    pub speed: Speed,
+    #[serde(skip_serializing_if = "Other::is_off")]
+    pub other: Other,
+}
+
+impl SpecialRules {
+    pub fn is_off(&self) -> bool {
+        *self == SpecialRules::default()
+    }
+
+    /// The set rule's +0x18..+0x1F.
+    pub fn bytes(&self) -> [u8; 8] {
+        [
+            self.stamina.byte(),
+            self.size.byte(),
+            self.attack.byte(),
+            self.body.byte(),
+            self.status.byte(),
+            self.gravity.byte(),
+            self.speed.byte(),
+            self.other.byte(),
+        ]
+    }
+
+    /// From the set rule's bytes; `None` if one is not 0-2.
+    pub fn from_bytes(b: [u8; 8]) -> Option<SpecialRules> {
+        Some(SpecialRules {
+            stamina: Stamina::from_byte(b[0])?,
+            size: Size::from_byte(b[1])?,
+            attack: Attack::from_byte(b[2])?,
+            body: Body::from_byte(b[3])?,
+            status: Status::from_byte(b[4])?,
+            gravity: Gravity::from_byte(b[5])?,
+            speed: Speed::from_byte(b[6])?,
+            other: Other::from_byte(b[7])?,
+        })
+    }
+}
+
+/// P+'s item frequencies past HIGH on its ITEM SWITCH page (Brawl's four, then P+'s): 0 none,
+/// 1 low, 2 medium, 3 high, 4 very high, 5 intense, 6 bomb rain (P+'s "Bomb Rain is an Item
+/// Frequency Setting": sudden death's bombs).
+pub const MAX_ITEM_FREQUENCY: u8 = 6;
+/// P+'s stamina types (STAMINA TYPE 1-5).
+pub const STAMINA_TYPES: u8 = 5;
 
 /// P+ v3.2's item switch after a fresh boot (its save's default): Stage Items and EX Items on.
 pub const PPLUS_ITEM_SWITCH: [u8; 8] = [0x00, 0x06, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
@@ -101,6 +251,8 @@ impl Default for MatchRules {
             auto_l_cancel: false,
             input_assist: false,
             stock_control: false,
+            special: SpecialRules::default(),
+            stamina_type: 1,
         }
     }
 }
@@ -110,6 +262,10 @@ impl Default for MatchRules {
 /// 0 is "none picked" (the rules' stock count). Online the pick travels as a byte, refused above
 /// this.
 pub const MAX_PICKED_STOCKS: u8 = 99;
+
+/// The most HP a pick on a panel's STAMINA box can say (a stamina match). P+'s box goes in steps
+/// of 10 from its default 150; online the pick travels as a u16, refused above this.
+pub const MAX_PICKED_HP: u16 = 999;
 
 /// The most stages whose hazards can differ from the rules' `hazards`: the game's SESSION rules
 /// keep them as 8 stage ids (`ppom.h` `Rules::hazardStages`).
@@ -137,8 +293,14 @@ impl MatchRules {
         {
             return Err(format!("damageRatio {} is not 0.5-2.0 in steps of 0.1", self.damage_ratio));
         }
-        if self.item_frequency > 3 {
-            return Err(format!("itemFrequency {} is not 0-3", self.item_frequency));
+        if self.item_frequency > MAX_ITEM_FREQUENCY {
+            return Err(format!("itemFrequency {} is not 0-{MAX_ITEM_FREQUENCY}", self.item_frequency));
+        }
+        if !(1..=STAMINA_TYPES).contains(&self.stamina_type) {
+            return Err(format!("staminaType {} is not 1-{STAMINA_TYPES}", self.stamina_type));
+        }
+        if self.stamina_type != 1 && self.special.stamina != Stamina::Stamina {
+            return Err("The stamina type is for stamina matches".into());
         }
         if self.hazard_stages.len() > MAX_HAZARD_STAGES {
             return Err(format!("At most {MAX_HAZARD_STAGES} stages can have their own hazards"));
@@ -152,6 +314,17 @@ impl MatchRules {
             }
         }
         Ok(())
+    }
+
+    /// Clears what the rules leave unused (the stamina type outside stamina matches), so rules
+    /// that play the same have the same JSON. The server normalizes the host's room rules and
+    /// every ruleset before it validates them.
+    pub fn normalize(&mut self) {
+        if self.special.stamina != Stamina::Stamina {
+            self.stamina_type = 1;
+        }
+        self.hazard_stages.sort_unstable();
+        self.hazard_stages.dedup();
     }
 
     /// Whether stage `stage` (`srStageKind`) plays with its hazards.
@@ -175,6 +348,9 @@ pub const MAX_RULESET_NAME_LEN: usize = 32;
 pub const MAX_STAGE_ID: u16 = 0xFF;
 /// Winner bans a ruleset can ask for (games 2+ of a set).
 pub const MAX_BANS: u8 = 3;
+/// Turns in a strike pattern at most: one stage struck a turn over [`MAX_STAGE_ID`] starters is
+/// already more than any stage select holds.
+pub const MAX_STRIKE_TURNS: usize = 64;
 
 /// P+ v3.2's legal stages (`srStageKind`; `mm::ruleset`'s table and `config/rulesets.json`):
 /// what the launcher's ruleset editor offers.
@@ -351,8 +527,7 @@ impl Ruleset {
         if !self.picks_used() {
             self.alternate_stages = false;
         }
-        self.rules.hazard_stages.sort_unstable();
-        self.rules.hazard_stages.dedup();
+        self.rules.normalize();
     }
 
     /// Checks everything a published ruleset must satisfy. Expects [`Ruleset::normalize`]d input:
@@ -555,7 +730,14 @@ mod tests {
             MatchRules { damage_ratio: 2.1, ..Default::default() },
             MatchRules { damage_ratio: 1.05, ..Default::default() },
             MatchRules { damage_ratio: f64::NAN, ..Default::default() },
-            MatchRules { item_frequency: 4, ..Default::default() },
+            MatchRules { item_frequency: 7, ..Default::default() },
+            MatchRules { stamina_type: 0, ..Default::default() },
+            MatchRules { stamina_type: 2, ..Default::default() },
+            MatchRules {
+                stamina_type: 6,
+                special: SpecialRules { stamina: Stamina::Stamina, ..Default::default() },
+                ..Default::default()
+            },
             MatchRules { hazard_stages: vec![0], ..Default::default() },
             MatchRules { hazard_stages: vec![256], ..Default::default() },
             MatchRules { hazard_stages: vec![31, 31], ..Default::default() },
@@ -568,6 +750,65 @@ mod tests {
         MatchRules { damage_ratio: 0.5, ..Default::default() }.validate().unwrap();
         MatchRules { damage_ratio: 2.0, style: Style::Coin, time_minutes: 2, ..Default::default() }.validate().unwrap();
         MatchRules { hazard_stages: (1..=8).collect(), ..Default::default() }.validate().unwrap();
+        MatchRules { item_frequency: 6, ..Default::default() }.validate().unwrap();
+        MatchRules {
+            stamina_type: 5,
+            special: SpecialRules { stamina: Stamina::Stamina, ..Default::default() },
+            ..Default::default()
+        }
+        .validate()
+        .unwrap();
+    }
+
+    #[test]
+    fn special_rules_wire_shape() {
+        // Off: not written at all (every ruleset from before it keeps its JSON and hash).
+        let off = serde_json::to_value(MatchRules::default()).unwrap();
+        assert!(off.get("special").is_none() && off.get("staminaType").is_none(), "{off}");
+        // On: only the rows that are on, by name.
+        let r = MatchRules {
+            special: SpecialRules {
+                stamina: Stamina::Stamina,
+                status: Status::Turbo,
+                other: Other::AllStar,
+                ..Default::default()
+            },
+            stamina_type: 3,
+            ..Default::default()
+        };
+        let v = serde_json::to_value(&r).unwrap();
+        assert_eq!(v["special"], serde_json::json!({"stamina": "stamina", "status": "turbo", "other": "all-star"}));
+        assert_eq!(v["staminaType"], 3);
+        assert_eq!(serde_json::from_value::<MatchRules>(v).unwrap(), r);
+        assert_eq!(r.special.bytes(), [2, 0, 0, 0, 1, 0, 0, 2]);
+        assert_eq!(SpecialRules::from_bytes(r.special.bytes()), Some(r.special));
+        assert_eq!(SpecialRules::from_bytes([0, 0, 3, 0, 0, 0, 0, 0]), None);
+        // Every value of every row, both ways; "off" is read too.
+        let all: SpecialRules = serde_json::from_str(
+            r#"{"stamina": "300", "size": "mega", "attack": "element", "body": "metal", "status": "bunny",
+                "gravity": "heavy", "speed": "wild", "other": "meter"}"#,
+        )
+        .unwrap();
+        assert_eq!(all.bytes(), [1, 1, 1, 1, 2, 2, 1, 1]);
+        let two: SpecialRules = serde_json::from_str(
+            r#"{"stamina": "stamina", "size": "mini", "attack": "regen", "body": "clear", "status": "turbo",
+                "gravity": "light", "speed": "fast", "other": "all-star"}"#,
+        )
+        .unwrap();
+        assert_eq!(two.bytes(), [2, 2, 2, 2, 1, 1, 2, 2]);
+        assert!(serde_json::from_str::<SpecialRules>(r#"{"size": "off"}"#).unwrap().is_off());
+        assert!(serde_json::from_str::<SpecialRules>(r#"{"size": "huge"}"#).is_err());
+        assert!(serde_json::from_str::<SpecialRules>(r#"{"hat": "bunny"}"#).is_err());
+        // The stamina type outside stamina matches is normalized away.
+        let mut n = MatchRules { stamina_type: 4, ..Default::default() };
+        n.normalize();
+        assert_eq!(n.stamina_type, 1);
+        // A ruleset with any of it hashes differently from one without.
+        let plain = Ruleset { name: "x".into(), ..Default::default() };
+        let turbo = Ruleset { rules: MatchRules { special: SpecialRules { status: Status::Turbo, ..Default::default() }, ..Default::default() }, ..plain.clone() };
+        assert_ne!(plain.hash(), turbo.hash());
+        let bombs = Ruleset { rules: MatchRules { item_frequency: 6, ..Default::default() }, ..plain.clone() };
+        assert_ne!(plain.hash(), bombs.hash());
     }
 
     #[test]

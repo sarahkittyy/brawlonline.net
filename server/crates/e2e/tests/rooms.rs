@@ -237,7 +237,7 @@ async fn a_room_plays_with_every_member_and_takes_a_joiner_during_the_game() {
     // Everyone on one colour: no start.
     for x in [&mut a, &mut b, &mut c] {
         x.send(&RoomRequest::Team { team: 1 });
-        x.send(&RoomRequest::Ready { ready: true, character: Some(7), costume: Some(1), stocks: None });
+        x.send(&RoomRequest::Ready { ready: true, character: Some(7), costume: Some(1), stocks: None, hp: None });
     }
     let s = room_state_where(&mut a, |s| {
         s["slots"].as_array().unwrap().iter().filter(|x| x["player"]["ready"] == true).count() == 3
@@ -350,10 +350,10 @@ async fn each_platform_needs_its_newest_build_from_the_update_feed() {
         b.pump();
         std::thread::sleep(Duration::from_millis(20));
     }
-    b.send(&RoomRequest::Ready { ready: true, character: Some(7), costume: Some(0), stocks: None });
+    b.send(&RoomRequest::Ready { ready: true, character: Some(7), costume: Some(0), stocks: None, hp: None });
     let e = room_error(&mut b);
     assert_eq!(e, json!({"type": "room-error", "op": "room-ready", "error": msg::update_to("0.2.0")}));
-    a.send(&RoomRequest::Ready { ready: true, character: Some(7), costume: Some(0), stocks: None });
+    a.send(&RoomRequest::Ready { ready: true, character: Some(7), costume: Some(0), stocks: None, hp: None });
     let s = room_state_where(&mut a, |s| s["slots"][0]["player"]["ready"] == true);
     assert_eq!(s["slots"][1]["player"]["ready"], false, "{s}");
     for x in [a, b] {

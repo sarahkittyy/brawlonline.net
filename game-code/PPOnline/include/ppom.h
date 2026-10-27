@@ -44,7 +44,10 @@ namespace PPOM {
     // 8: replays (docs/design/replays.md section 6): LOCAL.directJoin with a zero prefix and
     // directNumber 3 asks the game to play the replay whose SESSION Dolphin wrote (QUEUE_PLAYBACK).
     // No size or offset changed.
-    const u16 VERSION = 8;
+    // 9: P+'s special modes (docs/design/special-rules.md): SESSION grows to 0x420 with Special at
+    // +0x2C0 and PortExtra per player at +0x300; LOCAL grows to 0xC8 with the player's own
+    // PortExtra at +0x80; ROOM_RULES carries the special rows, ROOM_FORMAT the MATCH SETUP page.
+    const u16 VERSION = 9;
 
     // Slippi command bytes (EXI_DeviceSlippi.h), kept for familiarity (design 5.3).
     enum Cmd {
@@ -61,7 +64,19 @@ namespace PPOM {
         CMD_GP_FETCH_STEP = 0xC1,
         CMD_ROOM = 0xD0,          // rooms: RoomRequest, answered with RoomStatus
         CMD_RULESETS = 0xD1,      // v6: the Ruleset line's list, answered with RulesetList
+        CMD_SPECIAL_ASSETS = 0xD2,  // v9: the Special Versus box's models, SpecialAssetsRequest
     };
+
+    // CMD_SPECIAL_ASSETS (v9, docs/design/special-rules.md §5): the game's buffer for the box's
+    // models (32-byte aligned, its first 8 bytes "SPBX" and the nonce, which Dolphin checks before
+    // it writes). Answered with {state, written, pad[2], size u32}: state 1 loading, 2 ready (and
+    // `written` once the bundle is in the buffer), 3 unavailable.
+    struct SpecialAssetsRequest {
+        u32 addr;
+        u32 capacity;
+        u32 nonce;
+    };
+    enum SpecialAssetsState { SA_NONE = 0, SA_LOADING = 1, SA_READY = 2, SA_UNAVAILABLE = 3 };
 
     // Online modes, Slippi order (Online.s: Ranked, Unranked, Direct, Teams).
     enum Mode { MODE_RANKED = 0, MODE_UNRANKED = 1, MODE_DIRECT = 2, MODE_TEAMS = 3 };
@@ -213,6 +228,8 @@ namespace PPOM {
         ROOM_STAGES = 12,   // v7, host: RoomStagesRequest (the STAGE SWITCH); not while a set is on
         ROOM_SIT_OUT = 13,  // v8, SIT OUT: arg = in-game port 0-3, arg2 = 1 sits out / 0 plays (the
                             // player themselves; the host anyone)
+        ROOM_FORMAT = 14,   // v9, host: RoomFormatRequest (the rules menu's MATCH SETUP page); not
+                            // while a set is on
     };
 
     // CMD_ROOM request payload.
@@ -336,6 +353,27 @@ namespace PPOM {
     const u8 PV_WII = 0x01;
     const u8 SLOT_COLOURS = 13;   // P+'s slot colours 0-12 (PortValues.slotColour 1-13)
 
+    // v9 (docs/design/special-rules.md): a player's picks for P+'s special modes, written with the
+    // lock-in (LOCAL.ownExtra) and carried into every machine's SESSION (Session.extra) as the port
+    // values are. All zero for any other game. Dolphin checks a peer's (PeerData::SanitizePortExtra).
+    const int ROSTER_MAX = 16;
+    const u16 MAX_PICKED_HP = 999;
+    // A roster entry: P+'s All-Star table's 3 bytes as its CSS writes them (AllStarVs.asm, each
+    // placed coin; X / Y rewrite the last), which its match setup puts into the player's +0x00,
+    // +0x05 and +0x06, and the CSS id its CSS twin keeps.
+    struct RosterEntry {
+        u8 charKind;      // gmCharacterKind
+        u8 colour;        // P+'s colour number for the costume (0-0x1F), or 0x3D AltZ / 0x3E AltR
+        u8 costume;       // the CSS's costume (its player area +0x1BC, 0-0x1F)
+        u8 css;           // the CSS id
+    };
+    struct PortExtra {
+        u16 hp;           // a stamina match: the HP picked on the panel's STAMINA box, 0 none (150)
+        u8 rosterCount;   // All-Star: the characters picked, in order (each placed coin adds one)
+        u8 _pad[5];
+        RosterEntry roster[ROSTER_MAX];
+    };                    // 0x48
+
     // ---- LOCAL ----
 
     // LockIn.stagePick of the player who picks the next stage (Direct's loser): locked in with
@@ -399,7 +437,9 @@ namespace PPOM {
                           // screen's quit (Session.quitPorts) and the session ended for this
                           // machine only; the game ends its match (no DISCONNECTED). Until the
                           // next match starts
-    };                    // 0x80
+        PortExtra ownExtra;   // v9, game: the player's special-mode picks, written with the
+                              // lock-in (its seq covers them)
+    };                    // 0xC8
 
     // ---- SESSION ----
 
@@ -553,7 +593,25 @@ namespace PPOM {
         u8 op;            // ROOM_RULES
         u8 _pad[3];
         Rules rules;
-    };                    // 0x24
+        // v9: the Special Versus rows (the set rule's +0x18..+0x1F, each 0-2) and the stamina type
+        // (1-5), SpecialRules' first bytes.
+        u8 special[8];
+        u8 staminaType;
+    };                    // 0x2D
+
+    // CMD_ROOM payload for ROOM_FORMAT (v9): the MATCH SETUP page (the room's ruleset's stage
+    // choice, bans, DSR, alternate stages and strike pattern).
+    const int MAX_STRIKE_TURNS = 16;
+    struct RoomFormatRequest {
+        u8 op;            // ROOM_FORMAT
+        u8 choice;        // StageChoice
+        u8 bans;          // 0-3 (a set)
+        u8 dsr;
+        u8 alternates;    // alternate stages
+        u8 strikeCount;   // turns, 0-MAX_STRIKE_TURNS
+        u8 _pad[2];
+        u8 strikes[MAX_STRIKE_TURNS];   // stages struck each turn, 1-255
+    };                    // 0x18
 
     // Why the next game cannot be set up (Session.setupError; the CSS shows the text).
     enum SetupError {
@@ -561,6 +619,23 @@ namespace PPOM {
         SE_SAME_TEAM = 1,   // "Pick different teams": a team battle with everyone on one colour
         SE_NO_TEAM = 2,     // "Pick a team": a team battle and a player without a colour
     };
+
+    // v9 (docs/design/special-rules.md): P+'s Special Versus box as the session's rules have it,
+    // and on the room CSS what the rules menu's MATCH SETUP page and the panels show.
+    enum SpecialRow { SR_STAMINA = 0, SR_SIZE, SR_ATTACK, SR_BODY, SR_STATUS, SR_GRAVITY, SR_SPEED, SR_OTHER };
+    const u8 SPECIAL_ROWS = 8;
+    struct Special {
+        u8 rows[8];       // the set rule's +0x18..+0x1F: 0 off, 1 the box's left value, 2 its right
+        u8 staminaType;   // P+'s STAMINA TYPE 1-5 (with rows[SR_STAMINA] 2), 0 / 1 otherwise
+        // Rooms: the room's ruleset (MATCH SETUP).
+        u8 bans;
+        u8 dsr;
+        u8 strikeCount;   // 0: none (or a pattern longer than MAX_STRIKE_TURNS)
+        u8 strikes[MAX_STRIKE_TURNS];
+        u16 roomHp[SESSION_PLAYERS];   // rooms: a ready member's picked HP (a stamina match), 0 none
+        u8 alternates;    // rooms: the ruleset plays alternate stages
+        u8 _reserved[0x1B];
+    };                    // 0x40
 
     struct Session {
         u32 seq;          // Dolphin: bumped after each update
@@ -614,7 +689,9 @@ namespace PPOM {
         Rules rules;      // 0x220 (v6)
         RoomPlay play;    // 0x240 (v6)
         RoomStages stages;// 0x280 (v7)
-    };                    // 0x2C0
+        Special special;  // 0x2C0 (v9)
+        PortExtra extra[SESSION_PLAYERS];   // 0x300 (v9): by in-game port, each player's picks
+    };                    // 0x420
 
     // The last MuMsg::printIndex calls (a ring). 16, not 32: the plugin's Syringe heap block has
     // no room for more (docs/game-code.md, heap budget).
@@ -677,8 +754,9 @@ namespace PPOM {
     };
 
     // The lock-in (LOCAL): write it and bump its sequence.
+    // `ex`: the special-mode picks (LOCAL.ownExtra, v9), NULL none.
     void writeLockIn(bool ready, u8 cssChar, u8 charKind, u8 costume, u16 stagePick, u8 asl, u8 game,
-                     const PortValues* pv, u8 pad);
+                     const PortValues* pv, u8 pad, const PortExtra* ex = NULL);
 
     extern Block g_block;
 

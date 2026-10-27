@@ -1,3 +1,4 @@
+import { defaultRuleset } from "@common/rulesets";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "os";
 import path from "path";
@@ -336,6 +337,30 @@ describe("accounts", () => {
     await manager.browseRulesets({ q: "nor cal", limit: 30, after: "cjE" });
     expect(calls[1].url).toBe("http://api/v1/rulesets?q=nor+cal&limit=30&after=cjE");
     expect(calls[1].headers.authorization).toBeUndefined();
+  });
+
+  it("sends rulesets without the special rows and stamina type they do not use", async () => {
+    // A server from before P+'s special modes refuses rules fields it does not know: a ruleset that does not use them
+    // goes as it always did (the editor's {} and 1 left out); one that does, with them.
+    const view = { code: "BCDFGH" };
+    const { impl, calls } = fakeFetch({
+      "POST /v1/rulesets": () => ({ status: 200, body: view }),
+      "POST /v1/me/ruleset-drafts": () => ({ status: 200, body: { id: "d1" } }),
+      "PUT /v1/me/ruleset-drafts/d1": () => ({ status: 200, body: { id: "d1" } }),
+    });
+    const client = new AccountsHttpClient("http://api", "test", impl);
+    const plain = defaultRuleset();
+    await client.publishRuleset("tok", { ruleset: plain });
+    await client.createRulesetDraft("tok", { ruleset: plain });
+    for (const call of calls) {
+      expect("special" in call.body.ruleset.rules || "staminaType" in call.body.ruleset.rules).toBe(false);
+    }
+    const stamina = { ...plain, rules: { ...plain.rules, special: { stamina: "stamina" }, staminaType: 2 } };
+    await client.updateRulesetDraft("tok", "d1", { ruleset: stamina });
+    await client.publishRuleset("tok", { draftId: "d1" });
+    expect(calls[2].body.ruleset.rules.special).toEqual({ stamina: "stamina" });
+    expect(calls[2].body.ruleset.rules.staminaType).toBe(2);
+    expect(calls[3].body).toEqual({ draftId: "d1" });
   });
 
   it("reports an unreachable server as a network error", async () => {

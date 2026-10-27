@@ -34,6 +34,12 @@ constexpr size_t MAX_TEXT_BYTES = 200;
 // The most stocks a pick on the STOCKS box (stock control) can say (server rules.rs
 // MAX_PICKED_STOCKS); 0 is no pick and is not sent.
 constexpr u8 MAX_PICKED_STOCKS = 99;
+// The most HP a pick on the STAMINA box can say (a stamina match; server rules.rs MAX_PICKED_HP).
+constexpr u16 MAX_PICKED_HP = 999;
+// MATCH SETUP's set format (server rules.rs MAX_BANS; a strike pattern of more turns is not
+// shown, the page shows the ruleset's as it is).
+constexpr u8 MAX_BANS = 3;
+constexpr size_t MAX_STRIKE_TURNS = 16;
 
 // A typed or received code: ASCII or full-width letters, any case -> "KFQB"; nullopt when it is
 // not 4 letters of the 20 (the server's rule: such a code is "Room not found.").
@@ -89,6 +95,9 @@ struct Player
   // With the rules' stock control: the stock count the player picked on their panel, shown as the
   // lock-in is (1-99; none: not picked, the rules' stocks).
   std::optional<u8> stocks;
+  // In a stamina match (the rules' special stamina): the HP the player picked on their panel,
+  // shown as `stocks` is (1-MAX_PICKED_HP; none: P+'s default; docs/design/special-rules.md).
+  std::optional<u16> hp;
   bool in_game = false;
   // The panel's SIT OUT: the room's games start without this player (by choice, or outside a set
   // that is on).
@@ -121,6 +130,13 @@ struct RulesetView
   // from an mm that sends none.
   std::vector<u16> starters;
   std::vector<u16> counterpicks;
+  // The rules menu's MATCH SETUP page (2026-10-27, docs/design/special-rules.md): the strike
+  // pattern (at most MAX_STRIKE_TURNS turns shown), the winner's bans and DSR (a set), alternate
+  // stages (absent from an older mm: none).
+  std::vector<u8> strikes;
+  u8 bans = 0;
+  bool dsr = false;
+  bool alternate_stages = false;
   // Only "loser picks" without a set leaves a stage to a player (the last game's loser).
   bool LoserPicks() const
   {
@@ -253,6 +269,8 @@ enum class Op : u8
   Stages = 13,       // v7, the host's STAGE SWITCH (`starters`, `counterpicks`, `stage_choice`)
   SitOut = 14,       // v8, SIT OUT: `slot` 1-4 sits out (`flag`) or plays (a player themselves,
                      // the host anyone)
+  Format = 15,       // v9, the MATCH SETUP page: `stage_choice`, `strikes`, `bans`, `dsr`,
+                     // `alternate_stages` (room-format)
   // Dolphin's own (not game ops)
   Ready = 100,
   Back = 101,
@@ -279,6 +297,7 @@ struct Request
   bool remembered = false;  // Create: the game's own Create Room (the account's remembered ruleset)
   std::optional<u8> character, costume;  // Ready
   std::optional<u8> stocks;              // Ready: the picked stock count (stock control), 1-99
+  std::optional<u16> hp;                 // Ready: the picked HP (a stamina match), 1-MAX_PICKED_HP
   std::optional<u8> pickers;             // Back: the next game's stage pickers as this game saw it
   std::optional<MatchRules> rules;        // Rules
   u32 game = 0;                           // Result: the set's game
@@ -286,7 +305,12 @@ struct Request
   u16 stage = 0;                          // Result
   u8 best_of = 0;                         // BestOf: 0 (no set), 3, 5, 7
   std::vector<u16> starters, counterpicks;  // Stages: stage ids 1-255
-  std::string stage_choice;                 // Stages: "loser-picks" / "loser-picks-list", "" as it is
+  std::string stage_choice;                 // Stages: "loser-picks" / "loser-picks-list", "" as it is;
+                                            // Format: any of the four
+  std::vector<u8> strikes;                  // Format: the strike pattern (turns 1-255)
+  u8 bans = 0;                              // Format: 0-MAX_BANS
+  bool dsr = false;                         // Format
+  bool alternate_stages = false;            // Format
   std::array<std::vector<u8>, 2> actions;  // Step: each side's stage actions (`game`; `flag`:
                                            // its match started)
   std::string match_id;     // Unreachable: the room's game

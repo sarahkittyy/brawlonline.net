@@ -18,6 +18,8 @@
 #include "ppom.h"
 #include "netmenu.h"
 #include "room_play.h"
+#include "special_box.h"
+#include "rules_pages.h"
 #include "stage_switch.h"
 #include "room_rules.h"
 #include "rules_button.h"
@@ -496,6 +498,65 @@ namespace OnlineMenu {
         memcpy(pv->layout, t + 0x14, PPOM::LAYOUT_SIZE);
     }
 
+    // All-Star (the room's OTHER row 2): the player's roster as P+'s CSS keeps it for their panel
+    // (AllStarVs.asm: 0x80588000 + 0xA0 * port, 3-byte entries up to an 0xCC; its CSS twin
+    // 0x80588300 + 0x70 * port has the CSS ids), each placed coin one character. A RANDOM coin's
+    // entry (0x3D) is drawn here, as the lock-in's own: P+ would draw it in the match setup with
+    // the game's random numbers. None placed since All-Star came on: the locked-in character.
+    static void allStarRoster(PPOM::PortExtra& ex, int css, int costume)
+    {
+        const u8* a = (const u8*)(0x80588000 + LOCAL_PORT * 0xA0);
+        const u8* b = (const u8*)(0x80588300 + LOCAL_PORT * 0x70);
+        int n = 0;
+        for (; n < PPOM::ROSTER_MAX && a[3 * n] != 0xCC; n++) {
+            PPOM::RosterEntry& e = ex.roster[n];
+            if (a[3 * n] == 0x3D) {
+                int c = resolveCss(0x29);
+                e.charKind = charKindOf(c);
+                e.colour = e.costume = 0;
+                e.css = (u8)c;
+            } else {
+                e.charKind = a[3 * n];
+                e.colour = a[3 * n + 1];
+                e.costume = a[3 * n + 2];
+                e.css = b[2 * n];
+            }
+        }
+        if (n == 0) {
+            ex.roster[0].charKind = charKindOf(css);
+            ex.roster[0].colour = ex.roster[0].costume = (u8)costume;
+            ex.roster[0].css = (u8)css;
+            n = 1;
+        }
+        ex.rosterCount = (u8)n;
+    }
+
+    // The characters on the local panel's All-Star roster (P+'s table up to its 0xCC).
+    static int allStarCount()
+    {
+        const u8* a = (const u8*)(0x80588000 + LOCAL_PORT * 0xA0);
+        int n = 0;
+        while (n < 0x9C / 3 && a[3 * n] != 0xCC) n++;
+        return n;
+    }
+
+    // X / Y with the coin in the hand take the roster's last character off (P+'s CSS has no way to,
+    // short of All-Star going off): its entry becomes the end, in both tables.
+    static bool allStarRemoveLast()
+    {
+        u8* a = (u8*)(0x80588000 + LOCAL_PORT * 0xA0);
+        u8* b = (u8*)(0x80588300 + LOCAL_PORT * 0x70);
+        int n = allStarCount();
+        if (n == 0) return false;
+        n--;
+        a[3 * n] = 0xCC;
+        a[3 * n + 1] = a[3 * n + 2] = 0;
+        a[0x9C] = (u8)(3 * n);
+        b[2 * n] = b[2 * n + 1] = 0;
+        b[0x68] = (u8)(2 * n);
+        return true;
+    }
+
     // Slippi's lock-in (MSRB_IS_LOCAL_PLAYER_READY + SET_MATCH_SELECTIONS) into LOCAL.
     static void lockIn(int game, u16 stagePick, u8 asl)
     {
@@ -517,8 +578,17 @@ namespace OnlineMenu {
         pv.slotColour = lockSlotColour();
         // The coin's CSS id (RANDOM's when on it, which Dolphin shows the others instead of the
         // character drawn: COSTUME_RANDOM), the character drawn.
+        // The special modes' picks (v9): the panel's stamina HP, the All-Star roster.
+        PPOM::PortExtra ex;
+        memset(&ex, 0, sizeof(ex));
+        const PPOM::Session& se = PPOM::g_block.session;
+        if (roomCss() && staminaOn()) {
+            ex.hp = RoomCss::myHp();
+            s.lockedStocks = (u8)(ex.hp / 10);   // the HP box's count
+        }
+        if (roomCss() && se.rules.valid && se.special.rows[PPOM::SR_OTHER] == 2) allStarRoster(ex, css, costume);
         PPOM::writeLockIn(true, (u8)coin, charKindOf(css), (u8)(costume | s.startAlt), stagePick, asl,
-                          (u8)game, &pv, s.startPad);
+                          (u8)game, &pv, s.startPad, &ex);
         s.lockedGame = game;
         s.lockStage = stagePick;
         s.lastCss = picked >= 0 ? picked : s.lastCss;
@@ -1009,6 +1079,58 @@ namespace OnlineMenu {
     // (OnlineMatch::setupMatch), so a setting changed in between (or left over from offline play)
     // never reaches an online match. Dolphin compares the result on every machine before the match
     // (GameplaySession SetupKey).
+    static const int SPECIAL_ROWS_AT = 0x18;   // gmSetRule: P+'s Special Versus rows (m_spMeleeSetting1..8)
+
+    // The session's rules turn one of P+'s Special Versus rows on (v9; never in Ranked, Unranked or
+    // Direct, whose rules have none). Any special byte left over from offline play is cleared by
+    // applyRules either way: P+'s Wild, regen, Final Smash meter and All-Star codes read the set
+    // rule during the match.
+    bool specialOn()
+    {
+        const PPOM::Special& sp = PPOM::g_block.session.special;
+        if (!PPOM::g_block.session.rules.valid) return false;
+        for (int i = 0; i < PPOM::SPECIAL_ROWS; i++) {
+            if (sp.rows[i] == 1 || sp.rows[i] == 2) return true;
+        }
+        return false;
+    }
+
+    // On the room CSS the set rule's special rows follow the room's rules as they change (the host's
+    // edits, another ruleset), so P+'s CSS codes for them run there as on its own Special Versus
+    // CSS: All-Star's roster (each coin placed adds a character, AllStarVs.asm) and the panels'
+    // stamina HP. A match's setup writes them again (applyRules).
+    static void cssSpecialRows()
+    {
+        u8* r = setRule();
+        if (!r) return;
+        const PPOM::Session& se = PPOM::g_block.session;
+        for (int i = 0; i < PPOM::SPECIAL_ROWS; i++) {
+            u8 v = se.rules.valid && se.special.rows[i] <= 2 ? se.special.rows[i] : 0;
+            if (r[SPECIAL_ROWS_AT + i] != v) r[SPECIAL_ROWS_AT + i] = v;
+        }
+    }
+
+    // The room's rules have this special row at `value`.
+    static bool specialRowIs(int row, u8 value)
+    {
+        const PPOM::Session& se = PPOM::g_block.session;
+        return se.rules.valid && se.special.rows[row] == value;
+    }
+
+    bool staminaOn()
+    {
+        const PPOM::Session& se = PPOM::g_block.session;
+        return se.rules.valid && se.special.rows[PPOM::SR_STAMINA] == 2;
+    }
+
+    bool stockControlOn()
+    {
+        const PPOM::Session& se = PPOM::g_block.session;
+        const PPOM::Rules& ru = se.rules;
+        if (!ru.valid || !ru.stockControl || staminaOn()) return false;
+        return ru.style == PPOM::STYLE_STOCK || se.special.rows[PPOM::SR_ATTACK] == 2;
+    }
+
     void applyRules(int stageKind)
     {
         static const u8 PPLUS_RULE[16] = {0x00, 0x00, 0x01, 0x00, 0x04, 0x00, 0x0A, 0x00,
@@ -1030,14 +1152,22 @@ namespace OnlineMenu {
             r[0xA] = ru.pause ? 1 : 0;                     // 1 normal, 0 hold START
             r[0xB] = ru.autoLCancel ? 1 : 0;
             r[0xC] = ru.inputAssist ? 1 : 0;
-            // P+'s STOCK CONTROL (+5, `m_handicap`: 2 on), stock matches only as its menu has it;
-            // each player's count is their match player's +0x26 (OnlineMatch::setupMatch).
-            r[5] = ru.stockControl && ru.style == PPOM::STYLE_STOCK ? 2 : 0;
+            // P+'s STOCK CONTROL (+5, `m_handicap`: 2 on), stock matches only as its menu has it
+            // (with regen its FRAME CONTROL, any style); each player's count is their match
+            // player's +0x26 (OnlineMatch::setupMatch).
+            r[5] = stockControlOn() ? 2 : 0;
+            // P+'s Special Versus box (v9, docs/design/special-rules.md): the set rule's
+            // +0x18..+0x1F, which Brawl's Special setup (OnlineMatch::setupMatch) and P+'s
+            // special codes read; with stamina, P+'s STAMINA TYPE in the stage choice byte (+7).
+            const PPOM::Special& sp = PPOM::g_block.session.special;
+            for (int i = 0; i < PPOM::SPECIAL_ROWS; i++) r[SPECIAL_ROWS_AT + i] = sp.rows[i] <= 2 ? sp.rows[i] : 0;
+            if (sp.rows[PPOM::SR_STAMINA] == 2 && sp.staminaType >= 1 && sp.staminaType <= 5) r[7] = sp.staminaType - 1;
             m[0] = ru.itemFrequency;
             memcpy(m + ITEM_SWITCH, ru.itemSwitch, sizeof(ru.itemSwitch));
             // (the match's stage's own when the rules give it one: hazardStages)
             if (st) st[HAZARD] = PPOM::hazardsOn(ru, stageKind) ? 0 : 1;
         } else {
+            for (int i = 0; i < PPOM::SPECIAL_ROWS; i++) r[SPECIAL_ROWS_AT + i] = 0;
             r[0xA] = (s.mode == PPOM::MODE_DIRECT) ? 1 : 0;   // m_allowPause
             m[0] = 0;                                          // item frequency: none
             memcpy(m + ITEM_SWITCH, PPLUS_ITEM_SWITCH, sizeof(PPLUS_ITEM_SWITCH));
@@ -2167,6 +2297,10 @@ namespace OnlineMenu {
             RoomPlay::onRulesets(*r);
             return;
         }
+        if (r->cmd == PPOM::CMD_SPECIAL_ASSETS) {
+            SpecialBox::onAssets(*r);
+            return;
+        }
         if (r->cmd == PPOM::CMD_GET_MATCH_STATE) {
             // The answer to FIND_OPPONENT or to one of the polls that follow it.
             if (s.mode >= 0 && s.searchSeq && r->seq >= s.searchSeq) {
@@ -2346,11 +2480,9 @@ namespace OnlineMenu {
 
     // The room's rules have P+'s STOCK CONTROL, in a stock match (P+ shows no STOCKS box in time
     // and coin: its hook at sel_char 0x80693138).
-    static bool roomStockControl()
-    {
-        const PPOM::Rules& ru = PPOM::g_block.session.rules;
-        return roomIn() && ru.valid && ru.stockControl && ru.style == PPOM::STYLE_STOCK;
-    }
+    static bool roomStaminaHp() { return roomIn() && staminaOn(); }
+
+    static bool roomStockControl() { return roomIn() && stockControlOn(); }
 
     static void roomPanels(RoomCss::PanelView v[3], int* myTeam)
     {
@@ -2394,6 +2526,11 @@ namespace OnlineMenu {
                         p.costume = 0;
                     }
                     p.stocks = pl.roomStocks <= PPOM::MAX_PICKED_STOCKS ? pl.roomStocks : 0;
+                    // Stamina: the HP they picked (their box's count, HP / 10).
+                    if (staminaOn()) {
+                        u16 hp = se.special.roomHp[i];
+                        p.stocks = hp >= 10 && hp <= PPOM::MAX_PICKED_HP ? (u8)(hp / 10) : 0;
+                    }
                 } else if (bits & PPOM::SLOT_READY) {
                     // Ready without a character shown: game 1 of a set is a blind pick (the
                     // server keeps the character from the others, room-rules.md §2).
@@ -2651,7 +2788,10 @@ namespace OnlineMenu {
             char hostName[RoomCss::NAME_SIZE];
             hostName[0] = 0;
             if (se.roomHost < PPOM::SESSION_PLAYERS) u16Name(hostName, se.players[se.roomHost].name);
-            if (host) strcpy(text, "A: open/close\nHold A: remove");
+            u8* a = playerArea();
+            if (specialRowIs(PPOM::SR_OTHER, 2) && a && a[0x1F8])
+                sprintf(text, "All-Star: %d\nX: remove last", allStarCount());
+            else if (host) strcpy(text, "A: open/close\nHold A: remove");
             else sprintf(text, "Host:\n%s", hostName);
         }
         if (strcmp(text, s.roomBtnPrinted[0]) == 0) return;
@@ -2687,6 +2827,7 @@ namespace OnlineMenu {
             s.roomCreateSent = true;
         }
         pollRoom();
+        cssSpecialRows();
         bool in = roomIn();
         int me = roomMe();
         bool host = in && me >= 0 && se.roomHost == me;
@@ -2725,6 +2866,13 @@ namespace OnlineMenu {
         if (teamsKind != s_teamsKindSeen && s_teamsKindSeen >= 0 && teamsKind >= 0 && waiting && roomLockedForNext())
             unlock();
         s_teamsKindSeen = teamsKind;
+        // All-Star: X / Y with the coin in the hand take the roster's last character off.
+        const u32 BTN_X = 0x400, BTN_Y = 0x800;
+        u8* myArea = playerArea();
+        if (in && !rulesOpen && specialRowIs(PPOM::SR_OTHER, 2) && myArea && myArea[0x1F8] && !roomLocked() &&
+            (pressed & (BTN_X | BTN_Y)) && allStarRemoveLast()) {
+            playSE(SE_BACK);
+        }
         if (rulesOpen) {
             s_headerPress = 0;
             s.roomKickPort = -1;
@@ -2961,7 +3109,8 @@ namespace OnlineMenu {
         // stays the one the lock-in carries (as the character, cssCoinAPress).
         if (g_onlineCssLock && (pressed & BTN_A) && RoomCss::handOnMyStocks()) maskPressed(BTN_A);
         RoomCss::tick(views, teams, myTeam, in && me >= 0 ? roomStars(me, host) : 0, myName, roomLockedForNext(),
-                      roomStockControl(), roomLockedForNext() ? s.lockedStocks : -1, sitting);
+                      roomStaminaHp() ? RoomCss::BOX_HP : roomStockControl() ? RoomCss::BOX_STOCKS : RoomCss::BOX_NONE,
+                      roomLockedForNext() ? s.lockedStocks : -1, sitting);
         roomButtons(in, host);
     }
 
@@ -3693,6 +3842,8 @@ namespace Text {
         if (css) return css;
         const char* room = TrainingRoom::line(msg, window, line, msbin);   // the waiting room's banner
         if (room) return room;
+        const char* pages = RulesPages::menuText(msg, msbin, line);   // MATCH SETUP / SPECIAL
+        if (pages) return pages;
         const char* play = RoomPlay::menuText(msbin, line);   // the RULESET / SET descriptions
         if (play) return play;
         const char* sw = StageSwitch::menuText(msg, msbin, line);  // the room's STAGE SWITCH

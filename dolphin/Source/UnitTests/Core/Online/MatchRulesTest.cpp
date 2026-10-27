@@ -103,7 +103,13 @@ TEST(MatchRules, BadValuesRefuseTheMatch)
            R"({"damageRatio": 2.1})",
            R"({"damageRatio": 1.05})",
            R"({"damageRatio": "1"})",
-           R"({"itemFrequency": 4})",
+           R"({"itemFrequency": 7})",
+           R"({"staminaType": 0})",
+           R"({"staminaType": 6})",
+           R"({"staminaType": 2})",
+           R"({"special": []})",
+           R"({"special": {"size": 1}})",
+           R"({"special": {"stamina": "stamina"}, "staminaType": 6})",
            R"({"itemSwitch": [0, 6, 0, 0, 0, 0, 0]})",
            R"({"itemSwitch": [0, 6, 0, 0, 0, 0, 0, 256]})",
            R"({"itemSwitch": "0006000000000000"})",
@@ -195,7 +201,7 @@ TEST(MatchRules, SessionBytes)
   EXPECT_EQ(FromSessionBytes(SessionBytes(MatchRules{})), MatchRules{});
   for (const auto& [at, value] : std::initializer_list<std::pair<u32, u8>>{
            {RU_VALID, 0}, {RU_STYLE, 3}, {RU_STOCKS, 0}, {RU_STOCKS, 100}, {RU_TIME, 100},
-           {RU_DAMAGE, 4}, {RU_DAMAGE, 21}, {RU_ITEM_FREQUENCY, 4}, {RU_PAUSE, 2},
+           {RU_DAMAGE, 4}, {RU_DAMAGE, 21}, {RU_ITEM_FREQUENCY, 7}, {RU_PAUSE, 2},
            {RU_AUTO_L_CANCEL, 7}, {RU_INPUT_ASSIST, 2}, {RU_STOCK_CONTROL, 2}})
   {
     auto bad = SessionBytes(MatchRules{});
@@ -210,4 +216,59 @@ TEST(MatchRules, SessionBytes)
   // (byte 0x10: hazards, off by default since 2026-10-12)
   const std::array<u8, RULES_SIZE> want_d{1, 1, 4, 8, 10, 1, 1, 0, 0, 6, 0, 0, 0, 0, 0, 0, 0, 0};
   EXPECT_EQ(d, want_d);
+}
+
+// P+'s Special Versus box and STAMINA TYPE (docs/design/special-rules.md; server rules.rs
+// special_rules_wire_shape), P+'s item frequencies past HIGH.
+TEST(MatchRules, SpecialModes)
+{
+  const auto p = Parse(R"({"special": {"stamina": "stamina", "size": "mini", "attack": "element",
+    "body": "metal", "status": "turbo", "gravity": "heavy", "speed": "wild", "other": "all-star"},
+    "staminaType": 4, "itemFrequency": 6})");
+  ASSERT_TRUE(p.rules) << p.detail;
+  EXPECT_EQ(p.rules->special, (std::array<u8, 8>{2, 2, 1, 1, 1, 2, 1, 2}));
+  EXPECT_EQ(p.rules->stamina_type, 4);
+  EXPECT_EQ(p.rules->item_frequency, 6);
+  EXPECT_EQ(SpecialBytes(p.rules), (std::array<u8, SPECIAL_RULES_SIZE>{2, 2, 1, 1, 1, 2, 1, 2, 4}));
+  EXPECT_EQ(SpecialBytes(std::nullopt), (std::array<u8, SPECIAL_RULES_SIZE>{}));
+  // Every value of every row, and "off".
+  const auto all = Parse(R"({"special": {"stamina": "300", "size": "mega", "attack": "regen",
+    "body": "clear", "status": "bunny", "gravity": "light", "speed": "fast", "other": "meter"}})");
+  ASSERT_TRUE(all.rules) << all.detail;
+  EXPECT_EQ(all.rules->special, (std::array<u8, 8>{1, 1, 2, 2, 2, 1, 2, 1}));
+  const auto off = Parse(R"({"special": {"size": "off"}})");
+  ASSERT_TRUE(off.rules) << off.detail;
+  EXPECT_EQ(off.rules->special, (std::array<u8, 8>{}));
+  // A row or value this build does not know is a newer server's: "Update to play".
+  for (const std::string json : {R"({"special": {"hat": "bunny"}})", R"({"special": {"size": "huge"}})"})
+  {
+    const auto u = Parse(json);
+    EXPECT_FALSE(u.rules) << json;
+    EXPECT_EQ(u.error, "Update to play with these rules.") << json;
+  }
+  // Back to the server's JSON: only the rows that are on, the type only when not 1.
+  const auto j = picojson::value(ToJson(*p.rules)).serialize();
+  EXPECT_NE(j.find(R"("special":{"attack":"element","body":"metal","gravity":"heavy","other":"all-star",)"
+                   R"("size":"mini","speed":"wild","stamina":"stamina","status":"turbo"})"),
+            std::string::npos)
+      << j;
+  EXPECT_NE(j.find(R"("staminaType":4)"), std::string::npos) << j;
+  const auto plain = picojson::value(ToJson(MatchRules{})).serialize();
+  EXPECT_EQ(plain.find("special"), std::string::npos) << plain;
+  EXPECT_EQ(plain.find("staminaType"), std::string::npos) << plain;
+  // The game's ROOM_RULES: the rows follow the rules; the type means something with stamina only.
+  const auto b = SessionBytes(p.rules);
+  auto sp = SpecialBytes(p.rules);
+  EXPECT_EQ(FromSessionBytes(b, &sp), p.rules);
+  sp[0] = 1;
+  EXPECT_EQ(FromSessionBytes(b, &sp)->stamina_type, 1);
+  sp[0] = 3;
+  EXPECT_FALSE(FromSessionBytes(b, &sp));
+  sp = SpecialBytes(p.rules);
+  sp[8] = 6;
+  EXPECT_FALSE(FromSessionBytes(b, &sp));
+  sp[8] = 0;
+  EXPECT_EQ(FromSessionBytes(b, &sp)->stamina_type, 1);
+  // Without the special bytes (an older game): none.
+  EXPECT_EQ(FromSessionBytes(b)->special, (std::array<u8, 8>{}));
 }

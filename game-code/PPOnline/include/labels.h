@@ -26,6 +26,11 @@ namespace Labels {
     u32 imageWord(const u8* tex0);
     // A copy of an I4 or IA4 TEX0 (header and image, 32-byte aligned, a copyBlock), or NULL.
     u8* copyTexture(const u8* tex0);
+    // The bytes an I4 or IA4 TEX0 takes with its header (0 for another format), and a copy of it
+    // into `dst` (32-byte aligned, `room` bytes; NULL if it does not fit): for copies kept
+    // elsewhere than the Network heap (rules_pages.cpp: the rules menu's own, while it is open).
+    u32 textureSize(const u8* tex0);
+    u8* copyTextureTo(const u8* tex0, u8* dst, u32 room);
     // A 32-byte aligned block of `size` bytes in the Network heap for a copy the menus keep, or
     // NULL. Kept until releaseCopies, which frees every one (OnlineMenu::tick, before any scene
     // that loads fighters: Brawl decompresses costumes in the Network heap, bug #75); the

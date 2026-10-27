@@ -16,6 +16,7 @@ room games need the real Dolphin and servers (harness/tests/test_rooms_game.py).
 from __future__ import annotations
 
 import struct
+from pathlib import Path
 import time
 from dataclasses import dataclass, field
 
@@ -36,6 +37,7 @@ class Member:
     in_game: bool = False
     local: bool = False
     sitting_out: bool = False  # SIT OUT (ROOM_SIT_OUT): the room's games start without them
+    hp: int = 0               # the HP picked on the panel while ready (a stamina match, v9)
 
 
 # (hazards off but on Fountain of Dreams: hazardStages at +0x18, 2026-10-26)
@@ -73,6 +75,14 @@ class Room:
     # SESSION RoomStages (ppom.h, v7): the ruleset's starters and counterpicks (P+ default's).
     starters: list = field(default_factory=lambda: [0x01, 0x02, 0x21, 0x2D, 0x2E])
     counterpicks: list = field(default_factory=lambda: [0x03, 0x04, 0x05, 0x06, 0x09, 0x0C, 0x0D, 0x1C, 0x1F, 0x23])
+    # SESSION Special (ppom.h, v9): the special rows and stamina type (the room's rules), and the
+    # ruleset's MATCH SETUP values (ROOM_FORMAT).
+    special: list = field(default_factory=lambda: [0] * 8)
+    stamina_type: int = 1
+    bans: int = 0
+    dsr: bool = False
+    strikes: list = field(default_factory=list)
+    alternates: bool = True
 
 
 def utf8_field(s: str, n: int) -> bytes:
@@ -114,6 +124,10 @@ class RoomSim:
         self.rulesets_state = 2
         self.ruleset_db: dict[str, tuple[str, int]] = {}
         self.stages_requests: list[tuple[int, list, list]] = []   # ROOM_STAGES seen: (choice, starters, counterpicks)
+        # CMD_SPECIAL_ASSETS (v9): the Special Versus box, built from this SD card image as Dolphin
+        # builds it (None: answered unavailable).
+        self.special_card: str | None = str(Path(__file__).resolve().parents[2] / "run" / "template-user" / "Wii" / "sd.raw")
+        self.special_writes = 0
 
     # ---- the room model -------------------------------------------------------------------
     def me(self) -> int:
@@ -311,9 +325,22 @@ class RoomSim:
                         m.ready = False
             else:
                 self.set_error("Only the host can do that.")
+        elif op == 14 and r:   # ROOM_FORMAT (v9): choice, bans, dsr, alternates, strike count, pad[2], strikes
+            if not host:
+                self.set_error("Only the host can do that.")
+            else:
+                r.stage_choice, r.bans, r.dsr, r.alternates = p[1], p[2], bool(p[3]), bool(p[4])
+                r.strikes = list(p[8:8 + p[5]])
+                r.custom = True
+                for m in r.members:
+                    if m:
+                        m.ready = False
         elif op == 8 and r:   # ROOM_RULES (v6): the payload's Rules from +4; every ready taken back
             if host:
                 r.rules = bytes(p[4:4 + ppom.RULES_SIZE])
+                if len(p) >= 4 + ppom.RULES_SIZE + 9:   # v9: the special rows and stamina type
+                    r.special = list(p[0x24:0x2C])
+                    r.stamina_type = p[0x2C] or 1
                 for m in r.members:
                     if m:
                         m.ready = False
@@ -371,6 +398,18 @@ class RoomSim:
             in_room = r and self.phase == 2
             se[ppom.S_STAGES:ppom.S_STAGES + 0x40] = (stage_mask(r.starters) + stage_mask(r.counterpicks)
                                                       if in_room else bytes(0x40))
+        if len(se) >= ppom.S_EXTRA:   # v9: Special, the special rows and the MATCH SETUP values
+            sp = bytearray(ppom.SPECIAL_SIZE)
+            if r and self.phase == 2:
+                sp[0:8] = bytes(r.special)
+                sp[8] = r.stamina_type
+                sp[9], sp[0xA] = r.bans, 1 if r.dsr else 0
+                sp[0xB] = len(r.strikes[:16])
+                sp[0xC:0xC + len(r.strikes[:16])] = bytes(r.strikes[:16])
+                for i, m in enumerate(r.members):
+                    struct.pack_into(">H", sp, 0x1C + 2 * i, m.hp if (m and m.ready) else 0)
+                sp[0x24] = 1 if r.alternates else 0
+            se[ppom.S_SPECIAL:ppom.S_SPECIAL + ppom.SPECIAL_SIZE] = sp
         if len(se) >= ppom.S_RULES + ppom.RULES_SIZE:   # v6: the room's rules on the room CSS
             se[ppom.S_RULES:ppom.S_RULES + ppom.RULES_SIZE] = r.rules if (r and self.phase == 2) else bytes(ppom.RULES_SIZE)
         for i in range(4):
@@ -421,6 +460,8 @@ class RoomSim:
                     self.handle_room(seq, pl)
                 elif cmd == 0xBA:
                     pass
+                elif cmd == 0xD2:   # v9: CMD_SPECIAL_ASSETS {addr, capacity, nonce}
+                    self.pending.append((seq, cmd, self.special_assets(pl)))
                 elif cmd == ppom.CMD_RULESETS:   # v6: RulesetList
                     body = bytearray(4 + 15 * 32)
                     n = min(15, len(self.rulesets))
@@ -434,7 +475,7 @@ class RoomSim:
                 ppom.consume(self.c, self.b, seq)
             if self.pending and rc == rs:
                 seq, cmd, body = self.pending.pop(0)
-                status = 0xFF if (cmd not in (0xB9, ppom.CMD_ROOM, ppom.CMD_RULESETS)) else 0
+                status = 0xFF if (cmd not in (0xB9, ppom.CMD_ROOM, ppom.CMD_RULESETS, 0xD2)) else 0
                 ppom.write_response(self.c, self.b, seq, cmd, body, status)
             self.lock_in()
             view = (self.phase, repr(self.room), self.room_join_counter)
@@ -447,6 +488,21 @@ class RoomSim:
             if now - start >= frames:
                 return
             time.sleep(0.012)
+
+    def special_assets(self, pl: bytes) -> bytes:
+        """Dolphin's CMD_SPECIAL_ASSETS: the bundle into the game's buffer when it is still the game's
+        (its magic and nonce), and {state, written, pad, size}."""
+        import special_bundle
+        addr, cap, nonce = struct.unpack_from(">III", pl, 0)
+        if not self.special_card:
+            return bytes([3, 0, 0, 0]) + struct.pack(">I", 0)
+        bundle = special_bundle.from_card(self.special_card)
+        head = self.c.read_mem(addr, 8) if 0x80000000 <= addr < 0x94000000 else b""
+        written = len(bundle) <= cap and head == struct.pack(">II", special_bundle.MAGIC, nonce)
+        if written:
+            self.c.write_mem(addr, bundle)
+            self.special_writes += 1
+        return bytes([2, 1 if written else 0, 0, 0]) + struct.pack(">I", len(bundle))
 
     def room_ops(self, op: str) -> list[bytes]:
         """Payloads of the CMD_ROOM requests with this op seen so far."""

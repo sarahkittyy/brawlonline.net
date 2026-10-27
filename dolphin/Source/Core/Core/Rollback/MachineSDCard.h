@@ -32,6 +32,7 @@
 #include <set>
 #include <span>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -104,6 +105,13 @@ struct CardFile
 // The files of a FAT16/FAT32 image (with or without an MBR), long names included, or nullopt
 // when it is not a FAT volume this can read.
 std::optional<std::vector<CardFile>> ListCardFiles(File::IOFile& image, u64 image_size);
+
+// One file's bytes from such an image, by its path from the root ("Project+/pf/menu2/x.pac", any
+// case, long or short names), or nullopt when there is no such file, it is larger than
+// `max_size`, or its cluster chain is broken (docs/design/special-rules.md: the Special Versus
+// box's models come from P+'s own menu archive on the player's card).
+std::optional<std::vector<u8>> ReadCardFile(File::IOFile& image, u64 image_size,
+                                            std::string_view path, u64 max_size);
 
 // Wire format of a file list; ReadFileList checks everything (a stranger's bytes): the counts,
 // the paths, and every run against the card's `chunk_count`.

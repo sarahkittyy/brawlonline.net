@@ -363,6 +363,51 @@ TEST(PeerData, PortValuesAndNames)
   EXPECT_EQ(TruncateName(s), std::string(MAX_NAME_LEN - 1, 'a'));
 }
 
+// A peer's special-mode picks (docs/design/special-rules.md): the HP up to 999, the All-Star roster
+// up to its first entry the game could not load, every other byte zero.
+TEST(PeerData, PortExtra)
+{
+  std::array<u8, 0x48> px;
+  px.fill(0xFF);
+  SanitizePortExtra(px);
+  EXPECT_EQ(px, (std::array<u8, 0x48>{}));
+  px[PX_HP] = 0x01;
+  px[PX_HP + 1] = 0x2C;  // 300
+  px[PX_ROSTER_COUNT] = 3;
+  px[3] = 0x77;           // padding
+  const u8 roster[] = {0x07, 0x03, 0x02, 0x07,   // Fox, P+'s colour 3 for costume 2
+                       0x14, 0x3D, 0x00, 0x15,   // Falco, P+'s AltZ
+                       0x00, 0x00, 0x20, 0x00};  // a costume past the last: the roster ends
+  std::copy(std::begin(roster), std::end(roster), px.begin() + PX_ROSTER);
+  SanitizePortExtra(px);
+  EXPECT_EQ((px[PX_HP] << 8) | px[PX_HP + 1], 300);
+  EXPECT_EQ(px[3], 0);
+  EXPECT_EQ(px[PX_ROSTER_COUNT], 2);
+  const u8 kept[] = {0x07, 0x03, 0x02, 0x07, 0x14, 0x3D, 0x00, 0x15, 0, 0, 0, 0};
+  EXPECT_TRUE(std::equal(std::begin(kept), std::end(kept), px.begin() + PX_ROSTER));
+  // Too many HP is none; a count past ROSTER_MAX is cut there.
+  px[PX_HP] = 0x03;
+  px[PX_HP + 1] = 0xE8;  // 1000
+  px[PX_ROSTER_COUNT] = 200;
+  for (size_t i = 0; i < ROSTER_MAX; ++i)
+  {
+    px[PX_ROSTER + i * PX_ENTRY] = 0x07;
+    px[PX_ROSTER + i * PX_ENTRY + 1] = 0;
+    px[PX_ROSTER + i * PX_ENTRY + 2] = 0;
+  }
+  SanitizePortExtra(px);
+  EXPECT_EQ(px[PX_HP] | px[PX_HP + 1], 0);
+  EXPECT_EQ(px[PX_ROSTER_COUNT], ROSTER_MAX);
+  // A character the game has no fighter for ends it, and a CSS id past the CSS's.
+  px[PX_ROSTER + 3 * PX_ENTRY] = 0xFE;
+  SanitizePortExtra(px);
+  EXPECT_EQ(px[PX_ROSTER_COUNT], 3);
+  px[PX_ROSTER_COUNT] = 3;
+  px[PX_ROSTER + 1 * PX_ENTRY + 3] = 0x40;
+  SanitizePortExtra(px);
+  EXPECT_EQ(px[PX_ROSTER_COUNT], 1);
+}
+
 TEST(PeerData, LeaveReasons)
 {
   // A peer's "why" goes into our logs and status: printable ASCII, bounded.

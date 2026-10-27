@@ -157,6 +157,8 @@ boot_menu.o ppom.o match_hud.o: CXXFLAGS += -Oz
 # of these files no longer fitted ("gfModule::create Error : Can't Alloc Heap Buffer" in the
 # boot log). They hold no frame-layout tricks (their hooks are naked functions).
 code_entry.o online_menu.o online_match.o stage_legal.o anyone_menu.o online.o rel.o netmenu.o: CXXFLAGS += -Oz
+# The rules menu's MATCH SETUP and SPECIAL pages and All-Star (2026-10-27; docs/design/special-rules.md).
+rules_pages.o special_box.o all_star.o: CXXFLAGS += -Oz
 
 %.o: %.cpp
 #	$(info $<)

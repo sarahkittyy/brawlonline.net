@@ -22,6 +22,8 @@
 #include "Common/UPnP.h"
 #include "Core/Config/OnlineSettings.h"
 #include "Core/Core.h"
+#include "Core/HW/Memmap.h"
+#include "Core/System.h"
 #include "Core/NetPlayClient.h"
 #include "Core/Online/Chat.h"
 #include "Core/Online/GameSetup.h"
@@ -30,6 +32,7 @@
 #include "Core/Online/Ranked.h"
 #include "Core/Online/RecentCodes.h"
 #include "Core/Online/Rooms.h"
+#include "Core/Online/SpecialAssets.h"
 #include "Core/Online/User.h"
 #include "Core/PowerPC/MMU.h"
 #include "Core/Rollback/GameplaySession.h"
@@ -55,7 +58,13 @@ constexpr u32 MAGIC = 0x50504F4D;  // "PPOM"
 // choice 3, loser picks from the list; a v4-v6 plugin still works (any stage).
 // 8: replays (docs/design/replays.md §6): LOCAL's Direct-invite counter with a zero prefix and the
 // number 3 asks the game to play the replay SESSION holds; no layout changed.
-constexpr u16 VERSION = 8;
+// 9: P+'s special modes (docs/design/special-rules.md): SESSION grows to 0x420 with ppom.h Special
+// at +0x2C0 (the Special Versus rows and stamina type, the room's MATCH SETUP values and the others'
+// picked HP) and PortExtra per player at +0x300 (the player's picked HP and All-Star roster);
+// LOCAL grows to 0xC8 with the player's own PortExtra at +0x80, written with the lock-in.
+// ROOM_RULES carries the special rows, ROOM_FORMAT (14) the MATCH SETUP page. A v4-v8 plugin
+// still works (no special modes).
+constexpr u16 VERSION = 9;
 constexpr u16 MIN_VERSION = 4;
 constexpr u32 HEADER_SIZE = 0x24;
 
@@ -74,7 +83,14 @@ constexpr u32 MAILBOX_SIZE = MB_RESP + RESP_PAYLOAD_OFF + RESP_PAYLOAD;  // 0x41
 
 // LOCAL (per machine, excluded from rollback; follows the mailbox): Dolphin's view of this
 // player's session, and the game's lock-in.
-constexpr u32 LOCAL_SIZE = 0x80;
+constexpr u32 LOCAL_SIZE_V8 = 0x80;
+constexpr u32 LOCAL_SIZE = 0xC8;
+// v9: the player's special-mode picks (ppom.h PortExtra), game-written with the lock-in.
+constexpr u32 L_OWN_EXTRA = 0x80;
+constexpr u32 LocalSize(u16 version)
+{
+  return version >= 9 ? LOCAL_SIZE : LOCAL_SIZE_V8;
+}
 constexpr u32 L_SEQ = 0x00, L_STATE = 0x04, L_LOCAL_PORT = 0x05, L_REMOTE_READY = 0x06,
               L_DISCONNECTED = 0x07, L_PEER_NAME = 0x08, L_LOCK = 0x28;
 // The player's port values (name tag and controls, ppom.h PortValues), game-written with the
@@ -98,7 +114,8 @@ constexpr u32 L_LOCK_TEAM = 0x34;
 // gone flags and the elimination order, which are rolled-back match state).
 constexpr u32 SESSION_SIZE_V5 = 0x220;
 constexpr u32 SESSION_SIZE_V6 = 0x280;
-constexpr u32 SESSION_SIZE = 0x2C0;
+constexpr u32 SESSION_SIZE_V7 = 0x2C0;
+constexpr u32 SESSION_SIZE = 0x420;
 constexpr u32 S_RULES = 0x220;  // v6: ppom.h Rules
 // v6: ppom.h RoomPlay: valid, bestOf, stageChoice, custom, code[8], name[32], setOn, setGame,
 // score[2], sides[2], setFlags.
@@ -111,10 +128,25 @@ constexpr u8 CHOICE_LOSER_PICKS = 0, CHOICE_STRIKE = 1, CHOICE_RANDOM = 2, CHOIC
 // mask 1 << k % 8), the starters and the counterpicks.
 constexpr u32 S_STAGES = 0x280, RS_STARTERS = 0, RS_COUNTERPICKS = 0x20, STAGE_MASK_BYTES = 0x20;
 static_assert(S_RULES == SESSION_SIZE_V5 && S_RULES + RULES_SIZE == S_PLAY && S_PLAY + 0x40 == SESSION_SIZE_V6);
-static_assert(S_STAGES == SESSION_SIZE_V6 && S_STAGES + 2 * STAGE_MASK_BYTES == SESSION_SIZE);
+static_assert(S_STAGES == SESSION_SIZE_V6 && S_STAGES + 2 * STAGE_MASK_BYTES == SESSION_SIZE_V7);
+// v9: ppom.h Special: the Special Versus rows and stamina type (MatchRules SpecialBytes), the
+// room's MATCH SETUP values (bans, DSR, the strike pattern's turn count and turns, alternate
+// stages) and per in-game port the HP a ready room member picked (u16, shown on their panel).
+constexpr u32 S_SPECIAL = 0x2C0, SPX_ROWS = 0, SPX_BANS = 0x09, SPX_DSR = 0x0A,
+              SPX_STRIKE_COUNT = 0x0B, SPX_STRIKES = 0x0C, SPX_MAX_STRIKES = 16, SPX_ROOM_HP = 0x1C,
+              SPX_ALTERNATES = 0x24, SPECIAL_SIZE = 0x40;
+// v9: ppom.h PortExtra per in-game port (Gprb::Session::PortExtra).
+constexpr u32 S_EXTRA = 0x300;
+static_assert(SPX_ROWS + SPECIAL_RULES_SIZE <= SPX_BANS && SPX_STRIKES + SPX_MAX_STRIKES == SPX_ROOM_HP &&
+              SPX_ROOM_HP + 8 <= SPX_ALTERNATES && SPX_ALTERNATES < SPECIAL_SIZE);
+static_assert(S_SPECIAL == SESSION_SIZE_V7 && S_SPECIAL + SPECIAL_SIZE == S_EXTRA &&
+              S_EXTRA + 4 * Gprb::Session::PORT_EXTRA_SIZE == SESSION_SIZE);
 constexpr u32 SessionSize(u16 version)
 {
-  return version >= 7 ? SESSION_SIZE : version >= 6 ? SESSION_SIZE_V6 : SESSION_SIZE_V5;
+  return version >= 9 ? SESSION_SIZE :
+         version >= 7 ? SESSION_SIZE_V7 :
+         version >= 6 ? SESSION_SIZE_V6 :
+                        SESSION_SIZE_V5;
 }
 constexpr u32 S_SEQ = 0x00, S_STATE = 0x04, S_MODE = 0x05, S_GAME = 0x06, S_LAST_WINNER = 0x07,
               S_STAGE = 0x08, S_ASL = 0x0A, S_NUM_PLAYERS = 0x0B, S_PLAYERS = 0x0C,
@@ -157,7 +189,8 @@ constexpr u8 RF_IN = 1, RF_PUBLIC = 2, RF_TEAMS = 4, RF_WATCH = 8, RF_TEAM_COLOR
 // 3 its plain one (every player in their team's costume).
 constexpr u8 TEAMS_LEGACY = 1, TEAMS_RAINBOW = 2, TEAMS_COLORS = 3;
 static_assert(L_ROOM_CREATE == L_DESYNCED + 1 && L_QUIT_LEFT == L_ROOM_CREATE + 1 &&
-              L_QUIT_LEFT < LOCAL_SIZE);
+              L_QUIT_LEFT < LOCAL_SIZE_V8 && L_OWN_EXTRA == LOCAL_SIZE_V8 &&
+              L_OWN_EXTRA + Gprb::Session::PORT_EXTRA_SIZE == LOCAL_SIZE);
 static_assert(L_ROOM < L_DIRECT_JOIN && L_DIRECT_NUMBER + 2 == L_OWN &&
               L_DIRECT_PREFIX + DIRECT_PREFIX_LEN == L_DIRECT_NUMBER);
 static_assert(L_ROOM < L_OWN && S_ROOM_MODE < SESSION_SIZE && SP_ROOM_COSTUME < SP_PORT_VALUES &&
@@ -177,6 +210,12 @@ constexpr u8 CMD_ROOM = 0xD0;
 // v6: the Ruleset line's list (ppom.h RulesetList): state, count, serial u16, then per ruleset its
 // code (8, NUL padded) and name (24, NUL ended).
 constexpr u8 CMD_RULESETS = 0xD1;
+// v9: the Special Versus box's models for the room's rules menu (Online/SpecialAssets.h): the game
+// asks with its buffer {addr u32, capacity u32, nonce u32}, whose first 8 bytes it set to "SPBX"
+// and the nonce; Dolphin answers {state, pad[3], size u32} and, once the bundle is ready and fits,
+// copies it into the buffer first, only while those 8 bytes are still there (a buffer the game
+// freed in between is never written).
+constexpr u8 CMD_SPECIAL_ASSETS = 0xD2;
 constexpr u32 RL_ENTRIES = 4, RL_ENTRY = 32, RL_CODE = 0, RL_NAME = 8, RL_NAME_LEN = 24;
 // RoomRequest payload: op, arg, arg2, pad, code u16[9]. RoomStatus: phase, error, localPort, pad,
 // serial u32, text u16[64].
@@ -471,7 +510,7 @@ std::optional<Located> Locate(const Core::CPUThreadGuard& guard)
           const u32 lo_size = R16(guard, a + H_LOCAL_SIZE);
           // The mailbox and LOCAL are contiguous: one range excluded from rollback.
           if (mb_off < HEADER_SIZE || mb_size != MAILBOX_SIZE || lo_off != mb_off + mb_size ||
-              lo_size != LOCAL_SIZE || se_size != SessionSize(version) || se_off < HEADER_SIZE ||
+              lo_size != LocalSize(version) || se_size != SessionSize(version) || se_off < HEADER_SIZE ||
               se_off + se_size > block_size || lo_off + lo_size > block_size ||
               a + block_size > offset + size)
           {
@@ -780,7 +819,7 @@ Response CodeSuggestion(const Core::CPUThreadGuard& guard, u32 payload, std::str
 }
 
 // Rooms (docs/rooms-game-interface.md): one op of the room CSS, answered with the status line.
-Response RoomResponse(const Core::CPUThreadGuard& guard, u32 payload, std::string* request)
+Response RoomResponse(const Core::CPUThreadGuard& guard, u32 payload, u16 version, std::string* request)
 {
   const u8 op = R8(guard, payload);
   const u8 arg = R8(guard, payload + 1);
@@ -901,8 +940,36 @@ Response RoomResponse(const Core::CPUThreadGuard& guard, u32 payload, std::strin
     std::array<u8, RULES_SIZE> b{};
     for (u32 i = 0; i < RULES_SIZE; ++i)
       b[i] = R8(guard, payload + RR_RULES + i);
-    r.rules = FromSessionBytes(b);
+    // v9: the Special Versus rows and the stamina type follow the rules (SpecialBytes' layout).
+    std::array<u8, SPECIAL_RULES_SIZE> sp{};
+    for (u32 i = 0; i < SPECIAL_RULES_SIZE; ++i)
+      sp[i] = R8(guard, payload + RR_RULES + RULES_SIZE + i);
+    r.rules = FromSessionBytes(b, version >= 9 ? &sp : nullptr);
     ok = r.rules.has_value();
+    break;
+  }
+  case 14:
+  {
+    // v9, the MATCH SETUP page (ppom.h RoomFormatRequest): op, stage choice, bans, dsr,
+    // alternate stages, the strike pattern's turn count, pad[2], then its turns.
+    r.op = Rooms::Op::Format;
+    const u8 choice = R8(guard, payload + 1);
+    r.stage_choice = choice == CHOICE_LOSER_PICKS      ? "loser-picks" :
+                     choice == CHOICE_LOSER_PICKS_LIST ? "loser-picks-list" :
+                     choice == CHOICE_STRIKE           ? "strike" :
+                     choice == CHOICE_RANDOM           ? "random" :
+                                                         "";
+    r.bans = R8(guard, payload + 2);
+    r.dsr = R8(guard, payload + 3) != 0;
+    r.alternate_stages = R8(guard, payload + 4) != 0;
+    const u8 turns = R8(guard, payload + 5);
+    ok = !r.stage_choice.empty() && r.bans <= Rooms::MAX_BANS && turns <= SPX_MAX_STRIKES;
+    for (u32 i = 0; ok && i < turns; ++i)
+    {
+      const u8 n = R8(guard, payload + 8 + i);
+      ok = n != 0;
+      r.strikes.push_back(n);
+    }
     break;
   }
   default:
@@ -953,6 +1020,10 @@ const char* CmdName(u8 cmd)
     return "GP_FETCH_STEP";
   case CMD_ROOM:
     return "ROOM";
+  case CMD_RULESETS:
+    return "RULESETS";
+  case CMD_SPECIAL_ASSETS:
+    return "SPECIAL_ASSETS";
   default:
     return "?";
   }
@@ -981,7 +1052,7 @@ void Record(u32 seq, u8 cmd, const std::string& request, const Response* respons
   }
 }
 
-void Service(const Core::CPUThreadGuard& guard, u32 mailbox)
+void Service(const Core::CPUThreadGuard& guard, u32 mailbox, u16 version)
 {
   const u32 wr = R32(guard, mailbox + MB_REQ_WRITE);
   u32 rd = R32(guard, mailbox + MB_REQ_READ);
@@ -1091,7 +1162,7 @@ void Service(const Core::CPUThreadGuard& guard, u32 mailbox)
       }
       break;
     case CMD_ROOM:
-      response = RoomResponse(guard, payload, &request);
+      response = RoomResponse(guard, payload, version, &request);
       break;
     case CMD_RULESETS:
     {
@@ -1115,6 +1186,41 @@ void Service(const Core::CPUThreadGuard& guard, u32 mailbox)
       }
       r.summary = fmt::format("RULESETS state={} n={}", static_cast<int>(list.state), n);
       request = "RULESETS";
+      response = r;
+      break;
+    }
+    case CMD_SPECIAL_ASSETS:
+    {
+      const u32 addr = R32(guard, payload);
+      const u32 capacity = R32(guard, payload + 4);
+      const u32 nonce = R32(guard, payload + 8);
+      SpecialAssets::State state = SpecialAssets::Request(File::GetUserPath(F_WIISDCARDIMAGE_IDX));
+      u32 size = 0;
+      bool wrote = false;
+      if (state == SpecialAssets::State::Ready)
+      {
+        const std::vector<u8> bundle = SpecialAssets::Bundle();
+        size = static_cast<u32>(bundle.size());
+        const bool fits = capacity <= SpecialAssets::MAX_BUNDLE && size <= capacity &&
+                          (addr & 0x1F) == 0 && IsRam(guard, addr, std::max<u32>(capacity, 8));
+        if (fits && R32(guard, addr) == SpecialAssets::MAGIC && R32(guard, addr + 4) == nonce)
+        {
+          guard.GetSystem().GetMemory().CopyToEmu(addr, bundle.data(), bundle.size());
+          wrote = true;
+        }
+      }
+      Response r;
+      r.cmd = CMD_SPECIAL_ASSETS;
+      r.status = STATUS_OK;
+      r.payload[0] = static_cast<u8>(state);
+      r.payload[1] = wrote ? 1 : 0;
+      r.payload[4] = static_cast<u8>(size >> 24);
+      r.payload[5] = static_cast<u8>(size >> 16);
+      r.payload[6] = static_cast<u8>(size >> 8);
+      r.payload[7] = static_cast<u8>(size);
+      r.summary = fmt::format("SPECIAL_ASSETS state={} size={}{}", static_cast<int>(state), size,
+                              wrote ? " written" : "");
+      request = fmt::format("SPECIAL_ASSETS {:08x} {}", addr, capacity);
       response = r;
       break;
     }
@@ -1268,6 +1374,43 @@ void PutRoom(std::vector<u8>& session, const Rooms::Snapshot& room, const Gprb::
   session[S_ROOM_HOST] = static_cast<u8>(v.host - 1);
   session[S_ROOM_STATUS] = static_cast<u8>(v.status);
   session[S_ROOM_MODE] = static_cast<u8>(v.mode);
+}
+
+// v9, the room CSS (docs/design/special-rules.md): the MATCH SETUP page's values (the room's
+// ruleset's bans, DSR, strike pattern and alternate stages) and each ready member's picked HP
+// (a stamina match), as SP_ROOM_STOCKS shows their stock count.
+void PutRoomSpecial(std::vector<u8>& session, const Rooms::Snapshot& room, const Gprb::Session::Lobby& lobby)
+{
+  const Rooms::View& v = *room.view;
+  const u32 sp = S_SPECIAL;
+  session[sp + SPX_BANS] = std::min<u8>(v.ruleset.bans, Rooms::MAX_BANS);
+  session[sp + SPX_DSR] = v.ruleset.dsr ? 1 : 0;
+  session[sp + SPX_ALTERNATES] = v.ruleset.alternate_stages ? 1 : 0;
+  if (v.ruleset.strikes.size() <= SPX_MAX_STRIKES)
+  {
+    session[sp + SPX_STRIKE_COUNT] = static_cast<u8>(v.ruleset.strikes.size());
+    for (size_t k = 0; k < v.ruleset.strikes.size(); ++k)
+      session[sp + SPX_STRIKES + k] = v.ruleset.strikes[k];
+  }
+  const bool session_css = lobby.active && room.game_active && !lobby.in_match;
+  for (int i = 0; i < SESSION_PLAYERS; ++i)
+  {
+    u16 hp = 0;
+    const Rooms::Slot& sl = v.slots[i];
+    const auto lock = session_css ? Gprb::Session::GetPlayerLock(i) : std::nullopt;
+    if (lock && lock->ready && lock->game == lobby.game)
+    {
+      hp = static_cast<u16>(lock->port_extra[Gprb::PeerData::PX_HP] << 8 |
+                            lock->port_extra[Gprb::PeerData::PX_HP + 1]);
+    }
+    else if (!lock && sl.player && sl.player->ready && sl.player->hp)
+    {
+      hp = *sl.player->hp;
+    }
+    hp = std::min<u16>(hp, Rooms::MAX_PICKED_HP);
+    session[sp + SPX_ROOM_HP + 2 * i] = static_cast<u8>(hp >> 8);
+    session[sp + SPX_ROOM_HP + 2 * i + 1] = static_cast<u8>(hp);
+  }
 }
 
 // LOCAL's Direct invite bytes. The code is Rooms' canonical one (NormalizeConnectCode: 2-4
@@ -1439,8 +1582,26 @@ std::vector<u8> PlaybackSession(const std::vector<u8>& rec, u16 version)
       out[rp + RP_WINNER] = 0xFF;
     }
   }
-  if (version >= 7 && rec.size() >= SESSION_SIZE)
-    std::copy(rec.begin() + S_STAGES, rec.begin() + SESSION_SIZE, out.begin() + S_STAGES);
+  if (version >= 7 && rec.size() >= SESSION_SIZE_V7)
+    std::copy(rec.begin() + S_STAGES, rec.begin() + SESSION_SIZE_V7, out.begin() + S_STAGES);
+  // v9: the special rows (each 0-2) and stamina type (1-5), and every present player's picks.
+  if (version >= 9 && rec.size() >= SESSION_SIZE)
+  {
+    for (u32 k = 0; k < 8; ++k)
+      out[S_SPECIAL + SPX_ROWS + k] = rec[S_SPECIAL + SPX_ROWS + k] <= 2 ? rec[S_SPECIAL + SPX_ROWS + k] : 0;
+    const u8 type = rec[S_SPECIAL + SPX_ROWS + 8];
+    out[S_SPECIAL + SPX_ROWS + 8] = type >= 1 && type <= STAMINA_TYPES ? type : 1;
+    for (int i = 0; i < SESSION_PLAYERS; ++i)
+    {
+      if (!out[S_PLAYERS + i * SP_SIZE + SP_PRESENT])
+        continue;
+      Gprb::Session::PortExtra px;
+      const u32 at = S_EXTRA + i * Gprb::Session::PORT_EXTRA_SIZE;
+      std::copy(rec.begin() + at, rec.begin() + at + px.size(), px.begin());
+      Gprb::PeerData::SanitizePortExtra(px);
+      std::copy(px.begin(), px.end(), out.begin() + at);
+    }
+  }
   // A desynced game played again: the restored values, in the ranges the session takes from a
   // host (Gprb::Session::Restore).
   if (version >= 6 && rec.size() >= SESSION_SIZE_V6 && rec[SESSION_RESTORE] == 1)
@@ -1491,12 +1652,12 @@ void SyncPlayback(const Core::CPUThreadGuard& guard, const Located& loc,
     ++s_playback_bumps;
     NOTICE_LOG_FMT(NETPLAY, "GameBridge: asking the game to play replay {}", pv.serial);
   }
-  std::vector<u8> local(LOCAL_SIZE, 0);
+  std::vector<u8> local(LocalSize(loc.version), 0);
   local[L_STATE] = pv.in_match ? 3 : 2;
   local[L_LOCAL_PORT] = static_cast<u8>(pv.local_port);
   local[L_REMOTE_READY] = 1;
   local[L_DISCONNECTED] = pv.disconnected ? 1 : 0;
-  for (u32 i = L_LOCK; i < LOCAL_SIZE; ++i)
+  for (u32 i = L_LOCK; i < local.size(); ++i)
     local[i] = R8(guard, loc.local + i);
   local[L_DESYNCED] = pv.desynced ? 1 : 0;
   local[L_QUIT_LEFT] = pv.quit_left ? 1 : 0;
@@ -1536,13 +1697,13 @@ bool SyncRoomWatch(const Core::CPUThreadGuard& guard, const Located& loc,
     Rooms::SetScreen(screen);
   const Rooms::Snapshot room = Rooms::GetSnapshot();
   const bool in_room = room.phase == Rooms::Phase::In && room.view.has_value();
-  std::vector<u8> local(LOCAL_SIZE, 0);
+  std::vector<u8> local(LocalSize(loc.version), 0);
   local[L_STATE] = pv.in_match ? 3 : on_css ? 0 : 2;
   local[L_LOCAL_PORT] = on_css && in_room ? static_cast<u8>(room.view->you - 1) :
                                             static_cast<u8>(pv.local_port);
   local[L_REMOTE_READY] = on_css ? 0 : 1;
   local[L_DISCONNECTED] = pv.disconnected ? 1 : 0;
-  for (u32 i = L_LOCK; i < LOCAL_SIZE; ++i)
+  for (u32 i = L_LOCK; i < local.size(); ++i)
     local[i] = R8(guard, loc.local + i);
   local[L_DESYNCED] = pv.desynced ? 1 : 0;
   local[L_QUIT_LEFT] = pv.quit_left ? 1 : 0;
@@ -1615,7 +1776,16 @@ void SyncSession(const Core::CPUThreadGuard& guard, const Located& loc)
     l.local_pad = R8(guard, loc.local + L_LOCK_PAD);
     // Set from the controller itself, whatever the game wrote there.
     l.port_values[PV_CONTROLLER] = l.local_pad >= 4 && l.local_pad < 8 ? PV_WII : 0;
-    Rooms::SetLocalLock(l.ready, l.game, l.char_kind, RandomShown(l), l.port_values[PV_STOCKS]);
+    // v9: the special-mode picks (the stamina HP, the All-Star roster), checked as a peer's are.
+    if (loc.version >= 9)
+    {
+      for (u32 i = 0; i < l.port_extra.size(); ++i)
+        l.port_extra[i] = R8(guard, loc.local + L_OWN_EXTRA + i);
+      Gprb::PeerData::SanitizePortExtra(l.port_extra);
+    }
+    const u16 hp = static_cast<u16>(l.port_extra[Gprb::PeerData::PX_HP] << 8 |
+                                    l.port_extra[Gprb::PeerData::PX_HP + 1]);
+    Rooms::SetLocalLock(l.ready, l.game, l.char_kind, RandomShown(l), l.port_values[PV_STOCKS], hp);
     if (room.game_active)
     {
       // A room's game is a session of its own: the room's game N (SESSION `game`) is the
@@ -1740,7 +1910,7 @@ void SyncSession(const Core::CPUThreadGuard& guard, const Located& loc)
   s_was_disconnected = lobby.disconnected;
 
   // LOCAL: always (it is not part of the rolled-back state).
-  std::vector<u8> local(LOCAL_SIZE, 0);
+  std::vector<u8> local(LocalSize(loc.version), 0);
   local[L_STATE] = !lobby.active ? 0 : lobby.in_match ? 3 : lobby.connected ? 2 : 1;
   local[L_LOCAL_PORT] = lobby.active ? static_cast<u8>(lobby.local_port) :
                         in_room      ? static_cast<u8>(room.view->you - 1) :
@@ -1749,7 +1919,7 @@ void SyncSession(const Core::CPUThreadGuard& guard, const Located& loc)
   local[L_DISCONNECTED] = lobby.disconnected ? 1 : 0;
   PutU16Text(local, L_PEER_NAME, peer_name, NAME_LEN);
   // Keep the game's lock-in as it is.
-  for (u32 i = L_LOCK; i < LOCAL_SIZE; ++i)
+  for (u32 i = L_LOCK; i < local.size(); ++i)
     local[i] = R8(guard, loc.local + i);
   local[L_DESYNCED] = lobby.desynced ? 1 : 0;
   local[L_QUIT_LEFT] = lobby.quit_left ? 1 : 0;
@@ -1806,6 +1976,12 @@ void SyncSession(const Core::CPUThreadGuard& guard, const Located& loc)
       PutU16Text(session, p + SP_CODE, codes[i], CODE_LEN);
       if (pl.present)
         std::copy(pl.port_values.begin(), pl.port_values.end(), session.begin() + p + SP_PORT_VALUES);
+      // v9: their special-mode picks (sanitised on receipt, PeerData::SanitizePortExtra).
+      if (pl.present && loc.version >= 9)
+      {
+        std::copy(pl.port_extra.begin(), pl.port_extra.end(),
+                  session.begin() + S_EXTRA + i * Gprb::Session::PORT_EXTRA_SIZE);
+      }
     }
   }
   else
@@ -1871,6 +2047,15 @@ void SyncSession(const Core::CPUThreadGuard& guard, const Located& loc)
     const auto bytes = SessionBytes(rules);
     std::copy(bytes.begin(), bytes.end(), session.begin() + S_RULES);
   }
+  // v9: the special rows and stamina type (the rules'), and on the room CSS the MATCH SETUP page's
+  // values and every ready member's picked HP.
+  if (loc.version >= 9)
+  {
+    const auto special = SpecialBytes(rules);
+    std::copy(special.begin(), special.end(), session.begin() + S_SPECIAL + SPX_ROWS);
+    if (in_room)
+      PutRoomSpecial(session, room, lobby);
+  }
   // The next game plays a desynced one again from the state every machine agreed on.
   if (lobby.active && lobby.setup_ready)
     PutRestore(session, lobby.restore);
@@ -1919,7 +2104,7 @@ void OnFrameEnd(const Core::CPUThreadGuard& guard)
     // Out of rollback state (design 5.2): the mailbox (the game reads it only outside matches)
     // and LOCAL (what differs between the machines), which follows it.
     Rollback::RollbackManager::Get().SetMailboxRegion(located->mailbox,
-                                                      MAILBOX_SIZE + LOCAL_SIZE);
+                                                      MAILBOX_SIZE + LocalSize(located->version));
     s_session_written.clear();
     s_local_written.clear();
     std::lock_guard lk(s_mutex);
@@ -1940,7 +2125,7 @@ void OnFrameEnd(const Core::CPUThreadGuard& guard)
   if (netplay || !s_enabled.load())
     return;
   SyncSession(guard, *located);
-  Service(guard, located->mailbox);
+  Service(guard, located->mailbox, located->version);
 }
 
 void Reset()

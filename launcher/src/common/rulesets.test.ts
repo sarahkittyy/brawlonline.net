@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import type { Ruleset } from "./rulesets";
+import type { MatchRules, Ruleset, SpecialRules } from "./rulesets";
 import {
   defaultRuleset,
   hazardsOn,
@@ -48,6 +48,8 @@ describe("rulesets", () => {
       autoLCancel: false,
       inputAssist: false,
       stockControl: false,
+      special: {},
+      staminaType: 1,
     });
     expect(validateRuleset(weekly())).toBeNull();
   });
@@ -192,5 +194,31 @@ describe("rulesets", () => {
     expect(validateRuleset(rules([31, 31]))).toContain("twice");
     expect(validateRuleset(rules([0]))).toContain("range");
     expect(normalizeRuleset(rules([31, 1, 31])).rules.hazardStages).toEqual([1, 31]);
+  });
+
+  it("has P+'s special modes", () => {
+    const rules = (over: Partial<MatchRules>) => weekly({ rules: { ...defaultRuleset().rules, ...over } });
+    // Off (every ruleset from before them): nothing written, so their files and hashes stay the same.
+    const off = JSON.parse(rulesetToJson(weekly())).rules;
+    expect("special" in off || "staminaType" in off).toBe(false);
+    // On: the rows that are on by name, the stamina type with stamina only, read back the same.
+    const sp = rules({ special: { stamina: "stamina", status: "turbo", other: "all-star" }, staminaType: 3 });
+    expect(validateRuleset(sp)).toBeNull();
+    const json = JSON.parse(rulesetToJson(sp)).rules;
+    expect(json.special).toEqual({ stamina: "stamina", status: "turbo", other: "all-star" });
+    expect(json.staminaType).toBe(3);
+    expect(rulesetFromJson(rulesetToJson(sp))).toEqual(sp);
+    // As the server refuses: an unknown row or value, a stamina type outside stamina or past 5, items past 6.
+    expect(validateRuleset(rules({ special: { size: "huge" } }))).toContain("special.size");
+    expect(validateRuleset(rules({ special: { colour: "red" } as SpecialRules }))).toContain("not a special row");
+    expect(validateRuleset(rules({ staminaType: 2 }))).toContain("stamina matches");
+    expect(validateRuleset(rules({ special: { stamina: "stamina" }, staminaType: 6 }))).toContain("staminaType");
+    expect(validateRuleset(rules({ itemFrequency: 6 }))).toBeNull();
+    expect(validateRuleset(rules({ itemFrequency: 7 }))).toContain("itemFrequency");
+    // Normalized as the server: "off" rows left out, the stamina type back to 1 without stamina.
+    const n = normalizeRuleset(rules({ special: { size: "off", body: "metal", stamina: "300" }, staminaType: 4 }));
+    expect([n.rules.special, n.rules.staminaType]).toEqual([{ body: "metal", stamina: "300" }, 1]);
+    expect(rulesetProblem(rules({ special: { stamina: "300" }, staminaType: 4 }))).toBeNull();
+    expect(() => rulesetFromJson(`{"rules": {"special": ["stamina"]}}`)).toThrow("bad value");
   });
 });

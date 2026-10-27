@@ -251,6 +251,41 @@ void SanitizePortValues(std::array<u8, N>& pv)
   pv[0x3B] &= 0x01;
 }
 
+// A player's special-mode picks (ppom.h PortExtra, 0x48 bytes; docs/design/special-rules.md) from
+// the peer: hp (u16 at +0) above MAX_PICKED_HP is none; the All-Star roster (count at +2, then
+// ROSTER_MAX entries of {gmCharacterKind, P+'s colour, the CSS's costume, CSS id} from +8, P+'s
+// All-Star table's bytes) keeps its entries up to the first one the game cannot load (a
+// character, colour, costume or CSS id out of range), its count at most that, and every other
+// byte zero.
+constexpr u16 MAX_PICKED_HP = 999;
+constexpr size_t ROSTER_MAX = 16;
+constexpr size_t PX_HP = 0, PX_ROSTER_COUNT = 2, PX_ROSTER = 8, PX_ENTRY = 4;
+// An entry's colour byte: P+'s colour number, or its AltZ / AltR mark (0x3D / 0x3E).
+bool ValidRosterColour(u8 colour);
+constexpr u8 MAX_CSS_ID = 0x3F;
+template <size_t N>
+void SanitizePortExtra(std::array<u8, N>& px)
+{
+  static_assert(N == PX_ROSTER + ROSTER_MAX * PX_ENTRY);
+  std::array<u8, N> out{};
+  const u16 hp = static_cast<u16>(px[PX_HP] << 8 | px[PX_HP + 1]);
+  if (hp <= MAX_PICKED_HP)
+  {
+    out[PX_HP] = px[PX_HP];
+    out[PX_HP + 1] = px[PX_HP + 1];
+  }
+  size_t count = 0;
+  for (; count < ROSTER_MAX && count < px[PX_ROSTER_COUNT]; ++count)
+  {
+    const u8* e = &px[PX_ROSTER + count * PX_ENTRY];
+    if (!ValidCharKind(e[0]) || !ValidRosterColour(e[1]) || e[2] > MAX_COSTUME || e[3] > MAX_CSS_ID)
+      break;
+    std::copy_n(e, PX_ENTRY, &out[PX_ROSTER + count * PX_ENTRY]);
+  }
+  out[PX_ROSTER_COUNT] = static_cast<u8>(count);
+  px = out;
+}
+
 std::string TruncateName(const std::string& name);
 
 // What two machines' setup keys (GameplaySession.cpp SetupKey, whose layout this follows: keep

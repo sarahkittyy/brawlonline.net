@@ -89,8 +89,8 @@ export const ITEM_SWITCH: readonly ItemSwitchEntry[] = ROWS.map(([name, category
 export const ITEM_SWITCH_ITEMS = ITEM_SWITCH.filter((e) => e.kind === "item");
 export const ITEM_SWITCH_SETTINGS = ITEM_SWITCH.filter((e) => e.kind === "setting");
 
-/** P+'s ITEM SWITCH frequency line (the server takes 0-3; P+ also has VERY HIGH, INTENSE, BOMB RAIN). */
-export const ITEM_FREQUENCIES = ["None", "Low", "Medium", "High"] as const;
+/** P+'s ITEM SWITCH frequency line: Brawl's four, then P+'s VERY HIGH, INTENSE and BOMB RAIN (sudden death's bombs). */
+export const ITEM_FREQUENCIES = ["None", "Low", "Medium", "High", "Very High", "Intense", "Bomb Rain"] as const;
 
 export function itemOn(itemSwitch: readonly number[], bit: number): boolean {
   return ((itemSwitch[7 - (bit >> 3)] ?? 0) & (1 << (bit & 7))) !== 0;

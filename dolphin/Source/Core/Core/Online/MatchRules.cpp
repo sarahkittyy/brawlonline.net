@@ -72,7 +72,7 @@ ParsedRules ParseRules(const picojson::object& resp)
                                           "damageRatio",   "teamAttack", "pause",
                                           "itemFrequency", "itemSwitch", "hazards",
                                           "autoLCancel",   "inputAssist", "stockControl",
-                                          "hazardStages"};
+                                          "hazardStages",  "special",    "staminaType"};
   for (const auto& [key, value] : o)
   {
     if (std::find(std::begin(KNOWN), std::end(KNOWN), key) == std::end(KNOWN))
@@ -101,7 +101,9 @@ ParsedRules ParseRules(const picojson::object& resp)
   const auto stocks = GetByte(o, "stocks", 1, 99, r.stocks, &out.detail);
   const u8 min_time = r.style == MatchRules::STYLE_STOCK ? 0 : 1;
   const auto time = GetByte(o, "timeMinutes", min_time, 99, r.time_minutes, &out.detail);
-  const auto frequency = GetByte(o, "itemFrequency", 0, 3, r.item_frequency, &out.detail);
+  const auto frequency =
+      GetByte(o, "itemFrequency", 0, MAX_ITEM_FREQUENCY, r.item_frequency, &out.detail);
+  const auto stamina_type = GetByte(o, "staminaType", 1, STAMINA_TYPES, r.stamina_type, &out.detail);
   const auto team_attack = GetFlag(o, "teamAttack", r.team_attack, &out.detail);
   if (const auto p = o.find("pause"); p != o.end())
   {
@@ -117,8 +119,12 @@ ParsedRules ParseRules(const picojson::object& resp)
   const auto alc = GetFlag(o, "autoLCancel", r.auto_l_cancel, &out.detail);
   const auto assist = GetFlag(o, "inputAssist", r.input_assist, &out.detail);
   const auto stock_control = GetFlag(o, "stockControl", r.stock_control, &out.detail);
-  if (!stocks || !time || !frequency || !team_attack || !hazards || !alc || !assist || !stock_control)
+  if (!stocks || !time || !frequency || !team_attack || !hazards || !alc || !assist ||
+      !stock_control || !stamina_type)
+  {
     return fail(INVALID_TEXT);
+  }
+  r.stamina_type = *stamina_type;
   r.stocks = *stocks;
   r.time_minutes = *time;
   r.item_frequency = *frequency;
@@ -185,8 +191,56 @@ ParsedRules ParseRules(const picojson::object& resp)
       r.hazard_stages.push_back(*id);
     }
   }
+  if (const auto sp = o.find("special"); sp != o.end())
+  {
+    if (!sp->second.is<picojson::object>())
+    {
+      out.detail = "special is not an object";
+      return fail(INVALID_TEXT);
+    }
+    for (const auto& [key, value] : sp->second.get<picojson::object>())
+    {
+      const auto row = std::find_if(std::begin(SPECIAL_ROWS), std::end(SPECIAL_ROWS),
+                                    [&](const SpecialRow& s) { return key == s.key; });
+      if (row == std::end(SPECIAL_ROWS))
+      {
+        out.detail = fmt::format("unknown special rule '{}'", key.substr(0, 40));
+        return fail(UNKNOWN_TEXT);
+      }
+      const std::string v = value.is<std::string>() ? value.get<std::string>() : "";
+      const size_t i = static_cast<size_t>(row - std::begin(SPECIAL_ROWS));
+      if (v == "off")
+        r.special[i] = 0;
+      else if (v == row->values[0])
+        r.special[i] = 1;
+      else if (v == row->values[1])
+        r.special[i] = 2;
+      else
+      {
+        // A value this build does not know is a newer server's: refused, as an unknown key.
+        out.detail = fmt::format("special {} is '{}'", key, v.substr(0, 40));
+        return fail(value.is<std::string>() ? UNKNOWN_TEXT : INVALID_TEXT);
+      }
+    }
+  }
+  if (r.stamina_type != 1 && r.special[0] != 2)
+  {
+    out.detail = "staminaType without stamina";
+    return fail(INVALID_TEXT);
+  }
   out.rules = r;
   return out;
+}
+
+std::array<u8, SPECIAL_RULES_SIZE> SpecialBytes(const std::optional<MatchRules>& rules)
+{
+  std::array<u8, SPECIAL_RULES_SIZE> b{};
+  if (!rules)
+    return b;
+  for (size_t i = 0; i < rules->special.size(); ++i)
+    b[i] = rules->special[i];
+  b[8] = rules->stamina_type;
+  return b;
 }
 
 std::array<u8, RULES_SIZE> SessionBytes(const std::optional<MatchRules>& rules)
@@ -214,12 +268,13 @@ std::array<u8, RULES_SIZE> SessionBytes(const std::optional<MatchRules>& rules)
   return b;
 }
 
-std::optional<MatchRules> FromSessionBytes(const std::array<u8, RULES_SIZE>& b)
+std::optional<MatchRules> FromSessionBytes(const std::array<u8, RULES_SIZE>& b,
+                                           const std::array<u8, SPECIAL_RULES_SIZE>* special)
 {
   if (b[RU_VALID] != 1 || b[RU_STYLE] > MatchRules::STYLE_COIN || b[RU_STOCKS] < 1 ||
       b[RU_STOCKS] > 99 || b[RU_TIME] > 99 ||
       (b[RU_STYLE] != MatchRules::STYLE_STOCK && b[RU_TIME] < 1) || b[RU_DAMAGE] < 5 ||
-      b[RU_DAMAGE] > 20 || b[RU_ITEM_FREQUENCY] > 3)
+      b[RU_DAMAGE] > 20 || b[RU_ITEM_FREQUENCY] > MAX_ITEM_FREQUENCY)
   {
     return std::nullopt;
   }
@@ -251,6 +306,21 @@ std::optional<MatchRules> FromSessionBytes(const std::array<u8, RULES_SIZE>& b)
       return std::nullopt;
     r.hazard_stages.push_back(id);
   }
+  if (special)
+  {
+    const auto& sp = *special;
+    for (size_t i = 0; i < r.special.size(); ++i)
+    {
+      if (sp[i] > 2)
+        return std::nullopt;
+      r.special[i] = sp[i];
+    }
+    // The stamina type means something in a stamina match only (as the server normalizes it).
+    const u8 type = sp[8] == 0 ? 1 : sp[8];
+    if (type > STAMINA_TYPES)
+      return std::nullopt;
+    r.stamina_type = r.special[0] == 2 ? type : 1;
+  }
   return r;
 }
 
@@ -276,6 +346,16 @@ picojson::object ToJson(const MatchRules& r)
   // Only when on, as the server writes it (an older server refuses a key it does not know).
   if (r.stock_control)
     o["stockControl"] = picojson::value(true);
+  picojson::object special;
+  for (size_t i = 0; i < r.special.size(); ++i)
+  {
+    if (r.special[i] == 1 || r.special[i] == 2)
+      special[SPECIAL_ROWS[i].key] = picojson::value(SPECIAL_ROWS[i].values[r.special[i] - 1]);
+  }
+  if (!special.empty())
+    o["special"] = picojson::value(special);
+  if (r.stamina_type != 1)
+    o["staminaType"] = picojson::value(static_cast<double>(r.stamina_type));
   if (!r.hazard_stages.empty())
   {
     picojson::array hs;

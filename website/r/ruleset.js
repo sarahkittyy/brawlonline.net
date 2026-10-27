@@ -75,7 +75,12 @@
     const time = rules.timeMinutes === 0 ? "No limit" : `${rules.timeMinutes} min`;
     const rows = [["Style", style]];
     if (rules.style === "stock") rows.push(["Stocks", String(rules.stocks)]);
-    if (rules.style === "stock" && rules.stockControl) rows.push(["Stock control", "On: each player picks their stocks"]);
+    // (as the game plays it: stock matches, or any style with regen's frame control; not with stamina)
+    const special = rules.special || {};
+    const regen = special.attack === "regen";
+    if (rules.stockControl && (rules.style === "stock" || regen) && special.stamina !== "stamina") {
+      rows.push(regen ? ["Frame control", "On: each player picks theirs"] : ["Stock control", "On: each player picks their stocks"]);
+    }
     rows.push(
       ["Time limit", time],
       ["Damage ratio", Number(rules.damageRatio).toFixed(1)],
@@ -93,13 +98,17 @@
     const box = el("div", "group");
     box.appendChild(el("h2", null, "Items"));
     const on = ITEMS.filter((_, bit) => itemOn(rules.itemSwitch, bit));
-    const freq = ["None", "Low", "Medium", "High"][rules.itemFrequency] || String(rules.itemFrequency);
+    const freq =
+      ["None", "Low", "Medium", "High", "Very High", "Intense", "Bomb Rain"][rules.itemFrequency] ||
+      String(rules.itemFrequency);
     const dl = el("dl");
     const row = (k, v) => {
       dl.appendChild(el("dt", null, k));
       dl.appendChild(el("dd", null, v));
     };
-    if (rules.itemFrequency === 0 || on.length === 0) {
+    if (rules.itemFrequency === 6) {
+      row("Items", "Bomb Rain (sudden death's Bob-ombs)");
+    } else if (rules.itemFrequency === 0 || on.length === 0) {
       row("Items", "None");
     } else {
       row("Items", on.length === ITEMS.length ? "All items" : `${on.length} of ${ITEMS.length}`);
@@ -114,6 +123,28 @@
       box.appendChild(ul);
     }
     return box;
+  }
+
+  // P+'s Special Versus box (docs/design/special-rules.md): the rows that are on.
+  const SPECIAL_ROWS = [
+    ["stamina", "Stamina", { 300: "300%", stamina: "Stamina (each player picks their HP)" }],
+    ["size", "Size", { mega: "Mega", mini: "Mini" }],
+    ["attack", "Attack", { element: "Random Element", regen: "Regen" }],
+    ["body", "Body", { metal: "Metal", clear: "Clear" }],
+    ["status", "Status", { turbo: "Turbo Mode", bunny: "Bunny" }],
+    ["gravity", "Gravity", { light: "Light", heavy: "Heavy" }],
+    ["speed", "Speed", { wild: "Wild", fast: "Fast" }],
+    ["other", "Other", { meter: "Meter", "all-star": "All-Star (a character per stock)" }],
+  ];
+
+  function specialRows(rules) {
+    const special = rules.special || {};
+    const rows = [];
+    for (const [key, label, values] of SPECIAL_ROWS) {
+      if (special[key] && special[key] !== "off") rows.push([label, values[special[key]] || special[key]]);
+    }
+    if (special.stamina === "stamina") rows.push(["Stamina type", String(rules.staminaType || 1)]);
+    return rows;
   }
 
   function formatRows(r) {
@@ -195,6 +226,8 @@
     const grid = el("div", "grid");
     grid.appendChild(table(null, formatRows(r)));
     grid.appendChild(table("Rules", rulesRows(r.rules)));
+    const special = specialRows(r.rules);
+    if (special.length > 0) grid.appendChild(table("Special", special));
     grid.appendChild(itemsGroup(r.rules));
     grid.appendChild(stageList(r.bestOf > 0 || r.stageChoice === "strike" ? "Starters" : "Stages", r.stages.starters));
     if (r.stages.counterpicks.length > 0 || r.bestOf > 0) {

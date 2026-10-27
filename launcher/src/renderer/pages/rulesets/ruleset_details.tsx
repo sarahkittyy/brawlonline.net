@@ -1,10 +1,11 @@
 import type { Ruleset } from "@common/rulesets";
-import { picksUsed, stageName } from "@common/rulesets";
+import { picksUsed, SPECIAL_ROWS, specialOn, stageName } from "@common/rulesets";
 import Typography from "@mui/material/Typography";
 
 import { ItemsSection } from "./items_section";
 import { RulesetDetailsMessages as Messages } from "./rulesets_page.messages";
 import styles from "./rulesets_page.module.css";
+import { SpecialMessages } from "./special_section.messages";
 
 const onOff = (b: boolean) => (b ? Messages.on() : Messages.off());
 
@@ -39,9 +40,11 @@ function ruleRows(r: Ruleset): [string, string][] {
   const rows: [string, string][] = [[Messages.style(), style]];
   if (m.style === "stock") {
     rows.push([Messages.stocks(), String(m.stocks)]);
-    if (m.stockControl) {
-      rows.push([Messages.stockControl(), Messages.stockControlOn()]);
-    }
+  }
+  // (as the game plays it: stock matches, or any style with regen's frame control; not with stamina)
+  const regen = m.special?.attack === "regen";
+  if (m.stockControl && (m.style === "stock" || regen) && m.special?.stamina !== "stamina") {
+    rows.push([regen ? Messages.frameControl() : Messages.stockControl(), Messages.stockControlOn()]);
   }
   rows.push(
     [Messages.timeLimit(), m.timeMinutes === 0 ? Messages.noLimit() : Messages.minutes(m.timeMinutes)],
@@ -57,6 +60,19 @@ function ruleRows(r: Ruleset): [string, string][] {
     [Messages.autoLCancel(), onOff(m.autoLCancel)],
     [Messages.inputAssist(), onOff(m.inputAssist)],
   );
+  return rows;
+}
+
+/** The Special Versus rows that are on (none: no table). */
+function specialRows(r: Ruleset): [string, string][] {
+  const on = specialOn(r.rules.special);
+  const rows: [string, string][] = SPECIAL_ROWS.filter((row) => on[row.key]).map((row) => [
+    SpecialMessages.row(row.key),
+    SpecialMessages.value(on[row.key] ?? ""),
+  ]);
+  if (on.stamina === "stamina") {
+    rows.push([Messages.staminaType(), String(r.rules.staminaType ?? 1)]);
+  }
   return rows;
 }
 
@@ -101,6 +117,7 @@ export const RulesetDetails = ({ ruleset }: { ruleset: Ruleset }) => {
     <div className={styles.editorFields} data-testid="ruleset-details">
       <Table rows={formatRows(r)} />
       <Table title={Messages.rules()} rows={ruleRows(r)} />
+      {specialRows(r).length > 0 && <Table title={Messages.special()} rows={specialRows(r)} />}
       <ItemsSection frequency={r.rules.itemFrequency} itemSwitch={r.rules.itemSwitch} />
       <Stages
         title={r.bestOf > 0 || r.stageChoice === "strike" ? Messages.starters() : Messages.stageList()}

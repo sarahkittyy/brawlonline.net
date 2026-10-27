@@ -34,6 +34,7 @@
 #include "ppom.h"
 #include "stage_legal.h"
 #include "training_room.h"
+#include "all_star.h"
 
 extern "C" {
     extern u8 g_onlineCss;
@@ -155,6 +156,11 @@ namespace OnlineMatch {
 
     typedef void (*VsSetupFn)(void* seq, int stageKind);
     static const u32 VS_SETUP = 0x806DCE94;    // sqVsMelee's match setup (sora_scene)
+    // sqSpMelee's (Special Versus): the Versus setup plus the special rows (the set rule's
+    // +0x18..+0x1F) made into the match, with P+'s hooks for its special modes inside it (stamina,
+    // regen, random element, All-Star). Its first argument is not read either.
+    static const u32 SP_SETUP = 0x806DEE98;
+    static const u32 PLAYER_HP = 0x24;         // gmPlayerInitData: hitPointMax (stamina), u16; the CSS's default 150
 
     typedef void (*PlaySEFn)(void*, int, int, int, int, int);
     static void playSE(int id)
@@ -450,7 +456,20 @@ namespace OnlineMatch {
         // (Team attack is on in P+'s set rule; it only matters in a team battle.)
         OnlineMenu::applyRules(se.stageKind);
         slotColours(se);
-        ((VsSetupFn)VS_SETUP)(seq, se.stageKind);
+        // P+'s special modes (docs/design/special-rules.md): Brawl's Special setup. In a stamina
+        // match each player's HP is their pick on their panel (Session.extra, carried by their
+        // lock-in; none: the CSS's default, the template's 150), and in All-Star each player's
+        // roster goes into P+'s tables, which its setup hook reads.
+        const bool special = OnlineMenu::specialOn();
+        if (special) {
+            for (int i = 0; i < se.numPlayers && i < 4; i++) {
+                if (!se.players[i].present) continue;
+                u16 hp = se.extra[i].hp;
+                if (hp >= 1 && hp <= PPOM::MAX_PICKED_HP) *(u16*)(sel + SEL_PLAYERS + i * PLAYER_SIZE + PLAYER_HP) = hp;
+            }
+            AllStar::writeTables(se);
+        }
+        ((VsSetupFn)(special ? SP_SETUP : VS_SETUP))(seq, se.stageKind);
         // The match's controller numbers follow the in-game ports on both machines: the pad + 1
         // (gmPlayerInitData +0x07: GameCube 1-4, Wii Remotes 5-8).
         for (int i = 0; i < se.numPlayers && i < 4; i++) {
@@ -474,15 +493,15 @@ namespace OnlineMatch {
             }
             for (; n <= PPOM::TAG_CHARS; n++) name[n] = 0;
         }
-        // Stock control (the rules' stockControl, in a stock match: set rule +5 = 2, applyRules):
+        // Stock control (the rules' stockControl, in a stock match or with regen as FRAME CONTROL:
+        // set rule +5 = 2, applyRules):
         // each player's count, picked on their panel's STOCKS box and carried by their lock-in's
         // port values, into their match player's handicap (+0x26, u16, in tenths as the CSS keeps
         // it: 10 = 1 stock). P+'s "Handicap = Stock Count" (Handicap.asm, hook 0x8094690C) makes
         // that the player's stocks when the fighter is made; 0 (none picked) leaves the rules'.
         // Written for every present player whatever the setup copied, so every machine has the
         // same (Dolphin's setup key compares it under stock control).
-        const PPOM::Rules& ru = se.rules;
-        const bool stockControl = ru.valid && ru.stockControl && ru.style == PPOM::STYLE_STOCK;
+        const bool stockControl = OnlineMenu::stockControlOn();
         for (int i = 0; i < se.numPlayers && i < 4 && stockControl; i++) {
             if (!se.players[i].present) continue;
             u8 n = se.players[i].pv.stocks;
