@@ -160,15 +160,7 @@ OGLGfx::OGLGfx(std::unique_ptr<GLContext> main_gl_context, float backbuffer_scal
       glDebugMessageControlARB(GL_DONT_CARE, GL_DONT_CARE, GL_DONT_CARE, 0, nullptr, true);
       glDebugMessageCallbackARB(ErrorCallback, nullptr);
     }
-    if (Common::Log::LogManager::GetInstance()->IsEnabled(Common::Log::LogType::HOST_GPU,
-                                                          Common::Log::LogLevel::LERROR))
-    {
-      glEnable(GL_DEBUG_OUTPUT);
-    }
-    else
-    {
-      glDisable(GL_DEBUG_OUTPUT);
-    }
+    UpdateDebugOutput();
   }
 
   // Handle VSync on/off
@@ -415,20 +407,30 @@ bool OGLGfx::BindBackbuffer(const ClearColor& clear_color)
   return true;
 }
 
+// Only when the log setting changed: Mesa calls the driver's set_debug_callback on every
+// glEnable/glDisable(GL_DEBUG_OUTPUT), even an unchanged one, and radeonsi's waits there for
+// every shader its compiler threads have queued (si_set_debug_callback, util_queue_finish). Done
+// each present, the GPU thread waited on the background shader compiles every frame, and on one
+// player's Linux PC (RX 9070 XT, Mesa 25.2.8, bug report #170) it never came back from that wait.
+void OGLGfx::UpdateDebugOutput()
+{
+  const int enabled = Common::Log::LogManager::GetInstance()->IsEnabled(
+                          Common::Log::LogType::HOST_GPU, Common::Log::LogLevel::LERROR) ?
+                          1 :
+                          0;
+  if (enabled == m_debug_output)
+    return;
+  m_debug_output = enabled;
+  if (enabled)
+    glEnable(GL_DEBUG_OUTPUT);
+  else
+    glDisable(GL_DEBUG_OUTPUT);
+}
+
 void OGLGfx::PresentBackbuffer()
 {
   if (g_ogl_config.bSupportsDebug)
-  {
-    if (Common::Log::LogManager::GetInstance()->IsEnabled(Common::Log::LogType::HOST_GPU,
-                                                          Common::Log::LogLevel::LERROR))
-    {
-      glEnable(GL_DEBUG_OUTPUT);
-    }
-    else
-    {
-      glDisable(GL_DEBUG_OUTPUT);
-    }
-  }
+    UpdateDebugOutput();
 
   // Swap the back and front buffers, presenting the image.
   m_main_gl_context->Swap();
