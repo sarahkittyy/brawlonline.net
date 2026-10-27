@@ -178,3 +178,75 @@ def test_sit_out_and_the_placed_coin(game: Game) -> None:
     g.wait(40)
     assert me.sitting_out
     g.shot("07-guest-sits-out")
+
+
+L_STATE, L_REMOTE_READY = 0x04, 0x06       # LOCAL: the session's state (2 connected), remoteReady
+PICKS_STAGE = 0x0C + 0x36                  # SESSION player 0's picksStage
+PICK_CANCELLED = 0xFFFD                    # OnlineMatch: the stage select left without a pick
+STAGE_PENDING = 0xFFFE
+
+
+def test_own_game_before_its_match(game: Game) -> None:
+    """This player's own room game, its session connected, before its match (the room says in
+    game until the game is over): SIT OUT is refused and keeps the lock-in, and a lock-in lost
+    there (the loser's stage select left without a pick) comes back with START (board card 243,
+    prod 2026-10-27 room RHKR: the loser came back unlocked, START did nothing, and the room
+    waited until a player left). Dolphin's half (the room and LOCAL's session state) is roomsim's
+    and this test's."""
+    g = game
+    g.c.game_bridge_config(enabled=False)
+    create_room(g)
+    sim = g.sim
+    me = sim.room.members[0]
+    sim.add_player(1, "alice")
+    g.wait(30)
+    b = sim.b
+    # This player picks the stage (the last game's loser): START locks in STAGE_PENDING.
+    g.c.write_mem(b.session + PICKS_STAGE, b"\x01")
+    g.wait(10)
+    if css_area(g).placed:
+        g.tap("B")
+        g.wait(20)
+    g.hand_to(*FOX, tol=0.6)
+    g.wait(5)
+    g.tap("START")
+    g.wait(30)
+    g.tap("START")
+    g.wait(30)
+    assert me.ready and lock(g)["ready"], lock(g)
+    assert lock(g)["stage_pick"] == STAGE_PENDING, lock(g)
+
+    # The room's game: in game, this player's session connected (the others not locked in yet).
+    sim.room.status = 2
+    g.c.write_mem(b.local + L_STATE, b"\x02")
+    g.wait(30)
+    g.shot("10-own-game-locked")
+
+    # SIT OUT (and A on the own plate): refused, the lock-in stays.
+    n = len(sit_ops(g))
+    g.hand_to(*button_centre(g, "g_sitOutButton"), tol=0.4)
+    g.wait(5)
+    g.tap("A")
+    g.wait(40)
+    g.hand_to(PANEL_X[0] + 1.5, PLATE_Y, tol=0.6)
+    g.wait(5)
+    g.tap("A")
+    g.wait(40)
+    g.shot("11-own-game-sit-out-refused")
+    assert len(sit_ops(g)) == n, sit_ops(g)[n:]
+    assert lock(g)["ready"] and lock(g)["stage_pick"] == STAGE_PENDING, lock(g)
+
+    # The stage select left without a pick: back on the CSS unlocked ...
+    g.c.write_mem(ppom_sym(g, "s_pickedStage"), struct.pack(">H", PICK_CANCELLED))
+    g.wait(30)
+    g.shot("12-own-game-pick-cancelled")
+    assert not lock(g)["ready"], lock(g)
+    # ... and START locks in again for the session (STAGE_PENDING: the stage select once the
+    # others are locked in).
+    g.hand_to(*FOX, tol=0.6)
+    g.wait(5)
+    g.tap("START")
+    g.wait(30)
+    g.shot("13-own-game-locked-again")
+    assert lock(g)["ready"] and lock(g)["stage_pick"] == STAGE_PENDING, lock(g)
+    assert len(sit_ops(g)) == n
