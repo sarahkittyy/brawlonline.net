@@ -1405,4 +1405,109 @@ def test_team_room_costumes_on_a_joiners_panel(game: Game) -> None:
     g.wait(40)
     assert sim.room.members[3].team == (team0 + 1) % 3, sim.room.members[3]
     assert g.u32(g.area(0) + AREA_COSTUME) == 3
-    g.shot("22-teams-p4-A-team")
+    # every card in its team's colour (with the slot colour lines arranged for a joiner at P4, the
+    # red team's P1 card was drawn green and the green team's red)
+    team_colour = ["red", "blue", "green"]
+    shown = plate_colours(g, "22-teams-p4-A-team")
+    assert shown == [team_colour[m.team] for m in sim.room.members], (shown, sim.room.members)
+
+
+
+SLOT_COLOUR_LINES = 0x804E02F4      # P+'s slot colour lines (online_menu.cpp): value +8, default +0x10
+PLAYER_KIND_BUTTON = 0x1C           # the hand's +0xAC on the local card's player box
+RED, BLUE, YELLOW, GREEN = 0, 1, 2, 3   # P+'s slot colours 0-3, the ports' own
+
+
+def slot_lines(g: Game) -> list[int]:
+    return [g.u32(g.u32(SLOT_COLOUR_LINES + 4 * p) + 8) for p in range(4)]
+
+
+def plate_colours(g: Game, name: str) -> list[str]:
+    """Each slot's card colour on a screenshot: the name plate's left end, left of the name
+    (1/1159 of the height a unit: x 330 + 375 * slot, y 1035-1075 on a 2000x1159 shot)."""
+    Image = pytest.importorskip("PIL.Image")
+    g.shot(name)
+    im = Image.open(g.art / f"{name}.png").convert("RGB")
+    k = im.size[1] / 1159.0
+    out = []
+    for slot in range(4):
+        x0 = 335 + 375 * slot
+        box = im.crop((int(x0 * k), int(1040 * k), int((x0 + 30) * k), int(1070 * k)))
+        px = list(box.getdata())
+        r, gr, b = (sum(p[i] for p in px) / len(px) for i in range(3))
+        if r > 1.6 * b and gr > 1.6 * b and abs(r - gr) < 0.35 * max(r, gr):
+            out.append("yellow")
+        elif r > 1.4 * gr and r > 1.4 * b:
+            out.append("red")
+        elif b > 1.3 * r and b > 1.1 * gr:
+            out.append("blue")
+        elif gr > 1.3 * r and gr > 1.3 * b:
+            out.append("green")
+        else:
+            out.append(f"? {int(r)},{int(gr)},{int(b)}")
+    return out
+
+
+def test_colour_on_a_joiners_panel_at_p3(game: Game) -> None:
+    """Sarah's board (2026-10-26): "pressing R on my own port 3 portrait in a room changes the port 1
+    visual". A room's CSS shows the local card (area 0) at the player's slot, and P+'s L / R / Z
+    step the line of the area under the hand, P1's, while the cards were drawn in their slots'
+    lines: joined at P3, R recoloured P1's card, and then the player's own. Now each card is drawn
+    in its own area's line and the lines hold the slots' colours. Joined at P3 of a free-for-all
+    room (P1 and P2 taken): the card is yellow (no pick), R steps it to green, L twice to blue (by
+    yellow), Z back to its own yellow; P1's card stays red and P2's blue throughout, and the plate
+    keeps the player's name. Locked in with green, the lock-in carries it (3 + 1)."""
+    g = game
+    c = g.c
+    c.game_bridge_config(enabled=False)
+    g.steps("until muMenuMain 3000", "wait 60")
+    g.sim = sim = roomsim.RoomSim(c)
+    g.wait(60)
+    g.tap("A")
+    g.wait(60)
+    friends_to(g, 2)
+    g.tap("A")
+    sim.service(600, until=lambda: g.scene() == "scSelctCharacter")
+    g.wait(60)
+    g.hand_to(*FOX, tol=0.6)
+    g.tap("A")
+    g.wait(20)
+    sim.joinable["KFQB"] = roomsim.Room(code="KFQB", host=0, open=[True, True, True, True],
+                                        members=[roomsim.Member("carol", char=GMKIND_MARIO),
+                                                 roomsim.Member("bob"), None, None])
+    g.tap("START")
+    g.wait(40)
+    keypad_type(g, "KFQB")
+    g.tap("START")
+    g.wait(90)
+    assert sim.room is not None and sim.me() == 2
+    task = g.u32(g.u32(g.u32(0x805A0060) + 4) + 0x400)
+    hand = g.u32(g.u32(task + 0x44) + 0x1A8)
+
+    def press(btn: str, name: str) -> tuple[list[int], list[str]]:
+        g.hand_to(-26.0 + 16.0 * 2, -20.0, tol=0.6)   # our card's player box, at P3
+        g.wait(10)
+        assert g.u32(hand + 0xAC) == PLAYER_KIND_BUTTON, (hex(g.u32(hand + 0xAC)), g.hand())
+        pad = {"R": PadInput(("R",), r=255, hold=4), "L": PadInput(("L",), l=255, hold=4),
+               "Z": PadInput(("Z",), hold=4)}[btn]
+        c.pad_script(0, [pad, PadInput(hold=8)])
+        g.wait(40)
+        g.hand_to(*FOX, tol=0.6)   # (off the plate, for the shot)
+        g.wait(10)
+        return slot_lines(g), plate_colours(g, name)
+
+    g.hand_to(*FOX, tol=0.6)
+    lines0, shown = slot_lines(g), plate_colours(g, "30-p3-colour-joined")
+    assert lines0 == [YELLOW, BLUE, RED, GREEN], lines0
+    assert shown == ["red", "blue", "yellow", "green"], shown
+    steps = [("R", GREEN, "green"), ("L", YELLOW, "yellow"), ("L", BLUE, "blue"), ("Z", YELLOW, "yellow"),
+             ("R", GREEN, "green")]
+    for k, (btn, line, colour) in enumerate(steps):
+        lines, shown = press(btn, f"31-p3-colour-{k + 1}-{btn}")
+        assert lines == [line, BLUE, RED, GREEN], (btn, lines)
+        assert shown == ["red", "blue", colour, "green"], (btn, shown)
+    # the lock-in carries green
+    g.tap("START")
+    g.wait(60)
+    assert ppom.read_local(c, sim.b)["own"]["slot_colour"] == GREEN + 1, ppom.read_local(c, sim.b)["own"]
+    g.shot("32-p3-colour-locked")

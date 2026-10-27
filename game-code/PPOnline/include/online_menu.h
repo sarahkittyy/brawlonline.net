@@ -16,6 +16,9 @@ namespace OnlineMenu {
     void restoreCss();                  // before the CSS starts again: the remembered coin
     // P+'s four slot colour lines (0-12; -1: the port's own), the match's from SESSION
     void setSlotColours(const s8* colour);
+    // The local panel's colour as drawn (P1's line) and the L / R / Z presses on its player box,
+    // which change when P+ steps or resets the colour; -1 without P+'s Code Menu.
+    int localColourKey();
     bool selectableCharKind(int kind);  // a gmCharacterKind P+'s CSS can lock in
     const char* cssLine(MuMsg* msg, u32 window, u32 line, const void* msbin, u32 caller);
     // Ranked's game setup step in Ranked (NULL otherwise; inactive while not connected), and
@@ -72,6 +75,7 @@ namespace RoomCss {
     int plateUnderHand();
     bool handOverMyFlag();               // the local hand is over the local panel's team flag
     bool handOnMyPlayerBox();            // on the local card's player box (P+'s L / R colour)
+    bool teamsShown();                   // the panels are in the team battle look
     // The local panel's costume set by the plugin, its picture drawn again: the room's TEAMS in the
     // teams' costumes gives the player their team's (OnlineMenu's tickRoom). Nothing without a
     // character on the panel (none, Random).
