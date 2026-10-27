@@ -118,6 +118,16 @@ class AuthClient implements AuthService {
     const updated = await window.electron.accounts.rename(user.uid, displayName);
     this._multiAccountService.setUserRecord(updated);
   }
+
+  async changeEmail(email: string): Promise<void> {
+    const user = this._multiAccountService.getActiveUser();
+    Preconditions.checkExists(user, "User is not logged in.");
+
+    const updated = await window.electron.accounts.changeEmail(user.uid, email.trim());
+    // The server sent the new address its verification email.
+    this._verificationSentAt.set(user.uid, Date.now());
+    this._multiAccountService.setUserRecord(updated);
+  }
 }
 
 export default function createAuthClient(): AuthService {

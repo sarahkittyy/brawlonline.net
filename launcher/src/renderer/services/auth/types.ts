@@ -33,6 +33,8 @@ export interface AuthService {
   resetPassword(email: string): Promise<void>;
   signUp(args: SignUpArgs): Promise<AuthUser | undefined>;
   updateDisplayName(displayName: string): Promise<void>;
+  /** A new email for the active account while its own is not verified; the server mails the new one a link. */
+  changeEmail(email: string): Promise<void>;
   // Multi-account support
   getMultiAccountService(): MultiAccountService;
 }

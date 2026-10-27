@@ -303,6 +303,52 @@ pub async fn resend_verification(State(state): State<AppState>, headers: HeaderM
 }
 
 #[derive(Debug, Deserialize)]
+pub struct ChangeEmailReq {
+    pub email: String,
+}
+
+/// "Wrong email? Change email" on the launcher's verify step (bug #163: a typo at
+/// sign-up left only Skip setup and a new account). Only while the email is not
+/// verified: a verified address is not changed here. Sends the verification email to
+/// the new address, with the resend's limits (one per minute per account).
+pub async fn change_email(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<ChangeEmailReq>,
+) -> ApiResult<Json<Me>> {
+    let user = current_user(&state, &headers).await?;
+    rate_limit(&state, format!("change-email:{}", user.uid))?;
+    let already_verified = || ApiError::conflict("already_verified", "Your email is already verified");
+    if user.email_verified() {
+        return Err(already_verified());
+    }
+    let email = store::normalize_email(&req.email).map_err(|m| ApiError::bad_request("invalid_email", m))?;
+    if email == user.email {
+        return Err(ApiError::bad_request("same_email", "That is already your account's email"));
+    }
+    if store::user_by_email(&state.pool, &email).await?.is_some() {
+        return Err(ApiError::conflict("email_taken", CreateUserError::EmailTaken.to_string()));
+    }
+    let verify = state.cfg.require_email_verification;
+    if verify {
+        mail_to_limit(&state, format!("verify:{}", user.uid))?;
+        verify_mail_budget(&state)?;
+    }
+    let user = store::change_unverified_email(&state.pool, user.uid, &email)
+        .await
+        .map_err(|e| match e {
+            CreateUserError::EmailTaken => ApiError::conflict("email_taken", e.to_string()),
+            CreateUserError::Db(e) => ApiError::internal(e),
+        })?
+        .ok_or_else(already_verified)?;
+    tracing::info!(uid = %user.uid, "unverified email changed");
+    if verify {
+        send_verification(&state, &user).await?;
+    }
+    Ok(Json(me(&state, &user)))
+}
+
+#[derive(Debug, Deserialize)]
 pub struct TokenReq {
     pub token: String,
 }

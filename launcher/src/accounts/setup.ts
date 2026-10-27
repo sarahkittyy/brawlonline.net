@@ -8,6 +8,7 @@ import { AccountsHttpClient } from "./client";
 import { resolveServiceUrls } from "./config";
 import {
   ipc_accountsBrowseRulesets,
+  ipc_accountsChangeEmail,
   ipc_accountsCreateRulesetDraft,
   ipc_accountsDeleteRulesetDraft,
   ipc_accountsHasSession,
@@ -51,6 +52,7 @@ export default function setupAccountsIpc() {
   ipc_accountsHasSession.main!.handle(async ({ uid }) => await manager.hasSession(uid));
   ipc_accountsMe.main!.handle(async ({ uid }) => await manager.me(uid));
   ipc_accountsResendVerification.main!.handle(async ({ uid }) => await manager.resendVerification(uid));
+  ipc_accountsChangeEmail.main!.handle(async ({ uid, email }) => await manager.changeEmail(uid, email));
   ipc_accountsRequestPasswordReset.main!.handle(async ({ email }) => manager.requestPasswordReset(email));
   ipc_accountsInitNetplay.main!.handle(async ({ uid, codeStart }) => manager.initNetplay(uid, codeStart));
   ipc_accountsRename.main!.handle(async ({ uid, displayName }) => await manager.rename(uid, displayName));

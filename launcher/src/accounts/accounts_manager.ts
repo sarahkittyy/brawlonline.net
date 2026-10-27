@@ -73,6 +73,10 @@ export class AccountsManager {
     });
   }
 
+  changeEmail(uid: string, email: string): Promise<AccountsResult<AccountsMe>> {
+    return this._withSession(uid, (token) => this.client.changeEmail(token, email));
+  }
+
   requestPasswordReset(email: string): Promise<AccountsResult<null>> {
     return wrap(async () => {
       await this.client.requestPasswordReset(email);

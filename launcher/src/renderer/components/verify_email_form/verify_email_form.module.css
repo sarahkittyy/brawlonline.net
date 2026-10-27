@@ -22,6 +22,17 @@
   color: var(--accent-secondary);
 }
 
+.changeEmailForm {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-left: 10px;
+}
+
+.changeEmailForm > :first-child {
+  width: 320px;
+}
+
 .instructions {
   margin-top: 25px;
   margin-bottom: 10px;

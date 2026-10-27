@@ -78,6 +78,11 @@ export class AccountsHttpClient {
     await this._request("POST", "/v1/auth/verify-email/resend", { token });
   }
 
+  /** `POST /v1/auth/change-email`: a new email for an account that has not verified its own. */
+  changeEmail(token: string, email: string): Promise<AccountsMe> {
+    return this._request("POST", "/v1/auth/change-email", { token, body: { email } });
+  }
+
   async requestPasswordReset(email: string): Promise<void> {
     await this._request("POST", "/v1/auth/password-reset/request", { body: { email } });
   }

@@ -103,6 +103,7 @@ JSON in and out. Errors are `{"error": {"code": "...", "message": "..."}}`. Auth
 | `POST /v1/auth/password-reset/request {email}` | Firebase reset | 202 whether or not the account exists (429 only from the per-IP and per-address limits). Emails a 1-hour link. |
 | `POST /v1/auth/password-reset/confirm {token, newPassword}`, `GET/POST /reset-password` | | The page is the emailed link's form. Rotates the play key and ends all sessions. |
 | `POST /v1/auth/change-password {currentPassword, newPassword}` | | Same rotation; returns a new session. |
+| `POST /v1/auth/change-email {email}` | | The launcher's "Wrong email? Change email" (a typo at sign-up), only while the email is not verified (else 409 `already_verified`). Voids the verification and reset links mailed to the old address, and emails the new one a verification link (the resend's limits). Returns the user. 409 `email_taken`, 400 `same_email`. |
 | `GET /v1/me` | `getUser` | Includes `playKey` and `userJson` once the email is verified and a code is set. |
 | `POST /v1/me/netplay {codeStart}` | `userInitNetplay` | Assigns the connect code (once). A code start the slur filter flags gets a kind one (below). |
 | `POST /v1/me/rename {displayName}` | `userRename` | A name the slur filter flags is stored as a kind one (below). 403 `rename_locked` while `admin user lock-name` holds the account. |
@@ -134,10 +135,10 @@ Rules:
   | Login | IP, and email | 5 per minute, 20 per hour (a successful login clears the email's count) |
   | Sign-up attempts, valid or not | IP | 5 per minute, 20 per hour |
   | Accounts created (each sends one verification email) | IP | 3 per hour, 10 per day. A taken email is refused (409) before this count |
-  | Verification email resends | account | 1 per minute, 3 per hour, 5 per day |
+  | Verification email resends and email changes | account | 1 per minute, 3 per hour, 5 per day |
   | Password-reset requests | IP | 5 per minute, 20 per hour |
   | Password-reset emails | address | 1 per minute, 3 per hour, 5 per day |
-  | Verification emails (sign-ups + resends), all clients | global | 2/3 of `MAIL_DAILY_LIMIT` per 24 h (60 with 90). After that, sign-up and resend answer 429 "Too many sign-ups right now", so no account is created whose email cannot go out |
+  | Verification emails (sign-ups, resends, email changes), all clients | global | 2/3 of `MAIL_DAILY_LIMIT` per 24 h (60 with 90). After that, sign-up and resend answer 429 "Too many sign-ups right now", so no account is created whose email cannot go out |
   | Password-reset emails, all clients | global | the other 1/3 (30 with 90). After that, the request still answers 202 (no account enumeration), no email is sent, and accounts logs a WARN |
   | Password change | account | 5 per minute, 20 per hour |
   | Leaderboard pages | IP | 30 per minute, 600 per hour |

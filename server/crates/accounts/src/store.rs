@@ -194,7 +194,7 @@ impl TokenPurpose {
 /// ones, so only the latest reset link works. Verification links all stay valid
 /// until they expire: Gmail held some for longer than players waited before asking
 /// for another (2026-10-14), and the late ones then said "invalid". Any of them
-/// proves the same address (an account's email never changes).
+/// proves the same address (a new address voids them: [`change_unverified_email`]).
 pub async fn create_email_token(
     pool: &PgPool,
     uid: Uuid,
@@ -262,6 +262,36 @@ pub async fn verify_email(pool: &PgPool, token: &str) -> sqlx::Result<Option<Uui
     .await?;
     tx.commit().await?;
     Ok(Some(uid))
+}
+
+/// Gives an account whose email is not verified a new email (a typo at sign-up), and
+/// voids every link mailed to the old one: a verification or reset link would
+/// otherwise verify the new address from the old one's inbox. `Ok(None)`: the email
+/// is verified (also when that happened meanwhile). The tokens are locked before the
+/// user, in [`verify_email`]'s order.
+pub async fn change_unverified_email(
+    pool: &PgPool,
+    uid: Uuid,
+    email: &str,
+) -> Result<Option<UserRow>, CreateUserError> {
+    let mut tx = pool.begin().await?;
+    sqlx::query("UPDATE email_tokens SET used_at = now() WHERE uid = $1 AND used_at IS NULL")
+        .bind(uid)
+        .execute(&mut *tx)
+        .await?;
+    let row = sqlx::query_as::<_, UserRow>(&format!(
+        "UPDATE users SET email = $2, updated_at = now() WHERE uid = $1 AND email_verified_at IS NULL
+         RETURNING {USER_COLS}"
+    ))
+    .bind(uid)
+    .bind(email)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(|e| if is_unique_violation(&e, "email") { CreateUserError::EmailTaken } else { e.into() })?;
+    if row.is_some() {
+        tx.commit().await?;
+    }
+    Ok(row)
 }
 
 /// Uses a reset token and sets the new password hash. Following a reset link
