@@ -8,23 +8,25 @@ A published ruleset without a set, its stages Battlefield, Final Destination and
   alternate stages are off unless the ruleset turns them on), and P+'s random (START) draws from
   the room's stages;
 - a ruleset with alternate stages on: the loser's pick keeps the layout L selects, from any stage
-  or from the list;
+  or from the list; so does P+ default, a room without a ruleset (2026-10-27, bug report #164);
 - a game on P+'s Training Room (the waiting room's stage) is an online match like any other.
 
 Screenshots: run/artifacts/game-code/rooms/stage-list/<test>/<player>/.
 """
 from __future__ import annotations
 
+import json
 import struct
-from typing import Callable
+from typing import Callable, Iterator
 
 import pytest
 
 from ppharness import brawl as B
 from ppharness.backend import OnlineBackend
+from ppharness import paths
 from ppharness.instance import DolphinInstance
 
-from test_online import _wait
+from test_online import _make_backend, _wait
 from test_online_game import Game, _boot, backend  # noqa: F401  (the backend fixture)
 from test_room_rules import session_rules
 from test_rooms_game import (ART, CSS, _all, launcher_answer, lock_of, pick, room_view, to_join_room,
@@ -191,6 +193,70 @@ def test_room_alternate_stages_on(backend: OnlineBackend, dolphin: Callable[...,
     _wait(lambda: online_set.gstatus(loser.c)["phase"] in ("running", "error", "ended"), 90,
           "game 2 to start after the pick")
     rep = online_set.play_game([a, b], game)
+    assert rep["checksums"]["mismatches"] == 0, rep
+    assert rep["stage"] == FOD and rep["asl"] == [0x40, 0x40], ("the pick or its layout was not played", rep)
+    assert rep["asl_loaded"][0] == rep["asl_loaded"][1] == 0x40, ("P+ did not load the L layout", rep)
+
+
+@pytest.fixture(scope="module")
+def one_stock_backend(tmp_path_factory: pytest.TempPathFactory) -> Iterator[OnlineBackend]:
+    """The server with Direct's rules (a room's P+ default takes them) at 1 stock and 2 minutes."""
+    rulesets = json.loads((paths.workspace_root() / "server" / "config" / "rulesets.json").read_text(encoding="utf-8"))
+    rulesets["direct"]["rules"] = {"style": "stock", "stocks": 1, "timeMinutes": 2, "pause": "normal",
+                                   "hazards": False}
+    path = tmp_path_factory.mktemp("rulesets") / "rulesets.json"
+    path.write_text(json.dumps(rulesets), encoding="utf-8")
+    be = _make_backend(rulesets_file=path)
+    try:
+        yield be
+    finally:
+        be.stop()
+
+
+@pytest.mark.slow
+def test_room_pplus_default_plays_alternate_stages(one_stock_backend: OnlineBackend,
+                                                  dolphin: Callable[..., DolphinInstance],
+                                                  gpu_backend: str) -> None:
+    """Bug report #164 (2026-10-27): a room created without a ruleset (P+ default) plays the
+    alternate stage the loser's held button selects, as Direct does: Fountain of Dreams with L held
+    is its L layout on both machines. (The server's Direct rules, which P+ default takes, at 1 stock.)"""
+    backend = one_stock_backend
+    ua, ub = backend.create_user("pdfah", "SLAH"), backend.create_user("pdfbj", "SLBJ")
+    a = _boot(dolphin, "list-a", backend, ua, gpu_backend, "pdef", "gameplay", artifacts=LIST_ART)
+    b = _boot(dolphin, "list-b", backend, ub, gpu_backend, "pdef", "gameplay", artifacts=LIST_ART)
+    _all(a.to_main_menu, b.to_main_menu)
+    _all(a.to_online_page, b.to_online_page)
+    rid = write_create(a)
+    assert launcher_answer(a, rid)["result"] == "accepted"
+    _wait(lambda: a.scene() == CSS, 60, "A on the room's CSS")
+    room = until_view(a, lambda v: v["flags"] & ppom.RF_IN, "A in its room", timeout=60)["code"]
+    to_join_room(b)
+    pick(a)
+    pick(b, right=2)
+    type_room_code(b, room)
+    until_view(b, lambda v: v["flags"] & ppom.RF_IN, "B in the room")
+    for g in (a, b):
+        _wait(lambda g=g: (session(g).get("play") or {}).get("name") == "P+ default", 30,
+              f"{g.name}: the room's P+ default")
+
+    # Game 1: B walks off, A wins and B picks game 2's stage.
+    game = room_view(a)["game"]
+    a.steps("tap START 8", "wait 40")
+    until_view(b, lambda v: v["slots"][0]["bits"] & ppom.SLOT_READY, "B sees A ready")
+    b.steps("tap START 8", "wait 10")
+    rep = online_set.play_game([a, b], game, winner=a)
+    assert rep["checksums"]["mismatches"] == 0, rep
+    _wait(lambda: a.scene() == CSS and b.scene() == CSS, 180, "both back on the room's CSS")
+    for g in (a, b):
+        until_view(g, lambda v: v["flags"] & ppom.RF_IN and v["status"] == 0 and v["game"] == game + 1,
+                   "the room waiting for its next game", timeout=60)
+
+    loser = to_losers_stage_select(a, b, game + 1)
+    assert loser is b, "A won game 1, B should pick"
+    B.sss_pick_stage(loser.c, FOD, 0, held=["L"])
+    _wait(lambda: online_set.gstatus(loser.c)["phase"] in ("running", "error", "ended"), 90,
+          "game 2 to start after the pick")
+    rep = online_set.play_game([a, b], game + 1, winner=a)
     assert rep["checksums"]["mismatches"] == 0, rep
     assert rep["stage"] == FOD and rep["asl"] == [0x40, 0x40], ("the pick or its layout was not played", rep)
     assert rep["asl_loaded"][0] == rep["asl_loaded"][1] == 0x40, ("P+ did not load the L layout", rep)

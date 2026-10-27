@@ -717,6 +717,14 @@ impl RoomBook {
     /// The next game's pickers changed (someone sits out, plays again, joins or left): whoever
     /// gained or lost the pick readies again, since their lock-in said whether they pick (the
     /// game's STAGE_PENDING).
+    /// P+ default, a room's ruleset until the host picks one: [`Ruleset::default`] with the server's
+    /// match rules and P+'s alternate stages on, as Direct (the user's, 2026-10-27, bug report #164:
+    /// players hold L/R/Z on the loser's pick). Not in `Ruleset::default`, which fills a published
+    /// ruleset's missing keys: every ruleset written without `alternateStages` keeps it off.
+    fn pplus_default(&self) -> Ruleset {
+        Ruleset { rules: self.cfg.rules.rules.clone(), alternate_stages: true, ..Default::default() }
+    }
+
     fn settle_pickers(&mut self, code: &str, before: Option<u8>) {
         let Some(room) = self.rooms.get_mut(code) else { return };
         if !matches!(room.phase, Phase::Waiting) {
@@ -843,7 +851,7 @@ impl RoomBook {
                 phase: Phase::Waiting,
                 created: now,
                 serial: self.room_counter,
-                ruleset: Ruleset { rules: self.cfg.rules.rules.clone(), ..Default::default() },
+                ruleset: self.pplus_default(),
                 ruleset_code: None,
                 based_on: None,
                 set: None,
@@ -1407,7 +1415,7 @@ impl RoomBook {
         }
         match code {
             None => {
-                let default = Ruleset { rules: self.cfg.rules.rules.clone(), ..Default::default() };
+                let default = self.pplus_default();
                 self.apply_ruleset(&room_code, default, None, out)?;
                 // P+'s default becomes the remembered choice too (decision 12).
                 out.push(Output::FetchRuleset(RulesetFetch {
@@ -2371,6 +2379,7 @@ mod tests {
         // P+'s default at once (and remembered as the host's choice).
         let out = t.req(1, RoomRequest::Ruleset { code: None });
         assert_eq!(last_state(&out, 1)["ruleset"]["name"], "P+ default");
+        assert_eq!(last_state(&out, 1)["ruleset"]["alternateStages"], true);
         assert!(fetch(&out).remember);
         // A create with the launcher's code looks it up for the new room; the game's own create
         // asks for the remembered one.
@@ -2427,7 +2436,8 @@ mod tests {
     }
 
     /// The room's stages go to its members with the ruleset, and a ruleset whose loser picks from
-    /// the list says so in the ticket; P+ default (any stage) does not.
+    /// the list says so in the ticket; P+ default (any stage) does not. P+ default plays alternate
+    /// stages (2026-10-27); a published ruleset only with its switch on.
     #[test]
     fn a_loser_picks_from_the_list_room_holds_its_tickets_to_the_stages() {
         let addr = |n: u8| SocketAddrV4::new([203, 0, 113, n].into(), 41000 + n as u16);
@@ -2442,8 +2452,9 @@ mod tests {
         let s = last_state(&out, 1);
         assert_eq!(s["ruleset"]["stageChoice"], "loser-picks");
         assert_eq!(s["ruleset"]["stages"]["starters"], serde_json::json!([1, 4, 9, 0x21, 0x2E]));
+        assert_eq!(s["ruleset"]["alternateStages"], true);
         let resp = start(&mut t, &code, 100);
-        assert_eq!((resp.pick_from_stages, resp.alternate_stages), (None, None));
+        assert_eq!((resp.pick_from_stages, resp.alternate_stages), (None, Some(true)));
         for n in 1..=2 {
             t.req(n, RoomRequest::Back { pickers: None });
         }
