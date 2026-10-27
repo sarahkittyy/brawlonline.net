@@ -109,6 +109,9 @@ bool s_result_pending = false;
 std::optional<float> s_rating;  // newer than the user's, once a result arrived
 std::optional<u32> s_sets_played;
 std::optional<float> s_change;
+// A set whose result was still on its way when a search started (OnSearch): its change is not
+// shown when it arrives.
+std::string s_change_dropped;
 std::string s_last_status;
 
 Clock::duration ReportBackoff(int attempt)
@@ -239,7 +242,8 @@ Outcome FetchResult(const std::string& match_id)
     std::lock_guard lk(s_mutex);
     s_last_status = status;
     s_result_pending = false;
-    s_change = change.value_or(0.0f);
+    if (match_id != s_change_dropped)
+      s_change = change.value_or(0.0f);
     if (after)
       s_rating = after;
     if (sets)
@@ -578,6 +582,14 @@ void OnPeerGone()
   NOTICE_LOG_FMT(NETPLAY, "Ranked: the opponent left set {}", s_match_id);
   EnqueueLeave(s_match_id, "opponent_left");
   EnqueueResult();
+}
+
+void OnSearch()
+{
+  std::lock_guard lk(s_mutex);
+  s_change.reset();
+  if (s_result_pending)
+    s_change_dropped = s_match_id;
 }
 
 void OnStageSelect()

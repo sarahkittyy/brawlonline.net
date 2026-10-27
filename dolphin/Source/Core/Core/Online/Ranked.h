@@ -56,6 +56,10 @@ void OnSessionStartFailed();
 void OnGameResult(const Gprb::Session::GameResult& result);
 // The opponent disconnected or went silent (GameBridge sees the lobby's disconnected flag).
 void OnPeerGone();
+// A search starts (any mode): the last set's change is no longer shown, also one still on its
+// way. Back on the CSS after a cancelled search it read as the cost of cancelling (bug report
+// #159).
+void OnSearch();
 // GP_FETCH_STEP answered with a character step (the CSS shows the opponent's name) or a stage
 // step (the game goes to, or is on, the set's stage select): from here leaving is rated.
 void OnStageSelect();
@@ -68,7 +72,8 @@ bool IsSetOver();
 // game played again keeps its number); the session game itself outside a ranked set.
 u32 GameIndexOf(u32 session_game);
 
-// What GET_RANK shows: this player's rating and the change of the last ranked set.
+// What GET_RANK shows: this player's rating and the change of the last ranked set, until the
+// next search.
 struct RankInfo
 {
   enum class State : u8

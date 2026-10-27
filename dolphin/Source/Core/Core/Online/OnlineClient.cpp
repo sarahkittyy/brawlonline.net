@@ -155,6 +155,8 @@ std::optional<std::string> FindMatch(const SearchOptions& options)
       });
     });
   }
+  // Outside s_mutex, as Ranked's other hooks.
+  Ranked::OnSearch();
   std::lock_guard lk(s_mutex);
   User& user = GetUserLocked();
   if (s_matchmaking && s_matchmaking->IsSearching())
