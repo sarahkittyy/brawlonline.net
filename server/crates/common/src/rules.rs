@@ -279,7 +279,8 @@ pub struct Ruleset {
     pub stage_choice: StageChoice,
     /// P+'s alternate stages: every stage pick (a loser's, a set's counterpick) plays the layout
     /// the picker's held L, R or Z selects. Off (the default, the user's, 2026-10-19): every pick
-    /// plays the stage's normal layout. Only with a pick (a set, or a loser who picks). Not written
+    /// plays the stage's normal layout. A room without a ruleset has them on (mm's P+ default,
+    /// 2026-10-27); this default stays off, as it fills the key in rulesets written without it. Only with a pick (a set, or a loser who picks). Not written
     /// when off, so the hash of every ruleset from before it stays the same.
     #[serde(skip_serializing_if = "is_false")]
     pub alternate_stages: bool,

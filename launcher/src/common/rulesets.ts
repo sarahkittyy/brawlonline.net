@@ -162,7 +162,10 @@ export function withStageHazards(m: MatchRules, id: number): MatchRules {
   return { ...m, hazardStages };
 }
 
-/** P+ default (`Ruleset::default()`): what a room plays without a ruleset. */
+/**
+ * `Ruleset::default()`: a new ruleset's start and the value of a missing key. A room without a
+ * ruleset plays it with alternate stages on (mm `RoomBook::pplus_default`, 2026-10-27).
+ */
 export function defaultRuleset(): Ruleset {
   return {
     format: RULESET_FORMAT,

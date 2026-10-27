@@ -57,7 +57,7 @@ Defaults the coordinating session chose where the user asked a question are mark
 | Player count | A ruleset names 1v1, 2v2 or FFA. The room can't start until slots and teams match: "This ruleset needs 2 teams of 2". |
 | 2v2 striking | Either teammate strikes or picks for the team; the same frame: the lower slot counts. |
 | Timers | Ranked's step timers (strikes 30 s, last game-1 strike 10 s, bans and pick 30 s each, 3 s grace). Not part of the ruleset at first. |
-| Code Menu modifiers | Not in rules or rulesets (hitstun, staling, Special Modes...): still forced to P+'s defaults. Alternate stages (P+'s held-button variants): **a ruleset switch, off by default** (the user's, 2026-10-19, `alternateStages` in `rulesets-protocol.md`): on, every pick in the room (the loser's, a set's counterpick) plays the layout held L/R/Z selects; off, the normal layout. Ranked and Unranked never have them; Direct and Teams keep them on the loser's pick. |
+| Code Menu modifiers | Not in rules or rulesets (hitstun, staling, Special Modes...): still forced to P+'s defaults. Alternate stages (P+'s held-button variants): **a ruleset switch, off by default** (the user's, 2026-10-19, `alternateStages` in `rulesets-protocol.md`): on, every pick in the room (the loser's, a set's counterpick) plays the layout held L/R/Z selects; off, the normal layout. **P+ default** (a room without a ruleset) has them **on** (the user's, 2026-10-27, bug report #164: "direct and rooms (P+ default) should have alt stages on"; mm's `RoomBook::pplus_default`; `Ruleset::default()` keeps them off, since it fills a published ruleset's missing keys). Ranked and Unranked never have them; Direct and Teams keep them on the loser's pick. |
 
 ### 2.1 The paused set
 
