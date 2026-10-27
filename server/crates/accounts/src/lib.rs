@@ -172,6 +172,7 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/auth/password-reset/request", post(api::password_reset_request))
         .route("/v1/auth/password-reset/confirm", post(api::password_reset_confirm))
         .route("/v1/auth/change-password", post(api::change_password))
+        .route("/v1/auth/change-email", post(api::change_email))
         .route("/v1/me", get(api::get_me))
         .route("/v1/me/netplay", post(api::init_netplay))
         .route("/v1/me/rename", post(api::rename))

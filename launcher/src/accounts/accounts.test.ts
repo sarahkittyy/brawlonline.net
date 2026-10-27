@@ -112,6 +112,33 @@ describe("accounts", () => {
     expect(await fresh.me(UID)).toEqual({ ok: true, value: me() });
   });
 
+  it("changes an unverified email with the session and returns the new record", async () => {
+    const taken = {
+      status: 409,
+      body: { error: { code: "email_taken", message: "An account with this email exists" } },
+    };
+    const { impl, calls } = fakeFetch({
+      "POST /v1/auth/change-email": (c) =>
+        c.body.email === "taken@example.test"
+          ? taken
+          : { status: 200, body: me({ email: c.body.email, emailVerified: false }) },
+    });
+    const store = new SessionStore(path.join(dir, "sessions.json"), null);
+    await store.set(UID, "tok-1");
+    const manager = new AccountsManager(new AccountsHttpClient("http://api", "test", impl), store);
+
+    expect(await manager.changeEmail(UID, "alice@right.test")).toEqual({
+      ok: true,
+      value: me({ email: "alice@right.test", emailVerified: false }),
+    });
+    expect(calls[0].headers.authorization).toBe("Bearer tok-1");
+    expect(calls[0].body).toEqual({ email: "alice@right.test" });
+    const refused = await manager.changeEmail(UID, "taken@example.test");
+    expect(refused.ok === false && refused.error.code).toBe("email_taken");
+    // A refused change keeps the session.
+    expect(await store.get(UID)).toBe("tok-1");
+  });
+
   it("sends a bug report's text, then its zip; a failed zip keeps the report", async () => {
     let uploads = 0;
     const { impl, calls } = fakeFetch({

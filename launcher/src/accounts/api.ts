@@ -1,6 +1,7 @@
 /* eslint-disable import/no-default-export */
 import {
   ipc_accountsBrowseRulesets,
+  ipc_accountsChangeEmail,
   ipc_accountsCreateRulesetDraft,
   ipc_accountsDeleteRulesetDraft,
   ipc_accountsHasSession,
@@ -56,6 +57,9 @@ const accountsApi: AccountsApi = {
   },
   async resendVerificationEmail(uid) {
     unwrap(await ipc_accountsResendVerification.renderer!.trigger({ uid }));
+  },
+  async changeEmail(uid, email) {
+    return unwrap(await ipc_accountsChangeEmail.renderer!.trigger({ uid, email }));
   },
   async requestPasswordReset(email) {
     unwrap(await ipc_accountsRequestPasswordReset.renderer!.trigger({ email }));

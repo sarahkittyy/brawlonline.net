@@ -76,6 +76,13 @@ class MockAuthClient implements AuthService {
   }
 
   @delayAndMaybeError(SHOULD_ERROR)
+  async changeEmail(email: string): Promise<void> {
+    const user = this._multiAccountService.getActiveUser();
+    Preconditions.checkExists(user, "User is not logged in.");
+    this._multiAccountService.setUserRecord({ ...user, email: email.trim().toLowerCase() });
+  }
+
+  @delayAndMaybeError(SHOULD_ERROR)
   async refreshUser(): Promise<void> {
     await this._multiAccountService.refreshActiveUser();
   }

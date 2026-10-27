@@ -42,6 +42,12 @@ export const ipc_accountsResendVerification = makeEndpoint.main(
   <R<null>>_,
 );
 
+export const ipc_accountsChangeEmail = makeEndpoint.main(
+  "accounts_changeEmail",
+  <{ uid: string; email: string }>_,
+  <R<AccountsMe>>_,
+);
+
 export const ipc_accountsRequestPasswordReset = makeEndpoint.main(
   "accounts_requestPasswordReset",
   <{ email: string }>_,

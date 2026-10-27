@@ -313,6 +313,8 @@ export interface AccountsApi {
   hasSession(uid: string): Promise<boolean>;
   me(uid: string): Promise<AccountsMe>;
   resendVerificationEmail(uid: string): Promise<void>;
+  /** A new email for an account that has not verified its own (the verify step's "Wrong email?"). */
+  changeEmail(uid: string, email: string): Promise<AccountsMe>;
   requestPasswordReset(email: string): Promise<void>;
   initNetplay(uid: string, codeStart: string): Promise<AccountsMe>;
   rename(uid: string, displayName: string): Promise<AccountsMe>;

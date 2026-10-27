@@ -6,4 +6,9 @@ export const VerifyEmailFormMessages = {
   emailVerified: () => "Email verified",
   aConfirmationEmailHasBeenSentTo: () => "A confirmation email has been sent to:",
   emailIsNotVerified: () => "Email is not yet verified. Have you checked your spam folder?",
+  wrongEmail: () => "Wrong email?",
+  changeEmail: () => "Change email",
+  newEmail: () => "New email",
+  change: () => "Change",
+  cancel: () => "Cancel",
 };
