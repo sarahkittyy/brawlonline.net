@@ -2264,6 +2264,23 @@ namespace OnlineMenu {
                (roomIn() && se.roomStatus == 1);
     }
 
+    // This player's own room game (not a set's) is on and its match has not started: its session
+    // is connecting or connected, and the room says in game until the game is over, so it never
+    // waits again before then. Back on the CSS unlocked here (the stage select left without a
+    // pick), START locks in again for the session; before, START waited for a room that never
+    // waited, and the session waited for that lock-in until someone left the room (prod
+    // 2026-10-27, room RHKR, twice in an hour). No SIT OUT here: it took the lock-in back first,
+    // and mm refuses it in the player's own game.
+    static bool roomOwnGameBeforeMatch()
+    {
+        const PPOM::Session& se = PPOM::g_block.session;
+        const PPOM::Local& lo = PPOM::g_block.local;
+        const PPOM::RoomPlay& play = se.play;
+        const bool setOn = play.valid && play.setOn && !(play.setFlags & PPOM::SET_FINISHED);
+        return roomIn() && se.roomStatus == 2 && !(se.roomFlags & PPOM::RF_WATCH) && !setOn &&
+               !g_onlineMatchGame && (lo.state == PPOM::LS_CONNECTING || lo.state == PPOM::LS_CONNECTED);
+    }
+
     // Every open slot has a player (the room can start once all are ready, rooms.md #7).
     // This player sits out the room's games (SIT OUT, or outside a set that is on).
     static bool roomSittingOut()
@@ -2447,6 +2464,11 @@ namespace OnlineMenu {
             char buf[32];
             sprintf(buf, "P%d choosing stage...", picker + 1);
             setStatus(buf, false);
+            return;
+        }
+        // Unlocked in this player's own game before its match: START locks in again.
+        if (roomOwnGameBeforeMatch() && !roomLockedForNext() && lockChar() >= 0 && !s.roomError) {
+            setStatus(roomPicksStage() ? "Press START to select stage" : "Press START to lock in", false);
             return;
         }
         if (s.roomText[0] && (roomActive() || s.roomError)) {
@@ -2686,7 +2708,9 @@ namespace OnlineMenu {
         const bool sitting = roomSittingOut();
         const bool meInGame = in && me >= 0 && (se.players[me].roomSlot & PPOM::SLOT_IN_GAME);
         const bool setOn = play.valid && play.setOn && !(play.setFlags & PPOM::SET_FINISHED);
-        const bool maySitOut = in && me >= 0 && se.roomStatus != 1 && !meInGame && !g_onlineMatchGame && !setOn;
+        const bool ownGame = roomOwnGameBeforeMatch();
+        const bool maySitOut = in && me >= 0 && se.roomStatus != 1 && !meInGame && !g_onlineMatchGame && !setOn &&
+                               !ownGame;
         SitOutButton::tick(in, maySitOut, sitting);
         // The ruleset and the set on the RULES page's RULESET / SET lines (room_play.cpp).
         RoomPlay::tick(in, host);
@@ -2768,7 +2792,7 @@ namespace OnlineMenu {
                     } else {
                         playSE(SE_ERROR);
                     }
-                } else if (!roomLockedForNext() && waiting && lockChar() >= 0) {
+                } else if (!roomLockedForNext() && (waiting || ownGame) && lockChar() >= 0) {
                     lockIn(roomGame(), roomPicksStage() ? PPOM::STAGE_PENDING : 0xFFFF, 0);
                 }
             }
