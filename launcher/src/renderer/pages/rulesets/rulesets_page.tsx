@@ -1,7 +1,7 @@
 import type { RulesetDraft, RulesetView } from "@accounts/types";
 import type { Ruleset } from "@common/rulesets";
 import {
-  defaultRuleset,
+  newRuleset,
   normalizeRuleset,
   picksUsed,
   rulesetFromJson,
@@ -293,7 +293,7 @@ export const RulesetsPage = React.memo(function RulesetsPage() {
               color="secondary"
               disableElevation={true}
               startIcon={<AddRoundedIcon />}
-              onClick={() => open({ basedOn: null, ruleset: { ...defaultRuleset(), name: "" }, dirty: true })}
+              onClick={() => open({ basedOn: null, ruleset: newRuleset(), dirty: true })}
               data-testid="new-ruleset"
               sx={{ textTransform: "none" }}
             >

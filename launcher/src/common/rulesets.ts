@@ -206,7 +206,23 @@ export function withStageHazards(m: MatchRules, id: number): MatchRules {
 }
 
 /**
- * `Ruleset::default()`: a new ruleset's start and the value of a missing key. A room without a
+ * The stages whose hazards a new ruleset has the other way from its default (off): Fountain of Dreams, as Unranked,
+ * Ranked and Direct play it (server config/rulesets.json, the user's, 2026-10-26).
+ */
+export const NEW_RULESET_HAZARD_STAGES = [0x1f];
+
+/**
+ * What New ruleset starts from: P+ default with Fountain of Dreams' hazards on (the user's, 2026-10-27: "when you're
+ * creating a brand new ruleset FOD hazards show as off"). Only here, not in `defaultRuleset`: that is also the value of
+ * a missing key, and every published ruleset without `hazardStages` must keep playing FoD without hazards.
+ */
+export function newRuleset(): Ruleset {
+  const r = defaultRuleset();
+  return { ...r, name: "", rules: { ...r.rules, hazardStages: [...NEW_RULESET_HAZARD_STAGES] } };
+}
+
+/**
+ * `Ruleset::default()`: the value of a missing key (New ruleset starts from `newRuleset`). A room without a
  * ruleset plays it with alternate stages on (mm `RoomBook::pplus_default`, 2026-10-27).
  */
 export function defaultRuleset(): Ruleset {
