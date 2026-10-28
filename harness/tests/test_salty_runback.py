@@ -37,6 +37,14 @@ def _quit(a, buttons: str) -> None:
     a.steps(f"hold {buttons} 90")
 
 
+def _quit_late_y(a, late: int) -> None:
+    """The quit with Y `late` frames after L+R+A+START (one pad read a frame in a match)."""
+    a.steps("tap START 8", "wait 60")
+    lras = PadInput(buttons=("L", "R", "A", "START"), hold=late)
+    a.c.pad_script(a.pad, [lras, PadInput(buttons=("L", "R", "A", "Y", "START"), hold=90)])
+    a.steps(f"wait {late + 90}")
+
+
 def _walk(b) -> None:
     walk = [PadInput(main=(40, 128), hold=7), PadInput(main=(216, 128), hold=7)]
     b.c.pad_script(0, walk * 80)
@@ -81,6 +89,17 @@ def test_runback_restarts_the_same_match_in_direct(backend: OnlineBackend,
         again = B.read_match_setup(g.c.read_mem)
         assert again == setup, (g.name, "a different match", setup, again)
         assert g.inst.log.read().count("the last game again (runback)") == 1, g.name
+    # Y a few frames after L+R+A+START runs back too, as P+'s own runback (it reads the buttons
+    # when the match scene ends); online it had to be down on the quit's frame (bug report #181).
+    _walk(b)
+    a.steps("wait 240")
+    _quit_late_y(a, 6)
+    online_set.wait(lambda: all(online_set.gstatus(g.c)["phase"] == "running" and
+                                online_set.gstatus(g.c)["match_index"] == first[0] + 2 for g in (a, b)),
+                    90, "the same match again on both (Y late)")
+    for g in (a, b):
+        assert B.read_match_setup(g.c.read_mem) == setup, (g.name, "a different match")
+        assert g.inst.log.read().count("the last game again (runback)") == 2, g.name
     # A plain quit of the runback's match: both back on the CSS, which says who quit.
     _walk(b)
     a.steps("wait 240")

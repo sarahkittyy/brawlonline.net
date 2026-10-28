@@ -1019,6 +1019,14 @@ namespace OnlineMatch {
     // pads. Here the buttons are the pauser's in the game's pad status, the session's inputs, so
     // every machine sees the same.
     static const u32 RUNBACK_BUTTONS = 0x0860;
+    // P+ reads them when the match scene ends, well after the quit, so offline Y may come a few
+    // frames after L+R+A+START; online it had to be down on the quit's own frame, and a Y one
+    // frame late was a plain quit (bug report #181, "Sometimes holding LRAY Start doesn't perform
+    // a salty reset"). So the runback is also taken in the frames after the quit while the
+    // session runs: Dolphin ends it END_AFTER_GAME_SET (MAX_ROLLBACK_FRAMES + 12 = 19) frames
+    // after the quit and reads SESSION then, when every frame up to the quit's + 11 is final on
+    // every machine (GameplaySession.cpp). 10 stays inside those.
+    static const u16 RUNBACK_LATE_FRAMES = 10;
 
     // The game's pause-screen quit per controller type (gfPadType: GameCube, Classic Controller,
     // Wii Remote, Nunchuk), its table at 0x80408C28 that the pause screen's quit check
@@ -1136,7 +1144,14 @@ namespace OnlineMatch {
             return 0;   // stay paused
         }
         ++s_quitFrames;
-        if (PPOM::g_block.local.state == PPOM::LS_IN_MATCH && s_quitFrames < QUIT_MAX_FRAMES) return 0;
+        if (PPOM::g_block.local.state == PPOM::LS_IN_MATCH) {
+            PPOM::Session& se = PPOM::g_block.session;
+            if (!se.quitRunback && s_quitFrames <= RUNBACK_LATE_FRAMES && pauserRunback(op)) {
+                se.quitRunback = s_matchQuitRunback = 1;   // L+R+Y a little after the quit
+                dbg.scratch[10] |= 0x1000000;
+            }
+            if (s_quitFrames < QUIT_MAX_FRAMES) return 0;
+        }
         int kind = s_quitKind;
         s_quitOp = NULL;
         dbg.scratch[10] |= 0x80000;
@@ -1257,6 +1272,12 @@ namespace OnlineMatch {
             // the press from the held buttons (this array's pressed words were never seen set)
             if ((held & BTN_START) && !(s_startPorts & bit)) s_hintPorts ^= bit;
             s_startPorts = (u8)((held & BTN_START) ? s_startPorts | bit : s_startPorts & ~bit);
+            // The quitter's runback buttons a little after the quit (RUNBACK_LATE_FRAMES).
+            if (live && s_clientQuit && se.quitBy == p + 1 && !se.quitRunback &&
+                s_clientQuitFrames <= RUNBACK_LATE_FRAMES && (held & runback) == runback) {
+                se.quitRunback = s_matchQuitRunback = 1;
+                PPOM::g_block.debug.scratch[10] |= 0x1000000;
+            }
             if (!live || s_clientQuit || !oi || (oi[0x11B] & 0x70) || (held & quit) != quit) continue;
             oi[0x11B] |= 0x30;
             s_clientQuit = 1;

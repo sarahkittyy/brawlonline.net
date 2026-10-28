@@ -334,6 +334,15 @@ def test_unranked_quits_without_a_pause(backend: OnlineBackend,
         assert B.read_match_setup(g.c.read_mem) == setup, g.name
         assert not _paused(g), (g.name, "paused")
     a.shot("02-runback")
+    # Y a few frames after the quit runs back too (bug report #181; one pad read a frame).
+    a.steps("wait 240")
+    a.c.pad_script(a.pad, [PadInput(buttons=("L", "R", "A", "START"), hold=6),
+                           PadInput(buttons=("L", "R", "A", "Y", "START"), hold=14)])
+    online_set.wait(lambda: all(online_set.gstatus(g.c)["phase"] == "running" and
+                                online_set.gstatus(g.c)["match_index"] == first + 2 for g in players),
+                    90, "the same match again on both (Y late)")
+    for g in players:
+        assert B.read_match_setup(g.c.read_mem) == setup, g.name
     a.steps("wait 240", "hold L+R+A+START 20")
     online_set.wait(lambda: all(online_set.scene(g.c) == online_set.CSS for g in players), 60,
                     "both back on the CSS")
