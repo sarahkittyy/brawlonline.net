@@ -242,6 +242,13 @@ enum UserCmd {
         #[command(flatten)]
         filter: Box<SlurFilterConfig>,
     },
+    /// Every racial slur the filter replaced (sign-up, rename, code pick, room name, the late
+    /// re-check) or `slur-scan --apply` did, newest first: when, by whom, what was typed, what
+    /// it became, and the account's code and name now.
+    SlurLog {
+        #[arg(long, default_value_t = 50)]
+        limit: i64,
+    },
     /// Delete an account with its sessions and email tokens. Its connect code is free again
     /// at once. Cannot be undone.
     Delete {
@@ -726,6 +733,31 @@ async fn main() -> anyhow::Result<()> {
         }
         Cmd::User(UserCmd::SlurScan { apply, concurrency, filter }) => {
             slur_scan(&pool, &actor, &filter, apply, concurrency.max(1)).await?;
+        }
+        Cmd::User(UserCmd::SlurLog { limit }) => {
+            let rows = admin::slur_replacements(&pool, limit.clamp(1, 10_000)).await?;
+            if rows.is_empty() {
+                println!("no slur replacements");
+            }
+            for r in &rows {
+                let what = match r.action.as_str() {
+                    "user.signup_name" => "sign-up name",
+                    "user.rename" => "name",
+                    "user.set_code" => "code",
+                    "user.room-name" => "room name",
+                    other => other,
+                };
+                println!(
+                    "{} {:<18} {what:<12} {:?} -> {:?}   now {} {:?} ({})",
+                    r.at.format("%Y-%m-%d %H:%M:%S"),
+                    r.actor,
+                    r.from_text.as_deref().unwrap_or("?"),
+                    r.to_text.as_deref().unwrap_or("?"),
+                    r.code.as_deref().unwrap_or("-"),
+                    r.name.as_deref().unwrap_or("(deleted)"),
+                    r.target.as_deref().unwrap_or("-"),
+                );
+            }
         }
         Cmd::User(UserCmd::Delete { ident, yes }) => {
             let u = find(&pool, &ident).await?;

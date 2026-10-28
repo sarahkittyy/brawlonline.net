@@ -186,6 +186,7 @@ pub async fn set_room_name(
         ApiError::rate_limited(wait)
             .with_message(format!("Too many name changes. Try again in {} s.", wait.as_secs().max(1)))
     })?;
+    let typed = name.clone();
     let (name, recheck) = match name {
         Some(n) => {
             let (n, recheck) = slur_filter::screen_room_name(&state, &n).await;
@@ -194,6 +195,11 @@ pub async fn set_room_name(
         None => (None, false),
     };
     store::set_room_name(&state.pool, user.uid, req.kind, name.as_deref()).await?;
+    if let (Some(from), Some(to)) = (&typed, &name) {
+        if from != to {
+            slur_filter::audit_screened(&state, "user.room-name", user.uid, from, to).await;
+        }
+    }
     if let (true, Some(n)) = (recheck, &name) {
         slur_filter::recheck_room_name(&state, user.uid, req.kind, n.clone());
     }
