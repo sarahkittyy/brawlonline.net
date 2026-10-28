@@ -1,5 +1,5 @@
 import type { LiveGameEntry } from "@spectate/types";
-import { cleanup, fireEvent, render } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { SpectateMessages as Messages } from "./spectate.messages";
@@ -105,6 +105,25 @@ describe("SpectateView", () => {
     }
     expect(onWatch.mock.calls.map((c) => c[0].id)).toEqual(["aaaaaaaaaaaa", "cccccccccccc"]);
     expect(container.querySelector('[data-stream="bbbbbbbbbbbb"]')!.textContent).toContain(Messages.yourGame());
+  });
+
+  it("closes a row's tooltip when the list scrolls", async () => {
+    vi.useFakeTimers();
+    try {
+      const { container } = view({ kind: "ready", games });
+      fireEvent.mouseOver(container.querySelector('[data-stream="aaaaaaaaaaaa"]')!);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1000);
+      });
+      expect(screen.getByRole("tooltip").textContent).toBe(Messages.watchTooltip());
+      fireEvent.scroll(container.querySelector("ul")!);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1000);
+      });
+      expect(screen.queryByRole("tooltip")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("marks the game being watched, and waits for one watch at a time", () => {
