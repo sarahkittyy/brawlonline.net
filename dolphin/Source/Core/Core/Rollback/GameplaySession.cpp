@@ -689,13 +689,14 @@ struct State
     u16 xer_stringctrl = 0;
     u32 lr = 0, ctr = 0;
   } gcall_saved;
-  // Waiting for the file IO thread at the loop top (RunIoWait): the registers to restore, and
-  // counters (loop tops that waited, retraces waited).
+  // Waiting for the file IO and sound loader threads at the loop top (RunIoWait): the registers
+  // to restore, and counters (loop tops that waited, of them for a sound load, retraces waited).
   bool io_wait_active = false;
   bool io_wait_update = false;  // the next guest call is the manager's update (else a retrace)
+  bool io_wait_sound = false;   // this wait saw a sound group load pending
   int io_wait_n = 0;
   GuestRegs io_saved;
-  u64 io_waits = 0, io_wait_retraces = 0, io_wait_timeouts = 0;
+  u64 io_waits = 0, sound_waits = 0, io_wait_retraces = 0, io_wait_timeouts = 0;
   // Diagnostics (PPR_GPRB_FORCE_FINAL): ports still to be given their Final Smash before the match
   // starts under rollback, and whether a guest call for it is running.
   u32 force_final_todo = 0;
@@ -3520,8 +3521,9 @@ void ResetRunStats()
     r.frame = -1;
   s.rng_logged = false;
   s.io_wait_active = false;
+  s.io_wait_sound = false;
   s.io_wait_n = 0;
-  s.io_waits = s.io_wait_retraces = s.io_wait_timeouts = 0;
+  s.io_waits = s.sound_waits = s.io_wait_retraces = s.io_wait_timeouts = 0;
   s.force_final_inited = false;  // the next match's countdown reads PPR_GPRB_FORCE_FINAL again
   s.force_final_at.clear();
   s.force_final_at_active = s.force_final_at_reenter = false;
@@ -7753,6 +7755,7 @@ picojson::value Status()
   o["sound_moved"] = picojson::value(static_cast<double>(s.sound_moved));
   o["sound_stops_ignored"] = picojson::value(static_cast<double>(s.sound_stops_ignored));
   o["io_waits"] = picojson::value(static_cast<double>(s.io_waits));
+  o["sound_waits"] = picojson::value(static_cast<double>(s.sound_waits));
   o["io_wait_retraces"] = picojson::value(static_cast<double>(s.io_wait_retraces));
   o["io_wait_timeouts"] = picojson::value(static_cast<double>(s.io_wait_timeouts));
   o["sound_gone_why"] = picojson::value(picojson::array{
@@ -9443,11 +9446,33 @@ u32 FileIoPending(const Core::CPUThreadGuard& guard)
   return n;
 }
 
+// Sound groups load the same way, on the sound loader's own thread: a fighter's sounds when
+// All-Star brings the next fighter in (P+), and the match waits for them before the fighter
+// enters (sora_melee 0x8084E728). The loader (sndSystem +0xB98) queues requests at +0x368, 0x10
+// bytes each; +0xCC8 counts the queued ones, +0xCCC the one being loaded (fn_80079CD4: none of
+// either = idle). As for the file IO, the main thread waits at the loop top until it is idle, so
+// a fighter comes in on the same frame in every pass and on every peer, and no load writes the
+// sound heaps (in the region set, gp-v25) under a save or a load.
+u32 SoundLoadPending(const Core::CPUThreadGuard& guard)
+{
+  const u32 snd = ReadGuest(guard, Addr::SND_SYSTEM_PTR);
+  const u32 loader = snd ? ReadGuest(guard, snd + Addr::SND_LOADER) : 0;
+  if (!loader)
+    return 0;
+  const u32 queued = ReadGuest(guard, loader + 0xCC8);
+  const u32 loading = ReadGuest(guard, loader + 0xCCC);
+  // (At most 0x95 queue entries: anything else is not the loader.)
+  return queued <= 0x95 && loading <= 0x95 ? queued + loading : 0;
+}
+
 bool RunIoWait(const Core::CPUThreadGuard& guard)
 {
   auto& ppc = guard.GetSystem().GetPPCState();
-  if (FileIoPending(guard) != 0 && s.io_wait_n < IO_WAIT_MAX)
+  const u32 file_io = FileIoPending(guard);
+  const u32 sound = SoundLoadPending(guard);
+  if ((file_io != 0 || sound != 0) && s.io_wait_n < IO_WAIT_MAX)
   {
+    s.io_wait_sound |= sound != 0;
     if (!s.io_wait_active)
     {
       SaveGuestRegs(ppc, &s.io_saved);
@@ -9477,11 +9502,16 @@ bool RunIoWait(const Core::CPUThreadGuard& guard)
     if (s.io_wait_n >= IO_WAIT_MAX)
     {
       ++s.io_wait_timeouts;
-      WARN_LOG_FMT(BRAWLBACK, "gprb: file IO still busy after {} retraces, going on", s.io_wait_n);
+      WARN_LOG_FMT(BRAWLBACK,
+                   "gprb: file IO or sound loader still busy after {} retraces, going on",
+                   s.io_wait_n);
     }
     RestoreGuestRegs(ppc, s.io_saved);
     s.io_wait_active = false;
     s.io_wait_n = 0;
+    if (s.io_wait_sound)
+      ++s.sound_waits;
+    s.io_wait_sound = false;
   }
   return false;
 }
