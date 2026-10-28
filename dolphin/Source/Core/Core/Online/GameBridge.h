@@ -71,6 +71,10 @@ constexpr u32 SESSION_RESTORE = 0x21F;
 constexpr u32 SESSION_PLAYER_RESTORE_STOCKS = 0x3C;
 constexpr u32 SESSION_PLAYER_RESTORE_DAMAGE = 0x7C;
 constexpr u32 SESSION_RESTORE_FRAMES = 0x234;
+// SESSION's sizes: the oldest plugin's (PPOM v4/v5) and the newest's (v9). A replay's recorded
+// SESSION is any size in between (the recorder's plugin's).
+constexpr u32 SESSION_MIN_SIZE = 0x220;
+constexpr u32 SESSION_MAX_SIZE = 0x420;
 // SESSION's address in game memory, 0 before the plugin's block is found, and its size (the
 // plugin's PPOM version's).
 u32 SessionAddress();

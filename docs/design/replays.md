@@ -442,6 +442,7 @@ A shared replay comes from a stranger. Every byte is validated before use. Value
 | Stage | `ValidStageKind`, then the plugin's `StageLegal::selectableKind` | PD.cpp:164-178, `online_match.cpp:146` |
 | ASL buttons | only the bits the stage select produces | new |
 | Port values | `SanitizePortValues`; layout bytes by the plugin's `layoutByte` | PD.h:95-105, `online_match.cpp:86-95` |
+| SESSION | any plugin's size, 0x220 (PPOM v4/v5) to 0x420 (v9), else "the replay's match setup is damaged"; rebuilt field by field (`PlaybackSession`) | GameBridge.h `SESSION_MIN_SIZE`/`SESSION_MAX_SIZE` |
 | Names, codes into SESSION | UTF-16, length-bounded (`NAME_LEN`, `CODE_LEN`), control characters removed | GB:761-762 |
 | Init block | only the stage variant (≤ 0x0F) is taken, never stage kind, rules or time | PD.h:72-81, GS:2843-2859 |
 | Seeds | any value; bit 31 cleared for the two mtRand words as `MatchSeeds` does | GS:677-678 |
