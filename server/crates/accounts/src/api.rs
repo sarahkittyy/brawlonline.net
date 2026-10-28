@@ -239,6 +239,9 @@ pub async fn signup(
         })
     })?;
     tracing::info!(uid = %user.uid, "account created");
+    if name != req.display_name {
+        slur_filter::audit_screened(&state, "user.signup_name", user.uid, &req.display_name, &name).await;
+    }
     if recheck {
         slur_filter::recheck_name(&state, user.uid, name);
     }
@@ -488,13 +491,16 @@ pub async fn init_netplay(
     }
     let prefix =
         validate_code_start(&req.code_start).map_err(|e| ApiError::bad_request("invalid_code", e.to_string()))?;
-    let (prefix, recheck) = slur_filter::screen_code_start(&state, &prefix).await;
-    let code = store::assign_connect_code(&state.pool, user.uid, &prefix).await.map_err(|e| match e {
+    let (screened, recheck) = slur_filter::screen_code_start(&state, &prefix).await;
+    let code = store::assign_connect_code(&state.pool, user.uid, &screened).await.map_err(|e| match e {
         store::AssignCodeError::AlreadyAssigned => ApiError::conflict("code_already_set", e.to_string()),
         store::AssignCodeError::Exhausted => ApiError::conflict("prefix_exhausted", e.to_string()),
         store::AssignCodeError::Db(e) => ApiError::internal(e),
     })?;
     tracing::info!(uid = %user.uid, %code, "connect code assigned");
+    if screened != prefix {
+        slur_filter::audit_screened(&state, "user.set_code", user.uid, &prefix, &code).await;
+    }
     if recheck {
         slur_filter::recheck_code(&state, user.uid, code);
     }
@@ -522,6 +528,9 @@ pub async fn rename(
     }
     let (name, recheck) = slur_filter::screen_name(&state, &req.display_name).await;
     store::rename(&state.pool, user.uid, &name).await?;
+    if name != req.display_name {
+        slur_filter::audit_screened(&state, "user.rename", user.uid, &req.display_name, &name).await;
+    }
     if recheck {
         slur_filter::recheck_name(&state, user.uid, name);
     }

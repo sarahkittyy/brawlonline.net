@@ -427,11 +427,15 @@ async fn racial_slurs_in_room_names_are_replaced() {
     let late = stored("mods_room_name").await.unwrap();
     assert!(KIND_NAMES.contains(&late.as_str()), "{late}");
     assert_eq!(stored("room_name").await.as_deref(), Some(kind.as_str()));
-    let audits: i64 = sqlx::query_scalar("SELECT count(*) FROM audit_log WHERE action = 'user.room-name'")
-        .fetch_one(&s.pool)
-        .await
-        .unwrap();
-    assert_eq!(audits, 1);
+    // Both are in the audit log, the one replaced at once too.
+    let audits: Vec<(String, String)> = sqlx::query_as(
+        "SELECT detail->>'from', detail->>'to' FROM audit_log WHERE action = 'user.room-name' AND actor = 'slur-filter'
+          ORDER BY id",
+    )
+    .fetch_all(&s.pool)
+    .await
+    .unwrap();
+    assert_eq!(audits, [("badword ffa".to_string(), kind), ("flaky races".to_string(), late)]);
     s.shutdown().await;
 }
 
@@ -479,11 +483,25 @@ async fn racial_slurs_in_names_and_codes_are_replaced() {
     tokio::time::sleep(std::time::Duration::from_millis(2500)).await;
     assert!(kind_name(&s.get("/v1/me", Some(&session_b)).await.1["displayName"]));
     assert!(kind_code(&s.get("/v1/me", Some(&session_c)).await.1["connectCode"]));
-    let audits: i64 = sqlx::query_scalar("SELECT count(*) FROM audit_log WHERE actor = 'slur-filter'")
-        .fetch_one(&s.pool)
-        .await
-        .unwrap();
-    assert_eq!(audits, 2);
+    // Every replacement is in the audit log: the three made at once and the two late ones.
+    let audits: Vec<(String, String)> =
+        sqlx::query_as("SELECT action, detail->>'from' FROM audit_log WHERE actor = 'slur-filter' ORDER BY id")
+            .fetch_all(&s.pool)
+            .await
+            .unwrap();
+    let mut audits: Vec<(&str, &str)> = audits.iter().map(|(a, f)| (a.as_str(), f.as_str())).collect();
+    // The two late ones may land in either order.
+    audits[3..].sort();
+    assert_eq!(
+        audits,
+        [
+            ("user.signup_name", "xXbadwordXx"),
+            ("user.set_code", "BADW"),
+            ("user.rename", "badword 2"),
+            ("user.rename", "flaky"),
+            ("user.set_code", code_c.as_str()),
+        ]
+    );
 
     // A rename lock (pp-admin user lock-name) refuses every rename.
     let uid_b = s.get("/v1/me", Some(&session_b)).await.1["uid"].as_str().unwrap().parse().unwrap();

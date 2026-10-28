@@ -102,6 +102,39 @@ pub async fn chat_report_done(pool: &PgPool, actor: &str, id: i64) -> anyhow::Re
     Ok(done)
 }
 
+/// A racial slur the filter or `slur-scan` replaced, as `admin user slur-log` lists it.
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct SlurReplacement {
+    pub at: chrono::DateTime<chrono::Utc>,
+    /// `slur-filter` (sign-up, rename, code pick, room name, or its late re-check) or the admin
+    /// who ran `slur-scan --apply`.
+    pub actor: String,
+    /// `user.signup_name`, `user.rename`, `user.set_code` or `user.room-name`.
+    pub action: String,
+    pub target: Option<String>,
+    pub from_text: Option<String>,
+    pub to_text: Option<String>,
+    /// The account as it is now (none once it is deleted).
+    pub code: Option<String>,
+    pub name: Option<String>,
+}
+
+/// The newest `limit` slur replacements (audit rows with reason "racial slur"), newest first.
+pub async fn slur_replacements(pool: &PgPool, limit: i64) -> anyhow::Result<Vec<SlurReplacement>> {
+    Ok(sqlx::query_as::<_, SlurReplacement>(
+        "SELECT a.at, a.actor, a.action, a.target, a.detail->>'from' AS from_text, a.detail->>'to' AS to_text,
+                u.connect_code AS code, u.display_name AS name
+           FROM audit_log a
+           LEFT JOIN users u ON u.uid::text = a.target
+          WHERE a.detail->>'reason' = 'racial slur'
+          ORDER BY a.at DESC, a.id DESC
+          LIMIT $1",
+    )
+    .bind(limit)
+    .fetch_all(pool)
+    .await?)
+}
+
 /// `admin ranked recompute`: every rank and placement from the rating history, audit-logged.
 pub async fn recompute_ranked_tiers(pool: &PgPool, actor: &str) -> anyhow::Result<accounts::ranked::Recomputed> {
     let done = accounts::ranked::recompute_tiers(pool).await?;

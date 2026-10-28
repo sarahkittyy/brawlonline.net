@@ -9,8 +9,9 @@
 //! The check waits for the model (well under a second) but never blocks a sign-up: when DeepInfra
 //! fails or is slow the text is stored as typed and checked again in the background
 //! ([`recheck_name`], [`recheck_code`]), which replaces it only if the player has not changed it
-//! since. Every replacement is in `audit_log` (actor `slur-filter`). `pp-admin user slur-scan`
-//! runs the same check over every account. Off while `DEEPINFRA_API_KEY` is unset.
+//! since. Every replacement is in `audit_log` (actor `slur-filter`; `pp-admin user slur-log` lists
+//! them). `pp-admin user slur-scan` runs the same check over every account. Off while
+//! `DEEPINFRA_API_KEY` is unset.
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -225,10 +226,7 @@ pub fn kind_prefix() -> &'static str {
 pub async fn screen_name(state: &AppState, name: &str) -> (String, bool) {
     match state.slur_filter.screen(What::DisplayName, name).await {
         Screened::Clean => (name.to_string(), false),
-        Screened::Replace(kind) => {
-            tracing::info!(from = name, to = kind, "racial slur in a display name replaced");
-            (kind.to_string(), false)
-        }
+        Screened::Replace(kind) => (kind.to_string(), false),
         Screened::Unchecked => (name.to_string(), true),
     }
 }
@@ -238,10 +236,7 @@ pub async fn screen_name(state: &AppState, name: &str) -> (String, bool) {
 pub async fn screen_code_start(state: &AppState, prefix: &str) -> (String, bool) {
     match state.slur_filter.screen(What::CodeStart, prefix).await {
         Screened::Clean => (prefix.to_string(), false),
-        Screened::Replace(kind) => {
-            tracing::info!(from = prefix, to = kind, "racial slur in a connect code start replaced");
-            (kind.to_string(), false)
-        }
+        Screened::Replace(kind) => (kind.to_string(), false),
         Screened::Unchecked => (prefix.to_string(), true),
     }
 }
@@ -251,11 +246,18 @@ pub async fn screen_code_start(state: &AppState, prefix: &str) -> (String, bool)
 pub async fn screen_room_name(state: &AppState, name: &str) -> (String, bool) {
     match state.slur_filter.screen(What::RoomName, name).await {
         Screened::Clean => (name.to_string(), false),
-        Screened::Replace(kind) => {
-            tracing::info!(from = name, to = kind, "racial slur in a room name replaced");
-            (kind.to_string(), false)
-        }
+        Screened::Replace(kind) => (kind.to_string(), false),
         Screened::Unchecked => (name.to_string(), true),
+    }
+}
+
+/// Logs a replacement made before the text was stored ([`screen_name`] and the like gave a kind
+/// text for `from`), once the account has it: the journal and `audit_log` as the late ones, so
+/// `pp-admin user slur-log` lists every replacement. A failed audit only warns.
+pub async fn audit_screened(state: &AppState, action: &str, uid: Uuid, from: &str, to: &str) {
+    tracing::info!(%uid, from, to, action, "racial slur replaced");
+    if let Err(e) = audit_replacement(&state.pool, ACTOR, action, uid, from, to).await {
+        tracing::warn!(%uid, "audit of a slur replacement failed: {e}");
     }
 }
 
