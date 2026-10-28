@@ -22,4 +22,7 @@ public:
   virtual void SetVolume(int) {}
   // Returns true if successful.
   virtual bool SetRunning(bool running) { return false; }
+  // Called often from the CPU thread while the game makes sound: a backend whose output can die
+  // by itself checks that it still plays (CubebStream).
+  virtual void CheckOutput() {}
 };

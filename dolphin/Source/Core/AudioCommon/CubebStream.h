@@ -4,6 +4,7 @@
 #pragma once
 
 #include <array>
+#include <atomic>
 #include <memory>
 #include <vector>
 
@@ -29,9 +30,12 @@ public:
   bool Init() override;
   bool SetRunning(bool running) override;
   void SetVolume(int) override;
+  void CheckOutput() override;
   static bool IsValid() { return true; }
 
 private:
+  bool OpenStream();
+  void ReopenStream();
   struct WiimoteStreamData
   {
     CubebStream* self;
@@ -41,6 +45,21 @@ private:
   bool m_stereo = false;
   std::shared_ptr<cubeb> m_ctx;
   cubeb_stream* m_stream = nullptr;
+  cubeb_stream_params m_params{};
+  u32 m_latency = 0;
+  int m_volume = 100;
+  bool m_running = false;
+
+  // The output's health (CheckOutput): when cubeb last asked for samples (steady clock, us), and
+  // whether it said the stream failed. Its WASAPI backend ends the stream when the device goes
+  // away and it cannot move to another one, or when the device stops answering, sometimes without
+  // telling: the game then played on in silence until Dolphin was restarted (bug report #176).
+  std::atomic<s64> m_last_callback_us{0};
+  std::atomic<bool> m_failed{false};
+  std::atomic<bool> m_output_running{false};
+  std::atomic<bool> m_reopen_queued{false};
+  std::atomic<s64> m_next_reopen_us{0};
+  int m_reopen_failures = 0;
   std::array<WiimoteStreamData, 4> m_wiimote_stream_data{};
   std::array<cubeb_stream*, 4> m_wiimote_streams{};
 
