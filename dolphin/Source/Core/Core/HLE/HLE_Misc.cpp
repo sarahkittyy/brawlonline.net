@@ -631,6 +631,7 @@ void BrawlbackCapturePadThreadReadHook(const Core::CPUThreadGuard& guard)
   // input delay). Then, on every pass, replace every player's pad with GekkoNet's input for this
   // frame. Otherwise the local player's own game would use the live sample on this frame while
   // the peer (and any later resimulation of this frame) uses the delayed one.
+  Gprb::PadsOnPadRead();
   if (!IsResimulationPass())
   {
     Harness::OnGamePadRead();

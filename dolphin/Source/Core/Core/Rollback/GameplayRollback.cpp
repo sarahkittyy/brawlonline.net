@@ -732,6 +732,10 @@ struct HostPads
   u32 seen_generation = 0;
   std::array<HostPadRead, 4> last{};
   std::array<Clock::time_point, 4> instant{};  // each channel's last read (PadsLatestSampleAgeMs)
+  // `instant` when the pad thread's updateLowGC returned (PadsOnPadRead): the reads its pass is
+  // made of, until the pass ends (PadsOnPadThreadUpdated).
+  std::array<Clock::time_point, 4> pass_instant{};
+  bool pass_instant_valid = false;
   HostPadReadStats stats{};
 };
 HostPads s_host_pads;
@@ -855,6 +859,21 @@ void LogRead(int chan, Clock::time_point now, std::optional<Clock::time_point> d
 std::array<Clock::time_point, 4> HostPadReadInstants()
 {
   return s_host_pads.instant;
+}
+
+// The reads the pass that ends now was made of: those of its updateLowGC (bug report #173). An SI
+// poll can come between updateLowGC and the end of the pass (the pad thread goes on into
+// updateLow's Wii controllers and P+'s post-processing, and the poll's interrupt or another
+// thread can run in between), so the newest read is then a poll newer than the pass's.
+std::array<Clock::time_point, 4> TakePassReadInstants()
+{
+  HostPads& h = s_host_pads;
+  if (!h.pass_instant_valid)
+    return h.instant;
+  h.pass_instant_valid = false;
+  if (h.pass_instant != h.instant)
+    ++h.stats.pass_older;
+  return h.pass_instant;
 }
 
 GCPadStatus ReadHostPadNow(int chan, HostPadSource source)
@@ -1242,6 +1261,12 @@ void PadsOnLoopTop(Core::System& system)
   }
 }
 
+void PadsOnPadRead()
+{
+  s_host_pads.pass_instant = s_host_pads.instant;
+  s_host_pads.pass_instant_valid = true;
+}
+
 void PadsOnPadThreadUpdated(Core::System& system)
 {
   auto& memory = system.GetMemory();
@@ -1252,7 +1277,7 @@ void PadsOnPadThreadUpdated(Core::System& system)
   {
     auto& pass = s_pads.recent[s_pads.recent_next];
     pass.pads = s_pads.latest;
-    pass.sampled_at = HostPadReadInstants();
+    pass.sampled_at = TakePassReadInstants();
     pass.at = s_pads.latest_at;
     s_pads.recent_next = (s_pads.recent_next + 1) % s_pads.recent.size();
     s_pads.recent_n = std::min(s_pads.recent_n + 1, s_pads.recent.size());
@@ -1268,7 +1293,9 @@ void PadsOnPadThreadUpdated(Core::System& system)
   if (HostDecodeEnabled() && !s_decode.off && !system.GetCoreTiming().IsRollbackResimulating() &&
       s_host_pads.scheduled.load(std::memory_order_relaxed))
   {
-    const auto sampled = HostPadReadInstants();
+    const auto& sampled = s_pads.recent[(s_pads.recent_next + s_pads.recent.size() - 1) %
+                                        s_pads.recent.size()]
+                              .sampled_at;
     for (int chan = 0; chan < 4; ++chan)
     {
       const u8* guest = s_pads.latest.data() + chan * Addr::PAD_STRIDE;

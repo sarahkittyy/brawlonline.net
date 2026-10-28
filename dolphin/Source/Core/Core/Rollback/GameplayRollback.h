@@ -227,6 +227,9 @@ bool IsWiiPad(const u8* pad);
 // Main thread, top of every game-loop iteration (any mode). `frame` is the game frame the
 // iteration produces (g_GameFrame.frameCounter + 1 in a match).
 void PadsOnLoopTop(Core::System& system);
+// Pad thread, when updateLowGC returns (BrawlbackCapturePadThreadReadHook): the SI reads it took
+// are the ones the pass is made of (bug report #173).
+void PadsOnPadRead();
 // Pad thread, after updateLow and P+'s post-processing wrote the slots (GprbPadThreadLoopHook):
 // keeps the newest sample (PadsLatestRaw) and puts the frame's slots back.
 void PadsOnPadThreadUpdated(Core::System& system);
@@ -327,6 +330,9 @@ struct HostPadReadStats
   u64 decode_declined = 0;
   u64 decode_checked = 0;
   u64 decode_mismatched = 0;
+  // Pad-thread passes made of an older read than the newest (an SI poll came between updateLowGC
+  // and the end of the pass, bug report #173).
+  u64 pass_older = 0;
   u64 latched = 0;       // in a re-run: the last read before it
   u64 relatched = 0;     // in a re-run, the last read too old: read now
   double late_max_ms = 0;
