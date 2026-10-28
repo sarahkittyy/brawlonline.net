@@ -8,7 +8,7 @@ import Button from "@mui/material/Button";
 import CircularProgress from "@mui/material/CircularProgress";
 import Tooltip from "@mui/material/Tooltip";
 import { clsx } from "clsx";
-import React, { useState } from "react";
+import React from "react";
 
 import { RoomNameMessages } from "@/components/room_name/room_name.messages";
 import { RoomNameField } from "@/components/room_name/room_name_field";
@@ -277,7 +277,6 @@ const OwnRoomRow = ({
   onShowRuleset?: (room: PublicRoom) => void;
   forceEditText?: string;
 }) => {
-  const [editing, setEditing] = useState(forceEditText !== undefined);
   const inGame = room.status === "in-game";
   return (
     <div className={clsx(styles.row, styles.own)} data-room={room.code} data-own-room="true">
@@ -288,11 +287,10 @@ const OwnRoomRow = ({
             fallback={RoomNameMessages.defaultName(room.host)}
             canEdit={host && !!onRename}
             onSave={async (name) => onRename?.(room.code, name)}
-            onEditingChange={setEditing}
             initialEditText={forceEditText}
           />
         </div>
-        {editing ? <div className={styles.names}>{RoomNameMessages.editHint()}</div> : <PlayerNames room={room} />}
+        <PlayerNames room={room} />
       </div>
       <RulesetCell room={room} onShow={onShowRuleset} />
       <span className={styles.mode}>{modeLabel(room.mode)}</span>

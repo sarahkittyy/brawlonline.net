@@ -20,8 +20,6 @@ export type RoomNameFieldProps = {
   canEdit: boolean;
   /** Stores the typed name (empty: none); throws when it was refused (the box stays open). */
   onSave: (name: string) => Promise<void>;
-  /** The box opened or closed (the room list shows its hint under it meanwhile). */
-  onEditingChange?: (editing: boolean) => void;
   /** The name's text style (the list row's or the panel title's). */
   className?: string;
   /** Stories and screenshots: open with this text. */
@@ -32,29 +30,17 @@ export type RoomNameFieldProps = {
  * A room's name with the host's pencil (docs/design/rooms.md §1.4). Editing is in place: Enter or a click elsewhere
  * saves, Esc goes back. Clicks and keys stay inside, so a list row around it doesn't take them.
  */
-export const RoomNameField = ({
-  name,
-  fallback,
-  canEdit,
-  onSave,
-  onEditingChange,
-  className,
-  initialEditText,
-}: RoomNameFieldProps) => {
+export const RoomNameField = ({ name, fallback, canEdit, onSave, className, initialEditText }: RoomNameFieldProps) => {
   const [text, setText] = useState<string | null>(initialEditText ?? null);
   const [saving, setSaving] = useState(false);
   // Esc (or a save under way) closes the box without the blur saving again.
   const closing = useRef(false);
   const editing = text !== null;
 
-  const setEditing = (next: string | null) => {
-    setText(next);
-    onEditingChange?.(next !== null);
-  };
   const open = () => {
     if (canEdit && !editing) {
       closing.current = false;
-      setEditing(name ?? "");
+      setText(name ?? "");
     }
   };
   const save = async () => {
@@ -64,14 +50,14 @@ export const RoomNameField = ({
     const typed = text.trim().replace(/\s+/g, " ");
     if (typed === (name ?? "")) {
       closing.current = true;
-      setEditing(null);
+      setText(null);
       return;
     }
     closing.current = true;
     setSaving(true);
     try {
       await onSave(typed);
-      setEditing(null);
+      setText(null);
     } catch {
       // Refused (the toast says why): the box stays open with the text.
       closing.current = false;
@@ -103,7 +89,7 @@ export const RoomNameField = ({
             } else if (e.key === "Escape") {
               e.preventDefault();
               closing.current = true;
-              setEditing(null);
+              setText(null);
             }
           }}
           data-testid="room-name-input"
