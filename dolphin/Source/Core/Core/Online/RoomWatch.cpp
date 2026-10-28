@@ -12,10 +12,23 @@
 #include <fmt/format.h>
 
 #include "Common/Logging/Log.h"
+#include "Core/Config/MainSettings.h"
+#include "Core/Config/WiimoteSettings.h"
+#include "Core/Core.h"
+#include "Core/Harness/Harness.h"
+#include "Core/HW/GCPad.h"
+#include "Core/HW/SI/SI_Device.h"
+#include "Core/HW/Wiimote.h"
+#include "Core/HW/WiimoteEmu/WiimoteEmu.h"
 #include "Core/Rollback/GameplayRollback.h"
 #include "Core/Rollback/GameplaySession.h"
 #include "Core/Rollback/PeerData.h"
 #include "Core/Rollback/ReplayFile.h"
+#include "Core/System.h"
+#include "InputCommon/ControllerEmu/ControlGroup/Buttons.h"
+#include "InputCommon/ControllerEmu/ControllerEmu.h"
+#include "InputCommon/GCAdapter.h"
+#include "InputCommon/InputConfig.h"
 #include "VideoCommon/OnScreenDisplay.h"
 
 namespace Online::RoomWatch
@@ -32,6 +45,10 @@ constexpr Clock::duration LEAVE_CSS_TIMEOUT = std::chrono::seconds(10);
 constexpr Clock::duration TOAST_EVERY = std::chrono::seconds(1);
 constexpr u32 TOAST_MS = 1500;
 constexpr char TOAST_TEXT[] = "Game ended, press B to return to CSS.";
+// Out of frames this long (the players' upload paused: their connection is busy), it says so.
+constexpr Clock::duration BUFFERING_TOAST_AFTER = std::chrono::seconds(1);
+constexpr char BUFFERING_TEXT[] =
+    "Buffering (the players' connection is busy), press B to return to CSS.";
 // gfPadButtons (Rollback/GameplaySession.cpp HOLD_BUTTONS): START, B.
 constexpr u16 BUTTON_START = 0x1000;
 constexpr u16 BUTTON_B = 0x0200;
@@ -199,12 +216,17 @@ struct State
   bool pad_released = false;
   bool leaving = false;
   Clock::time_point next_toast{};
+  // Since when the watched game has been out of frames (none: it is not).
+  std::optional<Clock::time_point> buffering_since;
+  u32 buffering_toasts_now = 0;  // ... and its toasts since
+  bool played = false;           // it has played since its start's buffer
   std::string last_error;
   // For the harness.
   u32 watched = 0;      // games whose match started here
   u32 finished = 0;     // ... and ended by themselves (not left early)
   u32 left_early = 0;
   u32 toasts = 0;
+  u32 buffering_toasts = 0;
   u32 bad_packets = 0;
   picojson::array results;  // each watched game's end (PlaybackStatus)
 };
@@ -213,6 +235,7 @@ std::mutex s_mutex;
 State s;
 std::atomic<bool> s_abort{false};
 std::atomic<bool> s_watching{false};
+std::atomic<bool> s_hold_feed{false};
 
 std::string WatchJson(std::optional<bool> want, std::optional<bool> watching)
 {
@@ -225,18 +248,80 @@ std::string WatchJson(std::optional<bool> want, std::optional<bool> watching)
   return picojson::value(o).serialize();
 }
 
-// Any controller's START or B (the local controllers' newest sample, never the replay's inputs).
-bool LeavePressed(bool* released)
+// START or B on the host's controllers as they are now: the GameCube ports (mapped or a Wii U
+// adapter's) and the emulated Wii Remotes' B and +. A watch that is buffering stands still between
+// two frames, and so does the game's pad thread: its newest sample is from before (bug report
+// #171, a sitter's view stuck while the players' upload paused, where START and B did nothing).
+bool HostLeaveDown()
 {
-  const Gprb::RawPads latest = Gprb::PadsLatestRaw();
-  bool down = false;
-  for (u32 port = 0; port < 8; ++port)  // the GameCube ports and the Wii Remotes
+  if (!Pad::IsInitialized())
+    return false;
+  // As the CPU thread before an SI poll: the controllers count only while the game window has
+  // focus, unless background input is on.
+  Core::UpdateInputGate(!Config::Get(Config::MAIN_INPUT_BACKGROUND_INPUT),
+                        Config::Get(Config::MAIN_LOCK_CURSOR));
+  for (int chan = 0; chan < 4; ++chan)
   {
-    const u8* pad = latest.data() + port * Gprb::Addr::PAD_STRIDE;
-    if (pad[0x38] != 0)  // gfPadError: no controller
+    const SerialInterface::SIDevices type = Config::Get(Config::GetInfoForSIDevice(chan));
+    GCPadStatus pad{};
+    if (type == SerialInterface::SIDEVICE_WIIU_ADAPTER)
+    {
+      pad = GCAdapter::Peek(chan);
+      Harness::ApplyPadOverride(chan, &pad);
+    }
+    else if (SerialInterface::SIDevice_IsGCController(type))
+    {
+      pad = Pad::GetStatus(chan);
+    }
+    else
+    {
       continue;
-    const u16 buttons = static_cast<u16>(pad[2] << 8 | pad[3]);
-    down = down || (buttons & (BUTTON_START | BUTTON_B)) != 0;
+    }
+    if (pad.isConnected && (pad.button & (PAD_BUTTON_START | PAD_BUTTON_B)) != 0)
+      return true;
+  }
+  if (!Core::System::GetInstance().IsWii() || !Wiimote::GetConfig() ||
+      Wiimote::GetConfig()->ControllersNeedToBeCreated())
+  {
+    return false;
+  }
+  // The Wii Remote's buttons group: A, B, 1, 2, -, +, HOME.
+  static constexpr u16 WIIMOTE_LEAVE[] = {0, 1, 0, 0, 0, 1, 0};
+  const auto lock = ControllerEmu::EmulatedController::GetStateLock();
+  for (int i = 0; i < 4; ++i)
+  {
+    if (Config::Get(Config::GetInfoForWiimoteSource(i)) != WiimoteSource::Emulated)
+      continue;
+    const auto* buttons = static_cast<const ControllerEmu::Buttons*>(
+        Wiimote::GetWiimoteGroup(i, WiimoteEmu::WiimoteGroup::Buttons));
+    u16 down = 0;
+    buttons->GetState(&down, WIIMOTE_LEAVE);
+    if (down != 0)
+      return true;
+  }
+  return false;
+}
+
+// Any controller's START or B (the local controllers' newest sample, never the replay's inputs);
+// `standing_still`: the host's controllers now instead (HostLeaveDown).
+bool LeavePressed(bool* released, bool standing_still)
+{
+  bool down = false;
+  if (standing_still)
+  {
+    down = HostLeaveDown();
+  }
+  else
+  {
+    const Gprb::RawPads latest = Gprb::PadsLatestRaw();
+    for (u32 port = 0; port < 8; ++port)  // the GameCube ports and the Wii Remotes
+    {
+      const u8* pad = latest.data() + port * Gprb::Addr::PAD_STRIDE;
+      if (pad[0x38] != 0)  // gfPadError: no controller
+        continue;
+      const u16 buttons = static_cast<u16>(pad[2] << 8 | pad[3]);
+      down = down || (buttons & (BUTTON_START | BUTTON_B)) != 0;
+    }
   }
   if (!down)
   {
@@ -370,7 +455,8 @@ std::vector<std::string> Service(Clock::time_point now, const RoomInfo& room)
       s.left_css = true;
     auto& games = s.assembler.Games();
     Game* g = !games.empty() && games.front().uid == s.armed_uid ? &games.front() : nullptr;
-    if (g && !s.leaving && (g->bytes.size() != s.fed_size || (g->Done() && !s.fed_done)))
+    if (g && !s.leaving && !s_hold_feed &&
+        (g->bytes.size() != s.fed_size || (g->Done() && !s.fed_done)))
     {
       if (auto f = ParseGame(*g))
       {
@@ -383,8 +469,8 @@ std::vector<std::string> Service(Clock::time_point now, const RoomInfo& room)
     const bool in_match = pv.in_match || (pv.starting && s.left_css);
     if (!s.leaving && (abort || room.own_game))
       LeaveEarly(&out, room, abort ? "asked" : "this player's own game starts");
-    else if (!s.leaving && in_match && LeavePressed(&s.pad_released))
-      LeaveEarly(&out, room, "START or B");
+    else if (!s.leaving && in_match && LeavePressed(&s.pad_released, pv.buffering))
+      LeaveEarly(&out, room, pv.buffering ? "START or B, buffering" : "START or B");
     // The players' game is over while it still plays here.
     const bool players_done = !room.room_in_game || s.assembler.Games().size() > 1;
     if (!s.leaving && pv.in_match && players_done && now >= s.next_toast)
@@ -392,6 +478,36 @@ std::vector<std::string> Service(Clock::time_point now, const RoomInfo& room)
       OSD::AddTypedMessage(OSD::MessageType::RoomWatch, TOAST_TEXT, TOAST_MS, OSD::Color::CYAN);
       s.next_toast = now + TOAST_EVERY;
       ++s.toasts;
+    }
+    // The players' upload paused (players first: their connection is busy) and the frames ran
+    // out: it says why it stands still, and how to leave. Not the wait for a buffer's frames at
+    // the start (the upload trickles then), only once it has played.
+    if (pv.in_match && !pv.buffering)
+      s.played = true;
+    if (pv.in_match && pv.buffering && s.played && !s.leaving)
+    {
+      if (!s.buffering_since)
+        s.buffering_since = now;
+      if (!players_done && now - *s.buffering_since >= BUFFERING_TOAST_AFTER &&
+          now >= s.next_toast)
+      {
+        if (s.buffering_toasts_now++ == 0)
+          INFO_LOG_FMT(NETPLAY, "RoomWatch: buffering: out of the players' frames");
+        OSD::AddTypedMessage(OSD::MessageType::RoomWatch, BUFFERING_TEXT, TOAST_MS,
+                             OSD::Color::YELLOW);
+        s.next_toast = now + TOAST_EVERY;
+        ++s.buffering_toasts;
+      }
+    }
+    else if (s.buffering_since)
+    {
+      if (s.buffering_toasts_now != 0)
+      {
+        INFO_LOG_FMT(NETPLAY, "RoomWatch: frames again after {:.1f} s buffering",
+                     std::chrono::duration<double>(now - *s.buffering_since).count());
+      }
+      s.buffering_since.reset();
+      s.buffering_toasts_now = 0;
     }
     if (pv.starting && !s.left_css && now - s.armed_at > LEAVE_CSS_TIMEOUT)
     {
@@ -454,6 +570,9 @@ std::vector<std::string> Service(Clock::time_point now, const RoomInfo& room)
   s.pad_released = false;
   s.leaving = false;
   s.next_toast = {};
+  s.buffering_since.reset();
+  s.buffering_toasts_now = 0;
+  s.played = false;
   ++s.watched;
   s_watching = true;
   INFO_LOG_FMT(NETPLAY, "RoomWatch: watching the room's game {} ({} frames so far)", g.number,
@@ -473,6 +592,11 @@ void Abort()
   s_abort = true;
 }
 
+void HoldFeed(bool hold)
+{
+  s_hold_feed = hold;
+}
+
 picojson::object Status()
 {
   std::lock_guard lk(s_mutex);
@@ -486,7 +610,10 @@ picojson::object Status()
   o["finished"] = picojson::value(static_cast<double>(s.finished));
   o["left_early"] = picojson::value(static_cast<double>(s.left_early));
   o["toasts"] = picojson::value(static_cast<double>(s.toasts));
+  o["buffering_toasts"] = picojson::value(static_cast<double>(s.buffering_toasts));
   o["bad_packets"] = picojson::value(static_cast<double>(s.bad_packets));
+  o["hold"] = picojson::value(s_hold_feed.load());
+  o["buffering"] = picojson::value(s.buffering_since.has_value());
   o["error"] = picojson::value(s.last_error);
   picojson::array games;
   for (const Game& g : s.assembler.Games())

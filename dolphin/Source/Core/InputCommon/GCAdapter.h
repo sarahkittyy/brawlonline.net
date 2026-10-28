@@ -28,6 +28,10 @@ GCPadStatus Input(int chan);
 // older than the payloads kept, or none arrived yet (the caller reads Input). As Input otherwise:
 // the origin on a new connection, a neutral state without an adapter.
 std::optional<GCPadStatus> InputAt(int chan, Clock::time_point t);
+// The controller in this port now, read from outside the emulated game (a room watch standing
+// still): unlike Input, a new connection's origin stays for the game's next read (nothing pressed
+// meanwhile). A neutral state without an adapter.
+GCPadStatus Peek(int chan);
 
 void Output(int chan, u8 rumble_command);
 bool IsDetected(const char** error_message);

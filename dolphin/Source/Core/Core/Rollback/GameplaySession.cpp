@@ -7604,6 +7604,7 @@ PlaybackView GetPlaybackView()
   v.room_watch = s.pb.room_watch;
   v.starting = s.phase == Phase::Armed && !s.pb.stopped && !s.await_scene_exit;
   v.stopping = PlaybackStoppingLocked();
+  v.buffering = s.pb.buffering;
   return v;
 }
 

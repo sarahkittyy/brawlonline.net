@@ -2252,6 +2252,12 @@ std::optional<std::string> HarnessRequest(const picojson::object& args)
     RoomWatch::Abort();
     return std::nullopt;
   }
+  else if (op == "watch_hold")
+  {
+    // The watched game's frames stop coming, as when the players' upload pauses.
+    RoomWatch::HoldFeed(flag("hold", true));
+    return std::nullopt;
+  }
   else if (op == "release_lock")
   {
     std::lock_guard lk(s_mutex);
