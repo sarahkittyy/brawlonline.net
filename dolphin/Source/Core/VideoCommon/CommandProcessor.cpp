@@ -495,7 +495,11 @@ void CommandProcessorManager::SetCPStatusFromGPU()
   if (interrupt != m_interrupt_set.IsSet() && !m_interrupt_waiting.IsSet())
   {
     const u64 userdata = interrupt ? 1 : 0;
-    if (IsOnThread(m_system))
+    // With the deterministic GPU thread the FIFO is read on the CPU thread (RunGpuOnCpu), as in
+    // single core, so the interrupt is set here too. The video backend's path below sets nothing in
+    // that mode: a game waiting for its CP breakpoint (007 Nightfire's missions, bug report #162)
+    // waited for good, and m_interrupt_waiting stayed set, holding back every later CP interrupt.
+    if (IsOnThread(m_system) && !m_system.GetFifo().UseDeterministicGPUThread())
     {
       if (!interrupt || bpInt || undfInt || ovfInt)
       {
