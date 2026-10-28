@@ -1,9 +1,16 @@
 //! Rooms: the room model, free of I/O (`docs/rooms-protocol.md`, decisions in
 //! `docs/design/rooms.md`).
 //!
-//! A room is in memory only: it exists while someone is in it, and its code is free again as soon
-//! as it is empty, so nothing about it needs to outlive the process (a restart of mm empties every
-//! room, and the members' games see their online connection drop, as with a search).
+//! A room is in memory: it exists while someone is in it, and its code is free again as soon as it
+//! is empty. A restart of mm (every deploy) drops every member's online connection; so that the
+//! rooms are still there when their games connect again (bug report #178, 2026-10-28: a deploy in
+//! the middle of a room's game, and after it "Room not found."), mm saves them when it is stopped
+//! ([`RoomBook::save`]) and the next mm puts them back ([`RoomBook::restore`]): each member keeps
+//! their slot for [`RoomsConfig::restore_grace`] and gets it back by joining the room again, as
+//! their game does by itself after a dropped connection. A member who has not come back by then
+//! leaves, as a dropped connection does. The saved form is the serde form of [`Room`]: a field
+//! added to it (or to [`Member`], [`MemberInfo`], [`Phase`], `SetProgress`) needs a
+//! `#[serde(default)]` for the rooms an older mm saved, or they are lost (logged) at that deploy.
 //!
 //! Members are online connections ([`crate::engine`] state `Online`): one per account. A room has
 //! four slots; a slot is the in-game port and stays the same for the life of the room. A new room
@@ -27,6 +34,7 @@ use std::net::SocketAddrV4;
 use std::time::{Duration, Instant};
 
 use chrono::Utc;
+use serde::{Deserialize, Serialize};
 use common::proto::{GetTicketResp, Player, GET_TICKET_RESP};
 use common::ratelimit::{RateLimiter, Window};
 use common::rooms::{
@@ -59,6 +67,9 @@ pub struct RoomsConfig {
     pub request_windows: Vec<Window>,
     /// Stages and items sent with a room's game (Direct's: rooms play like Direct).
     pub rules: ModeRules,
+    /// Rooms put back after a restart ([`RoomBook::restore`]) keep each member's slot this long for
+    /// their game to join again.
+    pub restore_grace: Duration,
 }
 
 impl Default for RoomsConfig {
@@ -72,7 +83,26 @@ impl Default for RoomsConfig {
             join_windows: vec![Window::new(10, minute), Window::new(60, Duration::from_secs(3600))],
             request_windows: vec![Window::new(40, Duration::from_secs(10))],
             rules: ModeRules::default(),
+            restore_grace: Duration::from_secs(60),
         }
+    }
+}
+
+/// An [`Instant`] saved with a room ([`RoomBook::save`]) as the seconds before the save, and put
+/// back as that long before the restore (the restart itself is not counted).
+mod ago {
+    use serde::{Deserialize, Deserializer, Serializer};
+    use std::time::{Duration, Instant};
+
+    pub fn serialize<S: Serializer>(t: &Instant, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_f64(t.elapsed().as_secs_f64())
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Instant, D::Error> {
+        let secs = f64::deserialize(d)?;
+        let ago = Duration::from_secs_f64(if secs.is_finite() { secs.clamp(0.0, 86_400.0) } else { 0.0 });
+        let now = Instant::now();
+        Ok(now.checked_sub(ago).unwrap_or(now))
     }
 }
 
@@ -83,7 +113,7 @@ const WATCH_AFTER_GAME: Duration = Duration::from_secs(30);
 const COUNT_GAME_AFTER: Duration = Duration::from_secs(30);
 
 /// Who a member is (from the verified account).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MemberInfo {
     pub uid: Uuid,
     pub display_name: String,
@@ -93,7 +123,7 @@ pub struct MemberInfo {
     pub room_name: Option<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct Member {
     conn: ConnId,
     info: MemberInfo,
@@ -115,23 +145,25 @@ struct Member {
     watch: bool,
     /// `room-watch` `watching`: their game shows one of the room's games now, since then. The
     /// room's next game does not wait for them ([`Room::playing`]).
+    #[serde(skip)]
     watching: Option<Instant>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct StartTicket {
     conn: ConnId,
     addr: SocketAddrV4,
     lan: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 enum Phase {
     Waiting,
     /// `players`: the slots (0-3) that play this game, the others sit it out; `host`: the game's
     /// host (the session's decider), one of them.
     Starting {
         match_id: String,
+        #[serde(with = "ago")]
         since: Instant,
         tickets: BTreeMap<usize, StartTicket>,
         players: Vec<usize>,
@@ -142,6 +174,7 @@ enum Phase {
     /// players (slot, account). `set`: the session plays the room's set (its games are counted as
     /// they are reported, not when it ends).
     InGame {
+        #[serde(with = "ago")]
         since: Instant,
         match_id: String,
         unreachable: BTreeSet<[u8; 2]>,
@@ -150,7 +183,7 @@ enum Phase {
     },
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct Room {
     code: String,
     /// The name its host gave it (`docs/design/rooms.md` §1.4): the creator's at the start, then
@@ -167,6 +200,7 @@ struct Room {
     /// Slot index (0-3) of the host.
     host: usize,
     phase: Phase,
+    #[serde(with = "ago")]
     created: Instant,
     /// Rooms created before this one since mm started, plus one: the `n` of its chat group
     /// `room-<CODE>-<n>`, so a code used again later is another group.
@@ -195,6 +229,7 @@ struct Room {
     pick_draw: usize,
     /// When its last game was over (every player back): a member still marked watching long
     /// after that (their game never said it stopped) is waited for again ([`RoomBook::tick`]).
+    #[serde(skip)]
     game_over_at: Option<Instant>,
 }
 
@@ -639,6 +674,12 @@ pub struct RoomBook {
     create_limiter: RateLimiter<Uuid>,
     join_limiter: RateLimiter<Uuid>,
     request_limiter: RateLimiter<ConnId>,
+    /// Members of rooms put back after a restart whose game has not joined again yet: the stand-in
+    /// connection in their slot (no real connection has it) → the room's code and until when the
+    /// slot is kept ([`Self::restore`]).
+    away: HashMap<ConnId, (String, Instant)>,
+    /// The next stand-in connection: they count down from `ConnId::MAX` (real ones count up from 1).
+    next_away: ConnId,
 }
 
 fn send(out: &mut Vec<Output>, conn: ConnId, m: &impl serde::Serialize) {
@@ -666,6 +707,71 @@ impl RoomBook {
             join_seq: 0,
             match_counter: 0,
             room_counter: 0,
+            away: HashMap::new(),
+            next_away: ConnId::MAX,
+        }
+    }
+
+    /// Every room, to put back after mm restarts ([`Self::restore`]): mm saves them when it is
+    /// stopped (`server.rs`).
+    pub fn save(&self) -> serde_json::Value {
+        let rooms: Vec<serde_json::Value> = self
+            .rooms
+            .values()
+            .filter_map(|r| match serde_json::to_value(r) {
+                Ok(v) => Some(v),
+                Err(e) => {
+                    tracing::error!(code = %r.code, "room not saved: {e}");
+                    None
+                }
+            })
+            .collect();
+        serde_json::Value::Array(rooms)
+    }
+
+    /// Puts back the rooms the last mm saved ([`Self::save`]), before anyone is online: every
+    /// member's slot is kept for [`RoomsConfig::restore_grace`] (`away`) and is theirs again when
+    /// their game joins the room. A start under way is called off (its tickets went with the old
+    /// mm); a game under way goes on, and is over when its players are back on the room's CSS as
+    /// usual. Rooms that cannot be read are logged and left out.
+    pub fn restore(&mut self, now: Instant, saved: serde_json::Value) {
+        let serde_json::Value::Array(saved) = saved else {
+            tracing::error!("saved rooms are not a list: none put back");
+            return;
+        };
+        for v in saved {
+            let mut room: Room = match serde_json::from_value(v) {
+                Ok(r) => r,
+                Err(e) => {
+                    tracing::error!("a saved room could not be read: {e}");
+                    continue;
+                }
+            };
+            if self.rooms.contains_key(&room.code) || room.player_count() == 0 {
+                continue;
+            }
+            if matches!(room.phase, Phase::Starting { .. }) {
+                room.phase = Phase::Waiting;
+            }
+            let until = now + self.cfg.restore_grace;
+            for m in room.slots.iter_mut().flatten() {
+                m.conn = self.next_away;
+                self.next_away -= 1;
+                m.ready = false;
+                m.watch = false;
+                m.watching = None;
+                self.away.insert(m.conn, (room.code.clone(), until));
+                self.join_seq = self.join_seq.max(m.joined);
+            }
+            self.room_counter = self.room_counter.max(room.serial);
+            tracing::info!(
+                code = %room.code,
+                players = room.player_count(),
+                in_game = matches!(room.phase, Phase::InGame { .. }),
+                set = ?room.set.as_ref().map(|s| (s.game, s.wins)),
+                "room put back after the restart"
+            );
+            self.rooms.insert(room.code.clone(), room);
         }
     }
 
@@ -701,7 +807,8 @@ impl RoomBook {
     /// with this code is still the one with this serial.
     pub fn players(&self, code: &str, serial: u64) -> Vec<(ConnId, Uuid)> {
         let Some(room) = self.rooms.get(code).filter(|r| r.serial == serial) else { return Vec::new() };
-        let mut players: Vec<&Member> = room.members().map(|(_, m)| m).collect();
+        let mut players: Vec<&Member> =
+            room.members().map(|(_, m)| m).filter(|m| !self.away.contains_key(&m.conn)).collect();
         players.sort_by_key(|m| m.joined);
         players.into_iter().map(|m| (m.conn, m.info.uid)).collect()
     }
@@ -918,6 +1025,26 @@ impl RoomBook {
         let room = self.rooms.get(&code).ok_or(msg::ROOM_NOT_FOUND)?;
         if room.slot_of(conn).is_some() {
             // Already in it: the answer is the state, as for a join.
+            self.broadcast(&code, out);
+            return Ok(());
+        }
+        // Back after mm restarted: their own slot, as it was (`restore`).
+        let back = room
+            .members()
+            .find(|(_, m)| m.info.uid == who.uid && self.away.contains_key(&m.conn))
+            .map(|(i, m)| (i, m.conn));
+        if let Some((slot, stand_in)) = back {
+            if let Some(old) = self.member_of.get(&conn).cloned() {
+                self.leave(now, &old, conn, None, true, out);
+            }
+            self.away.remove(&stand_in);
+            let Some(room) = self.rooms.get_mut(&code) else { return Err(msg::ROOM_NOT_FOUND) };
+            let Some(m) = room.slots[slot].as_mut() else { return Err(msg::ROOM_NOT_FOUND) };
+            m.conn = conn;
+            m.info = who.clone();
+            tracing::info!(%code, player = %who.connect_code, slot = slot + 1, "back in the room after the restart");
+            self.changed.push((code.clone(), room.serial));
+            self.member_of.insert(conn, code.clone());
             self.broadcast(&code, out);
             return Ok(());
         }
@@ -1846,8 +1973,16 @@ impl RoomBook {
         }
     }
 
-    /// Starts that waited too long fail; games that never reported their end are over.
+    /// Starts that waited too long fail; games that never reported their end are over; members
+    /// of a room put back after a restart who did not come back leave.
     pub fn tick(&mut self, now: Instant, out: &mut Vec<Output>) {
+        let gone: Vec<(ConnId, String)> =
+            self.away.iter().filter(|(_, (_, until))| now >= *until).map(|(c, (code, _))| (*c, code.clone())).collect();
+        for (conn, code) in gone {
+            self.away.remove(&conn);
+            tracing::info!(%code, "a member did not come back after the restart");
+            self.leave(now, &code, conn, None, false, out);
+        }
         let mut late = Vec::new();
         let mut stale = Vec::new();
         for room in self.rooms.values() {
@@ -2725,6 +2860,98 @@ mod tests {
         let mut out = vec![];
         t.book.announce(code, &mut out);
         done.matched[0].1.set.clone().expect("the set ticket")
+    }
+
+    /// What the next mm puts back from `t`'s rooms (through the text the database keeps).
+    fn restart(t: &T) -> RoomBook {
+        let saved: Value = serde_json::from_str(&t.book.save().to_string()).unwrap();
+        let mut book = RoomBook::new(RoomsConfig::default());
+        book.restore(t.now, saved);
+        book
+    }
+
+    fn rejoin(book: &mut RoomBook, now: Instant, conn: ConnId, n: u8, code: &str) -> Vec<Output> {
+        let mut out = vec![];
+        book.request(now, conn, &info(n), RoomRequest::Join { code: code.into() }, &mut out);
+        out
+    }
+
+    /// mm restarts (every deploy) during a room's game (bug report #178: after it, "Room not
+    /// found." and a room CSS nobody could play from): the room is put back as it was, each member
+    /// gets their own slot back when their game joins again, the game ends as usual, and a member
+    /// who does not come back leaves once the grace is over.
+    #[test]
+    fn a_room_is_put_back_after_mm_restarts() {
+        let mut t = T::new();
+        let code = create(&mut t, 1);
+        t.req(1, RoomRequest::Slot { slot: 3, open: true });
+        join(&mut t, 2, &code);
+        join(&mut t, 3, &code);
+        ready_all(&mut t, &[1, 2, 3]);
+        for n in 1..=3u8 {
+            t.book.ticket(100 + n as ConnId, addr(n), String::new(), info(n).uid, &code).unwrap();
+        }
+        let serial = t.book.rooms[&code].serial;
+        let mut b = restart(&t);
+        assert_eq!(b.public_rooms(10)[0].status, RoomStatus::InGame);
+        assert_eq!(b.public_rooms(10)[0].players, 3);
+        // The slots are kept for their players: a stranger finds the room full.
+        assert_eq!(msgs(&rejoin(&mut b, t.now, 9, 9, &code), 9)[0]["error"], msg::ROOM_FULL);
+        let out = rejoin(&mut b, t.now, 12, 2, &code);
+        let s = last_state(&out, 12);
+        assert_eq!((s["you"].as_u64(), s["host"].as_u64(), s["status"].as_str()), (Some(2), Some(1), Some("in-game")));
+        assert_eq!(s["slots"][1]["player"]["inGame"], true);
+        let out = rejoin(&mut b, t.now, 11, 1, &code);
+        assert_eq!(last_state(&out, 11)["you"], 1);
+        assert_eq!(b.take_changed(), vec![(code.clone(), serial)]);
+        assert_eq!(b.players(&code, serial), vec![(11, info(1).uid), (12, info(2).uid)]);
+        // Their game ends; player 3's game never came back: the game is over when the grace is.
+        let mut out = vec![];
+        b.request(t.now, 11, &info(1), RoomRequest::Back { pickers: None }, &mut out);
+        b.request(t.now, 12, &info(2), RoomRequest::Back { pickers: None }, &mut out);
+        assert_eq!(last_state(&out, 11)["status"], "in-game");
+        let mut out = vec![];
+        b.tick(t.now + Duration::from_secs(59), &mut out);
+        assert!(out.is_empty());
+        b.tick(t.now + Duration::from_secs(60), &mut out);
+        let s = last_state(&out, 11);
+        assert_eq!((s["status"].as_str(), s["slots"][2]["player"].is_null()), (Some("waiting"), true), "{s}");
+        // A room nobody comes back to closes, and its code is free again.
+        let mut b = restart(&t);
+        b.tick(t.now + Duration::from_secs(60), &mut vec![]);
+        assert_eq!(b.room_count(), 0);
+    }
+
+    /// A room's set and rules come back with it; a start under way does not (its tickets went with
+    /// the old mm): everyone readies again.
+    #[test]
+    fn a_rooms_set_is_put_back_and_a_start_is_called_off() {
+        let mut t = T::new();
+        let code = create(&mut t, 1);
+        join(&mut t, 2, &code);
+        let mut r =
+            Ruleset { name: "Weekly".into(), version: 3, best_of: 3, strikes: vec![1, 2, 1], ..Default::default() };
+        r.normalize();
+        t.book.apply_ruleset(&code, r, Some("BCDFGH".into()), &mut vec![]).unwrap();
+        play(&mut t, &code, 101);
+        t.req(1, RoomRequest::Result { game: 1, winner_side: 0, stage: 0x21 });
+        t.req(2, RoomRequest::Result { game: 1, winner_side: 0, stage: 0x21 });
+        t.req(1, RoomRequest::Back { pickers: None });
+        t.req(2, RoomRequest::Back { pickers: None });
+        ready_all(&mut t, &[1, 2]);
+        assert!(matches!(t.book.rooms[&code].phase, Phase::Starting { .. }));
+        let mut b = restart(&t);
+        rejoin(&mut b, t.now, 11, 1, &code);
+        let s = last_state(&rejoin(&mut b, t.now, 12, 2, &code), 12);
+        assert_eq!((s["status"].as_str(), s["slots"][0]["player"]["ready"].as_bool()), (Some("waiting"), Some(false)));
+        assert_eq!((s["set"]["score"][0].as_u64(), s["set"]["game"].as_u64()), (Some(1), Some(2)), "{s}");
+        assert_eq!(s["ruleset"]["code"], "BCDFGH");
+        let mut out = vec![];
+        for (conn, n) in [(11, 1), (12, 2)] {
+            let ready = RoomRequest::Ready { ready: true, character: Some(n), costume: Some(0), stocks: None, hp: None };
+            b.request(t.now, conn, &info(n), ready, &mut out);
+        }
+        assert!(msgs(&out, 11).iter().any(|m| m["type"] == "room-start"));
     }
 
     /// A banned player (`pp-admin user ban`) leaves like a removed one: their side forfeits the set

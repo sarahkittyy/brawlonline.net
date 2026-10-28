@@ -19,6 +19,7 @@ use std::collections::HashMap;
 use common::proto::SetTicket;
 use common::rooms::{RoomSet, SIDE_DRAW, SIDE_VOID};
 use common::rules::{Ruleset, StageChoice};
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 /// No last winner yet (`SetTicket.last_winner`).
@@ -65,7 +66,7 @@ fn ordered(mut sides: [Vec<Seat>; 2]) -> [Vec<Seat>; 2] {
 }
 
 /// A player of the set.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Seat {
     pub slot: usize,
     pub uid: Uuid,
@@ -73,14 +74,15 @@ pub struct Seat {
 }
 
 /// The game being set up: each side's stage actions so far and whether its match has started.
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Steps {
     pub game: u32,
     pub actions: [Vec<u8>; 2],
     pub match_started: bool,
 }
 
-#[derive(Debug, Clone)]
+/// Saved with its room when mm stops ([`crate::rooms::RoomBook::save`]).
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SetProgress {
     pub best_of: u8,
     pub game: u32,

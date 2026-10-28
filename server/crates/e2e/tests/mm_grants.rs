@@ -183,6 +183,21 @@ async fn mm_queries_work_as_pp_mm() {
     assert!(stalled.is_some_and(|s| (s - t).num_milliseconds().abs() < 1), "{stalled:?}");
     db::record_ranked_game_result(&pool, &id, 1, a, Some(a), "game").await.unwrap();
 
+    // The rooms mm saves when it stops and takes back when it starts (0025), saved twice (the
+    // upsert), taken once; and none from longer ago than asked.
+    let rooms = serde_json::json!([{"code": "ABCD"}]);
+    db::save_rooms(&pool, &serde_json::json!([])).await.unwrap();
+    db::save_rooms(&pool, &rooms).await.unwrap();
+    let within = std::time::Duration::from_secs(300);
+    assert_eq!(db::take_saved_rooms(&pool, within).await.unwrap(), Some(rooms.clone()));
+    assert_eq!(db::take_saved_rooms(&pool, within).await.unwrap(), None);
+    db::save_rooms(&pool, &rooms).await.unwrap();
+    sqlx::query("UPDATE mm_saved_rooms SET saved_at = now() - interval '10 minutes'")
+        .execute(&stack.pool)
+        .await
+        .unwrap();
+    assert_eq!(db::take_saved_rooms(&pool, within).await.unwrap(), None);
+
     // And nothing else: no password hashes or emails.
     let err = sqlx::query("SELECT email FROM users LIMIT 1").execute(&pool).await.unwrap_err();
     assert!(err.to_string().contains("permission denied"), "{err}");

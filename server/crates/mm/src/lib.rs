@@ -44,6 +44,36 @@ pub fn run(cfg: Config) -> anyhow::Result<()> {
             .connect(&cfg.database_url),
     )?;
     let handle = start(cfg.listen, cfg.status_addr()?, cfg.max_peers, engine_cfg, secret, pool, rt.handle().clone())?;
+    // systemd's stop (every deploy restarts mm) or Ctrl+C: the rooms are saved for the next mm.
+    let switch = handle.stop_switch();
+    rt.spawn(async move {
+        stop_signal().await;
+        tracing::info!("stopping: the rooms are saved for the next mm");
+        switch.stop_keeping_rooms();
+    });
     handle.join();
     Ok(())
+}
+
+/// SIGTERM or SIGINT (Ctrl+C elsewhere).
+async fn stop_signal() {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{signal, SignalKind};
+        match (signal(SignalKind::terminate()), signal(SignalKind::interrupt())) {
+            (Ok(mut term), Ok(mut int)) => {
+                tokio::select! {
+                    _ = term.recv() => {}
+                    _ = int.recv() => {}
+                }
+            }
+            _ => std::future::pending::<()>().await,
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        if tokio::signal::ctrl_c().await.is_err() {
+            std::future::pending::<()>().await;
+        }
+    }
 }

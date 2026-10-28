@@ -643,6 +643,16 @@ impl Engine {
         self.rooms.room_count()
     }
 
+    /// The rooms, saved when mm is stopped ([`RoomBook::save`]).
+    pub fn save_rooms(&self) -> serde_json::Value {
+        self.rooms.save()
+    }
+
+    /// The rooms the last mm saved, put back before anyone is online ([`RoomBook::restore`]).
+    pub fn restore_rooms(&mut self, now: Instant, saved: serde_json::Value) {
+        self.rooms.restore(now, saved)
+    }
+
     pub fn chat_group_count(&self) -> usize {
         self.chat.group_count()
     }
