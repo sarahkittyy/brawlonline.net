@@ -7191,7 +7191,9 @@ std::optional<std::string> ArmPlayback(std::shared_ptr<const Replay::File> file,
   };
   const auto init = hex("init", PeerData::INIT_BLOCK_SIZE, PeerData::INIT_BLOCK_SIZE);
   const auto key = hex("setup_key", 1, 16 * 1024);
-  const auto session = hex("session", 0x220, 0x400);
+  // (Any plugin's SESSION: v9's 0x420 bytes since 2026-10-27, PlaybackSession takes each size.)
+  const auto session =
+      hex("session", Online::GameBridge::SESSION_MIN_SIZE, Online::GameBridge::SESSION_MAX_SIZE);
   const auto sync = get("sync") ? SyncBlockFromJson(*get("sync")) : std::nullopt;
   const auto tasks = get("tasks") ? TaskListsFromJson(*get("tasks")) : std::nullopt;
   if (!init || !key || !session || !sync || !tasks)

@@ -112,10 +112,10 @@ constexpr u32 LK_SEQ = 0x00, LK_READY = 0x04, LK_CSS = 0x05, LK_KIND = 0x06, LK_
 constexpr u32 L_LOCK_TEAM = 0x34;
 // SESSION (the same on every machine of a session; written only outside a match, except the
 // gone flags and the elimination order, which are rolled-back match state).
-constexpr u32 SESSION_SIZE_V5 = 0x220;
+constexpr u32 SESSION_SIZE_V5 = SESSION_MIN_SIZE;
 constexpr u32 SESSION_SIZE_V6 = 0x280;
 constexpr u32 SESSION_SIZE_V7 = 0x2C0;
-constexpr u32 SESSION_SIZE = 0x420;
+constexpr u32 SESSION_SIZE = SESSION_MAX_SIZE;
 constexpr u32 S_RULES = 0x220;  // v6: ppom.h Rules
 // v6: ppom.h RoomPlay: valid, bestOf, stageChoice, custom, code[8], name[32], setOn, setGame,
 // score[2], sides[2], setFlags.
