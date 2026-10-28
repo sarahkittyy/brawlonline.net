@@ -96,6 +96,7 @@
 #include "VideoCommon/AsyncRequests.h"
 #include "VideoCommon/Fifo.h"
 #include "VideoCommon/OnScreenDisplay.h"
+#include "VideoCommon/OnlineChatUI.h"
 #include "VideoCommon/Present.h"
 #include "VideoCommon/VideoState.h"
 
@@ -728,11 +729,19 @@ void AddLog(std::string line)
   s.log.push_back(std::move(line));
 }
 
-// A grey line in the chat window (only here) and the log. Not with `net_mutex` held.
-void ShowNotice(const std::string& text)
+// How long a notice stays on screen when the chat window doesn't show it.
+constexpr u32 NOTICE_OSD_MS = 8000;
+
+// A grey line in the chat window (only here) and the log. Not with `net_mutex` held. A folded or
+// disabled chat window shows nothing of it, so then it is on screen too, top left (`on_screen`:
+// unless the caller puts its own line there): bug report #175's player, chat folded, saw a game
+// that stood still for a minute and closed, the reason only in the folded chat.
+void ShowNotice(const std::string& text, bool on_screen = true)
 {
   AddLog("notice: " + text);
   Online::Chat::AddNotice(text);
+  if (on_screen && !VideoCommon::OnlineChatUI::ShowsLines())
+    OSD::AddTypedMessage(OSD::MessageType::MachineNotice, text, NOTICE_OSD_MS, OSD::Color::YELLOW);
 }
 
 // An SD card difference this big is rarely a few changed files: more likely another release of the
@@ -5553,14 +5562,19 @@ bool SDSyncStep()
 // NO_LINK_NOTICE, and after NO_LINK_LIMIT the join gives up saying who, rather than a frozen game
 // until JOIN_TIMEOUT's "Not admitted" (bug report #149: three joins of a REX room whose host never
 // answered, 30 attempts and no hello either way, each after the player said Yes to downloading
-// the host's SD card; the download waits for that link, so it never started). Under net_mutex:
-// returns why to fail, or "".
+// the host's SD card; the download waits for that link, so it never started). From
+// NO_LINK_NOTICE on, a line on screen also says so with the seconds left (`waiting`), whatever the
+// chat window shows (bug report #175: with the chat folded, two joins of a vBrawl room whose host
+// nobody reached stood still for a minute with nothing on screen). Under net_mutex: returns why to
+// fail, or "".
 constexpr auto NO_LINK_NOTICE = std::chrono::seconds(10);
 constexpr auto NO_LINK_LIMIT = std::chrono::seconds(60);
 
-std::string JoinNoLinkStep(Clock::time_point now, std::vector<std::string>* notices)
+std::string JoinNoLinkStep(Clock::time_point now, std::vector<std::string>* notices,
+                           std::string* waiting)
 {
-  std::vector<std::string> shown, given_up;
+  std::vector<std::string> shown, given_up, unlinked;
+  Clock::duration longest{};
   for (PeerLink& p : s.peers)
   {
     if (p.slot < 0 || !p.no_link_watch || p.hello || p.left)
@@ -5570,7 +5584,17 @@ std::string JoinNoLinkStep(Clock::time_point now, std::vector<std::string>* noti
     else if (now - p.link_wanted >= NO_LINK_NOTICE && !p.no_link_shown)
       shown.push_back(NameOf(p.slot));
     if (now - p.link_wanted >= NO_LINK_NOTICE)
+    {
       p.no_link_shown = true;
+      unlinked.push_back(NameOf(p.slot));
+      longest = std::max(longest, now - p.link_wanted);
+    }
+  }
+  if (given_up.empty() && !unlinked.empty())
+  {
+    const auto left = std::chrono::ceil<std::chrono::seconds>(NO_LINK_LIMIT - longest);
+    *waiting = fmt::format("Can't connect to {} yet. Joining waits for it: {} s left.",
+                           fmt::join(unlinked, ", "), left.count());
   }
   if (!given_up.empty())
   {
@@ -5600,15 +5624,15 @@ void JoinStep(Core::System& system)
   std::optional<State::EpochGo> go;
   bool image = false;
   std::optional<std::string> refused;
-  std::string no_link;
-  std::vector<std::string> notices;
+  std::string no_link, no_link_waiting;
+  std::vector<std::string> notices, chat_notices;
   bool ready_to_sync = false;
   {
     std::lock_guard lk(s.net_mutex);
     if (s.join_refused)
       refused = s.join_refused_why;
     if (s.opts.room && !s.join_sent)
-      no_link = JoinNoLinkStep(Clock::now(), &notices);
+      no_link = JoinNoLinkStep(Clock::now(), &chat_notices, &no_link_waiting);
     // The image's progress, in the chat window at every tenth (the game waits for it: across an
     // ocean a REX image took about a minute), and to the players for theirs.
     const State::ImageRx& rx = s.image_rx;
@@ -5661,8 +5685,21 @@ void JoinStep(Core::System& system)
     if (s.join_loaded && s.epoch_go && s.epoch_go->frame == s.current_frame + 1)
       go = s.epoch_go;
   }
+  for (const std::string& n : chat_notices)
+    ShowNotice(n, false);
   for (const std::string& n : notices)
     ShowNotice(n);
+  if (!no_link_waiting.empty())
+  {
+    // Refreshed while the wait lasts, gone a second after it ends.
+    static Clock::time_point shown_at;
+    if (Clock::now() - shown_at >= std::chrono::milliseconds(250))
+    {
+      shown_at = Clock::now();
+      OSD::AddTypedMessage(OSD::MessageType::MachineJoinWait, no_link_waiting, 1000,
+                           OSD::Color::YELLOW);
+    }
+  }
   if (refused)
   {
     Fail("Could not join: " + *refused);

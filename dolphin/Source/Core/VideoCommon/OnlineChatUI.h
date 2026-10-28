@@ -53,6 +53,10 @@ void SetTopLeftBoxRight(float right);
 // After Display: the folded title bar's bottom edge when it sits in the top-left corner itself (no
 // FPS box there), for the OSD messages to go under it; else 0.
 float CornerBarBottom();
+// The last frame drew the window open (any thread): a line added to the chat is seen there. Not
+// while folded, with chat disabled or out of a chat group (Rollback/MachineSession's notices then
+// go on screen too, bug report #175).
+bool ShowsLines();
 // The box has the keyboard (any thread): the game gets no keyboard or mouse input meanwhile.
 bool IsTyping();
 

@@ -84,6 +84,8 @@ constexpr const char* SHORTCUT_PREFIX = "Ctrl+";
 
 std::atomic<bool> s_activate{false};
 std::atomic<bool> s_typing{false};
+// The last frame drew the window open, its lines in view (ShowsLines).
+std::atomic<bool> s_lines_shown{false};
 ImFont* s_font = nullptr;
 
 // The chat key's label for the title ("T": Dolphin's default binding, until LoadConfig says).
@@ -966,6 +968,11 @@ float CornerBarBottom()
   return s_corner_bar_bottom;
 }
 
+bool ShowsLines()
+{
+  return s_lines_shown;
+}
+
 bool IsTyping()
 {
   return s_typing;
@@ -1052,6 +1059,7 @@ void DisplayFrame(float scale)
   const bool shown = s.view && s.view->active && !Config::Get(Config::ONLINE_DISABLE_CHAT);
   if (!shown)
   {
+    s_lines_shown = false;
     s_activate = false;
     StopTyping();
     // Opened by the chat key when it went: folded again when it comes back.
@@ -1311,6 +1319,7 @@ void DisplayFrame(float scale)
   }
   now_geometry.collapsed = s.applied.collapsed;
   s.drawn_collapsed = now_collapsed;
+  s_lines_shown = !now_collapsed;
   if (now_collapsed && s_top_left_right <= 0)
     s_corner_bar_bottom = ImGui::GetWindowPos().y + ImGui::GetWindowSize().y;
   // Hovered also while one of its items is held: without that, a press on a name (or anywhere that

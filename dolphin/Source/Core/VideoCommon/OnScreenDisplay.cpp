@@ -152,6 +152,18 @@ void AddMessage(std::string message, u32 ms, u32 argb,
   s_messages.emplace(MessageType::Typeless, Message(std::move(message), ms, argb, icon));
 }
 
+std::vector<std::string> GetMessageTexts()
+{
+  std::lock_guard lock{s_messages_mutex};
+  std::vector<std::string> texts;
+  for (const auto& [type, msg] : s_messages)
+  {
+    if (!msg.should_discard && msg.TimeRemaining() > 0)
+      texts.push_back(msg.text);
+  }
+  return texts;
+}
+
 void DrawMessages(float min_top)
 {
   const bool draw_messages = Config::Get(Config::MAIN_OSD_MESSAGES);
