@@ -101,9 +101,11 @@ describe("PublicRoomsView", () => {
     expect(queryByTestId("room-name-input")).toBeNull();
     expect(onRename).not.toHaveBeenCalled();
 
-    // A click on the name opens it too; Enter saves.
+    // A click on the name opens it too, the player names stay under it; Enter saves.
     fireEvent.click(getByTestId("room-name"));
-    expect(first.textContent).toContain("Enter saves");
+    expect(getByTestId("room-name-input")).toBeTruthy();
+    expect(first.textContent).toContain("♛ bob");
+    expect(first.textContent).not.toContain("Enter saves");
     fireEvent.change(getByTestId("room-name-input"), { target: { value: "  friday   doubles " } });
     await act(async () => {
       fireEvent.keyDown(getByTestId("room-name-input"), { key: "Enter" });
