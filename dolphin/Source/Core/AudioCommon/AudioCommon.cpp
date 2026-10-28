@@ -168,9 +168,20 @@ void UpdateSoundStream(Core::System& system)
 
   if (sound_stream)
   {
-    const int volume =
-        Config::Get(Config::MAIN_AUDIO_MUTED) ? 0 : Config::Get(Config::MAIN_AUDIO_VOLUME);
+    const bool muted = Config::Get(Config::MAIN_AUDIO_MUTED);
+    const int volume = muted ? 0 : Config::Get(Config::MAIN_AUDIO_VOLUME);
     sound_stream->SetVolume(volume);
+    // In the log a bug report sends (the AUDIO log is off there): a player's "the sound went
+    // mute" shows whether the volume did (a hotkey: Down is volume down, with no on-screen
+    // message when those are off).
+    static int s_logged = -1;
+    const int logged = muted ? 1000 : volume;
+    if (logged != s_logged)
+    {
+      s_logged = logged;
+      NOTICE_LOG_FMT(CORE, "Audio: volume {}%{}", Config::Get(Config::MAIN_AUDIO_VOLUME),
+                     muted ? ", muted" : "");
+    }
   }
 }
 
@@ -195,10 +206,12 @@ void SetSoundStreamRunning(Core::System& system, bool running)
 
 void SendAIBuffer(Core::System& system, const short* samples, unsigned int num_samples)
 {
-  const SoundStream* const sound_stream = system.GetSoundStream();
+  SoundStream* const sound_stream = system.GetSoundStream();
 
   if (!sound_stream)
     return;
+
+  sound_stream->CheckOutput();
 
   if (Config::Get(Config::MAIN_DUMP_AUDIO) && !system.IsAudioDumpStarted())
     StartAudioDump(system);
