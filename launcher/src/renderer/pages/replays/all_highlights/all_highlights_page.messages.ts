@@ -25,4 +25,7 @@ export const AllHighlightsMessages = {
   sort: () => "Sort",
   bestFirst: () => "Best first",
   newestFirst: () => "Newest first",
+  openReplayLocation: () => "Open Replay Location",
+  openVideoLocation: () => "Open Rendered Video Location",
+  folderNotThereYet: (folder: string) => "Nothing is there yet: {0}",
 };

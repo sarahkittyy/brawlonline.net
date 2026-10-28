@@ -58,6 +58,13 @@
   background: rgb(0 0 0 / 30%);
 }
 
+/* The folder buttons at the sidebar's foot, under the empty rest: smaller. */
+.folderItem {
+  gap: 8px;
+  padding: 6px 14px;
+  font-size: 12px;
+}
+
 .content {
   flex: 1;
   min-width: 0;

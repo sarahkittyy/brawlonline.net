@@ -293,6 +293,13 @@ from `CLIP_BEFORE_SECONDS`). A replay without a recorder port is in neither mine
 Highlights cached before `recorderPort` was kept get it from the replay's header the first time
 they are read (`highlight_service.ts`), written back to the cache, so no replay is analysed again.
 
+**Newest first and folder buttons** (the user, 2026-10-27). The tab opens on Newest first (Best
+first was the default). Under the sidebar's entries, at its foot, two smaller folder-icon buttons:
+**Open Replay Location** (the Root Replay Folder, `rootSlpPath`) and **Open Rendered Video
+Location** (Settings > Clips' Video Output Folder, `<Root Replay Folder>/Highlights` by default);
+hovering shows the path, and a folder not made yet (the videos' one is made with the first video)
+says "Nothing is there yet: <path>", as Settings > Dolphin's folder buttons do.
+
 ## 7. Settings > Clips > Video Resolution, and a playback that never starts (2026-10-21)
 
 Video Resolution (the user's request): a dropdown of 480p, 720p (the default), 1080p and 1440p
