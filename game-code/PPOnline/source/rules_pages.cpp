@@ -127,6 +127,12 @@ namespace RulesPages {
         // Turning to MATCH SETUP or SPECIAL (or back to MORE RULES): the page's rows slide in from the
         // side it comes from (frames left, +1 from the right, -1 from the left), as P+'s own turn does.
         int slideLeft, slideDir;
+        // P+'s own turn back to RULES (its B; our L): played mirrored (backTurn).
+        bool backPending;
+        int backT, backN;
+        u8* backObj[48];
+        u8* backAnim[48];
+        u16 backLen[48];
         // The footer (P+'s MuMsg printing MORE RULES' descriptions).
         void* footMsg;
         const void* footMsbin;
@@ -477,6 +483,97 @@ namespace RulesPages {
         return s.slideDir * SLIDE_DISTANCE * t * t;
     }
 
+    // ---- P+'s turn back --------------------------------------------------------------------------
+    // P+'s rows turn with CHR animations of their own (MenMainIcon01xx_TopN__0..__5, slot +0x0C of
+    // the MuObject's animations): __0 / __2 come in from the right, __1 / __3 go out to the left,
+    // and there are none the other way, so its turn back (MORE RULES -> RULES) moves the same way
+    // as its turn forward (Sarah's board, 2026-10-27: "pressing L to go back ALSO plays the same
+    // swipe-right animation"). Mirrored here: right after P+ gave each model its __0 (coming in)
+    // or __1 (going out), each gets the other, played backwards (frame from its last to 0, the
+    // rate 0 and the frame ours): RULES comes in from the left, MORE RULES goes out to the right.
+    typedef void (*ChangeAnimFn)(u8* obj, const char* name);
+    static const ChangeAnimFn CHANGE_ANIM = (ChangeAnimFn)0x800B534C;   // MuObject::changeAnimN
+
+    static u8* slotAnim(u8* obj)
+    {
+        u8* anims = *(u8**)(obj + 0x14);
+        if (!isPtr((u32)anims)) return NULL;
+        u8* a = *(u8**)(anims + 0x0C);
+        return isPtr((u32)a) ? a : NULL;
+    }
+
+    // The CHR0 an animation object plays (a pointer to it in its first words, or one level down).
+    static u8* chrOf(u8* anim)
+    {
+        for (int i = 0; i < 32; i++) {
+            u32 w = *(u32*)(anim + 4 * i);
+            if (!isPtr(w)) continue;
+            if (*(u32*)w == 0x43485230) return (u8*)w;   // 'CHR0'
+            for (int j = 0; j < 16; j++) {
+                u32 w2 = *(u32*)(w + 4 * j);
+                if (isPtr(w2) && *(u32*)w2 == 0x43485230) return (u8*)w2;
+            }
+        }
+        return NULL;
+    }
+
+    static const u16 BACK_FRAMES = 10;
+    extern "C" {
+        u32 g_rulesBackHold = 0;   // tests: the mirrored turn held at this frame (0: not held)
+    }
+
+    static void startBack()
+    {
+        s.backN = 0;
+        s.backT = 0;
+        if (!s.rt) return;
+        for (u32 off = 0x40; off < 0x2B0 && s.backN < 48; off += 4) {
+            u8* obj = *(u8**)(s.rt + off);
+            if (!isPtr((u32)obj) || obj == s.rt || !isPtr(*(u32*)(obj + 8)) || **(u32**)(obj + 8) != 0x4D444C30) continue;
+            u8* a = slotAnim(obj);
+            u8* chr = a ? chrOf(a) : NULL;
+            if (!chr) continue;
+            const char* name = (const char*)(chr + *(s32*)(chr + 0x14));
+            int n = (int)strlen(name);
+            if (n < 4 || n > 60 || name[n - 3] != '_' || name[n - 2] != '_' || (name[n - 1] != '0' && name[n - 1] != '1')) continue;
+            char want[64];
+            memcpy(want, name, n + 1);
+            want[n - 1] = name[n - 1] == '0' ? '1' : '0';
+            CHANGE_ANIM(obj, want);
+            u8* a2 = slotAnim(obj);
+            u8* chr2 = a2 ? chrOf(a2) : NULL;
+            if (!chr2) continue;
+            int i = s.backN++;
+            s.backObj[i] = obj;
+            s.backAnim[i] = a2;
+            // (from frame 10 at most: P+'s turn takes 10 frames; __1 has the rows off the screen
+            // from there to its end, 20)
+            u16 len = *(u16*)(chr2 + 0x1C);
+            s.backLen[i] = len < BACK_FRAMES ? len : BACK_FRAMES;
+        }
+    }
+
+    static void backTurn()
+    {
+        if (s.backPending) {
+            s.backPending = false;
+            startBack();
+        }
+        if (s.backN == 0) return;
+        bool more = false;
+        for (int i = 0; i < s.backN; i++) {
+            if (slotAnim(s.backObj[i]) != s.backAnim[i]) continue;   // P+ gave it another since
+            int f = (int)s.backLen[i] - s.backT;
+            if (f < 0) f = 0;
+            if (f > 0) more = true;
+            float* fr = (float*)(s.backAnim[i] + 0x18);
+            fr[0] = (float)f;
+            fr[1] = 0.0f;   // (the rate: the frame is ours)
+        }
+        if (!g_rulesBackHold || (u32)s.backT < g_rulesBackHold) s.backT++;
+        if (!more) s.backN = 0;
+    }
+
     void notePage(int kind)
     {
         s.pageKind = kind;
@@ -714,7 +811,10 @@ namespace RulesPages {
         if (bits & (IN_L | IN_R)) {
             bool right = (bits & IN_R) != 0;
             if (s.view == V_PPLUS) {
-                if (!right) return IN_B;          // back to RULES, as B
+                if (!right) {
+                    s.backPending = true;         // (P+'s turn back, mirrored: backTurn)
+                    return IN_B;                  // back to RULES, as B
+                }
                 setView(V_SETUP);
             } else if (s.view == V_SETUP) {
                 setView(right ? V_SPECIAL : V_PPLUS);
@@ -723,9 +823,13 @@ namespace RulesPages {
             }
             return 0;
         }
-        if (s.view == V_PPLUS) return bits;
+        if (s.view == V_PPLUS) {
+            if (bits & IN_B) s.backPending = true;
+            return bits;
+        }
         if (bits & IN_B) {
             setView(V_PPLUS);
+            s.backPending = true;
             return IN_B;
         }
         if (s.view == V_SPECIAL) {
@@ -747,6 +851,7 @@ namespace RulesPages {
         g_rulesPages.rt = (u32)rt;
         if (!s.opened) return;
         s.ticks++;
+        backTurn();
         if (RoomPlay::changedNow()) {
             fromSession();
             reprintFooter();
