@@ -14,6 +14,10 @@
 //! accounts reads to serve the launcher's `GET /v1/rooms`. The same listener serves the live games
 //! to accounts (`GET /live/{stream}`, `docs/spectate-protocol.md` §2): mm keeps the uploaded
 //! chunks ([`crate::live::LiveStore`]) and each spectator's stream reads them from there.
+//!
+//! Stopped by a signal (`main`: every deploy restarts mm), the loop saves the rooms to the database
+//! on its way out, and the next mm puts them back before it takes any connection
+//! (`crate::rooms`, bug report #178).
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -78,6 +82,7 @@ pub struct MmHandle {
     /// Where the status listener answers `GET /status` (None when it is off).
     pub status_addr: Option<SocketAddr>,
     stop: Arc<AtomicBool>,
+    keep_rooms: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
     status_task: Option<tokio::task::JoinHandle<()>>,
 }
@@ -90,6 +95,11 @@ impl MmHandle {
 
     pub fn stop(mut self) {
         self.shutdown();
+    }
+
+    /// Stops the loop from another thread (a signal), the rooms saved for the next mm.
+    pub fn stop_switch(&self) -> StopSwitch {
+        StopSwitch { stop: self.stop.clone(), keep_rooms: self.keep_rooms.clone() }
     }
 
     fn shutdown(&mut self) {
@@ -107,6 +117,22 @@ impl MmHandle {
         if let Some(t) = self.thread.take() {
             let _ = t.join();
         }
+    }
+}
+
+/// [`MmHandle::stop_switch`].
+#[derive(Clone)]
+pub struct StopSwitch {
+    stop: Arc<AtomicBool>,
+    keep_rooms: Arc<AtomicBool>,
+}
+
+impl StopSwitch {
+    /// The loop ends and saves the rooms on its way out (a deploy's restart): the next mm on the
+    /// same database puts them back. A plain [`MmHandle::stop`] (tests) saves nothing.
+    pub fn stop_keeping_rooms(&self) {
+        self.keep_rooms.store(true, Ordering::SeqCst);
+        self.stop.store(true, Ordering::SeqCst);
     }
 }
 
@@ -144,6 +170,8 @@ pub fn start(
     rt.spawn(watch_accounts(pool.clone(), accounts_tx));
     let (restored_tx, restored_rx) = std_mpsc::channel::<Vec<db::RecentMatch>>();
     rt.spawn(restore_matches(pool.clone(), engine_cfg.live.match_ttl, restored_tx));
+    let (rooms_tx, rooms_rx) = std_mpsc::channel::<Option<serde_json::Value>>();
+    rt.spawn(take_saved_rooms(pool.clone(), rooms_tx));
     let fetch_pool = pool.clone();
     rt.spawn(fetch_worker(
         move |uid| fetch_user(fetch_pool.clone(), uid),
@@ -170,13 +198,22 @@ pub fn start(
     };
 
     let stop = Arc::new(AtomicBool::new(false));
-    let stop2 = stop.clone();
+    let keep_rooms = Arc::new(AtomicBool::new(false));
+    let (stop2, keep_rooms2) = (stop.clone(), keep_rooms.clone());
     let db = Db { fetches: job_tx, fetched: done_tx, rulesets: rulesets_tx, ruleset_lists: lists_tx, pool, rt };
     let thread = std::thread::Builder::new().name("mm-enet".into()).spawn(move || {
-        event_loop(host, engine, db, done_rx, rulesets_rx, lists_rx, accounts_rx, restored_rx, stop2, status)
+        let inputs = LoopInputs {
+            done: done_rx,
+            rulesets: rulesets_rx,
+            ruleset_lists: lists_rx,
+            accounts: accounts_rx,
+            restored: restored_rx,
+            saved_rooms: rooms_rx,
+        };
+        event_loop(host, engine, db, inputs, stop2, keep_rooms2, status)
     })?;
     tracing::info!("mm listening on udp://{addr}");
-    Ok(MmHandle { addr, status_addr, stop, thread: Some(thread), status_task })
+    Ok(MmHandle { addr, status_addr, stop, keep_rooms, thread: Some(thread), status_task })
 }
 
 /// `GET /status`: the latest snapshot as JSON ([`MmStatus`]). `GET /live/{stream}`: a live
@@ -433,6 +470,37 @@ async fn restore_matches(pool: PgPool, within: Duration, done: std_mpsc::Sender<
 /// [`restore_matches`] tries this many times, a second apart.
 const RESTORE_ATTEMPTS: u32 = 60;
 
+/// Rooms saved longer ago than this are not put back (mm was down for a while: their games have
+/// long left them).
+const SAVED_ROOMS_WITHIN: Duration = Duration::from_secs(300);
+/// The loop waits this long at most for the saved rooms before it takes connections: a game that
+/// joins its room again before the rooms are back would find no room. accounts, restarted with mm,
+/// may still be creating the table (the first deploy), so a failure is tried again meanwhile.
+const SAVED_ROOMS_WAIT: Duration = Duration::from_secs(8);
+
+/// Takes the rooms the last mm saved ([`db::take_saved_rooms`]) once, when mm starts. `None`: none
+/// (or they could not be read).
+async fn take_saved_rooms(pool: PgPool, done: std_mpsc::Sender<Option<serde_json::Value>>) {
+    let until = Instant::now() + SAVED_ROOMS_WAIT - Duration::from_secs(1);
+    loop {
+        match db::take_saved_rooms(&pool, SAVED_ROOMS_WITHIN).await {
+            Ok(rooms) => {
+                let _ = done.send(rooms);
+                return;
+            }
+            Err(e) if Instant::now() < until => {
+                tracing::warn!("reading the saved rooms failed (trying again): {e}");
+                tokio::time::sleep(Duration::from_millis(500)).await;
+            }
+            Err(e) => {
+                tracing::error!("reading the saved rooms failed: {e}");
+                let _ = done.send(None);
+                return;
+            }
+        }
+    }
+}
+
 /// Records a chat identity key (best effort, like a match).
 async fn record_chat_key(pool: PgPool, uid: Uuid, key: [u8; 32]) {
     if let Err(e) = db::record_chat_key(&pool, uid, &key).await {
@@ -672,18 +740,35 @@ impl Loop {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn event_loop(
-    host: Host<EnetSocket>,
-    engine: Engine,
-    db: Db,
+/// What the database tasks send the loop.
+struct LoopInputs {
     done: std_mpsc::Receiver<Fetched>,
     rulesets: std_mpsc::Receiver<RulesetFetched>,
     ruleset_lists: std_mpsc::Receiver<RulesetListFetched>,
     accounts: std_mpsc::Receiver<Vec<db::MmUser>>,
     restored: std_mpsc::Receiver<Vec<db::RecentMatch>>,
+    saved_rooms: std_mpsc::Receiver<Option<serde_json::Value>>,
+}
+
+fn event_loop(
+    host: Host<EnetSocket>,
+    mut engine: Engine,
+    db: Db,
+    inputs: LoopInputs,
     stop: Arc<AtomicBool>,
+    keep_rooms: Arc<AtomicBool>,
     status: SharedStatus,
 ) {
+    let LoopInputs { done, rulesets, ruleset_lists, accounts, restored, saved_rooms } = inputs;
+    // The last mm's rooms first: their members' games join them again as soon as they connect.
+    match saved_rooms.recv_timeout(SAVED_ROOMS_WAIT) {
+        Ok(Some(rooms)) => {
+            engine.restore_rooms(Instant::now(), rooms);
+            tracing::info!(rooms = engine.room_count(), "rooms put back from the last mm");
+        }
+        Ok(None) | Err(std_mpsc::RecvTimeoutError::Disconnected) => {}
+        Err(std_mpsc::RecvTimeoutError::Timeout) => tracing::error!("the saved rooms did not come: none put back"),
+    }
     let mut lp = Loop {
         host,
         engine,
@@ -769,6 +854,20 @@ fn event_loop(
         lp.host.peer_mut(pid).disconnect_now(0);
     }
     lp.host.flush();
+    if keep_rooms.load(Ordering::SeqCst) {
+        let rooms = lp.engine.save_rooms();
+        let n = rooms.as_array().map_or(0, Vec::len);
+        let pool = lp.db.pool.clone();
+        let saved = lp
+            .db
+            .rt
+            .block_on(async move { tokio::time::timeout(Duration::from_secs(5), db::save_rooms(&pool, &rooms)).await });
+        match saved {
+            Ok(Ok(())) => tracing::info!(rooms = n, "rooms saved for the next mm"),
+            Ok(Err(e)) => tracing::error!("saving the rooms failed: {e}"),
+            Err(_) => tracing::error!("saving the rooms timed out"),
+        }
+    }
     tracing::info!("mm stopped");
 }
 

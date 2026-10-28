@@ -159,6 +159,35 @@ pub async fn recent_matches(pool: &sqlx::PgPool, within: std::time::Duration) ->
     .await
 }
 
+/// Saves the rooms mm had when it was stopped (`migrations/0025_mm_saved_rooms.sql`), for the next
+/// mm to put back ([`take_saved_rooms`]).
+pub async fn save_rooms(pool: &sqlx::PgPool, rooms: &serde_json::Value) -> sqlx::Result<()> {
+    sqlx::query(
+        "INSERT INTO mm_saved_rooms (id, saved_at, rooms) VALUES (1, now(), $1)
+         ON CONFLICT (id) DO UPDATE SET saved_at = EXCLUDED.saved_at, rooms = EXCLUDED.rooms",
+    )
+    .bind(sqlx::types::Json(rooms))
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// The rooms the last mm saved ([`save_rooms`]) if it saved them in the last `within`, taken (one
+/// mm puts them back once).
+pub async fn take_saved_rooms(
+    pool: &sqlx::PgPool,
+    within: std::time::Duration,
+) -> sqlx::Result<Option<serde_json::Value>> {
+    let row: Option<(sqlx::types::Json<serde_json::Value>, bool)> = sqlx::query_as(
+        "DELETE FROM mm_saved_rooms WHERE id = 1
+         RETURNING rooms, saved_at > now() - make_interval(secs => $1) AS fresh",
+    )
+    .bind(within.as_secs_f64())
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.filter(|(_, fresh)| *fresh).map(|(rooms, _)| rooms.0))
+}
+
 /// Identity keys kept per account: older ones are deleted when a new one is recorded.
 pub const CHAT_KEYS_KEPT: i64 = 20;
 

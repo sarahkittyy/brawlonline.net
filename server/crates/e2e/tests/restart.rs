@@ -97,3 +97,71 @@ async fn a_set_under_way_goes_on_after_mm_restarts() {
 
     stack.shutdown().await;
 }
+
+/// mm restarts (every deploy) with a room open (bug report #178: the deploy at 05:58 UTC on
+/// 2026-10-28 emptied every room, and the games that joined theirs again were told "Room not
+/// found."): stopped as systemd stops it, mm saves its rooms; the next mm puts them back, and each
+/// game that joins its room again has its own slot.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_room_is_there_after_mm_restarts() {
+    use common::rooms::RoomRequest;
+    let mut stack = Stack::start(StackOptions::default()).await.unwrap();
+    let (_, alice) = stack.create_player("alice@example.test", "alice", "alic").await;
+    let (_, bob) = stack.create_player("bob@example.test", "bob", "bo").await;
+    let (a, b, code) = tokio::task::spawn_blocking({
+        let (alice, bob, addr) = (alice.clone(), bob.clone(), stack.mm_addr);
+        move || {
+            let (mut a, mut b) = (online(addr, &alice), online(addr, &bob));
+            a.send(&RoomRequest::Create { public: true, ruleset: None, remembered: false });
+            let code = a.wait_for(WAIT, |m| m["type"] == "room-state").unwrap()["code"].as_str().unwrap().to_string();
+            b.send(&RoomRequest::Join { code: code.clone() });
+            b.wait_for(WAIT, |m| m["type"] == "room-state").unwrap();
+            (a, b, code)
+        }
+    })
+    .await
+    .unwrap();
+
+    // systemd stops mm (SIGTERM): the rooms are saved on the way out.
+    let old = stack.mm.take().unwrap();
+    tokio::task::spawn_blocking(move || {
+        old.stop_switch().stop_keeping_rooms();
+        old.join();
+    })
+    .await
+    .unwrap();
+    drop((a, b));
+    let saved: i64 = sqlx::query_scalar("SELECT count(*) FROM mm_saved_rooms").fetch_one(&stack.pool).await.unwrap();
+    assert_eq!(saved, 1);
+    let secret = common::playkey::PlayKeySecret::parse(TEST_SECRET).unwrap();
+    let mm = mm::start(
+        "127.0.0.1:0".parse().unwrap(),
+        None,
+        64,
+        EngineConfig::default(),
+        secret,
+        stack.pool.clone(),
+        tokio::runtime::Handle::current(),
+    )
+    .unwrap();
+    let addr = mm.addr;
+    stack.mm = Some(mm);
+
+    // Both games connect again and join the room, Bob first: each has their own slot, Alice is
+    // still its host, and the saved rooms were taken.
+    tokio::task::spawn_blocking(move || {
+        let (mut a, mut b) = (online(addr, &alice), online(addr, &bob));
+        b.send(&RoomRequest::Join { code: code.clone() });
+        let s = b.wait_for(WAIT, |m| m["type"] == "room-state").unwrap();
+        assert_eq!((s["code"].as_str(), s["you"].as_u64(), s["host"].as_u64()), (Some(code.as_str()), Some(2), Some(1)), "{s}");
+        a.send(&RoomRequest::Join { code: code.clone() });
+        let s = a.wait_for(WAIT, |m| m["type"] == "room-state").unwrap();
+        assert_eq!((s["you"].as_u64(), s["slots"][1]["player"]["displayName"].as_str()), (Some(1), Some("bob")), "{s}");
+    })
+    .await
+    .unwrap();
+    let saved: i64 = sqlx::query_scalar("SELECT count(*) FROM mm_saved_rooms").fetch_one(&stack.pool).await.unwrap();
+    assert_eq!(saved, 0);
+
+    stack.shutdown().await;
+}
