@@ -37,11 +37,13 @@ export function networkReportText(diagnostics: NetworkDiagnostics | null, error?
 function natTypeText(natType: NatType): string {
   switch (natType) {
     case NatType.NORMAL:
-      return "normal (the same public port toward two STUN servers)";
+      return "normal (the same public address and port toward two STUN servers)";
     case NatType.SYMMETRIC:
-      return "symmetric (a new public port per destination: hole punching fails against strict routers)";
+      return "symmetric (a new public address or port per destination: hole punching fails against strict routers)";
     case NatType.FAILED:
       return "unknown (the STUN check failed: UDP may be blocked)";
+    case NatType.UNKNOWN:
+      return "unknown (both STUN servers had one address)";
     default:
       return "unknown";
   }

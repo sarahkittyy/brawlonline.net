@@ -466,6 +466,8 @@ struct State
     Clock::time_point last{};
     int attempts = 0;
   } probe;
+  // Where mm saw this player's probe come from (SetRoom logs it once per change).
+  std::string seen_endpoint;
   // A machine image on its way to this joiner (net thread): header, then the compressed bytes.
   struct ImageRx
   {
@@ -2620,6 +2622,7 @@ void StopNetwork()
   }
   s.gekko_rx.clear();
   s.gekko_tx.clear();
+  s.seen_endpoint.clear();
 }
 
 // ------------------------------------------------------------------------------ GekkoNet adapter
@@ -6930,6 +6933,20 @@ void SetRoom(int local_slot, const std::vector<RoomMember>& members)
       by_slot[m.slot] = &m;
   }
   const RoomMember* self = by_slot[local_slot];
+  if (self && !self->host.empty())
+  {
+    // Where the peers punch to. A port other than the socket's means the router changes it, and
+    // only peers whose router lets in any port of an address it sent to can reach this one (bug
+    // report #174: a router that gave every destination its own port reached nobody in rooms).
+    const std::string seen = fmt::format("{}:{}", self->host, self->port);
+    if (seen != s.seen_endpoint)
+    {
+      s.seen_endpoint = seen;
+      AddLog(fmt::format("room: the server sees this player at {} (UDP port {}{})", seen,
+                         s.host->address.port,
+                         self->port == s.host->address.port ? "" : "; the router changed the port"));
+    }
+  }
   // A slot move in flight: the session swapped two players and the room has not yet (or the
   // reverse). Those slots stay as they are until the room and the session agree again (the
   // player is not gone, nor someone new).
