@@ -16,6 +16,7 @@
 #include "Core/ConfigManager.h"
 #include "Core/Core.h"
 #include "Core/CoreTiming.h"
+#include "Core/HW/Memmap.h"
 #include "Core/Harness/HarnessInternal.h"
 #include "Core/PowerPC/PowerPC.h"
 #include "Core/Rollback/GameplayRollback.h"
@@ -330,4 +331,79 @@ TEST_F(HostPadReadTest, TheNewestScheduledReadIsDecoded)
   // Outside a session nothing is decoded.
   Gprb::SetHostPadsScheduled(false);
   EXPECT_FALSE(Gprb::PadsHostDecoded(0, &pad, &at));
+}
+
+// Bug report #173: an SI poll between updateLowGC and the end of the pad thread's pass (the poll's
+// interrupt, the Wii controllers, P+'s post-processing). The pass is made of the read updateLowGC
+// took: it is checked against that read's decode and stands for that read's instant, not the
+// newer one's (the check paired it with the newer read, counted the stick's movement as a
+// mismatch and turned the decode off for the session after 10).
+TEST_F(HostPadReadTest, APassIsCheckedAgainstTheReadItsUpdateLowGCTook)
+{
+  auto& memory = m_system.GetMemory();
+  memory.Init();
+  auto& ct = m_system.GetCoreTiming();
+  Gprb::SetHostPadsScheduled(true);
+  Gprb::TakeHostPadReadStats();
+  Gprb::HostPadOriginReported(0, 0x80, 0x80, 0x80, 0x80, 0, 0);
+  const auto read_at = [&](const GCPadStatus& st) {
+    Harness::Internal::PadSet(0, st);
+    std::this_thread::sleep_for(2ms);
+    ct.ResetThrottleToNow();
+    Read();
+    std::array<u8, Gprb::Addr::PAD_STRIDE> pad{};
+    std::chrono::steady_clock::time_point at{};
+    EXPECT_TRUE(Gprb::PadsHostDecoded(0, &pad, &at));
+    return at;
+  };
+  // The pass: the game's pad (its slot) is what updateLowGC made of `st`.
+  const auto pass = [&](const GCPadStatus& st) {
+    std::array<u8, Gprb::Addr::PAD_STRIDE> slot{};
+    Gprb::HostDecodePadSlot(st, {0x80, 0x80, 0x80, 0x80, 0, 0}, 0, slot.data());
+    memory.CopyToEmu(Gprb::Addr::PAD_STATUS, slot.data(), slot.size());
+    Gprb::PadsOnPadThreadUpdated(m_system);
+  };
+  GCPadStatus st = Pad(PAD_BUTTON_B);
+  st.stickX = 160;
+  GCPadStatus moved = st;
+  moved.stickX = 200;
+
+  // A poll after updateLowGC: the pass is the older read's.
+  const auto first = read_at(st);
+  Gprb::PadsOnPadRead();
+  const auto second = read_at(moved);
+  ASSERT_NE(first, second);
+  pass(st);
+  Gprb::HostPadReadStats stats = Gprb::TakeHostPadReadStats();
+  EXPECT_EQ(stats.decode_checked, 1u);
+  EXPECT_EQ(stats.decode_mismatched, 0u);
+  EXPECT_EQ(stats.pass_older, 1u);
+  std::chrono::steady_clock::time_point sampled{};
+  Gprb::PadsSampledBefore(0, std::chrono::steady_clock::time_point::max(), &sampled);
+  EXPECT_EQ(sampled, first);
+  // The decode is still in use: the next read's.
+  std::array<u8, Gprb::Addr::PAD_STRIDE> pad{};
+  std::chrono::steady_clock::time_point at{};
+  ASSERT_TRUE(Gprb::PadsHostDecoded(0, &pad, &at));
+  EXPECT_EQ(at, second);
+
+  // No poll in between: the newest read's.
+  const auto third = read_at(st);
+  Gprb::PadsOnPadRead();
+  pass(st);
+  stats = Gprb::TakeHostPadReadStats();
+  EXPECT_EQ(stats.decode_checked, 1u);
+  EXPECT_EQ(stats.decode_mismatched, 0u);
+  EXPECT_EQ(stats.pass_older, 0u);
+  Gprb::PadsSampledBefore(0, std::chrono::steady_clock::time_point::max(), &sampled);
+  EXPECT_EQ(sampled, third);
+
+  // A pass that is not the decode of its read still differs.
+  read_at(st);
+  Gprb::PadsOnPadRead();
+  pass(moved);
+  stats = Gprb::TakeHostPadReadStats();
+  EXPECT_EQ(stats.decode_mismatched, 1u);
+
+  memory.Shutdown();
 }

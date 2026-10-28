@@ -4283,10 +4283,10 @@ std::string NetStatsLine(const State::NetStats& w)
   {
     line += fmt::format(", pad reads {} on time, {} in re-runs ({} read anew), late {} from history "
                         "{} live, {} far behind read now (max {:.1f} ms); host decode used {}, "
-                        "declined {}, checked {}, differed {}",
+                        "declined {}, checked {}, differed {}; passes of an older read {}",
                         r.on_time, r.latched + r.relatched, r.relatched, r.late_history,
                         r.late_live, r.late_far, r.late_max_ms, r.decode_used, r.decode_declined,
-                        r.decode_checked, r.decode_mismatched);
+                        r.decode_checked, r.decode_mismatched, r.pass_older);
   }
   return line;
 }
@@ -4335,6 +4335,7 @@ void NetStatsFold(State::NetStats& t, const State::NetStats& w)
   t.pad_reads.decode_declined += w.pad_reads.decode_declined;
   t.pad_reads.decode_checked += w.pad_reads.decode_checked;
   t.pad_reads.decode_mismatched += w.pad_reads.decode_mismatched;
+  t.pad_reads.pass_older += w.pad_reads.pass_older;
   t.pad_reads.latched += w.pad_reads.latched;
   t.pad_reads.relatched += w.pad_reads.relatched;
   t.pad_reads.late_max_ms = std::max(t.pad_reads.late_max_ms, w.pad_reads.late_max_ms);
