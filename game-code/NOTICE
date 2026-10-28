@@ -18,8 +18,9 @@ Licenses
 - lib/BrawlHeaders (git submodule, JaredWhiteOne/BrawlHeaders @ 12544f8) and its OpenRVL
   submodule (JaredWhiteOne/open_rvl @ d6aa79c): no license file in either repository. They are
   referenced as submodules only and not redistributed by this repository.
-- lib/brawlback-common (git submodule, Brawlback-Team/brawlback-common @ 33d728c): used only by
-  the upstream Brawlback-Online plugin, not by PPOnline.
+- lib/brawlback-common (Brawlback-Team/brawlback-common @ 33d728c, the files as they were; a
+  submodule until that repository went away in October 2026): used only by the upstream
+  Brawlback-Online plugin, not by PPOnline.
 
 PPOnline/
 ---------
