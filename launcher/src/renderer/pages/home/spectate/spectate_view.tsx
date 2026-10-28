@@ -16,10 +16,11 @@ import InputBase from "@mui/material/InputBase";
 import MenuItem from "@mui/material/MenuItem";
 import Select from "@mui/material/Select";
 import Switch from "@mui/material/Switch";
+import type { TooltipProps } from "@mui/material/Tooltip";
 import Tooltip from "@mui/material/Tooltip";
 import type { LiveGameEntry, LiveMode, LivePlayer, SpectateState } from "@spectate/types";
 import { clsx } from "clsx";
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 
 import { getCharacterIcon } from "@/lib/utils";
 
@@ -321,6 +322,25 @@ function watchingStatus(watching: SpectateViewProps["watching"]): string | null 
   }
 }
 
+/**
+ * A row's tooltip, closed when anything scrolls (bug reports #179/#180): the tooltip lives in the body and follows its
+ * row, so a wheel over the list carried it over the header and past the window's edge, where it scrolled the whole
+ * page. Hovering again after the scroll opens it for the row under the cursor.
+ */
+function RowTooltip(props: Omit<TooltipProps, "open" | "onOpen" | "onClose">) {
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+    // Scroll events don't bubble: caught on the way down, any scrolled element (the list's or the page's) closes it.
+    const close = () => setOpen(false);
+    window.addEventListener("scroll", close, { capture: true, passive: true });
+    return () => window.removeEventListener("scroll", close, { capture: true });
+  }, [open]);
+  return <Tooltip {...props} open={open} onOpen={() => setOpen(true)} onClose={() => setOpen(false)} />;
+}
+
 export const LiveGameRow = React.memo(function LiveGameRow({
   game,
   now,
@@ -357,7 +377,7 @@ export const LiveGameRow = React.memo(function LiveGameRow({
   const spectators = game.spectators ?? 0;
 
   return (
-    <Tooltip title={tooltip} placement="top" enterDelay={600} disableInteractive={true}>
+    <RowTooltip title={tooltip} placement="top" enterDelay={600} disableInteractive={true}>
       <button
         type="button"
         className={clsx(styles.row, disabled && styles.disabled, watching && styles.watchingRow, fresh && styles.fresh)}
@@ -399,12 +419,12 @@ export const LiveGameRow = React.memo(function LiveGameRow({
           {game.game.state === "playing" && <span className={styles.liveDot} />}
           {time}
         </span>
-        <Tooltip title={Messages.spectators(spectators)} placement="top" disableInteractive={true}>
+        <RowTooltip title={Messages.spectators(spectators)} placement="top" disableInteractive={true}>
           <span className={styles.eye} data-testid="spectators">
             <VisibilityOutlinedIcon style={{ fontSize: 16 }} />
             {spectators}
           </span>
-        </Tooltip>
+        </RowTooltip>
         <span className={styles.action}>
           {starting ? (
             <CircularProgress color="inherit" size={14} />
@@ -420,6 +440,6 @@ export const LiveGameRow = React.memo(function LiveGameRow({
           )}
         </span>
       </button>
-    </Tooltip>
+    </RowTooltip>
   );
 });
