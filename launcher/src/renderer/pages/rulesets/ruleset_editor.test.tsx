@@ -48,8 +48,12 @@ describe("the ruleset editor's tabs", () => {
     press("other", "All-Star");
     expect(latest.rules.special).toEqual({ stamina: "stamina", other: "all-star" });
     expect(screen.getByText(/Fight with a different character per stock!/)).toBeTruthy();
+    expect(screen.getByText("Set knockback with blastzones.")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "3" }));
     expect(latest.rules.staminaType).toBe(3);
+    // The type's own description (P+'s footer line) under the label.
+    expect(screen.getByText("Normal knockback without blastzones.")).toBeTruthy();
+    expect(screen.queryByText("Set knockback with blastzones.")).toBeNull();
     // Off again: the row is left out and the stamina type goes back to 1.
     press("stamina", "Off");
     expect(latest.rules.special).toEqual({ other: "all-star" });

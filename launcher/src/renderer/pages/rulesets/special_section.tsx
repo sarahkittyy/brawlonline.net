@@ -76,7 +76,7 @@ export const SpecialSection = ({
         <div className={styles.row}>
           <div className={styles.rowLabel}>
             <span>{Messages.staminaType()}</span>
-            <span className={styles.rowHelp}>{Messages.staminaTypeHelp()}</span>
+            <span className={styles.rowHelp}>{Messages.staminaTypeHelp(rules.staminaType ?? 1)}</span>
           </div>
           <div className={styles.rowControl}>
             {onChange ? (

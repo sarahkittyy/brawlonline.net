@@ -57,6 +57,14 @@ export const SpecialMessages = {
         "Fight with a different character per stock! Each player places their coin on every character of their roster; X with the coin in hand takes the last one off.",
     }[value] ?? ""),
   staminaType: () => "Stamina type",
-  staminaTypeHelp: () => "P+'s stamina types 1-5 (blast zones and knockback).",
+  /** P+'s description of each stamina type, as the game's footer shows it. */
+  staminaTypeHelp: (type: number) =>
+    [
+      "Set knockback with blastzones.",
+      "Set knockback without blastzones.",
+      "Normal knockback without blastzones.",
+      "Normal knockback with blastzones.",
+      "Normal knockback, no blastzones, and stabilized camera.",
+    ][type - 1] ?? "",
   summary: (n: number) => (n === 0 ? "Off" : `${n} on`),
 };

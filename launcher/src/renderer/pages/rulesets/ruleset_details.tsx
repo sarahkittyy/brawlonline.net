@@ -71,7 +71,8 @@ function specialRows(r: Ruleset): [string, string][] {
     SpecialMessages.value(on[row.key] ?? ""),
   ]);
   if (on.stamina === "stamina") {
-    rows.push([Messages.staminaType(), String(r.rules.staminaType ?? 1)]);
+    const type = r.rules.staminaType ?? 1;
+    rows.push([Messages.staminaType(), `${type}: ${SpecialMessages.staminaTypeHelp(type)}`]);
   }
   return rows;
 }
