@@ -522,9 +522,10 @@ def junction(link: Path, target: Path) -> None:
 
 
 def unlink_junctions(root: Path) -> int:
-    """Removes the junctions `prepare_worktree` made (never their targets)."""
+    """Removes the junctions `prepare_worktree` made (never their targets): at this checkout's
+    submodule paths and at the worktree's own, which differ once a submodule is dropped."""
     n = 0
-    for rel in [*submodule_paths(), "toolchains"]:
+    for rel in [*sorted({*submodule_paths(), *submodule_paths(root)}), "toolchains"]:
         p = root / rel
         if p.is_junction():
             os.rmdir(p)  # the junction itself, not its target
@@ -532,8 +533,8 @@ def unlink_junctions(root: Path) -> int:
     return n
 
 
-def submodule_paths() -> list[str]:
-    out = git("ls-files", "-s")
+def submodule_paths(cwd: Path = ROOT) -> list[str]:
+    out = git("ls-files", "-s", cwd=cwd)
     return [line.split("\t", 1)[1] for line in out.splitlines() if line.startswith("160000 ")]
 
 
@@ -545,6 +546,9 @@ def prepare_worktree(sha: str) -> None:
         dirty = git("status", "--porcelain", "--ignore-submodules=all", "--untracked-files=no", cwd=SRC)
         if dirty:
             die(f"the staging worktree has local changes:\n{dirty}")
+        # Out of the way first: a submodule that became plain files (game-code/lib/brawlback-common)
+        # would otherwise be checked out through its junction, into this checkout's copy.
+        unlink_junctions(SRC)
         run(["git", "checkout", "--detach", "--quiet", sha], cwd=SRC)
     # The submodules (Dolphin's Externals, game-code's headers) and the plugin toolchain: links to
     # this checkout's copies, as the other worktrees have.
