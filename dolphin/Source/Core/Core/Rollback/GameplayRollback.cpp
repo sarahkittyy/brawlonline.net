@@ -219,6 +219,40 @@ std::vector<ModuleSection> ReadModuleSections(const Guest& g)
   return out;
 }
 
+std::vector<Range> ReadSoundHeaps(const Guest& g)
+{
+  // sndHeapSys (0x504 bytes): +0x000 30 records of the loaded sound groups (0x14 each: +4 group,
+  // +0x10 in use), +0x258 12 nw4r::snd::SoundHeap (0x2C each: vtable, an OSMutex at +4, the
+  // FrameHeap's head pointer and section list at +0x1C), +0x474 each heap's base, +0x4A4 its
+  // size, +0x4D4 its use. The frame heaps keep their head ('FRMH', the allocation pointers) at
+  // their base and their section and block records inside, next to the sound data. Only a sound
+  // group load or free writes there during a match (none of it changes from frame to frame), and
+  // none is in flight at a save or a load (RunIoWait). The mutexes stay out all the same.
+  std::vector<Range> out;
+  constexpr u32 HEAP_SYS_SIZE = 0x504, HEAPS = 0x258, HEAP_SIZE = 0x2C, HEAP_COUNT = 12;
+  const auto snd = g.Ptr32(Addr::SND_SYSTEM_PTR);
+  const auto hs = snd ? g.Ptr32(*snd + Addr::SND_HEAP_SYS) : std::nullopt;
+  if (!hs || !IsMemAddr(*hs, HEAP_SYS_SIZE))
+    return out;
+  out.push_back({*hs, HEAPS, "sndHeapSys groups"});
+  for (u32 i = 0; i < HEAP_COUNT; ++i)
+    out.push_back({*hs + HEAPS + HEAP_SIZE * i + 0x1C, 0x10, "sndHeapSys frame heap"});
+  const u32 arrays = HEAPS + HEAP_SIZE * HEAP_COUNT;
+  out.push_back({*hs + arrays, HEAP_SYS_SIZE - arrays, "sndHeapSys heaps"});
+  for (u32 i = 0; i < HEAP_COUNT; ++i)
+  {
+    const auto base = g.U32(*hs + 0x474 + 4 * i);
+    const auto size = g.U32(*hs + 0x4A4 + 4 * i);
+    if (!base || !size || *base == 0 || *size == 0 || *size > 0x01000000 ||
+        !IsMemAddr(*base, *size))
+    {
+      continue;
+    }
+    out.push_back({*base, *size, fmt::format("sound heap {}", i)});
+  }
+  return out;
+}
+
 FighterFields ReadFighterFields(const Guest& g)
 {
   // ftEntryManager* at 0x80624780 -> ftEntry entries[4], stride 0x244: +0x0A u8 active instance,
@@ -408,6 +442,8 @@ std::optional<std::string> ParseRegionSet(const std::string& json, RegionSetSpec
   }
   if (const auto* v = get("rel_data"); v && v->is<bool>())
     spec.rel_data = v->get<bool>();
+  if (const auto* v = get("sound_heaps"); v && v->is<bool>())
+    spec.sound_heaps = v->get<bool>();
   // "add": [[addr, size, label], ...] or [{"addr":..,"size":..,"label":..}, ...]
   if (const auto* v = get("add"); v && v->is<picojson::array>())
   {
@@ -541,6 +577,11 @@ std::vector<Range> ResolveRegionSet(const Guest& g, const RegionSetSpec& spec)
       if (!s.exec)
         rs.push_back({s.addr, s.size, fmt::format("rel{}.{}", s.module_id, s.bss ? "bss" : "data")});
     }
+  }
+  if (spec.sound_heaps)
+  {
+    for (auto& r : ReadSoundHeaps(g))
+      rs.push_back(std::move(r));
   }
   for (const auto& r : spec.add)
     rs.push_back(r);

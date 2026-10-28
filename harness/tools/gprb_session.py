@@ -766,7 +766,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                     help="host A's input delay in frames (overrides --delay for A only)")
     ap.add_argument("--delay-b", type=lambda v: None if v == "auto" else int(v), default=None,
                     help="joiner B's input delay in frames (overrides --delay for B only)")
-    ap.add_argument("--region-set", default="gp-v24")
+    ap.add_argument("--region-set", default="gp-v25")
     ap.add_argument("--start-frame", type=int, default=120)
     ap.add_argument("--frames", type=int, default=30000)
     ap.add_argument("--rtc-a", type=lambda x: int(x, 0), default=0, help="A's custom RTC (0: the fixed default)")

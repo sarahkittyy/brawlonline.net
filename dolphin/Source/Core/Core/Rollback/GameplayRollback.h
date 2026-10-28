@@ -43,6 +43,9 @@ constexpr u32 APP_FRAME_COUNTER_OFF = 0x100;
 constexpr u32 HEAP_INFOS = 0x80494958;  // HeapInfo g_HeapInfos[0x48] {name*, pool*, size, arena}
 constexpr u32 HEAP_INFO_COUNT = 0x48;
 constexpr u32 OS_MODULE_LIST_HEAD = 0x800030C8;
+constexpr u32 SND_SYSTEM_PTR = 0x805A01D0;  // g_sndSystem (.sbss)
+constexpr u32 SND_HEAP_SYS = 0x2D0;         // sndSystem: sndHeapSys*
+constexpr u32 SND_LOADER = 0xB98;           // sndSystem: the sound group loader (its own thread)
 constexpr u32 GAME_FRAME = 0x901812A0;  // +4 frameCounter, +0x14 persistentFrameCounter (0x18 bytes)
 constexpr u32 GAME_FRAME_SIZE = 0x18;
 constexpr u32 MTRAND_DEFAULT_SEED = 0x805A00BC;  // g_mtRand {vtable, seed}
@@ -149,11 +152,17 @@ struct Range
   std::string label;
 };
 
+// Brawl's sound heaps (gp-v25): sndHeapSys (*g_sndSystem +0x2D0, 0x504 bytes: the table of loaded
+// sound groups, the heaps' nw4r SoundHeap objects, their bases and sizes) and each of its frame
+// heaps' memory. Empty if the sound system is not set up.
+std::vector<Range> ReadSoundHeaps(const Guest& g);
+
 struct RegionSetSpec
 {
   std::string name;
   std::vector<std::string> heaps;          // resolved by name from the live heap table
   bool rel_data = false;                   // every loaded REL's non-exec sections (data + bss)
+  bool sound_heaps = false;                // sndHeapSys and its sound heaps (ReadSoundHeaps)
   std::vector<Range> add;                  // static ranges
   std::vector<std::pair<u32, u32>> remove;  // holes punched out of everything above
   std::vector<std::string> remove_heaps;

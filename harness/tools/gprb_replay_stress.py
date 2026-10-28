@@ -144,7 +144,7 @@ def main() -> int:
     ap.add_argument("--cpu", default="sc", choices=("sc", "dc"))
     ap.add_argument("--cpu-core", type=int, default=None, help="Dolphin.Core.CPUCore (0 interpreter, 1 JIT64, 5 cached interpreter)")
     ap.add_argument("--video", default="Null")
-    ap.add_argument("--region-set", default="gp-v24")
+    ap.add_argument("--region-set", default="gp-v25")
     ap.add_argument("--start-frame", type=int, default=240)
     ap.add_argument("--players", type=int, default=0,
                     help="players of the fixture (default: <state>.json of gprb_mispredict prep, else 2)")
