@@ -82,6 +82,7 @@
 #include "Core/Rollback/GameplayOnlineBackend.h"
 #include "Core/Rollback/PresentStats.h"
 #include "Core/Rollback/ReplayPlayback.h"
+#include "VideoCommon/OnScreenDisplay.h"
 #include "VideoCommon/OnlineChatUI.h"
 #include "VideoCommon/Present.h"
 #include "Core/Rollback/RollbackManager.h"
@@ -1489,6 +1490,17 @@ Result CmdMachineArm(const Args& args)
   return {};
 }
 
+// The OSD messages still up (VideoCommon/OnScreenDisplay), which screenshots don't show.
+Result CmdOsdMessages(const Args&)
+{
+  picojson::array texts;
+  for (std::string& t : OSD::GetMessageTexts())
+    texts.emplace_back(std::move(t));
+  picojson::object o;
+  o["messages"] = picojson::value(texts);
+  return o;
+}
+
 Result CmdMachineStatus(const Args&)
 {
   return Machine::Status().get<picojson::object>();
@@ -2280,6 +2292,7 @@ const std::vector<std::pair<std::string_view, Handler>>& Handlers()
       {"chat_leave", CmdChatLeave},
       {"chat_ui", CmdChatUi},
       {"osd_mouse", CmdOsdMouse},
+      {"osd_messages", CmdOsdMessages},
       {"online_recent_codes", CmdOnlineRecentCodes},
       {"rollback_pad_history", CmdRollbackPadHistory},
       {"rollback_chunk_hashes", CmdRollbackChunkHashes},

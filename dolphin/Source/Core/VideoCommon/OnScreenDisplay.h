@@ -29,6 +29,10 @@ enum class MessageType
   HighlightSeek,
   // Draws are left out while the shaders a new build doesn't have on disk compile (ShaderCache).
   CompilingShaders,
+  // A room session's notice while the chat window doesn't show it (Rollback/MachineSession.cpp).
+  MachineNotice,
+  // A room's joiner waiting for a link to a member, with the seconds left (MachineSession.cpp).
+  MachineJoinWait,
 
   // This entry must be kept last so that persistent typed messages are
   // displayed before other messages
@@ -61,6 +65,9 @@ void AddTypedMessage(MessageType type, std::string message, u32 ms = Duration::S
 // The messages start below min_top, the bottom edge of the top-left FPS box (0 for none).
 void DrawMessages(float min_top = 0.0f);
 void ClearMessages();
+// The texts of the messages still up (not run out or replaced), for the harness (`osd_messages`):
+// its screenshots don't show them.
+std::vector<std::string> GetMessageTexts();
 
 void SetObscuredPixelsLeft(int width);
 void SetObscuredPixelsTop(int height);

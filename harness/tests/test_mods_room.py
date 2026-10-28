@@ -75,10 +75,13 @@ def test_joiner_says_who_it_cannot_reach(backend: OnlineBackend, dolphin: Callab
         try:
             st = joiner.client.call("mods_status", timeout=5)
             lines = joiner.client.call("chat_status", timeout=5).get("lines", [])
+            osd = joiner.client.call("osd_messages", timeout=5).get("messages", [])
         except Exception:  # noqa: BLE001  (Dolphin closes after a join that failed)
             break
         for ln in lines:
             seen.setdefault(f"chat: {ln.get('text', '')}", time.monotonic() - t0)
+        for text in osd:
+            seen.setdefault(f"osd: {text}", time.monotonic() - t0)
         if st.get("error"):
             seen.setdefault(f"error: {st['error']}", time.monotonic() - t0)
         time.sleep(0.5)
@@ -87,6 +90,14 @@ def test_joiner_says_who_it_cannot_reach(backend: OnlineBackend, dolphin: Callab
     notice = f"chat: Can't connect to hosty yet. {then}"
     assert notice in seen, seen
     assert 8 <= seen[notice] <= 20, seen
+    # On screen too, whatever the chat window shows (bug report #175: folded, it showed nothing),
+    # with the seconds left, and not twice (the notice itself stays in the chat).
+    countdown = {k: v for k, v in seen.items() if k.startswith("osd: Can't connect to hosty yet. Joining waits for it: ")}
+    assert len(countdown) >= 20, seen
+    assert 8 <= min(countdown.values()) <= 20, seen
+    assert "osd: Can't connect to hosty yet. Joining waits for it: 50 s left." in countdown, seen
+    assert any(f"for it: {n} s left." in k for k in countdown for n in range(1, 10)), seen
+    assert f"osd: Can't connect to hosty yet. {then}" not in seen, seen
     err = ("error: Could not join the game: no connection to hosty after 60 s: your network or theirs "
            "blocks a direct connection between you")
     assert err in seen, seen
