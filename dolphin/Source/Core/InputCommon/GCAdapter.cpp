@@ -919,6 +919,24 @@ std::optional<GCPadStatus> InputAt(int chan, Clock::time_point t)
   return std::nullopt;
 }
 
+GCPadStatus Peek(int chan)
+{
+  if (!s_is_adapter_wanted.load(std::memory_order_relaxed))
+    return {};
+
+#if GCADAPTER_USE_LIBUSB_IMPLEMENTATION
+  if (s_handle == nullptr || s_status != AdapterStatus::Detected)
+    return {};
+#elif GCADAPTER_USE_ANDROID_IMPLEMENTATION
+  if (!s_detected || !s_fd)
+    return {};
+#endif
+
+  std::lock_guard lk(s_read_mutex);
+  const auto& pad_state = s_port_states[chan];
+  return pad_state.is_new_connection ? GCPadStatus{} : pad_state.status;
+}
+
 // Get ControllerType from first byte in input payload.
 static ControllerType IdentifyControllerType(u8 data)
 {

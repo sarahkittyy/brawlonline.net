@@ -175,6 +175,64 @@ def test_a_sitter_watches_the_rooms_game(watch_backend: OnlineBackend,
     print("uploads:", sa, flush=True)
 
 
+def test_a_sitter_leaves_a_watch_that_buffers(watch_backend: OnlineBackend,
+                                              dolphin: Callable[..., DolphinInstance],
+                                              gpu_backend: str) -> None:
+    """Bug report #171: the players' upload paused (players first: their connection was busy), the
+    sitter's view ran out of frames and stood still, and START / B did nothing (the game's pad
+    thread stands still with it), so the sitter closed Dolphin. Here C's frames stop coming
+    (`watch_hold`, as a paused upload): C's screen says it is buffering and how to leave, and B
+    on C's controller ends the watch while A and B play on."""
+    test = "room-watch-buffering"
+    a, b, c = gs = _players(watch_backend, dolphin, gpu_backend, test, "rwb", 3)
+    for g in gs:  # a game long enough to still be on when C leaves it
+        B.write_rules(g.c, stocks=4, minutes=2, items_off=True)
+        ppom.allow_test_rules(g.c)
+    code = create_room(a)
+    pick(a)
+    _open_slot(a, 2)
+    for k, g in ((1, b), (2, c)):
+        to_join_room(g)
+        pick(g, right=2 * k)
+        _join(g, code, k)
+    until_view(a, lambda v: all(v["slots"][p]["bits"] & ppom.SLOT_TAKEN for p in range(3)), "all players")
+    _plate(c, 2)
+    until_view(a, lambda v: v["slots"][2]["bits"] & ppom.SLOT_SITTING_OUT, "C sitting out")
+
+    for g in (a, b):
+        g.steps("tap START 8", "wait 10")
+    reports: dict[str, Any] = {}
+    t1 = _play([a, b], 1, reports)
+    _wait(lambda: _watch(c)["armed"] and c.scene() == MATCH, 120, "C watching game 1")
+    _wait(lambda: c.c.call("replay_status").get("shown", -1) >= 300, 90, "C's view 5 s into game 1")
+    # The wait for a buffer's frames at the start says nothing.
+    assert _watch(c)["buffering_toasts"] == 0, _watch(c)
+    c.c.call("rooms_request", op="watch_hold", hold=True)
+    try:
+        _wait(lambda: _watch(c)["buffering_toasts"] > 0, 30, "C buffering, with the line saying so")
+        shown = c.c.call("replay_status")["shown"]
+        time.sleep(3)
+        assert c.c.call("replay_status")["shown"] == shown, "C's view did not stand still"
+        c.shot("01-c-buffering")
+        # B on C's controller while the game stands still.
+        c.c.pad_set(0, buttons=["B"])
+        try:
+            _wait(lambda: _watch(c)["left_early"] >= 1, 10, "B to end C's buffering watch")
+        finally:
+            c.c.pad_clear(0)
+    finally:
+        c.c.call("rooms_request", op="watch_hold", hold=False)
+    _wait(lambda: c.scene() == CSS and not _watch(c)["armed"], 60, "C back on the room's CSS")
+    c.shot("02-c-left-the-buffering-watch")
+    assert _phase(a) == "running" or 1 in reports, "A's game stopped"
+    t1.join(900)
+    assert 1 in reports, "game 1 did not finish"
+    rep = reports[1]
+    print("game 1:", rep, flush=True)
+    print("C's watch:", _watch(c), flush=True)
+    assert rep["checksums"]["mismatches"] == 0 and rep["checksums"]["compared"] > 300, rep
+
+
 def test_a_player_who_joins_during_the_game_watches_it(watch_backend: OnlineBackend,
                                                       dolphin: Callable[..., DolphinInstance],
                                                       gpu_backend: str) -> None:

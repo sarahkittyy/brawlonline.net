@@ -102,5 +102,8 @@ std::vector<std::string> Service(Clock::time_point now, const RoomInfo& room);
 bool Watching();
 // Ends the watch as START / B does (a launcher click, the harness's `watch_leave`).
 void Abort();
+// Tests (the harness's `watch_hold`): what comes of the watched game is kept but not played, as
+// when the players' upload pauses: the watch runs out of frames and buffers.
+void HoldFeed(bool hold);
 picojson::object Status();
 }  // namespace Online::RoomWatch

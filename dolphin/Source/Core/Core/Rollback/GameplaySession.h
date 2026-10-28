@@ -549,6 +549,7 @@ struct PlaybackView
   bool room_watch = false;     // ArmPlayback's `room_watch`
   bool starting = false;       // armed, its match not started yet (the game is on its way to it)
   bool stopping = false;       // PlaybackStopping
+  bool buffering = false;      // a live game out of frames: it stands still until more come
 };
 PlaybackView GetPlaybackView();
 // For the harness and the launcher: phase, frame, last frame, desync, error.
