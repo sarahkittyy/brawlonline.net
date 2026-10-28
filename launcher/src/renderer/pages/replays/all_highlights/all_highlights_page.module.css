@@ -58,11 +58,16 @@
   background: rgb(0 0 0 / 30%);
 }
 
-/* The folder buttons at the sidebar's foot, under the empty rest: smaller. */
+/* The folder buttons at the sidebar's foot, under the empty rest: smaller, and wrapping in a narrow sidebar. */
 .folderItem {
   gap: 8px;
   padding: 6px 14px;
   font-size: 12px;
+  white-space: normal;
+}
+
+.folderItem:last-child {
+  padding-bottom: 10px;
 }
 
 .content {
