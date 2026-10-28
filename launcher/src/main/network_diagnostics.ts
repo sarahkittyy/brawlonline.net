@@ -2,12 +2,16 @@ import type { PortMapping } from "@common/types";
 import { NatType, Presence } from "@common/types";
 import { createPmpClient, createUpnpClient } from "@xmcl/nat-api";
 import { v4DefaultGateway } from "network-default-gateway";
+import { lookup } from "node:dns/promises";
 import { createServer, request } from "stun";
 
 import { countHops } from "./traceroute";
 
-const STUN_SERVER_URL1 = "stun1.l.google.com:19302";
-const STUN_SERVER_URL2 = "stun2.l.google.com:19302";
+// Two different machines: a router that gives every destination its own port shows it only toward
+// two addresses. stun1 and stun2.l.google.com are one (74.125.250.129:19302), so every router
+// passed as "normal" (bug reports #169 and #174, 2026-10-27: a port-changing router reported so).
+const STUN_SERVER1 = { host: "stun.l.google.com", port: 19302 };
+const STUN_SERVER2 = { host: "stun.cloudflare.com", port: 3478 };
 
 export async function getNetworkDiagnostics(): Promise<{
   address: string;
@@ -32,13 +36,38 @@ export async function getNetworkDiagnostics(): Promise<{
 }
 
 async function getNatType(): Promise<{ address: string; natType: NatType }> {
+  const [ip1, ip2] = await Promise.all(
+    [STUN_SERVER1, STUN_SERVER2].map(async ({ host }) => (await lookup(host, { family: 4 })).address),
+  );
   const stunServer = createServer({ type: "udp4" });
-  const stunResponse1 = await request(STUN_SERVER_URL1, { server: stunServer });
-  const stunResponse2 = await request(STUN_SERVER_URL2, { server: stunServer });
-  const address1 = stunResponse1.getXorAddress();
-  const address2 = stunResponse2.getXorAddress();
-  stunServer.close();
-  return { address: address1.address, natType: address1.port === address2.port ? NatType.NORMAL : NatType.SYMMETRIC };
+  try {
+    const stunResponse1 = await request(`${ip1}:${STUN_SERVER1.port}`, { server: stunServer });
+    const stunResponse2 = await request(`${ip2}:${STUN_SERVER2.port}`, { server: stunServer });
+    const mapped1 = stunResponse1.getXorAddress();
+    const mapped2 = stunResponse2.getXorAddress();
+    return {
+      address: mapped1.address,
+      natType: natTypeOf({ server: ip1, ...mapped1 }, { server: ip2, ...mapped2 }),
+    };
+  } finally {
+    stunServer.close();
+  }
+}
+
+/**
+ * The NAT type from one socket's public address and port as two STUN servers saw them: the same
+ * toward both is a normal NAT, another address or port per destination a symmetric one (its
+ * players are sent where the server saw it, so the strict routers' answers miss). Two answers from
+ * one server address tell nothing.
+ */
+export function natTypeOf(
+  a: { server: string; address: string; port: number },
+  b: { server: string; address: string; port: number },
+): NatType {
+  if (a.server === b.server) {
+    return NatType.UNKNOWN;
+  }
+  return a.address === b.address && a.port === b.port ? NatType.NORMAL : NatType.SYMMETRIC;
 }
 
 async function getPortMappingPresence(): Promise<PortMapping> {
