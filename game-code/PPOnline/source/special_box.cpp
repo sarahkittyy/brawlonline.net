@@ -7,7 +7,7 @@
 // ours in Fighter1Resoruce (free on the character select) when the SPECIAL page first shows;
 // everything is freed when the menu closes. The page is driven as muProcSpecial drives it
 // (read off P+'s own page, 2026-10-27):
-//   - the rows 0003 (STAMINA) .. 0009 (SPEED), 0010 (OTHER): CHR frame 9 (the end of their
+//   - the rows 0003..0007 (STAMINA..STATUS), 0010 (GRAVITY), 0008 (SPEED), 0009 (OTHER): CHR frame 9 (the end of their
 //     entrance), CLR frame 3 + 4 * value (0 off, 1 its left value, 2 its right);
 //   - the cursor 0002: VIS frame = the column (the value, 3 on OK), CHR frame = the row (8 on
 //     OK), its CLR playing (the pulse);
@@ -214,6 +214,36 @@ namespace SpecialBox {
         *(float*)(a + 0x1C) = rate;
     }
 
+    // P+'s OK button under the box hides nothing but the footer, where the stamina type is (Sarah's
+    // board, 2026-10-27: "remove the OK button, as it serves no purpose and hides the stamina mode
+    // blast zone setting beneath"): its nodes (okN, ok, okbase1, okbase2) in our copy of the frame's
+    // MDL0 made invisible (ResNodeData +0x14 flags, 0x100 visible) and scaled to nothing (+0x20),
+    // before the model is made. The cursor never goes to it (input).
+    static void hideOkButton(u8* brres, u32 size)
+    {
+        u8* mdl = NULL;
+        for (u32 o = 0; o + 0x50 < size; o += 4) {
+            if (*(u32*)(brres + o) == 0x4D444C30) {   // 'MDL0'
+                mdl = brres + o;
+                break;
+            }
+        }
+        if (!mdl) return;
+        s32 nodes = *(s32*)(mdl + 0x14);   // the node group (section 1, version 9)
+        if (nodes <= 0 || (u32)nodes > size) return;
+        u8* grp = mdl + nodes;
+        u32 count = *(u32*)(grp + 4);
+        for (u32 i = 1; i <= count && i < 64; i++) {
+            u8* e = grp + 8 + 16 * i;
+            const char* name = (const char*)(grp + *(s32*)(e + 8));
+            u8* node = grp + *(s32*)(e + 12);
+            if (name[0] != 'o' || name[1] != 'k') continue;   // okN, ok, okbase1, okbase2
+            *(u32*)(node + 0x14) &= ~0x100u;
+            float* scale = (float*)(node + 0x20);
+            scale[0] = scale[1] = scale[2] = 0.0f;
+        }
+    }
+
     static void makeBox(u8* rt)
     {
         u8* task = cssTask();
@@ -232,6 +262,11 @@ namespace SpecialBox {
             if (!mdl) {
                 g_specialBox.failed++;
                 continue;
+            }
+            if (m == 0) {
+                u32 size = 0;
+                entry(1, &size);
+                hideOkButton(mdl, size);
             }
             s.modelRes[m] = (u32)mdl;
             RES_INIT(&s.modelRes[m]);
@@ -320,7 +355,10 @@ namespace SpecialBox {
     // The box as the values and the cursor are (§ above).
     static void frames()
     {
-        static const int ROW_MODEL[8] = {2, 3, 4, 5, 6, 7, 8, 9};   // 0003..0009, 0010
+        // The rows' models: STAMINA..STATUS 0003..0007, then GRAVITY 0010, SPEED 0008, OTHER 0009
+        // (P+'s box has them in that order on screen; Sarah's board, 2026-10-27: "the gravity setting
+        // controls speed, speed controls other, and other controls gravity" with 0008-0010 in order).
+        static const int ROW_MODEL[8] = {2, 3, 4, 5, 6, 9, 7, 8};
         for (int r = 0; r < 8; r++) {
             u8* o = s.obj[ROW_MODEL[r]];
             if (!o) continue;
@@ -412,11 +450,12 @@ namespace SpecialBox {
     void input(u32 bits, bool canEdit)
     {
         int r = s.cursorRow;
+        // (the eight rows round: P+'s OK button below them is hidden, hideOkButton)
         if (bits & IN_UP) {
-            s.cursorRow = r == 0 ? OK_ROW : r - 1;
+            s.cursorRow = r <= 0 ? 7 : r - 1;
             playSE(SE_CURSOR);
         } else if (bits & IN_DOWN) {
-            s.cursorRow = r == OK_ROW ? 0 : r + 1;
+            s.cursorRow = r >= 7 ? 0 : r + 1;
             playSE(SE_CURSOR);
         } else if (r != OK_ROW && (bits & (IN_LEFT | IN_RIGHT | IN_A))) {
             if (!canEdit) {
