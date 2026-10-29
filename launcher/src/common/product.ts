@@ -33,6 +33,9 @@ export const BASE_DOMAIN = "brawlonline.net";
 /** The community Discord server, linked from the header and the website. */
 export const DISCORD_INVITE_URL = "https://discord.gg/BsR9xq5bgM";
 
+/** The community's tournaments on start.gg, linked from the header's trophy. */
+export const TOURNAMENTS_URL = "https://start.gg/catfight";
+
 /**
  * The app id: electron-builder.json's appId (the macOS bundle id) and, on Windows, the
  * AppUserModelID. The NSIS installer gives the Start Menu shortcut this AppUserModelID, and
