@@ -16,6 +16,10 @@ who sit out do not pick. Ranked's strikes show the opponent's cursor the same wa
 - test_room_anyone_picks_three_players: a third player sits out game 1 (never on the stage select,
   no pick, not waited for), then all three pick: each draws the other two cursors.
 - test_ranked_strikes_show_the_opponents_cursor: Ranked's game 1 strikes.
+- test_direct_anyone_picks: Direct, where everyone picks by default (Sarah's board, 2026-10-29):
+  game 1 too (its lock-in is the search's: locked in again with the pick to come), both on the
+  stage select with each other's cursors, B does nothing there, a pick with L held is played as the
+  L layout; game 2 both again (the winner too), START a random stage of Direct's list.
 
 Every stage select's cursors are deleted with it (made = deleted, none alive). Screenshots:
 run/artifacts/game-code/rooms/anyone-picks/<test>/<player>/.
@@ -34,7 +38,7 @@ from ppharness.backend import OnlineBackend
 from ppharness.instance import DolphinInstance
 
 from test_online import _wait
-from test_online_game import Game, _boot, _both, _peer_shown, backend  # noqa: F401  (the backend fixture)
+from test_online_game import Game, _boot, _both, _connected_direct, _peer_shown, backend  # noqa: F401  (the backend fixture)
 from test_online_ranked import SSS as RANKED_SSS, STARTERS, _both_on, _paired, _search_ranked, _to_ranked_css
 from test_ranked_sss_portraits import _sym
 from test_room_rules import session_rules
@@ -337,3 +341,49 @@ def test_ranked_strikes_show_the_opponents_cursor(backend, dolphin: Callable[...
     online_set.wait(lambda: online_set.scene(a.c) == "scMelee", 300, "game 1")
     B.step(a.c, 5)
     cursors_gone([a, b])
+
+
+@pytest.mark.slow
+def test_direct_anyone_picks(backend, dolphin: Callable[..., DolphinInstance], gpu_backend: str) -> None:
+    a, b, _, _ = _connected_direct(backend, dolphin, gpu_backend, "anyone-direct", ("dapa", "dapb"), stocks=1,
+                                  pick_game_1=False)
+    gs = [a, b]
+    for g in gs:
+        g.out = ANY_ART / "direct" / g.name
+    # Game 1: the search's lock-in, then locked in again with the pick to come; both stage selects.
+    _wait(lambda: all(g.scene() == SSS for g in gs), 90, "game 1: both on the stage select")
+    for g in gs:
+        se = session(g)
+        assert se["anyone_picks"] and [p["picks_stage"] for p in se["players"][:2]] == [1, 1], se
+        assert lock_of(g)["stage_pick"] == STAGE_PENDING, lock_of(g)
+        B.step(g.c, 40)
+    port_a = ppom.read_local(a.c, ppom.find_block(a.c))["local_port"]
+    port_b = 1 - port_a
+    sees(a, b, port_b, "B in Direct")
+    sees(b, a, port_a, "A in Direct")
+    # B: no way back to the CSS where everyone picks.
+    b.steps("tap B 8", "wait 40")
+    assert b.scene() == SSS and lock_of(b)["ready"], ("B left the stage select", b.scene(), lock_of(b))
+    a.shot("01-direct-game-1")
+    B.sss_pick_stage(a.c, FD, 0, held=["L"])
+    leaves_by_itself(b, "A picked")
+    rep = online_set.play_game(gs, 1)
+    assert rep["checksums"]["mismatches"] == 0, rep
+    assert rep["stage"] == FD and rep["asl"] == [L_LAYOUT, L_LAYOUT], ("A's pick was not played", rep)
+    cursors_gone(gs)
+    online_set.back_on_css(gs, 1)
+
+    # Game 2: both again, the winner too; START: a random stage of Direct's list.
+    for g in gs:
+        g.steps("tap START 8", "wait 10")
+    _wait(lambda: all(g.scene() == SSS for g in gs), 90, "game 2: both on the stage select")
+    starters = session(a)["stages"]["starters"]
+    assert starters, ("Direct's stages not in SESSION", session(a)["stages"])
+    b.steps("wait 40", "tap START 8")
+    for g in gs:
+        leaves_by_itself(g, "B's START")
+    rep = online_set.play_game(gs, 2)
+    assert rep["checksums"]["mismatches"] == 0, rep
+    assert rep["stage"] in starters, ("START left Direct's stages", rep, starters)
+    cursors_gone(gs)
+

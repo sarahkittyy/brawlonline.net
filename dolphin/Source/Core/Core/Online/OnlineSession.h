@@ -86,6 +86,9 @@ struct Match
   // P+'s alternate stages (get-ticket-resp `alternateStages`: Direct, Teams, a room whose ruleset
   // has them on): a stage pick plays the layout its held L/R/Z selects; else the normal layout.
   bool alternate_stages = false;
+  // Every player picks every game's stage at once, game 1 too; the first pick the host sees plays
+  // (get-ticket-resp `anyonePicks`: Direct, 2026-10-29).
+  bool anyone_picks = false;
   // Ranked: the starter stages struck for game 1 (get-ticket-resp `starters`, ours; Slippi's
   // client has them built in). Empty: Online::GameSetup's default.
   std::vector<u16> starters;

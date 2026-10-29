@@ -181,6 +181,13 @@ pub struct GetTicketResp {
     /// every pick plays the stage's normal layout.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub alternate_stages: Option<bool>,
+    /// Every player picks the stage of every game, game 1 too, all on the stage select at once,
+    /// and the first pick the session's host sees is played (Direct, Sarah's board, 2026-10-29:
+    /// "could we make this the default for DIRECT only?"; rooms do it with their ruleset's
+    /// `anyone-picks` and the pickers instead). Absent: Slippi's (Direct: game 1 random, then
+    /// the loser picks).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub anyone_picks: Option<bool>,
 }
 
 /// A room's set as its session starts it (ours; Dolphin's `Online/SetFormat.h` `Format` and

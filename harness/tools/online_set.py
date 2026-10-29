@@ -165,11 +165,40 @@ def expected_shades(setup: B.MatchSetup) -> List[int]:
     return out
 
 
+def anyone_picks(players: Sequence[Any]) -> bool:
+    """Every player picks every game's stage at once (Direct since 2026-10-29: SESSION's flag)."""
+    try:
+        return any(session(p.c).get("anyone_picks") for p in players)
+    except Exception:  # noqa: BLE001 - an older plugin, or the block not there yet
+        return False
+
+
+def random_pick_where_anyone_picks(players: Sequence[Any], game: int, log: Callable[[str], None] = print,
+                                   timeout: float = 120) -> Optional[str]:
+    """Direct (every player picks, game 1 too): the players wait on the stage select until one
+    picks. For a test that picks nothing itself, the first player there presses START: a random
+    stage of the match's (the server's list, as Slippi's game 1 draw). Returns who pressed it."""
+    end = time.monotonic() + timeout
+    while time.monotonic() < end:
+        if all(gstatus(p.c)["phase"] in ("running", "error", "ended") for p in players):
+            return None
+        on = [p for p in players if scene(p.c) == "scSelStage"]
+        if on and anyone_picks(players) and not any(session(p.c)["state"] == 2 for p in players):
+            on[0].steps("wait 40", "tap START 8")
+            log(f"game {game}: {on[0].name} pressed START on the stage select (a random stage)")
+            return on[0].name
+        time.sleep(0.5)
+    return None
+
+
 def play_game(players: Sequence[Any], game: int, timeout: float = 900,
               log: Callable[[str], None] = print, winner: Optional[Any] = None) -> Dict[str, Any]:
     """Wait for the match to run under rollback on both, play it to game set closed-loop (each
     side drives its own in-game port with its own controller, port 0), and compare. With
-    `winner` (one of `players`), that player stands still and the other walks off the stage."""
+    `winner` (one of `players`), that player stands still and the other walks off the stage.
+    Where every player picks the stage (Direct) and nobody has, the first player's START picks a
+    random one."""
+    random_pick_where_anyone_picks(players, game, log)
     wait(lambda: all(gstatus(p.c)["phase"] in ("running", "error", "ended") for p in players), 240,
          f"game {game}: both sessions running")
     st = [gstatus(p.c) for p in players]
@@ -284,6 +313,8 @@ def lock_in_next(players: Sequence[Any], game: int, mode: str = "direct",
     2 the loser first leaves the stage select with B: back on the CSS unlocked, the character still
     selected, and START again opens the stage select again."""
     info: Dict[str, Any] = {}
+    if mode == "direct" and anyone_picks(players):
+        return _lock_in_anyone_picks(players, game, log, panels)
     se = session(players[0].c)
     # (Between games SESSION's `present` is 0: Dolphin fills the players in with the setup.)
     picker = next((i for i, pl in enumerate(se["players"]) if pl.get("picks_stage")), None)         if mode == "direct" else None
@@ -333,6 +364,44 @@ def lock_in_next(players: Sequence[Any], game: int, mode: str = "direct",
                  and local(p.c)["lock"]["game"] == game, 30, f"{p.name}: locked in for game {game}")
             if scene(p.c) == CSS:
                 p.shot(f"g{game}-locked-in")
+    return info
+
+
+def _lock_in_anyone_picks(players: Sequence[Any], game: int, log: Callable[[str], None],
+                          panels: Optional[Dict[str, Dict[str, int]]]) -> Dict[str, Any]:
+    """Direct since 2026-10-29: every player's START opens their stage select once all are locked
+    in; the last game's loser picks STAGE_PICKS[game] there (holding STAGE_PICK_HELD[game]), and
+    the others' stage selects leave by themselves with it. In game 2 the picker's B first does
+    nothing (no way back to the CSS where everyone picks)."""
+    info: Dict[str, Any] = {}
+    for p in players:
+        lo = local(p.c)
+        assert not (lo["lock"]["ready"] and lo["lock"]["game"] == game), (p.name, "locked in before START", lo["lock"])
+    for p in players:
+        p.steps("tap START 8", "wait 10")
+    wait(lambda: all(scene(p.c) == "scSelStage" for p in players), 60, f"game {game}: everyone on the stage select")
+    for p in players:
+        p.steps("wait 40")
+    for q in players:   # nothing is set up before a pick
+        assert not (session(q.c)["state"] == 2 and session(q.c)["game"] == game), (q.name, "set up before a pick")
+    winner = session(players[0].c)["last_winner"]
+    losers = [p for p in players if local(p.c)["local_port"] != winner]
+    picker = losers[0] if len(losers) == 1 else players[0]
+    if game == 2:
+        picker.steps("tap B 8", "wait 40")
+        assert scene(picker.c) == "scSelStage" and local(picker.c)["lock"]["ready"], (
+            picker.name, "B left the stage select where everyone picks", scene(picker.c), local(picker.c)["lock"])
+    picker.shot(f"g{game}-stage-select")
+    assert picker.c.read_mem(STRIKE_TABLE, 30) == bytes(30), (picker.name, "stages struck on the SSS")
+    stage = STAGE_PICKS.get(game, STAGE_PICK)
+    held = STAGE_PICK_HELD.get(game, [])
+    B.sss_pick_stage(picker.c, B.STAGE_KIND[stage], 0, held=held)
+    for p in players:
+        wait(lambda p=p: scene(p.c) != "scSelStage", 60, f"{p.name}: the stage select left with the pick")
+    info["picked_by"] = picker.name
+    info["picked"] = stage
+    info["asl"] = sum(ASL_VALUE[b] for b in held)
+    log(f"game {game}: {picker.name} (the last game's loser) picked {stage}; everyone's stage select left")
     return info
 
 

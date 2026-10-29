@@ -191,9 +191,10 @@ def test_ready_banner_between_games(backend: OnlineBackend,
         g.steps("wait 60")
         _a_on_banner(g, f"{g.name}-A-on-banner-between-games", shown=True)
         assert g.c.mm_status()["state"] == "connection_success"
-    # START locks in the winner (the loser would go on to the stage select): its banner goes,
-    # the loser's stays.
-    winner = next(g for g in (a, b) if not _picks_stage(g))
+    # START locks in the winner (once both are, both go on to the stage select: every player
+    # picks in Direct): its banner goes, the loser's stays.
+    last = online_set.session(a.c)["last_winner"]
+    winner = next(g for g in (a, b) if online_set.local(g.c)["local_port"] == last)
     winner.press_until("START", winner.locked, "the lock-in")
     winner.steps("wait 10")
     assert _hidden(winner, TASK_READY), "READY TO FIGHT while locked in"

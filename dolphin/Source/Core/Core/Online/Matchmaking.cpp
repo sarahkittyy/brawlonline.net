@@ -1103,6 +1103,7 @@ void Matchmaking::HandleMatchmaking()
   }
   match.pick_from_stages = GetBool(get_resp, "pickFromStages");
   match.alternate_stages = GetBool(get_resp, "alternateStages");
+  match.anyone_picks = GetBool(get_resp, "anyonePicks");
   match.items = static_cast<u32>(GetInt(get_resp, "items", 0, 0xFFFFFFFF).value_or(0));
   // The match's rules (MatchRules.h). Rules that are there but unusable refuse the match: playing
   // under other rules than the server set up is worse than not playing.
