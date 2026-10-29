@@ -1459,6 +1459,31 @@ So a frame's local input is ~1 ms old at the loop top instead of ~17.5: read -> 
 
 A threshold of 0 left one seed of the 4.2-frame jump at 1,328 frames (a ~0 advantage to an in-sync peer read just above 0); 0.25, 0.5 and 1.0 all closed it in under 400. Not tested: no Dolphin built or run (the shared build tree was left alone), so no real 3-4 player match, Other Games room or harness test; the slow PC in the simulator costs the same every frame, a real one does not.
 
+## A CPU without SSE4.1 rounded single-precision madds differently (bug report #189, 2026-10-29)
+
+**Report.** YOLO#63 (launcher 0.1.113, Windows 10, AMD Phenom II X6 1055T): "Too many desyncs, like 95% of matches". Their logs hold 23 games: 9 ended in a desync (Luigi, Jigglypuff, Ike, Roy, against 8 opponents, at game frames 524 to 7,874), 6 in a quit or the opponent leaving, 8 went to game set (7,340-13,018 frames). The Phenom II has SSE3 and SSE4a but no SSSE3, SSE4.1, SSE4.2, AVX, FMA3 or BMI.
+
+**Cause.** `MAIN_ACCURATE_FMADDS` is on by default, so single-precision madds (`fmadds`, `ps_madd*`) go through `GeneratePsMaddEft` (`Jit64AsmCommon.cpp`, upstream Dolphin's code), which corrects a result's rounding when it is an even tie, `(result & 0x1FFFFFFF) == 0x10000000`. With SSE4.1 it compares the shifted result with PCMPEQQ (per 64-bit lane). The SSE2 fallback used PCMPEQW and then copied each lane's high dword over both halves with `PSHUFD 0xF5`: a lane whose two high 16-bit words matched in only one of them got half a mask (`0x0000FFFF` or `0xFFFF0000` per dword), and the rounding step added 1, or that part of -1, to a result that was no even tie. Now PCMPEQD: the shift by 35 leaves each lane's low dword 0, as in the constant, so comparing dwords and copying the high one is exactly PCMPEQQ. Also, the paired U16 quantized store's SSE2 fallback clamped to 0 before `MINPS`, so a NaN stored 0 there and 65535 with PACKUSDW. It now clamps after. The fallbacks of `HandleNaNs` (accurate NaNs) and SSE4.1's `fsel` and quantized loads compute the same as their SSE4.1 paths. `SetFPRF` was not checked; neither it nor `HandleNaNs` runs in a P+ session (FPRF and accurate NaNs are off), but both run in an Other Games session. Boot now logs `Host CPU: <model>,<id>,<flags>` (`Core.cpp`), so a report shows what the JIT had.
+
+**Tests.** `gprb_session.py --preset typical --damage-ratio 0.5 --matches 2-3` (Fox vs Falco on Battlefield, then Mario vs Marth on Final Destination; region set gp-v26, single core), with both instances on a scratch DolphinNoGUI linked from build/anypick's libraries and a copy of `x64CPUDetect.cpp` that turns off the features named in `PPR_SCRATCH_OFF` for the joiner only:
+
+| Joiner without | JIT | Frames | Desync |
+|---|---|---:|---|
+| nothing (control) | before | 20,994 | none |
+| the Phenom II's features | before | 8,225 | frame 4,381 |
+| the Phenom II's, FMA pinned on (software FMA) | before | 2,759 | frame 2,629 |
+| FMA | before | 21,914 | none |
+| FMA, FMA pinned on | before | 21,678 | none |
+| all but FMA | before | 5,094 | frame 919 |
+| AVX | before | 20,919 | none |
+| SSSE3, SSE4.1, SSE4.2, BMI, AES, MOVBE, SHA | before | 8,833 | frame 4,971 |
+| SSE4.1 | before | 5,831 | frame 929 |
+| BMI | before | 22,436 | none |
+| SSE4.1 | after | 21,578 | none |
+| the Phenom II's features | after | 21,006 | none |
+
+FMA alone did not desync, as expected: for single-precision inputs the product is exact in double, so a multiply and a separate add round like a fused one. Pinning FMA on (Dolphin's software FMA, `std::fma` per lane) cost 17-24% more game code per frame on a Ryzen 7 9800X3D, where the CRT's `std::fma` has the instruction to use. A real Phenom has to do it in software, and this one already ran 87% of frames late, so FMA is left to each CPU. New gtest `Jit64.PsMaddEftSameWithoutSSE41` generates the routine with and without SSE4.1 and compares them on hand-picked lanes (a lane with only one high word matching stays as it is; a real tie is rounded) and 20,000 random ones: it passes after the change and fails 12,113 comparisons before (scratch tests.exe linked the same way). Jit64.ConvertDoubleToSingle, Fres and Frsqrte pass with it. Not tested: a real CPU without SSE4.1, dual core, an Other Games session on such a CPU. Not known: the "performance" settings the player said they changed. Their Dolphin.ini and GFX.ini hold only defaults (besides DSPThread), and the zip has no GameSettings.
+
 ## Open issues
 
 Resolved in Phase 6: the dual-core divergence (ground-collision list heads, gp-v11), the Peach article crash and the `GXWaitDrawDone` stalls (the GX FIFO ring tail), the 11-frame sync-test bursts (camera quake controller, gp-v12), stopping and re-attaching sounds. Resolved in Phase 8: every failure of the coverage sweep (gp-v13 to gp-v19, the file IO wait). Resolved in Phase 9: the nondeterministic render/effect hang (a load read the base snapshot while the eviction job was still merging into it). Resolved in Phase 12: the Smashville desync from frame 0 (issue 7).
