@@ -513,7 +513,8 @@ namespace OnlineMenu {
             if (a[3 * n] == 0x3D) {
                 int c = resolveCss(0x29);
                 e.charKind = charKindOf(c);
-                e.colour = e.costume = 0;
+                e.costume = 0;
+                e.colour = OnlineMatch::costumeFile(e.charKind, 0);
                 e.css = (u8)c;
             } else {
                 e.charKind = a[3 * n];
@@ -523,8 +524,12 @@ namespace OnlineMenu {
             }
         }
         if (n == 0) {
+            // (P+'s entry has the costume's file, which the match loads: the costume number is
+            // another file for most characters' later costumes, bug #184, Falcon's 17 a file
+            // that does not exist, and the match never started.)
             ex.roster[0].charKind = charKindOf(css);
-            ex.roster[0].colour = ex.roster[0].costume = (u8)costume;
+            ex.roster[0].costume = (u8)costume;
+            ex.roster[0].colour = OnlineMatch::costumeFile(ex.roster[0].charKind, (u8)costume);
             ex.roster[0].css = (u8)css;
             n = 1;
         }

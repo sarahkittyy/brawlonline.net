@@ -120,6 +120,9 @@ namespace OnlineMatch {
     // colour, else the character's first costume of it (as P+'s CSS gives it); `costume` if the
     // character has none.
     u8 teamCostume(u8 charKind, u8 team, u8 costume);
+    // The costume file (FitX<NN>.pac) a costume number loads, from P+'s costume list; `costume`
+    // if the list has none for it. P+'s All-Star roster holds the file, not the number.
+    u8 costumeFile(u8 charKind, u8 costume);
     // Which of the character's costumes of the team's colour `costume` is (P+'s "team set", 0 the
     // first), -1 if it is not of that colour; and the costume of a shade (wrapping round the
     // character's costumes of the colour; `costume` if it has none).

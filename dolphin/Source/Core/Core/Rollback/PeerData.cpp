@@ -539,7 +539,7 @@ std::vector<std::string> SetupKeyDiff(const std::vector<u8>& mine, const std::ve
 
 bool ValidRosterColour(u8 colour)
 {
-  return colour <= MAX_COSTUME || colour == 0x3D || colour == 0x3E;
+  return colour <= MAX_ROSTER_COLOUR;
 }
 
 std::optional<size_t> SetupKeyCodeMenuAt(const std::vector<u8>& key)

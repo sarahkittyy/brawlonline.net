@@ -373,18 +373,24 @@ TEST(PeerData, PortExtra)
   EXPECT_EQ(px, (std::array<u8, 0x48>{}));
   px[PX_HP] = 0x01;
   px[PX_HP + 1] = 0x2C;  // 300
-  px[PX_ROSTER_COUNT] = 3;
+  px[PX_ROSTER_COUNT] = 4;
   px[3] = 0x77;           // padding
   const u8 roster[] = {0x07, 0x03, 0x02, 0x07,   // Fox, P+'s colour 3 for costume 2
                        0x14, 0x3D, 0x00, 0x15,   // Falco, P+'s AltZ
+                       0x0A, 44, 17, 0x0A,       // Falcon's costume 17, FitCaptain44.pac (bug #184)
                        0x00, 0x00, 0x20, 0x00};  // a costume past the last: the roster ends
   std::copy(std::begin(roster), std::end(roster), px.begin() + PX_ROSTER);
   SanitizePortExtra(px);
   EXPECT_EQ((px[PX_HP] << 8) | px[PX_HP + 1], 300);
   EXPECT_EQ(px[3], 0);
-  EXPECT_EQ(px[PX_ROSTER_COUNT], 2);
-  const u8 kept[] = {0x07, 0x03, 0x02, 0x07, 0x14, 0x3D, 0x00, 0x15, 0, 0, 0, 0};
+  EXPECT_EQ(px[PX_ROSTER_COUNT], 3);
+  const u8 kept[] = {0x07, 0x03, 0x02, 0x07, 0x14, 0x3D, 0x00, 0x15, 0x0A, 44, 17, 0x0A, 0, 0, 0, 0};
   EXPECT_TRUE(std::equal(std::begin(kept), std::end(kept), px.begin() + PX_ROSTER));
+  // A colour no file has two digits for ends it.
+  px[PX_ROSTER_COUNT] = 3;
+  px[PX_ROSTER + 2 * PX_ENTRY + 1] = 100;
+  SanitizePortExtra(px);
+  EXPECT_EQ(px[PX_ROSTER_COUNT], 2);
   // Too many HP is none; a count past ROSTER_MAX is cut there.
   px[PX_HP] = 0x03;
   px[PX_HP + 1] = 0xE8;  // 1000

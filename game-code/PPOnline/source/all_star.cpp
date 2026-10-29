@@ -1,5 +1,6 @@
 // P+'s All-Star Versus online (docs/design/special-rules.md).
 #include "all_star.h"
+#include "online_menu.h"
 
 #include <OS/OSCache.h>
 #include <string.h>
@@ -40,7 +41,8 @@ namespace AllStar {
             if (present && n == 0) {
                 const PPOM::SessionPlayer& pl = se.players[i];
                 a[0] = pl.charKind;
-                a[1] = a[2] = pl.costume & PPOM::COSTUME_COLOUR;
+                a[2] = pl.costume & PPOM::COSTUME_COLOUR;
+                a[1] = OnlineMatch::costumeFile(pl.charKind, a[2]);   // (its file, as P+'s)
                 n = 1;
             }
             if (present) {
