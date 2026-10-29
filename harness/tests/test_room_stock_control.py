@@ -11,6 +11,8 @@ see it once they are ready, and the match gives each player their count
   not put the picked count back).
 - test_stock_control_stage_pickers_count: two instances, the real server, no set, the loser picks
   the stage: the stage picker's own count in game 2 (bug #35).
+- test_stamina_hp_box_counts_to_990: one instance, roomsim: stamina's box is Brawl's own HP box
+  (STAMINA, the HP itself), so 310-990 HP no longer show as 30.
 
 Screenshots: run/artifacts/game-code/rooms/stock-control/.
 """
@@ -418,3 +420,58 @@ def test_stock_box_on_a_joiners_panel(game: Game) -> None:
     pick_stocks(g, 2, slot=1)
     g.wait(10)
     g.shot("10-joiner-slot-2")
+
+
+def box_model(g: Game, i: int) -> str:
+    """Area i's box model's name (its MuObject's ResMdl, MDL0 v9: the name's offset at +0x3C)."""
+    mdl = g.u32(g.u32(g.area(i) + AREA_STOCK_BOX) + 8)
+    hdr = g.c.read_mem(mdl, 0x40)
+    assert hdr[:4] == b"MDL0", hdr[:4]
+    off = struct.unpack_from(">i", hdr, 0x3C)[0]
+    return g.c.read_mem(mdl + off, 32).split(b"\0")[0].decode()
+
+
+HANDICAP_BOX, HP_BOX = "MenSelchrChandicap4_TopN", "MenSelchrChp4_TopN"
+
+
+def test_stamina_hp_box_counts_to_990(game: Game) -> None:
+    """Sarah's board, 2026-10-29: "hp x10 at 990 visually says 30". The room CSS's areas are made
+    before its stamina is known, with P+'s STOCKS box, whose count goes to 30; with stamina each
+    area's box is now Brawl's own HP box (as the Special Brawl CSS started in stamina makes it),
+    which shows the HP itself up to 1000. We pick 990 (99 on Brawl's list), alice is ready with
+    870; stamina off: the STOCKS boxes back; on again: our 990. Leaving the room (the CSS's
+    destructor with HP boxes in place) and on Join Room's CSS: STOCKS boxes, the game going."""
+    from test_rooms_ui import to_join_room
+
+    g = game
+    g.c.game_bridge_config(enabled=False)
+    create_room(g)
+    sim = g.sim
+    sim.add_player(1, "alice")
+    g.wait(30)
+    assert box_model(g, 0) == HANDICAP_BOX
+    sim.room.special[0] = 2   # STAMINA: stamina
+    g.wait(60)
+    assert [box_model(g, i) for i in range(4)] == [HP_BOX] * 4
+    assert stocks_shown(g, 0) == 15 and box_in_group(g, 0) and box_in_group(g, 1)
+    g.shot("11-stamina-150")
+    pick_stocks(g, 31)
+    g.shot("12-stamina-310")
+    pick_stocks(g, 99)
+    g.wait(10)
+    g.shot("13-stamina-990")
+    sim.set_ready(1, 0x00, 0)
+    sim.room.members[1].hp = 870
+    g.wait(40)
+    assert stocks_shown(g, 1) == 87, stocks_shown(g, 1)
+    g.shot("14-alice-870")
+    sim.room.special[0] = 0
+    g.wait(60)
+    assert [box_model(g, i) for i in range(4)] == [HANDICAP_BOX] * 4
+    sim.room.special[0] = 2
+    g.wait(60)
+    assert [box_model(g, i) for i in range(4)] == [HP_BOX] * 4 and stocks_shown(g, 0) == 99
+    g.shot("15-stamina-again-990")
+    to_join_room(g)
+    assert box_model(g, 0) == HANDICAP_BOX
+    g.shot("16-join-room-css")

@@ -71,6 +71,7 @@ namespace RoomCss {
     void prepareRecords();               // before the CSS is built: four full panels
     void releaseRecords();               // a room's CSS built again as another: records as before
     void reset();                        // the CSS is gone
+    void taskGone(u8* task);             // muSelCharTask's destructor: our HP boxes' leftovers deleted
     void forgetCopies();                 // its label copies are about to be freed (Labels::releaseCopies)
     // boxKind: the panels' boxes: BOX_STOCKS with the room's P+ STOCK CONTROL (a stock match, or
     // any with regen's FRAME CONTROL), BOX_HP in stamina (each player's HP), else BOX_NONE;

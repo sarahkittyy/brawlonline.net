@@ -909,7 +909,7 @@ Dolphin joins the room the launcher asked for (`join-room.json`) and bumps `LOCA
 
 ### The rules menu's pages and Special Versus (2026-10-27)
 
-`docs/design/special-rules.md` has it all: L / R page tabs (RULES, MORE RULES, MATCH SETUP, SPECIAL; `rules_pages.cpp`), P+'s own Special Versus box over the room CSS (`special_box.cpp`, its files from Dolphin's `Online/SpecialAssets.cpp` through `CMD_SPECIAL_ASSETS`), the special rows live in the set rule on the room CSS (`cssSpecialRows`, so P+'s All-Star CSS code builds the roster; X / Y with the coin in the hand take the last one off), stamina's HP boxes (`room_css.cpp`, task +0x5D0, "HP x10"), the match through Brawl's Special setup with each player's HP and P+'s All-Star tables (`all_star.cpp`), and rollback region set gp-v24 for those tables.
+`docs/design/special-rules.md` has it all: L / R page tabs (RULES, MORE RULES, MATCH SETUP, SPECIAL; `rules_pages.cpp`), P+'s own Special Versus box over the room CSS (`special_box.cpp`, its files from Dolphin's `Online/SpecialAssets.cpp` through `CMD_SPECIAL_ASSETS`), the special rows live in the set rule on the room CSS (`cssSpecialRows`, so P+'s All-Star CSS code builds the roster; X / Y with the coin in the hand take the last one off), stamina's HP boxes (`room_css.cpp` hpBox: Brawl's `MenSelchrChp4`, task +0x5D0), the match through Brawl's Special setup with each player's HP and P+'s All-Star tables (`all_star.cpp`), and rollback region set gp-v24 for those tables.
 
 ### Room rules RE (2026-10-11)
 

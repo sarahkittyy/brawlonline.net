@@ -42,6 +42,7 @@
 #include <memory.h>
 #include <string.h>
 #include "labels.h"
+#include "online_menu.h"
 #include "rules_button.h"
 
 // Tests (harness/tests/test_rooms_ui.py test_rules_button, test_room_sit_out_ui.py), read through
@@ -357,6 +358,7 @@ namespace {
     // slot's MuObject: vtable at +0x5C, entry +8, with 1 = delete).
     void* hkTaskDtor(u8* task, int flags)
     {
+        RoomCss::taskGone(task);   // (stamina's HP boxes: the areas' own STOCKS boxes they stood in for)
         for (int i = 0; i < 2; i++) {
             Button& b = s_buttons[i];
             if (task && task == b.task && b.obj) {
