@@ -70,7 +70,6 @@ namespace RoomCss {
 
     static bool isPtr(u32 p) { return (p >= 0x80000000 && p < 0x81800000) || (p >= 0x90000000 && p < 0x94000000); }
 
-    typedef void (*SetCharFn)(u8* area, int css);
     typedef void (*SetCharPicFn)(u8* area, int css, int kind, int costume, int isTeam, int team, int teamSet);
     typedef void (*AreaFn)(u8* area);
     typedef void (*StateSetFn)(u8* obj, int state);
@@ -79,7 +78,6 @@ namespace RoomCss {
     typedef void (*StarsFn)(u8* area, int count, int kind);
     typedef void (*StateColorFn)(u8* obj, int color);
     static const StarsFn SHOW_STARS = (StarsFn)0x806977FC;
-    static const SetCharFn SET_CHAR = (SetCharFn)0x80696F60;
     static const SetCharPicFn SET_CHAR_PIC = (SetCharPicFn)0x8069742C;
     static const AreaFn DECIDE = (AreaFn)0x8069A4DC;
     static const AreaFn SHOW_TEAM = (AreaFn)0x80698A1C;
@@ -89,6 +87,31 @@ namespace RoomCss {
     // object is made with its panel's (so+4) and as showTeam sets it from area+0x1B0.
     static const StateColorFn STATE_COLOR = (StateColorFn)0x800FD878;
     static const SetVisFn SET_VIS = (SetVisFn)0x80043D20;   // nwSMSetVisibility
+
+    // setChar (0x80696F60) with r14-r31 put back after it. P+'s All-Star code in it (sel_char
+    // 0x806970EC -> 0x80555CD0, the end mark 0xAC of the CSS twin table at 0x80588300 + 0x70 *
+    // player + 0x69) uses r15 as scratch and leaves 0xAC there. Brawl's callers keep nothing in
+    // r15; apply kept its panel view there, so with All-Star on it read the view at 0xAC ("Invalid
+    // read from 0x000000ac"), the panel looked changed again on every frame, and every frame's
+    // setChar / setCharPic made P+'s AsyncRSP copy the 0.9 MB portrait byte by byte: the room CSS
+    // at 45 fps (Sarah's board, 2026-10-29: "why am i 45 fps after one game in all-star mode").
+    __attribute__((naked)) static void setChar(u8* area, int css)
+    {
+        asm volatile(
+            "stwu 1, -0x60(1)\n\t"
+            "mflr 0\n\t"
+            "stw 0, 0x64(1)\n\t"
+            "stmw 14, 0x10(1)\n\t"
+            "lis 12, 0x8069\n\t"
+            "ori 12, 12, 0x6F60\n\t"
+            "mtctr 12\n\t"
+            "bctrl\n\t"
+            "lmw 14, 0x10(1)\n\t"
+            "lwz 0, 0x64(1)\n\t"
+            "mtlr 0\n\t"
+            "addi 1, 1, 0x60\n\t"
+            "blr\n\t");
+    }
 
     typedef void (*ShowBoxFn)(u8* area, int on);
     typedef void (*ObjFrameFn)(u8* obj, float frame);
@@ -651,14 +674,14 @@ namespace RoomCss {
             // user's, 2026-10-18: seen before they ready).
             if ((v.kind == PV_READY || v.kind == PV_CHOOSING) && v.css != CSS_NONE) {
                 bool fresh = sh.kind == 0xFF || sh.css != v.css;
-                SET_CHAR(a, v.css);
+                setChar(a, v.css);
                 *(u32*)(a + 0x1BC) = v.costume;
                 // The player's own costume in a team battle too (not the team's: OnlineMenu's
                 // cssCharPic makes every portrait on the online CSS the costume's).
                 SET_CHAR_PIC(a, v.css, 1, v.costume, 0, *(u32*)(a + 0x1C0), 0);
                 if (fresh) DECIDE(a);
             } else if (*(u32*)(a + 0x1B8) != (u32)CSS_NONE) {
-                SET_CHAR(a, CSS_NONE);
+                setChar(a, CSS_NONE);
             }
             if (sh.team != v.team || sh.kind == 0xFF) showTeamAt(a, i);
             if (so) {
