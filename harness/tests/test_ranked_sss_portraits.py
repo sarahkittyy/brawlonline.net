@@ -33,6 +33,8 @@ pytestmark = [pytest.mark.dolphin, pytest.mark.server, pytest.mark.gpu]
 # g_sssPortraits: shown, loads, failed, made, deleted, freed (u32s), texNo[2] (u16), port[2], state,
 # remake (u8), pos[2][3], scale (floats), plateFrame, objs (u32).
 DEBUG_FMT = ">6I2H4B7fiI"
+# ... then obj[2][8] (u32s), then dropRead, retried, fallbacks (u8s).
+DEBUG_EXTRA = struct.calcsize(DEBUG_FMT) + 2 * 8 * 4
 
 
 def _sym(g: Game, name: str) -> int:
@@ -164,3 +166,50 @@ def test_ranked_stage_select_shows_random(backend, dolphin: Callable[..., Dolphi
     rep = online_set.play_game([a, b], 1)
     port = 0 if fa["port"][0] == 0 else 1
     assert f"port={port}, character={lock['char_kind']}," in rep["setup"], (lock, rep["setup"])
+
+
+def _extra(g: Game) -> dict[str, int]:
+    v = g.c.read_mem(_sym(g, "g_sssPortraits") + DEBUG_EXTRA, 3)
+    return {"dropRead": v[0], "retried": v[1], "fallbacks": v[2]}
+
+
+@pytest.mark.slow
+def test_ranked_stage_select_portrait_fallbacks(backend, dolphin: Callable[..., DolphinInstance],
+                                                gpu_backend: str) -> None:
+    """A card whose portrait does not come shows one anyway (Sarah's board, 2026-10-29: a Ranked
+    game 2's opponent card on Mario showed only the series mushroom in the port's colour, the
+    portrait missing; not reproduced as it happened). B locks in Mario with costume 25 written
+    to its CSS area (Mario's portrait file has 18), and B's machine takes its own portrait's
+    first read as failed (g_sssPortraits.dropRead). Before the change both machines drew B's
+    card with no portrait, as in Sarah's screenshot; now A shows Mario's first costume (and logs
+    the fallback), and B reads the file again and shows the same."""
+    from test_special_modes import costume_on_css, css_area
+    test = "ranked-sss-fallbacks"
+    ua, ub = backend.create_user("rsfa", "RSFA"), backend.create_user("rsfb", "RSFB")
+    a = _boot(dolphin, "rsf-a", backend, ua, gpu_backend, test, "gameplay")
+    b = _boot(dolphin, "rsf-b", backend, ub, gpu_backend, test, "gameplay")
+    _both(a.to_main_menu, b.to_main_menu)
+    _both(a.to_online_page, b.to_online_page)
+    _both(lambda: a.to_css("ranked"), lambda: b.to_css("ranked"))
+    costume_on_css(b, B.CSS_ID["mario"], 0)
+    b.c.write_mem(css_area(b) + 0x1BC, struct.pack(">I", 25))
+    B.step(b.c, 10)
+    _to_ranked_css(a, b)
+    b.c.write_mem(_sym(b, "g_sssPortraits") + DEBUG_EXTRA, bytes([1]))   # side 0: B's own
+    _search_ranked(a)
+    _search_ranked(b)
+    _peer_shown(a, ub)
+    _peer_shown(b, ua)
+    _paired(a, b)
+
+    _both_on([a, b], SSS, "game 1: both on the stage select")
+    fa, fb = _both_shown(a, 0), _both_shown(b, 0)
+    xa, xb = _extra(a), _extra(b)
+    a.shot("g1-sss")
+    b.shot("g1-sss")
+    # Mario's first costume (texture 1) on both machines.
+    assert fa["texNo"][1] == fb["texNo"][0] == 1, (fa, fb)
+    assert xa == {"dropRead": 0, "retried": 0, "fallbacks": 1}, xa
+    assert xb == {"dropRead": 0, "retried": 1, "fallbacks": 1}, xb
+    a.inst.wait_for_log(r"sss cards: MenSelchrFaceB\.026 is not in MenSelchrFaceB000\.brres", timeout=10)
+    b.inst.wait_for_log(r"sss cards: the portrait MenSelchrFaceB000\.brres did not come: read again", timeout=10)

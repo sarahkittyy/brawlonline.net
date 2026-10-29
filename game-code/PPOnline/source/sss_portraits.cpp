@@ -34,7 +34,14 @@
 // slice per frame (CXReadUncompLZ, P+'s LZ). The cards are MuObjects in the stage select's scene
 // group (as its own, heap MenuInstance), deleted in the stage select task's destructor before
 // Brawl deletes its own, and every file freed then.
+//
+// A portrait that does not come (Sarah's board, 2026-10-29: a Ranked set's game 2 showed the
+// opponent's Mario card with no portrait on their opponent's Windows machine, not reproduced in
+// the harness): a read that fails is asked once more, into Fighter4Resoruce (the CSS file's,
+// freed once decompressed), and a costume the portrait file has no texture for shows the
+// character's first. Either is written to the log (OSReport, "sss cards: ...").
 #include <OS/OSCache.h>
+#include <OS/OSError.h>
 #include <string.h>
 
 #include <mu/mu_msg.h>
@@ -63,9 +70,13 @@ extern "C" struct SssPortraitsDebug {
     s32 plateFrame;      // Cplynm4's PAT0 frame (-1: the port's)
     u32 objs;            // the card objects alive
     u32 obj[2][8];       // per side: the card's MuObjects (PARTS order)
+    u8 dropRead;         // tests: bit n set, side n's first portrait read is taken as failed
+    u8 retried;          // portrait reads asked again
+    u8 fallbacks;        // costumes shown as the character's first
+    u8 pad;
 } g_sssPortraits = {0, 0, 0, 0, 0, 0, {0, 0}, {0xFF, 0xFF}, 0, 0,
                     {{-29.4f, 0.0f, 0.0f}, {30.0f, 0.0f, 0.0f}}, 0.92f,
-                    -1, 0, {{0}, {0}}};
+                    -1, 0, {{0}, {0}}, 0, 0, 0, 0};
 
 namespace SssPortraits {
 
@@ -192,6 +203,8 @@ namespace SssPortraits {
     static u32 s_cssRes = 0;         // its main brres (a ResFile value)
     static u32 s_picRes[2];          // the portrait files (ResFile values)
     static u16 s_texNo[2];
+    static s16 s_charNo[2];          // the portrait file's CharNo, -1 none
+    static bool s_picRetried[2];
 
     static void request(Read& r, const char* path, int heap)
     {
@@ -410,6 +423,16 @@ namespace SssPortraits {
             if (i == PORTRAIT_PART && *picRes && s_texNo[side]) {
                 char tex[24];
                 sprintf(tex, "MenSelchrFaceB.%03d", s_texNo[side]);
+                // P+'s portrait file holds a texture per costume of its list; a costume past it
+                // gets the character's first.
+                if (!random && !bresHas((const u8*)*picRes, s_picRead[side].size, "Textures(NW4R)", tex)) {
+                    OSReport("sss cards: %s is not in MenSelchrFaceB%02d0.brres (%u bytes), costume %d: the first\n",
+                             tex, s_charNo[side], s_picRead[side].size, pv->costume);
+                    s_texNo[side] = (u16)(s_charNo[side] * 10 + 1);
+                    sprintf(tex, "MenSelchrFaceB.%03d", s_texNo[side]);
+                    g_sssPortraits.failed++;
+                    g_sssPortraits.fallbacks++;
+                }
                 static const char* const MATS[2] = {"Card06", "Card006_sdw"};
                 for (int m = 0; m < 2; m++) {
                     u32 mat = GET_RES_MAT(obj + 8, MATS[m]);
@@ -463,6 +486,14 @@ namespace SssPortraits {
         g_sssPortraits.state = 0;
     }
 
+    static void requestPortrait(int side, int heap)
+    {
+        char path[64];
+        sprintf(path, "/menu/common/char_bust_tex/MenSelchrFaceB%02d0.brres", s_charNo[side]);
+        request(s_picRead[side], path, heap);
+        if (!s_picRead[side].pending) OSReport("sss cards: no read of %s (heap %d)\n", path, heap);
+    }
+
     static void start()
     {
         g_sssPortraits.shown++;
@@ -472,6 +503,8 @@ namespace SssPortraits {
             int port = -1;
             const PPOM::GameStep::PreviewPlayer* pv = sidePlayer(side, &port);
             s_texNo[side] = 0;
+            s_charNo[side] = -1;
+            s_picRetried[side] = false;
             if (!pv) continue;
             if (isRandom(*pv)) {
                 s_texNo[side] = RANDOM_TEX;   // one picture, in the CSS file
@@ -480,9 +513,8 @@ namespace SssPortraits {
             int charNo = STOCK_FRAME(SELCH_TO_STOCK(GM_TO_SELCH(pv->charKind)));
             if (charNo < 0 || charNo > 99) continue;
             s_texNo[side] = (u16)(charNo * 10 + 1 + (pv->costume & PPOM::COSTUME_COLOUR));
-            char path[64];
-            sprintf(path, "/menu/common/char_bust_tex/MenSelchrFaceB%02d0.brres", charNo);
-            request(s_picRead[side], path, HEAP_FIGHTER3);
+            s_charNo[side] = (s16)charNo;
+            requestPortrait(side, HEAP_FIGHTER3);
         }
     }
 
@@ -571,6 +603,27 @@ namespace SssPortraits {
         case 3:   // the portraits, then the cards
             for (int side = 0; side < 2; side++) {
                 if (s_picRead[side].pending) return;
+            }
+            for (int side = 0; side < 2; side++) {
+                if ((g_sssPortraits.dropRead & (1 << side)) && s_picRead[side].buf) {
+                    g_sssPortraits.dropRead &= ~(1 << side);
+                    freeBuf(s_picRead[side].buf);
+                    g_sssPortraits.failed++;
+                }
+            }
+            // A portrait that did not come is asked once more, into the CSS file's heap (its
+            // compressed file is freed by now).
+            {
+                bool again = false;
+                for (int side = 0; side < 2; side++) {
+                    if (s_charNo[side] < 0 || s_picRead[side].buf || s_picRetried[side]) continue;
+                    s_picRetried[side] = true;
+                    g_sssPortraits.retried++;
+                    OSReport("sss cards: the portrait MenSelchrFaceB%02d0.brres did not come: read again\n", s_charNo[side]);
+                    requestPortrait(side, HEAP_FIGHTER4);
+                    again = again || s_picRead[side].pending;
+                }
+                if (again) return;
             }
             for (int side = 0; side < 2; side++) {
                 s_picRes[side] = (u32)s_picRead[side].buf;
