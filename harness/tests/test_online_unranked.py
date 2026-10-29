@@ -51,7 +51,8 @@ DIRECT_STAGES = [0x21, 0x2D]
 # Long enough for the pairing test (the second player searches seconds after the first), short
 # enough for the expiry test.
 TICKET_TTL_SECS = 20
-TIMEOUT_ERROR = "No opponent found. Try again."   # server/crates/mm/src/messages.rs NO_OPPONENT
+# server/crates/mm/src/messages.rs NO_OPPONENT: two lines on the status line
+TIMEOUT_ERROR = "No opponent in range\nTry making a room"
 
 
 def _backend(tmp_path_factory: pytest.TempPathFactory, **kw: Any) -> Iterator[OnlineBackend]:
@@ -396,6 +397,8 @@ def test_unranked_search_ends_with_the_server_error(backend: OnlineBackend,
     _wait(lambda: g.scene() == "scSelctCharacter", 20, "the CSS after the waiting room")
     g.steps("wait 30")
     g.shot("05-unranked-timeout")
+    # The server's line break: two lines, split there (debug scratch[14]: the layout << 24).
+    assert g.debug_scratch()[14] >> 24 == 2, hex(g.debug_scratch()[14])
     assert g.locked()
     before = g.css()
     g.press_until("B", lambda: g.c.mm_status()["state"] == "idle", "the cleanup")

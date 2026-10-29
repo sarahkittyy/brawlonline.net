@@ -1433,17 +1433,46 @@ namespace OnlineMenu {
     // Layouts of the status line (layoutStatus).
     enum { LAYOUT_ONE = 1, LAYOUT_TWO = 2, LAYOUT_ONE_SMALL = 3 };
 
+    // A line break a server text asks for ('\n' in the mailbox's error text, which u16ToUtf8
+    // would make a '?' and setStatus a space): kept in the status as U+2028 (LINE SEPARATOR,
+    // UTF-8 E2 80 A8), where layoutStatus breaks the line (messages.rs NO_OPPONENT, "No opponent
+    // in range" / "Try making a room", 2026-10-29).
+    static const u16 STATUS_BREAK = 0x2028;
+    static int findBreak(const char* text, int len)
+    {
+        for (int i = 0; i + 2 < len; i++)
+            if ((u8)text[i] == 0xE2 && (u8)text[i + 1] == 0x80 && (u8)text[i + 2] == 0xA8) return i;
+        return -1;
+    }
+
     // Lay the status out into `out` (room for 164 bytes): one line at the normal size if it
     // fits; one line made smaller to fit if it fits at ONE_LINE_MIN; else two lines at WRAP_SCALE, split at the space that makes the longer line
     // shortest; a single word too long for the normal size: one small line; a text too long
     // even for two small lines: the first line as much as fits (cut at a space), the second
     // cut at a space and ended with "...".
+    // A STATUS_BREAK: two small lines there when both fit, else it is a space.
     static int layoutStatus(const char* text, char* out, int fit)
     {
         static const int MAX = 159;
         int adv[MAX];
         int len = (int)strlen(text);
         if (len > MAX) len = PPOM::utf8Fit(text, MAX);
+        char flat[MAX + 1];
+        int br = findBreak(text, len);
+        if (br >= 0) {
+            memcpy(flat, text, br);
+            flat[br] = ' ';
+            memcpy(flat + br + 1, text + br + 3, len - br - 3);
+            len -= 2;
+            flat[len] = 0;
+            text = flat;
+            int wide = (int)(fit / WRAP_SCALE);
+            if (statusWidths(text, br, NULL) <= wide && statusWidths(text + br + 1, len - br - 1, NULL) <= wide) {
+                memcpy(out, text, len + 1);
+                out[br] = '\n';
+                return LAYOUT_TWO;
+            }
+        }
         int total = statusWidths(text, len, adv);
         memcpy(out, text, len);
         out[len] = 0;
@@ -2079,10 +2108,14 @@ namespace OnlineMenu {
             s.phase = PH_CONNECTED;
             break;
         case PPOM::MM_ERROR:
-        default:
+        default: {
             s.phase = PH_ERROR;
-            PPOM::u16ToUtf8(s.error, sizeof(s.error), m.errorText, PPOM::ERROR_LEN);
+            u16 text[PPOM::ERROR_LEN];
+            for (int i = 0; i < PPOM::ERROR_LEN; i++)
+                text[i] = m.errorText[i] == '\n' ? STATUS_BREAK : m.errorText[i];
+            PPOM::u16ToUtf8(s.error, sizeof(s.error), text, PPOM::ERROR_LEN);
             break;
+        }
         }
         // Slippi's CSS sounds (HandleInputsOnCSS.asm:39-78): error on entering the error
         // state, back when a connection goes away.
