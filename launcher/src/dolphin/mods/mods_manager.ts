@@ -1,4 +1,5 @@
 import type { PublicModRoom } from "@accounts/types";
+import { PPLUS_NETPLAY_LAUNCHER_DOL } from "@common/product";
 import type { SettingsManager } from "@settings/settings_manager";
 import { randomUUID } from "crypto";
 import electronLog from "electron-log";
@@ -6,6 +7,7 @@ import { mkdir, stat } from "fs/promises";
 import path from "path";
 import { throttleProgress } from "utils/copy_file";
 
+import { PPLUS_RELEASE } from "../install/pplus_release";
 import type { DolphinManager } from "../manager";
 import { DolphinLaunchType } from "../types";
 import { BUILD_HASH_VERSION, buildHashKey, combineBuildHash, computeBuildParts, sdHashKey } from "./build_hash";
@@ -99,6 +101,19 @@ async function assertBuildFile(build: ModBuild, file: string | null, what: strin
   }
 }
 
+async function isFile(file: string): Promise<boolean> {
+  return !!(await stat(file).catch(() => null))?.isFile();
+}
+
+/** The same file (Windows and macOS do not tell "User" from "user"). */
+function samePath(a: string | null | undefined, b: string | null | undefined): boolean {
+  if (!a || !b) {
+    return !a && !b;
+  }
+  const norm = (p: string) => (process.platform === "linux" ? path.resolve(p) : path.resolve(p).toLowerCase());
+  return norm(a) === norm(b);
+}
+
 async function assertFile(file: string | null, what: string): Promise<void> {
   if (!file) {
     return;
@@ -142,6 +157,10 @@ export class ModsManager {
   private readonly listingsSent = new Set<string>();
   /** The games hashed again at start (rehashChanged), which a join by code waits for. */
   private rehashing: Promise<void> = Promise.resolve();
+  /** The last refreshBuiltIn: one runs at a time. */
+  private builtInRefresh: Promise<void> = Promise.resolve();
+  /** The game the running room plays. */
+  private runningBuildId: string | null = null;
 
   /** `toolPath` resolves DolphinTool (the bundled Dolphin's, once it is installed). */
   constructor(
@@ -234,7 +253,97 @@ export class ModsManager {
       controller: this.controller(),
       controllers: this.controllers,
       hashing: Object.fromEntries(this.hashProgress),
+      runningBuildId: this.running ? this.runningBuildId : null,
     };
+  }
+
+  /**
+   * Brawl Online's own Project+ in the list (`ModBuild.builtIn`; Sarah's board, 2026-10-29: "on a
+   * fresh install, if u wanna play the included p+ but through "other games", can u just add the
+   * folder?", then "i would love to have it intuitive since it's a p+ install that's built in. i
+   * just wouldn't want people overwriting the sd card"): the Brawl disc set in Settings with the
+   * netplay User folder's P+ netplay launcher and plain SD card. Play boots a copy of that card
+   * with our plugin (pponline-sd), so this plays P+ itself, without our online menus. It comes
+   * once P+ is installed and the disc set, follows them when they change, and goes while one is
+   * missing (its save stays in its store, named by its hash). A game the player added with the
+   * same launcher and card (Add mod folder on the game files folder) becomes it. Run before the
+   * state is read (the tab's getState).
+   */
+  refreshBuiltIn(): Promise<void> {
+    this.builtInRefresh = this.builtInRefresh
+      .then(() => this.doRefreshBuiltIn())
+      .catch((err) => log.warn(`Project+ in Other Games: ${err}`));
+    return this.builtInRefresh;
+  }
+
+  private async doRefreshBuiltIn(): Promise<void> {
+    if (this.running) {
+      return;
+    }
+    const user = this.dolphin.netplayUserFolder();
+    const launcherPath = path.join(user, "Launcher", PPLUS_NETPLAY_LAUNCHER_DOL);
+    const sdPath = path.join(user, "Wii", "sd.raw");
+    const discPath = this.settings.get().settings?.isoPath || null;
+    const ready = !!discPath && (await isFile(discPath)) && (await isFile(launcherPath)) && (await isFile(sdPath));
+    const builds = this.builds();
+    const current =
+      builds.find((b) => b.builtIn) ??
+      builds.find((b) => samePath(b.launcherPath, launcherPath) && samePath(b.sdPath, sdPath)) ??
+      null;
+    if (current && this.hashing.has(current.id)) {
+      return;
+    }
+    if (!ready) {
+      if (current?.builtIn) {
+        log.info(`Project+ leaves Other Games: ${discPath ? "its files are not there" : "no Brawl disc is set"}`);
+        await this.saveBuilds(builds.filter((b) => b.id !== current.id));
+      }
+      return;
+    }
+    const name = `Project+ ${PPLUS_RELEASE.version}`;
+    const filesChanged =
+      !current ||
+      !samePath(current.discPath, discPath) ||
+      !samePath(current.launcherPath, launcherPath) ||
+      !samePath(current.sdPath, sdPath);
+    if (current?.builtIn && !filesChanged && current.name === name) {
+      return;
+    }
+    let build: ModBuild = current
+      ? { ...current, name, autoName: false, builtIn: true, discPath, launcherPath, sdPath }
+      : {
+          id: randomUUID(),
+          name,
+          autoName: false,
+          builtIn: true,
+          discPath,
+          launcherPath,
+          sdPath,
+          hash: null,
+          hashKey: null,
+        };
+    if (filesChanged) {
+      build = { ...build, hash: null, parts: null, hashKey: null };
+      if (!current || !samePath(current.discPath, discPath)) {
+        const info = await readDiscInfo(await this.toolPath(), discPath);
+        build = {
+          ...build,
+          gameId: info.gameId,
+          revision: info.revision,
+          gameTitle: info.title,
+          platform: info.platform,
+          titleId: info.titleId,
+        };
+      }
+    }
+    // First in the list. (Rooms take it last of the games on its disc: room_match.ts.)
+    await this.saveBuilds([build, ...this.builds().filter((b) => b.id !== build.id)]);
+    log.info(`${name} is in Other Games${current ? ` (was ${current.name})` : ""}: ${discPath}, ${user}`);
+    // Checked now for the room list, as an added game is, unless Dolphin is open (a match would
+    // share the disk with the disc's read): then at its first Host or Join.
+    if (filesChanged && !this.dolphin.isNetplayRunning()) {
+      void this.hashBuild(build.id).catch((err) => log.warn(`hashing ${name}: ${err}`));
+    }
   }
 
   /** What the player plays with: their pick, else a Wii Remote if only that is set up in Dolphin. */
@@ -333,6 +442,9 @@ export class ModsManager {
    * the background, as a new game is. */
   async updateBuild(id: string, input: Partial<ModBuildInput>): Promise<ModBuild> {
     const current = this.findBuild(id);
+    if (current.builtIn) {
+      throw new Error(`${current.name}'s files are Brawl Online's own. Change your Brawl disc in Settings.`);
+    }
     const next: ModBuild = { ...current };
     let filesChanged = false;
     for (const key of ["discPath", "launcherPath", "sdPath"] as const) {
@@ -396,6 +508,9 @@ export class ModsManager {
   }
 
   async removeBuild(id: string): Promise<void> {
+    if (this.builds().find((b) => b.id === id)?.builtIn) {
+      throw new Error("Project+ is built into Brawl Online, so it stays in the list.");
+    }
     await this.saveBuilds(this.builds().filter((b) => b.id !== id));
   }
 
@@ -481,10 +596,15 @@ export class ModsManager {
     );
   }
 
-  /** What joining room `code` with `build` would download of the room's SD card. */
-  private async checkCard(build: ModBuild, code: string, uid: string | undefined): Promise<ModSdCardCheck> {
+  /** What joining room `code` with `build` would download of the room's SD card, and the room's
+   * game's name. */
+  private async checkCard(
+    build: ModBuild,
+    code: string,
+    uid: string | undefined,
+  ): Promise<{ check: ModSdCardCheck; roomName?: string }> {
     if (!build.sdPath || !uid) {
-      return { kind: "same" };
+      return { check: { kind: "same" } };
     }
     const room = await this.lookupRoom(uid, code);
     if (!room) {
@@ -494,13 +614,14 @@ export class ModsManager {
     const toolPath = await this.toolPath();
     const userDir = this.dolphin.netplayUserFolder();
     const sdPath = build.sdPath;
-    return await checkRoomCard({
+    const check = await checkRoomCard({
       ownRoot: build.parts?.sdCard ?? null,
       roomRoot,
       fetchListing: () => this.listings.fetch(uid, roomRoot),
       compare: (listing) => compareSdListing(toolPath, sdPath, userDir, listing, roomRoot),
       log: (message) => log.warn(message),
     });
+    return { check, roomName: room.build.name };
   }
 
   async join(options: ModsJoinOptions): Promise<ModsJoinResult> {
@@ -511,21 +632,23 @@ export class ModsManager {
     const build = await this.hashBuild(options.buildId);
     // A card that differs from the room's: the player says yes before Dolphin starts.
     if (!options.sdSync) {
-      const check = await this.checkCard(build, code, options.uid);
+      const { check, roomName } = await this.checkCard(build, code, options.uid);
       if (check.kind !== "same") {
         log.info(
           `room ${code}'s SD card differs from ${build.name}'s: ${
             check.kind === "differs" ? `${check.bytes} bytes, ${check.files} files` : "no listing"
           }`,
         );
-        return { outcome: "sd-card", buildId: build.id, code, check };
+        return { outcome: "sd-card", buildId: build.id, code, check, roomName };
       }
     }
+    // Brawl Online's own P+ card is never written over: a room's card is for that room only.
+    const sdSync = options.sdSync === "overwrite" && build.builtIn ? "yes" : options.sdSync;
     await this.launch(build, {
       join: code,
       build: roomBuild(build),
       controller: await this.launchController(),
-      ...(options.sdSync ? { sd_sync: options.sdSync } : {}),
+      ...(sdSync ? { sd_sync: sdSync } : {}),
     });
     return { outcome: "joining" };
   }
@@ -534,7 +657,10 @@ export class ModsManager {
     if (!this.running) {
       throw new Error("No Brawl Mods room is open.");
     }
-    await writeModRoomRequest(this.dolphin.netplayOnlineDir(), request);
+    // Dolphin's own SD card question: as join's.
+    const builtIn = this.builds().find((b) => b.id === this.runningBuildId)?.builtIn;
+    const keepCard = request.op === "sd-sync" && request.choice === "overwrite" && builtIn;
+    await writeModRoomRequest(this.dolphin.netplayOnlineDir(), keepCard ? { op: "sd-sync", choice: "yes" } : request);
   }
 
   /** The game's save in rooms: null for a game not hashed yet (its store is named by its hash). A
@@ -684,8 +810,9 @@ export class ModsManager {
       // disc): this one goes again.
       const twin = this.builds().find((b) => b.id !== id && b.hash === hash);
       // Not a game hashed before (by an older launcher: rehashChanged): two of the player's games
-      // that are now one disc (Brawl Rev 1 and Rev 2) both stay, as they were added.
-      if (twin && !latest.hash) {
+      // that are now one disc (Brawl Rev 1 and Rev 2) both stay, as they were added. Nor Brawl
+      // Online's own P+, which stays beside a copy of it the player added from elsewhere.
+      if (twin && !latest.hash && !latest.builtIn) {
         await this.saveBuilds(this.builds().filter((b) => b.id !== id));
         this.emit({ type: "duplicate", name: twin.name });
         throw new Error(`You already have this game: ${twin.name}.`);
@@ -763,6 +890,7 @@ export class ModsManager {
     }
     await this.dolphin.launchModsDolphin(build, room, () => this.onDolphinClosed());
     this.running = true;
+    this.runningBuildId = build.id;
     this.lastError = null;
     this.status = null;
     this.statusText = "";

@@ -337,6 +337,38 @@ describe("ModsView", () => {
     expect(getByText(Messages.sdBigDifference())).toBeTruthy();
   });
 
+  it("names the game whose card an overwrite replaces, and never offers it for Brawl Online's own P+", () => {
+    const status = room(2);
+    status.session = {
+      phase: "joining",
+      sd_sync: { step: "ask", checked: 1, bytes: 280 * 1024 * 1024, files: 412, names: [], eta_s: 240 },
+    };
+    status.room!.build.name = "REX";
+    const p = props({ builds: [minus], running: true, status, runningBuildId: "minus" });
+    const { getByText, getByRole, queryByRole, rerender } = render(<ModsView {...p} />);
+    expect(getByText(Messages.sdSyncGames("Brawl Minus", "REX"))).toBeTruthy();
+    fireEvent.click(getByRole("button", { name: Messages.sdSyncOverwriteGame("Brawl Minus") }));
+    expect(p.onRequest).toHaveBeenCalledWith({ op: "sd-sync", choice: "overwrite" });
+
+    const pplus: ModBuild = { ...minus, id: "pplus", name: "Project+ v3.2.1", builtIn: true };
+    const q = props({ builds: [pplus], running: true, status, runningBuildId: "pplus" });
+    rerender(<ModsView {...q} />);
+    expect(getByText(Messages.sdSyncBuiltInKept("Project+ v3.2.1"))).toBeTruthy();
+    expect(queryByRole("button", { name: /overwrite/i })).toBeNull();
+    fireEvent.click(getByRole("button", { name: Messages.sdSyncYes() }));
+    expect(q.onRequest).toHaveBeenCalledWith({ op: "sd-sync", choice: "yes" });
+  });
+
+  it("shows Brawl Online's own P+ with its save's pencil and no trash can", () => {
+    const pplus: ModBuild = { ...minus, id: "pplus", name: "Project+ v3.2.1", builtIn: true };
+    const p = props({ builds: [pplus], running: false, status: null });
+    const { getByText, getByLabelText, queryByLabelText } = render(<ModsView {...p} />);
+    expect(getByText(Messages.parts("Brawl.iso", Messages.builtInFiles(), null))).toBeTruthy();
+    expect(queryByLabelText(Messages.remove())).toBeNull();
+    fireEvent.click(getByLabelText(Messages.edit()));
+    expect(p.onEditBuild).toHaveBeenCalledWith(pplus);
+  });
+
   it("says nothing about versions for a small SD card difference", () => {
     const status = room(2);
     const sd_sync = {

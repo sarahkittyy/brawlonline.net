@@ -61,6 +61,10 @@ export type ModBuild = {
   hashKey: string | null;
   /** The SD card's size and modification time when its root (`parts.sdCard`) was taken. */
   sdHashKey?: string | null;
+  /** Brawl Online's own Project+ (ModsManager.refreshBuiltIn): the Brawl disc set in Settings and
+   * the launcher's P+ files. Always in the list, its files not the player's to change, and its SD
+   * card never overwritten by a room's. */
+  builtIn?: boolean;
 };
 
 export type ModBuildInput = Pick<ModBuild, "name" | "discPath" | "launcherPath" | "sdPath">;
@@ -211,6 +215,8 @@ export type ModsState = {
   /** The builds being hashed, by id, with their progress (`ModsHashProgress.fraction`): kept here,
    * so a tab opened again mid-hash shows it. */
   hashing: Record<string, number | null>;
+  /** The game the running room plays (absent from an older launcher's state). */
+  runningBuildId?: string | null;
 };
 
 export type ModsEvent =
@@ -257,8 +263,9 @@ export type ModsSdChoice = "yes" | "overwrite";
 export type ModsJoinOptions = { buildId: string; code: string; uid?: string; sdSync?: ModsSdChoice };
 export type ModsJoinResult =
   | { outcome: "joining" }
-  /** The room's SD card differs: ask the player, then join again with `sdSync`. */
-  | { outcome: "sd-card"; buildId: string; code: string; check: ModSdCardCheck };
+  /** The room's SD card differs: ask the player, then join again with `sdSync`. `roomName`: the
+   * room's game, as its host named it. */
+  | { outcome: "sd-card"; buildId: string; code: string; check: ModSdCardCheck; roomName?: string };
 /** A room code typed in: the room's game is looked up (`uid`: the account that asks). */
 export type ModsJoinByCodeOptions = { uid: string; code: string };
 export type ModsJoinByCodeResult =

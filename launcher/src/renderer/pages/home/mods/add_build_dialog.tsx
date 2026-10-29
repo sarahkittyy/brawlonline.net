@@ -33,6 +33,8 @@ export type AddBuildInitial = {
   /** The field a room pointed at (its disc or SD card differs from the room's): it pulses gold
    * until it is clicked. */
   highlight?: "disc" | "sd";
+  /** Brawl Online's own P+ being edited: its files are not the player's to change, only its save. */
+  builtIn?: boolean;
 };
 
 /** The edit window's save data (`save_import.ts`, a GameCube game's `gc_save.ts`): what rooms play,
@@ -149,6 +151,28 @@ export const AddBuildDialog = ({
       setAdding(false);
     }
   };
+
+  if (initial?.builtIn) {
+    return (
+      <Dialog open={open} onClose={onClose} fullWidth={true} maxWidth="sm">
+        <DialogTitle>{initial.name}</DialogTitle>
+        <DialogContent sx={{ display: "flex", flexDirection: "column", gap: 2, pt: 1 }}>
+          <div className={styles.saveHelp}>{Messages.builtInHelp()}</div>
+          {save && (
+            <>
+              <Divider />
+              <SaveSection {...save} />
+            </>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button variant="contained" onClick={onClose}>
+            {Messages.close()}
+          </Button>
+        </DialogActions>
+      </Dialog>
+    );
+  }
 
   const clearButton = (value: string | null, clear: () => void) =>
     value ? (
