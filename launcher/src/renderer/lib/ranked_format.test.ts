@@ -94,6 +94,7 @@ describe("ranked formatting", () => {
     expect(matchNote(set("ABANDONED", "abandoned by bob"))).toBe("Abandoned by bob");
     expect(matchNote(set("ABANDONED", "abandoned by someone-else"))).toBe("Abandoned");
     expect(matchNote(set("TERMINATED"))).toMatch(/^Void: the connection broke/);
+    expect(matchNote(set("TERMINATED", "match quality low"))).toBe("Void: match quality low, no rating change");
     expect(matchNote(set("ERROR"))).toMatch(/^Void: the reports disagree/);
     expect(matchNote(set("ORPHANED"))).toMatch(/^Void: no result/);
   });

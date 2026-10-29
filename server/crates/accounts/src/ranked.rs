@@ -619,7 +619,8 @@ pub struct ReportLeaveReq {
     pub uid: String,
     pub play_key: String,
     pub match_id: String,
-    /// `left` (this player left the set) or `opponent_left` (the opponent disconnected).
+    /// `left` (this player left the set), `opponent_left` (the opponent disconnected) or
+    /// `match_quality` (the game was aborted for its match quality: the set is void).
     pub kind: String,
     /// With `left`: this player's game had not been sent to the set's stage select yet (a search
     /// cancelled as the match was made). With no game played the set is not rated.

@@ -1,6 +1,7 @@
 // Copyright 2026 Dolphin Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <algorithm>
 #include <array>
 #include <cstring>
 #include <limits>
@@ -421,6 +422,44 @@ TEST(PeerData, LeaveReasons)
   EXPECT_EQ(LeaveReason(""), "");
   EXPECT_EQ(LeaveReason("a\nb\x1b[31m\xc3\xa9"), "a?b?[31m??");
   EXPECT_EQ(LeaveReason(std::string(1000, 'x')).size(), MAX_LEAVE_REASON_LEN);
+}
+
+TEST(PeerData, MatchQualityDebt)
+{
+  // Slippi's tiers on the speed: an interval at full speed pays 1 back.
+  EXPECT_EQ(QualityDebt(1.0, 0, false), -1);
+  EXPECT_EQ(QualityDebt(1.09, 0, false), -1);
+  EXPECT_EQ(QualityDebt(1.15, 0, false), 4);  // 52 frames a second (bug report #182)
+  EXPECT_EQ(QualityDebt(1.5, 0, false), 8);
+  EXPECT_EQ(QualityDebt(1.8, 0, false), 15);
+  // Ours on the round trip, above Ranked's 150 ms pairing cap.
+  EXPECT_EQ(QualityDebt(1.0, 165, false), -1);
+  EXPECT_EQ(QualityDebt(1.0, 180, false), 4);
+  EXPECT_EQ(QualityDebt(1.0, 230, false), 8);
+  EXPECT_EQ(QualityDebt(1.0, 300, false), 15);
+  // The worse of the two, not the sum.
+  EXPECT_EQ(QualityDebt(1.5, 190, false), 8);
+  // After a minute every tier is 15% further out.
+  EXPECT_EQ(QualityDebt(1.15, 0, true), 4);
+  EXPECT_EQ(QualityDebt(1.11, 0, true), -1);
+  EXPECT_EQ(QualityDebt(1.0, 200, true), -1);
+  EXPECT_EQ(QualityDebt(1.0, 207, true), 4);
+
+  // A game at 52 frames a second reaches the abort in 8 intervals (20 s); one hitch a minute
+  // never does.
+  int debt = 0, intervals = 0;
+  while (debt < QUALITY_ABORT_DEBT && intervals < 100)
+  {
+    debt = std::max(0, debt + QualityDebt(60.0 / 52.0, 160, false));
+    ++intervals;
+  }
+  EXPECT_EQ(intervals, 8);
+  debt = 0;
+  for (int i = 0; i < 240; ++i)
+  {
+    debt = std::max(0, debt + QualityDebt(i % 24 == 0 ? 1.8 : 1.0, 120, false));
+    EXPECT_LT(debt, QUALITY_ABORT_DEBT) << i;
+  }
 }
 
 TEST(PeerData, TeamsAndPorts)

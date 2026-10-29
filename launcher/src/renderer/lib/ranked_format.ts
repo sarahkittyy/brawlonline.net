@@ -169,7 +169,8 @@ export function matchNote(
       return leaver ? Messages.abandonedBy(playerName(leaver)) : Messages.abandoned();
     }
     case "TERMINATED":
-      return Messages.voidConnection();
+      // A game aborted for its match quality (the server's MATCH_QUALITY_LOW).
+      return item.endReason === "match quality low" ? Messages.voidMatchQuality() : Messages.voidConnection();
     case "ERROR":
       return Messages.voidDisagreement();
     case "ORPHANED":

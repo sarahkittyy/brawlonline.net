@@ -334,4 +334,25 @@ std::vector<std::optional<u32>> RecordedCodeMenuValues(const std::vector<u8>& re
 // ASCII only (anything else becomes '?'), at most MAX_LEAVE_REASON_LEN characters.
 constexpr size_t MAX_LEAVE_REASON_LEN = 160;
 std::string LeaveReason(std::string_view why);
+// Ranked's match quality (GameplaySession's UpdateMatchQuality): Slippi's poor-performance
+// termination (Ishiiruka 3.6.3 and 3.6.4, CEXISlippi::handlePoorMatchPerformance). Every
+// QUALITY_INTERVAL_FRAMES (2.5 s) of a game adds a debt for how slowly that interval ran and how
+// high its round trip was, the worse of the two; a healthy interval pays 1 back. At
+// QUALITY_ABORT_DEBT the game is aborted and the set voided, nobody rated (the user's,
+// 2026-10-29). One hitch is survivable; a game at 52 frames a second (ratio 1.15) is aborted in
+// about 20 s, as is one at a round trip of QUALITY_PING_MILD_MS or more.
+constexpr s64 QUALITY_INTERVAL_FRAMES = 150;
+constexpr int QUALITY_ABORT_DEBT = 30;
+// After a minute of the game (Slippi: frame 3600) every tier is 15% further out.
+constexpr s64 QUALITY_LENIENT_AFTER_FRAMES = 3600;
+// Round trips, ms. Slippi's tiers are 90 / 120 / 200; ours start above Ranked's 150 ms pairing
+// cap (mm, 9a6f024d), whose GeoIP estimate can be 30 ms off the real round trip, so that every
+// pair matchmaking makes on purpose is playable.
+constexpr double QUALITY_PING_MILD_MS = 180;
+constexpr double QUALITY_PING_BAD_MS = 220;
+constexpr double QUALITY_PING_SEVERE_MS = 300;
+// One interval's debt (negative: paid back). `ratio`: its wall time over the 150 frames' own
+// (2.5 s at 59.94 Hz); `avg_ping_ms`: its average round trip (0: none measured; the ratio then
+// covers it); `lenient`: past QUALITY_LENIENT_AFTER_FRAMES.
+int QualityDebt(double ratio, double avg_ping_ms, bool lenient);
 }  // namespace Gprb::PeerData

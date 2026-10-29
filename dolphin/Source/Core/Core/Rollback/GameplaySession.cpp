@@ -324,6 +324,9 @@ struct State
   // The session ends (fewer than two players left): handled on the CPU thread for a match.
   bool peer_left = false;
   std::string peer_left_reason;
+  // The match was aborted for its quality (UpdateMatchQuality), here or by the other player (its
+  // leave's "abort"): the session ended as a disconnect; Ranked voids the set.
+  bool quality_aborted = false;
   // This player told the others it left: Stop, or the session gave up (Phase::Error), so they
   // do not wait for it at a barrier until their own timeout.
   bool leave_sent = false;
@@ -522,6 +525,13 @@ struct State
   int slow_checks = 0;
   double slow_fps = 0;
   bool slow_shown = false;
+  // Ranked's match quality (UpdateMatchQuality, SetQualityAbort): the current interval's first
+  // frame and its time, the round trips sampled in it, and the game's debt so far.
+  s64 quality_frame = -1;
+  Clock::time_point quality_t{};
+  double quality_ping_sum = 0;
+  int quality_pings = 0;
+  int quality_debt = 0;
   // Slippi's frame advance (UpdateTimeSync): catch-up frames left in this batch, whether a batch
   // runs, and whether the frame running now / the previous displayed frame was one (its throttle
   // point is a frame early on purpose, not late).
@@ -1573,11 +1583,16 @@ size_t SendControlToAll(std::string_view text, int copies = 1)
   return sent;
 }
 
+// Why a session ended when its match was aborted for its quality (UpdateMatchQuality): the log's,
+// the leave's "why" and the status's error.
+constexpr const char* QUALITY_ABORT_REASON = "match quality low";
+
 // Tells the other players that this one has left the session (under s.mutex), with why when the
 // session gave up (they log it). Slippi's graceful ENet disconnect: the others go on without it
 // (3-4 players) or end the session at once, instead of waiting at a barrier for their timeout or
-// for the 7.2 s silence. UDP: sent a few times.
-void SendLeave(std::string_view why)
+// for the 7.2 s silence. UDP: sent a few times. `quality_abort`: the match is aborted for its
+// quality (UpdateMatchQuality; "abort": "quality"), and the others end it the same way.
+void SendLeave(std::string_view why, bool quality_abort = false)
 {
   if (s.mode != Mode::Network || !s.socket)
     return;
@@ -1587,6 +1602,8 @@ void SendLeave(std::string_view why)
   o["slot"] = picojson::value(static_cast<double>(s.local_slot));
   if (!why.empty())
     o["why"] = picojson::value(PeerData::LeaveReason(why));
+  if (quality_abort)
+    o["abort"] = picojson::value("quality");
   const std::string text = picojson::value(o).serialize();
   SendControlToAll(text, 3);
   s.leave_sent = true;
@@ -2140,6 +2157,7 @@ u16 DrawRandomStage(u32 game)
 std::mutex s_result_callback_mutex;
 std::function<void(const GameResult&)> s_result_callback;
 std::atomic<bool> s_quit_loses{false};  // SetQuitLoses
+std::atomic<bool> s_quality_abort{false};  // SetQualityAbort
 // The player's setting as it changed while Dolphin runs (SetInputDelay): a sequence number (0:
 // never changed) << 8 | the setting - DELAY_SMOOTH (a profile or 1-MAX_INPUT_DELAY frames).
 std::atomic<u32> s_live_delay{0};
@@ -2639,6 +2657,18 @@ void HandleControl(std::string_view text, const sf::IpAddress& from, u16 from_po
   if (const auto t = o.find("t"); t != o.end() && t->second.is<std::string>() &&
                                   t->second.get<std::string>() == "leave")
   {
+    // "abort": "quality": the peer aborted the match for its quality (UpdateMatchQuality), and
+    // this machine ends it the same way. Only where it is checked (Ranked) and in a match.
+    if (const auto a = o.find("abort"); a != o.end() && a->second.is<std::string>() &&
+                                        a->second.get<std::string>() == "quality" &&
+                                        s_quality_abort && ActivePlayers() == 2 &&
+                                        InMatchPhase() && !s.peer_left)
+    {
+      INFO_LOG_FMT(BRAWLBACK, "gprb: P{} aborted the match: its quality is low", slot + 1);
+      s.quality_aborted = true;
+      OnPeerLeft(slot, QUALITY_ABORT_REASON);
+      return;
+    }
     // "why": its session gave up (older builds send no reason).
     const auto why = o.find("why");
     OnPeerLeft(slot, why != o.end() && why->second.is<std::string>() ?
@@ -3462,6 +3492,11 @@ void ResetRunStats()
   s.slow_fps = 0;
   s.slow_shown = false;
   ForEachPeer([](int, PeerView& p) { p.slow_shown = false; });
+  s.quality_frame = -1;
+  s.quality_t = {};
+  s.quality_ping_sum = 0;
+  s.quality_pings = 0;
+  s.quality_debt = 0;
   s.frames_to_advance = 0;
   s.advancing = s.advanced_this_frame = s.prev_frame_advanced = false;
   s.last_advance_frame = -1;
@@ -5370,6 +5405,79 @@ void UpdateSlowNotice()
   });
 }
 
+// Ranked's match quality (SetQualityAbort; PeerData::QualityDebt, Slippi's poor-performance
+// termination): from QUALITY_FIRST_FRAME, every QUALITY_INTERVAL_FRAMES displayed frames add the
+// interval's debt: its wall time against the frames' own, and the round trips sampled at each
+// loop top in it. At QUALITY_ABORT_DEBT this machine aborts the match: it tells the other player
+// (a leave with "abort": "quality", which ends the match there the same way) and ends its own as
+// a disconnect (the game shows DISCONNECTED). Both screens say why (QUALITY_ABORT_TEXT, also the
+// CSS's status line after, GameBridge), and Ranked reports the set as aborted, which the server
+// voids: nobody is rated (Online/Ranked.cpp). Either machine may find it first; the other's leave
+// is then ignored (it is already ending). Test (PPR_GPRB_TEST_POOR_QUALITY=1): every interval
+// counts as severe, so a game aborts at its second check (about 5 s in).
+constexpr s64 QUALITY_FIRST_FRAME = HARD_SYNC_UNTIL;
+
+void UpdateMatchQuality()
+{
+  if (!s_quality_abort || s.mode != Mode::Network || s.phase != Phase::Running ||
+      s.current_frame < QUALITY_FIRST_FRAME)
+  {
+    return;
+  }
+  std::lock_guard<std::recursive_timed_mutex> lk(s.mutex);
+  if (s.quality_aborted || s.peer_left || ActivePlayers() != 2)
+    return;
+  const auto now = Clock::now();
+  if (s.quality_frame < 0)
+  {
+    s.quality_frame = s.current_frame;
+    s.quality_t = now;
+    s.quality_ping_sum = 0;
+    s.quality_pings = 0;
+    return;
+  }
+  if (GekkoNetworkStats stats{}; WorstLink(&stats) && stats.last_ping > 0)
+  {
+    s.quality_ping_sum += stats.last_ping;
+    ++s.quality_pings;
+  }
+  const s64 frames = s.current_frame - s.quality_frame;
+  if (frames < PeerData::QUALITY_INTERVAL_FRAMES)
+    return;
+  static const bool poor = std::getenv("PPR_GPRB_TEST_POOR_QUALITY") != nullptr;
+  const double wall_us = std::chrono::duration<double, std::micro>(now - s.quality_t).count();
+  const double ratio = poor ? 2.0 : wall_us / (static_cast<double>(frames) * FRAME_US);
+  const double ping = s.quality_pings ? s.quality_ping_sum / s.quality_pings : 0.0;
+  const int debt = PeerData::QualityDebt(
+      ratio, ping, s.current_frame > PeerData::QUALITY_LENIENT_AFTER_FRAMES);
+  s.quality_debt = std::max(0, s.quality_debt + debt);
+  s.quality_frame = s.current_frame;
+  s.quality_t = now;
+  s.quality_ping_sum = 0;
+  s.quality_pings = 0;
+  if (debt > 0 || s.quality_debt > 0)
+  {
+    INFO_LOG_FMT(BRAWLBACK,
+                 "gprb: match quality at frame {}: {} frames in {:.2f} s ({:.1f}/s), round trip "
+                 "{:.0f} ms: debt {:+d}, now {}/{}",
+                 s.current_frame, frames, wall_us / 1e6,
+                 wall_us > 0 ? frames * 1e6 / wall_us : 0.0, ping, debt, s.quality_debt,
+                 PeerData::QUALITY_ABORT_DEBT);
+  }
+  if (s.quality_debt < PeerData::QUALITY_ABORT_DEBT)
+    return;
+  WARN_LOG_FMT(BRAWLBACK, "gprb: match quality low at frame {}: aborting the match",
+               s.current_frame);
+  SendLeave(QUALITY_ABORT_REASON, true);
+  s.quality_aborted = true;
+  s.peer_left = true;
+  s.peer_left_reason = QUALITY_ABORT_REASON;
+  picojson::object ev;
+  ev["type"] = picojson::value("quality-abort");
+  ev["debt"] = picojson::value(static_cast<double>(s.quality_debt));
+  Replay::AddEvent(s.current_frame, ev);
+}
+
 // Half a VI field (59.94 Hz).
 constexpr auto HALF_FIELD = std::chrono::microseconds(8342);
 
@@ -6471,6 +6579,7 @@ bool RunFrame(const Core::CPUThreadGuard& guard)
     }
     UpdateTimeSync(system);
     UpdateSlowNotice();
+    UpdateMatchQuality();
     StartTelemetry();
     UpdatePingDisplay();
     PassLogWrite();
@@ -6840,6 +6949,7 @@ std::optional<std::string> Connect(const ConnectOptions& options)
     b.clear();
   s.peer_left = false;
   s.peer_left_reason.clear();
+  s.quality_aborted = false;
   s.leave_sent = false;
   s.wait_logs = 0;
   s.state_size_logged = false;
@@ -6911,6 +7021,11 @@ void SetQuitLoses(bool loses)
 void SetDesyncRecovery(bool on)
 {
   s_desync_recovery = on;
+}
+
+void SetQualityAbort(bool on)
+{
+  s_quality_abort = on;
 }
 
 void SetInputDelay(int setting)
@@ -7007,6 +7122,7 @@ Lobby GetLobby()
   l.disconnected = s.disconnected;
   l.desynced = s.desynced;
   l.quit_left = s.quit_left;
+  l.quality_aborted = s.quality_aborted;
   l.local_port = s.mode == Mode::Network ? s.local_slot : -1;
   l.num_players = s.mode == Mode::Network ? ActivePlayers() : 0;
   l.game = NextGame();
@@ -7694,6 +7810,8 @@ picojson::value Status()
   o["disconnected"] = picojson::value(s.disconnected);
   o["desynced"] = picojson::value(s.desynced);
   o["peer_left"] = picojson::value(s.peer_left);
+  o["quality_aborted"] = picojson::value(s.quality_aborted);
+  o["quality_debt"] = picojson::value(static_cast<double>(s.quality_debt));
   o["role"] = picojson::value(s.mode == Mode::Network ? (IsHost() ? "host" : "joiner") : "");
   o["match_index"] = picojson::value(static_cast<double>(s.match_index));
   o["current_frame"] = picojson::value(static_cast<double>(s.current_frame));

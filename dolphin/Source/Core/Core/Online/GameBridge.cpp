@@ -1134,6 +1134,14 @@ void Service(const Core::CPUThreadGuard& guard, u32 mailbox, u16 version)
         Client::Cleanup();
         ms = Client::GetMatchState();
       }
+      // A ranked game aborted for its match quality (Ranked::OnQualityAbort): the CSS shows why
+      // on its status line, in red, as an error it clears with B or Z (Slippi shows its own on
+      // the screen alone).
+      if (ms.state == Matchmaking::State::Idle && Ranked::TakeQualityNotice())
+      {
+        ms.state = Matchmaking::State::ErrorEncountered;
+        ms.error = Gprb::Session::QUALITY_ABORT_TEXT;
+      }
       response = MatchStateResponse(ms, false);
       break;
     }
@@ -1888,9 +1896,22 @@ void SyncSession(const Core::CPUThreadGuard& guard, const Located& loc)
   // (an older plugin, or a scene where it cannot draw).
   if (lobby.disconnected && !s_was_disconnected)
   {
-    NOTICE_LOG_FMT(NETPLAY, "GameBridge: the opponent disconnected{}",
-                   s_was_in_match ? " in a match" : "");
-    Ranked::OnPeerGone();
+    NOTICE_LOG_FMT(NETPLAY, "GameBridge: the opponent disconnected{}{}",
+                   s_was_in_match ? " in a match" : "",
+                   lobby.quality_aborted ? " (aborted, the match quality is low)" : "");
+    if (lobby.quality_aborted)
+    {
+      // Ranked's quality abort (Gprb::Session::SetQualityAbort), here or by the opponent: both
+      // screens say why under the game's DISCONNECTED, on the OSD and in chat (Slippi's red
+      // message), and the set is void.
+      OSD::AddMessage(Gprb::Session::QUALITY_ABORT_TEXT, 15000, OSD::Color::RED);
+      Chat::AddNotice(Gprb::Session::QUALITY_ABORT_TEXT);
+      Ranked::OnQualityAbort();
+    }
+    else
+    {
+      Ranked::OnPeerGone();
+    }
     s_hud_wait = s_was_in_match ? HUD_WAIT_FRAMES : -1;
   }
   if (s_hud_wait >= 0)

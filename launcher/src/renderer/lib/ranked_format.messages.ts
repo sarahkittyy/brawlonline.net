@@ -17,6 +17,7 @@ export const RankedFormatMessages = {
   abandonedBy: (name: string) => `Abandoned by ${name}`,
   abandoned: () => "Abandoned",
   voidConnection: () => "Void: the connection broke, no rating change",
+  voidMatchQuality: () => "Void: match quality low, no rating change",
   voidDisagreement: () => "Void: the reports disagree, no rating change",
   voidNoResult: () => "Void: no result was reported, no rating change",
   voidOther: () => "Void: no rating change",

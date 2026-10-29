@@ -226,6 +226,19 @@ async fn abandoning_disagreeing_and_bad_reports() {
     let (_, s) = leave_early(&stack, b, &id).await;
     assert_eq!(s["status"], "ABANDONED", "{s}");
 
+    // A game aborted for its match quality (bug report #182): void at the first report, nobody
+    // rated, even after a game one of them won; the other's own report changes nothing.
+    let before = (rank(&stack, a).await, rank(&stack, b).await);
+    let id = direct_set(&stack, a, b, 8).await;
+    both(&stack, a, b, &id, 1, b).await;
+    let (st, s) = leave(&stack, a, &id, "match_quality").await;
+    assert_eq!((st, s["status"].as_str()), (200, Some("TERMINATED")), "{s}");
+    assert!(s["rating"].is_null(), "{s}");
+    let (_, s) = leave(&stack, b, &id, "match_quality").await;
+    assert_eq!(s["status"], "TERMINATED");
+    assert_eq!(result(&stack, b, &id).await["reason"], "match quality low");
+    assert_eq!((rank(&stack, a).await, rank(&stack, b).await), before);
+
     // Both saying the other left: a broken connection, nobody rated.
     let id = direct_set(&stack, a, b, 3).await;
     leave(&stack, a, &id, "opponent_left").await;

@@ -348,6 +348,12 @@ struct Restore
 // than only ending it (DESYNC DETECTED, no result: Unranked, Direct, a room's game without a set).
 // Every machine of a session sets the same.
 void SetDesyncRecovery(bool on);
+// Whether a 1v1 match that runs too slowly or at too high a round trip for too long is aborted
+// (Ranked, the user's, 2026-10-29; Slippi's poor-performance termination): the session ends as a
+// disconnect on both machines, with Lobby.quality_aborted, and both screens show
+// QUALITY_ABORT_TEXT. Every machine of a session sets the same.
+void SetQualityAbort(bool on);
+constexpr const char* QUALITY_ABORT_TEXT = "Match quality low, aborted.";
 
 struct Lobby
 {
@@ -359,6 +365,9 @@ struct Lobby
   // This player left a 3-4 player match with the pause screen's quit: its session ended, the
   // others play on (until the next session or match)
   bool quit_left = false;
+  // The match was aborted for its quality (SetQualityAbort), here or by the other player: the
+  // session ended as a disconnect (`disconnected`), until the next session
+  bool quality_aborted = false;
   int local_port = -1;        // in-game port of this player (2 players: 0 host, 1 joiner)
   int num_players = 0;        // players in the session (this one included)
   bool remote_ready = false;  // every remote player is locked in for `game`
