@@ -178,6 +178,20 @@ namespace TrainingRoom {
     void setBanner(const char* text, bool red)
     {
         if (!text) text = "";
+        // The status line's break (U+2028, online_menu.cpp STATUS_BREAK) is a space in the
+        // one-line banner.
+        char t[sizeof(s_banner)];
+        int n = 0;
+        for (int i = 0; text[i] && n < (int)sizeof(t) - 1; i++) {
+            if ((u8)text[i] == 0xE2 && (u8)text[i + 1] == 0x80 && (u8)text[i + 2] == 0xA8) {
+                t[n++] = ' ';
+                i += 2;
+            } else {
+                t[n++] = text[i];
+            }
+        }
+        t[n] = 0;
+        text = t;
         if (red == s_bannerRed && strncmp(text, s_banner, sizeof(s_banner) - 1) == 0) return;
         strncpy(s_banner, text, sizeof(s_banner) - 1);
         s_banner[sizeof(s_banner) - 1] = 0;

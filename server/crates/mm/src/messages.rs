@@ -5,7 +5,9 @@
 //! normal size, about 35 average characters or 21 of the widest ("W"); longer texts are
 //! wrapped onto two smaller lines, and texts too long for those are cut. So every message
 //! here is a short sentence that fits one line, measured in the game with the widest
-//! connect code ("WWWW#999") where one is part of it. Keep new ones as short.
+//! connect code ("WWWW#999") where one is part of it. Keep new ones as short. A `\n` puts
+//! the rest on the second of the two smaller lines (each must fit one line; the game's plugin
+//! since 2026-10-29, older ones show it as "?").
 
 /// Too many connections from one source address.
 pub const TOO_MANY_CONNECTIONS: &str = "Too many connections. Try later.";
@@ -41,8 +43,10 @@ pub const OWN_CODE: &str = "That is your own connect code.";
 pub const REPLACED: &str = "Replaced by a newer search.";
 /// A connection that never sent a ticket.
 pub const NO_REQUEST: &str = "No search received. Try again.";
-/// An Unranked ticket that found nobody within its time.
-pub const NO_OPPONENT: &str = "No opponent found. Try again.";
+/// An Unranked or Ranked ticket that found nobody within its time (`ticket_ttl`), on two lines
+/// (Sarah's board, 2026-10-29, with Ranked's ping cap lowered to 150 ms: "no opponent in
+/// range<br>try making a room").
+pub const NO_OPPONENT: &str = "No opponent in range\nTry making a room";
 
 /// Rooms (`docs/rooms-protocol.md`): a code that is no live room, or not a room code at all.
 pub const ROOM_NOT_FOUND: &str = "Room not found.";
@@ -319,8 +323,11 @@ mod tests {
             waiting_on(&["player1", "player2", "player4"]),
         ];
         for m in all {
-            assert!(m.chars().count() <= 36, "{m:?} is {} characters", m.chars().count());
-            assert!(rough_width(&m) <= 640, "{m:?} is about {} font units", rough_width(&m));
+            assert!(m.lines().count() <= 2, "{m:?} is more than two lines");
+            for line in m.lines() {
+                assert!(line.chars().count() <= 36, "{line:?} is {} characters", line.chars().count());
+                assert!(rough_width(line) <= 640, "{line:?} is about {} font units", rough_width(line));
+            }
         }
     }
 }
