@@ -676,6 +676,7 @@ mod tests {
             chat_muted: false,
             room_name: None,
             mods_room_name: None,
+            ranked_cooldown_until: None,
         }
     }
 

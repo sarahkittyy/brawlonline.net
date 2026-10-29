@@ -458,6 +458,41 @@ TEST(PeerData, LeaveReasons)
   EXPECT_EQ(LeaveReason(std::string(1000, 'x')).size(), MAX_LEAVE_REASON_LEN);
 }
 
+// Whose end an aborted game's poor quality was on, as this machine saw it (Ranked's report
+// "cause"; the user's, 2026-10-29: a player who slows their game down to void a lost set loses it).
+TEST(PeerData, MatchQualityCause)
+{
+  using C = QualityCause;
+  // A slow interval: this PC behind its own schedule, else the other PC saying so, else waits.
+  EXPECT_EQ(IntervalCause(1.5, 60, false, true, false), C::OwnPc);
+  EXPECT_EQ(IntervalCause(1.5, 60, false, true, true), C::OwnPc);
+  EXPECT_EQ(IntervalCause(1.5, 60, false, false, true), C::PeerPc);
+  EXPECT_EQ(IntervalCause(1.5, 60, false, false, false), C::Link);
+  // The round trip as bad as the speed or worse: the link, whoever is behind.
+  EXPECT_EQ(IntervalCause(1.15, 230, false, true, false), C::Link);
+  EXPECT_EQ(IntervalCause(1.5, 230, false, true, false), C::Link);
+  EXPECT_EQ(IntervalCause(1.8, 230, false, true, false), C::OwnPc);
+  // The run's cause: the most debt; a tie blames nobody.
+  EXPECT_EQ(RunCause({4, 26, 0}), C::OwnPc);
+  EXPECT_EQ(RunCause({0, 0, 30}), C::PeerPc);
+  EXPECT_EQ(RunCause({15, 15, 0}), C::Link);
+  EXPECT_EQ(RunCause({0, 0, 0}), C::Link);
+  EXPECT_STREQ(QualityCauseName(C::OwnPc), "self");
+  EXPECT_STREQ(QualityCauseName(C::PeerPc), "peer");
+  EXPECT_STREQ(QualityCauseName(C::Link), "link");
+  // Poor from the set's start: the first game's first 15 s hold 5 intervals (from frame 120),
+  // enough for QUALITY_EARLY_BAD bad ones, and a steady 52 frames a second makes each bad.
+  int intervals = 0;
+  for (s64 frame = 120 + QUALITY_INTERVAL_FRAMES; frame <= QUALITY_EARLY_FRAMES;
+       frame += QUALITY_INTERVAL_FRAMES)
+  {
+    ++intervals;
+  }
+  EXPECT_EQ(intervals, 5);
+  EXPECT_GT(QualityDebt(60.0 / 52.0, 60, false), 0);
+  EXPECT_LE(QUALITY_EARLY_BAD, intervals);
+}
+
 TEST(PeerData, MatchQualityDebt)
 {
   // Slippi's tiers on the speed: an interval at full speed pays 1 back.

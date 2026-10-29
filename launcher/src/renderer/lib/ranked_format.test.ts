@@ -93,6 +93,13 @@ describe("ranked formatting", () => {
     expect(matchNote(set("ASSIGNED"))).toBe("In progress");
     expect(matchNote(set("ABANDONED", "abandoned by bob"))).toBe("Abandoned by bob");
     expect(matchNote(set("ABANDONED", "abandoned by someone-else"))).toBe("Abandoned");
+    // The set ended on bob's own end (his PC or connection) after its first seconds.
+    expect(matchNote(set("ABANDONED", "abandoned by bob: match quality low"))).toBe(
+      "Aborted: match quality low on bob's end, their loss",
+    );
+    expect(matchNote(set("ABANDONED", "abandoned by bob: connection lost"))).toBe(
+      "bob's connection dropped, their loss",
+    );
     expect(matchNote(set("TERMINATED"))).toMatch(/^Void: the connection broke/);
     expect(matchNote(set("TERMINATED", "match quality low"))).toBe("Void: match quality low, no rating change");
     expect(matchNote(set("ERROR"))).toMatch(/^Void: the reports disagree/);

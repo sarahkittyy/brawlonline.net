@@ -40,6 +40,10 @@ namespace Gprb::Session
 {
 struct GameResult;
 }
+namespace Gprb::PeerData
+{
+enum class QualityCause : u8;
+}
 
 namespace Online
 {
@@ -55,11 +59,17 @@ void OnSessionStartFailed();
 // CPU thread: a game of the session ended with GAME SET (the gameplay session's callback).
 void OnGameResult(const Gprb::Session::GameResult& result);
 // The opponent disconnected or went silent (GameBridge sees the lobby's disconnected flag).
-void OnPeerGone();
+// `early`: the lobby's, in the set's first seconds (the server does not make it anyone's loss).
+void OnPeerGone(bool early);
 // The game was aborted for its match quality (the lobby's quality_aborted, with its disconnected;
-// Gprb::Session::SetQualityAbort), by either player: the set is reported so, and the server voids
-// it, nobody rated.
-void OnQualityAbort();
+// Gprb::Session::SetQualityAbort), by either player: the set is reported so, with whose end this
+// machine saw it on (`cause`, the lobby's) and `early`. The server makes it the loss of the player
+// whose own PC or connection it was, when that is known for a fact and not early; else the set is
+// void, nobody rated.
+void OnQualityAbort(Gprb::PeerData::QualityCause cause, bool early);
+// A Ranked set is under way here (Rooms' thread: `game-alive` goes out every
+// GameAlive::RANKED_EVERY, for mm's record of whose connection went).
+bool InSet();
 // Once, after OnQualityAbort: the CSS's status line says why the set ended (GameBridge's match
 // state after the cleanup). Cleared by a search and a new session.
 bool TakeQualityNotice();

@@ -131,6 +131,22 @@ enum RankedCmd {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Sets that ended on a player's own end (their PC or connection, known for a fact), newest
+    /// first: 3 in 24 h are a 1 h Ranked cooldown from the last.
+    Faults {
+        /// Only this player's (uid, email, name or connect code).
+        ident: Option<String>,
+        #[arg(long, default_value_t = 7)]
+        days: i64,
+    },
+    /// Take a set off its player's fault count (its result stays): ends a cooldown it was part of.
+    Unfault {
+        /// The set's match id (mm_matches.match_id).
+        match_id: String,
+        /// Why (the audit row).
+        #[arg(long)]
+        reason: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -393,6 +409,30 @@ async fn main() -> anyhow::Result<()> {
                 "ranked tiers recomputed: {} players from {} rating changes, {} rank(s) changed",
                 done.players, done.sets, done.ranks_changed
             );
+        }
+        Cmd::Ranked(RankedCmd::Faults { ident, days }) => {
+            let uid = match ident {
+                Some(i) => Some(find(&pool, &i).await?.uid),
+                None => None,
+            };
+            let rows = admin::ranked_faults(&pool, uid, days.clamp(1, 365)).await?;
+            for r in &rows {
+                println!(
+                    "{}  {:<10} {:<10} {}  {}",
+                    r.ended_at.format("%Y-%m-%d %H:%M UTC"),
+                    r.connect_code.as_deref().unwrap_or("?"),
+                    r.status,
+                    r.match_id,
+                    r.end_reason.as_deref().unwrap_or("")
+                );
+            }
+            println!("{} set(s)", rows.len());
+        }
+        Cmd::Ranked(RankedCmd::Unfault { match_id, reason }) => {
+            match admin::unfault_ranked_set(&pool, &actor, &match_id, &reason).await? {
+                Some(uid) => println!("{match_id} no longer counts against {uid}"),
+                None => println!("{match_id}: no such set with a fault"),
+            }
         }
         Cmd::Ranked(RankedCmd::Void { match_id, reason, dry_run }) => {
             let v = admin::void_ranked_set(&pool, &actor, &match_id, &reason, dry_run).await?;

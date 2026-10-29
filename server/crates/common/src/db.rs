@@ -26,26 +26,47 @@ pub struct MmUser {
     pub room_name: Option<String>,
     /// The same for its Brawl Mods (Other Games) rooms (`users.mods_room_name`).
     pub mods_room_name: Option<String>,
+    /// Until when a Ranked search is refused: [`crate::ranked::COOLDOWN_FAULTS`] sets ended on this
+    /// player's own end in [`crate::ranked::COOLDOWN_WINDOW`] (`mm_matches.fault`, 0027), for
+    /// [`crate::ranked::COOLDOWN`] after the last. `None`: no cooldown.
+    pub ranked_cooldown_until: Option<DateTime<Utc>>,
 }
 
 impl MmUser {
     pub fn is_banned(&self, now: DateTime<Utc>) -> bool {
         self.banned_until.is_some_and(|t| t > now)
     }
+
+    /// The Ranked cooldown left at `now`, if any.
+    pub fn ranked_cooldown(&self, now: DateTime<Utc>) -> Option<chrono::Duration> {
+        self.ranked_cooldown_until.map(|t| t - now).filter(|left| *left > chrono::Duration::zero())
+    }
 }
 
+/// $2: the default rating; $3: the Ranked cooldown's window and $5 its length (seconds), $4 the
+/// faults it takes.
 const MM_USER_SELECT: &str = "SELECT u.uid, u.display_name, u.connect_code, u.play_key_version, u.banned_until,
         u.email_verified_at IS NOT NULL AS email_verified,
         COALESCE(r.rating, $2) AS rating, COALESCE(r.sets_played, 0) AS ranked_sets,
-        u.chat_muted_at IS NOT NULL AS chat_muted, u.room_name, u.mods_room_name
-   FROM users u LEFT JOIN ratings r ON r.uid = u.uid";
+        u.chat_muted_at IS NOT NULL AS chat_muted, u.room_name, u.mods_room_name,
+        CASE WHEN f.n >= $4 THEN f.last + make_interval(secs => $5) END AS ranked_cooldown_until
+   FROM users u LEFT JOIN ratings r ON r.uid = u.uid
+   LEFT JOIN LATERAL (SELECT count(*) AS n, max(m.ended_at) AS last FROM mm_matches m
+                       WHERE m.fault = u.uid AND m.ended_at > now() - make_interval(secs => $3)) f ON true";
+
+type MmUserQuery<'q> = sqlx::query::QueryAs<'q, sqlx::Postgres, MmUser, sqlx::postgres::PgArguments>;
+
+/// Binds [`MM_USER_SELECT`]'s $2..$5 after a query's $1.
+fn bind_mm_user(q: MmUserQuery<'_>) -> MmUserQuery<'_> {
+    q.bind(crate::ranked::DEFAULT_RATING)
+        .bind(crate::ranked::COOLDOWN_WINDOW.num_seconds() as f64)
+        .bind(crate::ranked::COOLDOWN_FAULTS)
+        .bind(crate::ranked::COOLDOWN.num_seconds() as f64)
+}
 
 pub async fn fetch_mm_user(pool: &sqlx::PgPool, uid: Uuid) -> sqlx::Result<Option<MmUser>> {
-    sqlx::query_as::<_, MmUser>(&format!("{MM_USER_SELECT} WHERE u.uid = $1"))
-        .bind(uid)
-        .bind(crate::ranked::DEFAULT_RATING)
-        .fetch_optional(pool)
-        .await
+    let sql = format!("{MM_USER_SELECT} WHERE u.uid = $1");
+    bind_mm_user(sqlx::query_as::<_, MmUser>(&sql).bind(uid)).fetch_optional(pool).await
 }
 
 /// How often mm and accounts look for changed accounts ([`changed_users`]).
@@ -60,11 +81,8 @@ pub const ACCOUNT_POLL_OVERLAP: chrono::Duration = chrono::Duration::seconds(30)
 /// carried to connected players this way (`pp-admin` writes only the database).
 pub async fn changed_users(pool: &sqlx::PgPool, since: DateTime<Utc>) -> sqlx::Result<(Vec<MmUser>, DateTime<Utc>)> {
     let now: DateTime<Utc> = sqlx::query_scalar("SELECT now()").fetch_one(pool).await?;
-    let users = sqlx::query_as::<_, MmUser>(&format!("{MM_USER_SELECT} WHERE u.updated_at > $1"))
-        .bind(since)
-        .bind(crate::ranked::DEFAULT_RATING)
-        .fetch_all(pool)
-        .await?;
+    let sql = format!("{MM_USER_SELECT} WHERE u.updated_at > $1");
+    let users = bind_mm_user(sqlx::query_as::<_, MmUser>(&sql).bind(since)).fetch_all(pool).await?;
     Ok((users, now))
 }
 
@@ -215,6 +233,53 @@ pub async fn record_ranked_presence(
     .bind(online)
     .bind(stalled_since)
     .bind(at)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// What a [`record_ranked_net_event`] records (`ranked_net_events`, 0027).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NetEventKind {
+    /// Nothing came from the player's game for a while.
+    Silence,
+    /// The round trip to the player's game jumped.
+    Lag,
+}
+
+impl NetEventKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            NetEventKind::Silence => "silence",
+            NetEventKind::Lag => "lag",
+        }
+    }
+}
+
+/// Trouble on a Ranked set's player's own connection to mm (`ranked_net_events`, 0027;
+/// [`crate::ranked::NetTrouble`]). `peak_ms`/`base_ms`: a lag's highest and usual round trips.
+#[allow(clippy::too_many_arguments)]
+pub async fn record_ranked_net_event(
+    pool: &sqlx::PgPool,
+    match_id: &str,
+    uid: Uuid,
+    kind: NetEventKind,
+    started_at: DateTime<Utc>,
+    ended_at: DateTime<Utc>,
+    peak_ms: Option<i32>,
+    base_ms: Option<i32>,
+) -> sqlx::Result<()> {
+    sqlx::query(
+        "INSERT INTO ranked_net_events (match_id, uid, kind, started_at, ended_at, peak_ms, base_ms)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)",
+    )
+    .bind(match_id)
+    .bind(uid)
+    .bind(kind.as_str())
+    .bind(started_at)
+    .bind(ended_at)
+    .bind(peak_ms)
+    .bind(base_ms)
     .execute(pool)
     .await?;
     Ok(())

@@ -588,6 +588,34 @@ impl LiveBook {
         }
     }
 
+    /// Trouble on `uid`'s own connection (`ranked_net_events`): recorded for their recent Ranked
+    /// sets, as their presence is. `lag`: a lag's peak and usual round trips (ms).
+    #[allow(clippy::too_many_arguments)]
+    pub fn net_event(
+        &mut self,
+        now: Instant,
+        uid: Uuid,
+        kind: common::db::NetEventKind,
+        from: DateTime<Utc>,
+        to: DateTime<Utc>,
+        lag: Option<(u32, u32)>,
+        out: &mut Vec<Output>,
+    ) {
+        for (match_id, m) in &self.matches {
+            if m.mode == "ranked" && m.players.contains(&uid) && now.duration_since(m.made) < RANKED_PRESENCE_FOR {
+                out.push(Output::RankedNetEvent {
+                    match_id: match_id.clone(),
+                    uid,
+                    kind,
+                    from,
+                    to,
+                    peak_ms: lag.map(|l| l.0),
+                    base_ms: lag.map(|l| l.1),
+                });
+            }
+        }
+    }
+
     /// Whether `match_id`'s games are streamed with a primary: spectating on, or a Ranked set.
     fn uploads(&self, match_id: &str) -> bool {
         self.cfg.mode == SpectateMode::On || self.forced(match_id)

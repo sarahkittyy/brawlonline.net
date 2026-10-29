@@ -35,6 +35,11 @@ pub const LOGIN_EXPIRED: &str = "Login expired. Log in again.";
 pub const SEARCHING_TOO_OFTEN: &str = "Searching too often. Wait a moment.";
 /// The account is banned.
 pub const BANNED: &str = "This account is banned.";
+/// A Ranked search during the account's Ranked cooldown (`common::ranked::COOLDOWN_FAULTS` sets
+/// ended on its own end in a day), with the minutes left.
+pub fn ranked_cooldown(minutes: i64) -> String {
+    format!("Ranked cooldown: {minutes} min left\nYour PC or connection ended 3 sets")
+}
 /// The account has no connect code yet.
 pub const NO_CONNECT_CODE: &str = "Pick a connect code in the launcher.";
 /// A Direct search for one's own code.

@@ -200,6 +200,89 @@ pub const LEFT_BEFORE_STAGE_SELECT: &str = "left before the stage select";
 /// The end reason of a set whose game was aborted for its match quality ([`Leave::MatchQuality`]).
 pub const MATCH_QUALITY_LOW: &str = "match quality low";
 
+/// The end reason of a set whose connection broke with nobody to blame.
+pub const CONNECTION_BROKE: &str = "the connection between the players broke";
+
+/// What a game says made its match quality too low ([`LeaveReport::cause`]): where most of the
+/// debt of its bad intervals came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Cause {
+    /// This PC missed its own frame schedule (it could not run the game at full speed). The only
+    /// cause that blames anyone on a game's word: its own player.
+    OwnPc,
+    /// The other player's PC said it missed its own schedule.
+    PeerPc,
+    /// The link: waits for the other player's inputs, or a high round trip.
+    Link,
+}
+
+impl Cause {
+    pub fn parse(s: &str) -> Option<Cause> {
+        match s {
+            "self" => Some(Cause::OwnPc),
+            "peer" => Some(Cause::PeerPc),
+            "link" => Some(Cause::Link),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Cause::OwnPc => "self",
+            Cause::PeerPc => "peer",
+            Cause::Link => "link",
+        }
+    }
+}
+
+/// How a set that one player's own end ended counts against them ([`Outcome::Abandoned`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Fault {
+    /// Their PC or connection made the match quality so low that the game was aborted.
+    MatchQuality,
+    /// Their connection went (mm saw it go silent), and the players' link with it.
+    Connection,
+}
+
+impl Fault {
+    /// The end reason's tail: `abandoned by <uid>: <this>`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Fault::MatchQuality => MATCH_QUALITY_LOW,
+            Fault::Connection => CONNECTION_LOST,
+        }
+    }
+}
+
+/// [`Fault::Connection`]'s end reason tail.
+pub const CONNECTION_LOST: &str = "connection lost";
+
+/// A trouble or an abort counts against the player whose own end caused it as a set loss only
+/// after the first [`EARLY_SECONDS`] of the set's first game (the user's, 2026-10-29: "games that
+/// are slow from the start of game 1 are obviously like, not intentional ... maybe after 10-15s
+/// after the start of the first game that it becomes potentially intentional"). Before that, or
+/// when a game says the set's first game was already poor in that time, the set is void, but it
+/// still counts toward their cooldown ([`COOLDOWN_FAULTS`]). Dolphin decides it (the reports'
+/// `early`).
+pub const EARLY_SECONDS: u32 = 15;
+
+/// Faults ([`Outcome::fault`]) in [`COOLDOWN_WINDOW`] that keep a player out of Ranked for
+/// [`COOLDOWN`] after the last of them (the user's, 2026-10-29: "a ranked cooldown after 3 low
+/// quality aborts, only when we know for a fact its their fault").
+pub const COOLDOWN_FAULTS: i64 = 3;
+pub const COOLDOWN_WINDOW: Duration = Duration::hours(24);
+pub const COOLDOWN: Duration = Duration::hours(1);
+
+/// How far before and after a set's first abort or "opponent left" mm's record of a player's
+/// connection trouble ([`NetTrouble`]) counts. An abort comes once its debt has built up (20 s at
+/// a steady 52 frames a second, longer with healthy intervals between), an "opponent left" about
+/// 7 s after the link went; the reports reach the server a moment later.
+pub const TROUBLE_BEFORE: Duration = Duration::seconds(90);
+pub const TROUBLE_AFTER: Duration = Duration::seconds(10);
+/// The least trouble on a player's connection in that window that blames them (a short blip on a
+/// Wi-Fi is nobody's doing); the other player's must be at most a quarter of it.
+pub const TROUBLE_MIN: Duration = Duration::seconds(2);
+
 /// A client's report that the set ended early.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Leave {
@@ -209,7 +292,7 @@ pub enum Leave {
     OpponentLeft,
     /// The game was aborted for its match quality, by either player's game (too slow, or too high
     /// a round trip, for too long: Slippi's poor-performance termination, the user's, 2026-10-29).
-    /// Nobody is to blame.
+    /// Both games report it, each with its [`Cause`].
     MatchQuality,
 }
 
@@ -239,6 +322,23 @@ pub struct LeaveReport {
     pub at: DateTime<Utc>,
     /// A `Left` made before the reporter's game was sent to the set's stage select.
     pub before_stage_select: bool,
+    /// An `OpponentLeft` or `MatchQuality` in the first [`EARLY_SECONDS`] of the set's first game
+    /// or before it, or after a first game whose start was already poor: nobody loses the set for
+    /// it. `None`: a game from before 2026-10-29 that does not say, taken as early.
+    pub early: Option<bool>,
+    /// A `MatchQuality`'s cause as the reporter's game saw it (`None`: an older game).
+    pub cause: Option<Cause>,
+}
+
+/// mm's record of trouble on one player's own connection while in a Ranked set
+/// (`ranked_net_events`): their game went silent on its connection to mm (the network went, or the
+/// game stopped running), or their round trip to mm jumped. mm is a third party: trouble only one
+/// player's connection had is that player's own.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct NetTrouble {
+    pub player: Uuid,
+    pub from: DateTime<Utc>,
+    pub to: DateTime<Utc>,
 }
 
 /// What mm saw of a set's games (`ranked_presence`, `ranked_game_results`): Ranked games are
@@ -257,6 +357,8 @@ pub struct Seen {
     /// How games ended as each player's own game told mm (`spectate-end`): only Ranked games that
     /// ended by a game set or a quit.
     pub games: Vec<SeenGame>,
+    /// Trouble on each player's connection to mm.
+    pub trouble: Vec<NetTrouble>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -279,6 +381,22 @@ impl Seen {
     /// report about it was made.
     fn stalled_by(&self, player: Uuid, at: DateTime<Utc>) -> bool {
         self.stalled.iter().any(|(p, since)| *p == player && *since <= at)
+    }
+
+    /// The one player of `players` whose connection mm saw in trouble around `at`
+    /// ([`TROUBLE_BEFORE`], [`TROUBLE_AFTER`]): [`TROUBLE_MIN`] of it or more, and the other
+    /// player's at most a quarter of theirs. None otherwise: both had trouble, or neither much.
+    fn troubled_alone(&self, players: [Uuid; 2], at: DateTime<Utc>) -> Option<usize> {
+        let (lo, hi) = (at - TROUBLE_BEFORE, at + TROUBLE_AFTER);
+        let length = |p: Uuid| -> Duration {
+            self.trouble
+                .iter()
+                .filter(|t| t.player == p && t.from < hi && t.to > lo)
+                .map(|t| t.to.min(hi) - t.from.max(lo))
+                .fold(Duration::zero(), |sum, d| sum + d)
+        };
+        let len = [length(players[0]), length(players[1])];
+        (0..2).find(|&p| len[p] >= TROUBLE_MIN && len[1 - p] * 4 <= len[p])
     }
 
     /// The winner of `game` as `player`'s game told mm.
@@ -313,12 +431,16 @@ pub enum Outcome {
     Complete { winner: Uuid, loser: Uuid, wins: [u32; 2] },
     /// A player abandoned the set before it was decided. The leaver takes a set loss and the other
     /// player the win, also before any game was played (the user's, 2026-10-23: quitting game 1
-    /// gave the one who stayed nothing).
-    Abandoned { leaver: Uuid, other: Uuid, wins: [u32; 2] },
+    /// gave the one who stayed nothing). `fault`: the leaver did not leave, their own PC or
+    /// connection ended the set after its first [`EARLY_SECONDS`]; it also counts toward their
+    /// cooldown.
+    Abandoned { leaver: Uuid, other: Uuid, wins: [u32; 2], fault: Option<Fault> },
     /// No rating change. `status` is the `mm_matches.status` (Slippi's set states):
-    /// `TERMINATED` (the connection broke and nobody can be blamed), `ERROR` (the reports
-    /// disagree; held for review), `ORPHANED` (nothing more was reported).
-    Void { status: &'static str, reason: String, wins: [u32; 2] },
+    /// `TERMINATED` (the connection broke, or the match quality was too low), `ERROR` (the reports
+    /// disagree; held for review), `ORPHANED` (nothing more was reported). `fault`: the player
+    /// whose own PC or connection did it, early in the set: nobody is rated, but it counts toward
+    /// their cooldown.
+    Void { status: &'static str, reason: String, wins: [u32; 2], fault: Option<Uuid> },
 }
 
 impl Outcome {
@@ -329,6 +451,16 @@ impl Outcome {
             Outcome::Complete { .. } => "COMPLETE",
             Outcome::Abandoned { .. } => "ABANDONED",
             Outcome::Void { status, .. } => status,
+        }
+    }
+
+    /// The player whose own PC or connection ended the set, as far as is known for a fact
+    /// (`mm_matches.fault`): counted toward their Ranked cooldown.
+    pub fn fault(&self) -> Option<Uuid> {
+        match self {
+            Outcome::Abandoned { leaver, fault: Some(_), .. } => Some(*leaver),
+            Outcome::Void { fault, .. } => *fault,
+            _ => None,
         }
     }
 
@@ -361,15 +493,25 @@ impl Outcome {
 ///   no game played: void, nobody rated). A player
 ///   whose opponent reports [`Leave::OpponentLeft`] and who does not report the same within
 ///   `report_grace` abandoned it (their game crashed or was closed). Both reporting
-///   `OpponentLeft` is a broken connection: void as `TERMINATED`, nobody is blamed. An
+///   `OpponentLeft` is a broken connection: void as `TERMINATED`, unless mm saw only one
+///   player's own connection go then ([`NetTrouble`]): the set ended on that player's end. An
 ///   `OpponentLeft` about a player whose game is still connected to mm and running blames nobody
-///   (it may be untrue); the set is orphaned if nothing more comes. One about a player whose game
-///   had stopped running before it was made abandons the set for that player at once: a frozen
-///   game can't report anything, and one that runs again is no longer stalled.
+///   (it may be untrue) unless mm saw that player's connection go; the set is orphaned if
+///   nothing more comes. One about a player whose game had stopped running before it was made
+///   abandons the set for that player at once: a frozen game can't report anything, and one that
+///   runs again is no longer stalled.
 /// - A [`Leave::MatchQuality`] from either player (their game aborted the set's game for its
-///   match quality, and the other's ended with it) voids the set as `TERMINATED`, nobody rated,
-///   whatever the games before it were (the user's, 2026-10-29: "no loss to either player"). Not
-///   when a player had left before it: that player abandoned the set.
+///   match quality, and the other's ended with it) ends the set, whatever the games before it
+///   were. It ended on a player's own end when their own game says its PC could not keep up
+///   ([`Cause::OwnPc`]) or mm saw only their connection in trouble; without either it waits a
+///   little for the other game's report (its cause), then is void as `TERMINATED` with nobody
+///   rated (the user's, 2026-10-29: "no loss to either player"). Not when a player had left before
+///   it: that player abandoned the set.
+/// - A set that ended on one player's own end (their PC or connection, known for a fact) is their
+///   loss, [`Outcome::Abandoned`] with a `fault`, unless it was early in the set
+///   ([`EARLY_SECONDS`]): then void with that `fault`. Either counts toward their cooldown (the
+///   user's, 2026-10-29: a player losing a set must not get it voided by slowing their game down
+///   or pulling the cable).
 /// - A set with no report for `stale_after` is void as `ORPHANED`.
 ///
 /// Reports from anyone but the two players, and winners who are not one of them, are ignored
@@ -401,6 +543,7 @@ pub fn resolve(
                     status: "ERROR",
                     reason: format!("the players reported different winners for game {game}"),
                     wins,
+                    fault: None,
                 };
             }
             [Some(a), Some(_)] => a.winner,
@@ -413,6 +556,7 @@ pub fn resolve(
                             status: "ERROR",
                             reason: format!("the other player's game saw another winner for game {game}"),
                             wins,
+                            fault: None,
                         };
                     }
                     None if seen.stalled_by(other, r.at) => r.winner,
@@ -422,6 +566,7 @@ pub fn resolve(
                             status: "ORPHANED",
                             reason: format!("only one player reported game {game}"),
                             wins,
+                            fault: None,
                         };
                     }
                     None => {
@@ -447,13 +592,59 @@ pub fn resolve(
     let reported = |p: usize, kind: Leave| leaves.iter().find(|l| l.reporter == players[p] && l.kind == kind);
     let left = [reported(0, Leave::Left), reported(1, Leave::Left)];
     let first_left = left.iter().flatten().map(|l| l.at).min();
-    let quality = leaves.iter().filter(|l| l.kind == Leave::MatchQuality).map(|l| l.at).min();
-    if quality.is_some_and(|at| first_left.is_none_or(|l| at <= l)) {
-        return Outcome::Void { status: "TERMINATED", reason: MATCH_QUALITY_LOW.into(), wins };
+    let abandon = |leaver: usize, fault: Option<Fault>| Outcome::Abandoned {
+        leaver: players[leaver],
+        other: players[1 - leaver],
+        wins,
+        fault,
+    };
+    // The set's first abort or "opponent left": about when the trouble came. Whether that was
+    // early in the set: any report says so, or does not say (an older game).
+    let ended = leaves.iter().filter(|l| l.kind != Leave::Left);
+    let trouble_at = ended.clone().map(|l| l.at).min();
+    let early = ended.clone().any(|l| l.early != Some(false));
+    // The one player whose connection mm saw in trouble then.
+    let troubled = trouble_at.and_then(|at| seen.troubled_alone(players, at));
+    // The set ended on player `p`'s own end: their loss, or early in the set a void; it counts
+    // toward their cooldown either way.
+    let on_end = |p: usize, fault: Fault, reason: &str| {
+        if early {
+            Outcome::Void { status: "TERMINATED", reason: reason.into(), wins, fault: Some(players[p]) }
+        } else {
+            abandon(p, Some(fault))
+        }
+    };
+
+    let quality: Vec<&LeaveReport> = leaves.iter().copied().filter(|l| l.kind == Leave::MatchQuality).collect();
+    if let Some(at) = quality.iter().map(|l| l.at).min().filter(|at| first_left.is_none_or(|l| *at <= l)) {
+        // A game that says its own PC could not keep up blames its own player, and mm's record of
+        // one player's connection trouble that player. Nothing else blames anyone.
+        let own_pc = |p: usize| quality.iter().any(|l| l.reporter == players[p] && l.cause == Some(Cause::OwnPc));
+        let at_fault = match (own_pc(0), own_pc(1)) {
+            (true, false) => Some(0),
+            (false, true) => Some(1),
+            (true, true) => None,
+            (false, false) => troubled,
+        };
+        if let Some(p) = at_fault {
+            return on_end(p, Fault::MatchQuality, MATCH_QUALITY_LOW);
+        }
+        // The other game's own report, normally a moment behind, may yet say its PC was the slow
+        // one: it waits for that.
+        if let Some(p) = (0..2).find(|&p| !leaves.iter().any(|l| l.reporter == players[p])) {
+            if now - at < timing.report_grace {
+                return Outcome::InProgress { wins };
+            }
+            // It never came, and that game is gone from mm, whose PC the other game saw fall behind.
+            let peer_pc = quality.iter().any(|l| l.reporter == players[1 - p] && l.cause == Some(Cause::PeerPc));
+            if peer_pc && !seen.online(players[p]) {
+                return on_end(p, Fault::MatchQuality, MATCH_QUALITY_LOW);
+            }
+        }
+        return Outcome::Void { status: "TERMINATED", reason: MATCH_QUALITY_LOW.into(), wins, fault: None };
     }
     let opp_left = [reported(0, Leave::OpponentLeft), reported(1, Leave::OpponentLeft)];
     let played = wins.iter().sum::<u32>() > 0 || games.iter().any(|g| g.winner.is_none());
-    let abandon = |leaver: usize| Outcome::Abandoned { leaver: players[leaver], other: players[1 - leaver], wins };
     // A player who left before their game was sent to the stage select, with no game played,
     // abandoned nothing: the search was cancelled as the match was made, or the connection never
     // came up (bug report #37, 2026-10-16). Nobody is rated.
@@ -462,42 +653,51 @@ pub fn resolve(
             status: "TERMINATED",
             reason: LEFT_BEFORE_STAGE_SELECT.into(),
             wins,
+            fault: None,
         })
     };
     match left {
         [Some(_), Some(_)] => {
-            return Outcome::Void { status: "TERMINATED", reason: "both players left".into(), wins };
+            return Outcome::Void { status: "TERMINATED", reason: "both players left".into(), wins, fault: None };
         }
-        [Some(l), None] => return left_early(l).unwrap_or_else(|| abandon(0)),
-        [None, Some(l)] => return left_early(l).unwrap_or_else(|| abandon(1)),
+        [Some(l), None] => return left_early(l).unwrap_or_else(|| abandon(0, None)),
+        [None, Some(l)] => return left_early(l).unwrap_or_else(|| abandon(1, None)),
         [None, None] => {}
     }
+    // A player whose connection mm saw go (and the other's not) lost the link on their own end.
+    let lost_link = |p: usize| (troubled == Some(p)).then_some(Fault::Connection);
     match opp_left {
         [Some(_), Some(_)] => {
-            return Outcome::Void {
-                status: "TERMINATED",
-                reason: "the connection between the players broke".into(),
-                wins,
+            return match troubled {
+                Some(p) => on_end(p, Fault::Connection, CONNECTION_BROKE),
+                None => Outcome::Void { status: "TERMINATED", reason: CONNECTION_BROKE.into(), wins, fault: None },
             };
         }
         // Player 0 says player 1 left; player 1 has had `report_grace` to say the same, and their
         // game is not connected to mm. A player whose game is still connected did not leave (or
-        // the report is untrue): nobody is blamed, and the set is orphaned if nothing more comes.
-        // Unless that game had already stopped running when the report was made (bug report #105:
-        // frozen 19 minutes with its mm connection up): abandoned at once.
-        [Some(r), None] if seen.stalled_by(players[1], r.at) => return abandon(1),
-        [None, Some(r)] if seen.stalled_by(players[0], r.at) => return abandon(0),
+        // the report is untrue): nobody is blamed, and the set is orphaned if nothing more comes,
+        // unless mm saw that player's connection go (it came back). Unless that game had already
+        // stopped running when the report was made (bug report #105: frozen 19 minutes with its
+        // mm connection up): abandoned at once.
+        [Some(r), None] if seen.stalled_by(players[1], r.at) => return abandon(1, None),
+        [None, Some(r)] if seen.stalled_by(players[0], r.at) => return abandon(0, None),
+        [Some(_), None] if seen.online(players[1]) && troubled == Some(1) => {
+            return on_end(1, Fault::Connection, CONNECTION_BROKE);
+        }
+        [None, Some(_)] if seen.online(players[0]) && troubled == Some(0) => {
+            return on_end(0, Fault::Connection, CONNECTION_BROKE);
+        }
         [Some(_), None] if seen.online(players[1]) => {}
         [None, Some(_)] if seen.online(players[0]) => {}
-        [Some(r), None] if now - r.at >= timing.report_grace => return abandon(1),
-        [None, Some(r)] if now - r.at >= timing.report_grace => return abandon(0),
+        [Some(r), None] if now - r.at >= timing.report_grace => return abandon(1, lost_link(1)),
+        [None, Some(r)] if now - r.at >= timing.report_grace => return abandon(0, lost_link(0)),
         [Some(_), None] | [None, Some(_)] => return Outcome::InProgress { wins },
         [None, None] => {}
     }
 
     let last = games.iter().map(|g| g.at).chain(leaves.iter().map(|l| l.at)).max().unwrap_or(created).max(created);
     if now - last >= timing.stale_after {
-        return Outcome::Void { status: "ORPHANED", reason: "no result was reported".into(), wins };
+        return Outcome::Void { status: "ORPHANED", reason: "no result was reported".into(), wins, fault: None };
     }
     Outcome::InProgress { wins }
 }
@@ -881,18 +1081,60 @@ mod tests {
             self.game(0, g, w, min).game(1, g, w, min)
         }
         fn leave(&mut self, by: usize, kind: Leave, min: i64) -> &mut Self {
-            let r = LeaveReport { reporter: self.p[by], kind, at: self.at(min), before_stage_select: false };
+            let r = LeaveReport {
+                reporter: self.p[by],
+                kind,
+                at: self.at(min),
+                before_stage_select: false,
+                early: Some(false),
+                cause: None,
+            };
             self.leaves.push(r);
             self
         }
         /// Player `by` leaves before their game was sent to the stage select.
         fn leave_early(&mut self, by: usize, min: i64) -> &mut Self {
-            let r = LeaveReport { reporter: self.p[by], kind: Leave::Left, at: self.at(min), before_stage_select: true };
+            let r = LeaveReport {
+                reporter: self.p[by],
+                kind: Leave::Left,
+                at: self.at(min),
+                before_stage_select: true,
+                early: None,
+                cause: None,
+            };
             self.leaves.push(r);
+            self
+        }
+        /// Player `by`'s game reports a leave `kind` (not `Left`) at second `sec`, saying its cause
+        /// (`MatchQuality`) and whether it came early in the set.
+        fn report(&mut self, by: usize, kind: Leave, cause: Option<Cause>, early: bool, sec: i64) -> &mut Self {
+            let r = LeaveReport {
+                reporter: self.p[by],
+                kind,
+                at: self.t0 + Duration::seconds(sec),
+                before_stage_select: false,
+                early: Some(early),
+                cause,
+            };
+            self.leaves.push(r);
+            self
+        }
+        /// mm saw player `p`'s connection in trouble from second `from` to `to`.
+        fn trouble(&mut self, p: usize, from: i64, to: i64) -> &mut Self {
+            let t = NetTrouble {
+                player: self.p[p],
+                from: self.t0 + Duration::seconds(from),
+                to: self.t0 + Duration::seconds(to),
+            };
+            self.seen.trouble.push(t);
             self
         }
         fn at_min(&self, min: i64) -> Outcome {
             resolve(self.p, self.t0, &self.games, &self.leaves, &self.seen, self.at(min), Timing::default())
+        }
+        fn at_sec(&self, sec: i64) -> Outcome {
+            let now = self.t0 + Duration::seconds(sec);
+            resolve(self.p, self.t0, &self.games, &self.leaves, &self.seen, now, Timing::default())
         }
     }
 
@@ -993,7 +1235,7 @@ mod tests {
         let mut s = Set::new();
         s.online(0, true).online(1, false).both(1, Some(0), 1).leave(0, Leave::OpponentLeft, 2);
         assert_eq!(s.at_min(3), Outcome::InProgress { wins: [1, 0] });
-        assert_eq!(s.at_min(4), Outcome::Abandoned { leaver: s.p[1], other: s.p[0], wins: [1, 0] });
+        assert_eq!(s.at_min(4), Outcome::Abandoned { leaver: s.p[1], other: s.p[0], wins: [1, 0], fault: None });
     }
 
     /// Bug report #105 (2026-10-22): the opponent's game froze 18 s into game 2 and stayed
@@ -1003,14 +1245,11 @@ mod tests {
     fn opponent_left_about_a_frozen_game_abandons_at_once() {
         let mut s = Set::new();
         s.online(0, true).online(1, true).both(1, Some(0), 1).stalled(1, 4).leave(0, Leave::OpponentLeft, 4);
-        assert_eq!(s.at_min(4), Outcome::Abandoned { leaver: s.p[1], other: s.p[0], wins: [1, 0] });
+        assert_eq!(s.at_min(4), Outcome::Abandoned { leaver: s.p[1], other: s.p[0], wins: [1, 0], fault: None });
         // Either player.
         let mut s = Set::new();
         s.online(0, true).online(1, true).stalled(0, 2).leave(1, Leave::OpponentLeft, 3);
-        assert_eq!(
-            s.at_min(3),
-            Outcome::Abandoned { leaver: s.p[0], other: s.p[1], wins: [0, 0] }
-        );
+        assert_eq!(s.at_min(3), Outcome::Abandoned { leaver: s.p[0], other: s.p[1], wins: [0, 0], fault: None });
         // A game that stopped running only after the report was running when it was made: the
         // report may be untrue, so nobody is blamed, as for any connected game.
         let mut s = Set::new();
@@ -1050,7 +1289,7 @@ mod tests {
         let mut s = Set::new();
         s.both(1, Some(0), 5).leave(0, Leave::Left, 6);
         let o = s.at_min(6);
-        assert_eq!(o, Outcome::Abandoned { leaver: s.p[0], other: s.p[1], wins: [1, 0] });
+        assert_eq!(o, Outcome::Abandoned { leaver: s.p[0], other: s.p[1], wins: [1, 0], fault: None });
         assert_eq!(o.status(), "ABANDONED");
         assert_eq!(scores(s.p, &o), [Some(0.0), Some(1.0)]);
         // Before any game (quitting game 1, or leaving once the opponent's name shows): the leaver
@@ -1058,7 +1297,7 @@ mod tests {
         let mut s = Set::new();
         s.leave(1, Leave::Left, 1);
         let o = s.at_min(1);
-        assert_eq!(o, Outcome::Abandoned { leaver: s.p[1], other: s.p[0], wins: [0, 0] });
+        assert_eq!(o, Outcome::Abandoned { leaver: s.p[1], other: s.p[0], wins: [0, 0], fault: None });
         assert_eq!(scores(s.p, &o), [Some(1.0), Some(0.0)]);
     }
 
@@ -1068,7 +1307,7 @@ mod tests {
         let mut s = Set::new();
         s.both(1, Some(1), 5).leave(1, Leave::OpponentLeft, 7);
         assert_eq!(s.at_min(8), Outcome::InProgress { wins: [0, 1] });
-        assert_eq!(s.at_min(9), Outcome::Abandoned { leaver: s.p[0], other: s.p[1], wins: [0, 1] });
+        assert_eq!(s.at_min(9), Outcome::Abandoned { leaver: s.p[0], other: s.p[1], wins: [0, 1], fault: None });
         // Both say the other left: the connection broke, nobody is blamed.
         let mut s = Set::new();
         s.both(1, Some(1), 5).leave(1, Leave::OpponentLeft, 7).leave(0, Leave::OpponentLeft, 7);
@@ -1077,7 +1316,7 @@ mod tests {
         // Their own "left" settles it at once.
         let mut s = Set::new();
         s.leave(1, Leave::OpponentLeft, 7).leave(0, Leave::Left, 7);
-        assert_eq!(s.at_min(7), Outcome::Abandoned { leaver: s.p[0], other: s.p[1], wins: [0, 0] });
+        assert_eq!(s.at_min(7), Outcome::Abandoned { leaver: s.p[0], other: s.p[1], wins: [0, 0], fault: None });
     }
 
     #[test]
@@ -1087,7 +1326,10 @@ mod tests {
         let mut s = Set::new();
         s.leave_early(0, 0).leave(1, Leave::OpponentLeft, 1);
         let o = s.at_min(1);
-        assert_eq!(o, Outcome::Void { status: "TERMINATED", reason: LEFT_BEFORE_STAGE_SELECT.into(), wins: [0, 0] });
+        assert_eq!(
+            o,
+            Outcome::Void { status: "TERMINATED", reason: LEFT_BEFORE_STAGE_SELECT.into(), wins: [0, 0], fault: None }
+        );
         assert_eq!(scores(s.p, &o), [None, None]);
         // Settled at once, before the opponent says anything.
         let mut s = Set::new();
@@ -1097,16 +1339,16 @@ mod tests {
         // select anyway).
         let mut s = Set::new();
         s.both(1, Some(0), 5).leave_early(1, 6);
-        assert_eq!(s.at_min(6), Outcome::Abandoned { leaver: s.p[1], other: s.p[0], wins: [1, 0] });
+        assert_eq!(s.at_min(6), Outcome::Abandoned { leaver: s.p[1], other: s.p[0], wins: [1, 0], fault: None });
         // A drawn game counts as played.
         let mut s = Set::new();
         s.both(1, None, 5).leave_early(1, 6);
-        assert_eq!(s.at_min(6), Outcome::Abandoned { leaver: s.p[1], other: s.p[0], wins: [0, 0] });
+        assert_eq!(s.at_min(6), Outcome::Abandoned { leaver: s.p[1], other: s.p[0], wins: [0, 0], fault: None });
         // Without the leaver's own report (an old client, a crash) the opponent's report decides,
         // as before.
         let mut s = Set::new();
         s.leave(1, Leave::OpponentLeft, 1);
-        assert_eq!(s.at_min(3), Outcome::Abandoned { leaver: s.p[0], other: s.p[1], wins: [0, 0] });
+        assert_eq!(s.at_min(3), Outcome::Abandoned { leaver: s.p[0], other: s.p[1], wins: [0, 0], fault: None });
     }
 
     #[test]
@@ -1115,20 +1357,30 @@ mod tests {
         let mut s = Set::new();
         s.both(1, Some(1), 5).leave(0, Leave::MatchQuality, 7).leave(1, Leave::MatchQuality, 7);
         let o = s.at_min(7);
-        assert_eq!(o, Outcome::Void { status: "TERMINATED", reason: MATCH_QUALITY_LOW.into(), wins: [0, 1] });
+        assert_eq!(
+            o,
+            Outcome::Void { status: "TERMINATED", reason: MATCH_QUALITY_LOW.into(), wins: [0, 1], fault: None }
+        );
         assert_eq!(scores(s.p, &o), [None, None]);
-        // One player's report is enough, at once (the other's abort never came, its game saw the
-        // connection go; or it has not reported yet).
+        // One player's report waits a little for the other's (its cause may blame its own PC),
+        // then is enough (the other's abort never came, its game saw the connection go).
         let mut s = Set::new();
         s.leave(1, Leave::MatchQuality, 2);
-        assert!(matches!(s.at_min(2), Outcome::Void { status: "TERMINATED", .. }));
+        assert_eq!(s.at_min(3), Outcome::InProgress { wins: [0, 0] });
+        assert_eq!(
+            s.at_min(4),
+            Outcome::Void { status: "TERMINATED", reason: MATCH_QUALITY_LOW.into(), wins: [0, 0], fault: None }
+        );
         let mut s = Set::new();
         s.leave(0, Leave::OpponentLeft, 2).leave(1, Leave::MatchQuality, 2);
-        assert_eq!(s.at_min(2), Outcome::Void { status: "TERMINATED", reason: MATCH_QUALITY_LOW.into(), wins: [0, 0] });
+        assert_eq!(
+            s.at_min(2),
+            Outcome::Void { status: "TERMINATED", reason: MATCH_QUALITY_LOW.into(), wins: [0, 0], fault: None }
+        );
         // A player who left before it abandoned the set; a "left" after it changes nothing.
         let mut s = Set::new();
         s.leave(0, Leave::Left, 2).leave(1, Leave::MatchQuality, 3);
-        assert_eq!(s.at_min(3), Outcome::Abandoned { leaver: s.p[0], other: s.p[1], wins: [0, 0] });
+        assert_eq!(s.at_min(3), Outcome::Abandoned { leaver: s.p[0], other: s.p[1], wins: [0, 0], fault: None });
         let mut s = Set::new();
         s.leave(1, Leave::MatchQuality, 2).leave(0, Leave::Left, 3);
         assert!(matches!(s.at_min(3), Outcome::Void { status: "TERMINATED", .. }));
@@ -1138,6 +1390,186 @@ mod tests {
         assert_eq!(s.at_min(11), Outcome::Complete { winner: s.p[0], loser: s.p[1], wins: [2, 0] });
         assert_eq!(Leave::parse("match_quality"), Some(Leave::MatchQuality));
         assert_eq!(Leave::MatchQuality.as_str(), "match_quality");
+    }
+
+    /// The user's, 2026-10-29: "if the game starts fast and then they decide to manually slow it
+    /// down, it should be aborted as a loss for them. games that are slow from the start of game 1
+    /// are obviously like, not intentional."
+    #[test]
+    fn an_abort_on_ones_own_pc_is_their_loss_after_the_first_seconds() {
+        // Player 1 won game 1; player 0's PC falls behind in game 2 and its game says so.
+        let mut s = Set::new();
+        s.online(0, true).online(1, true).both(1, Some(1), 5);
+        s.report(0, Leave::MatchQuality, Some(Cause::OwnPc), false, 400);
+        let o = s.at_sec(400);
+        assert_eq!(
+            o,
+            Outcome::Abandoned { leaver: s.p[0], other: s.p[1], wins: [0, 1], fault: Some(Fault::MatchQuality) }
+        );
+        assert_eq!(scores(s.p, &o), [Some(0.0), Some(1.0)]);
+        assert_eq!(o.fault(), Some(s.p[0]));
+        // The other game's word that it was player 0's PC is not enough on its own: it waits for
+        // player 0's own report, which says so.
+        let mut s = Set::new();
+        s.online(0, true).online(1, true).both(1, Some(1), 5);
+        s.report(1, Leave::MatchQuality, Some(Cause::PeerPc), false, 400);
+        assert_eq!(s.at_sec(401), Outcome::InProgress { wins: [0, 1] });
+        s.report(0, Leave::MatchQuality, Some(Cause::OwnPc), false, 401);
+        assert!(matches!(s.at_sec(401), Outcome::Abandoned { fault: Some(Fault::MatchQuality), .. }));
+        // Player 0's report never comes: a void if their game is still with mm, their loss if it
+        // is gone.
+        let mut s = Set::new();
+        s.online(0, true).online(1, true).both(1, Some(1), 5);
+        s.report(1, Leave::MatchQuality, Some(Cause::PeerPc), false, 400);
+        assert_eq!(
+            s.at_sec(530),
+            Outcome::Void { status: "TERMINATED", reason: MATCH_QUALITY_LOW.into(), wins: [0, 1], fault: None }
+        );
+        s.online(0, false);
+        assert_eq!(s.at_sec(530).fault(), Some(s.p[0]));
+        assert_eq!(s.at_sec(519), Outcome::InProgress { wins: [0, 1] });
+        // Early in the set (game 1's first seconds, or a game 1 poor from its start): void, but
+        // counted against player 0.
+        let mut s = Set::new();
+        s.report(0, Leave::MatchQuality, Some(Cause::OwnPc), true, 60);
+        let o = s.at_sec(60);
+        assert_eq!(
+            o,
+            Outcome::Void { status: "TERMINATED", reason: MATCH_QUALITY_LOW.into(), wins: [0, 0], fault: Some(s.p[0]) }
+        );
+        assert_eq!(scores(s.p, &o), [None, None]);
+        // Either game saying early is enough; an older game that does not say is early.
+        let mut s = Set::new();
+        s.both(1, Some(1), 5);
+        s.report(0, Leave::MatchQuality, Some(Cause::OwnPc), false, 400).report(
+            1,
+            Leave::MatchQuality,
+            None,
+            true,
+            400,
+        );
+        assert!(matches!(s.at_sec(400), Outcome::Void { fault: Some(_), .. }));
+        let mut s = Set::new();
+        s.both(1, Some(1), 5).report(0, Leave::MatchQuality, Some(Cause::OwnPc), false, 420);
+        let old = LeaveReport { early: None, ..s.leaves[0].clone() };
+        s.leaves.push(LeaveReport { reporter: s.p[1], cause: None, ..old });
+        assert!(matches!(s.at_min(7), Outcome::Void { fault: Some(_), .. }));
+        // Both PCs fell behind: nobody is blamed.
+        let mut s = Set::new();
+        s.report(0, Leave::MatchQuality, Some(Cause::OwnPc), false, 400).report(
+            1,
+            Leave::MatchQuality,
+            Some(Cause::OwnPc),
+            false,
+            400,
+        );
+        assert_eq!(
+            s.at_sec(400),
+            Outcome::Void { status: "TERMINATED", reason: MATCH_QUALITY_LOW.into(), wins: [0, 0], fault: None }
+        );
+    }
+
+    #[test]
+    fn an_abort_on_ones_own_connection_is_their_loss() {
+        // The link stalled (both games say "link"); mm saw player 1's connection go silent for a
+        // few seconds twice before the abort, player 0's never.
+        let mut s = Set::new();
+        s.online(0, true).online(1, true).both(1, Some(0), 5).trouble(1, 380, 383).trouble(1, 386, 389);
+        s.report(0, Leave::MatchQuality, Some(Cause::Link), false, 392);
+        let o = s.at_sec(392);
+        assert_eq!(
+            o,
+            Outcome::Abandoned { leaver: s.p[1], other: s.p[0], wins: [1, 0], fault: Some(Fault::MatchQuality) }
+        );
+        // Both connections in trouble, or neither: nobody is blamed (after the wait for the other
+        // game's report).
+        let mut s = Set::new();
+        s.trouble(1, 380, 383).trouble(0, 350, 351);
+        s.report(0, Leave::MatchQuality, Some(Cause::Link), false, 392).report(
+            1,
+            Leave::MatchQuality,
+            Some(Cause::Link),
+            false,
+            392,
+        );
+        assert_eq!(s.at_sec(392).fault(), None);
+        let mut s = Set::new();
+        s.trouble(1, 200, 230);
+        s.report(0, Leave::MatchQuality, Some(Cause::Link), false, 392).report(
+            1,
+            Leave::MatchQuality,
+            Some(Cause::Link),
+            false,
+            392,
+        );
+        assert!(
+            matches!(s.at_sec(392), Outcome::Void { status: "TERMINATED", fault: None, .. }),
+            "trouble long before"
+        );
+        // A blip of a second on one connection blames nobody.
+        let mut s = Set::new();
+        s.trouble(0, 385, 386);
+        s.report(0, Leave::MatchQuality, Some(Cause::Link), false, 392).report(
+            1,
+            Leave::MatchQuality,
+            Some(Cause::Link),
+            false,
+            392,
+        );
+        assert_eq!(s.at_sec(392).fault(), None);
+        // A PC that says it fell behind decides it, whatever mm saw of the other's connection.
+        let mut s = Set::new();
+        s.trouble(1, 380, 383);
+        s.report(0, Leave::MatchQuality, Some(Cause::OwnPc), false, 392);
+        assert_eq!(s.at_sec(392).fault(), Some(s.p[0]));
+    }
+
+    /// The user's, 2026-10-29: "it's when they decide to pull the network cable or something like
+    /// maybe after 10-15s after the start of the first game that it becomes potentially
+    /// intentional."
+    #[test]
+    fn a_connection_lost_on_ones_own_end_is_their_loss() {
+        // Player 1 pulls the cable in game 2: mm sees their connection go, and both games say the
+        // other left (player 1's once it is back).
+        let mut s = Set::new();
+        s.online(0, true).online(1, true).both(1, Some(0), 5).trouble(1, 400, 410);
+        s.report(0, Leave::OpponentLeft, None, false, 407).report(1, Leave::OpponentLeft, None, false, 430);
+        let o = s.at_sec(430);
+        assert_eq!(
+            o,
+            Outcome::Abandoned { leaver: s.p[1], other: s.p[0], wins: [1, 0], fault: Some(Fault::Connection) }
+        );
+        // Back with mm but no report of its own: decided at once all the same.
+        let mut s = Set::new();
+        s.online(0, true).online(1, true).both(1, Some(0), 5).trouble(1, 400, 410);
+        s.report(0, Leave::OpponentLeft, None, false, 407);
+        assert_eq!(s.at_sec(420).fault(), Some(s.p[1]));
+        // Gone from mm for good: abandoned after the grace period, as before, now counted as their
+        // connection.
+        let mut s = Set::new();
+        s.online(0, true).online(1, false).trouble(1, 400, 410);
+        s.report(0, Leave::OpponentLeft, None, false, 407);
+        assert_eq!(s.at_sec(420), Outcome::InProgress { wins: [0, 0] });
+        assert_eq!(
+            s.at_sec(530),
+            Outcome::Abandoned { leaver: s.p[1], other: s.p[0], wins: [0, 0], fault: Some(Fault::Connection) }
+        );
+        // In game 1's first seconds: void, counted against them.
+        let mut s = Set::new();
+        s.trouble(1, 100, 110);
+        s.report(0, Leave::OpponentLeft, None, true, 107).report(1, Leave::OpponentLeft, None, true, 130);
+        assert_eq!(
+            s.at_sec(130),
+            Outcome::Void { status: "TERMINATED", reason: CONNECTION_BROKE.into(), wins: [0, 0], fault: Some(s.p[1]) }
+        );
+        // Both connections went, or neither (the link between them broke): nobody is blamed.
+        let mut s = Set::new();
+        s.trouble(1, 400, 410).trouble(0, 401, 409);
+        s.report(0, Leave::OpponentLeft, None, false, 407).report(1, Leave::OpponentLeft, None, false, 407);
+        assert_eq!(
+            s.at_sec(407),
+            Outcome::Void { status: "TERMINATED", reason: CONNECTION_BROKE.into(), wins: [0, 0], fault: None }
+        );
     }
 
     #[test]

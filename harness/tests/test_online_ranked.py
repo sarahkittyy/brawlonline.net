@@ -1004,3 +1004,66 @@ def test_ranked_poor_match_quality_aborts_and_voids(backend: OnlineBackend,
         _wait(lambda g=g: g.debug_scratch()[1] >> 4 == 4, 30, f"{g.inst.name}: the CSS's error state")
         _wait(lambda g=g: "error='Match quality low, aborted.'" in _log(g), 10, f"{g.inst.name}: the line")
         g.shot("02-css-line")
+
+
+@pytest.mark.slow
+def test_ranked_pc_slowing_down_mid_set_loses_it(backend: OnlineBackend,
+                                                 dolphin: Callable[..., DolphinInstance],
+                                                 gpu_backend: str) -> None:
+    """A player whose own PC slows down after the set's first seconds loses the set, instead of
+    getting it voided (the user's, 2026-10-29: "if the game starts fast and then they decide to
+    manually slow it down, it should be aborted as a loss for them"). A's game counts every 2.5 s
+    from frame 1200 of each match as severe and as its own PC's
+    (PPR_GPRB_TEST_POOR_QUALITY_AFTER): game 1 runs normally for 20 s, then A aborts it. A's game
+    reports the abort with cause "self", not early; B's with its own view. The server makes it
+    A's loss (ABANDONED, "abandoned by <A>: match quality low", mm_matches.fault A): B's rating
+    goes up, A's down."""
+    test = "ranked-pc-slows-down"
+    ua, ub = backend.create_user("rsda", "RSDA"), backend.create_user("rsdb", "RSDB")
+    a = _boot(dolphin, "rsd-a", backend, ua, gpu_backend, test, "gameplay",
+              env={"PPR_GPRB_TEST_POOR_QUALITY_AFTER": "1200"})
+    b = _boot(dolphin, "rsd-b", backend, ub, gpu_backend, test, "gameplay")
+    _both(a.to_main_menu, b.to_main_menu)
+    _both(a.to_online_page, b.to_online_page)
+    _both(lambda: a.to_css("ranked"), lambda: b.to_css("ranked"))
+    for g in (a, b):
+        B.write_rules(g.c, stocks=1, minutes=2, items_off=True)
+        ppom.allow_test_rules(g.c)
+    _search_ranked(a)
+    _search_ranked(b)
+    _peer_shown(a, ub)
+    _peer_shown(b, ua)
+    players = [a, b]
+    for g in players:
+        _wait(lambda g=g: g.c.mm_status()["handoff"] == "started", 30, "the hand-off")
+    match_id = a.c.mm_status()["match"]["match_id"]
+    host = a if _ranked(a)["local_port"] == 0 else b
+    join = b if host is a else a
+    _both_on(players, SSS, "game 1: both on the stage select")
+    _wait_view(host, lambda v: v["type"] == 1 and v["my_turn"], "the host's strike")
+    _strike(host, 0x04, join)
+    _wait_view(join, lambda v: v["my_turn"], "the joiner's turn")
+    _strike(join, 0x21, host)
+    _strike(join, 0x2E, host)
+    _strike(host, 0x09, join)
+    online_set.wait(lambda: all(online_set.gstatus(g.c)["phase"] == "running" for g in players), 240,
+                    "game 1 running on both")
+
+    for g in players:
+        _wait(lambda g=g: online_set.gstatus(g.c)["quality_aborted"], 90, f"{g.inst.name}: the abort")
+        _wait(lambda g=g: _ranked(g)["quality_aborted"], 30, f"{g.inst.name}: the set reported aborted")
+    assert re.search(r"aborting the match \(link \d+, this PC \d+, the other PC \d+: self\)", _log(a)), \
+        _log(a)[-3000:]
+    assert "match quality poor from the set's start" not in _log(a), _log(a)[-3000:]
+    assert re.search(r"Ranked: set \S+ aborted, its match quality is low \(seen here: self\)", _log(a)), \
+        _log(a)[-3000:]
+    assert "in its first seconds" not in _log(a) and "in its first seconds" not in _log(b)
+
+    res = {}
+    for u in (ua, ub):
+        res[u.uid] = _wait(lambda u=u: (lambda r: r if r["status"] != "ASSIGNED" else None)(
+            backend._http("GET", f"/v1/ranked/result?matchId={match_id}&uid={u.uid}")), 180, "the set settled")
+    ra, rb = res[ua.uid], res[ub.uid]
+    assert ra["status"] == "ABANDONED" and ra["winner"] == ub.uid, ra
+    assert ra["reason"] == f"abandoned by {ua.uid}: match quality low", ra
+    assert ra["rating"]["change"] < 0 < rb["rating"]["change"], (ra, rb)
