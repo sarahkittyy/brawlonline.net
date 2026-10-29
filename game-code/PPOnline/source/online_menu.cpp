@@ -2563,12 +2563,8 @@ namespace OnlineMenu {
 
     const char* anyoneText()
     {
-        switch (anyoneSss()) {
-        case ANY_PICKING: return "Anyone picks: the first pick plays";
-        case ANY_PICKED: return "Picked!";
-        case ANY_DECIDED: return s.lockStage == anyoneStage() ? "" : "Another pick was first";
-        default: return "";
-        }
+        // (Sarah's board, 2026-10-29: the one line, the same as the MATCH SETUP row's help)
+        return anyoneSss() != ANY_NONE ? "ANYONE: Everyone picks at once" : "";
     }
 
     void u16Name(char* out, const u16* in)
