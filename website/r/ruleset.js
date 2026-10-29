@@ -159,6 +159,7 @@
         "loser-picks": "Game 1 random, then the loser picks",
         strike: `Strike ${r.strikes.join("-")} from the starters every game`,
         random: "Random every game",
+        "anyone-picks": "Every game, anyone picks any stage: the first pick plays",
       }[r.stageChoice];
       rows.push(["Set count", "No set: one game at a time"]);
       rows.push(["Stages", choice || r.stageChoice]);

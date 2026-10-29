@@ -215,6 +215,9 @@ struct PeerView
   bool seen = false;
   picojson::object extra;  // SetLocalExtra of the peer
   LockIn lock;
+  // Its cursor on an online stage select (its state's "sc"; off without one), and when heard.
+  SssCursor sss_cursor;
+  Clock::time_point sss_cursor_at{};
   MatchSetup setup;  // the host's setup (joiner)
   std::optional<RecoveryList> recovery;  // its checksums after a desync (the state's "dsr")
   u8 last_winner = 0xFF;
@@ -378,6 +381,8 @@ struct State
   LockIn local_lock;
   MatchSetup setup;
   u8 last_winner = 0xFF;
+  // This player's cursor on an online stage select (the game's, SetLocalSssCursor).
+  SssCursor local_sss_cursor;
   // Ports (bits) that pick the next game's stage (GameSetup::DecideOutcome; a 1v1: the loser,
   // both after a draw), and why the next game cannot be set up (GameSetup::SetupError).
   u8 last_pickers = 0;
@@ -2351,6 +2356,10 @@ void MaybeDecideSetup()
   // The stage pick: the last game's loser's (s.last_pickers: a 1v1's loser, both after a draw;
   // the game sends the lower port's), no one else's. A picker locks in with the character first
   // (STAGE_PENDING) and goes to the stage select once everyone is locked in: wait for that pick.
+  // In a room where anyone picks every player is a picker, all on the stage select at once: the
+  // first pick this machine sees is played (this runs on every lock-in heard and on our own, so
+  // the order is the order they arrive here; of picks that arrive together, the lowest port's),
+  // and the setup, once decided, stays.
   std::array<u16, Online::GameSetup::MAX_PORTS> picks{NO_STAGE, NO_STAGE, NO_STAGE, NO_STAGE};
   bool pick_pending = false;
   for (size_t i = 0; i < locks.size(); ++i)
@@ -2419,7 +2428,7 @@ void MaybeDecideSetup()
   }
   INFO_LOG_FMT(BRAWLBACK, "gprb lobby: game {} setup: stage {:#x}{}{}", game, st.stage,
                decided.applies ? " (decided by the ranked game setup)" :
-               pick            ? " (picked)" :
+               pick            ? fmt::format(" (picked by P{})", pick_port + 1) :
                       fmt::format(" (random from {} stages, {})", AllowedStages().size(),
                                   s.net_opts.stages.empty() ? "P+ legal list" : "server list"),
                who);
@@ -2476,6 +2485,14 @@ void SendState(bool tick = false)
     o["behind"] = picojson::value(s.behind);
     if (!s_local_extra.empty())
       o["x"] = picojson::value(s_local_extra);
+    // The stage select's cursor (20 a second with the tick), for the others to draw.
+    if (s.local_sss_cursor.on && !InMatchPhase())
+    {
+      const SssCursor& c = s.local_sss_cursor;
+      o["sc"] = picojson::value(picojson::array{picojson::value(static_cast<double>(c.page)),
+                                                picojson::value(static_cast<double>(c.x)),
+                                                picojson::value(static_cast<double>(c.y))});
+    }
     if (s.recovery.pending)
     {
       // After a desync where the game starts again: our checksums of the last confirmed frames
@@ -2795,6 +2812,16 @@ void HandleControl(std::string_view text, const sf::IpAddress& from, u16 from_po
   }
   if (const auto* x = get("lock"); x && x->is<picojson::object>())
     p.lock = LockFromJson(x->get<picojson::object>());
+  // Its stage select cursor: a page and position the stage select can have, else none.
+  if (const auto c = PeerData::ParseSssCursor(get("sc"), SSS_PAGES, SSS_CURSOR_RANGE))
+  {
+    p.sss_cursor = {true, c->page, c->x, c->y};
+    p.sss_cursor_at = p.last_heard;
+  }
+  else
+  {
+    p.sss_cursor = {};
+  }
   if (const auto n = PeerData::JsonUInt(get("winner"), 0xFF))
     p.last_winner = static_cast<u8>(*n);
   // Another module's state (GameSetup's strikes): only a small object is kept.
@@ -7068,6 +7095,12 @@ void SetStageDecider(std::function<StageDecision(u32 game)> decider)
   s_stage_decider = std::move(decider);
 }
 
+void SetLocalSssCursor(const SssCursor& cursor)
+{
+  std::lock_guard<std::recursive_timed_mutex> lk(s.mutex);
+  s.local_sss_cursor = cursor;
+}
+
 void SetLocalExtra(const picojson::object& extra)
 {
   std::lock_guard<std::recursive_timed_mutex> lk(s.mutex);
@@ -7155,6 +7188,15 @@ Lobby GetLobby()
   l.setup_error = s.setup_error;
   l.after_match = s.await_scene_exit;
   l.unheard = s.unheard_ports;
+  // The others' stage select cursors: heard in the last second (a state message comes every 50 ms).
+  if (l.active && !l.in_match)
+  {
+    const auto now = Clock::now();
+    ForEachPeer([&](int slot, const PeerView& p) {
+      if (!p.left && p.sss_cursor.on && now - p.sss_cursor_at < std::chrono::seconds(1))
+        l.sss_cursors[slot] = p.sss_cursor;
+    });
+  }
   return l;
 }
 

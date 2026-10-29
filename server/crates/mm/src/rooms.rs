@@ -316,11 +316,15 @@ impl Room {
     /// pickers who play it; when none does (they sit out or left), one of its players at random
     /// (the user's, 2026-10-18). `None`: the players' games decide (no report from them, or the
     /// ruleset leaves no stage to the loser).
+    /// Anyone picks: every player of the game, game 1 too (never one who sits out).
     fn next_pickers(&self, players: &[usize]) -> Option<u8> {
+        let mask = players.iter().fold(0u8, |m, &i| m | 1 << i);
+        if self.ruleset.anyone_picks() {
+            return Some(mask);
+        }
         let loser_picks = self.ruleset.best_of == 0
             && matches!(self.ruleset.stage_choice, StageChoice::LoserPicks | StageChoice::LoserPicksList);
         let reported = self.pickers.filter(|_| loser_picks)?;
-        let mask = players.iter().fold(0u8, |m, &i| m | 1 << i);
         Some(match reported & mask {
             0 if self.pick_owed && !players.is_empty() => 1 << players[self.pick_draw % players.len()],
             q => q,
@@ -3271,6 +3275,56 @@ mod tests {
         t.req(3, RoomRequest::Back { pickers: None });
         let out = sit(&mut t, 1, 3, true);
         assert_eq!(last_state(&out, 3)["slots"][2]["player"]["sittingOut"], true);
+    }
+
+    /// Anyone picks (Sarah's board, 2026-10-29): every player of the next game picks, game 1 too,
+    /// whatever the last game's players reported; a player sitting out never does; a set keeps its
+    /// own steps.
+    #[test]
+    fn anyone_picks_gives_every_player_the_pick() {
+        use common::rooms::RoomFormat;
+        let mut t = T::new();
+        let code = create(&mut t, 1);
+        t.req(1, RoomRequest::Slot { slot: 3, open: true });
+        join(&mut t, 2, &code);
+        join(&mut t, 3, &code);
+        let out = t.req(
+            1,
+            RoomRequest::Format(RoomFormat {
+                kind: None,
+                stage_choice: StageChoice::AnyonePicks,
+                strikes: vec![],
+                bans: 0,
+                dsr: false,
+                alternate_stages: true,
+            }),
+        );
+        let s = last_state(&out, 1);
+        assert_eq!(s["ruleset"]["stageChoice"], "anyone-picks");
+        assert_eq!(s["ruleset"]["alternateStages"], true, "alternate stages go with anyone's pick");
+        assert_eq!(s["pickers"], 0b111, "everyone picks, before game 1");
+        sit(&mut t, 3, 3, true);
+        let mut out = vec![];
+        t.book.announce(&code, &mut out);
+        assert_eq!(last_state(&out, 1)["pickers"], 0b11, "who sits out does not pick");
+        let out = ready_all(&mut t, &[1, 2]);
+        assert_eq!(start_of(&out, 1).unwrap()["pickers"], 0b11, "game 1: both pick");
+        tickets(&mut t, &code, &[1, 2]);
+        // The loser's report changes nothing: everyone picks again.
+        t.req(1, RoomRequest::Back { pickers: Some(0b10) });
+        t.req(2, RoomRequest::Back { pickers: Some(0b10) });
+        sit(&mut t, 3, 3, false);
+        let out = ready_all(&mut t, &[1, 2, 3]);
+        assert_eq!(start_of(&out, 1).unwrap()["pickers"], 0b111);
+        tickets(&mut t, &code, &[1, 2, 3]);
+        for n in 1..=3 {
+            t.req(n, RoomRequest::Back { pickers: Some(0b100) });
+        }
+        // A set: its steps pick (no pickers), and the stage choice is the set's.
+        let out = t.req(1, RoomRequest::BestOf { best_of: 3 });
+        let s = last_state(&out, 1);
+        assert_eq!(s["ruleset"]["stageChoice"], "loser-picks");
+        assert!(s.get("pickers").is_none_or(|p| p.is_null()), "{s}");
     }
 
     /// The loser picks: the last game's loser when they play the next game, else one of its

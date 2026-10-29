@@ -16,4 +16,5 @@ namespace StageLegal {
     int kindAt(int page, int pos);         // the stage at a page's position (P+'s tables), -1 none
     void onMsgCreate(MuMsg* m, u32 caller);  // the stage select's message object (its rule line)
     void onSssPrint(u32 caller);             // the stage select printed its rule line itself
+    void anyoneRandom();                     // anyone picks: START, a random stage of the room's
 }

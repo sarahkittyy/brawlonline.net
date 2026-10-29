@@ -10,10 +10,10 @@ export type RuleStyle = "time" | "stock" | "coin";
 export type RulePause = "normal" | "hold";
 /**
  * Without a set: `loser-picks` (game 1 random, then the loser picks any stage; the list only feeds random stages),
- * `loser-picks-list` (the same, held to the list), `strike` (every game struck from the starters) or `random` (every
- * game).
+ * `loser-picks-list` (the same, held to the list), `strike` (every game struck from the starters), `random` (every
+ * game) or `anyone-picks` (every player picks at once, game 1 too, seeing each other's cursors; the first pick plays).
  */
-export type StageChoice = "loser-picks" | "loser-picks-list" | "strike" | "random";
+export type StageChoice = "loser-picks" | "loser-picks-list" | "strike" | "random" | "anyone-picks";
 
 /**
  * P+'s Special Versus box (docs/design/special-rules.md): its rows in the box's order, each OFF or one of its two
@@ -250,9 +250,14 @@ export function strikesUsed(r: Ruleset): boolean {
   return r.bestOf > 0 || r.stageChoice === "strike";
 }
 
-/** Whether a player picks a stage in some game: a set's games 2+, or a loser without a set. */
+/** Whether a player picks a stage in some game: a set's games 2+, a loser without a set, or anyone. */
 export function picksUsed(r: Ruleset): boolean {
-  return r.bestOf > 0 || r.stageChoice === "loser-picks" || r.stageChoice === "loser-picks-list";
+  return (
+    r.bestOf > 0 ||
+    r.stageChoice === "loser-picks" ||
+    r.stageChoice === "loser-picks-list" ||
+    r.stageChoice === "anyone-picks"
+  );
 }
 
 /**
@@ -402,7 +407,7 @@ export function validateRuleset(r: Ruleset): string | null {
     return "The stage choice is for rulesets without a set";
   }
   if (r.alternateStages && !picksUsed(r)) {
-    return "Alternate stages need a stage pick: a set, or the loser picks";
+    return "Alternate stages need a stage pick: a set, the loser or anyone picks";
   }
   if (strikesUsed(r)) {
     const left = r.stages.starters.length - 1;
@@ -542,7 +547,7 @@ function checkTypes(r: Ruleset): string | null {
   if (typeof r.name !== "string") {
     return "name";
   }
-  if (!["loser-picks", "loser-picks-list", "strike", "random"].includes(r.stageChoice)) {
+  if (!["loser-picks", "loser-picks-list", "strike", "random", "anyone-picks"].includes(r.stageChoice)) {
     return "stageChoice";
   }
   if (!isInt(r.bestOf) || !isInt(r.bans) || typeof r.dsr !== "boolean") {

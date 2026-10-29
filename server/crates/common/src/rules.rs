@@ -399,6 +399,11 @@ pub enum StageChoice {
     Strike,
     /// A random stage every game.
     Random,
+    /// Every player of the game picks on the stage select at once, game 1 too, each seeing the
+    /// others' cursors; the first pick the game's host sees is played (Sarah's board, 2026-10-29:
+    /// "first stage anyone picks gets to play"). Any stage; P+'s random (START) draws from the
+    /// stage list. Players who sit out do not pick.
+    AnyonePicks,
 }
 
 /// The stage lists. Two separate lists, as tournament rulesets write them: game 1 of a set (and
@@ -498,9 +503,20 @@ impl Ruleset {
         self.best_of > 0 || self.stage_choice == StageChoice::Strike
     }
 
-    /// Whether a player picks a stage in some game: a set's games 2+, or a loser without a set.
+    /// Whether a player picks a stage in some game: a set's games 2+, a loser without a set, or
+    /// anyone ([`StageChoice::AnyonePicks`]).
     pub fn picks_used(&self) -> bool {
-        self.best_of > 0 || matches!(self.stage_choice, StageChoice::LoserPicks | StageChoice::LoserPicksList)
+        self.best_of > 0
+            || matches!(
+                self.stage_choice,
+                StageChoice::LoserPicks | StageChoice::LoserPicksList | StageChoice::AnyonePicks
+            )
+    }
+
+    /// Whether every player picks the stage, first pick played ([`StageChoice::AnyonePicks`]; not
+    /// with a set).
+    pub fn anyone_picks(&self) -> bool {
+        self.best_of == 0 && self.stage_choice == StageChoice::AnyonePicks
     }
 
     /// Whether a loser's stage pick is held to the stage list ([`StageChoice::LoserPicksList`]; a
@@ -572,7 +588,7 @@ impl Ruleset {
             return Err("The stage choice is for rulesets without a set".into());
         }
         if self.alternate_stages && !self.picks_used() {
-            return Err("Alternate stages need a stage pick: a set, or the loser picks".into());
+            return Err("Alternate stages need a stage pick: a set, the loser or anyone picks".into());
         }
 
         if self.strikes_used() {
@@ -897,6 +913,17 @@ mod tests {
         a.normalize();
         assert!(a.alternate_stages);
         a.validate().unwrap();
+        // Anyone picks: a pick too (alternate stages kept); a set normalizes it to the loser's.
+        let mut c: Ruleset =
+            serde_json::from_str(r#"{"name": "x", "stageChoice": "anyone-picks", "alternateStages": true}"#).unwrap();
+        c.normalize();
+        c.validate().unwrap();
+        assert!(c.anyone_picks() && c.alternate_stages && !c.pick_from_stages());
+        assert_eq!(serde_json::to_value(&c).unwrap()["stageChoice"], "anyone-picks");
+        c.best_of = 3;
+        c.strikes = vec![1, 2, 1];
+        c.normalize();
+        assert_eq!((c.stage_choice, c.anyone_picks()), (StageChoice::LoserPicks, false));
         for choice in [StageChoice::Strike, StageChoice::Random] {
             let mut b = Ruleset { name: "x".into(), stage_choice: choice, alternate_stages: true, ..Default::default() };
             if choice == StageChoice::Strike {

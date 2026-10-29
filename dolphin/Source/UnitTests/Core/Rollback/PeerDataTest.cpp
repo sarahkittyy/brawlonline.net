@@ -79,6 +79,35 @@ TEST(PeerData, NumbersAreCheckedBeforeAnyCast)
   EXPECT_EQ(JsonUInt(&v, 0xFFFFFFFF), 0xFFFFFFFFu);
 }
 
+TEST(PeerData, StageSelectCursorIsChecked)
+{
+  // A peer's cursor (its state's "sc": [page, x, y]) is written into the game's LOCAL: only a
+  // page and a position the stage select can have.
+  picojson::value v;
+  auto cur = [&](const std::string& text) {
+    v = picojson::value();
+    picojson::parse(v, text);
+    return ParseSssCursor(&v, 8, 4096);
+  };
+  const auto ok = cur("[2, -1200, 4096]");
+  ASSERT_TRUE(ok.has_value());
+  EXPECT_EQ(ok->page, 2);
+  EXPECT_EQ(ok->x, -1200);
+  EXPECT_EQ(ok->y, 4096);
+  EXPECT_TRUE(cur("[7, 0, -4096]").has_value());
+  EXPECT_FALSE(cur("[8, 0, 0]").has_value());
+  EXPECT_FALSE(cur("[0, 4097, 0]").has_value());
+  EXPECT_FALSE(cur("[0, 0, -4097]").has_value());
+  EXPECT_FALSE(cur("[0, 1.5, 0]").has_value());
+  EXPECT_FALSE(cur("[0, 1e300, 0]").has_value());
+  EXPECT_FALSE(cur("[-1, 0, 0]").has_value());
+  EXPECT_FALSE(cur("[0, 0]").has_value());
+  EXPECT_FALSE(cur("[0, 0, 0, 0]").has_value());
+  EXPECT_FALSE(cur("[0, \"1\", 0]").has_value());
+  EXPECT_FALSE(cur("{\"page\": 0}").has_value());
+  EXPECT_FALSE(ParseSssCursor(nullptr, 8, 4096).has_value());
+}
+
 TEST(PeerData, NumbersThatOverflowAreRefusedBeforeParsing)
 {
   // Dolphin's picojson calls std::abort() when a number parses to infinity: one control message

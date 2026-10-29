@@ -185,6 +185,29 @@ namespace StageLegal {
         s_sssMsg->printf(0, "%s", text);
     }
 
+    // Anyone picks: START (or A on RANDOM) picks a random stage of the room's (its starters and
+    // counterpicks on P+'s pages; none: P+'s legal list), as P+'s random keeps to them where the
+    // loser picks any stage. This machine's own draw (the menus' random numbers are not the
+    // match's), sent as the player's pick.
+    void anyoneRandom()
+    {
+        if (OnlineMenu::anyoneSss() != OnlineMenu::ANY_PICKING) return;
+        const PPOM::Session& se = PPOM::g_block.session;
+        u8 kinds[64];
+        int n = 0;
+        for (int id = 1; id < 256 && n < (int)sizeof(kinds); id++) {
+            if ((PPOM::stageBit(se.stages.starters, id) || PPOM::stageBit(se.stages.counterpicks, id)) && selectableKind(id))
+                kinds[n++] = (u8)id;
+        }
+        for (u32 i = 0; n == 0 && i < sizeof(PPLUS_LEGAL); i++) {
+            if (selectableKind(PPLUS_LEGAL[i])) kinds[n++] = PPLUS_LEGAL[i];
+        }
+        if (n == 0) return;
+        static u32 seed = 0;
+        seed = seed * 1664525u + 1013904223u + PPOM::g_block.debug.frames * 2654435761u;
+        OnlineMenu::anyonePick(kinds[(seed >> 16) % (u32)n], OnlineMatch::sssAsl());
+    }
+
     int kindAt(int page, int pos)
     {
         if (page < 0 || page >= PAGES || pos < 0) return -1;
@@ -339,9 +362,34 @@ extern "C" {
     // Ranked: leave the stage select at once (A on any stage: the steps decide the stage).
     static bool s_autoLeave = false;
 
+    // Anyone picks: leave at once with SESSION's stage (the host took the first pick).
+    static bool s_anyLeave = false;
+
     // H1: returns the pressed buttons the rest of buttonProc (P+'s hooks) sees in r3.
     __attribute__((used)) u32 pponline_sssButtons(u8* task, u32 pressed)
     {
+        const int any = OnlineMenu::anyoneSss();
+        if (any != OnlineMenu::ANY_NONE) {
+            // Anyone picks (online_menu.cpp anyoneSss): A on a stage is a pick (H2 sends it and keeps
+            // the stage select), A on RANDOM a random one; no B, X (P+'s strikes are this screen's
+            // only), START (online_menu.cpp: random) or Z. Once the host took the first pick, or
+            // the session is gone, the stage select leaves as Ranked's does (an A, nothing
+            // hovered: H2 gives the stage).
+            u32 out = pressed & ~(0x200u | 0x400u | 0x80000u | 0x1000u | 0x10u);
+            u32* hovered = (u32*)(task + 0x244);
+            StageLegal::showTurn(OnlineMenu::anyoneText());
+            s_anyLeave = any == OnlineMenu::ANY_DECIDED || any == OnlineMenu::ANY_GONE;
+            if (s_anyLeave) {
+                if (*hovered - 0x30u <= 7u) *hovered = 0;
+                return out | 0x100u;
+            }
+            if ((out & 0x100u) && (*hovered == 0x36 || *hovered == 0x37)) {
+                out &= ~0x100u;
+                if (*hovered == 0x36) StageLegal::anyoneRandom();
+            }
+            return out;
+        }
+        s_anyLeave = false;
         if (StageLegal::roomPick() == StageLegal::ROOM_RANDOM) {
             StageLegal::apply(false);   // any stage: only P+'s random keeps to the room's stages
             return pressed;
@@ -388,6 +436,26 @@ extern "C" {
     // H2: the selection A/START would take on a normal page, or -1.
     __attribute__((used)) int pponline_sssFilterPos(u8* task, int pos)
     {
+        const int any = OnlineMenu::anyoneSss();
+        if (any != OnlineMenu::ANY_NONE) {
+            int page = *(u8*)StageLegal::CURRENT_PAGE;
+            if (s_anyLeave) {
+                // The stage the host took where this page has it (its icon is the one picked on
+                // every screen), else any stage: the match plays SESSION's whatever this says.
+                int kind = OnlineMenu::anyoneStage();
+                for (int p = 0; p < 39; p++) {
+                    if (StageLegal::kindAt(page, p) == kind) return p;
+                }
+                for (int p = 0; p < 39; p++) {
+                    if (StageLegal::kindAt(page, p) > 0) return p;
+                }
+                return pos;
+            }
+            // A pick: sent in the lock-in; the stage select stays until the host took one.
+            int kind = StageLegal::kindAt(page, pos);
+            if (pos >= 0 && kind > 0) OnlineMenu::anyonePick((u16)kind, OnlineMatch::sssAsl());
+            return -1;
+        }
         if (!StageLegal::active()) return pos;
         int page = *(u8*)StageLegal::CURRENT_PAGE;
         if (StageLegal::ranked() && s_autoLeave) {
@@ -555,7 +623,12 @@ extern "C" {
     // H3: 1 if a stage-builder / custom-list stage may be taken.
     __attribute__((used)) int pponline_sssCustomAllowed()
     {
-        if (!StageLegal::active()) return 1;
+        // (anyone picks: a pick never leaves the stage select by itself, and a custom stage is not
+        // a stage kind the lock-in can carry)
+        // (once it leaves, any stage it takes does: the match plays SESSION's)
+        const int any = OnlineMenu::anyoneSss();
+        if (any == OnlineMenu::ANY_DECIDED || any == OnlineMenu::ANY_GONE) return 1;
+        if (!StageLegal::active() && any == OnlineMenu::ANY_NONE) return 1;
         PPOM::g_block.debug.scratch[13]++;
         return 0;
     }

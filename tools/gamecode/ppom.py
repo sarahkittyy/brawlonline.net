@@ -113,7 +113,7 @@ def _parse_block(c: HarnessClient, a: int):
     if hdr[:4] != MAGIC:
         return None
     ver, sz, mbo, mbs, so, ss, lo, ls, dbo, dbs = struct.unpack_from(">HHHHHHHHHH", hdr, 4)
-    if ver in (1, 2, 3, 4, 5, 6, 7, 8, 9) and 0x100 < sz < 0x4000 and mbo and dbo:
+    if ver in (1, 2, 3, 4, 5, 6, 7, 8, 9, 10) and 0x100 < sz < 0x4000 and mbo and dbo:
         return Block(a, ver, sz, a + mbo, mbs, a + dbo, dbs, a + so if ss else 0, ss,
                      a + lo if ls else 0, ls)
     return None
@@ -314,7 +314,22 @@ def read_local(c: HarnessClient, b: Block) -> dict:
             "lock_pad": d[0x35],   # the controller whose START locked in: GameCube 0-3, Wii Remotes 4-7
             **({"own": port_values(d[0x40:0x40 + PORT_VALUES_SIZE]),
                 "hud_disconnected": d[0x7C], "desynced": d[0x7D], "quit_left": d[0x7F]}
-               if len(d) >= 0x80 else {})}
+               if len(d) >= 0x80 else {}),
+            **({"own_cursor": sss_cursor(d[L_OWN_CURSOR:L_OWN_CURSOR + 8]),
+                "cursors": [sss_cursor(d[L_CURSORS + 8 * i:L_CURSORS + 8 * (i + 1)]) for i in range(4)]}
+               if len(d) >= L_CURSORS + 32 else {})}
+
+
+# ---- v10: the stage select's cursors (LOCAL; docs/game-code.md §11) ----
+L_OWN_CURSOR, L_CURSORS = 0xC8, 0xD0
+CHOICE_ANYONE_PICKS = 4
+
+
+def sss_cursor(d: bytes) -> dict | None:
+    """ppom.h SssCursor: a player's cursor on an online stage select (x, y in stage select units),
+    None when not on one."""
+    state, page, x, y = struct.unpack_from(">BBxxhh", d, 0)
+    return {"page": page, "x": x / 64.0, "y": y / 64.0} if state == 1 else None
 
 
 def read_session(c: HarnessClient, b: Block) -> dict:

@@ -355,6 +355,21 @@ void SetDesyncRecovery(bool on);
 void SetQualityAbort(bool on);
 constexpr const char* QUALITY_ABORT_TEXT = "Match quality low, aborted.";
 
+// A player's cursor on an online stage select (the game's LOCAL ownCursor, PPOM v10; Sarah's
+// board, 2026-10-29: the players see each other's cursors where several are on it at once: a room
+// where anyone picks, Ranked's strikes). x, y in 1/64 units of the stage select; page: P+'s page.
+constexpr u8 SSS_PAGES = 8;
+constexpr s16 SSS_CURSOR_RANGE = 64 * 64;
+struct SssCursor
+{
+  bool on = false;  // on the stage select
+  u8 page = 0;
+  s16 x = 0, y = 0;
+  bool operator==(const SssCursor&) const = default;
+};
+// This player's cursor (the game's, every frame; GameBridge), sent with the state message.
+void SetLocalSssCursor(const SssCursor& cursor);
+
 struct Lobby
 {
   bool active = false;        // a network session exists (connecting .. running)
@@ -386,6 +401,9 @@ struct Lobby
   // The session gave up connecting: these players (in-game ports as bits) were never heard from
   // (Online::PEER_NEVER_HEARD_TIMEOUT_MS); kept until the next session.
   u8 unheard = 0;
+  // The other players' stage select cursors, by in-game port (this player's own and anyone not
+  // heard from lately: not `on`). None in a match.
+  std::array<SssCursor, MAX_LOBBY_PLAYERS> sss_cursors{};
 };
 Lobby GetLobby();
 

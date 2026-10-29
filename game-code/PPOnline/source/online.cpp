@@ -19,6 +19,7 @@
 #include "online_menu.h"
 #include "netmenu.h"
 #include "ppom.h"
+#include "sss_cursors.h"
 #include "sss_portraits.h"
 #include "stage_legal.h"
 
@@ -115,6 +116,7 @@ namespace Online {
         OnlineMenu::tick();
         StageLegal::tick();
         SssPortraits::tick();
+        SssCursors::tick();
         Rpc::tick();
     }
 

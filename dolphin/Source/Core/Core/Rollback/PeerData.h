@@ -121,6 +121,15 @@ std::optional<std::vector<u8>> ParseHex(std::string_view hex, size_t bytes);
 // the target type's range is undefined behaviour, so nothing is cast before this check.)
 std::optional<u64> JsonUInt(const picojson::value* v, u64 max);
 
+// A peer's cursor on an online stage select, its state's "sc": [page, x, y], page below
+// `max_page`, x and y whole numbers within +-`range` (1/64 units). Else nullopt.
+struct SssCursorValues
+{
+  u8 page = 0;
+  s16 x = 0, y = 0;
+};
+std::optional<SssCursorValues> ParseSssCursor(const picojson::value* v, u8 max_page, s16 range);
+
 // gmCharacterKind values the online character select can lock in (docs/brawl-memory-map.md):
 // the playable kinds 0x00-0x11 and 0x13-0x2B, and P+'s Roy 0x32, Mewtwo 0x33 and Knuckles 0x35.
 // Not P+'s hold-shield forms 0x2C (Giga Bowser) and 0x2D (Wario-Man): they are not played online.
@@ -334,6 +343,7 @@ std::vector<std::optional<u32>> RecordedCodeMenuValues(const std::vector<u8>& re
 // ASCII only (anything else becomes '?'), at most MAX_LEAVE_REASON_LEN characters.
 constexpr size_t MAX_LEAVE_REASON_LEN = 160;
 std::string LeaveReason(std::string_view why);
+
 // Ranked's match quality (GameplaySession's UpdateMatchQuality): Slippi's poor-performance
 // termination (Ishiiruka 3.6.3 and 3.6.4, CEXISlippi::handlePoorMatchPerformance). Every
 // QUALITY_INTERVAL_FRAMES (2.5 s) of a game adds a debt for how slowly that interval ran and how
