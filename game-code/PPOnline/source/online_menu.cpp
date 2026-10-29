@@ -542,14 +542,20 @@ namespace OnlineMenu {
     // lock-in took it for the player's own, and both players started game 2 as P1's first
     // character (Sarah's board, 2026-10-29: "we ended up as the same character next game, like
     // even though he never picked kirby"). The CSS gets them back on the way from the match
-    // (restoreCss), as it gets the coin: the player's own roster, to place more coins on.
+    // (restoreCss), as it gets the coin: the player's own roster, played again if no coin is placed.
+    // The first coin placed after the match starts a new roster (allStarFreshStart): appended, the
+    // new picks would come after the old ones, past the stocks of the match (Sarah, 2026-10-29:
+    // "picking 4 new characters starts that game with those 4").
     static u8 s_allStarTable[4 * 0xA0];
     static u8 s_allStarTwin[4 * 0x70];
     static bool s_allStarSaved = false;
+    static int s_allStarKept = 0;   // the entries restoreCss put back, while no coin was placed since
+    static int allStarCount();
 
     static void saveAllStarTables(bool on)
     {
         s_allStarSaved = on;
+        s_allStarKept = 0;
         if (!on) return;
         memcpy(s_allStarTable, (const void*)0x80588000, sizeof(s_allStarTable));
         memcpy(s_allStarTwin, (const void*)0x80588300, sizeof(s_allStarTwin));
@@ -561,6 +567,7 @@ namespace OnlineMenu {
         s_allStarSaved = false;
         memcpy((void*)0x80588000, s_allStarTable, sizeof(s_allStarTable));
         memcpy((void*)0x80588300, s_allStarTwin, sizeof(s_allStarTwin));
+        s_allStarKept = allStarCount();
     }
 
     // The characters on the local panel's All-Star roster (P+'s table up to its 0xCC).
@@ -580,6 +587,7 @@ namespace OnlineMenu {
         u8* b = (u8*)(0x80588300 + LOCAL_PORT * 0x70);
         int n = allStarCount();
         if (n == 0) return false;
+        s_allStarKept = 0;   // (taking one off keeps the rest: the next coin goes after them)
         n--;
         a[3 * n] = 0xCC;
         a[3 * n + 1] = a[3 * n + 2] = 0;
@@ -587,6 +595,33 @@ namespace OnlineMenu {
         b[2 * n] = b[2 * n + 1] = 0;
         b[0x68] = (u8)(2 * n);
         return true;
+    }
+
+    // The kept roster gives way to the first coin placed after the match (P+'s CSS hook appends it
+    // after the kept entries): the new entries move to the front, in both tables.
+    static void allStarFreshStart()
+    {
+        if (s_allStarKept <= 0) return;
+        int n = allStarCount();
+        if (n <= s_allStarKept) {
+            if (n < s_allStarKept) s_allStarKept = 0;
+            return;
+        }
+        u8* a = (u8*)(0x80588000 + LOCAL_PORT * 0xA0);
+        u8* b = (u8*)(0x80588300 + LOCAL_PORT * 0x70);
+        int k = s_allStarKept, m = n - k;
+        u8 tmp[0x9C];   // (through a copy: the plugin has memcpy, not memmove, far_mem.cpp)
+        memcpy(tmp, a + 3 * k, 3 * m);
+        memcpy(a, tmp, 3 * m);
+        memset(a + 3 * m, 0, 3 * k);
+        if (3 * n < 0x99) a[3 * n] = 0;   // (the old end mark)
+        a[3 * m] = 0xCC;
+        a[0x9C] = (u8)(3 * m);
+        memcpy(tmp, b + 2 * k, 2 * m);
+        memcpy(b, tmp, 2 * m);
+        memset(b + 2 * m, 0, 2 * k);
+        b[0x68] = (u8)(2 * m);
+        s_allStarKept = 0;
     }
 
     // Slippi's lock-in (MSRB_IS_LOCAL_PLAYER_READY + SET_MATCH_SELECTIONS) into LOCAL.
@@ -2937,6 +2972,7 @@ namespace OnlineMenu {
         // All-Star: X / Y with the coin in the hand take the roster's last character off.
         const u32 BTN_X = 0x400, BTN_Y = 0x800;
         u8* myArea = playerArea();
+        if (in && specialRowIs(PPOM::SR_OTHER, 2) && !roomLocked()) allStarFreshStart();
         if (in && !rulesOpen && specialRowIs(PPOM::SR_OTHER, 2) && myArea && myArea[0x1F8] && !roomLocked() &&
             (pressed & (BTN_X | BTN_Y)) && allStarRemoveLast()) {
             playSE(SE_BACK);

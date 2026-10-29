@@ -305,7 +305,9 @@ def test_all_star_room_css_and_next_game(backend: OnlineBackend, dolphin: Callab
                                          gpu_backend: str) -> None:
     """The All-Star room CSS runs at full speed, and the next game starts from each player's own
     roster (Sarah's board, 2026-10-29: "why am i 45 fps after one game in all-star mode", "we also
-    ended up as the same character next game, like even though he never picked kirby"). P+'s
+    ended up as the same character next game, like even though he never picked kirby"): the one
+    they kept, or the new one the first coin placed after the game starts ("picking 4 new
+    characters starts that game with those 4"). P+'s
     All-Star code in the CSS's setChar leaves 0xAC in r15, where RoomCss kept the other panel's
     view: every frame that panel was set up again, and P+'s AsyncRSP copied its portrait (0.9 MB,
     byte by byte); the CSS ran at about 47 frames a second before and after a game. The match
@@ -342,7 +344,14 @@ def test_all_star_room_css_and_next_game(backend: OnlineBackend, dolphin: Callab
         assert g.c.read_mem(ALL_STAR_TABLE, 0xA0) == own[g.name][0], g.c.read_mem(ALL_STAR_TABLE, 8).hex()
         assert g.c.read_mem(ALL_STAR_TWIN, 0x70) == own[g.name][1]
         g.shot("back-on-css")
-    # Game 2 with the coins kept (no new coin): each player's own roster, its first character first.
+    # Game 2: A keeps its roster (no new coin); B places Pikachu then Roy, a new roster of those two.
+    pikachu, roy = B.CSS_ID["pikachu"], B.CSS_ID["roy"]
+    B.css_pick_character(b.c, 0, pikachu)
+    B.css_pick_character(b.c, 0, roy)
+    b.steps("wait 30")
+    kinds = [B.CSS_TO_CHAR_KIND[pikachu], B.CSS_TO_CHAR_KIND[roy]]
+    tb = b.c.read_mem(ALL_STAR_TABLE, 7)
+    assert [tb[0], tb[3], tb[6]] == [*kinds, 0xCC], tb.hex()
     a.steps("tap START 8", "wait 40")
     _wait(lambda: ppom.read_room(b.c, ppom.find_block(b.c))["slots"][0]["bits"] & ppom.SLOT_READY, 30, "B sees A ready")
     b.steps("tap START 8", "wait 10")
@@ -350,9 +359,11 @@ def test_all_star_room_css_and_next_game(backend: OnlineBackend, dolphin: Callab
     a.steps("wait 200")
     for g in players:
         se = ppom.read_session(g.c, ppom.find_block(g.c))
-        assert [x["roster"] for x in se["extra"][:2]] == [rosters[a.name], rosters[b.name]], se["extra"][:2]
+        ra, rb = [x["roster"] for x in se["extra"][:2]]
+        assert ra == rosters[a.name], ra
+        assert [(e[0], e[3]) for e in rb] == [(kinds[0], pikachu), (kinds[1], roy)], rb
         mm = g.c.read_mem(u32(g, u32(g, GG) + MODE_MELEE) + MM_PLAYERS, 2 * PLAYER_SIZE)
-        assert [mm[i * PLAYER_SIZE] for i in range(2)] == [marth[0], fox[0]], (g.name, mm[0], mm[PLAYER_SIZE])
+        assert [mm[i * PLAYER_SIZE] for i in range(2)] == [marth[0], kinds[0]], (g.name, mm[0], mm[PLAYER_SIZE])
         g.shot("game-2")
 
 
