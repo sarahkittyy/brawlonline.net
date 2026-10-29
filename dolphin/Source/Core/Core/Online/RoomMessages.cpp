@@ -430,7 +430,8 @@ std::optional<View> ParseView(const picojson::object& o, std::string* why)
     v.ruleset.based_on = Str(ro, "basedOn", MAX_NAME_BYTES + 16).value_or("");
     v.ruleset.best_of = static_cast<u8>(Int(ro, "bestOf", 0, 7).value_or(0));
     const auto choice = Str(ro, "stageChoice", 24).value_or("loser-picks");
-    v.ruleset.stage_choice = choice == "strike" || choice == "random" || choice == "loser-picks-list" ?
+    v.ruleset.stage_choice = choice == "strike" || choice == "random" || choice == "loser-picks-list" ||
+                                     choice == "anyone-picks" ?
                                  choice :
                                  std::string("loser-picks");
     if (const picojson::value* st = Find(ro, "stages"); st && st->is<picojson::object>())
@@ -951,7 +952,7 @@ std::optional<std::string> RequestJson(const Request& r)
   case Op::Format:
   {
     if (r.stage_choice != "loser-picks" && r.stage_choice != "loser-picks-list" &&
-        r.stage_choice != "strike" && r.stage_choice != "random")
+        r.stage_choice != "strike" && r.stage_choice != "random" && r.stage_choice != "anyone-picks")
     {
       return std::nullopt;
     }

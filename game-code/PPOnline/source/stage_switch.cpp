@@ -203,7 +203,8 @@ namespace StageSwitch {
         u8 c = se.play.stageChoice;
         s.choice = se.play.bestOf == 0 && (c == PPOM::CHOICE_LOSER_PICKS || c == PPOM::CHOICE_LOSER_PICKS_LIST) ? c : 0xFF;
         s.roomChoice = s.choice;
-        s.fixedChoice = se.play.bestOf == 0 && (c == PPOM::CHOICE_STRIKE || c == PPOM::CHOICE_RANDOM) ? c : 0xFF;
+        s.fixedChoice = se.play.bestOf == 0 && (c == PPOM::CHOICE_STRIKE || c == PPOM::CHOICE_RANDOM ||
+                                                c == PPOM::CHOICE_ANYONE_PICKS) ? c : 0xFF;
         s.hazards = se.rules.hazards != 0;
         memcpy(s.hazStages, se.rules.hazardStages, sizeof(s.hazStages));
         s.canEdit = canEdit;
@@ -669,6 +670,7 @@ namespace StageSwitch {
         if (s.choice == 0xFF) {
             if (s.fixedChoice == PPOM::CHOICE_STRIKE) return "Every game's stage is struck from the list.";
             if (s.fixedChoice == PPOM::CHOICE_RANDOM) return "Every game's stage is drawn from the list.";
+            if (s.fixedChoice == PPOM::CHOICE_ANYONE_PICKS) return "Anyone picks any stage; START draws from the list.";
             return "In a set the loser always picks from the list.";
         }
         if (!s.canEdit) {

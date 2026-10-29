@@ -64,7 +64,11 @@ constexpr u32 MAGIC = 0x50504F4D;  // "PPOM"
 // LOCAL grows to 0xC8 with the player's own PortExtra at +0x80, written with the lock-in.
 // ROOM_RULES carries the special rows, ROOM_FORMAT (14) the MATCH SETUP page. A v4-v8 plugin
 // still works (no special modes).
-constexpr u16 VERSION = 9;
+// 10: the stage select's cursors (Sarah's board, 2026-10-29): LOCAL grows to 0xF0 with the player's
+// own cursor at +0xC8 (game-written, every frame of an online stage select) and the other players'
+// at +0xD0 (by in-game port), and RoomPlay's stage choice 4, anyone picks. A v4-v9 plugin still
+// works (no cursors; anyone picks shows as loser picks).
+constexpr u16 VERSION = 10;
 constexpr u16 MIN_VERSION = 4;
 constexpr u32 HEADER_SIZE = 0x24;
 
@@ -84,12 +88,17 @@ constexpr u32 MAILBOX_SIZE = MB_RESP + RESP_PAYLOAD_OFF + RESP_PAYLOAD;  // 0x41
 // LOCAL (per machine, excluded from rollback; follows the mailbox): Dolphin's view of this
 // player's session, and the game's lock-in.
 constexpr u32 LOCAL_SIZE_V8 = 0x80;
-constexpr u32 LOCAL_SIZE = 0xC8;
+constexpr u32 LOCAL_SIZE_V9 = 0xC8;
+constexpr u32 LOCAL_SIZE = 0xF0;
 // v9: the player's special-mode picks (ppom.h PortExtra), game-written with the lock-in.
 constexpr u32 L_OWN_EXTRA = 0x80;
+// v10: ppom.h SssCursor {state, page, pad[2], x s16, y s16}: the player's own (game) and the
+// others' by in-game port (Dolphin), out of the rolled-back state as all of LOCAL.
+constexpr u32 L_OWN_CURSOR = 0xC8, L_CURSORS = 0xD0, CURSOR_SIZE = 8;
+constexpr u32 CUR_STATE = 0, CUR_PAGE = 1, CUR_X = 4, CUR_Y = 6;
 constexpr u32 LocalSize(u16 version)
 {
-  return version >= 9 ? LOCAL_SIZE : LOCAL_SIZE_V8;
+  return version >= 10 ? LOCAL_SIZE : version >= 9 ? LOCAL_SIZE_V9 : LOCAL_SIZE_V8;
 }
 constexpr u32 L_SEQ = 0x00, L_STATE = 0x04, L_LOCAL_PORT = 0x05, L_REMOTE_READY = 0x06,
               L_DISCONNECTED = 0x07, L_PEER_NAME = 0x08, L_LOCK = 0x28;
@@ -122,8 +131,10 @@ constexpr u32 S_RULES = 0x220;  // v6: ppom.h Rules
 constexpr u32 S_PLAY = 0x240, RP_VALID = 0, RP_BEST_OF = 1, RP_CHOICE = 2, RP_CUSTOM = 3, RP_CODE = 4,
               RP_NAME = 0x0C, RP_NAME_LEN = 32, RP_SET_ON = 0x2C, RP_SET_GAME = 0x2D, RP_SCORE = 0x2E,
               RP_SIDES = 0x30, RP_SET_FLAGS = 0x32, RP_SIDE_SLOTS = 0x33, RP_WINNER = 0x35;
-// RoomPlay's stage choice: 0 loser picks (any stage), 1 strike, 2 random, 3 loser picks from the list.
-constexpr u8 CHOICE_LOSER_PICKS = 0, CHOICE_STRIKE = 1, CHOICE_RANDOM = 2, CHOICE_LOSER_PICKS_LIST = 3;
+// RoomPlay's stage choice: 0 loser picks (any stage), 1 strike, 2 random, 3 loser picks from the list,
+// 4 (v10) anyone picks.
+constexpr u8 CHOICE_LOSER_PICKS = 0, CHOICE_STRIKE = 1, CHOICE_RANDOM = 2, CHOICE_LOSER_PICKS_LIST = 3,
+             CHOICE_ANYONE_PICKS = 4;
 // v7: ppom.h RoomStages: the room's stages as bit masks over stage ids 0-255 (id k: byte k / 8,
 // mask 1 << k % 8), the starters and the counterpicks.
 constexpr u32 S_STAGES = 0x280, RS_STARTERS = 0, RS_COUNTERPICKS = 0x20, STAGE_MASK_BYTES = 0x20;
@@ -190,7 +201,9 @@ constexpr u8 RF_IN = 1, RF_PUBLIC = 2, RF_TEAMS = 4, RF_WATCH = 8, RF_TEAM_COLOR
 constexpr u8 TEAMS_LEGACY = 1, TEAMS_RAINBOW = 2, TEAMS_COLORS = 3;
 static_assert(L_ROOM_CREATE == L_DESYNCED + 1 && L_QUIT_LEFT == L_ROOM_CREATE + 1 &&
               L_QUIT_LEFT < LOCAL_SIZE_V8 && L_OWN_EXTRA == LOCAL_SIZE_V8 &&
-              L_OWN_EXTRA + Gprb::Session::PORT_EXTRA_SIZE == LOCAL_SIZE);
+              L_OWN_EXTRA + Gprb::Session::PORT_EXTRA_SIZE == LOCAL_SIZE_V9 &&
+              L_OWN_CURSOR == LOCAL_SIZE_V9 && L_CURSORS == L_OWN_CURSOR + CURSOR_SIZE &&
+              L_CURSORS + 4 * CURSOR_SIZE == LOCAL_SIZE);
 static_assert(L_ROOM < L_DIRECT_JOIN && L_DIRECT_NUMBER + 2 == L_OWN &&
               L_DIRECT_PREFIX + DIRECT_PREFIX_LEN == L_DIRECT_NUMBER);
 static_assert(L_ROOM < L_OWN && S_ROOM_MODE < SESSION_SIZE && SP_ROOM_COSTUME < SP_PORT_VALUES &&
@@ -958,6 +971,7 @@ Response RoomResponse(const Core::CPUThreadGuard& guard, u32 payload, u16 versio
                      choice == CHOICE_LOSER_PICKS_LIST ? "loser-picks-list" :
                      choice == CHOICE_STRIKE           ? "strike" :
                      choice == CHOICE_RANDOM           ? "random" :
+                     choice == CHOICE_ANYONE_PICKS     ? "anyone-picks" :
                                                          "";
     r.bans = R8(guard, payload + 2);
     r.dsr = R8(guard, payload + 3) != 0;
@@ -1563,7 +1577,9 @@ std::vector<u8> PlaybackSession(const std::vector<u8>& rec, u16 version)
       out[rp + RP_VALID] = 1;
       const u8 best_of = rec[rp + RP_BEST_OF];
       out[rp + RP_BEST_OF] = best_of == 3 || best_of == 5 || best_of == 7 ? best_of : 0;
-      out[rp + RP_CHOICE] = rec[rp + RP_CHOICE] <= CHOICE_LOSER_PICKS_LIST ? rec[rp + RP_CHOICE] : 0;
+      out[rp + RP_CHOICE] = rec[rp + RP_CHOICE] <= (version >= 10 ? CHOICE_ANYONE_PICKS : CHOICE_LOSER_PICKS_LIST) ?
+                                rec[rp + RP_CHOICE] :
+                                0;
       out[rp + RP_CUSTOM] = rec[rp + RP_CUSTOM] ? 1 : 0;
       for (u32 k = 0; k < 6; ++k)
       {
@@ -1944,6 +1960,35 @@ void SyncSession(const Core::CPUThreadGuard& guard, const Located& loc)
     local[i] = R8(guard, loc.local + i);
   local[L_DESYNCED] = lobby.desynced ? 1 : 0;
   local[L_QUIT_LEFT] = lobby.quit_left ? 1 : 0;
+  // v10: the stage select's cursors: this player's in, the others' out.
+  if (loc.version >= 10)
+  {
+    Gprb::Session::SssCursor own;
+    own.on = local[L_OWN_CURSOR + CUR_STATE] == 1 && local[L_OWN_CURSOR + CUR_PAGE] < Gprb::Session::SSS_PAGES;
+    if (own.on)
+    {
+      own.page = local[L_OWN_CURSOR + CUR_PAGE];
+      own.x = std::clamp<s16>(static_cast<s16>(local[L_OWN_CURSOR + CUR_X] << 8 | local[L_OWN_CURSOR + CUR_X + 1]),
+                              -Gprb::Session::SSS_CURSOR_RANGE, Gprb::Session::SSS_CURSOR_RANGE);
+      own.y = std::clamp<s16>(static_cast<s16>(local[L_OWN_CURSOR + CUR_Y] << 8 | local[L_OWN_CURSOR + CUR_Y + 1]),
+                              -Gprb::Session::SSS_CURSOR_RANGE, Gprb::Session::SSS_CURSOR_RANGE);
+    }
+    Gprb::Session::SetLocalSssCursor(own);
+    for (int i = 0; i < SESSION_PLAYERS; ++i)
+    {
+      const auto& c = lobby.sss_cursors[i];
+      u8* out = &local[L_CURSORS + i * CURSOR_SIZE];
+      std::fill(out, out + CURSOR_SIZE, u8{0});
+      if (!c.on || i == lobby.local_port)
+        continue;
+      out[CUR_STATE] = 1;
+      out[CUR_PAGE] = c.page;
+      out[CUR_X] = static_cast<u8>(static_cast<u16>(c.x) >> 8);
+      out[CUR_X + 1] = static_cast<u8>(c.x);
+      out[CUR_Y] = static_cast<u8>(static_cast<u16>(c.y) >> 8);
+      out[CUR_Y + 1] = static_cast<u8>(c.y);
+    }
+  }
   if (v5)
   {
     local[L_ROOM_JOIN] = room.join_seq;
@@ -2024,9 +2069,13 @@ void SyncSession(const Core::CPUThreadGuard& guard, const Located& loc)
     session[p + RP_CHOICE] = v.ruleset.stage_choice == "strike"           ? CHOICE_STRIKE :
                              v.ruleset.stage_choice == "random"           ? CHOICE_RANDOM :
                              v.ruleset.stage_choice == "loser-picks-list" ? CHOICE_LOSER_PICKS_LIST :
+                             v.ruleset.stage_choice == "anyone-picks"     ? CHOICE_ANYONE_PICKS :
                                                                             CHOICE_LOSER_PICKS;
-    // A v6 plugin knows choices 0-2 only: loser picks (from the list) shows as loser picks.
+    // A v6 plugin knows choices 0-2 only: loser picks (from the list) shows as loser picks; one
+    // before v10 knows no anyone picks.
     if (loc.version < 7 && session[p + RP_CHOICE] == CHOICE_LOSER_PICKS_LIST)
+      session[p + RP_CHOICE] = CHOICE_LOSER_PICKS;
+    if (loc.version < 10 && session[p + RP_CHOICE] == CHOICE_ANYONE_PICKS)
       session[p + RP_CHOICE] = CHOICE_LOSER_PICKS;
     session[p + RP_CUSTOM] = v.ruleset.code.empty() && v.ruleset.name != "P+ default" ? 1 : 0;
     for (size_t i = 0; i < 6 && i < v.ruleset.code.size(); ++i)

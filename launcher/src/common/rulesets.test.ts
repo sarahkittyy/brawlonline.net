@@ -115,6 +115,11 @@ describe("rulesets", () => {
     ).toBe(true);
     expect(normalizeRuleset({ ...n, alternateStages: true }).alternateStages).toBe(false);
     expect(rulesetProblem({ ...defaultRuleset(), stageChoice: "random", alternateStages: true })).toBeNull();
+    // Anyone picks: a pick too; a set makes it the loser's.
+    const anyone = normalizeRuleset({ ...defaultRuleset(), stageChoice: "anyone-picks", alternateStages: true });
+    expect([anyone.stageChoice, anyone.alternateStages]).toEqual(["anyone-picks", true]);
+    expect(validateRuleset(anyone)).toBeNull();
+    expect(normalizeRuleset(weekly({ stageChoice: "anyone-picks" })).stageChoice).toBe("loser-picks");
   });
 
   it("suggests strike patterns that leave one stage", () => {

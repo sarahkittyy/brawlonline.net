@@ -47,7 +47,10 @@ namespace PPOM {
     // 9: P+'s special modes (docs/design/special-rules.md): SESSION grows to 0x420 with Special at
     // +0x2C0 and PortExtra per player at +0x300; LOCAL grows to 0xC8 with the player's own
     // PortExtra at +0x80; ROOM_RULES carries the special rows, ROOM_FORMAT the MATCH SETUP page.
-    const u16 VERSION = 9;
+    // 10: the stage select's cursors (Sarah's board, 2026-10-29): LOCAL grows to 0xF0 with this
+    // player's cursor (+0xC8, game) and the other players' (+0xD0, Dolphin); RoomPlay's stageChoice
+    // CHOICE_ANYONE_PICKS.
+    const u16 VERSION = 10;
 
     // Slippi command bytes (EXI_DeviceSlippi.h), kept for familiarity (design 5.3).
     enum Cmd {
@@ -376,6 +379,22 @@ namespace PPOM {
 
     // ---- LOCAL ----
 
+    // v10: a player's cursor on an online stage select (Ranked's strikes, a room's set steps, a room
+    // where anyone picks). x, y: the cursor's position (sel_stage's cursor MuObject +0x3C / +0x40)
+    // in 1/64 units; page: P+'s page shown (0x80496000). Peers' come from their machines: checked
+    // by Dolphin (page < SSS_PAGES, inside SSS_CURSOR_RANGE) and again by the game.
+    enum SssCursorState { CURSOR_NONE = 0, CURSOR_ON = 1 };
+    struct SssCursor {
+        u8 state;         // SssCursorState
+        u8 page;
+        u8 _pad[2];
+        s16 x;
+        s16 y;
+    };                    // 0x08
+    const int SSS_PAGES = 8;
+    const s16 SSS_CURSOR_RANGE = 64 * 64;   // |x|, |y| at most (64 units)
+    const int SESSION_PLAYERS_LOCAL = 4;
+
     // LockIn.stagePick of the player who picks the next stage (Direct's loser): locked in with
     // the character, the stage select comes once every player is locked in, and the setup waits
     // for its pick (Dolphin's GameplaySession STAGE_PENDING).
@@ -439,7 +458,12 @@ namespace PPOM {
                           // next match starts
         PortExtra ownExtra;   // v9, game: the player's special-mode picks, written with the
                               // lock-in (its seq covers them)
-    };                    // 0xC8
+        // v10 (docs/game-code.md §11, the stage select's cursors): in LOCAL, out of the rolled-back
+        // state, since each machine has the others' and not its own.
+        SssCursor ownCursor;  // game, every frame: this player's cursor on an online stage select
+        SssCursor cursors[SESSION_PLAYERS_LOCAL];   // Dolphin: the other players' (by in-game
+                                                    // port; this player's own and absent ones 0)
+    };                    // 0xF0
 
     // ---- SESSION ----
 
@@ -551,7 +575,10 @@ namespace PPOM {
     // its set, for the room CSS to show (the ruleset's name, the score) and the host's set controls.
     // CHOICE_LOSER_PICKS: any stage, alternate layouts too (the room's stages only feed random
     // stages); CHOICE_LOSER_PICKS_LIST (v7): only the room's stages, on their normal layout.
-    enum StageChoice { CHOICE_LOSER_PICKS = 0, CHOICE_STRIKE = 1, CHOICE_RANDOM = 2, CHOICE_LOSER_PICKS_LIST = 3 };
+    // CHOICE_ANYONE_PICKS (v10): every player picks at once on the stage select, game 1 too; the
+    // first pick the game's host sees plays (Dolphin's MaybeDecideSetup).
+    enum StageChoice { CHOICE_LOSER_PICKS = 0, CHOICE_STRIKE = 1, CHOICE_RANDOM = 2, CHOICE_LOSER_PICKS_LIST = 3,
+                       CHOICE_ANYONE_PICKS = 4 };
     enum SetFlags { SET_PAUSED = 1, SET_CAN_RESUME = 2, SET_FINISHED = 4 };
     struct RoomPlay {
         u8 valid;         // 1: in a room
@@ -757,6 +784,8 @@ namespace PPOM {
     // `ex`: the special-mode picks (LOCAL.ownExtra, v9), NULL none.
     void writeLockIn(bool ready, u8 cssChar, u8 charKind, u8 costume, u16 stagePick, u8 asl, u8 game,
                      const PortValues* pv, u8 pad, const PortExtra* ex = NULL);
+    // The lock-in as it is with another stage pick (anyone picks: the pick from the stage select).
+    void setLockInStage(u16 stagePick, u8 asl);
 
     extern Block g_block;
 

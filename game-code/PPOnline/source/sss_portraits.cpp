@@ -49,6 +49,7 @@
 #include "online.h"
 #include "online_menu.h"
 #include "ppom.h"
+#include "sss_cursors.h"
 #include "sss_portraits.h"
 
 extern "C" int sprintf(char* buf, const char* fmt, ...);
@@ -647,6 +648,7 @@ namespace SssPortraits {
     // group (+0x50) is still there; then the files.
     static void* hkTaskDtor(u8* task, int flags)
     {
+        SssCursors::taskGone(task);
         if (task && task == s_task) {
             deleteCards();
             freeAll();

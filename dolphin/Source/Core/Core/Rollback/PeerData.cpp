@@ -152,6 +152,30 @@ std::optional<u64> JsonUInt(const picojson::value* v, u64 max)
   return n;
 }
 
+std::optional<SssCursorValues> ParseSssCursor(const picojson::value* v, u8 max_page, s16 range)
+{
+  if (!v || !v->is<picojson::array>())
+    return std::nullopt;
+  const auto& a = v->get<picojson::array>();
+  if (a.size() != 3)
+    return std::nullopt;
+  const auto page = JsonUInt(&a[0], max_page > 0 ? max_page - 1 : 0);
+  std::array<s16, 2> xy{};
+  for (size_t i = 0; i < 2; ++i)
+  {
+    const picojson::value& c = a[i + 1];
+    if (!c.is<double>())
+      return std::nullopt;
+    const double d = c.get<double>();
+    if (!std::isfinite(d) || std::floor(d) != d || d < -range || d > range)
+      return std::nullopt;
+    xy[i] = static_cast<s16>(d);
+  }
+  if (!page)
+    return std::nullopt;
+  return SssCursorValues{static_cast<u8>(*page), xy[0], xy[1]};
+}
+
 bool ValidCharKind(u32 kind)
 {
   return kind <= 0x11 || (kind >= 0x13 && kind <= 0x2B) || kind == 0x32 || kind == 0x33 ||

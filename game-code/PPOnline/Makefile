@@ -162,6 +162,12 @@ rules_pages.o special_box.o all_star.o page_hints.o: CXXFLAGS += -Oz
 # The room CSS and its rules menu (2026-10-27: with the rules menu's pages the plugin no longer left
 # the Network heap room for the biggest costume, bug #75; test_online_big_costumes.py).
 room_css.o room_rules.o room_play.o rules_button.o: CXXFLAGS += -Oz
+# The other players' cursors on the stage select (2026-10-29), and with them the stage select's
+# cards and the menus' labels, -O0 until then (about 10 KB less): the plugin had grown about 32 KB
+# since bug #75's 40 KB of room (2026-10-21), and with the cursors at -O0 too the biggest costume
+# no longer loaded (test_online_big_costumes.py). Not stage_switch.o: at -Oz its cursor frame's
+# place came out wrong (test_room_stage_switch.py).
+sss_cursors.o sss_portraits.o labels.o: CXXFLAGS += -Oz
 
 %.o: %.cpp
 #	$(info $<)

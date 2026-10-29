@@ -185,10 +185,10 @@ namespace RulesPages {
     static const char* valueText(int r, char* buf)
     {
         // (a value strip's cell is 96 texels: short words)
-        static const char* const CHOICES[4] = {"LOSER", "STRIKE", "RANDOM", "LIST"};
+        static const char* const CHOICES[5] = {"LOSER", "STRIKE", "RANDOM", "LIST", "ANYONE"};
         switch (r) {
         case R_DSR: return s.bestOf ? (s.dsr ? "ON" : "OFF") : "-";
-        case R_CHOICE: return s.bestOf ? "SET" : CHOICES[s.choice & 3];
+        case R_CHOICE: return s.bestOf ? "SET" : CHOICES[s.choice <= PPOM::CHOICE_ANYONE_PICKS ? s.choice : 0];
         case R_STRIKES: strikeText(buf); return buf;
         case R_CONTROL: return s.stockControl ? "ON" : "OFF";
         case R_ALTS: return s.alternates ? "ALT STAGES: ON" : "ALT STAGES: OFF";
@@ -223,6 +223,7 @@ namespace RulesPages {
             case PPOM::CHOICE_LOSER_PICKS: return "LOSER: the last game's loser picks any stage.";
             case PPOM::CHOICE_LOSER_PICKS_LIST: return "LIST: the loser picks from the stage list.";
             case PPOM::CHOICE_STRIKE: return "STRIKE: strike from the starters every game.";
+            case PPOM::CHOICE_ANYONE_PICKS: return "ANYONE: everyone picks at once, the first pick plays.";
             default: return "RANDOM: a random stage from the list every game.";
             }
         case R_STRIKES:
@@ -636,7 +637,7 @@ namespace RulesPages {
         const PPOM::Session& se = PPOM::g_block.session;
         s.bestOf = se.play.bestOf;
         s.setOn = se.play.setOn && !(se.play.setFlags & PPOM::SET_FINISHED);
-        s.choice = se.play.stageChoice <= PPOM::CHOICE_LOSER_PICKS_LIST ? se.play.stageChoice : 0;
+        s.choice = se.play.stageChoice <= PPOM::CHOICE_ANYONE_PICKS ? se.play.stageChoice : 0;
         s.bans = se.special.bans <= 3 ? se.special.bans : 0;
         s.dsr = se.special.dsr ? 1 : 0;
         s.alternates = se.special.alternates ? 1 : 0;
@@ -749,12 +750,12 @@ namespace RulesPages {
             break;
         case R_CHOICE: {
             if (s.bestOf) { playSE(SE_ERROR); return; }
-            // P+'s order on screen: loser picks, from the list, strike, random.
-            static const u8 ORDER[4] = {PPOM::CHOICE_LOSER_PICKS, PPOM::CHOICE_LOSER_PICKS_LIST,
-                                        PPOM::CHOICE_STRIKE, PPOM::CHOICE_RANDOM};
+            // P+'s order on screen: loser picks, from the list, strike, random, anyone picks.
+            static const u8 ORDER[5] = {PPOM::CHOICE_LOSER_PICKS, PPOM::CHOICE_LOSER_PICKS_LIST,
+                                        PPOM::CHOICE_STRIKE, PPOM::CHOICE_RANDOM, PPOM::CHOICE_ANYONE_PICKS};
             int i = 0;
-            while (i < 4 && ORDER[i] != s.choice) i++;
-            i = (i + (dir < 0 ? 3 : 1)) % 4;
+            while (i < 5 && ORDER[i] != s.choice) i++;
+            i = (i + (dir < 0 ? 4 : 1)) % 5;
             s.choice = ORDER[i];
             if (s.choice == PPOM::CHOICE_STRIKE && s.strikeCount == 0) defaultStrikes(s.starters, s.strikes, &s.strikeCount);
             s.formatEdited = true;

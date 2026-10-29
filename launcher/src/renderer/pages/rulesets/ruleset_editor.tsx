@@ -103,6 +103,7 @@ export const RulesetEditor = ({ value, onChange }: { value: Ruleset; onChange: (
                   ["loser-picks", Messages.loserPicks()],
                   ["strike", Messages.strike()],
                   ["random", Messages.random()],
+                  ["anyone-picks", Messages.anyonePicks()],
                 ]}
               />
             </Row>
@@ -315,6 +316,8 @@ function stageChoiceHelp(c: StageChoice): string {
       return Messages.strikeHelp();
     case "random":
       return Messages.randomHelp();
+    case "anyone-picks":
+      return Messages.anyonePicksHelp();
   }
 }
 

@@ -23,6 +23,8 @@ function formatRows(r: Ruleset): [string, string][] {
         ? Messages.strikeEveryGame(r.strikes.join("-"))
         : r.stageChoice === "random"
         ? Messages.randomEveryGame()
+        : r.stageChoice === "anyone-picks"
+        ? Messages.anyonePicksEveryGame()
         : r.stageChoice === "loser-picks-list"
         ? Messages.loserPicksList()
         : Messages.loserPicks();

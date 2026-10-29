@@ -24,6 +24,7 @@
 #include "room_rules.h"
 #include "rules_button.h"
 #include "labels.h"
+#include "stage_legal.h"
 
 extern "C" {
     extern u8 g_onlineCss;
@@ -759,6 +760,7 @@ namespace OnlineMenu {
     // and the setup not decided yet (the host waits for the pick). The picker's port, else -1;
     // the others' line reads "P<n> choosing stage...". Of several pickers (a 1v1 draw) the
     // lowest port picks, as stagePicker.
+    static bool roomAnyonePicks();
     static int otherPickerChoosing(bool room)
     {
         const PPOM::Session& se = PPOM::g_block.session;
@@ -766,6 +768,9 @@ namespace OnlineMenu {
         if (!room && s.mode != PPOM::MODE_DIRECT && s.mode != PPOM::MODE_TEAMS) return -1;
         if (lo.state != PPOM::LS_CONNECTED || !lo.remoteReady || se.state != PPOM::SS_LOBBY ||
             !se.game || s.lockedGame != se.game)
+            return -1;
+        // (anyone picks: a player with the pick is on the stage select with the others)
+        if (room && roomAnyonePicks() && lo.localPort < PPOM::SESSION_PLAYERS && se.players[lo.localPort].picksStage)
             return -1;
         for (int i = 0; i < PPOM::SESSION_PLAYERS; i++) {
             if (se.players[i].picksStage) return i == lo.localPort ? -1 : i;
@@ -2510,17 +2515,60 @@ namespace OnlineMenu {
         return roomIn() && me >= 0 && (se.players[me].roomSlot & PPOM::SLOT_SITTING_OUT);
     }
 
+    // The room's ruleset has every player pick the stage (CHOICE_ANYONE_PICKS, no set).
+    static bool roomAnyonePicks()
+    {
+        const PPOM::RoomPlay& p = PPOM::g_block.session.play;
+        return roomCss() && p.valid && p.bestOf == 0 && p.stageChoice == PPOM::CHOICE_ANYONE_PICKS;
+    }
+
     // This player picks the next room game's stage (the last game's loser; of several pickers,
-    // a draw, the lowest port), as Direct's loser.
+    // a draw, the lowest port), as Direct's loser. Where anyone picks, every player with the pick
+    // (the server's: every player of the game) picks, all on the stage select at once.
     static bool roomPicksStage()
     {
         const PPOM::Session& se = PPOM::g_block.session;
         int me = roomMe();
         if (!roomIn() || me < 0) return false;
+        if (roomAnyonePicks()) return se.players[me].picksStage != 0;
         for (int i = 0; i < PPOM::SESSION_PLAYERS; i++) {
             if (se.players[i].picksStage) return i == me;
         }
         return false;
+    }
+
+    // Anyone picks, on the stage select (stage_legal.cpp): A on a stage (START: a random one) is
+    // this player's pick, sent at once in the lock-in (its stage), and the stage select stays
+    // until the game's host has taken the first pick it saw: then every machine's stage select
+    // leaves with that stage (SESSION's), the pick that was first or not, and the match starts.
+    int anyoneSss()
+    {
+        if (!g_onlinePickStage || !roomAnyonePicks()) return ANY_NONE;
+        if (PPOM::g_block.local.state != PPOM::LS_CONNECTED) return ANY_GONE;
+        const PPOM::Session& se = PPOM::g_block.session;
+        if (roomLockedForNext() && se.state == PPOM::SS_MATCH_READY && se.game == roomGame()) return ANY_DECIDED;
+        return roomLockedForNext() && s.lockStage != PPOM::STAGE_PENDING ? ANY_PICKED : ANY_PICKING;
+    }
+
+    u16 anyoneStage() { return PPOM::g_block.session.stageKind; }
+
+    bool anyonePick(u16 kind, u8 asl)
+    {
+        if (anyoneSss() != ANY_PICKING || s.lockStage != PPOM::STAGE_PENDING) return false;
+        PPOM::setLockInStage(kind, asl);
+        s.lockStage = kind;
+        playSE(1);   // the menus' decide
+        return true;
+    }
+
+    const char* anyoneText()
+    {
+        switch (anyoneSss()) {
+        case ANY_PICKING: return "Anyone picks: the first pick plays";
+        case ANY_PICKED: return "Picked!";
+        case ANY_DECIDED: return s.lockStage == anyoneStage() ? "" : "Another pick was first";
+        default: return "";
+        }
     }
 
     void u16Name(char* out, const u16* in)
@@ -2723,6 +2771,9 @@ namespace OnlineMenu {
         if (se.state == PPOM::SS_MATCH_READY && se.game == game) {
             g_onlineMatchGame = (u8)game;
             PPOM::g_block.debug.scratch[10] = 0x100 * game;
+            // (where anyone picks, a stage select left once another pick was taken leaves its
+            // own here: it is not the next game's)
+            OnlineMatch::clearPickedStage();
             leaveCss(1);
             return;
         }
@@ -3735,6 +3786,12 @@ namespace OnlineMenu {
             u32 mask = BTN_Z;
             if ((s.mode == PPOM::MODE_RANKED || s.roomStepSss) && g_onlinePickStage) mask |= BTN_START | BTN_B;
             if (roomCss() && g_onlinePickStage) mask |= BTN_B;
+            // Anyone picks: START is a random stage of the room's (P+'s random would leave the
+            // stage select with its own draw before the host took the first pick).
+            if (anyoneSss() != ANY_NONE) {
+                mask |= BTN_START;
+                if (padButtons(0xC) & BTN_START) StageLegal::anyoneRandom();
+            }
             maskButtons(mask);
             blockCodeMenu();
         }

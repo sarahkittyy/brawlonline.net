@@ -124,7 +124,8 @@ struct RulesetView
   u8 best_of = 0;
   // How the stage is chosen without a set: "loser-picks" (any stage; also with a set: its steps
   // decide), "loser-picks-list" (the loser picks from the stages, on their normal layout),
-  // "strike" (struck every game, GameSetup), "random" (a random stage every game).
+  // "strike" (struck every game, GameSetup), "random" (a random stage every game), "anyone-picks"
+  // (every player picks at once, game 1 too: the first pick the host sees plays).
   std::string stage_choice = "loser-picks";
   // The ruleset's stages (srStageKind): struck from, and picked from with the counterpicks. Empty
   // from an mm that sends none.
@@ -144,6 +145,8 @@ struct RulesetView
   }
   // ... held to the stages.
   bool PickFromList() const { return best_of == 0 && stage_choice == "loser-picks-list"; }
+  // Every player of a game picks its stage (no set).
+  bool AnyonePicks() const { return best_of == 0 && stage_choice == "anyone-picks"; }
 };
 // room-state's `set`: the room's set (sides: side 0 the lower slot).
 struct SetView
@@ -306,7 +309,7 @@ struct Request
   u8 best_of = 0;                         // BestOf: 0 (no set), 3, 5, 7
   std::vector<u16> starters, counterpicks;  // Stages: stage ids 1-255
   std::string stage_choice;                 // Stages: "loser-picks" / "loser-picks-list", "" as it is;
-                                            // Format: any of the four
+                                            // Format: any of the five
   std::vector<u8> strikes;                  // Format: the strike pattern (turns 1-255)
   u8 bans = 0;                              // Format: 0-MAX_BANS
   bool dsr = false;                         // Format

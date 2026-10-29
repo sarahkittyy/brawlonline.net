@@ -272,6 +272,9 @@ TEST(RoomMessages, Format)
                             R"("strikes":[1,2,1],"type":"room-format"})");
   r.stage_choice = "rps";
   EXPECT_EQ(RequestJson(r), std::nullopt);
+  r.stage_choice = "anyone-picks";
+  EXPECT_EQ(RequestJson(r), R"({"alternateStages":true,"bans":2,"dsr":true,"stageChoice":"anyone-picks",)"
+                            R"("strikes":[1,2,1],"type":"room-format"})");
   r.stage_choice = "random";
   r.bans = 4;
   EXPECT_EQ(RequestJson(r), std::nullopt);
@@ -343,6 +346,13 @@ TEST(RoomMessages, RoomRulesetStages)
   m = with(R"({"name": "x", "stageChoice": "pick-anything"})");
   EXPECT_EQ(m.view->ruleset.stage_choice, "loser-picks");
   EXPECT_TRUE(m.view->ruleset.starters.empty());
+  // Anyone picks (2026-10-29): not the loser's pick; a set's steps pick instead.
+  m = with(R"({"name": "x", "stageChoice": "anyone-picks"})");
+  EXPECT_EQ(m.view->ruleset.stage_choice, "anyone-picks");
+  EXPECT_TRUE(m.view->ruleset.AnyonePicks());
+  EXPECT_FALSE(m.view->ruleset.LoserPicks());
+  m = with(R"({"name": "x", "bestOf": 3, "stageChoice": "anyone-picks"})");
+  EXPECT_FALSE(m.view->ruleset.AnyonePicks());
 }
 
 TEST(RoomMessages, StagesRequest)

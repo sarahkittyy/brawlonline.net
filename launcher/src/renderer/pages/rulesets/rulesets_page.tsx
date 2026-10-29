@@ -77,6 +77,8 @@ export function setSummary(r: Ruleset): string {
       ? Messages.summaryStrikes(r.strikes.join("-"))
       : r.stageChoice === "random"
       ? Messages.summaryRandom()
+      : r.stageChoice === "anyone-picks"
+      ? Messages.summaryAnyonePicks()
       : r.stageChoice === "loser-picks-list"
       ? Messages.summaryLoserPicksList()
       : Messages.summaryLoserPicks();

@@ -41,6 +41,13 @@ namespace OnlineMenu {
     void enterRoom(int entry);           // WITH FRIENDS > Create Room / Join Room
     bool roomCss();                      // the online CSS is a room's
     bool stepsDecideStage();             // Ranked or a room's set: GameSetup's steps pick the stage
+    // A room where anyone picks the stage, on its stage select (online_menu.cpp anyoneSss): picking,
+    // this player's pick sent, the host took the first (leave with anyoneStage()), the session gone.
+    enum AnyoneSss { ANY_NONE = 0, ANY_PICKING = 1, ANY_PICKED = 2, ANY_DECIDED = 3, ANY_GONE = 4 };
+    int anyoneSss();
+    u16 anyoneStage();                   // the stage the host took (SESSION's)
+    bool anyonePick(u16 kind, u8 asl);   // this player's pick (false: not now)
+    const char* anyoneText();            // the stage select's header line
     bool nobodyPlaysHere();              // the online match is a replay or a watched room game
     void prepareCss();                   // the CSS is about to be built (sqNetAnyOkiraku)
     void menuPageRunning(u8* page);      // a menu page the launcher's join can leave from ran
