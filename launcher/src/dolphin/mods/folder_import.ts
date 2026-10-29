@@ -16,7 +16,15 @@ export type FolderParts = {
 };
 
 const LAUNCHER_DIRS = ["Launcher", "launcher", "user/Launcher", "User/Launcher"];
-const SD_FILES = ["user/Wii/sd.raw", "User/Wii/sd.raw", "User/Load/WiiSD.raw", "user/Load/WiiSD.raw", "sd.raw"];
+// "Wii/sd.raw": the User folder itself picked (Brawl Online's own P+ is `<game files>/User`).
+const SD_FILES = [
+  "user/Wii/sd.raw",
+  "User/Wii/sd.raw",
+  "User/Load/WiiSD.raw",
+  "user/Load/WiiSD.raw",
+  "Wii/sd.raw",
+  "sd.raw",
+];
 
 async function isFile(p: string): Promise<boolean> {
   return !!(await stat(p).catch(() => null))?.isFile();
