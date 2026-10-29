@@ -5,4 +5,5 @@
 namespace SssCursors {
     void tick();                // every frame
     void taskGone(u8* task);    // the stage select task's destructor (sss_portraits.cpp's hook)
+    int pageToFollow();         // anyone picks: the page another player turned to, -1 none
 }

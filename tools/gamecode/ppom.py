@@ -328,8 +328,8 @@ CHOICE_ANYONE_PICKS = 4
 def sss_cursor(d: bytes) -> dict | None:
     """ppom.h SssCursor: a player's cursor on an online stage select (x, y in stage select units),
     None when not on one."""
-    state, page, x, y = struct.unpack_from(">BBxxhh", d, 0)
-    return {"page": page, "x": x / 64.0, "y": y / 64.0} if state == 1 else None
+    state, page, turns, x, y = struct.unpack_from(">BBBxhh", d, 0)
+    return {"page": page, "turns": turns, "x": x / 64.0, "y": y / 64.0} if state == 1 else None
 
 
 def read_session(c: HarnessClient, b: Block) -> dict:

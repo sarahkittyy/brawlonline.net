@@ -12,7 +12,8 @@ who sit out do not pick. Ranked's strikes show the opponent's cursor the same wa
 - test_room_anyone_picks: two players, four games: game 1 (A picks Final Destination with L
   held: the L layout on both), the cursors (each machine draws the other's where it is, labelled
   P1 / P2, and hides it while the two are on different pages), both pressing A at once (one pick
-  is played, the same on both machines), a pick while the other player is on another page, START.
+  is played, the same on both machines), one page for everyone (a turn on one turns the other's,
+  both turning at once ends on one page), START.
 - test_room_anyone_picks_three_players: a third player sits out game 1 (never on the stage select,
   no pick, not waited for), then all three pick: each draws the other two cursors.
 - test_ranked_strikes_show_the_opponents_cursor: Ranked's game 1 strikes.
@@ -212,21 +213,47 @@ def test_room_anyone_picks(backend: OnlineBackend, dolphin: Callable[..., Dolphi
     back_in_the_room(gs, game)
     game += 1
 
-    # Game 3: A turns to P+'s second page (each hides the other's cursor there), B picks
-    # Battlefield on the first: A's stage select leaves by itself, without A's pick.
+    # Game 3: one page for everyone (Sarah's board, 2026-10-29). A turns to P+'s second page: B's
+    # turns with it, and each still draws the other's cursor. Then both press the page button at
+    # once: they end on one page. B picks a stage of that page; A's stage select leaves with it.
     all_ready_to_sss(gs, game)
+    pages = B.read_stage_pages(a.c.read_mem)
     B.sss_hover_item(a.c, B.SSS_ITEM_PAGE, 0)
     B.tap(a.c, 0, ["A"], hold=3, release=3)
-    _wait(lambda: a.c.read_u8(CURRENT_PAGE) == 1, 10, "A on page 2")
-    _wait(lambda: not cursors(a)["shown"] & 2 and not cursors(b)["shown"] & 1, 10,
-          "the other's cursor hidden on another page")
-    a.shot("03-another-page")
-    B.sss_pick_stage(b.c, BF, 0)
-    leaves_by_itself(a, "B picked on another page")
+    _wait(lambda: a.c.read_u8(CURRENT_PAGE) == 1 and b.c.read_u8(CURRENT_PAGE) == 1, 10,
+          "B's stage select on A's page 2 too")
+    sees(a, b, 1, "B on page 2 with A")
+    sees(b, a, 0, "A on page 2")
+    a.shot("03-same-page")
+    b.shot("03-same-page")
+    _all(lambda: B.sss_hover_item(a.c, B.SSS_ITEM_PAGE, 0), lambda: B.sss_hover_item(b.c, B.SSS_ITEM_PAGE, 0))
+    go = threading.Barrier(2)
+
+    def turn(g: Game) -> None:
+        go.wait()
+        B.tap(g.c, 0, ["A"], hold=3, release=3)
+    _all(lambda: turn(a), lambda: turn(b))
+
+    def settled() -> int | None:
+        pa, pb = a.c.read_u8(CURRENT_PAGE), b.c.read_u8(CURRENT_PAGE)
+        return pa + 1 if pa == pb and pa != 1 else None
+    page = _wait(settled, 15, "both on one page after turning it at once") - 1
+    B.step(a.c, 60)
+    assert a.c.read_u8(CURRENT_PAGE) == b.c.read_u8(CURRENT_PAGE) == page, "the pages went apart again"
+    print("both turned at once:", {"page": page, "turns": [ppom.read_local(g.c, ppom.find_block(g.c))["own_cursor"]
+                                                          for g in gs]})
+    # A turns once more (now ahead again): B's stage select follows again.
+    B.sss_hover_item(a.c, B.SSS_ITEM_PAGE, 0)
+    B.tap(a.c, 0, ["A"], hold=3, release=3)
+    _wait(lambda: a.c.read_u8(CURRENT_PAGE) == b.c.read_u8(CURRENT_PAGE) != page, 15, "B following A's turn again")
+    page = a.c.read_u8(CURRENT_PAGE)
+    kind = BF if page == 0 else next(k for k in pages[page] if k > 0)
+    B.sss_pick_stage(b.c, kind, 0)
+    leaves_by_itself(a, "B picked")
     assert lock_of(a)["stage_pick"] == STAGE_PENDING, lock_of(a)
     rep = online_set.play_game(gs, game)
     assert rep["checksums"]["mismatches"] == 0, rep
-    assert rep["stage"] == BF and rep["asl"] == [0, 0], rep
+    assert rep["stage"] == kind and rep["asl"] == [0, 0], rep
     cursors_gone(gs)
     back_in_the_room(gs, game)
     game += 1

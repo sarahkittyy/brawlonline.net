@@ -121,12 +121,14 @@ std::optional<std::vector<u8>> ParseHex(std::string_view hex, size_t bytes);
 // the target type's range is undefined behaviour, so nothing is cast before this check.)
 std::optional<u64> JsonUInt(const picojson::value* v, u64 max);
 
-// A peer's cursor on an online stage select, its state's "sc": [page, x, y], page below
-// `max_page`, x and y whole numbers within +-`range` (1/64 units). Else nullopt.
+// A peer's cursor on an online stage select, its state's "sc": [page, x, y] or [page, x, y, turns],
+// page below `max_page`, x and y whole numbers within +-`range` (1/64 units), turns 0-255 (its
+// page turns; 0 without it). Else nullopt.
 struct SssCursorValues
 {
   u8 page = 0;
   s16 x = 0, y = 0;
+  u8 turns = 0;
 };
 std::optional<SssCursorValues> ParseSssCursor(const picojson::value* v, u8 max_page, s16 range);
 

@@ -39,6 +39,7 @@
 #include "online.h"
 #include "online_menu.h"
 #include "ppom.h"
+#include "sss_cursors.h"
 #include "stage_legal.h"
 
 extern "C" {
@@ -382,6 +383,19 @@ extern "C" {
             if (s_anyLeave) {
                 if (*hovered - 0x30u <= 7u) *hovered = 0;
                 return out | 0x100u;
+            }
+            // One page for everyone (Sarah's board, 2026-10-29): another player turned the page,
+            // so this stage select turns too, with P+'s own page button (an A on it, as when the
+            // cursor is there: P+ turns one page an A), until it shows theirs (sss_cursors.cpp).
+            const int follow = SssCursors::pageToFollow();
+            if (follow >= 0 && follow != *(u8*)StageLegal::CURRENT_PAGE) {
+                static u32 s_turnAt = 0;
+                const u32 now = PPOM::g_block.debug.frames;
+                if (now - s_turnAt >= 8) {
+                    s_turnAt = now;
+                    *hovered = 0x35;
+                    return out | 0x100u;
+                }
             }
             if ((out & 0x100u) && (*hovered == 0x36 || *hovered == 0x37)) {
                 out &= ~0x100u;
