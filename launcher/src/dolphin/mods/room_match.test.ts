@@ -57,6 +57,19 @@ describe("matchRoom", () => {
     expect(m.build?.id).toBe("hotfix");
   });
 
+  it("takes Brawl Online's own P+ last: the player's REX plays a REX room", () => {
+    const pplus = build("pplus", {
+      builtIn: true,
+      parts: { disc: DISC, launcher: "l".repeat(64), sd: true, sdCard: OTHER_CARD },
+    });
+    const rex = build("rex", { parts: { disc: DISC, launcher: null, sd: true, sdCard: "7".repeat(64) } });
+    expect(matchRoom(room, [pplus, rex]).build?.id).toBe("rex");
+    // P+ alone plays it, its card synced for the room.
+    expect(matchRoom(room, [pplus])).toMatchObject({ build: { id: "pplus" }, joinable: true, sd: "differs" });
+    // A P+ room: its card is P+'s.
+    expect(matchRoom({ ...room, sd: OTHER_CARD }, [rex, pplus]).build?.id).toBe("pplus");
+  });
+
   it("does not join with another disc, and names the game to fix", () => {
     const rev2 = build("rev2", { revision: 2, parts: { disc: OTHER_DISC, launcher: null, sd: true, sdCard: CARD } });
     const m = matchRoom(room, [rev2]);

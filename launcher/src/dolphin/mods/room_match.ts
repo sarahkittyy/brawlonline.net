@@ -47,7 +47,10 @@ export function matchRoom(room: ModRoomBuild, builds: ModBuild[]): RoomMatch {
     };
   }
   const roomCard = hasCard(room.sd);
-  const sameDisc = builds.filter((b) => b.parts?.disc === room.disc);
+  // Brawl Online's own P+ (`builtIn`, every player has it) after the player's own games: a REX
+  // room plays their REX with its card's few differences, not P+ with all of REX's.
+  const onDisc = builds.filter((b) => b.parts?.disc === room.disc);
+  const sameDisc = [...onDisc.filter((b) => !b.builtIn), ...onDisc.filter((b) => b.builtIn)];
   const cardOf = (b: ModBuild) => (b.sdPath ? b.parts?.sdCard ?? null : null);
   // The exact build (its launcher too) before any other game on the disc with a card: that one
   // can be another release of the mod, its whole card to download (bug #28, 2026-10-16: RUDY#60's
@@ -73,7 +76,8 @@ export function matchRoom(room: ModRoomBuild, builds: ModBuild[]): RoomMatch {
   // ID with an SD card as the room's: a REX room shows the player's REX, not their plain Brawl
   // disc as "add an SD card").
   const gameId = room.discLabel?.split(" ")[0];
-  const sameGame = gameId ? builds.filter((b) => b.gameId === gameId) : [];
+  const ofGame = gameId ? builds.filter((b) => b.gameId === gameId) : [];
+  const sameGame = [...ofGame.filter((b) => !b.builtIn), ...ofGame.filter((b) => b.builtIn)];
   const near = exact ?? sameGame.find((b) => roomCard === !!b.sdPath) ?? sameGame[0] ?? null;
   let sd: PartMatch | null = null;
   if (near) {

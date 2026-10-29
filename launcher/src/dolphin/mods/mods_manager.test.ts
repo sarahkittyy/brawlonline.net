@@ -7,9 +7,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { BRAWL_NTSC_U_DISC } from "../brawl_disc";
 
 const discIdentity = vi.fn(async () => BRAWL_NTSC_U_DISC);
+const readDiscInfo = vi.fn(async () => ({
+  gameId: "RSBE01",
+  title: "Super Smash Bros. Brawl",
+  revision: 1,
+  platform: "wii",
+  titleId: "0001000052534245",
+}));
 vi.mock("./disc_info", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   discIdentity: (...args: unknown[]) => discIdentity(...(args as [])),
+  readDiscInfo: (...args: unknown[]) => readDiscInfo(...(args as [])),
 }));
 
 import type { PublicModRoom } from "@accounts/types";
@@ -17,6 +25,7 @@ import type { SettingsManager } from "@settings/settings_manager";
 
 import type { DolphinManager } from "../manager";
 import { BUILD_HASH_VERSION, buildHashKey, combineBuildHash } from "./build_hash";
+import type { ModsRoomArg } from "./mods_args";
 import { ModsManager } from "./mods_manager";
 import { saveStoreDir, titleDataDir } from "./save_import";
 import type { ModBuild } from "./types";
@@ -60,14 +69,36 @@ function manager(
   builds: ModBuild[],
   settings: Record<string, unknown> = { modBuilds: builds },
   room: PublicModRoom | null = null,
-): { mods: ModsManager; builds: () => ModBuild[]; settings: Record<string, unknown> } {
+): {
+  mods: ModsManager;
+  builds: () => ModBuild[];
+  settings: Record<string, unknown>;
+  launches: ModsRoomArg[];
+  /** Closes the Dolphins launched (their rooms' polls stop). */
+  closeAll: () => Promise<void>;
+} {
   const settingsManager = {
     get: () => settings,
     updateSetting: async (key: string, value: unknown) => {
       settings[key] = value;
     },
   } as unknown as SettingsManager;
-  const dolphin = { netplayUserFolder: () => path.join(tmp, "netplay", "User") } as unknown as DolphinManager;
+  const launches: ModsRoomArg[] = [];
+  const closers: Array<() => void | Promise<void>> = [];
+  const dolphin = {
+    netplayUserFolder: () => path.join(tmp, "netplay", "User"),
+    netplayOnlineDir: () => path.join(tmp, "netplay", "User", "Online"),
+    isNetplayRunning: () => false,
+    launchModsDolphin: async (_build: ModBuild, arg: ModsRoomArg, onClose: () => void | Promise<void>) => {
+      launches.push(arg);
+      closers.push(onClose);
+    },
+  } as unknown as DolphinManager;
+  const closeAll = async () => {
+    for (const close of closers.splice(0)) {
+      await close();
+    }
+  };
   const mods = new ModsManager(
     settingsManager,
     dolphin,
@@ -75,7 +106,7 @@ function manager(
     async () => room,
     async () => "card",
   );
-  return { mods, builds: () => settings.modBuilds as ModBuild[], settings };
+  return { mods, builds: () => settings.modBuilds as ModBuild[], settings, launches, closeAll };
 }
 
 describe("rehashChanged", () => {
@@ -239,5 +270,159 @@ describe("joinByCode", () => {
     const result = await mods.joinByCode({ uid: "u", code: "BKSD" });
     expect(result).toEqual({ outcome: "no-game", name: "Brawl", hash: brawlRoom().build.hash, discLabel: "RSBE01" });
     expect(discIdentity).not.toHaveBeenCalled();
+  });
+});
+
+describe("Brawl Online's own Project+", () => {
+  const user = () => path.join(tmp, "netplay", "User");
+  const dol = () => path.join(user(), "Launcher", "Project+ Netplay Launcher.dol");
+  const card = () => path.join(user(), "Wii", "sd.raw");
+
+  async function installPPlus(): Promise<string> {
+    await mkdir(path.dirname(dol()), { recursive: true });
+    await writeFile(dol(), "launcher");
+    await mkdir(path.dirname(card()), { recursive: true });
+    await writeFile(card(), "card");
+    const iso = path.join(tmp, "brawl.iso");
+    await writeFile(iso, "brawl");
+    return iso;
+  }
+
+  /** The list once refreshed, with the check it started done. */
+  async function refreshed(m: ReturnType<typeof manager>): Promise<ModBuild[]> {
+    await m.mods.refreshBuiltIn();
+    const builtIn = m.builds().find((b) => b.builtIn);
+    if (builtIn) {
+      await m.mods.hashBuild(builtIn.id);
+    }
+    return m.builds();
+  }
+
+  it("is in the list once P+ is installed and the Brawl disc set, first, and checked", async () => {
+    const other = await oldBuild("nsmb", { gameId: "SMNE01" });
+    other.hashKey = await buildHashKey(other);
+    const m = manager([other], { modBuilds: [other], settings: { isoPath: null } });
+    expect(await refreshed(m)).toEqual([other]);
+
+    const iso = await installPPlus();
+    expect(await refreshed(m)).toEqual([other]);
+    (m.settings.settings as Record<string, unknown>).isoPath = iso;
+    const [pplus, ...rest] = await refreshed(m);
+    expect(rest).toEqual([other]);
+    expect(pplus).toMatchObject({
+      name: "Project+ v3.2.1",
+      builtIn: true,
+      autoName: false,
+      discPath: iso,
+      launcherPath: dol(),
+      sdPath: card(),
+      gameId: "RSBE01",
+      titleId: "0001000052534245",
+    });
+    expect(pplus.parts).toMatchObject({ disc: BRAWL_NTSC_U_DISC, sd: true, sdCard: "card" });
+
+    // Nothing changed: left as it is.
+    readDiscInfo.mockClear();
+    expect(await refreshed(m)).toEqual([pplus, other]);
+    expect(readDiscInfo).not.toHaveBeenCalled();
+  });
+
+  it("follows the Brawl disc, and goes while there is none (back with the same save store)", async () => {
+    const iso = await installPPlus();
+    const m = manager([], { modBuilds: [], settings: { isoPath: iso } });
+    const [first] = await refreshed(m);
+    const rev2 = path.join(tmp, "brawl-rev2.rvz");
+    await writeFile(rev2, "rev2");
+    (m.settings.settings as Record<string, unknown>).isoPath = rev2;
+    const [moved] = await refreshed(m);
+    expect(moved).toMatchObject({ id: first.id, discPath: rev2, builtIn: true });
+    expect(moved.hashKey).not.toBe(first.hashKey);
+    // The same disc's game data: the same hash, so the same save.
+    expect(moved.hash).toBe(first.hash);
+
+    (m.settings.settings as Record<string, unknown>).isoPath = null;
+    expect(await refreshed(m)).toEqual([]);
+    (m.settings.settings as Record<string, unknown>).isoPath = rev2;
+    const [back] = await refreshed(m);
+    expect(back.hash).toBe(first.hash);
+  });
+
+  it("is the game the player added from the game files folder (Add mod folder)", async () => {
+    const iso = await installPPlus();
+    const added: ModBuild = {
+      id: "added",
+      name: "netplay",
+      discPath: iso,
+      launcherPath: dol(),
+      sdPath: card(),
+      hash: null,
+      hashKey: null,
+    };
+    const m = manager([added], { modBuilds: [added], settings: { isoPath: iso } });
+    const builds = await refreshed(m);
+    expect(builds).toHaveLength(1);
+    expect(builds[0]).toMatchObject({ id: "added", name: "Project+ v3.2.1", builtIn: true });
+  });
+
+  it("stays beside a copy of P+ the player added from elsewhere (the same hash)", async () => {
+    const iso = await installPPlus();
+    const elsewhere = path.join(tmp, "P+ Dolphin", "User");
+    await mkdir(path.join(elsewhere, "Launcher"), { recursive: true });
+    await mkdir(path.join(elsewhere, "Wii"), { recursive: true });
+    await writeFile(path.join(elsewhere, "Launcher", "Project+ Netplay Launcher.dol"), "launcher");
+    await writeFile(path.join(elsewhere, "Wii", "sd.raw"), "card");
+    const m = manager([], { modBuilds: [], settings: { isoPath: iso } });
+    const [pplus] = await refreshed(m);
+    const copy = await m.mods.addBuild({
+      name: "",
+      discPath: iso,
+      launcherPath: path.join(elsewhere, "Launcher", "Project+ Netplay Launcher.dol"),
+      sdPath: path.join(elsewhere, "Wii", "sd.raw"),
+    });
+    // The player's copy is the duplicate: it goes, P+ stays.
+    await expect(m.mods.hashBuild(copy.id)).rejects.toThrow(/already have this game: Project\+ v3.2.1/);
+    expect(m.builds().map((b) => b.id)).toEqual([pplus.id]);
+  });
+
+  it("cannot be removed or have its files changed", async () => {
+    const iso = await installPPlus();
+    const m = manager([], { modBuilds: [], settings: { isoPath: iso } });
+    const [pplus] = await refreshed(m);
+    await expect(m.mods.removeBuild(pplus.id)).rejects.toThrow(/built into Brawl Online/);
+    await expect(m.mods.updateBuild(pplus.id, { sdPath: null })).rejects.toThrow(/Brawl Online's own/);
+    expect(m.builds()).toEqual([pplus]);
+  });
+
+  it("never has its SD card overwritten by a room's", async () => {
+    const iso = await installPPlus();
+    const m = manager([], { modBuilds: [], settings: { isoPath: iso } });
+    const [pplus] = await refreshed(m);
+    expect(await m.mods.join({ buildId: pplus.id, code: "BKSD", uid: "u", sdSync: "overwrite" })).toEqual({
+      outcome: "joining",
+    });
+    expect(m.launches).toEqual([expect.objectContaining({ join: "BKSD", sd_sync: "yes" })]);
+    // Dolphin's own question too.
+    await mkdir(path.join(user(), "Online"), { recursive: true });
+    await m.mods.request({ op: "sd-sync", choice: "overwrite" });
+    const request = JSON.parse(await readFile(path.join(user(), "Online", "mods-request.json"), "utf8"));
+    expect(request).toMatchObject({ op: "sd-sync", choice: "yes" });
+    await m.closeAll();
+  });
+
+  it("leaves another game's overwrite as the player chose", async () => {
+    const iso = await installPPlus();
+    const rex: ModBuild = {
+      id: "rex",
+      name: "REX",
+      discPath: iso,
+      launcherPath: null,
+      sdPath: card(),
+      hash: null,
+      hashKey: null,
+    };
+    const m = manager([rex], { modBuilds: [rex], settings: { isoPath: null } });
+    await m.mods.join({ buildId: "rex", code: "BKSD", uid: "u", sdSync: "overwrite" });
+    expect(m.launches).toEqual([expect.objectContaining({ sd_sync: "overwrite" })]);
+    await m.closeAll();
   });
 });

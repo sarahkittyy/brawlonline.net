@@ -79,8 +79,14 @@ export default function setupModsIpc({
   });
   // Games hashed by an older launcher, or whose files changed: hashed again for the room list.
   void mods.rehashChanged();
+  void mods.refreshBuiltIn();
 
-  ipc_modsGetState.main!.handle(async () => mods.getState());
+  // Brawl Online's own P+ follows the Brawl disc and P+'s install (the tab asks again when either
+  // changes).
+  ipc_modsGetState.main!.handle(async () => {
+    await mods.refreshBuiltIn();
+    return mods.getState();
+  });
   ipc_modsAddBuild.main!.handle(async ({ input }) => ({ build: await mods.addBuild(input) }));
   ipc_modsUpdateBuild.main!.handle(async ({ id, input }) => ({ build: await mods.updateBuild(id, input) }));
   ipc_modsRemoveBuild.main!.handle(async ({ id }) => {

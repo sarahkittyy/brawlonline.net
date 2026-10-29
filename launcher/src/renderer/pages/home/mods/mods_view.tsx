@@ -220,7 +220,12 @@ export const ModsView = (props: ModsViewProps) => {
           />
         </div>
       </div>
-      <SdSyncDialog sync={status?.session?.sd_sync ?? null} onRequest={props.onRequest} />
+      <SdSyncDialog
+        sync={status?.session?.sd_sync ?? null}
+        build={state?.builds.find((b) => b.id === state.runningBuildId) ?? null}
+        roomName={status?.room?.build.name}
+        onRequest={props.onRequest}
+      />
     </div>
   );
 };
@@ -235,9 +240,14 @@ export const SD_BIG_DIFFERENCE_BYTES = 50 * 1024 * 1024;
  * download the host's card, or leave. Dolphin waits for the answer. */
 const SdSyncDialog = ({
   sync,
+  build,
+  roomName,
   onRequest,
 }: {
   sync: ModSdSync | null;
+  /** The player's game the room plays, if known. */
+  build: ModBuild | null;
+  roomName?: string;
   onRequest: (request: ModRoomRequest) => void;
 }) => {
   const asking = sync?.step === "ask";
@@ -258,6 +268,8 @@ const SdSyncDialog = ({
       bigDifference={sync.bytes > SD_BIG_DIFFERENCE_BYTES}
       names={sync.names}
       files={sync.files}
+      build={build}
+      roomName={roomName}
       onAnswer={(choice) => {
         setAnswered(true);
         onRequest({ op: "sd-sync", choice });
@@ -266,14 +278,18 @@ const SdSyncDialog = ({
   );
 };
 
-/** The SD card question (a room's card that differs from the player's): how much differs, the
- * warning, the largest files that differ, and No / Yes / Yes, and overwrite local card. */
+/** The SD card question (a room's card that differs from the player's): which of the player's
+ * games joins and the room's, how much differs, the warning, the largest files that differ, and
+ * No / Yes / Yes, and overwrite <the game>'s card. Brawl Online's own P+ has no overwrite (its card
+ * stays P+'s; Sarah's board, 2026-10-29). */
 export const SdCardDialog = ({
   open,
   body,
   bigDifference,
   names,
   files,
+  build,
+  roomName,
   onAnswer,
 }: {
   open: boolean;
@@ -284,6 +300,10 @@ export const SdCardDialog = ({
   names: string[];
   /** How many files differ in all. */
   files: number;
+  /** The player's game whose card it is, when known. */
+  build?: ModBuild | null;
+  /** The room's game, as its host named it. */
+  roomName?: string;
   onAnswer: (choice: "yes" | "overwrite" | "no") => void;
 }) => {
   const shown = names.slice(0, 8);
@@ -292,10 +312,12 @@ export const SdCardDialog = ({
     <Dialog open={open} maxWidth="sm" fullWidth={true}>
       <DialogTitle>{Messages.sdSyncTitle()}</DialogTitle>
       <DialogContent>
+        {build && <p className={styles.sdSyncBody}>{Messages.sdSyncGames(build.name, roomName)}</p>}
         <p className={styles.sdSyncBody}>
           {body}
           {bigDifference && ` ${Messages.sdBigDifferenceQuestion()}`}
         </p>
+        {build?.builtIn && <p className={styles.sdSyncBody}>{Messages.sdSyncBuiltInKept(build.name)}</p>}
         <p className={styles.sdSyncWarning}>{Messages.sdSyncWarning()}</p>
         {shown.length > 0 && (
           <div className={styles.sdSyncFiles}>
@@ -311,12 +333,14 @@ export const SdCardDialog = ({
       </DialogContent>
       <DialogActions>
         <Button onClick={() => onAnswer("no")}>{Messages.sdSyncNo()}</Button>
-        <Button variant="outlined" onClick={() => onAnswer("yes")}>
+        <Button variant={build?.builtIn ? "contained" : "outlined"} onClick={() => onAnswer("yes")}>
           {Messages.sdSyncYes()}
         </Button>
-        <Button variant="contained" onClick={() => onAnswer("overwrite")}>
-          {Messages.sdSyncOverwrite()}
-        </Button>
+        {!build?.builtIn && (
+          <Button variant="contained" onClick={() => onAnswer("overwrite")}>
+            {build ? Messages.sdSyncOverwriteGame(build.name) : Messages.sdSyncOverwrite()}
+          </Button>
+        )}
       </DialogActions>
     </Dialog>
   );
@@ -636,22 +660,26 @@ const BuildRow = ({
         </div>
         <div className={styles.parts}>
           {build.gameId && <span className={styles.gameId}>{build.gameId}</span>}
-          {Messages.parts(fileName(build.discPath)!, fileName(build.launcherPath), fileName(build.sdPath))}
+          {build.builtIn
+            ? Messages.parts(fileName(build.discPath)!, Messages.builtInFiles(), null)
+            : Messages.parts(fileName(build.discPath)!, fileName(build.launcherPath), fileName(build.sdPath))}
         </div>
-        <Tooltip title={Messages.editTooltip()}>
+        <Tooltip title={build.builtIn ? Messages.editBuiltInTooltip() : Messages.editTooltip()}>
           <span>
             <IconButton size="small" aria-label={Messages.edit()} onClick={onEdit} disabled={disabled || hashing}>
               <EditOutlinedIcon fontSize="small" />
             </IconButton>
           </span>
         </Tooltip>
-        <Tooltip title={Messages.removeTooltip()}>
-          <span>
-            <IconButton size="small" aria-label={Messages.remove()} onClick={onRemove} disabled={disabled || hashing}>
-              <DeleteOutlineRoundedIcon fontSize="small" />
-            </IconButton>
-          </span>
-        </Tooltip>
+        {!build.builtIn && (
+          <Tooltip title={Messages.removeTooltip()}>
+            <span>
+              <IconButton size="small" aria-label={Messages.remove()} onClick={onRemove} disabled={disabled || hashing}>
+                <DeleteOutlineRoundedIcon fontSize="small" />
+              </IconButton>
+            </span>
+          </Tooltip>
+        )}
       </div>
       {hashing && (
         <div className={styles.progress}>

@@ -16,6 +16,7 @@ import DialogContent from "@mui/material/DialogContent";
 import DialogTitle from "@mui/material/DialogTitle";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 
+import { useDolphinStore } from "@/lib/dolphin/use_dolphin_store";
 import { usePlayDialogs } from "@/lib/dolphin/use_play";
 import { useAccount } from "@/lib/hooks/use_account";
 import { useLoginModal } from "@/lib/hooks/use_login_modal";
@@ -85,7 +86,12 @@ export const ModsTab = React.memo(function ModsTab() {
   // a part that differs (`closest`: a code typed in; the public rooms' list shows that itself).
   const [missing, setMissing] = useState<MissingGame | null>(null);
   // A room whose SD card differs from the player's: asked before Dolphin starts (sd_listing.ts).
-  const [sdAsk, setSdAsk] = useState<{ buildId: string; code: string; check: ModSdCardCheck } | null>(null);
+  const [sdAsk, setSdAsk] = useState<{
+    buildId: string;
+    code: string;
+    check: ModSdCardCheck;
+    roomName?: string;
+  } | null>(null);
   const openLogin = useLoginModal((s) => s.openModal);
   const outdated = query.isError && Date.now() - query.dataUpdatedAt > STALE_AFTER_MS;
   let publicRooms: ModsPublicRooms;
@@ -130,6 +136,13 @@ export const ModsTab = React.memo(function ModsTab() {
     };
   }, [modsService, showError]);
 
+  // Brawl Online's own P+ comes and goes with the Brawl disc and P+'s install: asked again when
+  // either changes (its state comes as an event).
+  const netplayStatus = useDolphinStore((store) => store.netplayStatus);
+  useEffect(() => {
+    void modsService.getState().catch(() => undefined);
+  }, [modsService, isoPath, netplayStatus]);
+
   // A room needs the player's login in Dolphin (its online connection): logged in, with an online
   // code, and the play key on disk, as Play makes sure (use_play.ts).
   const ensureOnline = useCallback(async (): Promise<boolean> => {
@@ -172,7 +185,7 @@ export const ModsTab = React.memo(function ModsTab() {
   const joinRoom = async (buildId: string, code: string, sdSync?: ModsSdChoice) => {
     const result = await modsService.join({ buildId, code, uid: uid ?? undefined, sdSync });
     if (result.outcome === "sd-card") {
-      setSdAsk({ buildId: result.buildId, code: result.code, check: result.check });
+      setSdAsk({ buildId: result.buildId, code: result.code, check: result.check, roomName: result.roomName });
     }
   };
 
@@ -188,7 +201,7 @@ export const ModsTab = React.memo(function ModsTab() {
       if (result.outcome === "no-game") {
         setMissing(result);
       } else if (result.outcome === "sd-card") {
-        setSdAsk({ buildId: result.buildId, code: result.code, check: result.check });
+        setSdAsk({ buildId: result.buildId, code: result.code, check: result.check, roomName: result.roomName });
       }
     } catch (err) {
       setError(errorText(err));
@@ -253,7 +266,8 @@ export const ModsTab = React.memo(function ModsTab() {
     // A name the launcher picked shows empty, so it keeps following the game's files.
     setAdding({
       kind: "edit",
-      name: build.autoName ? "" : build.name,
+      builtIn: build.builtIn,
+      name: build.autoName && !build.builtIn ? "" : build.name,
       discPath: build.discPath,
       launcherPath: build.launcherPath ?? null,
       sdPath: build.sdPath ?? null,
@@ -398,6 +412,8 @@ export const ModsTab = React.memo(function ModsTab() {
         bigDifference={sdAsk?.check.kind === "differs" && sdAsk.check.bytes > SD_BIG_DIFFERENCE_BYTES}
         names={sdAsk?.check.kind === "differs" ? sdAsk.check.names : []}
         files={sdAsk?.check.kind === "differs" ? sdAsk.check.files : 0}
+        build={sdAsk ? state?.builds.find((b) => b.id === sdAsk.buildId) : null}
+        roomName={sdAsk?.roomName}
         onAnswer={onSdAnswer}
       />
       <Dialog open={missing !== null} onClose={() => setMissing(null)} maxWidth="xs" fullWidth={true}>

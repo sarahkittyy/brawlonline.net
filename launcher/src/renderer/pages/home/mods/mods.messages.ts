@@ -19,6 +19,13 @@ export const ModsMessages = {
   hashFailed: (name: string, error: string) => `Couldn't check ${name}: ${error}`,
   edit: () => "Edit",
   editTooltip: () => "Change this game's name or files.",
+  // Brawl Online's own Project+ (ModsManager.refreshBuiltIn): the Brawl disc from Settings and the
+  // launcher's P+ files.
+  builtInFiles: () => "Brawl Online's Project+",
+  editBuiltInTooltip: () => "Its save data.",
+  builtInHelp: () =>
+    "Built into Brawl Online: your Brawl disc from Settings with the launcher's own Project+ files. Rooms never change them. To use another Brawl disc, change it in Settings.",
+  close: () => "Close",
   remove: () => "Remove",
   removeTooltip: () => "Remove this game from the list (your files stay where they are).",
   host: () => "Host",
@@ -173,6 +180,14 @@ export const ModsMessages = {
   sdSyncNo: () => "No",
   sdSyncYes: () => "Yes",
   sdSyncOverwrite: () => "Yes, and overwrite local card",
+  sdSyncOverwriteGame: (game: string) => `Yes, and overwrite ${game}'s card`,
+  // Which of the player's games joins (the one on the room's disc), and the room's.
+  sdSyncGames: (game: string, room?: string) =>
+    room && room !== game
+      ? `This room plays ${room}. You're joining with your ${game}.`
+      : `You're joining with your ${game}.`,
+  sdSyncBuiltInKept: (game: string) =>
+    `${game}'s files stay as they are: the host's card is only used for this room, and downloaded again next time.`,
   sdSyncChecking: (percent: number) => `Checking your SD card… ${percent}%`,
   sdSyncDownloading: (percent: number, rate: string, eta: string) =>
     `Downloading the host's SD card… ${percent}% · ${rate} · ${eta} left`,
