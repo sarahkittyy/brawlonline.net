@@ -15,6 +15,7 @@ from typing import Any, Callable
 
 import pytest
 
+from ppharness import brawl as B
 from ppharness.backend import OnlineBackend
 from ppharness.instance import DolphinInstance
 
@@ -225,6 +226,71 @@ def test_all_star(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance
     # Someone lost a stock: their port played their roster's second character too.
     assert any(seen[a.name][i] >= {r[0][0], r[1][0]} for i, r in enumerate((rosters[a.name], rosters[b.name]))), seen
 
+
+
+COSTUME_LIST = 0x80585B08   # P+'s CSS slot table's costume lists (+0x10 a slot): {colour, file} each
+
+
+def costume_files(g: Game, css: int) -> list[int]:
+    """The character's costume files by costume number (P+'s list, up to its colour 0x0C)."""
+    raw = g.c.read_mem(u32(g, COSTUME_LIST + 0x10 * css), 0x40)
+    out = []
+    for k in range(0x20):
+        if raw[2 * k] == 0x0C:
+            break
+        out.append(raw[2 * k + 1])
+    return out
+
+
+def costume_on_css(g: Game, css: int, costume: int) -> None:
+    """The local panel's coin on `css`, then X up to `costume`."""
+    B.css_pick_character(g.c, 0, css)
+    for _ in range(costume):
+        g.c.pad_script(0, [{"buttons": ["X"], "hold": 3}, {"buttons": [], "hold": 6}])
+        B.step(g.c, 12)
+    assert u32(g, css_area(g) + 0x1BC) == costume, u32(g, css_area(g) + 0x1BC)
+
+
+def test_all_star_costume_files(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
+                                gpu_backend: str) -> None:
+    """All-Star loads each player's costume (bug report #184, Falcon's costume 17: "I tried to play
+    all star battle and it ... broke"). P+'s roster entry holds the costume's file, not its number
+    (Falcon's 17 is FitCaptain44.pac), and it reaches the match whatever the file (Dolphin dropped
+    any past 31, and the match then asked for FitCaptain17.pac, which does not exist, and never
+    started); a player with no entry of their own (the coin placed before All-Star came on) gets
+    their costume's file too (Samus's 9 is FitSamus27.pac)."""
+    a, b, _code = special_room(backend, dolphin, gpu_backend, "sp-allstar-files",
+                               ruleset_with("All-Star files", special={"other": "all-star"}))
+    samus, falcon = B.CSS_ID["samus"], B.CSS_ID["captain_falcon"]
+    files = {css: costume_files(a, css) for css in (samus, falcon)}
+    assert len(files[samus]) > 9 and len(files[falcon]) > 17, files
+    want_a, want_b = files[falcon][17], files[samus][9]
+    assert (want_a, want_b) == (44, 27), (want_a, want_b)   # P+ v3.2.1
+    falcon_kind, samus_kind = B.CSS_TO_CHAR_KIND[falcon], B.CSS_TO_CHAR_KIND[samus]
+    all_star_roster(a, [])
+    costume_on_css(a, falcon, 17)
+    # A's roster as P+'s CSS made it: Falcon, his costume's file and its number.
+    assert a.c.read_mem(ALL_STAR_TABLE, 4) == bytes((falcon_kind, want_a, 17, 0xCC)), a.c.read_mem(ALL_STAR_TABLE, 4).hex()
+    costume_on_css(b, samus, 9)
+    all_star_roster(b, [])   # none placed since All-Star came on
+    players = [a, b]
+    a.steps("tap START 8", "wait 40")
+    _wait(lambda: ppom.read_room(b.c, ppom.find_block(b.c))["slots"][0]["bits"] & ppom.SLOT_READY, 20, "B sees A ready")
+    b.steps("tap START 8", "wait 10")
+    try:
+        online_set.wait(lambda: all(online_set.gstatus(g.c)["phase"] == "running" for g in players), 240,
+                        "both in the match")
+    except TimeoutError:
+        raise AssertionError("the match never ran: a fighter's costume file did not load (bug #184)") from None
+    a.steps("wait 200")
+    for g in players:
+        se = ppom.read_session(g.c, ppom.find_block(g.c))
+        assert [x["roster"] for x in se["extra"][:2]] == [[(falcon_kind, want_a, 17, falcon)], [(samus_kind, want_b, 9, samus)]],             se["extra"][:2]
+        mm = g.c.read_mem(u32(g, u32(g, GG) + MODE_MELEE) + MM_PLAYERS, 2 * PLAYER_SIZE)
+        assert [mm[i * PLAYER_SIZE + 5] for i in range(2)] == [want_a, want_b], (g.name, mm[5], mm[PLAYER_SIZE + 5])
+        g.shot("match")
+    rep = online_set.play_game(players, 1)
+    assert rep["checksums"]["mismatches"] == 0, rep
 
 def test_stamina_hp(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance], gpu_backend: str) -> None:
     """Stamina: each player's HP picked on their panel's box (Brawl's HP list, area+0x1D0 = HP / 10)

@@ -194,6 +194,21 @@ namespace OnlineMatch {
         return n;
     }
 
+    // The costume file a costume number loads: the second byte of its entry in the same list (the
+    // Versus setup turns the record's costume number into it; Falcon's 17 is FitCaptain44.pac).
+    // `costume` itself if the list has no such entry.
+    u8 costumeFile(u8 charKind, u8 costume)
+    {
+        typedef int (*ToSelchFn)(int);
+        int slot = ((ToSelchFn)0x800AF708)(charKind);
+        u32 list = *(u32*)(0x80585B08 + ((u32)slot & 0xFF) * 0x10);
+        if (!isPtr(list) || costume >= 0x20) return costume;
+        for (int n = 0; n <= costume; n++) {
+            if (*(u8*)(list + 2 * n) == 0x0C) return costume;
+        }
+        return *(u8*)(list + 2 * costume + 1);
+    }
+
     // A player's costume in a team battle in the teams' costumes (the room's TEAMS, 2026-10-21; until
     // 2026-10-12 every room team battle): the one the CSS would give them for their team. The CSS
     // calls muMenu::findCharTeamColorNo (0x800AF520) with the CSS character, the team and P+'s "team

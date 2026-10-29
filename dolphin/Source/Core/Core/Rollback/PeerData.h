@@ -260,7 +260,10 @@ void SanitizePortValues(std::array<u8, N>& pv)
 constexpr u16 MAX_PICKED_HP = 999;
 constexpr size_t ROSTER_MAX = 16;
 constexpr size_t PX_HP = 0, PX_ROSTER_COUNT = 2, PX_ROSTER = 8, PX_ENTRY = 4;
-// An entry's colour byte: P+'s colour number, or its AltZ / AltR mark (0x3D / 0x3E).
+// An entry's colour byte: the costume's file, FitX<NN>.pac (P+'s costume list gives it: not the
+// costume number, Falcon's costume 17 is file 44, bug #184), or P+'s AltZ / AltR mark (0x3D /
+// 0x3E). Up to 99, the files' two digits.
+constexpr u8 MAX_ROSTER_COLOUR = 99;
 bool ValidRosterColour(u8 colour);
 constexpr u8 MAX_CSS_ID = 0x3F;
 template <size_t N>
