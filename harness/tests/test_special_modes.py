@@ -292,6 +292,70 @@ def test_all_star_costume_files(backend: OnlineBackend, dolphin: Callable[..., D
     rep = online_set.play_game(players, 1)
     assert rep["checksums"]["mismatches"] == 0, rep
 
+
+def css_fps(g: Game, secs: float = 4.0) -> float:
+    """The game loops a second (gfApplication's counter over `secs` of wall time)."""
+    f0 = B.read_frame_counters(g.c.read_mem)["app"]
+    t0 = time.monotonic()
+    time.sleep(secs)
+    return (B.read_frame_counters(g.c.read_mem)["app"] - f0) / (time.monotonic() - t0)
+
+
+def test_all_star_room_css_and_next_game(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
+                                         gpu_backend: str) -> None:
+    """The All-Star room CSS runs at full speed, and the next game starts from each player's own
+    roster (Sarah's board, 2026-10-29: "why am i 45 fps after one game in all-star mode", "we also
+    ended up as the same character next game, like even though he never picked kirby"). P+'s
+    All-Star code in the CSS's setChar leaves 0xAC in r15, where RoomCss kept the other panel's
+    view: every frame that panel was set up again, and P+'s AsyncRSP copied its portrait (0.9 MB,
+    byte by byte); the CSS ran at about 47 frames a second before and after a game. The match
+    setup writes every player's roster into P+'s tables in session order, so back on the CSS the
+    local table held P1's roster, and P2's next lock-in carried it."""
+    a, b, _code = special_room(backend, dolphin, gpu_backend, "sp-allstar-next",
+                               ruleset_with("All-Star next", stocks=2, special={"other": "all-star"}))
+    # As players build them, the last entry the coin placed: A Marth then Fox (its coin on Fox
+    # from special_room), B Fox then Mewtwo (a coin placed with All-Star on, P+'s hook appends it).
+    marth, fox, mewtwo = (0x15, 0, 0, 0x13), (0x07, 0, 0, 0x07), (0x28, 0, 0, 0x24)
+    all_star_roster(a, [marth, fox])
+    all_star_roster(b, [fox])
+    B.css_pick_character(b.c, 0, 0x24)
+    for g in (a, b):
+        g.steps("wait 30")
+    own = {g.name: (g.c.read_mem(ALL_STAR_TABLE, 0xA0), g.c.read_mem(ALL_STAR_TWIN, 0x70)) for g in (a, b)}
+    assert own[b.name][0][:7] == bytes((*fox[:3], *mewtwo[:3], 0xCC)), own[b.name][0][:8].hex()
+    rosters = {a.name: [marth, fox], b.name: [fox, mewtwo]}
+    for g in (a, b):
+        fps = css_fps(g)
+        assert fps > 57, (g.name, "the All-Star CSS before the game", fps)
+    players = [a, b]
+    a.steps("tap START 8", "wait 40")
+    _wait(lambda: ppom.read_room(b.c, ppom.find_block(b.c))["slots"][0]["bits"] & ppom.SLOT_READY, 20, "B sees A ready")
+    b.steps("tap START 8", "wait 10")
+    rep = online_set.play_game(players, 1)
+    assert rep["checksums"]["mismatches"] == 0, rep
+    _wait(lambda: a.scene() == CSS and b.scene() == CSS, 180, "both back on the room's CSS")
+    for g in (a, b):
+        g.steps("wait 120")
+        fps = css_fps(g)
+        assert fps > 57, (g.name, "the All-Star CSS after the game", fps)
+        # The local panel's tables as this player left them, not P1's from the match.
+        assert g.c.read_mem(ALL_STAR_TABLE, 0xA0) == own[g.name][0], g.c.read_mem(ALL_STAR_TABLE, 8).hex()
+        assert g.c.read_mem(ALL_STAR_TWIN, 0x70) == own[g.name][1]
+        g.shot("back-on-css")
+    # Game 2 with the coins kept (no new coin): each player's own roster, its first character first.
+    a.steps("tap START 8", "wait 40")
+    _wait(lambda: ppom.read_room(b.c, ppom.find_block(b.c))["slots"][0]["bits"] & ppom.SLOT_READY, 30, "B sees A ready")
+    b.steps("tap START 8", "wait 10")
+    online_set.wait(lambda: all(online_set.gstatus(g.c)["phase"] == "running" for g in players), 240, "game 2")
+    a.steps("wait 200")
+    for g in players:
+        se = ppom.read_session(g.c, ppom.find_block(g.c))
+        assert [x["roster"] for x in se["extra"][:2]] == [rosters[a.name], rosters[b.name]], se["extra"][:2]
+        mm = g.c.read_mem(u32(g, u32(g, GG) + MODE_MELEE) + MM_PLAYERS, 2 * PLAYER_SIZE)
+        assert [mm[i * PLAYER_SIZE] for i in range(2)] == [marth[0], fox[0]], (g.name, mm[0], mm[PLAYER_SIZE])
+        g.shot("game-2")
+
+
 def test_stamina_hp(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance], gpu_backend: str) -> None:
     """Stamina: each player's HP picked on their panel's box (Brawl's HP list, area+0x1D0 = HP / 10)
     goes with their lock-in, the others' panels show it once ready, and the match gives each player

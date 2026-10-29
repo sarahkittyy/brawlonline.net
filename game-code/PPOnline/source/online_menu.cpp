@@ -536,6 +536,33 @@ namespace OnlineMenu {
         ex.rosterCount = (u8)n;
     }
 
+    // P+'s All-Star tables as this CSS left them at the last lock-in with All-Star on. The match
+    // setup writes every player's roster into them in session order (AllStar::writeTables), so
+    // after a match the local panel's table (port 0) held P1's roster on every machine: the next
+    // lock-in took it for the player's own, and both players started game 2 as P1's first
+    // character (Sarah's board, 2026-10-29: "we ended up as the same character next game, like
+    // even though he never picked kirby"). The CSS gets them back on the way from the match
+    // (restoreCss), as it gets the coin: the player's own roster, to place more coins on.
+    static u8 s_allStarTable[4 * 0xA0];
+    static u8 s_allStarTwin[4 * 0x70];
+    static bool s_allStarSaved = false;
+
+    static void saveAllStarTables(bool on)
+    {
+        s_allStarSaved = on;
+        if (!on) return;
+        memcpy(s_allStarTable, (const void*)0x80588000, sizeof(s_allStarTable));
+        memcpy(s_allStarTwin, (const void*)0x80588300, sizeof(s_allStarTwin));
+    }
+
+    static void restoreAllStarTables()
+    {
+        if (!s_allStarSaved) return;
+        s_allStarSaved = false;
+        memcpy((void*)0x80588000, s_allStarTable, sizeof(s_allStarTable));
+        memcpy((void*)0x80588300, s_allStarTwin, sizeof(s_allStarTwin));
+    }
+
     // The characters on the local panel's All-Star roster (P+'s table up to its 0xCC).
     static int allStarCount()
     {
@@ -591,7 +618,9 @@ namespace OnlineMenu {
             ex.hp = RoomCss::myHp();
             s.lockedStocks = (u8)(ex.hp / 10);   // the HP box's count
         }
-        if (roomCss() && se.rules.valid && se.special.rows[PPOM::SR_OTHER] == 2) allStarRoster(ex, css, costume);
+        const bool allStar = roomCss() && se.rules.valid && se.special.rows[PPOM::SR_OTHER] == 2;
+        if (allStar) allStarRoster(ex, css, costume);
+        saveAllStarTables(allStar);
         PPOM::writeLockIn(true, (u8)coin, charKindOf(css), (u8)(costume | s.startAlt), stagePick, asl,
                           (u8)game, &pv, s.startPad, &ex);
         s.lockedGame = game;
@@ -650,6 +679,7 @@ namespace OnlineMenu {
     void restoreCss()
     {
         prepareCss();
+        restoreAllStarTables();
         if (s.mode >= 0) cssSlotColours();   // the match's colours out of the lines
         if (s.mode < 0 || s.lastCss < 0) return;
         u32 gg = *(u32*)0x805A00E0;
