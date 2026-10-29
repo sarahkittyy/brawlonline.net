@@ -40,8 +40,16 @@ import { UserMenu } from "./user_menu/user_menu";
 const isMac = window.electron.bootstrap.isMac;
 
 /** Narrower than this (a small window, or a large Interface Size), the header's right side is
- * compact: the account's picture without its name (user_info.module.css) and tighter icons. */
-const COMPACT_HEADER = "@media (width <= 1120px)";
+ * compact: the account's picture without its name (user_info.module.css) and tighter icons. The
+ * full header with a 160 px name needs 1248 px (in the game theme). */
+const COMPACT_HEADER = "@media (width <= 1250px)";
+
+/** Narrower steps, each fitting the header (logged in) down to the next: compact needs 1003 px,
+ * then 904, 848 and 756. The smallest window (main.ts, 980 px) is 771 px wide at 125 % Interface
+ * Size. Measured in the game theme, whose title font is wider than the fallback's. */
+const NARROW_TABS = "@media (width <= 1010px)";
+const NARROWER_HEADER = "@media (width <= 910px)";
+const NARROWEST_HEADER = "@media (width <= 850px)";
 
 const OuterBox = styled(Box)`
   background-color: var(--surface-1);
@@ -77,6 +85,9 @@ export const Header = ({ menuItems }: { menuItems: readonly MenuItem[] }) => {
         <div
           css={css`
             margin: 0 10px;
+            ${NARROWEST_HEADER} {
+              margin: 0 6px;
+            }
           `}
         >
           <PlayButton onClick={() => onPlay()} />
@@ -86,15 +97,28 @@ export const Header = ({ menuItems }: { menuItems: readonly MenuItem[] }) => {
             display: flex;
             height: 100%;
             /* Narrower still (a large Interface Size): the tab icons give up some of their room. */
-            @media (width <= 860px) {
+            ${NARROW_TABS} {
               & .MuiButton-root {
                 min-width: 44px;
                 padding: 6px 10px;
               }
             }
+            ${NARROWER_HEADER} {
+              & .MuiButton-root {
+                min-width: 40px;
+                padding: 6px 8px;
+              }
+            }
+            ${NARROWEST_HEADER} {
+              & .MuiButton-root {
+                min-width: 32px;
+                padding: 6px 4px;
+              }
+            }
           `}
         >
           <MainMenu menuItems={menuItems} />
+          <TournamentsButton />
         </div>
       </div>
       <Box
@@ -107,14 +131,13 @@ export const Header = ({ menuItems }: { menuItems: readonly MenuItem[] }) => {
               padding: 8px;
             }
           }
-          @media (width <= 760px) {
+          ${NARROWER_HEADER} {
             & .MuiIconButton-root {
               padding: 4px;
             }
           }
         `}
       >
-        <TournamentsButton />
         {currentUser ? (
           <UserMenu user={currentUser} handleError={showError} />
         ) : (
@@ -171,36 +194,30 @@ const trophyGlow = keyframes`
   50% { filter: drop-shadow(0 0 8px rgba(255, 196, 40, 0.95)); }
 `;
 
-/** A glowing golden trophy left of the account: the community's tournaments, in the browser. */
+/** A glowing golden trophy after the tab icons, sized like them: the community's tournaments, in
+ * the browser. */
 const TournamentsButton = () => (
-  <Tooltip title={Messages.tournaments()}>
-    <IconButton
-      component="a"
-      href={TOURNAMENTS_URL}
-      target="_blank"
-      rel="noopener noreferrer"
-      aria-label={Messages.tournaments()}
-      css={css`
-        margin-right: 16px;
-        color: #ffc83d;
-        animation: ${trophyGlow} 2.4s ease-in-out infinite;
-        &:hover {
-          color: #ffd966;
-          background-color: rgba(255, 196, 40, 0.12);
-        }
-        @media (prefers-reduced-motion: reduce) {
-          animation: none;
-          filter: drop-shadow(0 0 5px rgba(255, 196, 40, 0.8));
-        }
-        ${COMPACT_HEADER} {
-          margin-right: 6px;
-        }
-      `}
-      size="large"
-    >
-      <EmojiEventsRoundedIcon />
-    </IconButton>
-  </Tooltip>
+  <Button
+    component="a"
+    href={TOURNAMENTS_URL}
+    target="_blank"
+    rel="noopener noreferrer"
+    aria-label={Messages.tournaments()}
+    css={css`
+      color: #ffc83d;
+      animation: ${trophyGlow} 2.4s ease-in-out infinite;
+      &:hover {
+        color: #ffd966;
+        background-color: rgba(255, 196, 40, 0.12);
+      }
+      @media (prefers-reduced-motion: reduce) {
+        animation: none;
+        filter: drop-shadow(0 0 5px rgba(255, 196, 40, 0.8));
+      }
+    `}
+  >
+    <EmojiEventsRoundedIcon />
+  </Button>
 );
 
 /** The bell: chat message and invite sounds on or off. */
@@ -292,6 +309,9 @@ const CheckForUpdatesButton = () => {
             font-size: 18px;
             color: var(--off-white);
             text-transform: none;
+            ${NARROWEST_HEADER} {
+              font-size: 14px;
+            }
           `}
         >
           {PRODUCT_NAME}

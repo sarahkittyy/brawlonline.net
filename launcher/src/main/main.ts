@@ -208,7 +208,8 @@ const createWindow = async () => {
     width: 1280,
     height: 750,
     minHeight: isDevelopment ? undefined : 450,
-    minWidth: isDevelopment ? undefined : 900,
+    // The header fits down to 756 CSS px (header.tsx); 980 px is 771 at 125 % Interface Size.
+    minWidth: isDevelopment ? undefined : 980,
     backgroundColor: BACKGROUND_COLOR,
     icon: getWindowIcon(),
 

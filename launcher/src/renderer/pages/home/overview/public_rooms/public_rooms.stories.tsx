@@ -225,7 +225,7 @@ export const GameBusy = () => {
   );
 };
 
-/** The narrowest window the launcher allows (900 px). */
+/** A window of 900 px (the launcher allows 980 px; a larger Interface Size is narrower still). */
 export const NarrowWindow = () => <Frame width={900} state={{ kind: "ready", online: 128, rooms: mockRooms }} />;
 
 /** The narrowest window with the whole header: a long ruleset name, its code and Create room. */
