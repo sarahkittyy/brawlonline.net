@@ -707,6 +707,9 @@ struct State
   int io_wait_n = 0;
   GuestRegs io_saved;
   u64 io_waits = 0, sound_waits = 0, io_wait_retraces = 0, io_wait_timeouts = 0;
+  // The waits' wall-clock time (unthrottled, CoreTimingManager::SetRollbackLoadWait).
+  Clock::time_point io_wait_t0{};
+  double io_wait_ms = 0, io_wait_ms_max = 0;
   // Diagnostics (PPR_GPRB_FORCE_FINAL): ports still to be given their Final Smash before the match
   // starts under rollback, and whether a guest call for it is running.
   u32 force_final_todo = 0;
@@ -880,6 +883,7 @@ void CommitSoundPass();
 bool PauseResimAudio();
 // File loads in a match (defined with RunSoundStops below).
 bool RunIoWait(const Core::CPUThreadGuard& guard);
+bool LoadWaitUnthrottled();
 bool RunForceFinal(const Core::CPUThreadGuard& guard);
 bool RunForceFinalAt(const Core::CPUThreadGuard& guard, s64 frame, bool first_run);
 void SaveGuestRegs(const PowerPC::PowerPCState& ppc, State::GuestRegs* out);
@@ -3559,6 +3563,7 @@ void ResetRunStats()
   s.io_wait_sound = false;
   s.io_wait_n = 0;
   s.io_waits = s.sound_waits = s.io_wait_retraces = s.io_wait_timeouts = 0;
+  s.io_wait_ms = s.io_wait_ms_max = 0;
   s.force_final_inited = false;  // the next match's countdown reads PPR_GPRB_FORCE_FINAL again
   s.force_final_at.clear();
   s.force_final_at_active = s.force_final_at_reenter = false;
@@ -3712,8 +3717,16 @@ void EndRunning(Core::System& system, const std::string& reason)
   auto& ct = system.GetCoreTiming();
   ct.ResetThrottleToNow();  // drops a rollback burst still pending
   ct.SetRollbackResimulating(false);
+  ct.SetRollbackLoadWait(false);
   ct.SetRollbackAudioWaits(false);
   ct.SetRollbackSpeedAdjustment(1.0);
+  if (s.io_waits)
+  {
+    INFO_LOG_FMT(BRAWLBACK,
+                 "gprb: load waits: {} ({} for sounds), {} retraces, {:.0f} ms (max {:.0f} ms){}",
+                 s.io_waits, s.sound_waits, s.io_wait_retraces, s.io_wait_ms, s.io_wait_ms_max,
+                 LoadWaitUnthrottled() ? "" : ", throttled");
+  }
   system.GetFifo().SetRollbackSessionDeterminism(false);
   system.GetCoreTiming().SetPresentPacing(false);
   s.resim_pass = false;
@@ -7878,6 +7891,8 @@ picojson::value Status()
   o["sound_waits"] = picojson::value(static_cast<double>(s.sound_waits));
   o["io_wait_retraces"] = picojson::value(static_cast<double>(s.io_wait_retraces));
   o["io_wait_timeouts"] = picojson::value(static_cast<double>(s.io_wait_timeouts));
+  o["io_wait_ms"] = picojson::value(s.io_wait_ms);
+  o["io_wait_ms_max"] = picojson::value(s.io_wait_ms_max);
   o["sound_gone_why"] = picojson::value(picojson::array{
       picojson::value(static_cast<double>(s.snd_gone_why[0])),
       picojson::value(static_cast<double>(s.snd_gone_why[1])),
@@ -9585,6 +9600,22 @@ u32 SoundLoadPending(const Core::CPUThreadGuard& guard)
   return queued <= 0x95 && loading <= 0x95 ? queued + loading : 0;
 }
 
+// The wait runs unthrottled (CoreTimingManager::SetRollbackLoadWait): no game frame runs during
+// it and the loads finish between the same two frames whatever the host's speed, so only its
+// wall-clock length changes (Sarah's board, 2026-10-29, All-Star: "there is SO much lag between
+// stocks when changing character", 0.3-0.7 s a change at the console's speed). The audio holds
+// during it (SystemTimers' AudioDMACallback). A file the host reads slowly (the SD image, a cold
+// disk cache) still takes its time. PPR_GPRB_LOAD_WAIT=throttled keeps the console's speed
+// (comparisons).
+bool LoadWaitUnthrottled()
+{
+  static const bool throttled = [] {
+    const char* env = std::getenv("PPR_GPRB_LOAD_WAIT");
+    return env && std::strcmp(env, "throttled") == 0;
+  }();
+  return !throttled;
+}
+
 bool RunIoWait(const Core::CPUThreadGuard& guard)
 {
   auto& ppc = guard.GetSystem().GetPPCState();
@@ -9600,6 +9631,9 @@ bool RunIoWait(const Core::CPUThreadGuard& guard)
       s.io_wait_update = true;
       s.io_wait_n = 0;
       ++s.io_waits;
+      s.io_wait_t0 = Clock::now();
+      if (LoadWaitUnthrottled())
+        guard.GetSystem().GetCoreTiming().SetRollbackLoadWait(true);
     }
     ppc.spr[SPR_LR] = LOOP_TOP;
     if (s.io_wait_update)
@@ -9627,6 +9661,17 @@ bool RunIoWait(const Core::CPUThreadGuard& guard)
                    s.io_wait_n);
     }
     RestoreGuestRegs(ppc, s.io_saved);
+    guard.GetSystem().GetCoreTiming().SetRollbackLoadWait(false);
+    const double ms =
+        std::chrono::duration<double, std::milli>(Clock::now() - s.io_wait_t0).count();
+    s.io_wait_ms += ms;
+    s.io_wait_ms_max = std::max(s.io_wait_ms_max, ms);
+    if (s.io_wait_n >= 10 || ms >= 50)
+    {
+      INFO_LOG_FMT(BRAWLBACK, "gprb: waited {} retraces ({:.0f} ms) at frame {}{} for {}", s.io_wait_n,
+                   ms, s.current_frame, s.phase == Phase::Running ? "" : " (countdown)",
+                   s.io_wait_sound ? "file IO and sounds" : "file IO");
+    }
     s.io_wait_active = false;
     s.io_wait_n = 0;
     if (s.io_wait_sound)

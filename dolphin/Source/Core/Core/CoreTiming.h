@@ -191,6 +191,14 @@ public:
   // CPU thread only.
   void SetRollbackResimulating(bool resimulating);
   bool IsRollbackResimulating() const { return m_rollback_resimulating; }
+  // A gameplay session's wait at the loop top for the game's file and sound loads (All-Star's
+  // next fighter after a lost stock): no game frame runs and nothing new is shown until they are
+  // done, so the wait runs unthrottled, and the throttle starts again from the time it ends. With
+  // the audio clock waiting for re-runs (SetRollbackAudioWaits) the audio DMA holds during it too
+  // (SystemTimers' AudioDMACallback): the music and sounds stop for the wait's few milliseconds
+  // instead of skipping the emulated time it took. CPU thread only.
+  void SetRollbackLoadWait(bool waiting);
+  bool IsRollbackLoadWait() const { return m_rollback_load_wait; }
 
   // Rush Frame Presentation in a gameplay rollback session. Rush lets the CPU sleep only at the
   // first throttle (an SI poll) after each frame is presented, and the GPU thread used to re-arm it
@@ -328,6 +336,7 @@ private:
   bool m_correct_time_drift = false;
   double m_emulation_speed = 1.0;
   bool m_rollback_resimulating = false;
+  bool m_rollback_load_wait = false;
   bool m_rollback_audio_waits = false;
   s64 m_rollback_audio_pause = 0;
   double m_rollback_speed_factor = 1.0;

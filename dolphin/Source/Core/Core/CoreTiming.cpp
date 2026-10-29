@@ -478,7 +478,7 @@ TimePoint CoreTimingManager::CalculateTargetHostTimeInternal(s64 target_cycle)
 bool CoreTimingManager::IsSpeedUnlimited() const
 {
   return m_throttle_adj_clock_per_sec == 0 || Core::GetIsThrottlerTempDisabled() ||
-         m_rollback_resimulating;
+         m_rollback_resimulating || m_rollback_load_wait;
 }
 
 void CoreTimingManager::SetRollbackResimulating(bool resimulating)
@@ -506,6 +506,17 @@ void CoreTimingManager::SetRollbackResimulating(bool resimulating)
   // Throttle keeps re-anchoring the reference while unlimited; anchor once more when the
   // presented frame starts so it is paced from now, not from the start of the resimulation.
   if (!resimulating)
+    ResetThrottle(GetTicks());
+}
+
+void CoreTimingManager::SetRollbackLoadWait(bool waiting)
+{
+  if (m_rollback_load_wait == waiting)
+    return;
+  m_rollback_load_wait = waiting;
+  // (Throttle keeps re-anchoring the reference while unlimited; once more at the end, so the
+  // frames after the wait are paced from now and do not race to make up for it.)
+  if (!waiting && !m_rollback_resimulating)
     ResetThrottle(GetTicks());
 }
 
