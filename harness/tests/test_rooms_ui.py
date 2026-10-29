@@ -955,6 +955,60 @@ def test_room_ruleset_and_set(play_game: Game) -> None:
     g.shot("12-2v2-stars")
 
 
+def rules_row_state(g: Game) -> dict:
+    """The open rules menu: its kind (muRuleTask +0x28C; 2 = Special Brawl's), its RULES page's
+    cursor line and line 4's enabled byte (+0x6A4), and whether the STOCK CONTROL / STAGE CHOICE
+    rows (+0x50 / +0x58) have a PAT0 (MuObject anims +0x10: P+'s FRAME CONTROL / STAMINA TYPE)."""
+    rt = g.u32(css_task(g) + 0x62C)
+    page = g.u32(rt + 0x268)
+    pat = lambda off: g.u32(g.u32(g.u32(rt + off) + 0x14) + 0x10) != 0  # noqa: E731
+    return {"kind": g.u32(rt + 0x28C), "line": struct.unpack(">H", g.c.read_mem(page + 0x42, 2))[0],
+            "line4": g.c.read_mem(page + 0x6A4, 1)[0], "setPat": pat(0x50), "rulesetPat": pat(0x58)}
+
+
+def test_ruleset_and_set_rows_with_stamina_and_regen(play_game: Game) -> None:
+    """Sarah's board, 2026-10-29: with STAMINA on, RULES showed P+'s STAMINA TYPE (TYPE 5) where
+    the room's RULESET is, and the cursor skipped it. The hand over RULES hit Brawl's own rules
+    button (4, live on the stamina CSS), which opened P+'s menu as Special Brawl's; and P+'s
+    rules init gives those rows their STAMINA TYPE / FRAME CONTROL (REGEN) textures. Through the
+    RULES button both rows are the room's, and the host browses rulesets as without stamina."""
+    g = play_game
+    g.c.game_bridge_config(enabled=False)
+    create_room(g)
+    sim = g.sim
+    sim.rulesets = list(RULESETS)
+    sim.ruleset_db = dict(RULESET_DB)
+    v = RoomPlayView(g)
+    rb = RulesButton(g)
+    for name, special in (("stamina", [2, 0, 0, 0, 0, 0, 0, 0]), ("regen", [0, 0, 2, 0, 0, 0, 0, 0])):
+        sim.room.special = special
+        sim.room.stamina_type = 5 if name == "stamina" else 1
+        g.wait(60)
+        g.hand_to(*rb.centre(), tol=0.4)
+        g.wait(5)
+        assert hand_button(g) == BUTTON_RULES, (name, hex(hand_button(g)))
+        presses = rb.read()["presses"]
+        open_rules_line(g, 4)
+        assert rb.read()["presses"] == presses + 1, name
+        st = rules_row_state(g)
+        assert st == {"kind": 0, "line": 4, "line4": 1, "setPat": False, "rulesetPat": False}, (name, st)
+        assert (v.read()["ruleset"], v.read()["set"]) == ("P+ default", "No set"), (name, v.read())
+        g.shot(f"15-{name}-ruleset")
+        g.tap("DRIGHT", 4)
+        g.wait(15)
+        assert v.read()["ruleset"] == "NorCal Weekly v3", (name, v.read())
+        g.tap("DUP", 4)
+        g.wait(8)
+        g.tap("DUP", 4)
+        g.wait(15)
+        assert rules_row_state(g)["line"] == 2
+        g.shot(f"16-{name}-set")
+        close_rules(g)
+        # (the set rule's special rows back as the room's: P+'s CSS reads them)
+        rule = g.c.read_mem(g.u32(g.u32(0x805A00E0) + 0x1C), 0x20)
+        assert list(rule[0x18:0x20]) == special, (name, rule.hex())
+
+
 def test_host_changes_the_set_length(play_game: Game) -> None:
     """The SET line (staging feedback 2026-10-12: left / right did nothing): the host's left / right
     pick No set / Best of 3 / 5 / 7, sent as ROOM_BEST_OF when the menu closes; the room's rules

@@ -187,7 +187,28 @@ namespace RoomRules {
         OnlineMenu::applyRules();
         StageSwitch::open(!s.readOnly);
         RulesPages::open(!s.readOnly);
+        // The menu is made with no STAMINA or REGEN in the set rule (Sarah's board, 2026-10-29):
+        // P+'s muProcRule1::init (Rules.asm, 0x806A66B0) gives the STAGE CHOICE row its STAMINA
+        // TYPE label and value strip with STAMINA (+0x18 = 2; a PAT0, 126_TopN, over our RULESET
+        // copies; the strip at the type, +7) and the STOCK CONTROL row its FRAME CONTROL label
+        // with REGEN (+0x1A = 2; 124_TopN, over SET). Here those rows are the room's RULESET and
+        // SET; the stamina type is on the SPECIAL page. init runs inside openRules; the bytes are
+        // put back right after (cssSpecialRows writes them every frame too).
+        u8* rule = setRule();
+        u8 keep[3] = {0, 0, 0};
+        if (rule) {
+            keep[0] = rule[7];
+            keep[1] = rule[0x18];
+            keep[2] = rule[0x1A];
+            if (keep[1] == 2) rule[7] = 0;
+            rule[0x18] = rule[0x1A] = 0;
+        }
         pponline_callPreserving(OPEN_RULES, (u32)task, 0);
+        if (rule) {
+            rule[7] = keep[0];
+            rule[0x18] = keep[1];
+            rule[0x1A] = keep[2];
+        }
         s.opened = isOpen();
         if (s.opened) playSE(1);
     }
