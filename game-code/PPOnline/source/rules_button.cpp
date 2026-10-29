@@ -65,6 +65,7 @@ namespace {
 
     // Hand button numbers Brawl does not use: its table has 2-0x1A, the panels 0x1B-0x26.
     const int BUTTON_RULES = 0x30, BUTTON_SIT_OUT = 0x31;
+    const int BRAWL_RULES = 4;                // Brawl's own (buttonProcInAllArea: openRules, text+0x7C34)
     const u32 ITEM_OBJ = 0x420;               // muSelCharTask: MenSelchrState0005 (ITEM)
     const char* const MODEL = "MenSelchrState0005_TopN";
     const char* const ANIM = "MenSelchrState0005_TopN__0";
@@ -340,6 +341,12 @@ namespace {
     int hkHit(u8* task, float* rect, float* pos)
     {
         int hit = s_origHit(task, rect, pos);
+        // Brawl's own RULES button (4) is live on the room CSS with STAMINA on (as on Special
+        // Brawl's CSS) and lies under ours: A on it opened P+'s menu as Special Brawl's
+        // (its STAGE CHOICE row STAMINA TYPE, skipped by the cursor), not RoomRules::open's
+        // (Sarah's board, 2026-10-29). The room has one RULES button: ours.
+        const Button& rules = s_buttons[0];
+        if (hit == BRAWL_RULES && rules.obj && rules.task == task && rules.show) hit = 0;
         if (hit) return hit;
         for (int i = 0; i < 2; i++) {
             Button& b = s_buttons[i];

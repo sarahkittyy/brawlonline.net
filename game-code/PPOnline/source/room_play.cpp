@@ -477,11 +477,15 @@ namespace RoomPlay {
     {
         if (!s.wasOpen || !rulesTask()) return NULL;   // the rules menu, opened in a room
         // P+'s descriptions for the values these rows keep: stock control OFF, stage choice CHOOSE
-        if (Online::msbinLineContains(msbin, (int)line, "same stock count")) {
+        // (with REGEN P+ prints its FRAME CONTROL's, with STAMINA its STAMINA TYPE's: Rules.asm's
+        // setMessage hooks read the set rule's special rows)
+        if (Online::msbinLineContains(msbin, (int)line, "same stock count") ||
+            Online::msbinLineContains(msbin, (int)line, "damage resets")) {
             return s.host ? "Left/right: the set's length; during a set, End set (A)."
                           : "The room's set and its score.";
         }
-        if (Online::msbinLineContains(msbin, (int)line, "complete freedom")) {
+        if (Online::msbinLineContains(msbin, (int)line, "complete freedom") ||
+            Online::msbinLineContains(msbin, (int)line, "blastzones")) {
             return s.host ? "Left/right: your recent and own rulesets. A: play it."
                           : "The ruleset the room plays (the host picks it).";
         }
