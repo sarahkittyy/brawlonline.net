@@ -458,6 +458,23 @@ std::string LeaveReason(std::string_view why)
   return out;
 }
 
+int QualityDebt(double ratio, double avg_ping_ms, bool lenient)
+{
+  const double m = lenient ? 1.15 : 1.0;
+  // Slippi's tiers: severe 15, bad 8, mild 4, healthy -1.
+  const int speed = ratio >= 1.0 + 0.75 * m ? 15 :
+                    ratio >= 1.0 + 0.5 * m  ? 8 :
+                    ratio >= 1.0 + 0.1 * m  ? 4 :
+                                              -1;
+  const int ping = avg_ping_ms >= QUALITY_PING_SEVERE_MS * m ? 15 :
+                   avg_ping_ms >= QUALITY_PING_BAD_MS * m    ? 8 :
+                   avg_ping_ms >= QUALITY_PING_MILD_MS * m   ? 4 :
+                                                               -1;
+  // The worse, not the sum: a bad network stretches the interval (waits for the peer) and the
+  // round trip both.
+  return std::max(speed, ping);
+}
+
 std::vector<std::string> SetupKeyDiff(const std::vector<u8>& mine, const std::vector<u8>& theirs,
                                       size_t max_lines)
 {

@@ -56,6 +56,13 @@ void OnSessionStartFailed();
 void OnGameResult(const Gprb::Session::GameResult& result);
 // The opponent disconnected or went silent (GameBridge sees the lobby's disconnected flag).
 void OnPeerGone();
+// The game was aborted for its match quality (the lobby's quality_aborted, with its disconnected;
+// Gprb::Session::SetQualityAbort), by either player: the set is reported so, and the server voids
+// it, nobody rated.
+void OnQualityAbort();
+// Once, after OnQualityAbort: the CSS's status line says why the set ended (GameBridge's match
+// state after the cleanup). Cleared by a search and a new session.
+bool TakeQualityNotice();
 // A search starts (any mode): the last set's change is no longer shown, also one still on its
 // way. Back on the CSS after a cancelled search it read as the cost of cancelling (bug report
 // #159).

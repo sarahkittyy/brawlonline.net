@@ -197,6 +197,9 @@ pub struct GameReport {
 /// in the match history).
 pub const LEFT_BEFORE_STAGE_SELECT: &str = "left before the stage select";
 
+/// The end reason of a set whose game was aborted for its match quality ([`Leave::MatchQuality`]).
+pub const MATCH_QUALITY_LOW: &str = "match quality low";
+
 /// A client's report that the set ended early.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Leave {
@@ -204,6 +207,10 @@ pub enum Leave {
     Left,
     /// The reporter's opponent disconnected or went silent.
     OpponentLeft,
+    /// The game was aborted for its match quality, by either player's game (too slow, or too high
+    /// a round trip, for too long: Slippi's poor-performance termination, the user's, 2026-10-29).
+    /// Nobody is to blame.
+    MatchQuality,
 }
 
 impl Leave {
@@ -211,6 +218,7 @@ impl Leave {
         match s {
             "left" => Some(Leave::Left),
             "opponent_left" => Some(Leave::OpponentLeft),
+            "match_quality" => Some(Leave::MatchQuality),
             _ => None,
         }
     }
@@ -219,6 +227,7 @@ impl Leave {
         match self {
             Leave::Left => "left",
             Leave::OpponentLeft => "opponent_left",
+            Leave::MatchQuality => "match_quality",
         }
     }
 }
@@ -357,6 +366,10 @@ impl Outcome {
 ///   (it may be untrue); the set is orphaned if nothing more comes. One about a player whose game
 ///   had stopped running before it was made abandons the set for that player at once: a frozen
 ///   game can't report anything, and one that runs again is no longer stalled.
+/// - A [`Leave::MatchQuality`] from either player (their game aborted the set's game for its
+///   match quality, and the other's ended with it) voids the set as `TERMINATED`, nobody rated,
+///   whatever the games before it were (the user's, 2026-10-29: "no loss to either player"). Not
+///   when a player had left before it: that player abandoned the set.
 /// - A set with no report for `stale_after` is void as `ORPHANED`.
 ///
 /// Reports from anyone but the two players, and winners who are not one of them, are ignored
@@ -433,6 +446,11 @@ pub fn resolve(
 
     let reported = |p: usize, kind: Leave| leaves.iter().find(|l| l.reporter == players[p] && l.kind == kind);
     let left = [reported(0, Leave::Left), reported(1, Leave::Left)];
+    let first_left = left.iter().flatten().map(|l| l.at).min();
+    let quality = leaves.iter().filter(|l| l.kind == Leave::MatchQuality).map(|l| l.at).min();
+    if quality.is_some_and(|at| first_left.is_none_or(|l| at <= l)) {
+        return Outcome::Void { status: "TERMINATED", reason: MATCH_QUALITY_LOW.into(), wins };
+    }
     let opp_left = [reported(0, Leave::OpponentLeft), reported(1, Leave::OpponentLeft)];
     let played = wins.iter().sum::<u32>() > 0 || games.iter().any(|g| g.winner.is_none());
     let abandon = |leaver: usize| Outcome::Abandoned { leaver: players[leaver], other: players[1 - leaver], wins };
@@ -1089,6 +1107,37 @@ mod tests {
         let mut s = Set::new();
         s.leave(1, Leave::OpponentLeft, 1);
         assert_eq!(s.at_min(3), Outcome::Abandoned { leaver: s.p[0], other: s.p[1], wins: [0, 0] });
+    }
+
+    #[test]
+    fn an_abort_for_match_quality_voids_the_set() {
+        // Bug report #182: game 1 won by player 1, game 2 aborted 20 s in; both games say so.
+        let mut s = Set::new();
+        s.both(1, Some(1), 5).leave(0, Leave::MatchQuality, 7).leave(1, Leave::MatchQuality, 7);
+        let o = s.at_min(7);
+        assert_eq!(o, Outcome::Void { status: "TERMINATED", reason: MATCH_QUALITY_LOW.into(), wins: [0, 1] });
+        assert_eq!(scores(s.p, &o), [None, None]);
+        // One player's report is enough, at once (the other's abort never came, its game saw the
+        // connection go; or it has not reported yet).
+        let mut s = Set::new();
+        s.leave(1, Leave::MatchQuality, 2);
+        assert!(matches!(s.at_min(2), Outcome::Void { status: "TERMINATED", .. }));
+        let mut s = Set::new();
+        s.leave(0, Leave::OpponentLeft, 2).leave(1, Leave::MatchQuality, 2);
+        assert_eq!(s.at_min(2), Outcome::Void { status: "TERMINATED", reason: MATCH_QUALITY_LOW.into(), wins: [0, 0] });
+        // A player who left before it abandoned the set; a "left" after it changes nothing.
+        let mut s = Set::new();
+        s.leave(0, Leave::Left, 2).leave(1, Leave::MatchQuality, 3);
+        assert_eq!(s.at_min(3), Outcome::Abandoned { leaver: s.p[0], other: s.p[1], wins: [0, 0] });
+        let mut s = Set::new();
+        s.leave(1, Leave::MatchQuality, 2).leave(0, Leave::Left, 3);
+        assert!(matches!(s.at_min(3), Outcome::Void { status: "TERMINATED", .. }));
+        // A set decided before it stays decided.
+        let mut s = Set::new();
+        s.both(1, Some(0), 5).both(2, Some(0), 10).leave(1, Leave::MatchQuality, 11);
+        assert_eq!(s.at_min(11), Outcome::Complete { winner: s.p[0], loser: s.p[1], wins: [2, 0] });
+        assert_eq!(Leave::parse("match_quality"), Some(Leave::MatchQuality));
+        assert_eq!(Leave::MatchQuality.as_str(), "match_quality");
     }
 
     #[test]

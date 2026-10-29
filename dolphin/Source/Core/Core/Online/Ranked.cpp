@@ -13,6 +13,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <utility>
 
 #include <fmt/format.h>
 
@@ -96,6 +97,10 @@ std::array<int, 2> s_wins{};
 bool s_set_over = false;
 bool s_peer_gone = false;
 bool s_left_reported = false;
+// The game was aborted for its match quality (OnQualityAbort), and whether the CSS still has to
+// say so (TakeQualityNotice).
+bool s_quality_aborted = false;
+bool s_quality_notice = false;
 // The game has been sent to the stage select in this set (GP_FETCH_STEP answered with a stage
 // step). Leaving before that does not count (bug report #37): the "left" says so.
 bool s_stage_select = false;
@@ -377,6 +382,9 @@ void OnSessionStart(const Match& match)
   // runback plays the same match again (docs/game-code.md §11, the quit per mode). Ranked has no
   // pause since 2026-10-14 (the plugin's noRankedPause), so there it is only a safeguard.
   Gprb::Session::SetQuitLoses(ranked);
+  // Ranked: a game that runs badly (too slowly, or at too high a round trip) for too long is
+  // aborted and the set voided, nobody rated (the user's, 2026-10-29, as Slippi does since 3.6.3).
+  Gprb::Session::SetQualityAbort(ranked);
   // Ranked and a room's set: a desync plays the game again from the state every machine agreed on
   // (the user's, 2026-10-13); elsewhere it only ends the game (docs/game-code.md, desync recovery).
   const bool room_set = match.set && match.set->format.best_of > 0 &&
@@ -450,6 +458,8 @@ void OnSessionStart(const Match& match)
   s_set_over = false;
   s_peer_gone = false;
   s_left_reported = false;
+  s_quality_aborted = false;
+  s_quality_notice = false;
   s_stage_select = false;
   s_change.reset();
   s_last_status = "ASSIGNED";
@@ -584,9 +594,30 @@ void OnPeerGone()
   EnqueueResult();
 }
 
+void OnQualityAbort()
+{
+  std::lock_guard lk(s_mutex);
+  if (!s_active || s_set_over || s_peer_gone || s_left_reported)
+    return;
+  // No "left" or "opponent left" after it: the set ends here for both players.
+  s_peer_gone = true;
+  s_quality_aborted = true;
+  s_quality_notice = true;
+  NOTICE_LOG_FMT(NETPLAY, "Ranked: set {} aborted, its match quality is low", s_match_id);
+  EnqueueLeave(s_match_id, "match_quality");
+  EnqueueResult();
+}
+
+bool TakeQualityNotice()
+{
+  std::lock_guard lk(s_mutex);
+  return std::exchange(s_quality_notice, false);
+}
+
 void OnSearch()
 {
   std::lock_guard lk(s_mutex);
+  s_quality_notice = false;
   s_change.reset();
   if (s_result_pending)
     s_change_dropped = s_match_id;
@@ -673,6 +704,7 @@ picojson::object Status()
   o["set_over"] = picojson::value(s_set_over);
   o["peer_gone"] = picojson::value(s_peer_gone);
   o["left_reported"] = picojson::value(s_left_reported);
+  o["quality_aborted"] = picojson::value(s_quality_aborted);
   o["stage_select"] = picojson::value(s_stage_select);
   o["left_before_session"] = picojson::value(s_left_before_session);
   o["reports_sent"] = picojson::value(static_cast<double>(s_reports_sent));
