@@ -247,6 +247,9 @@ struct ConnectOptions
   // A pick plays P+'s alternate stage its held L/R/Z selects (the server's `alternateStages`:
   // Direct, Teams, a room whose ruleset has them on); else the stage's normal layout (asl 0).
   bool alternate_stages = false;
+  // Every player picks every game's stage, game 1 too (the server's `anyonePicks`: Direct): all
+  // of them are pickers whatever the last game said, and the first pick heard is played.
+  bool anyone_picks = false;
   // The room's Teams switch (docs/nplayer/setup.md): 3-4 players play a team battle with each
   // player's lock-in team (Online::GameSetup::DecideTeams); with 2 players it has no effect.
   bool teams = false;
@@ -395,6 +398,8 @@ struct Lobby
   bool teams = false;         // the next game is a team battle (players[i].team)
   bool team_colors = false;   // ... in the teams' costumes (else the rainbow team battle)
   u8 stage_pickers = 0;       // ports (bits) that pick the next stage (GameSetup::Outcome)
+  bool anyone_picks = false;  // every player picks every game's stage (NetOptions anyone_picks)
+  std::vector<u16> stages;    // with anyone_picks: the match's stages (START's random draws from them)
   u8 setup_error = 0;         // GameSetup::SetupError: why the next game is not set up
   bool after_match = false;   // a match ended and the game has not left its scene yet
   Restore restore;            // the next game restarts a desynced one (with setup_ready)

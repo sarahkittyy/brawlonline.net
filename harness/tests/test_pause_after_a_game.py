@@ -106,6 +106,7 @@ def test_pauses_under_rollback(backend: OnlineBackend, dolphin: Callable[..., Do
         _check(a, b, "after game 1")
         for g in (a, b):
             g.steps("tap START 8", "wait 30")
+        online_set.random_pick_where_anyone_picks([a, b], 2)   # (everyone picks in Direct)
         online_set.wait(lambda: all(online_set.gstatus(g.c)["phase"] == "running" for g in (a, b)), 120,
                         "game 2 to run on both")
         _pauses(a, b, "game 2")

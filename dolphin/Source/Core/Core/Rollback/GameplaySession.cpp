@@ -2293,6 +2293,20 @@ bool DecideRestart(u32 game, const std::array<const LockIn*, MAX_LOBBY_PLAYERS>&
   return true;
 }
 
+// Under s.mutex: the ports that pick the next game's stage. Where anyone picks (Direct), every
+// player still in the session, whatever the last game left (a loser, nobody after a quit).
+u8 StagePickers()
+{
+  if (!s.net_opts.anyone_picks || s.mode != Mode::Network || s.local_slot < 0)
+    return s.last_pickers;
+  u8 ports = static_cast<u8>(1u << s.local_slot);
+  ForEachPeer([&](int slot, const PeerView& p) {
+    if (!p.left)
+      ports |= static_cast<u8>(1u << slot);
+  });
+  return ports;
+}
+
 // Host, under s.mutex: once every player is locked in for the next game, decide its setup. The
 // stage: the pick of the player who lost the last game (waited for), else random from the
 // match's stage list (DrawRandomStage). Slippi: Unranked random (every game), Direct random for
@@ -2356,22 +2370,26 @@ void MaybeDecideSetup()
   // The stage pick: the last game's loser's (s.last_pickers: a 1v1's loser, both after a draw;
   // the game sends the lower port's), no one else's. A picker locks in with the character first
   // (STAGE_PENDING) and goes to the stage select once everyone is locked in: wait for that pick.
-  // In a room where anyone picks every player is a picker, all on the stage select at once: the
-  // first pick this machine sees is played (this runs on every lock-in heard and on our own, so
-  // the order is the order they arrive here; of picks that arrive together, the lowest port's),
-  // and the setup, once decided, stays.
+  // Where anyone picks (a room's ruleset, Direct: StagePickers) every player is a picker, all on
+  // the stage select at once: the first pick this machine sees is played (this runs on every
+  // lock-in heard and on our own, so the order is the order they arrive here; of picks that
+  // arrive together, the lowest port's), and the setup, once decided, stays.
+  const u8 pickers = StagePickers();
   std::array<u16, Online::GameSetup::MAX_PORTS> picks{NO_STAGE, NO_STAGE, NO_STAGE, NO_STAGE};
   bool pick_pending = false;
   for (size_t i = 0; i < locks.size(); ++i)
   {
     if (!locks[i])
       continue;
-    if (locks[i]->stage_pick == STAGE_PENDING)
-      pick_pending = pick_pending || ((s.last_pickers >> i) & 1);
+    // (Direct where anyone picks: game 1's lock-in is the search's, made before the session knew
+    // the player picks; their game locks in again with the pick to come, so a lock-in without a
+    // pick is waited for too.)
+    if (locks[i]->stage_pick == STAGE_PENDING || (s.net_opts.anyone_picks && locks[i]->stage_pick == NO_STAGE))
+      pick_pending = pick_pending || ((pickers >> i) & 1);
     else
       picks[i] = locks[i]->stage_pick;
   }
-  const int pick_port = Online::GameSetup::StagePickPort(s.last_pickers, picks);
+  const int pick_port = Online::GameSetup::StagePickPort(pickers, picks);
   if (!decided.applies && pick_pending && pick_port < 0)
     return;
   MatchSetup st;
@@ -7184,7 +7202,10 @@ Lobby GetLobby()
     l.restore = s.setup.restore;
   }
   l.last_winner = s.last_winner;
-  l.stage_pickers = s.last_pickers;
+  l.stage_pickers = StagePickers();
+  l.anyone_picks = s.net_opts.anyone_picks;
+  if (l.anyone_picks)
+    l.stages = AllowedStages();
   l.setup_error = s.setup_error;
   l.after_match = s.await_scene_exit;
   l.unheard = s.unheard_ports;
@@ -8020,7 +8041,8 @@ picojson::value Status()
     lobby["peer_lock"] = LockJson(fp >= 0 ? s.peers[fp].lock : LockIn{});
     lobby["setup"] = SetupJson(s.setup);
     lobby["last_winner"] = picojson::value(static_cast<double>(s.last_winner));
-    lobby["stage_pickers"] = picojson::value(static_cast<double>(s.last_pickers));
+    lobby["stage_pickers"] = picojson::value(static_cast<double>(StagePickers()));
+    lobby["anyone_picks"] = picojson::value(s.net_opts.anyone_picks);
     lobby["setup_error"] = picojson::value(static_cast<double>(s.setup_error));
     lobby["teams"] = picojson::value(s.net_opts.teams);
     lobby["team_colors"] = picojson::value(s.net_opts.team_colors);

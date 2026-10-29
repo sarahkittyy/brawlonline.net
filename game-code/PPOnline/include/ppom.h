@@ -594,7 +594,11 @@ namespace PPOM {
         u8 setFlags;      // SetFlags
         u8 sideSlots[2];  // each side's room slots (bit s = slot s), 0 without a set
         u8 winner;        // the winning side (0 / 1) once the set is finished, else 0xFF
-        u8 _reserved[10];
+        // v10, Dolphin, outside a room too: 1 = every player picks every game's stage at once, the
+        // first pick played (Direct; a room says it with stageChoice CHOICE_ANYONE_PICKS). With
+        // it, RoomStages' starters are the match's stages (START's random draws from them).
+        u8 anyonePicks;   // +0x36
+        u8 _reserved[9];
     };                    // 0x40
 
     // v7, in a room (Dolphin, from room-state; all zero outside one or from an older mm): the

@@ -131,6 +131,9 @@ constexpr u32 S_RULES = 0x220;  // v6: ppom.h Rules
 constexpr u32 S_PLAY = 0x240, RP_VALID = 0, RP_BEST_OF = 1, RP_CHOICE = 2, RP_CUSTOM = 3, RP_CODE = 4,
               RP_NAME = 0x0C, RP_NAME_LEN = 32, RP_SET_ON = 0x2C, RP_SET_GAME = 0x2D, RP_SCORE = 0x2E,
               RP_SIDES = 0x30, RP_SET_FLAGS = 0x32, RP_SIDE_SLOTS = 0x33, RP_WINNER = 0x35;
+// v10, outside a room too: 1 = every player picks every game's stage at once (Direct's session,
+// NetOptions anyone_picks; a room says it with its stage choice instead).
+constexpr u32 RP_ANYONE_PICKS = 0x36;
 // RoomPlay's stage choice: 0 loser picks (any stage), 1 strike, 2 random, 3 loser picks from the list,
 // 4 (v10) anyone picks.
 constexpr u8 CHOICE_LOSER_PICKS = 0, CHOICE_STRIKE = 1, CHOICE_RANDOM = 2, CHOICE_LOSER_PICKS_LIST = 3,
@@ -2109,6 +2112,17 @@ void SyncSession(const Core::CPUThreadGuard& guard, const Located& loc)
     };
     put(RS_STARTERS, v.ruleset.starters);
     put(RS_COUNTERPICKS, v.ruleset.counterpicks);
+  }
+  // v10: a session where anyone picks (Direct): the game's flag, and the match's stages as the
+  // starters, which START's random stage draws from (as a room's).
+  if (loc.version >= 10 && lobby.active && lobby.anyone_picks && !in_room)
+  {
+    session[S_PLAY + RP_ANYONE_PICKS] = 1;
+    for (const u16 id : lobby.stages)
+    {
+      if (id < 0x100)
+        session[S_STAGES + RS_STARTERS + id / 8] |= static_cast<u8>(1u << (id % 8));
+    }
   }
   // v6: the session's rules, the same on every machine (each got them from the server with its
   // ticket; the gameplay session compares what the game applied before every match).

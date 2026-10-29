@@ -730,6 +730,7 @@ def _connected_direct(backend: OnlineBackend, dolphin: Callable[..., DolphinInst
                       on_css: tuple[Any, Any] = (None, None),
                       after_first_search: Any = None,
                       env: tuple[Any, Any] = (None, None),
+                      pick_game_1: bool = True,
                       ) -> tuple[Game, Game, OnlineUser, OnlineUser]:
     """Two games on the Direct CSS with the gameplay backend (the default), searching for each
     other from the keypad until both are connected. Shorter rules than P+'s (`stocks` stocks,
@@ -739,7 +740,10 @@ def _connected_direct(backend: OnlineBackend, dolphin: Callable[..., DolphinInst
     stocks and times. `before_online`: a function per game, run on its main menu (offline)
     before it goes online. `on_css`: a function per game, run on its CSS after the character
     pick, before the search. `after_first_search`: run on the first game once it searches,
-    before the second one does. `env`: each Dolphin's extra environment."""
+    before the second one does. `env`: each Dolphin's extra environment. `pick_game_1`: everyone
+    picks the stage in Direct (2026-10-29), game 1 too, on the stage select both go to once
+    connected; the first player there presses START (a random stage of the server's list, as
+    Slippi's game 1 draw was), so game 1 starts by itself as before. False: the test picks."""
     ua = backend.create_user(names[0], names[0][:4].upper())
     ub = backend.create_user(names[1], names[1][:4].upper())
     a = _boot(dolphin, inst_names[0], backend, ua, gpu_backend, test, "gameplay",
@@ -775,6 +779,8 @@ def _connected_direct(backend: OnlineBackend, dolphin: Callable[..., DolphinInst
         st = _wait(lambda g=g: (lambda s: s if s["handoff"] == "started" else None)(g.c.mm_status()),
                    30, "the hand-off")
         assert st["session"]["backend"] == "gameplay", st["session"]
+    if pick_game_1:
+        online_set.random_pick_where_anyone_picks([a, b], 1)
     return a, b, ua, ub
 
 
@@ -787,13 +793,14 @@ def test_direct_set_under_the_gameplay_session(backend: OnlineBackend,
                                                dolphin: Callable[..., DolphinInstance],
                                                gpu_backend: str) -> None:
     """The real online path (backend-design 5.1 C): two players connect from the online CSS and
-    play a two-game Direct set without any reboot. Game 1 starts by itself (both locked in by
-    their search) on a random stage from P+'s legal list; both games build the same match from
+    play a three-game Direct set without any reboot. Game 1: both locked in by their search, then
+    (everyone picks in Direct since 2026-10-29) both on the stage select, where one's START picks
+    a random stage from P+'s legal list; both games build the same match from
     SESSION and start it in step at the first simulation frame (RNG, frame counters and setup
     synced); the confirmed frames of both peers agree and both reach game set on the same frame;
     both go straight back to the online CSS, still connected. Games 2 and 3: both lock in with
-    START (nobody is locked in before, so both characters can change), then the loser picks the
-    stage on P+'s stage select and that stage is played; game 3's pick is a new one (an earlier
+    START (nobody is locked in before, so both characters can change), then both are on P+'s
+    stage select, the loser picks the stage there and that stage is played; game 3's pick is a new one (an earlier
     pick used to lock its player in again at once and be played again). Game 2's pick is made
     holding Z and game 3's holding L: both play that alternate (Final Destination's Z,
     Battlefield's L; SESSION's asl and the stage file P+ loaded).
@@ -811,9 +818,9 @@ def test_direct_set_under_the_gameplay_session(backend: OnlineBackend,
         assert not g.c.netplay_status().game_running
     rep = online_set.play_set([a, b], games=3, mode="direct",
                               panels={g.name: g.panel for g in (a, b)})
-    # The CSS remembered each player's character (coin placed, same costume) after each game and
-    # after B on the loser's stage select.
-    assert rep["lock_ins"][0].get("after_sss"), rep["lock_ins"]
+    # The CSS remembered each player's character (coin placed, same costume) after each game.
+    # (Since 2026-10-29 everyone picks in Direct: B on the stage select does nothing, checked by
+    # online_set's lock-in, so there is no CSS after B to look at.)
     stages = [g["stage"] for g in rep["games"]]
     assert stages[0] in LEGAL_STAGES, stages
     assert stages[1:] == [B.STAGE_KIND[online_set.STAGE_PICKS[n]] for n in (2, 3)], stages

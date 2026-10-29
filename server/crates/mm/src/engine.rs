@@ -1918,6 +1918,9 @@ impl Engine {
                 // The friends' modes keep P+'s alternate stages on the loser's pick (Slippi does
                 // not restrict Direct's pick); Unranked has no pick, Ranked's steps none.
                 alternate_stages: matches!(mode, Mode::Direct | Mode::Teams).then_some(true),
+                // Direct: both players pick every game's stage at once, the first pick played
+                // (Sarah's board, 2026-10-29), not Slippi's game 1 random then the loser's pick.
+                anyone_picks: (mode == Mode::Direct).then_some(true),
                 ..Default::default()
             };
             Self::send(out, *conn, &resp);
@@ -2073,6 +2076,8 @@ mod tests {
         assert_ne!(ga["isHost"], gb["isHost"]);
         // Direct's loser picks P+'s alternate stages (Unranked and Ranked never).
         assert_eq!((&ga["alternateStages"], &gb["alternateStages"]), (&json!(true), &json!(true)));
+        // Anyone picks every game's stage in Direct (2026-10-29).
+        assert_eq!((&ga["anyonePicks"], &gb["anyonePicks"]), (&json!(true), &json!(true)));
         assert_eq!(ga["players"].as_array().unwrap().len(), 2);
         // Same player list for both, except the isLocalPlayer flag.
         for i in 0..2 {
@@ -2715,6 +2720,7 @@ mod tests {
         assert_eq!(msgs.len(), 1);
         assert_eq!(msgs[0]["type"], "get-ticket-resp");
         assert!(msgs[0].get("alternateStages").is_none());
+        assert!(msgs[0].get("anyonePicks").is_none());
         assert_eq!(msgs[0]["error"], msg::NO_OPPONENT);
         assert!(disconnected(&out, 1));
         assert_eq!(h.e.waiting_count(), 0);

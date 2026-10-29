@@ -193,9 +193,11 @@ def test_lrax_is_a_plain_quit_and_the_css_says_who_quit(backend: OnlineBackend,
     for g in (a, b):
         g.shot("01-quit-notice")
         assert online_set.session(g.c)["game"] == 2, g.name
-    # The next game: both START on the CSS (no winner, so nobody picks a stage); it runs on both.
+    # The next game: both START on the CSS (no winner; everyone picks in Direct since 2026-10-29,
+    # so both go on to the stage select, where one's START picks a random stage); it runs on both.
     for g in (a, b):
         g.steps("tap START 8", "wait 30")
+    online_set.random_pick_where_anyone_picks([a, b], 2)
     online_set.wait(lambda: all(online_set.gstatus(g.c)["phase"] == "running" for g in (a, b)), 120,
                     "the next game to run on both")
     a.steps("wait 60")

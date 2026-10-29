@@ -251,10 +251,11 @@ def test_unranked_start_with_the_coin_in_the_hand(backend: OnlineBackend,
 def test_direct_loser_picks_off_the_server_list(direct_backend: OnlineBackend,
                                                 dolphin: Callable[..., DolphinInstance],
                                                 gpu_backend: str) -> None:
-    """Direct with the server's Direct list: game 1 is random from it (Slippi: Direct's first
-    stage is random from the allowed stages); game 2 is the loser's pick on P+'s whole stage
-    select, Final Destination, played although it is not in the list (Slippi does not restrict
-    Direct's pick; the unranked branch's Dolphin replaced such a pick with a random stage)."""
+    """Direct with the server's Direct list: game 1's START on the stage select (every player picks
+    in Direct since 2026-10-29; online_set.play_game's random pick) is random from it; game 2 is
+    the loser's pick on P+'s whole stage select, Final Destination, played although it is not in
+    the list (Slippi does not restrict Direct's pick; the unranked branch's Dolphin replaced such a
+    pick with a random stage)."""
     test = "direct-server-stages"
     a, b, _, _ = _connected_direct(direct_backend, dolphin, gpu_backend, test, ("rosa", "sven"),
                                    inst_names=("unr-da", "unr-db"))
@@ -269,8 +270,8 @@ def test_direct_loser_picks_off_the_server_list(direct_backend: OnlineBackend,
     assert pick not in DIRECT_STAGES
     assert stages[0] in DIRECT_STAGES and stages[1] == pick, [hex(s) for s in stages]
     host, _ = online_set.roles([a, b])
-    _setup_logged(host, 1, stages[0], r"\(random from 2 stages, server list\)")
-    _setup_logged(host, 2, pick, r"\(picked\)")
+    _setup_logged(host, 1, stages[0], r"\(picked by P\d\)")
+    _setup_logged(host, 2, pick, r"\(picked by P\d\)")
     for g in (a, b):
         assert g.bridge()["lost"] == 0
         g.c.mm_cancel()

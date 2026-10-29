@@ -358,6 +358,8 @@ def read_session(c: HarnessClient, b: Block) -> dict:
         se["rules"] = read_rules(d[S_RULES:S_RULES + RULES_SIZE])
     if len(d) >= S_PLAY + 0x40:          # v6: the room's ruleset and set
         se["play"] = read_play(d[S_PLAY:S_PLAY + 0x40])
+        # v10, outside a room too: every player picks every game's stage at once (Direct)
+        se["anyone_picks"] = d[S_PLAY + 0x36] == 1
     if len(d) >= S_STAGES + 0x40:        # v7: the room's stages
         se["stages"] = read_room_stages(d[S_STAGES:S_STAGES + 0x40])
     if len(d) >= S_EXTRA + 4 * PORT_EXTRA_SIZE:   # v9: the special modes
