@@ -1328,7 +1328,7 @@ Result CmdGprbSyncTest(const Args& args)
 {
   Gprb::Session::SyncTestOptions o;
   o.distance = static_cast<int>(GetU64(args, "distance", 2));
-  o.region_set = GetString(args, "region_set", std::string("gp-v25"));
+  o.region_set = GetString(args, "region_set", std::string("gp-v26"));
   o.hash_regions = GetBool(args, "hash_regions", true);
   o.start_frame = static_cast<u32>(GetU64(args, "start_frame", o.start_frame));
   o.ports = static_cast<u32>(GetU64(args, "ports", 3));
@@ -1357,7 +1357,7 @@ Result CmdGprbConnect(const Args& args)
   o.local_port = static_cast<u16>(GetU64(args, "port", 0));
   o.remote_host = GetString(args, "host", std::string(""));
   o.remote_port = static_cast<u16>(GetU64(args, "remote_port", 0));
-  o.region_set = GetString(args, "region_set", std::string("gp-v25"));
+  o.region_set = GetString(args, "region_set", std::string("gp-v26"));
   o.start_frame = static_cast<u32>(GetU64(args, "start_frame", o.start_frame));
   if (Find(args, "delay"))
     o.delay = static_cast<int>(GetU64(args, "delay"));

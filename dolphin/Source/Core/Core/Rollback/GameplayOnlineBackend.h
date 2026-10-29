@@ -18,7 +18,7 @@ namespace Gprb
 struct OnlineBackendOptions
 {
   std::optional<int> delay;          // input delay; unset: picked per game (AutoInputDelay)
-  std::string region_set = "gp-v25";  // Data/Sys/Rollback/<name>.json
+  std::string region_set = "gp-v26";  // Data/Sys/Rollback/<name>.json
   bool dedupe_resim_sounds = true;
 };
 
