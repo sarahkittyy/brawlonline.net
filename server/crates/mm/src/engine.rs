@@ -38,9 +38,13 @@
 //!
 //! Both queues hold back a pair whose estimated ping ([`crate::geo`]: GeoIP distance) is above the
 //! ping limit, `ping_limit` ms widened by `ping_limit_step` for every `ping_limit_interval` the
-//! shorter-waiting of the two has waited, up to `ping_limit_max` however long either waits (100 ms,
-//! +20 every 10 s, 200 at most: a 150 ms pair waits until both have searched 30 s, a 200 ms pair
-//! 50 s, for someone closer, and a pair above 200 is never made; 2026-10-27). The shorter wait, so
+//! shorter-waiting of the two has waited, up to `ping_limit_max` however long either waits, or
+//! `ranked_ping_limit_max` in Ranked (100 ms, +20 every 20 s, 200 at most in Unranked and 150 in
+//! Ranked: a 140 ms pair waits until both have searched 40 s, a 150 ms one 60 s and a 200 ms
+//! Unranked one 100 s, for someone closer, and a pair above the cap is never made; 2026-10-29,
+//! after a 182 ms Ranked set between Alberta and Tokyo: "lower the cap to 150 and widen more
+//! slowly ... unranked can stay at a higher cap"; +20 every 10 s and 200 for both from
+//! 2026-10-27). The shorter wait, so
 //! a new search does not take a far opponent at once just because that one has searched a while
 //! (2026-10-21). Players set no limit of their own (an older build's `pingLimit` is ignored). A
 //! pair without an estimate (an address the database does not place, or no database) is never
@@ -172,8 +176,10 @@ pub struct EngineConfig {
     pub ping_limit_step: f64,
     /// ... for every this long the shorter-waiting player has waited ...
     pub ping_limit_interval: Duration,
-    /// ... up to this, however long either has waited.
+    /// ... up to this in Unranked, however long either has waited ...
     pub ping_limit_max: f64,
+    /// ... and this in Ranked.
+    pub ranked_ping_limit_max: f64,
     /// Two players who just played each other are paired again only once the longer-waiting of
     /// the two has waited this long ...
     pub rematch_hold: Duration,
@@ -219,8 +225,9 @@ impl Default for EngineConfig {
             geoip: GeoDb::default(),
             ping_limit: 100.0,
             ping_limit_step: 20.0,
-            ping_limit_interval: Duration::from_secs(10),
+            ping_limit_interval: Duration::from_secs(20),
             ping_limit_max: 200.0,
+            ranked_ping_limit_max: 150.0,
             rematch_hold: Duration::from_secs(60),
             rematch_memory: Duration::from_secs(30 * 60),
             rooms: RoomsConfig::default(),
@@ -1728,15 +1735,16 @@ impl Engine {
         self.cfg.ranked_band + self.cfg.ranked_band_step * steps
     }
 
-    /// The highest estimated ping (ms) a pair may have when the shorter-waiting of the two has
-    /// waited `waited`.
-    fn ping_limit(&self, waited: Duration) -> f64 {
+    /// The highest estimated ping (ms) a pair in this queue may have when the shorter-waiting of
+    /// the two has waited `waited`.
+    fn ping_limit(&self, ranked: bool, waited: Duration) -> f64 {
         let steps = if self.cfg.ping_limit_interval.is_zero() {
             0.0
         } else {
             (waited.as_secs_f64() / self.cfg.ping_limit_interval.as_secs_f64()).floor()
         };
-        (self.cfg.ping_limit + self.cfg.ping_limit_step * steps).min(self.cfg.ping_limit_max)
+        let max = if ranked { self.cfg.ranked_ping_limit_max } else { self.cfg.ping_limit_max };
+        (self.cfg.ping_limit + self.cfg.ping_limit_step * steps).min(max)
     }
 
     /// Whether a pair with this history, the earlier of whose current tickets came at `searched`,
@@ -1794,7 +1802,7 @@ impl Engine {
                 let longer = waited(wa).max(waited(wb));
                 let shorter = waited(wa).min(waited(wb));
                 let ping = wa.loc.zip(wb.loc).map(|(la, lb)| estimate_rtt_ms(la, lb));
-                if ping.is_some_and(|p| p > self.ping_limit(shorter)) {
+                if ping.is_some_and(|p| p > self.ping_limit(ranked, shorter)) {
                     continue;
                 }
                 let diff =
@@ -2845,8 +2853,9 @@ mod tests {
     }
 
     /// conn n connects from 203.0.113.n: 1-15 in New York, 16-31 in Sydney, 32-47 in Dallas,
-    /// 48-63 in Anchorage (New York to Sydney about 319 ms, Sydney to Dallas 283, New York to
-    /// Dallas 91, Dallas to Anchorage 136, New York to Anchorage 144).
+    /// 48-63 in Anchorage, 64-79 in London (New York to Sydney about 319 ms, Sydney to Dallas 283,
+    /// New York to Dallas 91, Dallas to Anchorage 136, New York to Anchorage 144, New York to
+    /// London 147, London to Dallas 181).
     fn geo_rules() -> EngineConfig {
         let geoip = GeoDb::from_table(&[
             ("203.0.113.0/28", 40.71, -74.01),
@@ -2868,7 +2877,7 @@ mod tests {
         // Sydney, then New York: about 319 ms apart, held back.
         h.unranked(16, &u[0]);
         assert!(matches(&h.unranked(1, &u[1])).is_empty());
-        // The limit is 100 ms, +20 every 10 s of the shorter wait: 140 at 20 s, not enough.
+        // The limit is 100 ms, +20 every 20 s of the shorter wait: 120 at 25 s, not enough.
         assert!(matches(&h.advance(Duration::from_secs(25))).is_empty());
         // Someone in Dallas comes: 91 ms to New York, taken at once; Sydney keeps waiting.
         h.connect(32, 41000);
@@ -2899,10 +2908,10 @@ mod tests {
             h.connect(c, 41000);
         }
         h.connect(48, 41000);
-        // Dallas and Anchorage (136 ms apart) wait until both have searched 20 s ...
+        // Dallas and Anchorage (136 ms apart) wait until both have searched 40 s ...
         h.unranked(32, &u[0]);
         assert!(matches(&h.unranked(48, &u[1])).is_empty());
-        h.now += Duration::from_secs(20);
+        h.now += Duration::from_secs(40);
         // ... and then New York comes: Dallas takes it (91 ms) over Anchorage (within the limit
         // by now, but the higher one).
         h.connect(1, 41000);
@@ -2915,10 +2924,10 @@ mod tests {
     fn a_new_search_does_not_take_a_far_opponent_at_once() {
         let mut h = Harness::new(geo_rules());
         let u = h.users(4);
-        // Dallas has searched 30 s alone: its own limit would be 160 ms by now.
+        // Dallas has searched 60 s alone: its own limit would be 160 ms by now.
         h.connect(32, 41000);
         h.unranked(32, &u[0]);
-        assert!(matches(&h.advance(Duration::from_secs(30))).is_empty());
+        assert!(matches(&h.advance(Duration::from_secs(60))).is_empty());
         // Anchorage searches, 136 ms from Dallas: held back, as Anchorage has only just started
         // (100 ms).
         h.connect(48, 41000);
@@ -2930,10 +2939,10 @@ mod tests {
         assert_eq!(m.len(), 1);
         assert_eq!(pair_of(&m[0]), pair_key(u[0].uid, u[2].uid));
         // Another Dallas player for Anchorage: the pair is held until the new one has searched
-        // 20 s (140 ms).
+        // 40 s (140 ms).
         h.connect(33, 41000);
         assert!(matches(&h.unranked(33, &u[3])).is_empty());
-        assert!(matches(&h.advance(Duration::from_secs(19))).is_empty());
+        assert!(matches(&h.advance(Duration::from_secs(39))).is_empty());
         let m = matches(&h.advance(Duration::from_secs(1)));
         assert_eq!(m.len(), 1);
         assert_eq!(pair_of(&m[0]), pair_key(u[1].uid, u[3].uid));
@@ -2962,20 +2971,45 @@ mod tests {
         for c in [64, 32] {
             h.connect(c, 41000);
         }
-        // London and Dallas, about 181 ms apart: 100, 120, ... 180 at 40 s, then 200 when both
-        // have searched 50 s.
+        // London and Dallas, about 181 ms apart: 100, 120, ... 180 at 80 s, then 200 when both
+        // have searched 100 s.
         h.unranked(64, &u[0]);
         assert!(matches(&h.unranked(32, &u[1])).is_empty());
-        assert!(matches(&h.advance(Duration::from_secs(49))).is_empty());
+        assert!(matches(&h.advance(Duration::from_secs(99))).is_empty());
         let m = matches(&h.advance(Duration::from_secs(1)));
         assert_eq!(m.len(), 1);
         assert_eq!(pair_of(&m[0]), pair_key(u[0].uid, u[1].uid));
-        // New York and Sydney, about 319 ms apart, in Ranked: never, past the 200 ms limit at 50 s.
+        // New York and Sydney, about 319 ms apart: never, past the 200 ms limit at 100 s.
         for c in [1, 16] {
             h.connect(c, 41000);
         }
         h.ranked(1, &u[2]);
         assert!(matches(&h.ranked(16, &u[3])).is_empty());
+        assert!(matches(&h.advance(Duration::from_secs(300))).is_empty());
+        assert_eq!(h.e.waiting_count(), 2);
+    }
+
+    #[test]
+    fn the_ranked_ping_limit_stops_at_150() {
+        let mut h = Harness::new(geo_rules());
+        let u = h.rated(&[1500.0; 4]);
+        for c in [1, 64] {
+            h.connect(c, 41000);
+        }
+        // New York and London, about 147 ms apart: 100, 120, 140 at 40 s, then 150 when both
+        // have searched 60 s.
+        h.ranked(1, &u[0]);
+        assert!(matches(&h.ranked(64, &u[1])).is_empty());
+        assert!(matches(&h.advance(Duration::from_secs(59))).is_empty());
+        let m = matches(&h.advance(Duration::from_secs(1)));
+        assert_eq!(m.len(), 1);
+        assert_eq!(pair_of(&m[0]), pair_key(u[0].uid, u[1].uid));
+        // London and Dallas, about 181 ms apart, which Unranked pairs at 100 s: never in Ranked.
+        for c in [65, 32] {
+            h.connect(c, 41000);
+        }
+        h.ranked(65, &u[2]);
+        assert!(matches(&h.ranked(32, &u[3])).is_empty());
         assert!(matches(&h.advance(Duration::from_secs(300))).is_empty());
         assert_eq!(h.e.waiting_count(), 2);
     }
@@ -2988,10 +3022,10 @@ mod tests {
             h.connect(c, 41000);
         }
         // Dallas and Anchorage, 136 ms apart, both sending pingLimit 100 (launchers before
-        // 2026-10-27): paired at 20 s (140 ms) as anyone.
+        // 2026-10-27): paired at 40 s (140 ms) as anyone.
         h.with_ping_limit(32, &u[0], 100.0);
         assert!(matches(&h.with_ping_limit(48, &u[1], 100.0)).is_empty());
-        assert!(matches(&h.advance(Duration::from_secs(19))).is_empty());
+        assert!(matches(&h.advance(Duration::from_secs(39))).is_empty());
         let m = matches(&h.advance(Duration::from_secs(1)));
         assert_eq!(m.len(), 1);
         assert_eq!(pair_of(&m[0]), pair_key(u[0].uid, u[1].uid));
