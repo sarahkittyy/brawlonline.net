@@ -16,6 +16,7 @@
 #include <fmt/format.h>
 #include <fmt/ranges.h>
 
+#include "Common/ENet.h"
 #include "Common/Logging/Log.h"
 #include "Common/StringUtil.h"
 #include "Common/Thread.h"
@@ -82,30 +83,8 @@ u32 ConnectToken(const std::string& match_id, const PlayerInfo& player)
   return h != 0 ? h : 1;
 }
 
-// The ports some carriers' NAT gives each new destination, from the bottom of the range: it
-// keeps the player's own port toward mm, but every peer hears them from 1024 (bug reports #115,
-// #122, #123: KZH#419 at 166.114.170.169, mm saw 45491, 44999, 49442, ...). A peer whose router
-// lets in only the ports it sent to dropped their connect, having sent only to the port mm saw,
-// so neither side heard the other. A datagram from our P2P port to these ports opens our router
-// for theirs; their connect's next resend then gets through. One byte: ENet drops anything
-// shorter than its header, on every build (and MachineSession's InterceptAcks too).
-constexpr u16 PUNCH_PORT_FIRST = 1024;
-constexpr u16 PUNCH_PORT_COUNT = 8;
+// How often a peer that has not connected gets Common::ENet::PunchLowPorts.
 constexpr u64 PUNCH_INTERVAL_MS = 1000;
-
-void PunchLowPorts(ENetHost* host, const ENetAddress& to)
-{
-  u8 byte = 0;
-  ENetBuffer buffer{};
-  buffer.data = &byte;
-  buffer.dataLength = 1;
-  for (u16 i = 0; i < PUNCH_PORT_COUNT; i++)
-  {
-    ENetAddress a = to;
-    a.port = static_cast<enet_uint16>(PUNCH_PORT_FIRST + i);
-    enet_socket_send(host->socket, &a, &buffer, 1);
-  }
-}
 
 int ENET_CALLBACK OnP2PReceive(ENetHost* host, ENetEvent*)
 {
@@ -1292,7 +1271,7 @@ void Matchmaking::HandleConnecting()
       for (size_t i = 0; i < remote_player_count; i++)
       {
         if (punch[i] && !connections[i])
-          PunchLowPorts(client.get(), remote_addrs[i]);
+          Common::ENet::PunchLowPorts(client.get(), remote_addrs[i]);
       }
     }
 

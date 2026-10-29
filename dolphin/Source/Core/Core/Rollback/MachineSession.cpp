@@ -39,6 +39,7 @@
 #include "Common/StringUtil.h"
 #include "Common/Swap.h"
 #include "Common/Thread.h"
+#include "Common/UPnP.h"
 #include "Core/Brawlback/include/brawlback-common/BrawlbackConstants.h"
 #include "Core/Brawlback/include/gekkonet/GekkoLib/include/gekkonet.h"
 #include "Core/Config/GraphicsSettings.h"
@@ -265,6 +266,7 @@ struct PeerLink
   int slot = -1;
   std::string host;
   u16 port = 0;
+  bool internet = false;     // `host` is its internet address (not a LAN or chosen-network one)
   ENetPeer* peer = nullptr;  // the connection kept for this slot
   bool hello = false;        // its hello arrived on `peer`
   int proto = 1;             // its PROTOCOL_VERSION (a hello without one: 1)
@@ -417,6 +419,8 @@ struct State
   ENetHost* host = nullptr;
   std::thread net_thread;
   std::atomic<bool> net_run{false};
+  // A room session's UPnP mapping of its port (MapRoomPort), removed by StopNetwork.
+  bool upnp_mapped = false;
   std::array<PeerLink, MAX_PLAYERS> peers;  // by slot (this player's unused)
 
   // At exit without Stop (a session never started, an error, the process ending): a joinable
@@ -949,7 +953,12 @@ void OnHello(ENetPeer* peer, const picojson::object& msg)
     p.dropped = false;
     p.join_asked = false;
   }
-  AddLog(fmt::format("peer {} connected ({}:{})", slot, p.host, p.port));
+  // A port other than the one the room gave: its router changes the port (PunchLowPorts' 1024 and
+  // up, or a port of its own for each destination).
+  AddLog(fmt::format("peer {} connected ({}:{}{})", slot, p.host, p.port,
+                     peer->address.port == p.port ?
+                         "" :
+                         fmt::format(", heard from port {}", peer->address.port)));
 }
 
 void HandleControl(ENetPeer* peer, const u8* data, size_t size)
@@ -2283,9 +2292,43 @@ void LogNoLink(PeerLink& p, Clock::time_point now)
                      p.unkept_hellos));
 }
 
+// Net thread, before anything is sent from the session's socket: a room session asks the router
+// over UPnP to forward its port to it, as Unranked's search does (Online/Matchmaking.cpp). A
+// router that gives every destination its own port then uses the mapped one toward all of them,
+// mm's probe included, so a peer whose router lets in only the ports it sent to can reach this
+// player (bug report #183: TEST#709 and AIR#23 played five Unranked games, then never connected
+// in AIR's Other Games room; nor did OHM#217, who plays AIR in P+ rooms). Waits for the router's
+// answer (no UPnP router: about 2 s) without the lock: nothing is sent until then. Not with a
+// server on this machine (the tests, whose mappings would only pile up on the router) nor with
+// UPnP off.
+void MapRoomPort()
+{
+#ifdef USE_UPNP
+  u16 port = 0;
+  {
+    std::lock_guard lk(s.net_mutex);
+    if (!s.opts.room || !s.host)
+      return;
+    port = s.host->address.port;
+  }
+  if (port == 0 || !Config::Get(Config::ONLINE_UPNP))
+    return;
+  ENetAddress mm{};
+  if (enet_address_set_host(&mm, Config::GetMatchmakingHost().c_str()) != 0 ||
+      reinterpret_cast<const u8*>(&mm.host)[0] == 127)
+  {
+    return;
+  }
+  const bool mapped = Common::UPnP::MapUdpPort(port, std::chrono::milliseconds(2500));
+  std::lock_guard lk(s.net_mutex);
+  s.upnp_mapped = mapped;
+#endif
+}
+
 void NetThread()
 {
   Common::SetCurrentThreadName("Machine session");
+  MapRoomPort();
   while (s.net_run.load())
   {
     std::unique_lock lk(s.net_mutex);
@@ -2422,6 +2465,11 @@ void NetThread()
         p.connecting = peer;
         ++p.attempts;
       }
+      // As Unranked's connect does: a peer behind a carrier's NAT that gives every destination a
+      // port from 1024 gets in once our router has sent to that port. Not to a LAN or
+      // chosen-network address, nor to this machine (the tests).
+      if (p.internet && reinterpret_cast<const u8*>(&addr.host)[0] != 127)
+        Common::ENet::PunchLowPorts(s.host, addr);
     }
     for (PeerLink& p : s.peers)
       LogNoLink(p, now);
@@ -2626,9 +2674,14 @@ void StopNetwork()
       p.hello = false;
     }
     enet_host_flush(s.host);
+#ifdef USE_UPNP
+    if (s.upnp_mapped)
+      Common::UPnP::UnmapUdpPort(s.host->address.port);
+#endif
     enet_host_destroy(s.host);
     s.host = nullptr;
   }
+  s.upnp_mapped = false;
   s.gekko_rx.clear();
   s.gekko_tx.clear();
   s.seen_endpoint.clear();
@@ -6979,8 +7032,8 @@ void SetRoom(int local_slot, const std::vector<RoomMember>& members)
     if (seen != s.seen_endpoint)
     {
       s.seen_endpoint = seen;
-      AddLog(fmt::format("room: the server sees this player at {} (UDP port {}{})", seen,
-                         s.host->address.port,
+      AddLog(fmt::format("room: the server sees this player at {} (UDP port {}{}{})", seen,
+                         s.host->address.port, s.upnp_mapped ? ", UPnP-mapped" : "",
                          self->port == s.host->address.port ? "" : "; the router changed the port"));
     }
   }
@@ -7082,6 +7135,7 @@ void SetRoom(int local_slot, const std::vector<RoomMember>& members)
       p.port = port;
       p.last_connect = {};
     }
+    p.internet = !same_net;
     p.ips = ResolveIps({&m->host, &m->lan_host});
   }
 }

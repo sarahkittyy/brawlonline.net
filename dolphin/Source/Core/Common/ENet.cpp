@@ -37,6 +37,22 @@ int ENET_CALLBACK InterceptCallback(ENetHost* host, ENetEvent* event)
   return 0;
 }
 
+void PunchLowPorts(ENetHost* host, const ENetAddress& to)
+{
+  constexpr u16 PUNCH_PORT_FIRST = 1024;
+  constexpr u16 PUNCH_PORT_COUNT = 8;
+  u8 byte = 0;
+  ENetBuffer buffer{};
+  buffer.data = &byte;
+  buffer.dataLength = 1;
+  for (u16 i = 0; i < PUNCH_PORT_COUNT; i++)
+  {
+    ENetAddress a = to;
+    a.port = static_cast<enet_uint16>(PUNCH_PORT_FIRST + i);
+    enet_socket_send(host->socket, &a, &buffer, 1);
+  }
+}
+
 bool SendPacket(ENetPeer* socket, const sf::Packet& packet, u8 channel_id, _ENetPacketFlag flag)
 {
   if (!socket)

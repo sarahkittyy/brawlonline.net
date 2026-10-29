@@ -10,15 +10,17 @@ is needed: the Null video backend.
 from __future__ import annotations
 
 import json
+import re
 import time
 from typing import Any, Callable
 
 import pytest
 
 from ppharness.backend import OnlineBackend, OnlineUser
+from ppharness.fake_igd import FakeIGD
 from ppharness.instance import DolphinInstance, InstanceConfig
 
-from test_online import _logged_in, _wait
+from test_online import _lan_address, _logged_in, _make_backend, _wait
 from test_rooms import backend  # noqa: F401  (the backend fixture)
 
 pytestmark = [pytest.mark.dolphin, pytest.mark.server]
@@ -28,7 +30,11 @@ BUILD = {"hash": "ab" * 32, "name": "Test build"}
 
 def _boot(dolphin: Callable[..., DolphinInstance], be: OnlineBackend, name: str, user: OnlineUser,
           room: dict[str, Any], block: str = "") -> DolphinInstance:
-    ini = {"Online": {"UseDevServer": True, "MatchmakingPort": be.mm_port, "DevAccountsUrl": be.accounts_url}}
+    if be.mm_host.startswith("127."):
+        ini = {"Online": {"UseDevServer": True, "MatchmakingPort": be.mm_port, "DevAccountsUrl": be.accounts_url}}
+    else:
+        ini = {"Online": {"MatchmakingHost": be.mm_host, "MatchmakingPort": be.mm_port,
+                          "AccountsUrl": be.accounts_url}}
     env = {"PPR_MODS_ROOM": json.dumps(room), **({"PPR_TEST_P2P_BLOCK": block} if block else {})}
     inst = dolphin(name, config=InstanceConfig(cpu_thread=True, video_backend="Null", dolphin_ini=ini),
                    client_timeout=60.0, env=env)
@@ -119,3 +125,56 @@ def test_joiner_with_a_link_joins(backend: OnlineBackend, dolphin: Callable[...,
     lines = joiner.client.call("chat_status").get("lines", [])
     assert not st.get("error"), st
     assert not any("Can't connect" in ln.get("text", "") for ln in lines), lines
+
+
+def test_room_sessions_map_their_port_with_upnp(dolphin: Callable[..., DolphinInstance]) -> None:
+    """Bug report #183: TEST#709 and AIR#23 played five Unranked games, then never connected in
+    AIR's Other Games room (no packet either way), nor did OHM#217, who plays AIR in P+ rooms.
+    Unranked asks the router over UPnP to forward its port before it talks to mm
+    (test_online.py::test_direct_match_maps_the_port_with_upnp), so a router that gives every
+    destination its own port uses that one toward the peers too; a room's session made no
+    mapping. Now each session maps its socket's port before its probe to mm, mm sees that port,
+    the join still works, and leaving removes the mapping. mm on the LAN address: with mm on
+    127.0.0.1 (the other tests here) no mapping is made. The fake IGD takes leases, so each port
+    is mapped once with the 2 h lease."""
+    lan = _lan_address()
+    if lan.startswith("127."):
+        pytest.skip("no LAN address")
+    try:
+        igd = FakeIGD(lan).start()
+    except OSError as e:
+        pytest.skip(f"cannot listen for SSDP on {lan}: {e}")
+    be = _make_backend(mm_host=lan)
+    try:
+        host_user = be.create_user("hostu", "HSTU")
+        join_user = be.create_user("joinu", "JNYU")
+        host, code = _host(dolphin, be, "mods-upnp-host", host_user)
+        joiner = _boot(dolphin, be, "mods-upnp-join", join_user,
+                       {"join": code, "build": BUILD, "controller": "gc", "sd_sync": "yes"})
+        _wait(lambda: "machine: running" in _log(joiner), 90, "the joiner's session running", interval=1)
+        ports: dict[DolphinInstance, str] = {}
+        for inst in (host, joiner):
+            log = _log(inst)
+            seen = re.search(rf"room: the server sees this player at {re.escape(lan)}:(\d+) "
+                             rf"\(UDP port (\d+), UPnP-mapped\)", log)
+            assert seen and seen.group(1) == seen.group(2), log[-4000:]
+            port = seen.group(2)
+            ports[inst] = port
+            mapped = log.find(f"UPnP: mapped UDP port {port} to {lan}")
+            probe = log.find("machine: endpoint probe answered")
+            assert 0 <= mapped < probe, (mapped, probe)
+        # Other programs on this machine may find the fake router too: only these UDP ports count.
+        adds = [c for c in igd.mapping_calls() if c.action == "AddPortMapping" and
+                c.args.get("NewProtocol") == "UDP" and c.args.get("NewExternalPort") in ports.values()]
+        assert sorted((c.args.get("NewExternalPort"), c.args.get("NewInternalPort"),
+                       c.args.get("NewInternalClient"), c.args.get("NewLeaseDuration"), c.error)
+                      for c in adds) == sorted((p, p, lan, "7200", 0) for p in ports.values()), adds
+        for inst in (joiner, host):
+            inst.stop()
+            assert f"UPnP: removed the mapping of UDP port {ports[inst]}" in _log(inst)
+        deletes = [c for c in igd.mapping_calls() if c.action == "DeletePortMapping" and
+                   c.args.get("NewExternalPort") in ports.values()]
+        assert sorted(c.args.get("NewExternalPort") for c in deletes) == sorted(ports.values()), deletes
+    finally:
+        be.stop()
+        igd.stop()

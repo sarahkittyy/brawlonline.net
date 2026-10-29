@@ -23,8 +23,9 @@ void StartDiscovery();
 // up to `wait` for the discovery. Replaces the mapping this made before. Logs what happened;
 // returns whether the router took the mapping.
 bool MapUdpPort(u16 port, std::chrono::milliseconds wait);
-// Removes the mapping MapUdpPort made, if any.
-void UnmapUdpPort();
+// Removes the mapping MapUdpPort made, if any (with `only_port`, only if it is that port's: an
+// Other Games room's session leaves a later search's mapping alone).
+void UnmapUdpPort(u16 only_port = 0);
 // The router's internet address as it reported it over UPnP, once the discovery is done ("" before
 // that, or with no router found).
 std::string ExternalAddress();

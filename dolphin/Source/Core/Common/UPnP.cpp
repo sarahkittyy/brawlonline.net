@@ -380,10 +380,12 @@ std::string Common::UPnP::ExternalAddress()
   return state.external;
 }
 
-void Common::UPnP::UnmapUdpPort()
+void Common::UPnP::UnmapUdpPort(u16 only_port)
 {
   OnlineState& state = GetOnlineState();
   std::lock_guard lk(state.mutex);
+  if (only_port != 0 && state.mapped != only_port)
+    return;
   UnmapLocked(state);
 }
 
