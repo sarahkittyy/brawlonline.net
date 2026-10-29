@@ -223,7 +223,7 @@ namespace RulesPages {
             case PPOM::CHOICE_LOSER_PICKS: return "LOSER: the last game's loser picks any stage.";
             case PPOM::CHOICE_LOSER_PICKS_LIST: return "LIST: the loser picks from the stage list.";
             case PPOM::CHOICE_STRIKE: return "STRIKE: strike from the starters every game.";
-            case PPOM::CHOICE_ANYONE_PICKS: return "ANYONE: everyone picks at once, the first pick plays.";
+            case PPOM::CHOICE_ANYONE_PICKS: return "ANYONE: Everyone picks at once";
             default: return "RANDOM: a random stage from the list every game.";
             }
         case R_STRIKES:
