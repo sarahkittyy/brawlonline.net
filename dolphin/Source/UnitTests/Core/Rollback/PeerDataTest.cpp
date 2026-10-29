@@ -95,6 +95,11 @@ TEST(PeerData, StageSelectCursorIsChecked)
   EXPECT_EQ(ok->x, -1200);
   EXPECT_EQ(ok->y, 4096);
   EXPECT_TRUE(cur("[7, 0, -4096]").has_value());
+  // Its page turns (2026-10-29; an older build sends none: 0).
+  EXPECT_EQ(cur("[1, 0, 0, 255]")->turns, 255);
+  EXPECT_EQ(cur("[1, 0, 0]")->turns, 0);
+  EXPECT_FALSE(cur("[1, 0, 0, 256]").has_value());
+  EXPECT_FALSE(cur("[1, 0, 0, -1]").has_value());
   EXPECT_FALSE(cur("[8, 0, 0]").has_value());
   EXPECT_FALSE(cur("[0, 4097, 0]").has_value());
   EXPECT_FALSE(cur("[0, 0, -4097]").has_value());
@@ -102,7 +107,7 @@ TEST(PeerData, StageSelectCursorIsChecked)
   EXPECT_FALSE(cur("[0, 1e300, 0]").has_value());
   EXPECT_FALSE(cur("[-1, 0, 0]").has_value());
   EXPECT_FALSE(cur("[0, 0]").has_value());
-  EXPECT_FALSE(cur("[0, 0, 0, 0]").has_value());
+  EXPECT_FALSE(cur("[0, 0, 0, 0, 0]").has_value());
   EXPECT_FALSE(cur("[0, \"1\", 0]").has_value());
   EXPECT_FALSE(cur("{\"page\": 0}").has_value());
   EXPECT_FALSE(ParseSssCursor(nullptr, 8, 4096).has_value());

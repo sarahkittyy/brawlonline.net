@@ -95,7 +95,7 @@ constexpr u32 L_OWN_EXTRA = 0x80;
 // v10: ppom.h SssCursor {state, page, pad[2], x s16, y s16}: the player's own (game) and the
 // others' by in-game port (Dolphin), out of the rolled-back state as all of LOCAL.
 constexpr u32 L_OWN_CURSOR = 0xC8, L_CURSORS = 0xD0, CURSOR_SIZE = 8;
-constexpr u32 CUR_STATE = 0, CUR_PAGE = 1, CUR_X = 4, CUR_Y = 6;
+constexpr u32 CUR_STATE = 0, CUR_PAGE = 1, CUR_TURNS = 2, CUR_X = 4, CUR_Y = 6;
 constexpr u32 LocalSize(u16 version)
 {
   return version >= 10 ? LOCAL_SIZE : version >= 9 ? LOCAL_SIZE_V9 : LOCAL_SIZE_V8;
@@ -1971,6 +1971,7 @@ void SyncSession(const Core::CPUThreadGuard& guard, const Located& loc)
     if (own.on)
     {
       own.page = local[L_OWN_CURSOR + CUR_PAGE];
+      own.turns = local[L_OWN_CURSOR + CUR_TURNS];
       own.x = std::clamp<s16>(static_cast<s16>(local[L_OWN_CURSOR + CUR_X] << 8 | local[L_OWN_CURSOR + CUR_X + 1]),
                               -Gprb::Session::SSS_CURSOR_RANGE, Gprb::Session::SSS_CURSOR_RANGE);
       own.y = std::clamp<s16>(static_cast<s16>(local[L_OWN_CURSOR + CUR_Y] << 8 | local[L_OWN_CURSOR + CUR_Y + 1]),
@@ -1986,6 +1987,7 @@ void SyncSession(const Core::CPUThreadGuard& guard, const Located& loc)
         continue;
       out[CUR_STATE] = 1;
       out[CUR_PAGE] = c.page;
+      out[CUR_TURNS] = c.turns;
       out[CUR_X] = static_cast<u8>(static_cast<u16>(c.x) >> 8);
       out[CUR_X + 1] = static_cast<u8>(c.x);
       out[CUR_Y] = static_cast<u8>(static_cast<u16>(c.y) >> 8);

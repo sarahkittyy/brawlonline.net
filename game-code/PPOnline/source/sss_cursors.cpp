@@ -79,6 +79,12 @@ namespace SssCursors {
     static Cursor s_cur[PPOM::SESSION_PLAYERS_LOCAL];
     static u8* s_task = NULL;
     static u32 s_res = 0;   // the stage select's brres (a ResFile value)
+    // The shared page (Sarah's board, 2026-10-29: "keep everyone on the same page"): this stage
+    // select's page turns (sent with the cursor), its last page, and the page it steps to (P+'s
+    // page button, stage_legal.cpp) after the player with the most turns (the lower port of a
+    // tie), -1 none.
+    static u8 s_turns = 0;
+    static int s_lastPage = -1, s_follow = -1;
 
     static u8* stageSelectTask()
     {
@@ -178,7 +184,8 @@ namespace SssCursors {
     static void writeOwn(const PPOM::SssCursor& c)
     {
         PPOM::SssCursor& own = PPOM::g_block.local.ownCursor;
-        if (own.state == c.state && own.page == c.page && own.x == c.x && own.y == c.y) return;   // (no memcmp in the DOL)
+        if (own.state == c.state && own.page == c.page && own.turns == c.turns && own.x == c.x && own.y == c.y)
+            return;   // (no memcmp in the DOL)
         own = c;
         DCFlushRange(&own, sizeof(own));
         g_sssCursors.written++;
@@ -212,6 +219,9 @@ namespace SssCursors {
             // (a stage select left without its destructor running: nothing of ours is in a scene)
             if (s_task) memset(s_cur, 0, sizeof(s_cur));
             s_task = task;
+            s_turns = 0;
+            s_lastPage = -1;
+            s_follow = -1;
         }
         u8* own = task ? ownCursor(task) : NULL;
         if (!own) {
@@ -219,13 +229,34 @@ namespace SssCursors {
             return;
         }
         const u8 page = *(u8*)CURRENT_PAGE;
+        const PPOM::Local& lo = PPOM::g_block.local;
+        // A page turn of this player's own (not one stepping after another player's) counts.
+        if (s_lastPage >= 0 && page != s_lastPage && s_follow < 0) s_turns++;
+        if (s_follow == page) s_follow = -1;
+        s_lastPage = page;
+        if (OnlineMenu::anyoneSss() != OnlineMenu::ANY_NONE) {
+            int leader = lo.localPort, leaderPage = page;
+            u8 most = s_turns;
+            for (int p = 0; p < PPOM::SESSION_PLAYERS_LOCAL; p++) {
+                const PPOM::SssCursor& in = lo.cursors[p];
+                if (p == lo.localPort || in.state != PPOM::CURSOR_ON || in.page >= PPOM::SSS_PAGES) continue;
+                s8 d = (s8)(u8)(in.turns - most);
+                if (d > 0 || (d == 0 && p < leader)) {
+                    leader = p;
+                    leaderPage = in.page;
+                    most = in.turns;
+                }
+            }
+            s_turns = most;   // (the count goes on from the most)
+            s_follow = leaderPage != page ? leaderPage : -1;
+        }
         mine.state = PPOM::CURSOR_ON;
         mine.page = page;
+        mine.turns = s_turns;
         mine.x = fixed(*(float*)(own + 0x3C));
         mine.y = fixed(*(float*)(own + 0x40));
         writeOwn(mine);
 
-        const PPOM::Local& lo = PPOM::g_block.local;
         u8 shown = 0;
         bool any = false;
         for (int p = 0; p < PPOM::SESSION_PLAYERS_LOCAL; p++) {
@@ -270,6 +301,8 @@ namespace SssCursors {
             g_sssCursors.ownLabel = (u8)(lo.localPort + 1);
         }
     }
+
+    int pageToFollow() { return s_task ? s_follow : -1; }
 
     void taskGone(u8* task)
     {

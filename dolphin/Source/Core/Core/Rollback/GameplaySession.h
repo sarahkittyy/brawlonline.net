@@ -368,6 +368,7 @@ struct SssCursor
   bool on = false;  // on the stage select
   u8 page = 0;
   s16 x = 0, y = 0;
+  u8 turns = 0;     // its page turns (where anyone picks, everyone shows the page of the most)
   bool operator==(const SssCursor&) const = default;
 };
 // This player's cursor (the game's, every frame; GameBridge), sent with the state message.

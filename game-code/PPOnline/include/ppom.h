@@ -382,12 +382,15 @@ namespace PPOM {
     // v10: a player's cursor on an online stage select (Ranked's strikes, a room's set steps, a room
     // where anyone picks). x, y: the cursor's position (sel_stage's cursor MuObject +0x3C / +0x40)
     // in 1/64 units; page: P+'s page shown (0x80496000). Peers' come from their machines: checked
-    // by Dolphin (page < SSS_PAGES, inside SSS_CURSOR_RANGE) and again by the game.
+    // by Dolphin (page < SSS_PAGES, inside SSS_CURSOR_RANGE) and again by the game. turns: the
+    // page turns this player's stage select made (wrapping): where anyone picks, every stage
+    // select shows the page of the player with the most (sss_cursors.cpp pageToFollow).
     enum SssCursorState { CURSOR_NONE = 0, CURSOR_ON = 1 };
     struct SssCursor {
         u8 state;         // SssCursorState
         u8 page;
-        u8 _pad[2];
+        u8 turns;
+        u8 _pad;
         s16 x;
         s16 y;
     };                    // 0x08

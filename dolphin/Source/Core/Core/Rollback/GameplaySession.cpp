@@ -2509,7 +2509,8 @@ void SendState(bool tick = false)
       const SssCursor& c = s.local_sss_cursor;
       o["sc"] = picojson::value(picojson::array{picojson::value(static_cast<double>(c.page)),
                                                 picojson::value(static_cast<double>(c.x)),
-                                                picojson::value(static_cast<double>(c.y))});
+                                                picojson::value(static_cast<double>(c.y)),
+                                                picojson::value(static_cast<double>(c.turns))});
     }
     if (s.recovery.pending)
     {
@@ -2833,7 +2834,7 @@ void HandleControl(std::string_view text, const sf::IpAddress& from, u16 from_po
   // Its stage select cursor: a page and position the stage select can have, else none.
   if (const auto c = PeerData::ParseSssCursor(get("sc"), SSS_PAGES, SSS_CURSOR_RANGE))
   {
-    p.sss_cursor = {true, c->page, c->x, c->y};
+    p.sss_cursor = {true, c->page, c->x, c->y, c->turns};
     p.sss_cursor_at = p.last_heard;
   }
   else
