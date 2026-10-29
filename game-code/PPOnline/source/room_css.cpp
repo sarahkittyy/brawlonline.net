@@ -46,10 +46,11 @@
 // stock), which leaves the pick in area+0x1D0 and the box showing it; the others' boxes show
 // their picks the way the picker's close does (sel_char text+0x184D4): the box's frames set to
 // the count (MuObject 0x800B7900, 0x800B7798, 0x800B7A18) and area+0x1D0.
-// Stamina (the room's STAMINA row 2, docs/design/special-rules.md): the same box is Brawl's HP box,
-// as on its Special Brawl CSS, which sets task+0x5D0 when it starts with stamina (text+0x2AC);
-// with it the box shows HP and A opens Brawl's HP list (list kind 3, P+'s 100 entries), whose pick
-// in area+0x1D0 is the HP / 10 (the CSS reads a record's +0x24 / 10 into it, text+0x1C44).
+// Stamina (the room's STAMINA row 2, docs/design/special-rules.md): the box is Brawl's HP box, as
+// on its Special Brawl CSS, which sets task+0x5D0 when it starts with stamina (text+0x2AC); with
+// it A opens Brawl's HP list (list kind 3, P+'s 100 entries), whose pick in area+0x1D0 is the
+// HP / 10 (the CSS reads a record's +0x24 / 10 into it, text+0x1C44). The HP box's model is made
+// here (hpBox): the area makes its box when it is made, before the room's stamina is known.
 #include <OS/OSCache.h>
 #include <gf/gf_heap_manager.h>
 #include <memory.h>
@@ -108,6 +109,28 @@ namespace RoomCss {
     // lower at P+'s x under the win stars (the host's star). There it is over the character
     // picture, above the name plate (screenshots, 2026-10-15); the hand's button follows the model.
     static const float STOCK_BOX_DX = -3.6f, STOCK_BOX_DY = -3.3f;
+    // Stamina's box is Brawl's own HP box, MenSelchrChp4 (its count's animation has frames 0-100,
+    // the STOCKS box's MenSelchrChandicap4 0-30: at 31-99, up to 990 HP, it showed 30). The area
+    // makes one or the other once, when it is made (sel_char text+0x142A4: Chp4 with task+0x5D0
+    // set, as on the Special Brawl CSS started in stamina); the room's CSS gets stamina later,
+    // so each area's box is made again as the area makes it (text+0x14414: MuObject::create from
+    // the CSS's archive, its draw priority, no texture file, the menu heap; changeAnimN(name +
+    // "__0"), update rate 0) and stands in at area+0xD4 while stamina is on. The area's own is
+    // kept out of its scene group meanwhile and comes back when stamina goes; the stand-in then
+    // goes (it is out of the group too). Brawl's own deletes the one at area+0xD4 with the CSS,
+    // as in its stamina CSS; ours deletes the one kept (taskGone, from muSelCharTask's destructor).
+    typedef u8* (*CreateFn)(void* modelRes, const char* name, int priority, void* texRes, int heap);
+    typedef void (*NameFn)(u8* obj, const char* name);
+    typedef void (*RateFn)(void* anim, float rate);
+    static const CreateFn MU_CREATE = (CreateFn)0x800B2394;     // MuObject::create(ResFile*, name, ...)
+    static const NameFn CHANGE_ANIM = (NameFn)0x800B534C;       // MuObject::changeAnimN
+    static const RateFn SET_UPDATE_RATE = (RateFn)0x80028650;   // gfModelAnimation::setUpdateRate
+    static const ObjFrameFn SET_FRAME_VISIBLE = (ObjFrameFn)0x800B784C;   // MuObject::setFrameVisible
+    static const int MENU_HEAP = 0x2A;
+    static const char* const HP_BOX = "MenSelchrChp4_TopN";
+    static const char* const HP_BOX_ANIM = "MenSelchrChp4_TopN__0";
+    static u8* s_hpBoxTask = NULL;                          // the CSS whose areas have HP boxes
+    static u8* s_ownBox[4] = {NULL, NULL, NULL, NULL};      // each area's own box while ours stands in
 
     static const int CSS_NONE = 0x28;
     enum PanelState { ST_NONE = 0, ST_SEEKING = 1, ST_SELECTING = 2, ST_CLOSED = 3, ST_READY = 4, ST_BRAWLING = 6 };
@@ -862,7 +885,64 @@ namespace RoomCss {
         *(int*)(a + AREA_STOCKS) = n;
     }
 
-    // A box's label: P+'s STOCKS, or "HP x10" for stamina's (a copy of it drawn with the game's font).
+    static void deleteObj(u8* obj)
+    {
+        typedef void (*DelFn)(u8*, int);   // MuObject's virtual destructor (vtable +0x5C, entry +8)
+        ((DelFn)(*(u32*)(*(u32*)(obj + 0x5C) + 8)))(obj, 1);
+    }
+
+    // Area i's box as the kind needs it: Brawl's HP box (made now) or the area's own (the HP box
+    // deleted). Taken out of the area's scene group first (stockBoxes shows it again). Returns
+    // whether the HP box is there.
+    static bool hpBox(u8* task, int i, bool hp)
+    {
+        if (s_hpBoxTask != task) {   // (another CSS's: gone with it)
+            for (int k = 0; k < 4; k++) s_ownBox[k] = NULL;
+            s_hpBoxTask = task;
+        }
+        u8* a = area(task, i);
+        u8* cur = a ? *(u8**)(a + AREA_STOCK_BOX) : NULL;
+        if (!isPtr((u32)cur)) return false;
+        if (hp == (s_ownBox[i] != NULL)) return hp;
+        SHOW_STOCK_BOX(a, 0);
+        if (!hp) {
+            *(u8**)(a + AREA_STOCK_BOX) = s_ownBox[i];
+            s_ownBox[i] = NULL;
+            deleteObj(cur);
+            return false;
+        }
+        u8* scn = *(u8**)(cur + 0x10);
+        u8* obj = MU_CREATE(cur + 4, HP_BOX, isPtr((u32)scn) ? scn[0xD0] : 0x10, NULL, MENU_HEAP);
+        if (!isPtr((u32)obj)) return false;
+        CHANGE_ANIM(obj, HP_BOX_ANIM);
+        void* anim = *(void**)(obj + 0x14);
+        if (isPtr((u32)anim)) SET_UPDATE_RATE(anim, 0.0f);
+        // As the area's set-up does (text+0x11CA0): its parts' visibility at frame 1 (0 hides them).
+        SET_FRAME_VISIBLE(obj, 1.0f);
+        // The area's calc-world callback the CSS gave its box (one of area+0x154's, text+0x14570;
+        // ScnObj +0xD4, its timing and options +0xD8).
+        u8* ours = *(u8**)(obj + 0x10);
+        if (isPtr((u32)scn) && isPtr((u32)ours)) {
+            *(u32*)(ours + 0xD4) = *(u32*)(scn + 0xD4);
+            *(u32*)(ours + 0xD8) = *(u32*)(scn + 0xD8);
+        }
+        s_ownBox[i] = cur;
+        *(u8**)(a + AREA_STOCK_BOX) = obj;
+        return true;
+    }
+
+    void taskGone(u8* task)
+    {
+        if (task != s_hpBoxTask) return;
+        for (int i = 0; i < 4; i++) {
+            if (s_ownBox[i]) deleteObj(s_ownBox[i]);
+            s_ownBox[i] = NULL;
+        }
+        s_hpBoxTask = NULL;
+    }
+
+    // A box's label: P+'s STOCKS, or "HP x10" for stamina's (a copy of it drawn with the game's
+    // font) when Brawl's HP box could not be made (hpBox), the STOCKS box showing HP / 10.
     static void boxLabel(u8* a, bool hp)
     {
         u8* box = *(u8**)(a + AREA_STOCK_BOX);
@@ -918,6 +998,7 @@ namespace RoomCss {
                     u8* a = area(task, i);
                     if (a) SHOW_STOCK_BOX(a, 0);
                 }
+                hpBox(task, i, hp);
                 s_boxShown[i] = -1;
             }
             s_boxKind = kind;
@@ -955,7 +1036,7 @@ namespace RoomCss {
                 if (want && i == 0 && mine && (kindChanged || *(int*)(a + AREA_STOCKS) == 0)) showCount(a, mine);
             }
             if (!want) continue;
-            boxLabel(a, hp);
+            if (s_hpBoxTask != task || !s_ownBox[i]) boxLabel(a, hp);
             if (i == 0) {
                 int n = *(int*)(a + AREA_STOCKS);
                 // Locked in: the pick the lock-in carries (Brawl's picker still opened while ready).
@@ -967,6 +1048,9 @@ namespace RoomCss {
                 }
             } else if (s_boxCount[i] != v->stocks) {
                 showCount(a, v->stocks);
+                // The HP box at 0 shows a "1" (its hundreds for 1000): hidden until they pick.
+                if (s_hpBoxTask == task && s_ownBox[i])
+                    SET_FRAME_VISIBLE(*(u8**)(a + AREA_STOCK_BOX), v->stocks ? 1.0f : 0.0f);
                 s_boxCount[i] = v->stocks;
             }
         }
