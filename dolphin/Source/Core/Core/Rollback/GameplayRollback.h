@@ -366,6 +366,9 @@ void HostPadLogLine(const char* kind, long long a, long long b, long long c);
 // in the controller's layout is not Shield also presses its button (L 0x40, R 0x20) at +0 and +4.
 // The decode does the same for the buttons in `light` (bug report #143: a player with L on another
 // action lost its light presses whenever the decode was in use).
+// P+'s "Hold Start to Pause v3" (a hook at 0x801E6D24 on the pad read) takes a held START out of
+// the read in a match whose pause is off until it has been held 50 frames; the decode does too
+// (bug report #182: a START held in Ranked turned the decode off for the rest of the game).
 // SI channel `chan`'s controller told the game this origin (CMD_ORIGIN, CMD_RECALIBRATE).
 void HostPadOriginReported(int chan, u8 stick_x, u8 stick_y, u8 substick_x, u8 substick_y,
                            u8 trigger_left, u8 trigger_right);
