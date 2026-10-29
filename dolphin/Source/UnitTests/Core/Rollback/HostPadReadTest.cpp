@@ -407,3 +407,74 @@ TEST_F(HostPadReadTest, APassIsCheckedAgainstTheReadItsUpdateLowGCTook)
 
   memory.Shutdown();
 }
+
+// Bug report #182: in a match whose pause is off (Ranked, Teams) P+'s "Hold Start to Pause v3"
+// (a hook at 0x801E6D24 on the pad read's store of the buttons) takes a held START out of the
+// read until the channel's hold timer reaches 50, and the plugin sets the timers back to 0 every
+// Ranked frame. The decode kept START, so a START held in Ranked made every pass differ and
+// turned the decode off for the rest of the game after 10.
+TEST_F(HostPadReadTest, AHeldStartIsTakenOutWhilePPlusHoldsIt)
+{
+  auto& memory = m_system.GetMemory();
+  memory.Init();
+  auto& ct = m_system.GetCoreTiming();
+  Gprb::SetHostPadsScheduled(true);
+  Gprb::TakeHostPadReadStats();
+  Gprb::HostPadOriginReported(0, 0x80, 0x80, 0x80, 0x80, 0, 0);
+  constexpr u32 HOOK = 0x801E6D24, HOLD = 0x80584080, PAUSE_OFF = 0x80584084;
+  // The pause status chain: *(*(*(r13 - 0x4350) + 0x18) + 0x3C), r13 = 0x805A4420.
+  constexpr u32 PAUSE_PTR = 0x805A4420 - 0x4350, PAUSE_A = 0x80F00000, PAUSE_B = 0x80F00100;
+  memory.Write_U32(0x48000000 | 0x100, HOOK);  // b (P+'s hook)
+  memory.Write_U32(2, PAUSE_OFF);
+  memory.Write_U32(PAUSE_A, PAUSE_PTR);
+  memory.Write_U32(PAUSE_B, PAUSE_A + 0x18);
+  memory.Write_U32(0, PAUSE_B + 0x3C);
+  const auto decoded_buttons = [&](u16 buttons) {
+    Harness::Internal::PadSet(0, Pad(buttons));
+    std::this_thread::sleep_for(2ms);
+    ct.ResetThrottleToNow();
+    Read();
+    std::array<u8, Gprb::Addr::PAD_STRIDE> pad{};
+    std::chrono::steady_clock::time_point at{};
+    EXPECT_TRUE(Gprb::PadsHostDecoded(0, &pad, &at));
+    EXPECT_EQ(pad[6], pad[2]);
+    return static_cast<u16>((pad[2] << 8) | pad[3]);
+  };
+  const u16 held = PAD_BUTTON_START | PAD_BUTTON_A;
+
+  // The timer under 50: START out, the other buttons kept.
+  memory.Write_U32(3, HOLD);
+  EXPECT_EQ(decoded_buttons(held), PAD_BUTTON_A);
+  // The pass P+ made of it (START out) is its decode.
+  Gprb::PadsOnPadRead();
+  {
+    std::array<u8, Gprb::Addr::PAD_STRIDE> slot{};
+    Gprb::HostDecodePadSlot(Pad(PAD_BUTTON_A), {0x80, 0x80, 0x80, 0x80, 0, 0}, 0, slot.data());
+    memory.CopyToEmu(Gprb::Addr::PAD_STATUS, slot.data(), slot.size());
+    Gprb::PadsOnPadThreadUpdated(m_system);
+  }
+  Gprb::HostPadReadStats stats = Gprb::TakeHostPadReadStats();
+  EXPECT_EQ(stats.decode_checked, 1u);
+  EXPECT_EQ(stats.decode_mismatched, 0u);
+  // Held 50 frames: it comes through (P+ pauses).
+  memory.Write_U32(50, HOLD);
+  EXPECT_EQ(decoded_buttons(held), held);
+  // Another channel's timer is its own.
+  memory.Write_U32(0, HOLD + 8);
+  EXPECT_EQ(decoded_buttons(held), held);
+  memory.Write_U32(0, HOLD);
+  EXPECT_EQ(decoded_buttons(held), PAD_BUTTON_A);
+  // Paused: START comes through (to unpause).
+  memory.Write_U32(1, PAUSE_B + 0x3C);
+  EXPECT_EQ(decoded_buttons(held), held);
+  memory.Write_U32(0, PAUSE_B + 0x3C);
+  // Pause on (the word not 2, as in Unranked, whose plugin clears it): START comes through.
+  memory.Write_U32(0, PAUSE_OFF);
+  EXPECT_EQ(decoded_buttons(held), held);
+  memory.Write_U32(2, PAUSE_OFF);
+  // No P+ (Brawl's own store there): START comes through.
+  memory.Write_U32(0x901E0000, HOOK);  // stw r0,0(r30)
+  EXPECT_EQ(decoded_buttons(held), held);
+
+  memory.Shutdown();
+}

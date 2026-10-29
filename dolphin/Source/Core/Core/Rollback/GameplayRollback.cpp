@@ -844,6 +844,32 @@ u16 HostDecodeLightPresses(const Memory::MemoryManager& memory, int chan)
   return light;
 }
 
+// Whether P+'s "Pause Set to Off -> Hold Start to Pause v3" takes a held START out of channel
+// `chan`'s next pass (bug report #182: a START held in a Ranked match made every pass differ from
+// its decode and turned the decode off for the rest of the game). Its hook replaces the pad read's
+// store of the buttons (`stw r0,0(r30)` at 0x801E6D24): while P+'s pause-off word (0x80584084,
+// "Allow Pausing When Set to Off" writes 2 in a match whose pause is off) is 2 and the game is
+// not paused, a held START is taken out of the read until the channel's hold timer
+// (0x80584080 + 8 * chan, counted by the same hook) reaches 50. The plugin sets the timers back to
+// 0 every Ranked frame, so there it never comes through.
+bool HostDecodeHoldsStart(const Memory::MemoryManager& memory, int chan)
+{
+  constexpr u32 HOOK = 0x801E6D24, HOLD = 0x80584080, PAUSE_OFF = HOLD + 4;
+  constexpr u32 SDA = 0x805A4420;  // r13
+  constexpr u32 HOLD_FRAMES = 50;
+  const Guest g(memory);
+  const std::optional<u32> op = g.U32(HOOK);
+  if (!op || (*op >> 26) != 18 || g.U32(PAUSE_OFF) != 2u)
+    return false;
+  // The game's pause status, as the hook reads it: *(*(*(r13 - 0x4350) + 0x18) + 0x3C), 1 paused.
+  if (const auto p = g.Ptr32(SDA - 0x4350))
+  {
+    if (const auto q = g.Ptr32(*p + 0x18); q && g.U32(*q + 0x3C) == 1u)
+      return false;
+  }
+  return g.U32(HOLD + 8 * chan).value_or(0) < HOLD_FRAMES;
+}
+
 // A read the game gets (ReadHostPad, a session's schedule): its decode, kept for the loop top and
 // the passes' check. A re-run's latched read is the same read: kept once.
 void HostDecodeKeep(const Memory::MemoryManager& memory, int chan, const GCPadStatus& st,
@@ -863,6 +889,11 @@ void HostDecodeKeep(const Memory::MemoryManager& memory, int chan, const GCPadSt
   {
     HostDecodePadSlot(st, s_decode.origin[chan], HostDecodeLightPresses(memory, chan),
                       e.pad.data());
+    if ((st.button & PAD_BUTTON_START) && HostDecodeHoldsStart(memory, chan))
+    {
+      e.pad[2] &= ~(PAD_BUTTON_START >> 8);
+      e.pad[6] = e.pad[2];
+    }
   }
 }
 
