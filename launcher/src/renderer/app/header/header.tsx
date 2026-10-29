@@ -1,6 +1,7 @@
-import { DISCORD_INVITE_URL, PRODUCT_NAME } from "@common/product";
-import { css } from "@emotion/react";
+import { DISCORD_INVITE_URL, PRODUCT_NAME, TOURNAMENTS_URL } from "@common/product";
+import { css, keyframes } from "@emotion/react";
 import styled from "@emotion/styled";
+import EmojiEventsRoundedIcon from "@mui/icons-material/EmojiEventsRounded";
 import NotificationsOffOutlinedIcon from "@mui/icons-material/NotificationsOffOutlined";
 import NotificationsOutlinedIcon from "@mui/icons-material/NotificationsOutlined";
 import SettingsOutlinedIcon from "@mui/icons-material/SettingsOutlined";
@@ -113,6 +114,7 @@ export const Header = ({ menuItems }: { menuItems: readonly MenuItem[] }) => {
           }
         `}
       >
+        <TournamentsButton />
         {currentUser ? (
           <UserMenu user={currentUser} handleError={showError} />
         ) : (
@@ -163,6 +165,43 @@ export const Header = ({ menuItems }: { menuItems: readonly MenuItem[] }) => {
     </OuterBox>
   );
 };
+
+const trophyGlow = keyframes`
+  0%, 100% { filter: drop-shadow(0 0 3px rgba(255, 196, 40, 0.55)); }
+  50% { filter: drop-shadow(0 0 8px rgba(255, 196, 40, 0.95)); }
+`;
+
+/** A glowing golden trophy left of the account: the community's tournaments, in the browser. */
+const TournamentsButton = () => (
+  <Tooltip title={Messages.tournaments()}>
+    <IconButton
+      component="a"
+      href={TOURNAMENTS_URL}
+      target="_blank"
+      rel="noopener noreferrer"
+      aria-label={Messages.tournaments()}
+      css={css`
+        margin-right: 16px;
+        color: #ffc83d;
+        animation: ${trophyGlow} 2.4s ease-in-out infinite;
+        &:hover {
+          color: #ffd966;
+          background-color: rgba(255, 196, 40, 0.12);
+        }
+        @media (prefers-reduced-motion: reduce) {
+          animation: none;
+          filter: drop-shadow(0 0 5px rgba(255, 196, 40, 0.8));
+        }
+        ${COMPACT_HEADER} {
+          margin-right: 6px;
+        }
+      `}
+      size="large"
+    >
+      <EmojiEventsRoundedIcon />
+    </IconButton>
+  </Tooltip>
+);
 
 /** The bell: chat message and invite sounds on or off. */
 const SoundsToggle = () => {

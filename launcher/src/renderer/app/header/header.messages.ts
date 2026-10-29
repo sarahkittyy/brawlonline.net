@@ -9,6 +9,7 @@ export const HeaderMessages = {
     "Your disc image will not work with {0}. Please choose an unmodified NTSC-U Brawl disc image (revision 1 or 2) in Settings > Game.",
   settings: () => "Settings",
   discord: () => "Discord",
+  tournaments: () => "Tournaments on start.gg",
   toggleNotificationSounds: () => "Toggle Notification Sounds",
   chooseAConnectCode: () => "Choose a connect code",
   youAreNotLoggedIn: () => "You are not logged in",
