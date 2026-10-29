@@ -380,7 +380,13 @@ void CommonAsmRoutines::GeneratePsMaddEft()
   }
   else
   {
-    PCMPEQW(XMM3, MConst(double_msb));
+    // The shift leaves each lane's low dword 0, as in double_msb: comparing the high dwords and
+    // copying that mask over both halves is PCMPEQQ. PCMPEQW compared 16-bit words, so a lane
+    // whose two high words differed in only one got half a mask (0x0000FFFF or 0xFFFF0000), and
+    // the rounding below added 1, or that mask's part of -1, to a result that was no even tie:
+    // single-precision madds rounded differently on a CPU without SSE4.1 (an AMD Phenom II
+    // desynced about half its P+ games, bug #189).
+    PCMPEQD(XMM3, MConst(double_msb));
     PSHUFD(XMM3, R(XMM3), 0xF5);
   }
 
@@ -569,19 +575,21 @@ void QuantizedMemoryRoutines::GenQuantizedStore(bool single, EQuantizeType type,
 
     bool hasPACKUSDW = cpu_info.bSSE4_1;
 
+    // According to Intel Docs CVTPS2DQ writes 0x80000000 if the source floating point value
+    // is out of int32 range while it's OK for large negatives, it isn't for positives
+    // I don't know whether the overflow actually happens in any games but it potentially can
+    // cause problems, so we need some clamping
+    MINPS(XMM0, MConst(m_65535));
+
     // Special case: if we don't have PACKUSDW we need to clamp to zero as well so the shuffle
-    // below can work
+    // below can work. After MINPS, which makes a NaN 65535 as with PACKUSDW (clamped first, a NaN
+    // became 0 on a CPU without SSE4.1, bug #189).
     if (type == QUANTIZE_U16 && !hasPACKUSDW)
     {
       XORPS(XMM1, R(XMM1));
       MAXPS(XMM0, R(XMM1));
     }
 
-    // According to Intel Docs CVTPS2DQ writes 0x80000000 if the source floating point value
-    // is out of int32 range while it's OK for large negatives, it isn't for positives
-    // I don't know whether the overflow actually happens in any games but it potentially can
-    // cause problems, so we need some clamping
-    MINPS(XMM0, MConst(m_65535));
     CVTTPS2DQ(XMM0, R(XMM0));
 
     switch (type)

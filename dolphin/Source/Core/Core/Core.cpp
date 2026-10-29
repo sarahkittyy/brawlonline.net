@@ -245,6 +245,9 @@ bool Init(Core::System& system, std::unique_ptr<BootParameters> boot, const Wind
 
   INFO_LOG_FMT(BOOT, "Starting core = {} mode", system.IsWii() ? "Wii" : "GameCube");
   INFO_LOG_FMT(BOOT, "CPU Thread separate = {}", system.IsDualCoreMode() ? "Yes" : "No");
+  // The JIT emits other code without some of these (SSE4.1, AVX, FMA, BMI...): a fallback that
+  // computed differently desynced a player's games (bug #189).
+  INFO_LOG_FMT(BOOT, "Host CPU: {}", cpu_info.Summarize());
 
   // Manually reactivate the video backend in case a GameINI overrides the video backend setting.
   VideoBackendBase::PopulateBackendInfo(wsi);
