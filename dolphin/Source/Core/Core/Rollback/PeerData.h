@@ -367,4 +367,34 @@ constexpr double QUALITY_PING_SEVERE_MS = 300;
 // (2.5 s at 59.94 Hz); `avg_ping_ms`: its average round trip (0: none measured; the ratio then
 // covers it); `lenient`: past QUALITY_LENIENT_AFTER_FRAMES.
 int QualityDebt(double ratio, double avg_ping_ms, bool lenient);
+
+// Whose end an aborted game's poor quality was on, as this machine saw it (Ranked's report
+// "cause", server common::ranked::Cause; the user's, 2026-10-29: a player losing a set must not
+// get it voided by slowing their game down, and only a fault known for a fact counts). Only
+// OwnPc blames anyone on a game's word: this machine's own player.
+enum class QualityCause : u8
+{
+  Link,    // waits for the other player's inputs, or a high round trip
+  OwnPc,   // this PC missed its own frame schedule
+  PeerPc,  // the other PC said it missed its own
+};
+constexpr int QUALITY_CAUSES = 3;
+const char* QualityCauseName(QualityCause cause);  // "link", "self", "peer"
+// The cause of one bad interval: its round trip's debt as much as its speed's: the link; else
+// this PC behind its own schedule (more than half of the interval's frames late without a rollback
+// before them, the "behind" test), else the other PC saying so, else the link (waits).
+QualityCause IntervalCause(double ratio, double avg_ping_ms, bool lenient, bool own_behind,
+                           bool peer_behind);
+// The cause of the debt that aborted a game: the one with the most of it (`debt`: the positive
+// debt of each cause since the debt was last 0); a tie is the link (blames nobody).
+QualityCause RunCause(const std::array<int, QUALITY_CAUSES>& debt);
+
+// The set's first seconds (the user's, 2026-10-29: "games that are slow from the start of game 1
+// are obviously like, not intentional ... maybe after 10-15s after the start of the first game
+// that it becomes potentially intentional"): an abort or a lost link before the first game's
+// frame QUALITY_EARLY_FRAMES is reported early (server: void, not the culprit's loss), and so is
+// any later one when QUALITY_EARLY_BAD of the first game's intervals by then were bad (debt
+// added): poor from its start. One hitch is not (a 2 s freeze alone is a severe interval).
+constexpr s64 QUALITY_EARLY_FRAMES = 900;
+constexpr int QUALITY_EARLY_BAD = 3;
 }  // namespace Gprb::PeerData

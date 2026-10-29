@@ -40,7 +40,7 @@ use tokio::sync::{mpsc as tk_mpsc, Semaphore};
 use uuid::Uuid;
 
 use crate::chat::{report_row, ChatReportRecord};
-use crate::engine::{ConnId, Engine, EngineConfig, FetchResult, Input, MatchRecord, Output};
+use crate::engine::{ConnId, Engine, EngineConfig, FetchResult, Input, MatchRecord, Output, RTT_EVERY};
 use crate::live::{Cursor, LiveStore};
 
 const TICK: Duration = Duration::from_millis(100);
@@ -653,6 +653,17 @@ impl Loop {
                 let pool = self.db.pool.clone();
                 self.db.rt.spawn(record_ranked_presence(pool, match_id, uid, online, stalled_since, at));
             }
+            Output::RankedNetEvent { match_id, uid, kind, from, to, peak_ms, base_ms } => {
+                let pool = self.db.pool.clone();
+                self.db.rt.spawn(async move {
+                    let ms = |v: Option<u32>| v.map(|v| v.min(i32::MAX as u32) as i32);
+                    let r =
+                        db::record_ranked_net_event(&pool, &match_id, uid, kind, from, to, ms(peak_ms), ms(base_ms));
+                    if let Err(e) = r.await {
+                        tracing::error!(match_id, %uid, "recording ranked net event failed: {e}");
+                    }
+                });
+            }
             Output::RankedGameResult { match_id, game_index, uid, winner, end_method } => {
                 let pool = self.db.pool.clone();
                 self.db.rt.spawn(record_ranked_game_result(pool, match_id, game_index, uid, winner, end_method));
@@ -779,6 +790,7 @@ fn event_loop(
         pending_disconnects: Vec::new(),
     };
     let mut last_tick = Instant::now();
+    let mut last_rtt = Instant::now();
     let mut last_stats = Instant::now();
     let mut last_status: Option<Instant> = None;
     while !stop.load(Ordering::Relaxed) {
@@ -824,6 +836,17 @@ fn event_loop(
         if last_tick.elapsed() >= TICK {
             last_tick = Instant::now();
             lp.feed(Input::Tick);
+        }
+        if last_rtt.elapsed() >= RTT_EVERY {
+            last_rtt = Instant::now();
+            let rtts = lp
+                .peer_conn
+                .iter()
+                .map(|(peer, conn)| {
+                    (*conn, lp.host.peer(*peer).round_trip_time().as_millis().min(u32::MAX as u128) as u32)
+                })
+                .collect();
+            lp.feed(Input::Rtt(rtts));
         }
         if last_status.is_none_or(|t| t.elapsed() >= STATUS_INTERVAL) {
             last_status = Some(Instant::now());

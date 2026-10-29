@@ -328,8 +328,15 @@ struct State
   bool peer_left = false;
   std::string peer_left_reason;
   // The match was aborted for its quality (UpdateMatchQuality), here or by the other player (its
-  // leave's "abort"): the session ended as a disconnect; Ranked voids the set.
+  // leave's "abort"): the session ended as a disconnect; Ranked reports it, with whose end this
+  // machine saw the poor quality on (Lobby.quality_cause).
   bool quality_aborted = false;
+  PeerData::QualityCause quality_cause = PeerData::QualityCause::Link;
+  // The set's first seconds are over (PeerData::QUALITY_EARLY_FRAMES of its first match), and its
+  // first match was poor from its start (QUALITY_EARLY_BAD bad intervals by then): Lobby.early.
+  bool past_early = false;
+  bool poor_start = false;
+  int early_bad = 0;  // bad intervals of the first match by QUALITY_EARLY_FRAMES
   // This player told the others it left: Stop, or the session gave up (Phase::Error), so they
   // do not wait for it at a barrier until their own timeout.
   bool leave_sent = false;
@@ -537,6 +544,10 @@ struct State
   double quality_ping_sum = 0;
   int quality_pings = 0;
   int quality_debt = 0;
+  // Where the debt since it was last 0 came from (PeerData::IntervalCause), and this PC's own late
+  // frames at the interval's start (its "behind" test over the interval).
+  std::array<int, PeerData::QUALITY_CAUSES> quality_cause_debt{};
+  u64 quality_own_late = 0;
   // Slippi's frame advance (UpdateTimeSync): catch-up frames left in this batch, whether a batch
   // runs, and whether the frame running now / the previous displayed frame was one (its throttle
   // point is a frame early on purpose, not late).
@@ -2704,7 +2715,9 @@ void HandleControl(std::string_view text, const sf::IpAddress& from, u16 from_po
                                         s_quality_abort && ActivePlayers() == 2 &&
                                         InMatchPhase() && !s.peer_left)
     {
-      INFO_LOG_FMT(BRAWLBACK, "gprb: P{} aborted the match: its quality is low", slot + 1);
+      s.quality_cause = PeerData::RunCause(s.quality_cause_debt);
+      INFO_LOG_FMT(BRAWLBACK, "gprb: P{} aborted the match: its quality is low (here: {})",
+                   slot + 1, PeerData::QualityCauseName(s.quality_cause));
       s.quality_aborted = true;
       OnPeerLeft(slot, QUALITY_ABORT_REASON);
       return;
@@ -3547,6 +3560,8 @@ void ResetRunStats()
   s.quality_ping_sum = 0;
   s.quality_pings = 0;
   s.quality_debt = 0;
+  s.quality_cause_debt = {};
+  s.quality_own_late = 0;
   s.frames_to_advance = 0;
   s.advancing = s.advanced_this_frame = s.prev_frame_advanced = false;
   s.last_advance_frame = -1;
@@ -5478,11 +5493,13 @@ constexpr s64 QUALITY_FIRST_FRAME = HARD_SYNC_UNTIL;
 
 void UpdateMatchQuality()
 {
-  if (!s_quality_abort || s.mode != Mode::Network || s.phase != Phase::Running ||
-      s.current_frame < QUALITY_FIRST_FRAME)
-  {
+  if (s.mode != Mode::Network || s.phase != Phase::Running)
     return;
-  }
+  // The set's first seconds (PeerData::QUALITY_EARLY_FRAMES of the session's first match).
+  if (!s.past_early && (s.match_index > 0 || s.current_frame > PeerData::QUALITY_EARLY_FRAMES))
+    s.past_early = true;
+  if (!s_quality_abort || s.current_frame < QUALITY_FIRST_FRAME)
+    return;
   std::lock_guard<std::recursive_timed_mutex> lk(s.mutex);
   if (s.quality_aborted || s.peer_left || ActivePlayers() != 2)
     return;
@@ -5493,6 +5510,7 @@ void UpdateMatchQuality()
     s.quality_t = now;
     s.quality_ping_sum = 0;
     s.quality_pings = 0;
+    s.quality_own_late = s.own_late;
     return;
   }
   if (GekkoNetworkStats stats{}; WorstLink(&stats) && stats.last_ping > 0)
@@ -5503,30 +5521,59 @@ void UpdateMatchQuality()
   const s64 frames = s.current_frame - s.quality_frame;
   if (frames < PeerData::QUALITY_INTERVAL_FRAMES)
     return;
-  static const bool poor = std::getenv("PPR_GPRB_TEST_POOR_QUALITY") != nullptr;
+  // Tests: PPR_GPRB_TEST_POOR_QUALITY=1 counts every interval as severe; with
+  // PPR_GPRB_TEST_POOR_QUALITY_AFTER=<frame> only those from that frame of each match on, and as
+  // this PC's own (behind its schedule): a PC that slows down in the middle of a set.
+  static const bool poor_all = std::getenv("PPR_GPRB_TEST_POOR_QUALITY") != nullptr;
+  static const s64 poor_after = [] {
+    const char* v = std::getenv("PPR_GPRB_TEST_POOR_QUALITY_AFTER");
+    return v ? std::strtoll(v, nullptr, 10) : -1;
+  }();
+  const bool poor_late = poor_after >= 0 && s.current_frame >= poor_after;
+  const bool poor = poor_all || poor_late;
   const double wall_us = std::chrono::duration<double, std::micro>(now - s.quality_t).count();
   const double ratio = poor ? 2.0 : wall_us / (static_cast<double>(frames) * FRAME_US);
   const double ping = s.quality_pings ? s.quality_ping_sum / s.quality_pings : 0.0;
-  const int debt = PeerData::QualityDebt(
-      ratio, ping, s.current_frame > PeerData::QUALITY_LENIENT_AFTER_FRAMES);
+  const bool lenient = s.current_frame > PeerData::QUALITY_LENIENT_AFTER_FRAMES;
+  const int debt = PeerData::QualityDebt(ratio, ping, lenient);
+  const bool own_behind =
+      poor_late || static_cast<double>(s.own_late - s.quality_own_late) * 2 > frames;
+  const auto cause = PeerData::IntervalCause(ratio, ping, lenient, own_behind, PeerBehind());
   s.quality_debt = std::max(0, s.quality_debt + debt);
+  if (s.quality_debt == 0)
+    s.quality_cause_debt = {};
+  else if (debt > 0)
+    s.quality_cause_debt[static_cast<int>(cause)] += debt;
+  // The set's first match poor from its start: an abort or a lost link later is reported early.
+  if (s.match_index == 0 && s.current_frame <= PeerData::QUALITY_EARLY_FRAMES && debt > 0 &&
+      ++s.early_bad == PeerData::QUALITY_EARLY_BAD)
+  {
+    s.poor_start = true;
+    INFO_LOG_FMT(BRAWLBACK, "gprb: match quality poor from the set's start ({} bad intervals by "
+                 "frame {})", s.early_bad, s.current_frame);
+  }
   s.quality_frame = s.current_frame;
   s.quality_t = now;
   s.quality_ping_sum = 0;
   s.quality_pings = 0;
+  s.quality_own_late = s.own_late;
   if (debt > 0 || s.quality_debt > 0)
   {
     INFO_LOG_FMT(BRAWLBACK,
                  "gprb: match quality at frame {}: {} frames in {:.2f} s ({:.1f}/s), round trip "
-                 "{:.0f} ms: debt {:+d}, now {}/{}",
+                 "{:.0f} ms: debt {:+d} ({}), now {}/{}",
                  s.current_frame, frames, wall_us / 1e6,
-                 wall_us > 0 ? frames * 1e6 / wall_us : 0.0, ping, debt, s.quality_debt,
-                 PeerData::QUALITY_ABORT_DEBT);
+                 wall_us > 0 ? frames * 1e6 / wall_us : 0.0, ping, debt,
+                 PeerData::QualityCauseName(cause), s.quality_debt, PeerData::QUALITY_ABORT_DEBT);
   }
   if (s.quality_debt < PeerData::QUALITY_ABORT_DEBT)
     return;
-  WARN_LOG_FMT(BRAWLBACK, "gprb: match quality low at frame {}: aborting the match",
-               s.current_frame);
+  s.quality_cause = PeerData::RunCause(s.quality_cause_debt);
+  WARN_LOG_FMT(BRAWLBACK,
+               "gprb: match quality low at frame {}: aborting the match (link {}, this PC {}, "
+               "the other PC {}: {})",
+               s.current_frame, s.quality_cause_debt[0], s.quality_cause_debt[1],
+               s.quality_cause_debt[2], PeerData::QualityCauseName(s.quality_cause));
   SendLeave(QUALITY_ABORT_REASON, true);
   s.quality_aborted = true;
   s.peer_left = true;
@@ -7009,6 +7056,10 @@ std::optional<std::string> Connect(const ConnectOptions& options)
   s.peer_left = false;
   s.peer_left_reason.clear();
   s.quality_aborted = false;
+  s.quality_cause = PeerData::QualityCause::Link;
+  s.past_early = false;
+  s.poor_start = false;
+  s.early_bad = 0;
   s.leave_sent = false;
   s.wait_logs = 0;
   s.state_size_logged = false;
@@ -7188,6 +7239,8 @@ Lobby GetLobby()
   l.desynced = s.desynced;
   l.quit_left = s.quit_left;
   l.quality_aborted = s.quality_aborted;
+  l.quality_cause = s.quality_cause;
+  l.early = !s.past_early || s.poor_start;
   l.local_port = s.mode == Mode::Network ? s.local_slot : -1;
   l.num_players = s.mode == Mode::Network ? ActivePlayers() : 0;
   l.game = NextGame();

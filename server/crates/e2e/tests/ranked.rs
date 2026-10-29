@@ -226,16 +226,17 @@ async fn abandoning_disagreeing_and_bad_reports() {
     let (_, s) = leave_early(&stack, b, &id).await;
     assert_eq!(s["status"], "ABANDONED", "{s}");
 
-    // A game aborted for its match quality (bug report #182): void at the first report, nobody
-    // rated, even after a game one of them won; the other's own report changes nothing.
+    // A game aborted for its match quality (bug report #182), nobody's PC or connection to
+    // blame: the first report waits for the other's (its cause), then the set is void, nobody
+    // rated, even after a game one of them won.
     let before = (rank(&stack, a).await, rank(&stack, b).await);
     let id = direct_set(&stack, a, b, 8).await;
     both(&stack, a, b, &id, 1, b).await;
     let (st, s) = leave(&stack, a, &id, "match_quality").await;
-    assert_eq!((st, s["status"].as_str()), (200, Some("TERMINATED")), "{s}");
-    assert!(s["rating"].is_null(), "{s}");
+    assert_eq!((st, s["status"].as_str()), (200, Some("ASSIGNED")), "{s}");
     let (_, s) = leave(&stack, b, &id, "match_quality").await;
-    assert_eq!(s["status"], "TERMINATED");
+    assert_eq!(s["status"], "TERMINATED", "{s}");
+    assert!(s["rating"].is_null(), "{s}");
     assert_eq!(result(&stack, b, &id).await["reason"], "match quality low");
     assert_eq!((rank(&stack, a).await, rank(&stack, b).await), before);
 
@@ -273,6 +274,89 @@ async fn abandoning_disagreeing_and_bad_reports() {
     assert_eq!((st, s["status"].as_str()), (200, Some("ASSIGNED")), "{s}");
     assert!(s["rating"].is_null());
     assert_eq!(leave(&stack, a, &unranked, "left").await.0, 404);
+    stack.shutdown().await;
+}
+
+async fn leave_with(stack: &Stack, by: &UserJson, id: &str, kind: &str, cause: Option<&str>, early: bool) -> Value {
+    let (st, body) = stack
+        .post(
+            "/v1/ranked/report-leave",
+            None,
+            json!({"uid": by.uid, "playKey": by.play_key, "matchId": id, "kind": kind, "cause": cause, "early": early}),
+        )
+        .await;
+    assert_eq!(st, 200, "{body}");
+    body
+}
+
+async fn fault(stack: &Stack, id: &str) -> Option<Uuid> {
+    sqlx::query_scalar("SELECT fault FROM mm_matches WHERE match_id = $1")
+        .bind(id)
+        .fetch_one(&stack.pool)
+        .await
+        .unwrap()
+}
+
+/// The user's, 2026-10-29: a player losing a set who slows their game down or pulls the cable
+/// loses it (after the set's first seconds), and three sets ended on one's own end in a day are a
+/// Ranked cooldown; mm refuses the next Ranked search.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_set_ended_on_ones_own_end_is_their_loss_and_three_are_a_cooldown() {
+    let stack = Stack::start(StackOptions { engine: engine(), ..Default::default() }).await.unwrap();
+    let u = players(&stack, &["gina", "hugo"]).await;
+    let (a, b) = (&u[0], &u[1]);
+
+    // Game 1 to gina; hugo's PC falls behind in game 2 and his game says so: his loss.
+    let id = direct_set(&stack, a, b, 1).await;
+    both(&stack, a, b, &id, 1, a).await;
+    let s = leave_with(&stack, a, &id, "match_quality", Some("peer"), false).await;
+    assert_eq!(s["status"], "ASSIGNED", "the other game's word on its own PC is awaited: {s}");
+    let s = leave_with(&stack, b, &id, "match_quality", Some("self"), false).await;
+    assert_eq!(s["status"], "ABANDONED", "{s}");
+    assert_eq!(s["reason"], format!("abandoned by {}: match quality low", b.uid));
+    assert!(s["rating"]["change"].as_f64().unwrap() < 0.0, "{s}");
+    assert_eq!(result(&stack, a, &id).await["winner"], json!(a.uid));
+    assert_eq!(fault(&stack, &id).await, Some(uid(b)));
+
+    // Hugo pulls the cable: mm saw his connection go silent, both games say the other left.
+    let id = direct_set(&stack, a, b, 2).await;
+    let t = chrono::Utc::now();
+    let silence = common::db::NetEventKind::Silence;
+    common::db::record_ranked_net_event(
+        &stack.pool,
+        &id,
+        uid(b),
+        silence,
+        t - chrono::Duration::seconds(9),
+        t,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    leave_with(&stack, a, &id, "opponent_left", None, false).await;
+    let s = leave_with(&stack, b, &id, "opponent_left", None, false).await;
+    assert_eq!(s["status"], "ABANDONED", "{s}");
+    assert_eq!(s["reason"], format!("abandoned by {}: connection lost", b.uid));
+    assert_eq!(fault(&stack, &id).await, Some(uid(b)));
+
+    // In game 1's first seconds: void, nobody rated, still counted against him.
+    let before = (rank(&stack, a).await, rank(&stack, b).await);
+    let id = direct_set(&stack, a, b, 3).await;
+    let s = leave_with(&stack, b, &id, "match_quality", Some("self"), true).await;
+    assert_eq!(s["status"], "TERMINATED", "{s}");
+    assert_eq!((rank(&stack, a).await, rank(&stack, b).await), before);
+    assert_eq!(fault(&stack, &id).await, Some(uid(b)));
+
+    // Three: a cooldown of an hour from the last; gina has none.
+    let hugo = common::db::fetch_mm_user(&stack.pool, uid(b)).await.unwrap().unwrap();
+    let left = hugo.ranked_cooldown(chrono::Utc::now()).expect("a cooldown");
+    assert!((59 * 60..=3600).contains(&left.num_seconds()), "{left:?}");
+    let gina = common::db::fetch_mm_user(&stack.pool, uid(a)).await.unwrap().unwrap();
+    assert_eq!(gina.ranked_cooldown_until, None);
+    let r = search(SearchOptions::ranked(stack.mm_addr, creds(b))).await;
+    assert_ne!(r.status, Status::Matched, "{r:?}");
+    assert!(r.error.as_deref().unwrap_or("").starts_with("Ranked cooldown: 60 min left"), "{r:?}");
     stack.shutdown().await;
 }
 

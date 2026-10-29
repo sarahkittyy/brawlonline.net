@@ -82,7 +82,7 @@ use std::time::{Duration, Instant};
 use chrono::{DateTime, Utc};
 use common::chat::ChatRequest;
 use common::codes::{decode_search_code, ConnectCode};
-use common::db::{MmUser, SpeedCheckRecord, SpeedReportRecord};
+use common::db::{MmUser, NetEventKind, SpeedCheckRecord, SpeedReportRecord};
 use common::net::{ip_key, sanitize_lan_addr, to_v4};
 use common::playkey::PlayKeySecret;
 use common::proto::{
@@ -298,8 +298,14 @@ pub enum Input {
     /// The matches made in the last `LiveConfig::match_ttl`, read back from the database once
     /// when mm starts (`common::db::recent_matches`): the sets under way go on being streamed.
     MatchesRestored(Vec<common::db::RecentMatch>),
+    /// Each connection's round trip as ENet has it (ms), every [`RTT_EVERY`]: a lag on a Ranked
+    /// player's own connection is recorded ([`Output::RankedNetEvent`]).
+    Rtt(Vec<(ConnId, u32)>),
     Tick,
 }
+
+/// How often the server loop sends [`Input::Rtt`].
+pub const RTT_EVERY: Duration = Duration::from_millis(500);
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct MatchRecord {
@@ -371,6 +377,18 @@ pub enum Output {
         online: bool,
         stalled_since: Option<DateTime<Utc>>,
         at: DateTime<Utc>,
+    },
+    /// Trouble on a Ranked set's player's own connection to mm (`ranked_net_events`): a silence
+    /// (their game's `game-alive`s came late or stopped) or a lag (their round trip jumped), from
+    /// `from` to `to`. `peak_ms`/`base_ms`: a lag's highest and usual round trips.
+    RankedNetEvent {
+        match_id: String,
+        uid: Uuid,
+        kind: common::db::NetEventKind,
+        from: DateTime<Utc>,
+        to: DateTime<Utc>,
+        peak_ms: Option<u32>,
+        base_ms: Option<u32>,
     },
     /// How a Ranked set's game ended as one player's own game said it (`ranked_game_results`).
     RankedGameResult {
@@ -446,6 +464,94 @@ struct Online {
     /// No `game-alive` for [`EngineConfig::game_stall`]: the game stopped running while its
     /// connection stayed up (frozen, or its emulation paused). Recorded for its recent Ranked sets.
     stalled: bool,
+    /// The game plays a Ranked set (its `game-alive`s say `ranked`, every
+    /// [`common::proto::GAME_ALIVE_RANKED_EVERY`]): the last one, on both clocks. A late one is a
+    /// silence on this player's own connection ([`SILENCE_MIN`]).
+    ranked_beat: Option<(Instant, DateTime<Utc>)>,
+    /// The round trips of this connection ([`Input::Rtt`]).
+    rtt: RttWatch,
+}
+
+// Whose end a Ranked set's trouble was on (the user's, 2026-10-29: a player losing a set must not
+// get it voided by slowing their game down or pulling the cable, and only when it is "for a fact
+// their fault"): mm is a third party to the players' link, so trouble on only one player's
+// connection to mm is that player's own (`common::ranked::NetTrouble`, `ranked_net_events`).
+//
+// - A silence: a Ranked game's `game-alive` came SILENCE_MIN or more after it was due (its network
+//   went, or the game stopped running), from when it was due until it came; written in
+//   SILENCE_FLUSH pieces while it lasts, and at a close that ends one (a timeout).
+// - A lag: the connection's round trip LAG_RISE_MS or more above its usual one (the lowest lately:
+//   it follows a higher one over minutes) for LAG_MIN or more, until it falls back under
+//   LAG_END_MS above it. A lag tool on one's own connection shows here too.
+
+pub const SILENCE_MIN: Duration = Duration::from_millis(600);
+pub const SILENCE_FLUSH: Duration = Duration::from_secs(5);
+pub const LAG_RISE_MS: u32 = 100;
+pub const LAG_END_MS: u32 = 50;
+pub const LAG_MIN: Duration = Duration::from_secs(1);
+/// The usual round trip follows a higher one by 1/[`RTT_BASE_FOLLOW`] of the difference per sample
+/// (a time constant of about 5 minutes at [`RTT_EVERY`]); a lower one is taken at once.
+const RTT_BASE_FOLLOW: u32 = 600;
+
+#[derive(Debug, Clone, Default)]
+struct RttWatch {
+    /// The usual round trip (ms), once there is a sample.
+    base: Option<u32>,
+    /// A lag under way: since when (both clocks), its peak and the usual round trip at its start.
+    lag: Option<(Instant, DateTime<Utc>, u32, u32)>,
+}
+
+impl RttWatch {
+    /// A sample; returns a lag that ended with it (`in_set`: the game is in a Ranked set, else a
+    /// lag ends now).
+    fn sample(&mut self, now: Instant, wall: DateTime<Utc>, rtt: u32, in_set: bool) -> Option<Lag> {
+        let base = match self.base {
+            Some(b) if rtt < b => rtt,
+            Some(b) => b + (rtt - b) / RTT_BASE_FOLLOW,
+            None => rtt,
+        };
+        self.base = Some(base);
+        match &mut self.lag {
+            None if in_set && rtt >= base + LAG_RISE_MS => {
+                self.lag = Some((now, wall, rtt, base));
+                None
+            }
+            Some((_, _, peak, base_then)) if in_set && rtt >= *base_then + LAG_END_MS => {
+                *peak = (*peak).max(rtt);
+                None
+            }
+            Some(_) => self.end(now),
+            None => None,
+        }
+    }
+
+    /// Ends a lag under way; returns it if it lasted [`LAG_MIN`] (timed on the monotonic clock).
+    fn end(&mut self, now: Instant) -> Option<Lag> {
+        let (at, from, peak, base) = self.lag.take()?;
+        let lasted = now.saturating_duration_since(at);
+        let to = from + chrono::Duration::from_std(lasted).unwrap_or_default();
+        (lasted >= LAG_MIN).then_some(Lag { from, to, peak, base })
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct Lag {
+    from: DateTime<Utc>,
+    to: DateTime<Utc>,
+    peak: u32,
+    base: u32,
+}
+
+/// A Ranked game's `game-alive` last came at `beat` (both clocks): the silence since it was due,
+/// if it is [`SILENCE_MIN`] or more by `now`.
+fn overdue(beat: (Instant, DateTime<Utc>), now: Instant) -> Option<(DateTime<Utc>, DateTime<Utc>)> {
+    let every = common::proto::GAME_ALIVE_RANKED_EVERY;
+    let late = now.saturating_duration_since(beat.0).checked_sub(every)?;
+    if late < SILENCE_MIN {
+        return None;
+    }
+    let due = beat.1 + chrono::Duration::from_std(every).unwrap_or_default();
+    Some((due, due + chrono::Duration::from_std(late).unwrap_or_default()))
 }
 
 impl Online {
@@ -753,6 +859,7 @@ impl Engine {
                 }
             },
             Input::Tick => self.on_tick(now, wall, &mut out),
+            Input::Rtt(samples) => self.on_rtt(now, wall, samples, &mut out),
         }
         self.sync_room_chat(&mut out);
         self.register_live_matches(now, &mut out);
@@ -796,6 +903,15 @@ impl Engine {
     /// record their game as gone from mm (and since when it had stopped running, if it had).
     fn online_gone(&mut self, now: Instant, o: &Online, out: &mut Vec<Output>) {
         let uid = o.user.uid;
+        // A close that ends a silence (the connection timed out) or a lag.
+        if let Some(beat) = o.ranked_beat {
+            if let Some((from, to)) = overdue(beat, now) {
+                self.live.net_event(now, uid, NetEventKind::Silence, from, to, None, out);
+            }
+            if let Some(lag) = o.rtt.clone().end(now) {
+                self.live.net_event(now, uid, NetEventKind::Lag, lag.from, lag.to, Some((lag.peak, lag.base)), out);
+            }
+        }
         let still = self.conns.values().any(|c| matches!(&c.state, State::Online(o) if o.user.uid == uid));
         if !still {
             self.live.presence(now, uid, false, o.stalled_since(), out);
@@ -804,13 +920,67 @@ impl Engine {
 
     /// `game-alive` on an online connection: its game runs. One that had stopped running runs
     /// again: its recent Ranked sets record it.
-    fn game_alive(&mut self, now: Instant, wall: DateTime<Utc>, conn: ConnId, out: &mut Vec<Output>) {
+    fn game_alive(&mut self, now: Instant, wall: DateTime<Utc>, conn: ConnId, ranked: bool, out: &mut Vec<Output>) {
         let Some(Conn { state: State::Online(o), .. }) = self.conns.get_mut(&conn) else { return };
         o.alive = Some((now, wall));
+        // Also the first plain one after a set (the game sends it at once): a silence under way
+        // ends with it.
+        let silence = o.ranked_beat.and_then(|beat| overdue(beat, now));
+        o.ranked_beat = ranked.then_some((now, wall));
+        let lag = if ranked { None } else { o.rtt.end(now) };
+        let uid = o.user.uid;
+        if let Some((from, to)) = silence {
+            tracing::info!(conn, %uid, %from, %to, "ranked game silent on its connection");
+            self.live.net_event(now, uid, NetEventKind::Silence, from, to, None, out);
+        }
+        if let Some(lag) = lag {
+            self.live.net_event(now, uid, NetEventKind::Lag, lag.from, lag.to, Some((lag.peak, lag.base)), out);
+        }
+        let Some(Conn { state: State::Online(o), .. }) = self.conns.get_mut(&conn) else { return };
         if std::mem::take(&mut o.stalled) {
             let uid = o.user.uid;
             tracing::info!(conn, code = %o.code, "the game runs again");
             self.live.presence(now, uid, true, None, out);
+        }
+    }
+
+    /// Ranked games silent for [`SILENCE_FLUSH`] past their due `game-alive`: the silence so far
+    /// is written (the rest follows when one comes, or at the close).
+    fn flush_ranked_silences(&mut self, now: Instant, out: &mut Vec<Output>) {
+        let every = common::proto::GAME_ALIVE_RANKED_EVERY;
+        let mut silent = Vec::new();
+        for c in self.conns.values_mut() {
+            let State::Online(o) = &mut c.state else { continue };
+            let Some(beat) = o.ranked_beat else { continue };
+            if now.saturating_duration_since(beat.0) < every + SILENCE_FLUSH {
+                continue;
+            }
+            let Some((from, to)) = overdue(beat, now) else { continue };
+            // The next piece starts where this one ends: as if a beat had come one interval before.
+            o.ranked_beat = Some((now - every, to - chrono::Duration::from_std(every).unwrap_or_default()));
+            silent.push((o.user.uid, from, to));
+        }
+        for (uid, from, to) in silent {
+            tracing::info!(%uid, %from, %to, "ranked game silent on its connection");
+            self.live.net_event(now, uid, NetEventKind::Silence, from, to, None, out);
+        }
+    }
+
+    /// ENet's round trips ([`Input::Rtt`]): lags on Ranked players' connections.
+    fn on_rtt(&mut self, now: Instant, wall: DateTime<Utc>, samples: Vec<(ConnId, u32)>, out: &mut Vec<Output>) {
+        let mut lags = Vec::new();
+        for (conn, rtt) in samples {
+            let Some(Conn { state: State::Online(o), .. }) = self.conns.get_mut(&conn) else { continue };
+            if rtt == 0 {
+                continue;
+            }
+            if let Some(lag) = o.rtt.sample(now, wall, rtt, o.ranked_beat.is_some()) {
+                lags.push((o.user.uid, lag));
+            }
+        }
+        for (uid, lag) in lags {
+            tracing::info!(%uid, from = %lag.from, to = %lag.to, peak = lag.peak, base = lag.base, "ranked game lagged on its connection");
+            self.live.net_event(now, uid, NetEventKind::Lag, lag.from, lag.to, Some((lag.peak, lag.base)), out);
         }
     }
 
@@ -1063,7 +1233,7 @@ impl Engine {
                 | ClientMessage::Mods(_)
                 | ClientMessage::Spectate(_)
                 | ClientMessage::SpeedCheck(_)
-                | ClientMessage::GameAlive,
+                | ClientMessage::GameAlive { .. },
             ) => {
                 // Rooms, chat, Brawl Mods rooms and spectating need an online connection: `hello`
                 // first.
@@ -1196,7 +1366,7 @@ impl Engine {
             }
             // A newer build's or a broken one: nothing to answer (the game expects no reply).
             Ok(ClientMessage::SpeedCheck(Err(why))) => tracing::warn!(conn, "bad speed check: {why}"),
-            Ok(ClientMessage::GameAlive) => self.game_alive(now, wall, conn, out),
+            Ok(ClientMessage::GameAlive { ranked }) => self.game_alive(now, wall, conn, ranked, out),
             Ok(ClientMessage::Spectate(Err((op, why)))) => {
                 tracing::warn!(conn, "bad spectate request: {why}");
                 Self::send(
@@ -1430,6 +1600,12 @@ impl Engine {
         if user.is_banned(wall) {
             return self.refuse(out, conn, msg::BANNED);
         }
+        // Sets ended on this player's own end (common::ranked::COOLDOWN_FAULTS in a day).
+        if let Some(left) = user.ranked_cooldown(wall).filter(|_| p.mode == Mode::Ranked && p.room.is_none()) {
+            tracing::info!(conn, uid = %user.uid, until = ?user.ranked_cooldown_until, "ranked search in a cooldown");
+            let minutes = (left.num_seconds() + 59) / 60;
+            return self.refuse(out, conn, msg::ranked_cooldown(minutes.max(1)));
+        }
         let Some(code) = user.connect_code.clone() else {
             return self.refuse(out, conn, msg::NO_CONNECT_CODE);
         };
@@ -1531,6 +1707,8 @@ impl Engine {
                 chat_key: p.chat_key,
                 alive: p.game_alive.then_some((now, wall)),
                 stalled: false,
+                ranked_beat: None,
+                rtt: RttWatch::default(),
             });
         }
         if let Some(Conn { state: State::Online(o), .. }) = self.conns.get(&conn) {
@@ -1656,6 +1834,7 @@ impl Engine {
         self.fail_room_tickets(out);
         self.live.tick(now, out);
         self.find_stalled_games(now, out);
+        self.flush_ranked_silences(now, out);
         // Room members watching their room's game (`room-watch`): its chunks as they are kept.
         let stops = self.rooms.take_watch_stops();
         let targets = self.rooms.watch_targets();
@@ -1978,6 +2157,7 @@ mod tests {
             chat_muted: false,
             room_name: None,
             mods_room_name: None,
+            ranked_cooldown_until: None,
         }
     }
 
@@ -4335,6 +4515,112 @@ mod tests {
             presence(&out),
             vec![("ab".to_string(), a.uid, false, false), ("ac".to_string(), a.uid, false, false)]
         );
+    }
+
+    /// Trouble on a Ranked player's own connection to mm (2026-10-29): `game-alive`s with `ranked`
+    /// that come late are a silence, a round trip far above the usual one a lag, both recorded for
+    /// the player's recent Ranked sets (`ranked_net_events`).
+    #[test]
+    fn a_ranked_games_silences_and_lags_on_its_own_connection_are_recorded() {
+        let mut h = Harness::new(EngineConfig::default());
+        let (a, b) = (user("AA#1", "a"), user("BB#1", "b"));
+        for (conn, u) in [(1, &a), (2, &b)] {
+            h.add(u);
+            h.connect(conn, conn as u16);
+            let v = json!({
+                "type": "hello",
+                "user": {"uid": u.uid.to_string(), "playKey": h.secret.derive(u.uid, u.play_key_version)},
+                "appVersion": "3.4.0",
+                "gameAlive": true,
+            });
+            h.raw(conn, v.to_string().as_bytes());
+        }
+        let set = common::db::RecentMatch {
+            match_id: "ab".into(),
+            mode: Mode::Ranked.as_u8() as i16,
+            is_host: a.uid,
+            players: vec![a.uid, b.uid],
+            room_code: None,
+            age_ms: 60 * 1000,
+        };
+        h.input(Input::MatchesRestored(vec![set]));
+        // (uid, kind, length in ms)
+        let events = |out: &[Output]| -> Vec<(Uuid, &'static str, i64)> {
+            out.iter()
+                .filter_map(|o| match o {
+                    Output::RankedNetEvent { match_id, uid, kind, from, to, .. } if match_id == "ab" => {
+                        Some((*uid, kind.as_str(), (*to - *from).num_milliseconds()))
+                    }
+                    _ => None,
+                })
+                .collect()
+        };
+        let beat = json!({"type": "game-alive", "ranked": true}).to_string();
+        let half = Duration::from_millis(500);
+        let mut seen = Vec::new();
+        // Both on time for 10 s, a little late now and then: nothing.
+        for i in 0..20 {
+            h.raw(1, beat.as_bytes());
+            h.raw(2, beat.as_bytes());
+            seen.extend(events(&h.advance(if i % 5 == 0 { half * 2 } else { half })));
+        }
+        assert!(seen.is_empty(), "{seen:?}");
+        // b's network goes for 3 s; a's game goes on.
+        for _ in 0..6 {
+            h.raw(1, beat.as_bytes());
+            seen.extend(events(&h.advance(half)));
+        }
+        let out = h.raw(2, beat.as_bytes());
+        // Its last one came 3.5 s before: 3 s past due.
+        assert_eq!(events(&out), vec![(b.uid, "silence", 3000)]);
+        // b's game stops for good: written every 5 s while it lasts, the rest at the close.
+        for _ in 0..12 {
+            h.raw(1, beat.as_bytes());
+            seen.extend(events(&h.advance(half)));
+        }
+        assert_eq!(seen, vec![(b.uid, "silence", 5000)]);
+        h.advance(Duration::from_secs(2));
+        assert_eq!(events(&h.input(Input::Disconnected { conn: 2 })), vec![(b.uid, "silence", 2500)]);
+        // a's round trip: 40 ms, then a lag tool adds 300 for 4 s.
+        let mut seen = Vec::new();
+        for i in 0..40 {
+            h.raw(1, beat.as_bytes());
+            let rtt = if (20..28).contains(&i) { 340 } else { 40 };
+            seen.extend(events(&h.input(Input::Rtt(vec![(1, rtt)]))));
+            h.advance(half);
+        }
+        assert_eq!(seen, vec![(a.uid, "lag", 4000)]);
+        // Outside Ranked (its beats say nothing) a lag is nobody's business.
+        let plain = json!({"type": "game-alive"}).to_string();
+        let mut seen = Vec::new();
+        for i in 0..20 {
+            seen.extend(events(&h.raw(1, plain.as_bytes())));
+            seen.extend(events(&h.input(Input::Rtt(vec![(1, if i > 5 { 400 } else { 40 })]))));
+            seen.extend(events(&h.advance(Duration::from_secs(2))));
+        }
+        assert!(seen.is_empty(), "{seen:?}");
+    }
+
+    /// The user's, 2026-10-29: "a ranked cooldown after 3 low quality aborts, only when we know for
+    /// a fact its their fault". The account query says until when (common::db).
+    #[test]
+    fn a_ranked_search_in_a_cooldown_is_refused() {
+        let mut h = Harness::new(default_rules());
+        let mut u = h.rated(&[1400.0, 1400.0]);
+        u[0].ranked_cooldown_until = Some(Utc::now() + chrono::Duration::minutes(42) + chrono::Duration::seconds(30));
+        h.add(&u[0]);
+        h.connect(1, 41001);
+        let out = h.ranked(1, &u[0]);
+        assert_eq!(sent(&out, 1)[0]["error"], msg::ranked_cooldown(43));
+        // Unranked and Direct are not touched, nor a cooldown that is over.
+        h.now += Duration::from_secs(120);
+        h.connect(2, 41002);
+        assert_eq!(sent(&h.unranked(2, &u[0]), 2), vec![json!({"type": "create-ticket-resp"})]);
+        u[0].ranked_cooldown_until = Some(Utc::now() - chrono::Duration::seconds(1));
+        h.add(&u[0]);
+        h.now += Duration::from_secs(120);
+        h.connect(3, 41003);
+        assert_eq!(sent(&h.ranked(3, &u[0]), 3), vec![json!({"type": "create-ticket-resp"})]);
     }
 
     #[test]

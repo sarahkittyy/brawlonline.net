@@ -25,12 +25,17 @@ namespace Online::GameAlive
 {
 // How often `game-alive` goes out while the game beats (mm's GAME_ALIVE_EVERY).
 constexpr std::chrono::seconds GAME_ALIVE_EVERY{2};
+// In a Ranked set (Ranked::InSet), with "ranked": true (mm's GAME_ALIVE_RANKED_EVERY, 2026-10-29):
+// mm times them, and one that comes late is a silence on this player's own connection, which
+// tells whose end a lost link or an aborted game was on. A switch either way goes out at once.
+constexpr std::chrono::milliseconds GAME_ALIVE_RANKED_EVERY{500};
 
 // Any thread, lock-free: the game ran just now.
 void Beat();
 
 // Rooms' thread, every pass: the `game-alive` due on the online connection (`connection` counts
-// its connections: a new one starts at once), if the game beat since the last one.
+// its connections: a new one starts at once), if the game beat since the last one. `ranked`: a
+// Ranked set is under way.
 std::optional<std::string> Service(std::chrono::steady_clock::time_point now, bool online,
-                                   u64 connection);
+                                   u64 connection, bool ranked);
 }  // namespace Online::GameAlive

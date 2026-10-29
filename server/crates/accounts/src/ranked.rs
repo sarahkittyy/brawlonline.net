@@ -29,8 +29,8 @@ use axum::extract::{Query, State};
 use axum::Json;
 use chrono::{DateTime, Utc};
 use common::ranked::{
-    self, GameReport, Leave, LeaveReport, Outcome, Rank, RatedSet, Seen, SeenGame, Standing, TierState, Timing,
-    MAX_GAME_INDEX, MAX_SESSION_GAME_INDEX,
+    self, Cause, GameReport, Leave, LeaveReport, NetTrouble, Outcome, Rank, RatedSet, Seen, SeenGame, Standing,
+    TierState, Timing, MAX_GAME_INDEX, MAX_SESSION_GAME_INDEX,
 };
 use serde::{Deserialize, Serialize};
 use sqlx::{PgConnection, PgPool, Postgres, Transaction};
@@ -229,11 +229,13 @@ async fn reports(
     .bind(match_id)
     .fetch_all(&mut **tx)
     .await?;
-    let leaves: Vec<(Uuid, String, DateTime<Utc>, bool)> =
-        sqlx::query_as("SELECT reporter, kind, created_at, before_stage_select FROM leave_reports WHERE match_id = $1")
-            .bind(match_id)
-            .fetch_all(&mut **tx)
-            .await?;
+    #[allow(clippy::type_complexity)]
+    let leaves: Vec<(Uuid, String, DateTime<Utc>, bool, Option<bool>, Option<String>)> = sqlx::query_as(
+        "SELECT reporter, kind, created_at, before_stage_select, early, cause FROM leave_reports WHERE match_id = $1",
+    )
+    .bind(match_id)
+    .fetch_all(&mut **tx)
+    .await?;
     Ok((
         games
             .into_iter()
@@ -241,8 +243,15 @@ async fn reports(
             .collect(),
         leaves
             .into_iter()
-            .filter_map(|(reporter, kind, at, before_stage_select)| {
-                Some(LeaveReport { reporter, kind: Leave::parse(&kind)?, at, before_stage_select })
+            .filter_map(|(reporter, kind, at, before_stage_select, early, cause)| {
+                Some(LeaveReport {
+                    reporter,
+                    kind: Leave::parse(&kind)?,
+                    at,
+                    before_stage_select,
+                    early,
+                    cause: cause.as_deref().and_then(Cause::parse),
+                })
             })
             .collect(),
     ))
@@ -260,6 +269,11 @@ async fn seen(tx: &mut Transaction<'_, Postgres>, match_id: &str) -> sqlx::Resul
             .bind(match_id)
             .fetch_all(&mut **tx)
             .await?;
+    let trouble: Vec<(Uuid, DateTime<Utc>, DateTime<Utc>)> =
+        sqlx::query_as("SELECT uid, started_at, ended_at FROM ranked_net_events WHERE match_id = $1")
+            .bind(match_id)
+            .fetch_all(&mut **tx)
+            .await?;
     Ok(Seen {
         online: presence.iter().map(|(u, on, _)| (*u, *on)).collect(),
         stalled: presence.iter().filter_map(|(u, _, since)| Some((*u, (*since)?))).collect(),
@@ -267,6 +281,7 @@ async fn seen(tx: &mut Transaction<'_, Postgres>, match_id: &str) -> sqlx::Resul
             .into_iter()
             .map(|(g, player, winner)| SeenGame { game_index: g.max(0) as u32, player, winner })
             .collect(),
+        trouble: trouble.into_iter().map(|(player, from, to)| NetTrouble { player, from, to }).collect(),
     })
 }
 
@@ -389,20 +404,27 @@ pub async fn settle(
     }
     let (winner, reason) = match &outcome {
         Outcome::Complete { winner, .. } => (Some(*winner), None),
-        Outcome::Abandoned { leaver, other, .. } => (Some(*other), Some(format!("abandoned by {leaver}"))),
+        Outcome::Abandoned { leaver, other, fault: None, .. } => (Some(*other), Some(format!("abandoned by {leaver}"))),
+        Outcome::Abandoned { leaver, other, fault: Some(f), .. } => {
+            (Some(*other), Some(format!("abandoned by {leaver}: {}", f.as_str())))
+        }
         Outcome::Void { reason, .. } => (None, Some(reason.clone())),
         Outcome::InProgress { .. } => unreachable!(),
     };
-    sqlx::query("UPDATE mm_matches SET status = $2, winner = $3, ended_at = $4, end_reason = $5 WHERE match_id = $1")
-        .bind(match_id)
-        .bind(outcome.status())
-        .bind(winner)
-        .bind(now)
-        .bind(&reason)
-        .execute(&mut *tx)
-        .await?;
+    let fault = outcome.fault();
+    sqlx::query(
+        "UPDATE mm_matches SET status = $2, winner = $3, ended_at = $4, end_reason = $5, fault = $6 WHERE match_id = $1",
+    )
+    .bind(match_id)
+    .bind(outcome.status())
+    .bind(winner)
+    .bind(now)
+    .bind(&reason)
+    .bind(fault)
+    .execute(&mut *tx)
+    .await?;
     tx.commit().await?;
-    tracing::info!(match_id, status = outcome.status(), wins = ?outcome.wins(), reason = ?reason, "ranked set settled");
+    tracing::info!(match_id, status = outcome.status(), wins = ?outcome.wins(), reason = ?reason, fault = ?fault, "ranked set settled");
     Ok(Some(outcome))
 }
 
@@ -626,6 +648,15 @@ pub struct ReportLeaveReq {
     /// cancelled as the match was made). With no game played the set is not rated.
     #[serde(default)]
     pub before_stage_select: bool,
+    /// With `opponent_left` and `match_quality`: it came in the first seconds of the set's first
+    /// game or before it, or after a first game that was poor from its start (nobody loses the set
+    /// for it). Missing: an older game, taken as early.
+    #[serde(default)]
+    pub early: Option<bool>,
+    /// With `match_quality`: what the game says made it poor, `self` (its own PC missed its frame
+    /// schedule), `peer` (the other PC said it did) or `link`. Anything else is dropped.
+    #[serde(default)]
+    pub cause: Option<String>,
 }
 
 /// `reportOnlineMatchStatus(abandoned)`: the set ended before it was decided.
@@ -634,18 +665,25 @@ pub async fn report_leave(State(state): State<AppState>, Json(req): Json<ReportL
     players_match(&state.pool, &req.match_id, uid).await?;
     let kind = Leave::parse(&req.kind).ok_or_else(|| ApiError::bad_request("invalid_kind", "Unknown leave kind"))?;
     let before_stage_select = req.before_stage_select && kind == Leave::Left;
+    let early = req.early.filter(|_| kind != Leave::Left);
+    let cause = req.cause.as_deref().and_then(Cause::parse).filter(|_| kind == Leave::MatchQuality);
     sqlx::query(
-        "INSERT INTO leave_reports (match_id, reporter, kind, created_at, before_stage_select)
-         VALUES ($1, $2, $3, $4, $5) ON CONFLICT DO NOTHING",
+        "INSERT INTO leave_reports (match_id, reporter, kind, created_at, before_stage_select, early, cause)
+         VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT DO NOTHING",
     )
     .bind(&req.match_id)
     .bind(uid)
     .bind(kind.as_str())
     .bind(Utc::now())
     .bind(before_stage_select)
+    .bind(early)
+    .bind(cause.map(Cause::as_str))
     .execute(&state.pool)
     .await?;
-    tracing::info!(match_id = %req.match_id, %uid, kind = kind.as_str(), before_stage_select, "ranked leave reported");
+    tracing::info!(
+        match_id = %req.match_id, %uid, kind = kind.as_str(), before_stage_select, ?early, cause = cause.map(Cause::as_str),
+        "ranked leave reported"
+    );
     let timing = state.cfg.ranked_timing();
     settle(&state.pool, &req.match_id, Utc::now(), timing).await?;
     Ok(Json(set_state(&state.pool, &req.match_id, uid, timing).await?))

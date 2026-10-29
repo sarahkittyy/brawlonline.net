@@ -1182,7 +1182,7 @@ void Service(const Core::CPUThreadGuard& guard, u32 mailbox, u16 version)
       {
         NOTICE_LOG_FMT(NETPLAY, "GameBridge: the opponent stopped answering the game setup; "
                                 "cleaning up");
-        Ranked::OnPeerGone();
+        Ranked::OnPeerGone(Gprb::Session::GetLobby().early);
         Client::Cleanup();
       }
       break;
@@ -1922,14 +1922,14 @@ void SyncSession(const Core::CPUThreadGuard& guard, const Located& loc)
     {
       // Ranked's quality abort (Gprb::Session::SetQualityAbort), here or by the opponent: both
       // screens say why under the game's DISCONNECTED, on the OSD and in chat (Slippi's red
-      // message), and the set is void.
+      // message); the set is void, or the loss of the player whose own PC or connection it was.
       OSD::AddMessage(Gprb::Session::QUALITY_ABORT_TEXT, 15000, OSD::Color::RED);
       Chat::AddNotice(Gprb::Session::QUALITY_ABORT_TEXT);
-      Ranked::OnQualityAbort();
+      Ranked::OnQualityAbort(lobby.quality_cause, lobby.early);
     }
     else
     {
-      Ranked::OnPeerGone();
+      Ranked::OnPeerGone(lobby.early);
     }
     s_hud_wait = s_was_in_match ? HUD_WAIT_FRAMES : -1;
   }

@@ -293,8 +293,11 @@ pub enum ClientMessage {
     Spectate(Result<crate::spectate::SpectateRequest, (&'static str, String)>),
     /// `speed-check`: the waiting room's frame rate (`crate::speed`), or why it could not be read.
     SpeedCheck(Result<crate::speed::SpeedCheck, String>),
-    /// `game-alive`: the game's emulation is running ([`GAME_ALIVE`]).
-    GameAlive,
+    /// `game-alive`: the game's emulation is running ([`GAME_ALIVE`]). `ranked`: it plays a Ranked
+    /// set and sends them every [`GAME_ALIVE_RANKED_EVERY`].
+    GameAlive {
+        ranked: bool,
+    },
     /// Valid JSON object with a `type` we do not handle.
     Unknown(String),
 }
@@ -322,6 +325,12 @@ pub const GAME_ALIVE: &str = "game-alive";
 /// How often a running game sends [`GAME_ALIVE`].
 pub const GAME_ALIVE_EVERY: std::time::Duration = std::time::Duration::from_secs(2);
 
+/// How often a game in a Ranked set sends [`GAME_ALIVE`], with `"ranked": true` (2026-10-29): mm
+/// times them, and one that comes late is a silence on that player's own connection
+/// (`ranked_net_events`), which tells whose end a broken link or an aborted game was on. An older
+/// mm ignores the field.
+pub const GAME_ALIVE_RANKED_EVERY: std::time::Duration = std::time::Duration::from_millis(500);
+
 /// Parses one client packet. Never panics on any input.
 pub fn parse_client_message(data: &[u8]) -> Result<ClientMessage, ParseError> {
     let text = std::str::from_utf8(data).map_err(|_| ParseError::NotUtf8)?;
@@ -346,7 +355,9 @@ pub fn parse_client_message(data: &[u8]) -> Result<ClientMessage, ParseError> {
             Ok(ClientMessage::Spectate(crate::spectate::SpectateRequest::parse(k, &value)))
         }
         crate::speed::SPEED_CHECK => Ok(ClientMessage::SpeedCheck(crate::speed::SpeedCheck::parse(&value))),
-        GAME_ALIVE => Ok(ClientMessage::GameAlive),
+        GAME_ALIVE => {
+            Ok(ClientMessage::GameAlive { ranked: value.get("ranked").and_then(|r| r.as_bool()).unwrap_or(false) })
+        }
         _ => Ok(ClientMessage::Unknown(kind)),
     }
 }

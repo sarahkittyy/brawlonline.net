@@ -30,6 +30,7 @@
 #include "Core/Online/Matchmaking.h"
 #include "Core/Online/ModsRoom.h"
 #include "Core/Online/OnlineClient.h"
+#include "Core/Online/Ranked.h"
 #include "Core/Online/RoomWatch.h"
 #include "Core/Online/SpeedCheck.h"
 #include "Core/Online/Spectate.h"
@@ -1584,7 +1585,7 @@ void Thread()
           chat_out.push_back(std::move(m));
       }
       // While the game runs (Online/GameAlive.h); none once it froze, with this thread still up.
-      if (auto alive = GameAlive::Service(now, game_alive, connection))
+      if (auto alive = GameAlive::Service(now, game_alive, connection, Ranked::InSet()))
         chat_out.push_back(std::move(*alive));
       // Spectating's upload (Online/Spectate.h): it backs off on the game's health and on what
       // is still unacknowledged to mm, before the game feels anything. The round trip is ENet's

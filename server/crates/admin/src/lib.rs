@@ -328,11 +328,14 @@ pub async fn void_ranked_set(
         .execute(&mut *tx)
         .await?
         .rows_affected() as usize;
-    sqlx::query("UPDATE mm_matches SET status = 'TERMINATED', winner = NULL, end_reason = $2 WHERE match_id = $1")
-        .bind(match_id)
-        .bind(format!("voided by admin: {reason}"))
-        .execute(&mut *tx)
-        .await?;
+    // Nor does it count toward anyone's Ranked cooldown any more.
+    sqlx::query(
+        "UPDATE mm_matches SET status = 'TERMINATED', winner = NULL, end_reason = $2, fault = NULL WHERE match_id = $1",
+    )
+    .bind(match_id)
+    .bind(format!("voided by admin: {reason}"))
+    .execute(&mut *tx)
+    .await?;
     let ranks = accounts::ranked::recompute_tiers_in(&mut tx).await?;
 
     let values = |s: &StoredChange| {
@@ -548,6 +551,60 @@ async fn audit_tx(
         .execute(&mut **tx)
         .await
         .map(|_| ())
+}
+
+/// A Ranked set that ended on one player's own end, their PC or connection (`mm_matches.fault`,
+/// 0027): [`common::ranked::COOLDOWN_FAULTS`] in a day are a Ranked cooldown.
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct FaultRow {
+    pub match_id: String,
+    pub fault: uuid::Uuid,
+    pub connect_code: Option<String>,
+    pub status: String,
+    pub end_reason: Option<String>,
+    pub ended_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// The sets of the last `days` that ended on a player's own end (one player's, with `uid`),
+/// newest first.
+pub async fn ranked_faults(pool: &PgPool, uid: Option<uuid::Uuid>, days: i64) -> anyhow::Result<Vec<FaultRow>> {
+    Ok(sqlx::query_as(
+        "SELECT m.match_id, m.fault, u.connect_code, m.status, m.end_reason, m.ended_at
+           FROM mm_matches m LEFT JOIN users u ON u.uid = m.fault
+          WHERE m.fault IS NOT NULL AND m.ended_at > now() - make_interval(days => $1)
+            AND ($2::uuid IS NULL OR m.fault = $2)
+          ORDER BY m.ended_at DESC",
+    )
+    .bind(days as i32)
+    .bind(uid)
+    .fetch_all(pool)
+    .await?)
+}
+
+/// Takes a set off its player's fault count (its result stays as it is): a cooldown it was part of
+/// ends if fewer than [`common::ranked::COOLDOWN_FAULTS`] are left. Audit-logged. Returns the player
+/// it was on, or `None` for a set with no fault.
+pub async fn unfault_ranked_set(
+    pool: &PgPool,
+    actor: &str,
+    match_id: &str,
+    reason: &str,
+) -> anyhow::Result<Option<uuid::Uuid>> {
+    let mut tx = pool.begin().await?;
+    let fault: Option<uuid::Uuid> = sqlx::query_scalar(
+        "UPDATE mm_matches m SET fault = NULL FROM mm_matches old
+          WHERE m.match_id = $1 AND old.match_id = m.match_id AND old.fault IS NOT NULL
+         RETURNING old.fault",
+    )
+    .bind(match_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    if let Some(uid) = fault {
+        let detail = serde_json::json!({"reason": reason, "fault": uid});
+        audit_tx(&mut tx, actor, "ranked.unfault", match_id, detail).await?;
+    }
+    tx.commit().await?;
+    Ok(fault)
 }
 
 /// Deletes a published ruleset version (with `all_versions`, the whole ruleset) for good: its

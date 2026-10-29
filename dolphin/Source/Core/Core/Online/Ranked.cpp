@@ -320,13 +320,20 @@ void Enqueue(Job job)
 
 // Under s_mutex. `before_stage_select`: this player leaves before their game was sent to the
 // set's stage select (only with "left"); with no game played the server does not rate the set.
-void EnqueueLeave(const std::string& match_id, const char* kind, bool before_stage_select = false)
+// `early` (opponent_left, match_quality): in the set's first seconds; `cause` (match_quality):
+// whose end this machine saw the poor quality on.
+void EnqueueLeave(const std::string& match_id, const char* kind, bool before_stage_select = false,
+                  std::optional<bool> early = std::nullopt, const char* cause = nullptr)
 {
   picojson::object body;
   body["matchId"] = picojson::value(match_id);
   body["kind"] = picojson::value(kind);
   if (before_stage_select)
     body["beforeStageSelect"] = picojson::value(true);
+  if (early)
+    body["early"] = picojson::value(*early);
+  if (cause)
+    body["cause"] = picojson::value(cause);
   ++s_reports_sent;
   Enqueue({fmt::format("leave '{}' of {}{}", kind, match_id,
                        before_stage_select ? " (before the stage select)" : ""),
@@ -583,18 +590,19 @@ void OnGameResult(const Gprb::Session::GameResult& r)
   }
 }
 
-void OnPeerGone()
+void OnPeerGone(bool early)
 {
   std::lock_guard lk(s_mutex);
   if (!s_active || s_set_over || s_peer_gone || s_left_reported)
     return;
   s_peer_gone = true;
-  NOTICE_LOG_FMT(NETPLAY, "Ranked: the opponent left set {}", s_match_id);
-  EnqueueLeave(s_match_id, "opponent_left");
+  NOTICE_LOG_FMT(NETPLAY, "Ranked: the opponent left set {}{}", s_match_id,
+                 early ? " (in its first seconds)" : "");
+  EnqueueLeave(s_match_id, "opponent_left", false, early);
   EnqueueResult();
 }
 
-void OnQualityAbort()
+void OnQualityAbort(Gprb::PeerData::QualityCause cause, bool early)
 {
   std::lock_guard lk(s_mutex);
   if (!s_active || s_set_over || s_peer_gone || s_left_reported)
@@ -603,9 +611,17 @@ void OnQualityAbort()
   s_peer_gone = true;
   s_quality_aborted = true;
   s_quality_notice = true;
-  NOTICE_LOG_FMT(NETPLAY, "Ranked: set {} aborted, its match quality is low", s_match_id);
-  EnqueueLeave(s_match_id, "match_quality");
+  const char* name = Gprb::PeerData::QualityCauseName(cause);
+  NOTICE_LOG_FMT(NETPLAY, "Ranked: set {} aborted, its match quality is low (seen here: {}{})",
+                 s_match_id, name, early ? ", in its first seconds" : "");
+  EnqueueLeave(s_match_id, "match_quality", false, early, name);
   EnqueueResult();
+}
+
+bool InSet()
+{
+  std::lock_guard lk(s_mutex);
+  return s_active && !s_set_over && !s_peer_gone && !s_left_reported;
 }
 
 bool TakeQualityNotice()

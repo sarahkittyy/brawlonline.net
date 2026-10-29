@@ -36,6 +36,7 @@
 #include <picojson.h>
 
 #include "Common/CommonTypes.h"
+#include "Core/Rollback/PeerData.h"
 #include "Core/Rollback/ReplayRecorder.h"
 
 namespace Core
@@ -385,8 +386,14 @@ struct Lobby
   // others play on (until the next session or match)
   bool quit_left = false;
   // The match was aborted for its quality (SetQualityAbort), here or by the other player: the
-  // session ended as a disconnect (`disconnected`), until the next session
+  // session ended as a disconnect (`disconnected`), until the next session; and whose end this
+  // machine saw the poor quality on (Ranked's report)
   bool quality_aborted = false;
+  PeerData::QualityCause quality_cause = PeerData::QualityCause::Link;
+  // The session is in its first seconds (PeerData::QUALITY_EARLY_FRAMES of its first match), or
+  // its first match was poor from its start: an abort or a lost link now is reported early
+  // (Ranked: void, not the culprit's loss)
+  bool early = true;
   int local_port = -1;        // in-game port of this player (2 players: 0 host, 1 joiner)
   int num_players = 0;        // players in the session (this one included)
   bool remote_ready = false;  // every remote player is locked in for `game`

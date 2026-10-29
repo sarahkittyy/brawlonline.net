@@ -164,9 +164,20 @@ export function matchNote(
     case "ASSIGNED":
       return Messages.inProgress();
     case "ABANDONED": {
-      const uid = item.endReason?.match(/^abandoned by (\S+)$/)?.[1];
-      const leaver = uid ? item.players.find((p) => p.uid === uid) : undefined;
-      return leaver ? Messages.abandonedBy(playerName(leaver)) : Messages.abandoned();
+      // `abandoned by <uid>`, or `abandoned by <uid>: <why>` when the set ended on that player's own
+      // end (their PC or connection, the server's Fault) after its first seconds: their loss.
+      const m = item.endReason?.match(/^abandoned by (\S+?)(?:: (.+))?$/);
+      const leaver = m ? item.players.find((p) => p.uid === m[1]) : undefined;
+      if (!leaver) {
+        return Messages.abandoned();
+      }
+      if (m?.[2] === "match quality low") {
+        return Messages.qualityLossBy(playerName(leaver));
+      }
+      if (m?.[2] === "connection lost") {
+        return Messages.connectionLossBy(playerName(leaver));
+      }
+      return Messages.abandonedBy(playerName(leaver));
     }
     case "TERMINATED":
       // A game aborted for its match quality (the server's MATCH_QUALITY_LOW).

@@ -182,6 +182,17 @@ async fn mm_queries_work_as_pp_mm() {
             .unwrap();
     assert!(stalled.is_some_and(|s| (s - t).num_milliseconds().abs() < 1), "{stalled:?}");
     db::record_ranked_game_result(&pool, &id, 1, a, Some(a), "game").await.unwrap();
+    // Trouble on a player's own connection (0027), and the cooldown in the account query, which
+    // reads mm_matches.fault and ended_at.
+    db::record_ranked_net_event(&pool, &id, a, db::NetEventKind::Lag, t, t, Some(400), Some(40)).await.unwrap();
+    sqlx::query("UPDATE mm_matches SET fault = $1, ended_at = now() WHERE match_id LIKE 'mode.ranked-grants-%'")
+        .bind(a)
+        .execute(&stack.pool)
+        .await
+        .unwrap();
+    assert_eq!(db::fetch_mm_user(&pool, a).await.unwrap().unwrap().ranked_cooldown_until, None, "one fault");
+    let err = sqlx::query("SELECT kind FROM ranked_net_events").execute(&pool).await.unwrap_err();
+    assert!(err.to_string().contains("permission denied"), "{err}");
 
     // The rooms mm saves when it stops and takes back when it starts (0025), saved twice (the
     // upsert), taken once; and none from longer ago than asked.

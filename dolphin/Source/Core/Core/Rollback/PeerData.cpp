@@ -504,6 +504,44 @@ int QualityDebt(double ratio, double avg_ping_ms, bool lenient)
   return std::max(speed, ping);
 }
 
+const char* QualityCauseName(QualityCause cause)
+{
+  switch (cause)
+  {
+  case QualityCause::OwnPc:
+    return "self";
+  case QualityCause::PeerPc:
+    return "peer";
+  case QualityCause::Link:
+  default:
+    return "link";
+  }
+}
+
+QualityCause IntervalCause(double ratio, double avg_ping_ms, bool lenient, bool own_behind,
+                           bool peer_behind)
+{
+  const int speed = QualityDebt(ratio, 0, lenient);
+  const int ping = QualityDebt(1.0, avg_ping_ms, lenient);
+  if (ping >= speed)
+    return QualityCause::Link;
+  if (own_behind)
+    return QualityCause::OwnPc;
+  return peer_behind ? QualityCause::PeerPc : QualityCause::Link;
+}
+
+QualityCause RunCause(const std::array<int, QUALITY_CAUSES>& debt)
+{
+  const int link = debt[static_cast<int>(QualityCause::Link)];
+  const int own = debt[static_cast<int>(QualityCause::OwnPc)];
+  const int peer = debt[static_cast<int>(QualityCause::PeerPc)];
+  if (own > link && own > peer)
+    return QualityCause::OwnPc;
+  if (peer > link && peer > own)
+    return QualityCause::PeerPc;
+  return QualityCause::Link;
+}
+
 std::vector<std::string> SetupKeyDiff(const std::vector<u8>& mine, const std::vector<u8>& theirs,
                                       size_t max_lines)
 {
