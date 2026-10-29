@@ -412,7 +412,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                     help=f"comma list of names or groups: 'all' (the 2-player ones: {', '.join(SCENARIOS)}), "
                          f"'np' (3-4 players: {', '.join(NP_SCENARIOS)}), 'f4', 'f3', 't4', 't3'")
     ap.add_argument("--distance", type=int, default=2)
-    ap.add_argument("--region-set", default="gp-v25")
+    ap.add_argument("--region-set", default="gp-v26")
     ap.add_argument("--frames", type=int, default=30000)
     ap.add_argument("--start-frame", type=int, default=120)
     ap.add_argument("--cpu", default="sc", choices=("sc", "dc"))
