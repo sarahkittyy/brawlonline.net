@@ -41,6 +41,22 @@ describe("mod folder import", () => {
     expect(parts.name).toBe("Brawl Minus v5.1.0");
   });
 
+  it("finds Brawl Online's own P+ from its game files folder or its User folder", async () => {
+    const netplay = await touch("netplay/User/Launcher/Project+ Netplay Launcher.dol");
+    await touch("netplay/User/Launcher/Project+ Offline Launcher.dol");
+    const sd = await touch("netplay/User/Wii/sd.raw");
+    // The card with our plugin, which Play boots: never the one picked.
+    await touch("netplay/pponline-sd/sd.raw");
+    await touch("netplay/Sys/codehandler.bin");
+    // (Windows and macOS find our `User` as P+'s `user`: the same file.)
+    const same = (p: string | null) => p?.toLowerCase();
+    for (const folder of ["netplay", "netplay/User"]) {
+      const parts = await findModParts(path.join(dir, folder));
+      expect(same(parts.launcherPath)).toBe(same(netplay));
+      expect(same(parts.sdPath)).toBe(same(sd));
+    }
+  });
+
   it("says when there is nothing to play", async () => {
     await touch("empty/readme.txt");
     await expect(findModParts(path.join(dir, "empty"))).rejects.toThrow(/No mod launcher/);
