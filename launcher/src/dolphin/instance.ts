@@ -12,6 +12,7 @@ import path from "path";
 import { fileExists } from "utils/file_exists";
 
 import { sanitizeAppImageEnv } from "./app_image_env/app_image_env";
+import { spawnRefusedError } from "./spawn_refused";
 import type { ReplayCommunication, ReplayPlaybackStatus } from "./types";
 
 const log = electronLog.scope("dolphin/instance");
@@ -120,7 +121,8 @@ export class DolphinInstance extends EventEmitter {
 
         child.once("error", (err) => {
           if (!started) {
-            reject(err);
+            log.error(`Could not start ${executablePath}: ${err.message}`);
+            reject(spawnRefusedError(err, executablePath) ?? err);
           }
         });
       } catch (err: unknown) {
@@ -129,7 +131,7 @@ export class DolphinInstance extends EventEmitter {
           reject(new MacOsRosettaRequiredError());
           return;
         }
-        reject(err);
+        reject(spawnRefusedError(err, executablePath) ?? err);
       }
     });
   }
