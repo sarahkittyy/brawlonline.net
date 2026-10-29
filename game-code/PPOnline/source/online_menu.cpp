@@ -579,24 +579,6 @@ namespace OnlineMenu {
         return n;
     }
 
-    // X / Y with the coin in the hand take the roster's last character off (P+'s CSS has no way to,
-    // short of All-Star going off): its entry becomes the end, in both tables.
-    static bool allStarRemoveLast()
-    {
-        u8* a = (u8*)(0x80588000 + LOCAL_PORT * 0xA0);
-        u8* b = (u8*)(0x80588300 + LOCAL_PORT * 0x70);
-        int n = allStarCount();
-        if (n == 0) return false;
-        s_allStarKept = 0;   // (taking one off keeps the rest: the next coin goes after them)
-        n--;
-        a[3 * n] = 0xCC;
-        a[3 * n + 1] = a[3 * n + 2] = 0;
-        a[0x9C] = (u8)(3 * n);
-        b[2 * n] = b[2 * n + 1] = 0;
-        b[0x68] = (u8)(2 * n);
-        return true;
-    }
-
     // The kept roster gives way to the first coin placed after the match (P+'s CSS hook appends it
     // after the kept entries): the new entries move to the front, in both tables.
     static void allStarFreshStart()
@@ -2891,10 +2873,7 @@ namespace OnlineMenu {
             char hostName[RoomCss::NAME_SIZE];
             hostName[0] = 0;
             if (se.roomHost < PPOM::SESSION_PLAYERS) u16Name(hostName, se.players[se.roomHost].name);
-            u8* a = playerArea();
-            if (specialRowIs(PPOM::SR_OTHER, 2) && a && a[0x1F8])
-                sprintf(text, "All-Star: %d\nX: remove last", allStarCount());
-            else if (host) strcpy(text, "A: open/close\nHold A: remove");
+            if (host) strcpy(text, "A: open/close\nHold A: remove");
             else sprintf(text, "Host:\n%s", hostName);
         }
         if (strcmp(text, s.roomBtnPrinted[0]) == 0) return;
@@ -2969,14 +2948,8 @@ namespace OnlineMenu {
         if (teamsKind != s_teamsKindSeen && s_teamsKindSeen >= 0 && teamsKind >= 0 && waiting && roomLockedForNext())
             unlock();
         s_teamsKindSeen = teamsKind;
-        // All-Star: X / Y with the coin in the hand take the roster's last character off.
-        const u32 BTN_X = 0x400, BTN_Y = 0x800;
-        u8* myArea = playerArea();
+        // All-Star: the first coin placed after a match starts a new roster.
         if (in && specialRowIs(PPOM::SR_OTHER, 2) && !roomLocked()) allStarFreshStart();
-        if (in && !rulesOpen && specialRowIs(PPOM::SR_OTHER, 2) && myArea && myArea[0x1F8] && !roomLocked() &&
-            (pressed & (BTN_X | BTN_Y)) && allStarRemoveLast()) {
-            playSE(SE_BACK);
-        }
         if (rulesOpen) {
             s_headerPress = 0;
             s.roomKickPort = -1;
