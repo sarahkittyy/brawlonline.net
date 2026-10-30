@@ -65,7 +65,25 @@ export type ModBuild = {
    * the launcher's P+ files. Always in the list, its files not the player's to change, and its SD
    * card never overwritten by a room's. */
   builtIn?: boolean;
+  /** The codes the player's rooms of this game run (docs/design/room-codes.md); absent until the
+   * launcher first looked (it starts with the ones on in the player's own Dolphin). */
+  codes?: ModBuildCodes;
 };
+
+/** A Gecko or Action Replay code (docs/design/room-codes.md). `lines`: "XXXXXXXX YYYYYYYY", or an
+ * encrypted Action Replay code's "XXXX-XXXX-XXXXX". */
+export type ModCode = { name: string; kind: "gecko" | "ar"; lines: string[]; author?: string; notes?: string };
+/** Where a code in the Codes dialog comes from: added there, the player's own Dolphin, Dolphin's
+ * list for the game, or the code database (codes.rc24.xyz, Dolphin's Download Codes). */
+export type ModCodeSource = "yours" | "own" | "dolphin" | "database";
+/** A code a room runs, with its own copy of the lines: the list it came from changing later does
+ * not change the room's. */
+export type ModOnCode = ModCode & { source: ModCodeSource };
+/** A game's codes: the ones on, and the ones the player added. */
+export type ModBuildCodes = { on: ModOnCode[]; yours: ModCode[] };
+/** The Codes dialog's lists of a game (the database's are fetched when that section opens).
+ * `ownFiles`: the ini files Your Dolphin's came from. */
+export type ModCodeLists = { own: ModCode[]; ownFiles: string[]; dolphin: ModCode[] };
 
 export type ModBuildInput = Pick<ModBuild, "name" | "discPath" | "launcherPath" | "sdPath">;
 
@@ -100,7 +118,15 @@ export type ModRoomSlot = {
 /** A room's build as the server says it (docs/design/brawl-mods.md §6.5): with its parts, from a
  * launcher that sends them: the disc's SHA-1 and what it is ("RSBE01 Rev 1"), and the SD card's
  * root ("" for none). */
-export type ModRoomBuild = { hash: string; name: string; disc?: string; discLabel?: string; sd?: string };
+export type ModRoomBuild = {
+  hash: string;
+  name: string;
+  disc?: string;
+  discLabel?: string;
+  sd?: string;
+  /** The names of the codes the host's game runs (room-codes.md); absent: none, or an older host. */
+  codes?: string[];
+};
 
 export type ModRoom = {
   code: string;
@@ -310,5 +336,11 @@ export interface ModsService {
   importSave(id: string, source: string): Promise<ModSaveImportResult>;
   /** Opens the game's save folder (made if it is not there yet). */
   openSaveFolder(id: string): Promise<void>;
+  /** The game's codes and the Codes dialog's lists (room-codes.md). */
+  codeLists(id: string): Promise<{ codes: ModBuildCodes; lists: ModCodeLists }>;
+  /** Keeps the game's codes: its next room runs the ones on. */
+  setCodes(id: string, codes: ModBuildCodes): Promise<ModBuildCodes>;
+  /** The code database's codes for the game (fetched once, then from the cache). */
+  databaseCodes(id: string): Promise<ModCode[]>;
   onEvent(handle: (event: ModsEvent) => void): () => void;
 }

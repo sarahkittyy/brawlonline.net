@@ -10,8 +10,10 @@ is needed: the Null video backend.
 from __future__ import annotations
 
 import json
+import os
 import re
 import time
+from pathlib import Path
 from typing import Any, Callable
 
 import pytest
@@ -29,15 +31,17 @@ BUILD = {"hash": "ab" * 32, "name": "Test build"}
 
 
 def _boot(dolphin: Callable[..., DolphinInstance], be: OnlineBackend, name: str, user: OnlineUser,
-          room: dict[str, Any], block: str = "") -> DolphinInstance:
+          room: dict[str, Any], block: str = "", config_args: list[str] | None = None,
+          **kw: Any) -> DolphinInstance:
     if be.mm_host.startswith("127."):
         ini = {"Online": {"UseDevServer": True, "MatchmakingPort": be.mm_port, "DevAccountsUrl": be.accounts_url}}
     else:
         ini = {"Online": {"MatchmakingHost": be.mm_host, "MatchmakingPort": be.mm_port,
                           "AccountsUrl": be.accounts_url}}
     env = {"PPR_MODS_ROOM": json.dumps(room), **({"PPR_TEST_P2P_BLOCK": block} if block else {})}
-    inst = dolphin(name, config=InstanceConfig(cpu_thread=True, video_backend="Null", dolphin_ini=ini),
-                   client_timeout=60.0, env=env)
+    inst = dolphin(name, config=InstanceConfig(cpu_thread=True, video_backend="Null", dolphin_ini=ini,
+                                               config_args=config_args or []),
+                   client_timeout=60.0, env=env, **kw)
     user.write_user_json(inst.create())
     inst.launch()
     inst.connect()
@@ -178,3 +182,54 @@ def test_room_sessions_map_their_port_with_upnp(dolphin: Callable[..., DolphinIn
     finally:
         be.stop()
         igd.stop()
+
+
+# A GameCube game for the codes (a mod's launcher, P+'s here, has its own Gecko code handler where
+# Dolphin's goes). E: is a USB disk that stalls sessions: a copy on D:.
+GC_DISC = Path(os.environ.get("PPHARNESS_GC_DISC", r"D:\Roms\GCN\Mario Party 6 (USA).nkit.iso"))
+# As the launcher starts a game without an SD card (mods_args.ts).
+GC_CONFIG = ["Dolphin.Core.WiiSDCard=False"]
+
+
+def test_host_codes_run_on_every_machine(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance]) -> None:
+    """docs/design/room-codes.md: the host's Gecko and Action Replay codes run on the host and, from
+    the machine image, on the joiner, and the room lists their names. Marker codes write words
+    into free RAM above Dolphin's code list; a counter goes up each frame on both machines (one
+    machine without it would desync)."""
+    if not GC_DISC.is_file():
+        pytest.skip(f"no GameCube disc at {GC_DISC} (PPHARNESS_GC_DISC)")
+    codes = [
+        {"name": "Marker (Gecko)", "kind": "gecko", "lines": ["04002F00 12345678"]},
+        {"name": "Counter (Gecko)", "kind": "gecko",
+         "lines": ["82200000 80002F08", "86000000 00000001", "84200000 80002F08"]},
+        {"name": "Marker (AR)", "kind": "ar", "lines": ["04002F04 CAFEBABE"]},
+    ]
+    host_user = backend.create_user("hostk", "HSTK")
+    join_user = backend.create_user("joink", "JNYK")
+    host = _boot(dolphin, backend, "mods-codes-host", host_user,
+                 {"host": True, "build": BUILD, "public": False, "controller": "gc", "codes": codes},
+                 boot=GC_DISC, config_args=GC_CONFIG)
+    code = _wait(lambda: (host.client.call("mods_status").get("room") or {}).get("code"), 60, "the room's code")
+    _wait(lambda: any(s.get("endpoint") for s in host.client.call("mods_status")["room"]["slots"]), 30,
+          "the host's endpoint")
+    joiner = _boot(dolphin, backend, "mods-codes-join", join_user,
+                   {"join": code, "build": BUILD, "controller": "gc", "sd_sync": "yes"},
+                   boot=GC_DISC, config_args=GC_CONFIG)
+    _wait(lambda: "machine: running" in _log(joiner), 120, "the joiner's session running", interval=1)
+    # The names, as mm gives them to every member, in the room file the launcher shows.
+    names = [c["name"] for c in codes]
+    room_file = json.loads((joiner.create() / "Online" / "mods-room.json").read_text(encoding="utf-8"))
+    assert room_file["room"]["build"].get("codes") == names, room_file["room"]
+    assert "codes: running the session's 2 Gecko and 1 Action Replay code(s)" in _log(joiner)
+    time.sleep(10)
+    counters = []
+    for inst in (host, joiner):
+        word = lambda a: int(inst.client.call("read_u32", addr=a)["value"]) & 0xFFFFFFFF  # noqa: E731
+        assert word(0x80002F00) == 0x12345678
+        assert word(0x80002F04) == 0xCAFEBABE
+        counters.append(word(0x80002F08))
+        status = inst.client.call("machine_status")
+        assert status.get("desyncs") == 0, status
+    # Running since the host's boot: about as many as frames, on both.
+    assert min(counters) > 600 and abs(counters[0] - counters[1]) < 300, counters
+

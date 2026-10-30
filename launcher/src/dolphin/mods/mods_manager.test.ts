@@ -69,6 +69,7 @@ function manager(
   builds: ModBuild[],
   settings: Record<string, unknown> = { modBuilds: builds },
   room: PublicModRoom | null = null,
+  codeDatabase: (gameId: string) => Promise<string | null> = async () => null,
 ): {
   mods: ModsManager;
   builds: () => ModBuild[];
@@ -108,6 +109,7 @@ function manager(
     undefined,
     // The player's own Dolphin: never this machine's.
     () => [path.join(tmp, "own Dolphin")],
+    codeDatabase,
   );
   return { mods, builds: () => settings.modBuilds as ModBuild[], settings, launches, closeAll };
 }
@@ -449,5 +451,126 @@ describe("Brawl Online's own Project+", () => {
     await m.mods.join({ buildId: "rex", code: "BKSD", uid: "u", sdSync: "overwrite" });
     expect(m.launches).toEqual([expect.objectContaining({ sd_sync: "overwrite" })]);
     await m.closeAll();
+  });
+});
+
+describe("room codes", () => {
+  /** A game ini in a Dolphin User folder's GameSettings. */
+  async function gameIni(user: string, name: string, lines: string[]): Promise<void> {
+    await mkdir(path.join(user, "GameSettings"), { recursive: true });
+    await writeFile(path.join(user, "GameSettings", `${name}.ini`), lines.join("\r\n"));
+  }
+  const own = () => path.join(tmp, "own Dolphin");
+  const netplay = () => path.join(tmp, "netplay", "User");
+  const hostArg = (arg: ModsRoomArg) => arg as Extract<ModsRoomArg, { host: true }>;
+
+  async function marioParty(over: Partial<ModBuild> = {}): Promise<ModBuild> {
+    return oldBuild("mp6", { gameId: "GP6E01", revision: 0, platform: "gamecube", ...over });
+  }
+
+  it("starts with the codes on in the player's Dolphins, and its room runs them", async () => {
+    await gameIni(own(), "GP6E01", [
+      "[Gecko]",
+      "$Faster Boot Time [gamemasterplc]",
+      "204cdc74 386003e8",
+      "*Skips the intro",
+      "$Off",
+      "04001238 00000002",
+      "[Gecko_Enabled]",
+      "$Faster Boot Time",
+    ]);
+    // Brawl Online's own Dolphin, by the 3-letter name; and a code of Dolphin's list turned on there.
+    await gameIni(netplay(), "GP6", [
+      "[ActionReplay]",
+      "$Marker",
+      "04002F04 CAFEBABE",
+      "[ActionReplay_Enabled]",
+      "$Marker",
+      "[Gecko_Enabled]",
+      "$QOL - Instant Text Display",
+    ]);
+    const m = manager([await marioParty()]);
+    await m.mods.host({ buildId: "mp6", public: true });
+    expect(hostArg(m.launches[0]).codes).toEqual([
+      { name: "Marker", kind: "ar", lines: ["04002F04 CAFEBABE"] },
+      { name: "Faster Boot Time", kind: "gecko", lines: ["204CDC74 386003E8"] },
+      {
+        name: "QOL - Instant Text Display",
+        kind: "gecko",
+        lines: [expect.stringMatching(/^[0-9A-F]{8} [0-9A-F]{8}$/)],
+      },
+    ]);
+    // Kept with the game: the player's Dolphin changing later changes nothing.
+    expect(m.builds()[0].codes?.on.map((c) => c.source)).toEqual(["own", "own", "dolphin"]);
+    await m.closeAll();
+  });
+
+  it("starts a Brawl game with none (its inis are an old P+ netplay setup's)", async () => {
+    await gameIni(own(), "RSBE01", ["[Gecko]", "+$Netplay Code", "04001234 00000001"]);
+    const m = manager([await oldBuild("rex")]);
+    await m.mods.host({ buildId: "rex", public: true });
+    expect(m.launches[0]).not.toHaveProperty("codes");
+    expect(m.builds()[0].codes).toEqual({ on: [], yours: [] });
+    await m.closeAll();
+  });
+
+  it("runs none for a mod booted by its launcher (its own Gecko code handler is where Dolphin's goes)", async () => {
+    const launcherPath = path.join(tmp, "minus.dol");
+    await writeFile(launcherPath, "launcher");
+    const on = [{ name: "Old", kind: "gecko" as const, lines: ["04000000 00000001"], source: "yours" as const }];
+    const m = manager([await oldBuild("minus", { launcherPath, codes: { on, yours: [] } })]);
+    await m.mods.host({ buildId: "minus", public: true });
+    expect(m.launches[0]).not.toHaveProperty("codes");
+    await m.closeAll();
+    await expect(m.mods.setCodes("minus", { on, yours: [] })).rejects.toThrow(/its own codes/);
+  });
+
+  it("lists the player's Dolphin's, Dolphin's own and the database's", async () => {
+    await gameIni(own(), "GP6E01", ["[Gecko]", "$Mine", "04000004 00000001"]);
+    const database = [
+      "GP6E01",
+      "Mario Party 6",
+      "",
+      "Moon Jump [someone]",
+      "28000000 00000000",
+      "Hold A",
+      "",
+      "Bad [x]",
+      "2834XXXX YYYYZZZZ",
+      "",
+    ].join("\r\n");
+    const m = manager([await marioParty()], undefined, null, async (id) => (id === "GP6E01" ? database : null));
+    const { codes, lists } = await m.mods.codeLists("mp6");
+    expect(codes).toEqual({ on: [], yours: [] });
+    expect(lists.own.map((c) => c.name)).toEqual(["Mine"]);
+    expect(lists.ownFiles).toEqual([path.join(own(), "GameSettings", "GP6E01.ini")]);
+    // Dolphin's list for Mario Party 6 (dolphin_codes.json).
+    expect(lists.dolphin.length).toBeGreaterThan(50);
+    expect(lists.dolphin.find((c) => c.name === "QOL - Auto Advance Text Boxes")?.notes).toContain("without pushing A");
+    expect(await m.mods.databaseCodes("mp6")).toEqual([
+      { name: "Moon Jump", kind: "gecko", lines: ["28000000 00000000"], author: "someone", notes: "Hold A" },
+      { name: "Bad", kind: "gecko", lines: ["2834XXXX YYYYZZZZ"], author: "x" },
+    ]);
+  });
+
+  it("keeps the codes checked, and not while the game's room is open", async () => {
+    const m = manager([await marioParty({ codes: { on: [], yours: [] } })]);
+    const mine = { name: "Turn count 30 \u0007", kind: "gecko" as const, lines: ["0426b6a0  0000001e"] };
+    const kept = await m.mods.setCodes("mp6", {
+      yours: [mine],
+      on: [
+        { ...mine, source: "yours" },
+        // Lines to fill in: not run.
+        { name: "Bad", kind: "gecko", lines: ["2834XXXX YYYYZZZZ"], source: "database" },
+      ],
+    });
+    const clean = { name: "Turn count 30", kind: "gecko", lines: ["0426B6A0 0000001E"] };
+    expect(kept).toEqual({ yours: [clean], on: [{ ...clean, source: "yours" }] });
+    expect(m.builds()[0].codes).toEqual(kept);
+    await m.mods.host({ buildId: "mp6", public: true });
+    expect(hostArg(m.launches[0]).codes).toEqual([clean]);
+    await expect(m.mods.setCodes("mp6", { on: [], yours: [] })).rejects.toThrow(/Leave the room/);
+    await m.closeAll();
+    await m.mods.setCodes("mp6", { on: [], yours: [] });
   });
 });

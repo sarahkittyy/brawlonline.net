@@ -2,6 +2,7 @@ import type { ModBuild, ModRoomStatus, ModsState } from "@dolphin/mods/types";
 import { act, cleanup, fireEvent, render, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { CodesMessages } from "./codes.messages";
 import { ModsMessages as Messages } from "./mods.messages";
 import type { ModsViewProps } from "./mods_view";
 import { ModsView } from "./mods_view";
@@ -218,6 +219,61 @@ describe("ModsView", () => {
     const { getByText } = render(<ModsView {...p} />);
     expect(getByText(Messages.sessionError("Could not join: not admitted"))).toBeTruthy();
   });
+  it("has a Codes button on a game booted from its disc, with how many are on (room-codes.md)", () => {
+    const withCodes: ModBuild = {
+      ...nsmbw,
+      codes: {
+        on: [{ name: "Infinite Lives", kind: "gecko", lines: ["04354E8C 00000063"], source: "own" }],
+        yours: [],
+      },
+    };
+    const builtIn: ModBuild = { ...minus, id: "pplus", name: "Project+", builtIn: true, launcherPath: null };
+    const onCodes = vi.fn();
+    const p = props({ builds: [withCodes, minus, builtIn], running: false, status: null }, { onCodes });
+    const { getAllByLabelText } = render(<ModsView {...p} />);
+    // Not for a mod's launcher (its own Gecko code handler) nor Brawl Online's P+.
+    const buttons = getAllByLabelText(CodesMessages.codes());
+    expect(buttons).toHaveLength(1);
+    expect(buttons[0].textContent).toContain("1");
+    fireEvent.click(buttons[0]);
+    expect(onCodes).toHaveBeenCalledWith(withCodes);
+  });
+
+  it("shows a room's codes beside its disc, in the list and in the room", () => {
+    const names = ["Infinite Lives", "Moon Jump"];
+    const status = room(2);
+    status.room!.build = { ...status.room!.build, codes: names };
+    const p = props(
+      { builds: [minus], running: true, status },
+      {
+        publicRooms: {
+          kind: "ready",
+          rooms: [
+            {
+              code: "PLNX",
+              build: {
+                hash: nsmbw.hash!,
+                name: "NSMBW",
+                disc: "d".repeat(40),
+                discLabel: "SMNE01",
+                sd: "",
+                codes: names,
+              },
+              hostName: "Keiko",
+              players: 1,
+              open: 4,
+            },
+          ],
+        },
+      },
+    );
+    const { container } = render(<ModsView {...p} />);
+    const chips = Array.from(container.querySelectorAll("span")).filter(
+      (el) => el.className.includes("codesChip") && el.textContent === "2",
+    );
+    expect(chips).toHaveLength(2);
+  });
+
   it("lists public rooms, with Join only for a build the player has", () => {
     const other = "9".repeat(64);
     const p = props(

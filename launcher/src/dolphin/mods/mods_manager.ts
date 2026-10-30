@@ -3,7 +3,7 @@ import { PPLUS_NETPLAY_LAUNCHER_DOL } from "@common/product";
 import type { SettingsManager } from "@settings/settings_manager";
 import { randomUUID } from "crypto";
 import electronLog from "electron-log";
-import { mkdir, stat } from "fs/promises";
+import { mkdir, readFile, stat, writeFile } from "fs/promises";
 import os from "os";
 import path from "path";
 import { throttleProgress } from "utils/copy_file";
@@ -12,6 +12,8 @@ import { PPLUS_RELEASE } from "../install/pplus_release";
 import type { DolphinManager } from "../manager";
 import { DolphinLaunchType } from "../types";
 import { BUILD_HASH_VERSION, buildHashKey, combineBuildHash, computeBuildParts, sdHashKey } from "./build_hash";
+import { roomCodes } from "./code_rules";
+import { cleanCodes, codeLists, dolphinCodes, ownDolphinCodes, parseDatabaseCodes, startingCodes } from "./codes";
 import { defaultControllerKind, readDolphinControllers } from "./controllers";
 import { discIdentity, isBrawlGameId, readDiscInfo } from "./disc_info";
 import { findModParts } from "./folder_import";
@@ -39,7 +41,10 @@ import { checkRoomCard, compareSdListing, noListings, readSdListing } from "./sd
 import type {
   DolphinControllers,
   ModBuild,
+  ModBuildCodes,
   ModBuildInput,
+  ModCode,
+  ModCodeLists,
   ModFolderParts,
   ModRoomBuild,
   ModRoomRequest,
@@ -58,6 +63,41 @@ import type {
 } from "./types";
 
 const log = electronLog.scope("dolphin/mods");
+
+/** The code database Dolphin's Download Codes reads (codes.rc24.xyz, geckocodes.org's mirror): a
+ * game's codes, kept a week in the netplay User folder's cache. */
+const CODE_DATABASE_URL = "https://codes.rc24.xyz/txt.php?txt=";
+const CODE_DATABASE_KEEP_MS = 7 * 24 * 3600 * 1000;
+
+/** A game's codes in the code database (geckocodes.org's text), null when it has none. A copy
+ * fetched in the last week is used, or an older one when the database can't be reached. */
+export async function fetchCodeDatabase(cacheDir: string, gameId: string): Promise<string | null> {
+  if (!/^[A-Z0-9]{4,6}$/.test(gameId)) {
+    return null;
+  }
+  const file = path.join(cacheDir, `${gameId}.txt`);
+  const cachedAt = (await stat(file).catch(() => null))?.mtimeMs;
+  const cached = cachedAt !== undefined ? await readFile(file, "utf8").catch(() => null) : null;
+  if (cached !== null && cachedAt !== undefined && Date.now() - cachedAt < CODE_DATABASE_KEEP_MS) {
+    return cached || null;
+  }
+  try {
+    const response = await fetch(CODE_DATABASE_URL + gameId, { signal: AbortSignal.timeout(15000) });
+    if (!response.ok && response.status !== 404) {
+      throw new Error(`The code database answered ${response.status}.`);
+    }
+    const text = response.ok ? await response.text() : "";
+    await mkdir(cacheDir, { recursive: true });
+    await writeFile(file, text);
+    return text || null;
+  } catch (err) {
+    if (cached !== null) {
+      log.warn(`The code database for ${gameId}: ${err}; using the copy kept before`);
+      return cached || null;
+    }
+    throw err;
+  }
+}
 
 /** How often the room file is read while Dolphin runs a room. */
 const POLL_MS = 500;
@@ -181,6 +221,9 @@ export class ModsManager {
     /** The User folders of the player's own Dolphin, whose Wii saves a game can start from. */
     private readonly ownDolphinFolders: () => string[] = () =>
       ownDolphinUserFolders(process.platform, os.homedir(), process.env),
+    /** A game's codes in the code database (room-codes.md), null when it has none. */
+    private readonly codeDatabase: (gameId: string) => Promise<string | null> = (gameId) =>
+      fetchCodeDatabase(path.join(this.dolphin.netplayUserFolder(), "Cache", "CodeDatabase"), gameId),
   ) {}
 
   async joinByCode(options: ModsJoinByCodeOptions): Promise<ModsJoinByCodeResult> {
@@ -431,6 +474,7 @@ export class ModsManager {
       hashKey: null,
     };
     await this.saveBuilds([...this.builds(), build]);
+    void this.buildCodes(build.id).catch((err) => log.warn(`codes of ${build.name}: ${err}`));
     // Hashed at once (in the background): a known game or mod gets its name, and Host is quick.
     void this.hashBuild(build.id).catch((err) => {
       log.warn(`hashing ${build.name}: ${err}`);
@@ -566,11 +610,17 @@ export class ModsManager {
 
   async host(options: ModsHostOptions): Promise<void> {
     const build = await this.hashBuild(options.buildId);
+    // The game's codes, as the player left them: the room runs them on every machine (room-codes.md).
+    const codes = roomCodes(await this.buildCodes(build.id));
+    if (codes.length > 0) {
+      log.info(`${build.name}'s room runs ${codes.length} code(s): ${codes.map((c) => c.name).join(", ")}`);
+    }
     await this.launch(build, {
       host: true,
       build: roomBuild(build),
       public: options.public,
       controller: await this.launchController(),
+      ...(codes.length > 0 ? { codes } : {}),
     });
     // While Dolphin boots and opens the room: the card's listing, for joiners whose card differs.
     if (options.uid && build.sdPath) {
@@ -669,6 +719,91 @@ export class ModsManager {
     const builtIn = this.builds().find((b) => b.id === this.runningBuildId)?.builtIn;
     const keepCard = request.op === "sd-sync" && request.choice === "overwrite" && builtIn;
     await writeModRoomRequest(this.dolphin.netplayOnlineDir(), keepCard ? { op: "sd-sync", choice: "yes" } : request);
+  }
+
+  /** The game's codes, and the Codes dialog's lists: the player's own Dolphins' (Brawl Online's and
+   * their own), and Dolphin's for the game (room-codes.md). */
+  async codeLists(id: string): Promise<{ codes: ModBuildCodes; lists: ModCodeLists }> {
+    const codes = await this.buildCodes(id);
+    const build = this.findBuild(id);
+    if (!build.gameId || build.builtIn || build.launcherPath) {
+      return { codes, lists: { own: [], ownFiles: [], dolphin: [] } };
+    }
+    const own = await ownDolphinCodes(this.codeFolders(), build.gameId, build.revision);
+    return { codes, lists: codeLists(own, dolphinCodes(build.gameId, build.revision), codes.yours) };
+  }
+
+  /** Keeps the game's codes, checked (cleanCodes): its next room runs the ones on. Not while its
+   * room is open: that room's games already run the codes it started with. */
+  async setCodes(id: string, codes: ModBuildCodes): Promise<ModBuildCodes> {
+    const build = this.findBuild(id);
+    if (build.builtIn || build.launcherPath) {
+      throw new Error(`${build.name} runs its own codes.`);
+    }
+    if (this.running && this.runningBuildId === id) {
+      throw new Error("Leave the room to change its codes.");
+    }
+    const clean = cleanCodes(codes);
+    await this.saveBuilds(this.builds().map((b) => (b.id === id ? { ...b, codes: clean } : b)));
+    return clean;
+  }
+
+  /** The code database's codes for the game (none for a game it doesn't have). */
+  async databaseCodes(id: string): Promise<ModCode[]> {
+    const build = this.findBuild(id);
+    if (!build.gameId || build.builtIn) {
+      return [];
+    }
+    const text = await this.codeDatabase(build.gameId);
+    return text ? parseDatabaseCodes(text) : [];
+  }
+
+  /** Every game's codes looked at once (in the background at start): a game added before codes
+   * starts with the ones on in the player's own Dolphin, so its Codes button shows them. */
+  async seedCodes(): Promise<void> {
+    for (const build of this.builds()) {
+      if (!build.codes && !build.builtIn && !build.launcherPath && build.gameId) {
+        await this.buildCodes(build.id).catch((err) => log.warn(`codes of ${build.name}: ${err}`));
+      }
+    }
+  }
+
+  /** Brawl Online's Dolphin (the netplay User folder), then the player's own. */
+  private codeFolders(): string[] {
+    return [this.dolphin.netplayUserFolder(), ...this.ownDolphinFolders()];
+  }
+
+  /** The game's codes; the first time, the ones on in the player's own Dolphins (kept from then). */
+  private async buildCodes(id: string): Promise<ModBuildCodes> {
+    const build = this.findBuild(id);
+    // A mod booted by its launcher (P+'s too) has its own Gecko code handler where Dolphin's goes:
+    // its codes are the mod's.
+    if (build.builtIn || build.launcherPath) {
+      return { on: [], yours: [] };
+    }
+    if (build.codes) {
+      return build.codes;
+    }
+    if (!build.gameId) {
+      return { on: [], yours: [] };
+    }
+    // Not for Brawl: its inis hold an old P+ netplay setup's codes, which no mod's room wants.
+    const codes = isBrawlGameId(build.gameId)
+      ? { on: [], yours: [] }
+      : startingCodes(
+          await ownDolphinCodes(this.codeFolders(), build.gameId, build.revision),
+          dolphinCodes(build.gameId, build.revision),
+        );
+    if (codes.on.length > 0) {
+      log.info(
+        `${build.name} starts with the codes on in the player's Dolphin: ${codes.on.map((c) => c.name).join(", ")}`,
+      );
+    }
+    const latest = this.builds().find((b) => b.id === id);
+    if (latest && !latest.codes) {
+      await this.saveBuilds(this.builds().map((b) => (b.id === id ? { ...b, codes } : b)));
+    }
+    return latest?.codes ?? codes;
   }
 
   /** The game's save in rooms: null for a game not hashed yet (its store is named by its hash). A

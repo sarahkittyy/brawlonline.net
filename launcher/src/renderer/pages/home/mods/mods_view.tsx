@@ -40,6 +40,7 @@ import { RoomNameMessages } from "@/components/room_name/room_name.messages";
 import { RoomNameField } from "@/components/room_name/room_name_field";
 
 import { ContentBlock } from "../overview/content_block/content_block";
+import { CodesButton, CodesChip, hasRoomCodes } from "./codes_dialog";
 import { ControllerMenu } from "./controller_menu";
 import { ModsMessages as Messages } from "./mods.messages";
 import styles from "./mods.module.css";
@@ -68,6 +69,8 @@ export type ModsViewProps = {
   onAddFolder: () => void;
   onEditBuild: (build: ModBuild) => void;
   onRemoveBuild: (build: ModBuild) => void;
+  /** The game's Codes dialog (docs/design/room-codes.md). */
+  onCodes?: (build: ModBuild) => void;
   onHost: (build: ModBuild, isPublic: boolean) => void;
   onJoin: (build: ModBuild, code: string) => void;
   /** A room code typed by the public rooms (its game is looked up). */
@@ -154,6 +157,7 @@ export const ModsView = (props: ModsViewProps) => {
                 onCopyCode={props.onCopyCode}
                 yourRoom={props.yourRoom}
                 onRename={props.onRenameRoom}
+                onCodes={roomBuild && props.onCodes ? () => props.onCodes?.(roomBuild) : undefined}
               />
             </div>
           )}
@@ -212,6 +216,7 @@ export const ModsView = (props: ModsViewProps) => {
                     disabled={!!state.running || props.startingBuildId !== null}
                     onEdit={() => props.onEditBuild(build)}
                     onRemove={() => props.onRemoveBuild(build)}
+                    onCodes={props.onCodes ? () => props.onCodes?.(build) : undefined}
                     onHost={(isPublic) => props.onHost(build, isPublic)}
                   />
                 ))}
@@ -535,6 +540,8 @@ const PublicRoomsBlock = ({
                             onClick={match.sd === "same" || !match.build ? undefined : fix("sd")}
                           />
                         )}
+                        {/* The host's codes, which the room runs for everyone (room-codes.md). */}
+                        {room.build.codes && room.build.codes.length > 0 && <CodesChip names={room.build.codes} />}
                       </div>
                     )}
                   </div>
@@ -613,6 +620,7 @@ const BuildRow = ({
   disabled,
   onEdit,
   onRemove,
+  onCodes,
   onHost,
 }: {
   build: ModBuild;
@@ -622,6 +630,7 @@ const BuildRow = ({
   disabled: boolean;
   onEdit: () => void;
   onRemove: () => void;
+  onCodes?: () => void;
   onHost: (isPublic: boolean) => void;
 }) => {
   const [isPublic, setIsPublic] = useState(true);
@@ -692,6 +701,11 @@ const BuildRow = ({
         </div>
       )}
       <div className={styles.actions}>
+        {/* The codes its rooms run. Not for a mod booted by its launcher (P+'s too): the launcher puts
+            its own Gecko code handler where Dolphin's goes, and the mod's codes are in it. */}
+        {onCodes && hasRoomCodes(build) && (
+          <CodesButton names={(build.codes?.on ?? []).map((c) => c.name)} onClick={onCodes} />
+        )}
         <Tooltip title={Messages.publicRoomTooltip()}>
           <label className={styles.toggle}>
             <Switch size="small" checked={isPublic} onChange={(e) => setIsPublic(e.target.checked)} />
@@ -716,12 +730,15 @@ const RoomPanel = ({
   onCopyCode,
   yourRoom,
   onRename,
+  onCodes,
 }: {
   status: ModRoomStatus | null;
   onRequest: (request: ModRoomRequest) => void;
   onCopyCode: (code: string) => void;
   yourRoom?: YourRoom | null;
   onRename?: (code: string, name: string) => Promise<void>;
+  /** The host: the game's Codes dialog (locked while the room is open). */
+  onCodes?: () => void;
 }) => {
   const [dragFrom, setDragFrom] = useState<number | null>(null);
   // The public switch moves at the click: the room file says it only after Dolphin and the
@@ -839,7 +856,12 @@ const RoomPanel = ({
           {!room && !status?.error && <LinearProgress />}
           {room && (
             <>
-              <div className={styles.roomBuild}>{Messages.buildName(room.build.name, room.build.hash.slice(0, 8))}</div>
+              <div className={styles.roomBuild}>
+                {Messages.buildName(room.build.name, room.build.hash.slice(0, 8))}
+                {room.build.codes && room.build.codes.length > 0 && (
+                  <CodesChip names={room.build.codes} onClick={isHost ? onCodes : undefined} />
+                )}
+              </div>
               <div className={styles.slots}>
                 {room.slots.map((slot) => (
                   <SlotRow

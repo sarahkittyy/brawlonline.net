@@ -36,6 +36,9 @@ namespace
 {
 constexpr size_t MAX_MESSAGE = 16 * 1024;
 constexpr size_t BUILD_HASH_LEN = 64;
+// The code names a room lists (docs/design/room-codes.md): mm's MAX_CODES and MAX_CODE_NAME.
+constexpr size_t MAX_CODE_NAMES = 64;
+constexpr size_t MAX_CODE_NAME = 48;
 constexpr char NOT_FOUND[] = "Room not found.";
 
 struct Member
@@ -54,6 +57,8 @@ struct View
   std::string code;
   bool is_public = false;
   std::string build_hash, build_name;
+  // The names of the host's codes (none: an older launcher, or no codes).
+  std::vector<std::string> codes;
   int host = 0;  // slot 1-4
   int you = 0;   // slot 1-4
   std::string token;
@@ -75,6 +80,8 @@ struct Room
   // The build's parts as rooms compare them (docs/design/brawl-mods.md §6.5): the disc's SHA-1,
   // what it is ("RSBE01 Rev 1"), and the SD card's root ("" for none).
   std::string build_disc, build_disc_label, build_sd;
+  // The host's codes' names, for the room's listing (the codes go P2P, in the machine image).
+  std::vector<std::string> code_names;
   std::string join_code;
   bool is_public = true;
   std::string controller = "gc";
@@ -186,6 +193,14 @@ std::optional<View> ParseState(const picojson::object& o)
   {
     v.build_hash = Str(*b, "hash", BUILD_HASH_LEN);
     v.build_name = Str(*b, "name", 64);
+    if (const auto c = b->find("codes"); c != b->end() && c->second.is<picojson::array>())
+    {
+      for (const auto& n : c->second.get<picojson::array>())
+      {
+        if (n.is<std::string>() && v.codes.size() < MAX_CODE_NAMES)
+          v.codes.push_back(n.get<std::string>().substr(0, MAX_CODE_NAME * 4));
+      }
+    }
   }
   v.host = static_cast<int>(Num(o, "host", 0));
   v.you = static_cast<int>(Num(o, "you", 0));
@@ -241,6 +256,13 @@ picojson::object RoomJson(const View& v)
   picojson::object build;
   build["hash"] = picojson::value(v.build_hash);
   build["name"] = picojson::value(v.build_name);
+  if (!v.codes.empty())
+  {
+    picojson::array codes;
+    for (const std::string& n : v.codes)
+      codes.emplace_back(n);
+    build["codes"] = picojson::value(codes);
+  }
   r["build"] = picojson::value(build);
   r["host"] = picojson::value(static_cast<double>(v.host));
   r["you"] = picojson::value(static_cast<double>(v.you));
@@ -281,6 +303,13 @@ std::string CreateJson()
   build["hash"] = picojson::value(s.build_hash);
   build["name"] = picojson::value(s.build_name);
   AddParts(&build);
+  if (!s.code_names.empty())
+  {
+    picojson::array codes;
+    for (const std::string& n : s.code_names)
+      codes.emplace_back(n);
+    build["codes"] = picojson::value(codes);
+  }
   picojson::object m;
   m["type"] = picojson::value("mods-create");
   m["build"] = picojson::value(build);
@@ -362,6 +391,16 @@ std::optional<Machine::Options> FromEnvironment(std::string* error)
     return std::nullopt;
   }
   Machine::Options opts;
+  // The host's codes (docs/design/room-codes.md): its session runs them; a joiner's come with the
+  // machine image.
+  if (const auto c = o.find("codes"); host && c != o.end())
+  {
+    if (!Machine::ParseCodes(c->second, &opts, error))
+    {
+      *error = "PPR_MODS_ROOM: " + *error;
+      return std::nullopt;
+    }
+  }
   opts.room = true;
   opts.join = !host;
   opts.sd_sync = *sd_sync;
@@ -395,6 +434,25 @@ std::optional<Machine::Options> FromEnvironment(std::string* error)
       s.build_sd = sd;
       s.build_disc_label = Str(*build, "discLabel", 32);
     }
+    for (const auto& c : opts.gecko_codes)
+      s.code_names.push_back(c.name);
+    for (const auto& c : opts.ar_codes)
+      s.code_names.push_back(c.name);
+    for (std::string& n : s.code_names)
+    {
+      // At most MAX_CODE_NAME characters (UTF-8: not cut inside one).
+      size_t chars = 0, end = 0;
+      while (end < n.size() && chars < MAX_CODE_NAME)
+      {
+        ++end;
+        while (end < n.size() && (static_cast<u8>(n[end]) & 0xC0) == 0x80)
+          ++end;
+        ++chars;
+      }
+      n.resize(end);
+    }
+    if (s.code_names.size() > MAX_CODE_NAMES)
+      s.code_names.resize(MAX_CODE_NAMES);
     s.join_code = join;
     s.is_public = Flag(o, "public", true);
     s.controller = controller;

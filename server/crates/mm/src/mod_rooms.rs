@@ -624,11 +624,15 @@ mod tests {
             disc: Some(disc.clone()),
             disc_label: Some("RSBE01 Rev 1".into()),
             sd: Some("5".repeat(64)),
+            codes: vec!["Faster Boot Time".into()],
             ..build()
         };
         let out = req(&mut b, 1, 1, ModsRequest::Create { build: room_build, public: true, controller: Controller::Gc });
         let state = last_state(&out, 1);
         assert_eq!(state["build"]["disc"], json!(disc));
+        // The host's code names go to every member and to the public list (room-codes.md).
+        assert_eq!(state["build"]["codes"], json!(["Faster Boot Time"]));
+        assert_eq!(b.public_rooms(10)[0].build.codes, vec!["Faster Boot Time".to_string()]);
         assert_eq!(state["build"]["discLabel"], json!("RSBE01 Rev 1"));
         let code = state["code"].as_str().unwrap().to_string();
         let other_card = mods::BuildKey { hash: "0".repeat(64), disc: Some(disc.clone()), sd: Some("6".repeat(64)) };

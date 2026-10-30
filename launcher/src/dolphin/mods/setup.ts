@@ -6,7 +6,9 @@ import electronLog from "electron-log";
 import type { DolphinManager } from "../manager";
 import {
   ipc_modsAddBuild,
+  ipc_modsCodeLists,
   ipc_modsConfigureControllers,
+  ipc_modsDatabaseCodes,
   ipc_modsEvent,
   ipc_modsGetState,
   ipc_modsHashBuild,
@@ -20,6 +22,7 @@ import {
   ipc_modsRemoveBuild,
   ipc_modsRequest,
   ipc_modsSaveInfo,
+  ipc_modsSetCodes,
   ipc_modsSetController,
   ipc_modsUpdateBuild,
 } from "./ipc";
@@ -80,6 +83,8 @@ export default function setupModsIpc({
   // Games hashed by an older launcher, or whose files changed: hashed again for the room list.
   void mods.rehashChanged();
   void mods.refreshBuiltIn();
+  // Games added before room codes start with the ones on in the player's own Dolphin.
+  void mods.seedCodes();
 
   // Brawl Online's own P+ follows the Brawl disc and P+'s install (the tab asks again when either
   // changes).
@@ -118,6 +123,9 @@ export default function setupModsIpc({
     return { success: true };
   });
   ipc_modsSaveInfo.main!.handle(async ({ id }) => ({ save: await mods.saveInfo(id) }));
+  ipc_modsCodeLists.main!.handle(async ({ id }) => await mods.codeLists(id));
+  ipc_modsSetCodes.main!.handle(async ({ id, codes }) => ({ codes: await mods.setCodes(id, codes) }));
+  ipc_modsDatabaseCodes.main!.handle(async ({ id }) => ({ codes: await mods.databaseCodes(id) }));
   ipc_modsImportSave.main!.handle(async ({ id, source }) => await mods.importSave(id, source));
   ipc_modsOpenSaveFolder.main!.handle(async ({ id }) => {
     const error = await shell.openPath(await mods.saveFolder(id));

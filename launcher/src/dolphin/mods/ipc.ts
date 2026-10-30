@@ -3,7 +3,10 @@ import { _, makeEndpoint } from "utils/ipc";
 
 import type {
   ModBuild,
+  ModBuildCodes,
   ModBuildInput,
+  ModCode,
+  ModCodeLists,
   ModFolderParts,
   ModRoomRequest,
   ModSaveImportResult,
@@ -77,6 +80,24 @@ export const ipc_modsImportSave = makeEndpoint.main(
 );
 
 export const ipc_modsOpenSaveFolder = makeEndpoint.main("mods_openSaveFolder", <{ id: string }>_, <SuccessPayload>_);
+
+export const ipc_modsCodeLists = makeEndpoint.main(
+  "mods_codeLists",
+  <{ id: string }>_,
+  <{ codes: ModBuildCodes; lists: ModCodeLists }>_,
+);
+
+export const ipc_modsSetCodes = makeEndpoint.main(
+  "mods_setCodes",
+  <{ id: string; codes: ModBuildCodes }>_,
+  <{ codes: ModBuildCodes }>_,
+);
+
+export const ipc_modsDatabaseCodes = makeEndpoint.main(
+  "mods_databaseCodes",
+  <{ id: string }>_,
+  <{ codes: ModCode[] }>_,
+);
 
 // Events
 

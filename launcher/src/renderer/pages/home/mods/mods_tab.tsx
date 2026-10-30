@@ -1,7 +1,9 @@
 import { withoutIpcPrefix } from "@common/disk_space";
 import type {
   ModBuild,
+  ModBuildCodes,
   ModBuildInput,
+  ModCodeLists,
   ModRoomRequest,
   ModSaveInfo,
   ModSdCardCheck,
@@ -28,6 +30,8 @@ import { useServices } from "@/services";
 
 import type { AddBuildInitial, SaveSectionProps } from "./add_build_dialog";
 import { AddBuildDialog, formatSaveSummary } from "./add_build_dialog";
+import type { DatabaseCodes } from "./codes_dialog";
+import { CodesDialog } from "./codes_dialog";
 import { ModsMessages as Messages } from "./mods.messages";
 import type { ModsPublicRooms } from "./mods_view";
 import { ModsView, SD_BIG_DIFFERENCE_BYTES, SdCardDialog } from "./mods_view";
@@ -92,6 +96,12 @@ export const ModsTab = React.memo(function ModsTab() {
     check: ModSdCardCheck;
     roomName?: string;
   } | null>(null);
+  // The Codes dialog (docs/design/room-codes.md): the game, its codes as last kept, its lists.
+  const [codesFor, setCodesFor] = useState<string | null>(null);
+  const [codes, setCodes] = useState<ModBuildCodes>({ on: [], yours: [] });
+  const [codeLists, setCodeLists] = useState<ModCodeLists | null>(null);
+  const [databaseCodes, setDatabaseCodes] = useState<DatabaseCodes>({ kind: "idle" });
+  const codesForRef = useRef<string | null>(null);
   const openLogin = useLoginModal((s) => s.openModal);
   const outdated = query.isError && Date.now() - query.dataUpdatedAt > STALE_AFTER_MS;
   let publicRooms: ModsPublicRooms;
@@ -333,6 +343,59 @@ export const ModsTab = React.memo(function ModsTab() {
     }
   };
 
+  const openCodes = (build: ModBuild) => {
+    codesForRef.current = build.id;
+    setCodesFor(build.id);
+    setCodes(build.codes ?? { on: [], yours: [] });
+    setCodeLists(null);
+    setDatabaseCodes({ kind: "idle" });
+    modsService
+      .codeLists(build.id)
+      .then((result) => {
+        if (codesForRef.current === build.id) {
+          setCodes(result.codes);
+          setCodeLists(result.lists);
+        }
+      })
+      .catch((err) => {
+        showError(errorText(err));
+        setCodesFor(null);
+      });
+  };
+
+  // Each change is kept at once; the main process's checked codes come back.
+  const changeCodes = (next: ModBuildCodes) => {
+    const id = codesFor;
+    if (!id) {
+      return;
+    }
+    const before = codes;
+    setCodes(next);
+    modsService
+      .setCodes(id, next)
+      .then((kept) => codesForRef.current === id && setCodes(kept))
+      .catch((err) => {
+        showError(errorText(err));
+        if (codesForRef.current === id) {
+          setCodes(before);
+        }
+      });
+  };
+
+  const loadDatabaseCodes = () => {
+    const id = codesFor;
+    if (!id) {
+      return;
+    }
+    setDatabaseCodes({ kind: "loading" });
+    modsService
+      .databaseCodes(id)
+      .then((list) => codesForRef.current === id && setDatabaseCodes({ kind: "ready", codes: list }))
+      .catch((err) => codesForRef.current === id && setDatabaseCodes({ kind: "failed", error: errorText(err) }));
+  };
+
+  const codesBuild = state?.builds.find((b) => b.id === codesFor) ?? null;
+
   const onRequest = (request: ModRoomRequest) => {
     void modsService.request(request).catch(showError);
   };
@@ -359,6 +422,7 @@ export const ModsTab = React.memo(function ModsTab() {
         onEditBuild={(build) => openEdit(build)}
         onAddFolder={() => void onAddFolder()}
         onRemoveBuild={(build) => void modsService.removeBuild(build.id).catch(showError)}
+        onCodes={openCodes}
         onHost={(build, isPublic) =>
           void start(build, () => modsService.host({ buildId: build.id, public: isPublic, uid: uid ?? undefined }))
         }
@@ -376,6 +440,21 @@ export const ModsTab = React.memo(function ModsTab() {
         onRenameRoom={renameRoom}
         onCopyCode={(code) => {
           void navigator.clipboard.writeText(code).then(() => showSuccess(Messages.copied()));
+        }}
+      />
+      <CodesDialog
+        open={codesBuild !== null}
+        game={codesBuild?.name ?? ""}
+        gameId={codesBuild?.gameId}
+        codes={codes}
+        lists={codeLists}
+        database={databaseCodes}
+        locked={!!state?.running && state.runningBuildId === codesFor}
+        onChange={changeCodes}
+        onLoadDatabase={loadDatabaseCodes}
+        onClose={() => {
+          codesForRef.current = null;
+          setCodesFor(null);
         }}
       />
       <AddBuildDialog

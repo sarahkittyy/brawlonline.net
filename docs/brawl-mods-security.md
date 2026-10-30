@@ -52,7 +52,7 @@ The image's sender controls the joiner's whole emulated machine, not only Dolphi
 | `CoreTiming` | the event queue; event types are looked up by name (unknown: a no-op "lost" event) | Low | check queue size limit (each event costs at least a few bytes, so §2.1's count fix bounds it) |
 | `Memory` | MEM1, MEM2, L1 (fixed sizes, checked against the joiner's) | Low: guest memory | none |
 | `PowerPC` | registers, MSR, BATs, TLB; BAT changes remap fastmem | Low-Medium: guest-visible state, but the mapping code must cope with any BAT value | audit `DBATUpdated`/`IBATUpdated` with arbitrary BATs |
-| `Gecko::DoState` | active Gecko codes | Low (they write guest memory only) | image mode: no codes (cheats are off in a session) |
+| `Gecko::DoState` | active Gecko codes | Low (they write guest memory only) | image mode: the session's codes only (the host's, `design/room-codes.md`: in the image, under every player's digest) |
 
 ## 3. Hardening (built 2026-10-12 unless marked)
 
