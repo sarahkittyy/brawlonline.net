@@ -44,6 +44,11 @@ export interface SettingsSchema {
   // else 1-4 frames. Synced to Dolphin.ini `[Online] InputDelay`.
   inputDelay: number;
 
+  // Online: "Unranked Rating Range": Unranked pairs the player only with placed players whose
+  // Ranked rating is within this many points (0 off; 100, 200 or 300). Synced to Dolphin.ini
+  // `[Online] UnrankedRatingRange`, sent in the game's Unranked tickets.
+  unrankedRatingRange: number;
+
   // Online: the game's music in matches and menus. Synced to Dolphin.ini `[Online] Music`.
   enableMusic: boolean;
 

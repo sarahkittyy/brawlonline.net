@@ -1,6 +1,7 @@
 import { DEFAULT_CHAT_KEY } from "@common/chat_key";
 import { normalizeInputDelay } from "@common/input_delay";
 import { DOLPHIN_INI_SECTION } from "@common/product";
+import { normalizeRatingRange } from "@common/rating_range";
 import { defaultAppSettings } from "@settings/default_settings";
 
 import type { IniFile } from "./ini_file";
@@ -12,6 +13,8 @@ export type SyncedDolphinSettings = {
   enableMonthlySubfolders: boolean;
   /** 0: automatic, else frames (`[Online] InputDelay`). */
   inputDelay: number;
+  /** "Unranked Rating Range", rating points, 0 off (`[Online] UnrankedRatingRange`). Written only. */
+  unrankedRatingRange?: number;
   /** The game's music (`[Online] Music`; off applies P+'s Music Off code). */
   enableMusic: boolean;
   /** No chat window in the game (`[Online] DisableChat`). */
@@ -62,6 +65,9 @@ export async function setOnlineSettings(iniFile: IniFile, options: Partial<Synce
   }
   if (options.inputDelay !== undefined) {
     section.set("InputDelay", String(normalizeInputDelay(options.inputDelay)));
+  }
+  if (options.unrankedRatingRange !== undefined) {
+    section.set("UnrankedRatingRange", String(normalizeRatingRange(options.unrankedRatingRange)));
   }
   if (options.enableMusic !== undefined) {
     section.set("Music", convertBooleanToIniVal(options.enableMusic));

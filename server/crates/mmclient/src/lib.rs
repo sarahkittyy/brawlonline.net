@@ -92,6 +92,8 @@ pub struct SearchOptions {
     /// Slippi's 1v1 behaviour after a failed P2P connect: search again with a new ticket (and a
     /// new local port), at most this many times. 0: report the failure.
     pub requeue: u32,
+    /// Unranked: the ticket's `ratingRange` (the launcher's "Unranked Rating Range"). None: off.
+    pub rating_range: Option<f64>,
 }
 
 impl SearchOptions {
@@ -110,6 +112,7 @@ impl SearchOptions {
             punch: false,
             punch_timeout: Duration::from_secs(8),
             requeue: 0,
+            rating_range: None,
         }
     }
 
@@ -400,6 +403,7 @@ fn search_once(opts: &SearchOptions) -> anyhow::Result<SearchResult> {
         app_version: opts.app_version.clone(),
         platform: opts.platform.clone(),
         ip_address_lan: lan_address,
+        rating_range: opts.rating_range,
     };
     send_raw(&mut host, mm, serde_json::to_vec(&ticket)?.as_slice());
 
@@ -511,6 +515,7 @@ pub fn search_and_linger(
         app_version: opts.app_version.clone(),
         platform: opts.platform.clone(),
         ip_address_lan: format!("127.0.0.1:{local_port}"),
+        rating_range: None,
     };
     send_raw(&mut host, mm, serde_json::to_vec(&ticket)?.as_slice());
     let deadline = Instant::now() + Duration::from_secs(30);

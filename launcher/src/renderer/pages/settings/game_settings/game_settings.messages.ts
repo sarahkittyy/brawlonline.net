@@ -18,6 +18,11 @@ export const GameSettingsMessages = {
   inputDelayNormal: () => "Normal",
   inputDelaySmooth: () => "Smooth",
   inputDelayFrames: (frames: number) => (frames === 1 ? "1 frame" : `${frames} frames`),
+  unrankedRatingRange: () => "Unranked Rating Range",
+  unrankedRatingRangeDescription: () =>
+    "Only match with players whose Ranked rating is this close to yours in Unranked. Searches can take much longer. Works once you have placed in Ranked.",
+  unrankedRatingRangeOff: () => "Off",
+  unrankedRatingRangePoints: (points: number) => "±{0}",
   enableMusic: () => "Music",
   enableMusicDescription: () => "Play the game's music in menus and matches.",
   disableChat: () => "Disable Chat",

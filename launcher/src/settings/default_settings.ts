@@ -1,5 +1,6 @@
 import { INPUT_DELAY_NORMAL } from "@common/input_delay";
 import { LEGACY_PRODUCT_NAMES, PRODUCT_NAME } from "@common/product";
+import { RATING_RANGE_OFF } from "@common/rating_range";
 import { app } from "electron";
 import log from "electron-log";
 import fs from "fs";
@@ -42,6 +43,7 @@ export const defaultAppSettings: AppSettings = {
     extraSlpPaths: [],
     launchGameOnPlay: true,
     inputDelay: INPUT_DELAY_NORMAL,
+    unrankedRatingRange: RATING_RANGE_OFF,
     enableMusic: true,
     disableChat: false,
     enableStreamGames: true,

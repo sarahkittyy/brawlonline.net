@@ -117,6 +117,37 @@ async fn unranked_is_first_come_first_served_and_expires_with_an_error() {
     stack.shutdown().await;
 }
 
+/// "Unranked Rating Range": a placed player with ±200 is not paired with a player 300 above
+/// them (the ratings come from Postgres), and is with one 150 above who searches later.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_unranked_rating_range_takes_only_close_ratings() {
+    let stack = Stack::start(StackOptions { engine: engine(), ..Default::default() }).await.unwrap();
+    let u = players(&stack, &["fatima", "gunnar", "hiroshi"]).await;
+    for (p, rating) in u.iter().zip([1400.0, 1700.0, 1550.0]) {
+        sqlx::query("INSERT INTO ratings (uid, rating, sets_played) VALUES ($1::uuid, $2, 12)")
+            .bind(p.uid.to_string())
+            .bind(rating)
+            .execute(&stack.pool)
+            .await
+            .unwrap();
+    }
+
+    let mut a = SearchOptions::unranked(stack.mm_addr, creds(&u[0]));
+    a.rating_range = Some(200.0);
+    a.match_timeout = Some(Duration::from_secs(10));
+    let mut b = SearchOptions::unranked(stack.mm_addr, creds(&u[1]));
+    b.match_timeout = Some(Duration::from_secs(3));
+    let fa = tokio::spawn(search(a));
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    assert_eq!(search(b).await.status, Status::MatchTimeout);
+    let rc = search(SearchOptions::unranked(stack.mm_addr, creds(&u[2]))).await;
+    let ra = fa.await.unwrap();
+    assert_eq!(ra.status, Status::Matched, "{ra:?}");
+    assert_eq!(rc.status, Status::Matched, "{rc:?}");
+    assert_eq!(opponent_uid(&ra), u[2].uid);
+    stack.shutdown().await;
+}
+
 /// The CSS's Z disconnects from mm: the ticket is gone at once and nobody is paired with it.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn cancelled_unranked_ticket_is_not_paired() {

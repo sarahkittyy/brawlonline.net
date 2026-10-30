@@ -91,6 +91,10 @@ enum Cmd {
         /// (Slippi's 1v1 behaviour).
         #[arg(long, default_value_t = 0)]
         requeue: u32,
+        /// Unranked: pair only with placed players within this many rating points
+        /// (`ratingRange`, the launcher's "Unranked Rating Range").
+        #[arg(long)]
+        rating_range: Option<f64>,
     },
     /// Keep an online connection open (`hello`), as a running, logged-in game does.
     Online {
@@ -479,6 +483,7 @@ fn run() -> anyhow::Result<i32> {
             timeout_secs,
             punch,
             requeue,
+            rating_range,
         } => {
             let creds = load_creds(user_json, uid, play_key)?;
             let mode = mode_number.unwrap_or(match mode {
@@ -505,6 +510,7 @@ fn run() -> anyhow::Result<i32> {
                 punch,
                 punch_timeout: Duration::from_secs(8),
                 requeue,
+                rating_range,
             };
             let result = mmclient::search(&opts)?;
             println!("{}", serde_json::to_string(&result)?);

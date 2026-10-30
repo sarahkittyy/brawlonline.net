@@ -30,7 +30,10 @@
 //!   `region_widen`), within the ping limit, not the opponent it just played (until the hold) and
 //!   that it did not just fail to connect to. Slippi's tickets carry no region field, so the
 //!   region comes from the ticket's source address ([`crate::region`]); with no region table there
-//!   is one bucket.
+//!   is one bucket. A player may also ask for opponents near their Ranked rating (the ticket's
+//!   `ratingRange`, the launcher's "Unranked Rating Range"): a pair is then made only if both are
+//!   placed and their ratings are within the smaller of the two players' ranges, however long
+//!   either waits. An unplaced player's range is ignored (their rating says little yet).
 //! - **Ranked**: like Unranked, but the oldest ticket takes the closest-rated opponent whose
 //!   rating is within the rating band: `ranked_band` points, widened by `ranked_band_step` for
 //!   every `ranked_band_interval` the longer-waiting of the two has waited (design 2.3: ±150,
@@ -417,6 +420,8 @@ struct Pending {
     /// Direct: the code typed in-game. Unranked: none (Slippi sends `[]`).
     target: Option<ConnectCode>,
     lan: String,
+    /// Unranked: the ticket's `ratingRange`, if it sent a usable one.
+    rating_range: Option<f64>,
     /// A `hello` (opens an online connection) rather than a ticket.
     hello: bool,
     /// A room game ticket (mode 3): the room code.
@@ -447,6 +452,8 @@ struct Waiting {
     region: String,
     /// Where the ticket's address is (GeoIP), for the ping estimate.
     loc: Option<Loc>,
+    /// Unranked: the player's rating range (`ratingRange`): only placed opponents within it.
+    rating_range: Option<f64>,
 }
 
 /// An online connection: a running, logged-in game (rooms, the online count).
@@ -630,6 +637,18 @@ pub struct Engine {
 
 fn hello_ok() -> HelloResp {
     HelloResp { kind: common::rooms::HELLO_RESP.into(), error: None, latest_version: None, game_alive: true }
+}
+
+/// Unranked: whether two tickets keep each other's rating ranges (`ratingRange`). A placed
+/// player's range takes only placed opponents within it; the smaller of two ranges holds for both.
+/// An unplaced player's own range counts for nothing.
+fn within_rating_ranges(a: &Waiting, b: &Waiting) -> bool {
+    let placed = |w: &Waiting| common::ranked::placed(w.user.ranked_sets.max(0) as u32);
+    let range = |w: &Waiting| w.rating_range.filter(|_| placed(w));
+    match [range(a), range(b)].into_iter().flatten().reduce(f64::min) {
+        None => true,
+        Some(cap) => placed(a) && placed(b) && (a.user.rating - b.user.rating).abs() <= cap,
+    }
 }
 
 fn pair_key(a: Uuid, b: Uuid) -> (Uuid, Uuid) {
@@ -1464,6 +1483,7 @@ impl Engine {
             mode: Mode::Direct,
             target: None,
             lan: String::new(),
+            rating_range: None,
             hello: true,
             room: None,
             client,
@@ -1548,6 +1568,7 @@ impl Engine {
             mode,
             target,
             lan: sanitize_lan_addr(&t.ip_address_lan),
+            rating_range: t.rating_range.filter(|r| mode == Mode::Unranked && r.is_finite() && *r > 0.0),
             hello: false,
             room,
             client,
@@ -1639,9 +1660,11 @@ impl Engine {
             lan: p.lan,
             region: region.clone(),
             loc,
+            rating_range: p.rating_range,
         });
         if p.mode == Mode::Unranked {
-            tracing::info!(conn, %code, %region, ?loc, queued = self.unranked.len() + 1, "unranked ticket waiting");
+            let rating_range = p.rating_range;
+            tracing::info!(conn, %code, %region, ?loc, ?rating_range, queued = self.unranked.len() + 1, "unranked ticket waiting");
             self.unranked.push(conn);
             self.pair_queue(Mode::Unranked, now, wall, out);
         } else if p.mode == Mode::Ranked {
@@ -1747,6 +1770,7 @@ impl Engine {
                 lan: p.lan,
                 region,
                 loc: None,
+                rating_range: None,
             });
         }
         if let Some(old) = outcome.replaced {
@@ -1948,7 +1972,8 @@ impl Engine {
     /// The pair a queue makes next: the oldest ticket and a later one it can play. Same region
     /// unless either has waited `region_widen`; estimated ping within the ping limit of the
     /// shorter-waiting of the two (no estimate: always within). Unranked takes the lowest-ping
-    /// such ticket (no estimate counts as `ping_limit`; ties: arrival order); Ranked the
+    /// such ticket within both players' rating ranges ([`within_rating_ranges`]; no estimate
+    /// counts as `ping_limit`; ties: arrival order); Ranked the
     /// closest-rated one within the rating band of the longer-waiting of the two (ties: arrival
     /// order). Two who just played each other wait until the longer-waiting has waited
     /// `rematch_hold`. A pair matched within `requeue_window` whose new search came within
@@ -1987,6 +2012,9 @@ impl Engine {
                 let diff =
                     if ranked { (wa.user.rating - wb.user.rating).abs() } else { ping.unwrap_or(self.cfg.ping_limit) };
                 if ranked && diff > self.rating_band(longer) {
+                    continue;
+                }
+                if !ranked && !within_rating_ranges(wa, wb) {
                     continue;
                 }
                 let recent = self
@@ -2785,6 +2813,12 @@ mod tests {
             v["pingLimit"] = json!(ping_limit);
             self.raw(conn, v.to_string().as_bytes())
         }
+        /// An Unranked (mode 1) or Ranked (0) ticket with the player's `ratingRange`.
+        fn with_rating_range(&mut self, conn: ConnId, u: &MmUser, mode: u8, range: f64) -> Vec<Output> {
+            let mut v = self.ticket_json(u, "", mode);
+            v["ratingRange"] = json!(range);
+            self.raw(conn, v.to_string().as_bytes())
+        }
         fn users(&mut self, n: usize) -> Vec<MmUser> {
             (0..n)
                 .map(|i| {
@@ -3215,6 +3249,82 @@ mod tests {
         let m = matches(&h.advance(Duration::from_secs(1)));
         assert_eq!(m.len(), 1);
         assert_eq!(pair_of(&m[0]), pair_key(u[0].uid, u[1].uid));
+    }
+
+    #[test]
+    fn an_unranked_rating_range_takes_only_close_ratings() {
+        let mut h = Harness::new(default_rules());
+        let u = h.rated(&[1400.0, 1700.0, 1550.0]);
+        for c in 1..=2 {
+            h.connect(c, 41000 + c as u16);
+        }
+        // ±200 against a ticket without a range (an older build, or off): 300 apart, never.
+        h.with_rating_range(1, &u[0], 1, 200.0);
+        assert!(matches(&h.unranked(2, &u[1])).is_empty());
+        assert!(matches(&h.advance(Duration::from_secs(300))).is_empty());
+        // 150 apart: at once.
+        h.connect(3, 41003);
+        let m = matches(&h.unranked(3, &u[2]));
+        assert_eq!(m.len(), 1);
+        assert_eq!(pair_of(&m[0]), pair_key(u[0].uid, u[2].uid));
+    }
+
+    #[test]
+    fn the_smaller_of_two_rating_ranges_holds_for_both() {
+        let mut h = Harness::new(default_rules());
+        let u = h.rated(&[1400.0, 1550.0, 1450.0]);
+        for c in 1..=2 {
+            h.connect(c, 41000 + c as u16);
+        }
+        // ±200 and ±100, 150 apart: not paired, however long they wait.
+        h.with_rating_range(1, &u[0], 1, 200.0);
+        assert!(matches(&h.with_rating_range(2, &u[1], 1, 100.0)).is_empty());
+        assert!(matches(&h.advance(Duration::from_secs(300))).is_empty());
+        // 50 from the first, 100 from the second: the first (the oldest) takes it.
+        h.connect(3, 41003);
+        let m = matches(&h.unranked(3, &u[2]));
+        assert_eq!(m.len(), 1);
+        assert_eq!(pair_of(&m[0]), pair_key(u[0].uid, u[2].uid));
+    }
+
+    #[test]
+    fn a_rating_range_skips_unplaced_players_and_means_nothing_for_them() {
+        let mut h = Harness::new(default_rules());
+        let mut u = h.rated(&[1400.0, 1400.0, 1400.0, 2000.0]);
+        // The second and third have played fewer than the placement sets: their 1400 says little.
+        for i in [1, 2] {
+            u[i].ranked_sets = common::ranked::PLACEMENT_SETS as i32 - 1;
+            h.add(&u[i]);
+        }
+        for c in 1..=2 {
+            h.connect(c, 41000 + c as u16);
+        }
+        // A placed player's range takes no unplaced player, even at the same rating.
+        h.with_rating_range(1, &u[0], 1, 300.0);
+        assert!(matches(&h.unranked(2, &u[1])).is_empty());
+        assert!(matches(&h.advance(Duration::from_secs(300))).is_empty());
+        h.input(Input::Disconnected { conn: 1 });
+        h.input(Input::Disconnected { conn: 2 });
+        // An unplaced player's own range is ignored: 600 apart, paired at once.
+        h.connect(3, 41003);
+        h.connect(4, 41004);
+        h.with_rating_range(3, &u[2], 1, 100.0);
+        let m = matches(&h.unranked(4, &u[3]));
+        assert_eq!(m.len(), 1);
+        assert_eq!(pair_of(&m[0]), pair_key(u[2].uid, u[3].uid));
+    }
+
+    #[test]
+    fn ranked_ignores_a_rating_range() {
+        let mut h = Harness::new(default_rules());
+        let u = h.rated(&[1400.0, 1500.0]);
+        for c in 1..=2 {
+            h.connect(c, 41000 + c as u16);
+        }
+        // 100 apart, inside Ranked's own band: a range of 50 changes nothing.
+        h.with_rating_range(1, &u[0], 0, 50.0);
+        let m = matches(&h.with_rating_range(2, &u[1], 0, 50.0));
+        assert_eq!(m.len(), 1);
     }
 
     #[test]

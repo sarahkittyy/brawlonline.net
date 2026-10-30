@@ -393,3 +393,11 @@ class OnlineBackend:
         code = user_json.get("connectCode") or (me or {}).get("connectCode", "")
         return OnlineUser(email=email, password=password, display_name=display_name, uid=uid,
                           connect_code=code, session_token=token, user_json=user_json)
+
+    def set_rating(self, user: OnlineUser, rating: float, sets_played: int) -> None:
+        """The user's Ranked rating and rated sets (``ratings``), as if they had played them. mm
+        reads both for every ticket."""
+        self._sql(self.database_url,
+                  f"INSERT INTO ratings (uid, rating, sets_played) VALUES ('{user.uid}', {float(rating)}, "
+                  f"{int(sets_played)}) ON CONFLICT (uid) DO UPDATE SET rating = EXCLUDED.rating, "
+                  "sets_played = EXCLUDED.sets_played")
