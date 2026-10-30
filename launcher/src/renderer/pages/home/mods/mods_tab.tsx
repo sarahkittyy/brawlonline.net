@@ -306,7 +306,21 @@ export const ModsTab = React.memo(function ModsTab() {
 
   const editingGameCube = state?.builds.find((b) => b.id === editingId)?.platform === "gamecube";
 
-  const onImportSave = async (from: "file" | "folder") => {
+  const importOrConfirm = async (source: string) => {
+    // A save the game has already is replaced only once the player says so (it is kept aside).
+    if (saveInfo && typeof saveInfo === "object" && saveInfo.files > 0) {
+      setReplacing({ source, current: saveInfo });
+      return;
+    }
+    await runImport(source);
+  };
+
+  const onImportSave = async (from: "file" | "folder" | "own") => {
+    const own = from === "own" && saveInfo && typeof saveInfo === "object" ? saveInfo.ownDolphin : null;
+    if (own) {
+      await importOrConfirm(own.folder);
+      return;
+    }
     const filter = editingGameCube
       ? { name: Messages.gcSaveFileFilter(), extensions: ["gci", "raw", "gcp"] }
       : { name: Messages.saveFileFilter(), extensions: ["bin"] };
@@ -314,15 +328,9 @@ export const ModsTab = React.memo(function ModsTab() {
       from === "file" ? { properties: ["openFile"], filters: [filter] } : { properties: ["openDirectory"] },
     );
     const source = result.canceled ? null : result.filePaths[0];
-    if (!source) {
-      return;
+    if (source) {
+      await importOrConfirm(source);
     }
-    // A save the game has already is replaced only once the player says so (it is kept aside).
-    if (saveInfo && typeof saveInfo === "object" && saveInfo.files > 0) {
-      setReplacing({ source, current: saveInfo });
-      return;
-    }
-    await runImport(source);
   };
 
   const onRequest = (request: ModRoomRequest) => {

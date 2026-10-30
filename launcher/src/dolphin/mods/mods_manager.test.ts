@@ -105,6 +105,9 @@ function manager(
     async () => "DolphinTool",
     async () => room,
     async () => "card",
+    undefined,
+    // The player's own Dolphin: never this machine's.
+    () => [path.join(tmp, "own Dolphin")],
   );
   return { mods, builds: () => settings.modBuilds as ModBuild[], settings, launches, closeAll };
 }
@@ -204,6 +207,28 @@ describe("a new Wii game's save", () => {
     expect(cobalt.hash).toBe(hash);
     expect(await readFile(path.join(store(hash), "autosv0.bin"), "utf8")).toBe("from rooms");
     expect(await readdir(store(fresh.hash!)).catch(() => [])).toEqual([]);
+  });
+
+  it("starts a plain disc from the save in the player's own Dolphin, not Brawl (bug report #193)", async () => {
+    const TVC = "0001000053544b45";
+    const own = path.join(tmp, "own Dolphin", "Wii", "title", "00010000");
+    await mkdir(path.join(own, "53544b45", "data"), { recursive: true });
+    await writeFile(path.join(own, "53544b45", "data", "save.dat"), "everyone unlocked");
+    await mkdir(path.join(own, "52534245", "data"), { recursive: true });
+    await writeFile(path.join(own, "52534245", "data", "autosv0.bin"), "NoTap");
+    // (The mocked disc check gives both discs one hash: one list each.)
+    const brawlList = manager([await newBuild("brawl", {})]);
+    await brawlList.mods.hashBuild("brawl");
+    expect(await readdir(store(brawlList.builds()[0].hash!)).catch(() => [])).toEqual([]);
+    const { mods, builds } = manager([await newBuild("tvc", { gameId: "STKE08", titleId: TVC })]);
+    await mods.hashBuild("tvc");
+    const [tvc] = builds();
+    const tvcStore = titleDataDir(saveStoreDir(path.join(tmp, "netplay", "User"), tvc.hash!), TVC);
+    expect(await readFile(path.join(tvcStore, "save.dat"), "utf8")).toBe("everyone unlocked");
+    // The edit window offers it only while the store's save is another one.
+    expect((await mods.saveInfo("tvc"))?.ownDolphin).toBeNull();
+    await writeFile(path.join(tvcStore, "save.dat"), "new save from a room");
+    expect((await mods.saveInfo("tvc"))?.ownDolphin?.folder).toBe(path.join(own, "53544b45", "data"));
   });
 
   it("never starts from P+'s save (a card in the netplay User folder)", async () => {
