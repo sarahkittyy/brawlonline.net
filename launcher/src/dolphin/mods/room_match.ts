@@ -3,7 +3,8 @@
  * shows its disc's hash and its SD card's: a different disc keeps the player out (a disc cannot be
  * sent), a different SD card does not (Dolphin gets the host's before the join, with the player's
  * consent). A room from an older launcher has no parts: then only a game with its exact build hash
- * plays it.
+ * plays it. A room of the disc alone (no launcher, no card) is played with the disc of any of the
+ * player's games on it (`discOnly`).
  */
 
 import { BRAWL_NTSC_U_DISC } from "../brawl_disc";
@@ -28,14 +29,21 @@ export type RoomMatch = {
   sd: PartMatch | null;
   /** The room says its parts (a launcher from before them does not). */
   hasParts: boolean;
+  /** The room plays the disc alone, and the player has it only in `build`, with a launcher or an
+   * SD card: joined with that disc alone (the launcher adds it as its own game, `ModsManager`). */
+  discOnly?: boolean;
 };
+
+/** The build hash of a disc played alone, no launcher and no SD card (`combineBuildHash`), by the
+ * disc's part: the main process's, for a room to tell it plays the plain disc. */
+export type DiscAloneHash = (disc: string) => string | undefined;
 
 const hasCard = (sd: string | undefined | null) => !!sd;
 
 /** The player's game for a room: the exact build first, then the same disc with the same card,
  * then the same disc with a card that differs, then the same disc at all, then the same game
  * (another revision, another dump: the one to fix). */
-export function matchRoom(room: ModRoomBuild, builds: ModBuild[]): RoomMatch {
+export function matchRoom(room: ModRoomBuild, builds: ModBuild[], discAlone?: DiscAloneHash): RoomMatch {
   const exact = builds.find((b) => b.hash === room.hash) ?? null;
   if (!room.disc) {
     return {
@@ -62,6 +70,12 @@ export function matchRoom(room: ModRoomBuild, builds: ModBuild[]): RoomMatch {
     sameDisc.find((b) => roomCard === !!b.sdPath) ??
     sameDisc[0] ??
     null;
+  // A room of the plain disc, and the player's games on it all have a card or a launcher (Brawl
+  // Online's P+ is on every player's Brawl disc): its disc alone plays the room, no card to turn
+  // off by hand (Sarah's board, 2026-10-30: "if there's no sd card, can't we just turn it off?").
+  if (best && !roomCard && best.hash !== room.hash && discAlone?.(room.disc) === room.hash) {
+    return { build: best, joinable: true, disc: "same", sd: null, hasParts: true, discOnly: true };
+  }
   if (best) {
     const card = !!best.sdPath;
     let sd: PartMatch | null = null;

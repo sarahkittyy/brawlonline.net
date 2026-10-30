@@ -192,8 +192,8 @@ export const ModsTab = React.memo(function ModsTab() {
   );
 
   // Joins a room; one whose SD card differs comes back to ask first (Dolphin starts on Yes).
-  const joinRoom = async (buildId: string, code: string, sdSync?: ModsSdChoice) => {
-    const result = await modsService.join({ buildId, code, uid: uid ?? undefined, sdSync });
+  const joinRoom = async (buildId: string, code: string, sdSync?: ModsSdChoice, discOnly?: boolean) => {
+    const result = await modsService.join({ buildId, code, uid: uid ?? undefined, sdSync, discOnly });
     if (result.outcome === "sd-card") {
       setSdAsk({ buildId: result.buildId, code: result.code, check: result.check, roomName: result.roomName });
     }
@@ -426,7 +426,7 @@ export const ModsTab = React.memo(function ModsTab() {
         onHost={(build, isPublic) =>
           void start(build, () => modsService.host({ buildId: build.id, public: isPublic, uid: uid ?? undefined }))
         }
-        onJoin={(build, code) => void start(build, () => joinRoom(build.id, code))}
+        onJoin={(build, code, discOnly) => void start(build, () => joinRoom(build.id, code, undefined, discOnly))}
         onJoinCode={(code) => void joinCode(code)}
         onMissingGame={(name, hash) => setMissing({ name, hash })}
         // The room's part that differs: the game's edit window, that field pulsing gold.

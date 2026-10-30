@@ -436,6 +436,35 @@ describe("Brawl Online's own Project+", () => {
     await m.closeAll();
   });
 
+  it("plays a room of the plain Brawl disc with its disc alone, added as its own game", async () => {
+    // Sarah's board, 2026-10-30: a plain Brawl room showed "SD card: - x" to a player whose only
+    // game on the disc was P+ ("if there's no sd card, can't we just turn it off?").
+    const iso = await installPPlus();
+    const hash = combineBuildHash({ disc: BRAWL_NTSC_U_DISC, launcher: null, sd: false });
+    const room: PublicModRoom = {
+      code: "BKSD",
+      build: { hash, name: "Super Smash Bros. Brawl", disc: BRAWL_NTSC_U_DISC, discLabel: "RSBE01", sd: "" },
+      hostName: "ANGE",
+      players: 1,
+      open: 4,
+    };
+    const m = manager([], { modBuilds: [], settings: { isoPath: iso } }, room);
+    const [pplus] = await refreshed(m);
+    expect(m.mods.getState().discAlone).toEqual({ [BRAWL_NTSC_U_DISC]: hash });
+    discIdentity.mockClear();
+    expect(await m.mods.joinByCode({ uid: "u", code: "BKSD" })).toEqual({ outcome: "joining" });
+    const plain = m.builds().find((b) => !b.builtIn)!;
+    expect(plain).toMatchObject({ discPath: iso, launcherPath: null, sdPath: null, hash, gameId: "RSBE01" });
+    expect(m.launches).toEqual([expect.objectContaining({ join: "BKSD", build: expect.objectContaining({ hash }) })]);
+    // The disc's hash was P+'s: not read again.
+    expect(discIdentity).not.toHaveBeenCalled();
+    await m.closeAll();
+    // The next join plays it with that game, not another copy.
+    await m.mods.join({ buildId: pplus.id, code: "BKSD", uid: "u", discOnly: true });
+    expect(m.builds()).toHaveLength(2);
+    await m.closeAll();
+  });
+
   it("leaves another game's overwrite as the player chose", async () => {
     const iso = await installPPlus();
     const rex: ModBuild = {

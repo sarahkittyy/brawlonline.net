@@ -72,7 +72,8 @@ export type ModsViewProps = {
   /** The game's Codes dialog (docs/design/room-codes.md). */
   onCodes?: (build: ModBuild) => void;
   onHost: (build: ModBuild, isPublic: boolean) => void;
-  onJoin: (build: ModBuild, code: string) => void;
+  /** `discOnly`: the room plays `build`'s disc alone (room_match.ts). */
+  onJoin: (build: ModBuild, code: string, discOnly?: boolean) => void;
   /** A room code typed by the public rooms (its game is looked up). */
   onJoinCode: (code: string) => void;
   /** A public room whose game the player does not have. */
@@ -165,6 +166,7 @@ export const ModsView = (props: ModsViewProps) => {
             rooms={props.publicRooms}
             ownCode={status?.room?.code ?? null}
             builds={state?.builds ?? []}
+            discAlone={state?.discAlone}
             disabled={!!state?.running || props.startingBuildId !== null}
             onJoin={props.onJoin}
             onJoinCode={props.onJoinCode}
@@ -403,6 +405,7 @@ const PublicRoomsBlock = ({
   rooms,
   ownCode,
   builds,
+  discAlone,
   disabled,
   onJoin,
   onJoinCode,
@@ -414,8 +417,10 @@ const PublicRoomsBlock = ({
   /** The room this player is in: listed, marked as theirs. */
   ownCode: string | null;
   builds: ModBuild[];
+  /** The build hash of each of the player's discs played alone (ModsState.discAlone). */
+  discAlone?: Record<string, string>;
   disabled: boolean;
-  onJoin: (build: ModBuild, code: string) => void;
+  onJoin: (build: ModBuild, code: string, discOnly?: boolean) => void;
   onJoinCode: (code: string) => void;
   onMissingGame: (name: string, hash: string) => void;
   onFixBuild: (build: ModBuild, part: "disc" | "sd") => void;
@@ -444,7 +449,7 @@ const PublicRoomsBlock = ({
     content = (
       <ul className={styles.roomList}>
         {listed.map((room) => {
-          const match = matchRoom(room.build, builds);
+          const match = matchRoom(room.build, builds, (disc) => discAlone?.[disc]);
           const build = match.joinable ? match.build : null;
           const label = match.hasParts
             ? room.build.name
@@ -466,7 +471,7 @@ const PublicRoomsBlock = ({
                   own
                     ? Messages.yourRoomTooltip()
                     : build
-                    ? Messages.joinPublicTooltip(build.name)
+                    ? Messages.joinPublicTooltip(match.discOnly ? room.build.name : build.name)
                     : match.hasParts && match.disc === "wrong"
                     ? Messages.discDiffers(room.build.discLabel)
                     : match.hasParts && match.sd === "wrong"
@@ -487,7 +492,11 @@ const PublicRoomsBlock = ({
                       return;
                     }
                     if (build) {
-                      onJoin(build, room.code);
+                      if (match.discOnly) {
+                        onJoin(build, room.code, true);
+                      } else {
+                        onJoin(build, room.code);
+                      }
                     } else if (match.build && match.hasParts) {
                       fix(match.disc === "wrong" ? "disc" : "sd")();
                     } else {

@@ -186,6 +186,9 @@ export function roomBuild(build: ModBuild): ModRoomBuild {
   return out;
 }
 
+/** `matchRoom`'s `discAlone`: the build hash of a disc played alone. */
+const discAloneHash = (disc: string) => combineBuildHash({ disc, launcher: null, sd: false });
+
 export class ModsManager {
   private running = false;
   private status: ModRoomStatus | null = null;
@@ -239,7 +242,7 @@ export class ModsManager {
     // hash of today's launcher.
     await this.rehashing;
     await this.hashGamesOf(room.build);
-    const match = matchRoom(room.build, this.builds());
+    const match = matchRoom(room.build, this.builds(), discAloneHash);
     const build = match.joinable ? match.build : null;
     if (!build) {
       // A game of the room's with a part that differs is named, not said to be missing (bug
@@ -267,7 +270,12 @@ export class ModsManager {
         closest,
       };
     }
-    return await this.join({ buildId: build.id, code, uid: options.uid });
+    return await this.join({
+      buildId: build.id,
+      code,
+      uid: options.uid,
+      ...(match.discOnly ? { discOnly: true } : {}),
+    });
   }
 
   /**
@@ -305,6 +313,9 @@ export class ModsManager {
       controllers: this.controllers,
       hashing: Object.fromEntries(this.hashProgress),
       runningBuildId: this.running ? this.runningBuildId : null,
+      discAlone: Object.fromEntries(
+        this.builds().flatMap((b) => (b.parts ? [[b.parts.disc, discAloneHash(b.parts.disc)]] : [])),
+      ),
     };
   }
 
@@ -687,7 +698,9 @@ export class ModsManager {
     if (!code) {
       throw new Error("Enter the room's code.");
     }
-    const build = await this.hashBuild(options.buildId);
+    const build = await this.hashBuild(
+      options.discOnly ? (await this.discAloneBuild(options.buildId)).id : options.buildId,
+    );
     // A card that differs from the room's: the player says yes before Dolphin starts.
     if (!options.sdSync) {
       const { check, roomName } = await this.checkCard(build, code, options.uid);
@@ -709,6 +722,36 @@ export class ModsManager {
       ...(sdSync ? { sd_sync: sdSync } : {}),
     });
     return { outcome: "joining" };
+  }
+
+  /** The player's game of `sourceId`'s disc alone, no launcher and no SD card, for a room of the
+   * plain disc (room_match.ts `discOnly`): added to the list the first time, with the disc's hash
+   * the source already has (the disc is not read again). */
+  private async discAloneBuild(sourceId: string): Promise<ModBuild> {
+    const source = this.findBuild(sourceId);
+    const same = this.builds().find((b) => b.discPath === source.discPath && !b.launcherPath && !b.sdPath);
+    if (same) {
+      return same;
+    }
+    const base = { discPath: source.discPath, launcherPath: null, sdPath: null, gameTitle: source.gameTitle ?? null };
+    const known = source.parts && source.hashKey?.startsWith(`${BUILD_HASH_VERSION}|`);
+    const parts = known ? { disc: source.parts!.disc, launcher: null, sd: false, sdCard: null } : null;
+    const build: ModBuild = {
+      id: randomUUID(),
+      name: autoName({ ...base, parts }),
+      autoName: true,
+      ...base,
+      gameId: source.gameId,
+      revision: source.revision,
+      platform: source.platform,
+      titleId: source.titleId,
+      parts,
+      hash: parts ? combineBuildHash(parts) : null,
+      hashKey: parts ? await buildHashKey(base) : null,
+    };
+    log.info(`a room plays ${source.name}'s disc alone: added ${build.name} (${build.discPath})`);
+    await this.saveBuilds([...this.builds(), build]);
+    return build;
   }
 
   async request(request: ModRoomRequest): Promise<void> {
