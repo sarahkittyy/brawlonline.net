@@ -668,14 +668,26 @@ void CoreTimingManager::Throttle(const s64 target_cycle)
 
   UpdateVISkip(time, target_time);
 
-  if (target_time > time)
+  // The paced sleep (the first throttle after a presented copy) with a rollback session's lead.
+  const bool paced_lead = !already_throttled && m_paced_sleep_lead && PresentPacingActive();
+  if (!paced_lead && target_time > time)
     m_throttle_sleep += target_time - time;
   {
     Rollback::FrameProfile::Scope sleep_scope{Rollback::FrameProfile::AddThrottle};
-    SleepUntil(target_time);
+    if (paced_lead)
+    {
+      // The CPU's slack is what it slept: a rollback run in the rest of the sleep is not slack.
+      const TimePoint woke = std::min(PacedSleepUntil(target_time), target_time);
+      if (woke > time)
+        m_throttle_sleep += woke - time;
+    }
+    else
+    {
+      SleepUntil(target_time);
+    }
   }
   if (Rollback::PresentStats::PresentTraceEnabled())
-    Rollback::PresentStats::TraceThrottle(target_time, Clock::now());
+    Rollback::PresentStats::TraceThrottle(time, target_time, Clock::now());
 }
 
 bool CoreTimingManager::PresentPacingActive() const
@@ -691,6 +703,31 @@ void CoreTimingManager::OnPresentedXFBCopy()
 {
   if (PresentPacingActive())
     m_throttled_after_presentation.store(false, std::memory_order_relaxed);
+}
+
+// Until `target` less the lead provider's lead (SetPacedSleepLead), in slices: the lead is asked
+// again as remote inputs come in during the sleep. Returns when it woke.
+TimePoint CoreTimingManager::PacedSleepUntil(TimePoint target)
+{
+  // The slices are plain OS sleeps: the precision timer spins the last ~1 ms of every sleep
+  // (Common::PrecisionTimer), so 1 ms slices of it spun the whole sleep. The last few ms, past
+  // what a 1 ms OS sleep may overshoot, go to SleepUntil as one sleep, as without a lead.
+  constexpr auto PACED_SLEEP_SLICE = std::chrono::milliseconds(1);
+  constexpr auto PACED_SLEEP_FINAL = std::chrono::milliseconds(3);
+  for (;;)
+  {
+    const TimePoint wake = target - m_paced_sleep_lead();
+    const TimePoint now = Clock::now();
+    if (now >= wake)
+      return now;
+    if (wake - now <= PACED_SLEEP_FINAL)
+    {
+      SleepUntil(wake);
+      continue;
+    }
+    std::this_thread::sleep_for(PACED_SLEEP_SLICE);
+    m_system.GetPerfMetrics().CountThrottleSleep(Clock::now() - now);
+  }
 }
 
 void CoreTimingManager::UpdateSpeedLimit(s64 cycle, double new_speed)

@@ -130,11 +130,16 @@ GpuRamWriteStats GetGpuRamWrites();
 // PPR_PRESENT_LOG=<file>: one line per present with its timeline, for the present cadence
 // (deterministic dual core): when the CPU thread preprocessed the frame's XFB copy, how long it
 // waited for the GPU thread and how many rollback bursts it ran since the previous copy, when the
-// GPU thread started the swap, the presenter's target time and when the present returned.
+// GPU thread started the swap, the presenter's target time and when the present returned. Also
+// when the last throttle that slept began, and the last end-of-render token (Brawl's draw sync
+// 0xFFE0, right after renderNormal) before the copy: where the frame's one sleep falls against
+// the end of the render whose picture the next copy holds.
 bool PresentTraceEnabled();
 void TraceCpuWaitForGpu(double ms);            // CPU thread
 void TraceRollbackBurstEnd(double behind_ms);  // CPU thread: the presented frame resumed this late
-void TraceThrottle(TimePoint target, TimePoint woke);  // CPU thread: a throttle that slept
+// CPU thread: a throttle that slept from `start`
+void TraceThrottle(TimePoint start, TimePoint target, TimePoint woke);
+void TraceToken(u16 token);                    // CPU thread (FIFO preprocessor): a PE token
 void TraceSwapStart();                         // GPU thread
 void TracePresentTarget(TimePoint intended, TimePoint target);  // GPU thread, before the sleep
 }  // namespace Rollback::PresentStats

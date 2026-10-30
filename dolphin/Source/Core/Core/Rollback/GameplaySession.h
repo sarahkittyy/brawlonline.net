@@ -66,7 +66,10 @@ constexpr int MAX_INPUT_DELAY = 9;
 // GekkoNet reads packets and answers its pings once per frame, on each side, so its round trip is
 // a frame longer on average, and so is the wait for a remote input (half a frame each way). The
 // delay is picked from the control channel's round trip plus that frame (prod: 90 ms before the
-// game read 103-125 ms in it, 30 ms read 46-67 ms).
+// game read 103-125 ms in it, 30 ms read 46-67 ms). Since bug report #195 a P+ game reads its
+// packets during the throttle's sleep too (GameplaySession's PacedSleepLead), so the ping it shows
+// is about half a frame lower (harness, 80 ms link: 104 -> 97 ms); the delays it picks are
+// unchanged.
 constexpr double GAME_POLL_RTT_MS = 1000.0 * 1001.0 / 60000.0;
 constexpr double GameRoundTrip(double control_rtt_ms)
 {
