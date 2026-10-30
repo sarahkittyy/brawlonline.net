@@ -352,6 +352,44 @@ describe("ModsView", () => {
     expect(p.onFixBuild).toHaveBeenLastCalledWith(rex, "disc");
   });
 
+  it("joins a room of the plain disc with the disc of a game with a card, no SD card chip", () => {
+    // Sarah's board, 2026-10-30: "SD card: - x" on a plain Brawl room for a player with only P+.
+    const disc = "d".repeat(40);
+    const plainHash = "a".repeat(64);
+    const pplus: ModBuild = {
+      ...minus,
+      id: "pplus",
+      name: "Project+",
+      builtIn: true,
+      gameId: "RSBE01",
+      revision: 1,
+      parts: { disc, launcher: "l".repeat(64), sd: true, sdCard: "6".repeat(64) },
+    };
+    const p = props(
+      { builds: [pplus], running: false, status: null, discAlone: { [disc]: plainHash } },
+      {
+        publicRooms: {
+          kind: "ready",
+          rooms: [
+            {
+              code: "PLAN",
+              build: { hash: plainHash, name: "Super Smash Bros. Brawl (USA)", disc, discLabel: "RSBE01", sd: "" },
+              hostName: "Strawn",
+              players: 3,
+              open: 4,
+            },
+          ],
+        },
+      },
+    );
+    const { getByText } = render(<ModsView {...p} />);
+    const row = getByText(Messages.roomHost("Strawn")).closest("button") as HTMLButtonElement;
+    expect(row.textContent).not.toContain(Messages.sdPart());
+    expect(row.textContent).toContain(Messages.join());
+    fireEvent.click(row);
+    expect(p.onJoin).toHaveBeenCalledWith(pplus, "PLAN", true);
+  });
+
   it("asks before downloading the host's SD card, and shows the download", () => {
     const status = room(2);
     status.session = {

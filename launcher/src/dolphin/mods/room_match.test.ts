@@ -89,6 +89,30 @@ describe("matchRoom", () => {
     expect(m.build?.id).toBe("vanilla");
   });
 
+  it("plays a room of the plain disc with the disc of a game with a card (Brawl Online's P+)", () => {
+    const plain = { ...room, hash: "a".repeat(64), sd: "" };
+    const discAlone = (disc: string) => (disc === DISC ? plain.hash : undefined);
+    const pplus = build("pplus", {
+      builtIn: true,
+      parts: { disc: DISC, launcher: "l".repeat(64), sd: true, sdCard: CARD },
+    });
+    const m = matchRoom(plain, [pplus], discAlone);
+    expect(m).toMatchObject({ build: { id: "pplus" }, joinable: true, disc: "same", sd: null, discOnly: true });
+    // The plain disc in the list plays it itself.
+    const vanilla = build("vanilla", {
+      hash: plain.hash,
+      sdPath: null,
+      parts: { disc: DISC, launcher: null, sd: false, sdCard: null },
+    });
+    expect(matchRoom(plain, [pplus, vanilla], discAlone)).toMatchObject({ build: { id: "vanilla" }, joinable: true });
+    expect(matchRoom(plain, [pplus, vanilla], discAlone).discOnly).toBeUndefined();
+    // A room of a mod's launcher without a card is not the disc alone.
+    expect(matchRoom({ ...plain, hash: "b".repeat(64) }, [pplus], discAlone)).toMatchObject({
+      joinable: false,
+      sd: "wrong",
+    });
+  });
+
   it("compares build hashes for a room from an older launcher", () => {
     const rex = build("rex");
     expect(matchRoom({ hash: rex.hash!, name: "REX" }, [rex])).toMatchObject({ joinable: true, hasParts: false });

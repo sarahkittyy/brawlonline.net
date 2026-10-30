@@ -243,6 +243,9 @@ export type ModsState = {
   hashing: Record<string, number | null>;
   /** The game the running room plays (absent from an older launcher's state). */
   runningBuildId?: string | null;
+  /** The build hash of each of the player's discs played alone (`matchRoom`'s `discAlone`), by
+   * the disc's part. */
+  discAlone?: Record<string, string>;
 };
 
 export type ModsEvent =
@@ -289,7 +292,15 @@ export type ModsSdChoice = "yes" | "overwrite";
 
 /** `sdSync`: the player's answer to the SD card question, once asked; without it a join whose card
  * differs answers `sd-card` instead of starting Dolphin. `uid`: the account that joins. */
-export type ModsJoinOptions = { buildId: string; code: string; uid?: string; sdSync?: ModsSdChoice };
+/** `discOnly`: the room plays the disc alone (room_match.ts), joined with `buildId`'s disc as its
+ * own game. */
+export type ModsJoinOptions = {
+  buildId: string;
+  code: string;
+  uid?: string;
+  sdSync?: ModsSdChoice;
+  discOnly?: boolean;
+};
 export type ModsJoinResult =
   | { outcome: "joining" }
   /** The room's SD card differs: ask the player, then join again with `sdSync`. `roomName`: the
