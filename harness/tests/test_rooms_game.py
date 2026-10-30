@@ -1812,12 +1812,67 @@ def test_room_player_quits_with_lras(backend: OnlineBackend, dolphin: Callable[.
         assert by_port[0]["place"] == 2, m
 
 
+# The plugin's own statics, from the link map beside the plugin under test (PPOnlineMain.map):
+# the plugin module (REL 20560) and its .bss as the OS module list has it once linked.
+def _plugin_bss_symbol(g: Game, name: str) -> int:
+    from test_online_game import PLUGIN
+    lines = (PLUGIN.parent / "PPOnlineMain.map").read_text(errors="replace").splitlines()
+    section, off = "", None
+    for line in lines:
+        f = line.split()
+        if len(f) == 5 and f[4].startswith("."):
+            section = f[4]
+        elif len(f) == 5 and f[4] == name:
+            assert section == ".bss", (name, section)
+            off = int(f[0], 16)
+    assert off is not None, name
+    import struct
+    p, seen = _u32(g, 0x800030C8), set()
+    while p and p not in seen:
+        seen.add(p)
+        h = g.c.read_mem(p, 0x40)
+        mid, nxt, _prv, nsec, secoff = struct.unpack_from(">5I", h, 0)
+        bss_size = struct.unpack_from(">I", h, 0x20)[0]
+        if mid == 20560:
+            secs = g.c.read_mem(secoff, 8 * nsec)
+            for i in range(nsec):
+                a, size = struct.unpack_from(">II", secs, 8 * i)
+                if size == bss_size and a and not a & 1:
+                    return a + off
+            raise AssertionError("no .bss in the plugin module")
+        p = nxt
+    raise AssertionError("no plugin module")
+
+
+def name_places(g: Game) -> dict[int, float]:
+    """The places the match HUD keeps for the names under the damage (match_hud.cpp s_restX),
+    by port, for the ports it has one for."""
+    import struct
+    rest = g.c.read_mem(_plugin_bss_symbol(g, "s_rest__8MatchHud"), 1)[0]
+    xs = struct.unpack(">4f", g.c.read_mem(_plugin_bss_symbol(g, "s_restX__8MatchHud"), 16))
+    return {p: xs[p] for p in range(4) if rest >> p & 1}
+
+
+def damage_digits_x(g: Game, port: int) -> float | None:
+    """A port's damage digits' x as the match HUD reads it (match_hud.cpp livePanelX), 640 wide."""
+    import struct
+    try:
+        ifp = _u32(g, _u32(g, 0x805A02D0) + 0x4C + 4 * port)
+        mtx = _u32(g, _u32(g, _u32(g, ifp + 0x30) + 0xC) + 0xEC)
+        return 279.7 + struct.unpack(">f", g.c.read_mem(mtx + 0xC, 4))[0] * 7.688
+    except Exception:
+        return None
+
+
 def test_room_runback_restarts_for_everyone(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
                                             gpu_backend: str) -> None:
     """A free-for-all of three without a set: P2 pauses and holds L+R+A+Y+START (P+'s salty
     runback). The same match starts again for all three (the user's, 2026-10-13), not only P2
     leaving as after a plain quit: the session sets it up on every machine and the room's game
-    goes on in it. The runback's match is the same game on all three (no checksum differs)."""
+    goes on in it. The runback's match is the same game on all three (no checksum differs).
+    P3 walks off just before the pause, so the runback comes while P3's damage digits are off to
+    the side: the names under the damage are still under each panel in the runback's match (bug
+    report #198: a name at the left of the screen for the whole match)."""
     import secrets
     from ppharness.client import PadInput
     test = "room-runback-three"
@@ -1855,12 +1910,32 @@ def test_room_runback_restarts_for_everyone(backend: OnlineBackend, dolphin: Cal
     first = st[0]["match_index"]
     setup = B.read_match_setup(a.c.read_mem)
     time.sleep(4)
+    places = [name_places(g) for g in gs]
+    print("name places, game 1:", places)
+    def same(x: dict, y: dict) -> bool:
+        return sorted(x) == sorted(y) and all(abs(x[k] - y[k]) < 0.5 for k in x)
+    assert all(sorted(pl) == [0, 1, 2] and same(pl, places[0]) for pl in places), places
 
     walk = [PadInput(main=(40, 128), hold=7), PadInput(main=(216, 128), hold=7)]
     q = gs[1]
-    for g in (gs[0], gs[2]):
-        g.c.pad_script(0, walk * 60)
+    # P3 walks off; P2 pauses as soon as P3's damage digits have left their place (they fly off
+    # at the KO and come back at the respawn): bug #198's salty runback.
+    from ppharness import flows as F
+
+    def p3_stocks() -> int:
+        return next((p.stocks for p in B.read_players(gs[2].c.read_mem) if p.port == 2), 4)
+
+    def p3_digits_away() -> bool:
+        x = damage_digits_x(q, 2)
+        return x is not None and abs(x - places[0][2]) > 20
+    gs[0].c.pad_script(0, walk * 60)
+    F.fight([F.Seat(gs[2].c, 2, 0, gs[2].name)], 60 * 20, mode="selfdestruct", seed="rb198",
+            stop=p3_digits_away)
     q.steps("hold START 90", "wait 20")
+    assert p3_stocks() == 3, "P3 did not walk off"
+    off = damage_digits_x(q, 2)
+    print(f"P3's damage digits at the pause: {off} (its name's place {places[0][2]})")
+    assert off is not None and abs(off - places[0][2]) > 20, ("paused after P3's respawn", off)
     assert online_set.gstatus(q.c)["phase"] == "running"
     # Held past the session's end (the game stays paused until then), not into the next match.
     q.steps("hold L+R+A+Y+START 90")
@@ -1870,6 +1945,9 @@ def test_room_runback_restarts_for_everyone(backend: OnlineBackend, dolphin: Cal
     for g in gs:
         g.c.pad_script(0, walk * 60)
     time.sleep(6)
+    again = [name_places(g) for g in gs]
+    print("name places, the runback's match:", again)
+    assert all(same(x, y) for x, y in zip(again, places)), (again, places)
     for g in gs:
         g.shot("01-runback-for-everyone")
         sc = g.debug_scratch()[10]
