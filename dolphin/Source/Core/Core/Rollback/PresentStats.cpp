@@ -69,12 +69,18 @@ struct CpuStamp
   TimePoint copy;
   TimePoint due;  // the throttle's host time for the copy's emulated ticks
   TimePoint throttle_target, throttle_woke;  // the last throttle that slept before the copy
+  TimePoint throttle_start;                  // and when it began
   int throttles = 0;                         // throttles that slept since the previous copy
   TimePoint loop_top;                        // the last displayed frame's start before the copy
   double gpu_wait_ms = 0;
   int bursts = 0;
   double burst_behind_ms = 0;
+  TimePoint token;  // the last end-of-render token since the previous copy
+  int tokens = 0;   // end-of-render tokens since the previous copy
 };
+// Brawl's draw sync token after renderNormal (fn_80023C70; docs/gameplay-rollback-status.md
+// Phase 28).
+constexpr u16 END_OF_RENDER_TOKEN = 0xFFE0;
 std::mutex s_trace_mutex;
 std::deque<CpuStamp> s_cpu_stamps;  // XFB copies preprocessed, not yet executed by the GPU thread
 CpuStamp s_cpu_pending;             // CPU thread: since the previous presented XFB copy
@@ -142,6 +148,7 @@ void OnEFBCopyPreprocess(bool to_xfb)
     // A copy without a throttle in between keeps the previous one's.
     s_cpu_pending.throttle_target = last.throttle_target;
     s_cpu_pending.throttle_woke = last.throttle_woke;
+    s_cpu_pending.throttle_start = last.throttle_start;
     s_cpu_pending.loop_top = last.loop_top;
   }
   CopyDecision decision{present, false, {}};
@@ -288,7 +295,7 @@ std::FILE* PresentTraceFile()
     if (f)
     {
       std::fprintf(f, "index copy_ms due_ms throttle_target_ms throttle_woke_ms throttles loop_top_ms gpu_wait_ms bursts burst_behind_ms swap_ms ready_ms "
-                      "intended_ms target_ms done_ms interval_ms\n");
+                      "intended_ms target_ms done_ms interval_ms throttle_start_ms token_ms tokens\n");
     }
     return f;
   }();
@@ -313,13 +320,16 @@ void TracePresent()
     s_trace_origin = c.copy;
   }
   const double interval = s_trace_index ? Ms(done, s_last_done) : 0.0;
-  std::fprintf(f, "%llu %.3f %.3f %.3f %.3f %d %.3f %.3f %d %.3f %.3f %.3f %.3f %.3f %.3f %.3f\n",
+  std::fprintf(f,
+               "%llu %.3f %.3f %.3f %.3f %d %.3f %.3f %d %.3f %.3f %.3f %.3f %.3f %.3f %.3f %.3f "
+               "%.3f %d\n",
                static_cast<unsigned long long>(s_trace_index), Ms(c.copy, s_trace_origin),
                Ms(c.due, c.copy), Ms(c.throttle_target, c.copy), Ms(c.throttle_woke, c.copy),
                c.throttles, Ms(c.loop_top, c.copy), c.gpu_wait_ms, c.bursts, c.burst_behind_ms, Ms(s_swap_start, c.copy),
                s_have_target ? Ms(s_before_sleep, c.copy) : -1.0,
                s_have_target ? Ms(s_intended, c.copy) : -1.0,
-               s_have_target ? Ms(s_target, c.copy) : -1.0, Ms(done, c.copy), interval);
+               s_have_target ? Ms(s_target, c.copy) : -1.0, Ms(done, c.copy), interval,
+               Ms(c.throttle_start, c.copy), c.tokens ? Ms(c.token, c.copy) : 0.0, c.tokens);
   if (++s_trace_index % 600 == 0)
     std::fflush(f);
   s_last_done = done;
@@ -385,11 +395,20 @@ void TraceRollbackBurstEnd(double behind_ms)
   s_cpu_pending.burst_behind_ms = std::max(s_cpu_pending.burst_behind_ms, behind_ms);
 }
 
-void TraceThrottle(TimePoint target, TimePoint woke)
+void TraceThrottle(TimePoint start, TimePoint target, TimePoint woke)
 {
+  s_cpu_pending.throttle_start = start;
   s_cpu_pending.throttle_target = target;
   s_cpu_pending.throttle_woke = woke;
   ++s_cpu_pending.throttles;
+}
+
+void TraceToken(u16 token)
+{
+  if (token != END_OF_RENDER_TOKEN || !PresentTraceEnabled())
+    return;
+  s_cpu_pending.token = Clock::now();
+  ++s_cpu_pending.tokens;
 }
 
 void TraceSwapStart()

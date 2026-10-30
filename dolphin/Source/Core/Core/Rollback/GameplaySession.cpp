@@ -96,6 +96,13 @@ constexpr s64 END_AFTER_GAME_SET = MAX_ROLLBACK_FRAMES + 12;
 constexpr u32 REGION_CHUNK = 4096;
 // While a barrier waits, what each player still lacks is logged this often.
 constexpr auto WAIT_LOG_INTERVAL = std::chrono::seconds(5);
+// The throttle's paced sleep ends early for a rollback (PacedSleepLead) by its frames times a
+// rollback's load and re-runs per frame back (State::burst_ms_per_frame) and a margin. The
+// estimate before the session has measured one, and the weight of each new rollback in the
+// average: MachineSession's (its BoundarySleep, bug report #152).
+constexpr double BURST_MS_PER_FRAME_START = 5.0;
+constexpr double BURST_AVERAGE_WEIGHT = 0.25;
+constexpr double PACED_LEAD_MARGIN_MS = 1.0;
 
 enum class Mode
 {
@@ -584,6 +591,10 @@ struct State
     u64 late = 0, late_after_rollback = 0;
     double late_ms_max = 0;
     u64 stalls = 0;  // updates with no frame to run (waited for the peer)
+    // Paced sleeps that ended early (PacedSleepLead): before a rollback, and their lead; and
+    // those after which the loop top did not roll back.
+    u64 prepaid = 0, lead_unused = 0;
+    double prepaid_lead_ms = 0;
     u64 advances = 0;  // catch-up frames (UpdateTimeSync)
     u64 followed = 0;  // frames run at the speed of a peer that cannot keep full speed
     double peer_fps_sum = 0;  // the peer's frame rate over the followed frames
@@ -606,6 +617,8 @@ struct State
   bool prev_frame_rolled_back = false;
   Clock::time_point burst_t0{};
   bool burst_open = false;
+  double burst_ms_per_frame = BURST_MS_PER_FRAME_START;  // PacedSleepLead's estimate
+  double paced_lead_ms = 0;  // the lead of the paced sleep before the next displayed frame
   // Frame cost profile (Rollback::FrameProfile, docs/gameplay-rollback-status.md "Frame cost
   // profile"): where re-run and presented passes spend their wall-clock time. A pass runs from
   // the end of its loop top (RunFrame) to the next loop top.
@@ -3790,6 +3803,8 @@ void ResetRunStats()
   Core::System::GetInstance().GetCoreTiming().TakeMaxBehindSchedule();
   Rollback::PresentStats::TakeCadence();
   s.burst_open = false;
+  s.burst_ms_per_frame = BURST_MS_PER_FRAME_START;
+  s.paced_lead_ms = 0;
   s.cost_window = s.cost_total = {};
   s.cost_window_first = -1;
   s.cost_pass_open = false;
@@ -3979,6 +3994,41 @@ void PlaybackMute(Core::System& system, bool mute)
   }
 }
 
+// The throttle's paced sleep before the next loop top (CoreTimingManager::SetPacedSleepLead). A
+// rollback's load and re-runs come between that sleep and the frame's XFB copy, and the frame
+// after them keeps its schedule (BeginRollbackBurst), so their time made that frame's copy late:
+// the present hold covered at most 8 ms and the CPU's slack, and 13-28% of presents were screen
+// hitches at 80-100 ms with half the frames rolled back (Phases 23 and 28). The remote inputs
+// that cause it come in during the sleep, but GekkoNet took them only at the loop top. Now the
+// sleep looks at them (gekko_receive, every slice) and, when GekkoNet will roll back
+// (gekko_rollback_frames), ends early by the frames it re-runs times the session's average per
+// frame back, plus a margin: the rollback runs in the sleep, as in MachineSession's BoundarySleep
+// (bug report #152). The local controller of such a frame is read that much earlier; frames
+// without a rollback are unchanged, and a PC with no slack never sleeps. CPU thread.
+// PPR_GPRB_RERUN_IN_SLEEP=0: the whole sleep always (A/B).
+bool RerunInSleep()
+{
+  static const bool on = [] {
+    const char* e = std::getenv("PPR_GPRB_RERUN_IN_SLEEP");
+    return !(e && *e == '0');
+  }();
+  return on;
+}
+
+DT PacedSleepLead()
+{
+  std::lock_guard<std::recursive_timed_mutex> lk(s.mutex);
+  if (s.mode != Mode::Network || s.phase != Phase::Running || !s.gekko || !s.gekko_started)
+    return {};
+  gekko_receive(s.gekko);
+  const int frames = gekko_rollback_frames(s.gekko);
+  if (frames <= 0)
+    return {};
+  const double ms = frames * s.burst_ms_per_frame + PACED_LEAD_MARGIN_MS;
+  s.paced_lead_ms = std::max(s.paced_lead_ms, ms);
+  return std::chrono::duration_cast<DT>(DT_ms(ms));
+}
+
 void EndRunning(Core::System& system, const std::string& reason)
 {
   EiReleaseBatch();
@@ -4003,6 +4053,7 @@ void EndRunning(Core::System& system, const std::string& reason)
   }
   system.GetFifo().SetRollbackSessionDeterminism(false);
   system.GetCoreTiming().SetPresentPacing(false);
+  system.GetCoreTiming().SetPacedSleepLead(nullptr);
   s.resim_pass = false;
   s.end_reason = reason;
   s_health_running.store(false, std::memory_order_relaxed);
@@ -4580,6 +4631,12 @@ std::string NetStatsLine(const State::NetStats& w)
       w.stall_ms, w.stall_ms_max, w.ahead_sum / n, w.frames ? w.ahead_min : 0.0,
       w.frames ? w.ahead_max : 0.0, w.frames ? w.speed_min : 1.0, w.frames ? w.speed_max : 1.0,
       w.advances);
+  if (w.prepaid || w.lead_unused)
+  {
+    line += fmt::format(", rollbacks run in the sleep {} (lead avg {:.2f} ms), early wakes without "
+                        "one {}",
+                        w.prepaid, w.prepaid ? w.prepaid_lead_ms / w.prepaid : 0.0, w.lead_unused);
+  }
   if (w.followed)
   {
     line += fmt::format(", frames at the peer's speed {} (the peer at {:.1f}/s)", w.followed,
@@ -4639,6 +4696,9 @@ void NetStatsFold(State::NetStats& t, const State::NetStats& w)
   t.burst_ms_max = std::max(t.burst_ms_max, w.burst_ms_max);
   t.late_ms_max = std::max(t.late_ms_max, w.late_ms_max);
   t.stalls += w.stalls;
+  t.prepaid += w.prepaid;
+  t.lead_unused += w.lead_unused;
+  t.prepaid_lead_ms += w.prepaid_lead_ms;
   t.advances += w.advances;
   t.wall_ms += w.wall_ms;
   t.stall_ms += w.stall_ms;
@@ -4965,6 +5025,24 @@ void NetStatsOnDisplayedFrame(Core::System& system)
     ++w.bursts;
     w.burst_ms += ms;
     w.burst_ms_max = std::max(w.burst_ms_max, ms);
+    if (s.ops.adv_count > 1)
+    {
+      s.burst_ms_per_frame +=
+          (ms / (s.ops.adv_count - 1) - s.burst_ms_per_frame) * BURST_AVERAGE_WEIGHT;
+    }
+  }
+  // The paced sleep before this frame ended early for a rollback (PacedSleepLead).
+  if (const double lead = std::exchange(s.paced_lead_ms, 0.0); lead > 0)
+  {
+    if (s.ops.adv_count > 1)
+    {
+      ++w.prepaid;
+      w.prepaid_lead_ms += lead;
+    }
+    else
+    {
+      ++w.lead_unused;
+    }
   }
   {
     // The throttle points since the previous displayed frame started: that frame's own.
@@ -5495,8 +5573,12 @@ double FollowTargetGap()
   GekkoNetworkStats st{};
   if (!WorstLink(&st) || st.avg_ping <= 0)
     return 1.0;
-  // GekkoNet's ping is the round trip in game (a frame of polling included, GameRoundTrip).
-  const double one_way_frames = (st.avg_ping / 2.0 + st.jitter) / (FRAME_US / 1000.0);
+  // GekkoNet's ping is the round trip in game, a frame of polling included (GameRoundTrip). Since
+  // bug report #195 this side reads the peer's answer during the throttle's sleep (PacedSleepLead),
+  // so its ping is about half a frame lower: that half frame is added back, as the gap was tuned
+  // with it (this PC is the one that sleeps; the peer it follows cannot keep full speed).
+  const double ping = st.avg_ping + (RerunInSleep() ? GAME_POLL_RTT_MS / 2.0 : 0.0);
+  const double one_way_frames = (ping / 2.0 + st.jitter) / (FRAME_US / 1000.0);
   return std::clamp(one_way_frames - s.input_delay, FOLLOW_TARGET_MIN, FOLLOW_TARGET_MAX);
 }
 
@@ -6343,6 +6425,12 @@ void StartRunning(Core::System& system)
   // deterministic GPU thread on for the session; the menus run without it.
   system.GetFifo().SetRollbackSessionDeterminism(true);
   system.GetCoreTiming().SetPresentPacing(true);
+  if (s.mode == Mode::Network)
+  {
+    system.GetCoreTiming().SetPacedSleepLead(RerunInSleep() ? &PacedSleepLead : nullptr);
+    INFO_LOG_FMT(BRAWLBACK, "gprb: rollbacks run in the throttle's sleep: {}",
+                 RerunInSleep() ? "on" : "off (PPR_GPRB_RERUN_IN_SLEEP=0)");
+  }
   // The local controllers are read on the throttle's schedule (bug report #70).
   SetHostPadsScheduled(s.mode == Mode::Network);
   ResetRunStats();

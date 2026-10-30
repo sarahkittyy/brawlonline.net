@@ -866,9 +866,11 @@ void LoadBPRegPreprocess(u8 reg, u32 value, int cycles_into_future)
     break;
   case BPMEM_PE_TOKEN_ID:
     system.GetPixelEngine().SetToken(newval & 0xffff, false, cycles_into_future);
+    Rollback::PresentStats::TraceToken(newval & 0xffff);
     break;
   case BPMEM_PE_TOKEN_INT_ID:  // Pixel Engine Interrupt Token ID
     system.GetPixelEngine().SetToken(newval & 0xffff, true, cycles_into_future);
+    Rollback::PresentStats::TraceToken(newval & 0xffff);
     break;
   case BPMEM_TRIGGER_EFB_COPY:
   {

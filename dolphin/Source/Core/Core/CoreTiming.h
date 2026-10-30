@@ -217,6 +217,15 @@ public:
   void SetPresentPacing(bool on) { m_pace_on.store(on, std::memory_order_relaxed); }
   bool PresentPacingActive() const;
   void OnPresentedXFBCopy();
+  // With present pacing, a rollback's load and re-runs come between that one sleep and the next
+  // presented copy. A lead provider makes the sleep end that much before its target: it is asked
+  // again every PACED_SLEEP_SLICE while the sleep lasts (remote inputs come in meanwhile) and
+  // returns the expected cost of the rollback the next loop top will run, or zero. The frame after
+  // the rollback keeps its schedule (BeginRollbackBurst), so a rollback that fits into the sleep
+  // no longer makes that frame late. CPU thread; nullptr: the whole sleep. GameplaySession sets it
+  // while a network session runs.
+  using PacedSleepLead = DT (*)();
+  void SetPacedSleepLead(PacedSleepLead lead) { m_paced_sleep_lead = lead; }
   // Gameplay-only rollback leaves the sound system out of the snapshot, so a sound keeps playing
   // through a rollback. With this mode set (for the whole session), the audio clock waits for the
   // resimulated passes: the session adds the fields each one takes to a pause that the audio DMA
@@ -325,6 +334,7 @@ private:
   bool m_config_present_pacing = false;
 
   std::atomic<bool> m_pace_on{false};  // SetPresentPacing
+  PacedSleepLead m_paced_sleep_lead = nullptr;
 
   s64 m_throttle_reference_cycle = 0;
   TimePoint m_throttle_reference_time = Clock::now();
@@ -350,6 +360,7 @@ private:
   void ResetThrottle(s64 cycle);
   TimePoint CalculateTargetHostTimeInternal(s64 target_cycle);
   void UpdateVISkip(TimePoint current_time, TimePoint target_time);
+  TimePoint PacedSleepUntil(TimePoint target);
 
   int DowncountToCycles(int downcount) const;
   int CyclesToDowncount(int cycles) const;
