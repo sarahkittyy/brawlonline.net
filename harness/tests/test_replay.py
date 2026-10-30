@@ -745,6 +745,37 @@ def test_launcher_comm_file_renders_whole_match(backend: OnlineBackend,
 
 
 @pytest.mark.slow
+def test_recording_keeps_its_frames_when_the_game_stops_running(backend: OnlineBackend,
+                                                                dolphin: Callable[..., DolphinInstance],
+                                                                gpu_backend: str) -> None:
+    """Bug report #190 (BAAD#643 and NIJA#200, launcher 0.1.115): P+ crashed on both machines in
+    the middle of a game. The recorders write whole chunks of 60 frames, and the rest only when the
+    session ends at the game's loop top, which a crashed game never reaches again: both files
+    stopped at the last whole chunk, 20 frames before the crash, with no end. Here a game is
+    paused mid-game (its loop top is never reached again either) and its Dolphin closed: the file
+    has every frame that ran and an end, "stopped"."""
+    a, b, _, _ = _connected_direct(backend, dolphin, gpu_backend, "replay-crash", ("nora", "omar"),
+                                   test_rules=False)
+    online_set.wait(lambda: all(online_set.gstatus(g.c)["phase"] == "running" for g in (a, b)), 240,
+                    "the match to run on both")
+    path = Path(a.c.call("replay_recording")["path"])
+    # Past two whole chunks and well into the third.
+    online_set.wait(lambda: (lambda f: f >= 140 and 20 <= f % 60 <= 45)(online_set.gstatus(a.c)["current_frame"]),
+                    60, "a frame in the middle of a chunk")
+    a.c.pause()
+    ran = online_set.gstatus(a.c)["current_frame"]
+    assert ran % 60 >= 20, ran
+    a.inst.stop()
+    fa = R.read(path)
+    assert fa.trailer and fa.endg, (fa.truncated, fa.endg)
+    assert fa.endg["endMethod"] == "stopped", fa.endg
+    assert fa.last_frame >= ran - 1 and fa.endg["lastFrame"] == fa.last_frame, (ran, fa.last_frame, fa.endg)
+    assert fa.endg["finalFrame"] <= fa.last_frame
+    print(f"paused at session frame {ran}; the file has frames {fa.first_frame}-{fa.last_frame}, "
+          f"final {fa.endg['finalFrame']}")
+
+
+@pytest.mark.slow
 def test_recording_names_its_pplus_release(backend: OnlineBackend,
                                            dolphin: Callable[..., DolphinInstance],
                                            gpu_backend: str) -> None:
