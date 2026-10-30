@@ -215,6 +215,11 @@ void RegisterOnlineBackend()
   if (!s_stop_hook)
   {
     s_stop_hook = Core::AddOnStateChangedCallback([](Core::State state) {
+      if (state == Core::State::Uninitialized)
+      {
+        Session::FinishRecordingAfterStop();
+        return;
+      }
       if (state != Core::State::Stopping || !Session::GetLobby().active)
         return;
       NOTICE_LOG_FMT(BRAWLBACK, "gprb: emulation is stopping; leaving the session");

@@ -664,6 +664,9 @@ std::optional<std::string> Connect(const ConnectOptions& options);
 std::optional<std::string> SetSelections(const picojson::object& selections);
 // Ends any online session and closes the socket (an armed or playing replay stays: StopPlayback).
 void Stop();
+// Once the emulation has stopped (its CPU thread is done): a game recording still open, because
+// the game never got back to its loop top (a crash or hang), is finished with the frames that ran.
+void FinishRecordingAfterStop();
 
 picojson::value Status();
 // Per-frame records of the running (or last) session, frame >= since: [frame, checksum,

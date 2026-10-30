@@ -8740,19 +8740,25 @@ void BeginReplay(Core::System& system)
   Replay::Begin(system, info);
 }
 
+// The replay's end method (ENDG endMethod) for a session end reason.
+std::string ReplayEndMethod(const std::string& reason)
+{
+  return reason == "game set"                                     ? "game" :
+         reason == "quit"                                         ? "quit" :
+         reason == "quit left"                                    ? "quit-left" :
+         reason == "desync"                                       ? "desync" :
+         reason == "stopped" || reason == "left the match scene"  ? "stopped" :
+         reason.find("peer") != std::string::npos                 ? "disconnect" :
+                                                                    "error";
+}
+
 // The end of this game's replay (EndRunning): how and with what result it ended.
 void EndReplay(Core::System& system, const std::string& reason, const GameResult* result)
 {
   if (!Replay::Active())
     return;
   Replay::EndInfo e;
-  e.method = reason == "game set"                                     ? "game" :
-             reason == "quit"                                         ? "quit" :
-             reason == "quit left"                                    ? "quit-left" :
-             reason == "desync"                                       ? "desync" :
-             reason == "stopped" || reason == "left the match scene"  ? "stopped" :
-             reason.find("peer") != std::string::npos                 ? "disconnect" :
-                                                                        "error";
+  e.method = ReplayEndMethod(reason);
   if (result && result->end == GameEnd::Runback)
     e.method = "runback";
   e.game_set_frame = s.game_set_frame;
@@ -8805,6 +8811,27 @@ void EndReplay(Core::System& system, const std::string& reason, const GameResult
   e.stocks = r.stocks;
   e.damage = r.damage;
   e.place = r.place;
+  Replay::End(e);
+}
+
+void FinishRecordingAfterStop()
+{
+  std::lock_guard<std::recursive_timed_mutex> lk(s.mutex);
+  if (!Replay::Active())
+    return;
+  // The game never got back to its loop top, where EndRunning ends the replay: it crashed or hung
+  // (bug #190: P+ crashed on both machines at once, and the frames since the last whole chunk,
+  // the ones that led to the crash, were never written). The frames that ran and the end, from
+  // what the recorder holds; the result is not read (the game's memory may be garbage).
+  WARN_LOG_FMT(BRAWLBACK, "replay: the emulation stopped at session frame {} before the game "
+                          "ended; saving the frames that ran",
+               s.current_frame);
+  Replay::EndInfo e;
+  e.method = ReplayEndMethod(s.end_reason.empty() ? "stopped" : s.end_reason);
+  e.game_set_frame = s.game_set_frame;
+  e.rollbacks = s.rollbacks;
+  e.max_rollback = s.max_rollback;
+  e.desyncs = s.desyncs;
   Replay::End(e);
 }
 
