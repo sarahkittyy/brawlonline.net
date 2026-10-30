@@ -75,6 +75,23 @@ namespace MatchHud {
     static const float TOP = 70.0f;
     static const float HINT_SCALE = 0.7f;
 
+    // Online every match is played in 16:9 (Dolphin pins Brawl's screen setting: GameplaySession
+    // PinScreenSetting), and the game then draws into the 640-wide picture squeezed by 3/4, which
+    // the screen stretches back out. Our text was drawn unsqueezed, so it came out 4/3 too wide
+    // (bug report #198: "the player name tags under the character portraits are stretched
+    // horizontally at all times"). The screen setting: gmGlobalRecord (GameGlobal 0x805A00E0
+    // +0x24) +0x838, bits 0xC0 (0xC0 16:9, 0 4:3).
+    static float s_aspectX = 1.0f;   // the text's width factor: 0.75 in 16:9
+
+    static float aspectX()
+    {
+        u32 gg = *(u32*)0x805A00E0;
+        if (gg < 0x80000000 || gg >= 0x81800000) return 1.0f;
+        u32 rec = *(u32*)(gg + 0x24);
+        if (rec < 0x80000000 || rec >= 0x81800000) return 1.0f;
+        return (*(u8*)(rec + 0x838) & 0xC0) == 0xC0 ? 0.75f : 1.0f;
+    }
+
     static void setU32(u32 off, u32 v) { *(u32*)(s_cw + off) = v; }
     static void setF32(u32 off, float v) { *(float*)(s_cw + off) = v; }
     static float getF32(u32 off) { return *(float*)(s_cw + off); }
@@ -100,7 +117,8 @@ namespace MatchHud {
         return w;
     }
 
-    // `text` (UTF-16, NUL-ended) in `color` with a black edge, centred on x, its top at y.
+    // `text` (UTF-16, NUL-ended) in `color` with a black edge, centred on x, its top at y; scaleX
+    // as it shows on screen (s_aspectX applied here).
     static void printCentredXY(const u16* text, float x, float y, float scaleX, float scaleY, u32 color);
     static void printCentred(const u16* text, float x, float y, float scale, u32 color)
     {
@@ -112,7 +130,7 @@ namespace MatchHud {
         setU32(0x18, color);
         s_cw[0x42] = 0xFF;          // alpha
         s_cw[0x43] = 0;             // proportional
-        setF32(0x24, scaleX);       // scale x
+        setF32(0x24, scaleX * s_aspectX);   // scale x
         setF32(0x28, scaleY);       // scale y
         setF32(0x50, 1.0f);
         setF32(0x5C, 1.0f);         // edge width
@@ -140,12 +158,36 @@ namespace MatchHud {
     // name slid with them). So each port's place is read once per match, the first frame it is
     // the same as the frame before (at rest: from when the HUD first has it until the first KO;
     // before that the matrix is not set up and fails the checks), and kept for the match.
+    // But a salty runback loads the same match again, and its panels' matrices come back at the
+    // same addresses still holding the last match's values until the HUD sets them again: a
+    // player KO'd just before the runback had their digits off to the side, which passed the
+    // checks, stayed the same frame after frame and was kept, so their name sat at the left of
+    // the screen the whole match (bug report #198, 3-player rooms with salty runbacks; seen in
+    // the harness: the old value until game frame 92, when the fighters come in). So nothing is
+    // read or drawn until the match itself has run PANEL_FROM_FRAME frames (the frame the
+    // rollback session starts at; nobody can be KO'd in the countdown): g_GameFrame's counter
+    // holds the last match's count until the match's first frame and starts again from 1 there.
     static const float PANEL_GAP = 154.0f;
     static const float HUD_UNIT = 7.688f, HUD_CENTRE = 279.7f;
+    static const u32 GAME_FRAME = 0x901812A4;   // g_GameFrame's frame counter
+    static const u32 PANEL_FROM_FRAME = 120;
     static float s_restX[4], s_lastX[4];
     static u8 s_seen = 0, s_rest = 0;   // bit per port: s_lastX read, s_restX kept
+    static u8 s_sim = 0;                // this scene: 0 not drawn yet, 1 before its first frame, 2 running
+    static u32 s_sceneFrame;            // the counter when the scene was first drawn
 
-    static void forgetPanels() { s_seen = 0; s_rest = 0; }
+    static void forgetPanels() { s_seen = 0; s_rest = 0; s_sim = 0; }
+
+    static bool panelsReady()
+    {
+        const u32 gf = *(u32*)GAME_FRAME;
+        if (s_sim == 0) {
+            s_sim = 1;
+            s_sceneFrame = gf;
+        }
+        if (s_sim == 1 && gf != s_sceneFrame) s_sim = 2;
+        return s_sim == 2 && gf >= PANEL_FROM_FRAME;
+    }
 
     static bool livePanelX(int port, float* out);
     static bool panelX(int port, float* out)
@@ -196,6 +238,7 @@ namespace MatchHud {
         const PPOM::Session& se = PPOM::g_block.session;
         int n = se.numPlayers;
         if (n < 1 || n > 4) return;
+        if (!panelsReady()) return;
         int count = 0;
         for (int i = 0; i < n; i++) {
             if (se.players[i].present) count++;
@@ -216,7 +259,7 @@ namespace MatchHud {
             float x;
             if (!panelX(i, &x)) x = SCREEN_W * 0.5f + ((float)k - (float)(count - 1) * 0.5f) * PANEL_GAP;
             // the width at NAME_SCALE (textWidth reads the CharWriter's scale: set it first)
-            setF32(0x24, NAME_SCALE);
+            setF32(0x24, NAME_SCALE * s_aspectX);
             float w = textWidth(name);
             float scale = NAME_SCALE;
             if (w > NAME_MAX_W) scale = NAME_SCALE * NAME_MAX_W / w;
@@ -257,6 +300,7 @@ namespace MatchHud {
             return;
         }
         begin2D();
+        s_aspectX = aspectX();
 
         if (names) drawNames();
         if (!s_on) {
