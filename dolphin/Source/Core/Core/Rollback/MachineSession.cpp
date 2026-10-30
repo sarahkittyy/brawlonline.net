@@ -17,8 +17,10 @@
 #include <mutex>
 #include <optional>
 #include <set>
+#include <span>
 #include <thread>
 #include <utility>
+#include <variant>
 
 #include <enet/enet.h>
 #if defined(_M_X86_64)
@@ -40,6 +42,7 @@
 #include "Common/Swap.h"
 #include "Common/Thread.h"
 #include "Common/UPnP.h"
+#include "Core/ARDecrypt.h"
 #include "Core/Brawlback/include/brawlback-common/BrawlbackConstants.h"
 #include "Core/Brawlback/include/gekkonet/GekkoLib/include/gekkonet.h"
 #include "Core/Config/GraphicsSettings.h"
@@ -51,6 +54,7 @@
 #include "Core/ConfigManager.h"
 #include "Core/Core.h"
 #include "Core/CoreTiming.h"
+#include "Core/GeckoCodeConfig.h"
 #include "Core/HW/CPU.h"
 #include "Core/HW/EXI/EXI.h"
 #include "Core/HW/GCPad.h"
@@ -212,6 +216,14 @@ constexpr u32 IMAGE_MAGIC = 0x424D4931;  // "BMI1"
 // 4: what only drawing uses (ImageParts::copies: EFB copies, TEV colours), after the SD card's
 // chunks.
 constexpr u32 IMAGE_VERSION = 4;
+// 5: the session's codes (docs/design/room-codes.md) after the draw state, vouched for. An image
+// of a session without codes stays version 4, so a joiner of an older build still joins one.
+constexpr u32 IMAGE_VERSION_CODES = 5;
+// A session's Gecko / Action Replay codes (ParseCodes, and the image's): at most this many, of
+// this many lines in all (Dolphin's Gecko code list in guest RAM holds about 400), names cut short.
+constexpr size_t MAX_SESSION_CODES = 256;
+constexpr size_t MAX_SESSION_CODE_LINES = 2048;
+constexpr size_t MAX_SESSION_CODE_NAME = 128;
 // The reliable data ENet keeps unacknowledged on a link. Its own is 64 KB (unless the hosts set
 // bandwidths), so a machine image or SD card chunks went at 64 KB per round trip: 1.3 MB/s at
 // 50 ms, a 22.5 MB image in 23 s with the whole room waiting (prod 2026-10-14), and a joiner's
@@ -526,6 +538,9 @@ struct State
   // manifest), while this machine plays the session's card.
   std::string sd_root;
   std::vector<u8> sd_files_wire;
+  // The session's codes (PackCodes; empty: none) this machine runs: the room host's, or those its
+  // machine image came with (net_mutex). They go into every image this machine sends.
+  std::vector<u8> codes_wire;
   // A joiner's own card (CPU thread), compared with the session's card before the join.
   std::string sd_path;
 
@@ -4391,6 +4406,124 @@ void Put32(std::vector<u8>* v, u32 x)
 // The parts of a machine image that every player's machine has the same at the epoch's frame:
 // the state (Dolphin's savestate in image mode), the NAND's game files, the inputs of the frame
 // before. Their digest is how the other players vouch for the image one of them sends.
+// The session's codes in the machine image (version 5): u32 count, then per code u8 kind (0 Gecko,
+// 1 Action Replay), u16 name length, the name, u32 lines, and each line's two words.
+std::vector<u8> PackCodes(const std::vector<Gecko::GeckoCode>& gecko,
+                          const std::vector<ActionReplay::ARCode>& ar)
+{
+  std::vector<u8> out;
+  if (gecko.empty() && ar.empty())
+    return out;
+  Put32(&out, static_cast<u32>(gecko.size() + ar.size()));
+  auto head = [&](u8 kind, const std::string& name, size_t lines) {
+    out.push_back(kind);
+    const size_t n = std::min(name.size(), MAX_SESSION_CODE_NAME);
+    out.push_back(static_cast<u8>(n));
+    out.push_back(static_cast<u8>(n >> 8));
+    out.insert(out.end(), name.begin(), name.begin() + n);
+    Put32(&out, static_cast<u32>(lines));
+  };
+  for (const Gecko::GeckoCode& c : gecko)
+  {
+    head(0, c.name, c.codes.size());
+    for (const Gecko::GeckoCode::Code& l : c.codes)
+    {
+      Put32(&out, l.address);
+      Put32(&out, l.data);
+    }
+  }
+  for (const ActionReplay::ARCode& c : ar)
+  {
+    head(1, c.name, c.ops.size());
+    for (const ActionReplay::AREntry& op : c.ops)
+    {
+      Put32(&out, op.cmd_addr);
+      Put32(&out, op.value);
+    }
+  }
+  return out;
+}
+
+// The codes of an image (it came from a peer: every count bounded); false when they are not valid.
+bool UnpackCodes(std::span<const u8> in, std::vector<Gecko::GeckoCode>* gecko,
+                 std::vector<ActionReplay::ARCode>* ar)
+{
+  size_t pos = 0;
+  auto get32 = [&](u32* v) {
+    if (in.size() - pos < 4)
+      return false;
+    std::memcpy(v, in.data() + pos, 4);
+    pos += 4;
+    return true;
+  };
+  u32 count;
+  if (!get32(&count) || count == 0 || count > MAX_SESSION_CODES)
+    return false;
+  size_t lines_total = 0;
+  for (u32 i = 0; i < count; ++i)
+  {
+    if (in.size() - pos < 3)
+      return false;
+    const u8 kind = in[pos];
+    const size_t name_size = in[pos + 1] | (in[pos + 2] << 8);
+    pos += 3;
+    if (kind > 1 || name_size > MAX_SESSION_CODE_NAME || in.size() - pos < name_size)
+      return false;
+    std::string name(reinterpret_cast<const char*>(in.data() + pos), name_size);
+    pos += name_size;
+    u32 lines;
+    if (!get32(&lines) || lines == 0 || lines > MAX_SESSION_CODE_LINES - lines_total)
+      return false;
+    lines_total += lines;
+    if ((in.size() - pos) / 8 < lines)
+      return false;
+    if (kind == 0)
+    {
+      Gecko::GeckoCode c;
+      c.name = std::move(name);
+      c.enabled = true;
+      for (u32 j = 0; j < lines; ++j)
+      {
+        Gecko::GeckoCode::Code l;
+        get32(&l.address);
+        get32(&l.data);
+        c.codes.push_back(std::move(l));
+      }
+      gecko->push_back(std::move(c));
+    }
+    else
+    {
+      ActionReplay::ARCode c;
+      c.name = std::move(name);
+      c.enabled = true;
+      for (u32 j = 0; j < lines; ++j)
+      {
+        ActionReplay::AREntry op;
+        get32(&op.cmd_addr);
+        get32(&op.value);
+        c.ops.push_back(op);
+      }
+      ar->push_back(std::move(c));
+    }
+  }
+  return pos == in.size();
+}
+
+// This machine runs these codes, and only these, from now on: Dolphin's netplay path for a host's
+// codes (the session layer's SESSION_CODE_SYNC_OVERRIDE, set by MakeNetSettings, makes PatchEngine
+// take the synced codes over the game's inis at boot).
+void UseCodes(std::vector<Gecko::GeckoCode> gecko, std::vector<ActionReplay::ARCode> ar)
+{
+  for (Gecko::GeckoCode& c : gecko)
+    c.enabled = true;
+  for (ActionReplay::ARCode& c : ar)
+    c.enabled = true;
+  Gecko::UpdateSyncedCodes(gecko);
+  Gecko::SetSyncedCodesAsActive();
+  ActionReplay::UpdateSyncedCodes(ar);
+  ActionReplay::SetSyncedCodesAsActive();
+}
+
 struct ImageParts
 {
   s64 frame = -1;
@@ -4409,11 +4542,13 @@ struct ImageParts
   // would differ; neither is ever read by the game.
   std::vector<u8> copies;
   u32 copies_count = 0;
+  // The session's codes (PackCodes; empty: none).
+  std::vector<u8> codes;
 };
 
 std::string ImageDigest(s64 frame, u32 mem1, u32 mem2, const std::array<Input, MAX_PLAYERS>& last,
                         std::span<const u8> state, std::span<const u8> nand,
-                        std::span<const u8> sd)
+                        std::span<const u8> sd, std::span<const u8> codes)
 {
   mbedtls_sha256_context ctx;
   mbedtls_sha256_init(&ctx);
@@ -4434,6 +4569,13 @@ std::string ImageDigest(s64 frame, u32 mem1, u32 mem2, const std::array<Input, M
   const u64 sd_size = sd.size();
   put(&sd_size, sizeof(sd_size));
   put(sd.data(), sd.size());
+  // Only with codes: without, the digest is an older build's, which vouches for the same machine.
+  if (!codes.empty())
+  {
+    const u64 codes_size = codes.size();
+    put(&codes_size, sizeof(codes_size));
+    put(codes.data(), codes.size());
+  }
   std::array<unsigned char, 32> out{};
   mbedtls_sha256_finish_ret(&ctx, out.data());
   mbedtls_sha256_free(&ctx);
@@ -4494,6 +4636,7 @@ bool MakeImageParts(Core::System& system, s64 frame, ImageParts* parts, bool cop
   {
     std::lock_guard lk(s.net_mutex);
     parts->sd = s.sd_manifest_canon;
+    parts->codes = s.codes_wire;
   }
   if (copies)
     parts->copies = SaveImageCopies(&parts->copies_count);
@@ -4502,7 +4645,7 @@ bool MakeImageParts(Core::System& system, s64 frame, ImageParts* parts, bool cop
 
 std::string ImageDigest(const ImageParts& p)
 {
-  return ImageDigest(p.frame, p.mem1, p.mem2, p.last, p.state, p.nand, p.sd);
+  return ImageDigest(p.frame, p.mem1, p.mem2, p.last, p.state, p.nand, p.sd, p.codes);
 }
 
 std::optional<ImageParts> s_image_parts;  // this player's, at the epoch it admits a joiner at
@@ -4517,7 +4660,7 @@ std::vector<u8> BuildImage(const ImageParts& parts, u32 sum, u64* raw_size)
   std::vector<u8> raw;
   raw.reserve(parts.state.size() + g1 + g2 + nand.size() + 1024);
   Put32(&raw, IMAGE_MAGIC);
-  Put32(&raw, IMAGE_VERSION);
+  Put32(&raw, parts.codes.empty() ? IMAGE_VERSION : IMAGE_VERSION_CODES);
   Put32(&raw, static_cast<u32>(frame));
   Put32(&raw, static_cast<u32>(frame >> 32));
   Put32(&raw, sum);
@@ -4549,6 +4692,11 @@ std::vector<u8> BuildImage(const ImageParts& parts, u32 sum, u64* raw_size)
     Put32(&raw, c);
   Put32(&raw, static_cast<u32>(parts.copies.size()));
   raw.insert(raw.end(), parts.copies.begin(), parts.copies.end());
+  if (!parts.codes.empty())
+  {
+    Put32(&raw, static_cast<u32>(parts.codes.size()));
+    raw.insert(raw.end(), parts.codes.begin(), parts.codes.end());
+  }
   *raw_size = raw.size();
 
   ZSTD_CCtx* cctx = ZSTD_createCCtx();
@@ -4617,7 +4765,7 @@ bool LoadImage(Core::System& system, std::string* error, bool self = false)
   auto& memory = system.GetMemory();
   if (!get32(&magic) || !get32(&version) || !get32(&frame_lo) || !get32(&frame_hi) ||
       !get32(&sum) || !get32(&mem1) || !get32(&mem2) || magic != IMAGE_MAGIC ||
-      version != IMAGE_VERSION)
+      (version != IMAGE_VERSION && version != IMAGE_VERSION_CODES))
   {
     *error = "not a machine image of this version";
     return false;
@@ -4695,6 +4843,26 @@ bool LoadImage(Core::System& system, std::string* error, bool self = false)
   }
   const size_t copies_pos = pos;
   pos += copies_size;
+  // The session's codes (version 5): this machine runs them from the image on.
+  std::span<const u8> codes;
+  std::vector<Gecko::GeckoCode> gecko_codes;
+  std::vector<ActionReplay::ARCode> ar_codes;
+  if (version == IMAGE_VERSION_CODES)
+  {
+    u32 codes_size;
+    if (!get32(&codes_size) || raw.size() - pos < codes_size)
+    {
+      *error = "the machine image is cut short";
+      return false;
+    }
+    codes = std::span<const u8>(raw.data() + pos, codes_size);
+    pos += codes_size;
+    if (!UnpackCodes(codes, &gecko_codes, &ar_codes))
+    {
+      *error = "the machine image's codes are not valid";
+      return false;
+    }
+  }
   // The session's SD card (checked like everything a peer sends; the players vouch for it below).
   std::shared_ptr<const SDCard::Manifest> sd_manifest;
   std::vector<u8> sd_canon;
@@ -4717,7 +4885,7 @@ bool LoadImage(Core::System& system, std::string* error, bool self = false)
   {
     const std::string digest =
         ImageDigest(frame, mem1, mem2, last, std::span<const u8>(raw.data() + state_pos, state_size),
-                    std::span<const u8>(raw.data() + nand_pos, nand_size), sd_canon);
+                    std::span<const u8>(raw.data() + nand_pos, nand_size), sd_canon, codes);
     std::lock_guard lk(s.net_mutex);
     for (const PeerLink& p : s.peers)
     {
@@ -4770,6 +4938,22 @@ bool LoadImage(Core::System& system, std::string* error, bool self = false)
       AddLog(fmt::format("SD card: playing the session's card ({:.1f} MB still to fetch)",
                          sd_card->MissingBytes() / 1048576.0));
     }
+  }
+
+  // The session's codes in place of this machine's own (none: none), before the state loads: the
+  // Gecko code handler and its list are in the image's RAM already, AR codes run from Dolphin.
+  if (!self)
+  {
+    {
+      std::lock_guard lk(s.net_mutex);
+      s.codes_wire.assign(codes.begin(), codes.end());
+    }
+    if (!gecko_codes.empty() || !ar_codes.empty())
+    {
+      AddLog(fmt::format("codes: running the session's {} Gecko and {} Action Replay code(s)",
+                         gecko_codes.size(), ar_codes.size()));
+    }
+    UseCodes(std::move(gecko_codes), std::move(ar_codes));
   }
 
   StartScheduleLog(system, frame, "image load");
@@ -6604,6 +6788,124 @@ void EncodePad(const GCPadStatus& pad, Input* in)
   (*in)[8] = pad.triggerRight;
 }
 
+bool ParseCodes(const picojson::value& codes, Options* options, std::string* error)
+{
+  if (!codes.is<picojson::array>())
+  {
+    *error = "codes must be a list";
+    return false;
+  }
+  const auto& list = codes.get<picojson::array>();
+  if (list.size() > MAX_SESSION_CODES)
+  {
+    *error = fmt::format("at most {} codes", MAX_SESSION_CODES);
+    return false;
+  }
+  std::vector<Gecko::GeckoCode> gecko;
+  std::vector<ActionReplay::ARCode> ar;
+  size_t lines_total = 0;
+  for (const picojson::value& v : list)
+  {
+    const picojson::object* o = v.is<picojson::object>() ? &v.get<picojson::object>() : nullptr;
+    auto text_of = [&](const char* key) -> const std::string* {
+      const auto it = o ? o->find(key) : picojson::object::const_iterator{};
+      return o && it != o->end() && it->second.is<std::string>() ? &it->second.get<std::string>() :
+                                                                   nullptr;
+    };
+    const std::string* name = text_of("name");
+    const std::string* kind = text_of("kind");
+    const auto lines = o ? o->find("lines") : picojson::object::const_iterator{};
+    if (!name || !kind || lines == o->end() || !lines->second.is<picojson::array>())
+    {
+      *error = "each code must be {name, kind, lines}";
+      return false;
+    }
+    const std::string code_name = name->substr(0, MAX_SESSION_CODE_NAME);
+    std::vector<std::string> text;
+    for (const picojson::value& l : lines->second.get<picojson::array>())
+    {
+      if (!l.is<std::string>())
+      {
+        *error = fmt::format("code \"{}\": its lines must be text", code_name);
+        return false;
+      }
+      std::string line(StripWhitespace(l.get<std::string>()));
+      if (!line.empty())
+        text.push_back(std::move(line));
+    }
+    lines_total += text.size();
+    if (text.empty())
+    {
+      *error = fmt::format("code \"{}\" has no lines", code_name);
+      return false;
+    }
+    if (lines_total > MAX_SESSION_CODE_LINES)
+    {
+      *error = fmt::format("at most {} code lines", MAX_SESSION_CODE_LINES);
+      return false;
+    }
+    if (*kind == "gecko")
+    {
+      Gecko::GeckoCode c;
+      c.name = code_name;
+      c.enabled = true;
+      for (const std::string& line : text)
+      {
+        const std::optional<Gecko::GeckoCode::Code> l = Gecko::DeserializeLine(line);
+        if (!l)
+        {
+          *error = fmt::format("code \"{}\": \"{}\" is not a Gecko code line", code_name,
+                               line.substr(0, 32));
+          return false;
+        }
+        c.codes.push_back(*l);
+      }
+      gecko.push_back(std::move(c));
+    }
+    else if (*kind == "ar")
+    {
+      ActionReplay::ARCode c;
+      c.name = code_name;
+      c.enabled = true;
+      std::vector<std::string> encrypted;
+      for (const std::string& line : text)
+      {
+        const auto l = ActionReplay::DeserializeLine(line);
+        if (std::holds_alternative<ActionReplay::AREntry>(l))
+        {
+          c.ops.push_back(std::get<ActionReplay::AREntry>(l));
+        }
+        else if (std::holds_alternative<ActionReplay::EncryptedLine>(l))
+        {
+          encrypted.push_back(std::get<ActionReplay::EncryptedLine>(l));
+        }
+        else
+        {
+          *error = fmt::format("code \"{}\": \"{}\" is not an Action Replay code line", code_name,
+                               line.substr(0, 32));
+          return false;
+        }
+      }
+      if (!encrypted.empty())
+        ActionReplay::DecryptARCode(encrypted, &c.ops);
+      if (c.ops.empty())
+      {
+        *error = fmt::format("code \"{}\" does not decrypt", code_name);
+        return false;
+      }
+      ar.push_back(std::move(c));
+    }
+    else
+    {
+      *error = "a code's kind must be \"gecko\" or \"ar\"";
+      return false;
+    }
+  }
+  options->gecko_codes = std::move(gecko);
+  options->ar_codes = std::move(ar);
+  return true;
+}
+
 std::optional<Options> ParseOptions(const picojson::value& json, std::string* error)
 {
   if (!json.is<picojson::object>())
@@ -6743,6 +7045,8 @@ std::optional<Options> ParseOptions(const picojson::value& json, std::string* er
     *error = "a sync test has no peers";
     return std::nullopt;
   }
+  if (const auto c = o.find("codes"); c != o.end() && !ParseCodes(c->second, &opts, error))
+    return std::nullopt;
   return opts;
 }
 
@@ -6760,6 +7064,13 @@ bool Arm(const Options& options, std::string* error)
   ResetSD();
   s.opts = options;
   s.error.clear();
+  // The host's codes (a joiner has none until its image brings the session's): synced before
+  // boot, where PatchEngine makes them the active ones.
+  {
+    std::lock_guard nlk(s.net_mutex);
+    s.codes_wire = PackCodes(options.gecko_codes, options.ar_codes);
+  }
+  UseCodes(options.gecko_codes, options.ar_codes);
   {
     std::lock_guard llk(s.log_mutex);
     s.log.clear();
@@ -6861,6 +7172,11 @@ bool Arm(const Options& options, std::string* error)
           fmt::format("auto, {}", Gprb::Session::DelayLevelName(AutoDelayLevel(options.delay))) :
           std::to_string(options.delay),
       options.synctest ? fmt::format(", sync test {}", options.synctest) : ""));
+  if (!options.gecko_codes.empty() || !options.ar_codes.empty())
+  {
+    AddLog(fmt::format("codes: {} Gecko and {} Action Replay code(s)", options.gecko_codes.size(),
+                       options.ar_codes.size()));
+  }
   return true;
 }
 
@@ -7287,7 +7603,13 @@ NetPlay::NetSettings MakeNetSettings()
   // by the netplay layer) single and dual core compute the same.
   ns.cpu_thread = Config::Get(Config::MAIN_CPU_THREAD);
   ns.cpu_core = Config::Get(Config::MAIN_CPU_CORE);
-  ns.enable_cheats = false;
+  // Cheats are on with the session's codes only (room-codes.md): those Arm or the machine image
+  // gave (UseCodes), never the player's own from the game's inis (sync_codes as a netplay guest:
+  // SESSION_CODE_SYNC_OVERRIDE). Without codes nothing runs: the Gecko code handler is installed
+  // only with a code to run, so the machine is the same as with cheats off.
+  ns.enable_cheats = true;
+  ns.sync_codes = true;
+  ns.is_hosting = false;
   ns.selected_language = Pinned(Config::MAIN_GC_LANGUAGE);
   ns.override_region_settings = Pinned(Config::MAIN_OVERRIDE_REGION_SETTINGS);
   ns.dsp_hle = Pinned(Config::MAIN_DSP_HLE);

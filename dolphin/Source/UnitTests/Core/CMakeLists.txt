@@ -74,6 +74,8 @@ add_dolphin_test(HostPadReadTest Rollback/HostPadReadTest.cpp)
 add_dolphin_test(ARAMSnapshotTest Rollback/ARAMSnapshotTest.cpp)
 # The rollback job pool (Core/Rollback/job.h) stopped and started again (GitHub issue #3).
 add_dolphin_test(JobPoolTest Rollback/JobPoolTest.cpp)
+# A room's codes as the launcher gives them (Machine::ParseCodes, docs/design/room-codes.md).
+add_dolphin_test(MachineCodesTest Rollback/MachineCodesTest.cpp)
 # Replay files (Core/Rollback/ReplayFile): round trip, cut and damaged files, hostile sizes.
 add_dolphin_test(ReplayFileTest Rollback/ReplayFileTest.cpp)
 # Spectating: the uploader's pacing, backoff and roles (Core/Online/Spectate).

@@ -8,7 +8,14 @@ import type { ModBuild, ModRoomBuild, ModsController, ModsSdChoice } from "./typ
 /** What Dolphin's `--mods-room` takes (the JSON of PPR_MODS_ROOM, docs/design/brawl-mods.md §3),
  * the build with its parts for the room (§6.5). */
 export type ModsRoomArg =
-  | { host: true; build: ModRoomBuild; public: boolean; controller: ModsController }
+  | {
+      host: true;
+      build: ModRoomBuild;
+      public: boolean;
+      controller: ModsController;
+      /** The codes every machine of the room runs (docs/design/room-codes.md); absent: none. */
+      codes?: { name: string; kind: "gecko" | "ar"; lines: string[] }[];
+    }
   /** `sd_sync`: the player's answer to the SD card question, asked before Dolphin started (Dolphin
    * asks through the room's status when it is left out: a card that only turned out different
    * there). */

@@ -18,6 +18,10 @@ of the card that still had to wait for the network (there must be none).
 What the joiner draws (bug report #114: a joiner drew the EFB copies made before its join from RAM):
 ``--shots N`` takes N screenshots of the host and the joiner while they play (``--play-seconds``
 apart in all), into ``<out>/shots``; they need a real ``--video`` (D3D11 renders headless).
+
+The host's codes (docs/design/room-codes.md): ``--codes`` is a JSON file of the room's codes
+(``[{"name", "kind": "gecko" | "ar", "lines": [...]}]``), run by the host and, from the machine
+image, by the joiner; ``--read 0x80002F00`` prints that word of both machines' RAM after the join.
 """
 
 from __future__ import annotations
@@ -74,6 +78,9 @@ def main() -> int:
                          "Dolphin's settings windows do) before the first join")
     ap.add_argument("--delay", help="each player's input delay: 0-9 or auto (default: the session's, 2)")
     ap.add_argument("--platform", default="headless", help="Dolphin's window platform (win32 for a real backend)")
+    ap.add_argument("--codes", help="a JSON file of the host's codes (room-codes.md)")
+    ap.add_argument("--read", action="append", default=[],
+                    help="a RAM address whose word is printed for host and joiner after each join")
     ap.add_argument("--host-play-record", action="store_true",
                     help="the host's session NAND starts with the Wii Menu's play_rec.dat (a disc boot's BS2 "
                          "writes it) and the joiner's without: the game keeps it open (bug #82)")
@@ -152,8 +159,10 @@ def main() -> int:
             return f.read_text(errors="replace")
         return ""
 
-    host = make("host", {"slot": 0, "port": p0,
-                         "peers": [{"slot": 1, "host": "127.0.0.1", "port": t1, "late": True}]}, a.sd)
+    host_session = {"slot": 0, "port": p0, "peers": [{"slot": 1, "host": "127.0.0.1", "port": t1, "late": True}]}
+    if a.codes:
+        host_session["codes"] = json.loads(Path(a.codes).read_text(encoding="utf-8"))
+    host = make("host", host_session, a.sd)
     results = []
     try:
         deadline = time.time() + 240
@@ -231,6 +240,15 @@ def main() -> int:
                 for inst in (host, joiner):
                     st = status(inst)
                     print(f"  {inst.name}: frame {st.get('frame')}, desyncs {st.get('desyncs')}", flush=True)
+                for addr in a.read:
+                    words = []
+                    for inst in (host, joiner):
+                        v = inst.client.call("read_u32", addr=int(addr, 0), timeout=30)
+                        words.append(f"{inst.name} {int(v.get('value', -1)) & 0xFFFFFFFF:08x}"
+                                     if isinstance(v, dict) else f"{inst.name} {v}")
+                    print(f"  {addr}: {', '.join(words)}", flush=True)
+                for line in re.findall(r"codes: .*", log_of(joiner)):
+                    print(f"  joiner: {line[:160]}", flush=True)
                 late = re.findall(r"the game read \d+ chunks this player had not got.*|a read waited \d+ ms.*",
                                   log_of(joiner))
                 print(f"  joiner: SD reads that waited while playing: {len(late)}"

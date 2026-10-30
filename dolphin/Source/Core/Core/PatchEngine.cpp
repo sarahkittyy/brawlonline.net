@@ -35,6 +35,7 @@
 #include "Core/GeckoCodeConfig.h"
 #include "Core/PowerPC/MMU.h"
 #include "Core/PowerPC/PowerPC.h"
+#include "Core/Rollback/MachineSession.h"
 #include "Core/System.h"
 #include "VideoCommon/OnScreenDisplay.h"
 
@@ -197,7 +198,10 @@ void LoadPatches()
   Common::IniFile globalIni = sconfig.LoadDefaultGameIni();
   Common::IniFile localIni = sconfig.LoadLocalGameIni();
 
-  LoadPatchSection("OnFrame", &s_on_frame, globalIni, localIni);
+  // A whole-machine session runs the same patches on every machine: Dolphin's own for the game,
+  // never the player's (docs/design/room-codes.md; a player's own patch desynced the room).
+  LoadPatchSection("OnFrame", &s_on_frame, globalIni,
+                   Machine::IsArmed() ? Common::IniFile{} : localIni);
 
 #ifdef USE_RETRO_ACHIEVEMENTS
   AchievementManager::GetInstance().FilterApprovedPatches(s_on_frame, sconfig.GetGameID(),

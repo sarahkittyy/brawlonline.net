@@ -1,7 +1,10 @@
 import type {
   DolphinControllers,
   ModBuild,
+  ModBuildCodes,
   ModBuildInput,
+  ModCode,
+  ModCodeLists,
   ModFolderParts,
   ModRoomRequest,
   ModRoomStatus,
@@ -274,6 +277,26 @@ class MockModsClient implements ModsService {
     const save = { ...before, files: 2, bytes: 31_000, modified: new Date().toISOString() };
     this.saves[id] = save;
     return { save, backup: before.files > 0 ? `${before.folder}.backup` : null };
+  }
+
+  async codeLists(id: string): Promise<{ codes: ModBuildCodes; lists: ModCodeLists }> {
+    const build = this.builds.find((b) => b.id === id);
+    const lists: ModCodeLists = {
+      own: [{ name: "Infinite Lives", kind: "gecko", lines: ["04354E8C 00000063"], author: "me" }],
+      ownFiles: ["C:/Users/me/AppData/Roaming/Dolphin Emulator/GameSettings/SMNE01.ini"],
+      dolphin: [{ name: "Skip Intro", kind: "gecko", lines: ["0415C2A0 60000000"] }],
+    };
+    return { codes: build?.codes ?? { on: [], yours: [] }, lists };
+  }
+
+  async setCodes(id: string, codes: ModBuildCodes): Promise<ModBuildCodes> {
+    this.builds = this.builds.map((b) => (b.id === id ? { ...b, codes } : b));
+    this.emit();
+    return codes;
+  }
+
+  async databaseCodes(_id: string): Promise<ModCode[]> {
+    return [{ name: "Moon Jump", kind: "gecko", lines: ["28000000 00000000"], author: "someone" }];
   }
 
   async openSaveFolder(_id: string) {

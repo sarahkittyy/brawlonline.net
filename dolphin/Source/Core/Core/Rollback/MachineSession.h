@@ -32,6 +32,8 @@
 #include <picojson.h>
 
 #include "Common/CommonTypes.h"
+#include "Core/ActionReplay.h"
+#include "Core/GeckoCode.h"
 #include "InputCommon/GCPadStatus.h"
 
 namespace Core
@@ -172,6 +174,11 @@ struct Options
   // A joiner whose SD card differs from the session's: "sd_sync" ("ask", "yes", "overwrite",
   // "no"); the launcher asks its player.
   SDSyncChoice sd_sync = SDSyncChoice::Ask;
+  // The room host's Gecko and Action Replay codes (docs/design/room-codes.md, "codes"): every
+  // machine of the session runs them, in place of its own; a joiner gets them with the machine
+  // image. Empty: no codes.
+  std::vector<Gecko::GeckoCode> gecko_codes;
+  std::vector<ActionReplay::ARCode> ar_codes;
 };
 
 // A Brawl Mods room's member (Online/ModsRoom.h).
@@ -189,6 +196,10 @@ struct RoomMember
 // Parses options from JSON ({"slot":0,"port":5000,"delay":2,"peers":[{"slot":1,"host":"..",
 // "port":5001}],"rtc":..,"synctest":0}); empty on error, with the reason in *error.
 std::optional<Options> ParseOptions(const picojson::value& json, std::string* error);
+// A session's codes, "codes": [{"name": "..", "kind": "gecko" | "ar", "lines": ["04xxxxxx
+// xxxxxxxx", ..]}] (an AR code's lines may be encrypted, XXXX-XXXX-XXXXX), into `options`; false
+// with the reason in *error. Bounded (MAX_SESSION_CODES codes, MAX_SESSION_CODE_LINES lines).
+bool ParseCodes(const picojson::value& codes, Options* options, std::string* error);
 
 // Before boot: the next boot runs this session. Also armed from the environment variable
 // PPR_MACHINE_SESSION (JSON, as ParseOptions) at the first call of IsArmed, or for a Brawl Mods

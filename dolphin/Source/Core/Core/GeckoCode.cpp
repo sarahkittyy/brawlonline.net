@@ -16,6 +16,7 @@
 
 #include "Core/AchievementManager.h"
 #include "Core/Config/MainSettings.h"
+#include "Core/Config/SessionSettings.h"
 #include "Core/Core.h"
 #include "Core/Host.h"
 #include "Core/PowerPC/MMU.h"
@@ -62,6 +63,11 @@ size_t CountEnabledCodes()
 
 void SetActiveCodes(std::span<const GeckoCode> gcodes, const std::string& game_id, u16 revision)
 {
+  // A session's codes stay the session's (synced, SetSyncedCodesAsActive): a code turned on in
+  // the Cheats window would run on this machine only.
+  if (Config::Get(Config::SESSION_CODE_SYNC_OVERRIDE))
+    return;
+
   std::lock_guard lk(s_active_codes_lock);
 
   s_active_codes.clear();

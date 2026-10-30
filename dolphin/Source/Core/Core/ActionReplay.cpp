@@ -41,6 +41,7 @@
 #include "Core/AchievementManager.h"
 #include "Core/CheatCodes.h"
 #include "Core/Config/MainSettings.h"
+#include "Core/Config/SessionSettings.h"
 #include "Core/Debugger/PPCDebugInterface.h"
 #include "Core/PowerPC/MMU.h"
 
@@ -116,6 +117,10 @@ struct ARAddr
 void ApplyCodes(std::span<const ARCode> codes, const std::string& game_id, u16 revision)
 {
   if (!Config::AreCheatsEnabled())
+    return;
+  // A session's codes stay the session's (synced): the Cheats window's would run on this machine
+  // only. Clearing them (at the game's end) still does.
+  if (Config::Get(Config::SESSION_CODE_SYNC_OVERRIDE) && !codes.empty())
     return;
 
   std::lock_guard guard(s_lock);

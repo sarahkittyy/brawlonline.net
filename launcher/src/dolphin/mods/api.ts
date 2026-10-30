@@ -1,7 +1,9 @@
 /* eslint-disable import/no-default-export */
 import {
   ipc_modsAddBuild,
+  ipc_modsCodeLists,
   ipc_modsConfigureControllers,
+  ipc_modsDatabaseCodes,
   ipc_modsEvent,
   ipc_modsGetState,
   ipc_modsHashBuild,
@@ -15,6 +17,7 @@ import {
   ipc_modsRemoveBuild,
   ipc_modsRequest,
   ipc_modsSaveInfo,
+  ipc_modsSetCodes,
   ipc_modsSetController,
   ipc_modsUpdateBuild,
 } from "./ipc";
@@ -76,6 +79,18 @@ const modsApi: ModsService = {
   },
   async openSaveFolder(id) {
     await ipc_modsOpenSaveFolder.renderer!.trigger({ id });
+  },
+  async codeLists(id) {
+    const { result } = await ipc_modsCodeLists.renderer!.trigger({ id });
+    return result;
+  },
+  async setCodes(id, codes) {
+    const { result } = await ipc_modsSetCodes.renderer!.trigger({ id, codes });
+    return result.codes;
+  },
+  async databaseCodes(id) {
+    const { result } = await ipc_modsDatabaseCodes.renderer!.trigger({ id });
+    return result.codes;
   },
   onEvent(handle) {
     const { destroy } = ipc_modsEvent.renderer!.handle(async (event) => handle(event));

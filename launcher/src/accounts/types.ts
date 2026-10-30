@@ -223,8 +223,9 @@ export type RoomList = {
 /** A public Brawl Mods room: its build, its host and how full it is. */
 export type PublicModRoom = {
   code: string;
-  /** With its parts from a launcher that sends them (docs/design/brawl-mods.md §6.5). */
-  build: { hash: string; name: string; disc?: string; discLabel?: string; sd?: string };
+  /** With its parts from a launcher that sends them (docs/design/brawl-mods.md §6.5), and the names
+   * of the host's codes (docs/design/room-codes.md). */
+  build: { hash: string; name: string; disc?: string; discLabel?: string; sd?: string; codes?: string[] };
   hostName: string;
   players: number;
   /** Open slots (the room's size). */

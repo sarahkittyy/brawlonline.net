@@ -29,6 +29,10 @@ pub const MAX_PLAYERS: usize = 4;
 pub const BUILD_HASH_LEN: usize = 64;
 pub const MAX_BUILD_NAME: usize = 64;
 pub const MAX_DISC_LABEL: usize = 32;
+/// The host's Gecko / Action Replay codes a room lists by name (`docs/design/room-codes.md`): at
+/// most this many, each at most [`MAX_CODE_NAME`] characters. The codes themselves go P2P.
+pub const MAX_CODES: usize = 64;
+pub const MAX_CODE_NAME: usize = 48;
 
 /// The build a room plays (`docs/design/brawl-mods.md` §4), and the parts rooms compare
 /// (§6.5): the disc, which a room cannot send (its contents' SHA-1, and what it is: "RSBE01 Rev 1"),
@@ -46,6 +50,9 @@ pub struct Build {
     pub disc_label: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sd: Option<String>,
+    /// The names of the codes the host's game runs (an older launcher sends none).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub codes: Vec<String>,
 }
 
 /// A joiner's build as a join compares it.
@@ -153,6 +160,25 @@ fn parse_parts(kind: &str, b: &serde_json::Value) -> Result<Parts, String> {
     Ok((Some(disc.to_string()), Some(label.trim().to_string()), Some(sd.to_string())))
 }
 
+/// The code names of a create's `build.codes`: printable, at most [`MAX_CODES`] of at most
+/// [`MAX_CODE_NAME`] characters, empty names left out.
+fn parse_codes(kind: &str, b: &serde_json::Value) -> Result<Vec<String>, String> {
+    let list = match b.get("codes") {
+        None | Some(serde_json::Value::Null) => return Ok(Vec::new()),
+        Some(serde_json::Value::Array(list)) => list,
+        Some(_) => return Err(format!("{kind}: `build.codes` must be a list of names")),
+    };
+    let mut names = Vec::new();
+    for v in list.iter().take(MAX_CODES) {
+        let name = v.as_str().ok_or_else(|| format!("{kind}: `build.codes` must be a list of names"))?;
+        let name: String = name.chars().filter(|c| !c.is_control()).take(MAX_CODE_NAME).collect();
+        if !name.trim().is_empty() {
+            names.push(name.trim().to_string());
+        }
+    }
+    Ok(names)
+}
+
 /// A build's display name: printable, at most [`MAX_BUILD_NAME`] characters.
 fn clean_name(name: &str) -> String {
     name.chars().filter(|c| !c.is_control()).take(MAX_BUILD_NAME).collect::<String>().trim().to_string()
@@ -190,8 +216,9 @@ impl ModsRequest {
                 }
                 let name = b.get("name").and_then(|n| n.as_str()).unwrap_or("");
                 let (disc, disc_label, sd) = parse_parts(kind, b)?;
+                let codes = parse_codes(kind, b)?;
                 ModsRequest::Create {
-                    build: Build { hash: hash.to_string(), name: clean_name(name), disc, disc_label, sd },
+                    build: Build { hash: hash.to_string(), name: clean_name(name), disc, disc_label, sd, codes },
                     public: flag("public", Some(true))?,
                     controller: controller()?,
                 }
@@ -358,8 +385,28 @@ mod tests {
     }
 
     #[test]
+    fn code_names_are_parsed_and_bounded() {
+        let long = "x".repeat(MAX_CODE_NAME + 10);
+        let mut names = vec![json!("QOL - Faster Boot Time\u{7}"), json!("  "), json!(long)];
+        names.extend((0..MAX_CODES).map(|i| json!(format!("code {i}"))));
+        let r = ModsRequest::parse(MODS_CREATE, &json!({"build": {"hash": HASH, "codes": names}})).unwrap();
+        let ModsRequest::Create { build, .. } = r else { panic!() };
+        // The first MAX_CODES entries; the blank one left out, the rest printable and cut short.
+        assert_eq!(build.codes.len(), MAX_CODES - 1);
+        assert_eq!(build.codes[0], "QOL - Faster Boot Time");
+        assert_eq!(build.codes[1].chars().count(), MAX_CODE_NAME);
+        // None: an older launcher, or a game without codes; it is not sent back then.
+        let r = ModsRequest::parse(MODS_CREATE, &json!({"build": {"hash": HASH}})).unwrap();
+        let ModsRequest::Create { build, .. } = r else { panic!() };
+        assert!(build.codes.is_empty());
+        assert!(serde_json::to_value(&build).unwrap().get("codes").is_none());
+        assert!(ModsRequest::parse(MODS_CREATE, &json!({"build": {"hash": HASH, "codes": "a"}})).is_err());
+        assert!(ModsRequest::parse(MODS_CREATE, &json!({"build": {"hash": HASH, "codes": [1]}})).is_err());
+    }
+
+    #[test]
     fn a_join_compares_the_disc_and_whether_there_is_a_card() {
-        let room = Build { hash: HASH.into(), name: "REX".into(), disc: Some(DISC.into()), disc_label: Some("RSBE01 Rev 1".into()), sd: Some(CARD.into()) };
+        let room = Build { hash: HASH.into(), name: "REX".into(), disc: Some(DISC.into()), disc_label: Some("RSBE01 Rev 1".into()), sd: Some(CARD.into()), codes: Vec::new() };
         let other_card = "1".repeat(64);
         // Another card (synced before the join), even another build hash: joins.
         let ok = BuildKey { hash: "0".repeat(64), disc: Some(DISC.into()), sd: Some(other_card) };
