@@ -272,6 +272,8 @@ struct FrameRecord
   u32 checksum = 0;
   std::array<u32, 3> rng{};
   u32 fighters_crc = 0;
+  // The values fighters_crc is over (ReadFighterFields), for the desync message's parts.
+  FighterFields fighters{};
   u64 region_hash = 0;
   u32 game_set = 0;
   u32 game_frame = 0;
@@ -702,6 +704,12 @@ struct State
   };
   std::array<RngFrame, 64> rng_frames{};
   bool rng_logged = false;  // the calls were logged for this match's first desync
+  // This machine's parts and rng calls of the desync frame went to the peers (SendDesync), and a
+  // peer's were logged beside ours (LogPeerDesync): once a match each. Each machine logs only its
+  // own calls, so without them the log of the machine that kept to the inputs could not tell what
+  // the other one computed (bug report #192).
+  bool desync_parts_sent = false;
+  bool peer_desync_logged = false;
   // A guest call (BasicSound::Stop) made from the loop top: the registers to restore when it
   // returns there.
   bool gcall_active = false;
@@ -1481,6 +1489,7 @@ u32 FrameChecksum(const Guest& g, FrameRecord* rec)
   rec->rng = {g.U32(Addr::MTRAND_DEFAULT_SEED).value_or(0), g.U32(Addr::MTRAND_OTHER_SEED).value_or(0),
               g.U32(Addr::LIBC_RAND_NEXT).value_or(0)};
   rec->fighters_crc = FightersCrc(fighters);
+  rec->fighters = fighters;
   rec->game_set = IsGameSet(g) ? 1 : 0;
   for (int port = 0; port < MAX_LOBBY_PLAYERS; ++port)
   {
@@ -1647,10 +1656,59 @@ void SendDesync(s64 frame)
 {
   if (!s.socket)
     return;
+  s.desync_parts_sent = true;
   // "f": the first frame whose checksums differ (older builds ignore it).
-  const std::string text =
-      fmt::format(R"({{"t":"desync","v":1,"m":{},"f":{}}})", s.match_index, frame);
-  SendControlToAll(text, 3);
+  SendControlToAll(fmt::format(R"({{"t":"desync","v":1,"m":{},"f":{}}})", s.match_index, frame), 3);
+  // Then the same with "p": what this machine's checksum of that frame is over, and its rng calls
+  // of the frame and the 3 before it (LogRngCalls), for the peer's log (LogPeerDesync; older
+  // builds ignore it). A few KB, so 'F' pieces: on its own, so that a lost piece cannot lose the
+  // message that ends the game.
+  picojson::object o;
+  o["t"] = picojson::value("desync");
+  o["v"] = picojson::value(1.0);
+  o["m"] = picojson::value(static_cast<double>(s.match_index));
+  o["f"] = picojson::value(static_cast<double>(frame));
+  auto num = [](u32 v) { return picojson::value(static_cast<double>(v)); };
+  picojson::object p;
+  const FrameRecord& rec = s.history[static_cast<size_t>(std::max<s64>(frame, 0)) % s.history.size()];
+  if (frame >= 0 && rec.frame == frame)
+  {
+    p["r"] = picojson::value(picojson::array{num(rec.rng[0]), num(rec.rng[1]), num(rec.rng[2])});
+    p["fc"] = num(rec.fighters_crc);
+    picojson::array fs;
+    for (const auto& port : rec.fighters)
+    {
+      picojson::array fields;
+      for (const u32 v : port)
+        fields.push_back(num(v));
+      fs.push_back(picojson::value(fields));
+    }
+    p["fs"] = picojson::value(fs);
+  }
+  picojson::array rc;
+  for (s64 f = std::max<s64>(frame - 3, 0); frame >= 0 && f <= frame; ++f)
+  {
+    const State::RngFrame& rf = s.rng_frames[static_cast<size_t>(f) % s.rng_frames.size()];
+    if (rf.frame != f)
+      continue;
+    // At most 16 calls a frame (the count says how many there were): the message stays well
+    // under MAX_CONTROL_SIZE.
+    picojson::array calls;
+    for (u32 i = 0; i < std::min<u32>(rf.count, 16); ++i)
+    {
+      const State::RngCall& c = rf.calls[i];
+      calls.push_back(picojson::value(picojson::array{num(c.rng), num(c.state), num(c.callers[0]),
+                                                      num(c.callers[1]), num(c.callers[2]),
+                                                      num(c.callers[3]), num(c.callers[4]),
+                                                      num(c.callers[5])}));
+    }
+    rc.push_back(picojson::value(picojson::array{picojson::value(static_cast<double>(f)),
+                                                 num(rf.count), picojson::value(rf.first_run),
+                                                 picojson::value(calls)}));
+  }
+  p["rc"] = picojson::value(rc);
+  o["p"] = picojson::value(p);
+  SendControlToAll(picojson::value(o).serialize(), 2);
 }
 
 // The messages GekkoSend holds for one peer while a GekkoBatch is open (a 'B' datagram,
@@ -2690,6 +2748,147 @@ std::optional<std::vector<std::vector<std::string>>> TaskListsFromJson(const pic
   return lists;
 }
 
+// The generator of an rng call (State::RngCall::rng) as the log names it.
+std::string RngGenName(u32 rng)
+{
+  if (rng == Addr::MTRAND_DEFAULT_SEED - 4)
+    return "mtRand";
+  if (rng == Addr::MTRAND_OTHER_SEED - 4)
+    return "mtRandOther";
+  return fmt::format("{:08x}", rng);
+}
+
+// How many draws of the game's LCG (mtRand: s * 0x41C64E6D + 0x3039 mod 2^31) take seed `from`
+// to `to`, either way: + ahead, - behind; nullopt: not within `max` draws.
+std::optional<s64> RngDraws(u32 from, u32 to, s64 max = 100000)
+{
+  u32 a = from & 0x7fffffff, b = to & 0x7fffffff;
+  for (s64 n = 0; n <= max; ++n)
+  {
+    if (a == (to & 0x7fffffff))
+      return n;
+    if (b == (from & 0x7fffffff))
+      return -n;
+    a = (a * 0x41C64E6Du + 0x3039u) & 0x7fffffff;
+    b = (b * 0x41C64E6Du + 0x3039u) & 0x7fffffff;
+  }
+  return std::nullopt;
+}
+
+// A peer's parts of the desync frame (SendDesync's "p") beside this machine's own record of that
+// frame: the rng seeds (and how many draws apart), each fighter whose values differ, and the
+// peer's rng calls of the frame and the 3 before it, as LogRngCalls logs ours. Once a match.
+// Everything in `p` comes from the network: what does not parse is left out.
+void LogPeerDesync(int slot, s64 frame, const picojson::object& p)
+{
+  if (s.peer_desync_logged)
+    return;
+  s.peer_desync_logged = true;
+  auto u32_of = [](const picojson::value& v) -> std::optional<u32> {
+    const auto n = PeerData::JsonUInt(&v, 0xFFFFFFFF);
+    return n ? std::optional<u32>(static_cast<u32>(*n)) : std::nullopt;
+  };
+  auto u32s = [&](const picojson::value* v, size_t n) -> std::optional<std::vector<u32>> {
+    if (!v || !v->is<picojson::array>() || v->get<picojson::array>().size() != n)
+      return std::nullopt;
+    std::vector<u32> out;
+    for (const auto& x : v->get<picojson::array>())
+    {
+      const auto u = u32_of(x);
+      if (!u)
+        return std::nullopt;
+      out.push_back(*u);
+    }
+    return out;
+  };
+  auto get = [&](const char* k) -> const picojson::value* {
+    const auto it = p.find(k);
+    return it == p.end() ? nullptr : &it->second;
+  };
+  const FrameRecord& ours = s.history[static_cast<size_t>(frame) % s.history.size()];
+  const bool have_ours = ours.frame == frame;
+  const auto rng = u32s(get("r"), 3);
+  const auto fc = get("fc") ? u32_of(*get("fc")) : std::nullopt;
+  if (rng && fc)
+  {
+    WARN_LOG_FMT(BRAWLBACK, "gprb: P{}'s parts of frame {}: rng {:08x} {:08x} {:08x}, fighters {:08x}",
+                 slot + 1, frame, (*rng)[0], (*rng)[1], (*rng)[2], *fc);
+    if (have_ours)
+    {
+      WARN_LOG_FMT(BRAWLBACK, "gprb: our parts of frame {}: rng {:08x} {:08x} {:08x}, fighters {:08x}",
+                   frame, ours.rng[0], ours.rng[1], ours.rng[2], ours.fighters_crc);
+      for (int k = 0; k < 2; ++k)
+      {
+        if ((*rng)[k] == ours.rng[k])
+          continue;
+        const auto d = RngDraws(ours.rng[k], (*rng)[k]);
+        WARN_LOG_FMT(BRAWLBACK, "gprb: P{}'s {} is {}", slot + 1, k == 0 ? "mtRand" : "mtRandOther",
+                     !d       ? std::string("not within 100000 draws of ours") :
+                     *d > 0   ? fmt::format("{} draws ahead of ours", *d) :
+                                fmt::format("{} draws behind ours", -*d));
+      }
+    }
+    else
+    {
+      WARN_LOG_FMT(BRAWLBACK, "gprb: our parts of frame {}: not kept", frame);
+    }
+  }
+  if (const auto* fs = get("fs"); fs && fs->is<picojson::array>() &&
+                                  fs->get<picojson::array>().size() == ours.fighters.size())
+  {
+    const auto& arr = fs->get<picojson::array>();
+    auto text = [](const auto& f) {
+      return fmt::format("instance {} damage {} stocks {} x {} y {} status {}", f[0],
+                         std::bit_cast<float>(f[1]), f[2], std::bit_cast<float>(f[3]),
+                         std::bit_cast<float>(f[4]), f[5]);
+    };
+    for (size_t port = 0; port < arr.size(); ++port)
+    {
+      const auto theirs = u32s(&arr[port], ours.fighters[port].size());
+      if (!theirs || (have_ours && std::equal(theirs->begin(), theirs->end(),
+                                              ours.fighters[port].begin())))
+      {
+        continue;
+      }
+      WARN_LOG_FMT(BRAWLBACK, "gprb: fighter P{} at frame {}: P{}'s {}; ours {}", port + 1, frame,
+                   slot + 1, text(*theirs),
+                   have_ours ? text(ours.fighters[port]) : std::string("not kept"));
+    }
+  }
+  if (const auto* rc = get("rc"); rc && rc->is<picojson::array>())
+  {
+    WARN_LOG_FMT(BRAWLBACK, "gprb: P{}'s rng calls before the desync at frame {}:", slot + 1, frame);
+    const auto& frames = rc->get<picojson::array>();
+    for (size_t i = 0; i < std::min<size_t>(frames.size(), 4); ++i)
+    {
+      if (!frames[i].is<picojson::array>() || frames[i].get<picojson::array>().size() != 4)
+        continue;
+      const auto& fr = frames[i].get<picojson::array>();
+      const auto f = PeerData::JsonUInt(&fr[0], 1u << 30);
+      const auto count = u32_of(fr[1]);
+      if (!f || !count || !fr[2].is<bool>() || !fr[3].is<picojson::array>())
+        continue;
+      WARN_LOG_FMT(BRAWLBACK, "gprb: P{}'s rng frame {}: {} calls ({} pass)", slot + 1, *f, *count,
+                   fr[2].get<bool>() ? "first" : "again");
+      const auto& calls = fr[3].get<picojson::array>();
+      for (size_t j = 0; j < std::min<size_t>(calls.size(), 16); ++j)
+      {
+        const auto c = u32s(&calls[j], 8);
+        if (!c)
+          continue;
+        WARN_LOG_FMT(BRAWLBACK,
+                     "gprb: P{}'s rng frame {} #{}: {} state {:08x} lr {:08x} < {:08x} < {:08x} < "
+                     "{:08x} < {:08x} < {:08x}",
+                     slot + 1, *f, j, RngGenName((*c)[0]), (*c)[1], (*c)[2], (*c)[3], (*c)[4],
+                     (*c)[5], (*c)[6], (*c)[7]);
+      }
+      if (*count > calls.size())
+        WARN_LOG_FMT(BRAWLBACK, "gprb: P{}'s rng frame {}: {} more calls not sent", slot + 1, *f,
+                     *count - calls.size());
+    }
+  }
+}
+
 void HandleControl(std::string_view text, const sf::IpAddress& from, u16 from_port)
 {
   // Everything here comes from the other players' machines (or anyone who can send UDP to this
@@ -2733,6 +2932,18 @@ void HandleControl(std::string_view text, const sf::IpAddress& from, u16 from_po
                                   t->second.get<std::string>() == "desync")
   {
     const auto m = o.find("m");
+    // Its parts (SendDesync's second message), this match's or, when ours already ended on it,
+    // the last one's: logged beside ours.
+    if (const auto f = o.find("f"), pp = o.find("p");
+        m != o.end() && m->second.is<double>() && f != o.end() && pp != o.end() &&
+        pp->second.is<picojson::object>())
+    {
+      const auto mi = PeerData::JsonUInt(&m->second, 0xFFFFFFFF);
+      const auto fi = PeerData::JsonUInt(&f->second, 1u << 30);
+      if (mi && fi &&
+          (*mi == s.match_index || (*mi + 1 == s.match_index && s.phase != Phase::Running)))
+        LogPeerDesync(slot, static_cast<s64>(*fi), pp->second.get<picojson::object>());
+    }
     if (s.phase == Phase::Running && !s.desync_end && m != o.end() && m->second.is<double>() &&
         m->second.get<double>() == static_cast<double>(s.match_index))
     {
@@ -3620,6 +3831,8 @@ void ResetRunStats()
   for (auto& r : s.rng_frames)
     r.frame = -1;
   s.rng_logged = false;
+  s.desync_parts_sent = false;
+  s.peer_desync_logged = false;
   s.io_wait_active = false;
   s.io_wait_sound = false;
   s.io_wait_n = 0;
@@ -4963,13 +5176,6 @@ void LogRngCalls(s64 frame, std::string_view why)
   if (s.rng_logged)
     return;
   s.rng_logged = true;
-  const auto gen = [](u32 rng) -> std::string {
-    if (rng == Addr::MTRAND_DEFAULT_SEED - 4)
-      return "mtRand";
-    if (rng == Addr::MTRAND_OTHER_SEED - 4)
-      return "mtRandOther";
-    return fmt::format("{:08x}", rng);
-  };
   WARN_LOG_FMT(BRAWLBACK, "gprb rng calls before the {} at frame {} (each frame's newest pass):", why,
                frame);
   for (s64 f = std::max<s64>(frame - 3, 0); f <= frame; ++f)
@@ -4989,7 +5195,7 @@ void LogRngCalls(s64 frame, std::string_view why)
       WARN_LOG_FMT(BRAWLBACK,
                    "gprb rng frame {} #{}: {} state {:08x} lr {:08x} < {:08x} < {:08x} < {:08x} < "
                    "{:08x} < {:08x}",
-                   f, i, gen(c.rng), c.state, c.callers[0], c.callers[1], c.callers[2],
+                   f, i, RngGenName(c.rng), c.state, c.callers[0], c.callers[1], c.callers[2],
                    c.callers[3], c.callers[4], c.callers[5]);
     }
     if (rf.count > n)
@@ -5077,6 +5283,11 @@ bool ProcessGekkoUpdate(Core::System& system, GekkoGameEvent** events, int count
         s.desync_end = true;
         WARN_LOG_FMT(BRAWLBACK, "gprb: the game states differ from frame {}: the game ends",
                      sev[i]->data.desynced.frame);
+        SendDesync(sev[i]->data.desynced.frame);
+      }
+      else if (s.mode == Mode::Network && !s.desync_parts_sent)
+      {
+        // The peer said so first: our parts still go, for its log.
         SendDesync(sev[i]->data.desynced.frame);
       }
       break;
@@ -8931,6 +9142,9 @@ bool OnLoopTop(const Core::CPUThreadGuard& guard)
       LogRngCalls(s.desync_frame, "desync");
     else
       LogRngCalls(s.snd_max_frame, "desync the peer found (frame not known; the newest frames)");
+    // Our own check has not seen it yet: our parts of the frame the peer named, for its log.
+    if (s.desync_frame >= 0 && !s.desync_parts_sent)
+      SendDesync(s.desync_frame);
     EndRunning(system, "desync");
     s.desync_end = false;
     s.desynced = true;

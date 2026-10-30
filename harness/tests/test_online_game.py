@@ -1164,6 +1164,27 @@ def test_desync_logs_each_machines_rng_calls(backend: OnlineBackend,
         i = later[0]
         assert any(sa[i] == step(sb[i], 12 * n) for n in range(1, 7)), (f"{sa[i]:08x}", f"{sb[i]:08x}")
     print("A's seeds differ from call", later[0] if later else "none (after the last draw)")
+    # Each log also has the other machine's parts of the frame and its rng calls (the desync
+    # message's "p", bug #192: the log of the machine that kept to the inputs could not say what
+    # the other one computed). A's g_mtRand is 12 n draws ahead of B's: B's log says so of A, A's
+    # log the other way round, and the peer's calls of the frames before are the log's own.
+    ahead = {}
+    for g, own in ((a, ca), (b, cb)):
+        text = (g.inst.user_dir / "Logs" / "dolphin.log").read_text(errors="replace")
+        assert re.search(rf"gprb: P\d's parts of frame {fa}: rng [0-9a-f]{{8}} ", text), \
+            f"{g.name}: no peer parts logged"
+        m = re.search(r"gprb: P\d's mtRand is (\d+) draws (ahead of|behind) ours", text)
+        assert m, f"{g.name}: no mtRand distance logged"
+        assert int(m.group(1)) % 12 == 0 and int(m.group(1)) > 0, m.group(0)
+        ahead[g.name] = m.group(2)
+        assert re.search(rf"gprb: P\d's rng calls before the desync at frame {fa}:", text)
+        peer = {}
+        for c in re.finditer(r"gprb: P\d's rng frame (\d+) #\d+: (\S+) state ([0-9a-f]{8}) lr ((?:[0-9a-f]{8}(?: < )?)+)",
+                             text):
+            peer.setdefault(int(c.group(1)), []).append((c.group(2), c.group(3), c.group(4).strip()))
+        for f in range(max(fa - 3, 0), fa):
+            assert peer.get(f) == own[f][:16], (g.name, f, peer.get(f), own[f])
+    assert ahead == {a.name: "behind", b.name: "ahead of"}, ahead
 
 
 def _p1_damage_addr(g: Game) -> int:
@@ -1199,6 +1220,14 @@ def _desync(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance], gpu
     ends = [online_set.gstatus(g.c) for g in (a, b)]
     print("end", [(s["end_reason"], s["desyncs_detected"], s["current_frame"]) for s in ends])
     assert [s["end_reason"] for s in ends] == ["desync", "desync"], ends
+    # Each log names the fighter that differs, with the other machine's values beside its own
+    # (the desync message's parts, bug #192): A's P1 has the 77% on A's side of both lines.
+    for g, theirs, ours in ((a, r"(?!77 )\S+", "77"), (b, "77", r"(?!77 )\S+")):
+        text = (g.inst.user_dir / "Logs" / "dolphin.log").read_text(errors="replace")
+        m = re.search(rf"gprb: fighter P1 at frame \d+: P\d's instance \d+ damage {theirs} .*; "
+                      rf"ours instance \d+ damage {ours} ", text)
+        assert m, f"{g.name}: no fighter P1 line with the 77% on A's side"
+        print(g.name, m.group(0))
     for g in (a, b):
         # No "GAME!": the plugin ended the match itself (0x20000), after DESYNC DETECTED.
         assert g.debug_scratch()[10] & 0x120000 == 0x120000, hex(g.debug_scratch()[10])
