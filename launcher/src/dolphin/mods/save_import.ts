@@ -274,6 +274,81 @@ export async function findDolphinSaveNear(
   return null;
 }
 
+/**
+ * The User folders the player's own Dolphin keeps its NAND in, where Dolphin itself puts it
+ * (UICommon::SetUserDirectory): on Windows `Documents\Dolphin Emulator` (older Dolphins, and a
+ * OneDrive Documents) or `%APPDATA%\Dolphin Emulator`; on macOS `~/Library/Application
+ * Support/Dolphin`; on Linux `$XDG_DATA_HOME/dolphin-emu`, `~/.dolphin-emu` and the Flatpak's (Steam
+ * Deck, EmuDeck). A portable Dolphin's is wherever the player unpacked it: "From a Dolphin folder".
+ */
+export function ownDolphinUserFolders(
+  platform: NodeJS.Platform,
+  home: string,
+  env: Record<string, string | undefined>,
+): string[] {
+  if (platform === "win32") {
+    const appData = env.APPDATA || path.join(home, "AppData", "Roaming");
+    return [
+      path.join(appData, "Dolphin Emulator"),
+      path.join(home, "Documents", "Dolphin Emulator"),
+      path.join(home, "OneDrive", "Documents", "Dolphin Emulator"),
+    ];
+  }
+  if (platform === "darwin") {
+    return [path.join(home, "Library", "Application Support", "Dolphin")];
+  }
+  return [
+    path.join(env.XDG_DATA_HOME || path.join(home, ".local", "share"), "dolphin-emu"),
+    path.join(home, ".dolphin-emu"),
+    path.join(home, ".var", "app", "org.DolphinEmu.dolphin-emu", "data", "dolphin-emu"),
+  ];
+}
+
+/**
+ * The title's save in the player's own Dolphin (`ownDolphinUserFolders`), the newest one when
+ * there are several (bug report #193: a Tatsunoko vs. Capcom save with everything unlocked, played
+ * in their own Dolphin, while rooms played a new save the room's game had made). Null for none.
+ */
+export async function findOwnDolphinSave(folders: string[], titleId: string): Promise<SaveSummary | null> {
+  let best: SaveSummary | null = null;
+  for (const folder of folders) {
+    const found = await findNandSave(folder, titleId).catch(() => null);
+    const save = found ? await summarizeSave(found) : null;
+    if (save && save.files > 0 && (!best || (save.modified ?? "") > (best.modified ?? ""))) {
+      best = save;
+    }
+  }
+  return best;
+}
+
+/** Whether two save folders hold the same files with the same bytes (an imported save not played
+ * since). */
+export async function sameSave(a: string, b: string): Promise<boolean> {
+  const list = async (dir: string, prefix = ""): Promise<string[]> => {
+    const entries = await readdir(dir, { withFileTypes: true }).catch(() => [] as Dirent[]);
+    const out: string[] = [];
+    for (const e of entries) {
+      if (e.isDirectory()) {
+        out.push(...(await list(path.join(dir, e.name), `${prefix}${e.name}/`)));
+      } else if (e.isFile()) {
+        out.push(prefix + e.name);
+      }
+    }
+    return out;
+  };
+  const [filesA, filesB] = [(await list(a)).sort(), (await list(b)).sort()];
+  if (filesA.length === 0 || filesA.join("\n") !== filesB.join("\n")) {
+    return false;
+  }
+  for (const f of filesA) {
+    const [x, y] = await Promise.all([readFile(path.join(a, f)), readFile(path.join(b, f))]);
+    if (!x.equals(y)) {
+      return false;
+    }
+  }
+  return true;
+}
+
 /** Copies a save folder's files and folders (no links), refusing what is too big to be a save. */
 async function copySaveTree(from: string, to: string, count = { files: 0, bytes: 0 }): Promise<typeof count> {
   await mkdir(to, { recursive: true });

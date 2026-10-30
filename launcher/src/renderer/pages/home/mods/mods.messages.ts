@@ -104,6 +104,11 @@ export const ModsMessages = {
   importSave: () => "Import save",
   importSaveFile: () => "From a data.bin file…",
   importSaveFolder: () => "From a Dolphin folder…",
+  ownDolphinSave: (modified: string) =>
+    `Your own Dolphin has another save of this game${
+      modified ? ` (last changed ${modified})` : ""
+    }. Import save > From your Dolphin uses it here.`,
+  importOwnDolphinSave: (modified: string) => `From your Dolphin${modified ? ` (${modified})` : ""}`,
   saveFileFilter: () => "Wii save (data.bin)",
   importGcSaveFile: () => "From a .gci file or memory card…",
   gcSaveFileFilter: () => "GameCube save (.gci) or memory card (.raw, .gcp)",

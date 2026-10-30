@@ -4,6 +4,7 @@ import type { SettingsManager } from "@settings/settings_manager";
 import { randomUUID } from "crypto";
 import electronLog from "electron-log";
 import { mkdir, stat } from "fs/promises";
+import os from "os";
 import path from "path";
 import { throttleProgress } from "utils/copy_file";
 
@@ -12,7 +13,7 @@ import type { DolphinManager } from "../manager";
 import { DolphinLaunchType } from "../types";
 import { BUILD_HASH_VERSION, buildHashKey, combineBuildHash, computeBuildParts, sdHashKey } from "./build_hash";
 import { defaultControllerKind, readDolphinControllers } from "./controllers";
-import { discIdentity, readDiscInfo } from "./disc_info";
+import { discIdentity, isBrawlGameId, readDiscInfo } from "./disc_info";
 import { findModParts } from "./folder_import";
 import { gcSaveDir, importGcSave, summarizeGcSave } from "./gc_save";
 import { knownDiscName, knownModName } from "./known_builds";
@@ -21,11 +22,15 @@ import { readModRoomStatus, writeModRoomRequest } from "./room_files";
 import { discLabel, matchRoom } from "./room_match";
 import {
   findDolphinSaveNear,
+  findOwnDolphinSave,
   importSave,
   moveSaveStore,
+  ownDolphinUserFolders,
+  sameSave,
   saveStoreDir,
   summarizeSave,
   titleDataDir,
+  titleGameId,
 } from "./save_import";
 import type { SdHashFn } from "./sd_hash";
 import { sdCardRoot } from "./sd_hash";
@@ -173,6 +178,9 @@ export class ModsManager {
     private readonly sdHash: SdHashFn = sdCardRoot,
     /** Room cards' listings on the accounts server (sd_listing.ts). */
     private readonly listings: SdListingStore = noListings,
+    /** The User folders of the player's own Dolphin, whose Wii saves a game can start from. */
+    private readonly ownDolphinFolders: () => string[] = () =>
+      ownDolphinUserFolders(process.platform, os.homedir(), process.env),
   ) {}
 
   async joinByCode(options: ModsJoinByCodeOptions): Promise<ModsJoinByCodeResult> {
@@ -671,7 +679,12 @@ export class ModsManager {
       return null;
     }
     const folder = await this.saveDataDir(id);
-    return build.platform === "gamecube" ? summarizeGcSave(folder) : summarizeSave(folder);
+    if (build.platform === "gamecube") {
+      return summarizeGcSave(folder);
+    }
+    const save = await summarizeSave(folder);
+    const own = await findOwnDolphinSave(this.ownDolphinFolders(), this.findBuild(id).titleId!).catch(() => null);
+    return { ...save, ownDolphin: own && !(await sameSave(own.folder, folder)) ? own : null };
   }
 
   /** The save's folder, made if it is not there yet (an empty one plays as no save). */
@@ -844,8 +857,8 @@ export class ModsManager {
   /**
    * A Wii game with no save in its store yet starts from the one in the Dolphin folder its
    * launcher or SD card is in, when there is one: the save the player has played the mod with
-   * (bug report #144). Without it the room's game made a new save, its rules and unlocks the
-   * game's defaults. A store with a save is left alone, as is any game while a room runs (its
+   * (bug report #144), and a plain disc the one in the player's own Dolphin (bug report #193).
+   * Without it the room's game made a new save, its rules and unlocks the game's defaults. A store with a save is left alone, as is any game while a room runs (its
    * game writes its save back when it closes).
    */
   private async importSaveNearBuild(build: ModBuild): Promise<void> {
@@ -856,7 +869,12 @@ export class ModsManager {
     if ((await summarizeSave(titleDataDir(saveStoreDir(userFolder, build.hash), build.titleId))).files > 0) {
       return;
     }
-    const source = await findDolphinSaveNear([build.launcherPath, build.sdPath], build.titleId);
+    let source = await findDolphinSaveNear([build.launcherPath, build.sdPath], build.titleId);
+    // Else a plain disc's save in the player's own Dolphin (bug report #193). Not for Brawl, whose
+    // save there is mostly a P+ card's (name tags, controls), which no build starts from.
+    if (!source && !build.launcherPath && !build.sdPath && !isBrawlGameId(titleGameId(build.titleId))) {
+      source = (await findOwnDolphinSave(this.ownDolphinFolders(), build.titleId))?.folder ?? null;
+    }
     // Not P+'s own save (a card in the netplay User folder): no build starts from it (template_saves.ts).
     const fromUser = source ? path.relative(userFolder, source) : "";
     if (!source || !(fromUser.startsWith("..") || path.isAbsolute(fromUser))) {

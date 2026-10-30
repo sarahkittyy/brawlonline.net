@@ -46,7 +46,8 @@ export type SaveSectionProps = {
    * save as it is. */
   info: ModSaveInfo | "loading" | "not-ready";
   busy: boolean;
-  onImport: (from: "file" | "folder") => void;
+  /** "own": the save in the player's own Dolphin (`info.ownDolphin`). */
+  onImport: (from: "file" | "folder" | "own") => void;
   onOpenFolder: () => void;
 };
 
@@ -64,7 +65,9 @@ const SaveSection = ({ gamecube, info, busy, onImport, onOpenFolder }: SaveSecti
   } else {
     line = info.files > 0 ? formatSaveSummary(info) : Messages.saveNone();
   }
-  const pick = (from: "file" | "folder") => {
+  const own = ready && info.ownDolphin ? info.ownDolphin : null;
+  const ownWhen = own?.modified ? new Date(own.modified).toLocaleString() : "";
+  const pick = (from: "file" | "folder" | "own") => {
     setMenuAnchor(null);
     onImport(from);
   };
@@ -72,6 +75,7 @@ const SaveSection = ({ gamecube, info, busy, onImport, onOpenFolder }: SaveSecti
     <div>
       <div>{Messages.saveData()}</div>
       <div className={styles.saveLine}>{line}</div>
+      {own && <div className={styles.saveLine}>{Messages.ownDolphinSave(ownWhen)}</div>}
       <div className={styles.saveHelp}>{Messages.saveHelp()}</div>
       <div className={styles.saveButtons}>
         <Button
@@ -88,6 +92,7 @@ const SaveSection = ({ gamecube, info, busy, onImport, onOpenFolder }: SaveSecti
         </Button>
       </div>
       <Menu anchorEl={menuAnchor} open={menuAnchor !== null} onClose={() => setMenuAnchor(null)}>
+        {own && <MenuItem onClick={() => pick("own")}>{Messages.importOwnDolphinSave(ownWhen)}</MenuItem>}
         <MenuItem onClick={() => pick("file")}>
           {gamecube ? Messages.importGcSaveFile() : Messages.importSaveFile()}
         </MenuItem>

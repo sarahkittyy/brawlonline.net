@@ -1,5 +1,5 @@
 import { createCipheriv, createHash } from "crypto";
-import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, utimes, writeFile } from "fs/promises";
 import os from "os";
 import path from "path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -8,10 +8,13 @@ import {
   escapeNandName,
   findDolphinSaveNear,
   findNandSave,
+  findOwnDolphinSave,
   importSave,
   KEEP_BACKUPS,
   moveSaveStore,
+  ownDolphinUserFolders,
   readDataBin,
+  sameSave,
   saveStoreDir,
   titleDataDir,
   titleGameId,
@@ -258,6 +261,43 @@ describe("save import", () => {
     // Another game's save, or none near the files, finds nothing.
     expect(await findDolphinSaveNear([launcher, sd], NSMBW)).toBeNull();
     expect(await findDolphinSaveNear([path.join(tmp, "elsewhere", "a", "b", "launcher.dol")], BRAWL)).toBeNull();
+  });
+
+  it("knows where the player's own Dolphin keeps its User folder", () => {
+    expect(ownDolphinUserFolders("win32", "/home/me", { APPDATA: "/roaming" })[0]).toBe(
+      path.join("/roaming", "Dolphin Emulator"),
+    );
+    expect(ownDolphinUserFolders("win32", "/home/me", {})).toContain(
+      path.join("/home/me", "Documents", "Dolphin Emulator"),
+    );
+    expect(ownDolphinUserFolders("darwin", "/Users/me", {})).toEqual([
+      path.join("/Users/me", "Library", "Application Support", "Dolphin"),
+    ]);
+    expect(ownDolphinUserFolders("linux", "/home/me", { XDG_DATA_HOME: "/xdg" })[0]).toBe(
+      path.join("/xdg", "dolphin-emu"),
+    );
+    expect(ownDolphinUserFolders("linux", "/home/me", {})).toContain(
+      path.join("/home/me", ".var", "app", "org.DolphinEmu.dolphin-emu", "data", "dolphin-emu"),
+    );
+  });
+
+  it("finds the newest save of the title in the player's own Dolphins (bug report #193)", async () => {
+    const save = async (root: string, text: string, when: Date) => {
+      const data = path.join(tmp, root, "Wii", "title", "00010000", "534d4e45", "data");
+      await mkdir(data, { recursive: true });
+      await writeFile(path.join(data, "wiiking2.sav"), text);
+      await utimes(path.join(data, "wiiking2.sav"), when, when);
+      return data;
+    };
+    const old = await save("Documents", "old", new Date("2020-01-01"));
+    const recent = await save("AppData", "recent", new Date("2026-01-01"));
+    const folders = ["AppData", "Documents", "none"].map((f) => path.join(tmp, f));
+    expect((await findOwnDolphinSave(folders, NSMBW))?.folder).toBe(recent);
+    expect(await findOwnDolphinSave(folders, MKW)).toBeNull();
+    expect(await sameSave(old, recent)).toBe(false);
+    await writeFile(path.join(old, "wiiking2.sav"), "recent");
+    expect(await sameSave(old, recent)).toBe(true);
+    expect(await sameSave(path.join(tmp, "none"), path.join(tmp, "none2"))).toBe(false);
   });
 
   it("refuses an empty save and a folder too big to be one, and leaves the store as it was", async () => {
