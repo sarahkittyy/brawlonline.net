@@ -330,7 +330,7 @@ export interface AccountsApi {
   /** Players online and the public rooms. */
   rooms(uid: string): Promise<RoomList>;
   /** Names the rooms of this kind the player hosts (null: no name); what was stored comes back
-   * (a racial slur is replaced by a kind name). */
+   * (a slur is replaced by a kind name). */
   setRoomName(uid: string, kind: RoomKind, name: string | null): Promise<string | null>;
   /** A published ruleset by code (public). */
   ruleset(code: string): Promise<RulesetView>;

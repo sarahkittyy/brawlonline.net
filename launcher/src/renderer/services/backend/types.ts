@@ -73,7 +73,7 @@ export interface BackendService {
   /** Players online and the public rooms (Home > Overview); needs a login. */
   fetchRooms(): Promise<RoomList>;
   /** Names the rooms of this kind the player hosts, the one they host now too (null: no name;
-   * docs/design/rooms.md §1.4). Resolves to what was stored: a racial slur comes back as a kind name. */
+   * docs/design/rooms.md §1.4). Resolves to what was stored: a slur comes back as a kind name. */
   setRoomName(kind: RoomKind, name: string | null): Promise<string | null>;
   /** A published ruleset by code (anyone's; docs/rulesets-protocol.md). */
   fetchRuleset(code: string): Promise<RulesetView>;

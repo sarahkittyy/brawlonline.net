@@ -165,13 +165,13 @@ pub struct SetRoomNameReq {
 #[derive(Debug, Serialize)]
 pub struct RoomNameView {
     pub kind: RoomKind,
-    /// What was stored: the name cleaned up, or a kind one if it was a racial slur.
+    /// What was stored: the name cleaned up, or a kind one if it was a slur.
     pub name: Option<String>,
 }
 
 /// `PUT /v1/me/room-name` `{kind, name}`: the name of the rooms the account hosts
 /// (`docs/design/rooms.md` §1.4), kept for its next rooms of that kind. mm renames the room it
-/// hosts now within a few seconds (its account poll). A racial slur is replaced by a kind name at
+/// hosts now within a few seconds (its account poll). A slur is replaced by a kind name at
 /// once (the answer says what was stored). 400 `invalid_room_name`; limited per account
 /// ([`common::ratelimit::ROOM_NAME_WINDOWS`]).
 pub async fn set_room_name(

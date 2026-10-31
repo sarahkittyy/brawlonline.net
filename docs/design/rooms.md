@@ -81,7 +81,7 @@ Hosts name their rooms in the launcher, P+ rooms and Other Games rooms alike. Th
 | 38 | Shown | The name is the row's bold line; a room nobody named reads **"alice's room" in grey**, so a real name stands out. The players line under it puts a crown before the host's name. The game does not show it (default, not asked: the list is where rooms are chosen). |
 | 39 | Remembered | The name is the account's, **one for P+ rooms and one for Other Games rooms**: the host's next room of that kind gets it too, rooms created in game included (default: a P+ room's name would rarely fit a Mario Kart room). |
 | 40 | Host leaves | **The room keeps its name**; the new host's pencil renames it. |
-| 41 | Slurs | Through the racial slur filter of display names (`server/README.md`): a flagged name is **replaced by a kind one at once** and the box shows it; DeepInfra failing, it is stored as typed and replaced by the background re-check. |
+| 41 | Slurs | Through the slur filter of display names (`server/README.md`): a flagged name is **replaced by a kind one at once** and the box shows it; DeepInfra failing, it is stored as typed and replaced by the background re-check. |
 
 How it works: `PUT /v1/me/room-name {kind, name}` (accounts, `server/README.md`) stores `users.room_name` / `users.mods_room_name`; mm reads them with the account (a room takes its creator's at creation) and through its account poll (`changed_users`, every 3 s) renames the room the account hosts. The lists (`GET /v1/rooms`, `docs/rooms-protocol.md` §4) carry each room's `name` and the caller's own room (`yourRoom`: code, whether they host it, its name), private ones too. The launcher shows a saved name at once, before the list has it (`use_room_name.ts`).
 

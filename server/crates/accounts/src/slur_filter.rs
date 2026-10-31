@@ -1,10 +1,10 @@
-//! Racial slurs in display names, connect codes and room names: a small LLM on DeepInfra reads
-//! each name a player picks (sign-up, rename), each code start (`/v1/me/netplay`) and each room
-//! name (`/v1/me/room-name`), and one it calls a
-//! racial or ethnic slur is replaced by a kind one ("happy friend", `JOY#123`) before it is
-//! stored. Only racial slurs: profanity, sexual words and other insults are left to the admins.
-//! With several models (`SLUR_FILTER_MODELS`) every one must say YES. The prompt and the default
-//! model were checked against prod's 3715 names and 3039 code starts on 2026-10-26 (README).
+//! Slurs in display names, connect codes and room names: a small LLM on DeepInfra reads each name
+//! a player picks (sign-up, rename), each code start (`/v1/me/netplay`) and each room name
+//! (`/v1/me/room-name`), and one it calls a racial or ethnic slur, or the word rape or pedo
+//! (2026-10-31), is replaced by a kind one ("happy friend", `JOY#123`) before it is stored.
+//! Only those: profanity, other sexual words and other insults are left to the admins. With
+//! several models (`SLUR_FILTER_MODELS`) every one must say YES. The prompt and the default model
+//! were checked against prod's names and code starts on 2026-10-26 and 2026-10-31 (README).
 //!
 //! The check waits for the model (well under a second) but never blocks a sign-up: when DeepInfra
 //! fails or is slow the text is stored as typed and checked again in the background
@@ -53,6 +53,9 @@ pub const KIND_PREFIXES: &[&str] = &["JOY", "LOVE", "KIND", "HUG", "HAPY", "FUN"
 /// Who the audit log names for the filter's replacements.
 pub const ACTOR: &str = "slur-filter";
 
+/// The audit log's `reason` for a replacement ("racial slur" until 2026-10-31).
+pub const REASON: &str = "slur";
+
 /// One answer from the model; waits longer than this count as a failure (stored as typed,
 /// checked again later).
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
@@ -60,17 +63,19 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 /// Answers kept in memory (a player trying the same name again does not ask again).
 const CACHE_MAX: usize = 20_000;
 
-const PROMPT: &str = "You check player names in an online video game for racial slurs. \
-Answer YES only if the text clearly is, or clearly spells out, a racial or ethnic slur: \
-the n-word in any spelling (nigger, nigga, n1gg3r, niqqa, n i g g a, nibba), chink, kike, spic, wetback, gook, \
-raghead and the like, also when hidden inside a longer name (xXniggaXx, superchink). \
-A disguised spelling counts when the slur is still plain to read. \
+const PROMPT: &str = "You check player names in an online video game for racial slurs and for rape and pedophile words. \
+Answer YES only if the text clearly is, or clearly spells out, one of these: \
+a racial or ethnic slur: the n-word in any spelling (nigger, nigga, n1gg3r, niqqa, n i g g a, nibba), chink, kike, spic, wetback, gook, \
+raghead and the like; the word rape or rapist (r4pe, rapey, iRapeKids); \
+the word pedo or pedophile (paedo, p3do, pedobear, pedophilia). \
+Also when hidden inside a longer name (xXniggaXx, superchink, xXpedoXx). \
+A disguised spelling counts when the word is still plain to read. \
 Answer NO when in doubt, and for: ordinary words and names in any language that only look or sound similar \
-(Night, Nigel, Niger, Negan, Nipper, Raccoon, Spicy, Chang), profanity, sexual words, \
-insults that are not about race or ethnicity, hate groups, symbols and political or historical names, \
-and random letters. \
-A connect code start is 2 to 4 capital letters: only say YES if those letters are themselves a slur \
-(NIG, NIGG, NIGR, NIGA, KIKE, CHNK), not if they merely could stand for one. \
+or contain the same letters (Night, Nigel, Niger, Negan, Nipper, Raccoon, Spicy, Chang, Grape, Drape, Scraper, \
+Trapeze, Rapper, Rapier, Therapist, Torpedo, Speedo, Pedro, Pedal), profanity, other sexual words, \
+other insults, hate groups, symbols and political or historical names, and random letters. \
+A connect code start is 2 to 4 capital letters: only say YES if those letters are themselves one of these words \
+(NIG, NIGG, NIGR, NIGA, KIKE, CHNK, RAPE, PEDO), not if they merely could stand for one (PED, RAP, PDF, KIK). \
 Reply with one word: YES or NO.";
 
 /// What is being checked (the model is told, and answers are cached per kind).
@@ -175,7 +180,7 @@ impl SlurFilter {
         }
     }
 
-    /// Whether the model calls `text` a racial slur. `Ok(false)` while the filter is off.
+    /// Whether the model calls `text` a slur. `Ok(false)` while the filter is off.
     pub async fn is_slur(&self, what: What, text: &str) -> anyhow::Result<bool> {
         let Some(remote) = &self.remote else { return Ok(false) };
         let key = (what, text.trim().to_lowercase());
@@ -255,7 +260,7 @@ pub async fn screen_room_name(state: &AppState, name: &str) -> (String, bool) {
 /// text for `from`), once the account has it: the journal and `audit_log` as the late ones, so
 /// `pp-admin user slur-log` lists every replacement. A failed audit only warns.
 pub async fn audit_screened(state: &AppState, action: &str, uid: Uuid, from: &str, to: &str) {
-    tracing::info!(%uid, from, to, action, "racial slur replaced");
+    tracing::info!(%uid, from, to, action, "slur replaced");
     if let Err(e) = audit_replacement(&state.pool, ACTOR, action, uid, from, to).await {
         tracing::warn!(%uid, "audit of a slur replacement failed: {e}");
     }
@@ -270,8 +275,7 @@ pub async fn audit_replacement(
     from: &str,
     to: &str,
 ) -> sqlx::Result<()> {
-    store::audit(pool, actor, action, Some(&uid.to_string()), json!({"from": from, "to": to, "reason": "racial slur"}))
-        .await
+    store::audit(pool, actor, action, Some(&uid.to_string()), json!({"from": from, "to": to, "reason": REASON})).await
 }
 
 /// Checks a display name stored unchecked again in the background until the model answers, and
@@ -287,7 +291,7 @@ pub fn recheck_name(state: &AppState, uid: Uuid, name: String) {
                     let kind = kind_name();
                     match store::rename_if(&state.pool, uid, &name, kind).await {
                         Ok(true) => {
-                            tracing::info!(%uid, from = %name, to = kind, "racial slur in a display name replaced");
+                            tracing::info!(%uid, from = %name, to = kind, "slur in a display name replaced");
                             if let Err(e) = audit_replacement(&state.pool, ACTOR, "user.rename", uid, &name, kind).await
                             {
                                 tracing::warn!("audit of a slur rename failed: {e}");
@@ -318,7 +322,7 @@ pub fn recheck_room_name(state: &AppState, uid: Uuid, kind: RoomKind, name: Stri
                     let kind_text = kind_name();
                     match store::set_room_name_if(&state.pool, uid, kind, &name, kind_text).await {
                         Ok(true) => {
-                            tracing::info!(%uid, from = %name, to = kind_text, "racial slur in a room name replaced");
+                            tracing::info!(%uid, from = %name, to = kind_text, "slur in a room name replaced");
                             if let Err(e) =
                                 audit_replacement(&state.pool, ACTOR, "user.room-name", uid, &name, kind_text).await
                             {
@@ -350,7 +354,7 @@ pub fn recheck_code(state: &AppState, uid: Uuid, code: String) {
                 Ok(true) => {
                     match store::reassign_connect_code(&state.pool, uid, &code, kind_prefix()).await {
                         Ok(new) => {
-                            tracing::info!(%uid, from = %code, to = %new, "racial slur in a connect code replaced");
+                            tracing::info!(%uid, from = %code, to = %new, "slur in a connect code replaced");
                             if let Err(e) =
                                 audit_replacement(&state.pool, ACTOR, "user.set_code", uid, &code, &new).await
                             {

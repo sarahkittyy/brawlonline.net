@@ -246,7 +246,7 @@ enum UserCmd {
         ident: String,
     },
     /// Ask the slur filter (DEEPINFRA_API_KEY, as accounts) about every account's display name and
-    /// connect code start, and list the ones it calls a racial slur. With --apply, give those a
+    /// connect code start, and list the ones it calls a slur. With --apply, give those a
     /// kind name or code start, as accounts does at sign-up. Banned accounts are skipped.
     SlurScan {
         /// Replace the flagged names and codes (default: only list them).
@@ -258,7 +258,7 @@ enum UserCmd {
         #[command(flatten)]
         filter: Box<SlurFilterConfig>,
     },
-    /// Every racial slur the filter replaced (sign-up, rename, code pick, room name, the late
+    /// Every slur the filter replaced (sign-up, rename, code pick, room name, the late
     /// re-check) or `slur-scan --apply` did, newest first: when, by whom, what was typed, what
     /// it became, and the account's code and name now.
     SlurLog {

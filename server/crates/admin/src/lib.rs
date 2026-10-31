@@ -102,7 +102,7 @@ pub async fn chat_report_done(pool: &PgPool, actor: &str, id: i64) -> anyhow::Re
     Ok(done)
 }
 
-/// A racial slur the filter or `slur-scan` replaced, as `admin user slur-log` lists it.
+/// A slur the filter or `slur-scan` replaced, as `admin user slur-log` lists it.
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct SlurReplacement {
     pub at: chrono::DateTime<chrono::Utc>,
@@ -119,14 +119,15 @@ pub struct SlurReplacement {
     pub name: Option<String>,
 }
 
-/// The newest `limit` slur replacements (audit rows with reason "racial slur"), newest first.
+/// The newest `limit` slur replacements (audit rows with reason "slur", "racial slur" before
+/// 2026-10-31), newest first.
 pub async fn slur_replacements(pool: &PgPool, limit: i64) -> anyhow::Result<Vec<SlurReplacement>> {
     Ok(sqlx::query_as::<_, SlurReplacement>(
         "SELECT a.at, a.actor, a.action, a.target, a.detail->>'from' AS from_text, a.detail->>'to' AS to_text,
                 u.connect_code AS code, u.display_name AS name
            FROM audit_log a
            LEFT JOIN users u ON u.uid::text = a.target
-          WHERE a.detail->>'reason' = 'racial slur'
+          WHERE a.detail->>'reason' IN ('slur', 'racial slur')
           ORDER BY a.at DESC, a.id DESC
           LIMIT $1",
     )
