@@ -64,6 +64,14 @@ async fn mm_queries_work_as_pp_mm() {
     let ub = db::fetch_mm_user(&pool, b).await.unwrap().unwrap();
     assert_eq!(ub.rating, 1234.5);
     assert_eq!(ub.ranked_sets, 3);
+    // The hidden Unranked rating (0028_unranked_ratings.sql): the Ranked one until it has a row.
+    assert_eq!((ua.unranked_rating, ub.unranked_rating), (DEFAULT_RATING, 1234.5));
+    sqlx::query("INSERT INTO unranked_ratings (uid, rating, games) VALUES ($1, 1500.25, 4)")
+        .bind(b)
+        .execute(&stack.pool)
+        .await
+        .unwrap();
+    assert_eq!(db::fetch_mm_user(&pool, b).await.unwrap().unwrap().unranked_rating, 1500.25);
 
     // A mute and the changed-accounts look (0017_chat_mute.sql).
     let before: chrono::DateTime<chrono::Utc> =

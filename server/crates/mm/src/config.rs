@@ -67,6 +67,19 @@ pub struct Config {
     #[arg(long, env = "MM_RANKED_BAND_STEP_SECS", default_value_t = 15)]
     pub ranked_band_step_secs: u64,
 
+    /// Unranked: the largest difference of hidden Unranked ratings of a pair at first ...
+    /// (a very large band, say 100000, turns it off)
+    #[arg(long, env = "MM_UNRANKED_BAND", default_value_t = 150.0)]
+    pub unranked_band: f64,
+
+    /// ... widened by this many points ...
+    #[arg(long, env = "MM_UNRANKED_BAND_STEP", default_value_t = 50.0)]
+    pub unranked_band_step: f64,
+
+    /// ... for every this many seconds the longer-waiting player has waited.
+    #[arg(long, env = "MM_UNRANKED_BAND_STEP_SECS", default_value_t = 15)]
+    pub unranked_band_step_secs: u64,
+
     /// GeoIP database (DB-IP "IP to City Lite", `.mmdb`) for the ping estimate of a pair.
     /// Replace it by renaming a new file over it; mm notices within 10 minutes. Without it no pair
     /// is held back for ping. Production: /var/lib/ppserver/geoip/dbip-city-lite.mmdb.
@@ -156,6 +169,9 @@ impl Config {
             ranked_band: self.ranked_band.max(0.0),
             ranked_band_step: self.ranked_band_step.max(0.0),
             ranked_band_interval: Duration::from_secs(self.ranked_band_step_secs),
+            unranked_band: self.unranked_band.max(0.0),
+            unranked_band_step: self.unranked_band_step.max(0.0),
+            unranked_band_interval: Duration::from_secs(self.unranked_band_step_secs),
             geoip: crate::geo::GeoDb::load(self.geoip_file.as_deref()),
             ping_limit: self.ping_limit_ms.max(0.0),
             ping_limit_step: self.ping_limit_step_ms.max(0.0),
@@ -196,6 +212,9 @@ impl Config {
             ranked_band: 150.0,
             ranked_band_step: 50.0,
             ranked_band_step_secs: 15,
+            unranked_band: 150.0,
+            unranked_band_step: 50.0,
+            unranked_band_step_secs: 15,
             geoip_file: None,
             ping_limit_ms: 100.0,
             ping_limit_step_ms: 20.0,

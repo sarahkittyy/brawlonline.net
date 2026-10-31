@@ -25,12 +25,18 @@
 //!
 //! Three queues:
 //! - **Direct**: two tickets that name each other's codes are paired.
-//! - **Unranked**: a FIFO. The oldest waiting ticket is paired with the lowest-ping later ticket
-//!   (ties: arrival order) that is in its region (any region once either has waited
-//!   `region_widen`), within the ping limit, not the opponent it just played (until the hold) and
-//!   that it did not just fail to connect to. Slippi's tickets carry no region field, so the
-//!   region comes from the ticket's source address ([`crate::region`]); with no region table there
-//!   is one bucket.
+//! - **Unranked**: a FIFO. The oldest waiting ticket is paired with a later ticket that is in its
+//!   region (any region once either has waited `region_widen`), within the ping limit, within the
+//!   Unranked rating band, not the opponent it just played (until the hold) and that it did not
+//!   just fail to connect to; of those, the one whose pair needed the least waiting for its ping
+//!   and its rating gap together (`Engine::unranked_wait`), then the lowest ping (ties: arrival
+//!   order). The rating is the hidden Unranked one ([`common::unranked`], the Ranked rating until
+//!   a player's first rated Unranked game) and the band works as Ranked's: `unranked_band`
+//!   points, widened by `unranked_band_step` for every `unranked_band_interval` the
+//!   longer-waiting of the two has waited (±150, +50 every 15 s; the user's, 2026-10-31: "no hard
+//!   mmr limits for unranked-- just a longer wait the bigger the rating difference is"). Slippi's
+//!   tickets carry no region field, so the region comes from the ticket's source address
+//!   ([`crate::region`]); with no region table there is one bucket.
 //! - **Ranked**: like Unranked, but the oldest ticket takes the closest-rated opponent whose
 //!   rating is within the rating band: `ranked_band` points, widened by `ranked_band_step` for
 //!   every `ranked_band_interval` the longer-waiting of the two has waited (design 2.3: ±150,
@@ -168,6 +174,10 @@ pub struct EngineConfig {
     pub ranked_band_step: f64,
     /// ... for every this long the longer-waiting player has waited.
     pub ranked_band_interval: Duration,
+    /// Unranked: the same for the players' hidden Unranked ratings ([`common::unranked`]).
+    pub unranked_band: f64,
+    pub unranked_band_step: f64,
+    pub unranked_band_interval: Duration,
     /// Where an address is, for the ping estimate of a pair (`MM_GEOIP_FILE`).
     pub geoip: GeoDb,
     /// Unranked and Ranked: the highest estimated ping (ms) of a pair at first ...
@@ -222,6 +232,9 @@ impl Default for EngineConfig {
             ranked_band: 150.0,
             ranked_band_step: 50.0,
             ranked_band_interval: Duration::from_secs(15),
+            unranked_band: 150.0,
+            unranked_band_step: 50.0,
+            unranked_band_interval: Duration::from_secs(15),
             geoip: GeoDb::default(),
             ping_limit: 100.0,
             ping_limit_step: 20.0,
@@ -630,6 +643,32 @@ pub struct Engine {
 
 fn hello_ok() -> HelloResp {
     HelloResp { kind: common::rooms::HELLO_RESP.into(), error: None, latest_version: None, game_alive: true }
+}
+
+/// The rating a queue pairs by: the Ranked rating in Ranked, the hidden Unranked one in Unranked.
+fn queue_rating(ranked: bool, w: &Waiting) -> f64 {
+    if ranked {
+        w.user.rating
+    } else {
+        w.user.unranked_rating
+    }
+}
+
+/// Whole `interval`s in `waited` (none for a zero interval: the limit never widens).
+fn steps(waited: Duration, interval: Duration) -> f64 {
+    if interval.is_zero() {
+        0.0
+    } else {
+        (waited.as_secs_f64() / interval.as_secs_f64()).floor()
+    }
+}
+
+/// Seconds until a limit that widens by `step` every `interval` has grown by `excess`.
+fn wait_for(excess: f64, step: f64, interval: Duration) -> f64 {
+    if excess <= 0.0 || step <= 0.0 {
+        return 0.0;
+    }
+    (excess / step).ceil() * interval.as_secs_f64()
 }
 
 fn pair_key(a: Uuid, b: Uuid) -> (Uuid, Uuid) {
@@ -1657,7 +1696,12 @@ impl Engine {
             loc,
         });
         if p.mode == Mode::Unranked {
-            tracing::info!(conn, %code, %region, ?loc, queued = self.unranked.len() + 1, "unranked ticket waiting");
+            // The hidden Unranked rating.
+            let rating = self.conns.get(&conn).and_then(|c| match &c.state {
+                State::Waiting(w) => Some(w.user.unranked_rating.round()),
+                _ => None,
+            });
+            tracing::info!(conn, %code, %region, ?loc, ?rating, queued = self.unranked.len() + 1, "unranked ticket waiting");
             self.unranked.push(conn);
             self.pair_queue(Mode::Unranked, now, wall, out);
         } else if p.mode == Mode::Ranked {
@@ -1920,26 +1964,35 @@ impl Engine {
         }
     }
 
-    /// The largest rating difference a Ranked ticket accepts after waiting `waited`.
-    fn rating_band(&self, waited: Duration) -> f64 {
-        let steps = if self.cfg.ranked_band_interval.is_zero() {
-            0.0
+    /// The largest rating difference a pair in this queue accepts once the longer-waiting of the
+    /// two has waited `waited`: of Ranked ratings in Ranked, of hidden Unranked ratings in Unranked.
+    fn rating_band(&self, ranked: bool, waited: Duration) -> f64 {
+        let (band, step, interval) = self.band_rule(ranked);
+        band + step * steps(waited, interval)
+    }
+
+    fn band_rule(&self, ranked: bool) -> (f64, f64, Duration) {
+        if ranked {
+            (self.cfg.ranked_band, self.cfg.ranked_band_step, self.cfg.ranked_band_interval)
         } else {
-            (waited.as_secs_f64() / self.cfg.ranked_band_interval.as_secs_f64()).floor()
-        };
-        self.cfg.ranked_band + self.cfg.ranked_band_step * steps
+            (self.cfg.unranked_band, self.cfg.unranked_band_step, self.cfg.unranked_band_interval)
+        }
+    }
+
+    /// Unranked: how long (seconds) a pair has to wait before the ping limit and the rating band
+    /// allow it, the two added up. The pair that needs least is the best one (a close opponent
+    /// at a higher ping and a farther-rated one at a lower ping weigh against each other this way).
+    fn unranked_wait(&self, ping: Option<f64>, gap: f64) -> f64 {
+        let ping_wait = ping
+            .map_or(0.0, |p| wait_for(p - self.cfg.ping_limit, self.cfg.ping_limit_step, self.cfg.ping_limit_interval));
+        ping_wait + wait_for(gap - self.cfg.unranked_band, self.cfg.unranked_band_step, self.cfg.unranked_band_interval)
     }
 
     /// The highest estimated ping (ms) a pair in this queue may have when the shorter-waiting of
     /// the two has waited `waited`.
     fn ping_limit(&self, ranked: bool, waited: Duration) -> f64 {
-        let steps = if self.cfg.ping_limit_interval.is_zero() {
-            0.0
-        } else {
-            (waited.as_secs_f64() / self.cfg.ping_limit_interval.as_secs_f64()).floor()
-        };
         let max = if ranked { self.cfg.ranked_ping_limit_max } else { self.cfg.ping_limit_max };
-        (self.cfg.ping_limit + self.cfg.ping_limit_step * steps).min(max)
+        (self.cfg.ping_limit + self.cfg.ping_limit_step * steps(waited, self.cfg.ping_limit_interval)).min(max)
     }
 
     /// Whether a pair with this history, the earlier of whose current tickets came at `searched`,
@@ -1963,10 +2016,11 @@ impl Engine {
 
     /// The pair a queue makes next: the oldest ticket and a later one it can play. Same region
     /// unless either has waited `region_widen`; estimated ping within the ping limit of the
-    /// shorter-waiting of the two (no estimate: always within). Unranked takes the lowest-ping
-    /// such ticket (no estimate counts as `ping_limit`; ties: arrival order); Ranked the
-    /// closest-rated one within the rating band of the longer-waiting of the two (ties: arrival
-    /// order). Two who just played each other wait until the longer-waiting has waited
+    /// shorter-waiting of the two (no estimate: always within), and ratings within the rating
+    /// band of the longer-waiting of the two (Ranked ratings in Ranked, hidden Unranked ratings in
+    /// Unranked). Ranked takes the closest-rated such ticket; Unranked the one whose pair needed
+    /// the least waiting for its ping and rating gap together ([`Engine::unranked_wait`]), then
+    /// the lowest ping (no estimate counts as `ping_limit`). Ties: arrival order. Two who just played each other wait until the longer-waiting has waited
     /// `rematch_hold`. A pair matched within `requeue_window` whose new search came within
     /// `FAILED_REQUEUE` of it failed its P2P connect (Slippi requeues with a new ticket): anyone
     /// else in the queue goes first; the same two again only after the backoff, and not at all
@@ -1984,9 +2038,9 @@ impl Engine {
         let waited = |w: &Waiting| now.saturating_duration_since(w.since);
         let widened = |w: &Waiting| waited(w) >= self.cfg.region_widen;
         for (i, (a, wa)) in queue.iter().enumerate() {
-            // (ticket, rating difference or ping); the first of equals wins.
-            let mut fresh: Option<(ConnId, f64)> = None;
-            let mut retry: Option<(ConnId, u32, f64)> = None;
+            // (ticket, how good the pair is: lower is better); the first of equals wins.
+            let mut fresh: Option<(ConnId, (f64, f64))> = None;
+            let mut retry: Option<(ConnId, u32, (f64, f64))> = None;
             for (b, wb) in &queue[i + 1..] {
                 if wa.user.uid == wb.user.uid {
                     continue;
@@ -2000,11 +2054,17 @@ impl Engine {
                 if ping.is_some_and(|p| p > self.ping_limit(ranked, shorter)) {
                     continue;
                 }
-                let diff =
-                    if ranked { (wa.user.rating - wb.user.rating).abs() } else { ping.unwrap_or(self.cfg.ping_limit) };
-                if ranked && diff > self.rating_band(longer) {
+                let gap = (queue_rating(ranked, wa) - queue_rating(ranked, wb)).abs();
+                if gap > self.rating_band(ranked, longer) {
                     continue;
                 }
+                // Among the allowed: Ranked the closest rating; Unranked the pair that needed the
+                // least waiting for its ping and its rating gap, then the lowest ping.
+                let diff = if ranked {
+                    (gap, 0.0)
+                } else {
+                    (self.unranked_wait(ping, gap), ping.unwrap_or(self.cfg.ping_limit))
+                };
                 let recent = self
                     .history
                     .get(&pair_key(wa.user.uid, wb.user.uid))
@@ -2091,10 +2151,19 @@ impl Engine {
             [(_, _, a), (_, _, b)] => a.loc.zip(b.loc).map(|(la, lb)| estimate_rtt_ms(la, lb).round()),
             _ => None,
         };
+        // The rating difference the queue paired by (Ranked, or the hidden Unranked rating).
+        let rating_gap = match entrants.as_slice() {
+            [(_, _, a), (_, _, b)] if matches!(mode, Mode::Ranked | Mode::Unranked) => {
+                let ranked = mode == Mode::Ranked;
+                Some((queue_rating(ranked, a) - queue_rating(ranked, b)).abs().round())
+            }
+            _ => None,
+        };
         tracing::info!(
             %match_id,
             %region,
             ?ping_ms,
+            ?rating_gap,
             players = ?entrants.iter().map(|(_, a, w)| format!("{}@{}", w.code, a)).collect::<Vec<_>>(),
             "matched"
         );
@@ -2170,6 +2239,7 @@ mod tests {
             email_verified: true,
             rating: common::ranked::DEFAULT_RATING,
             ranked_sets: 0,
+            unranked_rating: common::ranked::DEFAULT_RATING,
             chat_muted: false,
             room_name: None,
             mods_room_name: None,
@@ -3120,6 +3190,111 @@ mod tests {
         let m = matches(&h.unranked(1, &u[2]));
         assert_eq!(m.len(), 1);
         assert_eq!(pair_of(&m[0]), pair_key(u[0].uid, u[2].uid));
+    }
+
+    impl Harness {
+        /// Players with these hidden Unranked ratings (and the default Ranked one).
+        fn unranked_rated(&mut self, ratings: &[f64]) -> Vec<MmUser> {
+            ratings
+                .iter()
+                .enumerate()
+                .map(|(i, r)| {
+                    let mut u = user(&format!("U{}#{}", (b'A' + i as u8) as char, i + 1), &format!("u{i}"));
+                    u.unranked_rating = *r;
+                    self.add(&u);
+                    u
+                })
+                .collect()
+        }
+    }
+
+    #[test]
+    fn unranked_holds_back_far_hidden_ratings_until_the_band_widens() {
+        let mut h = Harness::new(default_rules());
+        let u = h.unranked_rated(&[1500.0, 1400.0, 1360.0, 1610.0]);
+        for c in 1..=4 {
+            h.connect(c, 41000 + c as u16);
+        }
+        // 100 apart, inside ±150: at once.
+        h.unranked(1, &u[0]);
+        let m = matches(&h.unranked(2, &u[1]));
+        assert_eq!(pair_of(&m[0]), pair_key(u[0].uid, u[1].uid));
+        // 250 apart: the band grows 50 every 15 s of the longer wait, as Ranked's, so 30 s.
+        h.unranked(3, &u[2]);
+        assert!(matches(&h.unranked(4, &u[3])).is_empty());
+        assert!(matches(&h.advance(Duration::from_secs(29))).is_empty());
+        let m = matches(&h.advance(Duration::from_secs(1)));
+        assert_eq!(m.len(), 1);
+        assert_eq!(pair_of(&m[0]), pair_key(u[2].uid, u[3].uid));
+    }
+
+    #[test]
+    fn unranked_pairs_by_the_hidden_rating_not_the_ranked_one() {
+        let mut h = Harness::new(default_rules());
+        let mut u = h.unranked_rated(&[1400.0, 2000.0]);
+        // Equal Ranked ratings, 600 apart in Unranked: held back (600 needs 135 s).
+        for x in u.iter_mut() {
+            x.rating = 1700.0;
+            x.ranked_sets = 20;
+            h.add(x);
+        }
+        h.connect(1, 41001);
+        h.connect(2, 41002);
+        h.unranked(1, &u[0]);
+        assert!(matches(&h.unranked(2, &u[1])).is_empty());
+        assert!(matches(&h.advance(Duration::from_secs(134))).is_empty());
+        assert_eq!(matches(&h.advance(Duration::from_secs(1))).len(), 1);
+    }
+
+    #[test]
+    fn unranked_prefers_the_closer_hidden_rating_of_several_opponents() {
+        let mut h = Harness::new(default_rules());
+        let u = h.unranked_rated(&[1500.0, 1700.0, 1450.0]);
+        for c in 1..=3 {
+            h.connect(c, 41000 + c as u16);
+        }
+        h.unranked(1, &u[0]);
+        h.unranked(2, &u[1]);
+        // After 15 s the band is ±200, so 1700 would fit 1500 now; but 1450 comes, and is closer.
+        h.now += Duration::from_secs(15);
+        let m = matches(&h.unranked(3, &u[2]));
+        assert_eq!(m.len(), 1);
+        assert_eq!(pair_of(&m[0]), pair_key(u[0].uid, u[2].uid));
+    }
+
+    #[test]
+    fn unranked_weighs_ping_against_the_rating_gap() {
+        // Dallas (1400) and Anchorage (1400, 136 ms away) both search; then New York (91 ms from
+        // Dallas, 144 from Anchorage) comes. Each pair "costs" the waiting its ping and its
+        // rating gap need: Anchorage 40 s for 136 ms (+20 every 20 s), New York none for its ping
+        // plus 15 s for every 50 points past 150.
+        for (waited, ny_rating, dallas_takes) in [(40, 1650.0, "New York"), (45, 1700.0, "Anchorage")] {
+            let mut h = Harness::new(geo_rules());
+            let u = h.unranked_rated(&[1400.0, 1400.0, ny_rating]);
+            h.connect(32, 41000);
+            h.connect(48, 41000);
+            h.connect(1, 41000);
+            h.unranked(32, &u[0]);
+            assert!(matches(&h.unranked(48, &u[1])).is_empty());
+            h.now += Duration::from_secs(waited);
+            let m = matches(&h.unranked(1, &u[2]));
+            assert_eq!(m.len(), 1);
+            let other = if dallas_takes == "New York" { u[2].uid } else { u[1].uid };
+            // 250 apart costs 30 s, under Anchorage's 40; 300 apart costs 45 s, over it.
+            assert_eq!(pair_of(&m[0]), pair_key(u[0].uid, other), "{dallas_takes} at {waited} s");
+        }
+    }
+
+    #[test]
+    fn unranked_wait_adds_the_ping_and_rating_waits() {
+        let h = Harness::new(default_rules());
+        let w = |ping, gap| h.e.unranked_wait(ping, gap);
+        assert_eq!(w(None, 0.0), 0.0);
+        assert_eq!(w(Some(99.0), 150.0), 0.0);
+        assert_eq!(w(Some(147.0), 0.0), 60.0);
+        assert_eq!(w(None, 300.0), 45.0);
+        // 125 ms needs the 140 ms limit (40 s), 300 points the ±300 band (45 s).
+        assert_eq!(w(Some(125.0), 300.0), 85.0);
     }
 
     #[test]

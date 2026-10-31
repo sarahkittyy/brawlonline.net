@@ -673,6 +673,7 @@ mod tests {
             email_verified: true,
             rating: 0.0,
             ranked_sets: 0,
+            unranked_rating: 0.0,
             chat_muted: false,
             room_name: None,
             mods_room_name: None,

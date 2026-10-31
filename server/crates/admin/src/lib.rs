@@ -150,6 +150,20 @@ pub async fn recompute_ranked_tiers(pool: &PgPool, actor: &str) -> anyhow::Resul
     Ok(done)
 }
 
+/// `admin unranked rebuild`: every Unranked rating from the game reports, audit-logged.
+pub async fn rebuild_unranked_ratings(pool: &PgPool, actor: &str) -> anyhow::Result<accounts::unranked::Rebuilt> {
+    let done = accounts::unranked::rebuild(pool).await?;
+    store::audit(
+        pool,
+        actor,
+        "unranked.rebuild",
+        None,
+        serde_json::json!({ "players": done.players, "games": done.games }),
+    )
+    .await?;
+    Ok(done)
+}
+
 /// What `admin ranked void` did (or, with `dry_run`, would do).
 #[derive(Debug, Clone)]
 pub struct Voided {

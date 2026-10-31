@@ -20,6 +20,9 @@ pub struct MmUser {
     pub rating: f64,
     /// Rated ranked sets played.
     pub ranked_sets: i32,
+    /// Unranked's hidden rating ([`crate::unranked`]); the Ranked [`Self::rating`] before the
+    /// first rated Unranked game.
+    pub unranked_rating: f64,
     /// Chat shadowban (`pp-admin mute`): mm drops the account's chat messages without a word.
     pub chat_muted: bool,
     /// The name of the P+ rooms the account hosts (`users.room_name`); `None`: "alice's room".
@@ -48,9 +51,11 @@ impl MmUser {
 const MM_USER_SELECT: &str = "SELECT u.uid, u.display_name, u.connect_code, u.play_key_version, u.banned_until,
         u.email_verified_at IS NOT NULL AS email_verified,
         COALESCE(r.rating, $2) AS rating, COALESCE(r.sets_played, 0) AS ranked_sets,
+        COALESCE(ur.rating, r.rating, $2) AS unranked_rating,
         u.chat_muted_at IS NOT NULL AS chat_muted, u.room_name, u.mods_room_name,
         CASE WHEN f.n >= $4 THEN f.last + make_interval(secs => $5) END AS ranked_cooldown_until
    FROM users u LEFT JOIN ratings r ON r.uid = u.uid
+   LEFT JOIN unranked_ratings ur ON ur.uid = u.uid
    LEFT JOIN LATERAL (SELECT count(*) AS n, max(m.ended_at) AS last FROM mm_matches m
                        WHERE m.fault = u.uid AND m.ended_at > now() - make_interval(secs => $3)) f ON true";
 
