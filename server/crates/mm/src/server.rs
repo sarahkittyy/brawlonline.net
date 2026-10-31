@@ -775,7 +775,11 @@ fn event_loop(
     match saved_rooms.recv_timeout(SAVED_ROOMS_WAIT) {
         Ok(Some(rooms)) => {
             engine.restore_rooms(Instant::now(), rooms);
-            tracing::info!(rooms = engine.room_count(), "rooms put back from the last mm");
+            tracing::info!(
+                rooms = engine.room_count(),
+                mod_rooms = engine.mod_room_count(),
+                "rooms put back from the last mm"
+            );
         }
         Ok(None) | Err(std_mpsc::RecvTimeoutError::Disconnected) => {}
         Err(std_mpsc::RecvTimeoutError::Timeout) => tracing::error!("the saved rooms did not come: none put back"),
@@ -879,14 +883,15 @@ fn event_loop(
     lp.host.flush();
     if keep_rooms.load(Ordering::SeqCst) {
         let rooms = lp.engine.save_rooms();
-        let n = rooms.as_array().map_or(0, Vec::len);
+        let count = |key: &str| rooms[key].as_array().map_or(0, Vec::len);
+        let (n, mods) = (count("rooms"), count("modRooms"));
         let pool = lp.db.pool.clone();
         let saved = lp
             .db
             .rt
             .block_on(async move { tokio::time::timeout(Duration::from_secs(5), db::save_rooms(&pool, &rooms)).await });
         match saved {
-            Ok(Ok(())) => tracing::info!(rooms = n, "rooms saved for the next mm"),
+            Ok(Ok(())) => tracing::info!(rooms = n, mod_rooms = mods, "rooms saved for the next mm"),
             Ok(Err(e)) => tracing::error!("saving the rooms failed: {e}"),
             Err(_) => tracing::error!("saving the rooms timed out"),
         }

@@ -143,7 +143,10 @@ struct State
   // The connection dropped while in a match group (mm restarted, or the network): the group is
   // kept, lines included, its other members' keys put aside, and chat-rejoin is sent as soon as
   // the connection is online again (TakeOutbox). mm answers with the group (the keys are
-  // exchanged again), or chat-error, which ends it, as does REJOIN_WAIT without an answer.
+  // exchanged again), or chat-error, which ends it, as does REJOIN_WAIT without an answer. A
+  // room's group is kept the same way, without chat-rejoin: the game joins its room again by
+  // itself and mm sends the room's group with it (the same group after a restart, which keeps the
+  // rooms); another group, or none, ends it (bug report #199: every deploy emptied the rooms' chat).
   bool rejoin_due = false;
   std::optional<Clock::time_point> rejoin_sent_at;
 
@@ -380,7 +383,8 @@ void LeaveLocked(const char* why)
   Touch();
 }
 
-// The connection dropped in a match group: kept for chat-rejoin. Nobody can read what is sent
+// The connection dropped in a match or room group: kept for chat-rejoin, or for the room's group
+// to come back with the room. Nobody can read what is sent
 // until mm has the group again; each member's key is put aside with its sequence number, so the
 // same key coming back goes on from there.
 void AwaitRejoinLocked()
@@ -704,8 +708,9 @@ void OnGroup(const picojson::object& o, Clock::time_point now)
   }
 
   const bool fresh = s.kind == GroupKind::None || *group != s.group;
-  if (!fresh && s.rejoin_sent_at)
+  if (!fresh && (s.rejoin_sent_at || s.rejoin_due))
   {
+    s.rejoin_due = false;
     s.rejoin_sent_at.reset();
     Log(fmt::format("rejoined {}", s.group));
     AddSystemLine("Reconnected.");
@@ -1053,9 +1058,16 @@ std::vector<std::string> TakeOutbox()
     s.hidden_checked = now;
     RefreshHiddenLocked(false);
   }
-  // Online again after a drop in a match group: ask for it back.
+  // Online again after a drop in a match group: ask for it back. A room's comes with the room.
   if (s.kind == GroupKind::Match && s.rejoin_due)
+  {
     QueueRejoinLocked(now);
+  }
+  else if (s.rejoin_due)
+  {
+    s.rejoin_due = false;
+    s.rejoin_sent_at = now;
+  }
   else if (s.rejoin_sent_at && now - *s.rejoin_sent_at > REJOIN_WAIT)
     LeaveLocked("rejoin timed out");
   ProcessPendingLocked();
@@ -1069,10 +1081,8 @@ void OnConnectionLost()
 {
   std::lock_guard lk(s_mutex);
   s.outbox.clear();
-  if (s.kind == GroupKind::Match)
+  if (s.kind != GroupKind::None)
     AwaitRejoinLocked();
-  else
-    LeaveLocked("connection lost");
 }
 
 void LeaveMatchGroup()

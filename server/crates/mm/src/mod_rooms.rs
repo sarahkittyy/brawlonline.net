@@ -4,11 +4,22 @@
 //! with a probe from its own UDP socket (`mods-endpoint`, on a connection of its own) carrying the
 //! token only that member got in `mods-state`. Every member gets the room's state after every
 //! change; their Dolphins connect to each other from the endpoints in it.
+//!
+//! A restart of mm (every deploy) drops every member's online connection. As with P+ rooms (bug
+//! report #178), the rooms are saved when mm is stopped ([`ModRoomBook::save`]) and put back by
+//! the next mm ([`ModRoomBook::restore`]): each member keeps their slot for
+//! [`ModRoomsConfig::restore_grace`] and gets it back when their game joins the room again, as it
+//! does by itself after a dropped connection. Before, the room was gone and every member's game
+//! opened a new room of its own, so a room of three became three rooms of one while the game went
+//! on between them, each with a new, empty chat (bug report #199). The saved form is the serde
+//! form of [`Room`]: a field added to it (or to [`Member`]) needs a `#[serde(default)]` for the
+//! rooms an older mm saved.
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 
+use serde::{Deserialize, Serialize};
 use common::mods::{
     self, Build, Controller, Endpoint, ModsPlayer, ModsRequest, ModsSlot, ModsState, PublicModRoom,
 };
@@ -39,6 +50,9 @@ pub struct ModRoomsConfig {
     pub create_windows: Vec<Window>,
     pub join_windows: Vec<Window>,
     pub request_windows: Vec<Window>,
+    /// How long a member of a room put back after a restart keeps their slot for their game to
+    /// join again ([`ModRoomBook::restore`]).
+    pub restore_grace: Duration,
 }
 
 impl Default for ModRoomsConfig {
@@ -49,6 +63,7 @@ impl Default for ModRoomsConfig {
             create_windows: vec![Window::new(5, minute), Window::new(30, Duration::from_secs(3600))],
             join_windows: vec![Window::new(20, minute)],
             request_windows: vec![Window::new(40, Duration::from_secs(10))],
+            restore_grace: Duration::from_secs(60),
         }
     }
 }
@@ -57,18 +72,20 @@ fn endpoint_of(a: SocketAddr) -> Endpoint {
     Endpoint { host: a.ip().to_canonical().to_string(), port: a.port() }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct Member {
     conn: ConnId,
     info: MemberInfo,
     controller: Controller,
     endpoint: Option<SocketAddr>,
     lan: Option<SocketAddr>,
+    /// Not saved: a member put back gets a new one when their game joins again.
+    #[serde(skip)]
     token: String,
     joined: u64,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct Room {
     code: String,
     /// Rooms created before this one since mm started, plus one: the `n` of its chat group
@@ -137,6 +154,10 @@ pub struct ModRoomBook {
     /// Rooms whose members changed since the engine last asked ([`ModRoomBook::take_changed`]):
     /// their chat groups follow them.
     changed: Vec<(String, u64)>,
+    /// Members of rooms put back after a restart whose game has not joined again: their stand-in
+    /// connection (no real one has it) → (room code, until when their slot is kept).
+    away: HashMap<ConnId, (String, Instant)>,
+    next_away: ConnId,
     create_limiter: RateLimiter<Uuid>,
     join_limiter: RateLimiter<Uuid>,
     request_limiter: RateLimiter<ConnId>,
@@ -170,6 +191,53 @@ impl ModRoomBook {
             join_seq: 0,
             room_seq: 0,
             changed: Vec::new(),
+            away: HashMap::new(),
+            // Below the P+ rooms' stand-ins (`rooms.rs`, from ConnId::MAX down).
+            next_away: ConnId::MAX - (1 << 32),
+        }
+    }
+
+    /// Every room, to put back after mm restarts ([`Self::restore`]).
+    pub fn save(&self) -> Vec<serde_json::Value> {
+        self.rooms
+            .values()
+            .filter_map(|r| match serde_json::to_value(r) {
+                Ok(v) => Some(v),
+                Err(e) => {
+                    tracing::error!(code = %r.code, "mod room not saved: {e}");
+                    None
+                }
+            })
+            .collect()
+    }
+
+    /// Puts back the rooms the last mm saved ([`Self::save`]), before anyone is online: every
+    /// member's slot is kept for [`ModRoomsConfig::restore_grace`] (`away`), with the endpoint the
+    /// others' games reach it at, and is theirs again when their game joins the room. Rooms that
+    /// cannot be read are logged and left out.
+    pub fn restore(&mut self, now: Instant, saved: Vec<serde_json::Value>) {
+        for v in saved {
+            let mut room: Room = match serde_json::from_value(v) {
+                Ok(r) => r,
+                Err(e) => {
+                    tracing::error!("a saved mod room could not be read: {e}");
+                    continue;
+                }
+            };
+            if self.rooms.contains_key(&room.code) || room.members().next().is_none() {
+                continue;
+            }
+            let until = now + self.cfg.restore_grace;
+            for m in room.slots.iter_mut().flatten() {
+                m.conn = self.next_away;
+                self.next_away -= 1;
+                self.member_of.insert(m.conn, room.code.clone());
+                self.away.insert(m.conn, (room.code.clone(), until));
+                self.join_seq = self.join_seq.max(m.joined);
+            }
+            self.room_seq = self.room_seq.max(room.serial);
+            tracing::info!(code = %room.code, players = room.members().count(), "mod room put back after the restart");
+            self.rooms.insert(room.code.clone(), room);
         }
     }
 
@@ -296,6 +364,26 @@ impl ModRoomBook {
                 let Some(room) = self.rooms.get(&code) else {
                     return mods_error(out, conn, mods::MODS_JOIN, NOT_FOUND);
                 };
+                // Back after mm restarted: their own slot, as it was (`restore`).
+                let back = room
+                    .members()
+                    .find(|(_, m)| m.info.uid == who.uid && self.away.contains_key(&m.conn))
+                    .map(|(i, m)| (i, m.conn));
+                if let Some((slot, stand_in)) = back {
+                    self.leave(conn, out);
+                    self.away.remove(&stand_in);
+                    self.member_of.remove(&stand_in);
+                    let token = new_token();
+                    self.tokens.insert(token.clone(), (code.clone(), conn));
+                    let Some(m) = self.rooms.get_mut(&code).and_then(|r| r.slots[slot].as_mut()) else { return };
+                    m.conn = conn;
+                    m.info = who.clone();
+                    m.controller = controller;
+                    m.token = token;
+                    self.member_of.insert(conn, code.clone());
+                    tracing::info!(%code, player = %who.connect_code, slot = slot + 1, "back in the mod room after the restart");
+                    return self.broadcast(&code, out);
+                }
                 if let Some(why) = mods::join_mismatch(&room.build, &key) {
                     return mods_error(out, conn, mods::MODS_JOIN, &why);
                 }
@@ -521,13 +609,23 @@ impl ModRoomBook {
     /// is still the one with this serial (none once it closed).
     pub fn players(&self, code: &str, serial: u64) -> Vec<ConnId> {
         let Some(room) = self.rooms.get(code).filter(|r| r.serial == serial) else { return Vec::new() };
-        let mut members: Vec<&Member> = room.members().map(|(_, m)| m).collect();
+        let mut members: Vec<&Member> =
+            room.members().map(|(_, m)| m).filter(|m| !self.away.contains_key(&m.conn)).collect();
         members.sort_by_key(|m| m.joined);
         members.into_iter().map(|m| m.conn).collect()
     }
 
-    pub fn tick(&mut self, now: Instant) {
+    /// Kick bans run out; members of a room put back after a restart who did not come back leave.
+    pub fn tick(&mut self, now: Instant, out: &mut Vec<Output>) {
         self.banned.retain(|_, until| *until > now);
+        let gone: Vec<ConnId> =
+            self.away.iter().filter(|(_, (_, until))| now >= *until).map(|(c, _)| *c).collect();
+        for conn in gone {
+            if let Some((code, _)) = self.away.remove(&conn) {
+                tracing::info!(%code, "a mod room member did not come back after the restart");
+            }
+            self.leave(conn, out);
+        }
     }
 }
 
@@ -597,6 +695,70 @@ mod tests {
         assert_eq!(s2["slots"][1]["player"]["controller"], "wiimote");
         assert_eq!(s2["slots"][0]["player"]["endpoint"], Value::Null);
         assert_eq!(b.public_rooms(10).len(), 1);
+    }
+
+    #[test]
+    fn rooms_come_back_after_a_restart() {
+        // Bug report #199: a deploy, and every member of a room opened a room of their own.
+        let mut old = ModRoomBook::new(ModRoomsConfig::default());
+        let code = create(&mut old, 1);
+        join(&mut old, 2, &code);
+        let out = join(&mut old, 3, &code);
+        let token = last_state(&out, 1)["token"].as_str().unwrap().to_string();
+        let addr: SocketAddr = "203.0.113.7:4077".parse().unwrap();
+        assert!(old.endpoint(&token, addr, None, &mut vec![]));
+        // The host moves player 2 to slot 4.
+        req(&mut old, 1, 1, ModsRequest::Move { from: 2, to: 4 });
+        let serial = old.rooms[&code].serial;
+        let saved: Vec<Value> = serde_json::from_str(&serde_json::to_string(&old.save()).unwrap()).unwrap();
+
+        let now = Instant::now();
+        let mut b = ModRoomBook::new(ModRoomsConfig::default());
+        b.restore(now, saved);
+        // Listed with its three players while their games come back; nobody is in its chat yet.
+        let listed = b.all_rooms(10);
+        assert_eq!((listed[0].code.as_str(), listed[0].players), (code.as_str(), 3));
+        assert!(b.players(&code, serial).is_empty());
+
+        // Their games join it again on their new connections (player 2 asks for its old slot 4).
+        let out = req(&mut b, 12, 2, ModsRequest::Join { code: code.clone(), build: key(HASH), controller: Controller::Gc, slot: Some(4) });
+        let s = last_state(&out, 12);
+        assert_eq!((s["you"].clone(), s["host"].clone()), (json!(4), json!(1)));
+        assert_eq!(s["slots"][0]["player"]["endpoint"], json!({"host": "203.0.113.7", "port": 4077}));
+        assert_eq!(s["slots"][2]["player"]["connectCode"], "P3#1", "still kept for player 3");
+        assert!(msgs(&out, 12).iter().all(|m| m["type"] == "mods-state"));
+        let out = req(&mut b, 11, 1, ModsRequest::Join { code: code.clone(), build: key(HASH), controller: Controller::Gc, slot: Some(1) });
+        assert_eq!(last_state(&out, 11)["you"], 1);
+        assert_eq!(last_state(&out, 12)["you"], 4, "the others are told");
+        // The same room's chat group (same serial), with the members that are back, in joining order.
+        assert_eq!(b.take_changed().last(), Some(&(code.clone(), serial)));
+        assert_eq!(b.players(&code, serial), vec![11, 12]);
+        // The host's requests work from its new connection; its new token reports its endpoint.
+        let token = last_state(&out, 11)["token"].as_str().unwrap().to_string();
+        assert!(b.endpoint(&token, addr, None, &mut vec![]));
+        assert!(msgs(&req(&mut b, 11, 1, ModsRequest::Public { public: false }), 11)
+            .iter()
+            .all(|m| m["type"] == "mods-state"));
+        // A room made now does not take the restored room's serial (its chat group).
+        let other = create(&mut b, 20);
+        assert!(b.rooms[&other].serial > serial);
+
+        // Player 3's game never came back: it leaves once the grace is over.
+        let mut out = vec![];
+        b.tick(now + Duration::from_secs(59), &mut out);
+        assert_eq!(b.all_rooms(10).iter().find(|r| r.code == code).unwrap().players, 3);
+        b.tick(now + Duration::from_secs(61), &mut out);
+        assert_eq!(b.all_rooms(10).iter().find(|r| r.code == code).unwrap().players, 2);
+        assert_eq!(last_state(&out, 11)["slots"][2]["player"], Value::Null);
+
+        // A room nobody comes back to closes.
+        let mut c = ModRoomBook::new(ModRoomsConfig::default());
+        c.restore(now, serde_json::from_str(&serde_json::to_string(&old.save()).unwrap()).unwrap());
+        c.tick(now + Duration::from_secs(61), &mut vec![]);
+        assert_eq!(c.room_count(), 0);
+        // A saved room that cannot be read is left out.
+        c.restore(now, vec![json!({"code": "ABCD"})]);
+        assert_eq!(c.room_count(), 0);
     }
 
     #[test]

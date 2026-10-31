@@ -756,14 +756,30 @@ impl Engine {
         self.rooms.room_count()
     }
 
-    /// The rooms, saved when mm is stopped ([`RoomBook::save`]).
+    /// The rooms, saved when mm is stopped: P+ rooms ([`RoomBook::save`]) and Brawl Mods rooms
+    /// ([`ModRoomBook::save`]).
     pub fn save_rooms(&self) -> serde_json::Value {
-        self.rooms.save()
+        serde_json::json!({"rooms": self.rooms.save(), "modRooms": self.mod_rooms.save()})
     }
 
-    /// The rooms the last mm saved, put back before anyone is online ([`RoomBook::restore`]).
+    /// The rooms the last mm saved ([`Self::save_rooms`]), put back before anyone is online
+    /// ([`RoomBook::restore`], [`ModRoomBook::restore`]). An mm from before Brawl Mods rooms were
+    /// saved left the P+ rooms' list alone.
     pub fn restore_rooms(&mut self, now: Instant, saved: serde_json::Value) {
-        self.rooms.restore(now, saved)
+        match saved {
+            serde_json::Value::Object(mut o) => {
+                self.rooms.restore(now, o.remove("rooms").unwrap_or_default());
+                match o.remove("modRooms") {
+                    Some(serde_json::Value::Array(mods)) => self.mod_rooms.restore(now, mods),
+                    _ => tracing::error!("saved mod rooms are not a list: none put back"),
+                }
+            }
+            list => self.rooms.restore(now, list),
+        }
+    }
+
+    pub fn mod_room_count(&self) -> usize {
+        self.mod_rooms.room_count()
     }
 
     pub fn chat_group_count(&self) -> usize {
@@ -1830,7 +1846,7 @@ impl Engine {
         let memory = self.cfg.rematch_memory;
         self.last_opponent.retain(|_, (_, at)| now.saturating_duration_since(*at) < memory);
         self.rooms.tick(now, out);
-        self.mod_rooms.tick(now);
+        self.mod_rooms.tick(now, out);
         self.fail_room_tickets(out);
         self.live.tick(now, out);
         self.find_stalled_games(now, out);
@@ -4349,6 +4365,49 @@ mod tests {
         assert_eq!(g["kind"], "room");
         assert_eq!(sent(&out, 1).iter().filter(|m| **m == null_group()).count(), 1);
         assert_eq!(h.e.chat_group_count(), 1);
+    }
+
+    #[test]
+    fn mod_rooms_and_their_chat_come_back_after_a_restart() {
+        // Bug report #199: after a deploy every member of a Brawl Mods room was in a room of their
+        // own, with an empty chat, while their game went on.
+        const HASH: &str = "3f9a1c07aa00000000000000000000000000000000000000000000000000beef";
+        let mut h = Harness::new(EngineConfig::default());
+        let (a, b) = (user("AA#1", "a"), user("BB#1", "b"));
+        h.chatter(1, &a);
+        h.chatter(2, &b);
+        let out = h.raw(1, json!({"type": "mods-create", "build": {"hash": HASH}}).to_string().as_bytes());
+        let code = sent(&out, 1).into_iter().find(|m| m["type"] == "mods-state").unwrap()["code"].clone();
+        let join = json!({"type": "mods-join", "code": code, "build": {"hash": HASH}});
+        let out = h.raw(2, join.to_string().as_bytes());
+        let group = chat_group(&out, 1).unwrap()["group"].clone();
+        assert_eq!(chat_members(&chat_group(&out, 2).unwrap()), uid_list(&[&a, &b]));
+        let saved: Value = serde_json::from_str(&h.e.save_rooms().to_string()).unwrap();
+
+        // mm restarts: the room is there before anyone is online, and both games join it again.
+        let mut h = Harness::new(EngineConfig::default());
+        h.e.restore_rooms(Instant::now(), saved);
+        assert_eq!(h.e.mod_room_count(), 1);
+        assert_eq!(h.e.status(Utc::now()).mod_room_index[0].players, 2);
+        h.chatter(1, &b);
+        h.chatter(2, &a);
+        let again = |slot: u8| json!({"type": "mods-join", "code": code, "build": {"hash": HASH}, "slot": slot});
+        let out = h.raw(1, again(2).to_string().as_bytes());
+        let s = sent(&out, 1).into_iter().find(|m| m["type"] == "mods-state").expect("mods-state");
+        assert_eq!((s["code"].clone(), s["you"].clone(), s["host"].clone()), (code.clone(), json!(2), json!(1)));
+        let out = h.raw(2, again(1).to_string().as_bytes());
+        // The same chat group as before the restart, so the games keep its lines.
+        for conn in [1, 2] {
+            let g = chat_group(&out, conn).unwrap();
+            assert_eq!((g["group"].clone(), g["kind"].as_str()), (group.clone(), Some("room")));
+            assert_eq!(chat_members(&g), uid_list(&[&b, &a]), "in the order they came back");
+        }
+        assert_eq!(h.e.mod_room_count(), 1, "no room of their own");
+
+        // What an mm from before this saved (the P+ rooms' list) is still read.
+        let mut h = Harness::new(EngineConfig::default());
+        h.e.restore_rooms(Instant::now(), json!([]));
+        assert_eq!((h.e.room_count(), h.e.mod_room_count()), (0, 0));
     }
 
     #[test]

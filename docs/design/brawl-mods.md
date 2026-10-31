@@ -83,7 +83,7 @@ Mod rooms live next to P+ rooms in mm (`server/crates/mm/src/mod_rooms.rs`, mess
 | Public list | `GET /v1/rooms` | the same response's `modRooms`: code, build, host name, players, open slots (fuller first) |
 | Session signaling | room ticket at the start | **`mods-endpoint {token}`**: the member's session sends its `mods-state` token from its P2P UDP port's address on a connection of its own (no `hello`); mm records the address it came from as the member's `endpoint`, answers `mods-endpoint-resp` (with `error` for an unknown token) and closes it. Every member gets the new `mods-state` |
 
-mm stays the only server involved. No game data goes through it: the machine image and inputs are P2P. Room codes are never a live P+ room's code. Rate limits as for P+ rooms. Kicked players cannot rejoin the same room for 10 minutes (**default**). An empty room closes; a host who leaves hands the room to the member who has been in it longest.
+mm stays the only server involved. No game data goes through it: the machine image and inputs are P2P. Room codes are never a live P+ room's code. Rate limits as for P+ rooms. Kicked players cannot rejoin the same room for 10 minutes (**default**). An empty room closes; a host who leaves hands the room to the member who has been in it longest. A restart of mm (every deploy) keeps the rooms as it keeps P+ rooms (2026-10-30, bug report #199: before, every member's game opened a room of its own, so a room of three became three rooms of one while their game went on, each with an empty chat): saved when mm stops, put back before it takes connections, each member's slot (and endpoint) kept 60 s for their game, which joins the room again by itself; a member not back by then leaves.
 
 ## 6. Dolphin
 
