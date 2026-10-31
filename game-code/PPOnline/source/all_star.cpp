@@ -19,6 +19,7 @@ namespace AllStar {
     void writeTables(const PPOM::Session& se)
     {
         if (se.special.rows[PPOM::SR_OTHER] != 2) return;
+        OnlineMenu::allStarTablesWritten();   // (the CSS puts the player's own back, restoreCss)
         for (int i = 0; i < 4; i++) {
             u8* a = (u8*)(TABLE + i * ENTRY_SIZE);
             u8* b = (u8*)(TWIN + i * TWIN_SIZE);

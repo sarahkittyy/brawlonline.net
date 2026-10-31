@@ -556,23 +556,38 @@ namespace OnlineMenu {
     static u8 s_allStarTwin[4 * 0x70];
     static bool s_allStarSaved = false;
     static int s_allStarKept = 0;   // the entries restoreCss put back, while no coin was placed since
+    static int s_allStarSavedKept = 0;
+    static bool s_allStarMatched = false;   // a match wrote the tables since the CSS was left
     static int allStarCount();
 
+    // The match setup wrote every player's roster into the tables (AllStar::writeTables).
+    void allStarTablesWritten() { s_allStarMatched = true; }
+
+    // A lock-in keeps the first coin's new roster to come: locked in with the kept roster and
+    // taken back with B, the next coin still starts a new one (Sarah's board, 2026-10-30: Roy
+    // kept and locked in, B, then Game & Watch placed, "got half g&w half roy").
     static void saveAllStarTables(bool on)
     {
         s_allStarSaved = on;
-        s_allStarKept = 0;
-        if (!on) return;
+        if (!on) {
+            s_allStarKept = 0;
+            return;
+        }
         memcpy(s_allStarTable, (const void*)0x80588000, sizeof(s_allStarTable));
         memcpy(s_allStarTwin, (const void*)0x80588300, sizeof(s_allStarTwin));
+        s_allStarSavedKept = s_allStarKept;
     }
 
+    // After a match the first coin placed starts a new roster; back from the stage select the
+    // CSS goes on as it was.
     static void restoreAllStarTables()
     {
+        const bool matched = s_allStarMatched;
+        s_allStarMatched = false;
         if (!s_allStarSaved) return;
         memcpy((void*)0x80588000, s_allStarTable, sizeof(s_allStarTable));
         memcpy((void*)0x80588300, s_allStarTwin, sizeof(s_allStarTwin));
-        s_allStarKept = allStarCount();
+        s_allStarKept = matched ? allStarCount() : s_allStarSavedKept;
     }
 
     // The characters on the local panel's All-Star roster (P+'s table up to its 0xCC).

@@ -23,6 +23,7 @@ namespace OnlineMenu {
     int currentMode();                  // PPOM::Mode of the online CSS, -1 outside it
     bool modesLocked();                 // logged out or update required: no online mode
     void restoreCss();                  // before the CSS starts again: the remembered coin
+    void allStarTablesWritten();        // All-Star: a match setup wrote the roster tables
     // P+'s four slot colour lines (0-12; -1: the port's own), the match's from SESSION
     void setSlotColours(const s8* colour);
     // The local panel's colour as drawn (P1's line) and the L / R / Z presses on its player box,
