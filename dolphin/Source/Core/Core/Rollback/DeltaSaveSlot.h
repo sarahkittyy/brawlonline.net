@@ -22,6 +22,7 @@
 #include "Common/Buffer.h"
 #include "Common/CommonTypes.h"
 #include "Core/HW/DSP.h"
+#include "Core/HW/Memmap.h"
 #include "Core/PowerPC/PowerPC.h"
 #include "Core/Rollback/IRollbackSaveSlot.h"
 
@@ -370,6 +371,8 @@ public:
   Common::UniqueBuffer<uint8_t> m_save_buffer;        // non-RAM state (CPU, HW, IOS, etc.)
   DSP::ARAMSnapshot m_aram;  // a GameCube's ARAM, not in m_save_buffer (bug report #135)
   u64 m_last_aram_bytes = 0;  // ARAM copied by the last Save
+  // A GameCube game's fake VMEM, which DoState skips with RAM (bug report #207).
+  Memory::FakeVMEMSnapshot m_fake_vmem;
 
   // Deterministic dual core: m_save_buffer holds only the CPU thread's part of the video state,
   // and the video thread writes its part into m_video_state when it reaches this snapshot's

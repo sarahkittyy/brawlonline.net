@@ -552,7 +552,12 @@ void MemoryManager::DoState(PointerWrap& p)
   }
   p.DoMarker("Memory RAM");
   if (current_have_fake_vmem && !skip_ram)
+  {
     p.DoArray(m_fake_vmem, current_fake_vmem_size);
+    // Every chunk has new content (a rollback snapshot's copy no longer holds it).
+    if (p.IsReadMode())
+      MarkAllFakeVMEMWritten();
+  }
   p.DoMarker("Memory FakeVMEM");
   if (current_have_exram && !skip_ram)
     p.DoArray(m_exram, current_exram_size);
@@ -574,6 +579,7 @@ void MemoryManager::Shutdown()
   }
   m_arena.ReleaseSHMSegment();
   m_mmio_mapping.reset();
+  m_fake_vmem_versions.clear();
   INFO_LOG_FMT(MEMMAP, "Memory system shut down.");
 }
 
@@ -623,7 +629,11 @@ void MemoryManager::Clear()
   if (m_l1_cache)
     memset(m_l1_cache, 0, GetL1CacheSize());
   if (m_fake_vmem)
+  {
     memset(m_fake_vmem, 0, GetFakeVMemSize());
+    // All zeros: version 0 (FakeVMEMSnapshot).
+    m_fake_vmem_versions.assign(GetFakeVMemSize() >> FAKE_VMEM_CHUNK_SHIFT, 0);
+  }
   if (m_exram)
     memset(m_exram, 0, GetExRamSize());
 }
@@ -832,5 +842,104 @@ void MemoryManager::MarkRangeDirty(u32 address, size_t size)
     }
     entries[p] = 1;
   }
+}
+
+// Fake VMEM (bug report #207, 2026-10-31: Super Mario Strikers desynced in every Other Games room
+// within seconds). A GameCube game with the MMU off pages its memory through 0x7E000000, which
+// Dolphin backs with m_fake_vmem; rollback snapshots skipped it with RAM in DoState but kept only
+// MEM1 and MEM2 themselves, so a rollback left it as the newer timeline had written it.
+
+// The version of each content a chunk has had since Dolphin started, also across boots: a
+// snapshot's copy outlives the boot it was taken in.
+static u64 s_fake_vmem_next_version = 1;
+
+// The dirty bitmap's entries for fake VMEM: its addresses masked as the JIT and MarkRangeDirty mark
+// them (0x7E000000 -> 0x1E000000).
+static constexpr u32 FAKE_VMEM_FIRST_PAGE = (0x7E000000u & 0x1FFFFFFFu) >> ROLLBACK_PAGE_SHIFT;
+
+// After a savestate load (a joiner's machine image): every chunk has new content, but a chunk of
+// zeros is version 0, so the snapshots copy only the ones the game has used.
+void MemoryManager::MarkAllFakeVMEMWritten()
+{
+  constexpr size_t chunk_size = size_t{1} << FAKE_VMEM_CHUNK_SHIFT;
+  for (size_t c = 0; c < m_fake_vmem_versions.size(); ++c)
+  {
+    const u8* chunk = m_fake_vmem + c * chunk_size;
+    const bool zero = chunk[0] == 0 && std::memcmp(chunk, chunk + 1, chunk_size - 1) == 0;
+    m_fake_vmem_versions[c] = zero ? 0 : s_fake_vmem_next_version++;
+  }
+}
+
+void MemoryManager::FlushFakeVMEMWrites()
+{
+  if (!m_fake_vmem || m_fake_vmem_versions.empty())
+    return;
+  constexpr u32 pages_per_chunk_shift = FAKE_VMEM_CHUNK_SHIFT - ROLLBACK_PAGE_SHIFT;
+  Rollback::JITDirtyBitmap::Get().ScanAndClear(
+      FAKE_VMEM_FIRST_PAGE, GetFakeVMemSize() >> ROLLBACK_PAGE_SHIFT, [&](u32 page) {
+        m_fake_vmem_versions[(page - FAKE_VMEM_FIRST_PAGE) >> pages_per_chunk_shift] =
+            s_fake_vmem_next_version++;
+      });
+}
+
+size_t MemoryManager::SaveFakeVMEMSnapshot(FakeVMEMSnapshot& snapshot)
+{
+  if (!m_fake_vmem || m_fake_vmem_versions.empty())
+    return 0;
+  FlushFakeVMEMWrites();
+  const size_t count = m_fake_vmem_versions.size();
+  if (snapshot.versions.size() != count)
+  {
+    snapshot.versions.assign(count, 0);
+    snapshot.chunks.clear();
+    snapshot.chunks.resize(count);
+  }
+  constexpr size_t chunk_size = size_t{1} << FAKE_VMEM_CHUNK_SHIFT;
+  size_t copied = 0;
+  for (size_t c = 0; c < count; ++c)
+  {
+    const u64 version = m_fake_vmem_versions[c];
+    if (snapshot.versions[c] == version)
+      continue;
+    snapshot.versions[c] = version;
+    if (version == 0)
+    {
+      snapshot.chunks[c].reset();
+      continue;
+    }
+    if (!snapshot.chunks[c])
+      snapshot.chunks[c].reset(new u8[chunk_size]);
+    std::memcpy(snapshot.chunks[c].get(), m_fake_vmem + c * chunk_size, chunk_size);
+    copied += chunk_size;
+  }
+  return copied;
+}
+
+size_t MemoryManager::LoadFakeVMEMSnapshot(const FakeVMEMSnapshot& snapshot)
+{
+  if (!m_fake_vmem || m_fake_vmem_versions.empty())
+    return 0;
+  const size_t count = m_fake_vmem_versions.size();
+  if (snapshot.versions.size() != count)
+  {
+    ERROR_LOG_FMT(MEMMAP, "Rollback: the snapshot has no fake VMEM; fake VMEM not restored");
+    return 0;
+  }
+  FlushFakeVMEMWrites();
+  constexpr size_t chunk_size = size_t{1} << FAKE_VMEM_CHUNK_SHIFT;
+  size_t copied = 0;
+  for (size_t c = 0; c < count; ++c)
+  {
+    const u64 version = snapshot.versions[c];
+    if (m_fake_vmem_versions[c] == version)
+      continue;
+    if (version == 0 || !snapshot.chunks[c])
+      std::memset(m_fake_vmem + c * chunk_size, 0, chunk_size);
+    else
+      std::memcpy(m_fake_vmem + c * chunk_size, snapshot.chunks[c].get(), chunk_size);
+    m_fake_vmem_versions[c] = version;
+    copied += chunk_size;
+  }
+  return copied;
 }
 }  // namespace Memory

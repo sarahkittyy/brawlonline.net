@@ -118,6 +118,7 @@ void DeltaSaveSlot::Reset()
   m_mem2_delta.Reset();
   m_save_buffer.reset();
   m_aram.Reset();
+  m_fake_vmem.Reset();
 }
 
 // region_phys_base: Wii physical base of the region
@@ -354,6 +355,7 @@ void DeltaSaveSlot::Save(Core::System& system)
     VideoCommon_SetRollbackSplitState(false);
     rbm.EndDoState();
     m_last_aram_bytes = system.GetDSP().SaveARAMSnapshot(m_aram);
+    system.GetMemory().SaveFakeVMEMSnapshot(m_fake_vmem);
     if (split)
     {
       m_video_capture.store(VideoCapture::Pending, std::memory_order_release);
