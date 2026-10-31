@@ -1,5 +1,7 @@
 # Linux build, tests and cross-platform checks
 
+> **History.** Written before 2026-10-09, when Dolphin was developed in a separate local repository. Its branches (`rollback-fixes`, `gameplay-rollback`, `linux-build`, ...) were folded into this repository's `dolphin/` without their history, so the Dolphin commit hashes below are not in this repository. Dolphin is now developed here, on `main`.
+
 Status on 2026-10-06/07, branch `linux-build` in the worktree `dolphin-linux/` (off `rollback-fixes` at `15de378723`). Not pushed.
 
 **Summary**

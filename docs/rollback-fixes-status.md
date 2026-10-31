@@ -1,5 +1,7 @@
 # Rollback fixes: status
 
+> **History.** Written before 2026-10-09, when Dolphin was developed in a separate local repository. Its branches (`rollback-fixes`, `gameplay-rollback`, `linux-build`, ...) were folded into this repository's `dolphin/` without their history, so the Dolphin commit hashes below are not in this repository. Dolphin is now developed here, on `main`.
+
 Branch `rollback-fixes` in `dolphin/` (off `harness`). Not pushed. All commits build. The regression tests are in `harness/tests/test_rollback.py` (`pytest -m dolphin tests/test_rollback.py`: 14 tests, single and dual core, a real-backend presentation test and a long dual-core real-backend stress test; all 14 passed on `7b2227fd5e` in 16 minutes).
 
 Measurement caveat: all numbers come from two instances on one 8-core PC, with another agent's Dolphins running most of the time, muted. Unless a section says otherwise: single core, Null video. FPS is noisy; before/after pairs were run back to back under the same conditions.
