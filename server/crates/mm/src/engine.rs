@@ -453,6 +453,7 @@ struct Waiting {
     /// Where the ticket's address is (GeoIP), for the ping estimate.
     loc: Option<Loc>,
     /// Unranked: the player's rating range (`ratingRange`): only placed opponents within it.
+    /// None for an unplaced player, whose range counts for nothing.
     rating_range: Option<f64>,
 }
 
@@ -643,12 +644,14 @@ fn hello_ok() -> HelloResp {
 /// player's range takes only placed opponents within it; the smaller of two ranges holds for both.
 /// An unplaced player's own range counts for nothing.
 fn within_rating_ranges(a: &Waiting, b: &Waiting) -> bool {
-    let placed = |w: &Waiting| common::ranked::placed(w.user.ranked_sets.max(0) as u32);
-    let range = |w: &Waiting| w.rating_range.filter(|_| placed(w));
-    match [range(a), range(b)].into_iter().flatten().reduce(f64::min) {
+    match [a.rating_range, b.rating_range].into_iter().flatten().reduce(f64::min) {
         None => true,
-        Some(cap) => placed(a) && placed(b) && (a.user.rating - b.user.rating).abs() <= cap,
+        Some(cap) => placed(&a.user) && placed(&b.user) && (a.user.rating - b.user.rating).abs() <= cap,
     }
+}
+
+fn placed(u: &MmUser) -> bool {
+    common::ranked::placed(u.ranked_sets.max(0) as u32)
 }
 
 fn pair_key(a: Uuid, b: Uuid) -> (Uuid, Uuid) {
@@ -1651,6 +1654,7 @@ impl Engine {
         let Some(c) = self.conns.get_mut(&conn) else { return };
         let region = self.cfg.regions.region_of(c.addr);
         let loc = self.cfg.geoip.locate(c.addr);
+        let rating_range = p.rating_range.filter(|_| placed(&user));
         c.state = State::Waiting(Waiting {
             since: now,
             user,
@@ -1660,10 +1664,9 @@ impl Engine {
             lan: p.lan,
             region: region.clone(),
             loc,
-            rating_range: p.rating_range,
+            rating_range,
         });
         if p.mode == Mode::Unranked {
-            let rating_range = p.rating_range;
             tracing::info!(conn, %code, %region, ?loc, ?rating_range, queued = self.unranked.len() + 1, "unranked ticket waiting");
             self.unranked.push(conn);
             self.pair_queue(Mode::Unranked, now, wall, out);
@@ -1821,7 +1824,7 @@ impl Engine {
             match &c.state {
                 State::Idle if now.saturating_duration_since(c.since) >= self.cfg.idle_timeout => idle.push(*id),
                 State::Waiting(w) if now.saturating_duration_since(w.since) >= self.cfg.ticket_ttl => {
-                    expired.push((*id, w.mode, w.target.clone()))
+                    expired.push((*id, w.mode, w.target.clone(), w.rating_range.is_some()))
                 }
                 State::Waiting(w) if w.mode == Mode::Direct => waiting.push(*id),
                 // Room game tickets end with their room's start (`RoomBook::tick`).
@@ -1837,8 +1840,12 @@ impl Engine {
         for id in auth_late {
             self.refuse(out, id, msg::UNAVAILABLE);
         }
-        for (id, mode, target) in expired {
-            let text = if mode == Mode::Direct { msg::did_not_connect(&target) } else { msg::NO_OPPONENT.to_string() };
+        for (id, mode, target, ranged) in expired {
+            let text = match mode {
+                Mode::Direct => msg::did_not_connect(&target),
+                _ if ranged => msg::NO_OPPONENT_IN_RATING_RANGE.to_string(),
+                _ => msg::NO_OPPONENT.to_string(),
+            };
             self.fail_ticket(out, id, text, None);
         }
         // Retry pairs that were held back by the re-pair backoff, and queued tickets whose
@@ -3312,6 +3319,24 @@ mod tests {
         let m = matches(&h.unranked(4, &u[3]));
         assert_eq!(m.len(), 1);
         assert_eq!(pair_of(&m[0]), pair_key(u[2].uid, u[3].uid));
+    }
+
+    #[test]
+    fn a_rating_range_that_finds_no_one_says_so() {
+        let mut h = Harness::new(EngineConfig { ticket_ttl: Duration::from_secs(30), ..default_rules() });
+        let mut u = h.rated(&[1400.0, 1400.0]);
+        u[1].ranked_sets = common::ranked::PLACEMENT_SETS as i32 - 1;
+        h.add(&u[1]);
+        for c in 1..=2 {
+            h.connect(c, 41000 + c as u16);
+        }
+        // The placed player's range applies; the unplaced player's is ignored, so theirs is the
+        // usual error.
+        h.with_rating_range(1, &u[0], 1, 100.0);
+        h.with_rating_range(2, &u[1], 1, 100.0);
+        let out = h.advance(Duration::from_secs(30));
+        assert_eq!(sent(&out, 1)[0]["error"], msg::NO_OPPONENT_IN_RATING_RANGE);
+        assert_eq!(sent(&out, 2)[0]["error"], msg::NO_OPPONENT);
     }
 
     #[test]
