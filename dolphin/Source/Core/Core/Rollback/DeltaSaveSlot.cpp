@@ -137,10 +137,13 @@ void RestoreRegionDelta(const RegionDelta& delta, uint8_t* region_base, uint32_t
 
 // The region's dirty granules (cleared in the bitmap as they are found; those outside the region
 // set too) go to `scan`, and jobs copy them to `out`. `scan` must outlive the jobs (the slot's).
+// With a `shadow` (RollbackManager's, whole-machine mode), the jobs also bring it up to date with
+// each granule they copy and set changed[n] to whether that changed it (UpdateShadowAfterSave).
 void enqueueSubsectionJobs(u32 first_page, u32 page_count, const uint8_t* region_base,
                            Rollback::RegionDelta& out, JITDirtyBitmap& bitmap,
                            job::JobTaskThread& w, job::Job& root, std::vector<job::Job*>& jar,
-                           u32 num_work_chunks, const u8* region_mask, std::vector<u32>& scan)
+                           u32 num_work_chunks, const u8* region_mask, std::vector<u32>& scan,
+                           u8* shadow, Common::UniqueBuffer<u8>& changed)
 {
   std::vector<u32>* const dirty_pages = &scan;
   {
@@ -162,14 +165,17 @@ void enqueueSubsectionJobs(u32 first_page, u32 page_count, const uint8_t* region
       out.page_indices.reset(num_dirty);
     if (out.page_data.size() < (num_dirty * ROLLBACK_PAGE_SIZE))
       out.page_data.reset(num_dirty * ROLLBACK_PAGE_SIZE);
+    if (shadow && changed.size() < num_dirty)
+      changed.reset(num_dirty);
   }
 
   // Capture pointers to the already-allocated buffers to avoid reference capture issues
   uint32_t* page_indices_ptr = out.page_indices.data();
   uint8_t* page_data_ptr = out.page_data.data();
+  u8* const changed_ptr = shadow ? changed.data() : nullptr;
 
-  auto copySubsectionFn = [dirty_pages, region_base, page_indices_ptr, page_data_ptr,
-                           first_page](u32 offset, u32 size) {
+  auto copySubsectionFn = [dirty_pages, region_base, page_indices_ptr, page_data_ptr, first_page,
+                           shadow, changed_ptr](u32 offset, u32 size) {
     ROLLBACK_ZONE_N("copy dirty pages");
     if (offset >= dirty_pages->size())
       return;  // Nothing to do for this subsection
@@ -184,8 +190,17 @@ void enqueueSubsectionJobs(u32 first_page, u32 page_count, const uint8_t* region
       // pageidx is global; subtract first_page to get region-relative index
       u32 relative_page_idx = pageidx - first_page;
       page_indices_ptr[dirtyPagesIndex] = relative_page_idx;
-      std::memcpy(page_data_ptr + static_cast<size_t>(dirtyPagesIndex) * ROLLBACK_PAGE_SIZE,
-                  region_base + static_cast<size_t>(relative_page_idx) * ROLLBACK_PAGE_SIZE, ROLLBACK_PAGE_SIZE);
+      u8* const saved = page_data_ptr + static_cast<size_t>(dirtyPagesIndex) * ROLLBACK_PAGE_SIZE;
+      std::memcpy(saved, region_base + static_cast<size_t>(relative_page_idx) * ROLLBACK_PAGE_SIZE,
+                  ROLLBACK_PAGE_SIZE);
+      if (shadow)
+      {
+        u8* const before = shadow + static_cast<size_t>(relative_page_idx) * ROLLBACK_PAGE_SIZE;
+        const bool differs = std::memcmp(before, saved, ROLLBACK_PAGE_SIZE) != 0;
+        if (differs)
+          std::memcpy(before, saved, ROLLBACK_PAGE_SIZE);
+        changed_ptr[dirtyPagesIndex] = differs;
+      }
       ++this_split_written;
     }
 #if defined(HAVE_TRACY)
@@ -298,6 +313,8 @@ void DeltaSaveSlot::Save(Core::System& system)
   const auto dostate_start = std::chrono::steady_clock::now();
 
   const u8* region_mask = rbm.RegionMask();
+  u8* const shadow1 = rbm.SaveShadow(false);
+  u8* const shadow2 = rbm.SaveShadow(true);
 
   // Serialize non-RAM state first so writes made by DoState are included in the dirty scan.
   // Gameplay-only rollback (region mode) saves memory and registers only.
@@ -359,12 +376,13 @@ void DeltaSaveSlot::Save(Core::System& system)
       std::memcpy(slot->m_l1_cache_snapshot.data(), slot->m_l1_cache_ptr, slot->m_l1_cache_size);
   });
 
-  job::Job* root_mem1_job =
-      job::KickRootJob(dt, [this, &bitmap, region_mask](job::JobTaskThread& w, job::Job& root) {
+  job::Job* root_mem1_job = job::KickRootJob(
+      dt, [this, &bitmap, region_mask, shadow1](job::JobTaskThread& w, job::Job& root) {
         ROLLBACK_ZONE_N("root mem1 save dispatch");
         std::vector<job::Job*> jar;
         enqueueSubsectionJobs(0, m_mem1_page_count, m_mem1_ptr, m_mem1_delta, bitmap, w, root, jar,
-                              SAVESTATE_NUM_WORK_CHUNKS, region_mask, m_mem1_scan);
+                              SAVESTATE_NUM_WORK_CHUNKS, region_mask, m_mem1_scan, shadow1,
+                              m_mem1_changed);
         auto num_jobs = jar.size();
         ASSERT(num_jobs <= UINT16_MAX);
         w.do_work_and_kick_jobs(jar.data(), (uint16_t)num_jobs);
@@ -372,14 +390,14 @@ void DeltaSaveSlot::Save(Core::System& system)
 
   // Do all mem1 copy jobs + l1 cache job. THEN do mem2 jobs.
   // Goal here is to try not to trash the cache too hard.
-  job::Job* root_mem2_job =
-      job::KickRootJob(dt, [this, &bitmap, region_mask](job::JobTaskThread& w, job::Job& root) {
+  job::Job* root_mem2_job = job::KickRootJob(
+      dt, [this, &bitmap, region_mask, shadow2](job::JobTaskThread& w, job::Job& root) {
         ROLLBACK_ZONE_N("root mem2 save dispatch");
         std::vector<job::Job*> jar;
         enqueueSubsectionJobs(MEM2_FIRST_PAGE, m_mem2_page_count, m_mem2_ptr, m_mem2_delta, bitmap,
                               w, root, jar, SAVESTATE_NUM_WORK_CHUNKS,
                               region_mask ? region_mask + m_mem1_page_count : nullptr,
-                              m_mem2_scan);
+                              m_mem2_scan, shadow2, m_mem2_changed);
         auto num_jobs = jar.size();
         ASSERT(num_jobs <= UINT16_MAX);
         w.do_work_and_kick_jobs(jar.data(), (uint16_t)num_jobs);
