@@ -4,6 +4,7 @@
 #include "Core/PowerPC/Jit64Common/EmuCodeBlock.h"
 
 #include <array>
+#include <bit>
 #include <functional>
 
 #include "Common/Assert.h"
@@ -153,39 +154,77 @@ static void FailedDirtyBitmapBoundsCheck()
 void EmuCodeBlock::EmitJITDirtyBitmapUpdate(X64Reg reg_addr, s32 offset, u32 size,
                                             BitSet32 registers_in_use)
 {
+  // A store an earlier instruction of the block already marked for (Jit64::PlanDirtyMarks).
+  if (m_jit.m_dirty_marks_covered)
+    return;
+  EmitDirtyBitmapMarks(reg_addr, offset, size, registers_in_use);
+}
+
+void EmuCodeBlock::EmitJITDirtyBitmapRangeUpdate(X64Reg reg_addr, s32 first, s32 last,
+                                                 BitSet32 registers_in_use)
+{
+  EmitDirtyBitmapMarks(reg_addr, first, static_cast<u32>(last - first + 1), registers_in_use);
+}
+
+void EmuCodeBlock::EmitDirtyBitmapMarks(X64Reg reg_addr, s32 offset, u32 size,
+                                        BitSet32 registers_in_use)
+{
   // dirty_bitmap[((effective_addr + offset) & 0x1FFFFFFF) >> ROLLBACK_PAGE_SHIFT] = 1, for the
-  // store's first and last byte (a store can straddle two granules).
+  // store's first byte, and for its last byte when the store can straddle two granules.
   //
-  // Two temporaries hold the bitmap base and the granule index. As in CheckIfSafeAddress, a
-  // scratch register the caller does not list in registers_in_use is free (the slow path's call
-  // clobbers it anyway), so a typical store marks without any stack traffic; only registers the
-  // caller still needs are saved around the update.
+  // An access whose size is a power of two, at an address aligned to that size, never straddles:
+  // ROLLBACK_PAGE_SIZE is a multiple of every access size. Guest stores are almost always aligned,
+  // so the last byte's mark sits behind a test of the address's low bits, out of line (far code)
+  // where there is far code. A misaligned store marks both, as every store did before.
+  //
+  // The granule index needs one temporary. When the bitmap's address fits in a sign-extended
+  // 32-bit displacement (a non-PIE build, where it is a static in the image) it is addressed as
+  // [index + disp32]; otherwise a second temporary holds its address, loaded RIP-relative when in
+  // reach. As in CheckIfSafeAddress, a scratch register the caller does not list in
+  // registers_in_use is free (the slow path's call clobbers it anyway), so a typical store marks
+  // without any stack traffic; only registers the caller still needs are saved around the update.
+  const u64 entries = reinterpret_cast<u64>(Rollback::JITDirtyBitmap::Get().entries);
+  const bool absolute =
+      m_dirty_bitmap_addressing == DirtyBitmapAddressing::Auto && entries <= 0x7FFFFFFFu;
+
   registers_in_use[reg_addr] = true;
   constexpr std::array<X64Reg, 3> candidates{RSCRATCH, RSCRATCH2, RSCRATCH_EXTRA};
+  const std::size_t temps_needed = absolute ? 1 : 2;
   std::array<X64Reg, 2> temps{};
   std::size_t temp_count = 0;
   for (const bool in_use : {false, true})
   {
     for (const X64Reg reg : candidates)
     {
-      if (temp_count < temps.size() && reg != reg_addr && registers_in_use[reg] == in_use)
+      if (temp_count < temps_needed && reg != reg_addr && registers_in_use[reg] == in_use)
         temps[temp_count++] = reg;
     }
   }
-  const X64Reg base = temps[0];
-  const X64Reg index = temps[1];
-  for (const X64Reg reg : temps)
+  const X64Reg index = temps[0];
+  const X64Reg base = absolute ? INVALID_REG : temps[1];
+  for (std::size_t i = 0; i < temps_needed; ++i)
   {
-    if (registers_in_use[reg])
-      PUSH(reg);
+    if (registers_in_use[temps[i]])
+      PUSH(temps[i]);
   }
 
-  MOV(64, R(base), Imm64(reinterpret_cast<u64>(Rollback::JITDirtyBitmap::Get().entries)));
-  const auto mark = [&](s32 byte_offset) {
+  if (!absolute)
+  {
+    // LEA base, [rip + disp32] is 7 bytes against MOV's 10 for a 64-bit immediate.
+    const s64 distance = static_cast<s64>(entries) - reinterpret_cast<s64>(GetCodePtr());
+    if (m_dirty_bitmap_addressing != DirtyBitmapAddressing::ImmediateBase &&
+        distance > -0x7FFF0000LL && distance < 0x7FFF0000LL)
+      LEA(64, base, M(Rollback::JITDirtyBitmap::Get().entries));
+    else
+      MOV(64, R(base), Imm64(entries));
+  }
+  const auto load_address = [&](s32 byte_offset) {
     if (byte_offset != 0)
       LEA(32, index, MDisp(reg_addr, byte_offset));
     else
       MOV(32, R(index), R(reg_addr));
+  };
+  const auto mark_loaded_address = [&] {
     AND(32, R(index), Imm32(ROLLBACK_PHYSICAL_ADDRESS_MASK));
     SHR(32, R(index), Imm8(::ROLLBACK_PAGE_SHIFT));
 #if ROLLBACK_VALIDATE
@@ -196,16 +235,60 @@ void EmuCodeBlock::EmitJITDirtyBitmapUpdate(X64Reg reg_addr, s32 offset, u32 siz
     ABI_PopRegistersAndAdjustStack({}, 0);
     SetJumpTarget(bounds_ok);
 #endif
-    MOV(8, MComplex(base, index, SCALE_1, 0), Imm8(1));
+    if (absolute)
+      MOV(8, MDisp(index, static_cast<s32>(entries)), Imm8(1));
+    else
+      MOV(8, MComplex(base, index, SCALE_1, 0), Imm8(1));
   };
-  mark(offset);
-  if (size > 1)
-    mark(offset + static_cast<s32>(size) - 1);
 
-  for (auto reg = temps.rbegin(); reg != temps.rend(); ++reg)
+  const s32 last = offset + static_cast<s32>(size) - 1;
+  load_address(offset);
+  if (size > 1 && std::has_single_bit(size) && size <= ROLLBACK_PAGE_SIZE)
   {
-    if (registers_in_use[*reg])
-      POP(*reg);
+    TEST(8, R(index), Imm8(static_cast<u8>(size - 1)));
+    // Far code cannot nest: a store emitted while already in far code skips inline instead.
+    if (m_far_code.Enabled() && !m_far_code.IsInSpace(GetCodePtr()))
+    {
+      FixupBranch misaligned = J_CC(CC_NZ, Jump::Near);
+      SwitchToFarCode();
+      SetJumpTarget(misaligned);
+      load_address(last);
+      mark_loaded_address();
+      load_address(offset);
+      FixupBranch back = J(Jump::Near);
+      SwitchToNearCode();
+      SetJumpTarget(back);
+    }
+    else
+    {
+      FixupBranch aligned = J_CC(CC_Z, Jump::Near);
+      load_address(last);
+      mark_loaded_address();
+      load_address(offset);
+      SetJumpTarget(aligned);
+    }
+    mark_loaded_address();
+  }
+  else
+  {
+    // Any other range: a mark every ROLLBACK_PAGE_SIZE bytes from the first byte, and the last
+    // byte's. Consecutive marks are at most a granule apart, so every granule the range overlaps
+    // holds one of them.
+    for (s32 at = offset; at < last; at += static_cast<s32>(ROLLBACK_PAGE_SIZE))
+    {
+      if (at != offset)
+        load_address(at);
+      mark_loaded_address();
+    }
+    if (last != offset)
+      load_address(last);
+    mark_loaded_address();
+  }
+
+  for (std::size_t i = temps_needed; i-- > 0;)
+  {
+    if (registers_in_use[temps[i]])
+      POP(temps[i]);
   }
 }
 void EmuCodeBlock::UnsafeWriteRegToReg(OpArg reg_value, X64Reg reg_addr, int accessSize, s32 offset,
@@ -763,12 +846,47 @@ bool EmuCodeBlock::WriteToConstAddress(int accessSize, OpArg arg, u32 address,
 
 void EmuCodeBlock::EmitJITDirtyBitmapUpdateConst(u32 address, int accessSize, const OpArg& value)
 {
-  // Constant-address variant of EmitJITDirtyBitmapUpdate: the granule is known at compile time.
+  // A store an earlier instruction of the block already marked for (Jit64::PlanDirtyMarks).
+  if (m_jit.m_dirty_marks_covered)
+    return;
+  EmitDirtyBitmapConstMarks(address, address + (accessSize >> 3) - 1, value);
+}
+
+void EmuCodeBlock::EmitJITDirtyBitmapConstRangeUpdate(u32 first_address, u32 last_address)
+{
+  // A range of up to a few granules (one store or a group of them; Jit64::PlanDirtyMarks).
+  for (u32 at = first_address; at - first_address < last_address - first_address;
+       at += ROLLBACK_PAGE_SIZE)
+  {
+    EmitDirtyBitmapConstMarks(at, at, Imm32(0));
+  }
+  EmitDirtyBitmapConstMarks(last_address, last_address, Imm32(0));
+}
+
+void EmuCodeBlock::EmitDirtyBitmapConstMarks(u32 address, u32 last_address, const OpArg& value)
+{
+  // Constant-address variant of EmitJITDirtyBitmapUpdate: the granules of a store of at most
+  // ROLLBACK_PAGE_SIZE bytes, [address, last_address], known at compile time.
   // RSCRATCH2 is free unless it holds the value being stored.
   const u32 first = (address & ROLLBACK_PHYSICAL_ADDRESS_MASK) >> ::ROLLBACK_PAGE_SHIFT;
-  const u32 last =
-      ((address + (accessSize >> 3) - 1) & ROLLBACK_PHYSICAL_ADDRESS_MASK) >> ::ROLLBACK_PAGE_SHIFT;
+  const u32 last = (last_address & ROLLBACK_PHYSICAL_ADDRESS_MASK) >> ::ROLLBACK_PAGE_SHIFT;
   u8* const entries = Rollback::JITDirtyBitmap::Get().entries;
+
+  // The bitmap is a static in the image and JIT code is allocated within reach of the image (the
+  // emitter's rel32 calls into it depend on that), so the entry is normally addressed RIP-relative
+  // with no register at all. The register form remains for a layout where it is not.
+  const auto in_reach = [&](u32 page) {
+    const s64 distance = reinterpret_cast<s64>(entries + page) - reinterpret_cast<s64>(GetCodePtr());
+    return distance > -0x7FFF0000LL && distance < 0x7FFF0000LL;
+  };
+  if (m_dirty_bitmap_addressing == DirtyBitmapAddressing::Auto && in_reach(first) &&
+      in_reach(last))
+  {
+    MOV(8, M(entries + first), Imm8(1));
+    if (last != first)
+      MOV(8, M(entries + last), Imm8(1));
+    return;
+  }
 
   const bool save = value.IsSimpleReg(RSCRATCH2);
   if (save)
