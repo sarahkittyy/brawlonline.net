@@ -90,6 +90,8 @@ import { buildNetplayDolphinArgs, buildPlaybackDolphinArgs, buildRenderDolphinAr
 import { closeIfIdle } from "./quit_if_idle";
 import type { RenderDolphin, RenderKey } from "./render_queue";
 import { RenderQueue } from "./render_queue";
+import type { NetplayStart } from "./repeat_play";
+import { repeatsStart, SharedStart } from "./repeat_play";
 import { clearRoomRequest } from "./room_handoff";
 import { createProgressThrottle, runWithProgress } from "./setup_progress";
 import type {
@@ -132,6 +134,10 @@ export class DolphinManager {
   private renderSettings = new Map<string, string>();
   private pplusVersionStore: PPlusVersions | null = null;
   private netplayDolphinInstance: DolphinInstance | null = null;
+  /** When Play started the open netplay Dolphin, and whether it boots P+ (null: Configure's, or none). */
+  private netplayStart: NetplayStart | null = null;
+  /** The Play start that is running, per boot choice: Play pressed again waits for it (repeat_play.ts). */
+  private netplayStarts = new SharedStart<boolean, NetplayLaunchResult>();
   private versionCache = new Map<string, string>();
   private bundledInstall: Promise<void> | null = null;
   /** Whether bundledInstall finished: one that did is redone when the executable has gone since. */
@@ -585,7 +591,11 @@ export class DolphinManager {
    */
   async launchNetplayDolphin(opts: { bootGame?: boolean } = {}): Promise<NetplayLaunchResult> {
     try {
-      return await this.sdCardStarts.runExclusive(() => this._launchNetplayDolphin(opts));
+      return await this.netplayStarts.run(
+        opts.bootGame === true,
+        () => this.sdCardStarts.runExclusive(() => this._launchNetplayDolphin(opts)),
+        () => log.warn("Play again while the game is starting: waiting for that start"),
+      );
     } catch (err) {
       throw await asDiskSpaceError(err, this.netplayFolder(), "the game");
     }
@@ -615,9 +625,18 @@ export class DolphinManager {
   }
 
   private async _launchNetplayDolphin(opts: { bootGame?: boolean }): Promise<NetplayLaunchResult> {
-    // An open Dolphin without a game closes first (closeNetplayIfIdle).
-    if (this.netplayDolphinInstance && !(await this.closeNetplayIfIdle())) {
-      throw new Error("Dolphin is already open with a game. Close it first.");
+    const launchGameOnPlay = opts.bootGame || this.settingsManager.get().settings.launchGameOnPlay;
+    if (this.netplayDolphinInstance) {
+      // The one Play started moments ago has no game yet either: it stays (bug report #209).
+      const start = this.netplayStart;
+      if (start && repeatsStart(start, launchGameOnPlay, Date.now())) {
+        log.warn(`Play again ${Date.now() - start.at} ms after it started Dolphin: keeping that Dolphin`);
+        return { status: "started" };
+      }
+      // An open Dolphin without a game closes first (closeNetplayIfIdle).
+      if (!(await this.closeNetplayIfIdle())) {
+        throw new Error("Dolphin is already open with a game. Close it first.");
+      }
     }
     this._assertNotMoving();
     await this.launchGate();
@@ -630,7 +649,6 @@ export class DolphinManager {
     await this._updateDolphinSettings(DolphinLaunchType.NETPLAY);
 
     const testMode = readTestMode(process.env, app.isPackaged);
-    const launchGameOnPlay = opts.bootGame || this.settingsManager.get().settings.launchGameOnPlay;
     let bootFile: string | null = null;
     if (launchGameOnPlay) {
       // Boot P+ the way P+ does: its netplay launcher DOL applies the codeset from the
@@ -692,6 +710,7 @@ export class DolphinManager {
       });
 
       this.netplayDolphinInstance = null;
+      this.netplayStart = null;
       // A room request the game never picked up must not act on the next start.
       void clearRoomRequest(this.netplayOnlineDir()).catch(() => undefined);
       log.warn(`Dolphin exit code: ${exitCode?.toString(16)}`);
@@ -716,6 +735,7 @@ export class DolphinManager {
       throw err;
     }
     this.netplayDolphinInstance = dolphinInstance;
+    this.netplayStart = { bootsGame: launchGameOnPlay, at: Date.now() };
     return { status: "started" };
   }
 
