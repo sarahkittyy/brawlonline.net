@@ -108,7 +108,9 @@ namespace Gekko {
         static const u64 DISCONNECT_CLAIM_HOLD = 2000;
         static const u64 SYNC_MSG_DELAY = 200;
         static const u64 NET_CHECK_DELAY = 500;
-        static const u64 INPUT_RETRY_INTERVAL = 200;
+        // a stalled session's re-send of inputs the peer has not acked (GitHub issue #5: 200 until
+        // 2026-10-31, the residual wait after a wifi drop-out, about 100 ms on average).
+        static const u64 INPUT_RETRY_INTERVAL = 40;
         static const u32 RTT_HISTORY_SIZE = 10;
 
         Frame last_acked_frame = -1;
