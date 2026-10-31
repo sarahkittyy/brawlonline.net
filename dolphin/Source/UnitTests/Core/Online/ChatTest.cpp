@@ -739,7 +739,7 @@ TEST_F(ChatTest, AMatchGroupIsRejoinedAfterTheConnectionDrops)
   EXPECT_EQ(Chat::Send("hi"), Chat::SendResult::Sent);
 }
 
-TEST_F(ChatTest, ARefusedRejoinEndsTheGroupAndRoomsEndOnADrop)
+TEST_F(ChatTest, ARefusedRejoinEndsTheGroup)
 {
   Peer bob(BOB, 2);
   ASSERT_TRUE(Chat::OnServerMessage(Group(
@@ -750,10 +750,51 @@ TEST_F(ChatTest, ARefusedRejoinEndsTheGroupAndRoomsEndOnADrop)
   ASSERT_TRUE(Chat::OnServerMessage(
       R"({"type":"chat-error","op":"chat-rejoin","error":"You are not in this chat."})"));
   EXPECT_EQ(Status()["kind"].get<std::string>(), "none");
-
-  // A room's group ends with the connection (the room itself is joined again).
-  Join({&bob});
+  // Without a group, a drop is nothing.
   Chat::OnConnectionLost();
   EXPECT_EQ(Status()["kind"].get<std::string>(), "none");
+  EXPECT_TRUE(Texts().empty());
+}
+
+// Bug report #199: every deploy emptied the chat of the rooms, which mm keeps over its restart.
+TEST_F(ChatTest, ARoomGroupComesBackWithItsRoom)
+{
+  Peer bob(BOB, 2);
+  const CC::Key32 my_kx = Join({&bob});
+  ASSERT_TRUE(Chat::OnServerMessage(Msg(BOB, bob.Box(GROUP, my_kx, ME, "first"))));
+
+  // The connection drops: the group and its lines stay; no chat-rejoin, the room is joined again.
+  Chat::OnConnectionLost();
+  EXPECT_EQ(Status()["kind"].get<std::string>(), "room");
+  EXPECT_TRUE(Status()["rejoining"].get<bool>());
+  EXPECT_EQ(Chat::Send("hi"), Chat::SendResult::NoReaders);
   EXPECT_TRUE(Outbox("chat-rejoin").empty());
+
+  // The room's group again (mm restarted: nobody has a key yet): the lines are kept.
+  picojson::object bob_no_key = bob.Member(GROUP, "bob");
+  bob_no_key["kx"] = picojson::value();
+  bob_no_key["kxSig"] = picojson::value();
+  ASSERT_TRUE(Chat::OnServerMessage(Group({picojson::value(MyMember()), picojson::value(bob_no_key)})));
+  EXPECT_EQ(Texts(), (std::vector<std::string>{
+                         "first", "Lost the connection to the server. Reconnecting...", "Reconnected."}));
+  EXPECT_FALSE(Status()["rejoining"].get<bool>());
+  const auto again = Outbox("chat-key");
+  ASSERT_EQ(again.size(), 1u);
+  EXPECT_EQ(CC::FromHexFixed<32>(again[0].at("kx").get<std::string>()), my_kx);
+  ASSERT_TRUE(Chat::OnServerMessage(Group({picojson::value(MyMember()), picojson::value(bob.Member(GROUP, "bob"))})));
+  ASSERT_TRUE(Chat::OnServerMessage(Msg(BOB, bob.Box(GROUP, my_kx, ME, "second"))));
+  EXPECT_EQ(Texts().back(), "second");
+
+  // The room is gone and the game is in a new one: that one starts empty.
+  Chat::OnConnectionLost();
+  Chat::TakeOutbox();
+  ASSERT_TRUE(Chat::OnServerMessage(Group({picojson::value(MyMember())}, "mods-QVDS-3")));
+  EXPECT_FALSE(Status()["rejoining"].get<bool>());
+  EXPECT_TRUE(Texts().empty());
+
+  // mm has this player in no group (it left the room meanwhile): the group ends.
+  Chat::OnConnectionLost();
+  EXPECT_EQ(Status()["kind"].get<std::string>(), "room");
+  ASSERT_TRUE(Chat::OnServerMessage(R"({"type":"chat-group","group":null})"));
+  EXPECT_EQ(Status()["kind"].get<std::string>(), "none");
 }
