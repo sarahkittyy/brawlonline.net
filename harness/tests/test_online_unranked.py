@@ -407,3 +407,82 @@ def test_unranked_search_ends_with_the_server_error(backend: OnlineBackend,
     g.steps("wait 20")
     assert g.css() == before
     g.shot("06-after-clear")
+
+
+def _expired(g: Game) -> None:
+    """The search ended with mm's expiry error, and B cleared it (back on the CSS, unlocked)."""
+    _wait(lambda: (lambda s: s if s["state"] == "error" else None)(g.c.mm_status()),
+          TICKET_TTL_SECS + 30, f"{g.name}: the expiry error")
+    st = g.c.mm_status()
+    assert st["error"] == TIMEOUT_ERROR and st["error_source"] == "get_ticket", st
+    _wait(lambda: g.scene() == "scSelctCharacter", 20, f"{g.name}: the CSS after the waiting room")
+    g.steps("wait 30")
+    g.press_until("B", lambda: g.c.mm_status()["state"] == "idle", "the cleanup")
+    _wait(lambda: not g.locked(), 5, f"{g.name}: the CSS to unlock")
+    g.steps("wait 20")
+
+
+def _ticket_lines(be: OnlineBackend, code: str) -> list[str]:
+    log = re.sub(r"\x1b\[[0-9;]*m", "", be.log_text("mm"))   # some runs' logs have colours
+    return [l for l in log.splitlines() if "unranked ticket waiting" in l and code in l]
+
+
+@pytest.mark.slow
+def test_unranked_rating_range_from_dolphin_ini(backend: OnlineBackend,
+                                                dolphin: Callable[..., DolphinInstance],
+                                                gpu_backend: str) -> None:
+    """"Unranked Rating Range" from the launcher's Dolphin.ini to mm's pairing: A's
+    `[Online] UnrankedRatingRange = 200` goes into A's Unranked tickets as `ratingRange` (B's,
+    without the key, have none), and mm pairs A only with a placed player within 200 points. B
+    300 above: both searches expire with the usual error, though both are searching at once. B 150
+    above: the next searches are paired."""
+    test = "unranked-rating-range"
+    ua, ub = backend.create_user("ines", "INES"), backend.create_user("jonas", "JONA")
+    backend.set_rating(ua, 1400, 12)
+    backend.set_rating(ub, 1700, 12)
+    a = _boot(dolphin, "unr-ra", backend, ua, gpu_backend, test, "gameplay",
+              dolphin_ini={"Online": {"UnrankedRatingRange": 200}})
+    b = _boot(dolphin, "unr-rb", backend, ub, gpu_backend, test, "gameplay")
+    _both(a.to_main_menu, b.to_main_menu)
+    _both(a.to_online_page, b.to_online_page)
+    _both(lambda: a.to_css("unranked"), lambda: b.to_css("unranked"))
+    for g in (a, b):
+        _unranked_css_reached(g)
+        B.write_rules(g.c, stocks=2, minutes=2, items_off=True)
+        ppom.allow_test_rules(g.c)
+
+    # 300 apart: both wait in the queue together and are never paired.
+    _search_unranked(a)
+    _wait(lambda: a.c.mm_status()["state"] == "matchmaking", 20, "A in the Unranked queue")
+    _search_unranked(b)
+    _wait(lambda: b.c.mm_status()["state"] == "matchmaking", 20, "B in the Unranked queue")
+    a.steps("wait 30")
+    a.shot("10-searching-300-apart")
+    _both(lambda: _expired(a), lambda: _expired(b))
+    a.shot("11-expired")
+    log = backend.log_text("mm")
+    assert not any("matched" in l and ua.connect_code in l for l in log.splitlines()), log[-3000:]
+    # Dolphin read the ini and sent the range; B's game sent none.
+    text = (a.inst.user_dir / "Logs" / "dolphin.log").read_text(errors="replace")
+    assert "[Matchmaking] Rating range: 200" in text
+    text = (b.inst.user_dir / "Logs" / "dolphin.log").read_text(errors="replace")
+    assert "[Matchmaking] Rating range" not in text
+    la, lb = _ticket_lines(backend, ua.connect_code), _ticket_lines(backend, ub.connect_code)
+    assert la and all("rating_range=Some(200.0)" in l for l in la), la
+    assert lb and all("rating_range=None" in l for l in lb), lb
+
+    # 150 apart (mm reads the rating for every ticket): paired at once.
+    backend.set_rating(ub, 1550, 12)
+    _search_unranked(a)
+    _wait(lambda: a.c.mm_status()["state"] == "matchmaking", 20, "A in the Unranked queue again")
+    _search_unranked(b)
+    ra = _peer_shown(a, ub)
+    rb = _peer_shown(b, ua)
+    assert ra["peer_code"] == ub.connect_code and rb["peer_code"] == ua.connect_code, (ra, rb)
+    sa, sb = a.c.mm_status(), b.c.mm_status()
+    match_id = sa["match"]["match_id"]
+    assert match_id == sb["match"]["match_id"] and match_id.startswith("mode.unranked-"), (sa, sb)
+    for g in (a, b):
+        g.steps("wait 10")
+        g.shot("12-paired-150-apart")
+        g.c.mm_cancel()

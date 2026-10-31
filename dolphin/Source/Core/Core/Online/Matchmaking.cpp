@@ -848,6 +848,12 @@ void Matchmaking::StartMatchmaking()
   request["appVersion"] = picojson::value(APP_VERSION);
   request["platform"] = picojson::value(APP_PLATFORM);
   request["ipAddressLan"] = picojson::value(lan_addr);
+  const int rating_range = Config::Get(Config::ONLINE_UNRANKED_RATING_RANGE);
+  if (m_search_settings.mode == Mode::Unranked && rating_range > 0)
+  {
+    request["ratingRange"] = picojson::value(static_cast<double>(rating_range));
+    INFO_LOG_FMT(NETPLAY, "[Matchmaking] Rating range: {}", rating_range);
+  }
   SendMmMessage(picojson::value(std::move(request)));
   m_ticket_count++;
   m_ticket_sent_ms = Common::Timer::NowMs();

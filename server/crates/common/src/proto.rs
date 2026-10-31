@@ -95,6 +95,11 @@ pub struct CreateTicket {
     pub platform: String,
     #[serde(default)]
     pub ip_address_lan: String,
+    /// Unranked: the launcher's "Unranked Rating Range" (a preset 100, 200 or 300 points, or a custom number): pair this
+    /// player only with placed players whose Ranked rating is within it. Absent (off, or a build
+    /// older than the field): anyone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rating_range: Option<f64>,
 }
 
 /// `create-ticket.user`. Brawlback's client sends only `uid` and `playKey`;

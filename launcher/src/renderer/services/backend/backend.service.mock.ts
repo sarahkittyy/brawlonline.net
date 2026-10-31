@@ -2,6 +2,8 @@ import { Preconditions } from "@common/preconditions";
 import { defaultRuleset, normalizeRuleset, parseRulesetCode, rulesetProblem } from "@common/rulesets";
 import type { PlayKey } from "@dolphin/types";
 
+import { rankForRating } from "@/lib/ranked_format";
+
 import type { AuthService } from "../auth/types";
 import { delayAndMaybeError } from "../utils";
 import type {
@@ -13,7 +15,6 @@ import type {
   MatchHistoryPage,
   MyRulesets,
   PublishRulesetRequest,
-  Rank,
   RankedProfile,
   RankTier,
   RecentRuleset,
@@ -54,36 +55,8 @@ const savedMessages = [
   "bad connection",
 ];
 
-// The server's cutoffs (common::ranked::RANK_FLOORS): each division's lowest rating, Bronze 3 first.
 // The server holds the real rank (with its demotion buffer); the mock derives it from the rating.
-const MOCK_RANK_FLOORS = [
-  -Infinity,
-  1050,
-  1100,
-  1150,
-  1200,
-  1250,
-  1300,
-  1350,
-  1400,
-  1450,
-  1510,
-  1570,
-  1625,
-  1750,
-  1875,
-  2000,
-  2085,
-  2170,
-  2250,
-];
-const MOCK_TIERS: RankTier[] = ["bronze", "silver", "gold", "emerald", "diamond", "master", "legendary"];
-
-function mockRank(rating: number): Rank {
-  const index = MOCK_RANK_FLOORS.filter((floor) => rating >= floor).length - 1;
-  const tier = MOCK_TIERS[Math.floor(index / 3)];
-  return tier === "legendary" ? { tier, division: null } : { tier, division: (3 - (index % 3)) as 1 | 2 | 3 };
-}
+const mockRank = rankForRating;
 
 /** `?mockRank=gold-2`, `?mockRank=legendary` or `?mockRank=placing-3` in the dev URL sets the mock user's rank. */
 function mockRankOverride(): Pick<RankedProfile, "rank" | "setsToPlace"> | undefined {

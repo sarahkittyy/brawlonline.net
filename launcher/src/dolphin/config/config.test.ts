@@ -128,3 +128,17 @@ describe("online settings: network for online games", () => {
     expect(text).toMatch(/LanIP = 192\.168\.5\.5/);
   });
 });
+
+describe("online settings: unranked rating range", () => {
+  it("writes [Online] UnrankedRatingRange: a custom range as a whole number, and 0 (off) for a bad value", async () => {
+    const ini = await IniFile.init(iniPath);
+    await setOnlineSettings(ini, { unrankedRatingRange: 200 });
+    expect(await fs.promises.readFile(iniPath, "utf8")).toMatch(/\[Online\][^[]*UnrankedRatingRange = 200/);
+
+    await setOnlineSettings(ini, { unrankedRatingRange: 150.4 });
+    expect(await fs.promises.readFile(iniPath, "utf8")).toMatch(/\[Online\][^[]*UnrankedRatingRange = 150/);
+
+    await setOnlineSettings(ini, { unrankedRatingRange: -5 });
+    expect(await fs.promises.readFile(iniPath, "utf8")).toMatch(/\[Online\][^[]*UnrankedRatingRange = 0/);
+  });
+});

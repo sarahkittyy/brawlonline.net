@@ -1,4 +1,5 @@
 import { normalizeInputDelay } from "@common/input_delay";
+import { normalizeRatingRange } from "@common/rating_range";
 import { DolphinLaunchType } from "@dolphin/types";
 import { Mutex } from "async-mutex";
 import electronSettings from "electron-settings";
@@ -130,6 +131,10 @@ export class SettingsManager extends EventEmitter {
 
   getInputDelay(): number {
     return normalizeInputDelay(this.get().settings.inputDelay);
+  }
+
+  getUnrankedRatingRange(): number {
+    return normalizeRatingRange(this.get().settings.unrankedRatingRange);
   }
 
   getEnableMusic(): boolean {

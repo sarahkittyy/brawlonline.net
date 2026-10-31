@@ -1,4 +1,11 @@
-import type { MatchHistoryItem, MatchHistoryPlayer, RankedProfile, RoomMode } from "@/services/backend/types";
+import type {
+  MatchHistoryItem,
+  MatchHistoryPlayer,
+  Rank,
+  RankedProfile,
+  RankTier,
+  RoomMode,
+} from "@/services/backend/types";
 
 import { RankedFormatMessages as Messages } from "./ranked_format.messages";
 
@@ -14,6 +21,58 @@ export const HIDDEN_RATING = "????";
 export function formatProfileRating(profile: Pick<RankedProfile, "rating" | "setsToPlace">): string {
   return (profile.setsToPlace ?? 0) > 0 ? HIDDEN_RATING : formatRating(profile.rating);
 }
+
+/** The server's cutoffs (common::ranked::RANK_FLOORS): each division's lowest rating, Bronze 3 first. */
+export const RANK_FLOORS: readonly number[] = [
+  -Infinity,
+  1050,
+  1100,
+  1150,
+  1200,
+  1250,
+  1300,
+  1350,
+  1400,
+  1450,
+  1510,
+  1570,
+  1625,
+  1750,
+  1875,
+  2000,
+  2085,
+  2170,
+  2250,
+];
+
+/** The tiers, lowest first; each but Legendary has three divisions in `RANK_FLOORS`. */
+export const RANK_TIERS: readonly RankTier[] = [
+  "bronze",
+  "silver",
+  "gold",
+  "emerald",
+  "diamond",
+  "master",
+  "legendary",
+];
+
+/** The rank a rating reaches, without the server's demotion buffer. */
+export function rankForRating(rating: number): Rank {
+  const index = RANK_FLOORS.filter((floor) => rating >= floor).length - 1;
+  const tier = RANK_TIERS[Math.floor(index / 3)];
+  return tier === "legendary" ? { tier, division: null } : { tier, division: (3 - (index % 3)) as 1 | 2 | 3 };
+}
+
+/** Each tier's colour on a rating scale. */
+export const TIER_COLORS: Record<RankTier, string> = {
+  bronze: "#b87333",
+  silver: "#a7b1bc",
+  gold: "#e3b341",
+  emerald: "#2fb37a",
+  diamond: "#5aa9e6",
+  master: "#9a6ce0",
+  legendary: "#e2574c",
+};
 
 /** Rounds to the one decimal shown, so the sign always matches the digits. */
 function roundTenth(n: number): number {

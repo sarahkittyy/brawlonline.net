@@ -52,6 +52,9 @@ pub const NO_REQUEST: &str = "No search received. Try again.";
 /// (Sarah's board, 2026-10-29, with Ranked's ping cap lowered to 150 ms: "no opponent in
 /// range<br>try making a room").
 pub const NO_OPPONENT: &str = "No opponent in range\nTry making a room";
+/// [`NO_OPPONENT`] for an Unranked ticket whose own Unranked Rating Range was in effect (the
+/// player is placed), so the setting is likely why.
+pub const NO_OPPONENT_IN_RATING_RANGE: &str = "No opponent in your rating range\nWiden it in Settings > Game";
 
 /// Rooms (`docs/rooms-protocol.md`): a code that is no live room, or not a room code at all.
 pub const ROOM_NOT_FOUND: &str = "Room not found.";
@@ -264,6 +267,7 @@ mod tests {
             REPLACED.to_string(),
             NO_REQUEST.to_string(),
             NO_OPPONENT.to_string(),
+            NO_OPPONENT_IN_RATING_RANGE.to_string(),
             not_available("Ranked"),
             not_available("Teams"),
             not_available("Party"),

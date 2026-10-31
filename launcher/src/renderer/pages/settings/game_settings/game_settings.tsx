@@ -31,6 +31,7 @@ import { ChatKeySetting } from "./chat_key_setting";
 import { GameSettingsMessages as Messages } from "./game_settings.messages";
 import { InputDelaySetting } from "./input_delay_setting";
 import { NetplayNetworkSetting } from "./netplay_network_setting";
+import { RatingRangeSetting } from "./rating_range_setting";
 
 const renderValidityStatus = (isoValidity: IsoValidity) => {
   switch (isoValidity) {
@@ -129,6 +130,7 @@ export const GameSettings = React.memo(() => {
         </RadioGroup>
       </SettingItem>
       <InputDelaySetting />
+      <RatingRangeSetting />
       <SettingItem>
         <Tooltip title={netplayDolphinOpen ? Messages.closeDolphinToChange() : ""} placement="bottom-start">
           <div>
