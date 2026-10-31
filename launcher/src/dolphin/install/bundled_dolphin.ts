@@ -11,7 +11,11 @@
 // that player started failed) is installed again. The bundle itself is checked against its own
 // manifest's file count and size first: a launcher update that did not finish can leave it short
 // of files (bug report #111: no Sys/Rollback/gp-v23.json, so every match ended in "Could not start
-// the game"), and copying it would install the same gap, which the check above cannot see.
+// the game"), and copying it would install the same gap, which the check above cannot see. When
+// the file the bundle lacks is Dolphin's executable, an antivirus took it (bug report #205: copying
+// Dolphin.exe failed with UNKNOWN, Windows' answer for a file it calls a virus, then the bundle had
+// 1069 of 1070 files, short by Dolphin.exe's 24.8 MB, and installing the launcher again did not help):
+// the error says so instead of only telling the player to reinstall.
 //
 // SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -170,6 +174,38 @@ function incompleteBundleMessage(files: number, manifest: DolphinBundleManifest)
   );
 }
 
+/** The error for a bundle whose Dolphin executable is gone: an antivirus quarantined it. */
+function quarantinedExecutableMessage(
+  sourceDir: string,
+  destDir: string,
+  manifest: DolphinBundleManifest,
+  platform: NodeJS.Platform,
+): string {
+  const name = path.basename(manifest.executable);
+  const where =
+    platform === "win32"
+      ? " (Windows Security: Virus & threat protection > Protection history, or your own antivirus)"
+      : "";
+  return (
+    `Your antivirus removed ${name} from the launcher's copy of Dolphin ${manifest.version}: it mistakes it ` +
+    `for a threat. Restore ${name} from its quarantine${where}, add ${sourceDir} and ${destDir} to its ` +
+    `exclusions, then start the launcher again. Installing ${PRODUCT_NAME} again only helps once ` +
+    `the antivirus allows it.`
+  );
+}
+
+/** A copy refused because Windows (or the antivirus hooked into it) calls the file a virus. */
+function copyRefusedError(err: unknown, from: string, platform: NodeJS.Platform): Error {
+  if (platform === "win32" && (err as NodeJS.ErrnoException).code === "UNKNOWN") {
+    return new Error(
+      `Windows refused to copy ${from}: an antivirus is probably blocking it as a false positive. ` +
+        `Allow Brawl Online in it (restore ${path.basename(from)} if it was quarantined), then try again. ` +
+        `(${(err as Error).message})`,
+    );
+  }
+  return err as Error;
+}
+
 /**
  * Takes an old entry of the build out of the way of the new one. On Windows, a file that another
  * program has open (an antivirus scan, an overlay or recorder) is only marked for deletion: its name
@@ -223,6 +259,7 @@ export async function installBundledDolphin({
   onProgress,
   log = () => undefined,
   freeBytes = freeDiskBytes,
+  platform = process.platform,
 }: {
   sourceDir: string;
   destDir: string;
@@ -230,6 +267,8 @@ export async function installBundledDolphin({
   log?: (message: string) => void;
   /** Test hook: the free space on the disk of `destDir`. */
   freeBytes?: FreeBytes;
+  /** Test hook: the platform the errors are worded for. */
+  platform?: NodeJS.Platform;
 }): Promise<{ action: "unchanged" | "installed"; manifest: DolphinBundleManifest }> {
   const manifest = await readDolphinManifest(sourceDir);
   if (!manifest) {
@@ -261,6 +300,14 @@ export async function installBundledDolphin({
       `The bundled Dolphin ${manifest.version} (${sourceDir}) has ${bundled.files} of ${manifest.files} files, ` +
         `${bundled.size} of ${manifest.size} bytes: not installing it`,
     );
+    const executableThere = await fs.promises.lstat(path.join(sourceDir, manifest.executable)).then(
+      () => true,
+      () => false,
+    );
+    if (!executableThere) {
+      log(`The bundled Dolphin lacks ${manifest.executable}: an antivirus most likely quarantined it`);
+      throw new Error(quarantinedExecutableMessage(sourceDir, destDir, manifest, platform));
+    }
     throw new Error(incompleteBundleMessage(bundled.files, manifest));
   }
   if (sameVersion) {
@@ -309,7 +356,9 @@ export async function installBundledDolphin({
     } else if (st.isSymbolicLink()) {
       await fs.promises.symlink(await fs.promises.readlink(from), to);
     } else {
-      await fs.promises.copyFile(from, to);
+      await fs.promises.copyFile(from, to).catch((err) => {
+        throw copyRefusedError(err, from, platform);
+      });
       await fs.promises.chmod(to, st.mode & 0o777);
       done += st.size + PROGRESS_BYTES_PER_FILE;
       onProgress?.(Math.min(done, total), total);
