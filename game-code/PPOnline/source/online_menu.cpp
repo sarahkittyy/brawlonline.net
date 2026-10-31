@@ -547,6 +547,11 @@ namespace OnlineMenu {
     // The first coin placed after the match starts a new roster (allStarFreshStart): appended, the
     // new picks would come after the old ones, past the stocks of the match (Sarah, 2026-10-29:
     // "picking 4 new characters starts that game with those 4").
+    // The saved tables stay until the next lock-in saves others: every way back to the CSS puts
+    // them back. Where anyone picks, a player whose pick was not played comes back from the stage
+    // select (restoreCss) and does not lock in again; when that used up the save, nothing put
+    // their tables back after the match and P2's next roster was P1's again (Sarah's board,
+    // 2026-10-30: "in game 2, he got my picks"; her room's every game was anyone picks).
     static u8 s_allStarTable[4 * 0xA0];
     static u8 s_allStarTwin[4 * 0x70];
     static bool s_allStarSaved = false;
@@ -565,7 +570,6 @@ namespace OnlineMenu {
     static void restoreAllStarTables()
     {
         if (!s_allStarSaved) return;
-        s_allStarSaved = false;
         memcpy((void*)0x80588000, s_allStarTable, sizeof(s_allStarTable));
         memcpy((void*)0x80588300, s_allStarTwin, sizeof(s_allStarTwin));
         s_allStarKept = allStarCount();
@@ -719,6 +723,10 @@ namespace OnlineMenu {
     static void leaveCss(int code)
     {
         rememberCss();
+        // All-Star: the tables as this CSS leaves them, also without a lock-in (a player sitting
+        // out watches the room's game, whose match setup writes the tables too).
+        const PPOM::Session& se = PPOM::g_block.session;
+        if (roomCss() && se.rules.valid && se.special.rows[PPOM::SR_OTHER] == 2) saveAllStarTables(true);
         u32 mgr = *(u32*)0x805A0060;
         if (!isPtr(mgr)) return;
         *(int*)(mgr + 0x284) = code;

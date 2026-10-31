@@ -21,8 +21,11 @@ from ppharness.instance import DolphinInstance
 
 from test_online import _wait
 from test_online_game import Game, _boot, backend  # noqa: F401  (the backend fixture)
+from test_room_anyone_picks import all_ready_to_sss, back_in_the_room, leaves_by_itself
 from test_room_rules import session_rules
-from test_rooms_game import ART, CSS, _all, launcher_answer, pick, to_join_room, type_room_code, until_view, write_create
+from test_room_stage_list import FD, STAGES
+from test_rooms_game import (ART, CSS, _all, launcher_answer, pick, room_view, to_join_room, type_room_code, until_view,
+                             write_create)
 import online_set  # noqa: E402
 import ppom  # noqa: E402
 
@@ -365,6 +368,52 @@ def test_all_star_room_css_and_next_game(backend: OnlineBackend, dolphin: Callab
         mm = g.c.read_mem(u32(g, u32(g, GG) + MODE_MELEE) + MM_PLAYERS, 2 * PLAYER_SIZE)
         assert [mm[i * PLAYER_SIZE] for i in range(2)] == [marth[0], kinds[0]], (g.name, mm[0], mm[PLAYER_SIZE])
         g.shot("game-2")
+
+
+def test_all_star_next_game_where_anyone_picks(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
+                                               gpu_backend: str) -> None:
+    """Where anyone picks, the next All-Star game starts from each player's own roster too (Sarah's
+    board, 2026-10-30: "i SWEAR we already fixed the all-star character selection stuff. yet in game
+    2, he got my picks"; every game of her room was anyone picks). Both players go to the stage
+    select and A's pick is played: B comes back from its stage select to the CSS without locking in
+    again, and that return used up B's saved tables, so after the match nothing put them back and
+    B's next roster was A's (P1's, from the match setup). Two games, B never the picker."""
+    ruleset = {**ruleset_with("All-Star anyone", stocks=2, special={"other": "all-star"}),
+               "bestOf": 0, "stageChoice": "anyone-picks", "stages": STAGES}
+    a, b, _code = special_room(backend, dolphin, gpu_backend, "sp-allstar-anyone", ruleset)
+    marth, fox, mewtwo = (0x15, 0, 0, 0x13), (0x07, 0, 0, 0x07), (0x28, 0, 0, 0x24)
+    all_star_roster(a, [marth, fox])
+    all_star_roster(b, [fox])
+    B.css_pick_character(b.c, 0, 0x24)
+    for g in (a, b):
+        g.steps("wait 30")
+    own = {g.name: (g.c.read_mem(ALL_STAR_TABLE, 0xA0), g.c.read_mem(ALL_STAR_TWIN, 0x70)) for g in (a, b)}
+    assert own[b.name][0][:7] == bytes((*fox[:3], *mewtwo[:3], 0xCC)), own[b.name][0][:8].hex()
+    rosters = {a.name: [marth, fox], b.name: [fox, mewtwo]}
+    gs = [a, b]
+    game = room_view(a)["game"]
+    for n in (1, 2):
+        all_ready_to_sss(gs, game)
+        B.sss_pick_stage(a.c, FD, 0)
+        leaves_by_itself(b, "A picked")
+        online_set.wait(lambda: all(online_set.gstatus(g.c)["phase"] == "running" for g in gs), 240,
+                        f"game {n}")
+        a.steps("wait 200")
+        for g in gs:
+            se = ppom.read_session(g.c, ppom.find_block(g.c))
+            assert [x["roster"] for x in se["extra"][:2]] == [rosters[a.name], rosters[b.name]], (n, g.name, se["extra"][:2])
+            mm = g.c.read_mem(u32(g, u32(g, GG) + MODE_MELEE) + MM_PLAYERS, 2 * PLAYER_SIZE)
+            assert [mm[i * PLAYER_SIZE] for i in range(2)] == [marth[0], fox[0]], (n, g.name, mm[0], mm[PLAYER_SIZE])
+            g.shot(f"game-{n}")
+        rep = online_set.play_game(gs, game)
+        assert rep["checksums"]["mismatches"] == 0, rep
+        back_in_the_room(gs, game)
+        game += 1
+        for g in gs:
+            # The local panel's tables as this player left them, not P1's from the match.
+            assert g.c.read_mem(ALL_STAR_TABLE, 0xA0) == own[g.name][0], (n, g.name, g.c.read_mem(ALL_STAR_TABLE, 8).hex())
+            assert g.c.read_mem(ALL_STAR_TWIN, 0x70) == own[g.name][1], (n, g.name)
+            g.shot(f"back-on-css-{n}")
 
 
 def test_stamina_hp(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance], gpu_backend: str) -> None:
