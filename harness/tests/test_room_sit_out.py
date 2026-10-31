@@ -29,7 +29,7 @@ from ppharness.instance import DolphinInstance
 from test_online import _wait
 from test_online_game import Game, _boot, backend  # noqa: F401  (the backend fixture)
 from test_rooms_game import (ART, CSS, PANEL_X, _all, create_room, hand_to, lock_of, online_set, pick, ppom,
-                             room_view, to_join_room, type_room_code, until_view)
+                             room_view, status_line, to_join_room, type_room_code, until_view)
 from ppharness import brawl as B
 
 pytestmark = [pytest.mark.dolphin, pytest.mark.server, pytest.mark.gpu]
@@ -217,3 +217,51 @@ def test_sitting_out_and_the_stage_pick(backend: OnlineBackend, dolphin: Callabl
     assert setups[0] == setups[1] and setups[0].stage_kind == B.STAGE_KIND[stage], setups
     for g in gs:
         g.shot("05-game-2")
+
+
+def test_p2_and_p3_that_cannot_connect_while_p1_sits_out(backend: OnlineBackend,
+                                                         dolphin: Callable[..., DolphinInstance],
+                                                         gpu_backend: str) -> None:
+    """Bug report #202 (2026-10-31): a room's game on P2 and P3 alone (P1 empty or sitting out).
+    Their connect failed, and P2's log named P2 itself ("No connection to P2 kzHouston" at P3's
+    address): Matchmaking took P2's place among the match's players from its port, so P2 also
+    checked P3's connect token against its own, did not punch P3's low ports and told the room it
+    could not reach slot 2. Here the host sits out and B (P2) drops C's packets
+    (PPR_TEST_P2P_BLOCK, mapped the same way: before the fix it named B and blocked nothing).
+    C never tells the room (PPR_TEST_ROOM_NO_UNREACHABLE), so the pair on the line is B's word."""
+    test = "sit-out-p2-p3-unreachable"
+    users = [backend.create_user(f"sgz{'abc'[k]}", f"SGZ{'ABC'[k]}",
+                                 email=f"sgz{k}-{secrets.token_hex(4)}@example.test") for k in range(3)]
+    envs = [{}, {"PPR_TEST_P2P_BLOCK": users[2].connect_code},
+            {"PPR_TEST_P2P_BLOCK": users[1].connect_code, "PPR_TEST_ROOM_NO_UNREACHABLE": "1"}]
+    a, b, c = gs = [_boot(dolphin, f"sgz-{'abc'[k]}", backend, u, gpu_backend, test, "gameplay", artifacts=ART,
+                          env=e) for k, (u, e) in enumerate(zip(users, envs))]
+    _all(*[g.to_main_menu for g in gs])
+    _all(*[g.to_online_page for g in gs])
+    code = create_room(a)
+    pick(a)
+    _open_slot(a, 2)
+    for k, g in ((1, b), (2, c)):
+        to_join_room(g)
+        pick(g, right=2 * k)
+        _join(g, code, k)
+    until_view(a, lambda v: all(v["slots"][p]["bits"] & ppom.SLOT_TAKEN for p in range(3)), "all players")
+    _plate(a, 0)
+    for g in gs:
+        until_view(g, lambda v: v["slots"][0]["bits"] & ppom.SLOT_SITTING_OUT, f"{g.name}: A sitting out")
+    for g in (b, c):
+        g.steps("tap START 8", "wait 10")
+    _wait(lambda: all(g.c.call("rooms_status")["room_game"]["active"] for g in (b, c)), 60,
+          "the room's game started")
+    want = "No connection between sgzb and sgzc."
+    _wait(lambda: all(want in status_line(g) for g in (b, c)), 40, f"B's and C's line: {want}", interval=0.2)
+    for g in gs:
+        g.steps("wait 20")
+        g.shot("01-told")
+    ends = [g.c.call("rooms_status")["room_game"]["last_end"] for g in (b, c)]
+    assert ends[0] in (want, "Could not connect to players: sgzc"), ends
+    # B dropped C's packets and named C, not itself, in its connect log.
+    log = b.inst.log_path.read_text(encoding="utf-8", errors="replace")
+    assert f"Test: no packets from {users[2].connect_code}" in log, "B blocked nobody"
+    assert f"No connection to P3 sgzc ({users[2].connect_code})" in log, "B did not name C"
+    assert "No connection to P2" not in log, "B named itself"

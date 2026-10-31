@@ -83,6 +83,21 @@ u32 ConnectToken(const std::string& match_id, const PlayerInfo& player)
   return h != 0 ? h : 1;
 }
 
+// The `players` entry of remote player i (`remotes` and the P2P peers follow `players` without
+// the local one). By the local player's place in `players`, not its port: a room's slots can
+// have gaps, and before 2026-10-31 a P2 whose room had no P1 took its own entry for P3's (bug
+// report #202), so it named itself in its connect log, checked P3's connect token against its
+// own, did not punch P3's low ports and told the room it could not reach slot 2.
+size_t RemotePlayer(const Match& match, size_t i)
+{
+  for (size_t j = 0; j < match.players.size(); j++)
+  {
+    if (match.players[j].port - 1 == match.local_player_index)
+      return i >= j ? i + 1 : i;
+  }
+  return i;
+}
+
 // How often a peer that has not connected gets Common::ENet::PunchLowPorts.
 constexpr u64 PUNCH_INTERVAL_MS = 1000;
 
@@ -267,7 +282,7 @@ void LogFailedConnect(const Match& match, const ENetHost* client,
     if (connections[i])
       continue;
     const ENetAddress& to = remote_addrs[i];
-    const size_t p = static_cast<int>(i) >= match.local_player_index ? i + 1 : i;
+    const size_t p = RemotePlayer(match, i);
     const std::string who =
         p < match.players.size() ?
             fmt::format("P{} {} ({})", match.players[p].port, match.players[p].display_name,
@@ -1232,7 +1247,7 @@ void Matchmaking::HandleConnecting()
     const std::string blocked = fmt::format(",{},", env);
     for (size_t i = 0; i < remote_addrs.size(); ++i)
     {
-      const size_t p = static_cast<int>(i) >= match.local_player_index ? i + 1 : i;
+      const size_t p = RemotePlayer(match, i);
       if (p < match.players.size() &&
           blocked.find(fmt::format(",{},", match.players[p].connect_code)) != std::string::npos)
       {
@@ -1249,7 +1264,7 @@ void Matchmaking::HandleConnecting()
   std::vector<bool> punch(remote_player_count, false);
   for (size_t i = 0; i < remote_player_count; i++)
   {
-    const size_t p = static_cast<int>(i) >= match.local_player_index ? i + 1 : i;
+    const size_t p = RemotePlayer(match, i);
     punch[i] = p < match.players.size() &&
                match.remotes[i].ToString() == match.players[p].ip_address &&
                reinterpret_cast<const u8*>(&remote_addrs[i].host)[0] != 127;
@@ -1351,7 +1366,7 @@ void Matchmaking::HandleConnecting()
         // went on alone (bug report #109).
         for (size_t i = 0; !matched && net_event.data != 0 && i < servers.size(); i++)
         {
-          const size_t p = static_cast<int>(i) >= match.local_player_index ? i + 1 : i;
+          const size_t p = RemotePlayer(match, i);
           if (connections[i] || p >= match.players.size() ||
               ConnectToken(match.match_id, match.players[p]) != net_event.data)
           {
@@ -1411,8 +1426,8 @@ void Matchmaking::HandleConnecting()
       // Which players: by port (a room's slot), for the room's server.
       for (const int i : failed_connections)
       {
-        const int p = i >= match.local_player_index ? i + 1 : i;
-        if (p < static_cast<int>(match.players.size()))
+        const size_t p = RemotePlayer(match, static_cast<size_t>(i));
+        if (p < match.players.size())
         {
           match.unreachable_ports.push_back(match.players[p].port);
         }
@@ -1433,10 +1448,8 @@ void Matchmaking::HandleConnecting()
           err = "Could not connect to players: ";
           for (size_t i = 0; i < failed_connections.size(); i++)
           {
-            int p = failed_connections[i];
-            if (p >= match.local_player_index)
-              p++;
-            if (p < static_cast<int>(match.players.size()))
+            const size_t p = RemotePlayer(match, static_cast<size_t>(failed_connections[i]));
+            if (p < match.players.size())
               err += match.players[p].display_name;
             if (i < failed_connections.size() - 1)
               err += ", ";
@@ -1475,7 +1488,7 @@ void Matchmaking::HandleConnecting()
     const ENetPeer* peer = servers[i];
     match.connected.push_back({IpToString(peer->address.host), peer->address.port});
     // Which of the peer's addresses worked, and whether its router changed the port on the way.
-    const size_t p = static_cast<int>(i) >= match.local_player_index ? i + 1 : i;
+    const size_t p = RemotePlayer(match, i);
     if (p < match.players.size())
     {
       const std::string& lan = match.players[p].ip_address_lan;
