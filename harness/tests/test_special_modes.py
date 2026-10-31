@@ -24,8 +24,8 @@ from test_online_game import Game, _boot, backend  # noqa: F401  (the backend fi
 from test_room_anyone_picks import all_ready_to_sss, back_in_the_room, leaves_by_itself
 from test_room_rules import session_rules
 from test_room_stage_list import FD, STAGES
-from test_rooms_game import (ART, CSS, _all, launcher_answer, pick, room_view, to_join_room, type_room_code, until_view,
-                             write_create)
+from test_rooms_game import (ART, CSS, _all, launcher_answer, lock_of, pick, room_view, to_join_room, type_room_code,
+                             until_view, write_create)
 import online_set  # noqa: E402
 import ppom  # noqa: E402
 
@@ -347,7 +347,14 @@ def test_all_star_room_css_and_next_game(backend: OnlineBackend, dolphin: Callab
         assert g.c.read_mem(ALL_STAR_TABLE, 0xA0) == own[g.name][0], g.c.read_mem(ALL_STAR_TABLE, 8).hex()
         assert g.c.read_mem(ALL_STAR_TWIN, 0x70) == own[g.name][1]
         g.shot("back-on-css")
-    # Game 2: A keeps its roster (no new coin); B places Pikachu then Roy, a new roster of those two.
+    # Game 2: A keeps its roster (no new coin); B places Pikachu then Roy, a new roster of those two,
+    # after locking in with the kept one and taking it back with B (Sarah's board, 2026-10-30: Roy
+    # kept, locked in, B, then Game & Watch: "got half g&w half roy").
+    b.steps("tap START 8")
+    _wait(lambda: lock_of(b)["ready"], 20, "B locked in with its kept roster")
+    b.steps("wait 30", "tap B 8")
+    _wait(lambda: not lock_of(b)["ready"], 20, "B's lock-in taken back")
+    b.steps("wait 30")
     pikachu, roy = B.CSS_ID["pikachu"], B.CSS_ID["roy"]
     B.css_pick_character(b.c, 0, pikachu)
     B.css_pick_character(b.c, 0, roy)
