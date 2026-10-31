@@ -19,6 +19,8 @@
 
 #include <optional>
 #include <queue>
+#include <span>
+#include <vector>
 #include "Common/CommonTypes.h"
 #include "Common/RangeSizeSet.h"
 #include "Common/x64Emitter.h"
@@ -81,6 +83,34 @@ public:
   void IntializeSpeculativeConstants();
 
   void FlushRegistersBeforeSlowAccess();
+
+  // Set while compiling a store whose rollback dirty granules an earlier instruction of the block
+  // already marked (PlanDirtyMarks): EmuCodeBlock's per-store marks are skipped.
+  bool m_dirty_marks_covered = false;
+
+  // Rollback dirty marks shared across a block's stores. Stores through the same base register,
+  // with nothing writing that register in between, whose bytes all fit in one ROLLBACK_PAGE_SIZE
+  // window form a group: its first store marks the window's first and last byte (every granule
+  // the window overlaps) before it runs, and the group's stores skip their own marks. An stmw
+  // marks its whole range once instead of once per register.
+  struct DirtyMarkPlan
+  {
+    enum class Kind : u8
+    {
+      Self,     // marks its own bytes
+      Leader,   // marks [base + first, base + last] first; its own marks are skipped
+      Covered,  // an earlier Leader marked its bytes
+    };
+    Kind kind = Kind::Self;
+    u8 base = 0;
+    s32 first = 0;
+    s32 last = 0;
+  };
+  // One entry per instruction of the block, in order.
+  // barriers[i] != 0: something runs before instruction i that may change any register (an HLE
+  // hook), so every group ends there.
+  static void PlanDirtyMarks(std::span<const PPCAnalyst::CodeOp> ops,
+                             std::vector<DirtyMarkPlan>& plan, std::span<const u8> barriers = {});
 
   JitCommon::ConstantPropagation& GetConstantPropagation() { return m_constant_propagation; }
 
@@ -273,6 +303,11 @@ public:
   void eieio(UGeckoInstruction inst);
 
 private:
+  void PlanDirtyMarks(u32 num_instructions);
+  void EmitPlannedDirtyMarks(const DirtyMarkPlan& plan);
+  std::vector<DirtyMarkPlan> m_dirty_mark_plan;
+  std::vector<u8> m_dirty_mark_barriers;
+
   void CompileInstruction(PPCAnalyst::CodeOp& op);
 
   bool HandleFunctionHooking(u32 address);

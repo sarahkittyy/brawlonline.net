@@ -60,9 +60,16 @@ public:
 
   // Marks the rollback granules of a `size`-byte store at reg_addr + offset. Scratch registers
   // outside registers_in_use may be clobbered; the default treats all of them as in use.
+  // Both skip their marks while Jit64 compiles a store whose granules an earlier instruction of
+  // the block already marked (Jit64::m_dirty_marks_covered).
   void EmitJITDirtyBitmapUpdate(Gen::X64Reg reg_addr, s32 offset, u32 size,
                                 BitSet32 registers_in_use = BitSet32::AllTrue(32));
   void EmitJITDirtyBitmapUpdateConst(u32 address, int accessSize, const Gen::OpArg& value);
+  // Marks every granule of [reg_addr + first, reg_addr + last] (or of the constant range),
+  // regardless of m_dirty_marks_covered: the marks a group of stores shares.
+  void EmitJITDirtyBitmapRangeUpdate(Gen::X64Reg reg_addr, s32 first, s32 last,
+                                     BitSet32 registers_in_use);
+  void EmitJITDirtyBitmapConstRangeUpdate(u32 first_address, u32 last_address);
   // these return the address of the MOV, for backpatching
   void UnsafeWriteRegToReg(Gen::OpArg reg_value, Gen::X64Reg reg_addr, int accessSize,
                            s32 offset = 0, bool swap = true, Gen::MovInfo* info = nullptr,
@@ -143,6 +150,23 @@ protected:
   ConstantPool m_const_pool;
   FarCodeCache m_far_code;
 
+  // Tests only: how the dirty-bitmap marks address the bitmap. Auto picks the shortest form the
+  // bitmap's address allows ([index + disp32], RIP-relative); the others force the register-base
+  // forms a build with the bitmap out of that reach (a PIE image above 2 GB) emits.
+  enum class DirtyBitmapAddressing
+  {
+    Auto,
+    RipLoadedBase,
+    ImmediateBase,
+  };
+  DirtyBitmapAddressing m_dirty_bitmap_addressing = DirtyBitmapAddressing::Auto;
+
+private:
+  void EmitDirtyBitmapMarks(Gen::X64Reg reg_addr, s32 offset, u32 size,
+                            BitSet32 registers_in_use);
+  void EmitDirtyBitmapConstMarks(u32 address, u32 last_address, const Gen::OpArg& value);
+
+protected:
   // Backed up when we switch to far code.
   u8* m_near_code = nullptr;
   u8* m_near_code_end = nullptr;

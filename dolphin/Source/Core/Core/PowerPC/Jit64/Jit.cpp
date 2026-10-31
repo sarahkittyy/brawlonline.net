@@ -3,6 +3,8 @@
 
 #include "Core/PowerPC/Jit64/Jit.h"
 
+#include <algorithm>
+#include <array>
 #include <map>
 #include <span>
 #include <sstream>
@@ -48,6 +50,7 @@
 #include "Core/PowerPC/PowerPC.h"
 #include "Core/System.h"
 #include "Core/NetPlayClient.h"
+#include "Core/Rollback/DeltaSaveSlot.h"
 #include "Core/Rollback/FrameProfile.h"
 #include "Core/Rollback/MachineSession.h"
 
@@ -1003,6 +1006,9 @@ bool Jit64::DoJit(u32 em_address, JitBlock* b, u32 nextPC)
     IntializeSpeculativeConstants();
   }
 
+  m_dirty_marks_covered = false;
+  PlanDirtyMarks(code_block.m_num_instructions);
+
   // Translate instructions
   for (u32 i = 0; i < code_block.m_num_instructions; i++)
   {
@@ -1140,6 +1146,13 @@ bool Jit64::DoJit(u32 em_address, JitBlock* b, u32 nextPC)
         js.firstFPInstructionFound = true;
       }
 
+      // A group of stores' shared marks, before its first store; then the group's stores skip
+      // their own (PlanDirtyMarks).
+      const DirtyMarkPlan& dirty_mark_plan = m_dirty_mark_plan[i];
+      if (dirty_mark_plan.kind == DirtyMarkPlan::Kind::Leader)
+        EmitPlannedDirtyMarks(dirty_mark_plan);
+      m_dirty_marks_covered = dirty_mark_plan.kind != DirtyMarkPlan::Kind::Self;
+
       if (bJITRegisterCacheOff)
       {
         gpr.Flush();
@@ -1195,6 +1208,7 @@ bool Jit64::DoJit(u32 em_address, JitBlock* b, u32 nextPC)
         }
       }
 
+      m_dirty_marks_covered = false;
       js.fpr_is_store_safe = op.fprIsStoreSafeAfterInst;
 
       if (jo.memcheck && (opinfo->flags & FL_LOADSTORE))
@@ -1265,6 +1279,12 @@ bool Jit64::DoJit(u32 em_address, JitBlock* b, u32 nextPC)
       NOTICE_LOG_FMT(DYNA_REC, "Unflushed register: {}", ppc_inst);
     }
 #endif
+    // No instruction merges a following store (whose group would then lose its marks).
+    for (u32 k = i + 1; k <= i + js.skipInstructions && k < code_block.m_num_instructions; ++k)
+    {
+      ASSERT_MSG(DYNA_REC, m_dirty_mark_plan[k].kind != DirtyMarkPlan::Kind::Leader,
+                 "Merged a store that leads a dirty-mark group (PC={:x})", m_code_buffer[k].address);
+    }
     i += js.skipInstructions;
     js.skipInstructions = 0;
   }
@@ -1314,6 +1334,131 @@ std::size_t Jit64::DisassembleNearCode(const JitBlock& block, std::ostream& stre
 std::size_t Jit64::DisassembleFarCode(const JitBlock& block, std::ostream& stream) const
 {
   return m_disassembler->Disassemble(block.far_begin, block.far_end, stream);
+}
+
+void Jit64::PlanDirtyMarks(u32 num_instructions)
+{
+  // An HLE hook runs C++ before its instruction, and some set guest registers that regsOut does
+  // not list (Gprb's pacing hooks write r20, the netplay seed hook r3): no group spans one.
+  m_dirty_mark_barriers.assign(num_instructions, 0);
+  for (u32 i = 0; i < num_instructions; ++i)
+  {
+    if (HLE::TryReplaceFunction(m_ppc_symbol_db, m_code_buffer[i].address,
+                                PowerPC::CoreMode::JIT))
+    {
+      m_dirty_mark_barriers[i] = 1;
+    }
+  }
+  PlanDirtyMarks(std::span(m_code_buffer.data(), num_instructions), m_dirty_mark_plan,
+                 m_dirty_mark_barriers);
+}
+
+void Jit64::PlanDirtyMarks(std::span<const PPCAnalyst::CodeOp> ops,
+                           std::vector<DirtyMarkPlan>& plan, std::span<const u8> barriers)
+{
+  const u32 num_instructions = static_cast<u32>(ops.size());
+  plan.assign(num_instructions, {});
+
+  struct Group
+  {
+    s32 leader = -1;
+    s32 first = 0;
+    s32 last = 0;
+    u32 stores = 0;
+    bool multiple = false;  // led by an stmw, which shares its marks across its registers
+  };
+  std::array<Group, 32> groups{};
+  const auto close = [&](u32 base) {
+    Group& group = groups[base];
+    if (group.leader >= 0 && (group.stores > 1 || group.multiple))
+    {
+      plan[group.leader] = {DirtyMarkPlan::Kind::Leader, static_cast<u8>(base), group.first,
+                           group.last};
+    }
+    group = {};
+  };
+
+  for (u32 i = 0; i < num_instructions; ++i)
+  {
+    const PPCAnalyst::CodeOp& op = ops[i];
+    const UGeckoInstruction inst = op.inst;
+    if (i < barriers.size() && barriers[i])
+    {
+      for (u32 base = 0; base < 32; ++base)
+        close(base);
+    }
+
+    // D-form stores without update, through a base register: the bytes [base + d, + size).
+    s32 size = 0;
+    switch (inst.OPCD)
+    {
+    case 36:  // stw
+    case 52:  // stfs
+      size = 4;
+      break;
+    case 38:  // stb
+      size = 1;
+      break;
+    case 44:  // sth
+      size = 2;
+      break;
+    case 54:  // stfd
+      size = 8;
+      break;
+    case 47:  // stmw
+      size = (32 - static_cast<s32>(inst.RS)) * 4;
+      break;
+    default:
+      break;
+    }
+    if (size != 0 && inst.RA != 0 && !op.skip)
+    {
+      const u32 base = inst.RA;
+      const s32 first = static_cast<s16>(inst.SIMM_16);
+      const s32 last = first + size - 1;
+      Group& group = groups[base];
+      if (group.leader >= 0 && std::max(last, group.last) - std::min(first, group.first) <
+                                   static_cast<s32>(ROLLBACK_PAGE_SIZE))
+      {
+        group.first = std::min(first, group.first);
+        group.last = std::max(last, group.last);
+        ++group.stores;
+        plan[i].kind = DirtyMarkPlan::Kind::Covered;
+      }
+      else
+      {
+        close(base);
+        group = {static_cast<s32>(i), first, last, 1, inst.OPCD == 47};
+      }
+    }
+
+    // An instruction that writes a register ends the group based on it: the stores after it see
+    // another base. lswi and lswx write more registers than regsOut lists, so they end them all.
+    if (inst.OPCD == 31 && (inst.SUBOP10 == 533 || inst.SUBOP10 == 597))
+    {
+      for (u32 base = 0; base < 32; ++base)
+        close(base);
+    }
+    for (const int reg : op.regsOut)
+      close(static_cast<u32>(reg));
+  }
+  for (u32 base = 0; base < 32; ++base)
+    close(base);
+}
+
+void Jit64::EmitPlannedDirtyMarks(const DirtyMarkPlan& plan)
+{
+  if (gpr.IsImm(plan.base))
+  {
+    const u32 base = gpr.Imm32(plan.base);
+    EmitJITDirtyBitmapConstRangeUpdate(base + static_cast<u32>(plan.first),
+                                       base + static_cast<u32>(plan.last));
+    return;
+  }
+  // Between instructions only RSCRATCH and RSCRATCH2 are free; the marks borrow them.
+  RCX64Reg Ra = gpr.Bind(plan.base, RCMode::Read);
+  RegCache::Realize(Ra);
+  EmitJITDirtyBitmapRangeUpdate(Ra, plan.first, plan.last, CallerSavedRegistersInUse());
 }
 
 BitSet8 Jit64::ComputeStaticGQRs(const PPCAnalyst::CodeBlock& cb) const
