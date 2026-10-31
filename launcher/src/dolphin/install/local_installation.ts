@@ -17,6 +17,7 @@ import path from "path";
 import type { ByteProgress } from "utils/copy_file";
 import { copyFileWithProgress } from "utils/copy_file";
 
+import { SILENT_DOLPHIN_VERSION } from "../brawl_online_build";
 import type { DolphinInstallation, DolphinLaunchType } from "../types";
 import { nandRootFor } from "./brawl_save";
 import { executeCommand } from "./execute_command";
@@ -318,8 +319,9 @@ export class LocalDolphinInstallation implements DolphinInstallation {
       const dolphinEnv = sanitizeAppImageEnv();
       const out = await executeCommand(dolphinPath, ["--version"], { env: dolphinEnv });
       // Slippi's builds print a semver; ours (P+ Dolphin based) print e.g. "Project+ Dolphin 2332460493".
+      // Project+ 3.2's Windows build exits without a word, which ours never does.
       const firstLine = out.trim().split(/\r?\n/)[0].trim();
-      return out.match(semverRegex)?.[0] ?? (firstLine || undefined);
+      return out.match(semverRegex)?.[0] ?? (firstLine || SILENT_DOLPHIN_VERSION);
     } catch (err) {
       return undefined;
     }

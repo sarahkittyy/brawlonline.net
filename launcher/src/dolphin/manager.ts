@@ -19,6 +19,7 @@ import { fileExists } from "utils/file_exists";
 import { isSubdirectory } from "utils/is_subdirectory";
 import { removeTree } from "utils/remove_tree";
 
+import { isBrawlOnlineDolphinVersion, notBrawlOnlineDolphinMessage } from "./brawl_online_build";
 import { isAbnormalExit, keepCrashLog } from "./crash_log";
 import { dolphinToolNextTo } from "./dolphin_tool";
 import { clearInputDelayRequest, writeInputDelayRequest } from "./input_delay_handoff";
@@ -454,6 +455,9 @@ export class DolphinManager {
     const netplayInstallation = this.getInstallation(DolphinLaunchType.NETPLAY);
     await this._repairBundledDolphin();
     const dolphinPath = await playbackInstallation.findDolphinExecutable();
+    if (!render) {
+      await this._assertBrawlOnlineDolphin(DolphinLaunchType.PLAYBACK);
+    }
     await playbackInstallation.ensureUserFolder();
 
     const configuring = this.playbackDolphinInstances.get("configure");
@@ -621,6 +625,7 @@ export class DolphinManager {
     const netplayInstallation = this.getInstallation(DolphinLaunchType.NETPLAY);
     await this._repairBundledDolphin();
     const dolphinPath = await netplayInstallation.findDolphinExecutable();
+    await this._assertBrawlOnlineDolphin(DolphinLaunchType.NETPLAY);
     await netplayInstallation.ensureUserFolder();
     await this._updateDolphinSettings(DolphinLaunchType.NETPLAY);
 
@@ -726,6 +731,7 @@ export class DolphinManager {
     const installation = this.getInstallation(DolphinLaunchType.NETPLAY);
     await this._repairBundledDolphin();
     const dolphinPath = await installation.findDolphinExecutable();
+    await this._assertBrawlOnlineDolphin(DolphinLaunchType.NETPLAY);
     await installation.ensureUserFolder();
     await this._updateDolphinSettings(DolphinLaunchType.NETPLAY);
     await clearModRoomFiles(this.netplayOnlineDir());
@@ -1229,6 +1235,30 @@ export class DolphinManager {
 
   private _cachedVersion(dolphinType: DolphinLaunchType): string | undefined {
     return this.versionCache.get(this.getDolphinExecutablePath(dolphinType));
+  }
+
+  /**
+   * Refuses a Dolphin Settings name that is not Brawl Online's (Project+'s own, Slippi's, a mod's):
+   * it boots the game and our online menus, but never answers their requests, so nothing connects
+   * (bug report #15; the card "Brawl Online accepts the P+ netplay build off the website without
+   * errors"). The bundled build is ours. A version `--version` could not give is not judged.
+   */
+  private async _assertBrawlOnlineDolphin(dolphinType: DolphinLaunchType): Promise<void> {
+    if (this.settingsManager.getDolphinPath(dolphinType) == null) {
+      return;
+    }
+    const exePath = this.getDolphinExecutablePath(dolphinType);
+    let version = this.versionCache.get(exePath);
+    if (version == null) {
+      version = await this.getInstallation(dolphinType).getDolphinVersion();
+      if (version) {
+        this.versionCache.set(exePath, version);
+      }
+    }
+    if (version && !isBrawlOnlineDolphinVersion(version)) {
+      log.warn(`Not starting ${exePath}: not Brawl Online's Dolphin (version: ${version})`);
+      throw new Error(notBrawlOnlineDolphinMessage(exePath, version));
+    }
   }
 
   /**
