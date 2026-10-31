@@ -427,7 +427,7 @@ def test_room_requests_errors_and_the_launcher(backend: OnlineBackend,
 
 
 def _match_args() -> argparse.Namespace:
-    return argparse.Namespace(p1="fox", p2="falco", stage="battlefield", delay=2, region_set="gp-v27",
+    return argparse.Namespace(p1="fox", p2="falco", stage="battlefield", delay=2, region_set="gp-v28",
                               start_frame=120, frames=30000, minutes=1, timeout=400, cpu="sc",
                               save_countdown=None, sample_every=0, save_traces=None,
                               # gprb_session.py's later options, at its CLI defaults

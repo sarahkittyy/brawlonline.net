@@ -253,6 +253,26 @@ std::vector<Range> ReadSoundHeaps(const Guest& g)
   return out;
 }
 
+std::vector<Range> ReadSoundGroupTable(const Guest& g)
+{
+  // nw4r::snd::SoundArchivePlayer (*g_sndSystem +0x18C) keeps each loaded group's address in its
+  // group table (+0x14: u32 count, then {address, wave data address} per group). LoadGroup returns
+  // at once when a group's address is set, and a free clears the addresses inside the freed memory
+  // (SoundHeap's dispose callback). The table sits outside the sound heaps: a rollback across an
+  // All-Star fighter change put the heaps and sndHeapSys back with the old fighter's group in them
+  // while the table still had the new fighter's group at that address, so the re-run's load was
+  // skipped and the new fighter played the old one's sounds from it (board 2026-10-30: Captain
+  // Falcon after Jigglypuff, "his neutral b plays the jigglypuff sing sound").
+  std::vector<Range> out;
+  const auto snd = g.Ptr32(Addr::SND_SYSTEM_PTR);
+  const auto table = snd ? g.Ptr32(*snd + Addr::SND_ARCHIVE_PLAYER + Addr::SAP_GROUP_TABLE) : std::nullopt;
+  const auto count = table ? g.U32(*table) : std::nullopt;
+  if (!count || *count == 0 || *count > 0x10000 || !IsMemAddr(*table, 4 + 8 * *count))
+    return out;
+  out.push_back({*table, 4 + 8 * *count, "nw4r group address table"});
+  return out;
+}
+
 FighterFields ReadFighterFields(const Guest& g)
 {
   // ftEntryManager* at 0x80624780 -> ftEntry entries[4], stride 0x244: +0x0A u8 active instance,
@@ -444,6 +464,8 @@ std::optional<std::string> ParseRegionSet(const std::string& json, RegionSetSpec
     spec.rel_data = v->get<bool>();
   if (const auto* v = get("sound_heaps"); v && v->is<bool>())
     spec.sound_heaps = v->get<bool>();
+  if (const auto* v = get("sound_group_table"); v && v->is<bool>())
+    spec.sound_group_table = v->get<bool>();
   // "add": [[addr, size, label], ...] or [{"addr":..,"size":..,"label":..}, ...]
   if (const auto* v = get("add"); v && v->is<picojson::array>())
   {
@@ -581,6 +603,11 @@ std::vector<Range> ResolveRegionSet(const Guest& g, const RegionSetSpec& spec)
   if (spec.sound_heaps)
   {
     for (auto& r : ReadSoundHeaps(g))
+      rs.push_back(std::move(r));
+  }
+  if (spec.sound_group_table)
+  {
+    for (auto& r : ReadSoundGroupTable(g))
       rs.push_back(std::move(r));
   }
   for (const auto& r : spec.add)
