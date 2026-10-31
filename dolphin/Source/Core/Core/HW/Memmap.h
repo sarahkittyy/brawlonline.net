@@ -62,6 +62,23 @@ struct LogicalMemoryView
   u32 logical_base; // Brawlback
 };
 
+// Whole-machine rollback (Core/Rollback/DeltaSaveSlot.cpp): a snapshot's copy of fake VMEM
+// (0x7E000000-0x7FFFFFFF, a GameCube game's paged memory with the MMU off), outside the savestate,
+// as DSP::ARAMSnapshot keeps ARAM. Each chunk of the copy holds the content of one version (see
+// MemoryManager::SaveFakeVMEMSnapshot); a save or load copies only the chunks whose version
+// differs. Version 0 is the zeros fake VMEM starts with, and needs no copy.
+constexpr u32 FAKE_VMEM_CHUNK_SHIFT = 12;  // 4 KiB
+struct FakeVMEMSnapshot
+{
+  std::vector<std::unique_ptr<u8[]>> chunks;  // allocated as a chunk's first content comes in
+  std::vector<u64> versions;                  // per chunk
+  void Reset()
+  {
+    chunks.clear();
+    versions.clear();
+  }
+};
+
 // Brawlback
 struct DirtyPage
 {
@@ -140,6 +157,14 @@ public:
   void Memset(u32 address, u8 value, size_t size);
   // Mark pages dirty for rollback. Call after direct writes that bypass CopyToEmu.
   void MarkRangeDirty(u32 address, size_t size);
+  // Rollback snapshots skip fake VMEM in DoState (as RAM) and keep it here instead; the dirty
+  // bitmap's marks for it (0x1E000000-0x1FFFFFFF, its addresses masked as the JIT marks them) say
+  // which chunks changed. Both return the bytes copied.
+  size_t SaveFakeVMEMSnapshot(FakeVMEMSnapshot& snapshot);
+  size_t LoadFakeVMEMSnapshot(const FakeVMEMSnapshot& snapshot);
+  // Gives the chunks written since the last save or load (the bitmap's marks) new versions. Called
+  // before anything clears the whole bitmap, so no write is lost.
+  void FlushFakeVMEMWrites();
   u8 Read_U8(u32 address) const;
   u16 Read_U16(u32 address) const;
   u32 Read_U32(u32 address) const;
@@ -219,6 +244,9 @@ private:
   u32 m_ram_mask = 0;
   u32 m_fakevmem_size = 0;
   u32 m_fakevmem_mask = 0;
+  // Per FAKE_VMEM_CHUNK_SHIFT chunk of fake VMEM, the version of its content (FakeVMEMSnapshot).
+  std::vector<u64> m_fake_vmem_versions;
+  void MarkAllFakeVMEMWritten();
   u32 m_l1_cache_size = 0;
   u32 m_l1_cache_mask = 0;
   // m_exram_size is the amount allocated by the emulator, whereas m_exram_size_real

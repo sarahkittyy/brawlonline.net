@@ -40,6 +40,7 @@ void FullMemcpySaveSlot::Reset()
   m_has_state = false;
   m_save_buffer.reset();
   m_aram.Reset();
+  m_fake_vmem.Reset();
 }
 
 void FullMemcpySaveSlot::Save(Core::System& system)
@@ -59,6 +60,7 @@ void FullMemcpySaveSlot::Save(Core::System& system)
   State::SaveToBuffer(system, m_save_buffer);
   mgr.EndDoState();
   system.GetDSP().SaveARAMSnapshot(m_aram);
+  system.GetMemory().SaveFakeVMEMSnapshot(m_fake_vmem);
 
   m_has_state = true;
 }
@@ -82,6 +84,7 @@ void FullMemcpySaveSlot::Load(Core::System& system)
       State::LoadFromBuffer(system, std::span<uint8_t>(m_save_buffer.data(), m_save_buffer.size()));
   mgr.EndDoState();
   system.GetDSP().LoadARAMSnapshot(m_aram);
+  system.GetMemory().LoadFakeVMEMSnapshot(m_fake_vmem);
 
   if (ok)
     OSD::AddMessage("Rollback state loaded", 2000);

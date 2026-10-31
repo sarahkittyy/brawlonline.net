@@ -618,6 +618,8 @@ void RollbackManager::Init(Core::System& system)
   m_needs_source_mem1.assign(m_mem1_size / ROLLBACK_PAGE_SIZE, 0);
   m_needs_source_mem2.assign(m_mem2_size / ROLLBACK_PAGE_SIZE, 0);
 
+  // Fake VMEM's chunk versions take its marks first: clearing them would lose its writes so far.
+  memory.FlushFakeVMEMWrites();
   JITDirtyBitmap::Get().Clear();
   GPUWrittenBitmap::Get().Clear();
 
@@ -851,6 +853,7 @@ void RollbackManager::ToggleFrameSave()
     m_base_snapshot.valid = false;
     m_shadow_valid = false;
 
+    Core::System::GetInstance().GetMemory().FlushFakeVMEMWrites();
     JITDirtyBitmap::Get().Clear();
 
 #if ROLLBACK_VALIDATE
@@ -1679,6 +1682,7 @@ bool RollbackManager::LoadFrame(Core::System& system, int frames_back)
       deltaSave.RestoreVideoState();
     EndDoState();
     m_last_load_aram_bytes = system.GetDSP().LoadARAMSnapshot(deltaSave.m_aram);
+    system.GetMemory().LoadFakeVMEMSnapshot(deltaSave.m_fake_vmem);
     m_last_load_dostate_us = static_cast<u64>(std::chrono::duration_cast<std::chrono::microseconds>(
                                                   std::chrono::steady_clock::now() - dostate_start)
                                                   .count()) -
