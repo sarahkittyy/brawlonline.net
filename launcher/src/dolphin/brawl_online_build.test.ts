@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { isBrawlOnlineDolphinVersion } from "./brawl_online_build";
+import { isBrawlOnlineDolphinVersion, SILENT_DOLPHIN_VERSION } from "./brawl_online_build";
 
 describe("isBrawlOnlineDolphinVersion", () => {
   it("accepts our releases and local builds", () => {
@@ -13,6 +13,10 @@ describe("isBrawlOnlineDolphinVersion", () => {
     expect(isBrawlOnlineDolphinVersion("3.4.2")).toBe(false);
     expect(isBrawlOnlineDolphinVersion("Dolphin 2512")).toBe(false);
     expect(isBrawlOnlineDolphinVersion("Dolphin 5.0-21088")).toBe(false);
+  });
+
+  it("rejects a Dolphin that printed no version (Project+ 3.2's Windows build)", () => {
+    expect(isBrawlOnlineDolphinVersion(SILENT_DOLPHIN_VERSION)).toBe(false);
   });
 
   it("does not judge an unknown version", () => {
