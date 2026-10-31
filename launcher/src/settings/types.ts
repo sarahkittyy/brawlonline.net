@@ -45,7 +45,7 @@ export interface SettingsSchema {
   inputDelay: number;
 
   // Online: "Unranked Rating Range": Unranked pairs the player only with placed players whose
-  // Ranked rating is within this many points (0 off; 100, 200 or 300). Synced to Dolphin.ini
+  // Ranked rating is within this many points (0 off; presets 100, 200, 300, or any whole number). Synced to Dolphin.ini
   // `[Online] UnrankedRatingRange`, sent in the game's Unranked tickets.
   unrankedRatingRange: number;
 

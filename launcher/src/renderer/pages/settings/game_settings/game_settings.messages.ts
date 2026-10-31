@@ -20,9 +20,17 @@ export const GameSettingsMessages = {
   inputDelayFrames: (frames: number) => (frames === 1 ? "1 frame" : `${frames} frames`),
   unrankedRatingRange: () => "Unranked Rating Range",
   unrankedRatingRangeDescription: () =>
-    "Only match with players whose Ranked rating is this close to yours in Unranked. Searches can take much longer. Works once you have placed in Ranked.",
+    "Only match with players whose Ranked rating is this close to yours in Unranked. Searches can take much longer. Works once you have placed in Ranked, and then skips players who haven't placed yet. If your opponent also set a range, the smaller one counts.",
   unrankedRatingRangeOff: () => "Off",
   unrankedRatingRangePoints: (points: number) => "±{0}",
+  unrankedRatingRangeCustom: () => "Custom",
+  unrankedRatingRangePreview: (rating: string, low: string, high: string, lowRank: string, highRank: string) =>
+    "You're at {0}. You'll be matched with placed players rated {1} to {2} ({3} to {4}).",
+  unrankedRatingRangeNotPlaced: (sets: number) =>
+    sets === 1
+      ? "This starts working once you place in Ranked (1 more set). Until then you search as if it were off."
+      : `This starts working once you place in Ranked (${sets} more sets). Until then you search as if it were off.`,
+  unrankedRatingRangeNoProfile: () => "Log in to see which ratings this matches you with.",
   enableMusic: () => "Music",
   enableMusicDescription: () => "Play the game's music in menus and matches.",
   disableChat: () => "Disable Chat",

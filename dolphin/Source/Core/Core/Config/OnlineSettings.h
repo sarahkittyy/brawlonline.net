@@ -50,7 +50,7 @@ extern const Info<std::string> ONLINE_SESSION_BACKEND;
 // in every mode (until 2026-10-23 Direct and rooms only).
 extern const Info<int> ONLINE_INPUT_DELAY;
 
-// The launcher's "Unranked Rating Range" (rating points; 100, 200 or 300): Unranked tickets send
+// The launcher's "Unranked Rating Range" (rating points: a preset 100, 200 or 300, or a custom number): Unranked tickets send
 // it as ratingRange, and mm pairs this player only with placed players whose Ranked rating is
 // within it. 0 or less: off.
 extern const Info<int> ONLINE_UNRANKED_RATING_RANGE;

@@ -1,5 +1,4 @@
 import { GAME_NAME } from "@common/product";
-import { RATING_RANGE_CHOICES, RATING_RANGE_OFF } from "@common/rating_range";
 import { IsoValidity } from "@common/types";
 import { css } from "@emotion/react";
 import styled from "@emotion/styled";
@@ -24,7 +23,6 @@ import {
   useEnableStreamGames,
   useIsoPath,
   useLaunchGameOnPlay,
-  useUnrankedRatingRange,
 } from "@/lib/hooks/use_settings";
 
 import { DISC_IMAGE_EXTENSIONS } from "../../quick_start/steps/iso_selection_step/iso_file";
@@ -33,6 +31,7 @@ import { ChatKeySetting } from "./chat_key_setting";
 import { GameSettingsMessages as Messages } from "./game_settings.messages";
 import { InputDelaySetting } from "./input_delay_setting";
 import { NetplayNetworkSetting } from "./netplay_network_setting";
+import { RatingRangeSetting } from "./rating_range_setting";
 
 const renderValidityStatus = (isoValidity: IsoValidity) => {
   switch (isoValidity) {
@@ -71,7 +70,6 @@ export const GameSettings = React.memo(() => {
   const [isoPath, setIsoPath] = useIsoPath();
   const verifyFraction = useIsoVerificationFraction(verifying ? isoPath : null);
   const [launchMeleeOnPlay, setLaunchMelee] = useLaunchGameOnPlay();
-  const [unrankedRatingRange, setUnrankedRatingRange] = useUnrankedRatingRange();
   const [enableMusic, setEnableMusic] = useEnableMusic();
   const [disableChat, setDisableChat] = useDisableChat();
   const [enableStreamGames, setEnableStreamGames] = useEnableStreamGames();
@@ -132,29 +130,7 @@ export const GameSettings = React.memo(() => {
         </RadioGroup>
       </SettingItem>
       <InputDelaySetting />
-      <SettingItem name={Messages.unrankedRatingRange()} description={Messages.unrankedRatingRangeDescription()}>
-        <Tooltip title={netplayDolphinOpen ? Messages.closeDolphinToChange() : ""} placement="bottom-start">
-          <RadioGroup
-            row={true}
-            value={unrankedRatingRange}
-            onChange={(_event, value) => setUnrankedRatingRange(Number(value))}
-          >
-            {RATING_RANGE_CHOICES.map((points) => (
-              <FormControlLabel
-                key={points}
-                value={points}
-                label={
-                  points === RATING_RANGE_OFF
-                    ? Messages.unrankedRatingRangeOff()
-                    : Messages.unrankedRatingRangePoints(points)
-                }
-                control={<Radio />}
-                disabled={netplayDolphinOpen}
-              />
-            ))}
-          </RadioGroup>
-        </Tooltip>
-      </SettingItem>
+      <RatingRangeSetting />
       <SettingItem>
         <Tooltip title={netplayDolphinOpen ? Messages.closeDolphinToChange() : ""} placement="bottom-start">
           <div>
