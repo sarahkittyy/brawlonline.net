@@ -240,7 +240,7 @@ Option: serve a tiny GraphQL endpoint with exactly these operations (async-graph
 | `POST /v1/me/rename`, `POST /v1/me/accept-rules` | `userRename`, `userAcceptRules` | session |
 | `GET /user/{uid}?additionalFields=chatMessages,rank` (built; `rank` has the Elo rating, rated sets, leaderboard `position` and `rankedPlayers`) | users-rest | public (as Slippi) |
 | `GET /v1/dolphin/latest?purpose=&beta=` | `getLatestDolphin` | — |
-| `POST /v1/ranked/report-game` (built; Ranked, Unranked and Direct games, only Ranked rated; no `uploadUrl` yet) | `reportOnlineGame` | play key |
+| `POST /v1/ranked/report-game` (built; Ranked, Unranked and Direct games, Ranked rated per set, Unranked per game on a hidden matchmaking rating; no `uploadUrl` yet) | `reportOnlineGame` | play key |
 | `POST /v1/ranked/report-leave {kind: left \| opponent_left \| match_quality, beforeStageSelect?}` (built; a `left` before the stage select with no game played is not rated; `match_quality` voids the set unless it was on one player's own end, server/README.md "Whose end it was") | `reportOnlineMatchStatus` (`abandoned`) | play key |
 | (none: the server decides the set from the game reports) | 0xC2 path | |
 | `GET /v1/ranked/result?matchId=&uid=` (built) | `getRankedMatchPersonalResult` | public |

@@ -18,7 +18,8 @@
 //!
 //! Unranked and Direct games, and rooms' games (with every player's place), are reported with
 //! the same endpoint and stored the same way (for the match history, [`crate::history`]); they
-//! are never settled or rated.
+//! are never settled. Unranked games move matchmaking's hidden Unranked rating
+//! ([`crate::unranked`]).
 //!
 //! `GET /v1/ranked/result?matchId=&uid=` (Slippi's `getRankedMatchPersonalResult`) and
 //! `GET /user/{uid}` (`rank`) give the rating back.
@@ -558,7 +559,8 @@ pub struct ReportGameReq {
 }
 
 /// `reportOnlineGame`. For a ranked game the set is settled after the report. Unranked, Direct
-/// and room games are stored the same way and never rated: the answer is the match's state with
+/// and room games are stored the same way and never settled (an Unranked game's first report
+/// moves the hidden Unranked rating, [`crate::unranked::rate_game`]): the answer is the match's state with
 /// status `ASSIGNED` and the wins counted from the reports ([`ranked::count_wins`], by winner).
 /// Idempotent: the same report again is accepted; a different winner for a game already
 /// reported is refused.
@@ -612,6 +614,15 @@ pub async fn report_game(State(state): State<AppState>, Json(req): Json<ReportGa
         tracing::info!(match_id = %req.match_id, mode = row.mode, game = req.game_index, %uid, winner = ?winner, "game reported");
     }
     if !is_ranked {
+        if let (crate::unranked::MODE_UNRANKED, Some(w), &[a, b]) = (row.mode, winner, &row.players[..]) {
+            let loser = if w == a { b } else { a };
+            let rated =
+                crate::unranked::rate_game(&state.pool, &req.match_id, req.game_index as i32, w, loser, Utc::now());
+            if let Err(e) = rated.await {
+                // Matchmaking's hidden rating only: the report itself stands.
+                tracing::warn!(match_id = %req.match_id, game = req.game_index, error = %e, "unranked rating not updated");
+            }
+        }
         return Ok(Json(session_state(&state.pool, &req.match_id, row).await?));
     }
     let timing = state.cfg.ranked_timing();

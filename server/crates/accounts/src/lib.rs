@@ -20,6 +20,7 @@ pub mod sd_cards;
 pub mod slur_filter;
 pub mod social;
 pub mod store;
+pub mod unranked;
 
 use std::net::{IpAddr, SocketAddr};
 use std::sync::{Arc, Mutex};
@@ -249,6 +250,7 @@ pub async fn run(cfg: Config) -> anyhow::Result<()> {
     if cfg.run_migrations {
         common::db::MIGRATOR.run(&pool).await?;
         ranked::backfill_tiers(&pool).await?;
+        unranked::backfill(&pool).await?;
     }
     let mailer = mail::from_config(&cfg.mail)?;
     tracing::info!(

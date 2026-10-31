@@ -58,6 +58,9 @@ enum Cmd {
     /// Ranked: ranks and placement (docs/design/ranked-tiers.md).
     #[command(subcommand)]
     Ranked(RankedCmd),
+    /// Unranked's hidden rating, which only matchmaking reads (common::unranked).
+    #[command(subcommand)]
+    Unranked(UnrankedCmd),
     /// Published rulesets (docs/rulesets-protocol.md). CODE is a ruleset code (one version).
     #[command(subcommand)]
     Ruleset(RulesetCmd),
@@ -111,6 +114,14 @@ enum RulesetCmd {
         #[arg(long)]
         all_versions: bool,
     },
+}
+
+#[derive(Subcommand)]
+enum UnrankedCmd {
+    /// Rate every Unranked game reported so far again, from each player's Ranked rating at their
+    /// first game, replacing all Unranked ratings (accounts does it once by itself, at the first
+    /// start with none). Run it after changing the rules in common::unranked.
+    Rebuild,
 }
 
 #[derive(Subcommand)]
@@ -402,6 +413,13 @@ async fn main() -> anyhow::Result<()> {
             if let Some(done) = accounts::ranked::backfill_tiers(&pool).await? {
                 println!("ranked tiers filled: {} players from {} rating changes", done.players, done.sets);
             }
+            if let Some(done) = accounts::unranked::backfill(&pool).await? {
+                println!("unranked ratings filled: {} players from {} games", done.players, done.games);
+            }
+        }
+        Cmd::Unranked(UnrankedCmd::Rebuild) => {
+            let done = admin::rebuild_unranked_ratings(&pool, &actor).await?;
+            println!("unranked ratings rebuilt: {} players from {} games", done.players, done.games);
         }
         Cmd::Ranked(RankedCmd::Recompute) => {
             let done = admin::recompute_ranked_tiers(&pool, &actor).await?;
