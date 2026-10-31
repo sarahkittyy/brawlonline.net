@@ -1252,7 +1252,8 @@ void Gekko::MessageSystem::SendInputsToPeer(Player* peer, GekkoNetAdapter* host,
     // about to get) everything we would send. A re-send waits for the retry interval; a lost
     // packet is repaired sooner by the next frame's packet, which carries every unacked input.
     // (Before 2026-10-13 each new ack sent the remaining inputs again: about one extra packet a
-    // frame.)
+    // frame.) While playing, a new input goes every frame, well inside the interval, so only a
+    // stalled session re-sends, and at most 25 times a second, under its 60 a second when running.
     if (!peer->input_cache.packets.empty() && peer->input_cache.last_input_frame == last_input) {
         const u64 now = TimeSinceEpoch();
         if (peer->last_input_send_time + NetStats::INPUT_RETRY_INTERVAL > now) {
