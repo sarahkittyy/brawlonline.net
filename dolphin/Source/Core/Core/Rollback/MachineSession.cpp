@@ -1120,6 +1120,17 @@ void HandleControl(ENetPeer* peer, const u8* data, size_t size)
       }
     }
     s.epoch_go = go;
+    // A joiner learns who plays now: a peer whose hello said it was a joiner too may have been let
+    // in since (JoinStep counts the players who can let this one in). Not across a move: the
+    // mask is after the swap, the room's slots may not be yet.
+    if (s.opts.join && !LocalPlays() && go.move.first < 0)
+    {
+      for (int i = 0; i < MAX_PLAYERS; ++i)
+      {
+        if (i != s.opts.local_slot && ((go.players >> i) & 1) && s.peers[i].slot == i)
+          s.peers[i].late = false;
+      }
+    }
   }
   else if (type == "image_progress")
   {
@@ -5861,13 +5872,28 @@ void JoinStep(Core::System& system)
   std::optional<State::EpochGo> go;
   bool image = false;
   std::optional<std::string> refused;
-  std::string no_link, no_link_waiting;
+  std::string no_link, no_link_waiting, nobody;
   std::vector<std::string> notices, chat_notices;
   bool ready_to_sync = false;
   {
     std::lock_guard lk(s.net_mutex);
     if (s.join_refused)
       refused = s.join_refused_why;
+    // Only the session's players let a joiner in (another joiner's game has no session to share;
+    // a room's newcomers are joiners): once no member of the room plays, nobody ever will. The
+    // join ends there rather than at JOIN_TIMEOUT (bug report #203: DRAC#759 was joining DAN#707's
+    // REX room when DAN#707 closed their game; mm made DRAC#759 the room's host while their game
+    // still waited at its first frame, and DAN#707 came back to the room twice and asked to join
+    // a game that was not running: both stood still until they closed them).
+    if (s.opts.room && s.room_known && !s.join_loaded)
+    {
+      bool anyone = false;
+      for (const PeerLink& p : s.peers)
+        anyone |= p.slot >= 0 && !p.left && !p.late;
+      if (!anyone)
+        nobody = "nobody in the room plays the game any more (its players left), so nobody can let "
+                 "you in";
+    }
     if (s.opts.room && !s.join_sent)
       no_link = JoinNoLinkStep(Clock::now(), &chat_notices, &no_link_waiting);
     // The image's progress, in the chat window at every tenth (the game waits for it: across an
@@ -5940,6 +5966,11 @@ void JoinStep(Core::System& system)
   if (refused)
   {
     Fail("Could not join: " + *refused);
+    return;
+  }
+  if (!nobody.empty())
+  {
+    Fail(nobody);
     return;
   }
   if (!no_link.empty())
