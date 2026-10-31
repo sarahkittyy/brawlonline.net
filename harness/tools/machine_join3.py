@@ -54,6 +54,8 @@ def main() -> int:
     ap.add_argument("--dump", action="store_true", help="PPR_MACHINE_DUMP_DIR: each epoch's image parts")
     ap.add_argument("--env", action="append", default=[], help="KEY=VALUE for every Dolphin")
     ap.add_argument("--video", default="Null")
+    ap.add_argument("--slot-config", action="append", default=[],
+                    help="SLOT:System.Section.Key=Value for one player only (slot 0-2), e.g. 1:Dolphin.Core.CPUThread=False")
     a = ap.parse_args()
 
     out = Path(a.out).resolve()
@@ -90,7 +92,9 @@ def main() -> int:
         if a.dump:
             env["PPR_MACHINE_DUMP_DIR"] = str(dump)
         cfg = InstanceConfig(video_backend=a.video, standard_controllers=(0,), other_ports="none",
-                             config_args=sd_cfg + [f"Dolphin.Core.DefaultISO={iso}",
+                             config_args=sd_cfg + [c.split(":", 1)[1] for c in a.slot_config
+                                                   if c.split(":", 1)[0] == str(slot)] + [
+                                                   f"Dolphin.Core.DefaultISO={iso}",
                                                    "Logger.Options.WriteToFile=True", "Logger.Options.Verbosity=4",
                                                    "Logger.Logs.Brawlback=True", "Logger.Logs.CORE=True"])
         inst = DolphinInstance(name, port=free_port(socket.SOCK_STREAM), exe=a.exe, config=cfg, boot=boot,

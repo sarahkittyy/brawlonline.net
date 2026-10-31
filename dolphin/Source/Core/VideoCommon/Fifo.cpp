@@ -698,11 +698,13 @@ int FifoManager::RunGpuOnCpu(int ticks)
     // waited forever ("GP WAIT Timeout"), reset its FIFOs and handed the GPU garbage, and both
     // machines crashed in LoadIndexedXF. The bytes up to CPReadPointer are already copied to the
     // video buffer, so the guest may reuse them.
-    if (m_use_deterministic_gpu_thread)
-    {
-      fifo.SafeCPReadPointer.store(fifo.CPReadPointer.load(std::memory_order_relaxed),
-                                   std::memory_order_relaxed);
-    }
+    // In single core too, where the game reads CPReadPointer and nothing reads this one: it is in
+    // the savestate, so a single-core player's stale copy differed from a dual-core player's in
+    // the machine image's digest, and that player never vouched for the dual-core host's image
+    // (bug report #200, "player 2 does not vouch for this machine"); a dual-core joiner of a
+    // single-core host also got the stale pointer as the GPU's read pointer.
+    fifo.SafeCPReadPointer.store(fifo.CPReadPointer.load(std::memory_order_relaxed),
+                                 std::memory_order_relaxed);
   }
 
   command_processor.SetCPStatusFromGPU();
