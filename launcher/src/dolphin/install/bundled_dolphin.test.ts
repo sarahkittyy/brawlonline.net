@@ -1,7 +1,7 @@
 import fs from "fs";
 import os from "os";
 import path from "path";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { DolphinBundleManifest } from "./bundled_dolphin";
 import {
@@ -178,6 +178,41 @@ describe("installBundledDolphin", () => {
     const v3 = await makeBundle("0.1.12", { "Dolphin.exe": "exe-12", "Sys/a.ini": "ini-12" });
     await fs.promises.writeFile(path.join(v3, "Sys", "_CodeSignature"), "x");
     expect((await installBundledDolphin({ sourceDir: v3, destDir: dest })).action).toBe("installed");
+  });
+
+  it("names the antivirus when the bundle lost its Dolphin executable or Windows refuses to copy a file", async () => {
+    // Bug report #205: copying Dolphin.exe failed with UNKNOWN (Windows' "contains a virus"), then
+    // the bundle had 1069 of 1070 files, short by Dolphin.exe, and installing the launcher again
+    // did not bring it back.
+    const src = await makeBundle("0.1.13", { "Dolphin.exe": "exe-13", "Sys/a.ini": "ini" });
+    const refused = Object.assign(new Error("UNKNOWN: unknown error, copyfile"), { code: "UNKNOWN" });
+    const copyFile = vi.spyOn(fs.promises, "copyFile").mockRejectedValueOnce(refused);
+    try {
+      await expect(installBundledDolphin({ sourceDir: src, destDir: dest, platform: "win32" })).rejects.toThrow(
+        /Windows refused to copy .*Dolphin\.exe: an antivirus.*\(UNKNOWN: unknown error, copyfile\)/,
+      );
+    } finally {
+      copyFile.mockRestore();
+    }
+
+    await fs.promises.rm(path.join(src, "Dolphin.exe"));
+    const logs: string[] = [];
+    const install = installBundledDolphin({
+      sourceDir: src,
+      destDir: dest,
+      platform: "win32",
+      log: (m) => logs.push(m),
+    });
+    await expect(install).rejects.toThrow(
+      /Your antivirus removed Dolphin\.exe .* Dolphin 0\.1\.13.*Protection history/,
+    );
+    expect(logs.join(" ")).toContain("lacks Dolphin.exe");
+    // Another missing file is still an update that did not finish.
+    await fs.promises.writeFile(path.join(src, "Dolphin.exe"), "exe-13");
+    await fs.promises.rm(path.join(src, "Sys", "a.ini"));
+    await expect(installBundledDolphin({ sourceDir: src, destDir: dest, platform: "win32" })).rejects.toThrow(
+      /is incomplete \(1 of its 2 files\)/,
+    );
   });
 
   it("updates while another program holds the old Dolphin.exe open, and deletes it on a later start", async () => {
