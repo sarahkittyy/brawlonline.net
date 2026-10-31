@@ -131,6 +131,56 @@ def test_joiner_with_a_link_joins(backend: OnlineBackend, dolphin: Callable[...,
     assert not any("Can't connect" in ln.get("text", "") for ln in lines), lines
 
 
+def test_joiners_stop_when_nobody_in_the_room_plays(backend: OnlineBackend,
+                                                   dolphin: Callable[..., DolphinInstance]) -> None:
+    """Bug report #203: DRAC#759 was joining DAN#707's REX room when DAN#707 closed their game;
+    mm made DRAC#759 the room's host while their game still waited for its first frame, and
+    DAN#707 joined the room again and asked a game that was not running to let them in. Both
+    stood still until they closed them. Here two joiners wait for a host they cannot reach
+    (PPR_TEST_P2P_BLOCK), the second linked to the first (a joiner, by its hello), and the host
+    closes: both say so and leave at once, long before the no-link limit (60 s)."""
+    host_user = backend.create_user("hostg", "HSTG")
+    one_user = backend.create_user("joing", "JNYG")
+    two_user = backend.create_user("joinh", "JNYH")
+    host, code = _host(dolphin, backend, "mods-gone-host", host_user,
+                       block=f"{one_user.connect_code},{two_user.connect_code}")
+    # Its session running first: a host stalled while booting (a busy test PC) can lose mm and
+    # open a new room under another code.
+    _wait(lambda: "machine: running" in _log(host), 90, "the host's session running", interval=1)
+    code = host.client.call("mods_status")["room"]["code"]
+    joiners = [_boot(dolphin, backend, f"mods-gone-join{i}", u,
+                     {"join": code, "build": BUILD, "controller": "gc", "sd_sync": "yes"},
+                     block=host_user.connect_code)
+               for i, u in enumerate((one_user, two_user), 1)]
+    _wait(lambda: sum(1 for s in host.client.call("mods_status")["room"]["slots"] if s.get("code")) == 3, 30,
+          "both joiners in the room")
+    _wait(lambda: all(re.search(r"machine: peer \d connected", _log(j)) for j in joiners), 30,
+          "the joiners' link to each other")
+    for j in joiners:
+        assert not j.client.call("mods_status").get("error")
+    host.stop()
+    t0 = time.monotonic()
+    errors = []
+    for j in joiners:
+        def gone() -> str | None:
+            try:
+                return j.client.call("mods_status", timeout=5).get("error")
+            except Exception:  # noqa: BLE001  (Dolphin closes after a join that failed)
+                return "closed"
+        errors.append(_wait(gone, 30, "the joiner to give up"))
+    took = time.monotonic() - t0
+    print(errors, round(took, 1))
+    # What the launcher shows (mods-room.json), or Dolphin had closed already.
+    assert all(e in ("closed", "Could not join the game: nobody in the room plays the game any more (its "
+                               "players left), so nobody can let you in") for e in errors), errors
+    assert took < 15, took
+    for j in joiners:
+        log = _log(j)
+        assert ("machine: nobody in the room plays the game any more (its players left), so nobody can let "
+                "you in") in log, log[-3000:]
+        assert "Not admitted" not in log and "no connection to" not in log
+
+
 def test_room_sessions_map_their_port_with_upnp(dolphin: Callable[..., DolphinInstance]) -> None:
     """Bug report #183: TEST#709 and AIR#23 played five Unranked games, then never connected in
     AIR's Other Games room (no packet either way), nor did OHM#217, who plays AIR in P+ rooms.
