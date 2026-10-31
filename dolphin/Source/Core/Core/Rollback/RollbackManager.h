@@ -272,6 +272,14 @@ public:
   bool m_collect_parts = false;
   mutable ChecksumParts m_parts;
   void UpdateShadowAfterSave(int slot);
+  // The shadow of MEM1 or MEM2 that a save's copy jobs bring up to date, or null (region mode, or
+  // no shadow yet).
+  u8* SaveShadow(bool mem2) const
+  {
+    if (m_region_mode || !m_shadow_valid)
+      return nullptr;
+    return mem2 ? m_shadow_mem2.get() : m_shadow_mem1.get();
+  }
 
   // The oldest slot's deltas being merged into m_base_snapshot (kicked by SaveFrame). Every reader
   // of the base snapshot (LoadFrame) and the next eviction wait for it: WaitForEviction().

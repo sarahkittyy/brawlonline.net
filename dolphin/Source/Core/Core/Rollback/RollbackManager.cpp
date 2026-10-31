@@ -1125,27 +1125,23 @@ const u8* RollbackManager::ForChecksum(u32 phys, const u8* src, u8* scratch) con
 
 void RollbackManager::UpdateShadowAfterSave(int slot)
 {
+  // The save's copy jobs brought the shadow up to date and flagged the granules that changed it.
   const DeltaSaveSlot& saved = m_slots[slot];
   const u8* gpu = GPUWrittenBitmap::Get().entries;
   u32 crc = Common::StartCRC32();
   u8 scratch[ROLLBACK_PAGE_SIZE];
   m_parts.changed.clear();
-  for (const auto& [delta, first_page, shadow] :
-       {std::tuple{&saved.m_mem1_delta, 0u, m_shadow_mem1.get()},
-        std::tuple{&saved.m_mem2_delta, MEM2_FIRST_PAGE, m_shadow_mem2.get()}})
+  for (const auto& [delta, first_page, changed] :
+       {std::tuple{&saved.m_mem1_delta, 0u, saved.m_mem1_changed.data()},
+        std::tuple{&saved.m_mem2_delta, MEM2_FIRST_PAGE, saved.m_mem2_changed.data()}})
   {
-    if (!shadow)
-      continue;
     for (u32 i = 0; i < delta->page_count; ++i)
     {
-      const u32 index = delta->page_indices[i];
-      const u8* now = delta->page_data.data() + static_cast<size_t>(i) * ROLLBACK_PAGE_SIZE;
-      u8* before = shadow + static_cast<size_t>(index) * ROLLBACK_PAGE_SIZE;
-      if (std::memcmp(before, now, ROLLBACK_PAGE_SIZE) == 0)
+      if (!changed[i])
         continue;
-      std::memcpy(before, now, ROLLBACK_PAGE_SIZE);
-      const u32 page = first_page + index;
+      const u32 page = first_page + delta->page_indices[i];
       const u32 phys = page << ROLLBACK_PAGE_SHIFT;
+      const u8* now = delta->page_data.data() + static_cast<size_t>(i) * ROLLBACK_PAGE_SIZE;
       const u8* counted = ForChecksum(phys, now, scratch);
       if (m_collect_parts)
         m_parts.changed.push_back({phys, Common::ComputeCRC32(counted, ROLLBACK_PAGE_SIZE), gpu[page] ? 1u : 0u});
@@ -1555,6 +1551,9 @@ bool RollbackManager::LoadFrame(Core::System& system, int frames_back)
         m_stat_load_gran_max.store(total, std::memory_order_relaxed);
       const u32 chunk = (total + SAVESTATE_NUM_WORK_CHUNKS - 1) / SAVESTATE_NUM_WORK_CHUNKS;
       restore_changed.resize(total);
+      const bool with_shadow = !m_region_mode && m_shadow_valid;
+      const std::array<u8*, 2> shadow_base{with_shadow ? m_shadow_mem1.get() : nullptr,
+                                           with_shadow ? m_shadow_mem2.get() : nullptr};
 
       // One job per granule would be millions of jobs, so each job restores a contiguous slice.
       // Every granule is a distinct destination, so slices are safe to run concurrently.
@@ -1565,7 +1564,8 @@ bool RollbackManager::LoadFrame(Core::System& system, int frames_back)
       {
         const u32 count = std::min(chunk, total - offset);
         page_jobs.push_back(w.create_job_as_child(
-            j, [this, sorted_exclude_regions, offset, count](job::JobTaskThread&, job::Job&) {
+            j, [this, sorted_exclude_regions, offset, count, shadow_base](job::JobTaskThread&,
+                                                                          job::Job&) {
               for (u32 n = offset; n < offset + count; n++)
               {
                 const u32 page_key = restore_keys[n];
@@ -1619,9 +1619,17 @@ bool RollbackManager::LoadFrame(Core::System& system, int frames_back)
                     continue;
                   }
                 }
+                // The shadow follows the machine back: the restored granules hold the loaded
+                // frame's bytes.
+                u8* const shadow =
+                    shadow_base[isMem2] ?
+                        shadow_base[isMem2] + static_cast<size_t>(local_page) * ROLLBACK_PAGE_SIZE :
+                        nullptr;
                 if (std::memcmp(dst, src, ROLLBACK_PAGE_SIZE) == 0)
                 {
                   restore_changed[n] = 0;
+                  if (shadow)
+                    std::memcpy(shadow, dst, ROLLBACK_PAGE_SIZE);
                   continue;
                 }
                 u32 changed = 0;
@@ -1632,6 +1640,8 @@ bool RollbackManager::LoadFrame(Core::System& system, int frames_back)
                 }
                 restore_changed[n] = static_cast<u16>(changed);
                 savestateMemcpy(dst, src, ROLLBACK_PAGE_SIZE, dst_phys, *sorted_exclude_regions);
+                if (shadow)
+                  std::memcpy(shadow, dst, ROLLBACK_PAGE_SIZE);
               }
             }));
       }
@@ -1718,21 +1728,6 @@ bool RollbackManager::LoadFrame(Core::System& system, int frames_back)
 
   if (ram_job)
     job::DrainJobsUntilComplete(m_dispatch_thread, ram_job);
-
-  if (!m_region_mode && m_shadow_valid)
-  {
-    // The shadow follows the machine back: the restored granules hold the loaded frame's bytes.
-    ROLLBACK_ZONE_N("Shadow of restored memory");
-    for (const u32 key : restore_keys)
-    {
-      const bool mem2 = key >= MEM2_FIRST_PAGE;
-      const size_t off = static_cast<size_t>(mem2 ? key - MEM2_FIRST_PAGE : key) * ROLLBACK_PAGE_SIZE;
-      u8* shadow = mem2 ? m_shadow_mem2.get() : m_shadow_mem1.get();
-      const u8* live = mem2 ? m_mem2_ptr : m_mem1_ptr;
-      if (shadow && off + ROLLBACK_PAGE_SIZE <= (mem2 ? m_mem2_size : m_mem1_size))
-        std::memcpy(shadow + off, live + off, ROLLBACK_PAGE_SIZE);
-    }
-  }
 
   if (!m_region_mode)
   {

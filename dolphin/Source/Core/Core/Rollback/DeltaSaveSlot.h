@@ -15,6 +15,9 @@
 #ifdef _MSC_VER
 #include <intrin.h>
 #endif
+#ifdef _M_X86_64
+#include <emmintrin.h>
+#endif
 
 #include "Common/Buffer.h"
 #include "Common/CommonTypes.h"
@@ -150,8 +153,9 @@ struct alignas(64) JITDirtyBitmap
 
   // Calls on_dirty(page) for every marked entry in [first_page, first_page + page_count), in
   // order, and clears them. A frame marks a few thousand of the range's ~1.4 million entries, so
-  // this reads 8 entries at a time and writes only the words that had marks (a byte loop and a
-  // memset of the whole range cost a snapshot about as much as copying its granules). A word is
+  // this tests a cache line (64 entries) at a time and writes only the words that had marks (a
+  // byte loop and a memset of the whole range cost a snapshot about as much as copying its
+  // granules; 8 entries at a time still spent ~80 us of every load walking zeros). A word is
   // cleared with an atomic exchange: a mark another thread sets meanwhile (the GPU thread's EFB
   // copies to RAM) is either seen here or kept for the next scan, never dropped.
   template <typename F>
@@ -167,20 +171,17 @@ struct alignas(64) JITDirtyBitmap
         on_dirty(i);
       }
     }
-    for (; i + 8 <= end; i += 8)
+    for (; (i & 63) != 0 && i + 8 <= end; i += 8)
+      ScanWord(i, on_dirty);
+    for (; i + 64 <= end; i += 64)
     {
-      uint64_t word;
-      std::memcpy(&word, &entries[i], sizeof(word));
-      if (word == 0)
+      if (LineIsClear(&entries[i]))
         continue;
-      word = ExchangeWordWithZero(&entries[i]);
-      while (word != 0)
-      {
-        const int byte = std::countr_zero(word) >> 3;
-        on_dirty(i + static_cast<uint32_t>(byte));
-        word &= ~(uint64_t{0xFF} << (byte * 8));
-      }
+      for (uint32_t w = 0; w < 64; w += 8)
+        ScanWord(i + w, on_dirty);
     }
+    for (; i + 8 <= end; i += 8)
+      ScanWord(i, on_dirty);
     for (; i < end; ++i)
     {
       if (entries[i])
@@ -192,6 +193,39 @@ struct alignas(64) JITDirtyBitmap
   }
 
 private:
+  // The 8 entries at `i` (a multiple of 8).
+  template <typename F>
+  void ScanWord(uint32_t i, F& on_dirty)
+  {
+    uint64_t word;
+    std::memcpy(&word, &entries[i], sizeof(word));
+    if (word == 0)
+      return;
+    word = ExchangeWordWithZero(&entries[i]);
+    while (word != 0)
+    {
+      const int byte = std::countr_zero(word) >> 3;
+      on_dirty(i + static_cast<uint32_t>(byte));
+      word &= ~(uint64_t{0xFF} << (byte * 8));
+    }
+  }
+
+  // `p` is 64-byte aligned. A plain read, as ScanWord's first one: a mark that lands after it is
+  // kept for the next scan.
+  static bool LineIsClear(const uint8_t* p)
+  {
+#ifdef _M_X86_64
+    const __m128i* const v = reinterpret_cast<const __m128i*>(p);
+    const __m128i any = _mm_or_si128(_mm_or_si128(_mm_load_si128(v), _mm_load_si128(v + 1)),
+                                     _mm_or_si128(_mm_load_si128(v + 2), _mm_load_si128(v + 3)));
+    return _mm_movemask_epi8(_mm_cmpeq_epi8(any, _mm_setzero_si128())) == 0xFFFF;
+#else
+    uint64_t w[8];
+    std::memcpy(w, p, sizeof(w));
+    return (w[0] | w[1] | w[2] | w[3] | w[4] | w[5] | w[6] | w[7]) == 0;
+#endif
+  }
+
   // `p` is 8-byte aligned (entries is 64-byte aligned and the scan's words start at multiples of
   // 8). Stores from the JIT are single bytes.
   static uint64_t ExchangeWordWithZero(uint8_t* p)
@@ -281,6 +315,10 @@ public:
   // The granules a Save found dirty (absolute bitmap indices), kept to reuse their storage.
   std::vector<u32> m_mem1_scan;
   std::vector<u32> m_mem2_scan;
+  // Whole-machine mode: per saved granule, whether it changed RollbackManager's shadow (set by the
+  // save's copy jobs, read by UpdateShadowAfterSave).
+  Common::UniqueBuffer<u8> m_mem1_changed;
+  Common::UniqueBuffer<u8> m_mem2_changed;
 
   uint32_t brawl_frame = 0;
 
