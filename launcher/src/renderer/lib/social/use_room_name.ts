@@ -24,7 +24,7 @@ export const useRoomName = (kind: RoomKind) => {
   const rename = useCallback(
     async (code: string, typed: string) => {
       try {
-        // What was stored: cleaned up, or a kind name in place of a racial slur.
+        // What was stored: cleaned up, or a kind name in place of a slur.
         const stored = await backendService.setRoomName(kind, typed.trim() || null);
         setPending({ code, name: stored, at: Date.now() });
         void queryClient.invalidateQueries({ queryKey: ["publicRooms"] });

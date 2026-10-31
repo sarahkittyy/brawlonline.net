@@ -54,7 +54,7 @@ pub struct AppState {
     pub social: Arc<social::SocialHub>,
     /// Spectators and spectator chat (`/v1/live`).
     pub live: Arc<live::LiveHub>,
-    /// The racial slur check of names and codes (off without `DEEPINFRA_API_KEY`).
+    /// The slur check of names and codes (off without `DEEPINFRA_API_KEY`).
     pub slur_filter: Arc<slur_filter::SlurFilter>,
 }
 

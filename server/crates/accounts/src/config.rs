@@ -163,7 +163,7 @@ impl MailConfig {
 /// [`SlurFilterConfig::slur_filter_models`]'s default (chosen on prod's names, 2026-10-26).
 pub const DEFAULT_SLUR_FILTER_MODELS: &str = "mistralai/Mistral-Small-3.2-24B-Instruct-2506";
 
-/// The racial slur check of display names and connect codes (`crate::slur_filter`). Shared by
+/// The slur check of display names, connect codes and room names (`crate::slur_filter`). Shared by
 /// `accounts` and the admin CLI (`user slur-scan`). Off while DEEPINFRA_API_KEY is unset.
 #[derive(Debug, Clone, Args)]
 pub struct SlurFilterConfig {

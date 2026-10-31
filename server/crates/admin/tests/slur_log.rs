@@ -27,6 +27,16 @@ async fn slur_log_lists_replacements() {
     assert!(text.contains("no slur replacements"), "{text}");
 
     let u = store::create_user(&pool, "zz-slurlog@example.test", "x", "happy friend").await.unwrap();
+    // As written before 2026-10-31.
+    store::audit(
+        &pool,
+        ACTOR,
+        "user.rename",
+        Some(&u.uid.to_string()),
+        serde_json::json!({"from": "xXoldwordXx", "to": "kind heart", "reason": "racial slur"}),
+    )
+    .await
+    .unwrap();
     audit_replacement(&pool, ACTOR, "user.signup_name", u.uid, "xXbadwordXx", "happy friend").await.unwrap();
     audit_replacement(&pool, "admin-cli:sarah", "user.set_code", u.uid, "BADW#12", "JOY#34").await.unwrap();
     store::audit(
@@ -42,7 +52,7 @@ async fn slur_log_lists_replacements() {
     let (ok, text) = run(&url, &["user", "slur-log"]).await;
     assert!(ok, "{text}");
     let lines: Vec<&str> = text.lines().collect();
-    assert_eq!(lines.len(), 2, "{text}");
+    assert_eq!(lines.len(), 3, "{text}");
     assert!(
         lines[0].contains("admin-cli:sarah") && lines[0].contains(r#"code         "BADW#12" -> "JOY#34""#),
         "{text}"
@@ -52,6 +62,7 @@ async fn slur_log_lists_replacements() {
         "{text}"
     );
     assert!(lines[1].contains(&format!(r#"now - "happy friend" ({})"#, u.uid)), "{text}");
+    assert!(lines[2].contains(r#""xXoldwordXx" -> "kind heart""#), "{text}");
     let (ok, text) = run(&url, &["user", "slur-log", "--limit", "1"]).await;
     assert!(ok && text.lines().count() == 1, "{text}");
     pool.close().await;
