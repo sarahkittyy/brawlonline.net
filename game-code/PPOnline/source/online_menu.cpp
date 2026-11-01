@@ -1050,7 +1050,7 @@ namespace OnlineMenu {
     // slot would be a red pick: there it is none, the slot's own colour, as Z is offline.
     static void followLocalSlot(u32 pressed)
     {
-        // (A team room's panels are drawn in the lines of the teams' ports: as at P1 there.)
+        // (A team room's panels are drawn in the teams' colours, the lines' defaults: as at P1 there.)
         int L = roomCss() && !RoomCss::teamsShown() ? RoomCss::portOfArea(0) : 0;
         if (L != s_colourSlot) {
             noteOwnSlotColour();

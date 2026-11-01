@@ -733,8 +733,8 @@ namespace RoomCss {
     // "P<n>" of its state box (state object +4) are the slot's. With P+'s slot colours, out of a
     // team battle, each area is drawn in its own line and the lines hold the slots' colours
     // (OnlineMenu's cssSlotColours): P+'s L / R / Z step the line of the area under the hand, area
-    // 0's for the local panel. (A team battle's panels are drawn in the lines of the teams' ports,
-    // red P1's, blue P2's, green P4's, which keep their own colours there.)
+    // 0's for the local panel. (A team battle's panels are drawn in the teams' colours, P+'s lines'
+    // defaults, with L / R / Z off, as offline: tick sets P+'s team battle byte.)
     static const float SLOT_POS = 16.0f / 0.99f;
     // Every model of an area (MuObjects at +0xB0..+0x14C: the panel, picture, plate, flag,
     // stars, ...; +0x204..+0x230: the name tag list and its rows; the keypad's at
@@ -1119,6 +1119,14 @@ namespace RoomCss {
         // player changes team with A on their own panel or its flag (OnlineMenu's tickRoom and
         // cssPanelClick), the costume with X / Y, as in P+'s rainbow TEAM BATTLE.
         bool wasTeams = task[0x5C8] != 0;
+        // P+'s slot colours keep the CSS's team battle switch in a byte of their own (0x804E0304:
+        // 8 off, 0x10 on, the line offset their colour code reads, value or default), set where
+        // Brawl's CSS switches it (0x8068EDA8), which this one bypasses. With it off in a team
+        // room, every card of a team was drawn in its team port's line at its value, P1's for the
+        // red team, which the local player's L / R / Z step: a red player's colour change
+        // recoloured their partner's card too (Sarah's board, 2026-10-31). On, as offline: L / R
+        // / Z leave the colour and the cards are in the teams' colours, as the match draws them.
+        if (OnlineMenu::localColourKey() >= 0) *(u8*)0x804E0304 = teams ? 0x10 : 0x08;
         if (wasTeams != teams || s_teams != teams) {
             task[0x5C8] = teams ? 1 : 0;
             s_teams = teams;
