@@ -422,6 +422,7 @@ export class ModsManager {
       !samePath(current.launcherPath, launcherPath) ||
       !samePath(current.sdPath, sdPath);
     if (current?.builtIn && !filesChanged && current.name === name) {
+      this.checkBuiltIn(current);
       return;
     }
     let build: ModBuild = current
@@ -454,11 +455,19 @@ export class ModsManager {
     // First in the list. (Rooms take it last of the games on its disc: room_match.ts.)
     await this.saveBuilds([build, ...this.builds().filter((b) => b.id !== build.id)]);
     log.info(`${name} is in Other Games${current ? ` (was ${current.name})` : ""}: ${discPath}, ${user}`);
-    // Checked now for the room list, as an added game is, unless Dolphin is open (a match would
-    // share the disk with the disc's read): then at its first Host or Join.
-    if (filesChanged && !this.dolphin.isNetplayRunning()) {
-      void this.hashBuild(build.id).catch((err) => log.warn(`hashing ${name}: ${err}`));
+    this.checkBuiltIn(build);
+  }
+
+  /** The built-in P+ checked for the room list, as an added game is, unless Dolphin is open (a
+   * match would share the disk with the disc's read): then at the next refresh once it closes
+   * (the tab asks again), or at its first Host. Unchecked it has no parts, so no room listed it
+   * in its "Joins with" (Sarah's board, 2026-11-01: "the built in project + is not included in
+   * the other games "join with""), and it was checked only by a Host or a Join by code. */
+  private checkBuiltIn(build: ModBuild): void {
+    if (build.parts || this.hashing.has(build.id) || this.dolphin.isNetplayRunning()) {
+      return;
     }
+    void this.hashBuild(build.id).catch((err) => log.warn(`hashing ${build.name}: ${err}`));
   }
 
   /** What the player plays with: their pick, else a Wii Remote if only that is set up in Dolphin. */

@@ -27,14 +27,18 @@ import type { DolphinManager } from "../manager";
 import { BUILD_HASH_VERSION, buildHashKey, combineBuildHash } from "./build_hash";
 import type { ModsRoomArg } from "./mods_args";
 import { ModsManager } from "./mods_manager";
+import { matchRoom } from "./room_match";
 import { saveStoreDir, titleDataDir } from "./save_import";
 import type { ModBuild } from "./types";
 
 let tmp: string;
+/** The P+ Dolphin is open (DolphinManager.isNetplayRunning). */
+let netplayRunning = false;
 
 beforeEach(async () => {
   tmp = await mkdtemp(path.join(os.tmpdir(), "mods-manager-"));
   discIdentity.mockClear();
+  netplayRunning = false;
 });
 
 afterEach(async () => {
@@ -91,7 +95,7 @@ function manager(
   const dolphin = {
     netplayUserFolder: () => path.join(tmp, "netplay", "User"),
     netplayOnlineDir: () => path.join(tmp, "netplay", "User", "Online"),
-    isNetplayRunning: () => false,
+    isNetplayRunning: () => netplayRunning,
     launchModsDolphin: async (_build: ModBuild, arg: ModsRoomArg, onClose: () => void | Promise<void>) => {
       launches.push(arg);
       closers.push(onClose);
@@ -420,6 +424,27 @@ describe("Brawl Online's own Project+", () => {
     (m.settings.settings as Record<string, unknown>).isoPath = rev2;
     const [back] = await refreshed(m);
     expect(back.hash).toBe(first.hash);
+  });
+
+  it("added while Dolphin is open, is checked once it closes, so rooms list it in Joins with", async () => {
+    const iso = await installPPlus();
+    const m = manager([], { modBuilds: [], settings: { isoPath: iso } });
+    netplayRunning = true;
+    await m.mods.refreshBuiltIn();
+    await m.mods.refreshBuiltIn();
+    const [unchecked] = m.builds();
+    expect(unchecked).toMatchObject({ builtIn: true, hash: null, parts: null });
+    expect(discIdentity).not.toHaveBeenCalled();
+    const room = { hash: "r".repeat(64), name: "REX", disc: BRAWL_NTSC_U_DISC, discLabel: "RSBE01", sd: "rex" };
+    expect(matchRoom(room, m.builds()).choices).toEqual([]);
+
+    // Closed: the tab asks for the state again, which checks it.
+    netplayRunning = false;
+    await m.mods.refreshBuiltIn();
+    await vi.waitFor(() => expect(m.builds()[0].parts).toBeTruthy());
+    const [checked] = m.builds();
+    expect(checked.parts).toMatchObject({ disc: BRAWL_NTSC_U_DISC, sdCard: "card" });
+    expect(matchRoom(room, m.builds()).choices.map((b) => b.id)).toEqual([checked.id]);
   });
 
   it("is the game the player added from the game files folder (Add mod folder)", async () => {
