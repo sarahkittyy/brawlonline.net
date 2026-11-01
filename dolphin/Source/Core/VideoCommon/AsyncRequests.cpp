@@ -32,7 +32,7 @@ void AsyncRequests::PullEvents()
   }
 }
 
-void AsyncRequests::QueueEvent(Event&& event)
+void AsyncRequests::QueueEvent(Event&& event, bool run_gpu)
 {
   m_queue.Push(std::move(event));
 
@@ -44,7 +44,7 @@ void AsyncRequests::QueueEvent(Event&& event)
   // event order one higher) that the players' own snapshots of that frame did not, so a player
   // who rolled back past the epoch and one who did not (or a joiner) saved different images at the
   // next epoch, and the joiner refused it (bug 90: "player 2 does not vouch for this machine").
-  if (!Rollback::InSnapshotDoState() && !Machine::InImageDoState())
+  if (run_gpu && !Rollback::InSnapshotDoState() && !Machine::InImageDoState())
     system.GetFifo().RunGpu();
   system.GetFifo().WakeGpuThread();
 }
