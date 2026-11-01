@@ -84,6 +84,9 @@ extern const Info<std::string> ONLINE_REPLAY_DIR;
 // whose games are always streamed as the server's record and listed only when a player allows it.
 extern const Info<bool> ONLINE_STREAM_GAMES;
 extern const Info<bool> ONLINE_REPLAY_MONTHLY_FOLDERS;
+// The seek bar of replays, highlights and spectated games (VideoCommon/ReplayOverlayUI) folded to a
+// thin bar with a + (its - button): kept for every later replay and launch of that Dolphin.
+extern const Info<bool> ONLINE_SEEK_BAR_COLLAPSED;
 
 // The matchmaking host and port in effect (the dev override applied).
 std::string GetMatchmakingHost();

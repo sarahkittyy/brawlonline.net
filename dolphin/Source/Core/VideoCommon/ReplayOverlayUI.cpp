@@ -13,7 +13,9 @@
 #include <fmt/format.h>
 #include <imgui.h>
 
+#include "Common/Config/Config.h"
 #include "Common/WorkQueueThread.h"
+#include "Core/Config/OnlineSettings.h"
 #include "Core/Online/GameSetup.h"
 #include "Core/Rollback/GameplaySession.h"
 #include "Core/Rollback/ReplayPlayback.h"
@@ -145,6 +147,35 @@ void Star(ImDrawList* dl, ImVec2 c, float r, ImU32 col)
   }
   dl->AddConcavePolyFilled(pts, 10, col);
 }
+
+// The fold button at the overlay's top left: a - that folds it to a thin bar, a + on that bar that
+// opens it again (the user, 2026-11-01: "so moving my mouse doesn't keep showing it all the time
+// and i can hide it for my stream"). Kept in [Online] SeekBarCollapsed. True when clicked.
+bool FoldButton(float size, float scale, bool collapsed)
+{
+  const ImVec2 b0 = ImGui::GetCursorScreenPos();
+  const bool pressed = ImGui::InvisibleButton("##replayfold", ImVec2(size, size));
+  const bool over = ImGui::IsItemHovered();
+  ImDrawList* dl = ImGui::GetWindowDrawList();
+  const ImVec2 b1(b0.x + size, b0.y + size);
+  if (over)
+    dl->AddRectFilled(b0, b1, IM_COL32(255, 255, 255, 40), 3.0f * scale);
+  const ImU32 col = over ? IM_COL32(255, 255, 255, 255) : IM_COL32(230, 230, 230, 220);
+  const ImVec2 c((b0.x + b1.x) * 0.5f, (b0.y + b1.y) * 0.5f);
+  const float h = size * 0.3f;
+  const float t = std::max(1.0f, 1.0f * scale);
+  dl->AddRectFilled(ImVec2(c.x - h, c.y - t), ImVec2(c.x + h, c.y + t), col);
+  if (collapsed)
+    dl->AddRectFilled(ImVec2(c.x - t, c.y - h), ImVec2(c.x + t, c.y + h), col);
+  if (over)
+    ImGui::SetTooltip("%s", collapsed ? "Show the seek bar" : "Fold the seek bar to a thin bar");
+  if (pressed)
+  {
+    Config::SetBaseOrCurrent(Config::ONLINE_SEEK_BAR_COLLAPSED, !collapsed);
+    Config::Save();
+  }
+  return pressed;
+}
 }  // namespace
 
 void ToggleHidden()
@@ -220,15 +251,49 @@ void Display(float scale)
   if (s_font)
     ImGui::PushFont(s_font);
   const float width = std::min(io.DisplaySize.x * 0.8f, 900.0f * scale);
-  ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y - 12.0f * scale),
-                          ImGuiCond_Always, ImVec2(0.5f, 1.0f));
-  ImGui::SetNextWindowSize(ImVec2(width, 0), ImGuiCond_Always);
-  ImGui::SetNextWindowBgAlpha(0.7f);
   constexpr ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
                                      ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar |
                                      ImGuiWindowFlags_NoSavedSettings |
                                      ImGuiWindowFlags_NoFocusOnAppearing |
                                      ImGuiWindowFlags_AlwaysAutoResize;
+  // Folded: a + and a thin line of how far it has played, at the bottom where the overlay is, shown
+  // when the overlay would be. Nothing else of it (clip mode ends with the fold).
+  if (Config::Get(Config::ONLINE_SEEK_BAR_COLLAPSED))
+  {
+    const float line_h = ImGui::GetTextLineHeight();
+    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y - 12.0f * scale),
+                            ImGuiCond_Always, ImVec2(0.5f, 1.0f));
+    ImGui::SetNextWindowSize(ImVec2(width, 0), ImGuiCond_Always);
+    ImGui::SetNextWindowBgAlpha(0.5f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(4.0f * scale, 3.0f * scale));
+    if (ImGui::Begin("##ReplayOverlayFolded", nullptr, flags))
+    {
+      FoldButton(line_h, scale, true);
+      ImGui::SameLine();
+      const ImVec2 r0 = ImGui::GetCursorScreenPos();
+      const float bar_w = std::max(ImGui::GetContentRegionAvail().x, 1.0f);
+      const bool live = info.live && !info.ended;
+      const s64 end = live ? std::max(info.live_edge, info.first) : info.last;
+      const float done = std::clamp(
+          static_cast<float>(info.shown - info.first) / static_cast<float>(std::max<s64>(end - info.first, 1)),
+          0.0f, 1.0f);
+      const float bar_h = 3.0f * scale;
+      const ImVec2 p0(r0.x, r0.y + (line_h - bar_h) * 0.5f);
+      ImDrawList* dl = ImGui::GetWindowDrawList();
+      dl->AddRectFilled(p0, ImVec2(p0.x + bar_w, p0.y + bar_h), IM_COL32(255, 255, 255, 50), bar_h * 0.5f);
+      dl->AddRectFilled(p0, ImVec2(p0.x + done * bar_w, p0.y + bar_h), IM_COL32(110, 200, 120, 220), bar_h * 0.5f);
+      ImGui::Dummy(ImVec2(bar_w, line_h));
+    }
+    ImGui::End();
+    ImGui::PopStyleVar();
+    if (s_font)
+      ImGui::PopFont();
+    return;
+  }
+  ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y - 12.0f * scale),
+                          ImGuiCond_Always, ImVec2(0.5f, 1.0f));
+  ImGui::SetNextWindowSize(ImVec2(width, 0), ImGuiCond_Always);
+  ImGui::SetNextWindowBgAlpha(0.7f);
   if (ImGui::Begin("##ReplayOverlay", nullptr, flags))
   {
     // The launcher's list (highlights, not spectating): "3/40  << < > >>" right of the title (the
@@ -261,6 +326,14 @@ void Display(float scale)
     const float nav_w = nav.shown ? ImGui::CalcTextSize(count.c_str()).x + ImGui::GetStyle().ItemSpacing.x +
                                         nav_button * nav_buttons + 2.0f * scale * (nav_buttons - 1) :
                                     0.0f;
+    // The fold button, left of the title.
+    if (FoldButton(line_h, scale, false))
+    {
+      s_dragging = false;
+      s_mark_held = -1;
+      EndClipMode();
+    }
+    ImGui::SameLine();
     const ImVec2 title0 = ImGui::GetCursorScreenPos();
     if (nav.shown)
     {
