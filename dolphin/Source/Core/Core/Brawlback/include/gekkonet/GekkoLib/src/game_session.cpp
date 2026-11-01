@@ -485,15 +485,10 @@ void Gekko::GameSession::SendSessionHealthCheck()
 
     _msg.SendSessionHealth(confirmed, sav->checksum);
 
-    for (auto iter = _msg.local_health.begin();
-        iter != _msg.local_health.end(); ) {
-        if (iter->first < (confirmed - 100)) {
-            iter = _msg.local_health.erase(iter);
-        }
-        else {
-            ++iter;
-        }
-    }
+    // the map is ordered by frame: only its front can be older than the window. (walking all of
+    // its ~100 nodes every frame, cold in the cache after a frame of emulation, cost a few us.)
+    auto& health = _msg.local_health;
+    health.erase(health.begin(), health.lower_bound(confirmed - 100));
 }
 
 void Gekko::GameSession::SendNetworkHealthCheck()
@@ -507,24 +502,32 @@ void Gekko::GameSession::SessionIntegrityCheck()
         return;
     }
 
-    for (auto iter = _msg.local_health.begin();
-        iter != _msg.local_health.end(); ) {
-
-        for (auto& player : _msg.remotes) {
-            if (player->session_health.count(iter->first)) {
-                if (player->session_health[iter->first] != iter->second) {
-                    _msg.session_events.AddDesyncDetectedEvent(
-                        iter->first,
-                        player->handle,
-                        iter->second,
-                        player->session_health[iter->first]
-                    );
-                }
-                player->session_health.erase(iter->first);
+    // compare every checksum a remote sent whose frame we have one for, then forget the remote's.
+    // a remote's map holds only the few it sent that we could not compare yet, so start from those
+    // instead of looking up each of our ~100 frames in every remote's map. events in the same order
+    // as before: by frame, then by remote.
+    _health_matches.clear();
+    for (u32 r = 0; r < (u32)_msg.remotes.size(); r++) {
+        for (const auto& [frame, checksum] : _msg.remotes[r]->session_health) {
+            if (_msg.local_health.count(frame)) {
+                _health_matches.push_back({frame, r});
             }
         }
-
-        ++iter;
+    }
+    if (_health_matches.empty()) {
+        return;
+    }
+    std::sort(_health_matches.begin(), _health_matches.end(), [](const auto& x, const auto& y) {
+        return x.frame != y.frame ? x.frame < y.frame : x.remote < y.remote;
+    });
+    for (const auto& m : _health_matches) {
+        auto& player = _msg.remotes[m.remote];
+        const u32 local = _msg.local_health[m.frame];
+        auto iter = player->session_health.find(m.frame);
+        if (iter->second != local) {
+            _msg.session_events.AddDesyncDetectedEvent(m.frame, player->handle, local, iter->second);
+        }
+        player->session_health.erase(iter);
     }
 }
 
@@ -577,6 +580,12 @@ void Gekko::GameSession::AddDisconnectedPlayerInputs()
 
 void Gekko::GameSession::SendSpectatorInputs()
 {
+    // a session without room for spectators never gets one (AddActor): no queue to fill, which
+    // copied every confirmed frame's inputs through a few allocations for nobody.
+    if (_config.max_spectators == 0) {
+        return;
+    }
+
     const Frame current = _msg.GetLastAddedInput(true) + 1;
     const Frame confirmed = GetConfirmedFrame();
 

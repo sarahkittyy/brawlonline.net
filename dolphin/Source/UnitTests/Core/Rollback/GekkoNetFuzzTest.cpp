@@ -9,12 +9,16 @@
 #include <array>
 #include <chrono>
 #include <climits>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <deque>
+#include <functional>
 #include <map>
+#include <set>
 #include <optional>
 #include <random>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -44,6 +48,15 @@ int g_a_sent_count = 0;
 // Packets arrive this many steps (frames) after they were sent (0: at once), and the step.
 int g_delay_steps = 0;
 int g_step = 0;
+// Issue #15 tests: each packet also takes 0..g_jitter_steps more steps (packets may overtake each
+// other) and is lost with probability g_loss.
+int g_jitter_steps = 0;
+double g_loss = 0.0;
+std::mt19937 g_net_rng;
+// The checksum each side's game gives a saved frame (player 0: A, 1: B; unset: 0), and the
+// desyncs each side's session reported.
+std::function<unsigned(int player, int frame)> g_checksum;
+std::array<std::vector<GekkoSessionEvent>, 2> g_desyncs;
 
 void Deliver(Side& to, Side& from, const char* data, int length)
 {
@@ -51,6 +64,18 @@ void Deliver(Side& to, Side& from, const char* data, int length)
   from.sent.push_back(v);
   if (&from == &g_a && g_drop_a_every && ++g_a_sent_count % g_drop_a_every == 0)
     return;
+  if (g_jitter_steps || g_loss > 0)
+  {
+    // No loss before step 100: the handshake has no retry timer that runs in a test's steps.
+    if (g_step >= 100 && std::uniform_real_distribution<double>(0, 1)(g_net_rng) < g_loss)
+      return;
+    const int at = g_step + g_delay_steps +
+                   std::uniform_int_distribution<int>(0, g_jitter_steps)(g_net_rng);
+    auto it = std::find_if(to.in_flight.begin(), to.in_flight.end(),
+                           [at](const auto& f) { return f.first > at; });
+    to.in_flight.emplace(it, at, std::move(v));
+    return;
+  }
   if (g_delay_steps)
     to.in_flight.emplace_back(g_step + g_delay_steps, std::move(v));
   else
@@ -135,6 +160,10 @@ struct Pair
     g_a_sent_count = 0;
     g_delay_steps = 0;
     g_step = 0;
+    g_jitter_steps = 0;
+    g_loss = 0.0;
+    g_checksum = nullptr;
+    g_desyncs = {};
     GekkoConfig cfg{};
     cfg.num_players = 2;
     cfg.input_prediction_window = 7;
@@ -181,7 +210,7 @@ struct Pair
         if (e->data.save.state_len)
           *e->data.save.state_len = sizeof(unsigned);
         if (e->data.save.checksum)
-          *e->data.save.checksum = 0;
+          *e->data.save.checksum = g_checksum ? g_checksum(player, e->data.save.frame) : 0;
       }
       else if (e->type == GekkoAdvanceEvent)
       {
@@ -193,7 +222,12 @@ struct Pair
       }
     }
     int scount = 0;
-    (void)gekko_session_events(s, &scount);
+    GekkoSessionEvent** sev = gekko_session_events(s, &scount);
+    for (int i = 0; i < scount; ++i)
+    {
+      if (sev[i]->type == GekkoDesyncDetected)
+        g_desyncs[player].push_back(*sev[i]);
+    }
     return advances;
   }
 
@@ -601,4 +635,199 @@ TEST(GekkoNetDelay, ChangeMidSessionKeepsBothSidesTogether)
   EXPECT_EQ(seq.back(), 200);
   EXPECT_EQ(repeats, 2);
   EXPECT_EQ(skipped, 3);
+}
+
+// Desync detection: each side compares the checksums of its confirmed frames with the ones the
+// other side sent. B's game gives frames 300 and 301 other checksums than A's: each side reports
+// exactly those two frames, in frame order, once each, with both checksums; the frames whose
+// checksums agree report nothing. Packets take 3 frames, so a remote checksum may come before or
+// after the local one (GitHub issue #15: the health bookkeeping's rewrite must report the same).
+TEST(GekkoNetHealth, DesyncReportedOnceForEachDifferingFrame)
+{
+  Pair pair;
+  g_delay_steps = 3;
+  const auto good = [](int frame) { return static_cast<unsigned>(frame) * 2654435761u + 1; };
+  g_checksum = [good](int player, int frame) {
+    return player == 1 && (frame == 300 || frame == 301) ? ~good(frame) : good(frame);
+  };
+  ASSERT_TRUE(pair.RunUntil(500));
+  for (int i = 0; i < 30; ++i)
+    pair.Step();
+  for (int side = 0; side < 2; ++side)
+  {
+    SCOPED_TRACE(side == 0 ? "A" : "B");
+    ASSERT_EQ(g_desyncs[side].size(), 2u);
+    for (int i = 0; i < 2; ++i)
+    {
+      const auto& d = g_desyncs[side][i].data.desynced;
+      const int frame = 300 + i;
+      EXPECT_EQ(d.frame, frame);
+      EXPECT_EQ(d.remote_handle, side == 0 ? 1 : 0);
+      EXPECT_EQ(d.local_checksum, side == 0 ? good(frame) : ~good(frame));
+      EXPECT_EQ(d.remote_checksum, side == 0 ? ~good(frame) : good(frame));
+    }
+  }
+}
+
+// GitHub issue #15: the gameplay session skips the snapshot of a frame f once every player's input
+// for f + 1 is in and no rollback is pending (NeedsSnapshot): no rollback may ever load a skipped
+// frame. Each side runs the gameplay session's order: at the newest frame's save (the loop top)
+// gekko_receive, then the decision, then the local input and the update; the frames a rollback
+// re-runs are decided after their update, without a receive (the pass tops of the burst). Inputs
+// change at random, packets are delayed, reordered and lost, and the local delays change
+// mid-session (live input delay). Every load must target a frame whose snapshot was taken, and no
+// load may come while the newest frame's snapshot was skipped.
+TEST(GekkoNetSnapshotSkip, NoRollbackLoadsASkippedFrame)
+{
+  struct Params
+  {
+    int delay_steps, jitter, delay_a, delay_b;
+    double loss;
+  };
+  const Params params[] = {{0, 0, 1, 1, 0.0},  {1, 1, 1, 1, 0.0},  {2, 2, 2, 1, 0.02},
+                           {3, 4, 2, 2, 0.05}, {5, 6, 3, 1, 0.10}, {2, 8, 1, 1, 0.20},
+                           {9, 3, 4, 4, 0.05}, {1, 2, 0, 0, 0.05}};
+  int total_skipped = 0, total_saved = 0, total_loads = 0;
+  // Mutation check of the test itself: without the pending-rollback rule loads must fail it.
+  const bool no_pending_check = std::getenv("PPR_ISSUE15_TEST_NO_PENDING_CHECK") != nullptr;
+  for (unsigned seed = 1; seed <= 10; ++seed)
+  {
+    for (const Params& prm : params)
+    {
+      SCOPED_TRACE(::testing::Message() << "seed " << seed << " delay " << prm.delay_steps
+                                        << " jitter " << prm.jitter << " loss " << prm.loss);
+      Pair pair;
+      g_net_rng.seed(seed);
+      g_delay_steps = prm.delay_steps;
+      g_jitter_steps = prm.jitter;
+      g_loss = prm.loss;
+      gekko_set_local_delay(pair.a, 0, static_cast<unsigned char>(prm.delay_a));
+      gekko_set_local_delay(pair.b, 1, static_cast<unsigned char>(prm.delay_b));
+      std::mt19937 rng(seed * 7919u);
+      struct Track
+      {
+        std::set<int> skipped;   // frames whose snapshot was skipped
+        int last_advanced = -1;  // the newest frame run
+        bool newest_skipped = false;
+        bool decide = false;  // the newest frame's save is still to come (the next loop top)
+        std::array<unsigned char, INPUT_SIZE> input{};
+      };
+      std::array<Track, 2> tr;
+      int loads = 0;
+      int frozen_steps = 0;
+      for (int step = 0; step < 3000; ++step)
+      {
+        // A frozen session gets going again through GekkoNet's re-send timer (wall time): let
+        // time pass as a frozen game does.
+        if (frozen_steps >= 5)
+          std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        const int advanced_before = tr[0].last_advanced + tr[1].last_advanced;
+        ++g_step;
+        for (Side* side : {&g_a, &g_b})
+        {
+          while (!side->in_flight.empty() && side->in_flight.front().first <= g_step)
+          {
+            side->inbox.push_back(std::move(side->in_flight.front().second));
+            side->in_flight.pop_front();
+          }
+        }
+        if (step % 500 == 250)
+        {
+          gekko_set_local_delay(pair.a, 0, static_cast<unsigned char>(rng() % 5));
+          gekko_set_local_delay(pair.b, 1, static_cast<unsigned char>(rng() % 5));
+        }
+        for (int p = 0; p < 2; ++p)
+        {
+          GekkoSession* s = p == 0 ? pair.a : pair.b;
+          Track& t = tr[p];
+          // The newest frame's save (the loop top, iteration 0).
+          if (t.decide)
+          {
+            t.decide = false;
+            gekko_receive(s);
+            const int f = t.last_advanced;
+            if (gekko_confirmed_frame(s) >= f + 1 && (no_pending_check || gekko_rollback_frames(s) == 0))
+            {
+              t.skipped.insert(f);
+              t.newest_skipped = true;
+              ++total_skipped;
+            }
+            else
+            {
+              t.skipped.erase(f);
+              t.newest_skipped = false;
+              ++total_saved;
+            }
+          }
+          gekko_network_poll(s);
+          if (rng() % 6 == 0)
+            t.input.fill(static_cast<unsigned char>(rng()));
+          gekko_add_local_input(s, p, t.input.data());
+          int count = 0;
+          GekkoGameEvent** events = gekko_update_session(s, &count);
+          std::vector<int> advanced;
+          for (int i = 0; i < count; ++i)
+          {
+            GekkoGameEvent* e = events[i];
+            if (e->type == GekkoSaveEvent)
+            {
+              if (e->data.save.state_len)
+                *e->data.save.state_len = sizeof(unsigned);
+              if (e->data.save.checksum)
+                *e->data.save.checksum = 0;
+            }
+            else if (e->type == GekkoLoadEvent)
+            {
+              const int target = e->data.load.frame;
+              ++loads;
+              EXPECT_FALSE(t.newest_skipped)
+                  << "side " << p << ": load of frame " << target << " after frame "
+                  << t.last_advanced << "'s snapshot was skipped";
+              EXPECT_EQ(t.skipped.count(target), 0u)
+                  << "side " << p << ": load of skipped frame " << target << " (newest "
+                  << t.last_advanced << ", confirmed " << gekko_confirmed_frame(s) << ")";
+              // The ring drops the slots after the target; the re-runs save again.
+              t.skipped.erase(t.skipped.upper_bound(target), t.skipped.end());
+              t.newest_skipped = false;
+            }
+            else if (e->type == GekkoAdvanceEvent)
+            {
+              advanced.push_back(e->data.adv.frame);
+            }
+          }
+          int scount = 0;
+          (void)gekko_session_events(s, &scount);
+          if (advanced.empty())
+            continue;
+          // The re-run frames' saves: the pass tops of the burst, no receive.
+          for (size_t i = 0; i + 1 < advanced.size(); ++i)
+          {
+            const int k = advanced[i];
+            if (gekko_confirmed_frame(s) >= k + 1 && gekko_rollback_frames(s) == 0)
+            {
+              t.skipped.insert(k);
+              ++total_skipped;
+            }
+            else
+            {
+              t.skipped.erase(k);
+              ++total_saved;
+            }
+          }
+          t.last_advanced = advanced.back();
+          t.decide = true;
+        }
+        frozen_steps = tr[0].last_advanced + tr[1].last_advanced == advanced_before ? frozen_steps + 1 : 0;
+      }
+      total_loads += loads;
+      EXPECT_GT(tr[0].last_advanced, 1000);
+      EXPECT_GT(tr[1].last_advanced, 1000);
+    }
+  }
+  // The test means something: frames were skipped and rollbacks happened.
+  EXPECT_GT(total_skipped, 10000);
+  EXPECT_GT(total_saved, 10000);
+  EXPECT_GT(total_loads, 1000);
+  std::printf("issue 15: %d skipped, %d saved, %d loads\n", total_skipped, total_saved,
+              total_loads);
 }
