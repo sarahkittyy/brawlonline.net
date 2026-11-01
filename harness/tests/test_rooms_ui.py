@@ -1565,3 +1565,71 @@ def test_colour_on_a_joiners_panel_at_p3(game: Game) -> None:
     g.wait(60)
     assert ppom.read_local(c, sim.b)["own"]["slot_colour"] == GREEN + 1, ppom.read_local(c, sim.b)["own"]
     g.shot("32-p3-colour-locked")
+
+
+def test_colour_in_a_team_room_leaves_the_partners_card(game: Game) -> None:
+    """Sarah's board (2026-10-31): "changing my player / tag / shield / badge color in a teams room
+    also changes my partner's color". A team room's cards are drawn in the lines of the teams'
+    ports (the red team's in P1's), and P+'s team battle byte (0x804E0304), set where Brawl's CSS
+    switches team battle, stayed off in a room, so P+ read the lines' values and its L / R / Z
+    stepped P1's: a red player's R turned their own card and their red partner's blue. Now the
+    byte is on in a team room, as on P+'s TEAM BATTLE offline: L / R / Z on the player box leave
+    the colour and every card stays in its team's colour, as in the match. Joined at P4 (red) of a
+    Teams room whose P1 is red: R, L, L, Z on our player box; then the room goes free-for-all and
+    R steps our colour again."""
+    g = game
+    c = g.c
+    c.game_bridge_config(enabled=False)
+    g.steps("until muMenuMain 3000", "wait 60")
+    g.sim = sim = roomsim.RoomSim(c)
+    g.wait(60)
+    g.tap("A")
+    g.wait(60)
+    friends_to(g, 2)
+    g.tap("A")
+    sim.service(600, until=lambda: g.scene() == "scSelctCharacter")
+    g.wait(60)
+    g.hand_to(*FOX, tol=0.6)
+    g.tap("A")
+    g.wait(20)
+    sim.joinable["KFQB"] = roomsim.Room(code="KFQB", host=1, teams=True, open=[True, True, True, True],
+                                        members=[roomsim.Member("carol", team=0, char=GMKIND_MARIO),
+                                                 roomsim.Member("bob", team=1), roomsim.Member("dave", team=2), None])
+    g.tap("START")
+    g.wait(40)
+    keypad_type(g, "KFQB")
+    g.tap("START")
+    g.wait(90)
+    assert sim.room is not None and sim.me() == 3 and sim.room.members[3].team == 0, sim.room.members
+    task = g.u32(g.u32(g.u32(0x805A0060) + 4) + 0x400)
+    hand = g.u32(g.u32(task + 0x44) + 0x1A8)
+
+    def press(btn: str, name: str) -> tuple[list[int], list[str]]:
+        g.hand_to(-26.0 + 16.0 * 3, -20.0, tol=0.6)   # our card's player box, at P4
+        g.wait(10)
+        assert g.u32(hand + 0xAC) == PLAYER_KIND_BUTTON, (hex(g.u32(hand + 0xAC)), g.hand())
+        pad = {"R": PadInput(("R",), r=255, hold=4), "L": PadInput(("L",), l=255, hold=4),
+               "Z": PadInput(("Z",), hold=4)}[btn]
+        c.pad_script(0, [pad, PadInput(hold=8)])
+        g.wait(40)
+        g.hand_to(*FOX, tol=0.6)   # (off the plate, for the shot)
+        g.wait(10)
+        return slot_lines(g), plate_colours(g, name)
+
+    teams = ["red", "blue", "green", "red"]
+    g.hand_to(*FOX, tol=0.6)
+    g.wait(10)
+    lines0, shown = slot_lines(g), plate_colours(g, "40-teams-colour-joined")
+    assert shown == teams, shown
+    for k, btn in enumerate(["R", "L", "L", "Z"]):
+        lines, shown = press(btn, f"41-teams-colour-{k + 1}-{btn}")
+        assert shown == teams, (btn, shown)          # (before: R made P1's and our card blue)
+        assert lines[0] == lines0[0], (btn, lines)   # P1's line, the one P+ steps, unchanged
+    assert g.c.read_mem(0x804E0304, 1)[0] == 0x10   # P+'s team battle byte: on
+    # Free-for-all again: the byte goes off and the player box steps our colour once more.
+    sim.room.teams = False
+    g.wait(60)
+    assert g.c.read_mem(0x804E0304, 1)[0] == 0x08
+    lines, shown = press("R", "42-ffa-colour-R")
+    assert lines[0] != lines0[0], lines
+    assert shown[:3] == ["red", "blue", "yellow"] and shown[3] != "green", shown
