@@ -1137,6 +1137,45 @@ def test_play_buttons_from_the_launcher(backend: OnlineBackend, dolphin: Callabl
     g.c.mm_cancel()
 
 
+def test_play_from_a_closed_game_with_the_controller_in_port_2(
+        backend: OnlineBackend, dolphin: Callable[..., DolphinInstance], gpu_backend: str) -> None:
+    """Play unranked with the game closed (the launcher writes join-room.json, then starts
+    Dolphin): the boot goes straight to the Unranked CSS with no menu press, and a controller in
+    port 2 (the only one plugged in) drives the hand there and locks in (bug report #210: a
+    GameCube adapter controller did nothing on that CSS; the Wi-Fi CSS plays only the pad that last
+    drove the menus, gmSetRule+0x24, which stayed port 1's)."""
+    import json
+    import uuid
+    from datetime import datetime, timezone
+    u = backend.create_user("playport2", "PLPT")
+    rid = str(uuid.uuid4())
+
+    def put(user_dir: Path) -> None:
+        created = datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+        (Path(user_dir) / "Online" / "join-room.json").write_text(json.dumps(
+            {"version": 1, "id": rid, "kind": "queue", "queue": "unranked", "createdAt": created}))
+
+    g = _boot(dolphin, "play-port2", backend, u, gpu_backend, "play-port-2", "record", artifacts=ART,
+              standard_controllers=(1,), before_launch=put)
+    g.pad = 1
+    g.c.pad_set(1)   # plugged in from the boot on, as a real controller (the harness's reads as unplugged until set)
+    assert launcher_answer(g, rid)["result"] == "accepted"
+    g.c.wait_state("running", timeout=120)
+    _wait(lambda: g.scene() == CSS, 120, "the CSS")
+    until_view(g, lambda v: v["screen"] == ppom.SCREENS["online-css"], "on the online CSS", timeout=60)
+    _wait(lambda: menu_state(g) == 2, 10, "the CSS is Unranked's")
+    g.steps("wait 60")
+    pick(g)
+    css = g.css()
+    assert css["char"] == 0x7 and css["hand_coin"] == 0, css   # Fox, the coin placed with port 2
+    n = g.finds()
+    g.press_until("START", lambda: g.finds() > n, "FIND_OPPONENT")
+    _wait(lambda: g.lock_in()["ready"], 5, "the lock-in")
+    assert g.lock_in()["pad"] == 1, g.lock_in()
+    g.shot("01-locked-in-from-port-2")
+    g.c.mm_cancel()
+
+
 def write_create(g: Game, ruleset: str | None = None) -> str:
     """The launcher's Create room (join-room.json kind "create", docs/rooms-protocol.md §5), with
     the launcher's ruleset box (`ruleset`, a code) when given."""
