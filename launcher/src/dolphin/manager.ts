@@ -681,6 +681,14 @@ export class DolphinManager {
       await this._ensureBrawlSave(netplayInstallation, storeDir);
       await netplayInstallation.setDefaultIso(isoPath);
       bootFile = netplayInstallation.netplayLauncherDol;
+    } else {
+      // Dolphin opens without a game and the player boots P+ from it: a Brawl save without its
+      // banner.bin is still replaced, which Brawl otherwise answers at every boot with "not enough
+      // available space in the Wii System Memory" (bug report #212: an Other Games join refused
+      // at once had copied its session's saves over this NAND). Nothing else is touched here.
+      const storeDir = projectPlusStoreFolder(this.netplayFolder());
+      await ensureNetplaySave(storeDir, netplayInstallation.userFolder).catch(() => false);
+      await this._ensureBrawlSave(netplayInstallation, storeDir, true);
     }
     // A playback Dolphin (a replay, a spectated game) may have the card open.
     const inUse = this.playbackDolphinInstances.size > 0;
@@ -1436,7 +1444,11 @@ export class DolphinManager {
    * never asks "Create save file for Project+?" (install/brawl_save.ts). An existing save is never
    * touched. A failure is logged and Play goes on: the game then asks, as P+ does.
    */
-  private async _ensureBrawlSave(installation: LocalDolphinInstallation, storeDir: string): Promise<void> {
+  private async _ensureBrawlSave(
+    installation: LocalDolphinInstallation,
+    storeDir: string,
+    brokenOnly = false,
+  ): Promise<void> {
     try {
       const result = await ensureBrawlSave({
         nandRoot: await installation.nandRoot(),
@@ -1446,6 +1458,7 @@ export class DolphinManager {
           path.join(this.getInstallation(DolphinLaunchType.NETPLAY).userFolder, NETPLAY_SAVE_DIR),
           path.join(installation.sysFolder, NETPLAY_SAVE_DIR),
         ],
+        brokenOnly,
         log: (message) => log.info(message),
       });
       if (result.action !== "present" && result.backup) {

@@ -333,6 +333,18 @@ void InitializeWiiRoot(bool use_temporary)
     MoveToBackupIfExists(s_temp_wii_root);
     MoveToBackupIfExists(s_temp_redirect_root);
 
+    // A whole-machine session's NAND from here on, decided now, while the session that made this
+    // root temporary is still armed. A session can end before the game's saves are set up
+    // (InitializeDeterministicWiiSaves): a room join refused ("Room not found."), the game closed
+    // at once. The cleanup then took the root for a TAS movie's and copied every save in it (P+'s
+    // template save) over the player's own NAND, which left P+'s Brawl save without its banner.bin
+    // and Brawl saying at every boot that the Wii System Memory is full (bug report #212;
+    // bug #175's log: "mods-join: Room not found." then "Wii FS Cleanup: Copying
+    // 0001000052534245").
+    auto& movie = Core::System::GetInstance().GetMovie();
+    s_machine_session_nand =
+        Machine::IsArmed() && !NetPlay::IsNetPlayRunning() && !movie.IsMovieActive();
+
     File::SetUserPath(D_SESSION_WIIROOT_IDX, s_temp_wii_root);
     // The Brawl save template: the launcher puts it in the User folder (on macOS, Sys is inside
     // the signed app bundle, and any file added there breaks its signature); Sys is the old place.
@@ -343,6 +355,7 @@ void InitializeWiiRoot(bool use_temporary)
   }
   else
   {
+    s_machine_session_nand = false;
     File::SetUserPath(D_SESSION_WIIROOT_IDX, File::GetUserPath(D_WIIROOT_IDX));
   }
 

@@ -123,17 +123,27 @@ export async function ensureBrawlSave({
   nandRoot,
   templateRoots,
   backupRoot = path.join(path.dirname(nandRoot), "SaveBackups", "RSBE"),
+  brokenOnly = false,
   log = () => undefined,
 }: {
   nandRoot: string;
   templateRoots: string[];
   /** Where a save P+ refuses is moved (a folder per time). */
   backupRoot?: string;
+  /**
+   * Only a save no Brawl boots with (files without banner.bin) is replaced. No save, and one with
+   * a banner of any size (another Brawl build's), stay: the Dolphin opens without a game, and the
+   * player may boot something other than P+ from it.
+   */
+  brokenOnly?: boolean;
   log?: (message: string) => void;
 }): Promise<BrawlSaveResult> {
   const dir = brawlSaveDir(nandRoot);
   let existing = await listBrawlSaveFiles(dir);
   if (existing && isUsableBrawlSave(existing)) {
+    return { action: "present", dir };
+  }
+  if (brokenOnly && (!existing || existing.length === 0 || findBanner(existing))) {
     return { action: "present", dir };
   }
   // A banner of another size: a whole save, which P+ still takes for none

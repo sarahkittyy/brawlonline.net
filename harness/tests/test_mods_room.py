@@ -283,3 +283,54 @@ def test_host_codes_run_on_every_machine(backend: OnlineBackend, dolphin: Callab
     # Running since the host's boot: about as many as frames, on both.
     assert min(counters) > 600 and abs(counters[0] - counters[1]) < 300, counters
 
+
+
+def test_a_refused_join_leaves_the_players_nand_alone(backend: OnlineBackend,
+                                                    dolphin: Callable[..., DolphinInstance]) -> None:
+    """Bug report #212: after Other Games, P+ said at every boot that the Wii System Memory is full;
+    the player's P+ save had every file but banner.bin. A join mm refuses ("Room not found.")
+    before the game's saves are set up (on the reporter's PC mm answered about 2 s before that)
+    stops the session while the game still boots on the session's temporary NAND, and the cleanup
+    took that NAND for a TAS movie's and copied every save in it over the player's own (bug #175's
+    log: "Wii FS Cleanup: Copying 0001000052534245"). Here the game boots 3 s late
+    (PPR_TEST_BOOT_DELAY_MS), after the refusal, and the player's own save stays byte for byte."""
+    user = backend.create_user("refused", "RFSD")
+    if backend.mm_host.startswith("127."):
+        ini = {"Online": {"UseDevServer": True, "MatchmakingPort": backend.mm_port,
+                          "DevAccountsUrl": backend.accounts_url}}
+    else:
+        ini = {"Online": {"MatchmakingHost": backend.mm_host, "MatchmakingPort": backend.mm_port,
+                          "AccountsUrl": backend.accounts_url}}
+    room = {"join": "ZZZZ", "build": BUILD, "controller": "gc", "sd_sync": "yes"}
+    inst = dolphin("mods-refused", config=InstanceConfig(cpu_thread=True, video_backend="Null", dolphin_ini=ini),
+                   client_timeout=60.0,
+                   env={"PPR_MODS_ROOM": json.dumps(room), "PPR_TEST_BOOT_DELAY_MS": "3000"})
+    user_dir = inst.create()
+    user.write_user_json(user_dir)
+    save = user_dir / "Wii" / "title" / "00010000" / "52534245" / "data"
+    save.mkdir(parents=True, exist_ok=True)
+    (save / "autosv0.bin").write_bytes(b"the player's own")
+    mine = {p.name: p.read_bytes() for p in save.iterdir()}
+    assert "banner.bin" in mine, sorted(mine)
+    inst.launch()
+
+    def log_text() -> str:
+        try:
+            return _log(inst)
+        except FileNotFoundError:
+            return ""
+    _wait(lambda: not inst.is_running() or "Room not found" in log_text(), 60, "the refused join")
+    # The game boots on regardless, then stops (the room closed this Dolphin): wait for it to go.
+    t0 = time.monotonic()
+    while inst.is_running() and time.monotonic() - t0 < 60:
+        time.sleep(0.5)
+    if inst.is_running():
+        inst.stop()
+    log = log_text()
+    assert "PPR_TEST_BOOT_DELAY_MS" in log and "Room not found" in log, log[-3000:]
+    assert log.index("Room not found") < log.index("Booting from"), log[-3000:]
+    assert "Copying from temporary FS" not in log, log[-3000:]
+    assert "a machine session's NAND, thrown away" in log, log[-3000:]
+    after = {p.name: p.read_bytes() for p in save.iterdir()}
+    assert sorted(after) == sorted(mine)
+    assert all(after[n] == mine[n] for n in mine), [n for n in mine if after[n] != mine[n]]
