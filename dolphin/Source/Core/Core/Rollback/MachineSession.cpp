@@ -6219,7 +6219,7 @@ void RedrawWhileWaiting(Core::System& system, Clock::duration waited_for)
   if (waited_for < std::chrono::milliseconds(100) || now - last < std::chrono::milliseconds(33))
     return;
   last = now;
-  AsyncRequests::GetInstance()->PushEvent([] {
+  AsyncRequests::GetInstance()->PushEventWhileStopped([] {
     if (g_presenter)
       g_presenter->RedrawLastFrame();
   });

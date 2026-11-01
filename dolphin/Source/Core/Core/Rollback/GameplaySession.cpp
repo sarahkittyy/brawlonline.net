@@ -6855,7 +6855,7 @@ PlaybackStep PlaybackLoopTopControls(Core::System& system)
     // gets the paused frame. Commands (PlaybackControl) and frames arriving (ExtendPlayback) wake
     // it.
     s.cpu_where = waiting ? "replay buffering" : "replay paused";
-    AsyncRequests::GetInstance()->PushEvent([] {
+    AsyncRequests::GetInstance()->PushEventWhileStopped([] {
       if (g_presenter)
         g_presenter->RedrawLastFrame();
     });
@@ -9145,7 +9145,7 @@ bool PlaybackLoopTop(const Core::CPUThreadGuard& guard)
     s.cpu_where = "replay waiting for frames";
     OSD::AddTypedMessage(OSD::MessageType::SpectateWaiting, "Game found, waiting for data...",
                          1000, OSD::Color::CYAN);
-    AsyncRequests::GetInstance()->PushEvent([] {
+    AsyncRequests::GetInstance()->PushEventWhileStopped([] {
       if (g_presenter)
         g_presenter->RedrawLastFrame();
     });
