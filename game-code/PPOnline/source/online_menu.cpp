@@ -3324,6 +3324,30 @@ namespace OnlineMenu {
         return strcmp(scene, "muMenuMain") == 0 && PPOM::g_block.debug.frames - s_jumpFrame < 3 && s_jumpPage;
     }
 
+    // The Wi-Fi CSS plays one controller: the pad the menus were last driven with (gmSetRule+0x24,
+    // s32, set by a menu press). The Wi-Fi sequence's state 1 copies it + 1 into gmSelCharData+0
+    // (sora_scene text 0x806F243C, through fn_80052DB0), and on that CSS only this pad reads as
+    // plugged in (every other pad's sys status is NO_CONTROLLER) and the player's area takes it
+    // (area+0x1DC). A launcher jump leaves the menus with no press: from a boot straight to the
+    // CSS it was still 0, so a controller in any port but 1 did nothing there (bug report #210, a
+    // GameCube adapter controller). Kept when a controller is in it; else the first pad with one
+    // (the GameCube ports, then the Wii Remotes), read from the menus' sys pads (all eight).
+    static void pickCssPad()
+    {
+        u8* rule = setRule();
+        u8* ps = padSystem();
+        if (!rule || !ps) return;
+        // gfPadStatus+0x38: the error, -1 = no controller.
+        s32* pad = (s32*)(rule + 0x24);
+        if (*pad >= 0 && *pad < PADS && *(volatile s8*)(ps + 0x244 + 0x40 * *pad + 0x38) != -1) return;
+        for (int p = 0; p < PADS; p++) {
+            if (*(volatile s8*)(ps + 0x244 + 0x40 * p + 0x38) != -1) {
+                *pad = p;
+                return;
+            }
+        }
+    }
+
     // Leave that page for the Wi-Fi CSS (sqNetAnyOkiraku): muProcMenu's decide (sora_menu_rule,
     // module 18, text+0x1AE0) with decision 0x1E, as the WITH FRIENDS buttons do. The caller says
     // which CSS it is (enter / enterRoom) right after.
@@ -3341,6 +3365,7 @@ namespace OnlineMenu {
         }
         if (!rule) return false;
         NetMenu::ensureWifiTask();   // from the top page none has been made yet
+        pickCssPad();
         typedef void (*DecideFn)(u8*, int, int);
         ((DecideFn)(rule + 0x1AE0))(s_jumpPage, 0x1E, 0);
         playSE(1);
