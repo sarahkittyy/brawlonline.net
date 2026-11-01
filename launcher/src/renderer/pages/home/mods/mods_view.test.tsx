@@ -352,6 +352,133 @@ describe("ModsView", () => {
     expect(p.onFixBuild).toHaveBeenLastCalledWith(rex, "disc");
   });
 
+  it("says which game joins a room, and asks first when that is only a guess (Joins with)", async () => {
+    // Sarah's board, 2026-11-01: a REX room offered as "Start Dolphin with Project+ v3.2.1".
+    const disc = "d".repeat(40);
+    const card = "5".repeat(64);
+    const roomHash = "a".repeat(64);
+    const game = (id: string, name: string, extra: Partial<ModBuild> = {}): ModBuild => ({
+      ...minus,
+      id,
+      name,
+      gameId: "RSBE01",
+      hash: id.padEnd(64, "0"),
+      parts: { disc, launcher: id.padEnd(64, "1"), sd: true, sdCard: id.padEnd(64, "2") },
+      ...extra,
+    });
+    const pplus = game("pplus", "Project+ v3.2.1", { builtIn: true });
+    const cobalt = game("cobalt", "Cobalt 1.34 Test");
+    const rex = game("rex", "REX Release");
+    const checkRoomCards = vi.fn(async (_root: string, ids: string[]) =>
+      Object.fromEntries(
+        ids.map((id) => [
+          id,
+          {
+            kind: "differs" as const,
+            bytes: id === "rex" ? 15 * 1024 * 1024 : 7.8 * 1024 ** 3,
+            files: id === "rex" ? 58 : 12000,
+            names: [],
+            filesKnown: true,
+          },
+        ]),
+      ),
+    );
+    const rooms: ModsViewProps["publicRooms"] = {
+      kind: "ready",
+      rooms: [
+        {
+          code: "NATH",
+          build: { hash: roomHash, name: "REX Release 0½ Hotfix 1", disc, discLabel: "RSBE01", sd: card },
+          hostName: "nath06",
+          players: 1,
+          open: 4,
+        },
+      ],
+    };
+    const p = props(
+      { builds: [pplus, cobalt, rex], running: false, status: null },
+      { publicRooms: rooms, checkRoomCards, onSetRoomGame: vi.fn() },
+    );
+    const { getByText, getByRole, queryByRole, rerender } = render(<ModsView {...p} />);
+    const row = () => getByText(Messages.roomHost("nath06")).closest("button") as HTMLButtonElement;
+    // The launcher's guess, shown before any click: its own games before the built-in P+.
+    expect(row().textContent).toContain(`${Messages.joinsWith()} Cobalt 1.34 Test`);
+    // Only a guess: Join opens the menu instead of joining.
+    fireEvent.click(row());
+    expect(p.onJoin).not.toHaveBeenCalled();
+    const menu = getByRole("menu");
+    const items = within(menu).getAllByRole("menuitem");
+    expect(items.map((i) => i.getAttribute("data-build"))).toEqual(["cobalt", "rex", "pplus"]);
+    expect(items[2].textContent).toContain(Messages.builtInBadge());
+    // The sizes: each card against the room's, asked once.
+    expect(checkRoomCards).toHaveBeenCalledWith(card, ["cobalt", "rex", "pplus"]);
+    await act(async () => undefined);
+    expect(items[1].textContent).toContain("15 MB");
+    expect(items[1].textContent).toContain(Messages.joinWithCardSmall(58));
+    expect(items[0].textContent).toContain("7.8 GB");
+    // Picked (kept for the mod: the box is on), and joined.
+    fireEvent.click(items[1]);
+    expect(p.onSetRoomGame).toHaveBeenCalledWith(roomHash, "rex");
+    expect(p.onJoin).toHaveBeenCalledWith(rex, "NATH");
+    // The main process keeps the pick: the row says it, its chip the size, and Join joins at once.
+    rerender(
+      <ModsView
+        {...props(
+          { builds: [pplus, cobalt, rex], running: false, status: null, roomGames: { [roomHash]: "rex" } },
+          { publicRooms: rooms, checkRoomCards, onSetRoomGame: vi.fn(), onJoin: p.onJoin },
+        )}
+      />,
+    );
+    expect(queryByRole("menu")).toBeNull();
+    expect(row().textContent).toContain(`${Messages.joinsWith()} REX Release`);
+    expect(row().textContent).toContain(`${Messages.partHash("SD card", card)} · 15 MB`);
+    fireEvent.click(row());
+    expect(p.onJoin).toHaveBeenCalledTimes(2);
+    // The menu from the name changes it without joining; unticked, for this room only.
+    fireEvent.click(getByText("REX Release", { selector: "[aria-haspopup]" }));
+    const again = within(getByRole("menu")).getAllByRole("menuitem");
+    expect(again.map((i) => i.getAttribute("data-build"))).toEqual(["rex", "cobalt", "pplus"]);
+    fireEvent.click(getByRole("checkbox"));
+    fireEvent.click(again[2]);
+    expect(p.onJoin).toHaveBeenCalledTimes(2);
+    expect(row().textContent).toContain(`${Messages.joinsWith()} Project+ v3.2.1`);
+    expect(checkRoomCards).toHaveBeenCalledTimes(1);
+  });
+
+  it("names the only game that can join a room, with no menu", () => {
+    const disc = "d".repeat(40);
+    const rex: ModBuild = {
+      ...minus,
+      id: "rex",
+      name: "REX",
+      gameId: "RSBE01",
+      parts: { disc, launcher: null, sd: true, sdCard: "6".repeat(64) },
+    };
+    const p = props(
+      { builds: [rex], running: false, status: null },
+      {
+        publicRooms: {
+          kind: "ready",
+          rooms: [
+            {
+              code: "SDSD",
+              build: { hash: "a".repeat(64), name: "REX", disc, discLabel: "RSBE01", sd: "5".repeat(64) },
+              hostName: "Sara",
+              players: 1,
+              open: 4,
+            },
+          ],
+        },
+      },
+    );
+    const { getByText } = render(<ModsView {...p} />);
+    const row = getByText(Messages.roomHost("Sara")).closest("button") as HTMLButtonElement;
+    expect(row.textContent).toContain(`${Messages.joinsWith()} REX`);
+    expect(row.querySelector("[aria-haspopup]")).toBeNull();
+    fireEvent.click(row);
+    expect(p.onJoin).toHaveBeenCalledWith(rex, "SDSD");
+  });
+
   it("joins a room of the plain disc with the disc of a game with a card, no SD card chip", () => {
     // Sarah's board, 2026-10-30: "SD card: - x" on a plain Brawl room for a player with only P+.
     const disc = "d".repeat(40);

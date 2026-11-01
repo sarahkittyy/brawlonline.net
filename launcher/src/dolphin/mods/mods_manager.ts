@@ -59,6 +59,7 @@ import type {
   ModsJoinByCodeResult,
   ModsJoinOptions,
   ModsJoinResult,
+  ModsRoomCardsOptions,
   ModsState,
 } from "./types";
 
@@ -242,7 +243,7 @@ export class ModsManager {
     // hash of today's launcher.
     await this.rehashing;
     await this.hashGamesOf(room.build);
-    const match = matchRoom(room.build, this.builds(), discAloneHash);
+    const match = matchRoom(room.build, this.builds(), discAloneHash, this.roomGames()[room.build.hash]);
     const build = match.joinable ? match.build : null;
     if (!build) {
       // A game of the room's with a part that differs is named, not said to be missing (bug
@@ -316,7 +317,59 @@ export class ModsManager {
       discAlone: Object.fromEntries(
         this.builds().flatMap((b) => (b.parts ? [[b.parts.disc, discAloneHash(b.parts.disc)]] : [])),
       ),
+      roomGames: this.roomGames(),
     };
+  }
+
+  /** The game the player joins each room mod with, by the room's build hash (`setRoomGame`). */
+  private roomGames(): Record<string, string> {
+    return this.settings.get().modRoomGames ?? {};
+  }
+
+  /**
+   * The room list's "Joins with" (Sarah's board, 2026-11-01): rooms of the mod whose build hash is
+   * `roomHash` join with this game from now on, or with the launcher's own pick again (null).
+   */
+  async setRoomGame(roomHash: string, buildId: string | null): Promise<void> {
+    if (buildId !== null) {
+      this.findBuild(buildId);
+    }
+    const games = { ...this.roomGames() };
+    if (buildId === null) {
+      delete games[roomHash];
+    } else {
+      games[roomHash] = buildId;
+    }
+    await this.settings.updateSetting("modRoomGames", games);
+    this.emitState();
+  }
+
+  /**
+   * What joining a room whose card is `roomRoot` would download with each game (the "Joins with"
+   * menu's sizes): the room card's listing fetched once and compared with each game's card, as
+   * the SD card question does at a join. A game without a card, or with the room's, is "same".
+   */
+  async checkRoomCards(options: ModsRoomCardsOptions): Promise<Record<string, ModSdCardCheck>> {
+    const toolPath = await this.toolPath();
+    const userDir = this.dolphin.netplayUserFolder();
+    let listing: Promise<Uint8Array | null> | null = null;
+    const fetchListing = () => (listing ??= this.listings.fetch(options.uid, options.roomRoot));
+    const checks: Record<string, ModSdCardCheck> = {};
+    for (const id of options.buildIds) {
+      const build = this.builds().find((b) => b.id === id);
+      if (!build) {
+        continue;
+      }
+      const sdPath = build.sdPath;
+      checks[id] = await checkRoomCard({
+        ownRoot: sdPath ? build.parts?.sdCard ?? null : null,
+        roomRoot: options.roomRoot,
+        fetchListing,
+        compare: (l) => compareSdListing(toolPath, sdPath!, userDir, l, options.roomRoot),
+        log: (message) => log.warn(`${build.name}: ${message}`),
+      });
+    }
+    return checks;
   }
 
   /**

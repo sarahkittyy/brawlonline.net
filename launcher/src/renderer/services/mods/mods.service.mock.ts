@@ -11,10 +11,12 @@ import type {
   ModSaveImportResult,
   ModSaveInfo,
   ModsController,
+  ModSdCardCheck,
   ModsEvent,
   ModsHostOptions,
   ModsJoinOptions,
   ModsJoinResult,
+  ModsRoomCardsOptions,
   ModsService,
   ModsState,
 } from "@dolphin/mods/types";
@@ -64,6 +66,7 @@ class MockModsClient implements ModsService {
   private hashing: Record<string, number | null> = {};
   private controller: ModsController = "gc";
   private saves: Record<string, ModSaveInfo> = {};
+  private roomGames: Record<string, string> = {};
   private readonly controllers: DolphinControllers = {
     gc: [{ index: 1, device: "GameCube adapter", label: "GameCube adapter" }],
     wiimote: [{ index: 1, device: "", label: "Real Wii Remote", real: true }],
@@ -78,6 +81,7 @@ class MockModsClient implements ModsService {
       controller: this.controller,
       controllers: this.controllers,
       hashing: { ...this.hashing },
+      roomGames: { ...this.roomGames },
     };
   }
 
@@ -218,6 +222,31 @@ class MockModsClient implements ModsService {
       return { outcome: "no-game" as const, name: "Some Mod", hash: "9".repeat(64) };
     }
     return await this.join({ buildId: build.id, code: options.code });
+  }
+
+  async setRoomGame(roomHash: string, buildId: string | null) {
+    if (buildId === null) {
+      delete this.roomGames[roomHash];
+    } else {
+      this.roomGames[roomHash] = buildId;
+    }
+    this.emit();
+  }
+
+  /** A second to check, then a card that differs a little for the first game, most of it for the rest. */
+  async checkRoomCards(options: ModsRoomCardsOptions) {
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    const checks: Record<string, ModSdCardCheck> = {};
+    options.buildIds.forEach((id, i) => {
+      checks[id] = {
+        kind: "differs",
+        bytes: i === 0 ? 15.3 * 1024 * 1024 : 7.8 * 1024 * 1024 * 1024,
+        files: i === 0 ? 58 : 12000,
+        names: [],
+        filesKnown: true,
+      };
+    });
+    return checks;
   }
 
   async request(request: ModRoomRequest) {

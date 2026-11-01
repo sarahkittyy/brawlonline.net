@@ -1,5 +1,5 @@
 import type { PublicModRoom, YourRoom } from "@accounts/types";
-import type { PartMatch } from "@dolphin/mods/room_match";
+import type { PartMatch, RoomMatch } from "@dolphin/mods/room_match";
 import { matchRoom } from "@dolphin/mods/room_match";
 import type {
   ModBuild,
@@ -7,6 +7,7 @@ import type {
   ModRoomSlot,
   ModRoomStatus,
   ModsController,
+  ModSdCardCheck,
   ModSdSync,
   ModsState,
 } from "@dolphin/mods/types";
@@ -33,7 +34,7 @@ import TextField from "@mui/material/TextField";
 import Tooltip from "@mui/material/Tooltip";
 import { clsx } from "clsx";
 import type { ReactNode } from "react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { ExternalLink } from "@/components/external_link";
 import { RoomNameMessages } from "@/components/room_name/room_name.messages";
@@ -42,6 +43,8 @@ import { RoomNameField } from "@/components/room_name/room_name_field";
 import { ContentBlock } from "../overview/content_block/content_block";
 import { CodesButton, CodesChip, hasRoomCodes } from "./codes_dialog";
 import { ControllerMenu } from "./controller_menu";
+import type { CardCheckState } from "./join_with_menu";
+import { cardCheckKey, JoinsWith, JoinWithMenu } from "./join_with_menu";
 import { ModsMessages as Messages } from "./mods.messages";
 import styles from "./mods.module.css";
 
@@ -86,6 +89,10 @@ export type ModsViewProps = {
   yourRoom?: YourRoom | null;
   /** The host names their room (empty: no name); throws when the server refused it. */
   onRenameRoom?: (code: string, name: string) => Promise<void>;
+  /** "Joins with": rooms of the mod whose build hash is `roomHash` join with this game from now on. */
+  onSetRoomGame?: (roomHash: string, buildId: string) => void;
+  /** What joining a room whose card is `roomRoot` downloads with each game, by build id (logged in). */
+  checkRoomCards?: (roomRoot: string, buildIds: string[]) => Promise<Record<string, ModSdCardCheck>>;
 };
 
 const fileName = (p: string | null) => (p ? p.split(/[\\/]/).pop() ?? p : null);
@@ -167,6 +174,9 @@ export const ModsView = (props: ModsViewProps) => {
             ownCode={status?.room?.code ?? null}
             builds={state?.builds ?? []}
             discAlone={state?.discAlone}
+            roomGames={state?.roomGames}
+            onSetRoomGame={props.onSetRoomGame}
+            checkRoomCards={props.checkRoomCards}
             disabled={!!state?.running || props.startingBuildId !== null}
             onJoin={props.onJoin}
             onJoinCode={props.onJoinCode}
@@ -360,9 +370,12 @@ const PartChip = ({
   match,
   tooltip,
   onClick,
+  extra,
 }: {
   label: string;
   hash: string;
+  /** After the hash: what joining downloads of it ("15 MB"). */
+  extra?: string;
   /** null: shown as it is (the player's own game). */
   match: PartMatch | null;
   tooltip: string;
@@ -394,6 +407,7 @@ const PartChip = ({
       }}
     >
       {Messages.partHash(label, hash)}
+      {extra && ` · ${extra}`}
       {match === "same" && <CheckRoundedIcon className={styles.partIcon} />}
       {match === "wrong" && <CloseRoundedIcon className={styles.partIcon} />}
       {match === "differs" && <span className={styles.partIcon}>!</span>}
@@ -406,6 +420,9 @@ const PublicRoomsBlock = ({
   ownCode,
   builds,
   discAlone,
+  roomGames,
+  onSetRoomGame,
+  checkRoomCards,
   disabled,
   onJoin,
   onJoinCode,
@@ -419,6 +436,10 @@ const PublicRoomsBlock = ({
   builds: ModBuild[];
   /** The build hash of each of the player's discs played alone (ModsState.discAlone). */
   discAlone?: Record<string, string>;
+  /** The game the player picked for each room mod (ModsState.roomGames). */
+  roomGames?: Record<string, string>;
+  onSetRoomGame?: (roomHash: string, buildId: string) => void;
+  checkRoomCards?: (roomRoot: string, buildIds: string[]) => Promise<Record<string, ModSdCardCheck>>;
   disabled: boolean;
   onJoin: (build: ModBuild, code: string, discOnly?: boolean) => void;
   onJoinCode: (code: string) => void;
@@ -427,8 +448,44 @@ const PublicRoomsBlock = ({
   onLogIn: () => void;
 }) => {
   const [code, setCode] = useState("");
+  // "Joins with": a game picked for one room only (by its code), each game's card against a
+  // room's, and the open menu (`joinAfter`: opened by Join, which joins once a game is picked).
+  const [pickedHere, setPickedHere] = useState<Record<string, string>>({});
+  const [checks, setChecks] = useState<Record<string, CardCheckState>>({});
+  const [menu, setMenu] = useState<{ code: string; anchor: HTMLElement; joinAfter: boolean } | null>(null);
+  const anchors = useRef(new Map<string, HTMLElement>());
   let content: ReactNode;
   const listed = rooms.kind === "ready" ? rooms.rooms : [];
+  const matchOf = (room: PublicModRoom) =>
+    matchRoom(room.build, builds, (disc) => discAlone?.[disc], pickedHere[room.code] ?? roomGames?.[room.build.hash]);
+  const openMenu = (room: PublicModRoom, match: RoomMatch, anchor: HTMLElement, joinAfter: boolean) => {
+    setMenu({ code: room.code, anchor, joinAfter });
+    const root = room.build.sd;
+    if (!root || !checkRoomCards) {
+      return;
+    }
+    // The sizes: each game whose card is not the room's, asked once (the main process compares
+    // them with the room card's listing, as the SD card question at a join does).
+    const need = match.choices.filter(
+      (b) => b.sdPath && b.parts?.sdCard !== root && checks[cardCheckKey(root, b)] === undefined,
+    );
+    if (need.length === 0) {
+      return;
+    }
+    const keyed = need.map((b) => [cardCheckKey(root, b), b.id] as const);
+    setChecks((c) => ({ ...c, ...Object.fromEntries(keyed.map(([k]) => [k, "checking" as const])) }));
+    void checkRoomCards(
+      root,
+      need.map((b) => b.id),
+    )
+      .catch(() => ({} as Record<string, ModSdCardCheck>))
+      .then((result) =>
+        setChecks((c) => ({
+          ...c,
+          ...Object.fromEntries(keyed.map(([k, id]) => [k, result[id] ?? ({ kind: "unknown" } as const)])),
+        })),
+      );
+  };
   if (rooms.kind === "logged-out") {
     content = (
       <div className={styles.centered}>
@@ -449,8 +506,12 @@ const PublicRoomsBlock = ({
     content = (
       <ul className={styles.roomList}>
         {listed.map((room) => {
-          const match = matchRoom(room.build, builds, (disc) => discAlone?.[disc]);
+          const match = matchOf(room);
           const build = match.joinable ? match.build : null;
+          // Joining with a game that is only a guess (none is the room's mod or has its card)
+          // asks which one first.
+          const ask = !!build && !match.sure && match.choices.length > 1;
+          const cardCheck = build && room.build.sd ? checks[cardCheckKey(room.build.sd, build)] : undefined;
           const label = match.hasParts
             ? room.build.name
             : Messages.buildName(room.build.name, room.build.hash.slice(0, 8));
@@ -470,6 +531,8 @@ const PublicRoomsBlock = ({
                 title={
                   own
                     ? Messages.yourRoomTooltip()
+                    : ask
+                    ? Messages.joinWithPickTooltip()
                     : build
                     ? Messages.joinPublicTooltip(match.discOnly ? room.build.name : build.name)
                     : match.hasParts && match.disc === "wrong"
@@ -487,11 +550,13 @@ const PublicRoomsBlock = ({
                   className={clsx(styles.roomRow, !build && styles.roomRowOff)}
                   aria-disabled={off}
                   data-room={room.code}
-                  onClick={() => {
+                  onClick={(e) => {
                     if (off) {
                       return;
                     }
-                    if (build) {
+                    if (ask) {
+                      openMenu(room, match, anchors.current.get(room.code) ?? e.currentTarget, true);
+                    } else if (build) {
                       if (match.discOnly) {
                         onJoin(build, room.code, true);
                       } else {
@@ -537,6 +602,14 @@ const PublicRoomsBlock = ({
                             label={Messages.sdPart()}
                             hash={room.build.sd || "-"}
                             match={match.sd}
+                            extra={
+                              match.sd === "differs" &&
+                              cardCheck &&
+                              cardCheck !== "checking" &&
+                              cardCheck.kind === "differs"
+                                ? Messages.megabytes(cardCheck.bytes)
+                                : undefined
+                            }
                             tooltip={
                               match.sd === "same"
                                 ? Messages.sdMatches()
@@ -552,6 +625,23 @@ const PublicRoomsBlock = ({
                         {/* The host's codes, which the room runs for everyone (room-codes.md). */}
                         {room.build.codes && room.build.codes.length > 0 && <CodesChip names={room.build.codes} />}
                       </div>
+                    )}
+                    {!own && (
+                      <JoinsWith
+                        match={match}
+                        anchorRef={(el) => {
+                          if (el) {
+                            anchors.current.set(room.code, el);
+                          } else {
+                            anchors.current.delete(room.code);
+                          }
+                        }}
+                        onOpen={(anchor) => {
+                          if (!off) {
+                            openMenu(room, match, anchor, false);
+                          }
+                        }}
+                      />
                     )}
                   </div>
                   <span className={styles.roomPlayers}>
@@ -580,6 +670,8 @@ const PublicRoomsBlock = ({
       </ul>
     );
   }
+  const menuRoom = menu ? listed.find((r) => r.code === menu.code) ?? null : null;
+  const menuMatch = menuRoom ? matchOf(menuRoom) : null;
   const join = () => {
     if (code.trim() && !disabled) {
       onJoinCode(code.trim());
@@ -617,7 +709,32 @@ const PublicRoomsBlock = ({
           </div>
         ) : undefined
       }
-      content={<div className={styles.room}>{content}</div>}
+      content={
+        <div className={styles.room}>
+          {content}
+          <JoinWithMenu
+            anchor={menuRoom ? menu!.anchor : null}
+            room={menuRoom?.build ?? null}
+            match={menuMatch}
+            checks={checks}
+            onClose={() => setMenu(null)}
+            onPick={(picked, remember) => {
+              const joinAfter = menu?.joinAfter;
+              setMenu(null);
+              if (!menuRoom) {
+                return;
+              }
+              setPickedHere((p) => ({ ...p, [menuRoom.code]: picked.id }));
+              if (remember) {
+                onSetRoomGame?.(menuRoom.build.hash, picked.id);
+              }
+              if (joinAfter && !disabled) {
+                onJoin(picked, menuRoom.code);
+              }
+            }}
+          />
+        </div>
+      }
     />
   );
 };

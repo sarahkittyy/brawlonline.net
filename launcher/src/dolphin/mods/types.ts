@@ -246,6 +246,9 @@ export type ModsState = {
   /** The build hash of each of the player's discs played alone (`matchRoom`'s `discAlone`), by
    * the disc's part. */
   discAlone?: Record<string, string>;
+  /** The game the player joins each room mod with (`matchRoom`'s `chosenId`), by the room's
+   * build hash: picked in the room list's "Joins with" menu. */
+  roomGames?: Record<string, string>;
 };
 
 export type ModsEvent =
@@ -306,6 +309,9 @@ export type ModsJoinResult =
   /** The room's SD card differs: ask the player, then join again with `sdSync`. `roomName`: the
    * room's game, as its host named it. */
   | { outcome: "sd-card"; buildId: string; code: string; check: ModSdCardCheck; roomName?: string };
+/** What joining a room whose SD card is `roomRoot` would download, for each of `buildIds` (the
+ * room list's "Joins with" menu). `uid`: the account that asks. */
+export type ModsRoomCardsOptions = { uid: string; roomRoot: string; buildIds: string[] };
 /** A room code typed in: the room's game is looked up (`uid`: the account that asks). */
 export type ModsJoinByCodeOptions = { uid: string; code: string };
 export type ModsJoinByCodeResult =
@@ -334,6 +340,11 @@ export interface ModsService {
   join(options: ModsJoinOptions): Promise<ModsJoinResult>;
   /** Joins the room with this code with the game whose hash it needs, if the player has it. */
   joinByCode(options: ModsJoinByCodeOptions): Promise<ModsJoinByCodeResult>;
+  /** Joins rooms of the mod whose build hash is `roomHash` with this game from now on (null: the
+   * launcher's own pick again). */
+  setRoomGame(roomHash: string, buildId: string | null): Promise<void>;
+  /** What joining the room with each game would download of its SD card, by build id. */
+  checkRoomCards(options: ModsRoomCardsOptions): Promise<Record<string, ModSdCardCheck>>;
   request(request: ModRoomRequest): Promise<void>;
   /** Plays with this kind of controller from now on (the running room's at once). */
   setController(controller: ModsController): Promise<void>;

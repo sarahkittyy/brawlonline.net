@@ -112,6 +112,9 @@ export interface RootSettingsSchema {
   modBuilds?: ModBuild[];
   // Other Games: what the player plays with; absent until they pick (then by what is set up).
   modsController?: ModsController;
+  // Other Games: the game the player joins a room's mod with (the room list's "Joins with"), by
+  // the room's build hash; absent until they pick one.
+  modRoomGames?: Record<string, string>;
   // The build hash version (build_hash.ts BUILD_HASH_VERSION) whose one pass over the games hashed
   // by an older launcher has run (ModsManager.rehashChanged); absent before the first.
   modsHashVersion?: string;

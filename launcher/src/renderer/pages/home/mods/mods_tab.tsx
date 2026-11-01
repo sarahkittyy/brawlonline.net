@@ -428,6 +428,10 @@ export const ModsTab = React.memo(function ModsTab() {
         }
         onJoin={(build, code, discOnly) => void start(build, () => joinRoom(build.id, code, undefined, discOnly))}
         onJoinCode={(code) => void joinCode(code)}
+        onSetRoomGame={(roomHash, buildId) => void modsService.setRoomGame(roomHash, buildId).catch(showError)}
+        checkRoomCards={
+          uid ? (roomRoot, buildIds) => modsService.checkRoomCards({ uid, roomRoot, buildIds }) : undefined
+        }
         onMissingGame={(name, hash) => setMissing({ name, hash })}
         // The room's part that differs: the game's edit window, that field pulsing gold.
         onFixBuild={(build, part) => openEdit(build, part)}
