@@ -155,6 +155,46 @@ TEST(Spectate, OffersOnceAndAgainAfterAReconnect)
   EXPECT_EQ(Types(t.Tick()), std::vector<std::string>{"spectate-offer"});
 }
 
+// Production 2026-11-01: after mm restarted, players' games offered the last game they had
+// played, some two hours over, and the Spectate list showed them again ("Next game soon" for
+// games that never came, one player three times). An ended game is not offered again; its end
+// report still goes out.
+TEST(Spectate, AnEndedGameIsNotOfferedAgainAfterAReconnect)
+{
+  const auto endg = [] {
+    const std::string j = R"({"endMethod":"game","winnerPort":1})";
+    return std::vector<u8>(j.begin(), j.end());
+  };
+
+  Rig t;
+  t.AddGame(2);
+  t.Tick();
+  t.Role("primary", 7);
+  t.Add(Replay::CHUNK_ENDG, endg());
+  t.up.EndGame(UID);
+  t.up.ConnectionLost();
+  EXPECT_TRUE(t.up.Status()["game"].is<picojson::null>());
+  EXPECT_EQ(Types(t.Tick()), std::vector<std::string>{"spectate-end"});
+  EXPECT_TRUE(t.Tick().json.empty());
+
+  // Lost while it went on, ended before the next connection: not offered either.
+  Rig s;
+  s.AddGame(2);
+  s.Tick();
+  s.Role("witness", 8);
+  s.up.ConnectionLost();
+  s.Add(Replay::CHUNK_ENDG, endg());
+  s.up.EndGame(UID);
+  EXPECT_TRUE(s.Tick(10ms, 0, false).json.empty());
+  EXPECT_EQ(Types(s.Tick()), std::vector<std::string>{"spectate-end"});
+  EXPECT_TRUE(s.Tick().json.empty());
+  EXPECT_TRUE(s.up.Status()["game"].is<picojson::null>());
+
+  // The next game is offered as before.
+  s.up.BeginGame({MATCH, {9}, 2});
+  EXPECT_EQ(Types(s.Tick()), std::vector<std::string>{"spectate-offer"});
+}
+
 TEST(Spectate, ThePrimarySendsEveryChunkPacedInSmallPackets)
 {
   Rig t;
