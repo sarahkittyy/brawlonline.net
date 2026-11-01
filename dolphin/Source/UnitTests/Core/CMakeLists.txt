@@ -72,6 +72,8 @@ add_dolphin_test(GCMemcardDirectoryTest GCMemcardDirectoryTest.cpp)
 add_dolphin_test(HostPadReadTest Rollback/HostPadReadTest.cpp)
 # A GameCube's ARAM in whole-machine rollback snapshots, outside the savestate (bug report #135).
 add_dolphin_test(ARAMSnapshotTest Rollback/ARAMSnapshotTest.cpp)
+# The change CRC's batched feed (whole-machine snapshot saves, GitHub issue #14): the serial CRC.
+add_dolphin_test(ChangeCRCTest Rollback/ChangeCRCTest.cpp)
 # The rollback job pool (Core/Rollback/job.h) stopped and started again (GitHub issue #3).
 add_dolphin_test(JobPoolTest Rollback/JobPoolTest.cpp)
 # A room's codes as the launcher gives them (Machine::ParseCodes, docs/design/room-codes.md).

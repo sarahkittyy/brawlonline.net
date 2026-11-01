@@ -24,6 +24,7 @@
 #include "Core/HW/Memmap.h"
 #include "Core/PowerPC/JitInterface.h"
 #include "Core/PowerPC/PowerPC.h"
+#include "Core/Rollback/ChangeCRC.h"
 #include "Core/Rollback/MachineSession.h"
 #include "Core/Rollback/Perf.h"
 #include "Core/System.h"
@@ -37,6 +38,8 @@ namespace Rollback
 // Brawl's GameFrame::frameCounter at 0x901812a4 (MEM2). This resets when the
 // match scene starts and advances inside the real game loop.
 static constexpr uint32_t BRAWL_GAME_FRAME_COUNTER_MEM2_OFFSET = 0x001812a4u;
+
+static_assert(BatchedChangeCRC::kGranuleSize == ROLLBACK_PAGE_SIZE);
 
 uint32_t ReadBrawlMatchFrameCounter(const uint8_t* mem2_ptr, size_t mem2_size)
 {
@@ -1131,7 +1134,8 @@ void RollbackManager::UpdateShadowAfterSave(int slot)
   // The save's copy jobs brought the shadow up to date and flagged the granules that changed it.
   const DeltaSaveSlot& saved = m_slots[slot];
   const u8* gpu = GPUWrittenBitmap::Get().entries;
-  u32 crc = Common::StartCRC32();
+  // The changed granules' (page, bytes) stream, to crc32 in blocks (GitHub issue #14).
+  BatchedChangeCRC change_crc;
   u8 scratch[ROLLBACK_PAGE_SIZE];
   m_parts.changed.clear();
   for (const auto& [delta, first_page, changed] :
@@ -1160,10 +1164,10 @@ void RollbackManager::UpdateShadowAfterSave(int slot)
           m_parts.changed.back()[2] = 2;
         continue;
       }
-      crc = Common::UpdateCRC32(crc, reinterpret_cast<const u8*>(&page), sizeof(page));
-      crc = Common::UpdateCRC32(crc, counted, ROLLBACK_PAGE_SIZE);
+      change_crc.Feed(page, counted);
     }
   }
+  const u32 crc = change_crc.Finish();
   m_last_change_crc = crc ? crc : 1;
 }
 
@@ -1638,11 +1642,22 @@ bool RollbackManager::LoadFrame(Core::System& system, int frames_back)
                 u32 changed = 0;
                 for (u32 w = 0; w < ROLLBACK_PAGE_SIZE / 4; ++w)
                 {
-                  if (std::memcmp(dst + w * 4, src + w * 4, 4) != 0)
+                  u32 live, saved;
+                  std::memcpy(&live, dst + w * 4, sizeof(live));
+                  std::memcpy(&saved, src + w * 4, sizeof(saved));
+                  if (live != saved)
                     changed |= 1u << w;
                 }
                 restore_changed[n] = static_cast<u16>(changed);
-                savestateMemcpy(dst, src, ROLLBACK_PAGE_SIZE, dst_phys, *sorted_exclude_regions);
+                // A granule clear of every exclusion is copied whole: savestateMemcpy walks the
+                // exclusions for each byte range (GitHub issue #14).
+                bool excluded = false;
+                for (const MemoryRegion& r : *sorted_exclude_regions)
+                  excluded |= dst_phys < r.phys_end && dst_phys + ROLLBACK_PAGE_SIZE > r.phys_start;
+                if (excluded)
+                  savestateMemcpy(dst, src, ROLLBACK_PAGE_SIZE, dst_phys, *sorted_exclude_regions);
+                else
+                  std::memcpy(dst, src, ROLLBACK_PAGE_SIZE);
                 if (shadow)
                   std::memcpy(shadow, dst, ROLLBACK_PAGE_SIZE);
               }
