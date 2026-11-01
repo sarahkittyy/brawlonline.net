@@ -255,6 +255,16 @@ void Uploader::ConnectionLost()
   // mm forgot this connection's slots: offer again once connected (mm treats it as a new offer).
   if (!m_game)
     return;
+  // A game that ended is not offered again: its end report is queued already, and nothing of it
+  // helps any more (the mm it went to handed it to a witness or cut it when this connection
+  // dropped). A restarted mm, or one that forgot it, took it for a new game and listed it again,
+  // played back at upload speed and then "Next game soon" for a game that never comes: after a
+  // deploy at 2026-11-01 02:18 UTC, 66 games, some ended two hours before, three with one player.
+  if (m_game->ended)
+  {
+    FinishGame();
+    return;
+  }
   m_game->offered = false;
   m_game->role = Role::Offering;
   m_game->slot = 0;
@@ -512,6 +522,12 @@ Outgoing Uploader::Service(Clock::time_point now, bool online, size_t unacked, c
 
   if (!online)
     return out;
+  // A game played through without a connection to mm is over before mm could list it.
+  if (!g.offered && g.ended)
+  {
+    FinishGame();
+    return out;
+  }
   if (!g.offered)
   {
     g.offered = true;

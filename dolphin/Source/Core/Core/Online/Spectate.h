@@ -143,6 +143,8 @@ public:
   bool OnMessage(const picojson::object& message);
   // What to send now. `unacked`: reliable bytes to mm not acknowledged yet.
   Outgoing Service(Clock::time_point now, bool online, size_t unacked, const Health& health);
+  // The connection to mm dropped: the game going on is offered again on the next one; one that
+  // ended is forgotten.
   void ConnectionLost();
 
   picojson::object Status() const;
