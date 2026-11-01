@@ -84,6 +84,10 @@ constexpr u32 TASK_SCHEDULER_PTR = 0x805A0068;
 constexpr u32 SERIAL_COUNTER_START = 0x10000;  // object serial numbers for the match (both peers)
 constexpr int MAX_ADVANCE = 16;
 constexpr u32 INPUT_SIZE = Addr::PAD_STRIDE;  // one gfPadStatus per player
+// Snapshots no rollback could load skipped in a row at most (NeedsSnapshot): a second's worth.
+// What Brawl writes is nearly the same every frame, so the snapshot after the longest run copies
+// about as much as any other (GitHub issue #15).
+constexpr int MAX_SKIPPED_SNAPSHOTS = 60;
 constexpr int CHECKSUM_HISTORY = 1 << 15;
 constexpr s64 PING_DISPLAY_INTERVAL = 60;  // frames (Slippi's SLIPPI_PING_DISPLAY_INTERVAL)
 // The session ends this many frames after the first frame showing game set (or a pause-screen
@@ -470,6 +474,7 @@ struct State
   bool defer_initial_save = false;
   bool initial_save_deferred = false;
   unsigned int* deferred_initial_checksum = nullptr;
+  int deferred_initial_frame = -1;
   // Start-of-match time sync (HardTimeSync): the last session frame it checked; the last frame
   // StartTelemetry logged.
   s64 last_hard_sync_frame = -1;
@@ -573,6 +578,14 @@ struct State
 
   // Stats.
   u64 rollbacks = 0, max_rollback = 0, frames_resimulated = 0, stall_polls = 0, desyncs = 0;
+  // Saves whose snapshot was skipped: no rollback could load them (NeedsSnapshot); the ones skipped
+  // since the last snapshot; whether the newest frame's was skipped; the skipped snapshots a load
+  // took after all (expected 0); loads that found no slot for their frame.
+  u64 snapshots_skipped = 0;
+  int snapshots_skipped_in_row = 0;
+  bool newest_snapshot_skipped = false;
+  u64 snapshots_taken_late = 0;
+  u64 loads_without_slot = 0;
   s64 last_desync_frame = -1;
   u64 region_mismatches = 0;
   std::vector<std::string> region_mismatch_log;
@@ -3793,6 +3806,11 @@ void ResetRunStats()
   s.last_start_log_frame = -1;
   s.next_ping_display_frame = PING_DISPLAY_INTERVAL;
   s.rollbacks = s.max_rollback = s.frames_resimulated = s.stall_polls = s.desyncs = 0;
+  s.snapshots_skipped = 0;
+  s.snapshots_skipped_in_row = 0;
+  s.newest_snapshot_skipped = false;
+  s.snapshots_taken_late = 0;
+  s.loads_without_slot = 0;
   s.net_window = s.net_total = {};
   s.ping_sum = s.jitter_sum = 0;
   s.ping_windows = 0;
@@ -4414,6 +4432,44 @@ u32 ChunkAddress(size_t index)
 
 void LogRngCalls(s64 frame, std::string_view why);
 
+// Whether a rollback could still load the end state of `frame` (the pass that just ended). A
+// rollback loads the frame before the first mispredicted one, and only frames after GekkoNet's
+// confirmed frame (every player's input in) can be mispredicted: once frame + 1 is confirmed, the
+// snapshot is never loaded and is skipped; the checksum is still taken. At the loop top, what
+// arrived since the last poll is taken in first (gekko_receive). A snapshot copies what was
+// written since the one before it, so at most MAX_SKIPPED_SNAPSHOTS go by in a row. Network
+// sessions only, and none once a player has left (a disconnected player's inputs may still be
+// rewritten by GekkoNet's claims). PPR_GPRB_SAVE_EVERY_FRAME=1 saves every frame,
+// PPR_GPRB_MAX_SKIPPED_SNAPSHOTS=n sets the cap (GitHub issue #15).
+bool NeedsSnapshot(s64 frame)
+{
+  static const bool every_frame = [] {
+    const char* e = std::getenv("PPR_GPRB_SAVE_EVERY_FRAME");
+    return e && *e == '1';
+  }();
+  static const int max_skipped = [] {
+    const char* e = std::getenv("PPR_GPRB_MAX_SKIPPED_SNAPSHOTS");
+    return e ? std::max(0, std::atoi(e)) : MAX_SKIPPED_SNAPSHOTS;
+  }();
+  if (every_frame || s.mode != Mode::Network || !s.gekko || !s.gekko_started || s.replay)
+    return true;
+  if (s.snapshots_skipped_in_row >= max_skipped)
+    return true;
+  std::lock_guard<std::recursive_timed_mutex> lk(s.mutex);
+  bool anyone_left = false;
+  ForEachPeer([&](int, const PeerView& p) {
+    anyone_left |= p.left || p.drop_requested || p.gekko_dropped;
+  });
+  if (anyone_left)
+    return true;
+  if (s.iteration == 0)
+    gekko_receive(s.gekko);
+  // A rollback the inputs in hand already call for loads a frame before this one: snapshot as
+  // before (ProcessGekkoUpdate would take it late otherwise). Inputs that arrive later cannot
+  // call for one that reaches this frame: frame + 1 and all before it are in.
+  return !(gekko_confirmed_frame(s.gekko) >= frame + 1 && gekko_rollback_frames(s.gekko) == 0);
+}
+
 void PerformQueuedSave(Core::System& system)
 {
   if (!s.queued_save.pending)
@@ -4463,7 +4519,18 @@ void PerformQueuedSave(Core::System& system)
     }
     return;
   }
-  Rollback::RollbackManager::Get().SaveFrame(system);
+  if (NeedsSnapshot(s.queued_save.frame))
+  {
+    Rollback::RollbackManager::Get().SaveFrame(system, s.queued_save.frame);
+    s.snapshots_skipped_in_row = 0;
+    s.newest_snapshot_skipped = false;
+  }
+  else
+  {
+    ++s.snapshots_skipped;
+    ++s.snapshots_skipped_in_row;
+    s.newest_snapshot_skipped = true;
+  }
   const Guest g(system.GetMemory());
   FrameRecord rec;
   const u32 crc = FrameChecksum(g, &rec);
@@ -4565,9 +4632,11 @@ void PerformQueuedSave(Core::System& system)
 }
 
 // GekkoNet's save of frame 0 (the session's first state): the first snapshot of the region set.
-void InitialSave(Core::System& system, unsigned int* checksum)
+void InitialSave(Core::System& system, unsigned int* checksum, int frame)
 {
-  Rollback::RollbackManager::Get().SaveFrame(system);
+  Rollback::RollbackManager::Get().SaveFrame(system, frame);
+  s.snapshots_skipped_in_row = 0;
+  s.newest_snapshot_skipped = false;
   FrameRecord rec;
   const u32 crc = FrameChecksum(GuestOf(system), &rec);
   if (checksum)
@@ -5380,6 +5449,7 @@ bool ProcessGekkoUpdate(Core::System& system, GekkoGameEvent** events, int count
   int load_before = -1;
   bool initial_save = false;
   unsigned int* initial_checksum = nullptr;
+  int initial_frame = -1;
   for (int i = 0; i < count; ++i)
   {
     auto& e = *events[i];
@@ -5397,6 +5467,7 @@ bool ProcessGekkoUpdate(Core::System& system, GekkoGameEvent** events, int count
       {
         initial_save = true;
         initial_checksum = e.data.save.checksum;
+        initial_frame = e.data.save.frame;
       }
       break;
     case GekkoLoadEvent:
@@ -5464,11 +5535,26 @@ bool ProcessGekkoUpdate(Core::System& system, GekkoGameEvent** events, int count
     // the peer's checksum of frame 1573 was ours of 1572).
     const int frames_back = static_cast<int>(s.current_frame - load_frame);
     auto& rbm = Rollback::RollbackManager::Get();
-    if (frames_back >= 1 && frames_back <= MAX_ROLLBACK_FRAMES && rbm.m_ring_count >= 2 &&
-        frames_back < rbm.m_ring_count)
+    if (frames_back >= 1 && s.newest_snapshot_skipped)
+    {
+      // The newest frame's snapshot was skipped (NeedsSnapshot) and a rollback came anyway: the
+      // machine still holds that frame's end (no guest code ran since the loop top), so take it
+      // now; a load restores only what the slots after its target hold. Not expected to happen.
+      rbm.SaveFrame(system, s.current_frame);
+      s.snapshots_skipped_in_row = 0;
+      s.newest_snapshot_skipped = false;
+      --s.snapshots_skipped;
+      ++s.snapshots_taken_late;
+      WARN_LOG_FMT(BRAWLBACK, "gprb: rollback to frame {} after frame {}'s snapshot was skipped",
+                   load_frame, s.current_frame);
+    }
+    // The slot that holds the end of load_frame: frames_back slots back while every frame is
+    // saved, fewer once frames no rollback could load were skipped (NeedsSnapshot).
+    const int slots_back = rbm.SlotsBackForTag(load_frame);
+    if (frames_back >= 1 && frames_back <= MAX_ROLLBACK_FRAMES && slots_back >= 1)
     {
       BeginBurst(system);
-      LoadForRollback(system, frames_back);
+      LoadForRollback(system, slots_back);
       ++s.rollbacks;
       s.max_rollback = std::max<u64>(s.max_rollback, static_cast<u64>(frames_back));
       s.iteration = 0;
@@ -5476,8 +5562,9 @@ bool ProcessGekkoUpdate(Core::System& system, GekkoGameEvent** events, int count
     }
     else if (frames_back != 0)
     {
-      WARN_LOG_FMT(BRAWLBACK, "gprb: cannot roll back {} frames (ring {})", frames_back,
-                   rbm.m_ring_count);
+      ++s.loads_without_slot;
+      WARN_LOG_FMT(BRAWLBACK, "gprb: cannot roll back {} frames to frame {} (ring {}, slot {})",
+                   frames_back, load_frame, rbm.m_ring_count, slots_back);
     }
   }
   if (initial_save && s.defer_initial_save)
@@ -5485,10 +5572,11 @@ bool ProcessGekkoUpdate(Core::System& system, GekkoGameEvent** events, int count
     // The countdown's handshake (PumpGekkoInCountdown): frame 0 is saved at the start barrier.
     s.initial_save_deferred = true;
     s.deferred_initial_checksum = initial_checksum;
+    s.deferred_initial_frame = initial_frame;
   }
   else if (initial_save)
   {
-    InitialSave(system, initial_checksum);
+    InitialSave(system, initial_checksum, initial_frame);
   }
   s.ops.adv_count = num_adv;
   if (num_adv == 0)
@@ -8248,6 +8336,9 @@ picojson::value Status()
   o["rollbacks"] = picojson::value(static_cast<double>(s.rollbacks));
   o["max_rollback_frames"] = picojson::value(static_cast<double>(s.max_rollback));
   o["frames_resimulated"] = picojson::value(static_cast<double>(s.frames_resimulated));
+  o["snapshots_skipped"] = picojson::value(static_cast<double>(s.snapshots_skipped));
+  o["snapshots_taken_late"] = picojson::value(static_cast<double>(s.snapshots_taken_late));
+  o["loads_without_slot"] = picojson::value(static_cast<double>(s.loads_without_slot));
   o["stall_polls"] = picojson::value(static_cast<double>(s.stall_polls));
   o["desyncs_detected"] = picojson::value(static_cast<double>(s.desyncs));
   o["last_desync_frame"] = picojson::value(static_cast<double>(s.last_desync_frame));
@@ -9348,7 +9439,7 @@ bool OnLoopTop(const Core::CPUThreadGuard& guard)
       if (s.initial_save_deferred)
       {
         s.initial_save_deferred = false;
-        InitialSave(system, s.deferred_initial_checksum);
+        InitialSave(system, s.deferred_initial_checksum, s.deferred_initial_frame);
         s.deferred_initial_checksum = nullptr;
       }
       s.at_start = true;

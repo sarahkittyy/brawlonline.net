@@ -939,7 +939,19 @@ u64 RollbackManager::WaitForEviction(bool* was_pending)
                               .count());
 }
 
-void RollbackManager::SaveFrame(Core::System& system)
+int RollbackManager::SlotsBackForTag(s64 tag) const
+{
+  if (tag == NO_TAG)
+    return -1;
+  for (int back = 1; back < m_ring_count; ++back)
+  {
+    if (m_slot_tags[Wrap(m_ring_next - 1 - back, NUM_SAVE_SLOTS)] == tag)
+      return back;
+  }
+  return -1;
+}
+
+void RollbackManager::SaveFrame(Core::System& system, s64 tag)
 {
   ROLLBACK_ZONE();
   if (!m_initialized)
@@ -969,6 +981,7 @@ void RollbackManager::SaveFrame(Core::System& system)
   }
 
   const int slot = m_ring_next;
+  m_slot_tags[slot] = tag;
   const auto t_base = std::chrono::steady_clock::now();
   u64 evict_us = 0;
 

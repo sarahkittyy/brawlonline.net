@@ -128,6 +128,13 @@ namespace Gekko {
         void SessionIntegrityCheck();
 
 	private:
+		// SessionIntegrityCheck's list of the checksums to compare: a frame, an index into remotes.
+		struct HealthMatch {
+			Frame frame;
+			u32 remote;
+		};
+		std::vector<HealthMatch> _health_matches;
+
 		bool _started;
 
 		Frame _last_saved_frame;

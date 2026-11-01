@@ -50,8 +50,15 @@ public:
   void Init(Core::System& system);
   void Shutdown();
 
-  void SaveFrame(Core::System& system);
+  // `tag` names the saved state for SlotsBackForTag (gameplay sessions: the GekkoNet frame whose
+  // end it holds); NO_TAG for callers that load by count.
+  static constexpr s64 NO_TAG = INT64_MIN;
+  void SaveFrame(Core::System& system, s64 tag = NO_TAG);
   bool LoadFrame(Core::System& system, int frames_back = 1);
+  // The frames_back LoadFrame takes to load the newest slot saved with `tag`, or -1 when no slot
+  // a load can reach holds it (the newest slot itself is not a load target). Equals the frame
+  // distance while every frame is saved; fewer when a caller skips frames it can never load.
+  int SlotsBackForTag(s64 tag) const;
 
   // CRC32 of the guest RAM the last SaveFrame found changed: of the granules written since the
   // save before it, those whose bytes differ from that save's (indices and contents, MEM1 then
@@ -249,6 +256,7 @@ public:
 
   int m_ring_next = 0;  // index of the slot that will be written by the next savestate
   int m_ring_count = 0;
+  std::array<s64, NUM_SAVE_SLOTS> m_slot_tags{};  // SaveFrame's tag per slot
 
   struct RollbackSnapshot
   {
