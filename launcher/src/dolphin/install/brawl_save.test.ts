@@ -122,6 +122,39 @@ describe("ensureBrawlSave", () => {
     expect(await readDir(brawlSaveDir(other))).toEqual({});
   });
 
+  it("with brokenOnly, replaces only a save without its banner (bug report #212)", async () => {
+    // Play opening Dolphin without a game: what a refused Other Games join left (every file of
+    // P+'s save but banner.bin) is replaced; no save, and another build's banner, stay as they are.
+    const template = path.join(tmp, "NetplaySave");
+    await makeTemplate(template, { "advsv0.bin": "template", "banner.bin": banner("template") });
+
+    const broken = path.join(tmp, "broken");
+    await fs.promises.mkdir(brawlSaveDir(broken), { recursive: true });
+    for (const name of ["advsv0.bin", "autosv0.bin", "collect.vff", "net0.bin"]) {
+      await fs.promises.writeFile(path.join(brawlSaveDir(broken), name), "left");
+    }
+    const fixed = await ensureBrawlSave({ nandRoot: broken, templateRoots: [template], brokenOnly: true });
+    expect(fixed).toMatchObject({
+      action: "seeded",
+      removed: ["advsv0.bin", "autosv0.bin", "collect.vff", "net0.bin"],
+    });
+    expect(await readDir(brawlSaveDir(broken))).toEqual({ "advsv0.bin": "template", "banner.bin": banner("template") });
+
+    const empty = path.join(tmp, "empty");
+    expect((await ensureBrawlSave({ nandRoot: empty, templateRoots: [template], brokenOnly: true })).action).toBe(
+      "present",
+    );
+    expect(fs.existsSync(brawlSaveDir(empty))).toBe(false);
+
+    const other = path.join(tmp, "other");
+    await fs.promises.mkdir(brawlSaveDir(other), { recursive: true });
+    await fs.promises.writeFile(path.join(brawlSaveDir(other), "banner.bin"), "8".repeat(61600));
+    expect((await ensureBrawlSave({ nandRoot: other, templateRoots: [template], brokenOnly: true })).action).toBe(
+      "present",
+    );
+    expect(await readDir(brawlSaveDir(other))).toEqual({ "banner.bin": "8".repeat(61600) });
+  });
+
   it("keeps a partial save as it is (the game decides what to do with it)", async () => {
     const template = path.join(tmp, "NetplaySave");
     await makeTemplate(template, { "advsv0.bin": "template" });

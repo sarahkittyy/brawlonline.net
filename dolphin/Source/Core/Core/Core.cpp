@@ -6,11 +6,14 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
+#include <cstdlib>
 #include <functional>
 #include <future>
 #include <mutex>
 #include <optional>
 #include <queue>
+#include <thread>
 #include <utility>
 #include <variant>
 
@@ -689,6 +692,14 @@ static void EmuThread(Core::System& system, std::unique_ptr<BootParameters> boot
   std::optional<DiscIO::Riivolution::SavegameRedirect> savegame_redirect = std::nullopt;
   if (system.IsWii())
     savegame_redirect = DiscIO::Riivolution::ExtractSavegameRedirect(boot->riivolution_patches);
+
+  // Tests (PPR_TEST_BOOT_DELAY_MS=<ms>): the game boots that much later, as on a slow PC, where mm
+  // answers a room join before the game's saves are set up (bug report #212).
+  if (const char* delay = std::getenv("PPR_TEST_BOOT_DELAY_MS"); delay && *delay)
+  {
+    WARN_LOG_FMT(CORE, "PPR_TEST_BOOT_DELAY_MS: {} ms", delay);
+    std::this_thread::sleep_for(std::chrono::milliseconds(std::atoi(delay)));
+  }
 
   {
     ASSERT(IsCPUThread());
