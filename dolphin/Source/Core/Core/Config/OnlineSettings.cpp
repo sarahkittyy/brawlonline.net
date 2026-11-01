@@ -57,6 +57,7 @@ const Info<bool> ONLINE_STREAM_GAMES{{System::Main, "Online", "StreamGames"}, tr
 const Info<std::string> ONLINE_PPLUS_RELEASE{{System::Main, "Online", "PPlusRelease"}, ""};
 const Info<bool> ONLINE_REPLAY_MONTHLY_FOLDERS{{System::Main, "Online", "ReplayMonthlyFolders"},
                                               true};
+const Info<bool> ONLINE_SEEK_BAR_COLLAPSED{{System::Main, "Online", "SeekBarCollapsed"}, false};
 
 std::string GetMatchmakingHost()
 {
