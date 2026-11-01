@@ -672,3 +672,149 @@
   gap: 8px;
   margin-top: 8px;
 }
+
+/* A public room's "Joins with" (join_with_menu.tsx): which of the player's games joins it, and the
+   menu to pick another. */
+.joinsWith {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  color: var(--text-dim);
+  font-size: 12px;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.joinsWithName {
+  color: var(--text-secondary);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.joinsWithSelect {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  max-width: 100%;
+  padding: 1px 2px 1px 8px;
+  border: 1px solid rgb(255 255 255 / 18%);
+  border-radius: 6px;
+  background-color: rgb(255 255 255 / 4%);
+  color: var(--text-primary);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+  transition: border-color 0.15s ease-in-out;
+}
+
+.joinsWithSelect:hover,
+.joinsWithSelect:focus-visible {
+  border-color: rgb(255 255 255 / 40%);
+  outline: none;
+}
+
+/* Only a guess: Join asks first. */
+.joinsWithUnsure {
+  border-style: dashed;
+}
+
+.joinsWithCaret {
+  font-size: 18px !important;
+  color: var(--text-secondary);
+}
+
+.joinWithPaper {
+  width: 440px;
+  max-width: calc(100vw - 32px);
+  border: 1px solid rgb(255 255 255 / 14%);
+}
+
+.joinWithHead {
+  padding: 6px 14px 4px;
+  color: var(--text-dim);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  list-style: none;
+}
+
+.joinWithItem {
+  display: grid !important;
+  grid-template-columns: 20px minmax(0, 1fr) auto;
+  align-items: start !important;
+  gap: 8px;
+  white-space: normal !important;
+}
+
+.joinWithTick {
+  display: flex;
+  padding-top: 1px;
+  color: var(--accent-primary-bright);
+}
+
+.joinWithText {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.joinWithName {
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.joinWithBadge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0 6px;
+  border-radius: 9px;
+  background-color: rgb(116 194 122 / 18%);
+  color: #8fd394;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  vertical-align: 1px;
+}
+
+.joinWithBadgeGrey {
+  background-color: rgb(255 255 255 / 8%);
+  color: var(--text-secondary);
+}
+
+.joinWithWhat {
+  margin-top: 2px;
+  color: var(--text-dim);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.joinWithSize {
+  padding-top: 1px;
+  color: var(--text-secondary);
+  font-family: monospace;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.joinWithSizeBig {
+  color: #f2b33d;
+}
+
+.joinWithDivider {
+  margin: 4px 0 !important;
+}
+
+.joinWithRemember {
+  padding: 0 14px 2px;
+  list-style: none;
+}
+
+.joinWithRememberLabel {
+  color: var(--text-secondary);
+  font-size: 12px;
+}

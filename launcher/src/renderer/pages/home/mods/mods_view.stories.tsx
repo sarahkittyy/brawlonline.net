@@ -1,4 +1,5 @@
 import type { ModBuild, ModRoomStatus, ModsState } from "@dolphin/mods/types";
+import { useState } from "react";
 
 import type { ModsViewProps } from "./mods_view";
 import { ModsView } from "./mods_view";
@@ -312,3 +313,72 @@ export const SdCardDownloading = () => (
     }}
   />
 );
+
+/** "Joins with" (Sarah's board, 2026-11-01): a REX room for a player with Cobalt, REX and Brawl
+ * Online's P+ on the same disc, none of them the room's own build. Join asks which game first;
+ * the menu's sizes come a second later; a pick is kept for the room's mod. */
+const JOIN_CARD = "e78976e6b93503c3a312478345d15eea6ce2a52eb4e0ec516306cafaac322a1c";
+const joinGame = (id: string, name: string, extra: Partial<ModBuild> = {}): ModBuild => ({
+  ...rexBuild,
+  id,
+  name,
+  hash: id.padEnd(64, "0"),
+  parts: { disc: DISC, launcher: id.padEnd(64, "1"), sd: true, sdCard: id.padEnd(64, "2") },
+  ...extra,
+});
+const joinGames = [
+  joinGame("pplus", "Project+ v3.2.1", { builtIn: true }),
+  joinGame("cobalt", "Cobalt 1.34 Test"),
+  joinGame("rex", "REX Release 0½ Hotfix 1"),
+];
+
+export const JoinsWith = () => {
+  const [roomGames, setRoomGames] = useState<Record<string, string>>({});
+  return (
+    <Frame
+      state={{ builds: joinGames, running: false, status: null, roomGames }}
+      onSetRoomGame={(hash, id) => setRoomGames((g) => ({ ...g, [hash]: id }))}
+      checkRoomCards={async (_root, ids) => {
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+        return Object.fromEntries(
+          ids.map((id) => [
+            id,
+            {
+              kind: "differs" as const,
+              bytes: id === "rex" ? 15.3 * 1024 * 1024 : 7.8 * 1024 ** 3,
+              files: id === "rex" ? 58 : 12000,
+              names: [],
+              filesKnown: true,
+            },
+          ]),
+        );
+      }}
+      publicRooms={{
+        kind: "ready",
+        rooms: [
+          {
+            code: "NATH",
+            build: {
+              hash: "a".repeat(64),
+              name: "REX Release 0½ Hotfix 1",
+              disc: DISC,
+              discLabel: "RSBE01",
+              sd: JOIN_CARD,
+            },
+            hostName: "nath06",
+            players: 1,
+            open: 4,
+            name: "REX",
+          },
+          {
+            code: "SDSD",
+            build: { hash: "rex".padEnd(64, "0"), name: "REX", disc: DISC, discLabel: "RSBE01", sd: JOIN_CARD },
+            hostName: "Noctiko",
+            players: 2,
+            open: 4,
+          },
+        ],
+      }}
+    />
+  );
+};

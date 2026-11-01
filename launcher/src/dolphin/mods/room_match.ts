@@ -32,6 +32,13 @@ export type RoomMatch = {
   /** The room plays the disc alone, and the player has it only in `build`, with a launcher or an
    * SD card: joined with that disc alone (the launcher adds it as its own game, `ModsManager`). */
   discOnly?: boolean;
+  /** The player's games that can join the room, `build` first: every game on its disc with a
+   * card as the room's (the room list's "Joins with" menu; Sarah's board, 2026-11-01: "we
+   * should also probably have an option to pick which brawl mod to join with anyway"). */
+  choices: ModBuild[];
+  /** `build` is surely the room's game: the player picked it, or it is the room's mod (the same
+   * launcher) or has the room's card, or it is the only one. Otherwise Join asks first. */
+  sure: boolean;
 };
 
 /** The build hash of a disc played alone, no launcher and no SD card (`combineBuildHash`), by the
@@ -40,10 +47,16 @@ export type DiscAloneHash = (disc: string) => string | undefined;
 
 const hasCard = (sd: string | undefined | null) => !!sd;
 
-/** The player's game for a room: the exact build first, then the same disc with the same card,
- * then the same disc with a card that differs, then the same disc at all, then the same game
- * (another revision, another dump: the one to fix). */
-export function matchRoom(room: ModRoomBuild, builds: ModBuild[], discAlone?: DiscAloneHash): RoomMatch {
+/** The player's game for a room: the one they picked for the room's mod (`chosenId`), else the
+ * same disc with the room's card, then the exact build, then the same disc with a card that
+ * differs, then the same disc at all, then the same game (another revision, another dump: the
+ * one to fix). */
+export function matchRoom(
+  room: ModRoomBuild,
+  builds: ModBuild[],
+  discAlone?: DiscAloneHash,
+  chosenId?: string | null,
+): RoomMatch {
   const exact = builds.find((b) => b.hash === room.hash) ?? null;
   if (!room.disc) {
     return {
@@ -52,6 +65,8 @@ export function matchRoom(room: ModRoomBuild, builds: ModBuild[], discAlone?: Di
       disc: exact ? "same" : "wrong",
       sd: null,
       hasParts: false,
+      choices: exact ? [exact] : [],
+      sure: true,
     };
   }
   const roomCard = hasCard(room.sd);
@@ -70,21 +85,39 @@ export function matchRoom(room: ModRoomBuild, builds: ModBuild[], discAlone?: Di
     sameDisc.find((b) => roomCard === !!b.sdPath) ??
     sameDisc[0] ??
     null;
+  const sdOf = (b: ModBuild): PartMatch | null => {
+    const card = !!b.sdPath;
+    if (roomCard && card) {
+      return cardOf(b) === room.sd ? "same" : "differs";
+    }
+    return roomCard !== card ? "wrong" : null;
+  };
+  const chosen = chosenId ? sameDisc.find((b) => b.id === chosenId && sdOf(b) !== "wrong") : undefined;
   // A room of the plain disc, and the player's games on it all have a card or a launcher (Brawl
   // Online's P+ is on every player's Brawl disc): its disc alone plays the room, no card to turn
   // off by hand (Sarah's board, 2026-10-30: "if there's no sd card, can't we just turn it off?").
-  if (best && !roomCard && best.hash !== room.hash && discAlone?.(room.disc) === room.hash) {
-    return { build: best, joinable: true, disc: "same", sd: null, hasParts: true, discOnly: true };
+  if (!chosen && best && !roomCard && best.hash !== room.hash && discAlone?.(room.disc) === room.hash) {
+    return {
+      build: best,
+      joinable: true,
+      disc: "same",
+      sd: null,
+      hasParts: true,
+      discOnly: true,
+      choices: [],
+      sure: true,
+    };
   }
-  if (best) {
-    const card = !!best.sdPath;
-    let sd: PartMatch | null = null;
-    if (roomCard && card) {
-      sd = cardOf(best) === room.sd ? "same" : "differs";
-    } else if (roomCard !== card) {
-      sd = "wrong";
-    }
-    return { build: best, joinable: sd !== "wrong", disc: "same", sd, hasParts: true };
+  const pick = chosen ?? best;
+  if (pick) {
+    const sd = sdOf(pick);
+    // The others that can join it: the room's mod, then its card, then the rest (P+ last).
+    const rank = (b: ModBuild) => (b.hash === room.hash ? 0 : roomCard && cardOf(b) === room.sd ? 1 : 2);
+    const others = sameDisc.filter((b) => b !== pick && sdOf(b) !== "wrong");
+    others.sort((a, b) => rank(a) - rank(b));
+    const choices = sd === "wrong" ? [] : [pick, ...others];
+    const sure = !!chosen || pick.hash === room.hash || (roomCard && cardOf(pick) === room.sd) || choices.length <= 1;
+    return { build: pick, joinable: sd !== "wrong", disc: "same", sd, hasParts: true, choices, sure };
   }
   // No game on that disc: the closest one is the one to fix (the exact build, then the same game
   // ID with an SD card as the room's: a REX room shows the player's REX, not their plain Brawl
@@ -101,7 +134,7 @@ export function matchRoom(room: ModRoomBuild, builds: ModBuild[], discAlone?: Di
       sd = "wrong";
     }
   }
-  return { build: near, joinable: false, disc: "wrong", sd, hasParts: true };
+  return { build: near, joinable: false, disc: "wrong", sd, hasParts: true, choices: [], sure: true };
 }
 
 /** "SMNE01 Rev 2": what a disc is, as rooms name it. NTSC-U Brawl's Rev 1 and Rev 2 are one disc

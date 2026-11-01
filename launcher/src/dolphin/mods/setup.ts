@@ -6,6 +6,7 @@ import electronLog from "electron-log";
 import type { DolphinManager } from "../manager";
 import {
   ipc_modsAddBuild,
+  ipc_modsCheckRoomCards,
   ipc_modsCodeLists,
   ipc_modsConfigureControllers,
   ipc_modsDatabaseCodes,
@@ -24,6 +25,7 @@ import {
   ipc_modsSaveInfo,
   ipc_modsSetCodes,
   ipc_modsSetController,
+  ipc_modsSetRoomGame,
   ipc_modsUpdateBuild,
 } from "./ipc";
 import { ModsManager } from "./mods_manager";
@@ -106,6 +108,11 @@ export default function setupModsIpc({
   });
   ipc_modsJoin.main!.handle(async (options) => await mods.join(options));
   ipc_modsJoinByCode.main!.handle(async (options) => await mods.joinByCode(options));
+  ipc_modsSetRoomGame.main!.handle(async ({ roomHash, buildId }) => {
+    await mods.setRoomGame(roomHash, buildId);
+    return { success: true };
+  });
+  ipc_modsCheckRoomCards.main!.handle(async (options) => ({ checks: await mods.checkRoomCards(options) }));
   ipc_modsRequest.main!.handle(async ({ request }) => {
     await mods.request(request);
     return { success: true };

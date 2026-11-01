@@ -144,6 +144,24 @@ export const ModsMessages = {
   changeGame: () => "Change it",
   ok: () => "OK",
   joinPublicTooltip: (build: string) => `Start Dolphin with ${build} and join this room.`,
+  // The room list's "Joins with" (Sarah's board, 2026-11-01): which of the player's games joins a
+  // room, and a menu to pick another.
+  joinsWith: () => "Joins with",
+  joinsWithTooltip: () => "Pick which of your games joins this room.",
+  joinWithTitle: () => "Join this room with",
+  joinWithPickTooltip: () => "More than one of your games can play this room: pick the one to join with.",
+  sameModBadge: () => "SAME MOD",
+  builtInBadge: () => "BUILT IN",
+  joinWithSameMod: () => "The room's mod.",
+  joinWithOtherMod: () => "Another launcher than the room's.",
+  joinWithCardSame: () => "Same SD card as the room.",
+  joinWithCardSmall: (files: number) =>
+    `${files} ${files === 1 ? "file" : "files"} of the SD card differ: downloaded for this room only.`,
+  joinWithCardBig: () => "Most of the room's SD card to download: probably another mod or release.",
+  joinWithCardUnknown: () => "The SD card differs: its size shows when you join.",
+  joinWithChecking: () => "Checking the SD card…",
+  joinWithSizeSame: () => "same card",
+  joinWithRemember: () => "Use my pick for every room of this mod",
 
   // A room's parts (docs/design/brawl-mods.md §6.5): the disc must match, the SD card is synced.
   discPart: (gameId: string | undefined) => (gameId?.startsWith("RSB") ? "Brawl" : "Disc"),

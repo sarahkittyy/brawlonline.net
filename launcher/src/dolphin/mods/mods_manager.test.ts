@@ -294,6 +294,52 @@ describe("joinByCode", () => {
     expect(result).toMatchObject({ outcome: "no-game", closest: { buildId: "dump", part: "disc" } });
   });
 
+  it("joins with the game the player picked for the room's mod (Joins with)", async () => {
+    // Sarah's board, 2026-11-01: two mods on the room's disc, neither the room's own.
+    const mod = async (id: string) => {
+      const launcherPath = path.join(tmp, id, "launcher.elf");
+      const sdPath = path.join(tmp, id, "sd.raw");
+      await mkdir(path.join(tmp, id), { recursive: true });
+      await writeFile(launcherPath, id);
+      await writeFile(sdPath, id);
+      return unchecked(id, { launcherPath, sdPath });
+    };
+    const room = brawlRoom({ name: "REX", sd: "other card" });
+    const m = manager([await mod("cobalt"), await mod("rex")], undefined, room);
+    const join = vi.spyOn(m.mods, "join").mockResolvedValue({ outcome: "joining" });
+    await m.mods.joinByCode({ uid: "u", code: "BKSD" });
+    expect(join).toHaveBeenLastCalledWith({ buildId: "cobalt", code: "BKSD", uid: "u" });
+
+    await m.mods.setRoomGame(room.build.hash, "rex");
+    expect(m.mods.getState().roomGames).toEqual({ [room.build.hash]: "rex" });
+    await m.mods.joinByCode({ uid: "u", code: "BKSD" });
+    expect(join).toHaveBeenLastCalledWith({ buildId: "rex", code: "BKSD", uid: "u" });
+
+    await m.mods.setRoomGame(room.build.hash, null);
+    expect(m.mods.getState().roomGames).toEqual({});
+    await expect(m.mods.setRoomGame(room.build.hash, "gone")).rejects.toThrow();
+  });
+
+  it("says what each game's card would download for the Joins with menu", async () => {
+    const sdPath = path.join(tmp, "card.raw");
+    await writeFile(sdPath, "card");
+    const withCard = await oldBuild("rex", {
+      sdPath,
+      parts: { disc: OLD_DISC, launcher: null, sd: true, sdCard: "card" },
+    });
+    const plain = await oldBuild("plain");
+    const m = manager([withCard, plain]);
+    // The room's card, and no card: nothing to download.
+    expect(await m.mods.checkRoomCards({ uid: "u", roomRoot: "card", buildIds: ["rex", "plain", "gone"] })).toEqual({
+      rex: { kind: "same" },
+      plain: { kind: "same" },
+    });
+    // Another card whose listing the server does not have: asked without a size.
+    expect(await m.mods.checkRoomCards({ uid: "u", roomRoot: "other", buildIds: ["rex"] })).toEqual({
+      rex: { kind: "unknown" },
+    });
+  });
+
   it("says there is no game when the player has none of the room's, without reading other games", async () => {
     const { mods } = manager([await unchecked("mkwii", { gameId: "RMCE01" })], undefined, brawlRoom());
     const result = await mods.joinByCode({ uid: "u", code: "BKSD" });

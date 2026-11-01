@@ -1,6 +1,7 @@
 /* eslint-disable import/no-default-export */
 import {
   ipc_modsAddBuild,
+  ipc_modsCheckRoomCards,
   ipc_modsCodeLists,
   ipc_modsConfigureControllers,
   ipc_modsDatabaseCodes,
@@ -19,6 +20,7 @@ import {
   ipc_modsSaveInfo,
   ipc_modsSetCodes,
   ipc_modsSetController,
+  ipc_modsSetRoomGame,
   ipc_modsUpdateBuild,
 } from "./ipc";
 import type { ModsService } from "./types";
@@ -56,6 +58,13 @@ const modsApi: ModsService = {
   async joinByCode(options) {
     const { result } = await ipc_modsJoinByCode.renderer!.trigger(options);
     return result;
+  },
+  async setRoomGame(roomHash, buildId) {
+    await ipc_modsSetRoomGame.renderer!.trigger({ roomHash, buildId });
+  },
+  async checkRoomCards(options) {
+    const { result } = await ipc_modsCheckRoomCards.renderer!.trigger(options);
+    return result.checks;
   },
   async request(request) {
     await ipc_modsRequest.renderer!.trigger({ request });

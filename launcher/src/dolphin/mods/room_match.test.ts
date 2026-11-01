@@ -70,6 +70,42 @@ describe("matchRoom", () => {
     expect(matchRoom({ ...room, sd: OTHER_CARD }, [rex, pplus]).build?.id).toBe("pplus");
   });
 
+  it("lists every game that can join, the pick first, and is sure only of the room's own", () => {
+    // Sarah's board, 2026-11-01: a REX room offered with P+ ("its right in front of you").
+    const pplus = build("pplus", {
+      builtIn: true,
+      parts: { disc: DISC, launcher: "l".repeat(64), sd: true, sdCard: OTHER_CARD },
+    });
+    const cobalt = build("cobalt", {
+      parts: { disc: DISC, launcher: "c".repeat(64), sd: true, sdCard: "8".repeat(64) },
+    });
+    const rex = build("rex", { parts: { disc: DISC, launcher: "r".repeat(64), sd: true, sdCard: "7".repeat(64) } });
+    const vanilla = build("vanilla", { sdPath: null, parts: { disc: DISC, launcher: null, sd: false, sdCard: null } });
+    // None is the room's mod nor has its card: a guess, and Join asks.
+    const guess = matchRoom(room, [pplus, cobalt, rex, vanilla]);
+    expect(guess.build?.id).toBe("cobalt");
+    expect(guess.sure).toBe(false);
+    // Without a card, vanilla cannot join a room with one; P+ comes last.
+    expect(guess.choices.map((b) => b.id)).toEqual(["cobalt", "rex", "pplus"]);
+    // The player's pick plays it, and is sure.
+    const picked = matchRoom(room, [pplus, cobalt, rex, vanilla], undefined, "rex");
+    expect(picked).toMatchObject({ build: { id: "rex" }, joinable: true, sd: "differs", sure: true });
+    expect(picked.choices.map((b) => b.id)).toEqual(["rex", "cobalt", "pplus"]);
+    // The room's own mod (its hash) is sure, and listed before the rest when another is picked.
+    const own = { ...rex, hash: room.hash };
+    expect(matchRoom(room, [pplus, cobalt, own])).toMatchObject({ build: { id: "rex" }, sure: true });
+    expect(matchRoom(room, [pplus, cobalt, own], undefined, "pplus").choices.map((b) => b.id)).toEqual([
+      "pplus",
+      "rex",
+      "cobalt",
+    ]);
+    // A pick that cannot join (no card), or is gone, leaves the launcher's own pick.
+    expect(matchRoom(room, [cobalt, rex, vanilla], undefined, "vanilla").build?.id).toBe("cobalt");
+    expect(matchRoom(room, [cobalt, rex], undefined, "gone").build?.id).toBe("cobalt");
+    // One game: nothing to ask.
+    expect(matchRoom(room, [rex])).toMatchObject({ sure: true, choices: [rex] });
+  });
+
   it("does not join with another disc, and names the game to fix", () => {
     const rev2 = build("rev2", { revision: 2, parts: { disc: OTHER_DISC, launcher: null, sd: true, sdCard: CARD } });
     const m = matchRoom(room, [rev2]);

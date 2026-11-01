@@ -12,12 +12,14 @@ import type {
   ModSaveImportResult,
   ModSaveInfo,
   ModsController,
+  ModSdCardCheck,
   ModsEvent,
   ModsHostOptions,
   ModsJoinByCodeOptions,
   ModsJoinByCodeResult,
   ModsJoinOptions,
   ModsJoinResult,
+  ModsRoomCardsOptions,
   ModsState,
 } from "./types";
 
@@ -49,6 +51,18 @@ export const ipc_modsJoinByCode = makeEndpoint.main(
   "mods_joinByCode",
   <ModsJoinByCodeOptions>_,
   <ModsJoinByCodeResult>_,
+);
+
+export const ipc_modsSetRoomGame = makeEndpoint.main(
+  "mods_setRoomGame",
+  <{ roomHash: string; buildId: string | null }>_,
+  <SuccessPayload>_,
+);
+
+export const ipc_modsCheckRoomCards = makeEndpoint.main(
+  "mods_checkRoomCards",
+  <ModsRoomCardsOptions>_,
+  <{ checks: Record<string, ModSdCardCheck> }>_,
 );
 
 export const ipc_modsRequest = makeEndpoint.main("mods_request", <{ request: ModRoomRequest }>_, <SuccessPayload>_);
