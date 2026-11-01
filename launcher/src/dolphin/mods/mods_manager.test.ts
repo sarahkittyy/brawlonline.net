@@ -70,6 +70,8 @@ function manager(
   settings: Record<string, unknown> = { modBuilds: builds },
   room: PublicModRoom | null = null,
   codeDatabase: (gameId: string) => Promise<string | null> = async () => null,
+  /** An SD card's root: every card the same unless a test tells them apart. */
+  sdHash: (toolPath: string, sdPath: string) => Promise<string> = async () => "card",
 ): {
   mods: ModsManager;
   builds: () => ModBuild[];
@@ -105,7 +107,7 @@ function manager(
     dolphin,
     async () => "DolphinTool",
     async () => room,
-    async () => "card",
+    sdHash,
     undefined,
     // The player's own Dolphin: never this machine's.
     () => [path.join(tmp, "own Dolphin")],
@@ -409,6 +411,31 @@ describe("Brawl Online's own Project+", () => {
     // The player's copy is the duplicate: it goes, P+ stays.
     await expect(m.mods.hashBuild(copy.id)).rejects.toThrow(/already have this game: Project\+ v3.2.1/);
     expect(m.builds().map((b) => b.id)).toEqual([pplus.id]);
+  });
+
+  it("keeps a copy of P+ the player added from elsewhere with another SD card", async () => {
+    // Sarah's board, 2026-11-01: "this thing that i didnt put here is eating my new folder
+    // configs". The build hash leaves the card out; rooms tell games by it.
+    const iso = await installPPlus();
+    const elsewhere = path.join(tmp, "P+ Dolphin", "User");
+    await mkdir(path.join(elsewhere, "Launcher"), { recursive: true });
+    await mkdir(path.join(elsewhere, "Wii"), { recursive: true });
+    await writeFile(path.join(elsewhere, "Launcher", "Project+ Netplay Launcher.dol"), "launcher");
+    await writeFile(path.join(elsewhere, "Wii", "sd.raw"), "my music");
+    const m = manager([], { modBuilds: [], settings: { isoPath: iso } }, null, undefined, (_tool, sd) =>
+      readFile(sd, "utf8"),
+    );
+    const [pplus] = await refreshed(m);
+    const copy = await m.mods.addBuild({
+      name: "My P+",
+      discPath: iso,
+      launcherPath: path.join(elsewhere, "Launcher", "Project+ Netplay Launcher.dol"),
+      sdPath: path.join(elsewhere, "Wii", "sd.raw"),
+    });
+    const hashed = await m.mods.hashBuild(copy.id);
+    expect(hashed.hash).toBe(pplus.hash);
+    expect(hashed.parts?.sdCard).toBe("my music");
+    expect(m.builds().map((b) => b.name)).toEqual(["Project+ v3.2.1", "My P+"]);
   });
 
   it("cannot be removed or have its files changed", async () => {

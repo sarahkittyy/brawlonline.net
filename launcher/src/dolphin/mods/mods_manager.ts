@@ -603,6 +603,7 @@ export class ModsManager {
    * Host or Join, as a game whose files changed always is.
    */
   rehashChanged(): Promise<void> {
+    this.logGames();
     if (this.settings.get().modsHashVersion === BUILD_HASH_VERSION) {
       return this.rehashing;
     }
@@ -617,6 +618,24 @@ export class ModsManager {
       await this.settings.updateSetting("modsHashVersion", BUILD_HASH_VERSION);
     })().catch((err) => log.warn(`hashing the games again: ${err}`));
     return this.rehashing;
+  }
+
+  /** The player's games in the log at start, with their parts: which game a room picked, or why
+   * a folder went as a duplicate, can be read from a bug report (Sarah's board, 2026-11-01: a REX
+   * room offered to a REX player as "Start Dolphin with Project+ v3.2.1"; "would logs help?"). */
+  private logGames(): void {
+    const short = (hash: string | null | undefined) => (hash ? hash.slice(0, 8) : "-");
+    const builds = this.builds();
+    log.info(`Other Games: ${builds.length} game(s)`);
+    for (const b of builds) {
+      log.info(
+        `  ${b.name}${b.builtIn ? " (built in)" : ""}: hash ${short(b.hash)}, disc ${short(b.parts?.disc)} ${
+          b.discPath
+        }, launcher ${short(b.parts?.launcher)} ${b.launcherPath ?? "-"}, SD card ${short(b.parts?.sdCard)} ${
+          b.sdPath ?? "-"
+        }`,
+      );
+    }
   }
 
   async host(options: ModsHostOptions): Promise<void> {
@@ -977,7 +996,11 @@ export class ModsManager {
       this.setHashProgress(id, !discReports && done < discSize ? null : total > 0 ? done / total : 0);
     }, 200);
     const started = Date.now();
-    log.info(`Hashing ${build.name}: ${build.discPath}`);
+    log.info(
+      `Hashing ${build.name}: ${build.discPath}, ${build.launcherPath ?? "no launcher"}, ${
+        build.sdPath ?? "no SD card"
+      }`,
+    );
     const parts = await computeBuildParts(
       build,
       (disc, onDisc) =>
@@ -991,15 +1014,26 @@ export class ModsManager {
     parts.sdCard = build.sdPath
       ? await this.cardRoot(id, build.sdPath, (done, total) => this.setHashProgress(id, total > 0 ? done / total : 0))
       : null;
-    log.info(`Hashed ${build.name} in ${((Date.now() - started) / 1000).toFixed(1)} s`);
+    log.info(
+      `Hashed ${build.name} in ${((Date.now() - started) / 1000).toFixed(1)} s: disc ${parts.disc.slice(
+        0,
+        8,
+      )}, launcher ${parts.launcher?.slice(0, 8) ?? "-"}, SD card ${parts.sdCard?.slice(0, 8) ?? "-"}`,
+    );
     const hash = combineBuildHash(parts);
     // The build may have been edited meanwhile: keep the newest, with this hash if its parts are the same.
     const latest = this.findBuild(id);
     let updated: ModBuild = latest;
     if ((await buildHashKey(latest)) === key) {
       // The same files as a game already in the list (another copy, an ISO and an RVZ of one
-      // disc): this one goes again.
-      const twin = this.builds().find((b) => b.id !== id && b.hash === hash);
+      // disc): this one goes again. Not one with another SD card: the build hash leaves the card
+      // out, but rooms tell games by it, and a mod's second folder with the player's own card
+      // (other music, other settings) is a game of its own (Sarah's board, 2026-11-01, a
+      // player's "this thing that i didnt put here is eating my new folder configs": a P+ folder
+      // of their own went as Brawl Online's P+).
+      const twin = this.builds().find(
+        (b) => b.id !== id && b.hash === hash && (b.sdPath ? b.parts?.sdCard ?? null : null) === parts.sdCard,
+      );
       // Not a game hashed before (by an older launcher: rehashChanged): two of the player's games
       // that are now one disc (Brawl Rev 1 and Rev 2) both stay, as they were added. Nor Brawl
       // Online's own P+, which stays beside a copy of it the player added from elsewhere.
