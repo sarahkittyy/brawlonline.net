@@ -16,6 +16,8 @@ export type SyncedDolphinSettings = {
   enableMusic: boolean;
   /** No chat window in the game (`[Online] DisableChat`). */
   disableChat: boolean;
+  /** Potato mode: matches draw less (`[Online] PotatoMode`, docs/game-code.md). */
+  potatoMode: boolean;
   /** "Show my games on the Spectate tab" (`[Online] StreamGames`, docs/design/spectating.md). */
   enableStreamGames: boolean;
   /**
@@ -69,6 +71,9 @@ export async function setOnlineSettings(iniFile: IniFile, options: Partial<Synce
   if (options.disableChat !== undefined) {
     section.set("DisableChat", convertBooleanToIniVal(options.disableChat));
   }
+  if (options.potatoMode !== undefined) {
+    section.set("PotatoMode", convertBooleanToIniVal(options.potatoMode));
+  }
   if (options.enableStreamGames !== undefined) {
     section.set("StreamGames", convertBooleanToIniVal(options.enableStreamGames));
   }
@@ -96,6 +101,7 @@ export async function getOnlineSettings(iniFile: IniFile): Promise<SyncedDolphin
   const inputDelay = normalizeInputDelay(section.get("InputDelay", "0"));
   const enableMusic = section.get("Music", "True") === "True";
   const disableChat = section.get("DisableChat", "False") === "True";
+  const potatoMode = section.get("PotatoMode", "False") === "True";
   const enableStreamGames = section.get("StreamGames", "True") === "True";
 
   return {
@@ -105,6 +111,7 @@ export async function getOnlineSettings(iniFile: IniFile): Promise<SyncedDolphin
     inputDelay,
     enableMusic,
     disableChat,
+    potatoMode,
     enableStreamGames,
   };
 }

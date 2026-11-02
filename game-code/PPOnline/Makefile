@@ -168,6 +168,8 @@ room_css.o room_rules.o room_play.o rules_button.o: CXXFLAGS += -Oz
 # no longer loaded (test_online_big_costumes.py). Not stage_switch.o: at -Oz its cursor frame's
 # place came out wrong (test_room_stage_switch.py).
 sss_cursors.o sss_portraits.o labels.o: CXXFLAGS += -Oz
+# Potato mode (2026-11-01): -Oz from the start, for the same heap room.
+potato.o: CXXFLAGS += -Oz
 
 %.o: %.cpp
 #	$(info $<)

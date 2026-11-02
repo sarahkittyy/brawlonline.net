@@ -140,6 +140,10 @@ export class SettingsManager extends EventEmitter {
     return this.get().settings.disableChat;
   }
 
+  getPotatoMode(): boolean {
+    return this.get().settings.potatoMode;
+  }
+
   getEnableStreamGames(): boolean {
     return this.get().settings.enableStreamGames;
   }

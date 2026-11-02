@@ -343,6 +343,8 @@ STAGE_KIND: Dict[str, int] = {
     # P+ 2024 legal list (orca RankedPPlus.cpp LEGAL_KINDS; P+ stage ids):
     "pokemon_stadium_2": 0x2E, "smashville": 0x21, "luigis_mansion": 0x04, "temple_of_time": 0x09,
     "green_hill_zone": 0x23, "bowsers_castle": 0x06, "frigate_husk": 0x0C, "dream_land": 0x2D,
+    "fountain_of_dreams": 0x1F, "delfino_secret": 0x03, "metal_cavern": 0x05, "yoshis_story": 0x0D,
+    "wario_land": 0x1C,
 }
 STAGE_SUBSPACE = 0x3D            # srStageKind Adventure (gm_lib.h)
 STAGE_SPECIAL_KINDS = frozenset(range(0x34, 0x3E))  # HomeRun, Edit, Heal, OTrain, TBreak, CRoll, ..., Adventure

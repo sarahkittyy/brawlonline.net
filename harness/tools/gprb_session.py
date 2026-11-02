@@ -652,6 +652,7 @@ def play_match_n(insts, clients, ports: List[int], sims, args, preset: str, cpu:
 
 def run_session_n(preset: str, cpu: str, args: argparse.Namespace, run: int) -> Dict[str, Any]:
     ports = [int(p) - 1 for p in args.ports.split(",")]
+    potato_ports = {int(p) - 1 for p in args.potato_ports.split(",") if p}
     chars = args.chars.split(",")
     if len(chars) != len(ports) or not 2 <= len(ports) <= 4 or len(set(ports)) != len(ports):
         raise SystemExit("--ports and --chars: 2-4 distinct ports, one character each")
@@ -693,7 +694,7 @@ def run_session_n(preset: str, cpu: str, args: argparse.Namespace, run: int) -> 
             clients = [i.client for i in insts]
             if args.plugin:
                 # With the plugin P+ boots to the online menus: back to the main menu, then Versus.
-                def to_css(c, port: int) -> None:
+                def to_css(c, port: int, own_port: int) -> None:
                     # GameBridge only locates the block (SessionAddress): it does not service the
                     # plugin's mailbox, whose CLEANUP_CONNECTION (leaving the online menus) would
                     # stop the session, and does not write SESSION.
@@ -709,7 +710,12 @@ def run_session_n(preset: str, cpu: str, args: argparse.Namespace, run: int) -> 
                     import ppom
                     # The plugin removes a gone player's fighter in a local Versus match too.
                     ppom.set_cfg_bits(c, ppom.CFG_TEST_GONE, True)
-                G.par([lambda c=c: to_css(c, ports[0]) for c in clients])
+                    if own_port in potato_ports:
+                        # Potato mode on this machine (docs/game-code.md, Potato mode). GameBridge is off
+                        # here, so nothing rewrites LOCAL; on an install Dolphin writes the byte from
+                        # [Online] PotatoMode every frame.
+                        c.write_mem(ppom.find_block(c).local + ppom.L_POTATO, b"\x01")
+                G.par([lambda c=c, p=p: to_css(c, ports[0], p) for c, p in zip(clients, ports)])
             G.par([lambda c=c: B.wait_scene(c, [B.Scene.CSS], 60 * 120) for c in clients])
             udp = [free_udp_port() for _ in ports]
             # One proxy per port that has a higher port in the match: everyone above sends through it.
@@ -732,7 +738,23 @@ def run_session_n(preset: str, cpu: str, args: argparse.Namespace, run: int) -> 
                     raise RuntimeError("the peers never connected: " +
                                        str([c.call("gprb_status")["phase"] for c in clients]))
                 time.sleep(0.2)
+            potato_thread = None
+            if potato_ports:
+                # Each machine's potato mode as it runs the match (past the countdown).
+                def read_potato() -> None:
+                    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools" / "gamecode"))
+                    import ppom
+                    states = []
+                    for c in clients:
+                        B.wait_scene(c, [B.Scene.IN_MATCH], 60 * 120)
+                        time.sleep(8)
+                        states.append(ppom.potato_state(c, ppom.find_block(c)))
+                    rep["potato_state"] = states
+                potato_thread = threading.Thread(target=read_potato, daemon=True)
+                potato_thread.start()
             play_match_n(insts, clients, ports, sims, args, preset, cpu, run, chars, args.stage, rep)
+            if potato_thread:
+                potato_thread.join(timeout=10)
             rep["netsim"] = [s.format_stats() for s in sims if hasattr(s, "format_stats")]
             for c in clients:
                 with contextlib.suppress(Exception):
@@ -819,6 +841,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ap.add_argument("--chars", default="fox,falco,mario,marth", help="with --ports: one character per port")
     ap.add_argument("--teams", default="",
                     help="with --ports: a team battle, the team (0 red, 1 blue, 2 green) of P1..P4, e.g. 0,1,0,1")
+    ap.add_argument("--potato-ports", default="",
+                    help="with --plugin: potato mode on these players' machines (1-based ports, e.g. 1); the JSON's "
+                         "potato_state says what each machine drew (docs/game-code.md, Potato mode)")
     ap.add_argument("--plugin", default="",
                     help="with --ports: our game plugin (PPOnline.rel) on every SD card; the session writes the "
                          "gone flags into its SESSION block and the plugin removes the gone player's fighter")

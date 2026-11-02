@@ -113,7 +113,7 @@ def _parse_block(c: HarnessClient, a: int):
     if hdr[:4] != MAGIC:
         return None
     ver, sz, mbo, mbs, so, ss, lo, ls, dbo, dbs = struct.unpack_from(">HHHHHHHHHH", hdr, 4)
-    if ver in (1, 2, 3, 4, 5, 6, 7, 8, 9, 10) and 0x100 < sz < 0x4000 and mbo and dbo:
+    if ver in (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11) and 0x100 < sz < 0x4000 and mbo and dbo:
         return Block(a, ver, sz, a + mbo, mbs, a + dbo, dbs, a + so if ss else 0, ss,
                      a + lo if ls else 0, ls)
     return None
@@ -317,11 +317,45 @@ def read_local(c: HarnessClient, b: Block) -> dict:
                if len(d) >= 0x80 else {}),
             **({"own_cursor": sss_cursor(d[L_OWN_CURSOR:L_OWN_CURSOR + 8]),
                 "cursors": [sss_cursor(d[L_CURSORS + 8 * i:L_CURSORS + 8 * (i + 1)]) for i in range(4)]}
-               if len(d) >= L_CURSORS + 32 else {})}
+               if len(d) >= L_CURSORS + 32 else {}),
+            **({"potato": d[L_POTATO]} if len(d) > L_POTATO else {})}
 
 
 # ---- v10: the stage select's cursors (LOCAL; docs/game-code.md §11) ----
 L_OWN_CURSOR, L_CURSORS = 0xC8, 0xD0
+# v11: potato mode (LOCAL; docs/game-code.md, Potato mode): Dolphin's [Online] PotatoMode, every frame.
+L_POTATO = 0xF0
+
+
+def potato_state(c: HarnessClient, b: Block) -> dict:
+    """Potato mode as this machine runs it (docs/game-code.md, Potato mode), read in a match:
+    LOCAL.potato, the scene root's shadow bit (g_gfSceneRoot+0x464 & 0x40) and the stage pieces'
+    models that don't draw (nw4r ScnObj flags +0xCC & 0x60), as "ground[i]". The grounds are
+    gfTaskScheduler's render lists' Category_Ground tasks (potato.cpp walks the same)."""
+    def is_ptr(p: int) -> bool:  # potato.cpp's isPtr: MEM1 or MEM2
+        return 0x80000000 <= p < 0x81800000 or 0x90000000 <= p < 0x94000000
+
+    root = c.read_u32(0x8059FF80)
+    sched = c.read_u32(0x805A0068)
+    hidden = []
+    for lst in range(14):
+        t, n = c.read_u32(sched + 0xF8 + 4 * lst), 0
+        while is_ptr(t) and n < 512:
+            task = c.read_mem(t, 0x48)
+            if (struct.unpack_from(">I", task, 0x2C)[0] >> 7) & 0xFF == 0x06:
+                name_ptr = struct.unpack_from(">I", task, 0)[0]
+                name = c.read_mem(name_ptr, 48).split(b"\0")[0].decode("latin-1") if is_ptr(name_ptr) else "?"
+                models = struct.unpack_from(">I", task, 0x44)[0]
+                for i in range(8):
+                    mdl = c.read_u32(models + 4 * i) if is_ptr(models) else 0
+                    if not is_ptr(mdl) or c.read_u32(mdl) != 0x804663C8:
+                        break
+                    if c.read_u32(mdl + 0xCC) & 0x60 == 0x60:
+                        hidden.append(f"{name}[{i}]")
+            t, n = struct.unpack_from(">I", task, 0x18)[0], n + 1
+    return {"potato": c.read_mem(b.local + L_POTATO, 1)[0] if b.local_size > L_POTATO else None,
+            "shadow_bit": c.read_mem(root + 0x464, 1)[0] & 0x40 if is_ptr(root) else None,
+            "no_draw_models": hidden}
 CHOICE_ANYONE_PICKS = 4
 
 

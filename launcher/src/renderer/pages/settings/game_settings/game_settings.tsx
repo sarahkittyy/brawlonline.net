@@ -23,6 +23,7 @@ import {
   useEnableStreamGames,
   useIsoPath,
   useLaunchGameOnPlay,
+  usePotatoMode,
 } from "@/lib/hooks/use_settings";
 
 import { DISC_IMAGE_EXTENSIONS } from "../../quick_start/steps/iso_selection_step/iso_file";
@@ -71,6 +72,7 @@ export const GameSettings = React.memo(() => {
   const [launchMeleeOnPlay, setLaunchMelee] = useLaunchGameOnPlay();
   const [enableMusic, setEnableMusic] = useEnableMusic();
   const [disableChat, setDisableChat] = useDisableChat();
+  const [potatoMode, setPotatoMode] = usePotatoMode();
   const [enableStreamGames, setEnableStreamGames] = useEnableStreamGames();
   const [closeAfterSpectating, setCloseAfterSpectating] = useCloseDolphinAfterSpectating();
   const netplayDolphinOpen = useDolphinStore((store) => store.netplayOpened);
@@ -150,6 +152,19 @@ export const GameSettings = React.memo(() => {
               onChange={(checked) => setDisableChat(checked)}
               label={Messages.disableChat()}
               description={Messages.disableChatDescription()}
+              disabled={netplayDolphinOpen}
+            />
+          </div>
+        </Tooltip>
+      </SettingItem>
+      <SettingItem>
+        <Tooltip title={netplayDolphinOpen ? Messages.closeDolphinToChange() : ""} placement="bottom-start">
+          <div>
+            <Toggle
+              value={potatoMode}
+              onChange={(checked) => setPotatoMode(checked)}
+              label={Messages.potatoMode()}
+              description={Messages.potatoModeDescription()}
               disabled={netplayDolphinOpen}
             />
           </div>

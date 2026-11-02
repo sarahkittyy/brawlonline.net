@@ -36,6 +36,7 @@
 #include "Core/Online/User.h"
 #include "Core/PowerPC/MMU.h"
 #include "Core/Rollback/GameplaySession.h"
+#include "Core/Rollback/MachineSession.h"
 #include "Core/Rollback/PeerData.h"
 #include "Core/Rollback/RollbackManager.h"
 #include "VideoCommon/OnScreenDisplay.h"
@@ -68,7 +69,10 @@ constexpr u32 MAGIC = 0x50504F4D;  // "PPOM"
 // own cursor at +0xC8 (game-written, every frame of an online stage select) and the other players'
 // at +0xD0 (by in-game port), and RoomPlay's stage choice 4, anyone picks. A v4-v9 plugin still
 // works (no cursors; anyone picks shows as loser picks).
-constexpr u16 VERSION = 10;
+// 11: potato mode (docs/game-code.md, Potato mode): LOCAL grows to 0xF4 with the launcher's potato
+// switch at +0xF0 ([Online] PotatoMode, Dolphin-written every frame). A v4-v10 plugin still works (it
+// draws everything).
+constexpr u16 VERSION = 11;
 constexpr u16 MIN_VERSION = 4;
 constexpr u32 HEADER_SIZE = 0x24;
 
@@ -89,16 +93,22 @@ constexpr u32 MAILBOX_SIZE = MB_RESP + RESP_PAYLOAD_OFF + RESP_PAYLOAD;  // 0x41
 // player's session, and the game's lock-in.
 constexpr u32 LOCAL_SIZE_V8 = 0x80;
 constexpr u32 LOCAL_SIZE_V9 = 0xC8;
-constexpr u32 LOCAL_SIZE = 0xF0;
+constexpr u32 LOCAL_SIZE_V10 = 0xF0;
+constexpr u32 LOCAL_SIZE = 0xF4;
 // v9: the player's special-mode picks (ppom.h PortExtra), game-written with the lock-in.
 constexpr u32 L_OWN_EXTRA = 0x80;
 // v10: ppom.h SssCursor {state, page, pad[2], x s16, y s16}: the player's own (game) and the
 // others' by in-game port (Dolphin), out of the rolled-back state as all of LOCAL.
 constexpr u32 L_OWN_CURSOR = 0xC8, L_CURSORS = 0xD0, CURSOR_SIZE = 8;
 constexpr u32 CUR_STATE = 0, CUR_PAGE = 1, CUR_TURNS = 2, CUR_X = 4, CUR_Y = 6;
+// v11: 1 = potato mode (Config::ONLINE_POTATO_MODE): the game draws less in matches (ppom.h Local.potato).
+constexpr u32 L_POTATO = 0xF0;
 constexpr u32 LocalSize(u16 version)
 {
-  return version >= 10 ? LOCAL_SIZE : version >= 9 ? LOCAL_SIZE_V9 : LOCAL_SIZE_V8;
+  return version >= 11 ? LOCAL_SIZE :
+         version >= 10 ? LOCAL_SIZE_V10 :
+         version >= 9  ? LOCAL_SIZE_V9 :
+                         LOCAL_SIZE_V8;
 }
 constexpr u32 L_SEQ = 0x00, L_STATE = 0x04, L_LOCAL_PORT = 0x05, L_REMOTE_READY = 0x06,
               L_DISCONNECTED = 0x07, L_PEER_NAME = 0x08, L_LOCK = 0x28;
@@ -206,7 +216,8 @@ static_assert(L_ROOM_CREATE == L_DESYNCED + 1 && L_QUIT_LEFT == L_ROOM_CREATE + 
               L_QUIT_LEFT < LOCAL_SIZE_V8 && L_OWN_EXTRA == LOCAL_SIZE_V8 &&
               L_OWN_EXTRA + Gprb::Session::PORT_EXTRA_SIZE == LOCAL_SIZE_V9 &&
               L_OWN_CURSOR == LOCAL_SIZE_V9 && L_CURSORS == L_OWN_CURSOR + CURSOR_SIZE &&
-              L_CURSORS + 4 * CURSOR_SIZE == LOCAL_SIZE);
+              L_CURSORS + 4 * CURSOR_SIZE == LOCAL_SIZE_V10 && L_POTATO == LOCAL_SIZE_V10 &&
+              L_POTATO + 4 == LOCAL_SIZE);
 static_assert(L_ROOM < L_DIRECT_JOIN && L_DIRECT_NUMBER + 2 == L_OWN &&
               L_DIRECT_PREFIX + DIRECT_PREFIX_LEN == L_DIRECT_NUMBER);
 static_assert(L_ROOM < L_OWN && S_ROOM_MODE < SESSION_SIZE && SP_ROOM_COSTUME < SP_PORT_VALUES &&
@@ -1438,6 +1449,21 @@ void PutRoomSpecial(std::vector<u8>& session, const Rooms::Snapshot& room, const
   }
 }
 
+// v11: the launcher's potato mode ([Online] PotatoMode), in the LOCAL writes of the games this
+// PC plays (live and a watched room game). A playback (a replay, a highlight or clip render, a
+// Spectate tab game) always draws the whole stage: `playing` false writes 0. Never under a
+// whole-machine session (an Other Games room, or the netplay backend): its machines compare all of
+// guest RAM, and what potato mode leaves undrawn differs there. (GameBridge does not run under
+// NetPlay at all; that hand-off boots the game again, LOCAL zeroed.)
+void PutPotato(std::vector<u8>& local, bool playing)
+{
+  if (local.size() >= L_POTATO + 1)
+  {
+    local[L_POTATO] =
+        playing && Config::Get(Config::ONLINE_POTATO_MODE) && !Machine::IsArmed() ? 1 : 0;
+  }
+}
+
 // LOCAL's Direct invite bytes. The code is Rooms' canonical one (NormalizeConnectCode: 2-4
 // letters, '#', 1-9999); it is checked again here, and anything else leaves the bytes zero (the
 // counter still moves, so the game goes to a plain Direct CSS). The launcher's Play unranked /
@@ -1686,6 +1712,7 @@ void SyncPlayback(const Core::CPUThreadGuard& guard, const Located& loc,
   local[L_DISCONNECTED] = pv.disconnected ? 1 : 0;
   for (u32 i = L_LOCK; i < local.size(); ++i)
     local[i] = R8(guard, loc.local + i);
+  PutPotato(local, false);
   local[L_DESYNCED] = pv.desynced ? 1 : 0;
   local[L_QUIT_LEFT] = pv.quit_left ? 1 : 0;
   local[L_ROOM_JOIN] = 0;
@@ -1732,6 +1759,7 @@ bool SyncRoomWatch(const Core::CPUThreadGuard& guard, const Located& loc,
   local[L_DISCONNECTED] = pv.disconnected ? 1 : 0;
   for (u32 i = L_LOCK; i < local.size(); ++i)
     local[i] = R8(guard, loc.local + i);
+  PutPotato(local, true);
   local[L_DESYNCED] = pv.desynced ? 1 : 0;
   local[L_QUIT_LEFT] = pv.quit_left ? 1 : 0;
   local[L_ROOM_JOIN] = room.join_seq;
@@ -1961,6 +1989,7 @@ void SyncSession(const Core::CPUThreadGuard& guard, const Located& loc)
   // Keep the game's lock-in as it is.
   for (u32 i = L_LOCK; i < local.size(); ++i)
     local[i] = R8(guard, loc.local + i);
+  PutPotato(local, true);
   local[L_DESYNCED] = lobby.desynced ? 1 : 0;
   local[L_QUIT_LEFT] = lobby.quit_left ? 1 : 0;
   // v10: the stage select's cursors: this player's in, the others' out.

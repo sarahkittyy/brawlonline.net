@@ -91,6 +91,13 @@ function setupSettingsSubscriptions(settingsManager: SettingsManager, dolphinMan
     );
   });
 
+  // Only the games this PC plays: replays, spectated games and clips always draw the whole stage
+  // (the playback Dolphin never gets the key, and GameBridge ignores it in a playback).
+  settingsManager.onSettingChange("potatoMode", async (potatoMode) => {
+    const installation = dolphinManager.getInstallation(DolphinLaunchType.NETPLAY);
+    await installation.updateSettings({ potatoMode });
+  });
+
   settingsManager.onSettingChange("disableChat", async (disableChat) => {
     const installation = dolphinManager.getInstallation(DolphinLaunchType.NETPLAY);
     await installation.updateSettings({ disableChat });

@@ -50,7 +50,9 @@ namespace PPOM {
     // 10: the stage select's cursors (Sarah's board, 2026-10-29): LOCAL grows to 0xF0 with this
     // player's cursor (+0xC8, game) and the other players' (+0xD0, Dolphin); RoomPlay's stageChoice
     // CHOICE_ANYONE_PICKS.
-    const u16 VERSION = 10;
+    // 11: potato mode (docs/game-code.md, Potato mode): LOCAL grows to 0xF4 with Dolphin's potato switch
+    // at +0xF0 (the launcher's setting).
+    const u16 VERSION = 11;
 
     // Slippi command bytes (EXI_DeviceSlippi.h), kept for familiarity (design 5.3).
     enum Cmd {
@@ -466,7 +468,12 @@ namespace PPOM {
         SssCursor ownCursor;  // game, every frame: this player's cursor on an online stage select
         SssCursor cursors[SESSION_PLAYERS_LOCAL];   // Dolphin: the other players' (by in-game
                                                     // port; this player's own and absent ones 0)
-    };                    // 0xF0
+        // v11: Dolphin, every frame: 1 = potato mode (the launcher's setting, [Online] PotatoMode):
+        // matches draw less (potato.cpp). Per machine, so in LOCAL: it changes only what this
+        // machine draws, never the game state the machines compare.
+        u8 potato;
+        u8 _potatoPad[3];
+    };                    // 0xF4
 
     // ---- SESSION ----
 

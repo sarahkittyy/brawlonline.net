@@ -1795,6 +1795,8 @@ export class DolphinManager {
       inputDelay: this.settingsManager.getInputDelay(),
       enableMusic: this.settingsManager.getEnableMusic(),
       disableChat: this.settingsManager.getDisableChat(),
+      // Only the games this PC plays: replays, spectated games and clips draw the whole stage.
+      potatoMode: launchType === DolphinLaunchType.NETPLAY && this.settingsManager.getPotatoMode(),
       enableStreamGames: this.settingsManager.getEnableStreamGames(),
       netplayNetwork: this.settingsManager.getNetplayNetwork(),
       pplusRelease: this.pplusVersions().currentRelease,
@@ -1832,6 +1834,11 @@ export class DolphinManager {
     await this._updateLauncherSetting(this.settingsManager.getDisableChat(), newSettings.disableChat, (val) =>
       this.settingsManager.updateSetting("disableChat", val),
     );
+    if (launchType === DolphinLaunchType.NETPLAY) {
+      await this._updateLauncherSetting(this.settingsManager.getPotatoMode(), newSettings.potatoMode, (val) =>
+        this.settingsManager.updateSetting("potatoMode", val),
+      );
+    }
     await this._updateLauncherSetting(
       this.settingsManager.getEnableStreamGames(),
       newSettings.enableStreamGames,
