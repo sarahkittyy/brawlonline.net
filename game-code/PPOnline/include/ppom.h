@@ -750,11 +750,14 @@ namespace PPOM {
         // Tests (CFG_TEST_GONE): from game frame testGoneFrame on (g_GameFrame's frame counter,
         // rolled back with the match), the ports in the bit mask testGonePorts & 0xF are set gone,
         // as Dolphin's session does for a dropped player, and (testGonePorts >> 16) frames later
-        // the ports in (testGonePorts >> 8) & 0xF. Written before the match only (this block is
-        // rolled back with it).
+        // the ports in (testGonePorts >> 8) & 0xF. With TEST_GONE_KO_ONLY they lose their last
+        // stock instead (not gone), only while they have 2 or more. Written before the match only
+        // (this block is rolled back with it).
         u32 testGoneFrame;
         u32 testGonePorts;
     };
+
+    static const u32 TEST_GONE_KO_ONLY = 1 << 12;   // Debug.testGonePorts
 
     enum Cfg {
         CFG_TEXT = 1 << 0,        // relabel texts

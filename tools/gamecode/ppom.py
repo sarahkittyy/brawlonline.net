@@ -457,6 +457,7 @@ S_QUIT_PORTS, S_QUIT_STAYS = 0x21B, 0x21C
 SP_TEAM, SP_PICKS_STAGE, SP_OUT = 0x03, 0x36, 0x37
 CFG_TEST_GONE = 1 << 7   # ppom.h Cfg: Debug.testGone* set gone flags; removal in local matches too
 DEBUG_TEST_GONE = 0x18 + 4 * 16 + 16 * DEBUG_LOG   # Debug.testGoneFrame, then testGonePorts
+TEST_GONE_KO_ONLY = 1 << 12   # ppom.h: Debug.testGonePorts, lose the last stock instead of gone
 
 
 def write_session(c: HarnessClient, b: Block, *, game: int, stage: int, players: list,
@@ -553,12 +554,15 @@ def read_room(c: HarnessClient, b: Block) -> dict:
 
 
 def set_test_gone(c: HarnessClient, b: Block, frame: int, ports: int, later_ports: int = 0,
-                  later_by: int = 0) -> None:
+                  later_by: int = 0, ko_only: bool = False) -> None:
     """CFG_TEST_GONE: from game frame `frame` on (g_GameFrame +4), the ports in the bit mask
-    `ports` are gone, and `later_by` frames after that also `later_ports`. Before the match only:
-    the plugin's data is rolled back with it."""
+    `ports` are gone, and `later_by` frames after that also `later_ports`. `ko_only`
+    (TEST_GONE_KO_ONLY): they lose their last stock instead, not gone, only while they have 2 or
+    more (two ports at once: a double KO). Before the match only: the plugin's data is rolled back
+    with it."""
     c.write_mem(b.debug + DEBUG_TEST_GONE,
-                struct.pack(">II", frame, (ports & 0xF) | (later_ports & 0xF) << 8 | later_by << 16))
+                struct.pack(">II", frame, (ports & 0xF) | (later_ports & 0xF) << 8 | later_by << 16
+                            | (TEST_GONE_KO_ONLY if ko_only else 0)))
     set_cfg_bits(c, CFG_TEST_GONE, True)
 
 

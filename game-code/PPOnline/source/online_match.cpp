@@ -757,6 +757,7 @@ namespace OnlineMatch {
         PPOM::Session& se = PPOM::g_block.session;
         PPOM::Debug& dbg = PPOM::g_block.debug;
         u32 test = 0;
+        const bool testKoOnly = (dbg.testGonePorts & PPOM::TEST_GONE_KO_ONLY) != 0;
         if (dbg.cfg & PPOM::CFG_TEST_GONE) {
             u32 t = dbg.testGonePorts;
             s32 f = (s32)(*(u32*)GAME_FRAME - dbg.testGoneFrame);
@@ -795,8 +796,11 @@ namespace OnlineMatch {
                 u32 fighter = *(u32*)(e + 0x34 + 8 * (e[0x0A] & 3));   // the active instance
                 bool quit = (se.quitPorts >> p) & 1;   // the pause screen's quit (pponline_pauseResult)
                 bool out = restored && rp.restoreStocks == 0;   // out at the agreed frame
-                if ((se.gone[p] || quit || out || ((test >> p) & 1)) && isPtr(fighter)) {
-                    if ((test >> p) & 1) se.gone[p] = 1;
+                // TEST_GONE_KO_ONLY: the port loses its last stock but is not gone, and only
+                // while it has 2 or more (not again in the sudden death after a double KO).
+                bool tested = ((test >> p) & 1) && (!testKoOnly || *stocks >= 2);
+                if ((se.gone[p] || quit || out || tested) && isPtr(fighter)) {
+                    if (tested && !testKoOnly) se.gone[p] = 1;
                     *stocks = 1;
                     ((SetDeadFn)SET_DEAD)(mgr, *(int*)(e + 0x04), 5, -1);
                     ((SetOutFn)SET_OUT)(fighter);

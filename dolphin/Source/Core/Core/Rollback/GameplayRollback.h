@@ -79,6 +79,14 @@ constexpr u32 PAD_SYS_THREAD_OFF = 0xB54;        // gfPadSystem+0xB54: the threa
 constexpr u32 OS_ALARM_QUEUE = 0x805A0678;       // {head, tail} of the OS alarm queue (r13-0x3DA8)
 constexpr u32 SCM_OPERATOR_RULE_MELEE = 0x54;
 constexpr u32 OPR_IS_GAME_SET = 0x74;
+// stOperator::m_condition (the match's gmGlobalModeMelee) and stOperatorRuleMelee::m_resultInfo,
+// what its isSuddenDeath (sora_melee 0x8095517C) reads: SuddenDeathFollows.
+constexpr u32 OPR_CONDITION = 0x44;
+constexpr u32 OPR_RESULT_INFO = 0xCC;
+// scMelee's state flags: 0x80 from the frame of a game set until the scene goes on (to its end, or
+// to the stage of a sudden death, which Brawl plays with the same operators).
+constexpr u32 SCM_STATE_FLAGS = 0xD8;
+constexpr u8 SCM_GAME_SET_FLAG = 0x80;
 constexpr u32 OPR_REMAINING_FRAMES = 0xE0;  // m_remainingFrameTime: the match timer, in frames
 constexpr u32 MM_TIME_LIMIT = 0x20;         // gmGlobalModeMelee: the time limit (s32 frames, 0 none)
 // scMelee's stOperatorInfoMelee (its gfTask name at +0) and its flags byte: 0x80 running, 0x40 stop
@@ -137,6 +145,14 @@ u32 FightersCrc(const FighterFields& f);
 
 // scMelee's stOperatorRuleMelee "is game set" byte (0 if not in a match).
 bool IsGameSet(const Guest& g);
+// The match goes on to sudden death once it is game set: Brawl's own stOperatorRuleMelee::
+// isSuddenDeath, from the same state (more than one player or team ranked first: a double KO on
+// the last stocks, or a time-out tie). Brawl then rebuilds the stage and the tied fighters in the
+// same scene, and the match ends at the sudden death's own game set.
+bool SuddenDeathFollows(const Guest& g);
+// The match scene shows a game set (scMelee's own flag): also a sudden death's, where the rule's
+// game set byte has stayed set since the tie.
+bool SceneShowsGameSet(const Guest& g);
 // The match timer in frames (stOperatorRuleMelee m_remainingFrameTime; one that ran out reads 1),
 // 0 when the match has no time limit (gmGlobalModeMelee's) or none is running.
 u32 RemainingFrames(const Guest& g);

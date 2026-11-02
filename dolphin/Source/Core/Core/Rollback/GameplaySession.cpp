@@ -669,6 +669,15 @@ struct State
   std::string end_reason;
   s64 game_set_frame = -1;  // first session frame that showed game set or a quit (-1: none)
   bool game_set_quit = false;  // that frame showed a pause-screen quit (no winner)
+  // A tie at game set goes on to sudden death in the same match (SuddenDeathFollows). sd_tie_frame:
+  // the tie's game set (-1: none; a rollback can undo it). sd_stage, once that frame is final
+  // (END_AFTER_GAME_SET after it, as a game set's end): 1 while the scene still shows the tie's
+  // game set (Brawl rebuilds the stage and the fighters after ~2 s), 2 once the frame where it no
+  // longer does (sd_clear_frame) is final too: the sudden death runs, and its own game set ends
+  // the match (Brawl plays one sudden death, it does not ask again).
+  s64 sd_tie_frame = -1;
+  s64 sd_clear_frame = -1;
+  int sd_stage = 0;
   // Set when a network session ends inside the match scene (game set): the next match is armed
   // only after the scene was left, so the old match's last frames are not taken for a new one.
   bool await_scene_exit = false;
@@ -754,6 +763,8 @@ struct State
   bool io_wait_active = false;
   bool io_wait_update = false;  // the next guest call is the manager's update (else a retrace)
   bool io_wait_sound = false;   // this wait saw a sound group load pending
+  bool io_wait_strm = false;    // this wait saw a music stream being prepared
+  bool strm_wait_off = false;   // a stream never got prepared: no more waits for streams
   int io_wait_n = 0;
   GuestRegs io_saved;
   u64 io_waits = 0, sound_waits = 0, io_wait_retraces = 0, io_wait_timeouts = 0;
@@ -3843,6 +3854,9 @@ void ResetRunStats()
   s.end_reason.clear();
   s.game_set_frame = -1;
   s.game_set_quit = false;
+  s.sd_tie_frame = -1;
+  s.sd_clear_frame = -1;
+  s.sd_stage = 0;
   s.local_quit_frame = -1;
   s.sound_allocs = s.resim_sound_allocs = s.suppressed_sound_allocs = 0;
   for (auto& v : s.snd_played)
@@ -3868,6 +3882,8 @@ void ResetRunStats()
   s.peer_desync_logged = false;
   s.io_wait_active = false;
   s.io_wait_sound = false;
+  s.io_wait_strm = false;
+  s.strm_wait_off = false;
   s.io_wait_n = 0;
   s.io_waits = s.sound_waits = s.io_wait_retraces = s.io_wait_timeouts = 0;
   s.io_wait_ms = s.io_wait_ms_max = 0;
@@ -3975,6 +3991,10 @@ GameResult ReadGameResult(Core::System& system)
     {
       e.out = *out;
     }
+    // A player who was out and has stocks again played on in the sudden death after a tie
+    // (SuddenDeathFollows): in the game, not placed by that elimination.
+    if (e.stocks > 0)
+      e.out = 0;
   }
   if (std::popcount(s.match_ports) == 2)
   {
@@ -3982,7 +4002,12 @@ GameResult ReadGameResult(Core::System& system)
     const int b = 31 - std::countl_zero(s.match_ports);
     const s32 sa = r.stocks[a], sb = r.stocks[b];
     const float da = r.damage[a], db = r.damage[b];
-    r.winner = static_cast<u8>(sa != sb ? (sa > sb ? a : b) : (da != db ? (da < db ? a : b) : 0xFE));
+    // Both out of stocks (a double KO where the game has no sudden death): a draw, whatever the
+    // damage the fighters were left with.
+    r.winner = static_cast<u8>(sa != sb       ? (sa > sb ? a : b) :
+                               sa <= 0        ? 0xFE :
+                               da != db       ? (da < db ? a : b) :
+                                                0xFE);
     r.pickers = r.winner == 0xFE ? static_cast<u8>(s.match_ports) :
                                    static_cast<u8>(s.match_ports & ~(1u << r.winner));
     return r;
@@ -6740,6 +6765,10 @@ void PlaybackSeek(Core::System& system)
     s.current_frame = *key - 1;
     s.game_set_frame = -1;
     s.game_set_quit = false;
+    // A sudden death is found again from the keyframe's state (its tie, then its stage).
+    s.sd_tie_frame = -1;
+    s.sd_clear_frame = -1;
+    s.sd_stage = 0;
     s.snd_max_frame = *key - 1;
     for (auto& v : s.snd_played)
       v.clear();
@@ -7116,7 +7145,47 @@ bool RunFrame(const Core::CPUThreadGuard& guard)
   // Match end: the state at this loop top is the end of the previous frame.
   {
     const s64 prev_frame = static_cast<s64>(s.ops.adv_frame[i]) - 1;
-    const bool game_set = IsGameSet(g);
+    // A tie at game set (a double KO on the last stocks) is not the end: Brawl goes on to sudden
+    // death in the same match, rebuilding the stage and the tied fighters, and the session plays
+    // on through it (its loads wait at the loop top as any mid-match load), so the replay, the
+    // spectators and the result take the sudden death in (bug report #215: the session ended at
+    // the tie, and each machine played the sudden death alone, with only its own player's
+    // inputs). The rule's game set byte stays set through the sudden death (Brawl reuses the
+    // match's operators), so there the scene's own game set flag says when it ends.
+    const s64 frame = static_cast<s64>(s.ops.adv_frame[i]);
+    const bool rule_set = IsGameSet(g);
+    bool game_set = false;
+    if (s.sd_stage == 0)
+    {
+      const bool tie = rule_set && SuddenDeathFollows(g);
+      if (!tie)
+        s.sd_tie_frame = -1;
+      else if (s.sd_tie_frame < 0 || prev_frame < s.sd_tie_frame)
+        s.sd_tie_frame = prev_frame;
+      if (s.sd_tie_frame >= 0 && !s.resim_pass && frame >= s.sd_tie_frame + END_AFTER_GAME_SET)
+      {
+        s.sd_stage = 1;
+        INFO_LOG_FMT(BRAWLBACK, "gprb: game set at frame {} is a tie: the match goes on to sudden "
+                     "death", s.sd_tie_frame);
+      }
+      game_set = rule_set && !tie;
+    }
+    else if (s.sd_stage == 1)
+    {
+      if (SceneShowsGameSet(g))
+        s.sd_clear_frame = -1;
+      else if (s.sd_clear_frame < 0 || prev_frame < s.sd_clear_frame)
+        s.sd_clear_frame = prev_frame;
+      if (s.sd_clear_frame >= 0 && !s.resim_pass && frame >= s.sd_clear_frame + END_AFTER_GAME_SET)
+      {
+        s.sd_stage = 2;
+        INFO_LOG_FMT(BRAWLBACK, "gprb: sudden death from frame {}", s.sd_clear_frame);
+      }
+    }
+    else
+    {
+      game_set = rule_set && SceneShowsGameSet(g);
+    }
     const bool quit = !game_set && IsQuitRequested(g);
     if (game_set || quit)
     {
@@ -10138,6 +10207,39 @@ u32 SoundLoadPending(const Core::CPUThreadGuard& guard)
   return queued <= 0x95 && loading <= 0x95 ? queued + loading : 0;
 }
 
+// The match's music is a stream (StrmSound, in the sound archive player's stream instances, not
+// in the region set), prepared on nw4r's task thread from the file P+ or the disc gives it: its
+// header and first blocks. A sudden death starts the music again, and Brawl rebuilds the stage
+// once it is prepared, which took one frame more on one machine than on the other (with the same
+// song too: the reads end when the host's do), so the two games came apart there (bug report
+// #215). As for the file IO, the main thread waits at the loop top while a stream is set up and
+// active but not prepared (nor failed). StrmPlayer's flags at StrmSound +0x190: setup, active,
+// started, prepared; +0x194 the task error flag.
+constexpr u32 SND_STRM_MANAGER = 0x60;  // SND_MANAGERS' stream instances
+constexpr u32 STRM_PLAYER_FLAGS = 0x190;
+constexpr u32 STRM_PLAYER_TASK_ERROR = 0x194;
+
+u32 StreamPreparePending(const Core::CPUThreadGuard& guard)
+{
+  if (!s.snd_player)
+    return 0;
+  const u32 sentinel = s.snd_player + SND_STRM_MANAGER + 8;
+  u32 node = ReadGuest(guard, sentinel);
+  u32 n = 0;
+  for (int k = 0; node && node != sentinel && k < 16; ++k)
+  {
+    const u32 sound = node - SND_PRIORITY_LINK;
+    const u32 flags = ReadGuest(guard, sound + STRM_PLAYER_FLAGS);
+    const bool setup = (flags >> 24) != 0, active = ((flags >> 16) & 0xFF) != 0;
+    const bool prepared = (flags & 0xFF) != 0;
+    const bool failed = (ReadGuest(guard, sound + STRM_PLAYER_TASK_ERROR) >> 24) != 0;
+    if (setup && active && !prepared && !failed)
+      ++n;
+    node = ReadGuest(guard, node);
+  }
+  return n;
+}
+
 // The wait runs unthrottled (CoreTimingManager::SetRollbackLoadWait): no game frame runs during
 // it and the loads finish between the same two frames whatever the host's speed, so only its
 // wall-clock length changes (Sarah's board, 2026-10-29, All-Star: "there is SO much lag between
@@ -10158,10 +10260,12 @@ bool RunIoWait(const Core::CPUThreadGuard& guard)
 {
   auto& ppc = guard.GetSystem().GetPPCState();
   const u32 file_io = FileIoPending(guard);
-  const u32 sound = SoundLoadPending(guard);
+  const u32 strm = s.strm_wait_off ? 0 : StreamPreparePending(guard);
+  const u32 sound = SoundLoadPending(guard) + strm;
   if ((file_io != 0 || sound != 0) && s.io_wait_n < IO_WAIT_MAX)
   {
     s.io_wait_sound |= sound != 0;
+    s.io_wait_strm = strm != 0;
     if (!s.io_wait_active)
     {
       SaveGuestRegs(ppc, &s.io_saved);
@@ -10195,8 +10299,9 @@ bool RunIoWait(const Core::CPUThreadGuard& guard)
     {
       ++s.io_wait_timeouts;
       WARN_LOG_FMT(BRAWLBACK,
-                   "gprb: file IO or sound loader still busy after {} retraces, going on",
-                   s.io_wait_n);
+                   "gprb: file IO or sound loader still busy after {} retraces, going on{}",
+                   s.io_wait_n, s.io_wait_strm ? " (a music stream: no more waits for it)" : "");
+      s.strm_wait_off = s.strm_wait_off || s.io_wait_strm;
     }
     RestoreGuestRegs(ppc, s.io_saved);
     guard.GetSystem().GetCoreTiming().SetRollbackLoadWait(false);
