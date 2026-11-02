@@ -250,7 +250,7 @@ void Jit64::bcctrx(UGeckoInstruction inst)
       MOV(32, PPCSTATE_LR, Imm32(js.compilerPC + 4));  // LR = PC + 4;
     AND(32, R(RSCRATCH), Imm32(0xFFFFFFFC));
     WriteBranchWatchDestInRSCRATCH(js.compilerPC, inst, BitSet32{RSCRATCH});
-    WriteExitDestInRSCRATCH(inst.LK_3, js.compilerPC + 4);
+    WriteIndirectExit(inst.LK_3, js.compilerPC + 4);
   }
   else
   {

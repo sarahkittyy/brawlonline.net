@@ -484,6 +484,28 @@ void JitBaseBlockCache::WriteDestroyBlock(const JitBlock& block)
 // Can be faster by doing a queue for blocks to link up, and only process those
 // Should probably be done
 
+void JitBaseBlockCache::RetargetExit(JitBlock& block, JitBlock::LinkData& exit, u32 address)
+{
+  const u32 old_address = exit.exitAddress;
+  exit.exitAddress = address;
+  // The block stays registered under the old address while another of its exits goes there.
+  if (std::ranges::none_of(block.linkData,
+                           [&](const auto& e) { return e.exitAddress == old_address; }))
+  {
+    const auto it = links_to.find(old_address);
+    if (it != links_to.end())
+    {
+      it->second.erase(&block);
+      if (it->second.empty())
+        links_to.erase(it);
+    }
+  }
+  links_to[address].insert(&block);
+  JitBlock* const destination = GetBlockFromStartAddress(address, block.feature_flags);
+  WriteLinkBlock(exit, destination);
+  exit.linkStatus = destination != nullptr;
+}
+
 void JitBaseBlockCache::LinkBlockExits(JitBlock& block)
 {
   for (auto& e : block.linkData)
