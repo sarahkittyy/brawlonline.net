@@ -162,6 +162,14 @@ namespace OnlineMatch {
     static const u32 SP_SETUP = 0x806DEE98;
     static const u32 PLAYER_HP = 0x24;         // gmPlayerInitData: hitPointMax (stamina), u16; the CSS's default 150
 
+    // gfCameraManager (made once at boot, *0x8059FFC0) and its aspect setter (fn_8001A108: 0
+    // 16:9, else 4:3): the six cameras' aspect (+0xE4), the manager's +0x738 / +0x73C, and the
+    // video mode's width (the application's render mode, *0x805A0098, then VIConfigure).
+    typedef void* (*GetCameraManagerFn)();
+    typedef void (*SetCameraAspectFn)(void* mgr, int standard);
+    static const u32 CAMERA_MANAGER = 0x80019FA4;   // gfCameraManager::getManager
+    static const u32 CAMERA_ASPECT = 0x8001A108;
+
     typedef void (*PlaySEFn)(void*, int, int, int, int, int);
     static void playSE(int id)
     {
@@ -471,6 +479,14 @@ namespace OnlineMatch {
         // (Team attack is on in P+'s set rule; it only matters in a team battle.)
         OnlineMenu::applyRules(se.stageKind);
         slotColours(se);
+        // Every machine's camera framed for 16:9, as a boot on the launcher's pinned 16:9 Wii
+        // frames it. Options > Screen (sora_menu_main) applies a change at once through the
+        // camera's aspect setter, and the manager lives until the game is closed: a player who
+        // picked Standard (4:3) there played every match with a 4:3 camera, though Dolphin pins
+        // the screen setting itself (PinScreenSetting), and a screen KO, which places the fighter
+        // from the camera, desynced (MATT#695, 2026-11-02: 30 of 220 games). The setter with 0,
+        // as the boot runs it on a 16:9 Wii; it touches the video mode only when it changes.
+        ((SetCameraAspectFn)CAMERA_ASPECT)(((GetCameraManagerFn)CAMERA_MANAGER)(), 0);
         // P+'s special modes (docs/design/special-rules.md): Brawl's Special setup. In a stamina
         // match each player's HP is their pick on their panel (Session.extra, carried by their
         // lock-in; none: the CSS's default, the template's 150), and in All-Star each player's

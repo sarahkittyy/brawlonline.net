@@ -35,8 +35,9 @@ export const LOGGING_CONFIG_ARGS: readonly string[] = [
  * Aspect Ratio, SYSCONF `IPL.AR`) frames Brawl's camera, and a screen KO places the fighter from
  * the camera: two players with different values desynced on every screen KO (prod 2026-10-12).
  * Pinned to a fresh install's 16:9; Dolphin writes it into the Wii's settings at boot. Brawl's own
- * Options > Screen is pinned by Dolphin at every match start. How the picture is shown (Graphics >
- * Aspect Ratio, window size, resolution) is not game state and stays the player's.
+ * Options > Screen is pinned at every match start: the setting by Dolphin, the camera by the plugin.
+ * How the picture is shown (Graphics > Aspect Ratio, window size, resolution) is not game state and
+ * stays the player's.
  */
 export const WII_SETTINGS_CONFIG_ARGS: readonly string[] = ["-C", "SYSCONF.IPL.AR=True"];
 

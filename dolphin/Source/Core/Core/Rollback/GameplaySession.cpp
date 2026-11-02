@@ -975,7 +975,8 @@ void WriteU32(Core::System& system, u32 addr, u32 value)
 // the fighter from the camera: peers with different settings desynced on every screen KO (prod
 // 2026-10-12, docs/gameplay-rollback-status.md Phase 25). Every match is played with the value a
 // fresh install has (16:9); how the picture is shown (Dolphin's aspect ratio, window, resolution)
-// stays each player's.
+// stays each player's. The camera itself (gfCameraManager, made at boot, which Options > Screen
+// also sets at once) is set to 16:9 by the plugin's match setup (OnlineMatch::setupMatch).
 constexpr u32 GG_RECORD = 0x24;
 constexpr u32 RECORD_SCREEN = 0x810 + 0x28;
 constexpr u8 SCREEN_BITS = 0xC0, SCREEN_WIDE = 0xC0;
