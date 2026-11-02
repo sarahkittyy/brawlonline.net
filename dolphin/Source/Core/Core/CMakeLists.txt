@@ -138,6 +138,8 @@ add_library(core
   Harness/HarnessOnline.cpp
   Harness/HarnessServer.cpp
   Harness/HarnessCrash.cpp
+  HLE/HLE_BrawlReverb.cpp
+  HLE/HLE_BrawlReverb.h
   HLE/HLE_Misc.cpp
   HLE/HLE_Misc.h
   HLE/HLE_OS.cpp

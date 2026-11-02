@@ -15,6 +15,7 @@
 #include "Core/ConfigManager.h"
 #include "Core/Core.h"
 #include "Core/GeckoCode.h"
+#include "Core/HLE/HLE_BrawlReverb.h"
 #include "Core/HLE/HLE_Misc.h"
 #include "Core/HLE/HLE_OS.h"
 #include "Core/HW/Memmap.h"
@@ -30,7 +31,7 @@ namespace HLE
 static std::map<u32, u32> s_hooked_addresses;
 
 // clang-format off
-constexpr std::array<Hook, 50> os_patches{{
+constexpr std::array<Hook, 52> os_patches{{
     // Placeholder, os_patches[0] is the "non-existent function" index
     {"FAKE_TO_SKIP_0",               HLE_Misc::UnimplementedFunction,       HookType::Replace, HookFlag::Generic},
 
@@ -89,7 +90,9 @@ constexpr std::array<Hook, 50> os_patches{{
     {"GprbStageCreateHook", HLE_Misc::GprbStageCreateHook, HookType::Start, HookFlag::Fixed},
     {"GprbStageFileHook", HLE_Misc::GprbStageFileHook, HookType::Start, HookFlag::Fixed},
     {"BrawlTagRenderHook", HLE_Misc::BrawlTagRenderHook, HookType::Start, HookFlag::Fixed},
-    {"BrawlTagCopyTexHook", HLE_Misc::BrawlTagCopyTexHook, HookType::Start, HookFlag::Fixed}
+    {"BrawlTagCopyTexHook", HLE_Misc::BrawlTagCopyTexHook, HookType::Start, HookFlag::Fixed},
+    {"BrawlReverbHiHook", HLE_BrawlReverb::ReverbHiHook, HookType::Replace, HookFlag::Fixed},
+    {"BrawlReverbHiReturnHook", HLE_BrawlReverb::ReverbHiReturnHook, HookType::Start, HookFlag::Fixed}
   }};
 // clang-format on
 
@@ -186,6 +189,16 @@ void PatchFixedFunctions(Core::System& system)
   Patch(system, 0x80023b1c, "BrawlbackFrameBufferSyncWaitHook"); // `bl VIWaitForRetrace` inside gfFrameBuffer::sync's busy-wait loop
   Patch(system, 0x800e10b0, "BrawlTagRenderHook");  // name tag render (fn_800E10B0): no skipped draws
   Patch(system, 0x80072888, "BrawlTagCopyTexHook"); // its copy into the tag's texture (GXCopyTex)
+  // The stage reverb (the SDK's AXFX reverb "HI", Brawl's AUX callback) in C++: HLE_BrawlReverb.cpp.
+  // Not in a whole-machine session (Other Games rooms, armed before the boot): its machines must run
+  // the guest code at the same emulated times as builds without these hooks, and a Replace hook
+  // changes that even when the guest's code then runs (the JIT ends the block at the hook and counts
+  // the block's cycles again), so a room of players with and without it desynced from its first frame.
+  if (!Machine::IsArmed())
+  {
+    Patch(system, HLE_BrawlReverb::FunctionAddress(), "BrawlReverbHiHook");
+    Patch(system, HLE_BrawlReverb::ReturnAddress(), "BrawlReverbHiReturnHook");
+  }
 }
 
 void PatchFunctions(Core::System& system)
