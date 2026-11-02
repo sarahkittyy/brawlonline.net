@@ -22,6 +22,8 @@ export const GameSettingsMessages = {
   enableMusicDescription: () => "Play the game's music in menus and matches.",
   disableChat: () => "Disable Chat",
   disableChatDescription: () => "Hide the chat window everywhere in the game.",
+  potatoMode: () => "Potato Mode",
+  potatoModeDescription: () => "Disables shadows and backgrounds.",
   enableStreamGames: () => "Show my games on the Spectate tab",
   enableStreamGamesDescription: () =>
     "Streams inputs to the server for others to spectate you. Very minimal network load. Your opponent's setting may still show the match. Ranked games are always sent to the server to check results, and shown only if a player allows it.",

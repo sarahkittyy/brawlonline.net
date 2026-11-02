@@ -53,6 +53,23 @@ describe("online settings: disable chat", () => {
   });
 });
 
+describe("online settings: potato mode", () => {
+  it("is off in a Dolphin.ini without the key", async () => {
+    const ini = await IniFile.init(iniPath);
+    expect((await getOnlineSettings(ini)).potatoMode).toBe(false);
+  });
+
+  it("round-trips through [Online] PotatoMode", async () => {
+    const ini = await IniFile.init(iniPath);
+    await setOnlineSettings(ini, { potatoMode: true });
+    expect(await fs.promises.readFile(iniPath, "utf8")).toMatch(/\[Online\][^[]*PotatoMode = True/);
+    expect((await getOnlineSettings(await IniFile.init(iniPath))).potatoMode).toBe(true);
+
+    await setOnlineSettings(ini, { potatoMode: false });
+    expect((await getOnlineSettings(await IniFile.init(iniPath))).potatoMode).toBe(false);
+  });
+});
+
 describe("online settings: let others stream my games", () => {
   it("is on in a Dolphin.ini without the key", async () => {
     const ini = await IniFile.init(iniPath);

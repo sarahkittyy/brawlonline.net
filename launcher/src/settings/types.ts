@@ -51,6 +51,11 @@ export interface SettingsSchema {
   // Dolphin.ini `[Online] DisableChat`.
   disableChat: boolean;
 
+  // "Potato mode": matches draw less (no shadows, no stage backgrounds) for a PC that can't hold
+  // 60 fps; what each player's game simulates is unchanged, so it plays online against anyone
+  // (docs/game-code.md, Potato mode). Synced to Dolphin.ini `[Online] PotatoMode`.
+  potatoMode: boolean;
+
   // Online: "Show my games on the Spectate tab" (docs/design/spectating.md): this player's game
   // uploads its games' inputs for spectators (Ranked's always, listed only when a player allows
   // it). Synced to Dolphin.ini `[Online] StreamGames`.

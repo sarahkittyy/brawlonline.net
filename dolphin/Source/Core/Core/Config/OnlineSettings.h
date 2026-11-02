@@ -54,6 +54,11 @@ extern const Info<int> ONLINE_INPUT_DELAY;
 // zeroes the music volume every frame (docs/gameplay-rollback-status.md, Phase 20).
 extern const Info<bool> ONLINE_MUSIC;
 
+// Potato mode (the launcher's setting): matches draw less (no shadows, no stage backgrounds), for a
+// PC that can't hold 60 fps. GameBridge passes it to the game in LOCAL (v11); only this machine's
+// drawing changes (docs/game-code.md, Potato mode).
+extern const Info<bool> ONLINE_POTATO_MODE;
+
 // The Project+ release on the card the launcher gives this Dolphin ("v3.2.1"; empty: not said).
 // Replays record it (INFO build.pplus), so the launcher plays each on its own release's files.
 extern const Info<std::string> ONLINE_PPLUS_RELEASE;

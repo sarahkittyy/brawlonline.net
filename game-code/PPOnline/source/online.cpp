@@ -2,7 +2,7 @@
 //
 // Hooks (all verified clear of P+ v3.2 codeset patches with tools/gamecode/pplus_hooks.py):
 //   MuMsg::printIndex      0x800B91B8  replace  -> relabel message lines (Text::overrideFor)
-//   gfPadSystem::updateSystem 0x8002A210 replace -> per-frame tick (menus only; mailbox polling)
+//   gfPadSystem::updateSystem 0x8002A210 replace -> per-frame tick (menus; mailbox polling; potato mode)
 //   MuMsg::beginPrint      0x800B8EE8  replace  -> debug log of MuMsg::printf callers
 //   MuMsg::create          0x800B8930  replace  -> debug log of message objects
 //   gfSceneManager::setNextSequence 0x8002D640 replace -> boot to the ONLINE page (boot_menu.cpp)
@@ -15,6 +15,7 @@
 #include <mu/mu_msg.h>
 #include <string.h>
 
+#include "potato.h"
 #include "online.h"
 #include "online_menu.h"
 #include "netmenu.h"
@@ -118,6 +119,7 @@ namespace Online {
         SssPortraits::tick();
         SssCursors::tick();
         Rpc::tick();
+        Potato::tick();
     }
 
     // gfPadSystem's rumble: startMotor(port, frames) 0x8002A9E8, startMotor(port) 0x8002A948,

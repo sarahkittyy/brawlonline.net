@@ -82,6 +82,7 @@ export const useInputDelay = () => useSetting("inputDelay");
 
 export const useEnableMusic = () => useSetting("enableMusic");
 export const useDisableChat = () => useSetting("disableChat");
+export const usePotatoMode = () => useSetting("potatoMode");
 export const useEnableStreamGames = () => useSetting("enableStreamGames");
 export const useNetplayNetwork = () => useSetting("netplayNetwork");
 export const useCloseDolphinAfterSpectating = () => useSetting("closeDolphinAfterSpectating");
