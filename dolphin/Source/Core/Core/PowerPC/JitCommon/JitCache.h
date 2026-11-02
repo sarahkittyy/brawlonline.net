@@ -97,6 +97,10 @@ struct JitBlock : public JitBlockData
     u32 exitAddress;
     bool linkStatus;  // is it already linked?
     bool call;
+    // Jit64::WriteIndirectExit: the compare's imm32 (the address this exit is linked to) and how
+    // often the exit has been retargeted.
+    u8* cachedTarget = nullptr;
+    u8 retargets = 0;
   };
   std::vector<LinkData> linkData;
 
@@ -175,6 +179,8 @@ public:
   // This function shall be used if FastLookupIndexForAddress() failed.
   // This might return nullptr if there is no such block.
   JitBlock* GetBlockFromStartAddress(u32 em_address, CPUEmuFeatureFlags feature_flags);
+  // Points one of the block's exits at another address and links it if that block exists.
+  void RetargetExit(JitBlock& block, JitBlock::LinkData& exit, u32 address);
 
   // Get the normal entry for the block associated with the current program
   // counter. This will JIT code if necessary. (This is the reference

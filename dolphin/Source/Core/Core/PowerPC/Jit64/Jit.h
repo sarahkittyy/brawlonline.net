@@ -130,9 +130,10 @@ public:
   void EmitUpdateMembase();
   void MSRUpdated(const Gen::OpArg& msr, Gen::X64Reg scratch_reg);
   void FakeBLCall(u32 after);
-  void WriteExit(u32 destination, bool bl = false, u32 after = 0);
-  void JustWriteExit(u32 destination, bool bl, u32 after);
+  void WriteExit(u32 destination, bool bl = false, u32 after = 0, bool store_pc = true);
+  void JustWriteExit(u32 destination, bool bl, u32 after, bool store_pc = true);
   void WriteExitDestInRSCRATCH(bool bl = false, u32 after = 0);
+  void WriteIndirectExit(bool bl, u32 after);
   void WriteBLRExit();
   void WriteExceptionExit();
   void WriteExternalExceptionExit();
@@ -318,6 +319,7 @@ private:
   void LogGeneratedCode() const;
 
   static void ImHere(Jit64& jit);
+  static bool RetargetIndirectExit(Jit64& jit, u8* cached_target, const u8* slow, u32 block_start);
 
   JitBlockCache blocks{*this};
   TrampolineCache trampolines{*this};

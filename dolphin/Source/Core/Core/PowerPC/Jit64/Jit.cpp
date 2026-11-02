@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstring>
 #include <map>
 #include <span>
 #include <sstream>
@@ -579,7 +580,7 @@ void Jit64::MSRUpdated(const OpArg& msr, X64Reg scratch_reg)
   }
 }
 
-void Jit64::WriteExit(u32 destination, bool bl, u32 after)
+void Jit64::WriteExit(u32 destination, bool bl, u32 after, bool store_pc)
 {
   if (!m_enable_blr_optimization)
     bl = false;
@@ -594,10 +595,10 @@ void Jit64::WriteExit(u32 destination, bool bl, u32 after)
 
   SUB(32, PPCSTATE(downcount), Imm32(js.downcountAmount));
 
-  JustWriteExit(destination, bl, after);
+  JustWriteExit(destination, bl, after, store_pc);
 }
 
-void Jit64::JustWriteExit(u32 destination, bool bl, u32 after)
+void Jit64::JustWriteExit(u32 destination, bool bl, u32 after, bool store_pc)
 {
   // If nobody has taken care of this yet (this can be removed when all branches are done)
   JitBlock* b = js.curBlock;
@@ -606,7 +607,8 @@ void Jit64::JustWriteExit(u32 destination, bool bl, u32 after)
   linkData.linkStatus = false;
   linkData.call = bl;
 
-  MOV(32, PPCSTATE(pc), Imm32(destination));
+  if (store_pc)
+    MOV(32, PPCSTATE(pc), Imm32(destination));
 
   // Perform downcount flag check, followed by the requested exit
   if (bl)
@@ -663,6 +665,85 @@ void Jit64::WriteExitDestInRSCRATCH(bool bl, u32 after)
   {
     JMP(asm_routines.dispatcher);
   }
+}
+
+// Odd, so never a bcctr target, and too large for an imm8, so the compare keeps an imm32.
+constexpr u32 INDIRECT_EXIT_NO_TARGET = 0x7FFFFFFD;
+
+// An unconditional bcctr/bcctrl, target in RSCRATCH, with an inline cache in front of the
+// dispatcher: the exit is a linkable one whose address is decided at run time. A compare with the
+// address it is linked to takes the link; on a miss, RetargetIndirectExit relinks it to the new
+// target and the compare runs again. pc, LR, the downcount and the timing check are those of
+// WriteExitDestInRSCRATCH, so only the host's route to the next block changes.
+void Jit64::WriteIndirectExit(bool bl, u32 after)
+{
+  if (!jo.enableBlocklink)
+  {
+    WriteExitDestInRSCRATCH(bl, after);
+    return;
+  }
+
+  MOV(32, PPCSTATE(pc), R(RSCRATCH));
+  const u8* const compare = GetCodePtr();
+  CMP(32, R(RSCRATCH), Imm32(INDIRECT_EXIT_NO_TARGET));
+  u8* const cached_target = GetWritableCodePtr() - sizeof(u32);
+  FixupBranch miss = J_CC(CC_NE, Jump::Near);
+  DEBUG_ASSERT(HasWriteFailed() || GetCodePtr() == cached_target + sizeof(u32) + 6);
+  WriteExit(INDIRECT_EXIT_NO_TARGET, bl, after, false);
+  js.curBlock->linkData.back().cachedTarget = cached_target;
+
+  SwitchToFarCode();
+  // Today's exit through the dispatcher (RSCRATCH = pc), for the misses of a site the cache has
+  // given up on, so the compare keeps guarding the linked exit whatever that is linked to.
+  const u8* const slow = GetCodePtr();
+  WriteExitDestInRSCRATCH(bl, after);
+
+  SetJumpTarget(miss);
+  ABI_PushRegistersAndAdjustStack({}, 0);
+  MOV(64, R(ABI_PARAM1), ImmPtr(this));
+  MOV(64, R(ABI_PARAM2), ImmPtr(cached_target));
+  MOV(64, R(ABI_PARAM3), ImmPtr(slow));
+  MOV(32, R(ABI_PARAM4), Imm32(js.blockStart));
+  ABI_CallFunction(&Jit64::RetargetIndirectExit);
+  ABI_PopRegistersAndAdjustStack({}, 0);
+  TEST(8, R(ABI_RETURN), R(ABI_RETURN));
+  MOV(32, R(RSCRATCH), PPCSTATE(pc));
+  J_CC(CC_Z, slow);
+  JMP(compare, true);
+  SwitchToNearCode();
+}
+
+bool Jit64::RetargetIndirectExit(Jit64& jit, u8* cached_target, const u8* slow, u32 block_start)
+{
+  constexpr u8 MAX_RETARGETS = 3;
+  const u32 target = jit.m_ppc_state.pc;
+
+  // Looked up again: the block may have been destroyed while it ran, which unlinked its exits.
+  JitBlock* const block =
+      jit.blocks.GetBlockFromStartAddress(block_start, jit.m_ppc_state.feature_flags);
+  JitBlock::LinkData* exit = nullptr;
+  if (block)
+  {
+    const auto it =
+        std::ranges::find(block->linkData, cached_target, &JitBlock::LinkData::cachedTarget);
+    if (it != block->linkData.end())
+      exit = &*it;
+  }
+
+  if (exit && exit->retargets++ < MAX_RETARGETS)
+  {
+    jit.blocks.RetargetExit(*block, *exit, target);
+    std::memcpy(cached_target, &target, sizeof(target));
+    return true;
+  }
+
+  // Too many targets, or this block is not found (destroyed while it ran, or its address no longer
+  // translates to it): the miss branch (0F 85 rel32) goes to the dispatcher exit from now on. The
+  // linked exit is left as it is; only a compare that matches its address reaches it.
+  u8* const jne = cached_target + sizeof(u32);
+  const s32 rel = static_cast<s32>(slow - (jne + 6));
+  std::memcpy(jne + 2, &rel, sizeof(rel));
+  return false;
 }
 
 void Jit64::WriteBLRExit()

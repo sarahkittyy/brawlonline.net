@@ -4,6 +4,7 @@
 #include "Core/PowerPC/Jit64/Jit.h"
 
 #include "Common/BitSet.h"
+#include "Common/CPUDetect.h"
 #include "Common/CommonTypes.h"
 #include "Common/x64Emitter.h"
 #include "Core/PowerPC/Jit64/RegCache/JitRegCache.h"
@@ -121,7 +122,31 @@ void Jit64::stfXXX(UGeckoInstruction inst)
       RCX64Reg Rs = fpr.Bind(s, RCMode::Read);
       RegCache::Realize(Rs);
       MOVAPD(XMM0, Rs);
-      CALL(asm_routines.cdts);
+      if (cpu_info.bBMI2FastParallelBitOps)
+      {
+        // asm_routines.cdts's common case in place, same instructions and bits (the exponent is
+        // under 2^12, so 32-bit arithmetic agrees with the routine's 16-bit); a double in the
+        // single denormal range calls the routine, which starts over from XMM0.
+        MOVQ_xmm(R(RSCRATCH), XMM0);
+        MOV(64, R(RSCRATCH2), R(RSCRATCH));
+        SHR(64, R(RSCRATCH), Imm8(52));
+        AND(32, R(RSCRATCH), Imm32(0x7ff));
+        SUB(32, R(RSCRATCH), Imm32(874));
+        CMP(32, R(RSCRATCH), Imm32(896 - 874));
+        FixupBranch denormal = J_CC(CC_NA, Jump::Near);
+        MOV(64, R(RSCRATCH), Imm64(0xc7ffffffe0000000));
+        PEXT(64, RSCRATCH, RSCRATCH2, R(RSCRATCH));
+        SwitchToFarCode();
+        SetJumpTarget(denormal);
+        CALL(asm_routines.cdts);
+        FixupBranch back = J(Jump::Near);
+        SwitchToNearCode();
+        SetJumpTarget(back);
+      }
+      else
+      {
+        CALL(asm_routines.cdts);
+      }
     }
   }
   else
