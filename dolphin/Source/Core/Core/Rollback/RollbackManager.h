@@ -123,6 +123,14 @@ public:
   // 1 per granule (MEM1 granules, then MEM2 granules) inside the region set.
   const u8* RegionMask() const { return m_region_mode ? m_region_mask.data() : nullptr; }
 
+  // Clears the dirty marks of the granules saves cover, between bitmap entries lo and hi: the
+  // region set's in region mode, else all of MEM1 and MEM2. With `out`, lists the marked granules
+  // of the set there, in order. Marks outside the set stay set in region mode: nothing reads them
+  // (a save copies only the set's granules) and EndRegionMode clears them. A frame marks a few
+  // thousand of MEM1 and MEM2's ~1.4 million entries, so walking a third fewer of them is most of
+  // what this saves (GitHub issue #21).
+  void ScanDirtyMarks(u32 lo, u32 hi, std::vector<u32>* out);
+
   bool IsInitialized() const { return m_initialized; }
 
   void ToggleFrameSave();
@@ -297,6 +305,11 @@ public:
   job::Job* m_eviction_job = nullptr;
   // Returns the microseconds spent waiting (0 if there was no job or it had finished).
   u64 WaitForEviction(bool* was_pending = nullptr);
+
+  // The bitmap entry ranges ScanDirtyMarks walks ([first, end), in order, each a whole number of
+  // 8-entry words): the region set's runs in region mode, else MEM1 and MEM2.
+  std::vector<std::pair<u32, u32>> m_scan_runs;
+  std::vector<std::pair<u32, u32>> AllRamScanRuns() const;
 
   // one byte per page, 1 = needs a source, 0 = satisfied.
   std::vector<u8> m_needs_source_mem1;
