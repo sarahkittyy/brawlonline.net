@@ -676,6 +676,10 @@ picojson::value Checksums(s64 since);
 // CPU thread, from the Brawl game-loop hooks. Each returns true when it handled the hook (and set
 // npc); false lets the hook do its default.
 bool OnLoopTop(const Core::CPUThreadGuard& guard);
+// CPU thread, at every emulated field (Core::Callback_NewField): the main loop watchdog. Once the
+// game of a session that drives its loop has not come back to its loop top for a second of
+// emulated time, logs where the game's threads are.
+void OnField(Core::System& system);
 // CPU thread: a pass of the game's pad thread (early local input for a Wii controller).
 void OnPadPass(Core::System& system, const std::array<u8, 8 * 0x40>& pads,
                std::chrono::steady_clock::time_point at);

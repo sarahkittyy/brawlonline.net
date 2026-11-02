@@ -1516,17 +1516,6 @@ RawPads PadsSampledBefore(int chan, Clock::time_point t, Clock::time_point* samp
   return newest.pads;
 }
 
-namespace
-{
-struct PadWatch
-{
-  bool stalled = false;
-  u32 reports = 0;
-};
-PadWatch s_pad_watch;
-constexpr u32 PAD_WATCH_MAX_REPORTS = 8;  // a run
-
-// The return addresses of the guest stack at `sp` (back chain), oldest call last.
 std::string GuestBacktrace(const Core::CPUThreadGuard& guard, u32 sp, int depth)
 {
   std::string out;
@@ -1551,6 +1540,16 @@ std::string ThreadReport(const Core::CPUThreadGuard& guard, u32 addr)
                      t.context.srr0, t.context.lr, t.context.gpr[3], t.context.srr1,
                      GuestBacktrace(guard, t.context.gpr[1], 12));
 }
+
+namespace
+{
+struct PadWatch
+{
+  bool stalled = false;
+  u32 reports = 0;
+};
+PadWatch s_pad_watch;
+constexpr u32 PAD_WATCH_MAX_REPORTS = 8;  // a run
 
 void ReportPadStall(const Core::CPUThreadGuard& guard, double seconds)
 {

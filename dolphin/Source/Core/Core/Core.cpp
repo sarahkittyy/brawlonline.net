@@ -72,6 +72,7 @@
 #include "Core/NetPlayProto.h"
 #include "Core/Online/GameAlive.h"
 #include "Core/Rollback/MachineSDCard.h"
+#include "Core/Rollback/GameplaySession.h"
 #include "Core/Rollback/MachineSession.h"
 #include "Core/PatchEngine.h"
 #include "Core/PowerPC/GDBStub.h"
@@ -941,6 +942,8 @@ void Callback_FramePresented(const PresentInfo& present_info)
 void Callback_NewField(Core::System& system)
 {
   StallTracer::OnField();
+  // A P+ online game whose main loop stopped coming back to its loop top (GameplaySession.cpp).
+  Gprb::Session::OnField(system);
   // The emulation runs: mm's `game-alive` (Online/GameAlive.h).
   Online::GameAlive::Beat();
   if (s_frame_step)

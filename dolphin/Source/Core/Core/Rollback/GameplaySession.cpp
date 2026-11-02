@@ -48,6 +48,7 @@
 #include "Core/CoreTiming.h"
 #include "Core/HW/CPU.h"
 #include "Core/HW/Memmap.h"
+#include "Core/HW/SystemTimers.h"
 #include "Core/HW/VideoInterface.h"
 #include "Core/Online/Chat.h"
 #include "Core/Online/ChatText.h"
@@ -519,6 +520,10 @@ struct State
   int iteration = 0;
   bool resim_pass = false;
   bool spinning = false;  // this pass through the loop runs no game logic
+  // The main loop watchdog (OnField): the emulated time of the game's last loop top, and the
+  // reports since then.
+  u64 loop_top_ticks = 0;
+  int loop_stall_reports = 0;
   struct QueuedSave
   {
     bool pending = false;
@@ -9361,12 +9366,70 @@ void OnPadPass(Core::System& system, const RawPads& pads, Clock::time_point at)
     EiReleaseBatch();
 }
 
+// Main loop watchdog. The stall tracer (Core/StallTracer.cpp) reports a CPU thread that stops
+// making VI fields; a game whose main thread loops forever in its own code, interrupts and the
+// other threads running, still makes them, and the session just never sees its loop top again
+// (bug report #218, ZOC#684, launcher 0.1.120, and #201/#202: a GameCube player against a
+// Classic Controller player froze at session frame 2 in most games, the music racing on; the
+// logs end there). Once a session that drives the loop has not had a loop top for
+// LOOP_STALL_FIRST_S of emulated time, and again at LOOP_STALL_SECOND_S, OnField logs where the
+// game is: the pass, the main thread's PC, LR, interrupts and stack, and every guest thread. Emulated
+// time: the waits at the loop top (the peer, the barriers, a paused Dolphin) let none pass.
+constexpr double LOOP_STALL_FIRST_S = 1.0;
+constexpr double LOOP_STALL_SECOND_S = 3.0;
+
+void NoteLoopTop(Core::System& system)
+{
+  const u64 now = system.GetCoreTiming().GetTicks();
+  if (s.loop_stall_reports > 0)
+  {
+    WARN_LOG_FMT(BRAWLBACK, "gprb: the game is back at its loop top after {:.1f} s of emulated time",
+                 static_cast<double>(now - s.loop_top_ticks) /
+                     system.GetSystemTimers().GetTicksPerSecond());
+  }
+  s.loop_top_ticks = now;
+  s.loop_stall_reports = 0;
+}
+
+void OnField(Core::System& system)
+{
+  if (s.mode == Mode::None || !DrivesLoop() || s.loop_top_ticks == 0 || s.loop_stall_reports >= 2)
+    return;
+  auto& ct = system.GetCoreTiming();
+  const u64 now = ct.GetTicks();
+  if (now < s.loop_top_ticks)
+    return;
+  const double seconds =
+      static_cast<double>(now - s.loop_top_ticks) / system.GetSystemTimers().GetTicksPerSecond();
+  if (seconds < (s.loop_stall_reports == 0 ? LOOP_STALL_FIRST_S : LOOP_STALL_SECOND_S))
+    return;
+  ++s.loop_stall_reports;
+  const Core::CPUThreadGuard guard(system);
+  const auto& ppc = system.GetPPCState();
+  const auto rd = [&](u32 a) {
+    return PowerPC::MMU::HostIsRAMAddress(guard, a) ? PowerPC::MMU::HostRead<u32>(guard, a) : 0u;
+  };
+  const int i = s.iteration;
+  WARN_LOG_FMT(BRAWLBACK,
+               "gprb: the game has not been back at its loop top for {:.1f} s of emulated time "
+               "(phase {}, session frame {}, pass {} of {} for frame {}, {}, at {}): main thread at "
+               "{:08x}, lr {:08x}, interrupts {}, current thread {:08x}, stack{}",
+               seconds, PhaseName(s.phase), s.current_frame, i + 1, s.ops.adv_count,
+               i < s.ops.adv_count ? s.ops.adv_frame[i] : -1,
+               ct.IsRollbackResimulating() ? "re-run" : "presented", s.cpu_where.load(), ppc.pc,
+               ppc.spr[SPR_LR], ppc.msr.EE ? "on" : "off", rd(0x800000E4),
+               GuestBacktrace(guard, ppc.gpr[1], 16));
+  for (const auto& t : system.GetPowerPC().GetDebugInterface().GetThreads(guard))
+    WARN_LOG_FMT(BRAWLBACK, "gprb:   thread {}", ThreadReport(guard, t->GetAddress()));
+}
+
 bool OnLoopTop(const Core::CPUThreadGuard& guard)
 {
   s.cpu_where = "looptop";
   std::lock_guard<std::recursive_timed_mutex> lk(s.mutex);
   auto& system = guard.GetSystem();
   auto& ppc = system.GetPPCState();
+  NoteLoopTop(system);
 
   // Sounds of mispredicted runs are stopped here, between passes (guest calls that return here).
   if (s.gcall_active || (s.phase == Phase::Running && !s.snd_to_stop.empty()))
