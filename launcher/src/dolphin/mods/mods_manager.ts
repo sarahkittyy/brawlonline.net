@@ -942,7 +942,16 @@ export class ModsManager {
       return summarizeGcSave(folder);
     }
     const save = await summarizeSave(folder);
-    const own = await findOwnDolphinSave(this.ownDolphinFolders(), this.findBuild(id).titleId!).catch(() => null);
+    // (saveDataDir may have read the title ID just now.)
+    const current = this.findBuild(id);
+    // A mod's own Dolphin first: a portable one (Cobalt's) is not where Dolphin keeps its User
+    // folder, and its save is the one the player set the mod's rules in (a Discord report,
+    // 2026-11-02, Cobalt: "it had no items and fs off but when i run it with brawl online it had
+    // fs meter still", after removing and adding the game again, which keeps its save).
+    const near = await this.saveNearBuild(current).catch(() => null);
+    const own = near
+      ? { ...(await summarizeSave(near)), near: true }
+      : await findOwnDolphinSave(this.ownDolphinFolders(), current.titleId!).catch(() => null);
     return { ...save, ownDolphin: own && !(await sameSave(own.folder, folder)) ? own : null };
   }
 
@@ -1143,19 +1152,33 @@ export class ModsManager {
     if ((await summarizeSave(titleDataDir(saveStoreDir(userFolder, build.hash), build.titleId))).files > 0) {
       return;
     }
-    let source = await findDolphinSaveNear([build.launcherPath, build.sdPath], build.titleId);
+    let source = await this.saveNearBuild(build);
     // Else a plain disc's save in the player's own Dolphin (bug report #193). Not for Brawl, whose
     // save there is mostly a P+ card's (name tags, controls), which no build starts from.
     if (!source && !build.launcherPath && !build.sdPath && !isBrawlGameId(titleGameId(build.titleId))) {
       source = (await findOwnDolphinSave(this.ownDolphinFolders(), build.titleId))?.folder ?? null;
     }
-    // Not P+'s own save (a card in the netplay User folder): no build starts from it (template_saves.ts).
-    const fromUser = source ? path.relative(userFolder, source) : "";
-    if (!source || !(fromUser.startsWith("..") || path.isAbsolute(fromUser))) {
+    if (!source || this.inNetplayUser(source)) {
       return;
     }
     const result = await importSave({ source, titleId: build.titleId, userFolder, buildHash: build.hash });
     log.warn(`${build.name} starts from the save in its Dolphin folder: ${source} (${result.save.files} files)`);
+  }
+
+  /** The save in the Dolphin folder the build's launcher or SD card is in (`findDolphinSaveNear`),
+   * null for none. Not P+'s own save (a card in the netplay User folder): no build starts from it
+   * (template_saves.ts). */
+  private async saveNearBuild(build: ModBuild): Promise<string | null> {
+    if (build.platform === "gamecube" || !build.titleId) {
+      return null;
+    }
+    const source = await findDolphinSaveNear([build.launcherPath, build.sdPath], build.titleId);
+    return source && !this.inNetplayUser(source) ? source : null;
+  }
+
+  private inNetplayUser(file: string): boolean {
+    const fromUser = path.relative(this.dolphin.netplayUserFolder(), file);
+    return !(fromUser.startsWith("..") || path.isAbsolute(fromUser));
   }
 
   /** The SD card's root (DolphinTool sdhash), its hashes cached in the netplay User folder. */

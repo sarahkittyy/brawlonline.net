@@ -268,8 +268,9 @@ export type ModSaveInfo = {
   /** The newest file's change (ISO), or null when the game has no save yet. */
   modified: string | null;
   /** A save of the game in the player's own Dolphin that is not the one here (a Wii game's;
-   * `findOwnDolphinSave`), to import with one click. */
-  ownDolphin?: { folder: string; files: number; modified: string | null } | null;
+   * `near`: the one in the Dolphin folder the game's launcher or SD card is in,
+   * `findDolphinSaveNear`; else `findOwnDolphinSave`), to import with one click. */
+  ownDolphin?: { folder: string; files: number; modified: string | null; near?: boolean } | null;
 };
 
 /** The save imported, and where the one it replaced went (null: there was none). */

@@ -75,7 +75,11 @@ const SaveSection = ({ gamecube, info, busy, onImport, onOpenFolder }: SaveSecti
     <div>
       <div>{Messages.saveData()}</div>
       <div className={styles.saveLine}>{line}</div>
-      {own && <div className={styles.saveLine}>{Messages.ownDolphinSave(ownWhen)}</div>}
+      {own && (
+        <div className={styles.saveLine}>
+          {own.near ? Messages.nearDolphinSave(ownWhen) : Messages.ownDolphinSave(ownWhen)}
+        </div>
+      )}
       <div className={styles.saveHelp}>{Messages.saveHelp()}</div>
       <div className={styles.saveButtons}>
         <Button
@@ -92,7 +96,11 @@ const SaveSection = ({ gamecube, info, busy, onImport, onOpenFolder }: SaveSecti
         </Button>
       </div>
       <Menu anchorEl={menuAnchor} open={menuAnchor !== null} onClose={() => setMenuAnchor(null)}>
-        {own && <MenuItem onClick={() => pick("own")}>{Messages.importOwnDolphinSave(ownWhen)}</MenuItem>}
+        {own && (
+          <MenuItem onClick={() => pick("own")}>
+            {own.near ? Messages.importNearDolphinSave(ownWhen) : Messages.importOwnDolphinSave(ownWhen)}
+          </MenuItem>
+        )}
         <MenuItem onClick={() => pick("file")}>
           {gamecube ? Messages.importGcSaveFile() : Messages.importSaveFile()}
         </MenuItem>
