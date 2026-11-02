@@ -114,11 +114,8 @@ public:
     // player's delay costs only their own screen; until 2026-10-23 Direct and rooms only), else a
     // profile (Session::DelayLevel).
     o.delay = options.delay;
-    if (const int delay = Config::Get(Config::ONLINE_INPUT_DELAY);
-        !o.delay && delay > 0 && delay <= Session::MAX_INPUT_DELAY)
-    {
-      o.delay = delay;
-    }
+    if (!o.delay)
+      o.delay = Session::DelayFramesFromSetting(Config::Get(Config::ONLINE_INPUT_DELAY));
     o.delay_level = Session::DelayLevel(Config::Get(Config::ONLINE_INPUT_DELAY));
     o.dedupe_resim_sounds = options.dedupe_resim_sounds;
     // The match's stages: the server's list for this mode (get-ticket-resp `stages`), else P+'s

@@ -71,11 +71,12 @@ constexpr int AutoDelayLevel(int delay)
 {
   return delay == AUTO_DELAY_AGGRESSIVE ? -1 : delay == AUTO_DELAY_SMOOTH ? 1 : 0;
 }
-// The player's setting ([Online] InputDelay: 1-9 frames, 0 Normal, -1 Aggressive, -2 Smooth,
-// Gprb::Session::DELAY_*) as an Options::delay.
+// The player's setting ([Online] InputDelay: 1-9 frames, -3 0 frames, 0 Normal, -1 Aggressive,
+// -2 Smooth, Gprb::Session::DELAY_*) as an Options::delay.
 constexpr int DelayFromSetting(int setting)
 {
   return setting > 0   ? setting :
+         setting == -3 ? 0 :
          setting == -1 ? AUTO_DELAY_AGGRESSIVE :
          setting == -2 ? AUTO_DELAY_SMOOTH :
                          AUTO_DELAY;

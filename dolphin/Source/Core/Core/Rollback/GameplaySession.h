@@ -90,10 +90,25 @@ static_assert(AutoInputDelay(GameRoundTrip(-1)) == 2 && AutoInputDelay(GameRound
               AutoInputDelay(GameRoundTrip(90)) == 2);
 
 // The input delay setting ([Online] InputDelay, the launcher's; SetInputDelay): a profile, or
-// 1-MAX_INPUT_DELAY frames.
+// 1-MAX_INPUT_DELAY frames, or DELAY_ZERO_FRAMES for 0 frames (0 is Normal).
 constexpr int DELAY_NORMAL = 0;
 constexpr int DELAY_AGGRESSIVE = -1;
 constexpr int DELAY_SMOOTH = -2;
+constexpr int DELAY_ZERO_FRAMES = -3;
+// The lowest setting.
+constexpr int MIN_DELAY_SETTING = DELAY_ZERO_FRAMES;
+// A setting's number of frames; a profile (or anything else): none.
+constexpr std::optional<int> DelayFramesFromSetting(int setting)
+{
+  if (setting == DELAY_ZERO_FRAMES)
+    return 0;
+  if (setting > 0 && setting <= MAX_INPUT_DELAY)
+    return setting;
+  return std::nullopt;
+}
+static_assert(DelayFramesFromSetting(DELAY_ZERO_FRAMES) == 0 && DelayFramesFromSetting(3) == 3 &&
+              !DelayFramesFromSetting(DELAY_NORMAL) && !DelayFramesFromSetting(DELAY_SMOOTH) &&
+              !DelayFramesFromSetting(MAX_INPUT_DELAY + 1));
 // A profile as a level: -1 Aggressive, 0 Normal, 1 Smooth (a number of frames: Normal).
 constexpr int DelayLevel(int setting)
 {
@@ -462,8 +477,8 @@ void SetGameResultCallback(std::function<void(const GameResult&)> callback);
 // every machine, and the game goes straight into it.
 void SetQuitLoses(bool loses);
 // The player's input delay setting changed while Dolphin runs (any thread; the launcher's
-// input-delay.json, Online::Rooms): a profile (DELAY_NORMAL, DELAY_AGGRESSIVE, DELAY_SMOOTH) or
-// 1-MAX_INPUT_DELAY frames. A running game takes it from its next frame, and so does every later
+// input-delay.json, Online::Rooms): a profile (DELAY_NORMAL, DELAY_AGGRESSIVE, DELAY_SMOOTH),
+// 1-MAX_INPUT_DELAY frames or DELAY_ZERO_FRAMES. A running game takes it from its next frame, and so does every later
 // game, over an option the session started with.
 void SetInputDelay(int setting);
 // This player's input delay in the running game (any thread), -1 when none runs.

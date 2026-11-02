@@ -31,14 +31,14 @@ describe("input delay hand-off", () => {
   });
 
   it("refuses what the game would ignore", async () => {
-    for (const bad of [-3, 10, 2.5, Number.NaN]) {
+    for (const bad of [-4, 10, 2.5, Number.NaN]) {
       await expect(writeInputDelayRequest(dir, bad)).rejects.toThrow();
     }
     expect(await readdir(dir)).toEqual([]);
   });
 
-  it("takes the profiles: -1 Aggressive, 0 Normal, -2 Smooth", async () => {
-    for (const profile of [-1, 0, -2]) {
+  it("takes the profiles (-1 Aggressive, 0 Normal, -2 Smooth) and 0 frames (-3)", async () => {
+    for (const profile of [-1, 0, -2, -3]) {
       const req = await writeInputDelayRequest(dir, profile);
       expect(JSON.parse(await readFile(inputDelayRequestPath(dir), "utf8")).inputDelay).toBe(profile);
       expect(req.inputDelay).toBe(profile);
