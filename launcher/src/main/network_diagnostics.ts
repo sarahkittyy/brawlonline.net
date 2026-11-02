@@ -5,6 +5,7 @@ import { v4DefaultGateway } from "network-default-gateway";
 import { lookup } from "node:dns/promises";
 import { createServer, request } from "stun";
 
+import type { NetworkDiagnostics } from "./network_report";
 import { countHops } from "./traceroute";
 
 // Two different machines: a router that gives every destination its own port shows it only toward
@@ -13,25 +14,24 @@ import { countHops } from "./traceroute";
 const STUN_SERVER1 = { host: "stun.l.google.com", port: 19302 };
 const STUN_SERVER2 = { host: "stun.cloudflare.com", port: 3478 };
 
-export async function getNetworkDiagnostics(): Promise<{
-  address: string;
-  cgnat: Presence;
-  natType: NatType;
-  portMapping: PortMapping;
-}> {
-  const natTypePromise = getNatType().catch(() => ({ address: "", natType: NatType.FAILED }));
-  const portMappingPromise = getPortMappingPresence().catch(() => ({ upnp: Presence.FAILED, natpmp: Presence.FAILED }));
+/**
+ * The network check. `found` gets each finding as soon as it is known, so a caller that stops
+ * waiting (a bug report) still has the NAT type when the traceroute runs long.
+ */
+export async function getNetworkDiagnostics(found: Partial<NetworkDiagnostics> = {}): Promise<NetworkDiagnostics> {
+  const natTypePromise = getNatType()
+    .catch(() => ({ address: "", natType: NatType.FAILED }))
+    .then((result) => Object.assign(found, result));
+  const portMappingPromise = getPortMappingPresence()
+    .catch(() => ({ upnp: Presence.FAILED, natpmp: Presence.FAILED }))
+    .then((portMapping) => (found.portMapping = portMapping));
   const { address, natType } = await natTypePromise;
-  const portMapping = await portMappingPromise;
 
-  let cgnat = Presence.FAILED;
-  if (address) {
-    try {
-      cgnat = await getCgnatPresence(address);
-    } catch (err) {
-      // just return what we have
-    }
-  }
+  // The traceroute (up to 9 s) runs while the router is asked for UPnP and NAT-PMP.
+  const cgnatPromise = (
+    address ? getCgnatPresence(address).catch(() => Presence.FAILED) : Promise.resolve(Presence.FAILED)
+  ).then((cgnat) => (found.cgnat = cgnat));
+  const [portMapping, cgnat] = await Promise.all([portMappingPromise, cgnatPromise]);
   return { address, cgnat, natType, portMapping };
 }
 
