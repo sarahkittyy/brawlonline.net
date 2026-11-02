@@ -3634,12 +3634,16 @@ namespace OnlineMenu {
         if (!startHeld) s.roomStartUp = true;
         s.roomHoldStart = (startHeld && s.roomStartUp) ? s.roomHoldStart + 1 : 0;
         updateStatus();
-        if (s.phase == PH_SEARCHING || s.phase == PH_CONNECTING) {
-            char banner[sizeof(s.status) + 32];
-            sprintf(banner, "%s - Hold START to cancel", s.status);
+        // The banner names the mode searched for (Sarah's board, 2026-11-02: "UNRANKED - Searching
+        // for opponent - Hold START to cancel", same with RANKED).
+        {
+            const char* mode = s.mode == PPOM::MODE_RANKED ? "RANKED" : "UNRANKED";
+            char banner[sizeof(s.status) + 48];
+            if (s.phase == PH_SEARCHING || s.phase == PH_CONNECTING)
+                sprintf(banner, "%s - %s - Hold START to cancel", mode, s.status);
+            else
+                sprintf(banner, "%s - %s", mode, s.status);
             TrainingRoom::setBanner(banner, s.statusRed);
-        } else {
-            TrainingRoom::setBanner(s.status, s.statusRed);
         }
         if (s.phase == PH_SEARCHING || s.phase == PH_CONNECTING) {
             if (s.roomHoldStart >= ROOM_HOLD_START_FRAMES) {

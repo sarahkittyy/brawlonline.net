@@ -36,6 +36,7 @@ STAGE_ONLINE_TRAINING = 0x37
 ST_MANSION = "st_mansion.rel"   # P+'s module for the Online Training stage (Training.param)
 UNRANKED_STAGES = [0x21, 0x2D]   # Smashville, Dream Land (a two-stage test list)
 WIFIPR_HUD = 0x805A0300          # ifWifiprTask's HUD: the banner and the player panels
+NETWORK_HEAP, NETWORK_HEAP_SIZE = 0x90E77500, 0x143800   # Brawl's heap 6, where the plugin is linked
 SCREEN_ONLINE_BUSY = 4           # PPOM: an online search (the launcher shows no "In game")
 # training_room.cpp's debug word (scratch[5]): 0xF the step (3 in the room, 7 after it), 0xF0
 # the room's exit code, 0xF00 how it ended (1 the match, 2 the CSS), 0x10000 the banner seen, 0x20000 a Sandbag made,
@@ -119,12 +120,24 @@ def _search(g: Game, mode: int, held: tuple[str, ...] = ()) -> None:
     _wait(lambda: _in_room(g) or (_room(g) & 0xF) == ROOM_ENDED, 30, f"{g.inst.name} in the waiting room")
 
 
-def _check_room(g: Game, shot: str) -> None:
+def _banner_shown(g: Game, text: str) -> bool:
+    """training_room.cpp's banner line (s_banner, in the plugin's .bss in the Network heap) is `text`."""
+    want = text.encode() + b"\0"
+    for a in range(NETWORK_HEAP, NETWORK_HEAP + NETWORK_HEAP_SIZE, 0x10000):
+        n = min(0x10000 + len(want), NETWORK_HEAP + NETWORK_HEAP_SIZE - a)
+        if want in g.c.read_mem(a, n):
+            return True
+    return False
+
+
+def _check_room(g: Game, shot: str, mode: str = "UNRANKED") -> None:
     """The room is Brawl's Online Training stage with the player's fighter, the Sandbag and the
-    search line in the banner, and Dolphin runs no match in it."""
+    search line in the banner (the mode first: Sarah's board, 2026-11-02), and Dolphin runs no
+    match in it."""
     assert _stage_kind(g) == STAGE_ONLINE_TRAINING, hex(_stage_kind(g))
     _wait(lambda: _fade(g) == 0, 5, "the room out of the fade")
     _wait(lambda: _room(g) & ROOM_BANNER, 10, "the banner line")
+    _wait(lambda: _banner_shown(g, f"{mode} - Searching for opponent - Hold START to cancel"), 5, "the banner's text")
     _wait(lambda: _room(g) & ROOM_SANDBAG, 10, "the Sandbag")
     # Brawl's own waiting room song, whatever P+'s tracklist drew (Sarah, 2026-10-24): X07
     # streams from the disc, so P+'s SD stream open of it fails (the log's last song).
@@ -411,7 +424,7 @@ def test_ranked_game_1_from_the_waiting_room(backend: OnlineBackend, dolphin: Ca
 
     _search(a, 0)
     assert _in_room(a)
-    _check_room(a, "01-room-searching")
+    _check_room(a, "01-room-searching", "RANKED")
     _search(b, 0)
     _peer_shown(a, ub)
     _peer_shown(b, ua)
