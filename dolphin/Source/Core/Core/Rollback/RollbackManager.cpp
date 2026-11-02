@@ -620,6 +620,7 @@ void RollbackManager::Init(Core::System& system)
 
   m_needs_source_mem1.assign(m_mem1_size / ROLLBACK_PAGE_SIZE, 0);
   m_needs_source_mem2.assign(m_mem2_size / ROLLBACK_PAGE_SIZE, 0);
+  m_scan_runs = AllRamScanRuns();
 
   // Fake VMEM's chunk versions take its marks first: clearing them would lose its writes so far.
   memory.FlushFakeVMEMWrites();
@@ -780,6 +781,41 @@ void RollbackManager::BeginRegionMode(const std::vector<std::pair<uint32_t, uint
       }
     }
   }
+  // The set as runs of bitmap entries for ScanDirtyMarks, widened to whole 8-entry words (the
+  // bitmap scan clears a whole word with one atomic exchange; a partial word would be read and
+  // cleared byte by byte, racing the GPU thread's marks) and joined across gaps shorter than a
+  // cache line of entries. The extra entries' marks are cleared and dropped by the mask.
+  {
+    m_scan_runs.clear();
+    const auto add_runs = [&](size_t base, size_t count, u32 first_entry) {
+      const u32 limit = first_entry + static_cast<u32>(count);
+      for (size_t i = 0; i < count;)
+      {
+        if (!m_region_mask[base + i])
+        {
+          ++i;
+          continue;
+        }
+        size_t j = i;
+        while (j < count && m_region_mask[base + j])
+          ++j;
+        const u32 first = (first_entry + static_cast<u32>(i)) & ~7u;
+        const u32 end = std::min(limit, (first_entry + static_cast<u32>(j) + 7) & ~7u);
+        if (!m_scan_runs.empty() && m_scan_runs.back().second >= first_entry &&
+            first <= m_scan_runs.back().second + 64)
+        {
+          m_scan_runs.back().second = std::max(m_scan_runs.back().second, end);
+        }
+        else
+        {
+          m_scan_runs.emplace_back(first, end);
+        }
+        i = j;
+      }
+    };
+    add_runs(0, mem1_pages, 0);
+    add_runs(mem1_pages, mem2_pages, MEM2_FIRST_PAGE);
+  }
   m_region_mode = true;
   // Fresh ring and base snapshot.
   m_frame_save_enabled.store(false, std::memory_order_relaxed);
@@ -787,6 +823,38 @@ void RollbackManager::BeginRegionMode(const std::vector<std::pair<uint32_t, uint
   INFO_LOG_FMT(BRAWLBACK,
                "Rollback: region mode on, {} ranges, {} bytes, {} exclusions, {} granules partly inside",
                ranges.size(), m_region_bytes, exclude.size(), m_region_partial.size());
+}
+
+std::vector<std::pair<u32, u32>> RollbackManager::AllRamScanRuns() const
+{
+  std::vector<std::pair<u32, u32>> runs{{0, static_cast<u32>(m_mem1_size / ROLLBACK_PAGE_SIZE)}};
+  if (m_mem2_ptr && m_mem2_size > 0)
+  {
+    runs.emplace_back(MEM2_FIRST_PAGE,
+                      MEM2_FIRST_PAGE + static_cast<u32>(m_mem2_size / ROLLBACK_PAGE_SIZE));
+  }
+  return runs;
+}
+
+void RollbackManager::ScanDirtyMarks(u32 lo, u32 hi, std::vector<u32>* out)
+{
+  auto& bitmap = JITDirtyBitmap::Get();
+  const u8* const mask = RegionMask();
+  const u32 mem1_pages = static_cast<u32>(m_mem1_size / ROLLBACK_PAGE_SIZE);
+  if (out)
+    out->clear();
+  for (const auto& [first, end] : m_scan_runs)
+  {
+    if (end <= lo || first >= hi)
+      continue;
+    const u32 a = std::max(first, lo);
+    const u32 b = std::min(end, hi);
+    bitmap.ScanAndClear(a, b - a, [&](u32 entry) {
+      const u32 granule = entry < MEM2_FIRST_PAGE ? entry : mem1_pages + (entry - MEM2_FIRST_PAGE);
+      if (out && (!mask || mask[granule]))
+        out->push_back(entry);
+    });
+  }
 }
 
 std::vector<std::pair<u32, u32>> RollbackManager::CensusRanges() const
@@ -823,6 +891,11 @@ void RollbackManager::EndRegionMode()
   m_ring_count = 0;
   m_base_snapshot.valid = false;
   m_shadow_valid = false;
+  // The scans walked only the set: the marks outside it are stale for whatever saves next.
+  m_scan_runs = AllRamScanRuns();
+  auto& bitmap = JITDirtyBitmap::Get();
+  for (const auto& [first, end] : m_scan_runs)
+    bitmap.ClearRange(first, end - first);
 }
 
 void RollbackManager::ToggleFrameSave()
@@ -1764,13 +1837,7 @@ bool RollbackManager::LoadFrame(Core::System& system, int frames_back)
 
   {
     ROLLBACK_ZONE_N("Clear JIT dirty bitmap");
-    auto& bitmap = JITDirtyBitmap::Get();
-    bitmap.ScanAndClear(0, static_cast<uint32_t>(m_mem1_size / ROLLBACK_PAGE_SIZE), [](u32) {});
-    if (m_mem2_ptr && m_mem2_size > 0)
-    {
-      bitmap.ScanAndClear(MEM2_FIRST_PAGE, static_cast<uint32_t>(m_mem2_size / ROLLBACK_PAGE_SIZE),
-                          [](u32) {});
-    }
+    ScanDirtyMarks(0, UINT32_MAX, nullptr);
   }
 
   RecordTiming(timing_start, m_stat_load_count, m_stat_load_us_total, m_stat_load_us_max);
