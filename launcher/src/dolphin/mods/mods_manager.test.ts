@@ -215,6 +215,13 @@ describe("a new Wii game's save", () => {
     expect(cobalt.hash).toBe(hash);
     expect(await readFile(path.join(store(hash), "autosv0.bin"), "utf8")).toBe("from rooms");
     expect(await readdir(store(fresh.hash!)).catch(() => [])).toEqual([]);
+    // The edit window offers the mod folder's save while the store's is another one.
+    const offered = (await mods.saveInfo("cobalt"))?.ownDolphin;
+    expect(offered?.near).toBe(true);
+    expect(offered?.folder).toBe(brawlData(path.join(tmp, "Cobalt", "User")));
+    await mods.importSave("cobalt", offered!.folder);
+    expect(await readFile(path.join(store(hash), "autosv0.bin"), "utf8")).toBe("theirs");
+    expect((await mods.saveInfo("cobalt"))?.ownDolphin).toBeNull();
   });
 
   it("starts a plain disc from the save in the player's own Dolphin, not Brawl (bug report #193)", async () => {
