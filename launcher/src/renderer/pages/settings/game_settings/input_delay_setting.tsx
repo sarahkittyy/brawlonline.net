@@ -1,16 +1,16 @@
 import {
   INPUT_DELAY_AGGRESSIVE,
-  INPUT_DELAY_CHOICES,
+  INPUT_DELAY_FRAMES,
   INPUT_DELAY_NORMAL,
   INPUT_DELAY_PROFILES,
   INPUT_DELAY_SMOOTH,
+  inputDelayFrames,
+  inputDelayFromFrames,
   isInputDelayProfile,
   normalizeInputDelay,
 } from "@common/input_delay";
 import { css } from "@emotion/react";
-import FormControlLabel from "@mui/material/FormControlLabel";
-import Radio from "@mui/material/Radio";
-import RadioGroup from "@mui/material/RadioGroup";
+import Slider from "@mui/material/Slider";
 import Switch from "@mui/material/Switch";
 import Typography from "@mui/material/Typography";
 import React from "react";
@@ -30,6 +30,11 @@ const profileLabel = (profile: number) =>
     ? Messages.inputDelaySmooth()
     : Messages.inputDelayNormal();
 
+// Automatic's slider stops at its three profiles, least delay first (its positions 0-2); Fixed's
+// at each number of frames.
+const PROFILE_MARKS = INPUT_DELAY_PROFILES.map((profile, i) => ({ value: i, label: profileLabel(profile) }));
+const FRAME_MARKS = INPUT_DELAY_FRAMES.map((frames) => ({ value: frames, label: String(frames) }));
+
 const SideLabel = ({ active, children }: { active: boolean; children: React.ReactNode }) => (
   <Typography
     css={css`
@@ -41,10 +46,48 @@ const SideLabel = ({ active, children }: { active: boolean; children: React.Reac
   </Typography>
 );
 
+/** A slider that stops at its marks (0 to the last); `onCommit` when it is let go. */
+const DelaySlider = ({
+  position,
+  marks,
+  valueLabel,
+  onCommit,
+}: {
+  position: number;
+  marks: { value: number; label: string }[];
+  valueLabel?: (at: number) => string;
+  onCommit: (at: number) => void;
+}) => {
+  // The position while it is dragged; the setting moves it too.
+  const [dragging, setDragging] = React.useState(position);
+  React.useEffect(() => setDragging(position), [position]);
+  return (
+    <div
+      css={css`
+        max-width: 360px;
+        padding: 0 24px;
+      `}
+    >
+      <Slider
+        aria-label={Messages.inputDelay()}
+        value={dragging}
+        min={0}
+        max={marks[marks.length - 1].value}
+        step={null}
+        marks={marks}
+        valueLabelDisplay={valueLabel ? "auto" : "off"}
+        valueLabelFormat={valueLabel}
+        onChange={(_, v) => setDragging(v as number)}
+        onChangeCommitted={(_, v) => onCommit(v as number)}
+      />
+    </div>
+  );
+};
+
 /**
- * "Input Delay": an Automatic <-> Fixed switch, then Automatic's profiles (Aggressive, Normal,
- * Smooth; picked from the ping at each game's start) or Fixed's 1-4 frames. Both apply in every
- * mode and right away, mid-game included (input-delay.json).
+ * "Input Delay": an Automatic <-> Fixed switch, then a slider: Automatic's profiles (Aggressive,
+ * Normal, Smooth; picked from the ping at each game's start) or Fixed's 0-8 frames. Both apply in
+ * every mode and right away, mid-game included (input-delay.json), when the slider is let go.
  */
 export const InputDelaySetting = () => {
   const [inputDelay, setInputDelay] = useInputDelay();
@@ -53,14 +96,20 @@ export const InputDelaySetting = () => {
 
   // Each side's last pick, so switching back and forth comes back to it.
   const lastProfile = React.useRef(automatic ? value : INPUT_DELAY_NORMAL);
-  const lastFrames = React.useRef(automatic ? DEFAULT_FIXED_FRAMES : value);
+  const lastFrames = React.useRef(inputDelayFrames(value) ?? DEFAULT_FIXED_FRAMES);
   React.useEffect(() => {
     if (isInputDelayProfile(value)) {
       lastProfile.current = value;
     } else {
-      lastFrames.current = value;
+      lastFrames.current = inputDelayFrames(value) ?? DEFAULT_FIXED_FRAMES;
     }
   }, [value]);
+
+  const commit = (setting: number) => {
+    if (setting !== value) {
+      void setInputDelay(setting);
+    }
+  };
 
   return (
     <SettingItem name={Messages.inputDelay()} description={Messages.inputDelayDescription()}>
@@ -75,25 +124,30 @@ export const InputDelaySetting = () => {
         <SideLabel active={automatic}>{Messages.inputDelayAutomatic()}</SideLabel>
         <Switch
           checked={!automatic}
-          onChange={(e) => void setInputDelay(e.target.checked ? lastFrames.current : lastProfile.current)}
+          onChange={(e) =>
+            void setInputDelay(e.target.checked ? inputDelayFromFrames(lastFrames.current) : lastProfile.current)
+          }
           color="primary"
         />
         <SideLabel active={!automatic}>{Messages.inputDelayFixed()}</SideLabel>
       </div>
-      <RadioGroup row={true} value={value} onChange={(_event, v) => void setInputDelay(Number(v))}>
-        {automatic
-          ? INPUT_DELAY_PROFILES.map((profile) => (
-              <FormControlLabel key={profile} value={profile} label={profileLabel(profile)} control={<Radio />} />
-            ))
-          : INPUT_DELAY_CHOICES.map((frames) => (
-              <FormControlLabel
-                key={frames}
-                value={frames}
-                label={Messages.inputDelayFrames(frames)}
-                control={<Radio />}
-              />
-            ))}
-      </RadioGroup>
+      {automatic ? (
+        // A slider for each side, so the thumb does not slide across from the other side's position.
+        <DelaySlider
+          key="automatic"
+          position={INPUT_DELAY_PROFILES.indexOf(value)}
+          marks={PROFILE_MARKS}
+          onCommit={(at) => commit(INPUT_DELAY_PROFILES[at])}
+        />
+      ) : (
+        <DelaySlider
+          key="fixed"
+          position={inputDelayFrames(value) ?? DEFAULT_FIXED_FRAMES}
+          marks={FRAME_MARKS}
+          valueLabel={Messages.inputDelayFrames}
+          onCommit={(frames) => commit(inputDelayFromFrames(frames))}
+        />
+      )}
     </SettingItem>
   );
 };

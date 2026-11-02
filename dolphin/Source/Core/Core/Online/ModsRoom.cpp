@@ -372,7 +372,7 @@ std::optional<Machine::Options> FromEnvironment(std::string* error)
   }
   const std::string controller = o.count("controller") ? Str(o, "controller", 16) : "gc";
   // The input delay: the room's "delay" (the harness), else the player's setting, as on Play
-  // ([Online] InputDelay, the launcher's): 1-9 frames, else its profile
+  // ([Online] InputDelay, the launcher's): 1-9 frames, else 0 frames (-3) or its profile
   // (Machine::DelayFromSetting).
   const int setting = Config::Get(Config::ONLINE_INPUT_DELAY);
   const double delay = Num(o, "delay", setting > 0 && setting <= 9 ? setting : 0);

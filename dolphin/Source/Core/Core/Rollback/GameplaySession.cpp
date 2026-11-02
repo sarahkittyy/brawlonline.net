@@ -2279,7 +2279,7 @@ std::function<void(const GameResult&)> s_result_callback;
 std::atomic<bool> s_quit_loses{false};  // SetQuitLoses
 std::atomic<bool> s_quality_abort{false};  // SetQualityAbort
 // The player's setting as it changed while Dolphin runs (SetInputDelay): a sequence number (0:
-// never changed) << 8 | the setting - DELAY_SMOOTH (a profile or 1-MAX_INPUT_DELAY frames).
+// never changed) << 8 | the setting - MIN_DELAY_SETTING (a profile or a number of frames).
 std::atomic<u32> s_live_delay{0};
 // The running game's input delay for other threads (CurrentInputDelay), -1 without one.
 std::atomic<int> s_current_delay{-1};
@@ -3524,8 +3524,8 @@ bool TakeLiveDelay()
   if (live >> 8 == s.live_delay_seq)
     return false;
   s.live_delay_seq = live >> 8;
-  const int setting = static_cast<int>(live & 0xFF) + DELAY_SMOOTH;
-  s.net_opts.delay = setting > 0 ? std::optional<int>(setting) : std::nullopt;
+  const int setting = static_cast<int>(live & 0xFF) + MIN_DELAY_SETTING;
+  s.net_opts.delay = DelayFramesFromSetting(setting);
   s.net_opts.delay_level = DelayLevel(setting);
   return true;
 }
@@ -7602,7 +7602,7 @@ void SetQualityAbort(bool on)
 void SetInputDelay(int setting)
 {
   const u32 value =
-      static_cast<u32>(std::clamp(setting, DELAY_SMOOTH, MAX_INPUT_DELAY) - DELAY_SMOOTH);
+      static_cast<u32>(std::clamp(setting, MIN_DELAY_SETTING, MAX_INPUT_DELAY) - MIN_DELAY_SETTING);
   u32 live = s_live_delay.load();
   while (!s_live_delay.compare_exchange_weak(live, (((live >> 8) + 1) << 8) | value))
   {
