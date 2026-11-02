@@ -152,7 +152,8 @@ export const PPLUS_STARTERS = [0x01, 0x04, 0x09, 0x21, 0x2e];
 
 /**
  * Ranked's counterpicks, the default ruleset's: Frigate Husk, Fountain of Dreams, Green Hill Zone,
- * Dream Land. Unranked and Direct draw their random stages from the starters and these.
+ * Dream Land. Direct draws its random stages from the starters and these; Unranked from all nine
+ * and Final Destination, Metal Cavern, Bowser's Castle, Yoshi's Island and Wario Land.
  */
 export const PPLUS_COUNTERPICKS = [0x0c, 0x1f, 0x23, 0x2d];
 
