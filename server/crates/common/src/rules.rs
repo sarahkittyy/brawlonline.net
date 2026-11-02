@@ -360,8 +360,9 @@ pub const PPLUS_LEGAL_STAGES: [u16; 15] =
 /// Mansion, Temple of Time, Smashville, Pokémon Stadium 2. The default ruleset's starters.
 pub const PPLUS_STARTERS: [u16; 5] = [0x01, 0x04, 0x09, 0x21, 0x2E];
 /// Ranked's counterpicks, the stages games 2+ add to the starters: Frigate Husk, Fountain of
-/// Dreams, Green Hill Zone, Dream Land. The default ruleset's counterpicks. Unranked and Direct
-/// draw their random stages from the starters and these.
+/// Dreams, Green Hill Zone, Dream Land. The default ruleset's counterpicks. Direct draws its
+/// random stages from the starters and these; Unranked from all nine and five more
+/// (`mm::ruleset::UNRANKED_EXTRA_STAGES`).
 pub const PPLUS_COUNTERPICKS: [u16; 4] = [0x0C, 0x1F, 0x23, 0x2D];
 
 /// A key the format had until 2026-10-11 and no longer has: `players` (1v1 / 2v2 / ffa), when a

@@ -32,7 +32,7 @@ _Phase 3a of `docs/design/room-rules.md` §8 (2026-10-11): the ruleset format, p
 
 **Codes.** 6 letters of the room codes' 20 (`BCDFGHJKLMNPQRSTVWXZ`), random, assigned by accounts. `parse_ruleset_code` accepts any case, full width and surrounding spaces.
 
-**P+ default** (`Ruleset::default()`, what "no ruleset" means): P+'s competitive `MatchRules`, Ranked's starters (Battlefield, Luigi's Mansion, Temple of Time, Smashville, Pokémon Stadium 2) and counterpicks (Frigate Husk, Fountain of Dreams, Green Hill Zone, Dream Land), no set, loser picks. These nine are the user's list (2026-10-12) and also the server's Unranked and Direct `stages` (`server/config/rulesets.json`), so a game without a set draws its random stage from all nine.
+**P+ default** (`Ruleset::default()`, what "no ruleset" means): P+'s competitive `MatchRules`, Ranked's starters (Battlefield, Luigi's Mansion, Temple of Time, Smashville, Pokémon Stadium 2) and counterpicks (Frigate Husk, Fountain of Dreams, Green Hill Zone, Dream Land), no set, loser picks. These nine are the user's list (2026-10-12) and also the server's Direct `stages` (`server/config/rulesets.json`), so a game without a set draws its random stage from all nine. Unranked's `stages` are the nine plus Final Destination, Metal Cavern, Bowser's Castle, Yoshi's Island and Wario Land (Sarah's board, 2026-11-02).
 
 ## 2. Storage (`server/migrations/0008_rulesets.sql`)
 

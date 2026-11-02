@@ -11,7 +11,8 @@
 //! **Stage ids** are Brawl's `srStageKind` values, the ids the game's own match setup and P+'s
 //! stage file loader key on (`docs/game-code.md` section 11, "Stages"). The list in
 //! `config/rulesets.json` is the user's (2026-10-12), the same nine stages as the rooms' P+
-//! default (`common::rules::PPLUS_STARTERS` and `PPLUS_COUNTERPICKS`):
+//! default (`common::rules::PPLUS_STARTERS` and `PPLUS_COUNTERPICKS`) for Direct and Ranked;
+//! Unranked adds five more to its random draw (`UNRANKED_EXTRA_STAGES`):
 //!
 //! | id | stage | | id | stage |
 //! |---|---|---|---|---|
@@ -20,6 +21,9 @@
 //! | 0x09 (9) | Temple of Time (starter) | | 0x23 (35) | Green Hill Zone |
 //! | 0x21 (33) | Smashville (starter) | | 0x2D (45) | Dream Land |
 //! | 0x2E (46) | Pokémon Stadium 2 (starter) | | | |
+//!
+//! Unranked's extra five: Final Destination 0x02 (2), Metal Cavern 0x05 (5), Bowser's Castle
+//! 0x06 (6), Yoshi's Island 0x0D (13), Wario Land 0x1C (28).
 //!
 //! How the client uses the list (as Slippi's does, `EXI_DeviceSlippi.cpp:2134-2153, 2707-2722`):
 //! Unranked and Ranked (fixed-rules modes) draw every game's stage from it; Direct draws game 1
@@ -57,6 +61,10 @@ pub struct Rulesets {
     #[serde(flatten)]
     pub modes: HashMap<String, ModeRules>,
 }
+
+/// The stages Unranked draws from besides the nine (Sarah's board, 2026-11-02): Final Destination,
+/// Metal Cavern, Bowser's Castle, Yoshi's Island, Wario Land.
+pub const UNRANKED_EXTRA_STAGES: [u16; 5] = [0x02, 0x05, 0x06, 0x0D, 0x1C];
 
 /// The repository's `config/rulesets.json`, used when no file is configured.
 pub const DEFAULT_RULESETS: &str = include_str!("../../../config/rulesets.json");
@@ -121,7 +129,12 @@ mod tests {
             let m = r.for_mode(mode);
             let mut stages = m.stages.clone();
             stages.sort();   // Ranked's are in its stage select's order
-            assert_eq!(stages, nine_stages(), "{mode:?}");
+            let mut want = nine_stages();
+            if mode == Mode::Unranked {
+                want.extend(UNRANKED_EXTRA_STAGES);
+                want.sort();
+            }
+            assert_eq!(stages, want, "{mode:?}");
             assert_eq!(m.items, 0, "{mode:?}");
             // P+'s competitive set; normal pause only in Direct, else hold START; hazards off but
             // on Fountain of Dreams (the user's, 2026-10-26: the Midwest ruleset's).

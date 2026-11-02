@@ -2925,7 +2925,7 @@ mod tests {
             assert_eq!(g["players"].as_array().unwrap().iter().filter(|p| p["isLocalPlayer"] == true).count(), 1);
             assert!(g.get("starters").is_none(), "only Ranked strikes starters: {g}");
             // The ruleset's stage list, as Slippi's server sends it for the mode.
-            assert_eq!(g["stages"], json!([1, 4, 9, 12, 31, 33, 35, 45, 46]));
+            assert_eq!(g["stages"], json!([1, 2, 4, 5, 6, 9, 12, 13, 28, 31, 33, 35, 45, 46]));
             assert_eq!(g["items"], 0);
             // The mode's rules: P+'s competitive set, hold-START pause in Unranked, hazards on
             // Fountain of Dreams only.

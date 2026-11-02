@@ -5,7 +5,7 @@
     "rules": {"style": "stock", "stocks": 4, "timeMinutes": 8, "pause": "normal", "hazards": false, "hazardStages": [31]}
   },
   "unranked": {
-    "stages": [1, 4, 9, 12, 31, 33, 35, 45, 46],
+    "stages": [1, 2, 4, 5, 6, 9, 12, 13, 28, 31, 33, 35, 45, 46],
     "items": 0,
     "rules": {"style": "stock", "stocks": 4, "timeMinutes": 8, "pause": "hold", "hazards": false, "hazardStages": [31]}
   },
