@@ -192,10 +192,12 @@ def random_pick_where_anyone_picks(players: Sequence[Any], game: int, log: Calla
 
 
 def play_game(players: Sequence[Any], game: int, timeout: float = 900,
-              log: Callable[[str], None] = print, winner: Optional[Any] = None) -> Dict[str, Any]:
+              log: Callable[[str], None] = print, winner: Optional[Any] = None,
+              modes: Optional[Sequence[str]] = None) -> Dict[str, Any]:
     """Wait for the match to run under rollback on both, play it to game set closed-loop (each
     side drives its own in-game port with its own controller, port 0), and compare. With
     `winner` (one of `players`), that player stands still and the other walks off the stage.
+    `modes`: the host's and the joiner's flows.fight modes instead (e.g. upsmash, idle).
     Where every player picks the stage (Direct) and nobody has, the first player's START picks a
     random one."""
     random_pick_where_anyone_picks(players, game, log)
@@ -241,6 +243,8 @@ def play_game(players: Sequence[Any], game: int, timeout: float = 900,
         stop_flag.set()
 
     def mode_of(p: Any) -> str:
+        if modes:
+            return modes[0] if p is host else modes[1]
         return "random" if winner is None else "idle" if p is winner else "selfdestruct"
 
     th = [threading.Thread(target=play, args=(s, f"{game}-{s.name}", mode_of(p)))
