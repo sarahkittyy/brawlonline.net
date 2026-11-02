@@ -31,6 +31,7 @@ class System;
 
 namespace Rollback
 {
+struct CountedRAM;
 static constexpr int NUM_SAVE_SLOTS = MAX_ROLLBACK_FRAMES + 1;  // MAX_ROLLBACK_FRAMES + 1
 static constexpr int ROLLBACK_NUM_HELPER_THREADS = 5 + 1;  // plus one extra for eviction job
 static constexpr u32 SAVESTATE_NUM_WORK_CHUNKS = 5;
@@ -224,6 +225,8 @@ public:
   // A granule's bytes as the checksums read them: `src`, or its copy in `scratch` with the masked
   // bytes zeroed.
   const u8* ForChecksum(u32 phys, const u8* src, u8* scratch) const;
+  // Guest RAM as the slice and full checksums count it (FeedCountedGranules).
+  CountedRAM CountedRam() const;
   std::optional<MemoryRegion> m_mailbox_region;
   bool m_brawl_exclusions = true;
 

@@ -1125,21 +1125,7 @@ bool IsResimulating()
 
 const u8* RollbackManager::ForChecksum(u32 phys, const u8* src, u8* scratch) const
 {
-  const u8* out = src;
-  for (const MemoryRegion& m : m_checksum_masks)
-  {
-    if (m.phys_start >= phys + ROLLBACK_PAGE_SIZE || m.phys_end <= phys)
-      continue;
-    if (out == src)
-    {
-      std::memcpy(scratch, src, ROLLBACK_PAGE_SIZE);
-      out = scratch;
-    }
-    const u32 from = std::max(m.phys_start, phys) - phys;
-    const u32 to = std::min<u32>(m.phys_end, phys + ROLLBACK_PAGE_SIZE) - phys;
-    std::memset(scratch + from, 0, to - from);
-  }
-  return out;
+  return MaskedForChecksum(phys, src, m_checksum_masks, scratch);
 }
 
 void RollbackManager::UpdateShadowAfterSave(int slot)
@@ -1227,56 +1213,44 @@ u32 RollbackManager::LastSaveChecksum() const
   return crc ? crc : 1;
 }
 
+CountedRAM RollbackManager::CountedRam() const
+{
+  return {m_mem1_ptr,
+          static_cast<u32>(m_mem1_size / ROLLBACK_PAGE_SIZE),
+          m_mem2_ptr,
+          static_cast<u32>(m_mem2_size / ROLLBACK_PAGE_SIZE),
+          GPUWrittenBitmap::Get().entries,
+          m_exclude_regions,
+          m_checksum_masks};
+}
+
 u32 RollbackManager::SaveChecksumWithSlice(s64 frame) const
 {
-  u32 crc = LastSaveChecksum();
+  const u32 change = LastSaveChecksum();
   if (!m_initialized || frame < 0)
-    return crc;
+    return change;
   const u32 mem1_pages = static_cast<u32>(m_mem1_size / ROLLBACK_PAGE_SIZE);
   const u32 mem2_pages = static_cast<u32>(m_mem2_size / ROLLBACK_PAGE_SIZE);
   const u32 total = mem1_pages + mem2_pages;
   const u32 per = (total + CHECK_SLICES - 1) / CHECK_SLICES;
   const u32 first = static_cast<u32>(frame % CHECK_SLICES) * per;
   const u32 last = std::min(total, first + per);
-  const u8* gpu = GPUWrittenBitmap::Get().entries;
-  u32 slice_crc = Common::StartCRC32();
-  u8 scratch[ROLLBACK_PAGE_SIZE];
+  RunCRC crc(change);
+  RunCRC slice_crc;
   if (m_collect_parts)
   {
     m_parts.slice_first = first;
     m_parts.slice_gpu.clear();
+    FeedCountedGranules(CountedRam(), first, last, crc, &slice_crc, &m_parts.slice_gpu);
+    m_parts.change_crc = change;
+    m_parts.slice_crc = slice_crc.Finish();
   }
-  for (u32 g = first; g < last; ++g)
+  else
   {
-    const bool mem2 = g >= mem1_pages;
-    const u32 page = mem2 ? MEM2_FIRST_PAGE + (g - mem1_pages) : g;
-    if (gpu[page])
-    {
-      if (m_collect_parts)
-        m_parts.slice_gpu.push_back(page << ROLLBACK_PAGE_SHIFT);
-      continue;
-    }
-    const u32 phys = page << ROLLBACK_PAGE_SHIFT;
-    bool excluded = false;
-    for (const MemoryRegion& r : m_exclude_regions)
-      excluded |= phys < r.phys_end && phys + ROLLBACK_PAGE_SIZE > r.phys_start;
-    if (excluded)
-      continue;
-    const u8* src = ForChecksum(
-        phys,
-        mem2 ? m_mem2_ptr + static_cast<size_t>(g - mem1_pages) * ROLLBACK_PAGE_SIZE :
-               m_mem1_ptr + static_cast<size_t>(g) * ROLLBACK_PAGE_SIZE,
-        scratch);
-    crc = Common::UpdateCRC32(crc, src, ROLLBACK_PAGE_SIZE);
-    if (m_collect_parts)
-      slice_crc = Common::UpdateCRC32(slice_crc, src, ROLLBACK_PAGE_SIZE);
+    FeedCountedGranules(CountedRam(), first, last, crc, nullptr, nullptr);
   }
-  if (m_collect_parts)
-  {
-    m_parts.change_crc = LastSaveChecksum();
-    m_parts.slice_crc = slice_crc;
-  }
-  return crc ? crc : 1;
+  const u32 sum = crc.Finish();
+  return sum ? sum : 1;
 }
 
 u32 RollbackManager::FullChecksum() const
@@ -1285,29 +1259,10 @@ u32 RollbackManager::FullChecksum() const
     return 0;
   const u32 mem1_pages = static_cast<u32>(m_mem1_size / ROLLBACK_PAGE_SIZE);
   const u32 mem2_pages = static_cast<u32>(m_mem2_size / ROLLBACK_PAGE_SIZE);
-  const u8* gpu = GPUWrittenBitmap::Get().entries;
-  u32 crc = Common::StartCRC32();
-  u8 scratch[ROLLBACK_PAGE_SIZE];
-  for (u32 g = 0; g < mem1_pages + mem2_pages; ++g)
-  {
-    const bool mem2 = g >= mem1_pages;
-    const u32 page = mem2 ? MEM2_FIRST_PAGE + (g - mem1_pages) : g;
-    if (gpu[page])
-      continue;
-    const u32 phys = page << ROLLBACK_PAGE_SHIFT;
-    bool excluded = false;
-    for (const MemoryRegion& r : m_exclude_regions)
-      excluded |= phys < r.phys_end && phys + ROLLBACK_PAGE_SIZE > r.phys_start;
-    if (excluded)
-      continue;
-    const u8* src = ForChecksum(
-        phys,
-        mem2 ? m_mem2_ptr + static_cast<size_t>(g - mem1_pages) * ROLLBACK_PAGE_SIZE :
-               m_mem1_ptr + static_cast<size_t>(g) * ROLLBACK_PAGE_SIZE,
-        scratch);
-    crc = Common::UpdateCRC32(crc, src, ROLLBACK_PAGE_SIZE);
-  }
-  return crc ? crc : 1;
+  RunCRC crc;
+  FeedCountedGranules(CountedRam(), 0, mem1_pages + mem2_pages, crc, nullptr, nullptr);
+  const u32 sum = crc.Finish();
+  return sum ? sum : 1;
 }
 
 std::vector<std::pair<u32, u32>> RollbackManager::LastSaveDigest() const
