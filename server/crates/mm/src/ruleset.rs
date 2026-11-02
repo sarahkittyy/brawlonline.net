@@ -11,8 +11,8 @@
 //! **Stage ids** are Brawl's `srStageKind` values, the ids the game's own match setup and P+'s
 //! stage file loader key on (`docs/game-code.md` section 11, "Stages"). The list in
 //! `config/rulesets.json` is the user's (2026-10-12), the same nine stages as the rooms' P+
-//! default (`common::rules::PPLUS_STARTERS` and `PPLUS_COUNTERPICKS`) for Direct and Ranked;
-//! Unranked adds five more to its random draw (`UNRANKED_EXTRA_STAGES`):
+//! default (`common::rules::PPLUS_STARTERS` and `PPLUS_COUNTERPICKS`) in Direct's and Ranked's
+//! entries; Unranked adds five more to its random draw (`UNRANKED_EXTRA_STAGES`):
 //!
 //! | id | stage | | id | stage |
 //! |---|---|---|---|---|
@@ -26,8 +26,10 @@
 //! 0x06 (6), Yoshi's Island 0x0D (13), Wario Land 0x1C (28).
 //!
 //! How the client uses the list (as Slippi's does, `EXI_DeviceSlippi.cpp:2134-2153, 2707-2722`):
-//! Unranked and Ranked (fixed-rules modes) draw every game's stage from it; Direct draws game 1
-//! from it, and the loser's pick for later games must be in it (design 5.4, screen 5). An empty
+//! Unranked draws every game's stage from it, Ranked strikes and counterpicks within it. Direct
+//! does not use it: both players pick every game's stage on P+'s stage select, any stage
+//! (`anyonePicks`, 2026-10-29; Slippi's game 1 random then loser's pick before that), and its
+//! list is only drawn from if a game ever comes without a pick. An empty
 //! list makes the client fall back to its built-in copy of P+ v3.2's 15 legal stages (the ones its
 //! random-stage switch "Default" preset, `/Project+/pf/stage/switch/Switch00.rss`, turns on).
 
