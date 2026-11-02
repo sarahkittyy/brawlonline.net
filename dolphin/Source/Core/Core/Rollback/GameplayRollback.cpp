@@ -385,6 +385,38 @@ bool IsGameSet(const Guest& g)
   return p && *p != 0;
 }
 
+bool SuddenDeathFollows(const Guest& g)
+{
+  const auto scene = CurrentScene(g);
+  if (!scene || !IsSceneMelee(g))
+    return false;
+  const auto rule = g.Ptr32(*scene + Addr::SCM_OPERATOR_RULE_MELEE);
+  const auto cond = rule ? g.Ptr32(*rule + Addr::OPR_CONDITION) : std::nullopt;
+  const auto info = rule ? g.Ptr32(*rule + Addr::OPR_RESULT_INFO) : std::nullopt;
+  const u8* c = cond ? g.Ptr(*cond, 0x15) : nullptr;
+  const u8* r = info ? g.Ptr(*info, 0x11) : nullptr;
+  if (!c || !r)
+    return false;
+  // isSuddenDeath: only in the modes whose kind (gmGlobalModeMelee +8, bits 2-7) is 0, 1, 0xE,
+  // 0x17, 0x18 or 0x1C (Versus, and online's), and not with +0x14 set; then the result info's
+  // number of players ranked first (+0xF), of teams in a team battle (+2 set: +0x10), above 1.
+  const u8 kind = (c[8] >> 2) & 0x3F;
+  if (kind != 0 && kind != 1 && kind != 0xE && kind != 0x17 && kind != 0x18 && kind != 0x1C)
+    return false;
+  if (c[0x14] != 0)
+    return false;
+  return (r[2] != 0 ? r[0x10] : r[0xF]) > 1;
+}
+
+bool SceneShowsGameSet(const Guest& g)
+{
+  const auto scene = CurrentScene(g);
+  if (!scene || !IsSceneMelee(g))
+    return false;
+  const u8* p = g.Ptr(*scene + Addr::SCM_STATE_FLAGS, 1);
+  return p && (*p & Addr::SCM_GAME_SET_FLAG) != 0;
+}
+
 u32 RemainingFrames(const Guest& g)
 {
   const auto scene = CurrentScene(g);
