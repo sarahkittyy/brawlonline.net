@@ -281,6 +281,12 @@ RawPads PadsSampledBefore(int chan, Clock::time_point t, Clock::time_point* samp
 // run flag and gfPadSystem's thread pointer, the pad alarm and the OS alarm queue, and every guest
 // thread; and again when passes resume. Emulated time, so a paused emulation reports nothing.
 void PadsWatchdog(const Core::CPUThreadGuard& guard);
+// The return addresses of the guest stack at `sp` (its back chain), oldest call last, each with a
+// leading space.
+std::string GuestBacktrace(const Core::CPUThreadGuard& guard, u32 sp, int depth);
+// A guest OSThread at `addr`: its state, suspend count, priority, wait queue, saved registers and
+// stack.
+std::string ThreadReport(const Core::CPUThreadGuard& guard, u32 addr);
 
 // Anchor (recorder): at every loop top the frame's slots become the pad thread's newest sample for
 // the ports in `port_mask`, and stay constant for the whole main-thread frame.
