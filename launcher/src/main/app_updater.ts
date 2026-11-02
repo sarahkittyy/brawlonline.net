@@ -271,7 +271,8 @@ export class AppUpdater {
         return;
       }
       this.autoInstallStarted = true;
-      // The installer shows its progress and starts the new launcher (quitAndInstall(false, true)).
+      // The installer shows an "Updating" banner and starts the new launcher (quitAndInstall(false,
+      // true)); a launcher opened meanwhile is closed again (installer.nsh, bug report #219).
       log.warn(`Launcher update ${version} downloaded and nothing is running: installing it and restarting`);
       this.quitAndInstall().catch((err) => {
         // Not tried again by itself: the bar's Install update (and Download manually) remain.
@@ -293,8 +294,10 @@ export class AppUpdater {
       log.info(`Auto-update succeeded: version ${currentVersion}`);
       this.updateState = { status: "succeeded", version: currentVersion };
     } else {
+      // Where it runs from tells a launcher opened during the update (the install folder) from an
+      // old copy somewhere else (bug report #219).
       log.error(
-        `Auto-update FAILED: expected ${pendingVersion}, running ${currentVersion}. ` +
+        `Auto-update FAILED: expected ${pendingVersion}, running ${currentVersion} (${process.execPath}). ` +
           "Update file may have been missing, corrupted, or the installer was interrupted.",
       );
       this.updateState = { status: "failed", version: pendingVersion };
