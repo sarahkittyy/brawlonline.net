@@ -181,6 +181,46 @@ def test_joiners_stop_when_nobody_in_the_room_plays(backend: OnlineBackend,
         assert "Not admitted" not in log and "no connection to" not in log
 
 
+def test_a_join_while_the_players_games_differ_says_why(backend: OnlineBackend,
+                                                         dolphin: Callable[..., DolphinInstance]) -> None:
+    """Bug report #214: in a TvC room whose host and one player had desynced, every joiner got the
+    25 MB machine image and then refused it ("player 2 does not vouch for this machine"); the
+    players saw "could not join" and nothing more, until that player left. Here the first joiner's
+    game is made to differ from the host's (a word of free RAM written on it only), and a second
+    joiner is refused at the epoch with why, before any image is sent."""
+    host_user = backend.create_user("hostd", "HSTD")
+    one_user = backend.create_user("joind", "JNYD")
+    two_user = backend.create_user("joine", "JNYE")
+    host, code = _host(dolphin, backend, "mods-differ-host", host_user)
+    one = _boot(dolphin, backend, "mods-differ-join1", one_user,
+                {"join": code, "build": BUILD, "controller": "gc", "sd_sync": "yes"})
+    _wait(lambda: "machine: running" in _log(one), 90, "the first joiner's session running", interval=1)
+    assert "machine image for player 2" in _log(host)
+    # Free RAM above Dolphin's code list (test_host_codes_run_on_every_machine), on one machine only.
+    one.client.call("write_mem", addr=0x80002F10, hex="0badf00d")
+    _wait(lambda: host.client.call("machine_status").get("desyncs"), 30, "the host to see the desync")
+    two = _boot(dolphin, backend, "mods-differ-join2", two_user,
+                {"join": code, "build": BUILD, "controller": "gc", "sd_sync": "yes"})
+    _wait(lambda: "cannot join: the game of" in _log(host), 120, "the host to refuse the second joiner",
+          interval=1)
+    host_log = _log(host)
+    assert "machine image for player 3" not in host_log, host_log[-3000:]
+    assert re.search(r"notice: joine could not join: joind's game differs from .+'s \(a desync\)\. joind can "
+                     r"leave the room and join it again to get .+'s game\.", host_log), host_log[-3000:]
+    _wait(lambda: "Could not join: the players' games differ (a desync between" in _log(two), 30,
+          "the second joiner's reason")
+    assert "Getting the game" not in _log(two)
+    # The first joiner was told too, and the two players play on.
+    _wait(lambda: "could not join: " in _log(one), 30, "the first joiner's notice")
+    for inst in (host, one):
+        _wait(lambda: inst.client.call("machine_status").get("phase") == "running", 30, "the game going on")
+        assert inst.client.call("machine_status").get("players") == 3
+    # One line for the epoch's checksum, not one per wait loop iteration; and the desynced frames
+    # are not a line each (60 between two notices).
+    assert len(re.findall(r"machine: player 2 is at epoch \d+ with checksum", host_log)) == 1, host_log[-3000:]
+    assert len(re.findall(r"machine: desync at frame", host_log)) <= 60 * (host_log.count("notice: Desync with") + 1)
+
+
 def test_room_sessions_map_their_port_with_upnp(dolphin: Callable[..., DolphinInstance]) -> None:
     """Bug report #183: TEST#709 and AIR#23 played five Unranked games, then never connected in
     AIR's Other Games room (no packet either way), nor did OHM#217, who plays AIR in P+ rooms.

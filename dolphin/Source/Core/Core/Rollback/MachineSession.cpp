@@ -205,6 +205,8 @@ constexpr s64 EPOCH_LEAD = MAX_ROLLBACK_FRAMES + 3;
 constexpr int NO_DELAY_REQUEST = -100;  // State::requested_delay
 // How long the players wait at an epoch for the image to reach a joiner and load there.
 constexpr auto EPOCH_TIMEOUT = std::chrono::seconds(120);
+// Desynced frames logged a line each between two desync notices (ProcessSessionEvents).
+constexpr u32 DESYNC_LINES_PER_NOTICE = 60;
 // A joiner gives up after this long without being admitted.
 constexpr auto JOIN_TIMEOUT = std::chrono::seconds(300);
 // Machine images: sent in chunks of IMAGE_CHUNK; a received one is at most MAX_IMAGE_PACKED
@@ -463,6 +465,7 @@ struct State
     // Two slots that swap players at this epoch ({-1, -1}: none). `players` and `controllers`
     // are already as after the swap.
     std::pair<int, int> move{-1, -1};
+    std::string why;  // why the joiner was not let in (empty: no reason given)
   };
   std::optional<EpochGo> epoch_go;
   bool join_refused = false;
@@ -650,6 +653,7 @@ struct State
   Clock::time_point epoch_since{};
   u32 epoch_sum = 0;
   std::string epoch_digest;  // of this machine's image at the epoch (when it admits a joiner)
+  u32 epoch_sum_warned = 0;  // the players whose other checksum at the epoch is logged
   bool image_built = false;
   double image_ms = 0;
   u64 image_packed = 0, image_raw = 0;
@@ -675,6 +679,7 @@ struct State
   double burst_ms_per_frame = BURST_MS_PER_FRAME_START;
   u64 load_mismatches = 0;
   Clock::time_point desync_notice_at{};  // the last desync the players were told of
+  u32 desync_lines = 0, desync_unlogged = 0;  // since that notice: frames logged, and not
   float frames_ahead = 0;
   int input_delay = 0;  // this player's, in the current GekkoNet session
   // Input latency trace (PPR_MACHINE_INPUT_LAT_LOG): per frame, when its first run began, when
@@ -1119,6 +1124,9 @@ void HandleControl(ENetPeer* peer, const u8* data, size_t size)
           go.move = {static_cast<int>(a), static_cast<int>(b)};
       }
     }
+    const auto wit = msg.find("why");
+    if (wit != msg.end() && wit->second.is<std::string>())
+      go.why = wit->second.get<std::string>().substr(0, 300);
     s.epoch_go = go;
     // A joiner learns who plays now: a peer whose hello said it was a joiner too may have been let
     // in since (JoinStep counts the players who can let this one in). Not across a move: the
@@ -3469,14 +3477,17 @@ void ProcessSessionEvents()
     {
       s.desyncs++;
       s.last_desync_frame = s.frame_base + e.data.desynced.frame;
-      WARN_LOG_FMT(BRAWLBACK, "machine: desync at frame {} (local {:08x}, remote {:08x})",
-                   s.last_desync_frame, e.data.desynced.local_checksum,
-                   e.data.desynced.remote_checksum);
       // The checksum counts nothing that depends on a host's timing (docs/design/brawl-mods.md
       // §6.6), so the two machines' memory differs: the players are told, once a burst.
       const auto now = Clock::now();
       if (s.desync_notice_at == Clock::time_point{} || now - s.desync_notice_at > std::chrono::seconds(30))
       {
+        if (s.desync_unlogged > 0)
+        {
+          WARN_LOG_FMT(BRAWLBACK, "machine: {} more frames differed since the last desync notice",
+                       s.desync_unlogged);
+        }
+        s.desync_lines = s.desync_unlogged = 0;
         s.desync_notice_at = now;
         const int h = e.data.desynced.remote_handle;
         const int slot = h >= 0 && h < MAX_PLAYERS ? s.handle_slot[h] : -1;
@@ -3488,6 +3499,20 @@ void ProcessSessionEvents()
         }
         ShowNotice(fmt::format("Desync with {} at frame {}: your games differ.", name,
                                s.last_desync_frame));
+      }
+      // A line a frame while the games differ (60 a second) filled a player's log within an hour
+      // and pushed out how the session began (bug report #214): the first frames of a burst, then
+      // their count at the next notice.
+      if (s.desync_lines < DESYNC_LINES_PER_NOTICE)
+      {
+        s.desync_lines++;
+        WARN_LOG_FMT(BRAWLBACK, "machine: desync at frame {} (local {:08x}, remote {:08x})",
+                     s.last_desync_frame, e.data.desynced.local_checksum,
+                     e.data.desynced.remote_checksum);
+      }
+      else
+      {
+        s.desync_unlogged++;
       }
       break;
     }
@@ -5251,7 +5276,8 @@ void StartEpoch(const State::EpochGo& go)
       name = NameOf(joiner);
     }
     ShowNotice((go.players >> joiner) & 1 ? fmt::format("{} is in the game.", name) :
-                                            fmt::format("{} could not join.", name));
+               go.why.empty()               ? fmt::format("{} could not join.", name) :
+                                              fmt::format("{} could not join: {}", name, go.why));
   }
   s.plan = {};
   s.local_request.reset();
@@ -5295,6 +5321,7 @@ void EnterEpoch()
   s.phase = Phase::Epoch;
   s.epoch_since = Clock::now();
   s.epoch_sum = rb.FullChecksum();
+  s.epoch_sum_warned = 0;
   s.image_built = false;
   s.image_tenths_shown = -1;
   DumpEpochState(Core::System::GetInstance(), s.plan.frame, "member");
@@ -5421,9 +5448,13 @@ void EpochStep(Core::System& system)
       others |= 1u << slot;
       if (p.epoch_at != next)
         all_at = false;
-      else if (p.epoch_sum != s.epoch_sum)
+      else if (p.epoch_sum != s.epoch_sum && !(s.epoch_sum_warned & (1u << slot)))
+      {
+        // Once: this runs every wait loop iteration (bug report #214: 1,299 lines in 3 s).
+        s.epoch_sum_warned |= 1u << slot;
         WARN_LOG_FMT(BRAWLBACK, "machine: player {} is at epoch {} with checksum {:08x}, not {:08x}",
                      slot + 1, next, p.epoch_sum, s.epoch_sum);
+      }
     }
     if (joiner >= 0 && !Plays(joiner))
     {
@@ -5441,6 +5472,41 @@ void EpochStep(Core::System& system)
   if (!all_at)
     return;
   const bool admitting = joiner >= 0 && !Plays(joiner);
+  // The joiner loads the image only if every player's own digest of it is this one (LoadImage),
+  // so while a player's game differs from this one (a desync) nobody can join. Said at once, with
+  // why, instead of sending the image for nothing (bug report #214: a TvC room's host and one
+  // player had desynced; every joiner got the 25 MB image, then "player 2 does not vouch for this
+  // machine" and nothing more; the players saw "could not join" until that player left).
+  std::string refused_why = "the machine image did not load", go_why;
+  if (admitting && !joiner_gone && !s.image_built && !s.epoch_digest.empty())
+  {
+    std::string differ;
+    int count = 0;
+    std::lock_guard lk(s.net_mutex);
+    for (int slot = 0; slot < MAX_PLAYERS; ++slot)
+    {
+      if (((others >> slot) & 1) && s.peers[slot].epoch_digest != s.epoch_digest)
+      {
+        differ += (differ.empty() ? "" : " and ") + NameOf(slot);
+        count++;
+      }
+    }
+    if (count > 0)
+    {
+      const std::string self =
+          s.opts.name.empty() ? fmt::format("Player {}", s.opts.local_slot + 1) : s.opts.name;
+      AddLog(fmt::format("player {} cannot join: the game of {} differs from this one", joiner + 1,
+                         differ));
+      refused_why = fmt::format("the players' games differ (a desync between {} and {}), so the "
+                                "game cannot be sent to you",
+                                self, differ);
+      go_why = fmt::format("{} from {}'s (a desync). {} can leave the room and join it again to "
+                           "get {}'s game.",
+                           count == 1 ? differ + "'s game differs" : "the games of " + differ + " differ",
+                           self, differ, self);
+      joiner_gone = true;
+    }
+  }
   if (admitting && !joiner_gone && !s.image_built)
   {
     s.image_built = true;
@@ -5513,6 +5579,7 @@ void EpochStep(Core::System& system)
     go.move = s.plan.move;
     s.move_done = s.plan.move;
   }
+  go.why = go_why;
   {
     std::lock_guard lk(s.net_mutex);
     picojson::object m;
@@ -5528,12 +5595,14 @@ void EpochStep(Core::System& system)
       mv.emplace_back(static_cast<double>(go.move.second));
       m["move"] = picojson::value(mv);
     }
+    if (!go.why.empty())
+      m["why"] = picojson::value(go.why);
     BroadcastControl(m);
     if (admitting && !joiner_ok && s.peers[joiner].hello)
     {
       picojson::object no;
       no["type"] = picojson::value("join_refused");
-      no["why"] = picojson::value("the machine image did not load");
+      no["why"] = picojson::value(refused_why);
       SendControl(joiner, no);
     }
     s.image_tx.clear();
@@ -7184,6 +7253,7 @@ bool Arm(const Options& options, std::string* error)
   s.desyncs = s.saves = 0;
   s.last_desync_frame = -1;
   s.desync_notice_at = {};
+  s.desync_lines = s.desync_unlogged = 0;
   s.input_log = {};
   s.pick_frame = -1;
   for (auto& e : s.history)
