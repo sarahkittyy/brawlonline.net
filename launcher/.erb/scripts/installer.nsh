@@ -31,11 +31,74 @@ var StartMenuShortcutCheckbox
   ShowUninstDetails show
 !macroend
 
+; Force-closes this user's running launchers (from any folder) and gives their files a moment.
+!macro killLauncher
+  Push $0
+  nsExec::Exec `"$SYSDIR\cmd.exe" /C taskkill /F /IM "${APP_EXECUTABLE_FILENAME}" /FI "USERNAME eq %USERNAME%"`
+  Pop $0
+  Pop $0
+  Sleep 1000
+!macroend
+
+; Sets VAR to 1 while this user runs a launcher (from any folder), else 0.
+!macro launcherRunning VAR
+  nsExec::Exec `"$SYSDIR\cmd.exe" /C tasklist /FI "USERNAME eq %USERNAME%" /FI "IMAGENAME eq ${APP_EXECUTABLE_FILENAME}" /FO CSV /NH | "$SYSDIR\findstr.exe" /B /I /C:"\"${APP_EXECUTABLE_FILENAME}\""`
+  Pop ${VAR}
+  ${If} ${VAR} == 0
+    StrCpy ${VAR} 1
+  ${Else}
+    StrCpy ${VAR} 0
+  ${EndIf}
+!macroend
+
+; Replaces electron-builder's check that the launcher is closed before an install or uninstall. A
+; fresh install or an uninstall asks to close it, as before; an update gives the launcher that started
+; it a moment to quit by itself. Then any launcher still or again running is closed, for up to about
+; 20 s. electron-builder's check gave up when it still saw one right after its second force-close (a
+; launcher opened again by a player who saw it vanish, or one not done exiting) and so quit the
+; update, leaving the old version (bug report #219).
+!macro customCheckAppRunning
+  Push $R1
+  Push $R2
+  StrCpy $R1 0
+  customCheckAppRunning_loop:
+    !insertmacro launcherRunning $R2
+    ${If} $R2 == 1
+      IntOp $R1 $R1 + 1
+      ${If} $R1 == 1
+        ${If} ${isUpdated}
+          ; The launcher that started the update is quitting by itself.
+          Sleep 1500
+        ${Else}
+          MessageBox MB_OKCANCEL|MB_ICONEXCLAMATION "$(appRunning)" /SD IDOK IDOK customCheckAppRunning_loop
+          Quit
+        ${EndIf}
+      ${ElseIf} $R1 > 20
+        MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "$(appCannotBeClosed)" /SD IDCANCEL IDRETRY customCheckAppRunning_retry
+        Quit
+        customCheckAppRunning_retry:
+        StrCpy $R1 1
+      ${Else}
+        DetailPrint "$(appClosing)"
+        !insertmacro killLauncher
+      ${EndIf}
+      Goto customCheckAppRunning_loop
+    ${EndIf}
+  Pop $R2
+  Pop $R1
+!macroend
+
 !macro customInit
   ; Force silent mode for updates to make them seamless
   ; while still allowing directory selection for fresh installs
   ${If} ${isUpdated}
     SetSilent silent
+    ; A silent update showed nothing for its 10-30 s, so players took the launcher for crashed and
+    ; opened it again, and a launcher opened during the update made it fail (bug report #219).
+    ; The banner stays until the new launcher is started (customInstall) or the installer ends.
+    ${IfNot} ${UAC_IsInnerInstance}
+      Banner::show /set 76 "Updating ${PRODUCT_NAME}..." "It reopens when it is done."
+    ${EndIf}
   ${EndIf}
 
   StrCpy $CreateDesktopShortcut 1
@@ -215,6 +278,12 @@ var StartMenuShortcutCheckbox
     ${If} ${FileExists} "${START_MENU_LINK}"
       !insertmacro writeShortcut "${START_MENU_LINK}"
     ${EndIf}
+    ; A launcher opened during the update holds the single-instance lock, so the new launcher
+    ; started next would quit at once and leave that one running (bug report #219).
+    ${If} ${isForceRun}
+      !insertmacro killLauncher
+    ${EndIf}
+    Banner::destroy
   ${Else}
     ${If} $CreateDesktopShortcut == 1
       !insertmacro writeShortcut "${DESKTOP_LINK}"
@@ -231,6 +300,35 @@ var StartMenuShortcutCheckbox
     ${EndIf}
   ${EndIf}
   System::Call 'Shell32::SHChangeNotify(i 0x8000000, i 0, i 0, i 0)'
+!macroend
+
+; electron-builder's check of the old version's uninstall (handleUninstallResult), plus: when an
+; update's uninstall failed because the launcher was opened again meanwhile (its files in use, so
+; they could not be moved), the launcher is closed and the uninstall tried again, twice, instead of
+; quitting and leaving the old version in place (bug report #219: "I can't update the launcher").
+!macro customUnInstallCheck
+  Var /GLOBAL unInstallRetries
+  StrCpy $unInstallRetries 0
+  customUnInstallCheck_check:
+  IfErrors 0 customUnInstallCheck_launched
+    DetailPrint `Uninstall was not successful. Not able to launch uninstaller!`
+    Return
+  customUnInstallCheck_launched:
+  ${If} $R0 != 0
+    ${If} ${isUpdated}
+    ${AndIf} $unInstallRetries < 2
+      IntOp $unInstallRetries $unInstallRetries + 1
+      DetailPrint `The old version's files are in use: closing ${PRODUCT_NAME} and trying again.`
+      !insertmacro killLauncher
+      Push SHELL_CONTEXT
+      Call uninstallOldVersion
+      Goto customUnInstallCheck_check
+    ${EndIf}
+    MessageBox MB_OK|MB_ICONEXCLAMATION "$(uninstallFailed): $R0" /SD IDOK
+    DetailPrint `Uninstall was not successful. Uninstaller error code: $R0.`
+    SetErrorLevel 2
+    Quit
+  ${EndIf}
 !macroend
 
 !macro customUnInstall
