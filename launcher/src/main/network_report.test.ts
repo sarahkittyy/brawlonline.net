@@ -32,5 +32,16 @@ describe("networkReportText", () => {
   it("says when the check timed out or failed", () => {
     expect(networkReportText(null)).toContain("Did not finish within 12 s");
     expect(networkReportText(null, new Error("spawn tracert ENOENT"))).toContain("Failed: spawn tracert ENOENT");
+    expect(networkReportText({})).toContain("Did not finish within 12 s");
+  });
+
+  it("writes what a check that timed out had found", () => {
+    // Bug report #221: the traceroute ran long and the report lost the NAT type STUN had found.
+    const text = networkReportText({ address: "129.81.255.94", natType: NatType.SYMMETRIC });
+    expect(text).toContain("Public address: 129.81.255.94\n");
+    expect(text).toContain("NAT type: symmetric (");
+    expect(text).toContain("Carrier-grade NAT: did not finish within 12 s\n");
+    expect(text).toContain("UPnP: did not finish within 12 s\n");
+    expect(text).toContain("NAT-PMP: did not finish within 12 s\n");
   });
 });
