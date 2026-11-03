@@ -1653,7 +1653,10 @@ std::vector<u8> PlaybackSession(const std::vector<u8>& rec, u16 version)
   };
   const auto team = [](u8 t) { return t < Rooms::NUM_TEAMS ? t : GameSetup::NO_TEAM; };
   out[S_STATE] = 2;  // SS_MATCH_READY
-  out[S_MODE] = rec[S_MODE] <= MODE_TEAMS ? rec[S_MODE] : 1;
+  // (2v2 kept: its match differs from Unranked's, as L+R+A+START takes only the quitter out; a 2v2
+  // replay with a quit played back as Unranked ended the game there for everyone and desynced,
+  // the user's, 2026-11-03.)
+  out[S_MODE] = rec[S_MODE] <= MODE_TEAMS || rec[S_MODE] == MODE_TWOS ? rec[S_MODE] : 1;
   out[S_GAME] = rec[S_GAME] ? rec[S_GAME] : 1;
   out[S_LAST_WINNER] = rec[S_LAST_WINNER] < SESSION_PLAYERS || rec[S_LAST_WINNER] >= 0xFE ?
                            rec[S_LAST_WINNER] :
