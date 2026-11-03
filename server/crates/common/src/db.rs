@@ -23,6 +23,9 @@ pub struct MmUser {
     /// Unranked's hidden rating ([`crate::unranked`]); the Ranked [`Self::rating`] before the
     /// first rated Unranked game.
     pub unranked_rating: f64,
+    /// The 2v2 queue's hidden rating ([`crate::twos`]); [`Self::unranked_rating`] before the first
+    /// rated 2v2 game.
+    pub twos_rating: f64,
     /// Chat shadowban (`pp-admin mute`): mm drops the account's chat messages without a word.
     pub chat_muted: bool,
     /// The name of the P+ rooms the account hosts (`users.room_name`); `None`: "alice's room".
@@ -52,10 +55,12 @@ const MM_USER_SELECT: &str = "SELECT u.uid, u.display_name, u.connect_code, u.pl
         u.email_verified_at IS NOT NULL AS email_verified,
         COALESCE(r.rating, $2) AS rating, COALESCE(r.sets_played, 0) AS ranked_sets,
         COALESCE(ur.rating, r.rating, $2) AS unranked_rating,
+        COALESCE(tr.rating, ur.rating, r.rating, $2) AS twos_rating,
         u.chat_muted_at IS NOT NULL AS chat_muted, u.room_name, u.mods_room_name,
         CASE WHEN f.n >= $4 THEN f.last + make_interval(secs => $5) END AS ranked_cooldown_until
    FROM users u LEFT JOIN ratings r ON r.uid = u.uid
    LEFT JOIN unranked_ratings ur ON ur.uid = u.uid
+   LEFT JOIN twos_ratings tr ON tr.uid = u.uid
    LEFT JOIN LATERAL (SELECT count(*) AS n, max(m.ended_at) AS last FROM mm_matches m
                        WHERE m.fault = u.uid AND m.ended_at > now() - make_interval(secs => $3)) f ON true";
 
@@ -149,6 +154,35 @@ pub async fn insert_match(
     .bind(room.and_then(|r| r.ruleset.as_ref()).map(|s| s.name.as_str()))
     .bind(room.and_then(|r| r.ruleset.as_ref()).map(|s| s.version))
     .bind(room.and_then(|r| r.ruleset.as_ref()).map(|s| s.hash.as_str()))
+    .execute(pool)
+    .await
+    .map(|_| ())
+}
+
+/// Records a 2v2 match (best effort, as [`insert_match`]) with each player's pair (`pairs`, in
+/// `players` order: 0 searched alone, else the same number for two who queued together;
+/// `migrations/0029_twos.sql`), which the 2v2 rating reads.
+pub async fn insert_twos_match(
+    pool: &sqlx::PgPool,
+    match_id: &str,
+    players: &[Uuid],
+    is_host: Uuid,
+    stages: &[i16],
+    region: &str,
+    pairs: &[i16],
+) -> sqlx::Result<()> {
+    sqlx::query(
+        "INSERT INTO mm_matches (match_id, mode, players, is_host, stages, region, pairs)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
+         ON CONFLICT (match_id) DO NOTHING",
+    )
+    .bind(match_id)
+    .bind(crate::proto::Mode::Twos.as_u8() as i16)
+    .bind(players)
+    .bind(is_host)
+    .bind(stages)
+    .bind(region)
+    .bind(pairs)
     .execute(pool)
     .await
     .map(|_| ())

@@ -61,6 +61,11 @@ pub const ROOM_STATE: &str = "room-state";
 pub const ROOM_ERROR: &str = "room-error";
 pub const ROOM_LEFT: &str = "room-left";
 pub const ROOM_START: &str = "room-start";
+/// A 2v2 party's kind (`room-create.kind`, `room-state.kind`).
+pub const TWOS: &str = "twos";
+/// `twos-off`, server → the players of a 2v2 match on their online connections: another player's
+/// connect to them failed and that player searches again, so the match is off (`matchId`).
+pub const TWOS_OFF: &str = "twos-off";
 pub const ERROR: &str = "error";
 
 /// Normalizes a room code typed anywhere (any case, full width, surrounding spaces) and checks
@@ -140,6 +145,10 @@ pub enum RoomRequest {
     /// game's own Create Room) plays the account's remembered ruleset (`docs/design/room-rules.md`
     /// decision 11), else P+'s default.
     Create { public: bool, ruleset: Option<String>, remembered: bool },
+    /// `room-create {kind: "twos"}` (2026-11-02, `docs/design/2v2.md`): a 2v2 party, the player's
+    /// own: two slots, private, never listed, no host settings. Its players search the 2v2 queue
+    /// together (mode 5 tickets naming its code).
+    CreateTwos,
     /// `room-join {code}`.
     Join { code: String },
     /// `room-leave {}`.
@@ -220,7 +229,7 @@ impl RoomRequest {
     /// The message type, for logs and `room-error.op`.
     pub fn op(&self) -> &'static str {
         match self {
-            RoomRequest::Create { .. } => ROOM_CREATE,
+            RoomRequest::Create { .. } | RoomRequest::CreateTwos => ROOM_CREATE,
             RoomRequest::Join { .. } => ROOM_JOIN,
             RoomRequest::Leave => ROOM_LEAVE,
             RoomRequest::Slot { .. } => ROOM_SLOT,
@@ -258,6 +267,7 @@ impl RoomRequest {
                 }
                 v
             }
+            RoomRequest::CreateTwos => json!({ "kind": "twos" }),
             RoomRequest::Join { code } => json!({ "code": code }),
             RoomRequest::Leave | RoomRequest::RulesetList => json!({}),
             RoomRequest::Back { pickers } => match pickers {
@@ -331,6 +341,12 @@ impl RoomRequest {
             }
         };
         Ok(match kind {
+            ROOM_CREATE if v.get("kind").is_some_and(|k| !k.is_null()) => {
+                match v.get("kind").and_then(|k| k.as_str()) {
+                    Some(TWOS) => RoomRequest::CreateTwos,
+                    _ => return Err(format!("{kind}: unknown `kind`")),
+                }
+            }
             ROOM_CREATE => RoomRequest::Create {
                 public: match v.get("public") {
                     None | Some(serde_json::Value::Null) => true,
@@ -562,6 +578,8 @@ pub enum RoomStatus {
     Starting,
     /// A game is being played (by at least one member who has not come back yet).
     InGame,
+    /// A 2v2 party: everyone is ready, its players search the 2v2 queue together.
+    Searching,
 }
 
 /// A player on a panel, as every member sees it.
@@ -640,6 +658,9 @@ pub struct RoomState {
     /// games decide (an older mm, no report yet, or a ruleset that leaves no stage to the loser).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pickers: Option<u8>,
+    /// `kind`: `twos` for a 2v2 party (2026-11-02). Absent: a room.
+    #[serde(rename = "kind", default, skip_serializing_if = "Option::is_none")]
+    pub room_kind: Option<String>,
 }
 
 /// `room-format`'s fields (docs/design/special-rules.md §4).
@@ -934,6 +955,8 @@ pub enum RoomKind {
     Pplus,
     /// A Brawl Mods (Other Games) room (`mod_rooms.rs`).
     Mods,
+    /// A 2v2 party (`rooms.rs`, kind `twos`): the launcher's envelope invites to it.
+    Twos,
 }
 
 /// [`MmStatus::your_room`].
@@ -954,6 +977,9 @@ pub struct YourRoom {
 pub struct QueueCounts {
     pub unranked: usize,
     pub ranked: usize,
+    /// The 2v2 queue (2026-11-02). Absent from an older mm: zero.
+    #[serde(default)]
+    pub twos: usize,
 }
 
 /// One room player's room, for [`MmStatus::members`].
@@ -976,6 +1002,9 @@ pub struct RoomMember {
     /// The room's name ([`PublicRoom::name`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    /// A 2v2 party, not a room (2026-11-02).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub twos: bool,
 }
 
 #[cfg(test)]

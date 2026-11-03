@@ -2039,6 +2039,7 @@ mod tests {
                 stages: vec![],
                 region: String::new(),
                 room: None,
+                pairs: [0; 4],
             };
             let names = HashMap::from([(a, ("alice".into(), "ALI#1".into())), (b, ("bob".into(), "BOB#2".into()))]);
             book.register_match(now, &rec, names, &mut vec![]);
@@ -2245,6 +2246,7 @@ mod tests {
             stages: vec![],
             region: String::new(),
             room: None,
+            pairs: [0; 4],
         };
         // Only A has an online connection when the set is made.
         let names = HashMap::from([(a, ("alice".into(), "ALI#1".into()))]);
@@ -3170,6 +3172,7 @@ mod tests {
                 teams: None,
                 ruleset: None,
             }),
+            pairs: [0; 4],
         };
         let names =
             HashMap::from([(t.a, ("kyran".into(), "KYRN#1".into())), (t.b, ("manbat".into(), "MBAT#2".into()))]);

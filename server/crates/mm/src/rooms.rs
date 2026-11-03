@@ -60,6 +60,8 @@ pub struct RoomsConfig {
     pub max_rooms: usize,
     /// Rooms created per account.
     pub create_windows: Vec<Window>,
+    /// 2v2 parties created per account (one comes with every visit to the 2V2 character select).
+    pub party_windows: Vec<Window>,
     /// Join attempts per account (counted before the code is looked up, so codes cannot be
     /// guessed quickly).
     pub join_windows: Vec<Window>,
@@ -80,6 +82,7 @@ impl Default for RoomsConfig {
             game_max: Duration::from_secs(30 * 60),
             max_rooms: 10_000,
             create_windows: vec![Window::new(5, minute), Window::new(30, Duration::from_secs(3600))],
+            party_windows: vec![Window::new(20, minute), Window::new(300, Duration::from_secs(3600))],
             join_windows: vec![Window::new(10, minute), Window::new(60, Duration::from_secs(3600))],
             request_windows: vec![Window::new(40, Duration::from_secs(10))],
             rules: ModeRules::default(),
@@ -147,6 +150,9 @@ struct Member {
     /// room's next game does not wait for them ([`Room::playing`]).
     #[serde(skip)]
     watching: Option<Instant>,
+    /// A 2v2 party: the member's 2v2 ticket (its connection) while it searches.
+    #[serde(skip)]
+    search: Option<ConnId>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -231,6 +237,10 @@ struct Room {
     /// after that (their game never said it stopped) is waited for again ([`RoomBook::tick`]).
     #[serde(skip)]
     game_over_at: Option<Instant>,
+    /// A 2v2 party (`docs/design/2v2.md`): two slots, private, no settings, never a room game. Its
+    /// players search the 2v2 queue together once all are ready ([`Room::party_status`]).
+    #[serde(default)]
+    twos: bool,
 }
 
 impl Room {
@@ -272,6 +282,9 @@ impl Room {
         (0..ROOM_SLOTS).find(|&i| self.open[i] && self.slots[i].is_none())
     }
     fn status(&self) -> RoomStatus {
+        if self.twos {
+            return self.party_status();
+        }
         match self.phase {
             Phase::Waiting => RoomStatus::Waiting,
             Phase::Starting { .. } => RoomStatus::Starting,
@@ -291,12 +304,25 @@ impl Room {
     /// and the members who sit out are not waited for.
     fn can_start(&self) -> bool {
         let playing = self.playing();
-        matches!(self.phase, Phase::Waiting)
+        !self.twos
+            && matches!(self.phase, Phase::Waiting)
             && playing.len() >= 2
             && playing.iter().all(|&i| self.slots[i].as_ref().is_some_and(|m| m.ready))
             && self.members().all(|(_, m)| !m.in_game)
             && !self.one_colour()
             && !self.set.as_ref().is_some_and(|s| s.paused())
+    }
+
+    /// A 2v2 party: in a 2v2 match while any of its players is in one; searching once every player
+    /// is ready (or already searching); else waiting.
+    fn party_status(&self) -> RoomStatus {
+        if self.members().any(|(_, m)| m.in_game) {
+            RoomStatus::InGame
+        } else if self.members().all(|(_, m)| m.ready || m.search.is_some()) {
+            RoomStatus::Searching
+        } else {
+            RoomStatus::Waiting
+        }
     }
 
     /// The game's host (the session's decider): the room's host when they play it, else its
@@ -520,6 +546,22 @@ impl Room {
     }
 
     fn status_text(&self, me: &Member) -> String {
+        if self.twos {
+            return match self.party_status() {
+                RoomStatus::InGame if me.in_game => msg::IN_GAME.into(),
+                RoomStatus::InGame => msg::WAITING_FOR_GAME.into(),
+                RoomStatus::Searching => msg::PARTY_SEARCHING.into(),
+                _ if self.player_count() == 1 => msg::PARTY_ALONE.into(),
+                _ => {
+                    let waiting: Vec<&str> = self
+                        .members()
+                        .filter(|(_, m)| !m.ready && m.search.is_none())
+                        .map(|(_, m)| m.info.display_name.as_str())
+                        .collect();
+                    msg::waiting_on(&waiting)
+                }
+            };
+        }
         match &self.phase {
             Phase::Starting { .. } => msg::STARTING_GAME.into(),
             Phase::InGame { .. } if me.in_game => msg::IN_GAME.into(),
@@ -589,7 +631,7 @@ impl Room {
                     player: self.slots[i].as_ref().map(|m| RoomPlayer {
                         display_name: m.info.display_name.clone(),
                         connect_code: m.info.connect_code.clone(),
-                        ready: m.ready,
+                        ready: m.ready || m.search.is_some(),
                         team: m.team,
                         // The coin placed on the CSS, before the player readies too (the user's,
                         // 2026-10-18; `docs/design/rooms.md` #15 showed only the lock-in), but not
@@ -616,7 +658,8 @@ impl Room {
             rules: self.ruleset.rules.clone(),
             ruleset: self.ruleset_view(),
             set: self.set.as_ref().map(|s| s.view()),
-            pickers: self.next_pickers(&self.playing()),
+            pickers: if self.twos { None } else { self.next_pickers(&self.playing()) },
+            room_kind: self.twos.then(|| rooms::TWOS.to_string()),
         })
     }
 
@@ -684,7 +727,17 @@ pub struct RoomBook {
     away: HashMap<ConnId, (String, Instant)>,
     /// The next stand-in connection: they count down from `ConnId::MAX` (real ones count up from 1).
     next_away: ConnId,
+    party_limiter: RateLimiter<Uuid>,
+    /// 2v2 ticket connection → the code of its player's party.
+    search_of: HashMap<ConnId, String>,
+    /// 2v2 parties that closed when their only player joined another one: the code → that player
+    /// and when. Two players who enter each other's codes at once: the second join finds the
+    /// first's party gone, its player already in the joiner's own, and is a no-op ([`Self::join`]).
+    moved: HashMap<String, (Uuid, Instant)>,
 }
+
+/// How long a party's code is remembered after its player moved to another party ([`RoomBook::moved`]).
+const MOVED_MEMORY: Duration = Duration::from_secs(60);
 
 fn send(out: &mut Vec<Output>, conn: ConnId, m: &impl serde::Serialize) {
     let json = serde_json::to_string(m).expect("room messages serialize");
@@ -697,6 +750,7 @@ fn room_error(out: &mut Vec<Output>, conn: ConnId, op: &str, error: &str) {
 
 impl RoomBook {
     pub fn new(cfg: RoomsConfig) -> Self {
+        let cfg_party_windows = cfg.party_windows.clone();
         RoomBook {
             create_limiter: RateLimiter::new(&cfg.create_windows),
             join_limiter: RateLimiter::new(&cfg.join_windows),
@@ -713,6 +767,9 @@ impl RoomBook {
             room_counter: 0,
             away: HashMap::new(),
             next_away: ConnId::MAX,
+            party_limiter: RateLimiter::new(&cfg_party_windows),
+            search_of: HashMap::new(),
+            moved: HashMap::new(),
         }
     }
 
@@ -764,6 +821,10 @@ impl RoomBook {
                 m.ready = false;
                 m.watch = false;
                 m.watching = None;
+                m.search = None;
+                if room.twos {
+                    m.in_game = false;
+                }
                 self.away.insert(m.conn, (room.code.clone(), until));
                 self.join_seq = self.join_seq.max(m.joined);
             }
@@ -853,6 +914,7 @@ impl RoomBook {
                     joinable: entry.joinable,
                     host: i == room.host,
                     name: entry.name.clone(),
+                    twos: room.twos,
                 });
             }
         }
@@ -905,7 +967,7 @@ impl RoomBook {
         }
         let result = match req {
             RoomRequest::Create { public, ruleset, remembered } => {
-                self.create(now, conn, who, public, out).map(|()| {
+                self.create(now, conn, who, public, false, out).map(|()| {
                     // The room is there at once with P+'s default; the ruleset follows its lookup.
                     if ruleset.is_some() || remembered {
                         if let Some(room) = self.member_of.get(&conn).cloned() {
@@ -921,6 +983,7 @@ impl RoomBook {
                     }
                 })
             }
+            RoomRequest::CreateTwos => self.create(now, conn, who, false, true, out),
             RoomRequest::Ruleset { code } => self.ruleset_request(conn, who, code, out),
             RoomRequest::RulesetList => {
                 out.push(Output::FetchRulesetList { conn, uid: who.uid });
@@ -948,9 +1011,11 @@ impl RoomBook {
         conn: ConnId,
         who: &MemberInfo,
         public: bool,
+        twos: bool,
         out: &mut Vec<Output>,
     ) -> Result<(), &'static str> {
-        if self.create_limiter.check(&who.uid, now).is_err() {
+        let limiter = if twos { &mut self.party_limiter } else { &mut self.create_limiter };
+        if limiter.check(&who.uid, now).is_err() {
             return Err(msg::ROOMS_TOO_OFTEN);
         }
         if self.rooms.len() >= self.cfg.max_rooms {
@@ -981,8 +1046,13 @@ impl RoomBook {
             sitting_out: false,
             watch: false,
             watching: None,
+            search: None,
         });
-        tracing::info!(%code, host = %who.connect_code, public, "room created");
+        if twos {
+            tracing::info!(%code, player = %who.connect_code, "2v2 party created");
+        } else {
+            tracing::info!(%code, host = %who.connect_code, public, "room created");
+        }
         self.rooms.insert(
             code.clone(),
             Room {
@@ -1006,6 +1076,7 @@ impl RoomBook {
                 pick_owed: false,
                 pick_draw: 0,
                 game_over_at: None,
+                twos,
             },
         );
         self.changed.push((code.clone(), self.room_counter));
@@ -1026,7 +1097,30 @@ impl RoomBook {
             return Err(msg::JOINS_TOO_OFTEN);
         }
         let code = rooms::parse_room_code(typed).ok_or(msg::ROOM_NOT_FOUND)?;
-        let room = self.rooms.get(&code).ok_or(msg::ROOM_NOT_FOUND)?;
+        let mine = self.member_of.get(&conn).cloned();
+        let in_party = mine.as_ref().and_then(|c| self.rooms.get(c)).is_some_and(|r| r.twos);
+        let Some(room) = self.rooms.get(&code) else {
+            // Two players who entered each other's party codes at once: the first join moved its
+            // player into the other's party, whose own code is gone; this second join finds that
+            // player already beside it. Nothing to do: the answer is the party's state.
+            let moved_here = self.moved.get(&code).is_some_and(|(uid, at)| {
+                now.saturating_duration_since(*at) < MOVED_MEMORY
+                    && mine
+                        .as_ref()
+                        .and_then(|c| self.rooms.get(c))
+                        .is_some_and(|r| r.twos && r.members().any(|(_, m)| m.info.uid == *uid))
+            });
+            if let (true, Some(mine)) = (moved_here, mine) {
+                tracing::info!(%code, party = %mine, player = %who.connect_code, "2v2 party joined both ways at once");
+                self.broadcast(&mine, out);
+                return Ok(());
+            }
+            return Err(msg::ROOM_NOT_FOUND);
+        };
+        // The 2V2 character select's partner panel takes 2v2 party codes only.
+        if in_party && !room.twos {
+            return Err(msg::NOT_A_PARTY);
+        }
         if room.slot_of(conn).is_some() {
             // Already in it: the answer is the state, as for a join.
             self.broadcast(&code, out);
@@ -1052,6 +1146,14 @@ impl RoomBook {
             self.broadcast(&code, out);
             return Ok(());
         }
+        if room.twos {
+            if room.members().any(|(_, m)| m.in_game) {
+                return Err(msg::PARTY_IN_GAME);
+            }
+            if room.free_slot().is_none() {
+                return Err(msg::PARTY_FULL);
+            }
+        }
         // A set that waits keeps its missing players' slots for them (room-rules.md A).
         let reserved = room.set.as_ref().map(|s| s.reserved()).unwrap_or_default();
         let slot = match reserved.iter().find(|(kept, uid)| *uid == who.uid && room.open[*kept]) {
@@ -1061,8 +1163,15 @@ impl RoomBook {
                 .ok_or(msg::ROOM_FULL)?,
         };
         if let Some(old) = self.member_of.get(&conn).cloned() {
+            let alone_in_party = self.rooms.get(&old).is_some_and(|r| r.twos && r.player_count() == 1);
             self.leave(now, &old, conn, None, true, out);
+            if alone_in_party {
+                self.moved.retain(|_, (_, at)| now.saturating_duration_since(*at) < MOVED_MEMORY);
+                self.moved.insert(old, (who.uid, now));
+            }
         }
+        // A party searching without this player: its search stops, everyone readies again together.
+        self.stop_party_search(&code, &msg::partner(&who.display_name, "joined"), out);
         let before = self.pickers_now(&code);
         self.join_seq += 1;
         let seq = self.join_seq;
@@ -1083,6 +1192,7 @@ impl RoomBook {
             sitting_out: false,
             watch: false,
             watching: None,
+            search: None,
         });
         tracing::info!(%code, player = %who.connect_code, slot = slot + 1, "joined room");
         if let Some(set) = room.set.as_mut() {
@@ -1123,6 +1233,22 @@ impl RoomBook {
         let gone = room.slots[slot].take();
         if gone.as_ref().is_some_and(|m| m.watch) {
             self.watch_stops.push(conn);
+        }
+        if room.twos {
+            // A 2v2 party: the leaver's search is over, and so is the partner's (they search
+            // together or not at all).
+            if let Some(t) = gone.as_ref().and_then(|m| m.search) {
+                self.search_of.remove(&t);
+                self.failed_tickets.push((t, msg::NOT_IN_PARTY.into()));
+            }
+            let why = msg::partner(gone.as_ref().map_or("Your partner", |m| m.info.display_name.as_str()), "left");
+            for m in room.slots.iter_mut().flatten() {
+                if let Some(t) = m.search.take() {
+                    self.search_of.remove(&t);
+                    self.failed_tickets.push((t, why.clone()));
+                }
+                m.ready = false;
+            }
         }
         if let (Some(set), Some(m)) = (room.set.as_mut(), gone.as_ref()) {
             if let Some(side) = set.side_of(m.info.uid) {
@@ -1190,6 +1316,92 @@ impl RoomBook {
         self.maybe_start(now, code, out);
     }
 
+    /// A 2v2 party's search stops (a player joined it): every player's 2v2 ticket fails with `why`
+    /// and every ready goes, so its players ready up again together.
+    fn stop_party_search(&mut self, code: &str, why: &str, out: &mut Vec<Output>) {
+        let Some(room) = self.rooms.get_mut(code).filter(|r| r.twos) else { return };
+        let mut stopped = false;
+        for m in room.slots.iter_mut().flatten() {
+            if let Some(t) = m.search.take() {
+                self.search_of.remove(&t);
+                self.failed_tickets.push((t, why.into()));
+                stopped = true;
+            }
+            stopped |= std::mem::take(&mut m.ready);
+        }
+        if stopped {
+            tracing::info!(%code, "2v2 party search stopped: {why}");
+            self.broadcast(code, out);
+        }
+    }
+
+    /// The number of players in a 2v2 party (its players search together: a party's tickets are
+    /// one unit once this many are in), `None` if no such party.
+    pub fn party_size(&self, code: &str) -> Option<usize> {
+        self.rooms.get(code).filter(|r| r.twos).map(|r| r.player_count())
+    }
+
+    /// A verified 2v2 ticket (`create-ticket` mode 5) naming party `code`: the player searches with
+    /// it from now on (ready, out of their last match). `Err`: the refusal.
+    pub fn party_ticket(
+        &mut self,
+        ticket: ConnId,
+        uid: Uuid,
+        code: &str,
+        out: &mut Vec<Output>,
+    ) -> Result<(), &'static str> {
+        let room = self.rooms.get_mut(code).filter(|r| r.twos).ok_or(msg::ROOM_NOT_FOUND)?;
+        let slot = room.members().find(|(_, m)| m.info.uid == uid).map(|(i, _)| i).ok_or(msg::NOT_IN_PARTY)?;
+        let m = room.slots[slot].as_mut().ok_or(msg::NOT_IN_PARTY)?;
+        if let Some(old) = m.search.replace(ticket) {
+            self.search_of.remove(&old);
+        }
+        m.ready = true;
+        m.in_game = false;
+        self.search_of.insert(ticket, code.to_string());
+        tracing::info!(%code, slot = slot + 1, player = %m.info.connect_code, "2v2 party player searching");
+        self.broadcast(code, out);
+        Ok(())
+    }
+
+    /// A 2v2 party's tickets were matched (`uids` its players in the match): they are in it until
+    /// they search again or are back on the party's CSS (`room-back`).
+    pub fn party_matched(&mut self, code: &str, uids: &[Uuid], out: &mut Vec<Output>) {
+        let Some(room) = self.rooms.get_mut(code).filter(|r| r.twos) else { return };
+        for m in room.slots.iter_mut().flatten().filter(|m| uids.contains(&m.info.uid)) {
+            if let Some(t) = m.search.take() {
+                self.search_of.remove(&t);
+            }
+            m.ready = false;
+            m.in_game = true;
+        }
+        self.broadcast(code, out);
+    }
+
+    /// A 2v2 ticket ended unmatched (cancelled, failed, its game gone): its player stops searching,
+    /// and so does their partner, whose ticket fails ("bob cancelled").
+    fn party_ticket_gone(&mut self, ticket: ConnId, out: &mut Vec<Output>) {
+        let Some(code) = self.search_of.remove(&ticket) else { return };
+        let Some(room) = self.rooms.get_mut(&code) else { return };
+        let Some(name) =
+            room.members().find(|(_, m)| m.search == Some(ticket)).map(|(_, m)| m.info.display_name.clone())
+        else {
+            return;
+        };
+        let why = msg::partner(&name, "cancelled");
+        for m in room.slots.iter_mut().flatten() {
+            if m.search == Some(ticket) {
+                m.search = None;
+            } else if let Some(t) = m.search.take() {
+                self.search_of.remove(&t);
+                self.failed_tickets.push((t, why.clone()));
+            }
+            m.ready = false;
+        }
+        tracing::info!(%code, "2v2 party search ended: {name}'s ticket");
+        self.broadcast(&code, out);
+    }
+
     /// Requests that change a room the connection is in.
     fn change(
         &mut self,
@@ -1206,6 +1418,26 @@ impl RoomBook {
         let waiting = matches!(room.phase, Phase::Waiting);
         let starting = matches!(room.phase, Phase::Starting { .. });
         let mut kick: Option<ConnId> = None;
+        // A 2v2 party has no settings, slots, teams or sets: its players ready up and come back.
+        if room.twos {
+            let m = room.slots[me].as_mut().ok_or(msg::NOT_IN_ROOM)?;
+            match req {
+                RoomRequest::Ready { ready, character, costume, .. } => {
+                    if m.in_game {
+                        return Err(msg::BETWEEN_GAMES);
+                    }
+                    // A player searching stays searching until their ticket ends: their game's
+                    // own coin moves change only what the partner sees.
+                    m.ready = ready || m.search.is_some();
+                    m.character = character;
+                    m.costume = costume;
+                }
+                RoomRequest::Back { .. } => m.in_game = false,
+                _ => return Err(msg::NOT_IN_A_PARTY),
+            }
+            self.broadcast(&code, out);
+            return Ok(());
+        }
         match req {
             RoomRequest::Slot { slot, open } => {
                 let s = slot as usize - 1;
@@ -1562,6 +1794,7 @@ impl RoomBook {
                 return Ok(());
             }
             RoomRequest::Create { .. }
+            | RoomRequest::CreateTwos
             | RoomRequest::Join { .. }
             | RoomRequest::Leave
             | RoomRequest::Ruleset { .. }
@@ -1590,6 +1823,9 @@ impl RoomBook {
     ) -> Result<(), &'static str> {
         let room_code = self.member_of.get(&conn).cloned().ok_or(msg::NOT_IN_ROOM)?;
         let room = self.rooms.get(&room_code).ok_or(msg::NOT_IN_ROOM)?;
+        if room.twos {
+            return Err(msg::NOT_IN_A_PARTY);
+        }
         if room.slot_of(conn) != Some(room.host) {
             return Err(msg::HOST_ONLY);
         }
@@ -1975,6 +2211,7 @@ impl RoomBook {
                 tickets.retain(|_, t| t.conn != conn);
             }
         }
+        self.party_ticket_gone(conn, out);
     }
 
     /// Starts that waited too long fail; games that never reported their end are over; members
@@ -3752,5 +3989,143 @@ mod tests {
             refused |= msgs(&out, 3)[0]["error"] == msg::TOO_MANY_REQUESTS;
         }
         assert!(refused);
+    }
+
+    // ---- 2v2 parties (docs/design/2v2.md)
+
+    fn party(t: &mut T, conn: ConnId) -> String {
+        let out = t.req(conn, RoomRequest::CreateTwos);
+        let s = last_state(&out, conn);
+        assert_eq!(s["kind"], "twos");
+        s["code"].as_str().unwrap().to_string()
+    }
+
+    fn ready(t: &mut T, conn: ConnId) -> Vec<Output> {
+        t.req(conn, RoomRequest::Ready { ready: true, character: Some(9), costume: Some(0), stocks: None, hp: None })
+    }
+
+    fn uid(n: u8) -> Uuid {
+        info(n).uid
+    }
+
+    #[test]
+    fn a_party_is_two_private_slots_that_search_once_all_are_ready() {
+        let mut t = T::new();
+        let code = party(&mut t, 1);
+        assert!(t.book.public_rooms(10).is_empty(), "never listed");
+        let s = last_state(&ready(&mut t, 1), 1);
+        assert_eq!((s["status"].as_str(), s["public"].as_bool()), (Some("searching"), Some(false)));
+        // Alone the ready is the search; a partner joining takes it back for both.
+        let out = join(&mut t, 2, &code);
+        let s = last_state(&out, 2);
+        assert_eq!(s["status"], "waiting");
+        assert_eq!(s["slots"][0]["player"]["ready"], false);
+        assert_eq!(s["statusText"], "Waiting on: player1, player2");
+        assert_eq!(s["slots"][2]["open"], false);
+        ready(&mut t, 2);
+        let s = last_state(&ready(&mut t, 1), 1);
+        assert_eq!((s["status"].as_str(), s["statusText"].as_str()), (Some("searching"), Some(msg::PARTY_SEARCHING)));
+        assert_eq!(t.book.party_size(&code), Some(2));
+        // Full; and a room has no party size.
+        assert_eq!(msgs(&join(&mut t, 3, &code), 3)[0]["error"], msg::PARTY_FULL);
+        let room = create(&mut t, 4);
+        assert_eq!(t.book.party_size(&room), None);
+        // The partner panel takes party codes only; a room's player may join a party.
+        let other = party(&mut t, 5);
+        assert_eq!(msgs(&join(&mut t, 5, &room), 5)[0]["error"], msg::NOT_A_PARTY);
+        assert_eq!(last_state(&join(&mut t, 4, &other), 4)["kind"], "twos");
+        // A party has no settings.
+        for req in [
+            RoomRequest::Teams { on: true, colors: false },
+            RoomRequest::Slot { slot: 3, open: true },
+            RoomRequest::Public { public: true },
+            RoomRequest::SitOut { slot: 1, sit_out: true },
+            RoomRequest::Team { team: 1 },
+            RoomRequest::Ruleset { code: None },
+        ] {
+            assert_eq!(msgs(&t.req(1, req), 1)[0]["error"], msg::NOT_IN_A_PARTY);
+        }
+    }
+
+    #[test]
+    fn two_players_entering_each_others_codes_at_once_end_up_together() {
+        let mut t = T::new();
+        let a = party(&mut t, 1);
+        let b = party(&mut t, 2);
+        // 1's join is taken first: 1 moves into 2's party, whose code stays; 1's own is gone.
+        let s = last_state(&join(&mut t, 1, &b), 1);
+        assert_eq!(s["code"].as_str(), Some(b.as_str()));
+        assert_eq!(t.book.party_size(&a), None);
+        // 2's join of 1's old code: nothing to do, the answer is their own party with 1 in it.
+        let out = join(&mut t, 2, &a);
+        assert!(msgs(&out, 2).iter().all(|m| m["type"] != "room-error"), "{:?}", msgs(&out, 2));
+        let s = last_state(&out, 2);
+        assert_eq!(s["code"].as_str(), Some(b.as_str()));
+        assert_eq!(t.book.party_size(&b), Some(2));
+        // Someone else who tries the old code: no such party.
+        assert_eq!(msgs(&join(&mut t, 3, &a), 3)[0]["error"], msg::ROOM_NOT_FOUND);
+    }
+
+    #[test]
+    fn a_partys_search_ends_for_both() {
+        let mut t = T::new();
+        let code = party(&mut t, 1);
+        join(&mut t, 2, &code);
+        let mut out = vec![];
+        t.book.party_ticket(101, uid(1), &code, &mut out).unwrap();
+        t.book.party_ticket(102, uid(2), &code, &mut out).unwrap();
+        assert_eq!(last_state(&out, 2)["status"], "searching");
+        assert_eq!(t.book.party_ticket(103, uid(3), &code, &mut out), Err(msg::NOT_IN_PARTY));
+        assert_eq!(t.book.party_ticket(103, uid(3), "ZZZZ", &mut out), Err(msg::ROOM_NOT_FOUND));
+        // 1 cancels (its ticket's connection goes): 2's ticket fails, both ready up again.
+        let mut out = vec![];
+        t.book.conn_gone(t.now, 101, &mut out);
+        assert_eq!(t.book.take_failed_tickets(), vec![(102, msg::partner("player1", "cancelled"))]);
+        assert_eq!(last_state(&out, 1)["status"], "waiting");
+        // Searching alone, someone joins: the search stops ("player2 joined").
+        let mut t = T::new();
+        let code = party(&mut t, 1);
+        let mut out = vec![];
+        t.book.party_ticket(101, uid(1), &code, &mut out).unwrap();
+        join(&mut t, 2, &code);
+        assert_eq!(t.book.take_failed_tickets(), vec![(101, msg::partner("player2", "joined"))]);
+        // Both searching, one leaves the party: the other's ticket fails ("player2 left").
+        let mut out = vec![];
+        t.book.party_ticket(111, uid(1), &code, &mut out).unwrap();
+        t.book.party_ticket(112, uid(2), &code, &mut out).unwrap();
+        t.req(2, RoomRequest::Leave);
+        let mut failed = t.book.take_failed_tickets();
+        failed.sort();
+        assert_eq!(failed, vec![(111, msg::partner("player2", "left")), (112, msg::NOT_IN_PARTY.to_string())]);
+    }
+
+    #[test]
+    fn a_party_in_a_match_is_back_with_room_back_or_a_new_search() {
+        let mut t = T::new();
+        let code = party(&mut t, 1);
+        join(&mut t, 2, &code);
+        let mut out = vec![];
+        t.book.party_ticket(101, uid(1), &code, &mut out).unwrap();
+        t.book.party_ticket(102, uid(2), &code, &mut out).unwrap();
+        let mut out = vec![];
+        t.book.party_matched(&code, &[uid(1), uid(2), uid(3), uid(4)], &mut out);
+        // Their tickets end with the match, not as a cancel.
+        t.book.conn_gone(t.now, 101, &mut out);
+        t.book.conn_gone(t.now, 102, &mut out);
+        assert!(t.book.take_failed_tickets().is_empty());
+        let s = last_state(&out, 1);
+        assert_eq!((s["status"].as_str(), s["statusText"].as_str()), (Some("in-game"), Some(msg::IN_GAME)));
+        assert_eq!(msgs(&join(&mut t, 3, &code), 3)[0]["error"], msg::PARTY_IN_GAME);
+        // A ready waits until they are back.
+        assert_eq!(msgs(&ready(&mut t, 1), 1)[0]["error"], msg::BETWEEN_GAMES);
+        // 1 searches again by itself (its group broke up); 2 is back on the party's CSS.
+        let mut out = vec![];
+        t.book.party_ticket(201, uid(1), &code, &mut out).unwrap();
+        let s = last_state(&t.req(2, RoomRequest::Back { pickers: None }), 2);
+        assert_eq!(s["status"], "waiting");
+        assert_eq!(s["statusText"], "Waiting on: player2");
+        assert_eq!(s["slots"][0]["player"]["ready"], true, "1 searches");
+        // 2 readies: the party searches (2's game then sends its ticket).
+        assert_eq!(last_state(&ready(&mut t, 2), 2)["status"], "searching");
     }
 }

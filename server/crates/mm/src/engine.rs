@@ -42,7 +42,19 @@
 //!   every `ranked_band_interval` the longer-waiting of the two has waited (design 2.3: ±150,
 //!   +50 every 15 s). The ratings are the accounts' Elo ([`common::ranked`]).
 //!
-//! Both queues hold back a pair whose estimated ping ([`crate::geo`]: GeoIP distance) is above the
+//! - **2v2** (`docs/design/2v2.md`, 2026-11-02): four players on two teams. A ticket may name the
+//!   player's 2v2 party (a room of kind `twos`, [`crate::rooms`]); a party's players search as one
+//!   unit once all of its tickets are in, and stay on one team. The oldest unit takes the units
+//!   that make four with it (two pairs, a pair and two players, or four players) whose every pair
+//!   from different units is within the ping limit (Unranked's) and has not just failed to
+//!   connect, and whose most even split into two teams (by the hidden 2v2 rating,
+//!   [`common::twos`], a pair counting [`common::twos::PAIR_BONUS`] above its average) is within
+//!   Unranked's rating band; of those, the group that needed the least waiting for its highest
+//!   ping and its teams' gap together, as Unranked's pairs. The match lists the team splits it
+//!   may play, the most even first: the session shuffles the teams every game. A search that
+//!   starts again by itself after its group broke up (`search.requeue`) goes first.
+//!
+//! The queues hold back a pair whose estimated ping ([`crate::geo`]: GeoIP distance) is above the
 //! ping limit, `ping_limit` ms widened by `ping_limit_step` for every `ping_limit_interval` the
 //! shorter-waiting of the two has waited, up to `ping_limit_max` however long either waits, or
 //! `ranked_ping_limit_max` in Ranked (100 ms, +20 every 20 s, 200 at most in Unranked and 150 in
@@ -209,6 +221,9 @@ pub struct EngineConfig {
     /// emulation paused) while its online connection stayed up: its recent Ranked sets record it
     /// (`ranked_presence.stalled_since`), so an "opponent left" about it counts (bug report #105).
     pub game_stall: Duration,
+    /// 2v2: two players one of whose connect to the other failed are grouped again only after this
+    /// long (`search.avoid`).
+    pub twos_avoid: Duration,
 }
 
 impl Default for EngineConfig {
@@ -249,6 +264,7 @@ impl Default for EngineConfig {
             chat: ChatConfig::default(),
             live: LiveConfig::default(),
             game_stall: Duration::from_secs(30),
+            twos_avoid: Duration::from_secs(600),
         }
     }
 }
@@ -331,6 +347,9 @@ pub struct MatchRecord {
     pub region: String,
     /// A room's game: the room, each player's slot and team.
     pub room: Option<common::db::MatchRoom>,
+    /// 2v2: each player's pair (`mm_matches.pairs`), in `players` order: 0 searched alone, else the
+    /// same number for two who queued together. Zeros in every other mode.
+    pub pairs: [u8; 4],
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -439,6 +458,20 @@ struct Pending {
     chat_key: Option<[u8; 32]>,
     /// `hello`: the game sends `game-alive` while its emulation runs.
     game_alive: bool,
+    /// A 2v2 ticket's own fields.
+    twos: Option<TwosSearch>,
+}
+
+/// What a 2v2 ticket says besides its mode (`search.connectCode`, `requeue`, `avoid`, `after`).
+#[derive(Debug, Clone, Default)]
+struct TwosSearch {
+    /// The player's 2v2 party (its code), if they are in one.
+    party: Option<String>,
+    /// The search started again by itself after its group broke up: it goes first.
+    requeue: bool,
+    /// Players this game's last match could not connect to, and that match.
+    avoid: Vec<Uuid>,
+    after: Option<String>,
 }
 
 /// The build a game says it is (`appVersion`, `platform`).
@@ -460,6 +493,8 @@ struct Waiting {
     region: String,
     /// Where the ticket's address is (GeoIP), for the ping estimate.
     loc: Option<Loc>,
+    /// 2v2: the player's party (its code); its players search as one unit.
+    party: Option<String>,
 }
 
 /// An online connection: a running, logged-in game (rooms, the online count).
@@ -618,6 +653,12 @@ pub struct Engine {
     unranked: Vec<ConnId>,
     /// Ranked tickets waiting, oldest first.
     ranked: Vec<ConnId>,
+    /// 2v2 tickets waiting, oldest first (a requeued search first of all).
+    twos: Vec<ConnId>,
+    /// 2v2: pairs of players (sorted uids) one of whose connect to the other failed, and when.
+    twos_avoid: HashMap<(Uuid, Uuid), Instant>,
+    /// 2v2 matches made lately: their players and when, for `twos-off` (a player's connect failed).
+    twos_matches: HashMap<String, (Vec<Uuid>, Instant)>,
     /// Recently matched pairs (sorted uids), to space out re-pairing after a
     /// failed P2P connect.
     history: HashMap<(Uuid, Uuid), PairHistory>,
@@ -679,6 +720,39 @@ fn pair_key(a: Uuid, b: Uuid) -> (Uuid, Uuid) {
     }
 }
 
+/// The ways four players split into two teams of two (team 0 has player 0), as a team per player.
+const TWOS_SPLITS: [[u8; 4]; 3] = [[0, 0, 1, 1], [0, 1, 0, 1], [0, 1, 1, 0]];
+
+/// How many of the 2v2 queue's units are looked at (the oldest).
+const TWOS_UNITS_MAX: usize = 64;
+
+/// How long a 2v2 match is remembered for `twos-off` (its players' connects are long over by then).
+const TWOS_MATCH_MEMORY: Duration = Duration::from_secs(120);
+
+/// The team splits four players with these 2v2 ratings and units (players of one unit queued
+/// together and stay on one team) may play, with each split's gap between the teams' strengths
+/// ([`common::twos::team_strength`]), the most even first (ties: [`TWOS_SPLITS`]' order).
+fn twos_splits(ratings: &[f64], units: &[usize]) -> Vec<([u8; 4], f64)> {
+    let mut out: Vec<([u8; 4], f64)> = Vec::new();
+    if ratings.len() != 4 || units.len() != 4 {
+        return out;
+    }
+    for split in TWOS_SPLITS {
+        let together = (0..4).all(|a| (0..4).all(|b| units[a] != units[b] || split[a] == split[b]));
+        if !together {
+            continue;
+        }
+        let strength = |t: u8| {
+            let team: Vec<usize> = (0..4).filter(|&i| split[i] == t).collect();
+            let pair = units[team[0]] == units[team[1]];
+            common::twos::team_strength(ratings[team[0]], ratings[team[1]], pair)
+        };
+        out.push((split, (strength(0) - strength(1)).abs()));
+    }
+    out.sort_by(|a, b| a.1.total_cmp(&b.1));
+    out
+}
+
 fn uid_hash(uid: Uuid) -> [u8; 32] {
     Sha256::digest(uid.as_bytes()).into()
 }
@@ -707,6 +781,9 @@ impl Engine {
             direct: HashMap::new(),
             unranked: Vec::new(),
             ranked: Vec::new(),
+            twos: Vec::new(),
+            twos_avoid: HashMap::new(),
+            twos_matches: HashMap::new(),
             history: HashMap::new(),
             last_opponent: HashMap::new(),
             ticket_limiter,
@@ -831,10 +908,11 @@ impl Engine {
         MmStatus {
             online: self.online_count(),
             rooms: self.rooms.public_rooms(200),
-            queues: QueueCounts { unranked: self.unranked.len(), ranked: self.ranked.len() },
+            queues: QueueCounts { unranked: self.unranked.len(), ranked: self.ranked.len(), twos: self.twos.len() },
             playing: QueueCounts {
                 unranked: self.chat.match_players(Mode::Unranked),
                 ranked: self.chat.match_players(Mode::Ranked),
+                twos: self.chat.match_players(Mode::Twos),
             },
             updated_at: wall.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
             mod_rooms: self.mod_rooms.public_rooms(200),
@@ -1238,6 +1316,7 @@ impl Engine {
         self.direct.retain(|_, c| *c != conn);
         self.unranked.retain(|c| *c != conn);
         self.ranked.retain(|c| *c != conn);
+        self.twos.retain(|c| *c != conn);
     }
 
     fn on_connect(&mut self, now: Instant, conn: ConnId, addr: SocketAddr, out: &mut Vec<Output>) {
@@ -1525,6 +1604,7 @@ impl Engine {
             // A malformed key is ignored: the connection works, it just can't chat.
             chat_key: common::chat::parse_identity_key(&h.chat_key),
             game_alive: h.game_alive,
+            twos: None,
         };
         if let Some(c) = self.conns.get_mut(&conn) {
             c.state = State::Validating(pending);
@@ -1554,7 +1634,7 @@ impl Engine {
         };
         let unsupported = match mode {
             // Mode 3 is a room's game ticket (the room code in `search.connectCode`).
-            Mode::Direct | Mode::Unranked | Mode::Ranked | Mode::Teams => None,
+            Mode::Direct | Mode::Unranked | Mode::Ranked | Mode::Teams | Mode::Twos => None,
             Mode::Party => Some("Party"),
         };
         if let Some(name) = unsupported {
@@ -1585,6 +1665,24 @@ impl Engine {
             },
             _ => None,
         };
+        // 2v2: the party (none: searching alone, outside one), and what a search started again
+        // after a failed connect says.
+        let twos = match mode {
+            Mode::Twos => Some(TwosSearch {
+                party: if t.search.connect_code.is_empty() {
+                    None
+                } else {
+                    match decode_room_search_code(&t.search.connect_code) {
+                        Some(code) => Some(code),
+                        None => return self.refuse(out, conn, msg::ROOM_NOT_FOUND),
+                    }
+                },
+                requeue: t.search.requeue,
+                avoid: t.search.avoid.iter().take(3).filter_map(|u| Uuid::parse_str(u.trim()).ok()).collect(),
+                after: t.search.after.clone().filter(|m| m.len() <= 128),
+            }),
+            _ => None,
+        };
         let Some(addr) = self.conns.get(&conn).map(|c| c.addr) else { return };
         // The game cannot use an IPv6 peer address (it splits `ipAddress` on ':'), and an empty
         // one crashes older clients, so such tickets are refused before they can be matched.
@@ -1608,6 +1706,7 @@ impl Engine {
             client,
             chat_key: None,
             game_alive: false,
+            twos,
         };
         if let Some(c) = self.conns.get_mut(&conn) {
             c.state = State::Validating(pending);
@@ -1668,6 +1767,13 @@ impl Engine {
         if p.mode == Mode::Direct && target == code {
             return self.refuse(out, conn, msg::OWN_CODE);
         }
+        // A 2v2 ticket for a party: the party takes it first (its player searches with this one, so
+        // the older ticket replaced below no longer counts as the party's search).
+        if let Some(party) = p.twos.as_ref().and_then(|t| t.party.clone()) {
+            if let Err(e) = self.rooms.party_ticket(conn, user.uid, &party, out) {
+                return self.refuse(out, conn, e);
+            }
+        }
         // One active ticket per account: a newer search replaces an older one.
         let older: Vec<ConnId> = self
             .conns
@@ -1685,6 +1791,7 @@ impl Engine {
         let Some(c) = self.conns.get_mut(&conn) else { return };
         let region = self.cfg.regions.region_of(c.addr);
         let loc = self.cfg.geoip.locate(c.addr);
+        let uid = user.uid;
         c.state = State::Waiting(Waiting {
             since: now,
             user,
@@ -1694,8 +1801,24 @@ impl Engine {
             lan: p.lan,
             region: region.clone(),
             loc,
+            party: p.twos.as_ref().and_then(|t| t.party.clone()),
         });
-        if p.mode == Mode::Unranked {
+        self.fail_room_tickets(out);
+        if let Some(t) = p.twos {
+            self.twos_failed_connect(now, uid, &t, out);
+            let rating = self.conns.get(&conn).and_then(|c| match &c.state {
+                State::Waiting(w) => Some(w.user.twos_rating.round()),
+                _ => None,
+            });
+            tracing::info!(conn, %code, %region, ?loc, ?rating, party = ?t.party, requeue = t.requeue,
+                queued = self.twos.len() + 1, "2v2 ticket waiting");
+            if t.requeue {
+                self.twos.insert(0, conn);
+            } else {
+                self.twos.push(conn);
+            }
+            self.group_twos(now, wall, out);
+        } else if p.mode == Mode::Unranked {
             // The hidden Unranked rating.
             let rating = self.conns.get(&conn).and_then(|c| match &c.state {
                 State::Waiting(w) => Some(w.user.unranked_rating.round()),
@@ -1807,6 +1930,7 @@ impl Engine {
                 lan: p.lan,
                 region,
                 loc: None,
+                party: None,
             });
         }
         if let Some(old) = outcome.replaced {
@@ -1838,6 +1962,7 @@ impl Engine {
                 stages: rec.stages,
                 region: regions.join("+"),
                 room: Some(rec.room),
+                pairs: [0; 4],
             }));
         }
         for (c, _) in &outcome.matched {
@@ -1885,6 +2010,10 @@ impl Engine {
         }
         self.pair_queue(Mode::Unranked, now, wall, out);
         self.pair_queue(Mode::Ranked, now, wall, out);
+        self.group_twos(now, wall, out);
+        let avoid = self.cfg.twos_avoid;
+        self.twos_avoid.retain(|_, at| now.saturating_duration_since(*at) < avoid);
+        self.twos_matches.retain(|_, (_, at)| now.saturating_duration_since(*at) < TWOS_MATCH_MEMORY);
         let window = self.cfg.requeue_window;
         self.history.retain(|_, h| now.saturating_duration_since(h.last_match) < window);
         let memory = self.cfg.rematch_memory;
@@ -1933,7 +2062,7 @@ impl Engine {
         } else {
             self.history.insert(key, PairHistory { last_match: now, failures: 0 });
         }
-        self.make_match(wall, &[conn, other], out);
+        self.make_match(wall, &[conn, other], None, out);
     }
 
     fn queue(&self, mode: Mode) -> &Vec<ConnId> {
@@ -1955,7 +2084,7 @@ impl Engine {
             };
             self.history.insert(pair_key(ua, ub), PairHistory { last_match: now, failures });
             let before = self.queue(mode).len();
-            self.make_match(wall, &[a, b], out);
+            self.make_match(wall, &[a, b], None, out);
             if self.queue(mode).len() == before {
                 break; // make_match refused; never loop forever
             }
@@ -2097,7 +2226,9 @@ impl Engine {
         None
     }
 
-    fn make_match(&mut self, wall: DateTime<Utc>, conns: &[ConnId], out: &mut Vec<Output>) {
+    /// Matches the tickets `conns`. `units` (2v2): each ticket's unit (the same number for a
+    /// party's players, who play on one team).
+    fn make_match(&mut self, wall: DateTime<Utc>, conns: &[ConnId], units: Option<&[usize]>, out: &mut Vec<Output>) {
         let mut entrants: Vec<(ConnId, SocketAddr, Waiting)> = conns
             .iter()
             .filter_map(|id| match self.conns.get(id) {
@@ -2108,6 +2239,9 @@ impl Engine {
         if entrants.len() != conns.len() {
             return;
         }
+        // Each player's unit (2v2), by connection, before the players are put in port order.
+        let unit_of: HashMap<ConnId, usize> =
+            units.map(|u| conns.iter().copied().zip(u.iter().copied()).collect()).unwrap_or_default();
         // Deterministic host ("decider"): the lowest hash of the uid (design 2.3).
         entrants.sort_by_key(|(_, _, w)| uid_hash(w.user.uid));
         let mode = entrants[0].2.mode;
@@ -2159,11 +2293,30 @@ impl Engine {
             }
             _ => None,
         };
+        // 2v2: the team splits by port, the most even first, and each player's pair (`mm_matches.pairs`).
+        let (splits, pairs) = if mode == Mode::Twos && entrants.len() == 4 {
+            let units: Vec<usize> =
+                entrants.iter().map(|(c, _, _)| unit_of.get(c).copied().unwrap_or(usize::MAX)).collect();
+            let ratings: Vec<f64> = entrants.iter().map(|(_, _, w)| w.user.twos_rating).collect();
+            let splits: Vec<Vec<u8>> = twos_splits(&ratings, &units).into_iter().map(|(s, _)| s.to_vec()).collect();
+            let mut pair_ids: HashMap<usize, u8> = HashMap::new();
+            let mut pairs = [0u8; 4];
+            for (p, u) in pairs.iter_mut().zip(&units) {
+                if units.iter().filter(|x| *x == u).count() == 2 {
+                    let next = pair_ids.len() as u8 + 1;
+                    *p = *pair_ids.entry(*u).or_insert(next);
+                }
+            }
+            (Some(splits), pairs)
+        } else {
+            (None, [0; 4])
+        };
         tracing::info!(
             %match_id,
             %region,
             ?ping_ms,
             ?rating_gap,
+            ?splits,
             players = ?entrants.iter().map(|(_, a, w)| format!("{}@{}", w.code, a)).collect::<Vec<_>>(),
             "matched"
         );
@@ -2185,6 +2338,7 @@ impl Engine {
                 // Direct: both players pick every game's stage at once, the first pick played
                 // (Sarah's board, 2026-10-29), not Slippi's game 1 random then the loser's pick.
                 anyone_picks: (mode == Mode::Direct).then_some(true),
+                splits: splits.clone(),
                 ..Default::default()
             };
             Self::send(out, *conn, &resp);
@@ -2200,18 +2354,197 @@ impl Engine {
             })
             .collect();
         self.chat.start_match(&match_id, mode, &chatters, out);
+        let uids: Vec<Uuid> = entrants.iter().map(|(_, _, w)| w.user.uid).collect();
+        if mode == Mode::Twos {
+            // Every party of the match is in it now (its tickets end with the match, not as a
+            // cancel), and the match is remembered for `twos-off`.
+            let mut parties: Vec<String> = entrants.iter().filter_map(|(_, _, w)| w.party.clone()).collect();
+            parties.sort();
+            parties.dedup();
+            for code in parties {
+                self.rooms.party_matched(&code, &uids, out);
+            }
+            self.twos_matches.insert(match_id.clone(), (uids.clone(), Instant::now()));
+        }
         out.push(Output::RecordMatch(MatchRecord {
             match_id,
             mode,
-            players: entrants.iter().map(|(_, _, w)| w.user.uid).collect(),
+            players: uids,
             host: host_uid,
             stages: rules.stages.clone(),
             region,
             room: None,
+            pairs,
         }));
         for (conn, _, _) in &entrants {
             self.finish(out, *conn);
         }
+    }
+
+    /// A 2v2 search that comes after a failed connect (`avoid`, `after`): those players are kept
+    /// out of this player's groups for a while, and the other players of that match are told it is
+    /// off (`twos-off`), so their games stop waiting for it and search again.
+    fn twos_failed_connect(&mut self, now: Instant, uid: Uuid, t: &TwosSearch, out: &mut Vec<Output>) {
+        for other in t.avoid.iter().filter(|o| **o != uid) {
+            self.twos_avoid.insert(pair_key(uid, *other), now);
+        }
+        let Some(match_id) = t.after.as_ref().filter(|_| !t.avoid.is_empty()) else { return };
+        let Some((players, _)) = self.twos_matches.remove(match_id) else { return };
+        if !players.contains(&uid) {
+            self.twos_matches.insert(match_id.clone(), (players, now));
+            return;
+        }
+        tracing::info!(%match_id, %uid, avoid = ?t.avoid, "2v2 match off: a connect failed");
+        let off = serde_json::json!({"type": common::rooms::TWOS_OFF, "matchId": match_id});
+        let to: Vec<ConnId> = self
+            .conns
+            .iter()
+            .filter_map(|(id, c)| match &c.state {
+                State::Online(o) if o.user.uid != uid && players.contains(&o.user.uid) => Some(*id),
+                _ => None,
+            })
+            .collect();
+        for conn in to {
+            Self::send(out, conn, &off);
+        }
+    }
+
+    /// Makes 2v2 matches until no group of four is possible.
+    fn group_twos(&mut self, now: Instant, wall: DateTime<Utc>, out: &mut Vec<Output>) {
+        while let Some((conns, units)) = self.next_twos_group(now) {
+            let before = self.twos.len();
+            self.make_match(wall, &conns, Some(&units), out);
+            if self.twos.len() == before {
+                break; // make_match refused; never loop forever
+            }
+        }
+    }
+
+    /// The 2v2 queue's units in queue order: each searching player alone, or a party's players
+    /// once every one of them searches (until then the party waits). At most [`TWOS_UNITS_MAX`].
+    fn twos_units(&self) -> Vec<Vec<ConnId>> {
+        let mut units: Vec<(Option<String>, Vec<ConnId>)> = Vec::new();
+        for &c in &self.twos {
+            let Some(Conn { state: State::Waiting(w), .. }) = self.conns.get(&c) else { continue };
+            match &w.party {
+                Some(code) => match units.iter_mut().find(|(p, _)| p.as_ref() == Some(code)) {
+                    Some((_, conns)) => conns.push(c),
+                    None => units.push((Some(code.clone()), vec![c])),
+                },
+                None => units.push((None, vec![c])),
+            }
+        }
+        units
+            .into_iter()
+            .filter(|(party, conns)| {
+                conns.len() <= 2 && party.as_ref().is_none_or(|p| self.rooms.party_size(p) == Some(conns.len()))
+            })
+            .map(|(_, conns)| conns)
+            .take(TWOS_UNITS_MAX)
+            .collect()
+    }
+
+    /// The group of four the 2v2 queue makes next, as (tickets, each ticket's unit), if any: the
+    /// oldest unit with the units that make four with it, as the module docs say.
+    fn next_twos_group(&self, now: Instant) -> Option<(Vec<ConnId>, Vec<usize>)> {
+        let units = self.twos_units();
+        for i in 0..units.len() {
+            let need = 4 - units[i].len();
+            let mut best: Option<((f64, f64), Vec<usize>)> = None;
+            let mut consider = |combo: Vec<usize>| {
+                let mut all = vec![i];
+                all.extend(&combo);
+                if let Some(score) = self.twos_group_score(now, &units, &all) {
+                    if best.as_ref().is_none_or(|(b, _)| score < *b) {
+                        best = Some((score, all));
+                    }
+                }
+            };
+            let rest: Vec<usize> = (i + 1..units.len()).collect();
+            for (x, &j) in rest.iter().enumerate() {
+                let nj = units[j].len();
+                if nj == need {
+                    consider(vec![j]);
+                }
+                for (y, &k) in rest.iter().enumerate().skip(x + 1) {
+                    let nk = units[k].len();
+                    if nj + nk == need {
+                        consider(vec![j, k]);
+                    }
+                    for &l in rest.iter().skip(y + 1) {
+                        if nj + nk + units[l].len() == need {
+                            consider(vec![j, k, l]);
+                        }
+                    }
+                }
+            }
+            if let Some((_, all)) = best {
+                let mut conns = Vec::with_capacity(4);
+                let mut of = Vec::with_capacity(4);
+                for u in all {
+                    for &c in &units[u] {
+                        conns.push(c);
+                        of.push(u);
+                    }
+                }
+                return Some((conns, of));
+            }
+        }
+        None
+    }
+
+    /// How good a group of units is (lower is better: the waiting its highest ping and its teams'
+    /// gap needed, then that ping), or `None` if it may not be made yet: a player twice, regions
+    /// apart before either has waited `region_widen`, a pair from different units above the ping
+    /// limit of the shorter-waiting of the two or that just failed to connect, or teams further
+    /// apart than the rating band of the longest-waiting player.
+    fn twos_group_score(&self, now: Instant, units: &[Vec<ConnId>], group: &[usize]) -> Option<(f64, f64)> {
+        let mut players: Vec<(&Waiting, usize)> = Vec::with_capacity(4);
+        for &u in group {
+            for c in &units[u] {
+                let Some(Conn { state: State::Waiting(w), .. }) = self.conns.get(c) else { return None };
+                players.push((w, u));
+            }
+        }
+        if players.len() != 4 {
+            return None;
+        }
+        let waited = |w: &Waiting| now.saturating_duration_since(w.since);
+        let mut uids: Vec<Uuid> = players.iter().map(|(w, _)| w.user.uid).collect();
+        uids.sort_unstable();
+        uids.dedup();
+        if uids.len() != 4 {
+            return None;
+        }
+        let widened = players.iter().any(|(w, _)| waited(w) >= self.cfg.region_widen);
+        if !widened && players.iter().any(|(w, _)| w.region != players[0].0.region) {
+            return None;
+        }
+        let mut max_ping: Option<f64> = None;
+        for (a, (wa, ua)) in players.iter().enumerate() {
+            for (wb, ub) in players.iter().skip(a + 1) {
+                if ua == ub {
+                    continue; // a party's players chose each other
+                }
+                if self.twos_avoid.contains_key(&pair_key(wa.user.uid, wb.user.uid)) {
+                    return None;
+                }
+                if let Some(p) = wa.loc.zip(wb.loc).map(|(la, lb)| estimate_rtt_ms(la, lb)) {
+                    if p > self.ping_limit(false, waited(wa).min(waited(wb))) {
+                        return None;
+                    }
+                    max_ping = Some(max_ping.map_or(p, |m: f64| m.max(p)));
+                }
+            }
+        }
+        let ratings: Vec<f64> = players.iter().map(|(w, _)| w.user.twos_rating).collect();
+        let of: Vec<usize> = players.iter().map(|(_, u)| *u).collect();
+        let gap = twos_splits(&ratings, &of).first().map(|(_, g)| *g)?;
+        let longest = players.iter().map(|(w, _)| waited(w)).max().unwrap_or_default();
+        if gap > self.rating_band(false, longest) {
+            return None;
+        }
+        Some((self.unranked_wait(max_ping, gap), max_ping.unwrap_or(self.cfg.ping_limit)))
     }
 }
 
@@ -2240,6 +2573,7 @@ mod tests {
             rating: common::ranked::DEFAULT_RATING,
             ranked_sets: 0,
             unranked_rating: common::ranked::DEFAULT_RATING,
+            twos_rating: common::ranked::DEFAULT_RATING,
             chat_muted: false,
             room_name: None,
             mods_room_name: None,
@@ -3604,9 +3938,9 @@ mod tests {
         assert!(matches(&h.unranked(4, &v[0])).is_empty());
         assert_eq!(h.e.waiting_count(), 2);
         // The launcher's "X in queue" under Play unranked / Play ranked.
-        assert_eq!(h.e.status(Utc::now()).queues, QueueCounts { unranked: 1, ranked: 1 });
+        assert_eq!(h.e.status(Utc::now()).queues, QueueCounts { unranked: 1, ranked: 1, twos: 0 });
         h.input(Input::Disconnected { conn: 4 });
-        assert_eq!(h.e.status(Utc::now()).queues, QueueCounts { unranked: 0, ranked: 1 });
+        assert_eq!(h.e.status(Utc::now()).queues, QueueCounts { unranked: 0, ranked: 1, twos: 0 });
     }
 
     #[test]
@@ -4479,17 +4813,17 @@ mod tests {
             h.connect(conn, conn as u16);
         }
         h.unranked(11, &a);
-        assert_eq!(playing(&h), QueueCounts { unranked: 0, ranked: 0 }, "searching is not playing");
+        assert_eq!(playing(&h), QueueCounts { unranked: 0, ranked: 0, twos: 0 }, "searching is not playing");
         h.unranked(12, &b);
         h.ranked(13, &c);
         assert!(!matches(&h.ranked(14, &d)).is_empty());
-        assert_eq!(playing(&h), QueueCounts { unranked: 2, ranked: 2 });
+        assert_eq!(playing(&h), QueueCounts { unranked: 2, ranked: 2, twos: 0 });
         // b's game leaves the online CSS: a is alone on it, in no match any more.
         h.raw(2, json!({"type": "chat-leave", "group": h.e.chat.group_of(b.uid).unwrap()}).to_string().as_bytes());
-        assert_eq!(playing(&h), QueueCounts { unranked: 0, ranked: 2 });
+        assert_eq!(playing(&h), QueueCounts { unranked: 0, ranked: 2, twos: 0 });
         // d's game closes.
         h.input(Input::Disconnected { conn: 4 });
-        assert_eq!(playing(&h), QueueCounts { unranked: 0, ranked: 0 });
+        assert_eq!(playing(&h), QueueCounts { unranked: 0, ranked: 0, twos: 0 });
     }
 
     #[test]
@@ -4625,7 +4959,7 @@ mod tests {
         for conn in [1, 2] {
             assert_eq!(chat_members(&chat_group(&out, conn).unwrap()), uid_list(&[&b, &a]), "b's order");
         }
-        assert_eq!(h.e.status(Utc::now()).playing, QueueCounts { unranked: 0, ranked: 0 }, "a direct match");
+        assert_eq!(h.e.status(Utc::now()).playing, QueueCounts { unranked: 0, ranked: 0, twos: 0 }, "a direct match");
         // A game that can't chat is told so.
         let c = user("CC#1", "c");
         h.add(&c);
@@ -4954,5 +5288,215 @@ mod tests {
         let out = h.raw(1, report.to_string().as_bytes());
         assert_eq!(chat_errors(&out, 1), [("chat-report".to_string(), msg::CHAT_REPORTS_TOO_OFTEN.to_string())]);
         assert!(!out.iter().any(|o| matches!(o, Output::ChatReport(_))));
+    }
+
+    // ---- 2v2 (docs/design/2v2.md)
+
+    impl Harness {
+        /// A 2v2 ticket (mode 5) naming a party (`party`, "" for none), with more `search` fields.
+        fn twos(&mut self, conn: ConnId, u: &MmUser, party: &str, more: Value) -> Vec<Output> {
+            let mut v = self.ticket_json(u, party, 5);
+            if let (Some(search), Value::Object(more)) = (v["search"].as_object_mut(), more) {
+                search.extend(more);
+            }
+            self.raw(conn, v.to_string().as_bytes())
+        }
+        /// An online connection with a 2v2 party of its own: the party's code.
+        fn party(&mut self, conn: ConnId, u: &MmUser) -> String {
+            self.connect(conn, 9);
+            self.hello(conn, u, "3.4.0");
+            let out = self.room(conn, json!({"type": "room-create", "kind": "twos"}));
+            state_of(&out, conn)["code"].as_str().unwrap().to_string()
+        }
+    }
+
+    fn resp(out: &[Output], conn: ConnId) -> Value {
+        sent(out, conn).into_iter().rev().find(|m| m["type"] == "get-ticket-resp").expect("get-ticket-resp")
+    }
+
+    #[test]
+    fn four_players_make_a_2v2_match_with_every_split() {
+        let mut h = Harness::new(EngineConfig::default());
+        let us = h.users(4);
+        for (i, u) in us.iter().enumerate().take(3) {
+            h.connect(i as ConnId + 1, 1);
+            let out = h.twos(i as ConnId + 1, u, "", json!({}));
+            assert!(matches(&out).is_empty());
+        }
+        assert_eq!(h.e.status(Utc::now()).queues.twos, 3);
+        h.connect(4, 1);
+        let out = h.twos(4, &us[3], "", json!({}));
+        let m = matches(&out);
+        assert_eq!(m.len(), 1);
+        assert_eq!((m[0].mode, m[0].players.len(), m[0].pairs), (Mode::Twos, 4, [0, 0, 0, 0]));
+        let r = resp(&out, 1);
+        assert_eq!(r["players"].as_array().unwrap().len(), 4);
+        let splits: Vec<Vec<u8>> = serde_json::from_value(r["splits"].clone()).unwrap();
+        assert_eq!(splits.len(), 3, "four players who searched alone: every split");
+        assert!(splits.iter().all(|s| s[0] == 0 && s.iter().filter(|t| **t == 0).count() == 2));
+        // Unranked's rules and stages.
+        assert_eq!(r["stages"], json!(h.e.cfg.rulesets.for_mode(Mode::Unranked).stages));
+        assert_eq!(h.e.status(Utc::now()).queues.twos, 0);
+    }
+
+    #[test]
+    fn a_party_searches_as_one_and_plays_on_one_team() {
+        let mut h = Harness::new(EngineConfig::default());
+        let us = h.users(4);
+        let code = h.party(11, &us[0]);
+        h.connect(12, 9);
+        h.hello(12, &us[1], "3.4.0");
+        h.room(12, json!({"type": "room-join", "code": code}));
+        // The two others and one of the party: the party waits for its second player.
+        for (conn, u, party) in [(1, &us[0], code.as_str()), (3, &us[2], ""), (4, &us[3], "")] {
+            h.connect(conn, 1);
+            assert!(matches(&h.twos(conn, u, party, json!({}))).is_empty());
+        }
+        h.connect(2, 1);
+        let out = h.twos(2, &us[1], &code, json!({}));
+        let m = matches(&out);
+        assert_eq!(m.len(), 1);
+        let ports: Vec<Uuid> = m[0].players.clone();
+        let pa = ports.iter().position(|u| *u == us[0].uid).unwrap();
+        let pb = ports.iter().position(|u| *u == us[1].uid).unwrap();
+        let pairs = m[0].pairs;
+        assert!(pairs[pa] != 0 && pairs[pa] == pairs[pb]);
+        assert_eq!(pairs.iter().filter(|p| **p == 0).count(), 2);
+        let splits: Vec<Vec<u8>> = serde_json::from_value(resp(&out, 1)["splits"].clone()).unwrap();
+        assert_eq!(splits.len(), 1, "a pair and two others: one split");
+        assert_eq!(splits[0][pa], splits[0][pb]);
+        // The party is in the match.
+        assert_eq!(state_of(&out, 11)["status"], "in-game");
+    }
+
+    #[test]
+    fn a_partners_cancel_ends_the_partys_search() {
+        let mut h = Harness::new(EngineConfig::default());
+        let us = h.users(2);
+        let code = h.party(11, &us[0]);
+        h.connect(12, 9);
+        h.hello(12, &us[1], "3.4.0");
+        h.room(12, json!({"type": "room-join", "code": code}));
+        h.connect(1, 1);
+        h.connect(2, 1);
+        h.twos(1, &us[0], &code, json!({}));
+        h.twos(2, &us[1], &code, json!({}));
+        let out = h.input(Input::Disconnected { conn: 1 });
+        assert_eq!(resp(&out, 2)["error"], msg::partner("p0", "cancelled"));
+        assert!(disconnected(&out, 2));
+        assert_eq!(state_of(&out, 12)["status"], "waiting");
+        // A ticket naming a party the player is not in.
+        let other = h.users(3).pop().unwrap();
+        h.connect(3, 1);
+        let out = h.twos(3, &other, &code, json!({}));
+        assert_eq!(sent(&out, 3)[0]["error"], msg::NOT_IN_PARTY);
+    }
+
+    #[test]
+    fn a_search_after_a_broken_group_goes_first() {
+        let mut h = Harness::new(EngineConfig::default());
+        let us = h.users(2);
+        h.connect(1, 1);
+        h.connect(2, 1);
+        h.twos(1, &us[0], "", json!({}));
+        h.twos(2, &us[1], "", json!({"requeue": true}));
+        assert_eq!(h.e.twos, vec![2, 1]);
+    }
+
+    #[test]
+    fn players_who_could_not_connect_are_kept_apart_and_the_match_is_off() {
+        let mut h = Harness::new(EngineConfig::default());
+        let us = h.users(5);
+        // Four online players matched.
+        for (i, u) in us.iter().enumerate().take(4) {
+            let (online, ticket) = (i as ConnId + 11, i as ConnId + 1);
+            h.connect(online, 9);
+            h.hello(online, u, "3.4.0");
+            h.connect(ticket, 1);
+        }
+        let mut out = vec![];
+        for (i, u) in us.iter().enumerate().take(4) {
+            out = h.twos(i as ConnId + 1, u, "", json!({}));
+        }
+        let match_id = matches(&out)[0].match_id.clone();
+        // p0 could not connect to p1: it searches again (8 s later), and the others are told the
+        // match is off.
+        h.advance(Duration::from_secs(8));
+        h.connect(21, 1);
+        let out = h.twos(21, &us[0], "", json!({"avoid": [us[1].uid.to_string()], "after": match_id}));
+        for conn in [12, 13, 14] {
+            assert_eq!(sent(&out, conn), vec![json!({"type": "twos-off", "matchId": match_id})], "{conn}");
+        }
+        assert!(sent(&out, 11).iter().all(|m| m["type"] != "twos-off"));
+        // p1, p2, p3 search again too: p0 and p1 are not grouped, so the four wait for a fifth.
+        for (conn, u) in [(22, &us[1]), (23, &us[2]), (24, &us[3])] {
+            h.connect(conn, 1);
+            assert!(matches(&h.twos(conn, u, "", json!({"requeue": true}))).is_empty());
+        }
+        h.connect(25, 1);
+        let m = matches(&h.twos(25, &us[4], "", json!({})));
+        assert_eq!(m.len(), 1);
+        assert!(!(m[0].players.contains(&us[0].uid) && m[0].players.contains(&us[1].uid)));
+        // The pair is kept apart for `twos_avoid`, then may meet again.
+        h.advance(Duration::from_secs(601));
+        assert!(h.e.twos_avoid.is_empty());
+    }
+
+    #[test]
+    fn teams_are_balanced_and_an_uneven_group_waits_for_the_band() {
+        let mut h = Harness::new(EngineConfig::default());
+        let mut us = h.users(4);
+        for (u, r) in us.iter_mut().zip([1800.0, 1800.0, 1000.0, 1000.0]) {
+            u.twos_rating = r;
+            h.add(u);
+        }
+        let mut out = vec![];
+        for (i, u) in us.iter().enumerate() {
+            h.connect(i as ConnId + 1, 1);
+            out = h.twos(i as ConnId + 1, u, "", json!({}));
+        }
+        let m = matches(&out);
+        assert_eq!(m.len(), 1);
+        let splits: Vec<Vec<u8>> = serde_json::from_value(resp(&out, 1)["splits"].clone()).unwrap();
+        let rating = |uid: Uuid| us.iter().find(|u| u.uid == uid).unwrap().twos_rating;
+        let team_avg = |split: &[u8], t: u8| {
+            let r: Vec<f64> = (0..4).filter(|&i| split[i] == t).map(|i| rating(m[0].players[i])).collect();
+            r.iter().sum::<f64>() / 2.0
+        };
+        // The first split pairs a 1800 with a 1000 on each team.
+        assert_eq!(team_avg(&splits[0], 0), team_avg(&splits[0], 1));
+        assert!(team_avg(&splits[2], 0) != team_avg(&splits[2], 1));
+
+        // Three 2400s and a 1000 can't be split within the band (700 apart): they wait for it.
+        let mut h = Harness::new(EngineConfig::default());
+        let mut us = h.users(4);
+        for (u, r) in us.iter_mut().zip([2400.0, 2400.0, 2400.0, 1000.0]) {
+            u.twos_rating = r;
+            h.add(u);
+        }
+        for (i, u) in us.iter().enumerate() {
+            h.connect(i as ConnId + 1, 1);
+            assert!(matches(&h.twos(i as ConnId + 1, u, "", json!({}))).is_empty());
+        }
+        assert!(matches(&h.advance(Duration::from_secs(150))).is_empty());
+        assert_eq!(matches(&h.advance(Duration::from_secs(15))).len(), 1);
+    }
+
+    #[test]
+    fn the_2v2_splits_keep_pairs_together_most_even_first() {
+        let all = twos_splits(&[1400.0, 1400.0, 1400.0, 1400.0], &[0, 1, 2, 3]);
+        assert_eq!(all.iter().map(|s| s.0).collect::<Vec<_>>(), TWOS_SPLITS.to_vec());
+        // Players 0 and 2 queued together: only the split with them on one team.
+        let pair = twos_splits(&[1400.0, 1400.0, 1400.0, 1400.0], &[0, 1, 0, 3]);
+        assert_eq!(pair.len(), 1);
+        assert_eq!(pair[0].0, [0, 1, 0, 1]);
+        assert_eq!(pair[0].1, common::twos::PAIR_BONUS);
+        // Two pairs: the one split, even.
+        let pairs = twos_splits(&[1500.0, 1300.0, 1400.0, 1400.0], &[0, 0, 1, 1]);
+        assert_eq!(pairs.iter().map(|s| (s.0, s.1)).collect::<Vec<_>>(), vec![([0, 0, 1, 1], 0.0)]);
+        // Most even first.
+        let r = twos_splits(&[2000.0, 1000.0, 1900.0, 1100.0], &[0, 1, 2, 3]);
+        assert_eq!(r[0].0, [0, 0, 1, 1]);
+        assert!(r[0].1 <= r[1].1 && r[1].1 <= r[2].1);
     }
 }
