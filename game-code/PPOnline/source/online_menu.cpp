@@ -725,7 +725,7 @@ namespace OnlineMenu {
         // 2v2: the party's CSS between searches, the plain one while its four play (a session).
         if (s.mode == PPOM::MODE_TWOS)
             s.roomEntry = PPOM::g_block.local.state >= PPOM::LS_CONNECTING ? ROOM_ENTRY_NONE : ROOM_ENTRY_TWOS;
-        if (roomCss()) RoomCss::prepareRecords();
+        if (roomCss() || s.mode == PPOM::MODE_TWOS) RoomCss::prepareRecords();   // (2v2: its four)
         if (s.mode >= 0) restoreTag();
     }
 
@@ -2093,7 +2093,9 @@ namespace OnlineMenu {
         // its game 1 starts with a character step on the CSS once the opponent's name shows (the
         // user's, 2026-10-19; Dolphin GameSetup), and the CSS starts on this character. The
         // waiting room plays it either way (TrainingRoom::fillPlayer).
-        lockIn(s.mode == PPOM::MODE_RANKED ? 0 : 1, 0xFFFF, 0);
+        // 2v2 (Sarah's board, 2026-11-03): as Ranked, game 1 is readied on the CSS, where the four
+        // see each other and the teams first.
+        lockIn(s.mode == PPOM::MODE_RANKED || s.mode == PPOM::MODE_TWOS ? 0 : 1, 0xFFFF, 0);
         s.searchSeq = PPOM::post(PPOM::CMD_FIND_OPPONENT, &req, sizeof(req));
         s.pollPending = true;   // Dolphin answers FIND_OPPONENT with the match state
         s.pollFrames = 0;
@@ -3188,6 +3190,66 @@ namespace OnlineMenu {
         PPOM::writeLockIn(false, (u8)coin, kind, (u8)selectedCostume(), 0xFFFF, 0, (u8)roomGame(), NULL, s.startPad);
     }
 
+    // A 2v2 session's CSS (Sarah's board, 2026-11-03: "like in ranked, when you match up with
+    // someone, you're taken back to the css, where you can see this window-- usernames, teams, and
+    // everyone can pick their character and see what everyone else picked"): the four players'
+    // panels as a room's, from SESSION's room fields (Dolphin's PutTwosLobby, RF_TWOS without
+    // RF_IN): each player's name, the character they locked in or have placed, READY, and the team
+    // colour of the next game. The teams are shown only: nothing here changes them (the CSS's
+    // team click stays Brawl's plain one, g_cssTeamRoom 0). The local player's placed coin goes to
+    // the others as a lock-in that is not ready.
+    static void tickTwosLobby()
+    {
+        const PPOM::Session& se = PPOM::g_block.session;
+        if (!(se.roomFlags & PPOM::RF_TWOS) || (se.roomFlags & PPOM::RF_IN)) return;
+        const int me = PPOM::g_block.local.localPort;
+        if (me >= PPOM::SESSION_PLAYERS) return;
+        const int game = sessionGame();
+        if (game && !lockedForNext()) {
+            int c = selectedChar();
+            if (c < 0) {
+                PPOM::writeLockIn(false, 0xFF, 0xFF, 0, 0xFFFF, 0, 0, NULL, s.startPad);
+            } else {
+                int coin = plainCss(c);
+                u8 kind = charKindOf(coin == 0x29 ? 0x00 : coin);
+                PPOM::writeLockIn(false, (u8)coin, kind, (u8)selectedCostume(), 0xFFFF, 0, (u8)game, NULL, s.startPad);
+            }
+        }
+        RoomCss::setTwos(true);   // (a player gone: their panel is not shown)
+        RoomCss::setLocalSlot(me, true);
+        RoomCss::PanelView views[3];
+        for (int k = 0; k < 3; k++) {
+            int i = RoomCss::portOfArea(k + 1);
+            RoomCss::PanelView& v = views[k];
+            memset(&v, 0, sizeof(v));
+            v.css = 0x28;
+            v.team = PPOM::TEAM_NONE;
+            if (i < 0 || i >= PPOM::SESSION_PLAYERS || i == me) continue;   // PV_CLOSED
+            const PPOM::SessionPlayer& pl = se.players[i];
+            if (!(pl.roomSlot & PPOM::SLOT_TAKEN)) continue;
+            v.team = pl.roomTeam < PPOM::TEAM_COUNT ? pl.roomTeam : PPOM::TEAM_NONE;
+            u16Name(v.name, pl.name);
+            int css = pl.roomChar != 0xFF ? cssOfKind(pl.roomChar) : -1;
+            if (css >= 0) {
+                v.kind = (pl.roomSlot & PPOM::SLOT_READY) ? RoomCss::PV_READY : RoomCss::PV_CHOOSING;
+                v.css = (u8)css;
+                v.costume = pl.roomCostume & PPOM::COSTUME_COLOUR;
+                if (pl.roomCostume & PPOM::COSTUME_RANDOM) {
+                    v.css = 0x29;   // RANDOM, as their own panel shows it
+                    v.costume = 0;
+                }
+            } else {
+                v.kind = (pl.roomSlot & PPOM::SLOT_READY) ? RoomCss::PV_READY : RoomCss::PV_CHOOSING;
+            }
+        }
+        const int myTeam = se.players[me].roomTeam < PPOM::TEAM_COUNT ? se.players[me].roomTeam : -1;
+        char myName[RoomCss::NAME_SIZE];
+        tagName(selectedTag(), myName);
+        if (!myName[0]) u16Name(myName, se.players[me].name);
+        if (!myName[0]) strcpy(myName, s.ownName);
+        RoomCss::tick(views, myTeam >= 0, myTeam, 0, myName, lockedForNext(), RoomCss::BOX_NONE, -1, false);
+    }
+
     // The 2V2 CSS (twosParty, docs/design/2v2.md): the party's two panels. START searches at once
     // alone; with a partner it readies (B takes it back) and the search starts once the party
     // says every player is ready (RS_SEARCHING). A on the open partner panel opens the keypad in
@@ -3944,7 +4006,7 @@ namespace OnlineMenu {
         if (s.phase == PH_CONNECTED) {
             const int game = sessionGame();
             if (!game) return;
-            if (s.mode == PPOM::MODE_RANKED) {
+            if (s.mode == PPOM::MODE_RANKED || s.mode == PPOM::MODE_TWOS) {
                 TrainingRoom::end(TrainingRoom::END_CSS);
                 return;
             }
@@ -4253,6 +4315,7 @@ namespace OnlineMenu {
                 }
             } else if (s.phase == PH_CONNECTED) {
                 tickConnected(pressed);
+                if (s.mode == PPOM::MODE_TWOS) tickTwosLobby();
             }
         }
         followLocalSlot(pressed);   // the slot colour lines for the local panel's slot

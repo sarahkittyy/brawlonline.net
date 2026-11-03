@@ -1487,6 +1487,37 @@ void PutRoom(std::vector<u8>& session, const Rooms::Snapshot& room, const Gprb::
   session[S_ROOM_MODE] = static_cast<u8>(v.mode);
 }
 
+// A 2v2 session's lobby (docs/design/2v2.md): every player in it as a room member would be, their
+// character (locked in for the next game, or the coin they have placed: the game sends it as a
+// lock-in that is not ready) and their team in the next game.
+void PutTwosLobby(std::vector<u8>& session, const Gprb::Session::Lobby& lobby)
+{
+  for (int i = 0; i < SESSION_PLAYERS; ++i)
+  {
+    const u32 p = S_PLAYERS + i * SP_SIZE;
+    session[p + SP_ROOM_SLOT] = 0;
+    session[p + SP_ROOM_TEAM] = GameSetup::NO_TEAM;
+    session[p + SP_ROOM_CHAR] = 0xFF;
+    session[p + SP_ROOM_COSTUME] = 0;
+    session[p + SP_ROOM_STOCKS] = 0;
+    const auto lock = Gprb::Session::GetPlayerLock(i);
+    if (!lock)
+      continue;   // not in the session, or gone
+    u8 bits = SLOT_OPEN | SLOT_TAKEN;
+    if (Gprb::PeerData::ValidCharKind(lock->char_kind))
+    {
+      if (lock->ready && lock->game == lobby.game)
+        bits |= SLOT_READY;
+      session[p + SP_ROOM_CHAR] = lock->char_kind;
+      session[p + SP_ROOM_COSTUME] = RandomShown(*lock);
+    }
+    const u8 team = lobby.twos_teams[i];
+    session[p + SP_ROOM_TEAM] = team < Rooms::NUM_TEAMS ? team : GameSetup::NO_TEAM;
+    session[p + SP_ROOM_SLOT] = bits;
+  }
+  session[S_ROOM_FLAGS] = RF_TWOS;
+}
+
 // v9, the room CSS (docs/design/special-rules.md): the MATCH SETUP page's values (the room's
 // ruleset's bans, DSR, strike pattern and alternate stages) and each ready member's picked HP
 // (a stamina match), as SP_ROOM_STOCKS shows their stock count.
@@ -2176,6 +2207,11 @@ void SyncSession(const Core::CPUThreadGuard& guard, const Located& loc)
   const bool party_session = in_room && room.view->twos && lobby.active;
   if (v5 && in_room && !party_session)
     PutRoom(session, room, lobby);
+  // A 2v2 session outside its matches (Sarah's board, 2026-11-03): the four players' panels on the
+  // CSS, as a room's (SESSION's room fields by in-game port), and their next game's teams, read
+  // only. RF_TWOS without RF_IN: no room of the game's takes it for its own.
+  if (v5 && lobby.active && lobby.twos)
+    PutTwosLobby(session, lobby);
   if (loc.version >= 6 && in_room && !party_session)
   {
     // What the room plays and its set (RoomPlay), for the room CSS.

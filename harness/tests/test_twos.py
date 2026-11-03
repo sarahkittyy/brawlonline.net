@@ -22,7 +22,7 @@ from ppharness.instance import DolphinInstance
 
 from test_online import _wait
 from test_online_game import ROOT, Game, _boot, backend  # noqa: F401  (the backend fixture)
-from test_rooms_game import PANEL_X, ROOM_KEYS, hand_to, until_view
+from test_rooms_game import PANEL_X, ROOM_KEYS, hand_to, room_view, until_view
 from test_waiting_room import _banner_shown
 import online_set  # noqa: E402  (test_online_game put harness/tools on the path)
 import ppom  # noqa: E402
@@ -143,8 +143,46 @@ def _back_on_css(gs: list[Game], game: int) -> None:
 
 
 def _ready(g: Game, game: int) -> None:
-    n = online_set.local(g.c)["lock"]["seq"]
-    g.press_until("START", lambda: online_set.local(g.c)["lock"]["seq"] > n, f"{g.name}: ready for game {game}")
+    # (the lock-in's seq moves with the coin too: the CSS sends it as a lock-in that is not ready)
+    def ready() -> bool:
+        lock = online_set.local(g.c)["lock"]
+        return bool(lock["ready"]) and lock["game"] == game
+    g.press_until("START", ready, f"{g.name}: ready for game {game}")
+
+
+def _lobby(gs: list[Game], game: int) -> dict[int, int]:
+    """Before `game` (game 1 too, as Ranked: the search goes back to the CSS once connected): every
+    game is on the CSS, connected, and shows the four players' panels (Dolphin's PutTwosLobby:
+    RF_TWOS without RF_IN): each player's name, the character on their CSS (not ready yet: their
+    coin) and the teams of the next game, the same on every machine and two of two. The ready-up
+    counts down. Returns the teams shown (in-game port -> team)."""
+    _wait(lambda: all(g.scene() == CSS and online_set.local(g.c)["state"] == 2 for g in gs), 180,
+          f"before game {game}: all on the CSS, connected")
+
+    def shown(g: Game) -> Any:
+        v = room_view(g)
+        if not v["flags"] & ppom.RF_TWOS or v["flags"] & ppom.RF_IN:
+            return None
+        sl = v["slots"]
+        if not all(sl[i]["bits"] & ppom.SLOT_TAKEN and sl[i]["name"] and sl[i]["char"] != 0xFF and sl[i]["team"] < 3
+                   for i in range(4)):
+            return None
+        return v
+    views = [_wait(lambda g=g: shown(g), 30, f"{g.name}: the four panels before game {game}") for g in gs]
+    teams = {i: views[0]["slots"][i]["team"] for i in range(4)}
+    assert all({i: v["slots"][i]["team"] for i in range(4)} == teams for v in views), [v["slots"] for v in views]
+    split = _split(teams)
+    assert len(split) == 2 and all(len(t) == 2 for t in split), teams
+    names = [sl["name"] for sl in views[0]["slots"]]
+    assert len(set(names)) == 4, names
+    assert not any(v["slots"][i]["bits"] & ppom.SLOT_READY for v in views for i in range(4)), "ready before START"
+    secs = [g.c.read_mem(online_set.block(g.c).local + ppom.L_READY_SECONDS, 1)[0] for g in gs]
+    assert all(0 < x <= READY_SECONDS for x in secs), secs
+    for g in gs:
+        g.steps("wait 30")
+        g.shot(f"g{game}-lobby")
+    print(f"before game {game}: {names}, teams {teams}")
+    return teams
 
 
 def test_twos_four_alone(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance], gpu_backend: str) -> None:
@@ -163,11 +201,17 @@ def test_twos_four_alone(backend: OnlineBackend, dolphin: Callable[..., DolphinI
     gs[0].shot("02-waiting-room")
     _search(gs[3])
 
+    l1 = _lobby(gs, 1)
+    for g in gs:
+        _ready(g, 1)
     r1 = _play(gs, 1)
+    assert _split(r1["teams"]) == _split(l1), ("game 1's teams are not the ones shown", l1, r1)
     _back_on_css(gs, 1)
+    l2 = _lobby(gs, 2)
     for g in gs:
         _ready(g, 2)
     r2 = _play(gs, 2)
+    assert _split(r2["teams"]) == _split(l2), ("game 2's teams are not the ones shown", l2, r2)
     assert _split(r2["teams"]) != _split(r1["teams"]), ("game 2 kept game 1's teams", r1, r2)
     _back_on_css(gs, 2)
     # D does not ready: when the time is up D is back on its party's CSS, the others search.
@@ -211,10 +255,14 @@ def test_twos_pair_and_two_alone(backend: OnlineBackend, dolphin: Callable[..., 
     _wait(lambda: a.finds() and b.finds(), 30, "the pair searching")
     _search(c)
     _search(d)
+    _lobby(gs, 1)
+    for g in gs:
+        _ready(g, 1)
     r1 = _play(gs, 1)
     pa, pb = r1["ports"][0], r1["ports"][1]
     assert r1["teams"][pa] == r1["teams"][pb], ("the pair split up", r1)
     _back_on_css(gs, 1)
+    _lobby(gs, 2)
     for g in gs:
         _ready(g, 2)
     r2 = _play(gs, 2)
