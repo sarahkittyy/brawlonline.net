@@ -12,9 +12,12 @@ export type SocialRoom = {
   players: number;
   openSlots: number;
   mode: RoomMode;
-  status: "waiting" | "starting" | "in-game";
+  /** `searching`: a 2v2 party searching the queue. */
+  status: "waiting" | "starting" | "in-game" | "searching";
   /** An open slot is empty. */
   joinable: boolean;
+  /** A 2v2 party (docs/design/2v2.md), not a room: invites are to "your 2v2". */
+  twos?: boolean;
 };
 
 export type SocialPlayer = {

@@ -29,6 +29,7 @@
 extern "C" {
     extern u8 g_onlineCss;
     extern u8 g_onlineReturnPage;
+    extern u8 g_anyoneReturn;
     extern u8 g_onlineFriendsCursor;
     extern u8 g_cssPicHold;   // room_css.cpp showTeamAt
     int sprintf(char* buf, const char* fmt, ...);
@@ -157,9 +158,21 @@ namespace OnlineMenu {
         // SESSION, each one's match once (playbackPending), and takes no input.
         bool playback;
         bool playbackPending;
+        // 2v2 (docs/design/2v2.md): why the last group ended ("bob left"), shown for
+        // twosNoticeFrames; and what comes next: search again (twosRequeue) or the party's CSS
+        // (twosToParty), done once the game is where it can.
+        char twosNotice[PPOM::ERROR_LEN];
+        u32 twosNoticeFrames;
+        bool twosRequeue;
+        bool twosToParty;
     };
     static State s;
     bool roomCss();
+    // 2v2 (docs/design/2v2.md), below
+    static bool twosParty();
+    static void twosSearchStatus(char* buf);
+    static void twosConnectedStatus(char* buf);
+    static void twosEnded(u8 kind, const char* text);
     static bool roomStockControl();
     static u8 s_headerPress = 0;   // the game's press on ITEM (0x19) / STAGE (0x1A) on a room's CSS
     // A press that sat the player out or in (START, A) does nothing more until it is let go: the
@@ -709,6 +722,9 @@ namespace OnlineMenu {
 
     void prepareCss()
     {
+        // 2v2: the party's CSS between searches, the plain one while its four play (a session).
+        if (s.mode == PPOM::MODE_TWOS)
+            s.roomEntry = PPOM::g_block.local.state >= PPOM::LS_CONNECTING ? ROOM_ENTRY_NONE : ROOM_ENTRY_TWOS;
         if (roomCss()) RoomCss::prepareRecords();
         if (s.mode >= 0) restoreTag();
     }
@@ -832,7 +848,7 @@ namespace OnlineMenu {
         // ITEM / STAGE are the room's buttons while in the room, and shown again then: Create
         // Room's CSS is up before the room is ("Creating room"), and on a slow connection they
         // were hidden first and stayed hidden (a player's report, 2026-10-24).
-        bool roomButtons = roomCss() && roomIn();
+        bool roomButtons = roomCss() && roomIn() && !twosParty();
         for (u32 i = 0; i < sizeof(OBJS) / sizeof(OBJS[0]); i++) {
             u32 obj = *(u32*)(task + OBJS[i]);
             if (!isPtr(obj)) continue;
@@ -1302,6 +1318,7 @@ namespace OnlineMenu {
     // Unranked and Ranked search from the waiting room (training_room.cpp); a replay never does.
     static bool usesWaitingRoom()
     {
+        if (s.mode == PPOM::MODE_TWOS) return !s.playback;   // also from the party's CSS
         return (s.mode == PPOM::MODE_UNRANKED || s.mode == PPOM::MODE_RANKED) && !roomCss() && !s.playback;
     }
 
@@ -1335,6 +1352,10 @@ namespace OnlineMenu {
         }
         switch (s.phase) {
         case PH_IDLE:
+            if (s.mode == PPOM::MODE_TWOS && s.twosNoticeFrames && s.twosNotice[0]) {
+                setStatus(s.twosNotice, false);   // the group's end, on the way to the party's CSS
+                return;
+            }
             if (s.codePreset && s.code[0]) {
                 // The launcher's invite: the other player's code where Direct shows it.
                 // (one line: "Select your character to play ABCD#123" wrapped and was cut off)
@@ -1347,14 +1368,21 @@ namespace OnlineMenu {
             }
             return;
         case PH_SEARCHING:
-            sprintf(buf, "Searching for %s", usesCode() && s.code[0] ? s.code : "opponent");
+            if (s.mode == PPOM::MODE_TWOS) twosSearchStatus(buf);
+            else sprintf(buf, "Searching for %s", usesCode() && s.code[0] ? s.code : "opponent");
             setStatus(buf, false);
             return;
         case PH_CONNECTING:
-            sprintf(buf, "Connecting to %s", usesCode() && s.code[0] ? s.code : "opponent");
+            if (s.mode == PPOM::MODE_TWOS) strcpy(buf, "Connecting...");
+            else sprintf(buf, "Connecting to %s", usesCode() && s.code[0] ? s.code : "opponent");
             setStatus(buf, false);
             return;
         case PH_CONNECTED:
+            if (s.mode == PPOM::MODE_TWOS) {
+                twosConnectedStatus(buf);
+                setStatus(buf, false);
+                return;
+            }
             // Ranked's game setup has its own line (whose turn it is, the opponent's character;
             // in a character step or after a desync, also once locked in: who is still choosing
             // or not ready yet, and the seconds left).
@@ -1999,14 +2027,14 @@ namespace OnlineMenu {
         s.playback = false;
         s.playbackPending = false;
         // Leaving the CSS goes back to the page the mode was picked on (netmenu.cpp
-        // exitToOnlinePage): Direct to the ONLINE page, Unranked/Teams to WITH ANYONE.
-        // Direct (BASIC VERSUS) goes back to WITH FRIENDS' page (sqMenuMain entry 0x1C reopens
-        // muProcWifiAnybody with BASIC VERSUS highlighted; Teams' sqNetAnyTeamMelee returns
-        // with 0x1D, TEAM BATTLE highlighted), and from there B lands on WITH FRIENDS; Unranked
-        // and Ranked go back to the ONLINE page (0x1F) with WITH ANYONE highlighted.
+        // exitToOnlinePage): sqMenuMain entry 0x1C reopens muProcWifiAnybody, as WITH FRIENDS'
+        // page after Direct and the rooms (from there B lands on WITH FRIENDS), as WITH ANYONE's
+        // after Unranked, Ranked and 2v2 (2026-11-02), on the mode's button (B: WITH ANYONE).
         bool friends = mode == PPOM::MODE_DIRECT || mode == PPOM::MODE_TEAMS;
-        g_onlineReturnPage = friends ? 0 : 0x1F;
+        g_onlineReturnPage = 0;
         g_onlineFriendsCursor = friends ? 1 : 0;
+        g_anyoneReturn = friends ? 0 : 1;
+        if (!friends) NetMenu::setReturnButton(mode == PPOM::MODE_UNRANKED ? 0 : mode == PPOM::MODE_RANKED ? 1 : 2);
         PPOM::g_block.debug.menuState = (u32)(mode + 1);
     }
 
@@ -2028,7 +2056,7 @@ namespace OnlineMenu {
     {
         // Leaving a room's CSS other than for its match: leave the room (Dolphin would after 5 s
         // on the menus anyway).
-        if (roomCss() && roomActive()) postRoom(PPOM::ROOM_LEAVE, 0, 0, NULL);
+        if ((roomCss() || s.mode == PPOM::MODE_TWOS) && roomActive()) postRoom(PPOM::ROOM_LEAVE, 0, 0, NULL);
         s.roomEntry = ROOM_ENTRY_NONE;
         s.mode = -1;
         s.codePreset = false;
@@ -2079,7 +2107,7 @@ namespace OnlineMenu {
         // The CSS fades to black first (TrainingRoom's fade) and leaves for the room once the
         // screen is black (tickRoomLeave): the frame frozen on the screen while the room loads
         // is black, not the CSS (the user's, 2026-10-16, after Brawlback's Quickplay).
-        if (usesWaitingRoom()) {
+        if (usesWaitingRoom() && !TrainingRoom::active()) {
             TrainingRoom::enter();
             s.roomLeaveFrames = 0;
             s.roomHoldStart = 0;
@@ -2144,6 +2172,12 @@ namespace OnlineMenu {
             s.phase = PH_IDLE;
             s.searchSeq = 0;
             unlock();
+            // 2v2: its group ended; `percent` says what comes next, the error text why.
+            if (s.mode == PPOM::MODE_TWOS && (m.percent == 1 || m.percent == 2)) {
+                char text[PPOM::ERROR_LEN];
+                PPOM::u16ToUtf8(text, sizeof(text), m.errorText, PPOM::ERROR_LEN);
+                twosEnded(m.percent, text);
+            }
             break;
         case PPOM::MM_INITIALIZING:
         case PPOM::MM_MATCHMAKING:
@@ -2466,6 +2500,16 @@ namespace OnlineMenu {
     // The others' panels (room_css.cpp) and the line come from Dolphin: SESSION's room view and
     // ROOM_POLL's answer, asked one at a time as the match state is.
 
+    void enterTwos()
+    {
+        enter(PPOM::MODE_TWOS);
+        s.roomEntry = ROOM_ENTRY_TWOS;   // its party is made by the CSS (tickRoom)
+        s.twosNotice[0] = 0;
+        s.twosNoticeFrames = 0;
+        s.twosRequeue = s.twosToParty = false;
+        PPOM::g_block.debug.menuState = 0x10 | ROOM_ENTRY_TWOS;
+    }
+
     void enterRoom(int entry)
     {
         enter(PPOM::MODE_TEAMS);
@@ -2477,7 +2521,127 @@ namespace OnlineMenu {
         PPOM::g_block.debug.menuState = 0x10 | (u32)entry;
     }
 
-    bool roomCss() { return s.mode == PPOM::MODE_TEAMS && s.roomEntry != ROOM_ENTRY_NONE; }
+    bool roomCss()
+    {
+        return (s.mode == PPOM::MODE_TEAMS || s.mode == PPOM::MODE_TWOS) && s.roomEntry != ROOM_ENTRY_NONE;
+    }
+
+    // ----------------------------------------------------------------------------------------
+    // 2v2 (docs/design/2v2.md). The 2V2 CSS is the room CSS of the player's own 2v2 party (a room
+    // of kind twos, made when the CSS is entered): its panel and the partner's, which says "Open /
+    // A: Enter Code" while nobody is in it (A opens the keypad in its room-code mode: the partner's
+    // party code joins that party). START searches: alone at once, with a partner once both are
+    // ready (the party then says RS_SEARCHING). The search waits in the waiting room as Unranked's;
+    // the four's games are played from the plain online CSS in MODE_TWOS (no panels: the session's
+    // four are not the party's two), and when the group ends (GET_MATCH_STATE: IDLE with `percent`
+    // 1 / 2) the game searches again by itself or goes back to the party's CSS.
+    static bool twosParty() { return s.mode == PPOM::MODE_TWOS && s.roomEntry != ROOM_ENTRY_NONE; }
+
+    // The party's partner: their slot (0-3) while one is in it, else -1.
+    static int twosPartner()
+    {
+        const PPOM::Session& se = PPOM::g_block.session;
+        const u8 me = PPOM::g_block.local.localPort;
+        if (!(se.roomFlags & PPOM::RF_IN) || !(se.roomFlags & PPOM::RF_TWOS)) return -1;
+        for (int i = 0; i < PPOM::SESSION_PLAYERS; i++) {
+            if (i != me && (se.players[i].roomSlot & PPOM::SLOT_TAKEN)) return i;
+        }
+        return -1;
+    }
+
+    // A player's name from SESSION (UTF-8), "P<n>" without one.
+    static void portName(char* out, int port)
+    {
+        u16Name(out, PPOM::g_block.session.players[port].name);
+        if (!out[0]) sprintf(out, "P%d", port + 1);
+    }
+
+    // "ann & bob vs cat & dan", this player's team first: the next game's teams once it is set up.
+    static void twosVsLine(char* buf)
+    {
+        const PPOM::Session& se = PPOM::g_block.session;
+        const u8 me = PPOM::g_block.local.localPort;
+        const u8 mine = me < PPOM::SESSION_PLAYERS ? se.players[me].team : 0;
+        char side[2][2 * RoomCss::NAME_SIZE + 4];
+        side[0][0] = side[1][0] = 0;
+        for (int i = 0; i < PPOM::SESSION_PLAYERS; i++) {
+            if (!se.players[i].present) continue;
+            char* out = side[se.players[i].team == mine ? 0 : 1];
+            char name[RoomCss::NAME_SIZE];
+            portName(name, i);
+            char* end = out + strlen(out);
+            sprintf(end, "%s%s", out[0] ? " & " : "", name);
+        }
+        sprintf(buf, "%s vs %s", side[0], side[1]);
+    }
+
+    // The 2v2 session's line between games (and in the waiting room before game 1): ready up with
+    // the seconds left, who is not ready yet, then the teams.
+    static void twosConnectedStatus(char* buf)
+    {
+        const PPOM::Session& se = PPOM::g_block.session;
+        const PPOM::Local& lo = PPOM::g_block.local;
+        if (!lockedForNext()) {
+            if (lockChar() < 0) strcpy(buf, "Select your character");
+            else if (lo.readySeconds) sprintf(buf, "Press START to ready (%d)", lo.readySeconds);
+            else strcpy(buf, "Press START to ready");
+            return;
+        }
+        if (se.state == PPOM::SS_MATCH_READY && se.game == s.lockedGame) {
+            twosVsLine(buf);
+            return;
+        }
+        int n = sprintf(buf, "Waiting on: ");
+        bool any = false;
+        for (int i = 0; i < PPOM::SESSION_PLAYERS; i++) {
+            if (!se.players[i].name[0] || ((lo.readyPorts >> i) & 1)) continue;
+            char name[RoomCss::NAME_SIZE];
+            portName(name, i);
+            if (n + (int)strlen(name) + 3 >= 100) break;
+            n += sprintf(buf + n, "%s%s", any ? ", " : "", name);
+            any = true;
+        }
+        if (!any) strcpy(buf, "Ready");
+    }
+
+    // The search's line in the waiting room (2v2): the group's end that started it again, the
+    // partner it searches with, or the partner it waits for (searching, not ready yet).
+    static void twosSearchStatus(char* buf)
+    {
+        const PPOM::Session& se = PPOM::g_block.session;
+        int partner = twosPartner();
+        char name[RoomCss::NAME_SIZE];
+        if (partner >= 0) portName(name, partner);
+        if (s.twosNoticeFrames && s.twosNotice[0]) sprintf(buf, "%s - Searching...", s.twosNotice);
+        else if (partner >= 0 && !(se.players[partner].roomSlot & PPOM::SLOT_READY)) sprintf(buf, "Waiting for %s", name);
+        else if (partner >= 0) sprintf(buf, "Searching with %s...", name);
+        else strcpy(buf, "Searching for players");
+    }
+
+    static void startSearch();
+
+    // Search the 2v2 queue: with the party's code (its players search together) when in one.
+    static void startTwosSearch()
+    {
+        const PPOM::Session& se = PPOM::g_block.session;
+        s.code[0] = 0;
+        if ((se.roomFlags & PPOM::RF_IN) && (se.roomFlags & PPOM::RF_TWOS)) {
+            memcpy(s.code, se.roomCode, 4);
+            s.code[4] = 0;
+        }
+        s.twosRequeue = false;
+        startSearch();
+    }
+
+    // The group ended (GET_MATCH_STATE: IDLE, `percent` 1 or 2): the line, and what comes next.
+    static void twosEnded(u8 kind, const char* text)
+    {
+        strncpy(s.twosNotice, text, sizeof(s.twosNotice) - 1);
+        s.twosNotice[sizeof(s.twosNotice) - 1] = 0;
+        s.twosNoticeFrames = s.twosNotice[0] ? 600 : 0;
+        s.twosRequeue = kind == 1;
+        s.twosToParty = kind != 1;
+    }
 
     static int roomGame() { return PPOM::g_block.session.game; }
 
@@ -2747,6 +2911,28 @@ namespace OnlineMenu {
     static void updateRoomStatus()
     {
         const PPOM::Session& se = PPOM::g_block.session;
+        if (twosParty() && !s.roomError) {
+            // The 2v2 party: the group's end, the keypad's hint, then the server's lines
+            // ("Press START to search", "Waiting on: bob", "Searching for players").
+            char buf[sizeof(s.twosNotice) + 24];
+            if (CodeEntry::active()) {
+                setStatus("Enter your partner's 2v2 code", false);
+                return;
+            }
+            if (s.twosNoticeFrames && s.twosNotice[0]) {
+                sprintf(buf, "%s - Press START", s.twosNotice);
+                setStatus(buf, false);
+                return;
+            }
+            if (selectedChar() < 0 && !roomLockedForNext()) {
+                setStatus("Select your character", false);
+                return;
+            }
+            if (roomIn() && twosPartner() < 0) {
+                setStatus("Press START to search", false);
+                return;
+            }
+        }
         if (stepSession() && s.step.active && s.stepText[0] &&
             (!roomLockedForNext() || resumeStep() || s.step.type == PPOM::STEP_CHAR) && !s.roomError) {
             setStatus(s.stepText, false);   // the set's step: whose turn, the seconds left
@@ -2987,6 +3173,59 @@ namespace OnlineMenu {
         PPOM::writeLockIn(false, (u8)coin, kind, (u8)selectedCostume(), 0xFFFF, 0, (u8)roomGame(), NULL, s.startPad);
     }
 
+    // The 2V2 CSS (twosParty, docs/design/2v2.md): the party's two panels. START searches at once
+    // alone; with a partner it readies (B takes it back) and the search starts once the party
+    // says every player is ready (RS_SEARCHING). A on the open partner panel opens the keypad in
+    // its room-code mode: the partner's party code joins their party. None of a room's settings.
+    static void cleanup();
+    static void tickTwosParty(u32 pressed, u32 held, bool in)
+    {
+        const PPOM::Session& se = PPOM::g_block.session;
+        const u32 BTN_A = 0x100;
+        (void)held;
+        RulesButton::tick(false, false);
+        SitOutButton::tick(false, false, false);
+        const int me = roomMe();
+        const int partner = twosPartner();
+        if (s.phase != PH_IDLE) {
+            // Searching (the screen fades out for the waiting room): Z or B cancels, as on the CSS.
+            if ((s.phase == PH_SEARCHING || s.phase == PH_ERROR) && (pressed & (BTN_Z | BTN_B))) {
+                if (pressed & BTN_B) maskPressed(BTN_B);
+                TrainingRoom::abandon();
+                cleanup();
+                playSE(SE_BACK);
+            }
+        } else if (in) {
+            if (se.roomStatus == PPOM::RS_SEARCHING && roomLockedForNext()) {
+                startTwosSearch();   // every player of the party is ready: search together
+            } else if ((pressed & BTN_START) && lockChar() >= 0 && !roomLockedForNext()) {
+                s.twosNoticeFrames = 0;
+                if (partner < 0) startTwosSearch();
+                else lockIn(roomGame(), 0xFFFF, 0);
+            } else if ((pressed & BTN_B) && roomLockedForNext()) {
+                maskPressed(BTN_B);   // the coin stays where it is
+                unlock();
+                playSE(SE_BACK);
+            }
+            if ((pressed & BTN_A) && partner < 0 && !roomLockedForNext() && RoomCss::panelUnderHand() >= 0) {
+                maskPressed(BTN_A);
+                CodeEntry::open(LOCAL_PORT, true);
+            }
+            roomPreview(me >= 0 && s.phase == PH_IDLE);
+        }
+        RoomCss::setLocalSlot(in && me >= 0 ? me : 0, in);
+        RoomCss::PanelView views[3];
+        int myTeam = -1;
+        roomPanels(views, &myTeam);
+        char myName[RoomCss::NAME_SIZE];
+        tagName(selectedTag(), myName);
+        if (!myName[0]) {
+            if (in && me >= 0) u16Name(myName, se.players[me].name);
+            else strcpy(myName, s.ownName);
+        }
+        RoomCss::tick(views, false, -1, 0, myName, roomLockedForNext(), RoomCss::BOX_NONE, -1, false);
+    }
+
     static void tickRoom(u32 pressed, u32 held)
     {
         const PPOM::Session& se = PPOM::g_block.session;
@@ -2994,9 +3233,30 @@ namespace OnlineMenu {
             postRoom(PPOM::ROOM_CREATE, 1, 0, NULL);   // public by default (rooms.md #17)
             s.roomCreateSent = true;
         }
+        // The 2V2 CSS: the player's own party, made once (a partner's code joins theirs instead).
+        if (s.roomEntry == ROOM_ENTRY_TWOS && !s.roomCreateSent && !roomActive()) {
+            postRoom(PPOM::ROOM_CREATE, 2, 0, NULL);
+            s.roomCreateSent = true;
+        }
         pollRoom();
         cssSpecialRows();
         bool in = roomIn();
+        // A party joined from a room's CSS (the launcher's invite) is the 2V2 CSS, and a room
+        // joined from the 2V2 CSS (the launcher's) a room's: the CSS follows what it is in.
+        if (in && (se.roomFlags & PPOM::RF_TWOS) && s.mode == PPOM::MODE_TEAMS) {
+            s.mode = PPOM::MODE_TWOS;
+            s.roomEntry = ROOM_ENTRY_TWOS;
+            s.roomCreateSent = true;
+        } else if (in && !(se.roomFlags & PPOM::RF_TWOS) && s.mode == PPOM::MODE_TWOS) {
+            s.mode = PPOM::MODE_TEAMS;
+            s.roomEntry = ROOM_ENTRY_JOIN;
+        }
+        const bool party = twosParty();
+        RoomCss::setTwos(party);
+        if (party) {
+            tickTwosParty(pressed, held, in);
+            return;
+        }
         int me = roomMe();
         bool host = in && me >= 0 && se.roomHost == me;
         bool waiting = in && se.roomStatus == 0;
@@ -3497,7 +3757,9 @@ namespace OnlineMenu {
         }
         if (l.directNumber == PPOM::QUEUE_PLAYBACK) return QUEUE_PLAYBACK;
         return l.directNumber == PPOM::QUEUE_UNRANKED ? PPOM::MODE_UNRANKED :
-               l.directNumber == PPOM::QUEUE_RANKED ? PPOM::MODE_RANKED : -1;
+               l.directNumber == PPOM::QUEUE_RANKED   ? PPOM::MODE_RANKED :
+               l.directNumber == PPOM::QUEUE_TWOS     ? PPOM::MODE_TWOS :
+                                                        -1;
     }
 
     // A replay: the CSS of the mode it was played in (SESSION's), which then starts its match.
@@ -3512,6 +3774,10 @@ namespace OnlineMenu {
     // 1v1); Unranked / Ranked as WITH ANYONE's (enter: back to the ONLINE page).
     static void enterLauncherMode(int mode)
     {
+        if (mode == PPOM::MODE_TWOS) {
+            enterTwos();   // the 2V2 CSS: its party (back from it: the ONLINE page)
+            return;
+        }
         enter(mode);
         if (mode != PPOM::MODE_DIRECT) return;
         presetCode();
@@ -3572,13 +3838,15 @@ namespace OnlineMenu {
             bool room = roomCss();
             if (!room && s.phase != PH_IDLE) return;   // searching or connected: not taken
             PPOM::g_block.debug.scratch[9] += 0x1000000;
-            if (s.mode == mode && !room) {
+            if (mode == PPOM::MODE_TWOS && twosParty()) return;   // already on the 2V2 CSS
+            if (s.mode == mode && !room && mode != PPOM::MODE_TWOS) {
                 if (mode == PPOM::MODE_DIRECT) presetCode();   // already on Direct's CSS: only the code changes
                 return;
             }
             // A room's CSS: Dolphin has left the room; its panels go with the CSS built again.
             enterLauncherMode(mode);
-            if (room) RoomCss::releaseRecords();
+            if (room && mode != PPOM::MODE_TWOS) RoomCss::releaseRecords();
+            if (mode == PPOM::MODE_TWOS) s.roomReload = true;   // the party's panels
             leaveCss(1);   // OnlineMatch: no match armed -> back to the CSS (restoreCss)
         }
     }
@@ -3637,7 +3905,9 @@ namespace OnlineMenu {
         // The banner names the mode searched for (Sarah's board, 2026-11-02: "UNRANKED - Searching
         // for opponent - Hold START to cancel", same with RANKED).
         {
-            const char* mode = s.mode == PPOM::MODE_RANKED ? "RANKED" : "UNRANKED";
+            const char* mode = s.mode == PPOM::MODE_RANKED ? "RANKED" :
+                               s.mode == PPOM::MODE_TWOS   ? "2V2" :
+                                                             "UNRANKED";
             char banner[sizeof(s.status) + 48];
             if (s.phase == PH_SEARCHING || s.phase == PH_CONNECTING)
                 sprintf(banner, "%s - %s - Hold START to cancel", mode, s.status);
@@ -3667,6 +3937,11 @@ namespace OnlineMenu {
                 PPOM::g_block.debug.scratch[10] = 0x100 * game;   // tests: the match started
                 TrainingRoom::end(TrainingRoom::END_MATCH);
             }
+            return;
+        }
+        // 2v2: its group ended before game 1 (a player could not connect): search again here.
+        if (s.mode == PPOM::MODE_TWOS && s.phase == PH_IDLE && s.twosRequeue) {
+            startTwosSearch();
             return;
         }
         TrainingRoom::end(TrainingRoom::END_CSS);   // idle (the search ended) or an error
@@ -3915,6 +4190,20 @@ namespace OnlineMenu {
         }
         startWithCoinUp(pressed, b);
         g_cssTeamRoom = 0;   // (tickRoom sets it again in a team room)
+        if (s.twosNoticeFrames) --s.twosNoticeFrames;
+        // 2v2: the group ended on the plain CSS: search again (once SESSION has the party's code
+        // back), or back to the party's CSS (built again, as for a launcher join).
+        if (s.mode == PPOM::MODE_TWOS && !twosParty() && s.phase == PH_IDLE && !CodeEntry::active()) {
+            const bool partyBack = !roomActive() || (PPOM::g_block.session.roomFlags & PPOM::RF_IN);
+            if (s.twosRequeue && partyBack) {
+                startTwosSearch();
+            } else if ((s.twosToParty || !s.twosRequeue) && partyBack) {
+                s.twosToParty = false;
+                s.roomEntry = ROOM_ENTRY_TWOS;
+                s.roomReload = true;
+                leaveCss(1);   // OnlineMatch: no match armed -> back to the CSS (restoreCss)
+            }
+        }
         if (CodeEntry::active()) {
             CodeEntry::tick(pressed & BTN_START);
         } else if (roomCss()) {

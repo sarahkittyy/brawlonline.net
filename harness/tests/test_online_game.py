@@ -236,14 +236,16 @@ class Game:
 
     def to_css(self, mode: str, tag: int = 0) -> None:
         """From the ONLINE page (WITH FRIENDS highlighted) to the mode's CSS: WITH FRIENDS ->
-        BASIC VERSUS = Direct, TEAM BATTLE = Teams; WITH ANYONE -> Unranked (the first entry),
-        Ranked (the second). Then pick a character (the hand starts on the P1 panel; up to the
+        BASIC VERSUS = Direct, TEAM BATTLE = Teams; WITH ANYONE -> Unranked (the first button,
+        highlighted), Ranked (right of it), 2V2 (below Ranked; its party's CSS). Then pick a character (the hand starts on the P1 panel; up to the
         second row, Fox): as on Slippi, START does nothing on the online CSS until a character is
         selected. `tag` > 0 first picks the `tag`-th of the save's name tags on the panel's name
         button (pick_tag)."""
-        if mode in ("unranked", "ranked"):
+        if mode in ("unranked", "ranked", "twos"):
             self.steps("tap DRIGHT 4", "wait 30", "tap A", "wait 90")
-            if mode == "ranked":
+            if mode in ("ranked", "twos"):
+                self.steps("tap DRIGHT 4", "wait 30")
+            if mode == "twos":
                 self.steps("tap DDOWN 4", "wait 30")
         else:
             self.steps("tap A", "wait 90")
@@ -1478,8 +1480,8 @@ def test_online_menus_match_the_modes(backend: OnlineBackend, dolphin: Callable[
                                       gpu_backend: str) -> None:
     """The ONLINE page follows the mode set (Direct, Unranked, Ranked, rooms): WITH FRIENDS opens
     Brawl's page with three buttons, retitled WITH FRIENDS (Create Room, Direct 1v1, Join Room;
-    docs/design/rooms.md); WITH ANYONE opens the matchmaking modes on Brawl's Wi-Fi
-    OPTIONS page, whose two buttons are labelled with the game's font: "Unranked" and "Ranked".
+    docs/design/rooms.md); WITH ANYONE opens the same page as WITH ANYONE's, its buttons labelled
+    UNRANKED, RANKED and 2V2 (2026-11-02; until then Brawl's Wi-Fi OPTIONS page with two).
     Each entry reaches the online CSS in its mode (the plugin's menuState = mode + 1, and the
     search's FIND_OPPONENT mode byte), and leaving the CSS goes back to the page the mode was
     picked on. Screenshots: run/artifacts/game-code/menu-modes/game-m/."""
@@ -1512,20 +1514,29 @@ def test_online_menus_match_the_modes(backend: OnlineBackend, dolphin: Callable[
     leave_css("15-back-on-with-friends-join")     # Join Room highlighted
     g.steps("tap B", "wait 90")
     g.shot("16-online-page-with-friends")         # back on the ONLINE page, WITH FRIENDS
-    # WITH ANYONE -> Unranked / Ranked, labelled with the game's font.
+    # WITH ANYONE -> its page: UNRANKED (highlighted), RANKED, 2V2, labelled with the game's font.
     g.steps("tap DRIGHT 4", "wait 30", "tap A", "wait 90")
     g.shot("17-with-anyone-unranked")
-    g.steps("tap DDOWN 4", "wait 30")
+    g.steps("tap DRIGHT 4", "wait 30")
     g.shot("18-with-anyone-ranked")
-    g.steps("tap DUP 4", "wait 30", "tap A", "wait 400")
+    g.steps("tap DDOWN 4", "wait 30")
+    g.shot("19-with-anyone-2v2")
+    g.steps("tap DUP 4", "wait 30", "tap DLEFT 4", "wait 30", "tap A", "wait 400")
     assert mode_on_css() == 1                     # Unranked
-    g.shot("19-unranked-css")
-    leave_css("20-back-on-online-page")           # ONLINE page, WITH ANYONE highlighted
-    g.steps("tap A", "wait 90", "tap DDOWN 4", "wait 30", "tap A", "wait 400")
+    g.shot("20-unranked-css")
+    leave_css("21-back-on-with-anyone")           # WITH ANYONE's page, UNRANKED highlighted
+    # 2V2: its party's CSS (menuState 0x10 | ROOM_ENTRY_TWOS); the party is made at once.
+    g.steps("tap DRIGHT 4", "wait 30", "tap DDOWN 4", "wait 30", "tap A", "wait 400")
+    assert mode_on_css() == 0x12
+    _wait(lambda: ppom.read_room(g.c, blk)["flags"] & ppom.RF_TWOS, 30, "the 2v2 party")
+    g.steps("wait 60")
+    g.shot("22-2v2-party-css")
+    leave_css("23-back-on-with-anyone-2v2")       # 2V2 highlighted
+    g.steps("tap DUP 4", "wait 30", "tap A", "wait 400")
     assert mode_on_css() == 0                     # Ranked
     g.steps("stick up 30", "wait 5", "tap A 8", "wait 30")
     g.press_until("START", lambda: g.finds() > 0, "FIND_OPPONENT")
     _find_logged(g, 0, "")
     g.steps("wait 60")
-    g.shot("21-ranked-css-searching")
+    g.shot("24-ranked-css-searching")
     g.c.mm_cancel()

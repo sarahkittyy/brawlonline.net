@@ -18,6 +18,7 @@ export const SpectateMessages = {
   modeUnranked: () => "Unranked",
   modeDirect: () => "Direct",
   modeRoom: () => "Room",
+  modeTwos: () => "2v2",
   vs: () => "vs",
   and: () => "&",
   gameScore: (game: number, score: string | null) => (score ? `Game ${game} · ${score}` : `Game ${game}`),

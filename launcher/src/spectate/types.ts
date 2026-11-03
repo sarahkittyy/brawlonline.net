@@ -3,7 +3,7 @@
  * (`GET /v1/live`), and watching one in the playback Dolphin.
  */
 
-export type LiveMode = "ranked" | "unranked" | "direct" | "room";
+export type LiveMode = "ranked" | "unranked" | "direct" | "room" | "twos";
 
 export type LivePlayer = {
   uid: string;

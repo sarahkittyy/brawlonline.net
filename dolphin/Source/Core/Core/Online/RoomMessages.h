@@ -80,6 +80,8 @@ enum class Status : u8
   Waiting = 0,
   Starting = 1,
   InGame = 2,
+  // A 2v2 party (View::twos): every player is ready, its players search the 2v2 queue together.
+  Searching = 3,
 };
 
 struct Player
@@ -191,6 +193,9 @@ struct View
   // The server knows SIT OUT and shows a placed coin (players carry `sittingOut`): an older mm
   // ignores a pick that is not a ready, so none is sent to it.
   bool sit_out_known = false;
+  // A 2v2 party (room-state `kind: "twos"`, docs/design/2v2.md): two slots, no settings; its
+  // players search the 2v2 queue (mode 5 tickets naming its code) once all are ready.
+  bool twos = false;
 };
 
 // One ruleset of `ruleset-list` (the game's Ruleset line).
@@ -220,6 +225,7 @@ struct Message
     CreateTicketResp,  // a ticket answer on the online connection (refused; ignored)
     RulesetList,       // the player's rulesets to offer (room-rulesets)
     RoomUnreachable,   // pairs of the room's game that could not connect to each other
+    TwosOff,           // a 2v2 match is off: another player's connect failed (`match_id`)
   };
   Kind kind = Kind::Unknown;
   std::string type;
@@ -230,7 +236,7 @@ struct Message
   std::string op;          // RoomError
   std::string code;        // RoomLeft / RoomStart
   std::string reason;      // RoomLeft
-  std::string match_id;    // RoomStart / RoomUnreachable
+  std::string match_id;    // RoomStart / RoomUnreachable / TwosOff
   int timeout_secs = 15;   // RoomStart
   // RoomStart: the slots (1-4) that play the game (empty from an older mm: every member), its host
   // (the session's decider, 0: the room's) and its stage pickers (bits; nullopt: this machine's).
@@ -292,6 +298,7 @@ struct Request
   Op op = Op::Poll;
   bool flag = false;   // Create: public; Slot: open; Teams: on; Public: public; Ready: ready;
                        // SitOut: sits out
+  bool twos = false;   // Create: a 2v2 party (room-create {kind: "twos"}), not a room
   int slot = 0;        // Slot, SitOut: 1-4
   u8 team = 0;         // Team
   bool colors = false;  // Teams: the team colours (with `flag`), else the rainbow team battle

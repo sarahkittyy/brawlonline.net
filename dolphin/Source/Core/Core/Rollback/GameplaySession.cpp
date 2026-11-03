@@ -358,6 +358,12 @@ struct State
   // because none of them was ever heard (Online::PEER_NEVER_HEARD_TIMEOUT_MS; Lobby::unheard).
   Clock::time_point connecting_since{};
   u8 unheard_ports = 0;
+  // 2v2 (ConnectOptions::twos_splits): the split the host set the last game up with, the end of
+  // the ready-up after a game (none before the first), and how the session ended (TakeTwosEnd;
+  // kept until taken or the next session).
+  int twos_last_split = -1;
+  std::optional<Clock::time_point> twos_ready_until;
+  TwosEnd twos_end;
   // "Still waiting" lines logged at the current barrier (every WAIT_LOG_INTERVAL).
   int wait_logs = 0;
   bool state_size_logged = false;  // our state message was over MAX_CONTROL_SIZE (logged once)
@@ -942,6 +948,7 @@ void EndReplay(Core::System& system, const std::string& reason, const GameResult
 
 namespace
 {
+bool Twos();
 void KeepPortType(u8* rec, int port);  // below, with the countdown's holds
 // Sound bookkeeping (defined with OnSoundAlloc below).
 bool RunSoundStops(const Core::CPUThreadGuard& guard);
@@ -2464,6 +2471,21 @@ void MaybeDecideSetup()
     if (locks[port])
       seats[port] = {true, locks[port]->team};
   }
+  // 2v2 (docs/design/2v2.md): the server's splits, not the lock-ins: game 1 the first (the most
+  // even), every later game the most even one that is not the last game's (the teams shuffle).
+  int twos_split = -1;
+  if (Twos())
+  {
+    const auto& splits = s.net_opts.twos_splits;
+    twos_split = 0;
+    if (s.twos_last_split >= 0 && splits.size() > 1)
+      twos_split = s.twos_last_split == 0 ? 1 : 0;
+    for (int port = 0; port < MAX_LOBBY_PLAYERS; ++port)
+    {
+      if (locks[port])
+        seats[port].team = splits[twos_split][port];
+    }
+  }
   const Online::GameSetup::TeamSetup teams = Online::GameSetup::DecideTeams(s.net_opts.teams, seats);
   if (teams.error != Online::GameSetup::SetupError::None)
   {
@@ -2546,6 +2568,8 @@ void MaybeDecideSetup()
   }
   s.setup = st;
   s.last_stage = st.stage;
+  if (twos_split >= 0)
+    s.twos_last_split = twos_split;
   std::string who;
   for (int port = 0; port < MAX_LOBBY_PLAYERS; ++port)
   {
@@ -2742,6 +2766,39 @@ int ControlSender(const picojson::object& o, const sf::IpAddress& from, u16 from
 // (in a match on the CPU thread, at the next loop top). Otherwise a match of 3-4 players goes on
 // without it: GekkoNet is told on the CPU thread, and the remaining peers agree on the frame its
 // input ends (GekkoNet's disconnect claims); the next game is set up without it.
+// A 2v2 session (ConnectOptions::twos_splits, docs/design/2v2.md).
+bool Twos()
+{
+  return s.mode == Mode::Network && !s.net_opts.twos_splits.empty();
+}
+
+// The leave reasons a 2v2 session sends: this player did not ready up in time, and its group
+// broke up (it ends because another player left: the others hear it from that player too).
+constexpr char TWOS_READY_TIMEOUT[] = "2v2 ready timeout";
+constexpr char TWOS_GROUP_ENDED[] = "2v2 group ended";
+
+// A player as a 2v2 notice names them: their display name (their state messages'), else "P<n>".
+std::string PeerName(int slot)
+{
+  const std::string& n = s.peers[slot].name;
+  return n.empty() ? fmt::format("P{}", slot + 1) : n;
+}
+
+// 2v2: the session ends for this player (the first end's notice is kept), and the others are told.
+void EndTwos(TwosEndKind kind, std::string text, u8 avoid = 0)
+{
+  if (s.twos_end.kind == TwosEndKind::None)
+  {
+    s.twos_end = {kind, std::move(text), avoid};
+    INFO_LOG_FMT(BRAWLBACK, "gprb 2v2: the group ended: {} ({})", s.twos_end.text,
+                 kind == TwosEndKind::Search ? "searching again" : "back to the party");
+  }
+  if (!s.leave_sent)
+    SendLeave(TWOS_GROUP_ENDED);
+  s.phase = Phase::Ended;
+  s.twos_ready_until.reset();
+}
+
 void OnPeerLeft(int slot, const std::string& reason)
 {
   PeerView& p = s.peers[slot];
@@ -2764,6 +2821,21 @@ void OnPeerLeft(int slot, const std::string& reason)
   {
     s.peer_left = true;
     s.peer_left_reason = reason;
+  }
+  // 2v2: the four play together or not at all. Between games (and before the first) the group
+  // breaks up at once: whoever is ready for the next game searches again, the others are back on
+  // their party's CSS. In a match the others play it out (the leaver's fighter leaves at the agreed
+  // frame) and the group breaks up when it ends (EndRunning).
+  if (Twos() && !InMatchPhase() && s.phase != Phase::Ended && s.phase != Phase::Error &&
+      s.phase != Phase::Idle)
+  {
+    const bool timeout = reason.find(TWOS_READY_TIMEOUT) != std::string::npos;
+    const bool relay = reason.find(TWOS_GROUP_ENDED) != std::string::npos;
+    std::string text = relay   ? std::string("The group broke up") :
+                       timeout ? PeerName(slot) + " didn't ready" :
+                                 PeerName(slot) + " left";
+    EndTwos(LockedFor(s.local_lock, NextGame()) ? TwosEndKind::Search : TwosEndKind::Idle,
+            std::move(text));
   }
 }
 
@@ -3419,6 +3491,16 @@ void NetThread()
         s.disconnected = true;
         s.error = s.peer_left_reason;
       }
+      // 2v2: not ready for the next game within TWOS_READY_SECONDS of the last one's end: this
+      // player is out of the group (back on the party's CSS); the others hear it and search again.
+      if (Twos() && s.phase == Phase::Connected && s.twos_ready_until && now >= *s.twos_ready_until &&
+          !LockedFor(s.local_lock, NextGame()))
+      {
+        INFO_LOG_FMT(BRAWLBACK, "gprb 2v2: not ready for game {} within {} s: leaving the group",
+                     NextGame(), TWOS_READY_SECONDS);
+        SendLeave(TWOS_READY_TIMEOUT);
+        EndTwos(TwosEndKind::Idle, "Removed - didn't ready in time");
+      }
     }
     if (now - last_state >= std::chrono::milliseconds(50))
     {
@@ -3439,6 +3521,10 @@ void NetThread()
           SendLeave(s.error);
         }
         s.disconnected = true;
+        // 2v2: a match that could not start (a player never heard from, a failed barrier) is
+        // searched again, without the players never heard from.
+        if (Twos() && s.twos_end.kind == TwosEndKind::None)
+          s.twos_end = {TwosEndKind::Search, "Couldn't connect", s.unheard_ports};
       }
     }
     // The pings' round trip picks the input delay and times the start; in a running match
@@ -3972,6 +4058,9 @@ GameResult ReadGameResult(Core::System& system)
   bool team_battle = false;
   for (int port = 0; port < MAX_LOBBY_PLAYERS; ++port)
   {
+    // The team of every player of the match, also one who left (a 2v2 game reports theirs).
+    if (s.match_ports & (1u << port))
+      r.team[port] = teams[port];
     if (!(s.match_ports & (1u << port)) || (s.gone_enabled && s.gone_written[port]) ||
         ((quit >> port) & 1))
     {
@@ -4018,6 +4107,8 @@ GameResult ReadGameResult(Core::System& system)
                                    static_cast<u8>(s.match_ports & ~(1u << r.winner));
     return r;
   }
+  r.left_with_stocks = static_cast<u8>(ReadSessionByte(g, Online::GameBridge::SESSION_LEFT_WITH_STOCKS) &
+                                      s.match_ports);
   const auto outcome = Online::GameSetup::DecideOutcome(team_battle, ends);
   r.winner = outcome.winner;
   r.pickers = outcome.pickers;
@@ -4261,6 +4352,23 @@ void EndRunning(Core::System& system, const std::string& reason)
       p.hold_valid = p.holds_valid = false;
     });
     s.phase = seen && !s.peer_left ? Phase::Connected : Phase::Ended;
+    // 2v2 (docs/design/2v2.md): a player who left during the match broke the group up: the others
+    // search again. This player's own quit: back to the party's CSS (it left). Otherwise the next
+    // game's ready-up starts now.
+    if (Twos())
+    {
+      std::string left;
+      ForEachPeer([&](int slot, PeerView& p) {
+        if (p.left)
+          left += (left.empty() ? "" : " & ") + PeerName(slot);
+      });
+      if (reason == "quit left")
+        EndTwos(TwosEndKind::Idle, "");
+      else if (!left.empty() || s.phase == Phase::Ended)
+        EndTwos(TwosEndKind::Search, left.empty() ? std::string("The group broke up") : left + " left");
+      else
+        s.twos_ready_until = Clock::now() + std::chrono::seconds(TWOS_READY_SECONDS);
+    }
     s.at_s = s.applied = s.at_start = s.go = false;
     s.holds_valid = false;
     s.did_frame0 = false;
@@ -7532,6 +7640,9 @@ std::optional<std::string> Connect(const ConnectOptions& options)
   s.recovery = {};
   s.quit_left = false;
   s.unheard_ports = 0;
+  s.twos_last_split = -1;
+  s.twos_ready_until.reset();
+  s.twos_end = {};
   s.socket = std::make_unique<sf::UdpSocket>();
   s.socket->setBlocking(false);
   if (s.socket->bind(options.local_port) != sf::Socket::Status::Done)
@@ -7725,6 +7836,22 @@ Lobby GetLobby()
   l.setup_error = s.setup_error;
   l.after_match = s.await_scene_exit;
   l.unheard = s.unheard_ports;
+  l.twos = Twos();
+  if (l.twos && l.active && !l.in_match)
+  {
+    if (s.twos_ready_until && s.phase == Phase::Connected)
+    {
+      const auto left = std::chrono::duration_cast<std::chrono::milliseconds>(*s.twos_ready_until -
+                                                                             Clock::now());
+      l.ready_seconds = static_cast<u8>(std::clamp<s64>((left.count() + 999) / 1000, 0, 99));
+    }
+    if (s.local_slot >= 0 && s.local_slot < MAX_LOBBY_PLAYERS && LockedFor(s.local_lock, NextGame()))
+      l.ready_ports |= static_cast<u8>(1u << s.local_slot);
+    ForEachPeer([&](int slot, const PeerView& p) {
+      if (!p.left && LockedFor(p.lock, NextGame()))
+        l.ready_ports |= static_cast<u8>(1u << slot);
+    });
+  }
   // The others' stage select cursors: heard in the last second (a state message comes every 50 ms).
   if (l.active && !l.in_match)
   {
@@ -7735,6 +7862,28 @@ Lobby GetLobby()
     });
   }
   return l;
+}
+
+std::optional<TwosEnd> TakeTwosEnd()
+{
+  std::lock_guard<std::recursive_timed_mutex> lk(s.mutex);
+  if (s.twos_end.kind == TwosEndKind::None)
+    return std::nullopt;
+  TwosEnd end = std::move(s.twos_end);
+  s.twos_end = {};
+  return end;
+}
+
+void TwosMatchOff(const std::string& match_id)
+{
+  std::lock_guard<std::recursive_timed_mutex> lk(s.mutex);
+  if (!Twos() || match_id.empty() || s.net_opts.replay_meta.match_id != match_id || s.match_index != 0 ||
+      InMatchPhase() || s.phase == Phase::Ended || s.phase == Phase::Error || s.phase == Phase::Idle)
+  {
+    return;
+  }
+  INFO_LOG_FMT(BRAWLBACK, "gprb 2v2: match {} is off (another player's connect failed)", match_id);
+  EndTwos(TwosEndKind::Search, "Couldn't connect");
 }
 
 const std::vector<u16>& DefaultStages()
@@ -7862,6 +8011,7 @@ std::optional<std::string> ArmPlayback(std::shared_ptr<const Replay::File> file,
                           mode == "direct"   ? "Direct" :
                           mode == "room"     ? "Room" :
                           mode == "teams"    ? "Teams" :
+                          mode == "twos"     ? "2v2" :
                                                "Replay";
       pb.title = g && *g ? fmt::format("{} - Game {}", label, *g) : std::string(label);
     }

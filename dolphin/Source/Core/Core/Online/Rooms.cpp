@@ -181,6 +181,8 @@ struct State
   Clock::time_point pending_since{};
   std::string pending_launch;      // the launcher request id that join answers
   std::string rejoin;              // the room the connection dropped out of
+  bool rejoin_twos = false;        // `rejoin` is a 2v2 party
+  bool rejoining_twos = false;     // the pending join is that party's: refused, a new party
   std::deque<Request> outbox;
 
   // The line.
@@ -215,6 +217,7 @@ struct State
   bool harness_lock = false;
   bool harness_screen = false;  // tests: the harness's screen, not the game's
   Clock::time_point next_ready{};
+  Clock::time_point next_back{};  // a 2v2 party's room-back not answered yet
 
   // The launcher.
   std::optional<Launch> launch;
@@ -405,6 +408,7 @@ struct Actions
   bool drop = false;        // fatal error: close the connection
   std::string fail_game;    // the room's game cannot start: end it with this text (room-back)
   std::vector<std::string> notices;  // the room chat's system lines (added outside the lock)
+  std::string twos_off;     // a 2v2 match is off (`twos-off`): its session ends (outside the lock)
 };
 
 // The CSS line's name for slot 1-4 of the room (its player's, else "P<slot>").
@@ -457,13 +461,16 @@ void Handle(const Message& m, Actions* a, Clock::time_point now)
       s.pending_sent = false;
       s.pending_since = now;
       s.phase = Phase::Joining;
+      s.rejoining_twos = s.rejoin_twos;
       Log(fmt::format("joining {} again after the connection dropped", s.rejoin));
     }
     s.rejoin.clear();
+    s.rejoin_twos = false;
     return;
   case Message::Kind::RoomState:
   {
     const View& v = *m.view;
+    s.rejoining_twos = false;
     if (s.pending && s.pending->op == Op::Create && !s.create_left.empty() && v.code == s.create_left)
     {
       Log(fmt::format("room-state for {} (left for the launcher's create): ignored", v.code));
@@ -516,6 +523,22 @@ void Handle(const Message& m, Actions* a, Clock::time_point now)
       ++s.list_serial;
       return;
     }
+    if (m.op == "room-join" && s.rejoining_twos && s.pending && s.pending->op == Op::Join && !s.view)
+    {
+      // The player's own 2v2 party, gone with the connection (mm deletes a party nobody is in):
+      // a new one, as the 2V2 CSS made the first (its new code shows on the CSS).
+      s.rejoining_twos = false;
+      Request r;
+      r.op = Op::Create;
+      r.twos = true;
+      s.pending = r;
+      s.pending_sent = false;
+      s.pending_since = now;
+      s.phase = Phase::Joining;
+      Log(fmt::format("the 2v2 party is gone ({}): a new one", m.error));
+      return;
+    }
+    s.rejoining_twos = false;
     if (m.op == "room-create" || m.op == "room-join")
     {
       if (s.pending)
@@ -636,6 +659,12 @@ void Handle(const Message& m, Actions* a, Clock::time_point now)
   case Message::Kind::CreateTicketResp:
     Log(fmt::format("create-ticket-resp on the online connection: {}", m.error));
     return;
+  case Message::Kind::TwosOff:
+    // Another player of this 2v2 match could not connect to someone and searches again: its
+    // session ends here too, to search again (Gprb::Session::TwosMatchOff).
+    Log(fmt::format("twos-off {}", m.match_id));
+    a->twos_off = m.match_id;
+    return;
   case Message::Kind::Invalid:
     ++s.invalid;
     Log(fmt::format("invalid {} from mm: {}", m.type.empty() ? "message" : m.type, m.why));
@@ -668,6 +697,7 @@ void OnDropped(Clock::time_point now, const std::string& why, bool count)
   if (s.view)
   {
     s.rejoin = s.view->code;
+    s.rejoin_twos = s.view->twos;
     ClearRoom();
     if (was_online && s.error.empty())
       SetError(TEXT_LOST);
@@ -772,11 +802,12 @@ void PollJoinRequest()
   {
     const picojson::value* q = get("queue");
     if (q && q->is<std::string>() &&
-        (q->get<std::string>() == "unranked" || q->get<std::string>() == "ranked"))
+        (q->get<std::string>() == "unranked" || q->get<std::string>() == "ranked" ||
+         q->get<std::string>() == "twos"))
       target = q->get<std::string>();
     if (!target)
     {
-      Log("join-room.json: a queue request without \"unranked\" or \"ranked\": ignored");
+      Log("join-room.json: a queue request without \"unranked\", \"ranked\" or \"twos\": ignored");
       return;
     }
   }
@@ -984,7 +1015,8 @@ void DecideLaunch(const DolphinBusy& busy, bool logged_in, const std::string& ow
     if (l.kind == LaunchKind::Queue)
     {
       s.direct_code.clear();
-      s.direct_queue = l.code == "ranked" ? 2 : 1;
+      // LOCAL.directNumber (ppom.h DirectQueue): 1 Unranked, 2 Ranked, 4 the 2V2 CSS.
+      s.direct_queue = l.code == "ranked" ? 2 : l.code == "twos" ? 4 : 1;
       ++s.direct_seq;
       Log(fmt::format("launcher Play: the game goes to the {} CSS (direct {})", l.code,
                       s.direct_seq));
@@ -1498,6 +1530,10 @@ void Thread()
       }
     }
 
+    // A 2v2 search or group runs (docs/design/2v2.md): the party's readies are then the
+    // session's, and the party is not left for the screens it shows meanwhile.
+    const bool twos_busy = Client::SearchMode() == Matchmaking::Mode::Twos || Gprb::Session::GetLobby().active;
+
     // Network.
     if (host)
     {
@@ -1564,6 +1600,8 @@ void Thread()
         EndGame(false, actions.fail_game, std::nullopt, true, CONNECT_ERROR_SHOWN);
       for (const std::string& line : actions.notices)
         Chat::AddNotice(line);
+      if (!actions.twos_off.empty())
+        Gprb::Session::TwosMatchOff(actions.twos_off);
 
       // Chat's outgoing messages, signed and encrypted outside the room lock; a Brawl Mods
       // room's requests; the waiting room's speed checks.
@@ -1603,7 +1641,9 @@ void Thread()
         std::lock_guard lk(s_mutex);
         watch.online = online;
         watch.connection = connection;
-        watch.in_room = s.phase == Phase::In && s.view.has_value();
+        // (A 2v2 party has no game to watch: its players play theirs in the queue; mm refuses
+        // room-watch there, "Not in a 2v2 party.")
+        watch.in_room = s.phase == Phase::In && s.view.has_value() && !s.view->twos;
         if (watch.in_room)
         {
           const View& v = *s.view;
@@ -1676,12 +1716,15 @@ void Thread()
             Log(fmt::format("sent {}", *json));
           }
         }
-        // The lock-in -> room-ready, when it differs from what the server shows.
-        if (s.phase == Phase::In && s.view && !s.rg.active && now >= s.next_ready)
+        // The lock-in -> room-ready, when it differs from what the server shows. A 2v2 party:
+        // only on the party's CSS, never while its 2v2 search or group runs (the lock-ins are then
+        // the 2v2 session's own; mm takes the search's ticket as the ready).
+        if (s.phase == Phase::In && s.view && !s.rg.active && now >= s.next_ready &&
+            !(s.view->twos && twos_busy))
         {
           const View& v = *s.view;
           const auto& me = v.slots[v.you - 1].player;
-          const bool may = v.status == Status::Waiting ||
+          const bool may = v.status == Status::Waiting || (v.twos && v.status == Status::Searching) ||
                            (v.status == Status::InGame && me && !me->in_game);
           // Never a ready while sitting out: mm would take it as playing again, and the host's SIT
           // OUT on a ready player would be undone by the lock-in the game has not taken back yet.
@@ -1729,6 +1772,22 @@ void Thread()
               Log(fmt::format("sent {}", *json));
             }
             s.next_ready = now + READY_RETRY;
+          }
+        }
+        // A 2v2 party whose group ended for this player: back on the party's CSS (no search, no
+        // session), the party is told (mm took this player as in the match).
+        if (s.phase == Phase::In && s.view && s.view->twos && !twos_busy &&
+            s.screen == static_cast<u8>(Screen::Room) && now >= s.next_back)
+        {
+          const auto& me = s.view->slots[s.view->you - 1].player;
+          if (me && me->in_game)
+          {
+            Request r;
+            r.op = Op::Back;
+            Send(peer, *RequestJson(r));
+            ++s.sent;
+            s.next_back = now + READY_RETRY;
+            Log("back on the 2v2 party's CSS: sent room-back");
           }
         }
         // The game left the room CSS without leaving the room: leave for it.

@@ -61,6 +61,11 @@ constexpr u32 SESSION_QUIT_STAYS = 0x21C;
 //   match for everyone (a 1v1, a 2v2 set), 0 none; SESSION_QUIT_RUNBACK: 1 when L+R+Y were held
 //   with it or up to 10 frames after (P+'s salty runback). Game-written in the frame of the quit
 //   (quitRunback up to 10 frames later), rolled back with the match, cleared at its setup.
+// - SESSION_LEFT_WITH_STOCKS: u8, bit p = port p was taken out of the match while it still had
+//   stocks (a dropped player's or a quit's removal; game-written, rolled back with the match,
+//   cleared at its setup): a 2v2 leaver who was already out of stocks is not (their team's result,
+//   docs/design/2v2.md). RoomPlay's first reserved byte.
+constexpr u32 SESSION_LEFT_WITH_STOCKS = 0x277;
 constexpr u32 SESSION_QUIT_BY = 0x21D;
 constexpr u32 SESSION_QUIT_RUNBACK = 0x21E;
 // A game played again after a desync (Gprb::Session::Restore; docs/game-code.md, desync

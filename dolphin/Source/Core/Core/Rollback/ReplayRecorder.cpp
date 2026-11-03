@@ -195,6 +195,8 @@ const char* ModeName(const MatchMeta& m)
     return "direct";
   case 3:
     return "teams";
+  case 5:
+    return "twos";
   default:
     return "unknown";
   }
@@ -214,6 +216,8 @@ const char* ModeLabel(const MatchMeta& m)
     return "Direct";
   case 3:
     return "Teams";
+  case 5:
+    return "2v2";
   default:
     return "Online";
   }

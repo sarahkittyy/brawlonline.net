@@ -278,6 +278,13 @@ struct ConnectOptions
   // Ports (bits) that pick the first game's stage: a room's game is a session of its own, and the
   // last room game's loser picks (docs/rooms-game-interface.md); every member carries the same.
   u8 initial_pickers = 0;
+  // A 2v2 match (docs/design/2v2.md; the server's `splits`, with `teams` on): the team splits the
+  // session may play, a team (0, 1) per in-game port, the most even first. The host sets game 1
+  // up with the first and every later game with the most even one that is not the last game's
+  // (the teams shuffle), whatever the lock-ins say. The four play game after game until one of
+  // them leaves or does not ready up within TWOS_READY_SECONDS of a game's end: then the session
+  // ends for all of them (TakeTwosEnd).
+  std::vector<std::array<u8, 4>> twos_splits;
   // Who plays (matchmaking's ticket), for the replays of this session's games (ReplayRecorder.h).
   Replay::MatchMeta replay_meta;
 };
@@ -289,6 +296,9 @@ struct ConnectOptions
 // it; every game then starts that match from its own character select. A session has 2 to
 // MAX_LOBBY_PLAYERS players, by in-game port (gaps allowed).
 constexpr int MAX_LOBBY_PLAYERS = 4;
+// 2v2 (ConnectOptions::twos_splits): the seconds after a game's end within which every player
+// readies up for the next one (Sarah's board, 2026-11-02: "45 second ready up timer is great").
+constexpr int TWOS_READY_SECONDS = 45;
 // A lock-in's team (gmPlayerInitData::m_teamNo: 0 red, 1 blue, 2 green; Brawl's three team
 // colours, Online::GameSetup::NUM_TEAMS), or none (free-for-all).
 constexpr u8 NO_TEAM = 0xFF;
@@ -435,8 +445,37 @@ struct Lobby
   // The other players' stage select cursors, by in-game port (this player's own and anyone not
   // heard from lately: not `on`). None in a match.
   std::array<SssCursor, MAX_LOBBY_PLAYERS> sss_cursors{};
+  // A 2v2 session (ConnectOptions::twos_splits): between games, the seconds left to ready up for
+  // the next game (0: none running), and the ports (bits) locked in for it, this player's included.
+  bool twos = false;
+  u8 ready_seconds = 0;
+  u8 ready_ports = 0;
 };
 Lobby GetLobby();
+
+// How a 2v2 session ended for this player (docs/design/2v2.md): `Search`, the game searches again
+// by itself (its group broke up: a player left or did not ready up while this one had, the match
+// could not start, or a player left during the last game); `Idle`, back to the party's character
+// select (this player did not ready up, or was not ready when another left). `text` is the line
+// to show ("bob left", "Removed - didn't ready in time"); `avoid`: the players' ports this
+// player could not connect to (the next search keeps them out).
+enum class TwosEndKind : u8
+{
+  None = 0,
+  Search = 1,
+  Idle = 2,
+};
+struct TwosEnd
+{
+  TwosEndKind kind = TwosEndKind::None;
+  std::string text;
+  u8 avoid_ports = 0;
+};
+// The end of the last 2v2 session, once (the next call returns nothing).
+std::optional<TwosEnd> TakeTwosEnd();
+// mm says the 2v2 match `match_id` is off (`twos-off`: another player's connect failed): a session
+// of it that has not started its first match ends, to search again.
+void TwosMatchOff(const std::string& match_id);
 
 // A game of a network session that ended with GAME SET or with a pause-screen quit that ended it
 // for everyone, read from the state every peer ended on (Online/Ranked.h reports it), or that a
@@ -466,6 +505,9 @@ struct GameResult
   std::array<float, MAX_LOBBY_PLAYERS> damage{};
   std::array<u8, MAX_LOBBY_PLAYERS> char_kind{};
   std::array<u8, MAX_LOBBY_PLAYERS> team{};
+  // Ports (bits) whose player left the match (dropped or quit) while they still had stocks; one
+  // who left already out of stocks is not in it (the 2v2 rating's leaver rule).
+  u8 left_with_stocks = 0;
   u16 stage = NO_STAGE;
   u8 asl = 0;      // P+ alternate-stage buttons it was played with
   u32 frames = 0;  // game frames the match ran

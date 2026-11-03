@@ -1,6 +1,7 @@
 import type { QueueTarget } from "@dolphin/hand_off_target";
-import { QUEUE_RANKED, QUEUE_UNRANKED } from "@dolphin/hand_off_target";
+import { QUEUE_RANKED, QUEUE_TWOS, QUEUE_UNRANKED } from "@dolphin/hand_off_target";
 import EmojiEventsRoundedIcon from "@mui/icons-material/EmojiEventsRounded";
+import GroupsRoundedIcon from "@mui/icons-material/GroupsRounded";
 import PlayArrowRoundedIcon from "@mui/icons-material/PlayArrowRounded";
 import Button from "@mui/material/Button";
 import CircularProgress from "@mui/material/CircularProgress";
@@ -12,16 +13,16 @@ import styles from "./play_buttons.module.css";
 
 export type PlayButtonsViewProps = {
   /** Players searching each queue; absent while unknown (logged out, the list not read yet). */
-  queues?: { unranked: number; ranked: number };
+  queues?: { unranked: number; ranked: number; twos?: number };
   /** Players in a match of each queue; absent while unknown or from an older server (then not shown). */
-  playing?: { unranked: number; ranked: number };
+  playing?: { unranked: number; ranked: number; twos?: number };
   /** The queue being handed to the game (its button shows a spinner, both wait). */
   starting?: QueueTarget;
   onPlay: (queue: QueueTarget) => void;
 };
 
 /**
- * Home's Play unranked / Play ranked, beside the Overview tab, each with its queue's count and the
+ * Home's Play unranked / Play ranked / Play 2v2, beside the Overview tab, each with its queue's count and the
  * players in its matches under it ("6 in queue · 14 in game").
  */
 export const PlayButtonsView = ({ queues, playing, starting, onPlay }: PlayButtonsViewProps) => (
@@ -47,6 +48,18 @@ export const PlayButtonsView = ({ queues, playing, starting, onPlay }: PlayButto
       disabled={starting != null}
       onClick={() => onPlay(QUEUE_RANKED)}
       testId="play-ranked"
+    />
+    {/* (A server before 2v2 sends no twos count: 0 in queue, the in-game count not shown.) */}
+    <PlayButton
+      label={Messages.playTwos()}
+      tooltip={Messages.playTwosTooltip()}
+      icon={<GroupsRoundedIcon />}
+      count={queues ? queues.twos ?? 0 : undefined}
+      inGame={playing?.twos}
+      starting={starting === QUEUE_TWOS}
+      disabled={starting != null}
+      onClick={() => onPlay(QUEUE_TWOS)}
+      testId="play-twos"
     />
   </div>
 );

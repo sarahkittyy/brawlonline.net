@@ -150,6 +150,7 @@ const MODE_LABELS: Record<string, string> = {
   direct: "Direct",
   teams: "Teams",
   room: "Room",
+  twos: "2v2",
 };
 
 /**

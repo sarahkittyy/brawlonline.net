@@ -22,7 +22,9 @@ namespace PPOM {
     static_assert(sizeof(LockIn) == 0x0C, "lock-in");
     static_assert(sizeof(PortValues) == 0x3C, "port values");
     static_assert(sizeof(Local) == 0xF4 && __builtin_offsetof(Local, ownExtra) == 0x80 &&
-                  __builtin_offsetof(Local, potato) == 0xF0, "local");
+                  __builtin_offsetof(Local, potato) == 0xF0 &&
+                  __builtin_offsetof(Local, readySeconds) == 0xF1 && __builtin_offsetof(Local, readyPorts) == 0xF2,
+                  "local");
     static_assert(sizeof(SssCursor) == 8 && __builtin_offsetof(Local, ownCursor) == 0xC8 &&
                   __builtin_offsetof(Local, cursors) == 0xD0, "local cursors");
     static_assert(sizeof(PortExtra) == 0x48 && __builtin_offsetof(PortExtra, roster) == 8, "port extra");
@@ -36,7 +38,8 @@ namespace PPOM {
     static_assert(sizeof(Session) == 0x420, "session");
     static_assert(sizeof(RoomStages) == 0x40 && __builtin_offsetof(Session, stages) == 0x280, "session room stages");
     static_assert(sizeof(RoomPlay) == 0x40 && __builtin_offsetof(Session, play) == 0x240, "session room play");
-    static_assert(__builtin_offsetof(RoomPlay, setOn) == 0x2C && __builtin_offsetof(RoomPlay, anyonePicks) == 0x36,
+    static_assert(__builtin_offsetof(RoomPlay, setOn) == 0x2C && __builtin_offsetof(RoomPlay, anyonePicks) == 0x36 &&
+                      __builtin_offsetof(RoomPlay, leftWithStocks) == 0x37,
                   "room play set");
     static_assert(sizeof(RulesetList) <= sizeof(((Response*)0)->payload), "ruleset list");
     static_assert(sizeof(Rules) == 0x20 && __builtin_offsetof(Session, rules) == 0x220, "session rules");

@@ -22,6 +22,11 @@ extern "C" {
     u8 g_onlineReturnPage = 0;
     // Set while Direct owns the CSS: the ONLINE page then opens on WITH FRIENDS (onlinePageCursor).
     u8 g_onlineFriendsCursor = 0;
+    // anyone_menu.cpp: the page (muProcWifiAnybody) was opened from WITH ANYONE, not WITH FRIENDS.
+    extern u8 g_anyonePage;
+    // Set while Unranked, Ranked or 2v2 owns the CSS: leaving it reopens the page as WITH ANYONE's
+    // (online_menu.cpp enter), on the mode's button (setReturnButton).
+    u8 g_anyoneReturn = 0;
 }
 
 namespace NetMenu {
@@ -122,6 +127,9 @@ namespace NetMenu {
         {0x340, "MenMainWifi22", "DIRECT\n1V1", {13, 6, 135, 81}},
         {0x344, "MenMainWifi23", "JOIN\nROOM", {21, 4, 139, 76}},
     };
+    // The same page opened from WITH ANYONE (anyone_menu.cpp, 2026-11-02): Unranked, Ranked and the
+    // 2v2 queue, in the same three buttons.
+    static const char* const ANYONE_TEXT[3] = {"UNRANKED", "RANKED", "2V2"};
     static int s_returnButton = -1;   // the button to highlight when the page opens again
 
     static bool menuPtr(u32 p) { return p >= 0x80000000 && p < 0x94000000; }
@@ -368,7 +376,8 @@ namespace NetMenu {
             if (!menuPtr((u32)obj)) continue;
             u8* tex = Labels::boundTexture(*(u8**)(obj + 8), BUTTONS[i].tex);
             const s16* b = BUTTONS[i].box;
-            if (tex && Labels::render(tex, BUTTONS[i].text, b[0], b[1], b[2], b[3], 2)) drawn++;
+            const char* text = g_anyonePage ? ANYONE_TEXT[i] : BUTTONS[i].text;
+            if (tex && Labels::render(tex, text, b[0], b[1], b[2], b[3], 2)) drawn++;
         }
         PPOM::g_block.debug.scratch[6] = (PPOM::g_block.debug.scratch[6] & 0xFFFF) | ((u32)drawn << 16);
     }
@@ -409,7 +418,10 @@ namespace NetMenu {
     {
         if (PPOM::g_block.debug.cfg & PPOM::CFG_WIFI_HOOKS) {
             s_friendsPicked = false;
-            g_onlineFriendsCursor = 1;
+            if (g_anyoneReturn) g_anyonePage = 1;   // back from Unranked, Ranked or 2v2
+            else if (g_anyonePage) s_returnButton = 0;   // from the ONLINE page: UNRANKED
+            g_anyoneReturn = 0;
+            g_onlineFriendsCursor = g_anyonePage ? 0 : 1;
         }
         g_friendsPage = proc;
         int r = s_origAnybodyEnter(proc, a, b);
@@ -434,9 +446,9 @@ namespace NetMenu {
     {
         volatile u32 keepFrame[2];
         keepFrame[0] = 0;
-        if (PPOM::g_block.debug.cfg & PPOM::CFG_WIFI_HOOKS) {
+        if ((PPOM::g_block.debug.cfg & PPOM::CFG_WIFI_HOOKS) && !g_anyonePage) {
             u32 stubFrame = *(u32*)__builtin_frame_address(0);
-            *(u32*)(stubFrame + 0x10) = 0x11;
+            *(u32*)(stubFrame + 0x10) = 0x11;   // (WITH ANYONE keeps its own, 0x12)
         }
         (void)keepFrame[0];
     }
@@ -456,7 +468,15 @@ namespace NetMenu {
         keepFrame[0] = 0;
         (void)r3;
         PPOM::g_block.debug.scratch[8] = decision;
-        if (PPOM::g_block.debug.cfg & PPOM::CFG_WIFI_HOOKS) {
+        if ((PPOM::g_block.debug.cfg & PPOM::CFG_WIFI_HOOKS) && g_anyonePage) {
+            // WITH ANYONE's: Unranked, Ranked, the 2V2 CSS; all the Wi-Fi CSS (decision 0x1E).
+            u32 stubFrame = *(u32*)__builtin_frame_address(0);
+            if (decision == 0x1D) onlineMenuEntered(PPOM::MODE_UNRANKED);
+            else if (decision == 0x1E) onlineMenuEntered(PPOM::MODE_RANKED);
+            else OnlineMenu::enterTwos();
+            *(u32*)(stubFrame + 0x10) = 0x1E;
+            g_anyonePage = 0;
+        } else if (PPOM::g_block.debug.cfg & PPOM::CFG_WIFI_HOOKS) {
             u32 stubFrame = *(u32*)__builtin_frame_address(0);
             if (decision == 0x1E) {
                 onlineMenuEntered(PPOM::MODE_DIRECT);
@@ -713,6 +733,7 @@ namespace NetMenu {
         u32 stubFrame = *(u32*)__builtin_frame_address(0);
         *(u32*)(stubFrame + 8) = 0x1B;
         s_friendsPicked = true;
+        g_anyonePage = g_anyoneReturn = 0;   // WITH FRIENDS' page, not WITH ANYONE's
         PPOM::g_block.debug.scratch[6]++;
         (void)keepFrame[0];
     }
@@ -778,8 +799,10 @@ namespace NetMenu {
         if (PPOM::g_block.debug.cfg & PPOM::CFG_WIFI_HOOKS) {
             u32 stubFrame = *(u32*)__builtin_frame_address(0);
             u8* page = *(u8**)(stubFrame + 0x78);   // saved r30 (stmw r3,0xC(r1))
-            if ((u32)page >= 0x80000000 && (u32)page < 0x81800000) *(u16*)(page + 0x42) = 0;
+            // (back from WITH ANYONE's: the game's own cursor, WITH ANYONE)
+            if ((u32)page >= 0x80000000 && (u32)page < 0x81800000 && !g_anyonePage) *(u16*)(page + 0x42) = 0;
             g_onlineFriendsCursor = 0;
+            g_anyonePage = 0;
         }
         (void)keepFrame[0];
     }

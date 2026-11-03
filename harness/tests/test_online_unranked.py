@@ -356,7 +356,7 @@ def test_unranked_quits_without_a_pause(backend: OnlineBackend,
         assert g.bridge()["lost"] == 0
     a.shot("03-back-on-css")
     # As the user did: back to the menus, then Direct, where START opens the keypad.
-    a.steps("wait 60", "hold B 120", "until muMenuMain 900", "wait 90", "tap DLEFT 4", "wait 30")
+    a.steps("wait 60", "hold B 120", "until muMenuMain 900", "wait 90", "tap B", "wait 90", "tap DLEFT 4", "wait 30")
     a.to_css("direct")
     a.open_keypad()
     a.shot("04-direct-keypad")

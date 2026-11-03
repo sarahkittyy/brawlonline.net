@@ -38,8 +38,11 @@ namespace OnlineMenu {
 
     // Rooms (docs/design/rooms.md, docs/rooms-game-interface.md). A room's CSS is the Wi-Fi CSS
     // in MODE_TEAMS (Slippi's mode 3, which the room's game ticket uses) with a room entry.
-    enum RoomEntry { ROOM_ENTRY_NONE = 0, ROOM_ENTRY_CREATE = 1, ROOM_ENTRY_JOIN = 2 };
+    // ROOM_ENTRY_TWOS (2026-11-02, docs/design/2v2.md): the 2V2 character select, the room CSS of
+    // the player's 2v2 party (MODE_TWOS): two panels, the partner's "Open / A: Enter Code".
+    enum RoomEntry { ROOM_ENTRY_NONE = 0, ROOM_ENTRY_CREATE = 1, ROOM_ENTRY_JOIN = 2, ROOM_ENTRY_TWOS = 3 };
     void enterRoom(int entry);           // WITH FRIENDS > Create Room / Join Room
+    void enterTwos();                    // WITH ANYONE > 2V2, the launcher's Play 2v2
     bool roomCss();                      // the online CSS is a room's
     bool stepsDecideStage();             // Ranked or a room's set: GameSetup's steps pick the stage
     // A room where anyone picks the stage, on its stage select (online_menu.cpp anyoneSss): picking,
@@ -103,6 +106,9 @@ namespace RoomCss {
     // teams' costumes gives the player their team's (OnlineMenu's tickRoom). Nothing without a
     // character on the panel (none, Random).
     void setMyCostume(int costume);
+    // A 2v2 party's CSS (docs/design/2v2.md): the closed slots are not shown, and the open one says
+    // "A: Enter Code" under "Open".
+    void setTwos(bool on);
     void headerButtons(bool isPublic, int teams);   // ITEM / STAGE as the room's two settings (teams:
                                                     // 0 FFA, 1 rainbow TEAMS, 2 TEAMS)
     void setLocalSlot(int slot, bool inRoom);   // the room slot the local player's panel is shown at
@@ -174,7 +180,7 @@ namespace BootMenu {
 }
 
 namespace AnyoneMenu {
-    // WITH ANYONE -> Unranked / Ranked on Brawl's Wi-Fi OPTIONS page (anyone_menu.cpp).
+    // WITH ANYONE -> Unranked / Ranked / 2V2 on Brawl's WITH ANYONE page (anyone_menu.cpp).
     void install(CoreApi* api);
     void tick();
     const char* line(MuMsg* msg, u32 window, u32 line, const void* msbin);
