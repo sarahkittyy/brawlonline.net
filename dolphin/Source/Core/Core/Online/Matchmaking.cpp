@@ -6,6 +6,7 @@
 
 #include "Core/Online/Matchmaking.h"
 
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
@@ -881,6 +882,27 @@ void Matchmaking::StartMatchmaking()
   request["appVersion"] = picojson::value(APP_VERSION);
   request["platform"] = picojson::value(APP_PLATFORM);
   request["ipAddressLan"] = picojson::value(lan_addr);
+  // mm takes one ticket per account every 2 s (engine `ticket_interval`, "Searching too often.
+  // Wait a moment."): a search started again at once (cancelled, then START) waits for its turn
+  // instead of failing. A 2v2 player was left ready with nothing searching that way (the user's,
+  // 2026-11-03: a cancel and a new search 70 ms apart).
+  {
+    static std::atomic<u64> s_last_ticket_ms{0};
+    constexpr u64 TICKET_INTERVAL_MS = 2100;
+    const u64 last = s_last_ticket_ms.load();
+    if (last && Common::Timer::NowMs() - last < TICKET_INTERVAL_MS)
+    {
+      INFO_LOG_FMT(NETPLAY, "[Matchmaking] the last ticket was {} ms ago: waiting for mm's interval",
+                   Common::Timer::NowMs() - last);
+      while (Common::Timer::NowMs() - last < TICKET_INTERVAL_MS)
+      {
+        if (m_is_mm_terminated)
+          return;
+        Common::SleepCurrentThread(20);
+      }
+    }
+    s_last_ticket_ms = Common::Timer::NowMs();
+  }
   SendMmMessage(picojson::value(std::move(request)));
   m_ticket_count++;
   m_ticket_sent_ms = Common::Timer::NowMs();

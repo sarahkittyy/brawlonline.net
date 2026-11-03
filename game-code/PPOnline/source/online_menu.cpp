@@ -2196,6 +2196,9 @@ namespace OnlineMenu {
             for (int i = 0; i < PPOM::ERROR_LEN; i++)
                 text[i] = m.errorText[i] == '\n' ? STATUS_BREAK : m.errorText[i];
             PPOM::u16ToUtf8(s.error, sizeof(s.error), text, PPOM::ERROR_LEN);
+            // A 2v2 party's search failed: the player is no longer ready (the panel showed READY
+            // with nothing searching; the user's, 2026-11-03), START searches again.
+            if (s.mode == PPOM::MODE_TWOS && twosParty()) unlock();
             break;
         }
         }
@@ -2915,6 +2918,10 @@ namespace OnlineMenu {
             // The 2v2 party: the group's end, the keypad's hint, then the server's lines
             // ("Press START to search", "Waiting on: bob", "Searching for players").
             char buf[sizeof(s.twosNotice) + 24];
+            if (s.phase == PH_ERROR && s.error[0]) {
+                setStatus(s.error, true);   // the failed search's reason; START searches again
+                return;
+            }
             // Searching (the waiting room's banner) or connecting: the search's own lines.
             if (s.phase == PH_SEARCHING || s.phase == PH_CONNECTING) {
                 char line[sizeof(s.twosNotice) + 64];
@@ -3195,6 +3202,8 @@ namespace OnlineMenu {
         SitOutButton::tick(false, false, false);
         const int me = roomMe();
         const int partner = twosPartner();
+        // After a failed search (its line in red), START searches again at once, as on the CSS.
+        if (s.phase == PH_ERROR && in && (pressed & BTN_START) && lockChar() >= 0) cleanup();
         if (s.phase != PH_IDLE) {
             // Searching (the screen fades out for the waiting room): Z or B cancels, as on the CSS.
             if ((s.phase == PH_SEARCHING || s.phase == PH_ERROR) && (pressed & (BTN_Z | BTN_B))) {
@@ -3204,7 +3213,7 @@ namespace OnlineMenu {
                 playSE(SE_BACK);
             }
         } else if (in) {
-            if (se.roomStatus == PPOM::RS_SEARCHING && roomLockedForNext()) {
+            if (se.roomStatus == PPOM::RS_SEARCHING && roomLockedForNext() && partner >= 0) {
                 startTwosSearch();   // every player of the party is ready: search together
             } else if ((pressed & BTN_START) && lockChar() >= 0 && !roomLockedForNext()) {
                 s.twosNoticeFrames = 0;
