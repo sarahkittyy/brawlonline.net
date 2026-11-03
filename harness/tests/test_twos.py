@@ -17,6 +17,7 @@ import pytest
 
 from ppharness import flows as F
 from ppharness.backend import OnlineBackend
+from ppharness.client import PadInput
 from ppharness.instance import DolphinInstance
 
 from test_online import _wait
@@ -251,3 +252,30 @@ def _type_code(g: Game, code: str) -> None:
     g.steps(*steps)
     g.shot("03-code-typed")
     g.steps("tap START 8", "wait 30")
+
+
+def test_twos_cancel_and_search_again_at_once(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
+                                              gpu_backend: str) -> None:
+    """Alone in a party: START searches, B cancels and START searches again a few frames later
+    (the user's, 2026-11-03: a cancel and a new search 70 ms apart left the player READY with
+    nothing searching, mm having refused the second ticket, "Searching too often. Wait a
+    moment."). Dolphin now waits for mm's ticket interval: the second search goes on."""
+    u = backend.create_user("twa", "TWAA")
+    g = _boot(dolphin, "twos-a", backend, u, gpu_backend, "search-again", "gameplay", artifacts=ART)
+    g.to_main_menu()
+    g.to_online_page()
+    _to_party_css(g)
+    g.steps("wait 30")
+    n = g.finds()
+    # (one script: the CSS leaves for the waiting room a few frames after the search starts)
+    g.c.pad_script(g.pad, [PadInput(buttons=["START"], hold=3), PadInput(hold=2),
+                           PadInput(buttons=["B"], hold=3), PadInput(hold=2),
+                           PadInput(buttons=["START"], hold=3), PadInput(hold=2)])
+    _wait(lambda: g.finds() >= n + 2, 10, "the search, then the second one")
+    time.sleep(5)
+    st = g.c.mm_status()
+    text = (g.inst.user_dir / "Logs" / "dolphin.log").read_text(errors="replace")
+    assert "Searching too often" not in text
+    assert "waiting for mm's interval" in text
+    assert st["state"] == "matchmaking", st
+    g.shot("01-searching-again")
