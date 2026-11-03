@@ -42,6 +42,8 @@ constexpr int MODE_RANKED = 0;
 constexpr int MODE_DIRECT = 2;
 // A room's game is a Teams (mode 3) match (docs/rooms-protocol.md §3).
 constexpr int MODE_TEAMS = 3;
+// The 2v2 queue (docs/design/2v2.md).
+constexpr int MODE_TWOS = 5;
 constexpr int MAX_PLAYERS = Gprb::Session::MAX_LOBBY_PLAYERS;
 // Best of three.
 constexpr int WINS_NEEDED = 2;
@@ -88,6 +90,9 @@ bool s_active = false;     // a ranked set is tracked
 // The games of this match are reported: a 1v1 of Ranked, Unranked or Direct, or a room's game.
 bool s_reporting = false;
 bool s_room = false;  // a room's game: 2-4 players, each on their slot
+// A 2v2 match (docs/design/2v2.md): four players on their server ports; every game reported with
+// each player's team, and a leaver's stocks (the 2v2 rating's leaver rule).
+bool s_twos = false;
 std::string s_match_id;
 // By in-game port: a 1v1's host is 0, the joiner 1; a room's players are on their slots. Empty:
 // nobody on that port.
@@ -444,17 +449,18 @@ void OnSessionStart(const Match& match)
   s_room = match.mode == MODE_TEAMS && match.room_host_port >= 1 &&
            match.room_host_port <= MAX_PLAYERS && match.players.size() >= 2 &&
            match.players.size() <= MAX_PLAYERS;
-  s_reporting = s_room || (match.players.size() == 2 && match.mode >= MODE_RANKED &&
-                           match.mode <= MODE_DIRECT);
+  s_twos = match.mode == MODE_TWOS && match.players.size() == 4 && !match.twos_splits.empty();
+  s_reporting = s_room || s_twos ||
+                (match.players.size() == 2 && match.mode >= MODE_RANKED && match.mode <= MODE_DIRECT);
   if (!s_reporting)
     return;
   s_match_id = match.match_id;
   s_uids = {};
   for (const auto& p : match.players)
   {
-    // In-game ports, as in the gameplay session: a room's slots, else the decider (host) is
-    // port 0.
-    const int port = s_room ? p.port - 1 : (p.is_local == match.is_host ? 0 : 1);
+    // In-game ports, as in the gameplay session: a room's slots and a 2v2 match's server ports,
+    // else the decider (host) is port 0.
+    const int port = s_room || s_twos ? p.port - 1 : (p.is_local == match.is_host ? 0 : 1);
     if (port < 0 || port >= MAX_PLAYERS)
       continue;
     s_uids[port] = p.uid;
@@ -522,7 +528,7 @@ void OnGameResult(const Gprb::Session::GameResult& r)
   // games in order and stops at a game nobody reported).
   const u32 game_index = s_active && GameSetup::IsActive() ? GameSetup::SetGameOf(r.game) : r.game;
   body["gameIndex"] = picojson::value(static_cast<double>(game_index));
-  const size_t ports = s_room ? MAX_PLAYERS : 2;
+  const size_t ports = s_room || s_twos ? MAX_PLAYERS : 2;
   body["winner"] = r.winner < ports && !s_uids[r.winner].empty() ? picojson::value(s_uids[r.winner]) :
                                                                    picojson::value();
   if (r.stage != Gprb::Session::NO_STAGE)
@@ -535,14 +541,21 @@ void OnGameResult(const Gprb::Session::GameResult& r)
       continue;
     picojson::object p;
     p["uid"] = picojson::value(s_uids[i]);
-    if (s_room)
+    if (s_room || s_twos)
     {
       // The history shows a room game's places (and teams), from what most players report.
       p["port"] = picojson::value(static_cast<double>(i + 1));
       if (!r.present[i])
       {
-        // Left during the game: not placed.
+        // Left during the game: not placed. 2v2: their team, and whether they were out of
+        // stocks then (the rating gives them their team's result; else a loss).
         p["left"] = picojson::value(true);
+        if (s_twos && r.team[i] != Gprb::Session::NO_TEAM)
+        {
+          p["team"] = picojson::value(static_cast<double>(r.team[i]));
+          if (!((r.left_with_stocks >> i) & 1))
+            p["eliminated"] = picojson::value(true);
+        }
         players.emplace_back(p);
         continue;
       }

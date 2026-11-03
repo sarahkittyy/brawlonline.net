@@ -1,0 +1,243 @@
+"""The 2v2 queue (docs/design/2v2.md): four games search WITH ANYONE > 2V2, the server matches
+them, and they play P+'s rainbow team battle under the gameplay session, teams shuffled every game,
+a 45 s ready-up between games.
+
+Instances are named ``twos-*`` (``ppharness clean --prefix twos-``). Screenshots go to
+``run/artifacts/game-code/twos/<test>/``. Needs what ``test_rooms_game.py`` needs.
+"""
+
+from __future__ import annotations
+
+import contextlib
+import threading
+import time
+from typing import Any, Callable
+
+import pytest
+
+from ppharness import flows as F
+from ppharness.backend import OnlineBackend
+from ppharness.instance import DolphinInstance
+
+from test_online import _wait
+from test_online_game import ROOT, Game, _boot, backend  # noqa: F401  (the backend fixture)
+from test_rooms_game import PANEL_X, ROOM_KEYS, hand_to, until_view
+from test_waiting_room import _banner_shown
+import online_set  # noqa: E402  (test_online_game put harness/tools on the path)
+import ppom  # noqa: E402
+from ppharness import brawl as B  # noqa: E402
+
+pytestmark = [pytest.mark.dolphin, pytest.mark.server, pytest.mark.gpu, pytest.mark.slow]
+
+ART = ROOT / "run" / "artifacts" / "game-code" / "twos"
+CSS = "scSelctCharacter"
+TEAMS_RAINBOW = 2
+READY_SECONDS = 45
+
+
+def _boot_four(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance], gpu_backend: str,
+               test: str, names: list[str]) -> tuple[list[Game], list[Any]]:
+    import secrets
+    users = [backend.create_user(n, f"TW{'ABCD'[k]}", email=f"twos{k}-{secrets.token_hex(4)}@example.test")
+             for k, n in enumerate(names)]
+    gs = [_boot(dolphin, f"twos-{x}", backend, u, gpu_backend, test, "gameplay", artifacts=ART)
+          for x, u in zip("abcd", users)]
+    online_set.both(*[g.to_main_menu for g in gs])
+    online_set.both(*[g.to_online_page for g in gs])
+    return gs, users
+
+
+def _to_party_css(g: Game) -> str:
+    """WITH ANYONE > 2V2: the player's own party (a 2-slot room of kind twos), a character picked.
+    Returns the party's code."""
+    g.to_css("twos")
+    v = until_view(g, lambda v: v["flags"] & ppom.RF_IN and v["flags"] & ppom.RF_TWOS, "the 2v2 party")
+    B.write_rules(g.c, stocks=1, minutes=2, items_off=True)
+    ppom.allow_test_rules(g.c)
+    return v["code"]
+
+
+def _search(g: Game) -> None:
+    n = g.finds()
+    g.press_until("START", lambda: g.finds() > n, "FIND_OPPONENT")
+
+
+def _teams(g: Game) -> dict[int, int]:
+    """SESSION's teams of the next (or running) game: port -> team."""
+    se = online_set.session(g.c)
+    return {i: p["team"] for i, p in enumerate(se["players"]) if p["present"]}
+
+
+def _split(teams: dict[int, int]) -> frozenset[frozenset[int]]:
+    by: dict[int, set[int]] = {}
+    for port, t in teams.items():
+        by.setdefault(t, set()).add(port)
+    return frozenset(frozenset(s) for s in by.values())
+
+
+def _play(gs: list[Game], game: int) -> dict[str, Any]:
+    """The game running on all four, the same setup on each, a rainbow team battle of two teams of
+    two; the team of the lower team number walks off, the other stands. Compares the confirmed
+    checksums. Returns the teams (in-game port -> team) and each game's port."""
+    online_set.wait(lambda: all(online_set.gstatus(g.c)["phase"] in ("running", "error", "ended") for g in gs),
+                    240, f"game {game} running on all")
+    st = [online_set.gstatus(g.c) for g in gs]
+    assert all(s["phase"] == "running" for s in st), [(s["phase"], s.get("error")) for s in st]
+    setups = [B.read_match_setup(g.c.read_mem) for g in gs]
+    assert all(x == setups[0] for x in setups), setups
+    se = online_set.session(gs[0].c)
+    assert se["teams"] == TEAMS_RAINBOW, se["teams"]
+    teams = _teams(gs[0])
+    assert all(_teams(g) == teams for g in gs), [_teams(g) for g in gs]
+    split = _split(teams)
+    assert len(split) == 2 and all(len(t) == 2 for t in split), teams
+    losers = {p for p, t in teams.items() if t == min(teams.values())}
+    time.sleep(6)
+    for g in gs:
+        g.shot(f"g{game}-match")
+    ports = [online_set.local(g.c)["local_port"] for g in gs]
+
+    def off(g: Game, port: int) -> None:
+        with contextlib.suppress(Exception):
+            F.fight([F.Seat(g.c, port, 0, g.name)], 60 * 60, mode="selfdestruct", seed=f"tw{game}{port}",
+                    stop=lambda: online_set.gstatus(g.c)["phase"] != "running")
+    th = [threading.Thread(target=off, args=(g, p)) for g, p in zip(gs, ports) if p in losers]
+    for t in th:
+        t.start()
+    for t in th:
+        t.join(300)
+    online_set.wait(lambda: all(online_set.gstatus(g.c)["phase"] != "running" for g in gs), 240, f"game {game} to end")
+    st = [online_set.gstatus(g.c) for g in gs]
+    limit = min(s["current_frame"] for s in st) - online_set.CONFIRM_MARGIN
+    cks = [{r[0]: r[1] for r in g.c.call("gprb_checksums", since=0)["rows"] if r[0] <= limit} for g in gs]
+    common = sorted(set(cks[0]).intersection(*cks[1:]))
+    bad = [f for f in common if len({ck[f] for ck in cks}) != 1]
+    print(f"game {game}: teams {teams}, frames {[s['current_frame'] for s in st]}, end {[s['end_reason'] for s in st]}, "
+          f"rollbacks {[s['rollbacks'] for s in st]}, checksums compared {len(common)}, mismatches {len(bad)}")
+    assert common and not bad, (len(common), bad[:5])
+    return {"teams": teams, "ports": ports}
+
+
+def _back_on_css(gs: list[Game], game: int) -> None:
+    """After game set: everyone on the plain online CSS, the session kept, the ready-up running."""
+    _wait(lambda: all(g.scene() == CSS for g in gs), 180, f"after game {game}: all on the CSS")
+    for g in gs:
+        lo = online_set.local(g.c)
+        assert lo["state"] == 2 and not lo["disconnected"], (g.name, lo)
+    secs = [g.c.read_mem(online_set.block(g.c).local + ppom.L_READY_SECONDS, 1)[0] for g in gs]
+    assert all(0 < s <= READY_SECONDS for s in secs), secs
+    for g in gs:
+        g.steps("wait 30")
+        g.shot(f"g{game}-back-on-css")
+
+
+def _ready(g: Game, game: int) -> None:
+    n = online_set.local(g.c)["lock"]["seq"]
+    g.press_until("START", lambda: online_set.local(g.c)["lock"]["seq"] > n, f"{g.name}: ready for game {game}")
+
+
+def test_twos_four_alone(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance], gpu_backend: str) -> None:
+    """Four players alone: each searches from its own party's CSS (the banner says 2V2), the
+    server matches them, game 1 is a rainbow team battle the same on all four; back on the CSS the
+    ready-up counts down, everyone readies and game 2 has other teams; after game 2 one player
+    does not ready: when the 45 s are up that player is back on its party's CSS, the other three
+    search again."""
+    gs, _users = _boot_four(backend, dolphin, gpu_backend, "four-alone", ["twa", "twb", "twc", "twd"])
+    for g in gs:
+        _to_party_css(g)
+        g.shot("01-party-css")
+    for g in gs[:3]:
+        _search(g)
+    _wait(lambda: _banner_shown(gs[0], "2V2 - Searching for players - Hold START to cancel"), 60, "the 2V2 banner")
+    gs[0].shot("02-waiting-room")
+    _search(gs[3])
+
+    r1 = _play(gs, 1)
+    _back_on_css(gs, 1)
+    for g in gs:
+        _ready(g, 2)
+    r2 = _play(gs, 2)
+    assert _split(r2["teams"]) != _split(r1["teams"]), ("game 2 kept game 1's teams", r1, r2)
+    _back_on_css(gs, 2)
+    # D does not ready: when the time is up D is back on its party's CSS, the others search.
+    finds = [g.finds() for g in gs[:3]]
+    for g in gs[:3]:
+        _ready(g, 3)
+    _wait(lambda: all(g.finds() > n for g, n in zip(gs[:3], finds)), READY_SECONDS + 30, "A-C searching again")
+    d = gs[3]
+    until_view(d, lambda v: v["flags"] & ppom.RF_IN and v["flags"] & ppom.RF_TWOS, "D back in its own party", timeout=60)
+    assert d.scene() == CSS
+    d.steps("wait 30")
+    d.shot("g3-removed")
+    for g in gs[:3]:
+        g.shot("g3-searching-again")
+
+
+def test_twos_pair_and_two_alone(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
+                                 gpu_backend: str) -> None:
+    """A and B queue as a pair: B presses A on A's party's open panel ("A: Enter Code") and types
+    A's code; both ready, the pair searches together, C and D alone. The pair is one team in game
+    1 and game 2."""
+    gs, _users = _boot_four(backend, dolphin, gpu_backend, "pair", ["twa", "twb", "twc", "twd"])
+    a, b, c, d = gs
+    code = _to_party_css(a)
+    _to_party_css(b)
+    b.shot("01-own-party")
+    hand_to(b, PANEL_X[1], -10.0)
+    b.steps("tap A 8", "wait 40")
+    _wait(lambda: b.debug_scratch()[4] == 1 and b.debug_scratch()[5] == 8, 5, "the keypad on the open panel")
+    _type_code(b, code)
+    vb = until_view(b, lambda v: v["flags"] & ppom.RF_TWOS and v["code"] == code, "B in A's party")
+    assert vb["local_port"] == 1, vb
+    until_view(a, lambda v: all(v["slots"][k]["bits"] & ppom.SLOT_TAKEN for k in (0, 1)), "A sees B")
+    for g in (a, b):
+        g.steps("wait 60")
+        g.shot("02-pair")
+    _to_party_css(c)
+    _to_party_css(d)
+    for g in (a, b):
+        g.press_until("START", lambda g=g: online_set.local(g.c)["lock"]["ready"], f"{g.name} ready")
+    _wait(lambda: a.finds() and b.finds(), 30, "the pair searching")
+    _search(c)
+    _search(d)
+    r1 = _play(gs, 1)
+    pa, pb = r1["ports"][0], r1["ports"][1]
+    assert r1["teams"][pa] == r1["teams"][pb], ("the pair split up", r1)
+    _back_on_css(gs, 1)
+    for g in gs:
+        _ready(g, 2)
+    r2 = _play(gs, 2)
+    assert r2["teams"][pa] == r2["teams"][pb], ("the pair split up", r2)
+
+
+def _type_code(g: Game, code: str) -> None:
+    """The keypad (room-code mode, open): the code from its letter keys; START joins
+    (test_rooms_game.type_room_code without the START that opens it)."""
+    steps: list[str] = []
+    move = lambda d: steps.extend([f"tap {d} 8", "wait 6"])  # noqa: E731
+    for _ in range(6):
+        move("DUP")
+    move("DDOWN")
+    move("DLEFT")
+    move("DLEFT")
+    pos, last = (1, 0), None
+    for ch in code:
+        key = next(k for k, v in ROOM_KEYS.items() if ch in v)
+        if key == last:
+            move("DRIGHT" if pos[1] < 2 else "DLEFT")
+            move("DLEFT" if pos[1] < 2 else "DRIGHT")
+        r, c = pos
+        while r < key[0]:
+            move("DDOWN"); r += 1
+        while r > key[0]:
+            move("DUP"); r -= 1
+        while c < key[1]:
+            move("DRIGHT"); c += 1
+        while c > key[1]:
+            move("DLEFT"); c -= 1
+        pos = (r, c)
+        steps.extend(["tap A 8", "wait 10"] * (ROOM_KEYS[key].index(ch) + 1))
+        last = key
+    g.steps(*steps)
+    g.shot("03-code-typed")
+    g.steps("tap START 8", "wait 30")

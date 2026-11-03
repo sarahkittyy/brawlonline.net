@@ -14,6 +14,7 @@ export const useSocialActions = () => {
   const invite = useCallback(
     async (player: SocialPlayer) => {
       const { pendingRoom, state, queueInvite } = useSocial.getState();
+      const twos = state.room?.twos === true;
       if (waitsForRoom(pendingRoom, state.room)) {
         queueInvite(player);
         showInfo(Messages.inviteWaitsForRoom(player.displayName));
@@ -22,9 +23,11 @@ export const useSocialActions = () => {
       const result = await window.electron.social.invite(player.uid);
       if (result.ok) {
         showInfo(
-          result.kind === "room"
-            ? Messages.invitedRoom(player.displayName)
-            : Messages.invitedDirect(player.displayName),
+          result.kind !== "room"
+            ? Messages.invitedDirect(player.displayName)
+            : twos
+            ? Messages.invitedTwos(player.displayName)
+            : Messages.invitedRoom(player.displayName),
         );
       } else {
         showError(result.message);

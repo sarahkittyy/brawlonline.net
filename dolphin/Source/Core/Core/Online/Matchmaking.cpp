@@ -389,6 +389,8 @@ const char* Matchmaking::ModeName(Mode mode)
     return "teams";
   case Mode::Party:
     return "party";
+  case Mode::Twos:
+    return "twos";
   }
   return "?";
 }
@@ -433,7 +435,8 @@ const char* Matchmaking::ErrorSourceName(ErrorSource source)
 
 bool Matchmaking::IsFixedRulesMode(Mode mode)
 {
-  return mode == Mode::Unranked || mode == Mode::Ranked || mode == Mode::Party;
+  return mode == Mode::Unranked || mode == Mode::Ranked || mode == Mode::Party ||
+         mode == Mode::Twos;
 }
 
 std::vector<u8> Matchmaking::EncodeConnectCode(const std::string& code)
@@ -856,6 +859,21 @@ void Matchmaking::StartMatchmaking()
   picojson::object search;
   search["mode"] = picojson::value(static_cast<double>(m_search_settings.mode));
   search["connectCode"] = picojson::value(std::move(connect_code_buf));
+  if (m_search_settings.mode == Mode::Twos)
+  {
+    // docs/design/2v2.md: a search started again by itself goes first; players the last match
+    // could not connect to are kept out of the next groups.
+    if (m_search_settings.requeue)
+      search["requeue"] = picojson::value(true);
+    if (!m_search_settings.avoid.empty())
+    {
+      picojson::array avoid;
+      for (const auto& uid : m_search_settings.avoid)
+        avoid.emplace_back(uid);
+      search["avoid"] = picojson::value(std::move(avoid));
+      search["after"] = picojson::value(m_search_settings.after);
+    }
+  }
   picojson::object request;
   request["type"] = picojson::value(CREATE_TICKET);
   request["user"] = picojson::value(std::move(user));
@@ -1114,6 +1132,45 @@ void Matchmaking::HandleMatchmaking()
       const auto kind = GetInt(probe, "s", 0, 0xFFFF);
       if (kind && Gprb::PeerData::ValidStageKind(static_cast<u32>(*kind)) && match.starters.size() < 16)
         match.starters.push_back(static_cast<u16>(*kind));
+    }
+  }
+  // 2v2 (docs/design/2v2.md): the team splits, each a team (0 or 1) per in-game port with two
+  // players on each; anything else in the list is dropped, and a 2v2 match without one usable
+  // split is refused.
+  if (m_search_settings.mode == Mode::Twos)
+  {
+    const auto splits_it = get_resp.find("splits");
+    if (splits_it != get_resp.end() && splits_it->second.is<picojson::array>())
+    {
+      for (const auto& sv : splits_it->second.get<picojson::array>())
+      {
+        if (!sv.is<picojson::array>() || sv.get<picojson::array>().size() != 4 ||
+            match.twos_splits.size() >= 3)
+        {
+          continue;
+        }
+        std::array<u8, 4> split{};
+        int ones = 0;
+        bool ok = true;
+        picojson::object probe;
+        for (size_t i = 0; i < 4; ++i)
+        {
+          probe["t"] = sv.get<picojson::array>()[i];
+          const auto t = GetInt(probe, "t", 0, 1);
+          ok = ok && t.has_value();
+          split[i] = static_cast<u8>(t.value_or(0));
+          ones += split[i];
+        }
+        if (ok && ones == 2)
+          match.twos_splits.push_back(split);
+      }
+    }
+    if (match.twos_splits.empty() || match.players.size() != 4)
+    {
+      ERROR_LOG_FMT(NETPLAY, "[Matchmaking] A 2v2 match without four players or a team split");
+      m_state = State::ErrorEncountered;
+      SetError(ErrorSource::Client, "Invalid response when getting mm status");
+      return;
     }
   }
   match.pick_from_stages = GetBool(get_resp, "pickFromStages");
@@ -1461,6 +1518,21 @@ void Matchmaking::HandleConnecting()
       }
 
       ERROR_LOG_FMT(NETPLAY, "[Matchmaking] Connection attempt failed, looking for someone else.");
+      if (m_search_settings.mode == Mode::Twos)
+      {
+        // 2v2: the players it could not reach are kept out of the next groups (and the others of
+        // this match are told it is off, so their games search again too); the new search goes
+        // first in the queue.
+        m_search_settings.requeue = true;
+        m_search_settings.avoid.clear();
+        for (const int i : failed_connections)
+        {
+          const size_t p = RemotePlayer(match, static_cast<size_t>(i));
+          if (p < match.players.size() && !match.players[p].uid.empty())
+            m_search_settings.avoid.push_back(match.players[p].uid);
+        }
+        m_search_settings.after = match.match_id;
+      }
       // Return to the start to get a new ticket to find someone else we can hopefully connect with
       m_state = State::Initializing;
       return;

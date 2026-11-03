@@ -405,11 +405,15 @@ std::optional<View> ParseView(const picojson::object& o, std::string* why)
     v.status = Status::Starting;
   else if (*status == "in-game")
     v.status = Status::InGame;
+  else if (*status == "searching")
+    v.status = Status::Searching;
   else
   {
     *why = "unknown status";
     return std::nullopt;
   }
+  // A 2v2 party (2026-11-02); any other kind (a newer mm's) is taken as a room.
+  v.twos = Str(o, "kind", 16).value_or("") == "twos";
   v.you = static_cast<int>(*you);
   v.host = static_cast<int>(*host);
   v.status_text = *text;
@@ -618,6 +622,14 @@ Message Parse(const std::string& packet)
       return invalid(m.why);
     m.kind = Message::Kind::RoomState;
   }
+  else if (m.type == "twos-off")
+  {
+    const auto match_id = Str(o, "matchId", 128);
+    if (!match_id || match_id->empty())
+      return invalid("twos-off without a matchId");
+    m.kind = Message::Kind::TwosOff;
+    m.match_id = CleanText(*match_id, 128);
+  }
   else if (m.type == "room-error")
   {
     const auto op = Str(o, "op", 32);
@@ -755,6 +767,12 @@ std::optional<std::string> RequestJson(const Request& r)
   {
   case Op::Create:
     o["type"] = picojson::value("room-create");
+    if (r.twos)
+    {
+      // A 2v2 party: private, no ruleset (docs/design/2v2.md).
+      o["kind"] = picojson::value("twos");
+      break;
+    }
     o["public"] = picojson::value(r.flag);
     if (!r.ruleset.empty())
     {
@@ -1066,6 +1084,8 @@ const char* StatusName(Status s)
     return "starting";
   case Status::InGame:
     return "in-game";
+  case Status::Searching:
+    return "searching";
   }
   return "?";
 }

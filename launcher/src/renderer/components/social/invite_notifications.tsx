@@ -45,10 +45,18 @@ const InviteCard = ({ invite }: { invite: Invite }) => {
 
   return (
     <div className={styles.invite} role="alertdialog" data-testid={`invite-${invite.from.uid}`}>
-      <div>{invite.kind === "room" ? Messages.invitedYouRoom(name) : Messages.invitedYouDirect(name)}</div>
+      <div>
+        {invite.kind !== "room"
+          ? Messages.invitedYouDirect(name)
+          : invite.room?.twos
+          ? Messages.invitedYouTwos(name)
+          : Messages.invitedYouRoom(name)}
+      </div>
       <div className={styles.inviteDetail}>
         {invite.room
-          ? `${modeLabel[invite.room.mode]} · ${invite.room.players}/${invite.room.openSlots}`
+          ? `${invite.room.twos ? "2v2" : modeLabel[invite.room.mode]} · ${invite.room.players}/${
+              invite.room.openSlots
+            }`
           : invite.from.connectCode}
         {" · "}
         {Messages.join()}

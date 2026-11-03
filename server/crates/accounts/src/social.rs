@@ -102,6 +102,9 @@ pub struct OwnRoom {
     pub mode: common::rooms::RoomMode,
     pub status: common::rooms::RoomStatus,
     pub joinable: bool,
+    /// A 2v2 party (docs/design/2v2.md): the launcher's envelope says "Invite to your 2v2".
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub twos: bool,
 }
 
 impl From<&RoomMember> for OwnRoom {
@@ -113,6 +116,7 @@ impl From<&RoomMember> for OwnRoom {
             mode: m.mode,
             status: m.status,
             joinable: m.joinable,
+            twos: m.twos,
         }
     }
 }

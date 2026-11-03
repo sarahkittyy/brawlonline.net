@@ -182,6 +182,10 @@ A watcher starts with the game being played, its chunks so far first (at most 64
 | A member left during the start | `A player left the room.` |
 | Version, login, ban, no code | the ticket texts (`server/README.md`) |
 
+### 2v2 parties (2026-11-02, `docs/design/2v2.md`)
+
+A 2v2 party is a room of kind `twos`: `{"type": "room-create", "kind": "twos"}` makes one (private, two slots, no ruleset; its own limit, 20 a minute and 300 an hour per account), and `room-join` with its code joins it (`This party is full.`, `In a game. Try again after.`, a room code: `That's not a 2v2 party code.`; a party joining a party moves the joiner, and two players entering each other's codes at once end up together: the second join is a no-op). Its `room` state has `"kind": "twos"`; `status` `"searching"` while its players search the 2v2 queue together (`create-ticket` mode 5 with `code` = the party's code, sent by every player of it; the match takes both or neither). Only `room-ready` / `room-back` / `room-leave` apply (others: `Not in a 2v2 party.`). When a 2v2 group ends before its first game (a player could not connect), mm pushes `{"type": "twos-off", "matchId": ...}` and the others search again (`requeue`, `avoid`, `after`). The social channel's own room (`room` in `GET /v1/social`) has `"twos": true` for a party: the launcher's envelope says "Invite to your 2v2". 2v2 games are not in `/v1/me/matches` yet. `GET /v1/rooms` `queues` and `playing` have `twos`.
+
 ## 3. Starting a game
 
 The room starts by itself once **two or more members play (not sitting out), every one of them is ready, nobody is still in the last game** and, with Teams on and three or more players, not everyone among them is on one colour. Empty open slots are not waited for (until 2026-10-18 they were). Then:
@@ -286,7 +290,7 @@ What the launcher shows (suggested): `accepted`: "Creating a room in your game."
 {"version": 1, "id": "5b0f3f0e-…", "kind": "queue", "queue": "ranked", "createdAt": "2026-10-12T15:00:00.000Z"}
 ```
 
-`queue` is `"unranked"` or `"ranked"` (anything else, or absent: the file is ignored). The game goes to that mode's character select, as ONLINE > WITH ANYONE > Unranked / Ranked does; it does not search (the player picks a character and presses START). The rules are the Direct invite's: 3 minutes from `createdAt`, `refused` while busy or on other screens, `accepted` at once and held while the game boots until it shows its menus; Dolphin leaves any room first. The game side: `docs/rooms-game-interface.md` (LOCAL `directJoin`, `directNumber` 1 / 2). The launcher says "Your game is going to Ranked."; no answer in 5 s: "Your game didn't respond. In game: Online > With Anyone > Ranked."
+`queue` is `"unranked"`, `"ranked"` or `"twos"` (Play 2v2, 2026-11-02: the 2V2 CSS, the player's own 2v2 party, `docs/design/2v2.md`; LOCAL `directNumber` 4) (anything else, or absent: the file is ignored). The game goes to that mode's character select, as ONLINE > WITH ANYONE > Unranked / Ranked / 2V2 does; it does not search (the player picks a character and presses START). The rules are the Direct invite's: 3 minutes from `createdAt`, `refused` while busy or on other screens, `accepted` at once and held while the game boots until it shows its menus; Dolphin leaves any room first. The game side: `docs/rooms-game-interface.md` (LOCAL `directJoin`, `directNumber` 1 / 2). The launcher says "Your game is going to Ranked."; no answer in 5 s: "Your game didn't respond. In game: Online > With Anyone > Ranked."
 
 **`game-status.json`**, game → launcher, written atomically by Dolphin on every change and at least every 5 s:
 

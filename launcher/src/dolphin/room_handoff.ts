@@ -20,8 +20,9 @@
  * Create Room does, from Home's "Create room" button or a `brawlonline://room/create` link;
  * `ruleset` is the code in Home's ruleset box, absent for P+ default; docs/rulesets-protocol.md §4;
  * `public: false` makes the room private (the website's CREATE PRIVATE ROOM), absent public).
- * `QUEUE_UNRANKED` / `QUEUE_RANKED` make a queue request (`{version, id, kind: "queue", queue,
- * createdAt}`, Home's Play unranked / Play ranked): the game goes to that mode's character select.
+ * `QUEUE_UNRANKED` / `QUEUE_RANKED` / `QUEUE_TWOS` make a queue request (`{version, id, kind: "queue",
+ * queue, createdAt}`, Home's Play unranked / Play ranked / Play 2v2): the game goes to that mode's
+ * character select (2v2's: the player's party, docs/design/2v2.md).
  *
  * Dolphin builds without this (everything before the rooms phase) write no status. Then the
  * launcher still writes the request, and when nothing answers it within a few seconds it takes
@@ -38,10 +39,11 @@ import {
   isQueueTarget,
   isRoomCode,
   QUEUE_RANKED,
+  QUEUE_TWOS,
   QUEUE_UNRANKED,
 } from "./hand_off_target";
 
-export { CREATE_ROOM, isRoomCode, QUEUE_RANKED, QUEUE_UNRANKED };
+export { CREATE_ROOM, isRoomCode, QUEUE_RANKED, QUEUE_TWOS, QUEUE_UNRANKED };
 
 export const ROOM_REQUEST_FILE = "join-room.json";
 export const GAME_STATUS_FILE = "game-status.json";

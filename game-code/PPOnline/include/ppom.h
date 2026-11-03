@@ -83,8 +83,9 @@ namespace PPOM {
     };
     enum SpecialAssetsState { SA_NONE = 0, SA_LOADING = 1, SA_READY = 2, SA_UNAVAILABLE = 3 };
 
-    // Online modes, Slippi order (Online.s: Ranked, Unranked, Direct, Teams).
-    enum Mode { MODE_RANKED = 0, MODE_UNRANKED = 1, MODE_DIRECT = 2, MODE_TEAMS = 3 };
+    // Online modes, Slippi order (Online.s: Ranked, Unranked, Direct, Teams), then ours: the 2v2
+    // queue (docs/design/2v2.md; 4 is Slippi's Party, never used).
+    enum Mode { MODE_RANKED = 0, MODE_UNRANKED = 1, MODE_DIRECT = 2, MODE_TEAMS = 3, MODE_TWOS = 5 };
 
     // mmState values = Slippi's ProcessState (SlippiMatchmaking.h).
     enum MmState {
@@ -99,7 +100,9 @@ namespace PPOM {
     const int CODE_LEN = 9;   // "ABCD#123" + NUL, UTF-16
     // LOCAL.directNumber with a zero prefix: the launcher's Play unranked / Play ranked, and v8's
     // replay playback.
-    enum DirectQueue { QUEUE_UNRANKED = 1, QUEUE_RANKED = 2, QUEUE_PLAYBACK = 3 };
+    // QUEUE_TWOS (still v11): the launcher's Play 2v2, the 2V2 character select (a plugin without
+    // it reads it as a plain Direct CSS).
+    enum DirectQueue { QUEUE_UNRANKED = 1, QUEUE_RANKED = 2, QUEUE_PLAYBACK = 3, QUEUE_TWOS = 4 };
     const int NAME_LEN = 16;
     const int ERROR_LEN = 120;
     const int TAG_CHARS = 5;  // a name tag's characters (the save's tag records, PortValues)
@@ -118,7 +121,10 @@ namespace PPOM {
         u8 mmState;       // MmState
         u8 role;          // 0 none, 1 host, 2 guest
         u8 sessionPhase;  // 0 none, 1 connecting, 2 transferring, 3 plugged
-        u8 percent;       // transfer progress
+        // Transfer progress; a 2v2 session that ended (mmState MM_IDLE, docs/design/2v2.md): 1 the
+        // game searches again by itself, 2 back to the party's CSS, with errorText the line to show
+        // ("bob left"), 0 otherwise.
+        u8 percent;
         u16 peerName[NAME_LEN];
         u16 peerCode[CODE_LEN];
         u16 _pad;
@@ -217,7 +223,7 @@ namespace PPOM {
 
     enum RoomOp {
         ROOM_POLL = 0,      // nothing; answers the status line
-        ROOM_CREATE = 1,    // arg: 1 public, 0 private
+        ROOM_CREATE = 1,    // arg: 1 public, 0 private; 2 the 2V2 CSS's own 2v2 party (2026-11-02)
         ROOM_JOIN = 2,      // code: the room code as typed
         ROOM_LEAVE = 3,
         ROOM_SLOT = 4,      // host: arg = in-game port 0-3, arg2 = 1 open / 0 close (an occupied one: kick)
@@ -284,8 +290,10 @@ namespace PPOM {
     // the room's own game, and comes back after it.
     // RF_TEAM_COLORS (2026-10-21): with RF_TEAMS, every player in their team's costume (P+'s plain
     // team battle); without it P+'s rainbow team battle (any costume, a team glow in the match).
-    enum RoomFlags { RF_IN = 1, RF_PUBLIC = 2, RF_TEAMS = 4, RF_WATCH = 8, RF_TEAM_COLORS = 0x10 };
-    enum RoomStatusKind { RS_WAITING = 0, RS_STARTING = 1, RS_IN_GAME = 2 };
+    // RF_TWOS (2026-11-02, docs/design/2v2.md): the room is the player's 2v2 party (two slots, no
+    // settings); RS_SEARCHING: everyone in it is ready and it searches the 2v2 queue.
+    enum RoomFlags { RF_IN = 1, RF_PUBLIC = 2, RF_TEAMS = 4, RF_WATCH = 8, RF_TEAM_COLORS = 0x10, RF_TWOS = 0x20 };
+    enum RoomStatusKind { RS_WAITING = 0, RS_STARTING = 1, RS_IN_GAME = 2, RS_SEARCHING = 3 };
     // Session.teams: 0 a free-for-all; a team battle: TEAMS_LEGACY recorded before 2026-10-21 (the
     // players' own costumes, no glow), TEAMS_RAINBOW P+'s rainbow team battle (the players' own
     // costumes, gmSelCharData+0x33 = 2: P+'s Teams.asm gives each fighter its team's glow),
@@ -472,7 +480,12 @@ namespace PPOM {
         // matches draw less (potato.cpp). Per machine, so in LOCAL: it changes only what this
         // machine draws, never the game state the machines compare.
         u8 potato;
-        u8 _potatoPad[3];
+        // Dolphin (still v11, this was padding): a 2v2 session between games (docs/design/2v2.md),
+        // the seconds left to ready up for the next game (0: none running) and the ports (bits) locked
+        // in for it, this player's included; 0 outside one.
+        u8 readySeconds;
+        u8 readyPorts;
+        u8 _potatoPad[1];
     };                    // 0xF4
 
     // ---- SESSION ----
@@ -608,7 +621,12 @@ namespace PPOM {
         // first pick played (Direct; a room says it with stageChoice CHOICE_ANYONE_PICKS). With
         // it, RoomStages' starters are the match's stages (START's random draws from them).
         u8 anyonePicks;   // +0x36
-        u8 _reserved[9];
+        // Game, every frame of a match (rolled back with it, cleared at its setup; still v11, this
+        // was reserved): ports (bits) taken out of the match while they still had stocks (a
+        // dropped player's or a quit's removal, tickPlayers). A 2v2 leaver who was out of stocks
+        // already gets their team's result (docs/design/2v2.md); Dolphin reads it at the game's end.
+        u8 leftWithStocks;   // +0x37
+        u8 _reserved[8];
     };                    // 0x40
 
     // v7, in a room (Dolphin, from room-state; all zero outside one or from an older mm): the

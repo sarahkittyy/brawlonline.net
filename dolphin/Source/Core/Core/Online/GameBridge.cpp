@@ -103,6 +103,10 @@ constexpr u32 L_OWN_CURSOR = 0xC8, L_CURSORS = 0xD0, CURSOR_SIZE = 8;
 constexpr u32 CUR_STATE = 0, CUR_PAGE = 1, CUR_TURNS = 2, CUR_X = 4, CUR_Y = 6;
 // v11: 1 = potato mode (Config::ONLINE_POTATO_MODE): the game draws less in matches (ppom.h Local.potato).
 constexpr u32 L_POTATO = 0xF0;
+// Still v11 (they were padding): a 2v2 session between games (docs/design/2v2.md), the seconds
+// left to ready up for the next game (0: none running) and the ports locked in for it (bits, this
+// player's included); 0 outside one (ppom.h Local.readySeconds / readyPorts).
+constexpr u32 L_READY_SECONDS = 0xF1, L_READY_PORTS = 0xF2;
 constexpr u32 LocalSize(u16 version)
 {
   return version >= 11 ? LOCAL_SIZE :
@@ -207,7 +211,11 @@ constexpr u8 SCREEN_ROOM_CSS = static_cast<u8>(Rooms::Screen::Room);
 // (Online/RoomWatch.h); the room CSS leaves for its match once it is SS_MATCH_READY.
 // RF_TEAM_COLORS (2026-10-21): with RF_TEAMS, P+'s plain team battle (the teams' costumes); without
 // it the rainbow team battle (any costume, a team glow).
-constexpr u8 RF_IN = 1, RF_PUBLIC = 2, RF_TEAMS = 4, RF_WATCH = 8, RF_TEAM_COLORS = 0x10;
+// RF_TWOS (2026-11-02): the room is the player's 2v2 party (room-state kind "twos",
+// docs/design/2v2.md): the 2V2 character select's two panels; ROOM_STATUS 3 while it searches.
+constexpr u8 RF_IN = 1, RF_PUBLIC = 2, RF_TEAMS = 4, RF_WATCH = 8, RF_TEAM_COLORS = 0x10, RF_TWOS = 0x20;
+// The 2v2 queue's mode (Matchmaking::Mode::Twos; ppom.h MODE_TWOS).
+constexpr u8 MODE_TWOS = 5;
 // S_TEAMS: 0 a free-for-all; a team battle: 1 as recorded before 2026-10-21 (the players' own
 // costumes, no glow), 2 P+'s rainbow team battle (the players' own costumes and the team glow),
 // 3 its plain one (every player in their team's costume).
@@ -327,6 +335,17 @@ picojson::object s_last_response;
 bool s_netplay_paused = false;
 // Session blocks (CPU thread).
 u8 s_search_mode = 0;
+// 2v2 (docs/design/2v2.md): the search the game starts after its group broke up (a GET_MATCH_STATE
+// answered with the group's end, `Search`) goes first in the queue, with the players this one
+// could not connect to; taken by that FIND_OPPONENT if it comes within TWOS_REQUEUE_WINDOW.
+struct TwosRequeue
+{
+  std::chrono::steady_clock::time_point at;
+  std::vector<std::string> avoid;
+  std::string after;
+};
+std::optional<TwosRequeue> s_twos_requeue;
+constexpr auto TWOS_REQUEUE_WINDOW = std::chrono::seconds(30);
 std::vector<u8> s_session_written;
 std::vector<u8> s_local_written;
 u32 s_session_seq = 0;
@@ -672,8 +691,20 @@ Response FindOpponent(const Core::CPUThreadGuard& guard, u32 payload, std::strin
 
   Client::SearchOptions options;
   options.settings.mode = static_cast<Matchmaking::Mode>(mode);
-  if (mode == u8(Matchmaking::Mode::Direct) || mode == u8(Matchmaking::Mode::Teams))
+  // 2v2 (docs/design/2v2.md): the code is the player's party's (a room code), or none.
+  if (mode == u8(Matchmaking::Mode::Direct) || mode == u8(Matchmaking::Mode::Teams) ||
+      mode == u8(Matchmaking::Mode::Twos))
     options.settings.connect_code = code;
+  if (mode == u8(Matchmaking::Mode::Twos) && s_twos_requeue &&
+      std::chrono::steady_clock::now() - s_twos_requeue->at < TWOS_REQUEUE_WINDOW)
+  {
+    // The search after its group broke up goes first; the players it could not reach are kept
+    // out of the next groups.
+    options.settings.requeue = true;
+    options.settings.avoid = s_twos_requeue->avoid;
+    options.settings.after = s_twos_requeue->after;
+  }
+  s_twos_requeue.reset();
   options.hand_off = s_hand_off.load();
   options.cancel_on_stop = true;
   options.selections["character"] = picojson::value(static_cast<double>(locked_char));
@@ -691,7 +722,7 @@ Response FindOpponent(const Core::CPUThreadGuard& guard, u32 payload, std::strin
   }
 
   std::optional<std::string> error;
-  if (mode > u8(Matchmaking::Mode::Teams))
+  if (mode > u8(Matchmaking::Mode::Teams) && mode != u8(Matchmaking::Mode::Twos))
   {
     error = "Unknown online mode";
   }
@@ -868,8 +899,10 @@ Response RoomResponse(const Core::CPUThreadGuard& guard, u32 payload, u16 versio
     break;
   case 1:
     r.op = Rooms::Op::Create;
-    r.flag = arg != 0;
-    r.remembered = true;  // the game's own Create Room: the account's remembered ruleset (#11)
+    // arg 2 (2026-11-02): the 2V2 character select's own 2v2 party (docs/design/2v2.md).
+    r.twos = arg == 2;
+    r.flag = arg == 1;
+    r.remembered = !r.twos;  // the game's own Create Room: the account's remembered ruleset (#11)
     break;
   case 2:
     r.op = Rooms::Op::Join;
@@ -1141,6 +1174,48 @@ void Service(const Core::CPUThreadGuard& guard, u32 mailbox, u16 version)
     case CMD_GET_MATCH_STATE:
     {
       Client::MatchState ms = Client::GetMatchState();
+      // A 2v2 session that ended (docs/design/2v2.md): the connection closes and the game reads
+      // IDLE with the group's end in the error text (the line to show) and in `percent` (1: it
+      // searches again by itself, 2: back to the party's CSS).
+      if (s_search_mode == MODE_TWOS && ms.handoff == "started")
+      {
+        std::optional<Gprb::Session::TwosEnd> end = Gprb::Session::TakeTwosEnd();
+        const auto d = ms.session.detail.find("disconnected");
+        if (!end && d != ms.session.detail.end() && d->second.is<bool>() && d->second.get<bool>())
+          end = Gprb::Session::TwosEnd{Gprb::Session::TwosEndKind::Search, "The other players left", 0};
+        if (end)
+        {
+          NOTICE_LOG_FMT(NETPLAY, "GameBridge: the 2v2 group ended: {} ({})", end->text,
+                         end->kind == Gprb::Session::TwosEndKind::Search ? "searching again" :
+                                                                           "back to the party");
+          if (end->kind == Gprb::Session::TwosEndKind::Search)
+          {
+            TwosRequeue rq;
+            rq.at = std::chrono::steady_clock::now();
+            if (ms.match)
+            {
+              rq.after = ms.match->match_id;
+              for (const auto& p : ms.match->players)
+              {
+                if (p.port >= 1 && p.port <= SESSION_PLAYERS && ((end->avoid_ports >> (p.port - 1)) & 1) &&
+                    !p.is_local)
+                {
+                  rq.avoid.push_back(p.uid);
+                }
+              }
+            }
+            s_twos_requeue = std::move(rq);
+          }
+          Client::Cleanup();
+          Response r = MatchStateResponse(Client::GetMatchState(), false);
+          r.payload[0] = static_cast<u8>(Matchmaking::State::Idle);
+          r.payload[3] = static_cast<u8>(end->kind);
+          WriteU16Text(r.payload, MS_ERROR, end->text, ERROR_LEN);
+          r.summary += fmt::format(" 2v2 end={} '{}'", static_cast<int>(end->kind), end->text);
+          response = r;
+          break;
+        }
+      }
       // A ranked set ends after the game that decides it, once the game is back on the character
       // select: the connection closes and the CSS reads as idle (Slippi's ranked set end). The
       // rating change is fetched meanwhile (GET_RANK).
@@ -1339,7 +1414,7 @@ void WriteBlock(const Core::CPUThreadGuard& guard, u32 addr, std::vector<u8> byt
 void PutRoom(std::vector<u8>& session, const Rooms::Snapshot& room, const Gprb::Session::Lobby& lobby)
 {
   const Rooms::View& v = *room.view;
-  session[S_MODE] = MODE_TEAMS;
+  session[S_MODE] = v.twos ? MODE_TWOS : MODE_TEAMS;
   const u32 game = lobby.active && room.game_active ? room.game + (lobby.game - 1) : room.game;
   session[S_GAME] = static_cast<u8>(game);
   // A set's session between its games: its players are back on the CSS (the room says in game
@@ -1404,7 +1479,7 @@ void PutRoom(std::vector<u8>& session, const Rooms::Snapshot& room, const Gprb::
     session[p + SP_ROOM_SLOT] = bits;
   }
   session[S_ROOM_FLAGS] = RF_IN | (v.is_public ? RF_PUBLIC : 0) | (v.teams ? RF_TEAMS : 0) |
-                          (v.teams && v.team_colors ? RF_TEAM_COLORS : 0);
+                          (v.teams && v.team_colors ? RF_TEAM_COLORS : 0) | (v.twos ? RF_TWOS : 0);
   for (size_t k = 0; k < 4; ++k)
     session[S_ROOM_CODE + k] = k < v.code.size() ? static_cast<u8>(v.code[k]) : 0;
   session[S_ROOM_HOST] = static_cast<u8>(v.host - 1);
@@ -1990,6 +2065,11 @@ void SyncSession(const Core::CPUThreadGuard& guard, const Located& loc)
   for (u32 i = L_LOCK; i < local.size(); ++i)
     local[i] = R8(guard, loc.local + i);
   PutPotato(local, true);
+  if (local.size() >= L_READY_PORTS + 1)
+  {
+    local[L_READY_SECONDS] = lobby.twos ? lobby.ready_seconds : 0;
+    local[L_READY_PORTS] = lobby.twos ? lobby.ready_ports : 0;
+  }
   local[L_DESYNCED] = lobby.desynced ? 1 : 0;
   local[L_QUIT_LEFT] = lobby.quit_left ? 1 : 0;
   // v10: the stage select's cursors: this player's in, the others' out.
@@ -2091,9 +2171,12 @@ void SyncSession(const Core::CPUThreadGuard& guard, const Located& loc)
     for (int i = 0; i < SESSION_PLAYERS; ++i)
       session[S_PLAYERS + i * SP_SIZE + SP_TEAM] = GameSetup::NO_TEAM;
   }
-  if (v5 && in_room)
+  // A 2v2 party while its 2v2 session runs (docs/design/2v2.md): SESSION is the session's (its four
+  // players on their ports), not the party's two panels.
+  const bool party_session = in_room && room.view->twos && lobby.active;
+  if (v5 && in_room && !party_session)
     PutRoom(session, room, lobby);
-  if (loc.version >= 6 && in_room)
+  if (loc.version >= 6 && in_room && !party_session)
   {
     // What the room plays and its set (RoomPlay), for the room CSS.
     const Rooms::View& v = *room.view;
@@ -2131,7 +2214,7 @@ void SyncSession(const Core::CPUThreadGuard& guard, const Located& loc)
     }
   }
   // v7: the room's stages (RoomStages), for the loser's stage select and the stage switch.
-  if (loc.version >= 7 && in_room)
+  if (loc.version >= 7 && in_room && !party_session)
   {
     const Rooms::View& v = *room.view;
     const auto put = [&](u32 off, const std::vector<u16>& ids) {
@@ -2168,7 +2251,7 @@ void SyncSession(const Core::CPUThreadGuard& guard, const Located& loc)
   {
     const auto special = SpecialBytes(rules);
     std::copy(special.begin(), special.end(), session.begin() + S_SPECIAL + SPX_ROWS);
-    if (in_room)
+    if (in_room && !party_session)
       PutRoomSpecial(session, room, lobby);
   }
   // The next game plays a desynced one again from the state every machine agreed on.

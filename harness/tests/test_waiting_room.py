@@ -244,10 +244,10 @@ def test_waiting_room_again_after_unranked(backend: OnlineBackend, dolphin: Call
         assert _room(g) & 0xF0F == 0x100 | ROOM_ENDED, hex(_room(g))   # ended into the match
         assert ST_MANSION not in _modules(g), (g.inst.name, "the room's stage module stayed loaded", _modules(g))
 
-    # As the player in the report: B out of the CSS (the session ends; back on the ONLINE page,
-    # WITH ANYONE highlighted), Unranked again, search.
+    # As the player in the report: B out of the CSS (the session ends; back on WITH ANYONE's page,
+    # UNRANKED highlighted), Unranked again, search.
     a.steps("hold B 90", "until muMenuMain 600", "wait 90")
-    a.steps("tap A", "wait 90", "tap A", "wait 400", "until scSelctCharacter 600", "wait 30")
+    a.steps("tap A", "wait 400", "until scSelctCharacter 600", "wait 30")
     a.steps("stick up 30", "wait 5", "tap A 8", "wait 30")
     a.shot("02-css-again")
     _search(a, 1)

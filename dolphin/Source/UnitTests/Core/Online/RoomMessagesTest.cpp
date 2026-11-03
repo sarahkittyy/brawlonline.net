@@ -718,3 +718,36 @@ TEST(RoomMessages, RulesetList)
   r.op = Op::RulesetList;
   EXPECT_EQ(RequestJson(r), R"({"type":"room-rulesets"})");
 }
+
+// A 2v2 party (docs/design/2v2.md): room-state's kind and its searching status, mm's twos-off, and
+// the party's create.
+TEST(RoomMessages, TwosParty)
+{
+  const Message room = Parse(STATE);
+  ASSERT_EQ(room.kind, Message::Kind::RoomState);
+  EXPECT_FALSE(room.view->twos);
+  const Message party =
+      Parse(Replace(Replace(STATE, R"("status": "waiting",)", R"("status": "searching", "kind": "twos",)"),
+                    R"("public": true,)", R"("public": false,)"));
+  ASSERT_EQ(party.kind, Message::Kind::RoomState) << party.why;
+  EXPECT_TRUE(party.view->twos);
+  EXPECT_EQ(party.view->status, Status::Searching);
+  EXPECT_STREQ(StatusName(party.view->status), "searching");
+  // Another kind (a newer mm's) is a room.
+  const Message other = Parse(Replace(STATE, R"("status": "waiting",)", R"("status": "waiting", "kind": "tournament",)"));
+  ASSERT_EQ(other.kind, Message::Kind::RoomState);
+  EXPECT_FALSE(other.view->twos);
+
+  const Message off = Parse(R"({"type": "twos-off", "matchId": "mode.twos-2026-11-03T00:51:32.165Z-1"})");
+  ASSERT_EQ(off.kind, Message::Kind::TwosOff);
+  EXPECT_EQ(off.match_id, "mode.twos-2026-11-03T00:51:32.165Z-1");
+  EXPECT_EQ(KindOf(R"({"type": "twos-off"})"), Message::Kind::Invalid);
+  EXPECT_EQ(KindOf(R"({"type": "twos-off", "matchId": ""})"), Message::Kind::Invalid);
+
+  Request r;
+  r.op = Op::Create;
+  r.twos = true;
+  r.flag = true;
+  r.remembered = true;
+  EXPECT_EQ(RequestJson(r), R"({"kind":"twos","type":"room-create"})");
+}

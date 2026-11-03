@@ -374,6 +374,13 @@ namespace RoomCss {
         return isPtr(o) ? (u8*)o : NULL;
     }
 
+    // A 2v2 party's CSS (setTwos): its closed slots are not shown; the open one asks for a code.
+    static bool s_twos = false;
+    // (Sarah's "(A) Enter Code": the plates' font has no brackets of any kind, ASCII or fullwidth,
+    // they print as its ■; it has : - ! + ' and /)
+    static const char TWOS_OPEN_PLATE[] = "A: Enter Code";
+    void setTwos(bool on) { s_twos = on; }
+
     static void plate(u8* a, const char* name)
     {
         MuMsg* m = *(MuMsg**)(a + 0x40C);
@@ -662,12 +669,13 @@ namespace RoomCss {
         u8* so = stateObj(a);
         bool sitting = v.sittingOut && (v.kind == PV_CHOOSING || v.kind == PV_READY);
         u8 sitShown = sitting ? v.sittingOut : 0;   // 1 SIT OUT, 2 WATCHING
-        bool changed = sh.kind != v.kind || sh.inRoom != (u8)s_inRoom || sh.css != v.css || sh.costume != v.costume ||
+        const u8 inRoomShown = (u8)((s_inRoom ? 1 : 0) | (s_twos ? 2 : 0));
+        bool changed = sh.kind != v.kind || sh.inRoom != inRoomShown || sh.css != v.css || sh.costume != v.costume ||
                        sh.team != v.team || sh.stars != v.stars || strcmp(sh.name, v.name) != 0 ||
                        sh.sittingOut != sitShown;
         if (changed) {
             // Sitting out: no state box ("Choosing..." is not what they do), the card grey.
-            int st = (v.kind == PV_CLOSED && !s_inRoom) || sitting ? ST_NONE : stateOf(v.kind);
+            int st = (v.kind == PV_CLOSED && (!s_inRoom || s_twos)) || sitting ? ST_NONE : stateOf(v.kind);
             if (so && (sh.kind == 0xFF || *(int*)(so + 8) != st)) STATE_SET(so, st);   // (so+8: the state shown)
             *(u32*)(a + 0x1C0) = v.team < PPOM::TEAM_COUNT ? v.team : 0;
             // The character: a ready player's lock-in, or the coin a choosing one has placed (the
@@ -695,14 +703,15 @@ namespace RoomCss {
                 if (isPtr((u32)scn)) scn[0xD0] = scn[0xD1] = STATE_PRIORITY_FRONT;
             }
             setGrey(a, i, sitting);
-            plate(a, v.kind == PV_CLOSED || v.kind == PV_SEARCHING ? "" :
+            plate(a, v.kind == PV_SEARCHING && s_twos               ? TWOS_OPEN_PLATE :
+                     v.kind == PV_CLOSED || v.kind == PV_SEARCHING ? "" :
                      sitShown == 2                                ? WATCHING_PLATE :
                      sitting                                      ? SIT_OUT_PLATE :
                                                                     v.name);
             SHOW_STARS(a, v.kind != PV_CLOSED && v.kind != PV_SEARCHING ? v.stars : 0, 1);
             sh.sittingOut = sitShown;
             sh.stars = v.stars;
-            sh.inRoom = (u8)s_inRoom;
+            sh.inRoom = inRoomShown;
             sh.kind = v.kind;
             sh.css = v.css;
             sh.costume = v.costume;
@@ -713,7 +722,7 @@ namespace RoomCss {
         if (so) STATE_UPDATE(so);
         // In a room a closed slot stays on screen with "Closed" on it, so that the host sees
         // where to open one; not in a room (Join Room before the code) the others are hidden.
-        if (v.kind == PV_CLOSED && !s_inRoom) hideArea(i, a);
+        if (v.kind == PV_CLOSED && (!s_inRoom || s_twos)) hideArea(i, a);
         else showArea(i, a);
     }
 

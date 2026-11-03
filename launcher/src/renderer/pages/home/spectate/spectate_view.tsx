@@ -131,6 +131,8 @@ const modeLabel = (mode: LiveMode): string => {
       return Messages.modeDirect();
     case "room":
       return Messages.modeRoom();
+    case "twos":
+      return Messages.modeTwos();
   }
 };
 

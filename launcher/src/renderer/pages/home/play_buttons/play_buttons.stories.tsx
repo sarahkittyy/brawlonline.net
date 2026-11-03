@@ -8,14 +8,18 @@ export default {
 
 const noop = () => undefined;
 
-const QUEUES = { unranked: 6, ranked: 3 };
-const PLAYING = { unranked: 14, ranked: 8 };
+const QUEUES = { unranked: 6, ranked: 3, twos: 2 };
+const PLAYING = { unranked: 14, ranked: 8, twos: 8 };
 
 export const WithCounts = () => <PlayButtonsView queues={QUEUES} playing={PLAYING} onPlay={noop} />;
 
 /** Three-digit counts: the widest the counts get in practice. */
 export const BigCounts = () => (
-  <PlayButtonsView queues={{ unranked: 104, ranked: 37 }} playing={{ unranked: 312, ranked: 186 }} onPlay={noop} />
+  <PlayButtonsView
+    queues={{ unranked: 104, ranked: 37, twos: 23 }}
+    playing={{ unranked: 312, ranked: 186, twos: 148 }}
+    onPlay={noop}
+  />
 );
 
 /** Logged out, or the room list not read yet: the counts' space is kept, empty. */

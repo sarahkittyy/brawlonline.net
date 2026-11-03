@@ -29,6 +29,7 @@
 
 #pragma once
 
+#include <array>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -115,6 +116,10 @@ struct Match
   bool room_teams = false;
   bool room_team_colors = false;
   u8 room_pickers = 0;
+  // A 2v2 match (mode 5, get-ticket-resp `splits`): the team splits the session may play, a team
+  // (0, 1) per in-game port, the most even first; game 1 plays the first, every later game the
+  // most even one that is not the last game's. Empty: not a 2v2 match.
+  std::vector<std::array<u8, 4>> twos_splits;
 };
 
 // The live P2P ENet connection from the connect window.

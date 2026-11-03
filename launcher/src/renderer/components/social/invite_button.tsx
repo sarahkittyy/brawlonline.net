@@ -11,7 +11,7 @@ import styles from "./social.module.css";
 
 /**
  * The small envelope button: invites the player to the room the player is in (it needs an open
- * slot), or to a Direct 1v1 when not in a room.
+ * slot; a 2v2 party: "Invite to your 2v2"), or to a Direct 1v1 when not in a room.
  */
 export const InviteButton = ({ player, className }: { player: SocialPlayer; className?: string }) => {
   const room = useSocial((s) => s.state.room);
@@ -21,7 +21,13 @@ export const InviteButton = ({ player, className }: { player: SocialPlayer; clas
   // While a room the player asked for is opening, an invite is to that room.
   const full = !waiting && inviteBlocked(room) != null;
   const blocked = full || !online;
-  const tip = full ? Messages.roomFull() : waiting || room ? Messages.inviteToRoom() : Messages.inviteToDirect();
+  const tip = full
+    ? Messages.roomFull()
+    : room?.twos && !waiting
+    ? Messages.inviteToTwos()
+    : waiting || room
+    ? Messages.inviteToRoom()
+    : Messages.inviteToDirect();
   return (
     <Tooltip title={online ? tip : ""} placement="top" disableInteractive={true}>
       <span className={clsx(styles.inviteWrap, className)}>

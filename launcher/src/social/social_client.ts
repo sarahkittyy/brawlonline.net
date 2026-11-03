@@ -133,7 +133,7 @@ function parsePeer(v: any): Peer | undefined {
 }
 
 const ROOM_MODES = new Set(["1v1", "ffa", "teams"]);
-const ROOM_STATUSES = new Set(["waiting", "starting", "in-game"]);
+const ROOM_STATUSES = new Set(["waiting", "starting", "in-game", "searching"]);
 
 function parseRoom(v: any): SocialRoom | null | undefined {
   if (v === null) {
@@ -163,6 +163,7 @@ function parseRoom(v: any): SocialRoom | null | undefined {
     mode: v.mode,
     status: v.status,
     joinable: v.joinable,
+    ...(v.twos === true ? { twos: true } : {}),
   };
 }
 

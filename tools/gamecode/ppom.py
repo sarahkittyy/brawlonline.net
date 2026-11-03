@@ -35,7 +35,7 @@ SYRINGE_HEAP = (0x817BA5A0, 0x10000)   # P+ v3.2 Syringe.asm: heap 60 start, siz
 CMD = {0xB3: "GET_MATCH_STATE", 0xB4: "FIND_OPPONENT", 0xB6: "OPEN_LOGIN", 0xB8: "UPDATE",
        0xB9: "GET_ONLINE_STATUS", 0xBA: "CLEANUP_CONNECTION", 0xBE: "FETCH_CODE_SUGGESTION",
        0xE3: "GET_RANK", 0xD0: "ROOM"}
-MODES = {0: "ranked", 1: "unranked", 2: "direct", 3: "teams"}
+MODES = {0: "ranked", 1: "unranked", 2: "direct", 3: "teams", 5: "twos"}
 
 SCROLL = {0: "none", 1: "older", 2: "newer", 3: "reset"}   # Slippi AutoComplete.s
 
@@ -325,6 +325,8 @@ def read_local(c: HarnessClient, b: Block) -> dict:
 L_OWN_CURSOR, L_CURSORS = 0xC8, 0xD0
 # v11: potato mode (LOCAL; docs/game-code.md, Potato mode): Dolphin's [Online] PotatoMode, every frame.
 L_POTATO = 0xF0
+# (still v11) a 2v2 session between games (docs/design/2v2.md): seconds left to ready up, ports ready.
+L_READY_SECONDS, L_READY_PORTS = 0xF1, 0xF2
 
 
 def potato_state(c: HarnessClient, b: Block) -> dict:
@@ -543,6 +545,9 @@ SLOT_WATCHING = 0x40   # 2026-10-19: watching the room's game from the room CSS
 RF_IN, RF_PUBLIC, RF_TEAMS = 1, 2, 4
 RF_WATCH = 8           # 2026-10-19: SESSION holds a room game this player watches
 RF_TEAM_COLORS = 0x10  # 2026-10-21: with RF_TEAMS, every player in their team's costume
+RF_TWOS = 0x20         # 2026-11-02: the room is a 2v2 party (docs/design/2v2.md)
+RS_SEARCHING = 3       # (SESSION roomStatus) the party searches for a 2v2 match
+MODE_TWOS, QUEUE_TWOS = 5, 4   # the 2v2 queue; QUEUE_TWOS = LOCAL directNumber from the launcher
 # SESSION `teams` (2026-10-21): 0 FFA, 1 a team battle recorded before, 2 P+'s rainbow team battle
 # (own costumes, the team glow), 3 its plain one (the teams' costumes)
 TEAMS_LEGACY, TEAMS_RAINBOW, TEAMS_COLORS = 1, 2, 3

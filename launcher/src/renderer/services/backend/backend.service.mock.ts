@@ -124,8 +124,8 @@ const MOCK_PAGE_SIZE = 50;
 export function mockRoomList(): RoomList {
   return {
     online: 128,
-    queues: { unranked: 6, ranked: 3 },
-    playing: { unranked: 14, ranked: 8 },
+    queues: { unranked: 6, ranked: 3, twos: 2 },
+    playing: { unranked: 14, ranked: 8, twos: 8 },
     updatedAt: new Date().toISOString(),
     rooms: [
       {

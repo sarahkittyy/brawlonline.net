@@ -61,7 +61,8 @@ impl ModeFilter {
 
     fn sql(self) -> &'static str {
         match self {
-            ModeFilter::All => "",
+            // (2v2 games, mode 5, are not in the history yet: it has 1v1s and rooms' games; docs/design/2v2.md)
+            ModeFilter::All => " AND m.mode <> 5",
             ModeFilter::Ranked => " AND m.mode = 0",
             ModeFilter::Unranked => " AND m.mode IN (1, 2)",
             ModeFilter::Rooms => " AND m.mode = 3",

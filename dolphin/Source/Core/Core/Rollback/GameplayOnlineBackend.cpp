@@ -108,6 +108,14 @@ public:
         o.team_colors = match.room_teams && match.room_team_colors;
         o.initial_pickers = match.room_pickers & ports;
       }
+      else if (!match.twos_splits.empty())
+      {
+        // A 2v2 match (docs/design/2v2.md): P+'s rainbow team battle (any costume, a team glow),
+        // teams by the server's splits, shuffled every game (the session's host decides).
+        o.teams = true;
+        o.team_colors = false;
+        o.twos_splits = match.twos_splits;
+      }
     }
     o.region_set = options.region_set;
     // The harness's option, else the player's setting: a number of frames, in every mode (a

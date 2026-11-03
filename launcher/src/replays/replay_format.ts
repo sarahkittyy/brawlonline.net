@@ -76,7 +76,7 @@ export type ReplayPlayer = {
 
 export type ReplayMeta = {
   startTime: string | null;
-  mode: string; // "ranked" | "unranked" | "direct" | "teams" | "room" | "unknown"
+  mode: string; // "ranked" | "unranked" | "direct" | "teams" | "room" | "twos" | "unknown"
   matchId: string;
   gameIndex: number;
   isTeams: boolean;

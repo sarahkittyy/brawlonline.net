@@ -466,6 +466,7 @@ namespace OnlineMatch {
         // before then (TEAMS_LEGACY) plays as it was: 1, no glow.
         sel[SEL_TEAMS] = se.teams == PPOM::TEAMS_RAINBOW ? 2 : teams ? 1 : 0;
         se.outCount = 0;
+        se.play.leftWithStocks = 0;
         se.quitPorts = 0;
         se.quitStays = 0;
         se.quitBy = 0;
@@ -817,6 +818,9 @@ namespace OnlineMatch {
                 bool tested = ((test >> p) & 1) && (!testKoOnly || *stocks >= 2);
                 if ((se.gone[p] || quit || out || tested) && isPtr(fighter)) {
                     if (tested && !testKoOnly) se.gone[p] = 1;
+                    // Left (dropped or quit) with stocks: a 2v2 leaver's loss (docs/design/2v2.md);
+                    // one already out of stocks never gets here.
+                    if (se.gone[p] || quit) se.play.leftWithStocks |= (u8)(1u << p);
                     *stocks = 1;
                     ((SetDeadFn)SET_DEAD)(mgr, *(int*)(e + 0x04), 5, -1);
                     ((SetOutFn)SET_OUT)(fighter);
@@ -892,7 +896,8 @@ namespace OnlineMatch {
         const u8 mode = PPOM::g_block.session.mode;
         if (mode == PPOM::MODE_RANKED) {
             for (u32 pad = 0; pad < 4; pad++) *(volatile u32*)(PPLUS_PAUSE_HOLD + 8 * pad) = 0;
-        } else if (mode == PPOM::MODE_UNRANKED) {
+        } else if (mode == PPOM::MODE_UNRANKED || mode == PPOM::MODE_TWOS) {
+            // (2v2 the same, the user's, 2026-11-02: "no pause, just the local L+R+A+START overlay")
             *(volatile u32*)PPLUS_PAUSE_OFF = 0;
             for (u32 pad = 0; pad < 4; pad++) {
                 *(volatile u32*)(PPLUS_PAUSE_HOLD + 8 * pad) = PPLUS_PAUSE_HOLD_FRAMES;
@@ -1314,6 +1319,17 @@ namespace OnlineMatch {
                 PPOM::g_block.debug.scratch[10] |= 0x1000000;
             }
             if (!live || s_clientQuit || !oi || (oi[0x11B] & 0x70) || (held & quit) != quit) continue;
+            // 2v2: the quit takes only this player out, as the pause screen's quit of a 3-4 player
+            // match (pponline_pauseResult): the others play the game out (docs/design/2v2.md).
+            if (se.mode == PPOM::MODE_TWOS) {
+                if (se.gone[p] || (se.quitPorts & bit)) continue;
+                if (sidesLeftWithout(bit) <= 1) se.quitStays |= bit;
+                se.quitPorts |= bit;
+                s_matchQuitPorts = se.quitPorts;
+                playQuitSound(3);
+                PPOM::g_block.debug.scratch[10] |= 0x400000;
+                continue;
+            }
             oi[0x11B] |= 0x30;
             s_clientQuit = 1;
             s_clientQuitFrames = 0;
@@ -1352,7 +1368,8 @@ namespace OnlineMatch {
     {
         const PPOM::Session& se = PPOM::g_block.session;
         u8 me = PPOM::g_block.local.localPort;
-        return g_onlineCss && g_onlineMatchGame && se.mode == PPOM::MODE_UNRANKED && !s_clientQuit &&
+        return g_onlineCss && g_onlineMatchGame && (se.mode == PPOM::MODE_UNRANKED || se.mode == PPOM::MODE_TWOS) &&
+               !s_clientQuit && !(se.quitPorts & (1u << (me & 3))) &&
                !OnlineMenu::nobodyPlaysHere() && me < 4 && ((s_hintPorts >> me) & 1);
     }
 

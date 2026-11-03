@@ -51,6 +51,9 @@ public:
     Direct = 2,
     Teams = 3,
     Party = 4,
+    // Ours (docs/design/2v2.md): the 2v2 queue, four players on two teams. The ticket's code is
+    // the player's 2v2 party (its room code), or empty for a player outside one.
+    Twos = 5,
   };
 
   // SlippiMatchmaking::ProcessState; the game reads these values (GET_MATCH_STATE).
@@ -79,8 +82,13 @@ public:
   {
     Mode mode = Mode::Direct;
     // The opponent's code as typed (e.g. "BOB#123"); sent as full-width Shift-JIS bytes like
-    // Melee's name-entry screen produces. Empty for queue modes.
+    // Melee's name-entry screen produces. Empty for queue modes (2v2: the party's code).
     std::string connect_code;
+    // 2v2: the search starts again by itself after its group broke up (it goes first in the
+    // queue); and the players (uids) the last match could not connect to, and that match.
+    bool requeue = false;
+    std::vector<std::string> avoid;
+    std::string after;
   };
 
   using ConnectedCallback = std::function<void(const Match&, P2PLink& link)>;
