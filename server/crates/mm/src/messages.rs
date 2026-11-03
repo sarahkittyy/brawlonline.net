@@ -218,6 +218,32 @@ pub const IN_GAME: &str = "In game";
 /// Room status line: the members' tickets are coming in.
 pub const STARTING_GAME: &str = "Starting the game";
 
+/// 2v2 parties (`docs/design/2v2.md`): the party already has two players.
+pub const PARTY_FULL: &str = "This party is full.";
+/// 2v2: a room's code typed on the 2V2 character select's partner panel.
+pub const NOT_A_PARTY: &str = "That's not a 2v2 party code.";
+/// 2v2: joining a party whose players are in a 2v2 match.
+pub const PARTY_IN_GAME: &str = "In a game. Try again after.";
+/// 2v2: a room request a party has no use for (its settings, kicks, Teams, SIT OUT...).
+pub const NOT_IN_A_PARTY: &str = "Not in a 2v2 party.";
+/// 2v2: a ticket naming a party the player is not in.
+pub const NOT_IN_PARTY: &str = "You are not in this party.";
+/// 2v2 party status line: everyone ready, its players search together.
+pub const PARTY_SEARCHING: &str = "Searching for players";
+/// 2v2 party status line: alone in the party.
+pub const PARTY_ALONE: &str = "Press START to search";
+
+/// A partner's search ended (`what`: "cancelled", "left", "joined") and with it this player's
+/// ticket: "bob cancelled" (a name too wide for the line: "Your partner cancelled").
+pub fn partner(name: &str, what: &str) -> String {
+    let full = format!("{name} {what}");
+    if full.chars().count() <= 36 && rough_width(&full) <= 640 {
+        full
+    } else {
+        format!("Your partner {what}")
+    }
+}
+
 /// A mode that is not built yet (Ranked, Teams, Party).
 pub fn not_available(mode: &str) -> String {
     format!("{mode} isn't available yet.")
@@ -326,6 +352,16 @@ mod tests {
             waiting_on(&["WW", "BO"]),
             waiting_on(&["WWWWWWWWWWWWWWW"]),
             waiting_on(&["player1", "player2", "player4"]),
+            PARTY_FULL.to_string(),
+            NOT_A_PARTY.to_string(),
+            PARTY_IN_GAME.to_string(),
+            NOT_IN_A_PARTY.to_string(),
+            NOT_IN_PARTY.to_string(),
+            PARTY_SEARCHING.to_string(),
+            PARTY_ALONE.to_string(),
+            partner(&"W".repeat(15), "cancelled"),
+            partner("player1", "joined"),
+            partner("WWWWWWWWWWWW", "left"),
         ];
         for m in all {
             assert!(m.lines().count() <= 2, "{m:?} is more than two lines");

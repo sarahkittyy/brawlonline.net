@@ -674,6 +674,7 @@ mod tests {
             rating: 0.0,
             ranked_sets: 0,
             unranked_rating: 0.0,
+            twos_rating: 0.0,
             chat_muted: false,
             room_name: None,
             mods_room_name: None,
@@ -733,6 +734,7 @@ mod tests {
             joinable,
             host: false,
             name: None,
+            twos: false,
         }
     }
 

@@ -143,7 +143,9 @@ pub async fn mod_room(
 /// The room `uid` is in, from mm's internal member lists.
 fn your_room(s: &MmStatus, uid: &str) -> Option<YourRoom> {
     if let Some(m) = s.members.iter().find(|m| m.uid == uid) {
-        return Some(YourRoom { kind: RoomKind::Pplus, code: m.code.clone(), host: m.host, name: m.name.clone() });
+        // A 2v2 party (2026-11-02): the launcher's envelope invites to it, and it pins no room.
+        let kind = if m.twos { RoomKind::Twos } else { RoomKind::Pplus };
+        return Some(YourRoom { kind, code: m.code.clone(), host: m.host, name: m.name.clone() });
     }
     s.mod_members.iter().find(|m| m.uid == uid).map(|m| YourRoom {
         kind: RoomKind::Mods,
@@ -180,6 +182,9 @@ pub async fn set_room_name(
     Json(req): Json<SetRoomNameReq>,
 ) -> ApiResult<Json<RoomNameView>> {
     let user = current_user(&state, &headers).await?;
+    if req.kind == RoomKind::Twos {
+        return Err(ApiError::bad_request("invalid_room_name", "2v2 parties have no name."));
+    }
     let name = clean_room_name(req.name.as_deref().unwrap_or_default())
         .map_err(|e| ApiError::bad_request("invalid_room_name", e))?;
     limit(&state, |l, now| l.room_name.check(&user.uid, now)).map_err(|wait| {

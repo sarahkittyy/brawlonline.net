@@ -23,7 +23,8 @@
 //! | 0x2E (46) | Pokémon Stadium 2 (starter) | | | |
 //!
 //! Unranked's extra five: Final Destination 0x02 (2), Metal Cavern 0x05 (5), Bowser's Castle
-//! 0x06 (6), Yoshi's Island 0x0D (13), Wario Land 0x1C (28).
+//! 0x06 (6), Yoshi's Island 0x0D (13), Wario Land 0x1C (28). The 2v2 queue (`twos`, 2026-11-02)
+//! plays Unranked's rules and stages, its random stage drawn as Unranked's.
 //!
 //! How the client uses the list (as Slippi's does, `EXI_DeviceSlippi.cpp:2134-2153, 2707-2722`):
 //! Unranked draws every game's stage from it, Ranked strikes and counterpicks within it. Direct
@@ -77,7 +78,7 @@ impl Rulesets {
         let r: Rulesets = serde_json::from_str(json)?;
         for (name, rules) in &r.modes {
             anyhow::ensure!(
-                ["ranked", "unranked", "direct", "teams", "party"].contains(&name.as_str()),
+                ["ranked", "unranked", "direct", "teams", "party", "twos"].contains(&name.as_str()),
                 "unknown mode {name:?} in rulesets"
             );
             let mut seen = HashSet::new();
@@ -127,12 +128,12 @@ mod tests {
     #[test]
     fn default_file_has_the_pplus_ruleset() {
         let r = Rulesets::parse(DEFAULT_RULESETS).unwrap();
-        for mode in [Mode::Direct, Mode::Unranked, Mode::Ranked] {
+        for mode in [Mode::Direct, Mode::Unranked, Mode::Ranked, Mode::Twos] {
             let m = r.for_mode(mode);
             let mut stages = m.stages.clone();
             stages.sort();   // Ranked's are in its stage select's order
             let mut want = nine_stages();
-            if mode == Mode::Unranked {
+            if mode == Mode::Unranked || mode == Mode::Twos {
                 want.extend(UNRANKED_EXTRA_STAGES);
                 want.sort();
             }
@@ -152,6 +153,7 @@ mod tests {
         assert_eq!(ranked, starters);
         assert!(r.for_mode(Mode::Direct).starters.is_empty());
         assert!(r.for_mode(Mode::Unranked).starters.is_empty());
+        assert_eq!(r.for_mode(Mode::Twos), r.for_mode(Mode::Unranked));
         assert_eq!(r.for_mode(Mode::Party), ModeRules::default());
         assert_eq!(r.for_mode(Mode::Teams), ModeRules::default());
     }

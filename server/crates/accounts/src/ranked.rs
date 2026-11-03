@@ -623,6 +623,20 @@ pub async fn report_game(State(state): State<AppState>, Json(req): Json<ReportGa
                 tracing::warn!(match_id = %req.match_id, game = req.game_index, error = %e, "unranked rating not updated");
             }
         }
+        if let (crate::twos::MODE_TWOS, Some(w)) = (row.mode, winner) {
+            let rated =
+                crate::twos::rate_game(&state.pool, &req.match_id, req.game_index as i32, &req.players, w, Utc::now());
+            match rated.await {
+                Ok(true) => {}
+                Ok(false) => {
+                    tracing::info!(match_id = %req.match_id, game = req.game_index, "2v2 game not rated: not 2 on 2")
+                }
+                // The 2v2 hidden rating only: the report itself stands.
+                Err(e) => {
+                    tracing::warn!(match_id = %req.match_id, game = req.game_index, error = %e, "2v2 rating not updated")
+                }
+            }
+        }
         return Ok(Json(session_state(&state.pool, &req.match_id, row).await?));
     }
     let timing = state.cfg.ranked_timing();

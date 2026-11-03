@@ -42,6 +42,10 @@ pub enum Mode {
     Direct,
     Teams,
     Party,
+    /// The 2v2 queue (ours, 2026-11-02, `docs/design/2v2.md`): four players, two teams, every
+    /// pair connected directly. A ticket names the player's 2v2 party (a room of kind `twos`) in
+    /// `search.connectCode`, or nothing for a player outside one.
+    Twos,
 }
 
 impl Mode {
@@ -52,6 +56,7 @@ impl Mode {
             2 => Mode::Direct,
             3 => Mode::Teams,
             4 => Mode::Party,
+            5 => Mode::Twos,
             _ => return None,
         })
     }
@@ -63,6 +68,7 @@ impl Mode {
             Mode::Direct => 2,
             Mode::Teams => 3,
             Mode::Party => 4,
+            Mode::Twos => 5,
         }
     }
 
@@ -75,6 +81,7 @@ impl Mode {
             Mode::Direct => "direct",
             Mode::Teams => "teams",
             Mode::Party => "party",
+            Mode::Twos => "twos",
         }
     }
 }
@@ -111,7 +118,7 @@ pub struct TicketUser {
     pub display_name: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Search {
     pub mode: u8,
@@ -122,6 +129,17 @@ pub struct Search {
     /// logged, not enforced yet (the build-hash allow-list is a later phase).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub game: Option<serde_json::Value>,
+    /// 2v2 (mode 5): the search starts again by itself after its four-player group broke up (a
+    /// player left or did not ready up in time): it goes before the queue's other tickets.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub requeue: bool,
+    /// 2v2: the players (uids) this game's last match could not connect to. mm keeps them out of
+    /// the player's next groups for a while, and tells that match's other players it is off.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub avoid: Vec<String>,
+    /// 2v2, with `avoid`: the match whose connect failed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub after: Option<String>,
 }
 
 /// `create-ticket-resp`, server → client. An `error` is shown in-game.
@@ -188,6 +206,12 @@ pub struct GetTicketResp {
     /// the loser picks).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub anyone_picks: Option<bool>,
+    /// 2v2 (ours, 2026-11-02): the team splits the session may play, each a team (0 red, 1 blue)
+    /// per in-game port (index 0 = P1), the most even first by the players' 2v2 ratings. Game 1
+    /// plays the first; every later game the most even one that is not the last game's (the
+    /// teams shuffle). A pair that queued together is on one team in every split.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub splits: Option<Vec<Vec<u8>>>,
 }
 
 /// A room's set as its session starts it (ours; Dolphin's `Online/SetFormat.h` `Format` and

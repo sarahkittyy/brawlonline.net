@@ -432,6 +432,13 @@ async fn watch_accounts(pool: PgPool, changed: std_mpsc::Sender<Vec<db::MmUser>>
 /// and must not be lost when the lookup queue is full.
 async fn record_match(pool: PgPool, m: MatchRecord) {
     let stages: Vec<i16> = m.stages.iter().map(|s| *s as i16).collect();
+    if m.mode == common::proto::Mode::Twos {
+        let pairs: Vec<i16> = m.pairs.iter().take(m.players.len()).map(|p| i16::from(*p)).collect();
+        if let Err(e) = db::insert_twos_match(&pool, &m.match_id, &m.players, m.host, &stages, &m.region, &pairs).await {
+            tracing::error!(match_id = %m.match_id, "recording 2v2 match failed: {e}");
+        }
+        return;
+    }
     if let Err(e) = db::insert_match(
         &pool,
         &m.match_id,

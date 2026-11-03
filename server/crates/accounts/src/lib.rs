@@ -20,6 +20,7 @@ pub mod sd_cards;
 pub mod slur_filter;
 pub mod social;
 pub mod store;
+pub mod twos;
 pub mod unranked;
 
 use std::net::{IpAddr, SocketAddr};

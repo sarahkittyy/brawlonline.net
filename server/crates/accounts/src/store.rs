@@ -432,7 +432,8 @@ pub async fn rename_if(pool: &PgPool, uid: Uuid, from: &str, to: &str) -> sqlx::
 /// The column of the account's name for that kind of room.
 fn room_name_column(kind: RoomKind) -> &'static str {
     match kind {
-        RoomKind::Pplus => "room_name",
+        // (a 2v2 party has no name: the request is refused before this)
+        RoomKind::Pplus | RoomKind::Twos => "room_name",
         RoomKind::Mods => "mods_room_name",
     }
 }
