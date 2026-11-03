@@ -289,6 +289,12 @@ void JitInterface::EraseBlocksForRestoredRange(u32 physical_address, u32 length)
     m_jit->GetBlockCache()->EraseBlocksForRestoredRange(physical_address, length);
 }
 
+void JitInterface::DropBlocksOfLine(u32 physical_address)
+{
+  if (m_jit)
+    m_jit->GetBlockCache()->DropBlocksOfLine(physical_address);
+}
+
 u64 JitInterface::Invalidations() const
 {
   return m_jit ? m_jit->GetBlockCache()->Invalidations() : 0;

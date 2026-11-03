@@ -1097,6 +1097,12 @@ void RollbackManager::SaveFrame(Core::System& system, s64 tag)
   m_ring_next = Wrap(m_ring_next + 1, NUM_SAVE_SLOTS);
   m_ring_count = std::clamp(m_ring_count + 1, 0, NUM_SAVE_SLOTS);
   const auto t_evict = std::chrono::steady_clock::now();
+  // No load goes back past the oldest snapshot (PowerPC::JitCodeRecord).
+  if (!m_region_mode)
+  {
+    system.GetPPCState().iCache.jit_code.Trim(
+        m_slots[Wrap(m_ring_next - m_ring_count, NUM_SAVE_SLOTS)].m_jit_code_mark);
+  }
 
   static const bool census = std::getenv("PPR_GPRB_CENSUS") != nullptr;
   if (census && m_region_mode)
@@ -1785,6 +1791,18 @@ bool RollbackManager::LoadFrame(Core::System& system, int frames_back)
 
   if (ram_job)
     job::DrainJobsUntilComplete(m_dispatch_thread, ram_job);
+
+  if (!m_region_mode)
+  {
+    // What the JIT compiled goes back to what it was at the snapshot (PowerPC::JitCodeRecord): the
+    // blocks first compiled since, or compiled from instructions the game invalidated since, go.
+    ROLLBACK_ZONE_N("JIT code record");
+    std::vector<u32> lines;
+    system.GetPPCState().iCache.jit_code.Undo(deltaSave.m_jit_code_mark, &lines);
+    auto& jit = system.GetJitInterface();
+    for (const u32 line : lines)
+      jit.DropBlocksOfLine(line);
+  }
 
   if (!m_region_mode)
   {

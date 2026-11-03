@@ -193,6 +193,9 @@ public:
   // was there are dropped, the JIT only: the emulated instruction cache is machine state and is
   // restored with the rest.
   void EraseBlocksForRestoredRange(u32 physical_address, u32 length);
+  // Rollback: the blocks that read this 32-byte line go, and nothing else changes (hints, the
+  // count of Invalidations): a load undid what PowerPC::JitCodeRecord recorded for them.
+  void DropBlocksOfLine(u32 physical_address);
   // Rollback: how many times compiled code or what it was compiled with went away (a block
   // destroyed, the cache cleared, a line invalidated, a per-instruction hint learned or dropped).
   // While it stays the same, the cache only gained blocks; see RollbackManager::LoadFrame.

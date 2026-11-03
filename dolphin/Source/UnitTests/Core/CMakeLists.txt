@@ -77,6 +77,9 @@ add_dolphin_test(ChangeCRCTest Rollback/ChangeCRCTest.cpp)
 # Changed-only whole-machine snapshots (Core/Rollback/KeptGranules.h): the copy jobs' kept granules
 # put together in scan order.
 add_dolphin_test(KeptGranulesTest Rollback/KeptGranulesTest.cpp)
+# What a whole-machine session's JIT compiled each block from, journaled for rollbacks
+# (PowerPC::JitCodeRecord, Core/PowerPC/PPCCache.h).
+add_dolphin_test(JitCodeRecordTest Rollback/JitCodeRecordTest.cpp)
 # The rollback job pool (Core/Rollback/job.h) stopped and started again (GitHub issue #3).
 add_dolphin_test(JobPoolTest Rollback/JobPoolTest.cpp)
 # A room's codes as the launcher gives them (Machine::ParseCodes, docs/design/room-codes.md).
