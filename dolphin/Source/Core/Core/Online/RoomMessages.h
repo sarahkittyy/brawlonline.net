@@ -196,6 +196,10 @@ struct View
   // A 2v2 party (room-state `kind: "twos"`, docs/design/2v2.md): two slots, no settings; its
   // players search the 2v2 queue (mode 5 tickets naming its code) once all are ready.
   bool twos = false;
+  // A 2v2 party whose two players both search now and whose games both play the pair room
+  // (room-state `pairRoom`, docs/design/2v2.md "The pair room"): each game sends its party ticket
+  // (mode 3 naming the party's code) and the two connect to each other.
+  bool pair_room = false;
 };
 
 // One ruleset of `ruleset-list` (the game's Ruleset line).

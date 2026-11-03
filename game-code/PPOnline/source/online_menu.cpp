@@ -165,6 +165,13 @@ namespace OnlineMenu {
         u32 twosNoticeFrames;
         bool twosRequeue;
         bool twosToParty;
+        // A 2v2 party's pair room (docs/design/2v2.md, "The pair room") has ended back to the CSS:
+        // the answer to the match state asked then (pairBackSeq, and later) says whether the
+        // search goes on (its match found, or searching again: back to the waiting room once on
+        // the CSS, pairBackRoom) or is over (Dolphin ended it with the room).
+        bool pairBack;
+        u32 pairBackSeq;
+        bool pairBackRoom;
     };
     static State s;
     bool roomCss();
@@ -2471,6 +2478,12 @@ namespace OnlineMenu {
             if (s.mode >= 0 && s.searchSeq && r->seq >= s.searchSeq) {
                 s.pollPending = false;
                 onMatchState(*(const PPOM::MatchState*)r->payload);
+                // After a pair room: still searching (its match failed to connect and the search
+                // started again) is the waiting room's again; anything else is the CSS's.
+                if (s.pairBack && r->seq >= s.pairBackSeq) {
+                    s.pairBack = false;
+                    s.pairBackRoom = s.phase == PH_SEARCHING;
+                }
             }
         }
     }
@@ -3623,8 +3636,10 @@ namespace OnlineMenu {
     {
         u8 screen = PPOM::SCREEN_OTHER;
         if (strcmp(scene, "scMelee") == 0) {
-            // The waiting room is a search, not a match (the launcher's "In game").
-            screen = TrainingRoom::active() ? PPOM::SCREEN_ONLINE_BUSY : PPOM::SCREEN_MATCH;
+            // The waiting room is a search, not a match (the launcher's "In game"); so is a 2v2
+            // party's pair room, the waiting room played together (Sarah's, 2026-11-03: only in
+            // the queue's numbers).
+            screen = TrainingRoom::active() || OnlineMatch::pairRoom() ? PPOM::SCREEN_ONLINE_BUSY : PPOM::SCREEN_MATCH;
         } else if (strcmp(scene, "muMenuMain") == 0) {
             screen = PPOM::g_block.debug.frames - s_jumpFrame < 3 ? PPOM::SCREEN_MENUS : PPOM::SCREEN_OTHER;
         } else if (g_onlineCss && s.mode >= 0 && strcmp(scene, "scSelctCharacter") == 0) {
@@ -4000,6 +4015,19 @@ namespace OnlineMenu {
                 cleanup();
                 playSE(SE_BACK);
                 TrainingRoom::end(TrainingRoom::END_CSS);
+                return;
+            }
+            // A 2v2 party searching together (docs/design/2v2.md, "The pair room"): once Dolphin
+            // has connected the two and set the pair room's match up (SESSION MODE_PAIR, its game
+            // 1), this room ends into it, both players in the room together. Dolphin ends the pair
+            // room at whatever step it is when the search finds its match; a setup gone by the
+            // time the match is set up goes back to the CSS (OnlineMatch::onSelStage).
+            const PPOM::Session& se = PPOM::g_block.session;
+            if (s.mode == PPOM::MODE_TWOS && s.phase == PH_SEARCHING && se.mode == PPOM::MODE_PAIR &&
+                se.state == PPOM::SS_MATCH_READY && se.game == 1) {
+                g_onlineMatchGame = 1;
+                PPOM::g_block.debug.scratch[10] = 0x100;   // tests: the match started
+                TrainingRoom::end(TrainingRoom::END_MATCH);
             }
             return;
         }
@@ -4036,6 +4064,17 @@ namespace OnlineMenu {
             s.roomLeaveFrames = ROOM_LEAVE_MAX_FRAMES + 1;
             leaveCss(1);
         }
+    }
+
+    void pairRoomEnded()
+    {
+        // Ask at once: the search goes on (its match found, or searching again) or is over.
+        s.pairBack = true;
+        s.pairBackRoom = false;
+        s.pairBackSeq = PPOM::post(PPOM::CMD_GET_MATCH_STATE, NULL, 0);
+        s.pollPending = true;
+        s.pollFrames = 0;
+        PPOM::g_block.debug.scratch[5] |= 0x100000;   // tests: a pair room's match ended
     }
 
     void waitingRoomEnded(int how)
@@ -4268,6 +4307,17 @@ namespace OnlineMenu {
             return;
         }
         startWithCoinUp(pressed, b);
+        // After a pair room whose search goes on (searching again): back to the waiting room, as
+        // after the search's START.
+        if (s.pairBackRoom) {
+            s.pairBackRoom = false;
+            if (s.mode == PPOM::MODE_TWOS && s.phase == PH_SEARCHING && usesWaitingRoom() && !TrainingRoom::active()) {
+                TrainingRoom::enter();
+                s.roomLeaveFrames = 0;
+                s.roomHoldStart = 0;
+                s.roomStartUp = false;
+            }
+        }
         g_cssTeamRoom = 0;   // (tickRoom sets it again in a team room)
         if (s.twosNoticeFrames) --s.twosNoticeFrames;
         // 2v2: the group ended on the plain CSS: search again (once SESSION has the party's code
@@ -4282,6 +4332,15 @@ namespace OnlineMenu {
                 s.roomReload = true;
                 leaveCss(1);   // OnlineMatch: no match armed -> back to the CSS (restoreCss)
             }
+        }
+        // 2v2: its four connected while this CSS is the party's (a pair room ended into it as the
+        // match was found, before the session was there): built again as the plain CSS with the
+        // four panels (prepareCss decides by the session).
+        if (s.mode == PPOM::MODE_TWOS && twosParty() && s.phase == PH_CONNECTED &&
+            PPOM::g_block.local.state >= PPOM::LS_CONNECTING && !CodeEntry::active() && !TrainingRoom::active()) {
+            s.roomReload = true;
+            leaveCss(1);
+            PPOM::g_block.debug.scratch[5] |= 0x200000;   // tests: the CSS built again for the four
         }
         if (CodeEntry::active()) {
             CodeEntry::tick(pressed & BTN_START);

@@ -117,6 +117,8 @@ namespace OnlineMatch {
     static u16 s_clientQuitFrames = 0;
     static u8 s_hintPorts = 0;        // Unranked: the ports whose START shows the quit hint
     static u8 s_startPorts = 0;       // Unranked: the ports holding START last frame
+    // A 2v2 party's pair room (pairHoldStart): the frames each port has held START (rolled back).
+    static u8 s_pairStartFrames[4] = {0, 0, 0, 0};
     static u32 s_seen = 0;          // ports seen with stocks in this match (tickPlayers)
     static bool s_inMatch = false;  // a match ran since the last frame outside scMelee (offMatch)
     static bool s_restore = false;  // this match plays a desynced game again (SESSION restore)
@@ -587,6 +589,8 @@ namespace OnlineMatch {
         s_matchQuitBy = s_matchQuitRunback = s_matchQuitPorts = 0;
         s_clientQuit = s_hintPorts = s_startPorts = 0;
         s_clientQuitFrames = 0;
+        memset(s_pairStartFrames, 0, sizeof(s_pairStartFrames));
+        TrainingRoom::pairReset();
         return true;
     }
 
@@ -641,8 +645,11 @@ namespace OnlineMatch {
         }
         PPOM::g_block.debug.scratch[10] = (PPOM::g_block.debug.scratch[10] & ~0xFF) | 3;
         if (setupMatch(seq)) return 1;
-        // No setup (should not happen): back to the CSS instead of Brawl's stage vote.
+        // No setup (should not happen; or a 2v2 party's pair room whose session ended as its match
+        // was being set up): back to the CSS instead of Brawl's stage vote.
+        const bool pair = PPOM::g_block.session.mode == PPOM::MODE_PAIR || OnlineMenu::currentMode() == PPOM::MODE_TWOS;
         g_onlineMatchGame = 0;
+        if (pair) OnlineMenu::pairRoomEnded();
         backToCss(seq);
         return 1;
     }
@@ -703,7 +710,8 @@ namespace OnlineMatch {
         for (int p = 0; quitter < 0 && p < PPOM::SESSION_PLAYERS; p++) {
             if ((s_matchQuitPorts >> p) & 1) quitter = p;
         }
-        if (quitter >= 0) OnlineMenu::noteQuit(quitter);
+        if (se.mode == PPOM::MODE_PAIR) OnlineMenu::pairRoomEnded();
+        else if (quitter >= 0) OnlineMenu::noteQuit(quitter);
         backToCss(seq);
         return 1;
     }
@@ -891,18 +899,20 @@ namespace OnlineMatch {
     // and START is taken out of the game's pads after the quit check. The pad thread reads the
     // word and the timers on its own, but only this machine's controllers before the session
     // takes their input: at worst a START press reaches the inputs a frame late.
+    static void pairHoldStart();
     static void noPause()
     {
         const u8 mode = PPOM::g_block.session.mode;
         if (mode == PPOM::MODE_RANKED) {
             for (u32 pad = 0; pad < 4; pad++) *(volatile u32*)(PPLUS_PAUSE_HOLD + 8 * pad) = 0;
-        } else if (mode == PPOM::MODE_UNRANKED || mode == PPOM::MODE_TWOS) {
+        } else if (mode == PPOM::MODE_UNRANKED || mode == PPOM::MODE_TWOS || mode == PPOM::MODE_PAIR) {
             // (2v2 the same, the user's, 2026-11-02: "no pause, just the local L+R+A+START overlay")
             *(volatile u32*)PPLUS_PAUSE_OFF = 0;
             for (u32 pad = 0; pad < 4; pad++) {
                 *(volatile u32*)(PPLUS_PAUSE_HOLD + 8 * pad) = PPLUS_PAUSE_HOLD_FRAMES;
             }
-            clientPause();
+            if (mode == PPOM::MODE_PAIR) pairHoldStart();
+            else clientPause();
         }
     }
 
@@ -942,6 +952,12 @@ namespace OnlineMatch {
         }
     }
 
+    // The online match is a 2v2 party's pair room (SESSION's mode, the same on every machine).
+    bool pairRoom()
+    {
+        return g_onlineCss && g_onlineMatchGame && PPOM::g_block.session.mode == PPOM::MODE_PAIR;
+    }
+
     // In a match (scMelee), every frame, also in resimulated frames: nothing here may depend on
     // anything that differs between the machines while the match runs under rollback. LOCAL's
     // `disconnected` only changes once Dolphin has ended the rollback session.
@@ -963,6 +979,7 @@ namespace OnlineMatch {
             noPause();
         }
         if ((g_onlineCss && g_onlineMatchGame) || (dbg.cfg & PPOM::CFG_TEST_GONE)) tickPlayers();
+        if (pairRoom()) TrainingRoom::pairSandbag(*(u32*)GAME_FRAME);
         // This player quit a 3-4 player match (pponline_pauseResult) and Dolphin has ended the
         // session for this machine (LOCAL, set only after the session ended): the match ends here
         // as the quit's own end does (no "GAME!", no contest), then the CSS. The others play on.
@@ -1347,6 +1364,71 @@ namespace OnlineMatch {
             u32* f = (u32*)(ps + off);
             for (int i = 0; i < 6; i++) f[i] &= ~BTN_START;
         }
+    }
+
+    // ---- A 2v2 party's pair room (docs/design/2v2.md, "The pair room") ----
+    // No pause and no quit hint (Sarah's, 2026-11-03: "no pause menu for either player, nor an
+    // L+R+A+START prompt"): either player holding START for PAIR_HOLD_START_FRAMES (the waiting
+    // room's half second, OnlineMenu's ROOM_HOLD_START_FRAMES) ends the room for both, back on the
+    // CSS and out of the queue (Dolphin ends the search with it). From the session's inputs in
+    // gfPadSystem's first pad array, as clientPause reads them, so every machine and every
+    // resimulation sees the same hold on the same frame: the quit is the client pause's (the
+    // operator's quit bits, which end the session; tickMatch then ends the match). START is
+    // taken out of every pad the game reads.
+    static const u8 PAIR_HOLD_START_FRAMES = 30;
+
+    static void pairHoldStart()
+    {
+        PPOM::Session& se = PPOM::g_block.session;
+        u32 ps = *(u32*)PAD_SYSTEM;
+        if (!isPtr(ps)) return;
+        u8* oi = operatorInfo();
+        bool live = PPOM::g_block.local.state == PPOM::LS_IN_MATCH;
+        for (int p = 0; p < se.numPlayers && p < 4; p++) {
+            if (!se.players[p].present) continue;
+            const u32* pad = (const u32*)(ps + 0x44 + 0x40 * s_portPad[p]);
+            const bool held = live && (pad[0] & BTN_START) != 0;
+            s_pairStartFrames[p] = held ? (u8)(s_pairStartFrames[p] < 0xFF ? s_pairStartFrames[p] + 1 : 0xFF) : 0;
+            if (!live || s_clientQuit || !oi || (oi[0x11B] & 0x70) || s_pairStartFrames[p] < PAIR_HOLD_START_FRAMES)
+                continue;
+            oi[0x11B] |= 0x30;
+            s_clientQuit = 1;
+            s_clientQuitFrames = 0;
+            se.quitBy = (u8)(p + 1);
+            se.quitRunback = 0;
+            s_matchQuitBy = se.quitBy;
+            s_matchQuitRunback = 0;
+            playSE(2);   // the menus' back sound, as the waiting room's hold START
+            PPOM::g_block.debug.scratch[10] |= 0x40000;
+        }
+        for (u32 off = 0x44; off < 0x944; off += 0x40) {
+            u32* f = (u32*)(ps + off);
+            for (int i = 0; i < 6; i++) f[i] &= ~BTN_START;
+        }
+    }
+
+    // MatchHud's banner: "2V2 - Searching with bob... - Hold START to cancel", as the waiting
+    // room's (OnlineMenu's twosSearchStatus).
+    bool pairRoomLine(u16* out, int max)
+    {
+        if (!pairRoom() || s_clientQuit || OnlineMenu::nobodyPlaysHere() || max < 64) return false;
+        const PPOM::Session& se = PPOM::g_block.session;
+        const u8 me = PPOM::g_block.local.localPort;
+        int n = 0;
+        const char* head = "2V2 - Searching with ";
+        for (const char* c = head; *c; c++) out[n++] = (u8)*c;
+        for (int p = 0; p < PPOM::SESSION_PLAYERS; p++) {
+            if (p == me || !se.players[p].present) continue;
+            for (int i = 0; i < PPOM::NAME_LEN && se.players[p].name[i] && n < max - 28; i++) {
+                const u16 c = se.players[p].name[i];
+                out[n++] = c < 0x20 || c == '%' ? (u16)' ' : c;   // nothing the renderer reads as a command
+            }
+            break;
+        }
+        const char* tail = "... - Hold START to cancel";
+        for (const char* c = tail; *c && n < max - 1; c++) out[n++] = (u8)*c;
+        out[n] = 0;
+        return true;
     }
 
     const char* quitHintText()

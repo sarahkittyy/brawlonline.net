@@ -84,8 +84,10 @@ namespace PPOM {
     enum SpecialAssetsState { SA_NONE = 0, SA_LOADING = 1, SA_READY = 2, SA_UNAVAILABLE = 3 };
 
     // Online modes, Slippi order (Online.s: Ranked, Unranked, Direct, Teams), then ours: the 2v2
-    // queue (docs/design/2v2.md; 4 is Slippi's Party, never used).
-    enum Mode { MODE_RANKED = 0, MODE_UNRANKED = 1, MODE_DIRECT = 2, MODE_TEAMS = 3, MODE_TWOS = 5 };
+    // queue (docs/design/2v2.md; 4 is Slippi's Party, never used). MODE_PAIR is SESSION's mode
+    // only: a 2v2 party's pair room (docs/design/2v2.md, "The pair room"), its two players in the
+    // waiting room together while their 2v2 search runs; the CSS's mode stays MODE_TWOS.
+    enum Mode { MODE_RANKED = 0, MODE_UNRANKED = 1, MODE_DIRECT = 2, MODE_TEAMS = 3, MODE_TWOS = 5, MODE_PAIR = 6 };
 
     // mmState values = Slippi's ProcessState (SlippiMatchmaking.h).
     enum MmState {

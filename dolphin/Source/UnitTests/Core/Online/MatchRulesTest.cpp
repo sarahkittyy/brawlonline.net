@@ -83,6 +83,11 @@ TEST(MatchRules, MissingFieldsArePPlusDefaults)
   const auto none = Parse(R"({"timeMinutes": 0})");
   ASSERT_TRUE(none.rules);
   EXPECT_EQ(none.rules->time_minutes, 0);
+  // A time match with none (a 2v2 party's pair room: it plays on forever).
+  const auto forever = Parse(R"({"style": "time", "timeMinutes": 0})");
+  ASSERT_TRUE(forever.rules);
+  EXPECT_EQ(forever.rules->style, MatchRules::STYLE_TIME);
+  EXPECT_EQ(forever.rules->time_minutes, 0);
 }
 
 TEST(MatchRules, BadValuesRefuseTheMatch)
@@ -96,7 +101,7 @@ TEST(MatchRules, BadValuesRefuseTheMatch)
            R"({"stocks": 100})",
            R"({"stocks": 2.5})",
            R"({"stocks": "4"})",
-           R"({"style": "time", "timeMinutes": 0})",
+           R"({"style": "coin", "timeMinutes": 0})",
            R"({"timeMinutes": 100})",
            R"({"timeMinutes": -1})",
            R"({"damageRatio": 0.4})",
@@ -211,7 +216,9 @@ TEST(MatchRules, SessionBytes)
   auto time0 = SessionBytes(MatchRules{});
   time0[RU_STYLE] = MatchRules::STYLE_TIME;
   time0[RU_TIME] = 0;
-  EXPECT_FALSE(FromSessionBytes(time0));   // a time match needs a time limit
+  EXPECT_TRUE(FromSessionBytes(time0));    // a time match with no time limit (the pair room's)
+  time0[RU_STYLE] = MatchRules::STYLE_COIN;
+  EXPECT_FALSE(FromSessionBytes(time0));   // a coin match needs a time limit
   const auto d = SessionBytes(MatchRules{});
   // (byte 0x10: hazards, off by default since 2026-10-12)
   const std::array<u8, RULES_SIZE> want_d{1, 1, 4, 8, 10, 1, 1, 0, 0, 6, 0, 0, 0, 0, 0, 0, 0, 0};

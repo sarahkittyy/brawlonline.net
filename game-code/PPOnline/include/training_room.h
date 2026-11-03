@@ -43,4 +43,11 @@ namespace TrainingRoom {
 
     // The printIndex hook: the room's banner line; returns a replacement or NULL.
     const char* line(MuMsg* msg, u32 window, u32 line, const void* msbin);
+
+    // A 2v2 party's pair room (docs/design/2v2.md, "The pair room"): its match is an online match
+    // on the room's stage, with the room's Sandbag. Every frame of it (also resimulated ones), at
+    // the game frame `frame`: the Sandbag as the room makes it, from the rolled-back state only.
+    // pairReset at its setup.
+    void pairSandbag(u32 frame);
+    void pairReset();
 }

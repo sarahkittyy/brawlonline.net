@@ -642,10 +642,11 @@ TEST(RoomMessages, Requests)
   r.op = Op::Poll;
   EXPECT_EQ(RequestJson(r), std::nullopt);
   EXPECT_EQ(HelloJson("u", "k", "0.1.0", "mac"),
-            R"({"appVersion":"0.1.0","gameAlive":true,"platform":"mac","type":"hello","user":{"playKey":"k","uid":"u"}})");
+            R"({"appVersion":"0.1.0","gameAlive":true,"pairRoom":true,"platform":"mac",)"
+            R"("type":"hello","user":{"playKey":"k","uid":"u"}})");
   EXPECT_EQ(HelloJson("u", "k", "0.1.0", "win", "ab12"),
-            R"({"appVersion":"0.1.0","chatKey":"ab12","gameAlive":true,"platform":"win","type":"hello",)"
-            R"("user":{"playKey":"k","uid":"u"}})");
+            R"({"appVersion":"0.1.0","chatKey":"ab12","gameAlive":true,"pairRoom":true,)"
+            R"("platform":"win","type":"hello","user":{"playKey":"k","uid":"u"}})");
 }
 
 TEST(RoomMessages, RulesetCodesAndRequests)
@@ -733,6 +734,18 @@ TEST(RoomMessages, TwosParty)
   EXPECT_TRUE(party.view->twos);
   EXPECT_EQ(party.view->status, Status::Searching);
   EXPECT_STREQ(StatusName(party.view->status), "searching");
+  EXPECT_FALSE(party.view->pair_room);
+  // Both of its players search and play the pair room (docs/design/2v2.md, "The pair room").
+  const Message pair = Parse(Replace(Replace(STATE, R"("status": "waiting",)",
+                                             R"("status": "searching", "kind": "twos", )"
+                                             R"("pairRoom": true,)"),
+                                     R"("public": true,)", R"("public": false,)"));
+  ASSERT_EQ(pair.kind, Message::Kind::RoomState) << pair.why;
+  EXPECT_TRUE(pair.view->pair_room);
+  // Only a party has one.
+  EXPECT_FALSE(
+      Parse(Replace(STATE, R"("status": "waiting",)", R"("status": "waiting", "pairRoom": true,)"))
+          .view->pair_room);
   // Another kind (a newer mm's) is a room.
   const Message other = Parse(Replace(STATE, R"("status": "waiting",)", R"("status": "waiting", "kind": "tournament",)"));
   ASSERT_EQ(other.kind, Message::Kind::RoomState);

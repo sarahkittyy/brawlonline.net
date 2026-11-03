@@ -286,11 +286,14 @@ namespace MatchHud {
         s_gxCurrentMtx(0);
     }
 
+    static void drawPairBanner(const u16* text);
     static void draw()
     {
         bool names = g_onlineMatchGame != 0;
         bool hint = OnlineMatch::quitHintShown();
-        if (!s_on && !names && !hint) {
+        u16 pairLine[96];
+        bool pair = OnlineMatch::pairRoomLine(pairLine, 96);
+        if (!s_on && !names && !hint && !pair) {
             forgetPanels();
             return;
         }
@@ -303,6 +306,12 @@ namespace MatchHud {
         s_aspectX = aspectX();
 
         if (names) drawNames();
+        if (!s_on && pair) {
+            // A 2v2 party's pair room: the waiting room's banner, with what it is and how to leave.
+            drawPairBanner(pairLine);
+            PPOM::g_block.debug.scratch[10] |= 0x40000000;   // tests: the pair room's banner was drawn
+            return;
+        }
         if (!s_on) {
             // Unranked: START shows how to quit (Slippi's client pause screen, which shows only
             // L+R+A+START; here the player's own controller's buttons), white where DISCONNECTED
@@ -361,11 +370,9 @@ namespace MatchHud {
     static const GxAlphaCompareFn s_gxSetAlphaCompare = (GxAlphaCompareFn)0x801F3FD8;
     static const GxBeginFn s_gxBegin = (GxBeginFn)0x801F1088;
 
-    static void drawFade()
+    // The GX state of a flat quad (vertex position + colour, alpha blended) in begin2D's space.
+    static void quadSetup()
     {
-        const u8 alpha = TrainingRoom::fadeAlpha();
-        if (!alpha) return;
-        begin2D();
         s_cwSetupGX(s_cw);
         s_gxClearVtxDesc();
         s_gxSetVtxDesc(9 /* GX_VA_POS */, 1 /* GX_DIRECT */);
@@ -384,9 +391,12 @@ namespace MatchHud {
         s_gxSetAlphaCompare(7 /* GX_ALWAYS */, 0, 0, 7, 0);
         s_gxZMode(0, 7 /* GX_ALWAYS */, 0);
         s_gxCullMode(0 /* GX_CULL_NONE */);
-        static const float X0 = -8.0f, X1 = SCREEN_W + 8.0f, Y0 = -8.0f, Y1 = SCREEN_H + 8.0f;
-        const float xs[4] = {X0, X1, X1, X0};
-        const float ys[4] = {Y0, Y0, Y1, Y1};
+    }
+
+    static void quad(float x0, float y0, float x1, float y1, u32 rgba)
+    {
+        const float xs[4] = {x0, x1, x1, x0};
+        const float ys[4] = {y0, y0, y1, y1};
         volatile float* fifoF = (volatile float*)0xCC008000;   // the GX write-gather pipe
         volatile u32* fifoU = (volatile u32*)0xCC008000;
         s_gxBegin(0x80 /* GX_QUADS */, 0, 4);
@@ -394,8 +404,40 @@ namespace MatchHud {
             *fifoF = xs[i];
             *fifoF = ys[i];
             *fifoF = 0.0f;
-            *fifoU = alpha;   // RGBA: black, this alpha
+            *fifoU = rgba;
         }
+    }
+
+    static void drawFade()
+    {
+        const u8 alpha = TrainingRoom::fadeAlpha();
+        if (!alpha) return;
+        begin2D();
+        quadSetup();
+        quad(-8.0f, -8.0f, SCREEN_W + 8.0f, SCREEN_H + 8.0f, alpha);   // black, this alpha
+    }
+
+    // A 2v2 party's pair room's banner (OnlineMatch::pairRoomLine; Sarah's, 2026-11-03: "definitely
+    // will also want the banner back"), as the waiting room's own (Brawl's banner there, which
+    // only the room's operator has): a dark band across the screen, the line moving through it
+    // from right to left and coming round again. Drawn only, by the frame hook: nothing of it is
+    // in the game's state. Its place follows the match's game frame, so a rollback's frames run
+    // again move it as they did the first time.
+    static const float BANNER_Y0 = 84.0f, BANNER_Y1 = 128.0f;
+    static const float BANNER_SCALE = 0.62f;
+    static const float BANNER_TEXT_TOP = 94.0f;
+    static const u32 BANNER_RGBA = 0x141414C8;
+    static const u32 BANNER_SPEED = 2;     // 640-space units a frame
+    static const u32 BANNER_GAP = 160;     // between the line's end and its next start
+    static void drawPairBanner(const u16* text)
+    {
+        quadSetup();
+        quad(-8.0f, BANNER_Y0, SCREEN_W + 8.0f, BANNER_Y1, BANNER_RGBA);
+        setF32(0x24, BANNER_SCALE * s_aspectX);
+        const float w = textWidth(text);
+        const u32 period = (u32)SCREEN_W + (u32)w + BANNER_GAP;
+        const float left = SCREEN_W - (float)((*(u32*)GAME_FRAME * BANNER_SPEED) % period);
+        printCentredXY(text, left + w * 0.5f, BANNER_TEXT_TOP, BANNER_SCALE, BANNER_SCALE, 0xFFFFFFFF);
     }
 
     // Brawl's name tags over the fighters are drawn once, when the HUD is made: fn_800E10B0

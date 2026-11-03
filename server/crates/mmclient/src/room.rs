@@ -108,6 +108,7 @@ impl OnlineClient {
             platform: platform.into(),
             chat_key: chat_key.into(),
             game_alive,
+            pair_room: false,
         };
         client.send_json(&serde_json::to_value(&hello)?);
         let resp = client.wait_for(Duration::from_secs(5), |m| m["type"] == "hello-resp")?;

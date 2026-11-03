@@ -414,6 +414,7 @@ std::optional<View> ParseView(const picojson::object& o, std::string* why)
   }
   // A 2v2 party (2026-11-02); any other kind (a newer mm's) is taken as a room.
   v.twos = Str(o, "kind", 16).value_or("") == "twos";
+  v.pair_room = v.twos && Bool(o, "pairRoom").value_or(false);
   v.you = static_cast<int>(*you);
   v.host = static_cast<int>(*host);
   v.status_text = *text;
@@ -757,6 +758,8 @@ std::string HelloJson(const std::string& uid, const std::string& play_key,
     o["chatKey"] = picojson::value(chat_key);
   // This build sends `game-alive` while its emulation runs (Online/GameAlive.h).
   o["gameAlive"] = picojson::value(true);
+  // ... and plays a 2v2 party's pair room (docs/design/2v2.md, "The pair room").
+  o["pairRoom"] = picojson::value(true);
   return picojson::value(o).serialize();
 }
 

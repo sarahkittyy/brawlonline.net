@@ -58,6 +58,7 @@ namespace OnlineMenu {
     void topPageRunning(u8* page);       // the main menu's top page ran (the same, no Wi-Fi task)
     void noteQuit(int port);             // the last game ended by this port's quit: the CSS says so
     void waitingRoomEnded(int how);      // the waiting room has ended (TrainingRoom::End)
+    void pairRoomEnded();                // a 2v2 party's pair room's match has ended (OnlineMatch)
     u8 lockedTagRecord();                // the last lock-in's name tag (record +0x18, 0x78 none)
 }
 
@@ -126,6 +127,10 @@ namespace OnlineMatch {
     bool disconnectShown();
     bool quitHintShown();             // Unranked: this player's START shows the quit hint
     const char* quitHintText();       // its text: this player's controller's quit buttons
+    bool pairRoom();                  // the match is a 2v2 party's pair room (SESSION MODE_PAIR)
+    // The pair room's line at the top of the screen (UTF-16 into `out`, `max` >= 64 units): false
+    // when none is shown.
+    bool pairRoomLine(u16* out, int max);
     u16 pickedStage();                // the loser's stage pick (0xFFFF none, PICK_CANCELLED)
     const u16 PICK_CANCELLED = 0xFFFD; // the stage select was left without a pick (B)
     u8 pickedAsl();

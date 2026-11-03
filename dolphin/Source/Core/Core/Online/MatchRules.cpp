@@ -99,7 +99,9 @@ ParsedRules ParseRules(const picojson::object& resp)
     }
   }
   const auto stocks = GetByte(o, "stocks", 1, 99, r.stocks, &out.detail);
-  const u8 min_time = r.style == MatchRules::STYLE_STOCK ? 0 : 1;
+  // 0: no time limit (P+'s MORE RULES TIME LIMIT has it for every style: a time match then plays
+  // on forever, a 2v2 party's pair room's, docs/design/2v2.md); coin needs one.
+  const u8 min_time = r.style == MatchRules::STYLE_COIN ? 1 : 0;
   const auto time = GetByte(o, "timeMinutes", min_time, 99, r.time_minutes, &out.detail);
   const auto frequency =
       GetByte(o, "itemFrequency", 0, MAX_ITEM_FREQUENCY, r.item_frequency, &out.detail);
@@ -273,7 +275,7 @@ std::optional<MatchRules> FromSessionBytes(const std::array<u8, RULES_SIZE>& b,
 {
   if (b[RU_VALID] != 1 || b[RU_STYLE] > MatchRules::STYLE_COIN || b[RU_STOCKS] < 1 ||
       b[RU_STOCKS] > 99 || b[RU_TIME] > 99 ||
-      (b[RU_STYLE] != MatchRules::STYLE_STOCK && b[RU_TIME] < 1) || b[RU_DAMAGE] < 5 ||
+      (b[RU_STYLE] == MatchRules::STYLE_COIN && b[RU_TIME] < 1) || b[RU_DAMAGE] < 5 ||
       b[RU_DAMAGE] > 20 || b[RU_ITEM_FREQUENCY] > MAX_ITEM_FREQUENCY)
   {
     return std::nullopt;

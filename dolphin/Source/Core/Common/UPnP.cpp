@@ -7,6 +7,7 @@
 
 #include "Common/Logging/Log.h"
 
+#include <algorithm>
 #include <array>
 #include <condition_variable>
 #include <cstdio>
@@ -202,7 +203,7 @@ struct OnlineState
   UPNPUrls urls{};
   IGDdatas data{};
   std::string lan_addr;  // this machine's address toward the router
-  u16 mapped = 0;
+  std::array<u16, Common::UPnP::MAP_SLOTS> mapped{};  // by MapUdpPort's slot, 0 none
 };
 
 // Never destroyed: the discovery thread is detached and may still run when the process exits.
@@ -312,19 +313,20 @@ void StartDiscoveryLocked(OnlineState& state)
   std::thread(&DiscoverOnlineIGD).detach();
 }
 
-void UnmapLocked(OnlineState& state)
+void UnmapLocked(OnlineState& state, int slot)
 {
-  if (state.mapped == 0)
+  u16& mapped = state.mapped[slot];
+  if (mapped == 0)
     return;
-  const std::string port = std::to_string(state.mapped);
+  const std::string port = std::to_string(mapped);
   const int r = UPNP_DeletePortMapping(state.urls.controlURL, state.data.first.servicetype,
                                        port.c_str(), "UDP", nullptr);
   if (r == UPNPCOMMAND_SUCCESS)
-    INFO_LOG_FMT(NETPLAY, "UPnP: removed the mapping of UDP port {}", state.mapped);
+    INFO_LOG_FMT(NETPLAY, "UPnP: removed the mapping of UDP port {}", mapped);
   else
-    WARN_LOG_FMT(NETPLAY, "UPnP: removing the mapping of UDP port {} failed: {}", state.mapped,
+    WARN_LOG_FMT(NETPLAY, "UPnP: removing the mapping of UDP port {} failed: {}", mapped,
                  ErrorText(r));
-  state.mapped = 0;
+  mapped = 0;
 }
 }  // namespace
 
@@ -335,8 +337,9 @@ void Common::UPnP::StartDiscovery()
   StartDiscoveryLocked(state);
 }
 
-bool Common::UPnP::MapUdpPort(u16 port, std::chrono::milliseconds wait)
+bool Common::UPnP::MapUdpPort(u16 port, std::chrono::milliseconds wait, int slot)
 {
+  slot = std::clamp(slot, 0, MAP_SLOTS - 1);
   OnlineState& state = GetOnlineState();
   std::unique_lock lk(state.mutex);
   StartDiscoveryLocked(state);
@@ -348,7 +351,7 @@ bool Common::UPnP::MapUdpPort(u16 port, std::chrono::milliseconds wait)
   if (!state.have_igd)
     return false;
 
-  UnmapLocked(state);
+  UnmapLocked(state, slot);
   const std::string port_str = std::to_string(port);
   const std::string desc = "Brawl Online UDP " + port_str;
   // A lease, so that a mapping left behind by a crash goes away. Some routers only take
@@ -368,7 +371,7 @@ bool Common::UPnP::MapUdpPort(u16 port, std::chrono::milliseconds wait)
                  state.lan_addr, ErrorText(r), r);
     return false;
   }
-  state.mapped = port;
+  state.mapped[slot] = port;
   NOTICE_LOG_FMT(NETPLAY, "UPnP: mapped UDP port {} to {}", port, state.lan_addr);
   return true;
 }
@@ -384,9 +387,11 @@ void Common::UPnP::UnmapUdpPort(u16 only_port)
 {
   OnlineState& state = GetOnlineState();
   std::lock_guard lk(state.mutex);
-  if (only_port != 0 && state.mapped != only_port)
-    return;
-  UnmapLocked(state);
+  for (int slot = 0; slot < MAP_SLOTS; ++slot)
+  {
+    if (only_port == 0 || state.mapped[slot] == only_port)
+      UnmapLocked(state, slot);
+  }
 }
 
 #endif

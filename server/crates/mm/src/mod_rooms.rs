@@ -646,6 +646,7 @@ mod tests {
             display_name: format!("player{n}"),
             connect_code: format!("P{n}#1"),
             room_name: None,
+            pair_room: false,
         }
     }
 

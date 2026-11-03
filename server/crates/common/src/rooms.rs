@@ -128,6 +128,12 @@ pub struct Hello {
     /// game. Builds before it leave it out and are never taken so.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub game_alive: bool,
+    /// The game plays a 2v2 party's pair room (2026-11-03, `docs/design/2v2.md`, "The pair room"):
+    /// while both players of a party search, their games connect to each other on a party ticket
+    /// and play in the waiting room together. Builds before it leave it out: a party with one never
+    /// gets [`RoomState::pair_room`].
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub pair_room: bool,
 }
 
 fn string_or_empty<'de, D: serde::Deserializer<'de>>(d: D) -> Result<String, D::Error> {
@@ -661,6 +667,11 @@ pub struct RoomState {
     /// `kind`: `twos` for a 2v2 party (2026-11-02). Absent: a room.
     #[serde(rename = "kind", default, skip_serializing_if = "Option::is_none")]
     pub room_kind: Option<String>,
+    /// A 2v2 party whose two players both search now and whose games both play the pair room
+    /// ([`Hello::pair_room`]): each game sends its party ticket (mode 3 naming the party's code), and
+    /// the two are matched with each other only. Written only when true.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub pair_room: bool,
 }
 
 /// `room-format`'s fields (docs/design/special-rules.md §4).
@@ -1199,6 +1210,7 @@ mod tests {
             platform: String::new(),
             chat_key: String::new(),
             game_alive: false,
+            pair_room: false,
         };
         assert!(serde_json::to_value(&hello).unwrap().get("chatKey").is_none());
         assert!(serde_json::to_value(&hello).unwrap().get("gameAlive").is_none());

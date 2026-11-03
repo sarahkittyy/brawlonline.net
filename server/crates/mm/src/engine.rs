@@ -464,6 +464,8 @@ struct Pending {
     chat_key: Option<[u8; 32]>,
     /// `hello`: the game sends `game-alive` while its emulation runs.
     game_alive: bool,
+    /// `hello`: the game plays a 2v2 party's pair room (`common::rooms::Hello::pair_room`).
+    pair_room: bool,
     /// A 2v2 ticket's own fields.
     twos: Option<TwosSearch>,
 }
@@ -524,6 +526,8 @@ struct Online {
     ranked_beat: Option<(Instant, DateTime<Utc>)>,
     /// The round trips of this connection ([`Input::Rtt`]).
     rtt: RttWatch,
+    /// The game plays a 2v2 party's pair room (its `hello` said so).
+    pair_room: bool,
 }
 
 // Whose end a Ranked set's trouble was on (the user's, 2026-10-29: a player losing a set must not
@@ -1442,6 +1446,7 @@ impl Engine {
                     display_name: o.user.display_name.clone(),
                     connect_code: o.code.clone(),
                     room_name: o.user.room_name.clone(),
+                    pair_room: o.pair_room,
                 };
                 // Going to a room ends the match chat (the room's own group comes with the room).
                 if matches!(req, RoomRequest::Create { .. } | RoomRequest::Join { .. }) {
@@ -1460,6 +1465,7 @@ impl Engine {
                     display_name: o.user.display_name.clone(),
                     connect_code: o.code.clone(),
                     room_name: o.user.mods_room_name.clone(),
+                    pair_room: o.pair_room,
                 };
                 // One room at a time: a mod room leaves the P+ room.
                 if matches!(req, common::mods::ModsRequest::Create { .. } | common::mods::ModsRequest::Join { .. })
@@ -1610,6 +1616,7 @@ impl Engine {
             // A malformed key is ignored: the connection works, it just can't chat.
             chat_key: common::chat::parse_identity_key(&h.chat_key),
             game_alive: h.game_alive,
+            pair_room: h.pair_room,
             twos: None,
         };
         if let Some(c) = self.conns.get_mut(&conn) {
@@ -1712,6 +1719,7 @@ impl Engine {
             client,
             chat_key: None,
             game_alive: false,
+            pair_room: false,
             twos,
         };
         if let Some(c) = self.conns.get_mut(&conn) {
@@ -1748,6 +1756,11 @@ impl Engine {
         }
         if !self.secret.verify(user.uid, user.play_key_version, &p.play_key) {
             return self.refuse(out, conn, msg::LOGIN_EXPIRED);
+        }
+        // A party ticket (a room game ticket naming a 2v2 party): the pair room of a party that
+        // searches, beside the player's 2v2 ticket. It replaces no ticket and is no search.
+        if let Some(party) = p.room.clone().filter(|code| self.rooms.is_party(code)) {
+            return self.on_pair_ticket(now, wall, conn, p, user, party, out);
         }
         // A new search (of any mode) ends the account's match chat; only a verified ticket can.
         self.chat.leave(user.uid, Some(GroupKind::Match), true, out);
@@ -1898,6 +1911,7 @@ impl Engine {
                 stalled: false,
                 ranked_beat: None,
                 rtt: RttWatch::default(),
+                pair_room: p.pair_room,
             });
         }
         if let Some(Conn { state: State::Online(o), .. }) = self.conns.get(&conn) {
@@ -1909,6 +1923,56 @@ impl Engine {
 
     /// A room's game ticket from a verified account.
     #[allow(clippy::too_many_arguments)]
+    /// A party ticket (`RoomBook::pair_ticket`, `docs/design/2v2.md`, "The pair room"): waits for
+    /// the partner's, then both get their `get-ticket-resp` and are done. No match is recorded.
+    #[allow(clippy::too_many_arguments)]
+    fn on_pair_ticket(
+        &mut self,
+        now: Instant,
+        wall: DateTime<Utc>,
+        conn: ConnId,
+        p: Pending,
+        user: MmUser,
+        party: String,
+        out: &mut Vec<Output>,
+    ) {
+        if user.is_banned(wall) {
+            return self.refuse(out, conn, msg::BANNED);
+        }
+        let Some(code) = user.connect_code.clone() else {
+            return self.refuse(out, conn, msg::NO_CONNECT_CODE);
+        };
+        let Some(addr) = self.conns.get(&conn).and_then(|c| to_v4(c.addr)) else { return };
+        let outcome = match self.rooms.pair_ticket(conn, addr, p.lan.clone(), user.uid, &party) {
+            Ok(o) => o,
+            Err(e) => return self.refuse(out, conn, e),
+        };
+        Self::send(out, conn, &CreateTicketResp::ok());
+        let region = self.cfg.regions.region_of(SocketAddr::V4(addr));
+        if let Some(c) = self.conns.get_mut(&conn) {
+            c.state = State::Waiting(Waiting {
+                since: now,
+                user,
+                code,
+                mode: Mode::Teams,
+                target: party.clone(),
+                lan: p.lan,
+                region,
+                loc: None,
+                party: None,
+            });
+        }
+        if let Some(old) = outcome.replaced {
+            self.fail_ticket(out, old, msg::REPLACED, None);
+        }
+        for (c, resp) in &outcome.matched {
+            Self::send(out, *c, resp);
+        }
+        for (c, _) in &outcome.matched {
+            self.finish(out, *c);
+        }
+    }
+
     fn on_room_ticket(
         &mut self,
         now: Instant,
@@ -5401,6 +5465,50 @@ mod tests {
         assert_eq!(splits[0][pa], splits[0][pb]);
         // The party is in the match.
         assert_eq!(state_of(&out, 11)["status"], "in-game");
+    }
+
+    #[test]
+    fn a_searching_partys_party_tickets_meet_beside_its_2v2_tickets() {
+        let mut h = Harness::new(EngineConfig::default());
+        let us = h.users(2);
+        // Both games play the pair room (their hellos say so).
+        h.connect(11, 9);
+        let mut hello = json!({
+            "type": "hello",
+            "user": {"uid": us[0].uid.to_string(), "playKey": h.secret.derive(us[0].uid, us[0].play_key_version)},
+            "appVersion": "3.4.0",
+            "pairRoom": true,
+        });
+        h.raw(11, hello.to_string().as_bytes());
+        let out = h.room(11, json!({"type": "room-create", "kind": "twos"}));
+        let code = state_of(&out, 11)["code"].as_str().unwrap().to_string();
+        h.connect(12, 9);
+        hello["user"] =
+            json!({"uid": us[1].uid.to_string(), "playKey": h.secret.derive(us[1].uid, us[1].play_key_version)});
+        h.raw(12, hello.to_string().as_bytes());
+        h.room(12, json!({"type": "room-join", "code": code}));
+        h.connect(1, 1);
+        h.connect(2, 1);
+        h.twos(1, &us[0], &code, json!({}));
+        let out = h.twos(2, &us[1], &code, json!({}));
+        assert_eq!(state_of(&out, 11)["pairRoom"], true);
+        // Each game's party ticket: a room game ticket (mode 3) naming the party.
+        h.connect(21, 1);
+        h.connect(22, 1);
+        let t = h.ticket_json(&us[0], &code, 3);
+        let out = h.raw(21, t.to_string().as_bytes());
+        assert!(sent(&out, 21).iter().all(|m| m["type"] != "get-ticket-resp"), "waits for the partner's");
+        let t = h.ticket_json(&us[1], &code, 3);
+        let out = h.raw(22, t.to_string().as_bytes());
+        assert!(matches(&out).is_empty(), "nothing recorded");
+        let (a, b) = (resp(&out, 21), resp(&out, 22));
+        assert_eq!(a["matchId"], b["matchId"]);
+        assert!(a["matchId"].as_str().unwrap().starts_with("mode.pair-"));
+        assert_eq!((a["isHost"].as_bool(), b["isHost"].as_bool()), (Some(true), Some(false)));
+        // The 2v2 tickets still search: neither was replaced.
+        assert!(sent(&out, 1).iter().chain(sent(&out, 2).iter()).all(|m| m["type"] != "get-ticket-resp"));
+        assert_eq!(h.e.status(Utc::now()).queues.twos, 2);
+        assert_eq!(state_of(&h.room(11, json!({"type": "room-back"})), 11)["status"], "searching");
     }
 
     #[test]

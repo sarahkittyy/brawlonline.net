@@ -89,6 +89,10 @@ public:
     bool requeue = false;
     std::vector<std::string> avoid;
     std::string after;
+    // A 2v2 party's pair room (OnlineClient.h; mode Teams, the party's code): it connects beside
+    // the party's 2v2 search, so it binds a port of its own (the forced port + 1 when one is
+    // forced) and maps it in UPnP's second slot, leaving the search's alone.
+    bool pair_room = false;
   };
 
   using ConnectedCallback = std::function<void(const Match&, P2PLink& link)>;

@@ -35,6 +35,7 @@
 #include "Core/Online/SpecialAssets.h"
 #include "Core/Online/User.h"
 #include "Core/PowerPC/MMU.h"
+#include "Core/Rollback/GameplayRollback.h"
 #include "Core/Rollback/GameplaySession.h"
 #include "Core/Rollback/MachineSession.h"
 #include "Core/Rollback/PeerData.h"
@@ -216,6 +217,10 @@ constexpr u8 SCREEN_ROOM_CSS = static_cast<u8>(Rooms::Screen::Room);
 constexpr u8 RF_IN = 1, RF_PUBLIC = 2, RF_TEAMS = 4, RF_WATCH = 8, RF_TEAM_COLORS = 0x10, RF_TWOS = 0x20;
 // The 2v2 queue's mode (Matchmaking::Mode::Twos; ppom.h MODE_TWOS).
 constexpr u8 MODE_TWOS = 5;
+// SESSION's mode while a 2v2 party's pair room is the session (Client::TickPairRoom; ppom.h
+// MODE_PAIR, docs/design/2v2.md "The pair room"): its match is the two partners in the waiting
+// room.
+constexpr u8 MODE_PAIR = 6;
 // S_TEAMS: 0 a free-for-all; a team battle: 1 as recorded before 2026-10-21 (the players' own
 // costumes, no glow), 2 P+'s rainbow team battle (the players' own costumes and the team glow),
 // 3 its plain one (every player in their team's costume).
@@ -359,6 +364,9 @@ bool s_was_disconnected = false;
 // Rooms: this player's colour in the room (kept for a room game whose connection to mm dropped).
 u8 s_room_team = 0xFF;
 bool s_was_in_match = false;
+// A 2v2 party's pair room: SESSION had its match set up, so the game may be in it (until it is back
+// on the menus). Once its session is gone the game ends that match itself (LOCAL quitLeft).
+bool s_pair_game = false;
 // Frames left for the game to show DISCONNECTED itself before the OSD stands in (-1: none).
 int s_hud_wait = -1;
 std::atomic<u64> s_osd_disconnects{0};
@@ -1959,6 +1967,10 @@ void SyncSession(const Core::CPUThreadGuard& guard, const Located& loc)
       l.game = l.game != 0 && k < 32 ? k + 1 : 0;
       l.team = s_room_team;
     }
+    // A 2v2 party's pair room: the search's lock-in (for no game, as 2v2's game 1 is readied on
+    // the CSS) is the pair room's one match, the session's game 1.
+    if (Client::PairRoomSession() && l.ready)
+      l.game = 1;
     Gprb::Session::SetLocalLock(l);
     if (lock_seq != s_lock_seq)
     {
@@ -2000,9 +2012,43 @@ void SyncSession(const Core::CPUThreadGuard& guard, const Located& loc)
   // SESSION's rules: the running session's (its ticket's), else on the room CSS the room's
   // (what the RULES screens show and the next game will play).
   std::optional<MatchRules> rules = in_room ? room.view->rules : std::nullopt;
+  // A 2v2 party's pair room (Client::TickPairRoom): started beside the party's 2v2 search, over
+  // once its session ended by itself (a hold START, the partner gone, a desync), when the search
+  // ends with it.
+  // Its own end first: the partner's search ending with theirs (the same hold START) must not read
+  // as their cancel here.
+  const std::optional<Match> pair_match = lobby.pair_room ? Client::PairRoomMatch() : std::nullopt;
+  // (A session that ended on the partner's leave is not active any more, and still the pair
+  // room's. Both machines' matches mark the hold START's quit on the same frame, SESSION's quitBy,
+  // and the machine whose session ended first leaves the other's: a quit too, not a lost
+  // connection. SESSION is read before this call writes it again.)
+  if (lobby.pair_room && (lobby.disconnected || lobby.desynced || lobby.game > 1))
+  {
+    const bool quit = R8(guard, loc.session + SESSION_QUIT_BY) != 0;
+    std::string partner = "your partner";
+    for (const auto& p : pair_match ? pair_match->players : std::vector<PlayerInfo>{})
+    {
+      if (!p.is_local)
+        partner = p.display_name;
+    }
+    const bool gone = !lobby.desynced && (lobby.unheard || (lobby.disconnected && !quit));
+    Client::PairRoomOver(lobby.desynced ? fmt::format("Out of sync with {}.", partner) :
+                         lobby.unheard  ? fmt::format("Couldn't connect to {}.", partner) :
+                         gone           ? fmt::format("Lost the connection to {}.", partner) :
+                                          std::string(),
+                         gone);
+  }
+  const bool party_view = in_room && room.view->twos;
+  Client::TickPairRoom(party_view && room.view->pair_room,
+                       party_view ? room.view->code : std::string());
   if (lobby.active)
   {
-    const Client::MatchState ms = Client::GetMatchState();
+    Client::MatchState ms = Client::GetMatchState();
+    if (pair_match)
+    {
+      ms.match = pair_match;
+      ms.handoff = "started";
+    }
     if (ms.match && ms.handoff == "started")
     {
       rules = ms.match->rules;
@@ -2012,7 +2058,7 @@ void SyncSession(const Core::CPUThreadGuard& guard, const Located& loc)
       // the decider-first order: after the host left and came back to slot 1, the new host's
       // name was under P1 and theirs under P2 (staging, 2026-10-10).
       std::vector<const PlayerInfo*> order;
-      if (ms.match->players.size() > 2 || room.game_active)
+      if (ms.match->players.size() > 2 || room.game_active || ms.match->pair_room)
       {
         order.assign(SESSION_PLAYERS, nullptr);
         for (const auto& p : ms.match->players)
@@ -2050,7 +2096,7 @@ void SyncSession(const Core::CPUThreadGuard& guard, const Located& loc)
   // character select it goes back to its idle prompt without any text, as Slippi does. Dolphin's
   // red OSD message only stands in when the game was in a match and did not show the text itself
   // (an older plugin, or a scene where it cannot draw).
-  if (lobby.disconnected && !s_was_disconnected)
+  if (lobby.disconnected && !s_was_disconnected && !lobby.pair_room)
   {
     NOTICE_LOG_FMT(NETPLAY, "GameBridge: the opponent disconnected{}{}",
                    s_was_in_match ? " in a match" : "",
@@ -2106,6 +2152,18 @@ void SyncSession(const Core::CPUThreadGuard& guard, const Located& loc)
   }
   local[L_DESYNCED] = lobby.desynced ? 1 : 0;
   local[L_QUIT_LEFT] = lobby.quit_left ? 1 : 0;
+  // A 2v2 party's pair room whose session is gone (the 2v2 match found, the search ended) while the
+  // game may be in its match: the game ends it as a quit's, without DISCONNECTED.
+  {
+    const bool pair_on = lobby.active && lobby.pair_room;
+    const std::string scene = Gprb::CurrentSceneName(Gprb::Guest(guard.GetSystem().GetMemory()));
+    if (pair_on && lobby.setup_ready)
+      s_pair_game = true;
+    else if (!pair_on && scene != "scMelee" && scene != "scMemoryChange")
+      s_pair_game = false;
+    if (s_pair_game && !pair_on && scene == "scMelee")
+      local[L_QUIT_LEFT] = 1;
+  }
   // v10: the stage select's cursors: this player's in, the others' out.
   if (loc.version >= 10)
   {
@@ -2158,7 +2216,7 @@ void SyncSession(const Core::CPUThreadGuard& guard, const Located& loc)
   if (lobby.active)
   {
     session[S_STATE] = lobby.setup_ready ? 2 : 1;
-    session[S_MODE] = s_search_mode;
+    session[S_MODE] = lobby.pair_room ? MODE_PAIR : s_search_mode;
     session[S_GAME] = static_cast<u8>(lobby.game);
     session[S_LAST_WINNER] = lobby.last_winner;
     session[S_STAGE] = static_cast<u8>(lobby.stage >> 8);
@@ -2207,9 +2265,15 @@ void SyncSession(const Core::CPUThreadGuard& guard, const Located& loc)
   }
   // A 2v2 party while its 2v2 session runs (docs/design/2v2.md): SESSION is the session's (its four
   // players on their ports), not the party's two panels.
-  const bool party_session = in_room && room.view->twos && lobby.active;
+  // (A pair room's session keeps the party's view, with its own mode and game.)
+  const bool party_session = in_room && room.view->twos && lobby.active && !lobby.pair_room;
   if (v5 && in_room && !party_session)
     PutRoom(session, room, lobby);
+  if (lobby.active && lobby.pair_room)
+  {
+    session[S_MODE] = MODE_PAIR;
+    session[S_GAME] = static_cast<u8>(lobby.game);
+  }
   // A 2v2 session outside its matches (Sarah's board, 2026-11-03): the four players' panels on the
   // CSS, as a room's (SESSION's room fields by in-game port), and their next game's teams, read
   // only. RF_TWOS without RF_IN: no room of the game's takes it for its own.

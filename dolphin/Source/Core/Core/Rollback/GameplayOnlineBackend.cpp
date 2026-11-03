@@ -107,6 +107,7 @@ public:
         o.teams = match.room_teams;
         o.team_colors = match.room_teams && match.room_team_colors;
         o.initial_pickers = match.room_pickers & ports;
+        o.pair_room = match.pair_room;
       }
       else if (!match.twos_splits.empty())
       {

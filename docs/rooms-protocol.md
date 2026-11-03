@@ -29,6 +29,8 @@ All messages are JSON in reliable ENet packets on channel 0, like tickets (`serv
 
 `gameAlive` (optional, `true` from builds after 2026-10-22): the game sends `game-alive` while its emulation runs (below).
 
+`pairRoom` (optional, `true` from builds after 2026-11-03): the game plays a 2v2 party's pair room (below, 2v2 parties; `docs/design/2v2.md`, "The pair room").
+
 The same checks as a ticket, in the same order: the build (below), the uid and play key, the ban, a connect code. Then mm answers and keeps the connection:
 
 ```json
@@ -185,6 +187,8 @@ A watcher starts with the game being played, its chunks so far first (at most 64
 ### 2v2 parties (2026-11-02, `docs/design/2v2.md`)
 
 A 2v2 party is a room of kind `twos`: `{"type": "room-create", "kind": "twos"}` makes one (private, two slots, no ruleset; its own limit, 20 a minute and 300 an hour per account), and `room-join` with its code joins it (`This party is full.`, `In a game. Try again after.`, a room code: `That's not a 2v2 party code.`; a party joining a party moves the joiner, and two players entering each other's codes at once end up together: the second join is a no-op). Its `room` state has `"kind": "twos"`; `status` `"searching"` while its players search the 2v2 queue together (`create-ticket` mode 5 with `code` = the party's code, sent by every player of it; the match takes both or neither). Only `room-ready` / `room-back` / `room-leave` apply (others: `Not in a 2v2 party.`). When a 2v2 group ends before its first game (a player could not connect), mm pushes `{"type": "twos-off", "matchId": ...}` and the others search again (`requeue`, `avoid`, `after`). The social channel's own room (`room` in `GET /v1/social`) has `"twos": true` for a party: the launcher's envelope says "Invite to your 2v2". 2v2 matches are in `/v1/me/matches` (`mode=twos`, and `all`; 2026-11-03): mode `twos`, `games` the rated games, each player's `wins` the games their team won. `GET /v1/rooms` `queues` and `playing` have `twos`.
+
+**The pair room** (2026-11-03, `docs/design/2v2.md`): a party whose two players both search and whose games both said `pairRoom` in their `hello` has `"pairRoom": true` in its `room` state (written only when true). Each game then sends a **party ticket** besides its 2v2 ticket, from a port of its own: `create-ticket` mode 3 with `code` = the party's code (as a room game's ticket). It replaces no ticket, skips the account's ticket interval and ends no match chat. Once both players' party tickets are in, each gets `get-ticket-resp` with the two of them on their slots' ports (`isHost` the party's host), `matchId` `mode.pair-<code>-<time>-<n>`, `stages` `[55]` (the Training Room), `items` 0 and `rules` a time match with no time limit (`{"style": "time", "timeMinutes": 0, ...}`, which no ruleset may have). Nothing of it is recorded: no `mm_matches` row, no live game, no chat group, no queue or `playing` count (the 2v2 tickets still count in `queues`). A party ticket fails (`Your party is not searching.`) unless `pairRoom` holds; a waiting one fails as the party's search ends (`bob cancelled`, `bob left`, `In a game. Try again after.`).
 
 ## 3. Starting a game
 
