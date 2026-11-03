@@ -35,6 +35,16 @@ TEAMS_RAINBOW = 2
 READY_SECONDS = 45
 
 
+@pytest.fixture(autouse=True)
+def _server_logs(backend: OnlineBackend, request: pytest.FixtureRequest) -> Any:
+    """mm's and accounts' logs next to the screenshots (the backend's own go with it)."""
+    yield
+    out = ART / request.node.name
+    out.mkdir(parents=True, exist_ok=True)
+    for name in ("mm", "accounts"):
+        (out / f"{name}.log").write_text(backend.log_text(name), encoding="utf-8")
+
+
 def _boot_four(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance], gpu_backend: str,
                test: str, names: list[str]) -> tuple[list[Game], list[Any]]:
     import secrets
@@ -166,8 +176,8 @@ def test_twos_four_alone(backend: OnlineBackend, dolphin: Callable[..., DolphinI
     _wait(lambda: all(g.finds() > n for g, n in zip(gs[:3], finds)), READY_SECONDS + 30, "A-C searching again")
     d = gs[3]
     until_view(d, lambda v: v["flags"] & ppom.RF_IN and v["flags"] & ppom.RF_TWOS, "D back in its own party", timeout=60)
-    assert d.scene() == CSS
-    d.steps("wait 30")
+    _wait(lambda: d.scene() == CSS, 60, "D on its party's CSS")   # (built again: scMemoryChange first)
+    d.steps("wait 60")
     d.shot("g3-removed")
     for g in gs[:3]:
         g.shot("g3-searching-again")

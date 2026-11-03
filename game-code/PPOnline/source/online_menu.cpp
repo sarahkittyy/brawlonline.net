@@ -2915,6 +2915,14 @@ namespace OnlineMenu {
             // The 2v2 party: the group's end, the keypad's hint, then the server's lines
             // ("Press START to search", "Waiting on: bob", "Searching for players").
             char buf[sizeof(s.twosNotice) + 24];
+            // Searching (the waiting room's banner) or connecting: the search's own lines.
+            if (s.phase == PH_SEARCHING || s.phase == PH_CONNECTING) {
+                char line[sizeof(s.twosNotice) + 64];
+                if (s.phase == PH_SEARCHING) twosSearchStatus(line);
+                else strcpy(line, "Connecting...");
+                setStatus(line, false);
+                return;
+            }
             if (CodeEntry::active()) {
                 setStatus("Enter your partner's 2v2 code", false);
                 return;
