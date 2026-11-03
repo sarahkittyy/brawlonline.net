@@ -31,8 +31,9 @@ const profileLabel = (profile: number) =>
     : Messages.inputDelayNormal();
 
 // Automatic's slider stops at its three profiles, least delay first (its positions 0-2); Fixed's
-// at each number of frames.
-const PROFILE_MARKS = INPUT_DELAY_PROFILES.map((profile, i) => ({ value: i, label: profileLabel(profile) }));
+// at each number of frames. The profile names are read at render: a release build's messages are
+// i18next lookups, empty until i18next has loaded, after this module.
+const profileMarks = () => INPUT_DELAY_PROFILES.map((profile, i) => ({ value: i, label: profileLabel(profile) }));
 const FRAME_MARKS = INPUT_DELAY_FRAMES.map((frames) => ({ value: frames, label: String(frames) }));
 
 const SideLabel = ({ active, children }: { active: boolean; children: React.ReactNode }) => (
@@ -136,7 +137,7 @@ export const InputDelaySetting = () => {
         <DelaySlider
           key="automatic"
           position={INPUT_DELAY_PROFILES.indexOf(value)}
-          marks={PROFILE_MARKS}
+          marks={profileMarks()}
           onCommit={(at) => commit(INPUT_DELAY_PROFILES[at])}
         />
       ) : (
