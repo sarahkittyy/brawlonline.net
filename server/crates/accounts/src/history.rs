@@ -29,6 +29,7 @@ use crate::api::{current_user, limit};
 use crate::cursor;
 use crate::error::{ApiError, ApiResult};
 use crate::ranked::MODE_RANKED;
+use crate::twos::MODE_TWOS;
 use crate::AppState;
 
 pub const DEFAULT_LIMIT: u32 = 20;
@@ -46,6 +47,8 @@ pub enum ModeFilter {
     Unranked,
     /// Rooms' games.
     Rooms,
+    /// 2v2 matches (docs/design/2v2.md).
+    Twos,
 }
 
 impl ModeFilter {
@@ -55,17 +58,18 @@ impl ModeFilter {
             "ranked" => Some(ModeFilter::Ranked),
             "unranked" => Some(ModeFilter::Unranked),
             "rooms" => Some(ModeFilter::Rooms),
+            "twos" => Some(ModeFilter::Twos),
             _ => None,
         }
     }
 
     fn sql(self) -> &'static str {
         match self {
-            // (2v2 games, mode 5, are not in the history yet: it has 1v1s and rooms' games; docs/design/2v2.md)
-            ModeFilter::All => " AND m.mode <> 5",
+            ModeFilter::All => "",
             ModeFilter::Ranked => " AND m.mode = 0",
             ModeFilter::Unranked => " AND m.mode IN (1, 2)",
             ModeFilter::Rooms => " AND m.mode = 3",
+            ModeFilter::Twos => " AND m.mode = 5",
         }
     }
 }
@@ -77,6 +81,7 @@ pub fn mode_name(mode: i16) -> &'static str {
         0 => "ranked",
         2 => "direct",
         MODE_ROOM => "room",
+        MODE_TWOS => "twos",
         _ => "unranked",
     }
 }
@@ -151,6 +156,32 @@ pub fn wins(
         }
     }
     ranked::count_wins(players, games)
+}
+
+/// A 2v2 match's wins (`players` order) and its rated games, from each game's winning team and
+/// players (`twos_rated_games`): a player wins the games their team won, except one who left with
+/// stocks left (their loss whatever the team did, docs/design/2v2.md).
+pub fn twos_wins(players: &[Uuid], games: &[(i16, serde_json::Value)]) -> (Vec<u32>, u32) {
+    let mut wins = vec![0u32; players.len()];
+    let mut count = 0;
+    for (winner_team, seats) in games {
+        let Some(seats) = seats.as_array() else { continue };
+        count += 1;
+        for seat in seats {
+            let uid = seat.get("uid").and_then(|u| u.as_str()).and_then(|u| Uuid::parse_str(u).ok());
+            let team = seat.get("team").and_then(serde_json::Value::as_i64);
+            let left = seat.get("left").and_then(serde_json::Value::as_bool).unwrap_or(false);
+            let eliminated = seat.get("eliminated").and_then(serde_json::Value::as_bool).unwrap_or(false);
+            let (Some(uid), Some(team)) = (uid, team) else { continue };
+            if team != i64::from(*winner_team) || (left && !eliminated) {
+                continue;
+            }
+            if let Some(i) = players.iter().position(|p| *p == uid) {
+                wins[i] += 1;
+            }
+        }
+    }
+    (wins, count)
 }
 
 /// Where a page starts: after (older than) this match.
@@ -240,6 +271,10 @@ pub struct MatchItem {
     pub end_reason: Option<String>,
     /// A room's game: the room; null for the other modes.
     pub room: Option<MatchRoom>,
+    /// A 2v2 match: its rated games (each player's `wins` are the ones their team won). Absent for
+    /// the other modes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub games: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -332,6 +367,16 @@ pub async fn matches(
         .fetch_all(&mut *tx)
         .await?
     };
+    // 2v2: each rated game's winning team and players (accounts::twos), for the wins.
+    let twos_ids: Vec<&str> = rows.iter().filter(|r| r.mode == MODE_TWOS).map(|r| r.match_id.as_str()).collect();
+    let twos_games: Vec<(String, i16, serde_json::Value)> = if twos_ids.is_empty() {
+        Vec::new()
+    } else {
+        sqlx::query_as("SELECT match_id, winner_team, players FROM twos_rated_games WHERE match_id = ANY($1)")
+            .bind(&twos_ids)
+            .fetch_all(&mut *tx)
+            .await?
+    };
     let events: Vec<(String, Uuid, f64, f64)> =
         sqlx::query_as("SELECT match_id, uid, rating_before, rating_after FROM rating_events WHERE match_id = ANY($1)")
             .bind(&ids)
@@ -358,6 +403,10 @@ pub async fn matches(
     for (id, g, reporter, players) in room_reports {
         place_reports.entry(id).or_default().push((g.max(0) as u32, reporter, players.unwrap_or_default()));
     }
+    let mut twos_by_match: HashMap<String, Vec<(i16, serde_json::Value)>> = HashMap::new();
+    for (id, winner_team, players) in twos_games {
+        twos_by_match.entry(id).or_default().push((winner_team, players));
+    }
     let events: HashMap<(String, Uuid), (f64, f64)> =
         events.into_iter().map(|(id, u, before, after)| ((id, u), (before, after))).collect();
     let users: HashMap<Uuid, (String, Option<String>, bool)> =
@@ -378,8 +427,12 @@ pub async fn matches(
             } else {
                 BTreeMap::new()
             };
+            let twos = (r.mode == MODE_TWOS)
+                .then(|| twos_wins(&r.players, twos_by_match.get(&r.match_id).map_or(&[][..], Vec::as_slice)));
             let won = if is_room {
                 room_wins(&r.players, &places)
+            } else if let Some((wins, _)) = &twos {
+                wins.clone()
             } else {
                 wins(r.mode, &r.players, r.created_at, games.get(&r.match_id).map_or(&[], Vec::as_slice), now, timing)
             };
@@ -434,6 +487,7 @@ pub async fn matches(
                 winner: r.winner,
                 end_reason: r.end_reason,
                 room,
+                games: twos.map(|(_, games)| games),
             }
         })
         .collect();
@@ -488,6 +542,38 @@ mod tests {
         assert_eq!(ModeFilter::parse(Some("rooms")), Some(ModeFilter::Rooms));
         assert_eq!(ModeFilter::parse(Some("direct")), None);
         assert_eq!((mode_name(0), mode_name(1), mode_name(2), mode_name(3)), ("ranked", "unranked", "direct", "room"));
+        assert_eq!(ModeFilter::parse(Some("twos")), Some(ModeFilter::Twos));
+        assert_eq!(mode_name(5), "twos");
+    }
+
+    #[test]
+    fn twos_wins_count_the_team_except_a_leaver_with_stocks() {
+        let u: Vec<Uuid> = (1..=4).map(Uuid::from_u128).collect();
+        let game = |winner: i16, teams: [i64; 4], left: Option<(usize, bool)>| {
+            let seats: Vec<serde_json::Value> = (0..4)
+                .map(|i| {
+                    let mut o = serde_json::json!({"uid": u[i], "team": teams[i]});
+                    if let Some((who, eliminated)) = left {
+                        if who == i {
+                            o["left"] = true.into();
+                            o["eliminated"] = eliminated.into();
+                        }
+                    }
+                    o
+                })
+                .collect();
+            (winner, serde_json::Value::Array(seats))
+        };
+        let games = [
+            game(0, [0, 0, 1, 1], None),
+            game(1, [0, 1, 0, 1], None),
+            // Team 0 wins, but its player 3 left with stocks: no win for them; player 1 (team 0)
+            // was out of stocks when they left: the team's win.
+            game(0, [1, 0, 0, 1], Some((2, false))),
+            game(0, [0, 1, 1, 0], Some((0, true))),
+        ];
+        assert_eq!(twos_wins(&u, &games), (vec![2, 3, 0, 2], 4));
+        assert_eq!(twos_wins(&u, &[]), (vec![0, 0, 0, 0], 0));
     }
 
     fn uids(n: u8) -> Vec<Uuid> {

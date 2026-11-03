@@ -11,6 +11,9 @@ export const ProfilePageMessages = {
   ranked: () => "Ranked",
   unranked: () => "Unranked",
   rooms: () => "Rooms",
+  twos: () => "2v2",
+  /** A 2v2 match: the games that player's team won (the teams change every game). */
+  twosWins: (wins: number) => (wins === 1 ? "1 win" : `${wins} wins`),
   mode: () => "Mode",
   date: () => "Date",
   you: () => "You",

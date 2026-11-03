@@ -138,6 +138,7 @@ const MatchHistory = ({ uid }: { uid: string }) => {
           <ToggleButton value="ranked">{Messages.ranked()}</ToggleButton>
           <ToggleButton value="unranked">{Messages.unranked()}</ToggleButton>
           <ToggleButton value="rooms">{Messages.rooms()}</ToggleButton>
+          <ToggleButton value="twos">{Messages.twos()}</ToggleButton>
         </ToggleButtonGroup>
       </div>
       <div style={{ flex: 1, minHeight: 0 }}>
@@ -292,7 +293,7 @@ export const MatchRow = React.memo(function MatchRow({
       </TableCell>
       <TableCell>
         {others.map((p) => (
-          <PlayerCell key={p.uid} player={p} showPlace={showPlaces} />
+          <PlayerCell key={p.uid} player={p} showPlace={showPlaces} showWins={item.mode === "twos"} />
         ))}
       </TableCell>
       <TableCell>
@@ -317,7 +318,16 @@ const RulesetLink = ({ ruleset }: { ruleset: { code: string; name: string; versi
   </a>
 );
 
-const PlayerCell = ({ player, showPlace = false }: { player: MatchHistoryPlayer; showPlace?: boolean }) => {
+const PlayerCell = ({
+  player,
+  showPlace = false,
+  showWins = false,
+}: {
+  player: MatchHistoryPlayer;
+  showPlace?: boolean;
+  /** A 2v2 match: the games the player's team won (the teams change every game). */
+  showWins?: boolean;
+}) => {
   const team = player.team;
   return (
     <div>
@@ -342,6 +352,9 @@ const PlayerCell = ({ player, showPlace = false }: { player: MatchHistoryPlayer;
       )}
       {showPlace && player.place != null && (
         <span style={{ marginLeft: 8, fontWeight: "bold" }}>{formatPlace(player.place)}</span>
+      )}
+      {showWins && (
+        <span style={{ marginLeft: 8, color: "var(--text-secondary)" }}>{Messages.twosWins(player.wins)}</span>
       )}
       {player.ratingHidden && (
         <div style={{ fontSize: 12, color: "var(--text-secondary)" }} title={Messages.ratingHidden()}>

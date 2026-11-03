@@ -63,6 +63,8 @@ export function modeLabel(mode: MatchHistoryItem["mode"], roomMode?: RoomMode): 
       return Messages.ranked();
     case "direct":
       return Messages.direct();
+    case "twos":
+      return Messages.twos();
     case "room":
       return roomMode === "ffa" ? Messages.ffa() : roomMode === "teams" ? Messages.teams() : Messages.oneVsOne();
     default:
@@ -124,10 +126,16 @@ export function matchSides(
  * the players' reports agree on the places, or when I left the game.
  */
 export function formatMatchScore(
-  item: Pick<MatchHistoryItem, "mode" | "room" | "players">,
+  item: Pick<MatchHistoryItem, "mode" | "room" | "players"> & Pick<Partial<MatchHistoryItem>, "games">,
   myUid: string | undefined,
 ): string {
   const players = orderPlayers(item.players, myUid);
+  // A 2v2 match: the games my team won and lost (the teams change every game), `2 - 1`.
+  if (item.mode === "twos") {
+    const me = players[0]?.uid === myUid ? players[0] : undefined;
+    const games = item.games ?? 0;
+    return me ? `${me.wins} - ${Math.max(games - me.wins, 0)}` : "–";
+  }
   if (item.mode !== "room" || !item.room || item.room.mode === "1v1") {
     return formatScore(players);
   }

@@ -4,6 +4,7 @@ export const RankedFormatMessages = {
   direct: () => "Direct",
   oneVsOne: () => "1v1",
   ffa: () => "FFA",
+  twos: () => "2v2",
   teams: () => "Teams",
   room: (code: string) => `Room ${code}`,
   won: () => "Won",

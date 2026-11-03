@@ -98,7 +98,7 @@ export type LeaderboardPage = {
 };
 
 /** The `mode` filter of `GET /v1/me/matches`. `unranked` is Unranked and Direct; `rooms` is rooms' games. */
-export type MatchHistoryFilter = "all" | "ranked" | "unranked" | "rooms";
+export type MatchHistoryFilter = "all" | "ranked" | "unranked" | "rooms" | "twos";
 
 export type MatchHistoryPlayer = {
   uid: string;
@@ -124,7 +124,7 @@ export type MatchHistoryPlayer = {
 
 export type MatchHistoryItem = {
   matchId: string;
-  mode: "ranked" | "unranked" | "direct" | "room";
+  mode: "ranked" | "unranked" | "direct" | "room" | "twos";
   /** RFC 3339. */
   createdAt: string;
   /** `ASSIGNED` (undecided, and always for Unranked and Direct), `COMPLETE`, `ABANDONED`, `TERMINATED`, `ERROR`, `ORPHANED`. */
@@ -142,6 +142,9 @@ export type MatchHistoryItem = {
     /** The published ruleset it played (as it was then) and its page; null for P+'s default, custom rules and older games. */
     ruleset?: { code: string; name: string; version: number; link: string } | null;
   } | null;
+  /** A 2v2 match: its games (each player's `wins` are the ones their team won; the teams change every game).
+   * Absent for the other modes. */
+  games?: number;
 };
 
 /** `GET /v1/me/matches?mode=&limit=&before=`: newest first; `next` is the `before` of the next page. */

@@ -44,9 +44,11 @@ fn close(a: f64, b: f64) -> bool {
 async fn twos_games_move_the_hidden_rating_once_each() {
     let stack = Stack::start(StackOptions::default()).await.unwrap();
     let mut p = Vec::new();
+    let mut sessions = Vec::new();
     for (i, name) in ["ann", "ben", "cat", "dan"].iter().enumerate() {
-        let (_, u) = stack.create_player(&format!("{name}@example.test"), name, ["ta", "tb", "tc", "td"][i]).await;
+        let (session, u) = stack.create_player(&format!("{name}@example.test"), name, ["ta", "tb", "tc", "td"][i]).await;
         p.push(u);
+        sessions.push(session);
     }
     // Ann has an Unranked rating (1600), Ben only a Ranked one (1500), Cat and Dan neither.
     sqlx::query("INSERT INTO ratings (uid, rating, sets_played) VALUES ($1, 1700, 12), ($2, 1500, 9)")
@@ -127,4 +129,19 @@ async fn twos_games_move_the_hidden_rating_once_each() {
     report(&stack, &p[0], &id, 3, &p[0], three).await;
     let n: i64 = sqlx::query_scalar("SELECT count(*) FROM twos_rated_games").fetch_one(&stack.pool).await.unwrap();
     assert_eq!(n, 2);
+
+    // The match history (Sarah's board, 2026-11-03: "can we add a 2v2 filter to the match history
+    // page?"): the match under `twos` and `all`, not under Unranked; its two rated games, and each
+    // player's wins (Ben left game 2 with stocks: his team's win is not his).
+    let (st, body) = stack.get("/v1/me/matches?mode=twos", Some(&sessions[0])).await;
+    assert_eq!(st, 200, "{body}");
+    let m = &body["matches"][0];
+    assert_eq!(body["matches"].as_array().unwrap().len(), 1, "{body}");
+    assert_eq!((m["matchId"].as_str(), m["mode"].as_str(), m["games"].as_u64()), (Some(id.as_str()), Some("twos"), Some(2)));
+    let wins: Vec<u64> = m["players"].as_array().unwrap().iter().map(|pl| pl["wins"].as_u64().unwrap()).collect();
+    assert_eq!(wins, vec![1, 1, 0, 1], "{m}");
+    let (_, all) = stack.get("/v1/me/matches", Some(&sessions[1])).await;
+    assert!(all["matches"].as_array().unwrap().iter().any(|x| x["matchId"] == m["matchId"]), "{all}");
+    let (_, unranked) = stack.get("/v1/me/matches?mode=unranked", Some(&sessions[1])).await;
+    assert!(unranked["matches"].as_array().unwrap().is_empty(), "{unranked}");
 }
