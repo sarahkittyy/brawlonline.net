@@ -34,7 +34,9 @@
 //!   a player's first rated Unranked game) and the band works as Ranked's: `unranked_band`
 //!   points, widened by `unranked_band_step` for every `unranked_band_interval` the
 //!   longer-waiting of the two has waited (±150, +50 every 15 s; the user's, 2026-10-31: "no hard
-//!   mmr limits for unranked-- just a longer wait the bigger the rating difference is"). Slippi's
+//!   mmr limits for unranked-- just a longer wait the bigger the rating difference is"), and gone
+//!   once that one has waited `unranked_band_max_wait` (45 s; 2026-11-03: "the max wait should be
+//!   around 45 seconds", after the top-rated players' median wait went from 12 s to 104 s). Slippi's
 //!   tickets carry no region field, so the region comes from the ticket's source address
 //!   ([`crate::region`]); with no region table there is one bucket.
 //! - **Ranked**: like Unranked, but the oldest ticket takes the closest-rated opponent whose
@@ -190,6 +192,9 @@ pub struct EngineConfig {
     pub unranked_band: f64,
     pub unranked_band_step: f64,
     pub unranked_band_interval: Duration,
+    /// Unranked (and 2v2): once the longer-waiting player has waited this long, any rating gap
+    /// is allowed.
+    pub unranked_band_max_wait: Duration,
     /// Where an address is, for the ping estimate of a pair (`MM_GEOIP_FILE`).
     pub geoip: GeoDb,
     /// Unranked and Ranked: the highest estimated ping (ms) of a pair at first ...
@@ -250,6 +255,7 @@ impl Default for EngineConfig {
             unranked_band: 150.0,
             unranked_band_step: 50.0,
             unranked_band_interval: Duration::from_secs(15),
+            unranked_band_max_wait: Duration::from_secs(45),
             geoip: GeoDb::default(),
             ping_limit: 100.0,
             ping_limit_step: 20.0,
@@ -2096,6 +2102,9 @@ impl Engine {
     /// The largest rating difference a pair in this queue accepts once the longer-waiting of the
     /// two has waited `waited`: of Ranked ratings in Ranked, of hidden Unranked ratings in Unranked.
     fn rating_band(&self, ranked: bool, waited: Duration) -> f64 {
+        if !ranked && waited >= self.cfg.unranked_band_max_wait {
+            return f64::INFINITY;
+        }
         let (band, step, interval) = self.band_rule(ranked);
         band + step * steps(waited, interval)
     }
@@ -2111,10 +2120,13 @@ impl Engine {
     /// Unranked: how long (seconds) a pair has to wait before the ping limit and the rating band
     /// allow it, the two added up. The pair that needs least is the best one (a close opponent
     /// at a higher ping and a farther-rated one at a lower ping weigh against each other this way).
+    /// The rating gap's wait is at most `unranked_band_max_wait`.
     fn unranked_wait(&self, ping: Option<f64>, gap: f64) -> f64 {
         let ping_wait = ping
             .map_or(0.0, |p| wait_for(p - self.cfg.ping_limit, self.cfg.ping_limit_step, self.cfg.ping_limit_interval));
-        ping_wait + wait_for(gap - self.cfg.unranked_band, self.cfg.unranked_band_step, self.cfg.unranked_band_interval)
+        let gap_wait =
+            wait_for(gap - self.cfg.unranked_band, self.cfg.unranked_band_step, self.cfg.unranked_band_interval);
+        ping_wait + gap_wait.min(self.cfg.unranked_band_max_wait.as_secs_f64())
     }
 
     /// The highest estimated ping (ms) a pair in this queue may have when the shorter-waiting of
@@ -3566,7 +3578,8 @@ mod tests {
     fn unranked_pairs_by_the_hidden_rating_not_the_ranked_one() {
         let mut h = Harness::new(default_rules());
         let mut u = h.unranked_rated(&[1400.0, 2000.0]);
-        // Equal Ranked ratings, 600 apart in Unranked: held back (600 needs 135 s).
+        // Equal Ranked ratings, 600 apart in Unranked: held back (the band reaches 600 at 135 s,
+        // but any gap is allowed at 45 s).
         for x in u.iter_mut() {
             x.rating = 1700.0;
             x.ranked_sets = 20;
@@ -3576,8 +3589,26 @@ mod tests {
         h.connect(2, 41002);
         h.unranked(1, &u[0]);
         assert!(matches(&h.unranked(2, &u[1])).is_empty());
-        assert!(matches(&h.advance(Duration::from_secs(134))).is_empty());
+        assert!(matches(&h.advance(Duration::from_secs(44))).is_empty());
         assert_eq!(matches(&h.advance(Duration::from_secs(1))).len(), 1);
+    }
+
+    #[test]
+    fn unranked_allows_any_rating_gap_after_45_s() {
+        // The top-rated player of 2026-11-03 (2388) and the one other searcher, 918 below: the
+        // band would reach 918 at 240 s; the wait stops at 45 s of the longer-waiting one.
+        let mut h = Harness::new(default_rules());
+        let u = h.unranked_rated(&[2388.0, 1470.0]);
+        h.connect(1, 41001);
+        h.unranked(1, &u[0]);
+        assert!(matches(&h.advance(Duration::from_secs(30))).is_empty());
+        // The second searches after 30 s: 15 s more, as the first has waited the longest.
+        h.connect(2, 41002);
+        assert!(matches(&h.unranked(2, &u[1])).is_empty());
+        assert!(matches(&h.advance(Duration::from_secs(14))).is_empty());
+        let m = matches(&h.advance(Duration::from_secs(1)));
+        assert_eq!(m.len(), 1);
+        assert_eq!(pair_of(&m[0]), pair_key(u[0].uid, u[1].uid));
     }
 
     #[test]
@@ -3629,6 +3660,9 @@ mod tests {
         assert_eq!(w(None, 300.0), 45.0);
         // 125 ms needs the 140 ms limit (40 s), 300 points the ±300 band (45 s).
         assert_eq!(w(Some(125.0), 300.0), 85.0);
+        // The rating gap's part is at most 45 s.
+        assert_eq!(w(None, 918.0), 45.0);
+        assert_eq!(w(Some(147.0), 918.0), 105.0);
     }
 
     #[test]
@@ -5467,7 +5501,8 @@ mod tests {
         assert_eq!(team_avg(&splits[0], 0), team_avg(&splits[0], 1));
         assert!(team_avg(&splits[2], 0) != team_avg(&splits[2], 1));
 
-        // Three 2400s and a 1000 can't be split within the band (700 apart): they wait for it.
+        // Three 2400s and a 1000 can't be split within the band (700 apart): they wait, until the
+        // longest-waiting has waited 45 s and any gap is allowed.
         let mut h = Harness::new(EngineConfig::default());
         let mut us = h.users(4);
         for (u, r) in us.iter_mut().zip([2400.0, 2400.0, 2400.0, 1000.0]) {
@@ -5478,8 +5513,8 @@ mod tests {
             h.connect(i as ConnId + 1, 1);
             assert!(matches(&h.twos(i as ConnId + 1, u, "", json!({}))).is_empty());
         }
-        assert!(matches(&h.advance(Duration::from_secs(150))).is_empty());
-        assert_eq!(matches(&h.advance(Duration::from_secs(15))).len(), 1);
+        assert!(matches(&h.advance(Duration::from_secs(44))).is_empty());
+        assert_eq!(matches(&h.advance(Duration::from_secs(1))).len(), 1);
     }
 
     #[test]
