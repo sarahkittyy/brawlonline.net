@@ -37,11 +37,14 @@ import {
   ipc_replaceProjectPlusCard,
   ipc_setChatKey,
   ipc_softResetDolphin,
+  ipc_startPadReader,
+  ipc_stopPadReader,
   ipc_storePlayKeyFile,
   ipc_viewSlpReplay,
 } from "./ipc";
 import type { DolphinManager } from "./manager";
 import { findMissingDlls } from "./missing_dlls";
+import { PadReader } from "./pad_reader";
 import { deletePlayKeyFile, writePlayKeyFile } from "./playkey";
 import type { RenderJob } from "./render_queue";
 import { clearRoomRequest, handOffRoom, isHandOffCode, writeRoomRequest } from "./room_handoff";
@@ -344,6 +347,22 @@ export default function setupDolphinIpc({ dolphinManager }: { dolphinManager: Do
       await dolphinManager.getInstallation(DolphinLaunchType.NETPLAY).setChatKey(chatKey);
     }
     return { chatKey };
+  });
+
+  const padReader = new PadReader(
+    () => dolphinManager.dolphinToolPath(),
+    () => dolphinManager.netplayUserFolder(),
+    (event) => void ipc_dolphinEvent.main!.trigger(event).catch(log.error),
+  );
+
+  ipc_startPadReader.main!.handle(async ({ readerId }) => {
+    padReader.start(readerId);
+    return { success: true };
+  });
+
+  ipc_stopPadReader.main!.handle(async ({ readerId }) => {
+    padReader.stop(readerId);
+    return { success: true };
   });
 
   ipc_installRosetta.main!.handle(async () => {

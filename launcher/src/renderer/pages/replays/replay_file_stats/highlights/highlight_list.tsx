@@ -77,8 +77,9 @@ export const HighlightList = ({ filePath, pplusRelease }: { filePath: string; pp
   const { replayService } = useServices();
   const [detectionOff] = useSetting("disableHighlightDetection");
   const [clipOnLrz] = useSetting("clipOnLrz");
+  const [clipHotkeys] = useSetting("clipHotkeys");
   const query = useQuery({
-    queryKey: ["replayHighlights", filePath, detectionOff, clipOnLrz],
+    queryKey: ["replayHighlights", filePath, detectionOff, clipOnLrz, clipHotkeys],
     queryFn: () => replayService.getHighlights(filePath),
   });
   const data = query.data;

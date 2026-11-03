@@ -14,7 +14,7 @@ cache.
 |---|---|
 | `launcher/src/replays/highlights/replay_frames.ts` | Decodes only what the detector needs from a `.brep` (CRC-checked, bounded): per player and frame damage, stocks, status kind, animation frame, motion kind, the attacker's ftEntry id, the player's own id (28 of the 2,248 fighter bytes, XOR-accumulated byte by byte within each `FTRM` chunk) and 10 pad bytes from `FRMS`. |
 | `detect_highlights.ts` | The prototype's `timeline.py` + `highlights.py`: conversions (the victim never escapes; 45 free frames end one, or a KO), features, tags (`combo`, `zero-to-death` / `low-to-death`, `fast`, `clean`) and the score. A highlight is a conversion tagged other than `clean`. |
-| `lrz_clips.ts` | L+R+Z (gfPadStatus +0x0: L 0x40, R 0x20, Z 0x10) pressed together, for a frame or more, marks a clip: 20 s before the hold, 2 s after it, the next one 5 s later at the earliest (Project Clippi's defaults). Only the recording player's presses count (`CLIP_PLAYERS` in `highlight_service.ts`). |
+| `lrz_clips.ts` | The clip hotkey (L+R+Z until the player sets another; gfPadStatus +0x0: L 0x40, R 0x20, Z 0x10, the other GameCube buttons as Dolphin's PAD_BUTTON_* bits) pressed together, for a frame or more, marks a clip: 20 s before the hold, 2 s after it, the next one 5 s later at the earliest (Project Clippi's defaults). Only the recording player's presses count (`CLIP_PLAYERS` in `highlight_service.ts`). A replay is searched with the hotkey of its start time (`@common/clip_hotkey`, below). |
 | `analyze_replay.ts` | The list's rows: a highlight plays from 1.5 s before its first hit to 1 s after the string (a KO: after the stock is lost). |
 | `highlights.worker.ts`, `highlight_service.ts` | On demand when a stats page opens, one replay at a time in a `worker_threads` worker (gone after 2 minutes idle), cached in replays.sqlite `highlight_cache` (path, size, mtime, detector version, what was looked for). |
 
@@ -56,9 +56,20 @@ bar)**, playing, done, or why it can't (a refused replay; a replay that plays di
 ends before the highlight). A click on a replay's row in the Replays tab opens the page (rows can't
 be selected: multi-select and its Delete / Select All / Play All bar went 2026-10-24).
 
-Settings > Clips: "L+R+Z to clip" (on), "Disable automatic highlight detection" (off; "Disables
+Settings > Clips: "Manual Clip Hotkey" (Enable on, L+R+Z), "Disable automatic highlight detection" (off; "Disables
 the local highlight detection for replays."), and the video output folder (default
 `<Root Replay Folder>/Highlights`, `SettingsManager.getClipsFolder`), where renders go (§5).
+
+Manual Clip Hotkey's Configure (2026-11-03, Sarah's board) opens "Press any combination of
+buttons.": every button pressed joins the hotkey until all are let go, then Retry or Apply. The
+buttons come from DolphinTool `pads` (`PadsCommand.cpp`, run by `launcher/src/dolphin/pad_reader.ts`
+with the netplay User folder), which reads the ports Dolphin plays with as Dolphin does (an adapter
+as it is, a standard controller through its mapping) and saves nothing; Configure is off while the
+netplay Dolphin is open (it holds the adapter). The setting `clipHotkeys` keeps every hotkey set with
+when: a game is searched with the hotkey of its start, so a new one makes clips in later games and
+earlier games keep the clips of theirs (nothing old turns into a clip, nothing old goes). The cache's
+`mode` names the hotkey when it isn't L+R+Z, so rows from before stay. The icons are Zacksly's
+"GameCube Button Icons and Controls" (`components/gc_button_icons`).
 
 ## 3. Playing (comm file `highlights`)
 

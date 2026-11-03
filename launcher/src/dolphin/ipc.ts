@@ -179,6 +179,10 @@ export const ipc_setChatKey = makeEndpoint.main(
   <{ chatKey: string | null }>_,
 );
 
+export const ipc_startPadReader = makeEndpoint.main("startPadReader", <{ readerId: string }>_, <SuccessPayload>_);
+
+export const ipc_stopPadReader = makeEndpoint.main("stopPadReader", <{ readerId: string }>_, <SuccessPayload>_);
+
 export const ipc_installRosetta = makeEndpoint.main("installRosetta", <EmptyPayload>_, <{ exitCode: number }>_);
 
 // Events
