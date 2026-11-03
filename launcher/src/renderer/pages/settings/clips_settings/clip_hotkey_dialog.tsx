@@ -1,171 +1,103 @@
-import type { PadReaderStatus } from "@dolphin/types";
-import { DolphinEventType } from "@dolphin/types";
+import { DEFAULT_CLIP_BUTTONS } from "@common/clip_hotkey";
 import { css } from "@emotion/react";
 import Button from "@mui/material/Button";
 import Dialog from "@mui/material/Dialog";
 import DialogActions from "@mui/material/DialogActions";
 import DialogContent from "@mui/material/DialogContent";
 import Typography from "@mui/material/Typography";
-import log from "electron-log";
 import React from "react";
 
 import { GcButtonRow } from "@/components/gc_button_icons/gc_button_icons";
-import { useServices } from "@/services";
+import { GcControllerPicker } from "@/components/gc_button_icons/gc_controller_picker";
 
 import { ClipsSettingsMessages as Messages } from "./clips_settings.messages";
 
-type Phase = "waiting" | "entering" | "done";
-
-/** What to tell the player about their controllers, or null when one is there to press. */
-function statusMessage(status: PadReaderStatus | null, error: string | null): string | null {
-  if (error !== null) {
-    return Messages.hotkeyReadError(error);
-  }
-  if (status === null) {
-    return Messages.hotkeyLooking();
-  }
-  if (status.ports.length === 0) {
-    return Messages.hotkeyNoControllers();
-  }
-  if (status.ports.some((p) => p.plugged)) {
-    return null;
-  }
-  if (status.adapter === "error") {
-    return Messages.hotkeyAdapterError(status.adapterError ?? "");
-  }
-  return Messages.hotkeyNotPlugged();
-}
-
 /**
- * Configure for Manual Clip Hotkey: "Press any combination of buttons." Every button pressed
- * joins the hotkey until all are let go, which finishes it; then Retry starts over and Apply keeps
- * it. The buttons are the controllers' as Dolphin reads them (dolphin/pad_reader.ts).
+ * Configure for Manual Clip Hotkey: a GameCube controller whose buttons are clicked into and out
+ * of the hotkey (Sarah's board, 2026-11-03). Nothing reads the player's controller: the hotkey is
+ * GameCube buttons, whatever Dolphin maps to them (a keyboard, another pad).
  */
 export const ClipHotkeyDialog = ({
   open,
+  current,
   onClose,
   onApply,
 }: {
   open: boolean;
+  current: number;
   onClose: () => void;
   onApply: (buttons: number) => void;
 }) => {
-  const { dolphinService } = useServices();
-  const [phase, setPhase] = React.useState<Phase>("waiting");
-  const [captured, setCaptured] = React.useState(0);
-  const [status, setStatus] = React.useState<PadReaderStatus | null>(null);
-  const [error, setError] = React.useState<string | null>(null);
-  const phaseRef = React.useRef<Phase>("waiting");
-  const capturedRef = React.useRef(0);
-
-  const setBoth = (p: Phase, buttons: number) => {
-    phaseRef.current = p;
-    capturedRef.current = buttons;
-    setPhase(p);
-    setCaptured(buttons);
-  };
+  const [buttons, setButtons] = React.useState(current);
 
   React.useEffect(() => {
-    if (!open) {
-      return;
+    if (open) {
+      setButtons(current);
     }
-    const readerId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    setBoth("waiting", 0);
-    setStatus(null);
-    setError(null);
-    // Buttons count once the controllers have been seen with none held (not one held while opening).
-    let armed = false;
-    const unsubscribe = dolphinService.onEvent(DolphinEventType.PAD_READER, (event) => {
-      if (event.readerId !== readerId) {
-        return;
-      }
-      if (event.status) {
-        setStatus(event.status);
-      }
-      if (event.ended) {
-        if (event.ended.error !== null) {
-          setError(event.ended.error);
-        }
-        return;
-      }
-      if (event.buttons === undefined) {
-        return;
-      }
-      if (!armed) {
-        armed = event.buttons === 0;
-        return;
-      }
-      if (phaseRef.current === "done") {
-        return;
-      }
-      if (event.buttons !== 0) {
-        setBoth("entering", capturedRef.current | event.buttons);
-      } else if (capturedRef.current !== 0) {
-        setBoth("done", capturedRef.current);
-      }
-    });
-    dolphinService.startPadReader(readerId).catch((err) => {
-      log.error(err);
-      setError(err instanceof Error ? err.message : String(err));
-    });
-    return () => {
-      unsubscribe();
-      void dolphinService.stopPadReader(readerId).catch(log.error);
-    };
-  }, [open, dolphinService]);
-
-  const message = statusMessage(status, error);
-  const done = phase === "done";
+  }, [open, current]);
 
   return (
-    <Dialog open={open} onClose={onClose} maxWidth="xs" fullWidth={true}>
+    <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth={true}>
       <DialogContent
         css={css`
           display: flex;
           flex-direction: column;
           align-items: center;
-          gap: 16px;
+          gap: 12px;
           padding-top: 24px;
         `}
       >
-        <Typography variant="subtitle1">{Messages.hotkeyPressButtons()}</Typography>
+        <Typography variant="subtitle1">{Messages.hotkeyClickButtons()}</Typography>
         <div
           css={css`
-            min-height: 3.5rem;
-            display: flex;
-            align-items: center;
-            justify-content: center;
+            width: 100%;
+            max-width: 440px;
           `}
         >
-          {captured !== 0 ? (
-            <GcButtonRow buttons={captured} size={1.2} />
+          <GcControllerPicker buttons={buttons} onToggle={(bit) => setButtons((b) => b ^ bit)} />
+        </div>
+        <div
+          css={css`
+            min-height: 2.5rem;
+            display: flex;
+            align-items: center;
+          `}
+        >
+          {buttons !== 0 ? (
+            <GcButtonRow buttons={buttons} />
           ) : (
             <Typography
               variant="body2"
               css={css`
-                opacity: 0.6;
+                opacity: 0.7;
               `}
             >
-              {message ?? Messages.hotkeyWaiting()}
+              {Messages.hotkeyNone()}
             </Typography>
           )}
         </div>
-        {captured !== 0 && !done && <Typography variant="caption">{Messages.hotkeyLetGo()}</Typography>}
       </DialogContent>
       <DialogActions>
+        <Button
+          onClick={() => setButtons(DEFAULT_CLIP_BUTTONS)}
+          color="secondary"
+          disabled={buttons === DEFAULT_CLIP_BUTTONS}
+          css={css`
+            margin-right: auto;
+          `}
+        >
+          {Messages.hotkeyReset()}
+        </Button>
         <Button onClick={onClose} color="secondary">
           {Messages.hotkeyCancel()}
         </Button>
-        <Button onClick={() => setBoth("waiting", 0)} color="secondary" disabled={!done}>
-          {Messages.hotkeyRetry()}
-        </Button>
         <Button
           onClick={() => {
-            onApply(capturedRef.current);
+            onApply(buttons);
             onClose();
           }}
           color="primary"
-          disabled={!done}
+          disabled={buttons === 0 || buttons === current}
         >
           {Messages.hotkeyApply()}
         </Button>
