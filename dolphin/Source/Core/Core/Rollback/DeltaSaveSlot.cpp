@@ -11,6 +11,7 @@
 #include "Common/ChunkFile.h"
 #include "Common/Logging/Log.h"
 #include "Core/CoreTiming.h"
+#include "Core/Rollback/KeptGranules.h"
 #include "Core/Rollback/Perf.h"
 #include "Core/PowerPC/Gekko.h"
 #include "Core/PowerPC/MMU.h"
@@ -136,16 +137,26 @@ void RestoreRegionDelta(const RegionDelta& delta, uint8_t* region_base, uint32_t
   }
 }
 
+// What a region's copy jobs kept: job n kept counts[n] granules, written from n * split on
+// (CompactKeptGranules puts them together once the jobs are done).
+struct KeptChunks
+{
+  u32 split = 0;
+  std::array<u32, SAVESTATE_NUM_WORK_CHUNKS> counts{};
+};
+
 // The region's dirty granules (RollbackManager::ScanDirtyMarks: cleared in the bitmap as they are
-// found) go to `scan`, and jobs copy them to `out`. `scan` must outlive the jobs (the slot's).
-// With a `shadow` (RollbackManager's, whole-machine mode), the jobs also bring it up to date with
-// each granule they copy and set changed[n] to whether that changed it (UpdateShadowAfterSave).
+// found) go to `scan`, and jobs copy them to `out`. `scan` and `kept` must outlive the jobs.
+// With a `shadow` (RollbackManager's, whole-machine mode), the jobs keep only the granules whose
+// bytes differ from it and bring it up to date with them (UpdateShadowAfterSave).
 void enqueueSubsectionJobs(u32 first_page, u32 page_count, const uint8_t* region_base,
                            Rollback::RegionDelta& out, RollbackManager& rbm,
                            job::JobTaskThread& w, job::Job& root, std::vector<job::Job*>& jar,
                            u32 num_work_chunks, std::vector<u32>& scan, u8* shadow,
-                           Common::UniqueBuffer<u8>& changed)
+                           KeptChunks& kept)
 {
+  ASSERT(num_work_chunks <= kept.counts.size());
+  kept = {};
   std::vector<u32>* const dirty_pages = &scan;
   {
     ROLLBACK_ZONE_N("dirty page population");
@@ -162,22 +173,20 @@ void enqueueSubsectionJobs(u32 first_page, u32 page_count, const uint8_t* region
       out.page_indices.reset(num_dirty);
     if (out.page_data.size() < (num_dirty * ROLLBACK_PAGE_SIZE))
       out.page_data.reset(num_dirty * ROLLBACK_PAGE_SIZE);
-    if (shadow && changed.size() < num_dirty)
-      changed.reset(num_dirty);
   }
 
   // Capture pointers to the already-allocated buffers to avoid reference capture issues
   uint32_t* page_indices_ptr = out.page_indices.data();
   uint8_t* page_data_ptr = out.page_data.data();
-  u8* const changed_ptr = shadow ? changed.data() : nullptr;
+  KeptChunks* const kept_ptr = &kept;
 
   auto copySubsectionFn = [dirty_pages, region_base, page_indices_ptr, page_data_ptr, first_page,
-                           shadow, changed_ptr](u32 offset, u32 size) {
+                           shadow, kept_ptr](u32 chunk, u32 offset, u32 size) {
     ROLLBACK_ZONE_N("copy dirty pages");
     if (offset >= dirty_pages->size())
       return;  // Nothing to do for this subsection
 
-    u32 this_split_written = 0;
+    u32 next = offset;  // where the next granule kept goes
     for (uint32_t dirtyPagesIndex = offset;
          dirtyPagesIndex < offset + size && dirtyPagesIndex < dirty_pages->size();
          ++dirtyPagesIndex)
@@ -186,35 +195,49 @@ void enqueueSubsectionJobs(u32 first_page, u32 page_count, const uint8_t* region
 
       // pageidx is global; subtract first_page to get region-relative index
       u32 relative_page_idx = pageidx - first_page;
-      page_indices_ptr[dirtyPagesIndex] = relative_page_idx;
-      u8* const saved = page_data_ptr + static_cast<size_t>(dirtyPagesIndex) * ROLLBACK_PAGE_SIZE;
-      std::memcpy(saved, region_base + static_cast<size_t>(relative_page_idx) * ROLLBACK_PAGE_SIZE,
-                  ROLLBACK_PAGE_SIZE);
+      const u8* const src =
+          region_base + static_cast<size_t>(relative_page_idx) * ROLLBACK_PAGE_SIZE;
+      u8* const saved = page_data_ptr + static_cast<size_t>(next) * ROLLBACK_PAGE_SIZE;
       if (shadow)
       {
+        // Only what changed since the previous save: a granule written with the bytes it held is
+        // in an older slot or the base snapshot with those bytes, and a load finds it there. RAM
+        // is read once (the GPU thread may write it meanwhile), as words compared with the
+        // shadow's: faster than memcmp and a copy, or comparing a copy just stored.
         u8* const before = shadow + static_cast<size_t>(relative_page_idx) * ROLLBACK_PAGE_SIZE;
-        const bool differs = std::memcmp(before, saved, ROLLBACK_PAGE_SIZE) != 0;
-        if (differs)
-          std::memcpy(before, saved, ROLLBACK_PAGE_SIZE);
-        changed_ptr[dirtyPagesIndex] = differs;
+        u64 now[ROLLBACK_PAGE_SIZE / 8], was[ROLLBACK_PAGE_SIZE / 8];
+        std::memcpy(now, src, ROLLBACK_PAGE_SIZE);
+        std::memcpy(was, before, ROLLBACK_PAGE_SIZE);
+        u64 differ = 0;
+        for (size_t word = 0; word < ROLLBACK_PAGE_SIZE / 8; ++word)
+          differ |= now[word] ^ was[word];
+        if (differ == 0)
+          continue;
+        std::memcpy(before, now, ROLLBACK_PAGE_SIZE);
+        std::memcpy(saved, now, ROLLBACK_PAGE_SIZE);
       }
-      ++this_split_written;
+      else
+      {
+        std::memcpy(saved, src, ROLLBACK_PAGE_SIZE);
+      }
+      page_indices_ptr[next++] = relative_page_idx;
     }
+    kept_ptr->counts[chunk] = next - offset;
 #if defined(HAVE_TRACY)
-    auto x =
-        std::format("page count %u (offset %u size %u)", this_split_written, offset, size);
+    auto x = std::format("page count %u (offset %u size %u)", next - offset, offset, size);
     ZoneText(x.c_str(), x.size());
 #endif
   };
 
   u32 split_size = (num_dirty + num_work_chunks - 1) / num_work_chunks;
+  kept.split = split_size;
   for (u32 i = 0; i < num_work_chunks; ++i)
   {
     u32 offset = i * split_size;
     u32 size = std::min(split_size, num_dirty - offset);
     jar.push_back(w.create_job_as_child(
-        root, [copySubsectionFn, offset, size](job::JobTaskThread& t, job::Job& j) {
-          copySubsectionFn(offset, size);
+        root, [copySubsectionFn, i, offset, size](job::JobTaskThread& t, job::Job& j) {
+          copySubsectionFn(i, offset, size);
         }));
   }
 }
@@ -311,6 +334,7 @@ void DeltaSaveSlot::Save(Core::System& system)
   const u8* region_mask = rbm.RegionMask();
   u8* const shadow1 = rbm.SaveShadow(false);
   u8* const shadow2 = rbm.SaveShadow(true);
+  KeptChunks kept1, kept2;
 
   // Serialize non-RAM state first so writes made by DoState are included in the dirty scan.
   // Gameplay-only rollback (region mode) saves memory and registers only.
@@ -374,11 +398,11 @@ void DeltaSaveSlot::Save(Core::System& system)
   });
 
   job::Job* root_mem1_job = job::KickRootJob(
-      dt, [this, &rbm, shadow1](job::JobTaskThread& w, job::Job& root) {
+      dt, [this, &rbm, shadow1, &kept1](job::JobTaskThread& w, job::Job& root) {
         ROLLBACK_ZONE_N("root mem1 save dispatch");
         std::vector<job::Job*> jar;
         enqueueSubsectionJobs(0, m_mem1_page_count, m_mem1_ptr, m_mem1_delta, rbm, w, root, jar,
-                              SAVESTATE_NUM_WORK_CHUNKS, m_mem1_scan, shadow1, m_mem1_changed);
+                              SAVESTATE_NUM_WORK_CHUNKS, m_mem1_scan, shadow1, kept1);
         auto num_jobs = jar.size();
         ASSERT(num_jobs <= UINT16_MAX);
         w.do_work_and_kick_jobs(jar.data(), (uint16_t)num_jobs);
@@ -387,12 +411,11 @@ void DeltaSaveSlot::Save(Core::System& system)
   // Do all mem1 copy jobs + l1 cache job. THEN do mem2 jobs.
   // Goal here is to try not to trash the cache too hard.
   job::Job* root_mem2_job = job::KickRootJob(
-      dt, [this, &rbm, shadow2](job::JobTaskThread& w, job::Job& root) {
+      dt, [this, &rbm, shadow2, &kept2](job::JobTaskThread& w, job::Job& root) {
         ROLLBACK_ZONE_N("root mem2 save dispatch");
         std::vector<job::Job*> jar;
         enqueueSubsectionJobs(MEM2_FIRST_PAGE, m_mem2_page_count, m_mem2_ptr, m_mem2_delta, rbm, w,
-                              root, jar, SAVESTATE_NUM_WORK_CHUNKS, m_mem2_scan, shadow2,
-                              m_mem2_changed);
+                              root, jar, SAVESTATE_NUM_WORK_CHUNKS, m_mem2_scan, shadow2, kept2);
         auto num_jobs = jar.size();
         ASSERT(num_jobs <= UINT16_MAX);
         w.do_work_and_kick_jobs(jar.data(), (uint16_t)num_jobs);
@@ -401,6 +424,12 @@ void DeltaSaveSlot::Save(Core::System& system)
   job::DrainJobsUntilComplete(dt, root_mem1_job);
   job::DrainJobsUntilComplete(dt, root_mem2_job);
   job::DrainJobsUntilComplete(dt, l1cachejob);
+  for (const auto& [delta, kept] :
+       {std::pair{&m_mem1_delta, &kept1}, std::pair{&m_mem2_delta, &kept2}})
+  {
+    delta->page_count = CompactKeptGranules(delta->page_indices.data(), delta->page_data.data(),
+                                            ROLLBACK_PAGE_SIZE, kept->split, kept->counts);
+  }
   m_last_ram_us = static_cast<u64>(std::chrono::duration_cast<std::chrono::microseconds>(
                                        std::chrono::steady_clock::now() - ram_start)
                                        .count());
