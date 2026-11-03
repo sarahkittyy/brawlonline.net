@@ -60,16 +60,19 @@ Settings > Clips: "Manual Clip Hotkey" (Enable on, L+R+Z), "Disable automatic hi
 the local highlight detection for replays."), and the video output folder (default
 `<Root Replay Folder>/Highlights`, `SettingsManager.getClipsFolder`), where renders go (§5).
 
-Manual Clip Hotkey's Configure (2026-11-03, Sarah's board) opens "Press any combination of
-buttons.": every button pressed joins the hotkey until all are let go, then Retry or Apply. The
-buttons come from DolphinTool `pads` (`PadsCommand.cpp`, run by `launcher/src/dolphin/pad_reader.ts`
-with the netplay User folder), which reads the ports Dolphin plays with as Dolphin does (an adapter
-as it is, a standard controller through its mapping) and saves nothing; Configure is off while the
-netplay Dolphin is open (it holds the adapter). The setting `clipHotkeys` keeps every hotkey set with
-when: a game is searched with the hotkey of its start, so a new one makes clips in later games and
-earlier games keep the clips of theirs (nothing old turns into a clip, nothing old goes). The cache's
-`mode` names the hotkey when it isn't L+R+Z, so rows from before stay. The icons are Zacksly's
-"GameCube Button Icons and Controls" (`components/gc_button_icons`).
+Manual Clip Hotkey's Configure (2026-11-03, Sarah's board) shows a GameCube controller whose
+buttons are clicked into and out of the hotkey (the picked ones glow), then Apply. Nothing reads
+the player's controller: the hotkey is GameCube buttons, whatever Dolphin maps to them (a keyboard,
+another pad), on every platform. (A first version read the controller through a DolphinTool
+`pads` command; Sarah: "how are we reading controller inputs in the launcher? ... people might
+rebind their keyboard to a gc controller and that's all in dolphin".) The setting `clipHotkeys`
+keeps every hotkey set with when: a game is searched with the hotkey of its start, so a new one
+makes clips in later games and earlier games keep the clips of theirs (nothing old turns into a
+clip, nothing old goes). The cache's `mode` names the hotkey when it isn't L+R+Z, so rows from
+before stay. The controller and the icons are Zacksly's "GameCube Button Icons and Controls"
+(`components/gc_button_icons`): the controller's face buttons, Start and D-pad are click areas over
+its drawing, L, R and Z their icons above the shoulders. Wii Remote and Classic Controller hotkeys
+don't exist yet.
 
 ## 3. Playing (comm file `highlights`)
 

@@ -12,8 +12,6 @@ add_executable(dolphin-tool
   GameDataCommand.h
   SDHashCommand.cpp
   SDHashCommand.h
-  PadsCommand.cpp
-  PadsCommand.h
   ToolMain.cpp
 )
 

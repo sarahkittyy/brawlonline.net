@@ -2,7 +2,6 @@ import { currentClipButtons, withClipHotkey } from "@common/clip_hotkey";
 import { CLIP_RESOLUTIONS, clipResolution } from "@common/clip_resolution";
 import { css } from "@emotion/react";
 import Button from "@mui/material/Button";
-import Tooltip from "@mui/material/Tooltip";
 import Typography from "@mui/material/Typography";
 import React from "react";
 
@@ -11,7 +10,6 @@ import { Dropdown } from "@/components/form/dropdown";
 import { Toggle } from "@/components/form/toggle";
 import { GcButtonRow } from "@/components/gc_button_icons/gc_button_icons";
 import { PathInput } from "@/components/path_input/path_input";
-import { useDolphinStore } from "@/lib/dolphin/use_dolphin_store";
 import { useSetting } from "@/lib/hooks/use_settings";
 
 import { SettingItem } from "../setting_item_section";
@@ -31,9 +29,8 @@ export const defaultClipsFolder = (rootSlpPath: string): string => {
 const ClipHotkeySetting = () => {
   const [clipOnLrz, setClipOnLrz] = useSetting("clipOnLrz");
   const [clipHotkeys, setClipHotkeys] = useSetting("clipHotkeys");
-  // The adapter is the netplay Dolphin's while it is open.
-  const netplayDolphinOpen = useDolphinStore((store) => store.netplayOpened);
   const [configuring, setConfiguring] = React.useState(false);
+  const current = currentClipButtons(clipHotkeys);
 
   return (
     <SettingItem name={Messages.clipHotkey()} description={Messages.clipHotkeyDescription()}>
@@ -49,19 +46,9 @@ const ClipHotkeySetting = () => {
           checked={clipOnLrz}
           onChange={(_, checked) => setClipOnLrz(checked)}
         />
-        <Tooltip title={netplayDolphinOpen ? Messages.closeDolphinToConfigure() : ""}>
-          <span>
-            <Button
-              variant="outlined"
-              color="secondary"
-              size="small"
-              disabled={netplayDolphinOpen}
-              onClick={() => setConfiguring(true)}
-            >
-              {Messages.clipHotkeyConfigure()}
-            </Button>
-          </span>
-        </Tooltip>
+        <Button variant="outlined" color="secondary" size="small" onClick={() => setConfiguring(true)}>
+          {Messages.clipHotkeyConfigure()}
+        </Button>
       </div>
       <div
         css={css`
@@ -73,10 +60,11 @@ const ClipHotkeySetting = () => {
         `}
       >
         <Typography variant="body2">{Messages.clipHotkeyCurrent()}</Typography>
-        <GcButtonRow buttons={currentClipButtons(clipHotkeys)} />
+        <GcButtonRow buttons={current} />
       </div>
       <ClipHotkeyDialog
         open={configuring}
+        current={current}
         onClose={() => setConfiguring(false)}
         onApply={(buttons) => setClipHotkeys(withClipHotkey(clipHotkeys, buttons, Date.now()))}
       />

@@ -27,7 +27,6 @@ import type { HighlightListView, HighlightPlayItem } from "@replays/highlights/t
 import { Observable, Subject } from "observable-fns";
 
 import { delayAndMaybeError } from "../utils";
-import { startMockPadReader } from "./mock_pad_reader";
 
 const SHOULD_ERROR = false;
 const DOLPHIN_VERSION = "9.8.7";
@@ -217,18 +216,6 @@ class MockDolphinClient implements DolphinService {
       this.chatKey = chatKey;
     }
     return chatKey;
-  }
-
-  private stopMockPads: (() => void) | null = null;
-
-  async startPadReader(readerId: string): Promise<void> {
-    this.stopMockPads?.();
-    this.stopMockPads = startMockPadReader(readerId, (event) => this.eventSubject.next(event));
-  }
-
-  async stopPadReader(_readerId: string): Promise<void> {
-    this.stopMockPads?.();
-    this.stopMockPads = null;
   }
 
   @delayAndMaybeError(SHOULD_ERROR)
