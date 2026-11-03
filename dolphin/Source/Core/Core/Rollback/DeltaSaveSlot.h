@@ -316,10 +316,6 @@ public:
   // The granules a Save found dirty (absolute bitmap indices), kept to reuse their storage.
   std::vector<u32> m_mem1_scan;
   std::vector<u32> m_mem2_scan;
-  // Whole-machine mode: per saved granule, whether it changed RollbackManager's shadow (set by the
-  // save's copy jobs, read by UpdateShadowAfterSave).
-  Common::UniqueBuffer<u8> m_mem1_changed;
-  Common::UniqueBuffer<u8> m_mem2_changed;
 
   uint32_t brawl_frame = 0;
 

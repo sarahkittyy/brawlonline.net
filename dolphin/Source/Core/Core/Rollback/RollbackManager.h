@@ -283,7 +283,7 @@ public:
 
   // Whole-machine snapshots: MEM1+MEM2 as the newest save left them (taken with the base
   // snapshot, updated by every save's written granules and every load's restored ones), so that a
-  // save can tell which written granules changed (LastSaveChecksum).
+  // save can tell which written granules changed (LastSaveChecksum) and keep only those.
   std::unique_ptr<uint8_t[]> m_shadow_mem1;
   std::unique_ptr<uint8_t[]> m_shadow_mem2;
   bool m_shadow_valid = false;

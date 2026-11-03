@@ -1203,21 +1203,18 @@ const u8* RollbackManager::ForChecksum(u32 phys, const u8* src, u8* scratch) con
 
 void RollbackManager::UpdateShadowAfterSave(int slot)
 {
-  // The save's copy jobs brought the shadow up to date and flagged the granules that changed it.
+  // The save's copy jobs brought the shadow up to date and kept only the granules that changed it.
   const DeltaSaveSlot& saved = m_slots[slot];
   const u8* gpu = GPUWrittenBitmap::Get().entries;
   // The changed granules' (page, bytes) stream, to crc32 in blocks (GitHub issue #14).
   BatchedChangeCRC change_crc;
   u8 scratch[ROLLBACK_PAGE_SIZE];
   m_parts.changed.clear();
-  for (const auto& [delta, first_page, changed] :
-       {std::tuple{&saved.m_mem1_delta, 0u, saved.m_mem1_changed.data()},
-        std::tuple{&saved.m_mem2_delta, MEM2_FIRST_PAGE, saved.m_mem2_changed.data()}})
+  for (const auto& [delta, first_page] :
+       {std::pair{&saved.m_mem1_delta, 0u}, std::pair{&saved.m_mem2_delta, MEM2_FIRST_PAGE}})
   {
     for (u32 i = 0; i < delta->page_count; ++i)
     {
-      if (!changed[i])
-        continue;
       const u32 page = first_page + delta->page_indices[i];
       const u32 phys = page << ROLLBACK_PAGE_SHIFT;
       const u8* now = delta->page_data.data() + static_cast<size_t>(i) * ROLLBACK_PAGE_SIZE;

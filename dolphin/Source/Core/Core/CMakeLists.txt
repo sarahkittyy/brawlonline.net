@@ -630,6 +630,7 @@ add_library(core
   Online/User.cpp
   Online/User.h
   Rollback/ChangeCRC.h
+  Rollback/KeptGranules.h
   Rollback/DeltaSaveSlot.cpp
   Rollback/DeltaSaveSlot.h
   Rollback/FullMemcpySaveSlot.cpp
