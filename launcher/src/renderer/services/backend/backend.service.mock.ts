@@ -196,6 +196,25 @@ function mockMatchHistory(): MatchHistoryItem[] {
     const me = { uid: fakeUserId, displayName: "Demo user 0", connectCode: "DEMO#0" };
     const them = { uid: opp.uid, displayName: opp.displayName, connectCode: opp.connectCode };
     const createdAt = new Date(start - i * 47 * 60 * 1000).toISOString();
+    if (i === 2) {
+      // A 2v2 match: four players, each with the games their team won (the teams change every game).
+      const more = opponents
+        .filter((o) => o.uid !== opp.uid)
+        .slice(0, 2)
+        .map((o) => ({ uid: o.uid, displayName: o.displayName, connectCode: o.connectCode }));
+      const none = { ratingBefore: null, ratingAfter: null, ratingChange: null };
+      return {
+        matchId: `mode.twos-mock-${i}`,
+        mode: "twos" as const,
+        createdAt,
+        status: "ASSIGNED",
+        ranked: false,
+        players: [me, them, ...more].map((p, k) => ({ ...p, wins: [2, 1, 2, 1][k], ...none })),
+        winner: null,
+        endReason: null,
+        games: 3,
+      };
+    }
     if (mode === "room") {
       const more = opponents
         .filter((o) => o.uid !== opp.uid)
@@ -396,7 +415,8 @@ class MockBackendClient implements BackendService {
         mode === "all" ||
         (mode === "ranked" && m.ranked) ||
         (mode === "unranked" && (m.mode === "unranked" || m.mode === "direct")) ||
-        (mode === "rooms" && m.mode === "room"),
+        (mode === "rooms" && m.mode === "room") ||
+        (mode === "twos" && m.mode === "twos"),
     );
     const { rows, next } = mockPage(all, before, 20);
     return { matches: rows, next };

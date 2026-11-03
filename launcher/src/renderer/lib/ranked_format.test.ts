@@ -107,6 +107,24 @@ describe("ranked formatting", () => {
   });
 });
 
+describe("2v2 matches", () => {
+  const twos = (games: number, wins: number[]) => ({
+    mode: "twos" as const,
+    room: null,
+    games,
+    players: ["ann", "bob", "cy", "dee"].map((uid, i) => player(uid, wins[i])),
+  });
+
+  it("are 2v2, scored by the games my team won and lost, the others on the other side", () => {
+    expect(modeLabel("twos")).toBe("2v2");
+    const m = twos(3, [2, 1, 1, 2]);
+    expect([formatMatchScore(m, "ann"), formatMatchScore(m, "bob")]).toEqual(["2 - 1", "1 - 2"]);
+    expect(formatMatchScore(m, "eve")).toBe("–");
+    const [mine, others] = matchSides(m, "cy");
+    expect([mine.map((p) => p.uid), others.map((p) => p.uid)]).toEqual([["cy"], ["ann", "bob", "dee"]]);
+  });
+});
+
 describe("room games", () => {
   const room = (mode: "1v1" | "ffa" | "teams", players: MatchHistoryPlayer[]) => ({
     mode: "room" as const,
