@@ -1,7 +1,23 @@
 export const ClipsSettingsMessages = {
-  clipOnLrz: () => "L+R+Z to clip",
-  clipOnLrzDescription: () =>
+  clipHotkey: () => "Manual Clip Hotkey",
+  clipHotkeyDescription: () =>
     "Press this button combination in-game to clip the last 20 seconds. Shows up in Replays > Highlights.",
+  clipHotkeyEnable: () => "Enable",
+  clipHotkeyConfigure: () => "Configure",
+  clipHotkeyCurrent: () => "Current:",
+  closeDolphinToConfigure: () => "Close Dolphin to configure the hotkey.",
+  hotkeyPressButtons: () => "Press any combination of buttons.",
+  hotkeyWaiting: () => "Waiting for buttons...",
+  hotkeyLetGo: () => "Let go of all buttons to finish.",
+  hotkeyLooking: () => "Looking for your controller...",
+  hotkeyNoControllers: () =>
+    "No GameCube controller or adapter is set up in Dolphin's controller settings (Settings > Netplay > Configure Dolphin > Controllers).",
+  hotkeyNotPlugged: () => "No controller found. Plug in your GameCube adapter or controller.",
+  hotkeyAdapterError: (error: string) => "The GameCube adapter could not be opened: {0}",
+  hotkeyReadError: (error: string) => "Your controller could not be read: {0}",
+  hotkeyCancel: () => "Cancel",
+  hotkeyRetry: () => "Retry",
+  hotkeyApply: () => "Apply",
   disableHighlightDetection: () => "Disable automatic highlight detection",
   disableHighlightDetectionDescription: () => "Disables the local highlight detection for replays.",
   resolution: () => "Video Resolution",

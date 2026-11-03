@@ -105,10 +105,10 @@ const idle = (damage = 0): FighterFrame => ({ damage, stocks: 3, status: 0, atta
 
 /**
  * 600 frames: Alice (P1) hits Bob (P2) with `moves` (one motion kind each) every 20 frames from
- * frame 100, 10% each, Bob in hitstun until 30 frames after the last; Alice holds L+R+Z for
- * `hold` frames from frame 400.
+ * frame 100, 10% each, Bob in hitstun until 30 frames after the last; Alice holds L+R+Z (or
+ * `pressed`) for `hold` frames from frame 400.
  */
-function game(moves: number[], hold = 0): Frame[] {
+function game(moves: number[], hold = 0, pressed = L_R_Z): Frame[] {
   const frames: Frame[] = [];
   let bobDamage = 0;
   const hitAt = moves.map((_, i) => 100 + i * 20);
@@ -131,7 +131,7 @@ function game(moves: number[], hold = 0): Frame[] {
       status: f >= 100 && f <= lastHit + 30 ? 0x45 : 0,
       attacker: ENTRY_IDS[0],
     };
-    const buttons = [hold && f >= 400 && f < 400 + hold ? L_R_Z : 0, 0];
+    const buttons = [hold && f >= 400 && f < 400 + hold ? pressed : 0, 0];
     frames.push({ fighters: [alice, bob], buttons });
   }
   return frames;
@@ -190,6 +190,20 @@ describe("replay highlights", () => {
     // A press of one frame is one too; no press, none.
     expect(findLrzClips(decodeTimeline(encode(game([1, 2, 3, 4], 1))), [0, 1])).toHaveLength(1);
     expect(findLrzClips(decodeTimeline(encode(game([1, 2, 3, 4], 0))), [0, 1])).toHaveLength(0);
+  });
+
+  it("finds presses of another hotkey, across both button bytes", () => {
+    const L_R_A = 0x0160;
+    const lra = decodeTimeline(encode(game([1, 2, 3, 4], 10, L_R_A)));
+    expect(findLrzClips(lra, [0, 1])).toHaveLength(0);
+    expect(findLrzClips(lra, [0, 1], L_R_A)).toHaveLength(1);
+    expect(findLrzClips(lra, [0, 1], 0x0100)).toHaveLength(1);
+    expect(findLrzClips(decodeTimeline(encode(game([1, 2, 3, 4], 10))), [0, 1], L_R_A)).toHaveLength(0);
+    // Start + D-pad Down; more buttons held than the hotkey's still count.
+    const startDown = decodeTimeline(encode(game([1, 2, 3, 4], 10, 0x1004 | 0x0200)));
+    expect(findLrzClips(startDown, [0, 1], 0x1004)).toHaveLength(1);
+    const options = { highlights: false, clips: true, clipPlayers: "local" as const, clipButtons: L_R_A };
+    expect(analyzeTimeline(lra, options).clips).toHaveLength(1);
   });
 
   it("counts only the recording player's L+R+Z by default", () => {

@@ -81,8 +81,8 @@ export default function setupReplaysIpc({
   const highlightService = new HighlightService(
     created.then(({ database }) => database),
     () => {
-      const { disableHighlightDetection, clipOnLrz } = settingsManager.get().settings;
-      return { detectHighlights: !disableHighlightDetection, clipOnLrz };
+      const { disableHighlightDetection, clipOnLrz, clipHotkeys } = settingsManager.get().settings;
+      return { detectHighlights: !disableHighlightDetection, clipOnLrz, clipHotkeys: clipHotkeys ?? [] };
     },
   );
 

@@ -1,3 +1,4 @@
+import type { ClipHotkey } from "@common/clip_hotkey";
 import type { ModBuild, ModsController } from "@dolphin/mods/types";
 import type { ManualClip } from "@replays/highlights/types";
 
@@ -71,10 +72,12 @@ export interface SettingsSchema {
   // playback Dolphin holds the last frame for 5 s, then closes. Auto play overrides it.
   closeDolphinAfterSpectating: boolean;
 
-  // Clips (DESIGN.md, the user 2026-10-20): "L+R+Z to clip" (Project Clippi's button-input
-  // highlights, found after the game in the replay's recorded pads); "Disable automatic highlight
-  // detection"; where rendered videos go (null = <rootSlpPath>/Highlights).
+  // Clips (DESIGN.md, the user 2026-10-20): "Manual Clip Hotkey" (Project Clippi's button-input
+  // highlights, found after the game in the replay's recorded pads; L+R+Z until 2026-11-03's
+  // Configure): on or off, and every hotkey set with when (@common/clip_hotkey, empty = L+R+Z);
+  // "Disable automatic highlight detection"; where rendered videos go (null = <rootSlpPath>/Highlights).
   clipOnLrz: boolean;
+  clipHotkeys: ClipHotkey[];
   disableHighlightDetection: boolean;
   clipsFolder: string | null;
   /** The rendered videos' height: 480, 720 (the default), 1080 or 1440 (@common/clip_resolution). */

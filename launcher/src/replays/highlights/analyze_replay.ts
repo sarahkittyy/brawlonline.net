@@ -15,6 +15,8 @@ export type AnalyzeOptions = {
   clips: boolean;
   /** Whose L+R+Z presses count: the recording player's only (the default), or every player's. */
   clipPlayers: "local" | "all";
+  /** The clip hotkey's buttons (@common/clip_hotkey; L+R+Z when not given). */
+  clipButtons?: number;
 };
 
 export function analyzeTimeline(t: Timeline, options: AnalyzeOptions): ReplayHighlights {
@@ -40,7 +42,7 @@ export function analyzeTimeline(t: Timeline, options: AnalyzeOptions): ReplayHig
       ? t.players.map((p) => p.index)
       : t.players.filter((p) => p.port === t.recorderPort).map((p) => p.index);
   const clips = options.clips
-    ? findLrzClips(t, clipPlayers).map((c) => ({
+    ? findLrzClips(t, clipPlayers, options.clipButtons).map((c) => ({
         kind: "clip" as const,
         port: port(c.player),
         frame: t.firstFrame + c.frame,

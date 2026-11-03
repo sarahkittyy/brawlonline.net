@@ -49,6 +49,7 @@ export const defaultAppSettings: AppSettings = {
     netplayNetwork: "",
     closeDolphinAfterSpectating: true,
     clipOnLrz: true,
+    clipHotkeys: [],
     disableHighlightDetection: false,
     clipsFolder: null,
     clipResolution: 720,

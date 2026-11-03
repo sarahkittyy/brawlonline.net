@@ -31,6 +31,8 @@ import {
   ipc_replaceProjectPlusCard,
   ipc_setChatKey,
   ipc_softResetDolphin,
+  ipc_startPadReader,
+  ipc_stopPadReader,
   ipc_storePlayKeyFile,
   ipc_viewSlpReplay,
 } from "./ipc";
@@ -158,6 +160,12 @@ const dolphinApi: DolphinService = {
   async setChatKey(press: ChatKeyPress): Promise<string | null> {
     const { result } = await ipc_setChatKey.renderer!.trigger({ press });
     return result.chatKey;
+  },
+  async startPadReader(readerId: string) {
+    await ipc_startPadReader.renderer!.trigger({ readerId });
+  },
+  async stopPadReader(readerId: string) {
+    await ipc_stopPadReader.renderer!.trigger({ readerId });
   },
   onEvent<T extends DolphinEventType>(eventType: T, handle: (event: DolphinEventMap[T]) => void) {
     const { destroy } = ipc_dolphinEvent.renderer!.handle(async (result) => {

@@ -11,15 +11,17 @@
  * intend to clip"); in those replays nothing else had the three down at all, and over the first
  * research's 167 replays they were down together in play 5 times, 4 frames at most.
  */
+import { DEFAULT_CLIP_BUTTONS } from "@common/clip_hotkey";
+
 import type { Timeline } from "./replay_frames";
 import { PAD_KEPT } from "./replay_frames";
 import { CLIP_BEFORE_SECONDS } from "./types";
 
-// gfPadStatus +0x0 (u32, big-endian): the low byte holds L, R and Z.
-const L = 0x40;
-const R = 0x20;
-const Z = 0x10;
-const LRZ = L | R | Z;
+// gfPadStatus +0x0 (u32, big-endian): L, R and Z are in the low byte. Since 2026-11-03 the player
+// sets the buttons (Settings > Clips > Manual Clip Hotkey, @common/clip_hotkey): any of the low 13
+// bits, so the low two bytes.
+const LRZ = DEFAULT_CLIP_BUTTONS;
+const held = (pads: Uint8Array, f: number) => (pads[f * PAD_KEPT + 2] << 8) | pads[f * PAD_KEPT + 3];
 export const HOLD_FRAMES = 1;
 // Project Clippi's defaults: 20 s before, 2 s after, a 5 s lockout.
 export const CLIP_BEFORE = CLIP_BEFORE_SECONDS * 60;
@@ -46,15 +48,18 @@ export function longestLrzHold(t: Timeline, player: number): number {
   return best;
 }
 
-/** The clips of the given players (timeline indices), in frame order. */
-export function findLrzClips(t: Timeline, players: readonly number[]): LrzClip[] {
+/** The clips of the given players (timeline indices), in frame order: presses of `buttons` (all held together). */
+export function findLrzClips(t: Timeline, players: readonly number[], buttons: number = LRZ): LrzClip[] {
   const out: LrzClip[] = [];
+  if (buttons === 0) {
+    return out;
+  }
   for (const player of players) {
     const pads = t.pads[player];
     let run = 0;
     let lockedUntil = -1;
     for (let f = 0; f < t.frames; f++) {
-      run = (pads[f * PAD_KEPT + 3] & LRZ) === LRZ ? run + 1 : 0;
+      run = (held(pads, f) & buttons) === buttons ? run + 1 : 0;
       if (run === HOLD_FRAMES && f >= lockedUntil) {
         out.push({
           player,

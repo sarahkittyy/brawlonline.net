@@ -1,8 +1,11 @@
 /**
  * A replay's highlights and L+R+Z clips for its stats page (DESIGN.md §1): found on demand, in a
  * worker thread, one replay at a time, and kept in replays.sqlite (`highlight_cache`) by file
- * (path, size, modification time), detector version and what was looked for.
+ * (path, size, modification time), detector version and what was looked for (the clip hotkey of
+ * the game's time included, @common/clip_hotkey).
  */
+import type { ClipHotkey } from "@common/clip_hotkey";
+import { clipButtonsAt, DEFAULT_CLIP_BUTTONS } from "@common/clip_hotkey";
 import type { Database } from "@database/schema";
 import { readReplayHeader } from "@replays/replay_format";
 import electronLog from "electron-log";
@@ -30,32 +33,62 @@ const WORKER_IDLE_MS = 2 * 60_000;
 export type HighlightSettings = {
   detectHighlights: boolean;
   clipOnLrz: boolean;
+  clipHotkeys: ClipHotkey[];
 };
 
-const modeKey = (o: AnalyzeOptions) => `${o.highlights ? "h" : ""}${o.clips ? `c-${o.clipPlayers}` : ""}`;
+// L+R+Z's key is the one from before the hotkey could change: those rows stay.
+const modeKey = (o: AnalyzeOptions) =>
+  `${o.highlights ? "h" : ""}${o.clips ? `c-${o.clipPlayers}` : ""}${
+    o.clips && o.clipButtons !== undefined && o.clipButtons !== DEFAULT_CLIP_BUTTONS
+      ? `-${o.clipButtons.toString(16)}`
+      : ""
+  }`;
 
 export class HighlightService {
   private worker: Promise<HighlightsWorker | null> | null = null;
   private idleTimer: ReturnType<typeof setTimeout> | null = null;
   private queue: Promise<unknown> = Promise.resolve();
   private inFlight = new Map<string, Promise<ReplayHighlights>>();
+  /** Replays' start times (ms), by path, size and modification time: which clip hotkey was theirs. */
+  private startTimes = new Map<string, number | null>();
 
   constructor(private readonly db: Promise<Kysely<Database>>, private readonly settings: () => HighlightSettings) {}
 
-  private options(): AnalyzeOptions {
+  /** What to look for in `fullPath`: the clip hotkey is the one of the game's start (else of the file's last write). */
+  private async options(fullPath: string, size: number, mtime: number): Promise<AnalyzeOptions> {
     const s = this.settings();
-    return { highlights: s.detectHighlights, clips: s.clipOnLrz, clipPlayers: CLIP_PLAYERS };
+    const options: AnalyzeOptions = { highlights: s.detectHighlights, clips: s.clipOnLrz, clipPlayers: CLIP_PLAYERS };
+    if (s.clipOnLrz && s.clipHotkeys.length > 0) {
+      const startTime = await this.startTime(fullPath, size, mtime);
+      options.clipButtons = clipButtonsAt(s.clipHotkeys, startTime ?? mtime);
+    }
+    return options;
+  }
+
+  private async startTime(fullPath: string, size: number, mtime: number): Promise<number | null> {
+    const key = `${fullPath}\n${size}\n${mtime}`;
+    if (this.startTimes.has(key)) {
+      return this.startTimes.get(key) ?? null;
+    }
+    const startTime = await readReplayHeader(fullPath).then(
+      (h) => (h.meta.startTime ? Date.parse(h.meta.startTime) : null),
+      () => null,
+    );
+    this.startTimes.set(key, startTime);
+    return startTime;
   }
 
   /** What is cached for `fullPath` (as this file, detector and settings are now), or null: nothing is found here. */
   async cached(fullPath: string): Promise<ReplayHighlights | null> {
-    const options = this.options();
-    if (!options.highlights && !options.clips) {
+    const s = this.settings();
+    if (!s.detectHighlights && !s.clipOnLrz) {
       return null;
     }
     try {
       const { size, mtimeMs } = await stat(fullPath);
-      return await this.fromCache(fullPath, size, Math.floor(mtimeMs), modeKey(options));
+      const mtime = Math.floor(mtimeMs);
+      const options = await this.options(fullPath, size, mtime);
+      return await this.fromCache(fullPath, size, mtime, modeKey(options));
     } catch {
       return null;
     }
@@ -94,17 +127,17 @@ export class HighlightService {
   }
 
   async getHighlights(fullPath: string): Promise<ReplayHighlights> {
-    const options = this.options();
-    const key = `${fullPath}\n${modeKey(options)}`;
+    const s = this.settings();
+    const key = `${fullPath}\n${s.detectHighlights}\n${s.clipOnLrz}\n${JSON.stringify(s.clipHotkeys)}`;
     let p = this.inFlight.get(key);
     if (!p) {
-      p = this.load(fullPath, options).finally(() => this.inFlight.delete(key));
+      p = this.load(fullPath).finally(() => this.inFlight.delete(key));
       this.inFlight.set(key, p);
     }
     return p;
   }
 
-  private async load(fullPath: string, options: AnalyzeOptions): Promise<ReplayHighlights> {
+  private async load(fullPath: string): Promise<ReplayHighlights> {
     const empty: ReplayHighlights = {
       detectorVersion: DETECTOR_VERSION,
       players: [],
@@ -112,11 +145,13 @@ export class HighlightService {
       highlights: [],
       clips: [],
     };
-    if (!options.highlights && !options.clips) {
+    const s = this.settings();
+    if (!s.detectHighlights && !s.clipOnLrz) {
       return empty;
     }
     const { size, mtimeMs } = await stat(fullPath);
     const mtime = Math.floor(mtimeMs);
+    const options = await this.options(fullPath, size, mtime);
     const mode = modeKey(options);
     const db = await this.db;
     const hit = await this.fromCache(fullPath, size, mtime, mode);

@@ -9,6 +9,7 @@
  * Newest first unless Best first is picked. Below the sidebar, buttons open the Root Replay Folder
  * and the rendered videos' folder (Settings > Clips).
  */
+import { currentClipButtons, hotkeyLabel } from "@common/clip_hotkey";
 import CloseIcon from "@mui/icons-material/Close";
 import ContentCutIcon from "@mui/icons-material/ContentCut";
 import CropIcon from "@mui/icons-material/Crop";
@@ -81,6 +82,8 @@ export const AllHighlightsPage = React.memo(() => {
   const { replayService } = useServices();
   const [detectionOff] = useSetting("disableHighlightDetection");
   const [clipOnLrz] = useSetting("clipOnLrz");
+  const [clipHotkeys] = useSetting("clipHotkeys");
+  const hotkey = hotkeyLabel(currentClipButtons(clipHotkeys));
   const [rootSlpPath] = useSetting("rootSlpPath");
   const [clipsFolder] = useSetting("clipsFolder");
   const { showInfo } = useToasts();
@@ -131,7 +134,7 @@ export const AllHighlightsPage = React.memo(() => {
       live = false;
       off();
     };
-  }, [replayService, detectionOff, clipOnLrz]);
+  }, [replayService, detectionOff, clipOnLrz, clipHotkeys]);
 
   const query = search.trim().toLowerCase();
   const entries = useMemo(() => {
@@ -222,7 +225,7 @@ export const AllHighlightsPage = React.memo(() => {
         : view === "opponents"
         ? Messages.noOpponents()
         : view === "clips"
-        ? Messages.noClips(CLIP_BEFORE_SECONDS)
+        ? Messages.noClips(hotkey, CLIP_BEFORE_SECONDS)
         : Messages.none()
       : null;
 
@@ -283,7 +286,7 @@ export const AllHighlightsPage = React.memo(() => {
               "clips",
               <ContentCutIcon fontSize="small" />,
               Messages.lrzHighlights(),
-              Messages.lrzHint(CLIP_BEFORE_SECONDS),
+              Messages.lrzHint(hotkey, CLIP_BEFORE_SECONDS),
             )}
             {sidebarItem("manual", <CropIcon fontSize="small" />, Messages.manualClips(), Messages.manualHint())}
             {sidebarItem("favorites", <StarIcon fontSize="small" />, Messages.favorites())}

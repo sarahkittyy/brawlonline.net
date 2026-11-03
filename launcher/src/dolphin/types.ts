@@ -204,7 +204,34 @@ export const enum DolphinEventType {
   PPLUS_PREPARE_PROGRESS = "PPLUS_PREPARE_PROGRESS",
   /** A render job was queued, moved on, finished or failed (render_queue.ts). */
   RENDER_PROGRESS = "RENDER_PROGRESS",
+  /** The controllers' buttons or status changed, or the reader stopped (pad_reader.ts). */
+  PAD_READER = "PAD_READER",
 }
+
+/** A GameCube port that has the adapter or a standard controller in the netplay Dolphin's settings. */
+export type PadReaderPort = {
+  port: number;
+  kind: "adapter" | "controller";
+  /** "GameCube adapter", or the mapped device as Dolphin names it (`XInput/0/Gamepad`). */
+  device: string;
+  plugged: boolean;
+};
+
+export type PadReaderStatus = {
+  ports: PadReaderPort[];
+  /** The GameCube adapter: "unused" when no port has it. */
+  adapter: "detected" | "not_detected" | "error" | "unused";
+  adapterError?: string;
+};
+
+/** What the pad reader `readerId` saw: buttons held (GcButton bits, @common/clip_hotkey), a status, or its end. */
+export type PadReaderEvent = {
+  type: DolphinEventType.PAD_READER;
+  readerId: string;
+  buttons?: number;
+  status?: PadReaderStatus;
+  ended?: { error: string | null };
+};
 
 /** A DLL Dolphin imports that Windows cannot load (missing_dlls.ts). */
 export type MissingDll = {
@@ -309,6 +336,7 @@ export type DolphinEventMap = {
   [DolphinEventType.PLAYBACK_STATUS]: DolphinPlaybackStatusEvent;
   [DolphinEventType.PPLUS_PREPARE_PROGRESS]: PPlusPrepareProgressEvent;
   [DolphinEventType.RENDER_PROGRESS]: DolphinRenderProgressEvent;
+  [DolphinEventType.PAD_READER]: PadReaderEvent;
 };
 
 export type DolphinEvent = DolphinEventMap[DolphinEventType];
@@ -417,6 +445,12 @@ export interface DolphinService {
   getChatKey(): Promise<string>;
   /** Sets the chat key to the pressed key; null (nothing changed) for a key that can't open chat. */
   setChatKey(press: ChatKeyPress): Promise<string | null>;
+  /**
+   * Starts reading the controllers' buttons (Settings > Clips > Manual Clip Hotkey): PAD_READER
+   * events with this id until stopPadReader (or another start).
+   */
+  startPadReader(readerId: string): Promise<void>;
+  stopPadReader(readerId: string): Promise<void>;
   onEvent<T extends DolphinEventType>(eventType: T, handle: (event: DolphinEventMap[T]) => void): () => void;
 }
 
