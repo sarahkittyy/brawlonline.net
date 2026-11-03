@@ -11,6 +11,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <optional>
+#include <thread>
 #include <utility>
 
 #include <enet/enet.h>
@@ -690,7 +691,8 @@ void Matchmaking::StartMatchmaking()
   while (m_client == nullptr && retry_count < 15)
   {
     if (Config::Get(Config::ONLINE_FORCE_NETPLAY_PORT))
-      m_host_port = static_cast<u16>(Config::Get(Config::ONLINE_NETPLAY_PORT));
+      m_host_port = static_cast<u16>(Config::Get(Config::ONLINE_NETPLAY_PORT) +
+                                     (m_search_settings.pair_room ? 1 : 0));
     else
       m_host_port = static_cast<u16>(41000 + (m_generator() % 10000));
     INFO_LOG_FMT(NETPLAY, "[Matchmaking] Port to use: {}...", m_host_port.load());
@@ -742,7 +744,8 @@ void Matchmaking::StartMatchmaking()
   m_upnp_mapped = false;
 #ifdef USE_UPNP
   if (Config::Get(Config::ONLINE_UPNP) && reinterpret_cast<const u8*>(&addr.host)[0] != 127)
-    m_upnp_mapped = Common::UPnP::MapUdpPort(m_host_port, UPNP_WAIT);
+    m_upnp_mapped =
+        Common::UPnP::MapUdpPort(m_host_port, UPNP_WAIT, m_search_settings.pair_room ? 1 : 0);
 #endif
 
   m_server = enet_host_connect(m_client, &addr, MM_CHANNELS, 0);
@@ -1263,6 +1266,22 @@ void Matchmaking::HandleConnecting()
   }
   Match match = *match_opt;
   m_connect_attempts++;
+
+  // Tests (PPR_TEST_PAIR_NO_P2P=1): a 2v2 party's pair room never connects, as two players whose
+  // NATs let nothing through (its connect times out the same way).
+  if (m_search_settings.pair_room && std::getenv("PPR_TEST_PAIR_NO_P2P"))
+  {
+    WARN_LOG_FMT(NETPLAY, "[Matchmaking] PPR_TEST_PAIR_NO_P2P: the pair room's connect times out");
+    const u64 until = Common::Timer::NowMs() + P2P_CONNECT_TIMEOUT_MS;
+    while (Common::Timer::NowMs() < until && m_state == State::OpponentConnecting &&
+           !m_is_mm_terminated)
+      std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    if (m_state != State::OpponentConnecting || m_is_mm_terminated)
+      return;
+    m_state = State::ErrorEncountered;
+    SetError(ErrorSource::Connection, "Timed out waiting for other players to connect");
+    return;
+  }
 
   const size_t remote_player_count = match.remotes.size();
   std::string ip_log;

@@ -928,6 +928,10 @@ State s;
 
 // LinkHealth (GetLinkHealth): written on the CPU thread, read by the spectate uploader.
 std::atomic<bool> s_health_running{false};
+// A 2v2 party's pair room's match was set up and the game may still be in its scene
+// (ConnectOptions::pair_room): set by its match start, cleared once the game is out of the match
+// scene. A session connecting meanwhile waits for that (await_scene_exit).
+std::atomic<bool> s_pair_scene{false};
 std::atomic<u64> s_health_late{0};
 std::atomic<double> s_health_rollback{0};
 std::atomic<double> s_health_ping{-1};
@@ -4019,6 +4023,9 @@ void PassLogClose();
 
 void ReportGameResult(const GameResult& r)
 {
+  // A 2v2 party's pair room is no game (ConnectOptions::pair_room).
+  if (s.net_opts.pair_room)
+    return;
   std::function<void(const GameResult&)> cb;
   {
     std::lock_guard lk(s_result_callback_mutex);
@@ -7624,7 +7631,12 @@ std::optional<std::string> Connect(const ConnectOptions& options)
   s.setup_error = 0;
   s.last_stage = NO_STAGE;
   s.stage_pool.clear();
-  s.await_scene_exit = false;
+  // A 2v2 party's pair room's match may still be on the screen (its session was stopped as the 2v2
+  // match was found): it is no match of this session's, which waits for the game to leave it.
+  s.await_scene_exit = s_pair_scene.load();
+  if (s.await_scene_exit)
+    INFO_LOG_FMT(BRAWLBACK,
+                 "gprb: the pair room's match is still on; this session waits for it to end");
   s.foreign_packets = 0;
   s.control_id = std::random_device{}();
   s.reassembler.Clear();
@@ -7845,6 +7857,7 @@ Lobby GetLobby()
   l.setup_error = s.setup_error;
   l.after_match = s.await_scene_exit;
   l.unheard = s.unheard_ports;
+  l.pair_room = s.mode == Mode::Network && s.net_opts.pair_room;
   l.twos = Twos();
   if (l.twos && l.active && !l.in_match)
   {
@@ -8843,6 +8856,8 @@ void LogWait(std::string_view where, Clock::time_point since)
 MatchStart ApplyMatchStart(Core::System& system, std::string_view when)
 {
   const Guest g(system.GetMemory());
+  if (s.net_opts.pair_room)
+    s_pair_scene = true;
   const auto host_block_ready = [] {
     const PeerView* hp = HostPeer();
     return hp && hp->init_match == static_cast<s64>(s.match_index) && !hp->init_block.empty();
@@ -8954,7 +8969,7 @@ MatchStart ApplyMatchStart(Core::System& system, std::string_view when)
 // (SETP; playback applies it as a joiner applies its host's, GameplayPlayback), and the metadata.
 void BeginReplay(Core::System& system)
 {
-  if (s.mode != Mode::Network || !Replay::Enabled(s.net_opts.replay_meta))
+  if (s.mode != Mode::Network || s.net_opts.pair_room || !Replay::Enabled(s.net_opts.replay_meta))
     return;
   const Guest g(system.GetMemory());
   const PeerView* hp = HostPeer();
@@ -9611,6 +9626,12 @@ bool OnLoopTop(const Core::CPUThreadGuard& guard)
       SetLoopDefault(ppc);
       return true;
     }
+    if (s_pair_scene)
+    {
+      const Guest pg(system.GetMemory());
+      if (!IsSceneMelee(pg) && !IsNextSceneMelee(pg))
+        s_pair_scene = false;
+    }
     return false;
   }
 
@@ -9868,6 +9889,8 @@ bool OnLoopTop(const Core::CPUThreadGuard& guard)
       s.did_frame0 = false;
       s.await_scene_exit = false;
       s.desynced = false;
+      if (!IsNextSceneMelee(g))
+        s_pair_scene = false;
       return false;
     }
     if (s.await_scene_exit)

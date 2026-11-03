@@ -285,6 +285,12 @@ struct ConnectOptions
   // them leaves or does not ready up within TWOS_READY_SECONDS of a game's end: then the session
   // ends for all of them (TakeTwosEnd).
   std::vector<std::array<u8, 4>> twos_splits;
+  // A 2v2 party's pair room (docs/design/2v2.md, "The pair room"; Online/OnlineClient.h): the two
+  // partners play the waiting room together while their 2v2 search runs. Its one match is no game:
+  // no replay (so nothing is spectated or reported to the server), no game result, and once it is
+  // over the session is too. The next session's matches wait for the game to leave that match's
+  // scene first (it is an scMelee with two players, as a match is).
+  bool pair_room = false;
   // Who plays (matchmaking's ticket), for the replays of this session's games (ReplayRecorder.h).
   Replay::MatchMeta replay_meta;
 };
@@ -453,6 +459,8 @@ struct Lobby
   // ... and the next game's teams by in-game port (the CSS shows them before the game is set up),
   // NO_TEAM outside one.
   std::array<u8, MAX_LOBBY_PLAYERS> twos_teams{NO_TEAM, NO_TEAM, NO_TEAM, NO_TEAM};
+  // The session is a 2v2 party's pair room (ConnectOptions::pair_room).
+  bool pair_room = false;
 };
 Lobby GetLobby();
 

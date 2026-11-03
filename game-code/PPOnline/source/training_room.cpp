@@ -219,25 +219,25 @@ namespace TrainingRoom {
         s_bannerMsg->printf(s_bannerWindow, "%s", s_banner);
     }
 
-    static void tickSandbag()
+    static void tickSandbag(u32 frames, u8& step, u32& wait)
     {
         itManager* im = itManager::getInstance();
         if (!im || !isPtr((u32)im)) return;
-        if (s_sandbagStep == 2) {
+        if (step == 2) {
             if (im->getItemNum(Item_Sandbag)) return;
             // Gone (knocked out): a new one after a while.
-            s_sandbagStep = 1;
-            s_sandbagWait = SANDBAG_RESPAWN_FRAMES;
+            step = 1;
+            wait = SANDBAG_RESPAWN_FRAMES;
             return;
         }
-        if (s_sandbagStep == 0) {
-            if (s_roomFrames < SANDBAG_FIRST_FRAME) return;
+        if (step == 0) {
+            if (frames < SANDBAG_FIRST_FRAME) return;
             im->preloadItemKindArchive(Item_Sandbag, 0, itArchive::Common, false);
-            s_sandbagStep = 1;
+            step = 1;
             return;
         }
-        if (s_sandbagWait) {
-            s_sandbagWait--;
+        if (wait) {
+            wait--;
             return;
         }
         if (!im->isCompItemKindArchive(Item_Sandbag, 0, false)) return;
@@ -245,10 +245,28 @@ namespace TrainingRoom {
         BaseItem* it = im->createItem(&pos, 1.0f, Item_Sandbag);
         PPOM::g_block.debug.scratch[5] |= it ? 0x20000 : 0x40000;   // tests: made / failed
         if (!it) {
-            s_sandbagWait = SANDBAG_RESPAWN_FRAMES;
+            wait = SANDBAG_RESPAWN_FRAMES;
             return;
         }
-        s_sandbagStep = 2;
+        step = 2;
+    }
+
+    // The pair room's Sandbag (pairSandbag): its own state, in the plugin's .bss, which the
+    // gameplay session rolls back with the match, and timed by the match's game frame, so every
+    // machine and every resimulation makes it on the same frame. Its archive loads in the
+    // countdown, before the session can roll anything back (Gprb DEFAULT_START_FRAME, 120).
+    static u8 s_pairBagStep;
+    static u32 s_pairBagWait;
+
+    void pairReset()
+    {
+        s_pairBagStep = 0;
+        s_pairBagWait = 0;
+    }
+
+    void pairSandbag(u32 frame)
+    {
+        tickSandbag(frame, s_pairBagStep, s_pairBagWait);
     }
 
     // ---- The fade (the user's, 2026-10-16) ----
@@ -373,7 +391,7 @@ namespace TrainingRoom {
         hidePanels();
         printBanner();
         if (s_end == END_NONE) {
-            tickSandbag();
+            tickSandbag(s_roomFrames, s_sandbagStep, s_sandbagWait);
             return;
         }
         // Ended: once the screen is black (the fade), the room's operator ends it, as when

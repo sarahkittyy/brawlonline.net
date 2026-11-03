@@ -228,13 +228,71 @@ def test_twos_four_alone(backend: OnlineBackend, dolphin: Callable[..., DolphinI
         g.shot("g3-searching-again")
 
 
-def test_twos_pair_and_two_alone(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
+def test_twos_pair_found_at_once(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
                                  gpu_backend: str) -> None:
-    """A and B queue as a pair: B presses A on A's party's open panel ("A: Enter Code") and types
-    A's code; both ready, the pair searches together, C and D alone. The pair is one team in game
-    1 and game 2."""
-    gs, _users = _boot_four(backend, dolphin, gpu_backend, "pair", ["twa", "twb", "twc", "twd"])
+    """C and D search first; then the pair: its match is made the moment both of its tickets are
+    in, while its pair room (docs/design/2v2.md, "The pair room") is only starting to connect. The
+    pair room ends wherever it is, and the four play game 1, the pair on one team."""
+    gs, _users = _boot_four(backend, dolphin, gpu_backend, "pair-at-once", ["twa", "twb", "twc", "twd"])
     a, b, c, d = gs
+    _make_pair(a, b)
+    _to_party_css(c)
+    _to_party_css(d)
+    _search(c)
+    _search(d)
+    for g in (a, b):
+        g.press_until("START", lambda g=g: online_set.local(g.c)["lock"]["ready"], f"{g.name} ready")
+    _lobby(gs, 1)
+    for g in gs:
+        _ready(g, 1)
+    r1 = _play(gs, 1)
+    pa, pb = r1["ports"][0], r1["ports"][1]
+    assert r1["teams"][pa] == r1["teams"][pb], ("the pair split up", r1)
+    for g in (a, b):
+        log = (g.inst.user_dir / "Logs" / "dolphin.log").read_text(errors="replace")
+        assert "the 2v2 search ends with" not in log, g.name
+
+
+def test_twos_pair_found_while_its_room_starts(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
+                                              gpu_backend: str) -> None:
+    """The pair's games are connected for their pair room, its hand-off held back
+    (PPR_TEST_PAIR_HANDOFF_DELAY_MS), when C and D make the match: the pair room ends there (its
+    late hand-off is dropped, no session of it starts) and the four play game 1."""
+    import secrets
+    users = [backend.create_user(n, f"TW{'ABCD'[k]}", email=f"twos{k}-{secrets.token_hex(4)}@example.test")
+             for k, n in enumerate(["twa", "twb", "twc", "twd"])]
+    env = {"PPR_TEST_PAIR_HANDOFF_DELAY_MS": "15000"}
+    gs = [_boot(dolphin, f"twos-{x}", backend, u, gpu_backend, "pair-mid-start", "gameplay", artifacts=ART,
+                env=env if x in "ab" else None)
+          for x, u in zip("abcd", users)]
+    online_set.both(*[g.to_main_menu for g in gs])
+    online_set.both(*[g.to_online_page for g in gs])
+    a, b, c, d = gs
+    _make_pair(a, b)
+    _to_party_css(c)
+    _to_party_css(d)
+    for g in (a, b):
+        g.press_until("START", lambda g=g: online_set.local(g.c)["lock"]["ready"], f"{g.name} ready")
+    for g in (a, b):
+        _wait(lambda g=g: g.c.mm_status()["pair_room"]["state"] == "connection_success", 60,
+              f"{g.name}: the pair room connected, its hand-off waiting")
+    _search(c)
+    _search(d)
+    _lobby(gs, 1)
+    for g in gs:
+        _ready(g, 1)
+    r1 = _play(gs, 1)
+    pa, pb = r1["ports"][0], r1["ports"][1]
+    assert r1["teams"][pa] == r1["teams"][pb], ("the pair split up", r1)
+    for g in (a, b):
+        log = (g.inst.user_dir / "Logs" / "dolphin.log").read_text(errors="replace")
+        assert "the pair room ended before its hand-off" in log, g.name
+        assert "the pair room's session started" not in log, g.name
+
+
+def _make_pair(a: Game, b: Game) -> str:
+    """B joins A's party: A on its party's CSS, B presses A on its open panel ("A: Enter Code") and
+    types A's code. Returns the code."""
     code = _to_party_css(a)
     _to_party_css(b)
     b.shot("01-own-party")
@@ -248,11 +306,29 @@ def test_twos_pair_and_two_alone(backend: OnlineBackend, dolphin: Callable[..., 
     for g in (a, b):
         g.steps("wait 60")
         g.shot("02-pair")
+    return code
+
+
+def test_twos_pair_and_two_alone(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
+                                 gpu_backend: str) -> None:
+    """A and B queue as a pair: B presses A on A's party's open panel ("A: Enter Code") and types
+    A's code; both ready, the pair searches together and plays the pair room until C and D, alone,
+    make the match. The pair is one team in game 1 and game 2."""
+    gs, _users = _boot_four(backend, dolphin, gpu_backend, "pair", ["twa", "twb", "twc", "twd"])
+    a, b, c, d = gs
+    _make_pair(a, b)
     _to_party_css(c)
     _to_party_css(d)
     for g in (a, b):
         g.press_until("START", lambda g=g: online_set.local(g.c)["lock"]["ready"], f"{g.name} ready")
     _wait(lambda: a.finds() and b.finds(), 30, "the pair searching")
+    # Searching together, the pair plays the waiting room together (docs/design/2v2.md, "The pair
+    # room"); the match found ends it, and the four go to game 1's CSS.
+    for g in (a, b):
+        _wait(lambda g=g: _in_pair_room(g), 120, f"{g.name}: in the pair room")
+    time.sleep(3)
+    for g in (a, b):
+        g.shot("02b-pair-room")
     _search(c)
     _search(d)
     _lobby(gs, 1)
@@ -267,6 +343,12 @@ def test_twos_pair_and_two_alone(backend: OnlineBackend, dolphin: Callable[..., 
         _ready(g, 2)
     r2 = _play(gs, 2)
     assert r2["teams"][pa] == r2["teams"][pb], ("the pair split up", r2)
+
+
+def _in_pair_room(g: Game) -> bool:
+    """The pair room's match runs on this game: the session's, SESSION's mode MODE_PAIR."""
+    return (online_set.gstatus(g.c)["phase"] == "running" and g.scene() == "scMelee"
+            and online_set.session(g.c)["mode"] == ppom.MODE_PAIR)
 
 
 def _type_code(g: Game, code: str) -> None:

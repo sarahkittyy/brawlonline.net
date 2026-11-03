@@ -120,6 +120,10 @@ struct Match
   // (0, 1) per in-game port, the most even first; game 1 plays the first, every later game the
   // most even one that is not the last game's. Empty: not a 2v2 match.
   std::vector<std::array<u8, 4>> twos_splits;
+  // A 2v2 party's pair room (OnlineClient.h; a party ticket's match, mode 3): the two partners play
+  // the waiting room together while their 2v2 search runs. Its ports are the party's slots, the
+  // party's host deciding (room_host_port).
+  bool pair_room = false;
 };
 
 // The live P2P ENet connection from the connect window.

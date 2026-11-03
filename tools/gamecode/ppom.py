@@ -548,6 +548,7 @@ RF_TEAM_COLORS = 0x10  # 2026-10-21: with RF_TEAMS, every player in their team's
 RF_TWOS = 0x20         # 2026-11-02: the room is a 2v2 party (docs/design/2v2.md)
 RS_SEARCHING = 3       # (SESSION roomStatus) the party searches for a 2v2 match
 MODE_TWOS, QUEUE_TWOS = 5, 4   # the 2v2 queue; QUEUE_TWOS = LOCAL directNumber from the launcher
+MODE_PAIR = 6   # 2026-11-03: SESSION while a 2v2 party's pair room is the session (docs/design/2v2.md)
 # SESSION `teams` (2026-10-21): 0 FFA, 1 a team battle recorded before, 2 P+'s rainbow team battle
 # (own costumes, the team glow), 3 its plain one (the teams' costumes)
 TEAMS_LEGACY, TEAMS_RAINBOW, TEAMS_COLORS = 1, 2, 3

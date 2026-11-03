@@ -47,7 +47,7 @@ use crate::engine::{ConnId, Output, RulesetFetch};
 use crate::messages as msg;
 use crate::room_set::{self, SetProgress};
 use crate::ruleset::ModeRules;
-use common::rules::{Ruleset, StageChoice, StageLists};
+use common::rules::{MatchRules, Ruleset, StageChoice, StageLists};
 
 #[derive(Debug, Clone)]
 pub struct RoomsConfig {
@@ -124,6 +124,9 @@ pub struct MemberInfo {
     /// The name the account gives the rooms of this kind it hosts (`users.room_name` or
     /// `users.mods_room_name`): a room it creates gets it.
     pub room_name: Option<String>,
+    /// The member's game plays a 2v2 party's pair room (its `hello`'s `pairRoom`).
+    #[serde(default)]
+    pub pair_room: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -153,6 +156,10 @@ struct Member {
     /// A 2v2 party: the member's 2v2 ticket (its connection) while it searches.
     #[serde(skip)]
     search: Option<ConnId>,
+    /// A 2v2 party: the member's party ticket for the pair room ([`RoomBook::pair_ticket`]), until
+    /// the partner's is in too.
+    #[serde(skip)]
+    pair: Option<StartTicket>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -249,6 +256,13 @@ impl Room {
     }
     fn player_count(&self) -> usize {
         self.slots.iter().filter(|m| m.is_some()).count()
+    }
+    /// A 2v2 party whose two players both search and whose games both play the pair room
+    /// (`RoomState::pair_room`): their party tickets are matched with each other.
+    fn pair_ready(&self) -> bool {
+        self.twos
+            && self.player_count() == 2
+            && self.members().all(|(_, m)| m.info.pair_room && m.search.is_some() && !m.in_game)
     }
     fn open_count(&self) -> usize {
         self.open.iter().filter(|o| **o).count()
@@ -660,6 +674,7 @@ impl Room {
             set: self.set.as_ref().map(|s| s.view()),
             pickers: if self.twos { None } else { self.next_pickers(&self.playing()) },
             room_kind: self.twos.then(|| rooms::TWOS.to_string()),
+            pair_room: self.pair_ready(),
         })
     }
 
@@ -730,10 +745,23 @@ pub struct RoomBook {
     party_limiter: RateLimiter<Uuid>,
     /// 2v2 ticket connection → the code of its player's party.
     search_of: HashMap<ConnId, String>,
+    /// Party ticket connection (the pair room's) → the code of its player's party.
+    pair_of: HashMap<ConnId, String>,
     /// 2v2 parties that closed when their only player joined another one: the code → that player
     /// and when. Two players who enter each other's codes at once: the second join finds the
     /// first's party gone, its player already in the joiner's own, and is a no-op ([`Self::join`]).
     moved: HashMap<String, (Uuid, Instant)>,
+}
+
+/// The pair room's stage (`docs/design/2v2.md`, "The pair room"): P+'s Training Room (srStageKind
+/// 0x37), the waiting room's own.
+pub const PAIR_ROOM_STAGE: u16 = 0x37;
+
+/// The pair room's rules: a time match with no time limit (P+'s TIME LIMIT "infinite": it plays
+/// on forever, no stocks; Sarah's, 2026-11-03), no items (the game makes its Sandbag), the rest
+/// P+'s defaults. A ruleset cannot have it (`MatchRules::validate`): only the pair room plays it.
+pub fn pair_room_rules() -> MatchRules {
+    MatchRules { style: common::rules::Style::Time, time_minutes: 0, ..MatchRules::default() }
 }
 
 /// How long a party's code is remembered after its player moved to another party ([`RoomBook::moved`]).
@@ -769,6 +797,7 @@ impl RoomBook {
             next_away: ConnId::MAX,
             party_limiter: RateLimiter::new(&cfg_party_windows),
             search_of: HashMap::new(),
+            pair_of: HashMap::new(),
             moved: HashMap::new(),
         }
     }
@@ -1047,6 +1076,7 @@ impl RoomBook {
             watch: false,
             watching: None,
             search: None,
+            pair: None,
         });
         if twos {
             tracing::info!(%code, player = %who.connect_code, "2v2 party created");
@@ -1193,6 +1223,7 @@ impl RoomBook {
             watch: false,
             watching: None,
             search: None,
+            pair: None,
         });
         tracing::info!(%code, player = %who.connect_code, slot = slot + 1, "joined room");
         if let Some(set) = room.set.as_mut() {
@@ -1241,11 +1272,19 @@ impl RoomBook {
                 self.search_of.remove(&t);
                 self.failed_tickets.push((t, msg::NOT_IN_PARTY.into()));
             }
+            if let Some(t) = gone.as_ref().and_then(|m| m.pair.as_ref()) {
+                self.pair_of.remove(&t.conn);
+                self.failed_tickets.push((t.conn, msg::NOT_IN_PARTY.into()));
+            }
             let why = msg::partner(gone.as_ref().map_or("Your partner", |m| m.info.display_name.as_str()), "left");
             for m in room.slots.iter_mut().flatten() {
                 if let Some(t) = m.search.take() {
                     self.search_of.remove(&t);
                     self.failed_tickets.push((t, why.clone()));
+                }
+                if let Some(t) = m.pair.take() {
+                    self.pair_of.remove(&t.conn);
+                    self.failed_tickets.push((t.conn, why.clone()));
                 }
                 m.ready = false;
             }
@@ -1329,6 +1368,7 @@ impl RoomBook {
             }
             stopped |= std::mem::take(&mut m.ready);
         }
+        self.end_pair(code, why);
         if stopped {
             tracing::info!(%code, "2v2 party search stopped: {why}");
             self.broadcast(code, out);
@@ -1375,6 +1415,7 @@ impl RoomBook {
             m.ready = false;
             m.in_game = true;
         }
+        self.end_pair(code, msg::PARTY_IN_GAME);
         self.broadcast(code, out);
     }
 
@@ -1398,8 +1439,126 @@ impl RoomBook {
             }
             m.ready = false;
         }
+        self.end_pair(&code, &why);
         tracing::info!(%code, "2v2 party search ended: {name}'s ticket");
         self.broadcast(&code, out);
+    }
+
+    /// A party's pair room is over before both of its tickets were in (its search stopped, a
+    /// player left or went into a match): the party tickets still waiting fail with `why`.
+    fn end_pair(&mut self, code: &str, why: &str) {
+        let Some(room) = self.rooms.get_mut(code) else { return };
+        for m in room.slots.iter_mut().flatten() {
+            if let Some(t) = m.pair.take() {
+                self.pair_of.remove(&t.conn);
+                self.failed_tickets.push((t.conn, why.to_string()));
+            }
+        }
+    }
+
+    /// Whether `code` is a 2v2 party: a room game ticket (mode 3) naming one is a party ticket
+    /// ([`Self::pair_ticket`]).
+    pub fn is_party(&self, code: &str) -> bool {
+        self.rooms.get(code).is_some_and(|r| r.twos)
+    }
+
+    /// A verified party ticket (`create-ticket` mode 3 naming the player's 2v2 party; `docs/design/
+    /// 2v2.md`, "The pair room"): while both players of the party search, their games connect to
+    /// each other and play the waiting room together. Once both players' tickets are in, each gets
+    /// a `get-ticket-resp` with the two of them on their slots' ports, the party's host deciding,
+    /// the Training Room as the only stage and the pair room's rules. Nothing of it is recorded:
+    /// it is no match (no history, no live game, no chat group). `Err`: the refusal (the game
+    /// waits on alone).
+    pub fn pair_ticket(
+        &mut self,
+        conn: ConnId,
+        addr: SocketAddrV4,
+        lan: String,
+        uid: Uuid,
+        code: &str,
+    ) -> Result<TicketOutcome, &'static str> {
+        let room = self.rooms.get_mut(code).filter(|r| r.twos).ok_or(msg::ROOM_NOT_FOUND)?;
+        let slot = room.members().find(|(_, m)| m.info.uid == uid).map(|(i, _)| i).ok_or(msg::NOT_IN_PARTY)?;
+        if !room.pair_ready() {
+            return Err(msg::PARTY_NOT_SEARCHING);
+        }
+        let mut outcome = TicketOutcome::default();
+        let m = room.slots[slot].as_mut().ok_or(msg::NOT_IN_PARTY)?;
+        if let Some(old) = m.pair.replace(StartTicket { conn, addr, lan }) {
+            if old.conn != conn {
+                self.pair_of.remove(&old.conn);
+                outcome.replaced = Some(old.conn);
+            }
+        }
+        self.pair_of.insert(conn, code.to_string());
+        if !room.members().all(|(_, m)| m.pair.is_some()) {
+            tracing::info!(%code, slot = slot + 1, "2v2 pair room: party ticket waiting");
+            return Ok(outcome);
+        }
+        self.match_counter += 1;
+        let match_id = format!(
+            "mode.pair-{code}-{}-{:x}",
+            Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            self.match_counter
+        );
+        let tickets: Vec<(usize, StartTicket)> =
+            room.slots.iter_mut().enumerate().filter_map(|(i, m)| Some((i, m.as_mut()?.pair.take()?))).collect();
+        let players: Vec<Player> = tickets
+            .iter()
+            .filter_map(|(i, t)| {
+                let m = room.slots[*i].as_ref()?;
+                Some(Player {
+                    uid: m.info.uid.to_string(),
+                    display_name: m.info.display_name.clone(),
+                    connect_code: m.info.connect_code.clone(),
+                    port: *i as u8 + 1,
+                    is_local_player: false,
+                    ip_address: t.addr.to_string(),
+                    ip_address_lan: t.lan.clone(),
+                    chat_messages: common::DEFAULT_CHAT_MESSAGES.iter().map(|s| s.to_string()).collect(),
+                    rank: None,
+                    is_bot: false,
+                })
+            })
+            .collect();
+        for (i, t) in &tickets {
+            let mut ps = players.clone();
+            for p in &mut ps {
+                p.is_local_player = p.port as usize == i + 1;
+            }
+            outcome.matched.push((
+                t.conn,
+                GetTicketResp {
+                    kind: GET_TICKET_RESP.into(),
+                    match_id: Some(match_id.clone()),
+                    is_host: Some(*i == room.host),
+                    players: Some(ps),
+                    stages: Some(vec![PAIR_ROOM_STAGE]),
+                    items: Some(0),
+                    rules: Some(pair_room_rules()),
+                    ..Default::default()
+                },
+            ));
+            self.pair_of.remove(&t.conn);
+        }
+        tracing::info!(
+            %code,
+            %match_id,
+            players = ?players.iter().map(|p| format!("{}@{}", p.connect_code, p.ip_address)).collect::<Vec<_>>(),
+            "2v2 pair room matched"
+        );
+        Ok(outcome)
+    }
+
+    /// A party ticket's connection went away (answered, cancelled, its game gone).
+    fn pair_ticket_gone(&mut self, ticket: ConnId) {
+        let Some(code) = self.pair_of.remove(&ticket) else { return };
+        let Some(room) = self.rooms.get_mut(&code) else { return };
+        for m in room.slots.iter_mut().flatten() {
+            if m.pair.as_ref().is_some_and(|t| t.conn == ticket) {
+                m.pair = None;
+            }
+        }
     }
 
     /// Requests that change a room the connection is in.
@@ -2212,6 +2371,7 @@ impl RoomBook {
             }
         }
         self.party_ticket_gone(conn, out);
+        self.pair_ticket_gone(conn);
     }
 
     /// Starts that waited too long fail; games that never reported their end are over; members
@@ -2299,6 +2459,7 @@ mod tests {
             display_name: format!("player{n}"),
             connect_code: format!("P#{n}"),
             room_name: None,
+            pair_room: true,
         }
     }
 
@@ -4064,6 +4225,98 @@ mod tests {
         assert_eq!(t.book.party_size(&b), Some(2));
         // Someone else who tries the old code: no such party.
         assert_eq!(msgs(&join(&mut t, 3, &a), 3)[0]["error"], msg::ROOM_NOT_FOUND);
+    }
+
+    fn pair_addr(n: u8) -> SocketAddrV4 {
+        SocketAddrV4::new(std::net::Ipv4Addr::new(10, 0, 0, n), 41000 + u16::from(n))
+    }
+
+    #[test]
+    fn a_searching_partys_two_party_tickets_are_matched_with_each_other() {
+        let mut t = T::new();
+        let code = party(&mut t, 1);
+        join(&mut t, 2, &code);
+        // Not before both search.
+        assert_eq!(
+            t.book.pair_ticket(201, pair_addr(1), String::new(), uid(1), &code).err(),
+            Some(msg::PARTY_NOT_SEARCHING)
+        );
+        let mut out = vec![];
+        t.book.party_ticket(101, uid(1), &code, &mut out).unwrap();
+        assert!(last_state(&out, 1).get("pairRoom").is_none(), "only one of them searches");
+        t.book.party_ticket(102, uid(2), &code, &mut out).unwrap();
+        assert_eq!(last_state(&out, 1)["pairRoom"], true);
+        assert_eq!(last_state(&out, 2)["pairRoom"], true);
+        let o = t.book.pair_ticket(201, pair_addr(1), "192.168.0.2:41001".into(), uid(1), &code).unwrap();
+        assert!(o.matched.is_empty() && o.record.is_none());
+        assert_eq!(t.book.pair_ticket(203, pair_addr(3), String::new(), uid(3), &code).err(), Some(msg::NOT_IN_PARTY));
+        let o = t.book.pair_ticket(202, pair_addr(2), String::new(), uid(2), &code).unwrap();
+        assert!(o.record.is_none(), "the pair room is no match: nothing recorded");
+        assert_eq!(o.matched.iter().map(|(c, _)| *c).collect::<HashSet<_>>(), HashSet::from([201, 202]));
+        let ids: HashSet<String> = o.matched.iter().filter_map(|(_, r)| r.match_id.clone()).collect();
+        assert_eq!(ids.len(), 1, "one match id for both");
+        for (conn, resp) in &o.matched {
+            let v = serde_json::to_value(resp).unwrap();
+            assert!(v["matchId"].as_str().unwrap().starts_with("mode.pair-"), "{v}");
+            // The party's host (slot 1, who made it) decides.
+            assert_eq!(v["isHost"], *conn == 201);
+            assert_eq!(v["stages"], serde_json::json!([PAIR_ROOM_STAGE]));
+            assert_eq!(v["items"], 0);
+            assert_eq!((v["rules"]["style"].as_str(), v["rules"]["timeMinutes"].as_u64()), (Some("time"), Some(0)));
+            let players = v["players"].as_array().unwrap();
+            let ports: Vec<u64> = players.iter().filter_map(|p| p["port"].as_u64()).collect();
+            assert_eq!(ports, vec![1, 2]);
+            let me = players.iter().find(|p| p["isLocalPlayer"] == true).unwrap();
+            assert_eq!(me["port"].as_u64(), Some(if *conn == 201 { 1 } else { 2 }));
+            assert_eq!(players[0]["ipAddress"], "10.0.0.1:41001");
+            assert_eq!(players[0]["ipAddressLan"], "192.168.0.2:41001");
+        }
+        // Both 2v2 tickets still search: the party tickets took nothing from them.
+        assert_eq!(last_state(&t.req(1, RoomRequest::Back { pickers: None }), 1)["status"], "searching");
+    }
+
+    #[test]
+    fn a_waiting_party_ticket_fails_when_the_partys_search_ends() {
+        let mut t = T::new();
+        let code = party(&mut t, 1);
+        join(&mut t, 2, &code);
+        let mut out = vec![];
+        t.book.party_ticket(101, uid(1), &code, &mut out).unwrap();
+        t.book.party_ticket(102, uid(2), &code, &mut out).unwrap();
+        t.book.pair_ticket(201, pair_addr(1), String::new(), uid(1), &code).unwrap();
+        // 2 cancels its search: 1's 2v2 ticket and its party ticket fail.
+        t.book.conn_gone(t.now, 102, &mut out);
+        let failed = t.book.take_failed_tickets();
+        let why = msg::partner("player2", "cancelled");
+        assert!(failed.contains(&(101, why.clone())) && failed.contains(&(201, why)), "{failed:?}");
+        // A party ticket's own connection going leaves nothing behind: a new one waits again.
+        t.book.party_ticket(111, uid(1), &code, &mut out).unwrap();
+        t.book.party_ticket(112, uid(2), &code, &mut out).unwrap();
+        t.book.pair_ticket(211, pair_addr(1), String::new(), uid(1), &code).unwrap();
+        t.book.conn_gone(t.now, 211, &mut out);
+        assert!(t.book.take_failed_tickets().is_empty());
+        let o = t.book.pair_ticket(222, pair_addr(2), String::new(), uid(2), &code).unwrap();
+        assert!(o.matched.is_empty(), "1's party ticket is gone");
+        // The party matched into a 2v2 game: the waiting party ticket is over too.
+        t.book.party_matched(&code, &[uid(1), uid(2), uid(3), uid(4)], &mut out);
+        assert_eq!(t.book.take_failed_tickets(), vec![(222, msg::PARTY_IN_GAME.to_string())]);
+    }
+
+    #[test]
+    fn a_party_with_an_older_game_has_no_pair_room() {
+        let mut t = T::new();
+        let code = party(&mut t, 1);
+        let mut out = vec![];
+        let old = MemberInfo { pair_room: false, ..info(2) };
+        t.book.request(t.now, 2, &old, RoomRequest::Join { code: code.clone() }, &mut out);
+        t.book.party_ticket(101, uid(1), &code, &mut out).unwrap();
+        t.book.party_ticket(102, uid(2), &code, &mut out).unwrap();
+        assert_eq!(last_state(&out, 1)["status"], "searching");
+        assert!(last_state(&out, 1).get("pairRoom").is_none());
+        assert_eq!(
+            t.book.pair_ticket(201, pair_addr(1), String::new(), uid(1), &code).err(),
+            Some(msg::PARTY_NOT_SEARCHING)
+        );
     }
 
     #[test]

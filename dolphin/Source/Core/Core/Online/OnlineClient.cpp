@@ -6,8 +6,11 @@
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
+#include <iterator>
 #include <memory>
 #include <mutex>
+#include <optional>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -50,6 +53,115 @@ std::mutex s_handoff_mutex;
 std::string s_handoff;  // "", "started", "kept" (no backend / not wanted), "failed"
 std::string s_handoff_error;
 
+// ---- The pair room (OnlineClient.h) ----
+using Clock = std::chrono::steady_clock;
+// Under s_mutex: the party ticket's matchmaking (none: no pair room), its party, when a refused
+// one may try again, when the 2v2 search was seen ending while the party ticket still connected
+// (it gets PAIR_GRACE to fail or connect by itself: both sides time out together, and the
+// partner's search ending would otherwise show as "bob cancelled"), and the line the 2v2 search
+// ended with.
+std::unique_ptr<Matchmaking> s_pair;
+std::string s_pair_party;
+Clock::time_point s_pair_retry_at{};
+std::optional<Clock::time_point> s_pair_search_gone_at;
+std::string s_pair_error;
+// The partner left the pair room's session (PairRoomOver with `wait`) while the 2v2 search still
+// waits: when, and the line the search ends with if it is still waiting PAIR_GRACE later. A
+// partner whose search found the match ends their pair room at once, and their leave can come
+// before this search's own get-ticket-resp: then it is the match's, not a lost partner.
+std::optional<Clock::time_point> s_pair_over_at;
+std::string s_pair_over_error;
+// Under s_session_gate: the party ticket's generation (a hand-off of an older one is dropped) and
+// its match once its session started.
+u64 s_pair_generation = 0;
+std::optional<Match> s_pair_match;
+std::atomic<bool> s_pair_session{false};
+// A party ticket the server refused (or that failed otherwise than by its connect): tried again
+// after this long while the party still searches.
+constexpr auto PAIR_RETRY = std::chrono::seconds(3);
+constexpr auto PAIR_GRACE = std::chrono::milliseconds(1500);
+// The 2v2 match's hand-off waits at most this long for the pair room's match to end.
+constexpr auto PAIR_STOP_WAIT = std::chrono::seconds(3);
+
+// The partner's name in a pair room's match (or "your partner").
+std::string PairPartner(const std::optional<Match>& match)
+{
+  if (match)
+  {
+    for (const auto& p : match->players)
+    {
+      if (!p.is_local && !p.display_name.empty())
+        return p.display_name;
+    }
+  }
+  return "your partner";
+}
+
+// Under s_mutex: the pair room ends at whatever step it is (no party ticket left, its session
+// stopped).
+void EndPairLocked(std::string_view why)
+{
+  s_pair_search_gone_at.reset();
+  s_pair_over_at.reset();
+  if (!s_pair)
+    return;
+  NOTICE_LOG_FMT(NETPLAY, "Online: the pair room of party {} ends ({})", s_pair_party, why);
+  std::unique_ptr<Matchmaking> old = std::move(s_pair);
+  s_pair_party.clear();
+  {
+    std::lock_guard gate(s_session_gate);
+    ++s_pair_generation;
+    if (s_pair_match)
+    {
+      s_pair_match.reset();
+      s_pair_session = false;
+      Session::Stop();
+    }
+  }
+  s_cleanup_threads.emplace_back([old = std::move(old)]() mutable { old.reset(); });
+}
+
+// Runs on the party ticket's matchmaking thread once the partners are connected: the pair room's
+// session, unless the pair room ended meanwhile.
+void OnPairConnected(u64 generation, const Match& found, P2PLink& link)
+{
+  Match match = found;
+  match.pair_room = true;
+  // The party's slots are the ports, the party's host (the server's isHost) decides.
+  for (const auto& p : match.players)
+  {
+    if (p.is_local == match.is_host)
+      match.room_host_port = p.port;
+  }
+  // Tests (PPR_TEST_PAIR_HANDOFF_DELAY_MS=<ms>): the partners are connected, and the hand-off
+  // waits this long first, so the 2v2 match can be found meanwhile.
+  if (const char* delay = std::getenv("PPR_TEST_PAIR_HANDOFF_DELAY_MS"); delay && *delay)
+  {
+    WARN_LOG_FMT(NETPLAY, "Online: PPR_TEST_PAIR_HANDOFF_DELAY_MS: {} ms", delay);
+    std::this_thread::sleep_for(std::chrono::milliseconds(std::atoi(delay)));
+  }
+  std::lock_guard gate(s_session_gate);
+  if (generation != s_pair_generation)
+  {
+    NOTICE_LOG_FMT(NETPLAY, "Online: the pair room ended before its hand-off; its link closes");
+    return;  // ended meanwhile; the link closes with its matchmaking
+  }
+  if (!Session::HasBackend())
+    return;
+  // No Ranked or room set state of an earlier session's: the pair room plays none of their rules.
+  Ranked::OnSessionStart(match);
+  if (auto error = Session::Start(match, std::move(link), {}))
+  {
+    ERROR_LOG_FMT(NETPLAY, "Online: the pair room's session did not start: {}", *error);
+    Ranked::OnSessionStartFailed();
+    return;
+  }
+  s_pair_match = match;
+  s_pair_session = true;
+  NOTICE_LOG_FMT(NETPLAY, "Online: the pair room's session started ({}, with {})", match.match_id,
+                 PairPartner(match));
+}
+
 void SetHandoff(std::string state, std::string error = {})
 {
   std::lock_guard lk(s_handoff_mutex);
@@ -73,6 +185,20 @@ User& GetUserLocked()
 void OnConnected(u64 generation, const Match& found, P2PLink& link, bool hand_off,
                  const picojson::object& selections, const SearchOptions& room)
 {
+  // A 2v2 party's pair room ends with its search's match (GameBridge ends it too once it sees the
+  // match found, a frame later at most), and its session must be over before this one starts.
+  {
+    std::lock_guard lk(s_mutex);
+    EndPairLocked("the 2v2 match connected");
+  }
+  for (const auto until = Clock::now() + PAIR_STOP_WAIT; Clock::now() < until;)
+  {
+    const std::string phase = Session::Status().phase;
+    if (phase != "running" && phase != "barrier" && phase != "countdown" &&
+        phase != "start_barrier")
+      break;
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
   Match match = found;
   match.room_host_port = room.room_host_port;
   match.room_teams = room.room_teams;
@@ -164,6 +290,10 @@ std::optional<std::string> FindMatch(const SearchOptions& options)
   if (s_matchmaking && s_matchmaking->GetState() == Matchmaking::State::ConnectionSuccess)
     return std::string("already connected to an opponent (mm_cancel first)");
 
+  // A new search has no pair room yet, nor the last one's error.
+  EndPairLocked("a new search");
+  s_pair_error.clear();
+  s_pair_retry_at = {};
   // Every search gets a fresh matchmaking (Slippi reuses its object until a cleanup replaces it).
   const bool hand_off = options.hand_off;
   u64 generation;
@@ -197,11 +327,17 @@ std::optional<std::string> FindMatch(const SearchOptions& options)
   return std::nullopt;
 }
 
-void Cleanup()
+namespace
+{
+// Cleanup(); `keep_pair_error`: the pair room ended the search, and its line stays the search's.
+void CleanupImpl(bool keep_pair_error)
 {
   std::unique_ptr<Matchmaking> old;
   {
     std::lock_guard lk(s_mutex);
+    EndPairLocked("the search's cleanup");
+    if (!keep_pair_error)
+      s_pair_error.clear();
     old = std::move(s_matchmaking);
     s_searched = false;
     s_search_mode = -1;
@@ -227,6 +363,183 @@ void Cleanup()
   std::lock_guard lk(s_mutex);
   if (old)
     s_cleanup_threads.emplace_back([old = std::move(old)]() mutable { old.reset(); });
+}
+}  // namespace
+
+void Cleanup()
+{
+  CleanupImpl(false);
+}
+
+namespace
+{
+// Under s_mutex: whether the pair room must end (the 2v2 search no longer waits for its match,
+// the party changed, its party ticket failed), and ends it. True: its partners could not connect
+// (or the partner is gone), and the 2v2 search ends too (the caller's CleanupImpl, outside
+// s_mutex).
+bool CheckPairLocked(bool pair_room, const std::string& party)
+{
+  if (!s_pair)
+    return false;
+  const Matchmaking* mm = s_matchmaking.get();
+  const Matchmaking::State state = mm ? mm->GetState() : Matchmaking::State::Idle;
+  const bool waiting = mm && s_search_mode == static_cast<int>(Matchmaking::Mode::Twos) &&
+                       state == Matchmaking::State::Matchmaking;
+  const Matchmaking::State pair = s_pair->GetState();
+  if (waiting && s_pair_over_at && Clock::now() - *s_pair_over_at >= PAIR_GRACE)
+  {
+    // The partner left the pair room and no match came: the partner is gone.
+    s_pair_error = s_pair_over_error;
+    EndPairLocked(s_pair_error);
+    return true;
+  }
+  if (pair == Matchmaking::State::ErrorEncountered)
+  {
+    // The partners could not connect: they would not in the 2v2 match either. Anything else (the
+    // server refused the ticket, the partner's search ended first): only the pair room is over.
+    const bool connect = s_pair->GetErrorSource() == Matchmaking::ErrorSource::Connection;
+    WARN_LOG_FMT(NETPLAY, "Online: the pair room's party ticket failed: {}",
+                 s_pair->GetErrorMessage());
+    if (connect)
+      s_pair_error = fmt::format("Couldn't connect to {}.", PairPartner(s_pair->GetMatch()));
+    EndPairLocked(connect ? "the partners could not connect" : "its ticket failed");
+    s_pair_retry_at = Clock::now() + PAIR_RETRY;
+    return connect;
+  }
+  if (waiting && pair_room && party == s_pair_party)
+    return false;
+  // The 2v2 search found its match, failed or was cancelled, or the party changed. A search that
+  // failed while the party ticket still connects, or while its session plays: its own outcome
+  // first. A partner whose party ticket failed too cancelled their search a moment before ours
+  // did, and a partner's hold START ends their search as the same hold ends this session a few
+  // frames later (PairRoomOver): neither is "bob cancelled" here.
+  if (state == Matchmaking::State::ErrorEncountered &&
+      (pair == Matchmaking::State::OpponentConnecting || s_pair_session.load()) && pair_room &&
+      party == s_pair_party)
+  {
+    if (!s_pair_search_gone_at)
+      s_pair_search_gone_at = Clock::now();
+    if (Clock::now() - *s_pair_search_gone_at < PAIR_GRACE)
+      return false;
+  }
+  EndPairLocked(state == Matchmaking::State::OpponentConnecting ||
+                        state == Matchmaking::State::ConnectionSuccess ?
+                    "the 2v2 match is found" :
+                waiting ? "the party no longer searches together" :
+                          "the 2v2 search ended");
+  return false;
+}
+
+// The pair room's own thread: GameBridge does not run while a match runs, and the pair room's
+// match ends as soon as the 2v2 search no longer waits (it checks every PAIR_WATCH, with the
+// party's room-state as GameBridge last saw it).
+constexpr auto PAIR_WATCH = std::chrono::milliseconds(50);
+std::thread s_pair_watcher;  // started with the first pair room (under s_mutex), until Shutdown
+std::atomic<bool> s_pair_watcher_quit{false};
+bool s_pair_seen_room = false;  // under s_mutex: the last TickPairRoom's
+std::string s_pair_seen_party;
+
+void PairWatcher()
+{
+  while (!s_pair_watcher_quit.load())
+  {
+    std::this_thread::sleep_for(PAIR_WATCH);
+    bool end_search;
+    {
+      std::lock_guard lk(s_mutex);
+      end_search = CheckPairLocked(s_pair_seen_room, s_pair_seen_party);
+    }
+    if (end_search)
+      CleanupImpl(true);
+  }
+}
+}  // namespace
+
+void TickPairRoom(bool pair_room, const std::string& party)
+{
+  bool end_search = false;
+  {
+    std::lock_guard lk(s_mutex);
+    s_pair_seen_room = pair_room;
+    s_pair_seen_party = party;
+    if (s_pair)
+    {
+      end_search = CheckPairLocked(pair_room, party);
+    }
+    else
+    {
+      const Matchmaking* mm = s_matchmaking.get();
+      // The 2v2 search waits for its match (its ticket is in), both partners search: the pair
+      // room's time.
+      const bool wanted = mm && s_search_mode == static_cast<int>(Matchmaking::Mode::Twos) &&
+                          mm->GetState() == Matchmaking::State::Matchmaking && pair_room &&
+                          !party.empty();
+      if (!wanted || !s_pair_error.empty() || Clock::now() < s_pair_retry_at)
+        return;
+      u64 generation;
+      {
+        std::lock_guard gate(s_session_gate);
+        generation = ++s_pair_generation;
+      }
+      s_pair_party = party;
+      s_pair_search_gone_at.reset();
+      s_pair = std::make_unique<Matchmaking>(&GetUserLocked(),
+                                             [generation](const Match& match, P2PLink& link) {
+                                               OnPairConnected(generation, match, link);
+                                             });
+      Matchmaking::SearchSettings settings;
+      settings.mode = Matchmaking::Mode::Teams;
+      settings.connect_code = party;
+      settings.pair_room = true;
+      NOTICE_LOG_FMT(NETPLAY, "Online: party {} searches together: its pair room connects", party);
+      s_pair->FindMatch(settings);
+      if (!s_pair_watcher.joinable())
+        s_pair_watcher = std::thread(PairWatcher);
+      return;
+    }
+  }
+  if (end_search)
+  {
+    NOTICE_LOG_FMT(NETPLAY, "Online: the 2v2 search ends with the pair room: {}", s_pair_error);
+    CleanupImpl(true);
+  }
+}
+
+void PairRoomOver(const std::string& error, bool wait)
+{
+  {
+    std::lock_guard lk(s_mutex);
+    if (!s_pair)
+      return;
+    if (wait)
+    {
+      if (!s_pair_over_at)
+      {
+        NOTICE_LOG_FMT(NETPLAY,
+                       "Online: the partner left the pair room ({}); the search's match first",
+                       error);
+        s_pair_over_at = Clock::now();
+        s_pair_over_error = error;
+      }
+      return;
+    }
+    s_pair_error = error;
+    EndPairLocked(error.empty() ? "it was left" : error);
+  }
+  NOTICE_LOG_FMT(NETPLAY, "Online: the 2v2 search ends with its pair room{}",
+                 error.empty() ? std::string() : ": " + error);
+  CleanupImpl(true);
+}
+
+std::optional<Match> PairRoomMatch()
+{
+  std::lock_guard gate(s_session_gate);
+  return s_pair_match;
+}
+
+bool PairRoomSession()
+{
+  return s_pair_session.load();
 }
 
 void CancelGameSearch()
@@ -264,6 +577,16 @@ void Shutdown()
     s_cleanup_threads.clear();
   }
   mm.reset();
+  s_pair_watcher_quit = true;
+  if (s_pair_watcher.joinable())
+    s_pair_watcher.join();
+  {
+    std::lock_guard lk(s_mutex);
+    EndPairLocked("the process exits");
+    threads.insert(threads.end(), std::make_move_iterator(s_cleanup_threads.begin()),
+                   std::make_move_iterator(s_cleanup_threads.end()));
+    s_cleanup_threads.clear();
+  }
   Session::Stop();
   for (auto& t : threads)
   {
@@ -345,6 +668,12 @@ MatchState GetMatchState()
       ms.error = mm->GetErrorMessage();
       ms.match = mm->GetMatch();
     }
+    // The pair room ended the 2v2 search (TickPairRoom, PairRoomOver): its line.
+    if (!s_pair_error.empty() && ms.state == Matchmaking::State::Idle)
+    {
+      ms.state = Matchmaking::State::ErrorEncountered;
+      ms.error = s_pair_error;
+    }
   }
   {
     std::lock_guard hk(s_handoff_mutex);
@@ -406,6 +735,18 @@ picojson::object MatchmakingStatus()
     std::lock_guard hk(s_handoff_mutex);
     o["handoff"] = picojson::value(s_handoff);
     o["handoff_error"] = picojson::value(s_handoff_error);
+  }
+  // A 2v2 party's pair room (OnlineClient.h).
+  {
+    picojson::object p;
+    p["state"] = picojson::value(
+        Matchmaking::StateName(s_pair ? s_pair->GetState() : Matchmaking::State::Idle));
+    p["party"] = picojson::value(s_pair_party);
+    p["error"] = picojson::value(s_pair_error);
+    p["session"] = picojson::value(s_pair_session.load());
+    if (s_pair)
+      p["local_port"] = picojson::value(static_cast<double>(s_pair->GetLocalPort()));
+    o["pair_room"] = picojson::value(p);
   }
   const SessionStatus session = Session::Status();
   picojson::object s;

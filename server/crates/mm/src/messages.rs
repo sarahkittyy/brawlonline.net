@@ -228,6 +228,8 @@ pub const PARTY_IN_GAME: &str = "In a game. Try again after.";
 pub const NOT_IN_A_PARTY: &str = "Not in a 2v2 party.";
 /// 2v2: a ticket naming a party the player is not in.
 pub const NOT_IN_PARTY: &str = "You are not in this party.";
+/// 2v2: a party ticket (the pair room's) while the party is not searching together.
+pub const PARTY_NOT_SEARCHING: &str = "Your party is not searching.";
 /// 2v2 party status line: everyone ready, its players search together.
 pub const PARTY_SEARCHING: &str = "Searching for players";
 /// 2v2 party status line: alone in the party.

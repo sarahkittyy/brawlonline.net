@@ -446,12 +446,14 @@ void OnSessionStart(const Match& match)
   s_active = ranked;
   // Every online 1v1 game and every room game is reported (Slippi's reportOnlineGame), for the
   // players' match history; only Ranked's are rated. A room's game has every player's place.
-  s_room = match.mode == MODE_TEAMS && match.room_host_port >= 1 &&
+  // (A 2v2 party's pair room is no game: nothing of it is reported.)
+  s_room = !match.pair_room && match.mode == MODE_TEAMS && match.room_host_port >= 1 &&
            match.room_host_port <= MAX_PLAYERS && match.players.size() >= 2 &&
            match.players.size() <= MAX_PLAYERS;
   s_twos = match.mode == MODE_TWOS && match.players.size() == 4 && !match.twos_splits.empty();
-  s_reporting = s_room || s_twos ||
-                (match.players.size() == 2 && match.mode >= MODE_RANKED && match.mode <= MODE_DIRECT);
+  s_reporting = !match.pair_room && (s_room || s_twos ||
+                                     (match.players.size() == 2 && match.mode >= MODE_RANKED &&
+                                      match.mode <= MODE_DIRECT));
   if (!s_reporting)
     return;
   s_match_id = match.match_id;

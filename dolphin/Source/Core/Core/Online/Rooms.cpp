@@ -929,7 +929,9 @@ DolphinBusy QueryBusy()
                 ms.state == Matchmaking::State::OpponentConnecting;
   const Gprb::Session::Lobby lobby = Gprb::Session::GetLobby();
   b.session = lobby.active || (ms.state == Matchmaking::State::ConnectionSuccess);
-  b.in_match = lobby.in_match;
+  // A 2v2 party's pair room is the search's waiting room played together, no match (the
+  // launcher's "searching": Sarah's, 2026-11-03, it counts only in the queue).
+  b.in_match = lobby.in_match && !lobby.pair_room;
   return b;
 }
 
