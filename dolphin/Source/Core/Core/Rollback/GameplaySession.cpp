@@ -358,10 +358,9 @@ struct State
   // because none of them was ever heard (Online::PEER_NEVER_HEARD_TIMEOUT_MS; Lobby::unheard).
   Clock::time_point connecting_since{};
   u8 unheard_ports = 0;
-  // 2v2 (ConnectOptions::twos_splits): the split the host set the last game up with, the end of
-  // the ready-up after a game (none before the first), and how the session ended (TakeTwosEnd;
-  // kept until taken or the next session).
-  int twos_last_split = -1;
+  // 2v2 (ConnectOptions::twos_splits): the end of the ready-up for the next game (from the
+  // connection for game 1, from the last game's end for the others), and how the session ended
+  // (TakeTwosEnd; kept until taken or the next session).
   std::optional<Clock::time_point> twos_ready_until;
   TwosEnd twos_end;
   // "Still waiting" lines logged at the current barrier (every WAIT_LOG_INTERVAL).
@@ -2255,6 +2254,15 @@ u32 NextGame()
   return s.match_index + 1;
 }
 
+// 2v2: which of the server's splits (most even first) the teams of `game` are: game 1 the most
+// even, every later game the most even one that is not the last game's (the teams shuffle). A
+// function of the game alone: every machine knows the next game's teams before it is set up.
+size_t TwosSplitFor(u32 game)
+{
+  const size_t n = s.net_opts.twos_splits.size();
+  return n > 1 && game >= 1 ? (game - 1) % 2 : 0;
+}
+
 bool LockedFor(const LockIn& l, u32 game)
 {
   return l.ready && l.game == game && l.char_kind != 0xFF;
@@ -2471,19 +2479,15 @@ void MaybeDecideSetup()
     if (locks[port])
       seats[port] = {true, locks[port]->team};
   }
-  // 2v2 (docs/design/2v2.md): the server's splits, not the lock-ins: game 1 the first (the most
-  // even), every later game the most even one that is not the last game's (the teams shuffle).
-  int twos_split = -1;
+  // 2v2 (docs/design/2v2.md): the server's splits, not the lock-ins (TwosSplitFor: every machine
+  // shows the next game's teams on the CSS before it is set up).
   if (Twos())
   {
-    const auto& splits = s.net_opts.twos_splits;
-    twos_split = 0;
-    if (s.twos_last_split >= 0 && splits.size() > 1)
-      twos_split = s.twos_last_split == 0 ? 1 : 0;
+    const auto& split = s.net_opts.twos_splits[TwosSplitFor(game)];
     for (int port = 0; port < MAX_LOBBY_PLAYERS; ++port)
     {
       if (locks[port])
-        seats[port].team = splits[twos_split][port];
+        seats[port].team = split[port];
     }
   }
   const Online::GameSetup::TeamSetup teams = Online::GameSetup::DecideTeams(s.net_opts.teams, seats);
@@ -2568,8 +2572,6 @@ void MaybeDecideSetup()
   }
   s.setup = st;
   s.last_stage = st.stage;
-  if (twos_split >= 0)
-    s.twos_last_split = twos_split;
   std::string who;
   for (int port = 0; port < MAX_LOBBY_PLAYERS; ++port)
   {
@@ -2834,8 +2836,10 @@ void OnPeerLeft(int slot, const std::string& reason)
     std::string text = relay   ? std::string("The group broke up") :
                        timeout ? PeerName(slot) + " didn't ready" :
                                  PeerName(slot) + " left";
-    EndTwos(LockedFor(s.local_lock, NextGame()) ? TwosEndKind::Search : TwosEndKind::Idle,
-            std::move(text));
+    // Before game 1 every player has searched to get here: they all search again (not only the
+    // ones ready, as between games).
+    const bool search = NextGame() <= 1 || LockedFor(s.local_lock, NextGame());
+    EndTwos(search ? TwosEndKind::Search : TwosEndKind::Idle, std::move(text));
   }
 }
 
@@ -3324,7 +3328,13 @@ void HandleControl(std::string_view text, const sf::IpAddress& from, u16 from_po
     bool all = true;
     ForEachPeer([&](int, const PeerView& q) { all = all && (q.seen || q.left); });
     if (all)
+    {
       s.phase = Phase::Connected;
+      // 2v2: game 1 is readied on the CSS, as every later game (the four see each other and the
+      // teams there first; Sarah's board, 2026-11-03): the same ready-up.
+      if (Twos() && NextGame() <= 1 && !s.twos_ready_until)
+        s.twos_ready_until = Clock::now() + std::chrono::seconds(TWOS_READY_SECONDS);
+    }
   }
   MaybeDecideSetup();
 }
@@ -7640,7 +7650,6 @@ std::optional<std::string> Connect(const ConnectOptions& options)
   s.recovery = {};
   s.quit_left = false;
   s.unheard_ports = 0;
-  s.twos_last_split = -1;
   s.twos_ready_until.reset();
   s.twos_end = {};
   s.socket = std::make_unique<sf::UdpSocket>();
@@ -7847,6 +7856,9 @@ Lobby GetLobby()
     }
     if (s.local_slot >= 0 && s.local_slot < MAX_LOBBY_PLAYERS && LockedFor(s.local_lock, NextGame()))
       l.ready_ports |= static_cast<u8>(1u << s.local_slot);
+    const auto& split = s.net_opts.twos_splits[TwosSplitFor(NextGame())];
+    for (int port = 0; port < MAX_LOBBY_PLAYERS; ++port)
+      l.twos_teams[port] = split[port];
     ForEachPeer([&](int slot, const PeerView& p) {
       if (!p.left && LockedFor(p.lock, NextGame()))
         l.ready_ports |= static_cast<u8>(1u << slot);

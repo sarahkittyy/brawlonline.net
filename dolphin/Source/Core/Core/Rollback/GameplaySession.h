@@ -450,6 +450,9 @@ struct Lobby
   bool twos = false;
   u8 ready_seconds = 0;
   u8 ready_ports = 0;
+  // ... and the next game's teams by in-game port (the CSS shows them before the game is set up),
+  // NO_TEAM outside one.
+  std::array<u8, MAX_LOBBY_PLAYERS> twos_teams{NO_TEAM, NO_TEAM, NO_TEAM, NO_TEAM};
 };
 Lobby GetLobby();
 
