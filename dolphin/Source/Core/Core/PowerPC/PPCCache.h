@@ -4,7 +4,9 @@
 #pragma once
 
 #include <array>
+#include <deque>
 #include <optional>
+#include <unordered_map>
 #include <vector>
 
 #include "Common/CommonTypes.h"
@@ -69,9 +71,74 @@ struct Cache
   void DoState(Memory::MemoryManager& memory, PointerWrap& p);
 };
 
+// A whole-machine session (Core/Rollback/MachineSession.cpp): the instructions each JIT block
+// was compiled from, by its entry, until the game invalidates them (an icbi, a reset of the
+// instruction cache). A block compiled again for the same entry is compiled from them, not from
+// RAM. Without a session, a block runs the instructions it was compiled from for as long as it
+// lives, and a game's codes write instructions without an icbi (the Gecko code handler,
+// GeckoCode.h): a block compiled before such a write keeps the old ones. In a session a rollback
+// drops blocks and compiles them again on one machine only, and that machine ran the new
+// instructions where the others ran the old (Project+ in Other Games desynced at scene changes,
+// 2026-11-02: one of its codes replaces a beq of Brawl's main loop with a nop, and the machine
+// that had rolled back took the other path). The record is journaled, and a rollback's load
+// undoes what came after its snapshot (RollbackManager::LoadFrame): the blocks first compiled in
+// the frames it throws away are dropped, and compiled again when the game gets to them.
+class JitCodeRecord
+{
+public:
+  struct Instruction
+  {
+    u32 address;
+    u32 physical_address;
+    u32 hex;
+    bool from_bat;
+    bool operator==(const Instruction&) const = default;
+  };
+  using Block = std::vector<Instruction>;
+
+  // Entry: the block's start address and its CPU feature flags (the JIT's key).
+  static u64 Entry(u32 address, u32 feature_flags)
+  {
+    return static_cast<u64>(feature_flags) << 32 | address;
+  }
+  const Block* Find(u64 entry) const;
+  void Record(u64 entry, Block block);
+  // The game invalidated [physical_address, +length): the blocks that read any of it are forgotten.
+  void Forget(u32 physical_address, u32 length);
+  void ForgetAll();
+  void Clear();
+  // A snapshot keeps the mark; Undo goes back to one (adding the 32-byte lines whose blocks must
+  // go), Trim forgets the changes before the oldest snapshot's.
+  u64 Mark() const { return m_seq; }
+  void Undo(u64 mark, std::vector<u32>* lines);
+  void Trim(u64 mark);
+
+private:
+  struct Change
+  {
+    u64 seq = 0;
+    u64 entry = 0;
+    bool all = false;             // a ForgetAll: the blocks it forgot are in `blocks`
+    std::optional<Block> before;  // the entry's record before the change
+    std::unordered_map<u64, Block> blocks;
+  };
+
+  void Index(u64 entry, const Block& block);
+  void Drop(std::unordered_map<u64, Block>::iterator it);
+  static void AddLines(const Block& block, std::vector<u32>* lines);
+
+  std::unordered_map<u64, Block> m_blocks;
+  // The entries whose blocks read each 32-byte line (an entry may have gone since).
+  std::unordered_map<u32, std::vector<u64>> m_by_line;
+  std::deque<Change> m_journal;
+  u64 m_seq = 0;
+};
+
 struct InstructionCache : public Cache
 {
   std::optional<Config::ConfigChangedCallbackID> m_config_callback_id = std::nullopt;
+
+  JitCodeRecord jit_code;
 
   bool m_disable_icache = false;
 

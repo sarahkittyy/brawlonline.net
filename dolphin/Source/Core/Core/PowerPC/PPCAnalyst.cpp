@@ -22,6 +22,7 @@
 #include "Core/PowerPC/PPCTables.h"
 #include "Core/PowerPC/PowerPC.h"
 #include "Core/PowerPC/SignatureDB/SignatureDB.h"
+#include "Core/Rollback/MachineSession.h"
 #include "Core/System.h"
 
 // Analyzes PowerPC code in memory to find functions
@@ -801,6 +802,29 @@ static bool CanCauseGatherPipeInterruptCheck(const CodeOp& op)
          op.opinfo->type == OpType::StorePS;
 }
 
+// An instruction of the block being compiled: in a whole-machine session, the one the entry's
+// block was compiled from before (PowerPC::JitCodeRecord), without reading memory or the
+// instruction cache again; otherwise from memory, through the instruction cache.
+static PowerPC::TryReadInstResult ReadForJit(PowerPC::MMU& mmu,
+                                             const PowerPC::JitCodeRecord::Block* before,
+                                             PowerPC::JitCodeRecord::Block* read, u32 address)
+{
+  if (before)
+  {
+    const auto it =
+        std::ranges::find(*before, address, &PowerPC::JitCodeRecord::Instruction::address);
+    if (it != before->end())
+    {
+      read->push_back(*it);
+      return {true, it->from_bat, it->hex, it->physical_address};
+    }
+  }
+  const PowerPC::TryReadInstResult result = mmu.TryReadInstruction(address);
+  if (read && result.valid)
+    read->push_back({address, result.physical_address, result.hex, result.from_bat});
+  return result;
+}
+
 u32 PPCAnalyzer::Analyze(u32 address, CodeBlock* block, CodeBuffer* buffer,
                          std::size_t block_size) const
 {
@@ -833,9 +857,15 @@ u32 PPCAnalyzer::Analyze(u32 address, CodeBlock* block, CodeBuffer* buffer,
 
   auto& system = Core::System::GetInstance();
   auto& mmu = system.GetMMU();
+  PowerPC::JitCodeRecord* const compiled =
+      Machine::IsArmed() ? &system.GetPPCState().iCache.jit_code : nullptr;
+  const u64 entry =
+      PowerPC::JitCodeRecord::Entry(address, static_cast<u32>(system.GetPPCState().feature_flags));
+  const PowerPC::JitCodeRecord::Block* const before = compiled ? compiled->Find(entry) : nullptr;
+  PowerPC::JitCodeRecord::Block read;
   for (std::size_t i = 0; i < block_size; ++i)
   {
-    auto result = mmu.TryReadInstruction(address);
+    auto result = ReadForJit(mmu, before, compiled ? &read : nullptr, address);
     if (!result.valid)
     {
       if (i == 0)
@@ -972,6 +1002,8 @@ u32 PPCAnalyzer::Analyze(u32 address, CodeBlock* block, CodeBuffer* buffer,
   }
 
   block->m_num_instructions = num_inst;
+  if (compiled && (!before || read != *before))
+    compiled->Record(entry, std::move(read));
 
   if (block->m_num_instructions > 1)
     ReorderInstructions(block->m_num_instructions, code);

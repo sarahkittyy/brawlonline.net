@@ -107,7 +107,151 @@ void Cache::Reset()
 void InstructionCache::Reset(JitInterface& jit_interface)
 {
   Cache::Reset();
+  jit_code.ForgetAll();
   jit_interface.ClearSafe();
+}
+
+const JitCodeRecord::Block* JitCodeRecord::Find(u64 entry) const
+{
+  const auto it = m_blocks.find(entry);
+  return it == m_blocks.end() ? nullptr : &it->second;
+}
+
+void JitCodeRecord::Index(u64 entry, const Block& block)
+{
+  u32 last = 0xFFFFFFFF;
+  for (const Instruction& instruction : block)
+  {
+    const u32 line = instruction.physical_address & ~0x1fu;
+    if (line != last)
+      m_by_line[line].push_back(entry);
+    last = line;
+  }
+}
+
+void JitCodeRecord::AddLines(const Block& block, std::vector<u32>* lines)
+{
+  for (const Instruction& instruction : block)
+    lines->push_back(instruction.physical_address & ~0x1fu);
+}
+
+void JitCodeRecord::Record(u64 entry, Block block)
+{
+  Change change{.seq = ++m_seq, .entry = entry};
+  const auto it = m_blocks.find(entry);
+  if (it != m_blocks.end())
+  {
+    change.before = std::move(it->second);
+    it->second = std::move(block);
+    Index(entry, it->second);
+  }
+  else
+  {
+    Index(entry, m_blocks.emplace(entry, std::move(block)).first->second);
+  }
+  m_journal.push_back(std::move(change));
+}
+
+void JitCodeRecord::Drop(std::unordered_map<u64, Block>::iterator it)
+{
+  m_journal.push_back(Change{.seq = ++m_seq, .entry = it->first, .before = std::move(it->second)});
+  m_blocks.erase(it);
+}
+
+void JitCodeRecord::Forget(u32 physical_address, u32 length)
+{
+  if (m_blocks.empty() || length == 0)
+    return;
+  const u64 first = physical_address & ~0x1fu;
+  const u64 end = static_cast<u64>(physical_address) + length;
+  const auto reads = [&](const Block& block) {
+    for (const Instruction& instruction : block)
+    {
+      if (instruction.physical_address >= first && instruction.physical_address < end)
+        return true;
+    }
+    return false;
+  };
+  if ((end - first) / 32 > m_by_line.size())
+  {
+    for (auto it = m_blocks.begin(); it != m_blocks.end();)
+    {
+      const auto next = std::next(it);
+      if (reads(it->second))
+        Drop(it);
+      it = next;
+    }
+    return;
+  }
+  for (u64 line = first; line < end; line += 32)
+  {
+    const auto by_line = m_by_line.find(static_cast<u32>(line));
+    if (by_line == m_by_line.end())
+      continue;
+    for (const u64 entry : by_line->second)
+    {
+      if (const auto it = m_blocks.find(entry); it != m_blocks.end() && reads(it->second))
+        Drop(it);
+    }
+    m_by_line.erase(by_line);
+  }
+}
+
+void JitCodeRecord::ForgetAll()
+{
+  if (m_blocks.empty())
+    return;
+  Change change{.seq = ++m_seq, .all = true};
+  change.blocks = std::move(m_blocks);
+  m_blocks.clear();
+  m_by_line.clear();
+  m_journal.push_back(std::move(change));
+}
+
+void JitCodeRecord::Clear()
+{
+  m_blocks.clear();
+  m_by_line.clear();
+  m_journal.clear();
+}
+
+void JitCodeRecord::Undo(u64 mark, std::vector<u32>* lines)
+{
+  // Newest first: each change finds the record as it left it.
+  while (!m_journal.empty() && m_journal.back().seq > mark)
+  {
+    Change& change = m_journal.back();
+    if (change.all)
+    {
+      for (const auto& [entry, block] : change.blocks)
+      {
+        AddLines(block, lines);
+        Index(entry, block);
+      }
+      m_blocks = std::move(change.blocks);
+    }
+    else
+    {
+      if (const auto it = m_blocks.find(change.entry); it != m_blocks.end())
+      {
+        AddLines(it->second, lines);
+        m_blocks.erase(it);
+      }
+      if (change.before)
+      {
+        AddLines(*change.before, lines);
+        Index(change.entry, *change.before);
+        m_blocks.emplace(change.entry, std::move(*change.before));
+      }
+    }
+    m_journal.pop_back();
+  }
+}
+
+void JitCodeRecord::Trim(u64 mark)
+{
+  while (!m_journal.empty() && m_journal.front().seq <= mark)
+    m_journal.pop_front();
 }
 
 void Cache::Init(Memory::MemoryManager& memory)
@@ -127,6 +271,7 @@ void InstructionCache::Init(Memory::MemoryManager& memory)
   RefreshConfig();
 
   Cache::Init(memory);
+  jit_code.Clear();
 }
 
 void Cache::Store(Memory::MemoryManager& memory, u32 addr)

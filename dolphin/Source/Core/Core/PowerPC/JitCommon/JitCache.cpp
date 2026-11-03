@@ -328,6 +328,15 @@ void JitBaseBlockCache::EraseBlocksForRestoredRange(u32 physical_address, u32 le
   }
 }
 
+void JitBaseBlockCache::DropBlocksOfLine(u32 physical_address)
+{
+  const u32 line = physical_address / 32;
+  if (!valid_block.Test(line))
+    return;
+  valid_block.Clear(line);
+  ErasePhysicalRange(line * 32, 32);
+}
+
 bool JitBaseBlockCache::HasCodeAt(u32 physical_address, u32 length) const
 {
   bool any = false;
@@ -351,6 +360,11 @@ bool JitBaseBlockCache::HasCodeAt(u32 physical_address, u32 length) const
 void JitBaseBlockCache::InvalidateICacheInternal(u32 physical_address, u32 address, u32 length,
                                                  bool forced)
 {
+  // Code the game invalidates is read from memory again (PowerPC::JitCodeRecord). A forced
+  // invalidation is the JIT's own (a breakpoint, a hint learned): the same instructions.
+  if (!forced)
+    m_jit.m_ppc_state.iCache.jit_code.Forget(physical_address, length);
+
   // Optimization for the case of invalidating a single cache line, which is used by the dcb*
   // instructions. If the valid_block bit for that cacheline is not set, we can safely skip
   // the remaining invalidation logic.
