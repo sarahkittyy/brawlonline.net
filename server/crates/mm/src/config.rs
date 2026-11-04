@@ -80,10 +80,15 @@ pub struct Config {
     #[arg(long, env = "MM_UNRANKED_BAND_STEP_SECS", default_value_t = 15)]
     pub unranked_band_step_secs: u64,
 
-    /// Unranked (and 2v2): once the longer-waiting player has waited this many seconds, any
-    /// rating gap is allowed (the ping limit still holds).
-    #[arg(long, env = "MM_UNRANKED_BAND_MAX_SECS", default_value_t = 45)]
+    /// Unranked: once the longer-waiting player has waited this many seconds, any rating gap is
+    /// allowed (the ping limit still holds).
+    #[arg(long, env = "MM_UNRANKED_BAND_MAX_SECS", default_value_t = 30)]
     pub unranked_band_max_secs: u64,
+
+    /// 2v2 (whose band is Unranked's): once the longest-waiting player has waited this many
+    /// seconds, any gap between the teams is allowed.
+    #[arg(long, env = "MM_TWOS_BAND_MAX_SECS", default_value_t = 15)]
+    pub twos_band_max_secs: u64,
 
     /// GeoIP database (DB-IP "IP to City Lite", `.mmdb`) for the ping estimate of a pair.
     /// Replace it by renaming a new file over it; mm notices within 10 minutes. Without it no pair
@@ -178,6 +183,7 @@ impl Config {
             unranked_band_step: self.unranked_band_step.max(0.0),
             unranked_band_interval: Duration::from_secs(self.unranked_band_step_secs),
             unranked_band_max_wait: Duration::from_secs(self.unranked_band_max_secs),
+            twos_band_max_wait: Duration::from_secs(self.twos_band_max_secs),
             geoip: crate::geo::GeoDb::load(self.geoip_file.as_deref()),
             ping_limit: self.ping_limit_ms.max(0.0),
             ping_limit_step: self.ping_limit_step_ms.max(0.0),
@@ -221,7 +227,8 @@ impl Config {
             unranked_band: 150.0,
             unranked_band_step: 50.0,
             unranked_band_step_secs: 15,
-            unranked_band_max_secs: 45,
+            unranked_band_max_secs: 30,
+            twos_band_max_secs: 15,
             geoip_file: None,
             ping_limit_ms: 100.0,
             ping_limit_step_ms: 20.0,
