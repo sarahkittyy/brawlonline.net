@@ -1418,9 +1418,16 @@ namespace OnlineMatch {
     // 0x200: 1 as the countdown starts, 5 and 6 during it, 7 at GO), and at GO it starts each
     // player's loader (StLoaderPlayer at +0x58, 7 of them, vtable slot 0x94) and the fighters
     // (text+0x109318 with g_ftManager), which only then take their controllers.
-    // In the pair room it does that and no more: no HUD, no announcer, no GO!, at game frame
-    // PAIR_GO_FRAME, once every fighter exists (the last at frame 92), then it is over; until then
-    // it waits, silent. The players then move from the session's start (frame 120: until then
+    // Its start (state 1) also starts the match's song: it waits for the song to be ready (the BGM
+    // operator at +0x74, StOperatorBgm: its state at +0x40 3, text+0x2423E4) and calls its start
+    // (text+0x242404: +0x5C = 1), and the song plays a few frames later (its state 4).
+    // In the pair room it does that and no more: the song as soon as it is ready (Sarah's,
+    // 2026-11-03, on the first build without the countdown: "i don't hear the music?"; the scene
+    // calls this every frame, also once it is over, so a song that is late to load still starts),
+    // and GO's start-up without its HUD, announcer and GO! at game frame PAIR_GO_FRAME, once every
+    // fighter exists (the last at frame 92), then it is over; until then it waits, silent. Each
+    // machine's song is ready in its own time; only the sound waits for it, nothing of the match.
+    // The players move from the session's start (frame 120: until then
     // every machine runs the same held inputs), and the screen is black until about then
     // (TrainingRoom::fadeForPairRoom). The operator is the match's rolled-back state, the frame
     // counter too, and SESSION's mode is the same on every machine: every machine and every
@@ -1431,6 +1438,10 @@ namespace OnlineMatch {
     static const u32 PAIR_GO_FRAME = 100;
     static const u32 FT_START = 0x80813D2C;     // sora_melee text+0x109318, with g_ftManager
     static const u32 STAGE_PTR = 0x80B8A428;    // sora_melee .bss+0x5668: the match's stage
+    static const u32 READY_GO_BGM = 0x74;       // the match's StOperatorBgm
+    static const u32 BGM_STATE = 0x40, BGM_STARTED = 0x5C;
+    static const u8 BGM_READY = 3;              // the song is ready and waits for its start
+    static const u32 BGM_START = 0x8094CE18;    // sora_melee text+0x242404, StOperatorBgm's start
     typedef void (*ReadyGoProcessFn)(u8* op);
     typedef void (*ObjFn)(u32 self);
     typedef void (*ObjIntFn)(u32 self, int code);
@@ -1461,7 +1472,13 @@ namespace OnlineMatch {
             return;
         }
         const u8 state = op[READY_GO_STATE];
-        if (state == 0 || state >= READY_GO_OVER || *(u32*)GAME_FRAME < PAIR_GO_FRAME) return;
+        if (state == 0) return;
+        u8* bgm = (u8*)*(u32*)(op + READY_GO_BGM);
+        if (isPtr((u32)bgm) && bgm[BGM_STATE] == BGM_READY && !bgm[BGM_STARTED]) {
+            ((ObjFn)BGM_START)((u32)bgm);
+            PPOM::g_block.debug.scratch[5] |= 0x800000;   // tests: the pair room's song started
+        }
+        if (state >= READY_GO_OVER || *(u32*)GAME_FRAME < PAIR_GO_FRAME) return;
         pairGo(op);
         PPOM::g_block.debug.scratch[10] |= 0x80000000u;   // tests: the pair room went without its countdown
     }
