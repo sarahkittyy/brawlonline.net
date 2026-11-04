@@ -172,6 +172,13 @@ namespace OnlineMenu {
         bool pairBack;
         u32 pairBackSeq;
         bool pairBackRoom;
+        // A 2v2 party searching together whose partner's game plays the pair room: no waiting room
+        // alone, the party's CSS waits for the pair room (pairWait, the frames it has waited since
+        // both search) and then leaves straight for it once the screen is black (pairLeave).
+        bool pairWait;
+        u32 pairWaitFrames;
+        bool pairLeave;
+        u32 pairLeaveFrames;
     };
     static State s;
     bool roomCss();
@@ -2083,6 +2090,68 @@ namespace OnlineMenu {
         PPOM::g_block.debug.menuState = 0;
     }
 
+    static int twosPartner();
+    // The party's partner plays the pair room too (docs/design/2v2.md, "The pair room").
+    static bool pairRoomPartner()
+    {
+        if (s.mode != PPOM::MODE_TWOS || !twosParty()) return false;
+        const int partner = twosPartner();
+        return partner >= 0 && (PPOM::g_block.session.players[partner].roomSlot & PPOM::SLOT_PAIR_ROOM);
+    }
+
+    static void enterWaitingRoom()
+    {
+        TrainingRoom::enter();
+        s.roomLeaveFrames = 0;
+        s.roomHoldStart = 0;
+        s.roomStartUp = false;
+    }
+
+    // The pair room's match is set up (SESSION MODE_PAIR, game 1): the session's, the same on both.
+    static bool pairRoomReady()
+    {
+        const PPOM::Session& se = PPOM::g_block.session;
+        return se.mode == PPOM::MODE_PAIR && se.state == PPOM::SS_MATCH_READY && se.game == 1;
+    }
+
+    // On the party's CSS, a pair waiting for its pair room: straight into it once its match is set
+    // up, the CSS fading out first; the waiting room alone if its partner no longer plays it, or
+    // if it takes PAIR_WAIT_FRAMES once both search (the pair room still comes there, as from the
+    // room). Anything but searching (the match found, an error, a cancel) is the CSS's own.
+    static const u32 PAIR_WAIT_FRAMES = 60 * 12;
+    static const u32 PAIR_LEAVE_MAX_FRAMES = 30;
+    static void tickPairWait()
+    {
+        if (s.pairLeave) {
+            if (TrainingRoom::screenBlack() || ++s.pairLeaveFrames >= PAIR_LEAVE_MAX_FRAMES) {
+                s.pairLeave = false;
+                leaveCss(1);   // state 3: OnlineMatch's setup of the armed match (no setup: the CSS)
+            }
+            return;
+        }
+        if (!s.pairWait) return;
+        if (s.phase != PH_SEARCHING) {
+            s.pairWait = false;
+            return;
+        }
+        if (pairRoomReady()) {
+            s.pairWait = false;
+            s.pairLeave = true;
+            s.pairLeaveFrames = 0;
+            g_onlineMatchGame = 1;
+            PPOM::g_block.debug.scratch[10] = 0x100;   // tests: the match started
+            PPOM::g_block.debug.scratch[5] |= 0x400000;   // tests: the CSS left straight for the pair room
+            TrainingRoom::fadeForPairRoom();
+            return;
+        }
+        const int partner = twosPartner();
+        const bool both = partner >= 0 && (PPOM::g_block.session.players[partner].roomSlot & PPOM::SLOT_READY);
+        if (!pairRoomPartner() || (both && ++s.pairWaitFrames >= PAIR_WAIT_FRAMES)) {
+            s.pairWait = false;
+            if (usesWaitingRoom() && !TrainingRoom::active()) enterWaitingRoom();
+        }
+    }
+
     static void startSearch()
     {
         PPOM::FindOpponent req;
@@ -2116,12 +2185,12 @@ namespace OnlineMenu {
         // The CSS fades to black first (TrainingRoom's fade) and leaves for the room once the
         // screen is black (tickRoomLeave): the frame frozen on the screen while the room loads
         // is black, not the CSS (the user's, 2026-10-16, after Brawlback's Quickplay).
-        if (usesWaitingRoom() && !TrainingRoom::active()) {
-            TrainingRoom::enter();
-            s.roomLeaveFrames = 0;
-            s.roomHoldStart = 0;
-            s.roomStartUp = false;
-        }
+        // A 2v2 pair whose partner's game plays the pair room: it waits for that on the party's
+        // CSS (tickPairWait), not in the room alone (Sarah's board, 2026-11-03: "the solo room
+        // should be skipped entirely").
+        s.pairWait = pairRoomPartner();
+        s.pairWaitFrames = 0;
+        if (usesWaitingRoom() && !TrainingRoom::active() && !s.pairWait) enterWaitingRoom();
     }
 
     int currentMode() { return s.mode; }
@@ -2162,6 +2231,7 @@ namespace OnlineMenu {
 
     static void cleanup()
     {
+        s.pairWait = false;
         PPOM::post(PPOM::CMD_CLEANUP_CONNECTION, NULL, 0);
         unlock();
         s.phase = PH_IDLE;
@@ -2631,6 +2701,8 @@ namespace OnlineMenu {
         char name[RoomCss::NAME_SIZE];
         if (partner >= 0) portName(name, partner);
         if (s.twosNoticeFrames && s.twosNotice[0]) sprintf(buf, "%s - Searching...", s.twosNotice);
+        else if (s.pairWait && partner >= 0 && (se.players[partner].roomSlot & PPOM::SLOT_READY))
+            sprintf(buf, "Connecting to %s...", name);
         else if (partner >= 0 && !(se.players[partner].roomSlot & PPOM::SLOT_READY)) sprintf(buf, "Waiting for %s", name);
         else if (partner >= 0) sprintf(buf, "Searching with %s...", name);
         else strcpy(buf, "Searching for players");
@@ -4312,12 +4384,12 @@ namespace OnlineMenu {
         if (s.pairBackRoom) {
             s.pairBackRoom = false;
             if (s.mode == PPOM::MODE_TWOS && s.phase == PH_SEARCHING && usesWaitingRoom() && !TrainingRoom::active()) {
-                TrainingRoom::enter();
-                s.roomLeaveFrames = 0;
-                s.roomHoldStart = 0;
-                s.roomStartUp = false;
+                s.pairWait = pairRoomPartner();
+                s.pairWaitFrames = 0;
+                if (!s.pairWait) enterWaitingRoom();
             }
         }
+        tickPairWait();
         g_cssTeamRoom = 0;   // (tickRoom sets it again in a team room)
         if (s.twosNoticeFrames) --s.twosNoticeFrames;
         // 2v2: the group ended on the plain CSS: search again (once SESSION has the party's code

@@ -1407,6 +1407,65 @@ namespace OnlineMatch {
         }
     }
 
+    // ---- No countdown in the pair room (Sarah's board, 2026-11-03: "it does the 3..2..1..
+    // countdown. can we cleanly remove that from just this training room thing?") ----
+    // stOperatorReadyGo (scMelee's m_operatorReadyGo, scMelee+0x48, the task "OperatorGo";
+    // sora_melee): a state byte at +0x40, 1 the countdown to start (it waits for its HUD, +0x74),
+    // 3 the 3-2-1 (IfMngr's count, the announcer), 4 GO!, 5 over: isEnd (text+0x246AAC) is
+    // `state == 5`. Its process (text+0x2466C0, the task's vtable slot 3) runs every match frame
+    // (seen live in a Versus match: 1 at game frame 31, 3 at 34, 4 at GO, 214). Besides the HUD
+    // and the sounds it starts the match: it tells the stage each step (the stage's vtable slot
+    // 0x200: 1 as the countdown starts, 5 and 6 during it, 7 at GO), and at GO it starts each
+    // player's loader (StLoaderPlayer at +0x58, 7 of them, vtable slot 0x94) and the fighters
+    // (text+0x109318 with g_ftManager), which only then take their controllers.
+    // In the pair room it does that and no more: no HUD, no announcer, no GO!, at game frame
+    // PAIR_GO_FRAME, once every fighter exists (the last at frame 92), then it is over; until then
+    // it waits, silent. The players then move from the session's start (frame 120: until then
+    // every machine runs the same held inputs), and the screen is black until about then
+    // (TrainingRoom::fadeForPairRoom). The operator is the match's rolled-back state, the frame
+    // counter too, and SESSION's mode is the same on every machine: every machine and every
+    // resimulation does the same.
+    static const u32 READY_GO_STATE = 0x40, READY_GO_FLAGS = 0x54, READY_GO_LOADERS = 0x58;
+    static const u8 READY_GO_OVER = 5;
+    static const u8 READY_GO_FLAGS_DONE = 0x80 | 0x20 | 0x10;   // as the countdown leaves them
+    static const u32 PAIR_GO_FRAME = 100;
+    static const u32 FT_START = 0x80813D2C;     // sora_melee text+0x109318, with g_ftManager
+    static const u32 STAGE_PTR = 0x80B8A428;    // sora_melee .bss+0x5668: the match's stage
+    typedef void (*ReadyGoProcessFn)(u8* op);
+    typedef void (*ObjFn)(u32 self);
+    typedef void (*ObjIntFn)(u32 self, int code);
+    static ReadyGoProcessFn s_readyGoProcess = NULL;
+
+    static void pairGo(u8* op)
+    {
+        for (int k = 0; k < 7; k++) {
+            u32 loader = *(u32*)(op + READY_GO_LOADERS + 4 * k);
+            u32 vt = isPtr(loader) ? *(u32*)(loader + 0x3C) : 0;
+            if (isPtr(vt) && isPtr(*(u32*)(vt + 0x94))) ((ObjFn)*(u32*)(vt + 0x94))(loader);
+        }
+        if (isPtr(*(u32*)FT_MANAGER)) ((ObjFn)FT_START)(*(u32*)FT_MANAGER);
+        u32 stage = *(u32*)STAGE_PTR;
+        u32 vt = isPtr(stage) ? *(u32*)(stage + 0x3C) : 0;
+        if (isPtr(vt) && isPtr(*(u32*)(vt + 0x200))) {
+            static const int STEPS[] = {1, 5, 6, 7};
+            for (u32 i = 0; i < sizeof(STEPS) / sizeof(STEPS[0]); i++) ((ObjIntFn)*(u32*)(vt + 0x200))(stage, STEPS[i]);
+        }
+        op[READY_GO_FLAGS] |= READY_GO_FLAGS_DONE;
+        op[READY_GO_STATE] = READY_GO_OVER;
+    }
+
+    static void hkReadyGoProcess(u8* op)
+    {
+        if (!pairRoom()) {
+            s_readyGoProcess(op);
+            return;
+        }
+        const u8 state = op[READY_GO_STATE];
+        if (state == 0 || state >= READY_GO_OVER || *(u32*)GAME_FRAME < PAIR_GO_FRAME) return;
+        pairGo(op);
+        PPOM::g_block.debug.scratch[10] |= 0x80000000u;   // tests: the pair room went without its countdown
+    }
+
     // MatchHud's banner: "2V2 - Searching with bob... - Hold START to cancel", as the waiting
     // room's (OnlineMenu's twosSearchStatus).
     bool pairRoomLine(u16* out, int max)
@@ -1590,6 +1649,8 @@ namespace OnlineMatch {
 
     void install(CoreApi* api)
     {
+        api->syReplaceFuncRel(0x002466C0, reinterpret_cast<void*>(hkReadyGoProcess),
+                              (void**)&s_readyGoProcess, 27 /* SORA_MELEE */);
         MatchHud::install(api);
         TrainingRoom::install(api);
         api->sySimpleHookRel(0x00036F64, reinterpret_cast<void*>(hookState3), 1 /* SORA_SCENE */);

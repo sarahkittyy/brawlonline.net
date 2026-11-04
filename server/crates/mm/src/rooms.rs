@@ -665,6 +665,7 @@ impl Room {
                         in_game: m.in_game,
                         sitting_out: self.sits_out(m),
                         watching: m.watching.is_some(),
+                        pair_room: self.twos && m.info.pair_room,
                     }),
                 })
                 .collect(),
@@ -4247,6 +4248,7 @@ mod tests {
         t.book.party_ticket(102, uid(2), &code, &mut out).unwrap();
         assert_eq!(last_state(&out, 1)["pairRoom"], true);
         assert_eq!(last_state(&out, 2)["pairRoom"], true);
+        assert_eq!(last_state(&out, 1)["slots"][1]["player"]["pairRoom"], true, "the partner's game plays it");
         let o = t.book.pair_ticket(201, pair_addr(1), "192.168.0.2:41001".into(), uid(1), &code).unwrap();
         assert!(o.matched.is_empty() && o.record.is_none());
         assert_eq!(t.book.pair_ticket(203, pair_addr(3), String::new(), uid(3), &code).err(), Some(msg::NOT_IN_PARTY));
@@ -4313,6 +4315,7 @@ mod tests {
         t.book.party_ticket(102, uid(2), &code, &mut out).unwrap();
         assert_eq!(last_state(&out, 1)["status"], "searching");
         assert!(last_state(&out, 1).get("pairRoom").is_none());
+        assert!(last_state(&out, 1)["slots"][1]["player"].get("pairRoom").is_none(), "the partner's game doesn't");
         assert_eq!(
             t.book.pair_ticket(201, pair_addr(1), String::new(), uid(1), &code).err(),
             Some(msg::PARTY_NOT_SEARCHING)

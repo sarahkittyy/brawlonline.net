@@ -326,6 +326,7 @@ def test_twos_pair_and_two_alone(backend: OnlineBackend, dolphin: Callable[..., 
     # room"); the match found ends it, and the four go to game 1's CSS.
     for g in (a, b):
         _wait(lambda g=g: _in_pair_room(g), 120, f"{g.name}: in the pair room")
+        assert g.debug_scratch()[5] & 0x400000, f"{g.name}: not straight from the CSS"
     time.sleep(3)
     for g in (a, b):
         g.shot("02b-pair-room")

@@ -205,6 +205,9 @@ constexpr u32 SP_ROOM_SLOT = 0x38, SP_ROOM_TEAM = 0x39, SP_ROOM_CHAR = 0x3A, SP_
 constexpr u32 SP_ROOM_STOCKS = 0x3D;
 // SLOT_WATCHING (2026-10-19): the player watches the room's game from the room CSS (room-state
 // `watching`): the next game does not wait for them.
+// SLOT_PAIR_ROOM (2026-11-03): a 2v2 party's player whose game plays the pair room
+// (docs/design/2v2.md, "The pair room"): its partner waits for it on the CSS, not in the room alone.
+constexpr u8 SLOT_PAIR_ROOM = 0x80;
 constexpr u8 SLOT_OPEN = 1, SLOT_TAKEN = 2, SLOT_READY = 4, SLOT_HOST = 8, SLOT_IN_GAME = 0x10,
              SLOT_SITTING_OUT = 0x20, SLOT_WATCHING = 0x40;
 constexpr u8 SCREEN_ROOM_CSS = static_cast<u8>(Rooms::Screen::Room);
@@ -1459,6 +1462,8 @@ void PutRoom(std::vector<u8>& session, const Rooms::Snapshot& room, const Gprb::
         bits |= SLOT_SITTING_OUT;
       if (pl.watching)
         bits |= SLOT_WATCHING;
+      if (pl.pair_room)
+        bits |= SLOT_PAIR_ROOM;
       session[p + SP_ROOM_TEAM] = pl.team < Rooms::NUM_TEAMS ? pl.team : GameSetup::NO_TEAM;
       if (in_session)
       {

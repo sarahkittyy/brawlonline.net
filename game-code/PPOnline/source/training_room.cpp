@@ -253,8 +253,14 @@ namespace TrainingRoom {
 
     // The pair room's Sandbag (pairSandbag): its own state, in the plugin's .bss, which the
     // gameplay session rolls back with the match, and timed by the match's game frame, so every
-    // machine and every resimulation makes it on the same frame. Its archive loads in the
-    // countdown, before the session can roll anything back (Gprb DEFAULT_START_FRAME, 120).
+    // machine and every resimulation makes it on the same frame. Its archive is asked for at frame
+    // SANDBAG_FIRST_FRAME, and loads on the file thread, on each machine in its own time: made as
+    // soon as it was there (the room's way), the Sandbag came a frame or two apart on the two
+    // machines, and they desynced later, when a fighter's effect ran on one of them only (4 of 4
+    // 80 s games in the harness; none without the Sandbag). So it is made at PAIR_SANDBAG_FRAME,
+    // after the rollback session's start (game frame 120), where the session waits out every file
+    // read still in flight on both machines.
+    static const u32 PAIR_SANDBAG_FRAME = 130;
     static u8 s_pairBagStep;
     static u32 s_pairBagWait;
 
@@ -266,6 +272,7 @@ namespace TrainingRoom {
 
     void pairSandbag(u32 frame)
     {
+        if (s_pairBagStep == 1 && frame < PAIR_SANDBAG_FRAME) return;
         tickSandbag(frame, s_pairBagStep, s_pairBagWait);
     }
 
@@ -282,6 +289,7 @@ namespace TrainingRoom {
     enum Fade { FADE_NONE = 0, FADE_OUT = 1, FADE_IN = 2 };
     static u8 s_fade;
     static bool s_fadeLoaded;     // a load screen has run since the fade out began
+    static bool s_fadePair;       // the fade is the pair room's: its match shows at PAIR_SHOW_FRAME
     static bool s_fadeWaitGame;   // in the next scMelee, waiting for its first game frame
     static u32 s_fadeGameFrame;   // the game frame counter when that scMelee was first seen
     static const u32 GAME_FRAME = 0x901812A4;    // g_GameFrame's frame counter
@@ -289,9 +297,15 @@ namespace TrainingRoom {
     static u32 s_fadeFrames;
     static u32 s_fadeTotal;
 
+    // A 2v2 party's pair room has no countdown (OnlineMatch's pairNoCountdown): its players hold
+    // still until the rollback session starts (game frame 120, Gprb DEFAULT_START_FRAME; until then
+    // every machine runs the inputs held at the start), and the screen stays black until then.
+    static const u32 PAIR_SHOW_FRAME = 120 - FADE_IN_FRAMES / 2;
+
     static void fadeOut()
     {
         s_fade = FADE_OUT;
+        s_fadePair = false;
         s_fadeLoaded = false;
         s_fadeWaitGame = false;
         s_fadeFrames = 0;
@@ -299,6 +313,12 @@ namespace TrainingRoom {
     }
 
     static bool fadedOut() { return s_fade == FADE_OUT && s_fadeFrames >= FADE_OUT_FRAMES; }
+
+    void fadeForPairRoom()
+    {
+        fadeOut();
+        s_fadePair = true;
+    }
 
     bool screenBlack() { return fadedOut(); }
 
@@ -345,7 +365,8 @@ namespace TrainingRoom {
                         s_fadeWaitGame = true;
                         s_fadeGameFrame = gf;
                     }
-                    ready = gf != s_fadeGameFrame && gf >= 1 && gf < 600 && pc > gf;
+                    ready = gf != s_fadeGameFrame && gf >= 1 && gf < 600 && pc > gf &&
+                            (!s_fadePair || gf >= PAIR_SHOW_FRAME);
                 }
                 if (ready) {
                     s_fade = FADE_IN;
@@ -610,7 +631,9 @@ namespace TrainingRoom {
         u8* tl = (u8*)TLST;
         const u32 n = *(u32*)(tl + 4);
         bool forced = false;
-        if (s_state != ST_NONE && s_end == END_NONE && *(u32*)tl == TLST_MAGIC && n <= TLST_MAX) {
+        // (A 2v2 party's pair room is the room played together: its song too.)
+        const bool room = (s_state != ST_NONE && s_end == END_NONE) || OnlineMatch::pairRoom();
+        if (room && *(u32*)tl == TLST_MAGIC && n <= TLST_MAX) {
             for (u32 i = 0; i < n && !forced; i++) forced = *(u32*)(tl + 0xC + 16 * i) == ROOM_BGM && tl[0xC + 16 * i + 7] != 0;
             for (u32 i = 0; forced && i < n; i++) {
                 u8* e = tl + 0xC + 16 * i;

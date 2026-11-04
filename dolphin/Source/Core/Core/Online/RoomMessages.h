@@ -107,6 +107,8 @@ struct Player
   // Watching the room's game from the room CSS (room-watch `watching`, 2026-10-19): the next game
   // does not wait for them.
   bool watching = false;
+  // A 2v2 party's player whose game plays the pair room (docs/design/2v2.md, "The pair room").
+  bool pair_room = false;
 };
 
 struct Slot

@@ -112,6 +112,7 @@ std::optional<Player> ParsePlayer(const picojson::object& o, std::string* why)
   p.in_game = *in_game;
   p.sitting_out = Bool(o, "sittingOut").value_or(false);
   p.watching = Bool(o, "watching").value_or(false);
+  p.pair_room = Bool(o, "pairRoom").value_or(false);
   // The placed coin shows before the ready too (the user's, 2026-10-18; docs/design/rooms.md #15
   // had only the lock-in); the picked stocks only with the ready.
   p.character = character;

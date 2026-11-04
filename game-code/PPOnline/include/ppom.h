@@ -285,8 +285,10 @@ namespace PPOM {
     // placed on that player's CSS, shown before they ready.
     // SLOT_WATCHING (2026-10-19): the player watches the room's game from the room CSS; the next
     // game does not wait for them.
+    // SLOT_PAIR_ROOM (2026-11-03): a 2v2 party's player whose game plays the pair room
+    // (docs/design/2v2.md, "The pair room"): the partner waits for it on the CSS, not in the room.
     enum RoomSlotBits { SLOT_OPEN = 1, SLOT_TAKEN = 2, SLOT_READY = 4, SLOT_HOST = 8, SLOT_IN_GAME = 0x10,
-                        SLOT_SITTING_OUT = 0x20, SLOT_WATCHING = 0x40 };
+                        SLOT_SITTING_OUT = 0x20, SLOT_WATCHING = 0x40, SLOT_PAIR_ROOM = 0x80 };
     // RF_WATCH (2026-10-19): SESSION holds the room's game this player is not in, to watch (Dolphin
     // plays it as a live replay): the room CSS leaves for its match once SS_MATCH_READY, as for
     // the room's own game, and comes back after it.
