@@ -12,9 +12,10 @@
 // link the plugin into Brawl's Network heap (heap 6, about 1.3 MB in MEM2, empty: the WFC login it
 // was made for never runs; not part of the rollback region set, and never rebuilt after boot).
 //
-// The plugin runs from MEM2, more than 32 MB away from the game's code in MEM1, so it is built with
-// -mlongcall (no relative calls out of it), and Syriinge's hooks cannot branch to it directly
-// (their stubs use relative branches). Every hook therefore goes through a thunk here in MEM1:
+// The plugin runs from MEM2, more than 32 MB away from the game's code in MEM1, so it makes no
+// relative calls out of it (PPOnline/source/dol_calls.cpp), and Syriinge's hooks cannot branch to
+// it directly (their stubs use relative branches). Every hook therefore goes through a thunk here
+// in MEM1:
 //     lis r12, target@h; ori r12, r12, target@l; mtctr r12; bctr
 // which clobbers only r12 and CTR, volatile at every hook site the plugin uses (each of its naked
 // hooks writes r12 and CTR itself before reading them). The plugin gets a CoreApi of ours (same

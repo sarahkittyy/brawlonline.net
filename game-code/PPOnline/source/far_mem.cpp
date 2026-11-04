@@ -1,10 +1,10 @@
 // memcpy and memset inside the plugin.
 //
 // The plugin runs from the Network heap in MEM2 (docs/game-code.md section 2, "Heap budget"),
-// beyond the reach of a relative branch to the game's code in MEM1, so it is built with
-// -mlongcall. The compiler's own calls to memcpy and memset (struct copies, zeroing; also the
-// ones it makes out of the source's memcpy/memset calls) ignore -mlongcall and come out as plain
-// `bl`, which the linker would point at the DOL's (0x80004338, 0x8000443C). These definitions
+// beyond the reach of a relative branch to the game's code in MEM1. The compiler's own calls to
+// memcpy and memset (struct copies, zeroing; also the ones it makes out of the source's
+// memcpy/memset calls) are plain `bl` (they ignored -mlongcall too, when the plugin was built with
+// it), which the linker would point at the DOL's (0x80004338, 0x8000443C). These definitions
 // keep them inside the module. Written in assembly so that the compiler cannot turn the loops
 // back into calls to themselves. `reltool.py check` fails the build on any far relative branch.
 #include <types.h>

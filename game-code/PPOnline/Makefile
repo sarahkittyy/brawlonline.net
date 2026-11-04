@@ -31,7 +31,9 @@ CCFLAGS		:= -target powerpc-gekko-ibm-kuribo-eabi -fuse-ld=lld \
 			   -nostdlib -nodefaultlibs -fno-addrsig -fno-exceptions \
 			   -fno-c++-static-destructors -fno-use-cxa-atexit \
 			   -r -flto -ffast-math -fpermissive -fno-unwind-tables -finline-functions -fdeclspec \
-			   -u _prolog -u _epilog -u _unresolved -mlongcall
+			   -u _prolog -u _epilog -u _unresolved
+# No -mlongcall (until 2026-11-03): calls inside the plugin are plain `bl`, the game's functions
+# called by name go through source/dol_calls.cpp's stubs (about 18 KB less).
 CXXFLAGS	:= $(CCFLAGS)
 LDFLAGS		:= -T $(TOPDIR)/test.ld --unresolved-symbols=ignore-all -e _prolog -r
 
@@ -71,6 +73,10 @@ export HFILES := $(addsuffix .h,$(subst .,_,$(BINFILES)))
 # For REL linking
 export LDFILES		:= $(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.ld)))
 export MAPFILE		:= $(LIB)/BrawlHeaders/RSBE01.lst $(CURDIR)/EXTRA.lst
+# The game's functions called by name, each through its stub (source/dol_calls.cpp, a `DOL(name)`
+# a line), and their entries in MAPFILE again as __dol_<name>, the stubs' targets.
+export DOL_NAMES	:= $(patsubst DOL(%),%,$(filter-out DOL(name),$(filter DOL(%),$(shell cat $(CURDIR)/source/dol_calls.cpp))))
+export DOL_MAP		:= $(CURDIR)/$(BUILD)/dol_calls.lst
 export LCF			:= $(TOPDIR)/rel.lcf
 
 #---------------------------------------------------------------------------------
@@ -116,7 +122,7 @@ DEPENDS	:=	$(OFILES:.o=.d)
 #---------------------------------------------------------------------------------
 # main targets
 #---------------------------------------------------------------------------------
-$(OUTPUT).rel: $(OUTPUT).elf $(MAPFILE)
+$(OUTPUT).rel: $(OUTPUT).elf $(MAPFILE) $(DOL_MAP)
 $(OUTPUT).elf: $(LDFILES) $(OFILES)
 
 $(OFILES_SOURCES) : $(HFILES)
@@ -127,11 +133,15 @@ $(OFILES_SOURCES) : $(HFILES)
 # the DOL's sscanf out of the plugin (Syringe::Version in rel.cpp), which cannot reach MEM2;
 # a link-time -mattr does not change that (each function carries its own target features).
 FLAGS_STAMP := $(DEPSDIR)/flags.stamp
-FLAGS_NOW := $(strip $(CC) $(CXXFLAGS) $(LDFLAGS) $(LDFILES))
+FLAGS_NOW := $(strip $(CC) $(CXXFLAGS) $(LDFLAGS) $(LDFILES) $(DOL_NAMES))
 ifneq ($(strip $(shell cat '$(FLAGS_STAMP)' 2>/dev/null)),$(FLAGS_NOW))
 $(shell printf '%s' '$(FLAGS_NOW)' > '$(FLAGS_STAMP)')
 endif
 $(OFILES_SOURCES) $(OUTPUT).elf : $(FLAGS_STAMP)
+
+# The stubs' targets (dol_calls.cpp): each name's map entry again, as __dol_<name>.
+$(DOL_MAP): $(MAPFILE) $(FLAGS_STAMP)
+	@sed -n $(foreach n,$(DOL_NAMES),-e 's/:$(n)\r*$$/:__dol_$(n)/p') $(MAPFILE) > $@
 
 # The plugin shares P+'s 64 KB Syringe heap with sy_core and P+'s own plugins and must fit in
 # what they leave (docs/game-code.md section 2, "Heap budget"). Every file is built for size,
@@ -142,7 +152,7 @@ boot_menu.o ppom.o match_hud.o: CXXFLAGS += -Oz
 # REL linking
 %.rel: %.elf
 	@echo output ... $(notdir $@)
-	$(SILENTCMD)$(ELF2REL) $< -s $(MAPFILE) --rel-id $(RELID)
+	$(SILENTCMD)$(ELF2REL) $< -s $(MAPFILE) $(DOL_MAP) --rel-id $(RELID)
 
 %.elf:
 	@echo linking ... $(notdir $@)
@@ -165,8 +175,8 @@ room_css.o room_rules.o room_play.o rules_button.o: CXXFLAGS += -Oz
 # The other players' cursors on the stage select (2026-10-29), and with them the stage select's
 # cards and the menus' labels, -O0 until then (about 10 KB less): the plugin had grown about 32 KB
 # since bug #75's 40 KB of room (2026-10-21), and with the cursors at -O0 too the biggest costume
-# no longer loaded (test_online_big_costumes.py). Not stage_switch.o: at -Oz its cursor frame's
-# place came out wrong (test_room_stage_switch.py).
+# no longer loaded (test_online_big_costumes.py). Not stage_switch.o then: at -Oz its cursor frame's
+# place came out wrong (test_room_stage_switch.py; below).
 sss_cursors.o sss_portraits.o labels.o: CXXFLAGS += -Oz
 # Potato mode (2026-11-01): -Oz from the start, for the same heap room.
 potato.o: CXXFLAGS += -Oz
@@ -174,6 +184,12 @@ potato.o: CXXFLAGS += -Oz
 # the biggest costume no longer loaded (test_online_big_costumes.py); at -Oz the plugin is back to
 # its size before (test_waiting_room.py, test_twos_pair_room.py).
 training_room.o: CXXFLAGS += -Oz
+# The harness's call aid (2026-11-03, about 0.2 KB less) and the plugin's memcpy/memset (assembly).
+# And the stage switch (6.5 KB less): its cursor frame's wrong place at -Oz (2026-10-29) was a
+# division by -7 that Dolphin's JIT gets wrong (stage_switch.cpp tileOffset, reltool.py check).
+rpc.o far_mem.o stage_switch.o: CXXFLAGS += -Oz
+# The game's functions' stubs: assembly only, kept out of LTO.
+dol_calls.o: CXXFLAGS += -fno-lto
 
 %.o: %.cpp
 #	$(info $<)

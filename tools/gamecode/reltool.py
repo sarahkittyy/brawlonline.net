@@ -261,6 +261,59 @@ def unresolved_calls(r: Rel) -> list[int]:
     return out
 
 
+def _jit_bad_divisor(d: int) -> bool:
+    """A divisor whose `divw` Dolphin's JITs get wrong once they know it (2026-11-03): Jit64 and
+    JitArm64 divwx by a constant, the branch for a negative divisor with a positive magic
+    multiplier (JitCommon/DivUtils.cpp SignedDivisionConstants: -7, -14, -15, -23, -28, ...), take
+    their shift and subtraction from the wrong register: 7 / -7 gives 1, 1 / -7 0xE4924925. The
+    interpreter and the hardware are right; a divisor loaded from memory is not a known constant."""
+    if d >= -2 or (-d) & (-d - 1) == 0:
+        return False   # -1, -2 and the powers of two have their own code
+    two31, ad = 1 << 31, -d
+    t = two31 - 1
+    anc = t - 1 - t % ad
+    q1, r1, q2, r2, p = two31 // anc, two31 - (two31 // anc) * anc, two31 // ad, two31 - (two31 // ad) * ad, 31
+    while True:
+        p += 1
+        q1, r1 = (2 * q1) & 0xFFFFFFFF, (2 * r1) & 0xFFFFFFFF
+        if r1 >= anc:
+            q1, r1 = q1 + 1, r1 - anc
+        q2, r2 = (2 * q2) & 0xFFFFFFFF, (2 * r2) & 0xFFFFFFFF
+        if r2 >= ad:
+            q2, r2 = q2 + 1, r2 - ad
+        if not (q1 < ad - r2 or (q1 == ad - r2 and r1 == 0)):
+            break
+    m = -((q2 + 1) & 0xFFFFFFFF) & 0xFFFFFFFF   # negated for a negative divisor, as s32
+    return 0 < m < 1 << 31
+
+
+def jit_bad_divisions(r: Rel) -> list[tuple[int, int]]:
+    """(offset in .text, divisor) of each `divw` whose divisor was just set by `li` to one of
+    _jit_bad_divisor's (clang makes `x - y / 7` into `x + y / -7`). By the instructions before it
+    in a straight line only, up to a branch or another write of the register: a divisor that comes
+    from elsewhere is not seen (rare: the JIT knows a constant within its block)."""
+    t = r.text()
+    words = struct.unpack_from(f">{len(t.data) // 4}I", t.data)
+    out = []
+    for n, w in enumerate(words):
+        if w >> 26 != 31 or (w >> 1) & 0x1FF != 491:   # divw(o)(.)
+            continue
+        rb = (w >> 11) & 31
+        for k in range(n - 1, max(n - 40, -1), -1):
+            v = words[k]
+            op = v >> 26
+            if op in (16, 18, 19):
+                break   # a branch
+            if op == 14 and (v >> 21) & 31 == rb and (v >> 16) & 31 == 0:   # li rB, imm
+                imm = (v & 0xFFFF) - ((v & 0x8000) << 1)
+                if _jit_bad_divisor(imm):
+                    out.append((4 * n, imm))
+                break
+            if (v >> 21) & 31 == rb and op not in (36, 37, 38, 39, 44, 45, 47, 52, 53, 54, 55, 62, 63, 10, 11):
+                break   # rB written by something else (stores, compares and FP ops name no GPR there)
+    return out
+
+
 # ELF32 (big-endian, relocatable), as ld.lld -r writes a module for elf2rel: just enough to find
 # the relocations against undefined symbols.
 SHT_SYMTAB, SHT_RELA, SHN_UNDEF, STB_WEAK = 2, 4, 0, 2
@@ -324,10 +377,15 @@ def dropped_refs(e: Elf, r: Rel) -> list[tuple[str, str, int, int]]:
     """(symbol, user, section, offset) of each relocation in the ELF against an undefined,
     non-weak symbol that has no relocation at the same place in the REL: elf2rel found the
     symbol neither in the module nor in the symbol maps and left the field 0 (a -mlongcall call
-    then jumps to address 0, a short one to itself, and a pointer is NULL)."""
+    then jumps to address 0, a short one to itself, and a pointer is NULL). Also each relocation
+    against no symbol at all (index 0), which elf2rel resolves to 0 without a word: lld's --wrap
+    in a relocatable link left the wrapped symbols' `__real_` references so (2026-11-03)."""
     have = {(x.section, x.offset) for x in r.relocs}
     out = []
     for sec, off, typ, si in e.relocs:
+        if typ != 0 and si == 0:
+            out.append(("(no symbol)", e.containing(sec, off), sec, off))
+            continue
         s = e.symbols[si] if si < len(e.symbols) else None
         if typ == 0 or s is None or s.shndx != SHN_UNDEF or not s.name or s.bind == STB_WEAK:
             continue
@@ -338,7 +396,8 @@ def dropped_refs(e: Elf, r: Rel) -> list[tuple[str, str, int, int]]:
 
 def far_branches(r: Rel) -> list[Reloc]:
     """Relative branches (REL24/REL14) to another module: out of range for a module linked into
-    MEM2 (the packed plugin runs from the Network heap; it is built with -mlongcall)."""
+    MEM2 (the packed plugin runs from the Network heap; the game's functions it calls by name go
+    through PPOnline/source/dol_calls.cpp's stubs)."""
     return [x for x in r.relocs if x.type in (10, 11) and x.module != r.id]
 
 
@@ -379,10 +438,22 @@ def cmd_check(a) -> None:
                              "them to EXTRA.lst if the DOL has them")
         if part == "main":
             far = far_branches(r)
+            called = {(sec, off & ~3): e.symbols[si].name for sec, off, _t, si in e.relocs} if part in elfs else {}
             for x in far[:20]:
-                print(f"{name}: relative branch to module {x.module} at sec{x.section}+{x.offset:#x}")
+                to = called.get((x.section, x.offset & ~3))
+                print(f"{name}: relative branch to module {x.module} at sec{x.section}+{x.offset:#x}"
+                      + (f" (a call to {to})" if to else ""))
             if far:
-                raise SystemExit(f"{len(far)} relative branch(es) out of the plugin: build it with -mlongcall")
+                raise SystemExit(f"{len(far)} relative branch(es) out of the plugin: add each function called "
+                                 "to PPOnline/source/dol_calls.cpp")
+        bad_div = jit_bad_divisions(r)
+        for off, d in bad_div:
+            at = f" in {e.containing(r.text().idx, off)}" if part in elfs else ""
+            print(f"{name}: divw by {d} at sec{r.text().idx}+{off:#x}{at}")
+        if bad_div:
+            raise SystemExit(f"{len(bad_div)} division(s) by a constant Dolphin's JIT gets wrong (reltool.py "
+                             "_jit_bad_divisor): pass the quotient by the positive constant through an "
+                             "empty asm before it is subtracted or negated (stage_switch.cpp tileOffset)")
         print(f"ok: {name}: no unresolved calls" + (" or symbols" if part in elfs else "")
               + (", no far relative branches" if part == "main" else ""))
 
