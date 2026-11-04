@@ -26,8 +26,8 @@ python tools/staging/staging.py down                 # stop clients and server; 
 | Windows build | worktree `run/staging/src` (own Dolphin build), packaged to `run/staging/win/app` | rebuilt by `win build` |
 | Server binaries | `run/staging/cargo-target`, built from the same commit by `win build` | same |
 | Windows profiles | `run/staging/win/profiles/<name>` | `win reset` / `run --fresh` delete one |
-| Mac build | `~/brawl-staging/src`, app in `~/brawl-staging/app/Brawl Online Staging.app` | rebuilt by `mac build` |
-| Mac profiles | `~/brawl-staging/profiles/<name>` | `mac reset` / `run --fresh` |
+| Mac build | `~/code/brawlonline.net/brawl-staging/src`, app in `~/code/brawlonline.net/brawl-staging/app/Brawl Online Staging.app` | rebuilt by `mac build` |
+| Mac profiles | `~/code/brawlonline.net/brawl-staging/profiles/<name>` | `mac reset` / `run --fresh` |
 
 Ports and addresses are in `run/staging/config.json` (written on first use, with the database
 password and play-key secret). The LAN IP is the one that reaches the Mac; edit `lan_ip` there if
@@ -61,13 +61,14 @@ A second account on the same machine: `win run --profile b` (or `mac run --profi
   then stages Dolphin as `build-dolphin-windows.ps1` does and runs `electron-builder --win dir`
   (no installer). Builds run at below-normal priority. The first build is a full Dolphin build;
   later ones are incremental.
-- **Mac** (`mac build`): pushes the commit to `~/brawl-staging/repo.git` over SSH, copies the
-  plugin built here, and runs CI's `build-dolphin-macos.sh` and `package-launcher-macos.sh` on the
-  Mac without a signing identity (ad-hoc signed, not notarized). Qt comes from
-  `~/brawl-dev/qt/6.8.3/macos`, and Node 24 from your nvm. Dolphin is built with Homebrew hidden, as
-  on CI: Homebrew's Qt 6.11 had leaked in through an rpath and made Dolphin abort at start, and a
-  build that still refers to `/opt/homebrew` is refused. `mac setup` checks these and writes a
-  pass-through `ccache` into `~/brawl-staging/bin` (nothing is installed).
+- **Mac** (`mac build`): pushes the commit to `~/code/brawlonline.net/brawl-staging/repo.git` over
+  SSH, copies the plugin built here, and runs CI's `build-dolphin-macos.sh` and
+  `package-launcher-macos.sh` on the Mac without a signing identity (ad-hoc signed, not notarized).
+  Qt comes from `~/code/brawlonline.net/brawl-dev/qt/6.8.3/macos`, and Node 24 from your nvm.
+  Dolphin is built with Homebrew hidden, as on CI: Homebrew's Qt 6.11 had leaked in through an
+  rpath and made Dolphin abort at start, and a build that still refers to `/opt/homebrew` is
+  refused. `mac setup` checks these and writes a pass-through `ccache` into
+  `~/code/brawlonline.net/brawl-staging/bin` (nothing is installed).
 - The Dolphin bundle's version is `0.1.0-staging.<commit>`, so a new build replaces the Dolphin an
   existing profile installed.
 
@@ -98,4 +99,4 @@ Logs: `run/staging/logs/` (`win-build.log`, `mac-build.log`, `accounts.log`, `mm
 - `win reset` / `mac reset [--profile b]`: deletes a profile (the next start is a fresh install).
 - `server reset-db --yes`: deletes the staging database.
 - `destroy --yes [--mac]`: everything. It unlinks the worktree's junctions before removing it,
-  then deletes `run/staging`, and with `--mac` also `~/brawl-staging` on the Mac.
+  then deletes `run/staging`, and with `--mac` also `~/code/brawlonline.net/brawl-staging` on the Mac.
