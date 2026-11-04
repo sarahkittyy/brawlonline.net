@@ -1285,6 +1285,56 @@ def test_room_launcher_create_from_the_top_page(backend: OnlineBackend, dolphin:
     _wait(lambda: not room_view(a)["flags"] & ppom.RF_IN, 30, "A out of the room")
 
 
+def game_status(g: Game) -> dict[str, Any]:
+    import json
+    return json.loads((Path(g.inst.user_dir) / "Online" / "game-status.json").read_text())
+
+
+def test_room_launcher_create_from_the_versus_page(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
+                                                   gpu_backend: str) -> None:
+    """The launcher's Create room from the main menu's VERSUS page (bug report #224: backed out of
+    an offline Versus CSS, the launcher said "Finish your current game first."). The top page's
+    own pages (VERSUS, SOLO, VAULT, OPTIONS, DATA) report menus and the game goes from them to its
+    new room's CSS; a page under one of them (VERSUS' RULES) is "other", and the game answers
+    "Go back to the menus first." there."""
+    test = "launcher-create-vs"
+    ua = backend.create_user("rcvs", "RCVS")
+    a = _boot(dolphin, "room-cv", backend, ua, gpu_backend, test, "gameplay", artifacts=ART)
+    a.to_main_menu()
+    a.steps("tap B", "wait 60", "tap DUP 4", "wait 30", "tap A", "wait 90")
+    a.shot("00-versus-page")
+    assert a.scene() == "muMenuMain"
+    assert room_view(a)["screen"] == ppom.SCREENS["menus"], room_view(a)
+    _wait(lambda: game_status(a)["state"] == "idle", 10, "game-status.json idle")
+    c0 = room_view(a)["create"]
+
+    # RULES: not a page to leave from. game-status.json says busy on "other" (the launcher then
+    # asks the game, room_handoff.ts isBusy), and the game says what to do.
+    a.steps("tap DRIGHT 4", "wait 30", "tap A", "wait 90")
+    a.shot("01-rules-page")
+    assert room_view(a)["screen"] == ppom.SCREENS["other"], room_view(a)
+    _wait(lambda: (game_status(a)["state"], game_status(a)["screen"]) == ("busy", "other"), 10,
+          "game-status.json busy on other")
+    rid = write_create(a)
+    answer = launcher_answer(a, rid)
+    assert (answer["result"], answer.get("message")) == ("refused", "Go back to the menus first."), answer
+    assert room_view(a)["create"] == c0
+    a.steps("tap B", "wait 90")
+    a.shot("02-back-on-the-versus-page")
+    _wait(lambda: room_view(a)["screen"] == ppom.SCREENS["menus"], 10, "the VERSUS page again")
+
+    rid = write_create(a)
+    assert launcher_answer(a, rid)["result"] == "accepted"
+    _wait(lambda: a.scene() == CSS, 60, "A on the room's CSS")
+    v = until_view(a, lambda v: v["flags"] & ppom.RF_IN and v["screen"] == ppom.SCREENS["room"], "A in its room",
+                   timeout=60)
+    assert v["host"] == v["local_port"] == 0 and v["create"] == (c0 + 1) & 0xFF, v
+    a.steps("wait 90")
+    a.shot("03-created-from-the-versus-page")
+    pick(a)
+    a.shot("04-picked")
+
+
 def test_room_launcher_create_before_the_game_starts(backend: OnlineBackend,
                                                      dolphin: Callable[..., DolphinInstance],
                                                      gpu_backend: str) -> None:

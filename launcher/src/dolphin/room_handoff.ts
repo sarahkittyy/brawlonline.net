@@ -211,6 +211,16 @@ export type HandOffOptions = {
 };
 
 /**
+ * A game that is playing or searching ("Finish your current game first."). `busy` on another screen
+ * (`other`: a menu page under the main menu's, a rules or controls page) is the game's to answer:
+ * it says "Go back to the menus first." there, which the launcher showed as "Finish your current
+ * game first." (bug report #224, on the main menu's VERSUS page).
+ */
+function isBusy(status: GameStatus): boolean {
+  return status.state === "busy" && status.screen !== "other";
+}
+
+/**
  * Hands `code` (a room code, or a connect code for Direct) to a running game: refuses at once when its status says busy, else writes the
  * request and waits for the game's answer. Without an answer the request is taken back, so a later
  * game start does not act on it.
@@ -223,7 +233,7 @@ export async function handOffRoom(
   const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   const now = opts.now ?? Date.now;
   const before = await readGameStatus(onlineDir, now());
-  if (before.kind === "fresh" && before.status.state === "busy") {
+  if (before.kind === "fresh" && isBusy(before.status)) {
     return { outcome: "busy" };
   }
   const req = await writeRoomRequest(onlineDir, code, new Date(now()), opts.ruleset, opts.isPrivate);
@@ -237,7 +247,7 @@ export async function handOffRoom(
         case "accepted":
           return await watchAfterAccept(onlineDir, req.id, opts, code === CREATE_ROOM ? FAILED_WATCH_MS : 0);
         case "refused":
-          return s.kind === "fresh" && s.status.state === "busy"
+          return s.kind === "fresh" && isBusy(s.status)
             ? { outcome: "busy" }
             : { outcome: "refused", message: answer.message };
         default:
