@@ -616,6 +616,11 @@ pub struct RoomPlayer {
     /// game does not wait for them. Written only when true.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub watching: bool,
+    /// A 2v2 party's player whose game plays the pair room ([`Hello::pair_room`]): the partner's
+    /// game waits for the pair room on its CSS instead of going to the waiting room alone.
+    /// Written only when true.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub pair_room: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

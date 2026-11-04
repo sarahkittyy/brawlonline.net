@@ -50,4 +50,8 @@ namespace TrainingRoom {
     // pairReset at its setup.
     void pairSandbag(u32 frame);
     void pairReset();
+    // The CSS leaves straight for the pair room's match (no waiting room alone first): the screen
+    // fades out as for the room, and the match comes out of black only at PAIR_SHOW_FRAME, when
+    // its players can move (it has no countdown: pairNoCountdown).
+    void fadeForPairRoom();
 }
