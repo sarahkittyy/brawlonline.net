@@ -205,6 +205,21 @@ describe("room hand-off", () => {
     expect(await readRequest()).toBeNull();
   });
 
+  it("asks a busy game on another screen, which says what to do (bug report #224)", async () => {
+    await writeStatus({ state: "busy", screen: "other" });
+    const pending = handOffRoom(dir, "KFQB", fast);
+    let req: RoomRequest | null = null;
+    while (!(req = await readRequest())) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    await writeStatus({
+      state: "busy",
+      screen: "other",
+      lastRequest: { id: req.id, result: "refused", message: "Go back to the menus first." },
+    });
+    expect(await pending).toEqual({ outcome: "refused", message: "Go back to the menus first." });
+  });
+
   it("returns the game's answer to the request", async () => {
     await writeStatus({ state: "idle", screen: "menus" });
     // A stand-in game: answers the request the moment it appears.

@@ -510,6 +510,19 @@ namespace NetMenu {
         return s_origTopUpdate(page);
     }
 
+    // The top page's own pages are ones too (vtable slot 5; the vtables in sora_menu_main
+    // .data): VERSUS (muProcVs, +0x1EB8), SOLO (muProc1p, +0x1A60), VAULT (muProcColl, +0x1BB8),
+    // DATA (muProcData, +0x1C30), OPTIONS (muProcOption, +0x1D60). Backing out of an offline
+    // Versus CSS lands on VERSUS' page, where the launcher said "Finish your current game first."
+    // (bug report #224). The pages those open (rules, controls, sound test ...) stay SCREEN_OTHER.
+    static PageUpdateFn s_origVsUpdate = NULL, s_origSoloUpdate = NULL, s_origVaultUpdate = NULL,
+                        s_origDataUpdate = NULL, s_origOptionsUpdate = NULL;
+    static int vsUpdate(u8* page) { OnlineMenu::topPageRunning(page); return s_origVsUpdate(page); }
+    static int soloUpdate(u8* page) { OnlineMenu::topPageRunning(page); return s_origSoloUpdate(page); }
+    static int vaultUpdate(u8* page) { OnlineMenu::topPageRunning(page); return s_origVaultUpdate(page); }
+    static int dataUpdate(u8* page) { OnlineMenu::topPageRunning(page); return s_origDataUpdate(page); }
+    static int optionsUpdate(u8* page) { OnlineMenu::topPageRunning(page); return s_origOptionsUpdate(page); }
+
     // muProcWifiAnybody's update (vtable slot 5, sora_menu_main text+0x2E794): the WITH FRIENDS
     // page is one the launcher's join can leave from (OnlineMenu::launcherJoin).
     static PageUpdateFn s_origAnybodyUpdate = NULL;
@@ -825,6 +838,11 @@ namespace NetMenu {
         api->syInlineHookRel(0x0002E760, reinterpret_cast<void*>(friendsTitle), 2);
         api->syReplaceFuncRel(0x0002E794, reinterpret_cast<void*>(anybodyUpdate), (void**)&s_origAnybodyUpdate, 2);
         api->syReplaceFuncRel(0x00014FAC, reinterpret_cast<void*>(topUpdate), (void**)&s_origTopUpdate, 2);
+        api->syReplaceFuncRel(0x00015844, reinterpret_cast<void*>(vsUpdate), (void**)&s_origVsUpdate, 2);
+        api->syReplaceFuncRel(0x000132E8, reinterpret_cast<void*>(soloUpdate), (void**)&s_origSoloUpdate, 2);
+        api->syReplaceFuncRel(0x00013B18, reinterpret_cast<void*>(vaultUpdate), (void**)&s_origVaultUpdate, 2);
+        api->syReplaceFuncRel(0x00014258, reinterpret_cast<void*>(dataUpdate), (void**)&s_origDataUpdate, 2);
+        api->syReplaceFuncRel(0x0001488C, reinterpret_cast<void*>(optionsUpdate), (void**)&s_origOptionsUpdate, 2);
         // the four `stw r3,0x66C(r29)` after WifiCnctWnd's create (text+0x38530)
         api->syInlineHookRel(0x00015288, reinterpret_cast<void*>(skipConnectWindow), 2);
         api->syInlineHookRel(0x00015460, reinterpret_cast<void*>(skipConnectWindow), 2);

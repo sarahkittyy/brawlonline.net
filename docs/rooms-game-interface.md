@@ -122,7 +122,7 @@ A request the server refuses changes nothing and turns the line red with the ser
 | Value | Name | When | Launcher join |
 |---|---|---|---|
 | 0 | `SCREEN_UNKNOWN` | not written yet (boot), or a v4 plugin | kept until the game reports a screen |
-| 1 | `SCREEN_MENUS` | the main menu's top page and the online pages (ONLINE, WITH FRIENDS, WITH ANYONE): the menu pages the game can jump to the room CSS from. Other pages of the main menu (VERSUS', SOLO's, OPTIONS ...) are `SCREEN_OTHER` | accepted |
+| 1 | `SCREEN_MENUS` | the main menu's top page, its own pages (VERSUS, SOLO, VAULT, OPTIONS, DATA; since 2026-11-04, bug report #224) and the online pages (ONLINE, WITH FRIENDS, WITH ANYONE): the menu pages the game can jump to the room CSS from. The pages those open (VERSUS' RULES, OPTIONS' controls, the sound test ...) are `SCREEN_OTHER` | accepted |
 | 2 | `SCREEN_ONLINE_CSS` | an online CSS (Direct/Unranked/Ranked), not searching | accepted |
 | 3 | `SCREEN_ROOM` | the room CSS (in a room or not) | accepted (leaves the old room) |
 | 4 | `SCREEN_ONLINE_BUSY` | an online CSS while searching, connecting, or connected to an opponent (a Direct/Ranked set) | refused, "Finish your current game first." |
