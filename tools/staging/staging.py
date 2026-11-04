@@ -10,7 +10,8 @@ macOS clients built from one commit, set up like fresh installs that talk only t
     python tools/staging/staging.py server mail          # sign-up verification links
     python tools/staging/staging.py down                 # stop everything (the database stays)
 
-Everything lives in run/staging/ on this PC (gitignored) and ~/brawl-staging/ on the Mac:
+Everything lives in run/staging/ on this PC (gitignored) and on the Mac in
+~/code/brawlonline.net/brawl-staging/:
 
     run/staging/config.json   ports, the LAN address, the database password and play-key secret
     run/staging/pgdata/       the staging database (kept until `server reset-db --yes`)
@@ -20,7 +21,7 @@ Everything lives in run/staging/ on this PC (gitignored) and ~/brawl-staging/ on
     run/staging/cargo-target/ the staging server binaries, built from that commit
     run/staging/win/app/      the packaged Windows launcher (electron-builder's win-unpacked)
     run/staging/win/profiles/ launcher profiles (PPO_USER_DATA_DIR): settings, logins, Dolphin
-    ~/brawl-staging/          on the Mac: repo.git, src/, cache/, app/Brawl Online.app, profiles/
+    ~/code/brawlonline.net/brawl-staging/  on the Mac: repo.git, src/, cache/, app/, profiles/
 
 A client is the packaged app, started in the launcher's test mode (PPO_TEST_MODE=1) with its own
 profile folder, so it never reads or writes the real install's settings, logins or Dolphin.
@@ -75,11 +76,11 @@ DEFAULTS = {
     "mac_host": "192.168.0.147",
     "mac_user": "sarahkitty",
     "mac_key": "~/.ssh/brawlmac",
-    "mac_qt": "~/brawl-dev/qt/6.8.3/macos",
+    "mac_qt": "~/code/brawlonline.net/brawl-dev/qt/6.8.3/macos",
     "mac_ssh": "",  # the ssh to use; scp is the one next to it. Empty: Git's on Windows, else PATH's
 }
 # Inside double quotes on the Mac ("~" would not expand there).
-MAC_HOME = "$HOME/brawl-staging"
+MAC_HOME = "$HOME/code/brawlonline.net/brawl-staging"
 # Its own folder name. The bundle ID stays the real one: Electron's helper apps carry IDs derived
 # from it, and a changed main ID made Electron stop at start-up (EXC_BREAKPOINT in ElectronMain).
 # What keeps a Dock or Finder start on staging is the staging-env.json inside the app.
@@ -827,8 +828,8 @@ def mac_target(cfg: dict) -> list[str]:
 
 
 # The Mac's shell for every command: Homebrew's tools, the user's nvm Node (CI uses Node 24), and
-# ~/brawl-staging/bin (the ccache shim from `mac setup`).
-MAC_PRELUDE = ('export PATH="$HOME/brawl-staging/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"; '
+# ~/code/brawlonline.net/brawl-staging/bin (the ccache shim from `mac setup`).
+MAC_PRELUDE = ('export PATH="$HOME/code/brawlonline.net/brawl-staging/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"; '
                'export NVM_DIR="$HOME/.nvm"; [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh" && '
                'nvm use --silent 24 >/dev/null; set -euo pipefail; ')
 
@@ -840,7 +841,7 @@ MAC_PRELUDE = ('export PATH="$HOME/brawl-staging/bin:/opt/homebrew/bin:/usr/loca
 # build the same. A cmake stand-in for that step adds the ignore lists to the configure call.
 CMAKE_SHIM = """#!/bin/sh
 # Staging (tools/staging/staging.py): Dolphin's configure ignores Homebrew's prefix, as on CI.
-real="$HOME/brawl-dev/venv/bin/cmake"
+real="$HOME/code/brawlonline.net/brawl-dev/venv/bin/cmake"
 [ -x "$real" ] || real=/usr/local/bin/cmake
 for a in "$@"; do
   if [ "$a" = "-S" ]; then
@@ -875,7 +876,7 @@ command -v node >/dev/null || {{ echo 'no Node: install 24 with nvm (nvm install
 echo "node $(node -v)"
 if ! command -v ccache >/dev/null || [ -f {MAC_HOME}/bin/ccache ]; then
   printf '%s' {shlex.quote(CCACHE_SHIM)} > {MAC_HOME}/bin/ccache && chmod +x {MAC_HOME}/bin/ccache
-  echo "ccache: pass-through shim in ~/brawl-staging/bin"
+  echo "ccache: pass-through shim in ~/code/brawlonline.net/brawl-staging/bin"
 fi
 for t in git cmake ninja xcrun; do command -v $t >/dev/null || {{ echo "missing $t" >&2; exit 1; }}; done
 [ -d {cfg['mac_qt']}/lib/QtCore.framework ] && echo "Qt: {cfg['mac_qt']}" || {{ echo "no Qt in {cfg['mac_qt']}" >&2; exit 1; }}
@@ -896,7 +897,7 @@ def mac_build(args: argparse.Namespace) -> None:
     ssh = ssh_tool(cfg, "ssh").replace("\\", "/")
     env = dict(os.environ, GIT_SSH_COMMAND=f'"{ssh}" -i "{key}" -o BatchMode=yes')
     run(["git", "push", "--quiet", "--force",
-         f"ssh://{cfg['mac_user']}@{cfg['mac_host']}/~/brawl-staging/repo.git", f"{sha}:refs/heads/staging"],
+         f"ssh://{cfg['mac_user']}@{cfg['mac_host']}/~/code/brawlonline.net/brawl-staging/repo.git", f"{sha}:refs/heads/staging"],
         env=env, log=log)
     # 2. The plugin: built here from the same commit (the Mac has no PowerPC toolchain).
     plugin = SRC / "game-code" / "PPOnline" / "PPOnline.rel"
@@ -907,14 +908,14 @@ def mac_build(args: argparse.Namespace) -> None:
         prepare_worktree(sha)
         run([bash(), "./build.sh"], cwd=SRC / "game-code", log=log)
     run([ssh_tool(cfg, "scp"), "-q", "-i", key, "-o", "BatchMode=yes", str(plugin),
-         f"{cfg['mac_user']}@{cfg['mac_host']}:brawl-staging/PPOnline.rel"], log=log)
+         f"{cfg['mac_user']}@{cfg['mac_host']}:code/brawlonline.net/brawl-staging/PPOnline.rel"], log=log)
     rank_badges_here(log)
     badges = STAGE / "rank-badges.tar"
     with tarfile.open(badges, "w") as tar:
         for d in RANK_BADGE_DIRS:
             tar.add(ROOT / d, arcname=d)
     run([ssh_tool(cfg, "scp"), "-q", "-i", key, "-o", "BatchMode=yes", str(badges),
-         f"{cfg['mac_user']}@{cfg['mac_host']}:brawl-staging/rank-badges.tar"], log=log)
+         f"{cfg['mac_user']}@{cfg['mac_host']}:code/brawlonline.net/brawl-staging/rank-badges.tar"], log=log)
     # 3. Dolphin and the launcher with CI's own scripts, ad-hoc signed (no identity, no notary).
     h = MAC_HOME
     script = f"""
@@ -930,7 +931,7 @@ mkdir -p {h}/dolphin-bin
 printf '%s' {shlex.quote(CMAKE_SHIM)} > {h}/dolphin-bin/cmake && chmod +x {h}/dolphin-bin/cmake
 B={h}/cache/dolphin-build-macos-arm64
 if grep -q /opt/homebrew "$B/CMakeCache.txt" 2>/dev/null; then rm -rf "$B"; fi
-env -u HOMEBREW_PREFIX -u HOMEBREW_CELLAR -u HOMEBREW_REPOSITORY -u PKG_CONFIG_PATH   PATH="{h}/dolphin-bin:{h}/bin:$HOME/brawl-dev/venv/bin:$(dirname "$(command -v node)"):/usr/bin:/bin:/usr/sbin:/sbin"   nice -n 10 .github/scripts/build-dolphin-macos.sh 0.1.0-staging.{sha[:10]} launcher/release/dolphin arm64
+env -u HOMEBREW_PREFIX -u HOMEBREW_CELLAR -u HOMEBREW_REPOSITORY -u PKG_CONFIG_PATH   PATH="{h}/dolphin-bin:{h}/bin:$HOME/code/brawlonline.net/brawl-dev/venv/bin:$(dirname "$(command -v node)"):/usr/bin:/bin:/usr/sbin:/sbin"   nice -n 10 .github/scripts/build-dolphin-macos.sh 0.1.0-staging.{sha[:10]} launcher/release/dolphin arm64
 D=launcher/release/dolphin/Dolphin.app/Contents/MacOS/Dolphin
 if otool -l "$D" | grep -q /opt/homebrew || otool -L "$D" | grep -q /opt/homebrew; then
   echo "the staging Dolphin still refers to Homebrew (/opt/homebrew): not shipping it" >&2; exit 1
@@ -952,7 +953,7 @@ done
 mkdir -p {h}/app
 ditto "release/build/mac-arm64/Brawl Online.app" "{MAC_APP}"
 # Its staging settings inside it (applied however it is started), then re-signed ad hoc.
-printf '%s' {shlex.quote(staging_env_json(cfg, "__HOME__/brawl-staging/profiles/a"))}   | sed "s|__HOME__|$HOME|g" > "{MAC_APP}/Contents/Resources/staging-env.json"
+printf '%s' {shlex.quote(staging_env_json(cfg, "__HOME__/code/brawlonline.net/brawl-staging/profiles/a"))}   | sed "s|__HOME__|$HOME|g" > "{MAC_APP}/Contents/Resources/staging-env.json"
 codesign --force --deep --sign - "{MAC_APP}"
 "$LSREG" -f "{MAC_APP}"
 echo '{{"sha": "{sha}"}}' > {h}/app/build.json
@@ -970,7 +971,7 @@ def mac_run(args: argparse.Namespace) -> None:
                     if k != "PPO_USER_DATA_DIR")
     mac(cfg, f'[ -d "{MAC_APP}" ] || {{ echo "no macOS staging build yet: mac build" >&2; exit 1; }}; '
              f'mkdir -p "{profile}"; open -n {envs} --env "PPO_USER_DATA_DIR={profile}" "{MAC_APP}"')
-    say(f"started the macOS client on {cfg['mac_host']}, profile ~/brawl-staging/profiles/{args.profile}")
+    say(f"started the macOS client on {cfg['mac_host']}, profile ~/code/brawlonline.net/brawl-staging/profiles/{args.profile}")
 
 
 def mac_stop(_args: argparse.Namespace | None) -> None:
@@ -1016,7 +1017,7 @@ def down(args: argparse.Namespace) -> None:
 def destroy(args: argparse.Namespace) -> None:
     """Everything staging made: processes, the worktree (its links first), builds, the database."""
     if not args.yes:
-        die("this deletes run/staging (database included) and ~/brawl-staging on the Mac; pass --yes")
+        die("this deletes run/staging (database included) and ~/code/brawlonline.net/brawl-staging on the Mac; pass --yes")
     down(args)
     if SRC.exists():
         n = unlink_junctions(SRC)
@@ -1074,7 +1075,7 @@ def main() -> None:
     sub.add_parser("down", help="stop the clients and the server (the database stays)").set_defaults(func=down)
     p = sub.add_parser("destroy", help="remove everything staging made")
     p.add_argument("--yes", action="store_true")
-    p.add_argument("--mac", action="store_true", help="also delete ~/brawl-staging on the Mac")
+    p.add_argument("--mac", action="store_true", help="also delete ~/code/brawlonline.net/brawl-staging on the Mac")
     p.set_defaults(func=destroy)
 
     args = ap.parse_args()
