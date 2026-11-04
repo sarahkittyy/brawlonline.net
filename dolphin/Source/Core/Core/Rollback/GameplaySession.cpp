@@ -722,6 +722,9 @@ struct State
   s64 audio_pass_start = 0;
   bool audio_pass_resim = false;
   std::map<u32, u64> snd_gen;  // sound object -> allocation count
+  // A replay's keyframes: the sounds allocated when each was taken ({sound object, sound id}). A
+  // seek stops the sounds playing that the state it puts back does not have (bug report #225).
+  std::map<s64, std::vector<std::pair<u32, u32>>> snd_at_key;
   u32 snd_reattach = 0;        // the sound the current detail_SetupSound re-attaches
   u64 snd_reattach_gen = 0;
   u32 snd_player = 0;          // SoundArchivePlayer (from detail_SetupSound)
@@ -956,6 +959,7 @@ void KeepPortType(u8* rec, int port);  // below, with the countdown's holds
 // Sound bookkeeping (defined with OnSoundAlloc below).
 bool RunSoundStops(const Core::CPUThreadGuard& guard);
 void CommitSoundPass();
+std::vector<std::pair<u32, u32>> AllocatedSounds(const Core::CPUThreadGuard& guard);
 bool PauseResimAudio();
 // File loads in a match (defined with RunSoundStops below).
 bool RunIoWait(const Core::CPUThreadGuard& guard);
@@ -3975,6 +3979,7 @@ void ResetRunStats()
   s.snd_first_run = true;
   s.audio_pass_resim = false;
   s.snd_gen.clear();
+  s.snd_at_key.clear();
   s.snd_reattach = 0;
   s.snd_to_stop.clear();
   s.sound_reattached = s.sound_reattach_gone = s.sound_stopped = s.sound_stop_gone = 0;
@@ -6623,6 +6628,7 @@ bool ReplayNextUpdate(Core::System& system)
 void PreparePlaybackKeyframes(Core::System& system)
 {
   s.pb_keys->Clear();
+  s.snd_at_key.clear();
   RegionSetSpec spec;
   if (auto err = LoadRegionSet(s.net_opts.region_set, &spec))
   {
@@ -6881,6 +6887,10 @@ void PlaybackSeek(Core::System& system)
   pb.stop_armed = pb.stop_end >= 0 && target <= pb.stop_end;
   const s64 next = first + static_cast<s64>(pb.next);
   const auto key = s.pb_keys->AtOrBefore(target);
+  const Core::CPUThreadGuard guard(system);
+  // The sound system is not in the keyframes (nor in what a rollback restores): what plays now
+  // plays on after one is put back.
+  const auto playing = AllocatedSounds(guard);
   if (target >= next && (!key || *key <= next))
   {
     pb.ff_until = target;  // straight on
@@ -6906,6 +6916,23 @@ void PlaybackSeek(Core::System& system)
     s.snd_tag.fill(-1);
     s.snd_remaining.clear();
     s.snd_to_stop.clear();
+    // The sounds playing now that were not when the keyframe was taken are stopped (at the next
+    // loop top, as a mispredicted run's). The game state put back does not hold them, so the game
+    // would never stop them: a fighter's off-screen magnifier sound, a loop, went on for the rest
+    // of the replay after a seek back to before it started (bug report #225), or after a jump
+    // ahead to after it ended. Sounds that were playing then too are its own and play on.
+    if (const auto at = s.snd_at_key.find(*key); at != s.snd_at_key.end())
+    {
+      for (const auto& p : playing)
+      {
+        const auto gen = s.snd_gen.find(p.first);
+        if (gen != s.snd_gen.end() &&
+            std::find(at->second.begin(), at->second.end(), p) == at->second.end())
+        {
+          s.snd_to_stop.push_back({p.second, p.first, 0, gen->second});
+        }
+      }
+    }
     s.queued_save = {};
     INFO_LOG_FMT(BRAWLBACK, "replay: seek to frame {}: keyframe {}, {} frames to run", target, *key,
                  target - *key);
@@ -7048,7 +7075,10 @@ PlaybackStep PlaybackLoopTopControls(Core::System& system)
       (ff && pb.ff_until - f <= KEYFRAME_EVERY && (f - first) % DENSE_EVERY == 0))
   {
     if (!s.pb_keys->Has(f))
+    {
       s.pb_keys->Capture(system, f);
+      s.snd_at_key[f] = AllocatedSounds(Core::CPUThreadGuard(system));
+    }
   }
   PadSlots slots = file.pads[pb.next];
   for (int port = 0; port < MAX_LOBBY_PLAYERS; ++port)
@@ -10310,6 +10340,26 @@ bool SoundIsAllocated(const Core::CPUThreadGuard& guard, u32 sound)
     }
   }
   return false;
+}
+
+// The allocated sounds, {sound object, sound id} each.
+std::vector<std::pair<u32, u32>> AllocatedSounds(const Core::CPUThreadGuard& guard)
+{
+  std::vector<std::pair<u32, u32>> out;
+  if (!s.snd_player)
+    return out;
+  for (u32 off : SND_MANAGERS)
+  {
+    const u32 sentinel = s.snd_player + off + 8;
+    u32 node = ReadGuest(guard, sentinel);
+    for (int n = 0; node && node != sentinel && n < 256; ++n)
+    {
+      const u32 sound = node - SND_PRIORITY_LINK;
+      out.emplace_back(sound, ReadGuest(guard, sound + SND_ID));
+      node = ReadGuest(guard, node);
+    }
+  }
+  return out;
 }
 
 // `e` still describes a live sound: the same allocation of that pool object, still allocated, the
