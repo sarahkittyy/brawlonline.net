@@ -35,6 +35,7 @@ CSS = "scSelctCharacter"
 TRAINING_ROOM = 0x37
 HOLD_START_FRAMES = 30
 GAME_FRAME = 0x901812A4   # g_GameFrame's frame counter (1 at the match's first frame)
+BGM_PLAYING = 4           # StOperatorBgm's state while its song plays (online_match.cpp)
 
 
 @pytest.fixture(autouse=True)
@@ -133,6 +134,12 @@ def test_pair_room_both_in_then_hold_start(backend: OnlineBackend, dolphin: Call
         assert sc[5] & 0x400000 and (sc[5] & 0xF) not in (2, 3, 7), (g.name, hex(sc[5]))
         assert sc[10] & 0x80000000, (g.name, hex(sc[10]))
         assert sc[5] & 0x80000, (g.name, hex(sc[5]))
+        # ... and it plays: the pair room started it (scratch[5] 0x800000; the countdown's start
+        # does that in a match), and the match's BGM operator (scMelee+0x40) is in its playing state.
+        assert sc[5] & 0x800000, (g.name, hex(sc[5]))
+        scene = g.c.read_u32(g.c.read_u32(0x805A0060) + 4)
+        _wait(lambda g=g, scene=scene: g.c.read_mem(g.c.read_u32(scene + 0x40) + 0x40, 1)[0] == BGM_PLAYING, 10,
+              f"{g.name}: the song playing")
     # The players move once the session runs its inputs (game frame 120): A walks right.
     _wait(lambda: a.c.read_u32(GAME_FRAME) > 200, 30, "the pair room past its start")
     a.shot("00-moving")
