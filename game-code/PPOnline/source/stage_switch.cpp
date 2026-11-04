@@ -429,7 +429,12 @@ namespace StageSwitch {
     static void tileOffset(int i, int n, float* pos)
     {
         pos[0] = (gridCol(i, n) - (i % 5)) * TILE_DX;
-        pos[1] = -((i / GRID) - (i / 5)) * TILE_DY;
+        // The row of 7 through an empty asm: at -Oz `x - i / 7` becomes `x + i / -7`, a division by a
+        // constant Dolphin's JIT gets wrong (reltool.py _jit_bad_divisor; the tiles and the cursor went
+        // to y = +-2e9, test_room_stage_switch.py).
+        int row7 = i / GRID;
+        asm("" : "+r"(row7));
+        pos[1] = ((i / 5) - row7) * TILE_DY;
         pos[2] = 0.0f;
     }
 

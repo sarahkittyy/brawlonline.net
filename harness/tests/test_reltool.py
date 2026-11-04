@@ -151,3 +151,29 @@ def test_check_passes_a_clean_module_and_refuses_a_stale_elf(tmp_path):
     stale = make_elf(len(TEXT_WORDS) * 4 + 4, [], [])
     p = _check(tmp_path, rel_ok, stale)
     assert p.returncode != 0 and "section sizes differ" in p.stderr
+
+
+def test_a_relocation_against_no_symbol_is_named():
+    # lld's --wrap in a relocatable link left the `__real_` references so (2026-11-03): elf2rel
+    # writes 0 there without a word.
+    rel, _ = fixture(memcmp_resolved=True)
+    symbols = [("msbinLineContains__6OnlineFPCviPCc", 0, USER_SIZE, 1, 1), ("other", USER_SIZE, 0x0C, 1, 1)]
+    elf = make_elf(len(TEXT_WORDS) * 4, symbols, [(0x02, 6, 0), (0x06, 4, 0)])
+    assert reltool.dropped_refs(reltool.Elf(elf), reltool.Rel(rel)) == [
+        ("(no symbol)", "msbinLineContains__6OnlineFPCviPCc", 1, 0x02),
+        ("(no symbol)", "msbinLineContains__6OnlineFPCviPCc", 1, 0x06)]
+
+
+def test_divisions_dolphins_jit_gets_wrong():
+    def li(r: int, imm: int) -> int:
+        return 14 << 26 | r << 21 | (imm & 0xFFFF)
+
+    def divw(d: int, a: int, b: int) -> int:
+        return 31 << 26 | d << 21 | a << 16 | b << 11 | 491 << 1
+
+    lwz_r5 = 32 << 26 | 5 << 21 | 1 << 16   # lwz r5,0(r1): not a known constant
+    words = [li(5, -7), divw(3, 29, 5), li(5, 7), divw(3, 29, 5), li(5, -3), divw(3, 29, 5),
+             li(5, -7), lwz_r5, divw(3, 29, 5)] + BLR
+    assert reltool.jit_bad_divisions(reltool.Rel(make_rel(words, []))) == [(0x04, -7)]
+    assert all(reltool._jit_bad_divisor(d) for d in (-7, -14, -15, -23))
+    assert not any(reltool._jit_bad_divisor(d) for d in (-1, -2, -3, -4, -5, -6, -8, -9, 3, 7))
