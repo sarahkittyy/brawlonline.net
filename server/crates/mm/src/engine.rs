@@ -43,8 +43,9 @@
 //!   ([`crate::region`]); with no region table there is one bucket.
 //! - **Ranked**: like Unranked, but the oldest ticket takes the closest-rated opponent whose
 //!   rating is within the rating band: `ranked_band` points, widened by `ranked_band_step` for
-//!   every `ranked_band_interval` the longer-waiting of the two has waited (design 2.3: ±150,
-//!   +50 every 15 s). The ratings are the accounts' Elo ([`common::ranked`]).
+//!   every `ranked_band_interval` the longer-waiting of the two has waited (±150, +50 every 10 s,
+//!   with no cap; design 2.3's +50 every 15 s until 2026-11-05, Sarah: "+50 every 10 seconds for
+//!   elo, don't change the ping band"). The ratings are the accounts' Elo ([`common::ranked`]).
 //!
 //! - **2v2** (`docs/design/2v2.md`, 2026-11-02): four players on two teams. A ticket may name the
 //!   player's 2v2 party (a room of kind `twos`, [`crate::rooms`]); a party's players search as one
@@ -256,7 +257,7 @@ impl Default for EngineConfig {
             region_widen: Duration::from_secs(30),
             ranked_band: 150.0,
             ranked_band_step: 50.0,
-            ranked_band_interval: Duration::from_secs(15),
+            ranked_band_interval: Duration::from_secs(10),
             unranked_band: 150.0,
             unranked_band_step: 50.0,
             unranked_band_interval: Duration::from_secs(15),
@@ -4076,8 +4077,8 @@ mod tests {
         // Now 1360 waits; 1610 comes: 250 apart, outside ±150 at first.
         h.ranked(3, &u[2]);
         assert!(matches(&h.ranked(4, &u[3])).is_empty());
-        // The band grows 50 every 15 s of the longer wait: 250 needs 30 s (150 + 2 × 50).
-        assert!(matches(&h.advance(Duration::from_secs(29))).is_empty());
+        // The band grows 50 every 10 s of the longer wait: 250 needs 20 s (150 + 2 × 50).
+        assert!(matches(&h.advance(Duration::from_secs(19))).is_empty());
         let m = matches(&h.advance(Duration::from_secs(1)));
         assert_eq!(m.len(), 1);
         assert_eq!(pair_of(&m[0]), pair_key(u[2].uid, u[3].uid));
@@ -4092,14 +4093,14 @@ mod tests {
         }
         h.ranked(1, &u[0]);
         h.ranked(2, &u[1]);
-        // After 15 s the band is ±200, so 1700 would fit 1500 now; but the next ticket, 1450, is
+        // After 10 s the band is ±200, so 1700 would fit 1500 now; but the next ticket, 1450, is
         // closer, and the closest goes first.
-        h.now += Duration::from_secs(15);
+        h.now += Duration::from_secs(10);
         let m = matches(&h.ranked(3, &u[2]));
         assert_eq!(m.len(), 1);
         assert_eq!(pair_of(&m[0]), pair_key(u[0].uid, u[2].uid));
         let m = matches(&h.ranked(4, &u[3]));
-        // 1700 and 1520 (180 apart, 1700 waited 15 s: ±200) take each other.
+        // 1700 and 1520 (180 apart, 1700 waited 10 s: ±200) take each other.
         assert_eq!(m.len(), 1);
         assert_eq!(pair_of(&m[0]), pair_key(u[1].uid, u[3].uid));
     }
