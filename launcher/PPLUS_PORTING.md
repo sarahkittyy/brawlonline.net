@@ -91,7 +91,7 @@ Our game code is one Syriinge plugin, `/Project+/pf/plugins/PPOnline.rel` on P+'
 
   | State | Action (logged as) |
   |---|---|
-  | copy or manifest missing, or source path/size/mtime differ from the manifest | copy the source to `sd.raw.partial` (a copy-on-write clone with `COPYFILE_FICLONE_FORCE` where the file system has one, else a chunked copy in 8 MB chunks, flushed to disk every 64 MB, with progress; `src/utils/copy_file.ts`), patch, verify, rename (`copied`) |
+  | copy or manifest missing, or source path/size/mtime differ from the manifest, or the copy is not the source's size | copy the source to `sd.raw.partial` (a copy-on-write clone with `COPYFILE_FICLONE_FORCE` where the file system has one, else a chunked copy in 8 MB chunks, flushed to disk every 64 MB, with progress; `src/utils/copy_file.ts`; a copy whose reads end before the end of a source that is still whole fails, as does one of another size than the source), patch, verify, rename (`copied`) |
   | plugin sha256 differs from the manifest | replace the plugin inside the existing copy, keeping what the game wrote to its card (`replaced`) |
   | nothing changed | read the plugin back from the copy (~24 KB) and compare its sha256; rewrite it only on a mismatch (`repaired`), else write nothing (`unchanged`) |
 

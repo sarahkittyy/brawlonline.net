@@ -100,7 +100,13 @@ async function chunkedCopy(
       await output.datasync();
     }
     if (done < total) {
-      // It shrank: what was copied is all there is.
+      // The reads ended early. If the file shrank, what was copied is all there is; if it is still
+      // longer, the copy is short and missing the end (bug report #230: a P+ card whose last 60 MB,
+      // where Fox's and Falco's folders are, did not read played Brawl's own Fox and Falco).
+      const now = (await fs.promises.stat(src)).size;
+      if (now > done) {
+        throw new Error(`Copying ${src} stopped after ${done} of its ${now} bytes`);
+      }
       onProgress?.(done, done);
     }
   } finally {

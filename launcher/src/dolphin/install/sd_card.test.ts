@@ -9,6 +9,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { PLUGIN_SD_PATH } from "./paths";
 import type { PluginBinary } from "./sd_card";
 import {
+  describeSdCard,
   installPluginOnSdCard,
   loadPlugin,
   PPLUS_REPLAY_DIR,
@@ -229,6 +230,36 @@ describe("installPluginOnSdCard", () => {
     const res = await installPluginOnSdCard(opts(p));
     expect(res.action).toBe("copied");
     expect(await readFileHashFromImage(res.image, PLUGIN_SD_PATH)).toBe(p.sha256);
+  });
+
+  it("copies again a copy that lost its end, which the FAT and plugin checks never read (bug report #230)", async () => {
+    const p = plugin(15);
+    const first = await installPluginOnSdCard(opts(p));
+    const { size } = await fs.promises.stat(source);
+    await fs.promises.truncate(first.image, size - 64 * 1024);
+    // Its start still reads as an up-to-date copy.
+    expect(await readFileHashFromImage(first.image, PLUGIN_SD_PATH)).toBe(p.sha256);
+
+    const res = await installPluginOnSdCard(opts(p));
+    expect(res.action).toBe("copied");
+    expect((await fs.promises.stat(res.image)).size).toBe(size);
+    expect(logs.some((m) => /has \d+ bytes, its card \d+; copying it again/.test(m))).toBe(true);
+    expect((await installPluginOnSdCard(opts(p))).action).toBe("unchanged");
+  });
+
+  it("refuses a copy that came out shorter than the card", async () => {
+    const p = plugin(16);
+    const short = installPluginOnSdCard({
+      ...opts(p),
+      clone: async (s, d) => {
+        await fs.promises.copyFile(s, d);
+        await fs.promises.truncate(d, (await fs.promises.stat(s)).size - 4096);
+      },
+    });
+    await expect(short).rejects.toThrow(/copy has \d+ bytes, the card \d+/);
+    expect(fs.existsSync(path.join(out, "sd.raw"))).toBe(false);
+    expect(fs.existsSync(path.join(out, "sd.raw.partial"))).toBe(false);
+    expect(fs.existsSync(path.join(out, "manifest.json"))).toBe(false);
   });
 
   it("never writes the source card or the template", async () => {
@@ -485,6 +516,32 @@ describe("pruneGameReplays", () => {
     const res = await pruneGameReplays(bare, { lowFreeBytes: 1_000_000, targetFreeBytes: 2_000_000 });
     expect(res.deleted).toBe(0);
     await checkCard(bare);
+  });
+});
+
+describe("describeSdCard", () => {
+  it("names the fighter folders past the end of a card that lost it (bug report #230)", async () => {
+    const card = path.join(root, `describe-${n++}.raw`);
+    await makeEmptyFat32Image(card);
+    await writeOnCard(card, "/Project+/pf/fighter/captain/FitCaptain.pac", pattern(3000, 1));
+    await writeOnCard(card, "/Project+/pf/fighter/fox/FitFox.pac", pattern(3000, 2));
+    const whole = await describeSdCard(card);
+    expect(whole).toBe(`${(await fs.promises.stat(card)).size} bytes, 2 fighter folders`);
+
+    // Cut the card at Fox's folder, made after Captain's (clusters go lowest free first).
+    const bs = Buffer.alloc(512);
+    const fh = await fs.promises.open(card, "r");
+    await fh.read(bs, 0, 512, 0);
+    await fh.close();
+    const bps = bs.readUInt16LE(11);
+    const dataOffset = (bs.readUInt16LE(14) + bs[16] * bs.readUInt32LE(36)) * bps;
+    const fat = await FatImage.open(card);
+    const fox = (await fat.stat("/Project+/pf/fighter/fox"))!.firstCluster;
+    await fat.close();
+    const cut = dataOffset + (fox - 2) * bps * bs[13];
+    await fs.promises.truncate(card, cut);
+    expect(await describeSdCard(card)).toBe(`${cut} bytes, 2 fighter folders, unreadable or empty: fox`);
+    expect(await describeSdCard(path.join(root, "no card.raw"))).toBe("none");
   });
 });
 

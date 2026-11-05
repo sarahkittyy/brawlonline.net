@@ -333,7 +333,8 @@ async function exists(p: string): Promise<boolean> {
  * Makes sure `<outputDir>/sd.raw` is the user's card with the current plugin installed.
  * Idempotent: when nothing changed only the plugin and the FAT are read back and nothing is written.
  *
- * - copy missing, manifest missing, or source changed (path, size or mtime) → fresh copy + patch;
+ * - copy missing, manifest missing, source changed (path, size or mtime), or the copy's size is
+ *   not the source's → fresh copy + patch;
  * - plugin changed → the plugin is replaced inside the existing copy (keeps what the game wrote);
  * - otherwise the plugin is read back and re-written only if its sha256 does not match.
  * If patching the existing copy fails, the copy is recreated from the source once.
@@ -420,6 +421,10 @@ export async function installPluginOnSdCard(opts: SdInstallOptions): Promise<SdI
         clone: opts.clone,
         syncEvery: SD_COPY_SYNC_BYTES,
       });
+      const { size } = await fs.promises.stat(partial);
+      if (size !== srcStat.size) {
+        throw new SdCardError(`The SD card copy has ${size} bytes, the card ${srcStat.size}.`);
+      }
       const copiedIn = ((Date.now() - started) / 1000).toFixed(1);
       await prune(partial);
       if (opts.variant) {
@@ -458,6 +463,15 @@ export async function installPluginOnSdCard(opts: SdInstallOptions): Promise<SdI
   if (!imageExists || sourceChanged) {
     return freshCopy();
   }
+  // A copy of another size than its card is not whole: the game reads nothing past its end, and
+  // P+'s files there come from the disc instead (bug report #230: Brawl's own Fox, Falco and
+  // Ganondorf, whose folders are in the card's last 60 MB). The checks below read only the FAT
+  // and the plugin, both near the start.
+  const imageSize = (await fs.promises.stat(image)).size;
+  if (imageSize !== source.size) {
+    log(`The SD card copy ${image} has ${imageSize} bytes, its card ${source.size}; copying it again`);
+    return freshCopy();
+  }
   await prune(image);
 
   const patchInPlace = async (action: "replaced" | "repaired"): Promise<SdInstallResult> => {
@@ -486,6 +500,41 @@ export async function installPluginOnSdCard(opts: SdInstallOptions): Promise<SdI
     return patchInPlace("repaired");
   }
   return finish("unchanged");
+}
+
+/**
+ * For a bug report's system.txt: the card's size, and the fighter folders the FAT reader cannot
+ * read or finds empty (bug report #230: the game played Brawl's own Fox and Falco, and P+'s
+ * Fox and Falco folders are in the card's last 60 MB).
+ */
+export async function describeSdCard(image: string): Promise<string> {
+  let size: number;
+  try {
+    size = (await fs.promises.stat(image)).size;
+  } catch {
+    return "none";
+  }
+  let fat: FatImage | null = null;
+  try {
+    fat = await FatImage.open(image);
+    const fighters = (await fat.readdir("/Project+/pf/fighter")).filter(
+      (e) => e.isDirectory && !e.name.startsWith("."),
+    );
+    const bad: string[] = [];
+    for (const f of fighters) {
+      const entries = await fat.readdir(`/Project+/pf/fighter/${f.name}`).catch(() => []);
+      if (!entries.some((e) => !e.name.startsWith("."))) {
+        bad.push(f.name);
+      }
+    }
+    return `${size} bytes, ${fighters.length} fighter folders${
+      bad.length ? `, unreadable or empty: ${bad.join(" ")}` : ""
+    }`;
+  } catch (err) {
+    return `${size} bytes, not readable: ${err instanceof Error ? err.message : String(err)}`;
+  } finally {
+    await fat?.close();
+  }
 }
 
 export type SdSource = PatchedSdManifest["source"];

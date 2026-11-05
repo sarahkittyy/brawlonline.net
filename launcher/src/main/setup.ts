@@ -1,5 +1,7 @@
 import type { AccountsManager } from "@accounts/accounts_manager";
 import { IsoValidity } from "@common/types";
+import { patchedSdCardFolder } from "@dolphin/install/paths";
+import { describeSdCard, PATCHED_SD_IMAGE_NAME } from "@dolphin/install/sd_card";
 import type { DolphinManager } from "@dolphin/manager";
 import { DolphinLaunchType } from "@dolphin/types";
 import type { SettingsManager } from "@settings/settings_manager";
@@ -271,6 +273,12 @@ async function systemInfo(
     ["Playback Dolphin", dolphin(DolphinLaunchType.PLAYBACK)],
     ["Disc image set", settings.isoPath ? "yes" : "no"],
     ["Launch game on Play", settings.launchGameOnPlay],
+    // The P+ card and the copy the game boots (bug report #230: one the game could not read to its end).
+    ["SD card", await describeSdCard(dolphinManager.getInstallation(DolphinLaunchType.NETPLAY).sdCardImage)],
+    [
+      "SD card copy",
+      await describeSdCard(path.join(patchedSdCardFolder(dolphinManager.netplayFolder()), PATCHED_SD_IMAGE_NAME)),
+    ],
   ];
   return lines.map(([label, value]) => `${label}: ${String(value)}\n`).join("");
 }
