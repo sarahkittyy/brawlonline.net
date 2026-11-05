@@ -2,7 +2,7 @@ import { createHash } from "crypto";
 import fs from "fs";
 import os from "os";
 import path from "path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { copyFileWithProgress, hashFileWithProgress, throttleProgress } from "./copy_file";
 
@@ -177,6 +177,51 @@ describe("copyFileWithProgress", () => {
     // Both handles were closed (Windows refuses to delete a file that is still open).
     await fs.promises.rm(out);
     await fs.promises.rm(file);
+  });
+
+  it("keeps what was there of a file that shrank while it was copied", async () => {
+    const { file, content } = await source(10_000);
+    const out = dest();
+    const calls: [number, number][] = [];
+    await copyFileWithProgress(file, out, {
+      chunkSize: 1000,
+      clone: noClone,
+      onProgress: (d, t) => {
+        calls.push([d, t]);
+        if (calls.length === 3) {
+          fs.truncateSync(file, 3500);
+        }
+      },
+    });
+    const { size } = await fs.promises.stat(out);
+    expect(size).toBeLessThan(content.length);
+    expect(calls[calls.length - 1]).toEqual([size, size]);
+  });
+
+  it("fails when the reads end before the end of a file that is still whole (bug report #230)", async () => {
+    const { file, content } = await source(10_000);
+    const out = dest();
+    const open = fs.promises.open.bind(fs.promises);
+    const spy = vi.spyOn(fs.promises, "open").mockImplementation(async (p, flags, mode) => {
+      const fh = await open(p, flags, mode);
+      if (p === file) {
+        // Reads past 6000 bytes come back empty, as at the end of the file.
+        const read = fh.read.bind(fh) as (b: Buffer, o: number, l: number, pos: number) => Promise<unknown>;
+        Object.assign(fh, {
+          read: (b: Buffer, o: number, l: number, pos: number) =>
+            pos >= 6000 ? Promise.resolve({ bytesRead: 0, buffer: b }) : read(b, o, l, pos),
+        });
+      }
+      return fh;
+    });
+    try {
+      await expect(copyFileWithProgress(file, out, { chunkSize: 1000, clone: noClone })).rejects.toThrow(
+        /stopped after 6000 of its 10000 bytes/,
+      );
+    } finally {
+      spy.mockRestore();
+    }
+    expect(await fs.promises.readFile(file)).toEqual(content);
   });
 
   it("fails without a destination when the source is missing", async () => {
