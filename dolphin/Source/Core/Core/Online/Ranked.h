@@ -67,6 +67,10 @@ void OnPeerGone(bool early);
 // whose own PC or connection it was, when that is known for a fact and not early; else the set is
 // void, nobody rated.
 void OnQualityAbort(Gprb::PeerData::QualityCause cause, bool early);
+// The set ended in its ping check (GameSetup.h: either player cancelled at a high round trip, or
+// left before it was decided): reported as `ping_declined`, which the server voids with nobody
+// rated or at fault. No "left" or "opponent left" after it.
+void OnPingDeclined();
 // A Ranked set is under way here (Rooms' thread: `game-alive` goes out every
 // GameAlive::RANKED_EVERY, for mm's record of whose connection went).
 bool InSet();

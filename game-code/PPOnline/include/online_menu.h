@@ -35,6 +35,18 @@ namespace OnlineMenu {
     // its line.
     const PPOM::GameStep* rankedStep();
     const char* rankedText();
+    // Ranked's ping check (bug report #226): the popup over the CSS while the players are asked
+    // "Play anyway?" at a high round trip, for match_hud.cpp to draw. False when none is up.
+    enum PingPopupState { PINGUP_ASK = 0, PINGUP_WAIT = 1, PINGUP_END = 2 };
+    struct PingPopup {
+        u16 ms;          // the set's round trip
+        u8 seconds;      // left to answer
+        u8 cursor;       // PINGUP_ASK: 0 PLAY, 1 CANCEL
+        u8 state;        // PingPopupState: asking, this player chose PLAY, over (`line` says how)
+        char line[128];  // UTF-8: PINGUP_WAIT's and PINGUP_END's line (Dolphin's)
+    };
+    bool pingPopup(PingPopup* out);
+    void pingPopupDrawn();               // match_hud.cpp drew it (tests)
 
     // Rooms (docs/design/rooms.md, docs/rooms-game-interface.md). A room's CSS is the Wi-Fi CSS
     // in MODE_TEAMS (Slippi's mode 3, which the room's game ticket uses) with a room entry.

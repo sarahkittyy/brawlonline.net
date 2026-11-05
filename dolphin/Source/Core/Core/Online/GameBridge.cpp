@@ -306,8 +306,12 @@ constexpr u32 GS_PREVIEW = 0xB4, GS_PREVIEW_PLAYERS = 2, GS_PREVIEW_SIZE = 0x24;
 // u8[39] (srStageKind) from 0x104.
 constexpr u32 GS_PAGE = 0x100, GS_PAGE_STAGES = 0x104;
 constexpr size_t GS_MAX_PAGE = 39;  // P+'s most stages on a page
+// ... then Ranked's ping check (ppom.h GameStep pingMs / pingMine / pingPeer): the set's round
+// trip (u16), this player's answer and the other's (GameSetup::PingAnswer).
+constexpr u32 GS_PING = 0x12C;
 static_assert(GS_PAGE == GS_PREVIEW + 4 + GS_PREVIEW_PLAYERS * GS_PREVIEW_SIZE);
-static_assert(GS_PAGE_STAGES + GS_MAX_PAGE <= RESP_PAYLOAD);
+static_assert(GS_PAGE_STAGES + GS_MAX_PAGE <= GS_PING);
+static_assert(GS_PING + 4 <= RESP_PAYLOAD);
 constexpr u8 MODE_TEAMS = 3;
 
 // The game's OSModuleInfo list (first, last).
@@ -354,6 +358,10 @@ struct TwosRequeue
 };
 std::optional<TwosRequeue> s_twos_requeue;
 constexpr auto TWOS_REQUEUE_WINDOW = std::chrono::seconds(30);
+// Ranked: the search the game starts by itself after a set ended in its ping check
+// (GameSetup::TakePingCheckEnd), taken by that FIND_OPPONENT within TWOS_REQUEUE_WINDOW: that
+// opponent is kept apart from this player for a while (mm), as 2v2's `avoid`.
+std::optional<TwosRequeue> s_ranked_requeue;
 std::vector<u8> s_session_written;
 std::vector<u8> s_local_written;
 u32 s_session_seq = 0;
@@ -716,6 +724,13 @@ Response FindOpponent(const Core::CPUThreadGuard& guard, u32 payload, std::strin
     options.settings.after = s_twos_requeue->after;
   }
   s_twos_requeue.reset();
+  if (mode == u8(Matchmaking::Mode::Ranked) && s_ranked_requeue &&
+      std::chrono::steady_clock::now() - s_ranked_requeue->at < TWOS_REQUEUE_WINDOW)
+  {
+    options.settings.avoid = s_ranked_requeue->avoid;
+    options.settings.after = s_ranked_requeue->after;
+  }
+  s_ranked_requeue.reset();
   options.hand_off = s_hand_off.load();
   options.cancel_on_stop = true;
   options.selections["character"] = picojson::value(static_cast<double>(locked_char));
@@ -838,6 +853,10 @@ Response GameStepResponse()
     }
   }
   r.payload[GS_PREVIEW] = static_cast<u8>(previewed);
+  r.payload[GS_PING] = static_cast<u8>(v.ping_ms >> 8);
+  r.payload[GS_PING + 1] = static_cast<u8>(v.ping_ms);
+  r.payload[GS_PING + 2] = v.my_answer;
+  r.payload[GS_PING + 3] = v.peer_answer;
   // The stage select's page: a set with more stages than a page holds sends none (P+'s own
   // page, the rest struck).
   if (v.page.size() <= GS_MAX_PAGE)
@@ -846,9 +865,12 @@ Response GameStepResponse()
     std::copy(v.page.begin(), v.page.end(), r.payload.begin() + GS_PAGE_STAGES);
   }
   r.summary = fmt::format("GP_FETCH_STEP active={} type={} turn={} count={} sss={} lock={} "
-                          "time_up={} stages={} text='{}'",
+                          "time_up={} stages={} text='{}'{}",
                           v.active, u8(v.type), v.my_turn, v.count, v.to_sss, v.may_lock,
-                          v.time_up, n, v.text);
+                          v.time_up, n, v.text,
+                          v.type == GameSetup::StepType::PingCheck ?
+                              fmt::format(" ping={} answers={}/{}", v.ping_ms, v.my_answer, v.peer_answer) :
+                              std::string());
   return r;
 }
 
@@ -1223,6 +1245,43 @@ void Service(const Core::CPUThreadGuard& guard, u32 mailbox, u16 version)
           r.payload[3] = static_cast<u8>(end->kind);
           WriteU16Text(r.payload, MS_ERROR, end->text, ERROR_LEN);
           r.summary += fmt::format(" 2v2 end={} '{}'", static_cast<int>(end->kind), end->text);
+          response = r;
+          break;
+        }
+      }
+      // Ranked's ping check ended the set (GameSetup.h: a player cancelled at a high round trip,
+      // or left before it was decided): void, nobody's fault. The connection closes and the game
+      // reads IDLE with the line in the error text and `percent` 1, as a 2v2 group's end: it
+      // searches again by itself, and that search keeps away from this opponent for a while.
+      if (s_search_mode == u8(Matchmaking::Mode::Ranked) && ms.handoff == "started")
+      {
+        const auto d = ms.session.detail.find("disconnected");
+        const bool lost = d != ms.session.detail.end() && d->second.is<bool>() && d->second.get<bool>();
+        if (const std::optional<std::string> line = GameSetup::TakePingCheckEnd(lost))
+        {
+          NOTICE_LOG_FMT(NETPLAY, "GameBridge: the ranked set ended in its ping check: {}; searching "
+                                  "again",
+                         *line);
+          TwosRequeue rq;
+          rq.at = std::chrono::steady_clock::now();
+          if (ms.match)
+          {
+            rq.after = ms.match->match_id;
+            for (const auto& p : ms.match->players)
+            {
+              if (!p.is_local && !p.uid.empty())
+                rq.avoid.push_back(p.uid);
+            }
+          }
+          s_ranked_requeue = std::move(rq);
+          Ranked::OnPingDeclined();
+          Chat::AddNotice(*line);
+          Client::Cleanup();
+          Response r = MatchStateResponse(Client::GetMatchState(), false);
+          r.payload[0] = static_cast<u8>(Matchmaking::State::Idle);
+          r.payload[3] = 1;
+          WriteU16Text(r.payload, MS_ERROR, *line, ERROR_LEN);
+          r.summary += fmt::format(" ping check end '{}'", *line);
           response = r;
           break;
         }
@@ -2115,8 +2174,9 @@ void SyncSession(const Core::CPUThreadGuard& guard, const Located& loc)
       Chat::AddNotice(Gprb::Session::QUALITY_ABORT_TEXT);
       Ranked::OnQualityAbort(lobby.quality_cause, lobby.early);
     }
-    else
+    else if (!GameSetup::PingCheckPending())
     {
+      // (In Ranked's ping check the set ends as declined instead: GET_MATCH_STATE.)
       Ranked::OnPeerGone(lobby.early);
     }
     s_hud_wait = s_was_in_match ? HUD_WAIT_FRAMES : -1;

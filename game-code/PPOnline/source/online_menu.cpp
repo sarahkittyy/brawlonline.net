@@ -47,6 +47,16 @@ extern "C" {
     // team's colour only (cssCostume notes a press in g_cssTeamStep: 1 next, 0xFF back).
     u8 g_cssTeamColours = 0;
     u8 g_cssTeamStep = 0;
+    // Tests (harness, through PPOnlineMain.map): Ranked's ping check popup (tickPingPopup).
+    struct PingPopupDebug {
+        u32 shown;      // frames it was up
+        u32 answers;    // GP_COMPLETE_STEP answers sent
+        u8 cursor;      // 0 PLAY, 1 CANCEL
+        u8 choice;      // the answer sent (PPOM::PingAnswer)
+        u8 requeues;    // searches started again after a set ended in its ping check
+        u8 drawn;       // match_hud.cpp drew it (low 8 bits of its count)
+    };
+    PingPopupDebug g_pingPopup;
     extern u8 g_onlineMatchGame;
     extern u8 g_onlinePickStage;
 }
@@ -179,6 +189,21 @@ namespace OnlineMenu {
         u32 pairWaitFrames;
         bool pairLeave;
         u32 pairLeaveFrames;
+        // Ranked's ping check (bug report #226; tickPingPopup): its popup is up (since pingFrames
+        // frames), the cursor (0 PLAY, 1 CANCEL), the answer sent (PPOM::PingAnswer, 0 none),
+        // the stick's last side, and A / B still held from it once it is gone (taken out until let
+        // go). After a set ended in it: the line, shown for pingNoticeFrames, and the search to
+        // start again by itself (pingRequeue).
+        bool pingUp;
+        u32 pingFrames;
+        u8 pingCursor;
+        u8 pingChoice;
+        s8 pingStick;
+        u32 pingButtons;    // the controllers' buttons last frame (the popup's own presses)
+        bool pingRelease;
+        char pingNotice[PPOM::ERROR_LEN];
+        u32 pingNoticeFrames;
+        bool pingRequeue;
     };
     static State s;
     bool roomCss();
@@ -1370,6 +1395,10 @@ namespace OnlineMenu {
                 setStatus(s.twosNotice, false);   // the group's end, on the way to the party's CSS
                 return;
             }
+            if (s.mode == PPOM::MODE_RANKED && s.pingNoticeFrames && s.pingNotice[0]) {
+                setStatus(s.pingNotice, false);   // the set's ping check ended it
+                return;
+            }
             if (s.codePreset && s.code[0]) {
                 // The launcher's invite: the other player's code where Direct shows it.
                 // (one line: "Select your character to play ABCD#123" wrapped and was cut off)
@@ -1383,6 +1412,8 @@ namespace OnlineMenu {
             return;
         case PH_SEARCHING:
             if (s.mode == PPOM::MODE_TWOS) twosSearchStatus(buf);
+            else if (s.mode == PPOM::MODE_RANKED && s.pingNoticeFrames && s.pingNotice[0])
+                sprintf(buf, "%s - Searching...", s.pingNotice);
             else sprintf(buf, "Searching for %s", usesCode() && s.code[0] ? s.code : "opponent");
             setStatus(buf, false);
             return;
@@ -2011,6 +2042,9 @@ namespace OnlineMenu {
         runbackOff();
         s.mode = mode;
         s.phase = PH_IDLE;
+        s.pingUp = s.pingRequeue = false;
+        s.pingNotice[0] = 0;
+        s.pingNoticeFrames = 0;
         s.rankText[0] = 0;
         s.rankFrames = 0;   // Ranked: ask for the rating at once
         s.cssMsg = NULL;
@@ -2256,6 +2290,13 @@ namespace OnlineMenu {
                 char text[PPOM::ERROR_LEN];
                 PPOM::u16ToUtf8(text, sizeof(text), m.errorText, PPOM::ERROR_LEN);
                 twosEnded(m.percent, text);
+            }
+            // Ranked: the set ended in its ping check (`percent` 1): the line, and the search
+            // starts again by itself (tick).
+            if (s.mode == PPOM::MODE_RANKED && m.percent == 1) {
+                PPOM::u16ToUtf8(s.pingNotice, sizeof(s.pingNotice), m.errorText, PPOM::ERROR_LEN);
+                s.pingNoticeFrames = s.pingNotice[0] ? 600 : 0;
+                s.pingRequeue = true;
             }
             break;
         case PPOM::MM_INITIALIZING:
@@ -4067,6 +4108,7 @@ namespace OnlineMenu {
         maskButtons(BTN_START);
         if (!startHeld) s.roomStartUp = true;
         s.roomHoldStart = (startHeld && s.roomStartUp) ? s.roomHoldStart + 1 : 0;
+        if (s.pingNoticeFrames) --s.pingNoticeFrames;
         updateStatus();
         // The banner names the mode searched for (Sarah's board, 2026-11-02: "UNRANKED - Searching
         // for opponent - Hold START to cancel", same with RANKED).
@@ -4215,6 +4257,133 @@ namespace OnlineMenu {
         Labels::releaseCopies();
     }
 
+    // ---- Ranked's ping check (bug report #226; Dolphin's GameSetup.h) --------------------------
+    // Before game 1 Dolphin measures the round trip. At one the match quality would abort a game
+    // for (STEP_PING with pingMs) both players are asked in a popup over the CSS (match_hud.cpp
+    // draws it): "High ping: N ms / Play anyway?", PLAY and CANCEL, left / right moves the cursor
+    // (on CANCEL first), A chooses, B cancels. The CSS under it takes no input. It comes up while
+    // the players pick characters with A and B, so its first PING_INPUT_GUARD frames take no
+    // answer. Both PLAY: the set goes on (the character step). Either CANCEL (or no answer in
+    // time): Dolphin ends the set (void) and the game searches again by itself (onMatchState,
+    // `percent` 1), the line on the status line and the waiting room's banner.
+    static const u32 PING_INPUT_GUARD = 30;
+    static const u32 BTN_A = 0x100, BTN_DPAD_RIGHT = 0x1, BTN_DPAD_LEFT = 0x2;
+    static const int SE_CURSOR = 0, SE_DECIDE = 1;
+    static const s8 STICK_SIDE = 48;
+
+    static bool pingPopupStep()
+    {
+        return s.mode == PPOM::MODE_RANKED && s.phase == PH_CONNECTED && s.step.active &&
+               s.step.type == PPOM::STEP_PING && s.step.pingMs && stepFresh();
+    }
+
+    // The control stick's side on any controller: -1 left, 1 right, 0 neither.
+    static int stickSide()
+    {
+        u8* ps = padSystem();
+        if (!ps) return 0;
+        for (int p = 0; p < PADS; p++) {
+            s8 x = *(volatile s8*)(ps + 0x244 + 0x40 * p + 0x30);
+            if (x <= -STICK_SIDE) return -1;
+            if (x >= STICK_SIDE) return 1;
+        }
+        return 0;
+    }
+
+    // Nothing of any controller reaches the game this frame: every pad status's buttons and
+    // sticks (gfPadStatus +0x30: stick x, y, C-stick x, y).
+    static void freezePads()
+    {
+        u8* ps = padSystem();
+        if (!ps) return;
+        for (u32 off = 0x244; off < 0x944; off += 0x40) {
+            u32* f = (u32*)(ps + off);
+            for (int i = 0; i < 6; i++) f[i] = 0;
+            *(u32*)(ps + off + 0x30) = 0;
+        }
+    }
+
+    static void pingAnswer(u8 answer)
+    {
+        u8 k[2] = {answer == PPOM::PING_PLAY ? PPOM::PING_ACT_PLAY : PPOM::PING_ACT_CANCEL, 0};
+        PPOM::post(PPOM::CMD_GP_COMPLETE_STEP, k, 2);
+        s.pingChoice = answer;
+        playSE(answer == PPOM::PING_PLAY ? SE_DECIDE : SE_BACK);
+        g_pingPopup.answers++;
+        g_pingPopup.choice = answer;
+    }
+
+    // The popup's frame on the CSS: true while it is up (the caller does nothing else with the CSS
+    // this frame). Its presses are its own, from the controllers' current buttons against the last
+    // frame's: the pad statuses it empties every frame (freezePads) make the game's own pressed
+    // field repeat a held button (a D-pad press held 6 frames moved the cursor 6 times).
+    static bool tickPingPopup()
+    {
+        if (!pingPopupStep()) {
+            if (s.pingUp) {
+                s.pingUp = false;
+                s.pingRelease = true;
+            }
+            if (s.pingRelease) {
+                if (padButtons(0x0) & (BTN_A | BTN_B)) maskButtons(BTN_A | BTN_B);
+                else s.pingRelease = false;
+            }
+            return false;
+        }
+        const u32 buttons = padButtons(0x0);
+        const int stick = stickSide();
+        if (!s.pingUp) {
+            s.pingUp = true;
+            s.pingFrames = 0;
+            s.pingCursor = 1;   // CANCEL
+            s.pingChoice = PPOM::PING_NONE;
+            s.pingStick = (s8)stick;    // (what is held as it comes up is no press)
+            s.pingButtons = buttons;
+        }
+        s.pingFrames++;
+        const u32 pressed = buttons & ~s.pingButtons;
+        s.pingButtons = buttons;
+        const bool asking = s.step.pingMine == PPOM::PING_NONE && s.step.pingPeer != PPOM::PING_CANCEL &&
+                            s.pingChoice == PPOM::PING_NONE;
+        if (asking && s.pingFrames > PING_INPUT_GUARD) {
+            if ((pressed & (BTN_DPAD_LEFT | BTN_DPAD_RIGHT)) || (stick && stick != s.pingStick)) {
+                s.pingCursor ^= 1;
+                playSE(SE_CURSOR);
+            }
+            if (pressed & BTN_B) pingAnswer(PPOM::PING_CANCEL);
+            else if (pressed & BTN_A) pingAnswer(s.pingCursor == 0 ? PPOM::PING_PLAY : PPOM::PING_CANCEL);
+        }
+        s.pingStick = (s8)stick;
+        freezePads();
+        g_pingPopup.shown++;
+        g_pingPopup.cursor = s.pingCursor;
+        return true;
+    }
+
+    void pingPopupDrawn() { g_pingPopup.drawn++; }
+
+    bool pingPopup(PingPopup* out)
+    {
+        if (!s.pingUp || !pingPopupStep() || !g_onlineCss) return false;
+        out->ms = s.step.pingMs;
+        out->seconds = s.step.seconds;
+        out->cursor = s.pingCursor;
+        const bool over = s.step.pingMine == PPOM::PING_CANCEL || s.step.pingPeer == PPOM::PING_CANCEL ||
+                          s.pingChoice == PPOM::PING_CANCEL;
+        if (over) out->state = PINGUP_END;
+        else if (s.step.pingMine == PPOM::PING_PLAY || s.pingChoice == PPOM::PING_PLAY) out->state = PINGUP_WAIT;
+        else out->state = PINGUP_ASK;
+        // Dolphin's line once it has the answer ("Waiting for bob (12)", "bob chose not to play at
+        // 210 ms"); until then this player's own.
+        const bool fresh = over ? (s.step.pingMine == PPOM::PING_CANCEL || s.step.pingPeer == PPOM::PING_CANCEL)
+                                : s.step.pingMine == PPOM::PING_PLAY;
+        if (out->state == PINGUP_ASK) out->line[0] = 0;
+        else if (fresh) strncpy(out->line, s.stepText, sizeof(out->line) - 1);
+        else strcpy(out->line, over ? "Cancelled" : "Waiting...");
+        out->line[sizeof(out->line) - 1] = 0;
+        return true;
+    }
+
     void tick()
     {
         AnyoneMenu::tick();
@@ -4359,6 +4528,18 @@ namespace OnlineMenu {
             if (p >= 0 && !CodeEntry::active()) s.startAlt = altHeld(p);
         }
         maskStart();
+        // Ranked's ping check: its popup takes the controllers while it is up.
+        if (tickPingPopup()) {
+            g_onlineCssLock = 1;
+            updateStatus();
+            if (s.statusDirty && s.cssMsg) {
+                printCssStatus();
+                s.statusDirty = false;
+            }
+            pollRank();
+            showOwnCode();
+            return;
+        }
         if (s.playback) {
             // A replay: nothing the player presses here does anything (START would search, B and
             // Z would leave). Its match starts once SESSION has it, as a connected game's does.
@@ -4392,6 +4573,16 @@ namespace OnlineMenu {
         tickPairWait();
         g_cssTeamRoom = 0;   // (tickRoom sets it again in a team room)
         if (s.twosNoticeFrames) --s.twosNoticeFrames;
+        if (s.pingNoticeFrames) --s.pingNoticeFrames;
+        // Ranked: the set ended in its ping check: search again by itself (with the character on
+        // the CSS, the one searched with; none selected: START searches, the line says why).
+        if (s.mode == PPOM::MODE_RANKED && s.pingRequeue && s.phase == PH_IDLE && !CodeEntry::active()) {
+            s.pingRequeue = false;
+            if (selectedChar() >= 0) {
+                startSearch();
+                g_pingPopup.requeues++;
+            }
+        }
         // 2v2: the group ended on the plain CSS: search again (once SESSION has the party's code
         // back), or back to the party's CSS (built again, as for a launcher join).
         if (s.mode == PPOM::MODE_TWOS && !twosParty() && s.phase == PH_IDLE && !CodeEntry::active()) {

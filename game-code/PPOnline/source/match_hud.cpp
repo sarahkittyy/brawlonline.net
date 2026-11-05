@@ -13,6 +13,9 @@
 // (MuMsg::attachScnMdlSimple / attachMuObject), and the match HUD has no free node at the top
 // centre (the only in-match MuMsg, IfCenter+0x164, is the pause screen's song title).
 //
+// And over the online CSS, Ranked's ping check popup (drawPingPopup): "High ping: N ms / Play
+// anyway?" with PLAY and CANCEL (bug report #226).
+//
 // Where: gfApplication's frame loop at 0x8001792C, after the frame is drawn and before the copy
 // to the XFB (P+'s Code Menu draws at 0x80017928, the instruction before, the same way). We set
 // our own 2D projection (640x480 ortho, the HUD's space), an identity position matrix, no depth
@@ -29,6 +32,7 @@
 
 extern "C" {
     extern u8 g_onlineMatchGame;
+    int sprintf(char* buf, const char* fmt, ...);
 }
 
 namespace MatchHud {
@@ -474,11 +478,81 @@ namespace MatchHud {
         writeBP(BP_NO_SKIP_DRAWS, 0);
     }
 
+    // Ranked's ping check popup over the CSS (OnlineMenu::pingPopup; bug report #226, Sarah's
+    // board 2026-11-05: "a popup would be nice ... just 'Play anyway?'"): the screen dimmed, a box
+    // with the round trip in a dark red band (P+'s red), "Play anyway?" with the seconds left and
+    // PLAY / CANCEL, the cursor's button red; once this player has answered, the line instead
+    // (waiting for the other player, or how it ended). Drawn only: online_menu.cpp takes the
+    // controllers while it is up.
+    static const float PU_X0 = 196.0f, PU_X1 = 444.0f, PU_Y0 = 156.0f, PU_Y1 = 318.0f;
+    static const float PU_BAND = 46.0f;
+    static const float PU_BTN_Y0 = 262.0f, PU_BTN_Y1 = 298.0f, PU_BTN_W = 100.0f, PU_BTN_GAP = 16.0f;
+    static const float PU_TITLE_SCALE = 0.8f, PU_TEXT_SCALE = 0.66f, PU_BTN_SCALE = 0.66f;
+
+    // UTF-8 into `out` (n UTF-16 units with its NUL), anything under a space as a space (nothing the
+    // renderer reads as a command).
+    static void toU16(u16* out, int n, const char* in)
+    {
+        int k = 0;
+        for (int i = 0; in[i] && k < n - 1;) {
+            u16 c = PPOM::utf8Next(in, &i);
+            out[k++] = c < 0x20 ? (u16)' ' : c;
+        }
+        out[k] = 0;
+    }
+
+    // `text` centred on x at y, narrowed to `maxW` if it is wider (its height kept).
+    static void printFitted(const char* text, float x, float y, float scale, float maxW, u32 color)
+    {
+        u16 t[96];
+        toU16(t, 96, text);
+        setF32(0x24, scale * s_aspectX);
+        const float w = textWidth(t);
+        printCentredXY(t, x, y, w > maxW ? scale * maxW / w : scale, scale, color);
+    }
+
+    static void drawPingPopup()
+    {
+        OnlineMenu::PingPopup p;
+        if (!OnlineMenu::pingPopup(&p)) return;
+        begin2D();
+        s_aspectX = aspectX();
+        const float cx = (PU_X0 + PU_X1) * 0.5f, maxW = PU_X1 - PU_X0 - 24.0f;
+        quadSetup();
+        quad(-8.0f, -8.0f, SCREEN_W + 8.0f, SCREEN_H + 8.0f, 0x00000090);   // the CSS dimmed
+        quad(PU_X0 - 3.0f, PU_Y0 - 3.0f, PU_X1 + 3.0f, PU_Y1 + 3.0f, 0xE6E6E6FF);   // rim
+        quad(PU_X0, PU_Y0, PU_X1, PU_Y1, 0x1A1A22F6);
+        quad(PU_X0, PU_Y0, PU_X1, PU_Y0 + PU_BAND, 0x8C1010FF);
+        char buf[48];
+        sprintf(buf, "High ping: %u ms", (unsigned)p.ms);
+        printFitted(buf, cx, PU_Y0 + 8.0f, PU_TITLE_SCALE, maxW, 0xFFFFFFFF);
+        if (p.state == OnlineMenu::PINGUP_ASK) {
+            sprintf(buf, "Play anyway? (%u)", (unsigned)p.seconds);
+            printFitted(buf, cx, PU_Y0 + 64.0f, PU_TEXT_SCALE, maxW, 0xFFFFFFFF);
+            static const char* const LABELS[2] = {"PLAY", "CANCEL"};
+            for (int i = 0; i < 2; i++) {
+                const bool on = p.cursor == i;
+                const float x0 = cx + (i == 0 ? -PU_BTN_GAP * 0.5f - PU_BTN_W : PU_BTN_GAP * 0.5f);
+                quadSetup();
+                if (on) quad(x0 - 2.0f, PU_BTN_Y0 - 2.0f, x0 + PU_BTN_W + 2.0f, PU_BTN_Y1 + 2.0f, 0xFFFFFFFF);
+                quad(x0, PU_BTN_Y0, x0 + PU_BTN_W, PU_BTN_Y1, on ? 0xD82020FF : 0x44444CFF);
+                printFitted(LABELS[i], x0 + PU_BTN_W * 0.5f, PU_BTN_Y0 + 7.0f, PU_BTN_SCALE, PU_BTN_W - 8.0f,
+                            on ? 0xFFFFFFFF : 0xB0B0B0FF);
+            }
+        } else {
+            printFitted("Play anyway?", cx, PU_Y0 + 64.0f, PU_TEXT_SCALE, maxW, 0x9A9AA2FF);
+            printFitted(p.line, cx, PU_BTN_Y0 + 7.0f, PU_TEXT_SCALE, maxW,
+                        p.state == OnlineMenu::PINGUP_END ? 0xFF7070FF : 0xFFFFFFFF);
+        }
+        OnlineMenu::pingPopupDrawn();
+    }
+
     // Inline hook at 0x8001792C (gfApplication frame loop, `addi r3, r30, 0x118`).
     static void onFrameDrawn()
     {
         OnlineMatch::onFrameDrawn();
         draw();
+        drawPingPopup();
         drawFade();
     }
 

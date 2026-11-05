@@ -5,6 +5,8 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
+#include <cstdlib>
 #include <mutex>
 #include <random>
 
@@ -84,6 +86,39 @@ u16 s_resume_stage = NO_STAGE;
 u8 s_resume_asl = 0;
 View s_last_view;  // the last Current() (harness)
 std::mt19937 s_rng{std::random_device{}()};
+
+// Ranked's ping check (GameSetup.h). The round trip is measured from the first Current() with the
+// players connected, for up to PING_MEASURE_SECONDS once a ping has come back (all
+// Gprb::Session::PING_CHECK_SAMPLES sooner), PING_GIVE_UP_SECONDS with none (then 0: unknown,
+// the other machine's decides). A peer that has not answered PING_ANSWER_SECONDS plus Slippi's
+// WAIT_TIMEOUT_SECONDS after the popup opened declined (its game never showed it).
+constexpr double PING_CHECK_MS = Gprb::PeerData::QUALITY_PING_MILD_MS;
+constexpr double PING_MEASURE_SECONDS = 3;
+constexpr double PING_GIVE_UP_SECONDS = 8;
+constexpr auto PING_DECLINE_LINGER = std::chrono::milliseconds(1500);
+enum class PingResult
+{
+  Pending,   // measuring, or asking both players
+  Clear,     // under the abort's round trip: no question
+  Play,      // both chose to play
+  Declined,  // either cancelled (or did not answer)
+};
+struct PingCheck
+{
+  bool on = false;  // Ranked's set
+  bool started = false;
+  Clock::time_point since;    // measuring since
+  int own_ms = -1;            // this machine's, published (0: none measured)
+  int ms = -1;                // the set's (both known)
+  Clock::time_point open_at;  // the popup opened (ms at PING_CHECK_MS or more)
+  PingAnswer answer = PingAnswer::None;  // this player's
+  bool timed_out = false;     // this player did not answer in time
+  PingResult result = PingResult::Pending;
+  Clock::time_point decided_at;
+  std::string end_text;  // a decline's line
+  bool end_taken = false;
+};
+PingCheck s_ping;
 
 // gmCharacterKind -> the name the game shows (P+ v3.2's roster).
 const char* CharName(u8 kind)
@@ -417,6 +452,13 @@ std::optional<picojson::object> ToPublish(u32 game)
   }
   picojson::object o;
   o["gs"] = picojson::value(gs);
+  if (s_ping.on && s_ping.own_ms >= 0)
+  {
+    picojson::object pg;
+    pg["r"] = picojson::value(static_cast<double>(s_ping.own_ms));
+    pg["a"] = picojson::value(static_cast<double>(s_ping.answer));
+    o["pg"] = picojson::value(pg);
+  }
   std::string text = picojson::value(o).serialize();
   if (text == s_last_extra)
     return std::nullopt;
@@ -581,6 +623,138 @@ u8 PickAsl(u32 game, const Extras& extras, const Steps& e)
   return 0;
 }
 
+// The other player's ping check as its extra says (`pg`: {r: its round trip in ms, 0 none
+// measured; a: its PingAnswer}); ms -1 while it has not sent one. Another machine's bytes: checked.
+struct PeerPing
+{
+  int ms = -1;
+  PingAnswer answer = PingAnswer::None;
+};
+PeerPing PeerPingFrom(const picojson::object& extra)
+{
+  PeerPing out;
+  const auto pg = extra.find("pg");
+  if (pg == extra.end() || !pg->second.is<picojson::object>())
+    return out;
+  const auto& o = pg->second.get<picojson::object>();
+  const picojson::value* r = Field(o, "r");
+  const picojson::value* a = Field(o, "a");
+  if (r && r->is<double>() && r->get<double>() >= 0 && r->get<double>() <= 9999)
+    out.ms = static_cast<int>(r->get<double>());
+  if (a && a->is<double>() && (a->get<double>() == 1 || a->get<double>() == 2))
+    out.answer = static_cast<PingAnswer>(static_cast<int>(a->get<double>()));
+  return out;
+}
+
+double SecondsSince(Clock::time_point t)
+{
+  return std::chrono::duration<double>(Clock::now() - t).count();
+}
+
+// Under s_mutex: Ranked's ping check before the session's `game` (GameSetup.h). True while it holds
+// the set's steps back, with `v` filled in for it; `*play` when both players have just chosen to
+// play (the caller tells the session, without s_mutex). `link`: this machine's measurement.
+bool PingCheckHolds(u32 game, const Extras& extras, const Gprb::Session::LinkRoundTrip& link, View& v,
+                    bool* play)
+{
+  PingCheck& pc = s_ping;
+  if (!pc.on || game != 1 || pc.result == PingResult::Clear || pc.result == PingResult::Play)
+    return false;
+  if (!pc.started)
+  {
+    pc.started = true;
+    pc.since = Clock::now();
+  }
+  const std::string peer_name = SideNames(1 - s_local);
+  if (pc.own_ms < 0)
+  {
+    const double waited = SecondsSince(pc.since);
+    if (link.samples >= Gprb::Session::PING_CHECK_SAMPLES ||
+        (link.samples >= 1 && waited >= PING_MEASURE_SECONDS) || waited >= PING_GIVE_UP_SECONDS)
+    {
+      // Tests: PPR_PING_CHECK_TEST_MS=<ms> is this machine's round trip.
+      static const char* test_ms = std::getenv("PPR_PING_CHECK_TEST_MS");
+      const double game_rtt =
+          test_ms ? std::strtod(test_ms, nullptr) :
+          link.samples && link.median_ms >= 0 ? Gprb::Session::GameRoundTrip(link.median_ms) : 0.0;
+      pc.own_ms = std::clamp(static_cast<int>(std::lround(game_rtt)), 0, 9999);
+      NOTICE_LOG_FMT(NETPLAY, "GameSetup: ping check: our round trip {} ms ({} ping(s), median {:.0f} "
+                              "ms, after {:.1f} s){}",
+                     pc.own_ms, link.samples, link.median_ms, waited, test_ms ? " (test)" : "");
+    }
+  }
+  const PeerPing peer = PeerPingFrom(extras[s_side_ports[1 - s_local]]);
+  if (pc.ms < 0 && pc.own_ms >= 0 && peer.ms >= 0)
+  {
+    pc.ms = std::max(pc.own_ms, peer.ms);
+    if (pc.ms < PING_CHECK_MS)
+    {
+      pc.result = PingResult::Clear;
+      NOTICE_LOG_FMT(NETPLAY, "GameSetup: ping check: {} ms (ours {}, theirs {}): playing", pc.ms,
+                     pc.own_ms, peer.ms);
+      return false;
+    }
+    pc.open_at = Clock::now();
+    NOTICE_LOG_FMT(NETPLAY, "GameSetup: ping check: {} ms (ours {}, theirs {}): asking both players",
+                   pc.ms, pc.own_ms, peer.ms);
+  }
+  v.type = StepType::PingCheck;
+  v.may_lock = false;
+  if (pc.ms < 0)
+  {
+    // (No name yet: leaving is still free here, and the name would say whom it dodges.)
+    v.text = "Checking the connection...";
+    return true;
+  }
+  const double elapsed = SecondsSince(pc.open_at);
+  if (pc.answer == PingAnswer::None && elapsed >= PING_ANSWER_SECONDS)
+  {
+    pc.answer = PingAnswer::Cancel;
+    pc.timed_out = true;
+    NOTICE_LOG_FMT(NETPLAY, "GameSetup: ping check: no answer in {} s: cancelled",
+                   PING_ANSWER_SECONDS);
+  }
+  const bool peer_stuck =
+      peer.answer == PingAnswer::None && elapsed >= PING_ANSWER_SECONDS + WAIT_TIMEOUT_SECONDS;
+  const std::string who = peer_name.empty() ? "Opponent" : peer_name;
+  if (pc.result == PingResult::Pending)
+  {
+    if (pc.answer == PingAnswer::Cancel || peer.answer == PingAnswer::Cancel || peer_stuck)
+    {
+      pc.result = PingResult::Declined;
+      pc.decided_at = Clock::now();
+      if (pc.answer == PingAnswer::Cancel)
+        pc.end_text = pc.timed_out ? fmt::format("No answer: not played at {} ms", pc.ms) :
+                                     fmt::format("You cancelled ({} ms ping)", pc.ms);
+      else if (peer.answer == PingAnswer::Cancel)
+        pc.end_text = fmt::format("{} chose not to play at {} ms", who, pc.ms);
+      else
+        pc.end_text = fmt::format("{} did not answer", who);
+      NOTICE_LOG_FMT(NETPLAY, "GameSetup: ping check: declined ({}; ours {}, theirs {})",
+                     pc.end_text, static_cast<int>(pc.answer), static_cast<int>(peer.answer));
+    }
+    else if (pc.answer == PingAnswer::Play && peer.answer == PingAnswer::Play)
+    {
+      pc.result = PingResult::Play;
+      *play = true;
+      NOTICE_LOG_FMT(NETPLAY, "GameSetup: ping check: both play at {} ms", pc.ms);
+      return false;
+    }
+  }
+  v.ping_ms = static_cast<u16>(std::min(pc.ms, 0xFFFF));
+  v.my_answer = static_cast<u8>(pc.answer);
+  v.peer_answer = static_cast<u8>(peer.answer);
+  v.my_turn = pc.answer == PingAnswer::None && pc.result == PingResult::Pending;
+  v.seconds = static_cast<u8>(std::clamp(PING_ANSWER_SECONDS - static_cast<int>(elapsed), 0, 99));
+  if (pc.result == PingResult::Declined)
+    v.text = pc.end_text;
+  else if (v.my_turn)
+    v.text = fmt::format("High ping: {} ms - Play anyway? ({})", pc.ms, v.seconds);
+  else
+    v.text = fmt::format("Waiting for {} ({})", peer_name.empty() ? "opponent" : peer_name, v.seconds);
+  return true;
+}
+
 Gprb::Session::StageDecision Decide(u32 game)
 {
   // Called by the session with its lock held: read the players' extras first, then take ours.
@@ -642,6 +816,7 @@ void Begin(int local_port, std::vector<u16> starters, std::vector<u16> counterpi
                                                         std::move(counterpicks)));
   std::lock_guard lk(s_mutex);
   s_both_pick_first = true;
+  s_ping.on = true;
 }
 
 void Begin(int local_port, const SetTicket& ticket, int host_port, bool alternate_stages)
@@ -758,6 +933,7 @@ void Begin(int local_port, Format format)
     s_resume_asl = 0;
     s_alternates = false;
     s_pick_asl = 0;
+    s_ping = PingCheck{};
   }
   Gprb::Session::SetLocalExtra({});
   Gprb::Session::SetStageDecider(Decide);
@@ -835,6 +1011,25 @@ bool Act(u8 kind, u8 asl)
   const Extras extras = PlayerExtras();
   const Locks locks = PlayerLocks();
   std::optional<picojson::object> publish;
+  if (kind == PING_ACT_PLAY || kind == PING_ACT_CANCEL)
+  {
+    // The ping check's popup: this player's answer, once, while it is asked.
+    {
+      std::lock_guard lk(s_mutex);
+      if (!s_active || !lobby.active || lobby.in_match || !s_ping.on || s_ping.ms < 0 ||
+          s_ping.result != PingResult::Pending || s_ping.answer != PingAnswer::None)
+      {
+        return false;
+      }
+      s_ping.answer = kind == PING_ACT_PLAY ? PingAnswer::Play : PingAnswer::Cancel;
+      NOTICE_LOG_FMT(NETPLAY, "GameSetup: ping check: we {} at {} ms",
+                     kind == PING_ACT_PLAY ? "play" : "cancel", s_ping.ms);
+      publish = ToPublish(lobby.game);
+    }
+    if (publish)
+      Gprb::Session::SetLocalExtra(*publish);
+    return true;
+  }
   {
     std::lock_guard lk(s_mutex);
     if (!s_active || !lobby.active || lobby.in_match || lobby.setup_ready)
@@ -879,7 +1074,9 @@ View Current()
   const Gprb::Session::Lobby lobby = Gprb::Session::GetLobby();
   const Extras extras = PlayerExtras();
   const Locks locks = PlayerLocks();
+  const Gprb::Session::LinkRoundTrip link = Gprb::Session::GetLinkRoundTrip();
   View v;
+  bool play_at_ping = false;
   std::optional<picojson::object> publish;
   {
     std::lock_guard lk(s_mutex);
@@ -950,7 +1147,11 @@ View Current()
     // P+ is character first (the user's, 2026-10-19): the characters on the CSS, then the stage
     // steps on the stage select.
     const CharOrder order = CharOrderOf(game);
-    if (order != CharOrder::None && !(SideLocked(0, game, locks) && SideLocked(1, game, locks)))
+    if (PingCheckHolds(game, extras, link, v, &play_at_ping))
+    {
+      // Ranked's ping check (GameSetup.h): no characters or stages until it is decided.
+    }
+    else if (order != CharOrder::None && !(SideLocked(0, game, locks) && SideLocked(1, game, locks)))
     {
       const bool pair = s_members[0].size() > 1;
       v.type = StepType::Char;
@@ -1086,7 +1287,40 @@ View Current()
   }
   if (publish)
     Gprb::Session::SetLocalExtra(*publish);
+  if (play_at_ping)
+    Gprb::Session::SetQualityIgnorePing(true);
   return v;
+}
+
+std::optional<std::string> TakePingCheckEnd(bool link_lost)
+{
+  std::lock_guard lk(s_mutex);
+  PingCheck& pc = s_ping;
+  if (!s_active || !pc.on || pc.end_taken)
+    return std::nullopt;
+  if (pc.result == PingResult::Declined &&
+      (link_lost || Clock::now() - pc.decided_at >= PING_DECLINE_LINGER))
+  {
+    pc.end_taken = true;
+    return pc.end_text;
+  }
+  if (pc.result == PingResult::Pending && link_lost)
+  {
+    pc.end_taken = true;
+    pc.result = PingResult::Declined;
+    const std::string who = SideNames(1 - s_local);
+    pc.end_text = fmt::format("{} left", who.empty() ? "Opponent" : who);
+    NOTICE_LOG_FMT(NETPLAY, "GameSetup: ping check: the other player left before it was decided");
+    return pc.end_text;
+  }
+  return std::nullopt;
+}
+
+bool PingCheckPending()
+{
+  std::lock_guard lk(s_mutex);
+  return s_active && s_ping.on && !s_ping.end_taken &&
+         (s_ping.result == PingResult::Pending || s_ping.result == PingResult::Declined);
 }
 
 bool OpponentStalled()
@@ -1115,6 +1349,14 @@ picojson::object Status()
   o["presses"] = picojson::value(static_cast<double>(s_presses.size()));
   o["host_lists"] = picojson::value(picojson::array{KindsJson(s_host.actions[0]), KindsJson(s_host.actions[1])});
   o["opponent_stalled"] = picojson::value(s_opponent_stalled);
+  picojson::object ping;
+  ping["on"] = picojson::value(s_ping.on);
+  ping["own_ms"] = picojson::value(static_cast<double>(s_ping.own_ms));
+  ping["ms"] = picojson::value(static_cast<double>(s_ping.ms));
+  ping["answer"] = picojson::value(static_cast<double>(s_ping.answer));
+  ping["result"] = picojson::value(static_cast<double>(s_ping.result));
+  ping["end_text"] = picojson::value(s_ping.end_text);
+  o["ping_check"] = picojson::value(ping);
   picojson::array st;
   for (const u16 k : s_format.starters)
     st.emplace_back(static_cast<double>(k));
@@ -1131,6 +1373,9 @@ picojson::object Status()
   view["seconds"] = picojson::value(static_cast<double>(s_last_view.seconds));
   view["stage"] = picojson::value(static_cast<double>(s_last_view.stage));
   view["text"] = picojson::value(s_last_view.text);
+  view["ping_ms"] = picojson::value(static_cast<double>(s_last_view.ping_ms));
+  view["my_answer"] = picojson::value(static_cast<double>(s_last_view.my_answer));
+  view["peer_answer"] = picojson::value(static_cast<double>(s_last_view.peer_answer));
   picojson::array sel;
   for (const u8 k : s_last_view.selectable)
     sel.emplace_back(static_cast<double>(k));

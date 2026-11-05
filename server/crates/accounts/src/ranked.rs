@@ -666,8 +666,9 @@ pub struct ReportLeaveReq {
     pub uid: String,
     pub play_key: String,
     pub match_id: String,
-    /// `left` (this player left the set), `opponent_left` (the opponent disconnected) or
-    /// `match_quality` (the game was aborted for its match quality: the set is void).
+    /// `left` (this player left the set), `opponent_left` (the opponent disconnected),
+    /// `match_quality` (the game was aborted for its match quality: the set is void) or
+    /// `ping_declined` (the set ended in its ping check before game 1: void).
     pub kind: String,
     /// With `left`: this player's game had not been sent to the set's stage select yet (a search
     /// cancelled as the match was made). With no game played the set is not rated.
@@ -690,7 +691,7 @@ pub async fn report_leave(State(state): State<AppState>, Json(req): Json<ReportL
     players_match(&state.pool, &req.match_id, uid).await?;
     let kind = Leave::parse(&req.kind).ok_or_else(|| ApiError::bad_request("invalid_kind", "Unknown leave kind"))?;
     let before_stage_select = req.before_stage_select && kind == Leave::Left;
-    let early = req.early.filter(|_| kind != Leave::Left);
+    let early = req.early.filter(|_| matches!(kind, Leave::OpponentLeft | Leave::MatchQuality));
     let cause = req.cause.as_deref().and_then(Cause::parse).filter(|_| kind == Leave::MatchQuality);
     sqlx::query(
         "INSERT INTO leave_reports (match_id, reporter, kind, created_at, before_stage_select, early, cause)

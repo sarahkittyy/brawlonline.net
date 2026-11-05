@@ -863,10 +863,11 @@ void Matchmaking::StartMatchmaking()
   picojson::object search;
   search["mode"] = picojson::value(static_cast<double>(m_search_settings.mode));
   search["connectCode"] = picojson::value(std::move(connect_code_buf));
-  if (m_search_settings.mode == Mode::Twos)
+  if (m_search_settings.mode == Mode::Twos || m_search_settings.mode == Mode::Ranked)
   {
     // docs/design/2v2.md: a search started again by itself goes first; players the last match
-    // could not connect to are kept out of the next groups.
+    // could not connect to are kept out of the next groups. Ranked: the opponent of a set that
+    // ended in its ping check (GameSetup.h), kept apart for a while.
     if (m_search_settings.requeue)
       search["requeue"] = picojson::value(true);
     if (!m_search_settings.avoid.empty())

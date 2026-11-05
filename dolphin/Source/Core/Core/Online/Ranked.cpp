@@ -633,6 +633,17 @@ void OnQualityAbort(Gprb::PeerData::QualityCause cause, bool early)
   EnqueueResult();
 }
 
+void OnPingDeclined()
+{
+  std::lock_guard lk(s_mutex);
+  if (!s_active || s_set_over || s_peer_gone || s_left_reported)
+    return;
+  s_peer_gone = true;
+  NOTICE_LOG_FMT(NETPLAY, "Ranked: set {} not played: declined at its ping check", s_match_id);
+  EnqueueLeave(s_match_id, "ping_declined");
+  EnqueueResult();
+}
+
 bool InSet()
 {
   std::lock_guard lk(s_mutex);

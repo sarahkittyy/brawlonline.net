@@ -75,7 +75,11 @@
 //! held back. Two
 //! players who just played each other (each one's last Unranked or Ranked opponent, within
 //! `rematch_memory`) are held back the same way until the longer-waiting has waited
-//! `rematch_hold` (60 s), so anyone else searching meanwhile is paired first.
+//! `rematch_hold` (60 s), so anyone else searching meanwhile is paired first. Two Ranked players
+//! whose set ended in its ping check (bug report #226: the real round trip was one the game's
+//! match quality aborts a game for, and either chose not to play it) are not paired again for
+//! `ranked_avoid` (3 h): each game's next search names the other (`search.avoid`, `after`), which
+//! counts only when it is that player's last opponent.
 //!
 //! Rooms (`crate::rooms`, `docs/rooms-protocol.md`) live on **online connections**: a game that
 //! is running and logged in keeps one connection open (`hello`, then `room-*` requests), which is
@@ -235,6 +239,9 @@ pub struct EngineConfig {
     /// 2v2: two players one of whose connect to the other failed are grouped again only after this
     /// long (`search.avoid`).
     pub twos_avoid: Duration,
+    /// Ranked: two players whose set ended in its ping check (`search.avoid`) are paired again only
+    /// after this long.
+    pub ranked_avoid: Duration,
 }
 
 impl Default for EngineConfig {
@@ -278,6 +285,7 @@ impl Default for EngineConfig {
             live: LiveConfig::default(),
             game_stall: Duration::from_secs(30),
             twos_avoid: Duration::from_secs(600),
+            ranked_avoid: Duration::from_secs(3 * 3600),
         }
     }
 }
@@ -475,6 +483,8 @@ struct Pending {
     pair_room: bool,
     /// A 2v2 ticket's own fields.
     twos: Option<TwosSearch>,
+    /// A Ranked ticket after a set that ended in its ping check: that opponent and that match.
+    ranked_avoid: Option<(Uuid, Option<String>)>,
 }
 
 /// What a 2v2 ticket says besides its mode (`search.connectCode`, `requeue`, `avoid`, `after`).
@@ -674,6 +684,8 @@ pub struct Engine {
     twos: Vec<ConnId>,
     /// 2v2: pairs of players (sorted uids) one of whose connect to the other failed, and when.
     twos_avoid: HashMap<(Uuid, Uuid), Instant>,
+    /// Ranked: pairs of players (sorted uids) whose set ended in its ping check, and when.
+    ranked_avoid: HashMap<(Uuid, Uuid), Instant>,
     /// 2v2 matches made lately: their players and when, for `twos-off` (a player's connect failed).
     twos_matches: HashMap<String, (Vec<Uuid>, Instant)>,
     /// Recently matched pairs (sorted uids), to space out re-pairing after a
@@ -800,6 +812,7 @@ impl Engine {
             ranked: Vec::new(),
             twos: Vec::new(),
             twos_avoid: HashMap::new(),
+            ranked_avoid: HashMap::new(),
             twos_matches: HashMap::new(),
             history: HashMap::new(),
             last_opponent: HashMap::new(),
@@ -1625,6 +1638,7 @@ impl Engine {
             game_alive: h.game_alive,
             pair_room: h.pair_room,
             twos: None,
+            ranked_avoid: None,
         };
         if let Some(c) = self.conns.get_mut(&conn) {
             c.state = State::Validating(pending);
@@ -1703,6 +1717,16 @@ impl Engine {
             }),
             _ => None,
         };
+        // Ranked: the opponent of the last set, which ended in its ping check.
+        let ranked_avoid = match mode {
+            Mode::Ranked => t
+                .search
+                .avoid
+                .first()
+                .and_then(|u| Uuid::parse_str(u.trim()).ok())
+                .map(|u| (u, t.search.after.clone().filter(|m| m.len() <= 128))),
+            _ => None,
+        };
         let Some(addr) = self.conns.get(&conn).map(|c| c.addr) else { return };
         // The game cannot use an IPv6 peer address (it splits `ipAddress` on ':'), and an empty
         // one crashes older clients, so such tickets are refused before they can be matched.
@@ -1728,6 +1752,7 @@ impl Engine {
             game_alive: false,
             pair_room: false,
             twos,
+            ranked_avoid,
         };
         if let Some(c) = self.conns.get_mut(&conn) {
             c.state = State::Validating(pending);
@@ -1854,6 +1879,9 @@ impl Engine {
             self.unranked.push(conn);
             self.pair_queue(Mode::Unranked, now, wall, out);
         } else if p.mode == Mode::Ranked {
+            if let Some((other, after)) = &p.ranked_avoid {
+                self.ranked_ping_declined(now, uid, *other, after.as_deref());
+            }
             let rating = self.conns.get(&conn).and_then(|c| match &c.state {
                 State::Waiting(w) => Some(w.user.rating),
                 _ => None,
@@ -2090,6 +2118,8 @@ impl Engine {
         self.group_twos(now, wall, out);
         let avoid = self.cfg.twos_avoid;
         self.twos_avoid.retain(|_, at| now.saturating_duration_since(*at) < avoid);
+        let avoid = self.cfg.ranked_avoid;
+        self.ranked_avoid.retain(|_, at| now.saturating_duration_since(*at) < avoid);
         self.twos_matches.retain(|_, (_, at)| now.saturating_duration_since(*at) < TWOS_MATCH_MEMORY);
         let window = self.cfg.requeue_window;
         self.history.retain(|_, h| now.saturating_duration_since(h.last_match) < window);
@@ -2267,6 +2297,9 @@ impl Engine {
             let mut retry: Option<(ConnId, u32, (f64, f64))> = None;
             for (b, wb) in &queue[i + 1..] {
                 if wa.user.uid == wb.user.uid {
+                    continue;
+                }
+                if ranked && self.ranked_avoid.contains_key(&pair_key(wa.user.uid, wb.user.uid)) {
                     continue;
                 }
                 if wa.region != wb.region && !widened(wa) && !widened(wb) {
@@ -2474,6 +2507,19 @@ impl Engine {
         for (conn, _, _) in &entrants {
             self.finish(out, *conn);
         }
+    }
+
+    /// A Ranked search after a set that ended in its ping check (`avoid`, `after`): that opponent is
+    /// kept apart from this player for `ranked_avoid`. Only this player's last opponent counts, so a
+    /// game cannot keep anyone else away.
+    fn ranked_ping_declined(&mut self, now: Instant, uid: Uuid, other: Uuid, after: Option<&str>) {
+        let last = self.last_opponent.get(&uid).is_some_and(|(o, _)| *o == other);
+        if !last || other == uid {
+            tracing::info!(%uid, %other, ?after, "ranked avoid ignored: not the last opponent");
+            return;
+        }
+        tracing::info!(%uid, %other, ?after, "ranked pair kept apart: the set ended in its ping check");
+        self.ranked_avoid.insert(pair_key(uid, other), now);
     }
 
     /// A 2v2 search that comes after a failed connect (`avoid`, `after`): those players are kept
@@ -3985,6 +4031,50 @@ mod tests {
         h.advance(Duration::ZERO);
         search(&mut h, &u[0]);
         assert_eq!(matches(&search(&mut h, &u[1])).len(), 1);
+    }
+
+    /// Bug report #226: two Ranked players whose set ended in its ping check search again naming
+    /// each other (`avoid`, `after`): they are not paired for `ranked_avoid`, anyone else is, and
+    /// an `avoid` naming someone who was not the player's last opponent keeps nobody away.
+    #[test]
+    fn ranked_players_who_declined_their_ping_are_kept_apart() {
+        let mut h = Harness::new(EngineConfig::default());
+        let u = h.rated(&[1500.0, 1510.0, 1520.0, 1530.0]);
+        let mut conn = 0;
+        let mut search = |h: &mut Harness, who: &MmUser, avoid: Option<&MmUser>| -> Vec<Output> {
+            conn += 1;
+            h.connect(conn, 41000);
+            let mut v = h.ticket_json(who, "", 0);
+            if let Some(a) = avoid {
+                v["search"]["avoid"] = json!([a.uid.to_string()]);
+                v["search"]["after"] = json!("mode.ranked-x");
+            }
+            h.raw(conn, v.to_string().as_bytes())
+        };
+        search(&mut h, &u[0], None);
+        assert_eq!(matches(&search(&mut h, &u[1], None)).len(), 1);
+        // Declined at the ping check a few seconds later: both search again at once.
+        h.now += Duration::from_secs(25);
+        h.advance(Duration::ZERO);
+        search(&mut h, &u[0], Some(&u[1]));
+        assert!(matches(&search(&mut h, &u[1], Some(&u[0]))).is_empty());
+        // Not after the rematch hold either; someone else comes along and is paired.
+        assert!(matches(&h.advance(Duration::from_secs(120))).is_empty());
+        let m = matches(&search(&mut h, &u[2], None));
+        assert_eq!(m.len(), 1);
+        assert_eq!(pair_of(&m[0]), pair_key(u[0].uid, u[2].uid));
+        // u3 names u1, whom it never played: nobody is kept away.
+        assert_eq!(h.e.ranked_avoid.len(), 1);
+        let m = matches(&search(&mut h, &u[3], Some(&u[1])));
+        assert_eq!(m.len(), 1);
+        assert_eq!(pair_of(&m[0]), pair_key(u[1].uid, u[3].uid));
+        assert_eq!(h.e.ranked_avoid.len(), 1);
+        // Three hours on, u0 and u1 may meet again.
+        h.now += Duration::from_secs(3 * 3600);
+        h.advance(Duration::ZERO);
+        assert!(h.e.ranked_avoid.is_empty());
+        search(&mut h, &u[0], None);
+        assert_eq!(matches(&search(&mut h, &u[1], None)).len(), 1);
     }
 
     #[test]
