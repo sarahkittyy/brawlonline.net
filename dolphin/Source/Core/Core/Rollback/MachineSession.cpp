@@ -488,6 +488,10 @@ struct State
   } probe;
   // Where mm saw this player's probe come from (SetRoom logs it once per change).
   std::string seen_endpoint;
+  // This player's name as the room has it (SetRoom). opts.name is empty in rooms: ModsRoom arms
+  // the session before the login has the display name (bug report #227: "a desync between Player
+  // 1 and EXSeismo", where Player 1 was Jaaames).
+  std::string room_name;
   // A machine image on its way to this joiner (net thread): header, then the compressed bytes.
   struct ImageRx
   {
@@ -2719,6 +2723,7 @@ void StopNetwork()
   s.gekko_rx.clear();
   s.gekko_tx.clear();
   s.seen_endpoint.clear();
+  s.room_name.clear();
 }
 
 // ------------------------------------------------------------------------------ GekkoNet adapter
@@ -5493,8 +5498,9 @@ void EpochStep(Core::System& system)
     }
     if (count > 0)
     {
-      const std::string self =
-          s.opts.name.empty() ? fmt::format("Player {}", s.opts.local_slot + 1) : s.opts.name;
+      const std::string self = !s.room_name.empty() ? s.room_name :
+                               !s.opts.name.empty() ? s.opts.name :
+                                                      fmt::format("Player {}", s.opts.local_slot + 1);
       AddLog(fmt::format("player {} cannot join: the game of {} differs from this one", joiner + 1,
                          differ));
       refused_why = fmt::format("the players' games differ (a desync between {} and {}), so the "
@@ -7440,6 +7446,8 @@ void SetRoom(int local_slot, const std::vector<RoomMember>& members)
       by_slot[m.slot] = &m;
   }
   const RoomMember* self = by_slot[local_slot];
+  if (self && !self->name.empty())
+    s.room_name = self->name;
   if (self && !self->host.empty())
   {
     // Where the peers punch to. A port other than the socket's means the router changes it, and
