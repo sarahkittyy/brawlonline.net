@@ -794,6 +794,9 @@ namespace
 constexpr auto HOST_PAD_LATCH_MAX_AGE = std::chrono::milliseconds(100);
 // How far behind schedule a read may come and still count as on time (the throttle's wake-up).
 constexpr auto HOST_PAD_LATE = std::chrono::milliseconds(1);
+// HostDecodeReadAt waits for its due time when it comes at most this early (a paced sleep's lead:
+// the frames of a rollback times their cost, plus a margin); earlier than that it reads now.
+constexpr auto HOST_PAD_DEFERRED_MAX_WAIT = std::chrono::milliseconds(17);
 // Further behind than this (a field), a read takes the controller as it is now; it still stands
 // for its due instant. A PC that cannot keep full speed runs up to MaxFallback (100 ms and more)
 // behind its schedule on every frame, and the history gave its player the controller of that long
@@ -837,6 +840,10 @@ struct HostPads
   std::array<Clock::time_point, 4> pass_instant{};
   bool pass_instant_valid = false;
   HostPadReadStats stats{};
+  // Each channel's source as the SI last read it (HostDecodeReadAt reads it the same way), and
+  // that read's due time on the schedule (outside a re-run).
+  std::array<std::optional<HostPadSource>, 4> source{};
+  std::array<std::optional<Clock::time_point>, 4> last_due{};
 };
 HostPads s_host_pads;
 
@@ -1051,6 +1058,7 @@ GCPadStatus ReadHostPad(Core::System& system, int chan, HostPadSource source)
       h.instant[chan] = now;
     return ReadHostPadNow(chan, source);
   }
+  h.source[chan] = source;
   if (const u32 gen = h.generation.load(std::memory_order_relaxed); gen != h.seen_generation)
   {
     h.seen_generation = gen;
@@ -1087,6 +1095,7 @@ GCPadStatus ReadHostPad(Core::System& system, int chan, HostPadSource source)
   Clock::time_point data_at = now;
   const char* kind = "now";
   const std::optional<Clock::time_point> due = ct.ScheduledHostTime();
+  h.last_due[chan] = due;
   if (due && *due < now)
   {
     const auto behind = now - *due;
@@ -1227,6 +1236,59 @@ bool PadsHostDecoded(int chan, std::array<u8, Addr::PAD_STRIDE>* pad, Clock::tim
   *pad = e.pad;
   *instant = e.instant;
   ++h.stats.decode_used;
+  return true;
+}
+
+bool HostDecodeReadAt(Core::System& system, int chan, std::array<u8, Addr::PAD_STRIDE>* pad,
+                      Clock::time_point* instant)
+{
+  HostPads& h = s_host_pads;
+  if (chan < 0 || chan >= 4 || !HostDecodeEnabled() || s_decode.off ||
+      s_decode.guest_error[chan] || s_decode.suspended[chan] || !h.source[chan] ||
+      !h.last_due[chan] || !h.scheduled.load(std::memory_order_relaxed))
+  {
+    ++h.stats.deferred_declined;
+    return false;
+  }
+  const HostPadSource source = *h.source[chan];
+  // The due time of the SI read the loop top took, which came that much early: Brawl polls just
+  // before its loop top, ~1 ms of the schedule before the loop top's own due time.
+  const Clock::time_point due = *h.last_due[chan];
+  Clock::time_point now = Clock::now();
+  if (now < due && due - now <= HOST_PAD_DEFERRED_MAX_WAIT)
+  {
+    system.GetCoreTiming().SleepUntil(due);
+    now = Clock::now();
+  }
+  // As ReadHostPad on the schedule: now when on time (or ahead), else the state at `due`.
+  GCPadStatus st{};
+  *instant = now;
+  if (due < now && now - due > HOST_PAD_LATE)
+  {
+    std::optional<GCPadStatus> then;
+    if (now - due <= HostPadFarLate())
+      then = ReadHostPadAt(chan, source, due);
+    st = then ? *then : ReadHostPadNow(chan, source);
+    *instant = due;
+  }
+  else
+  {
+    st = ReadHostPadNow(chan, source);
+  }
+  if (!st.isConnected)
+  {
+    ++h.stats.deferred_declined;
+    return false;
+  }
+  HostDecodePadSlot(st, s_decode.origin[chan], HostDecodeLightPresses(system.GetMemory(), chan),
+                    pad->data());
+  if ((st.button & PAD_BUTTON_START) && HostDecodeHoldsStart(system.GetMemory(), chan))
+  {
+    (*pad)[2] &= ~(PAD_BUTTON_START >> 8);
+    (*pad)[6] = (*pad)[2];
+  }
+  ++h.stats.deferred_read;
+  LogRead(chan, now, due, false, "deferred", st, *instant);
   return true;
 }
 
