@@ -28,6 +28,7 @@ enum class StepType : u8
   Char = 3,    // the characters (winner, then loser)
   Done = 4,    // the stage is decided and nothing is left to do for it
   Resume = 5,  // a desynced game starts again: every player readies up with the same character
+  PingCheck = 6,  // Ranked, before game 1: the round trip is checked, and a high one asked about
 };
 
 struct Format

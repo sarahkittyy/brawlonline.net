@@ -174,7 +174,14 @@ namespace PPOM {
     // (winner first). 0xC0 GP_COMPLETE_STEP request payload: {u8 stage kind} (a strike or pick).
     // STEP_RESUME: a desynced game starts again (Ranked, a room's set): the characters stay, START
     // readies up (timeUp: readied for the player), no stage select.
-    enum StepType { STEP_NONE = 0, STEP_STRIKE = 1, STEP_PICK = 2, STEP_CHAR = 3, STEP_DONE = 4, STEP_RESUME = 5 };
+    // STEP_PING: Ranked, before game 1 (bug report #226): the round trip is being checked (pingMs
+    // 0), or it is one the match quality would abort a game for (pingMs) and both players are
+    // asked "Play anyway?" (online_menu.cpp's popup; the answer: GP_COMPLETE_STEP PING_ACT_PLAY /
+    // PING_ACT_CANCEL). No lock-in meanwhile.
+    enum StepType { STEP_NONE = 0, STEP_STRIKE = 1, STEP_PICK = 2, STEP_CHAR = 3, STEP_DONE = 4, STEP_RESUME = 5,
+                    STEP_PING = 6 };
+    enum PingAnswer { PING_NONE = 0, PING_PLAY = 1, PING_CANCEL = 2 };
+    const u8 PING_ACT_PLAY = 0xF1, PING_ACT_CANCEL = 0xF2;
     struct GameStep {     // 0xC1 GP_FETCH_STEP response payload
         u8 active;        // a ranked game setup runs (else the CSS works as in Unranked)
         u8 type;          // StepType
@@ -208,7 +215,12 @@ namespace PPOM {
         u8 _pagePad[3];
         u8 page[39];
         u8 _pageEnd;
-    };                    // 0x12C
+        // STEP_PING: the set's round trip (ms, 0 while it is measured) and the two answers
+        // (PingAnswer). A Dolphin without it sends zeros.
+        u16 pingMs;       // 0x12C
+        u8 pingMine;
+        u8 pingPeer;
+    };                    // 0x130
 
     // 0xB9 GET_ONLINE_STATUS response payload.
     struct OnlineStatus {

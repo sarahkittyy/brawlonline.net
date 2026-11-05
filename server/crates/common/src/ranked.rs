@@ -200,6 +200,9 @@ pub const LEFT_BEFORE_STAGE_SELECT: &str = "left before the stage select";
 /// The end reason of a set whose game was aborted for its match quality ([`Leave::MatchQuality`]).
 pub const MATCH_QUALITY_LOW: &str = "match quality low";
 
+/// The end reason of a set that ended in its ping check, before any game ([`Leave::PingDeclined`]).
+pub const HIGH_PING_NOT_PLAYED: &str = "not played: high ping";
+
 /// The end reason of a set whose connection broke with nobody to blame.
 pub const CONNECTION_BROKE: &str = "the connection between the players broke";
 
@@ -294,6 +297,10 @@ pub enum Leave {
     /// a round trip, for too long: Slippi's poor-performance termination, the user's, 2026-10-29).
     /// Both games report it, each with its [`Cause`].
     MatchQuality,
+    /// The set ended in its ping check, before game 1 (bug report #226, the user's, 2026-11-05):
+    /// the players' round trip was one the match quality aborts a game for, and either player
+    /// chose not to play it (or left before answering). Both games report it.
+    PingDeclined,
 }
 
 impl Leave {
@@ -302,6 +309,7 @@ impl Leave {
             "left" => Some(Leave::Left),
             "opponent_left" => Some(Leave::OpponentLeft),
             "match_quality" => Some(Leave::MatchQuality),
+            "ping_declined" => Some(Leave::PingDeclined),
             _ => None,
         }
     }
@@ -311,6 +319,7 @@ impl Leave {
             Leave::Left => "left",
             Leave::OpponentLeft => "opponent_left",
             Leave::MatchQuality => "match_quality",
+            Leave::PingDeclined => "ping_declined",
         }
     }
 }
@@ -507,6 +516,9 @@ impl Outcome {
 ///   little for the other game's report (its cause), then is void as `TERMINATED` with nobody
 ///   rated (the user's, 2026-10-29: "no loss to either player"). Not when a player had left before
 ///   it: that player abandoned the set.
+/// - A [`Leave::PingDeclined`] from either player with no game played (the set ended in its ping
+///   check: a round trip the match quality would abort a game for, and a player chose not to play
+///   it) is void as `TERMINATED`, nobody rated or at fault, whatever else was reported.
 /// - A set that ended on one player's own end (their PC or connection, known for a fact) is their
 ///   loss, [`Outcome::Abandoned`] with a `fault`, unless it was early in the set
 ///   ([`EARLY_SECONDS`]): then void with that `fault`. Either counts toward their cooldown (the
@@ -588,6 +600,10 @@ pub fn resolve(
     if waiting {
         return Outcome::InProgress { wins };
     }
+    let played = wins.iter().sum::<u32>() > 0 || games.iter().any(|g| g.winner.is_none());
+    if !played && leaves.iter().any(|l| l.kind == Leave::PingDeclined) {
+        return Outcome::Void { status: "TERMINATED", reason: HIGH_PING_NOT_PLAYED.into(), wins, fault: None };
+    }
 
     let reported = |p: usize, kind: Leave| leaves.iter().find(|l| l.reporter == players[p] && l.kind == kind);
     let left = [reported(0, Leave::Left), reported(1, Leave::Left)];
@@ -644,7 +660,6 @@ pub fn resolve(
         return Outcome::Void { status: "TERMINATED", reason: MATCH_QUALITY_LOW.into(), wins, fault: None };
     }
     let opp_left = [reported(0, Leave::OpponentLeft), reported(1, Leave::OpponentLeft)];
-    let played = wins.iter().sum::<u32>() > 0 || games.iter().any(|g| g.winner.is_none());
     // A player who left before their game was sent to the stage select, with no game played,
     // abandoned nothing: the search was cancelled as the match was made, or the connection never
     // came up (bug report #37, 2026-10-16). Nobody is rated.
@@ -1390,6 +1405,35 @@ mod tests {
         assert_eq!(s.at_min(11), Outcome::Complete { winner: s.p[0], loser: s.p[1], wins: [2, 0] });
         assert_eq!(Leave::parse("match_quality"), Some(Leave::MatchQuality));
         assert_eq!(Leave::MatchQuality.as_str(), "match_quality");
+    }
+
+    #[test]
+    fn a_set_declined_at_its_ping_check_is_void() {
+        // Bug report #226: either player cancels at the set's ping check; both games report it.
+        let void =
+            |wins| Outcome::Void { status: "TERMINATED", reason: HIGH_PING_NOT_PLAYED.into(), wins, fault: None };
+        let mut s = Set::new();
+        s.leave(0, Leave::PingDeclined, 1).leave(1, Leave::PingDeclined, 1);
+        let o = s.at_min(1);
+        assert_eq!(o, void([0, 0]));
+        assert_eq!(scores(s.p, &o), [None, None]);
+        // One report is enough, at once: nobody waits for the other's.
+        let mut s = Set::new();
+        s.leave(1, Leave::PingDeclined, 1);
+        assert_eq!(s.at_min(1), void([0, 0]));
+        // Whatever else came: the other player left (or their game saw this one go) meanwhile.
+        let mut s = Set::new();
+        s.leave(0, Leave::PingDeclined, 1).leave(1, Leave::Left, 1);
+        assert_eq!(s.at_min(1), void([0, 0]));
+        let mut s = Set::new();
+        s.leave(0, Leave::OpponentLeft, 1).leave(1, Leave::PingDeclined, 1);
+        assert_eq!(s.at_min(1), void([0, 0]));
+        // Not once a game was played (a modified game cannot void a set it is losing).
+        let mut s = Set::new();
+        s.both(1, Some(1), 5).leave(0, Leave::PingDeclined, 6).leave(0, Leave::Left, 6);
+        assert_eq!(s.at_min(6), Outcome::Abandoned { leaver: s.p[0], other: s.p[1], wins: [0, 1], fault: None });
+        assert_eq!(Leave::parse("ping_declined"), Some(Leave::PingDeclined));
+        assert_eq!(Leave::PingDeclined.as_str(), "ping_declined");
     }
 
     /// The user's, 2026-10-29: "if the game starts fast and then they decide to manually slow it

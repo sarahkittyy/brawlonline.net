@@ -265,6 +265,10 @@ struct PeerView
   // match): a long wait for the other players' inputs logs how long each was silent.
   Clock::time_point last_packet{};
   double rtt_ms = -1;
+  // Its first round trips as measured (ms), for Ranked's ping check before the set
+  // (GetLinkRoundTrip): the first PING_CHECK_SAMPLES only.
+  std::array<float, PING_CHECK_SAMPLES> first_rtts{};
+  u32 rtt_samples = 0;
   bool oversize_logged = false;  // a control message over MAX_CONTROL_SIZE came from it
   // Its PC is falling behind (its own check, UpdateSlowNotice): its frame rate, 0 if not; and
   // whether this match showed the notice.
@@ -2314,6 +2318,7 @@ std::mutex s_result_callback_mutex;
 std::function<void(const GameResult&)> s_result_callback;
 std::atomic<bool> s_quit_loses{false};  // SetQuitLoses
 std::atomic<bool> s_quality_abort{false};  // SetQualityAbort
+std::atomic<bool> s_quality_ignore_ping{false};  // SetQualityIgnorePing
 // The player's setting as it changed while Dolphin runs (SetInputDelay): a sequence number (0:
 // never changed) << 8 | the setting - MIN_DELAY_SETTING (a profile or a number of frames).
 std::atomic<u32> s_live_delay{0};
@@ -3475,6 +3480,9 @@ void NetThread()
             const double rtt = (now_us - sent_us) / 1000.0;
             auto& p = s.peers[slot];
             p.rtt_ms = p.rtt_ms < 0 ? rtt : 0.8 * p.rtt_ms + 0.2 * rtt;
+            if (p.rtt_samples < PING_CHECK_SAMPLES)
+              p.first_rtts[p.rtt_samples] = static_cast<float>(rtt);
+            ++p.rtt_samples;
           }
         }
       }
@@ -6111,11 +6119,14 @@ void UpdateMatchQuality()
   const double wall_us = std::chrono::duration<double, std::micro>(now - s.quality_t).count();
   const double ratio = poor ? 2.0 : wall_us / (static_cast<double>(frames) * FRAME_US);
   const double ping = s.quality_pings ? s.quality_ping_sum / s.quality_pings : 0.0;
+  // Both players chose to play the set at its round trip (SetQualityIgnorePing): only its speed
+  // counts, as with no round trip measured.
+  const double rated_ping = s_quality_ignore_ping ? 0.0 : ping;
   const bool lenient = s.current_frame > PeerData::QUALITY_LENIENT_AFTER_FRAMES;
-  const int debt = PeerData::QualityDebt(ratio, ping, lenient);
+  const int debt = PeerData::QualityDebt(ratio, rated_ping, lenient);
   const bool own_behind =
       poor_late || static_cast<double>(s.own_late - s.quality_own_late) * 2 > frames;
-  const auto cause = PeerData::IntervalCause(ratio, ping, lenient, own_behind, PeerBehind());
+  const auto cause = PeerData::IntervalCause(ratio, rated_ping, lenient, own_behind, PeerBehind());
   s.quality_debt = std::max(0, s.quality_debt + debt);
   if (s.quality_debt == 0)
     s.quality_cause_debt = {};
@@ -6138,9 +6149,10 @@ void UpdateMatchQuality()
   {
     INFO_LOG_FMT(BRAWLBACK,
                  "gprb: match quality at frame {}: {} frames in {:.2f} s ({:.1f}/s), round trip "
-                 "{:.0f} ms: debt {:+d} ({}), now {}/{}",
+                 "{:.0f} ms{}: debt {:+d} ({}), now {}/{}",
                  s.current_frame, frames, wall_us / 1e6,
-                 wall_us > 0 ? frames * 1e6 / wall_us : 0.0, ping, debt,
+                 wall_us > 0 ? frames * 1e6 / wall_us : 0.0, ping,
+                 s_quality_ignore_ping ? " (not counted)" : "", debt,
                  PeerData::QualityCauseName(cause), s.quality_debt, PeerData::QUALITY_ABORT_DEBT);
   }
   if (s.quality_debt < PeerData::QUALITY_ABORT_DEBT)
@@ -7895,6 +7907,37 @@ void SetDesyncRecovery(bool on)
 void SetQualityAbort(bool on)
 {
   s_quality_abort = on;
+  s_quality_ignore_ping = false;
+}
+
+void SetQualityIgnorePing(bool ignore)
+{
+  if (s_quality_ignore_ping.exchange(ignore) != ignore)
+  {
+    INFO_LOG_FMT(BRAWLBACK, "gprb: the match quality {} the round trip", ignore ? "ignores" : "counts");
+  }
+}
+
+LinkRoundTrip GetLinkRoundTrip()
+{
+  std::lock_guard<std::recursive_timed_mutex> lk(s.mutex);
+  LinkRoundTrip out;
+  if (s.mode != Mode::Network)
+    return out;
+  bool any = false;
+  ForEachPeer([&](int, const PeerView& p) {
+    if (p.left)
+      return;
+    const u32 n = std::min<u32>(p.rtt_samples, PING_CHECK_SAMPLES);
+    std::array<float, PING_CHECK_SAMPLES> v = p.first_rtts;
+    std::sort(v.begin(), v.begin() + n);
+    const double median = n == 0 ? -1.0 : n % 2 ? v[n / 2] : (v[n / 2 - 1] + v[n / 2]) / 2.0;
+    // The furthest player, and the fewest samples of any.
+    out.median_ms = std::max(out.median_ms, median);
+    out.samples = any ? std::min(out.samples, p.rtt_samples) : p.rtt_samples;
+    any = true;
+  });
+  return out;
 }
 
 void SetInputDelay(int setting)

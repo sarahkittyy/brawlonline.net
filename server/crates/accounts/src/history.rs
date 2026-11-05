@@ -20,7 +20,7 @@ use axum::extract::{Query, State};
 use axum::http::HeaderMap;
 use axum::Json;
 use chrono::{DateTime, Utc};
-use common::ranked::{self, GameReport, Timing, LEFT_BEFORE_STAGE_SELECT};
+use common::ranked::{self, GameReport, Timing, HIGH_PING_NOT_PLAYED, LEFT_BEFORE_STAGE_SELECT};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -328,6 +328,7 @@ pub async fn matches(
             AND (EXISTS (SELECT 1 FROM game_reports g WHERE g.match_id = m.match_id)
                  OR (m.mode = {MODE_RANKED} AND m.status <> 'ASSIGNED'
                      AND m.end_reason IS DISTINCT FROM '{LEFT_BEFORE_STAGE_SELECT}'
+                     AND m.end_reason IS DISTINCT FROM '{HIGH_PING_NOT_PLAYED}'
                      AND (EXISTS (SELECT 1 FROM rating_events e WHERE e.match_id = m.match_id)
                           OR EXISTS (SELECT 1 FROM leave_reports l WHERE l.match_id = m.match_id))))
           ORDER BY m.created_at DESC, m.match_id DESC

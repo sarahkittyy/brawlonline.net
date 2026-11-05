@@ -392,6 +392,20 @@ void SetDesyncRecovery(bool on);
 // QUALITY_ABORT_TEXT. Every machine of a session sets the same.
 void SetQualityAbort(bool on);
 constexpr const char* QUALITY_ABORT_TEXT = "Match quality low, aborted.";
+// Both players of a Ranked set chose to play it at a round trip the match quality would abort
+// it for (Online/GameSetup.h, the ping check; the user's, 2026-11-05, bug report #226): only the
+// games' speed counts from now on, not the round trip. SetQualityAbort counts it again.
+void SetQualityIgnorePing(bool ignore);
+// The round trip to the other players before a set (Ranked's ping check): the median of the
+// first PING_CHECK_SAMPLES pings to the furthest player (the session pings every 200 ms outside a
+// match), -1 with none, and how many pings have measured it (the fewest of any player).
+constexpr u32 PING_CHECK_SAMPLES = 8;
+struct LinkRoundTrip
+{
+  double median_ms = -1;
+  u32 samples = 0;
+};
+LinkRoundTrip GetLinkRoundTrip();
 
 // A player's cursor on an online stage select (the game's LOCAL ownCursor, PPOM v10; Sarah's
 // board, 2026-10-29: the players see each other's cursors where several are on it at once: a room

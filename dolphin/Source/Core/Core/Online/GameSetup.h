@@ -66,6 +66,11 @@ struct View
   u16 stage = 0xFFFF;          // the decided stage
   std::string text;            // the status line ("" = the game's own)
   u32 game = 0;
+  // StepType::PingCheck, once both round trips are known and the set's is high: it (the game's,
+  // ms) and each player's answer (the popup).
+  u16 ping_ms = 0;
+  u8 my_answer = 0;    // PingAnswer
+  u8 peer_answer = 0;
 };
 
 // The ranked set starts: this player's in-game port (0 host, 1 joiner) and the stage lists.
@@ -122,6 +127,38 @@ View Current();
 // the caller treats the opponent as gone.
 bool OpponentStalled();
 picojson::object Status();
+
+// ---- Ranked's ping check (the user's, 2026-11-05, bug report #226) ----
+// Ranked's match quality aborts a game at a round trip of PeerData::QUALITY_PING_MILD_MS or more,
+// and pairs mm made under its 150 ms cap often play at 200-250 ms (its GeoIP estimate is far off
+// for South America), so such sets were all voided about 20 s into game 1. Now, before game 1's
+// characters (StepType::PingCheck), both machines measure their round trip
+// (Gprb::Session::GetLinkRoundTrip, as the game will see it: GameRoundTrip) and send it to each
+// other (the extra's `pg`); the higher of the two is the set's, the same on both. Under the abort's
+// round trip the set goes on. At it or over, both players are asked in a popup, "High ping: N ms /
+// Play anyway?", with PING_ANSWER_SECONDS to answer (no answer: CANCEL). Both PLAY: the set is
+// played and its match quality no longer counts the round trip (SetQualityIgnorePing; its speed
+// still does). Either CANCEL: the set is void, nobody's fault (Ranked::OnPingDeclined), both
+// search again and mm keeps the two apart for a few hours. Only at the set's start, so it cannot
+// void a set being lost.
+enum class PingAnswer : u8
+{
+  None = 0,
+  Play = 1,
+  Cancel = 2,
+};
+constexpr int PING_ANSWER_SECONDS = 15;
+// GP_COMPLETE_STEP's kind for the popup's answers (no stage has these kinds).
+constexpr u8 PING_ACT_PLAY = 0xF1;
+constexpr u8 PING_ACT_CANCEL = 0xF2;
+// The set ended in its ping check: the line to show, once. A decline is taken a moment after it
+// is known (PING_DECLINE_LINGER), so that the other machine hears the answer before the connection
+// closes; `link_lost` (the other player's session is gone): at once, and while the check is still
+// undecided too ("<name> left").
+std::optional<std::string> TakePingCheckEnd(bool link_lost);
+// The ping check is not decided yet, or its decline not taken: a lost link ends it
+// (TakePingCheckEnd), not the set as an opponent's leave.
+bool PingCheckPending();
 
 // The default starters (P+'s competitive five: Battlefield, Final Destination, Smashville,
 // Dream Land, Pokemon Stadium 2) as srStageKind.
