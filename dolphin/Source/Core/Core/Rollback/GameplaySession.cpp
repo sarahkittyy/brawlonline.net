@@ -519,6 +519,18 @@ struct State
     double lat_sum = 0, lead_sum = 0;
   } ei, ei_window;
   std::vector<double> ei_lat, ei_lead;  // this window's
+  // A frame whose paced sleep ended early for a rollback (PacedSleepLead) came to its loop top that
+  // much early, and so did the SI read its local input would be made of: a frame with a rollback
+  // read its controller up to ~15 ms before its due time, the next frame on time, so a held button
+  // was seen a frame longer or shorter (test_diag_bug70 rtt130: 84.5% of the frames one sample
+  // after the last, 99.6% without the early wake). Such a frame's local GameCube controller is read
+  // again after the re-runs, at that SI read's due time (TakeDeferredLocalInput, 99.4-99.6%), and
+  // goes to GekkoNet then, for the frame the loop top would have given it; the loop top's
+  // GekkoBatch is held open until then. The loop top's own read stays for when that cannot be
+  // made. PPR_GPRB_DEFERRED_LOCAL_READ=0: never.
+  bool local_deferred = false;
+  int local_deferred_target = -1;                  // its GekkoNet frame
+  std::array<u8, INPUT_SIZE> local_deferred_in{};  // the loop top's read
 
   // Per-frame CPU-thread state.
   PendingOps ops;
@@ -3791,6 +3803,7 @@ bool CreateGekko(bool stress, int num_players)
       const char* env = std::getenv("PPR_GPRB_EARLY_INPUT");
       s.early_input = s.local_pad >= 4 && !(env && env[0] == '0');
       s.ei_batch_held = false;
+      s.local_deferred = false;
       s.ei_loop_due.reset();
       s.ei_loop_frame = -1;
       s.ei_frames = {};
@@ -4165,8 +4178,9 @@ void PlaybackMute(Core::System& system, bool mute)
 // sleep looks at them (gekko_receive, every slice) and, when GekkoNet will roll back
 // (gekko_rollback_frames), ends early by the frames it re-runs times the session's average per
 // frame back, plus a margin: the rollback runs in the sleep, as in MachineSession's BoundarySleep
-// (bug report #152). The local controller of such a frame is read that much earlier; frames
-// without a rollback are unchanged, and a PC with no slack never sleeps. CPU thread.
+// (bug report #152). The SI read of such a frame's local controller comes that much earlier, so
+// it is read again after the re-runs (State::local_deferred); frames without a rollback are
+// unchanged, and a PC with no slack never sleeps. CPU thread.
 // PPR_GPRB_RERUN_IN_SLEEP=0: the whole sleep always (A/B).
 bool RerunInSleep()
 {
@@ -4894,10 +4908,12 @@ std::string NetStatsLine(const State::NetStats& w)
   {
     line += fmt::format(", pad reads {} on time, {} in re-runs ({} read anew), late {} from history "
                         "{} live, {} far behind read now (max {:.1f} ms); host decode used {}, "
-                        "declined {}, checked {}, differed {}; passes of an older read {}",
+                        "declined {}, checked {}, differed {}; passes of an older read {}; read "
+                        "after a rollback {} (declined {})",
                         r.on_time, r.latched + r.relatched, r.relatched, r.late_history,
                         r.late_live, r.late_far, r.late_max_ms, r.decode_used, r.decode_declined,
-                        r.decode_checked, r.decode_mismatched, r.pass_older);
+                        r.decode_checked, r.decode_mismatched, r.pass_older, r.deferred_read,
+                        r.deferred_declined);
   }
   return line;
 }
@@ -4952,6 +4968,8 @@ void NetStatsFold(State::NetStats& t, const State::NetStats& w)
   t.pad_reads.pass_older += w.pad_reads.pass_older;
   t.pad_reads.latched += w.pad_reads.latched;
   t.pad_reads.relatched += w.pad_reads.relatched;
+  t.pad_reads.deferred_read += w.pad_reads.deferred_read;
+  t.pad_reads.deferred_declined += w.pad_reads.deferred_declined;
   t.pad_reads.late_max_ms = std::max(t.pad_reads.late_max_ms, w.pad_reads.late_max_ms);
   t.cadence.presents += w.cadence.presents;
   t.cadence.hitches += w.cadence.hitches;
@@ -5450,20 +5468,37 @@ bool HandleGekkoFrame(Core::System& system)
     if (s.mode == Mode::Network)
       gekko_network_poll(s.gekko);
     ApplyLiveDelay();
+    if (s.local_deferred &&
+        (gekko_current_frame(s.gekko) + GekkoDelayFor(s.input_delay) != s.local_deferred_target ||
+         gekko_local_input_frame(s.gekko, s.local_handles[0]) != s.local_deferred_target - 1))
+    {
+      s.local_deferred = false;  // the delay changed: the loop top's read goes now
+    }
     for (int h : s.local_handles)
     {
       u8* in = s.local_inputs.data() + s.handle_port[h] * INPUT_SIZE;
       if (s.mode == Mode::Network)
-        AddLocalInputAtLoopTop(h, in);
+      {
+        if (!s.local_deferred)
+          AddLocalInputAtLoopTop(h, in);
+      }
       else
+      {
         gekko_add_local_input(s.gekko, h, in);
+      }
     }
     const int frame_before = s.mode == Mode::Network ? gekko_current_frame(s.gekko) : -1;
     events = gekko_update_session(s.gekko, &count);
+    if (s.local_deferred && gekko_current_frame(s.gekko) == frame_before)
+    {
+      // No frame to run (a wait for the peer follows): the loop top's read goes now, as without.
+      s.local_deferred = false;
+      AddLocalInputAtLoopTop(s.local_handles[0], s.local_deferred_in.data());
+    }
     if (s.mode == Mode::Network && gekko_current_frame(s.gekko) > frame_before)
     {
       NoteLocalInputUsed(frame_before);
-      if (s.early_input)
+      if (s.early_input || s.local_deferred)
       {
         // Held until the early input goes with it (OnPadPass), at the latest the next loop top.
         std::lock_guard<std::recursive_timed_mutex> lk(s.mutex);
@@ -6245,6 +6280,102 @@ void OnPadPassLocked(Core::System& system, const RawPads& pads, Clock::time_poin
   f.in = in;
   ++s.ei.early;
   ++s.ei_window.early;
+}
+
+bool DeferredLocalReadOn()
+{
+  static const bool on = [] {
+    const char* e = std::getenv("PPR_GPRB_DEFERRED_LOCAL_READ");
+    return !(e && *e == '0');
+  }();
+  return on;
+}
+
+// The loop top, after CaptureLocalInputs: a frame whose paced sleep ended early for a rollback
+// reads its local GameCube controller after the re-runs (State::local_deferred).
+void ArmDeferredLocalInput()
+{
+  s.local_deferred = false;
+  if (s.mode != Mode::Network || !DeferredLocalReadOn() || !s.gekko || !s.gekko_started ||
+      s.local_handles.size() != 1 || s.early_input || s.local_pad >= 4 || s.paced_lead_ms <= 0 ||
+      !s.ei_loop_due)
+  {
+    return;
+  }
+  const int delay = GekkoDelayFor(s.input_delay);
+  const int h = s.local_handles[0];
+  const int target = gekko_current_frame(s.gekko) + delay;
+  // With no delay this frame runs on it; the input must also be the next one GekkoNet takes.
+  if (delay < 1 || gekko_local_input_frame(s.gekko, h) != target - 1)
+    return;
+  s.local_deferred = true;
+  s.local_deferred_target = target;
+  std::memcpy(s.local_deferred_in.data(), s.local_inputs.data() + s.handle_port[h] * INPUT_SIZE,
+              INPUT_SIZE);
+}
+
+// The deferred local input to GekkoNet (under s.mutex): `in`, read at `read`.
+void AddDeferredLocalInput(const u8* in, Clock::time_point read)
+{
+  s.local_deferred = false;
+  if (!s.gekko || s.local_handles.empty())
+    return;
+  const int h = s.local_handles[0];
+  const int target = s.local_deferred_target;
+  std::array<u8, INPUT_SIZE> copy;
+  std::memcpy(copy.data(), in, INPUT_SIZE);
+  if (gekko_local_input_frame(s.gekko, h) != target - 1 ||
+      !gekko_add_local_input_at(s.gekko, h, target, copy.data()))
+  {
+    WARN_LOG_FMT(BRAWLBACK, "gprb: the deferred local input for frame {} was not taken (last {})",
+                 target, gekko_local_input_frame(s.gekko, h));
+    return;
+  }
+  State::EiFrame& f = s.ei_frames[static_cast<size_t>(target) % s.ei_frames.size()];
+  f.frame = target;
+  f.read = read;
+  f.sent = Clock::now();
+  f.early = false;
+  f.checked = true;
+  f.in = copy;
+  HostPadLogLine("D", target, (in[0] << 24) | (in[1] << 16) | (in[2] << 8) | in[3],
+                 std::chrono::duration_cast<std::chrono::microseconds>(Clock::now() - read)
+                     .count());
+}
+
+// The presented pass of a frame whose local input was deferred (ArmDeferredLocalInput): its
+// controller now, at the due time of the read the loop top took, to GekkoNet and out with the
+// frame's datagram.
+void TakeDeferredLocalInput(Core::System& system)
+{
+  if (!s.local_deferred)
+    return;
+  std::array<u8, INPUT_SIZE> in = s.local_deferred_in;
+  Clock::time_point read = s.local_sampled_at;
+  std::array<u8, Addr::PAD_STRIDE> pad;
+  Clock::time_point at{};
+  if (HostDecodeReadAt(system, s.local_pad, &pad, &at))
+  {
+    std::memcpy(in.data(), pad.data(), INPUT_SIZE);
+    if (s.gone_enabled)
+      PeerData::ClearGoneMarkerBytes(in.data());
+    read = at;
+  }
+  std::lock_guard<std::recursive_timed_mutex> lk(s.mutex);
+  AddDeferredLocalInput(in.data(), read);
+  if (s.gekko)
+    gekko_send_local_inputs(s.gekko);
+  EiReleaseBatch();
+}
+
+// The next loop top: a deferred input the presented pass did not take goes as the loop top read
+// it.
+void FlushDeferredLocalInput()
+{
+  if (!s.local_deferred)
+    return;
+  std::lock_guard<std::recursive_timed_mutex> lk(s.mutex);
+  AddDeferredLocalInput(s.local_deferred_in.data(), s.local_sampled_at);
 }
 
 void SetLoopDefault(PowerPC::PowerPCState& ppc)
@@ -7211,7 +7342,9 @@ bool RunFrame(const Core::CPUThreadGuard& guard)
     EiReleaseBatch();
     ApplyPeerDrops();
     HardTimeSync(system);
+    FlushDeferredLocalInput();
     CaptureLocalInputs();
+    ArmDeferredLocalInput();
     if (s.mode == Mode::Network)
     {
       // The age of the instant the controller read behind the local input stands for.
@@ -7288,6 +7421,8 @@ bool RunFrame(const Core::CPUThreadGuard& guard)
                          !((s.pb.clip_ff || s.pb.seek_ff) &&
                            s.ops.adv_frame[i] % CLIP_SHOW_EVERY == 0) :
                      s.ops.adv_count > 1 && i != s.ops.adv_count - 1;
+  if (!s.resim_pass)
+    TakeDeferredLocalInput(system);
 
   if (s.force_final_at_active)
   {

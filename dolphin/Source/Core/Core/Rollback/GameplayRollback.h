@@ -372,6 +372,9 @@ struct HostPadReadStats
   u64 pass_older = 0;
   u64 latched = 0;       // in a re-run: the last read before it
   u64 relatched = 0;     // in a re-run, the last read too old: read now
+  // HostDecodeReadAt: local inputs read after a rollback's re-runs, and declined (no decode).
+  u64 deferred_read = 0;
+  u64 deferred_declined = 0;
   double late_max_ms = 0;
 };
 // Since the last call.
@@ -403,6 +406,14 @@ void HostPadOriginReported(int chan, u8 stick_x, u8 stick_y, u8 substick_x, u8 s
 // The decode of the newest read of `chan` (0-3) and the instant it stands for; false when there is
 // none (or decoding is off or turned off for the session).
 bool PadsHostDecoded(int chan, std::array<u8, Addr::PAD_STRIDE>* pad, Clock::time_point* instant);
+// CPU thread: channel `chan`'s controller read outside the SI, on the schedule as the SI's reads
+// are (ReadHostPad), at the due time of the SI's last read of it (it waits for that when it comes
+// a little early), from the history when late. Its decode and the instant it stands for; false
+// when the decode is not in use. Not kept for the passes' check: no pass is made of it. A frame
+// whose paced sleep ended early for a rollback reads its local input with it after the re-runs
+// (Session's deferred loop-top read): that SI read came early, the read is made again on time.
+bool HostDecodeReadAt(Core::System& system, int chan, std::array<u8, Addr::PAD_STRIDE>* pad,
+                      Clock::time_point* instant);
 // The decode itself (tests).
 constexpr u8 HOST_DECODE_LIGHT_PRESS = 45;
 void HostDecodePadSlot(const GCPadStatus& st, const std::array<u8, 6>& origin, u16 light, u8* pad);
