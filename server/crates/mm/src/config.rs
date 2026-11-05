@@ -64,7 +64,7 @@ pub struct Config {
     pub ranked_band_step: f64,
 
     /// ... for every this many seconds the longer-waiting player has waited.
-    #[arg(long, env = "MM_RANKED_BAND_STEP_SECS", default_value_t = 15)]
+    #[arg(long, env = "MM_RANKED_BAND_STEP_SECS", default_value_t = 10)]
     pub ranked_band_step_secs: u64,
 
     /// Unranked: the largest difference of hidden Unranked ratings of a pair at first ...
@@ -223,7 +223,7 @@ impl Config {
             region_widen_secs: 30,
             ranked_band: 150.0,
             ranked_band_step: 50.0,
-            ranked_band_step_secs: 15,
+            ranked_band_step_secs: 10,
             unranked_band: 150.0,
             unranked_band_step: 50.0,
             unranked_band_step_secs: 15,
