@@ -6854,8 +6854,10 @@ void PreparePlaybackKeyframes(Core::System& system)
 
 void StartRunning(Core::System& system)
 {
-  // Before the first frame (and its base snapshot): GPUDeterminismMode "auto" turns the
-  // deterministic GPU thread on for the session; the menus run without it.
+  // Before the first frame: GPUDeterminismMode "auto" turns the deterministic GPU thread on for
+  // the session; the menus run without it. A network session's base snapshot came before this
+  // (InitialSave at the start barrier), with the GPU thread possibly behind: gp-v29 leaves the
+  // frame buffer's slots, which it left waiting for a draw done, out of the set.
   system.GetFifo().SetRollbackSessionDeterminism(true);
   system.GetCoreTiming().SetPresentPacing(true);
   if (s.mode == Mode::Network)
