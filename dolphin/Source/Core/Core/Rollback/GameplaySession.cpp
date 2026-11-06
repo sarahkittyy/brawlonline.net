@@ -531,7 +531,7 @@ struct State
   // again after the re-runs, at that SI read's due time (TakeDeferredLocalInput, 99.4-99.6%), and
   // goes to GekkoNet then, for the frame the loop top would have given it; the loop top's
   // GekkoBatch is held open until then. The loop top's own read stays for when that cannot be
-  // made. PPR_GPRB_DEFERRED_LOCAL_READ=0: never.
+  // made. Off unless PPR_GPRB_DEFERRED_LOCAL_READ=1 (DeferredLocalReadOn: bug reports #233, #234).
   bool local_deferred = false;
   int local_deferred_target = -1;                  // its GekkoNet frame
   std::array<u8, INPUT_SIZE> local_deferred_in{};  // the loop top's read
@@ -6294,11 +6294,15 @@ void OnPadPassLocked(Core::System& system, const RawPads& pads, Clock::time_poin
   ++s.ei_window.early;
 }
 
+// Off unless PPR_GPRB_DEFERRED_LOCAL_READ=1 (bug reports #233 and #234): with it on in launcher
+// 0.1.123, P+ online games waited for the peer far more often (games with over 3 s of waits 2.5-4x
+// as many at the same round trip, 10x with two different delays), each wait 0.8-1 s with both
+// machines waiting at once; the harness's links (jitter, loss, delays 3 and 2) never showed it.
 bool DeferredLocalReadOn()
 {
   static const bool on = [] {
     const char* e = std::getenv("PPR_GPRB_DEFERRED_LOCAL_READ");
-    return !(e && *e == '0');
+    return e && *e == '1';
   }();
   return on;
 }
