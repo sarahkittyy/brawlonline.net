@@ -54,6 +54,8 @@ function mapRankedProfile(user: AccountsPublicUser): RankedProfile {
     rankedPlayers: user.rank.rankedPlayers ?? 0,
     rank: user.rank.tier ?? null,
     setsToPlace: user.rank.setsToPlace ?? 0,
+    wins: user.rank.wins,
+    losses: user.rank.losses,
   };
 }
 

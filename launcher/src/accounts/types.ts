@@ -57,6 +57,9 @@ export type AccountsPublicUser = {
     tier?: Rank | null;
     /** Rated sets left before the rank shows; 0 once placed. */
     setsToPlace?: number;
+    /** Ranked sets won and lost, placement sets included (absent from an older server). */
+    wins?: number;
+    losses?: number;
   };
 };
 

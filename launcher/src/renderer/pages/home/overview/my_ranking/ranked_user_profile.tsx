@@ -9,7 +9,7 @@ import { useNavigate } from "react-router-dom";
 
 import { RankBadge } from "@/components/rank_badge/rank_badge";
 import { useAccount } from "@/lib/hooks/use_account";
-import { formatPosition, formatProfileRating } from "@/lib/ranked_format";
+import { formatPosition, formatProfileRating, formatProfileRecord } from "@/lib/ranked_format";
 import { useServices } from "@/services";
 import type { RankedProfile } from "@/services/backend/types";
 
@@ -19,6 +19,7 @@ import styles from "./ranked_user_profile.module.css";
 export const RankedUserProfile = ({ rankedProfile, onHide }: { rankedProfile: RankedProfile; onHide: () => void }) => {
   const { setsPlayed, rank, setsToPlace } = rankedProfile;
   const position = formatPosition(rankedProfile.position, rankedProfile.rankedPlayers);
+  const record = formatProfileRecord(rankedProfile);
   const navigate = useNavigate();
   // Slippi shows its rank badge and tier here; so do we, with the rating beside it (docs/design/ranked-tiers.md),
   // `????` while placing.
@@ -36,6 +37,11 @@ export const RankedUserProfile = ({ rankedProfile, onHide }: { rankedProfile: Ra
               {Messages.setsPlayed(setsPlayed)}
               {position && ` · ${position}`}
             </div>
+            {record && (
+              <div data-testid="ranked-record" style={{ fontSize: "12px", opacity: 0.7 }}>
+                {record}
+              </div>
+            )}
           </div>
           <div className={styles.rankBadge}>
             <RankBadge rank={rank} setsToPlace={setsToPlace} size="large" />

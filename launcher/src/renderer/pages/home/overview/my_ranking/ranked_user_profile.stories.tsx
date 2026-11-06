@@ -38,16 +38,36 @@ const profile = (rating: number, extra: Partial<RankedProfile>): RankedProfile =
   position: 23,
   rankedPlayers: 137,
   setsToPlace: 0,
+  wins: 25,
+  losses: 17,
   ...extra,
 });
 
 const BOXES: [string, RankedProfile][] = [
   ["Gold 2", profile(1351.2, { rank: { tier: "gold", division: 2 } })],
-  ["Placing", profile(1463.8, { setsPlayed: 4, position: 61, rank: null, setsToPlace: 3 })],
-  ["Placing, last set", profile(1512.0, { setsPlayed: 8, position: 40, rank: null, setsToPlace: 1 })],
-  ["Bronze 3", profile(988.4, { setsPlayed: 17, position: 131, rank: { tier: "bronze", division: 3 } })],
-  ["Diamond 1", profile(1903.5, { setsPlayed: 88, position: 9, rank: { tier: "diamond", division: 1 } })],
-  ["Legendary", profile(2281.7, { setsPlayed: 136, position: 1, rank: { tier: "legendary", division: null } })],
+  ["Placing", profile(1463.8, { setsPlayed: 4, wins: 3, losses: 1, position: 61, rank: null, setsToPlace: 3 })],
+  [
+    "Placing, last set",
+    profile(1512.0, { setsPlayed: 8, wins: 5, losses: 3, position: 40, rank: null, setsToPlace: 1 }),
+  ],
+  [
+    "Bronze 3",
+    profile(988.4, { setsPlayed: 17, wins: 6, losses: 11, position: 131, rank: { tier: "bronze", division: 3 } }),
+  ],
+  [
+    "Diamond 1",
+    profile(1903.5, { setsPlayed: 88, wins: 60, losses: 28, position: 9, rank: { tier: "diamond", division: 1 } }),
+  ],
+  [
+    "Legendary",
+    profile(2281.7, {
+      setsPlayed: 136,
+      wins: 101,
+      losses: 35,
+      position: 1,
+      rank: { tier: "legendary", division: null },
+    }),
+  ],
 ];
 
 /** The Home ranked box (MyRanking's ContentBlock) at a given size. */
