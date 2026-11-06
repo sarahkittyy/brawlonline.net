@@ -6,6 +6,7 @@
 #include "Common/UPnP.h"
 
 #include "Common/Logging/Log.h"
+#include "Common/NatPmp.h"
 
 #include <algorithm>
 #include <array>
@@ -17,6 +18,7 @@
 #include <miniupnpc.h>
 #include <miniwget.h>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <thread>
 #include <upnpcommands.h>
@@ -189,7 +191,9 @@ void Common::UPnP::StopPortmapping()
 // port the matchmaking server saw, which the router only keeps open for the server. A UPnP
 // mapping of the port makes the router forward it, and with it most routers also keep the port
 // for what the machine sends from it (miniupnpd adds a MASQUERADE --to-ports rule), so the
-// server sees the port the peers can reach.
+// server sees the port the peers can reach. A router that does not answer UPnP (it has only
+// NAT-PMP on, or a firewall on this machine drops the routers' UPnP answers, which come back to a
+// multicast search) is asked over NAT-PMP instead: miniupnpd adds the same rules for both.
 namespace
 {
 struct OnlineState
@@ -203,8 +207,18 @@ struct OnlineState
   UPNPUrls urls{};
   IGDdatas data{};
   std::string lan_addr;  // this machine's address toward the router
-  std::array<u16, Common::UPnP::MAP_SLOTS> mapped{};  // by MapUdpPort's slot, 0 none
+  // NAT-PMP's probe runs beside UPnP's discovery, which takes 8 s when no router answers it
+  // (miniupnpc asks for four device types, 2 s each): a search can use NAT-PMP before that.
+  u32 natpmp_gateway = 0;       // the router, if it answered NAT-PMP (s_addr, 0 none)
+  std::string natpmp_external;  // its internet address over NAT-PMP
+  std::array<u16, Common::UPnP::MAP_SLOTS> mapped{};          // by MapUdpPort's slot, 0 none
+  std::array<bool, Common::UPnP::MAP_SLOTS> mapped_natpmp{};  // mapped over NAT-PMP, not UPnP
 };
+
+// NAT-PMP's retries: 250, 500 and 1000 ms.
+constexpr int NATPMP_TRIES = 3;
+// A lease, as UPnP's (7200 s).
+constexpr u32 NATPMP_LIFETIME = 7200;
 
 // Never destroyed: the discovery thread is detached and may still run when the process exits.
 OnlineState& GetOnlineState()
@@ -227,6 +241,45 @@ bool IsPrivateIPv4(const char* addr)
     return false;
   return a == 10 || (a == 172 && b >= 16 && b <= 31) || (a == 192 && b == 168) ||
          (a == 100 && b >= 64 && b <= 127);
+}
+
+void ProbeNatPmp()
+{
+  const std::optional<u32> gateway = Common::NatPmp::DefaultGateway();
+  if (!gateway)
+  {
+    NOTICE_LOG_FMT(NETPLAY, "NAT-PMP: no default gateway found");
+    return;
+  }
+  const std::string gw = Common::NatPmp::AddressToString(*gateway);
+  const Common::NatPmp::Answer a = Common::NatPmp::ExternalAddress(*gateway, NATPMP_TRIES);
+  if (!a.answered)
+  {
+    NOTICE_LOG_FMT(NETPLAY, "NAT-PMP: router at {}: {}", gw, a.error);
+    return;
+  }
+  if (a.result != 0)
+  {
+    NOTICE_LOG_FMT(NETPLAY, "NAT-PMP: router at {} answers: {} ({})", gw,
+                   Common::NatPmp::ResultText(a.result), a.result);
+    return;
+  }
+  const std::string external = Common::NatPmp::AddressToString(a.external_address);
+  if (IsPrivateIPv4(external.c_str()))
+  {
+    WARN_LOG_FMT(NETPLAY,
+                 "NAT-PMP: router at {}; its internet address {} is private (another NAT above it)",
+                 gw, external);
+  }
+  else
+  {
+    NOTICE_LOG_FMT(NETPLAY, "NAT-PMP: router at {}, internet address {}", gw, external);
+  }
+  OnlineState& state = GetOnlineState();
+  std::lock_guard lk(state.mutex);
+  state.natpmp_gateway = *gateway;
+  state.natpmp_external = external;
+  state.discovered.notify_all();
 }
 
 void DiscoverOnlineIGD()
@@ -311,6 +364,7 @@ void StartDiscoveryLocked(OnlineState& state)
     return;
   state.started = true;
   std::thread(&DiscoverOnlineIGD).detach();
+  std::thread(&ProbeNatPmp).detach();
 }
 
 void UnmapLocked(OnlineState& state, int slot)
@@ -318,6 +372,18 @@ void UnmapLocked(OnlineState& state, int slot)
   u16& mapped = state.mapped[slot];
   if (mapped == 0)
     return;
+  if (state.mapped_natpmp[slot])
+  {
+    const Common::NatPmp::Answer a = Common::NatPmp::MapUdp(state.natpmp_gateway, mapped, 0, 0, 1);
+    if (a.answered && a.result == 0)
+      INFO_LOG_FMT(NETPLAY, "NAT-PMP: removed the mapping of UDP port {}", mapped);
+    else
+      WARN_LOG_FMT(NETPLAY, "NAT-PMP: removing the mapping of UDP port {} failed: {}", mapped,
+                   a.answered ? Common::NatPmp::ResultText(a.result) : a.error);
+    mapped = 0;
+    state.mapped_natpmp[slot] = false;
+    return;
+  }
   const std::string port = std::to_string(mapped);
   const int r = UPNP_DeletePortMapping(state.urls.controlURL, state.data.first.servicetype,
                                        port.c_str(), "UDP", nullptr);
@@ -327,6 +393,33 @@ void UnmapLocked(OnlineState& state, int slot)
     WARN_LOG_FMT(NETPLAY, "UPnP: removing the mapping of UDP port {} failed: {}", mapped,
                  ErrorText(r));
   mapped = 0;
+}
+
+// Under the state's lock, with the router's UPnP found.
+bool MapUpnpLocked(OnlineState& state, u16 port, int slot)
+{
+  const std::string port_str = std::to_string(port);
+  const std::string desc = "Brawl Online UDP " + port_str;
+  // A lease, so that a mapping left behind by a crash goes away. Some routers only take
+  // permanent ones (0).
+  int r = UPNP_AddPortMapping(state.urls.controlURL, state.data.first.servicetype, port_str.c_str(),
+                              port_str.c_str(), state.lan_addr.c_str(), desc.c_str(), "UDP",
+                              nullptr, "7200");
+  if (r == 725)
+  {
+    r = UPNP_AddPortMapping(state.urls.controlURL, state.data.first.servicetype, port_str.c_str(),
+                            port_str.c_str(), state.lan_addr.c_str(), desc.c_str(), "UDP", nullptr,
+                            "0");
+  }
+  if (r != UPNPCOMMAND_SUCCESS)
+  {
+    WARN_LOG_FMT(NETPLAY, "UPnP: the router refused to map UDP port {} to {}: {} ({})", port,
+                 state.lan_addr, ErrorText(r), r);
+    return false;
+  }
+  state.mapped[slot] = port;
+  NOTICE_LOG_FMT(NETPLAY, "UPnP: mapped UDP port {} to {}", port, state.lan_addr);
+  return true;
 }
 }  // namespace
 
@@ -343,36 +436,39 @@ bool Common::UPnP::MapUdpPort(u16 port, std::chrono::milliseconds wait, int slot
   OnlineState& state = GetOnlineState();
   std::unique_lock lk(state.mutex);
   StartDiscoveryLocked(state);
-  if (!state.discovered.wait_for(lk, wait, [&] { return state.done; }))
+  if (!state.discovered.wait_for(lk, wait, [&] { return state.done || state.natpmp_gateway != 0; }))
   {
     NOTICE_LOG_FMT(NETPLAY, "UPnP: still looking for the router; UDP port {} is not mapped", port);
     return false;
   }
-  if (!state.have_igd)
+  if (!state.have_igd && state.natpmp_gateway == 0)
     return false;
 
   UnmapLocked(state, slot);
-  const std::string port_str = std::to_string(port);
-  const std::string desc = "Brawl Online UDP " + port_str;
-  // A lease, so that a mapping left behind by a crash goes away. Some routers only take
-  // permanent ones (0).
-  int r = UPNP_AddPortMapping(state.urls.controlURL, state.data.first.servicetype,
-                              port_str.c_str(), port_str.c_str(), state.lan_addr.c_str(),
-                              desc.c_str(), "UDP", nullptr, "7200");
-  if (r == 725)
+  if (state.have_igd && MapUpnpLocked(state, port, slot))
+    return true;
+  if (state.natpmp_gateway == 0)
+    return false;
+
+  const Common::NatPmp::Answer a =
+      Common::NatPmp::MapUdp(state.natpmp_gateway, port, port, NATPMP_LIFETIME, NATPMP_TRIES);
+  if (!a.answered || a.result != 0 || a.external_port == 0)
   {
-    r = UPNP_AddPortMapping(state.urls.controlURL, state.data.first.servicetype, port_str.c_str(),
-                            port_str.c_str(), state.lan_addr.c_str(), desc.c_str(), "UDP",
-                            nullptr, "0");
-  }
-  if (r != UPNPCOMMAND_SUCCESS)
-  {
-    WARN_LOG_FMT(NETPLAY, "UPnP: the router refused to map UDP port {} to {}: {} ({})", port,
-                 state.lan_addr, ErrorText(r), r);
+    WARN_LOG_FMT(NETPLAY, "NAT-PMP: the router did not map UDP port {}: {}", port,
+                 a.answered ? Common::NatPmp::ResultText(a.result) : a.error);
     return false;
   }
   state.mapped[slot] = port;
-  NOTICE_LOG_FMT(NETPLAY, "UPnP: mapped UDP port {} to {}", port, state.lan_addr);
+  state.mapped_natpmp[slot] = true;
+  if (a.external_port == port)
+  {
+    NOTICE_LOG_FMT(NETPLAY, "NAT-PMP: mapped UDP port {} ({} s)", port, a.lifetime);
+  }
+  else
+  {
+    NOTICE_LOG_FMT(NETPLAY, "NAT-PMP: mapped UDP port {} to the router's port {} ({} s)", port,
+                   a.external_port, a.lifetime);
+  }
   return true;
 }
 
@@ -380,7 +476,7 @@ std::string Common::UPnP::ExternalAddress()
 {
   OnlineState& state = GetOnlineState();
   std::lock_guard lk(state.mutex);
-  return state.external;
+  return state.have_igd ? state.external : state.natpmp_external;
 }
 
 void Common::UPnP::UnmapUdpPort(u16 only_port)

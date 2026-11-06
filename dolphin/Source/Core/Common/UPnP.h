@@ -16,20 +16,22 @@ void TryPortmapping(u16 port);
 void StopPortmapping();
 
 // Online play's mapping (Core/Online/Matchmaking.cpp), separate from the netplay host's above.
-// Looking for the router's UPnP service takes up to about 2 s, so it starts in the background
-// (once per process; later calls do nothing).
+// Looking for the router's UPnP service takes about 2 s (8 s when nothing answers), and asking it
+// over NAT-PMP up to 1.75 s, so both start in the background (once per process; later calls do
+// nothing).
 void StartDiscovery();
-// Asks the router to forward UDP `port` on its internet side to `port` on this machine, waiting
-// up to `wait` for the discovery. Replaces the mapping this made before in the same `slot`: 0 the
-// search's, 1 a 2v2 party's pair room's, which connects beside the search on a port of its own
-// (Core/Online/OnlineClient.h). Logs what happened; returns whether the router took the mapping.
+// Asks the router to forward UDP `port` on its internet side to `port` on this machine, over UPnP
+// or else NAT-PMP (Common/NatPmp.h), waiting up to `wait` for the discovery. Replaces the mapping
+// this made before in the same `slot`: 0 the search's, 1 a 2v2 party's pair room's, which
+// connects beside the search on a port of its own (Core/Online/OnlineClient.h). Logs what
+// happened; returns whether the router took the mapping.
 constexpr int MAP_SLOTS = 2;
 bool MapUdpPort(u16 port, std::chrono::milliseconds wait, int slot = 0);
 // Removes the mappings MapUdpPort made, if any (with `only_port`, only that port's: an Other Games
 // room's session leaves a later search's mapping alone).
 void UnmapUdpPort(u16 only_port = 0);
-// The router's internet address as it reported it over UPnP, once the discovery is done ("" before
-// that, or with no router found).
+// The router's internet address as it reported it over UPnP (or NAT-PMP, without UPnP), once the
+// discovery is done ("" before that, or with no router found).
 std::string ExternalAddress();
 }  // namespace Common::UPnP
 

@@ -117,6 +117,8 @@ add_library(common
   Mutex.h
   NandPaths.cpp
   NandPaths.h
+  NatPmp.cpp
+  NatPmp.h
   Network.cpp
   Network.h
   OneShotEvent.h
@@ -347,6 +349,11 @@ endif()
 
 if(USE_UPNP)
   target_link_libraries(common PRIVATE Miniupnpc::miniupnpc)
+endif()
+
+if(WIN32)
+  # NatPmp.cpp's GetBestRoute.
+  target_link_libraries(common PRIVATE iphlpapi)
 endif()
 
 if(ENABLE_LLVM)
