@@ -264,6 +264,10 @@ struct PeerView
   // Its last datagram of any kind (control, ping or GekkoNet's, these about every frame in a
   // match): a long wait for the other players' inputs logs how long each was silent.
   Clock::time_point last_packet{};
+  // Its datagrams so far: GekkoNet's ('G', 'B') and the rest (control, pings). A long wait for
+  // the other players' inputs logs how many of each came in it (bug reports #233-#237: the
+  // peer's state messages every 50 ms, but GekkoNet heard nothing from it for 0.8 to 7 s).
+  u64 rx_gekko = 0, rx_other = 0;
   double rtt_ms = -1;
   // Its first round trips as measured (ms), for Ranked's ping check before the set
   // (GetLinkRoundTrip): the first PING_CHECK_SAMPLES only.
@@ -531,7 +535,7 @@ struct State
   // again after the re-runs, at that SI read's due time (TakeDeferredLocalInput, 99.4-99.6%), and
   // goes to GekkoNet then, for the frame the loop top would have given it; the loop top's
   // GekkoBatch is held open until then. The loop top's own read stays for when that cannot be
-  // made. Off unless PPR_GPRB_DEFERRED_LOCAL_READ=1 (DeferredLocalReadOn: bug reports #233, #234).
+  // made. PPR_GPRB_DEFERRED_LOCAL_READ=0: never.
   bool local_deferred = false;
   int local_deferred_target = -1;                  // its GekkoNet frame
   std::array<u8, INPUT_SIZE> local_deferred_in{};  // the loop top's read
@@ -1651,6 +1655,16 @@ int SlotOf(const sf::IpAddress& from, u16 from_port)
   return found;
 }
 
+// Datagrams sent to each player (GekkoNet's 'G' and 'B', the rest), those the socket did not
+// take, and the last such status (sf::Socket::Status): a long wait logs them (LogPeerWait). Any
+// thread sends.
+struct TxCounts
+{
+  std::atomic<u64> gekko{0}, other{0}, failed{0};
+  std::atomic<int> last_status{0};
+};
+std::array<TxCounts, MAX_LOBBY_PLAYERS> s_tx;
+
 void SendRaw(int slot, const std::vector<u8>& data)
 {
   if (!s.socket || slot < 0 || slot >= MAX_LOBBY_PLAYERS)
@@ -1658,7 +1672,14 @@ void SendRaw(int slot, const std::vector<u8>& data)
   const PeerView& p = s.peers[slot];
   if (!p.expected || !p.ip || p.port == 0)
     return;
-  (void)s.socket->send(data.data(), data.size(), *p.ip, p.port);
+  const sf::Socket::Status st = s.socket->send(data.data(), data.size(), *p.ip, p.port);
+  TxCounts& tx = s_tx[slot];
+  ++(!data.empty() && (data[0] == 'G' || data[0] == 'B') ? tx.gekko : tx.other);
+  if (st != sf::Socket::Status::Done)
+  {
+    ++tx.failed;
+    tx.last_status = static_cast<int>(st);
+  }
 }
 
 void SendToAll(const std::vector<u8>& data)
@@ -3400,7 +3421,11 @@ void NetThread()
           if (slot >= 0 && s.peers[slot].left)
             slot = -1;
           if (slot >= 0)
-            s.peers[slot].last_packet = Clock::now();
+          {
+            PeerView& from_peer = s.peers[slot];
+            from_peer.last_packet = Clock::now();
+            ++(buf[0] == 'G' || buf[0] == 'B' ? from_peer.rx_gekko : from_peer.rx_other);
+          }
           if (slot < 0 && buf[0] != 'C' && buf[0] != 'F')
             ++s.foreign_packets;
         }
@@ -6294,15 +6319,15 @@ void OnPadPassLocked(Core::System& system, const RawPads& pads, Clock::time_poin
   ++s.ei_window.early;
 }
 
-// Off unless PPR_GPRB_DEFERRED_LOCAL_READ=1 (bug reports #233 and #234): with it on in launcher
-// 0.1.123, P+ online games waited for the peer far more often (games with over 3 s of waits 2.5-4x
-// as many at the same round trip, 10x with two different delays), each wait 0.8-1 s with both
-// machines waiting at once; the harness's links (jitter, loss, delays 3 and 2) never showed it.
+// PPR_GPRB_DEFERRED_LOCAL_READ=0: never. (Launcher 0.1.124 had it off, 4b07d510: bug reports
+// #233-#237's waits for the peer were blamed on it; they went on the same in 0.1.124, and without
+// the three players whose links made them, prod's waits, hitches and late frames on 0.1.123 were
+// 0.1.122's.)
 bool DeferredLocalReadOn()
 {
   static const bool on = [] {
     const char* e = std::getenv("PPR_GPRB_DEFERRED_LOCAL_READ");
-    return e && *e == '1';
+    return !(e && *e == '0');
   }();
   return on;
 }
@@ -6370,7 +6395,18 @@ void TakeDeferredLocalInput(Core::System& system)
   Clock::time_point read = s.local_sampled_at;
   std::array<u8, Addr::PAD_STRIDE> pad;
   Clock::time_point at{};
-  if (HostDecodeReadAt(system, s.local_pad, &pad, &at))
+  // The read waits for its due time (up to 17 ms after a short rollback): without s.mutex, which
+  // the net thread takes for every datagram, and not as the rollback's cost. The burst's time is
+  // PacedSleepLead's estimate per frame back (NetStatsOnDisplayedFrame); with this wait in it the
+  // lead grew towards the wait's limit (test_diag_bug70 rtt130, B: 4.3 ms without the deferred
+  // read, 12.6-15.8 ms with it).
+  const auto read_t0 = Clock::now();
+  s.mutex.unlock();
+  const bool decoded = HostDecodeReadAt(system, s.local_pad, &pad, &at);
+  s.mutex.lock();
+  if (s.burst_open)
+    s.burst_t0 += Clock::now() - read_t0;
+  if (decoded)
   {
     std::memcpy(in.data(), pad.data(), INPUT_SIZE);
     if (s.gone_enabled)
@@ -7272,19 +7308,78 @@ void NotePeerSilence(std::array<double, MAX_LOBBY_PLAYERS>* silent_ms)
   });
 }
 
-void LogPeerWait(double ms, const std::array<double, MAX_LOBBY_PLAYERS>& silent_ms)
+// GekkoNet's frames and each player's datagrams when a wait for the other players' inputs began
+// (under s.mutex): LogPeerWait says what changed in it. Bug reports #233-#237 (SKI#549): waits of
+// 0.8-1 s where both machines waited, and GekkoNet heard nothing from the peer while its state
+// messages came every 50 ms; these tell whose input was missing, whether the peer's GekkoNet
+// datagrams came at all, and whether this machine's went out.
+struct WaitSnapshot
 {
-  std::string peers;
+  int frame = -1;        // GekkoNet's current frame
+  int local_frame = -1;  // the newest local input GekkoNet has
+  std::array<GekkoNetworkStats, MAX_LOBBY_PLAYERS> gekko{};
+  std::array<u64, MAX_LOBBY_PLAYERS> rx_gekko{}, rx_other{}, tx_gekko{}, tx_other{}, tx_failed{};
+};
+
+WaitSnapshot TakeWaitSnapshot()
+{
+  WaitSnapshot w;
+  if (!s.gekko)
+    return w;
+  w.frame = gekko_current_frame(s.gekko);
+  if (!s.local_handles.empty())
+    w.local_frame = gekko_local_input_frame(s.gekko, s.local_handles[0]);
+  ForEachPeer([&](int slot, const PeerView& p) {
+    if (p.handle >= 0 && !p.gekko_dropped)
+      gekko_network_stats(s.gekko, p.handle, &w.gekko[slot]);
+    w.rx_gekko[slot] = p.rx_gekko;
+    w.rx_other[slot] = p.rx_other;
+    w.tx_gekko[slot] = s_tx[slot].gekko;
+    w.tx_other[slot] = s_tx[slot].other;
+    w.tx_failed[slot] = s_tx[slot].failed;
+  });
+  return w;
+}
+
+void LogPeerWait(double ms, const std::array<double, MAX_LOBBY_PLAYERS>& silent_ms,
+                 const WaitSnapshot& start)
+{
+  const WaitSnapshot end = TakeWaitSnapshot();
+  std::string peers, detail;
   ForEachPeer([&](int slot, const PeerView& p) {
     if (p.left)
       return;
     peers += fmt::format("{}P{} {} {:.0f} ms", peers.empty() ? "" : ", ", slot + 1, p.name,
                          silent_ms[slot]);
+    const GekkoNetworkStats& a = start.gekko[slot];
+    const GekkoNetworkStats& b = end.gekko[slot];
+    const int failed = static_cast<int>(end.tx_failed[slot] - start.tx_failed[slot]);
+    detail += fmt::format(
+        "; P{}: its inputs to frame {} at the start, {} at the end, ours acked to {} then {}; "
+        "from it {} GekkoNet datagrams and {} others, to it {} and {}{}",
+        slot + 1, a.received_frame, b.received_frame, a.acked_frame, b.acked_frame,
+        end.rx_gekko[slot] - start.rx_gekko[slot], end.rx_other[slot] - start.rx_other[slot],
+        end.tx_gekko[slot] - start.tx_gekko[slot], end.tx_other[slot] - start.tx_other[slot],
+        failed ? fmt::format(" ({} not sent, status {})", failed, s_tx[slot].last_status.load()) :
+                 "");
   });
+  // GekkoNet's count is the session's (any peer's stats carry it).
+  const unsigned dropped = [&] {
+    unsigned before = 0, after = 0;
+    for (int slot = 0; slot < MAX_LOBBY_PLAYERS; ++slot)
+    {
+      before = std::max(before, start.gekko[slot].dropped_packets);
+      after = std::max(after, end.gekko[slot].dropped_packets);
+    }
+    return after > before ? after - before : 0u;
+  }();
   WARN_LOG_FMT(BRAWLBACK,
                "gprb: waited {:.0f} ms at frame {} for the other players' inputs; nothing came "
-               "for up to: {}",
-               ms, s.current_frame, peers);
+               "for up to: {}. GekkoNet at frame {} (then {}), our inputs to {} (then {}){}{}",
+               ms, s.current_frame, peers, start.frame, end.frame, start.local_frame,
+               end.local_frame, detail,
+               dropped ? fmt::format("; GekkoNet dropped {} malformed packets in it", dropped) :
+                         "");
 }
 
 bool RunFrame(const Core::CPUThreadGuard& guard)
@@ -7392,6 +7487,7 @@ bool RunFrame(const Core::CPUThreadGuard& guard)
       // The peer is behind: wait on the host, polling GekkoNet, instead of spinning guest code.
       const auto wait_t0 = Clock::now();
       std::array<double, MAX_LOBBY_PLAYERS> silent_ms{};
+      const WaitSnapshot wait_start = TakeWaitSnapshot();
       HostWait(
           system,
           [&] {
@@ -7407,7 +7503,7 @@ bool RunFrame(const Core::CPUThreadGuard& guard)
       s.net_window.stall_ms += ms;
       s.net_window.stall_ms_max = std::max(s.net_window.stall_ms_max, ms);
       if (ms >= LOGGED_PEER_WAIT_MS)
-        LogPeerWait(ms, silent_ms);
+        LogPeerWait(ms, silent_ms, wait_start);
     }
     UpdateTimeSync(system);
     UpdateSlowNotice();

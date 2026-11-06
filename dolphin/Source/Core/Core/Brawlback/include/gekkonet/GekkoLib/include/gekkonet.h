@@ -177,6 +177,11 @@ typedef struct GekkoNetworkStats {
     unsigned short last_ping;
     float avg_ping;
     float jitter;
+    // the newest of our frames the actor has acked, and the newest frame of the actor's input
+    // received (-1: none); the packets the session dropped as malformed, from anyone.
+    int acked_frame;
+    int received_frame;
+    unsigned int dropped_packets;
 } GekkoNetworkStats;
 
 // Public Facing API
