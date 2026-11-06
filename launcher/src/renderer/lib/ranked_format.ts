@@ -48,6 +48,14 @@ export function formatRecord(wins: number, losses: number): string {
   return `${wins}-${losses}`;
 }
 
+/** A player's own set record: `25 wins, 17 losses`, or null from an older server. */
+export function formatProfileRecord(profile: Pick<RankedProfile, "wins" | "losses">): string | null {
+  if (profile.wins == null || profile.losses == null) {
+    return null;
+  }
+  return Messages.record(profile.wins, profile.losses);
+}
+
 /** `#23 of 137`, or null while placing. */
 export function formatPosition(position: number | null | undefined, total: number | null | undefined): string | null {
   if (position == null || position < 1) {

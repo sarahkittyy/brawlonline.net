@@ -60,6 +60,13 @@ pub async fn tier_state(pool: &PgPool, uid: Uuid) -> sqlx::Result<TierState> {
     Ok(row.map(|(rank, rd)| stored_tier(rank, rd)).unwrap_or_default())
 }
 
+/// A player's ranked sets won and lost (0-0 for a new player).
+pub async fn record(pool: &PgPool, uid: Uuid) -> sqlx::Result<(u32, u32)> {
+    let row: Option<(i32, i32)> =
+        sqlx::query_as("SELECT wins, losses FROM ratings WHERE uid = $1").bind(uid).fetch_optional(pool).await?;
+    Ok(row.map(|(w, l)| (w.max(0) as u32, l.max(0) as u32)).unwrap_or_default())
+}
+
 /// `ratings.rank` and `ratings.rd` as a [`TierState`] (a NULL rd: not filled yet, a new player's).
 pub(crate) fn stored_tier(rank: Option<i16>, rd: Option<f64>) -> TierState {
     TierState { rd: rd.unwrap_or(ranked::RD_START), rank: rank.and_then(Rank::from_index) }

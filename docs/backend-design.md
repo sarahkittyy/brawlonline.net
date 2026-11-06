@@ -240,7 +240,7 @@ Option: serve a tiny GraphQL endpoint with exactly these operations (async-graph
 | `GET /v1/me` → `{uid, displayName, connectCode, playKey, rulesVersion, ...}` | `getUser` incl. `private.playKey` | session |
 | `POST /v1/me/netplay {codeStart}` | `userInitNetplay` | session |
 | `POST /v1/me/rename`, `POST /v1/me/accept-rules` | `userRename`, `userAcceptRules` | session |
-| `GET /user/{uid}?additionalFields=chatMessages,rank` (built; `rank` has the Elo rating, rated sets, leaderboard `position` and `rankedPlayers`) | users-rest | public (as Slippi) |
+| `GET /user/{uid}?additionalFields=chatMessages,rank` (built; `rank` has the Elo rating, rated sets, leaderboard `position` and `rankedPlayers`, and the set record `wins` and `losses`) | users-rest | public (as Slippi) |
 | `GET /v1/dolphin/latest?purpose=&beta=` | `getLatestDolphin` | — |
 | `POST /v1/ranked/report-game` (built; Ranked, Unranked and Direct games, Ranked rated per set, Unranked per game on a hidden matchmaking rating; no `uploadUrl` yet) | `reportOnlineGame` | play key |
 | `POST /v1/ranked/report-leave {kind: left \| opponent_left \| match_quality, beforeStageSelect?}` (built; a `left` before the stage select with no game played is not rated; `match_quality` voids the set unless it was on one player's own end, server/README.md "Whose end it was") | `reportOnlineMatchStatus` (`abandoned`) | play key |

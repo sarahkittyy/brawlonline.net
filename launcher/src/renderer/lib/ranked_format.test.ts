@@ -7,6 +7,7 @@ import {
   formatPlace,
   formatPosition,
   formatProfileRating,
+  formatProfileRecord,
   formatRating,
   formatRatingChange,
   formatRecord,
@@ -67,6 +68,11 @@ describe("ranked formatting", () => {
 
   it("formats records, positions and scores", () => {
     expect(formatRecord(12, 3)).toBe("12-3");
+    expect(formatProfileRecord({ wins: 25, losses: 17 })).toBe("25 wins, 17 losses");
+    expect(formatProfileRecord({ wins: 1, losses: 1 })).toBe("1 win, 1 loss");
+    expect(formatProfileRecord({ wins: 0, losses: 0 })).toBe("0 wins, 0 losses");
+    // An older server sends no record.
+    expect(formatProfileRecord({})).toBeNull();
     expect(formatPosition(23, 137)).toBe("#23 of 137");
     expect(formatPosition(1, 0)).toBe("#1");
     expect(formatPosition(null, 137)).toBeNull();

@@ -110,9 +110,13 @@ const mockRankedProfile: RankedProfile = {
   rankedPlayers: 137,
   rank: mockRank(1523.4),
   setsToPlace: 0,
+  wins: 25,
+  losses: 17,
   ...mockRankOverrides,
   ...(mockPlacing && {
     setsPlayed: 5 - (mockRankOverrides?.setsToPlace ?? 0),
+    wins: Math.ceil((5 - (mockRankOverrides?.setsToPlace ?? 0)) / 2),
+    losses: Math.floor((5 - (mockRankOverrides?.setsToPlace ?? 0)) / 2),
     position: null,
     rankedPlayers: 136,
   }),

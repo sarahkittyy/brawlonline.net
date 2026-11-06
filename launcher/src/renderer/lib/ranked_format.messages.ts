@@ -10,6 +10,9 @@ export const RankedFormatMessages = {
   won: () => "Won",
   lost: () => "Lost",
   draw: () => "Draw",
+  /** A player's ranked sets won and lost. */
+  record: (wins: number, losses: number) =>
+    `${wins === 1 ? "1 win" : `${wins} wins`}, ${losses === 1 ? "1 loss" : `${losses} losses`}`,
   redTeam: () => "Red team",
   blueTeam: () => "Blue team",
   greenTeam: () => "Green team",

@@ -26,6 +26,7 @@ import {
   formatPlace,
   formatPosition,
   formatProfileRating,
+  formatProfileRecord,
   formatRating,
   formatRatingChange,
   HIDDEN_RATING,
@@ -79,6 +80,7 @@ const RankedSummary = ({ uid }: { uid: string }) => {
   }, [data, uid, updateRanking]);
   const profile = data ?? stored;
   const position = formatPosition(profile?.position, profile?.rankedPlayers);
+  const record = profile && formatProfileRecord(profile);
 
   return (
     <div style={{ marginBottom: 16 }}>
@@ -100,6 +102,11 @@ const RankedSummary = ({ uid }: { uid: string }) => {
             {formatProfileRating(profile)}
           </span>
           <span style={{ color: "var(--text-secondary)" }}>{Messages.setsPlayed(profile.setsPlayed)}</span>
+          {record && (
+            <span data-testid="profile-record" style={{ color: "var(--text-secondary)" }}>
+              {record}
+            </span>
+          )}
           <span style={{ color: "var(--text-secondary)" }}>
             {position ?? (profile.setsToPlace ? Messages.notPlacedYet(profile.setsToPlace) : Messages.notRankedYet())}
           </span>

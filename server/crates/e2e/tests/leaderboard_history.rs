@@ -136,6 +136,8 @@ async fn leaderboard_pages_positions_and_ties() {
         let (_, u) = stack.get(&format!("/user/{uid}?additionalFields=chatMessages,rank"), None).await;
         assert_eq!(u["rank"]["position"], i as u64 + 1, "{u}");
         assert_eq!(u["rank"]["rankedPlayers"], 25);
+        // And gives the leaderboard's set record.
+        assert_eq!((&u["rank"]["wins"], &u["rank"]["losses"]), (&entries[i]["wins"], &entries[i]["losses"]), "{u}");
     }
     for uid in [unrated_row, no_row, placing] {
         let (_, u) = stack.get(&format!("/user/{uid}"), None).await;
@@ -144,6 +146,10 @@ async fn leaderboard_pages_positions_and_ties() {
         // The existing fields are still there.
         assert_eq!(u["rank"]["ratingUpdateCount"], if uid == placing { placed - 1 } else { 0 });
         assert!(u["rank"]["ratingOrdinal"].is_number());
+        // The record shows while placing too (`rated` splits the sets half and half).
+        let n = if uid == placing { placed as u64 - 1 } else { 0 };
+        let (w, l) = (n / 2, n - n / 2);
+        assert_eq!((u["rank"]["wins"].as_u64(), u["rank"]["losses"].as_u64()), (Some(w), Some(l)), "{u}");
     }
 
     // The cursor stays put while ratings change: after page 1, the 20th player jumps to the

@@ -55,6 +55,9 @@ export type RankedProfile = {
   rank?: Rank | null;
   /** Rated sets left before the rank shows; 0 once placed. */
   setsToPlace?: number;
+  /** Ranked sets won and lost (the leaderboard's W-L); absent from an older server. */
+  wins?: number;
+  losses?: number;
 };
 
 export type UserData = {
