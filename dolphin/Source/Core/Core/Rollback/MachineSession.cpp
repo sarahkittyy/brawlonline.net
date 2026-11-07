@@ -535,6 +535,7 @@ struct State
     double ceiling = 0;
     u64 sent = 0;
     u32 slowdowns = 0;
+    bool unpaced = false;  // some went while nobody else played
   };
   std::array<SDPace, MAX_PLAYERS> sd_pace;
   // CHANNEL_SD slices from each player, until the last of a packet (net thread).
@@ -2137,8 +2138,8 @@ double SteadyQueueMs(PeerLink& p, Clock::time_point now)
 // round trip, which the net thread measures apart from the game's frames, kept fresh by the
 // chunks' acknowledgements and, on a game link, a ping every 50 ms). It keeps the upload a little under what the
 // links can take (as a "background" transfer such as BitTorrent's uTP or an OS update does), so
-// the players' game never waits for it. PPR_MACHINE_SD_PACE=0 sends at once (for comparisons);
-// PPR_MACHINE_SD_PACE_LOG=1 logs each step.
+// the players' game never waits for it. While nobody else plays, nothing is paced (below).
+// PPR_MACHINE_SD_PACE=0 sends at once (for comparisons); PPR_MACHINE_SD_PACE_LOG=1 logs each step.
 void PaceSD(PeerLink& p, State::SDPace& pace, Clock::time_point now)
 {
   static const bool off = [] {
@@ -2191,6 +2192,16 @@ void PaceSD(PeerLink& p, State::SDPace& pace, Clock::time_point now)
     return;
   }
 
+  // Nobody else plays (a player alone in its room, its first joiner getting the card): there is no
+  // game link to keep clear, and this machine's own game runs whatever its uplink does, so the
+  // upload goes as a machine image does, at the congestion window's pace (PaceSendWindow), still
+  // in slices. Bug report #250: the 2.2 MB list of Cobalt's card to a room's only joiner went at
+  // 0.04 MB/s, its rate halved on round trips 10 ms over the link's lowest (jitter of 4-8 ms,
+  // nothing queued on the way: the joiner's own round trip did not move), and the joiner gave up.
+  bool others_play = false;
+  for (const PeerLink& g : s.peers)
+    others_play |= g.slot >= 0 && g.slot != p.slot && g.peer && g.hello && Plays(g.slot);
+
   if (pace.filled == Clock::time_point{})
     pace.filled = pace.stepped = now;
   const double dt = std::chrono::duration<double>(now - pace.filled).count();
@@ -2209,6 +2220,14 @@ void PaceSD(PeerLink& p, State::SDPace& pace, Clock::time_point now)
     // window held the upload back went far past what the way takes, and once the window opened
     // (it no longer halves on jitter, PaceSendWindow) the upload burst at it (netsim, an 8 Mbit/s
     // uplink: the rate at 1.5 MB/s, its 200 ms buffer full, game packets dropped).
+    if (!small && !others_play)
+    {
+      if (QueuedReliable(p.peer, IMAGE_CHUNK) >= IMAGE_CHUNK)
+        break;
+      pace.unpaced = true;
+      send_next();
+      continue;
+    }
     if (!small && (pace.tokens < 0 || QueuedReliable(p.peer, 4 * SD_PIECE_BYTES) >= 2 * SD_PIECE_BYTES))
     {
       pace.limited |= pace.tokens < 0;
@@ -2228,12 +2247,20 @@ void PaceSD(PeerLink& p, State::SDPace& pace, Clock::time_point now)
     {
       const double secs = std::chrono::duration<double>(pace.last_send - pace.started).count();
       AddLog(fmt::format("SD card: sent player {} {:.1f} MB in {:.1f} s ({:.2f} MB/s, slowed down "
-                         "{} times)",
+                         "{} times{})",
                          p.slot + 1, pace.sent / 1048576.0, secs,
-                         secs > 0 ? pace.sent / 1048576.0 / secs : 0.0, pace.slowdowns));
+                         secs > 0 ? pace.sent / 1048576.0 / secs : 0.0, pace.slowdowns,
+                         pace.unpaced ? "; not paced while nobody else played" : ""));
       pace = {};
     }
     pace.stepped = now;
+    return;
+  }
+  // The rate stays as it was for when someone plays.
+  if (!others_play)
+  {
+    pace.stepped = now;
+    pace.limited = false;
     return;
   }
   // The queue on the joiner's link, and the worst on the game's links to the other players.
