@@ -152,6 +152,8 @@ std::optional<ImageHashes> CachedImageHashes(const std::string& path);
 std::optional<Manifest> BuildManifest(const std::string& path,
                                       const std::atomic<bool>* cancel = nullptr,
                                       const HashProgress& progress = {});
+// The manifest of the image at `path` from its hashes (HashImage's, of that image now).
+std::optional<Manifest> ManifestFromHashes(const std::string& path, const ImageHashes& hashes);
 
 // The manifest's contents in a fixed form (its size, then each chunk's zero flag and hash, not
 // compressed): what players compare to agree on the card.

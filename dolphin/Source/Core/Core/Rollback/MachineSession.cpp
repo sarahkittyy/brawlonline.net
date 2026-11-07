@@ -571,12 +571,21 @@ struct State
     std::atomic<u64> hash_done{0}, hash_total{0};
     std::mutex own_mutex;
     std::optional<SDCard::ImageHashes> own;
+    // Its own card's manifest and file list when that card is the session's (the players' root):
+    // then nothing is asked of them (also under `own_mutex`).
+    std::optional<SDCard::Manifest> own_manifest;
+    std::vector<u8> own_files_wire;
     // The manifest asked for (under `net_mutex`: the net thread fills it in).
     int from = -1;
     Clock::time_point asked{};
     bool received = false;
     std::vector<u8> packet;
     double packet_ms = 0;
+    // The list's slices so far (net thread): when the latest came, and their bytes. A full card's
+    // list is megabytes at the host's upload pace, so the wait for it counts from the latest.
+    Clock::time_point heard{};
+    u64 heard_bytes = 0;
+    Clock::time_point list_shown{};
     // The session's card, compared with this one.
     std::shared_ptr<SDCard::SessionCard> card;
     std::vector<u8> files_wire;
@@ -1340,6 +1349,11 @@ void HandleSDPacket(int slot, const u8* data, size_t size)
       return;
     }
     buffer.insert(buffer.end(), data + 2, data + size);
+    if (slot == s.sd_sync.from && !s.sd_sync.received)
+    {
+      s.sd_sync.heard = Clock::now();
+      s.sd_sync.heard_bytes = buffer.size();
+    }
     if (data[1] == 0)
       return;
     std::vector<u8> whole = std::move(buffer);
@@ -1500,6 +1514,8 @@ void ResetSD()
     y.from = -1;
     y.received = false;
     y.packet.clear();
+    y.heard = {};
+    y.heard_bytes = 0;
   }
   y.step = State::SDSync::Step::Idle;
   y.hash_cancel = false;
@@ -1507,6 +1523,8 @@ void ResetSD()
   y.hash_done = 0;
   y.hash_total = 0;
   y.own.reset();
+  y.own_manifest.reset();
+  y.own_files_wire.clear();
   y.card.reset();
   y.files_wire.clear();
   y.missing_bytes = 0;
@@ -5619,9 +5637,9 @@ void EpochStep(Core::System& system)
 // A joiner, every wait loop iteration until it is admitted: ask, load the image, wait for the go.
 // A joiner's SD card before it asks to join (docs/design/brawl-mods.md §6.5): the game must
 // never wait for the network, so a joiner gets the whole session card first, while the room plays
-// on. It hashes its own card (the cache, or a full read), asks a player for the session card's
-// manifest and file list (checked against the root every player's hello gave), and works out what
-// differs. Its player agrees (the launcher's dialog, or Options::sd_sync), then it fetches every
+// on. It hashes its own card (the cache, or a full read); a card with the root every player's
+// hello gave is the session's, and otherwise it asks a player for the session card's manifest and
+// file list (checked against that root) and works out what differs. Its player agrees (the launcher's dialog, or Options::sd_sync), then it fetches every
 // chunk it has not got, and writes them into its own card if its player chose that. Returns true
 // once it has the whole card (or the session has none); until then it does not ask to join.
 bool SDSyncStep()
@@ -5683,27 +5701,49 @@ bool SDSyncStep()
     if (s.sd_path.empty())
       return fail("the room's game has an SD card, and this one has none");
     AddLog("SD card: comparing this player's card with the session's");
-    y.hash_thread = std::thread([path = s.sd_path] {
+    y.hash_thread = std::thread([path = s.sd_path, root] {
       State::SDSync& t = s.sd_sync;
       std::optional<SDCard::ImageHashes> own =
           SDCard::HashImage(path, &t.hash_cancel, [](u64 done, u64 total) {
             s.sd_sync.hash_done = done;
             s.sd_sync.hash_total = total;
           });
+      // The card the players play (their root): its own manifest is theirs.
+      std::optional<SDCard::Manifest> same;
+      std::vector<u8> files_wire;
+      if (own)
+      {
+        same = SDCard::ManifestFromHashes(path, *own);
+        if (same && SDCard::RootHex(SDCard::ManifestRoot(*same)) != root)
+          same.reset();
+        File::IOFile image(path, "rb");
+        const std::optional<std::vector<SDCard::CardFile>> files =
+            same && image ? SDCard::ListCardFiles(image, same->size) : std::nullopt;
+        if (files)
+        {
+          sf::Packet packet;
+          SDCard::WriteFileList(*files, packet);
+          const u8* data = static_cast<const u8*>(packet.getData());
+          files_wire.assign(data, data + packet.getDataSize());
+        }
+      }
       // No card, or one that cannot be read: everything comes from the players.
       if (!own)
         own = SDCard::ImageHashes{};
       {
         std::lock_guard lk(t.own_mutex);
         t.own = std::move(own);
+        t.own_manifest = std::move(same);
+        t.own_files_wire = std::move(files_wire);
       }
       t.hash_finished = true;
     });
     std::lock_guard lk(s.net_mutex);
     y.from = source;
-    y.asked = now;
+    y.asked = {};
     y.received = false;
-    s.sd_tx.emplace_back(source, std::vector<u8>{SD_MANIFEST_REQUEST});
+    y.heard = {};
+    y.heard_bytes = 0;
     y.step = Step::Checking;
     return false;
   }
@@ -5720,43 +5760,98 @@ bool SDSyncStep()
         ShowNotice(fmt::format("Checking your SD card: {}%", tenths * 10));
       }
     }
+    if (!y.hash_finished)
+      return false;
+    std::optional<SDCard::Manifest> manifest;
+    {
+      std::lock_guard lk(y.own_mutex);
+      if (y.own_manifest)
+      {
+        manifest = std::move(y.own_manifest);
+        y.own_manifest.reset();
+        y.files_wire = std::move(y.own_files_wire);
+      }
+    }
+    // A card the session does not play: the players' list says what differs. Asked once the own
+    // card is hashed (bug report #250: a joiner with the host's own Cobalt card waited a minute for
+    // the 2.2 MB list of it, and gave up).
     std::vector<u8> packet;
     double packet_ms = 0;
+    std::string list_notice;
+    bool ready = manifest.has_value();
+    if (!manifest)
     {
       std::lock_guard lk(s.net_mutex);
+      if (y.asked == Clock::time_point{})
+      {
+        y.asked = now;
+        y.list_shown = now;
+        s.sd_tx.emplace_back(y.from, std::vector<u8>{SD_MANIFEST_REQUEST});
+      }
       if (!y.received)
       {
-        if (now - y.asked > std::chrono::seconds(60))
-          return fail("the room's host did not send its SD card's list");
-        return false;
+        // The list comes at the host's upload pace (PaceSD), which keeps under what the link
+        // takes: 2.2 MB for a full 8 GB card took 61 s at 0.04 MB/s on a link whose round trip
+        // grew at that pace already (bug report #250, Cobalt), so the wait gives up only once
+        // nothing has come for a minute, not a minute after asking.
+        if (now - std::max(y.asked, y.heard) > std::chrono::seconds(60))
+        {
+          if (y.heard_bytes == 0)
+            return fail("the room's host did not send its SD card's list");
+          return fail(fmt::format("the host's SD card list stopped coming ({:.1f} MB came)",
+                                  y.heard_bytes / 1048576.0));
+        }
+        if (y.heard_bytes > 0 && now - y.list_shown >= std::chrono::seconds(5))
+        {
+          y.list_shown = now;
+          const double secs = std::chrono::duration<double>(now - y.asked).count();
+          list_notice = fmt::format("Getting the host's SD card list: {:.1f} MB ({:.0f} KB/s)",
+                                    y.heard_bytes / 1048576.0,
+                                    secs > 0 ? y.heard_bytes / 1024.0 / secs : 0.0);
+        }
       }
-      if (!y.hash_finished)
-        return false;
-      packet = y.packet;
-      packet_ms = y.packet_ms;
+      else
+      {
+        packet = y.packet;
+        packet_ms = y.packet_ms;
+        ready = true;
+      }
     }
-    // [u32 manifest size][manifest][file list], from a player.
-    if (packet.size() < 4)
-      return fail("the SD card's list from the host is not valid");
-    u32 msize;
-    std::memcpy(&msize, packet.data(), 4);
-    if (msize > packet.size() - 4)
-      return fail("the SD card's list from the host is not valid");
-    sf::Packet mp;
-    mp.append(packet.data() + 4, msize);
-    std::optional<SDCard::Manifest> manifest = SDCard::ReadManifest(mp);
-    if (!manifest)
-      return fail("the SD card's list from the host is not valid");
-    if (SDCard::RootHex(SDCard::ManifestRoot(*manifest)) != root)
-      return fail("the SD card's list from the host is not the card the room plays");
+    if (!list_notice.empty())
+      ShowNotice(list_notice);
+    if (!ready)
+      return false;
     std::vector<SDCard::CardFile> files;
-    if (packet.size() > 4 + msize)
+    if (manifest)
     {
-      sf::Packet fp;
-      fp.append(packet.data() + 4 + msize, packet.size() - 4 - msize);
-      if (auto list = SDCard::ReadFileList(fp, manifest->ChunkCount()))
-        files = std::move(*list);
-      y.files_wire.assign(packet.begin() + 4 + msize, packet.end());
+      AddLog("SD card: this player's card has the room's root: no list asked of the players");
+    }
+    else
+    {
+      // [u32 manifest size][manifest][file list], from a player.
+      if (packet.size() < 4)
+        return fail("the SD card's list from the host is not valid");
+      u32 msize;
+      std::memcpy(&msize, packet.data(), 4);
+      if (msize > packet.size() - 4)
+        return fail("the SD card's list from the host is not valid");
+      sf::Packet mp;
+      mp.append(packet.data() + 4, msize);
+      manifest = SDCard::ReadManifest(mp);
+      if (!manifest)
+        return fail("the SD card's list from the host is not valid");
+      if (SDCard::RootHex(SDCard::ManifestRoot(*manifest)) != root)
+        return fail("the SD card's list from the host is not the card the room plays");
+      if (packet.size() > 4 + msize)
+      {
+        sf::Packet fp;
+        fp.append(packet.data() + 4 + msize, packet.size() - 4 - msize);
+        if (auto list = SDCard::ReadFileList(fp, manifest->ChunkCount()))
+          files = std::move(*list);
+        y.files_wire.assign(packet.begin() + 4 + msize, packet.end());
+      }
+      AddLog(fmt::format("SD card: got the host's list ({:.1f} MB in {:.1f} s)",
+                         packet.size() / 1048576.0, packet_ms / 1000.0));
     }
     auto shared = std::make_shared<const SDCard::Manifest>(std::move(*manifest));
     {
