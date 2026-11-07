@@ -36,6 +36,11 @@ namespace
 {
 constexpr u16 SERVER_PORT = 5351;
 constexpr int FIRST_WAIT_MS = 250;
+#ifdef MSG_NOSIGNAL
+constexpr int SEND_FLAGS = MSG_NOSIGNAL;
+#else
+constexpr int SEND_FLAGS = 0;
+#endif
 
 #ifdef _WIN32
 using Socket = SOCKET;
@@ -106,6 +111,12 @@ bool Exchange(u32 gateway, const u8* request, size_t request_size, u8* answer, s
     *error = "no socket (error " + std::to_string(LastError()) + ")";
     return false;
   }
+#ifdef SO_NOSIGPIPE
+  // macOS can fail the send with EPIPE (bug report #253), which would also kill the process with
+  // SIGPIPE.
+  const int no_sigpipe = 1;
+  setsockopt(s, SOL_SOCKET, SO_NOSIGPIPE, &no_sigpipe, sizeof(no_sigpipe));
+#endif
   sockaddr_in to{};
   to.sin_family = AF_INET;
   to.sin_port = htons(SERVER_PORT);
@@ -123,7 +134,8 @@ bool Exchange(u32 gateway, const u8* request, size_t request_size, u8* answer, s
   *error = "no answer";
   for (int t = 0; t < tries && !got; ++t, wait_ms *= 2)
   {
-    if (send(s, reinterpret_cast<const char*>(request), static_cast<int>(request_size), 0) < 0)
+    if (send(s, reinterpret_cast<const char*>(request), static_cast<int>(request_size),
+             SEND_FLAGS) < 0)
     {
       *error = "send failed (error " + std::to_string(LastError()) + ")";
       break;
