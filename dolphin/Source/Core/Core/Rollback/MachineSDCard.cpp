@@ -891,21 +891,25 @@ std::optional<Manifest> BuildManifest(const std::string& path, const std::atomic
   std::optional<ImageHashes> hashes = HashImage(path, cancel, progress);
   if (!hashes)
     return std::nullopt;
+  return ManifestFromHashes(path, *hashes);
+}
 
+std::optional<Manifest> ManifestFromHashes(const std::string& path, const ImageHashes& hashes)
+{
   File::IOFile file(path, "rb");
-  if (!file || file.GetSize() != hashes->size)
+  if (!file || file.GetSize() != hashes.size || hashes.zero.size() != hashes.hashes.size())
     return std::nullopt;
-  const std::optional<std::vector<bool>> free = FindFreeChunks(file, hashes->size);
+  const std::optional<std::vector<bool>> free = FindFreeChunks(file, hashes.size);
 
   Manifest manifest;
-  manifest.size = hashes->size;
-  manifest.chunks.resize(hashes->hashes.size());
+  manifest.size = hashes.size;
+  manifest.chunks.resize(hashes.hashes.size());
   for (size_t i = 0; i < manifest.chunks.size(); ++i)
   {
     ChunkInfo& info = manifest.chunks[i];
-    info.zero = hashes->zero[i] || (free && (*free)[i]);
+    info.zero = hashes.zero[i] || (free && (*free)[i]);
     if (!info.zero)
-      info.hash = hashes->hashes[i];
+      info.hash = hashes.hashes[i];
   }
   return manifest;
 }
