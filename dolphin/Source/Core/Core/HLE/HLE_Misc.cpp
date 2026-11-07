@@ -782,6 +782,11 @@ void GprbStageCreateHook(const Core::CPUThreadGuard& guard)
   Gprb::Session::OnStageCreate(guard);
 }
 
+void GprbStageFileHook(const Core::CPUThreadGuard& guard)
+{
+  Gprb::Session::OnStageFileLoad(guard);
+}
+
 void GprbSoundAttachHook(const Core::CPUThreadGuard& guard)
 {
   const auto& ppc = guard.GetSystem().GetPPCState();

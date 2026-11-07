@@ -34,6 +34,7 @@ void BrawlbackSkipResimStrmSoundAllocHook(const Core::CPUThreadGuard& guard);
 void GprbSoundAttachHook(const Core::CPUThreadGuard& guard);
 void GprbSoundStopHook(const Core::CPUThreadGuard& guard);
 void GprbStageCreateHook(const Core::CPUThreadGuard& guard);
+void GprbStageFileHook(const Core::CPUThreadGuard& guard);
 void BrawlbackSyncCharSelectRandomSeedHook(const Core::CPUThreadGuard& guard);
 void BrawlbackSkipResimPadThreadReadHook(const Core::CPUThreadGuard& guard);
 void BrawlbackCapturePadThreadReadHook(const Core::CPUThreadGuard& guard);

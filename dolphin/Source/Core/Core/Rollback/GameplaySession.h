@@ -819,4 +819,7 @@ void OnProbe(u32 pc, const std::array<u32, 7>& regs);
 // stage is built (it shuffles the fighters' start points with g_mtRand) if not done yet, and the
 // RNGs are seeded again if they were.
 void OnStageCreate(const Core::CPUThreadGuard& guard);
+// HLE hook at the stage file's load (sora_melee 0x80949C20, where P+'s stage file hook branches
+// off): a stage whose substage P+ picks at random gets the session's agreed one (PinSubstage).
+void OnStageFileLoad(const Core::CPUThreadGuard& guard);
 }  // namespace Gprb::Session

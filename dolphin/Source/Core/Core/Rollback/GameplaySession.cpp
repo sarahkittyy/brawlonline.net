@@ -9156,6 +9156,93 @@ void LogWait(std::string_view where, Clock::time_point since)
                WaitText());
 }
 
+// P+'s stage files (Project+/StageFiles.asm, "Stage Roster Expansion System" and "Custom Stage SD
+// File Loader"): the stage's STEX parameter file at 0x8053F000, with the stage it was loaded for at
+// -0x80 and the substage P+ picked for that stage at -0x7E (0xFF: none yet; a STEX loaded again
+// for the same stage keeps it). Its hook at the stage file's load (sora_melee 0x80949C20) takes the
+// substage from the STEX: kept from the setup (flag 0x20: Smashville's clock-derived lighting), none
+// (flag 0x08, operation 0xFF), fixed (operation 0: the range byte is the substage), or else the one
+// picked for the stage, or randi(range) once (Mushroomy Kingdom: World 1-1 or 1-2). It writes it
+// into the init block (+0x14) and loads that substage's file.
+constexpr u32 STEX = 0x8053F000;
+constexpr u32 STEX_MAGIC = 0x53544558;  // "STEX"
+constexpr u32 STEX_STAGE = STEX - 0x80, STEX_PICKED = STEX - 0x7E;
+constexpr u32 STEX_FLAGS = 0x14, STEX_OPERATION = 0x16, STEX_RANGE = 0x17;
+constexpr u16 STEX_KEEP_SUBSTAGE = 0x20, STEX_DUAL_LOAD = 0x08;
+constexpr u8 STEX_NO_SUBSTAGE = 0xFF, STEX_NONE_PICKED = 0xFF;
+constexpr u32 MM_STAGE_KIND = INIT_BLOCK_OFFSET + 0x12;
+
+// The substage of a stage P+ picks at random, the same on every machine: from the session seed and
+// the match index, or a replay's recorded one. That load can run before the match start seeds the
+// RNGs, on one machine and not the other, so each drew its own, and P+'s next load of the stage
+// wrote the joiner's own back over the host's it had taken: the barrier's setup check failed
+// ("init block +0x14 01, peer 00", bug report #252: Unranked games on Mushroomy Kingdom). nullopt
+// where P+ does not pick at random, or before the session knows its seed.
+std::optional<u8> AgreedSubstage(const Guest& g)
+{
+  const u8* stex = g.Ptr(STEX_STAGE, 0x80 + STEX_RANGE + 1);
+  const auto mm = ModeMeleeAddr(g);
+  const u8* stage = mm ? g.Ptr(*mm + MM_STAGE_KIND, 2) : nullptr;
+  if (!stex || !stage || g.U32(STEX) != STEX_MAGIC || IsWaitingRoom(g))
+    return std::nullopt;
+  const u8* file = stex + 0x80;
+  const u16 flags = static_cast<u16>(file[STEX_FLAGS] << 8 | file[STEX_FLAGS + 1]);
+  const u8 operation = file[STEX_OPERATION], range = file[STEX_RANGE];
+  // The STEX is the match stage's (P+ loads it when the stage is loaded), and P+ picks at random.
+  if (stex[0] != stage[0] || stex[1] != stage[1] || (flags & (STEX_KEEP_SUBSTAGE | STEX_DUAL_LOAD)) ||
+      operation == 0 || operation == STEX_NO_SUBSTAGE || range == 0)
+  {
+    return std::nullopt;
+  }
+  if (s.mode == Mode::Playback)
+  {
+    if (s.phase != Phase::Armed || s.await_scene_exit ||
+        s.pb.init.size() <= PeerData::INIT_BLOCK_VARIANT || s.pb.init[PeerData::INIT_BLOCK_VARIANT] >= range)
+    {
+      return std::nullopt;
+    }
+    return s.pb.init[PeerData::INIT_BLOCK_VARIANT];
+  }
+  if (s.mode != Mode::Network || s.phase != Phase::Connected || s.await_scene_exit ||
+      !(IsHost() || s.have_seed))
+  {
+    return std::nullopt;
+  }
+  return static_cast<u8>((MatchSeeds(s.session_seed, s.match_index)[0] >> 8) % range);
+}
+
+// Before P+'s hook at the stage file's load (when) runs, or later at the match start and the
+// stage's construction: P+ picks the agreed substage (it takes the one picked for the stage), and
+// once the file is loaded, the init block says the substage that was loaded.
+void PinSubstage(Core::System& system, bool file_load, std::string_view when)
+{
+  const Guest g(system.GetMemory());
+  const auto agreed = AgreedSubstage(g);
+  const auto mm = ModeMeleeAddr(g);
+  const u8* picked = g.Ptr(STEX_PICKED, 1);
+  const u8* variant = mm ? g.Ptr(*mm + INIT_BLOCK_OFFSET + PeerData::INIT_BLOCK_VARIANT, 1) : nullptr;
+  if (!agreed || !picked || !variant)
+    return;
+  const u8 was_picked = *picked, was = *variant;
+  // A file loaded already has its substage: what P+ picked for it (the agreed one, unless that load
+  // ran before the session could agree; the barrier then tells).
+  const u8 now = file_load || was_picked == STEX_NONE_PICKED ? *agreed : was_picked;
+  if (now != was_picked)
+    system.GetMemory().CopyToEmu(STEX_PICKED, &now, 1);
+  if (now != was)
+    system.GetMemory().CopyToEmu(*mm + INIT_BLOCK_OFFSET + PeerData::INIT_BLOCK_VARIANT, &now, 1);
+  if (now != *agreed)
+  {
+    WARN_LOG_FMT(BRAWLBACK, "gprb: stage substage {:02x} was picked before the session agreed on {:02x} ({})",
+                 now, *agreed, when);
+  }
+  else if (now != was_picked || now != was)
+  {
+    INFO_LOG_FMT(BRAWLBACK, "gprb: stage substage {:02x} (picked {:02x}, init block {:02x}) {}", now,
+                 was_picked, was, when);
+  }
+}
+
 // The start of a match on this connection, before the match scene loads anything: the joiner
 // takes the host's gmGlobalModeMelee init block (stage, rules, the clock-derived stage variant),
 // both seed the three RNGs from the session seed and the match index, and the object serial
@@ -9205,6 +9292,7 @@ MatchStart ApplyMatchStart(Core::System& system, std::string_view when)
       std::this_thread::sleep_for(std::chrono::milliseconds(std::atoi(delay)));
       s.mutex.lock();
     }
+    PinSubstage(system, false, "at the match start");
     s.init_block = InitBlock(g);
     s.init_match = s.match_index;
   }
@@ -9230,6 +9318,9 @@ MatchStart ApplyMatchStart(Core::System& system, std::string_view when)
       INFO_LOG_FMT(BRAWLBACK, "gprb: joiner took the host's match init block ({} -> {})", Hex(mine),
                    Hex(merged));
     }
+    // A substage P+ picks at random is the agreed one, not the host's block's (the host's file may
+    // not have been loaded yet when it took its block).
+    PinSubstage(system, false, "at the match start");
   }
   // Tests only (PPR_GPRB_TEST_TEAMS=t1,t2,t3,t4, a team per port or '-'): every machine makes the
   // match a team battle before it loads, as a team setup on the character select would. (The
@@ -9642,6 +9733,7 @@ void ApplyPlaybackStart(Core::System& system, std::string_view when)
   }
   if (const auto mm = ModeMeleeAddr(g); mm && merged != mine)
     system.GetMemory().CopyToEmu(*mm + INIT_BLOCK_OFFSET, merged.data(), merged.size());
+  PinSubstage(system, false, "at the match start");
   RestoreLegacyTeamCostumes(system, g);
   ApplyRecordedCodeMenu(system, g);
   PinScreenSetting(system);
@@ -10524,6 +10616,7 @@ void OnStageCreate(const Core::CPUThreadGuard& guard)
     WriteU32(system, Addr::MTRAND_OTHER_SEED, seeds[1]);
     WriteU32(system, Addr::LIBC_RAND_NEXT, seeds[2]);
     INFO_LOG_FMT(BRAWLBACK, "replay: match RNG seeded again at the stage's construction");
+    PinSubstage(system, false, "at the stage's construction");
     return;
   }
   if (s.mode != Mode::Network)
@@ -10560,6 +10653,13 @@ void OnStageCreate(const Core::CPUThreadGuard& guard)
   WriteU32(system, Addr::LIBC_RAND_NEXT, seeds[2]);
   INFO_LOG_FMT(BRAWLBACK, "gprb: match {} RNG seeded again at the stage's construction (was {:08x} "
                "{:08x} {:08x})", s.match_index, before[0], before[1], before[2]);
+  PinSubstage(system, false, "at the stage's construction");
+}
+
+void OnStageFileLoad(const Core::CPUThreadGuard& guard)
+{
+  std::lock_guard<std::recursive_timed_mutex> lk(s.mutex);
+  PinSubstage(guard.GetSystem(), true, "at the stage file's load");
 }
 
 bool IsResimulationPass()
