@@ -10,6 +10,11 @@
 #include <vector>
 
 #ifdef _WIN32
+#include <atomic>
+#include <chrono>
+#include <condition_variable>
+#include <mutex>
+
 #include <windows.h>
 
 #include <cfgmgr32.h>
@@ -21,6 +26,10 @@
 #include <SDL3/SDL.h>
 
 #ifdef _WIN32
+#include "Common/CommonPaths.h"
+#include "Common/CommonTypes.h"
+#include "Common/Config/Config.h"
+#include "Common/FileUtil.h"
 #include "Common/WindowsDevice.h"
 #include "InputCommon/ControllerInterface/DInput/DInput.h"
 #endif
@@ -57,6 +66,19 @@ private:
   Uint32 m_stop_event_type;
   Uint32 m_populate_event_type;
   std::thread m_hotplug_thread;
+
+#ifdef _WIN32
+  void WatchUpdates();
+
+  // When the running SDL_UpdateGamepads started (steady clock, ms), 0 when none is running.
+  // ControllerInterface::UpdateInput holds its devices mutex around it, so one runs at a time.
+  std::atomic<s64> m_update_started_ms{0};
+  bool m_sdl_directinput = false;
+  std::thread m_update_watchdog;
+  std::mutex m_watchdog_mutex;
+  std::condition_variable m_watchdog_cv;
+  bool m_watchdog_stop = false;
+#endif
 };
 
 std::unique_ptr<ciface::InputBackend> CreateInputBackend(ControllerInterface* controller_interface)
@@ -85,6 +107,29 @@ static bool IsSwitch2ControllerPluggedIn()
     }
   }
   return false;
+}
+
+// Bug #251 (a Lenovo Legion Go's controller, 17EF:61ED, beside two Joy-Cons): SDL's DirectInput
+// joystick update re-acquires the device, and dinput8 (CDIDev_Acquire -> CEm_HID_Acquire ->
+// NudgeWorkerThreadPem) waited forever for its own worker thread, which sat idle. That update runs
+// in ControllerInterface::UpdateInput, which holds the devices mutex, so every thread that reads
+// or lists controllers waited behind it: the Controllers window froze (the hang dump), and every
+// game start stopped before its audio came up, where the emulation thread first takes those
+// mutexes, on a white window. Upstream's comment below names the same hang. A stuck
+// update leaves this file; the next start turns SDL's DirectInput off (the setting, saved) and
+// deletes it. Dolphin's own DirectInput backend still has those controllers (DInput/...).
+constexpr s64 SDL_UPDATE_STUCK_MS = 5000;
+
+static std::string SDLUpdateStuckMarkerPath()
+{
+  return File::GetUserPath(D_CONFIG_IDX) + "SDLDirectInputStuck.txt";
+}
+
+static s64 SteadyNowMs()
+{
+  return std::chrono::duration_cast<std::chrono::milliseconds>(
+             std::chrono::steady_clock::now().time_since_epoch())
+      .count();
 }
 #endif
 
@@ -190,6 +235,21 @@ InputBackend::InputBackend(ControllerInterface* controller_interface)
   if (Config::Get(Config::MAIN_SDL_HINT_JOYSTICK_DIRECTINPUT) == "")
     Config::SetBase(Config::MAIN_SDL_HINT_JOYSTICK_DIRECTINPUT, "1");
 
+#ifdef _WIN32
+  // An earlier run's SDL update got stuck in DirectInput (bug #251, SDLUpdateStuckMarkerPath):
+  // SDL's DirectInput off for good, as the SDL settings window's checkbox would. Saved now, so a
+  // run that ends badly again does not bring it back.
+  if (const std::string marker = SDLUpdateStuckMarkerPath(); File::Exists(marker))
+  {
+    std::string what;
+    File::ReadFileToString(marker, what);
+    Config::SetBase(Config::MAIN_SDL_HINT_JOYSTICK_DIRECTINPUT, "0");
+    Config::Save();
+    File::Delete(marker);
+    WARN_LOG_FMT(CORE, "SDL's DirectInput is off from now on: {}", what);
+  }
+#endif
+
   // Pre-populate the default Joy-Con hints so they can be easily changed
   if (Config::Get(Config::MAIN_SDL_HINT_JOYSTICK_HIDAPI_COMBINE_JOY_CONS) == "")
     Config::SetBase(Config::MAIN_SDL_HINT_JOYSTICK_HIDAPI_COMBINE_JOY_CONS, "1");
@@ -260,6 +320,9 @@ InputBackend::InputBackend(ControllerInterface* controller_interface)
                    switch2 ? "a Switch 2 controller is plugged in" : "no Switch 2 controller");
     SDL_SetHint(SDL_HINT_HIDAPI_LIBUSB, switch2 ? "1" : "0");
   }
+
+  m_sdl_directinput = SDL_GetHintBoolean(SDL_HINT_JOYSTICK_DIRECTINPUT, true);
+  m_update_watchdog = std::thread([this] { WatchUpdates(); });
 #endif
 
   m_hotplug_thread = std::thread([this] {
@@ -313,6 +376,16 @@ InputBackend::InputBackend(ControllerInterface* controller_interface)
 
 InputBackend::~InputBackend()
 {
+#ifdef _WIN32
+  {
+    std::lock_guard lk(m_watchdog_mutex);
+    m_watchdog_stop = true;
+  }
+  m_watchdog_cv.notify_all();
+  if (m_update_watchdog.joinable())
+    m_update_watchdog.join();
+#endif
+
   if (!m_hotplug_thread.joinable())
     return;
 
@@ -333,8 +406,48 @@ void InputBackend::PopulateDevices()
 
 void InputBackend::UpdateInput(std::vector<std::weak_ptr<ciface::Core::Device>>&)
 {
+#ifdef _WIN32
+  m_update_started_ms.store(SteadyNowMs(), std::memory_order_relaxed);
   SDL_UpdateGamepads();
+  m_update_started_ms.store(0, std::memory_order_relaxed);
+#else
+  SDL_UpdateGamepads();
+#endif
 }
+
+#ifdef _WIN32
+// Nothing can unstick a stuck update (bug #251): this says so in the log and, with SDL's
+// DirectInput on, leaves the marker for the next start.
+void InputBackend::WatchUpdates()
+{
+  Common::SetCurrentThreadName("SDL update watchdog");
+  std::unique_lock lk(m_watchdog_mutex);
+  while (!m_watchdog_cv.wait_for(lk, std::chrono::seconds(1), [this] { return m_watchdog_stop; }))
+  {
+    const s64 started = m_update_started_ms.load(std::memory_order_relaxed);
+    if (started == 0 || SteadyNowMs() - started < SDL_UPDATE_STUCK_MS)
+      continue;
+
+    if (!m_sdl_directinput)
+    {
+      WARN_LOG_FMT(CORE, "SDL's controller update has not returned in {} s: controller input is "
+                         "stuck (SDL's DirectInput is already off)",
+                   SDL_UPDATE_STUCK_MS / 1000);
+      return;
+    }
+    const std::string what = fmt::format(
+        "an earlier run's SDL controller update did not return in {} s (stuck in DirectInput, "
+        "bug #251: the game stayed on a white screen and the Controllers window froze)",
+        SDL_UPDATE_STUCK_MS / 1000);
+    const bool written = File::WriteStringToFile(SDLUpdateStuckMarkerPath(), what);
+    WARN_LOG_FMT(CORE,
+                 "SDL's controller update has not returned in {} s: controller input is stuck, "
+                 "most likely in SDL's DirectInput. It is turned off from the next start{}",
+                 SDL_UPDATE_STUCK_MS / 1000, written ? "" : " (could not write the marker)");
+    return;
+  }
+}
+#endif
 
 void InputBackend::OpenAndAddDevice(SDL_JoystickID instance_id)
 {
