@@ -4238,8 +4238,82 @@ DT PacedSleepLead()
   return std::chrono::duration_cast<DT>(DT_ms(ms));
 }
 
+// Re-run passes that another re-run pass follows draw nothing anyone sees. A pass's picture is
+// copied to the screen at the start of the next pass's render (Phase 28), so the passes of an
+// update before its last re-run are copied only by re-run passes, which are never shown. In those
+// passes the scene root's layers (stage, fighters, items, tags: gfSceneRoot+0x399 + 0x18 * layer,
+// bit 0x80, which inserts, calculates and draws the layer's models) and the shadow pass (+0x464 bit
+// 0x40) are switched off with the game's own bits. The layers' effects (bit 0x20) are still drawn:
+// nw4r::ef frees dead effects as it draws them, which is why skipping the whole render was not
+// deterministic (Phase 28). The bits are put back at the next loop top, before any save or load,
+// and in EndRunning, so no snapshot holds them cleared; a bit the game itself changed in the pass
+// keeps the game's value. PPR_GPRB_RESIM_HIDE=0 turns this off (A/B runs).
+namespace ResimHide
+{
+constexpr u32 SCENE_ROOT = 0x8059FF80;  // g_gfSceneRoot (.sbss)
+constexpr u32 LAYER_FLAGS = 0x399;
+constexpr u32 LAYER_STRIDE = 0x18;
+constexpr int LAYERS = 9;
+constexpr u8 LAYER_DRAW = 0x80;
+constexpr u32 ROOT_SHADOW = 0x464;
+constexpr u8 SHADOW_ON = 0x40;
+
+struct Cleared
+{
+  u32 addr = 0;
+  u8 before = 0;
+  u8 written = 0;
+};
+std::array<Cleared, LAYERS + 1> s_cleared;
+int s_count = 0;
+u64 s_passes = 0;  // gprb_status resim_hidden_passes
+
+bool Enabled()
+{
+  static const bool enabled = [] {
+    const char* v = std::getenv("PPR_GPRB_RESIM_HIDE");
+    return !v || std::strcmp(v, "0") != 0;
+  }();
+  return enabled;
+}
+
+void Restore(Core::System& system)
+{
+  if (s_count == 0)
+    return;
+  auto& memory = system.GetMemory();
+  for (int n = 0; n < s_count; ++n)
+  {
+    const Cleared& c = s_cleared[n];
+    if (memory.Read_U8(c.addr) == c.written)
+      memory.Write_U8(c.before, c.addr);
+  }
+  s_count = 0;
+}
+
+void Hide(Core::System& system)
+{
+  auto& memory = system.GetMemory();
+  const u32 root = memory.Read_U32(SCENE_ROOT);
+  if (!IsMemAddr(root + LAYER_FLAGS, LAYER_STRIDE * LAYERS) || !IsMemAddr(root + ROOT_SHADOW))
+    return;
+  const auto clear = [&](u32 addr, u8 bit) {
+    const u8 b = memory.Read_U8(addr);
+    if (!(b & bit))
+      return;
+    s_cleared[s_count++] = {addr, b, static_cast<u8>(b & ~bit)};
+    memory.Write_U8(static_cast<u8>(b & ~bit), addr);
+  };
+  for (int k = 0; k < LAYERS; ++k)
+    clear(root + LAYER_FLAGS + LAYER_STRIDE * k, LAYER_DRAW);
+  clear(root + ROOT_SHADOW, SHADOW_ON);
+  ++s_passes;
+}
+}  // namespace ResimHide
+
 void EndRunning(Core::System& system, const std::string& reason)
 {
+  ResimHide::Restore(system);
   EiReleaseBatch();
   CostSessionEnd();
   PassLogClose();
@@ -7767,6 +7841,9 @@ bool RunFrame(const Core::CPUThreadGuard& guard)
     }
     s.mutex.lock();
   }
+  // Only another re-run pass follows this one: nobody sees its picture (ResimHide).
+  if (s.mode != Mode::Playback && s.resim_pass && i + 2 < s.ops.adv_count && ResimHide::Enabled())
+    ResimHide::Hide(system);
   SetLoopDefault(ppc);
   s.cpu_where = "guest";
   CostPassStart(s.resim_pass);
@@ -8896,6 +8973,7 @@ picojson::value Status()
   o["rollbacks"] = picojson::value(static_cast<double>(s.rollbacks));
   o["max_rollback_frames"] = picojson::value(static_cast<double>(s.max_rollback));
   o["frames_resimulated"] = picojson::value(static_cast<double>(s.frames_resimulated));
+  o["resim_hidden_passes"] = picojson::value(static_cast<double>(ResimHide::s_passes));
   o["snapshots_skipped"] = picojson::value(static_cast<double>(s.snapshots_skipped));
   o["snapshots_taken_late"] = picojson::value(static_cast<double>(s.snapshots_taken_late));
   o["loads_without_slot"] = picojson::value(static_cast<double>(s.loads_without_slot));
@@ -10010,6 +10088,7 @@ bool OnLoopTop(const Core::CPUThreadGuard& guard)
   auto& system = guard.GetSystem();
   auto& ppc = system.GetPPCState();
   NoteLoopTop(system);
+  ResimHide::Restore(system);
 
   // Sounds of mispredicted runs are stopped here, between passes (guest calls that return here).
   if (s.gcall_active || (s.phase == Phase::Running && !s.snd_to_stop.empty()))
