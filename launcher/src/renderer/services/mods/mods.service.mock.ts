@@ -313,6 +313,7 @@ class MockModsClient implements ModsService {
     const lists: ModCodeLists = {
       own: [{ name: "Infinite Lives", kind: "gecko", lines: ["04354E8C 00000063"], author: "me" }],
       ownFiles: ["C:/Users/me/AppData/Roaming/Dolphin Emulator/GameSettings/SMNE01.ini"],
+      recommended: [{ name: "All Characters", kind: "gecko", lines: ["043EBA84 FFFFFFFF"], author: "someone" }],
       dolphin: [{ name: "Skip Intro", kind: "gecko", lines: ["0415C2A0 60000000"] }],
     };
     return { codes: build?.codes ?? { on: [], yours: [] }, lists };

@@ -2,6 +2,7 @@
  * is a list of switches. */
 export const CodesMessages = {
   codes: () => "Codes",
+  codesCount: (count: number) => `Codes (${count})`,
   onCount: (count: number) => `${count} on`,
   search: () => "Search",
   all: () => "All",
@@ -9,6 +10,8 @@ export const CodesMessages = {
   paste: () => "Paste a code",
   yours: () => "Yours",
   own: () => "Your Dolphin",
+  recommended: () => "Recommended",
+  recommendedHint: () => "On by default, and kept up to date until you change this game's codes",
   dolphin: () => "Dolphin",
   database: () => "Database",
   databaseHint: () => "codes.rc24.xyz",

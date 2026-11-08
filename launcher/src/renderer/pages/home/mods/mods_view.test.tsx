@@ -234,7 +234,7 @@ describe("ModsView", () => {
     // Not for a mod's launcher (its own Gecko code handler) nor Brawl Online's P+.
     const buttons = getAllByLabelText(CodesMessages.codes());
     expect(buttons).toHaveLength(1);
-    expect(buttons[0].textContent).toContain("1");
+    expect(buttons[0].textContent).toBe(CodesMessages.codesCount(1));
     fireEvent.click(buttons[0]);
     expect(onCodes).toHaveBeenCalledWith(withCodes);
   });
@@ -269,7 +269,7 @@ describe("ModsView", () => {
     );
     const { container } = render(<ModsView {...p} />);
     const chips = Array.from(container.querySelectorAll("span")).filter(
-      (el) => el.className.includes("codesChip") && el.textContent === "2",
+      (el) => el.className.includes("codesChip") && el.textContent === CodesMessages.codesCount(2),
     );
     expect(chips).toHaveLength(2);
   });

@@ -1,7 +1,17 @@
 import { describe, expect, it } from "vitest";
 
 import { fitsRoom, GECKO_LINES_MAX, isRunnable, parsePastedCode } from "./code_rules";
-import { cleanCodes, codeLists, gameIniNames, parseDatabaseCodes, parseIniCodes, startingCodes } from "./codes";
+import {
+  cleanCodes,
+  codeLists,
+  gameIniNames,
+  parseDatabaseCodes,
+  parseIniCodes,
+  recommendedCodes,
+  recommendedKey,
+  startingCodes,
+  updateRecommended,
+} from "./codes";
 import type { ModCode } from "./types";
 
 const gecko = (name: string, lines = 1): ModCode => ({
@@ -187,5 +197,79 @@ describe("a room's codes", () => {
     });
     expect(kept.on.map((c) => c.name)).toEqual(["big", "fits"]);
     expect(kept.yours).toEqual([]);
+  });
+});
+
+describe("recommended codes", () => {
+  const table = {
+    STKE08: [
+      { name: "All Characters", author: "James", kind: "gecko", on: true, lines: ["043EBA84 FFFFFFFF"] },
+      { name: "Optional", kind: "gecko", lines: ["04000010 00000001"] },
+    ],
+  };
+  const v1 = recommendedCodes("STKE08", table);
+  const v2 = recommendedCodes("STKE08", {
+    STKE08: [...table.STKE08, { name: "Skip Intro", kind: "gecko", on: true, lines: ["04000014 00000001"] }],
+  });
+  const mine = { ...gecko("Mine"), source: "own" as const };
+  const MINE = ["[Gecko]", "+$Mine", "04000000 00000001"].join("\n");
+
+  it("are the launcher's list for the game's exact ID, each on by default or not", () => {
+    expect(v1).toEqual([
+      { name: "All Characters", author: "James", kind: "gecko", lines: ["043EBA84 FFFFFFFF"], enabled: true },
+      { name: "Optional", kind: "gecko", lines: ["04000010 00000001"], enabled: false },
+    ]);
+    expect(recommendedCodes("STKJ08", table)).toEqual([]);
+    // Tatsunoko vs. Capcom (US) has them in the launcher's own list.
+    expect(recommendedCodes("STKE08").filter((c) => c.enabled).length).toBeGreaterThan(0);
+    expect(recommendedCodes("STKE08").every((c) => isRunnable(c))).toBe(true);
+    // The key changes only with the ones on by default.
+    const offChanged = v1.map((c) => (c.enabled ? c : { ...c, lines: ["04000018 00000001"] }));
+    expect(recommendedKey(offChanged)).toBe(recommendedKey(v1));
+    expect(recommendedKey(v2)).not.toBe(recommendedKey(v1));
+    expect(recommendedKey([])).toBeNull();
+  });
+
+  it("start a game on, after the player's Dolphin's, and show above Dolphin's", () => {
+    const own = parseIniCodes(MINE);
+    const start = startingCodes(own, parseIniCodes(""), v1);
+    expect(start.on.map((c) => [c.name, c.source])).toEqual([
+      ["Mine", "own"],
+      ["All Characters", "recommended"],
+    ]);
+    expect(start).toMatchObject({ changed: false, recommended: recommendedKey(v1) });
+    const dolphin = parseIniCodes(["[Gecko]", "$Optional", "04000010 00000001"].join("\n"));
+    const lists = codeLists({ ...own, files: [] }, dolphin, [], v1);
+    expect(lists.recommended.map((c) => c.name)).toEqual(["All Characters", "Optional"]);
+    expect(lists.dolphin).toEqual([]);
+  });
+
+  it("come with an update while the player never changed the game's codes", () => {
+    const start = startingCodes(parseIniCodes(MINE), parseIniCodes(""), v1);
+    const next = updateRecommended(start, v2);
+    expect(next.on.map((c) => [c.name, c.source])).toEqual([
+      ["Mine", "own"],
+      ["All Characters", "recommended"],
+      ["Skip Intro", "recommended"],
+    ]);
+    expect(next).toMatchObject({ changed: false, recommended: recommendedKey(v2) });
+    // Nothing new: the same codes.
+    expect(updateRecommended(next, v2)).toBe(next);
+    // A launcher without them takes them away again.
+    const none = updateRecommended(next, []);
+    expect(none.on.map((c) => c.name)).toEqual(["Mine"]);
+    expect(none).not.toHaveProperty("recommended");
+  });
+
+  it("leave the codes alone once the player changed them, or had codes from before", () => {
+    const start = startingCodes(parseIniCodes(""), parseIniCodes(""), v1);
+    const changed = { ...start, on: [], changed: true };
+    expect(updateRecommended(changed, v2)).toBe(changed);
+    // Kept before the launcher asked: only a game with no codes at all takes them.
+    const old = { on: [mine], yours: [] };
+    expect(updateRecommended(old, v2)).toBe(old);
+    const empty = updateRecommended({ on: [], yours: [] }, v2);
+    expect(empty.on.map((c) => c.name)).toEqual(["All Characters", "Skip Intro"]);
+    expect(empty.changed).toBe(false);
   });
 });

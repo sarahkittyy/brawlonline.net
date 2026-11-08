@@ -644,7 +644,7 @@ describe("room codes", () => {
     const m = manager([await oldBuild("rex")]);
     await m.mods.host({ buildId: "rex", public: true });
     expect(m.launches[0]).not.toHaveProperty("codes");
-    expect(m.builds()[0].codes).toEqual({ on: [], yours: [] });
+    expect(m.builds()[0].codes).toEqual({ on: [], yours: [], changed: false });
     await m.closeAll();
   });
 
@@ -675,7 +675,7 @@ describe("room codes", () => {
     ].join("\r\n");
     const m = manager([await marioParty()], undefined, null, async (id) => (id === "GP6E01" ? database : null));
     const { codes, lists } = await m.mods.codeLists("mp6");
-    expect(codes).toEqual({ on: [], yours: [] });
+    expect(codes).toEqual({ on: [], yours: [], changed: false });
     expect(lists.own.map((c) => c.name)).toEqual(["Mine"]);
     expect(lists.ownFiles).toEqual([path.join(own(), "GameSettings", "GP6E01.ini")]);
     // Dolphin's list for Mario Party 6 (dolphin_codes.json).
@@ -685,6 +685,25 @@ describe("room codes", () => {
       { name: "Moon Jump", kind: "gecko", lines: ["28000000 00000000"], author: "someone", notes: "Hold A" },
       { name: "Bad", kind: "gecko", lines: ["2834XXXX YYYYZZZZ"], author: "x" },
     ]);
+  });
+
+  it("starts Tatsunoko vs. Capcom with the recommended codes, until the player changes them", async () => {
+    const tvc = await oldBuild("tvc", { gameId: "STKE08", revision: 0, platform: "wii" });
+    const m = manager([tvc, { ...tvc, id: "older", codes: { on: [], yours: [] } }]);
+    await m.mods.seedCodes();
+    for (const build of m.builds()) {
+      expect(build.codes?.on.map((c) => c.source)).toEqual(["recommended", "recommended"]);
+      expect(build.codes).toMatchObject({ changed: false, recommended: expect.any(String) });
+    }
+    const { codes, lists } = await m.mods.codeLists("tvc");
+    expect(lists.recommended.map((c) => c.name)).toEqual(codes.on.map((c) => c.name));
+    // Kept as it was: not a change.
+    expect((await m.mods.setCodes("tvc", codes)).changed).toBe(false);
+    const kept = await m.mods.setCodes("tvc", { ...codes, on: codes.on.slice(1) });
+    expect(kept).toMatchObject({ changed: true, recommended: codes.recommended });
+    await m.mods.host({ buildId: "tvc", public: true });
+    expect(hostArg(m.launches[0]).codes).toEqual([{ name: codes.on[1].name, kind: "gecko", lines: codes.on[1].lines }]);
+    await m.closeAll();
   });
 
   it("keeps the codes checked, and not while the game's room is open", async () => {
@@ -699,7 +718,7 @@ describe("room codes", () => {
       ],
     });
     const clean = { name: "Turn count 30", kind: "gecko", lines: ["0426B6A0 0000001E"] };
-    expect(kept).toEqual({ yours: [clean], on: [{ ...clean, source: "yours" }] });
+    expect(kept).toEqual({ yours: [clean], on: [{ ...clean, source: "yours" }], changed: true });
     expect(m.builds()[0].codes).toEqual(kept);
     await m.mods.host({ buildId: "mp6", public: true });
     expect(hostArg(m.launches[0]).codes).toEqual([clean]);

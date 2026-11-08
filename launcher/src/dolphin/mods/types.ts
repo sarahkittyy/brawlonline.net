@@ -73,17 +73,21 @@ export type ModBuild = {
 /** A Gecko or Action Replay code (docs/design/room-codes.md). `lines`: "XXXXXXXX YYYYYYYY", or an
  * encrypted Action Replay code's "XXXX-XXXX-XXXXX". */
 export type ModCode = { name: string; kind: "gecko" | "ar"; lines: string[]; author?: string; notes?: string };
-/** Where a code in the Codes dialog comes from: added there, the player's own Dolphin, Dolphin's
- * list for the game, or the code database (codes.rc24.xyz, Dolphin's Download Codes). */
-export type ModCodeSource = "yours" | "own" | "dolphin" | "database";
+/** Where a code in the Codes dialog comes from: added there, the player's own Dolphin, Brawl
+ * Online's recommended codes (recommended_codes.json), Dolphin's list for the game, or the code
+ * database (codes.rc24.xyz, Dolphin's Download Codes). */
+export type ModCodeSource = "yours" | "own" | "recommended" | "dolphin" | "database";
 /** A code a room runs, with its own copy of the lines: the list it came from changing later does
  * not change the room's. */
 export type ModOnCode = ModCode & { source: ModCodeSource };
-/** A game's codes: the ones on, and the ones the player added. */
-export type ModBuildCodes = { on: ModOnCode[]; yours: ModCode[] };
+/** A game's codes: the ones on, and the ones the player added. `changed`: the player changed them
+ * in the Codes dialog (false: never; absent: kept before the launcher asked, so not known).
+ * `recommended`: the recommended codes on by default the game last took (recommendedKey). Until
+ * the player changes them, a launcher with other recommended codes puts its own on instead. */
+export type ModBuildCodes = { on: ModOnCode[]; yours: ModCode[]; changed?: boolean; recommended?: string };
 /** The Codes dialog's lists of a game (the database's are fetched when that section opens).
  * `ownFiles`: the ini files Your Dolphin's came from. */
-export type ModCodeLists = { own: ModCode[]; ownFiles: string[]; dolphin: ModCode[] };
+export type ModCodeLists = { own: ModCode[]; ownFiles: string[]; recommended: ModCode[]; dolphin: ModCode[] };
 
 export type ModBuildInput = Pick<ModBuild, "name" | "discPath" | "launcherPath" | "sdPath">;
 

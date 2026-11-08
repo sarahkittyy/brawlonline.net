@@ -1,0 +1,35 @@
+{
+  "STKE08": [
+    {
+      "name": "All Characters + Costumes",
+      "author": "James",
+      "kind": "gecko",
+      "on": true,
+      "lines": [
+        "043EBA84 FFFFFFFF",
+        "043EBA88 F9FFFBFF",
+        "043EBA8C BFFFFFFE",
+        "043EBA90 FFFFFFFF",
+        "043EBA94 FFBFDFFF"
+      ]
+    },
+    {
+      "name": "Skip to Main Menu, No Saving or Auto Save",
+      "kind": "gecko",
+      "on": true,
+      "lines": [
+        "003EBA4B 00000000",
+        "C2074658 00000009",
+        "2C00FFF8 40820014",
+        "38000000 38600001",
+        "3B400011 3BC00011",
+        "2C00FFFA 40820010",
+        "38000004 3B400015",
+        "3BC00015 2C000009",
+        "40820010 38000004",
+        "3B400015 3BC00015",
+        "2C030000 00000000"
+      ]
+    }
+  ]
+}

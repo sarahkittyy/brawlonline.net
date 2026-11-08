@@ -1,14 +1,16 @@
+import { createHash } from "crypto";
 import { readFile } from "fs/promises";
 import path from "path";
 
 import { fitsRoom, isRunnable, normalizeLine } from "./code_rules";
 import DOLPHIN_CODES from "./dolphin_codes.json";
+import RECOMMENDED_CODES from "./recommended_codes.json";
 import type { ModBuildCodes, ModCode, ModCodeLists, ModCodeSource, ModOnCode } from "./types";
 
 /**
  * A room's Gecko and Action Replay codes (docs/design/room-codes.md): the lists the Codes dialog
- * shows (the player's own Dolphin's, Dolphin's own, the code database's), what a game starts with,
- * and what its room runs.
+ * shows (the player's own Dolphin's, the recommended ones, Dolphin's own, the code database's),
+ * what a game starts with, and what its room runs.
  */
 
 /** The ini files Dolphin reads for a game, in its order (ConfigLoaders::GetGameIniFilenames). */
@@ -117,6 +119,30 @@ export function dolphinCodes(gameId: string, revision?: number | null): IniCodes
   return mergeIni(gameIniNames(gameId, revision).flatMap((n) => (table[n] ? [table[n]] : [])));
 }
 
+/** Brawl Online's recommended codes for the game (recommended_codes.json, by its exact ID), each
+ * with whether a game starts with it on. */
+export function recommendedCodes(
+  gameId: string,
+  table: Record<string, unknown> = RECOMMENDED_CODES,
+): (ModCode & { enabled: boolean })[] {
+  const list = (table[gameId] ?? []) as (ModCode & { on?: boolean })[];
+  return list.map(({ on, name, kind, lines, author, notes }) => ({
+    name,
+    kind,
+    lines,
+    enabled: on === true,
+    ...(author ? { author } : {}),
+    ...(notes ? { notes } : {}),
+  }));
+}
+
+/** Which recommended codes are on by default (null: none): a launcher whose on ones differ in a
+ * name or a line has another key. */
+export function recommendedKey(recommended: (ModCode & { enabled: boolean })[]): string | null {
+  const on = recommended.filter((c) => c.enabled).map(({ name, kind, lines }) => ({ name, kind, lines }));
+  return on.length > 0 ? createHash("sha256").update(JSON.stringify(on)).digest("hex").slice(0, 16) : null;
+}
+
 /** The game's codes in the player's Dolphin User folders (`GameSettings/<id>.ini` and the like),
  * and the files they came from. A folder that is not there is skipped. */
 export async function ownDolphinCodes(
@@ -193,27 +219,42 @@ const sameCode = (a: ModCode, b: ModCode) =>
 
 /** The dialog's lists: a code shows once, in the first list that has it (Yours, Your Dolphin,
  * Dolphin, the database). */
-export function codeLists(own: IniCodes & { files: string[] }, dolphin: IniCodes, yours: ModCode[]): ModCodeLists {
+export function codeLists(
+  own: IniCodes & { files: string[] },
+  dolphin: IniCodes,
+  yours: ModCode[],
+  recommended: ModCode[] = [],
+): ModCodeLists {
   const ownCodes: ModCode[] = [];
   for (const c of own.codes.map(plain)) {
     if (!yours.some((y) => sameCode(y, c)) && !ownCodes.some((o) => sameCode(o, c))) {
       ownCodes.push(c);
     }
   }
+  const recommendedList: ModCode[] = [];
+  for (const c of recommended.map(plain)) {
+    if (![...yours, ...ownCodes, ...recommendedList].some((o) => sameCode(o, c))) {
+      recommendedList.push(c);
+    }
+  }
   const dolphinCodesList: ModCode[] = [];
   for (const c of dolphin.codes.map(plain)) {
-    const shown = [...yours, ...ownCodes, ...dolphinCodesList];
+    const shown = [...yours, ...ownCodes, ...recommendedList, ...dolphinCodesList];
     if (!shown.some((o) => sameCode(o, c))) {
       dolphinCodesList.push(c);
     }
   }
-  return { own: ownCodes, ownFiles: own.files, dolphin: dolphinCodesList };
+  return { own: ownCodes, ownFiles: own.files, recommended: recommendedList, dolphin: dolphinCodesList };
 }
 
 /** The codes a game starts with: the ones on in the player's own Dolphin (Dolphin's rule: a code
  * is on when its ini says `+$`, its name is in an _Enabled list, or Dolphin turns it on itself and
- * no _Disabled list names it). */
-export function startingCodes(own: IniCodes, dolphin: IniCodes): ModBuildCodes {
+ * no _Disabled list names it), and the recommended ones on by default. */
+export function startingCodes(
+  own: IniCodes,
+  dolphin: IniCodes,
+  recommended: (ModCode & { enabled: boolean })[] = [],
+): ModBuildCodes {
   const on: ModOnCode[] = [];
   const isOn = (c: ModCode & { enabled: boolean }, defaultOn: boolean) => {
     const key = enabledKey(c.kind, c.name);
@@ -230,6 +271,11 @@ export function startingCodes(own: IniCodes, dolphin: IniCodes): ModBuildCodes {
       add(c, "own");
     }
   }
+  for (const c of recommended) {
+    if (c.enabled) {
+      add(c, "recommended");
+    }
+  }
   for (const c of dolphin.codes) {
     // The player's own copy of one of Dolphin's codes (by its name) stands for it.
     const own = on.some((o) => o.kind === c.kind && o.name === c.name);
@@ -237,7 +283,33 @@ export function startingCodes(own: IniCodes, dolphin: IniCodes): ModBuildCodes {
       add(c, "dolphin");
     }
   }
-  return { on: fitRoom(on), yours: [] };
+  const key = recommendedKey(recommended);
+  return { on: fitRoom(on), yours: [], changed: false, ...(key ? { recommended: key } : {}) };
+}
+
+/** A game's codes with this launcher's recommended codes, when the player never changed them (and
+ * when it is not known whether they did, only if none are on and they added none): the recommended
+ * ones on before go, the ones on by default now come on. The same object when nothing changes. */
+export function updateRecommended(
+  codes: ModBuildCodes,
+  recommended: (ModCode & { enabled: boolean })[],
+): ModBuildCodes {
+  const key = recommendedKey(recommended);
+  if (codes.changed === true || codes.recommended === (key ?? undefined)) {
+    return codes;
+  }
+  if (codes.changed === undefined && (codes.on.length > 0 || codes.yours.length > 0)) {
+    return codes;
+  }
+  const on: ModOnCode[] = codes.on.filter((c) => c.source !== "recommended");
+  for (const c of recommended) {
+    const code = plain(c);
+    if (c.enabled && isRunnable(code) && !on.some((o) => sameCode(o, code))) {
+      on.push({ ...code, source: "recommended" });
+    }
+  }
+  const { recommended: _old, ...rest } = codes;
+  return { ...rest, on: fitRoom(on), changed: false, ...(key ? { recommended: key } : {}) };
 }
 
 /** The first of these codes that fit a room, in order. */

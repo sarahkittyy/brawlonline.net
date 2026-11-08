@@ -48,7 +48,7 @@ export const CodeNames = ({ names }: { names: string[] }) => (
   </div>
 );
 
-/** A game's Codes button: how many are on, their names on hover. */
+/** A game's Codes button: "Codes (N)" with N on, their names on hover. */
 export const CodesButton = ({
   names,
   disabled,
@@ -68,13 +68,13 @@ export const CodesButton = ({
         startIcon={<CodeRoundedIcon />}
         aria-label={Messages.codes()}
       >
-        {names.length ? names.length : Messages.codes()}
+        {names.length ? Messages.codesCount(names.length) : Messages.codes()}
       </Button>
     </span>
   </Tooltip>
 );
 
-/** A room's codes beside its Disc and SD card chips ("<> 6"), their names on hover. */
+/** A room's codes beside its Disc and SD card chips ("<> Codes (6)"), their names on hover. */
 export const CodesChip = ({ names, onClick }: { names: string[]; onClick?: () => void }) => (
   <Tooltip title={<CodeNames names={names} />} disableInteractive={true}>
     <span
@@ -95,7 +95,7 @@ export const CodesChip = ({ names, onClick }: { names: string[]; onClick?: () =>
       }}
     >
       <CodeRoundedIcon className={styles.chipIcon} />
-      {names.length}
+      {Messages.codesCount(names.length)}
     </span>
   </Tooltip>
 );
@@ -213,6 +213,7 @@ export const CodesDialog = ({
 }) => {
   const [filter, setFilter] = useState<"all" | "on">("all");
   const [query, setQuery] = useState("");
+  const [recommendedOpen, setRecommendedOpen] = useState(true);
   const [databaseOpen, setDatabaseOpen] = useState(false);
   // The code being edited (null: a new one), or none.
   const [editing, setEditing] = useState<{ code: ModCode | null } | null>(null);
@@ -221,6 +222,7 @@ export const CodesDialog = ({
       // While its room is open, the ones it runs.
       setFilter(locked ? "on" : "all");
       setQuery("");
+      setRecommendedOpen(true);
       setDatabaseOpen(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -277,13 +279,27 @@ export const CodesDialog = ({
     });
   };
 
-  const sections: { source: ModCodeSource; label: string; hint?: string; list: ModCode[] }[] = [
+  // A section with `fold` folds away all its codes when its header is clicked.
+  const sections: {
+    source: ModCodeSource;
+    label: string;
+    hint?: string;
+    list: ModCode[];
+    fold?: { open: boolean; toggle: () => void };
+  }[] = [
     { source: "yours", label: Messages.yours(), list: withOn("yours", codes.yours) },
     {
       source: "own",
       label: Messages.own(),
       hint: lists?.ownFiles.join("\n"),
       list: withOn("own", lists?.own ?? []),
+    },
+    {
+      source: "recommended",
+      label: Messages.recommended(),
+      hint: Messages.recommendedHint(),
+      list: withOn("recommended", lists?.recommended ?? []),
+      fold: { open: recommendedOpen, toggle: () => setRecommendedOpen(!recommendedOpen) },
     },
     { source: "dolphin", label: Messages.dolphin(), list: withOn("dolphin", lists?.dolphin ?? []) },
   ];
@@ -323,8 +339,10 @@ export const CodesDialog = ({
         </DialogTitle>
         <DialogContent className={styles.content}>
           <div className={styles.toolbar}>
+            {/* hiddenLabel: the theme's filled field keeps room for a label above its text otherwise. */}
             <TextField
               size="small"
+              hiddenLabel={true}
               placeholder={Messages.search()}
               value={query}
               onChange={(e) => setQuery(e.target.value)}
@@ -366,7 +384,28 @@ export const CodesDialog = ({
               if (items.length === 0) {
                 return null;
               }
-              const header = (
+              const fold = s.fold;
+              const header = fold ? (
+                <div
+                  className={clsx(styles.section, styles.sectionClickable)}
+                  role="button"
+                  tabIndex={0}
+                  onClick={fold.toggle}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      fold.toggle();
+                    }
+                  }}
+                >
+                  {s.label}
+                  <span className={styles.sectionCount}>{items.length}</span>
+                  <ExpandMoreRoundedIcon
+                    fontSize="small"
+                    className={clsx(styles.chevron, fold.open && styles.chevronOpen)}
+                  />
+                </div>
+              ) : (
                 <div className={styles.section}>
                   {s.label}
                   <span className={styles.sectionCount}>{items.length}</span>
@@ -381,7 +420,7 @@ export const CodesDialog = ({
                   ) : (
                     header
                   )}
-                  {items.map((c) => row(s.source, c))}
+                  {(!fold || fold.open) && items.map((c) => row(s.source, c))}
                 </div>
               );
             })}

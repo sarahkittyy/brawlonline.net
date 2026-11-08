@@ -13,7 +13,16 @@ import type { DolphinManager } from "../manager";
 import { DolphinLaunchType } from "../types";
 import { BUILD_HASH_VERSION, buildHashKey, combineBuildHash, computeBuildParts, sdHashKey } from "./build_hash";
 import { roomCodes } from "./code_rules";
-import { cleanCodes, codeLists, dolphinCodes, ownDolphinCodes, parseDatabaseCodes, startingCodes } from "./codes";
+import {
+  cleanCodes,
+  codeLists,
+  dolphinCodes,
+  ownDolphinCodes,
+  parseDatabaseCodes,
+  recommendedCodes,
+  startingCodes,
+  updateRecommended,
+} from "./codes";
 import { defaultControllerKind, readDolphinControllers } from "./controllers";
 import { discIdentity, isBrawlGameId, readDiscInfo } from "./disc_info";
 import { findModParts } from "./folder_import";
@@ -846,15 +855,16 @@ export class ModsManager {
   }
 
   /** The game's codes, and the Codes dialog's lists: the player's own Dolphins' (Brawl Online's and
-   * their own), and Dolphin's for the game (room-codes.md). */
+   * their own), the recommended ones, and Dolphin's for the game (room-codes.md). */
   async codeLists(id: string): Promise<{ codes: ModBuildCodes; lists: ModCodeLists }> {
     const codes = await this.buildCodes(id);
     const build = this.findBuild(id);
     if (!build.gameId || build.builtIn || build.launcherPath) {
-      return { codes, lists: { own: [], ownFiles: [], dolphin: [] } };
+      return { codes, lists: { own: [], ownFiles: [], recommended: [], dolphin: [] } };
     }
     const own = await ownDolphinCodes(this.codeFolders(), build.gameId, build.revision);
-    return { codes, lists: codeLists(own, dolphinCodes(build.gameId, build.revision), codes.yours) };
+    const dolphin = dolphinCodes(build.gameId, build.revision);
+    return { codes, lists: codeLists(own, dolphin, codes.yours, recommendedCodes(build.gameId)) };
   }
 
   /** Keeps the game's codes, checked (cleanCodes): its next room runs the ones on. Not while its
@@ -867,7 +877,15 @@ export class ModsManager {
     if (this.running && this.runningBuildId === id) {
       throw new Error("Leave the room to change its codes.");
     }
-    const clean = cleanCodes(codes);
+    const kept = build.codes ?? { on: [], yours: [] };
+    const checked = cleanCodes(codes);
+    // Changed by hand: a launcher with other recommended codes leaves them as they are from now on.
+    const same = JSON.stringify([checked.on, checked.yours]) === JSON.stringify([kept.on, kept.yours]);
+    const clean: ModBuildCodes = {
+      ...checked,
+      changed: same ? kept.changed : true,
+      ...(kept.recommended ? { recommended: kept.recommended } : {}),
+    };
     await this.saveBuilds(this.builds().map((b) => (b.id === id ? { ...b, codes: clean } : b)));
     return clean;
   }
@@ -883,10 +901,11 @@ export class ModsManager {
   }
 
   /** Every game's codes looked at once (in the background at start): a game added before codes
-   * starts with the ones on in the player's own Dolphin, so its Codes button shows them. */
+   * starts with the ones on in the player's own Dolphin, and one whose codes the player never
+   * changed takes this launcher's recommended ones, so its Codes button shows them. */
   async seedCodes(): Promise<void> {
     for (const build of this.builds()) {
-      if (!build.codes && !build.builtIn && !build.launcherPath && build.gameId) {
+      if (!build.builtIn && !build.launcherPath && build.gameId) {
         await this.buildCodes(build.id).catch((err) => log.warn(`codes of ${build.name}: ${err}`));
       }
     }
@@ -897,7 +916,8 @@ export class ModsManager {
     return [this.dolphin.netplayUserFolder(), ...this.ownDolphinFolders()];
   }
 
-  /** The game's codes; the first time, the ones on in the player's own Dolphins (kept from then). */
+  /** The game's codes; the first time, the ones on in the player's own Dolphins and the recommended
+   * ones (kept from then); this launcher's recommended ones while the player never changed them. */
   private async buildCodes(id: string): Promise<ModBuildCodes> {
     const build = this.findBuild(id);
     // A mod booted by its launcher (P+'s too) has its own Gecko code handler where Dolphin's goes:
@@ -905,23 +925,28 @@ export class ModsManager {
     if (build.builtIn || build.launcherPath) {
       return { on: [], yours: [] };
     }
+    const recommended = build.gameId ? recommendedCodes(build.gameId) : [];
     if (build.codes) {
-      return build.codes;
+      const codes = updateRecommended(build.codes, recommended);
+      if (codes !== build.codes) {
+        log.info(`${build.name} takes the recommended codes: ${codes.on.map((c) => c.name).join(", ") || "none"}`);
+        await this.saveBuilds(this.builds().map((b) => (b.id === id ? { ...b, codes } : b)));
+      }
+      return codes;
     }
     if (!build.gameId) {
       return { on: [], yours: [] };
     }
     // Not for Brawl: its inis hold an old P+ netplay setup's codes, which no mod's room wants.
-    const codes = isBrawlGameId(build.gameId)
-      ? { on: [], yours: [] }
-      : startingCodes(
-          await ownDolphinCodes(this.codeFolders(), build.gameId, build.revision),
-          dolphinCodes(build.gameId, build.revision),
-        );
+    const brawl = isBrawlGameId(build.gameId);
+    const none = { codes: [], enabled: new Set<string>(), disabled: new Set<string>() };
+    const codes = startingCodes(
+      brawl ? none : await ownDolphinCodes(this.codeFolders(), build.gameId, build.revision),
+      brawl ? none : dolphinCodes(build.gameId, build.revision),
+      recommended,
+    );
     if (codes.on.length > 0) {
-      log.info(
-        `${build.name} starts with the codes on in the player's Dolphin: ${codes.on.map((c) => c.name).join(", ")}`,
-      );
+      log.info(`${build.name} starts with the codes: ${codes.on.map((c) => `${c.name} (${c.source})`).join(", ")}`);
     }
     const latest = this.builds().find((b) => b.id === id);
     if (latest && !latest.codes) {
