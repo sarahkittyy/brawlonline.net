@@ -1586,20 +1586,49 @@ std::string LanHost(const ENetAddress& towards)
   return text;
 }
 
+// Once mm answered, the probe goes again this often for as long as the session is in the room. A
+// router or carrier-grade NAT forgets a UDP port mapping nothing went out on for a while (30-60 s
+// is common), and a player alone in a room sends nothing else: its socket's next packet, to a
+// joiner, got a new mapping (a new public port behind such a NAT), while every joiner punched to
+// the address mm had from the first probe, and no link came up (bug report #255: a Mario Party 6
+// room's host behind a carrier-grade NAT, "the router changed the port"; each joiner from 2 min
+// after the room opened had "no link ... 0 hellos" until it left). Each probe keeps the mapping
+// open, and mm passes on a new address if it changed anyway (nothing when it is the same).
+constexpr auto PROBE_REFRESH = std::chrono::seconds(15);
+
 // Net thread: the endpoint probe (docs/design/brawl-mods.md §5): a connection of its own to mm
 // from the session's socket, one `mods-endpoint` message, closed by mm after its answer.
 void StepProbe(Clock::time_point now)
 {
   State::Probe& pr = s.probe;
-  if (pr.state != "probing" || pr.peer || now - pr.last < std::chrono::seconds(2))
-    return;
-  pr.last = now;
-  if (++pr.attempts > 15)
+  if (pr.peer && now - pr.last > std::chrono::seconds(10))
   {
+    // Connected and never answered or closed (ENet's timeouts only end a link that stops
+    // acknowledging): the next one goes.
+    pr.peer->data = nullptr;
+    enet_peer_reset(pr.peer);
+    pr.peer = nullptr;
+  }
+  if (pr.peer)
+    return;
+  if (pr.state == "done")
+  {
+    // A refresh: retried at the same pace when mm does not answer, and never logged.
+    if (now - pr.last < PROBE_REFRESH)
+      return;
+  }
+  else if (pr.state != "probing" || now - pr.last < std::chrono::seconds(2))
+  {
+    return;
+  }
+  else if (++pr.attempts > 15)
+  {
+    pr.last = now;
     pr.state = "failed: the server did not answer";
     AddLog("endpoint probe: the server did not answer");
     return;
   }
+  pr.last = now;
   ENetAddress addr{};
   if (enet_address_set_host(&addr, pr.host.c_str()) != 0)
     return;
@@ -1653,7 +1682,7 @@ void OnProbeAnswer(ENetPeer* peer, const u8* data, size_t size)
     s.probe.state = "failed: " + e->second.get<std::string>().substr(0, 120);
     AddLog("endpoint probe refused: " + e->second.get<std::string>().substr(0, 120));
   }
-  else
+  else if (s.probe.state != "done")
   {
     s.probe.state = "done";
     AddLog(fmt::format("endpoint probe answered (attempt {})", s.probe.attempts));
@@ -7687,12 +7716,16 @@ void SetRoom(int local_slot, const std::vector<RoomMember>& members)
   }
 }
 
-void ProbeEndpoint(const std::string& mm_host, u16 mm_port, const std::string& token)
+void ProbeEndpoint(const std::string& mm_host, u16 mm_port, const std::string& token, bool known)
 {
   std::lock_guard lk(s.net_mutex);
   if (!s.host || token.empty())
     return;
   if (s.probe.token == token && (s.probe.state == "probing" || s.probe.state == "done"))
+    return;
+  // mm has this player's endpoint already: a probe that failed is not tried again for it, but a
+  // new token (mm's restart keeps the endpoint and hands out new tokens) takes over the refreshes.
+  if (known && s.probe.token == token)
     return;
   if (s.probe.peer)
   {

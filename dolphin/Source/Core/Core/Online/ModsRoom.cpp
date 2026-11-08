@@ -581,11 +581,8 @@ bool OnServerMessage(const std::string& text)
       probed = !m->host.empty();
   }
   Machine::SetRoom(view->you - 1, members);
-  if (!probed)
-  {
-    Machine::ProbeEndpoint(Config::GetMatchmakingHost(),
-                           static_cast<u16>(Config::GetMatchmakingPort()), view->token);
-  }
+  Machine::ProbeEndpoint(Config::GetMatchmakingHost(),
+                         static_cast<u16>(Config::GetMatchmakingPort()), view->token, probed);
   return true;
 }
 

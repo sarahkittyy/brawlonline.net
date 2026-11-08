@@ -12,6 +12,9 @@ from __future__ import annotations
 import json
 import os
 import re
+import selectors
+import socket
+import threading
 import time
 from pathlib import Path
 from typing import Any, Callable
@@ -32,9 +35,10 @@ BUILD = {"hash": "ab" * 32, "name": "Test build"}
 
 def _boot(dolphin: Callable[..., DolphinInstance], be: OnlineBackend, name: str, user: OnlineUser,
           room: dict[str, Any], block: str = "", config_args: list[str] | None = None,
-          **kw: Any) -> DolphinInstance:
+          mm_port: int | None = None, **kw: Any) -> DolphinInstance:
     if be.mm_host.startswith("127."):
-        ini = {"Online": {"UseDevServer": True, "MatchmakingPort": be.mm_port, "DevAccountsUrl": be.accounts_url}}
+        ini = {"Online": {"UseDevServer": True, "MatchmakingPort": mm_port or be.mm_port,
+                          "DevAccountsUrl": be.accounts_url}}
     else:
         ini = {"Online": {"MatchmakingHost": be.mm_host, "MatchmakingPort": be.mm_port,
                           "AccountsUrl": be.accounts_url}}
@@ -272,6 +276,108 @@ def test_room_sessions_map_their_port_with_upnp(dolphin: Callable[..., DolphinIn
     finally:
         be.stop()
         igd.stop()
+
+
+class _ForgetfulNat:
+    """A UDP NAT between one player's Dolphin and mm (127.0.0.1): each of the player's sockets gets
+    a "public" socket of its own toward mm, forgotten once nothing went out on it for `idle`
+    seconds, as a router or carrier-grade NAT forgets a mapping; the socket's next datagram gets a
+    new one, with a new port. Only what the player sends keeps a mapping (mm's answers do not)."""
+
+    def __init__(self, mm_port: int, idle: float) -> None:
+        self.mm = ("127.0.0.1", mm_port)
+        self.idle = idle
+        self.inner = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.inner.bind(("127.0.0.1", 0))
+        self.port = self.inner.getsockname()[1]
+        self.sel = selectors.DefaultSelector()
+        self.sel.register(self.inner, selectors.EVENT_READ, None)
+        self.maps: dict[tuple[str, int], list[Any]] = {}  # player's address -> [socket, last sent]
+        self.lock = threading.Lock()
+        self.run = True
+        self.thread = threading.Thread(target=self._loop, daemon=True)
+
+    def start(self) -> "_ForgetfulNat":
+        self.thread.start()
+        return self
+
+    def stop(self) -> None:
+        self.run = False
+        self.thread.join(5)
+        for sock, _ in self.maps.values():
+            sock.close()
+        self.inner.close()
+
+    def live_ports(self) -> set[int]:
+        with self.lock:
+            return {m[0].getsockname()[1] for m in self.maps.values()}
+
+    def _loop(self) -> None:
+        while self.run:
+            for key, _ in self.sel.select(0.1):
+                try:
+                    data, src = key.fileobj.recvfrom(65536)  # type: ignore[union-attr]
+                except OSError:
+                    continue
+                with self.lock:
+                    if key.data is None:
+                        m = self.maps.get(src)
+                        if m is None:
+                            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                            sock.bind(("127.0.0.1", 0))
+                            self.sel.register(sock, selectors.EVENT_READ, src)
+                            m = self.maps[src] = [sock, 0.0]
+                        m[1] = time.monotonic()
+                        m[0].sendto(data, self.mm)
+                    elif key.data in self.maps and src == self.mm:
+                        self.inner.sendto(data, key.data)
+            with self.lock:
+                now = time.monotonic()
+                for src, (sock, last) in list(self.maps.items()):
+                    if now - last > self.idle:
+                        self.sel.unregister(sock)
+                        sock.close()
+                        del self.maps[src]
+
+
+@pytest.mark.parametrize("idle", [25, 8])
+def test_the_room_keeps_the_hosts_endpoint_open(backend: OnlineBackend,
+                                                dolphin: Callable[..., DolphinInstance], idle: int) -> None:
+    """Bug report #255: a Mario Party 6 room's host behind a carrier-grade NAT; every friend who
+    joined from 2 min after the room opened got no link ("0 hellos"). The session probed mm once,
+    when the room opened, and a host alone sends nothing else from its socket, so the NAT forgot
+    the mapping mm passes to joiners. Now the probe goes every 15 s: with a NAT that forgets after
+    25 s, the endpoint mm has stays one the NAT still maps, after a minute alone; with one that
+    forgets after 8 s, each probe comes from a new port, and mm passes it on."""
+    nat = _ForgetfulNat(backend.mm_port, idle).start()
+    try:
+        user = backend.create_user(f"hostn{idle}", "HSNA" if idle == 25 else "HSNB")
+        host = _boot(dolphin, backend, f"mods-nat-host-{idle}", user,
+                     {"host": True, "build": BUILD, "public": False, "controller": "gc"}, mm_port=nat.port)
+
+        def endpoint() -> str:
+            room = host.client.call("mods_status").get("room") or {}
+            return next((s["endpoint"] for s in room.get("slots", []) if s.get("endpoint")), "")
+
+        first = _wait(endpoint, 60, "the host's endpoint")
+        seen = [first]
+        t0 = time.monotonic()
+        while time.monotonic() - t0 < 65:
+            ep = endpoint()
+            if ep and ep != seen[-1]:
+                seen.append(ep)
+            time.sleep(0.5)
+        last = endpoint()
+        print(idle, seen, nat.live_ports())
+        if idle == 25:
+            assert seen == [first], seen
+            assert int(last.rsplit(":", 1)[1]) in nat.live_ports(), (last, nat.live_ports())
+        else:
+            assert len(seen) >= 3, seen
+            assert len(re.findall(r"room: the server sees this player at", _log(host))) >= 3
+        assert _log(host).count("machine: endpoint probe answered") == 1
+    finally:
+        nat.stop()
 
 
 # A GameCube game for the codes (a mod's launcher, P+'s here, has its own Gecko code handler where

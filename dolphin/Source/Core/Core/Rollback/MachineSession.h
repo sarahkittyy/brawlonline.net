@@ -217,8 +217,11 @@ void RecheckEnvironment();
 // LAN address. A peer's hello is taken only from one of its addresses.
 void SetRoom(int local_slot, const std::vector<RoomMember>& members);
 // Sends mm the room's endpoint token from the session's UDP socket (with its LAN address), so mm
-// records where peers reach this player; again every 2 s until mm answers (any thread).
-void ProbeEndpoint(const std::string& mm_host, u16 mm_port, const std::string& token);
+// records where peers reach this player; again every 2 s until mm answers, then every 15 s while
+// the session runs, which keeps the NAT's mapping of the socket open (any thread). `known`: mm's
+// room state already has an endpoint for this player (then only a new token probes).
+void ProbeEndpoint(const std::string& mm_host, u16 mm_port, const std::string& token,
+                   bool known);
 // "" (none), "probing", "done" or "failed: <why>".
 std::string ProbeState();
 // Ends the session (any thread); the game keeps running locally.
