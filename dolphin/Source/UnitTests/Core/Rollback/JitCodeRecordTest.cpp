@@ -3,8 +3,9 @@
 
 // PowerPC::JitCodeRecord (Core/PowerPC/PPCCache.h): the instructions a whole-machine session's JIT
 // compiled each block from. A rollback's load undoes the record to the snapshot's mark and drops
-// the blocks of every line whose record changed, so the record after an undo must be the record
-// at the mark, and the lines it reports must cover every block that changed.
+// the blocks of every entry whose record changed, so the record after an undo must be the record
+// at the mark, and the entries it reports must be every one that changed (and only those: their
+// blocks are dropped and compiled again).
 
 #include <gtest/gtest.h>
 
@@ -32,9 +33,10 @@ u64 Entry(u32 physical)
   return JitCodeRecord::Entry(0x80000000 | physical, 0);
 }
 
-bool Has(const std::vector<u32>& lines, u32 line)
+bool Has(const std::vector<JitCodeRecord::Undone>& undone, u32 physical)
 {
-  return std::ranges::find(lines, line) != lines.end();
+  return std::ranges::find(undone, JitCodeRecord::Undone{0x80000000 | physical, 0, physical}) !=
+         undone.end();
 }
 }  // namespace
 
@@ -45,13 +47,13 @@ TEST(JitCodeRecord, UndoForgetsWhatWasRecordedAfterTheMark)
   const u64 mark = record.Mark();
   record.Record(Entry(0x2000), MakeBlock(0x2000, 12, 200));  // two lines
 
-  std::vector<u32> lines;
+  std::vector<JitCodeRecord::Undone> lines;
   record.Undo(mark, &lines);
   EXPECT_EQ(record.Find(Entry(0x2000)), nullptr);
   ASSERT_NE(record.Find(Entry(0x1000)), nullptr);
   EXPECT_TRUE(Has(lines, 0x2000));
-  EXPECT_TRUE(Has(lines, 0x2020));
   EXPECT_FALSE(Has(lines, 0x1000));
+  EXPECT_EQ(lines.size(), 1u);  // the entry once, not each line it read
   EXPECT_EQ(record.Mark(), mark + 1);  // the sequence goes on: marks never repeat
 }
 
@@ -66,7 +68,7 @@ TEST(JitCodeRecord, UndoBringsBackWhatTheGameInvalidatedAfterTheMark)
   EXPECT_EQ(record.Find(Entry(0x3000)), nullptr);
   record.Record(Entry(0x3000), MakeBlock(0x3000, 8, 900));  // compiled again from new code
 
-  std::vector<u32> lines;
+  std::vector<JitCodeRecord::Undone> lines;
   record.Undo(mark, &lines);
   const JitCodeRecord::Block* restored = record.Find(Entry(0x3000));
   ASSERT_NE(restored, nullptr);
@@ -104,7 +106,7 @@ TEST(JitCodeRecord, ReplacedRecordComesBackOnUndo)
   const u64 mark = record.Mark();
   record.Record(Entry(0x5000), MakeBlock(0x5000, 6, 20));
 
-  std::vector<u32> lines;
+  std::vector<JitCodeRecord::Undone> lines;
   record.Undo(mark, &lines);
   ASSERT_NE(record.Find(Entry(0x5000)), nullptr);
   EXPECT_EQ(*record.Find(Entry(0x5000)), first);
@@ -122,7 +124,7 @@ TEST(JitCodeRecord, ForgetAllAndItsUndo)
   EXPECT_EQ(record.Find(Entry(0x6000)), nullptr);
   record.Record(Entry(0x6000), MakeBlock(0x6000, 4, 50));
 
-  std::vector<u32> lines;
+  std::vector<JitCodeRecord::Undone> lines;
   record.Undo(mark, &lines);
   ASSERT_NE(record.Find(Entry(0x6000)), nullptr);
   EXPECT_EQ((*record.Find(Entry(0x6000)))[0].hex, 1u);
@@ -144,7 +146,7 @@ TEST(JitCodeRecord, TrimKeepsWhatAnUndoToALaterMarkNeeds)
   record.Record(Entry(0x8200), MakeBlock(0x8200, 4, 3));
 
   record.Trim(oldest);
-  std::vector<u32> lines;
+  std::vector<JitCodeRecord::Undone> lines;
   record.Undo(later, &lines);
   EXPECT_NE(record.Find(Entry(0x8000)), nullptr);
   EXPECT_NE(record.Find(Entry(0x8100)), nullptr);
@@ -157,6 +159,19 @@ TEST(JitCodeRecord, TrimKeepsWhatAnUndoToALaterMarkNeeds)
   EXPECT_NE(record.Find(Entry(0x8000)), nullptr);
   EXPECT_NE(record.Find(Entry(0x8100)), nullptr);
   EXPECT_TRUE(lines.empty());
+}
+
+TEST(JitCodeRecord, UndoReportsTheEntryWithItsFeatureFlags)
+{
+  JitCodeRecord record;
+  const u64 mark = record.Mark();
+  record.Record(JitCodeRecord::Entry(0x8000A010, 5), MakeBlock(0xA010, 20, 1));
+  record.Record(JitCodeRecord::Entry(0x8000B000, 0), {});  // no instruction read: no block
+
+  std::vector<JitCodeRecord::Undone> undone;
+  record.Undo(mark, &undone);
+  ASSERT_EQ(undone.size(), 1u);
+  EXPECT_EQ(undone[0], (JitCodeRecord::Undone{0x8000A010, 5, 0xA010}));
 }
 
 TEST(JitCodeRecord, EntriesDifferByFeatureFlags)

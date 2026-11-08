@@ -289,10 +289,14 @@ void JitInterface::EraseBlocksForRestoredRange(u32 physical_address, u32 length)
     m_jit->GetBlockCache()->EraseBlocksForRestoredRange(physical_address, length);
 }
 
-void JitInterface::DropBlocksOfLine(u32 physical_address)
+void JitInterface::DropBlocksOfEntry(u32 physical_address, u32 effective_address,
+                                     u32 feature_flags)
 {
   if (m_jit)
-    m_jit->GetBlockCache()->DropBlocksOfLine(physical_address);
+  {
+    m_jit->GetBlockCache()->DropBlocksOfEntry(physical_address, effective_address,
+                                              static_cast<CPUEmuFeatureFlags>(feature_flags));
+  }
 }
 
 u64 JitInterface::Invalidations() const

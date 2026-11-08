@@ -328,13 +328,25 @@ void JitBaseBlockCache::EraseBlocksForRestoredRange(u32 physical_address, u32 le
   }
 }
 
-void JitBaseBlockCache::DropBlocksOfLine(u32 physical_address)
+void JitBaseBlockCache::DropBlocksOfEntry(u32 physical_address, u32 effective_address,
+                                          CPUEmuFeatureFlags feature_flags)
 {
-  const u32 line = physical_address / 32;
-  if (!valid_block.Test(line))
-    return;
-  valid_block.Clear(line);
-  ErasePhysicalRange(line * 32, 32);
+  std::vector<const JitBlock*> blocks;
+  for (auto [it, end] = block_map.equal_range(physical_address); it != end; ++it)
+  {
+    if (it->second.effectiveAddress == effective_address &&
+        it->second.feature_flags == feature_flags)
+    {
+      blocks.push_back(&it->second);
+    }
+  }
+  // DestroyBlock counts each block as an invalidation; these are not (the header): counted, a load
+  // that undid any block compiled since its snapshot dropped every block of the restored memory
+  // as well (RollbackManager::JitKeepsBlocks), and the re-run compiled them all again.
+  const u64 invalidations = m_invalidations;
+  for (const JitBlock* block : blocks)
+    EraseSingleBlock(*block);
+  m_invalidations = invalidations;
 }
 
 bool JitBaseBlockCache::HasCodeAt(u32 physical_address, u32 length) const

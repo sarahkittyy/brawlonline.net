@@ -1796,12 +1796,17 @@ bool RollbackManager::LoadFrame(Core::System& system, int frames_back)
   {
     // What the JIT compiled goes back to what it was at the snapshot (PowerPC::JitCodeRecord): the
     // blocks first compiled since, or compiled from instructions the game invalidated since, go.
+    // Only those: dropping every block of their 32-byte lines (until 2026-11-07) took about 19
+    // other blocks with each one in Cobalt (a block reads many lines), and the re-run compiled
+    // them all again: 3.1-3.7 ms of JIT in each re-run frame, 133-141 ms of rollbacks a second
+    // in a Cobalt pair at 90 ms where this takes 32.
     ROLLBACK_ZONE_N("JIT code record");
-    std::vector<u32> lines;
-    system.GetPPCState().iCache.jit_code.Undo(deltaSave.m_jit_code_mark, &lines);
+    static std::vector<PowerPC::JitCodeRecord::Undone> undone;
+    undone.clear();
+    system.GetPPCState().iCache.jit_code.Undo(deltaSave.m_jit_code_mark, &undone);
     auto& jit = system.GetJitInterface();
-    for (const u32 line : lines)
-      jit.DropBlocksOfLine(line);
+    for (const auto& u : undone)
+      jit.DropBlocksOfEntry(u.physical_address, u.address, u.feature_flags);
   }
 
   if (!m_region_mode)

@@ -129,10 +129,14 @@ void JitCodeRecord::Index(u64 entry, const Block& block)
   }
 }
 
-void JitCodeRecord::AddLines(const Block& block, std::vector<u32>* lines)
+void JitCodeRecord::AddUndone(u64 entry, const Block& block, std::vector<Undone>* undone)
 {
-  for (const Instruction& instruction : block)
-    lines->push_back(instruction.physical_address & ~0x1fu);
+  // The entry's own instruction comes first (PPCAnalyzer::Analyze); none: no block was compiled.
+  if (block.empty())
+    return;
+  undone->push_back({.address = static_cast<u32>(entry),
+                     .feature_flags = static_cast<u32>(entry >> 32),
+                     .physical_address = block.front().physical_address});
 }
 
 void JitCodeRecord::Record(u64 entry, Block block)
@@ -215,7 +219,7 @@ void JitCodeRecord::Clear()
   m_journal.clear();
 }
 
-void JitCodeRecord::Undo(u64 mark, std::vector<u32>* lines)
+void JitCodeRecord::Undo(u64 mark, std::vector<Undone>* undone)
 {
   // Newest first: each change finds the record as it left it.
   while (!m_journal.empty() && m_journal.back().seq > mark)
@@ -225,7 +229,7 @@ void JitCodeRecord::Undo(u64 mark, std::vector<u32>* lines)
     {
       for (const auto& [entry, block] : change.blocks)
       {
-        AddLines(block, lines);
+        AddUndone(entry, block, undone);
         Index(entry, block);
       }
       m_blocks = std::move(change.blocks);
@@ -234,12 +238,12 @@ void JitCodeRecord::Undo(u64 mark, std::vector<u32>* lines)
     {
       if (const auto it = m_blocks.find(change.entry); it != m_blocks.end())
       {
-        AddLines(it->second, lines);
+        AddUndone(change.entry, it->second, undone);
         m_blocks.erase(it);
       }
       if (change.before)
       {
-        AddLines(*change.before, lines);
+        AddUndone(change.entry, *change.before, undone);
         Index(change.entry, *change.before);
         m_blocks.emplace(change.entry, std::move(*change.before));
       }

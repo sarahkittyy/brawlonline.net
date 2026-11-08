@@ -107,10 +107,21 @@ public:
   void Forget(u32 physical_address, u32 length);
   void ForgetAll();
   void Clear();
-  // A snapshot keeps the mark; Undo goes back to one (adding the 32-byte lines whose blocks must
-  // go), Trim forgets the changes before the oldest snapshot's.
+  // An entry whose record an Undo changed, with where its block starts in physical memory (a
+  // record from before and after, so maybe twice): its JIT blocks must go
+  // (JitBaseBlockCache::DropBlocksOfEntry). Only its own: a block is compiled from its entry's
+  // record and from memory, never from another entry's record.
+  struct Undone
+  {
+    u32 address;
+    u32 feature_flags;
+    u32 physical_address;
+    bool operator==(const Undone&) const = default;
+  };
+  // A snapshot keeps the mark; Undo goes back to one (adding the entries whose blocks must go),
+  // Trim forgets the changes before the oldest snapshot's.
   u64 Mark() const { return m_seq; }
-  void Undo(u64 mark, std::vector<u32>* lines);
+  void Undo(u64 mark, std::vector<Undone>* undone);
   void Trim(u64 mark);
 
 private:
@@ -125,7 +136,7 @@ private:
 
   void Index(u64 entry, const Block& block);
   void Drop(std::unordered_map<u64, Block>::iterator it);
-  static void AddLines(const Block& block, std::vector<u32>* lines);
+  static void AddUndone(u64 entry, const Block& block, std::vector<Undone>* undone);
 
   std::unordered_map<u64, Block> m_blocks;
   // The entries whose blocks read each 32-byte line (an entry may have gone since).

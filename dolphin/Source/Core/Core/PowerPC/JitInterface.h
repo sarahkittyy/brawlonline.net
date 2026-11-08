@@ -88,8 +88,8 @@ public:
   void InvalidateICacheLine(u32 address);
   // Rollback: see JitBaseBlockCache::EraseBlocksForRestoredRange.
   void EraseBlocksForRestoredRange(u32 physical_address, u32 length);
-  // Rollback: see JitBaseBlockCache::DropBlocksOfLine.
-  void DropBlocksOfLine(u32 physical_address);
+  // Rollback: see JitBaseBlockCache::DropBlocksOfEntry.
+  void DropBlocksOfEntry(u32 physical_address, u32 effective_address, u32 feature_flags);
   // Rollback: see JitBaseBlockCache::Invalidations and HasCodeAt.
   u64 Invalidations() const;
   bool HasCodeAt(u32 physical_address, u32 length) const;
