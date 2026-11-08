@@ -13,6 +13,7 @@
 #endif
 
 #include "Common/Logging/Log.h"
+#include "Common/Logging/LogManager.h"
 #ifdef _WIN32
 #include "Common/StringUtil.h"
 #endif
@@ -129,6 +130,8 @@ static bool ShowMessageAlert(std::string_view text, bool yes_no, Common::Log::Lo
   // Panic alerts.
   if (style == MsgType::Warning && s_abort_on_panic_alert)
   {
+    if (auto* log = Common::Log::LogManager::GetInstance())
+      log->Flush();
     std::abort();
   }
 

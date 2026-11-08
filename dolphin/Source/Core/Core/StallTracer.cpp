@@ -21,6 +21,7 @@
 
 #include "Common/CommonTypes.h"
 #include "Common/Logging/Log.h"
+#include "Common/Logging/LogManager.h"
 #include "Common/Thread.h"
 #include "Core/Core.h"
 #include "Core/System.h"
@@ -470,14 +471,16 @@ void Trace(std::string_view headline, u64 field, const std::array<double, 3>& cp
 }
 
 // The emulation did not stop in STOP_HANG_MS: where the threads are, then out (TerminateProcess /
-// _Exit: nothing more runs in the process, its stuck threads' locks included; the log file is
-// written through at every line).
+// _Exit: nothing more runs in the process, its stuck threads' locks included; dolphin.log's
+// writer thread is waited for first, for up to 2 s).
 [[noreturn]] void ExitStuckStop(u64 field, const std::array<double, 3>& cpu_at_field)
 {
   Trace(fmt::format("The emulation did not stop {} s after the stop was asked for; Dolphin exits",
                     STOP_HANG_MS / 1000),
         field, cpu_at_field);
   ERROR_LOG_FMT(CORE, "Dolphin exits (code {}): the emulation is stuck", STOP_HANG_EXIT_CODE);
+  if (auto* log = Common::Log::LogManager::GetInstance())
+    log->Flush();
 #ifdef _WIN32
   TerminateProcess(GetCurrentProcess(), STOP_HANG_EXIT_CODE);
 #endif

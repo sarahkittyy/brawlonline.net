@@ -6,12 +6,16 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <memory>
 #include <mutex>
 #include <string>
+#include <thread>
+#include <utility>
 
 #include <fmt/chrono.h>
 #include <fmt/format.h>
@@ -21,6 +25,7 @@
 #include "Common/Logging/ConsoleListener.h"
 #include "Common/Logging/Log.h"
 #include "Common/StringUtil.h"
+#include "Common/Thread.h"
 
 namespace Common::Log
 {
@@ -41,6 +46,29 @@ const Config::Info<LogLevel> LOGGER_VERBOSITY{{Config::System::Logger, "Options"
 constexpr u64 MAX_LOG_FILE_SIZE = 25 * 1024 * 1024;
 constexpr int KEPT_LOGS = 3;
 
+// "MM:SS:mmm", as each line starts (LogManager::GetTimestamp).
+static std::string Timestamp()
+{
+  // NOTE: the Qt LogWidget hardcodes the expected length of the timestamp portion of the log line,
+  // so ensure they stay in sync
+
+  // We want milliseconds *and not hours*, so can't directly use STL formatters
+  const auto now = std::chrono::system_clock::now();
+  const auto now_s = std::chrono::floor<std::chrono::seconds>(now);
+  const auto now_ms = std::chrono::floor<std::chrono::milliseconds>(now);
+  return fmt::format("{:%M:%S}:{:03}", now_s, (now_ms - now_s).count());
+}
+
+// The file is written by its own thread: a thread that logs only appends the line to a buffer, so
+// a disk that does not take a write for a while (another program's scan, a busy or sleeping
+// drive) no longer stops the thread that logged. Bug report #257 (2026-11-08): the CPU thread
+// waited 2.4 s in NtWriteFile for one line of dolphin.log in the middle of an Unranked game, and
+// the opponent saw the game stop and quit. Above MAX_PENDING bytes waiting (a disk that stopped
+// for minutes) lines are dropped and counted, and the file says so when it takes writes again.
+constexpr size_t MAX_PENDING = 8 * 1024 * 1024;
+// A write that took this long is noted in the file.
+constexpr auto SLOW_WRITE = std::chrono::milliseconds(250);
+
 class FileLogListener : public LogListener
 {
 public:
@@ -51,29 +79,112 @@ public:
       MoveToPrev();
     Open();
     SetEnable(true);
+    m_thread = std::thread([this] { Loop(); });
+  }
+
+  ~FileLogListener() override
+  {
+    {
+      std::lock_guard lk(m_mutex);
+      m_quit = true;
+    }
+    m_cv.notify_one();
+    if (m_thread.joinable())
+      m_thread.join();
   }
 
   void Log(LogLevel, const char* msg) override
   {
-    if (!IsEnabled() || !IsValid())
+    if (!IsEnabled() || !m_valid.load(std::memory_order_relaxed))
       return;
 
-    std::lock_guard<std::mutex> lk(m_log_lock);
-    m_logfile << msg << std::flush;
-    m_size += std::strlen(msg);
+    const size_t length = std::strlen(msg);
+    {
+      std::lock_guard lk(m_mutex);
+      if (m_pending.size() + length > MAX_PENDING)
+      {
+        ++m_dropped;
+        return;
+      }
+      m_pending.append(msg, length);
+    }
+    m_cv.notify_one();
+  }
+
+  // Waits until the lines logged so far are in the file, for up to `timeout`.
+  void Flush(std::chrono::milliseconds timeout) override
+  {
+    std::unique_lock lk(m_mutex);
+    m_idle_cv.wait_for(lk, timeout, [this] { return m_pending.empty() && !m_writing; });
+  }
+
+  bool IsEnabled() const { return m_enable; }
+  void SetEnable(bool enable) { m_enable = enable; }
+
+private:
+  void Loop()
+  {
+    Common::SetCurrentThreadName("Log writer");
+    // Tests: each write waits this long first, as a disk that does not take writes.
+    const char* delay_env = std::getenv("PPR_LOG_WRITE_DELAY_MS");
+    const auto delay = std::chrono::milliseconds(delay_env ? std::atoi(delay_env) : 0);
+    std::string out;
+    std::unique_lock lk(m_mutex);
+    while (true)
+    {
+      m_cv.wait(lk, [this] { return m_quit || !m_pending.empty(); });
+      if (m_pending.empty())
+        return;
+      out.swap(m_pending);
+      const u64 dropped = std::exchange(m_dropped, 0);
+      m_writing = true;
+      lk.unlock();
+
+      if (dropped != 0)
+      {
+        out.insert(0, fmt::format("{} {}:{} W[MASTER]: dolphin.log: {} lines dropped here: the "
+                                  "file did not take writes and {} MiB were waiting\n",
+                                  Timestamp(), "Common/Logging/LogManager.cpp", __LINE__,
+                                  dropped, MAX_PENDING >> 20));
+      }
+      const auto start = std::chrono::steady_clock::now();
+      if (delay.count() > 0)
+        std::this_thread::sleep_for(delay);
+      Write(out);
+      const auto took = std::chrono::steady_clock::now() - start;
+      if (took >= SLOW_WRITE)
+      {
+        Write(fmt::format(
+            "{} {}:{} W[MASTER]: dolphin.log: a write took {} ms (the lines before this one; "
+            "nothing waited for it)\n",
+            Timestamp(), "Common/Logging/LogManager.cpp", __LINE__,
+            std::chrono::duration_cast<std::chrono::milliseconds>(took).count()));
+      }
+      out.clear();
+
+      lk.lock();
+      m_writing = false;
+      if (m_pending.empty())
+        m_idle_cv.notify_all();
+    }
+  }
+
+  // Writer thread only (and the constructor, before it starts).
+  void Write(const std::string& text)
+  {
+    if (!m_logfile.good())
+      return;
+    m_logfile << text << std::flush;
+    m_size += text.size();
     if (m_size >= MAX_LOG_FILE_SIZE)
     {
       m_logfile.close();
       MoveToPrev();
       Open();
     }
+    m_valid.store(m_logfile.good(), std::memory_order_relaxed);
   }
 
-  bool IsValid() const { return m_logfile.good(); }
-  bool IsEnabled() const { return m_enable; }
-  void SetEnable(bool enable) { m_enable = enable; }
-
-private:
   // dolphin.prev.log for n = 1, dolphin.prev<n>.log after it.
   static std::string PrevFilename(const std::string& filename, int n)
   {
@@ -84,7 +195,8 @@ private:
   }
 
   // Shifts the kept logs one older (the oldest is dropped) and moves the current one to the
-  // newest. Not File::Rename: that logs its failures, and this runs with m_log_lock held.
+  // newest. Not File::Rename: that logs its failures, and this runs on the writer thread, which
+  // the log waits for.
   void MoveToPrev()
   {
     std::error_code error;
@@ -101,13 +213,22 @@ private:
   {
     File::OpenFStream(m_logfile, m_filename, std::ios::out | std::ios::trunc);
     m_size = 0;
+    m_valid.store(m_logfile.good(), std::memory_order_relaxed);
   }
 
   const std::string m_filename;
-  std::mutex m_log_lock;
   std::ofstream m_logfile;
   u64 m_size = 0;
+  std::atomic<bool> m_valid{false};
   bool m_enable;
+
+  std::mutex m_mutex;
+  std::condition_variable m_cv, m_idle_cv;
+  std::string m_pending;
+  u64 m_dropped = 0;
+  bool m_writing = false;
+  bool m_quit = false;
+  std::thread m_thread;
 };
 
 void GenericLogFmtImpl(LogLevel level, LogType type, const char* file, int line,
@@ -252,6 +373,15 @@ void LogManager::SaveSettings()
   Config::Save();
 }
 
+void LogManager::Flush(std::chrono::milliseconds timeout)
+{
+  for (const auto listener_id : m_listener_ids)
+  {
+    if (m_listeners[listener_id])
+      m_listeners[listener_id]->Flush(timeout);
+  }
+}
+
 void LogManager::Log(LogLevel level, LogType type, const char* file, int line, const char* message)
 {
   if (!IsEnabled(type, level) || !static_cast<bool>(m_listener_ids))
@@ -262,14 +392,7 @@ void LogManager::Log(LogLevel level, LogType type, const char* file, int line, c
 
 std::string LogManager::GetTimestamp()
 {
-  // NOTE: the Qt LogWidget hardcodes the expected length of the timestamp portion of the log line,
-  // so ensure they stay in sync
-
-  // We want milliseconds *and not hours*, so can't directly use STL formatters
-  const auto now = std::chrono::system_clock::now();
-  const auto now_s = std::chrono::floor<std::chrono::seconds>(now);
-  const auto now_ms = std::chrono::floor<std::chrono::milliseconds>(now);
-  return fmt::format("{:%M:%S}:{:03}", now_s, (now_ms - now_s).count());
+  return Timestamp();
 }
 
 void LogManager::LogWithFullPath(LogLevel level, LogType type, const char* file, int line,

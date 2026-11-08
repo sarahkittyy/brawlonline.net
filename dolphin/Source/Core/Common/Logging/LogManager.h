@@ -5,6 +5,7 @@
 
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cstdarg>
 #include <memory>
 #include <string>
@@ -29,6 +30,9 @@ class LogListener
 public:
   virtual ~LogListener() = default;
   virtual void Log(LogLevel level, const char* msg) = 0;
+  // Waits up to `timeout` for the lines logged so far to be out (the file listener writes on its
+  // own thread).
+  virtual void Flush(std::chrono::milliseconds /*timeout*/) {}
 
   enum LISTENER
   {
@@ -77,6 +81,10 @@ public:
   bool IsListenerEnabled(LogListener::LISTENER id) const;
 
   void SaveSettings();
+
+  // Before the process ends without returning (a crash report, an exit of a stuck emulation):
+  // waits up to `timeout` for dolphin.log to have every line logged so far.
+  void Flush(std::chrono::milliseconds timeout = std::chrono::seconds(2));
 
 private:
   LogManager();

@@ -26,6 +26,7 @@
 
 #include "Common/CommonTypes.h"
 #include "Common/Logging/Log.h"
+#include "Common/Logging/LogManager.h"
 
 #pragma comment(lib, "dbghelp.lib")
 
@@ -89,6 +90,9 @@ void Report(const std::string& out)
   std::fputs(out.c_str(), stderr);
   std::fflush(stderr);
   ERROR_LOG_FMT(HARNESS, "{}", out);
+  // The process dies next: dolphin.log is written on its own thread.
+  if (auto* log = Common::Log::LogManager::GetInstance())
+    log->Flush();
 }
 
 constexpr DWORD CXX_EXCEPTION = 0xE06D7363;  // MSVC's throw
