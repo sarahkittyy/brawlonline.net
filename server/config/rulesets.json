@@ -10,7 +10,7 @@
     "rules": {"style": "stock", "stocks": 4, "timeMinutes": 8, "pause": "hold", "hazards": false, "hazardStages": [31]}
   },
   "twos": {
-    "stages": [1, 2, 4, 5, 6, 9, 12, 13, 28, 31, 33, 35, 45, 46],
+    "stages": [1, 2, 4, 12, 33, 45, 46, 68],
     "items": 0,
     "rules": {"style": "stock", "stocks": 4, "timeMinutes": 8, "pause": "hold", "hazards": false, "hazardStages": [31]}
   },

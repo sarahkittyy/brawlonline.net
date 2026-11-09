@@ -24,7 +24,10 @@
 //!
 //! Unranked's extra five: Final Destination 0x02 (2), Metal Cavern 0x05 (5), Bowser's Castle
 //! 0x06 (6), Yoshi's Island 0x0D (13), Wario Land 0x1C (28). The 2v2 queue (`twos`, 2026-11-02)
-//! plays Unranked's rules and stages, its random stage drawn as Unranked's.
+//! plays Unranked's rules, its random stage drawn as Unranked's, from the doubles stages of the
+//! 2024 P+ proposed stagelist (`TWOS_STAGES`, Sarah's board, 2026-11-09): Battlefield, Final
+//! Destination, Luigi's Mansion, Frigate Husk, Smashville, Dream Land, Pokémon Stadium 2 and Dead
+//! Line 0x44 (68), hazards off as everywhere.
 //!
 //! How the client uses the list (as Slippi's does, `EXI_DeviceSlippi.cpp:2134-2153, 2707-2722`):
 //! Unranked draws every game's stage from it, Ranked strikes and counterpicks within it. Direct
@@ -68,6 +71,11 @@ pub struct Rulesets {
 /// The stages Unranked draws from besides the nine (Sarah's board, 2026-11-02): Final Destination,
 /// Metal Cavern, Bowser's Castle, Yoshi's Island, Wario Land.
 pub const UNRANKED_EXTRA_STAGES: [u16; 5] = [0x02, 0x05, 0x06, 0x0D, 0x1C];
+
+/// The 2v2 queue's stages (Sarah's board, 2026-11-09: the doubles stages of the 2024 P+ proposed
+/// stagelist): Battlefield, Final Destination, Luigi's Mansion, Frigate Husk, Smashville, Dream
+/// Land, Pokémon Stadium 2, Dead Line.
+pub const TWOS_STAGES: [u16; 8] = [0x01, 0x02, 0x04, 0x0C, 0x21, 0x2D, 0x2E, 0x44];
 
 /// The repository's `config/rulesets.json`, used when no file is configured.
 pub const DEFAULT_RULESETS: &str = include_str!("../../../config/rulesets.json");
@@ -133,9 +141,12 @@ mod tests {
             let mut stages = m.stages.clone();
             stages.sort();   // Ranked's are in its stage select's order
             let mut want = nine_stages();
-            if mode == Mode::Unranked || mode == Mode::Twos {
+            if mode == Mode::Unranked {
                 want.extend(UNRANKED_EXTRA_STAGES);
                 want.sort();
+            }
+            if mode == Mode::Twos {
+                want = TWOS_STAGES.to_vec();
             }
             assert_eq!(stages, want, "{mode:?}");
             assert_eq!(m.items, 0, "{mode:?}");
@@ -153,7 +164,8 @@ mod tests {
         assert_eq!(ranked, starters);
         assert!(r.for_mode(Mode::Direct).starters.is_empty());
         assert!(r.for_mode(Mode::Unranked).starters.is_empty());
-        assert_eq!(r.for_mode(Mode::Twos), r.for_mode(Mode::Unranked));
+        assert_eq!(r.for_mode(Mode::Twos).rules, r.for_mode(Mode::Unranked).rules);
+        assert!(r.for_mode(Mode::Twos).starters.is_empty());
         assert_eq!(r.for_mode(Mode::Party), ModeRules::default());
         assert_eq!(r.for_mode(Mode::Teams), ModeRules::default());
     }
