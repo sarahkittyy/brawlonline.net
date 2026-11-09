@@ -975,8 +975,9 @@ async fn slur_scan(
         let (kind, change) = match what {
             What::DisplayName => ("name", if apply { rename_slur(pool, actor, u).await? } else { None }),
             What::CodeStart => ("code", if apply { recode_slur(pool, actor, u).await? } else { None }),
-            // Room names are checked when they are set (`PUT /v1/me/room-name`), never asked here.
-            What::RoomName => continue,
+            // Room names and social media usernames are checked when they are set
+            // (`PUT /v1/me/room-name`, `PUT /v1/me/profile`), never asked here.
+            What::RoomName | What::SocialHandle => continue,
         };
         match change {
             Some(to) => println!("{uid} {code:<10} {kind} {text:?} -> {to:?}"),
