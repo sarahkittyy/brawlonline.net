@@ -89,6 +89,22 @@ async fn two_strangers_meet_in_unranked() {
     assert_eq!(mode, 1);
     assert_eq!(stages, UNRANKED_STAGES.iter().map(|s| *s as i16).collect::<Vec<_>>());
     assert_eq!(region.as_deref(), Some(mm::region::DEFAULT_REGION));
+    // Each search recorded as matched (`queue_searches`, `pp-admin stats`).
+    let mut rows: Vec<(String, String, bool, bool)> = vec![];
+    for _ in 0..50 {
+        rows = sqlx::query_as("SELECT uid::text, mode, matched, requeue FROM queue_searches ORDER BY uid")
+            .fetch_all(&stack.pool)
+            .await
+            .unwrap();
+        if rows.len() == 2 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let mut want: Vec<(String, String, bool, bool)> =
+        u.iter().map(|p| (p.uid.clone(), "unranked".to_string(), true, false)).collect();
+    want.sort();
+    assert_eq!(rows, want);
     stack.shutdown().await;
 }
 

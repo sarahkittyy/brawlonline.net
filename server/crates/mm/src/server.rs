@@ -555,6 +555,12 @@ async fn record_speed_check(pool: PgPool, r: Box<db::SpeedCheckRecord>) {
     }
 }
 
+async fn record_queue_search(pool: PgPool, r: db::QueueSearchRecord) {
+    if let Err(e) = db::record_queue_search(&pool, &r).await {
+        tracing::error!(uid = %r.uid, mode = r.mode, "recording a queue search failed: {e}");
+    }
+}
+
 async fn count_ruleset_game(pool: PgPool, code: String) {
     if let Err(e) = db::count_ruleset_game(&pool, &code).await {
         tracing::error!(%code, "counting a ruleset game failed: {e}");
@@ -680,6 +686,9 @@ impl Loop {
             }
             Output::SpeedCheck(r) => {
                 self.db.rt.spawn(record_speed_check(self.db.pool.clone(), r));
+            }
+            Output::QueueSearch(r) => {
+                self.db.rt.spawn(record_queue_search(self.db.pool.clone(), r));
             }
             Output::FetchRulesetList { conn, uid } => {
                 let (pool, done) = (self.db.pool.clone(), self.db.ruleset_lists.clone());

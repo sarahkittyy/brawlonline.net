@@ -217,6 +217,12 @@ async fn mm_queries_work_as_pp_mm() {
         .unwrap();
     assert_eq!(db::take_saved_rooms(&pool, within).await.unwrap(), None);
 
+    // A queue search that ended (0031, `pp-admin stats`): written, never read back.
+    let search = db::QueueSearchRecord { uid: a, mode: "unranked", waited_ms: 20_000, matched: true, requeue: false };
+    db::record_queue_search(&pool, &search).await.unwrap();
+    let err = sqlx::query("SELECT waited_ms FROM queue_searches").execute(&pool).await.unwrap_err();
+    assert!(err.to_string().contains("permission denied"), "{err}");
+
     // And nothing else: no password hashes or emails.
     let err = sqlx::query("SELECT email FROM users LIMIT 1").execute(&pool).await.unwrap_err();
     assert!(err.to_string().contains("permission denied"), "{err}");

@@ -413,6 +413,32 @@ pub async fn record_speed_report(pool: &sqlx::PgPool, r: &SpeedReportRecord) -> 
     Ok(())
 }
 
+/// An Unranked, Ranked or 2v2 ticket that ended (`queue_searches`, `pp-admin stats`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct QueueSearchRecord {
+    pub uid: Uuid,
+    /// `Mode::name`: `unranked`, `ranked` or `twos`.
+    pub mode: &'static str,
+    /// From the ticket to its end.
+    pub waited_ms: u32,
+    pub matched: bool,
+    /// 2v2: the search started again by itself after its group broke up.
+    pub requeue: bool,
+}
+
+/// Stored with the time it is written as its end (`ended_at`), a few milliseconds after it ended.
+pub async fn record_queue_search(pool: &sqlx::PgPool, r: &QueueSearchRecord) -> sqlx::Result<()> {
+    sqlx::query("INSERT INTO queue_searches (uid, mode, waited_ms, matched, requeue) VALUES ($1, $2, $3, $4, $5)")
+        .bind(r.uid)
+        .bind(r.mode)
+        .bind(r.waited_ms.min(i32::MAX as u32) as i32)
+        .bind(r.matched)
+        .bind(r.requeue)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
 /// A waiting-room speed check (`speed_checks`, `crate::speed`).
 #[derive(Debug, Clone, PartialEq)]
 pub struct SpeedCheckRecord {

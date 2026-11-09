@@ -68,6 +68,20 @@ enum Cmd {
     /// refused yet; this shows what the Ranked rule would do.
     #[command(subcommand)]
     Speed(SpeedCmd),
+    /// The queues now (mm's counts, as Home's Play buttons showed them until 2026-11-09: players
+    /// searching and players in a match, per mode) and the estimated wait by hour of day: the
+    /// median search of that hour over the last DAYS days, with the searches given up counted as
+    /// still waiting when they stopped (`queue_searches`).
+    Stats {
+        #[arg(long, default_value_t = 14)]
+        days: i64,
+        /// Also print the hours shifted by this many hours (-5: US Eastern in winter).
+        #[arg(long, default_value_t = -5, allow_negative_numbers = true)]
+        offset: i64,
+        /// mm's status listener, as accounts reads it.
+        #[arg(long, env = "MM_STATUS_URL", default_value = "http://127.0.0.1:43181/status")]
+        mm_status_url: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -389,6 +403,73 @@ fn print_user(u: &UserRow) {
     }
 }
 
+/// `stats`: mm's counts now, then the estimated wait per mode by hour of day.
+async fn print_stats(pool: &PgPool, days: i64, offset: i64, mm_status_url: &str) -> anyhow::Result<()> {
+    use chrono::Timelike;
+    const MODES: [(&str, &str); 3] = [("unranked", "Unranked"), ("ranked", "Ranked"), ("twos", "2v2")];
+    match accounts::rooms::MmStatusSource::new(mm_status_url).get().await {
+        Ok(s) => {
+            println!("now ({}): {} online", s.updated_at, s.online);
+            let counts = [
+                (s.queues.unranked, s.playing.unranked),
+                (s.queues.ranked, s.playing.ranked),
+                (s.queues.twos, s.playing.twos),
+            ];
+            for ((_, name), (queue, playing)) in MODES.iter().zip(counts) {
+                println!("  {name:<9} {queue:>4} in queue  {playing:>4} in game");
+            }
+        }
+        Err(e) => println!("mm's counts: not available ({mm_status_url}: {e})"),
+    }
+    let searches = admin::queue_searches(pool, days).await?;
+    let hours: Vec<Vec<admin::HourWait>> = MODES.iter().map(|(m, _)| admin::hourly_waits(&searches, m)).collect();
+    // A median from fewer searches than this is not printed.
+    const MIN_SEARCHES: usize = 5;
+    let mmss = |s: Option<f64>| s.map_or("never".to_string(), |s| format!("{}:{:02}", s as u64 / 60, s as u64 % 60));
+    let local = if offset < 0 { format!("UTC{offset}") } else { format!("UTC+{offset}") };
+    println!();
+    // Searches a day over the days the table covers (fewer than `days` while it fills).
+    let first = searches.iter().map(|s| s.started).min();
+    let span = first
+        .map_or(days as f64, |f| ((chrono::Utc::now() - f).num_seconds() as f64 / 86400.0).clamp(1.0, days as f64));
+    let since = match first {
+        Some(f) if span < days as f64 => format!(", recorded since {}", f.format("%Y-%m-%d %H:%M UTC")),
+        _ => String::new(),
+    };
+    println!("estimated wait by hour of day, last {days} days{since}, {} searches", searches.len());
+    println!("ETA = the median wait, 3/4 = 3 in 4 matched by then, /day = searches a day in that hour;");
+    println!("searches given up count as still waiting (never = most gave up), - = under {MIN_SEARCHES} searches");
+    print!("{:12}", "");
+    for (_, name) in MODES {
+        print!("| {name:<19}");
+    }
+    println!();
+    print!("{:>3} {:>7} ", "UTC", local);
+    for _ in MODES {
+        print!("| {:>5} {:>6} {:>6}", "/day", "ETA", "3/4");
+    }
+    println!();
+    let now_hour = chrono::Utc::now().hour() as usize;
+    for h in 0..24 {
+        print!(
+            "{}{h:02} {:>7} ",
+            if h == now_hour { ">" } else { " " },
+            format!("{:02}", (h as i64 + offset).rem_euclid(24))
+        );
+        for w in hours.iter().map(|m| &m[h]) {
+            let per_day = w.searches as f64 / span;
+            let (eta, most) = if w.searches < MIN_SEARCHES {
+                ("-".to_string(), "-".to_string())
+            } else {
+                (mmss(w.median), mmss(w.p75))
+            };
+            print!("| {per_day:>5.1} {eta:>6} {most:>6}");
+        }
+        println!();
+    }
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let _ = dotenvy::dotenv();
@@ -526,6 +607,9 @@ async fn main() -> anyhow::Result<()> {
                 u.connect_code.as_deref().unwrap_or("-"),
                 if u.chat_muted_at.is_none() { "; it was not muted" } else { "" }
             );
+        }
+        Cmd::Stats { days, offset, mm_status_url } => {
+            print_stats(&pool, days.clamp(1, 365), offset, &mm_status_url).await?
         }
         Cmd::Speed(SpeedCmd::Summary { days }) => {
             let days = days.clamp(1, 365);

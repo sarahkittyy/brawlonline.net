@@ -110,7 +110,7 @@ use std::time::{Duration, Instant};
 use chrono::{DateTime, Utc};
 use common::chat::ChatRequest;
 use common::codes::{decode_search_code, ConnectCode};
-use common::db::{MmUser, NetEventKind, SpeedCheckRecord, SpeedReportRecord};
+use common::db::{MmUser, NetEventKind, QueueSearchRecord, SpeedCheckRecord, SpeedReportRecord};
 use common::net::{ip_key, sanitize_lan_addr, to_v4};
 use common::playkey::PlayKeySecret;
 use common::proto::{
@@ -455,6 +455,8 @@ pub enum Output {
     SpeedReport(Box<SpeedReportRecord>),
     /// A waiting-room speed check (`speed_checks`).
     SpeedCheck(Box<SpeedCheckRecord>),
+    /// An Unranked, Ranked or 2v2 ticket ended, matched or given up (`queue_searches`).
+    QueueSearch(QueueSearchRecord),
 }
 
 /// `speed-check`s an account may send: 3 a minute, 60 an hour.
@@ -520,6 +522,8 @@ struct Waiting {
     loc: Option<Loc>,
     /// 2v2: the player's party (its code); its players search as one unit.
     party: Option<String>,
+    /// 2v2: the search started again by itself after its group broke up (`queue_searches`).
+    requeue: bool,
 }
 
 /// An online connection: a running, logged-in game (rooms, the online count).
@@ -722,6 +726,20 @@ fn queue_rating(ranked: bool, w: &Waiting) -> f64 {
     } else {
         w.user.unranked_rating
     }
+}
+
+/// The record of an Unranked, Ranked or 2v2 search that ends now (`queue_searches`, `pp-admin
+/// stats`); None for the other modes' tickets, whose wait is for a friend or a room.
+fn search_ended(now: Instant, w: &Waiting, matched: bool) -> Option<Output> {
+    matches!(w.mode, Mode::Unranked | Mode::Ranked | Mode::Twos).then(|| {
+        Output::QueueSearch(QueueSearchRecord {
+            uid: w.user.uid,
+            mode: w.mode.name(),
+            waited_ms: now.saturating_duration_since(w.since).as_millis().min(u32::MAX as u128) as u32,
+            matched,
+            requeue: w.requeue,
+        })
+    })
 }
 
 /// Whole `interval`s in `waited` (none for a zero interval: the limit never widens).
@@ -971,7 +989,8 @@ impl Engine {
                 if let Some(c) = self.conns.remove(&conn) {
                     match &c.state {
                         State::Waiting(w) => {
-                            tracing::info!(code = %w.code, target = %w.target, "ticket cancelled by client disconnect")
+                            tracing::info!(code = %w.code, target = %w.target, "ticket cancelled by client disconnect");
+                            out.extend(search_ended(now, w, false));
                         }
                         State::Online(o) => tracing::info!(code = %o.code, "online connection closed"),
                         _ => {}
@@ -1239,6 +1258,9 @@ impl Engine {
     }
 
     fn finish(&mut self, out: &mut Vec<Output>, conn: ConnId) {
+        if let Some(Conn { state: State::Waiting(w), .. }) = self.conns.get(&conn) {
+            out.extend(search_ended(Instant::now(), w, false));
+        }
         self.unindex(conn);
         self.chat.conn_gone(conn, out);
         let online = match self.conns.get(&conn) {
@@ -1853,6 +1875,7 @@ impl Engine {
             region: region.clone(),
             loc,
             party: p.twos.as_ref().and_then(|t| t.party.clone()),
+            requeue: p.twos.as_ref().is_some_and(|t| t.requeue),
         });
         self.fail_room_tickets(out);
         if let Some(t) = p.twos {
@@ -1995,6 +2018,7 @@ impl Engine {
                 region,
                 loc: None,
                 party: None,
+                requeue: false,
             });
         }
         if let Some(old) = outcome.replaced {
@@ -2036,6 +2060,7 @@ impl Engine {
                 region,
                 loc: None,
                 party: None,
+                requeue: false,
             });
         }
         if let Some(old) = outcome.replaced {
@@ -2169,7 +2194,7 @@ impl Engine {
         } else {
             self.history.insert(key, PairHistory { last_match: now, failures: 0 });
         }
-        self.make_match(wall, &[conn, other], None, out);
+        self.make_match(now, wall, &[conn, other], None, out);
     }
 
     fn queue(&self, mode: Mode) -> &Vec<ConnId> {
@@ -2191,7 +2216,7 @@ impl Engine {
             };
             self.history.insert(pair_key(ua, ub), PairHistory { last_match: now, failures });
             let before = self.queue(mode).len();
-            self.make_match(wall, &[a, b], None, out);
+            self.make_match(now, wall, &[a, b], None, out);
             if self.queue(mode).len() == before {
                 break; // make_match refused; never loop forever
             }
@@ -2356,7 +2381,14 @@ impl Engine {
 
     /// Matches the tickets `conns`. `units` (2v2): each ticket's unit (the same number for a
     /// party's players, who play on one team).
-    fn make_match(&mut self, wall: DateTime<Utc>, conns: &[ConnId], units: Option<&[usize]>, out: &mut Vec<Output>) {
+    fn make_match(
+        &mut self,
+        now: Instant,
+        wall: DateTime<Utc>,
+        conns: &[ConnId],
+        units: Option<&[usize]>,
+        out: &mut Vec<Output>,
+    ) {
         let mut entrants: Vec<(ConnId, SocketAddr, Waiting)> = conns
             .iter()
             .filter_map(|id| match self.conns.get(id) {
@@ -2504,7 +2536,12 @@ impl Engine {
             room: None,
             pairs,
         }));
-        for (conn, _, _) in &entrants {
+        for (conn, _, w) in &entrants {
+            out.extend(search_ended(now, w, true));
+            // Not Waiting any more, so `finish` does not record the search again as given up.
+            if let Some(c) = self.conns.get_mut(conn) {
+                c.state = State::Done;
+            }
             self.finish(out, *conn);
         }
     }
@@ -2554,7 +2591,7 @@ impl Engine {
     fn group_twos(&mut self, now: Instant, wall: DateTime<Utc>, out: &mut Vec<Output>) {
         while let Some((conns, units)) = self.next_twos_group(now) {
             let before = self.twos.len();
-            self.make_match(wall, &conns, Some(&units), out);
+            self.make_match(now, wall, &conns, Some(&units), out);
             if self.twos.len() == before {
                 break; // make_match refused; never loop forever
             }
@@ -5522,6 +5559,50 @@ mod tests {
 
     fn resp(out: &[Output], conn: ConnId) -> Value {
         sent(out, conn).into_iter().rev().find(|m| m["type"] == "get-ticket-resp").expect("get-ticket-resp")
+    }
+
+    fn searches(out: &[Output]) -> Vec<(Uuid, &'static str, u32, bool, bool)> {
+        out.iter()
+            .filter_map(|o| match o {
+                Output::QueueSearch(r) => Some((r.uid, r.mode, r.waited_ms, r.matched, r.requeue)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn queue_searches_are_recorded_when_they_end() {
+        let mut h = Harness::new(EngineConfig::default());
+        let u = h.users(5);
+        for c in 1..=7 {
+            h.connect(c, 41000 + c as u16);
+        }
+        // 1 waits 20 s and is matched with 2, who has just come: both matched.
+        assert!(searches(&h.unranked(1, &u[0])).is_empty());
+        h.now += Duration::from_secs(20);
+        let mut s = searches(&h.unranked(2, &u[1]));
+        s.sort_by_key(|r| r.2);
+        assert_eq!(s, vec![(u[1].uid, "unranked", 0, true, false), (u[0].uid, "unranked", 20_000, true, false)]);
+        // 3 closes the game after 5 s: given up.
+        assert!(searches(&h.unranked(3, &u[2])).is_empty());
+        h.now += Duration::from_secs(5);
+        assert_eq!(
+            searches(&h.input(Input::Disconnected { conn: 3 })),
+            vec![(u[2].uid, "unranked", 5_000, false, false)]
+        );
+        // 4's Ranked search is replaced by a newer one: the older one ended unmatched. (Its wait is
+        // read from the clock in `finish`, which this test's clock does not move.)
+        assert!(searches(&h.ranked(4, &u[3])).is_empty());
+        h.now += Duration::from_secs(3);
+        let s: Vec<_> = searches(&h.ranked(5, &u[3])).into_iter().map(|(uid, m, _, ok, re)| (uid, m, ok, re)).collect();
+        assert_eq!(s, vec![(u[3].uid, "ranked", false, false)]);
+        // A 2v2 search that started again after its group broke up says so.
+        h.twos(6, &u[4], "", json!({"requeue": true}));
+        h.now += Duration::from_secs(1);
+        assert_eq!(searches(&h.input(Input::Disconnected { conn: 6 })), vec![(u[4].uid, "twos", 1_000, false, true)]);
+        // A Direct ticket waits for a friend, not a queue: no record.
+        h.ticket(7, &u[4], "ZZ#9");
+        assert!(searches(&h.input(Input::Disconnected { conn: 7 })).is_empty());
     }
 
     #[test]
