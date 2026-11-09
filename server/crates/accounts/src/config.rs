@@ -301,6 +301,12 @@ pub struct Config {
     /// refused (507) until unused ones (90 days) are deleted; joiners then ask without the sizes.
     #[arg(long, env = "SD_LISTINGS_MAX_TOTAL_BYTES", default_value_t = 4 * 1024 * 1024 * 1024)]
     pub sd_listings_max_total_bytes: u64,
+
+    /// The website's folder (`website/` in the repository), for a server with nothing in front of
+    /// it (staging, local runs): the profile pages' stylesheet and images (`/profile/profile.css`,
+    /// `/assets/...`) are then served from it. Unset in production, where nginx serves the site.
+    #[arg(long, env = "WEBSITE_DIR")]
+    pub website_dir: Option<std::path::PathBuf>,
 }
 
 impl Config {
@@ -341,6 +347,7 @@ impl Config {
             bug_reports_max_total_bytes: 4 * 1024 * 1024 * 1024,
             sd_listing_max_bytes: 64 * 1024 * 1024,
             sd_listings_max_total_bytes: 4 * 1024 * 1024 * 1024,
+            website_dir: None,
         }
     }
 }

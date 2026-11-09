@@ -31,7 +31,8 @@
 }
 
 .tab {
-  flex: 0 1 210px;
+  /* 22 px wider since the flag (2026-11-09), so a name doesn't lose its end to it. */
+  flex: 0 1 232px;
   min-width: 64px;
   display: flex;
   align-items: center;

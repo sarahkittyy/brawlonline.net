@@ -223,7 +223,6 @@ h2 {
 
 .about .label {
   flex-shrink: 0;
-  width: 70px;
   color: var(--dim);
 }
 

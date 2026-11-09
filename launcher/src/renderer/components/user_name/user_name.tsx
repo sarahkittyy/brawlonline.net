@@ -86,7 +86,7 @@ export const UserName = ({
     <span className={clsx(styles.root, className)}>
       {showBadge && (
         <span className={styles.badge}>
-          <RankBadge rank={user.rank} size="inline" />
+          <RankBadge rank={user.rank} size="inline" outlineWhenNone={true} />
         </span>
       )}
       {showFlag && user.country && (

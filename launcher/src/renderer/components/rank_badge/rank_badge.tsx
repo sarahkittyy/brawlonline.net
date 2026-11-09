@@ -88,10 +88,13 @@ export const RankBadge = ({
   rank,
   setsToPlace,
   size,
+  outlineWhenNone = false,
 }: {
   rank?: Rank | null;
   setsToPlace?: number;
   size: "large" | "small" | "inline";
+  /** `inline` without a rank: the dotted outline instead of nothing. */
+  outlineWhenNone?: boolean;
 }) => {
   const sizeClass = size === "large" ? styles.large : size === "small" ? styles.small : styles.inline;
   if (setsToPlace && setsToPlace > 0 && size !== "inline") {
@@ -109,6 +112,17 @@ export const RankBadge = ({
     );
   }
   if (!rank) {
+    // Beside a name in a list (the match history): the emblems' outline, dotted, so a player without a rank
+    // still has a badge like the others (no "N more").
+    if (size === "inline" && outlineWhenNone) {
+      return (
+        <div className={`${styles.badge} ${sizeClass}`} data-tier="none" data-testid="rank-none">
+          <svg className={styles.emblem} viewBox="0 0 256 256" aria-hidden={true}>
+            <path className={styles.outline} d={OUTLINE} />
+          </svg>
+        </div>
+      );
+    }
     return null;
   }
   const name = Messages.rankName(rank);

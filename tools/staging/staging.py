@@ -249,6 +249,9 @@ def server_env(cfg: dict) -> dict[str, str]:
         # Spectating's kill switch (docs/spectate-protocol.md): on in staging unless config.json's
         # "spectate" says otherwise (off, witness).
         "MM_SPECTATE": cfg.get("spectate", "on"),
+        # Nothing serves the website in staging: accounts serves the profile pages' stylesheet,
+        # flags, rank badges and font itself (docs/design/profiles.md §9).
+        "WEBSITE_DIR": str(SRC / "website"),
     })
     return env
 

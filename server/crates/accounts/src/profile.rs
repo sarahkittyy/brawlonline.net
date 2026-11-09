@@ -427,6 +427,37 @@ pub async fn page(
     }
 }
 
+/// `GET /profile/profile.css` and `GET /assets/<path>`: the profile page's own files (its
+/// stylesheet, the flags, rank badges and font) from `WEBSITE_DIR`, for a server with no web server
+/// in front of it (staging). In production nginx serves them and never asks accounts; without
+/// `WEBSITE_DIR` they are 404s.
+pub async fn site_file(State(state): State<AppState>, uri: axum::http::Uri) -> Response {
+    let not_found = || StatusCode::NOT_FOUND.into_response();
+    let Some(root) = state.cfg.website_dir.as_ref() else { return not_found() };
+    let path = uri.path().trim_start_matches('/');
+    // Only plain names below the folder: no "..", no hidden files, nothing odd.
+    let ok = path.split('/').all(|part| {
+        !part.is_empty()
+            && !part.starts_with('.')
+            && part.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'))
+    });
+    let kind = match path.rsplit_once('.').map(|(_, ext)| ext) {
+        Some("css") => "text/css; charset=utf-8",
+        Some("svg") => "image/svg+xml",
+        Some("png") => "image/png",
+        Some("woff2") => "font/woff2",
+        Some("ico") => "image/x-icon",
+        _ => return not_found(),
+    };
+    if !ok {
+        return not_found();
+    }
+    match tokio::fs::read(root.join(path)).await {
+        Ok(bytes) => ([(header::CONTENT_TYPE, kind)], bytes).into_response(),
+        Err(_) => not_found(),
+    }
+}
+
 fn html_response(status: StatusCode, body: String) -> Response {
     let mut resp = (status, body).into_response();
     let h = resp.headers_mut();

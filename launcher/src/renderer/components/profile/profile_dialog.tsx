@@ -56,20 +56,6 @@ const ProfileDialogBody = ({ uid, seedName, onClose }: { uid: string; seedName?:
   return (
     <div className={styles.dialog}>
       <div className={styles.corner}>
-        {own && data && (
-          <Tooltip title={editMode ? Messages.doneEditing() : Messages.editProfile()}>
-            <IconButton
-              size="small"
-              aria-label={editMode ? Messages.doneEditing() : Messages.editProfile()}
-              aria-pressed={editMode}
-              className={editMode ? styles.editOn : undefined}
-              onClick={() => setEditMode((e) => !e)}
-              data-testid="profile-edit"
-            >
-              {editMode ? <CheckIcon fontSize="small" /> : <EditOutlinedIcon fontSize="small" />}
-            </IconButton>
-          </Tooltip>
-        )}
         <IconButton size="small" aria-label={Messages.close()} onClick={onClose}>
           <CloseIcon fontSize="small" />
         </IconButton>
@@ -79,6 +65,22 @@ const ProfileDialogBody = ({ uid, seedName, onClose }: { uid: string; seedName?:
           profile={data}
           actions={<ProfileActions profile={data} onDone={onClose} />}
           editing={own && editMode ? editing : null}
+          editToggle={
+            own ? (
+              <Tooltip title={editMode ? Messages.doneEditing() : Messages.editProfile()}>
+                <IconButton
+                  size="small"
+                  aria-label={editMode ? Messages.doneEditing() : Messages.editProfile()}
+                  aria-pressed={editMode}
+                  className={editMode ? styles.editOn : undefined}
+                  onClick={() => setEditMode((e) => !e)}
+                  data-testid="profile-edit"
+                >
+                  {editMode ? <CheckIcon fontSize="small" /> : <EditOutlinedIcon fontSize="small" />}
+                </IconButton>
+              </Tooltip>
+            ) : undefined
+          }
           onCopyLink={(link) => void navigator.clipboard.writeText(link).then(() => showSuccess(Messages.linkCopied()))}
           onCopyText={(text) =>
             void navigator.clipboard.writeText(text).then(() => showSuccess(Messages.discordCopied(text)))

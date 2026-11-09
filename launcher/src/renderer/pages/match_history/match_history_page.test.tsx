@@ -81,6 +81,8 @@ describe("MatchRow", () => {
     expect(getByAltText("Diamond 3")).toBeTruthy();
     expect(cells[4].querySelector("img")?.alt).toBe("Diamond 3");
     expect(cells[2].querySelector("img")).toBeNull();
+    // No rank then: the emblems' dotted outline, so every name has a badge.
+    expect(cells[2].querySelector("[data-testid=rank-none]")).toBeTruthy();
     expect(Array.from(container.querySelectorAll("button[data-profile-link]")).map((b) => b.textContent)).toEqual([
       "ann",
       "bob",

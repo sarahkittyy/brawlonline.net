@@ -108,4 +108,5 @@ Data: the server adds what to show beside each name (`profile::NameTag`: `countr
 
 - accounts: the two routes (`server/crates/accounts/src/lib.rs`).
 - website: `website/profile/profile.css` (the page's only style), the flags (`assets/flags/`), the placing badge, and the top 10 links (`script.js`, `style.css`).
-- **nginx (by hand on sarahvps2)**: `/profile/<code>` goes to accounts (`server/deploy/sarahvps2/nginx-brawl-online.conf`, the accounts `location`). Until it's installed, `/profile/...` is a 404 from the static site, including the launcher's "open in browser" link. The Caddyfile has the same route.
+- **nginx (by hand on sarahvps2)**: `/profile/<code>` goes to accounts (`server/deploy/sarahvps2/nginx-brawl-online.conf`, the accounts `location`). Installed on prod 2026-11-09 (backup `/etc/nginx/brawl-online.conf.bak-20261109T215204Z`), ahead of the accounts code: until it ships, `/profile/...` is accounts' plain 404. The Caddyfile has the same route.
+- **Staging and local runs** have nothing in front of accounts, so accounts serves the page's own files (`/profile/profile.css`, `/assets/...`: flags, rank badges, the font) from `WEBSITE_DIR` (staging.py sets it to its checkout's `website/`). Unset in production, where nginx serves them and accounts never sees those paths.

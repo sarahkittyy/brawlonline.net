@@ -47,6 +47,7 @@ export const ProfileView = React.memo(function ProfileView({
   onCopyLink,
   onCopyText,
   editing = null,
+  editToggle,
 }: {
   profile: PlayerProfile;
   actions?: React.ReactNode;
@@ -54,6 +55,8 @@ export const ProfileView = React.memo(function ProfileView({
   /** Copies a Discord username (it has no page to open). */
   onCopyText?: (text: string) => void;
   editing?: ProfileEditing | null;
+  /** The player's own profile: the pencil (edit mode) or check (done) beside the name. */
+  editToggle?: React.ReactNode;
 }) {
   const r = profile.ranked;
   const mains = profile.mains ?? [];
@@ -76,13 +79,16 @@ export const ProfileView = React.memo(function ProfileView({
           </div>
         )}
         <div className={styles.names}>
-          {editing ? (
-            <NameInput name={profile.displayName} onRename={editing.rename} />
-          ) : (
-            <div className={styles.name} data-testid="profile-name">
-              {profile.displayName}
-            </div>
-          )}
+          <div className={styles.nameRow}>
+            {editing ? (
+              <NameInput name={profile.displayName} onRename={editing.rename} />
+            ) : (
+              <div className={styles.name} data-testid="profile-name">
+                {profile.displayName}
+              </div>
+            )}
+            {editToggle}
+          </div>
           {profile.connectCode && <div className={styles.code}>{profile.connectCode}</div>}
           {(country || editing) && (
             <CountryRow country={country} editing={editing} show={profile.showCountry ?? true} />
@@ -260,12 +266,13 @@ const ShowNextToName = ({
   onChange: (show: boolean) => void;
   testId: string;
 }) => (
-  <Tooltip title={Messages.showNextToNameHint()} placement="bottom-start">
-    <label className={styles.showToggle}>
-      <input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} data-testid={testId} />
+  <label className={styles.showToggle}>
+    <input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} data-testid={testId} />
+    <span>
       {Messages.showNextToName()}
-    </label>
-  </Tooltip>
+      <span className={styles.showWhere}>{Messages.showNextToNameWhere()}</span>
+    </span>
+  </label>
 );
 
 /**

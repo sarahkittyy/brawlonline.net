@@ -193,6 +193,8 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/profiles/{id}", get(profile::lookup))
         .route("/v1/me/profile", put(profile::update))
         .route("/profile/{slug}", get(profile::page))
+        .route("/profile/profile.css", get(profile::site_file))
+        .route("/assets/{*path}", get(profile::site_file))
         .route("/v1/ranked/report-game", post(ranked::report_game))
         .route("/v1/ranked/report-leave", post(ranked::report_leave))
         .route("/v1/ranked/result", get(ranked::result))

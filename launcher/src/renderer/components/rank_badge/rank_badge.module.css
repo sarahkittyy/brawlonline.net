@@ -77,3 +77,12 @@
   border-radius: 4px;
   font-size: 9px;
 }
+
+.inline .outline {
+  stroke-width: 1.2px;
+  stroke-dasharray: 0.1px 2.4px;
+}
+
+.badge[data-tier="none"] .emblem {
+  filter: none;
+}
