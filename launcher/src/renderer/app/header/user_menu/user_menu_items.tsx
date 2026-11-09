@@ -11,6 +11,7 @@ import type { StoredAccount } from "@settings/types";
 
 import { AccountSwitcher } from "../account_switcher/account_switcher";
 import { UserMenuMessages as Messages } from "./user_menu.messages";
+import styles from "./user_menu.module.css";
 
 const SectionDivider = styled.div`
   height: 1px;
@@ -27,6 +28,7 @@ type UserMenuItemsProps = {
   isOnlineActivated: boolean; // Whether the user has activated online play (has playKey)
   isEmailVerified: boolean; // Whether the user has verified their email
   serverError: boolean;
+  glowViewProfile?: boolean; // Glow View Profile gold: this client hasn't shown the player their own profile yet
   onActivateOnline: () => void;
   onViewProfile: () => void;
   onEditDisplayName: () => void;
@@ -43,6 +45,7 @@ export const UserMenuItems = ({
   isOnlineActivated,
   isEmailVerified,
   serverError,
+  glowViewProfile,
   onActivateOnline,
   onViewProfile,
   onEditDisplayName,
@@ -89,7 +92,7 @@ export const UserMenuItems = ({
       {isOnlineActivated && (
         <>
           {/* The player's own public profile (docs/design/profiles.md), as others see it. */}
-          <MenuItem onClick={onViewProfile}>
+          <MenuItem onClick={onViewProfile} className={glowViewProfile ? styles.profileGlowItem : undefined}>
             <ListItemIcon>
               <PersonOutlineIcon fontSize="small" />
             </ListItemIcon>

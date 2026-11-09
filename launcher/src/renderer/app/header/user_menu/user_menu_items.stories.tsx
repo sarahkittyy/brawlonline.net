@@ -78,6 +78,14 @@ export const NoInactiveAccounts: Story = {
   } as UserMenuItemsProps,
 };
 
+// This client hasn't shown the player their own profile yet: View Profile glows gold
+export const ViewProfileGlow: Story = {
+  args: {
+    ...NoInactiveAccounts.args,
+    glowViewProfile: true,
+  },
+};
+
 // Not activated (no play key)
 export const NotActivated: Story = {
   args: {

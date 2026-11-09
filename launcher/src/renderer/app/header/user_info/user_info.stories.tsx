@@ -1,5 +1,9 @@
+import ButtonBase from "@mui/material/ButtonBase";
+import { clsx } from "clsx";
+
 import { generateDisplayPicture } from "@/lib/display_picture";
 
+import menuStyles from "../user_menu/user_menu.module.css";
 import { UserInfo } from "./user_info";
 
 // type UserInfoProps = React.ComponentProps<typeof UserInfo>;
@@ -28,5 +32,14 @@ export const ErrorUserInfo = () => {
       connectCode="TEST#000"
       errorMessage="Some error message"
     />
+  );
+};
+
+// The header's name until this client has shown the player their own profile (user_menu.tsx)
+export const ProfileGlowUserInfo = () => {
+  return (
+    <ButtonBase className={clsx(menuStyles.userInfoButton, menuStyles.profileGlow)}>
+      <UserInfo displayName="Player name" displayPicture={displayPicture} connectCode="TEST#000" />
+    </ButtonBase>
   );
 };

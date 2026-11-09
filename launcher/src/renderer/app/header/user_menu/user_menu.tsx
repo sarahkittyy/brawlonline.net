@@ -1,6 +1,7 @@
 import ButtonBase from "@mui/material/ButtonBase";
 import DialogContentText from "@mui/material/DialogContentText";
 import Menu from "@mui/material/Menu";
+import { clsx } from "clsx";
 import log from "electron-log";
 import React from "react";
 
@@ -8,6 +9,7 @@ import { ConfirmationModal } from "@/components/confirmation_modal/confirmation_
 import { useDolphinStore } from "@/lib/dolphin/use_dolphin_store";
 import { useAccount } from "@/lib/hooks/use_account";
 import { useAppStore } from "@/lib/hooks/use_app_store";
+import { useOwnProfileHint } from "@/lib/hooks/use_own_profile_hint";
 import { useProfileView } from "@/lib/hooks/use_profile_view";
 import { useToasts } from "@/lib/hooks/use_toasts";
 import { useServices } from "@/services";
@@ -38,6 +40,16 @@ export const UserMenu = ({ user, handleError }: { user: AuthUser; handleError: (
   const netplayOpened = useDolphinStore((store) => store.netplayOpened);
   const { showSuccess, showError } = useToasts();
   const openProfile = useProfileView((store) => store.open);
+  const profileTargetUid = useProfileView((store) => store.target?.uid);
+  const ownProfileOpened = useOwnProfileHint((store) => store.opened);
+  const markOwnProfileOpened = useOwnProfileHint((store) => store.markOpened);
+
+  // Opening their own profile, from the menu or their name anywhere else, ends the gold glow for good.
+  React.useEffect(() => {
+    if (!ownProfileOpened && profileTargetUid === user.uid) {
+      markOwnProfileOpened();
+    }
+  }, [ownProfileOpened, profileTargetUid, user.uid, markOwnProfileOpened]);
 
   const [openLogoutPrompt, setOpenLogoutPrompt] = React.useState(false);
   const [openNameChangePrompt, setOpenNameChangePrompt] = React.useState(false);
@@ -173,9 +185,15 @@ export const UserMenu = ({ user, handleError }: { user: AuthUser; handleError: (
     isUserErrorMessage = true;
   }
 
+  // Until this client has shown its player their own profile: the name glows gold, then View Profile in the menu.
+  const glowProfile = !ownProfileOpened && !!userData?.playKey && !errMessage && !loading;
+
   return (
     <div>
-      <ButtonBase onClick={handleClick} className={styles.userInfoButton}>
+      <ButtonBase
+        onClick={handleClick}
+        className={clsx(styles.userInfoButton, glowProfile && !anchorEl && styles.profileGlow)}
+      >
         <UserInfo
           displayName={displayName}
           displayPicture={user.displayPicture}
@@ -202,6 +220,7 @@ export const UserMenu = ({ user, handleError }: { user: AuthUser; handleError: (
           isOnlineActivated={!!userData?.playKey}
           isEmailVerified={!!user.emailVerified}
           serverError={serverError}
+          glowViewProfile={glowProfile}
           onVerifyEmail={() => {
             closeMenu();
             setOpenVerifyEmailDialog(true);
