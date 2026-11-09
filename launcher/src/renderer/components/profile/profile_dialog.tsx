@@ -81,27 +81,39 @@ const ProfileActions = ({ profile, onDone }: { profile: PlayerProfile; onDone: (
   }
   const player = { uid: profile.uid, displayName: profile.displayName, connectCode: profile.connectCode };
   return (
-    <>
-      <Button
-        variant="contained"
-        size="small"
-        startIcon={<MailOutlinedIcon />}
-        onClick={() => {
-          message(player);
-          onDone();
-        }}
-      >
-        {Messages.message()}
-      </Button>
-      <Button
-        variant="outlined"
-        size="small"
-        color={ignored ? "inherit" : "secondary"}
-        startIcon={<BlockIcon />}
-        onClick={() => void setIgnored(player, !ignored)}
-      >
-        {ignored ? Messages.unignoreUser() : Messages.ignoreUser()}
-      </Button>
-    </>
+    <ProfileButtons
+      ignored={ignored}
+      onMessage={() => {
+        message(player);
+        onDone();
+      }}
+      onIgnore={() => void setIgnored(player, !ignored)}
+    />
   );
 };
+
+/** The Message and Ignore user buttons themselves (also the stories'). */
+export const ProfileButtons = ({
+  ignored,
+  onMessage,
+  onIgnore,
+}: {
+  ignored: boolean;
+  onMessage: () => void;
+  onIgnore: () => void;
+}) => (
+  <>
+    <Button variant="contained" size="small" startIcon={<MailOutlinedIcon />} onClick={onMessage}>
+      {Messages.message()}
+    </Button>
+    <Button
+      variant="outlined"
+      size="small"
+      color={ignored ? "inherit" : "secondary"}
+      startIcon={<BlockIcon />}
+      onClick={onIgnore}
+    >
+      {ignored ? Messages.unignoreUser() : Messages.ignoreUser()}
+    </Button>
+  </>
+);

@@ -94,7 +94,7 @@ describe("ProfileDialog", () => {
     expect(getByText("SOND#810")).toBeTruthy();
     expect(getByAltText("Gold 2")).toBeTruthy();
     expect(document.querySelector("[data-testid=profile-standing]")?.textContent).toBe("Gold 2");
-    expect(stats()).toEqual(["Rating: 1523.4", "Leaderboard: #12 of 340", "Sets played: 54", "Record: 34 W - 20 L"]);
+    expect(stats()).toEqual(["Rating: 1523.4", "Leaderboard: #12 of 340", "Sets played: 54", "Record: 34W-20L"]);
     expect(getByText("brawlonline.net/profile/sond-810")).toBeTruthy();
 
     fireEvent.click(getByText("Ignore user"));
@@ -116,7 +116,7 @@ describe("ProfileDialog", () => {
     const { findByTestId, queryByText } = open("me");
     await findByTestId("profile-view");
     expect(document.querySelector("[data-testid=profile-standing]")?.textContent).toBe("Placing: 3 more ranked sets");
-    expect(stats()).toEqual(["Rating: ????", "Sets played: 2", "Record: 1 W - 1 L"]);
+    expect(stats()).toEqual(["Rating: ????", "Sets played: 2", "Record: 1W-1L"]);
     expect(queryByText("Message")).toBeNull();
     expect(queryByText("Ignore user")).toBeNull();
   });

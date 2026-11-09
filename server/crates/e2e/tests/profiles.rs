@@ -94,7 +94,7 @@ async fn profiles_by_uid_and_code_and_their_page() {
     assert!(
         html.contains(&format!("<meta property=\"og:title\" content=\"Sonder&lt;Meaning&gt; ({})\">", a.connect_code))
     );
-    assert!(html.contains("content=\"Gold 2 · Rating 1523.4 · #1 of 1 · 6-3 in Ranked\""), "{html}");
+    assert!(html.contains("content=\"Gold 2 · Rating 1523.4 · #1 of 1 · 6W-3L\""), "{html}");
     assert!(html.contains("/assets/ranks/gold-2.png"));
     // Other spellings of the address go to the one address; unknown and banned ones are 404 pages.
     for other in [slug.to_uppercase(), a.uid.clone(), a.connect_code.replace('#', "-0")] {

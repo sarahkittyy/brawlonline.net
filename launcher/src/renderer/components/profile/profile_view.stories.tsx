@@ -2,6 +2,7 @@ import Paper from "@mui/material/Paper";
 
 import type { PlayerProfile } from "@/services/backend/types";
 
+import { ProfileButtons } from "./profile_dialog";
 import { ProfileView } from "./profile_view";
 
 export default {
@@ -31,13 +32,7 @@ const Frame = ({ children }: { children: React.ReactNode }) => (
   <Paper sx={{ width: 444, padding: "24px 24px 20px" }}>{children}</Paper>
 );
 
-const Buttons = () => (
-  <>
-    {/* The dialog's Message and Ignore user (profile_dialog.tsx), as plain buttons here. */}
-    <button type="button">Message</button>
-    <button type="button">Ignore user</button>
-  </>
-);
+const Buttons = () => <ProfileButtons ignored={false} onMessage={() => undefined} onIgnore={() => undefined} />;
 
 /** Someone else's profile: Message and Ignore user, and the web page. */
 export const Placed = () => (

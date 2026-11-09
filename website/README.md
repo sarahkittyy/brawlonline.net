@@ -106,7 +106,7 @@ Preview it with the accounts API behind the same origin (a plain `python -m http
 
 ## Player profiles (`/profile/<code>`)
 
-`brawlonline.net/profile/sond-810` is `SOND#810`'s profile (docs/design/profiles.md). accounts renders the whole page (`server/crates/accounts/src/profile.rs`), the same HTML for people, search engines and link previews, so nginx sends `/profile/<code>` to accounts; the page's one stylesheet, `profile/profile.css`, is a static file here, and it uses `assets/ranks/` for the badge and the wordmark font. No scripts. The pages are indexable (not in the sitemap; the Ranked top 10 links each name to its page, which is how crawlers find them). The badge is the link preview's image and the tier's colour its side bar.
+`brawlonline.net/profile/sond-810` is `SOND#810`'s profile (docs/design/profiles.md). accounts renders the whole page (`server/crates/accounts/src/profile.rs`), the same HTML for people, search engines and link previews, so nginx sends `/profile/<code>` to accounts; the page's one stylesheet, `profile/profile.css`, is a static file here, and it uses `assets/ranks/` for the badge and the wordmark font. No scripts. The pages are indexable (not in the sitemap; the Ranked top 10 links each name to its page, which is how crawlers find them). The badge is the link preview's image (without a rank, `assets/placing-badge.png`: the emblems' outline, dotted) and the tier's colour its side bar.
 
 ## Deploying
 

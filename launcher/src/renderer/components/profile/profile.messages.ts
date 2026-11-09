@@ -4,7 +4,7 @@ export const ProfileMessages = {
   leaderboard: () => "Leaderboard",
   setsPlayed: () => "Sets played",
   record: () => "Record",
-  recordValue: (wins: number, losses: number) => `${wins} W - ${losses} L`,
+  recordValue: (wins: number, losses: number) => `${wins}W-${losses}L`,
   placing: (sets: number) => (sets === 1 ? "Placing: 1 more ranked set" : `Placing: ${sets} more ranked sets`),
   notRanked: () => "Not ranked yet",
   message: () => "Message",

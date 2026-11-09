@@ -265,20 +265,22 @@ fn standing_text(r: &ProfileRanked) -> String {
     }
 }
 
-/// The search snippet and link preview text: "Gold 2 · Rating 1523.4 · #12 of 340 · 34-20 in
-/// Ranked".
+/// The search snippet and link preview text: "Gold 2 · Rating 1523.4 · #12 of 340 · 34W-20L";
+/// without a rank "Placing. 1W-1L" (Sarah's, 2026-11-09).
 pub fn summary(p: &Profile) -> String {
     let r = &p.ranked;
-    let mut parts = vec![standing_text(r)];
+    let record = format!("{}W-{}L", r.wins, r.losses);
+    let Some(rank) = &r.rank else {
+        return format!("Placing. {record}");
+    };
+    let mut parts = vec![rank_name(rank)];
     if let Some(rating) = r.rating {
         parts.push(format!("Rating {}", rating_text(rating)));
     }
     if let Some(pos) = r.position {
         parts.push(format!("#{pos} of {}", r.ranked_players));
     }
-    if r.sets_played > 0 {
-        parts.push(format!("{}-{} in Ranked", r.wins, r.losses));
-    }
+    parts.push(record);
     parts.join(" · ")
 }
 
@@ -325,7 +327,8 @@ pub fn page_html(p: &Profile, base: &str) -> String {
     let summary = summary(p);
     let image = match &r.rank {
         Some(rank) => format!("{base}{}", badge_path(rank)),
-        None => format!("{base}/assets/icon-512.png"),
+        // The emblems' outline, dotted, with no "N more" tag (website/assets/placing-badge.png).
+        None => format!("{base}/assets/placing-badge.png"),
     };
     let ld = json_ld(&serde_json::json!({
         "@context": "https://schema.org",
@@ -350,7 +353,7 @@ pub fn page_html(p: &Profile, base: &str) -> String {
     }
     stats.push_str(&stat("Sets played", &r.sets_played.to_string()));
     if r.sets_played > 0 {
-        stats.push_str(&stat("Record", &format!("{} W - {} L", r.wins, r.losses)));
+        stats.push_str(&stat("Record", &format!("{}W-{}L", r.wins, r.losses)));
     }
 
     format!(
@@ -395,7 +398,7 @@ pub fn page_html(p: &Profile, base: &str) -> String {
     <h2>Ranked</h2>
     <dl class=\"stats\">{stats}</dl>
   </section>
-  <p class=\"cta\">Brawl and P+ online with rollback netcode. <a href=\"/\">Download Brawl Online</a></p>
+  <p class=\"cta\">Wii/GCN games with rollback netcode. <a href=\"/\">Download Brawl Online</a></p>
 </main>
 </body>
 </html>
@@ -495,7 +498,7 @@ mod tests {
     fn page_of_a_placed_player() {
         let gold2 = RankView { tier: "gold", division: Some(2) };
         let p = profile(Some(gold2), Some(1523.44), 54);
-        assert_eq!(summary(&p), "Gold 2 · Rating 1523.4 · #12 of 340 · 27-27 in Ranked");
+        assert_eq!(summary(&p), "Gold 2 · Rating 1523.4 · #12 of 340 · 27W-27L");
         let html = page_html(&p, "https://brawlonline.net");
         // The name is escaped everywhere it goes.
         assert!(!html.contains("Sonder<b>"), "{html}");
@@ -503,7 +506,7 @@ mod tests {
         assert!(html.contains("\"name\":\"Sonder\\u003cb\\u003e\\\"\\u0026\""), "{html}");
         // What Discord reads.
         assert!(html.contains("<meta property=\"og:title\" content=\"Sonder&lt;b&gt;&quot;&amp; (SOND#810)\">"));
-        assert!(html.contains("content=\"Gold 2 · Rating 1523.4 · #12 of 340 · 27-27 in Ranked\""));
+        assert!(html.contains("content=\"Gold 2 · Rating 1523.4 · #12 of 340 · 27W-27L\""));
         assert!(
             html.contains("<meta property=\"og:image\" content=\"https://brawlonline.net/assets/ranks/gold-2.png\">")
         );
@@ -518,14 +521,14 @@ mod tests {
     #[test]
     fn page_of_a_placing_and_a_new_player() {
         let p = profile(None, None, 2);
-        assert_eq!(summary(&p), "Placing: 3 more ranked sets · 1-1 in Ranked");
+        assert_eq!(summary(&p), "Placing. 1W-1L");
         let html = page_html(&p, "https://brawlonline.net");
         assert!(html.contains("<dt>Rating</dt><dd>????</dd>"), "{html}");
         assert!(html.contains("3 more</span>"));
         assert!(!html.contains("Leaderboard"));
-        assert!(html.contains("og:image\" content=\"https://brawlonline.net/assets/icon-512.png\""));
+        assert!(html.contains("og:image\" content=\"https://brawlonline.net/assets/placing-badge.png\""));
         let p = profile(None, None, 0);
-        assert_eq!(summary(&p), "Not ranked yet");
+        assert_eq!(summary(&p), "Placing. 0W-0L");
         let html = page_html(&p, "");
         assert!(!html.contains("Rating") && !html.contains("Record"), "{html}");
         assert!(html.contains("<dt>Sets played</dt><dd>0</dd>"));

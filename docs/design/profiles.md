@@ -11,7 +11,7 @@ _Built 2026-11-09 from Sarah's board card ("let's create some user features ..."
 | A player's right-click menu (online list, chat tab) | **View Profile**, below Message. |
 | Chat window title | Clicking the name opens the profile. |
 | Leaderboard | Clicking a name opens the profile. |
-| Profile dialog | Badge, name, code, rank (or "Placing: N more ranked sets" / "Not ranked yet"); Ranked: rating (`????` while placing), leaderboard position, sets played, W-L; the web page's address (opens in the browser, copy button). Someone else's, when logged in with online play: **Message** (mail icon) and **Ignore user** / Unignore user. |
+| Profile dialog | Badge, name, code, rank (or "Placing: N more ranked sets" / "Not ranked yet"); Ranked: rating (`????` while placing), leaderboard position, sets played, record (`34W-20L`); the web page's address (opens in the browser, copy button). Someone else's, when logged in with online play: **Message** (mail icon) and **Ignore user** / Unignore user. |
 | `brawlonline.net/profile/<code>` | The same profile as a web page, for search engines and link previews. The website's Ranked top 10 links each name to it. |
 
 Profiles are public: `GET /v1/profiles/<id>` needs no login, and the page is indexable. The match history stays private (only the player's own, with a session); nothing on a profile says who someone played or when.
@@ -36,8 +36,8 @@ The page is HTML that accounts renders, the same for people, crawlers and unfurl
 
 - **Site name**: Brawl Online (`og:site_name`).
 - **Title** (the link): `SonderMeaning (SOND#810)` (`og:title`).
-- **Description**: `Gold 2 · Rating 1523.4 · #12 of 340 · 34-20 in Ranked`; while placing `Placing: 3 more ranked sets · 1-1 in Ranked`; never played `Not ranked yet` (`og:description`).
-- **Thumbnail** (top right): the rank badge (`/assets/ranks/gold-2.png`), else the site icon (`og:image` with `twitter:card` = `summary`, the small image; `summary_large_image` would put a big banner under the text).
+- **Description**: `Gold 2 · Rating 1523.4 · #12 of 340 · 34W-20L`; without a rank (placing, or no sets yet) `Placing. 1W-1L` (`og:description`).
+- **Thumbnail** (top right): the rank badge (`/assets/ranks/gold-2.png`); without a rank the emblems' outline, dotted, with no "N more" tag (`/assets/placing-badge.png`, drawn from the same silhouette as the launcher's placing badge; in git, unlike the Layerlab badges). `og:image` with `twitter:card` = `summary`, the small image; `summary_large_image` would put a big banner under the text.
 - **Side bar**: the tier's colour (`theme-color`), green (the site's) without a rank.
 
 Search engines get the title `SonderMeaning (SOND#810) · Brawl Online`, a description sentence, the canonical address and a schema.org `ProfilePage` (JSON-LD). The page has no scripts (CSP `default-src 'none'`), is cached for a minute and is limited per IP together with the JSON lookup (60 a minute, 1,000 an hour).
