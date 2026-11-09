@@ -1,4 +1,4 @@
-import { extractBrawlAssets, extractMissingSounds, soundsOutdated } from "@brawl_assets/extract";
+import { extractBrawlAssets, extractMissingSounds, soundsOutdated, stocksMissing } from "@brawl_assets/extract";
 
 import type { ExtractFn, FillMissingFn } from "./game_assets_manager";
 import type { GameAssetManifest } from "./types";
@@ -17,4 +17,4 @@ export const fillMissingGameAssets: FillMissingFn = async (opts) => {
 
 /** Whether a cached manifest needs fillMissingGameAssets: no sounds, or not the catalog's; no ITEM SWITCH or stage icons. */
 export const gameAssetsNeedFill = (manifest: GameAssetManifest) =>
-  soundsOutdated(manifest) || !manifest.items || !manifest.stages;
+  soundsOutdated(manifest) || !manifest.items || !manifest.stages || stocksMissing(manifest).length > 0;

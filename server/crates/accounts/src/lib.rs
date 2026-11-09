@@ -32,9 +32,9 @@ use axum::Router;
 use common::playkey::PlayKeySecret;
 use common::ratelimit::{
     RateLimiter, Window, AUTH_WINDOWS, BUG_REPORT_IP_WINDOWS, DAY, HISTORY_WINDOWS, LEADERBOARD_IP_WINDOWS,
-    MAIL_RECIPIENT_WINDOWS, PROFILE_IP_WINDOWS, ROOMS_WINDOWS, ROOM_NAME_WINDOWS, RULESET_EDIT_WINDOWS,
-    RULESET_LOOKUP_IP_WINDOWS, RULESET_PUBLISH_WINDOWS, SD_LISTING_FETCH_WINDOWS, SD_LISTING_UPLOAD_WINDOWS,
-    SIGNUP_IP_WINDOWS,
+    MAIL_RECIPIENT_WINDOWS, PROFILE_EDIT_WINDOWS, PROFILE_IP_WINDOWS, ROOMS_WINDOWS, ROOM_NAME_WINDOWS,
+    RULESET_EDIT_WINDOWS, RULESET_LOOKUP_IP_WINDOWS, RULESET_PUBLISH_WINDOWS, SD_LISTING_FETCH_WINDOWS,
+    SD_LISTING_UPLOAD_WINDOWS, SIGNUP_IP_WINDOWS,
 };
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
@@ -110,6 +110,8 @@ pub struct Limits {
     pub ruleset_lookup_ip: RateLimiter<IpAddr>,
     /// Profile lookups and pages per client IP (IPv6 per /64): [`PROFILE_IP_WINDOWS`].
     pub profile_ip: RateLimiter<IpAddr>,
+    /// Profile changes per account: [`PROFILE_EDIT_WINDOWS`].
+    pub profile_edit: RateLimiter<uuid::Uuid>,
     /// The account's own ruleset calls: [`RULESET_EDIT_WINDOWS`].
     pub ruleset_edit: RateLimiter<uuid::Uuid>,
     /// Bug reports per client IP (IPv6 per /64): [`BUG_REPORT_IP_WINDOWS`].
@@ -142,6 +144,7 @@ impl Limits {
             ruleset_publish: RateLimiter::new(&RULESET_PUBLISH_WINDOWS),
             ruleset_lookup_ip: RateLimiter::new(&RULESET_LOOKUP_IP_WINDOWS),
             profile_ip: RateLimiter::new(&PROFILE_IP_WINDOWS),
+            profile_edit: RateLimiter::new(&PROFILE_EDIT_WINDOWS),
             ruleset_edit: RateLimiter::new(&RULESET_EDIT_WINDOWS),
             bug_report_ip: RateLimiter::new(&BUG_REPORT_IP_WINDOWS),
             sd_listing_upload: RateLimiter::new(&SD_LISTING_UPLOAD_WINDOWS),
@@ -188,6 +191,7 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/me/matches", get(history::my_matches))
         .route("/user/{uid}", get(api::public_user))
         .route("/v1/profiles/{id}", get(profile::lookup))
+        .route("/v1/me/profile", put(profile::update))
         .route("/profile/{slug}", get(profile::page))
         .route("/v1/ranked/report-game", post(ranked::report_game))
         .route("/v1/ranked/report-leave", post(ranked::report_leave))

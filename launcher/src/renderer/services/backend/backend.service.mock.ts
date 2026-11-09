@@ -13,6 +13,7 @@ import type {
   MatchHistoryPage,
   MyRulesets,
   PlayerProfile,
+  ProfileUpdate,
   PublishRulesetRequest,
   Rank,
   RankedProfile,
@@ -24,6 +25,7 @@ import type {
   RulesetDraftRequest,
   RulesetPage,
   RulesetView,
+  SocialPlatform,
   UserData,
 } from "./types";
 
@@ -188,6 +190,13 @@ const mockLeaderboard: LeaderboardEntry[] = Array.from({ length: 137 }, (_, i): 
 })
   .filter((e) => !(mockPlacing && e.uid === fakeUserId))
   .map((e, i) => ({ ...e, position: i + 1 }));
+
+/** What the mock user has put on their profile (changed by updateProfile). */
+const mockOwnProfileExtras: { mains: string[]; country: string | null; socials: PlayerProfile["socials"] & object } = {
+  mains: ["marth", "sheik"],
+  country: "se",
+  socials: [{ platform: "twitch", handle: "demo", display: "@demo", url: "https://twitch.tv/demo" }],
+};
 
 /** A profile for anyone on the mock leaderboard (by uid or code), the mock user included. */
 export function mockProfile(id: string): PlayerProfile {
@@ -458,7 +467,25 @@ class MockBackendClient implements BackendService {
 
   @delayAndMaybeError(SHOULD_ERROR)
   async fetchProfile(id: string): Promise<PlayerProfile> {
-    return mockProfile(id);
+    return { ...mockProfile(id), ...(id === fakeUserId ? mockOwnProfileExtras : {}) };
+  }
+
+  @delayAndMaybeError(SHOULD_ERROR)
+  async updateProfile(update: ProfileUpdate): Promise<PlayerProfile> {
+    if (update.mains) {
+      mockOwnProfileExtras.mains = update.mains;
+    }
+    if (update.country !== undefined) {
+      mockOwnProfileExtras.country = update.country;
+    }
+    for (const [platform, text] of Object.entries(update.socials ?? {})) {
+      const others = mockOwnProfileExtras.socials.filter((s) => s.platform !== platform);
+      const handle = text?.trim().replace(/^@/, "").replace(/^.*\//, "");
+      mockOwnProfileExtras.socials = handle
+        ? [...others, { platform: platform as SocialPlatform, handle, display: `@${handle}`, url: null }]
+        : others;
+    }
+    return { ...mockProfile(fakeUserId), ...mockOwnProfileExtras };
   }
 
   @delayAndMaybeError(SHOULD_ERROR)

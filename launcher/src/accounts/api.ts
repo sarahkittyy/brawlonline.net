@@ -27,6 +27,7 @@ import {
   ipc_accountsSetRoomName,
   ipc_accountsSetRulesetHidden,
   ipc_accountsSignUp,
+  ipc_accountsUpdateProfile,
   ipc_accountsUpdateRulesetDraft,
 } from "./ipc";
 import type { AccountsApi, AccountsResult } from "./types";
@@ -73,6 +74,9 @@ const accountsApi: AccountsApi = {
   },
   async publicUser(uid) {
     return unwrap(await ipc_accountsPublicUser.renderer!.trigger({ uid }));
+  },
+  async updateProfile(uid, update) {
+    return unwrap(await ipc_accountsUpdateProfile.renderer!.trigger({ uid, update }));
   },
   async profile(id) {
     return unwrap(await ipc_accountsProfile.renderer!.trigger({ id }));

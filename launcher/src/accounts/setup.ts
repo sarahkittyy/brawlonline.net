@@ -34,6 +34,7 @@ import {
   ipc_accountsSetRoomName,
   ipc_accountsSetRulesetHidden,
   ipc_accountsSignUp,
+  ipc_accountsUpdateProfile,
   ipc_accountsUpdateRulesetDraft,
 } from "./ipc";
 import { SessionStore } from "./session_store";
@@ -59,6 +60,7 @@ export default function setupAccountsIpc() {
   ipc_accountsRename.main!.handle(async ({ uid, displayName }) => await manager.rename(uid, displayName));
   ipc_accountsPublicUser.main!.handle(async ({ uid }) => await manager.publicUser(uid));
   ipc_accountsProfile.main!.handle(async ({ id }) => await manager.profile(id));
+  ipc_accountsUpdateProfile.main!.handle(async ({ uid, update }) => await manager.updateProfile(uid, update));
   ipc_accountsLeaderboard.main!.handle(async ({ limit, after, q }) => await manager.leaderboard({ limit, after, q }));
   ipc_accountsMatchHistory.main!.handle(
     async ({ uid, mode, limit, before }) => await manager.matchHistory(uid, { mode, limit, before }),

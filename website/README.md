@@ -11,6 +11,7 @@ The landing page for Brawl Online. It is a static site with no build step, no an
 | `assets/bg.webm`, `assets/bg.mp4`, `assets/bg-poster.jpg` | Background video and its still frame. **Not present yet.** |
 | `r/index.html`, `r/ruleset.js`, `r/ruleset.css` | The ruleset page, `brawlonline.net/r/<code>` (below). |
 | `profile/profile.css` | The style of the player profile pages, `brawlonline.net/profile/<code>`, which accounts renders (below). |
+| `assets/flags/` | Every country flag a profile can show (flag-icons 7.6.0, MIT; `LICENSES.txt` §4), the same SVGs the launcher bundles. |
 | `robots.txt`, `sitemap.xml` | For search engines (below). |
 | `LICENSES.txt` | Credits for the font, the icons and (later) the video. Deploy it with the site. |
 

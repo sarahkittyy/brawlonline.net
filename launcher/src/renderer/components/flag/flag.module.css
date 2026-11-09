@@ -1,0 +1,16 @@
+/* A 4:3 flag (flag.tsx). */
+.flag {
+  display: inline-block;
+  flex-shrink: 0;
+  border-radius: 2px;
+  object-fit: cover;
+  box-shadow: 0 0 0 1px rgb(255 255 255 / 12%);
+}
+
+.noFlag {
+  display: inline-block;
+  flex-shrink: 0;
+  box-sizing: border-box;
+  border: 1.5px dashed rgb(255 255 255 / 40%);
+  border-radius: 2px;
+}

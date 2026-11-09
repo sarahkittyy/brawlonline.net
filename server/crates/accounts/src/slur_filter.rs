@@ -85,6 +85,8 @@ pub enum What {
     CodeStart,
     /// The name a host gives their rooms (`PUT /v1/me/room-name`).
     RoomName,
+    /// A social media username on a profile (`PUT /v1/me/profile`): refused, not replaced.
+    SocialHandle,
 }
 
 impl What {
@@ -93,6 +95,7 @@ impl What {
             What::DisplayName => "display name",
             What::CodeStart => "connect code start",
             What::RoomName => "room name",
+            What::SocialHandle => "social media username",
         }
     }
 }
@@ -207,7 +210,7 @@ impl SlurFilter {
         match self.is_slur(what, text).await {
             Ok(false) => Screened::Clean,
             Ok(true) => Screened::Replace(match what {
-                What::DisplayName | What::RoomName => kind_name(),
+                What::DisplayName | What::RoomName | What::SocialHandle => kind_name(),
                 What::CodeStart => kind_prefix(),
             }),
             Err(e) => {

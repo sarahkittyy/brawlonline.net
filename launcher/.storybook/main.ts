@@ -64,10 +64,11 @@ const config: StorybookConfig = {
       (rule: any) => !Array.isArray(rule.test) && rule.test.test(".svg"),
     ) as RuleSetRule;
     fileLoaderRule.exclude = /\.svg$/;
-    config.module.rules.push({
-      test: /\.svg$/,
-      use: ["@svgr/webpack", "url-loader"],
-    });
+    config.module.rules.push(
+      // Flags (flag-icons): plain files, as in the app.
+      { test: /flag-icons[\\/]flags[\\/].*\.svg$/, type: "asset/resource" },
+      { test: /\.svg$/, exclude: /flag-icons[\\/]flags[\\/]/, use: ["@svgr/webpack", "url-loader"] },
+    );
 
     // Merge resolve configuration separately to avoid plugin duplication
     config.resolve = config.resolve || {};

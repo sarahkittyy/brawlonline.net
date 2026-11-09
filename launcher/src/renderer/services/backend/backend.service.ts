@@ -6,6 +6,7 @@ import type {
   MatchHistoryPage,
   MyRulesets,
   PlayerProfile,
+  ProfileUpdate,
   PublishRulesetRequest,
   RecentRuleset,
   RoomKind,
@@ -125,6 +126,10 @@ class AccountsBackendClient implements BackendService {
 
   async fetchProfile(id: string): Promise<PlayerProfile> {
     return await this._api.profile(id);
+  }
+
+  async updateProfile(update: ProfileUpdate): Promise<PlayerProfile> {
+    return await this._api.updateProfile(this._activeUid(), update);
   }
 
   async fetchLeaderboard(after?: string, search?: string): Promise<LeaderboardPage> {

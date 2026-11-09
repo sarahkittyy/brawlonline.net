@@ -96,6 +96,34 @@ export type PlayerProfile = {
     /** Players on the leaderboard. */
     rankedPlayers: number;
   };
+  /** Character keys (src/common/profile.ts CHARACTERS), the primary first; empty for none (absent from an older server). */
+  mains?: string[];
+  /** A flag-icons country code (`se`, `gb-eng`); null for none. */
+  country?: string | null;
+  /** The social media accounts set, in SOCIAL_PLATFORMS' order. */
+  socials?: ProfileSocial[];
+};
+
+export type SocialPlatform = "discord" | "twitter" | "twitch" | "youtube" | "tiktok" | "instagram";
+
+export type ProfileSocial = {
+  platform: SocialPlatform;
+  /** As stored (`sarahkitty`, YouTube's `@name`). */
+  handle: string;
+  /** As shown (`@sarahkitty`; Discord's as it is). */
+  display: string;
+  /** The account's page; null for Discord. */
+  url: string | null;
+};
+
+/**
+ * `PUT /v1/me/profile`: each field sent replaces what is stored. `socials` values are what the player typed (a
+ * username, `@username` or a link); blank or null removes the account. `country: null` removes the country.
+ */
+export type ProfileUpdate = {
+  mains?: string[];
+  country?: string | null;
+  socials?: Partial<Record<SocialPlatform, string | null>>;
 };
 
 /** One row of `GET /v1/ranked/leaderboard`. */
@@ -364,6 +392,8 @@ export interface AccountsApi {
   publicUser(uid: string): Promise<AccountsPublicUser>;
   /** A player's public profile by uid or connect code. */
   profile(id: string): Promise<PlayerProfile>;
+  /** Changes this account's mains, country and social media accounts; resolves to the new profile. */
+  updateProfile(uid: string, update: ProfileUpdate): Promise<PlayerProfile>;
   /** One leaderboard page (public); `q` searches names and connect codes. */
   leaderboard(query: { limit?: number; after?: string; q?: string }): Promise<LeaderboardPage>;
   /** One page of this account's match history. */

@@ -73,8 +73,32 @@ The online list and chat don't show badges yet: the social stream's players have
 
 Each player's `rank` in `GET /v1/me/matches` is their rank when the match was made: the `rank_after` of their last rating change (`rating_events`) before the match's `created_at`. For a ranked set that is the rank going into it. Null while they were placing or before their first rated set. No new storage: the ranks were already kept per rating change for the tier rules (`docs/design/ranked-tiers.md`), and `rating_events_uid_idx (uid, created_at)` makes it one index lookup per player per row.
 
-## 7. Deploying
+## 7. Customization (2026-11-09)
+
+Sarah's board, second card: the player edits their own profile in place.
+
+- **Edit mode**: on the player's own profile a pencil sits left of the X; it turns into a check while editing. Every change is saved as it is made; there is no Save button.
+- **Name**: a text box in place of the name. Leaving it or Enter renames through `POST /v1/me/rename`, the same path as Edit display name, so the slur filter applies; Escape puts it back. The launcher's 15-character rule is checked first.
+- **Mains** (under the name and badge, above Ranked): "Mains:" and the characters, the primary first. Up to 9 are 32 px stock icons in one row; 10 to 36 are 16 px in two even rows. 36 (`MAX_MAINS`, two rows of 18 in the 324 px the row has) is the most the server takes. Without a disc set up the launcher has no stock icons, so the mains are rounded name tags that wrap. The row is hidden when there are none (except in edit mode). Edit mode: a pencil before "Mains:" opens a popover with no title, every character's stock icon in a grid (or the name tags), with a bright rounded outline on the picked ones. A click picks or drops one. The **primary** is the first one picked until another is double-clicked (which also picks it); it has a gold outline and a star, and it comes first everywhere. Dropping the primary makes the next one primary. Ok saves.
+- **Random** is a main: its icon is the disc's Smash emblem stock (`InfStc.981`; Brawl has no "?" stock). Caches extracted before it get it added at the next start (`stocksMissing`, like the sounds).
+- **Country** (under mains): the flag and the country's name; hidden when unset. Edit mode: one button with the flag (a dashed outline without one) and a pencil opens a popover with a search box and a grid of every flag, the dashed "no country" first; a click picks and closes. The list is flag-icons 7.6.0's (MIT): ISO 3166-1 plus England, Scotland, Wales, Northern Ireland, Catalonia, Basque Country, Galicia, the EU, the UN and a few more (270 flags). The launcher loads each flag's SVG when shown; the website serves the same files (`website/assets/flags/`).
+- **Social media** (under Ranked): one row of logos (Discord, X/Twitter, Twitch, YouTube, TikTok, Instagram), only the ones set; hidden when none. A logo opens the account in the browser; Discord's copies the username (it has no page). Edit mode: each platform's logo and a text box that takes a username, `@username` or a link to the account; leaving it saves it, blank removes it. The server keeps only the handle and builds the link itself, so a profile never links anywhere but the platform's own site. A username the slur filter calls a slur is refused (not replaced). The logos are Simple Icons (CC0).
+- **The web page** shows the same: mains as name tags (the website has no game art), the flag and name, the social logos linking to the accounts (Discord's with the username beside it).
+
+Server: `profiles` table (migration 0032: mains as character keys, country, one column per platform), `PUT /v1/me/profile` (partial: each field sent replaces what is stored), rules in `common::profile` and `common::countries` (the launcher keeps the same lists in `src/common/profile.ts`; the country list there is read from flag-icons itself).
+
+## 8. Flags and mains outside the profile (open)
+
+Undecided: where else the flag and the mains show, and whether a player can keep them on their profile only. Mockups of three ways across the online list, a chat window, the leaderboard, a room's player cards and the Spectate list: `tmp/profile-preview/shots/mockups.png` (local, not in git).
+
+- **A. Each place shows what fits it, with one opt-out switch.** The flag in its own narrow column in lists (names still line up), the primary main only where there's room (a leaderboard column, the chat window's title), the flag alone on room cards and in Spectate. One switch in edit mode, "Show my flag and main next to my name around the launcher", on by default.
+- **B. Names stay as they are; hovering a name shows a mini profile** (badge, flag, mains, socials). Nothing to switch off. Cleanest, least visible.
+- **C. Each player picks their own name tag**: nothing, flag, main, or both, shown the same way everywhere ([flag] Name [main]); places too small for a main drop it.
+
+Recommendation: A, with B's hover card added later. A keeps lists tidy because each place decides the layout (columns, not decorations glued to names) and one switch covers "only on my profile" without a per-place matrix. C makes lists uneven, B hides the thing people set to be seen. `UserName` (§5) already takes the parts as switches, so A is a `showFlag` / `showMain` per place plus the flag and primary main in the lists' data (the social stream, leaderboard, rooms and spectate payloads).
+
+## 9. Deploying
 
 - accounts: the two routes (`server/crates/accounts/src/lib.rs`).
-- website: `website/profile/profile.css` (the page's only style) and the top 10 links (`script.js`, `style.css`).
+- website: `website/profile/profile.css` (the page's only style), the flags (`assets/flags/`), the placing badge, and the top 10 links (`script.js`, `style.css`).
 - **nginx (by hand on sarahvps2)**: `/profile/<code>` goes to accounts (`server/deploy/sarahvps2/nginx-brawl-online.conf`, the accounts `location`). Until it's installed, `/profile/...` is a 404 from the static site, including the launcher's "open in browser" link. The Caddyfile has the same route.

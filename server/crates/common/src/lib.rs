@@ -8,10 +8,12 @@
 
 pub mod chat;
 pub mod codes;
+pub mod countries;
 pub mod db;
 pub mod mods;
 pub mod net;
 pub mod playkey;
+pub mod profile;
 pub mod proto;
 pub mod ranked;
 pub mod ratelimit;

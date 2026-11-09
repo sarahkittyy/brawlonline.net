@@ -206,3 +206,92 @@ h2 {
     font-size: 24px;
   }
 }
+
+/* Mains and country (only when set). Mains are name tags: the site has no stock icons (they come from each
+   player's own disc in the launcher). */
+.about {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.about .row {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+}
+
+.about .label {
+  flex-shrink: 0;
+  width: 70px;
+  color: var(--dim);
+}
+
+.mains {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.main {
+  padding: 2px 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-size: 14px;
+}
+
+.main.primary {
+  border-color: #f0c24a;
+}
+
+.country {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.flag {
+  display: block;
+  border-radius: 2px;
+  box-shadow: 0 0 0 1px rgb(255 255 255 / 12%);
+}
+
+/* Social media: one row of logos (Discord's with the username, it has no page). */
+.socials {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0 0 16px;
+  padding: 0;
+  list-style: none;
+}
+
+.socials a,
+.socials .handle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  color: var(--dim);
+  background: var(--card);
+}
+
+.socials a:hover {
+  color: var(--fg);
+}
+
+.socials svg {
+  width: 20px;
+  height: 20px;
+  fill: currentColor;
+}
+
+.socials .handle span {
+  color: var(--fg);
+  font-size: 14px;
+}

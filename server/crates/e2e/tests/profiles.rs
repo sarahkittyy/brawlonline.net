@@ -180,3 +180,73 @@ async fn match_history_shows_each_players_rank_then() {
     assert!(rank_of(&ids[0], &b).is_null() && rank_of(&ids[1], &b).is_null());
     stack.shutdown().await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn players_set_their_mains_country_and_socials() {
+    let stack = Stack::start(StackOptions::default()).await.unwrap();
+    let (session, a) = stack.create_player("edit-a@example.test", "editor", "EDIT").await;
+    // Nothing set: empty lists, no country.
+    let (st, p) = profile(&stack, &a.uid).await;
+    assert_eq!(st, 200);
+    assert_eq!((&p["mains"], &p["country"], &p["socials"]), (&json!([]), &Value::Null, &json!([])));
+
+    // Everything at once: mains in order (the primary first), a country in any case, socials as
+    // usernames, @names and links.
+    let body = json!({
+        "mains": ["marth", "random", "sheik"],
+        "country": "GB-ENG",
+        "socials": {"twitch": "https://www.twitch.tv/SarahKitty/", "discord": "SarahKittyy", "youtube": "@sarah"},
+    });
+    let (st, p) = stack.put("/v1/me/profile", Some(&session), body).await;
+    assert_eq!(st, 200, "{p}");
+    assert_eq!(p["mains"], json!(["marth", "random", "sheik"]));
+    assert_eq!(p["country"], "gb-eng");
+    assert_eq!(
+        p["socials"],
+        json!([
+            {"platform": "discord", "handle": "sarahkittyy", "display": "sarahkittyy", "url": null},
+            {"platform": "twitch", "handle": "sarahkitty", "display": "@sarahkitty", "url": "https://twitch.tv/sarahkitty"},
+            {"platform": "youtube", "handle": "@sarah", "display": "@sarah", "url": "https://youtube.com/@sarah"},
+        ])
+    );
+    assert_eq!(profile(&stack, &a.uid).await.1, p, "the public profile has the same");
+
+    // A field left out stays; null clears the country; a blank social removes it.
+    let (st, p) = stack.put("/v1/me/profile", Some(&session), json!({"mains": ["fox"]})).await;
+    assert_eq!(st, 200, "{p}");
+    assert_eq!((p["mains"].clone(), p["country"].clone()), (json!(["fox"]), json!("gb-eng")));
+    assert_eq!(p["socials"].as_array().unwrap().len(), 3);
+    let (st, p) = stack
+        .put("/v1/me/profile", Some(&session), json!({"country": null, "socials": {"discord": "", "youtube": null}}))
+        .await;
+    assert_eq!(st, 200, "{p}");
+    assert!(p["country"].is_null());
+    assert_eq!(
+        p["socials"].as_array().unwrap().iter().map(|s| s["platform"].clone()).collect::<Vec<_>>(),
+        [json!("twitch")]
+    );
+
+    // Refused, with a message for the player, and nothing changed.
+    for bad in [
+        json!({"mains": ["marth", "giga_bowser"]}),
+        json!({"mains": ["marth", "marth"]}),
+        json!({"country": "zz"}),
+        json!({"socials": {"twitch": "https://evil.example/x"}}),
+        json!({"socials": {"myspace": "tom"}}),
+    ] {
+        let (st, body) = stack.put("/v1/me/profile", Some(&session), bad.clone()).await;
+        assert_eq!((st, body["error"]["code"].as_str()), (400, Some("invalid_profile")), "{bad}: {body}");
+        assert!(!body["error"]["message"].as_str().unwrap().is_empty());
+    }
+    let too_many: Vec<&str> = common::profile::CHARACTERS.iter().map(|(k, _)| *k).collect();
+    assert_eq!(stack.put("/v1/me/profile", Some(&session), json!({"mains": too_many})).await.0, 400);
+    assert_eq!(profile(&stack, &a.uid).await.1["mains"], json!(["fox"]));
+    assert_eq!(stack.put("/v1/me/profile", None, json!({"mains": []})).await.0, 401);
+
+    // The web page shows them.
+    let slug = a.connect_code.replace('#', "-").to_lowercase();
+    let html = stack.http.get(stack.url(&format!("/profile/{slug}"))).send().await.unwrap().text().await.unwrap();
+    assert!(html.contains("<li class=\"main primary\" title=\"Primary\">Fox</li>"), "{html}");
+    assert!(html.contains("href=\"https://twitch.tv/sarahkitty\""));
+    stack.shutdown().await;
+}

@@ -4,7 +4,7 @@ import path from "path";
 import { afterAll, describe, expect, it } from "vitest";
 
 import { stockTextureName } from "./catalog";
-import { extractBrawlAssets, readManifest, runExtraction } from "./extract";
+import { extractBrawlAssets, readManifest, runExtraction, stocksMissing } from "./extract";
 import { readTtf } from "./font/ttf";
 import { buildArc } from "./formats/arc";
 import { buildBrres, buildPlt0, buildTex0 } from "./formats/brres";
@@ -137,5 +137,15 @@ describe("extractBrawlAssets (synthetic disc)", () => {
     // Fonts are not on this fake SD, so they come from the disc.
     expect(manifest.fonts.menuFont.origin).toBe("disc");
     expect(manifest.missing).toContain("stock:roy");
+  });
+});
+
+describe("stocksMissing", () => {
+  it("names the disc-only stock icons a cache has gained since (Random), unless recorded missing", () => {
+    const keys = (m: Parameters<typeof stocksMissing>[0]) => stocksMissing(m).map((c) => c.key);
+    expect(keys({ stocks: { mario: {} }, missing: [] })).toEqual(["random"]);
+    expect(keys({ stocks: { mario: {}, random: {} }, missing: [] })).toEqual([]);
+    expect(keys({ stocks: { mario: {} }, missing: ["stock:random"] })).toEqual([]);
+    expect(keys({ stocks: {}, missing: ["stocks"] })).toEqual([]);
   });
 });

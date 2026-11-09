@@ -6,10 +6,17 @@
   padding: 24px 24px 20px;
 }
 
-.close {
-  position: absolute !important;
+/* The pencil (own profile) and the X, top right. */
+.corner {
+  position: absolute;
   top: 8px;
   right: 8px;
+  display: flex;
+  gap: 2px;
+}
+
+.editOn {
+  color: var(--accent-primary) !important;
 }
 
 .status {
@@ -32,7 +39,7 @@
   display: flex;
   align-items: center;
   gap: 18px;
-  padding-right: 24px;
+  padding-right: 60px;
 }
 
 .badge {
@@ -148,4 +155,285 @@
 .webLink a:hover {
   color: var(--text-primary);
   text-decoration: underline;
+}
+
+/* Edit mode: the name as a text box. */
+.nameInput {
+  width: 100%;
+  max-width: 230px;
+  padding: 2px 6px;
+  margin-left: -7px;
+  border: 1px solid rgb(255 255 255 / 25%);
+  border-radius: 6px;
+  background: rgb(0 0 0 / 25%);
+  font-family: inherit;
+}
+
+.nameInput:focus {
+  outline: none;
+  border-color: var(--accent-primary);
+}
+
+.nameInput.invalid {
+  border-color: var(--red-error, #f28b82);
+}
+
+.problem {
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--red-error, #f28b82);
+}
+
+/* Mains and country, between the name and Ranked. */
+.about {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+}
+
+.label {
+  flex-shrink: 0;
+  width: 58px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.pencil {
+  margin: 0 -4px 0 -8px !important;
+}
+
+.editing .label {
+  width: auto;
+}
+
+.none {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+/* Up to 9 stock icons at 32 px in one row; more at 16 px in two even rows (at most 18 a row, 324 px). */
+.mainIcons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  width: 324px;
+  max-width: 100%;
+}
+
+.mainIcons.small {
+  display: grid;
+  gap: 2px;
+  width: auto;
+}
+
+.mainTags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  min-width: 0;
+}
+
+.stock {
+  display: block;
+  image-rendering: auto;
+}
+
+/* A character's name in a rounded border (no disc, so no stock icons). */
+.tag {
+  display: inline-block;
+  padding: 1px 8px;
+  border: 1px solid rgb(255 255 255 / 30%);
+  border-radius: 999px;
+  font-size: 12px;
+  line-height: 18px;
+  white-space: nowrap;
+  color: var(--text-primary);
+}
+
+.primaryTag {
+  border-color: #f0c24a;
+}
+
+.country {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+}
+
+.countryButton {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: none;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.countryButton:hover {
+  border-color: rgb(255 255 255 / 20%);
+  background: rgb(255 255 255 / 5%);
+}
+
+/* Social media: one row of logos; edit mode a logo and a text box each. */
+.socials {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: -6px;
+}
+
+.socialButton {
+  color: var(--text-secondary) !important;
+}
+
+.socialButton:hover {
+  color: var(--text-primary) !important;
+}
+
+.socialsEditor {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 14px;
+  border-top: 1px solid rgb(255 255 255 / 8%);
+}
+
+.socialField {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--text-secondary);
+}
+
+.socialInput {
+  flex: 1;
+  min-width: 0;
+  padding: 5px 8px;
+  border: 1px solid rgb(255 255 255 / 15%);
+  border-radius: 6px;
+  background: rgb(0 0 0 / 20%);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 13px;
+}
+
+.socialInput:focus {
+  outline: none;
+  border-color: var(--accent-primary);
+}
+
+/* The mains and country pickers (popovers). */
+.picker {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-width: 420px;
+  padding: 12px;
+}
+
+.iconGrid {
+  display: grid;
+  grid-template-columns: repeat(9, 40px);
+  gap: 4px;
+}
+
+.tagGrid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.flagGrid {
+  display: grid;
+  grid-template-columns: repeat(10, 36px);
+  gap: 3px;
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+/* A choice: no outline until picked; picked a bright rounded square; the primary main gold, with a star. */
+.choice {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 36px;
+  min-height: 30px;
+  padding: 3px;
+  border: 2px solid transparent;
+  border-radius: 8px;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+}
+
+.choice:hover {
+  background: rgb(255 255 255 / 8%);
+}
+
+.choice.selected {
+  border-color: rgb(255 255 255 / 85%);
+  background: rgb(255 255 255 / 10%);
+}
+
+.choice.primary {
+  border-color: #f0c24a;
+}
+
+.choice:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.tagGrid .choice {
+  padding: 1px;
+}
+
+.star {
+  position: absolute;
+  top: -7px;
+  right: -7px;
+  font-size: 16px !important;
+  color: #f0c24a;
+  filter: drop-shadow(0 1px 1px rgb(0 0 0 / 60%));
+}
+
+.pickerFooter {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.hint {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.search {
+  padding: 6px 10px;
+  border: 1px solid rgb(255 255 255 / 20%);
+  border-radius: 6px;
+  background: rgb(0 0 0 / 25%);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 13px;
+}
+
+.search:focus {
+  outline: none;
+  border-color: var(--accent-primary);
 }

@@ -106,3 +106,33 @@ export const NotRanked = () => (
     />
   </Frame>
 );
+
+/** Mains (the primary first), a country and social media accounts. Stock icons need a disc: here name tags. */
+export const Customized = () => (
+  <Frame>
+    <ProfileView
+      profile={{
+        ...gold,
+        mains: ["fox", "falco", "random"],
+        country: "se",
+        socials: [
+          { platform: "discord", handle: "sonder", display: "sonder", url: null },
+          { platform: "twitch", handle: "sonder", display: "@sonder", url: "https://twitch.tv/sonder" },
+        ],
+      }}
+      actions={<Buttons />}
+      onCopyLink={() => undefined}
+    />
+  </Frame>
+);
+
+/** Edit mode on the player's own profile (nothing is saved here). */
+export const Editing = () => (
+  <Frame>
+    <ProfileView
+      profile={{ ...gold, mains: ["marth"], country: null, socials: [] }}
+      editing={{ rename: async () => undefined, save: async () => undefined }}
+      onCopyLink={() => undefined}
+    />
+  </Frame>
+);

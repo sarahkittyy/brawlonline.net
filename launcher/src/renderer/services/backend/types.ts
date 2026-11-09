@@ -4,6 +4,7 @@ import type {
   MatchHistoryPage,
   MyRulesets,
   PlayerProfile,
+  ProfileUpdate,
   PublishRulesetRequest,
   Rank,
   RecentRuleset,
@@ -25,6 +26,8 @@ export type {
   MatchHistoryPlayer,
   MyRulesets,
   PlayerProfile,
+  ProfileSocial,
+  ProfileUpdate,
   PublicModRoom,
   PublicRoom,
   PublishRulesetRequest,
@@ -40,6 +43,7 @@ export type {
   RulesetDraftRequest,
   RulesetPage,
   RulesetView,
+  SocialPlatform,
   YourRoom,
 } from "@accounts/types";
 
@@ -73,6 +77,8 @@ export interface BackendService {
   fetchRankedNetplayProfile(userId: string): Promise<RankedProfile | undefined>;
   /** A player's public profile (docs/design/profiles.md) by uid or connect code; anyone's, no login needed. */
   fetchProfile(id: string): Promise<PlayerProfile>;
+  /** Changes the logged-in player's mains, country and social media accounts (docs/design/profiles.md). */
+  updateProfile(update: ProfileUpdate): Promise<PlayerProfile>;
   /**
    * One leaderboard page; `after` is the previous page's `next`. With `search`, only the players whose
    * name or connect code contains it.

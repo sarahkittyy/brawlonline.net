@@ -11,6 +11,7 @@ import type {
   MatchHistoryPage,
   MyRulesets,
   PlayerProfile,
+  ProfileUpdate,
   PublicModRoom,
   PublishRulesetRequest,
   RecentRuleset,
@@ -104,6 +105,10 @@ export class AccountsHttpClient {
 
   publicUser(uid: string): Promise<AccountsPublicUser> {
     return this._request("GET", `/user/${encodeURIComponent(uid)}?additionalFields=chatMessages,rank`, {});
+  }
+
+  updateProfile(token: string, update: ProfileUpdate): Promise<PlayerProfile> {
+    return this._request("PUT", "/v1/me/profile", { token, body: update });
   }
 
   profile(id: string): Promise<PlayerProfile> {

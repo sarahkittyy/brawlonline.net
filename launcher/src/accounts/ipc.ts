@@ -10,6 +10,7 @@ import type {
   MatchHistoryPage,
   MyRulesets,
   PlayerProfile,
+  ProfileUpdate,
   PublishRulesetRequest,
   RecentRuleset,
   RoomKind,
@@ -74,6 +75,12 @@ export const ipc_accountsPublicUser = makeEndpoint.main(
 );
 
 export const ipc_accountsProfile = makeEndpoint.main("accounts_profile", <{ id: string }>_, <R<PlayerProfile>>_);
+
+export const ipc_accountsUpdateProfile = makeEndpoint.main(
+  "accounts_updateProfile",
+  <{ uid: string; update: ProfileUpdate }>_,
+  <R<PlayerProfile>>_,
+);
 
 export const ipc_accountsLeaderboard = makeEndpoint.main(
   "accounts_leaderboard",

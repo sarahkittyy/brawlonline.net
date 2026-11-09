@@ -142,9 +142,15 @@ export default (env?: Record<string, string | true>, _argv?: any) => {
           test: /\.(woff|woff2|eot|ttf|otf)$/i,
           type: "asset/resource",
         },
+        // Flags (flag-icons, the profile's country): plain files, each loaded by its URL when shown.
+        {
+          test: /flag-icons[\\/]flags[\\/].*\.svg$/,
+          type: "asset/resource",
+        },
         // Allow direct importing of SVGs
         {
           test: /\.svg$/,
+          exclude: /flag-icons[\\/]flags[\\/]/,
           use: ["@svgr/webpack", "url-loader"],
         },
         // Images

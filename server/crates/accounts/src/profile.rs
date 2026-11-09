@@ -9,6 +9,10 @@
 //! (the old link then 404s, which is what a replaced code wants). A uid, any case or a code with
 //! leading zeros redirects (308, permanent) to that address. Accounts without a code (online play never set
 //! up) and banned accounts have no profile.
+//!
+//! The player edits their own (the launcher's profile in edit mode): the name through
+//! `POST /v1/me/rename` as before, mains, country and social media accounts through
+//! `PUT /v1/me/profile` ([`update`]), checked by `common::profile`.
 
 use std::net::SocketAddr;
 
@@ -17,13 +21,15 @@ use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::Json;
 use common::codes::{parse_connect_code, ConnectCode};
+use common::countries::country_name;
 use common::net::ip_key;
+use common::profile::{character_name, check_country, check_mains, Platform, ProfileError};
 use common::ranked::{self, Rank, Tier};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::api::{client_ip, limit};
+use crate::api::{client_ip, current_user, limit};
 use crate::error::{ApiError, ApiResult};
 use crate::pages::esc;
 use crate::ranked::RankView;
@@ -41,6 +47,56 @@ pub struct Profile {
     /// The profile's web page (`<PUBLIC_BASE_URL>/profile/<slug>`); null without a connect code.
     pub link: Option<String>,
     pub ranked: ProfileRanked,
+    /// Character keys (`common::profile::CHARACTERS`), the primary first; empty for none.
+    pub mains: Vec<String>,
+    /// A flag-icons code (`se`, `gb-eng`); null for none.
+    pub country: Option<String>,
+    /// The accounts set, in [`Platform::ALL`]'s order.
+    pub socials: Vec<Social>,
+}
+
+/// A social media account on a profile.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Social {
+    /// `discord`, `twitter`, `twitch`, `youtube`, `tiktok` or `instagram`.
+    pub platform: &'static str,
+    /// As stored: `sarahkitty`, YouTube's `@name` or `channel/UC...`.
+    pub handle: String,
+    /// As shown: `@sarahkitty`, Discord's as it is.
+    pub display: String,
+    /// The account's page; null for Discord (a username, not a page).
+    pub url: Option<String>,
+}
+
+impl Social {
+    fn of(platform: Platform, handle: String) -> Social {
+        Social { platform: platform.key(), display: platform.display(&handle), url: platform.url(&handle), handle }
+    }
+}
+
+/// A `profiles` row: mains, country and each platform's handle in [`Platform::ALL`]'s order.
+type ProfileRow = (Vec<String>, Option<String>, [Option<String>; 6]);
+
+type RawProfileRow = (
+    Vec<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+);
+
+async fn profile_row(pool: &PgPool, uid: Uuid) -> sqlx::Result<ProfileRow> {
+    let row: Option<RawProfileRow> = sqlx::query_as(
+        "SELECT mains, country, discord, twitter, twitch, youtube, tiktok, instagram FROM profiles WHERE uid = $1",
+    )
+    .bind(uid)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map_or((Vec::new(), None, Default::default()), |(m, c, a, b, t, y, k, i)| (m, c, [a, b, t, y, k, i])))
 }
 
 /// The player's Ranked standing, as the leaderboard and Home show it.
@@ -111,6 +167,11 @@ async fn profile_of(pool: &PgPool, user: &UserRow, base_url: &str) -> sqlx::Resu
     let (wins, losses) = crate::ranked::record(pool, user.uid).await?;
     let placed = ranked::placed(standing.sets_played);
     let code = user.connect_code.clone().unwrap_or_default();
+    let (mains, country, handles) = profile_row(pool, user.uid).await?;
+    // Only what the lists still know (a character or flag dropped from them since is left out).
+    let mains = mains.into_iter().filter(|m| character_name(m).is_some()).collect();
+    let country = country.filter(|c| country_name(c).is_some());
+    let socials = Platform::ALL.into_iter().zip(handles).filter_map(|(p, h)| Some(Social::of(p, h?))).collect();
     Ok(Profile {
         uid: user.uid,
         display_name: user.display_name.clone(),
@@ -126,7 +187,100 @@ async fn profile_of(pool: &PgPool, user: &UserRow, base_url: &str) -> sqlx::Resu
             position,
             ranked_players,
         },
+        mains,
+        country,
+        socials,
     })
+}
+
+/// `PUT /v1/me/profile`: changes the player's mains, country and social media accounts. Each field
+/// sent replaces what is stored; one left out stays. `mains`: character keys, the primary first
+/// (at most [`common::profile::MAX_MAINS`], no repeats); `country`: a flag code or null;
+/// `socials`: `{platform: text}`, where the text is a username, `@username` or a link to the
+/// account (stored as its handle; blank or null removes it). A username the slur filter calls a
+/// slur is refused. 400 for anything else not allowed, with a message for the player. Session
+/// auth; limited per account. Answers the profile as `GET /v1/profiles/<uid>` does.
+pub async fn update(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<ProfileUpdate>,
+) -> ApiResult<Json<Profile>> {
+    let user = current_user(&state, &headers).await?;
+    limit(&state, |l, now| l.profile_edit.check(&user.uid, now)).map_err(|wait| {
+        ApiError::rate_limited(wait)
+            .with_message(format!("Too many changes. Try again in {} s.", wait.as_secs().max(1)))
+    })?;
+    let bad = |e: ProfileError| ApiError::bad_request("invalid_profile", e.to_string());
+    let (mut mains, mut country, mut handles) = profile_row(&state.pool, user.uid).await?;
+    if let Some(m) = req.mains {
+        check_mains(&m).map_err(bad)?;
+        mains = m;
+    }
+    if let Some(c) = req.country {
+        country = match c.as_deref().map(str::trim).filter(|c| !c.is_empty()) {
+            Some(code) => Some(check_country(code).map_err(bad)?),
+            None => None,
+        };
+    }
+    if let Some(socials) = req.socials {
+        for (key, text) in socials {
+            let platform = Platform::from_key(&key)
+                .ok_or_else(|| ApiError::bad_request("invalid_profile", format!("Unknown platform: {key}")))?;
+            let i = Platform::ALL.iter().position(|p| *p == platform).unwrap_or(0);
+            let handle = platform.parse(text.as_deref().unwrap_or("")).map_err(bad)?;
+            if let Some(h) = &handle {
+                if handles[i].as_deref() != Some(h.as_str()) {
+                    match state.slur_filter.is_slur(crate::slur_filter::What::SocialHandle, h).await {
+                        Ok(true) => {
+                            return Err(ApiError::bad_request(
+                                "invalid_profile",
+                                format!("That {} username isn't allowed.", platform.name()),
+                            ))
+                        }
+                        Ok(false) => {}
+                        // Taken as typed when the model doesn't answer (the admins can clear it).
+                        Err(e) => tracing::warn!("slur check of a social handle failed: {e:#}"),
+                    }
+                }
+            }
+            handles[i] = handle;
+        }
+    }
+    let [discord, twitter, twitch, youtube, tiktok, instagram] = handles;
+    sqlx::query(
+        "INSERT INTO profiles (uid, mains, country, discord, twitter, twitch, youtube, tiktok, instagram, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now())
+         ON CONFLICT (uid) DO UPDATE SET mains = $2, country = $3, discord = $4, twitter = $5, twitch = $6,
+                                         youtube = $7, tiktok = $8, instagram = $9, updated_at = now()",
+    )
+    .bind(user.uid)
+    .bind(&mains)
+    .bind(&country)
+    .bind(discord)
+    .bind(twitter)
+    .bind(twitch)
+    .bind(youtube)
+    .bind(tiktok)
+    .bind(instagram)
+    .execute(&state.pool)
+    .await?;
+    Ok(Json(profile_of(&state.pool, &user, &state.cfg.public_base_url).await?))
+}
+
+/// The body of `PUT /v1/me/profile`. `country: null` removes the country; a missing field is left
+/// as it is (`Option<Option<_>>` tells the two apart).
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProfileUpdate {
+    pub mains: Option<Vec<String>>,
+    #[serde(default, deserialize_with = "present")]
+    pub country: Option<Option<String>>,
+    pub socials: Option<std::collections::BTreeMap<String, Option<String>>>,
+}
+
+/// A field that is present, even as null, is `Some`.
+fn present<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<Option<String>>, D::Error> {
+    Option::<String>::deserialize(d).map(Some)
 }
 
 fn check_limit(state: &AppState, headers: &HeaderMap, peer: SocketAddr) -> ApiResult<()> {
@@ -394,11 +548,11 @@ pub fn page_html(p: &Profile, base: &str) -> String {
       <p class=\"standing\">{standing}</p>
     </div>
   </section>
-  <section class=\"card\">
+{about}  <section class=\"card\">
     <h2>Ranked</h2>
     <dl class=\"stats\">{stats}</dl>
   </section>
-  <p class=\"cta\">Wii/GCN games with rollback netcode. <a href=\"/\">Download Brawl Online</a></p>
+{socials}  <p class=\"cta\">Wii/GCN games with rollback netcode. <a href=\"/\">Download Brawl Online</a></p>
 </main>
 </body>
 </html>
@@ -410,7 +564,85 @@ pub fn page_html(p: &Profile, base: &str) -> String {
         tier = r.rank.as_ref().map_or("none", |k| k.tier),
         badge = badge_html(r),
         standing = esc(&standing_text(r)),
+        about = about_html(p),
+        socials = socials_html(p),
     )
+}
+
+/// Mains (each a name tag; the website has no stock icons, they come from the player's own disc)
+/// and the country; nothing without either.
+fn about_html(p: &Profile) -> String {
+    let mut rows = String::new();
+    if !p.mains.is_empty() {
+        let tags: String = p
+            .mains
+            .iter()
+            .enumerate()
+            .filter_map(|(i, m)| {
+                let name = esc(character_name(m)?);
+                Some(if i == 0 {
+                    format!("<li class=\"main primary\" title=\"Primary\">{name}</li>")
+                } else {
+                    format!("<li class=\"main\">{name}</li>")
+                })
+            })
+            .collect();
+        rows.push_str(&format!(
+            "<div class=\"row\"><span class=\"label\">Mains:</span><ul class=\"mains\">{tags}</ul></div>"
+        ));
+    }
+    if let Some((code, name)) = p.country.as_deref().and_then(|c| Some((c, country_name(c)?))) {
+        rows.push_str(&format!(
+            "<div class=\"row\"><span class=\"label\">Country:</span><span class=\"country\">\
+             <img class=\"flag\" src=\"/assets/flags/{code}.svg\" alt=\"\" width=\"28\" height=\"21\">{}</span></div>",
+            esc(name)
+        ));
+    }
+    if rows.is_empty() {
+        return String::new();
+    }
+    format!("  <section class=\"card about\">{rows}</section>\n")
+}
+
+/// The social media row: each account's logo linking to it (Discord's with the username beside it,
+/// as it has no page); nothing without any.
+fn socials_html(p: &Profile) -> String {
+    if p.socials.is_empty() {
+        return String::new();
+    }
+    let items: String = p
+        .socials
+        .iter()
+        .filter_map(|s| {
+            let platform = Platform::from_key(s.platform)?;
+            let icon = format!(
+                "<svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"{}\"/></svg>",
+                social_icon_path(platform)
+            );
+            let label = esc(&format!("{}: {}", platform.name(), s.display));
+            Some(match &s.url {
+                Some(url) => format!(
+                    "<li><a href=\"{}\" title=\"{label}\" aria-label=\"{label}\" rel=\"me nofollow noopener\">{icon}</a></li>",
+                    esc(url)
+                ),
+                None => format!("<li class=\"handle\" title=\"{label}\">{icon}<span>{}</span></li>", esc(&s.display)),
+            })
+        })
+        .collect();
+    format!("  <ul class=\"socials\">{items}</ul>\n")
+}
+
+/// Each platform's logo, a 24x24 SVG path (simple-icons 16.37.0, CC0; X for Twitter). The launcher has the same
+/// paths (`launcher/src/renderer/components/profile/social_icons.ts`).
+fn social_icon_path(p: Platform) -> &'static str {
+    match p {
+        Platform::Discord => "M20.317 4.3698a19.7913 19.7913 0 00-4.8851-1.5152.0741.0741 0 00-.0785.0371c-.211.3753-.4447.8648-.6083 1.2495-1.8447-.2762-3.68-.2762-5.4868 0-.1636-.3933-.4058-.8742-.6177-1.2495a.077.077 0 00-.0785-.037 19.7363 19.7363 0 00-4.8852 1.515.0699.0699 0 00-.0321.0277C.5334 9.0458-.319 13.5799.0992 18.0578a.0824.0824 0 00.0312.0561c2.0528 1.5076 4.0413 2.4228 5.9929 3.0294a.0777.0777 0 00.0842-.0276c.4616-.6304.8731-1.2952 1.226-1.9942a.076.076 0 00-.0416-.1057c-.6528-.2476-1.2743-.5495-1.8722-.8923a.077.077 0 01-.0076-.1277c.1258-.0943.2517-.1923.3718-.2914a.0743.0743 0 01.0776-.0105c3.9278 1.7933 8.18 1.7933 12.0614 0a.0739.0739 0 01.0785.0095c.1202.099.246.1981.3728.2924a.077.077 0 01-.0066.1276 12.2986 12.2986 0 01-1.873.8914.0766.0766 0 00-.0407.1067c.3604.698.7719 1.3628 1.225 1.9932a.076.076 0 00.0842.0286c1.961-.6067 3.9495-1.5219 6.0023-3.0294a.077.077 0 00.0313-.0552c.5004-5.177-.8382-9.6739-3.5485-13.6604a.061.061 0 00-.0312-.0286zM8.02 15.3312c-1.1825 0-2.1569-1.0857-2.1569-2.419 0-1.3332.9555-2.4189 2.157-2.4189 1.2108 0 2.1757 1.0952 2.1568 2.419 0 1.3332-.9555 2.4189-2.1569 2.4189zm7.9748 0c-1.1825 0-2.1569-1.0857-2.1569-2.419 0-1.3332.9554-2.4189 2.1569-2.4189 1.2108 0 2.1757 1.0952 2.1568 2.419 0 1.3332-.946 2.4189-2.1568 2.4189Z",
+        Platform::Twitter => "M14.234 10.162 22.977 0h-2.072l-7.591 8.824L7.251 0H.258l9.168 13.343L.258 24H2.33l8.016-9.318L16.749 24h6.993zm-2.837 3.299-.929-1.329L3.076 1.56h3.182l5.965 8.532.929 1.329 7.754 11.09h-3.182z",
+        Platform::Twitch => "M11.571 4.714h1.715v5.143H11.57zm4.715 0H18v5.143h-1.714zM6 0L1.714 4.286v15.428h5.143V24l4.286-4.286h3.428L22.286 12V0zm14.571 11.143l-3.428 3.428h-3.429l-3 3v-3H6.857V1.714h13.714Z",
+        Platform::Youtube => "M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z",
+        Platform::Tiktok => "M12.525.02c1.31-.02 2.61-.01 3.91-.02.08 1.53.63 3.09 1.75 4.17 1.12 1.11 2.7 1.62 4.24 1.79v4.03c-1.44-.05-2.89-.35-4.2-.97-.57-.26-1.1-.59-1.62-.93-.01 2.92.01 5.84-.02 8.75-.08 1.4-.54 2.79-1.35 3.94-1.31 1.92-3.58 3.17-5.91 3.21-1.43.08-2.86-.31-4.08-1.03-2.02-1.19-3.44-3.37-3.65-5.71-.02-.5-.03-1-.01-1.49.18-1.9 1.12-3.72 2.58-4.96 1.66-1.44 3.98-2.13 6.15-1.72.02 1.48-.04 2.96-.04 4.44-.99-.32-2.15-.23-3.02.37-.63.41-1.11 1.04-1.36 1.75-.21.51-.15 1.07-.14 1.61.24 1.64 1.82 3.02 3.5 2.87 1.12-.01 2.19-.66 2.77-1.61.19-.33.4-.67.41-1.06.1-1.79.06-3.57.07-5.36.01-4.03-.01-8.05.02-12.07z",
+        Platform::Instagram => "M7.0301.084c-1.2768.0602-2.1487.264-2.911.5634-.7888.3075-1.4575.72-2.1228 1.3877-.6652.6677-1.075 1.3368-1.3802 2.127-.2954.7638-.4956 1.6365-.552 2.914-.0564 1.2775-.0689 1.6882-.0626 4.947.0062 3.2586.0206 3.6671.0825 4.9473.061 1.2765.264 2.1482.5635 2.9107.308.7889.72 1.4573 1.388 2.1228.6679.6655 1.3365 1.0743 2.1285 1.38.7632.295 1.6361.4961 2.9134.552 1.2773.056 1.6884.069 4.9462.0627 3.2578-.0062 3.668-.0207 4.9478-.0814 1.28-.0607 2.147-.2652 2.9098-.5633.7889-.3086 1.4578-.72 2.1228-1.3881.665-.6682 1.0745-1.3378 1.3795-2.1284.2957-.7632.4966-1.636.552-2.9124.056-1.2809.0692-1.6898.063-4.948-.0063-3.2583-.021-3.6668-.0817-4.9465-.0607-1.2797-.264-2.1487-.5633-2.9117-.3084-.7889-.72-1.4568-1.3876-2.1228C21.2982 1.33 20.628.9208 19.8378.6165 19.074.321 18.2017.1197 16.9244.0645 15.6471.0093 15.236-.005 11.977.0014 8.718.0076 8.31.0215 7.0301.0839m.1402 21.6932c-1.17-.0509-1.8053-.2453-2.2287-.408-.5606-.216-.96-.4771-1.3819-.895-.422-.4178-.6811-.8186-.9-1.378-.1644-.4234-.3624-1.058-.4171-2.228-.0595-1.2645-.072-1.6442-.079-4.848-.007-3.2037.0053-3.583.0607-4.848.05-1.169.2456-1.805.408-2.2282.216-.5613.4762-.96.895-1.3816.4188-.4217.8184-.6814 1.3783-.9003.423-.1651 1.0575-.3614 2.227-.4171 1.2655-.06 1.6447-.072 4.848-.079 3.2033-.007 3.5835.005 4.8495.0608 1.169.0508 1.8053.2445 2.228.408.5608.216.96.4754 1.3816.895.4217.4194.6816.8176.9005 1.3787.1653.4217.3617 1.056.4169 2.2263.0602 1.2655.0739 1.645.0796 4.848.0058 3.203-.0055 3.5834-.061 4.848-.051 1.17-.245 1.8055-.408 2.2294-.216.5604-.4763.96-.8954 1.3814-.419.4215-.8181.6811-1.3783.9-.4224.1649-1.0577.3617-2.2262.4174-1.2656.0595-1.6448.072-4.8493.079-3.2045.007-3.5825-.006-4.848-.0608M16.953 5.5864A1.44 1.44 0 1 0 18.39 4.144a1.44 1.44 0 0 0-1.437 1.4424M5.8385 12.012c.0067 3.4032 2.7706 6.1557 6.173 6.1493 3.4026-.0065 6.157-2.7701 6.1506-6.1733-.0065-3.4032-2.771-6.1565-6.174-6.1498-3.403.0067-6.156 2.771-6.1496 6.1738M8 12.0077a4 4 0 1 1 4.008 3.9921A3.9996 3.9996 0 0 1 8 12.0077",
+    }
 }
 
 fn plain_page(title: &str, text: &str) -> String {
@@ -474,6 +706,9 @@ mod tests {
                 position: rating.map(|_| 12),
                 ranked_players: 340,
             },
+            mains: vec![],
+            country: None,
+            socials: vec![],
         }
     }
 
@@ -516,6 +751,28 @@ mod tests {
         assert!(!html.contains("noindex"));
         let legend = profile(Some(RankView { tier: "legendary", division: None }), Some(2300.0), 80);
         assert!(page_html(&legend, "").contains("src=\"/assets/ranks/legendary.png\""));
+    }
+
+    #[test]
+    fn page_shows_mains_country_and_socials_when_set() {
+        let mut p = profile(None, None, 0);
+        let html = page_html(&p, "");
+        assert!(!html.contains("Mains") && !html.contains("Country") && !html.contains("socials"), "{html}");
+        p.mains = vec!["marth".into(), "random".into()];
+        p.country = Some("gb-eng".into());
+        p.socials = vec![
+            Social::of(Platform::Discord, "sarah<kitty>".into()),
+            Social::of(Platform::Twitch, "sarahkitty".into()),
+        ];
+        let html = page_html(&p, "");
+        assert!(
+            html.contains("<li class=\"main primary\" title=\"Primary\">Marth</li><li class=\"main\">Random</li>"),
+            "{html}"
+        );
+        assert!(html.contains("src=\"/assets/flags/gb-eng.svg\""));
+        assert!(html.contains(">England</span>"));
+        assert!(html.contains("<a href=\"https://twitch.tv/sarahkitty\" title=\"Twitch: @sarahkitty\""));
+        assert!(html.contains("<span>sarah&lt;kitty&gt;</span>"));
     }
 
     #[test]

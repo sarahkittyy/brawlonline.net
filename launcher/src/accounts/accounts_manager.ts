@@ -12,6 +12,7 @@ import type {
   MatchHistoryPage,
   MyRulesets,
   PlayerProfile,
+  ProfileUpdate,
   PublicModRoom,
   PublishRulesetRequest,
   RecentRuleset,
@@ -95,6 +96,10 @@ export class AccountsManager {
 
   publicUser(uid: string): Promise<AccountsResult<AccountsPublicUser>> {
     return wrap(() => this.client.publicUser(uid));
+  }
+
+  updateProfile(uid: string, update: ProfileUpdate): Promise<AccountsResult<PlayerProfile>> {
+    return this._withSession(uid, (token) => this.client.updateProfile(token, update));
   }
 
   profile(id: string): Promise<AccountsResult<PlayerProfile>> {
