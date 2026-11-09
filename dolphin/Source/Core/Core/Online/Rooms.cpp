@@ -1418,6 +1418,7 @@ void Thread()
   Clock::time_point conn_started{};
   Clock::time_point next_file{};
   bool was_logged_in = false;
+  bool was_twos_busy = false;
   // The chat identity (docs/chat-protocol.md §1), read or made once, before any lock is held.
   const std::string chat_key = Chat::IdentityPublicKeyHex();
 
@@ -1535,6 +1536,14 @@ void Thread()
     // A 2v2 search or group runs (docs/design/2v2.md): the party's readies are then the
     // session's, and the party is not left for the screens it shows meanwhile.
     const bool twos_busy = Client::SearchMode() == Matchmaking::Mode::Twos || Gprb::Session::GetLobby().active;
+    if (was_twos_busy && !twos_busy)
+    {
+      // The time away from the party's CSS counts from the search's or group's end (the game is
+      // on its way back from the group's CSS or the waiting room).
+      std::lock_guard lk(s_mutex);
+      RestartAway();
+    }
+    was_twos_busy = twos_busy;
 
     // Network.
     if (host)
@@ -1792,9 +1801,13 @@ void Thread()
             Log("back on the 2v2 party's CSS: sent room-back");
           }
         }
-        // The game left the room CSS without leaving the room: leave for it.
+        // The game left the room CSS without leaving the room: leave for it. Not a 2v2 party
+        // while its search or group runs: the game shows the group's CSS and the waiting room
+        // meanwhile, and the party can be Waiting then (a player searching again after the group
+        // ended, the partner not), where leaving it failed the search ("You are not in this
+        // party.", bug #262).
         if (s.phase == Phase::In && s.view && !s.rg.active && s.view->status == Status::Waiting &&
-            s.away_since &&
+            !(s.view->twos && twos_busy) && s.away_since &&
             now - *s.away_since >
                 (s.screen == static_cast<u8>(Screen::OnlineBusy) ? AWAY_LEAVE_BUSY : AWAY_LEAVE))
         {

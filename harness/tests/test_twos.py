@@ -410,3 +410,45 @@ def test_twos_cancel_and_search_again_at_once(backend: OnlineBackend, dolphin: C
     assert "waiting for mm's interval" in text
     assert st["state"] == "matchmaking", st
     g.shot("01-searching-again")
+
+
+def test_twos_partner_didnt_ready_party_kept(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
+                                             gpu_backend: str) -> None:
+    """A and B queue as a pair and are matched with C and D; before game 1 A, C and D ready, B does
+    not. At the ready-up's end the group breaks up ("B didn't ready"): A, ready, searches again by
+    itself, B is back on the party's CSS. A stays in the party and its search goes on (bug #262:
+    Dolphin's room client left the party for the game being on the group's CSS, the party then
+    Waiting with B not ready, and mm failed A's new search, "You are not in this party."). B's START
+    then makes the four again."""
+    gs, _users = _boot_four(backend, dolphin, gpu_backend, "partner-not-ready", ["twa", "twb", "twc", "twd"])
+    a, b, c, d = gs
+    code = _make_pair(a, b)
+    _to_party_css(c)
+    _to_party_css(d)
+    for g in (a, b):
+        g.press_until("START", lambda g=g: online_set.local(g.c)["lock"]["ready"], f"{g.name} ready")
+    _wait(lambda: a.finds() and b.finds(), 30, "the pair searching")
+    _search(c)
+    _search(d)
+    _lobby(gs, 1)
+    for g in (a, c, d):
+        _ready(g, 1)
+    log = a.inst.user_dir / "Logs" / "dolphin.log"
+    finds = a.finds()
+    _wait(lambda: a.finds() > finds, READY_SECONDS + 30, "A searching again after the ready-up")
+    text = log.read_text(errors="replace")
+    assert "didn't ready (searching again)" in text, "the group did not end on B's ready-up"
+    time.sleep(10)
+    a.shot("01-a-searching-again")
+    b.shot("01-b-back-on-party-css")
+    text = log.read_text(errors="replace")
+    assert "You are not in this party" not in text
+    assert "the game is away from the room CSS: left the room" not in text
+    va = room_view(a)
+    assert va["flags"] & ppom.RF_IN and va["flags"] & ppom.RF_TWOS and va["code"] == code, va
+    assert a.c.mm_status()["state"] == "matchmaking", a.c.mm_status()
+    until_view(b, lambda v: v["flags"] & ppom.RF_IN and v["code"] == code, "B still in the party")
+    # B searches too: the pair, C and D (searching again, ready) make the four again.
+    _wait(lambda: b.scene() == CSS, 30, "B on the party's CSS")
+    _search(b)
+    _lobby(gs, 1)
