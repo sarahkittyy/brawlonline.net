@@ -41,11 +41,13 @@ protected:
     SConfig::Init();
     m_system.GetPowerPC().Init(PowerPC::CPUCore::Interpreter);
     m_system.GetCoreTiming().Init();
+    m_system.GetMemory().Init();
   }
   void TearDown() override
   {
     Gprb::SetHostPadsScheduled(false);
     Harness::Internal::PadClear(0);
+    m_system.GetMemory().Shutdown();
     m_system.GetCoreTiming().Shutdown();
     m_system.GetPowerPC().Shutdown();
     SConfig::Shutdown();
@@ -341,7 +343,6 @@ TEST_F(HostPadReadTest, TheNewestScheduledReadIsDecoded)
 TEST_F(HostPadReadTest, APassIsCheckedAgainstTheReadItsUpdateLowGCTook)
 {
   auto& memory = m_system.GetMemory();
-  memory.Init();
   auto& ct = m_system.GetCoreTiming();
   Gprb::SetHostPadsScheduled(true);
   Gprb::TakeHostPadReadStats();
@@ -404,8 +405,6 @@ TEST_F(HostPadReadTest, APassIsCheckedAgainstTheReadItsUpdateLowGCTook)
   pass(moved);
   stats = Gprb::TakeHostPadReadStats();
   EXPECT_EQ(stats.decode_mismatched, 1u);
-
-  memory.Shutdown();
 }
 
 // Bug report #182: in a match whose pause is off (Ranked, Teams) P+'s "Hold Start to Pause v3"
@@ -416,7 +415,6 @@ TEST_F(HostPadReadTest, APassIsCheckedAgainstTheReadItsUpdateLowGCTook)
 TEST_F(HostPadReadTest, AHeldStartIsTakenOutWhilePPlusHoldsIt)
 {
   auto& memory = m_system.GetMemory();
-  memory.Init();
   auto& ct = m_system.GetCoreTiming();
   Gprb::SetHostPadsScheduled(true);
   Gprb::TakeHostPadReadStats();
@@ -475,6 +473,4 @@ TEST_F(HostPadReadTest, AHeldStartIsTakenOutWhilePPlusHoldsIt)
   // No P+ (Brawl's own store there): START comes through.
   memory.Write_U32(0x901E0000, HOOK);  // stw r0,0(r30)
   EXPECT_EQ(decoded_buttons(held), held);
-
-  memory.Shutdown();
 }
