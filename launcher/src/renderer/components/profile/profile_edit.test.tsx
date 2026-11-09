@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { UserName } from "@/components/user_name/user_name";
 import { useProfileView } from "@/lib/hooks/use_profile_view";
 import type { PlayerProfile, ProfileUpdate } from "@/services/backend/types";
 import { useGameAssets } from "@/styles/game_theme";
@@ -145,6 +146,37 @@ describe("profile edit mode", () => {
     await waitFor(() =>
       expect(Array.from(mains.querySelectorAll("img")).map((i) => i.getAttribute("alt"))).toEqual(["Marth", "Sheik"]),
     );
+  });
+
+  it('shows the country under the code, Random as a "?", and saves each "Show next to name"', async () => {
+    stored = { ...base, mains: ["random", "fox"], country: "us", showCountry: true, showMain: true };
+    withStocks(["fox"]);
+    const view = open();
+    const country = await view.findByTestId("profile-country");
+    expect(country.textContent).toBe("United States");
+    expect(country.previousElementSibling?.textContent).toBe("SARA#64");
+    expect(view.getByTestId("stock-random").querySelector("text")?.textContent).toBe("?");
+    fireEvent.click(view.getByTestId("profile-edit"));
+    fireEvent.click(view.getByTestId("show-main"));
+    await waitFor(() => expect(updateProfile).toHaveBeenCalledWith({ showMain: false }));
+    fireEvent.click(view.getByTestId("show-country"));
+    await waitFor(() => expect(updateProfile).toHaveBeenCalledWith({ showCountry: false }));
+  });
+
+  it("shows a small profile card when a name is hovered", async () => {
+    stored = { ...base, country: "se", mains: ["fox"] };
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const view = render(
+      <QueryClientProvider client={client}>
+        <UserName user={{ uid: "me", displayName: "Sarah" }} />
+      </QueryClientProvider>,
+    );
+    fireEvent.mouseOver(view.getByText("Sarah"));
+    const card = await view.findByTestId("mini-profile", undefined, { timeout: 3000 });
+    expect(card.textContent).toContain("SARA#64");
+    expect(card.textContent).toContain("Sweden");
+    expect(card.textContent).toContain("Gold 2");
+    expect(fetchProfile).toHaveBeenCalledWith("me");
   });
 
   it("shows mains as name tags without a disc", async () => {

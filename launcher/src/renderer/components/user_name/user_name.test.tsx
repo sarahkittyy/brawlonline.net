@@ -33,8 +33,8 @@ describe("UserName", () => {
   it("opens the player's profile from the name when it's a link", () => {
     const plain = render(<UserName user={ann} />);
     expect(plain.container.querySelector("button")).toBeNull();
-    const { getByTitle } = render(<UserName user={ann} profileLink={true} />);
-    fireEvent.click(getByTitle("View Profile"));
+    const { container } = render(<UserName user={ann} profileLink={true} />);
+    fireEvent.click(container.querySelector("[data-profile-link=u1]")!);
     expect(useProfileView.getState().target).toEqual({ uid: "u1", displayName: "ann", connectCode: "ANN#1" });
   });
 });

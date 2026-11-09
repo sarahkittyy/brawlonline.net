@@ -1,9 +1,11 @@
+import { countryName } from "@common/profile";
 import CloseRoundedIcon from "@mui/icons-material/CloseRounded";
 import SearchRoundedIcon from "@mui/icons-material/SearchRounded";
 import IconButton from "@mui/material/IconButton";
 import { clsx } from "clsx";
 import React, { useMemo, useRef, useState } from "react";
 
+import { Flag } from "@/components/flag/flag";
 import { InviteButton, PlayerName } from "@/components/social/invite_button";
 import type { PlayerMenuTarget } from "@/components/social/player_menu";
 import { PlayerMenu } from "@/components/social/player_menu";
@@ -146,7 +148,12 @@ export const OnlinePlayers = React.memo(function OnlinePlayers() {
               }}
             >
               <PlayerName player={player} />
-              <InviteButton player={player} />
+              {player.country && (
+                <span className={styles.flag}>
+                  <Flag code={player.country} height={12} title={countryName(player.country)} />
+                </span>
+              )}
+              <InviteButton player={player} className={player.country ? styles.afterFlag : undefined} />
             </div>
           </li>
         ))}

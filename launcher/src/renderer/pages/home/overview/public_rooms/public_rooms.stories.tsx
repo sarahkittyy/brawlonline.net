@@ -26,6 +26,8 @@ const mockRooms: PublicRoom[] = [
     mode: "1v1",
     status: "waiting",
     names: ["Sarah"],
+    uids: ["u-sarah"],
+    countries: ["se"],
     joinable: true,
     ruleset: {
       code: "KFQBTR",
@@ -45,6 +47,8 @@ const mockRooms: PublicRoom[] = [
     mode: "ffa",
     status: "waiting",
     names: ["Wario Fan", "Ness"],
+    uids: ["u-wario", "u-ness"],
+    countries: [null, "us"],
     joinable: true,
     name: "chill ffa, no camping",
   },
@@ -56,6 +60,8 @@ const mockRooms: PublicRoom[] = [
     mode: "ffa",
     status: "in-game",
     names: ["Lucas", "Toon Link Main", "ギガクッパ"],
+    uids: ["u-lucas", "u-tl", "u-giga"],
+    countries: ["se", "br", "jp"],
     joinable: true,
   },
   {
@@ -85,6 +91,8 @@ const mockRooms: PublicRoom[] = [
     mode: "teams",
     status: "in-game",
     names: ["Mango", "Zain", "Cody", "Hungrybox"],
+    uids: ["u-1", "u-2", "u-3", "u-4"],
+    countries: ["us", "us", "gb-eng", null],
     joinable: false,
     name: "Friday doubles (all welcome)",
     ruleset: {

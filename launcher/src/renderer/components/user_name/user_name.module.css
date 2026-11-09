@@ -51,3 +51,7 @@
 .link:focus-visible .name {
   text-decoration: underline;
 }
+
+.flag {
+  margin-right: -1px;
+}

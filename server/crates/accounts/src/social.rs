@@ -90,6 +90,9 @@ pub struct Member {
     /// This launcher session's X25519 key (hex), signed by `id_key` under [`session_group`].
     pub kx: String,
     pub kx_sig: String,
+    /// Their flag and primary main, when they show them beside their name (`profile::NameTag`).
+    #[serde(flatten)]
+    pub tag: crate::profile::NameTag,
 }
 
 /// The inviter's room, as the invite shows it.
@@ -428,6 +431,18 @@ impl SocialHub {
         }
     }
 
+    /// A player changed their profile's flag or primary main, or whether they show them: listed
+    /// again (`online`) with the new ones.
+    pub fn name_tag_changed(&self, uid: &str, tag: crate::profile::NameTag) {
+        let mut hub = self.hub.lock().unwrap();
+        let Some(c) = hub.clients.get_mut(uid).filter(|c| c.member.tag != tag) else {
+            return;
+        };
+        c.member.tag = tag;
+        let listed = json!({"type": "online", "member": c.member}).to_string();
+        Self::broadcast(&mut hub, uid, &listed);
+    }
+
     /// Takes mm's latest rooms by uid and sends `room {room}` to every launcher whose player's
     /// room changed (joined, left, or the room's slots or status changed).
     pub fn update_rooms(&self, members: &[RoomMember]) {
@@ -510,6 +525,7 @@ pub async fn stream(State(state): State<AppState>, headers: HeaderMap) -> ApiRes
         id_key: hex_lower(&id_key),
         kx: hex_lower(&kx),
         kx_sig: hex_lower(&kx_sig),
+        tag: crate::profile::name_tags(&state.pool, &[user.uid]).await?.remove(&user.uid).unwrap_or_default(),
     };
     let (conn, rx) = state.social.connect(member, Instant::now())?;
     let pool = state.pool.clone();
@@ -660,6 +676,7 @@ mod tests {
             id_key: "00".repeat(32),
             kx: format!("{n:02x}").repeat(32),
             kx_sig: "00".repeat(64),
+            tag: Default::default(),
         }
     }
 

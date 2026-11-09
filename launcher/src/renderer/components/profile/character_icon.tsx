@@ -35,6 +35,25 @@ export const CharacterIcon = ({
   const url = useStockIcon(character);
   const name = characterName(character) ?? character;
   const title = primary ? `${name} (primary)` : name;
+  // Random: a "?" alone, centered in the stock icon's square (Brawl has no "?" stock icon).
+  if (character === "random" && !forceTag) {
+    return (
+      <svg
+        className={styles.randomIcon}
+        viewBox="0 0 32 32"
+        width={size}
+        height={size}
+        role="img"
+        aria-label={name}
+        data-testid="stock-random"
+      >
+        <title>{title}</title>
+        <text x="16" y="16" textAnchor="middle" dominantBaseline="central">
+          ?
+        </text>
+      </svg>
+    );
+  }
   if (!url || forceTag) {
     return (
       <span className={clsx(styles.tag, primary && styles.primaryTag)} title={title}>

@@ -25,6 +25,10 @@ export type SocialPlayer = {
   displayName: string;
   /** `ABCD#123` */
   connectCode: string;
+  /** Their flag code, when they show it beside their name (docs/design/profiles.md). */
+  country?: string;
+  /** Their primary main's character key, when they show it. */
+  main?: string;
 };
 
 export type ChatLine = {

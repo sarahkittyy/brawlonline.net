@@ -207,7 +207,7 @@ h2 {
   }
 }
 
-/* Mains and country (only when set). Mains are name tags: the site has no stock icons (they come from each
+/* Mains (only when set). Mains are name tags: the site has no stock icons (they come from each
    player's own disc in the launcher). */
 .about {
   display: flex;
@@ -247,10 +247,13 @@ h2 {
   border-color: #f0c24a;
 }
 
+/* The flag and the country's name, under the code. */
 .country {
-  display: inline-flex;
+  display: flex;
   align-items: center;
   gap: 8px;
+  margin: 6px 0 0;
+  font-size: 14px;
 }
 
 .flag {
@@ -259,12 +262,12 @@ h2 {
   box-shadow: 0 0 0 1px rgb(255 255 255 / 12%);
 }
 
-/* Social media: one row of logos (Discord's with the username, it has no page). */
+/* Social media, in their own section: one row of logos (Discord's with the username, it has no page). */
 .socials {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  margin: 0 0 16px;
+  margin: 0;
   padding: 0;
   list-style: none;
 }

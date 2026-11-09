@@ -62,6 +62,16 @@ describe("PublicRoomsView", () => {
     expect(text("HBPL")).toContain("Full");
   });
 
+  it("puts each player's flag before their name when they show one", () => {
+    const flagged = [{ ...rooms[1], uids: ["u-bob", "u-cy", "u-dee"], countries: ["se", null, "jp"] }];
+    const { container } = view({ kind: "ready", online: 1, rooms: flagged });
+    const row = container.querySelector('[data-room="PLNX"]')!;
+    expect(row.textContent).toContain("bob · cy · dee");
+    const flags = Array.from(row.querySelectorAll("[title]")).map((f) => f.getAttribute("title"));
+    expect(flags).toEqual(expect.arrayContaining(["Sweden", "Japan"]));
+    expect(flags).not.toContain("United States");
+  });
+
   it("shows a room's name, or its host's room in grey, and crowns the host", () => {
     const named = [{ ...rooms[1], name: "chill ffa", names: ["cy", "bob", "dee"] }, rooms[0]];
     const { container } = view({ kind: "ready", online: 1, rooms: named });

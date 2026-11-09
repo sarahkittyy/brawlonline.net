@@ -116,3 +116,14 @@
 .ignored {
   opacity: 0.45;
 }
+
+/* A player's flag, right-aligned before the invite envelope. */
+.flag {
+  display: inline-flex;
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+.afterFlag {
+  margin-left: 8px !important;
+}

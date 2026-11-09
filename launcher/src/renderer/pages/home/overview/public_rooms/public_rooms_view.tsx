@@ -12,6 +12,7 @@ import React from "react";
 
 import { RoomNameMessages } from "@/components/room_name/room_name.messages";
 import { RoomNameField } from "@/components/room_name/room_name_field";
+import { UserName } from "@/components/user_name/user_name";
 import type { PublicRoom, RoomMode, YourRoom } from "@/services/backend/types";
 
 import { ContentBlock } from "../content_block/content_block";
@@ -243,7 +244,7 @@ const pinOwn = (rooms: PublicRoom[], own: string | undefined): PublicRoom[] => {
   return mine ? [mine, ...rooms.filter((r) => r !== mine)] : rooms;
 };
 
-/** The room's players, the host's name with a crown. */
+/** The room's players, the host's name with a crown, each with their flag when they show one (hover: their profile). */
 const PlayerNames = ({ room }: { room: PublicRoom }) => {
   const hostAt = room.names.indexOf(room.host);
   return (
@@ -256,7 +257,12 @@ const PlayerNames = ({ room }: { room: PublicRoom }) => {
               {"♛ "}
             </span>
           )}
-          {n}
+          <UserName
+            user={{ uid: room.uids?.[i], displayName: n, country: room.countries?.[i] }}
+            showCode={false}
+            showFlag={true}
+            className={styles.playerName}
+          />
         </React.Fragment>
       ))}
     </div>

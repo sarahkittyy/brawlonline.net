@@ -357,3 +357,9 @@
 .rulesetCustom {
   font-style: italic;
 }
+
+/* A player's name in a room row, with their flag before it (it wraps as text does). */
+.playerName {
+  display: inline-flex;
+  vertical-align: bottom;
+}

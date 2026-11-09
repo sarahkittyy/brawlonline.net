@@ -6,7 +6,7 @@
 import fs from "fs";
 import path from "path";
 
-import type { FontRole, Slice, SoundRole, StockCharacter, TextureCandidate, TextureRole } from "./catalog";
+import type { FontRole, Slice, SoundRole, TextureCandidate, TextureRole } from "./catalog";
 import {
   FONT_ROLES,
   parseStockTextureName,
@@ -342,7 +342,6 @@ async function extractStocks(
   manifest: AssetManifest,
   allCostumes: boolean,
   progress: (label: string) => void,
-  characters: StockCharacter[] = STOCK_CHARACTERS,
 ) {
   const byOrigin = new Map<Origin, Map<string, BrresTexture>>();
   for (const origin of ["sd", "disc"] as Origin[]) {
@@ -369,12 +368,12 @@ async function extractStocks(
   const usable = (t: BrresTexture | undefined): t is BrresTexture => !!t && t.tex.width >= 16 && t.tex.height >= 16;
   // With a P+ SD card the roster is P+'s (no Pokemon Trainer); without one, P+-only characters are not expected.
   const hasSd = !!cache.source("sd");
-  for (const ch of characters) {
+  for (const ch of STOCK_CHARACTERS) {
     progress(`stock ${ch.key}`);
     if ((ch.pplusOnly && !hasSd) || (ch.discOnly && hasSd)) {
       continue;
     }
-    const origins: Origin[] = ch.pplusOnly ? ["sd"] : ch.discOnly || ch.fromDisc ? ["disc"] : ["sd", "disc"];
+    const origins: Origin[] = ch.pplusOnly ? ["sd"] : ch.discOnly ? ["disc"] : ["sd", "disc"];
     let done = false;
     for (const origin of origins) {
       const textures = byOrigin.get(origin);
@@ -528,20 +527,6 @@ async function extractStages(sd: GameFileSource | null, cacheDir: string, manife
 }
 
 /**
- * Stock icons the catalog has gained since the cache was extracted (Random, 2026-11-09): neither extracted nor recorded
- * missing. Only the ones taken from the disc whatever the card, so a cache's roster (P+'s or the disc's) stays as it is.
- */
-export function stocksMissing(manifest: { stocks?: Record<string, unknown>; missing?: string[] }): StockCharacter[] {
-  // No stock icon archive at all: nothing to add.
-  if ((manifest.missing ?? []).includes("stocks")) {
-    return [];
-  }
-  return STOCK_CHARACTERS.filter(
-    (ch) => ch.fromDisc && !manifest.stocks?.[ch.key] && !(manifest.missing ?? []).includes(`stock:${ch.key}`),
-  );
-}
-
-/**
  * True when the manifest's sounds do not match the catalog: none extracted yet, a role neither extracted nor recorded
  * missing (added since), or a role taken under a sound the catalog no longer lists for it (changed since).
  */
@@ -569,10 +554,7 @@ export async function extractMissingSounds(
   opts: Pick<ExtractOptions, "disc" | "sdRawPath" | "cacheDir" | "tmpDir">,
 ): Promise<AssetManifest | null> {
   const manifest = await readManifest(opts.cacheDir);
-  if (
-    !manifest ||
-    (!soundsOutdated(manifest) && manifest.items && manifest.stages && !stocksMissing(manifest).length)
-  ) {
+  if (!manifest || (!soundsOutdated(manifest) && manifest.items && manifest.stages)) {
     return manifest;
   }
   if (soundsOutdated(manifest)) {
@@ -594,10 +576,6 @@ export async function extractMissingSounds(
     }
     if (!manifest.stages) {
       await extractStages(sd, opts.cacheDir, manifest);
-    }
-    const stocks = stocksMissing(manifest);
-    if (stocks.length) {
-      await extractStocks(new ArchiveCache(disc, sd), opts.cacheDir, manifest, false, () => undefined, stocks);
     }
   } finally {
     await sd?.close();

@@ -1,3 +1,4 @@
+import { countryName } from "@common/profile";
 import CloseIcon from "@mui/icons-material/Close";
 import SearchIcon from "@mui/icons-material/Search";
 import CircularProgress from "@mui/material/CircularProgress";
@@ -13,8 +14,10 @@ import Tooltip from "@mui/material/Tooltip";
 import Typography from "@mui/material/Typography";
 import React, { useCallback, useState } from "react";
 
+import { Flag } from "@/components/flag/flag";
 import { InfiniteScrollContainer } from "@/components/infinite_scroll_container/infinite_scroll_container";
 import { PagedListStatus } from "@/components/paged_list_status/paged_list_status";
+import { CharacterIcon } from "@/components/profile/character_icon";
 import { RankBadge } from "@/components/rank_badge/rank_badge";
 import { UserName } from "@/components/user_name/user_name";
 import { useAccount } from "@/lib/hooks/use_account";
@@ -154,7 +157,9 @@ export const LeaderboardHead = React.memo(function LeaderboardHead() {
         <TableCell align="center" sx={{ width: 96 }}>
           {Messages.rank()}
         </TableCell>
+        <TableCell sx={{ width: 36, paddingX: "4px" }} aria-label={Messages.country()} />
         <TableCell>{Messages.player()}</TableCell>
+        <TableCell sx={{ width: 56 }}>{Messages.main()}</TableCell>
         <TableCell>{Messages.connectCode()}</TableCell>
         <TableCell align="right">{Messages.rating()}</TableCell>
         <TableCell align="right">{Messages.record()}</TableCell>
@@ -180,9 +185,13 @@ export const LeaderboardRow = React.memo(function LeaderboardRow({
       <TableCell align="center" sx={{ paddingY: "4px" }}>
         <RankBadge rank={entry.rank} setsToPlace={entry.setsToPlace} size="small" />
       </TableCell>
+      <TableCell sx={{ paddingX: "4px" }}>
+        {entry.country && <Flag code={entry.country} height={15} title={countryName(entry.country)} />}
+      </TableCell>
       <TableCell sx={strong}>
         <UserName user={entry} showCode={false} profileLink={true} />
       </TableCell>
+      <TableCell sx={{ paddingY: "2px" }}>{entry.main && <CharacterIcon character={entry.main} size={24} />}</TableCell>
       <TableCell sx={{ color: "text.secondary", ...strong }}>{entry.connectCode}</TableCell>
       <TableCell align="right" sx={strong}>
         {formatRating(entry.rating)}

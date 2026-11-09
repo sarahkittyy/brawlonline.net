@@ -51,11 +51,23 @@ export const InviteButton = ({ player, className }: { player: SocialPlayer; clas
   );
 };
 
-/** A display name with the connect code after it, lighter, in the chat's look; `profileLink`: the name opens the profile. */
-export const PlayerName = ({ player, profileLink = false }: { player: SocialPlayer; profileLink?: boolean }) => (
+/**
+ * A display name with the connect code after it, lighter, in the chat's look; `profileLink`: the name opens the
+ * profile; `showFlag`: the player's flag before it, when they show one.
+ */
+export const PlayerName = ({
+  player,
+  profileLink = false,
+  showFlag = false,
+}: {
+  player: SocialPlayer;
+  profileLink?: boolean;
+  showFlag?: boolean;
+}) => (
   <UserName
     user={player}
     profileLink={profileLink}
+    showFlag={showFlag}
     className={styles.playerName}
     classes={{ name: styles.displayName, code: styles.tag }}
   />

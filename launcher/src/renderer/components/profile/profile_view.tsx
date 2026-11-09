@@ -66,7 +66,7 @@ export const ProfileView = React.memo(function ProfileView({
     ? Messages.placing(r.setsToPlace)
     : Messages.notRanked();
   const position = formatPosition(r.position, r.rankedPlayers);
-  const showAbout = editing != null || mains.length > 0 || country != null;
+  const showMains = editing != null || mains.length > 0;
   return (
     <div className={clsx(styles.profile, editing && styles.editing)} data-testid="profile-view">
       <div className={styles.who} data-tier={r.rank?.tier ?? "none"}>
@@ -84,16 +84,18 @@ export const ProfileView = React.memo(function ProfileView({
             </div>
           )}
           {profile.connectCode && <div className={styles.code}>{profile.connectCode}</div>}
+          {(country || editing) && (
+            <CountryRow country={country} editing={editing} show={profile.showCountry ?? true} />
+          )}
           <div className={styles.standing} data-testid="profile-standing">
             {standing}
           </div>
         </div>
       </div>
 
-      {showAbout && (
+      {showMains && (
         <div className={styles.about}>
-          {(mains.length > 0 || editing) && <MainsRow mains={mains} editing={editing} />}
-          {(country || editing) && <CountryRow country={country} editing={editing} />}
+          <MainsRow mains={mains} editing={editing} show={profile.showMain ?? true} />
         </div>
       )}
 
@@ -109,10 +111,15 @@ export const ProfileView = React.memo(function ProfileView({
         </dl>
       </div>
 
-      {editing ? (
-        <SocialsEditor socials={socials} save={editing.save} />
-      ) : (
-        socials.length > 0 && <SocialsRow socials={socials} onCopyText={onCopyText} />
+      {(editing || socials.length > 0) && (
+        <div className={styles.section}>
+          <div className={styles.sectionTitle}>{Messages.socials()}</div>
+          {editing ? (
+            <SocialsEditor socials={socials} save={editing.save} />
+          ) : (
+            <SocialsRow socials={socials} onCopyText={onCopyText} />
+          )}
+        </div>
       )}
 
       {(actions || profile.link) && (
@@ -191,57 +198,94 @@ const EditButton = ({ label, onClick }: { label: string; onClick: (el: HTMLEleme
  * "Mains:" and the mains, the primary first: up to BIG_MAINS stock icons full size in a row, more at half size in
  * two rows; name tags (wrapping) without a disc. Edit mode: a pencil before "Mains:" opens the picker.
  */
-const MainsRow = ({ mains, editing }: { mains: string[]; editing: ProfileEditing | null }) => {
+const MainsRow = ({ mains, editing, show }: { mains: string[]; editing: ProfileEditing | null; show: boolean }) => {
   const icons = useHasStockIcons();
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
   const small = mains.length > BIG_MAINS;
   return (
-    <div className={styles.row} data-testid="profile-mains">
-      {editing && <EditButton label={Messages.editMains()} onClick={setAnchor} />}
-      <span className={styles.label}>{Messages.mains()}</span>
-      {mains.length === 0 ? (
-        <span className={styles.none}>{Messages.none()}</span>
-      ) : (
-        <div
-          className={clsx(icons ? styles.mainIcons : styles.mainTags, small && styles.small)}
-          // Half size: two even rows (10 mains are two rows of 5).
-          style={icons && small ? { gridTemplateColumns: `repeat(${Math.ceil(mains.length / 2)}, 16px)` } : undefined}
-        >
-          {mains.map((m, i) => (
-            <CharacterIcon key={m} character={m} size={small ? 16 : 32} primary={i === 0} forceTag={!icons} />
-          ))}
-        </div>
-      )}
+    <>
+      <div className={styles.row} data-testid="profile-mains">
+        {editing && <EditButton label={Messages.editMains()} onClick={setAnchor} />}
+        <span className={styles.label}>{Messages.mains()}</span>
+        {mains.length === 0 ? (
+          <span className={styles.none}>{Messages.none()}</span>
+        ) : (
+          <div
+            className={clsx(icons ? styles.mainIcons : styles.mainTags, small && styles.small)}
+            // Half size: two even rows (10 mains are two rows of 5).
+            style={icons && small ? { gridTemplateColumns: `repeat(${Math.ceil(mains.length / 2)}, 16px)` } : undefined}
+          >
+            {mains.map((m, i) => (
+              <CharacterIcon key={m} character={m} size={small ? 16 : 32} primary={i === 0} forceTag={!icons} />
+            ))}
+          </div>
+        )}
+        {editing && (
+          <Popover
+            open={anchor != null}
+            anchorEl={anchor}
+            onClose={() => setAnchor(null)}
+            anchorOrigin={{ vertical: "bottom", horizontal: "left" }}
+          >
+            <MainsPicker
+              initial={mains}
+              onDone={(next) => {
+                setAnchor(null);
+                if (next.join() !== mains.join()) {
+                  void editing.save({ mains: next }).catch(() => undefined);
+                }
+              }}
+            />
+          </Popover>
+        )}
+      </div>
       {editing && (
-        <Popover
-          open={anchor != null}
-          anchorEl={anchor}
-          onClose={() => setAnchor(null)}
-          anchorOrigin={{ vertical: "bottom", horizontal: "left" }}
-        >
-          <MainsPicker
-            initial={mains}
-            onDone={(next) => {
-              setAnchor(null);
-              if (next.join() !== mains.join()) {
-                void editing.save({ mains: next }).catch(() => undefined);
-              }
-            }}
-          />
-        </Popover>
+        <ShowNextToName
+          checked={show}
+          testId="show-main"
+          onChange={(v) => void editing.save({ showMain: v }).catch(() => undefined)}
+        />
       )}
-    </div>
+    </>
   );
 };
 
-/** "Country:", the flag and the name. Edit mode: the flag (dashed without one) and a pencil, one button, open the picker. */
-const CountryRow = ({ country, editing }: { country: string | null; editing: ProfileEditing | null }) => {
+/** Edit mode: whether the flag or the primary main shows beside the player's name around the launcher. */
+const ShowNextToName = ({
+  checked,
+  onChange,
+  testId,
+}: {
+  checked: boolean;
+  onChange: (show: boolean) => void;
+  testId: string;
+}) => (
+  <Tooltip title={Messages.showNextToNameHint()} placement="bottom-start">
+    <label className={styles.showToggle}>
+      <input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} data-testid={testId} />
+      {Messages.showNextToName()}
+    </label>
+  </Tooltip>
+);
+
+/**
+ * The flag and the country's name, under the code. Edit mode: the flag (dashed without one), the name and a pencil, one
+ * button, open the picker; "Show next to name" beside it.
+ */
+const CountryRow = ({
+  country,
+  editing,
+  show,
+}: {
+  country: string | null;
+  editing: ProfileEditing | null;
+  show: boolean;
+}) => {
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
   const name = country ? countryName(country) ?? country : null;
-  const flag = country ? <Flag code={country} height={18} title={name ?? undefined} /> : <NoFlag height={18} />;
+  const flag = country ? <Flag code={country} height={15} title={name ?? undefined} /> : <NoFlag height={15} />;
   return (
-    <div className={styles.row} data-testid="profile-country">
-      <span className={styles.label}>{Messages.country()}</span>
+    <div className={styles.countryRow} data-testid="profile-country">
       {editing ? (
         <button
           type="button"
@@ -277,6 +321,13 @@ const CountryRow = ({ country, editing }: { country: string | null; editing: Pro
             }}
           />
         </Popover>
+      )}
+      {editing && country && (
+        <ShowNextToName
+          checked={show}
+          testId="show-country"
+          onChange={(v) => void editing.save({ showCountry: v }).catch(() => undefined)}
+        />
       )}
     </div>
   );

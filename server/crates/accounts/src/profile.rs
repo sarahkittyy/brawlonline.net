@@ -53,6 +53,56 @@ pub struct Profile {
     pub country: Option<String>,
     /// The accounts set, in [`Platform::ALL`]'s order.
     pub socials: Vec<Social>,
+    /// The player shows their flag beside their name around the launcher (the leaderboard, the
+    /// online list, rooms, chat), not only here.
+    pub show_country: bool,
+    /// The same for their primary main (the leaderboard, chat).
+    pub show_main: bool,
+}
+
+/// What shows beside a player's name in the launcher's lists ([`name_tags`]): the flag and the
+/// primary main, each only when set and the player chose to show it.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NameTag {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub country: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub main: Option<String>,
+}
+
+impl NameTag {
+    pub fn is_empty(&self) -> bool {
+        self.country.is_none() && self.main.is_none()
+    }
+}
+
+/// Each player's [`NameTag`] (players with nothing to show are left out).
+pub async fn name_tags<'e, E: sqlx::PgExecutor<'e>>(
+    e: E,
+    uids: &[Uuid],
+) -> sqlx::Result<std::collections::HashMap<Uuid, NameTag>> {
+    if uids.is_empty() {
+        return Ok(Default::default());
+    }
+    let rows: Vec<(Uuid, Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT uid, CASE WHEN show_country THEN country END, CASE WHEN show_main THEN mains[1] END
+           FROM profiles WHERE uid = ANY($1) AND ((show_country AND country IS NOT NULL) OR (show_main AND cardinality(mains) > 0))",
+    )
+    .bind(uids)
+    .fetch_all(e)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|(uid, country, main)| {
+            let tag = NameTag {
+                country: country.filter(|c| country_name(c).is_some()),
+                main: main.filter(|m| character_name(m).is_some()),
+            };
+            (uid, tag)
+        })
+        .filter(|(_, t)| !t.is_empty())
+        .collect())
 }
 
 /// A social media account on a profile.
@@ -75,8 +125,22 @@ impl Social {
     }
 }
 
-/// A `profiles` row: mains, country and each platform's handle in [`Platform::ALL`]'s order.
-type ProfileRow = (Vec<String>, Option<String>, [Option<String>; 6]);
+/// A `profiles` row (an empty profile without one): mains, country, each platform's handle in
+/// [`Platform::ALL`]'s order, and the two "show next to name" choices (on until turned off).
+#[derive(Debug, Clone)]
+struct StoredProfile {
+    mains: Vec<String>,
+    country: Option<String>,
+    handles: [Option<String>; 6],
+    show_country: bool,
+    show_main: bool,
+}
+
+impl Default for StoredProfile {
+    fn default() -> Self {
+        StoredProfile { mains: vec![], country: None, handles: Default::default(), show_country: true, show_main: true }
+    }
+}
 
 type RawProfileRow = (
     Vec<String>,
@@ -87,16 +151,21 @@ type RawProfileRow = (
     Option<String>,
     Option<String>,
     Option<String>,
+    bool,
+    bool,
 );
 
-async fn profile_row(pool: &PgPool, uid: Uuid) -> sqlx::Result<ProfileRow> {
+async fn profile_row(pool: &PgPool, uid: Uuid) -> sqlx::Result<StoredProfile> {
     let row: Option<RawProfileRow> = sqlx::query_as(
-        "SELECT mains, country, discord, twitter, twitch, youtube, tiktok, instagram FROM profiles WHERE uid = $1",
+        "SELECT mains, country, discord, twitter, twitch, youtube, tiktok, instagram, show_country, show_main
+           FROM profiles WHERE uid = $1",
     )
     .bind(uid)
     .fetch_optional(pool)
     .await?;
-    Ok(row.map_or((Vec::new(), None, Default::default()), |(m, c, a, b, t, y, k, i)| (m, c, [a, b, t, y, k, i])))
+    Ok(row.map_or_else(StoredProfile::default, |(mains, country, a, b, t, y, k, i, show_country, show_main)| {
+        StoredProfile { mains, country, handles: [a, b, t, y, k, i], show_country, show_main }
+    }))
 }
 
 /// The player's Ranked standing, as the leaderboard and Home show it.
@@ -167,11 +236,11 @@ async fn profile_of(pool: &PgPool, user: &UserRow, base_url: &str) -> sqlx::Resu
     let (wins, losses) = crate::ranked::record(pool, user.uid).await?;
     let placed = ranked::placed(standing.sets_played);
     let code = user.connect_code.clone().unwrap_or_default();
-    let (mains, country, handles) = profile_row(pool, user.uid).await?;
+    let stored = profile_row(pool, user.uid).await?;
     // Only what the lists still know (a character or flag dropped from them since is left out).
-    let mains = mains.into_iter().filter(|m| character_name(m).is_some()).collect();
-    let country = country.filter(|c| country_name(c).is_some());
-    let socials = Platform::ALL.into_iter().zip(handles).filter_map(|(p, h)| Some(Social::of(p, h?))).collect();
+    let mains = stored.mains.into_iter().filter(|m| character_name(m).is_some()).collect();
+    let country = stored.country.filter(|c| country_name(c).is_some());
+    let socials = Platform::ALL.into_iter().zip(stored.handles).filter_map(|(p, h)| Some(Social::of(p, h?))).collect();
     Ok(Profile {
         uid: user.uid,
         display_name: user.display_name.clone(),
@@ -190,10 +259,13 @@ async fn profile_of(pool: &PgPool, user: &UserRow, base_url: &str) -> sqlx::Resu
         mains,
         country,
         socials,
+        show_country: stored.show_country,
+        show_main: stored.show_main,
     })
 }
 
-/// `PUT /v1/me/profile`: changes the player's mains, country and social media accounts. Each field
+/// `PUT /v1/me/profile`: changes the player's mains, country, social media accounts and whether the
+/// flag and primary main show beside their name (`showCountry`, `showMain`). Each field
 /// sent replaces what is stored; one left out stays. `mains`: character keys, the primary first
 /// (at most [`common::profile::MAX_MAINS`], no repeats); `country`: a flag code or null;
 /// `socials`: `{platform: text}`, where the text is a username, `@username` or a link to the
@@ -211,17 +283,24 @@ pub async fn update(
             .with_message(format!("Too many changes. Try again in {} s.", wait.as_secs().max(1)))
     })?;
     let bad = |e: ProfileError| ApiError::bad_request("invalid_profile", e.to_string());
-    let (mut mains, mut country, mut handles) = profile_row(&state.pool, user.uid).await?;
+    let mut stored = profile_row(&state.pool, user.uid).await?;
     if let Some(m) = req.mains {
         check_mains(&m).map_err(bad)?;
-        mains = m;
+        stored.mains = m;
     }
     if let Some(c) = req.country {
-        country = match c.as_deref().map(str::trim).filter(|c| !c.is_empty()) {
+        stored.country = match c.as_deref().map(str::trim).filter(|c| !c.is_empty()) {
             Some(code) => Some(check_country(code).map_err(bad)?),
             None => None,
         };
     }
+    if let Some(v) = req.show_country {
+        stored.show_country = v;
+    }
+    if let Some(v) = req.show_main {
+        stored.show_main = v;
+    }
+    let handles = &mut stored.handles;
     if let Some(socials) = req.socials {
         for (key, text) in socials {
             let platform = Platform::from_key(&key)
@@ -246,24 +325,31 @@ pub async fn update(
             handles[i] = handle;
         }
     }
-    let [discord, twitter, twitch, youtube, tiktok, instagram] = handles;
+    let [discord, twitter, twitch, youtube, tiktok, instagram] = stored.handles.clone();
     sqlx::query(
-        "INSERT INTO profiles (uid, mains, country, discord, twitter, twitch, youtube, tiktok, instagram, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now())
+        "INSERT INTO profiles (uid, mains, country, discord, twitter, twitch, youtube, tiktok, instagram,
+                               show_country, show_main, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, now())
          ON CONFLICT (uid) DO UPDATE SET mains = $2, country = $3, discord = $4, twitter = $5, twitch = $6,
-                                         youtube = $7, tiktok = $8, instagram = $9, updated_at = now()",
+                                         youtube = $7, tiktok = $8, instagram = $9, show_country = $10,
+                                         show_main = $11, updated_at = now()",
     )
     .bind(user.uid)
-    .bind(&mains)
-    .bind(&country)
+    .bind(&stored.mains)
+    .bind(&stored.country)
     .bind(discord)
     .bind(twitter)
     .bind(twitch)
     .bind(youtube)
     .bind(tiktok)
     .bind(instagram)
+    .bind(stored.show_country)
+    .bind(stored.show_main)
     .execute(&state.pool)
     .await?;
+    // The online list and chat show the new flag and main at once.
+    let tag = name_tags(&state.pool, &[user.uid]).await?.remove(&user.uid).unwrap_or_default();
+    state.social.name_tag_changed(&user.uid.to_string(), tag);
     Ok(Json(profile_of(&state.pool, &user, &state.cfg.public_base_url).await?))
 }
 
@@ -276,6 +362,8 @@ pub struct ProfileUpdate {
     #[serde(default, deserialize_with = "present")]
     pub country: Option<Option<String>>,
     pub socials: Option<std::collections::BTreeMap<String, Option<String>>>,
+    pub show_country: Option<bool>,
+    pub show_main: Option<bool>,
 }
 
 /// A field that is present, even as null, is `Some`.
@@ -545,6 +633,7 @@ pub fn page_html(p: &Profile, base: &str) -> String {
     <div>
       <h1 class=\"name\">{name}</h1>
       <p class=\"code\">{code}</p>
+{country}
       <p class=\"standing\">{standing}</p>
     </div>
   </section>
@@ -565,12 +654,25 @@ pub fn page_html(p: &Profile, base: &str) -> String {
         badge = badge_html(r),
         standing = esc(&standing_text(r)),
         about = about_html(p),
+        country = country_html(p),
         socials = socials_html(p),
     )
 }
 
-/// Mains (each a name tag; the website has no stock icons, they come from the player's own disc)
-/// and the country; nothing without either.
+/// The flag and the country's name, under the code (as in the launcher); nothing without one.
+fn country_html(p: &Profile) -> String {
+    match p.country.as_deref().and_then(|c| Some((c, country_name(c)?))) {
+        Some((code, name)) => format!(
+            "      <p class=\"country\"><img class=\"flag\" src=\"/assets/flags/{code}.svg\" alt=\"\" width=\"20\" \
+             height=\"15\">{}</p>\n",
+            esc(name)
+        ),
+        None => String::new(),
+    }
+}
+
+/// Mains (each a name tag; the website has no stock icons, they come from the player's own disc);
+/// nothing without any.
 fn about_html(p: &Profile) -> String {
     let mut rows = String::new();
     if !p.mains.is_empty() {
@@ -589,13 +691,6 @@ fn about_html(p: &Profile) -> String {
             .collect();
         rows.push_str(&format!(
             "<div class=\"row\"><span class=\"label\">Mains:</span><ul class=\"mains\">{tags}</ul></div>"
-        ));
-    }
-    if let Some((code, name)) = p.country.as_deref().and_then(|c| Some((c, country_name(c)?))) {
-        rows.push_str(&format!(
-            "<div class=\"row\"><span class=\"label\">Country:</span><span class=\"country\">\
-             <img class=\"flag\" src=\"/assets/flags/{code}.svg\" alt=\"\" width=\"28\" height=\"21\">{}</span></div>",
-            esc(name)
         ));
     }
     if rows.is_empty() {
@@ -629,7 +724,7 @@ fn socials_html(p: &Profile) -> String {
             })
         })
         .collect();
-    format!("  <ul class=\"socials\">{items}</ul>\n")
+    format!("  <section class=\"card\">\n    <h2>Socials</h2>\n    <ul class=\"socials\">{items}</ul>\n  </section>\n")
 }
 
 /// Each platform's logo, a 24x24 SVG path (simple-icons 16.37.0, CC0; X for Twitter). The launcher has the same
@@ -709,6 +804,8 @@ mod tests {
             mains: vec![],
             country: None,
             socials: vec![],
+            show_country: true,
+            show_main: true,
         }
     }
 
@@ -757,7 +854,7 @@ mod tests {
     fn page_shows_mains_country_and_socials_when_set() {
         let mut p = profile(None, None, 0);
         let html = page_html(&p, "");
-        assert!(!html.contains("Mains") && !html.contains("Country") && !html.contains("socials"), "{html}");
+        assert!(!html.contains("Mains") && !html.contains("class=\"country\"") && !html.contains("Socials"), "{html}");
         p.mains = vec!["marth".into(), "random".into()];
         p.country = Some("gb-eng".into());
         p.socials = vec![
@@ -770,7 +867,10 @@ mod tests {
             "{html}"
         );
         assert!(html.contains("src=\"/assets/flags/gb-eng.svg\""));
-        assert!(html.contains(">England</span>"));
+        // The country under the code; socials in their own section.
+        assert!(html.contains(">England</p>"), "{html}");
+        assert!(html.find("class=\"code\"").unwrap() < html.find("class=\"country\"").unwrap());
+        assert!(html.contains("<h2>Socials</h2>"));
         assert!(html.contains("<a href=\"https://twitch.tv/sarahkitty\" title=\"Twitch: @sarahkitty\""));
         assert!(html.contains("<span>sarah&lt;kitty&gt;</span>"));
     }

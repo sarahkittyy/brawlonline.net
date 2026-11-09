@@ -42,7 +42,7 @@ function renderPage() {
 }
 
 const names = (container: HTMLElement) =>
-  Array.from(container.querySelectorAll("tbody tr")).map((tr) => tr.querySelectorAll("td")[2].textContent);
+  Array.from(container.querySelectorAll("tbody tr")).map((tr) => tr.querySelectorAll("td")[3].textContent);
 
 describe("LeaderboardPage search", () => {
   it("searches the server as the player types, keeps the total, and says when nothing matches", async () => {

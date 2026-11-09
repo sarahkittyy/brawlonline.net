@@ -689,6 +689,8 @@ impl Room {
             mode: self.mode(),
             status: if matches!(self.phase, Phase::Waiting) { RoomStatus::Waiting } else { RoomStatus::InGame },
             names: self.members().map(|(_, m)| m.info.display_name.clone()).collect(),
+            uids: self.members().map(|(_, m)| m.info.uid.to_string()).collect(),
+            countries: Vec::new(),
             joinable: self.free_slot().is_some(),
             ruleset: self.ruleset_view(),
             name: self.name.clone(),

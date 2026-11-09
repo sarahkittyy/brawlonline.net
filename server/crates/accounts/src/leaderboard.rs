@@ -93,6 +93,9 @@ pub struct Entry {
     /// Places moved up (positive) or down (negative) since [`CHANGE_WINDOW`] ago; null if the
     /// player was not on the leaderboard then (placed since).
     pub position_change: Option<i64>,
+    /// The player's flag and primary main, when they show them beside their name.
+    #[serde(flatten)]
+    pub tag: crate::profile::NameTag,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -199,6 +202,7 @@ pub async fn page(pool: &PgPool, after: Option<Key>, limit: u32, search: Option<
     .await?
     .into_iter()
     .collect();
+    let mut tags = crate::profile::name_tags(&mut *tx, &page_uids).await?;
     tx.commit().await?;
 
     let more = rows.len() as i64 > limit;
@@ -226,6 +230,7 @@ pub async fn page(pool: &PgPool, after: Option<Key>, limit: u32, search: Option<
                 losses: r.losses.max(0) as u32,
                 rank: RankView::of(tier.rank),
                 sets_to_place: ranked::sets_to_place(sets_played),
+                tag: tags.remove(&r.uid).unwrap_or_default(),
             }
         })
         .collect();

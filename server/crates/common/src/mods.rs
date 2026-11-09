@@ -340,6 +340,13 @@ pub struct PublicModRoom {
     pub code: String,
     pub build: Build,
     pub host_name: String,
+    /// The host's account; absent from an older mm.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub host_uid: String,
+    /// The host's flag code when they show it beside their name. Only accounts fills it in
+    /// (`GET /v1/rooms`); mm never sends it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_country: Option<String>,
     pub players: u8,
     pub open: u8,
     /// The host's name for it (`users.mods_room_name`); `None`: the launcher shows "alice's room".

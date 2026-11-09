@@ -292,7 +292,7 @@
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
-  margin-top: -6px;
+  margin-left: -5px;
 }
 
 .socialButton {
@@ -307,8 +307,6 @@
   display: flex;
   flex-direction: column;
   gap: 6px;
-  padding-top: 14px;
-  border-top: 1px solid rgb(255 255 255 / 8%);
 }
 
 .socialField {
@@ -436,4 +434,119 @@
 .search:focus {
   outline: none;
   border-color: var(--accent-primary);
+}
+
+/* Random: just a "?", centered, on nothing (the square is transparent). */
+.randomIcon {
+  display: block;
+  flex-shrink: 0;
+  overflow: visible;
+}
+
+.randomIcon text {
+  fill: #fff;
+  font: 800 26px system-ui, sans-serif;
+  paint-order: stroke;
+  stroke: rgb(0 0 0 / 70%);
+  stroke-width: 3px;
+  stroke-linejoin: round;
+}
+
+/* The flag and country's name, under the code. */
+.countryRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  margin-top: 4px;
+}
+
+.countryRow .country,
+.countryRow .countryButton {
+  font-size: 13px;
+}
+
+.countryRow .countryButton {
+  margin-left: -9px;
+  padding: 2px 8px;
+}
+
+/* Edit mode: "Show next to name". */
+.showToggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  user-select: none;
+}
+
+.showToggle input {
+  margin: 0;
+  accent-color: var(--accent-primary);
+  cursor: pointer;
+}
+
+.about .showToggle {
+  margin-left: 26px;
+}
+
+/* A name's hover card (mini_profile.tsx). */
+.miniTooltip {
+  max-width: 260px !important;
+  padding: 10px 12px !important;
+  border: 1px solid rgb(255 255 255 / 12%);
+  border-radius: 10px !important;
+  background: #262626 !important;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 55%);
+  color: var(--text-primary) !important;
+}
+
+.mini {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 170px;
+}
+
+.miniTop {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.miniName {
+  font-size: 15px;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.miniCountry {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.miniRank {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.miniRating {
+  color: var(--text-primary);
+}
+
+.miniMains {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 3px;
 }

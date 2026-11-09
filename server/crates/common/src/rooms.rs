@@ -868,6 +868,13 @@ pub struct PublicRoom {
     pub status: RoomStatus,
     /// Every player's display name, by slot.
     pub names: Vec<String>,
+    /// Every player's account, by slot (as `names`); absent from an older mm.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub uids: Vec<String>,
+    /// Every player's flag code, by slot (as `names`), when they show it beside their name; null
+    /// for one who doesn't. Only accounts fills it in (`GET /v1/rooms`); mm never sends it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub countries: Vec<Option<String>>,
     /// An open slot is empty, so the room can be joined (also during a game).
     pub joinable: bool,
     /// What the room plays (its ruleset's code, name and set), for the room list.

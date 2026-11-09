@@ -34,6 +34,9 @@ pub struct MmStatusSource {
     /// For live streams: no overall timeout (they last as long as the game).
     live_http: reqwest::Client,
     cache: Mutex<Option<(Instant, MmStatus)>>,
+    /// The latest snapshot with the players' flags filled in ([`MmStatusSource::get_with_flags`]),
+    /// by its `updated_at`: one profiles query per snapshot, not per launcher.
+    flagged: Mutex<Option<(String, MmStatus)>>,
 }
 
 impl MmStatusSource {
@@ -41,7 +44,7 @@ impl MmStatusSource {
         let http = reqwest::Client::builder().timeout(FETCH_TIMEOUT).build().expect("reqwest client builds");
         let live_http =
             reqwest::Client::builder().connect_timeout(FETCH_TIMEOUT).build().expect("reqwest client builds");
-        MmStatusSource { url: url.to_string(), http, live_http, cache: Mutex::new(None) }
+        MmStatusSource { url: url.to_string(), http, live_http, cache: Mutex::new(None), flagged: Mutex::new(None) }
     }
 
     /// Opens mm's stream of a live game from game `game` (1-based) chunk `chunk` on. The caller
@@ -74,6 +77,41 @@ impl MmStatusSource {
     }
 }
 
+impl MmStatusSource {
+    /// [`MmStatusSource::get`] with each room player's flag (`countries`, by slot) and each Brawl
+    /// Mods room host's (`hostCountry`), for those who show it beside their name.
+    pub async fn get_with_flags(&self, pool: &sqlx::PgPool) -> anyhow::Result<MmStatus> {
+        let status = self.get().await?;
+        let mut flagged = self.flagged.lock().await;
+        if let Some((at, s)) = flagged.as_ref() {
+            if *at == status.updated_at {
+                return Ok(s.clone());
+            }
+        }
+        let s = with_flags(pool, status).await?;
+        *flagged = Some((s.updated_at.clone(), s.clone()));
+        Ok(s)
+    }
+}
+
+/// Fills in the room players' and Brawl Mods hosts' flags.
+async fn with_flags(pool: &sqlx::PgPool, mut s: MmStatus) -> sqlx::Result<MmStatus> {
+    let parse = |u: &String| uuid::Uuid::parse_str(u).ok();
+    let mut uids: Vec<uuid::Uuid> = s.rooms.iter().flat_map(|r| r.uids.iter().filter_map(parse)).collect();
+    uids.extend(s.mod_rooms.iter().filter_map(|r| parse(&r.host_uid)));
+    uids.sort();
+    uids.dedup();
+    let tags = crate::profile::name_tags(pool, &uids).await?;
+    let flag = |u: &String| parse(u).and_then(|u| tags.get(&u)).and_then(|t| t.country.clone());
+    for r in &mut s.rooms {
+        r.countries = r.uids.iter().map(flag).collect();
+    }
+    for r in &mut s.mod_rooms {
+        r.host_country = flag(&r.host_uid);
+    }
+    Ok(s)
+}
+
 /// `GET /v1/rooms`: `{online, rooms: [{code, host, players, openSlots, mode, status, names,
 /// joinable, name}], updatedAt, yourRoom}`. Session auth (the list names players); limited per
 /// account ([`common::ratelimit::ROOMS_WINDOWS`]). 503 `mm_unavailable` when mm does not answer.
@@ -85,7 +123,7 @@ pub async fn rooms(State(state): State<AppState>, headers: HeaderMap) -> ApiResu
         ApiError::rate_limited(wait)
             .with_message(format!("Too many requests. Try again in {} s.", wait.as_secs().max(1)))
     })?;
-    match state.mm_status.get().await {
+    match state.mm_status.get_with_flags(&state.pool).await {
         // Where each player is stays between mm and accounts (it names private rooms), as does
         // the index of every Brawl Mods room.
         Ok(s) => {

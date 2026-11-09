@@ -3,7 +3,8 @@
  * server keeps the same lists and checks them (server/crates/common/src/profile.rs, countries.rs); keep both in step.
  */
 import type { SocialPlatform } from "@accounts/types";
-import countryList from "flag-icons/country.json";
+
+import countryList from "./countries.json";
 
 /**
  * P+'s roster as a profile's mains, in the picker's order, plus Random: the stock icon key (brawl_assets/catalog.ts)
@@ -73,13 +74,11 @@ export const SOCIAL_PLATFORMS: readonly { platform: SocialPlatform; name: string
 ];
 
 /**
- * Every country a profile can show: flag-icons' list (ISO 3166-1 plus regions and groups such as England, Catalonia,
- * the EU), by name. `xx` (its "unknown" flag) is left out.
+ * Every country a profile can show, by name: flag-icons' list (ISO 3166-1 plus regions and groups such as England,
+ * Catalonia, the EU) with short everyday names ("United States"). Written by tools/profiles/countries.py, with the
+ * server's copy (server/crates/common/src/countries.rs).
  */
-export const COUNTRIES: readonly { code: string; name: string }[] = (countryList as { code: string; name: string }[])
-  .filter((c) => c.code !== "xx")
-  .map(({ code, name }) => ({ code, name }))
-  .sort((a, b) => a.name.localeCompare(b.name));
+export const COUNTRIES: readonly { code: string; name: string }[] = countryList;
 
 export function countryName(code: string): string | undefined {
   return COUNTRIES.find((c) => c.code === code)?.name;

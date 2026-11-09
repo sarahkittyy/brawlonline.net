@@ -6,6 +6,7 @@ import type { Conversation, SocialPlayer } from "@social/types";
 import { clsx } from "clsx";
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 
+import { CharacterIcon } from "@/components/profile/character_icon";
 import { useToasts } from "@/lib/hooks/use_toasts";
 import { findPlayer, frontTab, useSocial } from "@/lib/social/use_social";
 
@@ -152,7 +153,7 @@ const TabHeader = React.forwardRef<
     >
       <span className={online ? styles.onlineDot : styles.offlineDot} />
       <span className={styles.tabName}>
-        <PlayerName player={player} />
+        <PlayerName player={player} showFlag={true} />
       </span>
       <InviteButton player={player} />
       <button
@@ -297,7 +298,12 @@ const ChatWindow = ({
             <LockOutlinedIcon style={{ fontSize: 14 }} />
           </span>
         </Tooltip>
-        <PlayerName player={player} profileLink={true} />
+        <PlayerName player={player} profileLink={true} showFlag={true} />
+        {player.main && (
+          <span className={styles.titleMain}>
+            <CharacterIcon character={player.main} size={18} />
+          </span>
+        )}
         <Tooltip title={Messages.minimize()} placement="top" disableInteractive={true}>
           <button
             type="button"

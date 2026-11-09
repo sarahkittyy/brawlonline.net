@@ -10,6 +10,7 @@
  * only ever sees cleaned text.
  */
 
+import { characterName, countryName } from "@common/profile";
 import { randomUUID } from "crypto";
 import electronLog from "electron-log";
 
@@ -118,7 +119,9 @@ function parsePlayer(v: any): SocialPlayer | undefined {
     return undefined;
   }
   const code = typeof v.connectCode === "string" && /^[A-Z]{1,4}#[0-9]{1,4}$/.test(v.connectCode) ? v.connectCode : "";
-  return { uid: v.uid, displayName, connectCode: code };
+  const country = typeof v.country === "string" && countryName(v.country) ? v.country : undefined;
+  const main = typeof v.main === "string" && characterName(v.main) ? v.main : undefined;
+  return { uid: v.uid, displayName, connectCode: code, ...(country && { country }), ...(main && { main }) };
 }
 
 function parsePeer(v: any): Peer | undefined {

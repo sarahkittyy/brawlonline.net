@@ -818,3 +818,9 @@
   color: var(--text-secondary);
   font-size: 12px;
 }
+
+/* The host's name in a room row, with their flag before it. */
+.hostName {
+  display: inline-flex;
+  vertical-align: bottom;
+}

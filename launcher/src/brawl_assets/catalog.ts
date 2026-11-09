@@ -204,15 +204,7 @@ export const SOUND_ROLES: SoundRole[] = [
 //   P+   (StockFaceTex.brres):    "InfStc.<id*50 + costume>" padded to 4 digits (BrawlEx style, C8 + PLT0)
 // The id -> character table below was established by viewing every icon.
 
-export type StockCharacter = {
-  key: string;
-  name: string;
-  id: number;
-  pplusOnly?: boolean;
-  discOnly?: boolean;
-  /** Always the disc's icon, with or without a P+ SD card. */
-  fromDisc?: boolean;
-};
+export type StockCharacter = { key: string; name: string; id: number; pplusOnly?: boolean; discOnly?: boolean };
 
 export const STOCK_CHARACTERS: StockCharacter[] = [
   { key: "mario", name: "Mario", id: 0 },
@@ -261,9 +253,6 @@ export const STOCK_CHARACTERS: StockCharacter[] = [
   { key: "snake", name: "Snake", id: 45 },
   { key: "sonic", name: "Sonic", id: 46 },
   { key: "wario_man", name: "Wario-Man", id: 66, pplusOnly: true },
-  // Random (a profile's mains): the disc's Smash emblem stock (InfStc.981; 991 is a "BOSS" icon). P+'s card has no
-  // full-size one (its InfStc.2500 is a 16x16).
-  { key: "random", name: "Random", id: 98, fromDisc: true },
 ];
 
 export const STOCK_FILES = {

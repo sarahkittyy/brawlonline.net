@@ -169,12 +169,18 @@ async fn public_list_private_rooms_and_online_count() {
             "mode": "1v1",
             "status": "waiting",
             "names": ["alice"],
+            "uids": [alice.uid],
+            "countries": [null],
             "joinable": true,
             "ruleset": {"code": null, "name": "P+ default", "version": 0, "by": "", "basedOn": null,
-                        "bestOf": 0, "stageChoice": "loser-picks",
+                        "bestOf": 0, "stageChoice": "loser-picks", "alternateStages": true,
                         "stages": {"starters": [1, 4, 9, 33, 46], "counterpicks": [12, 31, 35, 45]}},
         })
     );
+    // A player's flag beside their name once they set one (docs/design/profiles.md §8).
+    let (st, p) = stack.put("/v1/me/profile", Some(&sa), json!({"country": "se"})).await;
+    assert_eq!(st, 200, "{p}");
+    rooms_until(&stack, &sa, |b| b["rooms"][0]["countries"] == json!(["se"])).await;
     // A private room is joinable by code.
     let mut c = c;
     join(&mut c, &private);

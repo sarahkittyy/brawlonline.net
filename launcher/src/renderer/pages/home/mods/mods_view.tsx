@@ -39,6 +39,7 @@ import { useEffect, useRef, useState } from "react";
 import { ExternalLink } from "@/components/external_link";
 import { RoomNameMessages } from "@/components/room_name/room_name.messages";
 import { RoomNameField } from "@/components/room_name/room_name_field";
+import { UserName } from "@/components/user_name/user_name";
 
 import { ContentBlock } from "../overview/content_block/content_block";
 import { CodesButton, CodesChip, hasRoomCodes } from "./codes_dialog";
@@ -578,7 +579,13 @@ const PublicRoomsBlock = ({
                       <span className={styles.crown} title={Messages.hostLabel()}>
                         {"♛ "}
                       </span>
-                      {room.hostName} · {label}
+                      <UserName
+                        user={{ uid: room.hostUid, displayName: room.hostName, country: room.hostCountry }}
+                        showCode={false}
+                        showFlag={true}
+                        className={styles.hostName}
+                      />
+                      {` · ${label}`}
                     </div>
                     {match.hasParts && room.build.disc && (
                       <div className={styles.partChips}>

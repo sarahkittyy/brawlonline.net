@@ -25,6 +25,7 @@ export type {
   MatchHistoryPage,
   MatchHistoryPlayer,
   MyRulesets,
+  NameTag,
   PlayerProfile,
   ProfileSocial,
   ProfileUpdate,

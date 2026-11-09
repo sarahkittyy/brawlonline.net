@@ -102,6 +102,18 @@ export type PlayerProfile = {
   country?: string | null;
   /** The social media accounts set, in SOCIAL_PLATFORMS' order. */
   socials?: ProfileSocial[];
+  /** The flag shows beside the player's name around the launcher (leaderboard, online list, rooms, chat). */
+  showCountry?: boolean;
+  /** The primary main shows beside the player's name (leaderboard, chat). */
+  showMain?: boolean;
+};
+
+/** What shows beside a name in a list: the flag and the primary main, each only when the player shows it. */
+export type NameTag = {
+  /** A flag-icons code. */
+  country?: string | null;
+  /** A character key (the primary main). */
+  main?: string | null;
 };
 
 export type SocialPlatform = "discord" | "twitter" | "twitch" | "youtube" | "tiktok" | "instagram";
@@ -123,6 +135,8 @@ export type ProfileSocial = {
 export type ProfileUpdate = {
   mains?: string[];
   country?: string | null;
+  showCountry?: boolean;
+  showMain?: boolean;
   socials?: Partial<Record<SocialPlatform, string | null>>;
 };
 
@@ -147,7 +161,7 @@ export type LeaderboardEntry = {
    * an older server.
    */
   positionChange?: number | null;
-};
+} & NameTag;
 
 /**
  * `GET /v1/ranked/leaderboard?limit=&after=&q=`: `next` is the `after` of the next page, null on the
@@ -238,6 +252,10 @@ export type PublicRoom = {
   status: "waiting" | "in-game";
   /** Every player's display name, by slot. */
   names: string[];
+  /** Every player's account, by slot (as `names`); absent from an older server. */
+  uids?: string[];
+  /** Every player's flag code, by slot (as `names`), when they show it beside their name; null when not. */
+  countries?: (string | null)[];
   /** An open slot is empty (also during a game: the joiner waits for it to end). */
   joinable: boolean;
   /** What the room plays (common::rooms::RoomRuleset). Absent from an older server. */
@@ -297,6 +315,10 @@ export type PublicModRoom = {
    * of the host's codes (docs/design/room-codes.md). */
   build: { hash: string; name: string; disc?: string; discLabel?: string; sd?: string; codes?: string[] };
   hostName: string;
+  /** The host's account; absent from an older server. */
+  hostUid?: string;
+  /** The host's flag code when they show it beside their name. */
+  hostCountry?: string | null;
   players: number;
   /** Open slots (the room's size). */
   open: number;

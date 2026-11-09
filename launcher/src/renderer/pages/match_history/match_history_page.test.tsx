@@ -81,7 +81,7 @@ describe("MatchRow", () => {
     expect(getByAltText("Diamond 3")).toBeTruthy();
     expect(cells[4].querySelector("img")?.alt).toBe("Diamond 3");
     expect(cells[2].querySelector("img")).toBeNull();
-    expect(Array.from(container.querySelectorAll("button[title='View Profile']")).map((b) => b.textContent)).toEqual([
+    expect(Array.from(container.querySelectorAll("button[data-profile-link]")).map((b) => b.textContent)).toEqual([
       "ann",
       "bob",
     ]);
@@ -269,11 +269,30 @@ describe("LeaderboardRow", () => {
     };
     const { container } = render(inTable(<LeaderboardRow entry={entry} isMe={true} />));
     const cells = Array.from(container.querySelectorAll("td")).map((td) => td.textContent);
-    // No rank from an older server: the rank cell stays empty.
-    expect(cells).toEqual(["7", "", "ann", "ANN#1", "1612.3", "10-5"]);
+    // No rank from an older server, no flag or main shown: those cells stay empty.
+    expect(cells).toEqual(["7", "", "", "ann", "", "ANN#1", "1612.3", "10-5"]);
     expect(container.querySelector("tr")!.getAttribute("data-me")).toBe("true");
     const { container: other } = render(inTable(<LeaderboardRow entry={{ ...entry, uid: "x" }} isMe={false} />));
     expect(other.querySelector("tr")!.getAttribute("data-me")).toBeNull();
+  });
+
+  it("shows the player's flag and primary main in their own columns when they show them", () => {
+    const entry = {
+      position: 2,
+      uid: "k",
+      displayName: "knux",
+      connectCode: "KNUX#190",
+      rating: 1890.2,
+      setsPlayed: 120,
+      wins: 78,
+      losses: 42,
+      country: "us",
+      main: "random",
+    };
+    const { container } = render(inTable(<LeaderboardRow entry={entry} isMe={false} />));
+    const cells = container.querySelectorAll("td");
+    expect(cells[2].querySelector("[title='United States']")).toBeTruthy();
+    expect(cells[4].querySelector("[data-testid=stock-random] text")?.textContent).toBe("?");
   });
 
   it("shows the rank's emblem, named in its alt text, or the sets left while placing", () => {

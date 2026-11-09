@@ -193,6 +193,23 @@ describe("social client", () => {
     await until(() => client.getState().room?.code === "KFQB");
   });
 
+  it("keeps a player's flag and main when they are known ones, and drops anything else", async () => {
+    const carol = fakePeer(CAROL, "carol", "CA#1");
+    server.send({ type: "online", member: { ...carol.member, country: "gb-eng", main: "random" } });
+    await until(() => client.getState().online.some((p) => p.uid === CAROL));
+    expect(client.getState().online.find((p) => p.uid === CAROL)).toEqual({
+      uid: CAROL,
+      displayName: "carol",
+      connectCode: "CA#1",
+      country: "gb-eng",
+      main: "random",
+    });
+    // Listed again (a profile change): an unknown flag and character are left out.
+    server.send({ type: "online", member: { ...carol.member, country: "zz", main: "<img>" } });
+    await until(() => client.getState().online.find((p) => p.uid === CAROL)?.country === undefined);
+    expect(client.getState().online.find((p) => p.uid === CAROL)?.main).toBeUndefined();
+  });
+
   it("lists players in a random order that holds until they leave", async () => {
     const carol = fakePeer(CAROL, "carol", "CA#1");
     const dave = fakePeer(DAVE, "_dave", "DA#2");

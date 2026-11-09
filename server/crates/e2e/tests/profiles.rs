@@ -250,3 +250,35 @@ async fn players_set_their_mains_country_and_socials() {
     assert!(html.contains("href=\"https://twitch.tv/sarahkitty\""));
     stack.shutdown().await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_leaderboard_shows_flags_and_mains_players_show_next_to_their_name() {
+    let stack = Stack::start(StackOptions::default()).await.unwrap();
+    let (session, a) = stack.create_player("tags-a@example.test", "tagged", "TAGS").await;
+    let (_, b) = stack.create_player("tags-b@example.test", "plain", "PLAN").await;
+    let placed = PLACEMENT_SETS as i32;
+    set_rating(&stack.pool, uuid(&a), 1600.0, placed, Some(9)).await;
+    set_rating(&stack.pool, uuid(&b), 1500.0, placed, Some(8)).await;
+    let body = json!({"mains": ["random", "fox"], "country": "us"});
+    let (st, p) = stack.put("/v1/me/profile", Some(&session), body).await;
+    assert_eq!(st, 200, "{p}");
+    assert_eq!((&p["showCountry"], &p["showMain"]), (&json!(true), &json!(true)), "on until turned off");
+    let entry = |page: &Value, u: &UserJson| -> Value {
+        page["entries"].as_array().unwrap().iter().find(|e| e["uid"] == u.uid.as_str()).unwrap().clone()
+    };
+    let board = || async { stack.get("/v1/ranked/leaderboard", None).await.1 };
+    let page = board().await;
+    assert_eq!((&entry(&page, &a)["country"], &entry(&page, &a)["main"]), (&json!("us"), &json!("random")));
+    let other = entry(&page, &b);
+    assert!(other.get("country").is_none() && other.get("main").is_none(), "{other}");
+
+    // Each one hidden on its own; the profile keeps both.
+    stack.put("/v1/me/profile", Some(&session), json!({"showMain": false})).await;
+    let e = entry(&board().await, &a);
+    assert_eq!((&e["country"], e.get("main")), (&json!("us"), None), "{e}");
+    let (_, p) = stack.put("/v1/me/profile", Some(&session), json!({"showCountry": false, "showMain": true})).await;
+    let e = entry(&board().await, &a);
+    assert_eq!((e.get("country"), &e["main"]), (None, &json!("random")), "{e}");
+    assert_eq!((&p["country"], &p["mains"][0], &p["showCountry"]), (&json!("us"), &json!("random"), &json!(false)));
+    stack.shutdown().await;
+}
