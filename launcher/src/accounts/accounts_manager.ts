@@ -11,6 +11,7 @@ import type {
   MatchHistoryFilter,
   MatchHistoryPage,
   MyRulesets,
+  PlayerProfile,
   PublicModRoom,
   PublishRulesetRequest,
   RecentRuleset,
@@ -94,6 +95,10 @@ export class AccountsManager {
 
   publicUser(uid: string): Promise<AccountsResult<AccountsPublicUser>> {
     return wrap(() => this.client.publicUser(uid));
+  }
+
+  profile(id: string): Promise<AccountsResult<PlayerProfile>> {
+    return wrap(() => this.client.profile(id));
   }
 
   leaderboard(query: { limit?: number; after?: string; q?: string }): Promise<AccountsResult<LeaderboardPage>> {

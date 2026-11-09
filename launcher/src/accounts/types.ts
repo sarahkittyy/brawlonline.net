@@ -69,6 +69,35 @@ export type RankTier = "bronze" | "silver" | "gold" | "emerald" | "diamond" | "m
 /** The rank a player holds. Division 3 is a tier's lowest and 1 its highest; Legendary has none (null). */
 export type Rank = { tier: RankTier; division: 1 | 2 | 3 | null };
 
+/**
+ * `GET /v1/profiles/<id>` (docs/design/profiles.md): a player's public profile, the same one the
+ * website's `/profile/<code>` page shows. Fields added here should show in both.
+ */
+export type PlayerProfile = {
+  uid: string;
+  displayName: string;
+  /** `ABCD#123`; empty before online play is set up. */
+  connectCode: string;
+  /** The profile's web page (`https://brawlonline.net/profile/abcd-123`); null without a connect code. */
+  link: string | null;
+  ranked: {
+    /** The rank held; null while placing. */
+    rank: Rank | null;
+    /** The Elo rating; null while placing (shown as `????`). */
+    rating: number | null;
+    setsPlayed: number;
+    /** Rated sets left before the rank shows; 0 once placed. */
+    setsToPlace: number;
+    /** Ranked sets won and lost, placement sets included. */
+    wins: number;
+    losses: number;
+    /** 1-based leaderboard position; null while placing. */
+    position: number | null;
+    /** Players on the leaderboard. */
+    rankedPlayers: number;
+  };
+};
+
 /** One row of `GET /v1/ranked/leaderboard`. */
 export type LeaderboardEntry = {
   /** 1-based; ties (same rating) are ordered by uid and still get their own positions. */
@@ -121,6 +150,9 @@ export type MatchHistoryPlayer = {
   /** The set changed this player's rating, but they are still placing: the rating fields are null and the
    * launcher shows `????` (from 2026-10-21; absent from an older server). */
   ratingHidden?: boolean;
+  /** The player's rank when the match was made, for the badge beside the name; null while they were placing
+   * or had not played Ranked (absent from an older server). */
+  rank?: Rank | null;
   /** A room's game: the player's slot (1-4); null for the other modes. */
   port?: number | null;
   /** A room's team battle: 0 red, 1 blue, 2 green. */
@@ -330,6 +362,8 @@ export interface AccountsApi {
   initNetplay(uid: string, codeStart: string): Promise<AccountsMe>;
   rename(uid: string, displayName: string): Promise<AccountsMe>;
   publicUser(uid: string): Promise<AccountsPublicUser>;
+  /** A player's public profile by uid or connect code. */
+  profile(id: string): Promise<PlayerProfile>;
   /** One leaderboard page (public); `q` searches names and connect codes. */
   leaderboard(query: { limit?: number; after?: string; q?: string }): Promise<LeaderboardPage>;
   /** One page of this account's match history. */

@@ -577,6 +577,16 @@ summary:focus-visible {
   overflow-wrap: anywhere;
 }
 
+.top td.name a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.top td.name a:hover,
+.top td.name a:focus-visible {
+  text-decoration: underline;
+}
+
 .top td.code {
   color: var(--dim);
   white-space: nowrap;

@@ -12,6 +12,7 @@ import {
   ipc_accountsMatchHistory,
   ipc_accountsMe,
   ipc_accountsMyRulesets,
+  ipc_accountsProfile,
   ipc_accountsPublicUser,
   ipc_accountsPublishRuleset,
   ipc_accountsRecentRulesets,
@@ -72,6 +73,9 @@ const accountsApi: AccountsApi = {
   },
   async publicUser(uid) {
     return unwrap(await ipc_accountsPublicUser.renderer!.trigger({ uid }));
+  },
+  async profile(id) {
+    return unwrap(await ipc_accountsProfile.renderer!.trigger({ id }));
   },
   async leaderboard(query) {
     return unwrap(await ipc_accountsLeaderboard.renderer!.trigger(query));

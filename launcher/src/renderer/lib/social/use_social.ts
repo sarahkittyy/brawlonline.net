@@ -4,9 +4,11 @@ import { combine } from "zustand/middleware";
 
 /**
  * A chat tab in the bar along the bottom of the window. `z` orders the open windows where they
- * overlap: the one raised last (opened or clicked) is drawn over the others.
+ * overlap: the one raised last (opened or clicked) is drawn over the others. `player` is who it
+ * was opened for, when that came from elsewhere (a profile's Message): someone offline with no
+ * conversation yet is in neither the online list nor the conversations.
  */
-export type ChatTab = { uid: string; open: boolean; z: number };
+export type ChatTab = { uid: string; open: boolean; z: number; player?: SocialPlayer };
 
 /** The open window drawn over the others, if any. */
 export function frontTab(tabs: ChatTab[]): string | null {
@@ -69,7 +71,7 @@ export const useSocial = create(
       }
     },
     /** Opens (and expands, unless `expand` is false) the player's tab, adding it if needed. */
-    openTab: (uid: string, expand = true) => {
+    openTab: (uid: string, expand = true, player?: SocialPlayer) => {
       const tabs = get().tabs;
       const existing = tabs.find((t) => t.uid === uid);
       if (existing) {
@@ -78,7 +80,7 @@ export const useSocial = create(
         }
         return;
       }
-      set({ tabs: [...tabs, { uid, open: expand, z: topZ(tabs) }] });
+      set({ tabs: [...tabs, { uid, open: expand, z: topZ(tabs), ...(player && { player }) }] });
     },
     toggleTab: (uid: string) => set({ tabs: toggled(get().tabs, uid) }),
     /** Draws an open window over the others. */

@@ -47,7 +47,7 @@ export const useSocialActions = () => {
     [showError],
   );
 
-  const message = useCallback((player: SocialPlayer) => openTab(player.uid, true), [openTab]);
+  const message = useCallback((player: SocialPlayer) => openTab(player.uid, true, player), [openTab]);
 
   return { invite, setIgnored, message };
 };

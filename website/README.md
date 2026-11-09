@@ -10,6 +10,7 @@ The landing page for Brawl Online. It is a static site with no build step, no an
 | `assets/fonts/` | The wordmark font (Barlow Condensed Black Italic, OFL) and its licence. |
 | `assets/bg.webm`, `assets/bg.mp4`, `assets/bg-poster.jpg` | Background video and its still frame. **Not present yet.** |
 | `r/index.html`, `r/ruleset.js`, `r/ruleset.css` | The ruleset page, `brawlonline.net/r/<code>` (below). |
+| `profile/profile.css` | The style of the player profile pages, `brawlonline.net/profile/<code>`, which accounts renders (below). |
 | `robots.txt`, `sitemap.xml` | For search engines (below). |
 | `LICENSES.txt` | Credits for the font, the icons and (later) the video. Deploy it with the site. |
 
@@ -102,6 +103,10 @@ Google Search Console (and Bing Webmaster Tools) is where to see what is indexed
 A published ruleset's share link (`docs/rulesets-protocol.md` §4). nginx serves `r/index.html` for every `/r/<code>` (`location /r/` in `server/deploy/sarahvps2/brawl-online.conf`; `handle /r/*` in the Caddyfile). Link previews (Discordbot and the like, by `User-Agent`) get the accounts page `GET /v1/rulesets/<code>/preview` instead, titled "<name> v<version> by <publisher>" with no description, since they don't run the script. `r/ruleset.js` reads the code from the address (also `/r/?<code>` and `/r/#<code>`, for a plain static server), fetches `GET /v1/rulesets/<code>` from the accounts API (same origin, so `connect-src 'self'` covers it) and shows the name, version, publisher, a "newer version" link, the set format, every rule and the stage lists. Everything from the server goes in as text, never HTML. **Create room with this ruleset** opens `brawlonline://room/create?ruleset=<code>`, which the launcher registers; if the page keeps focus after the click (nothing took the link), the "Don't have the launcher? Download" line is highlighted. The stage names are a copy of the launcher's (`launcher/src/common/rulesets.ts`).
 
 Preview it with the accounts API behind the same origin (a plain `python -m http.server` has no `/v1/`): open `/r/?<code>` against any server that proxies `/v1/` to accounts.
+
+## Player profiles (`/profile/<code>`)
+
+`brawlonline.net/profile/sond-810` is `SOND#810`'s profile (docs/design/profiles.md). accounts renders the whole page (`server/crates/accounts/src/profile.rs`), the same HTML for people, search engines and link previews, so nginx sends `/profile/<code>` to accounts; the page's one stylesheet, `profile/profile.css`, is a static file here, and it uses `assets/ranks/` for the badge and the wordmark font. No scripts. The pages are indexable (not in the sitemap; the Ranked top 10 links each name to its page, which is how crawlers find them). The badge is the link preview's image and the tier's colour its side bar.
 
 ## Deploying
 

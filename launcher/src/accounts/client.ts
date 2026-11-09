@@ -10,6 +10,7 @@ import type {
   MatchHistoryFilter,
   MatchHistoryPage,
   MyRulesets,
+  PlayerProfile,
   PublicModRoom,
   PublishRulesetRequest,
   RecentRuleset,
@@ -103,6 +104,10 @@ export class AccountsHttpClient {
 
   publicUser(uid: string): Promise<AccountsPublicUser> {
     return this._request("GET", `/user/${encodeURIComponent(uid)}?additionalFields=chatMessages,rank`, {});
+  }
+
+  profile(id: string): Promise<PlayerProfile> {
+    return this._request("GET", `/v1/profiles/${encodeURIComponent(id)}`, {});
   }
 
   leaderboard(query: { limit?: number; after?: string; q?: string }): Promise<LeaderboardPage> {

@@ -3,6 +3,7 @@ import Menu from "@mui/material/Menu";
 import MenuItem from "@mui/material/MenuItem";
 import type { SocialPlayer } from "@social/types";
 
+import { useProfileView } from "@/lib/hooks/use_profile_view";
 import { inviteBlocked, useSocial, waitsForRoom } from "@/lib/social/use_social";
 import { useSocialActions } from "@/lib/social/use_social_actions";
 
@@ -10,7 +11,7 @@ import { SocialMessages as Messages } from "./social.messages";
 
 export type PlayerMenuTarget = { player: SocialPlayer; x: number; y: number };
 
-/** The right-click menu of a player's name (the online list and a chat tab's header). */
+/** The right-click menu of a player's name (the online list and a chat tab's header): Message, View Profile, ... */
 export const PlayerMenu = ({
   target,
   onClose,
@@ -25,6 +26,7 @@ export const PlayerMenu = ({
   const ignored = useSocial((s) => (target ? s.state.ignored.includes(target.player.uid) : false));
   const online = useSocial((s) => (target ? s.state.online.some((p) => p.uid === target.player.uid) : false));
   const { invite, setIgnored, message } = useSocialActions();
+  const openProfile = useProfileView((s) => s.open);
   const blocked = waiting ? undefined : inviteBlocked(room);
   const player = target?.player;
 
@@ -52,6 +54,9 @@ export const PlayerMenu = ({
           <ListItemText>{Messages.message()}</ListItemText>
         </MenuItem>
       )}
+      <MenuItem onClick={act(openProfile)} dense={true}>
+        <ListItemText>{Messages.viewProfile()}</ListItemText>
+      </MenuItem>
       <MenuItem onClick={act(invite)} disabled={!online || blocked != null} dense={true}>
         <ListItemText
           primary={Messages.inviteToGame()}

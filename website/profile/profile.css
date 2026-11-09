@@ -1,0 +1,208 @@
+/* brawlonline.net/profile/<code>: a player's profile. accounts renders the page
+   (server/crates/accounts/src/profile.rs, docs/design/profiles.md); this is its only style.
+   Same palette and wordmark font as the landing page and the ruleset page. */
+
+@font-face {
+  font-family: "Barlow Condensed";
+  font-style: italic;
+  font-weight: 900;
+  font-display: block;
+  src: url("/assets/fonts/barlow-condensed-900-italic.woff2") format("woff2");
+}
+
+:root {
+  --bg: #08080b;
+  --fg: #f1f1f4;
+  --dim: rgba(241, 241, 244, 0.55);
+  --line: rgba(241, 241, 244, 0.12);
+  --card: rgba(255, 255, 255, 0.04);
+  --pm-hi: #74de55;
+  color-scheme: dark;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font: 400 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+a {
+  color: var(--pm-hi);
+}
+
+header {
+  padding: 20px 16px 0;
+  max-width: 720px;
+  margin: 0 auto;
+}
+
+.home {
+  font-family: "Barlow Condensed", system-ui, sans-serif;
+  font-style: italic;
+  font-weight: 900;
+  font-size: 26px;
+  letter-spacing: 0.01em;
+  text-transform: uppercase;
+  color: var(--fg);
+  text-decoration: none;
+}
+
+.home .w2 {
+  color: var(--pm-hi);
+}
+
+main {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 16px 16px 48px;
+}
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 22px 24px;
+  margin-bottom: 16px;
+}
+
+/* The badge left of the name, code and rank. */
+.who {
+  display: flex;
+  align-items: center;
+  gap: 22px;
+}
+
+/* The name's column may shrink, so a long name wraps instead of widening the card. */
+.who > div:last-child {
+  min-width: 0;
+}
+
+.badge {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.badge:empty {
+  display: none;
+}
+
+.emblem {
+  display: block;
+  width: 112px;
+  height: 112px;
+  filter: drop-shadow(0 3px 4px rgb(0 0 0 / 45%));
+}
+
+/* Placing: the emblems' outline, dotted, with how many sets are left under it. */
+.emblem.placing {
+  filter: none;
+}
+
+.emblem.placing path {
+  fill: rgb(255 255 255 / 3%);
+  stroke: #8a8a8a;
+  stroke-width: 2.5px;
+  stroke-linecap: round;
+  stroke-dasharray: 0.1px 7px;
+  vector-effect: non-scaling-stroke;
+}
+
+.more {
+  margin-top: -18px;
+  padding: 1px 8px;
+  border: 1.5px dashed #8a8a8a;
+  border-radius: 6px;
+  background: #1f1f1f;
+  color: #c8c8c8;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.name {
+  margin: 0;
+  font-size: 30px;
+  line-height: 1.15;
+  overflow-wrap: anywhere;
+}
+
+.code {
+  margin: 2px 0 0;
+  font: 600 16px/1.3 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  letter-spacing: 0.08em;
+  color: var(--dim);
+}
+
+.standing {
+  margin: 8px 0 0;
+  font-weight: 600;
+}
+
+.who[data-tier="bronze"] .standing { color: #d99063; }
+.who[data-tier="silver"] .standing { color: #c9d2dc; }
+.who[data-tier="gold"] .standing { color: #f0c24a; }
+.who[data-tier="emerald"] .standing { color: #43d488; }
+.who[data-tier="diamond"] .standing { color: #77baf2; }
+.who[data-tier="master"] .standing { color: #b98af0; }
+.who[data-tier="legendary"] .standing { color: #f4785e; }
+.who[data-tier="none"] .standing { color: var(--dim); }
+
+h2 {
+  margin: 0 0 12px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+
+/* Stat tiles: label over value, as many per row as fit. */
+.stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 14px 24px;
+  margin: 0;
+}
+
+.stats dt {
+  color: var(--dim);
+  font-size: 13px;
+}
+
+.stats dd {
+  margin: 2px 0 0;
+  font-size: 22px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.cta {
+  margin: 20px 0 0;
+  text-align: center;
+  color: var(--dim);
+}
+
+@media (max-width: 480px) {
+  .who {
+    gap: 14px;
+  }
+
+  .emblem {
+    width: 80px;
+    height: 80px;
+  }
+
+  .name {
+    font-size: 24px;
+  }
+}

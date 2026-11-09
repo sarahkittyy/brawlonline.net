@@ -16,6 +16,7 @@ import React, { useCallback, useState } from "react";
 import { InfiniteScrollContainer } from "@/components/infinite_scroll_container/infinite_scroll_container";
 import { PagedListStatus } from "@/components/paged_list_status/paged_list_status";
 import { RankBadge } from "@/components/rank_badge/rank_badge";
+import { UserName } from "@/components/user_name/user_name";
 import { useAccount } from "@/lib/hooks/use_account";
 import type { CursorPage } from "@/lib/hooks/use_cursor_pages";
 import { useCursorPages } from "@/lib/hooks/use_cursor_pages";
@@ -179,7 +180,9 @@ export const LeaderboardRow = React.memo(function LeaderboardRow({
       <TableCell align="center" sx={{ paddingY: "4px" }}>
         <RankBadge rank={entry.rank} setsToPlace={entry.setsToPlace} size="small" />
       </TableCell>
-      <TableCell sx={strong}>{entry.displayName}</TableCell>
+      <TableCell sx={strong}>
+        <UserName user={entry} showCode={false} profileLink={true} />
+      </TableCell>
       <TableCell sx={{ color: "text.secondary", ...strong }}>{entry.connectCode}</TableCell>
       <TableCell align="right" sx={strong}>
         {formatRating(entry.rating)}

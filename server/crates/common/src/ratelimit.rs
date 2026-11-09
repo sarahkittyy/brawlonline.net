@@ -64,6 +64,11 @@ pub const RULESET_PUBLISH_WINDOWS: [Window; 2] = [Window::new(10, HOUR), Window:
 /// anyone from walking the 64 M codes.
 pub const RULESET_LOOKUP_IP_WINDOWS: [Window; 2] = [Window::new(60, MINUTE), Window::new(1000, HOUR)];
 
+/// Player profiles (`GET /v1/profiles/<id>` and the website's `/profile/<code>` page, together) per
+/// client IP (IPv6 per /64): 60 per minute and 1,000 per hour. The launcher fetches one when a
+/// profile is opened; search engines and link previews read the page.
+pub const PROFILE_IP_WINDOWS: [Window; 2] = [Window::new(60, MINUTE), Window::new(1000, HOUR)];
+
 /// The account's own ruleset calls (drafts, hide, the remembered ruleset, lists) per account: 120
 /// per minute. The launcher saves a draft when the player stops typing.
 pub const RULESET_EDIT_WINDOWS: [Window; 1] = [Window::new(120, MINUTE)];

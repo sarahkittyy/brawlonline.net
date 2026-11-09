@@ -49,7 +49,7 @@ export const RankedUserProfile = ({ rankedProfile, onHide }: { rankedProfile: Ra
         </div>
         <div style={{ display: "flex", gap: 16 }}>
           <RefreshRatingButton />
-          <Button className={styles.refreshButton} onClick={() => navigate("/main/profile")}>
+          <Button className={styles.refreshButton} onClick={() => navigate("/main/matches")}>
             <HistoryIcon color="inherit" sx={{ fontSize: "16px", color: "var(--surface-3)" }} />
             <span>{Messages.matchHistory()}</span>
           </Button>

@@ -81,8 +81,8 @@ const OUTLINE =
 
 /**
  * A ranked emblem, its division shown by the numeral on it; hovering names the rank ("Gold 2"). While the
- * player is still placing, a dotted outline with "3 more sets" under it. Nothing without a rank (an older
- * server).
+ * player is still placing, a dotted outline with "3 more sets" under it (not `inline`). Nothing without a rank
+ * (an older server). `inline` is text height, beside a name (`UserName`, the match history).
  */
 export const RankBadge = ({
   rank,
@@ -91,10 +91,10 @@ export const RankBadge = ({
 }: {
   rank?: Rank | null;
   setsToPlace?: number;
-  size: "large" | "small";
+  size: "large" | "small" | "inline";
 }) => {
-  const sizeClass = size === "large" ? styles.large : styles.small;
-  if (setsToPlace && setsToPlace > 0) {
+  const sizeClass = size === "large" ? styles.large : size === "small" ? styles.small : styles.inline;
+  if (setsToPlace && setsToPlace > 0 && size !== "inline") {
     return (
       <Tooltip title={Messages.placingTooltip(setsToPlace)} arrow={true}>
         <div className={`${styles.badge} ${sizeClass}`} data-tier="placing">
@@ -115,7 +115,12 @@ export const RankBadge = ({
   return (
     <Tooltip title={name} arrow={true}>
       <div className={`${styles.badge} ${sizeClass}`} data-tier={rank.tier}>
-        <img className={styles.emblem} src={emblemFor(rank, size)} alt={name} draggable={false} />
+        <img
+          className={styles.emblem}
+          src={emblemFor(rank, size === "large" ? "large" : "small")}
+          alt={name}
+          draggable={false}
+        />
       </div>
     </Tooltip>
   );

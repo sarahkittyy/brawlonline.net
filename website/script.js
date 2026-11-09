@@ -257,7 +257,13 @@ async function setupTop10() {
       cell("rank", "");
       const badge = rankBadge(e);
       if (badge) tr.lastChild.appendChild(badge);
-      cell("name", String(e.displayName || ""));
+      cell("name", "");
+      // The name opens the player's profile (/profile/<code>, docs/design/profiles.md).
+      const code = String(e.connectCode || "");
+      const name = document.createElement(code ? "a" : "span");
+      name.textContent = String(e.displayName || "");
+      if (code) name.href = "/profile/" + encodeURIComponent(code.replace("#", "-").toLowerCase());
+      tr.lastChild.appendChild(name);
       cell("code", String(e.connectCode || ""));
       cell("rating", Number(e.rating).toFixed(1));
       rows.appendChild(tr);

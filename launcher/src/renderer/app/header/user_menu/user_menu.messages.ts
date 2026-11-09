@@ -1,5 +1,6 @@
 export const UserMenuMessages = {
   activateOnlinePlay: () => "Activate online play",
+  viewProfile: () => "View Profile",
   editDisplayName: () => "Edit display name",
   logout: () => "Log out",
   offline: () => "Offline",

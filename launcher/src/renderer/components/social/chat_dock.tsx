@@ -53,7 +53,7 @@ export const ChatDock = React.memo(function ChatDock() {
   return (
     <div className={styles.dock} ref={dockRef} data-testid="chat-dock">
       {tabs.map((tab) => {
-        const player = findPlayer(state, tab.uid);
+        const player = findPlayer(state, tab.uid) ?? tab.player;
         if (!tab.open || !player) {
           return null;
         }
@@ -72,7 +72,7 @@ export const ChatDock = React.memo(function ChatDock() {
       })}
       <div className={styles.tabs}>
         {tabs.map((tab) => {
-          const player = findPlayer(state, tab.uid);
+          const player = findPlayer(state, tab.uid) ?? tab.player;
           if (!player) {
             return null;
           }
@@ -297,7 +297,7 @@ const ChatWindow = ({
             <LockOutlinedIcon style={{ fontSize: 14 }} />
           </span>
         </Tooltip>
-        <PlayerName player={player} />
+        <PlayerName player={player} profileLink={true} />
         <Tooltip title={Messages.minimize()} placement="top" disableInteractive={true}>
           <button
             type="button"

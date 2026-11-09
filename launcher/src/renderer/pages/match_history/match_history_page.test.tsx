@@ -6,7 +6,7 @@ import { RATING_DOWN_COLOR, RATING_UP_COLOR } from "@/lib/ranked_format";
 import { LeaderboardRow } from "@/pages/leaderboard/leaderboard_page";
 import type { MatchHistoryItem } from "@/services/backend/types";
 
-import { MatchRow } from "./profile_page";
+import { MatchRow } from "./match_history_page";
 
 // The replays cell reads the replay folders from the settings store, which loads window.electron's settings.
 vi.mock("@/lib/hooks/use_settings", () => {
@@ -66,6 +66,25 @@ describe("MatchRow", () => {
     expect(cells[4]).toBe("bobBOB#21500.0 -16.0");
     const colored = Array.from(container.querySelectorAll("span")).filter((s) => /^[+-]/.test(s.textContent ?? ""));
     expect(colored.map((s) => s.style.color)).toEqual([hexToRgb(RATING_UP_COLOR), hexToRgb(RATING_DOWN_COLOR)]);
+  });
+
+  it("puts each player's rank then before their name, and the names open their profiles", () => {
+    const ranks: MatchHistoryItem = {
+      ...rankedSet,
+      players: [
+        { ...rankedSet.players[0], rank: { tier: "diamond", division: 3 } },
+        { ...rankedSet.players[1], rank: null },
+      ],
+    };
+    const { container, getByAltText } = render(inTable(<MatchRow item={ranks} myUid="me" />));
+    const cells = Array.from(container.querySelectorAll("td"));
+    expect(getByAltText("Diamond 3")).toBeTruthy();
+    expect(cells[4].querySelector("img")?.alt).toBe("Diamond 3");
+    expect(cells[2].querySelector("img")).toBeNull();
+    expect(Array.from(container.querySelectorAll("button[title='View Profile']")).map((b) => b.textContent)).toEqual([
+      "ann",
+      "bob",
+    ]);
   });
 
   it("notes an abandoned set and shows no rating for a player it did not change", () => {

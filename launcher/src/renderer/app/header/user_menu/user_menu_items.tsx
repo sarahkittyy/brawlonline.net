@@ -3,6 +3,7 @@ import EditIcon from "@mui/icons-material/Edit";
 import EmailIcon from "@mui/icons-material/Email";
 import LanguageIcon from "@mui/icons-material/Language";
 import LogoutIcon from "@mui/icons-material/Logout";
+import PersonOutlineIcon from "@mui/icons-material/PersonOutline";
 import ListItemIcon from "@mui/material/ListItemIcon";
 import ListItemText from "@mui/material/ListItemText";
 import MenuItem from "@mui/material/MenuItem";
@@ -27,6 +28,7 @@ type UserMenuItemsProps = {
   isEmailVerified: boolean; // Whether the user has verified their email
   serverError: boolean;
   onActivateOnline: () => void;
+  onViewProfile: () => void;
   onEditDisplayName: () => void;
   onVerifyEmail: () => void;
   onLogout: () => void;
@@ -42,6 +44,7 @@ export const UserMenuItems = ({
   isEmailVerified,
   serverError,
   onActivateOnline,
+  onViewProfile,
   onEditDisplayName,
   onVerifyEmail,
   onLogout,
@@ -85,7 +88,13 @@ export const UserMenuItems = ({
 
       {isOnlineActivated && (
         <>
-          {/* Slippi's "View profile" and "Manage account" open slippi.gg pages; we have no website yet. */}
+          {/* The player's own public profile (docs/design/profiles.md), as others see it. */}
+          <MenuItem onClick={onViewProfile}>
+            <ListItemIcon>
+              <PersonOutlineIcon fontSize="small" />
+            </ListItemIcon>
+            <ListItemText primary={Messages.viewProfile()} />
+          </MenuItem>
           <MenuItem onClick={onEditDisplayName}>
             <ListItemIcon>
               <EditIcon fontSize="small" />

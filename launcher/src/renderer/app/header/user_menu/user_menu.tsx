@@ -8,6 +8,7 @@ import { ConfirmationModal } from "@/components/confirmation_modal/confirmation_
 import { useDolphinStore } from "@/lib/dolphin/use_dolphin_store";
 import { useAccount } from "@/lib/hooks/use_account";
 import { useAppStore } from "@/lib/hooks/use_app_store";
+import { useProfileView } from "@/lib/hooks/use_profile_view";
 import { useToasts } from "@/lib/hooks/use_toasts";
 import { useServices } from "@/services";
 import type { AuthUser } from "@/services/auth/types";
@@ -36,6 +37,7 @@ export const UserMenu = ({ user, handleError }: { user: AuthUser; handleError: (
   const setActiveAccountId = useAccount((store) => store.setActiveAccountId);
   const netplayOpened = useDolphinStore((store) => store.netplayOpened);
   const { showSuccess, showError } = useToasts();
+  const openProfile = useProfileView((store) => store.open);
 
   const [openLogoutPrompt, setOpenLogoutPrompt] = React.useState(false);
   const [openNameChangePrompt, setOpenNameChangePrompt] = React.useState(false);
@@ -207,6 +209,10 @@ export const UserMenu = ({ user, handleError }: { user: AuthUser; handleError: (
           onActivateOnline={() => {
             closeMenu();
             setOpenActivationDialog(true);
+          }}
+          onViewProfile={() => {
+            closeMenu();
+            openProfile({ uid: user.uid, displayName, connectCode: userData?.playKey?.connectCode });
           }}
           onEditDisplayName={() => {
             closeMenu();

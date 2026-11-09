@@ -3,6 +3,7 @@ import Tooltip from "@mui/material/Tooltip";
 import type { SocialPlayer } from "@social/types";
 import { clsx } from "clsx";
 
+import { UserName } from "@/components/user_name/user_name";
 import { inviteBlocked, useSocial, waitsForRoom } from "@/lib/social/use_social";
 import { useSocialActions } from "@/lib/social/use_social_actions";
 
@@ -50,10 +51,12 @@ export const InviteButton = ({ player, className }: { player: SocialPlayer; clas
   );
 };
 
-/** A display name with the connect code after it, lighter. */
-export const PlayerName = ({ player }: { player: SocialPlayer }) => (
-  <span className={styles.playerName}>
-    <span className={styles.displayName}>{player.displayName}</span>
-    {player.connectCode && <span className={styles.tag}>{player.connectCode}</span>}
-  </span>
+/** A display name with the connect code after it, lighter, in the chat's look; `profileLink`: the name opens the profile. */
+export const PlayerName = ({ player, profileLink = false }: { player: SocialPlayer; profileLink?: boolean }) => (
+  <UserName
+    user={player}
+    profileLink={profileLink}
+    className={styles.playerName}
+    classes={{ name: styles.displayName, code: styles.tag }}
+  />
 );

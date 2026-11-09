@@ -9,6 +9,7 @@ import type {
   MatchHistoryFilter,
   MatchHistoryPage,
   MyRulesets,
+  PlayerProfile,
   PublishRulesetRequest,
   RecentRuleset,
   RoomKind,
@@ -71,6 +72,8 @@ export const ipc_accountsPublicUser = makeEndpoint.main(
   <{ uid: string }>_,
   <R<AccountsPublicUser>>_,
 );
+
+export const ipc_accountsProfile = makeEndpoint.main("accounts_profile", <{ id: string }>_, <R<PlayerProfile>>_);
 
 export const ipc_accountsLeaderboard = makeEndpoint.main(
   "accounts_leaderboard",

@@ -1,0 +1,53 @@
+/* A player's name (user_name.tsx): [badge] name CODE. Sizes and colours come from where it is used;
+   these are the defaults. */
+.root {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.badge {
+  display: inline-flex;
+  flex-shrink: 0;
+  width: var(--rank-badge-inline-size, 20px);
+  height: var(--rank-badge-inline-size, 20px);
+}
+
+.text {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.code {
+  flex-shrink: 0;
+  color: var(--text-secondary);
+}
+
+/* The name as the way to the profile: plain text until hovered. */
+.link {
+  display: inline-flex;
+  min-width: 0;
+  padding: 0;
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.link:hover .name,
+.link:focus-visible .name {
+  text-decoration: underline;
+}

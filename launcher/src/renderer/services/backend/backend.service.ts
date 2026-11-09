@@ -5,6 +5,7 @@ import type {
   MatchHistoryFilter,
   MatchHistoryPage,
   MyRulesets,
+  PlayerProfile,
   PublishRulesetRequest,
   RecentRuleset,
   RoomKind,
@@ -34,6 +35,7 @@ import type { BackendService, RankedProfile, UserData } from "./types";
  * | userInitNetplay                | POST /v1/me/netplay               |
  * | (none: slippi.gg's site)       | GET /v1/ranked/leaderboard        |
  * | (none: slippi.gg's site)       | GET /v1/me/matches                |
+ * | (none: slippi.gg's site)       | GET /v1/profiles/{id}             |
  * | (none: ours)                   | GET /v1/rooms                     |
  * | (none: ours)                   | /v1/rulesets, /v1/me/ruleset*     |
  * | getLatestDolphin.version       | `latestVersion` in /v1/me         |
@@ -119,6 +121,10 @@ class AccountsBackendClient implements BackendService {
 
   async fetchRankedNetplayProfile(userId: string): Promise<RankedProfile | undefined> {
     return mapRankedProfile(await this._api.publicUser(userId));
+  }
+
+  async fetchProfile(id: string): Promise<PlayerProfile> {
+    return await this._api.profile(id);
   }
 
   async fetchLeaderboard(after?: string, search?: string): Promise<LeaderboardPage> {

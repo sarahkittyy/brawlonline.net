@@ -14,6 +14,7 @@ export const SocialMessages = {
   inviteToDirect: () => "Invite to a Direct 1v1",
   roomFull: () => "Your room has no open slot.",
   message: () => "Message",
+  viewProfile: () => "View Profile",
   ignoreUser: () => "Ignore user",
   unignoreUser: () => "Unignore user",
   ignored: () => "Ignored",

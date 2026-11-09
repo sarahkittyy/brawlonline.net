@@ -1,6 +1,6 @@
+import HistoryIcon from "@mui/icons-material/History";
 import HomeOutlinedIcon from "@mui/icons-material/HomeOutlined";
 import LeaderboardOutlinedIcon from "@mui/icons-material/LeaderboardOutlined";
-import PersonOutlineIcon from "@mui/icons-material/PersonOutline";
 import RuleOutlinedIcon from "@mui/icons-material/RuleOutlined";
 import SlowMotionVideoIcon from "@mui/icons-material/SlowMotionVideo";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -14,8 +14,8 @@ import { usePageNavigationShortcuts } from "@/lib/hooks/use_shortcuts";
 import { useBrawlLinks } from "@/lib/rulesets/use_brawl_links";
 import { HomePage } from "@/pages/home/home_page";
 import { LeaderboardPage } from "@/pages/leaderboard/leaderboard_page";
+import { MatchHistoryPage } from "@/pages/match_history/match_history_page";
 import { NotFoundPage } from "@/pages/not_found/not_found_page";
-import { ProfilePage } from "@/pages/profile/profile_page";
 import { createQuickStartPage } from "@/pages/quick_start/create";
 import { useQuickStartStore } from "@/pages/quick_start/use_quick_start";
 import { createReplaysPage } from "@/pages/replays/create";
@@ -63,10 +63,11 @@ export function createApp({ services }: { services: Services }): {
       Icon: RuleOutlinedIcon,
     },
     {
-      subpath: "profile",
-      title: () => Messages.profile(),
-      Component: ProfilePage,
-      Icon: PersonOutlineIcon,
+      // The player's own name, rank and rating are on their profile (the user menu's View Profile).
+      subpath: "matches",
+      title: () => Messages.matchHistory(),
+      Component: MatchHistoryPage,
+      Icon: HistoryIcon,
       private: true,
     },
   ];

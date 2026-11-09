@@ -3,6 +3,7 @@ import type {
   MatchHistoryFilter,
   MatchHistoryPage,
   MyRulesets,
+  PlayerProfile,
   PublishRulesetRequest,
   Rank,
   RecentRuleset,
@@ -23,6 +24,7 @@ export type {
   MatchHistoryPage,
   MatchHistoryPlayer,
   MyRulesets,
+  PlayerProfile,
   PublicModRoom,
   PublicRoom,
   PublishRulesetRequest,
@@ -69,6 +71,8 @@ export interface BackendService {
   validateUserId(userId: string): Promise<{ displayName: string; connectCode: string }>;
   fetchUserData(): Promise<UserData | undefined>;
   fetchRankedNetplayProfile(userId: string): Promise<RankedProfile | undefined>;
+  /** A player's public profile (docs/design/profiles.md) by uid or connect code; anyone's, no login needed. */
+  fetchProfile(id: string): Promise<PlayerProfile>;
   /**
    * One leaderboard page; `after` is the previous page's `next`. With `search`, only the players whose
    * name or connect code contains it.

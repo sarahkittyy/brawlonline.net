@@ -12,6 +12,7 @@ import type {
   MatchHistoryItem,
   MatchHistoryPage,
   MyRulesets,
+  PlayerProfile,
   PublishRulesetRequest,
   Rank,
   RankedProfile,
@@ -188,6 +189,50 @@ const mockLeaderboard: LeaderboardEntry[] = Array.from({ length: 137 }, (_, i): 
   .filter((e) => !(mockPlacing && e.uid === fakeUserId))
   .map((e, i) => ({ ...e, position: i + 1 }));
 
+/** A profile for anyone on the mock leaderboard (by uid or code), the mock user included. */
+export function mockProfile(id: string): PlayerProfile {
+  const code = id.toUpperCase().replace("-", "#");
+  const e = mockLeaderboard.find((p) => p.uid === id || p.connectCode === code);
+  if (id === fakeUserId || (!e && mockPlacing)) {
+    const p = mockRankedProfile;
+    return {
+      uid: fakeUserId,
+      displayName: "Demo user 0",
+      connectCode: "DEMO#0",
+      link: "https://brawlonline.net/profile/demo-0",
+      ranked: {
+        rank: p.rank ?? null,
+        rating: p.setsToPlace ? null : p.rating,
+        setsPlayed: p.setsPlayed,
+        setsToPlace: p.setsToPlace ?? 0,
+        wins: p.wins ?? 0,
+        losses: p.losses ?? 0,
+        position: p.position ?? null,
+        rankedPlayers: p.rankedPlayers ?? 0,
+      },
+    };
+  }
+  if (!e) {
+    throw new Error("Not found");
+  }
+  return {
+    uid: e.uid,
+    displayName: e.displayName,
+    connectCode: e.connectCode,
+    link: `https://brawlonline.net/profile/${e.connectCode.replace("#", "-").toLowerCase()}`,
+    ranked: {
+      rank: e.rank ?? null,
+      rating: e.rating,
+      setsPlayed: e.setsPlayed,
+      setsToPlace: 0,
+      wins: e.wins,
+      losses: e.losses,
+      position: e.position,
+      rankedPlayers: mockLeaderboard.length,
+    },
+  };
+}
+
 function mockMatchHistory(): MatchHistoryItem[] {
   const opponents = mockLeaderboard.filter((e) => e.uid !== fakeUserId);
   const modes: MatchHistoryItem["mode"][] = ["ranked", "unranked", "room", "ranked", "direct", "room", "ranked"];
@@ -197,15 +242,20 @@ function mockMatchHistory(): MatchHistoryItem[] {
     const opp = opponents[(i * 7) % opponents.length];
     const mode = modes[i % modes.length];
     const won = i % 3 !== 1;
-    const me = { uid: fakeUserId, displayName: "Demo user 0", connectCode: "DEMO#0" };
-    const them = { uid: opp.uid, displayName: opp.displayName, connectCode: opp.connectCode };
+    const me = {
+      uid: fakeUserId,
+      displayName: "Demo user 0",
+      connectCode: "DEMO#0",
+      rank: mockPlacing ? null : mockRankedProfile.rank,
+    };
+    const them = { uid: opp.uid, displayName: opp.displayName, connectCode: opp.connectCode, rank: opp.rank };
     const createdAt = new Date(start - i * 47 * 60 * 1000).toISOString();
     if (i === 2) {
       // A 2v2 match: four players, each with the games their team won (the teams change every game).
       const more = opponents
         .filter((o) => o.uid !== opp.uid)
         .slice(0, 2)
-        .map((o) => ({ uid: o.uid, displayName: o.displayName, connectCode: o.connectCode }));
+        .map((o) => ({ uid: o.uid, displayName: o.displayName, connectCode: o.connectCode, rank: o.rank }));
       const none = { ratingBefore: null, ratingAfter: null, ratingChange: null };
       return {
         matchId: `mode.twos-mock-${i}`,
@@ -223,7 +273,7 @@ function mockMatchHistory(): MatchHistoryItem[] {
       const more = opponents
         .filter((o) => o.uid !== opp.uid)
         .slice(i % 5, (i % 5) + 2)
-        .map((o) => ({ uid: o.uid, displayName: o.displayName, connectCode: o.connectCode }));
+        .map((o) => ({ uid: o.uid, displayName: o.displayName, connectCode: o.connectCode, rank: o.rank }));
       return mockRoomGame(i, createdAt, [me, them, ...more]);
     }
     if (mode !== "ranked") {
@@ -282,7 +332,7 @@ function mockMatchHistory(): MatchHistoryItem[] {
 function mockRoomGame(
   i: number,
   createdAt: string,
-  people: { uid: string; displayName: string; connectCode: string }[],
+  people: { uid: string; displayName: string; connectCode: string; rank?: Rank | null }[],
 ): MatchHistoryItem {
   const none = { ratingBefore: null, ratingAfter: null, ratingChange: null };
   const kind = (["ffa", "teams", "1v1"] as const)[i % 3];
@@ -404,6 +454,11 @@ class MockBackendClient implements BackendService {
   @delayAndMaybeError(SHOULD_ERROR)
   async fetchRankedNetplayProfile(_userId: string): Promise<RankedProfile | undefined> {
     return Promise.resolve(mockRankedProfile);
+  }
+
+  @delayAndMaybeError(SHOULD_ERROR)
+  async fetchProfile(id: string): Promise<PlayerProfile> {
+    return mockProfile(id);
   }
 
   @delayAndMaybeError(SHOULD_ERROR)

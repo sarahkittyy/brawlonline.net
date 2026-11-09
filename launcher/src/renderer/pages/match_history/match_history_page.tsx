@@ -10,12 +10,12 @@ import Tooltip from "@mui/material/Tooltip";
 import Typography from "@mui/material/Typography";
 import type { GameEnding, MatchReplay } from "@replays/types";
 import { useQuery } from "@tanstack/react-query";
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { InfiniteScrollContainer } from "@/components/infinite_scroll_container/infinite_scroll_container";
 import { PagedListStatus } from "@/components/paged_list_status/paged_list_status";
-import { useAccount } from "@/lib/hooks/use_account";
+import { UserName } from "@/components/user_name/user_name";
 import { useCursorPages } from "@/lib/hooks/use_cursor_pages";
 import { useReplayFilter } from "@/lib/hooks/use_replay_filter";
 import { useReplayHighlight } from "@/lib/hooks/use_replay_highlight";
@@ -24,9 +24,6 @@ import { useSettings } from "@/lib/hooks/use_settings";
 import {
   formatMatchScore,
   formatPlace,
-  formatPosition,
-  formatProfileRating,
-  formatProfileRecord,
   formatRating,
   formatRatingChange,
   HIDDEN_RATING,
@@ -43,78 +40,19 @@ import { useServices } from "@/services";
 import type { AuthUser } from "@/services/auth/types";
 import type { MatchHistoryFilter, MatchHistoryItem, MatchHistoryPlayer } from "@/services/backend/types";
 
-import { ProfilePageMessages as Messages } from "./profile_page.messages";
+import { MatchHistoryPageMessages as Messages } from "./match_history_page.messages";
 
 /**
- * The logged-in player's ranked standing and match history. Slippi shows these on slippi.gg;
- * here they are a plain page in the launcher's style.
+ * The logged-in player's matches (docs/design/replays.md §9.2 for the replays column). Their own name,
+ * rank and rating are on their profile (the user menu's View Profile, docs/design/profiles.md).
  */
-export const ProfilePage = React.memo(function ProfilePage({ user }: { user: AuthUser }) {
+export const MatchHistoryPage = React.memo(function MatchHistoryPage({ user }: { user: AuthUser }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", flex: 1, minWidth: 0, padding: "20px 20px 0" }}>
-      <RankedSummary uid={user.uid} />
       <MatchHistory uid={user.uid} />
     </div>
   );
 });
-
-const RankedSummary = ({ uid }: { uid: string }) => {
-  const { backendService } = useServices();
-  const stored = useAccount((s) => s.userData?.rankedNetplayProfile);
-  const playKey = useAccount((s) => s.userData?.playKey);
-  const displayName = useAccount((s) => s.displayName);
-  // Fresh on every visit and window focus (the rating changes after each set); the stored one
-  // until it arrives.
-  const { data } = useQuery({
-    queryKey: ["rankedProfile", uid],
-    queryFn: () => backendService.fetchRankedNetplayProfile(uid),
-    refetchOnMount: "always",
-    refetchOnWindowFocus: "always",
-  });
-  const updateRanking = useAccount((s) => s.updateRanking);
-  useEffect(() => {
-    // Keep Home's "My Ranking" block in step.
-    if (data && useAccount.getState().user?.uid === uid) {
-      updateRanking(data);
-    }
-  }, [data, uid, updateRanking]);
-  const profile = data ?? stored;
-  const position = formatPosition(profile?.position, profile?.rankedPlayers);
-  const record = profile && formatProfileRecord(profile);
-
-  return (
-    <div style={{ marginBottom: 16 }}>
-      <Typography variant="h5">
-        {displayName}
-        {playKey?.connectCode && (
-          <Typography component="span" color="text.secondary" sx={{ marginLeft: 1.5 }}>
-            {playKey.connectCode}
-          </Typography>
-        )}
-      </Typography>
-      {profile && (
-        <div style={{ display: "flex", alignItems: "baseline", gap: 16, marginTop: 8 }}>
-          <span style={{ color: "var(--text-secondary)" }}>{Messages.rating()}</span>
-          <span
-            data-testid="profile-rating"
-            style={{ color: "var(--accent-primary)", fontWeight: "bold", fontSize: 24 }}
-          >
-            {formatProfileRating(profile)}
-          </span>
-          <span style={{ color: "var(--text-secondary)" }}>{Messages.setsPlayed(profile.setsPlayed)}</span>
-          {record && (
-            <span data-testid="profile-record" style={{ color: "var(--text-secondary)" }}>
-              {record}
-            </span>
-          )}
-          <span style={{ color: "var(--text-secondary)" }}>
-            {position ?? (profile.setsToPlace ? Messages.notPlacedYet(profile.setsToPlace) : Messages.notRankedYet())}
-          </span>
-        </div>
-      )}
-    </div>
-  );
-};
 
 const MatchHistory = ({ uid }: { uid: string }) => {
   const { backendService } = useServices();
@@ -353,10 +291,11 @@ const PlayerCell = ({
           }}
         />
       )}
-      <span>{playerName(player)}</span>
-      {player.connectCode && (
-        <span style={{ marginLeft: 8, color: "var(--text-secondary)" }}>{player.connectCode}</span>
-      )}
+      <UserName
+        user={{ ...player, displayName: playerName(player) }}
+        showBadge={true}
+        profileLink={player.displayName !== ""}
+      />
       {showPlace && player.place != null && (
         <span style={{ marginLeft: 8, fontWeight: "bold" }}>{formatPlace(player.place)}</span>
       )}

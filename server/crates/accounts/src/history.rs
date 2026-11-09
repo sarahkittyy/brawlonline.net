@@ -222,6 +222,10 @@ pub struct MatchPlayer {
     /// The set changed this player's rating, but they are still placing, so it is not shown
     /// (the launcher shows `????`).
     pub rating_hidden: bool,
+    /// The player's rank when the match was made (their last rating change before it; the
+    /// one going into a ranked set), for the badge beside the name; null while they were
+    /// placing or had not played Ranked.
+    pub rank: Option<crate::ranked::RankView>,
     /// A room's game: the player's slot (1-4, the in-game port); null for the other modes.
     pub port: Option<u8>,
     /// A room's team battle: 0 red, 1 blue, 2 green.
@@ -383,6 +387,27 @@ pub async fn matches(
             .bind(&ids)
             .fetch_all(&mut *tx)
             .await?;
+    // Each player's rank as the match was made: their last rating change before it.
+    let (mut seat_matches, mut seat_uids, mut seat_times) = (vec![], vec![], vec![]);
+    for r in &rows {
+        for p in &r.players {
+            seat_matches.push(r.match_id.clone());
+            seat_uids.push(*p);
+            seat_times.push(r.created_at);
+        }
+    }
+    let ranks: Vec<(String, Uuid, Option<i16>)> = sqlx::query_as(
+        "SELECT s.match_id, s.uid, e.rank_after
+           FROM unnest($1::text[], $2::uuid[], $3::timestamptz[]) AS s (match_id, uid, at)
+           JOIN LATERAL (SELECT rank_after FROM rating_events
+                          WHERE uid = s.uid AND created_at < s.at
+                          ORDER BY created_at DESC LIMIT 1) e ON true",
+    )
+    .bind(&seat_matches)
+    .bind(&seat_uids)
+    .bind(&seat_times)
+    .fetch_all(&mut *tx)
+    .await?;
     let mut uids: Vec<Uuid> = rows.iter().flat_map(|r| r.players.iter().copied()).collect();
     uids.sort();
     uids.dedup();
@@ -408,6 +433,7 @@ pub async fn matches(
     for (id, winner_team, players) in twos_games {
         twos_by_match.entry(id).or_default().push((winner_team, players));
     }
+    let ranks: HashMap<(String, Uuid), Option<i16>> = ranks.into_iter().map(|(m, u, r)| ((m, u), r)).collect();
     let events: HashMap<(String, Uuid), (f64, f64)> =
         events.into_iter().map(|(id, u, before, after)| ((id, u), (before, after))).collect();
     let users: HashMap<Uuid, (String, Option<String>, bool)> =
@@ -459,6 +485,9 @@ pub async fn matches(
                         rating_after: event.map(|e| e.1),
                         rating_change: event.map(|(before, after)| after - before),
                         rating_hidden: rated.is_some() && !placed,
+                        rank: crate::profile::rank_view_of_index(
+                            ranks.get(&(r.match_id.clone(), *p)).copied().flatten(),
+                        ),
                         port: nth(&r.ports, i),
                         team: nth(&r.teams, i),
                         place: last.and_then(|g| g.get(p).copied()),
