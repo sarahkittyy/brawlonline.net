@@ -233,8 +233,8 @@ Session auth (`Authorization: Bearer <sessionToken>`; 401 without it, since the 
 }
 ```
 
-- `queues` (2026-10-12): the Unranked and Ranked tickets waiting in mm, for the "X in queue" under Home's Play unranked / Play ranked. Absent from an older mm (accounts then sends zeros).
-- `playing` (2026-10-12): the players in an Unranked and a Ranked match, the "X in game" beside "X in queue". mm counts the members of the matches' chat groups (`docs/chat-protocol.md` §2) that still have two or more: a player is in from the pairing until their game leaves the online CSS (between games and runbacks too), searches again or closes, and a player whose opponent left is out. Absent from an older mm (zeros).
+- `queues` (2026-10-12): the Unranked and Ranked tickets waiting in mm, for the "X in queue" under Home's Play unranked / Play ranked (not shown since 2026-11-09: an empty queue put players off searching). Absent from an older mm (accounts then sends zeros).
+- `playing` (2026-10-12): the players in an Unranked and a Ranked match, the "X in game" beside "X in queue" (not shown since 2026-11-09). mm counts the members of the matches' chat groups (`docs/chat-protocol.md` §2) that still have two or more: a player is in from the pairing until their game leaves the online CSS (between games and runbacks too), searches again or closes, and a player whose opponent left is out. Absent from an older mm (zeros).
 - `online`: **players whose game is running and logged in**: distinct accounts with an online connection (`hello`). Launchers left open without the game do not count; neither do games that are not logged in.
 - Each room also has `ruleset` (`room-state`'s: `code`, `name`, `version`, `by`, `basedOn`, `bestOf`, `stageChoice`, `stages`), so the list can show what it plays.
 - `name` (2026-10-27, `docs/design/rooms.md` §1.4): the name the room's host gave it, absent when none (the launcher shows "alice's room"). Brawl Mods rooms (`modRooms`, and `GET /v1/mod-rooms/{code}`) have it too.

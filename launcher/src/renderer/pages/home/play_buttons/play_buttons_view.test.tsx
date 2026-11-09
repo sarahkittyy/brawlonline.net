@@ -6,36 +6,21 @@ import { PlayButtonsView } from "./play_buttons_view";
 describe("PlayButtonsView", () => {
   afterEach(cleanup);
 
-  it("shows each queue's count and the players in its matches under its button and plays that queue", () => {
+  it("plays the clicked queue and shows no player counts", () => {
     const onPlay = vi.fn();
-    const { getByTestId } = render(
-      <PlayButtonsView queues={{ unranked: 6, ranked: 1 }} playing={{ unranked: 14, ranked: 0 }} onPlay={onPlay} />,
-    );
-    expect(getByTestId("play-unranked-count").textContent).toBe("6 in queue · 14 in game");
-    expect(getByTestId("play-ranked-count").textContent).toBe("1 in queue · 0 in game");
+    const { container, getByTestId } = render(<PlayButtonsView onPlay={onPlay} />);
     fireEvent.click(getByTestId("play-ranked"));
     fireEvent.click(getByTestId("play-unranked"));
-    expect(onPlay.mock.calls).toEqual([["ranked"], ["unranked"]]);
-  });
-
-  it("shows only the queues when the server does not send the players in game", () => {
-    const { getByTestId } = render(<PlayButtonsView queues={{ unranked: 6, ranked: 1 }} onPlay={vi.fn()} />);
-    expect(getByTestId("play-unranked-count").textContent).toBe("6 in queue");
-    expect(getByTestId("play-ranked-count").textContent).toBe("1 in queue");
-  });
-
-  it("hides the counts while they are unknown", () => {
-    const { getByTestId } = render(<PlayButtonsView onPlay={vi.fn()} />);
-    expect(getByTestId("play-unranked-count").style.visibility).toBe("hidden");
-    expect(getByTestId("play-ranked-count").style.visibility).toBe("hidden");
+    fireEvent.click(getByTestId("play-twos"));
+    expect(onPlay.mock.calls).toEqual([["ranked"], ["unranked"], ["twos"]]);
+    expect(container.textContent).toBe("Play unrankedPlay rankedPlay 2v2");
   });
 
   it("waits while a Play is handed to the game", () => {
     const onPlay = vi.fn();
-    const { getByTestId } = render(
-      <PlayButtonsView queues={{ unranked: 0, ranked: 0 }} starting="unranked" onPlay={onPlay} />,
-    );
+    const { getByTestId } = render(<PlayButtonsView starting="unranked" onPlay={onPlay} />);
     expect((getByTestId("play-unranked") as HTMLButtonElement).disabled).toBe(true);
     expect((getByTestId("play-ranked") as HTMLButtonElement).disabled).toBe(true);
+    expect((getByTestId("play-twos") as HTMLButtonElement).disabled).toBe(true);
   });
 });

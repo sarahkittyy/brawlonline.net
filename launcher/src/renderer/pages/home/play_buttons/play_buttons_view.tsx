@@ -12,27 +12,21 @@ import { PlayButtonsMessages as Messages } from "./play_buttons.messages";
 import styles from "./play_buttons.module.css";
 
 export type PlayButtonsViewProps = {
-  /** Players searching each queue; absent while unknown (logged out, the list not read yet). */
-  queues?: { unranked: number; ranked: number; twos?: number };
-  /** Players in a match of each queue; absent while unknown or from an older server (then not shown). */
-  playing?: { unranked: number; ranked: number; twos?: number };
   /** The queue being handed to the game (its button shows a spinner, both wait). */
   starting?: QueueTarget;
   onPlay: (queue: QueueTarget) => void;
 };
 
 /**
- * Home's Play unranked / Play ranked / Play 2v2, beside the Overview tab, each with its queue's count and the
- * players in its matches under it ("6 in queue · 14 in game").
+ * Home's Play unranked / Play ranked / Play 2v2, beside the Overview tab. No player counts (until 2026-11-09
+ * "6 in queue · 14 in game" under each): an empty queue put players off searching, which kept it empty.
  */
-export const PlayButtonsView = ({ queues, playing, starting, onPlay }: PlayButtonsViewProps) => (
+export const PlayButtonsView = ({ starting, onPlay }: PlayButtonsViewProps) => (
   <div className={styles.buttons}>
     <PlayButton
       label={Messages.playUnranked()}
       tooltip={Messages.playUnrankedTooltip()}
       icon={<PlayArrowRoundedIcon />}
-      count={queues?.unranked}
-      inGame={playing?.unranked}
       starting={starting === QUEUE_UNRANKED}
       disabled={starting != null}
       onClick={() => onPlay(QUEUE_UNRANKED)}
@@ -42,20 +36,15 @@ export const PlayButtonsView = ({ queues, playing, starting, onPlay }: PlayButto
       label={Messages.playRanked()}
       tooltip={Messages.playRankedTooltip()}
       icon={<EmojiEventsRoundedIcon />}
-      count={queues?.ranked}
-      inGame={playing?.ranked}
       starting={starting === QUEUE_RANKED}
       disabled={starting != null}
       onClick={() => onPlay(QUEUE_RANKED)}
       testId="play-ranked"
     />
-    {/* (A server before 2v2 sends no twos count: 0 in queue, the in-game count not shown.) */}
     <PlayButton
       label={Messages.playTwos()}
       tooltip={Messages.playTwosTooltip()}
       icon={<GroupsRoundedIcon />}
-      count={queues ? queues.twos ?? 0 : undefined}
-      inGame={playing?.twos}
       starting={starting === QUEUE_TWOS}
       disabled={starting != null}
       onClick={() => onPlay(QUEUE_TWOS)}
@@ -68,8 +57,6 @@ const PlayButton = ({
   label,
   tooltip,
   icon,
-  count,
-  inGame,
   starting,
   disabled,
   onClick,
@@ -78,39 +65,31 @@ const PlayButton = ({
   label: string;
   tooltip: string;
   icon: React.ReactNode;
-  count?: number;
-  inGame?: number;
   starting: boolean;
   disabled: boolean;
   onClick: () => void;
   testId: string;
 }) => (
-  <div className={styles.play}>
-    <Tooltip title={tooltip} placement="bottom" enterDelay={400} disableInteractive={true}>
-      <span>
-        <Button
-          variant="contained"
-          color="secondary"
-          size="small"
-          disableElevation={true}
-          disabled={disabled}
-          startIcon={starting ? <CircularProgress color="inherit" size={14} /> : icon}
-          onClick={onClick}
-          data-testid={testId}
-          sx={{ textTransform: "none", fontWeight: 600, borderRadius: "8px", px: 1.5 }}
-        >
-          {label}
-        </Button>
-      </span>
-    </Tooltip>
-    {/* Kept in the layout while unknown, so the row does not move when the count comes in. */}
-    <span
-      className={styles.count}
-      data-testid={`${testId}-count`}
-      style={{ visibility: count == null ? "hidden" : undefined }}
-    >
-      {Messages.inQueue(count ?? 0)}
-      {count != null && inGame != null && ` · ${Messages.inGame(inGame)}`}
+  <Tooltip title={tooltip} placement="bottom" enterDelay={400} disableInteractive={true}>
+    <span>
+      <Button
+        variant="contained"
+        color="secondary"
+        size="small"
+        disableElevation={true}
+        disabled={disabled}
+        startIcon={starting ? <CircularProgress color="inherit" size={14} /> : icon}
+        onClick={onClick}
+        data-testid={testId}
+        sx={{
+          textTransform: "none",
+          fontWeight: 600,
+          borderRadius: "8px",
+          px: 1.5,
+        }}
+      >
+        {label}
+      </Button>
     </span>
-  </div>
+  </Tooltip>
 );
