@@ -561,6 +561,7 @@ struct State
     {
       Idle,         // nothing done yet
       Checking,     // its own card hashing, the manifest asked for
+      Matching,     // looking for the session's chunks at other places of its own card
       Asking,       // its player decides (the launcher's dialog)
       Downloading,  // the chunks it has not got coming in
       Ready,        // it has the whole card (or the session has none)
@@ -588,12 +589,19 @@ struct State
     Clock::time_point heard{};
     u64 heard_bytes = 0;
     Clock::time_point list_shown{};
+    // The session's card and file list, and what of it this card has at other places
+    // (SDCard::FindMovedChunks on `hash_thread`; `moved` under `own_mutex`).
+    std::shared_ptr<const SDCard::Manifest> list_manifest;
+    std::vector<SDCard::CardFile> list_files;
+    std::atomic<bool> match_finished{false};
+    std::atomic<u64> match_done{0}, match_total{0};
+    SDCard::MovedChunks moved;
     // The session's card, compared with this one.
     std::shared_ptr<SDCard::SessionCard> card;
     std::vector<u8> files_wire;
     u64 missing_bytes = 0;
     u32 missing_files = 0;
-    std::vector<std::string> names;  // the differing files, largest first (some)
+    std::vector<std::string> names;  // the differing files, the most changed first (some)
     double rate = 0;                 // bytes a second the link gave the manifest
     std::atomic<int> choice{static_cast<int>(SDSyncChoice::Ask)};
     bool chose = false;
@@ -1527,6 +1535,12 @@ void ResetSD()
   y.own.reset();
   y.own_manifest.reset();
   y.own_files_wire.clear();
+  y.list_manifest.reset();
+  y.list_files.clear();
+  y.match_finished = false;
+  y.match_done = 0;
+  y.match_total = 0;
+  y.moved.clear();
   y.card.reset();
   y.files_wire.clear();
   y.missing_bytes = 0;
@@ -5910,12 +5924,74 @@ bool SDSyncStep()
       AddLog(fmt::format("SD card: got the host's list ({:.1f} MB in {:.1f} s)",
                          packet.size() / 1048576.0, packet_ms / 1000.0));
     }
-    auto shared = std::make_shared<const SDCard::Manifest>(std::move(*manifest));
+    // The link's pace, from the list's own trip (at least 64 KB/s: a guess, not a promise).
+    y.rate = std::max(64.0 * 1024, packet.size() / std::max(packet_ms / 1000.0, 0.001));
+    // What of the session's card this one has at other places (bug report #265: a mod's card
+    // made again from its folder has every file elsewhere). About a read of the whole card the
+    // first time, so a thread of its own; then from the cache (the launcher's check before the
+    // join looked already).
+    y.list_manifest = std::make_shared<const SDCard::Manifest>(std::move(*manifest));
+    y.list_files = std::move(files);
+    if (y.hash_thread.joinable())
+      y.hash_thread.join();
+    y.match_finished = false;
+    y.tenths_shown = -1;
+    y.hash_thread = std::thread([path = s.sd_path, manifest = y.list_manifest] {
+      State::SDSync& t = s.sd_sync;
+      // `own` and the list stay as they are until this thread is joined.
+      const SDCard::ImageHashes* own = nullptr;
+      {
+        std::lock_guard lk(t.own_mutex);
+        own = t.own ? &*t.own : nullptr;
+      }
+      SDCard::MovedChunks moved;
+      if (own && own->size != 0)
+      {
+        moved = SDCard::FindMovedChunks(path, *own, *manifest, t.list_files, &t.hash_cancel,
+                                        [](u64 done, u64 total) {
+                                          s.sd_sync.match_done = done;
+                                          s.sd_sync.match_total = total;
+                                        });
+      }
+      {
+        std::lock_guard lk(t.own_mutex);
+        t.moved = std::move(moved);
+      }
+      t.match_finished = true;
+    });
+    y.step = Step::Matching;
+    return false;
+  }
+
+  if (y.step == Step::Matching)
+  {
+    const u64 total = y.match_total.load();
+    if (!y.match_finished && total > 0)
+    {
+      const int tenths = static_cast<int>(y.match_done.load() * 10 / total);
+      if (tenths > y.tenths_shown)
+      {
+        y.tenths_shown = tenths;
+        ShowNotice(fmt::format("Looking for the host's files on your SD card: {}%", tenths * 10));
+      }
+    }
+    if (!y.match_finished)
+      return false;
+    const std::vector<SDCard::CardFile>& files = y.list_files;
     {
       std::lock_guard lk(y.own_mutex);
       y.card = SDCard::SessionCard::CreateGuestCard(
-          s.sd_path, shared, File::GetUserPath(D_CACHE_IDX) + "MachineSD",
-          std::make_shared<SessionCardRemote>(), y.own ? &*y.own : nullptr);
+          s.sd_path, y.list_manifest, File::GetUserPath(D_CACHE_IDX) + "MachineSD",
+          std::make_shared<SessionCardRemote>(), y.own ? &*y.own : nullptr, &y.moved);
+      if (!y.moved.empty())
+      {
+        u64 bytes = 0;
+        for (const auto& [index, offset] : y.moved)
+          bytes += y.list_manifest->ChunkBytes(index);
+        AddLog(fmt::format("SD card: {:.1f} MB of the session's card are at other places of this "
+                           "player's",
+                           bytes / 1048576.0));
+      }
     }
     const std::vector<u32> missing = y.card->MissingChunks();
     y.missing_bytes = y.card->MissingBytes();
@@ -5924,8 +6000,6 @@ bool SDSyncStep()
     y.names.clear();
     for (size_t i = 0; i < touched.size() && i < 50; ++i)
       y.names.push_back(touched[i]->path);
-    // The link's pace, from the list's own trip (at least 64 KB/s: a guess, not a promise).
-    y.rate = std::max(64.0 * 1024, packet.size() / std::max(packet_ms / 1000.0, 0.001));
     {
       std::unique_ptr<SDCard::CardServer> old;
       {
@@ -8781,7 +8855,7 @@ picojson::value Status()
     if (y.step != Step::Idle)
     {
       picojson::object sd;
-      const char* step = y.step == Step::Checking    ? "checking" :
+      const char* step = y.step == Step::Checking || y.step == Step::Matching ? "checking" :
                          y.step == Step::Asking      ? "ask" :
                          y.step == Step::Downloading ? "downloading" :
                          y.step == Step::Ready       ? "ready" :

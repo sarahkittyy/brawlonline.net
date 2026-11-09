@@ -12,6 +12,7 @@
 #include <chrono>
 #include <cstring>
 #include <filesystem>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -1343,4 +1344,218 @@ TEST_F(MachineSDCardTest, ComparingWithAListingFindsWhatAGuestFetches)
   const CardDifference none = CompareWithManifest(*manifest, ImageHashes{});
   EXPECT_EQ(none.chunks.size(), 39u);
   EXPECT_EQ(none.bytes, 39 * CHUNK_SIZE);
+}
+
+// ------------------------------------------------------------- a card made again from its folder
+
+namespace
+{
+// A card SDCardCreate made (FAT32, 512-byte clusters), with files put in its root directory one
+// after another, as a card made from a folder has them.
+struct FolderCard
+{
+  std::vector<u8> bytes;
+  u32 fat_sectors = 0;
+  u64 data = 0;
+  u32 next_cluster = 3;
+  size_t dir_pos = 0;
+
+  static constexpr u64 FAT = 32 * 512;
+
+  void Open(const std::vector<u8>& created)
+  {
+    bytes = created;
+    std::memcpy(&fat_sectors, &bytes[0x24], 4);
+    data = (32 + 2 * u64{fat_sectors}) * 512;  // cluster 2, the root directory
+    dir_pos = data;
+  }
+
+  void SetFat(u32 cluster, u32 value)
+  {
+    std::memcpy(&bytes[FAT + cluster * 4], &value, 4);
+    std::memcpy(&bytes[FAT + u64{fat_sectors} * 512 + cluster * 4], &value, 4);
+  }
+
+  // Where the file starts in the image.
+  u64 Add(const char (&name11)[12], const std::vector<u8>& contents)
+  {
+    const u32 first = next_cluster;
+    const u32 clusters = static_cast<u32>((contents.size() + 511) / 512);
+    for (u32 i = 0; i < clusters; ++i)
+      SetFat(first + i, i + 1 < clusters ? first + i + 1 : 0x0FFFFFFF);
+    const u64 at = data + u64{first - 2} * 512;
+    std::memcpy(&bytes[at], contents.data(), contents.size());
+    const auto entry = ShortEntry(name11, 0x20, first, static_cast<u32>(contents.size()));
+    std::memcpy(&bytes[dir_pos], entry.data(), entry.size());
+    dir_pos += entry.size();
+    next_cluster += clusters;
+    return at;
+  }
+};
+
+std::vector<u8> FileContents(size_t size, u8 seed)
+{
+  std::vector<u8> out(size);
+  u32 x = 0x9E3779B9u * (seed + 1);
+  for (u8& b : out)
+  {
+    x ^= x << 13;
+    x ^= x >> 17;
+    x ^= x << 5;
+    b = static_cast<u8>(x);
+  }
+  return out;
+}
+}  // namespace
+
+TEST_F(MachineSDCardTest, ChunksElsewhereOnTheOwnCardAreNotFetched)
+{
+  // Bug report #265: a mod's creator changed a few files and made the card again from its folder
+  // (Dolphin's SD folder sync formats a new image of the folder's size), and everyone who had the
+  // last version downloaded the whole 5 GB card. Here the joiner's card is a bigger image (so its
+  // data area starts elsewhere), its files start one file later, and the host's card has one
+  // file changed and one new file: every chunk at its own place differs.
+  ASSERT_TRUE(Common::SDCardCreate(64, Path("host-new.raw")));
+  ASSERT_TRUE(Common::SDCardCreate(66, Path("guest-new.raw")));
+  FolderCard host, guest;
+  host.Open(ReadFile(Path("host-new.raw")));
+  guest.Open(ReadFile(Path("guest-new.raw")));
+  ASSERT_NE(host.data % CHUNK_SIZE, guest.data % CHUNK_SIZE) << "the data areas differ";
+
+  struct Entry
+  {
+    char name[12];
+    size_t size;
+  };
+  const Entry entries[] = {
+      {"FIGHTER0PAC", 3 * MiB + 1000}, {"FIGHTER1PAC", 700 * 1024}, {"SMALL0  BIN", 5000},
+      {"SMALL1  BIN", 20000},          {"MOTION  PAC", 2 * MiB},    {"STAGE   PAC", 900 * 1024},
+      {"SOUND   BRS", 1 * MiB + 77},   {"MENU    PAC", 150 * 1024},
+  };
+  guest.Add("README  TXT", FileContents(3000, 99));
+  std::map<std::string, std::pair<u64, size_t>> host_at;  // name -> (start, size)
+  for (u8 i = 0; i < std::size(entries); ++i)
+  {
+    const Entry& e = entries[i];
+    // The host's MOTION.PAC changed (same size), and it has a new file after SMALL1.BIN.
+    const bool changed = std::string(e.name) == "MOTION  PAC";
+    host_at[e.name] = {host.Add(e.name, FileContents(e.size, changed ? 200 : i)), e.size};
+    guest.Add(e.name, FileContents(e.size, i));
+    if (std::string(e.name) == "SMALL1  BIN")
+      host_at["NEW     PAC"] = {host.Add("NEW     PAC", FileContents(400 * 1024, 77)), 400 * 1024};
+  }
+  WriteFile(Path("host.raw"), host.bytes);
+  WriteFile(Path("guest.raw"), guest.bytes);
+
+  auto manifest = std::make_shared<const Manifest>(*BuildManifest(Path("host.raw")));
+  File::IOFile host_image(Path("host.raw"), "rb");
+  const auto files = ListCardFiles(host_image, host.bytes.size());
+  ASSERT_TRUE(files);
+  const auto own = HashImage(Path("guest.raw"));
+  ASSERT_TRUE(own);
+  const CardDifference before = CompareWithManifest(*manifest, *own);
+
+  const MovedChunks moved = FindMovedChunks(Path("guest.raw"), *own, *manifest, *files);
+  // Every chunk found is the host's chunk, at the place given on the joiner's card.
+  for (const auto& [index, offset] : moved)
+  {
+    const u64 len = manifest->ChunkBytes(index);
+    ASSERT_LE(offset + len, guest.bytes.size());
+    EXPECT_TRUE(std::equal(guest.bytes.begin() + offset, guest.bytes.begin() + offset + len,
+                           host.bytes.begin() + u64{index} * CHUNK_SIZE))
+        << index;
+  }
+  // Every chunk wholly inside a file the joiner has unchanged is found.
+  auto inside = [&](const std::string& name) {
+    std::vector<u32> chunks;
+    const auto [start, size] = host_at.at(name);
+    for (u64 c = (start + CHUNK_SIZE - 1) / CHUNK_SIZE; (c + 1) * CHUNK_SIZE <= start + size; ++c)
+      chunks.push_back(static_cast<u32>(c));
+    return chunks;
+  };
+  for (const char* name : {"FIGHTER0PAC", "FIGHTER1PAC", "STAGE   PAC", "SOUND   BRS"})
+  {
+    for (const u32 c : inside(name))
+      EXPECT_TRUE(moved.contains(c)) << name << " chunk " << c;
+  }
+  for (const char* name : {"MOTION  PAC", "NEW     PAC"})
+  {
+    for (const u32 c : inside(name))
+      EXPECT_FALSE(moved.contains(c)) << name << " chunk " << c;
+  }
+
+  // What is left to fetch: the changed and new files' chunks, and the directory's.
+  const CardDifference after = CompareWithManifest(*manifest, *own, &moved);
+  EXPECT_LT(after.bytes, before.bytes / 2);
+  const auto touched = FilesTouching(*files, after.chunks);
+  std::set<std::string> touched_names;
+  for (const CardFile* f : touched)
+    touched_names.insert(f->path);
+  EXPECT_TRUE(touched_names.contains("MOTION.PAC"));
+  EXPECT_TRUE(touched_names.contains("NEW.PAC"));
+  // A file between neighbours both cards have unchanged is found whole, its edges too (the
+  // others share a chunk with the root directory, whose entries differ, or with a new or
+  // changed file).
+  EXPECT_FALSE(touched_names.contains("SOUND.BRS"));
+
+  // The same answer again, from the cache.
+  EXPECT_EQ(FindMovedChunks(Path("guest.raw"), *own, *manifest, *files), moved);
+
+  // The session fetches only what is left, plays the host's card, serves the moved chunks to the
+  // other players, and "overwrite local card" makes this card the host's.
+  auto fake = std::make_shared<FakeHost>();
+  fake->data = host.bytes;
+  fake->manifest = manifest;
+  auto card = SessionCard::CreateGuestCard(Path("guest.raw"), manifest, Path("cache"), fake,
+                                           &*own, &moved);
+  fake->card = card;
+  EXPECT_EQ(card->MissingChunks(), after.chunks);
+  EXPECT_EQ(card->MissingBytes(), after.bytes);
+  card->StartSync();
+  ASSERT_TRUE(WaitForSync(*card).finished);
+  std::vector<u32> requested = fake->Requested();
+  std::ranges::sort(requested);
+  EXPECT_EQ(requested, after.chunks);
+  ASSERT_FALSE(moved.empty());
+  const u32 some = moved.begin()->first;
+  std::vector<u8> chunk(manifest->ChunkBytes(some));
+  ASSERT_TRUE(card->ReadForPeer(some, chunk));
+  EXPECT_TRUE(std::equal(chunk.begin(), chunk.end(), host.bytes.begin() + u64{some} * CHUNK_SIZE));
+  EXPECT_EQ(ReadAll(*card), host.bytes);
+  std::string error;
+  ASSERT_TRUE(card->WriteFetchedToImage(*own, &error)) << error;
+  card->Detach();
+  card.reset();
+  EXPECT_EQ(ReadFile(Path("guest.raw")), host.bytes);
+  EXPECT_EQ(ManifestRoot(*BuildManifest(Path("guest.raw"))), ManifestRoot(*manifest));
+}
+
+TEST_F(MachineSDCardTest, AnotherCardWithTheSameNamesFindsNothing)
+{
+  // The same file names and sizes with other contents (another mod's card): nothing matches, and
+  // the search gives up trying every place after a few files.
+  ASSERT_TRUE(Common::SDCardCreate(64, Path("host-new.raw")));
+  ASSERT_TRUE(Common::SDCardCreate(64, Path("guest-new.raw")));
+  FolderCard host, guest;
+  host.Open(ReadFile(Path("host-new.raw")));
+  guest.Open(ReadFile(Path("guest-new.raw")));
+  for (u8 i = 0; i < 40; ++i)
+  {
+    const std::string name = fmt::format("FILE{:02}  BIN", i);
+    char name11[12];
+    std::memcpy(name11, name.c_str(), 12);
+    host.Add(name11, FileContents(300 * 1024, i));
+    guest.Add(name11, FileContents(300 * 1024, static_cast<u8>(i + 100)));
+  }
+  WriteFile(Path("host.raw"), host.bytes);
+  WriteFile(Path("guest.raw"), guest.bytes);
+  auto manifest = *BuildManifest(Path("host.raw"));
+  File::IOFile host_image(Path("host.raw"), "rb");
+  const auto files = ListCardFiles(host_image, host.bytes.size());
+  ASSERT_TRUE(files);
+  const auto own = HashImage(Path("guest.raw"));
+  ASSERT_TRUE(own);
+  EXPECT_TRUE(FindMovedChunks(Path("guest.raw"), *own, manifest, *files).empty());
+  // No card file list (an older host's listing): nothing to go by.
+  EXPECT_TRUE(FindMovedChunks(Path("guest.raw"), *own, manifest, {}).empty());
 }

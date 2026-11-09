@@ -162,7 +162,7 @@ export type ModSdSync = {
   step: "checking" | "ask" | "downloading" | "ready" | "failed";
   /** The share of the player's own card checked (0-1). */
   checked: number;
-  /** What differs from the host's card: bytes and files, and some of those files, largest first. */
+  /** What differs from the host's card: bytes and files, and some of those files, the most changed first. */
   bytes: number;
   files: number;
   names: string[];

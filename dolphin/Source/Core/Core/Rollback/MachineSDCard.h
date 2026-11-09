@@ -122,7 +122,8 @@ std::optional<std::vector<CardFile>> ReadFileList(sf::Packet& packet, u32 chunk_
 std::vector<u8> EncodeFileList(const std::vector<CardFile>& files);
 std::optional<std::vector<CardFile>> DecodeFileList(std::span<const u8> bytes, u32 chunk_count);
 
-// The files that hold any of `chunks` (sorted, ascending), largest first.
+// The files that hold any of `chunks` (sorted, ascending): those in the most of them first, then
+// the largest.
 std::vector<const CardFile*> FilesTouching(const std::vector<CardFile>& files,
                                            std::span<const u32> chunks);
 
@@ -180,14 +181,33 @@ struct CardListing
 std::vector<u8> EncodeCardListing(const Manifest& manifest, const std::vector<CardFile>& files);
 std::optional<CardListing> DecodeCardListing(std::span<const u8> bytes);
 
+// Chunks of the session's card that a joiner's own card holds at another place: the chunk's index
+// on the session's card -> the byte offset of the same bytes in the joiner's image.
+using MovedChunks = std::map<u32, u64>;
+
+// Where the joiner's card (`image_path`, its hashes `own`) has the session's chunks that differ at
+// their own place (bug report #265: a mod's card made again from its folder, as Dolphin's SD
+// folder sync does, puts every file at another place, so a few changed files differed by the
+// whole 5 GB card). The session's file list says which of its files each chunk holds, and about
+// where; this card's FAT says where the same files are on it. Each candidate is checked against
+// the chunk's hash, so a match is the session's bytes whatever led to it. Kept in a cache in the
+// User folder by the image's size and modification time and the session card's root. Empty when
+// there is nothing to find (or `cancel`).
+MovedChunks FindMovedChunks(const std::string& image_path, const ImageHashes& own,
+                            const Manifest& manifest, const std::vector<CardFile>& files,
+                            const std::atomic<bool>* cancel = nullptr,
+                            const HashProgress& progress = {});
+
 // What a joiner whose own card has `own` would fetch of the session's card `manifest`
-// (SessionCard::CreateGuestCard's rule): the chunks, ascending, and their bytes.
+// (SessionCard::CreateGuestCard's rule): the chunks, ascending, and their bytes. Chunks in
+// `moved` are not fetched.
 struct CardDifference
 {
   u64 bytes = 0;
   std::vector<u32> chunks;
 };
-CardDifference CompareWithManifest(const Manifest& manifest, const ImageHashes& own);
+CardDifference CompareWithManifest(const Manifest& manifest, const ImageHashes& own,
+                                   const MovedChunks* moved = nullptr);
 
 // A chunk request: the chunk indices, at most MAX_REQUEST_CHUNKS.
 void WriteChunkRequest(std::span<const u32> chunks, sf::Packet& packet);
@@ -281,12 +301,14 @@ public:
                                                      std::shared_ptr<const Manifest> manifest);
   // `image_path` is the joiner's own card (it may not exist). With `own` (its hashes, HashImage)
   // every chunk is known at once to match or not; without, a chunk the cache does not rule out is
-  // checked when first read. `cache_dir` holds the file of fetched chunks, deleted with the card.
+  // checked when first read. `moved` (FindMovedChunks, with `own`): chunks read from another
+  // place of this card. `cache_dir` holds the file of fetched chunks, deleted with the card.
   static std::shared_ptr<SessionCard> CreateGuestCard(const std::string& image_path,
                                                       std::shared_ptr<const Manifest> manifest,
                                                       const std::string& cache_dir,
                                                       std::shared_ptr<Remote> remote,
-                                                      const ImageHashes* own = nullptr);
+                                                      const ImageHashes* own = nullptr,
+                                                      const MovedChunks* moved = nullptr);
 
   ~SessionCard() override;
   SessionCard(const SessionCard&) = delete;
@@ -365,6 +387,7 @@ private:
   {
     Zero,
     Local,      // this card's chunk, checked against the manifest
+    Moved,      // the same bytes at another place of this card (m_moved), checked
     Unchecked,  // this card has the chunk: checked when first needed
     Fetched,
     Missing,
@@ -409,6 +432,7 @@ private:
   mutable std::mutex m_fetch_mutex;
   std::condition_variable m_fetch_cv;
   std::vector<Source> m_sources;
+  MovedChunks m_moved;                       // Moved chunk -> offset in this card's image
   std::map<u32, u64> m_fetched_offsets;      // chunk -> offset in m_fetched_file
   std::map<u32, u64> m_requested_at;         // chunk -> when it was last requested (ms)
   std::set<u32> m_unavailable;

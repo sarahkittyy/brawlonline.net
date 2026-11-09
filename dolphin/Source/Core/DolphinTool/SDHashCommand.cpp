@@ -143,7 +143,7 @@ int SDCompareCommand(const std::vector<std::string>& args)
       .type("int")
       .action("store")
       .set_default(50)
-      .help("How many of the differing files to name, largest first (default 50)");
+      .help("How many of the differing files to name, the most changed first (default 50)");
   AddProgressOption(parser);
 
   const optparse::Values& options = parser.parse_args(args);
@@ -186,8 +186,15 @@ int SDCompareCommand(const std::vector<std::string>& args)
       own = std::move(*hashes);
     }
   }
+  // What this card has at other places (a card made again from its folder), as the session finds
+  // it: from the same cache when the card has not changed since.
+  const Machine::SDCard::MovedChunks moved =
+      options.is_set("input") ?
+          Machine::SDCard::FindMovedChunks(options["input"], own, listing->manifest,
+                                           listing->files) :
+          Machine::SDCard::MovedChunks{};
   const Machine::SDCard::CardDifference diff =
-      Machine::SDCard::CompareWithManifest(listing->manifest, own);
+      Machine::SDCard::CompareWithManifest(listing->manifest, own, &moved);
   const std::vector<const Machine::SDCard::CardFile*> touched =
       Machine::SDCard::FilesTouching(listing->files, diff.chunks);
 
