@@ -29,6 +29,148 @@ var StartMenuShortcutCheckbox
 !macro customHeader
   ShowInstDetails show
   ShowUninstDetails show
+
+  !ifndef BUILD_UNINSTALLER
+    !insertmacro keepPlayerFilesFunctions
+  !endif
+!macroend
+
+; The player's own files in the install folder (a Brawl disc image, textures, a whole games folder
+; picked as the install folder). Every update, and an install over an existing one, runs the old
+; version's uninstaller, which deletes the install folder as a whole (electron-builder's
+; uninstaller.nsh: every entry moved into its temp folder, then RMDir /r $INSTDIR), so a player's
+; disc image put next to the launcher was gone after an update (Discord, 2026-11-09: "MY BRAWL ISO
+; DELETED WHILE THE LAUNCHER HAS UPDATED"). The installer moves every top-level entry the launcher
+; does not ship out of the old install folder into a folder next to it (the same drive, so even a
+; disc image moves at once) before it runs the old uninstaller, and moves them back once the new
+; version's files are in. This is the installer of the new version, so it keeps them on the update
+; that ships it, whatever version is installed. An entry it cannot move stays where it is (and is
+; deleted, as before); one it cannot move back (a launcher file of the same name) stays in the
+; folder next to it, which is then left in place.
+!define KEEP_DIR_SUFFIX ".kept-by-update"
+
+; Sets VAR to 1 if NAME, a top-level entry of the install folder, is one the launcher ships (Electron's
+; files, electron-builder's uninstaller), else 0. Any .dll, .pak, .bin or .dat counts as the launcher's,
+; so files a later Electron adds are not kept across updates.
+!macro isLauncherEntry NAME VAR
+  StrCpy ${VAR} 0
+  StrCpy $R9 "${NAME}" "" -4
+  ${If} "${NAME}" == "${APP_EXECUTABLE_FILENAME}"
+  ${OrIf} "${NAME}" == "${UNINSTALL_FILENAME}"
+  ${OrIf} "${NAME}" == "uninstallerIcon.ico"
+  ${OrIf} "${NAME}" == "locales"
+  ${OrIf} "${NAME}" == "resources"
+  ${OrIf} "${NAME}" == "LICENSE.electron.txt"
+  ${OrIf} "${NAME}" == "LICENSES.chromium.html"
+  ${OrIf} "${NAME}" == "vk_swiftshader_icd.json"
+  ${OrIf} $R9 == ".dll"
+  ${OrIf} $R9 == ".pak"
+  ${OrIf} $R9 == ".bin"
+  ${OrIf} $R9 == ".dat"
+    StrCpy ${VAR} 1
+  ${EndIf}
+!macroend
+
+!macro keepPlayerFilesFunctions
+  ; The install folder the old version's uninstaller deletes, and the folder next to it that holds
+  ; the player's files meanwhile; empty while nothing was moved.
+  Var KeepFrom
+  Var KeepDir
+
+  ; Moves the player's files out of the installed version's folder (see KEEP_DIR_SUFFIX). Does
+  ; nothing when no version is installed, or when it is installed at a drive's root.
+  Function keepPlayerFiles
+    Push $R0
+    Push $R1
+    Push $R2
+    Push $R3
+    Push $R9
+    StrCpy $KeepFrom ""
+    StrCpy $KeepDir ""
+    ReadRegStr $R0 SHELL_CONTEXT "${UNINSTALL_REGISTRY_KEY}" UninstallString
+    ${If} $R0 != ""
+      ReadRegStr $R0 SHELL_CONTEXT "${INSTALL_REGISTRY_KEY}" InstallLocation
+      ${If} $R0 == ""
+        StrCpy $R0 $INSTDIR
+      ${EndIf}
+      StrCpy $R1 $R0 1 -1
+      ${If} $R1 == "\"
+        StrCpy $R0 $R0 -1
+      ${EndIf}
+      StrCpy $R1 $R0 1 -1
+      ${If} $R1 != ":"
+      ${AndIf} $R0 != ""
+      ${AndIf} ${FileExists} "$R0\*.*"
+        StrCpy $KeepFrom $R0
+        StrCpy $KeepDir "$R0${KEEP_DIR_SUFFIX}"
+        FindFirst $R1 $R2 "$KeepFrom\*.*"
+        ${DoWhile} $R2 != ""
+          ${If} $R2 != "."
+          ${AndIf} $R2 != ".."
+            !insertmacro isLauncherEntry $R2 $R3
+            ${If} $R3 == 0
+              CreateDirectory "$KeepDir"
+              ClearErrors
+              Rename "$KeepFrom\$R2" "$KeepDir\$R2"
+              ${If} ${Errors}
+                DetailPrint `Could not move "$KeepFrom\$R2" out of the way of the update.`
+              ${Else}
+                DetailPrint `Keeping "$R2" (not a ${PRODUCT_NAME} file) in "$KeepDir" during the update.`
+              ${EndIf}
+            ${EndIf}
+          ${EndIf}
+          FindNext $R1 $R2
+        ${Loop}
+        FindClose $R1
+        ClearErrors
+      ${EndIf}
+    ${EndIf}
+    Pop $R9
+    Pop $R3
+    Pop $R2
+    Pop $R1
+    Pop $R0
+  FunctionEnd
+
+  ; Moves the files keepPlayerFiles moved back into the install folder (made again if the old
+  ; uninstaller removed it and nothing was installed there). Safe to call more than once.
+  Function restorePlayerFiles
+    ${If} $KeepDir != ""
+    ${AndIf} ${FileExists} "$KeepDir\*.*"
+      Push $R1
+      Push $R2
+      CreateDirectory "$KeepFrom"
+      FindFirst $R1 $R2 "$KeepDir\*.*"
+      ${DoWhile} $R2 != ""
+        ${If} $R2 != "."
+        ${AndIf} $R2 != ".."
+          ${If} ${FileExists} "$KeepFrom\$R2"
+            DetailPrint `"$R2" is a ${PRODUCT_NAME} file now: yours stays in "$KeepDir".`
+          ${Else}
+            ClearErrors
+            Rename "$KeepDir\$R2" "$KeepFrom\$R2"
+            ${If} ${Errors}
+              DetailPrint `Could not move "$R2" back: it is in "$KeepDir".`
+            ${EndIf}
+          ${EndIf}
+        ${EndIf}
+        FindNext $R1 $R2
+      ${Loop}
+      FindClose $R1
+      ClearErrors
+      ; Only when empty.
+      RMDir "$KeepDir"
+      ClearErrors
+      Pop $R2
+      Pop $R1
+    ${EndIf}
+  FunctionEnd
+
+  ; An install that failed after keepPlayerFiles (the old uninstaller removed the old version, then
+  ; the new files could not be written) still puts the player's files back.
+  Function .onInstFailed
+    Call restorePlayerFiles
+  FunctionEnd
 !macroend
 
 ; Force-closes this user's running launchers (from any folder) and gives their files a moment.
@@ -86,6 +228,12 @@ var StartMenuShortcutCheckbox
     ${EndIf}
   Pop $R2
   Pop $R1
+
+  ; The launcher is closed: the player's files can be moved out of the old version's way. (An
+  ; elevated installer, which skips this check, does it in customInit.)
+  !ifndef BUILD_UNINSTALLER
+    Call keepPlayerFiles
+  !endif
 !macroend
 
 !macro customInit
@@ -99,6 +247,14 @@ var StartMenuShortcutCheckbox
     ${IfNot} ${UAC_IsInnerInstance}
       Banner::show /set 76 "Updating ${PRODUCT_NAME}..." "It reopens when it is done."
     ${EndIf}
+  ${EndIf}
+
+  ; The elevated installer of a silent update (a per-machine install) skips customCheckAppRunning,
+  ; so it moves the player's files out of the old version's way here. Only silent: a wizard could
+  ; still be cancelled.
+  ${If} ${UAC_IsInnerInstance}
+  ${AndIf} ${Silent}
+    Call keepPlayerFiles
   ${EndIf}
 
   StrCpy $CreateDesktopShortcut 1
@@ -250,6 +406,9 @@ var StartMenuShortcutCheckbox
 !macroend
 
 !macro customInstall
+  ; The player's files moved out of the old version's way go back next to the new files.
+  Call restorePlayerFiles
+
   ; Check if we should also install the GC drivers
   ${If} $InstallType == INSTALL
     ; gc-driver-install.exe (libwdi, Zadig's engine) reinstalls WinUSB on the adapter, and a driver
@@ -326,6 +485,7 @@ var StartMenuShortcutCheckbox
     ${EndIf}
     MessageBox MB_OK|MB_ICONEXCLAMATION "$(uninstallFailed): $R0" /SD IDOK
     DetailPrint `Uninstall was not successful. Uninstaller error code: $R0.`
+    Call restorePlayerFiles
     SetErrorLevel 2
     Quit
   ${EndIf}
