@@ -176,9 +176,10 @@ constexpr auto SD_DELAY_WINDOW = std::chrono::milliseconds(500);
 // What a hello says this build speaks: 2 since the SD card is synced before the join and its
 // chunks are hashed with BLAKE2b (a build before says nothing: 1), 3 since a Brawl session's
 // checksums leave out the disc revision (BRAWL_DISC_REVISION), 4 since a machine image carries
-// what only drawing uses (image version 4). Players of different versions refuse each other's
-// joins.
-constexpr int PROTOCOL_VERSION = 4;
+// what only drawing uses (image version 4), 5 since the JITs no longer merge two time base reads
+// (Jit64::mfspr: the second read is a cycle later). Players of different versions refuse each
+// other's joins.
+constexpr int PROTOCOL_VERSION = 5;
 // The disc revision a Brawl disc leaves in RAM: the only bytes a Rev 1 and a Rev 2 disc leave
 // different (both booted to the same frame and diffed, docs/design/disc-images.md): the disc ID's
 // revision in low memory, in the DVD library's copy and in the game's, and the operand of

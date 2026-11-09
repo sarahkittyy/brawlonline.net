@@ -375,7 +375,12 @@ void Jit64::mfspr(UGeckoInstruction inst)
     ADD(64, rax, rdx);
     MOV(64, PPCSTATE_SPR(SPR_TL), rax);
 
-    if (CanMergeNextInstructions(1))
+    // A whole-machine session doesn't merge two reads: merged, the second takes the first's time,
+    // and whether they merge depends on where the block starts and ends (blocks start elsewhere
+    // after a rollback erased them or on a machine that joined later). Read alone, each takes its
+    // own instruction's time (above), whatever the blocks; merged, a tick between the two reads
+    // gave two machines' OSGetTime different times (GitHub #34).
+    if (!Machine::IsArmed() && CanMergeNextInstructions(1))
     {
       const UGeckoInstruction& next = js.op[1].inst;
       // Two calls of TU/TL next to each other are extremely common in typical usage, so merge them

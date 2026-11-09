@@ -442,7 +442,8 @@ void JitArm64::mfspr(UGeckoInstruction inst)
     STR(IndexType::Unsigned, Xresult, PPC_REG, PPCSTATE_OFF_SPR(SPR_TL));
     static_assert((PPCSTATE_OFF_SPR(SPR_TL) & 0x7) == 0);
 
-    if (CanMergeNextInstructions(1))
+    // A whole-machine session doesn't merge two reads (Jit64's mfspr says why).
+    if (!Machine::IsArmed() && CanMergeNextInstructions(1))
     {
       const UGeckoInstruction& next = js.op[1].inst;
       // Two calls of TU/TL next to each other are extremely common in typical usage, so merge them
