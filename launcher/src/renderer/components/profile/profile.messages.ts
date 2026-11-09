@@ -23,7 +23,6 @@ export const ProfileMessages = {
   editCountry: () => "Change country",
   none: () => "None",
   showNextToName: () => "Show next to name",
-  showNextToNameWhere: () => "Leaderboard, Online List, Rooms, and Chat",
   socials: () => "Socials",
   ok: () => "Ok",
   primaryHint: () => "Click to toggle. Double-click to select primary.",

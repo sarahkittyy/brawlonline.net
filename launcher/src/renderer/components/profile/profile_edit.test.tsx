@@ -157,6 +157,9 @@ describe("profile edit mode", () => {
     expect(country.previousElementSibling?.textContent).toBe("SARA#64");
     expect(view.getByTestId("stock-random").querySelector("text")?.textContent).toBe("?");
     fireEvent.click(view.getByTestId("profile-edit"));
+    // The check that leaves edit mode sits beside the X; the label has no second line.
+    expect(view.getByTestId("profile-edit").nextElementSibling?.getAttribute("aria-label")).toBe("Close");
+    expect(view.getByTestId("show-main").closest("label")?.textContent).toBe("Show next to name");
     fireEvent.click(view.getByTestId("show-main"));
     await waitFor(() => expect(updateProfile).toHaveBeenCalledWith({ showMain: false }));
     fireEvent.click(view.getByTestId("show-country"));

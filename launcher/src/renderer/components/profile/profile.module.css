@@ -42,6 +42,11 @@
   padding-right: 32px;
 }
 
+/* Edit mode: the check beside the X. */
+.editing .who {
+  padding-right: 60px;
+}
+
 /* The name and, on the player's own profile, the pencil (or check) right beside it. */
 .nameRow {
   display: flex;
@@ -475,10 +480,10 @@
   padding: 2px 8px;
 }
 
-/* Edit mode: "Show next to name", and where under it. */
+/* Edit mode: "Show next to name". */
 .showToggle {
   display: inline-flex;
-  align-items: flex-start;
+  align-items: center;
   gap: 6px;
   font-size: 12px;
   color: var(--text-secondary);
@@ -487,15 +492,9 @@
 }
 
 .showToggle input {
-  margin: 2px 0 0;
+  margin: 0;
   accent-color: var(--accent-primary);
   cursor: pointer;
-}
-
-.showWhere {
-  display: block;
-  font-size: 11px;
-  opacity: 0.75;
 }
 
 .about .showToggle {

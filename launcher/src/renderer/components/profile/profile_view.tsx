@@ -55,7 +55,7 @@ export const ProfileView = React.memo(function ProfileView({
   /** Copies a Discord username (it has no page to open). */
   onCopyText?: (text: string) => void;
   editing?: ProfileEditing | null;
-  /** The player's own profile: the pencil (edit mode) or check (done) beside the name. */
+  /** The player's own profile outside edit mode: the pencil beside the name (the check is the dialog's, by the X). */
   editToggle?: React.ReactNode;
 }) {
   const r = profile.ranked;
@@ -268,10 +268,7 @@ const ShowNextToName = ({
 }) => (
   <label className={styles.showToggle}>
     <input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} data-testid={testId} />
-    <span>
-      {Messages.showNextToName()}
-      <span className={styles.showWhere}>{Messages.showNextToNameWhere()}</span>
-    </span>
+    {Messages.showNextToName()}
   </label>
 );
 

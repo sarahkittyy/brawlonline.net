@@ -27,8 +27,8 @@ import { ProfileView } from "./profile_view";
 /**
  * View Profile (docs/design/profiles.md): anyone's public profile, over whatever page is open. Opened with
  * `useProfileView().open(...)`. Someone else's has Message and Ignore user when logged in with online play
- * set up (the chat's own actions). The player's own has a pencil beside the X: edit mode (name, mains, country,
- * social media), where every change is saved as it is made.
+ * set up (the chat's own actions). The player's own has a pencil beside the name: edit mode (name, mains, country,
+ * social media), where every change is saved as it is made; a check beside the X leaves it.
  */
 export const ProfileDialog = React.memo(function ProfileDialog() {
   const target = useProfileView((s) => s.target);
@@ -56,6 +56,20 @@ const ProfileDialogBody = ({ uid, seedName, onClose }: { uid: string; seedName?:
   return (
     <div className={styles.dialog}>
       <div className={styles.corner}>
+        {own && data && editMode && (
+          <Tooltip title={Messages.doneEditing()}>
+            <IconButton
+              size="small"
+              aria-label={Messages.doneEditing()}
+              aria-pressed={true}
+              className={styles.editOn}
+              onClick={() => setEditMode(false)}
+              data-testid="profile-edit"
+            >
+              <CheckIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
+        )}
         <IconButton size="small" aria-label={Messages.close()} onClick={onClose}>
           <CloseIcon fontSize="small" />
         </IconButton>
@@ -66,17 +80,16 @@ const ProfileDialogBody = ({ uid, seedName, onClose }: { uid: string; seedName?:
           actions={<ProfileActions profile={data} onDone={onClose} />}
           editing={own && editMode ? editing : null}
           editToggle={
-            own ? (
-              <Tooltip title={editMode ? Messages.doneEditing() : Messages.editProfile()}>
+            own && !editMode ? (
+              <Tooltip title={Messages.editProfile()}>
                 <IconButton
                   size="small"
-                  aria-label={editMode ? Messages.doneEditing() : Messages.editProfile()}
-                  aria-pressed={editMode}
-                  className={editMode ? styles.editOn : undefined}
-                  onClick={() => setEditMode((e) => !e)}
+                  aria-label={Messages.editProfile()}
+                  aria-pressed={false}
+                  onClick={() => setEditMode(true)}
                   data-testid="profile-edit"
                 >
-                  {editMode ? <CheckIcon fontSize="small" /> : <EditOutlinedIcon fontSize="small" />}
+                  <EditOutlinedIcon fontSize="small" />
                 </IconButton>
               </Tooltip>
             ) : undefined
