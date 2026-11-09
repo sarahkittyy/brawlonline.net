@@ -3,7 +3,7 @@ import type { StadiumStatsType, StatsType } from "@slippi/slippi-js";
 
 import type { AllHighlightsEvent, GameHighlights, ReplayHighlights } from "./highlights/types";
 
-/** The stats call's error for a replay whose stats are not decoded yet (.brep): the stats page says "Coming soon". */
+/** The stats call's error for a file that is not ours (.brep has stats: stats/brawl_stats.ts). */
 export const STATS_NOT_AVAILABLE = "Stats are not available for this replay format yet.";
 
 /**

@@ -538,6 +538,11 @@ const std::vector<FighterBlock>& FighterBlocks()
     module("workManage", 25, 0x30);
     module("status", 28, 0xA4);
     module("kinetic", 31, 0x20);
+    // P+'s L-cancel counters (the L-cancel stat): the Fighter's instance float works 0x2A (aerial
+    // landings) and 0x2B (those L-cancelled), work ids 0x1000002A / 0x1000002B, which P+ counts at
+    // each landing from an aerial. getFloat takes the work module's general work at +0x1C + 4 *
+    // (id >> 28), here +0x20, and reads its float array (+0x14) at the id's low bits.
+    b.push_back({"lCancel", true, {0x60, 0xD8, 4 * 25, 0x20, 0x14, 0x2A * 4}, 8});
     return b;
   }();
   return blocks;

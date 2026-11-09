@@ -84,10 +84,12 @@ def _fighters(raw: bytes) -> tuple[int, int, int, int, list[bytes]]:
     off = 16
     out = []
     for _ in range(bin(ports).count("1")):
-        d = bytearray(raw[off:off + count * block])
-        for k in range(block, len(d)):
-            d[k] ^= d[k - block]
-        out.append(bytes(d))
+        # Each frame is XORed with the one before: undone a whole frame at a time (as one integer).
+        rows, prev = [], 0
+        for f in range(count):
+            prev ^= int.from_bytes(raw[off + f * block:off + (f + 1) * block], "big")
+            rows.append(prev.to_bytes(block, "big"))
+        out.append(b"".join(rows))
         off += count * block
     return first, count, ports, block, out
 
@@ -113,6 +115,7 @@ def read(path: str | Path) -> Replay:
     off = header_size
     endg_at = None
     fighter_frames = 0
+    fighter_parts: list[list[bytes]] = []
     while off < end:
         if end - off < 20:
             rep.truncated = "torn chunk header"
@@ -145,11 +148,12 @@ def read(path: str | Path) -> Replay:
             rep.parts += parts
         elif name == "FTRM":
             first, count, ports, block, data_ports = _fighters(raw)
-            if not rep.fighters:
+            if not fighter_parts:
                 rep.fighter_block, rep.fighter_ports = block, ports
-                rep.fighters = [b""] * len(data_ports)
+                fighter_parts = [[] for _ in data_ports]
             assert first == rep.first_frame + fighter_frames
-            rep.fighters = [a + b for a, b in zip(rep.fighters, data_ports)]
+            for parts, d in zip(fighter_parts, data_ports):
+                parts.append(d)
             fighter_frames += count
         elif name == "EVNT":
             rep.events += json.loads(raw).get("events", [])
@@ -158,6 +162,7 @@ def read(path: str | Path) -> Replay:
             endg_at = at
         elif flags & FLAG_CRITICAL:
             raise ValueError(f"{path}: unknown critical chunk {name}")
+    rep.fighters = [b"".join(parts) for parts in fighter_parts]
     rep.trailer = trailer_endg is not None and endg_at == trailer_endg
     return rep
 

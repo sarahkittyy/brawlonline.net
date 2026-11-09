@@ -130,7 +130,7 @@ export const ReplayFileContainer = React.memo(function ReplayFileContainer({
       },
       {
         Icon: ClapperboardIcon,
-        label: Messages.showHighlights(),
+        label: Messages.showStats(),
         onClick: onShowStats,
       },
       {

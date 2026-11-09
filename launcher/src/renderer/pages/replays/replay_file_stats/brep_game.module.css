@@ -1,0 +1,10 @@
+.root {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.tabs {
+  padding: 10px 30px 0;
+}

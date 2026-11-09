@@ -24,6 +24,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import json
+import shutil
 import socket
 import sys
 import threading
@@ -81,6 +82,18 @@ def wait(pred, timeout: float, what: str, every: float = 0.2):
         if time.monotonic() > deadline:
             raise RuntimeError(f"timed out waiting for {what}")
         time.sleep(every)
+
+
+def save_replays(d: Path, insts: Sequence[Any], stem: str) -> None:
+    """Copies the instances' replays (.brep, every match's) to `d` as <stem>-<a|b|...>-<name>, once
+    their sessions are stopped and the files closed (Windows can't read a replay being recorded)."""
+    d.mkdir(parents=True, exist_ok=True)
+    with contextlib.suppress(RuntimeError):
+        wait(lambda: not any(i.client.call("replay_recording")["recording"] for i in insts), 30,
+             "the recordings to end")
+    for name, i in zip("abcd", insts):
+        for src in sorted((i.user_dir / "Replays").rglob("*.brep")):
+            shutil.copyfile(src, d / f"{stem}-{name}-{src.name}")
 
 
 def compare_checksums(ra: Sequence[Sequence[Any]], rb: Sequence[Sequence[Any]], limit: int) -> Dict[str, Any]:
@@ -440,6 +453,8 @@ def run_session(preset: str, cpu: str, args: argparse.Namespace, run: int) -> Di
             for c in (ca, cb):
                 with contextlib.suppress(Exception):
                     c.call("gprb_stop")
+            if args.save_replays:
+                save_replays(Path(args.save_replays), [ia, ib], f"{preset}-{cpu}-r{run}")
     except Exception as e:  # noqa: BLE001
         rep["error"] = f"{type(e).__name__}: {e}"
     finally:
@@ -809,7 +824,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                     help="environment variable for the joiner only, e.g. PPR_GPRB_TEST_FRAME_COST_US=14000 "
                          "(every pass costs that much more CPU time: a PC that cannot keep full speed)")
     ap.add_argument("--modes", default="random,random",
-                    help="fight modes of P1,P2 (flows.fight: random, chase, idle, selfdestruct, upsmash)")
+                    help="fight modes of P1,P2 (flows.fight: random, chase, idle, selfdestruct, upsmash, hover, lcancel)")
     ap.add_argument("--damage-ratio", type=float, default=0.0,
                     help="write this damage ratio (e.g. 2.0) on both CSSs")
     ap.add_argument("--poke-match", action="append", default=[], metavar="ADDR=HEX",
@@ -828,6 +843,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ap.add_argument("--log-dir", default=None, help="copy each instance's dolphin.log and stderr here")
     ap.add_argument("--name-prefix", default="gprb", help="instance name prefix (ppharness clean --prefix)")
     ap.add_argument("--save-traces", default=None, help="write both peers' per-frame traces to this directory")
+    ap.add_argument("--save-replays", default=None,
+                    help="copy both peers' replays (.brep, every match's) to this directory after the run")
     ap.add_argument("--pass-log", default=None,
                     help="diagnostics: record every update's passes (for replays) under this directory")
     ap.add_argument("--save-countdown", default=None,

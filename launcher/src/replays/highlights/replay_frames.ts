@@ -1,15 +1,18 @@
 /**
- * The per-frame fighter state highlights need, from a `.brep`'s recorded fighter memory (FTSP/FTRM)
- * and pads (FRMS) (docs/design/replays.md §4; the prototype's timeline.py). A frame's fighter memory
- * is 2,248 bytes a player; only ~28 of them and 10 pad bytes are decoded here: each chunk's rows
- * are XORed with the row before (byte by byte), so the wanted bytes are XOR-accumulated on their own
- * and the rest is skipped.
+ * The per-frame fighter state highlights and stats need, from a `.brep`'s recorded fighter memory
+ * (FTSP/FTRM) and pads (FRMS) (docs/design/replays.md §4; the prototype's timeline.py). A frame's
+ * fighter memory is 2,256 bytes a player; only ~48 of them and 10 pad bytes are decoded here: each
+ * chunk's rows are XORed with the row before (byte by byte), so the wanted bytes are XOR-accumulated
+ * on their own and the rest is skipped.
  *
  * Fields (docs/brawl-memory-map.md): damage f32 ftOwner+0x24, stocks s32 ftOwner+0x34, status kind
  * s32 soStatusModule+0x34, animation frame f32 soMotionModule+0x40, motion kind s32
  * soMotionModule+0x58, the attacker's ftEntry id soDamageModuleImpl+0x84 (m_attackerInfo's indirect
- * entry id), the player's own id ftEntry+0x04. Pads (gfPadStatus): buttons u32 +0x0, stick s8
- * +0x30/+0x31, C-stick +0x32/+0x33, L/R analog +0x34/+0x35. All big-endian.
+ * entry id), the player's own id ftEntry+0x04; for stats also position x/y f32 soPostureModule+0xC
+ * / +0x10, ftKind u32 Fighter+0x110 and P+'s L-cancel counters (block `lCancel`: aerial landings
+ * f32 +0, L-cancelled f32 +4; files from before 2026-11-08 have none: zeros). Pads
+ * (gfPadStatus): buttons u32 +0x0 (GameCube bits), stick s8 +0x30/+0x31 (full tilt ±127), C-stick
+ * +0x32/+0x33, L/R analog u8 +0x34/+0x35. All big-endian.
  *
  * A replay is a file anyone can share: sizes are checked before anything is read, every chunk's
  * CRC is checked and nothing is inflated past its stated (bounded) size.
@@ -71,19 +74,37 @@ export type Timeline = {
   attacker: Uint32Array[];
   anim: Float32Array[];
   motion: Int32Array[];
+  x: Float32Array[];
+  y: Float32Array[];
+  /** The active Fighter's ftKind (it changes with Zelda/Sheik, Pokémon Trainer). */
+  kind: Uint32Array[];
+  /**
+   * P+'s counts of aerial landings and of those L-cancelled, per fighter instance; zeros in a file
+   * from before the counters (2026-11-08).
+   */
+  aerialLandings: Float32Array[];
+  lCancels: Float32Array[];
   /** PAD_KEPT bytes a frame: pad bytes 0x0-0x3, then 0x30-0x35. */
   pads: Uint8Array[];
 };
 
-/** The wanted bytes of a fighter block, by field: [block name, offset in the block, size]. */
+/**
+ * The wanted bytes of a fighter block, by field: [block name, offset in the block, needed]. A file
+ * without an unneeded field's block (lCancel: recorded since 2026-11-08) leaves it zero.
+ */
 const FIELDS = [
-  ["entry", 0x04], // entry id
-  ["owner", 0x24], // damage
-  ["owner", 0x34], // stocks
-  ["status", 0x34], // status kind
-  ["damage", 0x84], // attacker's entry id
-  ["motion", 0x40], // animation frame
-  ["motion", 0x58], // motion kind
+  ["entry", 0x04, true], // entry id
+  ["owner", 0x24, true], // damage
+  ["owner", 0x34, true], // stocks
+  ["status", 0x34, true], // status kind
+  ["damage", 0x84, true], // attacker's entry id
+  ["motion", 0x40, true], // animation frame
+  ["motion", 0x58, true], // motion kind
+  ["posture", 0x0c, true], // x
+  ["posture", 0x10, true], // y
+  ["fighter", 0x110, true], // ftKind
+  ["lCancel", 0x0, false], // aerial landings
+  ["lCancel", 0x4, false], // L-cancelled
 ] as const;
 const F_ENTRY = 0;
 const F_DAMAGE = 1;
@@ -92,6 +113,11 @@ const F_STATUS = 3;
 const F_ATTACKER = 4;
 const F_ANIM = 5;
 const F_MOTION = 6;
+const F_X = 7;
+const F_Y = 8;
+const F_KIND = 9;
+const F_LANDINGS = 10;
+const F_LCANCELS = 11;
 const PAD_BYTES = [0, 1, 2, 3, 0x30, 0x31, 0x32, 0x33, 0x34, 0x35];
 
 const obj = (v: unknown): Record<string, unknown> =>
@@ -207,6 +233,11 @@ export function decodeTimeline(data: Buffer): Timeline {
     anim: Column<Float32Array>;
     motion: Column<Int32Array>;
     entry: Column<Uint32Array>;
+    x: Column<Float32Array>;
+    y: Column<Float32Array>;
+    kind: Column<Uint32Array>;
+    landings: Column<Float32Array>;
+    lCancels: Column<Float32Array>;
   }[] = [];
   const pads: Column<Uint8Array>[] = Array.from(
     { length: PORTS },
@@ -277,10 +308,13 @@ export function decodeTimeline(data: Buffer): Timeline {
       if (fighterFrames === 0) {
         block = blockSize;
         fighterPorts = ports;
-        fieldOffsets = FIELDS.map(([name, at]) => {
+        fieldOffsets = FIELDS.map(([name, at, needed]) => {
           const base = spec?.[name];
           const size = spec?.[`${name}.size`] ?? 0;
           if (base == null || at + 4 > size || base + at + 4 > block) {
+            if (!needed) {
+              return -1;
+            }
             throw new ReplayFramesError(`no ${name} block in the fighter memory`);
           }
           return base + at;
@@ -293,6 +327,11 @@ export function decodeTimeline(data: Buffer): Timeline {
           anim: new Column((n) => new Float32Array(n)),
           motion: new Column((n) => new Int32Array(n)),
           entry: new Column((n) => new Uint32Array(n)),
+          x: new Column((n) => new Float32Array(n)),
+          y: new Column((n) => new Float32Array(n)),
+          kind: new Column((n) => new Uint32Array(n)),
+          landings: new Column((n) => new Float32Array(n)),
+          lCancels: new Column((n) => new Float32Array(n)),
         }));
       }
       if (
@@ -314,6 +353,9 @@ export function decodeTimeline(data: Buffer): Timeline {
         for (let f = 0; f < count; f++) {
           const row = off + f * block;
           for (let k = 0; k < FIELDS.length; k++) {
+            if (fieldOffsets[k] < 0) {
+              continue;
+            }
             const src = row + fieldOffsets[k];
             const a = k * 4;
             acc[a] ^= raw[src];
@@ -329,6 +371,11 @@ export function decodeTimeline(data: Buffer): Timeline {
           c.attacker.data[i] = acc.readUInt32BE(F_ATTACKER * 4);
           c.anim.data[i] = acc.readFloatBE(F_ANIM * 4);
           c.motion.data[i] = acc.readInt32BE(F_MOTION * 4);
+          c.x.data[i] = acc.readFloatBE(F_X * 4);
+          c.y.data[i] = acc.readFloatBE(F_Y * 4);
+          c.kind.data[i] = acc.readUInt32BE(F_KIND * 4);
+          c.landings.data[i] = acc.readFloatBE(F_LANDINGS * 4);
+          c.lCancels.data[i] = acc.readFloatBE(F_LCANCELS * 4);
         }
         off += count * block;
       }
@@ -354,6 +401,7 @@ export function decodeTimeline(data: Buffer): Timeline {
       infoPlayers.set(port, o);
     }
   }
+  const entries = cols.map((c) => c.entry.take(frames));
   const players = recorded.map((port0, index): TimelinePlayer => {
     const meta = infoPlayers.get(port0 + 1) ?? {};
     return {
@@ -364,11 +412,11 @@ export function decodeTimeline(data: Buffer): Timeline {
       characterId: int(meta.characterId, 0, 0xff) ?? 0xff,
       costume: int(meta.costume, 0, 0xff) ?? 0,
       teamId: int(meta.teamId, 0, 2),
-      entryId: entryId(cols[index].entry.take(frames)),
+      entryId: entryId(entries[index]),
     };
   });
   const emptyPads = new Uint8Array(frames * PAD_KEPT);
-  return {
+  const t: Timeline = {
     firstFrame,
     frames,
     players,
@@ -380,9 +428,46 @@ export function decodeTimeline(data: Buffer): Timeline {
     attacker: cols.map((c) => c.attacker.take(frames)),
     anim: cols.map((c) => c.anim.take(frames)),
     motion: cols.map((c) => c.motion.take(frames)),
+    x: cols.map((c) => c.x.take(frames)),
+    y: cols.map((c) => c.y.take(frames)),
+    kind: cols.map((c) => c.kind.take(frames)),
+    aerialLandings: cols.map((c) => c.landings.take(frames)),
+    lCancels: cols.map((c) => c.lCancels.take(frames)),
     // (The pads cover the same frames: FTRM and FRMS are written together.)
     pads: recorded.map((p) => (padFrames >= frames ? pads[p].take(frames) : emptyPads)),
   };
+  holdUnrecorded(t, entries);
+  return t;
+}
+
+/**
+ * The frames a fighter's memory was not read on (zeros: its ftEntry did not resolve, between a KO
+ * and the respawn, and on the last frame of a game that ended in a disconnect or a desync) keep its
+ * last recorded values: no stock is lost there and found again, and nobody is KO'd at the end.
+ */
+function holdUnrecorded(t: Timeline, entries: Uint32Array[]) {
+  const columns = [
+    t.damage,
+    t.stocks,
+    t.status,
+    t.attacker,
+    t.anim,
+    t.motion,
+    t.x,
+    t.y,
+    t.kind,
+    t.aerialLandings,
+    t.lCancels,
+  ];
+  entries.forEach((ids, i) => {
+    for (let f = 1; f < t.frames; f++) {
+      if (ids[f] === 0) {
+        for (const c of columns) {
+          c[i][f] = c[i][f - 1];
+        }
+      }
+    }
+  });
 }
 
 /**

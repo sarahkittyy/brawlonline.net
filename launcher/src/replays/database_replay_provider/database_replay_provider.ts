@@ -287,7 +287,7 @@ export class DatabaseReplayProvider implements ReplayProvider {
   }
 
   async calculateGameStats(_fullPath: string): Promise<StatsType | undefined> {
-    // Slippi computes stats from .slp files with slippi-js; our replay format has no parser yet.
+    // Ours (.brep) are computed in the highlights' worker (setup.ts, stats/brawl_stats.ts); other files have none.
     throw new Error(STATS_NOT_AVAILABLE);
   }
 

@@ -26,6 +26,7 @@ import {
   ipc_selectTreeFolder,
 } from "./ipc";
 import { rebaseReplayPaths } from "./rebase_replay_paths";
+import { isReplayFileName } from "./replay_format";
 import { createManagedReplayIndexingPool } from "./replay_indexing_pool/replay_indexing_pool_manager";
 import type { Progress } from "./types";
 
@@ -126,8 +127,9 @@ export default function setupReplaysIpc({
 
   ipc_calculateGameStats.main!.handle(async ({ filePath }) => {
     const replayProvider = await replayProviderPromise;
+    // Ours (.brep) from the recorded fighter memory, in the highlights' worker (stats/brawl_stats.ts).
     const [stats, fileResult] = await Promise.all([
-      replayProvider.calculateGameStats(filePath),
+      isReplayFileName(filePath) ? highlightService.getStats(filePath) : replayProvider.calculateGameStats(filePath),
       replayProvider.loadFile(filePath),
     ]);
     return { file: fileResult, stats };

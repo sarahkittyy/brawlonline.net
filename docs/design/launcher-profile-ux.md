@@ -191,7 +191,7 @@ Endpoint names follow backend-design.md 2.4. **New** marks endpoints that do not
 
 - **Slippi:** `replay_file_stats`. Header with `PlayerInfo` (stock icon, name, port pill, code), date/duration/stage/platform, "Launch replay" and previous/next.
   - The platform item becomes mode plus game number.
-  - The content area keeps Slippi's "stats not available" state until a stats parser exists (PPLUS_PORTING.md section 6).
+  - The content area has two tabs (2026-11-08): Stats, Slippi's stats computed from the replay's fighter memory (docs/design/replays.md §9.3), and Highlights (docs/design/highlights.md).
   - **New:** a "Ranked set" panel. It shows the set result and rating change, the games of the set (current one highlighted, other games open their stats, missing ones are marked), "Open in match history" and "Watch whole set". This is the replay → set direction of the link.
 - **Source:** local only (the file's metadata plus the index). The rating change needs the server's set record. Cache it in the index when match history is fetched, or fetch `GET /v1/me/sets/{matchId}` (**New**).
 

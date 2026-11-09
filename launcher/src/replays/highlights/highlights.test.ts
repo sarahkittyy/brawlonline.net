@@ -19,11 +19,29 @@ const BLOCKS = [
   { name: "motion", offset: 384, size: 368 },
   { name: "damage", offset: 752, size: 172 },
   { name: "status", offset: 924, size: 164 },
+  { name: "posture", offset: 1088, size: 120 },
+  { name: "fighter", offset: 1208, size: 384 },
 ];
-const BLOCK = 1088;
+const BLOCK = 1592;
+// P+'s L-cancel counters, recorded since 2026-11-08.
+const L_CANCEL_BLOCK = { name: "lCancel", offset: 1592, size: 8 };
 const L_R_Z = 0x70;
 
-type FighterFrame = { damage: number; stocks: number; status: number; attacker: number; anim: number; motion: number };
+type FighterFrame = {
+  damage: number;
+  stocks: number;
+  status: number;
+  attacker: number;
+  anim: number;
+  motion: number;
+  x?: number;
+  y?: number;
+  kind?: number;
+  landings?: number;
+  lCancels?: number;
+  /** Not read on this frame (the recorder writes zeros: between lives, a disconnect's last frame). */
+  blank?: boolean;
+};
 type Frame = { fighters: FighterFrame[]; buttons: number[] };
 
 function chunk(type: string, raw: Buffer, deflate = true): Buffer {
@@ -39,7 +57,10 @@ function chunk(type: string, raw: Buffer, deflate = true): Buffer {
 
 const ENTRY_IDS = [0x10001, 0x10002];
 
-function encode(frames: Frame[], recorderPort = 1): Buffer {
+/** `lCancel`: with the L-cancel counters' block (a file from before 2026-11-08 has none). */
+function encode(frames: Frame[], recorderPort = 1, lCancel = false): Buffer {
+  const blocks = lCancel ? [...BLOCKS, L_CANCEL_BLOCK] : BLOCKS;
+  const block = lCancel ? BLOCK + L_CANCEL_BLOCK.size : BLOCK;
   const header = Buffer.alloc(32);
   MAGIC.copy(header, 0);
   header.writeUInt16LE(1, 8);
@@ -55,7 +76,7 @@ function encode(frames: Frame[], recorderPort = 1): Buffer {
   const parts = [
     header,
     chunk("INFO", Buffer.from(JSON.stringify(info)), false),
-    chunk("FTSP", Buffer.from(JSON.stringify({ bytes: BLOCK, blocks: BLOCKS })), false),
+    chunk("FTSP", Buffer.from(JSON.stringify({ bytes: block, blocks })), false),
   ];
   for (let first = 0; first < frames.length; first += 60) {
     const rows = frames.slice(first, first + 60);
@@ -66,31 +87,40 @@ function encode(frames: Frame[], recorderPort = 1): Buffer {
     frms.writeUInt16LE(n, 4);
     frms[6] = 0x3;
     // FTRM: u32 first, u32 count, u8 ports, pad, u32 block, the rows per port.
-    const ftrm = Buffer.alloc(16 + 2 * n * BLOCK);
+    const ftrm = Buffer.alloc(16 + 2 * n * block);
     ftrm.writeUInt32LE(first, 0);
     ftrm.writeUInt32LE(n, 4);
     ftrm[8] = 0x3;
-    ftrm.writeUInt32LE(BLOCK, 12);
+    ftrm.writeUInt32LE(block, 12);
     for (let p = 0; p < 2; p++) {
       let prevPad = Buffer.alloc(0x40);
-      let prevRow = Buffer.alloc(BLOCK);
+      let prevRow = Buffer.alloc(block);
       rows.forEach((row, f) => {
         const pad = Buffer.alloc(0x40);
         pad.writeUInt32BE(row.buttons[p] >>> 0, 0);
-        const r = Buffer.alloc(BLOCK);
+        const r = Buffer.alloc(block);
         const s = row.fighters[p];
-        r.writeUInt32BE(ENTRY_IDS[p], 0 + 0x04);
-        r.writeFloatBE(s.damage, 128 + 0x24);
-        r.writeInt32BE(s.stocks, 128 + 0x34);
-        r.writeFloatBE(s.anim, 384 + 0x40);
-        r.writeInt32BE(s.motion, 384 + 0x58);
-        r.writeUInt32BE(s.attacker >>> 0, 752 + 0x84);
-        r.writeInt32BE(s.status, 924 + 0x34);
+        if (!s.blank) {
+          r.writeUInt32BE(ENTRY_IDS[p], 0 + 0x04);
+          r.writeFloatBE(s.damage, 128 + 0x24);
+          r.writeInt32BE(s.stocks, 128 + 0x34);
+          r.writeFloatBE(s.anim, 384 + 0x40);
+          r.writeInt32BE(s.motion, 384 + 0x58);
+          r.writeUInt32BE(s.attacker >>> 0, 752 + 0x84);
+          r.writeInt32BE(s.status, 924 + 0x34);
+          r.writeFloatBE(s.x ?? 0, 1088 + 0x0c);
+          r.writeFloatBE(s.y ?? 0, 1088 + 0x10);
+          r.writeUInt32BE(s.kind ?? 0, 1208 + 0x110);
+          if (lCancel) {
+            r.writeFloatBE(s.landings ?? 0, 1592);
+            r.writeFloatBE(s.lCancels ?? 0, 1592 + 4);
+          }
+        }
         for (let k = 0; k < 0x40; k++) {
           frms[8 + p * n * 0x40 + f * 0x40 + k] = pad[k] ^ prevPad[k];
         }
-        for (let k = 0; k < BLOCK; k++) {
-          ftrm[16 + p * n * BLOCK + f * BLOCK + k] = r[k] ^ prevRow[k];
+        for (let k = 0; k < block; k++) {
+          ftrm[16 + p * n * block + f * block + k] = r[k] ^ prevRow[k];
         }
         prevPad = pad;
         prevRow = r;
@@ -139,7 +169,18 @@ function game(moves: number[], hold = 0, pressed = L_R_Z): Frame[] {
 
 describe("replay highlights", () => {
   it("decodes the fighter fields and pads from XOR-delta chunks", () => {
-    const t = decodeTimeline(encode(game([1, 2, 3, 4], 40)));
+    const frames = game([1, 2, 3, 4], 40).map((row, f) => ({
+      ...row,
+      fighters: row.fighters.map((s, p) => ({
+        ...s,
+        x: p === 0 ? -40 + f / 10 : 40,
+        y: 12.5,
+        kind: p === 0 ? 0x06 : 0x13,
+        landings: f >= 200 ? 2 : f >= 150 ? 1 : 0,
+        lCancels: f >= 200 ? 1 : 0,
+      })),
+    }));
+    const t = decodeTimeline(encode(frames, 1, true));
     expect(t.frames).toBe(600);
     expect(t.players.map((p) => [p.port, p.displayName, p.characterId, p.entryId])).toEqual([
       [1, "Alice", 2, ENTRY_IDS[0]],
@@ -154,6 +195,15 @@ describe("replay highlights", () => {
     expect(t.motion[0][120]).toBe(2);
     expect(longestLrzHold(t, 0)).toBe(40);
     expect(longestLrzHold(t, 1)).toBe(0);
+    expect(t.x[0][100]).toBeCloseTo(-30);
+    expect([t.x[1][100], t.y[0][599]]).toEqual([40, 12.5]);
+    expect([t.kind[0][5], t.kind[1][5]]).toEqual([0x06, 0x13]);
+    expect([t.aerialLandings[0][149], t.aerialLandings[0][150], t.aerialLandings[0][200]]).toEqual([0, 1, 2]);
+    expect([t.lCancels[0][199], t.lCancels[0][200]]).toEqual([0, 1]);
+    // A file from before the L-cancel counters: zeros, the rest as it was.
+    const older = decodeTimeline(encode(frames));
+    expect(older.aerialLandings[0][599]).toBe(0);
+    expect(older.damage[1][599]).toBe(40);
   });
 
   it("finds a string of four different moves as a combo", () => {
@@ -233,6 +283,24 @@ describe("replay highlights", () => {
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
+  });
+
+  it("keeps a fighter's last values on frames it was not read (between lives, a disconnect's last frame)", () => {
+    // Bob is KO'd: a stock less at 300, then not read until 330 (between lives); nobody is read on
+    // the last frame (the game ended in a disconnect).
+    const frames = game([1, 2, 3, 4]).map((row, f) => ({
+      ...row,
+      fighters: row.fighters.map((s, p) => ({
+        ...s,
+        stocks: p === 1 && f >= 300 ? 2 : 3,
+        blank: f === 599 || (p === 1 && f > 300 && f < 330),
+      })),
+    }));
+    const t = decodeTimeline(encode(frames));
+    expect([t.stocks[1][299], t.stocks[1][300], t.stocks[1][315], t.stocks[1][330]]).toEqual([3, 2, 2, 2]);
+    expect([t.stocks[0][599], t.stocks[1][599]]).toEqual([3, 2]);
+    expect(t.damage[1][599]).toBe(t.damage[1][598]);
+    expect(t.players[1].entryId).toBe(ENTRY_IDS[1]);
   });
 
   it("refuses a file without fighter memory, and damaged chunks", () => {

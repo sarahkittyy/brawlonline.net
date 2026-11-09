@@ -20,10 +20,10 @@ import { convertFrameCountToDurationString } from "@/lib/time";
 import { getStageImage } from "@/lib/utils";
 import { useServices } from "@/services";
 
+import { BrepGame } from "./brep_game";
 import { GameProfile } from "./game_profile";
 import { GameProfileHeader } from "./game_profile_header/game_profile_header";
 import { GameProfileHeaderMessages as HeaderMessages } from "./game_profile_header/game_profile_header.messages";
-import { HighlightList } from "./highlights/highlight_list";
 import { HomeRunProfile } from "./home_run_profile";
 import { ReplayFileStatsMessages as Messages } from "./replay_file_stats.messages";
 import styles from "./replay_file_stats.module.css";
@@ -69,8 +69,8 @@ export const ReplayFileStats = (props: ReplayFileStatsProps) => {
       ? String(gameStatsQuery.error)
       : null;
 
-  // A .brep's stats call always fails (STATS_NOT_AVAILABLE), so a file opened from outside the
-  // replay browser comes from the stadium stats call, which loads it too.
+  // A file whose stats call fails (STATS_NOT_AVAILABLE: not ours) opened from outside the replay
+  // browser comes from the stadium stats call, which loads it too.
   const file = gameStatsQuery.data?.file ?? stadiumStatsQuery.data?.file ?? props.file;
   const loadError =
     stadiumStatsQuery.error ?? (errorMessage && !errorMessage.includes(STATS_NOT_AVAILABLE) ? errorMessage : null);
@@ -172,8 +172,16 @@ export const ReplayFileStats = (props: ReplayFileStatsProps) => {
         ) : game.mode === GameMode.HOME_RUN_CONTEST ? (
           <HomeRunProfile file={file} stats={stadiumStats} />
         ) : filePath.toLowerCase().endsWith(".brep") ? (
-          // Ours (.brep): no stats yet, the game's highlights and L+R+Z clips.
-          <HighlightList filePath={filePath} pplusRelease={game.pplusRelease} />
+          // Ours (.brep): the stats (stats/brawl_stats.ts), then the game's highlights and L+R+Z clips.
+          // (Keyed: each game opens on its own tab, a free-for-all on Highlights.)
+          <BrepGame
+            key={filePath}
+            filePath={filePath}
+            file={file}
+            stats={gameStats}
+            loading={gameStatsQuery.isLoading}
+            error={errorMessage}
+          />
         ) : numPlayers !== 2 ? (
           <IconMessage Icon={ErrorIcon} label={Messages.gameStatsForTeamBattlesIsUnsupported()} />
         ) : errorMessage?.includes(STATS_NOT_AVAILABLE) ? (

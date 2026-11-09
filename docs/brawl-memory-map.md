@@ -150,7 +150,13 @@ enum      = u32[u32[fighter+0x60] + 0xD8]        soExternalValueAccesser::getLr/
 posture   = u32[enum+0x0C]   pos x/y/z f32 @+0xC/+0x10/+0x14, prevPos @+0x18, lr (facing) @+0x40   headers
 status    = u32[enum+0x70]   status kind (action state) s32 @+0x34                                 headers
 motion    = u32[enum+0x08]   anim frame f32 @+0x40, motion kind @+0x58                              headers
+workManage = u32[enum+0x64]  general works @+0x20 (instance: ids 0x1nnnnnnn) / +0x24 (status: 0x2nnnnnnn)  live
+  general work: ints s32* @+0x0C (count @+0x10), floats f32* @+0x14 (count @+0x18), flags u32* @+0x1C
+  P+ L-cancel counters: instance floats [0x2A] aerial landings, [0x2B] of them L-cancelled (ids 0x1000002A/B)
 ```
+
+- **Work ids.** `soWorkManageModuleImpl::getFloat` (vtable slot 14, `0x807ACBB4`) takes the general work at `module + 0x1C + 4·(id >> 28)`, so the id's second nibble (int 0x10/float 0x11/flag 0x12 in BrawlHeaders' `Instance_Work_*`) does not pick the array: the call does. P+ hooks its second instruction (`b 0x8056D9F0`): the index is the id's low 23 bits, negated when bit 23 is set. The general work's `getFloatWork` is `m_floatWorks[index]`. In P+ the instance work holds 100 ints and 74 floats (arrays in MEM2), the status work 18 ints and 14 floats.
+- **verified live (harness template's disc and card, 2026-11-08)**, Fox alone on Final Destination, stepped a frame at a time: each short-hop nair's landing (`Landing_Attack_Air` 0x18) added 1 to `[0x2A]`; `[0x2B]` grew only with L pressed 3 frames before landing (2 of 2, then 2 of 4 after two misses); landing lag 7 frames cancelled, 15 missed. Wavedash: `Jump_Squat` 0xA (3 frames) → `Jump` 0xB → `Escape_Air` 0x21 → `Landing_Fall_Special` 0x19 → wait; a waveland the same without the jump squat before it. A dash back is `Dash` 0x3 → `Turn_Dash` 0x7 (one frame) → `Dash` 0x3, not `Turn` 0x6 (Melee's dash dance goes through its TURN).
 
 - The REL `.text` base is 0x8070AA14 in P+, consistent with Brawlback's absolute addresses and the P+ log ("create Instance adr:0x8070a940 text:0x8070aa14").
 - **Velocity.** BrawlHeaders documents no kinetic-energy velocity field. `PlayerState.vel_x/vel_y` uses `pos - prevPos`, which is the movement over the last frame.

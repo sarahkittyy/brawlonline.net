@@ -223,9 +223,10 @@ class Fighter:
     """Decides one seat's next input macro from the match state (see ``fight``)."""
 
     def __init__(self, seat: Seat, mode: str = "chase", seed: Any = 0, stage_kind: int | None = None):
-        if mode not in ("chase", "random", "idle", "selfdestruct", "upsmash", "hover"):
+        if mode not in ("chase", "random", "idle", "selfdestruct", "upsmash", "hover", "lcancel"):
             raise ValueError(f"unknown fight mode {mode!r}")
         self.seat, self.mode = seat, mode
+        self.lcancel_next = True
         self.rng = random.Random(f"{seed}:{seat.port}")
         self.edge = STAGE_EDGE.get(stage_kind if stage_kind is not None else -1, 65.0)
         self.busy_until = -1
@@ -256,6 +257,8 @@ class Fighter:
             return [{"main": [to_c, 128], "hold": 8}]
         if self.mode == "idle":
             return [{"hold": 10}]
+        if self.mode == "lcancel":
+            return self._lcancel_macro()
         if self.mode == "upsmash":                                # chase, up smash in range
             if abs(dx) < 12 and abs(dy) < 8:
                 return [{"c": [128, 255], "hold": 3}, {"hold": 45}]
@@ -270,6 +273,16 @@ class Fighter:
             return [{"main": [t, 128], "hold": 4}]
         return _macro(self.rng, toward)
 
+    def _lcancel_macro(self) -> List[Dict[str, Any]]:
+        """The "lcancel" mode: short-hop nairs, every other one with L 4 frames before it lands. Timed
+        for Fox (3-frame jump squat, the nair lands 24 frames after X; docs/brawl-memory-map.md
+        "Per player"); another character's landings come at other frames."""
+        cancel, self.lcancel_next = self.lcancel_next, not self.lcancel_next
+        seq: List[Dict[str, Any]] = [{"buttons": ["X"], "hold": 1}, {"hold": 4}, {"buttons": ["A"], "hold": 1}]
+        if cancel:
+            return seq + [{"hold": 14}, {"buttons": ["L"], "l": 255, "hold": 1}, {"hold": 40}]
+        return seq + [{"hold": 55}]
+
 
 def fight(seats: Seat | Sequence[Seat], frames: int, *, mode: str | Sequence[str] = "chase", seed: Any = 0,
           stage_kind: int | None = None, sample_every: int = 30,
@@ -280,7 +293,8 @@ def fight(seats: Seat | Sequence[Seat], frames: int, *, mode: str | Sequence[str
     (reliably deals damage); "random" plays seeded random macros (``_macro``) biased toward the
     opponent; "idle" stands still; "selfdestruct" walks off the nearer edge (to lose on purpose);
     "upsmash" walks to the nearest opponent and up smashes in range (KOs off the top); "hover" walks
-    off the nearer edge and spends its mid-air jumps drifting away (time off screen).
+    off the nearer edge and spends its mid-air jumps drifting away (time off screen); "lcancel"
+    short-hops nairs, every other one L-cancelled (the replay's L-cancel counters).
     All modes but "selfdestruct" recover when off stage. Never presses Start or the
     D-pad. For netplay, run one ``fight`` per instance in its own thread (``play``).
     """

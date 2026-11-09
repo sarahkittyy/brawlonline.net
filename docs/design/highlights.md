@@ -269,7 +269,7 @@ on PATH, the streams and their lengths).
 
 Replays has two tabs as Home has: **Replays** (the replay browser) and **Highlights**. The header's
 Replays button always opens the Replays tab (no longer the last stats page). A replay row's stats
-button is a star, "Show highlights" (its stats page, which lists that game's highlights). The
+button is a star, "Show highlights" (its stats page, which lists that game's highlights; since 2026-11-08 "Show stats & highlights": the page's Stats tab comes first, this list is its Highlights tab, docs/design/replays.md §9.3). The
 stats page's header no longer shows the platform ("Brawlonline" on every one of ours).
 
 The Highlights tab (`all_highlights_page.tsx`) lists every replay's highlights, then the L+R+Z

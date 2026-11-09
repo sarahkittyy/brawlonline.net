@@ -1,7 +1,7 @@
 export const ReplayFileMessages = {
   unknownStage: () => "Unknown stage",
   moreOptions: () => "More options",
-  showHighlights: () => "Show highlights",
+  showStats: () => "Show stats & highlights",
   renderToVideo: () => "Render to video",
   renderWithMusic: () => "Render (w/ Music)",
   renderNoMusic: () => "Render (No Music)",

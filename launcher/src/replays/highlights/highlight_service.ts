@@ -8,10 +8,12 @@ import type { ClipHotkey } from "@common/clip_hotkey";
 import { clipButtonsAt, DEFAULT_CLIP_BUTTONS } from "@common/clip_hotkey";
 import type { Database } from "@database/schema";
 import { readReplayHeader } from "@replays/replay_format";
+import type { StatsType } from "@slippi/slippi-js";
 import electronLog from "electron-log";
 import type { Kysely } from "kysely";
 import { stat } from "node:fs/promises";
 
+import { readStats } from "../stats/brawl_stats";
 import type { AnalyzeOptions } from "./analyze_replay";
 import { analyzeReplay } from "./analyze_replay";
 import { DETECTOR_VERSION } from "./detect_highlights";
@@ -185,17 +187,34 @@ export class HighlightService {
     return result;
   }
 
+  /**
+   * A replay's stats for its stats page (stats/brawl_stats.ts), in the same worker as the highlights.
+   * Not cached: a long game takes a fifth of a second.
+   */
+  async getStats(fullPath: string): Promise<StatsType> {
+    return this.inWorker(async (worker) => {
+      const t0 = Date.now();
+      const stats = worker ? await worker.calculateStats(fullPath) : await readStats(fullPath);
+      log.info(`stats in ${Date.now() - t0} ms: ${fullPath}`);
+      return stats;
+    });
+  }
+
   /** One replay at a time, in the worker (on this thread if no worker could start). */
   private analyze(fullPath: string, options: AnalyzeOptions): Promise<ReplayHighlights> {
-    const run = async () => {
+    return this.inWorker(async (worker) => {
       const t0 = Date.now();
-      const worker = await this.getWorker();
       const result = worker ? await worker.analyzeReplay(fullPath, options) : await analyzeReplay(fullPath, options);
       log.info(
         `${result.highlights.length} highlights, ${result.clips.length} clips in ${Date.now() - t0} ms: ${fullPath}`,
       );
       return result;
-    };
+    });
+  }
+
+  /** Runs `job` after the jobs before it, with the worker (null: none could start, so on this thread). */
+  private inWorker<T>(job: (worker: HighlightsWorker | null) => Promise<T>): Promise<T> {
+    const run = async () => job(await this.getWorker());
     const next = this.queue.then(run, run);
     this.queue = next.catch(() => undefined);
     return next.finally(() => this.armIdle());

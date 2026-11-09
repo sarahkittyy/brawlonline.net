@@ -26,8 +26,11 @@
 import type { Timeline } from "./replay_frames";
 import { PAD_KEPT } from "./replay_frames";
 
-/** Bumped whenever what is found or its score changes: cached results of another version are found again. */
-export const DETECTOR_VERSION = 4;
+/**
+ * Bumped whenever what is found or its score changes: cached results of another version are found
+ * again (5: a fighter's frames that were not read keep its last values: replay_frames.ts).
+ */
+export const DETECTOR_VERSION = 5;
 
 const RESET_FRAMES = 45; // Slippi's COMBO_STRING_RESET_FRAMES
 const DEAD = 189; // Status_Dead (then P+'s post-KO 267, seen before every stock loss)
@@ -154,8 +157,11 @@ function inputEvents(pads: Uint8Array, from: number, to: number): number {
   return count;
 }
 
-/** For each frame, the frame the player's current move (action instance) began. */
-function moveStarts(t: Timeline, i: number): Int32Array {
+/**
+ * For each frame, the frame the player's current move (action instance) began (also the replay
+ * stats' move: stats/brawl_stats.ts).
+ */
+export function moveStarts(t: Timeline, i: number): Int32Array {
   const st = t.status[i];
   const mo = t.motion[i];
   const an = t.anim[i];
