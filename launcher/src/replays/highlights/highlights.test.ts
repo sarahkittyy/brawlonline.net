@@ -72,6 +72,7 @@ function encode(frames: Frame[], recorderPort = 1, lCancel = false): Buffer {
     ],
     recorder: { port: recorderPort },
     isTeams: false,
+    stageId: 2,
   };
   const parts = [
     header,
@@ -301,6 +302,21 @@ describe("replay highlights", () => {
     expect([t.stocks[0][599], t.stocks[1][599]]).toEqual([3, 2]);
     expect(t.damage[1][599]).toBe(t.damage[1][598]);
     expect(t.players[1].entryId).toBe(ENTRY_IDS[1]);
+  });
+
+  it("gives the stage and everyone's stocks through the game, for the rows", () => {
+    // Bob loses a stock at frame 300.
+    const frames = game([1, 2, 3, 4]).map((row, f) => ({
+      ...row,
+      fighters: row.fighters.map((s, p) => ({ ...s, stocks: p === 1 && f >= 300 ? 2 : 3 })),
+    }));
+    const r = analyzeTimeline(decodeTimeline(encode(frames)), { highlights: true, clips: false, clipPlayers: "local" });
+    expect(r.stageId).toBe(2);
+    expect(r.stocks).toEqual([
+      { frame: 0, port: 1, stocks: 3 },
+      { frame: 0, port: 2, stocks: 3 },
+      { frame: 300, port: 2, stocks: 2 },
+    ]);
   });
 
   it("refuses a file without fighter memory, and damaged chunks", () => {

@@ -55,11 +55,77 @@
   gap: 10px;
 }
 
-.date {
+/* When in the game the row starts: a column of the same width on every row, as a list of times. */
+.time {
+  flex: none;
+  min-width: 34px;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  opacity: 0.7;
+}
+
+/* Rows of many games: the stage (its icon, its name) over when it was played. */
+.where {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
   margin-left: auto;
+}
+
+/* (As tall as a player chip: the row keeps its height.) */
+.stageIcon {
+  width: 34px;
+  height: 30px;
+  border-radius: 4px;
+  object-fit: cover;
+}
+
+.whereText {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 1px;
+  white-space: nowrap;
+}
+
+.stage {
+  font-size: 13px;
+  opacity: 0.9;
+}
+
+.date {
   font-size: 12px;
   white-space: nowrap;
   opacity: 0.6;
+}
+
+/* A player's stocks at the row's start, in the player's color: filled left, hollow lost. */
+.pips {
+  display: inline-flex;
+  gap: 3px;
+  margin-left: 2px;
+}
+
+.pip {
+  box-sizing: border-box;
+  width: 7px;
+  height: 7px;
+  border: 1.5px solid var(--port-color);
+  border-radius: 50%;
+  opacity: 0.45;
+}
+
+.pipLeft {
+  background: var(--port-color);
+  opacity: 1;
+}
+
+.stockCount {
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.8;
 }
 
 .comboLabel {

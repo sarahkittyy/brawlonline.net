@@ -3,7 +3,7 @@
  * launcher keeps in the settings (`manualClips`, src/replays/highlights/manual_clips.ts), as the
  * lists' rows; a row's remove button takes one out.
  */
-import type { ManualClip } from "@replays/highlights/types";
+import type { ManualClip, ReplayHighlights } from "@replays/highlights/types";
 import { useCallback } from "react";
 
 import { useSetting, useSettingsStore } from "@/lib/hooks/use_settings";
@@ -12,8 +12,11 @@ import type { HighlightEntry } from "./highlight_list";
 
 const clipKey = (path: string, startFrame: number, endFrame: number) => `${path}|${startFrame}|${endFrame}`;
 
-/** A manual clip as a row: its game is what was kept of it (players, teams, recorder). */
-export const manualClipEntry = (clip: ManualClip): HighlightEntry => ({
+/**
+ * A manual clip as a row: its game is what was kept of it (players, teams, recorder, stage), with
+ * the stage and stocks of its replay's highlights when they are known (`known`).
+ */
+export const manualClipEntry = (clip: ManualClip, known?: ReplayHighlights): HighlightEntry => ({
   key: `manual:${clipKey(clip.path, clip.startFrame, clip.endFrame)}`,
   path: clip.path,
   game: {
@@ -21,6 +24,8 @@ export const manualClipEntry = (clip: ManualClip): HighlightEntry => ({
     players: clip.players,
     isTeams: clip.isTeams,
     recorderPort: clip.recorderPort,
+    stageId: clip.stageId ?? known?.stageId,
+    stocks: known?.stocks,
     highlights: [],
     clips: [],
   },

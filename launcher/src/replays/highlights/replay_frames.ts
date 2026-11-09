@@ -68,6 +68,8 @@ export type Timeline = {
   /** The recording player's port (INFO's recorder), or null. */
   recorderPort: number | null;
   isTeams: boolean;
+  /** P+'s stage id (INFO's), or null. */
+  stageId: number | null;
   damage: Float32Array[];
   stocks: Int32Array[];
   status: Int32Array[];
@@ -422,6 +424,7 @@ export function decodeTimeline(data: Buffer): Timeline {
     players,
     recorderPort: int(obj(info.recorder).port, 1, PORTS),
     isTeams: info.isTeams === true,
+    stageId: int(info.stageId, 0, 0xffff),
     damage: cols.map((c) => c.damage.take(frames)),
     stocks: cols.map((c) => c.stocks.take(frames)),
     status: cols.map((c) => c.status.take(frames)),

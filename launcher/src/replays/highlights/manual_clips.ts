@@ -111,6 +111,7 @@ export class ManualClips {
       players,
       isTeams: header.meta.isTeams,
       recorderPort: spectated ? null : header.meta.recorderPort,
+      stageId: header.meta.stageId,
       ...(spectated ? { spectated: true } : {}),
     };
     // (From the settings as they are now: the player may have removed one meanwhile.)

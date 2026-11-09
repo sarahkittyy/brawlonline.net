@@ -2,7 +2,7 @@ import { DETECTOR_VERSION, findConversions, isHighlight } from "./detect_highlig
 import { findLrzClips } from "./lrz_clips";
 import type { Timeline } from "./replay_frames";
 import { readTimeline } from "./replay_frames";
-import type { ReplayHighlights } from "./types";
+import type { ReplayHighlights, StockChange } from "./types";
 
 /** A highlight plays from 1.5 s before its first hit to 1 s after the string (a KO: after the stock is lost). */
 export const PRE_FRAMES = 90;
@@ -18,6 +18,20 @@ export type AnalyzeOptions = {
   /** The clip hotkey's buttons (@common/clip_hotkey; L+R+Z when not given). */
   clipButtons?: number;
 };
+
+/** Each player's stocks at the first frame, then on each frame they change (game order). */
+function stockChanges(t: Timeline): StockChange[] {
+  const out: StockChange[] = [];
+  t.players.forEach(({ port }, i) => {
+    const stocks = t.stocks[i];
+    for (let f = 0; f < t.frames; f++) {
+      if (f === 0 || stocks[f] !== stocks[f - 1]) {
+        out.push({ frame: t.firstFrame + f, port, stocks: stocks[f] });
+      }
+    }
+  });
+  return out.sort((a, b) => a.frame - b.frame || a.port - b.port);
+}
 
 export function analyzeTimeline(t: Timeline, options: AnalyzeOptions): ReplayHighlights {
   const port = (index: number) => t.players[index].port;
@@ -52,6 +66,8 @@ export function analyzeTimeline(t: Timeline, options: AnalyzeOptions): ReplayHig
     : [];
   return {
     detectorVersion: DETECTOR_VERSION,
+    stageId: t.stageId,
+    stocks: stockChanges(t),
     players: t.players.map(({ port, displayName, connectCode, characterId, costume, teamId }) => ({
       port,
       displayName,

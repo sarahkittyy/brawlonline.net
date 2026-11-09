@@ -48,6 +48,13 @@ user); ↑/↓ or Tab/Shift+Tab plays the next one at once; Enter plays the
 selected one (Play all went 2026-10-24: the playback Dolphin's list buttons, §3, took its place).
 A row starts with its favorite star and ends with a Play button (as the Replays page's), which plays
 it without touching the selection (2026-10-24, the user).
+Since 2026-11-08 (the user: "it should say the stage you were on, the time the highlight starts, and
+the stock count of each player") a row also shows, after the star, when in the game it starts
+(m:ss, the header's and the Stats tab's clock), and on each player's chip their stocks at that
+moment as pips in the player's color (filled left, hollow lost; past 5, "×N"). The results keep the
+replay's stage and everyone's stock changes for this (`stageId`, `stocks`; DETECTOR_VERSION 6). A
+manual clip shows them when its replay's highlights are known (stocks), and the stage it was saved
+with (clips saved before have none).
 The row playing is shown selected, and follows the playback Dolphin's buttons and stars; it is
 shown only while the playback Dolphin is open (2026-10-24, the user). A banner
 says what the playback Dolphin does:
@@ -273,7 +280,8 @@ button is a star, "Show highlights" (its stats page, which lists that game's hig
 stats page's header no longer shows the platform ("Brawlonline" on every one of ours).
 
 The Highlights tab (`all_highlights_page.tsx`) lists every replay's highlights, then the L+R+Z
-clips, each row with its game's date; no game header. Sorted
+clips, each row with its game's stage (the stage select's icon from the user's P+ files, and its
+name) over the game's date, at the row's right end; no game header. Sorted
 Best first (the private score, across games) or Newest first; clips newest first. Play, ↑/↓,
 selecting, rendering and combo movies work as on a stats page (`HighlightRows`, shared); a combo of
 several games is named after when it was made: `2026-10-21 0845 Combo movie (2 highlights)`.

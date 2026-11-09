@@ -50,6 +50,7 @@ function timeline(frames: number, players = 2): Timeline {
     })),
     recorderPort: 1,
     isTeams: false,
+    stageId: null,
     damage: make(() => new Float32Array(frames)),
     stocks: make(() => new Int32Array(frames).fill(4)),
     status: make(() => new Int32Array(frames).fill(WAIT)),

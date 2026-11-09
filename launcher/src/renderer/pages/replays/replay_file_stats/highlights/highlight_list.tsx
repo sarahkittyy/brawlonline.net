@@ -11,6 +11,7 @@
  * (favorites.ts), the Play button at its end plays it. Manual clips (the seek bar's, manual_clips.ts)
  * come last, each with a button that removes it.
  */
+import { stageInfo } from "@common/stages";
 import type { ReplayPlaybackStatus } from "@dolphin/types";
 import { DolphinEventType } from "@dolphin/types";
 import CloseIcon from "@mui/icons-material/Close";
@@ -34,6 +35,7 @@ import type {
   ReplayHighlight,
   ReplayHighlights,
   ReplayManualClip,
+  StockChange,
 } from "@replays/highlights/types";
 import { useQuery } from "@tanstack/react-query";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -42,8 +44,9 @@ import { useDolphinActions } from "@/lib/dolphin/use_dolphin_actions";
 import { useMousetrap } from "@/lib/hooks/use_mousetrap";
 import { useSetting } from "@/lib/hooks/use_settings";
 import { getColor } from "@/lib/player_colors";
-import { monthDayHourFormat } from "@/lib/time";
+import { convertFrameCountToDurationString, monthDayHourFormat } from "@/lib/time";
 import { getCharacterIcon } from "@/lib/utils";
+import { useStageIcon } from "@/pages/rulesets/stages_section";
 import { useServices } from "@/services";
 
 import { favoriteKey, useFavoriteHighlights } from "./favorites";
@@ -61,6 +64,9 @@ type Row = ReplayHighlight | ReplayClip | ReplayManualClip;
 
 /** Starting for this long: the banner says where to look. */
 const STARTING_HINT_MS = 20_000;
+
+/** More stocks than this show as a count, not pips. */
+const MAX_PIPS = 5;
 
 /** A row: which replay it is of (its players, when it was played) and what of it. */
 export type HighlightEntry = {
@@ -98,7 +104,7 @@ export const HighlightList = ({ filePath, pplusRelease }: { filePath: string; pp
             ...manualClips
               .filter((c) => c.path === filePath)
               .sort((a, b) => a.startFrame - b.startFrame)
-              .map(manualClipEntry),
+              .map((c) => manualClipEntry(c, data)),
           ]
         : [],
     [data, filePath, manualClips],
@@ -409,6 +415,7 @@ export const HighlightRows = ({
           {entries.map((entry, i) => {
             const { row, game } = entry;
             const players = new Map(game.players.map((p) => [p.port, p]));
+            const stocks = stocksAt(game.stocks, row.startFrame);
             const favorite = favorites.has(favoriteKey(entry));
             const heading = row.kind !== "highlight" && (i === 0 || entries[i - 1].row.kind !== row.kind);
             return (
@@ -426,23 +433,27 @@ export const HighlightRows = ({
                     onClick={(e) => clickRow(i, e)}
                     onDoubleClick={() => void play(i)}
                   >
+                    <span
+                      className={styles.time}
+                      title={Messages.startsAt(convertFrameCountToDurationString(row.startFrame))}
+                    >
+                      {convertFrameCountToDurationString(row.startFrame)}
+                    </span>
                     {row.kind === "highlight" ? (
-                      <HighlightWho row={row} data={game} players={players} />
+                      <HighlightWho row={row} data={game} players={players} stocks={stocks} />
                     ) : row.kind === "manual" ? (
                       <span className={styles.who}>
                         <CropIcon fontSize="small" className={styles.clipIcon} />
                         <span className={styles.vs}>{Messages.manualClip(clipLength(row))}</span>
-                        <GameWho data={game} />
+                        <GameWho data={game} stocks={stocks} />
                       </span>
                     ) : (
                       <span className={styles.who}>
                         <ContentCutIcon fontSize="small" className={styles.clipIcon} />
-                        <GameWho data={game} />
+                        <GameWho data={game} stocks={stocks} />
                       </span>
                     )}
-                    {showDates && entry.date && (
-                      <span className={styles.date}>{monthDayHourFormat(new Date(entry.date))}</span>
-                    )}
+                    {showDates && <GameWhere stageId={game.stageId} date={entry.date} />}
                   </button>
                   {/* (Over the row, not in it: a button can't hold another.) */}
                   <IconButton
@@ -503,8 +514,59 @@ const clipLength = (row: ReplayManualClip) => {
   return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
 };
 
+/** A player's stocks at a row's start, and at the game's. */
+type Stocks = { left: number; start: number };
+
+/** Everyone's stocks at `frame` (none known: an empty map, the chips show none). */
+const stocksAt = (changes: StockChange[] | undefined, frame: number): Map<number, Stocks> => {
+  const out = new Map<number, Stocks>();
+  for (const c of changes ?? []) {
+    if (c.frame > frame && out.has(c.port)) {
+      continue;
+    }
+    const known = out.get(c.port);
+    out.set(c.port, { left: c.stocks, start: known?.start ?? c.stocks });
+  }
+  return out;
+};
+
+/** Stocks as pips (filled: left, hollow: lost), or "×N" past what pips show. */
+const StockPips = ({ stocks }: { stocks: Stocks }) => {
+  const label = Messages.stocksLeft(stocks.left, stocks.start);
+  if (stocks.start > MAX_PIPS || stocks.left > stocks.start) {
+    return (
+      <span className={styles.stockCount} title={label}>
+        {Messages.stockCount(stocks.left)}
+      </span>
+    );
+  }
+  return (
+    <span className={styles.pips} title={label} aria-label={label}>
+      {Array.from({ length: stocks.start }, (_, i) => (
+        <span key={i} className={`${styles.pip} ${i < stocks.left ? styles.pipLeft : ""}`} />
+      ))}
+    </span>
+  );
+};
+
+/** A row of many games' lists: the game's stage (its icon and name) and when it was played. */
+const GameWhere = ({ stageId, date }: { stageId?: number | null; date?: string }) => {
+  const stageIcon = useStageIcon();
+  const stage = stageId != null ? stageInfo(stageId) : undefined;
+  const icon = stage ? stageIcon(stage.id) : undefined;
+  return (
+    <span className={styles.where}>
+      {icon && <img className={styles.stageIcon} src={icon} alt="" />}
+      <span className={styles.whereText}>
+        {stage && <span className={styles.stage}>{stage.name}</span>}
+        {date && <span className={styles.date}>{monthDayHourFormat(new Date(date))}</span>}
+      </span>
+    </span>
+  );
+};
+
 /** Everyone in the game: one vs another; in teams, team vs team. */
-const GameWho = ({ data }: { data: ReplayHighlights }) => {
+const GameWho = ({ data, stocks }: { data: ReplayHighlights; stocks: Map<number, Stocks> }) => {
   const sides: HighlightPlayer[][] = [];
   if (data.isTeams) {
     const teams = new Map<number | null, HighlightPlayer[]>();
@@ -522,7 +584,7 @@ const GameWho = ({ data }: { data: ReplayHighlights }) => {
           {i > 0 && <span className={styles.vs}>{Messages.vs()}</span>}
           <span className={styles.side}>
             {side.map((p) => (
-              <PlayerChip key={p.port} player={p} isTeams={data.isTeams} />
+              <PlayerChip key={p.port} player={p} isTeams={data.isTeams} stocks={stocks.get(p.port)} />
             ))}
           </span>
         </React.Fragment>
@@ -536,10 +598,12 @@ const HighlightWho = ({
   row,
   data,
   players,
+  stocks,
 }: {
   row: ReplayHighlight;
   data: ReplayHighlights;
   players: Map<number, HighlightPlayer>;
+  stocks: Map<number, Stocks>;
 }) => {
   const side = (port: number) => {
     const p = players.get(port);
@@ -553,28 +617,38 @@ const HighlightWho = ({
     <span className={styles.who}>
       <span className={styles.side}>
         {side(row.attackerPort).map((p, i) => (
-          <PlayerChip key={i} player={p} isTeams={data.isTeams} />
+          <PlayerChip key={i} player={p} isTeams={data.isTeams} stocks={p && stocks.get(p.port)} />
         ))}
       </span>
       <span className={styles.vs}>{Messages.vs()}</span>
       <span className={styles.side}>
         {side(row.victimPort).map((p, i) => (
-          <PlayerChip key={i} player={p} isTeams={data.isTeams} />
+          <PlayerChip key={i} player={p} isTeams={data.isTeams} stocks={p && stocks.get(p.port)} />
         ))}
       </span>
     </span>
   );
 };
 
-const PlayerChip = ({ player, isTeams }: { player: HighlightPlayer | undefined; isTeams: boolean }) => {
+const PlayerChip = ({
+  player,
+  isTeams,
+  stocks,
+}: {
+  player: HighlightPlayer | undefined;
+  isTeams: boolean;
+  /** At the row's start (a replay from before they were kept: none). */
+  stocks?: Stocks;
+}) => {
   if (!player) {
     return null;
   }
   const color = getColor(player.port, isTeams ? player.teamId ?? undefined : undefined);
   return (
-    <span className={styles.chip} style={{ borderColor: color }}>
+    <span className={styles.chip} style={{ borderColor: color, "--port-color": color } as React.CSSProperties}>
       <img className={styles.charIcon} src={getCharacterIcon(player.characterId, player.costume)} alt="" />
       <span className={styles.name}>{player.displayName || player.connectCode || `P${player.port}`}</span>
+      {stocks && <StockPips stocks={stocks} />}
     </span>
   );
 };

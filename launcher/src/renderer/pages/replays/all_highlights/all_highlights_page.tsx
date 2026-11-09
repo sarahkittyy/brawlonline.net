@@ -160,7 +160,7 @@ export const AllHighlightsPage = React.memo(() => {
     // Newest saved first.
     let manual: HighlightEntry[] = [...manualClips]
       .sort((a, b) => b.savedAt.localeCompare(a.savedAt))
-      .map(manualClipEntry)
+      .map((c) => manualClipEntry(c, games.get(c.path)?.highlights))
       .filter((e) => !query || hasPlayer(e.game, query));
     // (A replay that doesn't say which player recorded it is in neither mine nor my opponents'.)
     const attacker = (e: HighlightEntry) => (e.row.kind === "highlight" ? e.row.attackerPort : 0);

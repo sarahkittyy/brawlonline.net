@@ -35,10 +35,17 @@ export type ReplayClip = {
   endFrame: number;
 };
 
+/** A player's stock count from `frame` on (the game's first frame, then each change). */
+export type StockChange = { frame: number; port: number; stocks: number };
+
 export type ReplayHighlights = {
   detectorVersion: number;
   players: HighlightPlayer[];
   isTeams: boolean;
+  /** P+'s stage id (@common/stages), as the replay's INFO; null when it doesn't say. */
+  stageId?: number | null;
+  /** Everyone's stocks through the game (a row shows them at its start: stocksAt). */
+  stocks?: StockChange[];
   /**
    * This machine's player (the replay's recorder), whose highlights are "mine" in Replays >
    * Highlights; null when the replay doesn't say. (Results cached before it was kept get it from
@@ -70,6 +77,8 @@ export type ManualClip = {
   players: HighlightPlayer[];
   isTeams: boolean;
   recorderPort: number | null;
+  /** The replay's stage (clips saved before 2026-11-08 have none). */
+  stageId?: number | null;
   /** Clipped while spectating. */
   spectated?: boolean;
 };
