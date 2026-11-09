@@ -2,15 +2,21 @@
 # them (.github/scripts/mac_publish.py).
 #
 # The client workflow's macos job submits its DMG to Apple without waiting and uploads the build
-# (launcher-mac) and the submission (mac-notary). Apple can answer in minutes or hours, so this asks
-# again every 10 minutes (and right after each client run) until it does, with no time limit (the
-# artifacts are kept 90 days). An accepted build is published with pp-release only if it is newer
-# than the latest-mac.yml on the site; older builds, accepted late, are dropped instead, so several
-# client runs waiting for Apple at once can never put an older version back. Runs never overlap
+# (launcher-mac) and the submission (mac-notary). Apple can answer in minutes or hours. After each
+# client run the wait-for-apple job asks Apple every minute (up to 30 minutes, on a GitHub-hosted
+# runner, free on this public repository) until it answers a pending build, then publish-mac
+# publishes; if builds still wait, publish-mac starts this workflow again (workflow_dispatch), for
+# up to 24 hours after their client run. The schedule is only a fallback: GitHub runs this
+# "every 10 minutes" cron every 3-10 hours (Macs stayed on 0.1.133 after 0.1.135 on 2026-11-09).
+# There is no time limit (the artifacts are kept 90 days). An accepted build is published with
+# pp-release only if it is newer than the latest-mac.yml on the site; older builds, accepted late,
+# are dropped instead, so several client runs waiting for Apple at once can never put an older
+# version back. Runs never overlap
 # (concurrency group), so checking the published version and publishing can't interleave.
 #
-# Runs on sarahvps2 (self-hosted, where pp-release lives): a run that finds nothing to do takes a
-# few seconds. Repository variable DISABLE_MACOS="true" turns it off, as for the macos job.
+# publish-mac runs on sarahvps2 (self-hosted, where pp-release lives; also the server and website
+# deploys' only runner, so nothing waits there): a run that finds nothing to do takes a few
+# seconds. Repository variable DISABLE_MACOS="true" turns it off, as for the macos job.
 name: client-mac-publish
 
 on:
@@ -30,8 +36,28 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  publish-mac:
+  wait-for-apple:
+    # Only asks Apple and GitHub; changes nothing, and always succeeds.
     if: ${{ vars.DISABLE_MACOS != 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/scripts
+      - name: Wait until Apple answers a pending build
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        run: python3 .github/scripts/mac_publish.py --wait 30
+
+  publish-mac:
+    needs: wait-for-apple
+    # Even when waiting failed or timed out: it publishes whatever Apple has accepted.
+    if: ${{ !cancelled() && vars.DISABLE_MACOS != 'true' }}
     runs-on: [self-hosted, linux, x64, sarahvps2, brawlonline]
     timeout-minutes: 30
     steps:
@@ -45,7 +71,7 @@ jobs:
           APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
           APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
-        run: python3 .github/scripts/mac_publish.py --work "$RUNNER_TEMP/mac-publish"
+        run: python3 .github/scripts/mac_publish.py --work "$RUNNER_TEMP/mac-publish" --again-hours 24
       - name: Clean up
         if: always()
         run: rm -rf "$RUNNER_TEMP/mac-publish"

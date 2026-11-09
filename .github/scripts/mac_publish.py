@@ -8,7 +8,7 @@ waiting (package-launcher-macos.sh, MAC_NOTARY_SUBMIT) and uploads two artifacts
     launcher-mac   the DMG, the update zip, latest-mac.yml, blockmaps (what pp-release publishes)
     mac-notary     notary.json: {"id": <Apple submission ID>, "version": "0.1.N", "file": <DMG>}
 
-This script (client-mac-publish.yml, every 10 minutes and after each client run, on sarahvps2)
+This script (client-mac-publish.yml, after each client run and on a schedule, on sarahvps2)
 looks at every pending mac-notary artifact and asks Apple about its submission:
 
     - In Progress: left alone, asked again next time. There is no time limit: a build waits as long
@@ -22,6 +22,15 @@ looks at every pending mac-notary artifact and asks Apple about its submission:
 Dropped builds have both artifacts deleted. Runs are serialized (the workflow's concurrency group),
 so the version check and the publish can't interleave with another run.
 
+Waiting: GitHub runs the "every 10 minutes" schedule only every 3-10 hours, and Apple rarely
+answers within the minute between the macos job and the run it triggers, so that alone left Macs
+hours behind (0.1.135 on 2026-11-09). So the workflow first runs this with --wait on a
+GitHub-hosted runner (sarahvps2 is the only self-hosted runner and also deploys the server, so it
+never waits): it asks Apple every minute until Apple has answered a pending build, then the
+publish runs. When builds still wait after publishing, --again-hours starts the workflow again
+(workflow_dispatch), so a build is waited for until Apple answers, for that many hours after its
+client run; after that only the schedule asks.
+
 Needs: GH_TOKEN (actions: write), GITHUB_REPOSITORY, APPLE_API_KEY_P8 (the .p8's text),
 APPLE_API_KEY_ID, APPLE_API_ISSUER; python3 and openssl. --dry-run only reports.
 """
@@ -30,6 +39,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import calendar
 import io
 import json
 import os
@@ -73,6 +83,7 @@ class Build:
     status: str | None     # Apple's status; None when it could not be asked this time
     run_id: int
     marker_id: int
+    created: str | None = None   # the mac-notary artifact's created_at (ISO 8601)
 
 
 @dataclass
@@ -296,17 +307,14 @@ def publish(b: Build, work: Path, dry: bool) -> None:
     shutil.rmtree(dest, ignore_errors=True)
 
 
-def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--work", default=tempfile.gettempdir(), help="where to unpack a build to publish")
-    ap.add_argument("--dry-run", action="store_true")
-    args = ap.parse_args()
-    work = Path(args.work)
+ANSWERED = ("Accepted", "Rejected", "Invalid")
 
+
+def pending_builds(quiet: bool = False) -> tuple[list[Build], str | None]:
+    """Every pending build with Apple's status now, and the notary token used (None: no builds)."""
     markers = list_artifacts(MARKER)
     if not markers:
-        log("no macOS builds waiting for Apple")
-        return 0
+        return [], None
     token = notary_token()
     builds: list[Build] = []
     for a in markers:
@@ -315,8 +323,88 @@ def main() -> int:
             continue
         status = submission_status(info["id"], token)
         builds.append(Build(version=str(info.get("version")), submission=info["id"], status=status,
-                            run_id=a["workflow_run"]["id"], marker_id=a["id"]))
-        log(f"{info.get('version')}: run {a['workflow_run']['id']}, submission {info['id']}: {status}")
+                            run_id=a["workflow_run"]["id"], marker_id=a["id"], created=a.get("created_at")))
+        if not quiet:
+            log(f"{info.get('version')}: run {a['workflow_run']['id']}, submission {info['id']}: {status}")
+    return builds, token
+
+
+def something_to_do(builds: list[Build]) -> bool:
+    """Whether to stop waiting: no builds left, or Apple has answered one of them."""
+    return not builds or any(b.status in ANSWERED for b in builds)
+
+
+def wait_for_apple(minutes: float) -> int:
+    """Asks Apple every minute until it has answered a pending build (or none are left), at most
+    `minutes`. Changes nothing and always succeeds: the publish job runs after it either way."""
+    deadline = time.monotonic() + minutes * 60
+    seen: dict[str, str | None] = {}
+    while True:
+        try:
+            builds, _ = pending_builds(quiet=True)  # a fresh token each time: they last 15 minutes
+        except (urllib.error.URLError, subprocess.CalledProcessError, KeyError, ValueError) as e:
+            log(f"could not look at the pending builds ({e}); publishing what there is")
+            return 0
+        for x in builds:
+            if seen.get(x.version, "") != x.status:
+                log(f"{x.version}: run {x.run_id}, submission {x.submission}: {x.status}")
+                seen[x.version] = x.status
+        if something_to_do(builds):
+            log("Apple has answered" if builds else "no macOS builds waiting for Apple")
+            return 0
+        if time.monotonic() >= deadline:
+            log(f"Apple has not answered within {minutes:g} minutes; publishing what there is")
+            return 0
+        time.sleep(60)
+
+
+def age_hours(created: str | None, now: float | None = None) -> float | None:
+    """Hours since an artifact's created_at ("2026-11-09T22:45:33Z"), None when unknown."""
+    try:
+        t = calendar.timegm(time.strptime((created or "")[:19], "%Y-%m-%dT%H:%M:%S"))
+    except ValueError:
+        return None
+    return ((time.time() if now is None else now) - t) / 3600
+
+
+def keep_waiting(wait: list[Build], hours: float, now: float | None = None) -> list[Build]:
+    """The waiting builds whose client run is recent enough to start another run for."""
+    return [x for x in wait if (age := age_hours(x.created, now)) is not None and age < hours]
+
+
+def dispatch_again() -> None:
+    """Starts this workflow again (GITHUB_TOKEN may start workflow_dispatch runs)."""
+    ref = os.environ.get("GITHUB_REF_NAME") or "main"
+    req = urllib.request.Request(
+        f"{GITHUB_API}{repo()}/actions/workflows/client-mac-publish.yml/dispatches",
+        data=json.dumps({"ref": ref}).encode(), method="POST", headers={
+            "Authorization": f"Bearer {os.environ['GH_TOKEN']}",
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+            "Content-Type": "application/json",
+        })
+    with urllib.request.urlopen(req, timeout=60):
+        pass
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--work", default=tempfile.gettempdir(), help="where to unpack a build to publish")
+    ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--wait", type=float, metavar="MINUTES",
+                    help="only wait (at most MINUTES) until Apple answers a pending build; publish nothing")
+    ap.add_argument("--again-hours", type=float, default=0, metavar="HOURS",
+                    help="start the workflow again while builds younger than HOURS wait for Apple")
+    args = ap.parse_args()
+    work = Path(args.work)
+
+    if args.wait is not None:
+        return wait_for_apple(args.wait)
+
+    builds, token = pending_builds()
+    if token is None:
+        log("no macOS builds waiting for Apple")
+        return 0
 
     published = published_mac_version()
     log(f"published latest-mac.yml: {published}")
@@ -341,6 +429,17 @@ def main() -> int:
         delete_run_artifacts(b, args.dry_run)
     for b in p.wait:
         log(f"waiting for Apple: macOS {b.version} (run {b.run_id}, {b.status or 'status unknown'})")
+    again = keep_waiting(p.wait, args.again_hours)
+    if again:
+        names = ", ".join(x.version for x in again)
+        if args.dry_run:
+            log(f"(dry run) would start this workflow again to keep waiting for {names}")
+        else:
+            try:
+                dispatch_again()
+                log(f"started this workflow again to keep waiting for {names}")
+            except urllib.error.URLError as e:
+                log(f"::warning::could not start this workflow again ({e}); the schedule asks later")
     return 1 if failed else 0
 
 

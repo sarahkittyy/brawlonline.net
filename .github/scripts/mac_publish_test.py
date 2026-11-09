@@ -66,6 +66,27 @@ class PlanTest(unittest.TestCase):
         self.assertEqual(p.publish.version, "0.1.100")
 
 
+class WaitTest(unittest.TestCase):
+    def test_stops_once_apple_answers_any_build(self):
+        self.assertFalse(mp.something_to_do([b("0.1.135", "In Progress"), b("0.1.136", None)]))
+        self.assertTrue(mp.something_to_do([b("0.1.135", "In Progress"), b("0.1.136", "Accepted")]))
+        self.assertTrue(mp.something_to_do([b("0.1.135", "Rejected")]))
+        self.assertTrue(mp.something_to_do([]))
+
+    def test_age_from_artifact_time(self):
+        now = mp.calendar.timegm((2026, 11, 9, 23, 45, 33, 0, 0, 0))
+        self.assertAlmostEqual(mp.age_hours("2026-11-09T22:45:33Z", now), 1.0)
+        self.assertIsNone(mp.age_hours(None, now))
+        self.assertIsNone(mp.age_hours("soon", now))
+
+    def test_runs_again_only_for_recent_builds(self):
+        now = mp.calendar.timegm((2026, 11, 10, 22, 0, 0, 0, 0, 0))
+        young, old, unknown = b("0.1.136", "In Progress"), b("0.1.135", "In Progress"), b("0.1.137", None)
+        young.created, old.created = "2026-11-10T20:00:00Z", "2026-11-09T20:00:00Z"
+        self.assertEqual(mp.keep_waiting([young, old, unknown], 24, now), [young])
+        self.assertEqual(mp.keep_waiting([young], 0, now), [])
+
+
 class TokenTest(unittest.TestCase):
     def test_es256_token_verifies(self):
         with tempfile.TemporaryDirectory() as tmp:
