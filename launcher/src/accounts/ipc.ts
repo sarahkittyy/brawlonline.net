@@ -74,7 +74,7 @@ export const ipc_accountsPublicUser = makeEndpoint.main(
 
 export const ipc_accountsLeaderboard = makeEndpoint.main(
   "accounts_leaderboard",
-  <{ limit?: number; after?: string }>_,
+  <{ limit?: number; after?: string; q?: string }>_,
   <R<LeaderboardPage>>_,
 );
 

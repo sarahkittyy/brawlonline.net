@@ -69,8 +69,11 @@ export interface BackendService {
   validateUserId(userId: string): Promise<{ displayName: string; connectCode: string }>;
   fetchUserData(): Promise<UserData | undefined>;
   fetchRankedNetplayProfile(userId: string): Promise<RankedProfile | undefined>;
-  /** One leaderboard page; `after` is the previous page's `next`. */
-  fetchLeaderboard(after?: string): Promise<LeaderboardPage>;
+  /**
+   * One leaderboard page; `after` is the previous page's `next`. With `search`, only the players whose
+   * name or connect code contains it.
+   */
+  fetchLeaderboard(after?: string, search?: string): Promise<LeaderboardPage>;
   /** One page of the logged-in player's matches, newest first; `before` is the previous page's `next`. */
   fetchMatchHistory(mode: MatchHistoryFilter, before?: string): Promise<MatchHistoryPage>;
   /** Players online and the public rooms (Home > Overview); needs a login. */

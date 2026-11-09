@@ -57,7 +57,7 @@ export default function setupAccountsIpc() {
   ipc_accountsInitNetplay.main!.handle(async ({ uid, codeStart }) => manager.initNetplay(uid, codeStart));
   ipc_accountsRename.main!.handle(async ({ uid, displayName }) => await manager.rename(uid, displayName));
   ipc_accountsPublicUser.main!.handle(async ({ uid }) => await manager.publicUser(uid));
-  ipc_accountsLeaderboard.main!.handle(async ({ limit, after }) => await manager.leaderboard({ limit, after }));
+  ipc_accountsLeaderboard.main!.handle(async ({ limit, after, q }) => await manager.leaderboard({ limit, after, q }));
   ipc_accountsMatchHistory.main!.handle(
     async ({ uid, mode, limit, before }) => await manager.matchHistory(uid, { mode, limit, before }),
   );

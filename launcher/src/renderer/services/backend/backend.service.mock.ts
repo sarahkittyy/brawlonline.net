@@ -407,8 +407,12 @@ class MockBackendClient implements BackendService {
   }
 
   @delayAndMaybeError(SHOULD_ERROR)
-  async fetchLeaderboard(after?: string): Promise<LeaderboardPage> {
-    const { rows, next } = mockPage(mockLeaderboard, after, MOCK_PAGE_SIZE);
+  async fetchLeaderboard(after?: string, search?: string): Promise<LeaderboardPage> {
+    const text = search?.trim().toLowerCase() ?? "";
+    const matching = mockLeaderboard.filter(
+      (e) => e.displayName.toLowerCase().includes(text) || e.connectCode.toLowerCase().includes(text),
+    );
+    const { rows, next } = mockPage(matching, after, MOCK_PAGE_SIZE);
     return { entries: rows, next, total: mockLeaderboard.length };
   }
 

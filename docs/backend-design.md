@@ -246,7 +246,7 @@ Option: serve a tiny GraphQL endpoint with exactly these operations (async-graph
 | `POST /v1/ranked/report-leave {kind: left \| opponent_left \| match_quality, beforeStageSelect?}` (built; a `left` before the stage select with no game played is not rated; `match_quality` voids the set unless it was on one player's own end, server/README.md "Whose end it was") | `reportOnlineMatchStatus` (`abandoned`) | play key |
 | (none: the server decides the set from the game reports) | 0xC2 path | |
 | `GET /v1/ranked/result?matchId=&uid=` (built) | `getRankedMatchPersonalResult` | public |
-| `GET /v1/ranked/leaderboard?limit=&after=` (built; keyset pages, no regions or seasons) | slippi.gg | public, per-IP limit |
+| `GET /v1/ranked/leaderboard?limit=&after=&q=` (built; keyset pages, no regions or seasons; `q` keeps the players whose name or code contains it, with their positions on the whole board) | slippi.gg | public, per-IP limit |
 | `GET /v1/me/matches?mode=all\|ranked\|unranked\|rooms\|twos&limit=&before=` (built) | slippi.gg profile | session |
 | `POST /v1/rulesets`, `GET /v1/rulesets/<code>[/preview]`, `GET /v1/me/rulesets[/recent]`, `PUT /v1/me/rulesets/<code>/hidden`, `/v1/me/ruleset-drafts[/<id>]`, `GET`/`PUT /v1/me/ruleset` (built 2026-10-11: room rulesets, `docs/rulesets-protocol.md`) | (none: ours) | public lookup (per-IP limit); the rest session |
 

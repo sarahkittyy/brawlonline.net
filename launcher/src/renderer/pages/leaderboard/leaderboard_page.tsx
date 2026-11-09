@@ -1,11 +1,17 @@
+import CloseIcon from "@mui/icons-material/Close";
+import SearchIcon from "@mui/icons-material/Search";
+import CircularProgress from "@mui/material/CircularProgress";
+import IconButton from "@mui/material/IconButton";
+import InputAdornment from "@mui/material/InputAdornment";
 import Table from "@mui/material/Table";
 import TableBody from "@mui/material/TableBody";
 import TableCell from "@mui/material/TableCell";
 import TableHead from "@mui/material/TableHead";
 import TableRow from "@mui/material/TableRow";
+import TextField from "@mui/material/TextField";
 import Tooltip from "@mui/material/Tooltip";
 import Typography from "@mui/material/Typography";
-import React, { useCallback } from "react";
+import React, { useCallback, useState } from "react";
 
 import { InfiniteScrollContainer } from "@/components/infinite_scroll_container/infinite_scroll_container";
 import { PagedListStatus } from "@/components/paged_list_status/paged_list_status";
@@ -13,6 +19,7 @@ import { RankBadge } from "@/components/rank_badge/rank_badge";
 import { useAccount } from "@/lib/hooks/use_account";
 import type { CursorPage } from "@/lib/hooks/use_cursor_pages";
 import { useCursorPages } from "@/lib/hooks/use_cursor_pages";
+import { useSearchText } from "@/lib/hooks/use_search_text";
 import { formatRating, formatRecord, RATING_DOWN_COLOR, RATING_UP_COLOR } from "@/lib/ranked_format";
 import { useServices } from "@/services";
 import type { LeaderboardEntry } from "@/services/backend/types";
@@ -21,43 +28,101 @@ import { LeaderboardPageMessages as Messages } from "./leaderboard_page.messages
 
 type LeaderboardPageData = CursorPage<LeaderboardEntry> & { total: number };
 
+/** How long a search's loaded pages (the whole board's too) are shown again without a request. */
+const SEARCH_STALE_MS = 60_000;
+
 /**
  * The ranked leaderboard: everyone with a rated set, by Elo rating. Slippi has its leaderboards
  * on slippi.gg rather than in the launcher; this is a plain table in the launcher's style.
- * Pages load as the list scrolls near its end.
+ * Pages load as the list scrolls near its end. The search box (right of the title) finds players
+ * by name or connect code on the server, as the player types: it waits for a pause in the typing
+ * and sends at most one search a second ({@link useSearchText}), a search typed again (or the
+ * cleared box) within {@link SEARCH_STALE_MS} shows its pages without asking again, and the last
+ * list stays (dimmed) until the new one arrives.
  */
 export const LeaderboardPage = React.memo(function LeaderboardPage() {
   const { backendService } = useServices();
   const myUid = useAccount((s) => s.user?.uid);
+  const [text, setText] = useState("");
+  const search = useSearchText(text);
 
   const fetchPage = useCallback(
     async (after: string | undefined): Promise<LeaderboardPageData> => {
-      const page = await backendService.fetchLeaderboard(after);
+      const page = await backendService.fetchLeaderboard(after, search || undefined);
       return { items: page.entries, next: page.next, total: page.total };
     },
-    [backendService],
+    [backendService, search],
   );
-  const pages = useCursorPages<LeaderboardEntry>({ queryKey: ["leaderboard"], fetchPage });
+  const pages = useCursorPages<LeaderboardEntry>({
+    queryKey: ["leaderboard", search],
+    fetchPage,
+    keepPrevious: true,
+    staleTime: SEARCH_STALE_MS,
+  });
   const total = (pages.firstPage as LeaderboardPageData | undefined)?.total;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", flex: 1, minWidth: 0, padding: "20px 20px 0" }}>
-      <div style={{ display: "flex", alignItems: "baseline", gap: 12, marginBottom: 12 }}>
-        <Typography variant="h5">{Messages.leaderboard()}</Typography>
-        {total != null && (
-          <Typography variant="body2" color="text.secondary">
-            {Messages.rankedPlayers(total)}
-          </Typography>
-        )}
+      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 12 }}>
+        <div style={{ display: "flex", alignItems: "baseline", gap: 12, flex: 1, minWidth: 0 }}>
+          <Typography variant="h5">{Messages.leaderboard()}</Typography>
+          {total != null && (
+            <Typography variant="body2" color="text.secondary">
+              {Messages.rankedPlayers(total)}
+            </Typography>
+          )}
+        </div>
+        <TextField
+          size="small"
+          hiddenLabel={true}
+          value={text}
+          placeholder={Messages.searchPlaceholder()}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Escape" && text !== "") {
+              e.stopPropagation();
+              setText("");
+            }
+          }}
+          inputProps={{
+            "aria-label": Messages.searchPlaceholder(),
+            "data-testid": "leaderboard-search",
+            maxLength: 64,
+          }}
+          InputProps={{
+            startAdornment: (
+              <InputAdornment position="start">
+                <SearchIcon fontSize="small" />
+              </InputAdornment>
+            ),
+            endAdornment: (
+              <InputAdornment position="end" sx={{ width: 28, justifyContent: "center" }}>
+                {pages.isPrevious ? (
+                  <CircularProgress color="inherit" size={14} />
+                ) : text !== "" ? (
+                  <IconButton size="small" aria-label={Messages.clearSearch()} onClick={() => setText("")}>
+                    <CloseIcon fontSize="inherit" />
+                  </IconButton>
+                ) : null}
+              </InputAdornment>
+            ),
+          }}
+          sx={{ width: 280, flexShrink: 0 }}
+        />
       </div>
       <div style={{ flex: 1, minHeight: 0 }}>
         <InfiniteScrollContainer
           onLoadMore={pages.loadMore}
           hasMore={pages.hasMore && !pages.error}
           isLoading={pages.isLoading || pages.isLoadingMore}
+          resetKey={search}
         >
           {pages.error && pages.items.length === 0 ? null : (
-            <Table size="small" stickyHeader={true}>
+            <Table
+              size="small"
+              stickyHeader={true}
+              style={{ opacity: pages.isPrevious ? 0.5 : 1, transition: "opacity 150ms" }}
+            >
               <LeaderboardHead />
               <TableBody>
                 {pages.items.map((e) => (
@@ -68,7 +133,7 @@ export const LeaderboardPage = React.memo(function LeaderboardPage() {
           )}
           {!pages.isLoading && !pages.error && pages.items.length === 0 && (
             <Typography variant="body2" color="text.secondary" sx={{ padding: 2 }}>
-              {Messages.empty()}
+              {search ? Messages.noMatches(search) : Messages.empty()}
             </Typography>
           )}
           <PagedListStatus pages={pages} />

@@ -100,6 +100,43 @@ describe("useCursorPages", () => {
     expect(server.calls).toEqual([undefined, undefined, "2", "2"]);
   });
 
+  it("with keepPrevious, shows the last key's list until the new key's first page arrives", async () => {
+    let release: (() => void) | undefined;
+    const fetchPage = (key: string) => async (): Promise<CursorPage<string>> => {
+      if (key === "b") {
+        await new Promise<void>((resolve) => (release = resolve));
+      }
+      return { items: [`${key}0`, `${key}1`], next: "more" };
+    };
+    const calls: string[] = [];
+    const { result, rerender } = renderHook(
+      ({ key }) =>
+        useCursorPages({
+          queryKey: ["t-keep", key],
+          fetchPage: async () => {
+            calls.push(key);
+            return await fetchPage(key)();
+          },
+          keepPrevious: true,
+        }),
+      { wrapper: wrapper(), initialProps: { key: "a" } },
+    );
+    await waitFor(() => expect(result.current.items).toEqual(["a0", "a1"]));
+    expect(result.current.isPrevious).toBe(false);
+
+    rerender({ key: "b" });
+    await waitFor(() => expect(result.current.isPrevious).toBe(true));
+    expect(result.current.items).toEqual(["a0", "a1"]);
+    expect(result.current.isLoading).toBe(false);
+    // The old list's next page is not asked for while it stands in.
+    act(() => result.current.loadMore());
+    expect(calls).toEqual(["a", "b"]);
+
+    act(() => release?.());
+    await waitFor(() => expect(result.current.items).toEqual(["b0", "b1"]));
+    expect(result.current.isPrevious).toBe(false);
+  });
+
   it("gives up on a page after the 429 retries", async () => {
     const server = fakeServer(4, 2);
     for (let i = 0; i <= MAX_RATE_LIMIT_RETRIES; i++) {

@@ -12,4 +12,7 @@ export const LeaderboardPageMessages = {
   newEntry: () => "New",
   newEntryTooltip: () => "Placed in the last 24 hours",
   empty: () => "Nobody has played a ranked set yet.",
+  searchPlaceholder: () => "Search by name or code",
+  clearSearch: () => "Clear search",
+  noMatches: (q: string) => `No ranked player matches "${q}".`,
 };

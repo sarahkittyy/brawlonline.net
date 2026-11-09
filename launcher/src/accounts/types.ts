@@ -92,11 +92,15 @@ export type LeaderboardEntry = {
   positionChange?: number | null;
 };
 
-/** `GET /v1/ranked/leaderboard?limit=&after=`: `next` is the `after` of the next page, null on the last. */
+/**
+ * `GET /v1/ranked/leaderboard?limit=&after=&q=`: `next` is the `after` of the next page, null on the
+ * last. With `q`, only the players whose name or connect code contains it (positions still on the
+ * whole leaderboard).
+ */
 export type LeaderboardPage = {
   entries: LeaderboardEntry[];
   next: string | null;
-  /** Players on the leaderboard. */
+  /** Players on the leaderboard (all of them, with `q` too). */
   total: number;
 };
 
@@ -326,8 +330,8 @@ export interface AccountsApi {
   initNetplay(uid: string, codeStart: string): Promise<AccountsMe>;
   rename(uid: string, displayName: string): Promise<AccountsMe>;
   publicUser(uid: string): Promise<AccountsPublicUser>;
-  /** One leaderboard page (public). */
-  leaderboard(query: { limit?: number; after?: string }): Promise<LeaderboardPage>;
+  /** One leaderboard page (public); `q` searches names and connect codes. */
+  leaderboard(query: { limit?: number; after?: string; q?: string }): Promise<LeaderboardPage>;
   /** One page of this account's match history. */
   matchHistory(
     uid: string,

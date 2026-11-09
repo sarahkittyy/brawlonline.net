@@ -105,7 +105,7 @@ export class AccountsHttpClient {
     return this._request("GET", `/user/${encodeURIComponent(uid)}?additionalFields=chatMessages,rank`, {});
   }
 
-  leaderboard(query: { limit?: number; after?: string }): Promise<LeaderboardPage> {
+  leaderboard(query: { limit?: number; after?: string; q?: string }): Promise<LeaderboardPage> {
     return this._request("GET", `/v1/ranked/leaderboard${queryString(query)}`, {});
   }
 

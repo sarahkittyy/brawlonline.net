@@ -264,6 +264,11 @@ describe("accounts", () => {
 
     expect((await manager.matchHistory(UID, { mode: "ranked", before: "Yz" })).ok).toBe(true);
     expect(calls[2].url).toBe("http://api/v1/me/matches?mode=ranked&before=Yz");
+    // A search goes in `q`; an empty one is left out.
+    await manager.leaderboard({ limit: 50, q: "beef#5 " });
+    expect(calls[3].url).toBe("http://api/v1/ranked/leaderboard?limit=50&q=beef%235+");
+    await manager.leaderboard({ q: "" });
+    expect(calls[4].url).toBe("http://api/v1/ranked/leaderboard");
 
     limited = true;
     expect(await manager.leaderboard({ after: "x" })).toEqual({

@@ -96,7 +96,7 @@ export class AccountsManager {
     return wrap(() => this.client.publicUser(uid));
   }
 
-  leaderboard(query: { limit?: number; after?: string }): Promise<AccountsResult<LeaderboardPage>> {
+  leaderboard(query: { limit?: number; after?: string; q?: string }): Promise<AccountsResult<LeaderboardPage>> {
     return wrap(() => this.client.leaderboard(query));
   }
 

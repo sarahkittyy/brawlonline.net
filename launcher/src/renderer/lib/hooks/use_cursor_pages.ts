@@ -1,5 +1,5 @@
 import type { QueryKey } from "@tanstack/react-query";
-import { useInfiniteQuery } from "@tanstack/react-query";
+import { keepPreviousData, useInfiniteQuery } from "@tanstack/react-query";
 import { useCallback, useMemo } from "react";
 
 /** A page of a keyset-paginated list: `next` is the cursor of the page after it, null on the last. */
@@ -35,8 +35,10 @@ export type CursorPages<T> = {
   items: T[];
   /** The first page's extra data (for example the leaderboard's `total`). */
   firstPage: CursorPage<T> | undefined;
-  /** The first page is loading. */
+  /** The first page is loading (with `keepPrevious`, only when there is no earlier list to show). */
   isLoading: boolean;
+  /** With `keepPrevious`: the items are the previous key's while this key's first page loads. */
+  isPrevious: boolean;
   /** A page after the first is loading (or waiting to retry). */
   isLoadingMore: boolean;
   hasMore: boolean;
@@ -57,17 +59,24 @@ export type CursorPages<T> = {
  * backoff); other errors, and a 429 after {@link MAX_RATE_LIMIT_RETRIES} retries, stop loading
  * until `retry` is called. With `refresh`, the loaded pages are fetched again on every mount
  * and when the window regains focus (the app's default keeps the first load for the whole run).
+ * With `keepPrevious`, a new `queryKey` (a new search) keeps showing the last key's list until
+ * its own first page arrives, instead of an empty list. `staleTime` is how long a key's loaded
+ * pages are used as they are when it comes back (the app's default: refetched at once).
  */
 export function useCursorPages<T>({
   queryKey,
   fetchPage,
   enabled = true,
   refresh = false,
+  keepPrevious = false,
+  staleTime,
 }: {
   queryKey: QueryKey;
   fetchPage: (cursor: string | undefined) => Promise<CursorPage<T>>;
   enabled?: boolean;
   refresh?: boolean;
+  keepPrevious?: boolean;
+  staleTime?: number;
 }): CursorPages<T> {
   const query = useInfiniteQuery({
     queryKey,
@@ -79,20 +88,32 @@ export function useCursorPages<T>({
     refetchOnWindowFocus: refresh ? "always" : undefined,
     retry: (failures, err) => isRateLimited(err) && failures < MAX_RATE_LIMIT_RETRIES,
     retryDelay: (attempt, err) => retryDelayMs(err, attempt),
+    placeholderData: keepPrevious ? keepPreviousData : undefined,
+    staleTime,
   });
-  const { data, hasNextPage, isFetching, isError, fetchNextPage, refetch, failureCount, failureReason } = query;
+  const {
+    data,
+    hasNextPage,
+    isFetching,
+    isError,
+    isPlaceholderData,
+    fetchNextPage,
+    refetch,
+    failureCount,
+    failureReason,
+  } = query;
 
   const items = useMemo(() => data?.pages.flatMap((p) => p.items) ?? [], [data]);
   const waiting = isFetching && failureCount > 0 && isRateLimited(failureReason);
   const rateLimitedFor = waiting ? Math.ceil(retryDelayMs(failureReason, failureCount - 1) / 1000) : null;
 
   const loadMore = useCallback(() => {
-    if (hasNextPage && !isFetching && !isError) {
+    if (hasNextPage && !isFetching && !isError && !isPlaceholderData) {
       // Joins a fetch already under way (the rendered state can lag a call behind) instead of
       // cancelling and repeating it.
       void fetchNextPage({ cancelRefetch: false });
     }
-  }, [hasNextPage, isFetching, isError, fetchNextPage]);
+  }, [hasNextPage, isFetching, isError, isPlaceholderData, fetchNextPage]);
 
   const retry = useCallback(() => {
     if (isFetching) {
@@ -109,6 +130,7 @@ export function useCursorPages<T>({
     items,
     firstPage: data?.pages[0],
     isLoading: query.isPending && enabled,
+    isPrevious: isPlaceholderData,
     isLoadingMore: query.isFetchingNextPage,
     hasMore: Boolean(hasNextPage),
     rateLimitedFor,

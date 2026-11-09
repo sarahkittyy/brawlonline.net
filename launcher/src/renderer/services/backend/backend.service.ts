@@ -121,8 +121,8 @@ class AccountsBackendClient implements BackendService {
     return mapRankedProfile(await this._api.publicUser(userId));
   }
 
-  async fetchLeaderboard(after?: string): Promise<LeaderboardPage> {
-    return await this._api.leaderboard({ limit: LEADERBOARD_PAGE_SIZE, after });
+  async fetchLeaderboard(after?: string, search?: string): Promise<LeaderboardPage> {
+    return await this._api.leaderboard({ limit: LEADERBOARD_PAGE_SIZE, after, q: search });
   }
 
   async fetchMatchHistory(mode: MatchHistoryFilter, before?: string): Promise<MatchHistoryPage> {

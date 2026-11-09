@@ -13,6 +13,11 @@
 //! it stood then is rebuilt from `rating_events` (each player's rating and sets after their last
 //! rated set before then), so a voided set (`pp-admin ranked void`, which deletes its events and
 //! re-rates the later ones) changes the old positions too and no snapshot goes stale.
+//!
+//! With `q`, the pages hold only the players whose display name or connect code contains it
+//! (case-insensitive; the launcher's search box, Sarah's board 2026-11-09), still in leaderboard
+//! order and with their positions on the whole leaderboard. A search page counts against the
+//! same per-IP limit as any page; the launcher debounces and spaces its searches.
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -34,6 +39,8 @@ use crate::AppState;
 
 pub const DEFAULT_LIMIT: u32 = 50;
 pub const MAX_LIMIT: u32 = 100;
+/// Longest search text taken (longer is cut), as long as a display name can be.
+pub const MAX_QUERY_CHARS: usize = 64;
 
 /// How far back `positionChange` compares, as a Postgres interval.
 pub const CHANGE_WINDOW: &str = "24 hours";
@@ -94,7 +101,7 @@ pub struct Page {
     pub entries: Vec<Entry>,
     /// The cursor for the next page (`after`), or null on the last page.
     pub next: Option<String>,
-    /// Placed players.
+    /// Placed players (all of them, with a search too).
     pub total: u64,
 }
 
@@ -123,31 +130,35 @@ fn page_sql() -> String {
     )
 }
 
-/// One page of `limit` rows after `after` (from the top without it).
-pub async fn page(pool: &PgPool, after: Option<Key>, limit: u32) -> sqlx::Result<Page> {
+/// One page of `limit` rows after `after` (from the top without it); with `search`, only the
+/// players whose display name or connect code contains it, ignoring case.
+pub async fn page(pool: &PgPool, after: Option<Key>, limit: u32, search: Option<&str>) -> sqlx::Result<Page> {
     let limit = i64::from(limit);
     let mut tx = pool.begin().await?;
     // The page and the counts from one snapshot, so the positions match the rows.
     sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY").execute(&mut *tx).await?;
-    let mut rows: Vec<Row> = match after {
-        None => {
-            sqlx::query_as(&format!("{} ORDER BY r.rating DESC, r.uid LIMIT $1", page_sql()))
-                .bind(limit + 1)
-                .fetch_all(&mut *tx)
-                .await?
-        }
-        Some(k) => {
-            sqlx::query_as(&format!(
-                "{} AND (r.rating < $2 OR (r.rating = $2 AND r.uid > $3)) ORDER BY r.rating DESC, r.uid LIMIT $1",
-                page_sql()
-            ))
-            .bind(limit + 1)
-            .bind(k.rating)
-            .bind(k.uid)
-            .fetch_all(&mut *tx)
-            .await?
-        }
-    };
+    // The cursor's condition only with a cursor, so a deep page stays an index range scan, and
+    // the search with strpos rather than LIKE, so `%` and `_` in it are just characters.
+    let mut sql = page_sql();
+    if after.is_some() {
+        sql.push_str(" AND (r.rating < $2 OR (r.rating = $2 AND r.uid > $3))");
+    }
+    if search.is_some() {
+        let n = if after.is_some() { 4 } else { 2 };
+        sql.push_str(&format!(
+            " AND (strpos(lower(u.display_name), lower(${n})) > 0
+                   OR strpos(lower(COALESCE(u.connect_code, '')), lower(${n})) > 0)"
+        ));
+    }
+    sql.push_str(" ORDER BY r.rating DESC, r.uid LIMIT $1");
+    let mut query = sqlx::query_as(&sql).bind(limit + 1);
+    if let Some(k) = after {
+        query = query.bind(k.rating).bind(k.uid);
+    }
+    if let Some(text) = search {
+        query = query.bind(text);
+    }
+    let mut rows: Vec<Row> = query.fetch_all(&mut *tx).await?;
     // Rows up to and including the cursor's (none without one), and everyone.
     let (ahead, total): (i64, i64) = sqlx::query_as(&format!(
         "SELECT count(*) FILTER (WHERE rating > $1 OR (rating = $1 AND uid <= $2)), count(*)
@@ -158,6 +169,22 @@ pub async fn page(pool: &PgPool, after: Option<Key>, limit: u32) -> sqlx::Result
     .fetch_one(&mut *tx)
     .await?;
     let page_uids: Vec<Uuid> = rows.iter().take(limit as usize).map(|r| r.uid).collect();
+    // A search's rows are not consecutive: each one's position on the whole leaderboard.
+    let positions: HashMap<Uuid, i64> = if search.is_some() {
+        sqlx::query_as::<_, (Uuid, i64)>(&format!(
+            "SELECT uid, pos FROM (
+                 SELECT uid, row_number() OVER (ORDER BY rating DESC, uid) AS pos
+                   FROM ratings WHERE sets_played >= {PLACED}) board
+              WHERE uid = ANY($1)"
+        ))
+        .bind(&page_uids)
+        .fetch_all(&mut *tx)
+        .await?
+        .into_iter()
+        .collect()
+    } else {
+        HashMap::new()
+    };
     let before: HashMap<Uuid, i64> = sqlx::query_as::<_, (Uuid, i64)>(&format!(
         "SELECT uid, pos FROM (
              SELECT uid, row_number() OVER (ORDER BY rating DESC, uid) AS pos FROM (
@@ -181,7 +208,10 @@ pub async fn page(pool: &PgPool, after: Option<Key>, limit: u32) -> sqlx::Result
         .into_iter()
         .enumerate()
         .map(|(i, r)| {
-            let position = ahead.max(0) as u64 + 1 + i as u64;
+            let position = match positions.get(&r.uid) {
+                Some(&p) => p.max(1) as u64,
+                None => ahead.max(0) as u64 + 1 + i as u64,
+            };
             let tier = stored_tier(r.rank, r.rd);
             let sets_played = r.sets_played.max(0) as u32;
             Entry {
@@ -221,10 +251,12 @@ pub async fn placement(pool: &PgPool, uid: Uuid, standing: Standing) -> sqlx::Re
 pub struct LeaderboardQuery {
     pub limit: Option<u32>,
     pub after: Option<String>,
+    /// Search text (trimmed, at most [`MAX_QUERY_CHARS`]); empty is no search.
+    pub q: Option<String>,
 }
 
-/// `GET /v1/ranked/leaderboard?limit=&after=`. Public; limited per client IP
-/// ([`common::ratelimit::LEADERBOARD_IP_WINDOWS`]).
+/// `GET /v1/ranked/leaderboard?limit=&after=&q=`. Public; limited per client IP
+/// ([`common::ratelimit::LEADERBOARD_IP_WINDOWS`]), searches included.
 pub async fn leaderboard(
     State(state): State<AppState>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
@@ -241,12 +273,27 @@ pub async fn leaderboard(
         Some(a) => Some(Key::parse(a).ok_or_else(|| ApiError::bad_request("invalid_cursor", "Invalid cursor"))?),
     };
     let n = cursor::page_limit(q.limit, DEFAULT_LIMIT, MAX_LIMIT);
-    Ok(Json(page(&state.pool, after, n).await?))
+    let search = search_text(q.q.as_deref());
+    Ok(Json(page(&state.pool, after, n, search.as_deref()).await?))
+}
+
+/// The search text taken from `q`: trimmed and cut to [`MAX_QUERY_CHARS`]; `None` when empty.
+fn search_text(q: Option<&str>) -> Option<String> {
+    q.map(|t| t.trim().chars().take(MAX_QUERY_CHARS).collect::<String>()).filter(|t| !t.is_empty())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn search_text_is_trimmed_and_cut() {
+        assert_eq!(search_text(None), None);
+        assert_eq!(search_text(Some("  ")), None);
+        assert_eq!(search_text(Some(" Beef#5 ")).as_deref(), Some("Beef#5"));
+        let long = "é".repeat(MAX_QUERY_CHARS + 5);
+        assert_eq!(search_text(Some(&long)).unwrap().chars().count(), MAX_QUERY_CHARS);
+    }
 
     #[test]
     fn cursors_keep_the_exact_rating() {

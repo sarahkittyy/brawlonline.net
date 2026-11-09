@@ -194,6 +194,60 @@ async fn leaderboard_pages_positions_and_ties() {
     stack.shutdown().await;
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn leaderboard_search_by_name_or_code() {
+    let stack = Stack::start(StackOptions::default()).await.unwrap();
+    let placed = PLACEMENT_SETS as i32;
+    // player0..player11 (codes P#0..P#11), 1700 down by 10; player12, still placing; and a name
+    // with LIKE's wildcards in it.
+    for n in 0..12 {
+        rated(&stack.pool, n, Some(1700.0 - n as f64 * 10.0), placed).await;
+    }
+    rated(&stack.pool, 12, Some(2000.0), placed - 1).await;
+    let odd = rated(&stack.pool, 13, Some(1000.0), placed).await;
+    sqlx::query("UPDATE users SET display_name = 'Mr_100%' WHERE uid = $1")
+        .bind(odd)
+        .execute(&stack.pool)
+        .await
+        .unwrap();
+    let want = expected_order(&stack.pool).await;
+    let position_of = |uid: Uuid| want.iter().position(|(u, _)| *u == uid).unwrap() as u64 + 1;
+    let names = |page: &Value| -> Vec<String> {
+        page["entries"].as_array().unwrap().iter().map(|e| e["displayName"].as_str().unwrap().to_string()).collect()
+    };
+
+    // "PLAYER1" (any case): player1, player10, player11 in leaderboard order, each with its
+    // position on the whole board; the placing player12 is not there. `total` is everyone.
+    let page = board(&stack, "?q=PLAYER1").await;
+    assert_eq!(names(&page), ["player1", "player10", "player11"]);
+    assert_eq!(page["total"], 13);
+    for e in page["entries"].as_array().unwrap() {
+        assert_eq!(e["position"].as_u64().unwrap(), position_of(uid_of(e)), "{e}");
+    }
+    assert_eq!(page["entries"][1]["position"], 11);
+    // Pages of a search: the cursor carries on within the matches.
+    let p1 = board(&stack, "?q=player1&limit=2").await;
+    assert_eq!(names(&p1), ["player1", "player10"]);
+    let next = p1["next"].as_str().unwrap();
+    let p2 = board(&stack, &format!("?q=player1&limit=2&after={next}")).await;
+    assert_eq!(names(&p2), ["player11"]);
+    assert!(p2["next"].is_null());
+    assert_eq!(p2["entries"][0]["position"], 12);
+    // The connect code, with its '#' (encoded), and spaces around it trimmed.
+    assert_eq!(names(&board(&stack, "?q=%20p%237%20").await), ["player7"]);
+    // `%` and `_` are plain characters, not LIKE wildcards.
+    assert_eq!(names(&board(&stack, "?q=r_1").await), ["Mr_100%"]);
+    assert!(names(&board(&stack, "?q=y_r").await).is_empty(), "as a wildcard, y_r matches every playerN");
+    assert_eq!(names(&board(&stack, "?q=100%25").await), ["Mr_100%"]);
+    assert_eq!(names(&board(&stack, "?q=%25").await), ["Mr_100%"]);
+    // No match: an empty page; an empty or blank q is the whole board.
+    let none = board(&stack, "?q=nobody").await;
+    assert!(none["entries"].as_array().unwrap().is_empty() && none["next"].is_null(), "{none}");
+    assert_eq!(board(&stack, "?q=%20%20").await["entries"].as_array().unwrap().len(), 13);
+    assert_eq!(board(&stack, "?q=").await["entries"].as_array().unwrap().len(), 13);
+    stack.shutdown().await;
+}
+
 /// A rated set's rating change for `uid`, `hours` ago: the rating after it and the rated sets
 /// before it.
 async fn rating_event(pool: &PgPool, uid: Uuid, rating_after: f64, sets_before: i32, hours: f64) {
