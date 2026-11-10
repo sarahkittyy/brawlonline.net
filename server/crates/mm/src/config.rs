@@ -116,8 +116,8 @@ pub struct Config {
     #[arg(long, env = "MM_RANKED_PING_LIMIT_MAX_MS", default_value_t = 150.0)]
     pub ranked_ping_limit_max_ms: f64,
 
-    /// Two players who just played each other are paired again only once the longer-waiting of
-    /// the two has waited this many seconds.
+    /// Two players who just played each other are paired again only once both have waited this
+    /// many seconds.
     #[arg(long, env = "MM_REMATCH_HOLD_SECS", default_value_t = 60)]
     pub rematch_hold_secs: u64,
 

@@ -74,8 +74,14 @@
 //! pair without an estimate (an address the database does not place, or no database) is never
 //! held back. Two
 //! players who just played each other (each one's last Unranked or Ranked opponent, within
-//! `rematch_memory`) are held back the same way until the longer-waiting has waited
-//! `rematch_hold` (60 s), so anyone else searching meanwhile is paired first. Two Ranked players
+//! `rematch_memory`) are held back the same way until both have waited `rematch_hold` (60 s), so
+//! anyone else searching meanwhile is paired first, and one who searches a minute after the other
+//! still waits a minute (2026-11-09, Sarah: "it should be until both players have waited 60
+//! seconds"; the longer-waiting's 60 s until then). A match whose P2P connect failed (a search
+//! again within `FAILED_REQUEUE` of it) was never played, so it makes nobody a last opponent: each
+//! of the two goes back to the one before (Sarah: "if you don't connect, that shouldn't be your
+//! last opponent"; prod 2026-11-09, one of two who had just played failed to connect to someone
+//! else and was paired with the first again 30 s later). Two Ranked players
 //! whose set ended in its ping check (bug report #226: the real round trip was one the game's
 //! match quality aborts a game for, and either chose not to play it) are not paired again for
 //! `ranked_avoid` (3 h): each game's next search names the other (`search.avoid`, `after`), which
@@ -217,8 +223,8 @@ pub struct EngineConfig {
     pub ping_limit_max: f64,
     /// ... and this in Ranked.
     pub ranked_ping_limit_max: f64,
-    /// Two players who just played each other are paired again only once the longer-waiting of
-    /// the two has waited this long ...
+    /// Two players who just played each other are paired again only once both have waited this
+    /// long ...
     pub rematch_hold: Duration,
     /// ... if their match was made within this long.
     pub rematch_memory: Duration,
@@ -668,6 +674,15 @@ struct Conn {
     state: State,
 }
 
+/// A player's last Unranked or Ranked opponent and when that match was made, and the one before
+/// it (taken back when that match turns out not to have connected).
+#[derive(Debug, Clone, Copy)]
+struct LastOpponent {
+    opponent: Uuid,
+    at: Instant,
+    before: Option<(Uuid, Instant)>,
+}
+
 #[derive(Debug, Clone, Copy)]
 struct PairHistory {
     last_match: Instant,
@@ -695,9 +710,9 @@ pub struct Engine {
     /// Recently matched pairs (sorted uids), to space out re-pairing after a
     /// failed P2P connect.
     history: HashMap<(Uuid, Uuid), PairHistory>,
-    /// Each player's last Unranked or Ranked opponent and when that match was made, for the
-    /// rematch hold.
-    last_opponent: HashMap<Uuid, (Uuid, Instant)>,
+    /// Each player's last Unranked or Ranked opponent they connected to (as far as mm knows), for
+    /// the rematch hold.
+    last_opponent: HashMap<Uuid, LastOpponent>,
     ticket_limiter: RateLimiter<Uuid>,
     ip_limiter: RateLimiter<IpAddr>,
     hello_limiter: RateLimiter<Uuid>,
@@ -1899,6 +1914,7 @@ impl Engine {
                 _ => None,
             });
             tracing::info!(conn, %code, %region, ?loc, ?rating, queued = self.unranked.len() + 1, "unranked ticket waiting");
+            self.forget_failed_opponent(now, uid);
             self.unranked.push(conn);
             self.pair_queue(Mode::Unranked, now, wall, out);
         } else if p.mode == Mode::Ranked {
@@ -1910,6 +1926,8 @@ impl Engine {
                 _ => None,
             });
             tracing::info!(conn, %code, %region, ?loc, ?rating, queued = self.ranked.len() + 1, "ranked ticket waiting");
+            // After `ranked_ping_declined`, which needs the last opponent a quick CANCEL forgets.
+            self.forget_failed_opponent(now, uid);
             self.ranked.push(conn);
             self.pair_queue(Mode::Ranked, now, wall, out);
         } else {
@@ -2149,7 +2167,7 @@ impl Engine {
         let window = self.cfg.requeue_window;
         self.history.retain(|_, h| now.saturating_duration_since(h.last_match) < window);
         let memory = self.cfg.rematch_memory;
-        self.last_opponent.retain(|_, (_, at)| now.saturating_duration_since(*at) < memory);
+        self.last_opponent.retain(|_, l| now.saturating_duration_since(l.at) < memory);
         self.rooms.tick(now, out);
         self.mod_rooms.tick(now, out);
         self.fail_room_tickets(out);
@@ -2220,8 +2238,34 @@ impl Engine {
             if self.queue(mode).len() == before {
                 break; // make_match refused; never loop forever
             }
-            self.last_opponent.insert(ua, (ub, now));
-            self.last_opponent.insert(ub, (ua, now));
+            for (x, y) in [(ua, ub), (ub, ua)] {
+                let before = self.last_opponent.get(&x).map(|l| (l.opponent, l.at));
+                self.last_opponent.insert(x, LastOpponent { opponent: y, at: now, before });
+            }
+        }
+    }
+
+    /// `uid` searches again within `FAILED_REQUEUE` of its last match (Slippi requeues 8 s after a
+    /// failed P2P connect): the two never played, so neither counts the other as their last
+    /// opponent; each goes back to the one before.
+    fn forget_failed_opponent(&mut self, now: Instant, uid: Uuid) {
+        let Some(last) = self.last_opponent.get(&uid).copied() else { return };
+        if now.saturating_duration_since(last.at) >= FAILED_REQUEUE {
+            return;
+        }
+        for (x, y) in [(uid, last.opponent), (last.opponent, uid)] {
+            let Some(l) = self.last_opponent.get(&x).copied() else { continue };
+            if l.opponent != y || l.at != last.at {
+                continue;
+            }
+            match l.before {
+                Some((opponent, at)) => {
+                    self.last_opponent.insert(x, LastOpponent { opponent, at, before: None });
+                }
+                None => {
+                    self.last_opponent.remove(&x);
+                }
+            }
         }
     }
 
@@ -2288,7 +2332,7 @@ impl Engine {
         let last = |x: Uuid, y: Uuid| {
             self.last_opponent
                 .get(&x)
-                .is_some_and(|(o, at)| *o == y && now.saturating_duration_since(*at) < self.cfg.rematch_memory)
+                .is_some_and(|l| l.opponent == y && now.saturating_duration_since(l.at) < self.cfg.rematch_memory)
         };
         last(a, b) && last(b, a)
     }
@@ -2299,7 +2343,7 @@ impl Engine {
     /// band of the longer-waiting of the two (Ranked ratings in Ranked, hidden Unranked ratings in
     /// Unranked). Ranked takes the closest-rated such ticket; Unranked the one whose pair needed
     /// the least waiting for its ping and rating gap together ([`Engine::unranked_wait`]), then
-    /// the lowest ping (no estimate counts as `ping_limit`). Ties: arrival order. Two who just played each other wait until the longer-waiting has waited
+    /// the lowest ping (no estimate counts as `ping_limit`). Ties: arrival order. Two who just played each other wait until both have waited
     /// `rematch_hold`. A pair matched within `requeue_window` whose new search came within
     /// `FAILED_REQUEUE` of it failed its P2P connect (Slippi requeues with a new ticket): anyone
     /// else in the queue goes first; the same two again only after the backoff, and not at all
@@ -2352,7 +2396,7 @@ impl Engine {
                     .get(&pair_key(wa.user.uid, wb.user.uid))
                     .filter(|h| self.failed_connect(now, h, wa.since.min(wb.since)));
                 let Some(h) = recent else {
-                    if longer < self.cfg.rematch_hold && self.just_played(now, wa.user.uid, wb.user.uid) {
+                    if shorter < self.cfg.rematch_hold && self.just_played(now, wa.user.uid, wb.user.uid) {
                         continue;
                     }
                     if fresh.is_none_or(|(_, d)| diff < d) {
@@ -2550,7 +2594,7 @@ impl Engine {
     /// kept apart from this player for `ranked_avoid`. Only this player's last opponent counts, so a
     /// game cannot keep anyone else away.
     fn ranked_ping_declined(&mut self, now: Instant, uid: Uuid, other: Uuid, after: Option<&str>) {
-        let last = self.last_opponent.get(&uid).is_some_and(|(o, _)| *o == other);
+        let last = self.last_opponent.get(&uid).is_some_and(|l| l.opponent == other);
         if !last || other == uid {
             tracing::info!(%uid, %other, ?after, "ranked avoid ignored: not the last opponent");
             return;
@@ -3970,18 +4014,21 @@ mod tests {
         assert_eq!(m.len(), 1);
         assert_eq!(pair_of(&m[0]), pair_key(u[0].uid, u[2].uid));
 
-        // u1 still waits. Its last opponent was u0, but u0's is now u2: they meet at once.
+        // u1 still waits. Its last opponent was u0, but once u0 has played u2 (searching again
+        // after that game, not right after the match) u0's is u2: they meet at once.
+        h.now += Duration::from_secs(30);
+        h.advance(Duration::ZERO);
         let m = matches(&search(&mut h, &u[0]));
         assert_eq!(m.len(), 1);
         assert_eq!(pair_of(&m[0]), pair_key(u[0].uid, u[1].uid));
 
-        // u0 and u1 just played: alone in the queue, they meet once the longer wait is 60 s.
+        // u0 and u1 just played: alone in the queue, they meet once both have waited 60 s.
         h.now += Duration::from_secs(300);
         h.advance(Duration::ZERO);
         search(&mut h, &u[1]);
         h.now += Duration::from_secs(5);
         assert!(matches(&search(&mut h, &u[0])).is_empty());
-        assert!(matches(&h.advance(Duration::from_secs(54))).is_empty());
+        assert!(matches(&h.advance(Duration::from_secs(59))).is_empty());
         let m = matches(&h.advance(Duration::from_secs(1)));
         assert_eq!(m.len(), 1);
         assert_eq!(pair_of(&m[0]), pair_key(u[0].uid, u[1].uid));
@@ -4010,13 +4057,73 @@ mod tests {
         h.now = first + Duration::from_secs(22);
         assert!(matches(&search(&mut h, &u[1])).is_empty());
         assert!(matches(&h.advance(Duration::from_secs(30))).is_empty());
-        // ... but once the longer-waiting has waited 60 s.
-        h.now = first + Duration::from_secs(79);
+        // ... but once both have waited 60 s.
+        h.now = first + Duration::from_secs(81);
         assert!(matches(&h.advance(Duration::ZERO)).is_empty());
-        h.now = first + Duration::from_secs(80);
+        h.now = first + Duration::from_secs(82);
         let m = matches(&h.advance(Duration::ZERO));
         assert_eq!(m.len(), 1);
         assert_eq!(pair_of(&m[0]), pair_key(u[0].uid, u[1].uid));
+    }
+
+    /// The hold counts the shorter wait: one who searches a minute after the other is not paired
+    /// with the opponent they just played at once, but after a minute of their own.
+    #[test]
+    fn rematch_hold_waits_for_both() {
+        let mut h = Harness::new(EngineConfig::default());
+        let u = h.users(2);
+        let mut conn = 0;
+        let mut search = |h: &mut Harness, who: &MmUser| -> Vec<Output> {
+            conn += 1;
+            h.connect(conn, 41000);
+            h.unranked(conn, who)
+        };
+        search(&mut h, &u[0]);
+        assert_eq!(matches(&search(&mut h, &u[1])).len(), 1);
+        h.now += Duration::from_secs(300);
+        h.advance(Duration::ZERO);
+        search(&mut h, &u[0]);
+        assert!(matches(&h.advance(Duration::from_secs(60))).is_empty());
+        assert!(matches(&search(&mut h, &u[1])).is_empty(), "the later one has not waited");
+        assert!(matches(&h.advance(Duration::from_secs(59))).is_empty());
+        assert_eq!(matches(&h.advance(Duration::from_secs(1))).len(), 1);
+    }
+
+    /// Prod 2026-11-09: of two who had just played, one was paired with someone else, did not
+    /// connect and searched again 8 s later, and the two were paired again 30 s on. A match that
+    /// did not connect makes nobody a last opponent: the hold for the first one still applies.
+    #[test]
+    fn a_failed_connect_is_not_a_last_opponent() {
+        let mut h = Harness::new(EngineConfig::default());
+        let u = h.users(3);
+        let mut conn = 0;
+        let mut search = |h: &mut Harness, who: &MmUser| -> Vec<Output> {
+            conn += 1;
+            h.connect(conn, 41000);
+            h.unranked(conn, who)
+        };
+        search(&mut h, &u[0]);
+        assert_eq!(matches(&search(&mut h, &u[1])).len(), 1);
+        // A game later u0 searches and meets u2, whose connect fails; u2 gives up, u0 requeues.
+        h.now += Duration::from_secs(300);
+        h.advance(Duration::ZERO);
+        search(&mut h, &u[0]);
+        let m = matches(&search(&mut h, &u[2]));
+        assert_eq!(pair_of(&m[0]), pair_key(u[0].uid, u[2].uid));
+        h.now += Duration::from_secs(8);
+        h.advance(Duration::ZERO);
+        assert!(matches(&search(&mut h, &u[0])).is_empty());
+        // u1 searches: u0 and u1 are still each other's last opponent.
+        assert!(matches(&search(&mut h, &u[1])).is_empty());
+        assert!(matches(&h.advance(Duration::from_secs(59))).is_empty());
+        let m = matches(&h.advance(Duration::from_secs(1)));
+        assert_eq!(m.len(), 1);
+        assert_eq!(pair_of(&m[0]), pair_key(u[0].uid, u[1].uid));
+        // A match that connected (searched again well after it) does count.
+        h.now += Duration::from_secs(300);
+        h.advance(Duration::ZERO);
+        search(&mut h, &u[0]);
+        assert!(matches(&search(&mut h, &u[1])).is_empty());
     }
 
     /// Direct: friends who played a short game and search for each other again are paired at
