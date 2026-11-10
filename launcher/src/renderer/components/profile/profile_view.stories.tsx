@@ -2,7 +2,8 @@ import Paper from "@mui/material/Paper";
 
 import type { PlayerProfile } from "@/services/backend/types";
 
-import { EditPencil, OwnAccountButtons, ProfileButtons } from "./profile_dialog";
+import styles from "./profile.module.css";
+import { EditPencil, OwnAccountButtons, ProfileButtons, ProfileCorner } from "./profile_dialog";
 import { ProfileView } from "./profile_view";
 
 export default {
@@ -27,9 +28,14 @@ const gold: PlayerProfile = {
   },
 };
 
-/** As the dialog shows it (the dialog's paper and padding). */
-const Frame = ({ children }: { children: React.ReactNode }) => (
-  <Paper sx={{ width: 444, padding: "24px 24px 20px" }}>{children}</Paper>
+/** As the dialog shows it (the dialog's paper, padding and X, with the player's own pencil beside it). */
+const Frame = ({ edit, children }: { edit?: React.ReactNode; children: React.ReactNode }) => (
+  <Paper sx={{ width: 444 }}>
+    <div className={styles.dialog}>
+      <ProfileCorner edit={edit} onClose={() => undefined} />
+      {children}
+    </div>
+  </Paper>
 );
 
 const Buttons = () => <ProfileButtons ignored={false} onMessage={() => undefined} onIgnore={() => undefined} />;
@@ -79,39 +85,28 @@ const Account = ({ activate = false, verify = false }: { activate?: boolean; ver
 );
 
 /**
- * The player's own while placing: the rating is ????, no position, no Message or Ignore; the pencil beside the name,
+ * The player's own while placing: the rating is ????, no position, no Message or Ignore; the pencil beside the X,
  * and Switch account and Log out under the web link (the header's name opens it).
  */
 export const Placing = () => (
-  <Frame>
-    <ProfileView
-      profile={placing}
-      editToggle={<EditPencil glow={false} onClick={() => undefined} />}
-      onCopyLink={() => undefined}
-    />
+  <Frame edit={<EditPencil glow={false} onClick={() => undefined} />}>
+    <ProfileView profile={placing} onCopyLink={() => undefined} />
     <Account />
   </Frame>
 );
 
 /** The player's own, before they have ever clicked the pencil on this client: it glows gold. */
 export const OwnFirstTime = () => (
-  <Frame>
-    <ProfileView
-      profile={placing}
-      editToggle={<EditPencil glow={true} onClick={() => undefined} />}
-      onCopyLink={() => undefined}
-    />
+  <Frame edit={<EditPencil glow={true} onClick={() => undefined} />}>
+    <ProfileView profile={placing} onCopyLink={() => undefined} />
     <Account />
   </Frame>
 );
 
 /** The player's own before online play is set up and the email verified: no code, no web page. */
 export const OwnNotActivated = () => (
-  <Frame>
-    <ProfileView
-      profile={{ ...placing, displayName: "brandnew", connectCode: "", link: null }}
-      editToggle={<EditPencil glow={false} onClick={() => undefined} />}
-    />
+  <Frame edit={<EditPencil glow={false} onClick={() => undefined} />}>
+    <ProfileView profile={{ ...placing, displayName: "brandnew", connectCode: "", link: null }} />
     <Account activate={true} verify={true} />
   </Frame>
 );

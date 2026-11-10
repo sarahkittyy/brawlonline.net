@@ -42,12 +42,12 @@
   padding-right: 32px;
 }
 
-/* Edit mode: the check beside the X. */
-.editing .who {
+/* The player's own profile: the pencil (or check) beside the X. */
+.dialog:has(.corner > :nth-child(2)) .who {
   padding-right: 60px;
 }
 
-/* The name and, on the player's own profile, the pencil (or check) right beside it. */
+/* The name (or its input in edit mode). */
 .nameRow {
   display: flex;
   align-items: center;

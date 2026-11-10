@@ -47,7 +47,6 @@ export const ProfileView = React.memo(function ProfileView({
   onCopyLink,
   onCopyText,
   editing = null,
-  editToggle,
 }: {
   profile: PlayerProfile;
   actions?: React.ReactNode;
@@ -55,8 +54,6 @@ export const ProfileView = React.memo(function ProfileView({
   /** Copies a Discord username (it has no page to open). */
   onCopyText?: (text: string) => void;
   editing?: ProfileEditing | null;
-  /** The player's own profile outside edit mode: the pencil beside the name (the check is the dialog's, by the X). */
-  editToggle?: React.ReactNode;
 }) {
   const r = profile.ranked;
   const mains = profile.mains ?? [];
@@ -71,7 +68,7 @@ export const ProfileView = React.memo(function ProfileView({
   const position = formatPosition(r.position, r.rankedPlayers);
   const showMains = editing != null || mains.length > 0;
   return (
-    <div className={clsx(styles.profile, editing && styles.editing)} data-testid="profile-view">
+    <div className={styles.profile} data-testid="profile-view">
       <div className={styles.who} data-tier={r.rank?.tier ?? "none"}>
         {(r.rank || placing) && (
           <div className={styles.badge}>
@@ -87,7 +84,6 @@ export const ProfileView = React.memo(function ProfileView({
                 {profile.displayName}
               </div>
             )}
-            {editToggle}
           </div>
           {profile.connectCode && <div className={styles.code}>{profile.connectCode}</div>}
           {(country || editing) && (

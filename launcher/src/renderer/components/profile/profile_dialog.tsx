@@ -31,8 +31,8 @@ import { ProfileView } from "./profile_view";
 /**
  * View Profile (docs/design/profiles.md): anyone's public profile, over whatever page is open. Opened with
  * `useProfileView().open(...)`. Someone else's has Message and Ignore user when logged in with online play
- * set up (the chat's own actions). The player's own has a pencil beside the name: edit mode (name, mains, country,
- * social media), where every change is saved as it is made; a check beside the X leaves it. Under it are Switch account
+ * set up (the chat's own actions). The player's own has a pencil beside the X: edit mode (name, mains, country,
+ * social media), where every change is saved as it is made; a check in its place leaves it. Under it are Switch account
  * and Log out (the header's name opens it: there is no account menu), and Activate online play / Verify email until
  * they're done. Until the player has clicked that pencil once on this client, it glows gold.
  */
@@ -63,32 +63,24 @@ const ProfileDialogBody = ({ uid, seedName, onClose }: { uid: string; seedName?:
   const markPencilFound = useOwnProfileHint((s) => s.markOpened);
   return (
     <div className={styles.dialog}>
-      <div className={styles.corner}>
-        {own && data && editMode && (
-          <Tooltip title={Messages.doneEditing()}>
-            <IconButton
-              size="small"
-              aria-label={Messages.doneEditing()}
-              aria-pressed={true}
-              className={styles.editOn}
-              onClick={() => setEditMode(false)}
-              data-testid="profile-edit"
-            >
-              <CheckIcon fontSize="small" />
-            </IconButton>
-          </Tooltip>
-        )}
-        <IconButton size="small" aria-label={Messages.close()} onClick={onClose}>
-          <CloseIcon fontSize="small" />
-        </IconButton>
-      </div>
-      {data ? (
-        <ProfileView
-          profile={data}
-          actions={<ProfileActions profile={data} onDone={onClose} />}
-          editing={own && editMode ? editing : null}
-          editToggle={
-            own && !editMode ? (
+      <ProfileCorner
+        onClose={onClose}
+        edit={
+          own && data ? (
+            editMode ? (
+              <Tooltip title={Messages.doneEditing()}>
+                <IconButton
+                  size="small"
+                  aria-label={Messages.doneEditing()}
+                  aria-pressed={true}
+                  className={styles.editOn}
+                  onClick={() => setEditMode(false)}
+                  data-testid="profile-edit"
+                >
+                  <CheckIcon fontSize="small" />
+                </IconButton>
+              </Tooltip>
+            ) : (
               <EditPencil
                 glow={!pencilFound}
                 onClick={() => {
@@ -98,8 +90,15 @@ const ProfileDialogBody = ({ uid, seedName, onClose }: { uid: string; seedName?:
                   }
                 }}
               />
-            ) : undefined
-          }
+            )
+          ) : undefined
+        }
+      />
+      {data ? (
+        <ProfileView
+          profile={data}
+          actions={<ProfileActions profile={data} onDone={onClose} />}
+          editing={own && editMode ? editing : null}
           onCopyLink={(link) => void navigator.clipboard.writeText(link).then(() => showSuccess(Messages.linkCopied()))}
           onCopyText={(text) =>
             void navigator.clipboard.writeText(text).then(() => showSuccess(Messages.discordCopied(text)))
@@ -121,7 +120,17 @@ const ProfileDialogBody = ({ uid, seedName, onClose }: { uid: string; seedName?:
   );
 };
 
-/** The pencil beside the player's own name that opens edit mode; it glows gold until they have clicked it once. */
+/** Top right: on the player's own profile the pencil (the check in edit mode), then the X. */
+export const ProfileCorner = ({ edit, onClose }: { edit?: React.ReactNode; onClose: () => void }) => (
+  <div className={styles.corner}>
+    {edit}
+    <IconButton size="small" aria-label={Messages.close()} onClick={onClose}>
+      <CloseIcon fontSize="small" />
+    </IconButton>
+  </div>
+);
+
+/** The pencil beside the X on the player's own profile that opens edit mode; it glows gold until clicked once. */
 export const EditPencil = ({ glow, onClick }: { glow: boolean; onClick: () => void }) => (
   <Tooltip title={Messages.editProfile()}>
     <IconButton

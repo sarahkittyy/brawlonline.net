@@ -105,7 +105,9 @@ describe("profile edit mode", () => {
     expect(own.queryByTestId("profile-mains")).toBeNull();
     expect(own.queryByTestId("profile-country")).toBeNull();
     expect(own.queryByTestId("profile-socials")).toBeNull();
-    expect(own.getByTestId("profile-edit")).toBeTruthy();
+    // The pencil sits beside the X, not beside the name.
+    expect(own.getByTestId("profile-edit").nextElementSibling?.getAttribute("aria-label")).toBe("Close");
+    expect(own.getByTestId("profile-name").parentElement?.querySelector("[data-testid=profile-edit]")).toBeNull();
   });
 
   it("renames through the display name path when the name box loses focus", async () => {
