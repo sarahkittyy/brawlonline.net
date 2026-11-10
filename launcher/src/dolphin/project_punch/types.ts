@@ -43,7 +43,7 @@ export type ProjectPunchState = {
   needsCard: boolean;
   /** Installed, its card is current, and it is the latest release (or the latest is unknown). */
   upToDate: boolean;
-  /** Bytes the next Download / Update needs on disk: the zip, plus the card when it is made. */
+  /** What the next Download / Update fetches: the release zip (the card copy is made on this PC). */
   downloadBytes: number;
   /** A download running (it goes on while the dialog is closed). */
   job: ProjectPunchJob | null;

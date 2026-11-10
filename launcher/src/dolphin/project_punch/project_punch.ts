@@ -269,7 +269,7 @@ export class ProjectPunch {
       latestError: latest ? null : this.releaseError,
       needsCard,
       upToDate,
-      downloadBytes: upToDate ? 0 : (latest?.size ?? 0) + (needsCard ? sourceBytes : 0),
+      downloadBytes: upToDate ? 0 : latest?.size ?? 0,
       job: this.job,
       running: this.running,
       error: this.lastError,

@@ -28,7 +28,7 @@ const base: ProjectPunchState = {
   latestError: null,
   needsCard: true,
   upToDate: false,
-  downloadBytes: CARD + latest.size,
+  downloadBytes: latest.size,
   job: null,
   running: false,
   error: null,

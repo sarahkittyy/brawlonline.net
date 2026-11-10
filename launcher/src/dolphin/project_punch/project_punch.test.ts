@@ -245,7 +245,7 @@ describe("ProjectPunch", () => {
     expect(s.needsCard).toBe(true);
     expect(s.upToDate).toBe(false);
     await expect(pp.cardForPlay()).rejects.toThrow(/another Project\+ version/);
-    expect(s.downloadBytes).toBe(release.zip.length + (await fs.promises.stat(source)).size);
+    expect(s.downloadBytes).toBe(release.zip.length);
     await pp.install();
     expect(await readOnCard(pp.cardImage, "/marker.bin")).toBeNull();
     expect((await pp.state()).installed?.pplusRelease).toBe("v3.2.2");
