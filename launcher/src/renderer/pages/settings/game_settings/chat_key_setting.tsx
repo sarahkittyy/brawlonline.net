@@ -129,18 +129,21 @@ export const ChatKeySetting = () => {
         </div>
       </Tooltip>
       {listening && (
-        // Under the key button, centred on it (a longer refusal grows to the left).
+        // Under the key button, centred on it: a box as wide as the button (140 px while listening), and
+        // the caption centred in it, so a longer refusal spills out evenly on both sides.
         <div
           css={css`
             display: flex;
-            justify-content: flex-end;
-            margin: 4px 12px 0 0;
+            justify-content: center;
+            width: 140px;
+            margin: 4px 12px 0 auto;
           `}
         >
           <Typography
             variant="caption"
             css={css`
-              min-width: 140px;
+              flex-shrink: 0;
+              width: max-content;
               max-width: 300px;
               text-align: center;
             `}
