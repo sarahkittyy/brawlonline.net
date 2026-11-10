@@ -129,7 +129,25 @@ export const ChatKeySetting = () => {
         </div>
       </Tooltip>
       {listening && (
-        <Typography variant="caption">{refused ? Messages.chatKeyRefused() : Messages.chatKeyEscToCancel()}</Typography>
+        // Under the key button, centred on it (a longer refusal grows to the left).
+        <div
+          css={css`
+            display: flex;
+            justify-content: flex-end;
+            margin: 4px 12px 0 0;
+          `}
+        >
+          <Typography
+            variant="caption"
+            css={css`
+              min-width: 140px;
+              max-width: 300px;
+              text-align: center;
+            `}
+          >
+            {refused ? Messages.chatKeyRefused() : Messages.chatKeyEscToCancel()}
+          </Typography>
+        </div>
       )}
     </SettingItem>
   );
