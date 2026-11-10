@@ -699,6 +699,10 @@ struct State
   std::string end_reason;
   s64 game_set_frame = -1;  // first session frame that showed game set or a quit (-1: none)
   bool game_set_quit = false;  // that frame showed a pause-screen quit (no winner)
+  // That frame's inputs from every player were final (GekkoNet confirmed them) while everyone was
+  // still in: no rollback can undo the game set, so a peer that leaves before the session's end
+  // frame no longer takes the result away (bug report #267).
+  bool game_set_final = false;
   // A tie at game set goes on to sudden death in the same match (SuddenDeathFollows). sd_tie_frame:
   // the tie's game set (-1: none; a rollback can undo it). sd_stage, once that frame is final
   // (END_AFTER_GAME_SET after it, as a game set's end): 1 while the scene still shows the tie's
@@ -4010,6 +4014,7 @@ void ResetRunStats()
   s.end_reason.clear();
   s.game_set_frame = -1;
   s.game_set_quit = false;
+  s.game_set_final = false;
   s.sd_tie_frame = -1;
   s.sd_clear_frame = -1;
   s.sd_stage = 0;
@@ -7165,6 +7170,7 @@ void PlaybackSeek(Core::System& system)
     s.current_frame = *key - 1;
     s.game_set_frame = -1;
     s.game_set_quit = false;
+    s.game_set_final = false;
     // A sudden death is found again from the keyframe's state (its tie, then its stage).
     s.sd_tie_frame = -1;
     s.sd_clear_frame = -1;
@@ -7682,6 +7688,21 @@ bool RunFrame(const Core::CPUThreadGuard& guard)
     else if (s.game_set_frame >= 0 && prev_frame <= s.game_set_frame)
     {
       s.game_set_frame = -1;  // a rollback undid the game set
+    }
+    if (s.game_set_frame < 0)
+    {
+      s.game_set_final = false;
+    }
+    else if (!s.game_set_final && s.mode == Mode::Network && s.gekko && !s.peer_left)
+    {
+      // Only while every peer is in: after a leave GekkoNet confirms frames with the leaver's
+      // disconnected input.
+      bool anyone_left = false;
+      ForEachPeer([&](int, const PeerView& p) {
+        anyone_left |= p.left || p.drop_requested || p.gekko_dropped;
+      });
+      if (!anyone_left && gekko_confirmed_frame(s.gekko) >= s.game_set_frame)
+        s.game_set_final = true;
     }
     if (s.game_set_frame >= 0 && !s.resim_pass &&
         static_cast<s64>(s.ops.adv_frame[i]) >= s.game_set_frame + END_AFTER_GAME_SET)
@@ -10127,7 +10148,28 @@ bool OnLoopTop(const Core::CPUThreadGuard& guard)
 
   if (s.mode == Mode::Network && s.peer_left && InMatchPhase())
   {
-    EndRunning(system, s.peer_left_reason);
+    // The game was already over: its game set (or quit) was final before the peer left, only the
+    // session's end frame (END_AFTER_GAME_SET later) had not come yet. It ends with its result,
+    // as the peer's game ended it, and the game still shows DISCONNECTED (bug report #267: the
+    // loser's PC stalled 20 s around that end frame; the winner's game had ended the set and
+    // closed the connection by then, the loser's game ended the decisive game as a disconnect
+    // with no winner, and mm, with one game's result only, never rated the set).
+    // 3-4 players: not once a leaver is gone in the game (ReadGameResult would leave them out,
+    // unlike the others' results).
+    const bool gone_in_game =
+        s.gone_enabled && std::any_of(s.gone_written.begin(), s.gone_written.end(),
+                                      [](u8 g) { return g != 0; });
+    if (s.game_set_final && s.phase == Phase::Running && !gone_in_game)
+    {
+      INFO_LOG_FMT(BRAWLBACK, "gprb: the peer left ({}) after the {} at frame {} was final: the "
+                              "game ends with its result",
+                   s.peer_left_reason, s.game_set_quit ? "quit" : "game set", s.game_set_frame);
+      EndRunning(system, s.game_set_quit ? "quit" : "game set");
+    }
+    else
+    {
+      EndRunning(system, s.peer_left_reason);
+    }
     s.phase = Phase::Ended;
     s.disconnected = true;
     s.error = s.peer_left_reason;

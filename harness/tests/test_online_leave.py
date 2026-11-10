@@ -34,6 +34,7 @@ from test_rooms_game import (ART, CSS, PANEL_X, _all, create_room, hand_to, pick
 import online_set  # noqa: E402  (harness/tools, on the path through test_rooms_game)
 import ppom  # noqa: E402
 from ppharness import brawl as B  # noqa: E402
+from ppharness import flows as F  # noqa: E402
 
 pytestmark = [pytest.mark.dolphin, pytest.mark.server, pytest.mark.gpu]
 
@@ -223,3 +224,78 @@ def test_closing_the_window_in_a_three_player_room(backend: OnlineBackend,
     for g in rest:
         g.steps("wait 60")
         g.shot("03-back-on-the-css")
+
+
+@pytest.mark.slow
+def test_a_leave_after_a_final_game_set_keeps_the_result(backend: OnlineBackend,
+                                                         dolphin: Callable[..., DolphinInstance],
+                                                         gpu_backend: str) -> None:
+    """Bug report #267: the loser's PC stalled for 20 s right at the end of a Ranked set's last
+    game, between the game set (final: every input of its frame in) and the session's end frame
+    (END_AFTER_GAME_SET later). The winner's game had ended the set and closed the connection by
+    then, so the loser's game ended the decisive game as a disconnect with no winner, and mm, with
+    one game's result only, never rated the set. Now a game whose game set was final when the peer
+    left ends with its result, as the peer's did.
+
+    Here: 1 stock, A stands still and B walks off. B is paused (its PC stalls) once its game set is
+    a few frames old, A ends its game and closes its window (leaves), then B runs again."""
+    a, b, _, _ = _connected_direct(backend, dolphin, gpu_backend, "gameplay-leave-after-game-set", ("gina", "hugo"),
+                                   stocks=1)
+    players = [a, b]
+    online_set.random_pick_where_anyone_picks(players, 1)
+    online_set.wait(lambda: all(online_set.gstatus(g.c)["phase"] == "running" for g in players), 240,
+                    "the match to run on both")
+    host, join = online_set.roles(players)
+    seat = {host.name: F.Seat(host.c, 0, 0, "H"), join.name: F.Seat(join.c, 1, 0, "J")}
+    stop_flag = threading.Event()
+
+    def play(g: Game, mode: str) -> None:
+        with contextlib.suppress(Exception):
+            F.fight([seat[g.name]], 60 * 60 * 3, mode=mode, seed=f"267-{g.name}", stop=stop_flag.is_set)
+
+    th = [threading.Thread(target=play, args=(a, "idle"), daemon=True),
+          threading.Thread(target=play, args=(b, "selfdestruct"), daemon=True)]
+    for t in th:
+        t.start()
+    try:
+        # B's game set, then B paused 12-17 frames after it: A has B's inputs far enough to reach
+        # its own end frame (19 frames after the game set), B has not reached it.
+        deadline = time.monotonic() + 240
+        st: dict[str, Any] = {}
+        while True:
+            assert time.monotonic() < deadline, "no game set on B"
+            st = online_set.gstatus(b.c)
+            assert st["phase"] == "running", ("B's game ended before it was paused", st["phase"], st["end_reason"])
+            g_set = int(st["game_set_frame"])
+            if g_set >= 0 and int(st["current_frame"]) >= g_set + 12:
+                break
+            time.sleep(0.002)
+        b.c.call("log_mark", text="test: B stalls (pause)")
+        b.c.pause()
+        st = online_set.gstatus(b.c)
+        print(f"B paused at session frame {st['current_frame']}, game set at {st['game_set_frame']}")
+        assert st["phase"] == "running", ("B's game ended before it was paused", st["end_reason"])
+        assert int(st["current_frame"]) < int(st["game_set_frame"]) + 19, st
+    finally:
+        stop_flag.set()
+    with contextlib.suppress(AssertionError):
+        _wait(lambda: online_set.gstatus(a.c)["phase"] != "running", 5, "A's game to end", interval=0.05)
+    print(f"A: {online_set.gstatus(a.c)['phase']} ({online_set.gstatus(a.c)['end_reason']})")
+    a_port = online_set.local(a.c)["local_port"]
+    close_window(a)
+    stopped(a)
+    _wait(lambda: peer(online_set.gstatus(b.c), a_port)["left"], 15, "B hears A leave", interval=0.05)
+    b.c.call("log_mark", text="test: B runs again (resume)")
+    b.c.resume()
+    _wait(lambda: online_set.gstatus(b.c)["phase"] != "running", 15, "B's game to end", interval=0.05)
+    st = online_set.gstatus(b.c)
+    assert st["end_reason"] == "game set", st["end_reason"]
+    log = (b.inst.user_dir / "Logs" / "dolphin.log").read_text(errors="replace")
+    assert "was final: the game ends with its result" in log
+    assert f"game 1 winner {a_port} " in log
+    # The peer is gone all the same: DISCONNECTED, then back on the CSS.
+    _wait(lambda: online_set.gstatus(b.c)["disconnected"], 5, "B disconnected", interval=0.05)
+    b.shot("01-ended-after-the-leave")
+    _wait(lambda: online_set.scene(b.c) == online_set.CSS, 60, "B back on the CSS")
+    b.steps("wait 60")
+    b.shot("02-back-on-css")
