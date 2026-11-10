@@ -320,7 +320,9 @@ first was the default). Under the sidebar's entries, at its foot, two smaller fo
 **Open Replay Location** (the Root Replay Folder, `rootSlpPath`) and **Open Rendered Video
 Location** (Settings > Clips' Video Output Folder, `<Root Replay Folder>/Highlights` by default);
 hovering shows the path, and a folder not made yet (the videos' one is made with the first video)
-says "Nothing is there yet: <path>", as Settings > Dolphin's folder buttons do.
+says "Nothing is there yet: <path>", as Settings > Dolphin's folder buttons do. Since 2026-11-10 the
+Replays tab has the same two buttons at the foot of its folder list (`folder_buttons.tsx`, shared);
+the folders scroll above them.
 
 ## 7. Settings > Clips > Video Resolution, and a playback that never starts (2026-10-21)
 

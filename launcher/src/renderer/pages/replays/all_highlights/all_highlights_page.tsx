@@ -7,13 +7,12 @@
  * seek bar clips, manual_clips.ts), or Favorites (the starred ones, favorites.ts), the same list of
  * fewer rows. The search above the list keeps the games with a player whose name or code has it.
  * Newest first unless Best first is picked. Below the sidebar, buttons open the Root Replay Folder
- * and the rendered videos' folder (Settings > Clips).
+ * and the rendered videos' folder (Settings > Clips), as on Replays (folder_buttons.tsx).
  */
 import { currentClipButtons, hotkeyLabel } from "@common/clip_hotkey";
 import CloseIcon from "@mui/icons-material/Close";
 import ContentCutIcon from "@mui/icons-material/ContentCut";
 import CropIcon from "@mui/icons-material/Crop";
-import FolderIcon from "@mui/icons-material/Folder";
 import GroupIcon from "@mui/icons-material/Group";
 import PersonIcon from "@mui/icons-material/Person";
 import SearchIcon from "@mui/icons-material/Search";
@@ -32,12 +31,11 @@ import React, { useEffect, useMemo, useState } from "react";
 
 import { DualPane } from "@/components/dual_pane";
 import { useSetting } from "@/lib/hooks/use_settings";
-import { useToasts } from "@/lib/hooks/use_toasts";
+import { FolderButtons } from "@/pages/replays/folder_buttons/folder_buttons";
 import { favoriteKey, useFavoriteHighlights } from "@/pages/replays/replay_file_stats/highlights/favorites";
 import type { HighlightEntry } from "@/pages/replays/replay_file_stats/highlights/highlight_list";
 import { comboOfManyName, HighlightRows } from "@/pages/replays/replay_file_stats/highlights/highlight_list";
 import { manualClipEntry, useManualClips } from "@/pages/replays/replay_file_stats/highlights/manual_clips";
-import { defaultClipsFolder } from "@/pages/settings/clips_settings/clips_settings";
 import { useServices } from "@/services";
 
 import { AllHighlightsMessages as Messages } from "./all_highlights_page.messages";
@@ -84,9 +82,6 @@ export const AllHighlightsPage = React.memo(() => {
   const [clipOnLrz] = useSetting("clipOnLrz");
   const [clipHotkeys] = useSetting("clipHotkeys");
   const hotkey = hotkeyLabel(currentClipButtons(clipHotkeys));
-  const [rootSlpPath] = useSetting("rootSlpPath");
-  const [clipsFolder] = useSetting("clipsFolder");
-  const { showInfo } = useToasts();
   const [games, setGames] = useState<Map<string, GameHighlights>>(new Map());
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
   const [loading, setLoading] = useState(true);
@@ -250,25 +245,6 @@ export const AllHighlightsPage = React.memo(() => {
     );
   };
 
-  const openFolder = async (folder: string) => {
-    // (Electron's error text, or "" when it opened.) The videos' folder is made with the first video.
-    if (await window.electron.shell.openPath(folder)) {
-      showInfo(Messages.folderNotThereYet(folder));
-    }
-  };
-  const folderButton = (label: string, folder: string) => (
-    <Tooltip title={folder} placement="right" arrow={true}>
-      <button
-        type="button"
-        className={`${styles.sideItem} ${styles.folderItem}`}
-        onClick={() => void openFolder(folder)}
-      >
-        <FolderIcon fontSize="small" />
-        <span className={styles.sideLabel}>{label}</span>
-      </button>
-    </Tooltip>
-  );
-
   return (
     <div className={styles.outer}>
       <DualPane
@@ -291,8 +267,7 @@ export const AllHighlightsPage = React.memo(() => {
             {sidebarItem("manual", <CropIcon fontSize="small" />, Messages.manualClips(), Messages.manualHint())}
             {sidebarItem("favorites", <StarIcon fontSize="small" />, Messages.favorites())}
             <div className={styles.sideRest} />
-            {folderButton(Messages.openReplayLocation(), rootSlpPath)}
-            {folderButton(Messages.openVideoLocation(), clipsFolder ?? defaultClipsFolder(rootSlpPath))}
+            <FolderButtons className={styles.folders} />
           </div>
         }
         rightSide={

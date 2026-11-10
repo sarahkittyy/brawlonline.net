@@ -18,6 +18,7 @@ import { useReplayBrowserList, useReplayBrowserNavigation } from "@/lib/hooks/us
 import { useReplayFilter } from "@/lib/hooks/use_replay_filter";
 import { useReplayPresenter, useReplays } from "@/lib/hooks/use_replays";
 import { useToasts } from "@/lib/hooks/use_toasts";
+import { FolderButtons } from "@/pages/replays/folder_buttons/folder_buttons";
 import { useServices } from "@/services";
 
 import { FileList } from "./file_list/file_list";
@@ -134,21 +135,25 @@ export const ReplayBrowser = React.memo(() => {
           maxWidth={300}
           leftStyle={{ backgroundColor: "rgba(0,0,0, 0.3)" }}
           leftSide={
-            <List dense={true} style={{ flex: 1, padding: 0 }}>
-              <div style={{ position: "relative", minHeight: "100%" }}>
-                {folderTree.map((folder) => {
-                  return (
-                    <FolderTreeNode
-                      folder={folder}
-                      key={folder.fullPath}
-                      collapsedFolders={collapsedFolders}
-                      onClick={onFolderTreeNodeClick}
-                      onToggle={(folder) => presenter.toggleFolder(folder)}
-                    />
-                  );
-                })}
-              </div>
-            </List>
+            // The folders scroll; the folder buttons stay at the foot, as on Highlights.
+            <div style={{ display: "flex", flexDirection: "column", flex: 1, minWidth: 0, minHeight: 0 }}>
+              <List dense={true} style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: 0 }}>
+                <div style={{ position: "relative", minHeight: "100%" }}>
+                  {folderTree.map((folder) => {
+                    return (
+                      <FolderTreeNode
+                        folder={folder}
+                        key={folder.fullPath}
+                        collapsedFolders={collapsedFolders}
+                        onClick={onFolderTreeNodeClick}
+                        onToggle={(folder) => presenter.toggleFolder(folder)}
+                      />
+                    );
+                  })}
+                </div>
+              </List>
+              <FolderButtons />
+            </div>
           }
           rightSide={
             <div
@@ -265,12 +270,15 @@ const EmptyFolder = ({ onClearFilter }: { onClearFilter: () => void }) => {
   );
 };
 
+// (min-height: 0: in the tabs' column it would grow to every row's height, scrolling the whole page
+// with the folders and the footer, and the list's own scroll box never scrolling.)
 const Outer = styled.div`
   display: flex;
   flex-flow: column;
   flex: 1;
   position: relative;
   min-width: 0;
+  min-height: 0;
 `;
 
 const Footer = styled(BasicFooter)`

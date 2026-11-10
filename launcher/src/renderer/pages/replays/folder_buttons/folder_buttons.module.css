@@ -1,0 +1,35 @@
+/* At a sidebar's foot: small, and wrapping in a narrow sidebar. The sidebar gives the background. */
+.buttons {
+  display: flex;
+  flex-direction: column;
+  padding-bottom: 4px;
+}
+
+.button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 14px;
+  border: none;
+  background: transparent;
+  color: rgb(255 255 255 / 50%);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.button:hover {
+  color: var(--off-white);
+}
+
+.button:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: -2px;
+}
+
+.label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
