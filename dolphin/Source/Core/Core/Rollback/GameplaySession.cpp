@@ -4253,6 +4253,13 @@ DT PacedSleepLead()
 // deterministic (Phase 28). The bits are put back at the next loop top, before any save or load,
 // and in EndRunning, so no snapshot holds them cleared; a bit the game itself changed in the pass
 // keeps the game's value. PPR_GPRB_RESIM_HIDE=0 turns this off (A/B runs).
+// The scene root also copies the EFB to a gfCopyEFBMgr texture after some layers, every frame on
+// every stage (+0x4F8 + 2 * layer: on, then the slot or -1; P+ arms slot 1 after layer 3 and slot 0
+// after layer 7), and the next frame draws that copy: Pokemon Stadium 2's big screen shows slot 1
+// (bug report #269: "Screen on the back of PS2 was flickering when the camera was focused on a
+// character"). A hidden pass would copy a scene with no layers drawn, and the pass after it, the
+// one players see, would show that. So hidden passes also make no copies (slot -1): the texture
+// keeps the last drawn pass's picture. The copy only writes the texture (CopyFB heap) and GX state.
 namespace ResimHide
 {
 constexpr u32 SCENE_ROOT = 0x8059FF80;  // g_gfSceneRoot (.sbss)
@@ -4262,6 +4269,8 @@ constexpr int LAYERS = 9;
 constexpr u8 LAYER_DRAW = 0x80;
 constexpr u32 ROOT_SHADOW = 0x464;
 constexpr u8 SHADOW_ON = 0x40;
+constexpr u32 LAYER_COPY = 0x4F8;  // per layer {u8 on, s8 gfCopyEFBMgr slot}
+constexpr u8 NO_COPY = 0xFF;
 
 struct Cleared
 {
@@ -4269,7 +4278,7 @@ struct Cleared
   u8 before = 0;
   u8 written = 0;
 };
-std::array<Cleared, LAYERS + 1> s_cleared;
+std::array<Cleared, 2 * LAYERS + 1> s_cleared;
 int s_count = 0;
 u64 s_passes = 0;  // gprb_status resim_hidden_passes
 
@@ -4300,7 +4309,8 @@ void Hide(Core::System& system)
 {
   auto& memory = system.GetMemory();
   const u32 root = memory.Read_U32(SCENE_ROOT);
-  if (!IsMemAddr(root + LAYER_FLAGS, LAYER_STRIDE * LAYERS) || !IsMemAddr(root + ROOT_SHADOW))
+  if (!IsMemAddr(root + LAYER_FLAGS, LAYER_STRIDE * LAYERS) || !IsMemAddr(root + ROOT_SHADOW) ||
+      !IsMemAddr(root + LAYER_COPY, 2 * LAYERS))
     return;
   const auto clear = [&](u32 addr, u8 bit) {
     const u8 b = memory.Read_U8(addr);
@@ -4310,7 +4320,16 @@ void Hide(Core::System& system)
     memory.Write_U8(static_cast<u8>(b & ~bit), addr);
   };
   for (int k = 0; k < LAYERS; ++k)
+  {
     clear(root + LAYER_FLAGS + LAYER_STRIDE * k, LAYER_DRAW);
+    const u32 copy = root + LAYER_COPY + 2 * k;
+    const u8 slot = memory.Read_U8(copy + 1);
+    if (memory.Read_U8(copy) != 0 && static_cast<s8>(slot) >= 0)
+    {
+      s_cleared[s_count++] = {copy + 1, slot, NO_COPY};
+      memory.Write_U8(NO_COPY, copy + 1);
+    }
+  }
   clear(root + ROOT_SHADOW, SHADOW_ON);
   ++s_passes;
 }
