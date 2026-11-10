@@ -2,14 +2,17 @@ import type { QueueTarget } from "@dolphin/hand_off_target";
 import React, { useState } from "react";
 
 import { useHandOff } from "@/lib/social/use_hand_off";
+import { useRoomList } from "@/lib/social/use_room_list";
 
 import { PlayButtonsView } from "./play_buttons_view";
 
 /**
  * Play unranked / Play ranked / Play 2v2: the game goes to that mode's character select, started first when
- * it isn't running (a `queue` hand-off, docs/rooms-protocol.md §5).
+ * it isn't running (a `queue` hand-off, docs/rooms-protocol.md §5). 2v2's counts come from the room list's poll
+ * (`GET /v1/rooms` `queues` and `playing`).
  */
 export const PlayButtons = React.memo(function PlayButtons() {
+  const { uid, query } = useRoomList();
   const handOff = useHandOff();
   const [starting, setStarting] = useState<QueueTarget>();
 
@@ -22,5 +25,16 @@ export const PlayButtons = React.memo(function PlayButtons() {
     }
   };
 
-  return <PlayButtonsView starting={starting} onPlay={(q) => void play(q)} />;
+  const known = uid && !query.isError;
+  const queues = known ? query.data?.queues : undefined;
+  const playing = known ? query.data?.playing : undefined;
+  return (
+    <PlayButtonsView
+      // A server before 2v2 sends no twos: 0 in queue, the in-game count not shown.
+      twosQueue={queues ? queues.twos ?? 0 : undefined}
+      twosPlaying={playing?.twos}
+      starting={starting}
+      onPlay={(q) => void play(q)}
+    />
+  );
 });

@@ -6,4 +6,6 @@ export const PlayButtonsMessages = {
   playRankedTooltip: () => "Opens Ranked's character select in your game, like Online > With Anyone > Ranked.",
   playTwosTooltip: () =>
     "Opens 2v2's character select in your game, like Online > With Anyone > 2V2. A friend joins you with your code or an invite.",
+  inQueue: (n: number) => `${n} in queue`,
+  inGame: (n: number) => `${n} in game`,
 };

@@ -4,3 +4,21 @@
   gap: 12px;
   padding-top: 8px;
 }
+
+/* Play 2v2 and its counts. The counts are wider than the button: centred under it without widening it, so the
+   gap to Play ranked stays the same as the others'; the padding keeps their line's height in the row. */
+.play {
+  position: relative;
+  padding-bottom: 16px;
+}
+
+.count {
+  position: absolute;
+  bottom: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 12px;
+  line-height: 1.2;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}

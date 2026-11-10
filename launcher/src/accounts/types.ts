@@ -303,9 +303,9 @@ export type RoomList = {
   online: number;
   /** Joinable first, then waiting before in game, then fuller first. */
   rooms: PublicRoom[];
-  /** Players searching Unranked, Ranked and 2v2 (until 2026-11-09 shown under Home's Play buttons). Absent from an older server; `twos` from one before 2v2. */
+  /** Players searching Unranked, Ranked and 2v2 (only 2v2's shown under its Home Play button since 2026-11-09). Absent from an older server; `twos` from one before 2v2. */
   queues?: { unranked: number; ranked: number; twos?: number };
-  /** Players in an Unranked, a Ranked and a 2v2 match (shown with the queues until 2026-11-09). Absent from an older server. */
+  /** Players in an Unranked, a Ranked and a 2v2 match (only 2v2's shown since 2026-11-09). Absent from an older server. */
   playing?: { unranked: number; ranked: number; twos?: number };
   updatedAt: string;
   /** Public Brawl Mods rooms (docs/design/brawl-mods.md §5), fuller first. Absent from an older server. */
