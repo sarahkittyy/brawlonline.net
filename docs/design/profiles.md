@@ -99,7 +99,7 @@ Sarah's picks from the mockups (2026-11-09), each place on its own, and each pla
 | Chat | The tab and the open window's title show the name the same way: the flag before it; the window also has the primary main by the minimize button. |
 | P+ rooms (Home's room list) | As before, with each player's flag before their name. No main. |
 | Other Games rooms | The host's flag before their name; nothing else changes. |
-| Spectate | Unchanged: it shows the character each player is playing in that game. |
+| Spectate | Unchanged: it shows the character each player is playing in that game. Hovering a name shows the hover card below (it used to show only the code). |
 | Any name | Hovering it shows a small floating profile: badge, name, code, flag and country, rank and rating, and up to 8 mains. |
 
 Data: the server adds what to show beside each name (`profile::NameTag`: `country`, `main`, each only when set and shown) to the leaderboard's entries, the social stream's members (sent again when the player changes their profile), and the room list (`countries` by slot, from the slot uids mm now sends, filled once per mm snapshot; `hostCountry` for Other Games rooms). The hover card reads the profile (`GET /v1/profiles/<uid>`, kept 5 minutes, after a 450 ms pause on the name).

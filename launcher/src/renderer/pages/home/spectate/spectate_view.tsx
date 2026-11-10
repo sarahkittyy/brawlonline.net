@@ -22,6 +22,7 @@ import type { LiveGameEntry, LiveMode, LivePlayer, SpectateState } from "@specta
 import { clsx } from "clsx";
 import React, { useEffect, useState } from "react";
 
+import { MiniProfileTooltip } from "@/components/profile/mini_profile";
 import { getCharacterIcon } from "@/lib/utils";
 
 import { ContentBlock } from "../overview/content_block/content_block";
@@ -399,9 +400,11 @@ export const LiveGameRow = React.memo(function LiveGameRow({
                 {side.map((p, j) => (
                   <React.Fragment key={p.uid}>
                     {j > 0 && <span className={styles.vs}>{Messages.and()}</span>}
-                    <span className={styles.player} title={p.connectCode}>
+                    <span className={styles.player}>
                       <img className={styles.stock} src={getCharacterIcon(p.characterId, p.costume)} alt="" />
-                      <span className={styles.name}>{p.displayName}</span>
+                      <MiniProfileTooltip uid={p.uid}>
+                        <span className={styles.name}>{p.displayName}</span>
+                      </MiniProfileTooltip>
                     </span>
                   </React.Fragment>
                 ))}

@@ -1,10 +1,32 @@
 import type { LiveGameEntry } from "@spectate/types";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { SpectateMessages as Messages } from "./spectate.messages";
 import type { SpectateListState } from "./spectate_view";
 import { gameClock, setScore, SpectateView } from "./spectate_view";
+
+const fetchProfile = vi.fn(async (uid: string) => ({
+  uid,
+  displayName: "bob",
+  connectCode: "BOB#2",
+  link: "https://brawlonline.net/profile/bob-2",
+  ranked: {
+    rank: null,
+    rating: null,
+    setsPlayed: 0,
+    setsToPlace: 5,
+    wins: 0,
+    losses: 0,
+    position: null,
+    rankedPlayers: 6,
+  },
+  mains: [],
+  country: "se",
+  socials: [],
+}));
+vi.mock("@/services", () => ({ useServices: () => ({ backendService: { fetchProfile } }) }));
 
 const ME = "me";
 const NOW = Date.parse("2026-10-14T02:10:00Z");
@@ -222,6 +244,31 @@ describe("SpectateView", () => {
     expect(view({ kind: "ready", games: [] }).getByText(Messages.noGames())).toBeTruthy();
     expect(view({ kind: "logged-out" }).getByText(Messages.logIn())).toBeTruthy();
     expect(view({ kind: "unreachable" }).getByText(Messages.retry())).toBeTruthy();
+  });
+
+  it("shows a player's small profile card when their name is hovered, not a code tooltip", async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const v = render(
+      <QueryClientProvider client={client}>
+        <SpectateView
+          state={{ kind: "ready", games: [games[0]] }}
+          uid={ME}
+          autoPlay={false}
+          onAutoPlayChange={vi.fn()}
+          onWatch={vi.fn()}
+          onRetry={vi.fn()}
+          onLogIn={vi.fn()}
+          now={NOW}
+        />
+      </QueryClientProvider>,
+    );
+    const name = v.getByText("bob");
+    expect(name.closest("[title]")).toBeNull();
+    fireEvent.mouseOver(name);
+    const card = await v.findByTestId("mini-profile", undefined, { timeout: 3000 });
+    expect(card.textContent).toContain("BOB#2");
+    expect(card.textContent).toContain("Sweden");
+    expect(fetchProfile).toHaveBeenCalledWith("aaaaaaaaaaaa-b");
   });
 
   it("counts the game's time and the set's score", () => {
