@@ -87,39 +87,50 @@ export const ChatKeySetting = () => {
   };
 
   return (
-    <SettingItem name={Messages.chatKey()}>
+    <SettingItem>
       <Tooltip title={netplayDolphinOpen ? Messages.closeDolphinToChange() : ""} placement="bottom-start">
+        {/* Laid out like the Toggles above it: the name on the left, the key on the right under their switches. */}
         <div
           css={css`
             display: flex;
             align-items: center;
+            justify-content: space-between;
             gap: 10px;
           `}
         >
-          <Button
-            variant="outlined"
-            color="secondary"
-            disabled={netplayDolphinOpen || chatKey === null}
-            onClick={listening ? () => setListening(false) : startListening}
+          <Typography color={netplayDolphinOpen ? "text.disabled" : undefined}>{Messages.chatKey()}</Typography>
+          <div
             css={css`
-              min-width: 140px;
-              text-transform: none;
+              display: flex;
+              align-items: center;
+              gap: 10px;
+              /* The switch's track sits inside its 12 px padding. */
+              margin-right: 12px;
             `}
           >
-            {listening ? Messages.chatKeyPressAKey() : chatKey !== null ? chatKeyLabel(chatKey) : "…"}
-          </Button>
-          {!listening && chatKey !== null && chatKeyLabel(chatKey) !== chatKeyLabel(DEFAULT_CHAT_KEY) && (
-            <Button color="secondary" disabled={netplayDolphinOpen} onClick={reset}>
-              {Messages.chatKeyReset()}
+            {!listening && chatKey !== null && chatKeyLabel(chatKey) !== chatKeyLabel(DEFAULT_CHAT_KEY) && (
+              <Button color="secondary" disabled={netplayDolphinOpen} onClick={reset}>
+                {Messages.chatKeyReset()}
+              </Button>
+            )}
+            <Button
+              variant="outlined"
+              color="secondary"
+              disabled={netplayDolphinOpen || chatKey === null}
+              onClick={listening ? () => setListening(false) : startListening}
+              css={css`
+                min-width: 140px;
+                text-transform: none;
+              `}
+            >
+              {listening ? Messages.chatKeyPressAKey() : chatKey !== null ? chatKeyLabel(chatKey) : "…"}
             </Button>
-          )}
-          {listening && (
-            <Typography variant="caption">
-              {refused ? Messages.chatKeyRefused() : Messages.chatKeyEscToCancel()}
-            </Typography>
-          )}
+          </div>
         </div>
       </Tooltip>
+      {listening && (
+        <Typography variant="caption">{refused ? Messages.chatKeyRefused() : Messages.chatKeyEscToCancel()}</Typography>
+      )}
     </SettingItem>
   );
 };

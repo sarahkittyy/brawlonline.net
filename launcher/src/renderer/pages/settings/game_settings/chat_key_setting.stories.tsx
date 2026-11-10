@@ -1,6 +1,7 @@
 import type { ChatKeyPress } from "@common/chat_key";
 import { chatKeyExpression, DEFAULT_CHAT_KEY } from "@common/chat_key";
 
+import { Toggle } from "@/components/form/toggle";
 import { useDolphinStore } from "@/lib/dolphin/use_dolphin_store";
 import { createServiceProvider } from "@/services";
 import type { Services } from "@/services/types";
@@ -56,5 +57,18 @@ export const DolphinOpen = () => {
     <WindowsProvider>
       <ChatKeySetting />
     </WindowsProvider>
+  );
+};
+
+/** Under a Toggle, as in Settings > Game: the key's right edge lines up with the switch's. */
+export const BesideToggles = () => {
+  useDolphinStore.setState({ netplayOpened: false });
+  return (
+    <LinuxProvider>
+      <div style={{ width: 600 }}>
+        <Toggle value={true} onChange={() => undefined} label="Close Dolphin after spectating" description="Text." />
+        <ChatKeySetting />
+      </div>
+    </LinuxProvider>
   );
 };
