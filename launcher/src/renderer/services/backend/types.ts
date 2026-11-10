@@ -80,6 +80,9 @@ export interface BackendService {
   fetchProfile(id: string): Promise<PlayerProfile>;
   /** Changes the logged-in player's mains, country and social media accounts (docs/design/profiles.md). */
   updateProfile(update: ProfileUpdate): Promise<PlayerProfile>;
+  /** The page the header's gold trophy opens, or null for no trophy: the server's `TOURNAMENTS_URL`
+   * (docs/trophy-button.md). No login needed. */
+  fetchTournamentsUrl(): Promise<string | null>;
   /**
    * One leaderboard page; `after` is the previous page's `next`. With `search`, only the players whose
    * name or connect code contains it.

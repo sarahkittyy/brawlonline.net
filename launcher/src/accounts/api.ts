@@ -6,6 +6,7 @@ import {
   ipc_accountsDeleteRulesetDraft,
   ipc_accountsHasSession,
   ipc_accountsInitNetplay,
+  ipc_accountsLauncherSettings,
   ipc_accountsLeaderboard,
   ipc_accountsLogin,
   ipc_accountsLogout,
@@ -80,6 +81,9 @@ const accountsApi: AccountsApi = {
   },
   async profile(id) {
     return unwrap(await ipc_accountsProfile.renderer!.trigger({ id }));
+  },
+  async launcherSettings() {
+    return unwrap(await ipc_accountsLauncherSettings.renderer!.trigger({}));
   },
   async leaderboard(query) {
     return unwrap(await ipc_accountsLeaderboard.renderer!.trigger(query));

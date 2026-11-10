@@ -13,6 +13,7 @@ import {
   ipc_accountsDeleteRulesetDraft,
   ipc_accountsHasSession,
   ipc_accountsInitNetplay,
+  ipc_accountsLauncherSettings,
   ipc_accountsLeaderboard,
   ipc_accountsLogin,
   ipc_accountsLogout,
@@ -61,6 +62,7 @@ export default function setupAccountsIpc() {
   ipc_accountsPublicUser.main!.handle(async ({ uid }) => await manager.publicUser(uid));
   ipc_accountsProfile.main!.handle(async ({ id }) => await manager.profile(id));
   ipc_accountsUpdateProfile.main!.handle(async ({ uid, update }) => await manager.updateProfile(uid, update));
+  ipc_accountsLauncherSettings.main!.handle(async () => await manager.launcherSettings());
   ipc_accountsLeaderboard.main!.handle(async ({ limit, after, q }) => await manager.leaderboard({ limit, after, q }));
   ipc_accountsMatchHistory.main!.handle(
     async ({ uid, mode, limit, before }) => await manager.matchHistory(uid, { mode, limit, before }),

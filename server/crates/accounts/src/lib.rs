@@ -8,6 +8,7 @@ pub mod config;
 pub mod cursor;
 pub mod error;
 pub mod history;
+pub mod launcher;
 pub mod leaderboard;
 pub mod live;
 pub mod mail;
@@ -225,6 +226,7 @@ pub fn router(state: AppState) -> Router {
         .route("/verify-email", get(pages::verify_email_page))
         .route("/reset-password", get(pages::reset_password_page).post(pages::reset_password_submit))
         .route("/healthz", get(api::healthz))
+        .route("/v1/launcher", get(launcher::settings))
         .route("/v1/bug-reports", post(bug_reports::create))
         .layer(RequestBodyLimitLayer::new(16 * 1024))
         .merge(uploads)

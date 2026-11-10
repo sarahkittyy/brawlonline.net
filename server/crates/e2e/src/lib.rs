@@ -129,6 +129,8 @@ pub struct StackOptions {
     pub bug_report_max_logs_bytes: Option<u64>,
     /// `SLUR_FILTER_URL` (a stand-in for DeepInfra), with a test `DEEPINFRA_API_KEY`; default off.
     pub slur_filter_url: Option<String>,
+    /// `TOURNAMENTS_URL` (default: none, no trophy).
+    pub tournaments_url: Option<String>,
 }
 
 /// accounts + mm + a database, all for one test.
@@ -184,6 +186,9 @@ impl Stack {
             cfg.slur_filter.slur_filter_url = url;
             cfg.slur_filter.deepinfra_api_key = Some(accounts::config::Secret::new("di_e2e"));
             cfg.slur_filter.slur_filter_recheck_secs = vec![1, 1];
+        }
+        if let Some(url) = opts.tournaments_url {
+            cfg.tournaments_url = url;
         }
         let bug_reports_dir = std::env::temp_dir().join(format!("pp-e2e-bug-reports-{db_name}"));
         cfg.bug_reports_dir = bug_reports_dir.clone();

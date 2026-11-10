@@ -1,4 +1,4 @@
-import { DISCORD_INVITE_URL, PRODUCT_NAME, TOURNAMENTS_URL } from "@common/product";
+import { DISCORD_INVITE_URL, PRODUCT_NAME } from "@common/product";
 import { css, keyframes } from "@emotion/react";
 import styled from "@emotion/styled";
 import EmojiEventsRoundedIcon from "@mui/icons-material/EmojiEventsRounded";
@@ -23,6 +23,7 @@ import { useLoginModal } from "@/lib/hooks/use_login_modal";
 import { useNotificationSounds } from "@/lib/hooks/use_settings";
 import { useSettingsModal } from "@/lib/hooks/use_settings_modal";
 import { useToasts } from "@/lib/hooks/use_toasts";
+import { useTournamentsUrl } from "@/lib/hooks/use_tournaments_url";
 import { useServices } from "@/services";
 import { platformTitleBarStyles } from "@/styles/platform_title_bar_styles";
 import { titleFont } from "@/styles/with_font";
@@ -65,6 +66,7 @@ export const Header = ({ menuItems }: { menuItems: readonly MenuItem[] }) => {
   const play = usePlay();
   const onPlay = (offlineOnly?: boolean) => void play({ offlineOnly });
   const { startGameOpen, activateOnlineOpen, setStartGameOpen, setActivateOnlineOpen } = usePlayDialogs();
+  const tournamentsUrl = useTournamentsUrl();
 
   return (
     <OuterBox
@@ -118,7 +120,7 @@ export const Header = ({ menuItems }: { menuItems: readonly MenuItem[] }) => {
           `}
         >
           <MainMenu menuItems={menuItems} />
-          <TournamentsButton />
+          {tournamentsUrl && <TournamentsButton url={tournamentsUrl} />}
         </div>
       </div>
       <Box
@@ -195,11 +197,11 @@ const trophyGlow = keyframes`
 `;
 
 /** A glowing golden trophy after the tab icons, sized like them: the community's tournaments, in
- * the browser. */
-const TournamentsButton = () => (
+ * the browser. Only while the server names a page (`TOURNAMENTS_URL`, docs/trophy-button.md). */
+const TournamentsButton = ({ url }: { url: string }) => (
   <Button
     component="a"
-    href={TOURNAMENTS_URL}
+    href={url}
     target="_blank"
     rel="noopener noreferrer"
     aria-label={Messages.tournaments()}

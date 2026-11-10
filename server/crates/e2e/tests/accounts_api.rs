@@ -513,3 +513,17 @@ async fn racial_slurs_in_names_and_codes_are_replaced() {
     assert_eq!((st, body["displayName"].as_str()), (200, Some("anything")), "{body}");
     s.shutdown().await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_trophy_follows_tournaments_url() {
+    let s = Stack::start(StackOptions::default()).await.unwrap();
+    let (st, body) = s.get("/v1/launcher", None).await;
+    assert_eq!((st, body), (200, json!({ "tournamentsUrl": null })));
+    s.shutdown().await;
+
+    let opts = StackOptions { tournaments_url: Some(" https://start.gg/catfight ".into()), ..Default::default() };
+    let s = Stack::start(opts).await.unwrap();
+    let (st, body) = s.get("/v1/launcher", None).await;
+    assert_eq!((st, body), (200, json!({ "tournamentsUrl": "https://start.gg/catfight" })));
+    s.shutdown().await;
+}

@@ -38,6 +38,7 @@ import type { BackendService, RankedProfile, UserData } from "./types";
  * | (none: slippi.gg's site)       | GET /v1/me/matches                |
  * | (none: slippi.gg's site)       | GET /v1/profiles/{id}             |
  * | (none: ours)                   | GET /v1/rooms                     |
+ * | (none: ours)                   | GET /v1/launcher                  |
  * | (none: ours)                   | /v1/rulesets, /v1/me/ruleset*     |
  * | getLatestDolphin.version       | `latestVersion` in /v1/me         |
  */
@@ -130,6 +131,10 @@ class AccountsBackendClient implements BackendService {
 
   async updateProfile(update: ProfileUpdate): Promise<PlayerProfile> {
     return await this._api.updateProfile(this._activeUid(), update);
+  }
+
+  async fetchTournamentsUrl(): Promise<string | null> {
+    return (await this._api.launcherSettings()).tournamentsUrl;
   }
 
   async fetchLeaderboard(after?: string, search?: string): Promise<LeaderboardPage> {

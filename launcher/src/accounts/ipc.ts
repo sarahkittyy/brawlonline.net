@@ -5,6 +5,7 @@ import type {
   AccountsMe,
   AccountsPublicUser,
   AccountsResult,
+  LauncherSettings,
   LeaderboardPage,
   MatchHistoryFilter,
   MatchHistoryPage,
@@ -80,6 +81,12 @@ export const ipc_accountsUpdateProfile = makeEndpoint.main(
   "accounts_updateProfile",
   <{ uid: string; update: ProfileUpdate }>_,
   <R<PlayerProfile>>_,
+);
+
+export const ipc_accountsLauncherSettings = makeEndpoint.main(
+  "accounts_launcherSettings",
+  <Record<never, never>>_,
+  <R<LauncherSettings>>_,
 );
 
 export const ipc_accountsLeaderboard = makeEndpoint.main(

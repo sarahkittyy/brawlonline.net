@@ -7,6 +7,7 @@ import type {
   AccountsResult,
   BugReportRequest,
   BugReportSent,
+  LauncherSettings,
   LeaderboardPage,
   MatchHistoryFilter,
   MatchHistoryPage,
@@ -104,6 +105,10 @@ export class AccountsManager {
 
   profile(id: string): Promise<AccountsResult<PlayerProfile>> {
     return wrap(() => this.client.profile(id));
+  }
+
+  launcherSettings(): Promise<AccountsResult<LauncherSettings>> {
+    return wrap(() => this.client.launcherSettings());
   }
 
   leaderboard(query: { limit?: number; after?: string; q?: string }): Promise<AccountsResult<LeaderboardPage>> {

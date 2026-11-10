@@ -489,6 +489,11 @@ class MockBackendClient implements BackendService {
   }
 
   @delayAndMaybeError(SHOULD_ERROR)
+  async fetchTournamentsUrl(): Promise<string | null> {
+    return "https://start.gg/catfight";
+  }
+
+  @delayAndMaybeError(SHOULD_ERROR)
   async fetchLeaderboard(after?: string, search?: string): Promise<LeaderboardPage> {
     const text = search?.trim().toLowerCase() ?? "";
     const matching = mockLeaderboard.filter(

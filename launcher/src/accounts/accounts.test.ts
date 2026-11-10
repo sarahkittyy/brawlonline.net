@@ -236,6 +236,22 @@ describe("accounts", () => {
     expect(again.ok === false && again.error.code).toBe("no_session");
   });
 
+  it("asks for the launcher settings without a session", async () => {
+    const { impl, calls } = fakeFetch({
+      "GET /v1/launcher": () => ({ status: 200, body: { tournamentsUrl: "https://start.gg/catfight" } }),
+    });
+    const manager = new AccountsManager(
+      new AccountsHttpClient("http://api", "test", impl),
+      new SessionStore(path.join(dir, "s.json"), null),
+    );
+    expect(await manager.launcherSettings()).toEqual({
+      ok: true,
+      value: { tournamentsUrl: "https://start.gg/catfight" },
+    });
+    expect(calls[0].url).toBe("http://api/v1/launcher");
+    expect(calls[0].headers.authorization).toBeUndefined();
+  });
+
   it("pages the leaderboard and the match history, and passes on a 429's Retry-After", async () => {
     let limited = false;
     const page = { entries: [], next: "Y3Vy", total: 0 };

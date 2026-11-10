@@ -302,6 +302,12 @@ pub struct Config {
     #[arg(long, env = "SD_LISTINGS_MAX_TOTAL_BYTES", default_value_t = 4 * 1024 * 1024 * 1024)]
     pub sd_listings_max_total_bytes: u64,
 
+    /// The launcher header's gold trophy opens this page (`GET /v1/launcher`, `tournamentsUrl`).
+    /// Empty or unset: no trophy. An http(s) URL; anything else counts as empty. Read at start, so
+    /// a change needs `systemctl restart pp-accounts` (docs/trophy-button.md).
+    #[arg(long, env = "TOURNAMENTS_URL", default_value = "")]
+    pub tournaments_url: String,
+
     /// The website's folder (`website/` in the repository), for a server with nothing in front of
     /// it (staging, local runs): the profile pages' stylesheet and images (`/profile/profile.css`,
     /// `/assets/...`) are then served from it. Unset in production, where nginx serves the site.
@@ -332,6 +338,7 @@ impl Config {
             slur_filter: SlurFilterConfig::default(),
             require_email_verification: true,
             latest_version: "0.1.0".into(),
+            tournaments_url: String::new(),
             trust_proxy_headers: false,
             argon2_memory_kib: 8192,
             argon2_iterations: 1,

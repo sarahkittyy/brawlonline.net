@@ -140,6 +140,12 @@ export type ProfileUpdate = {
   socials?: Partial<Record<SocialPlatform, string | null>>;
 };
 
+/** `GET /v1/launcher`: settings production changes with an env var and a restart (docs/trophy-button.md). */
+export type LauncherSettings = {
+  /** The header's gold trophy opens this page; null: no trophy (`TOURNAMENTS_URL` empty). */
+  tournamentsUrl: string | null;
+};
+
 /** One row of `GET /v1/ranked/leaderboard`. */
 export type LeaderboardEntry = {
   /** 1-based; ties (same rating) are ordered by uid and still get their own positions. */
@@ -416,6 +422,8 @@ export interface AccountsApi {
   profile(id: string): Promise<PlayerProfile>;
   /** Changes this account's mains, country and social media accounts; resolves to the new profile. */
   updateProfile(uid: string, update: ProfileUpdate): Promise<PlayerProfile>;
+  /** Settings from the server (public): whether the header shows the tournaments trophy. */
+  launcherSettings(): Promise<LauncherSettings>;
   /** One leaderboard page (public); `q` searches names and connect codes. */
   leaderboard(query: { limit?: number; after?: string; q?: string }): Promise<LeaderboardPage>;
   /** One page of this account's match history. */

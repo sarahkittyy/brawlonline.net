@@ -6,6 +6,7 @@ import type {
   AccountsPublicUser,
   BugReportCreated,
   BugReportRequest,
+  LauncherSettings,
   LeaderboardPage,
   MatchHistoryFilter,
   MatchHistoryPage,
@@ -113,6 +114,10 @@ export class AccountsHttpClient {
 
   profile(id: string): Promise<PlayerProfile> {
     return this._request("GET", `/v1/profiles/${encodeURIComponent(id)}`, {});
+  }
+
+  launcherSettings(): Promise<LauncherSettings> {
+    return this._request("GET", "/v1/launcher", {});
   }
 
   leaderboard(query: { limit?: number; after?: string; q?: string }): Promise<LeaderboardPage> {
