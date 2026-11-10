@@ -21,6 +21,7 @@
 
 #include "VideoCommon/AbstractGfx.h"
 #include "VideoCommon/BPMemory.h"
+#include "VideoCommon/BPStructs.h"
 #include "VideoCommon/BoundingBox.h"
 #include "VideoCommon/DataReader.h"
 #include "VideoCommon/FramebufferManager.h"
@@ -904,11 +905,13 @@ void VertexManagerBase::UpdatePipelineObject()
   case ShaderCompilationMode::AsynchronousSkipRendering:
   {
     if (g_ActiveConfig.iShaderCompilationMode == ShaderCompilationMode::AsynchronousSkipRendering &&
-        reinterpret_cast<const u32*>(&bpmem)[BPMEM_NO_SKIP_DRAWS] == NO_SKIP_DRAWS_ON)
+        (reinterpret_cast<const u32*>(&bpmem)[BPMEM_NO_SKIP_DRAWS] == NO_SKIP_DRAWS_ON ||
+         NoSkipDrawsArmed()))
     {
       // A draw the game makes once and copies into a texture (Brawl's name tags, marked by the
-      // P+ plugin): left out, it would be missing until the game draws it again. Wait for its
-      // background compile (not a compile here: bug reports #131/#132, ShaderCache.cpp).
+      // P+ plugin, or in any Brawl build by Dolphin's own hook, BPStructs.h): left out, it would
+      // be missing until the game draws it again. Wait for its background compile (not a compile
+      // here: bug reports #131/#132, ShaderCache.cpp).
       m_current_pipeline_object = g_shader_cache->WaitForPipelineForUid(m_current_pipeline_config);
       if (!m_current_pipeline_object)
         m_pipeline_config_changed = true;

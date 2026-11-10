@@ -111,7 +111,8 @@ const Info<bool> GFX_WAIT_FOR_SHADERS_BEFORE_STARTING{
 // default for a while on 2026-10-14) were turned off again by the user. The cost: with an empty
 // shader cache (a first run), what a game draws only once and copies into a texture can come out
 // with parts missing until the game draws it again, as Mario Kart Wii's guest Miis. Brawl's name
-// tags were the same (an empty box) until the P+ plugin marked their render (BPMEM_NO_SKIP_DRAWS).
+// tags were the same (an empty box) until the P+ plugin marked their render (BPMEM_NO_SKIP_DRAWS),
+// and in other Brawl builds Dolphin marks it itself (HLE_Misc.cpp, BrawlTagRenderHook).
 const Info<ShaderCompilationMode> GFX_SHADER_COMPILATION_MODE{
     {System::GFX, "Settings", "ShaderCompilationMode"}, ShaderCompilationMode::AsynchronousSkipRendering};
 const Info<int> GFX_SHADER_COMPILER_THREADS{{System::GFX, "Settings", "ShaderCompilerThreads"}, 1};

@@ -30,7 +30,7 @@ namespace HLE
 static std::map<u32, u32> s_hooked_addresses;
 
 // clang-format off
-constexpr std::array<Hook, 48> os_patches{{
+constexpr std::array<Hook, 50> os_patches{{
     // Placeholder, os_patches[0] is the "non-existent function" index
     {"FAKE_TO_SKIP_0",               HLE_Misc::UnimplementedFunction,       HookType::Replace, HookFlag::Generic},
 
@@ -87,7 +87,9 @@ constexpr std::array<Hook, 48> os_patches{{
     {"GprbSoundAttachHook", HLE_Misc::GprbSoundAttachHook, HookType::Start, HookFlag::Fixed},
     {"GprbSoundStopHook", HLE_Misc::GprbSoundStopHook, HookType::Replace, HookFlag::Fixed},
     {"GprbStageCreateHook", HLE_Misc::GprbStageCreateHook, HookType::Start, HookFlag::Fixed},
-    {"GprbStageFileHook", HLE_Misc::GprbStageFileHook, HookType::Start, HookFlag::Fixed}
+    {"GprbStageFileHook", HLE_Misc::GprbStageFileHook, HookType::Start, HookFlag::Fixed},
+    {"BrawlTagRenderHook", HLE_Misc::BrawlTagRenderHook, HookType::Start, HookFlag::Fixed},
+    {"BrawlTagCopyTexHook", HLE_Misc::BrawlTagCopyTexHook, HookType::Start, HookFlag::Fixed}
   }};
 // clang-format on
 
@@ -182,6 +184,8 @@ void PatchFixedFunctions(Core::System& system)
   Patch(system, 0x80017404, "BrawlbackSkipResimRenderHook"); // render dispatch branch in gfApplication::mainLoopSub
   Patch(system, 0x801f0ac0, "BrawlbackGXDrawDoneSleepHook"); // `bl OSSleepThread` inside GXDrawDone's wait loop (GXMisc.o)
   Patch(system, 0x80023b1c, "BrawlbackFrameBufferSyncWaitHook"); // `bl VIWaitForRetrace` inside gfFrameBuffer::sync's busy-wait loop
+  Patch(system, 0x800e10b0, "BrawlTagRenderHook");  // name tag render (fn_800E10B0): no skipped draws
+  Patch(system, 0x80072888, "BrawlTagCopyTexHook"); // its copy into the tag's texture (GXCopyTex)
 }
 
 void PatchFunctions(Core::System& system)

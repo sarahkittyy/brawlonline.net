@@ -4,6 +4,7 @@
 #include "VideoCommon/BPStructs.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cstring>
 #include <string>
 
@@ -54,10 +55,67 @@ static constexpr Common::EnumMap<float, GammaCorrection::Invalid2_2> s_gammaLUT 
 // just before BPWritten runs the copy, on the same thread.
 static bool s_present_efb_copy = true;
 
+// ArmNoSkipDraws (BPStructs.h): 0 off; NO_SKIP_DRAWS_ARMED armed, the copy that ends it not known
+// yet; else that copy's destination (physical, as bpmem.copyTexDest << 5). Written by the CPU
+// thread, cleared by the GPU thread when it runs that copy.
+static constexpr u32 NO_SKIP_DRAWS_ARMED = 1;
+static std::atomic<u32> s_no_skip_draws_until_copy{0};
+// GPU thread: XFB copies run while armed. A game draws what it copies once within a frame, so
+// after this many frames the copy is taken as never coming (another build of the game's code)
+// and draws are skipped again.
+static u32 s_no_skip_draws_xfb_copies = 0;
+static constexpr u32 NO_SKIP_DRAWS_MAX_XFB_COPIES = 30;
+
+void ArmNoSkipDraws()
+{
+  s_no_skip_draws_until_copy.store(NO_SKIP_DRAWS_ARMED, std::memory_order_release);
+}
+
+void SetNoSkipDrawsCopyDest(u32 guest_address)
+{
+  // As GXCopyTex writes it into BPMEM_EFB_ADDR: physical, in 32-byte units, 24 bits.
+  const u32 dest = (((guest_address & 0x3FFFFFFF) >> 5) & 0xFFFFFF) << 5;
+  // Not 0 or 1 (off, armed): a copy there is never a texture's.
+  if (dest >= 32)
+    s_no_skip_draws_until_copy.store(dest, std::memory_order_release);
+}
+
+bool NoSkipDrawsArmed()
+{
+  return s_no_skip_draws_until_copy.load(std::memory_order_acquire) != 0;
+}
+
+// GPU thread, at every EFB copy: the armed copy ends it.
+static void NoSkipDrawsOnCopy(bool to_xfb, u32 dest)
+{
+  u32 armed = s_no_skip_draws_until_copy.load(std::memory_order_acquire);
+  if (armed == 0)
+    return;
+  if (!to_xfb)
+  {
+    if (dest != armed)
+      return;
+    INFO_LOG_FMT(VIDEO, "Draws that must not be skipped: done at the copy to {:08x}", dest);
+  }
+  else
+  {
+    if (++s_no_skip_draws_xfb_copies < NO_SKIP_DRAWS_MAX_XFB_COPIES)
+      return;
+    WARN_LOG_FMT(VIDEO, "Draws that must not be skipped: their copy ({:08x}) did not come in {} "
+                        "frames; skipped again",
+                 armed, NO_SKIP_DRAWS_MAX_XFB_COPIES);
+  }
+  // Unless the CPU thread armed it again meanwhile (the next tag).
+  s_no_skip_draws_until_copy.compare_exchange_strong(armed, 0, std::memory_order_acq_rel);
+  s_no_skip_draws_xfb_copies = 0;
+}
+
 void BPInit()
 {
   memset(reinterpret_cast<u8*>(&bpmem), 0, sizeof(bpmem));
   bpmem.bpMask = 0xFFFFFF;
+  s_no_skip_draws_until_copy.store(0, std::memory_order_release);
+  s_no_skip_draws_xfb_copies = 0;
 }
 
 static void BPWritten(PixelShaderManager& pixel_shader_manager, XFStateManager& xf_state_manager,
@@ -264,6 +322,7 @@ static void BPWritten(PixelShaderManager& pixel_shader_manager, XFStateManager& 
     srcRect.bottom = bpmem.copyTexSrcXY.y + bpmem.copyTexSrcWH.y + 1;
 
     const UPE_Copy PE_copy = bpmem.triggerEFBCopy;
+    NoSkipDrawsOnCopy(PE_copy.copy_to_xfb != 0, destAddr);
 
     // Since the copy X and Y coordinates/sizes are 10-bit, the game can configure a copy region up
     // to 1024x1024. Hardware tests have found that the number of bytes written does not depend on

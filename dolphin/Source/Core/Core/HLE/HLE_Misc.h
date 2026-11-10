@@ -43,4 +43,6 @@ void GprbPacingElapsedHook(const Core::CPUThreadGuard& guard);
 void GprbPacingStepsHook(const Core::CPUThreadGuard& guard);
 void GprbRngTraceHook(const Core::CPUThreadGuard& guard);
 void GprbProbeHook(const Core::CPUThreadGuard& guard);
+void BrawlTagRenderHook(const Core::CPUThreadGuard& guard);
+void BrawlTagCopyTexHook(const Core::CPUThreadGuard& guard);
 }  // namespace HLE_Misc

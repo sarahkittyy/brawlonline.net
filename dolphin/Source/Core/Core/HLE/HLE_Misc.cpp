@@ -7,6 +7,7 @@
 #include <thread>
 
 #include "Common/CommonTypes.h"
+#include "Common/Logging/Log.h"
 #include "Core/Core.h"
 #include "Core/CoreTiming.h"
 #include "Core/GeckoCode.h"
@@ -27,6 +28,7 @@
 #include "Core/Rollback/PresentStats.h"
 #include "Core/Rollback/RollbackManager.h"
 #include "Core/System.h"
+#include "VideoCommon/BPStructs.h"
 
 namespace HLE_Misc
 {
@@ -867,5 +869,45 @@ void BrawlbackSyncCharSelectRandomSeedHook(const Core::CPUThreadGuard& guard)
   auto& ppc_state = guard.GetSystem().GetPPCState();
   // r3 contains the seed value passed to srand/srandi; override it with our deterministic session RTC seed.
   ppc_state.gpr[3] = static_cast<u32>(session_rtc);
+}
+
+// Brawl draws each name tag over a fighter once, as the HUD is made: fn_800E10B0 prints the tag
+// on its box into the EFB, then fn_8007270C copies it into a texture (GXCopyTex) that the tag shows
+// for the whole match. In the "Skip Drawing" shader mode a draw whose shader is still compiling is
+// left out, so with those shaders not cached yet (the first match after a new Dolphin, a cleared
+// cache) the tag stayed an empty box all match. P+ online's plugin marks the render itself
+// (BPMEM_NO_SKIP_DRAWS); a Brawl build without it (Other Games: vanilla, P+, Brawl Minus...) is
+// marked here: no draw is skipped from the render's start to its texture copy (BPStructs.h). Only
+// host state: nothing of the game's changes, so both machines of a session run the same either way.
+static constexpr u32 BRAWL_TAG_RENDER_COPY_CALL = 0x800E1348;  // fn_800E10B0: bl fn_8007270C
+static constexpr u32 BRAWL_TAG_RENDER_COPY_CALL_INST = 0x4BF913C5;
+static constexpr u32 BRAWL_TAG_COPY_TEX_CALL = 0x80072888;  // fn_8007270C: bl GXCopyTex(r3 dest)
+static constexpr u32 BRAWL_TAG_COPY_TEX_CALL_INST = 0x4817F5D9;
+static bool s_brawl_tag_render_armed = false;  // CPU thread: since the render's start
+
+// Start hook at fn_800E10B0 (Brawl NTSC-U; P+'s plugin branches from its first instruction to its
+// own wrapper, which comes back to the second).
+void BrawlTagRenderHook(const Core::CPUThreadGuard& guard)
+{
+  // Another region's game, or a mod with other code here: leave it alone.
+  if (PowerPC::MMU::HostRead<u32>(guard, BRAWL_TAG_RENDER_COPY_CALL) !=
+          BRAWL_TAG_RENDER_COPY_CALL_INST ||
+      PowerPC::MMU::HostRead<u32>(guard, BRAWL_TAG_COPY_TEX_CALL) != BRAWL_TAG_COPY_TEX_CALL_INST)
+  {
+    return;
+  }
+  s_brawl_tag_render_armed = true;
+  ArmNoSkipDraws();
+}
+
+// Start hook at fn_8007270C's GXCopyTex call: the tag's texture (r3) is the copy that ends it.
+void BrawlTagCopyTexHook(const Core::CPUThreadGuard& guard)
+{
+  if (!s_brawl_tag_render_armed)
+    return;
+  s_brawl_tag_render_armed = false;
+  const u32 dest = guard.GetSystem().GetPPCState().gpr[3];
+  INFO_LOG_FMT(VIDEO, "Brawl name tag: no skipped draws until the copy to {:08x}", dest);
+  SetNoSkipDrawsCopyDest(dest);
 }
 }  // namespace HLE_Misc
