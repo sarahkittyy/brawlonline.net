@@ -1,8 +1,9 @@
 export const ProjectPunchMessages = {
   title: () => "Project Punch Training Pack",
-  buttonTooltip: () => "Project Punch",
+  buttonTooltip: () => "Project Punch (Training)",
   descriptionBefore: () => "Project Punch is a mod by",
-  descriptionAfter: () => "for P+ that adds new functionality to the training mode. Offline play only.",
+  descriptionAfter: () => "for P+ that adds new functionality to the training mode.",
+  offlineOnly: () => "Offline play only.",
   notDownloaded: () => "You do not have it downloaded.",
   notLatest: () => "You are not on the latest version",
   download: (size: string) => `Download (${size})`,

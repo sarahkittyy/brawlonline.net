@@ -17,22 +17,28 @@ export type ProjectPunchButtonViewProps = {
 };
 
 export const ProjectPunchButtonView = ({ job, onClick }: ProjectPunchButtonViewProps) => (
-  <div style={{ marginLeft: "auto", paddingTop: 8, display: "flex", flexDirection: "column", alignItems: "center" }}>
-    <Tooltip title={Messages.buttonTooltip()} placement="bottom" enterDelay={400} disableInteractive={true}>
+  // Styled like the header's icon buttons (Settings, Discord: 24 px icon, half opacity), centred under
+  // the Settings icon: that one's centre is 34 px from the window's right edge (its 10 px margin and
+  // half its 48 px), so this 40 px button keeps 14 px to the right; vertically centred on the Play
+  // buttons (their 8 px top padding and half their 31 px).
+  <div
+    style={{
+      marginLeft: "auto",
+      marginRight: 14,
+      paddingTop: 4,
+      display: "flex",
+      flexDirection: "column",
+      alignItems: "center",
+    }}
+  >
+    <Tooltip title={Messages.buttonTooltip()}>
       <IconButton
         onClick={onClick}
         aria-label={Messages.buttonTooltip()}
         data-testid="project-punch-button"
-        sx={{
-          width: 38,
-          height: 31,
-          borderRadius: "8px",
-          border: "1px solid rgba(255, 255, 255, 0.14)",
-          color: "text.secondary",
-          "&:hover": { color: "text.primary", borderColor: "rgba(255, 255, 255, 0.3)" },
-        }}
+        sx={{ width: 40, height: 40, padding: "8px", color: "var(--off-white)", opacity: 0.5 }}
       >
-        <LabIcon style={{ fontSize: 22 }} />
+        <LabIcon />
       </IconButton>
     </Tooltip>
     {/* Kept in the layout, so the row does not move when a download starts. */}
@@ -42,9 +48,9 @@ export const ProjectPunchButtonView = ({ job, onClick }: ProjectPunchButtonViewP
       value={jobPercent(job)}
       color="secondary"
       sx={{
-        width: 26,
+        width: 24,
         height: 2,
-        mt: "4px",
+        mt: "1px",
         borderRadius: 1,
         visibility: job ? "visible" : "hidden",
       }}

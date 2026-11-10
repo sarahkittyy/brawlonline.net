@@ -56,8 +56,8 @@ export const ProjectPunchDialogView = ({
   const size = formatBytes(state?.downloadBytes ?? 0);
 
   return (
-    <Dialog open={open} onClose={onClose} maxWidth="xs" fullWidth={true}>
-      <DialogTitle style={{ fontSize: 22, fontWeight: 700, paddingRight: 48 }}>
+    <Dialog open={open} onClose={onClose} fullWidth={true} PaperProps={{ style: { maxWidth: 520 } }}>
+      <DialogTitle style={{ fontSize: 22, fontWeight: 700, paddingRight: 48, whiteSpace: "nowrap" }}>
         {Messages.title()}
         <IconButton
           aria-label={Messages.close()}
@@ -82,6 +82,8 @@ export const ProjectPunchDialogView = ({
             {PROJECT_PUNCH_AUTHOR}
           </Link>{" "}
           {Messages.descriptionAfter()}
+          <br />
+          {Messages.offlineOnly()}
         </p>
 
         {status && <p style={{ margin: "16px 0 0", opacity: 0.75 }}>{status}</p>}

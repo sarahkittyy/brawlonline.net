@@ -338,6 +338,10 @@ export class ProjectPunch {
       }
       throw err;
     } finally {
+      // The zip is only needed while its files are written (also after a failure or Cancel).
+      await fs.promises
+        .rm(path.join(this.opts.root, "download"), { recursive: true, force: true })
+        .catch(() => undefined);
       this.job = null;
       this.abort = null;
       await this.emit();

@@ -281,6 +281,7 @@ describe("ProjectPunch", () => {
     expect(s.job).toBeNull();
     expect(fs.existsSync(pp.cardImage)).toBe(false);
     expect(fs.existsSync(`${pp.cardImage}.partial`)).toBe(false);
+    expect(fs.existsSync(path.join(dir, "project-punch", "download"))).toBe(false);
   });
 
   it("says when GitHub can't be reached, and plays what it has", async () => {
