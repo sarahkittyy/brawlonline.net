@@ -18,9 +18,5 @@ export const HeaderMessages = {
   wouldYouLikeToPlayOffline: () => "Would you like to play offline?",
   playOffline: () => "Play offline",
   cancel: () => "Cancel",
-  editDisplayName: () => "Edit display name",
-  confirm: () => "Confirm",
-  displayName: () => "Display Name",
-  loading: () => "Loading",
   verifyYourEmail: () => "Verify your email",
 };

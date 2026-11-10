@@ -34,4 +34,8 @@ export const ProfileMessages = {
   discordCopied: (name: string) => `Copied Discord username ${name}`,
   couldNotLoad: () => "Couldn't load this profile. Try again later.",
   notFound: () => "This player has no profile.",
+  switchAccount: () => "Switch account",
+  logOut: () => "Log out",
+  activateOnlinePlay: () => "Activate online play",
+  verifyEmail: () => "Verify email",
 };

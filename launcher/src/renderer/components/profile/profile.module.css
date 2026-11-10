@@ -559,3 +559,72 @@
   align-items: center;
   gap: 3px;
 }
+
+/* The player's own profile, until they have clicked this pencil once (use_own_profile_hint.ts): it glows gold, as the
+   header's name does until then (user_menu.module.css .profileGlow). */
+.pencilGlow {
+  --profile-glow: 255 205 70;
+
+  color: rgb(var(--profile-glow)) !important;
+  animation: pencilGlow 1.8s ease-in-out infinite;
+}
+
+@keyframes pencilGlow {
+  0%,
+  100% {
+    box-shadow:
+      0 0 0 1px rgb(var(--profile-glow) / 55%),
+      0 0 4px 1px rgb(var(--profile-glow) / 20%);
+  }
+
+  50% {
+    box-shadow:
+      0 0 0 2px rgb(var(--profile-glow) / 90%),
+      0 0 12px 3px rgb(var(--profile-glow) / 45%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pencilGlow {
+    animation: none;
+    box-shadow: 0 0 0 2px rgb(var(--profile-glow) / 85%);
+  }
+}
+
+/* The player's own profile: Switch account and Log out under the web link, on the right; Activate online play and
+   Verify email above them until they're done. */
+.account {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px 8px;
+  margin-top: 10px;
+}
+
+/* Without the web link's footer above (no connect code yet, or the profile didn't load): its rule instead. */
+.account.ruled {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid rgb(255 255 255 / 8%);
+}
+
+/* Activate online play / Verify email: a row of their own above. */
+.account .todo {
+  flex-basis: 100%;
+  display: flex;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.accountLink {
+  padding: 2px 6px !important;
+  min-width: 0 !important;
+  font-size: 13px !important;
+  text-transform: none !important;
+  color: var(--text-secondary) !important;
+}
+
+.accountLink:hover {
+  color: var(--text-primary) !important;
+}

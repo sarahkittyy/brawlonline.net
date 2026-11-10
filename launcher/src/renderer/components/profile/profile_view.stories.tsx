@@ -2,7 +2,7 @@ import Paper from "@mui/material/Paper";
 
 import type { PlayerProfile } from "@/services/backend/types";
 
-import { ProfileButtons } from "./profile_dialog";
+import { EditPencil, OwnAccountButtons, ProfileButtons } from "./profile_dialog";
 import { ProfileView } from "./profile_view";
 
 export default {
@@ -57,28 +57,62 @@ export const Legendary = () => (
   </Frame>
 );
 
-/** The player's own while placing: the rating is ????, no position, no buttons. */
+const placing: PlayerProfile = {
+  ...gold,
+  displayName: "newbie",
+  connectCode: "NEWB#1",
+  link: "https://brawlonline.net/profile/newb-1",
+  ranked: {
+    ...gold.ranked,
+    rank: null,
+    rating: null,
+    setsPlayed: 2,
+    setsToPlace: 3,
+    wins: 1,
+    losses: 1,
+    position: null,
+  },
+};
+
+const Account = ({ activate = false, verify = false }: { activate?: boolean; verify?: boolean }) => (
+  <OwnAccountButtons activate={activate} verify={verify} ruled={activate} onOpen={() => undefined} />
+);
+
+/**
+ * The player's own while placing: the rating is ????, no position, no Message or Ignore; the pencil beside the name,
+ * and Switch account and Log out under the web link (the header's name opens it).
+ */
 export const Placing = () => (
   <Frame>
     <ProfileView
-      profile={{
-        ...gold,
-        displayName: "newbie",
-        connectCode: "NEWB#1",
-        link: "https://brawlonline.net/profile/newb-1",
-        ranked: {
-          ...gold.ranked,
-          rank: null,
-          rating: null,
-          setsPlayed: 2,
-          setsToPlace: 3,
-          wins: 1,
-          losses: 1,
-          position: null,
-        },
-      }}
+      profile={placing}
+      editToggle={<EditPencil glow={false} onClick={() => undefined} />}
       onCopyLink={() => undefined}
     />
+    <Account />
+  </Frame>
+);
+
+/** The player's own, before they have ever clicked the pencil on this client: it glows gold. */
+export const OwnFirstTime = () => (
+  <Frame>
+    <ProfileView
+      profile={placing}
+      editToggle={<EditPencil glow={true} onClick={() => undefined} />}
+      onCopyLink={() => undefined}
+    />
+    <Account />
+  </Frame>
+);
+
+/** The player's own before online play is set up and the email verified: no code, no web page. */
+export const OwnNotActivated = () => (
+  <Frame>
+    <ProfileView
+      profile={{ ...placing, displayName: "brandnew", connectCode: "", link: null }}
+      editToggle={<EditPencil glow={false} onClick={() => undefined} />}
+    />
+    <Account activate={true} verify={true} />
   </Frame>
 );
 

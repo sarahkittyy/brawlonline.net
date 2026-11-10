@@ -2,6 +2,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { useAccountDialogs } from "@/lib/hooks/use_account_dialogs";
+import { useOwnProfileHint } from "@/lib/hooks/use_own_profile_hint";
 import { useProfileView } from "@/lib/hooks/use_profile_view";
 import { useSocial } from "@/lib/social/use_social";
 import type { PlayerProfile } from "@/services/backend/types";
@@ -86,6 +88,8 @@ describe("ProfileDialog", () => {
     cleanup();
     useProfileView.setState({ target: null });
     useSocial.setState({ tabs: [] });
+    useAccountDialogs.setState({ open: null });
+    useOwnProfileHint.setState({ opened: true });
   });
 
   it("shows someone's rank, Ranked numbers and web page, with Message and Ignore user", async () => {
@@ -119,6 +123,47 @@ describe("ProfileDialog", () => {
     expect(stats()).toEqual(["Rating: ????", "Sets played: 2", "Record: 1W-1L"]);
     expect(queryByText("Message")).toBeNull();
     expect(queryByText("Ignore user")).toBeNull();
+  });
+
+  it("has Switch account and Log out under the player's own profile only, each closing it for its dialog", async () => {
+    const own = open("me");
+    await own.findByTestId("profile-view");
+    const links = Array.from(document.querySelectorAll("[data-testid=profile-account] button")).map(
+      (b) => b.textContent,
+    );
+    expect(links).toEqual(["Switch account", "Log out"]);
+    fireEvent.click(own.getByText("Switch account"));
+    expect(useAccountDialogs.getState().open).toBe("switch");
+    await waitFor(() => expect(document.querySelector("[data-testid=profile-view]")).toBeNull());
+    cleanup();
+
+    const theirs = open("them");
+    await theirs.findByTestId("profile-view");
+    expect(document.querySelector("[data-testid=profile-account]")).toBeNull();
+  });
+
+  it("keeps Switch account and Log out when the player's own profile can't be loaded", async () => {
+    fetchProfile.mockRejectedValueOnce(new Error("offline"));
+    const { findByText, getByText } = open("me");
+    await findByText("Couldn't load this profile. Try again later.");
+    fireEvent.click(getByText("Log out"));
+    expect(useAccountDialogs.getState().open).toBe("logout");
+  });
+
+  it("glows the edit pencil until it is clicked once, then never again", async () => {
+    useOwnProfileHint.setState({ opened: false });
+    const first = open("me");
+    await first.findByTestId("profile-view");
+    const pencil = () => document.querySelector("[data-testid=profile-edit]")!;
+    expect(pencil().className).toContain("pencilGlow");
+    fireEvent.click(pencil());
+    expect(useOwnProfileHint.getState().opened).toBe(true);
+    cleanup();
+    useProfileView.setState({ target: null });
+
+    const again = open("me");
+    await again.findByTestId("profile-view");
+    expect(pencil().className).not.toContain("pencilGlow");
   });
 
   it("says so when the profile can't be loaded", async () => {

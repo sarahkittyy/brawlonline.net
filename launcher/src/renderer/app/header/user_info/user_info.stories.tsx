@@ -35,7 +35,7 @@ export const ErrorUserInfo = () => {
   );
 };
 
-// The header's name until this client has shown the player their own profile (user_menu.tsx)
+// The header's name until this client's player has clicked their own profile's edit pencil (user_menu.tsx)
 export const ProfileGlowUserInfo = () => {
   return (
     <ButtonBase className={clsx(menuStyles.userInfoButton, menuStyles.profileGlow)}>

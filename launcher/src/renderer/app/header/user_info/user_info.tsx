@@ -1,4 +1,3 @@
-import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import CircularProgress from "@mui/material/CircularProgress";
 import { clsx } from "clsx";
 import React from "react";
@@ -39,9 +38,6 @@ export const UserInfo = React.memo(function UserInfo({
               <span>{connectCode}</span>
             </div>
           ))}
-      </div>
-      <div className={styles.expandMoreIcon}>
-        <ExpandMoreIcon />
       </div>
     </div>
   );

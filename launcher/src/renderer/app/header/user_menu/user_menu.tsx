@@ -1,6 +1,5 @@
 import ButtonBase from "@mui/material/ButtonBase";
 import DialogContentText from "@mui/material/DialogContentText";
-import Menu from "@mui/material/Menu";
 import { clsx } from "clsx";
 import log from "electron-log";
 import React from "react";
@@ -8,6 +7,7 @@ import React from "react";
 import { ConfirmationModal } from "@/components/confirmation_modal/confirmation_modal";
 import { useDolphinStore } from "@/lib/dolphin/use_dolphin_store";
 import { useAccount } from "@/lib/hooks/use_account";
+import { useAccountDialogs } from "@/lib/hooks/use_account_dialogs";
 import { useAppStore } from "@/lib/hooks/use_app_store";
 import { useOwnProfileHint } from "@/lib/hooks/use_own_profile_hint";
 import { useProfileView } from "@/lib/hooks/use_profile_view";
@@ -17,16 +17,19 @@ import type { AuthUser } from "@/services/auth/types";
 import { SessionExpiredError } from "@/services/auth/types";
 
 import { AddAccountDialog } from "../account_switcher/add_account_dialog";
+import { SwitchAccountDialog } from "../account_switcher/switch_account_dialog";
 import { ActivateOnlineDialog } from "../activate_online_dialog";
-import { NameChangeDialog } from "../name_change_dialog";
 import { UserInfo } from "../user_info/user_info";
 import { VerifyEmailDialog } from "../verify_email_dialog";
 import { UserMenuMessages as Messages } from "./user_menu.messages";
 import styles from "./user_menu.module.css";
-import { UserMenuItems } from "./user_menu_items";
 
 const MAX_ACCOUNTS = 5;
 
+/**
+ * The account in the header: clicking it opens the player's own profile, whose footer has Switch account and Log out
+ * (and Activate online play / Verify email until they're done). Those dialogs are here (use_account_dialogs.ts).
+ */
 export const UserMenu = ({ user, handleError }: { user: AuthUser; handleError: (error: any) => void }) => {
   const { authService, backendService, dolphinService } = useServices();
   const userData = useAccount((store) => store.userData);
@@ -40,21 +43,10 @@ export const UserMenu = ({ user, handleError }: { user: AuthUser; handleError: (
   const netplayOpened = useDolphinStore((store) => store.netplayOpened);
   const { showSuccess, showError } = useToasts();
   const openProfile = useProfileView((store) => store.open);
-  const profileTargetUid = useProfileView((store) => store.target?.uid);
   const ownProfileOpened = useOwnProfileHint((store) => store.opened);
-  const markOwnProfileOpened = useOwnProfileHint((store) => store.markOpened);
+  const accountDialog = useAccountDialogs((store) => store.open);
+  const closeAccountDialog = useAccountDialogs((store) => store.close);
 
-  // Opening their own profile, from the menu or their name anywhere else, ends the gold glow for good.
-  React.useEffect(() => {
-    if (!ownProfileOpened && profileTargetUid === user.uid) {
-      markOwnProfileOpened();
-    }
-  }, [ownProfileOpened, profileTargetUid, user.uid, markOwnProfileOpened]);
-
-  const [openLogoutPrompt, setOpenLogoutPrompt] = React.useState(false);
-  const [openNameChangePrompt, setOpenNameChangePrompt] = React.useState(false);
-  const [openActivationDialog, setOpenActivationDialog] = React.useState(false);
-  const [openVerifyEmailDialog, setOpenVerifyEmailDialog] = React.useState(false);
   const [openAddAccountDialog, setOpenAddAccountDialog] = React.useState(false);
   const [switching, setSwitching] = React.useState(false);
   const [reAuthEmail, setReAuthEmail] = React.useState<string | undefined>();
@@ -67,20 +59,8 @@ export const UserMenu = ({ user, handleError }: { user: AuthUser; handleError: (
       log.error(err);
       handleError(err);
     } finally {
-      handleClose();
+      closeAccountDialog();
     }
-  };
-
-  const [anchorEl, setAnchorEl] = React.useState<HTMLElement | undefined>();
-  const handleClick = (event: React.MouseEvent<HTMLButtonElement>) => {
-    setAnchorEl(event.currentTarget);
-  };
-  const closeMenu = () => {
-    setAnchorEl(undefined);
-  };
-  const handleClose = () => {
-    setOpenNameChangePrompt(false);
-    setOpenLogoutPrompt(false);
   };
 
   // Get multi-account service
@@ -99,7 +79,6 @@ export const UserMenu = ({ user, handleError }: { user: AuthUser; handleError: (
     }
 
     setSwitching(true);
-    closeMenu();
 
     try {
       await multiAccountService.switchAccount(accountId);
@@ -114,6 +93,7 @@ export const UserMenu = ({ user, handleError }: { user: AuthUser; handleError: (
       if (account) {
         showSuccess(Messages.switchedTo(account.displayName || account.id));
       }
+      closeAccountDialog();
 
       // Refresh user data for new account
       await backendService.fetchUserData().catch(() => {
@@ -123,6 +103,7 @@ export const UserMenu = ({ user, handleError }: { user: AuthUser; handleError: (
       // Check if session expired
       if (err instanceof SessionExpiredError) {
         // Show login dialog with pre-filled email
+        closeAccountDialog();
         setReAuthEmail(err.email);
         setOpenAddAccountDialog(true);
       } else {
@@ -141,7 +122,7 @@ export const UserMenu = ({ user, handleError }: { user: AuthUser; handleError: (
       return;
     }
 
-    closeMenu();
+    closeAccountDialog();
     setOpenAddAccountDialog(true);
   };
 
@@ -166,11 +147,6 @@ export const UserMenu = ({ user, handleError }: { user: AuthUser; handleError: (
     }
   };
 
-  // Filter out active account - only pass inactive accounts to menu
-  const inactiveAccounts = React.useMemo(() => {
-    return accounts.filter((account) => account.id !== activeAccountId);
-  }, [accounts, activeAccountId]);
-
   let isUserErrorMessage: boolean = false;
   let errMessage: string | undefined = undefined;
   if (!isOnline) {
@@ -185,14 +161,14 @@ export const UserMenu = ({ user, handleError }: { user: AuthUser; handleError: (
     isUserErrorMessage = true;
   }
 
-  // Until this client has shown its player their own profile: the name glows gold, then View Profile in the menu.
+  // Until this client's player has clicked their own profile's edit pencil: the name glows gold, then the pencil.
   const glowProfile = !ownProfileOpened && !!userData?.playKey && !errMessage && !loading;
 
   return (
     <div>
       <ButtonBase
-        onClick={handleClick}
-        className={clsx(styles.userInfoButton, glowProfile && !anchorEl && styles.profileGlow)}
+        onClick={() => openProfile({ uid: user.uid, displayName, connectCode: userData?.playKey?.connectCode })}
+        className={clsx(styles.userInfoButton, glowProfile && styles.profileGlow)}
       >
         <UserInfo
           displayName={displayName}
@@ -204,60 +180,27 @@ export const UserMenu = ({ user, handleError }: { user: AuthUser; handleError: (
         />
       </ButtonBase>
 
-      <Menu
-        anchorEl={anchorEl}
-        anchorOrigin={{ vertical: "bottom", horizontal: "left" }}
-        keepMounted={true}
-        open={Boolean(anchorEl)}
-        onClose={closeMenu}
-      >
-        <UserMenuItems
-          inactiveAccounts={inactiveAccounts}
-          onSwitchAccount={handleSwitchAccount}
-          onAddAccount={handleAddAccount}
-          onRemoveAccount={handleRemoveAccount}
-          switching={switching}
-          isOnlineActivated={!!userData?.playKey}
-          isEmailVerified={!!user.emailVerified}
-          serverError={serverError}
-          glowViewProfile={glowProfile}
-          onVerifyEmail={() => {
-            closeMenu();
-            setOpenVerifyEmailDialog(true);
-          }}
-          onActivateOnline={() => {
-            closeMenu();
-            setOpenActivationDialog(true);
-          }}
-          onViewProfile={() => {
-            closeMenu();
-            openProfile({ uid: user.uid, displayName, connectCode: userData?.playKey?.connectCode });
-          }}
-          onEditDisplayName={() => {
-            closeMenu();
-            setOpenNameChangePrompt(true);
-          }}
-          onLogout={() => {
-            closeMenu();
-            setOpenLogoutPrompt(true);
-          }}
-        />
-      </Menu>
-
-      <NameChangeDialog displayName={displayName} open={openNameChangePrompt} handleClose={handleClose} />
-      <VerifyEmailDialog open={openVerifyEmailDialog} onClose={() => setOpenVerifyEmailDialog(false)} />
+      <SwitchAccountDialog
+        open={accountDialog === "switch"}
+        onClose={closeAccountDialog}
+        accounts={accounts}
+        activeAccountId={activeAccountId}
+        onSwitchAccount={handleSwitchAccount}
+        onAddAccount={handleAddAccount}
+        onRemoveAccount={handleRemoveAccount}
+        switching={switching}
+      />
+      <VerifyEmailDialog open={accountDialog === "verify"} onClose={closeAccountDialog} />
       <ActivateOnlineDialog
-        open={openActivationDialog}
-        onClose={() => setOpenActivationDialog(false)}
-        onSubmit={() => {
-          setOpenActivationDialog(false);
-        }}
+        open={accountDialog === "activate"}
+        onClose={closeAccountDialog}
+        onSubmit={closeAccountDialog}
       />
       <ConfirmationModal
         title={Messages.areYouSureYouWantToLogout()}
         confirmText={Messages.logout()}
-        open={openLogoutPrompt}
-        onClose={handleClose}
+        open={accountDialog === "logout"}
+        onClose={closeAccountDialog}
         onSubmit={onLogout}
         fullWidth={false}
       >

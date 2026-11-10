@@ -5,11 +5,6 @@
   padding: 8px 10px;
 }
 
-.expandMoreIcon {
-  color: var(--surface-4);
-  margin-left: 16px;
-}
-
 .subtitle {
   font-weight: bold;
   font-size: 14px;
@@ -31,9 +26,9 @@
 }
 
 /* Below this the header's icons don't fit beside the name (header.tsx's COMPACT_HEADER): the
-   picture alone, the name is in the menu. */
+   picture alone, the name is in the profile it opens. */
 @media (width <= 1250px) {
-  .content, .expandMoreIcon {
+  .content {
     display: none;
   }
 }

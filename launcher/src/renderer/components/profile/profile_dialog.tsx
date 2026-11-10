@@ -9,9 +9,13 @@ import Dialog from "@mui/material/Dialog";
 import IconButton from "@mui/material/IconButton";
 import Tooltip from "@mui/material/Tooltip";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { clsx } from "clsx";
 import React, { useMemo, useState } from "react";
 
 import { useAccount } from "@/lib/hooks/use_account";
+import type { AccountDialog } from "@/lib/hooks/use_account_dialogs";
+import { useAccountDialogs } from "@/lib/hooks/use_account_dialogs";
+import { useOwnProfileHint } from "@/lib/hooks/use_own_profile_hint";
 import { useProfileView } from "@/lib/hooks/use_profile_view";
 import { useToasts } from "@/lib/hooks/use_toasts";
 import { useSocial } from "@/lib/social/use_social";
@@ -28,7 +32,9 @@ import { ProfileView } from "./profile_view";
  * View Profile (docs/design/profiles.md): anyone's public profile, over whatever page is open. Opened with
  * `useProfileView().open(...)`. Someone else's has Message and Ignore user when logged in with online play
  * set up (the chat's own actions). The player's own has a pencil beside the name: edit mode (name, mains, country,
- * social media), where every change is saved as it is made; a check beside the X leaves it.
+ * social media), where every change is saved as it is made; a check beside the X leaves it. Under it are Switch account
+ * and Log out (the header's name opens it: there is no account menu), and Activate online play / Verify email until
+ * they're done. Until the player has clicked that pencil once on this client, it glows gold.
  */
 export const ProfileDialog = React.memo(function ProfileDialog() {
   const target = useProfileView((s) => s.target);
@@ -53,6 +59,8 @@ const ProfileDialogBody = ({ uid, seedName, onClose }: { uid: string; seedName?:
     refetchOnMount: "always",
   });
   const own = myUid != null && myUid === uid;
+  const pencilFound = useOwnProfileHint((s) => s.opened);
+  const markPencilFound = useOwnProfileHint((s) => s.markOpened);
   return (
     <div className={styles.dialog}>
       <div className={styles.corner}>
@@ -81,17 +89,15 @@ const ProfileDialogBody = ({ uid, seedName, onClose }: { uid: string; seedName?:
           editing={own && editMode ? editing : null}
           editToggle={
             own && !editMode ? (
-              <Tooltip title={Messages.editProfile()}>
-                <IconButton
-                  size="small"
-                  aria-label={Messages.editProfile()}
-                  aria-pressed={false}
-                  onClick={() => setEditMode(true)}
-                  data-testid="profile-edit"
-                >
-                  <EditOutlinedIcon fontSize="small" />
-                </IconButton>
-              </Tooltip>
+              <EditPencil
+                glow={!pencilFound}
+                onClick={() => {
+                  setEditMode(true);
+                  if (!pencilFound) {
+                    markPencilFound();
+                  }
+                }}
+              />
             ) : undefined
           }
           onCopyLink={(link) => void navigator.clipboard.writeText(link).then(() => showSuccess(Messages.linkCopied()))}
@@ -110,12 +116,87 @@ const ProfileDialogBody = ({ uid, seedName, onClose }: { uid: string; seedName?:
           <div>{error ? Messages.couldNotLoad() : Messages.notFound()}</div>
         </div>
       )}
+      {own && <OwnAccountActions ruled={!data?.link} onClose={onClose} />}
     </div>
   );
 };
 
+/** The pencil beside the player's own name that opens edit mode; it glows gold until they have clicked it once. */
+export const EditPencil = ({ glow, onClick }: { glow: boolean; onClick: () => void }) => (
+  <Tooltip title={Messages.editProfile()}>
+    <IconButton
+      size="small"
+      aria-label={Messages.editProfile()}
+      aria-pressed={false}
+      className={clsx(glow && styles.pencilGlow)}
+      onClick={onClick}
+      data-testid="profile-edit"
+    >
+      <EditOutlinedIcon fontSize="small" />
+    </IconButton>
+  </Tooltip>
+);
+
+/** The player's own profile's account actions; each closes the profile and opens its dialog (user_menu.tsx). */
+const OwnAccountActions = ({ ruled, onClose }: { ruled: boolean; onClose: () => void }) => {
+  const show = useAccountDialogs((s) => s.show);
+  const activated = useAccount((s) => s.userData?.playKey != null);
+  const emailVerified = useAccount((s) => s.user?.emailVerified ?? true);
+  const serverError = useAccount((s) => s.serverError);
+  return (
+    <OwnAccountButtons
+      activate={!activated && !serverError}
+      verify={!emailVerified}
+      ruled={ruled}
+      onOpen={(dialog) => {
+        onClose();
+        show(dialog);
+      }}
+    />
+  );
+};
+
 /**
- * Edit mode's server calls for the player's own profile: the name through Edit display name's path (the slur filter
+ * Under the player's own profile: Switch account and Log out on the right, below the web link, and above them
+ * Activate online play / Verify email until they're done (also the stories'). `ruled`: no web link above, so a rule.
+ */
+export const OwnAccountButtons = ({
+  activate,
+  verify,
+  ruled = false,
+  onOpen,
+}: {
+  activate: boolean;
+  verify: boolean;
+  ruled?: boolean;
+  onOpen: (dialog: AccountDialog) => void;
+}) => (
+  <div className={clsx(styles.account, ruled && styles.ruled)} data-testid="profile-account">
+    {(activate || verify) && (
+      <div className={styles.todo}>
+        {activate && (
+          <Button variant="contained" size="small" onClick={() => onOpen("activate")}>
+            {Messages.activateOnlinePlay()}
+          </Button>
+        )}
+        {verify && (
+          <Button variant="contained" size="small" onClick={() => onOpen("verify")}>
+            {Messages.verifyEmail()}
+          </Button>
+        )}
+      </div>
+    )}
+    <Button size="small" className={styles.accountLink} onClick={() => onOpen("switch")}>
+      {Messages.switchAccount()}
+    </Button>
+    <Button size="small" className={styles.accountLink} onClick={() => onOpen("logout")}>
+      {Messages.logOut()}
+    </Button>
+  </div>
+);
+
+/**
+ * Edit mode's server calls for the player's own profile: the name through the display-name rename path (the slur filter
  * applies; the header's name follows), the rest through `PUT /v1/me/profile`. The profile shown takes the answer; a
  * refusal is a toast with the server's message.
  */

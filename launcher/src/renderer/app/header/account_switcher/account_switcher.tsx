@@ -1,6 +1,7 @@
 import { css } from "@emotion/react";
 import styled from "@emotion/styled";
 import AddIcon from "@mui/icons-material/Add";
+import CheckIcon from "@mui/icons-material/Check";
 import CloseIcon from "@mui/icons-material/Close";
 import ButtonBase from "@mui/material/ButtonBase";
 import IconButton from "@mui/material/IconButton";
@@ -14,17 +15,19 @@ import { AccountSwitcherMessages as Messages } from "./account_switcher.messages
 
 const MAX_ADDITIONAL_ACCOUNTS = 4;
 
-const AccountItem = styled.div<{ $disabled?: boolean }>`
+const AccountItem = styled.div<{ $disabled?: boolean; $current?: boolean }>`
   display: flex;
   justify-content: space-between;
   align-items: center;
+  min-height: 42px;
   padding: 4px 16px;
-  cursor: ${(props) => (props.$disabled ? "default" : "pointer")};
+  border-radius: 4px;
+  cursor: ${(props) => (props.$disabled || props.$current ? "default" : "pointer")};
   opacity: ${(props) => (props.$disabled ? 0.6 : 1)};
   transition: background-color 100ms ease-out;
 
   &:hover {
-    background-color: ${(props) => (props.$disabled ? "transparent" : "rgba(255, 255, 255, 0.05)")};
+    background-color: ${(props) => (props.$disabled || props.$current ? "transparent" : "rgba(255, 255, 255, 0.05)")};
 
     .remove-button {
       opacity: ${(props) => (props.$disabled ? 0 : 1)};
@@ -81,26 +84,34 @@ const RemoveButton = styled(IconButton)`
 `;
 
 type AccountSwitcherProps = {
-  accounts: StoredAccount[]; // Only inactive accounts (active account is shown in header)
+  accounts: readonly StoredAccount[]; // Every account, the active one included
+  activeAccountId: string | null;
   onSwitchAccount: (accountId: string) => void;
   onAddAccount: () => void;
   onRemoveAccount: (accountId: string) => void;
   switching?: boolean;
 };
 
+/**
+ * Switch account's list: the account logged in first (a check, not clickable), then the others by when they were last
+ * used (click one to switch, the X removes it), then "Add another account" while there's room.
+ */
 export const AccountSwitcher = ({
   accounts,
+  activeAccountId,
   onSwitchAccount,
   onAddAccount,
   onRemoveAccount,
   switching = false,
 }: AccountSwitcherProps) => {
-  // Sort accounts by last active (accounts are already filtered to exclude active)
+  const activeAccount = accounts.find((account) => account.id === activeAccountId);
+  // The others, by last active
   const sortedAccounts = React.useMemo(() => {
-    return [...accounts]
+    return accounts
+      .filter((account) => account.id !== activeAccountId)
       .sort((a, b) => b.lastActive.getTime() - a.lastActive.getTime())
       .slice(0, MAX_ADDITIONAL_ACCOUNTS);
-  }, [accounts]);
+  }, [accounts, activeAccountId]);
 
   const handleAccountClick = (accountId: string) => {
     if (!switching) {
@@ -116,11 +127,17 @@ export const AccountSwitcher = ({
   return (
     <div
       css={css`
-        min-width: 280px;
         color: var(--off-white);
       `}
     >
-      {/* Account List */}
+      {activeAccount && (
+        <AccountItem $current={true} data-testid="active-account">
+          <AccountRow account={activeAccount} />
+          <CheckIcon sx={{ fontSize: 20, color: "var(--accent-primary)", marginRight: "4px" }} />
+        </AccountItem>
+      )}
+
+      {/* The other accounts */}
       {sortedAccounts.length > 0 && (
         <div
           css={css`
@@ -131,18 +148,7 @@ export const AccountSwitcher = ({
         >
           {sortedAccounts.map((account) => (
             <AccountItem key={account.id} onClick={() => handleAccountClick(account.id)} $disabled={switching}>
-              <div
-                css={css`
-                  display: flex;
-                  align-items: center;
-                  gap: 10px;
-                `}
-              >
-                <UserIcon imageUrl={account.displayPicture} size={26} />
-                <AccountInfo>
-                  <AccountName>{account.displayName}</AccountName>
-                </AccountInfo>
-              </div>
+              <AccountRow account={account} />
               <Tooltip title={Messages.remove()}>
                 <RemoveButton className="remove-button" onClick={(e) => handleRemoveClick(e, account.id)} size="small">
                   <CloseIcon sx={{ fontSize: 18 }} />
@@ -156,7 +162,7 @@ export const AccountSwitcher = ({
       {/* Add Account Button */}
       {sortedAccounts.length < MAX_ADDITIONAL_ACCOUNTS && (
         <>
-          {sortedAccounts.length > 0 && <SectionDivider />}
+          <SectionDivider />
           <ActionButton onClick={onAddAccount}>
             <AddIcon sx={{ fontSize: 18 }} />
             {Messages.addAnotherAccount()}
@@ -166,3 +172,19 @@ export const AccountSwitcher = ({
     </div>
   );
 };
+
+const AccountRow = ({ account }: { account: StoredAccount }) => (
+  <div
+    css={css`
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-width: 0;
+    `}
+  >
+    <UserIcon imageUrl={account.displayPicture} size={26} />
+    <AccountInfo>
+      <AccountName>{account.displayName || account.email}</AccountName>
+    </AccountInfo>
+  </div>
+);

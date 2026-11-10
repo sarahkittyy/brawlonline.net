@@ -7,48 +7,32 @@
   background-color: rgb(255 255 255 / 7%);
 }
 
-/* Until this client has shown its player their own profile (use_own_profile_hint.ts): the name in the header glows
-   gold, and once the menu is open, View Profile does instead. */
-.profileGlow,
-.profileGlowItem {
+/* Until this client's player has clicked their own profile's edit pencil (use_own_profile_hint.ts): the name in the
+   header glows gold, and in the profile the pencil does (profile.module.css .pencilGlow). */
+.profileGlow {
   --profile-glow: 255 205 70;
 
   animation: profileGlow 1.8s ease-in-out infinite;
-}
-
-.profileGlowItem {
-  --profile-glow-inset: inset;
-
-  border-radius: 6px;
-  margin: 0 6px;
-  padding-left: 10px; /* MUI's 16px less the margin: the icon stays in line with the others */
-  padding-right: 10px;
-  color: rgb(var(--profile-glow));
-}
-
-.profileGlowItem svg {
-  color: rgb(var(--profile-glow));
 }
 
 @keyframes profileGlow {
   0%,
   100% {
     box-shadow:
-      var(--profile-glow-inset,) 0 0 0 1px rgb(var(--profile-glow) / 55%),
-      var(--profile-glow-inset,) 0 0 4px 1px rgb(var(--profile-glow) / 20%);
+      0 0 0 1px rgb(var(--profile-glow) / 55%),
+      0 0 4px 1px rgb(var(--profile-glow) / 20%);
   }
 
   50% {
     box-shadow:
-      var(--profile-glow-inset,) 0 0 0 2px rgb(var(--profile-glow) / 90%),
-      var(--profile-glow-inset,) 0 0 12px 3px rgb(var(--profile-glow) / 45%);
+      0 0 0 2px rgb(var(--profile-glow) / 90%),
+      0 0 12px 3px rgb(var(--profile-glow) / 45%);
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .profileGlow,
-  .profileGlowItem {
+  .profileGlow {
     animation: none;
-    box-shadow: var(--profile-glow-inset,) 0 0 0 2px rgb(var(--profile-glow) / 85%);
+    box-shadow: 0 0 0 2px rgb(var(--profile-glow) / 85%);
   }
 }

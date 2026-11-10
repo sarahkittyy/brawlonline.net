@@ -26,7 +26,7 @@ export const BIG_MAINS = 9;
 
 /** What edit mode does with a change (the dialog's server calls); each rejects with the error when refused. */
 export type ProfileEditing = {
-  /** The display name, through the same server path as Edit display name (the slur filter applies). */
+  /** The display name, through the display-name rename path (the slur filter applies). */
   rename: (name: string) => Promise<void>;
   /** Mains, country or social media accounts. */
   save: (update: ProfileUpdate) => Promise<void>;

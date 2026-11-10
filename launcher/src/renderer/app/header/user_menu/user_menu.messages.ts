@@ -1,7 +1,4 @@
 export const UserMenuMessages = {
-  activateOnlinePlay: () => "Activate online play",
-  viewProfile: () => "View Profile",
-  editDisplayName: () => "Edit display name",
   logout: () => "Log out",
   offline: () => "Offline",
   serverError: () => "Server error",
@@ -15,5 +12,4 @@ export const UserMenuMessages = {
   accountRemoved: (accountName: string) => `Removed {0}`,
   switchedTo: (accountName: string) => `Switched to {0}`,
   closeDolphinToSwitchAccounts: () => "Dolphin is in a game. Close it to switch accounts",
-  verifyEmail: () => "Verify email",
 };
