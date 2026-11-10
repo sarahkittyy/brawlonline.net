@@ -3,6 +3,7 @@ export const SettingsCreateMessages = {
   game: () => "Game",
   replays: () => "Replays",
   clips: () => "Clips",
+  training: () => "Training",
   dolphinSettings: () => "Dolphin Settings",
   netplay: () => "Netplay",
   playback: () => "Replays & Spectating",

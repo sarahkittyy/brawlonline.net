@@ -11,6 +11,7 @@ import { ModsMessages } from "./mods/mods.messages";
 import { ModsTab } from "./mods/mods_tab";
 import { HomeOverview } from "./overview/overview";
 import { PlayButtons } from "./play_buttons/play_buttons";
+import { ProjectPunchButton } from "./project_punch_button/project_punch_button";
 import { Spectate } from "./spectate/spectate";
 import { Tabs } from "./tabs/tabs";
 
@@ -22,7 +23,7 @@ const Outer = styled.div`
   min-width: 0;
 `;
 
-// The tabs, with Play unranked / Play ranked right after them.
+// The tabs, with Play unranked / Play ranked right after them, and Project Punch's lab button at the far right.
 const TabRow = styled.div`
   display: flex;
   align-items: flex-start;
@@ -77,6 +78,7 @@ export const HomePage = React.memo(function HomePage() {
             ]}
           />
           <PlayButtons />
+          <ProjectPunchButton />
         </TabRow>
         <Routes>
           <Route index={true} element={<RestoreHomeScope />} />

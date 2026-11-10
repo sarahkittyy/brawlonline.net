@@ -1,6 +1,7 @@
 import setupAccountsIpc from "@accounts/setup";
 import { DolphinManager } from "@dolphin/manager";
 import setupModsIpc from "@dolphin/mods/setup";
+import setupProjectPunchIpc from "@dolphin/project_punch/setup";
 import setupDolphinIpc from "@dolphin/setup";
 import setupGameAssetsIpc from "@game_assets/setup";
 import setupReplaysIpc from "@replays/setup";
@@ -22,6 +23,7 @@ export function installModules(flags: ConfigFlags) {
   dolphinManager.setLaunchGate(() => appUpdater.assertUpToDate());
   appUpdater.setBusyCheck(() => dolphinManager.isBusy());
   setupDolphinIpc({ dolphinManager });
+  setupProjectPunchIpc({ dolphinManager });
   const { accountsManager, serviceUrls } = setupAccountsIpc();
   setupSocialIpc({ accountsManager, accountsApi: serviceUrls.accountsApi, dolphinManager });
   setupSpectateIpc({ accountsManager, accountsApi: serviceUrls.accountsApi, dolphinManager, settingsManager });

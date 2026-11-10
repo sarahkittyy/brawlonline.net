@@ -12,6 +12,7 @@ import { SocialRoot } from "@/components/social/social_root";
 import { installPPlusBuildDialogPreview, PPlusBuildDialog } from "@/lib/pplus/pplus_build_dialog";
 import { installReplayVersionDialogPreview, ReplayVersionDialog } from "@/lib/pplus/replay_version_dialog";
 import { refreshPPlusVersions } from "@/lib/pplus/use_pplus_versions";
+import { ProjectPunchDialog } from "@/lib/project_punch/project_punch_dialog";
 import type { AuthUser } from "@/services/auth/types";
 
 type PrivateMenuItem = MenuItem & {
@@ -66,6 +67,7 @@ export const App = React.memo(({ menuItems }: { menuItems: readonly MainMenuItem
       <LoginDialog />
       <ReplayVersionDialog />
       <PPlusBuildDialog />
+      <ProjectPunchDialog />
       <RosettaInstallDialog />
     </div>
   );

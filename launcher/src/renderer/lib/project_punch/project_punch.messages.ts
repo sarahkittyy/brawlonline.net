@@ -1,0 +1,17 @@
+export const ProjectPunchMessages = {
+  title: () => "Project Punch Training Pack",
+  buttonTooltip: () => "Project Punch",
+  descriptionBefore: () => "Project Punch is a mod by",
+  descriptionAfter: () => "for P+ that adds new functionality to the training mode. Offline play only.",
+  notDownloaded: () => "You do not have it downloaded.",
+  notLatest: () => "You are not on the latest version",
+  download: (size: string) => `Download (${size})`,
+  update: (size: string) => `Update (${size})`,
+  play: (version: string) => `Play ${version}`,
+  cancel: () => "Cancel",
+  retry: () => "Retry",
+  downloading: () => "Downloading",
+  makingCard: () => "Making its SD card",
+  offline: () => "Could not reach GitHub.",
+  close: () => "Close",
+};

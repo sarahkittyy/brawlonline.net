@@ -107,3 +107,5 @@ export const DOLPHIN_INI_SECTION = "Online";
 
 /** P+ boots through this DOL in the Dolphin user folder, with the Brawl disc as the default ISO. */
 export const PPLUS_NETPLAY_LAUNCHER_DOL = "Project+ Netplay Launcher.dol";
+/** P+'s offline launcher DOL (RSBE01.GCT + BOOST.GCT), next to it: Project Punch boots through it. */
+export const PPLUS_OFFLINE_LAUNCHER_DOL = "Project+ Offline Launcher.dol";

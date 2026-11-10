@@ -139,6 +139,25 @@ export const useDolphinActions = (dolphinService: DolphinService) => {
     [getInstallStatus, launcherIsUpToDate, dolphinService, showError],
   );
 
+  /** Starts P+ on Project Punch's own SD card (dolphin/project_punch); resolves to whether it started. */
+  const launchProjectPunch = useCallback(async (): Promise<boolean> => {
+    if (getInstallStatus(DolphinLaunchType.NETPLAY) !== DolphinStatus.READY) {
+      showError(Messages.dolphinIsUpdating());
+      return false;
+    }
+    if (!(await launcherIsUpToDate())) {
+      return false;
+    }
+    try {
+      await window.electron.projectPunch.play();
+      setDolphinOpened(DolphinLaunchType.NETPLAY);
+      return true;
+    } catch (err) {
+      showError(err);
+      return false;
+    }
+  }, [getInstallStatus, launcherIsUpToDate, showError]);
+
   const viewReplays = useCallback(
     async (...files: ReplayQueueItem[]) => {
       if (getInstallStatus(DolphinLaunchType.PLAYBACK) !== DolphinStatus.READY) {
@@ -251,6 +270,7 @@ export const useDolphinActions = (dolphinService: DolphinService) => {
     softResetDolphin,
     hardResetDolphin,
     launchNetplay,
+    launchProjectPunch,
     viewReplays,
     playReplayInList,
     playHighlights,

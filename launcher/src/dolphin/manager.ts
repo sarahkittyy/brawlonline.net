@@ -2,7 +2,7 @@ import type { ClipResolution } from "@common/clip_resolution";
 import { clipResolution } from "@common/clip_resolution";
 import { pplusReleaseLabel } from "@common/pplus_releases";
 import { Preconditions } from "@common/preconditions";
-import { DOLPHIN_ONLINE_DIR, PRODUCT_NAME } from "@common/product";
+import { DOLPHIN_ONLINE_DIR, PPLUS_OFFLINE_LAUNCHER_DOL, PRODUCT_NAME } from "@common/product";
 import { readTestMode } from "@common/test_mode";
 import { readReplayHeader } from "@replays/replay_format";
 import { defaultAppSettings } from "@settings/default_settings";
@@ -798,6 +798,82 @@ export class DolphinManager {
     try {
       await dolphinInstance.start();
     } catch (err) {
+      if (err instanceof MacOsRosettaRequiredError) {
+        this.eventSubject.next({
+          type: DolphinEventType.ERROR,
+          errorType: DolphinErrorType.ROSETTA_REQUIRED,
+          dolphinType: DolphinLaunchType.NETPLAY,
+        });
+      }
+      throw err;
+    }
+    this.netplayDolphinInstance = dolphinInstance;
+  }
+
+  /** The Project+ release Play is on (Project Punch's card is made from the card on it). */
+  pplusReleaseVersion(): string {
+    return this._pplusRelease().version;
+  }
+
+  /** P+'s plain SD card in the netplay User folder: Project Punch's card is copied from it. */
+  plainSdCardImage(): string {
+    return this.getInstallation(DolphinLaunchType.NETPLAY).sdCardImage;
+  }
+
+  /**
+   * Starts the netplay Dolphin on Project Punch's own SD card (project_punch/project_punch.ts): P+
+   * through its Offline Launcher, no online plugin on the card, so nothing online runs. It is the
+   * netplay Dolphin (its User folder, the Brawl save): Play and Project Punch do not run at once.
+   * `onClose` runs when it exits.
+   */
+  async launchProjectPunchDolphin(sdCardImage: string, onClose?: () => void): Promise<void> {
+    if (this.netplayDolphinInstance && !(await this.closeNetplayIfIdle())) {
+      throw new Error("Dolphin is already open with a game. Close it first.");
+    }
+    Preconditions.checkState(this.netplayDolphinInstance == null, "Dolphin is already open. Close it first.");
+    this._assertNotMoving();
+    await this.launchGate();
+    const installation = this.getInstallation(DolphinLaunchType.NETPLAY);
+    await this._repairBundledDolphin();
+    const dolphinPath = await installation.findDolphinExecutable();
+    await this._assertBrawlOnlineDolphin(DolphinLaunchType.NETPLAY);
+    await installation.ensureUserFolder();
+    await this._updateDolphinSettings(DolphinLaunchType.NETPLAY);
+    const isoPath = await this._getIsoPath();
+    Preconditions.checkExists(isoPath, "No Brawl disc image set. Choose one in Settings > Game.");
+    const storeDir = projectPlusStoreFolder(this.netplayFolder());
+    await ensureNetplaySave(storeDir, installation.userFolder);
+    await this._ensureBrawlSave(installation, storeDir);
+    await installation.setDefaultIso(isoPath);
+    const offlineDol = path.join(installation.userFolder, "Launcher", PPLUS_OFFLINE_LAUNCHER_DOL);
+    const bootFile = (await fileExists(offlineDol)) ? offlineDol : installation.netplayLauncherDol;
+    const params = buildNetplayDolphinArgs({
+      userArgs: installation.userArgs(),
+      sdCardImage,
+      bootFile,
+      testMode: readTestMode(process.env, app.isPackaged),
+    });
+    log.info(`Launching dolphin for Project Punch at path: ${dolphinPath} ${params.join(" ")}`);
+    const dolphinInstance = new DolphinInstance(dolphinPath, params);
+    dolphinInstance.on("close", async (exitCode: number | null, signal: string | null) => {
+      try {
+        await this._updateLauncherSettings(DolphinLaunchType.NETPLAY);
+      } catch (e) {
+        log.error("Error encountered updating launcher settings.", e);
+      }
+      this.netplayDolphinInstance = null;
+      this.eventSubject.next({ type: DolphinEventType.CLOSED, dolphinType: DolphinLaunchType.NETPLAY, exitCode });
+      log.warn(`Dolphin (Project Punch) exit code: ${exitCode?.toString(16)}, signal: ${signal}`);
+      await Promise.resolve(onClose?.()).catch((err) => log.error(err));
+      await this._keepCrashLog(installation, exitCode, signal);
+    });
+    dolphinInstance.on("error", (err: Error) => {
+      log.error(err);
+    });
+    try {
+      await dolphinInstance.start();
+    } catch (err) {
+      await Promise.resolve(onClose?.()).catch(() => undefined);
       if (err instanceof MacOsRosettaRequiredError) {
         this.eventSubject.next({
           type: DolphinEventType.ERROR,

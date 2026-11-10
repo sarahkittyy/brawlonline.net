@@ -39,6 +39,8 @@ export const PROTECTED_ENTRIES = new Set([
   "pplus",
   // Older Project+ releases' files and cards for replays (pplus_versions.ts).
   "pplus-versions",
+  // Project Punch's own SD card (project_punch/project_punch.ts).
+  "project-punch",
   "downloads",
   DOLPHIN_MANIFEST_NAME,
 ]);
