@@ -102,6 +102,21 @@ export const ReplayBrowser = React.memo(() => {
     [presenter, showError, showSuccess, replayService],
   );
 
+  // The rows' handlers stay the same functions across renders (they call the latest of these): a
+  // new one would draw every loaded row again (React.memo) whenever this page renders, which with
+  // a thousand replays loaded blocked the launcher for a second at each page the list loaded as it
+  // was scrolled (bug report #268).
+  const latest = React.useRef({ setSelectedItem, playSelectedFile, filteredFiles, deleteReplays });
+  latest.current = { setSelectedItem, playSelectedFile, filteredFiles, deleteReplays };
+  const onSelectRow = React.useCallback((index: number) => latest.current.setSelectedItem(index), []);
+  const onPlayRow = React.useCallback((index: number) => latest.current.playSelectedFile(index), []);
+  const onDeleteRow = React.useCallback((filePath: string) => {
+    const file = latest.current.filteredFiles.find((f) => f.fullPath === filePath);
+    if (file) {
+      latest.current.deleteReplays([file.id]);
+    }
+  }, []);
+
   return (
     <Outer>
       <div
@@ -158,14 +173,9 @@ export const ReplayBrowser = React.memo(() => {
               ) : (
                 <FileList
                   folderPath={currentFolder}
-                  onDelete={(filePath) => {
-                    const file = filteredFiles.find((f) => f.fullPath === filePath);
-                    if (file) {
-                      deleteReplays([file.id]);
-                    }
-                  }}
-                  onSelect={(index: number) => setSelectedItem(index)}
-                  onPlay={(index: number) => playSelectedFile(index)}
+                  onDelete={onDeleteRow}
+                  onSelect={onSelectRow}
+                  onPlay={onPlayRow}
                   files={filteredFiles}
                   onLoadMore={handleLoadMore}
                   loadingMore={loadingMore}

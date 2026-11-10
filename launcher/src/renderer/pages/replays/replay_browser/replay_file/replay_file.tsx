@@ -170,6 +170,8 @@ const Outer = styled.div<{
   border-radius: 10px;
   height: 80px;
   margin: 10px;
+  /* Off-screen rows skip style, layout and paint: the list keeps every replay it has loaded (#268). */
+  content-visibility: auto;
   background: ${(p) =>
     p.backgroundImage
       ? `linear-gradient(to right, var(--surface-1) 20%, transparent 35%, transparent 65%, var(--surface-1) 80%)`
