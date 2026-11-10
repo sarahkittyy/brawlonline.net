@@ -9,6 +9,7 @@ import { useDolphinStore } from "@/lib/dolphin/use_dolphin_store";
 import { useAccount } from "@/lib/hooks/use_account";
 import { useAccountDialogs } from "@/lib/hooks/use_account_dialogs";
 import { useAppStore } from "@/lib/hooks/use_app_store";
+import { useMainPictures } from "@/lib/hooks/use_main_pictures";
 import { useOwnProfileHint } from "@/lib/hooks/use_own_profile_hint";
 import { useProfileView } from "@/lib/hooks/use_profile_view";
 import { useToasts } from "@/lib/hooks/use_toasts";
@@ -51,6 +52,19 @@ export const UserMenu = ({ user, handleError }: { user: AuthUser; handleError: (
   const [switching, setSwitching] = React.useState(false);
   const [reAuthEmail, setReAuthEmail] = React.useState<string | undefined>();
   const isOnline = useAppStore((state) => state.isOnline);
+
+  // Pictures: each account's primary main's stock icon, else its default. The other accounts' profiles only while
+  // Switch account is open.
+  const switchOpen = accountDialog === "switch";
+  const ownPicture = useMainPictures([user.uid], isOnline)[user.uid] ?? user.displayPicture;
+  const otherPictures = useMainPictures(
+    accounts.filter((a) => a.id !== user.uid).map((a) => a.id),
+    isOnline && switchOpen,
+  );
+  const shownAccounts = accounts.map((a) => {
+    const picture = a.id === user.uid ? ownPicture : otherPictures[a.id];
+    return picture ? { ...a, displayPicture: picture } : a;
+  });
 
   const onLogout = async () => {
     try {
@@ -172,7 +186,7 @@ export const UserMenu = ({ user, handleError }: { user: AuthUser; handleError: (
       >
         <UserInfo
           displayName={displayName}
-          displayPicture={user.displayPicture}
+          displayPicture={ownPicture}
           connectCode={userData?.playKey?.connectCode}
           errorBorder={isUserErrorMessage}
           errorMessage={errMessage}
@@ -181,9 +195,9 @@ export const UserMenu = ({ user, handleError }: { user: AuthUser; handleError: (
       </ButtonBase>
 
       <SwitchAccountDialog
-        open={accountDialog === "switch"}
+        open={switchOpen}
         onClose={closeAccountDialog}
-        accounts={accounts}
+        accounts={shownAccounts}
         activeAccountId={activeAccountId}
         onSwitchAccount={handleSwitchAccount}
         onAddAccount={handleAddAccount}
