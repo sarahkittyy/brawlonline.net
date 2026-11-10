@@ -77,7 +77,12 @@
 //! `rematch_memory`) are held back the same way until both have waited `rematch_hold` (60 s), so
 //! anyone else searching meanwhile is paired first, and one who searches a minute after the other
 //! still waits a minute (2026-11-09, Sarah: "it should be until both players have waited 60
-//! seconds"; the longer-waiting's 60 s until then). A match whose P2P connect failed (a search
+//! seconds"; the longer-waiting's 60 s until then). Two whose last two or more matches were
+//! with each other wait until both have waited `rematch_repeat_hold` (5 min) instead (bug report
+//! #273: one player was paired with the same opponent for three Ranked sets in a row, each after
+//! the 60 s, as nobody else searched in that minute; a week of prod Ranked searches replayed with
+//! 5 min for a third match in a row: third-or-later matches 46 -> 17 a week, median and p90 waits
+//! unchanged, p99 301 -> 313 s). A match whose P2P connect failed (a search
 //! again within `FAILED_REQUEUE` of it) was never played, so it makes nobody a last opponent: each
 //! of the two goes back to the one before (Sarah: "if you don't connect, that shouldn't be your
 //! last opponent"; prod 2026-11-09, one of two who had just played failed to connect to someone
@@ -226,6 +231,9 @@ pub struct EngineConfig {
     /// Two players who just played each other are paired again only once both have waited this
     /// long ...
     pub rematch_hold: Duration,
+    /// ... or this long if their last two or more matches were with each other (no hold at all if
+    /// `rematch_hold` is zero) ...
+    pub rematch_repeat_hold: Duration,
     /// ... if their match was made within this long.
     pub rematch_memory: Duration,
     /// Rooms: timeouts and limits. Their stages, items and rules are Direct's ruleset.
@@ -283,6 +291,7 @@ impl Default for EngineConfig {
             ping_limit_max: 200.0,
             ranked_ping_limit_max: 150.0,
             rematch_hold: Duration::from_secs(60),
+            rematch_repeat_hold: Duration::from_secs(300),
             rematch_memory: Duration::from_secs(30 * 60),
             rooms: RoomsConfig::default(),
             mod_rooms: ModRoomsConfig::default(),
@@ -674,13 +683,15 @@ struct Conn {
     state: State,
 }
 
-/// A player's last Unranked or Ranked opponent and when that match was made, and the one before
-/// it (taken back when that match turns out not to have connected).
+/// A player's last Unranked or Ranked opponent, when that match was made and how many matches in a
+/// row the two have had (1: this one only), and the one before it (taken back when that match
+/// turns out not to have connected).
 #[derive(Debug, Clone, Copy)]
 struct LastOpponent {
     opponent: Uuid,
     at: Instant,
-    before: Option<(Uuid, Instant)>,
+    in_a_row: u32,
+    before: Option<(Uuid, Instant, u32)>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -2238,9 +2249,10 @@ impl Engine {
             if self.queue(mode).len() == before {
                 break; // make_match refused; never loop forever
             }
+            let in_a_row = self.in_a_row(now, ua, ub) + 1;
             for (x, y) in [(ua, ub), (ub, ua)] {
-                let before = self.last_opponent.get(&x).map(|l| (l.opponent, l.at));
-                self.last_opponent.insert(x, LastOpponent { opponent: y, at: now, before });
+                let before = self.last_opponent.get(&x).map(|l| (l.opponent, l.at, l.in_a_row));
+                self.last_opponent.insert(x, LastOpponent { opponent: y, at: now, in_a_row, before });
             }
         }
     }
@@ -2259,8 +2271,8 @@ impl Engine {
                 continue;
             }
             match l.before {
-                Some((opponent, at)) => {
-                    self.last_opponent.insert(x, LastOpponent { opponent, at, before: None });
+                Some((opponent, at, in_a_row)) => {
+                    self.last_opponent.insert(x, LastOpponent { opponent, at, in_a_row, before: None });
                 }
                 None => {
                     self.last_opponent.remove(&x);
@@ -2327,14 +2339,30 @@ impl Engine {
             && searched.saturating_duration_since(h.last_match) < FAILED_REQUEUE
     }
 
-    /// Whether `a` and `b` were each other's last opponent (within `rematch_memory`).
-    fn just_played(&self, now: Instant, a: Uuid, b: Uuid) -> bool {
+    /// How many matches in a row `a` and `b` have just had with each other: 0 unless they were
+    /// each other's last opponent (within `rematch_memory`).
+    fn in_a_row(&self, now: Instant, a: Uuid, b: Uuid) -> u32 {
         let last = |x: Uuid, y: Uuid| {
             self.last_opponent
                 .get(&x)
-                .is_some_and(|l| l.opponent == y && now.saturating_duration_since(l.at) < self.cfg.rematch_memory)
+                .filter(|l| l.opponent == y && now.saturating_duration_since(l.at) < self.cfg.rematch_memory)
+                .map_or(0, |l| l.in_a_row)
         };
-        last(a, b) && last(b, a)
+        last(a, b).min(last(b, a))
+    }
+
+    /// How long both of two players must have waited before they are paired again: nothing if
+    /// they did not just play each other, `rematch_hold` after one match, `rematch_repeat_hold`
+    /// after two or more in a row. A `rematch_hold` of zero turns both off (the test harness).
+    fn rematch_hold(&self, now: Instant, a: Uuid, b: Uuid) -> Duration {
+        if self.cfg.rematch_hold.is_zero() {
+            return Duration::ZERO;
+        }
+        match self.in_a_row(now, a, b) {
+            0 => Duration::ZERO,
+            1 => self.cfg.rematch_hold,
+            _ => self.cfg.rematch_repeat_hold.max(self.cfg.rematch_hold),
+        }
     }
 
     /// The pair a queue makes next: the oldest ticket and a later one it can play. Same region
@@ -2344,7 +2372,7 @@ impl Engine {
     /// Unranked). Ranked takes the closest-rated such ticket; Unranked the one whose pair needed
     /// the least waiting for its ping and rating gap together ([`Engine::unranked_wait`]), then
     /// the lowest ping (no estimate counts as `ping_limit`). Ties: arrival order. Two who just played each other wait until both have waited
-    /// `rematch_hold`. A pair matched within `requeue_window` whose new search came within
+    /// `rematch_hold` (`rematch_repeat_hold` after two or more matches in a row). A pair matched within `requeue_window` whose new search came within
     /// `FAILED_REQUEUE` of it failed its P2P connect (Slippi requeues with a new ticket): anyone
     /// else in the queue goes first; the same two again only after the backoff, and not at all
     /// after `max_connect_failures`. Returns (older, newer, failures so far).
@@ -2396,7 +2424,7 @@ impl Engine {
                     .get(&pair_key(wa.user.uid, wb.user.uid))
                     .filter(|h| self.failed_connect(now, h, wa.since.min(wb.since)));
                 let Some(h) = recent else {
-                    if shorter < self.cfg.rematch_hold && self.just_played(now, wa.user.uid, wb.user.uid) {
+                    if shorter < self.rematch_hold(now, wa.user.uid, wb.user.uid) {
                         continue;
                     }
                     if fresh.is_none_or(|(_, d)| diff < d) {
@@ -4087,6 +4115,79 @@ mod tests {
         assert!(matches(&search(&mut h, &u[1])).is_empty(), "the later one has not waited");
         assert!(matches(&h.advance(Duration::from_secs(59))).is_empty());
         assert_eq!(matches(&h.advance(Duration::from_secs(1))).len(), 1);
+    }
+
+    /// Bug report #273: the same two for three Ranked sets in a row, each after the 60 s hold, as
+    /// nobody else searched in that minute. After two matches in a row they wait 5 min; a match
+    /// with someone else in between starts over at one.
+    #[test]
+    fn a_third_match_in_a_row_waits_longer() {
+        let mut h = Harness::new(EngineConfig::default());
+        let u = h.users(3);
+        let mut conn = 0;
+        let mut search = |h: &mut Harness, who: &MmUser| -> Vec<Output> {
+            conn += 1;
+            h.connect(conn, 41000);
+            h.unranked(conn, who)
+        };
+        let next_game = |h: &mut Harness| {
+            h.now += Duration::from_secs(300);
+            h.advance(Duration::ZERO);
+        };
+        search(&mut h, &u[0]);
+        assert_eq!(matches(&search(&mut h, &u[1])).len(), 1);
+        // Second match: 60 s.
+        next_game(&mut h);
+        search(&mut h, &u[0]);
+        assert!(matches(&search(&mut h, &u[1])).is_empty());
+        assert!(matches(&h.advance(Duration::from_secs(59))).is_empty());
+        assert_eq!(matches(&h.advance(Duration::from_secs(1))).len(), 1);
+        // Third match: 5 min.
+        next_game(&mut h);
+        search(&mut h, &u[0]);
+        assert!(matches(&search(&mut h, &u[1])).is_empty());
+        assert!(matches(&h.advance(Duration::from_secs(60))).is_empty());
+        assert!(matches(&h.advance(Duration::from_secs(239))).is_empty());
+        let m = matches(&h.advance(Duration::from_secs(1)));
+        assert_eq!(m.len(), 1);
+        assert_eq!(pair_of(&m[0]), pair_key(u[0].uid, u[1].uid));
+        // Fourth: 5 min as well, and anyone else searching meanwhile goes first.
+        next_game(&mut h);
+        search(&mut h, &u[0]);
+        assert!(matches(&search(&mut h, &u[1])).is_empty());
+        assert!(matches(&h.advance(Duration::from_secs(120))).is_empty());
+        let m = matches(&search(&mut h, &u[2]));
+        assert_eq!(m.len(), 1);
+        assert_eq!(pair_of(&m[0]), pair_key(u[0].uid, u[2].uid));
+        // u1, still searching, meets u0 at once after its game with u2: the run is over ...
+        next_game(&mut h);
+        let m = matches(&search(&mut h, &u[0]));
+        assert_eq!(m.len(), 1);
+        assert_eq!(pair_of(&m[0]), pair_key(u[0].uid, u[1].uid));
+        // ... and the next time they are held back 60 s, not 5 min.
+        next_game(&mut h);
+        search(&mut h, &u[0]);
+        assert!(matches(&search(&mut h, &u[1])).is_empty());
+        assert!(matches(&h.advance(Duration::from_secs(59))).is_empty());
+        assert_eq!(matches(&h.advance(Duration::from_secs(1))).len(), 1);
+    }
+
+    /// `MM_REMATCH_HOLD_SECS=0` (the test harness) turns the 5 min hold off as well.
+    #[test]
+    fn no_rematch_hold_means_none_in_a_row_either() {
+        let mut h = Harness::new(EngineConfig { rematch_hold: Duration::ZERO, ..EngineConfig::default() });
+        let u = h.users(2);
+        let mut conn = 0;
+        for _ in 0..4 {
+            h.now += Duration::from_secs(300);
+            h.advance(Duration::ZERO);
+            conn += 1;
+            h.connect(conn, 41000);
+            h.unranked(conn, &u[0]);
+            conn += 1;
+            h.connect(conn, 41000);
+            assert_eq!(matches(&h.unranked(conn, &u[1])).len(), 1);
+        }
     }
 
     /// Prod 2026-11-09: of two who had just played, one was paired with someone else, did not

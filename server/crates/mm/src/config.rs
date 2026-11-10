@@ -121,6 +121,11 @@ pub struct Config {
     #[arg(long, env = "MM_REMATCH_HOLD_SECS", default_value_t = 60)]
     pub rematch_hold_secs: u64,
 
+    /// ... and two whose last two or more matches were with each other once both have waited this
+    /// many (none if `MM_REMATCH_HOLD_SECS` is 0).
+    #[arg(long, env = "MM_REMATCH_REPEAT_HOLD_SECS", default_value_t = 300)]
+    pub rematch_repeat_hold_secs: u64,
+
     /// Maximum simultaneous ENet peers.
     #[arg(long, env = "MM_MAX_PEERS", default_value_t = 4000)]
     pub max_peers: usize,
@@ -191,6 +196,7 @@ impl Config {
             ping_limit_max: self.ping_limit_max_ms.max(0.0),
             ranked_ping_limit_max: self.ranked_ping_limit_max_ms.max(0.0),
             rematch_hold: Duration::from_secs(self.rematch_hold_secs),
+            rematch_repeat_hold: Duration::from_secs(self.rematch_repeat_hold_secs),
             max_conns_per_ip: self.max_conns_per_ip.max(1),
             rooms: crate::rooms::RoomsConfig {
                 start_timeout: Duration::from_secs(self.room_start_timeout_secs.max(1)),
@@ -236,6 +242,7 @@ impl Config {
             ping_limit_max_ms: 200.0,
             ranked_ping_limit_max_ms: 150.0,
             rematch_hold_secs: 60,
+            rematch_repeat_hold_secs: 300,
             max_peers: 64,
             ticket_interval_secs: 2,
             max_conns_per_ip: 8,
