@@ -4686,7 +4686,8 @@ namespace OnlineMenu {
         s.cssMsg = msg;
         s.cssWindow = window;
         s.statusDirty = true;   // re-printed by the next tick with our colour
-        // (returning " " here froze the display on the CSS: presents stopped; keep real text)
+        // (returning " " here froze the display on the CSS: presents stopped; keep real text.
+        // The cause was Text::printStyled's style prefix, fixed for bug report #272.)
         updateStatus();
         return s.status[0] ? s.status : "Select your character";
     }

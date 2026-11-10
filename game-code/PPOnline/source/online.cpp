@@ -254,22 +254,57 @@ namespace Online {
 
 namespace Text {
 
-    // A message line is "<style tags><text>\x13" (Brawl msbin: \x12 opens a style group whose
-    // parameters, e.g. \x0c RGBA colour or \r size, may contain printable bytes, and \x13
-    // closes it). The visible text is the last printable run that reaches the closing byte.
-    static int textStart(const char* s, int len)
+    // A message command's length in bytes, as Brawl's own text walker counts it (fn_8006CF54,
+    // which printMsgBuf runs over a line to measure it; its jump table at 0x804541F8), or 0 for
+    // a byte that ends the walk there (0x00, 0x01, 0x05, 0x06, 0x09, 0x15, 0x17-0x1A, the line
+    // break 0x0A and anything printable).
+    static int commandLength(const u8* p, int left)
     {
-        int end = len;
-        for (int i = 0; i < len; i++) {
-            if (s[i] == 0x13 || s[i] == 0) { end = i; break; }
+        static const u8 LEN[0x1E] = {0, 0, 2, 3, 5, 0, 0, 2, 2, 0, 0, 0, 5, 3, 2, 3,
+                                     3, 5, 2, 1, 0, 0, 0, 0, 0, 0, 0, 2, 3, 2};
+        if (left < 1 || p[0] >= 0x1E) return 0;
+        if (p[0] == 0x0B) return left >= 3 ? 3 + p[1] + p[2] : 0;
+        if (p[0] == 0x14 || p[0] == 0x16) {
+            if (left < 2) return 0;
+            int fields = (p[1] & 1) + ((p[1] >> 1) & 1) + ((p[1] >> 2) & 1);
+            return 2 + (p[0] == 0x14 ? 2 : 4) * fields;
         }
-        int start = end;
-        while (start > 0) {
-            u8 c = (u8)s[start - 1];
-            if (c < 0x20 || c >= 0x80) break;
-            start--;
+        return LEN[p[0]];
+    }
+
+    // A message line is "<style commands><text>\x13" (Brawl msbin: \x12 opens a style group,
+    // \x13 closes it; the CSS's rule line is 12 02 0C 00 00 00 FF <text> 13: its colour black).
+    // An override keeps the line's commands and puts its own text after them. They go through
+    // MuMsg::printf's "%s", where a 00 ends the string, so they are copied command by command
+    // (their parameters can be any byte): a colour's 00 is written as 01 (the same colour to
+    // the eye), any other command with a 00 in it is left out whole. Bug report #272: the old
+    // copy walked back from the line's end over printable bytes and stopped at the colour's 00,
+    // so the rule line kept 12 02 0C without the colour's four bytes and the game read the first
+    // four bytes of our text as the colour. With an opponent's Japanese name first on the line
+    // (the loser's "<name> is picking, then you"), the game's text walker (fn_8006CF54) then
+    // stood on the middle byte of a character, where it never moves on: the game froze on the
+    // CSS. (ASCII only lost its first four letters for a frame; the " " this once returned froze
+    // the same way, walking past the line's end.) Writes the prefix into `out` (room for
+    // `room`), returns its length: 0 for a line with no style group or one this walk does not
+    // know, which then prints as plain text.
+    static int stylePrefix(const char* s, int len, char* out, int room)
+    {
+        const u8* p = (const u8*)s;
+        if (len <= 0 || p[0] != 0x12) return 0;
+        int i = 0, n = 0;
+        while (i < len && p[i] < 0x20 && p[i] != 0x13) {
+            int k = commandLength(p + i, len - i);
+            if (k <= 0 || i + k > len) return 0;
+            const bool colour = p[i] == 0x0C || p[i] == 0x04;   // RGBA (Message::setColor's)
+            bool nul = false;
+            for (int j = 1; j < k; j++) nul |= p[i + j] == 0;
+            if (!nul || colour) {
+                if (n + k > room) return 0;
+                for (int j = 0; j < k; j++) out[n++] = (char)(p[i + j] ? p[i + j] : 1);
+            }
+            i += k;
         }
-        return start;
+        return i < len && p[i] >= 0x20 ? n : 0;
     }
 
     static char s_buf[256];
@@ -278,13 +313,10 @@ namespace Text {
     {
         int len = 0;
         const char* orig = Online::msbinLine(msbin, line, &len);
-        // Only lines that open with a style group (0x12) carry a prefix to keep.
-        int pre = (orig && len > 0 && orig[0] == 0x12) ? textStart(orig, len) : 0;
-        if (pre > 64) pre = 0;
-        int n = 0;
-        for (int i = 0; i < pre; i++) s_buf[n++] = orig[i];
+        int n = orig ? stylePrefix(orig, len, s_buf, 64) : 0;
+        const bool group = n > 0;
         for (int i = 0; text[i] && n < (int)sizeof(s_buf) - 2; i++) s_buf[n++] = text[i];
-        if (pre > 0 && orig[0] == 0x12) s_buf[n++] = 0x13;
+        if (group) s_buf[n++] = 0x13;
         s_buf[n] = 0;
         msg->printf(window, "%s", s_buf);
     }
