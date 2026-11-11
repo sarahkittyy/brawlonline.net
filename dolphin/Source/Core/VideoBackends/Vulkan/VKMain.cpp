@@ -106,7 +106,8 @@ bool VideoBackend::Initialize(const WindowSystemInfo& wsi)
 
   // Create Vulkan instance, needed before we can create a surface, or enumerate devices.
   // We use this instance to fill in backend info, then re-use it for the actual device.
-  bool enable_surface = wsi.type != WindowSystemType::Headless;
+  // (No window to draw to, as when rendering clips to video: no surface either.)
+  bool enable_surface = wsi.type != WindowSystemType::Headless && wsi.render_surface != nullptr;
   bool enable_debug_utils = ShouldEnableDebugUtils(enable_validation_layer);
   u32 vk_api_version = 0;
   VkInstance instance = VulkanContext::CreateVulkanInstance(

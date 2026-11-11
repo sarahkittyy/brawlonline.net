@@ -13,6 +13,10 @@ class GLContextEGLX11 final : public GLContextEGL
 public:
   ~GLContextEGLX11() override;
 
+  // No window (rendering clips to video, DolphinQt --render): a surfaceless context on the X
+  // display's EGL, the same driver the windowed Dolphin gets (bug report #279).
+  bool IsHeadless() const override;
+
   void Update() override;
 
 protected:

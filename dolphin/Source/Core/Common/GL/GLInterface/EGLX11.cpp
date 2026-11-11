@@ -11,8 +11,15 @@ GLContextEGLX11::~GLContextEGLX11()
   m_render_window.reset();
 }
 
+bool GLContextEGLX11::IsHeadless() const
+{
+  return m_wsi.render_surface == nullptr;
+}
+
 void GLContextEGLX11::Update()
 {
+  if (!m_render_window)
+    return;
   m_render_window->UpdateDimensions();
   m_backbuffer_width = m_render_window->GetWidth();
   m_backbuffer_height = m_render_window->GetHeight();

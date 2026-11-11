@@ -219,17 +219,20 @@ static WindowSystemInfo GetWindowSystemInfo(QWindow* window)
 }
 
 // Rendering clips to video (--render): no window, the video backend draws to its own textures.
-// Windows and macOS take their own type with no window. X11 and Wayland are told Headless (as
-// DolphinNoGUI's headless platform), so OpenGL makes a surfaceless EGL context on a display of
-// its own: told X11 with no window, it made a GL child window of window 0 on Qt's connection,
-// from the GPU thread, and the connection broke (Qt's "The X11 connection broke", then Xlib's
-// exit() from that thread: "terminate called without an active exception", "double free or
-// corruption"), the render Dolphin closing a second into every render (bug report #274).
+// Windows and macOS take their own type with no window. On X11 the backend gets Qt's X display
+// and no window: OpenGL makes a surfaceless context on that display's EGL, the same driver the
+// windowed Dolphin gets, and creates no window of its own (it made a GL child window of window 0
+// on Qt's connection from the GPU thread, and the connection broke: bug report #274); Vulkan
+// creates no surface. Not EGL's default display: with NVIDIA's driver beside Mesa it was Mesa,
+// which has no driver for the card ("egl: failed to create dri2 screen"), and the render Dolphin
+// died at boot (bug report #279). Wayland, which DolphinQt does not run games on, is Headless.
 static WindowSystemInfo GetRenderOnlyWindowSystemInfo()
 {
 #if defined(WIN32) || defined(__APPLE__) || defined(__HAIKU__)
   return GetWindowSystemInfo(nullptr);
 #else
+  if (GetWindowSystemType() == WindowSystemType::X11)
+    return GetWindowSystemInfo(nullptr);
   WindowSystemInfo wsi;
   wsi.type = WindowSystemType::Headless;
   return wsi;
