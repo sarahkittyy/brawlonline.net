@@ -218,6 +218,24 @@ static WindowSystemInfo GetWindowSystemInfo(QWindow* window)
   return wsi;
 }
 
+// Rendering clips to video (--render): no window, the video backend draws to its own textures.
+// Windows and macOS take their own type with no window. X11 and Wayland are told Headless (as
+// DolphinNoGUI's headless platform), so OpenGL makes a surfaceless EGL context on a display of
+// its own: told X11 with no window, it made a GL child window of window 0 on Qt's connection,
+// from the GPU thread, and the connection broke (Qt's "The X11 connection broke", then Xlib's
+// exit() from that thread: "terminate called without an active exception", "double free or
+// corruption"), the render Dolphin closing a second into every render (bug report #274).
+static WindowSystemInfo GetRenderOnlyWindowSystemInfo()
+{
+#if defined(WIN32) || defined(__APPLE__) || defined(__HAIKU__)
+  return GetWindowSystemInfo(nullptr);
+#else
+  WindowSystemInfo wsi;
+  wsi.type = WindowSystemType::Headless;
+  return wsi;
+#endif
+}
+
 static std::vector<std::string> StringListToStdVector(const QStringList& list)
 {
   std::vector<std::string> result;
@@ -1354,7 +1372,8 @@ void MainWindow::StartGame(std::unique_ptr<BootParameters>&& parameters)
   const bool render_only = Settings::Instance().IsRenderOnly();
   if (!BootManager::BootCore(
           m_system, std::move(parameters),
-          ::GetWindowSystemInfo(render_only ? nullptr : m_render_widget->windowHandle())))
+          render_only ? GetRenderOnlyWindowSystemInfo() :
+                        ::GetWindowSystemInfo(m_render_widget->windowHandle())))
   {
     ModalMessageBox::critical(this, tr("Error"), tr("Failed to init core"), QMessageBox::Ok);
     HideRenderWidget();
