@@ -716,13 +716,14 @@ void Display(float scale)
       }
     }
     // Where a highlight ends: the one playing while its end is ahead (it pauses there), the
-    // hovered star's while hovered (the user, 2026-10-24).
+    // hovered star's while hovered (the user, 2026-10-24). Not in clip mode: only the clip's end
+    // pauses then (GitHub #41).
     const auto end_line = [&](s64 frame, ImU32 col) {
       const float x = bar_x + bar_frac(frame) * bar_w;
       dl->AddRectFilled(ImVec2(x - 1.0f * scale, p0.y - 3.0f * scale), ImVec2(x + 1.0f * scale, p1.y + 3.0f * scale),
                         col);
     };
-    if (info.clip_armed && info.clip_end >= 0)
+    if (!s_clip_mode && info.clip_armed && info.clip_end >= 0)
       end_line(info.clip_end, IM_COL32(255, 255, 255, 230));
     if (mark_hovered >= 0 && static_cast<size_t>(mark_hovered) < info.marks.size())
       end_line(info.marks[mark_hovered].end, IM_COL32(255, 230, 120, 230));

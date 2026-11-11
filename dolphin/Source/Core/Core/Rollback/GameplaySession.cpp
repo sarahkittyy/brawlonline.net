@@ -7279,7 +7279,13 @@ PlaybackStep PlaybackLoopTopControls(Core::System& system)
     const bool waiting = !ff && LiveWaiting(f);
     // A highlight's end, or clip mode's: paused there (the launcher plays the next one, or it
     // stays). Stepped past while paused, it is passed all the same.
-    const bool clip_reached = pb.clip_armed && pb.clip_end >= 0 && !ff && f > pb.clip_end;
+    // In clip mode only the clip's end pauses: a highlight's end it passes is passed quietly, as a
+    // seek past it is (GitHub #41: a clip made over a highlight stopped at the highlight's end,
+    // or the launcher went on to the next highlight).
+    const bool clip_passed = pb.clip_armed && pb.clip_end >= 0 && !ff && f > pb.clip_end;
+    if (clip_passed && pb.stop_end >= 0)
+      pb.clip_armed = false;
+    const bool clip_reached = clip_passed && pb.stop_end < 0;
     const bool stop_reached = pb.stop_armed && pb.stop_end >= 0 && !ff && f > pb.stop_end;
     if (clip_reached || stop_reached)
     {

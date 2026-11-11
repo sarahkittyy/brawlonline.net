@@ -370,7 +370,11 @@ without the launcher: `Replay::Playback::CanSaveClip`). A click enters clip mode
 the frame shown and starts 20 s before it (the match's start at the earliest; at least 1 s long),
 drawn on the bar as a blue span with a handle at each end, taller than the bar, and the replay is
 paused at the clip's start (2026-10-24), so Play plays it: its end pauses as a highlight's does
-(`Session::SetPlaybackStop`). A handle moves only once dragged 4 px (scaled); from then on it
+(`Session::SetPlaybackStop`). While clip mode is on, the end of the highlight playing does not
+pause (nor does the launcher go on to the next one there) and its white line is not drawn: only
+the clip's end stops it (GitHub #41, 2026-11-11: a clip over a highlight "will stop mid way at
+the point where the automatic highlight would stop"); clip mode ended before that end, it pauses
+there again. A handle moves only once dragged 4 px (scaled); from then on it
 follows the mouse's movement since the press, never jumping to the mouse, so it can be nudged
 back a pixel; a press and release within that is a click and seeks to that end. Letting a dragged
 handle go seeks there too, so the screen shows the frame chosen (hovered: "Clip start (1:03)"). A

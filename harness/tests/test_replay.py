@@ -490,6 +490,57 @@ def test_launcher_comm_file_plays_highlights(backend: OnlineBackend,
 
 
 @pytest.mark.slow
+def test_launcher_comm_file_clip_mode_over_a_highlight(backend: OnlineBackend,
+                                                       dolphin: Callable[..., DolphinInstance],
+                                                       gpu_backend: str) -> None:
+    """Clip mode while a highlight plays (GitHub #41: "the recording will stop mid way at the point
+    where the automatic highlight would stop"): only the clip's end pauses; the highlight's end is
+    passed without a pause and the launcher's queue stays on it. Clip mode ended before the
+    highlight's end, that end pauses again and the queue goes on to the next one."""
+    fa, out = _recorded_direct_game(backend, dolphin, gpu_backend, "clip-over-hl", ("olga", "piet"))
+    first, last = fa.first_frame, fa.last_frame
+    assert last - first > 1500, (first, last)
+    v, inst, file_status = _comm_viewer(backend, dolphin, gpu_backend, fa, out)
+    comm = out / "playback-comms.json"
+    h0 = (first + 600, first + 1000)
+    h1 = (first + 1400, first + 1460)
+    comm.write_text(json.dumps({"mode": "highlights", "commandId": "h1", "queue": [
+        {"path": str(fa.path), "startFrame": a, "endFrame": b} for a, b in (h0, h1)]}))
+    _wait(lambda: (lambda fs: fs if fs.get("commandId") == "h1" and fs.get("index") == 0 and
+                   fs.get("state") == "playing" else None)(file_status()), 600, "the first highlight to play")
+
+    def wait_paused_at(frame: int, what: str) -> dict[str, Any]:
+        return _wait(lambda: (lambda s: s if s["paused"] and not s["seeking"] and s["shown"] == frame else None)(
+            _status(v)), 120, what)
+
+    # Clip mode as the overlay's Clip sets it: paused at the clip's start, its end past the
+    # highlight's.
+    stop = h0[1] + 180
+    v.c.call("replay_control", action="pause")
+    v.c.call("replay_control", action="stop", arg=stop)
+    v.c.call("replay_control", action="seek", arg=h0[0] - 60)
+    wait_paused_at(h0[0] - 60, "the clip's start")
+    v.c.call("replay_control", action="play")
+    st = wait_paused_at(stop, "the clip's end, past the highlight's")
+    assert not st["clip_done"] and not st["clip_armed"], st
+    fs = file_status()
+    assert fs.get("index") == 0 and fs.get("state") == "playing", fs
+    v.shot("clip-end")
+    # Clip mode ended before the highlight's end: that end pauses, and the queue goes on.
+    v.c.call("replay_control", action="seek", arg=h0[0])
+    wait_paused_at(h0[0], "back at the highlight's start")
+    v.c.call("replay_control", action="stop", arg=-1)
+    v.c.call("replay_control", action="play")
+    _wait(lambda: (lambda fs: fs if fs.get("index") == 1 and fs.get("state") in ("playing", "ended") else None)(
+        file_status()), 120, "the next highlight")
+    fs = _wait(lambda: (lambda fs: fs if fs.get("index") == 1 and fs.get("state") == "ended" else None)(
+        file_status()), 120, "the next highlight's end")
+    st = _status(v)
+    assert st["paused"] and st["clip_done"] and st["shown"] == h1[1], st
+    assert st["desync_frame"] == -1, st
+
+
+@pytest.mark.slow
 def test_launcher_comm_file_saves_manual_clips(backend: OnlineBackend,
                                               dolphin: Callable[..., DolphinInstance],
                                               gpu_backend: str) -> None:
