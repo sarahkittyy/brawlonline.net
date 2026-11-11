@@ -20,12 +20,7 @@ import {
 
 import { ThemeColorPickerMessages as Messages } from "./theme_color_picker.messages";
 import styles from "./theme_color_picker.module.css";
-import {
-  closeThemeColorPicker,
-  saveThemeColor,
-  THEME_COLOR_SETTINGS_PAGE,
-  useThemeColorPickerOpen,
-} from "./use_theme_color_picker";
+import { closeThemeColorPicker, saveThemeColor, useThemeColorPickerOpen } from "./use_theme_color_picker";
 
 /** The wheel's size in CSS pixels; the canvas is drawn at this size and its round edge is CSS's (crisp at any zoom). */
 const WHEEL_SIZE = 300;
@@ -144,8 +139,11 @@ const ThemeColorPickerPanel = () => {
   );
 
   const back = React.useCallback(() => {
+    const { returnTo } = useThemeColorPickerOpen.getState();
     closeThemeColorPicker();
-    navigate(THEME_COLOR_SETTINGS_PAGE);
+    if (returnTo) {
+      navigate(returnTo);
+    }
   }, [navigate]);
 
   const apply = React.useCallback(() => {

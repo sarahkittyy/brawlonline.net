@@ -14,6 +14,7 @@ import debounce from "lodash/debounce";
 import React, { useMemo } from "react";
 
 import { DiscordIcon } from "@/components/discord_icon";
+import { ThemeColorButton } from "@/components/theme_color_picker/theme_color_button";
 import { useDolphinActions } from "@/lib/dolphin/use_dolphin_actions";
 import { DolphinStatus, useDolphinStore } from "@/lib/dolphin/use_dolphin_store";
 import { usePlay, usePlayDialogs } from "@/lib/dolphin/use_play";
@@ -148,6 +149,7 @@ export const Header = ({ menuItems }: { menuItems: readonly MenuItem[] }) => {
           </Button>
         )}
         <BugReportButton />
+        <ThemeColorButton />
         <Tooltip title={Messages.discord()}>
           <IconButton
             component="a"
