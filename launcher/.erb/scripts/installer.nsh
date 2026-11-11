@@ -26,13 +26,86 @@ var CreateStartMenuShortcut
 var DesktopShortcutCheckbox
 var StartMenuShortcutCheckbox
 
+; The update's own log, in the player's %TEMP%: what each part of an update did (the installer, its
+; elevated copy for a per-machine install, the old version's uninstaller). A silent update showed and
+; wrote nothing, so one that failed left only "Auto-update FAILED" in the launcher's log (bug report
+; #280: five updates in a row came back on the old version, cause unknown). The launcher copies this
+; file into its log when it comes back on the old version (app_updater.ts, INSTALLER_LOG_FILE).
+!define UPDATE_LOG "$TEMP\${PRODUCT_NAME} update.log"
+!ifdef BUILD_UNINSTALLER
+  !define UPDATE_LOG_WHO "uninstaller"
+!else
+  !define UPDATE_LOG_WHO "installer"
+!endif
+
+; Appends "<local time> <installer|uninstaller> <its version>: TEXT" to UPDATE_LOG. TEXT must not hold
+; a double quote. Keeps every register and the error flag.
+!macro updateLog TEXT
+  Push "${TEXT}"
+  Exch $9
+  Push $0
+  Push $1
+  Push $2
+  Push $3
+  Push $4
+  Push $5
+  Push $6
+  Push $7
+  Push $8
+  StrCpy $8 0
+  IfErrors 0 +2
+    StrCpy $8 1
+  ; SYSTEMTIME: year, month, day of week, day, hour, minute, second, milliseconds
+  System::Call "*(&i2,&i2,&i2,&i2,&i2,&i2,&i2,&i2)p.r0"
+  System::Call "kernel32::GetLocalTime(pr0)"
+  System::Call "*$0(&i2.r1,&i2.r2,&i2,&i2.r3,&i2.r4,&i2.r5,&i2.r6,&i2.r7)"
+  System::Free $0
+  IntFmt $2 "%02d" $2
+  IntFmt $3 "%02d" $3
+  IntFmt $4 "%02d" $4
+  IntFmt $5 "%02d" $5
+  IntFmt $6 "%02d" $6
+  IntFmt $7 "%03d" $7
+  ClearErrors
+  FileOpen $0 "${UPDATE_LOG}" a
+  ${IfNot} ${Errors}
+    FileSeek $0 0 END
+    FileWrite $0 "$1-$2-$3 $4:$5:$6.$7 ${UPDATE_LOG_WHO} ${VERSION}: $9$\r$\n"
+    FileClose $0
+  ${EndIf}
+  ClearErrors
+  ${If} $8 == 1
+    SetErrors
+  ${EndIf}
+  Pop $8
+  Pop $7
+  Pop $6
+  Pop $5
+  Pop $4
+  Pop $3
+  Pop $2
+  Pop $1
+  Pop $0
+  Pop $9
+!macroend
+
 !macro customHeader
   ShowInstDetails show
   ShowUninstDetails show
 
   !ifndef BUILD_UNINSTALLER
     !insertmacro keepPlayerFilesFunctions
+  !else
+    ; electron-builder's uninstaller aborts when a file of the install folder cannot be moved out of
+    ; the way (in use, or no room for it in %TEMP%).
+    Function un.onUninstFailed
+      !insertmacro updateLog "could not remove $INSTDIR (a file in it is in use or could not be moved to %TEMP%)"
+    FunctionEnd
   !endif
+!macroend
+
+!macro customUnInit
+  !insertmacro updateLog "started: $CMDLINE"
 !macroend
 
 ; The player's own files in the install folder (a Brawl disc image, textures, a whole games folder
@@ -114,8 +187,10 @@ var StartMenuShortcutCheckbox
               Rename "$KeepFrom\$R2" "$KeepDir\$R2"
               ${If} ${Errors}
                 DetailPrint `Could not move "$KeepFrom\$R2" out of the way of the update.`
+                !insertmacro updateLog "could not move $KeepFrom\$R2 out of the way of the update"
               ${Else}
                 DetailPrint `Keeping "$R2" (not a ${PRODUCT_NAME} file) in "$KeepDir" during the update.`
+                !insertmacro updateLog "keeping $R2 in $KeepDir during the update"
               ${EndIf}
             ${EndIf}
           ${EndIf}
@@ -169,6 +244,7 @@ var StartMenuShortcutCheckbox
   ; An install that failed after keepPlayerFiles (the old uninstaller removed the old version, then
   ; the new files could not be written) still puts the player's files back.
   Function .onInstFailed
+    !insertmacro updateLog "install failed"
     Call restorePlayerFiles
   FunctionEnd
 !macroend
@@ -213,15 +289,18 @@ var StartMenuShortcutCheckbox
           Sleep 1500
         ${Else}
           MessageBox MB_OKCANCEL|MB_ICONEXCLAMATION "$(appRunning)" /SD IDOK IDOK customCheckAppRunning_loop
+          !insertmacro updateLog "the launcher is open: cancelled"
           Quit
         ${EndIf}
       ${ElseIf} $R1 > 20
         MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "$(appCannotBeClosed)" /SD IDCANCEL IDRETRY customCheckAppRunning_retry
+        !insertmacro updateLog "the launcher could not be closed: stopped"
         Quit
         customCheckAppRunning_retry:
         StrCpy $R1 1
       ${Else}
         DetailPrint "$(appClosing)"
+        !insertmacro updateLog "the launcher is still open: closing it"
         !insertmacro killLauncher
       ${EndIf}
       Goto customCheckAppRunning_loop
@@ -237,6 +316,28 @@ var StartMenuShortcutCheckbox
 !macroend
 
 !macro customInit
+  ; A new log for each run of the installer (its elevated copy adds to it).
+  ${IfNot} ${UAC_IsInnerInstance}
+    Delete "${UPDATE_LOG}"
+  ${EndIf}
+  ${If} ${UAC_IsAdmin}
+    StrCpy $R0 "administrator"
+  ${Else}
+    StrCpy $R0 "not administrator"
+  ${EndIf}
+  ${If} ${UAC_IsInnerInstance}
+    StrCpy $R0 "$R0, elevated copy"
+  ${EndIf}
+  !insertmacro updateLog "started: $CMDLINE (folder $INSTDIR, install mode $installMode, $R0)"
+  ; For an install for all users, electron-builder's install section asks Windows for administrator
+  ; rights next (UAC) and only the elevated copy goes on: no line from it means the prompt was
+  ; refused or never answered.
+  ${If} $hasPerMachineInstallation == "1"
+  ${AndIfNot} ${UAC_IsAdmin}
+  ${AndIf} ${isUpdated}
+    !insertmacro updateLog "installed for all users: asking Windows for administrator rights"
+  ${EndIf}
+
   ; Force silent mode for updates to make them seamless
   ; while still allowing directory selection for fresh installs
   ${If} ${isUpdated}
@@ -406,6 +507,7 @@ var StartMenuShortcutCheckbox
 !macroend
 
 !macro customInstall
+  !insertmacro updateLog "installed in $INSTDIR"
   ; The player's files moved out of the old version's way go back next to the new files.
   Call restorePlayerFiles
 
@@ -441,6 +543,7 @@ var StartMenuShortcutCheckbox
     ; started next would quit at once and leave that one running (bug report #219).
     ${If} ${isForceRun}
       !insertmacro killLauncher
+      !insertmacro updateLog "starting the new launcher"
     ${EndIf}
     Banner::destroy
   ${Else}
@@ -471,8 +574,10 @@ var StartMenuShortcutCheckbox
   customUnInstallCheck_check:
   IfErrors 0 customUnInstallCheck_launched
     DetailPrint `Uninstall was not successful. Not able to launch uninstaller!`
+    !insertmacro updateLog "the old version's uninstaller could not be started"
     Return
   customUnInstallCheck_launched:
+  !insertmacro updateLog "the old version's uninstaller exited with $R0"
   ${If} $R0 != 0
     ${If} ${isUpdated}
     ${AndIf} $unInstallRetries < 2
@@ -485,7 +590,17 @@ var StartMenuShortcutCheckbox
     ${EndIf}
     MessageBox MB_OK|MB_ICONEXCLAMATION "$(uninstallFailed): $R0" /SD IDOK
     DetailPrint `Uninstall was not successful. Uninstaller error code: $R0.`
+    !insertmacro updateLog "the old version could not be removed: stopped"
     Call restorePlayerFiles
+    ; The banner said the launcher reopens: the old one does, so the player sees that the update
+    ; failed and is offered the website's installer, instead of the launcher just gone (bug report
+    ; #280 reopened it by hand after each of five failed updates).
+    ${If} ${isUpdated}
+    ${AndIf} ${isForceRun}
+    ${AndIf} ${FileExists} "$appExe"
+      !insertmacro updateLog "starting the old launcher again"
+      ${StdUtils.ExecShellAsUser} $0 "$appExe" "open" ""
+    ${EndIf}
     SetErrorLevel 2
     Quit
   ${EndIf}

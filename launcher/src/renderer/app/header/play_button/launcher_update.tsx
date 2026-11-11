@@ -15,7 +15,10 @@ export const useLauncherUpdateVersion = () => useAppStore((store) => store.updat
 /**
  * The Play button while a newer launcher is out (it was a bar under the header, Slippi's). In
  * "install" mode it fills as the update downloads, then installs it and restarts the launcher; a
- * download or install that failed opens the website's installer instead. On macOS while the build
+ * download or install that failed opens the website's installer instead, as does an update whose
+ * install failed before this start (the launcher came back on the old version): trying the same silent
+ * install again failed every time for a player whose wizard install from the website then worked (bug
+ * report #280, four more clicks on Update). On macOS while the build
  * cannot update itself ("download" mode, MAC_SELF_UPDATE) it opens the website's download.
  */
 export const LauncherUpdate = React.memo(() => {
@@ -47,8 +50,10 @@ export const LauncherUpdate = React.memo(() => {
     }
   }, [installAppUpdate, showError]);
 
-  const downloadMode = window.electron.bootstrap.launcherUpdateMode === "download";
-  const manual = !downloadMode && (installFailed || (!updateReady && updateDownloadFailed));
+  const { launcherUpdateMode, updateState } = window.electron.bootstrap;
+  const downloadMode = launcherUpdateMode === "download";
+  const failedBefore = updateState?.status === "failed" && updateState.version === updateVersion;
+  const manual = !downloadMode && (installFailed || failedBefore || (!updateReady && updateDownloadFailed));
   const onClick = useCallback(() => {
     if (downloadMode) {
       window.electron.shell.openExternal(MAC_DOWNLOAD_URL).catch(log.error);

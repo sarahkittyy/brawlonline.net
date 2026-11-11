@@ -1,4 +1,7 @@
 import type { EventEmitter } from "events";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import os from "os";
+import path from "path";
 import type { Mock } from "vitest";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -26,9 +29,11 @@ import { autoUpdater as realAutoUpdater } from "electron-updater";
 
 import {
   AppUpdater,
+  describeInstallerLog,
   DOWNLOAD_RETRY_DELAYS_MS,
   DOWNLOAD_STALL_MS,
   INSTALL_IDLE_POLL_MS,
+  INSTALLER_LOG_FILE,
   LauncherUpdateRequiredError,
   UPDATE_CHECK_INTERVAL_MS,
 } from "./app_updater";
@@ -298,5 +303,38 @@ describe("AppUpdater installing a downloaded update by itself", () => {
     // A newer one is installed by itself.
     updater.installWhenIdle("0.3.0");
     expect(autoUpdater.quitAndInstall).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("describeInstallerLog", () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(path.join(os.tmpdir(), "installer-log-"));
+  });
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("gives the installer's log of the update (bug report #280)", () => {
+    expect(INSTALLER_LOG_FILE).toBe("Brawl Online update.log");
+    writeFileSync(
+      path.join(dir, INSTALLER_LOG_FILE),
+      "2026-11-11 11:22:16.120 installer 0.1.138: started\r\n" +
+        "2026-11-11 11:22:30.500 installer 0.1.138: the old version's uninstaller exited with 2\r\n",
+    );
+    const text = describeInstallerLog(dir);
+    expect(text).toContain(`The installer's log (${path.join(dir, INSTALLER_LOG_FILE)}, written `);
+    expect(text).toMatch(/started\r\n.*exited with 2$/s);
+  });
+
+  it("keeps the end of a long log", () => {
+    writeFileSync(path.join(dir, INSTALLER_LOG_FILE), `${"x".repeat(10000)}the end`);
+    const text = describeInstallerLog(dir);
+    expect(text.endsWith("the end")).toBe(true);
+    expect(text.length).toBeLessThan(4200);
+  });
+
+  it("says so when the installer left none", () => {
+    expect(describeInstallerLog(dir)).toMatch(/^The installer left no log/);
   });
 });

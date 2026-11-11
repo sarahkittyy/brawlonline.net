@@ -15,6 +15,7 @@ const { openExternal, installAppUpdate, showError, bootstrap } = vi.hoisted(() =
     bootstrap: {
       locale: "en-US",
       launcherUpdateMode: "install" as "install" | "download",
+      updateState: undefined as { status: "succeeded" | "failed"; version: string } | undefined,
       isMac: false,
       isLinux: false,
     },
@@ -39,6 +40,7 @@ describe("LauncherUpdate", () => {
     installAppUpdate.mockClear();
     showError.mockClear();
     bootstrap.launcherUpdateMode = "install";
+    bootstrap.updateState = undefined;
     useAppStore.setState({
       updateVersion: "",
       updateReady: false,
@@ -93,6 +95,27 @@ describe("LauncherUpdate", () => {
     fireEvent.click(button(container));
     expect(openExternal).toHaveBeenCalledWith(launcherDownloadUrl("win32"));
     expect(installAppUpdate).toHaveBeenCalledTimes(1);
+  });
+
+  it("opens the website's installer when installing this version failed before this start", () => {
+    // Bug report #280: the silent install of 0.1.137 failed and every Update click ran it again.
+    bootstrap.updateState = { status: "failed", version: "0.1.99" };
+    useAppStore.setState({ updateVersion: "0.1.99", updateReady: true });
+    const { container } = render(<LauncherUpdate />);
+    expect(container.textContent).toBe("Updatev0.1.98 → v0.1.99");
+    expect(button(container).disabled).toBe(false);
+    fireEvent.click(button(container));
+    expect(openExternal).toHaveBeenCalledWith(launcherDownloadUrl("win32"));
+    expect(installAppUpdate).not.toHaveBeenCalled();
+  });
+
+  it("installs a newer version by itself after an older one failed to install", async () => {
+    bootstrap.updateState = { status: "failed", version: "0.1.99" };
+    useAppStore.setState({ updateVersion: "0.1.100", updateReady: true });
+    const { container } = render(<LauncherUpdate />);
+    await act(async () => fireEvent.click(button(container)));
+    expect(installAppUpdate).toHaveBeenCalledTimes(1);
+    expect(openExternal).not.toHaveBeenCalled();
   });
 
   it("offers the website's download on macOS while it cannot update itself", () => {

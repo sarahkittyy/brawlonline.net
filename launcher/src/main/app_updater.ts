@@ -1,11 +1,15 @@
 import { resolveServiceUrls } from "@accounts/config";
 import type { LauncherUpdateMode } from "@common/launcher_update";
 import { getLauncherUpdateMode } from "@common/launcher_update";
+import { PRODUCT_NAME } from "@common/product";
 import type { SettingsManager } from "@settings/settings_manager";
 import { app } from "electron";
 import log from "electron-log";
 import type { ProgressInfo, UpdateInfo } from "electron-updater";
 import { autoUpdater } from "electron-updater";
+import { readFileSync, statSync } from "node:fs";
+import os from "os";
+import path from "path";
 
 import { ipc_launcherUpdateFailedEvent } from "./ipc";
 
@@ -31,6 +35,33 @@ export const INSTALL_IDLE_POLL_MS = 15 * 1000; // 15 seconds
 export const DOWNLOAD_STALL_MS = 60 * 1000; // 1 minute
 /** How long after each failed download it is tried again; past the last, the bar offers the manual download. */
 export const DOWNLOAD_RETRY_DELAYS_MS = [5 * 1000, 30 * 1000, 2 * 60 * 1000];
+
+/**
+ * The Windows installer's log of the update it ran last (installer.nsh UPDATE_LOG), in %TEMP%: each
+ * step of the installer, its elevated copy and the old version's uninstaller. A launcher that comes
+ * back on the old version copies it into main.log, where a failed silent update said nothing else
+ * (bug report #280: five failed updates in a row, cause unknown).
+ */
+export const INSTALLER_LOG_FILE = `${PRODUCT_NAME} update.log`;
+/** At most this much of its end goes into main.log. */
+const INSTALLER_LOG_MAX_CHARS = 4000;
+
+/** What the installer's log in `dir` says, for main.log. */
+export function describeInstallerLog(dir: string = os.tmpdir()): string {
+  const file = path.join(dir, INSTALLER_LOG_FILE);
+  try {
+    const written = statSync(file).mtime.toISOString();
+    const text = readFileSync(file, "latin1").trimEnd();
+    const shown = text.length > INSTALLER_LOG_MAX_CHARS ? `...${text.slice(-INSTALLER_LOG_MAX_CHARS)}` : text;
+    return `The installer's log (${file}, written ${written}):\n${shown}`;
+  } catch {
+    // The installers up to 0.1.137 write none (it is the new version's installer that writes it).
+    return `The installer left no log (${file}): it did not start, or it is from before the log`;
+  }
+}
+
+/** electron-updater's lines on how it ran the installer: main.log keeps only warn and above. */
+const INSTALL_LINE = /^(Install|Executing|Cannot run installer|isAdminRightsRequired)/;
 
 type UpdateDownload = { promise: Promise<unknown>; cancel: () => void; stalled: boolean; announced: boolean };
 
@@ -66,7 +97,13 @@ export class AppUpdater {
   readonly mode: LauncherUpdateMode = getLauncherUpdateMode(process.platform);
 
   constructor(private readonly settingsManager: SettingsManager) {
-    autoUpdater.logger = log;
+    autoUpdater.logger = {
+      info: (message?: unknown) =>
+        typeof message === "string" && INSTALL_LINE.test(message) ? log.warn(message) : log.info(message),
+      warn: (message?: unknown) => log.warn(message),
+      error: (message?: unknown) => log.error(message),
+      debug: (message: string) => log.debug(message),
+    };
     autoUpdater.autoInstallOnAppQuit = settingsManager.get().settings.autoUpdateLauncher;
     if (this.mode === "download") {
       // Squirrel.Mac would reject the update (signature mismatch), so it is only found, never
@@ -300,6 +337,9 @@ export class AppUpdater {
         `Auto-update FAILED: expected ${pendingVersion}, running ${currentVersion} (${process.execPath}). ` +
           "Update file may have been missing, corrupted, or the installer was interrupted.",
       );
+      if (process.platform === "win32") {
+        log.warn(describeInstallerLog());
+      }
       this.updateState = { status: "failed", version: pendingVersion };
     }
 
