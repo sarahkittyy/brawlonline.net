@@ -1,0 +1,48 @@
+.stock,
+.none,
+.empty {
+  display: block;
+  flex-shrink: 0;
+}
+
+.stock {
+  filter: drop-shadow(0 1px 2px rgb(0 0 0 / 45%));
+}
+
+/* As the placing rank emblem's outline (rank_badge.module.css .small / .inline). */
+.outline {
+  --main-picture-line: #8a8a8a;
+
+  fill: rgb(255 255 255 / 3%);
+  stroke: var(--main-picture-line);
+  stroke-width: 1.5px;
+  stroke-dasharray: 0.1px 3.5px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.tiny .outline {
+  stroke-width: 1.2px;
+  stroke-dasharray: 0.1px 2.4px;
+}
+
+.error .outline {
+  --main-picture-line: var(--red-error);
+}
+
+.pencil {
+  fill: #8a8a8a;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.error .pencil {
+  fill: var(--red-error);
+}
+
+/* MAIN_PICTURE_HOVER, on the header's account button. */
+.hoverHost:hover .pencil,
+.hoverHost:focus-visible .pencil {
+  opacity: 1;
+}

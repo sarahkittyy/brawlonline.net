@@ -2,20 +2,21 @@ import CircularProgress from "@mui/material/CircularProgress";
 import { clsx } from "clsx";
 import React from "react";
 
-import { UserIcon } from "@/components/user_icon";
+import { MainPicture } from "@/components/main_picture/main_picture";
 
 import styles from "./user_info.module.css";
 
 export const UserInfo = React.memo(function UserInfo({
   displayName,
-  displayPicture,
+  picture,
   connectCode,
   errorBorder,
   errorMessage,
   loading,
 }: {
   displayName: string;
-  displayPicture: string;
+  /** The primary main's stock icon; null for none (Fox's outline, a pencil on hover); undefined while loading. */
+  picture: string | null | undefined;
   connectCode?: string;
   errorBorder?: boolean;
   errorMessage?: string;
@@ -26,7 +27,7 @@ export const UserInfo = React.memo(function UserInfo({
       {loading ? (
         <CircularProgress color="inherit" />
       ) : (
-        <UserIcon imageUrl={displayPicture} size={42} borderColor={errorBorder ? "var(--red-error)" : undefined} />
+        <MainPicture url={picture} size={42} pencil={true} error={errorBorder} />
       )}
       <div className={styles.content}>
         <h3 className={styles.displayName}>{displayName}</h3>

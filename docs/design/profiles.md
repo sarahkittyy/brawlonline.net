@@ -101,6 +101,7 @@ Sarah's picks from the mockups (2026-11-09), each place on its own, and each pla
 | Other Games rooms | The host's flag before their name; nothing else changes. |
 | Spectate | Unchanged: it shows the character each player is playing in that game. Hovering a name shows the hover card below (it used to show only the code). |
 | Any name | Hovering it shows a small floating profile: badge, name, code, flag and country, rank and rating, and up to 8 mains. |
+| Header account (and Switch account's rows) | The picture is the primary main's stock icon, on its own (no frame), whatever "Show next to name" says (it's the player's own). Without one (no main, Random, no disc set up, offline) Fox's stock icon's outline, dotted like a placing rank emblem; in the header, hovering the account puts the profile's pencil inside it in the dots' colour (red while online play needs setting up). Nothing while the profile loads. |
 
 Data: the server adds what to show beside each name (`profile::NameTag`: `country`, `main`, each only when set and shown) to the leaderboard's entries, the social stream's members (sent again when the player changes their profile), and the room list (`countries` by slot, from the slot uids mm now sends, filled once per mm snapshot; `hostCountry` for Other Games rooms). The hover card reads the profile (`GET /v1/profiles/<uid>`, kept 5 minutes, after a 450 ms pause on the name).
 

@@ -34,6 +34,8 @@ const meta = {
     onAddAccount: action("onAddAccount"),
     onRemoveAccount: action("onRemoveAccount"),
     switching: false,
+    // No disc in Storybook: every account without a main's icon (Fox's dotted outline).
+    pictures: Object.fromEntries(accounts.map((a) => [a.id, null])),
   },
 } satisfies Meta<typeof SwitchAccountDialog>;
 

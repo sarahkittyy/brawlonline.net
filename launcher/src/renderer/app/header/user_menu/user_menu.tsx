@@ -5,6 +5,7 @@ import log from "electron-log";
 import React from "react";
 
 import { ConfirmationModal } from "@/components/confirmation_modal/confirmation_modal";
+import { MAIN_PICTURE_HOVER } from "@/components/main_picture/main_picture";
 import { useDolphinStore } from "@/lib/dolphin/use_dolphin_store";
 import { useAccount } from "@/lib/hooks/use_account";
 import { useAccountDialogs } from "@/lib/hooks/use_account_dialogs";
@@ -53,18 +54,17 @@ export const UserMenu = ({ user, handleError }: { user: AuthUser; handleError: (
   const [reAuthEmail, setReAuthEmail] = React.useState<string | undefined>();
   const isOnline = useAppStore((state) => state.isOnline);
 
-  // Pictures: each account's primary main's stock icon, else its default. The other accounts' profiles only while
-  // Switch account is open.
+  // Pictures: each account's primary main's stock icon (MainPicture). The other accounts' profiles only while Switch
+  // account is open.
   const switchOpen = accountDialog === "switch";
-  const ownPicture = useMainPictures([user.uid], isOnline)[user.uid] ?? user.displayPicture;
-  const otherPictures = useMainPictures(
-    accounts.filter((a) => a.id !== user.uid).map((a) => a.id),
-    isOnline && switchOpen,
-  );
-  const shownAccounts = accounts.map((a) => {
-    const picture = a.id === user.uid ? ownPicture : otherPictures[a.id];
-    return picture ? { ...a, displayPicture: picture } : a;
-  });
+  const ownPicture = useMainPictures([user.uid], isOnline)[user.uid];
+  const pictures = {
+    ...useMainPictures(
+      accounts.filter((a) => a.id !== user.uid).map((a) => a.id),
+      isOnline && switchOpen,
+    ),
+    [user.uid]: ownPicture,
+  };
 
   const onLogout = async () => {
     try {
@@ -182,11 +182,11 @@ export const UserMenu = ({ user, handleError }: { user: AuthUser; handleError: (
     <div>
       <ButtonBase
         onClick={() => openProfile({ uid: user.uid, displayName, connectCode: userData?.playKey?.connectCode })}
-        className={clsx(styles.userInfoButton, glowProfile && styles.profileGlow)}
+        className={clsx(styles.userInfoButton, MAIN_PICTURE_HOVER, glowProfile && styles.profileGlow)}
       >
         <UserInfo
           displayName={displayName}
-          displayPicture={ownPicture}
+          picture={ownPicture}
           connectCode={userData?.playKey?.connectCode}
           errorBorder={isUserErrorMessage}
           errorMessage={errMessage}
@@ -197,7 +197,8 @@ export const UserMenu = ({ user, handleError }: { user: AuthUser; handleError: (
       <SwitchAccountDialog
         open={switchOpen}
         onClose={closeAccountDialog}
-        accounts={shownAccounts}
+        accounts={accounts}
+        pictures={pictures}
         activeAccountId={activeAccountId}
         onSwitchAccount={handleSwitchAccount}
         onAddAccount={handleAddAccount}

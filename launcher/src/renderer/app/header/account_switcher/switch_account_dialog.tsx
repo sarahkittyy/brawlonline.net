@@ -17,6 +17,8 @@ type SwitchAccountDialogProps = {
   onAddAccount: () => void;
   onRemoveAccount: (accountId: string) => void;
   switching?: boolean;
+  /** Each account's picture by its id (MainPicture's `url`). */
+  pictures?: Partial<Record<string, string | null>>;
 };
 
 /** Switch account, from the player's own profile: every account on this computer and "Add another account". */

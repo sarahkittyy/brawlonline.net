@@ -1,12 +1,10 @@
 import ButtonBase from "@mui/material/ButtonBase";
 import { clsx } from "clsx";
 
-import { generateDisplayPicture } from "@/lib/display_picture";
+import { MAIN_PICTURE_HOVER } from "@/components/main_picture/main_picture";
 
 import menuStyles from "../user_menu/user_menu.module.css";
 import { UserInfo } from "./user_info";
-
-// type UserInfoProps = React.ComponentProps<typeof UserInfo>;
 
 export default {
   title: "containers/Header/UserInfo",
@@ -14,32 +12,39 @@ export default {
   argTypes: {},
 };
 
-const displayPicture = generateDisplayPicture("");
+// In the header's button, as user_menu.tsx has it: hovering shows the pencil in the empty picture.
+const InButton = ({ glow = false, children }: { glow?: boolean; children: React.ReactNode }) => (
+  <ButtonBase className={clsx(menuStyles.userInfoButton, MAIN_PICTURE_HOVER, glow && menuStyles.profileGlow)}>
+    {children}
+  </ButtonBase>
+);
 
-export const StandardUserInfo = () => {
-  return <UserInfo displayName="Player name" displayPicture={displayPicture} connectCode="TEST#000" />;
-};
+// No main set (or no disc): Fox's dotted outline; hover for the pencil.
+export const StandardUserInfo = () => (
+  <InButton>
+    <UserInfo displayName="Player name" picture={null} connectCode="TEST#000" />
+  </InButton>
+);
 
 export const LoadingUserInfo = () => {
-  return <UserInfo displayName="Player name" displayPicture={displayPicture} connectCode="TEST#000" loading={true} />;
+  return <UserInfo displayName="Player name" picture={undefined} connectCode="TEST#000" loading={true} />;
 };
 
-export const ErrorUserInfo = () => {
-  return (
+export const ErrorUserInfo = () => (
+  <InButton>
     <UserInfo
       displayName="Player name"
-      displayPicture={displayPicture}
+      picture={null}
       connectCode="TEST#000"
+      errorBorder={true}
       errorMessage="Some error message"
     />
-  );
-};
+  </InButton>
+);
 
 // The header's name until this client's player has clicked their own profile's edit pencil (user_menu.tsx)
-export const ProfileGlowUserInfo = () => {
-  return (
-    <ButtonBase className={clsx(menuStyles.userInfoButton, menuStyles.profileGlow)}>
-      <UserInfo displayName="Player name" displayPicture={displayPicture} connectCode="TEST#000" />
-    </ButtonBase>
-  );
-};
+export const ProfileGlowUserInfo = () => (
+  <InButton glow={true}>
+    <UserInfo displayName="Player name" picture={null} connectCode="TEST#000" />
+  </InButton>
+);

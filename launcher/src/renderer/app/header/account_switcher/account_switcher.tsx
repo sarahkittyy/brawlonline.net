@@ -9,7 +9,7 @@ import Tooltip from "@mui/material/Tooltip";
 import type { StoredAccount } from "@settings/types";
 import React from "react";
 
-import { UserIcon } from "@/components/user_icon";
+import { MainPicture } from "@/components/main_picture/main_picture";
 
 import { AccountSwitcherMessages as Messages } from "./account_switcher.messages";
 
@@ -90,6 +90,8 @@ type AccountSwitcherProps = {
   onAddAccount: () => void;
   onRemoveAccount: (accountId: string) => void;
   switching?: boolean;
+  /** Each account's picture by its id (MainPicture's `url`); missing: still loading. */
+  pictures?: Partial<Record<string, string | null>>;
 };
 
 /**
@@ -103,6 +105,7 @@ export const AccountSwitcher = ({
   onAddAccount,
   onRemoveAccount,
   switching = false,
+  pictures = {},
 }: AccountSwitcherProps) => {
   const activeAccount = accounts.find((account) => account.id === activeAccountId);
   // The others, by last active
@@ -132,7 +135,7 @@ export const AccountSwitcher = ({
     >
       {activeAccount && (
         <AccountItem $current={true} data-testid="active-account">
-          <AccountRow account={activeAccount} />
+          <AccountRow account={activeAccount} picture={pictures[activeAccount.id]} />
           <CheckIcon sx={{ fontSize: 20, color: "var(--accent-primary)", marginRight: "4px" }} />
         </AccountItem>
       )}
@@ -148,7 +151,7 @@ export const AccountSwitcher = ({
         >
           {sortedAccounts.map((account) => (
             <AccountItem key={account.id} onClick={() => handleAccountClick(account.id)} $disabled={switching}>
-              <AccountRow account={account} />
+              <AccountRow account={account} picture={pictures[account.id]} />
               <Tooltip title={Messages.remove()}>
                 <RemoveButton className="remove-button" onClick={(e) => handleRemoveClick(e, account.id)} size="small">
                   <CloseIcon sx={{ fontSize: 18 }} />
@@ -173,7 +176,7 @@ export const AccountSwitcher = ({
   );
 };
 
-const AccountRow = ({ account }: { account: StoredAccount }) => (
+const AccountRow = ({ account, picture }: { account: StoredAccount; picture: string | null | undefined }) => (
   <div
     css={css`
       display: flex;
@@ -182,7 +185,7 @@ const AccountRow = ({ account }: { account: StoredAccount }) => (
       min-width: 0;
     `}
   >
-    <UserIcon imageUrl={account.displayPicture} size={26} />
+    <MainPicture url={picture} size={26} />
     <AccountInfo>
       <AccountName>{account.displayName || account.email}</AccountName>
     </AccountInfo>
