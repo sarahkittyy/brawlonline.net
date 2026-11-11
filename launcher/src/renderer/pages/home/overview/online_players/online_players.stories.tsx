@@ -93,3 +93,37 @@ export const Themes = () => {
     </ServiceProvider>
   );
 };
+
+// The names from the board's screenshot (bug: the list scrolled sideways in a narrow window).
+const narrowPlayers: SocialPlayer[] = [
+  ["E-C", "EC#319"],
+  ["cartman", "KAY#709"],
+  ["SanjiWatsuki", "SANJ#964"],
+  ["TheCumGuzzla", "CUM#762"],
+  ["Lhasheil [JPN]", "LSL#488", "jp", "random"],
+  ["roy jones jr", "BOOM#216", "us", "marth"],
+  ["Ozakai", "OZAK#924"],
+  ["KoF_Rise", "HONE#802"],
+].map(([displayName, connectCode, country, main], i) => ({ uid: `n${i}`, displayName, connectCode, country, main }));
+
+/**
+ * The list at the overview column's width for a 1280, 1100 and 980 px window ((W - 72) / 4): flags show while every
+ * flagged name fits beside its flag; narrower, they all hide and the envelopes stay at the right.
+ */
+export const Narrow = () => {
+  useEffect(() => {
+    setUp();
+    useSocial.setState({ state: { ...state, online: narrowPlayers }, tabs: [] });
+  }, []);
+  return (
+    <ServiceProvider>
+      <div style={{ display: "flex", gap: 20, padding: 20, alignItems: "flex-start" }}>
+        {[302, 257, 227].map((width) => (
+          <div key={width} style={{ width, height: 380, display: "flex", flexDirection: "column" }}>
+            <OnlinePlayers />
+          </div>
+        ))}
+      </div>
+    </ServiceProvider>
+  );
+};

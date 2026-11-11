@@ -76,8 +76,10 @@
   line-height: 1.5;
 }
 
+/* min-width 0: the list is as wide as the panel, never as wide as its longest row (that scrolled sideways). */
 .list {
   list-style: none;
+  min-width: 0;
   margin: 0;
   padding: 6px;
   display: flex;
@@ -125,6 +127,28 @@
 }
 
 .afterFlag {
+  margin-left: 8px !important;
+}
+
+/* Too narrow for some flagged name in full beside its flag (flagsFitIn): no flags, the envelope at the right. */
+.hideFlags .flag {
+  display: none;
+}
+
+.hideFlags .afterFlag {
+  margin-left: auto !important;
+}
+
+/* For a moment while measuring (flagsFitIn): each row at its natural width, flags shown. */
+.list.measure .row {
+  width: max-content;
+}
+
+.list.measure .flag {
+  display: inline-flex;
+}
+
+.list.measure .afterFlag {
   margin-left: 8px !important;
 }
 

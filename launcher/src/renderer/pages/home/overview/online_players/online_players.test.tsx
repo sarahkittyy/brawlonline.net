@@ -1,6 +1,6 @@
 import type { SocialPlayer, SocialState } from "@social/types";
 import { cleanup, render, screen, within } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { useAccount } from "@/lib/hooks/use_account";
 import { useSocial } from "@/lib/social/use_social";
@@ -47,6 +47,7 @@ function renderList(disc: boolean) {
 const rowOf = (name: string) => screen.getByText(name).closest("[role=button]") as HTMLElement;
 
 afterEach(() => {
+  vi.restoreAllMocks();
   cleanup();
   useGameAssets.setState({ state: null });
 });
@@ -70,5 +71,37 @@ describe("OnlinePlayers mains", () => {
     renderList(false);
     expect(screen.queryAllByTestId("online-main")).toHaveLength(0);
     expect(rowOf("Lucas")).toBeTruthy();
+  });
+});
+
+describe("OnlinePlayers flags", () => {
+  /**
+   * jsdom has no layout: every row is `room` px wide, and while the list measures (rows at their natural width, flags
+   * shown), Lucas's row (the one flagged player) is `lucas` px.
+   */
+  function fakeWidths(room: number, lucas: number) {
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      const measuring = this.closest("ul")?.className.includes("measure") ?? false;
+      const width = measuring && this.textContent?.includes("Lucas") ? lucas : room;
+      return { width, height: 30, top: 0, left: 0, right: width, bottom: 30, x: 0, y: 0 } as DOMRect;
+    });
+  }
+
+  it("shows the flags while every flagged name fits beside its flag", () => {
+    fakeWidths(220, 220);
+    renderList(true);
+    expect(screen.getByTestId("online-players").dataset.flags).toBe("shown");
+    expect(rowOf("Lucas").querySelector("img[title], [class*=flag]")).toBeTruthy();
+  });
+
+  it("hides them all, keeping the invite, when a flagged name would not fit", () => {
+    fakeWidths(220, 221);
+    renderList(true);
+    const list = screen.getByTestId("online-players");
+    expect(list.dataset.flags).toBe("hidden");
+    expect(list.className).toMatch(/hideFlags/);
+    // The measuring class is gone again.
+    expect(list.className).not.toMatch(/measure/);
+    expect(within(rowOf("Lucas")).getByRole("button", { name: /invite/i })).toBeTruthy();
   });
 });

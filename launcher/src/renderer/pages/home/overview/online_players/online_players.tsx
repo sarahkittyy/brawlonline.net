@@ -3,7 +3,7 @@ import CloseRoundedIcon from "@mui/icons-material/CloseRounded";
 import SearchRoundedIcon from "@mui/icons-material/SearchRounded";
 import IconButton from "@mui/material/IconButton";
 import { clsx } from "clsx";
-import React, { useMemo, useRef, useState } from "react";
+import React, { useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { Flag } from "@/components/flag/flag";
 import { CharacterIcon, useHasStockIcons, useStockIcon } from "@/components/profile/character_icon";
@@ -36,11 +36,31 @@ const MainSlot = ({ main }: { main?: string }) => {
 };
 
 /**
+ * Whether every flagged row fits in the list with its flag: each row is laid out at its natural width (name and
+ * code in full, flag shown) for a moment, and compared with the width a row has. Synchronous, before paint.
+ */
+function flagsFitIn(list: HTMLElement): boolean {
+  const rows = list.querySelectorAll<HTMLElement>("[data-flagged]");
+  if (rows.length === 0) {
+    return true;
+  }
+  const room = rows[0].getBoundingClientRect().width;
+  list.classList.add(styles.measure);
+  try {
+    return Array.from(rows).every((row) => row.getBoundingClientRect().width <= room + 0.5);
+  } finally {
+    list.classList.remove(styles.measure);
+  }
+}
+
+/**
  * Everyone online in the launcher (docs/social-protocol.md), under the rating: a name opens a chat
  * tab, the envelope invites, a right click opens the player's menu. The magnifier next to the
  * title opens a search box in place of the count that filters the list by name or connect code
  * as you type. With a disc set up, each name has the player's main before it (MainSlot); without
- * one there are no stock icons and the list has no main column.
+ * one there are no stock icons and the list has no main column. When any flagged player's name and code no
+ * longer fit beside the flag, every flag hides (all at once, so a missing flag never reads as "has none"), the
+ * envelope stays at the right, and names that still don't fit end in "…"; the list never scrolls sideways.
  */
 export const OnlinePlayers = React.memo(function OnlinePlayers() {
   const user = useAccount((s) => s.user);
@@ -55,6 +75,8 @@ export const OnlinePlayers = React.memo(function OnlinePlayers() {
   const [searching, setSearching] = useState(false);
   const [query, setQuery] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
+  const listRef = useRef<HTMLUListElement>(null);
+  const [flagsFit, setFlagsFit] = useState(true);
 
   const needle = query.trim().toLowerCase();
   const shown = useMemo(
@@ -66,6 +88,23 @@ export const OnlinePlayers = React.memo(function OnlinePlayers() {
           ),
     [online, needle],
   );
+
+  // Re-checked when the list's width changes (the window, the column) and when the rows change.
+  const listShown = user != null && hasPlayKey && status === "online" && shown.length > 0;
+  useLayoutEffect(() => {
+    const list = listRef.current;
+    if (!list) {
+      return;
+    }
+    const check = () => setFlagsFit(flagsFitIn(list));
+    check();
+    if (typeof ResizeObserver === "undefined") {
+      return;
+    }
+    const observer = new ResizeObserver(check);
+    observer.observe(list);
+    return () => observer.disconnect();
+  }, [listShown, shown]);
 
   const canSearch = user != null && hasPlayKey && status === "online";
   const count =
@@ -149,13 +188,19 @@ export const OnlinePlayers = React.memo(function OnlinePlayers() {
       return <p className={styles.notice}>{Messages.noOnlineMatch(query.trim())}</p>;
     }
     return (
-      <ul className={styles.list} data-testid="online-players">
+      <ul
+        ref={listRef}
+        className={clsx(styles.list, !flagsFit && styles.hideFlags)}
+        data-testid="online-players"
+        data-flags={flagsFit ? "shown" : "hidden"}
+      >
         {shown.map((player) => (
           <li key={player.uid}>
             <div
               role="button"
               tabIndex={0}
               className={clsx(styles.row, ignored.includes(player.uid) && styles.ignored)}
+              data-flagged={player.country ? "" : undefined}
               onClick={() => openTab(player.uid, true)}
               onKeyDown={(e) => {
                 if (e.key === "Enter" || e.key === " ") {
