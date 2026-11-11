@@ -34,6 +34,7 @@ export const ModsMessages = {
   joinTooltip: () => "Join the room with this code. Its game is found among yours.",
   roomCode: () => "Room code",
   publicRoom: () => "Public",
+  privateRoom: () => "Private",
   publicRoomTooltip: () => "Public rooms are listed for everyone. Private rooms need the code.",
   controller: () => "Controller",
   gameCube: () => "GameCube controller",

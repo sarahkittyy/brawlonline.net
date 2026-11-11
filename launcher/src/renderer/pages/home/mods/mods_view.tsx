@@ -842,7 +842,7 @@ const BuildRow = ({
         <Tooltip title={Messages.publicRoomTooltip()}>
           <label className={styles.toggle}>
             <Switch size="small" checked={isPublic} onChange={(e) => setIsPublic(e.target.checked)} />
-            {Messages.publicRoom()}
+            <PublicLabel isPublic={isPublic} />
           </label>
         </Tooltip>
         <Tooltip title={Messages.hostTooltip()}>
@@ -856,6 +856,20 @@ const BuildRow = ({
     </div>
   );
 };
+
+/** The public switch's label: "Public" on, "Private" off (bug report #282). Both words share one
+ *  grid cell, the other one hidden, so the label is as wide as the longer word in any theme's font
+ *  and the switch and Host don't move when it flips. */
+const PublicLabel = ({ isPublic }: { isPublic: boolean }) => (
+  <span className={styles.toggleText}>
+    <span className={clsx(!isPublic && styles.toggleTextOff)} aria-hidden={!isPublic}>
+      {Messages.publicRoom()}
+    </span>
+    <span className={clsx(isPublic && styles.toggleTextOff)} aria-hidden={isPublic}>
+      {Messages.privateRoom()}
+    </span>
+  </span>
+);
 
 const RoomPanel = ({
   status,
@@ -950,7 +964,7 @@ const RoomPanel = ({
                       onRequest({ op: "public", public: e.target.checked });
                     }}
                   />
-                  {Messages.publicRoom()}
+                  <PublicLabel isPublic={publicClicked ?? room.public} />
                 </label>
               </Tooltip>
             )}

@@ -362,6 +362,19 @@
   cursor: pointer;
 }
 
+/* "Public" / "Private" in one cell: as wide as the longer word, so the switch and Host don't move. */
+.toggleText {
+  display: inline-grid;
+}
+
+.toggleText > span {
+  grid-area: 1 / 1;
+}
+
+.toggleTextOff {
+  visibility: hidden;
+}
+
 .separator {
   width: 1px;
   height: 20px;

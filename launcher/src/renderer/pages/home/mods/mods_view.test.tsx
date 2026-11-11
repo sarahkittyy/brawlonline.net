@@ -181,13 +181,20 @@ describe("ModsView", () => {
     vi.useFakeTimers();
     try {
       const p = props({ builds: [minus], running: true, status: room(1) });
-      const { getAllByLabelText, rerender } = render(<ModsView {...p} />);
-      // The room's switch comes first (the build row's own is for the next Host).
-      const toggle = () => getAllByLabelText(Messages.publicRoom())[0] as HTMLInputElement;
+      const { getAllByRole, rerender } = render(<ModsView {...p} />);
+      // The room's switch comes first (the build row's own is for the next Host). Its label says
+      // which the room is: "Private" off, "Public" on (bug report #282).
+      const toggle = () => getAllByRole("checkbox")[0] as HTMLInputElement;
+      const label = () =>
+        Array.from(toggle().closest("label")?.querySelectorAll("span[aria-hidden='false']") ?? [])
+          .map((e) => e.textContent)
+          .join("");
       expect(toggle().checked).toBe(false);
+      expect(label()).toBe(Messages.privateRoom());
       fireEvent.click(toggle());
       expect(p.onRequest).toHaveBeenCalledWith({ op: "public", public: true });
       expect(toggle().checked).toBe(true);
+      expect(label()).toBe(Messages.publicRoom());
       // The room file agrees: it is the room's value from then on.
       const on = room(1);
       on.room!.public = true;
@@ -200,6 +207,7 @@ describe("ModsView", () => {
         vi.advanceTimersByTime(5000);
       });
       expect(toggle().checked).toBe(true);
+      expect(label()).toBe(Messages.publicRoom());
     } finally {
       vi.useRealTimers();
     }
