@@ -1,14 +1,11 @@
-import { ThemeProvider } from "@emotion/react";
 import type { GameAssetManifest, GameAssetsState } from "@game_assets/types";
 import { GAME_ASSET_BASE_URL } from "@game_assets/types";
-import type { Theme } from "@mui/material/styles";
-import { ThemeProvider as MuiThemeProvider } from "@mui/material/styles";
 import log from "electron-log";
-import React from "react";
 import { create } from "zustand";
 
 import type { FrameCss, ThemeFrames, ThemePalette } from "./theme";
-import { createAppTheme, fallbackPalette, fallbackTheme } from "./theme";
+import { fallbackPalette } from "./theme";
+import { gradientFromThemeColor, paletteFromThemeColor, rgbToHex } from "./theme_color";
 import { SYSTEM_FONT_STACK } from "./with_font";
 
 /**
@@ -23,6 +20,9 @@ import { SYSTEM_FONT_STACK } from "./with_font";
  *   tile over it; the gradient itself is not drawn.
  *
  * Without a manifest the plain fallback from _variables.scss / theme.ts stays.
+ *
+ * A theme colour the player chose (Settings > Appearance > Theme Color, styles/theme_color.ts) replaces the
+ * gradient's colours, with or without a manifest: without one only the colours change (no frames or fonts).
  */
 
 export const assetUrl = (file: string) => `${GAME_ASSET_BASE_URL}${file.split("/").map(encodeURIComponent).join("/")}`;
@@ -150,26 +150,35 @@ export function buildThemeCss(manifest: GameAssetManifest, prepared: PreparedThe
     if (prepared.progressTrack) {
       vars.push(`--theme-progress-track: ${prepared.progressTrack};`);
     }
-    const p = prepared.palette;
-    if (p) {
-      vars.push(`--accent-primary: ${p.primary};`);
-      vars.push(`--accent-primary-bright: ${p.primary};`);
-      vars.push(`--accent-primary-dark: ${p.secondary};`);
-      vars.push(`--accent-primary-darker: ${p.secondary};`);
-      vars.push(`--accent-secondary: ${p.secondary};`);
-      vars.push(`--surface-0: ${p.backgroundPaper};`);
-      vars.push(`--surface-1: ${p.backgroundPaper};`);
-      vars.push(`--surface-2: ${p.backgroundDefault};`);
-      vars.push(`--surface-3: ${p.secondary};`);
-      vars.push(`--surface-4: ${p.primary};`);
-      vars.push(`--theme-page-background: ${p.backgroundDefault};`);
+    if (prepared.palette) {
+      vars.push(...paletteVars(prepared.palette));
     }
   }
   lines.push(`:root { ${vars.join(" ")} }`);
   return lines.join("\n");
 }
 
-function applyCss(css: string | null) {
+/** The CSS variables a palette sets (over _variables.scss's plain ones). */
+export function paletteVars(p: ThemePalette): string[] {
+  return [
+    `--accent-primary: ${p.primary};`,
+    `--accent-primary-bright: ${p.primary};`,
+    `--accent-primary-dark: ${p.secondary};`,
+    `--accent-primary-darker: ${p.secondary};`,
+    `--accent-secondary: ${p.secondary};`,
+    `--surface-0: ${p.backgroundPaper};`,
+    `--surface-1: ${p.backgroundPaper};`,
+    `--surface-2: ${p.backgroundDefault};`,
+    `--surface-3: ${p.secondary};`,
+    `--surface-4: ${p.primary};`,
+    `--theme-page-background: ${p.backgroundDefault};`,
+  ];
+}
+
+/** CSS for a theme colour without game assets: the plain look in its colours. */
+export const buildPlainThemeCss = (palette: ThemePalette) => `:root { ${paletteVars(palette).join(" ")} }`;
+
+export function applyCss(css: string | null) {
   let el = document.getElementById(STYLE_ELEMENT_ID) as HTMLStyleElement | null;
   if (!css) {
     el?.remove();
@@ -183,12 +192,36 @@ function applyCss(css: string | null) {
   el.textContent = css;
 }
 
+/** Decoded textures by URL: the theme colour picker re-tints the same few on every move. */
+const decoded = new Map<string, Promise<HTMLImageElement | null>>();
+
+function decode(url: string): Promise<HTMLImageElement | null> {
+  let image = decoded.get(url);
+  if (!image) {
+    image = (async () => {
+      try {
+        const img = new Image();
+        img.crossOrigin = "anonymous";
+        img.src = url;
+        await img.decode();
+        return img;
+      } catch (err) {
+        log.warn(`Could not load ${url}`, err);
+        decoded.delete(url);
+        return null;
+      }
+    })();
+    decoded.set(url, image);
+  }
+  return image;
+}
+
 async function loadPixels(url: string): Promise<{ canvas: HTMLCanvasElement; data: ImageData } | null> {
+  const img = await decode(url);
+  if (!img) {
+    return null;
+  }
   try {
-    const img = new Image();
-    img.crossOrigin = "anonymous";
-    img.src = url;
-    await img.decode();
     const canvas = document.createElement("canvas");
     canvas.width = img.naturalWidth;
     canvas.height = img.naturalHeight;
@@ -251,16 +284,31 @@ async function sampleGradient(url: string): Promise<{ top: RGB; middle: RGB; bot
   return { top: at(0), middle: at(Math.floor(data.height / 2)), bottom: at(data.height - 1) };
 }
 
+/** The colour at the top of P+'s menu gradient (its frame tint, #209a7a in P+ 3.x), or null without one. */
+export async function gradientTopColor(manifest: GameAssetManifest): Promise<string | null> {
+  const background = manifest.textures.background;
+  const gradient = background ? await sampleGradient(assetUrl(background.file)) : null;
+  return gradient ? rgbToHex(gradient.top) : null;
+}
+
 /**
  * Palette from P+'s menu background gradient (teal, dark, blue in P+ 3.x): the
  * accent is its top colour, the secondary its bottom colour, the surfaces its
  * dark middle. A disc-only extraction has no gradient and keeps the neutral palette, with the button
- * frames tinted a neutral grey.
+ * frames tinted a neutral grey. A theme colour stands in for the gradient (theme_color.ts) with its own
+ * palette, card or no card.
  */
-export async function prepareTheme(manifest: GameAssetManifest): Promise<PreparedTheme> {
+export async function prepareTheme(
+  manifest: GameAssetManifest,
+  themeColor: string | null = null,
+): Promise<PreparedTheme> {
   const images: PreparedTheme["images"] = {};
   const background = manifest.textures.background;
-  const gradient = background ? await sampleGradient(assetUrl(background.file)) : null;
+  const gradient = themeColor
+    ? gradientFromThemeColor(themeColor)
+    : background
+    ? await sampleGradient(assetUrl(background.file))
+    : null;
 
   let palette: ThemePalette | null = null;
   let frameTint = NEUTRAL_FRAME_TINT;
@@ -270,13 +318,15 @@ export async function prepareTheme(manifest: GameAssetManifest): Promise<Prepare
   if (gradient) {
     const accent = toLuminance(gradient.top, Math.max(luminance(gradient.top), 0.45));
     const secondary = toLuminance(gradient.bottom, Math.max(luminance(gradient.bottom), 0.4));
-    palette = {
-      ...fallbackPalette,
-      primary: hex(accent),
-      secondary: hex(secondary),
-      backgroundDefault: hex(gradient.middle),
-      backgroundPaper: hex(toLuminance(gradient.middle, luminance(gradient.middle) * 0.7)),
-    };
+    palette = themeColor
+      ? paletteFromThemeColor(themeColor)
+      : {
+          ...fallbackPalette,
+          primary: hex(accent),
+          secondary: hex(secondary),
+          backgroundDefault: hex(gradient.middle),
+          backgroundPaper: hex(toLuminance(gradient.middle, luminance(gradient.middle) * 0.7)),
+        };
     frameTint = gradient.top;
     hoverTint = hoverTintOf(gradient.top);
     panelTint = gradient.bottom;
@@ -302,52 +352,3 @@ export async function prepareTheme(manifest: GameAssetManifest): Promise<Prepare
   }
   return { palette, images, progressTrack };
 }
-
-/**
- * Provides the MUI/emotion theme and keeps it in sync with the extracted game
- * assets. Renders the fallback theme until (and unless) assets are available.
- */
-export const GameThemeProvider = ({ children }: React.PropsWithChildren) => {
-  const [theme, setTheme] = React.useState<Theme>(fallbackTheme);
-  const assetsState = useGameAssets((s) => s.state);
-
-  React.useEffect(() => {
-    const api = window.electron?.gameAssets;
-    if (!api) {
-      return;
-    }
-    const setState = useGameAssets.getState().setState;
-    void api.getState().then(setState).catch(log.error);
-    return api.onStateChange(setState);
-  }, []);
-
-  const manifest = assetsState?.manifest ?? null;
-  React.useEffect(() => {
-    let cancelled = false;
-    if (!manifest) {
-      applyCss(null);
-      setTheme(fallbackTheme);
-      return;
-    }
-    // Fonts first, then frames and colours once the textures are tinted.
-    applyCss(buildThemeCss(manifest, null));
-    void prepareTheme(manifest)
-      .then((prepared) => {
-        if (cancelled) {
-          return;
-        }
-        applyCss(buildThemeCss(manifest, prepared));
-        setTheme(createAppTheme(prepared.palette ?? fallbackPalette, framesFromManifest(manifest, prepared)));
-      })
-      .catch(log.error);
-    return () => {
-      cancelled = true;
-    };
-  }, [manifest]);
-
-  return (
-    <MuiThemeProvider theme={theme}>
-      <ThemeProvider theme={theme as any}>{children}</ThemeProvider>
-    </MuiThemeProvider>
-  );
-};

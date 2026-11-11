@@ -65,5 +65,6 @@ export const defaultAppSettings: AppSettings = {
     notificationSounds: true,
     notificationVolume: 15,
     interfaceZoom: 100,
+    themeColor: null,
   },
 };

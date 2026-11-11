@@ -1,0 +1,67 @@
+/* Over the whole window, without dimming it: the page behind shows the colour being picked. */
+.backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1400;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 24px;
+  border-radius: 18px;
+  background: color-mix(in srgb, var(--surface-1) 90%, transparent);
+  border: 1px solid rgb(255 255 255 / 10%);
+  box-shadow: 0 12px 40px rgb(0 0 0 / 55%);
+  backdrop-filter: blur(6px);
+}
+
+.wheel {
+  position: relative;
+  border-radius: 50%;
+  cursor: crosshair;
+  touch-action: none;
+  box-shadow: 0 0 0 1px rgb(255 255 255 / 12%), 0 4px 18px rgb(0 0 0 / 45%);
+}
+
+.wheel:focus-visible {
+  outline: 2px solid var(--text-primary);
+  outline-offset: 4px;
+}
+
+.canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+}
+
+/* Centred on the picked point (the transform moves it out from the middle). */
+.marker {
+  position: absolute;
+  top: calc(50% - 13px);
+  left: calc(50% - 13px);
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 3px solid #fff;
+  box-shadow: 0 0 0 1px rgb(0 0 0 / 40%), 0 2px 6px rgb(0 0 0 / 50%);
+  pointer-events: none;
+}
+
+.brightness {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 0 4px;
+  color: var(--text-secondary);
+}
+
+.buttons {
+  display: flex;
+  justify-content: space-between;
+}

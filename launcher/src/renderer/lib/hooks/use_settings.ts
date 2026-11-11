@@ -101,6 +101,8 @@ export const useNotificationVolume = () => useSetting("notificationVolume");
 
 export const useInterfaceZoom = () => useSetting("interfaceZoom");
 
+export const useThemeColor = () => useSetting("themeColor");
+
 /** Read only: DolphinManager.moveMainFolder (and moveGameFiles) set it after moving the files. */
 export const useGameFilesFolder = () => useSetting("gameFilesFolder")[0];
 

@@ -1,8 +1,9 @@
 import type { GameAssetManifest } from "@game_assets/types";
 import { describe, expect, it } from "vitest";
 
-import { buildThemeCss, FRAME_SCALE, frameCss, framesFromManifest } from "./game_theme";
+import { buildPlainThemeCss, buildThemeCss, FRAME_SCALE, frameCss, framesFromManifest } from "./game_theme";
 import { createAppTheme, fallbackPalette } from "./theme";
+import { paletteFromThemeColor } from "./theme_color";
 
 const texture = (file: string, width: number, height: number, inset: number) => ({
   file,
@@ -89,6 +90,22 @@ describe("game theme frames", () => {
     expect(css).not.toContain("--theme-button-source");
     expect(css).not.toContain("--theme-play-hover-opacity");
     expect(css).toContain('--theme-panel-source: url("data:panel");');
+  });
+
+  it("puts a theme colour's palette on before the frames are tinted, and without a disc", () => {
+    const palette = paletteFromThemeColor("#d33c3c");
+    const css = buildThemeCss(manifest, { palette, images: {} });
+    expect(css).toContain(`--accent-primary: ${palette.primary};`);
+    expect(css).toContain(`--theme-page-background: ${palette.backgroundDefault};`);
+    expect(css).not.toContain("--theme-button-source");
+    expect(buildPlainThemeCss(palette)).toBe(
+      `:root { --accent-primary: ${palette.primary}; --accent-primary-bright: ${palette.primary}; ` +
+        `--accent-primary-dark: ${palette.secondary}; --accent-primary-darker: ${palette.secondary}; ` +
+        `--accent-secondary: ${palette.secondary}; --surface-0: ${palette.backgroundPaper}; ` +
+        `--surface-1: ${palette.backgroundPaper}; --surface-2: ${palette.backgroundDefault}; ` +
+        `--surface-3: ${palette.secondary}; --surface-4: ${palette.primary}; ` +
+        `--theme-page-background: ${palette.backgroundDefault}; }`,
+    );
   });
 
   it("leaves contained buttons alone without game frames", () => {

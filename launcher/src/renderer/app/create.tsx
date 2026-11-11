@@ -7,6 +7,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import React from "react";
 import { HashRouter as Router, Navigate, Route, Routes } from "react-router-dom";
 
+import { ThemeColorPicker } from "@/components/theme_color_picker/theme_color_picker";
 import { useAppStore } from "@/lib/hooks/use_app_store";
 import { useLastPageTracker } from "@/lib/hooks/use_last_page";
 import { usePageRequestListeners } from "@/lib/hooks/use_page_request_listeners";
@@ -108,13 +109,17 @@ export function createApp({ services }: { services: Services }): {
     useHighlightNavigation();
 
     return (
-      <Routes key={currentLanguage}>
-        <Route path="/main/*" element={<MainAppPage />} />
-        <Route path="/landing" element={<QuickStartPage />} />
-        <Route path="/settings/*" element={<SettingsPage />} />
-        <Route path="/" element={<RootRedirect />} />
-        <Route element={<NotFoundPage />} />
-      </Routes>
+      <>
+        <Routes key={currentLanguage}>
+          <Route path="/main/*" element={<MainAppPage />} />
+          <Route path="/landing" element={<QuickStartPage />} />
+          <Route path="/settings/*" element={<SettingsPage />} />
+          <Route path="/" element={<RootRedirect />} />
+          <Route element={<NotFoundPage />} />
+        </Routes>
+        {/* Settings > Appearance > Theme Color's wheel, over the main page. */}
+        <ThemeColorPicker />
+      </>
     );
   };
 

@@ -7,7 +7,7 @@ import { createRoot } from "react-dom/client";
 
 import { ToastProvider } from "@/components/toast_provider";
 import { VersionLabel } from "@/components/version_label/version_label";
-import { GameThemeProvider } from "@/styles/game_theme";
+import { GameThemeProvider } from "@/styles/game_theme_provider";
 
 import { createApp } from "./app/create";
 import { ErrorBoundary } from "./components/error_boundary";
