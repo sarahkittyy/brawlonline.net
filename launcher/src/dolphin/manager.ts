@@ -136,6 +136,12 @@ export class DolphinManager {
   private netplayDolphinInstance: DolphinInstance | null = null;
   /** When Play started the open netplay Dolphin, and whether it boots P+ (null: Configure's, or none). */
   private netplayStart: NetplayStart | null = null;
+  /**
+   * The game the open netplay Dolphin plays when it is not Project+: a Brawl Mods build's name, or
+   * "Project Punch". Null for Play's P+, Configure's, or none. That game has no P+ online plugin,
+   * so a room click is not handed to it (bug report #281).
+   */
+  private netplayOtherGame: string | null = null;
   /** The Play start that is running, per boot choice: Play pressed again waits for it (repeat_play.ts). */
   private netplayStarts = new SharedStart<boolean, NetplayLaunchResult>();
   private versionCache = new Map<string, string>();
@@ -191,6 +197,16 @@ export class DolphinManager {
   /** True while the netplay Dolphin the launcher started (Play, or Configure) is running. */
   isNetplayRunning(): boolean {
     return this.netplayDolphinInstance != null;
+  }
+
+  /**
+   * What the open netplay Dolphin plays instead of Project+ (a Brawl Mods build's name, or
+   * "Project Punch"), or null (P+, Configure's, or none open). P+'s rooms, Direct and queues can't
+   * be handed to that game: it has no P+ online plugin, so it would hold the request without ever
+   * going there (bug report #281).
+   */
+  runningOtherGame(): string | null {
+    return this.netplayDolphinInstance != null ? this.netplayOtherGame : null;
   }
 
   /**
@@ -785,6 +801,7 @@ export class DolphinManager {
     const dolphinInstance = new DolphinInstance(dolphinPath, params);
     dolphinInstance.on("close", async (exitCode: number | null, signal: string | null) => {
       this.netplayDolphinInstance = null;
+      this.netplayOtherGame = null;
       this.eventSubject.next({ type: DolphinEventType.CLOSED, dolphinType: DolphinLaunchType.NETPLAY, exitCode });
       log.warn(`Dolphin (Brawl Mods) exit code: ${exitCode?.toString(16)}, signal: ${signal}`);
       // The room file's last words first (why a join failed), then it goes.
@@ -808,6 +825,7 @@ export class DolphinManager {
       throw err;
     }
     this.netplayDolphinInstance = dolphinInstance;
+    this.netplayOtherGame = build.name;
   }
 
   /** The Project+ release Play is on (Project Punch's card is made from the card on it). */
@@ -862,6 +880,7 @@ export class DolphinManager {
         log.error("Error encountered updating launcher settings.", e);
       }
       this.netplayDolphinInstance = null;
+      this.netplayOtherGame = null;
       this.eventSubject.next({ type: DolphinEventType.CLOSED, dolphinType: DolphinLaunchType.NETPLAY, exitCode });
       log.warn(`Dolphin (Project Punch) exit code: ${exitCode?.toString(16)}, signal: ${signal}`);
       await Promise.resolve(onClose?.()).catch((err) => log.error(err));
@@ -884,6 +903,7 @@ export class DolphinManager {
       throw err;
     }
     this.netplayDolphinInstance = dolphinInstance;
+    this.netplayOtherGame = "Project Punch";
   }
 
   /** `extraArgs` (netplay only): more arguments (`--controllers`); `onClose`: after it closed. */

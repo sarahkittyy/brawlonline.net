@@ -314,6 +314,14 @@ export default function setupDolphinIpc({ dolphinManager }: { dolphinManager: Do
     if (await dolphinManager.closeNetplayIfIdle()) {
       return { outcome: "not-running" };
     }
+    // A Brawl Mods build or Project Punch has no P+ online plugin: its Dolphin would answer the
+    // request "accepted" (held as for a game still booting, as it never reports P+'s menus) and
+    // never go to the room (bug report #281, a Cobalt game in Training).
+    const otherGame = dolphinManager.runningOtherGame();
+    if (otherGame != null) {
+      log.info(`Room ${code}${roomDetails(ruleset, isPrivate)} not handed off: the open Dolphin plays ${otherGame}`);
+      return { outcome: "other-game", game: otherGame };
+    }
     const onlineDir = dolphinManager.netplayOnlineDir();
     const result = await handOffRoom(onlineDir, code, { ruleset, isPrivate });
     log.info(`Room ${code}${roomDetails(ruleset, isPrivate)} handed to the running game: ${result.outcome}`);

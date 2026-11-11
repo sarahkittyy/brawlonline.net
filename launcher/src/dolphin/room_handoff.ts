@@ -87,7 +87,12 @@ export type RoomHandOffResult =
   /** No game answered (an older build, or a game stuck loading): the request was taken back. */
   | { outcome: "no-response" }
   /** No netplay Dolphin is running: the caller starts one with Play. */
-  | { outcome: "not-running" };
+  | { outcome: "not-running" }
+  /**
+   * The open Dolphin plays another game (`game`: a Brawl Mods build's name, or Project Punch),
+   * which can't go to P+'s rooms: nothing was sent, the player closes it first (bug report #281).
+   */
+  | { outcome: "other-game"; game: string };
 
 export type StatusRead =
   | { kind: "missing" }

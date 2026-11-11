@@ -55,6 +55,7 @@ export const SocialMessages = {
   startingForDirect: (code: string) => `Starting the game. It will open Direct 1v1 with ${code}.`,
   finishGameFirst: () => "Finish your current game first.",
   gameRefused: () => "Your game can't do that right now.",
+  closeOtherGameFirst: (game: string) => `Close ${game} first, then try again.`,
   noResponseRoom: (code: string) => `Your game didn't respond. Join in game with the code ${code}.`,
   noResponseDirect: (code: string) => `Your game didn't respond. In Direct 1v1, enter ${code}.`,
 };

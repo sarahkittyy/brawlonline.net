@@ -59,6 +59,9 @@ export const useHandOff = () => {
           case "no-response":
             showWarning(text.noResponse[kind]);
             break;
+          case "other-game":
+            showWarning(Messages.closeOtherGameFirst(result.game));
+            break;
           case "not-running": {
             const { id } = await dolphinService.prepareRoomLaunch(code, ruleset, isPrivate);
             if (await play({ bootGame: true })) {
