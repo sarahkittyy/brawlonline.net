@@ -15,12 +15,15 @@ const PENCIL =
   "m14.06 9.02.92.92L5.92 19H5v-.92zM17.66 3c-.25 0-.51.1-.7.29l-1.83 1.83 3.75 3.75 1.83-1.83c.39-.39.39-1.02 " +
   "0-1.41l-2.34-2.34c-.2-.2-.45-.29-.71-.29m-3.6 3.19L3 17.25V21h3.75L17.81 9.94z";
 
+/** `url` for a Random main: a "?" as everywhere else (CharacterIcon), since Brawl has no stock icon for it. */
+export const RANDOM_PICTURE = "random";
+
 /** Put on an ancestor (the header's account button): hovering it shows the pencil in the empty picture. */
 export const MAIN_PICTURE_HOVER = styles.hoverHost;
 
 /**
- * A player's picture (docs/design/profiles.md §8): their primary main's stock icon (`url`), or with none (`null`: no
- * main, Random, no disc set up, offline) Fox's stock icon's outline, dotted, with the profile's pencil in it while
+ * A player's picture (docs/design/profiles.md §8): their primary main's stock icon (`url`; `RANDOM_PICTURE`: a "?"),
+ * or with none (`null`: no main, no disc set up, offline) Fox's stock icon's outline, dotted, with the profile's pencil in it while
  * a `MAIN_PICTURE_HOVER` ancestor is hovered (`pencil`). `undefined` (the profile still loading) keeps the space empty.
  */
 export const MainPicture = ({
@@ -35,6 +38,22 @@ export const MainPicture = ({
   /** The outline red (online play needs setting up). */
   error?: boolean;
 }) => {
+  if (url === RANDOM_PICTURE) {
+    return (
+      <svg
+        className={styles.random}
+        viewBox="0 0 32 32"
+        width={size}
+        height={size}
+        aria-hidden={true}
+        data-testid="main-picture-random"
+      >
+        <text x="16" y="16" textAnchor="middle" dominantBaseline="central">
+          ?
+        </text>
+      </svg>
+    );
+  }
   if (url) {
     return (
       <img

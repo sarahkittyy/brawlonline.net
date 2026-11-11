@@ -3,6 +3,7 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { RANDOM_PICTURE } from "@/components/main_picture/main_picture";
 import type { PlayerProfile } from "@/services/backend/types";
 import { assetUrl, useGameAssets } from "@/styles/game_theme";
 
@@ -71,14 +72,27 @@ describe("useMainPictures", () => {
     await waitFor(() => expect(result.current.marth).toBe(assetUrl("theme/stocks/marth.png")));
   });
 
-  it("is none without a main, for Random, without a disc, and when the fetch fails", async () => {
+  it("is none without a main, without a disc, and when the fetch fails", async () => {
     withDisc(true);
-    const { result } = renderPictures(["none", "old", "random", "missing"]);
-    await waitFor(() => expect(result.current).toEqual({ none: null, old: null, random: null, missing: null }));
+    const { result } = renderPictures(["none", "old", "missing"]);
+    await waitFor(() => expect(result.current).toEqual({ none: null, old: null, missing: null }));
 
     withDisc(false);
     const noDisc = renderPictures(["marth"]);
     await waitFor(() => expect(noDisc.result.current).toEqual({ marth: null }));
+  });
+
+  it("is the question mark for Random, with or without a disc", async () => {
+    withDisc(true);
+    const { result } = renderPictures(["random"]);
+    await waitFor(() => expect(result.current).toEqual({ random: RANDOM_PICTURE }));
+
+    withDisc(false);
+    const noDisc = renderPictures(["random"]);
+    await waitFor(() => expect(noDisc.result.current).toEqual({ random: RANDOM_PICTURE }));
+    useGameAssets.setState({ state: null });
+    const noAssetsYet = renderPictures(["random"]);
+    await waitFor(() => expect(noAssetsYet.result.current).toEqual({ random: RANDOM_PICTURE }));
   });
 
   it("is unknown while the profile or the game assets load", async () => {

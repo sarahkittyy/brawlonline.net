@@ -1,7 +1,7 @@
 import ButtonBase from "@mui/material/ButtonBase";
 import { clsx } from "clsx";
 
-import { MAIN_PICTURE_HOVER } from "@/components/main_picture/main_picture";
+import { MAIN_PICTURE_HOVER, RANDOM_PICTURE } from "@/components/main_picture/main_picture";
 
 import menuStyles from "../user_menu/user_menu.module.css";
 import { UserInfo } from "./user_info";
@@ -23,6 +23,13 @@ const InButton = ({ glow = false, children }: { glow?: boolean; children: React.
 export const StandardUserInfo = () => (
   <InButton>
     <UserInfo displayName="Player name" picture={null} connectCode="TEST#000" />
+  </InButton>
+);
+
+// Random as the primary main: a "?", no pencil.
+export const RandomMainUserInfo = () => (
+  <InButton>
+    <UserInfo displayName="Player name" picture={RANDOM_PICTURE} connectCode="TEST#000" />
   </InButton>
 );
 
