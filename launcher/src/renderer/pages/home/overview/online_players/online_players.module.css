@@ -127,3 +127,26 @@
 .afterFlag {
   margin-left: 8px !important;
 }
+
+/* The player's main before their name: a 20 px stock icon in a fixed slot, so every name lines up. */
+.main {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  margin-left: -4px;
+}
+
+/*
+ * No main shown: a small dot at one fixed perceived lightness (OKLCH L 46%, a step above any theme's
+ * dark panel) in the theme accent's hue at half its chroma: grey in the plain look, a muted green in
+ * P+'s, and as visible in each (an alpha mix of the accent would be dimmer in the darker themes).
+ */
+.noMain {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background-color: oklch(from var(--accent-primary) 46% calc(c * 0.5) h);
+}

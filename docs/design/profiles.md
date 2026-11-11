@@ -95,7 +95,7 @@ Sarah's picks from the mockups (2026-11-09), each place on its own, and each pla
 | Place | Shows |
 | --- | --- |
 | Leaderboard | A flag column before the name and a Main column (the primary main's stock icon) after it, blank when not shown. |
-| Online list | The flag right of the name, just left of the invite envelope. |
+| Online list | The primary main's stock icon before the name (20 px, its own slot so names line up; Sarah's pick 2026-11-11 from the mockups). Without one shown (no main, "Show next to name" off, no icon for it on the card) a 6 px dot instead, never a stand-in character: one perceived lightness (OKLCH L 46%) in the theme accent's hue at half chroma, grey in the plain look and muted green in P+'s. Without a disc (no stock icons) no slot at all. The flag right of the name, just left of the invite envelope. |
 | Chat | The tab and the open window's title show the name the same way: the flag before it; the window also has the primary main by the minimize button. |
 | P+ rooms (Home's room list) | As before, with each player's flag before their name. No main. |
 | Other Games rooms | The host's flag before their name; nothing else changes. |

@@ -6,6 +6,7 @@ import { clsx } from "clsx";
 import React, { useMemo, useRef, useState } from "react";
 
 import { Flag } from "@/components/flag/flag";
+import { CharacterIcon, useHasStockIcons, useStockIcon } from "@/components/profile/character_icon";
 import { InviteButton, PlayerName } from "@/components/social/invite_button";
 import type { PlayerMenuTarget } from "@/components/social/player_menu";
 import { PlayerMenu } from "@/components/social/player_menu";
@@ -17,10 +18,29 @@ import { ContentBlock } from "../content_block/content_block";
 import styles from "./online_players.module.css";
 
 /**
+ * A player's primary main before their name (docs/design/profiles.md §8): its stock icon, or a small
+ * dot in the theme accent's hue for a player without one shown (no main, "Show next to name" off, or a
+ * character this disc has no stock icon for), so names line up without a hole or a stand-in character.
+ */
+const MainSlot = ({ main }: { main?: string }) => {
+  const url = useStockIcon(main ?? "");
+  return (
+    <span className={styles.main} data-testid="online-main">
+      {main != null && (main === "random" || url != null) ? (
+        <CharacterIcon character={main} size={20} />
+      ) : (
+        <span className={styles.noMain} />
+      )}
+    </span>
+  );
+};
+
+/**
  * Everyone online in the launcher (docs/social-protocol.md), under the rating: a name opens a chat
  * tab, the envelope invites, a right click opens the player's menu. The magnifier next to the
  * title opens a search box in place of the count that filters the list by name or connect code
- * as you type.
+ * as you type. With a disc set up, each name has the player's main before it (MainSlot); without
+ * one there are no stock icons and the list has no main column.
  */
 export const OnlinePlayers = React.memo(function OnlinePlayers() {
   const user = useAccount((s) => s.user);
@@ -30,6 +50,7 @@ export const OnlinePlayers = React.memo(function OnlinePlayers() {
   const online = useSocial((s) => s.state.online);
   const ignored = useSocial((s) => s.state.ignored);
   const openTab = useSocial((s) => s.openTab);
+  const hasStockIcons = useHasStockIcons();
   const [menu, setMenu] = useState<PlayerMenuTarget | null>(null);
   const [searching, setSearching] = useState(false);
   const [query, setQuery] = useState("");
@@ -147,6 +168,7 @@ export const OnlinePlayers = React.memo(function OnlinePlayers() {
                 setMenu({ player, x: e.clientX, y: e.clientY });
               }}
             >
+              {hasStockIcons && <MainSlot main={player.main} />}
               <PlayerName player={player} />
               {player.country && (
                 <span className={styles.flag}>
