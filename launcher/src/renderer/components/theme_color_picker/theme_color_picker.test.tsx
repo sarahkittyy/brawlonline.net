@@ -129,6 +129,28 @@ describe("Theme Color", () => {
     expect(screen.getByRole("button", { name: "Reset to default" })).toBeTruthy();
   });
 
+  it("has a reset icon by Apply only while a colour is chosen, which saves the default and closes", async () => {
+    renderApp("/main/replays/list");
+    fireEvent.click(screen.getByRole("button", { name: "Theme Color" }));
+    expect(screen.queryByRole("button", { name: "Reset to default" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+    setThemeColor("#d33c3c");
+    fireEvent.click(screen.getByRole("button", { name: "Theme Color" }));
+    fireEvent.keyDown(screen.getByRole("slider", { name: "Color wheel" }), { key: "ArrowLeft" });
+    await waitFor(() => expect(shown).not.toBe("#d33c3c"));
+    const reset = screen.getByRole("button", { name: "Reset to default" });
+    fireEvent.mouseOver(reset);
+    expect((await screen.findByRole("tooltip")).textContent).toBe("Reset to default");
+
+    fireEvent.click(reset);
+    await waitFor(() => expect(useThemeColorPickerOpen.getState().open).toBe(false));
+    expect(updateSettings).toHaveBeenCalledWith([{ key: "themeColor", value: null }]);
+    expect(useSettingsStore.getState().settings.themeColor).toBeNull();
+    expect(shown).toBeNull();
+    expect(path).toBe("/main/replays/list");
+  });
+
   it("closes without saving on Escape or when the main page is left", async () => {
     renderApp(THEME_COLOR_SETTINGS_PAGE);
     fireEvent.click(screen.getByRole("button", { name: "Change theme color" }));

@@ -4,4 +4,5 @@ export const ThemeColorPickerMessages = {
   brightness: () => "Brightness",
   cancel: () => "Cancel",
   apply: () => "Apply",
+  resetToDefault: () => "Reset to default",
 };

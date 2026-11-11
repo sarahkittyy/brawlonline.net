@@ -65,3 +65,18 @@
   display: flex;
   justify-content: space-between;
 }
+
+/* Apply with the grey reset icon left of it. */
+.applyGroup {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.reset {
+  opacity: 0.5;
+}
+
+.reset:hover {
+  opacity: 0.8;
+}

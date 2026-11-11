@@ -11,6 +11,7 @@ Settings > Appearance > Theme Color: the player picks the launcher's colour on a
   - Inline controls (this swatch and the App Language dropdown) end where the switches' thumbs end (`SettingItem inline`, `SWITCH_RIGHT_INSET`).
 - **Picker.** The pencil takes the player to Home with a wheel in the middle of the window. Cancel is on the left under the wheel and Apply on the right.
   - The header's grey palette icon (right of the bug report icon) opens the same wheel over the page the player is on, and Cancel/Apply/Escape just close it there instead of going to Settings.
+  - While a colour is chosen, a grey refresh icon left of Apply ("Reset to default" in a tooltip) saves the default look at once and closes the wheel, as Apply does.
   - The launcher shows each colour as it is picked, at most once a frame. The setting changes only on Apply.
   - Cancel, Escape, or leaving the main page (a shortcut) restores the previous look; opened from Settings, closing it returns to Settings > Appearance.
   - The page behind is not dimmed, but it does not take clicks.

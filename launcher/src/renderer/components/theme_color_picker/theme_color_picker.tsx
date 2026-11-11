@@ -1,7 +1,10 @@
 import BrightnessHighRoundedIcon from "@mui/icons-material/BrightnessHighRounded";
 import BrightnessLowRoundedIcon from "@mui/icons-material/BrightnessLowRounded";
+import RefreshRoundedIcon from "@mui/icons-material/RefreshRounded";
 import Button from "@mui/material/Button";
+import IconButton from "@mui/material/IconButton";
 import Slider from "@mui/material/Slider";
+import Tooltip from "@mui/material/Tooltip";
 import log from "electron-log";
 import React from "react";
 import { useLocation, useNavigate } from "react-router-dom";
@@ -150,6 +153,12 @@ const ThemeColorPickerPanel = () => {
     void saveThemeColor(colorAtWheelPosition(position)).catch(log.error).finally(back);
   }, [position, back]);
 
+  // Shown while a colour is chosen, as in Settings: the default look is saved at once and the picker closes.
+  const chosen = normalizeThemeColor(setting) !== null;
+  const reset = React.useCallback(() => {
+    void saveThemeColor(null).catch(log.error).finally(back);
+  }, [back]);
+
   React.useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
@@ -240,9 +249,23 @@ const ThemeColorPickerPanel = () => {
           <Button variant="outlined" color="inherit" onClick={back}>
             {Messages.cancel()}
           </Button>
-          <Button variant="contained" color="primary" onClick={apply}>
-            {Messages.apply()}
-          </Button>
+          <div className={styles.applyGroup}>
+            {chosen && (
+              <Tooltip title={Messages.resetToDefault()}>
+                <IconButton
+                  aria-label={Messages.resetToDefault()}
+                  color="inherit"
+                  className={styles.reset}
+                  onClick={reset}
+                >
+                  <RefreshRoundedIcon />
+                </IconButton>
+              </Tooltip>
+            )}
+            <Button variant="contained" color="primary" onClick={apply}>
+              {Messages.apply()}
+            </Button>
+          </div>
         </div>
       </div>
     </div>
