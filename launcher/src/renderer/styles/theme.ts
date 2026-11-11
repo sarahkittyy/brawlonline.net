@@ -47,11 +47,18 @@ export type FrameCss = {
   width: string;
 };
 
-const frameStyles = (frame: FrameCss) => ({
+/**
+ * A frame's image as the `--theme-<key>-source` variable game_theme.tsx sets, this theme's image if unset: the
+ * theme colour picker re-tints the frames through the variable as it moves and rebuilds this theme only when
+ * it stops (game_theme_provider.tsx), so framed buttons and dialogs follow the wheel without a re-render.
+ */
+const frameSource = (key: keyof ThemeFrames, frame: FrameCss) => `var(--theme-${key}-source, ${frame.source})`;
+
+const frameStyles = (key: keyof ThemeFrames, frame: FrameCss) => ({
   borderStyle: "solid",
   borderColor: "transparent",
   borderWidth: frame.width,
-  borderImageSource: frame.source,
+  borderImageSource: frameSource(key, frame),
   borderImageSlice: frame.slice,
   borderImageWidth: frame.width,
   borderImageRepeat: "stretch",
@@ -100,7 +107,7 @@ const addOverrides = (theme: Theme, palette: ThemePalette, frames: ThemeFrames) 
   // The frame's border replaces MUI's vertical padding, so a framed button keeps about MUI's height.
   const containedButton = frames.button
     ? {
-        ...frameStyles(frames.button),
+        ...frameStyles("button", frames.button),
         borderRadius: 0,
         boxShadow: "none",
         padding: "0 8px",
@@ -108,14 +115,16 @@ const addOverrides = (theme: Theme, palette: ThemePalette, frames: ThemeFrames) 
         textShadow: "0 1px 0 rgba(0, 0, 0, 0.6)",
         // Hover only swaps the image: same slice and width, so the button keeps its size.
         "&:hover": {
-          borderImageSource: (frames.buttonHover ?? frames.button).source,
+          borderImageSource: frames.buttonHover
+            ? frameSource("buttonHover", frames.buttonHover)
+            : frameSource("button", frames.button),
           backgroundColor: "transparent",
           boxShadow: "none",
         },
         "&.Mui-disabled": { opacity: 0.5, color: palette.textSecondary },
       }
     : {};
-  const panelPaper = frames.panel ? { ...frameStyles(frames.panel), borderRadius: 0 } : {};
+  const panelPaper = frames.panel ? { ...frameStyles("panel", frames.panel), borderRadius: 0 } : {};
 
   return createTheme({
     ...theme,

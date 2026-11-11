@@ -33,6 +33,23 @@ export function useShownThemeColor(): string | null {
   return normalizeThemeColor(draft ?? setting);
 }
 
+/** How long the picker's colour rests before the MUI theme takes it (game_theme_provider's second effect). */
+const DRAFT_SETTLE_MS = 150;
+
+/** `value` once it has stayed the same for `delayMs` (at once with 0). */
+function useSettled<T>(value: T, delayMs: number): T {
+  const [settled, setSettled] = React.useState(value);
+  React.useEffect(() => {
+    if (delayMs <= 0) {
+      setSettled(value);
+      return;
+    }
+    const timer = setTimeout(() => setSettled(value), delayMs);
+    return () => clearTimeout(timer);
+  }, [value, delayMs]);
+  return delayMs <= 0 ? value : settled;
+}
+
 /** The default look's colour (the picker's start, the setting's swatch): P+'s gradient top, null for plain grey. */
 export const useDefaultThemeColor = create<{ color: string | null }>(() => ({ color: null }));
 
@@ -74,6 +91,12 @@ export const GameThemeProvider = ({ children }: React.PropsWithChildren) => {
     };
   }, [manifest]);
 
+  // While the picker's colour moves, only the CSS follows it (palette variables and tinted frames, both cheap);
+  // the MUI theme waits until it rests. Each new MUI theme re-renders the whole launcher and adds new emotion
+  // rules for every styled element (thousands per second of dragging, never removed): the wheel lagged.
+  const draftActive = useThemeColorDraft((s) => s.draft !== undefined);
+  const settledColor = useSettled(themeColor, draftActive ? DRAFT_SETTLE_MS : 0);
+
   // Fonts go on once per manifest, before the frames are tinted (with a theme colour's palette, which needs
   // no textures: no grey moment); the rest also follows the theme colour, which the picker changes as it moves.
   const fontsApplied = React.useRef<GameAssetManifest | null>(null);
@@ -83,7 +106,6 @@ export const GameThemeProvider = ({ children }: React.PropsWithChildren) => {
     if (!manifest) {
       fontsApplied.current = null;
       applyCss(palette ? buildPlainThemeCss(palette) : null);
-      setTheme(palette ? createAppTheme(palette) : fallbackTheme);
       return;
     }
     if (fontsApplied.current !== manifest) {
@@ -92,17 +114,33 @@ export const GameThemeProvider = ({ children }: React.PropsWithChildren) => {
     }
     void prepareTheme(manifest, themeColor)
       .then((prepared) => {
-        if (cancelled) {
-          return;
+        if (!cancelled) {
+          applyCss(buildThemeCss(manifest, prepared));
         }
-        applyCss(buildThemeCss(manifest, prepared));
-        setTheme(createAppTheme(prepared.palette ?? fallbackPalette, framesFromManifest(manifest, prepared)));
       })
       .catch(log.error);
     return () => {
       cancelled = true;
     };
   }, [manifest, themeColor]);
+
+  React.useEffect(() => {
+    let cancelled = false;
+    if (!manifest) {
+      setTheme(settledColor ? createAppTheme(paletteFromThemeColor(settledColor)) : fallbackTheme);
+      return;
+    }
+    void prepareTheme(manifest, settledColor)
+      .then((prepared) => {
+        if (!cancelled) {
+          setTheme(createAppTheme(prepared.palette ?? fallbackPalette, framesFromManifest(manifest, prepared)));
+        }
+      })
+      .catch(log.error);
+    return () => {
+      cancelled = true;
+    };
+  }, [manifest, settledColor]);
 
   return (
     <MuiThemeProvider theme={theme}>

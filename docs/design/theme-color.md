@@ -13,6 +13,8 @@ Settings > Appearance > Theme Color: the player picks the launcher's colour on a
   - The header's grey palette icon (right of the bug report icon) opens the same wheel over the page the player is on, and Cancel/Apply/Escape just close it there instead of going to Settings.
   - While a colour is chosen, a grey refresh icon left of Apply ("Reset to default" in a tooltip) saves the default look at once and closes the wheel, as Apply does.
   - The launcher shows each colour as it is picked, at most once a frame. The setting changes only on Apply.
+    - While the wheel moves, only the CSS follows each frame: the palette variables and the tinted frames (`--theme-<frame>-source`, which the MUI button and dialog styles read before their own image). The MUI theme (MUI's own primary/paper colours, e.g. an outlined button's border) follows 150 ms after the colour stops changing. Rebuilding it re-renders the whole launcher and adds emotion rules that are never removed, so doing it every frame made dragging lag.
+    - Tinting reads each texture once and caches each tint. The wheel is redrawn at most once a frame when the brightness moves.
   - Cancel, Escape, or leaving the main page (a shortcut) restores the previous look; opened from Settings, closing it returns to Settings > Appearance.
   - The page behind is not dimmed, but it does not take clicks.
 

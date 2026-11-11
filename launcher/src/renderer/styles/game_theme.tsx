@@ -192,61 +192,68 @@ export function applyCss(css: string | null) {
   el.textContent = css;
 }
 
-/** Decoded textures by URL: the theme colour picker re-tints the same few on every move. */
-const decoded = new Map<string, Promise<HTMLImageElement | null>>();
+/** Decoded textures' pixels by URL, read once: the theme colour picker re-tints the same few on every move. */
+const decoded = new Map<string, Promise<ImageData | null>>();
 
-function decode(url: string): Promise<HTMLImageElement | null> {
-  let image = decoded.get(url);
-  if (!image) {
-    image = (async () => {
+/** A texture's pixels (shared: copy before changing them). */
+function loadPixels(url: string): Promise<ImageData | null> {
+  let pixels = decoded.get(url);
+  if (!pixels) {
+    pixels = (async () => {
       try {
         const img = new Image();
         img.crossOrigin = "anonymous";
         img.src = url;
         await img.decode();
-        return img;
+        const canvas = document.createElement("canvas");
+        canvas.width = img.naturalWidth;
+        canvas.height = img.naturalHeight;
+        const ctx = canvas.getContext("2d", { willReadFrequently: true });
+        if (!ctx) {
+          throw new Error("no 2d context");
+        }
+        ctx.drawImage(img, 0, 0);
+        return ctx.getImageData(0, 0, canvas.width, canvas.height);
       } catch (err) {
         log.warn(`Could not load ${url}`, err);
         decoded.delete(url);
         return null;
       }
     })();
-    decoded.set(url, image);
+    decoded.set(url, pixels);
   }
-  return image;
+  return pixels;
 }
 
-async function loadPixels(url: string): Promise<{ canvas: HTMLCanvasElement; data: ImageData } | null> {
-  const img = await decode(url);
-  if (!img) {
-    return null;
-  }
-  try {
-    const canvas = document.createElement("canvas");
-    canvas.width = img.naturalWidth;
-    canvas.height = img.naturalHeight;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) {
-      return null;
-    }
-    ctx.drawImage(img, 0, 0);
-    return { canvas, data: ctx.getImageData(0, 0, canvas.width, canvas.height) };
-  } catch (err) {
-    log.warn(`Could not load ${url}`, err);
-    return null;
-  }
-}
+/** Tinted images by texture, colour and alpha: the cursor and grid tile are the same for every theme colour. */
+const tinted = new Map<string, Promise<string | undefined>>();
+const MAX_TINTED = 64;
 
 /**
  * Multiplies a greyscale mask by a colour, as Brawl's TEV stage does for menu
  * frames. `alpha` scales the result's opacity.
  */
-async function tint(url: string, [r, g, b]: RGB, alpha = 1): Promise<string | undefined> {
-  const loaded = await loadPixels(url);
-  if (!loaded) {
+function tint(url: string, rgb: RGB, alpha = 1): Promise<string | undefined> {
+  const key = `${url}|${rgb.join(",")}|${alpha}`;
+  let image = tinted.get(key);
+  if (!image) {
+    image = tintUncached(url, rgb, alpha);
+    if (tinted.size >= MAX_TINTED) {
+      tinted.clear();
+    }
+    tinted.set(key, image);
+    const forget = () => tinted.get(key) === image && tinted.delete(key);
+    image.then((result) => result === undefined && forget()).catch(forget);
+  }
+  return image;
+}
+
+async function tintUncached(url: string, [r, g, b]: RGB, alpha: number): Promise<string | undefined> {
+  const source = await loadPixels(url);
+  if (!source) {
     return undefined;
   }
-  const { canvas, data } = loaded;
+  const data = new ImageData(new Uint8ClampedArray(source.data), source.width, source.height);
   const px = data.data;
   for (let i = 0; i < px.length; i += 4) {
     px[i] = (px[i] * r) / 255;
@@ -254,7 +261,15 @@ async function tint(url: string, [r, g, b]: RGB, alpha = 1): Promise<string | un
     px[i + 2] = (px[i + 2] * b) / 255;
     px[i + 3] = px[i + 3] * alpha;
   }
-  canvas.getContext("2d")!.putImageData(data, 0, 0);
+  const canvas = document.createElement("canvas");
+  canvas.width = data.width;
+  canvas.height = data.height;
+  // Not on the GPU: it is only encoded, and a GPU canvas reads back for that.
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  if (!ctx) {
+    return undefined;
+  }
+  ctx.putImageData(data, 0, 0);
   return canvas.toDataURL("image/png");
 }
 
@@ -272,11 +287,10 @@ const hoverTintOf = (c: RGB): RGB => toLuminance(c, Math.min(0.85, luminance(c) 
 
 /** Colours at the top, middle and bottom of the vertical gradient texture. */
 async function sampleGradient(url: string): Promise<{ top: RGB; middle: RGB; bottom: RGB } | null> {
-  const loaded = await loadPixels(url);
-  if (!loaded) {
+  const data = await loadPixels(url);
+  if (!data) {
     return null;
   }
-  const { data } = loaded;
   const at = (y: number): RGB => {
     const i = (Math.min(data.height - 1, Math.max(0, y)) * data.width + Math.floor(data.width / 2)) * 4;
     return [data.data[i], data.data[i + 1], data.data[i + 2]];

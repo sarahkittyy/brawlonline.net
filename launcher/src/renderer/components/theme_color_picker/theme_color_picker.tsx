@@ -16,7 +16,6 @@ import {
   colorAtWheelPosition,
   maxChroma,
   normalizeThemeColor,
-  oklchToRgb,
   THEME_LIGHTNESS,
   wheelPositionOf,
 } from "@/styles/theme_color";
@@ -29,10 +28,68 @@ import { closeThemeColorPicker, saveThemeColor, useThemeColorPickerOpen } from "
 const WHEEL_SIZE = 300;
 const HUE_STEP = 5;
 const RADIUS_STEP = 0.05;
+/** Fixed, with the moving colours in variables: an sx that changes on every move adds an emotion rule each time. */
+const BRIGHTNESS_SX = {
+  "& .MuiSlider-rail": { background: "var(--brightness-track)", opacity: 1, height: 8 },
+  "& .MuiSlider-thumb": { background: "var(--brightness-thumb)", border: "2px solid #fff" },
+};
+
+/** Each pixel's place on the wheel, worked out once (the brightness slider redraws the wheel as it moves). */
+type WheelGeometry = { r: Float32Array; hue: Uint16Array; frac: Float32Array; cos: Float32Array; sin: Float32Array };
+let wheelGeometry: WheelGeometry | null = null;
+
+function geometryOf(size: number): WheelGeometry {
+  const n = size * size;
+  if (wheelGeometry?.r.length === n) {
+    return wheelGeometry;
+  }
+  const g: WheelGeometry = {
+    r: new Float32Array(n),
+    hue: new Uint16Array(n),
+    frac: new Float32Array(n),
+    cos: new Float32Array(n),
+    sin: new Float32Array(n),
+  };
+  const half = size / 2;
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const p = y * size + x;
+      const dx = x + 0.5 - half;
+      const dy = half - (y + 0.5);
+      const angle = Math.atan2(dy, dx);
+      const h = ((angle * 180) / Math.PI + 360) % 360;
+      g.r[p] = Math.min(1, Math.hypot(dx, dy) / half);
+      g.hue[p] = Math.floor(h) % 360;
+      g.frac[p] = h - Math.floor(h);
+      g.cos[p] = Math.cos(angle);
+      g.sin[p] = Math.sin(angle);
+    }
+  }
+  wheelGeometry = g;
+  return g;
+}
+
+/** Linear 0-1 to an 8-bit sRGB channel by table (a fifth of a level at most off the exact curve near black). */
+const SRGB_STEPS = 16384;
+let srgbTable: Uint8ClampedArray | null = null;
+
+function srgbEncoder(): (v: number) => number {
+  if (!srgbTable) {
+    srgbTable = new Uint8ClampedArray(SRGB_STEPS + 1);
+    for (let i = 0; i <= SRGB_STEPS; i++) {
+      const v = i / SRGB_STEPS;
+      srgbTable[i] = 255 * (v <= 0.0031308 ? 12.92 * v : 1.055 * v ** (1 / 2.4) - 0.055);
+    }
+  }
+  const table = srgbTable;
+  return (v) => table[((v < 0 ? 0 : v > 1 ? 1 : v) * SRGB_STEPS + 0.5) | 0];
+}
 
 /**
  * Draws the wheel at a lightness: hue around the circle (OKLCH hue, counter-clockwise from the right), the
  * hue's most sRGB chroma at the rim and grey at the centre, so every point is a colour the theme can use.
+ * oklchToRgb inlined over typed arrays and an sRGB table, the chroma capped at the most for the pixel's hue (interpolated between
+ * whole degrees) instead of searched per pixel: about 6x faster, within a few levels of it at the rim.
  */
 function drawWheel(canvas: HTMLCanvasElement, l: number) {
   const ctx = canvas.getContext("2d");
@@ -40,23 +97,30 @@ function drawWheel(canvas: HTMLCanvasElement, l: number) {
     return;
   }
   const size = canvas.width;
-  const max = Array.from({ length: 360 }, (_, h) => maxChroma(l, h));
+  const g = geometryOf(size);
+  const encode = srgbEncoder();
+  const max = new Float32Array(361);
+  for (let h = 0; h < 360; h++) {
+    max[h] = maxChroma(l, h);
+  }
+  max[360] = max[0];
   const image = ctx.createImageData(size, size);
   const px = image.data;
-  const half = size / 2;
-  for (let y = 0; y < size; y++) {
-    for (let x = 0; x < size; x++) {
-      const dx = x + 0.5 - half;
-      const dy = half - (y + 0.5);
-      const r = Math.min(1, Math.hypot(dx, dy) / half);
-      const h = ((Math.atan2(dy, dx) * 180) / Math.PI + 360) % 360;
-      const [cr, cg, cb] = oklchToRgb({ l, c: r * max[Math.floor(h) % 360], h });
-      const i = (y * size + x) * 4;
-      px[i] = cr;
-      px[i + 1] = cg;
-      px[i + 2] = cb;
-      px[i + 3] = 255;
-    }
+  for (let p = 0; p < size * size; p++) {
+    const h = g.hue[p];
+    const cap = max[h] + (max[h + 1] - max[h]) * g.frac[p];
+    const c = Math.min(g.r[p] * max[h], cap);
+    const a = c * g.cos[p];
+    const b = c * g.sin[p];
+    // OKLab to linear sRGB, as theme_color.ts oklchToLinear.
+    const l_ = (l + 0.3963377774 * a + 0.2158037573 * b) ** 3;
+    const m_ = (l - 0.1055613458 * a - 0.0638541728 * b) ** 3;
+    const s_ = (l - 0.0894841775 * a - 1.291485548 * b) ** 3;
+    const i = p * 4;
+    px[i] = encode(4.0767416621 * l_ - 3.3077115913 * m_ + 0.2309699292 * s_);
+    px[i + 1] = encode(-1.2684380046 * l_ + 2.6097574011 * m_ - 0.3413193965 * s_);
+    px[i + 2] = encode(-0.0041960863 * l_ - 0.7034186147 * m_ + 1.707614701 * s_);
+    px[i + 3] = 255;
   }
   ctx.putImageData(image, 0, 0);
 }
@@ -111,10 +175,10 @@ const ThemeColorPickerPanel = () => {
   const wheelRef = React.useRef<HTMLDivElement>(null);
   const dragging = React.useRef(false);
 
+  // Once a frame at most: the slider can move several times a frame.
   React.useEffect(() => {
-    if (canvasRef.current) {
-      drawWheel(canvasRef.current, position.l);
-    }
+    const draw = requestAnimationFrame(() => canvasRef.current && drawWheel(canvasRef.current, position.l));
+    return () => cancelAnimationFrame(draw);
   }, [position.l]);
 
   // The launcher re-themes at most once a frame while the wheel is dragged.
@@ -238,10 +302,8 @@ const ThemeColorPickerPanel = () => {
             step={0.005}
             track={false}
             onChange={(_, v) => pick({ ...position, l: v as number })}
-            sx={{
-              "& .MuiSlider-rail": { background: brightnessTrack, opacity: 1, height: 8 },
-              "& .MuiSlider-thumb": { background: color, border: "2px solid #fff" },
-            }}
+            style={{ "--brightness-track": brightnessTrack, "--brightness-thumb": color } as React.CSSProperties}
+            sx={BRIGHTNESS_SX}
           />
           <BrightnessHighRoundedIcon fontSize="small" />
         </div>

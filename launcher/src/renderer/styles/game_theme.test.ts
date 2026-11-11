@@ -72,8 +72,9 @@ describe("game theme frames", () => {
     const contained = theme.components?.MuiButton?.styleOverrides?.contained as Record<string, any>;
     expect(contained.borderWidth).toBe("8px 8px 8px 8px");
     expect(contained.borderImageWidth).toBe("8px 8px 8px 8px");
+    expect(contained.borderImageSource).toBe('var(--theme-button-source, url("data:button"))');
     expect(contained["&:hover"]).toEqual({
-      borderImageSource: 'url("data:buttonHover")',
+      borderImageSource: 'var(--theme-buttonHover-source, url("data:buttonHover"))',
       backgroundColor: "transparent",
       boxShadow: "none",
     });
