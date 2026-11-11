@@ -59,14 +59,18 @@ struct PlayerInfo
   bool is_bot = false;
   std::string ip_address;      // external ip:port the mm server saw
   std::string ip_address_lan;  // the LAN ip:port the player reported
+  // "[ip]:port" where mm saw the player's IPv6 probe come from (Online/Ipv6.h); empty without.
+  std::string ip_address6;
   std::vector<std::string> chat_messages;
 };
 
 struct Endpoint
 {
-  std::string ip;
+  std::string ip;  // an IPv4 address, or an IPv6 one (no brackets)
   u16 port = 0;
+  // "ip:port", "[ip]:port" for IPv6.
   std::string ToString() const;
+  bool IsIpv6() const { return ip.find(':') != std::string::npos; }
 };
 
 // One finished matchmaking: the get-ticket-resp plus what the P2P connect found.
@@ -104,7 +108,15 @@ struct Match
   // with Slippi's rule (LAN address when both share an external IP) ...
   std::vector<Endpoint> remotes;
   // ... and the address the ENet connection actually came up with (the peer's source address).
+  // An IPv6 one (Endpoint::IsIpv6) only when IPv4 did not connect to that player.
   std::vector<Endpoint> connected;
+  // IPv6 (Online/Ipv6.h), one per remote player as `remotes`: its IPv6 address when both it and
+  // this player have one (ip empty otherwise), tried beside IPv4. The session may switch a
+  // player's packets to it if the IPv4 path goes quiet, and back.
+  std::vector<Endpoint> remotes6;
+  // This player's IPv6 address the remotes6 are reached from (empty: no IPv6 in this match), on
+  // local_port.
+  std::string local_ip6;
   u64 connect_ms = 0;  // time the P2P connect took
   // The players' ports (1-4) the P2P connect timed out on (set with the failure; a room tells the
   // room's server, which names the pair to every member).
@@ -137,7 +149,9 @@ public:
   using HostPtr = std::unique_ptr<_ENetHost, HostDeleter>;
 
   P2PLink() = default;
-  P2PLink(HostPtr host, std::vector<_ENetPeer*> peers);
+  // `host6`, `peers6`: the IPv6 host of the connect (Online/Ipv6.h) and its connections, if any.
+  P2PLink(HostPtr host, std::vector<_ENetPeer*> peers, HostPtr host6 = {},
+          std::vector<_ENetPeer*> peers6 = {});
   ~P2PLink();
   P2PLink(P2PLink&&) noexcept;
   P2PLink& operator=(P2PLink&&) noexcept;
@@ -149,12 +163,14 @@ public:
   // For backends that keep using this ENet host (Slippi does: SlippiNetplayClient owns it).
   HostPtr TakeHost();
   // Disconnects the peers (waiting up to `linger_ms` for the disconnects to be acknowledged) and
-  // destroys the host, so the local port can be bound again.
+  // destroys the host, so the local port can be bound again. The IPv6 host too.
   void Release(u32 linger_ms = 1000);
 
 private:
   HostPtr m_host;
   std::vector<_ENetPeer*> m_peers;
+  HostPtr m_host6;
+  std::vector<_ENetPeer*> m_peers6;
 };
 
 struct SessionStatus
@@ -200,5 +216,7 @@ std::optional<std::string> Start(const Match& match, P2PLink link,
                                  const picojson::object& selections = {});
 void Stop();
 SessionStatus Status();
+// The registered backend's name ("" when none).
+std::string BackendName();
 }  // namespace Session
 }  // namespace Online

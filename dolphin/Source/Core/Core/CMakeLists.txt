@@ -592,6 +592,8 @@ add_library(core
   Online/ChatText.h
   Online/GameAlive.cpp
   Online/GameAlive.h
+  Online/Ipv6.cpp
+  Online/Ipv6.h
   Online/GameBridge.cpp
   Online/GameBridge.h
   Online/GameSetup.cpp
@@ -640,6 +642,8 @@ add_library(core
   Rollback/GameplayOnlineBackend.h
   Rollback/GameplaySession.cpp
   Rollback/GameplaySession.h
+  Rollback/UdpSocket6.cpp
+  Rollback/UdpSocket6.h
   Rollback/GprbCpuTrace.cpp
   Rollback/FullMemcpySaveSlot.h
   Rollback/IRollbackSaveSlot.h

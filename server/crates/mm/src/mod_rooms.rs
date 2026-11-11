@@ -79,6 +79,9 @@ struct Member {
     controller: Controller,
     endpoint: Option<SocketAddr>,
     lan: Option<SocketAddr>,
+    /// Where its session's IPv6 probe came from (`common::probe6`, sent with its token).
+    #[serde(default)]
+    endpoint6: Option<SocketAddr>,
     /// Not saved: a member put back gets a new one when their game joins again.
     #[serde(skip)]
     token: String,
@@ -134,6 +137,7 @@ impl Room {
                         controller: m.controller,
                         endpoint: m.endpoint.map(endpoint_of),
                         lan: m.lan.map(endpoint_of),
+                        endpoint6: m.endpoint6.map(endpoint_of),
                     }),
                 })
                 .collect(),
@@ -489,7 +493,7 @@ impl ModRoomBook {
         let token = new_token();
         self.tokens.insert(token.clone(), (code.to_string(), conn));
         self.join_seq += 1;
-        Member { conn, info: who.clone(), controller, endpoint: None, lan: None, token, joined: self.join_seq }
+        Member { conn, info: who.clone(), controller, endpoint: None, lan: None, endpoint6: None, token, joined: self.join_seq }
     }
 
     /// The host's room and slot, or an error to the sender.
@@ -550,6 +554,21 @@ impl ModRoomBook {
         member.endpoint = Some(addr);
         member.lan = lan;
         self.broadcast(&code, out);
+        true
+    }
+
+    /// An IPv6 probe (`common::probe6`) came with `token`: if it is a member's endpoint token,
+    /// records where it came from. False for any other token.
+    pub fn endpoint6(&mut self, token: &str, addr: std::net::SocketAddrV6, out: &mut Vec<Output>) -> bool {
+        let Some((code, conn)) = self.tokens.get(token).cloned() else { return false };
+        let Some(room) = self.rooms.get_mut(&code) else { return false };
+        let Some(idx) = room.slot_of(conn) else { return false };
+        let member = room.slots[idx].as_mut().expect("slot_of found it");
+        let addr = SocketAddr::V6(addr);
+        if member.endpoint6 != Some(addr) {
+            member.endpoint6 = Some(addr);
+            self.broadcast(&code, out);
+        }
         true
     }
 
@@ -835,6 +854,18 @@ mod tests {
         assert_eq!(s1["slots"][1]["player"]["lan"], json!({"host": "192.168.1.20", "port": 40004}));
         assert!(!s1.to_string().contains(&token2));
         assert!(!b.endpoint("nope", "198.51.100.7:1".parse().unwrap(), None, &mut vec![]));
+        // No IPv6 probe yet: no endpoint6 key at all.
+        assert!(s1["slots"][1]["player"].get("endpoint6").is_none());
+        // Its IPv6 probe (with the same token) adds the IPv6 endpoint for everyone, once.
+        let mut out = vec![];
+        assert!(b.endpoint6(&token2, "[2600:1700::7]:40004".parse().unwrap(), &mut out));
+        let s1 = last_state(&out, 1);
+        assert_eq!(s1["slots"][1]["player"]["endpoint6"], json!({"host": "2600:1700::7", "port": 40004}));
+        assert_eq!(s1["slots"][1]["player"]["endpoint"], json!({"host": "198.51.100.7", "port": 40004}));
+        let mut again = vec![];
+        assert!(b.endpoint6(&token2, "[2600:1700::7]:40004".parse().unwrap(), &mut again));
+        assert!(again.is_empty(), "the same address again changes nothing");
+        assert!(!b.endpoint6("nope-nope-nope", "[2600:1700::7]:1".parse().unwrap(), &mut vec![]));
     }
 
     #[test]

@@ -39,6 +39,8 @@ const Info<int> ONLINE_NETPLAY_PORT{{System::Main, "Online", "NetplayPort"}, 262
 const Info<bool> ONLINE_FORCE_LAN_IP{{System::Main, "Online", "ForceLanIP"}, false};
 const Info<std::string> ONLINE_LAN_IP{{System::Main, "Online", "LanIP"}, ""};
 const Info<bool> ONLINE_UPNP{{System::Main, "Online", "UPnP"}, true};
+const Info<bool> ONLINE_IPV6{{System::Main, "Online", "IPv6"}, true};
+const Info<std::string> ONLINE_MM_HOST6{{System::Main, "Online", "MatchmakingHost6"}, ""};
 
 // "gameplay": the gameplay-only (Slippi-style) session; "netplay": the whole-machine netplay
 // session (synchronized reboot), kept as a fallback.
@@ -68,6 +70,24 @@ std::string GetMatchmakingHost()
 int GetMatchmakingPort()
 {
   return Get(ONLINE_MM_PORT);
+}
+
+std::string GetMatchmakingHost6()
+{
+  if (!Get(ONLINE_IPV6))
+    return {};
+  const std::string set = Get(ONLINE_MM_HOST6);
+  if (!set.empty())
+    return set;
+  if (Get(ONLINE_USE_DEV_SERVER))
+    return "::1";
+  const std::string host = Get(ONLINE_MM_HOST);
+  if (host == "mm.brawlonline.net")
+    return "mm6.brawlonline.net";
+  // An IPv4 address has no IPv6 one (a LAN server: staging).
+  if (ParseIpv4(host))
+    return {};
+  return host;
 }
 
 std::string GetAccountsUrl()

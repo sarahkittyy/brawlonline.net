@@ -20,6 +20,7 @@
 #include "Common/Logging/Log.h"
 #include "Core/Core.h"
 #include "Core/Config/OnlineSettings.h"
+#include "Core/Online/Ipv6.h"
 #include "Core/Online/OnlineClient.h"
 #include "Core/Online/User.h"
 #include "Core/Rollback/MachineSession.h"
@@ -50,6 +51,8 @@ struct Member
   u16 port = 0;
   std::string lan_host;
   u16 lan_port = 0;
+  std::string host6;  // its IPv6 endpoint (Online/Ipv6.h), if its session probed over IPv6
+  u16 port6 = 0;
 };
 
 struct View
@@ -228,6 +231,13 @@ std::optional<View> ParseState(const picojson::object& o)
     m.controller = Str(*po, "controller", 16);
     EndpointOf(*po, "endpoint", &m.host, &m.port);
     EndpointOf(*po, "lan", &m.lan_host, &m.lan_port);
+    // IPv6: only a usable IPv6 address (anything else is left out).
+    if (EndpointOf(*po, "endpoint6", &m.host6, &m.port6) &&
+        !Ipv6::ParseEndpoint(fmt::format("[{}]:{}", m.host6, m.port6)))
+    {
+      m.host6.clear();
+      m.port6 = 0;
+    }
     v.slots[slot - 1] = std::move(m);
   }
   if (!v.slots[v.you - 1])
@@ -576,6 +586,8 @@ bool OnServerMessage(const std::string& text)
     rm.port = m->port;
     rm.lan_host = m->lan_host;
     rm.lan_port = m->lan_port;
+    rm.host6 = m->host6;
+    rm.port6 = m->port6;
     members.push_back(std::move(rm));
     if (i == view->you - 1)
       probed = !m->host.empty();
@@ -908,6 +920,8 @@ picojson::object Status()
         so["code"] = picojson::value(m->code);
         so["controller"] = picojson::value(m->controller);
         so["endpoint"] = picojson::value(m->host.empty() ? "" : fmt::format("{}:{}", m->host, m->port));
+        so["endpoint6"] =
+            picojson::value(m->host6.empty() ? "" : fmt::format("[{}]:{}", m->host6, m->port6));
         so["lan"] = picojson::value(m->lan_host.empty() ? "" :
                                                           fmt::format("{}:{}", m->lan_host, m->lan_port));
       }

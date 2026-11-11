@@ -30,7 +30,7 @@ pub mod server;
 pub mod versions;
 
 pub use config::Config;
-pub use server::{start, MmHandle};
+pub use server::{start, start_with_ipv6, MmHandle};
 
 /// Everything `main` does.
 pub fn run(cfg: Config) -> anyhow::Result<()> {
@@ -43,7 +43,16 @@ pub fn run(cfg: Config) -> anyhow::Result<()> {
             .acquire_timeout(std::time::Duration::from_secs(3))
             .connect(&cfg.database_url),
     )?;
-    let handle = start(cfg.listen, cfg.status_addr()?, cfg.max_peers, engine_cfg, secret, pool, rt.handle().clone())?;
+    let handle = server::start_with_ipv6(
+        cfg.listen,
+        cfg.listen6,
+        cfg.status_addr()?,
+        cfg.max_peers,
+        engine_cfg,
+        secret,
+        pool,
+        rt.handle().clone(),
+    )?;
     // systemd's stop (every deploy restarts mm) or Ctrl+C: the rooms are saved for the next mm.
     let switch = handle.stop_switch();
     rt.spawn(async move {

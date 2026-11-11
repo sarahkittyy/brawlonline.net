@@ -23,6 +23,7 @@
 
 #include <atomic>
 #include <functional>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <random>
@@ -39,6 +40,10 @@
 namespace Online
 {
 class User;
+namespace Ipv6
+{
+class Probe;
+}
 
 class Matchmaking
 {
@@ -139,6 +144,8 @@ private:
   void StartMatchmaking();
   void HandleMatchmaking();
   void HandleConnecting();
+  // The search's IPv6 probe (Online/Ipv6.h), if this machine has IPv6 the internet can reach.
+  void StartIpv6();
 
   void SetError(ErrorSource source, std::string message);
   void SendMmMessage(const picojson::value& msg);
@@ -164,6 +171,12 @@ private:
   std::atomic<ErrorSource> m_error_source{ErrorSource::None};
 
   std::atomic<u16> m_host_port{0};
+  // IPv6 (Online/Ipv6.h, matchmaking thread only): the probe socket on this machine's IPv6
+  // address and m_host_port, open from the search's start to its P2P connect, and the probe's
+  // token (create-ticket's ipv6Token; empty: no IPv6 this search). When the probe was last sent.
+  std::unique_ptr<Ipv6::Probe> m_probe6;
+  std::string m_ipv6_token;
+  u64 m_probe6_sent_ms = 0;
   bool m_upnp_mapped = false;  // the router forwards m_host_port (matchmaking thread only)
   // The server saw us at another port than m_host_port: our router picks a port per
   // destination (matchmaking thread only; for the log of a failed connect).

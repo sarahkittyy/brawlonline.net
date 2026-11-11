@@ -26,11 +26,14 @@
 #include <SFML/Network/IpAddress.hpp>
 #include <SFML/Network/SocketSelector.hpp>
 #include <SFML/Network/UdpSocket.hpp>
+
+#include "Core/Rollback/UdpSocket6.h"
 #include <fmt/format.h>
 #include <fmt/ranges.h>
 #include "Core/Online/Timeouts.h"
 #include <xxhash.h>
 
+#include "Common/FileUtil.h"
 #include "Common/Hash.h"
 #include "Common/Logging/Log.h"
 #include "Common/StringUtil.h"
@@ -213,6 +216,16 @@ struct PeerView
   u16 port = 0;
   bool confirmed = false;
   bool exact = false;  // only ip:port may claim it (the 2-player joiner's host, as before)
+  // IPv6 (Rollback/UdpSocket6.h): its IPv6 address (a handle) and port when both players have
+  // one; only exactly that counts (there is no NAT on IPv6). `via6`: its packets go over IPv6
+  // (UpdatePaths). When a datagram last came from it over each, what its last path note ('K')
+  // said it hears from us, since when IPv4 works both ways, and how often its path switched.
+  std::optional<sf::IpAddress> ip6;
+  u16 port6 = 0;
+  bool via6 = false;
+  Clock::time_point rx4{}, rx6{}, path_note_at{}, good4_since{};
+  bool hears4 = false, hears6 = false;
+  u32 path_switches = 0;
   // It left the session (a "leave" message, silence, or GekkoNet dropped it). In a match of 3-4
   // players the others play on (it is gone from the agreed frame on); otherwise the session ends.
   bool left = false;
@@ -333,6 +346,8 @@ struct State
 
   // Network.
   std::unique_ptr<sf::UdpSocket> socket;
+  // IPv6 beside it (ConnectOptions::local_ip6), if this match has IPv6.
+  std::unique_ptr<UdpSocket6> socket6;
   // This player's in-game port, the deciding player's (-1: not known yet), and whether the
   // session was configured with ports (ConnectOptions::local_slot) rather than as a 1v1.
   int local_slot = 0;
@@ -1655,8 +1670,50 @@ int SlotOf(const sf::IpAddress& from, u16 from_port)
   ForEachPeer([&](int slot, const PeerView& p) {
     if (p.confirmed && p.ip && *p.ip == from && p.port == from_port)
       found = slot;
+    if (p.ip6 && *p.ip6 == from && p.port6 == from_port)
+      found = slot;
   });
   return found;
+}
+
+// Tests: every IPv4 datagram of the session is dropped, both ways, as a carrier NAT that stops
+// passing a pair's packets: PPR_GPRB_TEST_DROP_IPV4_AFTER_MS=<ms> from that long after the
+// session began, PPR_GPRB_TEST_DROP_IPV4_FILE=<path> while that file exists (looked at every
+// 100 ms).
+bool TestIpv4Dropped()
+{
+  static const long after = [] {
+    const char* v = std::getenv("PPR_GPRB_TEST_DROP_IPV4_AFTER_MS");
+    return v ? std::strtol(v, nullptr, 10) : -1L;
+  }();
+  static const char* file = std::getenv("PPR_GPRB_TEST_DROP_IPV4_FILE");
+  if (after >= 0 && Clock::now() - s.connecting_since >= std::chrono::milliseconds(after))
+    return true;
+  if (!file)
+    return false;
+  static std::atomic<s64> checked_ms{0};
+  static std::atomic<bool> exists{false};
+  const s64 now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                         Clock::now().time_since_epoch())
+                         .count();
+  if (now_ms - checked_ms.load() >= 100)
+  {
+    checked_ms = now_ms;
+    exists = File::Exists(file);
+  }
+  return exists.load();
+}
+
+// A datagram to `to:port` from the socket of its family.
+sf::Socket::Status SendTo(const void* data, std::size_t size, const sf::IpAddress& to, u16 port)
+{
+  if (IsIpv6Handle(to))
+    return s.socket6 ? s.socket6->Send(data, size, to, port) : sf::Socket::Status::Error;
+  if (!s.socket)
+    return sf::Socket::Status::Error;
+  if (TestIpv4Dropped())
+    return sf::Socket::Status::Done;
+  return s.socket->send(data, size, to, port);
 }
 
 // Datagrams sent to each player (GekkoNet's 'G' and 'B', the rest), those the socket did not
@@ -1674,9 +1731,11 @@ void SendRaw(int slot, const std::vector<u8>& data)
   if (!s.socket || slot < 0 || slot >= MAX_LOBBY_PLAYERS)
     return;
   const PeerView& p = s.peers[slot];
-  if (!p.expected || !p.ip || p.port == 0)
+  const bool six = p.via6 && p.ip6 && s.socket6;
+  if (!p.expected || (!six && (!p.ip || p.port == 0)))
     return;
-  const sf::Socket::Status st = s.socket->send(data.data(), data.size(), *p.ip, p.port);
+  const sf::Socket::Status st = six ? s.socket6->Send(data.data(), data.size(), *p.ip6, p.port6) :
+                                      SendTo(data.data(), data.size(), *p.ip, p.port);
   TxCounts& tx = s_tx[slot];
   ++(!data.empty() && (data[0] == 'G' || data[0] == 'B') ? tx.gekko : tx.other);
   if (st != sf::Socket::Status::Done)
@@ -3369,7 +3428,7 @@ void HandleControl(std::string_view text, const sf::IpAddress& from, u16 from_po
   }
   if (first)
   {
-    INFO_LOG_FMT(BRAWLBACK, "gprb: peer {}:{} ({}, P{}) heard", from.toString(), from_port, p.name,
+    INFO_LOG_FMT(BRAWLBACK, "gprb: peer {} ({}, P{}) heard", EndpointText(from, from_port), p.name,
                  slot + 1);
   }
   if (s.phase == Phase::Connecting)
@@ -3389,12 +3448,69 @@ void HandleControl(std::string_view text, const sf::IpAddress& from, u16 from_po
   MaybeDecideSetup();
 }
 
+// IPv6 beside IPv4 (Rollback/UdpSocket6.h). A player with both is sent to over one at a time:
+// IPv4 whenever it works both ways, IPv6 while it does not. Every PATH_NOTE_EVERY each side sends
+// a 'K' note over both ("I hear your IPv4 / your IPv6"), so each knows which of its paths reach
+// the other and both pick the same. IPv4 counts as working both ways when something came over it
+// within PATH_QUIET and the player's last note (within PATH_QUIET) says it hears ours; IPv4
+// going quiet moves the player's packets to IPv6 if IPv6 works so, and IPv4 working again for
+// PATH_BACK (doubled for every switch, at most PATH_BACK_MAX) moves them back. A carrier NAT that
+// stops passing the pair's IPv4 mid-match costs a second of waiting instead of the match.
+// Players without IPv6 get no notes, and nothing changes for them.
+constexpr auto PATH_NOTE_EVERY = std::chrono::milliseconds(250);
+constexpr auto PATH_QUIET = std::chrono::milliseconds(1000);
+constexpr auto PATH_BACK = std::chrono::milliseconds(3000);
+constexpr auto PATH_BACK_MAX = std::chrono::seconds(60);
+
+// Under s.mutex.
+void UpdatePaths(Clock::time_point now)
+{
+  ForEachPeer([&](int slot, PeerView& p) {
+    if (!p.ip6 || p.left)
+      return;
+    const bool in4 = p.rx4 != Clock::time_point{} && now - p.rx4 < PATH_QUIET;
+    const bool in6 = p.rx6 != Clock::time_point{} && now - p.rx6 < PATH_QUIET;
+    const bool noted = p.path_note_at != Clock::time_point{} && now - p.path_note_at < PATH_QUIET;
+    const bool good4 = in4 && noted && p.hears4;
+    const bool good6 = in6 && noted && p.hears6;
+    if (!good4)
+      p.good4_since = {};
+    else if (p.good4_since == Clock::time_point{})
+      p.good4_since = now;
+    const auto back = std::min<Clock::duration>(
+        PATH_BACK * (1u << std::min<u32>(p.path_switches / 2, 5)), PATH_BACK_MAX);
+    if (!p.via6 && !good4 && good6)
+    {
+      p.via6 = true;
+      ++p.path_switches;
+      WARN_LOG_FMT(BRAWLBACK, "gprb: IPv4 to P{} ({}) went quiet; its packets go over IPv6 ({})",
+                   slot + 1, p.ip ? EndpointText(*p.ip, p.port) : std::string("?"),
+                   EndpointText(*p.ip6, p.port6));
+    }
+    else if (p.via6 && good4 && now - p.good4_since >= back)
+    {
+      p.via6 = false;
+      ++p.path_switches;
+      INFO_LOG_FMT(BRAWLBACK, "gprb: IPv4 to P{} ({}) works both ways again; its packets go over "
+                              "IPv4",
+                   slot + 1, p.ip ? EndpointText(*p.ip, p.port) : std::string("?"));
+    }
+    const u8 note[2] = {'K', static_cast<u8>((in4 ? 1 : 0) | (in6 ? 2 : 0))};
+    if (p.ip && p.port != 0)
+      (void)SendTo(note, sizeof(note), *p.ip, p.port);
+    (void)s.socket6->Send(note, sizeof(note), *p.ip6, p.port6);
+  });
+}
+
 void NetThread()
 {
   Common::SetCurrentThreadName("GPRB net");
   sf::SocketSelector selector;
   selector.add(*s.socket);
+  if (s.socket6)
+    selector.add(*s.socket6);
   std::vector<u8> buf(64 * 1024);
+  auto last_path_note = Clock::now();
   auto last_state = Clock::now() - std::chrono::seconds(1);
   // Round trip: we time our state packets by sequence and the peer's echo of the newest
   // "ms" it saw; simpler: ping/pong control messages.
@@ -3403,18 +3519,28 @@ void NetThread()
   {
     if (selector.wait(sf::milliseconds(5)))
     {
+      // IPv4's datagrams, then IPv6's (Rollback/UdpSocket6.h).
+      bool six = false;
       while (true)
       {
         std::size_t received = 0;
         std::optional<sf::IpAddress> from;
         unsigned short from_port = 0;
-        if (s.socket->receive(buf.data(), buf.size(), received, from, from_port) !=
+        if ((six ? s.socket6->Receive(buf.data(), buf.size(), received, from, from_port) :
+                   s.socket->receive(buf.data(), buf.size(), received, from, from_port)) !=
                 sf::Socket::Status::Done ||
             !from)
         {
+          if (!six && s.socket6)
+          {
+            six = true;
+            continue;
+          }
           break;
         }
         if (received == 0)
+          continue;
+        if (!six && TestIpv4Dropped())
           continue;
         // Only control packets may come from an address that is not a peer's yet
         // (HandleControl decides); everything else must come from a peer.
@@ -3428,6 +3554,7 @@ void NetThread()
           {
             PeerView& from_peer = s.peers[slot];
             from_peer.last_packet = Clock::now();
+            (six ? from_peer.rx6 : from_peer.rx4) = from_peer.last_packet;
             ++(buf[0] == 'G' || buf[0] == 'B' ? from_peer.rx_gekko : from_peer.rx_other);
           }
           if (slot < 0 && buf[0] != 'C' && buf[0] != 'F')
@@ -3492,7 +3619,16 @@ void NetThread()
         {
           // ping: answer with the same payload
           buf[0] = 'Q';
-          (void)s.socket->send(buf.data(), received, *from, from_port);
+          (void)SendTo(buf.data(), received, *from, from_port);
+        }
+        else if (buf[0] == 'K' && received == 2 && known)
+        {
+          // Its path note (UpdatePaths): which of our paths it hears.
+          std::lock_guard<std::recursive_timed_mutex> lk(s.mutex);
+          PeerView& p = s.peers[slot];
+          p.path_note_at = Clock::now();
+          p.hears4 = (buf[1] & 1) != 0;
+          p.hears6 = (buf[1] & 2) != 0;
         }
         else if (buf[0] == 'Q' && received == 9 && known)
         {
@@ -3611,6 +3747,12 @@ void NetThread()
       std::lock_guard<std::recursive_timed_mutex> lk(s.mutex);
       SendToAll(ping);
     }
+    if (s.socket6 && now - last_path_note >= PATH_NOTE_EVERY)
+    {
+      last_path_note = now;
+      std::lock_guard<std::recursive_timed_mutex> lk(s.mutex);
+      UpdatePaths(now);
+    }
   }
 }
 
@@ -3625,6 +3767,7 @@ void CloseNetwork()
     if (s.socket)
       s.socket->unbind();
     s.socket.reset();
+    s.socket6.reset();
   }
   std::lock_guard lk(s.gekko_rx_mutex);
   s.gekko_rx.clear();
@@ -7950,7 +8093,7 @@ std::optional<std::string> Connect(const ConnectOptions& options)
       // both sides: it keeps the NAT mapping toward the joiner open.
       if (!options.remote_host.empty() && options.remote_port != 0)
       {
-        if (const auto ip = sf::IpAddress::resolve(options.remote_host))
+        if (const auto ip = ResolvePeerAddress(options.remote_host))
         {
           p.ip = *ip;
           p.port = options.remote_port;
@@ -7959,7 +8102,7 @@ std::optional<std::string> Connect(const ConnectOptions& options)
     }
     else
     {
-      const auto ip = sf::IpAddress::resolve(options.remote_host);
+      const auto ip = ResolvePeerAddress(options.remote_host);
       if (!ip || options.remote_port == 0)
         return "joiner needs remote_host and remote_port";
       p.ip = *ip;
@@ -7967,6 +8110,15 @@ std::optional<std::string> Connect(const ConnectOptions& options)
       p.exact = true;
       p.confirmed = true;
       host_slot = 0;
+    }
+    if (!options.local_ip6.empty() && !options.remote_host6.empty() && options.remote_port6 != 0)
+    {
+      if (const auto ip6 = ResolvePeerAddress(options.remote_host6); ip6 && IsIpv6Handle(*ip6))
+      {
+        p.ip6 = *ip6;
+        p.port6 = options.remote_port6;
+        p.via6 = options.remote_via6;
+      }
     }
   }
   else
@@ -7988,11 +8140,20 @@ std::optional<std::string> Connect(const ConnectOptions& options)
       p.expected = true;
       if (!c.host.empty())
       {
-        const auto ip = sf::IpAddress::resolve(c.host);
+        const auto ip = ResolvePeerAddress(c.host);
         if (!ip)
           return fmt::format("cannot resolve P{}'s address {}", c.slot + 1, c.host);
         p.ip = *ip;
         p.port = c.port;
+      }
+      if (!options.local_ip6.empty() && !c.host6.empty() && c.port6 != 0)
+      {
+        if (const auto ip6 = ResolvePeerAddress(c.host6); ip6 && IsIpv6Handle(*ip6))
+        {
+          p.ip6 = *ip6;
+          p.port6 = c.port6;
+          p.via6 = c.via6;
+        }
       }
     }
     if (!options.host && options.host_slot >= 0)
@@ -8072,6 +8233,37 @@ std::optional<std::string> Connect(const ConnectOptions& options)
   {
     s.socket.reset();
     return fmt::format("cannot bind UDP port {}", options.local_port);
+  }
+  s.socket6.reset();
+  bool any6 = false;
+  ForEachPeer([&](int, const PeerView& p) { any6 |= p.ip6.has_value(); });
+  if (any6)
+  {
+    auto six = std::make_unique<UdpSocket6>();
+    if (six->Bind(options.local_ip6, options.local_port))
+    {
+      s.socket6 = std::move(six);
+      INFO_LOG_FMT(BRAWLBACK, "gprb: IPv6 on [{}]:{} beside IPv4", options.local_ip6,
+                   options.local_port);
+    }
+    else
+    {
+      WARN_LOG_FMT(BRAWLBACK, "gprb: cannot bind IPv6 [{}]:{}; IPv4 only", options.local_ip6,
+                   options.local_port);
+    }
+    ForEachPeer([&](int slot, PeerView& p) {
+      if (!s.socket6)
+      {
+        p.ip6.reset();
+        p.via6 = false;
+      }
+      else if (p.ip6)
+      {
+        INFO_LOG_FMT(BRAWLBACK, "gprb: P{} at {} and {}; its packets go over {}", slot + 1,
+                     p.ip ? EndpointText(*p.ip, p.port) : std::string("?"),
+                     EndpointText(*p.ip6, p.port6), p.via6 ? "IPv6" : "IPv4");
+      }
+    });
   }
   if (options.host)
   {
@@ -9129,8 +9321,10 @@ picojson::value Status()
       p["left"] = picojson::value(q.left);
       p["left_reason"] = picojson::value(q.left_reason);
       p["confirmed"] = picojson::value(q.confirmed);
-      p["address"] = picojson::value(q.ip ? fmt::format("{}:{}", q.ip->toString(), q.port) :
-                                            std::string());
+      p["address"] = picojson::value(q.ip ? EndpointText(*q.ip, q.port) : std::string());
+      p["address6"] = picojson::value(q.ip6 ? EndpointText(*q.ip6, q.port6) : std::string());
+      p["path"] = picojson::value(q.via6 && q.ip6 ? "ipv6" : "ipv4");
+      p["path_switches"] = picojson::value(static_cast<double>(q.path_switches));
       p["handle"] = picojson::value(static_cast<double>(q.handle));
       p["gekko_dropped"] = picojson::value(q.gekko_dropped);
       p["gone_frame"] = picojson::value(static_cast<double>(q.gone_frame));
@@ -9185,6 +9379,7 @@ picojson::value Status()
     o["lobby"] = picojson::value(lobby);
     o["local_port"] = picojson::value(
         static_cast<double>(s.socket ? s.socket->getLocalPort() : 0));
+    o["ipv6"] = picojson::value(s.socket6 != nullptr);
   }
   return picojson::value(o);
 }

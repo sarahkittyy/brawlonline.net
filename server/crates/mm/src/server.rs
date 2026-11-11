@@ -15,13 +15,17 @@
 //! to accounts (`GET /live/{stream}`, `docs/spectate-protocol.md` §2): mm keeps the uploaded
 //! chunks ([`crate::live::LiveStore`]) and each spectator's stream reads them from there.
 //!
+//! With `MM_LISTEN6`, the loop also reads the games' IPv6 probes (`common::probe6`) from an IPv6
+//! socket of its own: each is noted ([`Input::Ipv6Probe`]) before it is answered, so a game that
+//! has its answer knows mm has its address.
+//!
 //! Stopped by a signal (`main`: every deploy restarts mm), the loop saves the rooms to the database
 //! on its way out, and the next mm puts them back before it takes any connection
 //! (`crate::rooms`, bug report #178).
 
 use std::collections::HashMap;
 use std::future::Future;
-use std::net::SocketAddr;
+use std::net::{SocketAddr, SocketAddrV6};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc as std_mpsc, Arc, RwLock};
 use std::thread::JoinHandle;
@@ -79,6 +83,8 @@ type RulesetListFetched = (ConnId, Result<Vec<common::rooms::RulesetEntry>, Stri
 /// A running mm server. Dropping it stops the loop.
 pub struct MmHandle {
     pub addr: SocketAddr,
+    /// Where the IPv6 probes are read (None without `MM_LISTEN6`).
+    pub addr6: Option<SocketAddr>,
     /// Where the status listener answers `GET /status` (None when it is off).
     pub status_addr: Option<SocketAddr>,
     stop: Arc<AtomicBool>,
@@ -154,6 +160,26 @@ pub fn start(
     pool: PgPool,
     rt: tokio::runtime::Handle,
 ) -> anyhow::Result<MmHandle> {
+    start_with_ipv6(listen, None, status_listen, max_peers, engine_cfg, secret, pool, rt)
+}
+
+/// [`start`] with the IPv6 probe listener on `listen6` (`MM_LISTEN6`).
+#[allow(clippy::too_many_arguments)]
+pub fn start_with_ipv6(
+    listen: SocketAddr,
+    listen6: Option<SocketAddr>,
+    status_listen: Option<SocketAddr>,
+    max_peers: usize,
+    engine_cfg: EngineConfig,
+    secret: PlayKeySecret,
+    pool: PgPool,
+    rt: tokio::runtime::Handle,
+) -> anyhow::Result<MmHandle> {
+    let probe6 = listen6.map(Probe6::bind).transpose()?;
+    let addr6 = probe6.as_ref().map(|p| p.socket.local_addr()).transpose()?;
+    if let Some(a) = addr6 {
+        tracing::info!("mm IPv6 probes on udp://{a}");
+    }
     let socket = EnetSocket::bind(listen)?;
     let addr = socket.local_addr()?;
     let host = Host::new(
@@ -210,10 +236,10 @@ pub fn start(
             restored: restored_rx,
             saved_rooms: rooms_rx,
         };
-        event_loop(host, engine, db, inputs, stop2, keep_rooms2, status)
+        event_loop(host, probe6, engine, db, inputs, stop2, keep_rooms2, status)
     })?;
     tracing::info!("mm listening on udp://{addr}");
-    Ok(MmHandle { addr, status_addr, stop, keep_rooms, thread: Some(thread), status_task })
+    Ok(MmHandle { addr, addr6, status_addr, stop, keep_rooms, thread: Some(thread), status_task })
 }
 
 /// `GET /status`: the latest snapshot as JSON ([`MmStatus`]). `GET /live/{stream}`: a live
@@ -777,8 +803,10 @@ struct LoopInputs {
     saved_rooms: std_mpsc::Receiver<Option<serde_json::Value>>,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn event_loop(
     host: Host<EnetSocket>,
+    mut probe6: Option<Probe6>,
     mut engine: Engine,
     db: Db,
     inputs: LoopInputs,
@@ -828,6 +856,13 @@ fn event_loop(
                     tracing::warn!("socket error: {e}");
                     break;
                 }
+            }
+        }
+        if let Some(p) = probe6.as_mut() {
+            for (token, addr) in p.read(Instant::now()) {
+                busy = true;
+                lp.feed(Input::Ipv6Probe { token, addr });
+                p.answer(addr);
             }
         }
         while let Ok((conn, seq, result)) = done.try_recv() {
@@ -915,9 +950,119 @@ fn event_loop(
     tracing::info!("mm stopped");
 }
 
+/// The IPv6 probe listener (`MM_LISTEN6`, `common::probe6`): a plain IPv6-only UDP socket.
+struct Probe6 {
+    socket: std::net::UdpSocket,
+    /// Probes from ::1 count (a listener on ::1: tests); anywhere else only global addresses.
+    loopback: bool,
+    /// Probes per /64 in the current window (when it began): at most [`PROBE6_PER_WINDOW`].
+    counts: HashMap<u64, (u32, Instant)>,
+}
+
+const PROBE6_PER_WINDOW: u32 = 30;
+const PROBE6_WINDOW: Duration = Duration::from_secs(10);
+/// Datagrams read per loop turn, so a flood cannot starve the ENet host.
+const PROBE6_READS: usize = 256;
+
+impl Probe6 {
+    fn bind(addr: SocketAddr) -> anyhow::Result<Self> {
+        use socket2::{Domain, Protocol, Socket, Type};
+        anyhow::ensure!(addr.is_ipv6(), "MM_LISTEN6 must be an IPv6 address ({addr})");
+        let s = Socket::new(Domain::IPV6, Type::DGRAM, Some(Protocol::UDP))?;
+        // IPv6 only: MM_LISTEN keeps IPv4 (the same port number is free for both).
+        s.set_only_v6(true)?;
+        s.set_nonblocking(true)?;
+        s.bind(&addr.into())?;
+        let loopback = addr.ip().is_loopback();
+        Ok(Probe6 { socket: s.into(), loopback, counts: HashMap::new() })
+    }
+
+    /// The valid probes waiting: their tokens and where they came from.
+    fn read(&mut self, now: Instant) -> Vec<(String, SocketAddrV6)> {
+        let mut got = Vec::new();
+        let mut buf = [0u8; 512];
+        for _ in 0..PROBE6_READS {
+            let (n, from) = match self.socket.recv_from(&mut buf) {
+                Ok(r) => r,
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+                // ICMP errors for an earlier answer, oversized datagrams: the next one.
+                Err(_) => continue,
+            };
+            let SocketAddr::V6(from) = from else { continue };
+            if !common::probe6::reachable(from.ip(), self.loopback) {
+                continue;
+            }
+            let Some(token) = common::probe6::parse_request(&buf[..n]) else { continue };
+            if !self.allow(from, now) {
+                continue;
+            }
+            got.push((token.to_string(), SocketAddrV6::new(*from.ip(), from.port(), 0, 0)));
+        }
+        got
+    }
+
+    fn allow(&mut self, from: SocketAddrV6, now: Instant) -> bool {
+        if self.counts.len() > 10_000 {
+            self.counts.retain(|_, (_, since)| now.duration_since(*since) < PROBE6_WINDOW);
+        }
+        let net = (u128::from(*from.ip()) >> 64) as u64;
+        let e = self.counts.entry(net).or_insert((0, now));
+        if now.duration_since(e.1) >= PROBE6_WINDOW {
+            *e = (0, now);
+        }
+        e.0 += 1;
+        e.0 <= PROBE6_PER_WINDOW
+    }
+
+    fn answer(&self, to: SocketAddrV6) {
+        let _ = self.socket.send_to(&common::probe6::reply(to), to);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ipv6_probes_are_read_and_answered() {
+        let Ok(mut p) = Probe6::bind("[::1]:0".parse().unwrap()) else {
+            eprintln!("no IPv6 here: skipped");
+            return;
+        };
+        let to = p.socket.local_addr().unwrap();
+        // An IPv4 socket on the same port number: the IPv6 one is IPv6 only.
+        let v4 = std::net::UdpSocket::bind(("0.0.0.0", to.port()));
+        assert!(v4.is_ok(), "MM_LISTEN6 took the IPv4 port too: {v4:?}");
+        let c = std::net::UdpSocket::bind("[::1]:0").unwrap();
+        c.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+        c.send_to(&common::probe6::request("tokenAAAA0001"), to).unwrap();
+        c.send_to(b"junk", to).unwrap();
+        c.send_to(&common::probe6::request("bad token!"), to).unwrap();
+        let mut got = Vec::new();
+        let until = Instant::now() + Duration::from_secs(2);
+        while got.is_empty() && Instant::now() < until {
+            got = p.read(Instant::now());
+        }
+        let SocketAddr::V6(me) = c.local_addr().unwrap() else { unreachable!() };
+        assert_eq!(got, vec![("tokenAAAA0001".to_string(), me)]);
+        p.answer(got[0].1);
+        let mut buf = [0u8; 64];
+        let (n, from) = c.recv_from(&mut buf).unwrap();
+        assert_eq!(from, to);
+        assert_eq!(common::probe6::parse_reply(&buf[..n]), Some(me));
+        // A flood from one /64 is cut off after PROBE6_PER_WINDOW.
+        for _ in 0..PROBE6_PER_WINDOW + 10 {
+            c.send_to(&common::probe6::request("tokenAAAA0001"), to).unwrap();
+        }
+        std::thread::sleep(Duration::from_millis(200));
+        let n = p.read(Instant::now()).len();
+        assert!(n < PROBE6_PER_WINDOW as usize, "{n} probes taken");
+    }
+
+    #[test]
+    fn listen6_must_be_ipv6() {
+        assert!(Probe6::bind("127.0.0.1:0".parse().unwrap()).is_err());
+    }
     use std::sync::atomic::AtomicUsize;
 
     fn job(conn: ConnId) -> FetchJob {

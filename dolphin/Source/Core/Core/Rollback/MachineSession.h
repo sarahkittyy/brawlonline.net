@@ -192,6 +192,9 @@ struct RoomMember
   u16 port = 0;
   std::string lan_host;  // the LAN endpoint its session reported
   u16 lan_port = 0;
+  // Its IPv6 endpoint, as mm saw its session's IPv6 probe (Online/Ipv6.h; "" without one).
+  std::string host6;
+  u16 port6 = 0;
 };
 
 // Parses options from JSON ({"slot":0,"port":5000,"delay":2,"peers":[{"slot":1,"host":"..",

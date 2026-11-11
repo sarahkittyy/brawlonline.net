@@ -102,6 +102,10 @@ pub struct CreateTicket {
     pub platform: String,
     #[serde(default)]
     pub ip_address_lan: String,
+    /// The token of the game's IPv6 probes (`common::probe6`): mm tells the match's players the
+    /// IPv6 address they came from. None from games without IPv6 and builds before it.
+    #[serde(default, rename = "ipv6Token", skip_serializing_if = "Option::is_none")]
+    pub ipv6_token: Option<String>,
 }
 
 /// `create-ticket.user`. Brawlback's client sends only `uid` and `playKey`;
@@ -272,6 +276,10 @@ pub struct Player {
     pub ip_address: String,
     /// The `ipAddressLan` the client reported (may be empty).
     pub ip_address_lan: String,
+    /// `[ip]:port`: where the player's IPv6 probe came from (`common::probe6`), if it sent one.
+    /// The game tries it beside `ipAddress` and uses IPv4 whenever IPv4 connects.
+    #[serde(default, rename = "ipAddress6", skip_serializing_if = "Option::is_none")]
+    pub ip_address6: Option<String>,
     pub chat_messages: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rank: Option<Rank>,
@@ -497,6 +505,7 @@ mod tests {
                 is_local_player: true,
                 ip_address: "1.2.3.4:41000".into(),
                 ip_address_lan: "192.168.0.2:41000".into(),
+                ip_address6: None,
                 chat_messages: crate::DEFAULT_CHAT_MESSAGES.iter().map(|s| s.to_string()).collect(),
                 rank: None,
                 is_bot: false,

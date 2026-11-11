@@ -38,6 +38,11 @@ extern const Info<std::string> ONLINE_LAN_IP;
 // for every destination (Matchmaking::StartMatchmaking). Not with a matchmaking server on this
 // machine (the tests).
 extern const Info<bool> ONLINE_UPNP;
+// IPv6 beside IPv4 for P2P connections (Online/Ipv6.h): on by default; IPv4 is still tried first
+// and used whenever it connects. Off: nothing is sent over IPv6.
+extern const Info<bool> ONLINE_IPV6;
+// mm's IPv6 probe listener, a name or an IPv6 address. Empty (the default): GetMatchmakingHost6.
+extern const Info<std::string> ONLINE_MM_HOST6;
 
 // The session backend a connected match is handed to (Online::Session): "gameplay" (the
 // gameplay-only, Slippi-style session, the default), "netplay" (whole-machine rollback netplay
@@ -96,6 +101,11 @@ extern const Info<bool> ONLINE_SEEK_BAR_COLLAPSED;
 // The matchmaking host and port in effect (the dev override applied).
 std::string GetMatchmakingHost();
 int GetMatchmakingPort();
+// The name or address of mm's IPv6 listener (on GetMatchmakingPort): MatchmakingHost6 if set;
+// else ::1 with the dev server, mm6.brawlonline.net for our own server (a name of its own, so the
+// IPv4 name stays IPv4 only), and the IPv4 name otherwise (its AAAA record, if it has one). ""
+// with [Online] IPv6 off.
+std::string GetMatchmakingHost6();
 // The accounts base URL in effect, without a trailing slash.
 std::string GetAccountsUrl();
 

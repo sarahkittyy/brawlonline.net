@@ -114,7 +114,7 @@
 //! them with each other (they keep searching) until the window has passed.
 
 use std::collections::HashMap;
-use std::net::{IpAddr, SocketAddr};
+use std::net::{IpAddr, SocketAddr, SocketAddrV6};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -366,8 +366,20 @@ pub enum Input {
     /// Each connection's round trip as ENet has it (ms), every [`RTT_EVERY`]: a lag on a Ranked
     /// player's own connection is recorded ([`Output::RankedNetEvent`]).
     Rtt(Vec<(ConnId, u32)>),
+    /// An IPv6 probe (`common::probe6`) came from `addr` with `token` (the server loop checked
+    /// it): the game's IPv6 address, for the match its ticket gets or its Brawl Mods room.
+    Ipv6Probe {
+        token: String,
+        addr: SocketAddrV6,
+    },
     Tick,
 }
+
+/// How long an IPv6 probe's address is kept: a ticket waits at most `ticket_ttl` (600 s by
+/// default) for its match, and a Brawl Mods session probes again every 15 s.
+const IPV6_SEEN_TTL: Duration = Duration::from_secs(900);
+/// At most this many tokens at once (a probe for a new one is dropped while it is full).
+const IPV6_SEEN_MAX: usize = 50_000;
 
 /// How often the server loop sends [`Input::Rtt`].
 pub const RTT_EVERY: Duration = Duration::from_millis(500);
@@ -502,6 +514,8 @@ struct Pending {
     twos: Option<TwosSearch>,
     /// A Ranked ticket after a set that ended in its ping check: that opponent and that match.
     ranked_avoid: Option<(Uuid, Option<String>)>,
+    /// The ticket's `ipv6Token` (`common::probe6`), if valid.
+    ipv6_token: Option<String>,
 }
 
 /// What a 2v2 ticket says besides its mode (`search.connectCode`, `requeue`, `avoid`, `after`).
@@ -539,6 +553,9 @@ struct Waiting {
     party: Option<String>,
     /// 2v2: the search started again by itself after its group broke up (`queue_searches`).
     requeue: bool,
+    /// The game's IPv6 probe token, and the address it came from if it came by the ticket.
+    ipv6_token: Option<String>,
+    addr6: Option<SocketAddrV6>,
 }
 
 /// An online connection: a running, logged-in game (rooms, the online count).
@@ -704,6 +721,10 @@ pub struct Engine {
     cfg: EngineConfig,
     secret: PlayKeySecret,
     conns: HashMap<ConnId, Conn>,
+    /// Where each IPv6 probe token's probes came from, and when the last one did
+    /// ([`Input::Ipv6Probe`]); forgotten after [`IPV6_SEEN_TTL`].
+    ipv6_seen: HashMap<String, (SocketAddrV6, Instant)>,
+    ipv6_pruned: Option<Instant>,
     /// Direct tickets waiting, keyed by (own code, target code).
     direct: HashMap<(String, String), ConnId>,
     /// Unranked tickets waiting, oldest first.
@@ -851,6 +872,8 @@ impl Engine {
             cfg,
             secret,
             conns: HashMap::new(),
+            ipv6_seen: HashMap::new(),
+            ipv6_pruned: None,
             direct: HashMap::new(),
             unranked: Vec::new(),
             ranked: Vec::new(),
@@ -874,6 +897,36 @@ impl Engine {
             feed_read: None,
             geoip_read: None,
         }
+    }
+
+    /// The address a probe token's IPv6 probes came from, if any came.
+    fn addr6_of(&self, token: Option<&str>) -> Option<SocketAddrV6> {
+        self.ipv6_seen.get(token?).map(|(a, _)| *a)
+    }
+
+    fn on_ipv6_probe(&mut self, now: Instant, token: String, addr: SocketAddrV6, out: &mut Vec<Output>) {
+        if !common::probe6::valid_token(&token) {
+            return;
+        }
+        if !self.ipv6_seen.contains_key(&token) && self.ipv6_seen.len() >= IPV6_SEEN_MAX {
+            self.prune_ipv6(now, true);
+            if self.ipv6_seen.len() >= IPV6_SEEN_MAX {
+                tracing::warn!("IPv6 probe table full: a probe not noted");
+                return;
+            }
+        }
+        // A Brawl Mods member's session probes with its endpoint token.
+        self.mod_rooms.endpoint6(&token, addr, out);
+        self.ipv6_seen.insert(token, (addr, now));
+    }
+
+    /// Forgets tokens not probed for [`IPV6_SEEN_TTL`] (once a minute, or now if `force`).
+    fn prune_ipv6(&mut self, now: Instant, force: bool) {
+        if !force && self.ipv6_pruned.is_some_and(|t| now.duration_since(t) < Duration::from_secs(60)) {
+            return;
+        }
+        self.ipv6_pruned = Some(now);
+        self.ipv6_seen.retain(|_, (_, at)| now.duration_since(*at) < IPV6_SEEN_TTL);
     }
 
     fn refresh_geoip(&mut self, now: Instant) {
@@ -1066,7 +1119,11 @@ impl Engine {
                     );
                 }
             },
-            Input::Tick => self.on_tick(now, wall, &mut out),
+            Input::Ipv6Probe { token, addr } => self.on_ipv6_probe(now, token, addr, &mut out),
+            Input::Tick => {
+                self.prune_ipv6(now, false);
+                self.on_tick(now, wall, &mut out)
+            }
             Input::Rtt(samples) => self.on_rtt(now, wall, samples, &mut out),
         }
         self.sync_room_chat(&mut out);
@@ -1687,6 +1744,7 @@ impl Engine {
             pair_room: h.pair_room,
             twos: None,
             ranked_avoid: None,
+            ipv6_token: None,
         };
         if let Some(c) = self.conns.get_mut(&conn) {
             c.state = State::Validating(pending);
@@ -1801,6 +1859,7 @@ impl Engine {
             pair_room: false,
             twos,
             ranked_avoid,
+            ipv6_token: t.ipv6_token.filter(|k| common::probe6::valid_token(k)),
         };
         if let Some(c) = self.conns.get_mut(&conn) {
             c.state = State::Validating(pending);
@@ -1902,6 +1961,8 @@ impl Engine {
             loc,
             party: p.twos.as_ref().and_then(|t| t.party.clone()),
             requeue: p.twos.as_ref().is_some_and(|t| t.requeue),
+            addr6: self.ipv6_seen.get(p.ipv6_token.as_deref().unwrap_or_default()).map(|(a, _)| *a),
+            ipv6_token: p.ipv6_token.clone(),
         });
         self.fail_room_tickets(out);
         if let Some(t) = p.twos {
@@ -2030,7 +2091,8 @@ impl Engine {
             return self.refuse(out, conn, msg::NO_CONNECT_CODE);
         };
         let Some(addr) = self.conns.get(&conn).and_then(|c| to_v4(c.addr)) else { return };
-        let outcome = match self.rooms.pair_ticket(conn, addr, p.lan.clone(), user.uid, &party) {
+        let addr6 = self.addr6_of(p.ipv6_token.as_deref());
+        let outcome = match self.rooms.pair_ticket(conn, addr, addr6, p.lan.clone(), user.uid, &party) {
             Ok(o) => o,
             Err(e) => return self.refuse(out, conn, e),
         };
@@ -2048,6 +2110,8 @@ impl Engine {
                 loc: None,
                 party: None,
                 requeue: false,
+                ipv6_token: None,
+                addr6: None,
             });
         }
         if let Some(old) = outcome.replaced {
@@ -2072,7 +2136,8 @@ impl Engine {
         out: &mut Vec<Output>,
     ) {
         let Some(addr) = self.conns.get(&conn).and_then(|c| to_v4(c.addr)) else { return };
-        let outcome = match self.rooms.ticket(conn, addr, p.lan.clone(), user.uid, &room) {
+        let addr6 = self.addr6_of(p.ipv6_token.as_deref());
+        let outcome = match self.rooms.ticket(conn, addr, addr6, p.lan.clone(), user.uid, &room) {
             Ok(o) => o,
             Err(e) => return self.refuse(out, conn, e),
         };
@@ -2090,6 +2155,8 @@ impl Engine {
                 loc: None,
                 party: None,
                 requeue: false,
+                ipv6_token: None,
+                addr6: None,
             });
         }
         if let Some(old) = outcome.replaced {
@@ -2498,6 +2565,11 @@ impl Engine {
                 // Never empty: tickets without an IPv4 address are refused in on_create_ticket.
                 ip_address: to_v4(*addr).map(|a| a.to_string()).unwrap_or_default(),
                 ip_address_lan: w.lan.clone(),
+                // The probe may have come after the ticket: looked up again now.
+                ip_address6: w
+                    .addr6
+                    .or_else(|| self.addr6_of(w.ipv6_token.as_deref()))
+                    .map(common::probe6::endpoint_text),
                 chat_messages: common::DEFAULT_CHAT_MESSAGES.iter().map(|s| s.to_string()).collect(),
                 // Slippi sends each player's rank with a ranked match; the rating is all we have.
                 rank: (mode == Mode::Ranked).then(|| Rank {
@@ -2948,6 +3020,116 @@ mod tests {
         assert!(disconnected(&out, 1) && disconnected(&out, 2));
         assert!(out.iter().any(|o| matches!(o, Output::RecordMatch(m) if m.players.len() == 2)));
         assert_eq!(h.e.waiting_count(), 0);
+    }
+
+    fn ticket6(h: &mut Harness, conn: ConnId, u: &MmUser, target: &str, token: Option<&str>) -> Vec<Output> {
+        let mut v = h.ticket_json(u, target, 2);
+        if let Some(t) = token {
+            v["ipv6Token"] = json!(t);
+        }
+        h.raw(conn, v.to_string().as_bytes())
+    }
+
+    fn probe6(h: &mut Harness, token: &str, addr: &str) -> Vec<Output> {
+        h.input(Input::Ipv6Probe { token: token.into(), addr: addr.parse().unwrap() })
+    }
+
+    fn players_of(resp: &Value) -> Vec<Value> {
+        resp["players"].as_array().unwrap().clone()
+    }
+
+    #[test]
+    fn ipv6_probes_give_the_players_each_others_ipv6_address() {
+        let mut h = Harness::new(EngineConfig::default());
+        let (a, b) = (user("AAAA#1", "alice"), user("BB#22", "bob"));
+        h.add(&a);
+        h.add(&b);
+        h.connect(1, 41001);
+        h.connect(2, 41002);
+        probe6(&mut h, "tokenAAAA0001", "[2600:1700:1::a]:41001");
+        // Bob's probe comes after his ticket (but before the match): looked up at the match.
+        ticket6(&mut h, 1, &a, "bb#22", Some("tokenAAAA0001"));
+        probe6(&mut h, "tokenBBBB0002", "[2a01:4f8:2::b]:41002");
+        let out = ticket6(&mut h, 2, &b, "AAAA#1", Some("tokenBBBB0002"));
+        let ga = &sent(&out, 1)[0];
+        let gb = &sent(&out, 2)[1];
+        for g in [ga, gb] {
+            for p in players_of(g) {
+                let want = if p["connectCode"] == "AAAA#1" { "[2600:1700:1::a]:41001" } else { "[2a01:4f8:2::b]:41002" };
+                assert_eq!(p["ipAddress6"], want);
+                // IPv4 as ever, beside it.
+                assert!(p["ipAddress"].as_str().unwrap().starts_with("203.0.113."));
+            }
+        }
+    }
+
+    #[test]
+    fn players_without_an_ipv6_probe_get_no_ipv6_address() {
+        let mut h = Harness::new(EngineConfig::default());
+        let (a, b) = (user("AAAA#1", "alice"), user("BB#22", "bob"));
+        h.add(&a);
+        h.add(&b);
+        h.connect(1, 41001);
+        h.connect(2, 41002);
+        // Alice probed; Bob's game has no IPv6 (no token); a token nobody probed with names nothing.
+        probe6(&mut h, "tokenAAAA0001", "[2600:1700:1::a]:41001");
+        ticket6(&mut h, 1, &a, "bb#22", Some("tokenAAAA0001"));
+        let out = ticket6(&mut h, 2, &b, "AAAA#1", None);
+        let ga = &sent(&out, 1)[0];
+        for p in players_of(ga) {
+            if p["connectCode"] == "AAAA#1" {
+                assert_eq!(p["ipAddress6"], "[2600:1700:1::a]:41001");
+            } else {
+                assert!(p.get("ipAddress6").is_none(), "{p}");
+            }
+        }
+        // Neither probed: the get-ticket-resp is exactly as before (no ipAddress6 key at all).
+        let mut h = Harness::new(EngineConfig::default());
+        h.add(&a);
+        h.add(&b);
+        h.connect(1, 41001);
+        h.connect(2, 41002);
+        ticket6(&mut h, 1, &a, "bb#22", Some("neverProbed01"));
+        let out = ticket6(&mut h, 2, &b, "AAAA#1", None);
+        let text = out
+            .iter()
+            .find_map(|o| match o {
+                Output::Send { conn: 1, json } if json.contains("get-ticket-resp") => Some(json.clone()),
+                _ => None,
+            })
+            .unwrap();
+        assert!(!text.contains("ipAddress6"), "{text}");
+    }
+
+    #[test]
+    fn bad_ipv6_tokens_are_ignored() {
+        let mut h = Harness::new(EngineConfig::default());
+        let (a, b) = (user("AAAA#1", "alice"), user("BB#22", "bob"));
+        h.add(&a);
+        h.add(&b);
+        h.connect(1, 41001);
+        h.connect(2, 41002);
+        // A probe with an invalid token is not noted; a ticket with one is taken without it.
+        probe6(&mut h, "bad token!", "[2600:1700:1::a]:41001");
+        assert!(h.e.ipv6_seen.is_empty());
+        ticket6(&mut h, 1, &a, "bb#22", Some("bad token!"));
+        let out = ticket6(&mut h, 2, &b, "AAAA#1", Some("x"));
+        let ga = &sent(&out, 1)[0];
+        assert_eq!(ga["type"], "get-ticket-resp");
+        assert!(players_of(ga).iter().all(|p| p.get("ipAddress6").is_none()));
+    }
+
+    #[test]
+    fn ipv6_probes_are_forgotten_after_a_while() {
+        let mut h = Harness::new(EngineConfig::default());
+        probe6(&mut h, "tokenAAAA0001", "[2600:1700:1::a]:41001");
+        assert_eq!(h.e.addr6_of(Some("tokenAAAA0001")), Some("[2600:1700:1::a]:41001".parse().unwrap()));
+        h.advance(IPV6_SEEN_TTL + Duration::from_secs(61));
+        assert_eq!(h.e.addr6_of(Some("tokenAAAA0001")), None);
+        // A later probe moves it.
+        probe6(&mut h, "tokenAAAA0001", "[2600:1700:1::c]:41009");
+        probe6(&mut h, "tokenAAAA0001", "[2600:1700:1::d]:41010");
+        assert_eq!(h.e.addr6_of(Some("tokenAAAA0001")), Some("[2600:1700:1::d]:41010".parse().unwrap()));
     }
 
     #[test]

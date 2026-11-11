@@ -246,6 +246,7 @@ picojson::value PlayerJson(const PlayerInfo& p)
   o["is_bot"] = picojson::value(p.is_bot);
   o["ip_address"] = picojson::value(p.ip_address);
   o["ip_address_lan"] = picojson::value(p.ip_address_lan);
+  o["ip_address6"] = picojson::value(p.ip_address6);
   return picojson::value(o);
 }
 
@@ -253,7 +254,7 @@ picojson::value EndpointsJson(const std::vector<Endpoint>& eps)
 {
   picojson::array a;
   for (const auto& e : eps)
-    a.emplace_back(e.ToString());
+    a.emplace_back(e.ip.empty() ? std::string() : e.ToString());  // "": none (remotes6)
   return picojson::value(a);
 }
 }  // namespace
@@ -727,6 +728,8 @@ picojson::object MatchmakingStatus()
       m["rules"] = match->rules ? picojson::value(ToJson(*match->rules)) : picojson::value();
       m["remote_addresses"] = EndpointsJson(match->remotes);
       m["connected_addresses"] = EndpointsJson(match->connected);
+      m["remote6_addresses"] = EndpointsJson(match->remotes6);
+      m["local_ip6"] = picojson::value(match->local_ip6);
       m["connect_ms"] = picojson::value(static_cast<double>(match->connect_ms));
       o["match"] = picojson::value(m);
     }

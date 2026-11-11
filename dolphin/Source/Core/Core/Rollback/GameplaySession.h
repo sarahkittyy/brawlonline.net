@@ -217,6 +217,14 @@ struct ConnectOptions
   // first packet confirms or corrects the address. The host plays P1, the joiner P2.
   std::string remote_host;
   u16 remote_port = 0;
+  // IPv6 (Online/Ipv6.h, Rollback/UdpSocket6.h): this player's IPv6 address, bound on local_port
+  // beside IPv4 (empty: no IPv6), and the 2-player peer's IPv6 address and port, if it has one,
+  // and whether its packets start on IPv6 (matchmaking's IPv4 connect to it failed). The session
+  // moves a player's packets to IPv6 when IPv4 goes quiet both ways and back once IPv4 works.
+  std::string local_ip6;
+  std::string remote_host6;
+  u16 remote_port6 = 0;
+  bool remote_via6 = false;
   // 2-4 players (local_slot 0-3): this player's in-game port, and every other player with its
   // in-game port. Every pair of players exchanges packets directly (full mesh). A peer's address
   // may be unknown (empty host): it is learned from that peer's first control message claiming
@@ -227,6 +235,10 @@ struct ConnectOptions
     int slot = -1;
     std::string host;
     u16 port = 0;
+    // Its IPv6 address and port (empty: none) and whether its packets start on IPv6.
+    std::string host6;
+    u16 port6 = 0;
+    bool via6 = false;
   };
   std::vector<Peer> peers;
   // The deciding player's port as the joiners know it (-1: learned from the peers' messages).

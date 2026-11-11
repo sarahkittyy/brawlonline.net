@@ -400,6 +400,7 @@ fn search_once(opts: &SearchOptions) -> anyhow::Result<SearchResult> {
         app_version: opts.app_version.clone(),
         platform: opts.platform.clone(),
         ip_address_lan: lan_address,
+        ipv6_token: None,
     };
     send_raw(&mut host, mm, serde_json::to_vec(&ticket)?.as_slice());
 
@@ -511,6 +512,7 @@ pub fn search_and_linger(
         app_version: opts.app_version.clone(),
         platform: opts.platform.clone(),
         ip_address_lan: format!("127.0.0.1:{local_port}"),
+        ipv6_token: None,
     };
     send_raw(&mut host, mm, serde_json::to_vec(&ticket)?.as_slice());
     let deadline = Instant::now() + Duration::from_secs(30);
@@ -576,6 +578,7 @@ mod tests {
             is_local_player: local,
             ip_address: ext.into(),
             ip_address_lan: lan.into(),
+            ip_address6: None,
             chat_messages: vec![],
             rank: None,
             is_bot: false,

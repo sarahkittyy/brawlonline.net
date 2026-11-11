@@ -4,9 +4,13 @@
 #pragma once
 
 #include <memory>
+#include <string>
 
 #include <SFML/Network/Packet.hpp>
 #include <enet/enet.h>
+#if __has_include(<enet_ipv6.h>)
+#include <enet_ipv6.h>
+#endif
 
 #include "Common/CommonTypes.h"
 
@@ -33,6 +37,16 @@ bool SendPacket(ENetPeer* socket, const sf::Packet& packet, u8 channel_id, _ENet
 // (Rollback/MachineSession.cpp), once a second for a peer at its internet address until it
 // connects.
 void PunchLowPorts(ENetHost* host, const ENetAddress& to);
+
+// IPv6 (Externals/enet/ipv6/enet_ipv6.h): an IPv6 socket names each IPv6 address by a handle in
+// ENetAddress::host. False when Dolphin was built against a system ENet without it, and then
+// nothing here makes or meets an IPv6 address.
+bool HasIpv6();
+bool IsIpv6(const ENetAddress& address);
+// The address in text: "a.b.c.d", or "2001:db8::1" for a handle ("" if it is no address).
+std::string HostText(const ENetAddress& address);
+// With the port: "a.b.c.d:port", or "[2001:db8::1]:port".
+std::string EndpointText(const ENetAddress& address);
 
 // used for traversal packets and wake-up packets
 constexpr int SKIPPABLE_EVENT = 42;

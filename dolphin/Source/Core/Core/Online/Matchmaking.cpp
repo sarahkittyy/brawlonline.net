@@ -25,6 +25,7 @@
 #include "Common/Timer.h"
 #include "Common/UPnP.h"
 #include "Core/Config/OnlineSettings.h"
+#include "Core/Online/Ipv6.h"
 #include "Core/Online/Timeouts.h"
 #include "Core/Online/User.h"
 #include "Core/Rollback/PeerData.h"
@@ -102,6 +103,39 @@ size_t RemotePlayer(const Match& match, size_t i)
 
 // How often a peer that has not connected gets Common::ENet::PunchLowPorts.
 constexpr u64 PUNCH_INTERVAL_MS = 1000;
+
+// IPv6 (Online/Ipv6.h): a player reached over IPv6 is used only if IPv4 has not connected to it
+// this long into the connect. Prod's IPv4 connects (1680 in bug reports up to #276): half within
+// 72 ms, 99% within 552 ms, 4 over 1.5 s (the longest 4.1 s); an IPv4 path that comes up later
+// is still taken by the session (GameplaySession's path check), which prefers IPv4 too.
+constexpr u64 IPV4_FIRST_MS = 2000;
+// How often a waiting search sends its IPv6 probe again (mm forgets one after 15 minutes).
+constexpr u64 PROBE6_RESEND_MS = 20 * 1000;
+
+// The IPv6 host's PPR_TEST_P2P_BLOCK6 and its senders, as s_test_blocked and s_heard for IPv4.
+std::vector<ENetAddress> s_test_blocked6;
+std::vector<Heard> s_heard6;
+
+int ENET_CALLBACK OnP2PReceive6(ENetHost* host, ENetEvent*)
+{
+  const ENetAddress& from = host->receivedAddress;
+  for (const ENetAddress& a : s_test_blocked6)
+  {
+    if (a.host == from.host)
+      return 1;
+  }
+  for (Heard& h : s_heard6)
+  {
+    if (h.from.host == from.host && h.from.port == from.port)
+    {
+      h.packets++;
+      return 0;
+    }
+  }
+  if (s_heard6.size() < MAX_HEARD)
+    s_heard6.push_back({from, 1});
+  return 0;
+}
 
 int ENET_CALLBACK OnP2PReceive(ENetHost* host, ENetEvent*)
 {
@@ -361,7 +395,8 @@ void LogFailedConnect(const Match& match, const ENetHost* client,
 
 Matchmaking::Matchmaking(User* user, ConnectedCallback on_connected)
     : m_user(user), m_on_connected(std::move(on_connected)),
-      m_generator(static_cast<unsigned>(Common::Timer::NowMs()))
+      m_generator(static_cast<unsigned>(Common::Timer::NowMs())),
+      m_probe6(std::make_unique<Ipv6::Probe>())
 {
 }
 
@@ -375,6 +410,7 @@ Matchmaking::~Matchmaking()
     m_matchmake_thread.join();
 
   TerminateMmConnection();
+  m_probe6->Close();
 }
 
 const char* Matchmaking::ModeName(Mode mode)
@@ -634,6 +670,7 @@ void Matchmaking::MatchmakeThread()
 
   // Clean up ENET connections
   TerminateMmConnection();
+  m_probe6->Close();
 }
 
 void Matchmaking::DisconnectFromServer()
@@ -747,6 +784,10 @@ void Matchmaking::StartMatchmaking()
     m_upnp_mapped =
         Common::UPnP::MapUdpPort(m_host_port, UPNP_WAIT, m_search_settings.pair_room ? 1 : 0);
 #endif
+
+  // Not in Slippi: IPv6 beside IPv4 (Online/Ipv6.h). Sent now, before mm's ENet connect, so the
+  // probe is there well before the ticket. Nothing of the IPv4 search changes.
+  StartIpv6();
 
   m_server = enet_host_connect(m_client, &addr, MM_CHANNELS, 0);
   if (m_server == nullptr)
@@ -886,6 +927,12 @@ void Matchmaking::StartMatchmaking()
   request["appVersion"] = picojson::value(APP_VERSION);
   request["platform"] = picojson::value(APP_PLATFORM);
   request["ipAddressLan"] = picojson::value(lan_addr);
+  if (!m_ipv6_token.empty())
+  {
+    request["ipv6Token"] = picojson::value(m_ipv6_token);
+    m_probe6->Send();
+    m_probe6_sent_ms = Common::Timer::NowMs();
+  }
   // mm takes one ticket per account every 2 s (engine `ticket_interval`, "Searching too often.
   // Wait a moment."): a search started again at once (cancelled, then START) waits for its turn
   // instead of failing. A 2v2 player was left ready with nothing searching that way (the user's,
@@ -952,11 +999,68 @@ void Matchmaking::StartMatchmaking()
   INFO_LOG_FMT(NETPLAY, "[Matchmaking] Request ticket success");
 }
 
+void Matchmaking::StartIpv6()
+{
+  m_probe6->Close();
+  m_ipv6_token.clear();
+  if (!Ipv6::Enabled())
+    return;
+  // Only the sessions that can play over IPv6 (the gameplay session, and the harness's record
+  // backend); the whole-machine netplay fallback stays on IPv4.
+  const std::string backend = Session::BackendName();
+  if (backend != "gameplay" && backend != "record")
+  {
+    INFO_LOG_FMT(NETPLAY, "[Matchmaking] IPv6: not with the '{}' session backend", backend);
+    return;
+  }
+  // GameBridge started the lookup at boot: this waits only for a search right after it.
+  const std::optional<ENetAddress> server = Ipv6::Server(std::chrono::milliseconds(250));
+  if (!server)
+  {
+    INFO_LOG_FMT(NETPLAY, "[Matchmaking] IPv6: no address for the server's IPv6 listener ({}); "
+                          "IPv4 only",
+                 Config::GetMatchmakingHost6());
+    return;
+  }
+  std::string why;
+  std::optional<ENetAddress> local = Ipv6::LocalAddressToward(*server, &why);
+  if (!local)
+  {
+    INFO_LOG_FMT(NETPLAY, "[Matchmaking] IPv6: not used ({}); IPv4 only", why);
+    return;
+  }
+  local->port = m_host_port;
+  const std::string token = Ipv6::NewToken();
+  if (!m_probe6->Open(*local, *server, token, &why))
+  {
+    INFO_LOG_FMT(NETPLAY, "[Matchmaking] IPv6: not used ({}); IPv4 only", why);
+    return;
+  }
+  m_ipv6_token = token;
+  m_probe6_sent_ms = Common::Timer::NowMs();
+  INFO_LOG_FMT(NETPLAY, "[Matchmaking] IPv6: probing the server at {} from {}",
+               Common::ENet::EndpointText(*server), Common::ENet::EndpointText(*local));
+}
+
 void Matchmaking::HandleMatchmaking()
 {
   // Deal with class shut down
   if (m_state != State::Matchmaking)
     return;
+
+  if (m_probe6->IsOpen())
+  {
+    if (const auto seen = m_probe6->Reply())
+    {
+      INFO_LOG_FMT(NETPLAY, "[Matchmaking] IPv6: the server sees us at {}",
+                   Common::ENet::EndpointText(*seen));
+    }
+    if (Common::Timer::NowMs() - m_probe6_sent_ms >= PROBE6_RESEND_MS)
+    {
+      m_probe6->Send();
+      m_probe6_sent_ms = Common::Timer::NowMs();
+    }
+  }
 
   // Get response from server
   picojson::value get_resp_value;
@@ -1038,6 +1142,14 @@ void Matchmaking::HandleMatchmaking()
       player.is_bot = GetBool(el, "isBot");
       player.ip_address = GetStr(el, "ipAddress", "1.1.1.1:123");
       player.ip_address_lan = GetStr(el, "ipAddressLan", "1.1.1.1:123");
+      // IPv6 (Online/Ipv6.h): kept only if it is a usable "[ip]:port".
+      player.ip_address6 = GetStr(el, "ipAddress6");
+      if (!player.ip_address6.empty() && !Ipv6::ParseEndpoint(player.ip_address6))
+      {
+        WARN_LOG_FMT(NETPLAY, "[Matchmaking] P{} has an unusable IPv6 address '{}'", player.port,
+                     player.ip_address6);
+        player.ip_address6.clear();
+      }
       player.chat_messages = User::GetDefaultChatMessages();
       const auto chat = el.find("chatMessages");
       if (chat != el.end() && chat->second.is<picojson::array>() &&
@@ -1085,11 +1197,37 @@ void Matchmaking::HandleMatchmaking()
       }
     }
 
+    // IPv6: only if mm has ours too (our probe got there) and the probe socket is still ours.
+    std::string local_ip6;
+    for (const auto& player : match.players)
+    {
+      if (player.is_local && !player.ip_address6.empty() && m_probe6->IsOpen())
+        local_ip6 = Common::ENet::HostText(m_probe6->Local());
+    }
+    if (!local_ip6.empty())
+      match.local_ip6 = local_ip6;
+
     // Loop a second time to get the correct remote IPs
     for (const auto& player : match.players)
     {
       if (player.port - 1 == match.local_player_index)
         continue;
+
+      // IPv6, beside whatever IPv4 address Slippi's rule picks below.
+      {
+        Endpoint e6;
+        if (!match.local_ip6.empty())
+        {
+          if (const auto a6 = Ipv6::ParseEndpoint(player.ip_address6))
+            e6 = {Common::ENet::HostText(*a6), a6->port};
+        }
+        match.remotes6.push_back(e6);
+        if (!e6.ip.empty())
+        {
+          INFO_LOG_FMT(NETPLAY, "[Matchmaking] P{} {} ({}): IPv6 {} (tried beside IPv4)",
+                       player.port, player.display_name, player.connect_code, e6.ToString());
+        }
+      }
 
       const std::string& ext_ip = player.ip_address;
       const std::string& lan_ip = player.ip_address_lan;
@@ -1247,6 +1385,12 @@ void Matchmaking::HandleMatchmaking()
     m_match = match;
   }
 
+  if (const auto seen = m_probe6->Reply())
+  {
+    INFO_LOG_FMT(NETPLAY, "[Matchmaking] IPv6: the server sees us at {}",
+                 Common::ENet::EndpointText(*seen));
+  }
+
   // Disconnect and destroy enet client to mm server
   TerminateMmConnection();
 
@@ -1347,8 +1491,10 @@ void Matchmaking::HandleConnecting()
     for (size_t i = 0; i < remote_addrs.size(); ++i)
     {
       const size_t p = RemotePlayer(match, i);
+      // "*": every player.
       if (p < match.players.size() &&
-          blocked.find(fmt::format(",{},", match.players[p].connect_code)) != std::string::npos)
+          (blocked.find(",*,") != std::string::npos ||
+           blocked.find(fmt::format(",{},", match.players[p].connect_code)) != std::string::npos))
       {
         WARN_LOG_FMT(NETPLAY, "[Matchmaking] Test: no packets from {} ({})",
                      match.players[p].connect_code, match.remotes[i].ToString());
@@ -1356,6 +1502,64 @@ void Matchmaking::HandleConnecting()
       }
     }
   }
+
+  // IPv6 (Online/Ipv6.h): a second host on this machine's IPv6 address and the same port, and a
+  // connect to every player that has an IPv6 address too, at the same time as the IPv4 ones. The
+  // IPv4 connects above and below are as they were; without IPv6 nothing else runs.
+  P2PLink::HostPtr client6;
+  std::vector<ENetPeer*> servers6(remote_player_count, nullptr);
+  std::vector<ENetAddress> remote_addrs6(remote_player_count);
+  std::vector<bool> has6(remote_player_count, false);
+  if (m_probe6->IsOpen())
+  {
+    const ENetAddress local6 = m_probe6->Local();
+    m_probe6->Close();  // its address and port are the host's now
+    bool any = false;
+    for (size_t i = 0; i < remote_player_count && i < match.remotes6.size(); i++)
+      any |= !match.remotes6[i].ip.empty();
+    if (any)
+    {
+#ifdef ENET_BRAWL_IPV6
+      client6.reset(enet_host_create_ipv6(&local6, 10, MM_CHANNELS, 0, 0));
+#endif
+      if (!client6)
+      {
+        WARN_LOG_FMT(NETPLAY, "[Matchmaking] IPv6: cannot bind {}; IPv4 only",
+                     Common::ENet::EndpointText(local6));
+      }
+    }
+    if (client6)
+    {
+      LimitHost(client6.get());
+      s_test_blocked6.clear();
+      s_heard6.clear();
+      client6->intercept = OnP2PReceive6;
+      const char* block6 = std::getenv("PPR_TEST_P2P_BLOCK6");
+      const std::string blocked6 = block6 ? fmt::format(",{},", block6) : std::string();
+      for (size_t i = 0; i < remote_player_count && i < match.remotes6.size(); i++)
+      {
+        const auto a6 = match.remotes6[i].ip.empty() ?
+                            std::nullopt :
+                            Ipv6::ParseEndpoint(match.remotes6[i].ToString());
+        if (!a6)
+          continue;
+        servers6[i] = enet_host_connect(client6.get(), &*a6, MM_CHANNELS, own_token);
+        remote_addrs6[i] = *a6;
+        has6[i] = servers6[i] != nullptr;
+        const size_t p = RemotePlayer(match, i);
+        if (block6 && p < match.players.size() &&
+            (blocked6.find(",*,") != std::string::npos ||
+             blocked6.find(fmt::format(",{},", match.players[p].connect_code)) != std::string::npos))
+        {
+          WARN_LOG_FMT(NETPLAY, "[Matchmaking] Test: no IPv6 packets from {} ({})",
+                       match.players[p].connect_code, match.remotes6[i].ToString());
+          s_test_blocked6.push_back(*a6);
+        }
+      }
+    }
+  }
+  const bool dual = client6 != nullptr;
+  std::vector<bool> connections6(remote_player_count, false);
 
   // Not in Slippi: the low ports of a peer at its internet address (PunchLowPorts), until it
   // connects. Not to a LAN or chosen-network address, where no carrier NAT is in the way, nor to
@@ -1392,7 +1596,7 @@ void Matchmaking::HandleConnecting()
 
     // This will confirm that connection went through successfully
     ENetEvent net_event;
-    const int net = enet_host_service(client.get(), &net_event, 500);
+    const int net = enet_host_service(client.get(), &net_event, dual ? 0 : 500);
     if (net > 0)
     {
       switch (net_event.type)
@@ -1495,10 +1699,72 @@ void Matchmaking::HandleConnecting()
       }
     }
 
+    if (dual)
+    {
+      ENetEvent ev6;
+      while (enet_host_service(client6.get(), &ev6, 0) > 0)
+      {
+        if (ev6.type == ENET_EVENT_TYPE_RECEIVE)
+        {
+          enet_packet_destroy(ev6.packet);
+          continue;
+        }
+        if (ev6.type == ENET_EVENT_TYPE_DISCONNECT)
+        {
+          for (size_t i = 0; i < remote_player_count; i++)
+          {
+            if (connections6[i] && servers6[i] == ev6.peer)
+            {
+              INFO_LOG_FMT(NETPLAY, "[Matchmaking] IPv6: lost the connection to {}",
+                           Common::ENet::EndpointText(remote_addrs6[i]));
+              connections6[i] = false;
+            }
+          }
+          continue;
+        }
+        if (ev6.type != ENET_EVENT_TYPE_CONNECT)
+          continue;
+        // No NAT on IPv6: a player connects from the address mm saw (any port, as Slippi).
+        bool matched6 = false;
+        for (size_t i = 0; i < remote_player_count && !matched6; i++)
+        {
+          if (!has6[i] || remote_addrs6[i].host != ev6.peer->address.host)
+            continue;
+          if (!connections6[i])
+          {
+            INFO_LOG_FMT(NETPLAY, "[Matchmaking] IPv6: connected to {} after {} ms",
+                         Common::ENet::EndpointText(ev6.peer->address),
+                         Common::Timer::NowMs() - start_time);
+          }
+          servers6[i] = ev6.peer;
+          connections6[i] = true;
+          matched6 = true;
+        }
+        if (!matched6)
+        {
+          WARN_LOG_FMT(NETPLAY, "[Matchmaking] IPv6: dropping a connection from an unknown "
+                                "address {}",
+                       Common::ENet::EndpointText(ev6.peer->address));
+          enet_peer_reset(ev6.peer);
+        }
+      }
+      if (net <= 0)
+      {
+        // Nothing came on IPv4 this turn: wait for either socket (as the 500 ms service did).
+        ENetSocketSet set;
+        ENET_SOCKETSET_EMPTY(set);
+        ENET_SOCKETSET_ADD(set, client->socket);
+        ENET_SOCKETSET_ADD(set, client6->socket);
+        enet_socketset_select(std::max(client->socket, client6->socket), &set, nullptr, 20);
+      }
+    }
+
+    // IPv4 whenever it connects; IPv6 for a player IPv4 has not reached in IPV4_FIRST_MS.
+    const bool ipv4_had_its_time = Common::Timer::NowMs() - start_time >= IPV4_FIRST_MS;
     bool all_connected = true;
     for (size_t i = 0; i < remote_player_count; i++)
     {
-      if (!connections[i])
+      if (!connections[i] && !(connections6[i] && ipv4_had_its_time))
         all_connected = false;
     }
 
@@ -1515,12 +1781,28 @@ void Matchmaking::HandleConnecting()
       std::vector<int> failed_connections;
       for (size_t i = 0; i < remote_player_count; i++)
       {
-        if (!connections[i])
+        if (!connections[i] && !connections6[i])
           failed_connections.push_back(static_cast<int>(i));
       }
       INFO_LOG_FMT(NETPLAY, "Online connection failed");
       LogFailedConnect(match, client.get(), servers, remote_addrs, connections,
                        m_router_changed_port, m_upnp_mapped);
+      for (size_t i = 0; dual && i < remote_player_count; i++)
+      {
+        if (connections[i] || connections6[i] || !has6[i])
+          continue;
+        u32 heard6 = 0;
+        for (const Heard& h : s_heard6)
+        {
+          if (h.from.host == remote_addrs6[i].host)
+            heard6 += h.packets;
+        }
+        WARN_LOG_FMT(NETPLAY, "[Matchmaking] IPv6: no connection to {} either: {} packets heard "
+                              "from it; our connect: {}",
+                     Common::ENet::EndpointText(remote_addrs6[i]), heard6,
+                     servers6[i] ? PeerStateName(static_cast<ENetPeerState>(servers6[i]->state)) :
+                                   "none");
+      }
 
       // Which players: by port (a room's slot), for the room's server.
       for (const int i : failed_connections)
@@ -1590,7 +1872,12 @@ void Matchmaking::HandleConnecting()
     if (m_state != State::OpponentConnecting || m_is_mm_terminated)
       return;
     ENetEvent net_event;
-    if (enet_host_service(client.get(), &net_event, 20) > 0 &&
+    if (enet_host_service(client.get(), &net_event, dual ? 10 : 20) > 0 &&
+        net_event.type == ENET_EVENT_TYPE_RECEIVE)
+    {
+      enet_packet_destroy(net_event.packet);
+    }
+    if (dual && enet_host_service(client6.get(), &net_event, 10) > 0 &&
         net_event.type == ENET_EVENT_TYPE_RECEIVE)
     {
       enet_packet_destroy(net_event.packet);
@@ -1599,6 +1886,18 @@ void Matchmaking::HandleConnecting()
 
   for (size_t i = 0; i < servers.size(); i++)
   {
+    if (!connections[i])
+    {
+      // Over IPv6: IPv4 did not connect to this player in IPV4_FIRST_MS.
+      const ENetPeer* peer6 = servers6[i];
+      match.connected.push_back({Common::ENet::HostText(peer6->address), peer6->address.port});
+      const size_t p = RemotePlayer(match, i);
+      INFO_LOG_FMT(NETPLAY, "[Matchmaking] Connected to P{} {} at {} (IPv6: IPv4 did not connect)",
+                   p < match.players.size() ? match.players[p].port : 0,
+                   p < match.players.size() ? match.players[p].connect_code : std::string("?"),
+                   Common::ENet::EndpointText(peer6->address));
+      continue;
+    }
     const ENetPeer* peer = servers[i];
     match.connected.push_back({IpToString(peer->address.host), peer->address.port});
     // Which of the peer's addresses worked, and whether its router changed the port on the way.
@@ -1622,7 +1921,7 @@ void Matchmaking::HandleConnecting()
   }
 
   INFO_LOG_FMT(NETPLAY, "[Matchmaking] Connection success! ({} ms)", match.connect_ms);
-  P2PLink link(std::move(client), servers);
+  P2PLink link(std::move(client), servers, std::move(client6), servers6);
 
   // Connection success, our work is done
   m_state = State::ConnectionSuccess;

@@ -27,6 +27,7 @@
 #include "Core/NetPlayClient.h"
 #include "Core/Online/Chat.h"
 #include "Core/Online/GameSetup.h"
+#include "Core/Online/Ipv6.h"
 #include "Core/Online/MatchRules.h"
 #include "Core/Online/OnlineClient.h"
 #include "Core/Online/Ranked.h"
@@ -2507,6 +2508,8 @@ void Reset()
   if (Config::Get(Config::ONLINE_UPNP))
     Common::UPnP::StartDiscovery();
 #endif
+  // The matchmaking server's IPv6 address (Online/Ipv6.h), looked up off the searches' path.
+  Ipv6::StartDiscovery();
   {
     std::lock_guard lk(s_mutex);
     s_located.reset();

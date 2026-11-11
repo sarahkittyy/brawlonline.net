@@ -30,7 +30,7 @@
 //! ([`crate::chat`]).
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
-use std::net::SocketAddrV4;
+use std::net::{SocketAddrV4, SocketAddrV6};
 use std::time::{Duration, Instant};
 
 use chrono::Utc;
@@ -166,6 +166,9 @@ struct Member {
 struct StartTicket {
     conn: ConnId,
     addr: SocketAddrV4,
+    /// Where the game's IPv6 probe came from (`common::probe6`), if it sent one.
+    #[serde(default)]
+    addr6: Option<SocketAddrV6>,
     lan: String,
 }
 
@@ -1476,6 +1479,7 @@ impl RoomBook {
         &mut self,
         conn: ConnId,
         addr: SocketAddrV4,
+        addr6: Option<SocketAddrV6>,
         lan: String,
         uid: Uuid,
         code: &str,
@@ -1487,7 +1491,7 @@ impl RoomBook {
         }
         let mut outcome = TicketOutcome::default();
         let m = room.slots[slot].as_mut().ok_or(msg::NOT_IN_PARTY)?;
-        if let Some(old) = m.pair.replace(StartTicket { conn, addr, lan }) {
+        if let Some(old) = m.pair.replace(StartTicket { conn, addr, addr6, lan }) {
             if old.conn != conn {
                 self.pair_of.remove(&old.conn);
                 outcome.replaced = Some(old.conn);
@@ -1518,6 +1522,7 @@ impl RoomBook {
                     is_local_player: false,
                     ip_address: t.addr.to_string(),
                     ip_address_lan: t.lan.clone(),
+                    ip_address6: t.addr6.map(common::probe6::endpoint_text),
                     chat_messages: common::DEFAULT_CHAT_MESSAGES.iter().map(|s| s.to_string()).collect(),
                     rank: None,
                     is_bot: false,
@@ -2200,6 +2205,7 @@ impl RoomBook {
         &mut self,
         conn: ConnId,
         addr: SocketAddrV4,
+        addr6: Option<SocketAddrV6>,
         lan: String,
         uid: Uuid,
         code: &str,
@@ -2213,7 +2219,7 @@ impl RoomBook {
             if !players.contains(&slot) {
                 return Err(msg::NOT_IN_THIS_GAME);
             }
-            let old = tickets.insert(slot, StartTicket { conn, addr, lan });
+            let old = tickets.insert(slot, StartTicket { conn, addr, addr6, lan });
             (match_id.clone(), tickets.clone(), old, players.clone(), *host)
         };
         let mut outcome = TicketOutcome::default();
@@ -2249,6 +2255,7 @@ impl RoomBook {
                     is_local_player: false,
                     ip_address: t.addr.to_string(),
                     ip_address_lan: t.lan.clone(),
+                    ip_address6: t.addr6.map(common::probe6::endpoint_text),
                     chat_messages: common::DEFAULT_CHAT_MESSAGES.iter().map(|s| s.to_string()).collect(),
                     rank: None,
                     is_bot: false,
@@ -2705,8 +2712,8 @@ mod tests {
         let out = t.req(1, RoomRequest::Rules { rules: MatchRules::default() });
         assert_eq!(msgs(&out, 1)[0]["error"], msg::BETWEEN_GAMES);
         let addr = |n: u8| SocketAddrV4::new([203, 0, 113, n].into(), 41000 + n as u16);
-        t.book.ticket(101, addr(1), String::new(), info(1).uid, &code).unwrap();
-        let done = t.book.ticket(102, addr(2), String::new(), info(2).uid, &code).unwrap();
+        t.book.ticket(101, addr(1), None, String::new(), info(1).uid, &code).unwrap();
+        let done = t.book.ticket(102, addr(2), None, String::new(), info(2).uid, &code).unwrap();
         assert_eq!(done.matched.len(), 2);
         for (_, resp) in &done.matched {
             assert_eq!(resp.rules.as_ref(), Some(&rules));
@@ -2738,8 +2745,8 @@ mod tests {
         t.req(2, ready(Some(5)));
         ready_all(&mut t, &[1]);
         let addr = |n: u8| SocketAddrV4::new([203, 0, 113, n].into(), 41000 + n as u16);
-        t.book.ticket(101, addr(1), String::new(), info(1).uid, &code).unwrap();
-        let done = t.book.ticket(102, addr(2), String::new(), info(2).uid, &code).unwrap();
+        t.book.ticket(101, addr(1), None, String::new(), info(1).uid, &code).unwrap();
+        let done = t.book.ticket(102, addr(2), None, String::new(), info(2).uid, &code).unwrap();
         for (_, resp) in &done.matched {
             assert!(resp.rules.as_ref().unwrap().stock_control);
         }
@@ -2772,8 +2779,8 @@ mod tests {
         // The start makes the set; the tickets carry it.
         ready_all(&mut t, &[2]);
         let addr = |n: u8| SocketAddrV4::new([203, 0, 113, n].into(), 41000 + n as u16);
-        t.book.ticket(101, addr(1), String::new(), info(1).uid, &code).unwrap();
-        let done = t.book.ticket(102, addr(2), String::new(), info(2).uid, &code).unwrap();
+        t.book.ticket(101, addr(1), None, String::new(), info(1).uid, &code).unwrap();
+        let done = t.book.ticket(102, addr(2), None, String::new(), info(2).uid, &code).unwrap();
         let set = done.matched[0].1.set.clone().expect("the set ticket");
         assert_eq!((set.best_of, set.game, set.sides, set.wins), (3, 1, [0, 1], [0, 0]));
         assert_eq!(set.counterpicks.len(), 9);
@@ -2878,8 +2885,8 @@ mod tests {
         assert_eq!(s["slots"][1]["player"]["ready"], false);
         let addr = |n: u8| SocketAddrV4::new([203, 0, 113, n].into(), 41000 + n as u16);
         ready_all(&mut t, &[1, 2]);
-        t.book.ticket(101, addr(1), String::new(), info(1).uid, &code).unwrap();
-        let done = t.book.ticket(102, addr(2), String::new(), info(2).uid, &code).unwrap();
+        t.book.ticket(101, addr(1), None, String::new(), info(1).uid, &code).unwrap();
+        let done = t.book.ticket(102, addr(2), None, String::new(), info(2).uid, &code).unwrap();
         let set = done.matched[0].1.set.clone().expect("a set");
         assert_eq!((set.best_of, set.strikes.clone(), set.bans, set.dsr), (3, vec![1, 2, 1], 2, true));
         // While it is on, the length waits.
@@ -3014,7 +3021,7 @@ mod tests {
         let addr = |n: u8| SocketAddrV4::new([203, 0, 113, n].into(), 41000 + n as u16);
         let mut done = TicketOutcome::default();
         for n in 1..=3u8 {
-            done = t.book.ticket(100 + n as ConnId, addr(n), String::new(), info(n).uid, &code).unwrap();
+            done = t.book.ticket(100 + n as ConnId, addr(n), None, String::new(), info(n).uid, &code).unwrap();
         }
         assert!(done.matched[0].1.set.is_none());
         let mut out = vec![];
@@ -3038,8 +3045,8 @@ mod tests {
         let addr = |n: u8| SocketAddrV4::new([203, 0, 113, n].into(), 41000 + n as u16);
         let start = |t: &mut T, code: &str, conn: ConnId| {
             ready_all(t, &[1, 2]);
-            t.book.ticket(conn, addr(1), String::new(), info(1).uid, code).unwrap();
-            t.book.ticket(conn + 1, addr(2), String::new(), info(2).uid, code).unwrap().matched[0].1.clone()
+            t.book.ticket(conn, addr(1), None, String::new(), info(1).uid, code).unwrap();
+            t.book.ticket(conn + 1, addr(2), None, String::new(), info(2).uid, code).unwrap().matched[0].1.clone()
         };
         let mut t = T::new();
         let code = create(&mut t, 1);
@@ -3177,8 +3184,8 @@ mod tests {
         // A set that is on: refused.
         let addr = |n: u8| SocketAddrV4::new([203, 0, 113, n].into(), 41000 + n as u16);
         ready_all(&mut t, &[1, 2]);
-        t.book.ticket(400, addr(1), String::new(), info(1).uid, &code).unwrap();
-        t.book.ticket(401, addr(2), String::new(), info(2).uid, &code).unwrap();
+        t.book.ticket(400, addr(1), None, String::new(), info(1).uid, &code).unwrap();
+        t.book.ticket(401, addr(2), None, String::new(), info(2).uid, &code).unwrap();
         for n in 1..=2 {
             t.req(n, RoomRequest::Back { pickers: None });
         }
@@ -3209,8 +3216,8 @@ mod tests {
         let addr = |n: u8| SocketAddrV4::new([203, 0, 113, n].into(), 41000 + n as u16);
         let start = |t: &mut T, ticket: ConnId| {
             ready_all(t, &[1, 2]);
-            t.book.ticket(ticket, addr(1), String::new(), info(1).uid, &code).unwrap();
-            let done = t.book.ticket(ticket + 1, addr(2), String::new(), info(2).uid, &code).unwrap();
+            t.book.ticket(ticket, addr(1), None, String::new(), info(1).uid, &code).unwrap();
+            let done = t.book.ticket(ticket + 1, addr(2), None, String::new(), info(2).uid, &code).unwrap();
             assert!(done.matched[0].1.set.is_none());
         };
         // A quick quit counts nothing; a game of 30 s and more counts once, when it is over.
@@ -3260,8 +3267,8 @@ mod tests {
     fn play(t: &mut T, code: &str, ticket: ConnId) -> common::proto::SetTicket {
         ready_all(t, &[1, 2]);
         let addr = |n: u8| SocketAddrV4::new([203, 0, 113, n].into(), 41000 + n as u16);
-        t.book.ticket(ticket, addr(1), String::new(), info(1).uid, code).unwrap();
-        let done = t.book.ticket(ticket + 1, addr(2), String::new(), info(2).uid, code).unwrap();
+        t.book.ticket(ticket, addr(1), None, String::new(), info(1).uid, code).unwrap();
+        let done = t.book.ticket(ticket + 1, addr(2), None, String::new(), info(2).uid, code).unwrap();
         let mut out = vec![];
         t.book.announce(code, &mut out);
         done.matched[0].1.set.clone().expect("the set ticket")
@@ -3294,7 +3301,7 @@ mod tests {
         join(&mut t, 3, &code);
         ready_all(&mut t, &[1, 2, 3]);
         for n in 1..=3u8 {
-            t.book.ticket(100 + n as ConnId, addr(n), String::new(), info(n).uid, &code).unwrap();
+            t.book.ticket(100 + n as ConnId, addr(n), None, String::new(), info(n).uid, &code).unwrap();
         }
         let serial = t.book.rooms[&code].serial;
         let mut b = restart(&t);
@@ -3401,7 +3408,7 @@ mod tests {
         let addr = |n: u8| SocketAddrV4::new([203, 0, 113, n].into(), 41000 + n as u16);
         let mut done = TicketOutcome::default();
         for n in 1..=4u8 {
-            done = t.book.ticket(100 + n as ConnId, addr(n), String::new(), info(n).uid, &code).unwrap();
+            done = t.book.ticket(100 + n as ConnId, addr(n), None, String::new(), info(n).uid, &code).unwrap();
         }
         let set = done.matched[0].1.set.clone().expect("the set ticket");
         assert_eq!((set.sides, set.members.clone()), ([0, 1], vec![vec![0, 2], vec![1, 3]]));
@@ -3457,7 +3464,7 @@ mod tests {
     fn tickets(t: &mut T, code: &str, conns: &[ConnId]) -> TicketOutcome {
         let mut done = TicketOutcome::default();
         for &c in conns {
-            done = t.book.ticket(100 + c, addr(c as u8), String::new(), info(c as u8).uid, code).unwrap();
+            done = t.book.ticket(100 + c, addr(c as u8), None, String::new(), info(c as u8).uid, code).unwrap();
         }
         done
     }
@@ -3480,7 +3487,7 @@ mod tests {
         let out = join(&mut t, 3, &code);
         assert_eq!(last_state(&out, 3)["statusText"], msg::STARTING_GAME);
         assert_eq!(
-            t.book.ticket(103, addr(3), String::new(), info(3).uid, &code).unwrap_err(),
+            t.book.ticket(103, addr(3), None, String::new(), info(3).uid, &code).unwrap_err(),
             msg::NOT_IN_THIS_GAME
         );
         let done = tickets(&mut t, &code, &[1, 2]);
@@ -3537,7 +3544,7 @@ mod tests {
         assert_eq!(last_state(&out, 1)["status"], "starting");
         join(&mut t, 3, &code);
         assert_eq!(
-            t.book.ticket(103, addr(3), String::new(), info(3).uid, &code).unwrap_err(),
+            t.book.ticket(103, addr(3), None, String::new(), info(3).uid, &code).unwrap_err(),
             msg::NOT_IN_THIS_GAME
         );
         let done = tickets(&mut t, &code, &[1, 2]);
@@ -3933,18 +3940,26 @@ mod tests {
         assert_eq!(msgs(&join(&mut t, 9, &code), 9)[0]["error"], msg::ROOM_FULL);
         // Tickets: a stranger is refused, members are matched once all are in.
         let addr = |n: u8| SocketAddrV4::new([203, 0, 113, n].into(), 41000 + n as u16);
-        assert_eq!(t.book.ticket(100, addr(9), String::new(), info(9).uid, &code).unwrap_err(), msg::NOT_A_MEMBER);
-        assert_eq!(t.book.ticket(100, addr(9), String::new(), info(1).uid, "ZZZZ").unwrap_err(), msg::ROOM_NOT_FOUND);
+        assert_eq!(t.book.ticket(100, addr(9), None, String::new(), info(9).uid, &code).unwrap_err(), msg::NOT_A_MEMBER);
+        assert_eq!(t.book.ticket(100, addr(9), None, String::new(), info(1).uid, "ZZZZ").unwrap_err(), msg::ROOM_NOT_FOUND);
         assert!(t
             .book
-            .ticket(101, addr(1), "192.168.0.2:41001".into(), info(1).uid, &code)
+            .ticket(101, addr(1), None, "192.168.0.2:41001".into(), info(1).uid, &code)
             .unwrap()
             .matched
             .is_empty());
-        let waiting = t.book.ticket(102, addr(2), String::new(), info(2).uid, &code).unwrap();
+        let six: SocketAddrV6 = "[2600:1700::2]:41002".parse().unwrap();
+        let waiting = t.book.ticket(102, addr(2), Some(six), String::new(), info(2).uid, &code).unwrap();
         assert!(waiting.matched.is_empty() && waiting.record.is_none());
-        let done = t.book.ticket(103, addr(3), String::new(), info(3).uid, &code).unwrap();
+        let done = t.book.ticket(103, addr(3), None, String::new(), info(3).uid, &code).unwrap();
         assert_eq!(done.matched.len(), 3);
+        // The member whose game probed over IPv6 has its IPv6 address too; the others none.
+        for (_, resp) in &done.matched {
+            for p in resp.players.as_ref().unwrap() {
+                let want = (p.port == 2).then(|| "[2600:1700::2]:41002".to_string());
+                assert_eq!(p.ip_address6, want, "P{}", p.port);
+            }
+        }
         // Recorded for the match history: a free-for-all, players in slot order.
         let rec = done.record.as_ref().expect("record");
         assert_eq!(Some(&rec.match_id), done.matched[0].1.match_id.as_ref());
@@ -4009,7 +4024,7 @@ mod tests {
         assert!(t.req(1, unreachable(vec![4])).is_empty());
         let addr = |n: u8| SocketAddrV4::new([203, 0, 113, n].into(), 41000 + n as u16);
         for n in 1..=4u8 {
-            t.book.ticket(100 + n as ConnId, addr(n), String::new(), info(n).uid, &code).unwrap();
+            t.book.ticket(100 + n as ConnId, addr(n), None, String::new(), info(n).uid, &code).unwrap();
         }
         let told = |out: &[Output], c: ConnId| -> Vec<Value> {
             msgs(out, c).into_iter().filter(|m| m["type"] == rooms::ROOM_UNREACHABLE).collect()
@@ -4045,7 +4060,7 @@ mod tests {
         join(&mut t, 2, &code);
         ready_all(&mut t, &[1, 2]);
         let addr = SocketAddrV4::new([203, 0, 113, 1].into(), 41001);
-        t.book.ticket(101, addr, String::new(), info(1).uid, &code).unwrap();
+        t.book.ticket(101, addr, None, String::new(), info(1).uid, &code).unwrap();
         t.now += Duration::from_secs(16);
         let mut out = vec![];
         t.book.tick(t.now, &mut out);
@@ -4057,7 +4072,7 @@ mod tests {
         assert_eq!(s["slots"][0]["player"]["ready"], false);
         // Again, and this time player 2 leaves during the start.
         ready_all(&mut t, &[1, 2]);
-        t.book.ticket(102, addr, String::new(), info(1).uid, &code).unwrap();
+        t.book.ticket(102, addr, None, String::new(), info(1).uid, &code).unwrap();
         t.req(2, RoomRequest::Leave);
         assert_eq!(t.book.take_failed_tickets(), vec![(102, msg::PLAYER_LEFT.to_string())]);
     }
@@ -4108,9 +4123,9 @@ mod tests {
         // The teams are recorded with the game.
         let addr = |n: u8| SocketAddrV4::new([203, 0, 113, n].into(), 41000 + n as u16);
         for c in 1..=2u8 {
-            t.book.ticket(100 + u64::from(c), addr(c), String::new(), info(c).uid, &code).unwrap();
+            t.book.ticket(100 + u64::from(c), addr(c), None, String::new(), info(c).uid, &code).unwrap();
         }
-        let done = t.book.ticket(103, addr(3), String::new(), info(3).uid, &code).unwrap();
+        let done = t.book.ticket(103, addr(3), None, String::new(), info(3).uid, &code).unwrap();
         let room = done.record.expect("record").room;
         assert_eq!((room.mode.as_str(), room.ports, room.teams), ("teams", vec![1, 2, 3], Some(vec![1, 1, 0])));
     }
@@ -4126,8 +4141,8 @@ mod tests {
         join(&mut t, 2, &code);
         ready_all(&mut t, &[1, 2]);
         let addr = |n: u8| SocketAddrV4::new([203, 0, 113, n].into(), 41000 + n as u16);
-        t.book.ticket(102, addr(2), String::new(), info(2).uid, &code).unwrap();
-        let done = t.book.ticket(101, addr(1), String::new(), info(1).uid, &code).unwrap();
+        t.book.ticket(102, addr(2), None, String::new(), info(2).uid, &code).unwrap();
+        let done = t.book.ticket(101, addr(1), None, String::new(), info(1).uid, &code).unwrap();
         let rec = done.record.expect("record");
         assert_eq!(rec.players, vec![info(1).uid, info(2).uid]);
         assert_eq!((rec.room.mode.as_str(), rec.room.ports, rec.room.teams), ("1v1", vec![1, 3], None));
@@ -4241,7 +4256,7 @@ mod tests {
         join(&mut t, 2, &code);
         // Not before both search.
         assert_eq!(
-            t.book.pair_ticket(201, pair_addr(1), String::new(), uid(1), &code).err(),
+            t.book.pair_ticket(201, pair_addr(1), None, String::new(), uid(1), &code).err(),
             Some(msg::PARTY_NOT_SEARCHING)
         );
         let mut out = vec![];
@@ -4251,10 +4266,10 @@ mod tests {
         assert_eq!(last_state(&out, 1)["pairRoom"], true);
         assert_eq!(last_state(&out, 2)["pairRoom"], true);
         assert_eq!(last_state(&out, 1)["slots"][1]["player"]["pairRoom"], true, "the partner's game plays it");
-        let o = t.book.pair_ticket(201, pair_addr(1), "192.168.0.2:41001".into(), uid(1), &code).unwrap();
+        let o = t.book.pair_ticket(201, pair_addr(1), None, "192.168.0.2:41001".into(), uid(1), &code).unwrap();
         assert!(o.matched.is_empty() && o.record.is_none());
-        assert_eq!(t.book.pair_ticket(203, pair_addr(3), String::new(), uid(3), &code).err(), Some(msg::NOT_IN_PARTY));
-        let o = t.book.pair_ticket(202, pair_addr(2), String::new(), uid(2), &code).unwrap();
+        assert_eq!(t.book.pair_ticket(203, pair_addr(3), None, String::new(), uid(3), &code).err(), Some(msg::NOT_IN_PARTY));
+        let o = t.book.pair_ticket(202, pair_addr(2), None, String::new(), uid(2), &code).unwrap();
         assert!(o.record.is_none(), "the pair room is no match: nothing recorded");
         assert_eq!(o.matched.iter().map(|(c, _)| *c).collect::<HashSet<_>>(), HashSet::from([201, 202]));
         let ids: HashSet<String> = o.matched.iter().filter_map(|(_, r)| r.match_id.clone()).collect();
@@ -4287,7 +4302,7 @@ mod tests {
         let mut out = vec![];
         t.book.party_ticket(101, uid(1), &code, &mut out).unwrap();
         t.book.party_ticket(102, uid(2), &code, &mut out).unwrap();
-        t.book.pair_ticket(201, pair_addr(1), String::new(), uid(1), &code).unwrap();
+        t.book.pair_ticket(201, pair_addr(1), None, String::new(), uid(1), &code).unwrap();
         // 2 cancels its search: 1's 2v2 ticket and its party ticket fail.
         t.book.conn_gone(t.now, 102, &mut out);
         let failed = t.book.take_failed_tickets();
@@ -4296,10 +4311,10 @@ mod tests {
         // A party ticket's own connection going leaves nothing behind: a new one waits again.
         t.book.party_ticket(111, uid(1), &code, &mut out).unwrap();
         t.book.party_ticket(112, uid(2), &code, &mut out).unwrap();
-        t.book.pair_ticket(211, pair_addr(1), String::new(), uid(1), &code).unwrap();
+        t.book.pair_ticket(211, pair_addr(1), None, String::new(), uid(1), &code).unwrap();
         t.book.conn_gone(t.now, 211, &mut out);
         assert!(t.book.take_failed_tickets().is_empty());
-        let o = t.book.pair_ticket(222, pair_addr(2), String::new(), uid(2), &code).unwrap();
+        let o = t.book.pair_ticket(222, pair_addr(2), None, String::new(), uid(2), &code).unwrap();
         assert!(o.matched.is_empty(), "1's party ticket is gone");
         // The party matched into a 2v2 game: the waiting party ticket is over too.
         t.book.party_matched(&code, &[uid(1), uid(2), uid(3), uid(4)], &mut out);
@@ -4319,7 +4334,7 @@ mod tests {
         assert!(last_state(&out, 1).get("pairRoom").is_none());
         assert!(last_state(&out, 1)["slots"][1]["player"].get("pairRoom").is_none(), "the partner's game doesn't");
         assert_eq!(
-            t.book.pair_ticket(201, pair_addr(1), String::new(), uid(1), &code).err(),
+            t.book.pair_ticket(201, pair_addr(1), None, String::new(), uid(1), &code).err(),
             Some(msg::PARTY_NOT_SEARCHING)
         );
     }

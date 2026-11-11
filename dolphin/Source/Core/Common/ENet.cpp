@@ -3,6 +3,8 @@
 
 #include "Common/ENet.h"
 
+#include <fmt/format.h>
+
 #include "Common/CommonTypes.h"
 #include "Common/Logging/Log.h"
 
@@ -19,6 +21,10 @@ void WakeupThread(ENetHost* host)
   else
     enet_socket_get_address(host->socket, &address);
   address.host = 0x0100007f;  // localhost
+#ifdef ENET_BRAWL_IPV6
+  if (enet_socket_is_ipv6(host->socket))
+    enet_address_set_host_ipv6(&address, "::1");
+#endif
   u8 byte = 0;
   ENetBuffer buf;
   buf.data = &byte;
@@ -51,6 +57,45 @@ void PunchLowPorts(ENetHost* host, const ENetAddress& to)
     a.port = static_cast<enet_uint16>(PUNCH_PORT_FIRST + i);
     enet_socket_send(host->socket, &a, &buffer, 1);
   }
+}
+
+bool HasIpv6()
+{
+#ifdef ENET_BRAWL_IPV6
+  return true;
+#else
+  return false;
+#endif
+}
+
+bool IsIpv6(const ENetAddress& address)
+{
+#ifdef ENET_BRAWL_IPV6
+  return enet_address_is_ipv6(&address) != 0;
+#else
+  (void)address;
+  return false;
+#endif
+}
+
+std::string HostText(const ENetAddress& address)
+{
+  if (IsIpv6(address))
+  {
+    char text[64]{};
+    return enet_address_get_host_ip(&address, text, sizeof(text)) == 0 ? std::string(text) :
+                                                                         std::string();
+  }
+  // ENetAddress::host is in network byte order: the bytes in memory are a.b.c.d.
+  const auto* b = reinterpret_cast<const u8*>(&address.host);
+  return fmt::format("{}.{}.{}.{}", b[0], b[1], b[2], b[3]);
+}
+
+std::string EndpointText(const ENetAddress& address)
+{
+  if (IsIpv6(address))
+    return fmt::format("[{}]:{}", HostText(address), address.port);
+  return fmt::format("{}:{}", HostText(address), address.port);
 }
 
 bool SendPacket(ENetPeer* socket, const sf::Packet& packet, u8 channel_id, _ENetPacketFlag flag)

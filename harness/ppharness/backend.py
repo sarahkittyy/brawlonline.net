@@ -99,7 +99,7 @@ class OnlineBackend:
                  ticket_ttl_secs: int | None = None,
                  rulesets_file: str | os.PathLike[str] | None = None, keep: bool = False,
                  mm_host: str = "127.0.0.1", spectate: str | None = None,
-                 rematch_hold_secs: int | None = 0):
+                 rematch_hold_secs: int | None = 0, ipv6: bool | None = None):
         root = paths.workspace_root() / "run" / "backends"
         self.run_dir = Path(run_dir) if run_dir else root / f"be-{int(time.time())}-{secrets.token_hex(3)}"
         self.latest_version = latest_version
@@ -116,6 +116,12 @@ class OnlineBackend:
         # MM_REMATCH_HOLD_SECS: tests pair the same two players again and again, so no hold by
         # default; None: mm's own (60 s).
         self.rematch_hold_secs = rematch_hold_secs
+        # mm's IPv6 probe listener (MM_LISTEN6) on [::1] and mm's port: the games (UseDevServer:
+        # their IPv6 server is ::1) then get each other's IPv6 address and connect over both. Off
+        # by default, so tests that block IPv4 connects (PPR_TEST_P2P_BLOCK) still fail them;
+        # PPHARNESS_MM_IPV6=1 turns it on for every backend (a run of the other tests with IPv6
+        # on, to see that IPv4 works as before beside it).
+        self.ipv6 = ipv6 if ipv6 is not None else os.environ.get("PPHARNESS_MM_IPV6") == "1"
         self.pg_mode = ""
         self.admin_url = ""
         self.database_url = ""
@@ -332,6 +338,8 @@ class OnlineBackend:
         self.mm_port = find_free_port(kind=socket.SOCK_DGRAM)
         env = self._env()
         env["MM_LISTEN"] = f"{self.mm_host}:{self.mm_port}"
+        if self.ipv6:
+            env["MM_LISTEN6"] = f"[::1]:{self.mm_port}"
         env["MM_STATUS_LISTEN"] = f"127.0.0.1:{self.mm_status_port}"
         if self.min_app_version:
             env["MM_MIN_APP_VERSION"] = self.min_app_version

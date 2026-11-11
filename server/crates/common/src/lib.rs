@@ -13,6 +13,7 @@ pub mod db;
 pub mod mods;
 pub mod net;
 pub mod playkey;
+pub mod probe6;
 pub mod profile;
 pub mod proto;
 pub mod ranked;

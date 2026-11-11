@@ -50,11 +50,24 @@ public:
       return fmt::format("the gameplay session supports 2-{} players ({} players)",
                          Session::MAX_LOBBY_PLAYERS, match.players.size());
     }
-    // The address the P2P connection came up with is the one the peer's NAT maps.
+    // The address the P2P connection came up with is the one the peer's NAT maps. A player
+    // reached over IPv6 only (Online/Ipv6.h) keeps the IPv4 address that was tried, should IPv4
+    // work later, and its IPv6 one.
     const auto endpoint = [&](size_t i) -> const Online::Endpoint* {
-      if (i < match.connected.size())
+      if (i < match.connected.size() && !match.connected[i].IsIpv6())
         return &match.connected[i];
       return i < match.remotes.size() ? &match.remotes[i] : nullptr;
+    };
+    const auto via6 = [&](size_t i) {
+      return i < match.connected.size() && match.connected[i].IsIpv6();
+    };
+    const auto endpoint6 = [&](size_t i) -> const Online::Endpoint* {
+      if (match.local_ip6.empty())
+        return nullptr;
+      if (via6(i))
+        return &match.connected[i];
+      return i < match.remotes6.size() && !match.remotes6[i].ip.empty() ? &match.remotes6[i] :
+                                                                           nullptr;
     };
     const Online::Endpoint& peer = *endpoint(0);
 
@@ -65,6 +78,13 @@ public:
     // mapping toward the guest open, as Slippi connects from both sides).
     o.remote_host = peer.ip;
     o.remote_port = peer.port;
+    o.local_ip6 = match.local_ip6;
+    if (const Online::Endpoint* e6 = endpoint6(0))
+    {
+      o.remote_host6 = e6->ip;
+      o.remote_port6 = e6->port;
+      o.remote_via6 = via6(0);
+    }
     // A room's game: every player on their slot also with 2 players (slots are ports, gaps
     // allowed) and the room's host decides (docs/rooms-protocol.md §3), not whoever claims it.
     const bool room = match.room_host_port >= 1 &&
@@ -85,10 +105,18 @@ public:
           o.local_slot = p.port - 1;
           continue;
         }
-        const Online::Endpoint* e = endpoint(remote++);
+        const size_t r = remote++;
+        const Online::Endpoint* e = endpoint(r);
         if (!e)
           return std::string("a remote player has no address");
-        o.peers.push_back({p.port - 1, e->ip, e->port});
+        Session::ConnectOptions::Peer peer_opts{p.port - 1, e->ip, e->port};
+        if (const Online::Endpoint* e6 = endpoint6(r))
+        {
+          peer_opts.host6 = e6->ip;
+          peer_opts.port6 = e6->port;
+          peer_opts.via6 = via6(r);
+        }
+        o.peers.push_back(peer_opts);
       }
       if (o.local_slot < 0)
         return std::string("the match has no local player");
@@ -169,8 +197,9 @@ public:
       std::lock_guard lk(m_mutex);
       m_match = match;
     }
-    NOTICE_LOG_FMT(BRAWLBACK, "gprb: online match {} as {} on port {}, peer {}", match.match_id,
-                   match.is_host ? "host" : "guest", match.local_port, peer.ToString());
+    NOTICE_LOG_FMT(BRAWLBACK, "gprb: online match {} as {} on port {}, peer {}{}", match.match_id,
+                   match.is_host ? "host" : "guest", match.local_port, peer.ToString(),
+                   via6(0) ? fmt::format(" (over IPv6: {})", match.connected[0].ToString()) : "");
     return std::nullopt;
   }
 

@@ -48,6 +48,7 @@
 #include "Core/Config/GraphicsSettings.h"
 #include "Core/Config/MainSettings.h"
 #include "Core/Config/OnlineSettings.h"
+#include "Core/Online/Ipv6.h"
 #include "Core/Config/SYSCONFSettings.h"
 #include "Core/Config/SessionSettings.h"
 #include "Core/Config/WiimoteSettings.h"
@@ -311,6 +312,17 @@ struct PeerLink
   std::string code;
   std::string name;
   std::vector<enet_uint32> ips;
+  // IPv6 (Online/Ipv6.h): its IPv6 endpoint when both players have one, this side's latest
+  // IPv6 connection attempt, and a connection of the lower slot's over IPv6 whose hello came
+  // (with that hello, and when), waiting for IPv4 to have had IPV4_FIRST since (StepIpv6Links).
+  // `kept6`: the link kept (`peer`) is that one.
+  std::string host6;
+  u16 port6 = 0;
+  ENetPeer* connecting6 = nullptr;
+  ENetPeer* cand6 = nullptr;
+  picojson::object cand6_hello;
+  Clock::time_point cand6_at{};
+  bool kept6 = false;
   // While a room member has no link (LogNoLink): since when, this side's connection attempts, its
   // hellos on a connection this side does not keep (only the one the lower slot started is kept),
   // and the lines logged.
@@ -489,6 +501,13 @@ struct State
   } probe;
   // Where mm saw this player's probe come from (SetRoom logs it once per change).
   std::string seen_endpoint;
+  // IPv6 (Online/Ipv6.h): a second host on this machine's IPv6 address and the session's port
+  // (rooms only, when this machine has IPv6 the internet can reach and mm an IPv6 listener), and
+  // mm's IPv6 address, which gets the IPv6 probe with the endpoint token beside every
+  // `mods-endpoint`.
+  ENetHost* host6 = nullptr;
+  ENetAddress server6{};
+  std::string seen_endpoint6;
   // This player's name as the room has it (SetRoom). opts.name is empty in rooms: ModsRoom arms
   // the session before the login has the display name (bug report #227: "a desync between Player
   // 1 and EXSeismo", where Player 1 was Jaaames).
@@ -847,6 +866,8 @@ void Fail(std::string why)
     msg["reason"] = picojson::value(s.error);
     BroadcastControl(msg);
     enet_host_flush(s.host);
+    if (s.host6)
+      enet_host_flush(s.host6);
   }
 }
 
@@ -930,6 +951,8 @@ int SlotOf(ENetPeer* peer)
   return static_cast<int>((reinterpret_cast<intptr_t>(peer->data) & 0xFF) - 1);
 }
 
+void KeepLink(PeerLink& p, ENetPeer* peer, const picojson::object& msg, bool six);
+
 // Both sides connect to each other (needed through NATs); of two connections for the same pair,
 // both keep the one the lower slot started, so they agree without another round trip.
 void OnHello(ENetPeer* peer, const picojson::object& msg)
@@ -961,6 +984,55 @@ void OnHello(ENetPeer* peer, const picojson::object& msg)
   {
     ++p.unkept_hellos;
     return;  // the other connection is the one both keep; this one idles until it drops
+  }
+  // IPv6 (Online/Ipv6.h): the lower slot's connection over IPv6 is kept only once that slot says
+  // so ("keep6", StepIpv6Links: its IPv4 connection had no hello in IPV4_FIRST), so both sides
+  // keep the same one; until then it waits. A link over IPv6 stays for good: an IPv4 hello after
+  // it idles, as an unkept connection does.
+  const bool six = s.host6 && peer->host == s.host6;
+  if (six && !p.kept6)
+  {
+    if (lower_is_me && p.hello)
+    {
+      // Linked over IPv4 already: this side decides, and this one is not needed.
+      enet_peer_disconnect_later(peer, 0);
+      return;
+    }
+    if (lower_is_me && p.cand6 && p.cand6 != peer)
+    {
+      // One candidate at a time (its wait would start again with each new one).
+      enet_peer_disconnect_later(peer, 0);
+      return;
+    }
+    if (p.cand6 != peer)
+      p.cand6_at = Clock::now();
+    p.cand6 = peer;
+    p.cand6_hello = msg;
+    return;
+  }
+  if (!six && p.kept6 && p.hello)
+  {
+    ++p.unkept_hellos;
+    return;
+  }
+  KeepLink(p, peer, msg, six);
+}
+
+// The connection `peer` is the one kept for `p` (OnHello, StepIpv6Links), with its hello `msg`.
+void KeepLink(PeerLink& p, ENetPeer* peer, const picojson::object& msg, bool six)
+{
+  const int slot = p.slot;
+  // The lower slot's idle IPv6 connection, once IPv4 is kept: nobody keeps it (the upper slot
+  // keeps an IPv6 one only when told).
+  if (!six && p.cand6 && s.opts.local_slot < slot)
+  {
+    enet_peer_disconnect_later(p.cand6, 0);
+    p.cand6 = nullptr;
+  }
+  if (six)
+  {
+    p.kept6 = true;
+    p.cand6 = nullptr;
   }
   if (p.peer && p.peer != peer)
     enet_peer_disconnect_later(p.peer, 0);
@@ -998,6 +1070,12 @@ void OnHello(ENetPeer* peer, const picojson::object& msg)
   }
   // A port other than the one the room gave: its router changes the port (PunchLowPorts' 1024 and
   // up, or a port of its own for each destination).
+  if (six)
+  {
+    AddLog(fmt::format("peer {} connected over IPv6 ({}; IPv4 {}:{} did not connect)", slot,
+                       Common::ENet::EndpointText(peer->address), p.host, p.port));
+    return;
+  }
   AddLog(fmt::format("peer {} connected ({}:{}{})", slot, p.host, p.port,
                      peer->address.port == p.port ?
                          "" :
@@ -1020,6 +1098,20 @@ void HandleControl(ENetPeer* peer, const u8* data, size_t size)
   if (type == "hello")
   {
     OnHello(peer, msg);
+    return;
+  }
+  if (type == "keep6")
+  {
+    // The lower slot keeps its IPv6 connection to this player (StepIpv6Links): this side too.
+    const int from = SlotOf(peer);
+    // Any of its IPv6 connections whose hello came (the one it keeps is the one this came on).
+    if (from >= 0 && from < MAX_PLAYERS && from < s.opts.local_slot && s.host6 &&
+        peer->host == s.host6 && s.peers[from].cand6)
+    {
+      PeerLink& p = s.peers[from];
+      const picojson::object hello = p.cand6_hello;
+      KeepLink(p, peer, hello, true);
+    }
     return;
   }
   const int slot = SlotOf(peer);
@@ -1654,6 +1746,46 @@ void StepProbe(Clock::time_point now)
     pr.peer->data = reinterpret_cast<void*>(PROBE);
     enet_peer_timeout(pr.peer, 0, 3000, 5000);
   }
+  // IPv6 (Online/Ipv6.h): the same token from the IPv6 host's socket, so mm passes on where peers
+  // reach this player over IPv6 too (`endpoint6`). A plain datagram, a few copies (nothing
+  // resends it); its answer is not ENet's and ENet drops it.
+  if (s.host6 && !pr.token.empty())
+  {
+    const std::string req = Online::Ipv6::ProbeRequest(pr.token);
+    ENetBuffer buf{};
+    buf.data = const_cast<char*>(req.data());
+    buf.dataLength = req.size();
+    for (int i = 0; i < 2; ++i)
+      enet_socket_send(s.host6->socket, &s.server6, &buf, 1);
+  }
+}
+
+// Net thread: the lower slot's IPv6 connection to a player is kept when IPv4 has not linked within
+// IPV4_FIRST of that connection's hello, and the player is told ("keep6"), so both keep it. From
+// the hello, not this side's first attempt: a joiner turns up seconds after the room gave its
+// slot (its game boots first), and both families' connects then come up within a moment.
+constexpr auto IPV4_FIRST = std::chrono::milliseconds(2000);
+
+void StepIpv6Links(Clock::time_point now)
+{
+  if (!s.host6)
+    return;
+  for (PeerLink& p : s.peers)
+  {
+    if (p.slot < 0 || p.hello || !p.cand6 || s.opts.local_slot > p.slot ||
+        now - p.cand6_at < IPV4_FIRST)
+    {
+      continue;
+    }
+    ENetPeer* peer = p.cand6;
+    const picojson::object hello = p.cand6_hello;
+    picojson::object keep;
+    keep["type"] = picojson::value("keep6");
+    const std::string text = picojson::value(keep).serialize();
+    enet_peer_send(peer, CHANNEL_CONTROL,
+                   enet_packet_create(text.data(), text.size(), ENET_PACKET_FLAG_RELIABLE));
+    KeepLink(p, peer, hello, true);
+  }
 }
 
 void SendProbe(ENetPeer* peer)
@@ -1913,13 +2045,20 @@ bool TestBlocked(const ENetAddress& from)
     const char* e = std::getenv("PPR_TEST_P2P_BLOCK");
     return e && *e ? fmt::format(",{},", e) : std::string();
   }();
-  if (blocked.empty())
+  // IPv6 (Online/Ipv6.h): PPR_TEST_P2P_BLOCK is IPv4's; PPR_TEST_P2P_BLOCK6 blocks IPv6.
+  static const std::string blocked6 = [] {
+    const char* e = std::getenv("PPR_TEST_P2P_BLOCK6");
+    return e && *e ? fmt::format(",{},", e) : std::string();
+  }();
+  const bool six = Common::ENet::IsIpv6(from);
+  const std::string& list = six ? blocked6 : blocked;
+  if (list.empty())
     return false;
   for (const PeerLink& p : s.peers)
   {
-    if (p.slot >= 0 && !p.code.empty() && p.port == from.port &&
+    if (p.slot >= 0 && !p.code.empty() && (six ? p.port6 : p.port) == from.port &&
         std::find(p.ips.begin(), p.ips.end(), from.host) != p.ips.end() &&
-        blocked.find(fmt::format(",{},", p.code)) != std::string::npos)
+        list.find(fmt::format(",{},", p.code)) != std::string::npos)
     {
       return true;
     }
@@ -2597,137 +2736,171 @@ void NetThread()
       // chosen-network address, nor to this machine (the tests).
       if (p.internet && reinterpret_cast<const u8*>(&addr.host)[0] != 127)
         Common::ENet::PunchLowPorts(s.host, addr);
+      // IPv6 (Online/Ipv6.h): the same, at the same time, to its IPv6 endpoint (not while a
+      // connection over IPv6 waits for IPv4's time, StepIpv6Links).
+      if (s.host6 && !p.host6.empty() && !p.cand6)
+      {
+        if (p.connecting6 && p.connecting6 != p.peer && p.connecting6 != p.cand6 &&
+            p.connecting6->state != ENET_PEER_STATE_CONNECTED)
+        {
+          p.connecting6->data = nullptr;
+          enet_peer_reset(p.connecting6);
+        }
+        p.connecting6 = nullptr;
+        ENetAddress addr6{};
+        if (enet_address_set_host(&addr6, p.host6.c_str()) == 0 && Common::ENet::IsIpv6(addr6))
+        {
+          addr6.port = p.port6;
+          if (ENetPeer* peer6 = enet_host_connect(s.host6, &addr6, CHANNEL_COUNT, 0))
+          {
+            peer6->data = reinterpret_cast<void*>(static_cast<intptr_t>(p.slot + 1) | OUTGOING);
+            p.connecting6 = peer6;
+          }
+        }
+      }
     }
+    StepIpv6Links(now);
     for (PeerLink& p : s.peers)
       LogNoLink(p, now);
-    ENetEvent ev;
-    int r = enet_host_service(s.host, &ev, 0);
-    while (r > 0)
+    // The IPv4 host, then the IPv6 one (Online/Ipv6.h) if the session has it.
+    for (ENetHost* host : {s.host, s.host6})
     {
-      switch (ev.type)
+      if (!host)
+        continue;
+      ENetEvent ev;
+      int r = enet_host_service(host, &ev, 0);
+      while (r > 0)
       {
-      case ENET_EVENT_TYPE_CONNECT:
-      {
-        if (ev.peer == s.probe.peer)
+        switch (ev.type)
         {
-          SendProbe(ev.peer);
+        case ENET_EVENT_TYPE_CONNECT:
+        {
+          if (ev.peer == s.probe.peer)
+          {
+            SendProbe(ev.peer);
+            break;
+          }
+          // ENet hands out its peers again without clearing `data`: a connection this side did not
+          // start learns its slot from its hello, whatever an earlier one left there.
+          bool outgoing = false;
+          for (const PeerLink& p : s.peers)
+            outgoing |= p.connecting == ev.peer || p.connecting6 == ev.peer;
+          if (!outgoing)
+            ev.peer->data = nullptr;
+          enet_peer_timeout(ev.peer, 0, 5000, 10000);
+          // A round trip every 50 ms on a link with nothing reliable to send (a game link: GekkoNet's
+          // packets are unsequenced), so PaceSD sees a queue building on it within a few hundred ms.
+          enet_peer_ping_interval(ev.peer, 50);
+          // The peer's side of the same (PaceSendWindow): ENet sends this to the peer, which then
+          // never lowers its throttle towards this machine either (an older build included).
+          if (!std::getenv("PPR_MACHINE_ENET_THROTTLE"))
+          {
+            enet_peer_throttle_configure(ev.peer, ENET_PEER_PACKET_THROTTLE_INTERVAL,
+                                         ENET_PEER_PACKET_THROTTLE_SCALE, 0);
+          }
+          picojson::object hello;
+          hello["type"] = picojson::value("hello");
+          hello["slot"] = picojson::value(static_cast<double>(s.opts.local_slot));
+          hello["name"] = picojson::value(s.opts.name);
+          hello["playing"] = picojson::value(LocalPlays());
+          hello["proto"] = picojson::value(static_cast<double>(PROTOCOL_VERSION));
+          hello["sd_card"] = picojson::value(Config::Get(Config::MAIN_WII_SD_CARD));
+          hello["sd"] = picojson::value(s.sd_root);
+          const std::string text = picojson::value(hello).serialize();
+          enet_peer_send(ev.peer, CHANNEL_CONTROL,
+                         enet_packet_create(text.data(), text.size(), ENET_PACKET_FLAG_RELIABLE));
           break;
         }
-        // ENet hands out its peers again without clearing `data`: a connection this side did not
-        // start learns its slot from its hello, whatever an earlier one left there.
-        bool outgoing = false;
-        for (const PeerLink& p : s.peers)
-          outgoing |= p.connecting == ev.peer;
-        if (!outgoing)
-          ev.peer->data = nullptr;
-        enet_peer_timeout(ev.peer, 0, 5000, 10000);
-        // A round trip every 50 ms on a link with nothing reliable to send (a game link: GekkoNet's
-        // packets are unsequenced), so PaceSD sees a queue building on it within a few hundred ms.
-        enet_peer_ping_interval(ev.peer, 50);
-        // The peer's side of the same (PaceSendWindow): ENet sends this to the peer, which then
-        // never lowers its throttle towards this machine either (an older build included).
-        if (!std::getenv("PPR_MACHINE_ENET_THROTTLE"))
+        case ENET_EVENT_TYPE_RECEIVE:
         {
-          enet_peer_throttle_configure(ev.peer, ENET_PEER_PACKET_THROTTLE_INTERVAL,
-                                       ENET_PEER_PACKET_THROTTLE_SCALE, 0);
-        }
-        picojson::object hello;
-        hello["type"] = picojson::value("hello");
-        hello["slot"] = picojson::value(static_cast<double>(s.opts.local_slot));
-        hello["name"] = picojson::value(s.opts.name);
-        hello["playing"] = picojson::value(LocalPlays());
-        hello["proto"] = picojson::value(static_cast<double>(PROTOCOL_VERSION));
-        hello["sd_card"] = picojson::value(Config::Get(Config::MAIN_WII_SD_CARD));
-        hello["sd"] = picojson::value(s.sd_root);
-        const std::string text = picojson::value(hello).serialize();
-        enet_peer_send(ev.peer, CHANNEL_CONTROL,
-                       enet_packet_create(text.data(), text.size(), ENET_PACKET_FLAG_RELIABLE));
-        break;
-      }
-      case ENET_EVENT_TYPE_RECEIVE:
-      {
-        if (ev.peer == s.probe.peer)
-          OnProbeAnswer(ev.peer, ev.packet->data, ev.packet->dataLength);
-        else if (ev.channelID == CHANNEL_CONTROL)
-        {
-          // An incoming connection learns its slot from the hello.
-          if (ev.peer->data == nullptr)
+          if (ev.peer == s.probe.peer)
+            OnProbeAnswer(ev.peer, ev.packet->data, ev.packet->dataLength);
+          else if (ev.channelID == CHANNEL_CONTROL)
           {
-            picojson::value v;
-            const std::string text(reinterpret_cast<const char*>(ev.packet->data),
-                                   std::min<size_t>(ev.packet->dataLength, MAX_CONTROL_SIZE));
-            if (picojson::parse(v, text).empty() && v.is<picojson::object>())
+            // An incoming connection learns its slot from the hello.
+            if (ev.peer->data == nullptr)
             {
-              const auto& o = v.get<picojson::object>();
-              const auto it = o.find("slot");
-              if (it != o.end() && it->second.is<double>())
+              picojson::value v;
+              const std::string text(reinterpret_cast<const char*>(ev.packet->data),
+                                     std::min<size_t>(ev.packet->dataLength, MAX_CONTROL_SIZE));
+              if (picojson::parse(v, text).empty() && v.is<picojson::object>())
               {
-                const double sl = it->second.get<double>();
-                if (sl >= 0 && sl < MAX_PLAYERS)
-                  ev.peer->data = reinterpret_cast<void*>(static_cast<intptr_t>(sl) + 1);
+                const auto& o = v.get<picojson::object>();
+                const auto it = o.find("slot");
+                if (it != o.end() && it->second.is<double>())
+                {
+                  const double sl = it->second.get<double>();
+                  if (sl >= 0 && sl < MAX_PLAYERS)
+                    ev.peer->data = reinterpret_cast<void*>(static_cast<intptr_t>(sl) + 1);
+                }
               }
             }
+            HandleControl(ev.peer, ev.packet->data, ev.packet->dataLength);
           }
-          HandleControl(ev.peer, ev.packet->data, ev.packet->dataLength);
-        }
-        else if (ev.channelID == CHANNEL_IMAGE && ev.packet->dataLength <= IMAGE_CHUNK)
-        {
-          const int slot = SlotOf(ev.peer);
-          if (slot >= 0 && slot < MAX_PLAYERS && s.peers[slot].peer == ev.peer)
-            HandleImagePacket(slot, ev.packet->data, ev.packet->dataLength);
-        }
-        else if (ev.channelID == CHANNEL_SD && ev.packet->dataLength <= MAX_SD_MANIFEST_PACKET)
-        {
-          const int slot = SlotOf(ev.peer);
-          if (slot >= 0 && slot < MAX_PLAYERS && s.peers[slot].peer == ev.peer &&
-              s.peers[slot].hello)
+          else if (ev.channelID == CHANNEL_IMAGE && ev.packet->dataLength <= IMAGE_CHUNK)
           {
-            HandleSDPacket(slot, ev.packet->data, ev.packet->dataLength);
+            const int slot = SlotOf(ev.peer);
+            if (slot >= 0 && slot < MAX_PLAYERS && s.peers[slot].peer == ev.peer)
+              HandleImagePacket(slot, ev.packet->data, ev.packet->dataLength);
           }
-        }
-        else if (ev.channelID == CHANNEL_GEKKO && ev.packet->dataLength <= MAX_GEKKO_PACKET)
-        {
-          const int slot = SlotOf(ev.peer);
-          if (slot >= 0 && slot < MAX_PLAYERS && s.peers[slot].peer == ev.peer)
+          else if (ev.channelID == CHANNEL_SD && ev.packet->dataLength <= MAX_SD_MANIFEST_PACKET)
           {
-            s.gekko_rx.emplace_back(slot, std::vector<u8>(ev.packet->data,
-                                                          ev.packet->data + ev.packet->dataLength));
-            if (s.gekko_rx.size() > 4096)
-              s.gekko_rx.pop_front();
+            const int slot = SlotOf(ev.peer);
+            if (slot >= 0 && slot < MAX_PLAYERS && s.peers[slot].peer == ev.peer &&
+                s.peers[slot].hello)
+            {
+              HandleSDPacket(slot, ev.packet->data, ev.packet->dataLength);
+            }
           }
+          else if (ev.channelID == CHANNEL_GEKKO && ev.packet->dataLength <= MAX_GEKKO_PACKET)
+          {
+            const int slot = SlotOf(ev.peer);
+            if (slot >= 0 && slot < MAX_PLAYERS && s.peers[slot].peer == ev.peer)
+            {
+              s.gekko_rx.emplace_back(slot, std::vector<u8>(ev.packet->data,
+                                                            ev.packet->data + ev.packet->dataLength));
+              if (s.gekko_rx.size() > 4096)
+                s.gekko_rx.pop_front();
+            }
+          }
+          enet_packet_destroy(ev.packet);
+          break;
         }
-        enet_packet_destroy(ev.packet);
-        break;
-      }
-      case ENET_EVENT_TYPE_DISCONNECT:
-      {
-        if (ev.peer == s.probe.peer)
+        case ENET_EVENT_TYPE_DISCONNECT:
         {
-          s.probe.peer = nullptr;
+          if (ev.peer == s.probe.peer)
+          {
+            s.probe.peer = nullptr;
+            ev.peer->data = nullptr;
+            break;
+          }
+          for (PeerLink& p : s.peers)
+          {
+            if (p.connecting == ev.peer)
+              p.connecting = nullptr;
+            if (p.connecting6 == ev.peer)
+              p.connecting6 = nullptr;
+            if (p.cand6 == ev.peer)
+              p.cand6 = nullptr;
+            if (p.peer == ev.peer)
+            {
+              p.peer = nullptr;
+              p.hello = false;
+              p.kept6 = false;
+              if (s.phase == Phase::Running || s.phase == Phase::Starting ||
+                  s.phase == Phase::Epoch)
+                p.left = true;
+              AddLog(fmt::format("peer {} disconnected", p.slot));
+            }
+          }
           ev.peer->data = nullptr;
           break;
         }
-        for (PeerLink& p : s.peers)
-        {
-          if (p.connecting == ev.peer)
-            p.connecting = nullptr;
-          if (p.peer == ev.peer)
-          {
-            p.peer = nullptr;
-            p.hello = false;
-            if (s.phase == Phase::Running || s.phase == Phase::Starting ||
-                s.phase == Phase::Epoch)
-              p.left = true;
-            AddLog(fmt::format("peer {} disconnected", p.slot));
-          }
+        default:
+          break;
         }
-        ev.peer->data = nullptr;
-        break;
+        r = enet_host_check_events(host, &ev);
       }
-      default:
-        break;
-      }
-      r = enet_host_check_events(s.host, &ev);
     }
     for (PeerLink& p : s.peers)
     {
@@ -2738,8 +2911,18 @@ void NetThread()
         p.min_rtt_ms = p.rtt_ms;
     }
     ENetSocket sock = s.host->socket;
+    const ENetSocket sock6 = s.host6 ? s.host6->socket : ENET_SOCKET_NULL;
     lk.unlock();
-    if (s.direct_send)
+    if (s.direct_send && sock6 != ENET_SOCKET_NULL)
+    {
+      // Both sockets (IPv6, Online/Ipv6.h), as below.
+      ENetSocketSet set;
+      ENET_SOCKETSET_EMPTY(set);
+      ENET_SOCKETSET_ADD(set, sock);
+      ENET_SOCKETSET_ADD(set, sock6);
+      enet_socketset_select(std::max(sock, sock6), &set, nullptr, 1);
+    }
+    else if (s.direct_send)
     {
       // Wakes when a packet comes, else after 1 ms (ENet's resends, pings, the queue's hold).
       enet_uint32 cond = ENET_SOCKET_WAIT_RECEIVE;
@@ -2764,6 +2947,39 @@ void NetThread()
   }
 }
 
+// A room session's IPv6 host (Online/Ipv6.h), beside the IPv4 one, on the same port number (net
+// mutex held). Nothing if this machine has no IPv6 the internet can reach or mm none.
+void StartIpv6Host()
+{
+  if (!s.opts.room || !Online::Ipv6::Enabled())
+    return;
+  const std::optional<ENetAddress> server = Online::Ipv6::Server(std::chrono::milliseconds(250));
+  if (!server)
+  {
+    AddLog("IPv6: the server has no IPv6 address; IPv4 only");
+    return;
+  }
+  std::string why;
+  std::optional<ENetAddress> local = Online::Ipv6::LocalAddressToward(*server, &why);
+  if (!local)
+  {
+    AddLog(fmt::format("IPv6: not used ({}); IPv4 only", why));
+    return;
+  }
+  local->port = s.host->address.port;
+#ifdef ENET_BRAWL_IPV6
+  s.host6 = enet_host_create_ipv6(&*local, MAX_PLAYERS * 4, CHANNEL_COUNT, 0, 0);
+#endif
+  if (!s.host6)
+  {
+    AddLog(fmt::format("IPv6: cannot bind {}; IPv4 only", Common::ENet::EndpointText(*local)));
+    return;
+  }
+  s.host6->intercept = InterceptAcks;
+  s.server6 = *server;
+  AddLog(fmt::format("IPv6: on {} beside IPv4", Common::ENet::EndpointText(s.host6->address)));
+}
+
 bool StartNetwork()
 {
   std::lock_guard lk(s.net_mutex);
@@ -2779,6 +2995,7 @@ bool StartNetwork()
     return false;
   }
   s.host->intercept = InterceptAcks;
+  StartIpv6Host();
   s.net_run = true;
   s.net_thread = std::thread(NetThread);
   return true;
@@ -2801,6 +3018,8 @@ void StopNetwork()
       p.hello = false;
     }
     enet_host_flush(s.host);
+    if (s.host6)
+      enet_host_flush(s.host6);
 #ifdef USE_UPNP
     if (s.upnp_mapped)
       Common::UPnP::UnmapUdpPort(s.host->address.port);
@@ -2808,6 +3027,13 @@ void StopNetwork()
     enet_host_destroy(s.host);
     s.host = nullptr;
   }
+  if (s.host6)
+  {
+    enet_host_flush(s.host6);
+    enet_host_destroy(s.host6);
+    s.host6 = nullptr;
+  }
+  s.seen_endpoint6.clear();
   s.upnp_mapped = false;
   s.gekko_rx.clear();
   s.gekko_tx.clear();
@@ -7545,6 +7771,8 @@ void Stop()
     {
       BroadcastControl(msg);
       enet_host_flush(s.host);
+      if (s.host6)
+        enet_host_flush(s.host6);
     }
   }
   StopNetwork();
@@ -7623,6 +7851,14 @@ static void ForgetLink(PeerLink& p)
     p.connecting->data = nullptr;
     enet_peer_reset(p.connecting);
   }
+  for (ENetPeer* e : {p.connecting6, p.cand6})
+  {
+    if (e && e != p.peer)
+    {
+      e->data = nullptr;
+      enet_peer_reset(e);
+    }
+  }
   p = PeerLink{};
 }
 
@@ -7688,6 +7924,15 @@ void SetRoom(int local_slot, const std::vector<RoomMember>& members)
                          self->port == s.host->address.port ? "" : "; the router changed the port"));
     }
   }
+  if (self && !self->host6.empty() && s.host6)
+  {
+    const std::string seen6 = fmt::format("[{}]:{}", self->host6, self->port6);
+    if (seen6 != s.seen_endpoint6)
+    {
+      s.seen_endpoint6 = seen6;
+      AddLog(fmt::format("room: the server sees this player over IPv6 at {}", seen6));
+    }
+  }
   // A slot move in flight: the session swapped two players and the room has not yet (or the
   // reverse). Those slots stay as they are until the room and the session agree again (the
   // player is not gone, nor someone new).
@@ -7737,8 +7982,19 @@ void SetRoom(int local_slot, const std::vector<RoomMember>& members)
           p.connecting->data = nullptr;
           enet_peer_reset(p.connecting);
         }
+        for (ENetPeer* e : {p.connecting6, p.cand6})
+        {
+          if (e && e != p.peer)
+          {
+            e->data = nullptr;
+            enet_peer_reset(e);
+          }
+        }
         p.peer = nullptr;
         p.connecting = nullptr;
+        p.connecting6 = nullptr;
+        p.cand6 = nullptr;
+        p.kept6 = false;
         p.hello = false;
         p.join_asked = false;
         p.epoch_at = -1;
@@ -7787,7 +8043,21 @@ void SetRoom(int local_slot, const std::vector<RoomMember>& members)
       p.last_connect = {};
     }
     p.internet = !same_net;
-    p.ips = ResolveIps({&m->host, &m->lan_host});
+    // IPv6 (Online/Ipv6.h): when both have it, tried beside IPv4 (on the same network too).
+    const std::string host6 =
+        s.host6 && self && !self->host6.empty() && !m->host6.empty() ? m->host6 : std::string();
+    if (host6 != p.host6 || (!host6.empty() && m->port6 != p.port6))
+    {
+      if (!host6.empty())
+      {
+        AddLog(fmt::format("room: player {} ({}) is also tried over IPv6 at [{}]:{}", slot + 1,
+                           m->code, host6, m->port6));
+      }
+      p.host6 = host6;
+      p.port6 = host6.empty() ? 0 : m->port6;
+      p.last_connect = {};
+    }
+    p.ips = ResolveIps({&m->host, &m->lan_host, &p.host6});
   }
 }
 
@@ -8100,6 +8370,8 @@ void FlushGekkoNow()
     return;
   SendQueuedGekko(Clock::now());
   enet_host_flush(s.host);
+  if (s.host6)
+    enet_host_flush(s.host6);
 }
 
 // The local controller, read now (the game's first read of the local player's device in this

@@ -293,6 +293,10 @@ pub struct ModsPlayer {
     /// The member's LAN address and P2P port, as its session reported it: a member with the same
     /// public address (the same network) connects to this one instead (as Slippi's matchmaking).
     pub lan: Option<Endpoint>,
+    /// Where its session's IPv6 probe came from (`common::probe6`, with its endpoint token), if
+    /// it sent one: peers with IPv6 try it beside `endpoint`, IPv4 first.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub endpoint6: Option<Endpoint>,
 }
 
 /// `mods-state`, to every member after every change (personalised by `you` and `token`).

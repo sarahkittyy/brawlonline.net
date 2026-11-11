@@ -19,6 +19,12 @@ pub struct Config {
     #[arg(long, env = "MM_LISTEN", default_value = "0.0.0.0:43113")]
     pub listen: SocketAddr,
 
+    /// UDP address for the games' IPv6 probes (`common::probe6`), e.g. `[::]:43113`: an IPv6
+    /// socket of its own (IPv6 only), beside MM_LISTEN. Unset: no IPv6, and every game connects
+    /// over IPv4 alone, as before.
+    #[arg(long, env = "MM_LISTEN6")]
+    pub listen6: Option<SocketAddr>,
+
     /// Same secret as the accounts service (play keys are derived from it).
     #[arg(long, env = "PLAY_KEY_SECRET", hide_env_values = true)]
     pub play_key_secret: String,
@@ -219,6 +225,7 @@ impl Config {
         Config {
             database_url: database_url.into(),
             listen: "127.0.0.1:0".parse().unwrap(),
+            listen6: None,
             play_key_secret: play_key_secret.into(),
             ticket_ttl_secs: 600,
             min_app_version: None,
