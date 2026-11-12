@@ -167,7 +167,7 @@ body.blog::after {
 .wrap {
   position: relative;
   z-index: 2;
-  width: min(760px, calc(100vw - 32px));
+  width: min(880px, calc(100vw - 32px));
   margin: 0 auto;
   padding: max(84px, calc(env(safe-area-inset-top) + 72px)) 0 48px;
 }
