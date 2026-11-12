@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self' blob:; media-src 'self' blob:; connect-src 'self'; base-uri 'none'; form-action 'none'">
+<meta name="referrer" content="no-referrer">
+<meta name="robots" content="noindex">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#08080b">
+<title>Blog editor · Brawl Online</title>
+<link rel="icon" href="/favicon.ico" sizes="16x16 32x32 48x48">
+<link rel="preload" href="/assets/fonts/barlow-condensed-900-italic.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="/auth/auth.css">
+<link rel="stylesheet" href="/blog/blog.css">
+<link rel="stylesheet" href="/blog/write/editor.css">
+<script src="/auth/auth.js" defer></script>
+<script src="/blog/write/editor.js" defer></script>
+<!-- The blog editor (docs/design/blog.md): admins only (users.role = 'admin'; pp-admin user role).
+     #<id> edits a post; no hash lists them. The preview is accounts' own renderer. -->
+</head>
+<body class="app editor">
+<header class="ebar">
+  <a class="app-mark" href="/blog"><span class="name">Brawl <span class="w2">Online</span></span><span class="what">Blog editor</span></a>
+  <span class="grow"></span>
+  <span id="account"></span>
+</header>
+
+<!-- Loading, or an account that can't write the blog. -->
+<section class="gate" id="gate">
+  <div class="card gate-card">
+    <p class="note" id="gate-text">Loading…</p>
+  </div>
+</section>
+
+<!-- The posts. -->
+<section class="list" id="list" hidden>
+  <div class="card list-card">
+    <div class="list-head">
+      <h1 class="app-title">Posts</h1>
+      <span class="grow"></span>
+      <a class="pill" href="/blog" target="_blank" rel="noopener">Open the blog</a>
+      <button class="btn" id="new-post" type="button">New post</button>
+    </div>
+    <ul class="post-rows" id="post-rows"></ul>
+    <p class="note" id="list-empty" hidden>No posts yet. Click New post to write the first one.</p>
+    <p class="error" id="list-error" hidden></p>
+  </div>
+</section>
+
+<!-- One post. -->
+<section class="edit" id="edit" hidden>
+  <div class="edit-bar">
+    <a class="pill" href="#" id="back">&larr; Posts</a>
+    <input class="input title-input" id="title" placeholder="Title" aria-label="Title" maxlength="200" autocomplete="off">
+    <span class="status" id="status"></span>
+    <span class="save-state" id="save-state" aria-live="polite"></span>
+    <a class="pill" id="view" target="_blank" rel="noopener"></a>
+    <button class="btn" id="publish" type="button">Publish</button>
+  </div>
+  <div class="edit-meta">
+    <label class="meta-field slug-field"><span id="slug-prefix">brawlonline.net/blog/</span>
+      <input class="input" id="slug" spellcheck="false" autocomplete="off" maxlength="80" aria-label="Address">
+    </label>
+    <label class="meta-field"><span>By</span>
+      <input class="input" id="author" placeholder="nobody (no byline)" maxlength="80" autocomplete="off">
+    </label>
+    <label class="meta-field summary-field"><span>Summary</span>
+      <input class="input" id="summary" placeholder="the first paragraph" maxlength="400" autocomplete="off">
+    </label>
+    <button class="pill" id="unpublish" type="button" hidden>Unpublish</button>
+    <button class="pill danger" id="delete" type="button">Delete</button>
+  </div>
+  <p class="banner" id="banner" hidden><span id="banner-text"></span> <button class="link" id="banner-yes" type="button"></button> <button class="link" id="banner-no" type="button"></button></p>
+  <div class="panes">
+    <div class="src-pane" id="src-pane">
+      <div class="src-tools">
+        <button class="pill" id="upload" type="button">Upload image or video</button>
+        <input id="file" type="file" multiple accept="image/png,image/jpeg,image/gif,image/webp,image/avif,video/mp4,video/webm,video/quicktime" hidden>
+        <span class="note">or paste / drop them in. <code>![caption](…)</code> shows its text under the picture.</span>
+      </div>
+      <textarea class="src" id="body" spellcheck="true" placeholder="Write in Markdown. Paste a screenshot to put it here."></textarea>
+      <div class="drop" id="drop" hidden><span>Drop images or videos</span></div>
+    </div>
+    <div class="preview-pane" id="preview-pane">
+      <p class="kicker preview-kicker">Preview: exactly as the page will look</p>
+      <h1 class="ptitle preview-title" id="p-title"></h1>
+      <p class="byline" id="p-byline"></p>
+      <div class="prose" id="p-body"></div>
+    </div>
+  </div>
+  <ul class="uploads" id="uploads" aria-live="polite"></ul>
+</section>
+
+<div class="toast" id="toast" role="status" hidden></div>
+</body>
+</html>

@@ -1,7 +1,11 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- Every page meant for search results. The FAQ and Credits are dialogs on / (no own URLs); /r/<code> pages are noindex. -->
+<!-- Every page meant for search results. The FAQ and Credits are dialogs on / (no own URLs); /r/<code> pages are noindex.
+     The blog's posts are linked from /blog (accounts renders both, docs/design/blog.md). -->
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
   <url>
     <loc>https://brawlonline.net/</loc>
+  </url>
+  <url>
+    <loc>https://brawlonline.net/blog</loc>
   </url>
 </urlset>

@@ -313,6 +313,20 @@ pub struct Config {
     /// `/assets/...`) are then served from it. Unset in production, where nginx serves the site.
     #[arg(long, env = "WEBSITE_DIR")]
     pub website_dir: Option<std::path::PathBuf>,
+
+    /// Where the blog's images and videos go (served at `/blog/media/<name>`). Relative to the
+    /// working directory (on prod /var/lib/ppserver, so /var/lib/ppserver/blog-media).
+    #[arg(long, env = "BLOG_MEDIA_DIR", default_value = "blog-media")]
+    pub blog_media_dir: std::path::PathBuf,
+
+    /// The largest image or video one upload may send (bytes; default 95 MiB, under Cloudflare's
+    /// 100 MB request limit in front of prod). nginx's `/v1/blog/` location allows a bit more.
+    #[arg(long, env = "BLOG_MEDIA_MAX_BYTES", default_value_t = 95 * 1024 * 1024)]
+    pub blog_media_max_bytes: u64,
+
+    /// All the blog's media together (bytes; default 20 GiB). Past it uploads are refused (507).
+    #[arg(long, env = "BLOG_MEDIA_MAX_TOTAL_BYTES", default_value_t = 20 * 1024 * 1024 * 1024)]
+    pub blog_media_max_total_bytes: u64,
 }
 
 impl Config {
@@ -355,6 +369,9 @@ impl Config {
             sd_listing_max_bytes: 64 * 1024 * 1024,
             sd_listings_max_total_bytes: 4 * 1024 * 1024 * 1024,
             website_dir: None,
+            blog_media_dir: std::env::temp_dir().join("pp-accounts-test-blog-media"),
+            blog_media_max_bytes: 95 * 1024 * 1024,
+            blog_media_max_total_bytes: 20 * 1024 * 1024 * 1024,
         }
     }
 }

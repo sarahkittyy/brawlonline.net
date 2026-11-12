@@ -270,6 +270,13 @@ enum UserCmd {
     UnlockName {
         ident: String,
     },
+    /// Set the account's role: `admin` may write the blog (brawlonline.net/blog/write/) and,
+    /// later, whatever else the website's admin pages offer; `user` is everyone else.
+    Role {
+        ident: String,
+        #[arg(value_parser = ["user", "admin"])]
+        role: String,
+    },
     /// Ask the slur filter (DEEPINFRA_API_KEY, as accounts) about every account's display name and
     /// connect code start, and list the ones it calls a slur. With --apply, give those a
     /// kind name or code start, as accounts does at sign-up. Banned accounts are skipped.
@@ -871,6 +878,24 @@ async fn main() -> anyhow::Result<()> {
                 u.display_name,
                 u.connect_code.as_deref().unwrap_or("-"),
                 if u.rename_locked_at.is_none() { "; it was not locked" } else { "" }
+            );
+        }
+        Cmd::User(UserCmd::Role { ident, role }) => {
+            let u = find(&pool, &ident).await?;
+            sqlx::query("UPDATE users SET role = $2 WHERE uid = $1").bind(u.uid).bind(&role).execute(&pool).await?;
+            store::audit(
+                &pool,
+                &actor,
+                "user.role",
+                Some(&u.uid.to_string()),
+                serde_json::json!({"from": u.role, "to": role}),
+            )
+            .await?;
+            println!(
+                "{} ({}) is now {role}{}",
+                u.display_name,
+                u.connect_code.as_deref().unwrap_or("-"),
+                if u.role == role { " (it already was)" } else { "" }
             );
         }
         Cmd::User(UserCmd::SlurScan { apply, concurrency, filter }) => {

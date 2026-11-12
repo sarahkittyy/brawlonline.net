@@ -1,0 +1,273 @@
+/* The pieces every logged-in page of the site shares (/login/, /blog/write/, later /admin/):
+   the palette, the menu font, the one-line wordmark, buttons, fields, cards and the account chip.
+   Same look as the landing page (style.css). docs/design/blog.md §4. */
+
+@font-face {
+  font-family: "Barlow Condensed";
+  font-style: italic;
+  font-weight: 900;
+  font-display: block;
+  src: url("/assets/fonts/barlow-condensed-900-italic.woff2") format("woff2");
+}
+
+:root {
+  --bg: #08080b;
+  --fg: #f1f1f4;
+  --dim: rgba(241, 241, 244, 0.5);
+  --line: rgba(241, 241, 244, 0.12);
+  --field: rgba(241, 241, 244, 0.05);
+  --panel: #111116;
+  --pm-rim: #03190a;
+  --pm-edge: #b9f59a;
+  --pm-hi: #74de55;
+  --pm-mid: #2c9d34;
+  --pm-lo: #0f5f20;
+  --pm-skew: -11deg;
+  --warn: #ffd25e;
+  --bad: #ff8a7a;
+  color-scheme: dark;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+body.app {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font: 400 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* "BRAWL ONLINE" on one line, ONLINE in green (as on the profile pages), and what the page is. */
+.app-mark {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 10px;
+  color: var(--fg);
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.app-mark .name,
+.app-mark .what,
+.pill,
+.btn,
+.app-title {
+  font-family: "Barlow Condensed", system-ui, sans-serif;
+  font-style: italic;
+  font-weight: 900;
+  font-synthesis: none;
+}
+
+.app-mark .name {
+  font-size: 24px;
+  letter-spacing: 0.01em;
+  text-transform: uppercase;
+}
+
+.app-mark .name .w2 {
+  color: var(--pm-hi);
+}
+
+.app-mark .what {
+  font-size: 18px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+
+.app-title {
+  margin: 0;
+  font-size: 30px;
+  line-height: 1.05;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+/* A small rounded button, as the home page's FAQ / Credits. */
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 14px 6px;
+  border: 1px solid rgba(241, 241, 244, 0.2);
+  border-radius: 999px;
+  background: rgba(8, 8, 11, 0.45);
+  color: rgba(241, 241, 244, 0.7);
+  font-size: 15px;
+  line-height: 1;
+  letter-spacing: 0.05em;
+  text-decoration: none;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+
+.pill:hover:not(:disabled) {
+  color: var(--fg);
+  border-color: rgba(241, 241, 244, 0.5);
+}
+
+.pill:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.pill.danger:hover:not(:disabled) {
+  color: var(--bad);
+  border-color: rgba(255, 138, 122, 0.6);
+}
+
+/* The main action: a green menu-button plate (style.css ".plate"). */
+.btn {
+  position: relative;
+  isolation: isolate;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 2.3em;
+  padding: 0 1.15em;
+  border: 0;
+  background: none;
+  color: #fff;
+  font-size: 16px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  -webkit-text-stroke: 0.13em var(--pm-rim);
+  paint-order: stroke fill;
+  text-shadow: 0 0.06em 0 var(--pm-rim);
+  cursor: pointer;
+}
+
+.btn::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  transform: skewX(var(--pm-skew));
+  border: 0.16em solid var(--pm-rim);
+  border-radius: 0.5em 0.22em 0.5em 0.22em;
+  background:
+    linear-gradient(180deg, var(--pm-hi) 0%, var(--pm-mid) 55%, var(--pm-lo) 100%) padding-box,
+    var(--pm-rim);
+  box-shadow:
+    inset 0 0 0 0.06em var(--pm-edge),
+    inset 0 0.14em 0.12em rgba(255, 255, 255, 0.28),
+    inset 0 -0.22em 0.24em rgba(0, 20, 6, 0.45),
+    0 0 0 0.04em rgba(150, 235, 130, 0.28),
+    0 0.3em 1em rgba(0, 0, 0, 0.5);
+  transition: filter 0.15s;
+}
+
+.btn:hover:not(:disabled)::before,
+.btn:focus-visible::before {
+  filter: brightness(1.14) saturate(1.05);
+}
+
+.btn:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.btn:focus-visible,
+.pill:focus-visible {
+  outline: 2px solid var(--pm-hi);
+  outline-offset: 3px;
+}
+
+/* Text fields. */
+.field {
+  display: grid;
+  gap: 6px;
+}
+
+.field > span {
+  font-size: 13px;
+  color: var(--dim);
+}
+
+.input {
+  width: 100%;
+  min-width: 0;
+  padding: 9px 11px;
+  border: 1px solid rgba(241, 241, 244, 0.16);
+  border-radius: 8px;
+  background: var(--field);
+  color: var(--fg);
+  font: inherit;
+}
+
+.input:focus {
+  outline: none;
+  border-color: var(--pm-mid);
+  box-shadow: 0 0 0 3px rgba(44, 157, 52, 0.25);
+}
+
+.input::placeholder {
+  color: rgba(241, 241, 244, 0.3);
+}
+
+/* A dark card with the green top edge (the FAQ, the Top 10). */
+.card {
+  border: 1px solid var(--line);
+  border-top: 3px solid var(--pm-mid);
+  border-radius: 14px;
+  background: var(--panel);
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.6);
+}
+
+.error {
+  margin: 0;
+  color: var(--bad);
+  font-size: 14px;
+}
+
+.note {
+  margin: 0;
+  color: var(--dim);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.note a,
+.link {
+  color: var(--pm-hi);
+  text-underline-offset: 3px;
+}
+
+button.link {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+/* BrawlAuth.mountAccount: "Name CODE  [Log out]". */
+.account-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  color: rgba(241, 241, 244, 0.75);
+  white-space: nowrap;
+}
+
+.account-code {
+  color: var(--dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.account-chip .pill {
+  padding: 5px 11px 4px;
+  font-size: 13px;
+}

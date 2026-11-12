@@ -153,6 +153,7 @@ Rules:
   | Ruleset lookups by code and public list pages (`GET /v1/rulesets/<code>`, `GET /v1/rulesets`, public; one count) | IP | 60 per minute, 1,000 per hour |
   | Profiles (`GET /v1/profiles/<id>` and the `/profile/<code>` page; one count) | IP | 60 per minute, 1,000 per hour |
   | Profile changes (`PUT /v1/me/profile`) | account | 30 per minute, 300 per hour |
+  | Blog pages (`/blog`, `/blog/<slug>`; not their images and videos) | IP | 120 per minute, 2,000 per hour |
   | Own ruleset calls (drafts, hide, remembered ruleset, lists) | account | 120 per minute |
   | mm tickets | account | 1 per 2 s |
   | mm `hello` (online connection) | account | 10 per minute |
@@ -303,6 +304,10 @@ The launcher's bug icon (next to the profile in the header) opens a popup: the p
 - Limits: one zip at most `BUG_REPORT_MAX_LOGS_BYTES` (32 MiB), all zips at most `BUG_REPORTS_MAX_TOTAL_BYTES` (4 GiB; past it a zip is refused with 507 and the text is still kept), 5000 characters of text, the per-IP rate limit above.
 - `admin bug list` / `bug show ID` / `bug resolve ID [--note]` / `bug reopen ID` / `bug delete ID...` / `bug clear --yes` (below). Resolving keeps the zip; delete and clear remove the rows and their zips.
 
+## Blog
+
+`brawlonline.net/blog`: posts written in the web editor (`/blog/write/`, accounts with `role = 'admin'`: `admin user role IDENT admin`) and rendered here from Markdown, plus their images and videos (`BLOG_MEDIA_DIR`, served at `/blog/media/<hash>.<ext>`). Editor API under `/v1/blog/` (Bearer session, admins only). Code: `crates/accounts/src/blog.rs`, migration `0033_blog.sql`; the editor and the website's login are static files in `website/`. Design, the one-time production steps (nginx, the unit's `StateDirectory`) and the reasons: docs/design/blog.md.
+
 ## Admin CLI
 
 ```sh
@@ -319,6 +324,7 @@ admin user rename IDENT NAME                   # the launcher's name rule; rooms
 admin user set-code IDENT CODE
 admin user lock-name IDENT [--reason TEXT]     # the player can no longer rename (403 rename_locked); never automatic
 admin user unlock-name IDENT
+admin user role IDENT user|admin               # admin may write the blog (brawlonline.net/blog/write/, docs/design/blog.md); audited
 admin user slur-scan [--apply]                 # the slur filter (DEEPINFRA_API_KEY) over every unbanned account's name and code start; --apply replaces the flagged ones
 admin user slur-log [--limit 50]               # every slur replacement (filter and slur-scan), newest first: typed -> stored, the account now
 admin user delete IDENT --yes                  # with its sessions and email tokens; the connect code is free again at once

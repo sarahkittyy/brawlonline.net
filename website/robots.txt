@@ -7,5 +7,7 @@ Disallow: /build-assets/
 Disallow: /user/
 Disallow: /verify-email
 Disallow: /reset-password
+Disallow: /login/
+Disallow: /blog/write/
 
 Sitemap: https://brawlonline.net/sitemap.xml

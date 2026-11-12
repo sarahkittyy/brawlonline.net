@@ -192,6 +192,7 @@ impl Stack {
         }
         let bug_reports_dir = std::env::temp_dir().join(format!("pp-e2e-bug-reports-{db_name}"));
         cfg.bug_reports_dir = bug_reports_dir.clone();
+        cfg.blog_media_dir = std::env::temp_dir().join(format!("pp-e2e-blog-media-{db_name}"));
         let mailer = MemoryMailer::new();
         let state = accounts::AppState::new(pool.clone(), cfg, Arc::new(mailer.clone()))?;
         let accounts_task = tokio::spawn(async move {

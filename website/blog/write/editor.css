@@ -1,0 +1,386 @@
+/* The blog editor (/blog/write/). Uses /auth/auth.css (buttons, fields, cards) and /blog/blog.css
+   (the preview: .ptitle, .byline, .prose, exactly as on the page). */
+
+body.editor {
+  height: 100vh;
+  height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.grow {
+  flex: 1;
+}
+
+.ebar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 18px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+}
+
+/* ---- Loading / not allowed, and the list ---- */
+
+.gate,
+.list {
+  flex: 1;
+  overflow: auto;
+  padding: 40px 16px;
+}
+
+.gate-card,
+.list-card {
+  width: min(760px, 100%);
+  margin: 0 auto;
+  padding: 22px 26px;
+}
+
+.gate-card {
+  display: grid;
+  gap: 14px;
+  justify-items: start;
+}
+
+.list-head {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 10px;
+}
+
+.post-rows {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.post-rows a {
+  display: grid;
+  grid-template-columns: 92px 1fr auto;
+  gap: 14px;
+  align-items: center;
+  padding: 12px 4px;
+  border-top: 1px solid rgba(241, 241, 244, 0.08);
+  color: var(--fg);
+  text-decoration: none;
+}
+
+.post-rows a:hover .row-title {
+  color: var(--pm-hi);
+}
+
+.row-title {
+  font-weight: 600;
+}
+
+.row-title.untitled {
+  color: var(--dim);
+  font-style: italic;
+}
+
+.row-date {
+  font-size: 13px;
+  color: var(--dim);
+  font-variant-numeric: tabular-nums;
+}
+
+/* "Draft" / "Published". */
+.status {
+  display: inline-block;
+  justify-self: start;
+  padding: 3px 9px;
+  border: 1px solid rgba(255, 196, 0, 0.5);
+  border-radius: 999px;
+  color: var(--warn);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.status.published {
+  border-color: rgba(116, 222, 85, 0.55);
+  color: var(--pm-hi);
+}
+
+/* ---- One post ---- */
+
+.edit {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.edit-bar,
+.edit-meta {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 18px;
+  border-bottom: 1px solid var(--line);
+  background: #0e0e12;
+}
+
+.edit-meta {
+  padding-top: 8px;
+  padding-bottom: 8px;
+  flex-wrap: wrap;
+  row-gap: 8px;
+}
+
+.title-input {
+  flex: 1;
+  font-size: 17px;
+  font-weight: 600;
+}
+
+.save-state {
+  min-width: 9em;
+  font-size: 12px;
+  color: var(--dim);
+  white-space: nowrap;
+}
+
+.save-state.dirty {
+  color: var(--warn);
+}
+
+.save-state.bad {
+  color: var(--bad);
+}
+
+.meta-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--dim);
+  white-space: nowrap;
+}
+
+.meta-field .input {
+  padding: 5px 8px;
+  font-size: 13px;
+}
+
+.slug-field .input {
+  width: 260px;
+  font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+}
+
+.slug-field.bad .input {
+  border-color: var(--bad);
+}
+
+.meta-field #author {
+  width: 150px;
+}
+
+.summary-field {
+  flex: 1;
+  min-width: 220px;
+}
+
+.summary-field .input {
+  flex: 1;
+}
+
+.banner {
+  margin: 0;
+  padding: 9px 18px;
+  border-bottom: 1px solid rgba(255, 196, 0, 0.35);
+  background: rgba(60, 46, 0, 0.55);
+  color: var(--warn);
+  font-size: 14px;
+}
+
+.banner .link {
+  margin-left: 10px;
+  color: var(--fg);
+}
+
+.panes {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+}
+
+.src-pane {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-right: 1px solid var(--line);
+  background: #0b0b0f;
+}
+
+.src-tools {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 18px;
+  border-bottom: 1px solid rgba(241, 241, 244, 0.07);
+}
+
+.src-tools .pill {
+  font-size: 13px;
+}
+
+.src-tools .note code {
+  padding: 0 4px;
+  border-radius: 4px;
+  background: rgba(241, 241, 244, 0.08);
+  color: rgba(241, 241, 244, 0.75);
+}
+
+.src {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  padding: 20px 24px 40vh;
+  border: 0;
+  outline: none;
+  resize: none;
+  background: transparent;
+  color: rgba(241, 241, 244, 0.88);
+  font: 14px/1.65 ui-monospace, "Cascadia Mono", Consolas, monospace;
+  tab-size: 4;
+}
+
+.drop {
+  position: absolute;
+  inset: 8px;
+  display: grid;
+  place-items: center;
+  border: 2px dashed var(--pm-hi);
+  border-radius: 12px;
+  background: rgba(8, 30, 10, 0.82);
+  color: var(--pm-hi);
+  font: 900 italic 26px/1 "Barlow Condensed", system-ui, sans-serif;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  pointer-events: none;
+}
+
+.preview-pane {
+  min-height: 0;
+  overflow: auto;
+  padding: 24px 34px 40vh;
+  background: rgba(17, 17, 22, 0.6);
+}
+
+.preview-kicker {
+  margin: 0 0 10px;
+  font-family: "Barlow Condensed", system-ui, sans-serif;
+  font-style: italic;
+  font-weight: 900;
+  font-size: 13px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--pm-hi);
+}
+
+.preview-title {
+  font-size: clamp(26px, 2.6vw, 38px);
+}
+
+.preview-title.empty {
+  color: var(--dim);
+}
+
+/* Uploads in progress, bottom left over the Markdown. */
+.uploads {
+  position: fixed;
+  left: 16px;
+  bottom: 16px;
+  z-index: 5;
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.uploads li {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 4px 12px;
+  align-items: center;
+  width: 320px;
+  padding: 9px 12px;
+  border: 1px solid rgba(116, 222, 85, 0.4);
+  border-radius: 9px;
+  background: #0f1a10;
+  font-size: 12.5px;
+  color: #c9f7b6;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+}
+
+.uploads .name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.uploads .bar {
+  grid-column: 1 / -1;
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(241, 241, 244, 0.12);
+  overflow: hidden;
+}
+
+.uploads .bar > span {
+  display: block;
+  height: 100%;
+  width: 0;
+  background: var(--pm-hi);
+  transition: width 0.2s;
+}
+
+.uploads button {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--dim);
+  font: inherit;
+  cursor: pointer;
+}
+
+.toast {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 6;
+  max-width: 420px;
+  padding: 10px 14px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: #16161c;
+  font-size: 13.5px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+}
+
+.toast.bad {
+  border-color: rgba(255, 138, 122, 0.55);
+  color: var(--bad);
+}
+
+@media (max-width: 900px) {
+  .panes {
+    grid-template-columns: 1fr;
+    grid-template-rows: 1fr 1fr;
+  }
+
+  .src-pane {
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .edit-bar {
+    flex-wrap: wrap;
+  }
+}

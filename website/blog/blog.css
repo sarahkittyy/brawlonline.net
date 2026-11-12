@@ -1,0 +1,656 @@
+/* brawlonline.net/blog: the index and the posts, which accounts renders
+   (server/crates/accounts/src/blog.rs, docs/design/blog.md). The blog editor (/blog/write/) loads
+   this file too, for its preview (.prose and .ptitle). Same palette, font and menu-button frame as
+   the landing page (style.css); the gameplay still stands in for its video. */
+
+@font-face {
+  font-family: "Barlow Condensed";
+  font-style: italic;
+  font-weight: 900;
+  font-display: block;
+  src: url("/assets/fonts/barlow-condensed-900-italic.woff2") format("woff2");
+}
+
+:root {
+  --bg: #08080b;
+  --fg: #f1f1f4;
+  --dim: rgba(241, 241, 244, 0.42);
+  --text: rgba(241, 241, 244, 0.82);
+  --line: rgba(241, 241, 244, 0.12);
+  --card: rgba(17, 17, 22, 0.92);
+  --pm-rim: #03190a;
+  --pm-edge: #b9f59a;
+  --pm-hi: #74de55;
+  --pm-mid: #2c9d34;
+  --pm-lo: #0f5f20;
+  --pm-skew: -11deg;
+  --backdrop-opacity: 0.16;
+  color-scheme: dark;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+body.blog {
+  margin: 0;
+  min-height: 100vh;
+  background: var(--bg);
+  color: var(--fg);
+  font: 400 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+}
+
+/* The landing page's gameplay still, very dim, with its darkened edges. */
+.backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  background: url("/assets/bg-poster.jpg") center / cover;
+  opacity: var(--backdrop-opacity);
+  pointer-events: none;
+}
+
+body.blog::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 1;
+  background: radial-gradient(ellipse at center, transparent 40%, rgba(0, 0, 0, 0.55) 100%);
+  pointer-events: none;
+}
+
+/* ---- The landing page's pieces ------------------------------------------------ */
+
+.font-menu,
+.pill,
+.wordmark,
+.ptitle,
+.kicker,
+.section,
+.plate .label {
+  font-family: "Barlow Condensed", system-ui, sans-serif;
+  font-style: italic;
+  font-weight: 900;
+  font-synthesis: none;
+}
+
+/* The FAQ / Credits / Blog buttons, top left as on the home page. */
+.top-nav {
+  position: absolute;
+  z-index: 3;
+  top: max(16px, env(safe-area-inset-top));
+  left: max(16px, env(safe-area-inset-left));
+  display: flex;
+  gap: 8px;
+}
+
+.pill {
+  display: inline-block;
+  color: var(--dim);
+  text-decoration: none;
+  padding: 7px 14px 6px;
+  border: 1px solid rgba(241, 241, 244, 0.2);
+  border-radius: 999px;
+  font-size: 1rem;
+  line-height: 1;
+  letter-spacing: 0.06em;
+  background: rgba(8, 8, 11, 0.45);
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.pill:hover {
+  color: var(--fg);
+  border-color: rgba(241, 241, 244, 0.5);
+}
+
+.pill.on {
+  color: var(--fg);
+  border-color: var(--pm-mid);
+}
+
+/* The menu-button frame (style.css ".plate"): a slanted, rounded green plate. */
+.plate {
+  position: relative;
+  isolation: isolate;
+}
+
+.plate::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  transform: skewX(var(--pm-skew));
+  border: 0.16em solid var(--pm-rim);
+  border-radius: 0.5em 0.22em 0.5em 0.22em;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.3) 0%, rgba(255, 255, 255, 0.1) 46%, rgba(255, 255, 255, 0) 47%) padding-box,
+    linear-gradient(180deg, var(--pm-hi) 0%, var(--pm-mid) 52%, var(--pm-lo) 100%) padding-box,
+    var(--pm-rim);
+  box-shadow:
+    inset 0 0 0 0.06em var(--pm-edge),
+    inset 0 0.14em 0.12em rgba(255, 255, 255, 0.28),
+    inset 0 -0.22em 0.24em rgba(0, 20, 6, 0.45),
+    0 0 0 0.04em rgba(150, 235, 130, 0.28),
+    0 0.3em 1.2em rgba(0, 0, 0, 0.6);
+  transition: filter 0.15s;
+}
+
+.wordmark {
+  display: block;
+  font-size: 1em;
+  line-height: 0.86;
+  letter-spacing: 0.015em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  text-align: left;
+  color: #fff;
+  -webkit-text-stroke: 0.1em var(--pm-rim);
+  paint-order: stroke fill;
+  text-shadow: 0 0.05em 0 var(--pm-rim), 0 0.06em 0.18em rgba(0, 0, 0, 0.45);
+}
+
+.wordmark .w1,
+.wordmark .w2 {
+  display: block;
+}
+
+.wordmark .w2 {
+  padding-left: 1.55em;
+}
+
+/* ---- The page ------------------------------------------------------------------ */
+
+.wrap {
+  position: relative;
+  z-index: 2;
+  width: min(760px, calc(100vw - 32px));
+  margin: 0 auto;
+  padding: max(84px, calc(env(safe-area-inset-top) + 72px)) 0 48px;
+}
+
+/* The small logo with "Blog" beside it; links to the index. */
+.brand {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 14px;
+  margin-bottom: 30px;
+  text-decoration: none;
+}
+
+.brand .logo.plate {
+  display: inline-block;
+  font-size: 34px;
+  padding: 0.2em 0.62em 0.3em 0.56em;
+}
+
+.brand .section {
+  padding-bottom: 4px;
+  font-size: 30px;
+  line-height: 1;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+
+.brand:hover .plate::before {
+  filter: brightness(1.1);
+}
+
+.kicker {
+  font-size: 14px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--pm-hi);
+}
+
+.date {
+  font-size: 13px;
+  color: rgba(241, 241, 244, 0.55);
+  font-variant-numeric: tabular-nums;
+}
+
+.ptitle {
+  display: block;
+  margin: 0;
+  line-height: 1.02;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--fg);
+}
+
+.summary {
+  display: block;
+  margin: 10px 0 0;
+  line-height: 1.55;
+  color: rgba(241, 241, 244, 0.72);
+}
+
+/* A dark card with the green top edge (the FAQ and the Top 10). */
+.panel,
+.hero,
+.article {
+  border: 1px solid var(--line);
+  border-top: 3px solid var(--pm-mid);
+  border-radius: 14px;
+  background: var(--card);
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.6);
+}
+
+.panel {
+  padding: 4px 28px;
+}
+
+.panel.empty {
+  padding: 26px 28px;
+}
+
+.panel.empty h1 {
+  margin: 0 0 6px;
+  font: 900 italic 28px/1.1 "Barlow Condensed", system-ui, sans-serif;
+  text-transform: uppercase;
+}
+
+.panel.empty p {
+  margin: 0;
+  color: var(--text);
+}
+
+/* ---- The index: the latest post up top ---- */
+
+.hero {
+  display: block;
+  overflow: hidden;
+  color: inherit;
+  text-decoration: none;
+  transition: border-color 0.15s, transform 0.15s;
+}
+
+.hero:hover {
+  transform: translateY(-1px);
+  border-color: rgba(116, 222, 85, 0.5);
+}
+
+.hero .cover {
+  position: relative;
+  display: block;
+  aspect-ratio: 16 / 7;
+  overflow: hidden;
+}
+
+.hero .cover img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center 40%;
+}
+
+.hero .cover::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, transparent 40%, rgba(17, 17, 22, 0.96) 100%);
+}
+
+.hero-body {
+  position: relative;
+  display: block;
+  margin-top: -54px;
+  padding: 0 28px 26px;
+}
+
+.hero .meta {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  margin-bottom: 6px;
+}
+
+.hero .ptitle {
+  font-size: clamp(28px, 5vw, 40px);
+  -webkit-text-stroke: 0.08em var(--pm-rim);
+  paint-order: stroke fill;
+  text-shadow: 0 0.05em 0 var(--pm-rim);
+}
+
+.read.plate {
+  display: inline-flex;
+  align-items: center;
+  margin-top: 18px;
+  height: 2.4em;
+  padding: 0 1.25em;
+  font-size: 17px;
+  color: #fff;
+}
+
+/* A button: no gloss band, as the home page's Download. */
+.read.plate::before {
+  background:
+    linear-gradient(180deg, var(--pm-hi) 0%, var(--pm-mid) 55%, var(--pm-lo) 100%) padding-box,
+    var(--pm-rim);
+}
+
+.hero:hover .read.plate::before {
+  filter: brightness(1.14) saturate(1.05);
+}
+
+.plate .label {
+  font-size: 1.05em;
+  line-height: 1;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  -webkit-text-stroke: 0.14em var(--pm-rim);
+  paint-order: stroke fill;
+  text-shadow: 0 0.06em 0 var(--pm-rim);
+}
+
+.older {
+  margin-top: 28px;
+}
+
+.older h2 {
+  margin: 0 0 6px 4px;
+  font: 900 italic 18px/1.2 "Barlow Condensed", system-ui, sans-serif;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+
+.rows {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.rows a {
+  display: grid;
+  grid-template-columns: 0.38em 96px 1fr;
+  gap: 16px;
+  align-items: center;
+  padding: 12px 2px;
+  border-top: 1px solid rgba(241, 241, 244, 0.08);
+  color: var(--fg);
+  text-decoration: none;
+}
+
+.rows li:first-child a {
+  border-top: 0;
+}
+
+/* The landing page's slanted green bar. */
+.rows a::before {
+  content: "";
+  width: 0.38em;
+  height: 1.1em;
+  transform: skewX(var(--pm-skew));
+  border-radius: 2px;
+  background: linear-gradient(180deg, var(--pm-hi), var(--pm-mid));
+  box-shadow: 0 0 0 1px var(--pm-rim);
+}
+
+.rows .t {
+  font-weight: 600;
+  font-size: 16px;
+}
+
+.rows .s {
+  display: block;
+  margin-top: 2px;
+  font-weight: 400;
+  font-size: 14px;
+  color: rgba(241, 241, 244, 0.6);
+}
+
+.rows a:hover .t {
+  color: var(--pm-hi);
+}
+
+@media (max-width: 560px) {
+  .rows a {
+    grid-template-columns: 0.38em 1fr;
+    row-gap: 2px;
+  }
+
+  .rows .date {
+    grid-column: 2;
+  }
+
+  .rows .t {
+    grid-column: 2;
+  }
+
+  .rows a::before {
+    grid-row: 1 / span 2;
+  }
+}
+
+/* ---- A post ---- */
+
+.draft-banner {
+  margin: 0 0 14px;
+  padding: 10px 16px;
+  border: 1px solid rgba(255, 196, 0, 0.45);
+  border-radius: 10px;
+  background: rgba(60, 46, 0, 0.6);
+  color: #ffd25e;
+  font-size: 14px;
+}
+
+.article {
+  padding: 34px 44px 40px;
+}
+
+.article .ptitle {
+  font-size: clamp(30px, 5.4vw, 44px);
+}
+
+.byline {
+  margin: 12px 0 28px;
+  font-size: 14px;
+  color: rgba(241, 241, 244, 0.55);
+}
+
+.back {
+  margin-top: 26px;
+}
+
+.foot {
+  margin: 36px 0 0;
+  text-align: center;
+  font-size: 13px;
+  color: rgba(241, 241, 244, 0.5);
+}
+
+.foot a {
+  color: var(--pm-hi);
+}
+
+@media (max-width: 600px) {
+  .wrap {
+    width: calc(100vw - 20px);
+  }
+
+  .article {
+    padding: 24px 20px 28px;
+  }
+
+  .hero-body {
+    padding: 0 20px 22px;
+  }
+
+  .panel {
+    padding: 4px 18px;
+  }
+
+  .brand .logo.plate {
+    font-size: 28px;
+  }
+
+  .brand .section {
+    font-size: 25px;
+  }
+}
+
+/* ---- The post's text (also the editor's preview) ---- */
+
+.prose {
+  font-size: 16.5px;
+  line-height: 1.7;
+  color: var(--text);
+  overflow-wrap: break-word;
+}
+
+.prose > :first-child {
+  margin-top: 0;
+}
+
+.prose p {
+  margin: 0 0 1em;
+}
+
+.prose h1,
+.prose h2 {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 44px 0 10px;
+  font: 900 italic 30px/1.1 "Barlow Condensed", system-ui, sans-serif;
+  font-synthesis: none;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--fg);
+}
+
+.prose h1::before,
+.prose h2::before {
+  content: "";
+  flex: none;
+  width: 0.3em;
+  height: 0.85em;
+  transform: skewX(var(--pm-skew));
+  border-radius: 2px;
+  background: linear-gradient(180deg, var(--pm-hi), var(--pm-mid));
+  box-shadow: 0 0 0 1px var(--pm-rim);
+}
+
+.prose h3,
+.prose h4 {
+  margin: 28px 0 6px;
+  font-size: 18px;
+  font-weight: 650;
+  line-height: 1.35;
+  color: var(--fg);
+}
+
+.prose strong {
+  color: var(--fg);
+  font-weight: 650;
+}
+
+.prose a {
+  color: var(--pm-hi);
+  text-underline-offset: 3px;
+}
+
+.prose code {
+  padding: 1px 6px;
+  border-radius: 5px;
+  font-size: 0.88em;
+  background: rgba(241, 241, 244, 0.08);
+  color: var(--fg);
+}
+
+.prose pre {
+  overflow-x: auto;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.35);
+  line-height: 1.5;
+}
+
+.prose pre code {
+  padding: 0;
+  background: none;
+}
+
+.prose hr {
+  height: 1px;
+  margin: 40px 0 0;
+  border: 0;
+  background: rgba(241, 241, 244, 0.1);
+}
+
+.prose ul,
+.prose ol {
+  margin: 0 0 1em;
+  padding-left: 22px;
+}
+
+.prose li {
+  margin: 8px 0;
+}
+
+.prose li::marker {
+  color: var(--pm-mid);
+}
+
+.prose blockquote {
+  margin: 0 0 1em;
+  padding: 2px 0 2px 18px;
+  border-left: 3px solid var(--pm-mid);
+  color: rgba(241, 241, 244, 0.7);
+}
+
+.prose table {
+  width: 100%;
+  margin: 0 0 1em;
+  border-collapse: collapse;
+  font-size: 15px;
+}
+
+.prose th,
+.prose td {
+  padding: 8px 10px;
+  border-bottom: 1px solid rgba(241, 241, 244, 0.1);
+  text-align: left;
+}
+
+.prose th {
+  color: var(--fg);
+  font-weight: 600;
+}
+
+.prose figure {
+  margin: 26px 0;
+}
+
+.prose img,
+.prose video {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #000;
+}
+
+.prose p img {
+  display: inline-block;
+  vertical-align: middle;
+}
+
+.prose video {
+  width: 100%;
+}
+
+.prose figcaption {
+  margin-top: 8px;
+  text-align: center;
+  font-size: 13px;
+  color: rgba(241, 241, 244, 0.5);
+}

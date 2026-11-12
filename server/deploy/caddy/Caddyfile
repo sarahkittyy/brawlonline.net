@@ -23,6 +23,13 @@ brawlonline.net {
 	handle @profile {
 		reverse_proxy 127.0.0.1:8080
 	}
+	# The blog (docs/design/blog.md): accounts renders /blog and /blog/<slug> and serves the
+	# uploaded images and videos; blog.css and the editor (/blog/write/) are static.
+	redir /blog/ /blog permanent
+	@blog path_regexp ^/blog(/[a-z0-9-]{1,80}|/media/[0-9a-f]{20}\.[a-z0-9]{3,4})?$
+	handle @blog {
+		reverse_proxy 127.0.0.1:8080
+	}
 	# Everything else is the static website.
 	# Ruleset pages: /r/<code> is website/r/index.html (docs/rulesets-protocol.md §4).
 	# Link previews (Discordbot and the like) get accounts' preview page instead: they don't run
