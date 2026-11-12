@@ -37,6 +37,28 @@ constexpr size_t REPLY_LEN = 4 + 1 + 16 + 2;
 // A failed lookup is tried again at a search this long after it.
 constexpr u64 RETRY_MS = 60 * 1000;
 
+// Cloudflare's proxy ranges (cloudflare.com/ips-v6). mm6's record behind Cloudflare's proxy (an
+// orange cloud) resolves here, and Cloudflare passes no UDP: no probe is ever answered (bug
+// #284, 2026-11-12: every player's mm6 was 2606:4700:...). The record must be "DNS only".
+bool IsCloudflareProxy(const u8* a)
+{
+  const u32 top = (u32{a[0]} << 24) | (u32{a[1]} << 16) | (u32{a[2]} << 8) | a[3];
+  struct Range
+  {
+    u32 prefix;
+    int bits;
+  };
+  static constexpr Range ranges[] = {{0x2400cb00, 32}, {0x26064700, 32}, {0x2803f800, 32},
+                                     {0x2405b500, 32}, {0x24058100, 32}, {0x2a0698c0, 29},
+                                     {0x2c0ff248, 32}};
+  for (const Range& r : ranges)
+  {
+    if ((top >> (32 - r.bits)) == (r.prefix >> (32 - r.bits)))
+      return true;
+  }
+  return false;
+}
+
 struct Discovery
 {
   std::mutex mutex;
@@ -83,9 +105,17 @@ std::optional<ENetAddress> Lookup(const std::string& host, int port)
     if (r->ai_family != AF_INET6 || !r->ai_addr || r->ai_addrlen < sizeof(sockaddr_in6))
       continue;
     const auto* sin6 = reinterpret_cast<const sockaddr_in6*>(r->ai_addr);
-    const enet_uint32 h = enet_ipv6_handle_of(reinterpret_cast<const enet_uint8*>(&sin6->sin6_addr));
+    const auto* bytes = reinterpret_cast<const enet_uint8*>(&sin6->sin6_addr);
+    const enet_uint32 h = enet_ipv6_handle_of(bytes);
     if (h != 0)
     {
+      if (IsCloudflareProxy(bytes))
+      {
+        WARN_LOG_FMT(NETPLAY,
+                     "IPv6: {} resolves to a Cloudflare proxy address, which passes no UDP: "
+                     "the server will not answer (its DNS record must be DNS only)",
+                     host);
+      }
       ENetAddress out{};
       out.host = h;
       out.port = static_cast<enet_uint16>(port);
