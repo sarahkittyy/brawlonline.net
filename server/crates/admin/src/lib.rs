@@ -9,6 +9,11 @@ pub async fn find(pool: &PgPool, ident: &str) -> anyhow::Result<UserRow> {
     store::find_user(pool, ident).await?.ok_or_else(|| anyhow::anyhow!("no user matches {ident:?}"))
 }
 
+/// The names the account gives its P+ rooms and its Brawl Mods rooms (`None`: "alice's room").
+pub async fn room_names(pool: &PgPool, uid: uuid::Uuid) -> anyhow::Result<(Option<String>, Option<String>)> {
+    Ok(sqlx::query_as("SELECT room_name, mods_room_name FROM users WHERE uid = $1").bind(uid).fetch_one(pool).await?)
+}
+
 /// A one-time reset link for one account.
 #[derive(Debug, Clone)]
 pub struct ResetLink {
