@@ -2,6 +2,8 @@
 //! `audit_log`. Reads DATABASE_URL (and, for `reset-password --send-email`,
 //! the mail settings) from the environment or `server/.env`.
 
+mod filter;
+
 use std::time::Duration as StdDuration;
 
 use accounts::config::{MailConfig, SlurFilterConfig};
@@ -55,6 +57,10 @@ enum Cmd {
     /// Rooms open now, and the names their hosts give them.
     #[command(subcommand)]
     Room(RoomCmd),
+    /// The name filter's rules (display names, code starts, room names, social media
+    /// usernames): add, test against every name players have now, turn on and off.
+    #[command(subcommand)]
+    Filter(filter::FilterCmd),
     /// Bug reports from the launcher's bug button, with their logs zips.
     #[command(subcommand)]
     Bug(BugCmd),
@@ -307,8 +313,9 @@ enum UserCmd {
         #[arg(value_parser = ["user", "admin"])]
         role: String,
     },
-    /// Ask the slur filter (DEEPINFRA_API_KEY, as accounts) about every account's display name and
-    /// connect code start, and list the ones it calls a slur. With --apply, give those a
+    /// Check every account's display name and connect code start with the name filter's rules
+    /// that are on (`filter list`; ai ones need DEEPINFRA_API_KEY, as accounts), and list the
+    /// ones it flags. With --apply, give those a
     /// kind name or code start, as accounts does at sign-up. Banned accounts are skipped.
     SlurScan {
         /// Replace the flagged names and codes (default: only list them).
@@ -679,6 +686,7 @@ async fn main() -> anyhow::Result<()> {
                 if u.chat_muted_at.is_none() { "; it was not muted" } else { "" }
             );
         }
+        Cmd::Filter(cmd) => filter::run(&pool, &actor, cmd).await?,
         Cmd::Stats { days, offset, mm_status_url } => {
             print_stats(&pool, days.clamp(1, 365), offset, &mm_status_url).await?
         }
@@ -1070,8 +1078,10 @@ async fn slur_scan(
 ) -> anyhow::Result<()> {
     use accounts::slur_filter::{SlurFilter, What};
     use std::sync::Arc;
-    let filter = Arc::new(SlurFilter::new(cfg)?);
-    anyhow::ensure!(filter.enabled(), "the slur filter is off: set DEEPINFRA_API_KEY");
+    let filter = Arc::new(SlurFilter::new(cfg, pool.clone())?);
+    if !filter.enabled() {
+        eprintln!("no DEEPINFRA_API_KEY: only the word, regex and allow rules are used");
+    }
     let users: Vec<UserRow> = store::list_users(pool).await?.into_iter().filter(|u| !u.is_banned()).collect();
     let gate = Arc::new(tokio::sync::Semaphore::new(concurrency));
     let mut checks = tokio::task::JoinSet::new();

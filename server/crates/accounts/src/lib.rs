@@ -69,6 +69,7 @@ impl AppState {
     pub fn new(pool: PgPool, cfg: Config, mailer: Arc<dyn mail::Mailer>) -> anyhow::Result<Self> {
         let secret = PlayKeySecret::parse(&cfg.play_key_secret)?;
         let hash_params = password::HashParams { memory_kib: cfg.argon2_memory_kib, iterations: cfg.argon2_iterations };
+        let slur_filter = Arc::new(slur_filter::SlurFilter::new(&cfg.slur_filter, pool.clone())?);
         Ok(AppState {
             pool,
             secret,
@@ -79,7 +80,7 @@ impl AppState {
             mm_status: Arc::new(rooms::MmStatusSource::new(&cfg.mm_status_url)),
             social: Arc::new(social::SocialHub::new(!cfg.disable_rate_limits)),
             live: Arc::new(live::LiveHub::new(!cfg.disable_rate_limits)),
-            slur_filter: Arc::new(slur_filter::SlurFilter::new(&cfg.slur_filter)?),
+            slur_filter,
             cfg: Arc::new(cfg),
         })
     }
