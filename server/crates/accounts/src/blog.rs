@@ -455,6 +455,182 @@ pub fn sniff_media(head: &[u8]) -> Option<(MediaKind, &'static str)> {
     None
 }
 
+/// The movie timescale uploads get (ticks per second): what ffmpeg writes by default.
+const MOVIE_TIMESCALE: u32 = 1000;
+
+/// The child boxes of an MP4 box's payload: (type, start, header length, size). Stops at the first
+/// box that doesn't fit.
+fn mp4_boxes(buf: &[u8]) -> Vec<([u8; 4], usize, usize, usize)> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i + 8 <= buf.len() {
+        let size32 = u32::from_be_bytes(buf[i..i + 4].try_into().unwrap());
+        let typ: [u8; 4] = buf[i + 4..i + 8].try_into().unwrap();
+        let (size, hdr) = match size32 {
+            0 => ((buf.len() - i) as u64, 8),
+            1 if i + 16 <= buf.len() => (u64::from_be_bytes(buf[i + 8..i + 16].try_into().unwrap()), 16),
+            1 => break,
+            n => (n as u64, 8),
+        };
+        if size < hdr as u64 || size > (buf.len() - i) as u64 {
+            break;
+        }
+        out.push((typ, i, hdr, size as usize));
+        i += size as usize;
+    }
+    out
+}
+
+/// Rescales the u32 (or, `long`, u64) duration at `buf[at..]` from `from` ticks a second to
+/// `MOVIE_TIMESCALE`. All ones means "unknown" and stays. False when it doesn't fit in `buf`.
+fn rescale_field(buf: &mut [u8], at: usize, long: bool, from: u32) -> bool {
+    let scale = |v: u64| ((v as u128 * MOVIE_TIMESCALE as u128 + from as u128 / 2) / from as u128) as u64;
+    if long {
+        let Some(f) = buf.get_mut(at..at + 8) else { return false };
+        let v = u64::from_be_bytes(f.try_into().unwrap());
+        if v != u64::MAX {
+            f.copy_from_slice(&scale(v).to_be_bytes());
+        }
+    } else {
+        let Some(f) = buf.get_mut(at..at + 4) else { return false };
+        let v = u32::from_be_bytes(f.try_into().unwrap());
+        if v != u32::MAX {
+            f.copy_from_slice(&(scale(v as u64) as u32).to_be_bytes());
+        }
+    }
+    true
+}
+
+/// Sets an MP4/MOV's movie timescale to `MOVIE_TIMESCALE` when it is finer, rescaling what is
+/// counted in it (mvhd's duration, each tkhd's, each edit's, mehd's), as an ffmpeg remux does.
+/// `moov` is the moov box's payload; sizes don't change. Returns whether it changed anything.
+///
+/// ffmpeg 8 writes the tracks' common multiple as the movie timescale (47952000 for 59.94 fps
+/// video with 48 kHz audio), and Firefox then shows a video's first frame only while its time and
+/// sound run on (Sarah's board, 2026-11-12: "i also see the video frozen ... it's stuck on one
+/// frame"). The tracks' own timescales (the samples' times) are untouched.
+pub fn normalize_movie_timescale(moov: &mut [u8]) -> bool {
+    let kids = mp4_boxes(moov);
+    let Some(&(_, at, hdr, size)) = kids.iter().find(|b| &b.0 == b"mvhd") else { return false };
+    let mvhd = &mut moov[at + hdr..at + size];
+    // version, flags, creation and modification times, then the timescale and the duration.
+    let (ts_at, long) = match mvhd.first() {
+        Some(0) => (12, false),
+        Some(1) => (20, true),
+        _ => return false,
+    };
+    let Some(ts) = mvhd.get(ts_at..ts_at + 4) else { return false };
+    let from = u32::from_be_bytes(ts.try_into().unwrap());
+    if from <= MOVIE_TIMESCALE || mvhd.len() < ts_at + 4 + if long { 8 } else { 4 } {
+        return false;
+    }
+    // Check every field fits before changing any, so a cut-off box changes nothing.
+    let mut fields: Vec<(usize, bool)> = vec![(at + hdr + ts_at + 4, long)];
+    for &(typ, t_at, t_hdr, t_size) in &kids {
+        let body = t_at + t_hdr..t_at + t_size;
+        match &typ {
+            b"trak" => {
+                for (k, k_at, k_hdr, k_size) in mp4_boxes(&moov[body.clone()]) {
+                    let k_at = body.start + k_at;
+                    match &k {
+                        // version, flags, times, track id, reserved, then the duration.
+                        b"tkhd" => match moov.get(k_at + k_hdr) {
+                            Some(0) => fields.push((k_at + k_hdr + 20, false)),
+                            Some(1) => fields.push((k_at + k_hdr + 28, true)),
+                            _ => return false,
+                        },
+                        b"edts" => {
+                            let edts = k_at + k_hdr..k_at + k_size;
+                            for (e, e_at, e_hdr, e_size) in mp4_boxes(&moov[edts.clone()]) {
+                                if &e != b"elst" {
+                                    continue;
+                                }
+                                let e_body = edts.start + e_at + e_hdr;
+                                let Some(head) = moov.get(e_body..e_body + 8) else { return false };
+                                let long = head[0] == 1;
+                                let n = u32::from_be_bytes(head[4..8].try_into().unwrap()) as usize;
+                                let entry = if long { 20 } else { 12 };
+                                if 8 + n * entry > e_size - e_hdr {
+                                    return false;
+                                }
+                                // Each edit: its duration (movie timescale), then where it starts
+                                // in the track (the track's own timescale) and its rate.
+                                fields.extend((0..n).map(|j| (e_body + 8 + j * entry, long)));
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            b"mvex" => {
+                for (k, k_at, k_hdr, _) in mp4_boxes(&moov[body.clone()]) {
+                    let k_body = body.start + k_at + k_hdr;
+                    if &k == b"mehd" {
+                        fields.push((k_body + 4, moov.get(k_body) == Some(&1)));
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    if fields.iter().any(|&(f, long)| f + if long { 8 } else { 4 } > moov.len()) {
+        return false;
+    }
+    for (f, long) in fields {
+        rescale_field(moov, f, long, from);
+    }
+    moov[at + hdr + ts_at..at + hdr + ts_at + 4].copy_from_slice(&MOVIE_TIMESCALE.to_be_bytes());
+    true
+}
+
+/// `normalize_movie_timescale` on an MP4/MOV file, in place (the moov box keeps its size and
+/// place). Returns whether the file changed.
+fn normalize_video_file(path: &FsPath) -> std::io::Result<bool> {
+    use std::io::{Read, Seek, SeekFrom, Write};
+    let mut f = std::fs::OpenOptions::new().read(true).write(true).open(path)?;
+    let len = f.metadata()?.len();
+    let mut pos = 0u64;
+    while pos + 8 <= len {
+        let mut h = [0u8; 8];
+        f.seek(SeekFrom::Start(pos))?;
+        f.read_exact(&mut h)?;
+        let (size, hdr) = match u32::from_be_bytes(h[..4].try_into().unwrap()) {
+            0 => (len - pos, 8),
+            1 => {
+                let mut l = [0u8; 8];
+                f.read_exact(&mut l)?;
+                (u64::from_be_bytes(l), 16)
+            }
+            n => (n as u64, 8),
+        };
+        if size < hdr || pos + size > len {
+            return Ok(false);
+        }
+        if &h[4..8] == b"moov" {
+            if size > 64 << 20 {
+                return Ok(false);
+            }
+            let mut moov = vec![0u8; (size - hdr) as usize];
+            f.read_exact(&mut moov)?;
+            if !normalize_movie_timescale(&mut moov) {
+                return Ok(false);
+            }
+            f.seek(SeekFrom::Start(pos + hdr))?;
+            f.write_all(&moov)?;
+            f.flush()?;
+            return Ok(true);
+        }
+        pos += size;
+    }
+    Ok(false)
+}
+
+fn sha256_file(path: &FsPath) -> std::io::Result<[u8; 32]> {
+    let mut hasher = Sha256::new();
+    std::io::copy(&mut std::fs::File::open(path)?, &mut hasher)?;
+    Ok(hasher.finalize().into())
+}
+
 /// A stored file's name: 20 hex digits of the content's SHA-256 and a known extension.
 pub fn valid_media_name(name: &str) -> bool {
     let Some((stem, ext)) = name.split_once('.') else { return false };
@@ -513,7 +689,7 @@ pub async fn upload_media(State(state): State<AppState>, headers: HeaderMap, bod
     tokio::fs::create_dir_all(dir).await.map_err(|e| media_storage(format!("{}: {e}", dir.display())))?;
     let partial = dir.join(format!(".upload-{}.partial", &random_token()[..12]));
     let written = write_media(body, &partial, max).await;
-    let (size, digest, head) = match written {
+    let (size, mut digest, head) = match written {
         Ok(w) => w,
         Err(e) => {
             let _ = tokio::fs::remove_file(&partial).await;
@@ -528,6 +704,28 @@ pub async fn upload_media(State(state): State<AppState>, headers: HeaderMap, bod
             "Only PNG, JPEG, GIF, WebP and AVIF images and MP4, WebM and MOV videos.",
         ));
     };
+    if kind == MediaKind::Video && ext != "webm" {
+        // A movie timescale Firefox can't play (normalize_movie_timescale): fixed before it is named,
+        // so the same upload again gets the same name.
+        let p = partial.clone();
+        let fixed = tokio::task::spawn_blocking(move || -> std::io::Result<Option<[u8; 32]>> {
+            Ok(if normalize_video_file(&p)? { Some(sha256_file(&p)?) } else { None })
+        })
+        .await
+        .map_err(std::io::Error::other)
+        .and_then(|r| r);
+        match fixed {
+            Ok(Some(d)) => {
+                tracing::info!(original_name, "blog upload: movie timescale set to {MOVIE_TIMESCALE}");
+                digest = d;
+            }
+            Ok(None) => {}
+            Err(e) => {
+                let _ = tokio::fs::remove_file(&partial).await;
+                return Err(media_storage(format!("{}: {e}", partial.display())));
+            }
+        }
+    }
     let name = format!("{}.{ext}", &hex::encode(digest)[..20]);
     let dest = dir.join(&name);
     if tokio::fs::try_exists(&dest).await.unwrap_or(false) {
@@ -1408,6 +1606,60 @@ mod tests {
         assert_eq!(slugify("Write"), "post");
         assert!(slugify(&"word ".repeat(40)).len() <= MAX_SLUG);
         assert!(check_slug(&slugify(&"word ".repeat(40))).is_ok());
+    }
+
+    fn mp4_box(typ: &[u8; 4], body: &[u8]) -> Vec<u8> {
+        let mut b = ((body.len() + 8) as u32).to_be_bytes().to_vec();
+        b.extend_from_slice(typ);
+        b.extend_from_slice(body);
+        b
+    }
+
+    /// The moov of the upload Firefox froze on (ffmpeg 8: Lavc63.1.101 libx264, 59.94 fps + 48 kHz).
+    fn ffmpeg8_moov(elst_entries: u32) -> Vec<u8> {
+        let mut mvhd = vec![0u8; 12];
+        mvhd.extend(47_952_000u32.to_be_bytes());
+        mvhd.extend(869_600_000u32.to_be_bytes());
+        mvhd.extend([0u8; 80]);
+        let mut tkhd = vec![0u8, 0, 0, 3];
+        tkhd.extend([0u8; 16]);
+        tkhd.extend(869_600_000u32.to_be_bytes());
+        tkhd.extend([0u8; 60]);
+        let mut elst = vec![0u8; 4];
+        elst.extend(elst_entries.to_be_bytes());
+        for (dur, start) in [(800_000u32, -1i32), (868_800_000, 400)] {
+            elst.extend(dur.to_be_bytes());
+            elst.extend(start.to_be_bytes());
+            elst.extend([0, 1, 0, 0]);
+        }
+        let trak =
+            [mp4_box(b"tkhd", &tkhd), mp4_box(b"edts", &mp4_box(b"elst", &elst)), mp4_box(b"mdia", &[0; 12])].concat();
+        [mp4_box(b"mvhd", &mvhd), mp4_box(b"trak", &trak)].concat()
+    }
+
+    #[test]
+    fn movie_timescale() {
+        let be32 = |b: &[u8], at: usize| u32::from_be_bytes(b[at..at + 4].try_into().unwrap());
+        let mut moov = ffmpeg8_moov(2);
+        assert!(normalize_movie_timescale(&mut moov));
+        // mvhd: timescale and duration.
+        assert_eq!((be32(&moov, 8 + 12), be32(&moov, 8 + 16)), (1000, 18135));
+        let tkhd = 108 + 8; // after mvhd and trak's header
+        assert_eq!(be32(&moov, tkhd + 8 + 20), 18135, "tkhd duration");
+        // Each edit's duration in milliseconds; where it starts in the track is the track's own time.
+        let elst = tkhd + 92 + 8 + 8 + 8; // after tkhd, edts and elst's headers, version and count
+        assert_eq!((be32(&moov, elst), be32(&moov, elst + 4) as i32), (17, -1));
+        assert_eq!((be32(&moov, elst + 12), be32(&moov, elst + 16)), (18118, 400));
+        // Already 1000: nothing to do.
+        let again = moov.clone();
+        assert!(!normalize_movie_timescale(&mut moov));
+        assert_eq!(moov, again);
+        // An edit list longer than its box: nothing changes at all.
+        let mut bad = ffmpeg8_moov(9);
+        let before = bad.clone();
+        assert!(!normalize_movie_timescale(&mut bad));
+        assert_eq!(bad, before);
+        assert!(!normalize_movie_timescale(&mut []));
     }
 
     #[test]

@@ -108,6 +108,21 @@ async fn blog_posts_pages_and_media() {
         assert_eq!(st, 404, "{bad}");
     }
 
+    // An ffmpeg 8 MP4 (a movie timescale Firefox freezes on) is stored with ffmpeg's usual 1000,
+    // and the same upload again is the same file.
+    let mvhd = [&[0u8; 12][..], &47_952_000u32.to_be_bytes(), &869_600_000u32.to_be_bytes(), &[0u8; 80]].concat();
+    let moov = [&116u32.to_be_bytes()[..], b"moov", &108u32.to_be_bytes(), b"mvhd", &mvhd].concat();
+    let ffmpeg8 = [&b"\0\0\0\x10ftypisom\0\0\x02\0\0\0\0\x6cmdat"[..], &[9u8; 100], &moov].concat();
+    let (st, fixed) = upload(&s, &admin, ffmpeg8.clone()).await;
+    assert_eq!((st, fixed["kind"].as_str()), (200, Some("video")), "{fixed}");
+    let mut expected = ffmpeg8.clone();
+    expected[124 + 16 + 12..124 + 16 + 20]
+        .copy_from_slice(&[&1000u32.to_be_bytes()[..], &18_135u32.to_be_bytes()].concat());
+    let resp = s.http.get(s.url(fixed["url"].as_str().unwrap())).send().await.unwrap();
+    assert_eq!(resp.bytes().await.unwrap().as_ref(), expected.as_slice());
+    let (_, again) = upload(&s, &admin, ffmpeg8).await;
+    assert_eq!(again["url"], fixed["url"]);
+
     let body_md = format!(
         "Welcome to the very first progress report for **Brawl Online**!\n\n![The waiting room]({img_url})\n\n## New Ways to Play\n\nDoubles queue:\n- **Solo:** jump in\n- **Duo:** team up\n\n![]({vid_url})\n\n<script>alert(1)</script>\n"
     );
