@@ -174,3 +174,22 @@
   border-radius: 50%;
   background-color: oklch(from var(--accent-primary) 46% calc(c * 0.5) h);
 }
+
+/* An admin account's offline players, after the online ones: under a small heading, dimmed; a banned one struck
+   through. */
+.offlineHeader {
+  padding: 10px 12px 4px;
+  color: var(--text-dim);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.offline {
+  opacity: 0.55;
+}
+
+.banned {
+  text-decoration: line-through;
+}

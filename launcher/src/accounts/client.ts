@@ -4,6 +4,10 @@ import type {
   AccountsErrorBody,
   AccountsMe,
   AccountsPublicUser,
+  AdminCodeOwner,
+  AdminPlayer,
+  AdminUser,
+  AdminUserUpdate,
   BugReportCreated,
   BugReportRequest,
   LauncherSettings,
@@ -141,6 +145,44 @@ export class AccountsHttpClient {
       token,
       body: { kind, name },
     });
+    return res.name;
+  }
+
+  /** `GET /v1/admin/players` (admins only). */
+  async adminPlayers(token: string, q?: string): Promise<AdminPlayer[]> {
+    const res = await this._request<{ players: AdminPlayer[] }>("GET", `/v1/admin/players${queryString({ q })}`, {
+      token,
+    });
+    return res.players;
+  }
+
+  adminUser(token: string, target: string): Promise<AdminUser> {
+    return this._request("GET", `/v1/admin/users/${encodeURIComponent(target)}`, { token });
+  }
+
+  adminSetMuted(token: string, target: string, muted: boolean): Promise<AdminUser> {
+    return this._request("PUT", `/v1/admin/users/${encodeURIComponent(target)}/muted`, { token, body: { muted } });
+  }
+
+  adminSetBanned(token: string, target: string, banned: boolean): Promise<AdminUser> {
+    return this._request("PUT", `/v1/admin/users/${encodeURIComponent(target)}/banned`, { token, body: { banned } });
+  }
+
+  adminUpdateUser(token: string, target: string, update: AdminUserUpdate): Promise<AdminUser> {
+    return this._request("PUT", `/v1/admin/users/${encodeURIComponent(target)}`, { token, body: update });
+  }
+
+  adminCodeOwner(token: string, code: string): Promise<AdminCodeOwner> {
+    return this._request("GET", `/v1/admin/codes${queryString({ code })}`, { token });
+  }
+
+  /** `PUT /v1/admin/rooms/<code>/name`: what was stored. */
+  async adminRenameRoom(token: string, code: string, name: string | null): Promise<string | null> {
+    const res = await this._request<{ kind: RoomKind; name: string | null }>(
+      "PUT",
+      `/v1/admin/rooms/${encodeURIComponent(code)}/name`,
+      { token, body: { name } },
+    );
     return res.name;
   }
 

@@ -151,6 +151,52 @@ describe("PublicRoomsView", () => {
     expect((getByTestId("room-name-input") as HTMLInputElement).value).toBe("too long");
   });
 
+  it("gives an admin the pencil on every room, which renames it without joining", async () => {
+    const onAdminRename = vi.fn(() => Promise.resolve());
+    const onJoin = vi.fn();
+    const { container, getAllByTestId, getByTestId, queryAllByTestId, rerender } = render(
+      <PublicRoomsView
+        state={{ kind: "ready", online: 1, rooms }}
+        onJoin={onJoin}
+        onRetry={vi.fn()}
+        onLogIn={vi.fn()}
+        yourRoom={{ kind: "pplus", code: "PLNX", host: false, name: null }}
+        onRenameRoom={vi.fn()}
+        onAdminRenameRoom={onAdminRename}
+      />,
+    );
+    // Every room, the one the admin is in without hosting it too; never a button inside the row's button.
+    expect(getAllByTestId("room-name-pencil")).toHaveLength(rooms.length);
+    const inRowButtons = container.querySelectorAll('button[data-room] [data-testid="room-name-pencil"]');
+    expect(inRowButtons).toHaveLength(rooms.length - 1);
+    for (const pencil of Array.from(inRowButtons)) {
+      expect(pencil.tagName).toBe("SPAN");
+    }
+    const row = container.querySelector('[data-room="KFQB"]')!;
+    fireEvent.click(row.querySelector('[data-testid="room-name-pencil"]')!);
+    expect(onJoin).not.toHaveBeenCalled();
+    fireEvent.click(getByTestId("room-name-input"));
+    fireEvent.change(getByTestId("room-name-input"), { target: { value: "be nice" } });
+    await act(async () => {
+      fireEvent.keyDown(getByTestId("room-name-input"), { key: "Enter" });
+    });
+    expect(onAdminRename).toHaveBeenCalledWith("KFQB", "be nice");
+    expect(onJoin).not.toHaveBeenCalled();
+
+    // Not an admin: only the host's own room has one (here, none).
+    rerender(
+      <PublicRoomsView
+        state={{ kind: "ready", online: 1, rooms }}
+        onJoin={onJoin}
+        onRetry={vi.fn()}
+        onLogIn={vi.fn()}
+        yourRoom={{ kind: "pplus", code: "PLNX", host: false, name: null }}
+        onRenameRoom={vi.fn()}
+      />,
+    );
+    expect(queryAllByTestId("room-name-pencil")).toHaveLength(0);
+  });
+
   it("joins open rooms (also in game) but not full ones", () => {
     const onJoin = vi.fn();
     const { container } = view({ kind: "ready", online: 1, rooms }, onJoin);

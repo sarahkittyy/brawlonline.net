@@ -58,6 +58,9 @@ pub struct Profile {
     pub show_country: bool,
     /// The same for their primary main (the leaderboard, chat).
     pub show_main: bool,
+    /// One of the game's developers (`users.role = 'admin'`): a purple `</>` beside the name, in the
+    /// launcher's profiles and on the profile page.
+    pub dev: bool,
 }
 
 /// What shows beside a player's name in the launcher's lists ([`name_tags`]): the flag and the
@@ -261,6 +264,7 @@ async fn profile_of(pool: &PgPool, user: &UserRow, base_url: &str) -> sqlx::Resu
         socials,
         show_country: stored.show_country,
         show_main: stored.show_main,
+        dev: user.role == "admin",
     })
 }
 
@@ -674,7 +678,7 @@ pub fn page_html(p: &Profile, base: &str) -> String {
   <section class=\"card who\" data-tier=\"{tier}\">
     <div class=\"badge\">{badge}</div>
     <div>
-      <h1 class=\"name\">{name}</h1>
+      <h1 class=\"name\">{name}{dev}</h1>
       <p class=\"code\">{code}</p>
 {country}
       <p class=\"standing\">{standing}</p>
@@ -699,8 +703,19 @@ pub fn page_html(p: &Profile, base: &str) -> String {
         about = about_html(p),
         country = country_html(p),
         socials = socials_html(p),
+        dev = if p.dev { DEV_BADGE } else { "" },
     )
 }
+
+/// The developers' mark after the name: the launcher's `</>` (MUI CodeRounded) in the room codes'
+/// purple, "Dev" on hover.
+const DEV_BADGE: &str = concat!(
+    r#"<span class="dev" title="Dev" aria-label="Dev" role="img"><svg viewBox="0 0 24 24" aria-hidden="true">"#,
+    r#"<path d="M8.7 15.9 4.8 12l3.9-3.9c.39-.39.39-1.01 0-1.4a.9839.9839 0 0 0-1.4 0l-4.59 4.59c-.39.39-.39 1.02 0 "#,
+    r#"1.41l4.59 4.6c.39.39 1.01.39 1.4 0 .39-.39.39-1.01 0-1.4m6.6 0 3.9-3.9-3.9-3.9a.9839.9839 0 0 1 0-1.4c.39-.39 "#,
+    r#"1.01-.39 1.4 0l4.59 4.59c.39.39.39 1.02 0 1.41l-4.59 4.6c-.39.39-1.01.39-1.4 0a.9839.9839 0 0 1 0-1.4"/>"#,
+    r#"</svg></span>"#,
+);
 
 /// The flag and the country's name, under the code (as in the launcher); nothing without one.
 fn country_html(p: &Profile) -> String {
@@ -849,6 +864,7 @@ mod tests {
             socials: vec![],
             show_country: true,
             show_main: true,
+            dev: false,
         }
     }
 
@@ -916,6 +932,16 @@ mod tests {
         assert!(html.contains("<h2>Socials</h2>"));
         assert!(html.contains("<a href=\"https://twitch.tv/sarahkitty\" title=\"Twitch: @sarahkitty\""));
         assert!(html.contains("<span>sarah&lt;kitty&gt;</span>"));
+    }
+
+    #[test]
+    fn page_marks_a_dev() {
+        let mut p = profile(None, None, 0);
+        assert!(!page_html(&p, "").contains("class=\"dev\""));
+        p.dev = true;
+        let html = page_html(&p, "");
+        assert!(html.contains("&amp;<span class=\"dev\" title=\"Dev\""), "{html}");
+        assert!(html.contains("4.59 4.59c") && html.contains("</svg></span></h1>"), "{html}");
     }
 
     #[test]

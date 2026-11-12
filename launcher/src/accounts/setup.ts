@@ -7,6 +7,13 @@ import { AccountsManager } from "./accounts_manager";
 import { AccountsHttpClient } from "./client";
 import { resolveServiceUrls } from "./config";
 import {
+  ipc_accountsAdminCodeOwner,
+  ipc_accountsAdminPlayers,
+  ipc_accountsAdminRenameRoom,
+  ipc_accountsAdminSetBanned,
+  ipc_accountsAdminSetMuted,
+  ipc_accountsAdminUpdateUser,
+  ipc_accountsAdminUser,
   ipc_accountsBrowseRulesets,
   ipc_accountsChangeEmail,
   ipc_accountsCreateRulesetDraft,
@@ -69,6 +76,21 @@ export default function setupAccountsIpc() {
   );
   ipc_accountsRooms.main!.handle(async ({ uid }) => await manager.rooms(uid));
   ipc_accountsSetRoomName.main!.handle(async ({ uid, kind, name }) => await manager.setRoomName(uid, kind, name));
+  ipc_accountsAdminPlayers.main!.handle(async ({ uid, q }) => await manager.adminPlayers(uid, q));
+  ipc_accountsAdminUser.main!.handle(async ({ uid, target }) => await manager.adminUser(uid, target));
+  ipc_accountsAdminSetMuted.main!.handle(
+    async ({ uid, target, muted }) => await manager.adminSetMuted(uid, target, muted),
+  );
+  ipc_accountsAdminSetBanned.main!.handle(
+    async ({ uid, target, banned }) => await manager.adminSetBanned(uid, target, banned),
+  );
+  ipc_accountsAdminUpdateUser.main!.handle(
+    async ({ uid, target, update }) => await manager.adminUpdateUser(uid, target, update),
+  );
+  ipc_accountsAdminCodeOwner.main!.handle(async ({ uid, code }) => await manager.adminCodeOwner(uid, code));
+  ipc_accountsAdminRenameRoom.main!.handle(
+    async ({ uid, code, name }) => await manager.adminRenameRoom(uid, code, name),
+  );
   ipc_accountsRuleset.main!.handle(async ({ code }) => await manager.ruleset(code));
   ipc_accountsBrowseRulesets.main!.handle(
     async ({ q, limit, after }) => await manager.browseRulesets({ q, limit, after }),

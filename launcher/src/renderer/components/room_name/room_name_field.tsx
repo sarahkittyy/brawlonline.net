@@ -24,13 +24,24 @@ export type RoomNameFieldProps = {
   className?: string;
   /** Stories and screenshots: open with this text. */
   initialEditText?: string;
+  /** Inside a list row that is itself a button (an admin's pencil on another player's room): the pencil is a
+   * span, as a button can't hold another. */
+  inButton?: boolean;
 };
 
 /**
  * A room's name with the host's pencil (docs/design/rooms.md §1.4). Editing is in place: Enter or a click elsewhere
  * saves, Esc goes back. Clicks and keys stay inside, so a list row around it doesn't take them.
  */
-export const RoomNameField = ({ name, fallback, canEdit, onSave, className, initialEditText }: RoomNameFieldProps) => {
+export const RoomNameField = ({
+  name,
+  fallback,
+  canEdit,
+  onSave,
+  className,
+  initialEditText,
+  inButton = false,
+}: RoomNameFieldProps) => {
   const [text, setText] = useState<string | null>(initialEditText ?? null);
   const [saving, setSaving] = useState(false);
   // Esc (or a save under way) closes the box without the blur saving again.
@@ -138,6 +149,7 @@ export const RoomNameField = ({ name, fallback, canEdit, onSave, className, init
         <Tooltip title={Messages.renameTooltip()} placement="top" enterDelay={300} disableInteractive={true}>
           <IconButton
             size="small"
+            component={inButton ? "span" : "button"}
             aria-label={Messages.rename()}
             sx={{
               flexShrink: 0,
@@ -147,7 +159,7 @@ export const RoomNameField = ({ name, fallback, canEdit, onSave, className, init
               borderRadius: "5px",
               "&:hover, &:focus-visible": { color: "var(--text-primary)", borderColor: "rgb(255 255 255 / 30%)" },
             }}
-            onClick={(e) => {
+            onClick={(e: React.MouseEvent) => {
               e.stopPropagation();
               open();
             }}

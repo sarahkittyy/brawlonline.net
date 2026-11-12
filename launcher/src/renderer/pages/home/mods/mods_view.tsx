@@ -90,6 +90,8 @@ export type ModsViewProps = {
   yourRoom?: YourRoom | null;
   /** The host names their room (empty: no name); throws when the server refused it. */
   onRenameRoom?: (code: string, name: string) => Promise<void>;
+  /** An admin account: every room has the pencil, and names it as its host would. */
+  onAdminRenameRoom?: (code: string, name: string) => Promise<void>;
   /** "Joins with": rooms of the mod whose build hash is `roomHash` join with this game from now on. */
   onSetRoomGame?: (roomHash: string, buildId: string) => void;
   /** What joining a room whose card is `roomRoot` downloads with each game, by build id (logged in). */
@@ -166,6 +168,7 @@ export const ModsView = (props: ModsViewProps) => {
                 onCopyCode={props.onCopyCode}
                 yourRoom={props.yourRoom}
                 onRename={props.onRenameRoom}
+                onAdminRename={props.onAdminRenameRoom}
                 onCodes={roomBuild && props.onCodes ? () => props.onCodes?.(roomBuild) : undefined}
               />
             </div>
@@ -184,6 +187,7 @@ export const ModsView = (props: ModsViewProps) => {
             onMissingGame={props.onMissingGame}
             onFixBuild={props.onFixBuild}
             onLogIn={props.onLogIn}
+            onAdminRename={props.onAdminRenameRoom}
           />
         </div>
         {/* Right: the player's games. */}
@@ -430,6 +434,7 @@ const PublicRoomsBlock = ({
   onMissingGame,
   onFixBuild,
   onLogIn,
+  onAdminRename,
 }: {
   rooms: ModsPublicRooms;
   /** The room this player is in: listed, marked as theirs. */
@@ -447,6 +452,8 @@ const PublicRoomsBlock = ({
   onMissingGame: (name: string, hash: string) => void;
   onFixBuild: (build: ModBuild, part: "disc" | "sd") => void;
   onLogIn: () => void;
+  /** An admin account: each room's pencil, as its host has. */
+  onAdminRename?: (code: string, name: string) => Promise<void>;
 }) => {
   const [code, setCode] = useState("");
   // "Joins with": a game picked for one room only (by its code), each game's card against a
@@ -571,10 +578,22 @@ const PublicRoomsBlock = ({
                   }}
                 >
                   <div className={styles.roomMain}>
-                    {/* A room its host didn't name: "alice's room" in grey, so a real name stands out. */}
-                    <div className={clsx(styles.roomHost, !room.name && styles.roomUnnamed)}>
-                      {room.name ?? Messages.roomHost(room.hostName)}
-                    </div>
+                    {onAdminRename ? (
+                      <div className={styles.roomHost}>
+                        <RoomNameField
+                          name={room.name ?? null}
+                          fallback={Messages.roomHost(room.hostName)}
+                          canEdit={true}
+                          onSave={async (name) => onAdminRename(room.code, name)}
+                          inButton={true}
+                        />
+                      </div>
+                    ) : (
+                      // A room its host didn't name: "alice's room" in grey, so a real name stands out.
+                      <div className={clsx(styles.roomHost, !room.name && styles.roomUnnamed)}>
+                        {room.name ?? Messages.roomHost(room.hostName)}
+                      </div>
+                    )}
                     <div className={styles.roomGame}>
                       <span className={styles.crown} title={Messages.hostLabel()}>
                         {"♛ "}
@@ -877,6 +896,7 @@ const RoomPanel = ({
   onCopyCode,
   yourRoom,
   onRename,
+  onAdminRename,
   onCodes,
 }: {
   status: ModRoomStatus | null;
@@ -884,6 +904,8 @@ const RoomPanel = ({
   onCopyCode: (code: string) => void;
   yourRoom?: YourRoom | null;
   onRename?: (code: string, name: string) => Promise<void>;
+  /** An admin account: the pencil even when another player hosts the room. */
+  onAdminRename?: (code: string, name: string) => Promise<void>;
   /** The host: the game's Codes dialog (locked while the room is open). */
   onCodes?: () => void;
 }) => {
@@ -927,8 +949,8 @@ const RoomPanel = ({
       <RoomNameField
         name={listed?.name ?? null}
         fallback={hostName ? RoomNameMessages.defaultName(hostName) : Messages.inRoom(room.code)}
-        canEdit={isHost && !!listed && !!onRename}
-        onSave={async (name) => onRename?.(room.code, name)}
+        canEdit={!!listed && ((isHost && !!onRename) || !!onAdminRename)}
+        onSave={async (name) => (isHost && onRename ? onRename(room.code, name) : onAdminRename?.(room.code, name))}
       />
     );
   } else if (status?.kind === "join") {

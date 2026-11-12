@@ -71,7 +71,7 @@ pub enum CreateUserError {
     Db(#[from] sqlx::Error),
 }
 
-fn is_unique_violation(e: &sqlx::Error, constraint: &str) -> bool {
+pub fn is_unique_violation(e: &sqlx::Error, constraint: &str) -> bool {
     matches!(e, sqlx::Error::Database(db) if db.code().as_deref() == Some("23505")
         && db.constraint().is_some_and(|c| c.contains(constraint)))
 }

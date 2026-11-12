@@ -5,6 +5,10 @@ import type {
   AccountsMe,
   AccountsPublicUser,
   AccountsResult,
+  AdminCodeOwner,
+  AdminPlayer,
+  AdminUser,
+  AdminUserUpdate,
   BugReportRequest,
   BugReportSent,
   LauncherSettings,
@@ -128,6 +132,34 @@ export class AccountsManager {
 
   setRoomName(uid: string, kind: RoomKind, name: string | null): Promise<AccountsResult<string | null>> {
     return this._withSession(uid, (token) => this.client.setRoomName(token, kind, name));
+  }
+
+  adminPlayers(uid: string, q?: string): Promise<AccountsResult<AdminPlayer[]>> {
+    return this._withSession(uid, (token) => this.client.adminPlayers(token, q));
+  }
+
+  adminUser(uid: string, target: string): Promise<AccountsResult<AdminUser>> {
+    return this._withSession(uid, (token) => this.client.adminUser(token, target));
+  }
+
+  adminSetMuted(uid: string, target: string, muted: boolean): Promise<AccountsResult<AdminUser>> {
+    return this._withSession(uid, (token) => this.client.adminSetMuted(token, target, muted));
+  }
+
+  adminSetBanned(uid: string, target: string, banned: boolean): Promise<AccountsResult<AdminUser>> {
+    return this._withSession(uid, (token) => this.client.adminSetBanned(token, target, banned));
+  }
+
+  adminUpdateUser(uid: string, target: string, update: AdminUserUpdate): Promise<AccountsResult<AdminUser>> {
+    return this._withSession(uid, (token) => this.client.adminUpdateUser(token, target, update));
+  }
+
+  adminCodeOwner(uid: string, code: string): Promise<AccountsResult<AdminCodeOwner>> {
+    return this._withSession(uid, (token) => this.client.adminCodeOwner(token, code));
+  }
+
+  adminRenameRoom(uid: string, code: string, name: string | null): Promise<AccountsResult<string | null>> {
+    return this._withSession(uid, (token) => this.client.adminRenameRoom(token, code, name));
   }
 
   modRoom(uid: string, code: string): Promise<AccountsResult<PublicModRoom>> {

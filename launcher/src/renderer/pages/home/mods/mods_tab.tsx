@@ -20,7 +20,7 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 
 import { useDolphinStore } from "@/lib/dolphin/use_dolphin_store";
 import { usePlayDialogs } from "@/lib/dolphin/use_play";
-import { useAccount } from "@/lib/hooks/use_account";
+import { useAccount, useIsAdmin } from "@/lib/hooks/use_account";
 import { useLoginModal } from "@/lib/hooks/use_login_modal";
 import { useSettings } from "@/lib/hooks/use_settings";
 import { useToasts } from "@/lib/hooks/use_toasts";
@@ -79,7 +79,8 @@ export const ModsTab = React.memo(function ModsTab() {
   const [adding, setAdding] = useState<AddBuildInitial | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const { uid, query } = useRoomList();
-  const { rename: renameRoom, shown: shownRoomName } = useRoomName("mods");
+  const { rename: renameRoom, adminRename: adminRenameRoom, shown: shownRoomName } = useRoomName("mods");
+  const isAdmin = useIsAdmin();
   // The edited Wii game's save in rooms (null: no save section), and a save picked to replace it.
   const [saveInfo, setSaveInfo] = useState<SaveSectionProps["info"] | null>(null);
   const [saveBusy, setSaveBusy] = useState(false);
@@ -442,6 +443,7 @@ export const ModsTab = React.memo(function ModsTab() {
             : null
         }
         onRenameRoom={renameRoom}
+        onAdminRenameRoom={isAdmin ? adminRenameRoom : undefined}
         onCopyCode={(code) => {
           void navigator.clipboard.writeText(code).then(() => showSuccess(Messages.copied()));
         }}

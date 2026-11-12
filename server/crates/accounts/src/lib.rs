@@ -2,6 +2,7 @@
 //! verification), login, sessions, connect codes, play keys and the data the launcher writes
 //! to `user.json`. See docs/backend-design.md sections 2.4 and 3.
 
+pub mod admin;
 pub mod api;
 pub mod blog;
 pub mod bug_reports;
@@ -232,6 +233,12 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/rooms", get(rooms::rooms))
         .route("/v1/mod-rooms/{code}", get(rooms::mod_room))
         .route("/v1/me/room-name", put(rooms::set_room_name))
+        .route("/v1/admin/players", get(admin::players))
+        .route("/v1/admin/users/{uid}", get(admin::user).put(admin::update_user))
+        .route("/v1/admin/users/{uid}/muted", put(admin::set_muted))
+        .route("/v1/admin/users/{uid}/banned", put(admin::set_banned))
+        .route("/v1/admin/codes", get(admin::code_owner))
+        .route("/v1/admin/rooms/{code}/name", put(admin::rename_room))
         .route("/v1/rulesets", get(rulesets::browse).post(rulesets::publish))
         .route("/v1/rulesets/{code}", get(rulesets::lookup))
         .route("/v1/rulesets/{code}/preview", get(rulesets::preview))

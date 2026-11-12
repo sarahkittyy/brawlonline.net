@@ -297,3 +297,18 @@ h2 {
   color: var(--fg);
   font-size: 14px;
 }
+
+/* A developer's mark after the name: the launcher's </> in the room codes' purple; "Dev" on hover. */
+.dev {
+  display: inline-flex;
+  vertical-align: 0.05em;
+  margin-left: 8px;
+  color: #c9a6f2;
+  cursor: default;
+}
+
+.dev svg {
+  width: 0.85em;
+  height: 0.85em;
+  fill: currentColor;
+}

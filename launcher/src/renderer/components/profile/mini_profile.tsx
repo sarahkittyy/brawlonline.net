@@ -4,6 +4,7 @@ import Tooltip from "@mui/material/Tooltip";
 import { useQuery } from "@tanstack/react-query";
 import React from "react";
 
+import { DevBadge } from "@/components/dev_badge/dev_badge";
 import { Flag } from "@/components/flag/flag";
 import { RankBadge } from "@/components/rank_badge/rank_badge";
 import { RankBadgeMessages } from "@/components/rank_badge/rank_badge.messages";
@@ -58,7 +59,10 @@ const MiniProfile = ({ uid }: { uid: string }) => {
       <div className={styles.miniTop}>
         {(r.rank || placing) && <RankBadge rank={r.rank} setsToPlace={placing ? r.setsToPlace : 0} size="small" />}
         <div className={styles.names}>
-          <div className={styles.miniName}>{data.displayName}</div>
+          <div className={styles.miniName}>
+            {data.displayName}
+            {data.dev && <DevBadge size={15} className={styles.miniDev} />}
+          </div>
           <div className={styles.code}>{data.connectCode}</div>
           {data.country && (
             <div className={styles.miniCountry}>

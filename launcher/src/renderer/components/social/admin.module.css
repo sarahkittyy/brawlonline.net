@@ -1,0 +1,38 @@
+/* The admin tools: the rename box and the ban question (admin_rename_dialog.tsx, player_menu.tsx). */
+
+.fields {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 6px;
+}
+
+.refused {
+  margin: 0 0 6px;
+  color: var(--mui-palette-error-main, #f44336);
+  font-size: 13px;
+}
+
+/* The lock at the bottom left, Cancel and Apply at the right. */
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.spacer {
+  flex: 1;
+}
+
+.locked {
+  color: #e9b52f !important;
+}
+
+.unlocked {
+  color: var(--text-dim) !important;
+}
+
+.banText {
+  margin: 0;
+}

@@ -55,6 +55,11 @@
   min-width: 0;
 }
 
+/* A developer's </> after the name (dev_badge.tsx). */
+.dev {
+  margin-left: 6px;
+}
+
 .badge {
   --rank-badge-size: 88px;
 
@@ -529,6 +534,11 @@
   font-size: 15px;
   font-weight: 700;
   overflow-wrap: anywhere;
+}
+
+.miniDev {
+  margin-left: 5px;
+  vertical-align: -3px;
 }
 
 .miniCountry {

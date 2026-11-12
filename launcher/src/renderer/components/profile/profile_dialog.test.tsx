@@ -44,7 +44,9 @@ const placing: PlayerProfile = {
   },
 };
 
-const profiles: Record<string, PlayerProfile> = { them: gold, me: placing };
+const dev: PlayerProfile = { ...gold, uid: "dev", displayName: "Sarah", connectCode: "SARA#694", dev: true };
+
+const profiles: Record<string, PlayerProfile> = { them: gold, me: placing, dev };
 const fetchProfile = vi.fn(async (id: string) => {
   const p = profiles[id];
   if (!p) {
@@ -114,6 +116,19 @@ describe("ProfileDialog", () => {
       }),
     ]);
     await waitFor(() => expect(document.querySelector("[data-testid=profile-view]")).toBeNull());
+  });
+
+  it("marks a developer's name with the </> (Dev on hover), and nobody else's", async () => {
+    const view = open("dev");
+    await view.findByTestId("profile-name");
+    const badge = view.getByTestId("dev-badge");
+    expect(badge.getAttribute("aria-label")).toBe("Dev");
+    expect(badge.parentElement?.textContent).toBe("Sarah");
+    cleanup();
+    useProfileView.setState({ target: null });
+    const other = open("them");
+    await other.findByTestId("profile-name");
+    expect(other.queryByTestId("dev-badge")).toBeNull();
   });
 
   it("shows the player's own profile while placing, without the buttons", async () => {

@@ -54,6 +54,8 @@ export type PublicRoomsViewProps = {
   yourRoom?: YourRoom | null;
   /** The host names their room (empty: no name); throws when the server refused it. */
   onRenameRoom?: (code: string, name: string) => Promise<void>;
+  /** An admin account: every room has the pencil, and names it as its host would. */
+  onAdminRenameRoom?: (code: string, name: string) => Promise<void>;
   /** Stories and screenshots: your room's name box open with this text. */
   forceEditText?: string;
 };
@@ -81,6 +83,7 @@ export const PublicRoomsView = ({
   forceRowState,
   yourRoom,
   onRenameRoom,
+  onAdminRenameRoom,
   forceEditText,
 }: PublicRoomsViewProps) => {
   const online =
@@ -202,8 +205,8 @@ export const PublicRoomsView = ({
                 <li key={room.code}>
                   <OwnRoomRow
                     room={room}
-                    host={yourRoom.host}
-                    onRename={onRenameRoom}
+                    host={yourRoom.host || onAdminRenameRoom != null}
+                    onRename={yourRoom.host ? onRenameRoom : onAdminRenameRoom}
                     onShowRuleset={onShowRuleset}
                     forceEditText={forceEditText}
                   />
@@ -216,6 +219,7 @@ export const PublicRoomsView = ({
                     busy={joiningCode != null}
                     onJoin={onJoin}
                     onShowRuleset={onShowRuleset}
+                    onRename={onAdminRenameRoom}
                     forceState={forceRowState?.code === room.code ? forceRowState.state : undefined}
                   />
                 </li>
@@ -321,6 +325,7 @@ export const RoomRow = React.memo(function RoomRow({
   busy,
   onJoin,
   onShowRuleset,
+  onRename,
   forceState,
 }: {
   room: PublicRoom;
@@ -329,6 +334,8 @@ export const RoomRow = React.memo(function RoomRow({
   busy: boolean;
   onJoin: (room: PublicRoom) => void;
   onShowRuleset?: (room: PublicRoom) => void;
+  /** An admin account: the room's pencil, as its host has. */
+  onRename?: (code: string, name: string) => Promise<void>;
   forceState?: "hover" | "pressed";
 }) {
   const inGame = room.status === "in-game";
@@ -354,10 +361,22 @@ export const RoomRow = React.memo(function RoomRow({
         }}
       >
         <div className={styles.main}>
-          {/* A room its host didn't name: "alice's room" in grey, so a real name stands out. */}
-          <div className={clsx(styles.host, !room.name && styles.unnamed)}>
-            {room.name ?? RoomNameMessages.defaultName(room.host)}
-          </div>
+          {onRename ? (
+            <div className={styles.host}>
+              <RoomNameField
+                name={room.name ?? null}
+                fallback={RoomNameMessages.defaultName(room.host)}
+                canEdit={true}
+                onSave={async (name) => onRename(room.code, name)}
+                inButton={true}
+              />
+            </div>
+          ) : (
+            // A room its host didn't name: "alice's room" in grey, so a real name stands out.
+            <div className={clsx(styles.host, !room.name && styles.unnamed)}>
+              {room.name ?? RoomNameMessages.defaultName(room.host)}
+            </div>
+          )}
           <PlayerNames room={room} />
         </div>
         <RulesetCell room={room} onShow={onShowRuleset} />

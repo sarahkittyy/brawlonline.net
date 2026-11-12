@@ -106,7 +106,37 @@ export type PlayerProfile = {
   showCountry?: boolean;
   /** The primary main shows beside the player's name (leaderboard, chat). */
   showMain?: boolean;
+  /** One of the game's developers (an admin account): a purple `</>` beside the name. */
+  dev?: boolean;
 };
+
+/** `GET /v1/admin/players`: a player in an admin's online list (the offline part). */
+export type AdminPlayer = {
+  uid: string;
+  displayName: string;
+  connectCode: string;
+  country?: string;
+  main?: string;
+  banned: boolean;
+};
+
+/** `GET /v1/admin/users/<uid>`: what an admin's player menu and rename box show. */
+export type AdminUser = {
+  uid: string;
+  displayName: string;
+  /** Empty before online play is set up. */
+  connectCode: string;
+  muted: boolean;
+  nameLocked: boolean;
+  banned: boolean;
+  admin: boolean;
+};
+
+/** `PUT /v1/admin/users/<uid>`: each field set is changed; all of them or none. */
+export type AdminUserUpdate = { displayName?: string; connectCode?: string; nameLocked?: boolean };
+
+/** `GET /v1/admin/codes`: who has a connect code (`uid` null: nobody). */
+export type AdminCodeOwner = { code: string; uid: string | null; displayName: string | null };
 
 /** What shows beside a name in a list: the flag and the primary main, each only when the player shows it. */
 export type NameTag = {
@@ -436,6 +466,17 @@ export interface AccountsApi {
   /** Names the rooms of this kind the player hosts (null: no name); what was stored comes back
    * (a slur is replaced by a kind name). */
   setRoomName(uid: string, kind: RoomKind, name: string | null): Promise<string | null>;
+  /** Admin accounts only (`/v1/admin/...`; anyone else gets 403 `not_admin`). Accounts with a code: the
+   * most recently seen, or those whose name or code contains `q`. */
+  adminPlayers(uid: string, q?: string): Promise<AdminPlayer[]>;
+  adminUser(uid: string, target: string): Promise<AdminUser>;
+  adminSetMuted(uid: string, target: string, muted: boolean): Promise<AdminUser>;
+  adminSetBanned(uid: string, target: string, banned: boolean): Promise<AdminUser>;
+  /** 409 `code_taken` for another account's code. */
+  adminUpdateUser(uid: string, target: string, update: AdminUserUpdate): Promise<AdminUser>;
+  adminCodeOwner(uid: string, code: string): Promise<AdminCodeOwner>;
+  /** Renames an open room (P+ or Other Games) as its host would; what was stored comes back. */
+  adminRenameRoom(uid: string, code: string, name: string | null): Promise<string | null>;
   /** A published ruleset by code (public). */
   ruleset(code: string): Promise<RulesetView>;
   /** A page of the public list (`q` searches the name, publisher and code). */

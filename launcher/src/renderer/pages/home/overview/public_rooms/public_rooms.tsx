@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 
+import { useIsAdmin } from "@/lib/hooks/use_account";
 import { useLocalStorage } from "@/lib/hooks/use_local_storage";
 import { useLoginModal } from "@/lib/hooks/use_login_modal";
 import { useRememberedRuleset } from "@/lib/rulesets/use_remembered_ruleset";
@@ -25,7 +26,8 @@ export const PublicRooms = React.memo(function PublicRooms() {
   const { join, joiningCode } = useJoinRoom();
   const { create: createRoom, creating } = useCreateRoom();
   const { ruleset } = useRememberedRuleset();
-  const { rename, shown } = useRoomName("pplus");
+  const { rename, adminRename, shown } = useRoomName("pplus");
+  const isAdmin = useIsAdmin();
   /** The ruleset whose rules are shown (a click on a room's ruleset). */
   const [showRuleset, setShowRuleset] = useState<string | null>(null);
   /** The join in progress came from the room code box. */
@@ -61,6 +63,7 @@ export const PublicRooms = React.memo(function PublicRooms() {
         state={state}
         yourRoom={yourRoom}
         onRenameRoom={rename}
+        onAdminRenameRoom={isAdmin ? adminRename : undefined}
         joiningCode={joiningCode}
         onJoin={(room) => {
           if (room.joinable) {
