@@ -1244,7 +1244,13 @@ pub async fn index_page(
     }
     let base = base_url(&state);
     match published(&state).await {
-        Ok(posts) => page_response(StatusCode::OK, index_html(&posts, &base), "public, max-age=60"),
+        Ok(posts) => {
+            let mut resp = page_response(StatusCode::OK, index_html(&posts, &base), "public, max-age=60");
+            if let Some(cookie) = posts.first().and_then(|p| seen_cookie(p.published_at, &base)) {
+                resp.headers_mut().insert(header::SET_COOKIE, cookie);
+            }
+            resp
+        }
         Err(e) => {
             tracing::error!("blog index: {e}");
             page_response(
@@ -1252,6 +1258,62 @@ pub async fn index_page(
                 message_html("Something went wrong", "Try again in a minute.", &base),
                 "no-store",
             )
+        }
+    }
+}
+
+/// The cookie the index leaves: when its newest post was published (Unix seconds). The home
+/// page's Blog button shows its "new post" badge only for a post published after it
+/// (`website/script.js`, `GET /v1/blog/latest`). The same for everyone, so a cached index setting
+/// it is still right. Not HttpOnly: the home page reads it.
+pub const SEEN_COOKIE: &str = "bo_blog_seen";
+
+fn seen_cookie(published_at: Option<DateTime<Utc>>, base: &str) -> Option<HeaderValue> {
+    let secs = published_at?.timestamp();
+    let secure = if base.starts_with("https://") { "; Secure" } else { "" };
+    // 400 days, the most browsers keep a cookie.
+    HeaderValue::from_str(&format!("{SEEN_COOKIE}={secs}; Path=/; Max-Age=34560000; SameSite=Lax{secure}")).ok()
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LatestPost {
+    pub slug: String,
+    pub title: String,
+    /// Unix seconds, as in the index's cookie.
+    pub published_at: i64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct LatestResp {
+    pub latest: Option<LatestPost>,
+}
+
+/// `GET /v1/blog/latest`: the newest published post, for the home page's "new post" badge.
+pub async fn latest_post(
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+) -> Response {
+    if let Some(resp) = page_limited(&state, &headers, peer) {
+        return resp;
+    }
+    let row = sqlx::query_as::<_, (String, String, Option<DateTime<Utc>>)>(
+        "SELECT slug, title, published_at FROM blog_posts WHERE status = 'published' \
+         ORDER BY published_at DESC, id DESC LIMIT 1",
+    )
+    .fetch_optional(&state.pool)
+    .await;
+    match row {
+        Ok(row) => {
+            let latest =
+                row.and_then(|(slug, title, at)| Some(LatestPost { slug, title, published_at: at?.timestamp() }));
+            ([(header::CACHE_CONTROL, HeaderValue::from_static("public, max-age=60"))], Json(LatestResp { latest }))
+                .into_response()
+        }
+        Err(e) => {
+            tracing::error!("blog latest: {e}");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
         }
     }
 }

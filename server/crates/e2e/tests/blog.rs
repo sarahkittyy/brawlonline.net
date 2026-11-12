@@ -58,6 +58,10 @@ async fn blog_posts_pages_and_media() {
     assert_eq!(st, 200);
     assert!(html.contains("No posts yet."));
     assert!(headers["content-security-policy"].to_str().unwrap().contains("media-src 'self'"));
+    // No post, no "seen" cookie, and nothing for the home page's badge.
+    assert!(headers.get("set-cookie").is_none());
+    let (st, latest) = s.get("/v1/blog/latest", None).await;
+    assert_eq!((st, &latest["latest"]), (200, &serde_json::Value::Null), "{latest}");
 
     // A new draft, then the progress report's start in it.
     let (st, post) = s.post("/v1/blog/posts", Some(&admin), json!({})).await;
@@ -175,6 +179,18 @@ async fn blog_posts_pages_and_media() {
     assert!(html.contains("\"@type\":\"Blog\""), "{html}");
     assert!(html.contains(&format!("<link rel=\"canonical\" href=\"{}/blog\">", s.base)), "{html}");
     assert_eq!(headers["cache-control"], "public, max-age=60");
+    // The home page's "new post" badge: the newest post, and the index's cookie with its date.
+    let (st, latest) = s.get("/v1/blog/latest", None).await;
+    assert_eq!(st, 200, "{latest}");
+    assert_eq!(latest["latest"]["slug"], "progress-report-1");
+    let first_secs = latest["latest"]["publishedAt"].as_i64().unwrap();
+    assert_eq!(
+        Some(first_secs),
+        chrono::DateTime::parse_from_rfc3339(first_date.as_str().unwrap()).ok().map(|t| t.timestamp())
+    );
+    let cookie = headers["set-cookie"].to_str().unwrap();
+    assert!(cookie.starts_with(&format!("bo_blog_seen={first_secs}; Path=/;")), "{cookie}");
+    assert!(!cookie.contains("HttpOnly"), "the home page reads it: {cookie}");
     let (st, html, _) = page(&s, "/blog/progress-report-1").await;
     assert_eq!(st, 200);
     assert!(!html.contains("noindex"));
@@ -216,8 +232,13 @@ async fn blog_posts_pages_and_media() {
         .await;
     assert_eq!(st, 200);
     s.post(&format!("/v1/blog/posts/{}/publish", second["id"]), Some(&admin), json!({})).await;
-    let (_, html, _) = page(&s, "/blog").await;
+    let (_, html, headers) = page(&s, "/blog").await;
     assert!(html.contains("class=\"hero\" href=\"/blog/second\""), "{html}");
+    let (_, latest) = s.get("/v1/blog/latest", None).await;
+    assert_eq!(latest["latest"]["slug"], "second");
+    assert!(latest["latest"]["publishedAt"].as_i64().unwrap() >= first_secs);
+    let cookie = headers["set-cookie"].to_str().unwrap().to_string();
+    assert!(cookie.starts_with(&format!("bo_blog_seen={};", latest["latest"]["publishedAt"])), "{cookie}");
     assert!(html.contains("Older posts") && html.contains("href=\"/blog/progress-report-1\""), "{html}");
     assert!(html.contains("/assets/bg-poster.jpg"), "no image: the home page's still");
 

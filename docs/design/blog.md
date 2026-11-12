@@ -14,7 +14,7 @@ Sarah's board, 2026-11-12: "i'd like to create a blog ... on the brawlonline net
 | `/login/` | The website's login, `?next=<path>` to come back | static (`website/login/`) |
 | `/auth/auth.js`, `/auth/auth.css` | The site's session and the logged-in pages' look | static (`website/auth/`) |
 
-The home page has a **Blog** button right of Credits. The blog pages have the same three buttons top left (Blog lit), a small logo plate with "BLOG" beside it, the dim gameplay still behind, and the dark cards with the green top edge from the FAQ and the Top 10. They have no scripts. Their CSP allows only the site itself, so a post can't load anything from elsewhere.
+The home page has a **Blog** button right of Credits. While there is a post the visitor hasn't seen, it glows green with a little "!" on its corner (a pulsing ring and a wiggle every 4 s; still with reduced motion; hovering names the post). Opening `/blog` leaves the cookie `bo_blog_seen` = its newest post's publish time (Unix seconds, 400 days, not HttpOnly; the same value for everyone, so a cached index sets it right too), and the home page's script compares it with `GET /v1/blog/latest` (`{latest: {slug, title, publishedAt} | null}`): the "!" shows for a newer post only. Someone who has never opened the blog gets it for a post from the last 30 days. Unpublishing or deleting the newest post never brings it back (an older date). Reading a post through a direct link doesn't count; only the index does. The blog pages have the same three buttons top left (Blog lit), a small logo plate with "BLOG" beside it, the dim gameplay still behind, and the dark cards with the green top edge from the FAQ and the Top 10. They have no scripts. Their CSP allows only the site itself, so a post can't load anything from elsewhere.
 
 Search engines and link previews (all server-rendered like `/profile/<code>`, so crawlers get the whole page without running anything):
 
@@ -74,6 +74,7 @@ BrawlAuth.mountAccount(element);                          // "Name CODE [Log out
 
 ## 5. Server
 
+- `GET /v1/blog/latest` (public, `max-age=60`, the pages' rate limit): the newest published post, for the home page's "!".
 - Editor API (`/v1/blog/...`, Bearer session, 403 `not_admin` for everyone but admins): `GET/POST posts`, `GET/PUT/DELETE posts/<id>` (PUT takes `expectedUpdatedAt`, 409 `changed_elsewhere`; 409 `slug_taken`, 400 `bad_slug`), `POST posts/<id>/publish|unpublish`, `POST render`, `PUT media` (raw body, `X-File-Name`). Post bodies up to 1 MiB (their own body limit; the API's 16 KiB is for the rest).
 - Media: streamed to a `.partial` in `BLOG_MEDIA_DIR` while hashed, typed, then renamed to `<20 hex of SHA-256>.<ext>` (the same file uploaded twice is stored once) and recorded in `blog_media` (kind, bytes, original name, uploader). Limits: `BLOG_MEDIA_MAX_BYTES` (95 MiB per file), `BLOG_MEDIA_MAX_TOTAL_BYTES` (20 GiB; 507 past it). Served by accounts (tower-http `ServeFile`: ranges for video seeking, `Cache-Control: immutable`). They are **not in the database backups** (`pp-backup.sh` dumps the posts only).
 - Pages: `public, max-age=60` (a preview link: `no-store`), 120 per minute per IP (`BLOG_IP_WINDOWS`).

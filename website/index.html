@@ -95,11 +95,12 @@
 </video>
 
 <!-- Open the FAQ and Credits dialogs (without JavaScript the links show them through :target,
-     style.css), and the blog (/blog, rendered by accounts: docs/design/blog.md). -->
+     style.css), and the blog (/blog, rendered by accounts: docs/design/blog.md). The "!" on Blog
+     shows while there's a post newer than the visitor last saw on /blog (script.js). -->
 <nav class="corner top-nav">
   <a class="pill" href="#faq">FAQ</a>
   <a class="pill" href="#credits">Credits</a>
-  <a class="pill" href="/blog">Blog</a>
+  <a class="pill blog-pill" href="/blog">Blog<span class="new-badge" hidden aria-hidden="true">!</span></a>
 </nav>
 
 <main>

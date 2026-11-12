@@ -212,6 +212,7 @@ pub fn router(state: AppState) -> Router {
         .route("/profile/{slug}", get(profile::page))
         .route("/profile/profile.css", get(profile::site_file))
         .route("/assets/{*path}", get(profile::site_file))
+        .route("/v1/blog/latest", get(blog::latest_post))
         .route("/blog", get(blog::index_page))
         .route("/blog/", get(blog::index_redirect))
         .route("/blog/sitemap.xml", get(blog::sitemap))
