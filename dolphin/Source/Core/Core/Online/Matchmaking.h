@@ -177,6 +177,7 @@ private:
   std::unique_ptr<Ipv6::Probe> m_probe6;
   std::string m_ipv6_token;
   u64 m_probe6_sent_ms = 0;
+  bool m_probe6_answered = false;  // a reply came this search (for the log)
   bool m_upnp_mapped = false;  // the router forwards m_host_port (matchmaking thread only)
   // The server saw us at another port than m_host_port: our router picks a port per
   // destination (matchmaking thread only; for the log of a failed connect).

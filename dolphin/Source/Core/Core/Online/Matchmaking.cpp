@@ -1003,6 +1003,7 @@ void Matchmaking::StartIpv6()
 {
   m_probe6->Close();
   m_ipv6_token.clear();
+  m_probe6_answered = false;
   if (!Ipv6::Enabled())
     return;
   // Only the sessions that can play over IPv6 (the gameplay session, and the harness's record
@@ -1052,6 +1053,7 @@ void Matchmaking::HandleMatchmaking()
   {
     if (const auto seen = m_probe6->Reply())
     {
+      m_probe6_answered = true;
       INFO_LOG_FMT(NETPLAY, "[Matchmaking] IPv6: the server sees us at {}",
                    Common::ENet::EndpointText(*seen));
     }
@@ -1387,8 +1389,14 @@ void Matchmaking::HandleMatchmaking()
 
   if (const auto seen = m_probe6->Reply())
   {
+    m_probe6_answered = true;
     INFO_LOG_FMT(NETPLAY, "[Matchmaking] IPv6: the server sees us at {}",
                  Common::ENet::EndpointText(*seen));
+  }
+  else if (m_probe6->IsOpen() && !m_probe6_answered)
+  {
+    // Without a reply mm has no IPv6 address for us: this match is IPv4 only.
+    WARN_LOG_FMT(NETPLAY, "[Matchmaking] IPv6: the server never answered our probe; IPv4 only");
   }
 
   // Disconnect and destroy enet client to mm server
