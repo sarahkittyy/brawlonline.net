@@ -750,7 +750,10 @@ pub fn render(md: &str) -> Rendered {
                 }
                 out.push(events[i].clone());
             }
-            Event::Start(Tag::Heading { level, .. }) if matches!(level, HeadingLevel::H2 | HeadingLevel::H3) => {
+            // `#` in the text is an h2 like `##`: the post's title is the page's only h1.
+            Event::Start(Tag::Heading { level, .. })
+                if matches!(level, HeadingLevel::H1 | HeadingLevel::H2 | HeadingLevel::H3) =>
+            {
                 let end = (i..events.len()).find(|&j| matches!(events[j], Event::End(TagEnd::Heading(_))));
                 let text = end.map(|end| plain_text(&events[i + 1..end])).unwrap_or_default();
                 let base = heading_id(&text);
@@ -761,7 +764,7 @@ pub fn render(md: &str) -> Rendered {
                     n += 1;
                 }
                 ids.push(id.clone());
-                let tag = if *level == HeadingLevel::H2 { "h2" } else { "h3" };
+                let tag = if *level == HeadingLevel::H3 { "h3" } else { "h2" };
                 out.push(Event::Html(format!("<{tag} id=\"{}\">", esc(&id)).into()));
             }
             Event::Start(Tag::Link { dest_url, title, .. }) => {
@@ -775,6 +778,7 @@ pub fn render(md: &str) -> Rendered {
                     out.push(Event::Html(format!("<a href=\"{}\"{title}{rel}>", esc(dest_url)).into()));
                 }
             }
+            Event::End(TagEnd::Heading(HeadingLevel::H1)) => out.push(Event::Html("</h2>\n".into())),
             Event::End(TagEnd::Link) => {
                 if links.pop().unwrap_or(false) {
                     out.push(Event::Html("</a>".into()));
@@ -894,12 +898,15 @@ struct Head<'a> {
     og_type: &'a str,
     extra: String,
     noindex: bool,
+    /// The index: the logo and "Blog" are the page's h1 (a post's h1 is its title).
+    brand_h1: bool,
 }
 
 /// The page around the content: the top-left buttons (as on the home page, Blog lit), the small
 /// logo with "Blog" beside it, the dim gameplay still behind everything.
 fn shell(head: &Head, content: &str) -> String {
     let robots = if head.noindex { "<meta name=\"robots\" content=\"noindex\">\n" } else { "" };
+    let (h1, h1_end) = if head.brand_h1 { ("<h1 class=\"brand-h1\">", "</h1>") } else { ("", "") };
     format!(
         "<!doctype html>
 <html lang=\"en\">
@@ -931,10 +938,10 @@ fn shell(head: &Head, content: &str) -> String {
   <a class=\"pill on\" href=\"/blog\" aria-current=\"page\">Blog</a>
 </nav>
 <main class=\"wrap\">
-  <a class=\"brand\" href=\"/blog\" aria-label=\"Brawl Online blog\">
+  {h1}<a class=\"brand\" href=\"/blog\">
     <span class=\"logo plate\"><span class=\"wordmark\"><span class=\"w1\">Brawl</span> <span class=\"w2\">Online</span></span></span>
     <span class=\"section\">Blog</span>
-  </a>
+  </a>{h1_end}
 {content}
   <p class=\"foot\">Wii/GCN games with rollback netcode. <a href=\"/\">Download Brawl Online</a></p>
 </main>
@@ -1004,11 +1011,90 @@ fn index_html(posts: &[PostRow], base: &str) -> String {
             url: &url,
             image: &image,
             og_type: "website",
-            extra: String::new(),
+            extra: blog_ld(posts, base),
             noindex: false,
+            brand_h1: true,
         },
         &content,
     )
+}
+
+/// The index's JSON-LD: a `Blog` with its posts.
+fn blog_ld(posts: &[PostRow], base: &str) -> String {
+    let items: Vec<_> = posts
+        .iter()
+        .map(|p| {
+            serde_json::json!({
+                "@type": "BlogPosting",
+                "headline": p.title,
+                "url": format!("{base}/blog/{}", p.slug),
+                "datePublished": p.published_at.map(|t| t.to_rfc3339()),
+            })
+        })
+        .collect();
+    let ld = serde_json::json!({
+        "@context": "https://schema.org",
+        "@type": "Blog",
+        "name": "Brawl Online Blog",
+        "url": format!("{base}/blog"),
+        "publisher": {"@type": "Organization", "name": "Brawl Online", "url": format!("{base}/")},
+        "blogPost": items,
+    });
+    format!("<script type=\"application/ld+json\">{}</script>\n", json_ld(&ld))
+}
+
+/// The blog's sitemap (robots.txt names it): the index and every published post, each with its
+/// last change.
+fn sitemap_xml(posts: &[PostRow], base: &str) -> String {
+    let mut out = String::from(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">\n",
+    );
+    let mut url = |loc: String, lastmod: Option<DateTime<Utc>>| {
+        out.push_str(&format!("  <url>\n    <loc>{}</loc>\n", esc(&loc)));
+        if let Some(t) = lastmod {
+            out.push_str(&format!("    <lastmod>{}</lastmod>\n", t.format("%Y-%m-%dT%H:%M:%SZ")));
+        }
+        out.push_str("  </url>\n");
+    };
+    url(format!("{base}/blog"), posts.iter().map(|p| p.updated_at).max());
+    for p in posts {
+        url(format!("{base}/blog/{}", p.slug), Some(p.updated_at));
+    }
+    out.push_str("</urlset>\n");
+    out
+}
+
+async fn published(state: &AppState) -> sqlx::Result<Vec<PostRow>> {
+    sqlx::query_as::<_, PostRow>(&format!(
+        "SELECT {POST_COLUMNS} FROM blog_posts WHERE status = 'published' ORDER BY published_at DESC, id DESC"
+    ))
+    .fetch_all(&state.pool)
+    .await
+}
+
+/// `GET /blog/sitemap.xml`.
+pub async fn sitemap(
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+) -> Response {
+    if let Some(resp) = page_limited(&state, &headers, peer) {
+        return resp;
+    }
+    match published(&state).await {
+        Ok(posts) => (
+            [
+                (header::CONTENT_TYPE, HeaderValue::from_static("application/xml; charset=utf-8")),
+                (header::CACHE_CONTROL, HeaderValue::from_static("public, max-age=600")),
+            ],
+            sitemap_xml(&posts, &base_url(&state)),
+        )
+            .into_response(),
+        Err(e) => {
+            tracing::error!("blog sitemap: {e}");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
 }
 
 fn post_html(post: &PostRow, base: &str, preview: bool) -> String {
@@ -1036,6 +1122,7 @@ fn post_html(post: &PostRow, base: &str, preview: bool) -> String {
             "image": image,
             "datePublished": t.to_rfc3339(),
             "dateModified": post.updated_at.to_rfc3339(),
+            "mainEntityOfPage": url,
             "publisher": {"@type": "Organization", "name": "Brawl Online", "url": format!("{base}/")},
         });
         if !post.author.is_empty() {
@@ -1071,6 +1158,7 @@ fn post_html(post: &PostRow, base: &str, preview: bool) -> String {
             og_type: "article",
             extra,
             noindex: preview,
+            brand_h1: false,
         },
         &content,
     )
@@ -1088,6 +1176,7 @@ fn message_html(title: &str, text: &str, base: &str) -> String {
             og_type: "website",
             extra: String::new(),
             noindex: true,
+            brand_h1: false,
         },
         &format!(
             "  <section class=\"panel empty\"><h1>{}</h1><p>{}</p></section>\n  <a class=\"pill back\" href=\"/blog\">&larr; All posts</a>\n",
@@ -1111,12 +1200,7 @@ pub async fn index_page(
         return resp;
     }
     let base = base_url(&state);
-    let posts = sqlx::query_as::<_, PostRow>(&format!(
-        "SELECT {POST_COLUMNS} FROM blog_posts WHERE status = 'published' ORDER BY published_at DESC, id DESC"
-    ))
-    .fetch_all(&state.pool)
-    .await;
-    match posts {
+    match published(&state).await {
         Ok(posts) => page_response(StatusCode::OK, index_html(&posts, &base), "public, max-age=60"),
         Err(e) => {
             tracing::error!("blog index: {e}");
@@ -1264,6 +1348,9 @@ mod tests {
         assert!(r.html.contains("<h2 id=\"new-ways\">New Ways</h2>"), "{}", r.html);
         assert!(r.html.contains("<h2 id=\"new-ways-2\">"), "{}", r.html);
         assert!(r.html.contains("<h3 id=\"sub\">"), "{}", r.html);
+        // `# Title` in the text: an h2, the page's only h1 is the post's title.
+        assert!(r.html.contains("<h2 id=\"title\">Title</h2>"), "{}", r.html);
+        assert!(!r.html.contains("<h1"), "{}", r.html);
         assert!(r.html.contains("<li>a</li>"), "{}", r.html);
         assert_eq!(r.first_paragraph, "Hello world, see Discord.");
         // A list right under a line, as in the progress report (CommonMark allows it).

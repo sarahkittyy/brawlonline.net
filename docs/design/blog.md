@@ -16,7 +16,16 @@ Sarah's board, 2026-11-12: "i'd like to create a blog ... on the brawlonline net
 
 The home page has a **Blog** button right of Credits. The blog pages have the same three buttons top left (Blog lit), a small logo plate with "BLOG" beside it, the dim gameplay still behind, and the dark cards with the green top edge from the FAQ and the Top 10. They have no scripts. Their CSP allows only the site itself, so a post can't load anything from elsewhere.
 
-Server-rendered (like `/profile/<code>`), so search engines and link previews get the real page: `og:title`/`og:description` (the summary)/`og:image` (the first image), `article:published_time`, a JSON-LD `BlogPosting`. `/blog` is in the sitemap; `/login/` and `/blog/write/` are disallowed in robots.txt and `noindex`.
+Search engines and link previews (all server-rendered like `/profile/<code>`, so crawlers get the whole page without running anything):
+
+- Each page has a `<title>`, a meta description (the summary), an absolute canonical URL (`PUBLIC_BASE_URL`, `https://brawlonline.net` on prod) and exactly one `<h1>`: the post's title, or the logo and "Blog" on the index. A `#` heading in a post's text becomes an h2.
+- Link previews: `og:title`, `og:description`, `og:image` (the first image) and `article:published_time`.
+- JSON-LD: a `BlogPosting` on each post (headline, dates, image, author when set, publisher) and a `Blog` listing the posts on the index.
+- `/blog/sitemap.xml` (accounts) lists `/blog` and every published post with its last change, and robots.txt names it next to the static `/sitemap.xml`. Discovery also works by links: home → Blog → each post.
+- A draft's preview link, the 404 page and the error page are `noindex`. A missing post answers 404, not a 200. `/blog/` redirects to `/blog` with a 301.
+- `/login/` and `/blog/write/` are disallowed in robots.txt and `noindex`.
+- After the first deploy: in Google Search Console (the domain is already verified there), submit `https://brawlonline.net/blog/sitemap.xml` and inspect the post's URL ("Request indexing") to have it crawled sooner than on its own.
+- Not done: images have no width/height (a little layout shift while they load; the server doesn't know an upload's dimensions).
 
 ## 2. Posts
 

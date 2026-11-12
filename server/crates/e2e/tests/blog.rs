@@ -167,6 +167,9 @@ async fn blog_posts_pages_and_media() {
     assert!(html.contains("PROGRESS REPORT #1") || html.contains("Progress Report #1"));
     assert!(html.contains("Welcome to the very first progress report for Brawl Online!"), "summary: {html}");
     assert!(!html.contains("Older posts"));
+    assert_eq!(html.matches("<h1").count(), 1, "one h1 (the logo and Blog): {html}");
+    assert!(html.contains("\"@type\":\"Blog\""), "{html}");
+    assert!(html.contains(&format!("<link rel=\"canonical\" href=\"{}/blog\">", s.base)), "{html}");
     assert_eq!(headers["cache-control"], "public, max-age=60");
     let (st, html, _) = page(&s, "/blog/progress-report-1").await;
     assert_eq!(st, 200);
@@ -175,6 +178,18 @@ async fn blog_posts_pages_and_media() {
     assert!(html.contains("<li><strong>Solo:</strong> jump in</li>"), "{html}");
     assert!(html.contains(&format!("og:image\" content=\"{}{img_url}", s.base)), "{html}");
     assert!(html.contains("\"@type\":\"BlogPosting\""));
+    assert_eq!(html.matches("<h1").count(), 1, "one h1 (the title): {html}");
+    assert!(html.contains(&format!("<link rel=\"canonical\" href=\"{}/blog/progress-report-1\">", s.base)));
+
+    // The sitemap: the index and the published post (not the draft).
+    let resp = s.http.get(s.url("/blog/sitemap.xml")).send().await.unwrap();
+    assert_eq!(resp.status().as_u16(), 200);
+    assert!(resp.headers()["content-type"].to_str().unwrap().starts_with("application/xml"));
+    let xml = resp.text().await.unwrap();
+    assert!(xml.contains(&format!("<loc>{}/blog</loc>", s.base)), "{xml}");
+    assert!(xml.contains(&format!("<loc>{}/blog/progress-report-1</loc>", s.base)), "{xml}");
+    assert!(xml.contains("<lastmod>"), "{xml}");
+    assert!(!xml.contains("untitled-2"), "{xml}");
     let (st, _, headers) = page(&s, "/blog/").await;
     assert!(st == 200 || st == 308, "{st}"); // reqwest follows the redirect
     let _ = headers;

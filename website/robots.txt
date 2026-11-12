@@ -11,3 +11,4 @@ Disallow: /login/
 Disallow: /blog/write/
 
 Sitemap: https://brawlonline.net/sitemap.xml
+Sitemap: https://brawlonline.net/blog/sitemap.xml

@@ -172,7 +172,12 @@ body.blog::after {
   padding: max(84px, calc(env(safe-area-inset-top) + 72px)) 0 48px;
 }
 
-/* The small logo with "Blog" beside it; links to the index. */
+/* The small logo with "Blog" beside it; links to the index. On the index it is the page's h1. */
+.brand-h1 {
+  margin: 0;
+  font: inherit;
+}
+
 .brand {
   display: inline-flex;
   align-items: flex-end;
