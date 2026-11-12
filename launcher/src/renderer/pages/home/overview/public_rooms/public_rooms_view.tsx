@@ -369,7 +369,6 @@ export const RoomRow = React.memo(function RoomRow({
                 canEdit={true}
                 onSave={async (name) => onRename(room.code, name)}
                 inButton={true}
-                plain={true}
               />
             </div>
           ) : (
