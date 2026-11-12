@@ -417,6 +417,18 @@ bool HostDecodeReadAt(Core::System& system, int chan, std::array<u8, Addr::PAD_S
 // The decode itself (tests).
 constexpr u8 HOST_DECODE_LIGHT_PRESS = 45;
 void HostDecodePadSlot(const GCPadStatus& st, const std::array<u8, 6>& origin, u16 light, u8* pad);
+// The local GameCube pad `chan` (0-3) plays in-game port `port` (bug report #283). The match puts
+// each port's controls at g_PadConfig + port * 0xC, and P+'s light trigger presses (above) read
+// those of the pad's own port: a P2 on controller port 1 got P1's. The pad thread's passes of
+// `chan` (FixLightPresses) and its decodes take the light presses of `port`'s layout instead.
+// -1 (or `chan`): its own. The session's, from the game's start to its end. Any thread.
+void SetHostPadPlaysPort(int chan, int port);
+void ClearHostPadPlaysPort();
+// A pass's gfPadStatus `pad` whose light presses were those of `applied` made those of `wanted`
+// (PAD_TRIGGER_L / R): a trigger at HOST_DECODE_LIGHT_PRESS or more presses its button when
+// `wanted` has it, and no longer when only `applied` had it and the read behind the pass
+// (`raw_buttons`, its digital buttons) did not press it. Without that read such a button stays.
+void FixLightPresses(u8* pad, u16 applied, u16 wanted, std::optional<u16> raw_buttons);
 
 // ---------------------------------------------------------------------------------------------
 // Interpreter instruction trace (debugging). Armed by the harness (`cpu_trace`); records, for the

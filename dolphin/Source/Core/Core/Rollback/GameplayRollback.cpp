@@ -853,6 +853,7 @@ struct HostDecodeEntry
   bool valid = false;
   Clock::time_point instant{};
   std::array<u8, Addr::PAD_STRIDE> pad{};
+  u16 raw_buttons = 0;  // the read's own buttons (its digital L and R: FixLightPresses)
 };
 struct HostDecodeState
 {
@@ -910,6 +911,24 @@ u16 HostDecodeLightPresses(const Memory::MemoryManager& memory, int chan)
   return light;
 }
 
+// Each local GameCube pad's in-game port when it plays another one than its own
+// (SetHostPadPlaysPort), else -1.
+std::array<std::atomic<int>, 4> s_pad_plays_port{-1, -1, -1, -1};
+
+// The pad whose layout gives channel `chan`'s light presses: the in-game port it plays, whose
+// player's controls the match put at g_PadConfig + port * 0xC (bug report #283).
+int LayoutPadOf(int chan)
+{
+  const int port =
+      chan >= 0 && chan < 4 ? s_pad_plays_port[chan].load(std::memory_order_relaxed) : -1;
+  return port >= 0 ? port : chan;
+}
+
+u16 LightPressesOf(const Memory::MemoryManager& memory, int chan)
+{
+  return HostDecodeLightPresses(memory, LayoutPadOf(chan));
+}
+
 // Whether P+'s "Pause Set to Off -> Hold Start to Pause v3" takes a held START out of channel
 // `chan`'s next pass (bug report #182: a START held in a Ranked match made every pass differ from
 // its decode and turned the decode off for the rest of the game). Its hook replaces the pad read's
@@ -953,8 +972,8 @@ void HostDecodeKeep(const Memory::MemoryManager& memory, int chan, const GCPadSt
   e.valid = st.isConnected;
   if (e.valid)
   {
-    HostDecodePadSlot(st, s_decode.origin[chan], HostDecodeLightPresses(memory, chan),
-                      e.pad.data());
+    e.raw_buttons = st.button;
+    HostDecodePadSlot(st, s_decode.origin[chan], LightPressesOf(memory, chan), e.pad.data());
     if ((st.button & PAD_BUTTON_START) && HostDecodeHoldsStart(memory, chan))
     {
       e.pad[2] &= ~(PAD_BUTTON_START >> 8);
@@ -1202,6 +1221,43 @@ void HostDecodePadSlot(const GCPadStatus& st, const std::array<u8, 6>& origin, u
   pad[Addr::PAD_ERROR_OFF] = st.isConnected ? 0 : 0xFF;
 }
 
+void FixLightPresses(u8* pad, u16 applied, u16 wanted, std::optional<u16> raw_buttons)
+{
+  if (pad[Addr::PAD_ERROR_OFF] != 0 || applied == wanted)
+    return;
+  for (const u16 t : {u16{PAD_TRIGGER_L}, u16{PAD_TRIGGER_R}})
+  {
+    const u8 analog = pad[t == PAD_TRIGGER_L ? 0x34 : 0x35];
+    if (analog < HOST_DECODE_LIGHT_PRESS || ((applied ^ wanted) & t) == 0)
+      continue;
+    const u8 bit = static_cast<u8>(t);  // the low byte's (+3, +7)
+    if (wanted & t)
+    {
+      pad[3] |= bit;
+      pad[7] |= bit;
+    }
+    else if (raw_buttons && !(*raw_buttons & t))
+    {
+      pad[3] &= static_cast<u8>(~bit);
+      pad[7] &= static_cast<u8>(~bit);
+    }
+  }
+}
+
+void SetHostPadPlaysPort(int chan, int port)
+{
+  if (chan < 0 || chan >= 4)
+    return;
+  s_pad_plays_port[chan].store(port >= 0 && port < 4 && port != chan ? port : -1,
+                               std::memory_order_relaxed);
+}
+
+void ClearHostPadPlaysPort()
+{
+  for (auto& p : s_pad_plays_port)
+    p.store(-1, std::memory_order_relaxed);
+}
+
 void HostPadOriginReported(int chan, u8 stick_x, u8 stick_y, u8 substick_x, u8 substick_y,
                            u8 trigger_left, u8 trigger_right)
 {
@@ -1280,7 +1336,7 @@ bool HostDecodeReadAt(Core::System& system, int chan, std::array<u8, Addr::PAD_S
     ++h.stats.deferred_declined;
     return false;
   }
-  HostDecodePadSlot(st, s_decode.origin[chan], HostDecodeLightPresses(system.GetMemory(), chan),
+  HostDecodePadSlot(st, s_decode.origin[chan], LightPressesOf(system.GetMemory(), chan),
                     pad->data());
   if ((st.button & PAD_BUTTON_START) && HostDecodeHoldsStart(system.GetMemory(), chan))
   {
@@ -1467,10 +1523,30 @@ void PadsOnPadThreadUpdated(Core::System& system)
   memory.CopyFromEmu(s_pads.latest.data(), Addr::PAD_STATUS, s_pads.latest.size());
   s_pads.have_latest = true;
   s_pads.latest_at = std::chrono::steady_clock::now();
+  const std::array<Clock::time_point, 4> pass_sampled = TakePassReadInstants();
+  // P+'s light presses went by the layout of the pad's own port (P+'s hook reads
+  // g_PadConfig + pad * 0xC); a local pad that plays another port takes that port's (bug report
+  // #283: a P2 on controller port 1 with R on Jump never jumped on a light R press, P1's layout
+  // having R on Shield). The read's own digital L / R tell a press from a light one.
+  for (int chan = 0; chan < 4; ++chan)
+  {
+    const int layout_pad = LayoutPadOf(chan);
+    if (layout_pad == chan)
+      continue;
+    std::optional<u16> raw;
+    for (const HostDecodeEntry& e : s_decode.ring[chan])
+    {
+      if (e.valid && e.instant == pass_sampled[chan])
+        raw = e.raw_buttons;
+    }
+    FixLightPresses(s_pads.latest.data() + chan * Addr::PAD_STRIDE,
+                    HostDecodeLightPresses(memory, chan),
+                    HostDecodeLightPresses(memory, layout_pad), raw);
+  }
   {
     auto& pass = s_pads.recent[s_pads.recent_next];
     pass.pads = s_pads.latest;
-    pass.sampled_at = TakePassReadInstants();
+    pass.sampled_at = pass_sampled;
     pass.at = s_pads.latest_at;
     s_pads.recent_next = (s_pads.recent_next + 1) % s_pads.recent.size();
     s_pads.recent_n = std::min(s_pads.recent_n + 1, s_pads.recent.size());

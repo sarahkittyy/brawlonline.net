@@ -46,6 +46,7 @@ protected:
   void TearDown() override
   {
     Gprb::SetHostPadsScheduled(false);
+    Gprb::ClearHostPadPlaysPort();
     Harness::Internal::PadClear(0);
     m_system.GetMemory().Shutdown();
     m_system.GetCoreTiming().Shutdown();
@@ -302,6 +303,54 @@ TEST(HostDecodePadSlot, ALightTriggerPressesItsButtonOffShieldAsPPlusDoes)
   EXPECT_EQ(pad[3], PAD_TRIGGER_L);
 }
 
+// Bug report #283: a P2 on controller port 1 with R on Jump. The pad thread's pass had P1's
+// layout's light presses (R on Shield: none); the pass gets the player's own.
+TEST(FixLightPresses, APadPlayingAnotherPortTakesThatPortsLightPresses)
+{
+  const auto pass = [](u8 buttons, u8 l, u8 r) {
+    std::array<u8, 0x40> pad{};
+    pad[2] = PAD_BUTTON_A >> 8;
+    pad[3] = buttons;
+    pad[6] = pad[2];
+    pad[7] = pad[3];
+    pad[0x34] = l;
+    pad[0x35] = r;
+    return pad;
+  };
+  // R at 45 on the wanted layout's Jump: pressed, at +3 and +7.
+  auto pad = pass(0, 0, 45);
+  Gprb::FixLightPresses(pad.data(), 0, PAD_TRIGGER_R, std::nullopt);
+  EXPECT_EQ(pad[3], PAD_TRIGGER_R);
+  EXPECT_EQ(pad[7], PAD_TRIGGER_R);
+  EXPECT_EQ(pad[2], PAD_BUTTON_A >> 8);
+  // At 44: not.
+  pad = pass(0, 0, 44);
+  Gprb::FixLightPresses(pad.data(), 0, PAD_TRIGGER_R, std::nullopt);
+  EXPECT_EQ(pad[3], 0);
+  // The other way: P1's layout pressed L lightly, ours has it on Shield. The read did not press L
+  // digitally: the press goes.
+  pad = pass(PAD_TRIGGER_L, 120, 0);
+  Gprb::FixLightPresses(pad.data(), PAD_TRIGGER_L, 0, u16{PAD_BUTTON_A});
+  EXPECT_EQ(pad[3], 0);
+  EXPECT_EQ(pad[7], 0);
+  // A digital L stays.
+  pad = pass(PAD_TRIGGER_L, 255, 0);
+  Gprb::FixLightPresses(pad.data(), PAD_TRIGGER_L, 0, u16{PAD_TRIGGER_L});
+  EXPECT_EQ(pad[3], PAD_TRIGGER_L);
+  // Without the read, it stays too (it may have been one).
+  pad = pass(PAD_TRIGGER_L, 120, 0);
+  Gprb::FixLightPresses(pad.data(), PAD_TRIGGER_L, 0, std::nullopt);
+  EXPECT_EQ(pad[3], PAD_TRIGGER_L);
+  // The same layouts, or a pad with no controller: nothing changes.
+  pad = pass(0, 120, 120);
+  Gprb::FixLightPresses(pad.data(), PAD_TRIGGER_R, PAD_TRIGGER_R, std::nullopt);
+  EXPECT_EQ(pad[3], 0);
+  pad = pass(0, 120, 120);
+  pad[0x38] = 0xFF;
+  Gprb::FixLightPresses(pad.data(), 0, PAD_TRIGGER_L | PAD_TRIGGER_R, std::nullopt);
+  EXPECT_EQ(pad[3], 0);
+}
+
 TEST_F(HostPadReadTest, TheNewestScheduledReadIsDecoded)
 {
   auto& ct = m_system.GetCoreTiming();
@@ -473,4 +522,84 @@ TEST_F(HostPadReadTest, AHeldStartIsTakenOutWhilePPlusHoldsIt)
   // No P+ (Brawl's own store there): START comes through.
   memory.Write_U32(0x901E0000, HOOK);  // stw r0,0(r30)
   EXPECT_EQ(decoded_buttons(held), held);
+}
+
+// Bug report #283: a P2 on controller port 1 (pad 0) with R on Jump, P1 with R on Shield. P+'s
+// light presses went by pad 0's layout, P1's: a light R press never jumped. The decode and the
+// pass of pad 0 take port 2's layout (pad 1's) once the session says pad 0 plays port 2.
+TEST_F(HostPadReadTest, ALocalPadPlayingAnotherPortGetsThatPortsLightPresses)
+{
+  auto& memory = m_system.GetMemory();
+  auto& ct = m_system.GetCoreTiming();
+  Gprb::SetHostPadsScheduled(true);
+  Gprb::TakeHostPadReadStats();
+  Gprb::HostPadOriginReported(0, 0x80, 0x80, 0x80, 0x80, 0, 0);
+  memory.Write_U32(0x48000000 | 0x100, 0x80029700);  // b (P+'s hooks)
+  memory.Write_U32(0x48000000 | 0x100, 0x80029708);
+  // g_PadConfig: pad 0 (P1) L and R on Shield; pad 1 (P2) L on Shield, R on Jump (0).
+  const u8 p1[2] = {Gprb::Addr::PAD_ACTION_SHIELD, Gprb::Addr::PAD_ACTION_SHIELD};
+  const u8 p2[2] = {Gprb::Addr::PAD_ACTION_SHIELD, 0};
+  memory.CopyToEmu(Gprb::Addr::PAD_CONFIG, p1, 2);
+  memory.CopyToEmu(Gprb::Addr::PAD_CONFIG + 0xC, p2, 2);
+  GCPadStatus light = Pad(0);
+  light.triggerRight = 100;
+  // The pad thread's pass of pad 0, made with pad 0's layout (no light presses).
+  const auto pass_and_decode = [&](const GCPadStatus& st) {
+    Harness::Internal::PadSet(0, st);
+    std::this_thread::sleep_for(2ms);
+    ct.ResetThrottleToNow();
+    Read();
+    std::array<u8, Gprb::Addr::PAD_STRIDE> decoded{};
+    std::chrono::steady_clock::time_point at{};
+    EXPECT_TRUE(Gprb::PadsHostDecoded(0, &decoded, &at));
+    Gprb::PadsOnPadRead();
+    std::array<u8, Gprb::Addr::PAD_STRIDE> slot{};
+    Gprb::HostDecodePadSlot(st, {0x80, 0x80, 0x80, 0x80, 0, 0}, 0, slot.data());
+    memory.CopyToEmu(Gprb::Addr::PAD_STATUS, slot.data(), slot.size());
+    Gprb::PadsOnPadThreadUpdated(m_system);
+    return std::pair{decoded[3], Gprb::PadsLatestRaw()[3]};
+  };
+
+  // Its own port (offline, or P1): no light press on Shield.
+  EXPECT_EQ(pass_and_decode(light), std::pair(u8{0}, u8{0}));
+  // Playing port 2: R pressed in the decode and the pass, which still match.
+  Gprb::SetHostPadPlaysPort(0, 1);
+  Gprb::TakeHostPadReadStats();
+  EXPECT_EQ(pass_and_decode(light), std::pair(u8{PAD_TRIGGER_R}, u8{PAD_TRIGGER_R}));
+  Gprb::HostPadReadStats stats = Gprb::TakeHostPadReadStats();
+  EXPECT_EQ(stats.decode_checked, 1u);
+  EXPECT_EQ(stats.decode_mismatched, 0u);
+  // The other way round (P1 R on Jump, P2 on Shield): pad 0's light R press goes, a digital one
+  // stays.
+  memory.CopyToEmu(Gprb::Addr::PAD_CONFIG, p2, 2);
+  memory.CopyToEmu(Gprb::Addr::PAD_CONFIG + 0xC, p1, 2);
+  {
+    Harness::Internal::PadSet(0, light);
+    std::this_thread::sleep_for(2ms);
+    ct.ResetThrottleToNow();
+    Read();
+    Gprb::PadsOnPadRead();
+    std::array<u8, Gprb::Addr::PAD_STRIDE> slot{};
+    Gprb::HostDecodePadSlot(light, {0x80, 0x80, 0x80, 0x80, 0, 0}, PAD_TRIGGER_R, slot.data());
+    memory.CopyToEmu(Gprb::Addr::PAD_STATUS, slot.data(), slot.size());
+    Gprb::PadsOnPadThreadUpdated(m_system);
+    EXPECT_EQ(Gprb::PadsLatestRaw()[3], 0);
+  }
+  GCPadStatus hard = Pad(PAD_TRIGGER_R);
+  hard.triggerRight = 255;
+  {
+    Harness::Internal::PadSet(0, hard);
+    std::this_thread::sleep_for(2ms);
+    ct.ResetThrottleToNow();
+    Read();
+    Gprb::PadsOnPadRead();
+    std::array<u8, Gprb::Addr::PAD_STRIDE> slot{};
+    Gprb::HostDecodePadSlot(hard, {0x80, 0x80, 0x80, 0x80, 0, 0}, PAD_TRIGGER_R, slot.data());
+    memory.CopyToEmu(Gprb::Addr::PAD_STATUS, slot.data(), slot.size());
+    Gprb::PadsOnPadThreadUpdated(m_system);
+    EXPECT_EQ(Gprb::PadsLatestRaw()[3], PAD_TRIGGER_R);
+  }
+  stats = Gprb::TakeHostPadReadStats();
+  EXPECT_EQ(stats.decode_mismatched, 0u);
+  Gprb::ClearHostPadPlaysPort();
 }

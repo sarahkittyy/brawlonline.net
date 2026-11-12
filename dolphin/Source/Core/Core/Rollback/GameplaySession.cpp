@@ -3977,6 +3977,10 @@ bool CreateGekko(bool stress, int num_players)
     gekko_set_local_delay(s.gekko, s.local_handles[0], static_cast<unsigned char>(s.input_delay));
     gekko_set_disconnect_timeout(s.gekko, Online::PeerSilenceTimeoutMs(s.input_delay));
     s.local_pad = LocalPad();
+    // P+'s light trigger presses of this controller by this player's own controls (bug #283).
+    ClearHostPadPlaysPort();
+    if (s.mode == Mode::Network && s.local_pad < 4)
+      SetHostPadPlaysPort(s.local_pad, s.local_slot);
     {
       // A Wii controller's pad goes to GekkoNet early (a GameCube one's read is decoded at the loop
       // top instead: PadsHostDecoded).
@@ -4487,6 +4491,7 @@ void EndRunning(Core::System& system, const std::string& reason)
   DestroyGekko();
   Rollback::RollbackManager::Get().EndRegionMode();
   PadsClearCurrent();
+  ClearHostPadPlaysPort();
   SetHostPadsScheduled(false);
   auto& ct = system.GetCoreTiming();
   ct.ResetThrottleToNow();  // drops a rollback burst still pending
