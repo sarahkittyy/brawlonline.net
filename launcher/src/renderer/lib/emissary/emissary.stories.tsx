@@ -1,7 +1,7 @@
 import type { EmissaryState } from "@dolphin/emissary/types";
 
 import { EmissarySettingView } from "@/pages/settings/addons_settings/emissary_setting_view";
-import { PlayProjectPlusWithView } from "@/pages/settings/game_settings/play_project_plus_with_setting";
+import { PlayProjectPlusWithView } from "@/pages/settings/game_settings/play_project_plus_with_view";
 
 export default {
   title: "lib/EmissaryRecomp",
