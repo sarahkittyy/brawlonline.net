@@ -1,8 +1,10 @@
-# Brawl Recompiled as a second game engine (design)
+# EmissaryRecomp as a second game engine (design)
 
-Status: design, 2026-11-10. Not built. The user's request (Sarah's board, 2026-11-10): "my goal is to get this brawlrecompiled working as a nice convenient clean ux from the launcher. we can replace this "Play Button Action" that no one uses with just, like, "Launch P+ Dolphin", "Launch P+ Recomp" ... just like project punch, we need the ability to download and set it up automatically, see how much it takes to download, and be able to delete it, and auto update it ... we also need proper handling for if the user doesn't have the brawl iso ... it also needs to work with all of our flows, including opening automatically, navigating to a room, joining and leaving, switching queues, direct invites, our in-game ui plugin injection, etc."
+Status: design 2026-11-10, decisions 2026-11-12; the launcher part is being built on branch `emissary-recomp` (§11), not on main. The user's request (Sarah's board, 2026-11-10): "my goal is to get this brawlrecompiled working as a nice convenient clean ux from the launcher. we can replace this "Play Button Action" that no one uses with just, like, "Launch P+ Dolphin", "Launch P+ Recomp" ... just like project punch, we need the ability to download and set it up automatically, see how much it takes to download, and be able to delete it, and auto update it ... we also need proper handling for if the user doesn't have the brawl iso ... it also needs to work with all of our flows, including opening automatically, navigating to a room, joining and leaving, switching queues, direct invites, our in-game ui plugin injection, etc."
 
-Scope: the launcher's UX, install/update, the launcher <-> game contract and the release pipeline. Making the recomp fast and desync-free is someone else's work (kalomaze and others, `kalomaze/BrawlRecompiled` and `kalomaze/brawlonline.net`, branch `rollback-dolphin-crossplay`); this design only states what it must provide.
+The decisions (Sarah's board, 2026-11-12): "we will probably use https://github.com/kalomaze/EmissaryRecomp/pulls as the repo. i believe he's handling CI/CD and stuff, there's releases ... i'm happy to just have our launcher pull from this repo's CI, rather than compiling it on people's PCs. we can test windows and linux for now ... i think the recomp should be allowed everywhere. all work for this should be done in a separate branch kept up to date with main as this requires extra manual testing before pushing on main. The name of the recomp project is EmissaryRecomp, Add-ons and "Play Project+ with" are all OK."
+
+Scope: the launcher's UX, install/update and the launcher <-> game contract. The game itself, its releases and its rollback are kalomaze's (`kalomaze/EmissaryRecomp`, a fork of JosiahG's Brawl Recompiled; the rollback client is PR #2, `rollback-support`); this design only states what the launcher needs from it. "Brawl Recompiled" below is the upstream program, EmissaryRecomp the release the launcher installs.
 
 ## 1. What Brawl Recompiled is, and where it stands (2026-11-10)
 
@@ -18,7 +20,7 @@ Scope: the launcher's UX, install/update, the launcher <-> game contract and the
 | Replace "Play Button Action"? | Yes: **Settings > Game > "Play Project+ with": Dolphin / Brawl Recompiled (Beta)**. "Launch Dolphin" (open Dolphin without a game) moves to a button in Settings > Netplay Dolphin (§4.2). |
 | Separate section or combined? | Combined: Settings > Training becomes **Settings > Add-ons**, with one card per add-on (Project Punch, Brawl Recompiled), the same layout and the same state machine (§4.1). |
 | Download, size, delete, auto-update | As Project Punch, plus a "Keep up to date" toggle and staged updates that apply only while the game is closed (§5). |
-| Central repository, CI? | Yes: our own fork, `sarahkittyy/brawl-recompiled` (GPLv3, separate repo, not in the monorepo), with CI for Windows and Linux (macOS later). The translated game code needs `main.dol` and the RELs, which can't be public: they come from an encrypted 17 MB input only CI can read (§7). **Distributing a translated engine is the one decision for Sarah (§10, D1).** |
+| Central repository, CI? | `kalomaze/EmissaryRecomp`: its GitHub releases are what the launcher downloads (the latest release's `-Windows.zip` / `-Linux.tar.gz`, checked against GitHub's sha256). No fork of ours, nothing compiled on players' PCs (§7). |
 | No Brawl ISO? | The recomp is not an alternative to the ISO: it plays the disc's files and needs the player's own copy, like Dolphin. With no valid ISO, its card says so and offers the same ISO picker; the files are extracted from whatever image the launcher already accepts (§6). |
 | All Brawl mods in Other Games? | Not at first. Other Games rooms play whole-machine rollback (`MachineSession`), which a recomp can never match. **Brawl Recompiled plays Project+ only (Play's queues, rooms, Direct); Other Games always opens Dolphin**, automatically (§8.4). Mods on the recomp (P+Ex, REX, Minus) would be recomp-only rooms later, and they run mostly interpreted. |
 | All our flows | The recomp speaks the **same launcher contract** as the netplay Dolphin: the same `User/Online` files (`user.json`, `join-room.json`, `game-status.json`, `input-delay.json`, `quit-if-idle*.json`, `mods-*.json`), the same SD card with our plugin, the same netplay save. The launcher picks the engine once, at launch; every flow after that is unchanged (§8). Each recomp release declares which modes it can play, so it ships before parity, with Dolphin taking the rest (§8.3). |
@@ -133,47 +135,37 @@ brawl-recompiled/
 - **No ISO, or an invalid one:** state `NeedsDisc`. The card says "Brawl Recompiled plays the files of your own Brawl disc. Choose your disc image in Settings > Game first." with a **Choose disc image** button (the same picker). The quick start never asks about the recomp.
 - Later, to save the 6.8 GB: a DVD backend in the runtime that reads the image directly (Wii partition decryption per 0x8000 cluster; ISO and WBFS easy, RVZ via Dolphin's code). Not v1.
 
-## 7. Our fork, releases and CI
+## 7. EmissaryRecomp's releases
 
-### 7.1 Repository
+### 7.1 Where they come from
 
-`sarahkittyy/brawl-recompiled`: a fork of `josiahg2502-glitch/BrawlRecompiled` with kalomaze's `rollback-dolphin-crossplay` merged, kept as its own repo (it has its own toolchain, a 71 MB tree and GPLv3; upstream merges stay simple). Branches: `main` (what the launcher ships), upstream tracking branches. It depends on this monorepo for GekkoNet and the plugin protocol: CI checks out `brawlonline.net` at the commit named in `brawlonline.lock`.
+`https://api.github.com/repos/kalomaze/EmissaryRecomp/releases/latest`, as Project Punch's (`PPO_EMISSARY_TAG` installs another tag, to test updates). v0.6.0 (2026-11-12) has `BrawlRecompiled-v0.6.0-Windows.zip` (208 MB: the upstream launcher, `engine/brawl-engine.exe`, `engine_usa.dll` and `engine_usa_v2.dll` for CPUs without AVX2, the loader picks one) and `BrawlRecompiled-v0.6.0-Linux.tar.gz` (118 MB; glibc 2.38+, e.g. Ubuntu 24.04), each with a sha256 digest. macOS has no release yet: the add-on is `unavailable` there.
 
-### 7.2 What CI builds
+v0.6.0 has no rollback yet (that is PR #2), and no release has the live online companion (§8.2).
 
-| Job | Runner | Output |
-|---|---|---|
-| translate | ubuntu-latest | `generated/` from `main.dol` + RELs (the C# translator; minutes) |
-| windows | windows-latest (or ubuntu cross with llvm-mingw) | `engine_usa.dll`, `engine_usa_v2.dll`, loader, DLLs |
-| linux | ubuntu-latest | `brawl-engine` (both ISA levels) |
-| macos (later) | macos-14 | arm64 app, notarized through the existing mac publish flow |
-| contracts | all | kalomaze's transport/protocol/snapshot unit tests |
-| replay gate | **private machine** (Sarah's PC or a self-hosted runner that has the disc files) | the replay corpus (§9) through the release build: zero checksum mismatches |
+### 7.2 What the launcher does with one
 
-The translation needs `main.dol` and the 126 RELs (17 MB, Nintendo's code). They never go in the repo: CI gets them from an encrypted archive (age/GPG) in a private location, decrypted with a repository secret, on `push` to `main` and tags only (never on pull requests). The full disc (game files) is only on the private replay-gate machine. A Windows build took 16 minutes with 12 jobs here; a 4-core hosted runner will take about an hour, fine for releases.
+Unpacks it into `versions/<tag>/`, without the upstream launcher (`Brawl Recompiled[.exe]`: the game's own update check only works beside it, so the launcher stays the only updater) and without `engine/portable.txt` and `engine/UserData`. The runtime looks for `portable.txt` up to 4 folders above its program, so `<emissary-recomp>/portable.txt` makes `<emissary-recomp>/UserData` its settings, saves and logs, kept across versions.
 
-### 7.3 Release artifacts
+### 7.3 What would help from the releases
 
-Per release, on GitHub Releases of the fork (or our updates host, as `updates/pplus`):
-
-- `brawl-recompiled-<ver>-windows-avx2.zip`, `-windows-v2.zip`, `-linux-avx2.tar.zst`, `-linux-v2.tar.zst` (each ~100 MB: one engine, not two).
-- `manifest.json`: `{version, protocol, sim, ppom, modes: ["direct","unranked",...], minLauncher, files: [{platform, isa, url, size, sha256}]}`.
-
-The launcher reads the manifest, picks its platform and ISA (a new AVX2/FMA check in main; the loader makes the same choice upstream), shows `size`, checks `sha256`. Later: binary diffs between consecutive versions (the engine DLL is one 180 MB file; most updates change little of it).
+- A small `manifest.json` asset: the protocol version (§7.4), the modes the release can play online (§8.3), and the least launcher version. Until then the launcher can only compare tags.
+- One engine per download (AVX2 / v2), which halves it; later binary diffs between versions.
 
 ### 7.4 Compatibility
 
-The recomp and Dolphin must simulate identically and speak the same protocol, so the launcher carries `RECOMP_PROTOCOL` (bumped whenever the plugin protocol, the gameplay region set, the setup sync or the checksum changes on the Dolphin side). A recomp whose manifest `protocol` differs is `required` (§5). mm learns the engine too: the ticket and the game report carry `engine: "dolphin" | "recomp"` and the recomp's version, so desync and speed numbers can be split by engine (`pp-admin speed`), and Ranked can refuse the recomp until we trust it (§10, D3).
+The recomp and Dolphin must simulate identically and speak the same protocol, so the launcher carries `RECOMP_PROTOCOL` (bumped whenever the plugin protocol, the gameplay region set, the setup sync or the checksum changes on the Dolphin side). A recomp whose manifest `protocol` differs is `required` (§5). mm learns the engine too: the ticket and the game report carry `engine: "dolphin" | "recomp"` and the recomp's version, so desync and speed numbers can be split by engine (`pp-admin speed`), and Ranked could refuse it if its numbers were bad (it is allowed: §10, D3).
 
-### 7.5 Fork changes the launcher needs
+### 7.5 What the launcher needs from EmissaryRecomp
 
-1. **Launch config from the launcher**: a `--config <toml>` (or env) naming the user dir, the disc files, the SD card image (read-only), the codes file *inside* that card (`/Project+/NETPLAY.GCT` + `gc.txt`; today it wants a host file), the NAND template, the mm server and the online folder. No portable.txt assumptions.
-2. **Read-only SD card** (as Dolphin's `WiiSDCardAllowWrites=False`): the runtime writes files back to a card folder at exit today.
-3. **The online contract in-process or as one bundled native companion** (§8.2): no Python on players' PCs.
-4. **Raw GameCube adapter input** (§4.4).
-5. Pinned game state that must match Dolphin: the game's widescreen flag (Dolphin pins `SYSCONF.IPL.AR=True`), the RTC, the language; F10's 4:3 hidden or ignored online. Cheats and fast-forward are already off in deterministic mode.
-6. The stage-start hook fix (`GuestCodePatch` path, found 2026-11-09) if kalomaze hasn't already.
-7. `.brep` recording of recomp games (same format), so replays, highlights, stats and ranked reports work; playback stays on the playback Dolphin.
+Done already (2026-11-12): the read-only SD card (`BRAWL_SD_VOLATILE_WRITES=1` in PR #2: the image is opened read-only, the game's writes stay in memory); the stage-start hook (fixed differently in PR #2); the launcher's `join-room.json` / `game-status.json` (kalomaze's companion speaks them, Direct and Unranked only). The launcher sets up the rest itself (`dolphin/emissary/launch.ts`): the card as `UserData/sd.raw` (a hard link), `NETPLAY.GCT` + `gc.txt` from the card as `UserData/Codes/`, the netplay save as `UserData/NAND`, `dvd_root` and the 16:9 mode in `Config.toml`.
+
+Still needed:
+
+1. **The online companion as part of the release, native** (§8.2): today it is Python (`tools/online` on `rollback-dolphin-crossplay`) plus our `mmclient`, which the launcher can't ship. Until then Play with EmissaryRecomp starts the game without online play.
+2. **Raw GameCube adapter input** (§4.4).
+3. The modes past Direct and Unranked (§8.5): rooms, 2v2, Ranked, being spectated.
+4. `.brep` recording of its games (same format), so replays, highlights, stats and Ranked reports work; playback stays on the playback Dolphin.
 
 ## 8. Flows
 
@@ -262,8 +254,30 @@ Estimates for phases 3-4 (the launcher part): about a week of focused work; it c
 
 ## 10. Decisions for Sarah
 
+All answered on 2026-11-12:
+
+- D1: the launcher downloads kalomaze's releases (his CI); nothing is built on players' PCs.
+- D2: Windows and Linux now; macOS later (it is being worked on upstream).
+- D3: **the recomp is allowed everywhere**, Ranked included. mm still learns the engine (§7.4) so desyncs and speed can be split by engine.
+- D4: "EmissaryRecomp" (with a BETA tag), "Add-ons", "Play Project+ with".
+- D5: no repo ownership for now; kalomaze would hand it over if needed.
+
+The questions as they were asked:
+
 - **D1, distributing the engine.** The engine DLL contains Brawl's code, translated. Upstream ships it the same way (that's how v0.5.3 is distributed), but it is a different legal exposure from shipping Dolphin and a plugin. Options: (a) ship it built by our CI, as upstream does; (b) never ship it: the launcher compiles it on the player's PC from their disc (needs a ~1.5 GB toolchain download and 20-60 minutes of CPU with 16 GB of RAM, once per update); (c) download upstream's own release files and only add our pieces (not possible while the runtime and the game code are one DLL). Recommendation: (a), with the repo itself free of game code, and revisit if anyone objects.
 - **D2, platforms.** Windows + Linux first (both have releases upstream), macOS (arm64) after. OK?
 - **D3, Ranked.** Let recomp players into Ranked from day one of beta, or keep Ranked on Dolphin until the desync numbers by engine are in? Recommendation: keep Ranked on Dolphin until then.
 - **D4, names.** "Brawl Recompiled (Beta)" in the UI, "Add-ons" for the settings section, "Play Project+ with" for the choice.
 - **D5, ownership.** The fork under `sarahkittyy/`; kalomaze (and whoever else) as collaborators on it, with the online side built on shared `Online/` code (§8.2) rather than the Python companion. That is their call as much as ours; this design only needs the §8.2 contract.
+
+## 11. Built so far (branch `emissary-recomp`)
+
+Launcher, 2026-11-12:
+
+- `dolphin/emissary/emissary.ts`: the add-on (§5): the latest release for this platform, download with progress and sha256, unpack into `versions/<tag>`, the disc's files with `DolphinTool extract -g` (progress from its `Extracting: ... | N%` lines; about 4 minutes, 6.8 GB), staged updates while the game runs, Cancel, Remove. `emissary.test.ts` (13 tests).
+- `dolphin/emissary/launch.ts`: the launch set-up of §7.5; `manager.ts` `_launchEmissary`: Play starts it as the netplay instance when Settings > Game says so and it is ready, else Dolphin plays (logged).
+- `dolphin/emissary/setup.ts`: IPC, the Settings disc's check, the auto-update (a minute after start, then every 6 hours; only once installed).
+- Settings > Add-ons (`addons_settings/`): Project Punch's card and EmissaryRecomp's; Settings > Game: "Play Project+ with" (`play_project_plus_with_setting.tsx`), which replaced Play Button Action (whoever had Launch Dolphin gets the game on Play again; Configure Dolphin opens Dolphin without one). Stories: `lib/EmissaryRecomp`.
+- `emissary-recomp` is a protected folder of the netplay install (launcher updates keep it, a game files move takes it along).
+
+Not yet: the online companion (§7.5), the mode greying of §8.3, the §8.4 dialog, the Home tag and toasts (§4.3).

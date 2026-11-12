@@ -41,6 +41,8 @@ export const PROTECTED_ENTRIES = new Set([
   "pplus-versions",
   // Project Punch's own SD card (project_punch/project_punch.ts).
   "project-punch",
+  // EmissaryRecomp: its program, the disc's files and its settings (emissary/emissary.ts).
+  "emissary-recomp",
   "downloads",
   DOLPHIN_MANIFEST_NAME,
 ]);

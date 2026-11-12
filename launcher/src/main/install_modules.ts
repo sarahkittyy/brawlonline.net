@@ -1,4 +1,5 @@
 import setupAccountsIpc from "@accounts/setup";
+import setupEmissaryIpc from "@dolphin/emissary/setup";
 import { DolphinManager } from "@dolphin/manager";
 import setupModsIpc from "@dolphin/mods/setup";
 import setupProjectPunchIpc from "@dolphin/project_punch/setup";
@@ -32,6 +33,12 @@ export function installModules(flags: ConfigFlags) {
   setupModsIpc({ settingsManager, dolphinManager, accountsManager });
   const isoGameData = isoGameDataReader(dolphinManager);
   setupGameAssetsIpc({ settingsManager, dolphinManager, checkIso: (isoPath) => checkIso(isoPath, isoGameData) });
+  const emissary = setupEmissaryIpc({
+    dolphinManager,
+    settingsManager,
+    checkIso: (isoPath) => checkIso(isoPath, isoGameData),
+  });
+  dolphinManager.setEmissary(emissary);
   const browserWindowManager = new BrowserWindowManager();
   setupMainIpc({ dolphinManager, settingsManager, flags, browserWindowManager, appUpdater, accountsManager });
   return { dolphinManager, settingsManager, browserWindowManager, appUpdater };

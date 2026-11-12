@@ -1,7 +1,7 @@
-// What Project Punch's popup and Settings > Training offer for a state (dolphin/project_punch).
+// What Project Punch's popup and Settings > Add-ons offer for a state (dolphin/project_punch).
 import type { ProjectPunchState } from "@dolphin/project_punch/types";
 
-/** What can be done in `state` (the popup's and Settings > Training's buttons). */
+/** What can be done in `state` (the popup's and Settings > Add-ons's buttons). */
 export function projectPunchActions(state: ProjectPunchState | null) {
   const installed = state?.installed ?? null;
   const job = state?.job ?? null;

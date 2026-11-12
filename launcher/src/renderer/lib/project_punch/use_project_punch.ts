@@ -1,5 +1,5 @@
 // Project Punch's state from main (dolphin/project_punch): the lab button on Home, its dialog and
-// Settings > Training read it. A download goes on in main while the dialog is closed.
+// Settings > Add-ons read it. A download goes on in main while the dialog is closed.
 import type { ProjectPunchState } from "@dolphin/project_punch/types";
 import log from "electron-log";
 import { create } from "zustand";

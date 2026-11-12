@@ -22,6 +22,8 @@ import { removeTree } from "utils/remove_tree";
 import { isBrawlOnlineDolphinVersion, notBrawlOnlineDolphinMessage } from "./brawl_online_build";
 import { isAbnormalExit, keepCrashLog } from "./crash_log";
 import { dolphinToolNextTo } from "./dolphin_tool";
+import type { EmissaryRecomp } from "./emissary/emissary";
+import { prepareEmissaryLaunch } from "./emissary/launch";
 import { clearInputDelayRequest, writeInputDelayRequest } from "./input_delay_handoff";
 import { brawlSaveDir, ensureBrawlSave, isUsableBrawlSave, listBrawlSaveFiles } from "./install/brawl_save";
 import { bundledDolphinSource, installBundledDolphin } from "./install/bundled_dolphin";
@@ -134,6 +136,7 @@ export class DolphinManager {
   private renderSettings = new Map<string, string>();
   private pplusVersionStore: PPlusVersions | null = null;
   private netplayDolphinInstance: DolphinInstance | null = null;
+  private emissary: (() => EmissaryRecomp) | null = null;
   /** When Play started the open netplay Dolphin, and whether it boots P+ (null: Configure's, or none). */
   private netplayStart: NetplayStart | null = null;
   /**
@@ -192,6 +195,11 @@ export class DolphinManager {
   /** No new Dolphin (Play, replays, Configure) starts while `gate` throws. A running one is left alone. */
   setLaunchGate(gate: () => Promise<void>): void {
     this.launchGate = gate;
+  }
+
+  /** EmissaryRecomp (emissary/setup.ts): Play starts it instead of Dolphin when Settings > Game says so. */
+  setEmissary(emissary: () => EmissaryRecomp): void {
+    this.emissary = emissary;
   }
 
   /** True while the netplay Dolphin the launcher started (Play, or Configure) is running. */
@@ -711,6 +719,14 @@ export class DolphinManager {
     const sdCardImage = await this._withProgress(DolphinLaunchType.NETPLAY, "prepareSdCard", (onProgress) =>
       this._installOnlinePlugin(netplayInstallation, launchGameOnPlay, inUse, onProgress),
     );
+    // "Play Project+ with: EmissaryRecomp": the same card, save and codes, in the recomp instead.
+    // When it can't play yet (not installed, updating, no game files), Dolphin plays.
+    if (launchGameOnPlay && sdCardImage && this.settingsManager.get().settings.playProjectPlusWith === "emissary") {
+      const started = await this._launchEmissary(sdCardImage);
+      if (started) {
+        return started;
+      }
+    }
     const params = buildNetplayDolphinArgs({
       userArgs: netplayInstallation.userArgs(),
       sdCardImage,
@@ -760,6 +776,47 @@ export class DolphinManager {
     }
     this.netplayDolphinInstance = dolphinInstance;
     this.netplayStart = { bootsGame: launchGameOnPlay, at: Date.now() };
+    return { status: "started" };
+  }
+
+  /**
+   * Starts EmissaryRecomp as the netplay game (docs/design/brawl-recompiled.md §8): it is the
+   * netplay instance while it runs, so Play, the room hand-off (`User/Online`) and quit-if-idle
+   * treat it as they treat Dolphin. Null when it can't play (Dolphin plays instead).
+   */
+  private async _launchEmissary(sdCardImage: string): Promise<NetplayLaunchResult | null> {
+    const emissary = this.emissary?.();
+    if (!emissary) {
+      return null;
+    }
+    let exe: string;
+    try {
+      exe = await emissary.engineForPlay();
+    } catch (err) {
+      log.warn(`Playing with Dolphin: ${err instanceof Error ? err.message : String(err)}`);
+      return null;
+    }
+    const env = await prepareEmissaryLaunch({
+      userData: emissary.userData,
+      gameFolder: emissary.gameFolder,
+      sdCardImage,
+      netplaySave: netplaySaveStore(projectPlusStoreFolder(this.netplayFolder())),
+    });
+    log.info(`Launching EmissaryRecomp at path: ${exe}`);
+    const instance = new DolphinInstance(exe, [], { env, cwd: path.dirname(exe) });
+    instance.on("close", (exitCode: number | null, signal: string | null) => {
+      emissary.setRunning(false);
+      this.eventSubject.next({ type: DolphinEventType.CLOSED, dolphinType: DolphinLaunchType.NETPLAY, exitCode });
+      this.netplayDolphinInstance = null;
+      this.netplayStart = null;
+      void clearRoomRequest(this.netplayOnlineDir()).catch(() => undefined);
+      log.warn(`EmissaryRecomp exit code: ${exitCode?.toString(16)}, signal: ${signal}`);
+    });
+    instance.on("error", (err: Error) => log.error(err));
+    await instance.start();
+    emissary.setRunning(true);
+    this.netplayDolphinInstance = instance;
+    this.netplayStart = { bootsGame: true, at: Date.now() };
     return { status: "started" };
   }
 

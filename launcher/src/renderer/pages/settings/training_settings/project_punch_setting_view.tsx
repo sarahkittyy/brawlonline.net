@@ -1,4 +1,4 @@
-// Settings > Training's Project Punch block (training_settings.tsx): where its SD card is, which
+// Settings > Add-ons's Project Punch block (training_settings.tsx): where its SD card is, which
 // version is on it and which is the latest; Download / Update / Play / Remove.
 import { formatBytes } from "@common/disk_space";
 import type { ProjectPunchState } from "@dolphin/project_punch/types";

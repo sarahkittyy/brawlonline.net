@@ -5,9 +5,13 @@ export const GameSettingsMessages = {
   closeDolphinToChange: () => "Close Dolphin to change this setting",
   noFileSet: () => "No file set",
   verifying: () => "Verifying...",
-  playButtonAction: () => "Play Button Action",
-  launchMelee: (gameName: string) => "Launch {0}",
-  launchDolphin: () => "Launch Dolphin",
+  playProjectPlusWith: () => "Play Project+ with",
+  playWithDolphin: () => "Dolphin",
+  playWithEmissary: () => "EmissaryRecomp",
+  beta: () => "BETA",
+  emissarySetUp: () => "Set up",
+  playProjectPlusWithDescription: () =>
+    "EmissaryRecomp is Brawl as a native PC program. Other Games and replays always use Dolphin. Until it is set up, Play uses Dolphin.",
   inputDelay: () => "Input Delay",
   inputDelayDescription: () =>
     "More input delay = less rollbacks. Increase this if your games are stuttering / teleporting around. " +

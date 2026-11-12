@@ -35,6 +35,11 @@ export interface SettingsSchema {
   enableNetplayReplays: boolean;
   useMonthlySubfolders: boolean;
   launchGameOnPlay: boolean;
+  // "Play Project+ with": the netplay Dolphin, or EmissaryRecomp (dolphin/emissary, a native Brawl
+  // with Brawl Online's rollback) once it is installed. Other Games always play in Dolphin.
+  playProjectPlusWith: "dolphin" | "emissary";
+  // Settings > Add-ons > EmissaryRecomp: "Keep up to date automatically".
+  emissaryAutoUpdate: boolean;
   autoUpdateLauncher: boolean;
 
   // "Hardware Acceleration": the launcher draws with the graphics card. Read once at start (main.ts:

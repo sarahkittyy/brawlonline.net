@@ -88,6 +88,8 @@ export const useNetplayNetwork = () => useSetting("netplayNetwork");
 export const useCloseDolphinAfterSpectating = () => useSetting("closeDolphinAfterSpectating");
 
 export const useLaunchGameOnPlay = () => useSetting("launchGameOnPlay");
+export const usePlayProjectPlusWith = () => useSetting("playProjectPlusWith");
+export const useEmissaryAutoUpdate = () => useSetting("emissaryAutoUpdate");
 
 export const useAutoUpdateLauncher = () => useSetting("autoUpdateLauncher");
 

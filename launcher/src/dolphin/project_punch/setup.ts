@@ -1,4 +1,4 @@
-// Project Punch (project_punch.ts): Home's lab button, its dialog and Settings > Training.
+// Project Punch (project_punch.ts): Home's lab button, its dialog and Settings > Add-ons.
 //
 // SPDX-License-Identifier: GPL-3.0-or-later
 

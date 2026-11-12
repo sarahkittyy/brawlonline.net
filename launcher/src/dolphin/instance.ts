@@ -45,7 +45,11 @@ export class DolphinInstance extends EventEmitter {
    * Unlike Slippi we do not pass `-b`: P+'s launcher DOL hands over to the disc, and batch mode
    * must not treat that hand-over as the end of emulation.
    */
-  constructor(execPath: string, baseParams: string[] = []) {
+  constructor(
+    execPath: string,
+    baseParams: string[] = [],
+    private readonly spawnOptions: { env?: Record<string, string>; cwd?: string } = {},
+  ) {
     super();
     this.baseParams = [...baseParams];
     this.executablePath = execPath;
@@ -107,10 +111,13 @@ export class DolphinInstance extends EventEmitter {
           child = execFile(executablePath, params, {
             // 100MB
             maxBuffer: 1000 * 1000 * 100,
+            ...(this.spawnOptions.env ? { env: { ...process.env, ...this.spawnOptions.env } } : {}),
+            ...(this.spawnOptions.cwd ? { cwd: this.spawnOptions.cwd } : {}),
           });
         } else {
           child = spawn(executablePath, params, {
-            env: sanitizeAppImageEnv(),
+            env: { ...sanitizeAppImageEnv(), ...this.spawnOptions.env },
+            ...(this.spawnOptions.cwd ? { cwd: this.spawnOptions.cwd } : {}),
           });
         }
 

@@ -1,4 +1,3 @@
-import { GAME_NAME } from "@common/product";
 import { IsoValidity } from "@common/types";
 import { css } from "@emotion/react";
 import styled from "@emotion/styled";
@@ -6,9 +5,6 @@ import CheckCircleIcon from "@mui/icons-material/CheckCircle";
 import ErrorIcon from "@mui/icons-material/Error";
 import Help from "@mui/icons-material/Help";
 import CircularProgress from "@mui/material/CircularProgress";
-import FormControlLabel from "@mui/material/FormControlLabel";
-import Radio from "@mui/material/Radio";
-import RadioGroup from "@mui/material/RadioGroup";
 import Tooltip from "@mui/material/Tooltip";
 import React from "react";
 
@@ -22,7 +18,6 @@ import {
   useEnableMusic,
   useEnableStreamGames,
   useIsoPath,
-  useLaunchGameOnPlay,
   usePotatoMode,
 } from "@/lib/hooks/use_settings";
 
@@ -32,6 +27,7 @@ import { ChatKeySetting } from "./chat_key_setting";
 import { GameSettingsMessages as Messages } from "./game_settings.messages";
 import { InputDelaySetting } from "./input_delay_setting";
 import { NetplayNetworkSetting } from "./netplay_network_setting";
+import { PlayProjectPlusWithSetting } from "./play_project_plus_with_setting";
 
 const renderValidityStatus = (isoValidity: IsoValidity) => {
   switch (isoValidity) {
@@ -69,7 +65,6 @@ export const GameSettings = React.memo(() => {
   const isoValidity = useIsoVerification((state) => state.validity);
   const [isoPath, setIsoPath] = useIsoPath();
   const verifyFraction = useIsoVerificationFraction(verifying ? isoPath : null);
-  const [launchMeleeOnPlay, setLaunchMelee] = useLaunchGameOnPlay();
   const [enableMusic, setEnableMusic] = useEnableMusic();
   const [disableChat, setDisableChat] = useDisableChat();
   const [potatoMode, setPotatoMode] = usePotatoMode();
@@ -77,11 +72,6 @@ export const GameSettings = React.memo(() => {
   const [closeAfterSpectating, setCloseAfterSpectating] = useCloseDolphinAfterSpectating();
   const netplayDolphinOpen = useDolphinStore((store) => store.netplayOpened);
   const playbackDolphinOpen = useDolphinStore((store) => store.playbackOpened);
-
-  const onLaunchMeleeChange = async (value: string) => {
-    const launchMelee = value === "true";
-    await setLaunchMelee(launchMelee);
-  };
 
   return (
     <div>
@@ -124,12 +114,7 @@ export const GameSettings = React.memo(() => {
           }
         />
       </SettingItem>
-      <SettingItem name={Messages.playButtonAction()}>
-        <RadioGroup value={launchMeleeOnPlay} onChange={(_event, value) => onLaunchMeleeChange(value)}>
-          <FormControlLabel value={true} label={Messages.launchMelee(GAME_NAME)} control={<Radio />} />
-          <FormControlLabel value={false} label={Messages.launchDolphin()} control={<Radio />} />
-        </RadioGroup>
-      </SettingItem>
+      <PlayProjectPlusWithSetting disabled={netplayDolphinOpen} />
       <InputDelaySetting />
       <SettingItem>
         <Tooltip title={netplayDolphinOpen ? Messages.closeDolphinToChange() : ""} placement="bottom-start">

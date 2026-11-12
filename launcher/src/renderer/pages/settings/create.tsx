@@ -1,3 +1,4 @@
+import { AddonsSettings } from "./addons_settings/addons_settings";
 import { AdvancedAppSettings } from "./advanced_app_settings/advanced_app_settings";
 import { AppearanceSettings } from "./appearance_settings/appearance_settings";
 import { ClipsSettings } from "./clips_settings/clips_settings";
@@ -10,7 +11,6 @@ import { GameSettings } from "./game_settings/game_settings";
 import { HelpPage } from "./help_page/help_page";
 import { ReplaySettings } from "./replay_settings/replay_settings";
 import { SettingsPage } from "./settings_page";
-import { TrainingSettings } from "./training_settings/training_settings";
 import type { SettingSection } from "./types";
 
 export function createSettingsPage(): { Page: React.ComponentType } {
@@ -34,9 +34,9 @@ export function createSettingsPage(): { Page: React.ComponentType } {
           component: <ClipsSettings />,
         },
         {
-          name: () => Messages.training(),
-          path: "training-options",
-          component: <TrainingSettings />,
+          name: () => Messages.addons(),
+          path: "addons",
+          component: <AddonsSettings />,
         },
       ],
     },

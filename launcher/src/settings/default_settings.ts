@@ -41,6 +41,8 @@ export const defaultAppSettings: AppSettings = {
     useMonthlySubfolders: true,
     extraSlpPaths: [],
     launchGameOnPlay: true,
+    playProjectPlusWith: "dolphin",
+    emissaryAutoUpdate: true,
     inputDelay: INPUT_DELAY_NORMAL,
     enableMusic: true,
     disableChat: false,

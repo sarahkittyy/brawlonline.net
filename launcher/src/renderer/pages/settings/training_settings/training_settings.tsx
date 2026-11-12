@@ -1,4 +1,4 @@
-// Settings > Training: Project Punch (dolphin/project_punch), as in Home's lab popup.
+// Settings > Add-ons: Project Punch (dolphin/project_punch), as in Home's lab popup.
 import { PROJECT_PUNCH_REPO_URL } from "@dolphin/project_punch/types";
 import React, { useEffect, useState } from "react";
 
