@@ -209,7 +209,9 @@ export const EmissarySettingView = ({
           </div>
         )}
         {installed && state?.status === "ready" && (
-          <div style={{ marginTop: 8, fontSize: 13, opacity: 0.75 }}>{Messages.playWith()}</div>
+          <div style={{ marginTop: 8, fontSize: 13, opacity: 0.75 }}>
+            {installed.playsOnline ? Messages.playWith() : Messages.noOnline()}
+          </div>
         )}
       </div>
     </SettingItem>

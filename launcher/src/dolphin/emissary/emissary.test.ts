@@ -34,12 +34,12 @@ async function zipOf(files: Record<string, Buffer | string>): Promise<Buffer> {
 }
 
 // A Windows release laid out as upstream's: BrawlRecompiled/{Brawl Recompiled.exe, engine/...}.
-const releaseZip = (marker: string) =>
+const releaseZip = (marker: string, online = true) =>
   zipOf({
     "BrawlRecompiled/Brawl Recompiled.exe": "upstream launcher",
     "BrawlRecompiled/README.txt": "readme",
     "BrawlRecompiled/engine/brawl-engine.exe": `engine ${marker}`,
-    "BrawlRecompiled/engine/engine_usa.dll": "dll",
+    "BrawlRecompiled/engine/engine_usa.dll": online ? "dll BRAWL_SD_VOLATILE_WRITES BRAWL_ONLINE_IPC" : "dll",
     "BrawlRecompiled/engine/portable.txt": "upstream portable",
     "BrawlRecompiled/engine/UserData/SD/.keep": "",
   });
@@ -265,6 +265,19 @@ describe("EmissaryRecomp", () => {
     await em.remove();
     expect(fs.existsSync(em.root)).toBe(false);
     expect((await em.state()).status).toBe("notInstalled");
+  });
+
+  it("doesn't play a release without online play (v0.6.0)", async () => {
+    latest = { tag: "v0.6.0", zip: await releaseZip("0.6.0", false) };
+    const em = make();
+    const s = await em.install();
+    expect(s.status).toBe("ready");
+    expect(s.installed?.playsOnline).toBe(false);
+    await expect(em.engineForPlay()).rejects.toThrow(/can't play online yet/);
+
+    latest = { tag: "v0.7.0", zip: await releaseZip("0.7.0") };
+    expect((await em.install()).installed?.playsOnline).toBe(true);
+    expect(await em.engineForPlay()).toContain("v0.7.0");
   });
 
   it("can't be removed while the game runs", async () => {

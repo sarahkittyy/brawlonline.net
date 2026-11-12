@@ -24,6 +24,7 @@ export const AddonsSettingsMessages = {
   autoUpdate: () => "Keep up to date automatically",
   autoUpdateDescription: () => "Newer releases download by themselves and play the next time the game starts.",
   playWith: () => "Play with it in Settings > Game.",
+  noOnline: () => "This release can't play online yet: Play uses Dolphin until an update can.",
   chooseDisc: () => "Choose disc image",
   staged: (version: string) => `${version} is downloaded and plays the next time the game starts.`,
   jobDownload: () => "Downloading",

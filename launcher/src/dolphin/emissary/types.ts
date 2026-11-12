@@ -51,6 +51,8 @@ export type EmissaryState = {
     /** The program's folder size. */
     programBytes: number;
     installedAt: string;
+    /** It has Brawl Online's online play (the read-only card and the online control); Play uses Dolphin otherwise. */
+    playsOnline: boolean;
   } | null;
   /** The disc's extracted files (how big), null when there are none. */
   gameFiles: { bytes: number } | null;

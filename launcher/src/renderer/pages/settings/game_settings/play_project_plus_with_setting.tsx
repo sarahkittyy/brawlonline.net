@@ -30,7 +30,9 @@ export type PlayProjectPlusWithViewProps = {
 
 /** EmissaryRecomp can play (or is playing): picking it needs nothing more. */
 export const emissaryUsable = (s: EmissaryState | null) =>
-  s != null && (s.status === "ready" || s.status === "updateAvailable" || s.status === "running");
+  s != null &&
+  s.installed?.playsOnline === true &&
+  (s.status === "ready" || s.status === "updateAvailable" || s.status === "running");
 
 export const PlayProjectPlusWithView = ({
   value,
@@ -81,7 +83,9 @@ export const PlayProjectPlusWithView = ({
                 </span>
                 {emissary && !usable && (
                   <span style={{ fontSize: 13, opacity: 0.7 }} data-testid="emissary-choice-status">
-                    {AddonsSettingsMessages.statusText(emissary.status)}{" "}
+                    {emissary.installed && !emissary.installed.playsOnline && emissary.status === "ready"
+                      ? AddonsSettingsMessages.noOnline()
+                      : AddonsSettingsMessages.statusText(emissary.status)}{" "}
                     {!unavailable && (
                       <Link
                         component="button"

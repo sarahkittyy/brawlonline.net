@@ -114,7 +114,45 @@ export function parseExtractProgress(line: string): number | null {
 
 type Fetch = (url: string, init?: { signal?: AbortSignal; headers?: Record<string, string> }) => Promise<Response>;
 
-type Current = { v: 1; version: string; programBytes: number; installedAt: string };
+type Current = {
+  v: 1;
+  version: string;
+  programBytes: number;
+  installedAt: string;
+  /** What the release can do, read from its program (releaseFeatures); absent in records from before. */
+  features?: EmissaryFeatures;
+};
+
+/**
+ * What a release supports, found by the switches its program reads. Play needs both: without the
+ * read-only card the game would write into the online card the netplay Dolphin also boots, and
+ * without the online control it plays no one (EmissaryRecomp v0.6.0 has neither; PR #2 adds them).
+ */
+export type EmissaryFeatures = { readOnlyCard: boolean; online: boolean };
+
+const FEATURE_MARKERS: Record<keyof EmissaryFeatures, string> = {
+  readOnlyCard: "BRAWL_SD_VOLATILE_WRITES",
+  online: "BRAWL_ONLINE_IPC",
+};
+
+/** Scans the program's files (the engine DLLs or the Linux program) for the feature switches' names. */
+export async function releaseFeatures(engineDir: string): Promise<EmissaryFeatures> {
+  const found: EmissaryFeatures = { readOnlyCard: false, online: false };
+  const names = await fs.promises.readdir(engineDir).catch(() => [] as string[]);
+  const targets = names.filter((n) => /^(engine_usa.*\.dll|brawl-engine(\.exe)?|libengine.*\.so)$/i.test(n));
+  for (const name of targets) {
+    const data = await fs.promises.readFile(path.join(engineDir, name)).catch(() => null);
+    if (!data) {
+      continue;
+    }
+    for (const [key, marker] of Object.entries(FEATURE_MARKERS) as [keyof EmissaryFeatures, string][]) {
+      if (!found[key] && data.includes(marker)) {
+        found[key] = true;
+      }
+    }
+  }
+  return found;
+}
 type GameFiles = { v: 1; iso: string; size: number; mtimeMs: number; bytes: number; extractedAt: string };
 
 /** Runs `DolphinTool extract` (or a test double): resolves on success, rejects with its error output. */
@@ -311,7 +349,12 @@ export class EmissaryRecomp {
       folder: this.opts.root,
       supported: this.supported,
       installed: program
-        ? { version: program.version, programBytes: program.programBytes, installedAt: program.installedAt }
+        ? {
+            version: program.version,
+            programBytes: program.programBytes,
+            installedAt: program.installedAt,
+            playsOnline: program.features?.readOnlyCard === true && program.features.online === true,
+          }
         : null,
       gameFiles: files ? { bytes: files.bytes } : null,
       gameFilesCurrent: filesCurrent,
@@ -338,6 +381,10 @@ export class EmissaryRecomp {
     const exe = await this.engine();
     if (!exe) {
       throw new EmissaryError("EmissaryRecomp is not installed.");
+    }
+    const features = (await this.readJson<Current>("current.json"))?.features;
+    if (!features?.readOnlyCard || !features.online) {
+      throw new EmissaryError(`EmissaryRecomp ${s.installed?.version} can't play online yet.`);
     }
     return exe;
   }
@@ -473,6 +520,7 @@ export class EmissaryRecomp {
       version: release.version,
       programBytes: await folderBytes(dest),
       installedAt: new Date().toISOString(),
+      features: await releaseFeatures(path.join(dest, "engine")),
     };
     if (this.running) {
       await this.writeJson("staged.json", record);

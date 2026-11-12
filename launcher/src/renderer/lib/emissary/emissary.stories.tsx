@@ -37,6 +37,7 @@ const installed = (version: string) => ({
   version,
   programBytes: 452_000_000,
   installedAt: "2026-11-12T20:00:00.000Z",
+  playsOnline: true,
 });
 const files = { bytes: 7_296_000_000 };
 
@@ -94,6 +95,16 @@ const states: Record<string, EmissaryState> = {
     downloadBytes: 0,
     diskBytes: 0,
   },
+  offlineOnly: {
+    ...base,
+    status: "ready",
+    installed: { ...installed("v0.6.0"), playsOnline: false },
+    gameFiles: files,
+    gameFilesCurrent: true,
+    upToDate: true,
+    downloadBytes: 0,
+    diskBytes: 0,
+  },
   error: {
     ...base,
     error: "Not enough space on drive C: for EmissaryRecomp: 7.6 GB needed, 2.1 GB free.",
@@ -128,6 +139,7 @@ export const CardReady = card(states.ready);
 export const CardUpdateAvailable = card(states.updateAvailable);
 export const CardUpdateStagedWhilePlaying = card(states.staged);
 export const CardError = card(states.error);
+export const CardReleaseWithoutOnline = card(states.offlineOnly);
 
 const choice =
   (value: "dolphin" | "emissary", state: EmissaryState | null, disabled = false) =>
@@ -149,4 +161,5 @@ export const PlayWithDolphinNotInstalled = choice("dolphin", states.notInstalled
 export const PlayWithEmissaryReady = choice("emissary", states.ready);
 export const PlayWithNeedsDisc = choice("dolphin", states.needsDisc);
 export const PlayWithUnavailable = choice("dolphin", states.unavailable);
+export const PlayWithReleaseWithoutOnline = choice("emissary", states.offlineOnly);
 export const PlayWithWhileGameOpen = choice("emissary", states.ready, true);
