@@ -153,6 +153,15 @@
           const date = document.createElement("span");
           date.className = "row-date";
           date.textContent = p.status === "published" ? dateText(p.publishedAt) : `edited ${dateText(p.updatedAt)}`;
+          if (localStorage.getItem(backupKey(p.id))) {
+            // Changes the server never got (a closed tab, or an edit to a published post that
+            // was not Updated): opening the post offers them back.
+            const unsaved = document.createElement("span");
+            unsaved.className = "row-unsaved";
+            unsaved.textContent = "Unsaved changes";
+            unsaved.title = "Changes kept in this browser. Open the post to restore them.";
+            title.append(unsaved);
+          }
           a.append(status, title, date);
           li.append(a);
           return li;
@@ -293,14 +302,25 @@
     renderStatus();
     schedulePreview();
     scheduleAutosave();
+    lineTops = null;
     clearTimeout(backupTimer);
-    const id = post.id;
-    backupTimer = setTimeout(() => {
-      if (post && post.id === id && dirty()) {
-        localStorage.setItem(backupKey(id), JSON.stringify({ ...fields(), base: post.updatedAt, at: new Date().toISOString() }));
-      }
-    }, 300);
+    backupTimer = setTimeout(writeBackup, 300);
   }
+
+  /** Keeps the open post's unsaved changes in localStorage (offered back when it is opened again). */
+  function writeBackup() {
+    clearTimeout(backupTimer);
+    if (!post || !dirty()) return;
+    try {
+      localStorage.setItem(backupKey(post.id), JSON.stringify({ ...fields(), base: post.updatedAt, at: new Date().toISOString() }));
+    } catch {
+      // Storage full or off: the server copy (drafts save themselves) is all there is.
+    }
+  }
+
+  // Closing the tab (or the browser) right after typing: keep the last keystrokes too.
+  window.addEventListener("pagehide", writeBackup);
+  document.addEventListener("visibilitychange", () => document.visibilityState === "hidden" && writeBackup());
 
   FIELDS.forEach((k) => $(k).addEventListener("input", changed));
 
@@ -462,19 +482,158 @@
       parts.push(`${r.readingMinutes} min read`);
       $("p-byline").textContent = parts.join(" · ");
       // accounts' renderer: raw HTML in the Markdown comes back as text.
-      $("p-body").innerHTML = r.html;
+      patchPreview(r.html);
+      blockLines = Array.isArray(r.blocks) ? r.blocks : [];
+      lineTops = null;
+      syncPreview();
     } catch (e) {
       if (seq === previewSeq) $("p-byline").textContent = `Preview failed: ${e.message}`;
     }
   }
 
-  // Keep the preview roughly level with the Markdown.
-  $("body").addEventListener("scroll", () => {
+  /** The HTML each preview element was made from: unchanged ones are kept, not made again. */
+  const madeFrom = new WeakMap();
+
+  /**
+   * Puts the rendered HTML in the preview, keeping every element whose HTML did not change, so a
+   * playing video keeps playing and pictures don't load again (and jump) at each keystroke.
+   */
+  function patchPreview(html) {
+    const box = $("p-body");
+    const tpl = document.createElement("template");
+    tpl.innerHTML = html;
+    const old = new Map();
+    for (const el of box.children) {
+      const k = madeFrom.get(el);
+      if (k === undefined) continue;
+      if (!old.has(k)) old.set(k, []);
+      old.get(k).push(el);
+    }
+    const keep = new Set();
+    const next = [...tpl.content.children].map((el) => {
+      const k = el.outerHTML;
+      const same = old.get(k)?.shift();
+      if (same) {
+        keep.add(same);
+        return same;
+      }
+      madeFrom.set(el, k);
+      // The preview is the author's own pictures: load them all, so the heights are right for the
+      // scrolling below.
+      el.querySelectorAll("img[loading=lazy]").forEach((img) => (img.loading = "eager"));
+      if (el.matches("img[loading=lazy]")) el.loading = "eager";
+      return el;
+    });
+    [...box.childNodes].forEach((n) => keep.has(n) || n.remove());
+    // Kept elements are only moved when they must be (a moved video would stop).
+    let at = box.firstChild;
+    for (const el of next) {
+      if (el === at) at = at.nextSibling;
+      else box.insertBefore(el, at);
+    }
+  }
+
+  // ---------------------------------------------------------------- the preview follows the Markdown
+
+  // The source line where each element of the preview starts (accounts' render), and the
+  // Markdown's height at each of those lines (measured in a copy of the textarea, wrapped alike).
+  let blockLines = [];
+  let lineTops = null;
+  let mirror = null;
+  // What decides where the textarea wraps its lines.
+  const MIRRORED = ["fontFamily", "fontSize", "fontWeight", "fontStyle", "fontStretch", "lineHeight",
+    "letterSpacing", "wordSpacing", "tabSize", "textIndent", "paddingTop", "paddingRight", "paddingBottom", "paddingLeft"];
+
+  /** Pixel top of each line in `lines` (ascending), in the textarea's content. */
+  function measureLines(lines) {
+    const src = $("body");
+    const cs = getComputedStyle(src);
+    if (!mirror) {
+      mirror = document.createElement("div");
+      mirror.setAttribute("aria-hidden", "true");
+      document.body.append(mirror);
+    }
+    const m = mirror.style;
+    m.position = "absolute";
+    m.left = "-10000px";
+    m.top = "0";
+    m.visibility = "hidden";
+    m.boxSizing = "border-box";
+    m.width = `${src.clientWidth}px`; // without the scrollbar, like the text inside
+    m.whiteSpace = "pre-wrap";
+    m.overflowWrap = "break-word";
+    m.wordBreak = cs.wordBreak;
+    for (const p of MIRRORED) m[p] = cs[p];
+    m.border = "0";
+    const text = src.value.split("\n");
+    const marks = [];
+    const parts = [];
+    let from = 0;
+    for (const line of lines) {
+      if (line < from || line >= text.length) continue;
+      parts.push(document.createTextNode(text.slice(from, line).map((t) => t + "\n").join("")));
+      const mark = document.createElement("span");
+      marks.push(mark);
+      parts.push(mark);
+      from = line;
+    }
+    parts.push(document.createTextNode(text.slice(from).join("\n")));
+    mirror.replaceChildren(...parts);
+    const tops = marks.map((mark) => mark.offsetTop);
+    mirror.replaceChildren();
+    return marks.length === lines.length ? tops : null;
+  }
+
+  /**
+   * Scrolls the preview so it shows what the Markdown shows: the block at the top of the Markdown
+   * is at the top of the preview, however tall its pictures and videos are; between two blocks
+   * it moves in step. Both reach their ends together.
+   */
+  function syncPreview() {
     const src = $("body");
     const pane = $("preview-pane");
-    const max = src.scrollHeight - src.clientHeight;
-    if (max <= 0) return;
-    pane.scrollTop = (src.scrollTop / max) * (pane.scrollHeight - pane.clientHeight);
+    const srcMax = src.scrollHeight - src.clientHeight;
+    const paneMax = pane.scrollHeight - pane.clientHeight;
+    if (srcMax <= 0 || paneMax <= 0) return;
+    const kids = $("p-body").children;
+    const points = [[0, 0]];
+    if (blockLines.length && blockLines.length === kids.length) {
+      if (!lineTops) lineTops = measureLines(blockLines);
+      if (lineTops) {
+        const padTop = parseFloat(getComputedStyle(src).paddingTop) || 0;
+        const paneTop = pane.getBoundingClientRect().top - pane.scrollTop;
+        for (let i = 0; i < kids.length; i++) {
+          points.push([lineTops[i] - padTop, kids[i].getBoundingClientRect().top - paneTop - 24]);
+        }
+      }
+    }
+    points.push([srcMax, paneMax]);
+    // Only points that go forward on both sides (a block at the very top or past the end is left
+    // to its neighbours).
+    const path = [];
+    for (const [a, b] of points) {
+      const last = path[path.length - 1];
+      if (a < 0 || a > srcMax || b < 0 || b > paneMax) continue;
+      if (last && (a <= last[0] || b < last[1])) continue;
+      path.push([a, b]);
+    }
+    if (path[path.length - 1][0] !== srcMax) path.push([srcMax, paneMax]);
+    const y = src.scrollTop;
+    let i = 1;
+    while (i < path.length - 1 && path[i][0] < y) i++;
+    const [a0, b0] = path[i - 1];
+    const [a1, b1] = path[i];
+    const t = a1 > a0 ? Math.min(1, Math.max(0, (y - a0) / (a1 - a0))) : 1;
+    pane.scrollTop = b0 + t * (b1 - b0);
+  }
+
+  $("body").addEventListener("scroll", syncPreview);
+  // A picture or video's size is known once it loads.
+  $("p-body").addEventListener("load", syncPreview, true);
+  $("p-body").addEventListener("loadedmetadata", syncPreview, true);
+  window.addEventListener("resize", () => {
+    lineTops = null;
+    syncPreview();
   });
 
   // ---------------------------------------------------------------- pasting text

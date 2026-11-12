@@ -81,6 +81,14 @@ body.editor {
   font-style: italic;
 }
 
+/* A post with changes only this browser has (localStorage). */
+.row-unsaved {
+  margin-left: 10px;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--warn);
+}
+
 .row-date {
   font-size: 13px;
   color: var(--dim);

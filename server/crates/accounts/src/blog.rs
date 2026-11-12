@@ -391,6 +391,8 @@ pub struct RenderReq {
 pub struct RenderResp {
     pub html: String,
     pub reading_minutes: usize,
+    /// `Rendered::blocks`: the source line of each top-level element of `html`.
+    pub blocks: Vec<usize>,
 }
 
 /// `POST /v1/blog/render`: the editor's preview, from the same renderer as the pages.
@@ -401,7 +403,7 @@ pub async fn render_preview(
 ) -> ApiResult<Json<RenderResp>> {
     require_admin(&state, &headers).await?;
     let r = render(&req.markdown);
-    Ok(Json(RenderResp { reading_minutes: reading_minutes(r.words), html: r.html }))
+    Ok(Json(RenderResp { reading_minutes: reading_minutes(r.words), html: r.html, blocks: r.blocks }))
 }
 
 // ---------------------------------------------------------------- images and videos
@@ -613,6 +615,9 @@ pub struct Rendered {
     /// The first paragraph's text: the summary when the post has none.
     pub first_paragraph: String,
     pub words: usize,
+    /// The source line (0-based) where each top-level element of `html` starts: the editor keeps
+    /// its preview level with the Markdown by these.
+    pub blocks: Vec<usize>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -697,12 +702,58 @@ fn media_html(url: &str, alt: &str) -> String {
     }
 }
 
+/// Where the HTML block starting at `events[i]` ends, when it is a comment (written as nothing).
+fn comment_block(events: &[Event], i: usize) -> Option<usize> {
+    if !matches!(events[i], Event::Start(Tag::HtmlBlock)) {
+        return None;
+    }
+    let mut j = i + 1;
+    let mut text = String::new();
+    while j < events.len() && !matches!(events[j], Event::End(TagEnd::HtmlBlock)) {
+        if let Event::Html(s) = &events[j] {
+            text.push_str(s);
+        }
+        j += 1;
+    }
+    text.trim_start().starts_with("<!--").then_some(j)
+}
+
+/// The source line of each top-level element `render` writes: every top-level block but a
+/// comment. An image alone in its paragraph stays one element (the figure).
+fn block_lines(md: &str, events: &[Event], starts: &[usize]) -> Vec<usize> {
+    let mut lines = Vec::new();
+    let mut depth = 0usize;
+    let (mut pos, mut line) = (0usize, 0usize);
+    for (i, e) in events.iter().enumerate() {
+        let top = match e {
+            Event::Start(_) => {
+                depth += 1;
+                depth == 1 && comment_block(events, i).is_none()
+            }
+            Event::End(_) => {
+                depth = depth.saturating_sub(1);
+                false
+            }
+            Event::Rule => depth == 0,
+            _ => false,
+        };
+        if top {
+            let at = starts[i].clamp(pos, md.len());
+            line += md.as_bytes()[pos..at].iter().filter(|&&b| b == b'\n').count();
+            pos = at;
+            lines.push(line);
+        }
+    }
+    lines
+}
+
 pub fn render(md: &str) -> Rendered {
     let opts =
         Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TASKLISTS | Options::ENABLE_FOOTNOTES;
-    let events: Vec<Event> = Parser::new_ext(md, opts).collect();
+    let (events, starts): (Vec<Event>, Vec<usize>) =
+        Parser::new_ext(md, opts).into_offset_iter().map(|(e, range)| (e, range.start)).unzip();
     let mut out: Vec<Event> = Vec::with_capacity(events.len());
-    let mut r = Rendered::default();
+    let mut r = Rendered { blocks: block_lines(md, &events, &starts), ..Rendered::default() };
     let mut ids: Vec<String> = Vec::new();
     // Whether each open link was written (a link to a bad URL is only its text).
     let mut links: Vec<bool> = Vec::new();
@@ -726,15 +777,7 @@ pub fn render(md: &str) -> Rendered {
             }
             Event::Start(Tag::HtmlBlock) => {
                 // A block comment: skip the whole block.
-                let mut j = i + 1;
-                let mut text = String::new();
-                while j < events.len() && !matches!(events[j], Event::End(TagEnd::HtmlBlock)) {
-                    if let Event::Html(s) = &events[j] {
-                        text.push_str(s);
-                    }
-                    j += 1;
-                }
-                if text.trim_start().starts_with("<!--") {
+                if let Some(j) = comment_block(&events, i) {
                     i = j + 1;
                     continue;
                 }
@@ -1419,6 +1462,41 @@ mod tests {
         assert_eq!(summary_of(&post(" Mine "), &long), "Mine");
         assert_eq!(reading_minutes(0), 1);
         assert_eq!(reading_minutes(2300), 10);
+    }
+
+    /// The top-level elements of rendered HTML (a crude tag walk, enough for the renderer's output).
+    fn top_level_elements(html: &str) -> usize {
+        let (mut depth, mut n) = (0usize, 0usize);
+        let mut rest = html;
+        while let Some(at) = rest.find('<') {
+            rest = &rest[at + 1..];
+            let end = rest.find('>').unwrap();
+            let tag = &rest[..end];
+            rest = &rest[end + 1..];
+            if tag.starts_with('/') {
+                depth -= 1;
+                continue;
+            }
+            let name: String = tag.chars().take_while(|c| c.is_ascii_alphanumeric()).collect();
+            if depth == 0 {
+                n += 1;
+            }
+            if !matches!(name.as_str(), "img" | "br" | "hr" | "input") && !tag.ends_with('/') {
+                depth += 1;
+            }
+        }
+        n
+    }
+
+    #[test]
+    fn block_lines_follow_the_elements() {
+        let md = "# Title\n\nPara one\ncontinues\n\n<!-- Uploading x (1)… -->\n\n![cap](/blog/media/0123456789abcdef0123.webp)\n\n- a\n- b\n\n---\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\nFootnote[^1].\n\n[^1]: The note.\n\n> quote\n\n```\ncode\n```\n<b>raw</b>\n";
+        let r = render(md);
+        assert_eq!(r.blocks, vec![0, 2, 7, 9, 12, 14, 18, 20, 22, 24, 27], "{}", r.html);
+        assert_eq!(top_level_elements(&r.html), r.blocks.len(), "{}", r.html);
+        assert_eq!(render("").blocks, Vec::<usize>::new());
+        // CRLF counts as one line each.
+        assert_eq!(render("a\r\n\r\nb\r\n").blocks, vec![0, 2]);
     }
 
     #[test]

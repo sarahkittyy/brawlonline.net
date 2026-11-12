@@ -137,6 +137,10 @@ async fn blog_posts_pages_and_media() {
     assert!(html.contains("<figcaption>The waiting room</figcaption>"), "{html}");
     assert!(html.contains("<video src=\""), "{html}");
     assert!(html.contains("&lt;script&gt;") && !html.contains("<script>"), "{html}");
+    // Each top-level element's source line, for the editor's scrolling: ascending, from line 0.
+    let blocks: Vec<u64> = r["blocks"].as_array().unwrap().iter().map(|b| b.as_u64().unwrap()).collect();
+    assert_eq!(blocks.first(), Some(&0), "{r}");
+    assert!(blocks.windows(2).all(|w| w[0] < w[1]), "{r}");
 
     // A draft: not on the index, 404 without its preview link, readable (noindex) with it.
     let (_, html, _) = page(&s, "/blog").await;
