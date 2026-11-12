@@ -106,7 +106,21 @@
   }
 
   async function route() {
-    const id = Number(location.hash.slice(1));
+    const hash = decodeURIComponent(location.hash.slice(1));
+    let id = Number(hash);
+    if (hash && !(Number.isInteger(id) && id > 0)) {
+      // #<address> (e.g. /blog/write/#progress-report-1): that post, by its link's last part.
+      try {
+        const found = (await api("/v1/blog/posts")).find((p) => p.slug === hash.toLowerCase());
+        if (!found) throw new BrawlAuth.ApiError(404, "not_found", `No post has the address "${hash}".`);
+        id = found.id;
+        history.replaceState(null, "", `#${id}`);
+      } catch (e) {
+        toast(e.message, true);
+        history.replaceState(null, "", location.pathname);
+        id = 0;
+      }
+    }
     if (post && dirty() && post.id !== id) {
       // Leaving a post with changes: save them first (the backup has them either way).
       await save().catch(() => {});
@@ -180,6 +194,7 @@
     problem = "";
     FIELDS.forEach((k) => ($(k).value = p[k]));
     slugFollowsTitle = !p.publishedAt && (p.slug === slugify(p.title) || /^untitled(-\d+)?$/.test(p.slug));
+    lockSlug(!!p.publishedAt);
     $("slug").closest(".slug-field").classList.remove("bad");
     $("slug-prefix").textContent = `${location.host}/blog/`;
     renderStatus();
@@ -296,6 +311,26 @@
     slugFollowsTitle = false;
   });
 
+  // A post that was ever published keeps its address: links to it are out there. Edits and
+  // Update keep the same post, link and id; only "change" (after a warning) unlocks the address.
+  function lockSlug(locked) {
+    $("slug").readOnly = locked;
+    $("slug").title = locked ? "Published posts keep their address, so shared links keep working" : "";
+    $("slug-change").hidden = !locked;
+  }
+
+  $("slug-change").addEventListener("click", () => {
+    if (!post) return;
+    const ok = confirm(
+      `Change this post's address?\n\nLinks people already shared, and search results, point at /blog/${post.slug}. ` +
+        "After the change that link shows \"No such post\".",
+    );
+    if (!ok) return;
+    lockSlug(false);
+    $("slug").focus();
+    $("slug").select();
+  });
+
   // A reload or a closed tab left changes the server never got: offer them back.
   function offerBackup() {
     let b = null;
@@ -353,6 +388,8 @@
       if (post.status !== "published") {
         if (!confirm(`Publish "${post.title || "Untitled"}" on the blog now?`)) return;
         post = await api(`/v1/blog/posts/${post.id}/publish`, { method: "POST" });
+        slugFollowsTitle = false;
+        lockSlug(true);
         toast("Published. It's on brawlonline.net/blog now.");
       } else {
         toast("Updated. The post shows the changes now.");

@@ -170,6 +170,22 @@ body.editor {
   font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
 }
 
+/* A published post's address: locked until "change". */
+.slug-field .input[readonly] {
+  border-style: dashed;
+  color: var(--dim);
+}
+
+.slug-change {
+  margin-left: -4px;
+  font-size: 12px;
+  color: var(--dim);
+}
+
+.slug-change:hover {
+  color: var(--fg);
+}
+
 .slug-field.bad .input {
   border-color: var(--bad);
 }
