@@ -586,6 +586,7 @@ const PublicRoomsBlock = ({
                           canEdit={true}
                           onSave={async (name) => onAdminRename(room.code, name)}
                           inButton={true}
+                          plain={true}
                         />
                       </div>
                     ) : (
@@ -951,6 +952,7 @@ const RoomPanel = ({
         fallback={hostName ? RoomNameMessages.defaultName(hostName) : Messages.inRoom(room.code)}
         canEdit={!!listed && ((isHost && !!onRename) || !!onAdminRename)}
         onSave={async (name) => (isHost && onRename ? onRename(room.code, name) : onAdminRename?.(room.code, name))}
+        plain={!(isHost && onRename)}
       />
     );
   } else if (status?.kind === "join") {

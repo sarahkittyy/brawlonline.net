@@ -27,6 +27,8 @@ export type RoomNameFieldProps = {
   /** Inside a list row that is itself a button (an admin's pencil on another player's room): the pencil is a
    * span, as a button can't hold another. */
   inButton?: boolean;
+  /** An admin's pencil on someone else's room: the bare icon, without the host's outline. */
+  plain?: boolean;
 };
 
 /**
@@ -41,6 +43,7 @@ export const RoomNameField = ({
   className,
   initialEditText,
   inButton = false,
+  plain = false,
 }: RoomNameFieldProps) => {
   const [text, setText] = useState<string | null>(initialEditText ?? null);
   const [saving, setSaving] = useState(false);
@@ -155,9 +158,13 @@ export const RoomNameField = ({
               flexShrink: 0,
               p: "3px",
               color: "var(--text-dim)",
-              border: "1px solid rgb(255 255 255 / 14%)",
-              borderRadius: "5px",
-              "&:hover, &:focus-visible": { color: "var(--text-primary)", borderColor: "rgb(255 255 255 / 30%)" },
+              ...(plain
+                ? { "&:hover, &:focus-visible": { color: "var(--text-primary)", backgroundColor: "transparent" } }
+                : {
+                    border: "1px solid rgb(255 255 255 / 14%)",
+                    borderRadius: "5px",
+                    "&:hover, &:focus-visible": { color: "var(--text-primary)", borderColor: "rgb(255 255 255 / 30%)" },
+                  }),
             }}
             onClick={(e: React.MouseEvent) => {
               e.stopPropagation();
