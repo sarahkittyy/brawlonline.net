@@ -7,7 +7,7 @@ Sarah's board, 2026-11-12: "i'd like to create a blog ... on the brawlonline net
 | Address | What | Served by |
 | --- | --- | --- |
 | `/blog` | The index: the newest post as a big card (its first image as the cover, else the home page's gameplay still; title, date, summary, **Read**), the others as rows under "Older posts" | accounts (`blog.rs`) |
-| `/blog/<slug>` | A post: title, date · by &lt;author&gt; · N min read, the text. A draft only with its preview link (`?preview=<token>`, `noindex`, a yellow "Draft preview" line) | accounts |
+| `/blog/<slug>` | A post: title, date · by &lt;author&gt; · N min read · N views, the text. A draft only with its preview link (`?preview=<token>`, `noindex`, a yellow "Draft preview" line) | accounts |
 | `/blog/media/<hash>.<ext>` | An uploaded image or video (byte ranges, cached for good: the name is the content's hash) | accounts |
 | `/blog/blog.css` | The blog's style (the editor's preview loads it too) | static (`website/blog/`) |
 | `/blog/write/` | The editor (admins only) | static (`website/blog/write/`) |
@@ -78,6 +78,19 @@ BrawlAuth.mountAccount(element);                          // "Name CODE [Log out
 - Editor API (`/v1/blog/...`, Bearer session, 403 `not_admin` for everyone but admins): `GET/POST posts`, `GET/PUT/DELETE posts/<id>` (PUT takes `expectedUpdatedAt`, 409 `changed_elsewhere`; 409 `slug_taken`, 400 `bad_slug`), `POST posts/<id>/publish|unpublish`, `POST render`, `PUT media` (raw body, `X-File-Name`). Post bodies up to 1 MiB (their own body limit; the API's 16 KiB is for the rest).
 - Media: streamed to a `.partial` in `BLOG_MEDIA_DIR` while hashed, typed, then renamed to `<20 hex of SHA-256>.<ext>` (the same file uploaded twice is stored once) and recorded in `blog_media` (kind, bytes, original name, uploader). Limits: `BLOG_MEDIA_MAX_BYTES` (95 MiB per file), `BLOG_MEDIA_MAX_TOTAL_BYTES` (20 GiB; 507 past it). Served by accounts (tower-http `ServeFile`: ranges for video seeking, `Cache-Control: immutable`). They are **not in the database backups** (`pp-backup.sh` dumps the posts only).
 - Pages: `public, max-age=60` (a preview link: `no-store`), 120 per minute per IP (`BLOG_IP_WINDOWS`).
+
+### Views
+
+Sarah's board, 2026-11-13: show the views after "8 min read" and after the date on the index. `blog_posts.views` (migration 0035) is shown in the post's byline ("· 575 views") and after the date on the index (the hero's date line; on desktop, the older posts' rows put it on its own line under the date). Nothing is shown at 0.
+
+The usual ways blogs count: page loads (WordPress/Jetpack, dev.to; inflated by reloads), unique visitors per day (Plausible, Fathom: a hash of address + browser with a salt that changes daily, no cookies), or reads (Medium: scrolled through or stayed ~30 s; needs a script). The pages have no scripts and set no cookies for this, so it's the middle one, server side, counted by `blog::count_view` when accounts serves a published post:
+
+- One view per reader per post per UTC day. A reader is the address (its /64 for IPv6, whose second half changes daily) plus the User-Agent. `blog_post_view_seen` keeps today's readers as a 16-byte SHA-256 of those, the post, the day and the server's play-key secret, never the address. Earlier days' rows are deleted as views come in.
+- Browsers only (`blog::is_reader`): the User-Agent starts with `Mozilla/` and names no crawler, link preview (Twitterbot, Discordbot, Applebot, facebookexternalhit, meta-webindexer, ApolloLinkPreviews, WhatsApp...) or AI fetcher. HEAD requests, browser prefetches (`Sec-Purpose: prefetch`) and a draft's preview link don't count. Admins reading their own post do (the pages don't know who is logged in).
+- The page shows the count including the view it just counted. Pages are `max-age=60`, so a reload within a minute comes from the browser's cache, uncounted either way. Cloudflare doesn't cache the HTML (`cf-cache-status: DYNAMIC`), so every view reaches accounts.
+- Editing, unpublishing or republishing a post keeps its views; deleting it drops them.
+
+Views before the counter (the first post, 2026-11-12 until the release with it) come from prod's nginx log by the same rule: `tools/blog/views_from_nginx.py --before <when the release went live>` prints an `UPDATE blog_posts SET views = views + N` per post, to run once on prod.
 
 ## 6. One-time production setup
 

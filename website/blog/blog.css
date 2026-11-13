@@ -414,6 +414,15 @@ body.blog::after {
   color: var(--pm-hi);
 }
 
+/* A row's views go on their own line under the date (its column is narrow). */
+.rows .views {
+  display: block;
+}
+
+.rows .views .sep {
+  display: none;
+}
+
 @media (max-width: 560px) {
   .rows a {
     grid-template-columns: 0.38em 1fr;
@@ -422,6 +431,12 @@ body.blog::after {
 
   .rows .date {
     grid-column: 2;
+  }
+
+  /* The date has the row to itself here: views back on its line. */
+  .rows .views,
+  .rows .views .sep {
+    display: inline;
   }
 
   .rows .t {

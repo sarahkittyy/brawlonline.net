@@ -15,10 +15,10 @@ use std::path::Path as FsPath;
 
 use axum::body::Body;
 use axum::extract::{ConnectInfo, Path, Query, Request, State};
-use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
+use axum::http::{header, HeaderMap, HeaderValue, Method, StatusCode};
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::Json;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 use common::net::ip_key;
 use common::playkey::random_token;
 use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag, TagEnd};
@@ -59,10 +59,12 @@ struct PostRow {
     preview_token: String,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
+    /// Readers so far ([`count_view`]).
+    views: i64,
 }
 
 const POST_COLUMNS: &str =
-    "id, slug, title, summary, author, body_md, status, published_at, preview_token, created_at, updated_at";
+    "id, slug, title, summary, author, body_md, status, published_at, preview_token, created_at, updated_at, views";
 
 /// A post as the editor sees it.
 #[derive(Debug, Serialize, Deserialize)]
@@ -1102,6 +1104,128 @@ fn page_limited(state: &AppState, headers: &HeaderMap, peer: SocketAddr) -> Opti
     })
 }
 
+// ---------------------------------------------------------------- views
+
+/// Whether a User-Agent is a person's browser. Every browser's starts with "Mozilla/"; crawlers,
+/// link previews (X, Discord, iMessage, Reddit...) and AI fetchers that look like one still name
+/// themselves somewhere in it.
+pub fn is_reader(user_agent: &str) -> bool {
+    const NOT_PEOPLE: [&str; 33] = [
+        "bot/",
+        "bot;",
+        "bot)",
+        "+http",
+        "crawl",
+        "spider",
+        "slurp",
+        "preview",
+        "facebookexternalhit",
+        "facebot",
+        "meta-externalagent",
+        "meta-webindexer",
+        "trendiction",
+        "headless",
+        "lighthouse",
+        "chatgpt",
+        "claude",
+        "perplexity",
+        "bytespider",
+        "whatsapp",
+        "telegram",
+        "slack",
+        "discord",
+        "embedly",
+        "iframely",
+        "google-",
+        "python",
+        "curl",
+        "wget",
+        "go-http",
+        "okhttp",
+        "node-fetch",
+        "java/",
+    ];
+    if !user_agent.starts_with("Mozilla/") {
+        return false;
+    }
+    let ua = user_agent.to_ascii_lowercase();
+    !NOT_PEOPLE.iter().any(|w| ua.contains(w))
+}
+
+/// Who is reading, for counting them once a day: a hash of the address (its /64 for IPv6, which
+/// changes its last half every day or so), the browser, the post and the day, keyed with the
+/// server's secret so the table can't be turned back into addresses by trying them all.
+fn visitor_hash(secret: &str, day: NaiveDate, post_id: i64, ip: std::net::IpAddr, user_agent: &str) -> Vec<u8> {
+    let mut h = Sha256::new();
+    h.update(b"pp-blog-view/v1|");
+    h.update((secret.len() as u64).to_le_bytes());
+    h.update(secret.as_bytes());
+    h.update(format!("|{day}|{post_id}|{ip}|{user_agent}").as_bytes());
+    h.finalize()[..16].to_vec()
+}
+
+/// Counts a view of a published post, once per reader a day (UTC), and returns the post's views
+/// now. Not counted: HEAD requests, browser prefetches, and anything that isn't a browser
+/// ([`is_reader`]). A failure only logs: the page is shown with the count it had.
+async fn count_view(state: &AppState, method: &Method, headers: &HeaderMap, peer: SocketAddr, post: &PostRow) -> i64 {
+    let header = |name: &str| headers.get(name).and_then(|v| v.to_str().ok()).unwrap_or("");
+    let prefetch = header("sec-purpose").contains("prefetch") || header("purpose").contains("prefetch");
+    let user_agent = header("user-agent");
+    if method != Method::GET || prefetch || !is_reader(user_agent) {
+        return post.views;
+    }
+    let day = Utc::now().date_naive();
+    let ip = ip_key(client_ip(state, headers, peer));
+    let visitor = visitor_hash(&state.cfg.play_key_secret, day, post.id, ip, user_agent);
+    let counted = sqlx::query_scalar::<_, i64>(
+        "WITH seen AS (INSERT INTO blog_post_view_seen (post_id, day, visitor) VALUES ($1, $2, $3) \
+         ON CONFLICT DO NOTHING RETURNING post_id) \
+         UPDATE blog_posts SET views = views + 1 WHERE id IN (SELECT post_id FROM seen) RETURNING views",
+    )
+    .bind(post.id)
+    .bind(day)
+    .bind(&visitor)
+    .fetch_optional(&state.pool)
+    .await;
+    match counted {
+        Ok(Some(views)) => {
+            // Earlier days' readers are no longer needed.
+            if let Err(e) =
+                sqlx::query("DELETE FROM blog_post_view_seen WHERE day < $1").bind(day).execute(&state.pool).await
+            {
+                tracing::warn!("blog views prune: {e}");
+            }
+            views
+        }
+        Ok(None) => post.views,
+        Err(e) => {
+            tracing::warn!("blog view of {}: {e}", post.slug);
+            post.views
+        }
+    }
+}
+
+/// "1 view", "1,234 views".
+fn views_text(views: i64) -> String {
+    let digits = views.max(0).to_string();
+    let mut out = String::new();
+    for (i, c) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i) % 3 == 0 {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    format!("{out} {}", if views == 1 { "view" } else { "views" })
+}
+
+/// The views after a date on the index (nothing before the first one).
+fn views_span(views: i64) -> String {
+    if views <= 0 {
+        return String::new();
+    }
+    format!("<span class=\"views\"><span class=\"sep\"> · </span>{}</span>", views_text(views))
+}
+
 fn date_text(t: Option<DateTime<Utc>>) -> String {
     t.map(|t| t.format("%b %-d, %Y").to_string()).unwrap_or_default()
 }
@@ -1211,7 +1335,7 @@ fn index_html(posts: &[PostRow], base: &str) -> String {
                 "  <a class=\"hero\" href=\"/blog/{slug}\">
     <span class=\"cover\"><img src=\"{cover}\" alt=\"\"></span>
     <span class=\"hero-body\">
-      <span class=\"meta\"><span class=\"kicker\">Latest</span><span class=\"date\">{date}</span></span>
+      <span class=\"meta\"><span class=\"kicker\">Latest</span><span class=\"date\">{date}{views}</span></span>
       <span class=\"ptitle\">{title}</span>
       <span class=\"summary\">{summary}</span>
       <span class=\"read plate\"><span class=\"label\">Read</span></span>
@@ -1221,6 +1345,7 @@ fn index_html(posts: &[PostRow], base: &str) -> String {
                 slug = esc(&latest.slug),
                 cover = esc(cover),
                 date = esc(&date_text(latest.published_at)),
+                views = views_span(latest.views),
                 title = esc(&latest.title),
                 summary = esc(&summary_of(latest, &r)),
             ));
@@ -1231,9 +1356,10 @@ fn index_html(posts: &[PostRow], base: &str) -> String {
                 for p in older {
                     let r = render(&p.body_md);
                     content.push_str(&format!(
-                        "        <li><a href=\"/blog/{slug}\"><span class=\"date\">{date}</span><span class=\"t\">{title}<span class=\"s\">{summary}</span></span></a></li>\n",
+                        "        <li><a href=\"/blog/{slug}\"><span class=\"date\">{date}{views}</span><span class=\"t\">{title}<span class=\"s\">{summary}</span></span></a></li>\n",
                         slug = esc(&p.slug),
                         date = esc(&date_text(p.published_at)),
+                        views = views_span(p.views),
                         title = esc(&p.title),
                         summary = esc(&summary_of(p, &r)),
                     ));
@@ -1351,6 +1477,9 @@ fn post_html(post: &PostRow, base: &str, preview: bool) -> String {
         byline.push(format!("by {}", esc(&post.author)));
     }
     byline.push(format!("{} min read", reading_minutes(r.words)));
+    if !preview && post.views > 0 {
+        byline.push(views_text(post.views));
+    }
     let mut extra = String::new();
     if let Some(t) = post.published_at {
         extra.push_str(&format!("<meta property=\"article:published_time\" content=\"{}\">\n", t.to_rfc3339()));
@@ -1538,6 +1667,7 @@ pub struct PageQuery {
 pub async fn post_page(
     State(state): State<AppState>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    method: Method,
     headers: HeaderMap,
     Path(slug): Path<String>,
     Query(q): Query<PageQuery>,
@@ -1564,7 +1694,8 @@ pub async fn post_page(
         .fetch_optional(&state.pool)
         .await;
     match post {
-        Ok(Some(p)) if p.status == "published" => {
+        Ok(Some(mut p)) if p.status == "published" => {
+            p.views = count_view(&state, &method, &headers, peer, &p).await;
             page_response(StatusCode::OK, post_html(&p, &base, false), "public, max-age=60")
         }
         Ok(Some(p)) if q.preview.as_deref() == Some(p.preview_token.as_str()) => {
@@ -1769,6 +1900,7 @@ mod tests {
             preview_token: "t".into(),
             created_at: Utc::now(),
             updated_at: Utc::now(),
+            views: 0,
         };
         let long = render(&"word ".repeat(100));
         let s = summary_of(&post(""), &long);
@@ -1827,6 +1959,7 @@ mod tests {
             preview_token: "t".into(),
             created_at: Utc::now(),
             updated_at: Utc::now(),
+            views: 0,
         };
         let html = post_html(&p, "https://brawlonline.net", false);
         assert!(!html.contains("<b>Hi"), "{html}");
@@ -1841,5 +1974,51 @@ mod tests {
         assert!(index.contains("Older posts"));
         assert!(!index_html(&[p], "https://brawlonline.net").contains("Older posts"));
         assert!(index_html(&[], "https://brawlonline.net").contains("No posts yet."));
+    }
+
+    #[test]
+    fn readers() {
+        for ua in [
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (iPhone; CPU iPhone OS 27_0_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/24A446 Twitter for iPhone/12.43",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:160.0) Gecko/20100101 Firefox/160.0",
+            "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) SamsungBrowser/31.0 Chrome/148.0.0.0 Mobile Safari/537.36",
+        ] {
+            assert!(is_reader(ua), "{ua}");
+        }
+        // All seen on the first post (2026-11-12/13).
+        for ua in [
+            "",
+            "Twitterbot/1.0",
+            "curl/8.21.0",
+            "WhatsApp/2.22.23.5 i",
+            "ApolloLinkPreviews/1.0",
+            "Mozilla/5.0 (compatible; Discordbot/2.0; +https://discordapp.com)",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15 (Applebot/0.1; +http://www.apple.com/go/applebot)",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36 (compatible; meta-webindexer/1.1 (+https://developers.facebook.com/docs/sharing/webmasters/crawler))",
+            "Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko); compatible; ChatGPT-User/1.0; +https://openai.com/bot",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64; trendictionbot0.5.0; trendiction search; http://www.trendiction.de/bot; please let us know of any problems; web at trendiction.com) Gecko/20100101 Firefox/125.0",
+            "Mozilla/5.0 (Linux; Android 6.0.1; Nexus 5X Build/MMB29P) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.7390.122 Mobile Safari/537.36 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
+            "Mozilla/5.0 (compatible; redditbot/1.0; +http://www.reddit.com/feedback)",
+        ] {
+            assert!(!is_reader(ua), "{ua}");
+        }
+    }
+
+    #[test]
+    fn views() {
+        assert_eq!(views_text(1), "1 view");
+        assert_eq!(views_text(575), "575 views");
+        assert_eq!(views_text(1234), "1,234 views");
+        assert_eq!(views_text(1234567), "1,234,567 views");
+        assert_eq!(views_span(0), "");
+        let day = NaiveDate::from_ymd_opt(2026, 11, 13).unwrap();
+        let ip = "2607:fb90:ee0f:45d9::".parse().unwrap();
+        let a = visitor_hash("s", day, 1, ip, "ua");
+        assert_eq!(a.len(), 16);
+        assert_eq!(a, visitor_hash("s", day, 1, ip, "ua"));
+        assert_ne!(a, visitor_hash("t", day, 1, ip, "ua"));
+        assert_ne!(a, visitor_hash("s", day.succ_opt().unwrap(), 1, ip, "ua"));
+        assert_ne!(a, visitor_hash("s", day, 2, ip, "ua"));
     }
 }

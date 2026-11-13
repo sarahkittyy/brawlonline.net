@@ -279,3 +279,85 @@ async fn blog_posts_pages_and_media() {
     let _ = std::fs::remove_dir_all(std::env::temp_dir().join(format!("pp-e2e-blog-media-{}", s.db_name)));
     s.shutdown().await;
 }
+
+/// A post page with a User-Agent (and more headers), its status and HTML.
+async fn read_as(s: &Stack, path: &str, ua: &str, extra: &[(&str, &str)]) -> (u16, String) {
+    let mut req = s.http.get(s.url(path)).header("user-agent", ua);
+    for (k, v) in extra {
+        req = req.header(*k, *v);
+    }
+    let resp = req.send().await.unwrap();
+    (resp.status().as_u16(), resp.text().await.unwrap())
+}
+
+/// Whether a post's byline ends with its views.
+fn shows_views(html: &str) -> bool {
+    html.contains(" view</p>") || html.contains(" views</p>")
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn blog_views() {
+    const CHROME: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36";
+    const FIREFOX: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:160.0) Gecko/20100101 Firefox/160.0";
+    let s = Stack::start(StackOptions::default()).await.unwrap();
+    let admin = signup(&s, "sarah@x.test", "sarah").await;
+    sqlx::query("UPDATE users SET role = 'admin' WHERE email = 'sarah@x.test'").execute(&s.pool).await.unwrap();
+    let (_, post) = s.post("/v1/blog/posts", Some(&admin), json!({})).await;
+    let id = post["id"].as_i64().unwrap();
+    let (st, _) = s
+        .put(&format!("/v1/blog/posts/{id}"), Some(&admin), json!({"slug": "news", "title": "News", "body": "Hello."}))
+        .await;
+    assert_eq!(st, 200);
+
+    // A draft's preview link doesn't count.
+    let token = post["viewUrl"].as_str().unwrap().split("preview=").nth(1).unwrap().to_string();
+    let (st, html) = read_as(&s, &format!("/blog/news?preview={token}"), CHROME, &[]).await;
+    assert_eq!(st, 200);
+    assert!(!shows_views(&html), "{html}");
+    s.post(&format!("/v1/blog/posts/{id}/publish"), Some(&admin), json!({})).await;
+
+    // No browser, a crawler, a link preview, a prefetch: not counted, and no count shown at 0.
+    let (_, html, _) = page(&s, "/blog/news").await;
+    assert!(html.contains("1 min read") && !shows_views(&html), "{html}");
+    for ua in ["Twitterbot/1.0", "Mozilla/5.0 (compatible; Discordbot/2.0; +https://discordapp.com)"] {
+        let (st, html) = read_as(&s, "/blog/news", ua, &[]).await;
+        assert_eq!(st, 200);
+        assert!(!shows_views(&html), "{ua}: {html}");
+    }
+    read_as(&s, "/blog/news", CHROME, &[("sec-purpose", "prefetch")]).await;
+    let head = s.http.head(s.url("/blog/news")).header("user-agent", CHROME).send().await.unwrap();
+    assert_eq!(head.status().as_u16(), 200);
+
+    // A reader counts once a day, however often they reload; another browser is another reader.
+    let (_, html) = read_as(&s, "/blog/news", CHROME, &[]).await;
+    assert!(html.contains("1 min read · 1 view</p>"), "{html}");
+    let (_, html) = read_as(&s, "/blog/news", CHROME, &[]).await;
+    assert!(html.contains("· 1 view</p>"), "{html}");
+    let (_, html) = read_as(&s, "/blog/news", FIREFOX, &[]).await;
+    assert!(html.contains("· 2 views</p>"), "{html}");
+
+    // The index: after the date.
+    let (_, html, _) = page(&s, "/blog").await;
+    assert!(html.contains("<span class=\"views\"><span class=\"sep\"> · </span>2 views</span></span>"), "{html}");
+
+    // The next day (UTC) the same reader counts again, and the earlier days' rows go.
+    sqlx::query("UPDATE blog_post_view_seen SET day = day - 1").execute(&s.pool).await.unwrap();
+    let (_, html) = read_as(&s, "/blog/news", CHROME, &[]).await;
+    assert!(html.contains("· 3 views</p>"), "{html}");
+    let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM blog_post_view_seen").fetch_one(&s.pool).await.unwrap();
+    assert_eq!(rows, 1);
+    let views: i64 =
+        sqlx::query_scalar("SELECT views FROM blog_posts WHERE id = $1").bind(id).fetch_one(&s.pool).await.unwrap();
+    assert_eq!(views, 3);
+
+    // Editing the post leaves its views alone.
+    let (st, _) = s
+        .put(&format!("/v1/blog/posts/{id}"), Some(&admin), json!({"slug": "news", "title": "News!", "body": "Hello."}))
+        .await;
+    assert_eq!(st, 200);
+    let (_, html, _) = page(&s, "/blog/news").await;
+    assert!(html.contains("· 3 views</p>"), "{html}");
+
+    let _ = std::fs::remove_dir_all(std::env::temp_dir().join(format!("pp-e2e-blog-media-{}", s.db_name)));
+    s.shutdown().await;
+}
