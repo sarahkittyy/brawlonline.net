@@ -9,6 +9,13 @@ body,
   margin: 0;
 }
 
+// The window never scrolls sideways: pages scroll inside their own panels. Without this, anything a
+// fraction of a pixel past the right edge (a tooltip at the far right, like Project Punch's) puts a
+// full-width scrollbar across the bottom of the window while it shows.
+html {
+  overflow-x: hidden;
+}
+
 body {
   font-family: var(--font-body, system-ui, sans-serif);
   color: var(--off-white);
