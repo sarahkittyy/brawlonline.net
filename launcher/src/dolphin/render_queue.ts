@@ -339,6 +339,8 @@ export class RenderQueue {
         lastText = text;
         lastChange = now();
       } else if (now() - lastChange > STALL_MS) {
+        // (Where it stood, for a bug report: the user sees only the message.)
+        log.warn(`Render ${info.jobId} stalled at ${text}`);
         throw new Error("The render stopped making progress.");
       }
       if (status?.commandId === commandId) {

@@ -466,6 +466,11 @@ export class DolphinManager {
     );
   }
 
+  /** The render Dolphin's User folder (its logs go in a bug report's zip). */
+  renderUserFolder(): string {
+    return this._renderInstallation().userFolder;
+  }
+
   private async _launchPlaybackDolphin(
     id: string,
     replayComm: ReplayCommunication,
