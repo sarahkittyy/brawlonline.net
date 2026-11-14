@@ -60,6 +60,7 @@ STAGE = ROOT / "run" / "staging"
 CONFIG = STAGE / "config.json"
 LOGS = STAGE / "logs"
 PIDS = STAGE / "pids.json"
+FAKE_STATE = STAGE / "fake-state.json"
 SRC = STAGE / "src"
 CARGO_TARGET = STAGE / "cargo-target"
 WIN = STAGE / "win"
@@ -252,6 +253,9 @@ def server_env(cfg: dict) -> dict[str, str]:
         # Nothing serves the website in staging: accounts serves the profile pages' stylesheet,
         # flags, rank badges and font itself (docs/design/profiles.md §9).
         "WEBSITE_DIR": str(SRC / "website"),
+        # The fake players' live state (rooms, live games, who is online), which accounts adds to
+        # mm's while the file is there: `server seed-fake` writes it, `--remove` deletes it.
+        "STAGING_FAKE_STATE": str(FAKE_STATE),
     })
     return env
 
@@ -464,6 +468,15 @@ def server_mail(args: argparse.Namespace) -> None:
 def admin(*args: str) -> None:
     cfg = load_config()
     run([str(server_bin("admin")), *args], cwd=STAGE, env=server_env(cfg))
+
+
+def server_seed_fake(args: argparse.Namespace) -> None:
+    """tools/staging/seed_fake.py: fake players, their history and live state (docs/staging.md)."""
+    cfg = load_config()
+    if not accounts_healthy(cfg):
+        die("the staging server isn't up: run `server up` first")
+    run([sys.executable, str(ROOT / "tools" / "staging" / "seed_fake.py"), "--state", str(FAKE_STATE),
+         *(["--remove"] if args.remove else []), *(["--include-seed-ranked"] if args.include_seed_ranked else [])])
 
 
 def server_reset_db(args: argparse.Namespace) -> None:
@@ -1088,6 +1101,11 @@ def main() -> None:
     p = s.add_parser("admin", help="run the admin tool against the staging database")
     p.add_argument("rest", nargs=argparse.REMAINDER)
     p.set_defaults(func=lambda a: admin(*a.rest))
+    p = s.add_parser("seed-fake", help="fake players, rooms, live games and history (--remove: take them out)")
+    p.add_argument("--remove", action="store_true", help="delete the fake accounts and their rows")
+    p.add_argument("--include-seed-ranked", action="store_true",
+                   help="also give seed_ranked.py's accounts fake friends and matches")
+    p.set_defaults(func=server_seed_fake)
     p = s.add_parser("reset-db", help="delete the staging database")
     p.add_argument("--yes", action="store_true")
     p.set_defaults(func=server_reset_db)

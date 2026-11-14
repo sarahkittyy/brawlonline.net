@@ -11,6 +11,7 @@ python tools/staging/staging.py mac build            # the same commit for the M
 python tools/staging/staging.py win run --fresh      # first start, like a new install
 python tools/staging/staging.py mac run --fresh
 python tools/staging/staging.py server mail          # the sign-up verification links
+python tools/staging/staging.py server seed-fake     # fake players, rooms, live games, history
 python tools/staging/staging.py status
 python tools/staging/staging.py down                 # stop clients and server; the database stays
 ```
@@ -74,6 +75,61 @@ A second account on the same machine: `win run --profile b` (or `mac run --profi
 
 Logs: `run/staging/logs/` (`win-build.log`, `mac-build.log`, `accounts.log`, `mm.log`,
 `postgres.log`).
+
+## Fake players
+
+A staging server has only your own test accounts on it, so most of the launcher is empty. `server
+seed-fake` fills it with made-up players (staging only: production never sets the variable that
+turns the live part on).
+
+```
+python tools/staging/staging.py server seed-fake            # after `server up`; again after new sign-ups
+python tools/staging/staging.py server seed-fake --remove   # take every fake row out again
+```
+
+It needs a staging server built from a commit that has `server/crates/accounts/src/staging_fake.rs`
+(`win build`, then `server restart` once, so accounts starts with `STAGING_FAKE_STATE`).
+
+**In the database** (`tools/staging/seed_fake.py`, the same rows the server writes):
+- 60 fake accounts, `fake-<name>@staging.test`, password `staging-pass` (any of them can log in).
+  Profiles with a country, 1-3 mains and a few socials; a few hide their flag or main.
+- Ranked: every tier, Bronze 3 to Legendary, plus three still placing and four who never played
+  Ranked. Each fake's rating history follows the server's Elo rules: an early climb 60-26 days ago
+  against opponents without accounts (shown as deleted accounts), then sets among the fakes.
+  `admin ranked recompute` gives the ranks from the history.
+- Unranked, Direct, room (1v1, FFA, teams, some with a published fake ruleset) and 2v2 matches among
+  the fakes over the last 30 days, with the game reports the match history reads. `admin unranked
+  rebuild` rates the Unranked games; the 2v2 ratings are rated as the server does.
+- Three published rulesets by fakes: Auto L Cancel v4, Catfight BO5, Friday Doubles. They stay
+  when the seed runs again (an account may publish 10 an hour); `--remove` deletes them.
+- Every real account with a connect code (not seed_ranked.py's `seed-*` accounts, unless
+  `--include-seed-ranked`): 8 fake friends, 2 friend requests from fakes and 2 to fakes, and 40
+  matches against fakes over the last two weeks, more of them lately: 22 Ranked sets (their rating
+  goes on from where it was, after their own last set, so rating history and rank move; a few
+  against the same player), 7 Unranked, 3 Direct with friends, 5 room games and 3 2v2 matches.
+  Accounts made later get theirs when the seed runs again.
+- `queue_searches`: two weeks of searches by the fakes. Unranked waits about 0:22, Ranked about
+  0:40, 2v2 about 1:00 most hours; late at night (UTC 11-14) Ranked and 2v2 searches mostly give up
+  ("never") and Unranked has too few to tell.
+
+**Live** (`run/staging/fake-state.json`, which accounts reads while `STAGING_FAKE_STATE` names it and
+reads again when it changes; `accounts/src/staging_fake.rs`): about 34 fakes online in the social
+stream's list, 6 P+ rooms (Peachy's friends-only FFA, a named waiting FFA, two full 1v1s and a
+teams room in game, a lone waiting 1v1), 3 Brawl Mods rooms (REX with an SD card and codes,
+Tatsunoko vs. Capcom with codes, Mario Kart Wii) and 7 live games (2 Ranked with the top players,
+Direct, 2 Unranked, a room's game and a 2v2), with spectator counts and the queue and in-game
+counts. Every real account's friends are spread over it: Peachy in her friends-only room, one
+friend in a live game, two in the launcher, four offline.
+
+**What fails when clicked**, each with the server's usual answer: joining a fake P+ room (the game
+says the room doesn't exist), joining a fake Brawl Mods room (its game isn't yours), watching a fake
+game ("This game has ended."), and a message or invite to a fake ("That player is offline."). Friend
+requests, profiles, the leaderboard and match history work as with real players.
+
+`--remove` deletes the fake accounts and every row naming one (matches, reports, rating changes,
+friends, requests, searches, rulesets), takes the fake sets' changes back out of the real accounts'
+ratings and 2v2 ratings (as they were, if they played nothing since), recomputes ranks and Unranked
+ratings, and deletes the state file, which turns the live fakes off at once.
 
 ## First-time notes
 
