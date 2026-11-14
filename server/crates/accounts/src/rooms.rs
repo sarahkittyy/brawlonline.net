@@ -72,6 +72,7 @@ impl MmStatusSource {
             }
         }
         let status: MmStatus = self.http.get(&self.url).send().await?.error_for_status()?.json().await?;
+        let status = crate::staging_fake::status(status);
         *cache = Some((Instant::now(), status.clone()));
         Ok(status)
     }

@@ -365,7 +365,9 @@ impl SocialHub {
         let (tx, rx) = mpsc::channel(QUEUE);
         let room = hub.rooms.get(&member.uid).cloned();
         let queue = hub.queues.get(&member.uid).cloned().map(|q| Self::tagged(&hub, q));
+        let fakes = crate::staging_fake::members();
         let mut online: Vec<&Member> = hub.clients.values().map(|c| &c.member).collect();
+        online.extend(fakes.iter().filter(|m| m.uid != member.uid && !hub.clients.contains_key(&m.uid)));
         online.sort_by(|a, b| a.display_name.to_lowercase().cmp(&b.display_name.to_lowercase()));
         let welcome =
             json!({"type": "welcome", "you": member.uid, "online": online, "room": room, "queue": queue}).to_string();

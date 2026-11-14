@@ -408,6 +408,7 @@ pub async fn list(State(state): State<AppState>, headers: HeaderMap) -> ApiResul
             e
         })
         .collect();
+    crate::staging_fake::spectators(&mut games);
     // The list still goes out without them if the ratings can't be read.
     match placed_ratings(&state.pool, &games).await {
         Ok(ratings) => fill_ratings(&mut games, &ratings),
