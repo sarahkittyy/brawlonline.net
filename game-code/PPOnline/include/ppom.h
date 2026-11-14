@@ -245,7 +245,7 @@ namespace PPOM {
         ROOM_SLOT = 4,      // host: arg = in-game port 0-3, arg2 = 1 open / 0 close (an occupied one: kick)
         ROOM_TEAMS = 5,     // host: arg = 0 off, 1 Teams on (P+'s rainbow team battle), 2 Teams on
                             // in the teams' costumes (2026-10-21; Dolphin before it: any arg on)
-        ROOM_PUBLIC = 6,    // host: arg = 1 public / 0 private
+        ROOM_PUBLIC = 6,    // host: arg = 1 public / 0 private / 2 friends only (2026-11-14)
         ROOM_TEAM = 7,      // arg = this player's colour (TEAM_RED..TEAM_GREEN)
         ROOM_RULES = 8,     // v6, host: RoomRulesRequest (the room's rules as the host edited them)
         ROOM_SET = 9,       // v6, host: arg = 1 resume / 0 restart the room's paused set
@@ -310,7 +310,11 @@ namespace PPOM {
     // team battle); without it P+'s rainbow team battle (any costume, a team glow in the match).
     // RF_TWOS (2026-11-02, docs/design/2v2.md): the room is the player's 2v2 party (two slots, no
     // settings); RS_SEARCHING: everyone in it is ready and it searches the 2v2 queue.
-    enum RoomFlags { RF_IN = 1, RF_PUBLIC = 2, RF_TEAMS = 4, RF_WATCH = 8, RF_TEAM_COLORS = 0x10, RF_TWOS = 0x20 };
+    // RF_FRIENDS (2026-11-14, docs/design/friends.md): without RF_PUBLIC, friends only (listed in
+    // the launcher to the friends of the room's players).
+    enum RoomFlags {
+        RF_IN = 1, RF_PUBLIC = 2, RF_TEAMS = 4, RF_WATCH = 8, RF_TEAM_COLORS = 0x10, RF_TWOS = 0x20, RF_FRIENDS = 0x40
+    };
     enum RoomStatusKind { RS_WAITING = 0, RS_STARTING = 1, RS_IN_GAME = 2, RS_SEARCHING = 3 };
     // Session.teams: 0 a free-for-all; a team battle: TEAMS_LEGACY recorded before 2026-10-21 (the
     // players' own costumes, no glow), TEAMS_RAINBOW P+'s rainbow team battle (the players' own

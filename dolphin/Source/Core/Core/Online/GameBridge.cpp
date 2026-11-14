@@ -231,7 +231,10 @@ constexpr u8 SCREEN_ROOM_CSS = static_cast<u8>(Rooms::Screen::Room);
 // it the rainbow team battle (any costume, a team glow).
 // RF_TWOS (2026-11-02): the room is the player's 2v2 party (room-state kind "twos",
 // docs/design/2v2.md): the 2V2 character select's two panels; ROOM_STATUS 3 while it searches.
-constexpr u8 RF_IN = 1, RF_PUBLIC = 2, RF_TEAMS = 4, RF_WATCH = 8, RF_TEAM_COLORS = 0x10, RF_TWOS = 0x20;
+// RF_FRIENDS (2026-11-14): without RF_PUBLIC, a friends-only room (docs/design/friends.md): the
+// host's button says FRIENDS.
+constexpr u8 RF_IN = 1, RF_PUBLIC = 2, RF_TEAMS = 4, RF_WATCH = 8, RF_TEAM_COLORS = 0x10, RF_TWOS = 0x20,
+             RF_FRIENDS = 0x40;
 // The 2v2 queue's mode (Matchmaking::Mode::Twos; ppom.h MODE_TWOS).
 constexpr u8 MODE_TWOS = 5;
 // SESSION's mode while a 2v2 party's pair room is the session (Client::TickPairRoom; ppom.h
@@ -974,8 +977,11 @@ Response RoomResponse(const Core::CPUThreadGuard& guard, u32 payload, u16 versio
     ok = arg <= 2;
     break;
   case 6:
+    // arg 0 private, 1 public, 2 friends only (2026-11-14).
     r.op = Rooms::Op::Public;
-    r.flag = arg != 0;
+    r.flag = arg == 1;
+    r.friends = arg == 2;
+    ok = arg <= 2;
     break;
   case 7:
     r.op = Rooms::Op::Team;
@@ -1566,7 +1572,8 @@ void PutRoom(std::vector<u8>& session, const Rooms::Snapshot& room, const Gprb::
     session[p + SP_ROOM_SLOT] = bits;
   }
   session[S_ROOM_FLAGS] = RF_IN | (v.is_public ? RF_PUBLIC : 0) | (v.teams ? RF_TEAMS : 0) |
-                          (v.teams && v.team_colors ? RF_TEAM_COLORS : 0) | (v.twos ? RF_TWOS : 0);
+                          (v.teams && v.team_colors ? RF_TEAM_COLORS : 0) | (v.twos ? RF_TWOS : 0) |
+                          (!v.is_public && v.friends ? RF_FRIENDS : 0);
   for (size_t k = 0; k < 4; ++k)
     session[S_ROOM_CODE + k] = k < v.code.size() ? static_cast<u8>(v.code[k]) : 0;
   session[S_ROOM_HOST] = static_cast<u8>(v.host - 1);
@@ -1824,7 +1831,7 @@ std::vector<u8> PlaybackSession(const std::vector<u8>& rec, u16 version)
     }
   }
   out[S_TEAMS] = rec[S_TEAMS] <= TEAMS_COLORS ? rec[S_TEAMS] : TEAMS_LEGACY;
-  out[S_ROOM_FLAGS] = rec[S_ROOM_FLAGS] & (RF_IN | RF_PUBLIC | RF_TEAMS | RF_TEAM_COLORS);
+  out[S_ROOM_FLAGS] = rec[S_ROOM_FLAGS] & (RF_IN | RF_PUBLIC | RF_TEAMS | RF_TEAM_COLORS | RF_FRIENDS);
   for (u32 k = 0; k < 4; ++k)
   {
     const u8 c = rec[S_ROOM_CODE + k];
