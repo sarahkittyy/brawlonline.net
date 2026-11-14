@@ -414,6 +414,18 @@ std::optional<Machine::Options> FromEnvironment(std::string* error)
   opts.room = true;
   opts.join = !host;
   opts.sd_sync = *sd_sync;
+  // The room card's listing the launcher fetched for its question (a file it writes for each
+  // join): the session checks it against the room's root before it uses it. One that cannot be
+  // read only costs the wait for the players' list.
+  if (const std::string listing = Str(o, "sd_listing", 4096); !host && !listing.empty())
+  {
+    constexpr u64 MAX_LISTING = 64ull << 20;
+    std::string bytes;
+    if (File::GetSize(listing) <= MAX_LISTING && File::ReadFileToString(listing, bytes))
+      opts.sd_listing.assign(bytes.begin(), bytes.end());
+    else
+      Log(fmt::format("the SD card listing {} could not be read", listing));
+  }
   opts.local_slot = 0;  // a joiner's comes with the room
   opts.local_port = static_cast<u16>(port);
   opts.delay =

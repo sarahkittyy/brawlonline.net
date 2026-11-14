@@ -175,6 +175,11 @@ struct Options
   // A joiner whose SD card differs from the session's: "sd_sync" ("ask", "yes", "overwrite",
   // "no"); the launcher asks its player.
   SDSyncChoice sd_sync = SDSyncChoice::Ask;
+  // The session card's listing (SDCard::EncodeCardListing) the launcher had from the accounts
+  // server for its SD card question ("sd_listing", a file): used in place of the players' list
+  // when its root is the room's, so the joiner does not wait for the same list again at the
+  // players' upload pace. Empty: none (the players send theirs).
+  std::vector<u8> sd_listing;
   // The room host's Gecko and Action Replay codes (docs/design/room-codes.md, "codes"): every
   // machine of the session runs them, in place of its own; a joiner gets them with the machine
   // image. Empty: no codes.

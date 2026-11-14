@@ -340,6 +340,9 @@ struct PeerLink
   // Someone new has this player's slot in the room: `left` is the previous player's until
   // GekkoNet unplugged it.
   bool reseated = false;
+  // A joiner: this session player left the room while its link was up; the link is forgotten
+  // when it drops (SetRoom).
+  bool room_gone = false;
   // The congestion window of what this machine sends `peer` reliably (PaceSendWindow).
   struct
   {
@@ -523,6 +526,7 @@ struct State
     std::vector<u8> data;
     bool complete = false;
     Clock::time_point started{};
+    std::string from_name;  // its sender's name (the chat's notices)
   } image_rx;
   // A machine image this player sends (net thread: to `image_to`, in chunks).
   std::vector<u8> image_tx;
@@ -1282,7 +1286,12 @@ void HandleImagePacket(int slot, const u8* data, size_t size)
   State::ImageRx& rx = s.image_rx;
   if (!s.opts.join || s.join_loaded || rx.complete)
     return;
-  if (rx.from < 0)
+  // Another player's header while an image comes: its sender left, and this player decides the
+  // epoch in its place (TakeOverEpoch). Its image starts over; whatever the first sender still
+  // sends is dropped. This side may not have seen that sender's link drop yet (a game that
+  // crashed is a link timeout away).
+  const bool other_header = rx.from >= 0 && slot != rx.from && size == 4 + 4 + 8 + 4 + 8 + 8;
+  if (rx.from < 0 || other_header)
   {
     // Header: magic, epoch, frame, sum, packed size, raw size (little endian).
     if (size != 4 + 4 + 8 + 4 + 8 + 8)
@@ -1302,7 +1311,16 @@ void HandleImagePacket(int slot, const u8* data, size_t size)
       WARN_LOG_FMT(BRAWLBACK, "machine: player {} sent an image header that is not valid", slot + 1);
       return;
     }
+    if (other_header)
+    {
+      AddLog(fmt::format("machine image from player {} dropped at {:.1f} of {:.1f} MB: player {} "
+                         "sends it now",
+                         rx.from + 1, rx.data.size() / 1048576.0, rx.packed_size / 1048576.0,
+                         slot + 1));
+      s.join_tenths_shown = -1;
+    }
     rx.from = slot;
+    rx.from_name = NameOf(slot);
     rx.epoch = static_cast<int>(epoch);
     rx.frame = frame;
     rx.sum = sum;
@@ -2891,6 +2909,20 @@ void NetThread()
                   s.phase == Phase::Epoch)
                 p.left = true;
               AddLog(fmt::format("peer {} disconnected", p.slot));
+              if (p.room_gone)
+              {
+                // As ForgetLink (its link is down already).
+                AddLog(fmt::format("room: player {} ({}) is gone", p.slot + 1, p.code));
+                for (ENetPeer* e : {p.connecting, p.connecting6, p.cand6})
+                {
+                  if (e && e != ev.peer)
+                  {
+                    e->data = nullptr;
+                    enet_peer_reset(e);
+                  }
+                }
+                p = PeerLink{};
+              }
             }
           }
           ev.peer->data = nullptr;
@@ -5633,6 +5665,36 @@ void StartEpoch(const State::EpochGo& go)
   OSD::AddMessage("Players changed", 2000, OSD::Color::CYAN);
 }
 
+// This player at the epoch: its checksum, and its digest of the image when the epoch admits a
+// joiner (to the decider, and to the joiner, who loads an image only if every player vouches).
+picojson::object EpochAtMessage()
+{
+  picojson::object at;
+  at["type"] = picojson::value("epoch_at");
+  at["epoch"] = picojson::value(static_cast<double>(s.epoch + 1));
+  at["frame"] = picojson::value(static_cast<double>(s.plan.frame));
+  at["sum"] = picojson::value(static_cast<double>(s.epoch_sum));
+  if (!s.epoch_digest.empty())
+    at["digest"] = picojson::value(s.epoch_digest);
+  return at;
+}
+
+// Who decides the epoch (`net_mutex` held): the player whose request planned it, until that
+// player leaves the session (its link dropped, or it said it leaves); then the lowest slot still
+// playing, this one included. Every player left sees the same leave, so they all pick the same.
+int EpochDeciderLocked()
+{
+  const int from = s.plan.from;
+  if (from < 0 || from == s.opts.local_slot || !s.peers[from].left)
+    return from;
+  for (int slot = 0; slot < MAX_PLAYERS; ++slot)
+  {
+    if (Plays(slot) && (slot == s.opts.local_slot || !s.peers[slot].left))
+      return slot;
+  }
+  return from;
+}
+
 // The players at the epoch's frame: it is final on every machine (every input before it is
 // confirmed and GekkoNet ran its rollbacks). Each tells the decider its checksum.
 void EnterEpoch()
@@ -5647,15 +5709,6 @@ void EnterEpoch()
   DumpEpochState(Core::System::GetInstance(), s.plan.frame, "member");
   const int joiner = s.plan.admit;
   const bool admitting = joiner >= 0 && !Plays(joiner);
-  if (admitting && s.plan.from != s.opts.local_slot)
-  {
-    std::string name;
-    {
-      std::lock_guard lk(s.net_mutex);
-      name = NameOf(joiner);
-    }
-    ShowNotice(fmt::format("{} is joining. The game waits until they have it.", name));
-  }
   s_image_parts.reset();
   s.epoch_digest.clear();
   StartScheduleLog(Core::System::GetInstance(), s.plan.frame, "epoch");
@@ -5683,13 +5736,7 @@ void EnterEpoch()
   AddLog(fmt::format("at epoch {} (frame {}), checksum {:08x}, image digest {}", s.epoch + 1,
                      s.plan.frame, s.epoch_sum, s.epoch_digest.substr(0, 16)));
   std::lock_guard lk(s.net_mutex);
-  picojson::object at;
-  at["type"] = picojson::value("epoch_at");
-  at["epoch"] = picojson::value(static_cast<double>(s.epoch + 1));
-  at["frame"] = picojson::value(static_cast<double>(s.plan.frame));
-  at["sum"] = picojson::value(static_cast<double>(s.epoch_sum));
-  if (!s.epoch_digest.empty())
-    at["digest"] = picojson::value(s.epoch_digest);
+  const picojson::object at = EpochAtMessage();
   if (s.plan.from != s.opts.local_slot)
     SendControl(s.plan.from, at);
   // The joiner hears every player's digest of the image it is about to get.
@@ -5705,25 +5752,85 @@ picojson::array ControllerNames(const std::array<Controller, MAX_PLAYERS>& c)
   return a;
 }
 
-// At an epoch that admits a joiner, every wait loop iteration (every player): the joiner's
-// progress with the machine image, in the chat window at every tenth it reports.
+// At an epoch that admits a joiner, every wait loop iteration (every player): the game stands
+// still until the joiner has the machine, so a line at the top left says why, with the joiner's
+// progress at every tenth it reports, whatever the chat window shows (Sarah's board, 2026-11-14:
+// "since the game freezes during a game data send, we should show that not in the chat, but in a
+// toast in the top left, similar to the sd card one"). The log keeps each tenth.
 void ShowJoinProgress()
 {
   const int joiner = s.plan.admit;
   if (joiner < 0 || Plays(joiner))
     return;
-  std::string notice;
+  std::string text;
   {
     std::lock_guard lk(s.net_mutex);
     const PeerLink& j = s.peers[joiner];
-    if (j.image_epoch != s.epoch + 1 || j.image_tenths <= s.image_tenths_shown)
-      return;
-    s.image_tenths_shown = j.image_tenths;
-    notice = s.plan.from == s.opts.local_slot ?
-                 fmt::format("Sending the game to {}: {}%", NameOf(joiner), j.image_tenths * 10) :
-                 fmt::format("{} is getting the game: {}%", NameOf(joiner), j.image_tenths * 10);
+    const int tenths = j.image_epoch == s.epoch + 1 ? j.image_tenths : -1;
+    if (tenths > s.image_tenths_shown)
+    {
+      s.image_tenths_shown = tenths;
+      AddLog(fmt::format("player {} has {}% of the machine image", joiner + 1, tenths * 10));
+    }
+    const std::string done = tenths > 0 ? fmt::format(" {}%", tenths * 10) : "";
+    text = s.plan.from == s.opts.local_slot ?
+               fmt::format("Sending {} the game state...{}", NameOf(joiner), done) :
+               fmt::format("{} is sending {} the game state...{}", NameOf(s.plan.from),
+                           NameOf(joiner), done);
   }
-  ShowNotice(notice);
+  // Refreshed while the wait lasts (a typed message replaces the last one in place), gone a
+  // second after it ends.
+  static Clock::time_point shown_at;
+  static std::string shown;
+  const auto now = Clock::now();
+  if (text != shown || now - shown_at >= std::chrono::milliseconds(250))
+  {
+    shown = text;
+    shown_at = now;
+    OSD::AddTypedMessage(OSD::MessageType::MachineImageSend, text, 1000, OSD::Color::YELLOW);
+  }
+}
+
+// At an epoch, every wait loop iteration (every player): the decider left before it said who
+// plays from now on (Sarah's board, 2026-11-14: NEST#120 left their REX room 11 s into sending
+// SARA#694 the game; SARA#694's download stood at 20% and KENO#349's game stood still, waiting
+// for NEST#120's go, until both gave up). The lowest slot still playing decides in its place: the
+// others send it their checksums (theirs went to the one that left), and it sends the joiner the
+// image again from its own machine, which stands at the same frame. EPOCH_TIMEOUT counts again.
+void TakeOverEpoch()
+{
+  const int old = s.plan.from;
+  int decider;
+  {
+    std::lock_guard lk(s.net_mutex);
+    decider = EpochDeciderLocked();
+  }
+  if (decider == old)
+    return;
+  s.plan.from = decider;
+  s.epoch_since = Clock::now();
+  s.image_built = false;
+  s.image_tenths_shown = -1;
+  const int joiner = s.plan.admit;
+  const bool admitting = joiner >= 0 && !Plays(joiner);
+  AddLog(fmt::format("epoch {}: player {} left before it said who plays; player {} decides it now",
+                     s.epoch + 1, old + 1, decider + 1));
+  if (admitting)
+  {
+    // The joiner's progress starts over with the new image.
+    std::lock_guard lk(s.net_mutex);
+    s.peers[joiner].image_tenths = -1;
+  }
+  if (decider == s.opts.local_slot)
+  {
+    // Only the sender's image carries its EFB copies (MakeImageParts): nothing was drawn since
+    // the epoch's frame, so they are the same as there.
+    if (admitting && s_image_parts)
+      s_image_parts->copies = SaveImageCopies(&s_image_parts->copies_count);
+    return;
+  }
+  std::lock_guard lk(s.net_mutex);
+  SendControl(decider, EpochAtMessage());
 }
 
 // At an epoch, every wait loop iteration. The decider waits for every player's checksum, sends
@@ -5735,6 +5842,7 @@ void EpochStep(Core::System& system)
   // frames before the epoch to be confirmed gets them.
   if (s.gekko)
     gekko_network_poll(s.gekko);
+  TakeOverEpoch();
   ShowJoinProgress();
   if (Clock::now() - s.epoch_since > EPOCH_TIMEOUT)
   {
@@ -5852,13 +5960,6 @@ void EpochStep(Core::System& system)
                          "{:.1f} MB) in {:.0f} ms",
                          joiner + 1, image.size() / 1048576.0, raw / 1048576.0, copies_count,
                          copies_bytes / 1048576.0, s.image_ms));
-      std::string name;
-      {
-        std::lock_guard lk(s.net_mutex);
-        name = NameOf(joiner);
-      }
-      ShowNotice(fmt::format("Sending the game to {} ({:.1f} MB). The game waits until they have it.",
-                             name, image.size() / 1048576.0));
       std::vector<u8> header(36);
       const u32 magic = IMAGE_MAGIC, ep = static_cast<u32>(next), sum = s.epoch_sum;
       const s64 frame = s.plan.frame;
@@ -6069,6 +6170,35 @@ bool SDSyncStep()
         y.files_wire = std::move(y.own_files_wire);
       }
     }
+    // The room card's listing the launcher had for its question (Options::sd_listing): the same
+    // list the players would send, checked by the same root, so none is asked of them (Sarah's
+    // board, 2026-11-14: SARA#694 joining NEST#120's REX room waited 70 s for the 2.3 MB list at
+    // 34 KB/s, the pace of an upload beside two players' game, right after the launcher had
+    // fetched the same list from the server in under a second).
+    std::optional<std::vector<SDCard::CardFile>> launcher_files;
+    if (!manifest && !s.opts.sd_listing.empty())
+    {
+      std::optional<SDCard::CardListing> listing = SDCard::DecodeCardListing(s.opts.sd_listing);
+      const size_t listing_bytes = s.opts.sd_listing.size();
+      s.opts.sd_listing = {};
+      if (listing && SDCard::RootHex(SDCard::ManifestRoot(listing->manifest)) == root)
+      {
+        sf::Packet fp;
+        SDCard::WriteFileList(listing->files, fp);
+        const u8* data = static_cast<const u8*>(fp.getData());
+        y.files_wire.assign(data, data + fp.getDataSize());
+        manifest = std::move(listing->manifest);
+        launcher_files = std::move(listing->files);
+        AddLog(fmt::format("SD card: the room card's list from the launcher ({:.1f} MB, {} files): "
+                           "no list asked of the players",
+                           listing_bytes / 1048576.0, launcher_files->size()));
+      }
+      else
+      {
+        AddLog(listing ? "SD card: the launcher's list is of another card: asking the players" :
+                         "SD card: the launcher's list is not valid: asking the players");
+      }
+    }
     // A card the session does not play: the players' list says what differs. Asked once the own
     // card is hashed (bug report #250: a joiner with the host's own Cobalt card waited a minute for
     // the 2.2 MB list of it, and gave up).
@@ -6119,7 +6249,11 @@ bool SDSyncStep()
     if (!ready)
       return false;
     std::vector<SDCard::CardFile> files;
-    if (manifest)
+    if (launcher_files)
+    {
+      files = std::move(*launcher_files);
+    }
+    else if (manifest)
     {
       AddLog("SD card: this player's card has the room's root: no list asked of the players");
     }
@@ -6423,6 +6557,24 @@ void JoinStep(Core::System& system)
     }
     if (s.opts.room && !s.join_sent)
       no_link = JoinNoLinkStep(Clock::now(), &chat_notices, &no_link_waiting);
+    // The image's sender left before all of it came: what came is dropped, and the player that
+    // decides in its place sends it again (TakeOverEpoch). An image that came whole stays: every
+    // player vouches for it, whoever sent it.
+    if (s.image_rx.from >= 0 && !s.image_rx.complete && !s.join_loaded &&
+        !s.peers[s.image_rx.from].peer)
+    {
+      const State::ImageRx& gone = s.image_rx;
+      AddLog(fmt::format("machine image from player {} stopped at {:.1f} of {:.1f} MB: its link "
+                         "dropped",
+                         gone.from + 1, gone.data.size() / 1048576.0, gone.packed_size / 1048576.0));
+      bool others = false;
+      for (const PeerLink& p : s.peers)
+        others |= p.slot >= 0 && p.slot != gone.from && p.peer && p.hello && !p.late && !p.left;
+      notices.push_back(fmt::format("{} left before you had the game.{}", gone.from_name,
+                                    others ? " Another player sends it." : ""));
+      s.image_rx = {};
+      s.join_tenths_shown = -1;
+    }
     // The image's progress, in the chat window at every tenth (the game waits for it: across an
     // ocean a REX image took about a minute), and to the players for theirs.
     const State::ImageRx& rx = s.image_rx;
@@ -6540,7 +6692,13 @@ void JoinStep(Core::System& system)
     at["epoch"] = picojson::value(static_cast<double>(epoch));
     at["frame"] = picojson::value(static_cast<double>(s.current_frame + 1));
     at["sum"] = picojson::value(static_cast<double>(s.epoch_sum));
-    SendControl(from, at);
+    // To every player, not only the sender: if it leaves before its go, the player that decides
+    // in its place (TakeOverEpoch) knows this one has the machine and sends no image again.
+    for (const PeerLink& p : s.peers)
+    {
+      if (p.slot >= 0 && p.hello && !p.late)
+        SendControl(p.slot, at);
+    }
     return;
   }
   if (go)
@@ -7959,14 +8117,27 @@ void SetRoom(int local_slot, const std::vector<RoomMember>& members)
     if (!m)
     {
       // Gone from the room. A player's link stays until it drops (a player whose connection to
-      // mm dropped still plays); a joiner's is forgotten.
-      if (p.slot >= 0 && !Plays(slot))
+      // mm dropped still plays); a joiner's is forgotten. So does a joiner's live link to a
+      // player of the session it joins: mm says a player that quits is gone a moment before its
+      // game ends its session, and a joiner that dropped the link then was a joiner gone to that
+      // player, which ended the join on everyone (TakeOverEpoch: the player deciding it was
+      // leaving, the one left to decide in its place would have).
+      const bool joiner_keeps =
+          s.opts.join && !LocalPlays() && p.peer && p.hello && !p.late && !p.left;
+      if (p.slot >= 0 && !Plays(slot) && joiner_keeps && !p.room_gone)
+      {
+        p.room_gone = true;
+        AddLog(fmt::format("room: player {} ({}) is gone; its link stays until it drops", slot + 1,
+                           p.code));
+      }
+      else if (p.slot >= 0 && !Plays(slot) && !joiner_keeps)
       {
         AddLog(fmt::format("room: player {} ({}) is gone", slot + 1, p.code));
         ForgetLink(p);
       }
       continue;
     }
+    p.room_gone = false;  // back in the room
     const bool fresh = p.slot < 0 || p.code != m->code;
     if (fresh)
     {

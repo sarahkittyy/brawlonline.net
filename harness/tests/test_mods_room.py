@@ -13,7 +13,9 @@ import json
 import os
 import re
 import selectors
+import shutil
 import socket
+import subprocess
 import threading
 import time
 from pathlib import Path
@@ -21,6 +23,7 @@ from typing import Any, Callable
 
 import pytest
 
+from ppharness import paths
 from ppharness.backend import OnlineBackend, OnlineUser
 from ppharness.fake_igd import FakeIGD
 from ppharness.instance import DolphinInstance, InstanceConfig
@@ -35,18 +38,22 @@ BUILD = {"hash": "ab" * 32, "name": "Test build"}
 
 def _boot(dolphin: Callable[..., DolphinInstance], be: OnlineBackend, name: str, user: OnlineUser,
           room: dict[str, Any], block: str = "", config_args: list[str] | None = None,
-          mm_port: int | None = None, **kw: Any) -> DolphinInstance:
+          mm_port: int | None = None, env: dict[str, str] | None = None,
+          prepare: Callable[[Path], None] | None = None, **kw: Any) -> DolphinInstance:
     if be.mm_host.startswith("127."):
         ini = {"Online": {"UseDevServer": True, "MatchmakingPort": mm_port or be.mm_port,
                           "DevAccountsUrl": be.accounts_url}}
     else:
         ini = {"Online": {"MatchmakingHost": be.mm_host, "MatchmakingPort": be.mm_port,
                           "AccountsUrl": be.accounts_url}}
-    env = {"PPR_MODS_ROOM": json.dumps(room), **({"PPR_TEST_P2P_BLOCK": block} if block else {})}
+    env = {"PPR_MODS_ROOM": json.dumps(room), **({"PPR_TEST_P2P_BLOCK": block} if block else {}), **(env or {})}
     inst = dolphin(name, config=InstanceConfig(cpu_thread=True, video_backend="Null", dolphin_ini=ini,
                                                config_args=config_args or []),
                    client_timeout=60.0, env=env, **kw)
-    user.write_user_json(inst.create())
+    user_dir = inst.create()
+    user.write_user_json(user_dir)
+    if prepare:
+        prepare(user_dir)
     inst.launch()
     inst.connect()
     _logged_in(inst, user)
@@ -54,9 +61,9 @@ def _boot(dolphin: Callable[..., DolphinInstance], be: OnlineBackend, name: str,
 
 
 def _host(dolphin: Callable[..., DolphinInstance], be: OnlineBackend, name: str, user: OnlineUser,
-          block: str = "") -> tuple[DolphinInstance, str]:
+          block: str = "", env: dict[str, str] | None = None) -> tuple[DolphinInstance, str]:
     host = _boot(dolphin, be, name, user, {"host": True, "build": BUILD, "public": False, "controller": "gc"},
-                 block)
+                 block, env=env)
     code = _wait(lambda: (host.client.call("mods_status").get("room") or {}).get("code"), 60, "the room's code")
     _wait(lambda: any(s.get("endpoint") for s in host.client.call("mods_status")["room"]["slots"]), 30,
           "the host's endpoint")
@@ -223,6 +230,148 @@ def test_a_join_while_the_players_games_differ_says_why(backend: OnlineBackend,
     # are not a line each (60 between two notices).
     assert len(re.findall(r"machine: player 2 is at epoch \d+ with checksum", host_log)) == 1, host_log[-3000:]
     assert len(re.findall(r"machine: desync at frame", host_log)) <= 60 * (host_log.count("notice: Desync with") + 1)
+
+
+def _watch(inst: DolphinInstance, seen: dict[str, float], t0: float) -> None:
+    """What `inst` shows now, on screen and in its chat window, kept with when it first showed."""
+    try:
+        osd = inst.client.call("osd_messages", timeout=5).get("messages", [])
+        lines = inst.client.call("chat_status", timeout=5).get("lines", [])
+    except Exception:  # noqa: BLE001  (a Dolphin that closed)
+        return
+    for text in osd:
+        seen.setdefault(f"osd: {text}", time.monotonic() - t0)
+    for ln in lines:
+        seen.setdefault(f"chat: {ln.get('text', '')}", time.monotonic() - t0)
+
+
+@pytest.mark.parametrize("how", ["quits", "crashes"])
+def test_a_join_goes_on_when_the_player_sending_the_game_leaves(backend: OnlineBackend,
+                                                               dolphin: Callable[..., DolphinInstance],
+                                                               how: str) -> None:
+    """Sarah's board, 2026-11-14: NEST#120 left their REX room 11 s into sending SARA#694 the game
+    (37.5 MB); SARA#694's download stood at 20% and KENO#349's game stood still, waiting for
+    NEST#120 to say who plays, until both gave up (they would have waited 300 s and 120 s). Here a
+    host and a player play, the host sends a second joiner the game slowly
+    (PPR_MACHINE_IMAGE_KBPS), and leaves partway: by quitting, or by its process dying (its links
+    then time out). The player decides the join in its place, sends the image again, and both
+    play on. While the game stands still the players see "Sending <joiner> the game state... N%"
+    at the top left (Sarah's board, 2026-11-14: "not in the chat, but in a toast"), and the chat
+    window has no such lines."""
+    tag = "Q" if how == "quits" else "K"
+    host_user = backend.create_user("hostt" + tag.lower(), "HT" + tag)
+    one_user = backend.create_user("onet" + tag.lower(), "OT" + tag)
+    two_user = backend.create_user("twot" + tag.lower(), "WT" + tag)
+    hname, two = host_user.display_name, two_user.display_name
+    host, code = _host(dolphin, backend, f"mods-takeover-host-{how}", host_user,
+                       env={"PPR_MACHINE_IMAGE_KBPS": "1500"})
+    one = _boot(dolphin, backend, f"mods-takeover-one-{how}", one_user,
+                {"join": code, "build": BUILD, "controller": "gc", "sd_sync": "yes"})
+    _wait(lambda: "machine: running" in _log(one), 180, "the first joiner's session running", interval=1)
+    joiner = _boot(dolphin, backend, f"mods-takeover-two-{how}", two_user,
+                   {"join": code, "build": BUILD, "controller": "gc", "sd_sync": "yes"})
+    t0 = time.monotonic()
+    seen: dict[str, float] = {}
+    sending = re.compile(r"notice: Getting the game: [2-9]0%")
+
+    def under_way() -> bool:
+        for inst in (host, one):
+            _watch(inst, seen, t0)
+        return bool(sending.search(_log(joiner)))
+    _wait(under_way, 120, "the image on its way to the second joiner", interval=0.3)
+    before = dict(seen)
+    assert "machine image for player 3" in _log(host)
+    assert "machine image for player 3" not in _log(one)
+    if how == "quits":
+        host.stop()
+    else:
+        host.kill()
+    left = time.monotonic() - t0
+
+    def joined() -> bool:
+        _watch(one, seen, t0)
+        log = _log(joiner)
+        return "machine: running" in log[log.find("machine image from player 1"):]
+    _wait(joined, 150, "the second joiner in the game", interval=0.3)
+    took = time.monotonic() - t0 - left
+    print(f"{how}: in the game {took:.1f} s after the host left; {[k for k in seen if 'game state' in k]}")
+    one_log, two_log = _log(one), _log(joiner)
+    assert re.search(r"epoch \d+: player 1 left before it said who plays; player 2 decides it now", one_log), \
+        one_log[-4000:]
+    assert "machine image for player 3" in one_log, one_log[-4000:]
+    assert re.search(r"machine image from player 1 (stopped|dropped) at [\d.]+ of [\d.]+ MB", two_log), two_log[-4000:]
+    assert "machine image from player 2 (" in two_log, two_log[-4000:]
+    # Both play on, the second joiner in the game.
+    for inst in (one, joiner):
+        _wait(lambda: inst.client.call("machine_status").get("phase") == "running", 30, "the game going on")
+        assert inst.client.call("machine_status").get("players") == 0b110
+    assert not joiner.client.call("mods_status").get("error")
+    # The top left said why the game stood still, with the joiner's progress: the host's sending,
+    # then the player's own.
+    assert f"osd: {hname} is sending {two} the game state..." in before, before
+    assert any(re.fullmatch(rf"osd: {hname} is sending {two} the game state\.\.\. [1-9]0%", k) for k in before), before
+    assert any(re.fullmatch(rf"osd: Sending {two} the game state\.\.\.( [1-9]0%| 100%)?", k) for k in seen), seen
+    assert not any(k.startswith("chat:") and ("getting the game" in k or "Sending the game" in k
+                                             or "The game waits" in k) for k in seen), seen
+    assert f"chat: {two} is in the game." in seen, seen
+    assert "Not admitted" not in two_log and "did not agree" not in one_log
+
+
+def _flip_card_byte(user_dir: Path) -> None:
+    """The instance's card differs from the room's in one byte, in the middle of its used part (a
+    chunk the session's list holds)."""
+    card = user_dir / "Wii" / "sd.raw"
+    with card.open("r+b") as f:
+        f.seek(200 << 20)
+        b = f.read(1)
+        f.seek(200 << 20)
+        f.write(bytes([b[0] ^ 0x5A]))
+
+
+@pytest.mark.parametrize("listing", ["room", "other"])
+def test_a_joiner_takes_the_room_cards_list_from_the_launcher(backend: OnlineBackend,
+                                                             dolphin: Callable[..., DolphinInstance],
+                                                             tmp_path: Path, listing: str) -> None:
+    """Sarah's board, 2026-11-14: joining a REX room, SARA#694's game waited 70 s for the players to
+    send the 2.3 MB list of the room's SD card (34 KB/s, the pace of an upload beside two players'
+    game), right after the launcher had fetched the same list from the accounts server for its
+    question. The launcher now hands Dolphin that listing (`sd_listing`). Here a joiner whose card
+    differs in one byte gets the room card's listing (DolphinTool sdhash --listing of the host's
+    card), downloads only the difference and asks the players for no list. A listing of another
+    card (the joiner's own) is not taken: the players' list comes as before."""
+    tool = paths.binaries_dir() / ("DolphinTool.exe" if os.name == "nt" else "dolphin-tool")
+    if not tool.exists():
+        pytest.skip(f"no {tool}")
+    card = paths.template_user_dir() / "Wii" / "sd.raw"
+    if listing == "other":
+        (tmp_path / "other" / "Wii").mkdir(parents=True)
+        shutil.copyfile(card, tmp_path / "other" / "Wii" / "sd.raw")
+        _flip_card_byte(tmp_path / "other")
+        card = tmp_path / "other" / "Wii" / "sd.raw"
+    listing_file = tmp_path / "room-sd-listing.bin"
+    cache = tmp_path / "tool-user"
+    cache.mkdir()
+    out = subprocess.run([str(tool), "sdhash", "-i", str(card), "-u", str(cache), "-l", str(listing_file)],
+                         capture_output=True, text=True, timeout=600)
+    assert out.returncode == 0, out.stderr
+    tag = "R" if listing == "room" else "O"
+    host_user = backend.create_user("hostl" + tag.lower(), "HL" + tag)
+    join_user = backend.create_user("joinl" + tag.lower(), "JL" + tag)
+    host, code = _host(dolphin, backend, f"mods-listing-host-{listing}", host_user)
+    joiner = _boot(dolphin, backend, f"mods-listing-join-{listing}", join_user,
+                   {"join": code, "build": BUILD, "controller": "gc", "sd_sync": "yes",
+                    "sd_listing": str(listing_file)}, prepare=_flip_card_byte)
+    _wait(lambda: "machine: running" in _log(joiner), 240, "the joiner's session running", interval=1)
+    log, host_log = _log(joiner), _log(host)
+    assert re.search(r"SD card: got [\d.]+ MB of the host's card", log), log[-4000:]
+    if listing == "room":
+        assert re.search(r"SD card: the room card's list from the launcher \([\d.]+ MB, \d+ files\): no list "
+                         r"asked of the players", log), log[-4000:]
+        assert "Getting the host's SD card list" not in log and "got the host's list" not in log, log[-4000:]
+        assert "the card's list" not in host_log, host_log[-3000:]
+    else:
+        assert "SD card: the launcher's list is of another card: asking the players" in log, log[-4000:]
+        assert "SD card: got the host's list" in log, log[-4000:]
 
 
 def test_room_sessions_map_their_port_with_upnp(dolphin: Callable[..., DolphinInstance]) -> None:

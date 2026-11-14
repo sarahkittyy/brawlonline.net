@@ -33,6 +33,9 @@ enum class MessageType
   MachineNotice,
   // A room's joiner waiting for a link to a member, with the seconds left (MachineSession.cpp).
   MachineJoinWait,
+  // A room's players standing still while a joiner gets the game state, with its progress
+  // (MachineSession.cpp ShowJoinProgress).
+  MachineImageSend,
 
   // This entry must be kept last so that persistent typed messages are
   // displayed before other messages
