@@ -7,11 +7,11 @@ import { useRememberedRuleset } from "@/lib/rulesets/use_remembered_ruleset";
 import { useCreateRoom } from "@/lib/social/use_create_room";
 import { useRoomList } from "@/lib/social/use_room_list";
 import { useRoomName } from "@/lib/social/use_room_name";
+import { RulesetChip } from "@/pages/play/ruleset_chip";
 import { RulesetPreviewDialog } from "@/pages/rulesets/ruleset_preview_dialog";
 
 import type { PublicRoomsState } from "./public_rooms_view";
 import { PublicRoomsView } from "./public_rooms_view";
-import { RulesetBox } from "./ruleset_box";
 import { useJoinRoom } from "./use_join_room";
 
 /** How long a list stays shown while polls fail. */
@@ -83,7 +83,7 @@ export const PublicRooms = React.memo(function PublicRooms() {
         onLogIn={openLogin}
         onCreate={create}
         creating={creating}
-        rulesetBox={<RulesetBox />}
+        rulesetBox={<RulesetChip />}
         highlightCreate={!hasCreatedRoom}
         onShowRuleset={(room) => {
           if (room.ruleset?.code) {

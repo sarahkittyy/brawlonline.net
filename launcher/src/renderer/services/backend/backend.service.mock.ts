@@ -508,15 +508,26 @@ class MockBackendClient implements BackendService {
   }
 
   @delayAndMaybeError(SHOULD_ERROR)
-  async fetchMatchHistory(mode: MatchHistoryFilter, before?: string): Promise<MatchHistoryPage> {
-    const all = mockMatchHistory().filter(
-      (m) =>
-        mode === "all" ||
-        (mode === "ranked" && m.ranked) ||
-        (mode === "unranked" && (m.mode === "unranked" || m.mode === "direct")) ||
-        (mode === "rooms" && m.mode === "room") ||
-        (mode === "twos" && m.mode === "twos"),
-    );
+  async fetchFriendsLeaderboard(): Promise<LeaderboardPage> {
+    const entries = mockLeaderboard.slice(0, 6);
+    return { entries, next: null, total: entries.length };
+  }
+
+  async fetchMatchHistory(
+    mode: MatchHistoryFilter,
+    before?: string,
+    options?: { opponent?: string; limit?: number },
+  ): Promise<MatchHistoryPage> {
+    const all = mockMatchHistory()
+      .filter((m) => !options?.opponent || m.players.some((p) => p.uid === options.opponent))
+      .filter(
+        (m) =>
+          mode === "all" ||
+          (mode === "ranked" && m.ranked) ||
+          (mode === "unranked" && (m.mode === "unranked" || m.mode === "direct")) ||
+          (mode === "rooms" && m.mode === "room") ||
+          (mode === "twos" && m.mode === "twos"),
+      );
     const { rows, next } = mockPage(all, before, 20);
     return { matches: rows, next };
   }

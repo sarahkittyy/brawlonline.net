@@ -139,7 +139,14 @@ function useOfflinePlayers(enabled: boolean, needle: string, online: SocialPlaye
  * The magnifier opens a search box under the header that filters the tab's list by name or code
  * as you type (Esc or the X closes it).
  */
-export const OnlinePlayers = React.memo(function OnlinePlayers() {
+export const OnlinePlayers = React.memo(function OnlinePlayers({
+  trailing,
+  className,
+}: {
+  /** After the header's icons: the players rail's fold button (app/shell/players_rail.tsx). */
+  trailing?: React.ReactNode;
+  className?: string;
+}) {
   const user = useAccount((s) => s.user);
   const hasPlayKey = useAccount((s) => s.userData?.playKey != null);
   const status = useSocial((s) => s.state.status);
@@ -233,34 +240,38 @@ export const OnlinePlayers = React.memo(function OnlinePlayers() {
           </button>
         ))}
       </div>
-      {ready && (
+      {(ready || trailing) && (
         <div className={styles.headIcons}>
-          <Tooltip
-            title={searching ? Messages.closeSearch() : friendsTab ? Messages.searchFriends() : Messages.searchOnline()}
-            placement="top"
-            disableInteractive={true}
-          >
-            <IconButton
-              size="small"
-              aria-label={searching ? Messages.closeSearch() : Messages.searchOnline()}
-              className={clsx(styles.iconButton, searching && styles.iconButtonOn)}
-              data-testid="online-search-toggle"
-              // Keeps the box focused, so its blur (closing an empty search) doesn't race this click.
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={() => {
-                if (searching) {
-                  closeSearch();
-                } else {
-                  setAdding(false);
-                  setSearching(true);
-                  requestAnimationFrame(() => inputRef.current?.focus());
-                }
-              }}
+          {ready && (
+            <Tooltip
+              title={
+                searching ? Messages.closeSearch() : friendsTab ? Messages.searchFriends() : Messages.searchOnline()
+              }
+              placement="top"
+              disableInteractive={true}
             >
-              {searching ? <CloseRoundedIcon fontSize="small" /> : <SearchRoundedIcon fontSize="small" />}
-            </IconButton>
-          </Tooltip>
-          {friendsTab && (
+              <IconButton
+                size="small"
+                aria-label={searching ? Messages.closeSearch() : Messages.searchOnline()}
+                className={clsx(styles.iconButton, searching && styles.iconButtonOn)}
+                data-testid="online-search-toggle"
+                // Keeps the box focused, so its blur (closing an empty search) doesn't race this click.
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => {
+                  if (searching) {
+                    closeSearch();
+                  } else {
+                    setAdding(false);
+                    setSearching(true);
+                    requestAnimationFrame(() => inputRef.current?.focus());
+                  }
+                }}
+              >
+                {searching ? <CloseRoundedIcon fontSize="small" /> : <SearchRoundedIcon fontSize="small" />}
+              </IconButton>
+            </Tooltip>
+          )}
+          {ready && friendsTab && (
             <Tooltip
               title={adding ? Messages.closeAddFriend() : Messages.addFriendByCode()}
               placement="top"
@@ -282,6 +293,7 @@ export const OnlinePlayers = React.memo(function OnlinePlayers() {
               </IconButton>
             </Tooltip>
           )}
+          {trailing}
         </div>
       )}
     </>
@@ -318,7 +330,7 @@ export const OnlinePlayers = React.memo(function OnlinePlayers() {
 
   return (
     <div className={styles.block}>
-      <ContentBlock fill={true} heading={heading} toolbar={toolbar} content={renderBody()} />
+      <ContentBlock fill={true} heading={heading} toolbar={toolbar} content={renderBody()} className={className} />
       <PlayerMenu target={menu} onClose={() => setMenu(null)} />
     </div>
   );

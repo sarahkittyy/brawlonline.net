@@ -1,24 +1,36 @@
+/* Play's buttons, stacked (docs/design/launcher-redesign.md §8): each with its status on its left. */
 .buttons {
   display: flex;
-  align-items: flex-start;
-  gap: 12px;
-  padding-top: 8px;
+  flex-direction: column;
+  gap: 6px;
+  flex: none;
 }
 
-/* Play 2v2 and its counts. The counts are wider than the button: centred under it without widening it, so the
-   gap to Play ranked stays the same as the others'; the padding keeps their line's height in the row. */
 .play {
-  position: relative;
-  padding-bottom: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
 }
 
 .count {
-  position: absolute;
-  bottom: 0;
-  left: 50%;
-  transform: translateX(-50%);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   font-size: 12px;
-  line-height: 1.2;
   color: var(--text-secondary);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.etaIcon {
+  font-size: 16px !important;
+}
+
+.button {
+  width: 196px;
+  height: 48px;
+  font-size: 17px !important;
+  text-transform: none !important;
   white-space: nowrap;
 }

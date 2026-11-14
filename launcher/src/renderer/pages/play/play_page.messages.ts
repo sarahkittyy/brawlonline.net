@@ -1,4 +1,4 @@
-export const MyRankingMessages = {
+export const PlayPageMessages = {
   myRanking: () => "My Ranking",
   refresh: () => "Refresh",
   rating: () => "Rating",

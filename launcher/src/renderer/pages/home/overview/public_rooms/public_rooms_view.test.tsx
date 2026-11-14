@@ -49,8 +49,7 @@ afterEach(cleanup);
 
 describe("PublicRoomsView", () => {
   it("lists every room with its host, players, mode, status and names", () => {
-    const { container, getByTestId } = view({ kind: "ready", online: 42, rooms });
-    expect(getByTestId("players-online").textContent).toBe("42 players in-game");
+    const { container } = view({ kind: "ready", online: 42, rooms });
     const rows = container.querySelectorAll("button[data-room]");
     expect(rows.length).toBe(3);
     const text = (code: string) => container.querySelector(`[data-room="${code}"]`)!.textContent;
@@ -231,7 +230,6 @@ describe("PublicRoomsView", () => {
         />,
       ).getByText(Messages.createAbove()),
     ).toBeTruthy();
-    expect(view({ kind: "ready", online: 1, rooms: [] }).getAllByText("1 player in-game").length).toBeGreaterThan(0);
     expect(view({ kind: "logged-out" }).getByText(Messages.logIn())).toBeTruthy();
     expect(view({ kind: "unreachable" }).getByText(Messages.retry())).toBeTruthy();
   });

@@ -6,7 +6,7 @@ import { useSettingsStore } from "@/lib/hooks/use_settings";
 import { useThemeColorDraft } from "@/styles/game_theme_provider";
 
 /** Where the picker opens (the launcher's main page, to see the colour on it) and where it goes back to. */
-export const THEME_COLOR_PICKER_PAGE = "/main/home";
+export const THEME_COLOR_PICKER_PAGE = "/main/play";
 export const THEME_COLOR_SETTINGS_PAGE = "/settings/appearance-settings";
 
 /**

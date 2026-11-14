@@ -36,3 +36,55 @@
     box-shadow: 0 0 0 2px rgb(var(--profile-glow) / 85%);
   }
 }
+
+/* The sidebar's card (docs/design/launcher-redesign.md): a lighter rounded box so it reads as a button. */
+.sidebarCard {
+  display: flex !important;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px !important;
+  border-radius: 10px;
+  background-color: var(--raised) !important;
+  color: var(--off-white) !important;
+  text-align: left;
+  transition: background-color 0.15s ease;
+}
+
+.sidebarCard:hover {
+  background-color: var(--raised-hover) !important;
+}
+
+.sidebarText {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+
+.sidebarName {
+  font-size: 15px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebarCode {
+  font-size: 12px;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebarError {
+  color: var(--red-error);
+}
+
+.sidebarRank {
+  flex: none;
+  display: flex;
+
+  --rank-badge-inline-size: 30px;
+}

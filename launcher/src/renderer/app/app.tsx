@@ -1,9 +1,10 @@
 import React from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
 
-import { Header } from "@/app/header/header";
 import { LoginDialog } from "@/app/header/login_dialog";
-import type { MenuItem } from "@/app/header/main_menu";
+import { PlayersRail } from "@/app/shell/players_rail";
+import type { NavItem } from "@/app/shell/sidebar";
+import { Sidebar } from "@/app/shell/sidebar";
 import { AuthGuard } from "@/components/auth_guard";
 import { LoginNotice } from "@/components/login_notice/login_notice";
 import { ProfileDialog } from "@/components/profile/profile_dialog";
@@ -14,6 +15,11 @@ import { installReplayVersionDialogPreview, ReplayVersionDialog } from "@/lib/pp
 import { refreshPPlusVersions } from "@/lib/pplus/use_pplus_versions";
 import { ProjectPunchDialog } from "@/lib/project_punch/project_punch_dialog";
 import type { AuthUser } from "@/services/auth/types";
+
+type MenuItem = NavItem & {
+  /** A page with no sidebar entry (reached from elsewhere: a profile, the old match history address). */
+  hidden?: boolean;
+};
 
 type PrivateMenuItem = MenuItem & {
   Component: React.ComponentType<{ user: AuthUser }>;
@@ -37,19 +43,17 @@ export const App = React.memo(({ menuItems }: { menuItems: readonly MainMenuItem
     installReplayVersionDialogPreview();
     installPPlusBuildDialogPreview();
   }, []);
+  // docs/design/launcher-redesign.md §2: the sidebar, the page, the players rail.
   return (
     <div
       style={{
         display: "flex",
-        flexFlow: "column",
         height: "100%",
         width: "100%",
       }}
     >
-      <div style={{ flexShrink: 0 }}>
-        <Header menuItems={menuItems} />
-      </div>
-      <div style={{ flex: 1, overflow: "auto", display: "flex" }}>
+      <Sidebar items={menuItems.filter((item) => !item.hidden)} />
+      <main style={{ flex: 1, minWidth: 0, overflow: "auto", display: "flex", backgroundColor: "var(--page)" }}>
         <Routes>
           {menuItems.map((item) => {
             const element = item.private ? (
@@ -59,9 +63,14 @@ export const App = React.memo(({ menuItems }: { menuItems: readonly MainMenuItem
             );
             return <Route key={item.subpath} path={`${item.subpath}/*`} element={element} />;
           })}
+          {/* The Home tabs' old addresses (route memory, links, page requests). */}
+          <Route path="home/spectate/*" element={<Navigate replace={true} to="/main/spectate" />} />
+          <Route path="home/mods/*" element={<Navigate replace={true} to="/main/other-games" />} />
+          <Route path="home/*" element={<Navigate replace={true} to="/main/play" />} />
           {defaultRoute && <Route path="*" element={<Navigate replace={true} to={`${defaultRoute.subpath}`} />} />}
         </Routes>
-      </div>
+      </main>
+      <PlayersRail />
       <SocialRoot />
       <ProfileDialog />
       <LoginDialog />

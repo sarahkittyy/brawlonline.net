@@ -56,3 +56,16 @@ a {
   text-decoration: none;
   color: inherit;
 }
+
+/*
+ * The redesign's shell (docs/design/launcher-redesign.md): the sidebar and players rail are the theme's paper,
+ * a step darker than the page; raised rows and panels are a step lighter. All follow the theme colour.
+ */
+:root {
+  --shell: var(--surface-1);
+  --page: var(--theme-page-background, var(--surface-2));
+  --raised: color-mix(in oklab, var(--page) 91%, white);
+  --raised-hover: color-mix(in oklab, var(--page) 85%, white);
+  --line: color-mix(in oklab, var(--page) 76%, white);
+  --line-soft: color-mix(in oklab, var(--page) 88%, white);
+}

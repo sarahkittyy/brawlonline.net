@@ -8,7 +8,6 @@ import { useAccount } from "@/lib/hooks/use_account";
 import { useLoginModal } from "@/lib/hooks/use_login_modal";
 import { useToasts } from "@/lib/hooks/use_toasts";
 import { useCreateRoom } from "@/lib/social/use_create_room";
-import { HomeRoutes } from "@/pages/home/home_routes";
 import { useServices } from "@/services";
 
 import { RulesetLinkMessages as Messages } from "./use_brawl_links.messages";
@@ -36,7 +35,7 @@ export const useBrawlLinks = () => {
         openLogin();
         return;
       }
-      navigate(HomeRoutes.overview());
+      navigate("/main/play");
       let code: string | undefined;
       try {
         if (link.ruleset) {

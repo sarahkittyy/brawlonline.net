@@ -1,0 +1,90 @@
+.rail {
+  width: 272px;
+  flex: none;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background-color: var(--shell);
+  border-left: 1px solid var(--line-soft);
+}
+
+/* The Online / Friends panel fills the rail: no box of its own. */
+.block {
+  border: none !important;
+  border-radius: 0 !important;
+  background-color: transparent !important;
+}
+
+.folded {
+  width: 60px;
+  flex: none;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding-top: 12px;
+  background-color: var(--shell);
+  border-left: 1px solid var(--line-soft);
+  overflow: hidden auto;
+}
+
+.foldButton {
+  color: var(--text-dim) !important;
+}
+
+.foldButton:hover {
+  color: var(--off-white) !important;
+}
+
+.friend {
+  all: unset;
+  position: relative;
+  width: 40px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.friend:hover {
+  background-color: var(--raised);
+}
+
+.friend:focus-visible {
+  outline: 2px solid var(--accent-primary);
+}
+
+.onlineDot {
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background-color: #74c27a;
+  box-shadow: 0 0 0 2px var(--shell);
+}
+
+.rule {
+  width: 28px;
+  height: 1px;
+  margin: 4px 0;
+  background-color: var(--line-soft);
+}
+
+.unread {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  box-sizing: border-box;
+  border-radius: 8px;
+  font-size: 11px;
+  line-height: 16px;
+  color: #2a1d05;
+  background-color: #e8b45a;
+}

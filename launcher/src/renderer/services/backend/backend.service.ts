@@ -146,9 +146,22 @@ class AccountsBackendClient implements BackendService {
     return await this._api.leaderboard({ limit: LEADERBOARD_PAGE_SIZE, after, q: search });
   }
 
-  async fetchMatchHistory(mode: MatchHistoryFilter, before?: string): Promise<MatchHistoryPage> {
+  async fetchMatchHistory(
+    mode: MatchHistoryFilter,
+    before?: string,
+    options?: { opponent?: string; limit?: number },
+  ): Promise<MatchHistoryPage> {
     const uid = this._activeUid();
-    return await this._api.matchHistory(uid, { mode, limit: MATCH_HISTORY_PAGE_SIZE, before });
+    return await this._api.matchHistory(uid, {
+      mode,
+      limit: options?.limit ?? MATCH_HISTORY_PAGE_SIZE,
+      before,
+      opponent: options?.opponent,
+    });
+  }
+
+  async fetchFriendsLeaderboard(): Promise<LeaderboardPage> {
+    return await this._api.friendsLeaderboard(this._activeUid());
   }
 
   async fetchRooms(): Promise<RoomList> {

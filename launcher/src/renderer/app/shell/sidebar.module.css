@@ -1,0 +1,164 @@
+/* The sidebar (docs/design/launcher-redesign.md §2): the theme's paper, a step darker than the page. */
+.side {
+  width: 216px;
+  flex: none;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: 14px 12px 10px;
+  background-color: var(--shell);
+  overflow: hidden auto;
+}
+
+/* macOS draws its window buttons over the top left (titleBarStyle hiddenInset): room for them, and the top of the
+   sidebar drags the window as Slippi's header did. */
+.mac {
+  padding-top: 34px;
+}
+
+.mac .logoRow {
+  -webkit-app-region: drag;
+}
+
+.logoRow {
+  display: flex;
+  padding: 2px 0 14px;
+}
+
+.logo {
+  font-family: var(--font-title, system-ui, sans-serif);
+  font-size: 19px;
+  white-space: nowrap;
+  color: var(--off-white);
+  padding: 2px 10px;
+  border-radius: 6px;
+  -webkit-app-region: no-drag;
+}
+
+.logo:hover {
+  background-color: var(--raised);
+}
+
+.status {
+  display: flex;
+  justify-content: center;
+  margin-bottom: 12px;
+}
+
+.nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.navItem {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: 40px;
+  padding: 0 12px;
+  box-sizing: border-box;
+  border-radius: 6px;
+  color: var(--text-secondary);
+  font-size: 15px;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.navItem:hover {
+  background-color: var(--raised);
+  color: var(--text-primary);
+}
+
+.navItem:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: -2px;
+}
+
+.navIcon {
+  flex: none;
+  font-size: 20px !important;
+  color: var(--text-dim);
+}
+
+.navLabel {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* The current page: in the game's look, Brawl's selected character-select entry, tinted like a hovered plate;
+   without the disc (no frames), a lighter row. */
+.on {
+  color: #fff;
+  background-color: var(--raised-hover);
+}
+
+.on .navIcon {
+  color: #fff;
+}
+
+:root[data-game-frames] .on {
+  background: none;
+  border: 7px solid transparent;
+  border-image: var(--theme-selected-source) 7 7 7 7 fill / 7px stretch;
+  padding: 0 5px;
+}
+
+.trophy .navIcon {
+  color: #ffc83d;
+}
+
+.badge {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  line-height: 18px;
+  padding: 0 7px;
+  border-radius: 999px;
+  color: var(--text-secondary);
+  background-color: var(--raised);
+}
+
+.on .badge {
+  color: #fff;
+  background-color: rgb(0 0 0 / 25%);
+}
+
+.liveDot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background-color: #e5534b;
+}
+
+.spacer {
+  flex: 1;
+  min-height: 12px;
+}
+
+.logIn {
+  margin: 0 4px 6px !important;
+}
+
+.tools {
+  display: flex;
+  justify-content: space-between;
+  padding: 6px 0 0;
+}
+
+.tools button {
+  padding: 6px;
+  opacity: 0.6;
+  color: var(--off-white);
+}
+
+.tools button:hover {
+  opacity: 1;
+}
+
+.tools svg {
+  font-size: 20px;
+}

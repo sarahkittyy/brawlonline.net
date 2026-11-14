@@ -12,7 +12,10 @@ export const ContentBlock = ({
   heading,
   toolbar,
   overflowY = "auto",
+  className,
 }: {
+  /** On the outer box (the players rail drops the box's border and radius). */
+  className?: string;
   fill?: boolean;
   /** Text, or a room's name field (Other Games' room panel). */
   title?: React.ReactNode;
@@ -28,7 +31,7 @@ export const ContentBlock = ({
   overflowY?: "auto" | "hidden";
 }) => {
   return (
-    <div className={clsx(styles.outer, { [styles.fill]: fill })}>
+    <div className={clsx(styles.outer, { [styles.fill]: fill }, className)}>
       {(title || heading) && (
         <div
           className={clsx(styles.header, onClick && styles.active, heading != null && styles.tabbed)}

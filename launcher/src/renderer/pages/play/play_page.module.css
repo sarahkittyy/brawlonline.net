@@ -1,0 +1,178 @@
+/* Play (docs/design/launcher-redesign.md §8). */
+.page {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 20px 28px 0;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-height: 44px;
+  margin-bottom: 16px;
+}
+
+.title {
+  margin: 0;
+  font-size: 28px;
+  white-space: nowrap;
+}
+
+.inGame {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background-color: #74c27a;
+}
+
+.grow {
+  flex: 1;
+}
+
+.launch {
+  text-transform: none !important;
+  white-space: nowrap;
+  border-color: var(--line) !important;
+}
+
+/* The ranked card and the three Play buttons, one panel. */
+.panel {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding: 16px 20px;
+  border-radius: 10px;
+  background-color: var(--raised);
+  flex: none;
+}
+
+.rankedSide {
+  flex: 1;
+  min-width: 0;
+  container-type: inline-size;
+}
+
+.ranked {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  min-width: 0;
+
+  --rank-badge-size: 76px;
+}
+
+.emblem {
+  flex: none;
+  display: flex;
+}
+
+.numbers {
+  min-width: 0;
+  flex: none;
+}
+
+.tier {
+  font-size: 15px;
+  white-space: nowrap;
+  color: var(--text-secondary);
+}
+
+.ranked[data-tier="bronze"] .tier { color: #d99063; }
+.ranked[data-tier="silver"] .tier { color: #c9d2dc; }
+.ranked[data-tier="gold"] .tier { color: #f0c24a; }
+.ranked[data-tier="emerald"] .tier { color: #43d488; }
+.ranked[data-tier="diamond"] .tier { color: #77baf2; }
+.ranked[data-tier="master"] .tier { color: #b98af0; }
+.ranked[data-tier="legendary"] .tier { color: #f4785e; }
+
+.rating {
+  font-size: 30px;
+  line-height: 1.15;
+  font-variant-numeric: tabular-nums;
+}
+
+.sub {
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--text-dim);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Beside the numbers, never over them: it hides where the card is too narrow for both. */
+.spark {
+  margin-left: 6px;
+}
+
+@container (max-width: 470px) {
+  .spark {
+    display: none;
+  }
+}
+
+.cardTools {
+  position: absolute;
+  top: -10px;
+  right: -8px;
+  display: flex;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+  color: var(--text-dim);
+}
+
+.panel:hover .cardTools,
+.cardTools:focus-within {
+  opacity: 1;
+}
+
+.cardTools button {
+  color: var(--text-dim);
+}
+
+/* The ruleset new rooms start with (ruleset_chip.tsx): no box; its name gives way first. */
+.ruleset {
+  display: inline-flex !important;
+  align-items: center;
+  gap: 6px;
+  min-width: 26px;
+  max-width: 190px;
+  flex: 0 1 auto;
+  height: 34px;
+  padding: 0 4px !important;
+  border-radius: 6px;
+  color: var(--text-secondary) !important;
+  font-size: 13px !important;
+  white-space: nowrap;
+}
+
+.ruleset:hover {
+  color: var(--text-primary) !important;
+}
+
+.rulesetIcon {
+  flex: none;
+  font-size: 18px !important;
+}
+
+.rulesetName {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

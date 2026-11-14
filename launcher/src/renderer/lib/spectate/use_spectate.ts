@@ -8,13 +8,13 @@ import { useAccount } from "@/lib/hooks/use_account";
 export const LIVE_POLL_MS = 3000;
 
 /** `GET /v1/live`, polled while the Spectate tab is shown (docs/design/spectating.md §6.1). */
-export const useLiveGames = () => {
+export const useLiveGames = (pollMs: number = LIVE_POLL_MS) => {
   const uid = useAccount((s) => s.user?.uid);
   const query = useQuery({
     queryKey: ["liveGames", uid],
     queryFn: () => window.electron.spectate.list(uid!),
     enabled: uid != null,
-    refetchInterval: LIVE_POLL_MS,
+    refetchInterval: pollMs,
     retry: false,
   });
   return { uid, query };

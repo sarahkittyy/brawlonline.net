@@ -5,7 +5,8 @@ import log from "electron-log";
 import React from "react";
 
 import { ConfirmationModal } from "@/components/confirmation_modal/confirmation_modal";
-import { MAIN_PICTURE_HOVER } from "@/components/main_picture/main_picture";
+import { MAIN_PICTURE_HOVER, MainPicture } from "@/components/main_picture/main_picture";
+import { RankBadge } from "@/components/rank_badge/rank_badge";
 import { useDolphinStore } from "@/lib/dolphin/use_dolphin_store";
 import { useAccount } from "@/lib/hooks/use_account";
 import { useAccountDialogs } from "@/lib/hooks/use_account_dialogs";
@@ -32,7 +33,16 @@ const MAX_ACCOUNTS = 5;
  * The account in the header: clicking it opens the player's own profile, whose footer has Switch account and Log out
  * (and Activate online play / Verify email until they're done). Those dialogs are here (use_account_dialogs.ts).
  */
-export const UserMenu = ({ user, handleError }: { user: AuthUser; handleError: (error: any) => void }) => {
+export const UserMenu = ({
+  user,
+  handleError,
+  variant = "header",
+}: {
+  user: AuthUser;
+  handleError: (error: any) => void;
+  /** `sidebar`: the sidebar's card (docs/design/launcher-redesign.md): picture, name and code, rank emblem. */
+  variant?: "header" | "sidebar";
+}) => {
   const { authService, backendService, dolphinService } = useServices();
   const userData = useAccount((store) => store.userData);
   const displayName = useAccount((store) => store.displayName);
@@ -46,6 +56,7 @@ export const UserMenu = ({ user, handleError }: { user: AuthUser; handleError: (
   const { showSuccess, showError } = useToasts();
   const openProfile = useProfileView((store) => store.open);
   const ownProfileOpened = useOwnProfileHint((store) => store.opened);
+  const rankedProfile = useAccount((store) => store.userData?.rankedNetplayProfile);
   const accountDialog = useAccountDialogs((store) => store.open);
   const closeAccountDialog = useAccountDialogs((store) => store.close);
 
@@ -182,16 +193,40 @@ export const UserMenu = ({ user, handleError }: { user: AuthUser; handleError: (
     <div>
       <ButtonBase
         onClick={() => openProfile({ uid: user.uid, displayName, connectCode: userData?.playKey?.connectCode })}
-        className={clsx(styles.userInfoButton, MAIN_PICTURE_HOVER, glowProfile && styles.profileGlow)}
+        className={clsx(
+          variant === "sidebar" ? styles.sidebarCard : styles.userInfoButton,
+          MAIN_PICTURE_HOVER,
+          glowProfile && styles.profileGlow,
+        )}
+        data-testid="user-card"
       >
-        <UserInfo
-          displayName={displayName}
-          picture={ownPicture}
-          connectCode={userData?.playKey?.connectCode}
-          errorBorder={isUserErrorMessage}
-          errorMessage={errMessage}
-          loading={loading}
-        />
+        {variant === "sidebar" ? (
+          <>
+            <MainPicture url={loading ? undefined : ownPicture} size={32} pencil={true} error={isUserErrorMessage} />
+            <span className={styles.sidebarText}>
+              <span className={styles.sidebarName}>{displayName}</span>
+              {!loading && (
+                <span className={clsx(styles.sidebarCode, errMessage && styles.sidebarError)}>
+                  {errMessage ?? userData?.playKey?.connectCode}
+                </span>
+              )}
+            </span>
+            {rankedProfile && !errMessage && (
+              <span className={styles.sidebarRank}>
+                <RankBadge rank={rankedProfile.rank ?? null} setsToPlace={rankedProfile.setsToPlace} size="inline" />
+              </span>
+            )}
+          </>
+        ) : (
+          <UserInfo
+            displayName={displayName}
+            picture={ownPicture}
+            connectCode={userData?.playKey?.connectCode}
+            errorBorder={isUserErrorMessage}
+            errorMessage={errMessage}
+            loading={loading}
+          />
+        )}
       </ButtonBase>
 
       <SwitchAccountDialog

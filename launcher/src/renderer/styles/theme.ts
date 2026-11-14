@@ -32,6 +32,8 @@ export type ThemeFrames = {
   /** The same plate as `button`, tinted brighter: Brawl highlights a menu plate by recolouring it. */
   buttonHover?: FrameCss;
   panel?: FrameCss;
+  /** The sidebar's current page (MenSelchrEntryW01b), tinted like `buttonHover`. */
+  selected?: FrameCss;
 };
 
 export type FrameCss = {
