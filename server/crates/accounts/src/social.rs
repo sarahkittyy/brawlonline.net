@@ -431,6 +431,13 @@ impl SocialHub {
         }
     }
 
+    /// Queues `event` for a player's launcher, if it is connected (friend requests and the like,
+    /// `friends.rs`).
+    pub fn notify(&self, uid: &str, event: String) {
+        let mut hub = self.hub.lock().unwrap();
+        Self::send_to(&mut hub, uid, event);
+    }
+
     /// A player changed their profile's flag or primary main, or whether they show them: listed
     /// again (`online`) with the new ones.
     pub fn name_tag_changed(&self, uid: &str, tag: crate::profile::NameTag) {

@@ -154,7 +154,7 @@ async fn public_list_private_rooms_and_online_count() {
     b.send(&RoomRequest::Create { public: false, ruleset: None, remembered: false });
     let private = room_state(&mut b)["code"].as_str().unwrap().to_string();
     // The private room shows as private to its members.
-    b.send(&RoomRequest::Public { public: false });
+    b.send(&RoomRequest::Public { public: false, friends: false });
     assert_eq!(room_state(&mut b)["public"], false);
 
     let body =
@@ -187,7 +187,7 @@ async fn public_list_private_rooms_and_online_count() {
     assert_eq!(room_state(&mut c)["public"], false);
 
     // The host makes it public: it is listed (full, so not joinable, and after the joinable one).
-    b.send(&RoomRequest::Public { public: true });
+    b.send(&RoomRequest::Public { public: true, friends: false });
     let body = rooms_until(&stack, &sa, |b| b["rooms"].as_array().is_some_and(|r| r.len() == 2)).await;
     assert_eq!(body["rooms"][0]["code"], public.as_str());
     assert_eq!(body["rooms"][1]["code"], private.as_str());

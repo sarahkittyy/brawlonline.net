@@ -206,6 +206,10 @@ struct Room {
     /// the host's whenever the host renames (the room keeps it when the host leaves).
     name: Option<String>,
     public: bool,
+    /// With `public` off: friends only, listed to the friends of its players
+    /// (`docs/design/friends.md`). The host's PUBLIC / FRIENDS / PRIVATE button.
+    #[serde(default)]
+    friends: bool,
     teams: bool,
     /// With `teams`: every player in their team's costume (P+'s plain team battle), else P+'s
     /// rainbow team battle (any costume, a team glow). The host's FFA / TEAMS button goes FFA,
@@ -234,6 +238,9 @@ struct Room {
     /// While a set waits for a player who left the room is private (room-rules.md A): whether it
     /// was public before, to go back to when the set goes on.
     public_before_pause: Option<bool>,
+    /// With `public_before_pause`: whether it was friends only.
+    #[serde(default)]
+    friends_before_pause: Option<bool>,
     /// The ports (bits) that pick the next game's stage, as the last game's players reported it
     /// with `room-back` (none from an older Dolphin: the players' games keep their own); a player
     /// who left is taken out. `pick_owed`: the last game left someone a pick, so a game its
@@ -375,16 +382,19 @@ impl Room {
     }
 
     /// A set that waits for a player makes the room private; when it goes on (or ends) the room
-    /// is public again if it was.
+    /// is public (or friends only) again if it was.
     fn settle_privacy(&mut self) {
         let waiting = self.set.as_ref().is_some_and(|s| s.paused() && !s.away.is_empty());
         match (waiting, self.public_before_pause) {
             (true, None) => {
                 self.public_before_pause = Some(self.public);
+                self.friends_before_pause = Some(self.friends);
                 self.public = false;
+                self.friends = false;
             }
             (false, Some(was)) => {
                 self.public = was;
+                self.friends = self.friends_before_pause.take().unwrap_or(false) && !was;
                 self.public_before_pause = None;
             }
             _ => {}
@@ -634,6 +644,7 @@ impl Room {
             kind: rooms::ROOM_STATE.into(),
             code: self.code.clone(),
             public: self.public,
+            friends: self.friends && !self.public,
             teams: self.teams,
             team_colors: self.teams && self.team_colors,
             mode: self.mode(),
@@ -697,6 +708,7 @@ impl Room {
             joinable: self.free_slot().is_some(),
             ruleset: self.ruleset_view(),
             name: self.name.clone(),
+            friends: self.friends && !self.public,
         }
     }
 }
@@ -929,6 +941,22 @@ impl RoomBook {
         list.into_iter().take(limit).map(|(_, p)| p).collect()
     }
 
+    /// Friends-only rooms ([`MmStatus::friend_rooms`](common::rooms::MmStatus::friend_rooms)), in
+    /// the order of [`Self::public_rooms`]: accounts lists each to the friends of its players.
+    pub fn friend_rooms(&self, limit: usize) -> Vec<PublicRoom> {
+        let mut list: Vec<(&Room, PublicRoom)> =
+            self.rooms.values().filter(|r| !r.public && r.friends && !r.twos).map(|r| (r, r.public_entry())).collect();
+        list.sort_by(|(ra, a), (rb, b)| {
+            b.joinable
+                .cmp(&a.joinable)
+                .then((a.status != RoomStatus::Waiting).cmp(&(b.status != RoomStatus::Waiting)))
+                .then(b.players.cmp(&a.players))
+                .then(ra.created.cmp(&rb.created))
+                .then(a.code.cmp(&b.code))
+        });
+        list.into_iter().take(limit).map(|(_, p)| p).collect()
+    }
+
     /// Every room player's room ([`MmStatus::members`](common::rooms::MmStatus::members)), at most
     /// `limit` players.
     pub fn member_rooms(&self, limit: usize) -> Vec<RoomMember> {
@@ -1095,6 +1123,7 @@ impl RoomBook {
                 code: code.clone(),
                 name: who.room_name.clone(),
                 public,
+                friends: false,
                 teams: false,
                 team_colors: false,
                 open: [true, true, false, false],
@@ -1108,6 +1137,7 @@ impl RoomBook {
                 based_on: None,
                 set: None,
                 public_before_pause: None,
+                friends_before_pause: None,
                 pickers: None,
                 pick_owed: false,
                 pick_draw: 0,
@@ -1679,15 +1709,19 @@ impl RoomBook {
                     }
                 }
             }
-            RoomRequest::Public { public } => {
+            RoomRequest::Public { public, friends } => {
                 if !is_host {
                     return Err(msg::HOST_ONLY);
                 }
+                let friends = friends && !public;
                 room.public = public;
+                room.friends = friends;
                 // The host's choice while a set waits is the one the room goes back to.
                 if room.public_before_pause.is_some() {
                     room.public_before_pause = Some(public);
+                    room.friends_before_pause = Some(friends);
                     room.public = false;
+                    room.friends = false;
                 }
             }
             RoomRequest::Ready { ready, character, costume, stocks, hp } => {
@@ -2663,8 +2697,11 @@ mod tests {
         let mut t = T::new();
         let a = create(&mut t, 1);
         let b = create(&mut t, 2);
-        t.req(2, RoomRequest::Public { public: false });
-        assert_eq!(msgs(&t.req(3, RoomRequest::Public { public: false }), 3)[0]["error"], msg::NOT_IN_ROOM);
+        t.req(2, RoomRequest::Public { public: false, friends: false });
+        assert_eq!(
+            msgs(&t.req(3, RoomRequest::Public { public: false, friends: false }), 3)[0]["error"],
+            msg::NOT_IN_ROOM
+        );
         join(&mut t, 3, &a);
         let list = t.book.public_rooms(100);
         assert_eq!(list.len(), 1);
@@ -2677,10 +2714,38 @@ mod tests {
         // Private rooms are joinable by code.
         assert_eq!(last_state(&join(&mut t, 4, &b), 4)["public"], false);
         // Joinable rooms come first.
-        t.req(2, RoomRequest::Public { public: true });
+        t.req(2, RoomRequest::Public { public: true, friends: false });
         t.req(2, RoomRequest::Slot { slot: 3, open: true });
         let list = t.book.public_rooms(100);
         assert_eq!(list.iter().map(|r| r.code.clone()).collect::<Vec<_>>(), vec![b, a]);
+    }
+
+    #[test]
+    fn friends_only_rooms_are_listed_apart() {
+        let mut t = T::new();
+        let a = create(&mut t, 1);
+        let out = t.req(1, RoomRequest::Public { public: false, friends: true });
+        let s = last_state(&out, 1);
+        assert_eq!((s["public"].as_bool(), s["friends"].as_bool()), (Some(false), Some(true)));
+        assert!(t.book.public_rooms(100).is_empty(), "not in the public list");
+        let list = t.book.friend_rooms(100);
+        assert_eq!(list.len(), 1);
+        assert_eq!((list[0].code.as_str(), list[0].friends), (a.as_str(), true));
+        assert_eq!(list[0].uids.len(), 1);
+        // Joinable by code, like a private room; the joiner is in its list of players.
+        let s = last_state(&join(&mut t, 2, &a), 2);
+        assert_eq!(s["friends"], true);
+        assert_eq!(t.book.friend_rooms(100)[0].uids.len(), 2);
+        // Only the host switches it.
+        let refused = t.req(2, RoomRequest::Public { public: true, friends: false });
+        assert_eq!(msgs(&refused, 2)[0]["error"], msg::HOST_ONLY);
+        // `friends` means nothing on a public room; private takes it away.
+        t.req(1, RoomRequest::Public { public: true, friends: true });
+        assert_eq!(t.book.public_rooms(100).len(), 1);
+        assert!(!t.book.public_rooms(100)[0].friends);
+        assert!(t.book.friend_rooms(100).is_empty());
+        t.req(1, RoomRequest::Public { public: false, friends: false });
+        assert!(t.book.public_rooms(100).is_empty() && t.book.friend_rooms(100).is_empty());
     }
 
     #[test]
@@ -4217,7 +4282,7 @@ mod tests {
         for req in [
             RoomRequest::Teams { on: true, colors: false },
             RoomRequest::Slot { slot: 3, open: true },
-            RoomRequest::Public { public: true },
+            RoomRequest::Public { public: true, friends: false },
             RoomRequest::SitOut { slot: 1, sit_out: true },
             RoomRequest::Team { team: 1 },
             RoomRequest::Ruleset { code: None },

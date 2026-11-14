@@ -97,13 +97,14 @@ impl MmStatusSource {
 /// Fills in the room players' and Brawl Mods hosts' flags.
 async fn with_flags(pool: &sqlx::PgPool, mut s: MmStatus) -> sqlx::Result<MmStatus> {
     let parse = |u: &String| uuid::Uuid::parse_str(u).ok();
-    let mut uids: Vec<uuid::Uuid> = s.rooms.iter().flat_map(|r| r.uids.iter().filter_map(parse)).collect();
+    let mut uids: Vec<uuid::Uuid> =
+        s.rooms.iter().chain(&s.friend_rooms).flat_map(|r| r.uids.iter().filter_map(parse)).collect();
     uids.extend(s.mod_rooms.iter().filter_map(|r| parse(&r.host_uid)));
     uids.sort();
     uids.dedup();
     let tags = crate::profile::name_tags(pool, &uids).await?;
     let flag = |u: &String| parse(u).and_then(|u| tags.get(&u)).and_then(|t| t.country.clone());
-    for r in &mut s.rooms {
+    for r in s.rooms.iter_mut().chain(s.friend_rooms.iter_mut()) {
         r.countries = r.uids.iter().map(flag).collect();
     }
     for r in &mut s.mod_rooms {
@@ -128,10 +129,29 @@ pub async fn rooms(State(state): State<AppState>, headers: HeaderMap) -> ApiResu
         // the index of every Brawl Mods room.
         Ok(s) => {
             let your_room = your_room(&s, &user.uid.to_string());
+            // Friends-only rooms: those the caller or a friend of theirs plays in, first.
+            let mut rooms = Vec::new();
+            if !s.friend_rooms.is_empty() {
+                let friends = state.friend_cache.get(&state.pool, user.uid).await?;
+                let me = user.uid.to_string();
+                rooms.extend(
+                    s.friend_rooms
+                        .iter()
+                        .filter(|r| {
+                            r.uids
+                                .iter()
+                                .any(|u| *u == me || uuid::Uuid::parse_str(u).is_ok_and(|u| friends.contains(&u)))
+                        })
+                        .cloned(),
+                );
+            }
+            rooms.extend(s.rooms);
             Ok(Json(MmStatus {
+                rooms,
                 members: Vec::new(),
                 mod_room_index: Vec::new(),
                 mod_members: Vec::new(),
+                friend_rooms: Vec::new(),
                 your_room,
                 ..s
             }))

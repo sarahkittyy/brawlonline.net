@@ -9,6 +9,7 @@ pub mod bug_reports;
 pub mod config;
 pub mod cursor;
 pub mod error;
+pub mod friends;
 pub mod history;
 pub mod launcher;
 pub mod leaderboard;
@@ -30,14 +31,14 @@ pub mod unranked;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::{Arc, Mutex};
 
-use axum::routing::{get, post, put};
+use axum::routing::{delete, get, post, put};
 use axum::Router;
 use common::playkey::PlayKeySecret;
 use common::ratelimit::{
     RateLimiter, Window, AUTH_WINDOWS, BLOG_IP_WINDOWS, BUG_REPORT_IP_WINDOWS, DAY, HISTORY_WINDOWS,
     LEADERBOARD_IP_WINDOWS, MAIL_RECIPIENT_WINDOWS, PROFILE_EDIT_WINDOWS, PROFILE_IP_WINDOWS, ROOMS_WINDOWS,
     ROOM_NAME_WINDOWS, RULESET_EDIT_WINDOWS, RULESET_LOOKUP_IP_WINDOWS, RULESET_PUBLISH_WINDOWS,
-    SD_LISTING_FETCH_WINDOWS, SD_LISTING_UPLOAD_WINDOWS, SIGNUP_IP_WINDOWS,
+    SD_LISTING_FETCH_WINDOWS, SD_LISTING_UPLOAD_WINDOWS, SIGNUP_IP_WINDOWS, FRIEND_REQUEST_WINDOWS,
 };
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
@@ -61,6 +62,8 @@ pub struct AppState {
     pub social: Arc<social::SocialHub>,
     /// Spectators and spectator chat (`/v1/live`).
     pub live: Arc<live::LiveHub>,
+    /// Each launcher's friends, for the friends-only rooms in `GET /v1/rooms`.
+    pub friend_cache: Arc<friends::FriendCache>,
     /// The slur check of names and codes (off without `DEEPINFRA_API_KEY`).
     pub slur_filter: Arc<slur_filter::SlurFilter>,
 }
@@ -80,6 +83,7 @@ impl AppState {
             mm_status: Arc::new(rooms::MmStatusSource::new(&cfg.mm_status_url)),
             social: Arc::new(social::SocialHub::new(!cfg.disable_rate_limits)),
             live: Arc::new(live::LiveHub::new(!cfg.disable_rate_limits)),
+            friend_cache: Arc::new(friends::FriendCache::default()),
             slur_filter,
             cfg: Arc::new(cfg),
         })
@@ -126,6 +130,8 @@ pub struct Limits {
     pub sd_listing_fetch: RateLimiter<uuid::Uuid>,
     /// Blog pages per client IP (IPv6 per /64): [`BLOG_IP_WINDOWS`].
     pub blog_ip: RateLimiter<IpAddr>,
+    /// Friend requests sent per account: [`FRIEND_REQUEST_WINDOWS`].
+    pub friend_requests: RateLimiter<uuid::Uuid>,
 }
 
 impl Limits {
@@ -156,6 +162,7 @@ impl Limits {
             sd_listing_upload: RateLimiter::new(&SD_LISTING_UPLOAD_WINDOWS),
             sd_listing_fetch: RateLimiter::new(&SD_LISTING_FETCH_WINDOWS),
             blog_ip: RateLimiter::new(&BLOG_IP_WINDOWS),
+            friend_requests: RateLimiter::new(&FRIEND_REQUEST_WINDOWS),
         }
     }
 
@@ -234,6 +241,15 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/rooms", get(rooms::rooms))
         .route("/v1/mod-rooms/{code}", get(rooms::mod_room))
         .route("/v1/me/room-name", put(rooms::set_room_name))
+        .route("/v1/friends", get(friends::list))
+        .route("/v1/friends/requests", post(friends::request))
+        .route("/v1/friends/requests/{uid}", delete(friends::cancel))
+        .route("/v1/friends/requests/{uid}/accept", post(friends::accept))
+        .route("/v1/friends/requests/{uid}/decline", post(friends::decline))
+        .route("/v1/friends/{uid}", delete(friends::remove))
+        .route("/v1/me/ignores", get(friends::ignores_list))
+        .route("/v1/me/ignores/import", post(friends::import))
+        .route("/v1/me/ignores/{uid}", put(friends::ignore).delete(friends::unignore))
         .route("/v1/admin/players", get(admin::players))
         .route("/v1/admin/users/{uid}", get(admin::user).put(admin::update_user))
         .route("/v1/admin/users/{uid}/muted", put(admin::set_muted))

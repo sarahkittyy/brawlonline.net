@@ -1048,6 +1048,7 @@ impl Engine {
             live: self.live.store().entries(),
             mod_members: self.mod_rooms.member_rooms(4000),
             your_room: None,
+            friend_rooms: self.rooms.friend_rooms(200),
         }
     }
 

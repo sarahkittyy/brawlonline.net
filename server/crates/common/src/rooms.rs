@@ -165,8 +165,10 @@ pub enum RoomRequest {
     /// P+'s plain team battle, every player in their team's costume; else its rainbow team battle
     /// (any costume, a team glow on each fighter).
     Teams { on: bool, colors: bool },
-    /// `room-public {public}` (host only).
-    Public { public: bool },
+    /// `room-public {public, friends?}` (host only). `friends` (2026-11-14; missing: false) with
+    /// `public: false`: a friends-only room, listed only to the friends of its players
+    /// (`docs/design/friends.md`); a game from before it asks for public or private only.
+    Public { public: bool, friends: bool },
     /// `room-ready {ready, character?, costume?, stocks?}`: START on the CSS (lock-in) or taking it
     /// back. `stocks`: with the rules' stock control, the count the player picked on their panel
     /// (1-99; missing: none picked, the rules' stocks). With `ready: false` the character and
@@ -293,7 +295,13 @@ impl RoomRequest {
             }
             RoomRequest::Slot { slot, open } => json!({ "slot": slot, "open": open }),
             RoomRequest::Teams { on, colors } => json!({ "on": on, "colors": colors }),
-            RoomRequest::Public { public } => json!({ "public": public }),
+            RoomRequest::Public { public, friends } => {
+                let mut v = json!({ "public": public });
+                if *friends {
+                    v["friends"] = json!(true);
+                }
+                v
+            }
             RoomRequest::Ready { ready, character, costume, stocks, hp } => {
                 let mut v = json!({ "ready": ready });
                 if let Some(n) = hp {
@@ -393,7 +401,15 @@ impl RoomRequest {
                     Some(_) => flag("colors")?,
                 },
             },
-            ROOM_PUBLIC => RoomRequest::Public { public: flag("public")? },
+            ROOM_PUBLIC => {
+                let public = flag("public")?;
+                let friends = match v.get("friends") {
+                    None | Some(serde_json::Value::Null) => false,
+                    Some(_) => flag("friends")?,
+                };
+                // Public wins: a public room is listed to everyone anyway.
+                RoomRequest::Public { public, friends: friends && !public }
+            }
             ROOM_READY => RoomRequest::Ready {
                 ready: flag("ready")?,
                 character: small("character", 255)?,
@@ -641,6 +657,10 @@ pub struct RoomState {
     pub kind: String,
     pub code: String,
     pub public: bool,
+    /// With `public: false`: friends only (listed to its players' friends). Absent from servers
+    /// before 2026-11-14: false.
+    #[serde(default)]
+    pub friends: bool,
     pub teams: bool,
     /// With `teams`: every player in their team's costume (P+'s plain team battle); else P+'s
     /// rainbow team battle. Absent from servers before 2026-10-21.
@@ -884,6 +904,10 @@ pub struct PublicRoom {
     /// launcher shows "alice's room". Absent from an older mm.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    /// A friends-only room (`docs/design/friends.md`): listed only to the friends of its players
+    /// ([`MmStatus::friend_rooms`]).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub friends: bool,
 }
 
 /// What mm publishes for the launcher (`GET /status` on mm's local status listener, served to
@@ -932,6 +956,11 @@ pub struct MmStatus {
     /// [`MmStatus::members`] and [`MmStatus::mod_members`]; mm never sends it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub your_room: Option<YourRoom>,
+    /// Friends-only rooms (`docs/design/friends.md`), in [`MmStatus::rooms`]' order. Internal:
+    /// accounts adds to a launcher's `rooms` the ones a friend of the caller plays in, and never
+    /// serves this list.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub friend_rooms: Vec<PublicRoom>,
 }
 
 /// The longest room name, in characters (`users.room_name`'s check).
@@ -1103,7 +1132,8 @@ mod tests {
             RoomRequest::Slot { slot: 3, open: true },
             RoomRequest::Teams { on: true, colors: false },
             RoomRequest::Teams { on: true, colors: true },
-            RoomRequest::Public { public: false },
+            RoomRequest::Public { public: false, friends: false },
+            RoomRequest::Public { public: false, friends: true },
             RoomRequest::Ready { ready: true, character: Some(12), costume: Some(3), stocks: None, hp: None },
             RoomRequest::Ready { ready: true, character: Some(12), costume: Some(3), stocks: Some(2), hp: None },
             RoomRequest::Ready { ready: true, character: Some(12), costume: Some(3), stocks: None, hp: Some(250) },
