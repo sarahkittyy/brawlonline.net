@@ -26,6 +26,7 @@ import contextlib
 import json
 import shutil
 import socket
+import struct
 import sys
 import threading
 import time
@@ -42,7 +43,24 @@ from ppharness import flows as F  # noqa: E402
 from ppharness.client import HarnessError  # noqa: E402
 from ppharness.netsim import NetSim  # noqa: E402
 
+MODES_DEFAULT = "random,random"  # --modes: everyone plays at random
 CONFIRM_MARGIN = 16  # frames behind the slower peer's current frame that can no longer roll back
+GX_STATE_PTR = 0x805A37B0  # the game's GX state (r2 - 0x5B70): its projection is at +0x528
+
+
+def drawn_aspects(c, samples: int = 300) -> List[float]:
+    """What a machine draws (docs/game-code.md, Any screen shape): the perspective projections
+    seen in its GX state over `samples` reads, as aspects (m11 / m00: a camera's projection has
+    m11 = cot(fov / 2) and m00 = m11 / aspect). Only those drawn into the whole picture, as the
+    plugin fits only those (local_aspect.cpp): a camera drawing into a texture (shadows 512x512,
+    the 64x64 passes) keeps its own shape."""
+    gx = int.from_bytes(c.read_mem(GX_STATE_PTR, 4), "big")
+    seen: List[float] = []
+    for _ in range(samples):
+        kind, m00, _m02, m11, _m12, _m22, _m23, _x, _y, w, h = struct.unpack(">I10f", c.read_mem(gx + 0x528, 44))
+        if kind == 0 and m00 > 0 and w >= 600.0 and h >= 440.0:
+            seen.append(m11 / m00)
+    return seen
 
 
 def sound_opts(args) -> Dict[str, bool]:
@@ -516,6 +534,10 @@ def play_match_n(insts, clients, ports: List[int], sims, args, preset: str, cpu:
             for c in clients:
                 B.wait_scene(c, [B.Scene.CSS], 60 * 120)
                 B.write_rules(c, stocks=4, minutes=args.minutes, items_off=True)
+        if args.damage_ratio:
+            for c in clients:
+                B.wait_scene(c, [B.Scene.CSS], 60 * 120)
+                c.write_mem(B.SET_RULE_OBJ + B.RULE_DAMAGE_RATIO, bytes([round(args.damage_ratio * 10)]))
 
         def path(k: int) -> None:
             if k == 0:
@@ -557,10 +579,17 @@ def play_match_n(insts, clients, ports: List[int], sims, args, preset: str, cpu:
         for sim in sims:
             sim.reset_epoch()
         setup = B.read_match_setup(clients[0].read_mem)
+        for c in clients:
+            # Diagnostics: the same bytes on every machine once the match runs (as the two-instance flow).
+            for poke in args.poke_match:
+                addr, data = poke.split("=", 1)
+                c.write_mem(int(addr, 0), bytes.fromhex(data))
         F._macro = gentle_macro
         stop_at = time.monotonic() + args.timeout
         stop_flag = threading.Event()
         gone_seen: Dict[int, Dict[str, Any]] = {}
+        # --modes: one mode per player, in --ports order (run_session_n checked the count).
+        modes = args.modes.split(",") if args.modes != MODES_DEFAULT else ["random"] * n
 
         def stop() -> bool:
             return stop_flag.is_set() or time.monotonic() > stop_at
@@ -568,7 +597,7 @@ def play_match_n(insts, clients, ports: List[int], sims, args, preset: str, cpu:
         def play(k: int) -> None:
             seat = F.Seat(clients[k], ports[k], ports[k], f"P{ports[k] + 1}")
             with contextlib.suppress(HarnessError, OSError, ConnectionError):
-                F.fight([seat], args.frames, mode="random", seed=f"{run}-{ports[k]}",
+                F.fight([seat], args.frames, mode=modes[k], seed=f"{run}-{ports[k]}",
                         stage_kind=setup.stage_kind if setup else None,
                         stop=lambda: stop() or ports[k] in dropped_ports)
             if ports[k] not in dropped_ports:
@@ -642,6 +671,11 @@ def play_match_n(insts, clients, ports: List[int], sims, args, preset: str, cpu:
         gf_limit = limit + args.start_frame
         tr = [[r for r in t if r[0] <= gf_limit] for t in tr]
         rep["trace"] = [compare_traces(tr[0], t) for t in tr[1:]]
+        if args.save_traces:
+            d = Path(args.save_traces)
+            d.mkdir(parents=True, exist_ok=True)
+            (d / f"{preset}-{cpu}-r{run}-n{n}.json").write_text(
+                json.dumps({f"p{ports[k] + 1}": t for k, t in zip(live, tr)}))
         with contextlib.suppress(Exception):
             pads = [{r[0]: r[1] for r in c.call("game_pads", since=args.start_frame)["rows"]} for c in lc]
             pf = sorted(f for f in set.intersection(*(set(p) for p in pads)) if f <= gf_limit)
@@ -668,6 +702,14 @@ def play_match_n(insts, clients, ports: List[int], sims, args, preset: str, cpu:
 def run_session_n(preset: str, cpu: str, args: argparse.Namespace, run: int) -> Dict[str, Any]:
     ports = [int(p) - 1 for p in args.ports.split(",")]
     potato_ports = {int(p) - 1 for p in args.potato_ports.split(",") if p}
+    # --aspects: the shape each machine shows its picture at (in --ports order; 0 or empty: none).
+    aspects = [float(a or 0) for a in args.aspects.split(",")] if args.aspects else []
+    if aspects and len(aspects) != len(ports):
+        raise SystemExit("--aspects: one screen shape per port")
+    if aspects and not args.plugin:
+        raise SystemExit("--aspects needs --plugin: the plugin draws for the shape")
+    if args.modes != MODES_DEFAULT and len(args.modes.split(",")) != len(ports):
+        raise SystemExit("--modes with --ports: one fight mode per port")
     chars = args.chars.split(",")
     if len(chars) != len(ports) or not 2 <= len(ports) <= 4 or len(set(ports)) != len(ports):
         raise SystemExit("--ports and --chars: 2-4 distinct ports, one character each")
@@ -730,6 +772,14 @@ def run_session_n(preset: str, cpu: str, args: argparse.Namespace, run: int) -> 
                         # here, so nothing rewrites LOCAL; on an install Dolphin writes the byte from
                         # [Online] PotatoMode every frame.
                         c.write_mem(ppom.find_block(c).local + ppom.L_POTATO, b"\x01")
+                    if aspects and aspects[ports.index(own_port)]:
+                        # This machine's screen shape (docs/game-code.md, Any screen shape), as
+                        # Dolphin writes it every frame on an install (Graphics > Aspect Ratio).
+                        block = ppom.find_block(c)
+                        if block.version < 12 or block.local_size < ppom.L_ASPECT + 4:
+                            raise RuntimeError(f"--aspects: the plugin is PPOM v{block.version}, whose LOCAL "
+                                               f"({block.local_size:#x} bytes) has no aspect (v12)")
+                        c.write_mem(block.local + ppom.L_ASPECT, struct.pack(">f", aspects[ports.index(own_port)]))
                 G.par([lambda c=c, p=p: to_css(c, ports[0], p) for c, p in zip(clients, ports)])
             G.par([lambda c=c: B.wait_scene(c, [B.Scene.CSS], 60 * 120) for c in clients])
             udp = [free_udp_port() for _ in ports]
@@ -767,9 +817,37 @@ def run_session_n(preset: str, cpu: str, args: argparse.Namespace, run: int) -> 
                     rep["potato_state"] = states
                 potato_thread = threading.Thread(target=read_potato, daemon=True)
                 potato_thread.start()
+            aspect_thread = None
+            if aspects:
+                # What each machine draws as it runs the match: its LOCAL's shape, and the widest
+                # and narrowest perspective projection of the scene seen in its GX state
+                # (drawn_aspects).
+                def read_aspects() -> None:
+                    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools" / "gamecode"))
+                    import ppom
+                    states = []
+                    # Once the fighters are in (the session runs), not during the stage's load. (A
+                    # session that never runs, or ends first, has no state to read.)
+                    try:
+                        wait(lambda: all(c.call("gprb_status")["phase"] == "running" for c in clients), 240,
+                             "the session to run")
+                    except Exception:  # noqa: BLE001
+                        return
+                    time.sleep(5)
+                    for c in clients:
+                        local = struct.unpack(">f", c.read_mem(ppom.find_block(c).local + ppom.L_ASPECT, 4))[0]
+                        seen = drawn_aspects(c)
+                        states.append({"local": round(local, 4), "samples": len(seen),
+                                       "drawn_min": round(min(seen), 4) if seen else None,
+                                       "drawn_max": round(max(seen), 4) if seen else None})
+                    rep["aspect_state"] = states
+                aspect_thread = threading.Thread(target=read_aspects, daemon=True)
+                aspect_thread.start()
             play_match_n(insts, clients, ports, sims, args, preset, cpu, run, chars, args.stage, rep)
             if potato_thread:
                 potato_thread.join(timeout=10)
+            if aspect_thread:
+                aspect_thread.join(timeout=10)
             rep["netsim"] = [s.format_stats() for s in sims if hasattr(s, "format_stats")]
             for c in clients:
                 with contextlib.suppress(Exception):
@@ -823,8 +901,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ap.add_argument("--env-b", action="append", default=[], metavar="NAME=VALUE",
                     help="environment variable for the joiner only, e.g. PPR_GPRB_TEST_FRAME_COST_US=14000 "
                          "(every pass costs that much more CPU time: a PC that cannot keep full speed)")
-    ap.add_argument("--modes", default="random,random",
-                    help="fight modes of P1,P2 (flows.fight: random, chase, idle, selfdestruct, upsmash, hover, lcancel)")
+    ap.add_argument("--modes", default=MODES_DEFAULT,
+                    help="fight modes of P1,P2, or with --ports one per port in that order (flows.fight: random, "
+                         "chase, idle, selfdestruct, upsmash, hover, lcancel)")
     ap.add_argument("--damage-ratio", type=float, default=0.0,
                     help="write this damage ratio (e.g. 2.0) on both CSSs")
     ap.add_argument("--poke-match", action="append", default=[], metavar="ADDR=HEX",
@@ -858,6 +937,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ap.add_argument("--chars", default="fox,falco,mario,marth", help="with --ports: one character per port")
     ap.add_argument("--teams", default="",
                     help="with --ports: a team battle, the team (0 red, 1 blue, 2 green) of P1..P4, e.g. 0,1,0,1")
+    ap.add_argument("--aspects", default="",
+                    help="with --plugin: the shape each machine shows its picture at (width / height, one per "
+                         "port in --ports order, e.g. 2.3333,1.3333; 0: the game's own), written into LOCAL as "
+                         "Dolphin does from Graphics > Aspect Ratio (docs/game-code.md, Any screen shape); the "
+                         "JSON's aspect_state says what each machine's LOCAL and GX projection held")
     ap.add_argument("--potato-ports", default="",
                     help="with --plugin: potato mode on these players' machines (1-based ports, e.g. 1); the JSON's "
                          "potato_state says what each machine drew (docs/game-code.md, Potato mode)")
@@ -868,6 +952,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                     help="with --ports: PORT:SECONDS[:stop|kill], that player leaves the match after SECONDS "
                          "(stop = it leaves the session, kill = its Dolphin is killed)")
     args = ap.parse_args(argv)
+    if args.aspects and not args.ports:
+        ap.error("--aspects is for --ports sessions (with --plugin)")
     for preset in args.preset.split(","):
         for cpu in args.cpu.split(","):
             for run in range(args.runs):

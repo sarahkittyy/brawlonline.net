@@ -180,6 +180,8 @@ room_css.o room_rules.o room_play.o rules_button.o: CXXFLAGS += -Oz
 sss_cursors.o sss_portraits.o labels.o: CXXFLAGS += -Oz
 # Potato mode (2026-11-01): -Oz from the start, for the same heap room.
 potato.o: CXXFLAGS += -Oz
+# Any screen shape (2026-11-13): the same.
+local_aspect.o: CXXFLAGS += -Oz
 # The waiting room (2026-11-03): -O0 until a 2v2 party's pair room grew the plugin about 3.5 KB and
 # the biggest costume no longer loaded (test_online_big_costumes.py); at -Oz the plugin is back to
 # its size before (test_waiting_room.py, test_twos_pair_room.py).

@@ -18,8 +18,10 @@
 #include "Common/CommonPaths.h"
 #include "Common/FileUtil.h"
 #include "Common/Logging/Log.h"
+#include "Common/ScopeGuard.h"
 #include "Common/StringUtil.h"
 #include "Common/UPnP.h"
+#include "Core/Config/GraphicsSettings.h"
 #include "Core/Config/OnlineSettings.h"
 #include "Core/Core.h"
 #include "Core/HW/Memmap.h"
@@ -36,12 +38,15 @@
 #include "Core/Online/SpecialAssets.h"
 #include "Core/Online/User.h"
 #include "Core/PowerPC/MMU.h"
+#include "Core/Rollback/ClipRecorder.h"
 #include "Core/Rollback/GameplayRollback.h"
 #include "Core/Rollback/GameplaySession.h"
 #include "Core/Rollback/MachineSession.h"
 #include "Core/Rollback/PeerData.h"
 #include "Core/Rollback/RollbackManager.h"
 #include "VideoCommon/OnScreenDisplay.h"
+#include "VideoCommon/Present.h"
+#include "VideoCommon/VideoConfig.h"
 
 namespace Online::GameBridge
 {
@@ -74,7 +79,10 @@ constexpr u32 MAGIC = 0x50504F4D;  // "PPOM"
 // 11: potato mode (docs/game-code.md, Potato mode): LOCAL grows to 0xF4 with the launcher's potato
 // switch at +0xF0 ([Online] PotatoMode, Dolphin-written every frame). A v4-v10 plugin still works (it
 // draws everything).
-constexpr u16 VERSION = 11;
+// 12: any screen shape (docs/game-code.md, Any screen shape): LOCAL grows to 0xF8 with the shape
+// this machine shows the picture at (width / height, f32) at +0xF4, Dolphin-written every frame. A
+// v4-v11 plugin still works (it draws for 16:9, as before).
+constexpr u16 VERSION = 12;
 constexpr u16 MIN_VERSION = 4;
 constexpr u32 HEADER_SIZE = 0x24;
 
@@ -96,7 +104,8 @@ constexpr u32 MAILBOX_SIZE = MB_RESP + RESP_PAYLOAD_OFF + RESP_PAYLOAD;  // 0x41
 constexpr u32 LOCAL_SIZE_V8 = 0x80;
 constexpr u32 LOCAL_SIZE_V9 = 0xC8;
 constexpr u32 LOCAL_SIZE_V10 = 0xF0;
-constexpr u32 LOCAL_SIZE = 0xF4;
+constexpr u32 LOCAL_SIZE_V11 = 0xF4;
+constexpr u32 LOCAL_SIZE = 0xF8;
 // v9: the player's special-mode picks (ppom.h PortExtra), game-written with the lock-in.
 constexpr u32 L_OWN_EXTRA = 0x80;
 // v10: ppom.h SssCursor {state, page, pad[2], x s16, y s16}: the player's own (game) and the
@@ -109,9 +118,13 @@ constexpr u32 L_POTATO = 0xF0;
 // left to ready up for the next game (0: none running) and the ports locked in for it (bits, this
 // player's included); 0 outside one (ppom.h Local.readySeconds / readyPorts).
 constexpr u32 L_READY_SECONDS = 0xF1, L_READY_PORTS = 0xF2;
+// v12: the shape this machine shows the picture at, width / height (f32, big-endian): 0 = as the
+// game draws it (ppom.h Local.aspect).
+constexpr u32 L_ASPECT = 0xF4;
 constexpr u32 LocalSize(u16 version)
 {
-  return version >= 11 ? LOCAL_SIZE :
+  return version >= 12 ? LOCAL_SIZE :
+         version >= 11 ? LOCAL_SIZE_V11 :
          version >= 10 ? LOCAL_SIZE_V10 :
          version >= 9  ? LOCAL_SIZE_V9 :
                          LOCAL_SIZE_V8;
@@ -234,7 +247,8 @@ static_assert(L_ROOM_CREATE == L_DESYNCED + 1 && L_QUIT_LEFT == L_ROOM_CREATE + 
               L_OWN_EXTRA + Gprb::Session::PORT_EXTRA_SIZE == LOCAL_SIZE_V9 &&
               L_OWN_CURSOR == LOCAL_SIZE_V9 && L_CURSORS == L_OWN_CURSOR + CURSOR_SIZE &&
               L_CURSORS + 4 * CURSOR_SIZE == LOCAL_SIZE_V10 && L_POTATO == LOCAL_SIZE_V10 &&
-              L_POTATO + 4 == LOCAL_SIZE);
+              L_POTATO + 4 == LOCAL_SIZE_V11 && L_ASPECT == LOCAL_SIZE_V11 &&
+              L_ASPECT + 4 == LOCAL_SIZE);
 static_assert(L_ROOM < L_DIRECT_JOIN && L_DIRECT_NUMBER + 2 == L_OWN &&
               L_DIRECT_PREFIX + DIRECT_PREFIX_LEN == L_DIRECT_NUMBER);
 static_assert(L_ROOM < L_OWN && S_ROOM_MODE < SESSION_SIZE && SP_ROOM_COSTUME < SP_PORT_VALUES &&
@@ -1628,6 +1642,40 @@ void PutRoomSpecial(std::vector<u8>& session, const Rooms::Snapshot& room, const
   }
 }
 
+// v12: the shape this machine shows the picture at (Graphics > Aspect Ratio: the window's with
+// Stretch to Window, a forced or custom one, else the game's own 16:9), in every LOCAL write. The
+// plugin draws for that shape (local_aspect.cpp): Dolphin only says how it shows the picture, and
+// with the game's own 16:9 the plugin changes nothing. The match is played with the same 16:9
+// cameras on every machine whatever this says (docs/game-code.md, Any screen shape). 0, as the
+// game draws it: under a whole-machine session, as potato mode below; with stereoscopy (two
+// pictures in one); and without a presenter.
+//
+// The picture is also saved: a screenshot, a frame dump, a clip or highlight's video. Those are
+// given the shape of Graphics > Aspect Ratio too, but never the window's (Presenter::
+// ProcessFrameDumping: Stretch to Window counts as Auto there). So while a clip is rendered the
+// game is told that shape, the one its video's frames have; and while the game draws for the
+// window's shape, DrawsForWindow() says so and a screenshot or frame dump gets the window's.
+static std::atomic<bool> s_draws_for_window{false};
+static bool s_told_window = false;  // CPU thread: this frame's PutAspect
+
+void PutAspect(std::vector<u8>& local)
+{
+  if (local.size() < L_ASPECT + 4)
+    return;
+  float aspect = 0.0f;
+  bool window = false;
+  if (g_presenter && !Machine::IsArmed() &&
+      Config::Get(Config::GFX_STEREO_MODE) == StereoMode::Off)
+  {
+    window = !Gprb::Clip::IsOpen();
+    aspect = g_presenter->CalculateDrawAspectRatio(window);
+    if (!(aspect >= 0.25f && aspect <= 8.0f))
+      aspect = 0.0f;
+  }
+  s_told_window = window && aspect != 0.0f;
+  PutU32(local, L_ASPECT, std::bit_cast<u32>(aspect));
+}
+
 // v11: the launcher's potato mode ([Online] PotatoMode), in the LOCAL writes of the games this
 // PC plays (live and a watched room game). A playback (a replay, a highlight or clip render, a
 // Spectate tab game) always draws the whole stage: `playing` false writes 0. Never under a
@@ -1895,6 +1943,7 @@ void SyncPlayback(const Core::CPUThreadGuard& guard, const Located& loc,
   for (u32 i = L_LOCK; i < local.size(); ++i)
     local[i] = R8(guard, loc.local + i);
   PutPotato(local, false);
+  PutAspect(local);
   local[L_DESYNCED] = pv.desynced ? 1 : 0;
   local[L_QUIT_LEFT] = pv.quit_left ? 1 : 0;
   local[L_ROOM_JOIN] = 0;
@@ -1942,6 +1991,7 @@ bool SyncRoomWatch(const Core::CPUThreadGuard& guard, const Located& loc,
   for (u32 i = L_LOCK; i < local.size(); ++i)
     local[i] = R8(guard, loc.local + i);
   PutPotato(local, true);
+  PutAspect(local);
   local[L_DESYNCED] = pv.desynced ? 1 : 0;
   local[L_QUIT_LEFT] = pv.quit_left ? 1 : 0;
   local[L_ROOM_JOIN] = room.join_seq;
@@ -2211,6 +2261,7 @@ void SyncSession(const Core::CPUThreadGuard& guard, const Located& loc)
   for (u32 i = L_LOCK; i < local.size(); ++i)
     local[i] = R8(guard, loc.local + i);
   PutPotato(local, true);
+  PutAspect(local);
   if (local.size() >= L_READY_PORTS + 1)
   {
     local[L_READY_SECONDS] = lobby.twos ? lobby.ready_seconds : 0;
@@ -2430,8 +2481,19 @@ void SyncSession(const Core::CPUThreadGuard& guard, const Located& loc)
 }
 }  // namespace
 
+bool DrawsForWindow()
+{
+  return s_draws_for_window.load(std::memory_order_relaxed);
+}
+
 void OnFrameEnd(const Core::CPUThreadGuard& guard)
 {
+  // What this frame's LOCAL write told the game (PutAspect); none (no plugin, a pre-v12 one, a
+  // netplay session): not for the window.
+  s_told_window = false;
+  Common::ScopeGuard told([] {
+    s_draws_for_window.store(s_told_window, std::memory_order_relaxed);
+  });
   std::optional<Located> located;
   {
     std::lock_guard lk(s_mutex);
@@ -2497,6 +2559,7 @@ void OnFrameEnd(const Core::CPUThreadGuard& guard)
 
 void Reset()
 {
+  s_draws_for_window.store(false, std::memory_order_relaxed);
   // Start watching for user.json at boot, as Slippi does when its EXI device is created: the
   // main menu's first GET_ONLINE_STATUS must already see the login (it comes ~10 s later).
   Client::GetUser();

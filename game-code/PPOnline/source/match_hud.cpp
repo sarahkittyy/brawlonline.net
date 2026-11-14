@@ -27,6 +27,7 @@
 
 #include "online.h"
 #include "online_menu.h"
+#include "local_aspect.h"
 #include "ppom.h"
 #include "training_room.h"
 
@@ -273,7 +274,10 @@ namespace MatchHud {
     }
 
     // The 2D state the text is drawn in: the HUD's 640x480 space, y down, no depth test, no culling.
-    static void begin2D()
+    // On a screen of another shape (LocalAspect) that space is the 16:9 picture in the middle of
+    // the screen, where the HUD is; `wholeScreen` is for what covers the screen instead (the fade):
+    // the 640x480 space stretched over all of it, as the game draws its own fades.
+    static void begin2D(bool wholeScreen = false)
     {
         if (!s_constructed) {
             s_cwCtor(s_cw);
@@ -286,6 +290,7 @@ namespace MatchHud {
         s_gxScissor(0, 0, (u32)SCREEN_W, (u32)SCREEN_H);
         s_mtxOrtho(proj, 0, SCREEN_H, 0, SCREEN_W, -1.0f, 1.0f);
         s_gxProjection(proj, 1);
+        if (!wholeScreen) LocalAspect::fit();
         s_gxLoadPosMtx(pos, 0);
         s_gxCurrentMtx(0);
     }
@@ -309,7 +314,11 @@ namespace MatchHud {
         begin2D();
         s_aspectX = aspectX();
 
+        // The names go with the damage panels, at the screen's bottom edge; the rest is under the
+        // timer, at its top (LocalAspect: on a narrower screen those are not the picture's own).
+        LocalAspect::edge(-1);
         if (names) drawNames();
+        LocalAspect::edge(1);
         if (!s_on && pair) {
             // A 2v2 party's pair room: the waiting room's banner, with what it is and how to leave.
             drawPairBanner(pairLine);
@@ -416,7 +425,7 @@ namespace MatchHud {
     {
         const u8 alpha = TrainingRoom::fadeAlpha();
         if (!alpha) return;
-        begin2D();
+        begin2D(true);
         quadSetup();
         quad(-8.0f, -8.0f, SCREEN_W + 8.0f, SCREEN_H + 8.0f, alpha);   // black, this alpha
     }
@@ -436,11 +445,15 @@ namespace MatchHud {
     static void drawPairBanner(const u16* text)
     {
         quadSetup();
-        quad(-8.0f, BANNER_Y0, SCREEN_W + 8.0f, BANNER_Y1, BANNER_RGBA);
+        // Across the screen, a wider one too (LocalAspect): the 640 space is the 16:9 picture in
+        // the middle, the screen goes on `side` past each of its side edges, and the line comes in
+        // at the screen's right edge and leaves at its left.
+        const float side = (LocalAspect::wider() - 1.0f) * SCREEN_W * 0.5f;
+        quad(-side - 8.0f, BANNER_Y0, SCREEN_W + side + 8.0f, BANNER_Y1, BANNER_RGBA);
         setF32(0x24, BANNER_SCALE * s_aspectX);
         const float w = textWidth(text);
-        const u32 period = (u32)SCREEN_W + (u32)w + BANNER_GAP;
-        const float left = SCREEN_W - (float)((*(u32*)GAME_FRAME * BANNER_SPEED) % period);
+        const u32 period = (u32)(SCREEN_W + 2.0f * side) + (u32)w + BANNER_GAP;
+        const float left = SCREEN_W + side - (float)((*(u32*)GAME_FRAME * BANNER_SPEED) % period);
         printCentredXY(text, left + w * 0.5f, BANNER_TEXT_TOP, BANNER_SCALE, BANNER_SCALE, 0xFFFFFFFF);
     }
 
@@ -515,11 +528,15 @@ namespace MatchHud {
     {
         OnlineMenu::PingPopup p;
         if (!OnlineMenu::pingPopup(&p)) return;
+        // The dim covers the screen, whatever its shape (as the fade); the popup is in the 16:9
+        // picture with the CSS.
+        begin2D(true);
+        quadSetup();
+        quad(-8.0f, -8.0f, SCREEN_W + 8.0f, SCREEN_H + 8.0f, 0x00000090);   // the CSS dimmed
         begin2D();
         s_aspectX = aspectX();
         const float cx = (PU_X0 + PU_X1) * 0.5f, maxW = PU_X1 - PU_X0 - 24.0f;
         quadSetup();
-        quad(-8.0f, -8.0f, SCREEN_W + 8.0f, SCREEN_H + 8.0f, 0x00000090);   // the CSS dimmed
         quad(PU_X0 - 3.0f, PU_Y0 - 3.0f, PU_X1 + 3.0f, PU_Y1 + 3.0f, 0xE6E6E6FF);   // rim
         quad(PU_X0, PU_Y0, PU_X1, PU_Y1, 0x1A1A22F6);
         quad(PU_X0, PU_Y0, PU_X1, PU_Y0 + PU_BAND, 0x8C1010FF);
@@ -554,6 +571,7 @@ namespace MatchHud {
         draw();
         drawPingPopup();
         drawFade();
+        LocalAspect::frame();
     }
 
     void install(CoreApi* api)

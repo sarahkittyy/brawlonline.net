@@ -87,6 +87,11 @@ u32 SessionSize();
 
 // From the frame-end HLE hook (CPU thread), every game frame.
 void OnFrameEnd(const Core::CPUThreadGuard& guard);
+
+// Any screen shape (docs/game-code.md): true while the game draws for the window's own shape
+// (Graphics > Aspect Ratio > Stretch to Window, told to a v12 plugin every frame). A screenshot or
+// frame dump of that picture has the window's shape. Any thread.
+bool DrawsForWindow();
 // A new boot: forget the block.
 void Reset();
 

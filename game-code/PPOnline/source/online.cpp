@@ -16,6 +16,7 @@
 #include <string.h>
 
 #include "potato.h"
+#include "local_aspect.h"
 #include "online.h"
 #include "online_menu.h"
 #include "netmenu.h"
@@ -51,7 +52,6 @@ namespace Online {
         dbg.printCount++;
     }
 
-    static bool isPtr(u32 p) { return (p >= 0x80000000 && p < 0x81800000) || (p >= 0x90000000 && p < 0x94000000); }
 
     const char* currentSceneName()
     {
@@ -249,6 +249,7 @@ namespace Online {
         SssPortraits::install(api);
         AnyoneMenu::install(api);
         BootMenu::install(api);
+        LocalAspect::install(api);
     }
 }
 

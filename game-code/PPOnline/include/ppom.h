@@ -52,7 +52,9 @@ namespace PPOM {
     // CHOICE_ANYONE_PICKS.
     // 11: potato mode (docs/game-code.md, Potato mode): LOCAL grows to 0xF4 with Dolphin's potato switch
     // at +0xF0 (the launcher's setting).
-    const u16 VERSION = 11;
+    // 12: any screen shape (docs/game-code.md, Any screen shape): LOCAL grows to 0xF8 with the shape
+    // this machine shows the picture at (width / height) at +0xF4.
+    const u16 VERSION = 12;
 
     // Slippi command bytes (EXI_DeviceSlippi.h), kept for familiarity (design 5.3).
     enum Cmd {
@@ -502,7 +504,12 @@ namespace PPOM {
         u8 readySeconds;
         u8 readyPorts;
         u8 _potatoPad[1];
-    };                    // 0xF4
+        // v12: Dolphin, every frame: the shape this machine shows the picture at, width / height
+        // (2.333 a 21:9 window, 1.333 a 4:3 one; 0: as the game draws it). The game draws for
+        // that shape (local_aspect.cpp): only what this machine draws changes, the cameras the
+        // match is played with stay the 16:9 ones on every machine.
+        f32 aspect;
+    };                    // 0xF8
 
     // ---- SESSION ----
 
