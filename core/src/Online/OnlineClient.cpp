@@ -23,7 +23,7 @@
 #include "Core/Core.h"
 #include "BrawlOnline/Online/OnlineSession.h"
 #include "BrawlOnline/Online/Ranked.h"
-#include "Core/Online/Rooms.h"
+#include "BrawlOnline/Online/Rooms.h"
 #include "BrawlOnline/Online/User.h"
 
 namespace Online::Client

@@ -584,16 +584,12 @@ add_library(core
   PowerPC/SignatureDB/SignatureDB.h
   Online/GameBridge.cpp
   Online/GameBridge.h
-  Online/GameSetup.cpp
-  Online/GameSetup.h
   Online/SpecialAssets.cpp
   Online/SpecialAssets.h
   Online/NetPlaySession.cpp
   Online/NetPlaySession.h
   Online/ModsRoom.cpp
   Online/ModsRoom.h
-  Online/Rooms.cpp
-  Online/Rooms.h
   Online/RoomWatch.cpp
   Online/RoomWatch.h
   Online/SpeedCheck.cpp

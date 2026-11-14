@@ -57,7 +57,7 @@
 #include "BrawlOnline/Online/ChatText.h"
 #include "BrawlOnline/Online/GameAlive.h"
 #include "Core/Online/GameBridge.h"
-#include "Core/Online/GameSetup.h"
+#include "BrawlOnline/Online/GameSetup.h"
 #include "Core/PowerPC/MMU.h"
 #include "Core/PowerPC/PowerPC.h"
 #include "Core/Rollback/ClipRecorder.h"

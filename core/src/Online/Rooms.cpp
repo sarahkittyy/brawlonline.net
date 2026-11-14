@@ -1,7 +1,7 @@
 // Copyright 2026 Dolphin Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-#include "Core/Online/Rooms.h"
+#include "BrawlOnline/Online/Rooms.h"
 
 #include <atomic>
 #include <chrono>
@@ -26,7 +26,7 @@
 #include "Core/Core.h"
 #include "BrawlOnline/Online/Chat.h"
 #include "BrawlOnline/Online/GameAlive.h"
-#include "Core/Online/GameSetup.h"
+#include "BrawlOnline/Online/GameSetup.h"
 #include "BrawlOnline/Online/Matchmaking.h"
 #include "Core/Online/ModsRoom.h"
 #include "BrawlOnline/Online/OnlineClient.h"

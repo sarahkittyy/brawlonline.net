@@ -9,6 +9,7 @@ add_library(brawl_online_core STATIC
   include/BrawlOnline/Online/ChatCrypto.h
   include/BrawlOnline/Online/ChatText.h
   include/BrawlOnline/Online/GameAlive.h
+  include/BrawlOnline/Online/GameSetup.h
   include/BrawlOnline/Online/Ipv6.h
   include/BrawlOnline/Online/MatchRules.h
   include/BrawlOnline/Online/Matchmaking.h
@@ -17,6 +18,7 @@ add_library(brawl_online_core STATIC
   include/BrawlOnline/Online/Ranked.h
   include/BrawlOnline/Online/RecentCodes.h
   include/BrawlOnline/Online/RoomMessages.h
+  include/BrawlOnline/Online/Rooms.h
   include/BrawlOnline/Online/SetFormat.h
   include/BrawlOnline/Online/Spectate.h
   include/BrawlOnline/Online/Timeouts.h
@@ -28,6 +30,7 @@ add_library(brawl_online_core STATIC
   src/Online/ChatCrypto.cpp
   src/Online/ChatText.cpp
   src/Online/GameAlive.cpp
+  src/Online/GameSetup.cpp
   src/Online/Ipv6.cpp
   src/Online/MatchRules.cpp
   src/Online/Matchmaking.cpp
@@ -36,6 +39,7 @@ add_library(brawl_online_core STATIC
   src/Online/Ranked.cpp
   src/Online/RecentCodes.cpp
   src/Online/RoomMessages.cpp
+  src/Online/Rooms.cpp
   src/Online/SetFormat.cpp
   src/Online/Spectate.cpp
   src/Online/User.cpp

@@ -28,7 +28,7 @@
 #include "BrawlOnline/Config/OnlineSettings.h"
 #include "BrawlOnline/Online/Chat.h"
 #include "BrawlOnline/Online/ChatText.h"
-#include "Core/Online/Rooms.h"
+#include "BrawlOnline/Online/Rooms.h"
 #include "InputCommon/ControllerInterface/CoreDevice.h"
 #include "VideoCommon/Present.h"
 

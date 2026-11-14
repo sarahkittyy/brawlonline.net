@@ -1,7 +1,7 @@
 // Copyright 2026 Dolphin Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-#include "Core/Online/GameSetup.h"
+#include "BrawlOnline/Online/GameSetup.h"
 
 #include <algorithm>
 #include <chrono>

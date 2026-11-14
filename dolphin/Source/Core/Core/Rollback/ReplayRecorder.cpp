@@ -25,7 +25,7 @@
 #include "BrawlOnline/Config/OnlineSettings.h"
 #include "Core/ConfigManager.h"
 #include "Core/HW/Memmap.h"
-#include "Core/Online/GameSetup.h"
+#include "BrawlOnline/Online/GameSetup.h"
 #include "BrawlOnline/Online/Ranked.h"
 #include "BrawlOnline/Online/Spectate.h"
 #include "Core/Rollback/GameplayRollback.h"
