@@ -9755,6 +9755,7 @@ void BeginReplay(Core::System& system)
   Replay::BeginInfo info;
   info.meta = s.net_opts.replay_meta;
   info.local_port = s.local_slot;
+  info.local_pad = LocalPad();
   info.host = IsHost();
   info.match_ports = s.match_ports;
   info.session_game = NextGame();
@@ -9885,6 +9886,7 @@ void EndReplay(Core::System& system, const std::string& reason, const GameResult
 void FinishRecordingAfterStop()
 {
   std::lock_guard<std::recursive_timed_mutex> lk(s.mutex);
+  Replay::EndAfter();
   if (!Replay::Active())
     return;
   // The game never got back to its loop top, where EndRunning ends the replay: it crashed or hung
@@ -10327,6 +10329,24 @@ void OnField(Core::System& system)
     WARN_LOG_FMT(BRAWLBACK, "gprb:   thread {}", ThreadReport(guard, t->GetAddress()));
 }
 
+// After a recorded game's end, while the game still shows it (GAME!; online it then goes straight
+// back to the CSS): the recording player's buttons as the game reads them, for a Manual Clip
+// Hotkey pressed there (Replay::OnAfterEnd; Sarah's board, 2026-11-14). The window closes once the
+// game leaves the match scene.
+void KeepButtonsAfterEnd(Core::System& system, int pad)
+{
+  const Guest g(system.GetMemory());
+  if (!IsSceneMelee(g) || pad < 0 || pad >= 8)
+  {
+    Replay::EndAfter();
+    return;
+  }
+  const auto counter = g.U32(Addr::GAME_FRAME + 0x14);
+  const auto buttons = g.U32(Addr::PAD_STATUS + static_cast<u32>(pad) * Addr::PAD_STRIDE);
+  if (counter && buttons)
+    Replay::OnAfterEnd(*counter, static_cast<u16>(*buttons & 0xFFFF));
+}
+
 bool OnLoopTop(const Core::CPUThreadGuard& guard)
 {
   s.cpu_where = "looptop";
@@ -10335,6 +10355,8 @@ bool OnLoopTop(const Core::CPUThreadGuard& guard)
   auto& ppc = system.GetPPCState();
   NoteLoopTop(system);
   ResimHide::Restore(system);
+  if (const int pad = Replay::AfterEndPad(); pad >= 0)
+    KeepButtonsAfterEnd(system, pad);
 
   // Sounds of mispredicted runs are stopped here, between passes (guest calls that return here).
   if (s.gcall_active || (s.phase == Phase::Running && !s.snd_to_stop.empty()))

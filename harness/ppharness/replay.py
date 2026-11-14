@@ -43,6 +43,9 @@ class Replay:
     trailer: bool = False
     truncated: str = ""
     chunk_types: list[str] = field(default_factory=list)
+    # AFTR: the recording player's buttons after the last frame while the game showed GAME!
+    # (ReplayRecorder.h AfterEnd), {"port", "pad", "frames", "buttons": [[frame, buttons], ...]}.
+    after: dict[str, Any] | None = None
 
     @property
     def last_frame(self) -> int:
@@ -155,6 +158,8 @@ def read(path: str | Path) -> Replay:
             for parts, d in zip(fighter_parts, data_ports):
                 parts.append(d)
             fighter_frames += count
+        elif name == "AFTR":
+            rep.after = json.loads(raw)
         elif name == "EVNT":
             rep.events += json.loads(raw).get("events", [])
         elif name == "ENDG":

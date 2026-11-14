@@ -324,6 +324,9 @@ bool Writer::Open(const std::string& path, const std::array<u8, 16>& uid, std::s
     return false;
   }
   m_offset = 0;
+  m_path = path;
+  m_endg_offset = 0;
+  m_trailer.clear();
   std::vector<u8> header(MAGIC.begin(), MAGIC.end());
   PutU16(header, FORMAT_MAJOR);
   PutU16(header, FORMAT_MINOR);
@@ -388,7 +391,38 @@ bool Writer::Finish(std::span<const u8> endg, u32 last_frame)
   PutU32(trailer, Crc(trailer));
   const bool ok = WriteAll(trailer.data(), trailer.size()) && m_file.Flush();
   Close();
+  if (ok)
+  {
+    m_endg_offset = endg_offset;
+    m_trailer = std::move(trailer);
+  }
   return ok;
+}
+
+bool Writer::InsertBeforeEnd(std::span<const u8> chunk, std::span<const u8> endg, u32 last_frame)
+{
+  if (m_file.IsOpen() || m_endg_offset == 0 || m_trailer.size() != TRAILER_SIZE)
+    return false;
+  // Shared as the readers open it: the launcher may be reading the file.
+  if (!m_file.Open(m_path, "r+b", ::File::SharedAccess::ReadWrite))
+    return false;
+  std::array<u8, TRAILER_SIZE> tail{};
+  if (m_file.GetSize() != m_offset || !m_file.Seek(-static_cast<s64>(TRAILER_SIZE), ::File::SeekOrigin::End) ||
+      !m_file.ReadBytes(tail.data(), tail.size()) ||
+      !std::equal(tail.begin(), tail.end(), m_trailer.begin()) ||
+      !m_file.Seek(static_cast<s64>(m_endg_offset), ::File::SeekOrigin::Begin))
+  {
+    Close();
+    return false;
+  }
+  m_offset = m_endg_offset;
+  m_endg_offset = 0;
+  if (!AppendChunk(chunk))
+  {
+    Close();
+    return false;
+  }
+  return Finish(endg, last_frame);
 }
 
 void Writer::Close()
