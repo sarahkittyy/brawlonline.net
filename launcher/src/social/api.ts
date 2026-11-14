@@ -4,10 +4,13 @@ import {
   ipc_socialConnect,
   ipc_socialDisconnect,
   ipc_socialDismissInvite,
+  ipc_socialDismissRequestPopup,
   ipc_socialEvent,
+  ipc_socialFriendAction,
   ipc_socialGetState,
   ipc_socialInvite,
   ipc_socialMarkRead,
+  ipc_socialSendFriendRequest,
   ipc_socialSendMessage,
   ipc_socialSetIgnored,
   ipc_socialStateChangedEvent,
@@ -42,6 +45,29 @@ const socialApi: SocialApi = {
   },
   async setIgnored(uid, ignored) {
     await ipc_socialSetIgnored.renderer!.trigger({ uid, ignored });
+  },
+  async sendFriendRequest(to) {
+    const { result } = await ipc_socialSendFriendRequest.renderer!.trigger({ to });
+    return result.result;
+  },
+  async acceptFriend(uid) {
+    const { result } = await ipc_socialFriendAction.renderer!.trigger({ action: "accept", uid });
+    return result.result;
+  },
+  async declineFriend(uid) {
+    const { result } = await ipc_socialFriendAction.renderer!.trigger({ action: "decline", uid });
+    return result.result;
+  },
+  async cancelFriendRequest(uid) {
+    const { result } = await ipc_socialFriendAction.renderer!.trigger({ action: "cancel", uid });
+    return result.result;
+  },
+  async removeFriend(uid) {
+    const { result } = await ipc_socialFriendAction.renderer!.trigger({ action: "remove", uid });
+    return result.result;
+  },
+  async dismissRequestPopup(uid) {
+    await ipc_socialDismissRequestPopup.renderer!.trigger({ uid });
   },
   async markRead(uid) {
     await ipc_socialMarkRead.renderer!.trigger({ uid });

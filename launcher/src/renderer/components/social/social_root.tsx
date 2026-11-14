@@ -2,6 +2,7 @@ import React, { useEffect } from "react";
 
 import { useAccount } from "@/lib/hooks/use_account";
 import { useToasts } from "@/lib/hooks/use_toasts";
+import { setRoomJoiner } from "@/lib/social/join_room";
 import { useHandOff } from "@/lib/social/use_hand_off";
 import { arrivedRoom, PENDING_ROOM_MS, useSocial } from "@/lib/social/use_social";
 import { useSocialActions } from "@/lib/social/use_social_actions";
@@ -17,11 +18,17 @@ import { SocialMessages as Messages } from "./social.messages";
  */
 export const SocialRoot = React.memo(function SocialRoot() {
   const loggedIn = useAccount((s) => s.user != null && s.userData?.playKey != null);
-  const { showInfo, showWarning } = useToasts();
+  const { showInfo, showSuccess, showWarning } = useToasts();
   const handOff = useHandOff();
   const { invite } = useSocialActions();
   const pendingRoom = useSocial((s) => s.pendingRoom);
   const newRoom = useSocial((s) => arrivedRoom(s.pendingRoom, s.state.room));
+
+  // A friend's JOIN and the menus' "Join their room" go through the hand-off here.
+  useEffect(() => {
+    setRoomJoiner(handOff);
+    return () => setRoomJoiner(undefined);
+  }, [handOff]);
 
   // The room the player asked for is open: the invites that waited for it go out.
   useEffect(() => {
@@ -60,13 +67,16 @@ export const SocialRoot = React.memo(function SocialRoot() {
           showInfo(Messages.acceptedDirect(name));
           void handOff(event.player.connectCode);
         }
+      } else if (event.type === "friend-accepted") {
+        // A toast, so it goes away by itself (the request's own pop-up doesn't).
+        showSuccess(Messages.acceptedYourRequest(event.player.displayName));
       } else if (event.type === "replaced") {
         showWarning(Messages.replaced());
       } else if (event.type === "banned") {
         showWarning(Messages.banned());
       }
     });
-  }, [handOff, showInfo, showWarning]);
+  }, [handOff, showInfo, showSuccess, showWarning]);
 
   if (!loggedIn) {
     return null;

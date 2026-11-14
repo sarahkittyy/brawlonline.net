@@ -25,6 +25,8 @@ const state: SocialState = {
   room: null,
   ignored: [],
   invites: [],
+  friends: { loaded: true, friends: [], incoming: [], outgoing: [] },
+  requestPopups: [],
   conversations: Object.fromEntries(
     players.map((p, i) => [
       p.uid,

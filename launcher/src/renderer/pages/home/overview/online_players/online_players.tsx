@@ -1,44 +1,52 @@
 import { countryName } from "@common/profile";
 import CloseRoundedIcon from "@mui/icons-material/CloseRounded";
 import SearchRoundedIcon from "@mui/icons-material/SearchRounded";
+import Button from "@mui/material/Button";
 import IconButton from "@mui/material/IconButton";
+import Tooltip from "@mui/material/Tooltip";
 import type { SocialPlayer } from "@social/types";
 import { clsx } from "clsx";
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { Flag } from "@/components/flag/flag";
-import { CharacterIcon, useHasStockIcons, useStockIcon } from "@/components/profile/character_icon";
+import { useHasStockIcons } from "@/components/profile/character_icon";
 import { AdminMessages } from "@/components/social/admin.messages";
+import { AddFriendIcon, FriendsIcon } from "@/components/social/friend_icons";
 import { InviteButton, PlayerName } from "@/components/social/invite_button";
 import type { PlayerMenuTarget } from "@/components/social/player_menu";
 import { PlayerMenu } from "@/components/social/player_menu";
 import { SocialMessages as Messages } from "@/components/social/social.messages";
 import { useAccount, useIsAdmin } from "@/lib/hooks/use_account";
+import { useLocalStorage } from "@/lib/hooks/use_local_storage";
 import { useAdminRefresh } from "@/lib/social/admin_refresh";
+import { useFriendsLiveGames } from "@/lib/social/friend_activity";
+import { useFriendUids } from "@/lib/social/use_friends";
+import { useRoomList } from "@/lib/social/use_room_list";
 import { useSocial } from "@/lib/social/use_social";
 import { useServices } from "@/services";
 import type { AdminPlayer } from "@/services/backend/types";
 
 import { ContentBlock } from "../content_block/content_block";
+import { FriendsList } from "./friends_list";
+import { MainSlot } from "./main_slot";
 import styles from "./online_players.module.css";
 
-/**
- * A player's primary main before their name (docs/design/profiles.md §8): its stock icon, or a small
- * dot in the theme accent's hue for a player without one shown (no main, "Show next to name" off, or a
- * character this disc has no stock icon for), so names line up without a hole or a stand-in character.
- */
-const MainSlot = ({ main }: { main?: string }) => {
-  const url = useStockIcon(main ?? "");
-  return (
-    <span className={styles.main} data-testid="online-main">
-      {main != null && (main === "random" || url != null) ? (
-        <CharacterIcon character={main} size={20} />
-      ) : (
-        <span className={styles.noMain} />
-      )}
+/** The tab shown, remembered on this computer. */
+const TAB_KEY = "ONLINE_PANEL_TAB";
+type PanelTab = "online" | "friends";
+
+/** A name and code, with a friend's glyph after them when there is no main column (no disc). */
+const NameCell = ({ player, friend, mark }: { player: SocialPlayer; friend: boolean; mark: boolean }) =>
+  friend && mark ? (
+    <span className={styles.nameWithMark}>
+      <PlayerName player={player} />
+      <span className={styles.friendAfterName} title={Messages.friend()} data-testid="online-friend">
+        <FriendsIcon style={{ fontSize: 13 }} />
+      </span>
     </span>
+  ) : (
+    <PlayerName player={player} />
   );
-};
 
 /**
  * Whether every flagged row fits in the list with its flag: each row is laid out at its natural width (name and
@@ -113,15 +121,23 @@ function useOfflinePlayers(enabled: boolean, needle: string, online: SocialPlaye
 }
 
 /**
- * Everyone online in the launcher (docs/social-protocol.md), under the rating: a name opens a chat
- * tab, the envelope invites, a right click opens the player's menu. The magnifier next to the
- * title opens a search box in place of the count that filters the list by name or connect code
- * as you type. With a disc set up, each name has the player's main before it (MainSlot); without
- * one there are no stock icons and the list has no main column. When any flagged player's name and code no
- * longer fit beside the flag, every flag hides (all at once, so a missing flag never reads as "has none"), the
- * envelope stays at the right, and names that still don't fit end in "…"; the list never scrolls sideways.
- * On an admin account, offline players follow the online ones (dimmed, no envelope; banned ones struck through),
- * and the search finds them too.
+ * The panel under the rating (docs/social-protocol.md, docs/design/friends.md): two tabs, Online
+ * and Friends, each with its players online after a green dot; the Friends tab's requests in amber.
+ *
+ * Online: everyone online in the launcher, the player's friends first (each with the friends glyph
+ * on their main's icon, in the dot's place, or after the code without a disc). A name opens a chat
+ * tab, the envelope invites, a right click opens the player's menu. With a disc set up, each name
+ * has the player's main before it (MainSlot); without one there are no stock icons and the list has
+ * no main column. When any flagged player's name and code no longer fit beside the flag, every
+ * flag hides (all at once, so a missing flag never reads as "has none"), the envelope stays at the
+ * right, and names that still don't fit end in "…"; the list never scrolls sideways. On an admin
+ * account, offline players follow the online ones (dimmed, no envelope; banned ones struck
+ * through), and the search finds them too.
+ *
+ * Friends: FriendsList. Its person+ button opens a box for a friend's code under the header.
+ *
+ * The magnifier opens a search box under the header that filters the tab's list by name or code
+ * as you type (Esc or the X closes it).
  */
 export const OnlinePlayers = React.memo(function OnlinePlayers() {
   const user = useAccount((s) => s.user);
@@ -130,21 +146,34 @@ export const OnlinePlayers = React.memo(function OnlinePlayers() {
   const message = useSocial((s) => s.state.message);
   const online = useSocial((s) => s.state.online);
   const ignored = useSocial((s) => s.state.ignored);
+  const incoming = useSocial((s) => s.state.friends.incoming.filter((p) => !s.state.ignored.includes(p.uid)).length);
   const openTab = useSocial((s) => s.openTab);
+  const friendUids = useFriendUids();
   const hasStockIcons = useHasStockIcons();
+  const [tab, setTab] = useLocalStorage<PanelTab>(TAB_KEY, "online");
   const [menu, setMenu] = useState<PlayerMenuTarget | null>(null);
   const [searching, setSearching] = useState(false);
+  const [adding, setAdding] = useState(false);
   const [query, setQuery] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLUListElement>(null);
   const [flagsFit, setFlagsFit] = useState(true);
+  const { query: rooms } = useRoomList();
 
+  const ready = user != null && hasPlayKey && status === "online";
+  const friendsTab = tab === "friends";
+  const live = useFriendsLiveGames(ready && friendsTab);
   const needle = query.trim().toLowerCase();
-  const shown = useMemo(() => (needle === "" ? online : online.filter((p) => matches(p, needle))), [online, needle]);
-  const offline = useOfflinePlayers(user != null && hasPlayKey && status === "online", needle, online, user?.uid);
+  const shown = useMemo(() => {
+    const list = needle === "" ? online : online.filter((p) => matches(p, needle));
+    // Friends first, each part in the list's own (random) order.
+    return [...list.filter((p) => friendUids.has(p.uid)), ...list.filter((p) => !friendUids.has(p.uid))];
+  }, [online, needle, friendUids]);
+  const offline = useOfflinePlayers(ready && !friendsTab, needle, online, user?.uid);
+  const friendsOnline = online.filter((p) => friendUids.has(p.uid)).length;
 
   // Re-checked when the list's width changes (the window, the column) and when the rows change.
-  const listShown = user != null && hasPlayKey && status === "online" && shown.length + offline.length > 0;
+  const listShown = ready && !friendsTab && shown.length + offline.length > 0;
   useLayoutEffect(() => {
     const list = listRef.current;
     if (!list) {
@@ -160,47 +189,114 @@ export const OnlinePlayers = React.memo(function OnlinePlayers() {
     return () => observer.disconnect();
   }, [listShown, shown, offline]);
 
-  const canSearch = user != null && hasPlayKey && status === "online";
-  const count =
-    canSearch && !searching ? <span className={styles.count}>{Messages.playersOnline(online.length)}</span> : undefined;
-
   const closeSearch = () => {
     setSearching(false);
     setQuery("");
     inputRef.current?.blur();
   };
 
-  const search = canSearch ? (
-    <div className={clsx(styles.search, searching && styles.searchOpen)}>
-      <IconButton
-        size="small"
-        aria-label={searching ? Messages.closeSearch() : Messages.searchOnline()}
-        title={searching ? Messages.closeSearch() : Messages.searchOnline()}
-        className={styles.searchButton}
-        data-testid="online-search-toggle"
-        // Keeps the box focused, so its blur (closing an empty search) doesn't race this click.
-        onMouseDown={(e) => e.preventDefault()}
-        onClick={() => {
-          if (searching) {
-            closeSearch();
-          } else {
-            setSearching(true);
-            inputRef.current?.focus();
-          }
-        }}
-      >
-        {searching ? <CloseRoundedIcon fontSize="small" /> : <SearchRoundedIcon fontSize="small" />}
-      </IconButton>
+  const switchTab = (next: PanelTab) => {
+    setTab(next);
+    if (next === "online") {
+      setAdding(false);
+    }
+  };
+
+  const heading = (
+    <>
+      <div className={styles.tabs} role="tablist">
+        {(["online", "friends"] as const).map((t) => (
+          <button
+            key={t}
+            type="button"
+            role="tab"
+            className={styles.tab}
+            aria-selected={tab === t}
+            data-active={tab === t ? "true" : undefined}
+            data-testid={`online-tab-${t}`}
+            onClick={() => switchTab(t)}
+          >
+            <span className={styles.tabLabel}>{t === "online" ? Messages.online() : Messages.friends()}</span>
+            {ready && (
+              <span
+                className={styles.tabCount}
+                title={Messages.playersOnline(t === "online" ? online.length : friendsOnline)}
+              >
+                {t === "online" ? online.length : friendsOnline}
+              </span>
+            )}
+            {t === "friends" && ready && incoming > 0 && (
+              <span className={styles.badge} data-testid="friends-requests-badge">
+                {incoming}
+              </span>
+            )}
+          </button>
+        ))}
+      </div>
+      {ready && (
+        <div className={styles.headIcons}>
+          <Tooltip
+            title={searching ? Messages.closeSearch() : friendsTab ? Messages.searchFriends() : Messages.searchOnline()}
+            placement="top"
+            disableInteractive={true}
+          >
+            <IconButton
+              size="small"
+              aria-label={searching ? Messages.closeSearch() : Messages.searchOnline()}
+              className={clsx(styles.iconButton, searching && styles.iconButtonOn)}
+              data-testid="online-search-toggle"
+              // Keeps the box focused, so its blur (closing an empty search) doesn't race this click.
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => {
+                if (searching) {
+                  closeSearch();
+                } else {
+                  setAdding(false);
+                  setSearching(true);
+                  requestAnimationFrame(() => inputRef.current?.focus());
+                }
+              }}
+            >
+              {searching ? <CloseRoundedIcon fontSize="small" /> : <SearchRoundedIcon fontSize="small" />}
+            </IconButton>
+          </Tooltip>
+          {friendsTab && (
+            <Tooltip
+              title={adding ? Messages.closeAddFriend() : Messages.addFriendByCode()}
+              placement="top"
+              disableInteractive={true}
+            >
+              <IconButton
+                size="small"
+                aria-label={Messages.addFriendByCode()}
+                className={clsx(styles.iconButton, adding && styles.iconButtonOn)}
+                data-testid="friends-add-toggle"
+                onClick={() => {
+                  if (!adding) {
+                    closeSearch();
+                  }
+                  setAdding(!adding);
+                }}
+              >
+                <AddFriendIcon fontSize="small" />
+              </IconButton>
+            </Tooltip>
+          )}
+        </div>
+      )}
+    </>
+  );
+
+  const toolbar = !ready ? undefined : searching ? (
+    <div className={styles.boxLine} style={{ width: "100%" }}>
       <input
         ref={inputRef}
-        className={styles.searchInput}
+        className={styles.box}
         type="text"
         value={query}
-        placeholder={Messages.searchOnline()}
-        aria-label={Messages.searchOnline()}
+        placeholder={friendsTab ? Messages.searchFriends() : Messages.searchOnline()}
+        aria-label={friendsTab ? Messages.searchFriends() : Messages.searchOnline()}
         spellCheck={false}
-        tabIndex={searching ? 0 : -1}
-        aria-hidden={!searching}
         data-testid="online-search"
         onChange={(e) => setQuery(e.target.value)}
         onKeyDown={(e) => {
@@ -216,11 +312,13 @@ export const OnlinePlayers = React.memo(function OnlinePlayers() {
         }}
       />
     </div>
+  ) : friendsTab && adding ? (
+    <AddFriendBox onClose={() => setAdding(false)} />
   ) : undefined;
 
   return (
     <div className={styles.block}>
-      <ContentBlock fill={true} title={Messages.online()} titleAction={search} endIcon={count} content={renderBody()} />
+      <ContentBlock fill={true} heading={heading} toolbar={toolbar} content={renderBody()} />
       <PlayerMenu target={menu} onClose={() => setMenu(null)} />
     </div>
   );
@@ -235,6 +333,18 @@ export const OnlinePlayers = React.memo(function OnlinePlayers() {
     if (status !== "online") {
       return <p className={styles.notice}>{status === "off" && message ? message : Messages.connecting()}</p>;
     }
+    if (friendsTab) {
+      return (
+        <FriendsList
+          needle={needle}
+          rawQuery={query}
+          hasStockIcons={hasStockIcons}
+          rooms={rooms.data}
+          live={live.data?.games}
+          onMenu={setMenu}
+        />
+      );
+    }
     if (online.length === 0 && offline.length === 0) {
       return <p className={styles.notice}>{Messages.nobodyOnline()}</p>;
     }
@@ -248,36 +358,40 @@ export const OnlinePlayers = React.memo(function OnlinePlayers() {
         data-testid="online-players"
         data-flags={flagsFit ? "shown" : "hidden"}
       >
-        {shown.map((player) => (
-          <li key={player.uid}>
-            <div
-              role="button"
-              tabIndex={0}
-              className={clsx(styles.row, ignored.includes(player.uid) && styles.ignored)}
-              data-flagged={player.country ? "" : undefined}
-              onClick={() => openTab(player.uid, true)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" || e.key === " ") {
+        {shown.map((player) => {
+          const friend = friendUids.has(player.uid);
+          return (
+            <li key={player.uid}>
+              <div
+                role="button"
+                tabIndex={0}
+                className={clsx(styles.row, ignored.includes(player.uid) && styles.ignored)}
+                data-flagged={player.country ? "" : undefined}
+                data-friend={friend ? "" : undefined}
+                onClick={() => openTab(player.uid, true)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    openTab(player.uid, true);
+                  }
+                }}
+                onContextMenu={(e) => {
                   e.preventDefault();
-                  openTab(player.uid, true);
-                }
-              }}
-              onContextMenu={(e) => {
-                e.preventDefault();
-                setMenu({ player, x: e.clientX, y: e.clientY });
-              }}
-            >
-              {hasStockIcons && <MainSlot main={player.main} />}
-              <PlayerName player={player} />
-              {player.country && (
-                <span className={styles.flag}>
-                  <Flag code={player.country} height={12} title={countryName(player.country)} />
-                </span>
-              )}
-              <InviteButton player={player} className={player.country ? styles.afterFlag : undefined} />
-            </div>
-          </li>
-        ))}
+                  setMenu({ player, x: e.clientX, y: e.clientY });
+                }}
+              >
+                {hasStockIcons && <MainSlot main={player.main} friend={friend} />}
+                <NameCell player={player} friend={friend} mark={!hasStockIcons} />
+                {player.country && (
+                  <span className={styles.flag}>
+                    <Flag code={player.country} height={12} title={countryName(player.country)} />
+                  </span>
+                )}
+                <InviteButton player={player} className={player.country ? styles.afterFlag : undefined} />
+              </div>
+            </li>
+          );
+        })}
         {offline.length > 0 && (
           <li className={styles.offlineHeader} data-testid="online-offline-header">
             {AdminMessages.offline()}
@@ -317,3 +431,90 @@ export const OnlinePlayers = React.memo(function OnlinePlayers() {
     );
   }
 });
+
+/**
+ * The Friends tab's box for a friend's code (or profile link), under the header: Send asks them;
+ * what happened shows under it. The person+ button or Esc closes it.
+ */
+const AddFriendBox = ({ onClose }: { onClose: () => void }) => {
+  const [code, setCode] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  useEffect(() => inputRef.current?.focus(), []);
+
+  const send = async () => {
+    const typed = code.trim();
+    if (!typed || busy) {
+      return;
+    }
+    setBusy(true);
+    try {
+      const r = await window.electron.social.sendFriendRequest(typed);
+      if (!r.ok) {
+        setResult({ ok: false, text: r.message });
+        return;
+      }
+      setCode("");
+      setResult({
+        ok: true,
+        text:
+          r.status === "friends"
+            ? Messages.friendsWith(r.player.displayName)
+            : Messages.requestSentTo(r.player.displayName, r.player.connectCode),
+      });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className={styles.boxRow} data-testid="friends-add-box">
+      <div className={styles.boxLine}>
+        <input
+          ref={inputRef}
+          className={styles.box}
+          type="text"
+          value={code}
+          placeholder={Messages.codePlaceholder()}
+          aria-label={Messages.addFriendByCode()}
+          spellCheck={false}
+          maxLength={200}
+          data-testid="friends-add-code"
+          onChange={(e) => {
+            setCode(e.target.value);
+            setResult(null);
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              void send();
+            } else if (e.key === "Escape") {
+              e.preventDefault();
+              onClose();
+            }
+          }}
+        />
+        <Button
+          variant="contained"
+          size="small"
+          disabled={busy || code.trim() === ""}
+          data-testid="friends-add-send"
+          onClick={() => void send()}
+        >
+          {Messages.send()}
+        </Button>
+        <IconButton size="small" aria-label={Messages.closeAddFriend()} className={styles.iconButton} onClick={onClose}>
+          <CloseRoundedIcon fontSize="small" />
+        </IconButton>
+      </div>
+      {result ? (
+        <span className={result.ok ? styles.boxOk : styles.boxError} data-testid="friends-add-result">
+          {result.text}
+        </span>
+      ) : (
+        <span className={styles.boxHint}>{Messages.codeHint()}</span>
+      )}
+    </div>
+  );
+};

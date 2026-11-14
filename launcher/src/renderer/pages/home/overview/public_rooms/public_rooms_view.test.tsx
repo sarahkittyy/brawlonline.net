@@ -75,7 +75,8 @@ describe("PublicRoomsView", () => {
   it("shows a room's name, or its host's room in grey, and crowns the host", () => {
     const named = [{ ...rooms[1], name: "chill ffa", names: ["cy", "bob", "dee"] }, rooms[0]];
     const { container } = view({ kind: "ready", online: 1, rooms: named });
-    const title = (code: string) => container.querySelector(`[data-room="${code}"] > div > div`)!;
+    // The name's line: the friends icon of a friends-only room, then the name.
+    const title = (code: string) => container.querySelector(`[data-room="${code}"] > div > div > div:last-child`)!;
     expect(title("PLNX").textContent).toBe("chill ffa");
     expect(title("KFQB").textContent).toBe("ann's room");
     expect(title("KFQB").className).toMatch(/unnamed/);

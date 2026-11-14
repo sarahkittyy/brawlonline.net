@@ -58,6 +58,24 @@ export type Invite = {
   receivedAt: number;
 };
 
+/** A friend, or a player in a friend request (docs/design/friends.md). */
+export type Friend = SocialPlayer & {
+  /** ISO 8601: when they became friends, or when the request was sent. */
+  since: string;
+};
+
+/** `GET /v1/friends`, as the main process last read it. */
+export type FriendsState = {
+  /** Read at least once since connecting. */
+  loaded: boolean;
+  /** By name, online or not. */
+  friends: Friend[];
+  /** Requests to the player, newest first. */
+  incoming: Friend[];
+  /** The player's own requests waiting for an answer, newest first. */
+  outgoing: Friend[];
+};
+
 export type SocialStatus =
   /** Not logged in, or online play not set up. */
   | "off"
@@ -79,6 +97,12 @@ export type SocialState = {
   /** By the other player's uid. */
   conversations: Record<string, Conversation>;
   invites: Invite[];
+  friends: FriendsState;
+  /**
+   * Friend requests that arrived while the launcher was open, shown as pop-ups until answered or
+   * closed (they don't time out; a closed one stays in Friends > Requests).
+   */
+  requestPopups: Friend[];
 };
 
 /** Something the renderer may want to make a sound or a toast for. */
@@ -90,9 +114,21 @@ export type SocialEvent =
   /** The account changed on the server (an admin rename): read it again. */
   | { type: "account" }
   /** The account was banned: the stream is over, and the session too. */
-  | { type: "banned" };
+  | { type: "banned" }
+  /** Someone asked the player to be friends (also in `requestPopups`). */
+  | { type: "friend-request"; player: Friend }
+  /** Someone accepted the player's friend request. */
+  | { type: "friend-accepted"; player: Friend };
 
 export type SendResult = { ok: true } | { ok: false; message: string };
+
+/**
+ * A friend request sent: `sent` waits for them; `friends`: they had asked too, so they are friends
+ * now (or already were).
+ */
+export type FriendRequestResult =
+  | { ok: true; status: "sent" | "friends"; player: Friend }
+  | { ok: false; message: string };
 
 export type InviteResult = { ok: true; kind: "room" | "direct" } | { ok: false; message: string };
 
@@ -108,6 +144,16 @@ export interface SocialApi {
   /** Drops an invite without telling the inviter (the notification's X). */
   dismissInvite(id: string): Promise<void>;
   setIgnored(uid: string, ignored: boolean): Promise<void>;
+  /** `to`: a connect code, a profile address or link, or a uid. */
+  sendFriendRequest(to: string): Promise<FriendRequestResult>;
+  acceptFriend(uid: string): Promise<SendResult>;
+  /** Hides their request (they aren't told). */
+  declineFriend(uid: string): Promise<SendResult>;
+  /** Takes back the player's own request. */
+  cancelFriendRequest(uid: string): Promise<SendResult>;
+  removeFriend(uid: string): Promise<SendResult>;
+  /** Closes a request's pop-up (the request stays in Friends > Requests). */
+  dismissRequestPopup(uid: string): Promise<void>;
   markRead(uid: string): Promise<void>;
   onStateChange(handle: (state: SocialState) => void): () => void;
   onEvent(handle: (event: SocialEvent) => void): () => void;

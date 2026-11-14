@@ -9,6 +9,7 @@ export const ContentBlock = ({
   fill,
   endIcon,
   titleAction,
+  heading,
   toolbar,
   overflowY = "auto",
 }: {
@@ -17,6 +18,8 @@ export const ContentBlock = ({
   title?: React.ReactNode;
   /** Shown right after the title (a button). */
   titleAction?: React.ReactNode;
+  /** In place of the title and its action: the header's own content (the Online / Friends tabs). */
+  heading?: React.ReactNode;
   /** A row under the header that doesn't scroll with the content (buttons, boxes). */
   toolbar?: React.ReactNode;
   content: React.ReactNode;
@@ -26,12 +29,17 @@ export const ContentBlock = ({
 }) => {
   return (
     <div className={clsx(styles.outer, { [styles.fill]: fill })}>
-      {title && (
-        <div className={clsx(styles.header, onClick && styles.active)} onClick={onClick}>
-          <div className={styles.titleRow}>
-            <h3 className={clsx(styles.title, typeof title !== "string" && styles.shrinks)}>{title}</h3>
-            {titleAction}
-          </div>
+      {(title || heading) && (
+        <div
+          className={clsx(styles.header, onClick && styles.active, heading != null && styles.tabbed)}
+          onClick={onClick}
+        >
+          {heading ?? (
+            <div className={styles.titleRow}>
+              <h3 className={clsx(styles.title, typeof title !== "string" && styles.shrinks)}>{title}</h3>
+              {titleAction}
+            </div>
+          )}
           {endIcon}
         </div>
       )}

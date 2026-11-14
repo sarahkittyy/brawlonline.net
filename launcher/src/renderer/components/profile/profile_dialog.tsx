@@ -12,6 +12,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { clsx } from "clsx";
 import React, { useMemo, useState } from "react";
 
+import { FriendPill } from "@/components/social/friend_pill";
 import { useAccount } from "@/lib/hooks/use_account";
 import type { AccountDialog } from "@/lib/hooks/use_account_dialogs";
 import { useAccountDialogs } from "@/lib/hooks/use_account_dialogs";
@@ -98,6 +99,7 @@ const ProfileDialogBody = ({ uid, seedName, onClose }: { uid: string; seedName?:
         <ProfileView
           profile={data}
           actions={<ProfileActions profile={data} onDone={onClose} />}
+          nameExtra={<ProfileFriendPill profile={data} />}
           editing={own && editMode ? editing : null}
           onCopyLink={(link) => void navigator.clipboard.writeText(link).then(() => showSuccess(Messages.linkCopied()))}
           onCopyText={(text) =>
@@ -240,6 +242,21 @@ function useProfileEditing(uid: string): ProfileEditing {
     [backendService, queryClient, setDisplayName, showError, uid],
   );
 }
+
+/** The friend button beside someone else's name, when the chat is there (logged in, online play set up). */
+const ProfileFriendPill = ({ profile }: { profile: PlayerProfile }) => {
+  const myUid = useAccount((s) => s.user?.uid);
+  const canChat = useAccount((s) => s.userData?.playKey != null);
+  if (!myUid || !canChat || myUid === profile.uid || !profile.connectCode) {
+    return null;
+  }
+  return (
+    <FriendPill
+      player={{ uid: profile.uid, displayName: profile.displayName, connectCode: profile.connectCode }}
+      long={true}
+    />
+  );
+};
 
 /** Message and Ignore user, for someone else's profile when the chat is there (logged in, online play set up). */
 const ProfileActions = ({ profile, onDone }: { profile: PlayerProfile; onDone: () => void }) => {

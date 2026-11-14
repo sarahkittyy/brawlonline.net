@@ -8,10 +8,13 @@ import {
   ipc_socialConnect,
   ipc_socialDisconnect,
   ipc_socialDismissInvite,
+  ipc_socialDismissRequestPopup,
   ipc_socialEvent,
+  ipc_socialFriendAction,
   ipc_socialGetState,
   ipc_socialInvite,
   ipc_socialMarkRead,
+  ipc_socialSendFriendRequest,
   ipc_socialSendMessage,
   ipc_socialSetIgnored,
   ipc_socialStateChangedEvent,
@@ -54,6 +57,25 @@ export default function setupSocialIpc({
   });
   ipc_socialSetIgnored.main!.handle(async ({ uid, ignored }) => {
     await client.setIgnored(uid, ignored);
+    return { success: true };
+  });
+  ipc_socialSendFriendRequest.main!.handle(async ({ to }) => ({ result: await client.sendFriendRequest(to) }));
+  ipc_socialFriendAction.main!.handle(async ({ action, uid }) => {
+    switch (action) {
+      case "accept":
+        return { result: await client.acceptFriend(uid) };
+      case "decline":
+        return { result: await client.declineFriend(uid) };
+      case "cancel":
+        return { result: await client.cancelFriendRequest(uid) };
+      case "remove":
+        return { result: await client.removeFriend(uid) };
+      default:
+        return { result: { ok: false, message: "Unknown action." } };
+    }
+  });
+  ipc_socialDismissRequestPopup.main!.handle(async ({ uid }) => {
+    client.dismissRequestPopup(uid);
     return { success: true };
   });
   ipc_socialMarkRead.main!.handle(async ({ uid }) => {

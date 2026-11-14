@@ -37,10 +37,22 @@ import {
   verifyKx,
   verifyMessage,
 } from "./crypto";
-import { hiddenStamp, isUid, loadIdentitySeed, MAX_HIDDEN, readHidden, writeHidden } from "./shared_files";
+import {
+  hiddenStamp,
+  isUid,
+  loadIdentitySeed,
+  MAX_HIDDEN,
+  readHidden,
+  readHiddenFile,
+  syncedHiddenFile,
+  writeHidden,
+} from "./shared_files";
 import type {
   ChatLine,
   Conversation,
+  Friend,
+  FriendRequestResult,
+  FriendsState,
   Invite,
   InviteResult,
   SendResult,
@@ -62,6 +74,10 @@ export const IDLE_TIMEOUT_MS = 45_000;
 export const INVITE_SHOWN_MS = 110_000;
 /** How often the ignore list file is checked for the game's changes. */
 const HIDDEN_POLL_MS = 2000;
+/** Players in each of the friend lists at most (the server keeps 500 friends, 100 sent requests). */
+export const MAX_FRIEND_LIST = 2000;
+/** Ignore list changes sent to the server in one go (the rest wait for the next look). */
+const MAX_IGNORE_CALLS = 100;
 const MAX_EVENT_BYTES = 64 * 1024;
 const MAX_WELCOME_BYTES = 4 * 1024 * 1024;
 const BACKOFF_MS = [1000, 2000, 5000, 10_000, 20_000, 30_000];
@@ -106,8 +122,19 @@ function abortableSleep(ms: number, signal: AbortSignal): Promise<void> {
   });
 }
 
+const noFriends = (): FriendsState => ({ loaded: false, friends: [], incoming: [], outgoing: [] });
+
 function emptyState(): SocialState {
-  return { status: "off", online: [], room: null, ignored: [], conversations: {}, invites: [] };
+  return {
+    status: "off",
+    online: [],
+    room: null,
+    ignored: [],
+    conversations: {},
+    invites: [],
+    friends: noFriends(),
+    requestPopups: [],
+  };
 }
 
 function parsePlayer(v: any): SocialPlayer | undefined {
@@ -122,6 +149,48 @@ function parsePlayer(v: any): SocialPlayer | undefined {
   const country = typeof v.country === "string" && countryName(v.country) ? v.country : undefined;
   const main = typeof v.main === "string" && characterName(v.main) ? v.main : undefined;
   return { uid: v.uid, displayName, connectCode: code, ...(country && { country }), ...(main && { main }) };
+}
+
+function parseFriend(v: any): Friend | undefined {
+  const player = parsePlayer(v);
+  if (!player || !player.connectCode) {
+    return undefined;
+  }
+  const since = typeof v.since === "string" && v.since.length <= 40 && !isNaN(Date.parse(v.since)) ? v.since : "";
+  return { ...player, since };
+}
+
+function parseFriendList(v: any): Friend[] {
+  if (!Array.isArray(v)) {
+    return [];
+  }
+  const seen = new Set<string>();
+  const list: Friend[] = [];
+  for (const item of v.slice(0, MAX_FRIEND_LIST)) {
+    const f = parseFriend(item);
+    if (f && !seen.has(f.uid)) {
+      seen.add(f.uid);
+      list.push(f);
+    }
+  }
+  return list;
+}
+
+/** `GET /v1/friends` (and the answers of the friend requests), checked. */
+export function parseFriends(v: any): FriendsState | undefined {
+  if (!v || typeof v !== "object" || !Array.isArray(v.friends)) {
+    return undefined;
+  }
+  return {
+    loaded: true,
+    friends: parseFriendList(v.friends),
+    incoming: parseFriendList(v.incoming),
+    outgoing: parseFriendList(v.outgoing),
+  };
+}
+
+function parseUidList(v: any): string[] | undefined {
+  return Array.isArray(v) ? [...new Set(v.filter(isUid))] : undefined;
 }
 
 function parsePeer(v: any): Peer | undefined {
@@ -193,6 +262,13 @@ export class SocialClient {
   private stateListeners = new Set<(s: SocialState) => void>();
   private eventListeners = new Set<(e: SocialEvent) => void>();
   private emitQueued = false;
+  /**
+   * The ignore list as the account has it, once read this connection (docs/design/friends.md):
+   * until then (or without the server) the game's file is the list, and its changes wait.
+   */
+  private accountIgnores?: string[];
+  /** Ignore list work, one at a time. */
+  private ignoreOps: Promise<unknown> = Promise.resolve();
 
   constructor(private readonly deps: SocialClientDeps) {}
 
@@ -277,6 +353,7 @@ export class SocialClient {
     this.peers.clear();
     this.sendSeq.clear();
     this.recvSeq.clear();
+    this.accountIgnores = undefined;
     this.update(emptyState());
   }
 
@@ -454,6 +531,8 @@ export class SocialClient {
       case "banned":
         this.emit({ type: "banned" });
         throw new StreamEnd(true, "This account is banned.");
+      case "friends":
+        return this.onFriendsEvent(ev);
     }
   }
 
@@ -472,6 +551,8 @@ export class SocialClient {
     const room = parseRoom(ev.room);
     this.update({ status: "online", message: undefined, you: this.uid, room: room ?? null });
     this.syncOnline();
+    void this.loadFriends();
+    void this.queueIgnoreWork(() => this.syncIgnores());
   }
 
   private syncOnline() {
@@ -616,6 +697,83 @@ export class SocialClient {
 
   // ---------------------------------------------------------------- ignore list
 
+  /*
+   * The list lives on the account (docs/design/friends.md); the game reads and writes its own file
+   * (`chat-hidden.json`). On connecting, the launcher uploads the file once per account, or sends
+   * what the game changed since the last time the two were in step (the per-account copy,
+   * `syncedHiddenFile`), and writes the account's list back to the file. While connected, the
+   * game's changes go to the account as they are seen.
+   */
+
+  private queueIgnoreWork(work: () => Promise<void>): Promise<void> {
+    const run = this.ignoreOps.then(work, work);
+    this.ignoreOps = run.catch((err) => log.warn("ignore list", err));
+    return run;
+  }
+
+  private async syncIgnores() {
+    const uid = this.uid;
+    if (!uid) {
+      return;
+    }
+    const got = await this.call("GET", "/v1/me/ignores");
+    const account = got.ok ? parseUidList(got.json?.ignored) : undefined;
+    if (!account || this.uid !== uid) {
+      return;
+    }
+    const dir = this.deps.onlineDir();
+    const file = await readHidden(dir);
+    let list = account;
+    if (got.ok && got.json?.imported !== true) {
+      const res = await this.call("POST", "/v1/me/ignores/import", { uids: file });
+      list = (res.ok && parseUidList(res.json?.ignored)) || account;
+    } else {
+      // What the game changed since the two were last in step; with no copy (another computer, or
+      // the first look since updating), only what this file adds.
+      const synced = await readHiddenFile(dir, syncedHiddenFile(uid));
+      const added = file.filter((u) => !(synced ?? account).includes(u));
+      const removed = synced ? synced.filter((u) => !file.includes(u)) : [];
+      list = await this.sendIgnoreChanges(added, removed, account);
+    }
+    if (this.uid !== uid) {
+      return;
+    }
+    await this.adoptAccountIgnores(uid, list);
+  }
+
+  /** Sends ignores added and removed (those that change the account's list) and returns the list after them. */
+  private async sendIgnoreChanges(added: string[], removed: string[], account: string[]): Promise<string[]> {
+    const changes = [
+      ...added.filter((u) => !account.includes(u)).map((u) => [u, true] as const),
+      ...removed.filter((u) => account.includes(u)).map((u) => [u, false] as const),
+    ];
+    let list = account;
+    for (const [uid, add] of changes.slice(0, MAX_IGNORE_CALLS)) {
+      if (uid === this.uid) {
+        continue;
+      }
+      const res = await this.call(add ? "PUT" : "DELETE", `/v1/me/ignores/${uid}`);
+      const next = res.ok ? parseUidList(res.json?.ignored) : undefined;
+      if (next) {
+        list = next;
+      }
+    }
+    return list;
+  }
+
+  /** The account's list is the list: written to the game's file and to the copy. */
+  private async adoptAccountIgnores(uid: string, list: string[]) {
+    const dir = this.deps.onlineDir();
+    this.accountIgnores = list;
+    const current = await readHidden(dir);
+    if (current.length !== list.length || current.some((u) => !list.includes(u))) {
+      await writeHidden(dir, list);
+    }
+    await writeHidden(dir, list, syncedHiddenFile(uid));
+    this.stamp = await hiddenStamp(dir);
+    this.applyIgnored(list.slice(-MAX_HIDDEN));
+  }
+
   private async pollHidden() {
     const dir = this.deps.onlineDir();
     const stamp = await hiddenStamp(dir);
@@ -623,33 +781,165 @@ export class SocialClient {
       return;
     }
     this.stamp = stamp;
-    this.applyIgnored(await readHidden(dir));
+    const file = await readHidden(dir);
+    this.applyIgnored(file);
+    // The game ignored or unignored someone: the account follows.
+    const uid = this.uid;
+    if (uid && this.accountIgnores) {
+      void this.queueIgnoreWork(async () => {
+        const before = this.accountIgnores;
+        if (!before || this.uid !== uid) {
+          return;
+        }
+        const file = await readHidden(dir);
+        const added = file.filter((u) => !before.includes(u));
+        const removed = before.filter((u) => !file.includes(u));
+        const list = await this.sendIgnoreChanges(added, removed, before);
+        if (this.uid === uid) {
+          await this.adoptAccountIgnores(uid, list);
+          void this.loadFriends();
+        }
+      });
+    }
   }
 
   private applyIgnored(ignored: string[]) {
     const invites = this.state.invites.filter((i) => !ignored.includes(i.from.uid));
+    const requestPopups = this.state.requestPopups.filter((p) => !ignored.includes(p.uid));
     const conversations = { ...this.state.conversations };
     for (const uid of ignored) {
       if (conversations[uid]?.unread) {
         conversations[uid] = { ...conversations[uid], unread: 0 };
       }
     }
-    this.update({ ignored, invites, conversations });
+    this.update({ ignored, invites, conversations, requestPopups });
   }
 
   async setIgnored(uid: string, ignored: boolean): Promise<void> {
     if (!isUid(uid) || uid === this.uid) {
       return;
     }
-    const dir = this.deps.onlineDir();
-    // The game may have changed the file since the last look.
-    const current = await readHidden(dir);
-    const next = ignored
-      ? [...current.filter((u) => u !== uid), uid].slice(-MAX_HIDDEN)
-      : current.filter((u) => u !== uid);
-    await writeHidden(dir, next);
-    this.stamp = await hiddenStamp(dir);
-    this.applyIgnored(next);
+    const me = this.uid;
+    await this.queueIgnoreWork(async () => {
+      if (me && this.accountIgnores && this.uid === me) {
+        const res = await this.call(ignored ? "PUT" : "DELETE", `/v1/me/ignores/${uid}`);
+        const list = res.ok ? parseUidList(res.json?.ignored) : undefined;
+        if (list) {
+          await this.adoptAccountIgnores(me, list);
+          // Ignoring a friend ends the friendship.
+          void this.loadFriends();
+          return;
+        }
+      }
+      // Offline (or the server didn't answer): the file only; the change goes to the account the
+      // next time the two are put in step.
+      const dir = this.deps.onlineDir();
+      // The game may have changed the file since the last look.
+      const current = await readHidden(dir);
+      const next = ignored
+        ? [...current.filter((u) => u !== uid), uid].slice(-MAX_HIDDEN)
+        : current.filter((u) => u !== uid);
+      await writeHidden(dir, next);
+      this.stamp = await hiddenStamp(dir);
+      this.applyIgnored(next);
+    });
+  }
+
+  // ---------------------------------------------------------------- friends
+
+  private applyFriends(friends: FriendsState) {
+    const incoming = new Set(friends.incoming.map((f) => f.uid));
+    const requestPopups = this.state.requestPopups.filter((p) => incoming.has(p.uid));
+    this.update({ friends, requestPopups });
+  }
+
+  /** Reads `GET /v1/friends` again. */
+  async loadFriends(): Promise<void> {
+    const uid = this.uid;
+    const res = await this.call("GET", "/v1/friends");
+    const friends = res.ok ? parseFriends(res.json) : undefined;
+    if (friends && this.uid === uid) {
+      this.applyFriends(friends);
+    }
+  }
+
+  private onFriendsEvent(ev: any) {
+    const player = ev.player === undefined ? undefined : parseFriend(ev.player);
+    if (ev.change === "request" && player && player.uid !== this.uid && !this.state.ignored.includes(player.uid)) {
+      const requestPopups = [...this.state.requestPopups.filter((p) => p.uid !== player.uid), player];
+      this.update({ requestPopups });
+      this.emit({ type: "friend-request", player });
+    } else if (ev.change === "accepted" && player && player.uid !== this.uid) {
+      this.emit({ type: "friend-accepted", player });
+    }
+    void this.loadFriends();
+  }
+
+  /** A friends call that answers with the lists. */
+  private async friendsCall(method: "POST" | "DELETE", path: string, popup?: string): Promise<SendResult> {
+    if (popup) {
+      this.dismissRequestPopup(popup);
+    }
+    const res = await this.call(method, path, method === "POST" ? {} : undefined);
+    if (!res.ok) {
+      void this.loadFriends();
+      return res;
+    }
+    const friends = parseFriends(res.json);
+    if (friends) {
+      this.applyFriends(friends);
+    }
+    return { ok: true };
+  }
+
+  async sendFriendRequest(to: string): Promise<FriendRequestResult> {
+    const typed = typeof to === "string" ? to.trim().slice(0, 200) : "";
+    if (!typed) {
+      return { ok: false, message: "Type a player's code." };
+    }
+    const res = await this.call("POST", "/v1/friends/requests", { to: typed });
+    if (!res.ok) {
+      return res;
+    }
+    const friends = parseFriends(res.json);
+    const player = parseFriend(res.json?.player);
+    if (friends) {
+      this.applyFriends(friends);
+    }
+    if (!player) {
+      return { ok: false, message: "Something went wrong." };
+    }
+    return { ok: true, status: res.json?.status === "friends" ? "friends" : "sent", player };
+  }
+
+  acceptFriend(uid: string): Promise<SendResult> {
+    return isUid(uid)
+      ? this.friendsCall("POST", `/v1/friends/requests/${uid}/accept`, uid)
+      : Promise.resolve({ ok: false, message: "Not a player." });
+  }
+
+  declineFriend(uid: string): Promise<SendResult> {
+    return isUid(uid)
+      ? this.friendsCall("POST", `/v1/friends/requests/${uid}/decline`, uid)
+      : Promise.resolve({ ok: false, message: "Not a player." });
+  }
+
+  cancelFriendRequest(uid: string): Promise<SendResult> {
+    return isUid(uid)
+      ? this.friendsCall("DELETE", `/v1/friends/requests/${uid}`)
+      : Promise.resolve({ ok: false, message: "Not a player." });
+  }
+
+  removeFriend(uid: string): Promise<SendResult> {
+    return isUid(uid)
+      ? this.friendsCall("DELETE", `/v1/friends/${uid}`)
+      : Promise.resolve({ ok: false, message: "Not a player." });
+  }
+
+  dismissRequestPopup(uid: string) {
+    if (this.state.requestPopups.some((p) => p.uid === uid)) {
+      this.update({ requestPopups: this.state.requestPopups.filter((p) => p.uid !== uid) });
+    }
   }
 
   markRead(uid: string) {
@@ -661,7 +951,15 @@ export class SocialClient {
 
   // ---------------------------------------------------------------- sending
 
-  private async post(path: string, body: unknown): Promise<{ ok: true; json: any } | { ok: false; message: string }> {
+  private post(path: string, body: unknown): Promise<{ ok: true; json: any } | { ok: false; message: string }> {
+    return this.call("POST", path, body);
+  }
+
+  private async call(
+    method: "GET" | "POST" | "PUT" | "DELETE",
+    path: string,
+    body?: unknown,
+  ): Promise<{ ok: true; json: any } | { ok: false; message: string }> {
     const uid = this.uid;
     const token = uid && (await this.deps.getToken(uid));
     if (!token) {
@@ -669,13 +967,13 @@ export class SocialClient {
     }
     try {
       const resp = await this.fetch(`${this.deps.baseUrl}${path}`, {
-        method: "POST",
+        method,
         headers: {
           Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json",
+          ...(body !== undefined && { "Content-Type": "application/json" }),
           "User-Agent": this.deps.userAgent,
         },
-        body: JSON.stringify(body),
+        ...(body !== undefined && { body: JSON.stringify(body) }),
         signal: AbortSignal.timeout(10_000),
       });
       const json = await resp.json().catch(() => null);

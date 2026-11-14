@@ -8,8 +8,11 @@ import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { CharacterIcon } from "@/components/profile/character_icon";
 import { useToasts } from "@/lib/hooks/use_toasts";
+import { useFriendRelation } from "@/lib/social/use_friends";
 import { findPlayer, frontTab, useSocial } from "@/lib/social/use_social";
 
+import { FriendsIcon } from "./friend_icons";
+import { FriendPill } from "./friend_pill";
 import { InviteButton, PlayerName } from "./invite_button";
 import type { PlayerMenuTarget } from "./player_menu";
 import { PlayerMenu } from "./player_menu";
@@ -114,6 +117,7 @@ const TabHeader = React.forwardRef<
   const clickTab = useSocial((s) => s.clickTab);
   const raiseTab = useSocial((s) => s.raiseTab);
   const closeTab = useSocial((s) => s.closeTab);
+  const friend = useFriendRelation(player.uid) === "friends";
   // Hovering brought the window up, so the click that usually follows doesn't minimize it.
   const raisedByHover = useRef(false);
   return (
@@ -155,6 +159,11 @@ const TabHeader = React.forwardRef<
       <span className={styles.tabName}>
         <PlayerName player={player} showFlag={true} />
       </span>
+      {friend && (
+        <span className={styles.tabFriend} title={Messages.friend()} data-testid={`chat-tab-friend-${player.uid}`}>
+          <FriendsIcon style={{ fontSize: 14 }} />
+        </span>
+      )}
       <InviteButton player={player} />
       <button
         type="button"
@@ -304,6 +313,7 @@ const ChatWindow = ({
             <CharacterIcon character={player.main} size={18} />
           </span>
         )}
+        <FriendPill player={player} />
         <Tooltip title={Messages.minimize()} placement="top" disableInteractive={true}>
           <button
             type="button"

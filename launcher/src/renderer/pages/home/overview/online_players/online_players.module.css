@@ -1,71 +1,174 @@
 .block {
+  container-type: inline-size;
   min-height: 0;
   flex: 1;
   display: flex;
   flex-direction: column;
 }
 
-.count {
-  color: var(--text-secondary);
-  font-size: 13px;
-  white-space: nowrap;
+/*
+ * The header: Online / Friends as Home's own tabs (pages/home/tabs), each with its players online
+ * after the chat's green dot, the Friends tab with its requests in the unread amber (Sarah's board,
+ * 2026-11-14: the title font was too wide for two tabs, the icons and a count in the column).
+ * Narrow columns drop the counts first.
+ */
+.tabs {
+  display: flex;
+  align-self: stretch;
+  gap: 2px;
+  min-width: 0;
 }
 
-/* The magnifier after the title; open, its box grows over the rest of the header (the count hides). */
-.search {
+.tab {
+  all: unset;
+  position: relative;
   display: flex;
   align-items: center;
   gap: 6px;
-  min-width: 0;
-  margin-left: -8px;
+  padding: 2px 10px 0;
+  border-bottom: solid 2px transparent;
+  color: var(--text-primary);
+  font-size: 15px;
+  white-space: nowrap;
+  cursor: pointer;
+  opacity: 0.6;
 }
 
-.searchOpen {
-  flex: 1;
+.tab:hover {
+  opacity: 0.85;
 }
 
-.searchButton {
+.tab:focus-visible {
+  outline: 2px solid var(--accent-primary-dark);
+  outline-offset: -2px;
+}
+
+.tab[data-active="true"] {
+  border-bottom-color: var(--surface-4);
+  color: var(--accent-primary-bright);
+  font-weight: 600;
+  opacity: 1;
+}
+
+.tabLabel {
+  line-height: 1;
+}
+
+/* Players online in the tab's list: the chat's green dot. The same 16 px box as the badge; the
+   menu font's digits sit high, so it moves down a pixel to the label's middle. */
+.tabCount {
+  position: relative;
+  top: 1px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 16px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1;
+}
+
+.tabCount::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background-color: #74c27a;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px 1px;
+  box-sizing: border-box;
+  border-radius: 8px;
+  background-color: rgb(217 164 65);
+  color: #1b1b1b;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+@container (max-width: 280px) {
+  .tabCount {
+    display: none;
+  }
+
+  .tab {
+    padding: 2px 8px 0;
+  }
+}
+
+.headIcons {
+  display: flex;
   flex: none;
+  align-items: center;
+  gap: 2px;
+}
+
+.iconButton {
   color: var(--text-secondary) !important;
 }
 
-.searchButton:hover {
+.iconButton:hover,
+.iconButtonOn {
   color: var(--accent-primary-bright) !important;
 }
 
-.searchInput {
+/* The search box and the code box: a row under the header. */
+.boxRow {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+}
+
+.boxLine {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.box {
   box-sizing: border-box;
   flex: 1;
   min-width: 0;
-  width: 0;
-  max-width: 0;
   height: 30px;
-  padding: 0;
-  border: 1px solid transparent;
+  padding: 0 10px;
+  border: 1px solid rgb(159 116 192 / 25%);
   border-radius: 8px;
+  outline: none;
   background-color: rgb(255 255 255 / 5%);
   color: var(--text-primary);
   font: inherit;
   font-size: 13px;
-  outline: none;
-  opacity: 0;
-  transition: max-width 0.2s ease-in-out, opacity 0.15s ease-in-out,
-    padding 0.2s ease-in-out;
 }
 
-.searchOpen .searchInput {
-  max-width: 100%;
-  padding: 0 10px;
-  opacity: 1;
-  border-color: rgb(159 116 192 / 25%);
-}
-
-.searchOpen .searchInput:focus {
+.box:focus {
   border-color: var(--accent-primary-dark);
 }
 
-.searchInput::placeholder {
+.box::placeholder {
   color: var(--text-dim);
+}
+
+.boxHint {
+  color: var(--text-very-dim);
+  font-size: 11.5px;
+}
+
+.boxOk {
+  color: #74c27a;
+  font-size: 12px;
+}
+
+.boxError {
+  color: #e0786e;
+  font-size: 12px;
 }
 
 .notice {
@@ -192,4 +295,189 @@
 
 .banned {
   text-decoration: line-through;
+}
+
+/* ---- friends (docs/design/friends.md) ---- */
+
+/* A friend with a main: the friends glyph in the accent at the stock icon's bottom-right corner. */
+.friendBadge {
+  position: absolute;
+  right: -5px;
+  bottom: -4px;
+  display: flex;
+  color: var(--accent-primary-bright);
+  filter: drop-shadow(0 0 1px var(--surface-1)) drop-shadow(0 0 1px var(--surface-1));
+}
+
+/* A friend without a main shown: the glyph in the dot's place. */
+.friendGlyph {
+  color: var(--accent-primary-bright);
+}
+
+/* No disc (no main column): the glyph right after the name and code. */
+.nameWithMark {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+.nameWithMark > :first-child {
+  flex: 0 1 auto;
+}
+
+.friendAfterName {
+  display: inline-flex;
+  flex: none;
+  color: var(--accent-primary-bright);
+}
+
+.section {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 12px 4px;
+  color: var(--text-dim);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.sectionCount {
+  color: var(--text-very-dim);
+}
+
+.sectionToggle {
+  all: unset;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+}
+
+.sectionToggle:hover {
+  color: var(--text-secondary);
+}
+
+.requests {
+  color: rgb(217 164 65);
+}
+
+.request {
+  background-color: rgb(217 164 65 / 7%);
+}
+
+/* A friend's name, then what they are doing. */
+.nameCol {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  line-height: 1.25;
+}
+
+.status {
+  overflow: hidden;
+  color: var(--text-dim);
+  font-size: 11.5px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.statusWaiting::before,
+.statusPlaying::before {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: 5px;
+  border-radius: 50%;
+  vertical-align: 1px;
+}
+
+.statusWaiting::before {
+  background-color: #74c27a;
+}
+
+.statusPlaying::before {
+  background-color: rgb(217 164 65);
+}
+
+/* JOIN / WATCH / FULL beside a friend, as the rooms list's action. */
+.pill {
+  all: unset;
+  flex: none;
+  padding: 2px 8px;
+  border: 1px solid var(--accent-primary-dark);
+  border-radius: 10px;
+  color: var(--accent-primary-bright);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+}
+
+.pill:hover:not(:disabled) {
+  background-color: rgb(255 255 255 / 6%);
+}
+
+.pill:disabled {
+  border-color: rgb(255 255 255 / 12%);
+  color: var(--text-very-dim);
+  cursor: default;
+}
+
+.accept,
+.decline {
+  all: unset;
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.accept {
+  background-color: #4f9a57;
+  color: #fff;
+}
+
+.accept:hover {
+  background-color: #5daf66;
+}
+
+.decline {
+  background-color: rgb(255 255 255 / 10%);
+  color: var(--text-secondary);
+}
+
+.decline:hover {
+  background-color: rgb(255 255 255 / 16%);
+}
+
+.cancelSent {
+  all: unset;
+  flex: none;
+  margin-left: auto;
+  padding: 2px 6px;
+  border-radius: 4px;
+  color: var(--text-dim);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.cancelSent:hover {
+  background-color: rgb(255 255 255 / 8%);
+  color: var(--text-primary);
+}
+
+.sendRequest {
+  margin-top: 8px !important;
+  text-align: left;
+  text-transform: none !important;
 }

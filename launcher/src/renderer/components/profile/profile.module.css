@@ -55,6 +55,13 @@
   min-width: 0;
 }
 
+/* The friend button right after the name (docs/design/friends.md), before a developer's </>. */
+.nameExtra {
+  display: inline-flex;
+  flex-shrink: 0;
+  margin-left: 10px;
+}
+
 /* A developer's </> after the name (dev_badge.tsx). */
 .dev {
   margin-left: 6px;

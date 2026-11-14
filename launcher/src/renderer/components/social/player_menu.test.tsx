@@ -50,6 +50,8 @@ function setup(opts: { admin: boolean; user?: Partial<AdminUser> }) {
     room: null,
     ignored: [],
     invites: [],
+    friends: { loaded: true, friends: [], incoming: [], outgoing: [] },
+    requestPopups: [],
     conversations: {},
   };
   useSocial.setState({ state, tabs: [] } as any);
@@ -159,5 +161,38 @@ describe("canonicalCode", () => {
     for (const bad of ["", "ABCDE#1", "AB#12345", "AB12", "A1#2", "#12"]) {
       expect(canonicalCode(bad)).toBeNull();
     }
+  });
+});
+
+describe("PlayerMenu friends (docs/design/friends.md)", () => {
+  const since = "2026-11-14T00:00:00Z";
+  const items = () => screen.getAllByRole("menuitem").map((m) => m.textContent);
+
+  function withFriends(friends: Partial<SocialState["friends"]>) {
+    setup({ admin: false });
+    act(() => {
+      const s = useSocial.getState().state;
+      useSocial.setState({ state: { ...s, friends: { ...s.friends, ...friends } } });
+    });
+  }
+
+  it("offers Add friend after Invite for anyone else", () => {
+    withFriends({});
+    expect(items()).toEqual(["Message", "View Profile", "Invite to game", "Add friend", "Ignore user"]);
+  });
+
+  it("puts their request first, apart, and Cancel where Add friend was for a sent one", () => {
+    withFriends({ incoming: [{ ...ness, since }] });
+    expect(items().slice(0, 3)).toEqual(["Accept friend request", "Decline friend request", "Message"]);
+    expect(screen.getByRole("menu").querySelector("hr")).toBeTruthy();
+    cleanup();
+    withFriends({ outgoing: [{ ...ness, since }] });
+    expect(items()).toEqual(["Message", "View Profile", "Invite to game", "Cancel friend request", "Ignore user"]);
+  });
+
+  it("offers Remove friend above Ignore user for a friend", () => {
+    withFriends({ friends: [{ ...ness, since }] });
+    expect(items().slice(-2)).toEqual(["Remove friend", "Ignore user"]);
+    expect(items()).not.toContain("Add friend");
   });
 });

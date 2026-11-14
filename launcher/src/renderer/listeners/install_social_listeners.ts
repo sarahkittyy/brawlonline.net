@@ -37,6 +37,7 @@ export function installSocialListeners() {
         break;
       }
       case "invite":
+      case "friend-request":
         playSound("invite");
         break;
     }

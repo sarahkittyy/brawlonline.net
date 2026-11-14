@@ -12,6 +12,8 @@ import React from "react";
 
 import { RoomNameMessages } from "@/components/room_name/room_name.messages";
 import { RoomNameField } from "@/components/room_name/room_name_field";
+import { FriendsIcon } from "@/components/social/friend_icons";
+import { SocialMessages } from "@/components/social/social.messages";
 import { UserName } from "@/components/user_name/user_name";
 import type { PublicRoom, RoomMode, YourRoom } from "@/services/backend/types";
 
@@ -273,6 +275,16 @@ const PlayerNames = ({ room }: { room: PublicRoom }) => {
   );
 };
 
+/** A friends-only room (docs/design/friends.md): the friends icon before its name, in the accent. */
+const FriendsOnlyMark = ({ room }: { room: PublicRoom }) =>
+  room.friends ? (
+    <Tooltip title={SocialMessages.friendsOnlyRoom()} placement="top" disableInteractive={true}>
+      <span className={styles.friendsOnly} data-testid={`friends-only-${room.code}`}>
+        <FriendsIcon style={{ fontSize: 16 }} />
+      </span>
+    </Tooltip>
+  ) : null;
+
 /** The player's own room: not a button (they are in it), marked, and its host's pencil names it. */
 const OwnRoomRow = ({
   room,
@@ -291,14 +303,17 @@ const OwnRoomRow = ({
   return (
     <div className={clsx(styles.row, styles.own)} data-room={room.code} data-own-room="true">
       <div className={styles.main}>
-        <div className={styles.host}>
-          <RoomNameField
-            name={room.name ?? null}
-            fallback={RoomNameMessages.defaultName(room.host)}
-            canEdit={host && !!onRename}
-            onSave={async (name) => onRename?.(room.code, name)}
-            initialEditText={forceEditText}
-          />
+        <div className={styles.hostLine}>
+          <FriendsOnlyMark room={room} />
+          <div className={styles.host}>
+            <RoomNameField
+              name={room.name ?? null}
+              fallback={RoomNameMessages.defaultName(room.host)}
+              canEdit={host && !!onRename}
+              onSave={async (name) => onRename?.(room.code, name)}
+              initialEditText={forceEditText}
+            />
+          </div>
         </div>
         <PlayerNames room={room} />
       </div>
@@ -361,22 +376,25 @@ export const RoomRow = React.memo(function RoomRow({
         }}
       >
         <div className={styles.main}>
-          {onRename ? (
-            <div className={styles.host}>
-              <RoomNameField
-                name={room.name ?? null}
-                fallback={RoomNameMessages.defaultName(room.host)}
-                canEdit={true}
-                onSave={async (name) => onRename(room.code, name)}
-                inButton={true}
-              />
-            </div>
-          ) : (
-            // A room its host didn't name: "alice's room" in grey, so a real name stands out.
-            <div className={clsx(styles.host, !room.name && styles.unnamed)}>
-              {room.name ?? RoomNameMessages.defaultName(room.host)}
-            </div>
-          )}
+          <div className={styles.hostLine}>
+            <FriendsOnlyMark room={room} />
+            {onRename ? (
+              <div className={styles.host}>
+                <RoomNameField
+                  name={room.name ?? null}
+                  fallback={RoomNameMessages.defaultName(room.host)}
+                  canEdit={true}
+                  onSave={async (name) => onRename(room.code, name)}
+                  inButton={true}
+                />
+              </div>
+            ) : (
+              // A room its host didn't name: "alice's room" in grey, so a real name stands out.
+              <div className={clsx(styles.host, !room.name && styles.unnamed)}>
+                {room.name ?? RoomNameMessages.defaultName(room.host)}
+              </div>
+            )}
+          </div>
           <PlayerNames room={room} />
         </div>
         <RulesetCell room={room} onShow={onShowRuleset} />

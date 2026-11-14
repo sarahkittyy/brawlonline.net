@@ -298,6 +298,8 @@ export type PublicRoom = {
   ruleset?: RoomRuleset;
   /** The name its host gave it (docs/design/rooms.md §1.4); absent: none ("alice's room"). */
   name?: string | null;
+  /** Friends only (docs/design/friends.md): listed to the friends of its players. */
+  friends?: boolean;
 };
 
 /** P+ rooms or Other Games (Brawl Mods) rooms: each has its own room name. */

@@ -1,3 +1,4 @@
+import type { RoomList } from "@accounts/types";
 import Button from "@mui/material/Button";
 import Dialog from "@mui/material/Dialog";
 import DialogActions from "@mui/material/DialogActions";
@@ -8,12 +9,17 @@ import ListItemText from "@mui/material/ListItemText";
 import Menu from "@mui/material/Menu";
 import MenuItem from "@mui/material/MenuItem";
 import type { SocialPlayer } from "@social/types";
+import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 
-import { useIsAdmin } from "@/lib/hooks/use_account";
+import { RoomNameMessages } from "@/components/room_name/room_name.messages";
+import { useAccount, useIsAdmin } from "@/lib/hooks/use_account";
 import { useProfileView } from "@/lib/hooks/use_profile_view";
 import { useToasts } from "@/lib/hooks/use_toasts";
 import { useAdminRefresh } from "@/lib/social/admin_refresh";
+import { activityOf } from "@/lib/social/friend_activity";
+import { joinRoomByCode } from "@/lib/social/join_room";
+import { useFriendActions, useFriendRelation } from "@/lib/social/use_friends";
 import { inviteBlocked, useSocial, waitsForRoom } from "@/lib/social/use_social";
 import { useSocialActions } from "@/lib/social/use_social_actions";
 import { useServices } from "@/services";
@@ -28,6 +34,9 @@ export type PlayerMenuTarget = { player: SocialPlayer; x: number; y: number };
 
 /**
  * The right-click menu of a player's name (the online list and a chat tab's header): Message, View Profile, ...
+ * Friends (docs/design/friends.md): a request from them first (Accept / Decline, then a line); Add friend or
+ * Cancel friend request after Invite, and Join their room for a friend in a room the player can join;
+ * Remove friend above Ignore user.
  * On an admin account, the admin tools after a line: Mute / Unmute, Rename (a box), Ban User (after "Are you sure?")
  * / Unban User. Not offered for another admin's account (the server refuses those too).
  */
@@ -45,6 +54,16 @@ export const PlayerMenu = ({
   const ignored = useSocial((s) => (target ? s.state.ignored.includes(target.player.uid) : false));
   const online = useSocial((s) => (target ? s.state.online.some((p) => p.uid === target.player.uid) : false));
   const { invite, setIgnored, message } = useSocialActions();
+  const friendsLoaded = useSocial((s) => s.state.friends.loaded);
+  const relation = useFriendRelation(target?.player.uid);
+  const friendActions = useFriendActions();
+  // Home's last room list, without polling it from wherever a name is (use_room_list.ts).
+  const queryClient = useQueryClient();
+  const uid = useAccount((s) => s.user?.uid);
+  const rooms = target && relation === "friends" ? queryClient.getQueryData<RoomList>(["publicRooms", uid]) : undefined;
+  const activity =
+    target && rooms ? activityOf(target.player.uid, rooms.rooms, rooms.yourRoom?.code, undefined) : undefined;
+  const joinable = activity?.kind === "room" && !activity.yours && activity.room.joinable ? activity.room : undefined;
   const openProfile = useProfileView((s) => s.open);
   const isAdmin = useIsAdmin();
   const blocked = waiting ? undefined : inviteBlocked(room);
@@ -110,6 +129,16 @@ export const PlayerMenu = ({
           onClose();
         }}
       >
+        {friendsLoaded &&
+          relation === "incoming" && [
+            <MenuItem key="accept" onClick={act(friendActions.accept)} dense={true} data-testid="menu-accept-friend">
+              <ListItemText>{Messages.acceptRequest()}</ListItemText>
+            </MenuItem>,
+            <MenuItem key="decline" onClick={act(friendActions.decline)} dense={true}>
+              <ListItemText>{Messages.declineRequest()}</ListItemText>
+            </MenuItem>,
+            <Divider key="friend-line" />,
+          ]}
         {showMessage && (
           <MenuItem onClick={act(message)} dense={true}>
             <ListItemText>{Messages.message()}</ListItemText>
@@ -125,6 +154,32 @@ export const PlayerMenu = ({
             secondaryTypographyProps={{ fontSize: 11 }}
           />
         </MenuItem>
+        {friendsLoaded && relation === "none" && (
+          <MenuItem onClick={act(friendActions.add)} dense={true} data-testid="menu-add-friend">
+            <ListItemText>{Messages.addFriend()}</ListItemText>
+          </MenuItem>
+        )}
+        {friendsLoaded && relation === "sent" && (
+          <MenuItem onClick={act(friendActions.cancel)} dense={true}>
+            <ListItemText>{Messages.cancelRequest()}</ListItemText>
+          </MenuItem>
+        )}
+        {joinable && (
+          <MenuItem onClick={act(() => joinRoomByCode(joinable.code))} dense={true}>
+            <ListItemText
+              primary={Messages.joinTheirRoom()}
+              secondary={`${joinable.name ?? RoomNameMessages.defaultName(joinable.host)} · ${joinable.players}/${
+                joinable.openSlots
+              }`}
+              secondaryTypographyProps={{ fontSize: 11 }}
+            />
+          </MenuItem>
+        )}
+        {friendsLoaded && relation === "friends" && (
+          <MenuItem onClick={act(friendActions.remove)} dense={true} data-testid="menu-remove-friend">
+            <ListItemText>{Messages.removeFriend()}</ListItemText>
+          </MenuItem>
+        )}
         <MenuItem onClick={act((p) => setIgnored(p, !ignored))} dense={true}>
           <ListItemText>{ignored ? Messages.unignoreUser() : Messages.ignoreUser()}</ListItemText>
         </MenuItem>

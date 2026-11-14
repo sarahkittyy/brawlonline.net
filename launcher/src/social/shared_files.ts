@@ -96,9 +96,16 @@ async function createExclusively(file: string, contents: string): Promise<boolea
   }
 }
 
-/** The ignore list; empty when there is no file or it can't be read. */
-export async function readHidden(onlineDir: string): Promise<string[]> {
-  const file = path.join(onlineDir, HIDDEN_FILE);
+/**
+ * The launcher's own copy of the list as the account had it the last time the two were in step
+ * (docs/design/friends.md, "The ignore list"): what changed in the game's file since then is
+ * what the game changed. One per account.
+ */
+export const syncedHiddenFile = (uid: string) => `chat-hidden-synced-${uid}.json`;
+
+/** An ignore list file; null when there is none, empty when it can't be read. */
+export async function readHiddenFile(onlineDir: string, name: string): Promise<string[] | null> {
+  const file = path.join(onlineDir, name);
   try {
     const st = await stat(file);
     if (st.size > MAX_HIDDEN_FILE_BYTES) {
@@ -110,15 +117,20 @@ export async function readHidden(onlineDir: string): Promise<string[]> {
       return [];
     }
     return [...new Set(list.filter(isUid))].slice(0, MAX_HIDDEN);
-  } catch {
-    return [];
+  } catch (err: any) {
+    return err?.code === "ENOENT" ? null : [];
   }
 }
 
-/** Writes the ignore list atomically. */
-export async function writeHidden(onlineDir: string, uids: string[]): Promise<void> {
+/** The ignore list; empty when there is no file or it can't be read. */
+export async function readHidden(onlineDir: string): Promise<string[]> {
+  return (await readHiddenFile(onlineDir, HIDDEN_FILE)) ?? [];
+}
+
+/** Writes the ignore list (or another list file: `name`) atomically. */
+export async function writeHidden(onlineDir: string, uids: string[], name = HIDDEN_FILE): Promise<void> {
   await mkdir(onlineDir, { recursive: true });
-  const file = path.join(onlineDir, HIDDEN_FILE);
+  const file = path.join(onlineDir, name);
   const tmp = `${file}.launcher.${process.pid}.tmp`;
   const list = [...new Set(uids.filter(isUid))].slice(-MAX_HIDDEN).sort();
   try {

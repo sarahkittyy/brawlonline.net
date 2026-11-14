@@ -133,7 +133,22 @@
   min-width: 0;
 }
 
+/* The room's name, after the friends icon of a friends-only room. */
+.hostLine {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.friendsOnly {
+  display: inline-flex;
+  flex-shrink: 0;
+  color: var(--accent-primary-bright);
+}
+
 .host {
+  min-width: 0;
   color: var(--text-primary);
   font-weight: 600;
   font-size: 14px;

@@ -1,4 +1,5 @@
 import type { SocialPlayer, SocialState } from "@social/types";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -34,13 +35,17 @@ function renderList(disc: boolean) {
     room: null,
     ignored: [],
     invites: [],
+    friends: { loaded: true, friends: [], incoming: [], outgoing: [] },
+    requestPopups: [],
     conversations: {},
   };
   useSocial.setState({ state, tabs: [] } as any);
   render(
-    <ServiceProvider>
-      <OnlinePlayers />
-    </ServiceProvider>,
+    <QueryClientProvider client={new QueryClient()}>
+      <ServiceProvider>
+        <OnlinePlayers />
+      </ServiceProvider>
+    </QueryClientProvider>,
   );
 }
 
@@ -129,13 +134,17 @@ describe("OnlinePlayers on an admin account", () => {
       room: null,
       ignored: [],
       invites: [],
+      friends: { loaded: true, friends: [], incoming: [], outgoing: [] },
+      requestPopups: [],
       conversations: {},
     };
     useSocial.setState({ state, tabs: [] } as any);
     render(
-      <Provider>
-        <OnlinePlayers />
-      </Provider>,
+      <QueryClientProvider client={new QueryClient()}>
+        <Provider>
+          <OnlinePlayers />
+        </Provider>
+      </QueryClientProvider>,
     );
     return adminPlayers;
   }
@@ -175,5 +184,132 @@ describe("OnlinePlayers on an admin account", () => {
     });
     expect(adminPlayers).not.toHaveBeenCalled();
     expect(screen.queryByTestId("online-offline-header")).toBeNull();
+  });
+});
+
+describe("OnlinePlayers friends (docs/design/friends.md)", () => {
+  const since = "2026-11-14T00:00:00Z";
+  const friend = (p: SocialPlayer) => ({ ...p, since });
+  const sendFriendRequest = vi.fn();
+
+  function renderFriends(opts: { disc?: boolean; tab?: "online" | "friends" } = {}) {
+    localStorage.setItem("ONLINE_PANEL_TAB", JSON.stringify(opts.tab ?? "online"));
+    useGameAssets.getState().setState({
+      manifest: { stocks: opts.disc === false ? {} : { marth: { file: "theme/stocks/marth.png" } } },
+    } as any);
+    useAccount.setState({ user: { uid: "me" }, userData: { playKey: {} } } as any);
+    (window as any).electron = {
+      ...(window as any).electron,
+      social: { sendFriendRequest, acceptFriend: vi.fn(), declineFriend: vi.fn(), cancelFriendRequest: vi.fn() },
+      spectate: { list: async () => ({ games: [] }) },
+    };
+    const state: SocialState = {
+      status: "online",
+      you: "me",
+      online: players,
+      room: null,
+      ignored: [],
+      invites: [],
+      friends: {
+        loaded: true,
+        // Lucas (a main) and Ness (none) online, Zed offline.
+        friends: [
+          friend(players[0]),
+          friend(players[1]),
+          { uid: "z", displayName: "Zed", connectCode: "ZED#9", since },
+        ],
+        incoming: [{ uid: "r", displayName: "Rae", connectCode: "RAE#3", since }],
+        outgoing: [{ uid: "o", displayName: "Oli", connectCode: "OLI#4", since }],
+      },
+      requestPopups: [],
+      conversations: {},
+    };
+    useSocial.setState({ state, tabs: [] } as any);
+    const room = {
+      code: "KFQB",
+      host: "Lucas",
+      players: 1,
+      openSlots: 2,
+      mode: "1v1",
+      status: "waiting",
+      names: ["Lucas"],
+      uids: ["a"],
+      joinable: true,
+      name: "friday netplay",
+      friends: true,
+    };
+    const { ServiceProvider: Provider } = createServiceProvider({
+      services: {
+        notificationService: toasts,
+        backendService: { fetchRooms: async () => ({ online: 3, rooms: [room], updatedAt: "" }) },
+      } as unknown as Services,
+    });
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <Provider>
+          <OnlinePlayers />
+        </Provider>
+      </QueryClientProvider>,
+    );
+  }
+
+  it("puts friends first in Online, marked on their main or in the dot's place", () => {
+    renderFriends();
+    const rows = Array.from(screen.getByTestId("online-players").querySelectorAll("[role=button]"));
+    const names = ["Lucas", "Ness", "Dice", "Odd"];
+    expect(rows.map((r) => names.find((n) => r.textContent?.includes(n)))).toEqual(names);
+    expect(within(rowOf("Lucas")).getByTestId("stock-marth")).toBeTruthy();
+    expect(within(rowOf("Lucas")).getByTestId("online-friend")).toBeTruthy();
+    expect(within(rowOf("Ness")).getByTestId("online-friend")).toBeTruthy();
+    expect(within(rowOf("Dice")).queryByTestId("online-friend")).toBeNull();
+    // The tabs: everyone online, friends online, and the requests waiting.
+    expect(screen.getByTestId("online-tab-online").textContent).toBe("Online4");
+    expect(screen.getByTestId("online-tab-friends").textContent).toBe("Friends21");
+    expect(screen.getByTestId("friends-requests-badge").textContent).toBe("1");
+  });
+
+  it("marks a friend after the code without a disc", () => {
+    renderFriends({ disc: false });
+    expect(within(rowOf("Ness")).getByTestId("online-friend")).toBeTruthy();
+    expect(screen.queryAllByTestId("online-main")).toHaveLength(0);
+  });
+
+  it("lists requests, friends online with what they do, offline friends and sent requests", async () => {
+    renderFriends({ tab: "friends" });
+    expect(within(screen.getByTestId("friend-incoming-r")).getByText("wants to be friends")).toBeTruthy();
+    // Lucas is in a friends-only room the player can join.
+    await screen.findByText("friday netplay · 1/2");
+    expect(screen.getByTestId("friend-join-KFQB").textContent).toBe("JOIN");
+    expect(within(screen.getByTestId("friend-online-b")).getByText("In the launcher")).toBeTruthy();
+    expect(screen.getByTestId("friend-offline-z")).toBeTruthy();
+    expect(within(screen.getByTestId("friend-outgoing-o")).getByText("Cancel")).toBeTruthy();
+    // The offline ones fold.
+    fireEvent.click(screen.getByTestId("friends-offline-toggle"));
+    expect(screen.queryByTestId("friend-offline-z")).toBeNull();
+  });
+
+  it("sends a request from the code box, says what happened, and closes", async () => {
+    sendFriendRequest.mockResolvedValue({
+      ok: true,
+      status: "sent",
+      player: { uid: "q", displayName: "Quin", connectCode: "QUIN#1", since },
+    });
+    renderFriends({ tab: "friends" });
+    fireEvent.click(screen.getByTestId("friends-add-toggle"));
+    fireEvent.change(screen.getByTestId("friends-add-code"), { target: { value: "quin#1" } });
+    fireEvent.click(screen.getByTestId("friends-add-send"));
+    await waitFor(() =>
+      expect(screen.getByTestId("friends-add-result").textContent).toBe("Request sent to Quin (QUIN#1)."),
+    );
+    expect(sendFriendRequest).toHaveBeenCalledWith("quin#1");
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    expect(screen.queryByTestId("friends-add-box")).toBeNull();
+  });
+
+  it("offers a request for a searched code that is no friend's", async () => {
+    renderFriends({ tab: "friends" });
+    fireEvent.click(screen.getByTestId("online-search-toggle"));
+    fireEvent.change(screen.getByTestId("online-search"), { target: { value: "abc#12" } });
+    expect((await screen.findByTestId("friends-search-request")).textContent).toBe("Send a friend request to ABC#12");
   });
 });

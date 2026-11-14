@@ -22,7 +22,15 @@ import {
   toHex,
   verifyMessage,
 } from "./crypto";
-import { HIDDEN_FILE, IDENTITY_FILE, loadIdentitySeed, readHidden, writeHidden } from "./shared_files";
+import {
+  HIDDEN_FILE,
+  IDENTITY_FILE,
+  loadIdentitySeed,
+  readHidden,
+  readHiddenFile,
+  syncedHiddenFile,
+  writeHidden,
+} from "./shared_files";
 import { SocialClient } from "./social_client";
 import type { SocialEvent } from "./types";
 
@@ -58,6 +66,10 @@ function fakeServer() {
   let push: ((s: string) => void) | undefined;
   let close: (() => void) | undefined;
   const posts: { path: string; body: any }[] = [];
+  /** Every request but the stream, in order. */
+  const calls: { method: string; path: string; body: any }[] = [];
+  /** Answers by `"<METHOD> <path>"`; GET, PUT and DELETE without one are 404. */
+  const routes: Record<string, (body: any) => unknown> = {};
   let streamHeaders: Record<string, string> = {};
   let postStatus = 204;
   const fetchFn = (async (url: string, init?: RequestInit) => {
@@ -80,7 +92,16 @@ function fakeServer() {
       });
       return new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
     }
-    const body = JSON.parse(String(init?.body));
+    const method = init?.method ?? "GET";
+    const body = init?.body !== undefined ? JSON.parse(String(init.body)) : undefined;
+    calls.push({ method, path: u.pathname, body });
+    const route = routes[`${method} ${u.pathname}`];
+    if (route) {
+      return new Response(JSON.stringify(route(body)), { status: 200 });
+    }
+    if (method !== "POST") {
+      return new Response(JSON.stringify({ error: { code: "not_found", message: "Not found" } }), { status: 404 });
+    }
     posts.push({ path: u.pathname, body });
     if (postStatus >= 400) {
       return new Response(JSON.stringify({ error: { code: "x", message: "That player is offline." } }), {
@@ -95,6 +116,8 @@ function fakeServer() {
   return {
     fetchFn,
     posts,
+    calls,
+    routes,
     send: (ev: unknown) => push!(`data: ${JSON.stringify(ev)}\n\n`),
     raw: (s: string) => push!(s),
     close: () => close?.(),
@@ -384,5 +407,172 @@ describe("shared chat files", () => {
     expect(await readHidden(dir)).toEqual([BOB]);
     await writeFile(path.join(dir, HIDDEN_FILE), "{");
     expect(await readHidden(dir)).toEqual([]);
+  });
+});
+
+describe("social client: friends and the account's ignore list", () => {
+  let dir: string;
+  let server: ReturnType<typeof fakeServer>;
+  let client: SocialClient;
+  let events: SocialEvent[];
+
+  const carol = { uid: CAROL, displayName: "carol", connectCode: "CA#1", since: "2026-11-14T00:00:00Z" };
+  const dave = { uid: DAVE, displayName: "dave", connectCode: "DA#2", main: "fox", since: "2026-11-14T00:00:00Z" };
+
+  /** Connects with the server's answers in place before the welcome. */
+  async function start(routes: Record<string, (body: any) => unknown>, file?: string[], synced?: string[]) {
+    dir = await mkdtemp(path.join(os.tmpdir(), "social-friends-"));
+    if (file) {
+      await writeHidden(dir, file);
+    }
+    if (synced) {
+      await writeHidden(dir, synced, syncedHiddenFile(ME));
+    }
+    server = fakeServer();
+    Object.assign(server.routes, routes);
+    client = new SocialClient({
+      baseUrl: "http://accounts",
+      userAgent: "test",
+      getToken: async () => "token",
+      onlineDir: () => dir,
+      fetch: server.fetchFn,
+      sleep: async () => undefined,
+    });
+    events = [];
+    client.onEvent((e) => events.push(e));
+    await client.connect(ME);
+    await until(() => client.getState().status === "connecting");
+    await tick();
+    server.send({ type: "welcome", you: ME, online: [], room: null });
+    await until(() => client.getState().status === "online");
+  }
+
+  afterEach(async () => {
+    client.disconnect();
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  const lists = (over: Partial<Record<"friends" | "incoming" | "outgoing", unknown[]>> = {}) => ({
+    friends: [],
+    incoming: [],
+    outgoing: [],
+    ...over,
+  });
+
+  /** Waits for a file read to hold. */
+  async function untilAsync(pred: () => Promise<boolean>) {
+    for (let i = 0; i < 300 && !(await pred()); i++) {
+      await tick();
+    }
+    expect(await pred()).toBe(true);
+  }
+
+  it("reads the lists after the welcome, checks them, and pops up a request that arrives", async () => {
+    let answer = lists({
+      friends: [carol, { ...carol, uid: "nope" }, { ...dave, connectCode: "" }],
+      outgoing: [dave],
+    });
+    await start({ "GET /v1/friends": () => answer });
+    await until(() => client.getState().friends.loaded);
+    expect(client.getState().friends.friends.map((f) => f.uid)).toEqual([CAROL]);
+    expect(client.getState().friends.outgoing[0]).toEqual({ ...dave });
+
+    answer = lists({ friends: [carol], incoming: [dave] });
+    server.send({ type: "friends", change: "request", player: dave });
+    await until(() => client.getState().requestPopups.length === 1);
+    expect(events).toContainEqual({ type: "friend-request", player: dave });
+    await until(() => client.getState().friends.incoming.length === 1);
+    // Closing the pop-up keeps the request.
+    client.dismissRequestPopup(DAVE);
+    expect(client.getState().requestPopups).toEqual([]);
+    expect(client.getState().friends.incoming.map((f) => f.uid)).toEqual([DAVE]);
+
+    // Accepting answers with the new lists.
+    server.routes[`POST /v1/friends/requests/${DAVE}/accept`] = () => lists({ friends: [carol, dave] });
+    expect(await client.acceptFriend(DAVE)).toEqual({ ok: true });
+    expect(client.getState().friends.friends.map((f) => f.uid)).toEqual([CAROL, DAVE]);
+    // The player's own request accepted is an event (a toast).
+    server.send({ type: "friends", change: "accepted", player: carol });
+    await until(() => events.some((e) => e.type === "friend-accepted"));
+  });
+
+  it("sends a request by code and says whether they are friends now", async () => {
+    await start({
+      "GET /v1/friends": () => lists(),
+      "POST /v1/friends/requests": (body) => ({
+        status: body.to === "CA#1" ? "friends" : "sent",
+        player: body.to === "CA#1" ? carol : dave,
+        ...lists({ outgoing: [dave] }),
+      }),
+    });
+    expect(await client.sendFriendRequest("  DA#2 ")).toEqual({ ok: true, status: "sent", player: dave });
+    expect(server.calls.find((c) => c.path === "/v1/friends/requests")?.body).toEqual({ to: "DA#2" });
+    expect(client.getState().friends.outgoing.map((f) => f.uid)).toEqual([DAVE]);
+    expect(await client.sendFriendRequest("CA#1")).toMatchObject({ ok: true, status: "friends" });
+    expect(await client.sendFriendRequest("  ")).toMatchObject({ ok: false });
+  });
+
+  it("uploads the install's ignore list once, then keeps the account's in the game's file", async () => {
+    let account: string[] = [];
+    await start(
+      {
+        "GET /v1/friends": () => lists(),
+        "GET /v1/me/ignores": () => ({ ignored: account, imported: false }),
+        "POST /v1/me/ignores/import": (body) => {
+          account = body.uids;
+          return { ignored: account, imported: true };
+        },
+        [`PUT /v1/me/ignores/${CAROL}`]: () => {
+          account = [...account, CAROL];
+          return { ignored: account, imported: true };
+        },
+      },
+      [BOB],
+    );
+    await until(() => server.calls.some((c) => c.path === "/v1/me/ignores/import"));
+    expect(server.calls.find((c) => c.path === "/v1/me/ignores/import")?.body).toEqual({ uids: [BOB] });
+    await untilAsync(async () => (await readHiddenFile(dir, syncedHiddenFile(ME))) !== null);
+    expect(await readHiddenFile(dir, syncedHiddenFile(ME))).toEqual([BOB]);
+
+    // The game ignores carol: the account follows (the file is looked at every 2 s).
+    await writeHidden(dir, [BOB, CAROL]);
+    await untilAsync(async () => server.calls.some((c) => c.method === "PUT" && c.path === `/v1/me/ignores/${CAROL}`));
+    await until(() => client.getState().ignored.includes(CAROL));
+  });
+
+  it("with the install's copy, sends only what the game changed since", async () => {
+    // The account has bob and dave; this install's game unignored bob and ignored carol while the
+    // launcher was closed.
+    await start(
+      {
+        "GET /v1/friends": () => lists(),
+        "GET /v1/me/ignores": () => ({ ignored: [BOB, DAVE], imported: true }),
+        [`PUT /v1/me/ignores/${CAROL}`]: () => ({ ignored: [BOB, DAVE, CAROL], imported: true }),
+        [`DELETE /v1/me/ignores/${BOB}`]: () => ({ ignored: [DAVE, CAROL], imported: true }),
+      },
+      [CAROL],
+      [BOB],
+    );
+    await until(() => client.getState().ignored.length === 2);
+    const changes = server.calls
+      .filter((c) => c.method === "PUT" || c.method === "DELETE")
+      .map((c) => `${c.method} ${c.path}`);
+    expect(changes).toEqual([`PUT /v1/me/ignores/${CAROL}`, `DELETE /v1/me/ignores/${BOB}`]);
+    expect([...client.getState().ignored].sort()).toEqual([CAROL, DAVE].sort());
+    expect([...(await readHidden(dir))].sort()).toEqual([CAROL, DAVE].sort());
+  });
+
+  it("without a copy (another computer), only adds what this file has", async () => {
+    await start(
+      {
+        "GET /v1/friends": () => lists(),
+        "GET /v1/me/ignores": () => ({ ignored: [DAVE], imported: true }),
+        [`PUT /v1/me/ignores/${CAROL}`]: () => ({ ignored: [DAVE, CAROL], imported: true }),
+      },
+      [CAROL],
+    );
+    await until(() => client.getState().ignored.length === 2);
+    expect(server.calls.filter((c) => c.method === "DELETE")).toEqual([]);
+    expect([...(await readHidden(dir))].sort()).toEqual([CAROL, DAVE].sort());
   });
 });
