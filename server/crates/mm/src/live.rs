@@ -199,6 +199,11 @@ impl LiveStore {
         self.with(|m| m.get(id).filter(|s| !s.hidden).map(|s| s.entry.clone()))
     }
 
+    /// A stream's entry, hidden ones too, and whether it is hidden (mm's own reads only).
+    pub fn entry_any(&self, id: &str) -> Option<(LiveEntry, bool)> {
+        self.with(|m| m.get(id).map(|s| (s.entry.clone(), s.hidden)))
+    }
+
     pub fn subscribe(&self, id: &str) -> Option<watch::Receiver<u64>> {
         self.with(|m| m.get(id).filter(|s| !s.hidden).map(|s| s.tx.subscribe()))
     }
@@ -275,6 +280,21 @@ pub struct RestoredMatch {
     pub age: Duration,
 }
 
+/// [`LiveBook::match_progress`].
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct MatchProgress {
+    /// The game number the players see: the latest game streamed, 1 before one.
+    pub game: u32,
+    /// Games won so far by each player.
+    pub wins: HashMap<Uuid, u32>,
+    /// Each player's team in the latest game streamed (2v2).
+    pub teams: HashMap<Uuid, u32>,
+    /// 2v2: who queued together ([`crate::engine::MatchRecord::pairs`]).
+    pub pairs: HashMap<Uuid, u8>,
+    /// The stream, when `GET /v1/live` lists it.
+    pub live_id: Option<String>,
+}
+
 #[derive(Debug, Clone)]
 struct MatchInfo {
     mode: &'static str,
@@ -284,6 +304,9 @@ struct MatchInfo {
     names: HashMap<Uuid, (String, String)>,
     made: Instant,
     stream: String,
+    /// 2v2: who queued together (`MatchRecord::pairs`, in `players` order); zeros otherwise and
+    /// for a match read back after a restart.
+    pairs: [u8; 4],
 }
 
 #[derive(Debug, Clone)]
@@ -638,6 +661,40 @@ impl LiveBook {
         self.streams.len()
     }
 
+    /// How far match `match_id`'s set is, for the launcher's queue box (`MmStatus::matched`):
+    /// `None` when its stream is over (the set can't go on); game 1 at 0-0 for a match not
+    /// streamed (yet).
+    pub fn match_progress(&self, match_id: &str) -> Option<MatchProgress> {
+        let Some(m) = self.matches.get(match_id) else {
+            return Some(MatchProgress { game: 1, ..Default::default() });
+        };
+        let book = self.streams.get(&m.stream);
+        if book.is_some_and(|b| b.set_over || b.over_at.is_some()) {
+            return None;
+        }
+        let pairs = m.players.iter().zip(m.pairs).map(|(u, p)| (*u, p)).collect();
+        let mut progress = MatchProgress { game: 1, pairs, ..Default::default() };
+        if let Some(b) = book {
+            progress.wins = b.wins.clone();
+        }
+        // The stream's list entry, listed or hidden (a Ranked set streamed only for the record).
+        if let Some((entry, hidden)) = self.store.entry_any(&m.stream) {
+            if entry.game.state == GameState::Over {
+                return None;
+            }
+            progress.game = entry.game.number.max(1);
+            for p in &entry.players {
+                let Ok(uid) = Uuid::parse_str(&p.uid) else { continue };
+                progress.wins.insert(uid, p.wins);
+                if let Some(t) = p.team_id {
+                    progress.teams.insert(uid, t);
+                }
+            }
+            progress.live_id = (!hidden).then(|| m.stream.clone());
+        }
+        Some(progress)
+    }
+
     /// A match mm made (a pairing or a room's start). `names`: each player's name and connect code
     /// as mm knows them (from their online connection), which the list uses instead of what an
     /// upload says.
@@ -690,6 +747,7 @@ impl LiveBook {
                 names,
                 made: now,
                 stream,
+                pairs: m.pairs,
             },
         );
     }
@@ -727,7 +785,16 @@ impl LiveBook {
         // No stream yet: the next offer makes one (fresh_stream).
         self.matches.insert(
             r.match_id,
-            MatchInfo { mode, room: r.room, players: r.players, host: r.host, names, made, stream: String::new() },
+            MatchInfo {
+                mode,
+                room: r.room,
+                players: r.players,
+                host: r.host,
+                names,
+                made,
+                stream: String::new(),
+                pairs: [0; 4],
+            },
         );
     }
 
@@ -1405,6 +1472,7 @@ impl LiveBook {
                     team_id: num("teamId"),
                     wins: wins.get(&uid).copied().unwrap_or(0),
                     rating: None,
+                    rank: None,
                 });
             }
         }
@@ -2941,6 +3009,36 @@ mod tests {
         t.advance(Duration::from_secs(1));
         assert!(over(&t), "2-0 wins a Ranked set");
         assert!(matches!(read_all(&t.book.store, &t.book.store.entries()[0].id).last(), Some(LiveLine::Over)));
+    }
+
+    /// The queue box's view of a set (`MmStatus::matched`): game 1 at 0-0 before anything is
+    /// streamed, then the stream's game number and wins, its id once listed, and nothing once
+    /// the set is over. Hidden Ranked streams count too, without an id.
+    #[test]
+    fn match_progress_follows_the_stream() {
+        let mut t = T::with_match_mode(SpectateMode::On, Mode::Ranked);
+        let p = t.book.match_progress(MATCH).unwrap();
+        assert_eq!((p.game, p.wins.values().sum::<u32>(), p.live_id.clone()), (1, 0, None));
+        assert_eq!(t.book.match_progress("mode.unranked-unknown").unwrap().game, 1, "a match mm doesn't stream");
+        play_game(&mut t, 1, r#"{"endMethod":"game","winnerPort":1}"#);
+        t.advance(Duration::from_secs(1));
+        let p = t.book.match_progress(MATCH).unwrap();
+        assert_eq!((p.game, p.wins.get(&t.a).copied(), p.wins.get(&t.b).copied()), (1, Some(1), Some(0)));
+        assert_eq!(p.live_id, Some(stream_id(&t)));
+        play_game(&mut t, 2, r#"{"endMethod":"game","winnerPort":1}"#);
+        t.advance(Duration::from_secs(1));
+        assert_eq!(t.book.match_progress(MATCH), None, "2-0: the set is over");
+
+        // Nobody lets others watch: hidden, still counted.
+        let mut t = T::with_match_mode(SpectateMode::On, Mode::Ranked);
+        let a = t.a;
+        t.offer_with(A, a, 1, 0, false);
+        let out = t.advance(Duration::from_secs(3));
+        let slot = role(&out, A).unwrap()["slot"].as_u64().unwrap() as u32;
+        let info = t.info(1);
+        t.send_chunk(A, slot, 0, &info);
+        let p = t.book.match_progress(MATCH).unwrap();
+        assert_eq!((p.game, p.live_id), (1, None));
     }
 
     /// The only uploader stops mid-game (players first): spectators get the rest cut at once

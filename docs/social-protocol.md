@@ -27,13 +27,14 @@ The answer is server-sent events: one JSON object per `data:` line, a `: ping` c
 
 | Event | Fields |
 |---|---|
-| `welcome` | `you` (uid), `online` (members, by name, the receiver left out), `room` (the receiver's room or null). Always first. |
+| `welcome` | `you` (uid), `online` (members, by name, the receiver left out), `room` (the receiver's room or null), `queue` (the receiver's search or match or null; absent from an older server). Always first. |
 | `online` | `member`: a player came online, or came back with a new session key. |
 | `offline` | `uid` |
 | `dm` | `from`, `kx` (the sender's session key the box was sealed with), `box` (hex) |
 | `invite` | `from`, `kind`: `room` with `room`, or `direct` with `connectCode` (the inviter's) |
 | `invite-answer` | `by`, `kind`, `accept`, `connectCode` (the invitee's) |
 | `room` | `room`: the receiver's room changed (joined, left, slots, status) or null |
+| `queue` | `queue`: the receiver's own search or match changed (the sidebar's queue box, `docs/design/launcher-redesign.md` §7), or null: neither |
 | `replaced` | another launcher took over the account |
 | `account` | an admin renamed the account (`pp-admin user rename`): read `/v1/me` again; the others got its `online` again with the new name |
 | `banned` | the account was banned (`pp-admin user ban`): the stream ends and its session is gone; the others get its `offline` |
@@ -42,6 +43,13 @@ The answer is server-sent events: one JSON object per `data:` line, a `: ping` c
 A member is `{uid, displayName, connectCode, idKey, kx, kxSig}`. A room is `{code, players, openSlots, mode, status, joinable}` (`status` `waiting`, `starting` or `in-game`; `joinable`: an open slot is empty).
 
 Rooms live in mm. mm's status snapshot (`GET /status` on its local listener) carries `members`, every room player's room by uid, public and private rooms alike. accounts reads it at most once a second, only while launchers are connected, to send `room` events and to check invites; `GET /v1/rooms` never includes it.
+
+A queue is one of:
+
+- `{"state": "searching", "mode", "since", "partner"?}`: the player's game has an Unranked, Ranked or 2v2 ticket waiting (`mode` `unranked`, `ranked` or `twos`). `since` (RFC 3339) is when that ticket came: a new ticket (a requeue after a failed connect, a search started again) starts it again. `partner`: in 2v2, the party's other player.
+- `{"state": "playing", "mode", "opponents", "game", "wins", "liveId"?}`: the player is in a Direct, Unranked, Ranked or 2v2 match (`mode` `direct`, `unranked`, `ranked` or `twos`), from the pairing until a player of it searches again, goes to a room or their game leaves the online CSS (the match's chat group has under two players), or its stream saw the set end (a Ranked set won, a disconnect). `opponents`: the other side; in 2v2 the other team of the latest game streamed, before one those not queued with the player (a pair stays on one team), or all three others when all four searched alone. `game`: the latest game number streamed (1 before one); `wins`: games won in the set so far, the player's side first (`[0, 0]` for a set that isn't streamed). `liveId`: its `GET /v1/live` id, when it is listed there.
+
+A player in a queue is `{uid, displayName, connectCode}` with `country` and `main` as the player's own launcher lists them (none while it is offline). Only players whose games are online with a chat key are in a match's chat group, so a match shows only once both players' games run a current build. mm's snapshot carries the searches (`searching`: uid, mode, since, partner) and the matches (`matched`: mode, players with their wins, team and pair, game, liveId) as internal lists, like `members`: accounts sends each launcher its own player's and never serves them.
 
 ## 4. Requests
 

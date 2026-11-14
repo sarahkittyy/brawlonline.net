@@ -229,9 +229,13 @@ Session auth (`Authorization: Bearer <sessionToken>`; 401 without it, since the 
   ],
   "queues": {"unranked": 6, "ranked": 3},
   "playing": {"unranked": 14, "ranked": 8},
+  "queueEta": {"unranked": 28, "ranked": null},
   "updatedAt": "2026-10-09T15:00:00.000Z"
 }
 ```
+
+- `queueEta` (2026-11-14, `docs/design/launcher-redesign.md` §7): how long a search waits now, per queue, in whole seconds: the current UTC hour of the day's median wait over the last 14 days, exactly `pp-admin stats`' ETA column (`accounts::queue_stats`, which `stats` uses too: tickets joined into searches, searches given up counted as still waiting when they stopped). `null` ("10+ min") when most searches that hour gave up (`stats`' "never"), the median is 10 minutes or more, or the hour had under 5 searches. accounts reads the searches when it starts and every 10 minutes after, never for a request; absent until the first read is done (and from an older server).
+- `countries` and `mains` by slot (as `names`): each player's flag code and primary main (character key) when they show it beside their name, else null. Only accounts fills them in, from the profiles (P+ rooms only; Brawl Mods rooms have the host's `hostCountry`).
 
 - `queues` (2026-10-12): the Unranked and Ranked tickets waiting in mm, for the "X in queue" under Home's Play unranked / Play ranked (Unranked and Ranked not shown since 2026-11-09: an empty queue put players off searching; `twos` still under Play 2v2). Absent from an older mm (accounts then sends zeros).
 - `playing` (2026-10-12): the players in an Unranked and a Ranked match, the "X in game" beside "X in queue" (only `twos` shown since 2026-11-09). mm counts the members of the matches' chat groups (`docs/chat-protocol.md` §2) that still have two or more: a player is in from the pairing until their game leaves the online CSS (between games and runbacks too), searches again or closes, and a player whose opponent left is out. Absent from an older mm (zeros).

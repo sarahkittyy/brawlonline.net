@@ -89,6 +89,17 @@ async fn counts_and_estimated_waits() {
     assert!(line.ends_with("      -      -|   0.0      -      -"), "{line}");
     assert!(hour_line(&text, 4).contains("|   0.0      -      -|"), "{text}");
 
+    // accounts' `queueEta` (GET /v1/rooms) reads the same rows the same way: at 03 UTC Unranked's
+    // is the median, 30 s; Ranked's null (under 5 searches); at 04 neither has any.
+    let cache = accounts::queue_stats::EtaCache::default();
+    cache.refresh(&pool).await.unwrap();
+    let at = |h: u32| {
+        use chrono::TimeZone;
+        cache.now(chrono::Utc.with_ymd_and_hms(2026, 11, 14, h, 30, 0).unwrap()).unwrap()
+    };
+    assert_eq!(at(3), common::rooms::QueueEta { unranked: Some(30), ranked: None });
+    assert_eq!(at(4), common::rooms::QueueEta { unranked: None, ranked: None });
+
     // mm not answering: the estimates still come.
     let (ok, text) = run(&url, &["stats", "--offset", "1", "--mm-status-url", "http://127.0.0.1:9/status"]).await;
     assert!(ok, "{text}");

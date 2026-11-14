@@ -310,11 +310,14 @@ struct Row {
     ruleset_version: Option<i32>,
 }
 
-/// One page of `uid`'s matches older than `before` (newest first).
+/// One page of `uid`'s matches older than `before` (newest first); with `opponent`, only those
+/// that player played in too.
+#[allow(clippy::too_many_arguments)]
 pub async fn matches(
     pool: &PgPool,
     uid: Uuid,
     mode: ModeFilter,
+    opponent: Option<Uuid>,
     before: Option<&Key>,
     limit: u32,
     now: DateTime<Utc>,
@@ -328,6 +331,7 @@ pub async fn matches(
                 m.room_code, m.room_mode, m.ports, m.teams, m.ruleset_code, m.ruleset_name, m.ruleset_version
            FROM mm_matches m
           WHERE m.players @> ARRAY[$1]::uuid[]{}
+            AND ($5::uuid IS NULL OR m.players @> ARRAY[$5]::uuid[])
             AND ($2::timestamptz IS NULL OR (m.created_at, m.match_id) < ($2, $3))
             AND (EXISTS (SELECT 1 FROM game_reports g WHERE g.match_id = m.match_id)
                  OR (m.mode = {MODE_RANKED} AND m.status <> 'ASSIGNED'
@@ -344,6 +348,7 @@ pub async fn matches(
         .bind(before.map(|k| k.created_at))
         .bind(before.map(|k| k.match_id.clone()))
         .bind(limit + 1)
+        .bind(opponent)
         .fetch_all(&mut *tx)
         .await?;
     let more = rows.len() as i64 > limit;
@@ -529,10 +534,14 @@ pub struct MatchesQuery {
     pub mode: Option<String>,
     pub limit: Option<u32>,
     pub before: Option<String>,
+    /// A uid: only the matches that player played in (a friend's profile shows the caller's
+    /// history with them).
+    pub opponent: Option<String>,
 }
 
-/// `GET /v1/me/matches?mode=all|ranked|unranked|rooms&limit=&before=`. Session auth; limited per
-/// account ([`common::ratelimit::HISTORY_WINDOWS`]).
+/// `GET /v1/me/matches?mode=all|ranked|unranked|rooms|twos&limit=&before=&opponent=`. Session
+/// auth; limited per account ([`common::ratelimit::HISTORY_WINDOWS`]). 400 `invalid_opponent`
+/// when `opponent` is not a uid.
 pub async fn my_matches(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -549,9 +558,16 @@ pub async fn my_matches(
         None => None,
         Some(b) => Some(Key::parse(b).ok_or_else(|| ApiError::bad_request("invalid_cursor", "Invalid cursor"))?),
     };
+    let opponent = match q.opponent.as_deref().map(str::trim).filter(|o| !o.is_empty()) {
+        None => None,
+        Some(o) => Some(
+            Uuid::parse_str(o)
+                .map_err(|_| ApiError::bad_request("invalid_opponent", "opponent must be a player's uid"))?,
+        ),
+    };
     let n = cursor::page_limit(q.limit, DEFAULT_LIMIT, MAX_LIMIT);
-    let mut page =
-        matches(&state.pool, user.uid, mode, before.as_ref(), n, Utc::now(), state.cfg.ranked_timing()).await?;
+    let timing = state.cfg.ranked_timing();
+    let mut page = matches(&state.pool, user.uid, mode, opponent, before.as_ref(), n, Utc::now(), timing).await?;
     let base = state.cfg.public_base_url.trim_end_matches('/');
     for r in page.matches.iter_mut().filter_map(|m| m.room.as_mut()?.ruleset.as_mut()) {
         r.link = format!("{base}/r/{}", r.code);

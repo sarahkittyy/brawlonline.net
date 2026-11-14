@@ -257,7 +257,8 @@ Option: serve a tiny GraphQL endpoint with exactly these operations (async-graph
 | (none: the server decides the set from the game reports) | 0xC2 path | |
 | `GET /v1/ranked/result?matchId=&uid=` (built) | `getRankedMatchPersonalResult` | public |
 | `GET /v1/ranked/leaderboard?limit=&after=&q=` (built; keyset pages, no regions or seasons; `q` keeps the players whose name or code contains it, with their positions on the whole board) | slippi.gg | public, per-IP limit |
-| `GET /v1/me/matches?mode=all\|ranked\|unranked\|rooms\|twos&limit=&before=` (built) | slippi.gg profile | session |
+| `GET /v1/me/friends/leaderboard` (built 2026-11-14; the caller's and their friends' leaderboard rows, the same entries and positions as the whole board, best first, as one page: `next` null, `total` the rows; friends still placing are not on it) | (none: ours) | session, the history's limit |
+| `GET /v1/me/matches?mode=all\|ranked\|unranked\|rooms\|twos&limit=&before=&opponent=` (built; `opponent` (2026-11-14) a uid: only the matches that player played in too, with the mode and the pages; 400 `invalid_opponent` for a non-uid) | slippi.gg profile | session |
 | `POST /v1/rulesets`, `GET /v1/rulesets/<code>[/preview]`, `GET /v1/me/rulesets[/recent]`, `PUT /v1/me/rulesets/<code>/hidden`, `/v1/me/ruleset-drafts[/<id>]`, `GET`/`PUT /v1/me/ruleset` (built 2026-10-11: room rulesets, `docs/rulesets-protocol.md`) | (none: ours) | public lookup (per-IP limit); the rest session |
 
 Play key: 32 random bytes in base64url. Store only its SHA-256. Rotate it on password change and on admin action.

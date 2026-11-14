@@ -895,6 +895,10 @@ pub struct PublicRoom {
     /// for one who doesn't. Only accounts fills it in (`GET /v1/rooms`); mm never sends it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub countries: Vec<Option<String>>,
+    /// Every player's primary main (character key), by slot (as `names`), when they show it beside
+    /// their name; null for one who doesn't. Only accounts fills it in, as `countries`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mains: Vec<Option<String>>,
     /// An open slot is empty, so the room can be joined (also during a game).
     pub joinable: bool,
     /// What the room plays (its ruleset's code, name and set), for the room list.
@@ -961,6 +965,85 @@ pub struct MmStatus {
     /// serves this list.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub friend_rooms: Vec<PublicRoom>,
+    /// How long a search waits now ([`QueueEta`]). Only accounts fills it in (`GET /v1/rooms`),
+    /// from `queue_searches`; mm never sends it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub queue_eta: Option<QueueEta>,
+    /// The players searching Unranked, Ranked or 2v2. Internal, as [`MmStatus::members`]: accounts
+    /// tells each launcher its own player's search (`queue` on the social stream) and never
+    /// serves the list.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub searching: Vec<QueueSearcher>,
+    /// The Direct, Unranked, Ranked and 2v2 matches under way (from the pairing until a player
+    /// searches again or their game leaves the online CSS). Internal, as [`MmStatus::searching`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub matched: Vec<QueueMatch>,
+}
+
+/// [`MmStatus::queue_eta`]: per queue, the median wait in seconds of the current UTC hour of the
+/// day over the last 14 days (`pp-admin stats`' ETA); `None` ("10+ min") when most searches that
+/// hour gave up, the median is 10 minutes or more, or the hour had under 5 searches.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct QueueEta {
+    pub unranked: Option<u32>,
+    pub ranked: Option<u32>,
+}
+
+/// A player as [`QueueSearcher`] and [`QueueMatch`] name them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct QueuePlayer {
+    /// The player's account (hyphenated lowercase UUID).
+    pub uid: String,
+    pub display_name: String,
+    pub connect_code: String,
+}
+
+/// One player searching, for [`MmStatus::searching`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QueueSearcher {
+    /// The player's account (hyphenated lowercase UUID).
+    pub uid: String,
+    /// `unranked`, `ranked` or `twos`.
+    pub mode: String,
+    /// RFC 3339: when the player's current ticket came.
+    pub since: String,
+    /// 2v2: the other player of the party searching with them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub partner: Option<QueuePlayer>,
+}
+
+/// One player of a [`QueueMatch`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct QueueMatchPlayer {
+    #[serde(flatten)]
+    pub player: QueuePlayer,
+    /// Games won in the set so far (from its stream; 0 before its first game's end).
+    pub wins: u32,
+    /// The player's team in the latest game streamed (2v2); `None` before one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub team: Option<u32>,
+    /// 2v2: the players who queued together share a number; 0 searched alone (and in the other
+    /// modes).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub pair: u8,
+}
+
+/// One match under way, for [`MmStatus::matched`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct QueueMatch {
+    /// `direct`, `unranked`, `ranked` or `twos`.
+    pub mode: String,
+    pub players: Vec<QueueMatchPlayer>,
+    /// The game number the players see (the latest one streamed; 1 before one).
+    pub game: u32,
+    /// The match's stream in `GET /v1/live`, when it is listed there.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub live_id: Option<String>,
 }
 
 /// The longest room name, in characters (`users.room_name`'s check).

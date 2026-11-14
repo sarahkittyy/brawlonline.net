@@ -501,8 +501,7 @@ async fn print_stats(pool: &PgPool, days: i64, offset: i64, mm_status_url: &str)
     }
     let searches = admin::queue_searches(pool, days).await?;
     let hours: Vec<Vec<admin::HourWait>> = MODES.iter().map(|(m, _)| admin::hourly_waits(&searches, m)).collect();
-    // A median from fewer searches than this is not printed.
-    const MIN_SEARCHES: usize = 5;
+    use admin::MIN_SEARCHES;
     let mmss = |s: Option<f64>| s.map_or("never".to_string(), |s| format!("{}:{:02}", s as u64 / 60, s as u64 % 60));
     let local = if offset < 0 { format!("UTC{offset}") } else { format!("UTC+{offset}") };
     println!();

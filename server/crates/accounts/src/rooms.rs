@@ -78,8 +78,9 @@ impl MmStatusSource {
 }
 
 impl MmStatusSource {
-    /// [`MmStatusSource::get`] with each room player's flag (`countries`, by slot) and each Brawl
-    /// Mods room host's (`hostCountry`), for those who show it beside their name.
+    /// [`MmStatusSource::get`] with each room player's flag and primary main (`countries` and
+    /// `mains`, by slot) and each Brawl Mods room host's flag (`hostCountry`), for those who show
+    /// them beside their name.
     pub async fn get_with_flags(&self, pool: &sqlx::PgPool) -> anyhow::Result<MmStatus> {
         let status = self.get().await?;
         let mut flagged = self.flagged.lock().await;
@@ -94,7 +95,7 @@ impl MmStatusSource {
     }
 }
 
-/// Fills in the room players' and Brawl Mods hosts' flags.
+/// Fills in the room players' flags and mains and the Brawl Mods hosts' flags.
 async fn with_flags(pool: &sqlx::PgPool, mut s: MmStatus) -> sqlx::Result<MmStatus> {
     let parse = |u: &String| uuid::Uuid::parse_str(u).ok();
     let mut uids: Vec<uuid::Uuid> =
@@ -103,9 +104,12 @@ async fn with_flags(pool: &sqlx::PgPool, mut s: MmStatus) -> sqlx::Result<MmStat
     uids.sort();
     uids.dedup();
     let tags = crate::profile::name_tags(pool, &uids).await?;
-    let flag = |u: &String| parse(u).and_then(|u| tags.get(&u)).and_then(|t| t.country.clone());
+    let tag = |u: &String| parse(u).and_then(|u| tags.get(&u));
+    let flag = |u: &String| tag(u).and_then(|t| t.country.clone());
+    let main = |u: &String| tag(u).and_then(|t| t.main.clone());
     for r in s.rooms.iter_mut().chain(s.friend_rooms.iter_mut()) {
         r.countries = r.uids.iter().map(flag).collect();
+        r.mains = r.uids.iter().map(main).collect();
     }
     for r in &mut s.mod_rooms {
         r.host_country = flag(&r.host_uid);
@@ -114,7 +118,9 @@ async fn with_flags(pool: &sqlx::PgPool, mut s: MmStatus) -> sqlx::Result<MmStat
 }
 
 /// `GET /v1/rooms`: `{online, rooms: [{code, host, players, openSlots, mode, status, names,
-/// joinable, name}], updatedAt, yourRoom}`. Session auth (the list names players); limited per
+/// countries, mains, joinable, name}], queues, playing, queueEta, updatedAt, yourRoom}`.
+/// `queueEta` is the current hour's from [`crate::queue_stats::EtaCache`] (absent until accounts
+/// first read the searches). Session auth (the list names players); limited per
 /// account ([`common::ratelimit::ROOMS_WINDOWS`]). 503 `mm_unavailable` when mm does not answer.
 /// `yourRoom`: the room the caller is in, P+ or Brawl Mods, private ones too (their launcher pins
 /// it and lets its host name it).
@@ -152,7 +158,10 @@ pub async fn rooms(State(state): State<AppState>, headers: HeaderMap) -> ApiResu
                 mod_room_index: Vec::new(),
                 mod_members: Vec::new(),
                 friend_rooms: Vec::new(),
+                searching: Vec::new(),
+                matched: Vec::new(),
                 your_room,
+                queue_eta: state.queue_eta.now(chrono::Utc::now()),
                 ..s
             }))
         }

@@ -18,6 +18,7 @@ pub mod mail;
 pub mod pages;
 pub mod password;
 pub mod profile;
+pub mod queue_stats;
 pub mod ranked;
 pub mod rooms;
 pub mod rulesets;
@@ -66,6 +67,8 @@ pub struct AppState {
     pub friend_cache: Arc<friends::FriendCache>,
     /// The slur check of names and codes (off without `DEEPINFRA_API_KEY`).
     pub slur_filter: Arc<slur_filter::SlurFilter>,
+    /// `GET /v1/rooms`' `queueEta`, refreshed by [`queue_stats::eta_watcher`].
+    pub queue_eta: Arc<queue_stats::EtaCache>,
 }
 
 impl AppState {
@@ -85,6 +88,7 @@ impl AppState {
             live: Arc::new(live::LiveHub::new(!cfg.disable_rate_limits)),
             friend_cache: Arc::new(friends::FriendCache::default()),
             slur_filter,
+            queue_eta: Arc::new(queue_stats::EtaCache::default()),
             cfg: Arc::new(cfg),
         })
     }
@@ -238,6 +242,7 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/ranked/report-leave", post(ranked::report_leave))
         .route("/v1/ranked/result", get(ranked::result))
         .route("/v1/ranked/leaderboard", get(leaderboard::leaderboard))
+        .route("/v1/me/friends/leaderboard", get(leaderboard::friends_leaderboard))
         .route("/v1/rooms", get(rooms::rooms))
         .route("/v1/mod-rooms/{code}", get(rooms::mod_room))
         .route("/v1/me/room-name", put(rooms::set_room_name))
@@ -304,6 +309,7 @@ pub async fn serve(listener: tokio::net::TcpListener, state: AppState) -> anyhow
     let room_watcher = social::room_watcher(state.clone());
     let account_watcher = social::account_watcher(state.clone());
     let live_ticker = live::ticker(state.live.clone());
+    let eta_watcher = queue_stats::eta_watcher(state.pool.clone(), state.queue_eta.clone());
     let app = router(state).into_make_service_with_connect_info::<SocketAddr>();
     tokio::select! {
         r = axum::serve(listener, app) => r?,
@@ -311,6 +317,7 @@ pub async fn serve(listener: tokio::net::TcpListener, state: AppState) -> anyhow
         () = room_watcher => {}
         () = account_watcher => {}
         () = live_ticker => {}
+        () = eta_watcher => {}
     }
     Ok(())
 }
