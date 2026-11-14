@@ -40,8 +40,8 @@ import { ExternalLink } from "@/components/external_link";
 import { RoomNameMessages } from "@/components/room_name/room_name.messages";
 import { RoomNameField } from "@/components/room_name/room_name_field";
 import { UserName } from "@/components/user_name/user_name";
+import { useLocalStorage } from "@/lib/hooks/use_local_storage";
 
-import { ContentBlock } from "../overview/content_block/content_block";
 import { CodesButton, CodesChip, hasRoomCodes } from "./codes_dialog";
 import { ControllerMenu } from "./controller_menu";
 import type { CardCheckState } from "./join_with_menu";
@@ -102,6 +102,8 @@ const fileName = (p: string | null) => (p ? p.split(/[\\/]/).pop() ?? p : null);
 
 /** Where Wii/GCN Rollback's beta feedback goes. */
 const FEEDBACK_URL = "https://brawlonline.net/discord";
+/** Whether the next room the player hosts is public: the room panel's switch, as last left (on this computer). */
+const HOST_PUBLIC_KEY = "MODS_HOST_PUBLIC";
 /** How long the public switch shows a click the room file does not say yet. */
 const PUBLIC_WAIT_MS = 5000;
 
@@ -121,28 +123,35 @@ export const ModsView = (props: ModsViewProps) => {
     }
   }, [running]);
   const shownError = error ?? (!state?.running && state?.lastError !== dismissed ? state?.lastError : null);
+  // Public or private is the room's: its panel has the switch. A new room opens the way the last one was left.
+  const [hostPublic, setHostPublic] = useLocalStorage(HOST_PUBLIC_KEY, true);
   return (
     <div className={styles.page}>
-      <div className={styles.introRow}>
-        <p className={styles.intro}>{Messages.intro()}</p>
-        <p className={styles.beta}>
-          {Messages.betaLine1()}
-          <br />
-          {Messages.betaLine2Before()}
-          <ExternalLink href={FEEDBACK_URL}>{Messages.discord()}</ExternalLink>
-        </p>
+      <div className={styles.head}>
+        <div className={styles.headText}>
+          <h1 className={styles.title}>{Messages.tabLabel()}</h1>
+          <p className={styles.intro}>{Messages.intro()}</p>
+        </div>
+        <div className={styles.headSide}>
+          {state && (
+            <ControllerMenu
+              controller={state.controller}
+              controllers={state.controllers}
+              input={status?.input}
+              gameWants={roomBuild ? defaultController(roomBuild) : null}
+              onChange={props.onControllerChange}
+              onConfigure={props.onConfigureControllers}
+              onOpen={props.onRefreshControllers}
+            />
+          )}
+          <p className={styles.beta}>
+            {Messages.betaLine1()}
+            <br />
+            {Messages.betaLine2Before()}
+            <ExternalLink href={FEEDBACK_URL}>{Messages.discord()}</ExternalLink>
+          </p>
+        </div>
       </div>
-      {state && (
-        <ControllerMenu
-          controller={state.controller}
-          controllers={state.controllers}
-          input={status?.input}
-          gameWants={roomBuild ? defaultController(roomBuild) : null}
-          onChange={props.onControllerChange}
-          onConfigure={props.onConfigureControllers}
-          onOpen={props.onRefreshControllers}
-        />
-      )}
       {shownError && (
         <div className={clsx(styles.error, styles.dismissable)}>
           <span>{shownError}</span>
@@ -157,91 +166,85 @@ export const ModsView = (props: ModsViewProps) => {
           )}
         </div>
       )}
-      <div className={styles.columns}>
-        {/* Left: the public rooms, under the player's own room while Dolphin runs one. */}
-        <div className={styles.column}>
-          {state?.running && (
-            <div className={styles.roomSlot}>
-              <RoomPanel
-                status={status}
-                onRequest={props.onRequest}
-                onCopyCode={props.onCopyCode}
-                yourRoom={props.yourRoom}
-                onRename={props.onRenameRoom}
-                onAdminRename={props.onAdminRenameRoom}
-                onCodes={roomBuild && props.onCodes ? () => props.onCodes?.(roomBuild) : undefined}
-              />
-            </div>
-          )}
-          <PublicRoomsBlock
-            rooms={props.publicRooms}
-            ownCode={status?.room?.code ?? null}
-            builds={state?.builds ?? []}
-            discAlone={state?.discAlone}
-            roomGames={state?.roomGames}
-            onSetRoomGame={props.onSetRoomGame}
-            checkRoomCards={props.checkRoomCards}
-            disabled={!!state?.running || props.startingBuildId !== null}
-            onJoin={props.onJoin}
-            onJoinCode={props.onJoinCode}
-            onMissingGame={props.onMissingGame}
-            onFixBuild={props.onFixBuild}
-            onLogIn={props.onLogIn}
-            onAdminRename={props.onAdminRenameRoom}
-          />
-        </div>
-        {/* Right: the player's games. */}
-        <div className={styles.column}>
-          <ContentBlock
-            fill={true}
-            title={Messages.yourBuilds()}
-            titleAction={
-              <>
-                <div className={styles.addButtons}>
-                  <Tooltip title={Messages.addBuildTooltip()}>
-                    <Button
-                      size="small"
-                      classes={{ startIcon: styles.addIcon }}
-                      startIcon={<AddRoundedIcon />}
-                      onClick={props.onAddBuild}
-                    >
-                      <span className={styles.addLabel}>{Messages.addBuild()}</span>
-                    </Button>
-                  </Tooltip>
-                  <Tooltip title={Messages.addFolderTooltip()}>
-                    <Button
-                      size="small"
-                      classes={{ startIcon: styles.addIcon }}
-                      startIcon={<CreateNewFolderOutlinedIcon />}
-                      onClick={props.onAddFolder}
-                    >
-                      <span className={styles.addLabel}>{Messages.addFolder()}</span>
-                    </Button>
-                  </Tooltip>
-                </div>
-              </>
+      {/* The player's own room while Dolphin runs one, then the public rooms and the player's games. */}
+      {state?.running && (
+        <RoomPanel
+          status={status}
+          onRequest={(request) => {
+            if (request.op === "public") {
+              setHostPublic(request.public);
             }
-            content={
-              <div className={styles.builds}>
-                {state && state.builds.length === 0 && <p className={styles.empty}>{Messages.noBuilds()}</p>}
-                {state?.builds.map((build) => (
-                  <BuildRow
-                    key={build.id}
-                    build={build}
-                    progress={props.hashProgress[build.id]}
-                    starting={props.startingBuildId === build.id}
-                    disabled={!!state.running || props.startingBuildId !== null}
-                    onEdit={() => props.onEditBuild(build)}
-                    onRemove={() => props.onRemoveBuild(build)}
-                    onCodes={props.onCodes ? () => props.onCodes?.(build) : undefined}
-                    onHost={(isPublic) => props.onHost(build, isPublic)}
-                  />
-                ))}
-              </div>
-            }
-          />
+            props.onRequest(request);
+          }}
+          onCopyCode={props.onCopyCode}
+          yourRoom={props.yourRoom}
+          onRename={props.onRenameRoom}
+          onAdminRename={props.onAdminRenameRoom}
+          onCodes={roomBuild && props.onCodes ? () => props.onCodes?.(roomBuild) : undefined}
+        />
+      )}
+      <PublicRoomsBlock
+        rooms={props.publicRooms}
+        ownCode={status?.room?.code ?? null}
+        builds={state?.builds ?? []}
+        discAlone={state?.discAlone}
+        roomGames={state?.roomGames}
+        onSetRoomGame={props.onSetRoomGame}
+        checkRoomCards={props.checkRoomCards}
+        disabled={!!state?.running || props.startingBuildId !== null}
+        onJoin={props.onJoin}
+        onJoinCode={props.onJoinCode}
+        onMissingGame={props.onMissingGame}
+        onFixBuild={props.onFixBuild}
+        onLogIn={props.onLogIn}
+        onAdminRename={props.onAdminRenameRoom}
+      />
+      <section className={styles.section}>
+        <div className={styles.bar}>
+          <h2 className={styles.heading}>{Messages.yourBuilds()}</h2>
+          <div className={styles.addButtons}>
+            <Tooltip title={Messages.addFolderTooltip()}>
+              <Button
+                size="small"
+                color="inherit"
+                classes={{ startIcon: styles.addIcon }}
+                startIcon={<CreateNewFolderOutlinedIcon />}
+                onClick={props.onAddFolder}
+              >
+                <span className={styles.addLabel}>{Messages.addFolder()}</span>
+              </Button>
+            </Tooltip>
+            <Tooltip title={Messages.addBuildTooltip()}>
+              <Button
+                size="small"
+                variant="outlined"
+                color="inherit"
+                classes={{ startIcon: styles.addIcon }}
+                startIcon={<AddRoundedIcon />}
+                onClick={props.onAddBuild}
+              >
+                <span className={styles.addLabel}>{Messages.addBuild()}</span>
+              </Button>
+            </Tooltip>
+          </div>
         </div>
-      </div>
+        <div className={styles.builds}>
+          {state && state.builds.length === 0 && <p className={styles.empty}>{Messages.noBuilds()}</p>}
+          {state?.builds.map((build) => (
+            <BuildRow
+              key={build.id}
+              build={build}
+              progress={props.hashProgress[build.id]}
+              starting={props.startingBuildId === build.id}
+              disabled={!!state.running || props.startingBuildId !== null}
+              onEdit={() => props.onEditBuild(build)}
+              onRemove={() => props.onRemoveBuild(build)}
+              onCodes={props.onCodes ? () => props.onCodes?.(build) : undefined}
+              onHost={() => props.onHost(build, hostPublic)}
+            />
+          ))}
+        </div>
+      </section>
       <SdSyncDialog
         sync={status?.session?.sd_sync ?? null}
         build={state?.builds.find((b) => b.id === state.runningBuildId) ?? null}
@@ -704,17 +707,15 @@ const PublicRoomsBlock = ({
     }
   };
   return (
-    <ContentBlock
-      fill={true}
-      title={Messages.publicRooms()}
-      titleAction={
-        rooms.kind !== "logged-out" ? (
-          <div className={styles.roomActions}>
+    <section className={styles.section}>
+      <div className={styles.bar}>
+        <h2 className={styles.heading}>{Messages.publicRooms()}</h2>
+        {rooms.kind !== "logged-out" && (
+          <div className={styles.codeBox}>
             <TextField
               size="small"
               variant="outlined"
               fullWidth={false}
-              sx={{ width: 140 }}
               placeholder={Messages.roomCode()}
               value={code}
               inputProps={{ maxLength: 16, "aria-label": Messages.roomCode() }}
@@ -727,41 +728,39 @@ const PublicRoomsBlock = ({
             />
             <Tooltip title={Messages.joinTooltip()}>
               <span>
-                <Button variant="outlined" size="small" disabled={disabled || !code.trim()} onClick={join}>
+                <Button size="small" disabled={disabled || !code.trim()} onClick={join}>
                   {Messages.join()}
                 </Button>
               </span>
             </Tooltip>
           </div>
-        ) : undefined
-      }
-      content={
-        <div className={styles.room}>
-          {content}
-          <JoinWithMenu
-            anchor={menuRoom ? menu!.anchor : null}
-            room={menuRoom?.build ?? null}
-            match={menuMatch}
-            checks={checks}
-            onClose={() => setMenu(null)}
-            onPick={(picked, remember) => {
-              const joinAfter = menu?.joinAfter;
-              setMenu(null);
-              if (!menuRoom) {
-                return;
-              }
-              setPickedHere((p) => ({ ...p, [menuRoom.code]: picked.id }));
-              if (remember) {
-                onSetRoomGame?.(menuRoom.build.hash, picked.id);
-              }
-              if (joinAfter && !disabled) {
-                onJoin(picked, menuRoom.code);
-              }
-            }}
-          />
-        </div>
-      }
-    />
+        )}
+      </div>
+      <div className={styles.room}>
+        {content}
+        <JoinWithMenu
+          anchor={menuRoom ? menu!.anchor : null}
+          room={menuRoom?.build ?? null}
+          match={menuMatch}
+          checks={checks}
+          onClose={() => setMenu(null)}
+          onPick={(picked, remember) => {
+            const joinAfter = menu?.joinAfter;
+            setMenu(null);
+            if (!menuRoom) {
+              return;
+            }
+            setPickedHere((p) => ({ ...p, [menuRoom.code]: picked.id }));
+            if (remember) {
+              onSetRoomGame?.(menuRoom.build.hash, picked.id);
+            }
+            if (joinAfter && !disabled) {
+              onJoin(picked, menuRoom.code);
+            }
+          }}
+        />
+      </div>
+    </section>
   );
 };
 
@@ -783,9 +782,8 @@ const BuildRow = ({
   onEdit: () => void;
   onRemove: () => void;
   onCodes?: () => void;
-  onHost: (isPublic: boolean) => void;
+  onHost: () => void;
 }) => {
-  const [isPublic, setIsPublic] = useState(true);
   const hashing = progress !== undefined;
   return (
     <div className={styles.build}>
@@ -858,15 +856,9 @@ const BuildRow = ({
         {onCodes && hasRoomCodes(build) && (
           <CodesButton names={(build.codes?.on ?? []).map((c) => c.name)} onClick={onCodes} />
         )}
-        <Tooltip title={Messages.publicRoomTooltip()}>
-          <label className={styles.toggle}>
-            <Switch size="small" checked={isPublic} onChange={(e) => setIsPublic(e.target.checked)} />
-            <PublicLabel isPublic={isPublic} />
-          </label>
-        </Tooltip>
         <Tooltip title={Messages.hostTooltip()}>
           <span>
-            <Button variant="contained" size="small" disabled={disabled || hashing} onClick={() => onHost(isPublic)}>
+            <Button variant="outlined" color="inherit" size="small" disabled={disabled || hashing} onClick={onHost}>
               {starting && !hashing ? Messages.opening() : Messages.host()}
             </Button>
           </span>
@@ -959,10 +951,10 @@ const RoomPanel = ({
     title = Messages.opening();
   }
   return (
-    <ContentBlock
-      title={title}
-      titleAction={
-        room ? (
+    <section className={styles.roomPanel} data-testid="mods-room-panel">
+      <div className={styles.roomPanelHead}>
+        <div className={styles.roomTitle}>{title}</div>
+        {room && (
           <div className={styles.roomActions}>
             <Tooltip title={Messages.copyCode()}>
               <button
@@ -975,6 +967,7 @@ const RoomPanel = ({
                 <ContentCopyRoundedIcon style={{ fontSize: 13 }} />
               </button>
             </Tooltip>
+            <span className={styles.grow} />
             {isHost && (
               <Tooltip title={Messages.publicRoomTooltip()}>
                 <label className={styles.toggle}>
@@ -991,66 +984,62 @@ const RoomPanel = ({
               </Tooltip>
             )}
             <Tooltip title={Messages.leaveTooltip()}>
-              <Button size="small" color="secondary" onClick={() => onRequest({ op: "leave" })}>
+              <Button size="small" variant="outlined" color="inherit" onClick={() => onRequest({ op: "leave" })}>
                 {Messages.leave()}
               </Button>
             </Tooltip>
           </div>
-        ) : undefined
-      }
-      content={
-        <div className={styles.room}>
-          {status?.error && <div className={styles.error}>{status.error}</div>}
-          {sessionError && <div className={styles.error}>{Messages.sessionError(sessionError)}</div>}
-          {status?.lastRequest?.result === "failed" && status.lastRequest.error && (
-            <div className={styles.error}>{status.lastRequest.error}</div>
-          )}
-          {status?.state === "left" && <p className={styles.empty}>{Messages.left()}</p>}
-          {syncLine && (
-            <div className={styles.progress}>
-              <LinearProgress
-                variant="determinate"
-                value={
-                  sync?.step === "downloading"
-                    ? ((sync.done ?? 0) * 100) / (sync.total || 1)
-                    : (sync?.checked ?? 0) * 100
-                }
-              />
-              <span>{syncLine}</span>
+        )}
+      </div>
+      <div className={styles.room}>
+        {status?.error && <div className={styles.error}>{status.error}</div>}
+        {sessionError && <div className={styles.error}>{Messages.sessionError(sessionError)}</div>}
+        {status?.lastRequest?.result === "failed" && status.lastRequest.error && (
+          <div className={styles.error}>{status.lastRequest.error}</div>
+        )}
+        {status?.state === "left" && <p className={styles.empty}>{Messages.left()}</p>}
+        {syncLine && (
+          <div className={styles.progress}>
+            <LinearProgress
+              variant="determinate"
+              value={
+                sync?.step === "downloading" ? ((sync.done ?? 0) * 100) / (sync.total || 1) : (sync?.checked ?? 0) * 100
+              }
+            />
+            <span>{syncLine}</span>
+          </div>
+        )}
+        {sync?.step === "downloading" && (sync.total ?? 0) > SD_BIG_DIFFERENCE_BYTES && (
+          <div className={styles.sdBigDifference}>{Messages.sdBigDifference()}</div>
+        )}
+        {!room && !status?.error && <LinearProgress />}
+        {room && (
+          <>
+            <div className={styles.roomBuild}>
+              {Messages.buildName(room.build.name, room.build.hash.slice(0, 8))}
+              {room.build.codes && room.build.codes.length > 0 && (
+                <CodesChip names={room.build.codes} onClick={isHost ? onCodes : undefined} />
+              )}
             </div>
-          )}
-          {sync?.step === "downloading" && (sync.total ?? 0) > SD_BIG_DIFFERENCE_BYTES && (
-            <div className={styles.sdBigDifference}>{Messages.sdBigDifference()}</div>
-          )}
-          {!room && !status?.error && <LinearProgress />}
-          {room && (
-            <>
-              <div className={styles.roomBuild}>
-                {Messages.buildName(room.build.name, room.build.hash.slice(0, 8))}
-                {room.build.codes && room.build.codes.length > 0 && (
-                  <CodesChip names={room.build.codes} onClick={isHost ? onCodes : undefined} />
-                )}
-              </div>
-              <div className={styles.slots}>
-                {room.slots.map((slot) => (
-                  <SlotRow
-                    key={slot.slot}
-                    slot={slot}
-                    isHost={isHost}
-                    dragging={dragFrom}
-                    onDragFrom={setDragFrom}
-                    isYou={slot.slot === room.you}
-                    isRoomHost={slot.slot === room.host}
-                    rttMs={status?.session?.peers?.find((p) => p.slot === slot.slot)?.rttMs}
-                    onRequest={onRequest}
-                  />
-                ))}
-              </div>
-            </>
-          )}
-        </div>
-      }
-    />
+            <div className={styles.slots}>
+              {room.slots.map((slot) => (
+                <SlotRow
+                  key={slot.slot}
+                  slot={slot}
+                  isHost={isHost}
+                  dragging={dragFrom}
+                  onDragFrom={setDragFrom}
+                  isYou={slot.slot === room.you}
+                  isRoomHost={slot.slot === room.host}
+                  rttMs={status?.session?.peers?.find((p) => p.slot === slot.slot)?.rttMs}
+                  onRequest={onRequest}
+                />
+              ))}
+            </div>
+          </>
+        )}
+      </div>
+    </section>
   );
 };
 

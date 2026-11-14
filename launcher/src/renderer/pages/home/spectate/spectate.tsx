@@ -68,6 +68,7 @@ export const Spectate = React.memo(function Spectate() {
   return (
     <div className={styles.page}>
       <SpectateView
+        showFeatured={true}
         state={state}
         uid={uid}
         watching={watching}

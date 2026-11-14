@@ -83,6 +83,69 @@ describe("SpectateView", () => {
   // (Menus and tooltips render into the body: one view at a time.)
   afterEach(cleanup);
 
+  it("shows the highest-rated game the player can watch above the list, and not in it", () => {
+    const rated = [
+      game("aaaaaaaaaaaa", "2026-10-14T02:00:00Z", {
+        players: [
+          {
+            uid: "a1",
+            displayName: "ann",
+            connectCode: "ANN#1",
+            characterId: 2,
+            costume: 0,
+            teamId: null,
+            wins: 0,
+            rating: 1500,
+          },
+          {
+            uid: "a2",
+            displayName: "bob",
+            connectCode: "BOB#2",
+            characterId: 9,
+            costume: 0,
+            teamId: null,
+            wins: 0,
+            rating: 1500,
+          },
+        ],
+      }),
+      game("dddddddddddd", "2026-10-14T02:01:00Z", {
+        spectators: 14,
+        players: [
+          {
+            uid: "d1",
+            displayName: "sosa",
+            connectCode: "SOSA#1",
+            characterId: 2,
+            costume: 0,
+            teamId: null,
+            wins: 1,
+            rating: 2100,
+          },
+          {
+            uid: "d2",
+            displayName: "doc",
+            connectCode: "DOC#2",
+            characterId: 9,
+            costume: 0,
+            teamId: null,
+            wins: 1,
+            rating: 2100,
+          },
+        ],
+      }),
+    ];
+    const onWatch = vi.fn();
+    const { container, getByTestId } = view({ kind: "ready", games: rated }, { showFeatured: true, onWatch });
+    expect(getByTestId("featured-game").getAttribute("data-stream")).toBe("dddddddddddd");
+    expect(getByTestId("featured-game").textContent).toContain("sosa");
+    expect(getByTestId("featured-game").textContent).toContain("14");
+    const rows = Array.from(container.querySelectorAll("button[data-stream]"));
+    expect(rows.map((r) => r.getAttribute("data-stream"))).toEqual(["aaaaaaaaaaaa"]);
+    fireEvent.click(getByTestId("featured-watch"));
+    expect(onWatch).toHaveBeenCalledWith(rated[1]);
+  });
+
   it("lists the live games newest first, with who plays, the game, its time and how many watch", () => {
     const { container } = view({ kind: "ready", games });
     const rows = Array.from(container.querySelectorAll("button[data-stream]"));

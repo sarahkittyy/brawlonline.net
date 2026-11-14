@@ -837,3 +837,270 @@
   display: inline-flex;
   vertical-align: bottom;
 }
+
+/* ---- The redesign (docs/design/launcher-redesign.md §7): one column; the page scrolls. ---- */
+.page {
+  padding: 20px 28px 24px;
+  gap: 0;
+  overflow-y: auto;
+}
+
+.head {
+  display: flex;
+  align-items: flex-start;
+  gap: 20px;
+  margin-bottom: 4px;
+}
+
+.headText {
+  flex: 1;
+  min-width: 0;
+  max-width: 600px;
+}
+
+.title {
+  margin: 0;
+  font-size: 28px;
+  white-space: nowrap;
+}
+
+.head .intro {
+  margin: 6px 0 0;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--text-dim);
+}
+
+.headSide {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  flex: none;
+}
+
+.headSide .beta {
+  margin: 0;
+  text-align: right;
+  font-size: 12px;
+}
+
+.section {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 40px;
+  margin: 22px 0 8px;
+}
+
+.heading {
+  margin: 0 auto 0 0;
+  white-space: nowrap;
+  font-family: var(--font-body, system-ui, sans-serif);
+  font-size: 18px;
+  color: var(--text-primary);
+}
+
+.codeBox {
+  display: inline-flex;
+  align-items: center;
+  height: 34px;
+  padding-right: 3px;
+  border: 1px solid var(--line-soft);
+  border-radius: 6px;
+  background-color: var(--shell);
+}
+
+.codeBox fieldset {
+  border: none;
+}
+
+.codeBox > div {
+  width: 120px;
+}
+
+.codeBox input {
+  letter-spacing: 0.08em;
+}
+
+.grow {
+  flex: 1;
+}
+
+.room {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 0;
+}
+
+.roomRow {
+  border-radius: 6px;
+}
+
+.roomRow:hover {
+  background-color: var(--raised);
+}
+
+.roomHost {
+  font-size: 15px;
+}
+
+.builds {
+  padding: 0;
+  gap: 0;
+}
+
+.build {
+  padding: 10px 12px;
+  border-radius: 6px;
+  background: none;
+}
+
+.build:hover {
+  background-color: var(--raised);
+}
+
+.build + .build {
+  border-top: 1px solid var(--line-soft);
+}
+
+.addButtons button {
+  text-transform: none;
+  border-color: var(--line);
+}
+
+/* "Joins with": a real dropdown when there is a choice. */
+.joinsWithSelect {
+  border: 1px solid var(--line) !important;
+  border-radius: 6px !important;
+  background-color: var(--shell) !important;
+  padding: 1px 4px 1px 8px !important;
+}
+
+/* The player's own room: a panel above the lists, its players as four cards in port colours. */
+.roomPanel {
+  container-type: inline-size;
+  margin-top: 16px;
+  padding: 14px 16px 16px;
+  border-radius: 10px;
+  background-color: var(--raised);
+}
+
+.roomPanelHead {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 34px;
+  margin-bottom: 4px;
+}
+
+.roomTitle {
+  font-size: 18px;
+  min-width: 0;
+}
+
+.roomPanelHead .roomActions {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.roomPanelHead button {
+  text-transform: none;
+}
+
+.slots {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 6px;
+}
+
+@container (width <= 560px) {
+  .slots {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.slot {
+  --pc: var(--line);
+
+  position: relative;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  min-height: 96px;
+  padding: 10px 12px 12px;
+  border-radius: 10px;
+  border-top: 3px solid var(--pc);
+  background-color: var(--shell);
+}
+
+.slot[data-slot="1"] {
+  --pc: #f15959;
+}
+
+.slot[data-slot="2"] {
+  --pc: #6565fe;
+}
+
+.slot[data-slot="3"] {
+  --pc: #febe3f;
+}
+
+.slot[data-slot="4"] {
+  --pc: #4ce44c;
+}
+
+.slotLabel {
+  width: auto;
+  color: var(--pc);
+}
+
+.slot .dragHandle {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+}
+
+.slot .dragSpacer {
+  display: none;
+}
+
+.slot .player {
+  flex: none;
+  font-size: 15px;
+}
+
+.slot .emptySlot {
+  flex: none;
+  font-size: 15px;
+}
+
+.slotActions {
+  margin-top: auto;
+}
+
+.slotActions button {
+  text-transform: none;
+}
+
+.closed {
+  opacity: 0.6;
+  background: none;
+  border: 1px solid var(--line-soft);
+  border-top: 3px solid var(--line-soft);
+}
+
+.dropTarget {
+  outline: 2px dashed var(--accent-primary-bright, #b98ce0);
+  outline-offset: 2px;
+}

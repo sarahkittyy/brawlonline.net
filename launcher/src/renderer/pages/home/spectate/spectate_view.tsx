@@ -22,11 +22,13 @@ import type { LiveGameEntry, LiveMode, LivePlayer, SpectateState } from "@specta
 import { clsx } from "clsx";
 import React, { useEffect, useState } from "react";
 
+import { ShellMessages } from "@/app/shell/shell.messages";
 import { MiniProfileTooltip } from "@/components/profile/mini_profile";
+import { RankBadge } from "@/components/rank_badge/rank_badge";
 import { usePlayerMenuOpener } from "@/lib/social/use_player_menu";
 import { getCharacterIcon } from "@/lib/utils";
+import { useStageIcon } from "@/pages/rulesets/stages_section";
 
-import { ContentBlock } from "../overview/content_block/content_block";
 import { SpectateMessages as Messages } from "./spectate.messages";
 import styles from "./spectate.module.css";
 
@@ -58,6 +60,8 @@ export type SpectateViewProps = {
   freshIds?: ReadonlySet<string>;
   sort?: LiveSort;
   onSortChange?: (sort: LiveSort) => void;
+  /** The highest-rated game above the list, out of it (the Spectate page; off in tests of the list). */
+  showFeatured?: boolean;
 };
 
 /**
@@ -157,45 +161,54 @@ export const SpectateView = ({
   freshIds,
   sort = "newest",
   onSortChange,
+  showFeatured = false,
 }: SpectateViewProps) => {
   const status = watchingStatus(watching);
   const [search, setSearch] = useState("");
+  const featured =
+    showFeatured && state.kind === "ready" && search.trim() === "" ? pickFeatured(state.games, uid) : null;
+  const watchedId = watching && watching.status !== "idle" && watching.status !== "error" ? watching.stream : null;
   return (
     <div className={styles.block}>
-      <ContentBlock
-        fill={true}
-        title={Messages.liveGames()}
-        titleAction={
-          state.kind !== "logged-out" ? (
-            <Tooltip title={Messages.autoPlayTooltip()} placement="top" enterDelay={400} disableInteractive={true}>
-              <FormControlLabel
-                className={styles.autoPlay}
-                sx={{ "& .MuiFormControlLabel-label": { fontSize: 13 } }}
-                control={
-                  <Switch
-                    size="small"
-                    color="secondary"
-                    checked={autoPlay}
-                    onChange={(e) => onAutoPlayChange(e.target.checked)}
-                    inputProps={{ "aria-label": Messages.autoPlay() }}
-                    data-testid="auto-play"
-                  />
-                }
-                label={Messages.autoPlay()}
-              />
-            </Tooltip>
-          ) : undefined
-        }
-        endIcon={
-          status || state.kind === "ready" ? (
-            <div className={styles.headerEnd}>
-              {status && <div className={styles.watchStatus}>{status}</div>}
-              {state.kind === "ready" && renderListControls()}
-            </div>
-          ) : undefined
-        }
-        content={renderBody()}
-      />
+      <div className={styles.head}>
+        <h1 className={styles.title}>{ShellMessages.spectate()}</h1>
+        {status && <div className={styles.watchStatus}>{status}</div>}
+        <span className={styles.grow} />
+        {state.kind !== "logged-out" && (
+          <Tooltip title={Messages.autoPlayTooltip()} placement="top" enterDelay={400} disableInteractive={true}>
+            <FormControlLabel
+              className={styles.autoPlay}
+              sx={{ "& .MuiFormControlLabel-label": { fontSize: 13 } }}
+              control={
+                <Switch
+                  size="small"
+                  color="secondary"
+                  checked={autoPlay}
+                  onChange={(e) => onAutoPlayChange(e.target.checked)}
+                  inputProps={{ "aria-label": Messages.autoPlay() }}
+                  data-testid="auto-play"
+                />
+              }
+              label={Messages.autoPlay()}
+            />
+          </Tooltip>
+        )}
+      </div>
+      {featured && (
+        <FeaturedGame
+          game={featured}
+          now={now}
+          watching={watchedId === featured.id}
+          starting={startingId === featured.id}
+          busy={startingId != null}
+          onWatch={onWatch}
+        />
+      )}
+      <div className={styles.bar}>
+        <h2 className={styles.heading}>{Messages.liveGames()}</h2>
+        {state.kind === "ready" && renderListControls()}
+      </div>
+      <div className={styles.body}>{renderBody(featured?.id)}</div>
     </div>
   );
 
@@ -235,7 +248,7 @@ export const SpectateView = ({
     );
   }
 
-  function renderBody() {
+  function renderBody(featuredId?: string) {
     switch (state.kind) {
       case "logged-out":
         return (
@@ -275,7 +288,10 @@ export const SpectateView = ({
             </div>
           );
         }
-        const shown = searchLiveGames(state.games, search);
+        const shown = searchLiveGames(state.games, search).filter((g) => g.id !== featuredId);
+        if (shown.length === 0 && featuredId) {
+          return null;
+        }
         if (shown.length === 0) {
           return (
             <div className={styles.centered}>
@@ -284,8 +300,6 @@ export const SpectateView = ({
             </div>
           );
         }
-        const watchedId =
-          watching && watching.status !== "idle" && watching.status !== "error" ? watching.stream : null;
         return (
           <ul className={styles.list}>
             {sortLiveGames(shown, sort).map((game) => (
@@ -391,6 +405,7 @@ export const LiveGameRow = React.memo(function LiveGameRow({
       ? Messages.betweenGames()
       : Messages.ended();
   const spectators = game.spectators ?? 0;
+  const stageIcon = useStageIcon()(game.game.stageId);
 
   return (
     <RowTooltip title={tooltip} placement="top" enterDelay={600} disableInteractive={true}>
@@ -405,6 +420,11 @@ export const LiveGameRow = React.memo(function LiveGameRow({
           }
         }}
       >
+        {stageIcon ? (
+          <img className={styles.stageThumb} src={stageIcon} alt="" />
+        ) : (
+          <span className={styles.stageThumb} />
+        )}
         <div className={styles.players}>
           {sides.map((side, i) => (
             <React.Fragment key={i}>
@@ -459,3 +479,85 @@ export const LiveGameRow = React.memo(function LiveGameRow({
     </RowTooltip>
   );
 });
+
+/** The game shown above the list: the highest-rated one the player can watch (the newest without ratings). */
+export function pickFeatured(games: readonly LiveGameEntry[], uid?: string): LiveGameEntry | null {
+  const watchable = games.filter((g) => g.game.state !== "over" && !(uid && g.players.some((p) => p.uid === uid)));
+  return sortLiveGames(watchable, "elo")[0] ?? null;
+}
+
+/**
+ * The game above the list (docs/design/launcher-redesign.md §7): its stage, the clock, mode, game and score and the
+ * players watching, then each side as [rank] [character] [name] vs [name] [character] [rank], and Watch.
+ */
+const FeaturedGame = ({
+  game,
+  now,
+  watching,
+  starting,
+  busy,
+  onWatch,
+}: {
+  game: LiveGameEntry;
+  now: number;
+  watching: boolean;
+  starting: boolean;
+  busy: boolean;
+  onWatch: (game: LiveGameEntry) => void;
+}) => {
+  const stageIcon = useStageIcon()(game.game.stageId);
+  const sides = sidesOf(game);
+  const playing = game.game.state === "playing";
+  const person = (p: LivePlayer, mirrored: boolean) => {
+    const parts = [
+      <RankBadge key="rank" rank={p.rank ?? null} size="inline" />,
+      <img key="stock" className={styles.featuredStock} src={getCharacterIcon(p.characterId, p.costume)} alt="" />,
+      <LivePlayerName key="name" player={p} />,
+    ];
+    return <span className={styles.featuredPlayer}>{mirrored ? parts.reverse() : parts}</span>;
+  };
+  return (
+    <section className={styles.featured} data-testid="featured-game" data-stream={game.id}>
+      {stageIcon && <img className={styles.featuredStage} src={stageIcon} alt="" />}
+      <div className={styles.featuredText}>
+        <div className={styles.featuredLine}>
+          <span className={clsx(styles.time, playing && styles.live)}>
+            {playing && <span className={styles.liveDot} />}
+            {playing ? gameClock(game.game.startedAt, now) : Messages.betweenGames()}
+          </span>
+          <span className={styles.mode}>{modeLabel(game.mode)}</span>
+          <span>{Messages.gameScore(game.game.number, setScore(game))}</span>
+          <span className={styles.eye}>
+            <VisibilityOutlinedIcon style={{ fontSize: 16 }} />
+            {game.spectators ?? 0}
+          </span>
+        </div>
+        <div className={styles.featuredPlayers}>
+          {sides.map((side, i) => (
+            <React.Fragment key={i}>
+              {i > 0 && <span className={styles.vs}>{Messages.vs()}</span>}
+              <span className={clsx(styles.featuredSide, i === 0 ? styles.sideP1 : styles.sideP2)}>
+                {side.map((p, j) => (
+                  <React.Fragment key={p.uid}>
+                    {j > 0 && <span className={styles.vs}>{Messages.and()}</span>}
+                    {person(p, i > 0)}
+                  </React.Fragment>
+                ))}
+              </span>
+            </React.Fragment>
+          ))}
+        </div>
+      </div>
+      <Button
+        variant="contained"
+        className={styles.featuredWatch}
+        disabled={busy || watching}
+        onClick={() => onWatch(game)}
+        startIcon={starting ? <CircularProgress color="inherit" size={16} /> : undefined}
+        data-testid="featured-watch"
+      >
+        {watching ? Messages.watching() : Messages.watch()}
+      </Button>
+    </section>
+  );
+};

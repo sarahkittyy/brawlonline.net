@@ -336,3 +336,182 @@
     display: none;
   }
 }
+
+/* ---- The redesign (docs/design/launcher-redesign.md §7) ---- */
+.page {
+  padding: 20px 28px 0;
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-height: 44px;
+  margin-bottom: 16px;
+}
+
+.title {
+  margin: 0;
+  font-size: 28px;
+  white-space: nowrap;
+}
+
+.grow {
+  flex: 1;
+}
+
+.bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 40px;
+  margin: 22px 0 8px;
+}
+
+.heading {
+  margin: 0 auto 0 0;
+  white-space: nowrap;
+  font-family: var(--font-body, system-ui, sans-serif);
+  font-size: 18px;
+  color: var(--text-primary);
+}
+
+.body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.search {
+  background-color: var(--shell);
+  border: 1px solid var(--line-soft);
+  border-radius: 6px;
+  height: 34px;
+}
+
+.list {
+  padding: 0;
+  gap: 0;
+}
+
+.row {
+  grid-template-columns: 52px minmax(0, 1fr) 76px 120px 96px 40px 64px;
+  grid-template-areas: "stage players mode game time eye action";
+  padding: 6px 12px;
+  min-height: 58px;
+  border-radius: 6px;
+}
+
+.row:hover {
+  background-color: var(--raised);
+}
+
+.stageThumb {
+  grid-area: stage;
+  width: 52px;
+  height: 45px;
+  border-radius: 4px;
+  object-fit: cover;
+}
+
+@container (width < 760px) {
+  .row {
+    grid-template-columns: 52px minmax(0, 1fr) 120px 96px 40px 60px;
+    grid-template-areas: "stage players game time eye action";
+    gap: 8px;
+  }
+
+  .mode {
+    display: none;
+  }
+}
+
+@container (width < 560px) {
+  .row {
+    grid-template-columns: 52px minmax(0, 1fr) auto auto;
+    grid-template-areas:
+      "stage players players action"
+      "stage game time eye";
+  }
+}
+
+/* The game above the list. */
+.featured {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  padding: 16px 18px;
+  border-radius: 10px;
+  background-color: var(--raised);
+}
+
+.featuredStage {
+  width: 112px;
+  height: 98px;
+  border-radius: 6px;
+  object-fit: cover;
+  flex: none;
+}
+
+.featuredText {
+  flex: 1;
+  min-width: 0;
+}
+
+.featuredLine {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.featuredLine .mode {
+  display: inline-block;
+}
+
+.featuredPlayers {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 10px;
+  font-size: 22px;
+
+  --rank-badge-inline-size: 30px;
+}
+
+.featuredSide {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.featuredPlayer {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.featuredStock {
+  width: 32px;
+  height: 32px;
+}
+
+.sideP1 .name {
+  color: #f15959;
+}
+
+.sideP2 .name {
+  color: #8080ff;
+}
+
+.featuredWatch {
+  flex: none;
+  min-width: 120px;
+  height: 46px;
+  font-size: 16px !important;
+  text-transform: none !important;
+}
