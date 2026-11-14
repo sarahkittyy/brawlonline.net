@@ -11,7 +11,7 @@
 #include <gtest/gtest.h>
 
 #include "Core/Online/RoomWatch.h"
-#include "Core/Rollback/ReplayFile.h"
+#include "BrawlOnline/Rollback/ReplayFile.h"
 
 using namespace Online::RoomWatch;
 namespace Replay = Gprb::Replay;

@@ -27,7 +27,7 @@
 #include "Core/Online/OnlineClient.h"
 #include "Core/Online/OnlineSession.h"
 #include "Core/Online/Rooms.h"
-#include "Core/Online/User.h"
+#include "BrawlOnline/Online/User.h"
 #include "Core/Rollback/GameplaySession.h"
 #include "BrawlOnline/Rollback/PeerData.h"
 

@@ -1,7 +1,7 @@
 // Copyright 2026 Dolphin Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-#include "Core/Online/RecentCodes.h"
+#include "BrawlOnline/Online/RecentCodes.h"
 
 #include <algorithm>
 #include <chrono>

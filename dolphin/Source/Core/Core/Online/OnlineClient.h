@@ -17,7 +17,7 @@
 
 #include <picojson.h>
 
-#include "Core/Online/Matchmaking.h"
+#include "BrawlOnline/Online/Matchmaking.h"
 
 namespace Online
 {

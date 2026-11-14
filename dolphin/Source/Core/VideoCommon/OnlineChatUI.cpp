@@ -26,7 +26,7 @@
 #include "Common/Config/Config.h"
 #include "Common/Timer.h"
 #include "Core/Config/OnlineSettings.h"
-#include "Core/Online/Chat.h"
+#include "BrawlOnline/Online/Chat.h"
 #include "BrawlOnline/Online/ChatText.h"
 #include "Core/Online/Rooms.h"
 #include "InputCommon/ControllerInterface/CoreDevice.h"

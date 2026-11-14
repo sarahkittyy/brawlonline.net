@@ -37,7 +37,7 @@
 #include "Core/NetPlayClient.h"
 #include "Core/NetPlayProto.h"
 #include "Core/NetPlayServer.h"
-#include "Core/Online/Matchmaking.h"
+#include "BrawlOnline/Online/Matchmaking.h"
 #include "Core/Online/OnlineSession.h"
 #include "Core/System.h"
 #include "Core/TitleDatabase.h"

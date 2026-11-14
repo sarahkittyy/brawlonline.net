@@ -20,8 +20,8 @@
 #include "Common/Config/Layer.h"
 #include "Common/FileUtil.h"
 #include "Core/Config/OnlineSettings.h"
-#include "Core/Online/Chat.h"
-#include "Core/Online/ChatCrypto.h"
+#include "BrawlOnline/Online/Chat.h"
+#include "BrawlOnline/Online/ChatCrypto.h"
 #include "Core/Online/Rooms.h"
 #include "VideoCommon/OnlineChatUI.h"
 

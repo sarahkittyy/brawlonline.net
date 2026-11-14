@@ -32,7 +32,7 @@
 #include <picojson.h>
 
 #include "Common/CommonTypes.h"
-#include "Core/Rollback/ReplayFile.h"
+#include "BrawlOnline/Rollback/ReplayFile.h"
 
 namespace Core
 {

@@ -1,7 +1,7 @@
 // Copyright 2026 Dolphin Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-#include "Core/Online/Spectate.h"
+#include "BrawlOnline/Online/Spectate.h"
 
 #include <algorithm>
 #include <cmath>
@@ -12,7 +12,7 @@
 
 #include "Common/Logging/Log.h"
 #include "BrawlOnline/Rollback/PeerData.h"
-#include "Core/Rollback/ReplayFile.h"
+#include "BrawlOnline/Rollback/ReplayFile.h"
 
 namespace Online::Spectate
 {

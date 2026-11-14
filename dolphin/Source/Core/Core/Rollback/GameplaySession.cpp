@@ -53,7 +53,7 @@
 #include "Core/HW/Memmap.h"
 #include "Core/HW/SystemTimers.h"
 #include "Core/HW/VideoInterface.h"
-#include "Core/Online/Chat.h"
+#include "BrawlOnline/Online/Chat.h"
 #include "BrawlOnline/Online/ChatText.h"
 #include "BrawlOnline/Online/GameAlive.h"
 #include "Core/Online/GameBridge.h"

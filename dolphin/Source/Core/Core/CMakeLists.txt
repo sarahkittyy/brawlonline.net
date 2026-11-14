@@ -584,18 +584,10 @@ add_library(core
   PowerPC/SignatureDB/MEGASignatureDB.h
   PowerPC/SignatureDB/SignatureDB.cpp
   PowerPC/SignatureDB/SignatureDB.h
-  Online/Chat.cpp
-  Online/Chat.h
-  Online/ChatCrypto.cpp
-  Online/ChatCrypto.h
-  Online/Ipv6.cpp
-  Online/Ipv6.h
   Online/GameBridge.cpp
   Online/GameBridge.h
   Online/GameSetup.cpp
   Online/GameSetup.h
-  Online/Matchmaking.cpp
-  Online/Matchmaking.h
   Online/SpecialAssets.cpp
   Online/SpecialAssets.h
   Online/NetPlaySession.cpp
@@ -606,20 +598,14 @@ add_library(core
   Online/OnlineSession.h
   Online/Ranked.cpp
   Online/Ranked.h
-  Online/RecentCodes.cpp
-  Online/RecentCodes.h
   Online/ModsRoom.cpp
   Online/ModsRoom.h
   Online/Rooms.cpp
   Online/Rooms.h
   Online/RoomWatch.cpp
   Online/RoomWatch.h
-  Online/Spectate.cpp
-  Online/Spectate.h
   Online/SpeedCheck.cpp
   Online/SpeedCheck.h
-  Online/User.cpp
-  Online/User.h
   Rollback/ChangeCRC.h
   Rollback/KeptGranules.h
   Rollback/DeltaSaveSlot.cpp
@@ -646,8 +632,6 @@ add_library(core
   Rollback/PresentStats.h
   Rollback/RollbackManager.cpp
   Rollback/RollbackManager.h
-  Rollback/ReplayFile.cpp
-  Rollback/ReplayFile.h
   Rollback/ReplayKeyframes.cpp
   Rollback/ReplayKeyframes.h
   Rollback/ReplayPlayback.cpp

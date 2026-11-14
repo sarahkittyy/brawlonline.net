@@ -1,7 +1,7 @@
 // Copyright 2026 Dolphin Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-#include "Core/Online/Ipv6.h"
+#include "BrawlOnline/Online/Ipv6.h"
 
 #include <condition_variable>
 #include <cstring>

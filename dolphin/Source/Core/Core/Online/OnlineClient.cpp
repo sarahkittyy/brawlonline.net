@@ -24,7 +24,7 @@
 #include "Core/Online/OnlineSession.h"
 #include "Core/Online/Ranked.h"
 #include "Core/Online/Rooms.h"
-#include "Core/Online/User.h"
+#include "BrawlOnline/Online/User.h"
 
 namespace Online::Client
 {

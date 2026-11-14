@@ -27,7 +27,7 @@
 #include "Core/HW/Memmap.h"
 #include "Core/Online/GameSetup.h"
 #include "Core/Online/Ranked.h"
-#include "Core/Online/Spectate.h"
+#include "BrawlOnline/Online/Spectate.h"
 #include "Core/Rollback/GameplayRollback.h"
 #include "Core/System.h"
 #include "VideoCommon/OnScreenDisplay.h"

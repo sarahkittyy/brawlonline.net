@@ -6,7 +6,7 @@
 
 #include <gtest/gtest.h>
 
-#include "Core/Online/ChatCrypto.h"
+#include "BrawlOnline/Online/ChatCrypto.h"
 
 using namespace Online::ChatCrypto;
 

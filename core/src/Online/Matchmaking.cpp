@@ -4,7 +4,7 @@
 // Port of Slippi's SlippiMatchmaking.cpp (and the connect phase of SlippiNetplay.cpp). Comments
 // marked "Slippi:" quote what the original does where this file has to differ or explain.
 
-#include "Core/Online/Matchmaking.h"
+#include "BrawlOnline/Online/Matchmaking.h"
 
 #include <atomic>
 #include <chrono>
@@ -25,9 +25,9 @@
 #include "Common/Timer.h"
 #include "Common/UPnP.h"
 #include "Core/Config/OnlineSettings.h"
-#include "Core/Online/Ipv6.h"
+#include "BrawlOnline/Online/Ipv6.h"
 #include "BrawlOnline/Online/Timeouts.h"
-#include "Core/Online/User.h"
+#include "BrawlOnline/Online/User.h"
 #include "BrawlOnline/Rollback/PeerData.h"
 
 #ifdef _WIN32

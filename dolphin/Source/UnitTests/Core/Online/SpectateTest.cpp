@@ -15,8 +15,8 @@
 #include <mbedtls/sha256.h>
 #include <picojson.h>
 
-#include "Core/Online/Spectate.h"
-#include "Core/Rollback/ReplayFile.h"
+#include "BrawlOnline/Online/Spectate.h"
+#include "BrawlOnline/Rollback/ReplayFile.h"
 
 namespace Sp = Online::Spectate;
 namespace Replay = Gprb::Replay;

@@ -1,7 +1,7 @@
 // Copyright 2026 Dolphin Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-#include "Core/Online/Chat.h"
+#include "BrawlOnline/Online/Chat.h"
 
 #include <algorithm>
 #include <cerrno>
@@ -28,10 +28,10 @@
 #include "Common/Logging/Log.h"
 #include "Common/StringUtil.h"
 #include "Common/Timer.h"
-#include "Core/Online/ChatCrypto.h"
+#include "BrawlOnline/Online/ChatCrypto.h"
 #include "BrawlOnline/Online/ChatText.h"
 #include "Core/Online/OnlineClient.h"
-#include "Core/Online/User.h"
+#include "BrawlOnline/Online/User.h"
 #include "BrawlOnline/Rollback/PeerData.h"
 
 namespace Online::Chat

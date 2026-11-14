@@ -23,7 +23,7 @@
 #include "Core/Rollback/GameplayRollback.h"
 #include "Core/Rollback/GameplaySession.h"
 #include "BrawlOnline/Rollback/PeerData.h"
-#include "Core/Rollback/ReplayFile.h"
+#include "BrawlOnline/Rollback/ReplayFile.h"
 #include "Core/System.h"
 #include "InputCommon/ControllerEmu/ControlGroup/Buttons.h"
 #include "InputCommon/ControllerEmu/ControllerEmu.h"

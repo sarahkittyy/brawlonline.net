@@ -20,7 +20,7 @@
 #include "Common/Logging/Log.h"
 #include "Core/Config/MainSettings.h"
 #include "Core/Core.h"
-#include "Core/Online/Matchmaking.h"
+#include "BrawlOnline/Online/Matchmaking.h"
 #include "Core/Online/OnlineClient.h"
 #include "Core/Rollback/GameplayRollback.h"
 #include "Core/System.h"
