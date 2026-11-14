@@ -72,24 +72,24 @@ Three columns: a **sidebar** (216 px), the **page**, and the **players rail** (2
 | Online / Friends panel (Home only) | The players rail (every page) |
 | Settings | Unchanged (its own full page) |
 
-## 3. Screens (round 2)
+## 3. Screens (round 3)
 
-Round 1's PNGs are in `out/round1/`.
+Rounds 1 and 2 are in `out/round1/` and `out/round2/`. `-1150`/`-980` are narrower windows. `-nodisc` is the look without a Brawl disc (`render.sh -q nodisc=1 -c d0d0d0`). `-pink` is Sarah's theme colour.
 
 | PNG | Shows |
 |---|---|
-| `01-play-ranked.png` / `-pink` | Play, Ranked tab: the ETA next to each mode, the room bar with the default ruleset |
-| `02-play-unranked.png` | Unranked tab: the player's last unranked games |
-| `03-other-games.png` | Other Games, with the "Joins with" menu open on a room |
-| `04-other-games-your-room.png` / `-pink` | Hosting a room: the room's Public switch, Kick / Close slot, a player being dragged to another slot |
-| `05-spectate-while-searching.png` | Spectate while a Ranked search runs (the queue box, bottom left) |
-| `06-replays.png` | Replays with the players rail folded |
-| `07-leaderboard-match-found.png` | Leaderboard while a Ranked match is on (the queue box in the frame) |
-| `08-profile-own.png` | Own profile, rail on Friends |
-| `09-profile-friend.png` | A friend's profile: Invite to game, your match history with them |
-| `10-play-2v2.png` | 2v2 tab: "Play solo or team with a friend", Invite to your 2v2 |
-| `11-play-late-night.png` | Late night: "ETA: 10+ min" for Ranked, rail folded |
-| `12-queue-states.png` | The queue box: searching, searching late, 2v2 with a partner, in a match |
+| `01-play-a.png` (+ `-pink`, `-nodisc`, `-1150`) | Play, variant A: the ranked card, the three Play buttons stacked on its right |
+| `02-play-b.png` | Play, variant B: the three Play buttons in a row under the ranked card |
+| `03-play-late-night.png` (+ `-980`) | Late night ("10+ min" for Ranked), the rail folded, the narrowest window |
+| `05-other-games.png` (+ `-1150`) | A room with Brawl, SD card and Codes chips; "Joins with" open |
+| `06-other-games-your-room.png` (+ `-nodisc`) | Hosting: slots, kick, a player being dragged |
+| `07-spectate-while-searching.png` (+ `-nodisc`) | Spectate, a Ranked search in the queue box |
+| `08-replays.png` (+ `-nodisc`) | Replays, rail folded |
+| `09-leaderboard-match-found.png` (+ `-nodisc`) | Leaderboard during a Ranked match |
+| `10-profile-own.png` (+ `-nodisc`) | Own profile |
+| `11-profile-friend.png` | A friend's profile |
+| `12-queue-states.png` | The queue box's states |
+| `13-no-disc-pictures.png` | Without the disc: four choices for the player's picture |
 
 ## 4. What stays
 
@@ -144,3 +144,32 @@ Sarah: "i love love love the design", with these notes. What changed:
   - A request reads "wants to be friends", with Accept / Decline as icons.
   - The leaderboard filter is "All / Friends", and its columns are "W-L".
   - A friend's profile shows your match history with them instead of round 1's invented "You vs them" boxes.
+
+## 8. Round 3 (Sarah's notes on round 2, 2026-11-14)
+
+- **Play is one panel, no tabs.**
+  - The ranked card (emblem, tier, rating, "24 ranked sets · #380 of 871 · 11W-13L", sparkline) is on one side, and the three Play buttons (Unranked, Ranked, 2v2) are on the other.
+  - Each button has its status: the stopwatch and the ETA, or "0 in queue" with the Invite to your 2v2 icon.
+  - **Variant A** (recommended) stacks the buttons on the right. The panel is 190 px tall, so Public rooms gets more room.
+  - **Variant B** lines the buttons up under the card.
+  - The unranked game list and the 2v2 line are gone. When the panel is narrow (1150 px window with the rail open), the sparkline hides.
+  - The three buttons all wear the Brawl frame: together they are the page's main action.
+- **The ETA is the stopwatch and the time** ("0:44", "10+ min"), with no "ETA:" text.
+- **Public rooms row never wraps.** The ruleset is a quiet icon and name with no box ("Auto L Cancel -r v4"; the code is in its tooltip with today's text). The name shrinks to an ellipsis, then to the icon alone. The room code field has Join inside it. It fits on one line in the 980 px minimum window (rail folded) and at 1150 px with the rail open.
+- **Other Games rooms with every chip.** A room with "Brawl: a56ffa ✓", "SD card: f35aaf !" and "Codes (3)":
+  - At the default width the three fit on one line, with "Joins with" under them.
+  - In a 1150 px window with the rail open they wrap to two lines, and the row grows (`05-other-games-1150.png`).
+- **Spectate's top game** reads [rank] [character] [name] vs [name] [character] [rank].
+- **Leaderboard:** "871 ranked players" sits under the title, left-aligned.
+- **No P+ pill** on Play. "128 players in-game" stays beside the title.
+- **The player's card** (bottom left) has a lighter rounded background, and is lighter still on hover and on the profile page.
+- **Settings** is unchanged: its own page with its own menu, as today.
+- **Without the disc** (`-nodisc`):
+  - The default grey look and system fonts. Primary buttons are plain filled buttons, and the selected nav item is a lighter row instead of Brawl's frames.
+  - No stage pictures.
+  - Characters are today's name tags on profiles; elsewhere they are left out (room rows, Spectate and Replays rows, match history).
+  - Players get a picture in place of their stock icon. The options (`13-no-disc-pictures.png`) are:
+    1. today's dotted Fox outline;
+    2. **the name's first letter in a grey circle** (drawn on every no-disc screen);
+    3. the jdenticon the launcher already makes from the uid (`lib/display_picture.ts`, today only in the account switcher);
+    4. the player's own rank emblem in the picture's place (only for the player's own card; it's the only one we have for everyone, and unranked players have none).
