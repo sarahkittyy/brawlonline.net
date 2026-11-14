@@ -55,6 +55,7 @@ import type {
   FriendsState,
   Invite,
   InviteResult,
+  QueueState,
   SendResult,
   SocialEvent,
   SocialPlayer,
@@ -129,6 +130,7 @@ function emptyState(): SocialState {
     status: "off",
     online: [],
     room: null,
+    queue: null,
     ignored: [],
     conversations: {},
     invites: [],
@@ -237,6 +239,49 @@ function parseRoom(v: any): SocialRoom | null | undefined {
     joinable: v.joinable,
     ...(v.twos === true ? { twos: true } : {}),
   };
+}
+
+const QUEUE_MODES = new Set(["unranked", "ranked", "twos", "direct"]);
+const isCount = (n: unknown, max: number): n is number =>
+  Number.isInteger(n) && (n as number) >= 0 && (n as number) <= max;
+
+/** The player's own search or match (`queue`); null: neither; undefined: not one. */
+export function parseQueue(v: any): QueueState | null | undefined {
+  if (v === null) {
+    return null;
+  }
+  if (!v || typeof v !== "object" || !QUEUE_MODES.has(v.mode)) {
+    return undefined;
+  }
+  if (v.state === "searching") {
+    if (typeof v.since !== "string" || v.since.length > 40 || isNaN(Date.parse(v.since))) {
+      return undefined;
+    }
+    const partner = v.partner == null ? undefined : parsePlayer(v.partner);
+    return { state: "searching", mode: v.mode, since: v.since, ...(partner && { partner }) };
+  }
+  if (v.state === "playing") {
+    if (!Array.isArray(v.opponents) || !isCount(v.game, 999) || v.game < 1) {
+      return undefined;
+    }
+    if (!Array.isArray(v.wins) || v.wins.length !== 2 || !v.wins.every((w: unknown) => isCount(w, 99))) {
+      return undefined;
+    }
+    const opponents = v.opponents
+      .slice(0, 3)
+      .map(parsePlayer)
+      .filter((p: SocialPlayer | undefined): p is SocialPlayer => !!p);
+    const liveId = typeof v.liveId === "string" && /^[0-9a-f]{12}$/.test(v.liveId) ? v.liveId : undefined;
+    return {
+      state: "playing",
+      mode: v.mode,
+      opponents,
+      game: v.game,
+      wins: [v.wins[0], v.wins[1]],
+      ...(liveId && { liveId }),
+    };
+  }
+  return undefined;
 }
 
 export class SocialClient {
@@ -376,7 +421,7 @@ export class SocialClient {
         if (err instanceof StreamEnd && err.fatal) {
           log.info(`social stream stopped: ${err.message}`);
           this.peers.clear();
-          this.update({ status: "off", message: err.message, online: [], room: null });
+          this.update({ status: "off", message: err.message, online: [], room: null, queue: null });
           this.markAllOffline();
           this.run?.abort();
           return;
@@ -386,7 +431,8 @@ export class SocialClient {
       }
       this.peers.clear();
       this.markAllOffline();
-      this.update({ status: "reconnecting", online: [] });
+      // What the player's game is doing is unknown until the next `welcome`.
+      this.update({ status: "reconnecting", online: [], queue: null });
       const wait = retryAfter ?? BACKOFF_MS[Math.min(attempt, BACKOFF_MS.length - 1)] * (0.75 + Math.random() / 2);
       attempt++;
       await (this.deps.sleep ?? abortableSleep)(wait, run.signal);
@@ -522,6 +568,13 @@ export class SocialClient {
         }
         return;
       }
+      case "queue": {
+        const queue = parseQueue(ev.queue);
+        if (queue !== undefined) {
+          this.update({ queue });
+        }
+        return;
+      }
       case "replaced":
         this.emit({ type: "replaced" });
         throw new StreamEnd(true, "You're signed in on another launcher.");
@@ -549,7 +602,8 @@ export class SocialClient {
       }
     }
     const room = parseRoom(ev.room);
-    this.update({ status: "online", message: undefined, you: this.uid, room: room ?? null });
+    const queue = parseQueue(ev.queue);
+    this.update({ status: "online", message: undefined, you: this.uid, room: room ?? null, queue: queue ?? null });
     this.syncOnline();
     void this.loadFriends();
     void this.queueIgnoreWork(() => this.syncIgnores());

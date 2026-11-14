@@ -367,6 +367,66 @@ describe("social client", () => {
     expect(events.at(-1)).toEqual({ type: "replaced" });
   });
 
+  it("keeps the player's own search and match for the queue box, null once disconnected", async () => {
+    expect(client.getState().queue).toBeNull();
+    const since = "2026-11-14T21:00:00.000Z";
+    server.send({ type: "queue", queue: { state: "searching", mode: "twos", since, partner: bob.member } });
+    await until(() => client.getState().queue?.state === "searching");
+    expect(client.getState().queue).toEqual({
+      state: "searching",
+      mode: "twos",
+      since,
+      partner: { uid: BOB, displayName: "bob", connectCode: "BO#7" },
+    });
+    server.send({
+      type: "queue",
+      queue: {
+        state: "playing",
+        mode: "ranked",
+        opponents: [{ uid: CAROL, displayName: "carol", connectCode: "CA#1", main: "fox" }, { uid: "nope" }],
+        game: 2,
+        wins: [1, 0],
+        liveId: "0123456789ab",
+      },
+    });
+    await until(() => client.getState().queue?.state === "playing");
+    expect(client.getState().queue).toEqual({
+      state: "playing",
+      mode: "ranked",
+      opponents: [{ uid: CAROL, displayName: "carol", connectCode: "CA#1", main: "fox" }],
+      game: 2,
+      wins: [1, 0],
+      liveId: "0123456789ab",
+    });
+    // Nonsense changes nothing: an unknown mode, a bad score, a bad time.
+    server.send({ type: "queue", queue: { state: "searching", mode: "rooms", since } });
+    server.send({ type: "queue", queue: { state: "playing", mode: "ranked", opponents: [], game: 1, wins: [1] } });
+    server.send({ type: "queue", queue: { state: "searching", mode: "ranked", since: "soon" } });
+    await tick();
+    expect(client.getState().queue?.state).toBe("playing");
+    server.send({ type: "queue", queue: null });
+    await until(() => client.getState().queue === null);
+
+    // A welcome brings the search back; a dropped stream forgets it until the next welcome.
+    server.send({ type: "queue", queue: { state: "searching", mode: "unranked", since } });
+    await until(() => client.getState().queue?.state === "searching");
+    server.close();
+    await until(() => client.getState().status !== "online");
+    expect(client.getState().queue).toBeNull();
+    await tick();
+    server.send({
+      type: "welcome",
+      you: ME,
+      online: [],
+      room: null,
+      queue: { state: "searching", mode: "unranked", since },
+    });
+    await until(() => client.getState().status === "online");
+    expect(client.getState().queue).toEqual({ state: "searching", mode: "unranked", since });
+    client.disconnect();
+    expect(client.getState().queue).toBeNull();
+  });
+
   it("passes an account change on, and stops for good on a ban", async () => {
     server.send({ type: "account" });
     await until(() => events.some((e) => e.type === "account"));
