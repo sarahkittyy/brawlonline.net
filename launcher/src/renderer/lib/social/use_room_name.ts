@@ -36,6 +36,21 @@ export const useRoomName = (kind: RoomKind) => {
     [backendService, kind, queryClient, showError],
   );
 
+  /** An admin names any open room of this kind, as its host would (the server checks the account is an admin's). */
+  const adminRename = useCallback(
+    async (code: string, typed: string) => {
+      try {
+        const stored = await backendService.adminRenameRoom(code, typed.trim() || null);
+        setPending({ code, name: stored, at: Date.now() });
+        void queryClient.invalidateQueries({ queryKey: ["publicRooms"] });
+      } catch (err) {
+        showError(err);
+        throw err;
+      }
+    },
+    [backendService, queryClient, showError],
+  );
+
   const shown = useCallback(
     (code: string, listed: string | null | undefined): string | null => {
       if (pending && pending.code === code && Date.now() - pending.at < PENDING_MS) {
@@ -46,5 +61,5 @@ export const useRoomName = (kind: RoomKind) => {
     [pending],
   );
 
-  return { rename, shown };
+  return { rename, adminRename, shown };
 };

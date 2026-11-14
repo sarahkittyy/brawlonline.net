@@ -73,6 +73,10 @@ pub const PROFILE_IP_WINDOWS: [Window; 2] = [Window::new(60, MINUTE), Window::ne
 /// media username asks the slur filter's model.
 pub const PROFILE_EDIT_WINDOWS: [Window; 2] = [Window::new(30, MINUTE), Window::new(300, HOUR)];
 
+/// The blog's pages (`/blog`, `/blog/<slug>`; not its images and videos) per client IP (IPv6 per
+/// /64): 120 per minute and 2,000 per hour.
+pub const BLOG_IP_WINDOWS: [Window; 2] = [Window::new(120, MINUTE), Window::new(2000, HOUR)];
+
 /// The account's own ruleset calls (drafts, hide, the remembered ruleset, lists) per account: 120
 /// per minute. The launcher saves a draft when the player stops typing.
 pub const RULESET_EDIT_WINDOWS: [Window; 1] = [Window::new(120, MINUTE)];

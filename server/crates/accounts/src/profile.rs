@@ -58,6 +58,9 @@ pub struct Profile {
     pub show_country: bool,
     /// The same for their primary main (the leaderboard, chat).
     pub show_main: bool,
+    /// One of the game's developers (`users.role = 'admin'`): a purple `</>` beside the name, in the
+    /// launcher's profiles and on the profile page.
+    pub dev: bool,
 }
 
 /// What shows beside a player's name in the launcher's lists ([`name_tags`]): the flag and the
@@ -261,6 +264,7 @@ async fn profile_of(pool: &PgPool, user: &UserRow, base_url: &str) -> sqlx::Resu
         socials,
         show_country: stored.show_country,
         show_main: stored.show_main,
+        dev: user.role == "admin",
     })
 }
 
@@ -427,14 +431,22 @@ pub async fn page(
     }
 }
 
-/// `GET /profile/profile.css` and `GET /assets/<path>`: the profile page's own files (its
-/// stylesheet, the flags, rank badges and font) from `WEBSITE_DIR`, for a server with no web server
-/// in front of it (staging). In production nginx serves them and never asks accounts; without
-/// `WEBSITE_DIR` they are 404s.
+/// `GET /profile/profile.css`, `GET /assets/<path>` and the website's other files accounts' own
+/// pages use (the blog's stylesheet, the blog editor, the login page and its script: `/blog/write/`,
+/// `/login/`, `/auth/`) from `WEBSITE_DIR`, for a server with no web server in front of it
+/// (staging, local runs). A path ending in `/` is its folder's `index.html`. In production nginx
+/// serves them and never asks accounts; without `WEBSITE_DIR` they are 404s.
 pub async fn site_file(State(state): State<AppState>, uri: axum::http::Uri) -> Response {
     let not_found = || StatusCode::NOT_FOUND.into_response();
     let Some(root) = state.cfg.website_dir.as_ref() else { return not_found() };
     let path = uri.path().trim_start_matches('/');
+    let index;
+    let path = if path.ends_with('/') {
+        index = format!("{path}index.html");
+        index.as_str()
+    } else {
+        path
+    };
     // Only plain names below the folder: no "..", no hidden files, nothing odd.
     let ok = path.split('/').all(|part| {
         !part.is_empty()
@@ -443,6 +455,10 @@ pub async fn site_file(State(state): State<AppState>, uri: axum::http::Uri) -> R
     });
     let kind = match path.rsplit_once('.').map(|(_, ext)| ext) {
         Some("css") => "text/css; charset=utf-8",
+        Some("js") => "text/javascript; charset=utf-8",
+        Some("html") => "text/html; charset=utf-8",
+        Some("jpg") => "image/jpeg",
+        Some("webp") => "image/webp",
         Some("svg") => "image/svg+xml",
         Some("png") => "image/png",
         Some("woff2") => "font/woff2",
@@ -586,7 +602,7 @@ fn stat(label: &str, value: &str) -> String {
 
 /// Text for a `<script type="application/ld+json">`: JSON with `<` escaped, so a name can't end
 /// the element.
-fn json_ld(v: &serde_json::Value) -> String {
+pub(crate) fn json_ld(v: &serde_json::Value) -> String {
     v.to_string().replace('<', "\\u003c").replace('>', "\\u003e").replace('&', "\\u0026")
 }
 
@@ -662,7 +678,7 @@ pub fn page_html(p: &Profile, base: &str) -> String {
   <section class=\"card who\" data-tier=\"{tier}\">
     <div class=\"badge\">{badge}</div>
     <div>
-      <h1 class=\"name\">{name}</h1>
+      <h1 class=\"name\">{name}{dev}</h1>
       <p class=\"code\">{code}</p>
 {country}
       <p class=\"standing\">{standing}</p>
@@ -687,8 +703,19 @@ pub fn page_html(p: &Profile, base: &str) -> String {
         about = about_html(p),
         country = country_html(p),
         socials = socials_html(p),
+        dev = if p.dev { DEV_BADGE } else { "" },
     )
 }
+
+/// The developers' mark after the name: the launcher's `</>` (MUI CodeRounded) in the room codes'
+/// purple, "Dev" on hover.
+const DEV_BADGE: &str = concat!(
+    r#"<span class="dev" title="Dev" aria-label="Dev" role="img"><svg viewBox="0 0 24 24" aria-hidden="true">"#,
+    r#"<path d="M8.7 15.9 4.8 12l3.9-3.9c.39-.39.39-1.01 0-1.4a.9839.9839 0 0 0-1.4 0l-4.59 4.59c-.39.39-.39 1.02 0 "#,
+    r#"1.41l4.59 4.6c.39.39 1.01.39 1.4 0 .39-.39.39-1.01 0-1.4m6.6 0 3.9-3.9-3.9-3.9a.9839.9839 0 0 1 0-1.4c.39-.39 "#,
+    r#"1.01-.39 1.4 0l4.59 4.59c.39.39.39 1.02 0 1.41l-4.59 4.6c-.39.39-1.01.39-1.4 0a.9839.9839 0 0 1 0-1.4"/>"#,
+    r#"</svg></span>"#,
+);
 
 /// The flag and the country's name, under the code (as in the launcher); nothing without one.
 fn country_html(p: &Profile) -> String {
@@ -837,6 +864,7 @@ mod tests {
             socials: vec![],
             show_country: true,
             show_main: true,
+            dev: false,
         }
     }
 
@@ -904,6 +932,16 @@ mod tests {
         assert!(html.contains("<h2>Socials</h2>"));
         assert!(html.contains("<a href=\"https://twitch.tv/sarahkitty\" title=\"Twitch: @sarahkitty\""));
         assert!(html.contains("<span>sarah&lt;kitty&gt;</span>"));
+    }
+
+    #[test]
+    fn page_marks_a_dev() {
+        let mut p = profile(None, None, 0);
+        assert!(!page_html(&p, "").contains("class=\"dev\""));
+        p.dev = true;
+        let html = page_html(&p, "");
+        assert!(html.contains("&amp;<span class=\"dev\" title=\"Dev\""), "{html}");
+        assert!(html.contains("4.59 4.59c") && html.contains("</svg></span></h1>"), "{html}");
     }
 
     #[test]

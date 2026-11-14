@@ -8,6 +8,7 @@ import Tooltip from "@mui/material/Tooltip";
 import { clsx } from "clsx";
 import React, { useEffect, useState } from "react";
 
+import { DevBadge } from "@/components/dev_badge/dev_badge";
 import { Flag, NoFlag } from "@/components/flag/flag";
 import { RankBadge } from "@/components/rank_badge/rank_badge";
 import { RankBadgeMessages } from "@/components/rank_badge/rank_badge.messages";
@@ -84,6 +85,7 @@ export const ProfileView = React.memo(function ProfileView({
                 {profile.displayName}
               </div>
             )}
+            {profile.dev && <DevBadge size={20} className={styles.dev} />}
           </div>
           {profile.connectCode && <div className={styles.code}>{profile.connectCode}</div>}
           {(country || editing) && (

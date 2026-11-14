@@ -463,6 +463,93 @@ summary:focus-visible {
   border-color: rgba(241, 241, 244, 0.5);
 }
 
+/* A blog post the visitor hasn't seen yet (script.js): the Blog button lights up green and a
+   little "!" in the menu buttons' green sits on its corner, pulsing a ring and giving a wiggle
+   now and then. Gone once they've opened /blog (its cookie), until the next post. */
+.blog-pill {
+  position: relative;
+}
+
+.blog-pill.has-new {
+  color: var(--fg);
+  border-color: rgba(185, 245, 154, 0.6);
+  box-shadow: 0 0 14px var(--pm-glow), inset 0 0 10px rgba(116, 222, 85, 0.12);
+}
+
+.new-badge {
+  position: absolute;
+  top: -9px;
+  right: -9px;
+  display: grid;
+  place-items: center;
+  width: 19px;
+  height: 19px;
+  padding-right: 1px; /* the italic "!" leans right */
+  border: 1.5px solid var(--pm-edge);
+  border-radius: 50%;
+  background: linear-gradient(180deg, var(--pm-hi) 0%, var(--pm-mid) 55%, var(--pm-lo) 100%);
+  box-shadow: 0 0 0 1.5px var(--pm-rim), 0 0 10px 1px var(--pm-glow);
+  color: #fff;
+  font-size: 0.82rem;
+  line-height: 1;
+  letter-spacing: 0;
+  text-shadow: 0 1px 0 var(--pm-rim), 0 0 3px rgba(3, 25, 10, 0.8);
+  pointer-events: none;
+}
+
+/* The ring that pulses out of the badge. */
+.new-badge::after {
+  content: "";
+  position: absolute;
+  inset: -2px;
+  border-radius: 50%;
+  border: 2px solid var(--pm-hi);
+  opacity: 0;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .new-badge {
+    animation: new-badge-wiggle 4s ease-in-out 0.6s infinite;
+  }
+
+  .new-badge::after {
+    animation: new-badge-ring 2s ease-out infinite;
+  }
+}
+
+@keyframes new-badge-ring {
+  0% {
+    transform: scale(1);
+    opacity: 0.85;
+  }
+  80%,
+  100% {
+    transform: scale(2.3);
+    opacity: 0;
+  }
+}
+
+/* Still most of the time; a quick shake and hop every 4 s. */
+@keyframes new-badge-wiggle {
+  0%,
+  78%,
+  100% {
+    transform: none;
+  }
+  82% {
+    transform: translateY(-3px) rotate(-16deg) scale(1.12);
+  }
+  86% {
+    transform: translateY(-3px) rotate(14deg) scale(1.12);
+  }
+  90% {
+    transform: translateY(-1px) rotate(-8deg) scale(1.05);
+  }
+  94% {
+    transform: rotate(4deg);
+  }
+}
+
 .gh {
   right: max(16px, env(safe-area-inset-right));
   bottom: max(16px, env(safe-area-inset-bottom));

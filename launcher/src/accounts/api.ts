@@ -1,5 +1,12 @@
 /* eslint-disable import/no-default-export */
 import {
+  ipc_accountsAdminCodeOwner,
+  ipc_accountsAdminPlayers,
+  ipc_accountsAdminRenameRoom,
+  ipc_accountsAdminSetBanned,
+  ipc_accountsAdminSetMuted,
+  ipc_accountsAdminUpdateUser,
+  ipc_accountsAdminUser,
   ipc_accountsBrowseRulesets,
   ipc_accountsChangeEmail,
   ipc_accountsCreateRulesetDraft,
@@ -96,6 +103,27 @@ const accountsApi: AccountsApi = {
   },
   async setRoomName(uid, kind, name) {
     return unwrap(await ipc_accountsSetRoomName.renderer!.trigger({ uid, kind, name }));
+  },
+  async adminPlayers(uid, q) {
+    return unwrap(await ipc_accountsAdminPlayers.renderer!.trigger({ uid, q }));
+  },
+  async adminUser(uid, target) {
+    return unwrap(await ipc_accountsAdminUser.renderer!.trigger({ uid, target }));
+  },
+  async adminSetMuted(uid, target, muted) {
+    return unwrap(await ipc_accountsAdminSetMuted.renderer!.trigger({ uid, target, muted }));
+  },
+  async adminSetBanned(uid, target, banned) {
+    return unwrap(await ipc_accountsAdminSetBanned.renderer!.trigger({ uid, target, banned }));
+  },
+  async adminUpdateUser(uid, target, update) {
+    return unwrap(await ipc_accountsAdminUpdateUser.renderer!.trigger({ uid, target, update }));
+  },
+  async adminCodeOwner(uid, code) {
+    return unwrap(await ipc_accountsAdminCodeOwner.renderer!.trigger({ uid, code }));
+  },
+  async adminRenameRoom(uid, code, name) {
+    return unwrap(await ipc_accountsAdminRenameRoom.renderer!.trigger({ uid, code, name }));
   },
   async ruleset(code) {
     return unwrap(await ipc_accountsRuleset.renderer!.trigger({ code }));

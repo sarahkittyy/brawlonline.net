@@ -5,6 +5,10 @@ import type { PlayKey } from "@dolphin/types";
 import type { AuthService } from "../auth/types";
 import { delayAndMaybeError } from "../utils";
 import type {
+  AdminCodeOwner,
+  AdminPlayer,
+  AdminUser,
+  AdminUserUpdate,
   BackendService,
   LeaderboardEntry,
   LeaderboardPage,
@@ -524,6 +528,41 @@ class MockBackendClient implements BackendService {
 
   @delayAndMaybeError(SHOULD_ERROR)
   async setRoomName(_kind: RoomKind, name: string | null): Promise<string | null> {
+    return name?.trim() || null;
+  }
+
+  // Admin tools: the mock's accounts are never admins (no admin menu shows); these answer as the server would.
+  async adminPlayers(_q?: string): Promise<AdminPlayer[]> {
+    return [];
+  }
+
+  async adminUser(uid: string): Promise<AdminUser> {
+    return { uid, displayName: "", connectCode: "", muted: false, nameLocked: false, banned: false, admin: false };
+  }
+
+  async adminSetMuted(uid: string, muted: boolean): Promise<AdminUser> {
+    return { ...(await this.adminUser(uid)), muted };
+  }
+
+  async adminSetBanned(uid: string, banned: boolean): Promise<AdminUser> {
+    return { ...(await this.adminUser(uid)), banned };
+  }
+
+  async adminUpdateUser(uid: string, update: AdminUserUpdate): Promise<AdminUser> {
+    const u = await this.adminUser(uid);
+    return {
+      ...u,
+      displayName: update.displayName ?? u.displayName,
+      connectCode: update.connectCode ?? u.connectCode,
+      nameLocked: update.nameLocked ?? u.nameLocked,
+    };
+  }
+
+  async adminCodeOwner(code: string): Promise<AdminCodeOwner> {
+    return { code, uid: null, displayName: null };
+  }
+
+  async adminRenameRoom(_code: string, name: string | null): Promise<string | null> {
     return name?.trim() || null;
   }
 

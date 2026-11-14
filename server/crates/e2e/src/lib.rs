@@ -186,12 +186,16 @@ impl Stack {
             cfg.slur_filter.slur_filter_url = url;
             cfg.slur_filter.deepinfra_api_key = Some(accounts::config::Secret::new("di_e2e"));
             cfg.slur_filter.slur_filter_recheck_secs = vec![1, 1];
+            // The filter's rules live in the database: one ai rule, which the stand-in answers.
+            accounts::slur_filter::add_rule(&pool, accounts::slur_filter::RuleKind::Ai, "e2e prompt", "", true, "e2e")
+                .await?;
         }
         if let Some(url) = opts.tournaments_url {
             cfg.tournaments_url = url;
         }
         let bug_reports_dir = std::env::temp_dir().join(format!("pp-e2e-bug-reports-{db_name}"));
         cfg.bug_reports_dir = bug_reports_dir.clone();
+        cfg.blog_media_dir = std::env::temp_dir().join(format!("pp-e2e-blog-media-{db_name}"));
         let mailer = MemoryMailer::new();
         let state = accounts::AppState::new(pool.clone(), cfg, Arc::new(mailer.clone()))?;
         let accounts_task = tokio::spawn(async move {

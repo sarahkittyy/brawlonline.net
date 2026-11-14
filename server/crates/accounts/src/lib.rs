@@ -2,7 +2,9 @@
 //! verification), login, sessions, connect codes, play keys and the data the launcher writes
 //! to `user.json`. See docs/backend-design.md sections 2.4 and 3.
 
+pub mod admin;
 pub mod api;
+pub mod blog;
 pub mod bug_reports;
 pub mod config;
 pub mod cursor;
@@ -32,10 +34,10 @@ use axum::routing::{get, post, put};
 use axum::Router;
 use common::playkey::PlayKeySecret;
 use common::ratelimit::{
-    RateLimiter, Window, AUTH_WINDOWS, BUG_REPORT_IP_WINDOWS, DAY, HISTORY_WINDOWS, LEADERBOARD_IP_WINDOWS,
-    MAIL_RECIPIENT_WINDOWS, PROFILE_EDIT_WINDOWS, PROFILE_IP_WINDOWS, ROOMS_WINDOWS, ROOM_NAME_WINDOWS,
-    RULESET_EDIT_WINDOWS, RULESET_LOOKUP_IP_WINDOWS, RULESET_PUBLISH_WINDOWS, SD_LISTING_FETCH_WINDOWS,
-    SD_LISTING_UPLOAD_WINDOWS, SIGNUP_IP_WINDOWS,
+    RateLimiter, Window, AUTH_WINDOWS, BLOG_IP_WINDOWS, BUG_REPORT_IP_WINDOWS, DAY, HISTORY_WINDOWS,
+    LEADERBOARD_IP_WINDOWS, MAIL_RECIPIENT_WINDOWS, PROFILE_EDIT_WINDOWS, PROFILE_IP_WINDOWS, ROOMS_WINDOWS,
+    ROOM_NAME_WINDOWS, RULESET_EDIT_WINDOWS, RULESET_LOOKUP_IP_WINDOWS, RULESET_PUBLISH_WINDOWS,
+    SD_LISTING_FETCH_WINDOWS, SD_LISTING_UPLOAD_WINDOWS, SIGNUP_IP_WINDOWS,
 };
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
@@ -67,6 +69,7 @@ impl AppState {
     pub fn new(pool: PgPool, cfg: Config, mailer: Arc<dyn mail::Mailer>) -> anyhow::Result<Self> {
         let secret = PlayKeySecret::parse(&cfg.play_key_secret)?;
         let hash_params = password::HashParams { memory_kib: cfg.argon2_memory_kib, iterations: cfg.argon2_iterations };
+        let slur_filter = Arc::new(slur_filter::SlurFilter::new(&cfg.slur_filter, pool.clone())?);
         Ok(AppState {
             pool,
             secret,
@@ -77,7 +80,7 @@ impl AppState {
             mm_status: Arc::new(rooms::MmStatusSource::new(&cfg.mm_status_url)),
             social: Arc::new(social::SocialHub::new(!cfg.disable_rate_limits)),
             live: Arc::new(live::LiveHub::new(!cfg.disable_rate_limits)),
-            slur_filter: Arc::new(slur_filter::SlurFilter::new(&cfg.slur_filter)?),
+            slur_filter,
             cfg: Arc::new(cfg),
         })
     }
@@ -121,6 +124,8 @@ pub struct Limits {
     pub sd_listing_upload: RateLimiter<uuid::Uuid>,
     /// SD card listings fetched per account: [`SD_LISTING_FETCH_WINDOWS`].
     pub sd_listing_fetch: RateLimiter<uuid::Uuid>,
+    /// Blog pages per client IP (IPv6 per /64): [`BLOG_IP_WINDOWS`].
+    pub blog_ip: RateLimiter<IpAddr>,
 }
 
 impl Limits {
@@ -150,6 +155,7 @@ impl Limits {
             bug_report_ip: RateLimiter::new(&BUG_REPORT_IP_WINDOWS),
             sd_listing_upload: RateLimiter::new(&SD_LISTING_UPLOAD_WINDOWS),
             sd_listing_fetch: RateLimiter::new(&SD_LISTING_FETCH_WINDOWS),
+            blog_ip: RateLimiter::new(&BLOG_IP_WINDOWS),
         }
     }
 
@@ -174,6 +180,18 @@ pub fn router(state: AppState) -> Router {
     let listings = Router::new()
         .route("/v1/sd-cards/{root}/listing", get(sd_cards::download).put(sd_cards::upload))
         .layer(RequestBodyLimitLayer::new(listing_limit));
+    // The blog's editor calls: a post's Markdown (up to 1 MiB) and the image and video uploads
+    // (BLOG_MEDIA_MAX_BYTES, checked in the upload; this is a backstop above it).
+    let blog_posts = Router::new()
+        .route("/v1/blog/posts", get(blog::list_posts).post(blog::create_post))
+        .route("/v1/blog/posts/{id}", get(blog::get_post).put(blog::update_post).delete(blog::delete_post))
+        .route("/v1/blog/posts/{id}/publish", post(blog::publish_post))
+        .route("/v1/blog/posts/{id}/unpublish", post(blog::unpublish_post))
+        .route("/v1/blog/render", post(blog::render_preview))
+        .layer(RequestBodyLimitLayer::new(blog::MAX_POST_BYTES + 64 * 1024));
+    let media_limit = usize::try_from(state.cfg.blog_media_max_bytes.saturating_add(1024 * 1024)).unwrap_or(usize::MAX);
+    let blog_media =
+        Router::new().route("/v1/blog/media", put(blog::upload_media)).layer(RequestBodyLimitLayer::new(media_limit));
     Router::new()
         .route("/v1/auth/signup", post(api::signup))
         .route("/v1/auth/login", post(api::login))
@@ -196,6 +214,19 @@ pub fn router(state: AppState) -> Router {
         .route("/profile/{slug}", get(profile::page))
         .route("/profile/profile.css", get(profile::site_file))
         .route("/assets/{*path}", get(profile::site_file))
+        .route("/v1/blog/latest", get(blog::latest_post))
+        .route("/blog", get(blog::index_page))
+        .route("/blog/", get(blog::index_redirect))
+        .route("/blog/sitemap.xml", get(blog::sitemap))
+        .route("/blog/{slug}", get(blog::post_page))
+        .route("/blog/media/{name}", get(blog::media_file))
+        .route("/blog/blog.css", get(profile::site_file))
+        .route("/blog/write/", get(profile::site_file))
+        .route("/blog/write/{file}", get(profile::site_file))
+        .route("/login", get(blog::login_redirect))
+        .route("/login/", get(profile::site_file))
+        .route("/login/{file}", get(profile::site_file))
+        .route("/auth/{file}", get(profile::site_file))
         .route("/v1/ranked/report-game", post(ranked::report_game))
         .route("/v1/ranked/report-leave", post(ranked::report_leave))
         .route("/v1/ranked/result", get(ranked::result))
@@ -203,6 +234,12 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/rooms", get(rooms::rooms))
         .route("/v1/mod-rooms/{code}", get(rooms::mod_room))
         .route("/v1/me/room-name", put(rooms::set_room_name))
+        .route("/v1/admin/players", get(admin::players))
+        .route("/v1/admin/users/{uid}", get(admin::user).put(admin::update_user))
+        .route("/v1/admin/users/{uid}/muted", put(admin::set_muted))
+        .route("/v1/admin/users/{uid}/banned", put(admin::set_banned))
+        .route("/v1/admin/codes", get(admin::code_owner))
+        .route("/v1/admin/rooms/{code}/name", put(admin::rename_room))
         .route("/v1/rulesets", get(rulesets::browse).post(rulesets::publish))
         .route("/v1/rulesets/{code}", get(rulesets::lookup))
         .route("/v1/rulesets/{code}/preview", get(rulesets::preview))
@@ -231,6 +268,8 @@ pub fn router(state: AppState) -> Router {
         .layer(RequestBodyLimitLayer::new(16 * 1024))
         .merge(uploads)
         .merge(listings)
+        .merge(blog_posts)
+        .merge(blog_media)
         .layer(TraceLayer::new_for_http())
         .with_state(state)
 }

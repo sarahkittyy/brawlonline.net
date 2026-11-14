@@ -5,6 +5,10 @@ import type {
   AccountsMe,
   AccountsPublicUser,
   AccountsResult,
+  AdminCodeOwner,
+  AdminPlayer,
+  AdminUser,
+  AdminUserUpdate,
   LauncherSettings,
   LeaderboardPage,
   MatchHistoryFilter,
@@ -106,6 +110,48 @@ export const ipc_accountsRooms = makeEndpoint.main("accounts_rooms", <{ uid: str
 export const ipc_accountsSetRoomName = makeEndpoint.main(
   "accounts_setRoomName",
   <{ uid: string; kind: RoomKind; name: string | null }>_,
+  <R<string | null>>_,
+);
+
+export const ipc_accountsAdminPlayers = makeEndpoint.main(
+  "accounts_adminPlayers",
+  <{ uid: string; q?: string }>_,
+  <R<AdminPlayer[]>>_,
+);
+
+export const ipc_accountsAdminUser = makeEndpoint.main(
+  "accounts_adminUser",
+  <{ uid: string; target: string }>_,
+  <R<AdminUser>>_,
+);
+
+export const ipc_accountsAdminSetMuted = makeEndpoint.main(
+  "accounts_adminSetMuted",
+  <{ uid: string; target: string; muted: boolean }>_,
+  <R<AdminUser>>_,
+);
+
+export const ipc_accountsAdminSetBanned = makeEndpoint.main(
+  "accounts_adminSetBanned",
+  <{ uid: string; target: string; banned: boolean }>_,
+  <R<AdminUser>>_,
+);
+
+export const ipc_accountsAdminUpdateUser = makeEndpoint.main(
+  "accounts_adminUpdateUser",
+  <{ uid: string; target: string; update: AdminUserUpdate }>_,
+  <R<AdminUser>>_,
+);
+
+export const ipc_accountsAdminCodeOwner = makeEndpoint.main(
+  "accounts_adminCodeOwner",
+  <{ uid: string; code: string }>_,
+  <R<AdminCodeOwner>>_,
+);
+
+export const ipc_accountsAdminRenameRoom = makeEndpoint.main(
+  "accounts_adminRenameRoom",
+  <{ uid: string; code: string; name: string | null }>_,
   <R<string | null>>_,
 );
 

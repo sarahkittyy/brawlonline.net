@@ -1,6 +1,10 @@
 import type {
   AccountsMe,
   AccountsPublicUser,
+  AdminCodeOwner,
+  AdminPlayer,
+  AdminUser,
+  AdminUserUpdate,
   LeaderboardPage,
   MatchHistoryFilter,
   MatchHistoryPage,
@@ -118,6 +122,7 @@ class AccountsBackendClient implements BackendService {
       // logic handling it asks the user to set them up.
       playKey: playKeyFromAccount(me),
       rankedNetplayProfile,
+      admin: me.role === "admin",
     };
   }
 
@@ -152,6 +157,34 @@ class AccountsBackendClient implements BackendService {
 
   async setRoomName(kind: RoomKind, name: string | null): Promise<string | null> {
     return await this._api.setRoomName(this._activeUid(), kind, name);
+  }
+
+  async adminPlayers(q?: string): Promise<AdminPlayer[]> {
+    return await this._api.adminPlayers(this._activeUid(), q?.trim() || undefined);
+  }
+
+  async adminUser(uid: string): Promise<AdminUser> {
+    return await this._api.adminUser(this._activeUid(), uid);
+  }
+
+  async adminSetMuted(uid: string, muted: boolean): Promise<AdminUser> {
+    return await this._api.adminSetMuted(this._activeUid(), uid, muted);
+  }
+
+  async adminSetBanned(uid: string, banned: boolean): Promise<AdminUser> {
+    return await this._api.adminSetBanned(this._activeUid(), uid, banned);
+  }
+
+  async adminUpdateUser(uid: string, update: AdminUserUpdate): Promise<AdminUser> {
+    return await this._api.adminUpdateUser(this._activeUid(), uid, update);
+  }
+
+  async adminCodeOwner(code: string): Promise<AdminCodeOwner> {
+    return await this._api.adminCodeOwner(this._activeUid(), code);
+  }
+
+  async adminRenameRoom(code: string, name: string | null): Promise<string | null> {
+    return await this._api.adminRenameRoom(this._activeUid(), code, name);
   }
 
   async fetchRuleset(code: string): Promise<RulesetView> {

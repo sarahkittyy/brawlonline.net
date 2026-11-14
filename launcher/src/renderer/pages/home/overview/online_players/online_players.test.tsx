@@ -1,5 +1,5 @@
 import type { SocialPlayer, SocialState } from "@social/types";
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { useAccount } from "@/lib/hooks/use_account";
@@ -103,5 +103,77 @@ describe("OnlinePlayers flags", () => {
     // The measuring class is gone again.
     expect(list.className).not.toMatch(/measure/);
     expect(within(rowOf("Lucas")).getByRole("button", { name: /invite/i })).toBeTruthy();
+  });
+});
+
+describe("OnlinePlayers on an admin account", () => {
+  const offline = [
+    { uid: "a", displayName: "Lucas", connectCode: "LUCA#5", banned: false },
+    { uid: "me", displayName: "Me", connectCode: "ME#1", banned: false },
+    { uid: "x", displayName: "Sleepy", connectCode: "SLEP#9", country: "se", banned: false },
+    { uid: "y", displayName: "Cheater", connectCode: "CHET#66", banned: true },
+  ];
+
+  function renderAdmin(admin: boolean) {
+    const adminPlayers = vi.fn(async (q?: string) =>
+      offline.filter((p) => !q || p.displayName.toLowerCase().includes(q) || p.connectCode.toLowerCase().includes(q)),
+    );
+    const { ServiceProvider: Provider } = createServiceProvider({
+      services: { notificationService: toasts, backendService: { adminPlayers } } as unknown as Services,
+    });
+    useGameAssets.getState().setState({ manifest: { stocks: {} } } as any);
+    useAccount.setState({ user: { uid: "me" }, userData: { playKey: {}, admin } } as any);
+    const state: SocialState = {
+      status: "online",
+      online: players,
+      room: null,
+      ignored: [],
+      invites: [],
+      conversations: {},
+    };
+    useSocial.setState({ state, tabs: [] } as any);
+    render(
+      <Provider>
+        <OnlinePlayers />
+      </Provider>,
+    );
+    return adminPlayers;
+  }
+
+  it("lists offline players after the online ones (not the admin, not anyone online), dimmed, without the envelope", async () => {
+    renderAdmin(true);
+    await screen.findByText("Sleepy");
+    const rows = Array.from(screen.getByTestId("online-players").querySelectorAll("[role=button]"));
+    const names = rows.map((r) => r.textContent ?? "");
+    expect(names.map((n) => n.replace(/#.*/, "").replace(/[A-Z]+$/, ""))).toHaveLength(players.length + 2);
+    expect(names.slice(0, players.length).every((n) => !n.includes("Sleepy"))).toBe(true);
+    expect(names[players.length]).toContain("Sleepy");
+    expect(names[players.length + 1]).toContain("Cheater");
+    expect(screen.queryByText("Me")).toBeNull();
+    expect(screen.getByTestId("online-offline-header").textContent).toBe("Offline");
+    const sleepy = rowOf("Sleepy");
+    expect(sleepy.className).toMatch(/offline/);
+    expect(within(sleepy).queryByRole("button", { name: /invite/i })).toBeNull();
+    expect(rowOf("Cheater").className).toMatch(/banned/);
+  });
+
+  it("searches offline players on the server too", async () => {
+    const adminPlayers = renderAdmin(true);
+    await screen.findByText("Sleepy");
+    fireEvent.click(screen.getByTestId("online-search-toggle"));
+    fireEvent.change(screen.getByTestId("online-search"), { target: { value: "chet" } });
+    await waitFor(() => expect(adminPlayers).toHaveBeenLastCalledWith("chet"));
+    await waitFor(() => expect(screen.queryByText("Sleepy")).toBeNull());
+    expect(rowOf("Cheater")).toBeTruthy();
+    expect(screen.queryByText("Lucas")).toBeNull();
+  });
+
+  it("shows only online players to anyone else, and never asks for the rest", async () => {
+    const adminPlayers = renderAdmin(false);
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    expect(adminPlayers).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("online-offline-header")).toBeNull();
   });
 });

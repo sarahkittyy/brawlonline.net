@@ -2,6 +2,8 @@
 //! `audit_log`. Reads DATABASE_URL (and, for `reset-password --send-email`,
 //! the mail settings) from the environment or `server/.env`.
 
+mod filter;
+
 use std::time::Duration as StdDuration;
 
 use accounts::config::{MailConfig, SlurFilterConfig};
@@ -52,6 +54,13 @@ enum Cmd {
     },
     /// Lift a `mute`.
     Unmute { ident: String },
+    /// Rooms open now, and the names their hosts give them.
+    #[command(subcommand)]
+    Room(RoomCmd),
+    /// The name filter's rules (display names, code starts, room names, social media
+    /// usernames): add, test against every name players have now, turn on and off.
+    #[command(subcommand)]
+    Filter(filter::FilterCmd),
     /// Bug reports from the launcher's bug button, with their logs zips.
     #[command(subcommand)]
     Bug(BugCmd),
@@ -79,6 +88,33 @@ enum Cmd {
         #[arg(long, default_value_t = -5, allow_negative_numbers = true)]
         offset: i64,
         /// mm's status listener, as accounts reads it.
+        #[arg(long, env = "MM_STATUS_URL", default_value = "http://127.0.0.1:43181/status")]
+        mm_status_url: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum RoomCmd {
+    /// Every room open now (mm's status), P+ and Brawl Mods, public and private: its code, the
+    /// name it shows and its host.
+    List {
+        /// mm's status listener, as accounts reads it.
+        #[arg(long, env = "MM_STATUS_URL", default_value = "http://127.0.0.1:43181/status")]
+        mm_status_url: String,
+    },
+    /// Rename a room, as its host would in the launcher: the name is kept on the host's account
+    /// for their rooms of that kind, and mm renames the room open now within a few seconds. No
+    /// NAME (or "") clears it: the room shows "alice's room". The host can still rename it.
+    Rename {
+        /// A room code open now (`room list`), or the host's account (a uid, an email or a
+        /// connect code) to name its next rooms.
+        target: String,
+        name: Option<String>,
+        /// With an account: its Brawl Mods (Other Games) rooms' name, not its P+ rooms'. A room
+        /// code says which kind it is.
+        #[arg(long)]
+        mods: bool,
+        /// mm's status listener, as accounts reads it (for a room code).
         #[arg(long, env = "MM_STATUS_URL", default_value = "http://127.0.0.1:43181/status")]
         mm_status_url: String,
     },
@@ -270,8 +306,16 @@ enum UserCmd {
     UnlockName {
         ident: String,
     },
-    /// Ask the slur filter (DEEPINFRA_API_KEY, as accounts) about every account's display name and
-    /// connect code start, and list the ones it calls a slur. With --apply, give those a
+    /// Set the account's role: `admin` may write the blog (brawlonline.net/blog/write/) and,
+    /// later, whatever else the website's admin pages offer; `user` is everyone else.
+    Role {
+        ident: String,
+        #[arg(value_parser = ["user", "admin"])]
+        role: String,
+    },
+    /// Check every account's display name and connect code start with the name filter's rules
+    /// that are on (`filter list`; ai ones need DEEPINFRA_API_KEY, as accounts), and list the
+    /// ones it flags. With --apply, give those a
     /// kind name or code start, as accounts does at sign-up. Banned accounts are skipped.
     SlurScan {
         /// Replace the flagged names and codes (default: only list them).
@@ -401,6 +445,40 @@ fn print_user(u: &UserRow) {
         Some(t) => println!("name locked:    since {}", t.format("%Y-%m-%d %H:%M UTC")),
         None => println!("name locked:    no"),
     }
+}
+
+/// A room name as `room list` and `room rename` print it.
+fn room_name(name: &Option<String>) -> String {
+    match name {
+        Some(n) => format!("{n:?}"),
+        None => "(no name)".into(),
+    }
+}
+
+/// `room list`: every room open now, from mm's status.
+async fn print_rooms(pool: &PgPool, mm_status_url: &str) -> anyhow::Result<()> {
+    let s = accounts::rooms::MmStatusSource::new(mm_status_url).get().await?;
+    let mut rows = Vec::new();
+    for m in s.members.iter().filter(|m| m.host && !m.twos) {
+        rows.push(("P+", m.code.clone(), m.uid.clone(), m.name.clone(), format!("{}/{}", m.players, m.open_slots)));
+    }
+    for m in s.mod_members.iter().filter(|m| m.host) {
+        let players = s.mod_room_index.iter().find(|r| r.code == m.code).map(|r| format!("{}/{}", r.players, r.open));
+        rows.push(("Mods", m.code.clone(), m.uid.clone(), m.name.clone(), players.unwrap_or_default()));
+    }
+    println!("now ({}): {} room(s)", s.updated_at, rows.len());
+    println!("{:<5} {:<5} {:<7} {:<34} host", "kind", "code", "players", "name");
+    for (kind, code, uid, name, players) in rows {
+        let host = match uuid::Uuid::parse_str(&uid) {
+            Ok(uid) => match store::user_by_uid(pool, uid).await? {
+                Some(u) => format!("{} ({})", u.connect_code.as_deref().unwrap_or("-"), u.display_name),
+                None => uid.to_string(),
+            },
+            Err(_) => uid,
+        };
+        println!("{kind:<5} {code:<5} {players:<7} {:<34} {host}", room_name(&name));
+    }
+    Ok(())
 }
 
 /// `stats`: mm's counts now, then the estimated wait per mode by hour of day.
@@ -608,6 +686,7 @@ async fn main() -> anyhow::Result<()> {
                 if u.chat_muted_at.is_none() { "; it was not muted" } else { "" }
             );
         }
+        Cmd::Filter(cmd) => filter::run(&pool, &actor, cmd).await?,
         Cmd::Stats { days, offset, mm_status_url } => {
             print_stats(&pool, days.clamp(1, 365), offset, &mm_status_url).await?
         }
@@ -751,7 +830,58 @@ async fn main() -> anyhow::Result<()> {
                 );
             }
         }
-        Cmd::User(UserCmd::Show { ident }) => print_user(&find(&pool, &ident).await?),
+        Cmd::User(UserCmd::Show { ident }) => {
+            let u = find(&pool, &ident).await?;
+            print_user(&u);
+            let (pplus, mods) = admin::room_names(&pool, u.uid).await?;
+            println!("room name:      {}", room_name(&pplus));
+            println!("mods room name: {}", room_name(&mods));
+        }
+        Cmd::Room(RoomCmd::List { mm_status_url }) => print_rooms(&pool, &mm_status_url).await?,
+        Cmd::Room(RoomCmd::Rename { target, name, mods, mm_status_url }) => {
+            use common::rooms::RoomKind;
+            let name = common::rooms::clean_room_name(name.as_deref().unwrap_or_default())
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
+            let (u, kind, code) = match common::rooms::parse_room_code(&target) {
+                Some(code) => {
+                    let s = accounts::rooms::MmStatusSource::new(&mm_status_url).get().await?;
+                    let pplus = s
+                        .members
+                        .iter()
+                        .find(|m| m.host && !m.twos && m.code == code)
+                        .map(|m| (&m.uid, RoomKind::Pplus));
+                    let modded =
+                        s.mod_members.iter().find(|m| m.host && m.code == code).map(|m| (&m.uid, RoomKind::Mods));
+                    let (uid, kind) = pplus
+                        .or(modded)
+                        .ok_or_else(|| anyhow::anyhow!("no room {code} is open now (see `room list`)"))?;
+                    (find(&pool, uid).await?, kind, Some(code))
+                }
+                None => (find(&pool, &target).await?, if mods { RoomKind::Mods } else { RoomKind::Pplus }, None),
+            };
+            let (pplus, modded) = admin::room_names(&pool, u.uid).await?;
+            let from = if kind == RoomKind::Mods { modded } else { pplus };
+            store::set_room_name(&pool, u.uid, kind, name.as_deref()).await?;
+            let kind_text = if kind == RoomKind::Mods { "mods" } else { "pplus" };
+            store::audit(
+                &pool,
+                &actor,
+                "user.room_name",
+                Some(&u.uid.to_string()),
+                serde_json::json!({"kind": kind_text, "room": code, "from": from, "to": name}),
+            )
+            .await?;
+            println!(
+                "{} room{} of {} ({}) renamed from {} to {}{}",
+                if kind == RoomKind::Mods { "Brawl Mods" } else { "P+" },
+                code.as_ref().map(|c| format!(" {c}")).unwrap_or_else(|| "s".into()),
+                u.connect_code.as_deref().unwrap_or("-"),
+                u.display_name,
+                room_name(&from),
+                room_name(&name),
+                if code.is_some() { " (the room shows it within a few seconds)" } else { "" }
+            );
+        }
         Cmd::User(UserCmd::ResetPassword { ident, send_email, public_base_url, mail: mail_cfg }) => {
             // The same mailer accounts would build from these settings (MAILER=file,
             // stdout, smtp or resend). Built first, so a bad setting fails before a
@@ -873,6 +1003,24 @@ async fn main() -> anyhow::Result<()> {
                 if u.rename_locked_at.is_none() { "; it was not locked" } else { "" }
             );
         }
+        Cmd::User(UserCmd::Role { ident, role }) => {
+            let u = find(&pool, &ident).await?;
+            sqlx::query("UPDATE users SET role = $2 WHERE uid = $1").bind(u.uid).bind(&role).execute(&pool).await?;
+            store::audit(
+                &pool,
+                &actor,
+                "user.role",
+                Some(&u.uid.to_string()),
+                serde_json::json!({"from": u.role, "to": role}),
+            )
+            .await?;
+            println!(
+                "{} ({}) is now {role}{}",
+                u.display_name,
+                u.connect_code.as_deref().unwrap_or("-"),
+                if u.role == role { " (it already was)" } else { "" }
+            );
+        }
         Cmd::User(UserCmd::SlurScan { apply, concurrency, filter }) => {
             slur_scan(&pool, &actor, &filter, apply, concurrency.max(1)).await?;
         }
@@ -930,8 +1078,10 @@ async fn slur_scan(
 ) -> anyhow::Result<()> {
     use accounts::slur_filter::{SlurFilter, What};
     use std::sync::Arc;
-    let filter = Arc::new(SlurFilter::new(cfg)?);
-    anyhow::ensure!(filter.enabled(), "the slur filter is off: set DEEPINFRA_API_KEY");
+    let filter = Arc::new(SlurFilter::new(cfg, pool.clone())?);
+    if !filter.enabled() {
+        eprintln!("no DEEPINFRA_API_KEY: only the word, regex and allow rules are used");
+    }
     let users: Vec<UserRow> = store::list_users(pool).await?.into_iter().filter(|u| !u.is_banned()).collect();
     let gate = Arc::new(tokio::sync::Semaphore::new(concurrency));
     let mut checks = tokio::task::JoinSet::new();

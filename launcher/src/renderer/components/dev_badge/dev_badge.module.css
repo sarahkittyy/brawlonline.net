@@ -1,0 +1,8 @@
+/* The developers' mark: Other Games' Codes </> in the codes' purple (codes.module.css). */
+.dev {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  color: #c9a6f2;
+  cursor: default;
+}

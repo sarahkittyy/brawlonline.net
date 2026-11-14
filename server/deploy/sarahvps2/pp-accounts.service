@@ -27,12 +27,14 @@ CPUWeight=50
 MemoryMax=1G
 TasksMax=256
 
-# Bug reports' logs zips (BUG_REPORTS_DIR, default "bug-reports" in the working directory):
-# systemd creates /var/lib/ppserver/bug-reports for ppserver (0750) and makes it writable.
-StateDirectory=ppserver/bug-reports
+# Bug reports' logs zips (BUG_REPORTS_DIR, default "bug-reports" in the working directory) and
+# the blog's images and videos (BLOG_MEDIA_DIR, default "blog-media"): systemd creates
+# /var/lib/ppserver/bug-reports and /var/lib/ppserver/blog-media for ppserver (0750) and makes
+# them writable. nginx never reads them: accounts serves /blog/media/<name> itself.
+StateDirectory=ppserver/bug-reports ppserver/blog-media
 StateDirectoryMode=0750
 
-# Sandboxing. The only writable paths are the mail log (MAILER=file) and the bug reports above.
+# Sandboxing. The only writable paths are the mail log (MAILER=file) and the folders above.
 ReadWritePaths=/var/log/ppserver
 ProtectSystem=strict
 ProtectHome=yes

@@ -10,7 +10,15 @@
 #endif
 
 #ifdef __linux__
+#include <csignal>
 #include <cstdlib>
+#include <cstring>
+#if __has_include(<execinfo.h>)
+#include <execinfo.h>
+#include <sys/prctl.h>
+#include <unistd.h>
+#define DOLPHIN_LINUX_CRASH_STACK 1
+#endif
 #endif
 
 #include <OptionParser.h>
@@ -117,6 +125,60 @@ static bool QtMsgAlertHandler(const char* caption, const char* text, bool yes_no
   return false;
 }
 
+#ifdef DOLPHIN_LINUX_CRASH_STACK
+// A crash on Linux (abort, glibc's "double free or corruption" among them, a segfault Dolphin's
+// fastmem handler passes on, ...) writes the crashing thread's stack to stderr, which the launcher
+// copies into its main.log, the log a bug report sends; then the signal does what it would have
+// (a core dump, the exit status). Before this a crash left one line from glibc and nothing that
+// says which library or call it was in (bug report #287: the render Dolphin on an NVIDIA desktop
+// wrote only "double free or corruption (out)" a second into every render). Frames are
+// module(+offset): the AppImage's binaries have no symbols, addr2line on the same build names
+// them. Only async-signal-safe calls apart from backtrace(), which is called once at install so
+// that libgcc's unwinder is loaded before a crash.
+static void WriteStderr(const char* text)
+{
+  [[maybe_unused]] const ssize_t written = write(STDERR_FILENO, text, std::strlen(text));
+}
+
+static void OnCrashSignal(int sig)
+{
+  const char* name = "SIGFPE";
+  if (sig == SIGABRT)
+    name = "SIGABRT";
+  else if (sig == SIGSEGV)
+    name = "SIGSEGV";
+  else if (sig == SIGBUS)
+    name = "SIGBUS";
+  else if (sig == SIGILL)
+    name = "SIGILL";
+  char thread_name[17] = {};
+  prctl(PR_GET_NAME, thread_name, 0, 0, 0);
+  WriteStderr("\nDolphin crashed: ");
+  WriteStderr(name);
+  WriteStderr(" in thread \"");
+  WriteStderr(thread_name);
+  WriteStderr("\"; stack:\n");
+  void* frames[64];
+  const int count = backtrace(frames, 64);
+  backtrace_symbols_fd(frames, count, STDERR_FILENO);
+  WriteStderr("(end of stack)\n");
+  // SA_RESETHAND put the default action back: the signal now does what it would have done.
+  raise(sig);
+}
+
+static void InstallCrashStack()
+{
+  void* warm_up[1];
+  backtrace(warm_up, 1);
+  struct sigaction sa{};
+  sa.sa_handler = &OnCrashSignal;
+  sa.sa_flags = SA_RESETHAND | SA_NODEFER;
+  sigemptyset(&sa.sa_mask);
+  for (const int sig : {SIGABRT, SIGSEGV, SIGBUS, SIGILL, SIGFPE})
+    sigaction(sig, &sa, nullptr);
+}
+#endif
+
 #ifdef _WIN32
 #define main app_main
 #endif
@@ -158,6 +220,12 @@ int main(int argc, char* argv[])
   {
     argc--;
   }
+#endif
+
+#ifdef DOLPHIN_LINUX_CRASH_STACK
+  // (First thing: MemTools' fastmem handler, installed at boot, passes the faults it does not
+  // handle on to this one.)
+  InstallCrashStack();
 #endif
 
 #ifdef __linux__

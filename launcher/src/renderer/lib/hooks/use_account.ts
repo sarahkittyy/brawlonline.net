@@ -82,3 +82,6 @@ export function clearUserData() {
 
   useAccount.getState().setUserData(undefined);
 }
+
+/** An admin account is logged in: the launcher's admin tools show (the server checks every admin call again). */
+export const useIsAdmin = () => useAccount((s) => s.userData?.admin === true);

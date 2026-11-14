@@ -222,7 +222,7 @@ async function bugReportNetworkText(): Promise<string> {
   }
 }
 
-/** What a logs zip holds: system.txt, the launcher's logs, and both Dolphins' logs and config files. */
+/** What a logs zip holds: system.txt, the launcher's logs, and the Dolphins' (netplay, playback, render) logs and config files. */
 async function logFiles(
   dolphinManager: DolphinManager,
   settingsManager: SettingsManager,
@@ -243,6 +243,12 @@ async function logFiles(
     } catch (err) {
       log.error(`Could not find the ${launchType} Dolphin's User folder: `, err);
     }
+  }
+  // The render Dolphin (highlights and replays rendered to video) has a User folder of its own.
+  try {
+    files.push(...(await dolphinUserFiles(dolphinManager.renderUserFolder(), "render-dolphin")));
+  } catch (err) {
+    log.error("Could not find the render Dolphin's User folder: ", err);
   }
   return files;
 }

@@ -31,7 +31,11 @@ export const ProjectPunchButtonView = ({ job, onClick }: ProjectPunchButtonViewP
       alignItems: "center",
     }}
   >
-    <Tooltip title={Messages.buttonTooltip()}>
+    {/* The button is 14 px from the window's right edge and the tooltip is wider: keep it 8 px in. */}
+    <Tooltip
+      title={Messages.buttonTooltip()}
+      PopperProps={{ modifiers: [{ name: "preventOverflow", options: { padding: 8 } }] }}
+    >
       <IconButton
         onClick={onClick}
         aria-label={Messages.buttonTooltip()}

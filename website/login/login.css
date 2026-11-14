@@ -1,0 +1,45 @@
+/* /login/: one card in the middle of the dim gameplay still. */
+
+.backdrop {
+  position: fixed;
+  inset: 0;
+  background: url("/assets/bg-poster.jpg") center / cover;
+  opacity: 0.12;
+  pointer-events: none;
+}
+
+.login {
+  position: relative;
+  min-height: 100vh;
+  min-height: 100svh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 22px;
+  padding: 32px 16px;
+}
+
+.login-card {
+  width: min(400px, 100%);
+  display: grid;
+  gap: 16px;
+  padding: 26px 28px 24px;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 14px 18px;
+  margin-top: 4px;
+}
+
+.forgot {
+  color: var(--dim);
+  font-size: 13px;
+}
+
+.forgot:hover {
+  color: var(--fg);
+}

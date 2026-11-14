@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'">
+<meta name="referrer" content="no-referrer">
+<meta name="robots" content="noindex">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#08080b">
+<title>Log in · Brawl Online</title>
+<link rel="icon" href="/favicon.ico" sizes="16x16 32x32 48x48">
+<link rel="preload" href="/assets/fonts/barlow-condensed-900-italic.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="/auth/auth.css">
+<link rel="stylesheet" href="/login/login.css">
+<script src="/auth/auth.js" defer></script>
+<script src="/login/login.js" defer></script>
+<!-- The website's login (docs/design/blog.md §4): the launcher's accounts. Pages that need it send
+     people here with ?next=<path> and get them back after. Nothing on the home page links here. -->
+</head>
+<body class="app">
+<div class="backdrop" aria-hidden="true"></div>
+<main class="login">
+  <a class="app-mark" href="/"><span class="name">Brawl <span class="w2">Online</span></span></a>
+
+  <!-- Logging in. -->
+  <form class="card login-card" id="form" novalidate>
+    <h1 class="app-title">Log in</h1>
+    <p class="note">With your Brawl Online account, the one you use in the launcher.</p>
+    <label class="field"><span>Email</span>
+      <input class="input" id="email" type="email" autocomplete="username" required autofocus>
+    </label>
+    <label class="field"><span>Password</span>
+      <input class="input" id="password" type="password" autocomplete="current-password" required>
+    </label>
+    <p class="error" id="error" role="alert" hidden></p>
+    <div class="actions">
+      <button class="btn" id="submit" type="submit">Log in</button>
+      <button class="link forgot" id="forgot" type="button">Forgot your password?</button>
+    </div>
+    <p class="note" id="reset-note" hidden></p>
+    <p class="note">No account? Sign up in the <a href="/">Brawl Online launcher</a>.</p>
+  </form>
+
+  <!-- Already logged in, with nowhere to go back to. -->
+  <section class="card login-card" id="done" hidden>
+    <h1 class="app-title">Logged in</h1>
+    <p class="note" id="done-who"></p>
+    <div class="actions">
+      <a class="btn" href="/">Home</a>
+      <a class="pill" id="done-blog" href="/blog/write/" hidden>Blog editor</a>
+      <button class="pill" id="logout" type="button">Log out</button>
+    </div>
+  </section>
+</main>
+</body>
+</html>

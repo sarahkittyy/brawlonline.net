@@ -277,8 +277,61 @@ async function setupTop10() {
   }
 }
 
-window.BrawlOnline = { detectOS, parseFeed, DOWNLOADS };
+// The "!" on the Blog button (index.html, style.css): shown while the newest post was published
+// after the one the visitor last saw on /blog. Opening /blog leaves a cookie with its newest post's
+// publish time (accounts, blog.rs SEEN_COOKIE); /v1/blog/latest says when the newest was published.
+// Someone who has never opened the blog gets it for a post from the last BLOG_NEW_DAYS days.
+const BLOG_SEEN_COOKIE = "bo_blog_seen";
+const BLOG_NEW_DAYS = 30;
+
+/** Whether the badge shows. Pure (Unix seconds; seen is null without the cookie). */
+function blogHasNew(latestSecs, seenSecs, nowSecs) {
+  if (!Number.isFinite(latestSecs) || latestSecs <= 0) return false;
+  if (seenSecs === null || !Number.isFinite(seenSecs)) return nowSecs - latestSecs < BLOG_NEW_DAYS * 86400;
+  return latestSecs > seenSecs;
+}
+
+function blogSeenSecs() {
+  for (const part of document.cookie.split(";")) {
+    const [name, value] = part.trim().split("=");
+    if (name === BLOG_SEEN_COOKIE) return Number(value);
+  }
+  return null;
+}
+
+async function setupBlogBadge() {
+  const pill = document.querySelector(".blog-pill");
+  const badge = pill && pill.querySelector(".new-badge");
+  if (!badge) return;
+  let latest = null;
+  try {
+    const res = await fetch("/v1/blog/latest", { cache: "no-cache" });
+    if (!res.ok) return;
+    latest = (await res.json()).latest;
+  } catch (e) {
+    return; // Offline or blocked: no badge.
+  }
+  if (!latest) return;
+  const sync = () => {
+    const show = blogHasNew(Number(latest.publishedAt), blogSeenSecs(), Date.now() / 1000);
+    badge.hidden = !show;
+    pill.classList.toggle("has-new", show);
+    if (show) {
+      pill.title = "New post: " + String(latest.title || "");
+      pill.setAttribute("aria-label", "Blog (new post: " + String(latest.title || "") + ")");
+    } else {
+      pill.removeAttribute("title");
+      pill.removeAttribute("aria-label");
+    }
+  };
+  sync();
+  // Back from the blog (the page restored from the back/forward cache): the cookie is new.
+  window.addEventListener("pageshow", sync);
+}
+
+window.BrawlOnline = { detectOS, parseFeed, blogHasNew, DOWNLOADS };
 setupDownloads(currentOS());
 setupVideo();
 setupDialogs();
 setupTop10();
+setupBlogBadge();

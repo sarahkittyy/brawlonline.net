@@ -1,4 +1,8 @@
 import type {
+  AdminCodeOwner,
+  AdminPlayer,
+  AdminUser,
+  AdminUserUpdate,
   LeaderboardPage,
   MatchHistoryFilter,
   MatchHistoryPage,
@@ -18,6 +22,10 @@ import type {
 import type { PlayKey } from "@dolphin/types";
 
 export type {
+  AdminCodeOwner,
+  AdminPlayer,
+  AdminUser,
+  AdminUserUpdate,
   LeaderboardEntry,
   LeaderboardPage,
   MatchHistoryFilter,
@@ -70,6 +78,9 @@ export type RankedProfile = {
 export type UserData = {
   playKey?: PlayKey;
   rankedNetplayProfile?: RankedProfile;
+  /** An admin account (`users.role = 'admin'`): the launcher's admin tools show. The server checks it again on
+   * every admin call. */
+  admin?: boolean;
 };
 
 export interface BackendService {
@@ -95,6 +106,18 @@ export interface BackendService {
   /** Names the rooms of this kind the player hosts, the one they host now too (null: no name;
    * docs/design/rooms.md §1.4). Resolves to what was stored: a slur comes back as a kind name. */
   setRoomName(kind: RoomKind, name: string | null): Promise<string | null>;
+  /** Admin accounts only (the server refuses anyone else): accounts with a connect code, the most recently seen
+   * or those whose name or code contains `q`. */
+  adminPlayers(q?: string): Promise<AdminPlayer[]>;
+  adminUser(uid: string): Promise<AdminUser>;
+  adminSetMuted(uid: string, muted: boolean): Promise<AdminUser>;
+  adminSetBanned(uid: string, banned: boolean): Promise<AdminUser>;
+  /** Renames the account, changes its connect code and locks its name; refused (`code_taken`) for a code another
+   * account has. */
+  adminUpdateUser(uid: string, update: AdminUserUpdate): Promise<AdminUser>;
+  adminCodeOwner(code: string): Promise<AdminCodeOwner>;
+  /** Renames any open room as its host would; resolves to what was stored. */
+  adminRenameRoom(code: string, name: string | null): Promise<string | null>;
   /** A published ruleset by code (anyone's; docs/rulesets-protocol.md). */
   fetchRuleset(code: string): Promise<RulesetView>;
   /** A page of the public list, newest first; `q` searches the name, publisher and code. */

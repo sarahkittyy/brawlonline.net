@@ -1,6 +1,6 @@
 # brawlonline.net
 
-The landing page for Brawl Online. It is a static site with no build step, no analytics, no cookies and no external requests (a Content-Security-Policy meta tag in `index.html` enforces `'self'` only). The page shows a logo with the tagline "rollback netplay for the wii" under its bottom right corner, two lines on what it plays (`.lede`: P+ in lobbies or ranked, and every Wii game), six short feature lines (`.features`), one download button for the visitor's OS ("Download for Windows", with the version and size under it), a tiny "download for other operating systems" toggle, and a dim looping gameplay video behind them. The logo and the button sit on green menu-button frames in the style of Project M's menus. The Ranked top 10 sits in the top right corner on wide screens and is a second page under the first on phones (below). "FAQ" and "Credits" buttons at the top left open `<dialog>`s (`#faq` and `#credits` in `index.html`; `/#faq` and `/#credits` open them too, and without JavaScript they show through `:target`); the FAQ ends with the same Credits button. The Credits list the Brawlback contributors and what else the project is built on, the same names as the repository README's Credits and the launcher's Settings > Credits. Discord and GitHub icons sit at the bottom right. Keep all text short.
+The landing page for Brawl Online. It is a static site with no build step, no analytics, no cookies and no external requests (a Content-Security-Policy meta tag in `index.html` enforces `'self'` only). The page shows a logo with the tagline "rollback netplay for the wii" under its bottom right corner, two lines on what it plays (`.lede`: P+ in lobbies or ranked, and every Wii game), six short feature lines (`.features`), one download button for the visitor's OS ("Download for Windows", with the version and size under it), a tiny "download for other operating systems" toggle, and a dim looping gameplay video behind them. The logo and the button sit on green menu-button frames in the style of Project M's menus. The Ranked top 10 sits in the top right corner on wide screens and is a second page under the first on phones (below). "FAQ" and "Credits" buttons at the top left open `<dialog>`s (a third, "Blog", goes to `/blog`) (`#faq` and `#credits` in `index.html`; `/#faq` and `/#credits` open them too, and without JavaScript they show through `:target`); the FAQ ends with the same Credits button. The Credits list the Brawlback contributors and what else the project is built on, the same names as the repository README's Credits and the launcher's Settings > Credits. Discord and GitHub icons sit at the bottom right. Keep all text short.
 
 | File | What it is |
 | --- | --- |
@@ -10,6 +10,8 @@ The landing page for Brawl Online. It is a static site with no build step, no an
 | `assets/fonts/` | The wordmark font (Barlow Condensed Black Italic, OFL) and its licence. |
 | `assets/bg.webm`, `assets/bg.mp4`, `assets/bg-poster.jpg` | Background video and its still frame. **Not present yet.** |
 | `r/index.html`, `r/ruleset.js`, `r/ruleset.css` | The ruleset page, `brawlonline.net/r/<code>` (below). |
+| `blog/blog.css`, `blog/write/` | The blog's style (accounts renders `/blog` and `/blog/<slug>`) and its editor, `/blog/write/` (below). |
+| `auth/auth.js`, `auth/auth.css`, `login/` | The website's login (`/login/`, not linked from the home page) and the session every logged-in page shares (below). |
 | `profile/profile.css` | The style of the player profile pages, `brawlonline.net/profile/<code>`, which accounts renders (below). |
 | `assets/flags/` | Every country flag a profile can show (flag-icons 7.6.0, MIT; `LICENSES.txt` §4), the same SVGs the launcher bundles. |
 | `robots.txt`, `sitemap.xml` | For search engines (below). |
@@ -108,6 +110,10 @@ Preview it with the accounts API behind the same origin (a plain `python -m http
 ## Player profiles (`/profile/<code>`)
 
 `brawlonline.net/profile/sond-810` is `SOND#810`'s profile (docs/design/profiles.md). accounts renders the whole page (`server/crates/accounts/src/profile.rs`), the same HTML for people, search engines and link previews, so nginx sends `/profile/<code>` to accounts; the page's one stylesheet, `profile/profile.css`, is a static file here, and it uses `assets/ranks/` for the badge and the wordmark font. No scripts. The pages are indexable (not in the sitemap; the Ranked top 10 links each name to its page, which is how crawlers find them). The badge is the link preview's image (without a rank, `assets/placing-badge.png`: the emblems' outline, dotted) and the tier's colour its side bar.
+
+## The blog (`/blog`) and the website's login
+
+The posts live in the accounts database; accounts renders `/blog` (the latest post up top, older ones below) and `/blog/<slug>`, and serves the uploaded images and videos at `/blog/media/`. `blog/blog.css` is their style. The editor, `/blog/write/`, is a static page here: Markdown on the left, the page as it will look on the right, images and videos pasted, dropped or uploaded. Only accounts with the `admin` role (`pp-admin user role <email> admin`) can use it. It logs in through `/login/`, the website's own login with the launcher's accounts; `auth/auth.js` keeps that session for any page that needs one (a later `/admin/` too). How to write a post, the Markdown rules, the login's API and the one-time production steps (nginx, the unit): docs/design/blog.md.
 
 ## Deploying
 
