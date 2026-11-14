@@ -92,6 +92,12 @@ Logs: `run/staging/logs/` (`win-build.log`, `mac-build.log`, `accounts.log`, `mm
   `win build` (which stops it to replace `accounts.exe`/`mm.exe`) says which pid to stop from an
   administrator PowerShell. `server up` finds a running `accounts.exe`/`mm.exe` from the staging
   ports when `pids.json` has lost it, and keeps it.
+- A Visual Studio update reinstalls `cl.exe` and the Windows SDK in their same folders with their
+  old file dates, and ninja doesn't notice: the old precompiled header fails every Dolphin object
+  with C1853 ("from a different version of the compiler"), and old objects don't link with new ones
+  (LNK2038 'C++/WinRT version'). `win build` stamps the compiler's and the SDKs' files in
+  `staging-toolchain.txt` in Dolphin's build dir and, when they change, cleans the build dir first,
+  so that build is a full one.
 
 ## Tear down
 

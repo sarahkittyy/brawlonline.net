@@ -604,6 +604,42 @@ def build_vcvars(build_dir: Path | None) -> Path:
     return vcvars
 
 
+def toolchain_stamp(build_dir: Path) -> str | None:
+    """Size and mtime of the build dir's compiler and of the Windows SDKs' headers."""
+    cache = build_dir / "CMakeCache.txt"
+    m = re.search(r"^CMAKE_CXX_COMPILER:\w+=(.+)$", cache.read_text(errors="replace"), re.M) \
+        if cache.exists() else None
+    if not m:
+        return None
+    bindir = Path(m.group(1).strip()).parent
+    files = [bindir / n for n in ("cl.exe", "c1xx.dll", "c2.dll")]
+    kits = Path(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")) / "Windows Kits" / "10"
+    for sdk in sorted((kits / "Include").glob("10.*")):
+        files += [sdk / "um" / "Windows.h", sdk / "cppwinrt" / "winrt" / "base.h"]
+    return "\n".join(f"{f} {f.stat().st_size} {f.stat().st_mtime_ns}" for f in files if f.exists())
+
+
+def clean_after_toolchain_update(build_dir: Path, log: Path) -> None:
+    """Builds Dolphin from scratch when the compiler or the Windows SDK changed under the build dir.
+
+    A Visual Studio update reinstalls cl.exe and the Windows SDK in their same folders (14.44.35207,
+    10.0.26100.0), and the new files keep their old build dates, so ninja rebuilds nothing: the old
+    precompiled header then fails every object with C1853 ("from a different version of the
+    compiler"), and objects from before the update don't link with new ones (LNK2038 'C++/WinRT
+    version' 2.0.250303.1 vs 2.0.250303.5, 2026-11-13). Their sizes and dates are stamped in the
+    build dir; when they differ (or there is no stamp yet), the build dir is cleaned first."""
+    stamp = toolchain_stamp(build_dir)
+    if stamp is None:
+        return
+    stamp_file = build_dir / "staging-toolchain.txt"
+    if stamp_file.exists() and stamp_file.read_text() == stamp:
+        return
+    if (build_dir / ".ninja_log").exists():
+        say("the compiler or Windows SDK changed since the last build: building Dolphin from scratch")
+        msvc(f'cmake --build "{build_dir}" --target clean', cwd=build_dir, log=log, build_dir=build_dir)
+    stamp_file.write_text(stamp)
+
+
 def msvc(cmd: str, cwd: Path, log: Path, build_dir: Path | None = None) -> None:
     """Runs `cmd` with the MSVC environment of the compiler the build dir was configured with."""
     run(f'call "{build_vcvars(build_dir)}" >nul && {cmd}', cwd=cwd, log=log, shell=True)
@@ -692,6 +728,7 @@ def win_build(args: argparse.Namespace) -> None:
         msvc("cmake --preset ninja-release-x64 -DENABLE_AUTOUPDATE=OFF -DENABLE_ANALYTICS=OFF "
              "-DUSE_DISCORD_PRESENCE=OFF -DENABLE_TESTS=OFF -DENABLE_NOGUI=OFF "
              '"-DDISTRIBUTOR=brawlonline.net"', cwd=dsrc, log=log)
+    clean_after_toolchain_update(build, log)
     msvc(f'cmake --build "{build}" --target project-plus-dolphin dolphin-tool', cwd=dsrc, log=log,
          build_dir=build)
 
