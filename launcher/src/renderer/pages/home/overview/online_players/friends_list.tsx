@@ -96,7 +96,7 @@ export const FriendsList = ({
     return <p className={styles.notice}>{Messages.connecting()}</p>;
   }
   if (needle === "" && lists.friends.length + incoming.length + outgoing.length === 0) {
-    return <p className={styles.notice}>{Messages.noFriendsYet()}</p>;
+    return null;
   }
   if (needle !== "" && shownOnline.length + shownOffline.length === 0) {
     const code = rawQuery.trim();

@@ -508,12 +508,10 @@ const AddFriendBox = ({ onClose }: { onClose: () => void }) => {
           <CloseRoundedIcon fontSize="small" />
         </IconButton>
       </div>
-      {result ? (
+      {result && (
         <span className={result.ok ? styles.boxOk : styles.boxError} data-testid="friends-add-result">
           {result.text}
         </span>
-      ) : (
-        <span className={styles.boxHint}>{Messages.codeHint()}</span>
       )}
     </div>
   );

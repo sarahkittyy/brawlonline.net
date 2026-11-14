@@ -156,11 +156,6 @@
   color: var(--text-dim);
 }
 
-.boxHint {
-  color: var(--text-very-dim);
-  font-size: 11.5px;
-}
-
 .boxOk {
   color: #74c27a;
   font-size: 12px;
