@@ -78,3 +78,24 @@
 .meRow {
   background-color: color-mix(in srgb, var(--accent-primary) 18%, transparent);
 }
+
+.player {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.code {
+  font-size: 12px;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.search input {
+  font-size: 13px;
+}
+
+.list > div {
+  overflow-x: hidden !important;
+}

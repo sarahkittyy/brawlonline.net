@@ -202,18 +202,18 @@ export const LeaderboardHead = React.memo(function LeaderboardHead() {
   return (
     <TableHead>
       <TableRow>
-        <TableCell sx={{ width: 84 }}>
+        <TableCell sx={{ width: 72 }}>
           <span style={positionStyle}>{Messages.position()}</span>
         </TableCell>
-        <TableCell align="center" sx={{ width: 96 }}>
+        <TableCell align="center" sx={{ width: 64 }}>
           {Messages.rank()}
         </TableCell>
-        <TableCell sx={{ width: 36, paddingX: "4px" }} aria-label={Messages.country()} />
         <TableCell>{Messages.player()}</TableCell>
         <TableCell sx={{ width: 56 }}>{Messages.main()}</TableCell>
-        <TableCell>{Messages.connectCode()}</TableCell>
         <TableCell align="right">{Messages.rating()}</TableCell>
-        <TableCell align="right">{Messages.record()}</TableCell>
+        <TableCell align="right" sx={{ whiteSpace: "nowrap" }}>
+          {Messages.record()}
+        </TableCell>
       </TableRow>
     </TableHead>
   );
@@ -236,18 +236,21 @@ export const LeaderboardRow = React.memo(function LeaderboardRow({
       <TableCell align="center" sx={{ paddingY: "4px" }}>
         <RankBadge rank={entry.rank} setsToPlace={entry.setsToPlace} size="small" />
       </TableCell>
-      <TableCell sx={{ paddingX: "4px" }}>
-        {entry.country && <Flag code={entry.country} height={15} title={countryName(entry.country)} />}
-      </TableCell>
       <TableCell sx={strong}>
-        <UserName user={entry} showCode={false} profileLink={true} />
+        {/* The flag, the name and the code in one cell (docs/design/launcher-redesign.md §7). */}
+        <span className={styles.player}>
+          {entry.country && <Flag code={entry.country} height={13} title={countryName(entry.country)} />}
+          <UserName user={entry} showCode={false} profileLink={true} />
+          <span className={styles.code} data-testid="leaderboard-code">
+            {entry.connectCode}
+          </span>
+        </span>
       </TableCell>
       <TableCell sx={{ paddingY: "2px" }}>{entry.main && <CharacterIcon character={entry.main} size={24} />}</TableCell>
-      <TableCell sx={{ color: "text.secondary", ...strong }}>{entry.connectCode}</TableCell>
-      <TableCell align="right" sx={strong}>
+      <TableCell align="right" sx={{ whiteSpace: "nowrap", ...strong }}>
         {formatRating(entry.rating)}
       </TableCell>
-      <TableCell align="right" sx={strong}>
+      <TableCell align="right" sx={{ whiteSpace: "nowrap", ...strong }}>
         {formatRecord(entry.wins, entry.losses)}
       </TableCell>
     </TableRow>

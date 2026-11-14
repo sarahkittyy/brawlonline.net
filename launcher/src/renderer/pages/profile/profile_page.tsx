@@ -36,7 +36,7 @@ export const ProfilePage = React.memo(function ProfilePage() {
       </section>
       {myUid && (
         <section className={styles.history}>
-          <MatchHistory uid={myUid} opponent={own ? undefined : uid} />
+          <MatchHistory uid={myUid} opponent={own ? undefined : uid} compact={true} />
         </section>
       )}
     </div>

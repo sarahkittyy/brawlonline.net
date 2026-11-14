@@ -55,7 +55,17 @@ export const MatchHistoryPage = React.memo(function MatchHistoryPage({ user }: {
  * The player's match history (their own profile's), or only the matches they played with `opponent` (someone else's
  * profile: match history stays private, so it is the viewer's own sets with that player).
  */
-export const MatchHistory = ({ uid, opponent }: { uid: string; opponent?: string }) => {
+export const MatchHistory = ({
+  uid,
+  opponent,
+  compact = false,
+}: {
+  uid: string;
+  opponent?: string;
+  /** Four columns (the profile page, beside the sidebar and the players rail): the date under the mode, the
+   * player's own rating change under the score. */
+  compact?: boolean;
+}) => {
   const { backendService } = useServices();
   const [mode, setMode] = useState<MatchHistoryFilter>("all");
   const fetchPage = useCallback(
@@ -81,6 +91,7 @@ export const MatchHistory = ({ uid, opponent }: { uid: string; opponent?: string
         <ToggleButtonGroup
           size="small"
           exclusive={true}
+          sx={{ "& .MuiToggleButton-root": { textTransform: "none" } }}
           value={mode}
           onChange={(_, value: MatchHistoryFilter | null) => value && setMode(value)}
         >
@@ -103,8 +114,8 @@ export const MatchHistory = ({ uid, opponent }: { uid: string; opponent?: string
               <TableHead>
                 <TableRow>
                   <TableCell>{Messages.mode()}</TableCell>
-                  <TableCell>{Messages.date()}</TableCell>
-                  <TableCell>{Messages.you()}</TableCell>
+                  {!compact && <TableCell>{Messages.date()}</TableCell>}
+                  {!compact && <TableCell>{Messages.you()}</TableCell>}
                   <TableCell align="center">{Messages.score()}</TableCell>
                   <TableCell>{Messages.opponent()}</TableCell>
                   <TableCell>{Messages.replays()}</TableCell>
@@ -112,7 +123,13 @@ export const MatchHistory = ({ uid, opponent }: { uid: string; opponent?: string
               </TableHead>
               <TableBody>
                 {pages.items.map((m) => (
-                  <MatchRow key={m.matchId} item={m} myUid={uid} replays={replays.data?.[m.matchId] ?? null} />
+                  <MatchRow
+                    key={m.matchId}
+                    item={m}
+                    myUid={uid}
+                    replays={replays.data?.[m.matchId] ?? null}
+                    compact={compact}
+                  />
                 ))}
               </TableBody>
             </Table>
@@ -215,10 +232,12 @@ export const MatchRow = React.memo(function MatchRow({
   item,
   myUid,
   replays = null,
+  compact = false,
 }: {
   item: MatchHistoryItem;
   myUid: string;
   replays?: MatchReplay[] | null;
+  compact?: boolean;
 }) {
   // A room's team battle: my teammates on my side. A free-for-all: everyone else's place.
   const [mine, others] = matchSides(item, myUid);
@@ -230,15 +249,23 @@ export const MatchRow = React.memo(function MatchRow({
         <div>{modeLabel(item.mode, item.room?.mode)}</div>
         {note && <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>{note}</div>}
         {item.room?.ruleset && <RulesetLink ruleset={item.room.ruleset} />}
+        {compact && (
+          <div style={{ fontSize: 12, color: "var(--text-secondary)", whiteSpace: "nowrap" }}>
+            {monthDayHourFormat(new Date(item.createdAt))}
+          </div>
+        )}
       </TableCell>
-      <TableCell sx={{ whiteSpace: "nowrap" }}>{monthDayHourFormat(new Date(item.createdAt))}</TableCell>
-      <TableCell>
-        {mine.map((p) => (
-          <PlayerCell key={p.uid} player={p} />
-        ))}
-      </TableCell>
+      {!compact && <TableCell sx={{ whiteSpace: "nowrap" }}>{monthDayHourFormat(new Date(item.createdAt))}</TableCell>}
+      {!compact && (
+        <TableCell>
+          {mine.map((p) => (
+            <PlayerCell key={p.uid} player={p} />
+          ))}
+        </TableCell>
+      )}
       <TableCell align="center" sx={{ fontWeight: "bold", whiteSpace: "nowrap" }}>
         {formatMatchScore(item, myUid)}
+        {compact && <OwnRatingChange player={mine.find((p) => p.uid === myUid)} />}
         <NoWinGamesNote replays={replays} />
       </TableCell>
       <TableCell>
@@ -252,6 +279,24 @@ export const MatchRow = React.memo(function MatchRow({
     </TableRow>
   );
 });
+
+/** The player's own rating change under the score (the compact rows' "You" column). */
+const OwnRatingChange = ({ player }: { player?: MatchHistoryPlayer }) => {
+  if (!player) {
+    return null;
+  }
+  if (player.ratingHidden) {
+    return <div style={{ fontSize: 12, fontWeight: "normal", color: "var(--text-secondary)" }}>{HIDDEN_RATING}</div>;
+  }
+  if (player.ratingChange == null) {
+    return null;
+  }
+  return (
+    <div style={{ fontSize: 12, fontWeight: "normal", color: ratingChangeColor(player.ratingChange) }}>
+      {formatRatingChange(player.ratingChange)}
+    </div>
+  );
+};
 
 /** A room game's published ruleset: its name, opening its page on the website (`/r/<code>`). */
 const RulesetLink = ({ ruleset }: { ruleset: { code: string; name: string; version: number; link: string } }) => (

@@ -1104,3 +1104,17 @@
   outline: 2px dashed var(--accent-primary-bright, #b98ce0);
   outline-offset: 2px;
 }
+
+.codeBox input {
+  font-size: 13px;
+}
+
+.codeBox button {
+  text-transform: none;
+}
+
+/* Join / Wrong disc / Your room as written (docs/design/launcher-redesign.md §1, rule 6). */
+.roomAction {
+  text-transform: none;
+  font-size: 13px;
+}

@@ -116,15 +116,10 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* Beside the numbers, never over them: it hides where the card is too narrow for both. */
+/* Under the numbers: the card is narrow beside the Play buttons, and the line never covers them. */
 .spark {
-  margin-left: 6px;
-}
-
-@container (max-width: 470px) {
-  .spark {
-    display: none;
-  }
+  display: block;
+  margin-top: 6px;
 }
 
 .cardTools {

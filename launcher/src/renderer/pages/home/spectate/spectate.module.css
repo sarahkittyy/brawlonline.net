@@ -515,3 +515,13 @@
   font-size: 16px !important;
   text-transform: none !important;
 }
+
+.page {
+  flex: 1;
+  min-width: 0;
+}
+
+.action {
+  text-transform: none;
+  font-size: 13px;
+}

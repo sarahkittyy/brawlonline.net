@@ -42,7 +42,12 @@ function renderPage() {
 }
 
 const names = (container: HTMLElement) =>
-  Array.from(container.querySelectorAll("tbody tr")).map((tr) => tr.querySelectorAll("td")[3].textContent);
+  // The player cell holds the flag, the name and the code (the name is the code's sibling before it).
+  Array.from(container.querySelectorAll("tbody tr")).map((tr) => {
+    const cell = tr.querySelectorAll("td")[2];
+    const code = cell.querySelector("[data-testid=leaderboard-code]")?.textContent ?? "";
+    return (cell.textContent ?? "").slice(0, -code.length || undefined);
+  });
 
 describe("LeaderboardPage search", () => {
   it("searches the server as the player types, keeps the total, and says when nothing matches", async () => {

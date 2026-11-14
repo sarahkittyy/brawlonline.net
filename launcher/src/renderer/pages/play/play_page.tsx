@@ -105,8 +105,8 @@ const RankedCard = () => {
         {profile.rank && <div className={styles.tier}>{RankBadgeMessages.rankName(profile.rank)}</div>}
         <div className={styles.rating}>{formatProfileRating(profile)}</div>
         <div className={styles.sub}>{sub}</div>
+        <Sparkline values={history} width={150} height={24} className={styles.spark} />
       </div>
-      <Sparkline values={history} className={styles.spark} />
       <div className={styles.cardTools}>
         <RefreshRating />
         <Tooltip title={MyRankingMessages.hide()}>
