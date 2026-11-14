@@ -1655,8 +1655,16 @@ void PutRoomSpecial(std::vector<u8>& session, const Rooms::Snapshot& room, const
 // ProcessFrameDumping: Stretch to Window counts as Auto there). So while a clip is rendered the
 // game is told that shape, the one its video's frames have; and while the game draws for the
 // window's shape, DrawsForWindow() says so and a screenshot or frame dump gets the window's.
+//
+// Graphics > Enhancements > Widescreen Hack widens every perspective projection on the GPU by the
+// same window-over-game shape: on top of the plugin's it would widen the picture twice (squeezed
+// sideways). While the game draws for the screen's shape, DrawsForScreen() says so and the
+// presenter leaves the hack out (Presenter::UpdateDrawRectangle); everywhere else (a pre-v12
+// plugin, a whole-machine session, stereoscopy, another game) it works as before.
 static std::atomic<bool> s_draws_for_window{false};
+static std::atomic<bool> s_draws_for_screen{false};
 static bool s_told_window = false;  // CPU thread: this frame's PutAspect
+static bool s_told_screen = false;
 
 void PutAspect(std::vector<u8>& local)
 {
@@ -1673,6 +1681,7 @@ void PutAspect(std::vector<u8>& local)
       aspect = 0.0f;
   }
   s_told_window = window && aspect != 0.0f;
+  s_told_screen = aspect != 0.0f;
   PutU32(local, L_ASPECT, std::bit_cast<u32>(aspect));
 }
 
@@ -2486,13 +2495,20 @@ bool DrawsForWindow()
   return s_draws_for_window.load(std::memory_order_relaxed);
 }
 
+bool DrawsForScreen()
+{
+  return s_draws_for_screen.load(std::memory_order_relaxed);
+}
+
 void OnFrameEnd(const Core::CPUThreadGuard& guard)
 {
   // What this frame's LOCAL write told the game (PutAspect); none (no plugin, a pre-v12 one, a
   // netplay session): not for the window.
   s_told_window = false;
+  s_told_screen = false;
   Common::ScopeGuard told([] {
     s_draws_for_window.store(s_told_window, std::memory_order_relaxed);
+    s_draws_for_screen.store(s_told_screen, std::memory_order_relaxed);
   });
   std::optional<Located> located;
   {
@@ -2560,6 +2576,7 @@ void OnFrameEnd(const Core::CPUThreadGuard& guard)
 void Reset()
 {
   s_draws_for_window.store(false, std::memory_order_relaxed);
+  s_draws_for_screen.store(false, std::memory_order_relaxed);
   // Start watching for user.json at boot, as Slippi does when its EXI device is created: the
   // main menu's first GET_ONLINE_STATUS must already see the login (it comes ~10 s later).
   Client::GetUser();

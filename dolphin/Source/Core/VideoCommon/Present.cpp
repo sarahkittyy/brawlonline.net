@@ -783,7 +783,9 @@ void Presenter::UpdateDrawRectangle()
   // Update aspect ratio hack values
   // Won't take effect until next frame
   // Don't know if there is a better place for this code so there isn't a 1 frame delay
-  if (g_ActiveConfig.bWidescreenHack)
+  // Not while our plugin draws for the screen's shape itself (docs/game-code.md, Any screen
+  // shape): the hack would widen the picture a second time.
+  if (g_ActiveConfig.bWidescreenHack && !Online::GameBridge::DrawsForScreen())
   {
     const auto& vi = Core::System::GetInstance().GetVideoInterface();
     float source_aspect_ratio = vi.GetAspectRatio();
