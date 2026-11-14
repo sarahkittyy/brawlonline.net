@@ -11,7 +11,7 @@ import Typography from "@mui/material/Typography";
 import type { GameEnding, MatchReplay } from "@replays/types";
 import { useQuery } from "@tanstack/react-query";
 import React, { useCallback, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Navigate, useNavigate } from "react-router-dom";
 
 import { InfiniteScrollContainer } from "@/components/infinite_scroll_container/infinite_scroll_container";
 import { PagedListStatus } from "@/components/paged_list_status/paged_list_status";
@@ -46,27 +46,32 @@ import { MatchHistoryPageMessages as Messages } from "./match_history_page.messa
  * The logged-in player's matches (docs/design/replays.md §9.2 for the replays column). Their own name,
  * rank and rating are on their profile (the user menu's View Profile, docs/design/profiles.md).
  */
+/** The old Match history page's address: the player's own profile, where their match history is now. */
 export const MatchHistoryPage = React.memo(function MatchHistoryPage({ user }: { user: AuthUser }) {
-  return (
-    <div style={{ display: "flex", flexDirection: "column", flex: 1, minWidth: 0, padding: "20px 20px 0" }}>
-      <MatchHistory uid={user.uid} />
-    </div>
-  );
+  return <Navigate replace={true} to={`/main/profile/${encodeURIComponent(user.uid)}`} />;
 });
 
-const MatchHistory = ({ uid }: { uid: string }) => {
+/**
+ * The player's match history (their own profile's), or only the matches they played with `opponent` (someone else's
+ * profile: match history stays private, so it is the viewer's own sets with that player).
+ */
+export const MatchHistory = ({ uid, opponent }: { uid: string; opponent?: string }) => {
   const { backendService } = useServices();
   const [mode, setMode] = useState<MatchHistoryFilter>("all");
   const fetchPage = useCallback(
     async (before: string | undefined) => {
-      const page = await backendService.fetchMatchHistory(mode, before);
+      const page = await backendService.fetchMatchHistory(mode, before, opponent ? { opponent } : undefined);
       return { items: page.matches, next: page.next };
     },
-    [backendService, mode],
+    [backendService, mode, opponent],
   );
   // Fresh on every visit and when the window regains focus (a set settles while the player is in
   // Dolphin), like the rating above; else a set shows "In progress" until the launcher restarts.
-  const pages = useCursorPages<MatchHistoryItem>({ queryKey: ["matchHistory", uid, mode], fetchPage, refresh: true });
+  const pages = useCursorPages<MatchHistoryItem>({
+    queryKey: ["matchHistory", uid, mode, opponent ?? null],
+    fetchPage,
+    refresh: true,
+  });
   const replays = useMatchReplays(pages.items);
 
   return (

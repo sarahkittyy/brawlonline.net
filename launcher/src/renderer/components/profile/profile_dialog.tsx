@@ -13,13 +13,14 @@ import { clsx } from "clsx";
 import React, { useMemo, useState } from "react";
 
 import { FriendPill } from "@/components/social/friend_pill";
+import { SocialMessages } from "@/components/social/social.messages";
 import { useAccount } from "@/lib/hooks/use_account";
 import type { AccountDialog } from "@/lib/hooks/use_account_dialogs";
 import { useAccountDialogs } from "@/lib/hooks/use_account_dialogs";
 import { useOwnProfileHint } from "@/lib/hooks/use_own_profile_hint";
 import { useProfileView } from "@/lib/hooks/use_profile_view";
 import { useToasts } from "@/lib/hooks/use_toasts";
-import { useSocial } from "@/lib/social/use_social";
+import { inviteBlocked, useSocial, waitsForRoom } from "@/lib/social/use_social";
 import { useSocialActions } from "@/lib/social/use_social_actions";
 import { useServices } from "@/services";
 import type { PlayerProfile, ProfileUpdate } from "@/services/backend/types";
@@ -47,7 +48,18 @@ export const ProfileDialog = React.memo(function ProfileDialog() {
   );
 });
 
-const ProfileDialogBody = ({ uid, seedName, onClose }: { uid: string; seedName?: string; onClose: () => void }) => {
+export const ProfileDialogBody = ({
+  uid,
+  seedName,
+  onClose,
+  page = false,
+}: {
+  uid: string;
+  seedName?: string;
+  onClose: () => void;
+  /** On the profile page (docs/design/launcher-redesign.md): no X, the page stays. */
+  page?: boolean;
+}) => {
   const { backendService } = useServices();
   const { showSuccess } = useToasts();
   const myUid = useAccount((s) => s.user?.uid);
@@ -65,7 +77,7 @@ const ProfileDialogBody = ({ uid, seedName, onClose }: { uid: string; seedName?:
   return (
     <div className={styles.dialog}>
       <ProfileCorner
-        onClose={onClose}
+        onClose={page ? undefined : onClose}
         edit={
           own && data ? (
             editMode ? (
@@ -98,7 +110,7 @@ const ProfileDialogBody = ({ uid, seedName, onClose }: { uid: string; seedName?:
       {data ? (
         <ProfileView
           profile={data}
-          actions={<ProfileActions profile={data} onDone={onClose} />}
+          actions={<ProfileActions profile={data} onDone={page ? noop : onClose} />}
           nameExtra={<ProfileFriendPill profile={data} />}
           editing={own && editMode ? editing : null}
           onCopyLink={(link) => void navigator.clipboard.writeText(link).then(() => showSuccess(Messages.linkCopied()))}
@@ -117,18 +129,22 @@ const ProfileDialogBody = ({ uid, seedName, onClose }: { uid: string; seedName?:
           <div>{error ? Messages.couldNotLoad() : Messages.notFound()}</div>
         </div>
       )}
-      {own && <OwnAccountActions ruled={!data?.link} onClose={onClose} />}
+      {own && <OwnAccountActions ruled={!data?.link} onClose={page ? noop : onClose} />}
     </div>
   );
 };
 
+const noop = () => undefined;
+
 /** Top right: on the player's own profile the pencil (the check in edit mode), then the X. */
-export const ProfileCorner = ({ edit, onClose }: { edit?: React.ReactNode; onClose: () => void }) => (
+export const ProfileCorner = ({ edit, onClose }: { edit?: React.ReactNode; onClose?: () => void }) => (
   <div className={styles.corner}>
     {edit}
-    <IconButton size="small" aria-label={Messages.close()} onClick={onClose}>
-      <CloseIcon fontSize="small" />
-    </IconButton>
+    {onClose && (
+      <IconButton size="small" aria-label={Messages.close()} onClick={onClose}>
+        <CloseIcon fontSize="small" />
+      </IconButton>
+    )}
   </div>
 );
 
@@ -263,13 +279,17 @@ const ProfileActions = ({ profile, onDone }: { profile: PlayerProfile; onDone: (
   const myUid = useAccount((s) => s.user?.uid);
   const canChat = useAccount((s) => s.userData?.playKey != null);
   const ignored = useSocial((s) => s.state.ignored.includes(profile.uid));
-  const { message, setIgnored } = useSocialActions();
+  const online = useSocial((s) => s.state.online.some((p) => p.uid === profile.uid));
+  const room = useSocial((s) => s.state.room);
+  const waiting = useSocial((s) => waitsForRoom(s.pendingRoom, s.state.room));
+  const { message, setIgnored, invite } = useSocialActions();
   if (!myUid || !canChat || myUid === profile.uid) {
     return null;
   }
   const player = { uid: profile.uid, displayName: profile.displayName, connectCode: profile.connectCode };
   return (
     <ProfileButtons
+      onInvite={online && (waiting || inviteBlocked(room) == null) ? () => void invite(player) : undefined}
       ignored={ignored}
       onMessage={() => {
         message(player);
@@ -285,13 +305,21 @@ export const ProfileButtons = ({
   ignored,
   onMessage,
   onIgnore,
+  onInvite,
 }: {
   ignored: boolean;
   onMessage: () => void;
   onIgnore: () => void;
+  /** Invite to game: the player is online and the invite can go (the right-click menu's rule). */
+  onInvite?: () => void;
 }) => (
   <>
-    <Button variant="contained" size="small" startIcon={<MailOutlinedIcon />} onClick={onMessage}>
+    {onInvite && (
+      <Button variant="contained" size="small" onClick={onInvite} data-testid="profile-invite">
+        {SocialMessages.inviteToGame()}
+      </Button>
+    )}
+    <Button variant="outlined" size="small" color="inherit" startIcon={<MailOutlinedIcon />} onClick={onMessage}>
       {Messages.message()}
     </Button>
     <Button

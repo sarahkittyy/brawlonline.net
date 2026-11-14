@@ -1,0 +1,80 @@
+/* The leaderboard (docs/design/launcher-redesign.md §7). */
+.page {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  padding: 20px 28px 0;
+  box-sizing: border-box;
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.titleBlock {
+  flex: 1;
+  min-width: 0;
+}
+
+.title {
+  margin: 0;
+  font-size: 28px;
+  white-space: nowrap;
+}
+
+.count {
+  margin-top: 2px;
+  font-size: 13px;
+  color: var(--text-dim);
+}
+
+.seg {
+  display: inline-flex;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 6px;
+  background-color: var(--shell);
+}
+
+.seg button {
+  all: unset;
+  padding: 5px 12px;
+  border-radius: 4px;
+  font-size: 13px;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.seg button:focus-visible {
+  outline: 2px solid var(--accent-primary);
+}
+
+.seg .segOn {
+  color: var(--text-primary);
+  background-color: var(--raised-hover);
+}
+
+.search {
+  width: 240px;
+  flex-shrink: 0;
+}
+
+.list {
+  flex: 1;
+  min-height: 0;
+}
+
+/* The player's own row, pinned under the list when it isn't in view. */
+.me {
+  flex: none;
+  padding: 6px 0 10px;
+  border-top: 1px solid var(--line);
+}
+
+.meRow {
+  background-color: color-mix(in srgb, var(--accent-primary) 18%, transparent);
+}

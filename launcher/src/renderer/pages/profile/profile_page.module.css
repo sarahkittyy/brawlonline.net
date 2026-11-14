@@ -1,0 +1,42 @@
+/* A profile as a page (docs/design/launcher-redesign.md §2). */
+.page {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  padding: 20px 28px 0;
+  box-sizing: border-box;
+  overflow-y: auto;
+}
+
+.back {
+  position: absolute !important;
+  top: 22px;
+  left: 4px;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  color: var(--text-dim) !important;
+}
+
+.back:hover {
+  background-color: var(--raised);
+}
+
+.hero {
+  flex: none;
+  position: relative;
+  padding: 4px 6px;
+  border-radius: 10px;
+  background-color: var(--raised);
+}
+
+.history {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 320px;
+  margin-top: 20px;
+}

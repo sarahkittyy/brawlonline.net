@@ -52,7 +52,8 @@
   transition: background-color 0.15s ease;
 }
 
-.sidebarCard:hover {
+.sidebarCard:hover,
+.sidebarCardOn {
   background-color: var(--raised-hover) !important;
 }
 

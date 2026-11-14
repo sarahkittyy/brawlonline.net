@@ -12,6 +12,7 @@ import TableRow from "@mui/material/TableRow";
 import TextField from "@mui/material/TextField";
 import Tooltip from "@mui/material/Tooltip";
 import Typography from "@mui/material/Typography";
+import { useQuery } from "@tanstack/react-query";
 import React, { useCallback, useState } from "react";
 
 import { Flag } from "@/components/flag/flag";
@@ -19,16 +20,19 @@ import { InfiniteScrollContainer } from "@/components/infinite_scroll_container/
 import { PagedListStatus } from "@/components/paged_list_status/paged_list_status";
 import { CharacterIcon } from "@/components/profile/character_icon";
 import { RankBadge } from "@/components/rank_badge/rank_badge";
+import { SocialMessages } from "@/components/social/social.messages";
 import { UserName } from "@/components/user_name/user_name";
 import { useAccount } from "@/lib/hooks/use_account";
 import type { CursorPage } from "@/lib/hooks/use_cursor_pages";
 import { useCursorPages } from "@/lib/hooks/use_cursor_pages";
 import { useSearchText } from "@/lib/hooks/use_search_text";
 import { formatRating, formatRecord, RATING_DOWN_COLOR, RATING_UP_COLOR } from "@/lib/ranked_format";
+import { MatchHistoryPageMessages as MatchHistoryMessages } from "@/pages/match_history/match_history_page.messages";
 import { useServices } from "@/services";
 import type { LeaderboardEntry } from "@/services/backend/types";
 
 import { LeaderboardPageMessages as Messages } from "./leaderboard_page.messages";
+import styles from "./leaderboard_page.module.css";
 
 type LeaderboardPageData = CursorPage<LeaderboardEntry> & { total: number };
 
@@ -47,8 +51,26 @@ const SEARCH_STALE_MS = 60_000;
 export const LeaderboardPage = React.memo(function LeaderboardPage() {
   const { backendService } = useServices();
   const myUid = useAccount((s) => s.user?.uid);
+  const myCode = useAccount((s) => s.userData?.playKey?.connectCode);
   const [text, setText] = useState("");
   const search = useSearchText(text);
+  // All, or the player and their friends (docs/design/launcher-redesign.md §7).
+  const [scope, setScope] = useState<"all" | "friends">("all");
+  const friendsBoard = useQuery({
+    queryKey: ["friendsLeaderboard", myUid],
+    queryFn: () => backendService.fetchFriendsLeaderboard(),
+    enabled: scope === "friends" && myUid != null,
+  });
+  // The player's own row, pinned under the list: their code searched (positions are the whole board's).
+  const myRow = useQuery({
+    queryKey: ["leaderboardMe", myCode],
+    queryFn: async () => {
+      const page = await backendService.fetchLeaderboard(undefined, myCode);
+      return page.entries.find((e) => e.uid === myUid) ?? null;
+    },
+    enabled: myCode != null && myUid != null,
+    staleTime: SEARCH_STALE_MS,
+  });
 
   const fetchPage = useCallback(
     async (after: string | undefined): Promise<LeaderboardPageData> => {
@@ -64,18 +86,38 @@ export const LeaderboardPage = React.memo(function LeaderboardPage() {
     staleTime: SEARCH_STALE_MS,
   });
   const total = (pages.firstPage as LeaderboardPageData | undefined)?.total;
+  const needle = search.toLowerCase();
+  const friendsRows = (friendsBoard.data?.entries ?? []).filter(
+    (e) => !needle || e.displayName.toLowerCase().includes(needle) || e.connectCode.toLowerCase().includes(needle),
+  );
+  const rows = scope === "friends" ? friendsRows : pages.items;
+  const me = myRow.data;
+  const meShown = rows.some((e) => e.uid === myUid);
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", flex: 1, minWidth: 0, padding: "20px 20px 0" }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 12 }}>
-        <div style={{ display: "flex", alignItems: "baseline", gap: 12, flex: 1, minWidth: 0 }}>
-          <Typography variant="h5">{Messages.leaderboard()}</Typography>
-          {total != null && (
-            <Typography variant="body2" color="text.secondary">
-              {Messages.rankedPlayers(total)}
-            </Typography>
-          )}
+    <div className={styles.page}>
+      <div className={styles.head}>
+        <div className={styles.titleBlock}>
+          <h1 className={styles.title}>{Messages.leaderboard()}</h1>
+          {total != null && <div className={styles.count}>{Messages.rankedPlayers(total)}</div>}
         </div>
+        {myUid && (
+          <div className={styles.seg} role="tablist">
+            {(["all", "friends"] as const).map((v) => (
+              <button
+                key={v}
+                type="button"
+                role="tab"
+                aria-selected={scope === v}
+                className={scope === v ? styles.segOn : undefined}
+                onClick={() => setScope(v)}
+                data-testid={`leaderboard-${v}`}
+              >
+                {v === "all" ? MatchHistoryMessages.all() : SocialMessages.friends()}
+              </button>
+            ))}
+          </div>
+        )}
         <TextField
           size="small"
           hiddenLabel={true}
@@ -111,38 +153,47 @@ export const LeaderboardPage = React.memo(function LeaderboardPage() {
               </InputAdornment>
             ),
           }}
-          sx={{ width: 280, flexShrink: 0 }}
+          className={styles.search}
         />
       </div>
-      <div style={{ flex: 1, minHeight: 0 }}>
+      <div className={styles.list}>
         <InfiniteScrollContainer
           onLoadMore={pages.loadMore}
-          hasMore={pages.hasMore && !pages.error}
-          isLoading={pages.isLoading || pages.isLoadingMore}
-          resetKey={search}
+          hasMore={scope === "all" && pages.hasMore && !pages.error}
+          isLoading={scope === "all" ? pages.isLoading || pages.isLoadingMore : friendsBoard.isLoading}
+          resetKey={`${scope}:${search}`}
         >
-          {pages.error && pages.items.length === 0 ? null : (
+          {scope === "all" && pages.error && pages.items.length === 0 ? null : (
             <Table
               size="small"
               stickyHeader={true}
-              style={{ opacity: pages.isPrevious ? 0.5 : 1, transition: "opacity 150ms" }}
+              style={{ opacity: scope === "all" && pages.isPrevious ? 0.5 : 1, transition: "opacity 150ms" }}
             >
               <LeaderboardHead />
               <TableBody>
-                {pages.items.map((e) => (
+                {rows.map((e) => (
                   <LeaderboardRow key={e.uid} entry={e} isMe={e.uid === myUid} />
                 ))}
               </TableBody>
             </Table>
           )}
-          {!pages.isLoading && !pages.error && pages.items.length === 0 && (
+          {scope === "all" && !pages.isLoading && !pages.error && pages.items.length === 0 && (
             <Typography variant="body2" color="text.secondary" sx={{ padding: 2 }}>
               {search ? Messages.noMatches(search) : Messages.empty()}
             </Typography>
           )}
-          <PagedListStatus pages={pages} />
+          {scope === "all" && <PagedListStatus pages={pages} />}
         </InfiniteScrollContainer>
       </div>
+      {me && !meShown && !search && (
+        <div className={styles.me} data-testid="leaderboard-me">
+          <Table size="small">
+            <TableBody>
+              <LeaderboardRow entry={me} isMe={true} />
+            </TableBody>
+          </Table>
+        </div>
+      )}
     </div>
   );
 });
@@ -177,7 +228,7 @@ export const LeaderboardRow = React.memo(function LeaderboardRow({
 }) {
   const strong = isMe ? { fontWeight: "bold" } : undefined;
   return (
-    <TableRow data-me={isMe || undefined} sx={isMe ? { backgroundColor: "rgba(255, 255, 255, 0.1)" } : undefined}>
+    <TableRow data-me={isMe || undefined} className={isMe ? styles.meRow : undefined}>
       <TableCell sx={{ whiteSpace: "nowrap", ...strong }}>
         <span style={positionStyle}>{entry.position}</span>
         <PositionChange change={entry.positionChange} />
