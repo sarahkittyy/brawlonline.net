@@ -26,7 +26,7 @@
 #include "Core/FreeLookManager.h"
 #include "Core/HotkeyManager.h"
 #include "Core/IOS/IOS.h"
-#include "Core/Rollback/GameplaySession.h"
+#include "BrawlOnline/Rollback/GameplaySession.h"
 #include "Core/State.h"
 #include "Core/System.h"
 #include "Core/WiiUtils.h"

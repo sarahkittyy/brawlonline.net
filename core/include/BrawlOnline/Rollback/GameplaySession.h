@@ -37,7 +37,7 @@
 
 #include "Common/CommonTypes.h"
 #include "BrawlOnline/Rollback/PeerData.h"
-#include "Core/Rollback/ReplayRecorder.h"
+#include "BrawlOnline/Rollback/ReplayRecorder.h"
 
 namespace Core
 {

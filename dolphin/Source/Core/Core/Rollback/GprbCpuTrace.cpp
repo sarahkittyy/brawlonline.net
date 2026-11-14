@@ -15,7 +15,7 @@
 #include "Core/HW/CPU.h"
 #include "Core/HW/Memmap.h"
 #include "Core/PowerPC/PowerPC.h"
-#include "Core/Rollback/GameplayRollback.h"
+#include "BrawlOnline/Rollback/GameplayRollback.h"
 #include "Core/System.h"
 
 namespace Gprb

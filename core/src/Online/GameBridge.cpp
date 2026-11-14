@@ -1,7 +1,7 @@
 // Copyright 2026 Dolphin Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-#include "Core/Online/GameBridge.h"
+#include "BrawlOnline/Online/GameBridge.h"
 
 #include <algorithm>
 #include <array>
@@ -36,8 +36,8 @@
 #include "Core/Online/SpecialAssets.h"
 #include "BrawlOnline/Online/User.h"
 #include "Core/PowerPC/MMU.h"
-#include "Core/Rollback/GameplayRollback.h"
-#include "Core/Rollback/GameplaySession.h"
+#include "BrawlOnline/Rollback/GameplayRollback.h"
+#include "BrawlOnline/Rollback/GameplaySession.h"
 #include "Core/Rollback/MachineSession.h"
 #include "BrawlOnline/Rollback/PeerData.h"
 #include "Core/Rollback/RollbackManager.h"

@@ -28,7 +28,7 @@
 #include "BrawlOnline/Online/OnlineSession.h"
 #include "BrawlOnline/Online/Rooms.h"
 #include "BrawlOnline/Online/User.h"
-#include "Core/Rollback/GameplaySession.h"
+#include "BrawlOnline/Rollback/GameplaySession.h"
 #include "BrawlOnline/Rollback/PeerData.h"
 
 namespace Online::Ranked

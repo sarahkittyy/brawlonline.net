@@ -89,7 +89,7 @@
 #include "Core/PowerPC/MMU.h"
 #include "Core/PowerPC/PowerPC.h"
 #include "Core/Rollback/FrameProfile.h"
-#include "Core/Rollback/GameplaySession.h"
+#include "BrawlOnline/Rollback/GameplaySession.h"
 #include "Core/Rollback/MachineSDCard.h"
 #include "Core/Rollback/PresentStats.h"
 #include "Core/Rollback/RollbackManager.h"

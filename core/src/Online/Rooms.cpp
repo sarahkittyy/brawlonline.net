@@ -35,7 +35,7 @@
 #include "Core/Online/SpeedCheck.h"
 #include "BrawlOnline/Online/Spectate.h"
 #include "BrawlOnline/Online/User.h"
-#include "Core/Rollback/GameplaySession.h"
+#include "BrawlOnline/Rollback/GameplaySession.h"
 #include "Core/Rollback/MachineSession.h"
 #include "VideoCommon/OnScreenDisplay.h"
 

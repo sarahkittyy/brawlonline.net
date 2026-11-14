@@ -1,7 +1,7 @@
 // Copyright 2026 Dolphin Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-#include "Core/Rollback/GameplayRollback.h"
+#include "BrawlOnline/Rollback/GameplayRollback.h"
 
 #include <algorithm>
 #include <atomic>
@@ -23,7 +23,7 @@
 #include "Common/Swap.h"
 #include "Core/Core.h"
 #include "Core/CoreTiming.h"
-#include "Core/Rollback/GameplaySession.h"
+#include "BrawlOnline/Rollback/GameplaySession.h"
 #include "Core/Debugger/OSThread.h"
 #include "Core/Harness/Harness.h"
 #include "Core/HW/GCPad.h"

@@ -1,7 +1,7 @@
 // Copyright 2026 Dolphin Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-#include "Core/Rollback/GameplaySession.h"
+#include "BrawlOnline/Rollback/GameplaySession.h"
 
 #include <algorithm>
 #include <array>
@@ -56,17 +56,17 @@
 #include "BrawlOnline/Online/Chat.h"
 #include "BrawlOnline/Online/ChatText.h"
 #include "BrawlOnline/Online/GameAlive.h"
-#include "Core/Online/GameBridge.h"
+#include "BrawlOnline/Online/GameBridge.h"
 #include "BrawlOnline/Online/GameSetup.h"
 #include "Core/PowerPC/MMU.h"
 #include "Core/PowerPC/PowerPC.h"
 #include "Core/Rollback/ClipRecorder.h"
 #include "Core/Rollback/FrameProfile.h"
-#include "Core/Rollback/GameplayRollback.h"
+#include "BrawlOnline/Rollback/GameplayRollback.h"
 #include "BrawlOnline/Rollback/PeerData.h"
 #include "Core/Rollback/PresentStats.h"
 #include "Core/Rollback/ReplayKeyframes.h"
-#include "Core/Rollback/ReplayRecorder.h"
+#include "BrawlOnline/Rollback/ReplayRecorder.h"
 #include "Core/Rollback/RollbackManager.h"
 #include "Core/System.h"
 #include "VideoCommon/AsyncRequests.h"

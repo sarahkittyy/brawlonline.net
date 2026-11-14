@@ -1,7 +1,7 @@
 // Copyright 2026 Dolphin Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-#include "Core/Rollback/ReplayRecorder.h"
+#include "BrawlOnline/Rollback/ReplayRecorder.h"
 
 #include <algorithm>
 #include <atomic>
@@ -28,7 +28,7 @@
 #include "BrawlOnline/Online/GameSetup.h"
 #include "BrawlOnline/Online/Ranked.h"
 #include "BrawlOnline/Online/Spectate.h"
-#include "Core/Rollback/GameplayRollback.h"
+#include "BrawlOnline/Rollback/GameplayRollback.h"
 #include "Core/System.h"
 #include "VideoCommon/OnScreenDisplay.h"
 

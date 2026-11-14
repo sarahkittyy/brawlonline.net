@@ -14,7 +14,7 @@
 #include <fmt/ranges.h>
 
 #include "Common/Logging/Log.h"
-#include "Core/Rollback/GameplaySession.h"
+#include "BrawlOnline/Rollback/GameplaySession.h"
 #include "BrawlOnline/Rollback/PeerData.h"
 
 namespace Online::GameSetup

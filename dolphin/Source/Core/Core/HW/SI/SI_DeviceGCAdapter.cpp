@@ -14,7 +14,7 @@
 #include "Core/HW/GCPad.h"
 #include "Core/Harness/Harness.h"
 #include "Core/NetPlayProto.h"
-#include "Core/Rollback/GameplayRollback.h"
+#include "BrawlOnline/Rollback/GameplayRollback.h"
 #include "Core/Rollback/MachineSession.h"
 #include "Core/System.h"
 #include "InputCommon/GCAdapter.h"

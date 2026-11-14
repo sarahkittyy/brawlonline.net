@@ -72,7 +72,7 @@
 #include "Core/NetPlayProto.h"
 #include "BrawlOnline/Online/GameAlive.h"
 #include "Core/Rollback/MachineSDCard.h"
-#include "Core/Rollback/GameplaySession.h"
+#include "BrawlOnline/Rollback/GameplaySession.h"
 #include "Core/Rollback/MachineSession.h"
 #include "Core/PatchEngine.h"
 #include "Core/PowerPC/GDBStub.h"

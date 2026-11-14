@@ -17,7 +17,7 @@
 #include "Common/WorkQueueThread.h"
 #include "BrawlOnline/Config/OnlineSettings.h"
 #include "BrawlOnline/Online/GameSetup.h"
-#include "Core/Rollback/GameplaySession.h"
+#include "BrawlOnline/Rollback/GameplaySession.h"
 #include "Core/Rollback/ReplayPlayback.h"
 #include "VideoCommon/OnScreenDisplay.h"
 

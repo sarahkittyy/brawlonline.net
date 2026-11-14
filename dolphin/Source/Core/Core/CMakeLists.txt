@@ -582,8 +582,6 @@ add_library(core
   PowerPC/SignatureDB/MEGASignatureDB.h
   PowerPC/SignatureDB/SignatureDB.cpp
   PowerPC/SignatureDB/SignatureDB.h
-  Online/GameBridge.cpp
-  Online/GameBridge.h
   Online/SpecialAssets.cpp
   Online/SpecialAssets.h
   Online/NetPlaySession.cpp
@@ -599,12 +597,8 @@ add_library(core
   Rollback/DeltaSaveSlot.cpp
   Rollback/DeltaSaveSlot.h
   Rollback/FullMemcpySaveSlot.cpp
-  Rollback/GameplayRollback.cpp
-  Rollback/GameplayRollback.h
   Rollback/GameplayOnlineBackend.cpp
   Rollback/GameplayOnlineBackend.h
-  Rollback/GameplaySession.cpp
-  Rollback/GameplaySession.h
   Rollback/UdpSocket6.cpp
   Rollback/UdpSocket6.h
   Rollback/GprbCpuTrace.cpp
@@ -629,8 +623,6 @@ add_library(core
   Rollback/ClipRecorder.cpp
   Rollback/ClipRecorder.h
   Rollback/ReplayPlayback.h
-  Rollback/ReplayRecorder.cpp
-  Rollback/ReplayRecorder.h
   Brawlback/include/gekkonet/GekkoLib/src/backend.cpp
   Brawlback/include/gekkonet/GekkoLib/src/event.cpp
   Brawlback/include/gekkonet/GekkoLib/src/game_session.cpp

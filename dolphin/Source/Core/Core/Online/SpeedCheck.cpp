@@ -22,7 +22,7 @@
 #include "Core/Core.h"
 #include "BrawlOnline/Online/Matchmaking.h"
 #include "BrawlOnline/Online/OnlineClient.h"
-#include "Core/Rollback/GameplayRollback.h"
+#include "BrawlOnline/Rollback/GameplayRollback.h"
 #include "Core/System.h"
 
 namespace Online::SpeedCheck
