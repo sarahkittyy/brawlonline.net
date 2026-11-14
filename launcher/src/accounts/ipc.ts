@@ -99,9 +99,15 @@ export const ipc_accountsLeaderboard = makeEndpoint.main(
   <R<LeaderboardPage>>_,
 );
 
+export const ipc_accountsFriendsLeaderboard = makeEndpoint.main(
+  "accounts_friendsLeaderboard",
+  <{ uid: string }>_,
+  <R<LeaderboardPage>>_,
+);
+
 export const ipc_accountsMatchHistory = makeEndpoint.main(
   "accounts_matchHistory",
-  <{ uid: string; mode: MatchHistoryFilter; limit?: number; before?: string }>_,
+  <{ uid: string; mode: MatchHistoryFilter; limit?: number; before?: string; opponent?: string }>_,
   <R<MatchHistoryPage>>_,
 );
 

@@ -300,6 +300,9 @@ export type PublicRoom = {
   name?: string | null;
   /** Friends only (docs/design/friends.md): listed to the friends of its players. */
   friends?: boolean;
+  /** Every player's primary main (character key), by slot (as `names`), when they show it beside their name;
+   * null when not. Absent from an older server. */
+  mains?: (string | null)[];
 };
 
 /** P+ rooms or Other Games (Brawl Mods) rooms: each has its own room name. */
@@ -339,6 +342,13 @@ export type RoomList = {
   queues?: { unranked: number; ranked: number; twos?: number };
   /** Players in an Unranked, a Ranked and a 2v2 match (only 2v2's shown since 2026-11-09). Absent from an older server. */
   playing?: { unranked: number; ranked: number; twos?: number };
+  /**
+   * How long a search waits now (docs/design/launcher-redesign.md §7): the median wait in seconds of the
+   * current UTC hour of the day over the last 14 days (`pp-admin stats`' ETA). null: "10+ min" (most
+   * searches that hour gave up, the median is 10 minutes or more, or under 5 searches). Absent from an
+   * older server.
+   */
+  queueEta?: { unranked: number | null; ranked: number | null };
   updatedAt: string;
   /** Public Brawl Mods rooms (docs/design/brawl-mods.md §5), fuller first. Absent from an older server. */
   modRooms?: PublicModRoom[];
@@ -458,10 +468,12 @@ export interface AccountsApi {
   launcherSettings(): Promise<LauncherSettings>;
   /** One leaderboard page (public); `q` searches names and connect codes. */
   leaderboard(query: { limit?: number; after?: string; q?: string }): Promise<LeaderboardPage>;
-  /** One page of this account's match history. */
+  /** The leaderboard rows of this account and its friends (positions on the whole leaderboard), best first. */
+  friendsLeaderboard(uid: string): Promise<LeaderboardPage>;
+  /** One page of this account's match history; `opponent` (a uid): only the matches that player played in. */
   matchHistory(
     uid: string,
-    query: { mode: MatchHistoryFilter; limit?: number; before?: string },
+    query: { mode: MatchHistoryFilter; limit?: number; before?: string; opponent?: string },
   ): Promise<MatchHistoryPage>;
   /** Players online and the public rooms. */
   rooms(uid: string): Promise<RoomList>;

@@ -11,6 +11,7 @@ import {
   ipc_accountsChangeEmail,
   ipc_accountsCreateRulesetDraft,
   ipc_accountsDeleteRulesetDraft,
+  ipc_accountsFriendsLeaderboard,
   ipc_accountsHasSession,
   ipc_accountsInitNetplay,
   ipc_accountsLauncherSettings,
@@ -94,6 +95,9 @@ const accountsApi: AccountsApi = {
   },
   async leaderboard(query) {
     return unwrap(await ipc_accountsLeaderboard.renderer!.trigger(query));
+  },
+  async friendsLeaderboard(uid) {
+    return unwrap(await ipc_accountsFriendsLeaderboard.renderer!.trigger({ uid }));
   },
   async matchHistory(uid, query) {
     return unwrap(await ipc_accountsMatchHistory.renderer!.trigger({ uid, ...query }));

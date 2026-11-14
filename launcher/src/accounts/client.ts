@@ -130,9 +130,14 @@ export class AccountsHttpClient {
 
   matchHistory(
     token: string,
-    query: { mode: MatchHistoryFilter; limit?: number; before?: string },
+    query: { mode: MatchHistoryFilter; limit?: number; before?: string; opponent?: string },
   ): Promise<MatchHistoryPage> {
     return this._request("GET", `/v1/me/matches${queryString(query)}`, { token });
+  }
+
+  /** `GET /v1/me/friends/leaderboard`: the account's and its friends' leaderboard rows. */
+  friendsLeaderboard(token: string): Promise<LeaderboardPage> {
+    return this._request("GET", "/v1/me/friends/leaderboard", { token });
   }
 
   rooms(token: string): Promise<RoomList> {

@@ -121,9 +121,13 @@ export class AccountsManager {
 
   matchHistory(
     uid: string,
-    query: { mode: MatchHistoryFilter; limit?: number; before?: string },
+    query: { mode: MatchHistoryFilter; limit?: number; before?: string; opponent?: string },
   ): Promise<AccountsResult<MatchHistoryPage>> {
     return this._withSession(uid, (token) => this.client.matchHistory(token, query));
+  }
+
+  friendsLeaderboard(uid: string): Promise<AccountsResult<LeaderboardPage>> {
+    return this._withSession(uid, (token) => this.client.friendsLeaderboard(token));
   }
 
   rooms(uid: string): Promise<AccountsResult<RoomList>> {

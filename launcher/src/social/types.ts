@@ -76,6 +76,35 @@ export type FriendsState = {
   outgoing: Friend[];
 };
 
+/** A queue the player can be searching in or playing from (the sidebar's queue box). */
+export type QueueMode = "unranked" | "ranked" | "twos" | "direct";
+
+/**
+ * The player's own search or match (docs/design/launcher-redesign.md §7), from mm through accounts like
+ * `room`. The game searches; the launcher only shows it.
+ */
+export type QueueState =
+  | {
+      state: "searching";
+      mode: QueueMode;
+      /** When this search started (ISO 8601). */
+      since: string;
+      /** 2v2: the partner searching with the player, if any. */
+      partner?: SocialPlayer;
+    }
+  | {
+      state: "playing";
+      mode: QueueMode;
+      /** The other side (2v2: both opponents). */
+      opponents: SocialPlayer[];
+      /** The game number the players see. */
+      game: number;
+      /** Games won in the set so far: the player's side first. */
+      wins: [number, number];
+      /** The /v1/live stream, when it is listed. */
+      liveId?: string;
+    };
+
 export type SocialStatus =
   /** Not logged in, or online play not set up. */
   | "off"
@@ -92,6 +121,8 @@ export type SocialState = {
   /** Online players, the player excluded, by name. */
   online: SocialPlayer[];
   room: SocialRoom | null;
+  /** The player's own search or match; null when neither (absent from an older server). */
+  queue?: QueueState | null;
   /** Ignored uids (shared with the game's chat: `<User>/Online/chat-hidden.json`). */
   ignored: string[];
   /** By the other player's uid. */
