@@ -72,21 +72,24 @@ Three columns: a **sidebar** (216 px), the **page**, and the **players rail** (2
 | Online / Friends panel (Home only) | The players rail (every page) |
 | Settings | Unchanged (its own full page) |
 
-## 3. Screens
+## 3. Screens (round 2)
+
+Round 1's PNGs are in `out/round1/`.
 
 | PNG | Shows |
 |---|---|
-| `00-before-after.png` | Home and Other Games today next to the mockups |
-| `01-play-ranked.png` / `-pink` | Play, Ranked tab, P+ colours and Sarah's pink |
-| `02-play-unranked-searching.png` | Searching Unranked: the panel and the sidebar chip |
-| `03-other-games.png` | Other Games as its own page |
-| `04-watch.png` / `-blue` | Watch, with a search running (chip), and a blue theme |
-| `05-replays.png` | Replays with the rail folded |
-| `06-leaderboard.png` | Everyone / Friends, the player's own row pinned at the bottom, friends marked |
-| `07-profile-own.png` / `-pink` | Own profile page: hero, stats with sparkline, match history by day, rail on Friends |
-| `08-profile-friend.png` | A friend's profile from the leaderboard: Invite to game is the main action, plus "You vs them" and your sets together |
-| `09-play-2v2-friends.png` | 2v2 tab with "Invite a friend", rail on Friends with a request |
-| `10-play-narrow.png` | 1084 px window, rail folded |
+| `01-play-ranked.png` / `-pink` | Play, Ranked tab: the ETA next to each mode, the room bar with the default ruleset |
+| `02-play-unranked.png` | Unranked tab: the player's last unranked games |
+| `03-other-games.png` | Other Games, with the "Joins with" menu open on a room |
+| `04-other-games-your-room.png` / `-pink` | Hosting a room: the room's Public switch, Kick / Close slot, a player being dragged to another slot |
+| `05-spectate-while-searching.png` | Spectate while a Ranked search runs (the queue box, bottom left) |
+| `06-replays.png` | Replays with the players rail folded |
+| `07-leaderboard-match-found.png` | Leaderboard while a Ranked match is on (the queue box in the frame) |
+| `08-profile-own.png` | Own profile, rail on Friends |
+| `09-profile-friend.png` | A friend's profile: Invite to game, your match history with them |
+| `10-play-2v2.png` | 2v2 tab: "Play solo or team with a friend", Invite to your 2v2 |
+| `11-play-late-night.png` | Late night: "ETA: 10+ min" for Ranked, rail folded |
+| `12-queue-states.png` | The queue box: searching, searching late, 2v2 with a partner, in a match |
 
 ## 4. What stays
 
@@ -109,3 +112,35 @@ Each step ships alone and leaves the launcher working.
 3. Should the profile become a page, with match history in it?
 4. Should Replays stay separate from Watch (as drawn), or become a tab of it?
 5. Should BrawlMenu stay the body font everywhere (as drawn), or should a plain sans take the dense text (tables, codes)? The guides prefer a plain sans for data. BrawlMenu is the game's own menu font and part of the look.
+
+## 7. Round 2 (Sarah's notes on round 1, 2026-11-14)
+
+Sarah: "i love love love the design", with these notes. What changed:
+
+- **No new words.** Every word on screen is one the launcher already has (its `*.messages.ts`: "Public rooms", "128 players in-game", "Spectate", "Highest Elo", "Next game soon", "Show 3 games", "Join this room with", "Player 3", "Kick", "Close slot", "Invite to your 2v2"...), data, or Sarah's own words: "ETA: 0:44", "ETA: 10+ min", "Play solo or team with a friend", "Searching". Round 1's sentences are gone: the ping band, "Usually under a minute", "Highest rated game right now · both Master 3", "Team up with a friend...". The nav item is "Spectate" (the tab's name), not "Watch". The main buttons say "Play ranked", "Play unranked" and "Play 2v2", as today.
+- **ETA instead of players searching.** Players searching is 0–2 at most hours, because they match quickly. Unranked and Ranked show the ETA next to their tab, with the stopwatch icon. The ETA is the median wait of that hour of the day, from `pp-admin stats` (`queue_searches`, the last 14 days). If most searches that hour gave up ("never"), the median is 10 minutes or more, or there are under 5 searches, the tab shows **"ETA: 10+ min"**. 2v2 keeps "0 in queue" (today's string). The launcher would need the hour's ETA per mode from the server (a field beside `queues` in `GET /v1/rooms`). On 2026-11-14 at 21 UTC it was Unranked 0:28 and Ranked 0:44. From 11 to 15 UTC Ranked's median is "never".
+- **The search stays in the game.** Play ranked opens the game's Ranked queue, and the player waits in Online Training, as today. The Play page doesn't change while a search runs. The queue box in the sidebar's bottom left shows the search on every page:
+  - mode, "Searching · 0:42" and the ETA (or the 2v2 partner);
+  - in a match: the opponent's stock and name, "Game 1 · 0-0", drawn in the selected frame.
+
+  It is display only (no Cancel: the game's own Cancel stays the one). A click brings the game's window forward. The launcher doesn't know the game's queue state today (social status only has a 2v2 party's `searching`), so Dolphin would have to send it to the launcher.
+- **Ruleset in the room bar.** Left of Create room, a button shows the player's default ruleset (name and code, e.g. "Auto L Cancel -r v4 WQGFFJ"). Its tooltip is today's "… by sarahkitty. Click to see the rules." and it opens Rulesets. The room code field has Join inside it, to make room. "128 players in-game" moved to the page header, beside the P+ version.
+- **Other Games:**
+  - **No monogram tiles.** Your games are rows again, with today's chips ("Brawl: a56ffa", "SD card: c3bc6e") and the disc ID and file under the name.
+  - **Codes are purple again:** the "Codes (4)" chip, from today's look.
+  - **"Joins with" is a dropdown again,** and its menu is today's ("Join this room with", SAME MOD / BUILT IN, the SD card line, "Use my pick for every room of this mod").
+  - **No Public switch on each game.** Public / Private is a property of the room, so it lives only in the room panel, where it already is today. Host opens the room the way the player last left the switch.
+- **In a room.** The room panel sits at the top of Other Games:
+  - the room's name with the pencil, its code chip with copy, the Public switch and Leave;
+  - the game's name and hash with its Codes chip;
+  - four slot cards in port colours. The host sees Kick and Close slot on a player's card, and "Close slot" or "Open slot" on an empty one.
+  - Dragging a card moves the player: the card lifts, its old slot stays as a faded copy, and the slot under it gets a dashed outline.
+
+  The room is also first in Public rooms, marked "Your room".
+- **Spectate.** No line of explanation on the top game. Viewers are always the eye icon and a number. "Next game soon" fits in its column. The mode moved into the game column ("Ranked · Game 1 · 0-0"), so names aren't cut.
+- **2v2.** "Play solo or team with a friend" and an "Invite to your 2v2" button. No character icon, because the player's character isn't known until they pick one.
+- **Other copy fixes:**
+  - Friends rows use today's statuses: the room's name with Join, "Playing Ranked" with Watch, "In the launcher".
+  - A request reads "wants to be friends", with Accept / Decline as icons.
+  - The leaderboard filter is "All / Friends", and its columns are "W-L".
+  - A friend's profile shows your match history with them instead of round 1's invented "You vs them" boxes.
