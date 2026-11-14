@@ -763,6 +763,18 @@ async fn match_history_with_one_opponent() {
     assert!(ids(&history(&stack, sa, &format!("?opponent={}", Uuid::new_v4())).await).is_empty());
     let (st, body) = stack.get("/v1/me/matches?opponent=bob", Some(sa)).await;
     assert_eq!((st, body["error"]["code"].as_str()), (400, Some("invalid_opponent")), "{body}");
+    // Several players: the matches every one of them played in (a never played b and c at once).
+    assert!(ids(&history(&stack, sa, &format!("?opponent={},{}", b.uid, c.uid)).await).is_empty());
+    assert_eq!(ids(&history(&stack, sa, &format!("?opponent={},{}", b.uid, b.uid)).await).len(), 2);
+    // The filter's suggestions: who a played, the most recent first, by name or code.
+    let (st, body) = stack.get("/v1/me/opponents", Some(sa)).await;
+    assert_eq!(st, 200, "{body}");
+    let names: Vec<&str> = body["players"].as_array().unwrap().iter().map(|p| p["displayName"].as_str().unwrap()).collect();
+    assert_eq!(names, vec!["quin", "rosa"]);
+    let (_, body) = stack.get("/v1/me/opponents?q=ROS", Some(sa)).await;
+    let names: Vec<&str> = body["players"].as_array().unwrap().iter().map(|p| p["displayName"].as_str().unwrap()).collect();
+    assert_eq!(names, vec!["rosa"]);
+    assert_eq!(body["players"][0]["connectCode"], c.connect_code.as_str());
     stack.shutdown().await;
 }
 

@@ -220,6 +220,7 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/me/accept-rules", post(api::accept_rules))
         .route("/v1/me/user-json", get(api::user_json))
         .route("/v1/me/matches", get(history::my_matches))
+        .route("/v1/me/opponents", get(history::my_opponents))
         .route("/user/{uid}", get(api::public_user))
         .route("/v1/profiles/{id}", get(profile::lookup))
         .route("/v1/me/profile", put(profile::update))
