@@ -18,7 +18,7 @@
 
 #include <picojson.h>
 
-#include "Common/CommonTypes.h"
+#include "BrawlOnline/CommonTypes.h"
 
 namespace Online
 {

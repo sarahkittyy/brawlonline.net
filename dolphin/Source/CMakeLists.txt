@@ -79,6 +79,9 @@ if(HAVE_ELF_AUX_INFO)
   add_definitions(-DHAVE_ELF_AUX_INFO)
 endif()
 
+# The online code Dolphin shares with EmissaryRecomp (docs/design/brawl-online-core.md): built
+# here, with the definitions above and Dolphin's precompiled header, as when it was part of core.
+add_subdirectory(${CMAKE_SOURCE_DIR}/../core ${CMAKE_BINARY_DIR}/brawl-online-core)
 add_subdirectory(Core)
 if (ANDROID)
   add_subdirectory(Android/jni)

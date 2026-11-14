@@ -15,8 +15,8 @@
 
 #include <picojson.h>
 
-#include "Common/CommonTypes.h"
-#include "Core/Online/MatchRules.h"
+#include "BrawlOnline/CommonTypes.h"
+#include "BrawlOnline/Online/MatchRules.h"
 
 namespace Online::Rooms
 {

@@ -72,7 +72,7 @@
 #include "Core/IOS/Uids.h"
 #include "Core/Movie.h"
 #include "Core/NetPlayCommon.h"
-#include "Core/Online/Timeouts.h"
+#include "BrawlOnline/Online/Timeouts.h"
 #include "Core/SyncIdentifier.h"
 #include "Core/System.h"
 #include "DiscIO/Blob.h"

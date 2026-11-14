@@ -39,8 +39,8 @@
 #include <picojson.h>
 
 #include "Common/CommonTypes.h"
-#include "Core/Online/MatchRules.h"
-#include "Core/Online/SetFormat.h"
+#include "BrawlOnline/Online/MatchRules.h"
+#include "BrawlOnline/Online/SetFormat.h"
 
 // ENet's types, forward-declared so this header does not pull in enet.h (and with it winsock.h,
 // whose macros clash with ordinary names such as s_host).

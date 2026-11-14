@@ -42,7 +42,7 @@
 #include <picojson.h>
 
 #include "Common/CommonTypes.h"
-#include "Core/Online/SetFormat.h"
+#include "BrawlOnline/Online/SetFormat.h"
 
 namespace Online::GameSetup
 {

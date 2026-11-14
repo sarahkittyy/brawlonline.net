@@ -13,7 +13,7 @@
 #include "Common/CommonFuncs.h"
 #include "Common/FileUtil.h"
 #include "Common/IOFile.h"
-#include "Core/Rollback/PeerData.h"
+#include "BrawlOnline/Rollback/PeerData.h"
 
 namespace Gprb::Replay
 {

@@ -19,7 +19,7 @@
 #include <optional>
 #include <string>
 
-#include "Common/CommonTypes.h"
+#include "BrawlOnline/CommonTypes.h"
 
 namespace Online::GameAlive
 {

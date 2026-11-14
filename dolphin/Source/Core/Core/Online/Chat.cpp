@@ -29,10 +29,10 @@
 #include "Common/StringUtil.h"
 #include "Common/Timer.h"
 #include "Core/Online/ChatCrypto.h"
-#include "Core/Online/ChatText.h"
+#include "BrawlOnline/Online/ChatText.h"
 #include "Core/Online/OnlineClient.h"
 #include "Core/Online/User.h"
-#include "Core/Rollback/PeerData.h"
+#include "BrawlOnline/Rollback/PeerData.h"
 
 namespace Online::Chat
 {

@@ -24,7 +24,7 @@
 #include <picojson.h>
 
 #include "Common/CommonTypes.h"
-#include "Core/Online/RoomMessages.h"
+#include "BrawlOnline/Online/RoomMessages.h"
 
 namespace Online::Rooms
 {

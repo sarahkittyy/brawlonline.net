@@ -17,7 +17,7 @@
 #include "Common/Logging/Log.h"
 #include "Common/StringUtil.h"
 #include "Common/Thread.h"
-#include "Core/Rollback/PeerData.h"
+#include "BrawlOnline/Rollback/PeerData.h"
 
 namespace Online
 {

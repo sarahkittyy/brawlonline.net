@@ -70,7 +70,7 @@
 #include "Core/Movie.h"
 #include "Core/NetPlayClient.h"
 #include "Core/NetPlayProto.h"
-#include "Core/Online/GameAlive.h"
+#include "BrawlOnline/Online/GameAlive.h"
 #include "Core/Rollback/MachineSDCard.h"
 #include "Core/Rollback/GameplaySession.h"
 #include "Core/Rollback/MachineSession.h"

@@ -1,7 +1,7 @@
 // Copyright 2026 Dolphin Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-#include "Core/Online/SetFormat.h"
+#include "BrawlOnline/Online/SetFormat.h"
 
 #include <algorithm>
 #include <cmath>

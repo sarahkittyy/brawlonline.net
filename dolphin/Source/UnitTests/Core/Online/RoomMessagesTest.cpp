@@ -10,7 +10,7 @@
 #include <gtest/gtest.h>
 #include <picojson.h>
 
-#include "Core/Online/RoomMessages.h"
+#include "BrawlOnline/Online/RoomMessages.h"
 
 using namespace Online::Rooms;
 

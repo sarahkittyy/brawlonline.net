@@ -11,7 +11,7 @@
 #include <mbedtls/sha256.h>
 
 #include "Common/Logging/Log.h"
-#include "Core/Rollback/PeerData.h"
+#include "BrawlOnline/Rollback/PeerData.h"
 #include "Core/Rollback/ReplayFile.h"
 
 namespace Online::Spectate

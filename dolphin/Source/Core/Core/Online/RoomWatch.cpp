@@ -22,7 +22,7 @@
 #include "Core/HW/WiimoteEmu/WiimoteEmu.h"
 #include "Core/Rollback/GameplayRollback.h"
 #include "Core/Rollback/GameplaySession.h"
-#include "Core/Rollback/PeerData.h"
+#include "BrawlOnline/Rollback/PeerData.h"
 #include "Core/Rollback/ReplayFile.h"
 #include "Core/System.h"
 #include "InputCommon/ControllerEmu/ControlGroup/Buttons.h"

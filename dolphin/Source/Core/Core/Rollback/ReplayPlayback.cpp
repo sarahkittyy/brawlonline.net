@@ -24,7 +24,7 @@
 #include "Core/Online/GameBridge.h"
 #include "Core/Rollback/ClipRecorder.h"
 #include "Core/Rollback/GameplaySession.h"
-#include "Core/Rollback/PeerData.h"
+#include "BrawlOnline/Rollback/PeerData.h"
 #include "Core/Rollback/ReplayFile.h"
 #include "VideoCommon/OnScreenDisplay.h"
 

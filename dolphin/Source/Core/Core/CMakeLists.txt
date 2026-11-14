@@ -588,10 +588,6 @@ add_library(core
   Online/Chat.h
   Online/ChatCrypto.cpp
   Online/ChatCrypto.h
-  Online/ChatText.cpp
-  Online/ChatText.h
-  Online/GameAlive.cpp
-  Online/GameAlive.h
   Online/Ipv6.cpp
   Online/Ipv6.h
   Online/GameBridge.cpp
@@ -600,8 +596,6 @@ add_library(core
   Online/GameSetup.h
   Online/Matchmaking.cpp
   Online/Matchmaking.h
-  Online/MatchRules.cpp
-  Online/MatchRules.h
   Online/SpecialAssets.cpp
   Online/SpecialAssets.h
   Online/NetPlaySession.cpp
@@ -614,10 +608,6 @@ add_library(core
   Online/Ranked.h
   Online/RecentCodes.cpp
   Online/RecentCodes.h
-  Online/RoomMessages.cpp
-  Online/RoomMessages.h
-  Online/SetFormat.cpp
-  Online/SetFormat.h
   Online/ModsRoom.cpp
   Online/ModsRoom.h
   Online/Rooms.cpp
@@ -628,7 +618,6 @@ add_library(core
   Online/Spectate.h
   Online/SpeedCheck.cpp
   Online/SpeedCheck.h
-  Online/Timeouts.h
   Online/User.cpp
   Online/User.h
   Rollback/ChangeCRC.h
@@ -649,8 +638,6 @@ add_library(core
   Rollback/IRollbackSaveSlot.h
   Rollback/MachineSession.cpp
   Rollback/MachineSession.h
-  Rollback/PeerData.cpp
-  Rollback/PeerData.h
   Rollback/Perf.cpp
   Rollback/Perf.h
   Rollback/FrameProfile.cpp
@@ -800,6 +787,7 @@ endif()
 
 target_link_libraries(core
 PUBLIC
+  brawl_online_core
   audiocommon
   common
   discio

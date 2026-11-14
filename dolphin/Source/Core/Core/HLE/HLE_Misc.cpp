@@ -17,7 +17,7 @@
 #include "Core/Harness/Harness.h"
 #include "Core/Host.h"
 #include "Core/NetPlayClient.h"
-#include "Core/Online/GameAlive.h"
+#include "BrawlOnline/Online/GameAlive.h"
 #include "Core/Online/GameBridge.h"
 #include "Core/Online/SpeedCheck.h"
 #include "Core/PowerPC/MMU.h"

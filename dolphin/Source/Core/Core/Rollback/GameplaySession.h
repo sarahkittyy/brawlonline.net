@@ -36,7 +36,7 @@
 #include <picojson.h>
 
 #include "Common/CommonTypes.h"
-#include "Core/Rollback/PeerData.h"
+#include "BrawlOnline/Rollback/PeerData.h"
 #include "Core/Rollback/ReplayRecorder.h"
 
 namespace Core

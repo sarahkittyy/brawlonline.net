@@ -26,9 +26,9 @@
 #include "Common/UPnP.h"
 #include "Core/Config/OnlineSettings.h"
 #include "Core/Online/Ipv6.h"
-#include "Core/Online/Timeouts.h"
+#include "BrawlOnline/Online/Timeouts.h"
 #include "Core/Online/User.h"
-#include "Core/Rollback/PeerData.h"
+#include "BrawlOnline/Rollback/PeerData.h"
 
 #ifdef _WIN32
 #include <winsock2.h>

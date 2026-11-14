@@ -1,14 +1,14 @@
 // Copyright 2026 Dolphin Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-#include "Core/Online/GameAlive.h"
+#include "BrawlOnline/Online/GameAlive.h"
 
 #include <atomic>
 #include <chrono>
 #include <optional>
 #include <string>
 
-#include "Common/CommonTypes.h"
+#include "BrawlOnline/CommonTypes.h"
 
 namespace Online::GameAlive
 {

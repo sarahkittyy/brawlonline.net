@@ -5,7 +5,7 @@
 
 #include <gtest/gtest.h>
 
-#include "Core/Online/SetFormat.h"
+#include "BrawlOnline/Online/SetFormat.h"
 
 using namespace Online::GameSetup;
 

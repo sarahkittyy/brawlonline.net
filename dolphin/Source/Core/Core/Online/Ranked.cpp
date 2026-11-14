@@ -29,7 +29,7 @@
 #include "Core/Online/Rooms.h"
 #include "Core/Online/User.h"
 #include "Core/Rollback/GameplaySession.h"
-#include "Core/Rollback/PeerData.h"
+#include "BrawlOnline/Rollback/PeerData.h"
 
 namespace Online::Ranked
 {

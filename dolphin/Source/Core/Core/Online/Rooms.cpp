@@ -25,7 +25,7 @@
 #include "Core/Config/OnlineSettings.h"
 #include "Core/Core.h"
 #include "Core/Online/Chat.h"
-#include "Core/Online/GameAlive.h"
+#include "BrawlOnline/Online/GameAlive.h"
 #include "Core/Online/GameSetup.h"
 #include "Core/Online/Matchmaking.h"
 #include "Core/Online/ModsRoom.h"

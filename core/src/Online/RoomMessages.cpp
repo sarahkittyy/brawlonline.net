@@ -1,7 +1,7 @@
 // Copyright 2026 Dolphin Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-#include "Core/Online/RoomMessages.h"
+#include "BrawlOnline/Online/RoomMessages.h"
 
 #include <algorithm>
 #include <cmath>

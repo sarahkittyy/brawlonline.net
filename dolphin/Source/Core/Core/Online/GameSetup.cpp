@@ -15,7 +15,7 @@
 
 #include "Common/Logging/Log.h"
 #include "Core/Rollback/GameplaySession.h"
-#include "Core/Rollback/PeerData.h"
+#include "BrawlOnline/Rollback/PeerData.h"
 
 namespace Online::GameSetup
 {

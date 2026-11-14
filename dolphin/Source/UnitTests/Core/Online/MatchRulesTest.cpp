@@ -9,7 +9,7 @@
 #include <gtest/gtest.h>
 #include <picojson.h>
 
-#include "Core/Online/MatchRules.h"
+#include "BrawlOnline/Online/MatchRules.h"
 
 using namespace Online;
 

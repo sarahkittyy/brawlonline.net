@@ -30,7 +30,7 @@
 #include "Core/Rollback/UdpSocket6.h"
 #include <fmt/format.h>
 #include <fmt/ranges.h>
-#include "Core/Online/Timeouts.h"
+#include "BrawlOnline/Online/Timeouts.h"
 #include <xxhash.h>
 
 #include "Common/FileUtil.h"
@@ -54,8 +54,8 @@
 #include "Core/HW/SystemTimers.h"
 #include "Core/HW/VideoInterface.h"
 #include "Core/Online/Chat.h"
-#include "Core/Online/ChatText.h"
-#include "Core/Online/GameAlive.h"
+#include "BrawlOnline/Online/ChatText.h"
+#include "BrawlOnline/Online/GameAlive.h"
 #include "Core/Online/GameBridge.h"
 #include "Core/Online/GameSetup.h"
 #include "Core/PowerPC/MMU.h"
@@ -63,7 +63,7 @@
 #include "Core/Rollback/ClipRecorder.h"
 #include "Core/Rollback/FrameProfile.h"
 #include "Core/Rollback/GameplayRollback.h"
-#include "Core/Rollback/PeerData.h"
+#include "BrawlOnline/Rollback/PeerData.h"
 #include "Core/Rollback/PresentStats.h"
 #include "Core/Rollback/ReplayKeyframes.h"
 #include "Core/Rollback/ReplayRecorder.h"

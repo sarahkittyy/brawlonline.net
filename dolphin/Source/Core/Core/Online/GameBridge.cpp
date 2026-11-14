@@ -28,7 +28,7 @@
 #include "Core/Online/Chat.h"
 #include "Core/Online/GameSetup.h"
 #include "Core/Online/Ipv6.h"
-#include "Core/Online/MatchRules.h"
+#include "BrawlOnline/Online/MatchRules.h"
 #include "Core/Online/OnlineClient.h"
 #include "Core/Online/Ranked.h"
 #include "Core/Online/RecentCodes.h"
@@ -39,7 +39,7 @@
 #include "Core/Rollback/GameplayRollback.h"
 #include "Core/Rollback/GameplaySession.h"
 #include "Core/Rollback/MachineSession.h"
-#include "Core/Rollback/PeerData.h"
+#include "BrawlOnline/Rollback/PeerData.h"
 #include "Core/Rollback/RollbackManager.h"
 #include "VideoCommon/OnScreenDisplay.h"
 
