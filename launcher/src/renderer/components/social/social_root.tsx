@@ -9,11 +9,12 @@ import { useSocialActions } from "@/lib/social/use_social_actions";
 
 import { ChatDock } from "./chat_dock";
 import { InviteNotifications } from "./invite_notifications";
+import { PlayerMenuHost } from "./player_menu";
 import { SocialMessages as Messages } from "./social.messages";
 
 /**
  * The launcher's chat around the pages: the tab bar at the bottom (it takes its height from the
- * page) and the invite pop-ups. Answers to the player's own invites come here: an accepted Direct
+ * page), the invite pop-ups and the player menu of the names around the pages (PlayerMenuHost). Answers to the player's own invites come here: an accepted Direct
  * invite sends this player's game to Direct 1v1 with the other player's code.
  */
 export const SocialRoot = React.memo(function SocialRoot() {
@@ -85,6 +86,7 @@ export const SocialRoot = React.memo(function SocialRoot() {
     <>
       <ChatDock />
       <InviteNotifications />
+      <PlayerMenuHost />
     </>
   );
 });

@@ -5,6 +5,7 @@ import { Flag } from "@/components/flag/flag";
 import { MiniProfileTooltip } from "@/components/profile/mini_profile";
 import { RankBadge } from "@/components/rank_badge/rank_badge";
 import { useProfileView } from "@/lib/hooks/use_profile_view";
+import { usePlayerMenuOpener } from "@/lib/social/use_player_menu";
 import type { Rank } from "@/services/backend/types";
 
 import { UserNameMessages as Messages } from "./user_name.messages";
@@ -28,7 +29,8 @@ export type UserNameData = {
  * A player's name, as the launcher shows it everywhere (the online list, chat, rooms, the leaderboard, the match
  * history): the rank badge and the flag before it, the connect code after it, lighter. Each part is switched on
  * where it's wanted. `profileLink` makes the name a button that opens the player's profile (View Profile); with a
- * uid, hovering the name shows a small profile card (`hoverCard`, on by default).
+ * uid, hovering the name shows a small profile card (`hoverCard`, on by default) and right-clicking it opens the
+ * online list's player menu (`playerMenu`, on by default with the hover card; off where the row has its own menu).
  *
  * `classes` restyles the parts for a place with its own look (the chat's names are its own CSS).
  */
@@ -39,6 +41,8 @@ export const UserName = ({
   showFlag = false,
   profileLink = false,
   hoverCard = true,
+  playerMenu = true,
+  menuMessage = true,
   className,
   classes,
 }: {
@@ -56,12 +60,21 @@ export const UserName = ({
   profileLink?: boolean;
   /** Hovering the name shows a small profile card (needs `uid`). */
   hoverCard?: boolean;
+  /** Right-clicking the name opens the player menu (with the hover card, needs `uid`). */
+  playerMenu?: boolean;
+  /** The menu offers Message (not in that player's own chat window). */
+  menuMessage?: boolean;
   className?: string;
   classes?: { name?: string; code?: string };
 }) => {
   const openProfile = useProfileView((s) => s.open);
   const uid = user.uid;
-  let name = <span className={clsx(styles.name, classes?.name)}>{user.displayName}</span>;
+  const onContextMenu = usePlayerMenuOpener(user, { showMessage: menuMessage, enabled: hoverCard && playerMenu });
+  let name = (
+    <span className={clsx(styles.name, classes?.name)} onContextMenu={onContextMenu}>
+      {user.displayName}
+    </span>
+  );
   if (profileLink && uid) {
     name = (
       <button

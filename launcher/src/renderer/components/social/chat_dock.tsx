@@ -307,7 +307,7 @@ const ChatWindow = ({
             <LockOutlinedIcon style={{ fontSize: 14 }} />
           </span>
         </Tooltip>
-        <PlayerName player={player} profileLink={true} showFlag={true} />
+        <PlayerName player={player} profileLink={true} showFlag={true} titleMenu={true} />
         {player.main && (
           <span className={styles.titleMain}>
             <CharacterIcon character={player.main} size={18} />

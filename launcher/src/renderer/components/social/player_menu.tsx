@@ -1,15 +1,27 @@
 import type { RoomList } from "@accounts/types";
+import BlockRoundedIcon from "@mui/icons-material/BlockRounded";
+import CampaignOutlinedIcon from "@mui/icons-material/CampaignOutlined";
+import ChatBubbleOutlineRoundedIcon from "@mui/icons-material/ChatBubbleOutlineRounded";
+import CheckRoundedIcon from "@mui/icons-material/CheckRounded";
+import CloseRoundedIcon from "@mui/icons-material/CloseRounded";
+import EditOutlinedIcon from "@mui/icons-material/EditOutlined";
+import GavelRoundedIcon from "@mui/icons-material/GavelRounded";
+import LoginRoundedIcon from "@mui/icons-material/LoginRounded";
+import MailOutlineRoundedIcon from "@mui/icons-material/MailOutlineRounded";
+import PersonOutlineRoundedIcon from "@mui/icons-material/PersonOutlineRounded";
 import Button from "@mui/material/Button";
 import Dialog from "@mui/material/Dialog";
 import DialogActions from "@mui/material/DialogActions";
 import DialogContent from "@mui/material/DialogContent";
 import DialogTitle from "@mui/material/DialogTitle";
 import Divider from "@mui/material/Divider";
+import ListItemIcon from "@mui/material/ListItemIcon";
 import ListItemText from "@mui/material/ListItemText";
 import Menu from "@mui/material/Menu";
 import MenuItem from "@mui/material/MenuItem";
+import { createSvgIcon } from "@mui/material/utils";
 import type { SocialPlayer } from "@social/types";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 
 import { RoomNameMessages } from "@/components/room_name/room_name.messages";
@@ -20,6 +32,7 @@ import { useAdminRefresh } from "@/lib/social/admin_refresh";
 import { activityOf } from "@/lib/social/friend_activity";
 import { joinRoomByCode } from "@/lib/social/join_room";
 import { useFriendActions, useFriendRelation } from "@/lib/social/use_friends";
+import { usePlayerMenu } from "@/lib/social/use_player_menu";
 import { inviteBlocked, useSocial, waitsForRoom } from "@/lib/social/use_social";
 import { useSocialActions } from "@/lib/social/use_social_actions";
 import { useServices } from "@/services";
@@ -28,12 +41,69 @@ import type { AdminUser } from "@/services/backend/types";
 import { AdminMessages } from "./admin.messages";
 import styles from "./admin.module.css";
 import { AdminRenameDialog } from "./admin_rename_dialog";
+import { AddFriendIcon, PendingFriendIcon, RemoveFriendIcon } from "./friend_icons";
 import { SocialMessages as Messages } from "./social.messages";
 
 export type PlayerMenuTarget = { player: SocialPlayer; x: number; y: number };
 
+/** Each item's icon, left of its text (Sarah's board, 2026-11-14). */
+const ICON = { fontSize: "small" } as const;
+const ICON_SLOT = { minWidth: "30px !important" };
+
+/** CampaignOutlined's megaphone with a line through it: Mute. */
+const MutedIcon = createSvgIcon(
+  [
+    <defs key="defs">
+      <mask id="pp-muted-megaphone">
+        <rect width="24" height="24" fill="white" />
+        <path d="M2.6 1.2 23.4 22" stroke="black" strokeWidth="4.4" />
+      </mask>
+    </defs>,
+    <path
+      key="megaphone"
+      mask="url(#pp-muted-megaphone)"
+      d="M18 11v2h4v-2zm-2 6.61c.96.71 2.21 1.65 3.2 2.39.4-.53.8-1.07 1.2-1.6-.99-.74-2.24-1.68-3.2-2.4-.4.54-.8 1.08-1.2 1.61M20.4 5.6c-.4-.53-.8-1.07-1.2-1.6-.99.74-2.24 1.68-3.2 2.4.4.53.8 1.07 1.2 1.6.96-.72 2.21-1.65 3.2-2.4M4 9c-1.1 0-2 .9-2 2v2c0 1.1.9 2 2 2h1v4h2v-4h1l5 3V6L8 9zm5.03 1.71L11 9.53v4.94l-1.97-1.18-.48-.29H4v-2h4.55zM15.5 12c0-1.33-.58-2.53-1.5-3.35v6.69c.92-.81 1.5-2.01 1.5-3.34"
+    />,
+    <path key="line" d="M3.4 2 22.6 21.2" stroke="currentColor" strokeWidth="2" strokeLinecap="round" fill="none" />,
+  ],
+  "Muted",
+);
+
 /**
- * The right-click menu of a player's name (the online list and a chat tab's header): Message, View Profile, ...
+ * The menu of every name that has a hover card, opened by usePlayerMenuOpener (lib/social/use_player_menu.ts).
+ * A list that only had the name gets the connect code from the player's profile (the hover card's, usually
+ * already fetched).
+ */
+export const PlayerMenuHost = () => {
+  const request = usePlayerMenu((s) => s.request);
+  const close = usePlayerMenu((s) => s.close);
+  const { backendService } = useServices();
+  const uid = request?.player.uid;
+  const needCode = request != null && !request.player.connectCode;
+  const { data: profile } = useQuery({
+    queryKey: ["profile", uid],
+    queryFn: () => backendService.fetchProfile(uid!),
+    staleTime: 5 * 60_000,
+    enabled: needCode,
+  });
+  const target: PlayerMenuTarget | null = request
+    ? {
+        player: {
+          uid: request.player.uid,
+          displayName: request.player.displayName,
+          connectCode: request.player.connectCode || (profile?.uid === uid ? profile?.connectCode : undefined) || "",
+          ...(request.player.country ? { country: request.player.country } : {}),
+        },
+        x: request.x,
+        y: request.y,
+      }
+    : null;
+  return <PlayerMenu target={target} onClose={close} showMessage={request?.showMessage ?? true} />;
+};
+
+/**
+ * The right-click menu of a player's name (the online list and a chat tab's header, and through PlayerMenuHost every
+ * name with a hover card): Message, View Profile, ..., each with its icon.
  * Friends (docs/design/friends.md): a request from them first (Accept / Decline, then a line); Add friend or
  * Cancel friend request after Invite, and Join their room for a friend in a room the player can join;
  * Remove friend above Ignore user.
@@ -94,10 +164,16 @@ export const PlayerMenu = ({
                   dense={true}
                   data-testid="admin-mute"
                 >
+                  <ListItemIcon sx={ICON_SLOT}>
+                    {u?.muted ? <CampaignOutlinedIcon {...ICON} /> : <MutedIcon {...ICON} />}
+                  </ListItemIcon>
                   <ListItemText>{u?.muted ? AdminMessages.unmute() : AdminMessages.mute()}</ListItemText>
                 </MenuItem>,
               ]),
           <MenuItem key="rename" onClick={act(setRenaming)} dense={true} data-testid="admin-rename-item">
+            <ListItemIcon sx={ICON_SLOT}>
+              <EditOutlinedIcon {...ICON} />
+            </ListItemIcon>
             <ListItemText>{AdminMessages.rename()}</ListItemText>
           </MenuItem>,
           ...(u?.admin
@@ -110,6 +186,9 @@ export const PlayerMenu = ({
                   dense={true}
                   data-testid="admin-ban"
                 >
+                  <ListItemIcon sx={ICON_SLOT}>
+                    <GavelRoundedIcon {...ICON} />
+                  </ListItemIcon>
                   <ListItemText>{u?.banned ? AdminMessages.unban() : AdminMessages.ban()}</ListItemText>
                 </MenuItem>,
               ]),
@@ -132,22 +211,37 @@ export const PlayerMenu = ({
         {friendsLoaded &&
           relation === "incoming" && [
             <MenuItem key="accept" onClick={act(friendActions.accept)} dense={true} data-testid="menu-accept-friend">
+              <ListItemIcon sx={ICON_SLOT}>
+                <CheckRoundedIcon {...ICON} />
+              </ListItemIcon>
               <ListItemText>{Messages.acceptRequest()}</ListItemText>
             </MenuItem>,
             <MenuItem key="decline" onClick={act(friendActions.decline)} dense={true}>
+              <ListItemIcon sx={ICON_SLOT}>
+                <CloseRoundedIcon {...ICON} />
+              </ListItemIcon>
               <ListItemText>{Messages.declineRequest()}</ListItemText>
             </MenuItem>,
             <Divider key="friend-line" />,
           ]}
         {showMessage && (
           <MenuItem onClick={act(message)} dense={true}>
+            <ListItemIcon sx={ICON_SLOT}>
+              <ChatBubbleOutlineRoundedIcon {...ICON} />
+            </ListItemIcon>
             <ListItemText>{Messages.message()}</ListItemText>
           </MenuItem>
         )}
         <MenuItem onClick={act(openProfile)} dense={true}>
+          <ListItemIcon sx={ICON_SLOT}>
+            <PersonOutlineRoundedIcon {...ICON} />
+          </ListItemIcon>
           <ListItemText>{Messages.viewProfile()}</ListItemText>
         </MenuItem>
         <MenuItem onClick={act(invite)} disabled={!online || blocked != null} dense={true}>
+          <ListItemIcon sx={ICON_SLOT}>
+            <MailOutlineRoundedIcon {...ICON} />
+          </ListItemIcon>
           <ListItemText
             primary={Messages.inviteToGame()}
             secondary={blocked === "full" ? Messages.roomFull() : undefined}
@@ -156,16 +250,25 @@ export const PlayerMenu = ({
         </MenuItem>
         {friendsLoaded && relation === "none" && (
           <MenuItem onClick={act(friendActions.add)} dense={true} data-testid="menu-add-friend">
+            <ListItemIcon sx={ICON_SLOT}>
+              <AddFriendIcon {...ICON} />
+            </ListItemIcon>
             <ListItemText>{Messages.addFriend()}</ListItemText>
           </MenuItem>
         )}
         {friendsLoaded && relation === "sent" && (
           <MenuItem onClick={act(friendActions.cancel)} dense={true}>
+            <ListItemIcon sx={ICON_SLOT}>
+              <PendingFriendIcon {...ICON} />
+            </ListItemIcon>
             <ListItemText>{Messages.cancelRequest()}</ListItemText>
           </MenuItem>
         )}
         {joinable && (
           <MenuItem onClick={act(() => joinRoomByCode(joinable.code))} dense={true}>
+            <ListItemIcon sx={ICON_SLOT}>
+              <LoginRoundedIcon {...ICON} />
+            </ListItemIcon>
             <ListItemText
               primary={Messages.joinTheirRoom()}
               secondary={`${joinable.name ?? RoomNameMessages.defaultName(joinable.host)} · ${joinable.players}/${
@@ -177,10 +280,16 @@ export const PlayerMenu = ({
         )}
         {friendsLoaded && relation === "friends" && (
           <MenuItem onClick={act(friendActions.remove)} dense={true} data-testid="menu-remove-friend">
+            <ListItemIcon sx={ICON_SLOT}>
+              <RemoveFriendIcon {...ICON} />
+            </ListItemIcon>
             <ListItemText>{Messages.removeFriend()}</ListItemText>
           </MenuItem>
         )}
         <MenuItem onClick={act((p) => setIgnored(p, !ignored))} dense={true}>
+          <ListItemIcon sx={ICON_SLOT}>
+            <BlockRoundedIcon {...ICON} />
+          </ListItemIcon>
           <ListItemText>{ignored ? Messages.unignoreUser() : Messages.ignoreUser()}</ListItemText>
         </MenuItem>
         {adminItems}

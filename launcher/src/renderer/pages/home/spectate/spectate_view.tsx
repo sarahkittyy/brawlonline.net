@@ -23,6 +23,7 @@ import { clsx } from "clsx";
 import React, { useEffect, useState } from "react";
 
 import { MiniProfileTooltip } from "@/components/profile/mini_profile";
+import { usePlayerMenuOpener } from "@/lib/social/use_player_menu";
 import { getCharacterIcon } from "@/lib/utils";
 
 import { ContentBlock } from "../overview/content_block/content_block";
@@ -344,6 +345,18 @@ function RowTooltip(props: Omit<TooltipProps, "open" | "onOpen" | "onClose">) {
   return <Tooltip {...props} open={open} onOpen={() => setOpen(true)} onClose={() => setOpen(false)} />;
 }
 
+/** A live game's player: their hover card, and the player menu on a right click. */
+const LivePlayerName = ({ player }: { player: LivePlayer }) => {
+  const onContextMenu = usePlayerMenuOpener(player);
+  return (
+    <MiniProfileTooltip uid={player.uid}>
+      <span className={styles.name} onContextMenu={onContextMenu}>
+        {player.displayName}
+      </span>
+    </MiniProfileTooltip>
+  );
+};
+
 export const LiveGameRow = React.memo(function LiveGameRow({
   game,
   now,
@@ -402,9 +415,7 @@ export const LiveGameRow = React.memo(function LiveGameRow({
                     {j > 0 && <span className={styles.vs}>{Messages.and()}</span>}
                     <span className={styles.player}>
                       <img className={styles.stock} src={getCharacterIcon(p.characterId, p.costume)} alt="" />
-                      <MiniProfileTooltip uid={p.uid}>
-                        <span className={styles.name}>{p.displayName}</span>
-                      </MiniProfileTooltip>
+                      <LivePlayerName player={p} />
                     </span>
                   </React.Fragment>
                 ))}
