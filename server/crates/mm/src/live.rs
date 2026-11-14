@@ -109,6 +109,11 @@ const START_HOLD_FRAMES: u32 = 600;
 /// With nobody to take its game over, a stalled primary keeps it this many stalls before the game
 /// is cut.
 const LONE_STALLS: u32 = 6;
+/// A game whose primary stopped (or left) while the other player's upload was paused on standby
+/// waits this long for that standby to resume before it is cut. Production 2026-11-14: 470 of the
+/// day's 865 cut games were cut this way, the other upload only paused; standbys resumed 12 s
+/// after their takeover at the median, 26 s at the 90th percentile, 37 s at the 95th (bug #291).
+const STANDBY_WAIT: Duration = Duration::from_secs(45);
 
 impl Default for LiveConfig {
     fn default() -> Self {
@@ -348,6 +353,9 @@ struct Game {
     finished_at: Option<Instant>,
     /// Its result is in the stream's score (from its `ENDG` or a player's `spectate-end`).
     counted: bool,
+    /// Nobody uploads it and a standby may still resume (its primary stopped or left): since
+    /// when. Cut after `STANDBY_WAIT`, or once no standby is left.
+    orphaned: Option<Instant>,
     /// A player's `spectate-end` that came while the upload was still going: counted when the
     /// upload ends (with its `ENDG`, or cut), so the list's score doesn't run ahead of what
     /// spectators have seen.
@@ -934,6 +942,7 @@ impl LiveBook {
                     bad: false,
                     finished_at: None,
                     counted: false,
+                    orphaned: None,
                     reported: None,
                 },
             );
@@ -1062,6 +1071,7 @@ impl LiveBook {
         game.offers[i].held = false;
         let (from, headers) = if role == Role::Primary {
             game.primary = Some(slot);
+            game.orphaned = None;
             game.progress = now;
             (game.next_frame, !game.headers_done())
         } else {
@@ -1097,13 +1107,22 @@ impl LiveBook {
                 tracing::info!(match_id = %game.match_id, game = game.number, why, "spectate takeover");
                 self.give_role(now, uid, i, Role::Primary, out);
             }
+            None if why == "paused" => {
+                // A pause comes back within seconds.
+                tracing::info!(match_id = %game.match_id, game = game.number, why, "spectate: nobody left to upload");
+            }
+            None if game.offers.iter().any(|o| !o.out && o.standby) => {
+                // Another player's upload is only paused, and resumes once that game is healthy
+                // again (`resume` then hands it the game): spectators see "Buffering…" a while
+                // rather than the rest of the game lost (bug #291). `tick` cuts it if it doesn't.
+                game.orphaned.get_or_insert(now);
+                tracing::info!(match_id = %game.match_id, game = game.number, why, "spectate: nobody uploading; waiting for a standby to resume");
+            }
             None => {
                 tracing::info!(match_id = %game.match_id, game = game.number, why, "spectate: nobody left to upload");
-                // Nobody will send the rest (a pause comes back within seconds; anything else
-                // doesn't): spectators get what came instead of "Buffering…" until the next game.
-                if why != "paused" {
-                    self.cut_game(now, uid);
-                }
+                // Nobody will send the rest: spectators get what came instead of "Buffering…"
+                // until the next game.
+                self.cut_game(now, uid);
             }
         }
     }
@@ -1474,6 +1493,11 @@ impl LiveBook {
         }
         if game.counted {
             return Ok(());
+        }
+        // A standby that hadn't resumed when its game ended never does (Dolphin's uploader resumes
+        // only during the game): a game waiting on it (`orphaned`) is cut at the next tick.
+        for o in game.offers.iter_mut().filter(|o| o.account == account && o.standby && !o.resumable) {
+            o.out = true;
         }
         let result = EndResult::from_report(e);
         if game.open() {
@@ -1891,6 +1915,25 @@ impl LiveBook {
         for uid in due {
             self.decide(now, uid, out);
         }
+        // Games waiting for a standby to resume (`takeover`) that waited long enough, or whose
+        // standbys are gone.
+        let orphans: Vec<[u8; 16]> = self
+            .games
+            .values()
+            .filter(|g| g.open() && g.primary.is_none())
+            .filter(|g| {
+                g.orphaned.is_some_and(|t| {
+                    now.duration_since(t) >= STANDBY_WAIT || !g.offers.iter().any(|o| !o.out && o.standby)
+                })
+            })
+            .map(|g| g.uid)
+            .collect();
+        for uid in orphans {
+            if let Some(g) = self.games.get(&uid) {
+                tracing::info!(match_id = %g.match_id, game = g.number, "spectate: no standby resumed");
+            }
+            self.cut_game(now, uid);
+        }
         // A primary that went quiet while a witness shows the game going on.
         let stall_frames = (self.cfg.stall.as_secs_f64() * 60.0) as u32;
         let stalled: Vec<(u32, [u8; 16], ConnId)> = self
@@ -1919,6 +1962,10 @@ impl LiveBook {
             o.standby = true;
             o.resumable = false;
             o.slot = None;
+            // Alone, and not paused (held): its game sends no `spectate-resume` to wait for.
+            if !other && !o.held {
+                o.out = true;
+            }
             self.slots.remove(&slot);
             self.takeover(now, uid, "primary stalled", out);
             if self.games.get(&uid).is_some_and(|g| g.open() && g.primary.is_some()) {
@@ -2607,6 +2654,80 @@ mod tests {
         assert_eq!(role(&out, A).unwrap()["role"], "none");
         assert_eq!(role(&out, B).unwrap()["role"], "primary");
         assert_eq!(role(&out, B).unwrap()["from"], 240);
+    }
+
+    /// Bug report #291 ("The rest of this game wasn't streamed", often): A paused and B took the
+    /// game over; B's upload then stopped (its third pause) while A was still on standby, and the
+    /// game was cut though A resumed seconds later. Now the game waits for A, which gets it back.
+    #[test]
+    fn a_stopped_primary_waits_for_a_paused_standby() {
+        let (mut t, a, slot_a) = standby_then_stop();
+        let id = stream_id(&t);
+        let cut = |t: &T| read_all(&t.book.store, &id).iter().any(|l| matches!(l, LiveLine::Bad { .. }));
+        assert!(!cut(&t), "A may still resume");
+        t.advance(Duration::from_secs(12));
+        assert!(!cut(&t));
+        let mut out = vec![];
+        t.book.request(t.now, A, a, SpectateRequest::Resume { slot: slot_a }, &mut out);
+        let ra = role(&out, A).unwrap();
+        assert_eq!((ra["role"].as_str(), ra["from"].as_u64()), (Some("primary"), Some(180)));
+        let slot_a = ra["slot"].as_u64().unwrap() as u32;
+        assert!(t.send_chunk(A, slot_a, 0, &encode_chunk(b"FRMS", &frms(180, 60, 1), true)).is_empty());
+        t.advance(Duration::from_secs(60));
+        assert!(!cut(&t));
+    }
+
+    /// ... but not forever: a standby that doesn't resume within `STANDBY_WAIT` gets the game cut.
+    #[test]
+    fn a_standby_that_never_resumes_gets_the_game_cut() {
+        let (mut t, ..) = standby_then_stop();
+        let id = stream_id(&t);
+        let cut = |t: &T| read_all(&t.book.store, &id).iter().any(|l| matches!(l, LiveLine::Bad { .. }));
+        t.advance(STANDBY_WAIT - Duration::from_secs(1));
+        assert!(!cut(&t));
+        t.advance(Duration::from_secs(1));
+        assert!(cut(&t), "spectators get what came");
+    }
+
+    /// ... and a standby whose game ended (it won't resume any more) or that left ends the wait.
+    #[test]
+    fn a_standby_that_ends_its_game_or_leaves_gets_the_game_cut() {
+        let (mut t, a, _) = standby_then_stop();
+        let id = stream_id(&t);
+        let cut = |t: &T| read_all(&t.book.store, &id).iter().any(|l| matches!(l, LiveLine::Bad { .. }));
+        report(&mut t, A, a, 1, json!({"endMethod": "game", "winnerPort": 1}));
+        assert!(!cut(&t));
+        t.advance(Duration::from_secs(1));
+        assert!(cut(&t));
+        assert_eq!(wins(&t), (1, 0), "the report counts once the game is cut");
+
+        let (mut t, ..) = standby_then_stop();
+        let id = stream_id(&t);
+        let mut out = vec![];
+        t.book.conn_gone(t.now, A, &mut out);
+        t.advance(Duration::from_secs(1));
+        assert!(read_all(&t.book.store, &id).iter().any(|l| matches!(l, LiveLine::Bad { .. })));
+    }
+
+    /// A uploads frames to 180, pauses, and B takes over; B's upload stops: A is the only one
+    /// left, on standby.
+    fn standby_then_stop() -> (T, Uuid, u32) {
+        let mut t = T::new(SpectateMode::On);
+        let (a, b) = (t.a, t.b);
+        t.offer(A, a, 1, 0);
+        let out = t.offer(B, b, 1, 0);
+        let slot_a = role(&out, A).unwrap()["slot"].as_u64().unwrap() as u32;
+        let info = t.info(1);
+        t.send_chunk(A, slot_a, 0, &info);
+        t.send_chunk(A, slot_a, 1, &encode_chunk(b"SETP", b"{}", false));
+        t.send_chunk(A, slot_a, 2, &encode_chunk(b"FRMS", &frms(120, 60, 1), true));
+        let mut out = vec![];
+        t.book.request(t.now, A, a, SpectateRequest::Pause { slot: slot_a, reason: "frame".into() }, &mut out);
+        let slot_b = role(&out, B).unwrap()["slot"].as_u64().unwrap() as u32;
+        let mut out = vec![];
+        t.book.request(t.now, B, b, SpectateRequest::Stop { slot: slot_b, reason: "frame".into() }, &mut out);
+        assert!(role(&out, A).is_none(), "A hasn't resumed");
+        (t, a, slot_a)
     }
 
     /// A held primary that resumes by itself just goes on; nobody else's role changes.
