@@ -5,6 +5,7 @@
 add_library(brawl_online_core STATIC
   include/BrawlOnline/CommonTypes.h
   include/BrawlOnline/Config/OnlineSettings.h
+  include/BrawlOnline/Engine.h
   include/BrawlOnline/Online/Chat.h
   include/BrawlOnline/Online/ChatCrypto.h
   include/BrawlOnline/Online/ChatText.h
@@ -30,6 +31,7 @@ add_library(brawl_online_core STATIC
   include/BrawlOnline/Rollback/ReplayFile.h
   include/BrawlOnline/Rollback/ReplayRecorder.h
   src/Config/OnlineSettings.cpp
+  src/Engine.cpp
   src/Online/Chat.cpp
   src/Online/ChatCrypto.cpp
   src/Online/ChatText.cpp

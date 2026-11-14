@@ -596,6 +596,8 @@ add_library(core
   Rollback/KeptGranules.h
   Rollback/DeltaSaveSlot.cpp
   Rollback/DeltaSaveSlot.h
+  Rollback/DolphinEngine.cpp
+  Rollback/DolphinEngine.h
   Rollback/FullMemcpySaveSlot.cpp
   Rollback/GameplayOnlineBackend.cpp
   Rollback/GameplayOnlineBackend.h

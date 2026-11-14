@@ -109,9 +109,31 @@ Everything is on the `emissary-recomp` branch (based on main, which stays quiet 
 | 0 | `harness/tools/core_replay_corpus.py` (52b927cc) | a corpus of 50 of Sarah's replays (rooms, 2v2, Direct, Unranked, Ranked) through the baseline build: E:\emissary\core\baseline.jsonl; unit tests 1,612/1,615 (3 failures that predate this work) |
 | 1 | 85085375: PeerData, RoomMessages, MatchRules, SetFormat, ChatText, GameAlive, Timeouts | 172/172 functions identical, same unit test results |
 | 2a | 3d20718e: Ipv6, User, RecentCodes, ChatCrypto, Chat, Matchmaking, Spectate, ReplayFile | 592/592 functions identical (steps 1 + 2a), same unit test results |
+| 2b | befdfe8c: OnlineClient, OnlineSession, Ranked, Config/OnlineSettings | 821/821 functions identical (steps 1-2b), same unit test results |
+| 2c | 4637c92c: GameSetup, Rooms | 1,024/1,024 functions identical (steps 1-2c), same unit test results; Linux build |
+| 3a | a82e083b: GameBridge, GameplaySession, GameplayRollback, ReplayRecorder | every function of the 24 moved objects identical (8,242, with the library code emitted beside ours), same unit test results |
+| 4a | the `Engine` (core/include/BrawlOnline/Engine.h), slice A: the session's CPU and loop control (go on into the frame, skip it, back to the loop top, the FRAME_END store, the guest calls from the loop top, the saved registers, CPU running) go through it; Dolphin's is Rollback/DolphinEngine, set in Core::Init | code changed, so checked by running it: the 50-replay corpus plays the same (every replay passes with the same frames checked and end, 556,351 frames checksummed); unit tests as before; 52 of the harness's online tests (Direct, Ranked, rooms, 2v2, leaves, runbacks, sudden death, rollback): 41 pass, 3 more pass when run again alone on both builds (they had failed with three groups at once), 8 fail the same way on the baseline build |
 
 The old questions, as asked:
 
 - **Q1, where the core lives:** in the monorepo with a mirror repo for the recomp's submodule (recommended, §3), or its own repo as a submodule of both?
 - **Q2, where the extraction lands:** step by step on main, each step proven unchanged (recommended, §6), or on the `emissary-recomp` branch?
 - **Q3, the recomp's rollback loop:** replace the recomp's own GekkoNet loop (`brawl_rollback.cpp`) with the core's session (recommended: one implementation of setup, checksums, desync recovery and quits), or keep it and share only the online/menu side? This one is kalomaze's as much as ours.
+
+## 9. What core/ still takes from Dolphin (after 4a)
+
+The 24 moved files still include 37 Dolphin headers. Each goes one of three ways: **same-named header** (the recomp ships a header of the same path whose types do the same thing over its runtime; Dolphin's code and machine code stay as they are), **Engine** (the engines behave differently: a call through `BrawlOnline::Engine`, Dolphin's implementation doing exactly what the code did), or **out of the core** (Dolphin-only code the core calls today: behind an Engine call or a hook Dolphin sets).
+
+| Header(s) | Used for | Way |
+|---|---|---|
+| Core/HW/CPU.h, the PowerPC registers in the loop hooks | going on / skipping the frame, guest calls, saved registers | Engine: done (4a) |
+| Core/System.h, Core/HW/Memmap.h, Core/PowerPC/MMU.h | guest memory (`Guest`, CopyToEmu, Read_U8, HostRead/HostWrite/HostIsRAMAddress) | same-named headers: guest memory is the same flat big-endian MEM1/MEM2 in both, and the checksum path stays a pointer read |
+| Core/Core.h | CPUThreadGuard, Core::State, run-on-CPU-thread | same-named header (the recomp's hooks are already on its game thread) |
+| VideoCommon/OnScreenDisplay.h, Core/Config/MainSettings.h, ConfigManager.h, Config/GraphicsSettings.h | on-screen messages, the online settings and a few of Dolphin's | same-named headers (the recomp's overlay and its settings file) |
+| Core/Brawlback/.../gekkonet.h, BrawlbackConstants.h, InputCommon/GCPadStatus.h, Core/Rollback/UdpSocket6.h | GekkoNet, constants, the pad struct, the IPv6 socket | into core/ itself (shared code with no Dolphin types) |
+| Core/CoreTiming.h, HW/SystemTimers.h, HW/VideoInterface.h | the session's pacing: throttle, present pacing, rollback bursts, "re-running", ticks | Engine (the next slice; the recomp paces by host time) |
+| Core/Rollback/RollbackManager.h | save / load a frame, region mode, its stats | Engine (the recomp's snapshot store) |
+| VideoCommon/Fifo.h, AsyncRequests.h, Present.h, Rollback/PresentStats.h, FrameProfile.h, ClipRecorder.h | GPU determinism and sync, redraw while paused, Dolphin's frame diagnostics, clips | Engine (no-ops or the recomp's own where it has them) |
+| AudioCommon/*.h, HW/GCPad.h, InputCommon/GCAdapter.h | audio during re-runs, local pad reads | Engine |
+| Core/PowerPC/PowerPC.h, Debugger/OSThread.h, Harness/Harness.h | the loop-stall diagnostic, guest backtraces, harness hooks | Engine (diagnostics), harness out of the core |
+| Core/Rollback/MachineSession.h, ReplayKeyframes.h, NetPlayClient.h, Online/RoomWatch.h, SpeedCheck.h, ModsRoom.h, SpecialAssets.h | Other Games (whole-machine sessions, mods rooms), replay keyframes, room watching, the speed check | out of the core: a hook Dolphin sets, none in the recomp (P+ only) until those move too |

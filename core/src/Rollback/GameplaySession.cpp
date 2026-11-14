@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include "BrawlOnline/Rollback/GameplaySession.h"
+#include "BrawlOnline/Engine.h"
 
 #include <algorithm>
 #include <array>
@@ -800,16 +801,8 @@ struct State
   // A guest call (BasicSound::Stop) made from the loop top: the registers to restore when it
   // returns there.
   bool gcall_active = false;
-  struct GuestRegs
-  {
-    std::array<u32, 32> gpr{};
-    std::array<PowerPC::PairedSingle, 32> ps{};
-    std::array<u64, 8> cr{};
-    u32 fpscr = 0;
-    u8 xer_ca = 0, xer_so_ov = 0;
-    u16 xer_stringctrl = 0;
-    u32 lr = 0, ctr = 0;
-  } gcall_saved;
+  using GuestRegs = BrawlOnline::GuestRegs;
+  GuestRegs gcall_saved;
   // Waiting for the file IO and sound loader threads at the loop top (RunIoWait): the registers
   // to restore, and counters (loop tops that waited, of them for a sound load, retraces waited).
   bool io_wait_active = false;
@@ -1005,8 +998,8 @@ bool RunIoWait(const Core::CPUThreadGuard& guard);
 bool LoadWaitUnthrottled();
 bool RunForceFinal(const Core::CPUThreadGuard& guard);
 bool RunForceFinalAt(const Core::CPUThreadGuard& guard, s64 frame, bool first_run);
-void SaveGuestRegs(const PowerPC::PowerPCState& ppc, State::GuestRegs* out);
-void RestoreGuestRegs(PowerPC::PowerPCState& ppc, const State::GuestRegs& in);
+void SaveGuestRegs(State::GuestRegs* out);
+void RestoreGuestRegs(const State::GuestRegs& in);
 
 // ---------------------------------------------------------------------------------------------
 // Guest helpers
@@ -6676,23 +6669,21 @@ void FlushDeferredLocalInput()
   AddDeferredLocalInput(s.local_deferred_in.data(), s.local_sampled_at);
 }
 
-void SetLoopDefault(PowerPC::PowerPCState& ppc)
+void SetLoopDefault()
 {
-  ppc.gpr[25] = 1;  // the replaced li r25,1
-  ppc.npc = LOOP_TOP + 4;
+  BrawlOnline::GetEngine().ContinueFrame();  // the replaced li r25,1, then the frame
 }
 
-void Spin(PowerPC::PowerPCState& ppc)
+void Spin()
 {
   // Skip this pass through the loop without running any game logic.
-  ppc.gpr[25] = 1;
-  ppc.npc = LOOP_END;
+  BrawlOnline::GetEngine().SkipFrame();
   s.spinning = true;
 }
 
-bool CpuRunning(Core::System& system)
+bool CpuRunning(Core::System&)
 {
-  return system.GetCPU().GetState() == CPU::State::Running;
+  return BrawlOnline::GetEngine().CpuRunning();
 }
 
 // Wakes a playback waiting at its loop top (PlaybackWait): frames came, a control, a stop.
@@ -7643,14 +7634,13 @@ bool RunFrame(const Core::CPUThreadGuard& guard)
   s.cpu_where = "runframe";
   s.cpu_frame = s.current_frame;
   auto& system = guard.GetSystem();
-  auto& ppc = system.GetPPCState();
   auto& ct = system.GetCoreTiming();
   const Guest g(system.GetMemory());
 
   if (!IsSceneMelee(g))
   {
     EndRunning(system, "left the match scene");
-    SetLoopDefault(ppc);
+    SetLoopDefault();
     return true;
   }
 
@@ -7675,7 +7665,7 @@ bool RunFrame(const Core::CPUThreadGuard& guard)
     if (!ReplayNextUpdate(system))
     {
       EndRunning(system, "replay ended");
-      SetLoopDefault(ppc);
+      SetLoopDefault();
       return true;
     }
   }
@@ -7692,12 +7682,12 @@ bool RunFrame(const Core::CPUThreadGuard& guard)
     switch (PlaybackLoopTopControls(system))
     {
     case PlaybackStep::Wait:
-      Spin(ppc);
+      Spin();
       return true;
     case PlaybackStep::End:
       s.pb.finished = true;
       EndRunning(system, "replay ended");
-      SetLoopDefault(ppc);
+      SetLoopDefault();
       return true;
     case PlaybackStep::Run:
       break;
@@ -7734,7 +7724,7 @@ bool RunFrame(const Core::CPUThreadGuard& guard)
         s.phase = Phase::Ended;
         s.disconnected = true;
       }
-      SetLoopDefault(ppc);
+      SetLoopDefault();
       return true;
     }
     if (s.ops.adv_count == 0)
@@ -7772,7 +7762,7 @@ bool RunFrame(const Core::CPUThreadGuard& guard)
   {
     ct.SetRollbackResimulating(false);
     s.iteration = 0;
-    Spin(ppc);
+    Spin();
     return true;
   }
 
@@ -7793,7 +7783,7 @@ bool RunFrame(const Core::CPUThreadGuard& guard)
 
   if (s.force_final_at_active)
   {
-    RestoreGuestRegs(ppc, s.force_final_at_saved);
+    RestoreGuestRegs(s.force_final_at_saved);
     s.force_final_at_active = false;
   }
   else if (!s.force_final_at.empty() &&
@@ -7881,7 +7871,7 @@ bool RunFrame(const Core::CPUThreadGuard& guard)
         static_cast<s64>(s.ops.adv_frame[i]) >= s.game_set_frame + END_AFTER_GAME_SET)
     {
       EndRunning(system, s.game_set_quit ? "quit" : "game set");
-      SetLoopDefault(ppc);
+      SetLoopDefault();
       return true;
     }
     // This player quit a 3-4 player match with the pause screen's quit (the game took its fighter
@@ -7913,7 +7903,7 @@ bool RunFrame(const Core::CPUThreadGuard& guard)
         EndRunning(system, "quit left");
         s.phase = Phase::Ended;
         s.quit_left = true;
-        SetLoopDefault(ppc);
+        SetLoopDefault();
         return true;
       }
     }
@@ -8038,7 +8028,7 @@ bool RunFrame(const Core::CPUThreadGuard& guard)
   // Only another re-run pass follows this one: nobody sees its picture (ResimHide).
   if (s.mode != Mode::Playback && s.resim_pass && i + 2 < s.ops.adv_count && ResimHide::Enabled())
     ResimHide::Hide(system);
-  SetLoopDefault(ppc);
+  SetLoopDefault();
   s.cpu_where = "guest";
   CostPassStart(s.resim_pass);
   return true;
@@ -10074,7 +10064,6 @@ void ApplyPlaybackStart(Core::System& system, std::string_view when)
 bool PlaybackLoopTop(const Core::CPUThreadGuard& guard)
 {
   auto& system = guard.GetSystem();
-  auto& ppc = system.GetPPCState();
   const Guest g(system.GetMemory());
   if (s.phase != Phase::Armed)
   {
@@ -10136,7 +10125,7 @@ bool PlaybackLoopTop(const Core::CPUThreadGuard& guard)
         std::chrono::milliseconds(33));
     if (s.phase != Phase::Armed)
       return false;
-    Spin(ppc);
+    Spin();
     return true;
   }
 
@@ -10220,7 +10209,7 @@ bool PlaybackLoopTop(const Core::CPUThreadGuard& guard)
   system.GetCoreTiming().ResetThrottleToNow();
   PadsSetCurrent(0xF, CountdownSlots());
   PadsOnLoopTop(system);
-  SetLoopDefault(ppc);
+  SetLoopDefault();
   return true;
 }
 
@@ -10332,7 +10321,6 @@ bool OnLoopTop(const Core::CPUThreadGuard& guard)
   s.cpu_where = "looptop";
   std::lock_guard<std::recursive_timed_mutex> lk(s.mutex);
   auto& system = guard.GetSystem();
-  auto& ppc = system.GetPPCState();
   NoteLoopTop(system);
   ResimHide::Restore(system);
 
@@ -10350,7 +10338,7 @@ bool OnLoopTop(const Core::CPUThreadGuard& guard)
     {
       EndRunning(system, s.end_reason.empty() ? "stopped" : s.end_reason);
       s.phase = Phase::Idle;
-      SetLoopDefault(ppc);
+      SetLoopDefault();
       return true;
     }
     if (s_pair_scene)
@@ -10367,7 +10355,7 @@ bool OnLoopTop(const Core::CPUThreadGuard& guard)
   if (s.mode == Mode::Playback && s.pb.stopped && InMatchPhase())
   {
     EndRunning(system, "stopped");
-    SetLoopDefault(ppc);
+    SetLoopDefault();
     return true;
   }
 
@@ -10398,7 +10386,7 @@ bool OnLoopTop(const Core::CPUThreadGuard& guard)
     s.phase = Phase::Ended;
     s.disconnected = true;
     s.error = s.peer_left_reason;
-    SetLoopDefault(ppc);
+    SetLoopDefault();
     return true;
   }
 
@@ -10418,7 +10406,7 @@ bool OnLoopTop(const Core::CPUThreadGuard& guard)
     EndRunning(system, "desync");
     s.desync_end = false;
     s.desynced = true;
-    SetLoopDefault(ppc);
+    SetLoopDefault();
     return true;
   }
 
@@ -10447,7 +10435,7 @@ bool OnLoopTop(const Core::CPUThreadGuard& guard)
       s.error = s.error.empty() ? "gekko session failed in the countdown" : s.error;
       EndRunning(system, s.error);
       s.phase = Phase::Error;
-      SetLoopDefault(ppc);
+      SetLoopDefault();
       return true;
     }
     if (s.phase == Phase::Countdown && fc + 1 < StartFrame())
@@ -10532,7 +10520,7 @@ bool OnLoopTop(const Core::CPUThreadGuard& guard)
           s.error = s.error.empty() ? "gekko session failed at the start barrier" : s.error;
           EndRunning(system, s.error);
           s.phase = Phase::Error;
-          SetLoopDefault(ppc);
+          SetLoopDefault();
           return true;
         }
         if (s.ops.adv_count > 0)
@@ -10585,12 +10573,12 @@ bool OnLoopTop(const Core::CPUThreadGuard& guard)
         s.error = "start barrier timed out";
         EndRunning(system, s.error);
         s.phase = Phase::Error;
-        SetLoopDefault(ppc);
+        SetLoopDefault();
         return true;
       }
       if (!CpuRunning(system))
       {
-        Spin(ppc);
+        Spin();
         return true;
       }
       LogWait("at the start barrier", s.barrier_since);
@@ -10650,7 +10638,7 @@ bool OnLoopTop(const Core::CPUThreadGuard& guard)
       case MatchStart::Error:
         return false;
       case MatchStart::Stopped:
-        Spin(ppc);
+        Spin();
         return true;
       case MatchStart::Done:
         break;
@@ -10796,7 +10784,7 @@ bool OnLoopTop(const Core::CPUThreadGuard& guard)
       ERROR_LOG_FMT(BRAWLBACK, "gprb: {}", s.error);
       EndRunning(system, s.error);
       s.phase = Phase::Error;
-      SetLoopDefault(ppc);
+      SetLoopDefault();
       return true;
     }
     // Host: every port's countdown buttons, fixed once every player still in the session has
@@ -10874,7 +10862,7 @@ bool OnLoopTop(const Core::CPUThreadGuard& guard)
       PadsSetCurrent(0xF, CountdownSlots());
       PadsOnLoopTop(system);
       INFO_LOG_FMT(BRAWLBACK, "gprb: barrier passed, countdown until game frame {}", StartFrame());
-      SetLoopDefault(ppc);
+      SetLoopDefault();
       return true;
     }
     if (Clock::now() - s.barrier_since > std::chrono::seconds(60))
@@ -10882,12 +10870,12 @@ bool OnLoopTop(const Core::CPUThreadGuard& guard)
       s.error = "barrier timed out";
       EndRunning(system, s.error);
       s.phase = Phase::Error;
-      SetLoopDefault(ppc);
+      SetLoopDefault();
       return true;
     }
     if (!CpuRunning(system))
     {
-      Spin(ppc);
+      Spin();
       return true;
     }
     LogWait("at the barrier", s.barrier_since);
@@ -10905,11 +10893,10 @@ bool OnFrameEnd(const Core::CPUThreadGuard& guard)
     return false;
   s.cpu_where = "frameend";
   auto& system = guard.GetSystem();
-  auto& ppc = system.GetPPCState();
+  auto& engine = BrawlOnline::GetEngine();
   // The replaced instruction: stw r0,0x100(r23).
-  PowerPC::MMU::HostWrite<u32>(guard, ppc.gpr[0], ppc.gpr[23] + 0x100);
-  ppc.npc = FRAME_END + 4;
-  FrameTraceOnFrameEnd(system, ppc.gpr[24], s.resim_pass);
+  engine.FinishFrameEnd();
+  FrameTraceOnFrameEnd(system, engine.Gpr(24), s.resim_pass);
   CpuTraceOnFrameEnd(system);
   std::lock_guard<std::recursive_timed_mutex> lk(s.mutex);
   const int i = s.iteration;
@@ -10927,7 +10914,6 @@ bool OnLoopEnd(const Core::CPUThreadGuard& guard)
 {
   if (s.phase != Phase::Running)
     return false;
-  auto& ppc = guard.GetSystem().GetPPCState();
   std::lock_guard<std::recursive_timed_mutex> lk(s.mutex);
   if (s.spinning)
   {
@@ -10939,7 +10925,7 @@ bool OnLoopEnd(const Core::CPUThreadGuard& guard)
     if (s.iteration >= s.ops.adv_count)
       s.iteration = 0;
   }
-  ppc.npc = LOOP_TOP;
+  BrawlOnline::GetEngine().BackToLoopTop();
   return true;
 }
 
@@ -11147,33 +11133,14 @@ void CommitSoundPass()
   s.snd_tag[slot] = s.snd_frame;
 }
 
-void SaveGuestRegs(const PowerPC::PowerPCState& ppc, State::GuestRegs* out)
+void SaveGuestRegs(State::GuestRegs* out)
 {
-  std::copy(std::begin(ppc.gpr), std::end(ppc.gpr), out->gpr.begin());
-  std::copy(std::begin(ppc.ps), std::end(ppc.ps), out->ps.begin());
-  std::copy(std::begin(ppc.cr.fields), std::end(ppc.cr.fields), out->cr.begin());
-  out->fpscr = ppc.fpscr.Hex;
-  out->xer_ca = ppc.xer_ca;
-  out->xer_so_ov = ppc.xer_so_ov;
-  out->xer_stringctrl = ppc.xer_stringctrl;
-  out->lr = ppc.spr[SPR_LR];
-  out->ctr = ppc.spr[SPR_CTR];
+  BrawlOnline::GetEngine().SaveGuestRegs(out);
 }
 
-void RestoreGuestRegs(PowerPC::PowerPCState& ppc, const State::GuestRegs& in)
+void RestoreGuestRegs(const State::GuestRegs& in)
 {
-  std::copy(in.gpr.begin(), in.gpr.end(), std::begin(ppc.gpr));
-  std::copy(in.ps.begin(), in.ps.end(), std::begin(ppc.ps));
-  std::copy(in.cr.begin(), in.cr.end(), std::begin(ppc.cr.fields));
-  const bool rounding_changed = ppc.fpscr.Hex != in.fpscr;
-  ppc.fpscr.Hex = in.fpscr;
-  if (rounding_changed)
-    PowerPC::RoundingModeUpdated(ppc);
-  ppc.xer_ca = in.xer_ca;
-  ppc.xer_so_ov = in.xer_so_ov;
-  ppc.xer_stringctrl = in.xer_stringctrl;
-  ppc.spr[SPR_LR] = in.lr;
-  ppc.spr[SPR_CTR] = in.ctr;
+  BrawlOnline::GetEngine().RestoreGuestRegs(in);
 }
 
 // Mid-match file loads (gfFileIOManager): a Zelda/Sheik transformation reads the other form's
@@ -11283,7 +11250,6 @@ bool LoadWaitUnthrottled()
 
 bool RunIoWait(const Core::CPUThreadGuard& guard)
 {
-  auto& ppc = guard.GetSystem().GetPPCState();
   const u32 file_io = FileIoPending(guard);
   const u32 strm = s.strm_wait_off ? 0 : StreamPreparePending(guard);
   const u32 sound = SoundLoadPending(guard) + strm;
@@ -11293,7 +11259,7 @@ bool RunIoWait(const Core::CPUThreadGuard& guard)
     s.io_wait_strm = strm != 0;
     if (!s.io_wait_active)
     {
-      SaveGuestRegs(ppc, &s.io_saved);
+      SaveGuestRegs(&s.io_saved);
       s.io_wait_active = true;
       s.io_wait_update = true;
       s.io_wait_n = 0;
@@ -11302,15 +11268,14 @@ bool RunIoWait(const Core::CPUThreadGuard& guard)
       if (LoadWaitUnthrottled())
         guard.GetSystem().GetCoreTiming().SetRollbackLoadWait(true);
     }
-    ppc.spr[SPR_LR] = LOOP_TOP;
     if (s.io_wait_update)
     {
-      ppc.gpr[3] = ReadGuest(guard, FILE_IO_MANAGER_PTR);
-      ppc.npc = FILE_IO_UPDATE;
+      BrawlOnline::GetEngine().CallFromLoopTop(FILE_IO_UPDATE,
+                                               {ReadGuest(guard, FILE_IO_MANAGER_PTR)});
     }
     else
     {
-      ppc.npc = VI_WAIT_FOR_RETRACE;
+      BrawlOnline::GetEngine().CallFromLoopTop(VI_WAIT_FOR_RETRACE, {});
       ++s.io_wait_n;
       ++s.io_wait_retraces;
     }
@@ -11328,7 +11293,7 @@ bool RunIoWait(const Core::CPUThreadGuard& guard)
                    s.io_wait_n, s.io_wait_strm ? " (a music stream: no more waits for it)" : "");
       s.strm_wait_off = s.strm_wait_off || s.io_wait_strm;
     }
-    RestoreGuestRegs(ppc, s.io_saved);
+    RestoreGuestRegs(s.io_saved);
     guard.GetSystem().GetCoreTiming().SetRollbackLoadWait(false);
     const double ms =
         std::chrono::duration<double, std::milli>(Clock::now() - s.io_wait_t0).count();
@@ -11361,7 +11326,6 @@ constexpr u32 FT_ENTRY_SIZE = 0x244;
 
 bool RunForceFinal(const Core::CPUThreadGuard& guard)
 {
-  auto& ppc = guard.GetSystem().GetPPCState();
   if (!s.force_final_inited)
   {
     const char* ff = std::getenv("PPR_GPRB_FORCE_FINAL");
@@ -11370,7 +11334,7 @@ bool RunForceFinal(const Core::CPUThreadGuard& guard)
   }
   if (s.force_final_active && s.force_final_todo == 0)
   {
-    RestoreGuestRegs(ppc, s.force_final_saved);
+    RestoreGuestRegs(s.force_final_saved);
     s.force_final_active = false;
     return false;
   }
@@ -11398,20 +11362,16 @@ bool RunForceFinal(const Core::CPUThreadGuard& guard)
       continue;
     if (!s.force_final_active)
     {
-      SaveGuestRegs(ppc, &s.force_final_saved);
+      SaveGuestRegs(&s.force_final_saved);
       s.force_final_active = true;
     }
     INFO_LOG_FMT(BRAWLBACK, "gprb: force final: port {} entry {:#x}", port, entry_id);
-    ppc.gpr[3] = FT_MANAGER;
-    ppc.gpr[4] = entry_id;
-    ppc.gpr[5] = 0;
-    ppc.spr[SPR_LR] = LOOP_TOP;
-    ppc.npc = FT_MANAGER_SET_FINAL;
+    BrawlOnline::GetEngine().CallFromLoopTop(FT_MANAGER_SET_FINAL, {FT_MANAGER, entry_id, 0});
     return true;
   }
   if (s.force_final_active)
   {
-    RestoreGuestRegs(ppc, s.force_final_saved);
+    RestoreGuestRegs(s.force_final_saved);
     s.force_final_active = false;
   }
   return false;
@@ -11425,7 +11385,6 @@ bool RunForceFinal(const Core::CPUThreadGuard& guard)
 // calling.
 bool RunForceFinalAt(const Core::CPUThreadGuard& guard, s64 frame, bool first_run)
 {
-  auto& ppc = guard.GetSystem().GetPPCState();
   for (const auto& e : s.force_final_at)
   {
     if (e.frame != frame || (e.first_only && !first_run))
@@ -11448,13 +11407,9 @@ bool RunForceFinalAt(const Core::CPUThreadGuard& guard, s64 frame, bool first_ru
       return false;
     INFO_LOG_FMT(BRAWLBACK, "gprb: force final at session frame {} ({} run): port {} entry {:#x}",
                  frame, first_run ? "first" : "a later", e.port, entry_id);
-    SaveGuestRegs(ppc, &s.force_final_at_saved);
+    SaveGuestRegs(&s.force_final_at_saved);
     s.force_final_at_active = true;
-    ppc.gpr[3] = FT_MANAGER;
-    ppc.gpr[4] = entry_id;
-    ppc.gpr[5] = 0;
-    ppc.spr[SPR_LR] = LOOP_TOP;
-    ppc.npc = FT_MANAGER_SET_FINAL;
+    BrawlOnline::GetEngine().CallFromLoopTop(FT_MANAGER_SET_FINAL, {FT_MANAGER, entry_id, 0});
     return true;
   }
   return false;
@@ -11466,10 +11421,9 @@ bool RunForceFinalAt(const Core::CPUThreadGuard& guard, s64 frame, bool first_ru
 // must not do anything else).
 bool RunSoundStops(const Core::CPUThreadGuard& guard)
 {
-  auto& ppc = guard.GetSystem().GetPPCState();
   if (s.gcall_active)
   {
-    RestoreGuestRegs(ppc, s.gcall_saved);
+    RestoreGuestRegs(s.gcall_saved);
     s.gcall_active = false;
   }
   while (!s.snd_to_stop.empty())
@@ -11492,11 +11446,8 @@ bool RunSoundStops(const Core::CPUThreadGuard& guard)
     const u32 stop = ReadGuest(guard, ReadGuest(guard, e.sound) + SND_VT_STOP);
     if (!PowerPC::MMU::HostIsRAMAddress(guard, stop))
       continue;
-    SaveGuestRegs(ppc, &s.gcall_saved);
-    ppc.gpr[3] = e.sound;
-    ppc.gpr[4] = SND_STOP_FADE_FRAMES;
-    ppc.spr[SPR_LR] = LOOP_TOP;
-    ppc.npc = stop;
+    SaveGuestRegs(&s.gcall_saved);
+    BrawlOnline::GetEngine().CallFromLoopTop(stop, {e.sound, SND_STOP_FADE_FRAMES});
     s.gcall_active = true;
     ++s.sound_stopped;
     return true;
@@ -11556,7 +11507,7 @@ SoundAllocDecision OnSoundAlloc(const Core::CPUThreadGuard& guard, u32 sound_id,
 {
   if (s.phase != Phase::Running)
     return {};
-  s.snd_player = guard.GetSystem().GetPPCState().gpr[27];  // detail_SetupSound's this
+  s.snd_player = BrawlOnline::GetEngine().Gpr(27);  // detail_SetupSound's this
   ++s.sound_allocs;
   if (s.snd_first_run)
     return {};
