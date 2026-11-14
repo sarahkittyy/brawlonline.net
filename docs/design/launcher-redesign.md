@@ -1,6 +1,6 @@
 # Launcher redesign (mockups)
 
-_2026-11-14. Sarah's board card: the launcher grew from Slippi's one feature at a time and is cluttered ("things are in weird spots, Other Games is kinda buried"). Keep what she likes: the choosable colour, P+'s colours, the Friends tab, the icons, the profiles. Mockups only, nothing built._
+_2026-11-14. Sarah's board card: the launcher grew from Slippi's one feature at a time and is cluttered ("things are in weird spots, Other Games is kinda buried"). Keep what she likes: the choosable colour, P+'s colours, the Friends tab, the icons, the profiles. Three rounds of mockups (§3, §7, §8), then built (§9): "go ahead and implement all of this"._
 
 Mockups: `run/design/redesign/` (gitignored). `index.html?s=<screen>&c=<hex>` holds every screen, and `render.sh` renders them with headless Edge at 1264x711, Sarah's window size. The PNGs are in `out/`; screenshots of the launcher as it is today (v0.1.140) are in `before/`. The page reads its fonts, menu frames, stock icons and stage pictures from the local extraction cache (`%APPDATA%\Brawl Online\game-assets\theme`), rank emblems from `components/rank_badge/images`, and flags from `flag-icons`, so nothing is copied. Any theme colour renders with `-c <hex>` (`-c f65098` is Sarah's pink).
 
@@ -173,3 +173,25 @@ Sarah: "i love love love the design", with these notes. What changed:
     2. **the name's first letter in a grey circle** (drawn on every no-disc screen);
     3. the jdenticon the launcher already makes from the uid (`lib/display_picture.ts`, today only in the account switcher);
     4. the player's own rank emblem in the picture's place (only for the player's own card; it's the only one we have for everyone, and unranked players have none).
+
+## 9. Built (2026-11-14)
+
+Sarah picked variant A (Play buttons stacked on the right) and the dashed Fox outline for a player without a stock icon (what the launcher already draws). Everything in §7 and §8 is built:
+
+| Part | Where |
+|---|---|
+| The data contract (8e46e17e) | `RoomList.queueEta`, `PublicRoom.mains`, `LivePlayer.rank`, `SocialState.queue` (`QueueState`), `friendsLeaderboard`, `matchHistory({opponent})` |
+| Sidebar, players rail, queue box | `app/shell/` (`sidebar.tsx`, `players_rail.tsx`, `queue_box.tsx`, `nav_badges.tsx`); `app.tsx` lays out sidebar / page / rail |
+| The selected page's frame | `styles/game_theme.tsx`: a `selected` frame from the extracted `buttonSelected` texture, tinted like `buttonHover`; `:root[data-game-frames]` says the theme has frames |
+| Play | `pages/play/` (the page, the ranked card, `ruleset_chip.tsx`); `play_buttons_view.tsx` stacked with ETAs; `public_rooms_view.tsx` as a section with a one-line bar |
+| Other Games | `pages/home/mods/mods_view.tsx`: one column; the room panel's slot cards; no Public switch per game (`MODS_HOST_PUBLIC` remembers the room's) |
+| Spectate | `spectate_view.tsx`: the top game (`pickFeatured`, `showFeatured`), stage pictures in rows |
+| Replays | `replay_browser.tsx`: the folder dropdown (`FolderSelect`), folder buttons in the footer |
+| Leaderboard | All / Friends, the player's own row pinned |
+| Profile page | `pages/profile/profile_page.tsx` at `/main/profile/<uid>`; `ProfileNavigator` turns every `useProfileView().open` into it; the old `/main/matches` leads to the player's own |
+
+Old addresses: `/main/home/*` redirect to `/main/play`, `/main/spectate` and `/main/other-games`. Removed: the header, Home's tabs and overview, the Rating widget (its Refresh and Hide ranking are on the ranked card, on hover).
+
+Not done:
+- the queue box can't bring the game's window forward (there is no call for it);
+- Highlights keeps its own left list of filters.
