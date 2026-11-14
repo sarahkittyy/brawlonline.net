@@ -1,6 +1,7 @@
 import React from "react";
 import { Navigate, Outlet, Route, Routes, useLocation, useNavigate, useParams } from "react-router-dom";
 
+import { CreateAppMessages } from "@/app/create.messages";
 import { useReplayBrowserList, useReplayBrowserNavigation } from "@/lib/hooks/use_replay_browser_list";
 import { useReplayPresenter, useReplays } from "@/lib/hooks/use_replays";
 import { useSettings } from "@/lib/hooks/use_settings";
@@ -48,8 +49,9 @@ const ReplaysTabs = () => {
   const current = REPLAY_TABS.find((tab) => pathname.endsWith(`/replays/${tab}`)) ?? "list";
   return (
     <div style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0, minWidth: 0 }}>
-      {/* (A gap below, so the tab's underline doesn't meet the folder list's selected row.) */}
-      <div style={{ paddingBottom: 6 }}>
+      {/* The page's name over its tabs (docs/design/launcher-redesign.md §7). */}
+      <div style={{ padding: "20px 28px 6px" }}>
+        <h1 style={{ margin: "0 0 6px", fontSize: 28, whiteSpace: "nowrap" }}>{CreateAppMessages.replays()}</h1>
         <Tabs
           value={current}
           onChange={(tab) => navigate(`/main/replays/${tab}`)}

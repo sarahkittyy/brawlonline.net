@@ -5,11 +5,12 @@ import SearchIcon from "@mui/icons-material/Search";
 import Button from "@mui/material/Button";
 import CircularProgress from "@mui/material/CircularProgress";
 import IconButton from "@mui/material/IconButton";
-import List from "@mui/material/List";
+import MenuItem from "@mui/material/MenuItem";
+import Select from "@mui/material/Select";
 import Tooltip from "@mui/material/Tooltip";
+import type { FolderResult } from "@replays/types";
 import React from "react";
 
-import { DualPane } from "@/components/dual_pane";
 import { BasicFooter } from "@/components/footer/footer";
 import { LabelledText } from "@/components/labelled_text";
 import { IconMessage } from "@/components/message";
@@ -24,7 +25,6 @@ import { useServices } from "@/services";
 import { FileList } from "./file_list/file_list";
 import { FileListSkeleton } from "./file_list/file_list_skeleton";
 import { FilterToolbar } from "./filter_toolbar/filter_toolbar";
-import { FolderTreeNode } from "./folder_tree_node";
 import { useFollowReplayList, usePlayFromReplayList } from "./play_from_list";
 import { ReplayBrowserMessages as Messages } from "./replay_browser.messages";
 
@@ -51,7 +51,6 @@ export const ReplayBrowser = React.memo(() => {
 
   const currentFolder = useReplays((store) => store.currentFolder);
   const folderTree = useReplays((store) => store.folderTree);
-  const collapsedFolders = useReplays((store) => store.collapsedFolders);
   const totalFilesInFolder = useReplays((store) => store.totalFilesInFolder);
 
   const showLoading = useDelayedLoading(loading, 300, 500);
@@ -128,68 +127,53 @@ export const ReplayBrowser = React.memo(() => {
           overflow: "hidden",
         }}
       >
-        <DualPane
-          id="replay-browser"
-          resizable={true}
-          minWidth={0}
-          maxWidth={300}
-          leftStyle={{ backgroundColor: "rgba(0,0,0, 0.3)" }}
-          leftSide={
-            // The folders scroll; the folder buttons stay at the foot, as on Highlights.
-            <div style={{ display: "flex", flexDirection: "column", flex: 1, minWidth: 0, minHeight: 0 }}>
-              <List dense={true} style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: 0 }}>
-                <div style={{ position: "relative", minHeight: "100%" }}>
-                  {folderTree.map((folder) => {
-                    return (
-                      <FolderTreeNode
-                        folder={folder}
-                        key={folder.fullPath}
-                        collapsedFolders={collapsedFolders}
-                        onClick={onFolderTreeNodeClick}
-                        onToggle={(folder) => presenter.toggleFolder(folder)}
-                      />
-                    );
-                  })}
-                </div>
-              </List>
-              <FolderButtons />
-            </div>
-          }
-          rightSide={
-            <div
-              css={css`
-                display: flex;
-                flex-direction: column;
-                flex: 1;
-              `}
-            >
+        {/* One column (docs/design/launcher-redesign.md §7): the folders are a dropdown before the filters. */}
+        <div
+          css={css`
+            display: flex;
+            flex-direction: column;
+            flex: 1;
+            min-width: 0;
+          `}
+        >
+          <div
+            css={css`
+              display: flex;
+              align-items: center;
+              gap: 8px;
+              min-width: 0;
+              padding-left: 28px;
+            `}
+          >
+            <FolderSelect folders={folderTree} value={currentFolder} onChange={(path) => onFolderTreeNodeClick(path)} />
+            <div style={{ flex: 1, minWidth: 0 }}>
               <FilterToolbar ref={searchInputRef} />
-              {showLoading ? (
-                <FileListSkeleton />
-              ) : filteredFiles.length === 0 ? (
-                <EmptyFolder
-                  onClearFilter={() => {
-                    if (searchInputRef.current) {
-                      searchInputRef.current.value = "";
-                    }
-                    resetFilter();
-                  }}
-                />
-              ) : (
-                <FileList
-                  folderPath={currentFolder}
-                  onDelete={onDeleteRow}
-                  onSelect={onSelectRow}
-                  onPlay={onPlayRow}
-                  files={filteredFiles}
-                  onLoadMore={handleLoadMore}
-                  loadingMore={loadingMore}
-                  hasMoreReplays={hasMoreReplays}
-                />
-              )}
             </div>
-          }
-        />
+          </div>
+          {showLoading ? (
+            <FileListSkeleton />
+          ) : filteredFiles.length === 0 ? (
+            <EmptyFolder
+              onClearFilter={() => {
+                if (searchInputRef.current) {
+                  searchInputRef.current.value = "";
+                }
+                resetFilter();
+              }}
+            />
+          ) : (
+            <FileList
+              folderPath={currentFolder}
+              onDelete={onDeleteRow}
+              onSelect={onSelectRow}
+              onPlay={onPlayRow}
+              files={filteredFiles}
+              onLoadMore={handleLoadMore}
+              loadingMore={loadingMore}
+              hasMoreReplays={hasMoreReplays}
+            />
+          )}
+        </div>
       </div>
 
       <Footer>
@@ -218,6 +202,9 @@ export const ReplayBrowser = React.memo(() => {
           >
             {currentFolder}
           </LabelledText>
+          <div style={{ marginLeft: 16 }}>
+            <FolderButtons />
+          </div>
         </div>
         <div
           css={css`
@@ -284,3 +271,47 @@ const Outer = styled.div`
 const Footer = styled(BasicFooter)`
   justify-content: space-between;
 `;
+
+/** The replay folders as a dropdown (each a level deeper indented), in place of the folder tree's column. */
+const FolderSelect = ({
+  folders,
+  value,
+  onChange,
+}: {
+  folders: readonly FolderResult[];
+  value: string;
+  onChange: (path: string) => void;
+}) => {
+  const flat: Array<{ folder: FolderResult; depth: number }> = [];
+  const walk = (list: readonly FolderResult[], depth: number) => {
+    for (const f of list) {
+      flat.push({ folder: f, depth });
+      walk(f.subdirectories, depth + 1);
+    }
+  };
+  walk(folders, 0);
+  if (flat.length === 0) {
+    return null;
+  }
+  return (
+    <Select
+      size="small"
+      value={flat.some((f) => f.folder.fullPath === value) ? value : ""}
+      onChange={(e) => onChange(e.target.value)}
+      renderValue={(v) => (
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+          <FolderIcon fontSize="small" style={{ color: "var(--text-dim)" }} />
+          {flat.find((f) => f.folder.fullPath === v)?.folder.name ?? ""}
+        </span>
+      )}
+      sx={{ minWidth: 150, maxWidth: 220, height: 34, flexShrink: 0 }}
+      inputProps={{ "data-testid": "replay-folder" }}
+    >
+      {flat.map(({ folder, depth }) => (
+        <MenuItem key={folder.fullPath} value={folder.fullPath} sx={{ paddingLeft: `${16 + depth * 16}px` }}>
+          {folder.name}
+        </MenuItem>
+      ))}
+    </Select>
+  );
+};
