@@ -1,6 +1,6 @@
 # Brawl Online core: one online implementation for Dolphin and EmissaryRecomp (design)
 
-Status: design, 2026-11-13. Not started. The user's request (Sarah's board, 2026-11-13): "we need to get rid of the companion app. i know dolphin and the recomp are both c++(?) so maybe it would make sense to have one submodule that both depend on??? it would also require a lot of tests to make sure nothing at all changed when we modularize it out."
+Status: being built on branch `emissary-recomp` (steps 0, 1 and 2a done, §8). Decisions 2026-11-13 (§7). The user's request (Sarah's board, 2026-11-13): "we need to get rid of the companion app. i know dolphin and the recomp are both c++(?) so maybe it would make sense to have one submodule that both depend on??? it would also require a lot of tests to make sure nothing at all changed when we modularize it out."
 
 ## 1. Today
 
@@ -54,11 +54,17 @@ Its `Engine`: guest memory (`Memory::`), save/load (its snapshot store, now driv
 Every protocol change today is one commit in this monorepo (server + Dolphin + plugin + launcher). That has to stay true, so:
 
 - **The core lives in the monorepo** (`core/` beside `dolphin/`, `server/`, `game-code/`); Dolphin builds it from there with no submodule.
-- **EmissaryRecomp gets it as a submodule** of a small read-only mirror repo (`sarahkittyy/brawl-online-core`), which CI on this repo updates from `core/` (`git subtree split`) on every push to main. The recomp pins a commit; bumping it is the "recomp protocol" update of brawl-recompiled.md §7.4.
+- **EmissaryRecomp fetches only `core/`** at a pinned commit of this repo, in its `build.py` as it fetches its other dependencies: `git clone --filter=blob:none --no-checkout`, `git sparse-checkout set core`, checkout of the pin (a few MB, not the 162 MB repository; a git submodule can only take a whole repository). Bumping the pin is the "recomp protocol" update of brawl-recompiled.md §7.4.
 
 (Alternative: the core as its own repo, a submodule of both. Simpler mechanics, but every protocol change becomes two commits in two repos in the right order, which is where Dolphin and the plugin would start drifting.)
 
 ## 4. Proving nothing changed
+
+**Machine code, for the moves.** A step that only moves files (and repoints includes) is checked by the instructions themselves: each moved file's object in `brawl_online_core` against the object it had in Dolphin's `core` target, disassembled (`dumpbin /disasm`) and compared function by function (`E:\emissary\scripts\fn_compare.py` for now; anonymous-namespace path hashes and string-constant names are normalised, the latter differing only by the log macros' `__FILE__`). For that the core is compiled exactly as Dolphin's own code: added from `dolphin/Source/CMakeLists.txt` (Dolphin's Source-level definitions) with Dolphin's precompiled header. Steps 1 and 2a: 592 of 592 functions identical.
+
+**The same header names, not a new interface, for Dolphin's helpers.** The moved code keeps including Dolphin's `Common/...` headers (files, timers, ENet, HTTP, UPnP, random, logging, settings). In Dolphin's tree those are Dolphin's headers, so the moves change no instruction; EmissaryRecomp provides headers of the same names with its own implementations (kalomaze's `gekkonet_compat/Common/Logging/Log.h` already does this for GekkoNet). A `Services` interface (§2) would have changed every call site, and so every function, before the recomp needs any of it. `Engine` (guest memory, save/load, the frame hooks) is still a real interface: Dolphin's emulator headers can't be stood in for.
+
+The other checks:
 
 The extraction is a refactor: Dolphin must behave byte for byte as before. Before the first step, a baseline is recorded with today's main; after every step it is recorded again and compared.
 
@@ -84,13 +90,27 @@ Each step is a commit that only moves code or puts an interface in front of a ca
 | 4 | Split GameplaySession: the session state machine into `core/session/`, the save/load/advance/re-run hiding into Dolphin's `Engine` | 1-2 weeks | high (the hot path) |
 | 5 | The recomp's `Engine` + `Services`; its rollback loop driven by the core's session; delete the control socket and the companion; crossplay tests (recomp vs Dolphin in staging, every mode) | 1-2 weeks, with kalomaze | medium |
 
-Steps 0-4 change only Dolphin and leave the recomp alone; step 5 is the recomp's.
+Steps 0-4 change only Dolphin and leave the recomp alone; step 5 is the recomp's. (Step 2 became: move the files with their `Common/...` includes as they are, §4; the recomp's same-named headers come with step 5.)
 
-## 6. Branch or main
+## 6. Where the work lands
 
-These files change about twice a day on main (31 commits touching `Online/` or `GameplaySession.cpp` in the last two weeks). A branch that moves them all would conflict with nearly every one of those commits, and resolving a conflict in a moved file means re-applying the change by hand. So the extraction steps (0-4) should land on main one at a time, each verified by §4 and kept short, rather than on `emissary-recomp`; only step 5 (and the launcher's EmissaryRecomp work) belongs on the branch and on kalomaze's PR. **Sarah's call (§7, Q2).**
+Everything is on the `emissary-recomp` branch (based on main, which stays quiet meanwhile, 2026-11-13), and on our own branch on top of kalomaze's PR #2 (`rollback-support`) for the recomp side.
 
-## 7. Questions for Sarah
+## 7. Decisions (2026-11-13)
+
+- Q1: the core stays in the monorepo (`core/`); EmissaryRecomp fetches only that folder at a pinned commit (a sparse, blob-less clone in its `build.py`), no mirror repo and no full submodule.
+- Q2: the work lands on `emissary-recomp`, not main (main stays quiet meanwhile).
+- Q3: the recomp runs the shared session (our input delay, time sync, held buttons, re-run hiding, desync recovery, quit rules, replays, spectating); it keeps its own snapshot store, which is fast. The Python companion, `mmclient` and the control socket go.
+
+## 8. Done
+
+| Step | Commit | Check |
+|---|---|---|
+| 0 | `harness/tools/core_replay_corpus.py` (52b927cc) | a corpus of 50 of Sarah's replays (rooms, 2v2, Direct, Unranked, Ranked) through the baseline build: E:\emissary\core\baseline.jsonl; unit tests 1,612/1,615 (3 failures that predate this work) |
+| 1 | 85085375: PeerData, RoomMessages, MatchRules, SetFormat, ChatText, GameAlive, Timeouts | 172/172 functions identical, same unit test results |
+| 2a | 3d20718e: Ipv6, User, RecentCodes, ChatCrypto, Chat, Matchmaking, Spectate, ReplayFile | 592/592 functions identical (steps 1 + 2a), same unit test results |
+
+The old questions, as asked:
 
 - **Q1, where the core lives:** in the monorepo with a mirror repo for the recomp's submodule (recommended, §3), or its own repo as a submodule of both?
 - **Q2, where the extraction lands:** step by step on main, each step proven unchanged (recommended, §6), or on the `emissary-recomp` branch?
