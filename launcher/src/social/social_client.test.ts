@@ -537,7 +537,10 @@ describe("social client: friends and the account's ignore list", () => {
     // The game ignores carol: the account follows (the file is looked at every 2 s).
     await writeHidden(dir, [BOB, CAROL]);
     await untilAsync(async () => server.calls.some((c) => c.method === "PUT" && c.path === `/v1/me/ignores/${CAROL}`));
-    await until(() => client.getState().ignored.includes(CAROL));
+    // The account's answer lands in the install's copy, the client's last file write (the state has
+    // carol as soon as the file is seen, before the PUT: waiting for it let teardown race the write).
+    await untilAsync(async () => (await readHiddenFile(dir, syncedHiddenFile(ME)))?.includes(CAROL) === true);
+    expect(client.getState().ignored).toContain(CAROL);
   });
 
   it("with the install's copy, sends only what the game changed since", async () => {
