@@ -14,7 +14,7 @@
 #include "Common/ENet.h"
 #include "Common/Logging/Log.h"
 #include "Common/Timer.h"
-#include "Core/Config/OnlineSettings.h"
+#include "BrawlOnline/Config/OnlineSettings.h"
 
 #ifdef _WIN32
 #include <winsock2.h>

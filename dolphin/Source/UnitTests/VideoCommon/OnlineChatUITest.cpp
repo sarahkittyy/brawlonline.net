@@ -19,7 +19,7 @@
 #include "Common/Config/Config.h"
 #include "Common/Config/Layer.h"
 #include "Common/FileUtil.h"
-#include "Core/Config/OnlineSettings.h"
+#include "BrawlOnline/Config/OnlineSettings.h"
 #include "BrawlOnline/Online/Chat.h"
 #include "BrawlOnline/Online/ChatCrypto.h"
 #include "Core/Online/Rooms.h"

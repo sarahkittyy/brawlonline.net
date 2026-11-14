@@ -35,8 +35,6 @@ add_library(core
   Config/MainSettings.h
   Config/NetplaySettings.cpp
   Config/NetplaySettings.h
-  Config/OnlineSettings.cpp
-  Config/OnlineSettings.h
   Config/SessionSettings.cpp
   Config/SessionSettings.h
   Config/SYSCONFSettings.cpp
@@ -592,12 +590,6 @@ add_library(core
   Online/SpecialAssets.h
   Online/NetPlaySession.cpp
   Online/NetPlaySession.h
-  Online/OnlineClient.cpp
-  Online/OnlineClient.h
-  Online/OnlineSession.cpp
-  Online/OnlineSession.h
-  Online/Ranked.cpp
-  Online/Ranked.h
   Online/ModsRoom.cpp
   Online/ModsRoom.h
   Online/Rooms.cpp

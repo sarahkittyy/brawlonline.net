@@ -30,7 +30,7 @@
 #include "Common/Timer.h"
 #include "BrawlOnline/Online/ChatCrypto.h"
 #include "BrawlOnline/Online/ChatText.h"
-#include "Core/Online/OnlineClient.h"
+#include "BrawlOnline/Online/OnlineClient.h"
 #include "BrawlOnline/Online/User.h"
 #include "BrawlOnline/Rollback/PeerData.h"
 

@@ -24,7 +24,7 @@
 #include "Core/Rollback/ReplayPlayback.h"
 #include "Core/Host.h"
 #include "Core/Online/ModsRoom.h"
-#include "Core/Online/OnlineSession.h"
+#include "BrawlOnline/Online/OnlineSession.h"
 #include "Core/Rollback/GameplayOnlineBackend.h"
 #include "Core/System.h"
 

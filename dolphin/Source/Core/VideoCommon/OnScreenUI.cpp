@@ -16,7 +16,7 @@
 #include "Core/Config/GraphicsSettings.h"
 #include "Core/Config/MainSettings.h"
 #include "Core/Config/NetplaySettings.h"
-#include "Core/Config/OnlineSettings.h"
+#include "BrawlOnline/Config/OnlineSettings.h"
 #include "Core/Movie.h"
 #include "Core/System.h"
 #include "InputCommon/GCAdapter.h"

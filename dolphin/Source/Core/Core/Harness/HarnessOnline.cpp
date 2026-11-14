@@ -11,7 +11,7 @@
 
 #include "Common/Logging/Log.h"
 #include "Core/Harness/HarnessInternal.h"
-#include "Core/Online/OnlineSession.h"
+#include "BrawlOnline/Online/OnlineSession.h"
 
 namespace Harness::Internal
 {

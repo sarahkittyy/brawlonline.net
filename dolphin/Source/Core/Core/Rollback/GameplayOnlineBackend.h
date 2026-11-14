@@ -11,7 +11,7 @@
 #include <optional>
 #include <string>
 
-#include "Core/Online/OnlineSession.h"
+#include "BrawlOnline/Online/OnlineSession.h"
 
 namespace Gprb
 {

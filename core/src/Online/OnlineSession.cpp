@@ -1,7 +1,7 @@
 // Copyright 2026 Dolphin Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-#include "Core/Online/OnlineSession.h"
+#include "BrawlOnline/Online/OnlineSession.h"
 
 #include <chrono>
 #include <map>
@@ -13,7 +13,7 @@
 
 #include "Common/Config/Config.h"
 #include "Common/Logging/Log.h"
-#include "Core/Config/OnlineSettings.h"
+#include "BrawlOnline/Config/OnlineSettings.h"
 
 namespace Online
 {

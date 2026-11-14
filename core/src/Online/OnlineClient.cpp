@@ -1,7 +1,7 @@
 // Copyright 2026 Dolphin Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-#include "Core/Online/OnlineClient.h"
+#include "BrawlOnline/Online/OnlineClient.h"
 
 #include <atomic>
 #include <chrono>
@@ -19,10 +19,10 @@
 #include "Common/FileUtil.h"
 #include "Common/Logging/Log.h"
 #include "Common/UPnP.h"
-#include "Core/Config/OnlineSettings.h"
+#include "BrawlOnline/Config/OnlineSettings.h"
 #include "Core/Core.h"
-#include "Core/Online/OnlineSession.h"
-#include "Core/Online/Ranked.h"
+#include "BrawlOnline/Online/OnlineSession.h"
+#include "BrawlOnline/Online/Ranked.h"
 #include "Core/Online/Rooms.h"
 #include "BrawlOnline/Online/User.h"
 

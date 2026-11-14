@@ -4,35 +4,43 @@
 
 add_library(brawl_online_core STATIC
   include/BrawlOnline/CommonTypes.h
+  include/BrawlOnline/Config/OnlineSettings.h
   include/BrawlOnline/Online/Chat.h
   include/BrawlOnline/Online/ChatCrypto.h
   include/BrawlOnline/Online/ChatText.h
-  include/BrawlOnline/Online/Ipv6.h
-  include/BrawlOnline/Online/Matchmaking.h
-  include/BrawlOnline/Online/RecentCodes.h
-  include/BrawlOnline/Online/Spectate.h
-  include/BrawlOnline/Online/User.h
-  include/BrawlOnline/Rollback/ReplayFile.h
   include/BrawlOnline/Online/GameAlive.h
+  include/BrawlOnline/Online/Ipv6.h
   include/BrawlOnline/Online/MatchRules.h
+  include/BrawlOnline/Online/Matchmaking.h
+  include/BrawlOnline/Online/OnlineClient.h
+  include/BrawlOnline/Online/OnlineSession.h
+  include/BrawlOnline/Online/Ranked.h
+  include/BrawlOnline/Online/RecentCodes.h
   include/BrawlOnline/Online/RoomMessages.h
   include/BrawlOnline/Online/SetFormat.h
+  include/BrawlOnline/Online/Spectate.h
   include/BrawlOnline/Online/Timeouts.h
+  include/BrawlOnline/Online/User.h
   include/BrawlOnline/Rollback/PeerData.h
+  include/BrawlOnline/Rollback/ReplayFile.h
+  src/Config/OnlineSettings.cpp
   src/Online/Chat.cpp
   src/Online/ChatCrypto.cpp
   src/Online/ChatText.cpp
-  src/Online/Ipv6.cpp
-  src/Online/Matchmaking.cpp
-  src/Online/RecentCodes.cpp
-  src/Online/Spectate.cpp
-  src/Online/User.cpp
-  src/Rollback/ReplayFile.cpp
   src/Online/GameAlive.cpp
+  src/Online/Ipv6.cpp
   src/Online/MatchRules.cpp
+  src/Online/Matchmaking.cpp
+  src/Online/OnlineClient.cpp
+  src/Online/OnlineSession.cpp
+  src/Online/Ranked.cpp
+  src/Online/RecentCodes.cpp
   src/Online/RoomMessages.cpp
   src/Online/SetFormat.cpp
+  src/Online/Spectate.cpp
+  src/Online/User.cpp
   src/Rollback/PeerData.cpp
+  src/Rollback/ReplayFile.cpp
 )
 target_include_directories(brawl_online_core PUBLIC include)
 target_compile_features(brawl_online_core PUBLIC cxx_std_20)

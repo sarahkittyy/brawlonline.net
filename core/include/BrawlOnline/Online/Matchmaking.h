@@ -34,8 +34,8 @@
 #include <picojson.h>
 
 #include "Common/CommonTypes.h"
-#include "Core/Config/OnlineSettings.h"
-#include "Core/Online/OnlineSession.h"
+#include "BrawlOnline/Config/OnlineSettings.h"
+#include "BrawlOnline/Online/OnlineSession.h"
 
 namespace Online
 {

@@ -15,7 +15,7 @@
 #include "Common/Common.h"
 #include "Common/CommonTypes.h"
 
-#include "Core/Config/OnlineSettings.h"
+#include "BrawlOnline/Config/OnlineSettings.h"
 
 #include "InputCommon/ControlReference/ControlReference.h"
 #include "InputCommon/ControllerEmu/Control/Control.h"

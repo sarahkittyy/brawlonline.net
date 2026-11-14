@@ -11,7 +11,7 @@
 
 #include "Common/HookableEvent.h"
 #include "Common/Logging/Log.h"
-#include "Core/Config/OnlineSettings.h"
+#include "BrawlOnline/Config/OnlineSettings.h"
 #include "Core/Core.h"
 #include "Core/Rollback/GameplaySession.h"
 

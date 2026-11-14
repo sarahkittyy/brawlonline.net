@@ -24,7 +24,7 @@
 #include "Common/Thread.h"
 #include "Common/Timer.h"
 #include "Common/UPnP.h"
-#include "Core/Config/OnlineSettings.h"
+#include "BrawlOnline/Config/OnlineSettings.h"
 #include "BrawlOnline/Online/Ipv6.h"
 #include "BrawlOnline/Online/Timeouts.h"
 #include "BrawlOnline/Online/User.h"
