@@ -12,6 +12,7 @@
 /* Stays at the top as the rows scroll under it: the page's own colour over them, a line under it. */
 .header {
   position: sticky;
+  container-type: inline-size;
   top: 0;
   z-index: 2;
   display: flex;
@@ -53,6 +54,22 @@
 .list {
   display: flex;
   flex-direction: column;
+  container-type: inline-size;
+}
+
+/* A narrow list (the smallest window with the players' rail open): no stage picture, so the players keep their
+   names whole; the stage's name stays on the second line. */
+@container (max-width: 520px) {
+  .row.withStage {
+    grid-template-areas:
+      "players"
+      "meta";
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .row.withStage .stageIcon {
+    display: none;
+  }
 }
 
 .renderBar {
@@ -223,7 +240,7 @@
   align-items: center;
   gap: 4px 12px;
   min-width: 0;
-  padding: 8px 112px 8px 12px;
+  padding: 8px 84px 8px 12px;
   border: none;
   border-radius: 8px;
   background: none;
@@ -241,7 +258,7 @@
 }
 
 .removable .row {
-  padding-right: 148px;
+  padding-right: 116px;
 }
 
 .row:focus-visible {
@@ -305,7 +322,8 @@
 
 .side {
   display: flex;
-  gap: 10px;
+  flex-wrap: wrap;
+  gap: 6px 10px;
 }
 
 .vs {
@@ -317,25 +335,11 @@
   grid-area: players;
 }
 
-/* X vs Y keeps to its line: the names shorten (ellipsis) rather than "vs" and Y going under X.
-   (A grid: the sides grow alike up to their names' widths, so only a name too long for its half shortens.) */
-.who.oneLine {
-  display: grid;
-  grid-template-columns: minmax(0, max-content) auto minmax(0, max-content);
-  justify-content: start;
-}
-
-.oneLine .side,
-.oneLine .chip,
-.oneLine .name {
-  min-width: 0;
-}
-
-.oneLine .vs,
-.oneLine .charIcon,
-.oneLine .pips,
-.oneLine .stockCount {
-  flex: none;
+/* "vs" and the side after it stay together (Sides). */
+.versus {
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
 
 /* A player: their character, name and stocks; the port's colour is in the stocks (no outlined pill). */

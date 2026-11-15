@@ -88,3 +88,20 @@
   font-size: 12px;
   color: var(--text-dim);
 }
+
+/* A narrow toolbar (the smallest window with the players' rail open): the category is its icon, its name in the
+   menu, so the search and the sort keep their room. */
+@container (max-width: 600px) {
+  .viewSelect {
+    width: auto;
+  }
+
+  .viewName {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+}

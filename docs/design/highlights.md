@@ -463,7 +463,7 @@ The page now:
 ```
   The stage select's icon leads (rows of many games; a replay's own page has none). Line 1 the
   players: character, name, stocks as pips in the port's colour (the colour lives there; no
-  outline); a 1v1 keeps X vs Y on its line, a name too long for its half shortening. Line 2, dim and
+  outline). Line 2, dim and
   12 px: the stage's name, when in the game it plays as from-to (the old start column, now also
   saying how long; "Starts at ... of the game" on hover), the date. No kind icon or "Clip (0:20)".
 - **Actions** at the right (star, remove for a manual clip, Play) show when the row is pointed at,
@@ -472,7 +472,14 @@ The page now:
 - **Section headings** only in a list of several kinds (All highlights, Favorites), sentence case,
   13 px, dim.
 - **The render bar** shows only with rows selected (a click selects one), with the keys' hint.
+- **The smallest window** (980 px with the players' rail open, ~450 px of list; Sarah's board: names
+  must not be cut off): under 600 px of toolbar the category select is its icon only (the name in
+  the menu); under 520 px of list the rows drop the stage picture (its name stays on line 2). Each
+  later side is "vs" + side kept together, so players that don't fit on one line break before a
+  "vs" ("KoF_comatoast" / "vs sarahkitty"), never inside a name; the 1v1 that shortened names
+  (adaebbd9) is gone. Less room is kept at the right for the hidden buttons (84 px, 116 with
+  remove).
 
 Looked at in a scratch launcher (worktree build, a copy of the profile without the login, Sarah's
-replays) at 1232x723 and 982x723: All highlights, the category menu, Manual Clips, hover and
+replays) at 1232x723, 980x723 and 980x450 (rail open and folded): All highlights, the category menu, Manual Clips, hover and
 selection, a replay's own Highlights tab.

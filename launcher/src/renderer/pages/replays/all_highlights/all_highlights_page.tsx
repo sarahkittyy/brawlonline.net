@@ -265,7 +265,7 @@ export const AllHighlightsPage = React.memo(() => {
         return (
           <span className={styles.viewValue}>
             {v?.icon}
-            {v?.label}
+            <span className={styles.viewName}>{v?.label}</span>
           </span>
         );
       }}

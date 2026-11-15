@@ -426,11 +426,7 @@ export const HighlightRows = ({
                     onDoubleClick={() => void play(i)}
                   >
                     {showDates && <StageThumb stageId={game.stageId} />}
-                    <span
-                      className={`${styles.who} ${styles.rowPlayers} ${
-                        (row.kind === "highlight" ? !game.isTeams : isOneOnOne(game)) ? styles.oneLine : ""
-                      }`}
-                    >
+                    <span className={`${styles.who} ${styles.rowPlayers}`}>
                       {row.kind === "highlight" ? (
                         <HighlightWho row={row} data={game} players={players} stocks={stocks} />
                       ) : (
@@ -581,9 +577,6 @@ const StageName = ({ stageId }: { stageId?: number | null }) => {
   return stage ? <span className={styles.stage}>{stage.name}</span> : null;
 };
 
-/** Two players, no teams: X vs Y, which keeps to one line (the names shorten). */
-const isOneOnOne = (data: ReplayHighlights) => !data.isTeams && data.players.length === 2;
-
 /** Everyone in the game: one vs another; in teams, team vs team. */
 const GameWho = ({ data, stocks }: { data: ReplayHighlights; stocks: Map<number, Stocks> }) => {
   const sides: HighlightPlayer[][] = [];
@@ -596,18 +589,41 @@ const GameWho = ({ data, stocks }: { data: ReplayHighlights; stocks: Map<number,
   } else {
     sides.push(...data.players.map((p) => [p]));
   }
+  return <Sides sides={sides} isTeams={data.isTeams} stocks={stocks} />;
+};
+
+/**
+ * X vs Y: each later side with its "vs" in front, so a line too narrow for them all breaks before a "vs", never
+ * inside a name (Sarah's board: names must not be cut off at the smallest window).
+ */
+const Sides = ({
+  sides,
+  isTeams,
+  stocks,
+}: {
+  sides: (HighlightPlayer | undefined)[][];
+  isTeams: boolean;
+  stocks: Map<number, Stocks>;
+}) => {
+  const side = (players: (HighlightPlayer | undefined)[]) => (
+    <span className={styles.side}>
+      {players.map((p, i) => (
+        <PlayerChip key={p?.port ?? i} player={p} isTeams={isTeams} stocks={p && stocks.get(p.port)} />
+      ))}
+    </span>
+  );
   return (
     <>
-      {sides.map((side, i) => (
-        <React.Fragment key={i}>
-          {i > 0 && <span className={styles.vs}>{Messages.vs()}</span>}
-          <span className={styles.side}>
-            {side.map((p) => (
-              <PlayerChip key={p.port} player={p} isTeams={data.isTeams} stocks={stocks.get(p.port)} />
-            ))}
+      {sides.map((players, i) =>
+        i === 0 ? (
+          <React.Fragment key={i}>{side(players)}</React.Fragment>
+        ) : (
+          <span key={i} className={styles.versus}>
+            <span className={styles.vs}>{Messages.vs()}</span>
+            {side(players)}
           </span>
-        </React.Fragment>
-      ))}
+        ),
+      )}
     </>
   );
 };
@@ -632,21 +648,7 @@ const HighlightWho = ({
     // The player who did it first, then their teammates.
     return [p, ...data.players.filter((q) => q.teamId === p.teamId && q.port !== port)];
   };
-  return (
-    <>
-      <span className={styles.side}>
-        {side(row.attackerPort).map((p, i) => (
-          <PlayerChip key={i} player={p} isTeams={data.isTeams} stocks={p && stocks.get(p.port)} />
-        ))}
-      </span>
-      <span className={styles.vs}>{Messages.vs()}</span>
-      <span className={styles.side}>
-        {side(row.victimPort).map((p, i) => (
-          <PlayerChip key={i} player={p} isTeams={data.isTeams} stocks={p && stocks.get(p.port)} />
-        ))}
-      </span>
-    </>
-  );
+  return <Sides sides={[side(row.attackerPort), side(row.victimPort)]} isTeams={data.isTeams} stocks={stocks} />;
 };
 
 const PlayerChip = ({
