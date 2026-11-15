@@ -129,7 +129,10 @@ use common::proto::{
     Rank, GET_TICKET_RESP,
 };
 use common::ratelimit::{RateLimiter, Window};
-use common::rooms::{decode_room_search_code, HelloResp, MmStatus, QueueCounts, RoomError, RoomRequest};
+use common::rooms::{
+    decode_room_search_code, HelloResp, MmStatus, QueueCounts, QueueMatch, QueueMatchPlayer, QueuePlayer,
+    QueueSearcher, RoomError, RoomRequest,
+};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
@@ -540,6 +543,8 @@ struct ClientBuild {
 #[derive(Debug, Clone)]
 struct Waiting {
     since: Instant,
+    /// `since` on the wall clock (the launcher's queue box, `MmStatus::searching`).
+    started: DateTime<Utc>,
     user: MmUser,
     code: String,
     mode: Mode,
@@ -1032,7 +1037,11 @@ impl Engine {
     /// The snapshot the launcher sees: the online count, the public rooms, the queues and the
     /// players in their matches.
     pub fn status(&self, wall: DateTime<Utc>) -> MmStatus {
+        let members = self.rooms.member_rooms(4000);
         MmStatus {
+            searching: self.searchers(&members),
+            matched: self.queue_matches(),
+            members,
             online: self.online_count(),
             rooms: self.rooms.public_rooms(200),
             queues: QueueCounts { unranked: self.unranked.len(), ranked: self.ranked.len(), twos: self.twos.len() },
@@ -1044,11 +1053,99 @@ impl Engine {
             updated_at: wall.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
             mod_rooms: self.mod_rooms.public_rooms(200),
             mod_room_index: self.mod_rooms.all_rooms(4000),
-            members: self.rooms.member_rooms(4000),
             live: self.live.store().entries(),
             mod_members: self.mod_rooms.member_rooms(4000),
             your_room: None,
+            friend_rooms: self.rooms.friend_rooms(200),
+            queue_eta: None,
         }
+    }
+
+    /// A player as the queue box names them: their online connection's name and code, else their
+    /// search's.
+    fn queue_player(&self, uid: Uuid) -> Option<QueuePlayer> {
+        let mut found = None;
+        for c in self.conns.values() {
+            match &c.state {
+                State::Online(o) if o.user.uid == uid => {
+                    return Some(QueuePlayer {
+                        uid: uid.to_string(),
+                        display_name: o.user.display_name.clone(),
+                        connect_code: o.code.clone(),
+                    });
+                }
+                State::Waiting(w) if w.user.uid == uid => {
+                    found = Some(QueuePlayer {
+                        uid: uid.to_string(),
+                        display_name: w.user.display_name.clone(),
+                        connect_code: w.code.clone(),
+                    })
+                }
+                _ => {}
+            }
+        }
+        found
+    }
+
+    /// [`MmStatus::searching`]: the Unranked, Ranked and 2v2 tickets waiting, with a 2v2 party's
+    /// other player (from `members`, the rooms' members).
+    fn searchers(&self, members: &[common::rooms::RoomMember]) -> Vec<QueueSearcher> {
+        self.unranked
+            .iter()
+            .chain(&self.ranked)
+            .chain(&self.twos)
+            .filter_map(|id| match &self.conns.get(id)?.state {
+                State::Waiting(w) => Some(w),
+                _ => None,
+            })
+            .map(|w| {
+                let me = w.user.uid.to_string();
+                let partner = w
+                    .party
+                    .as_ref()
+                    .and_then(|party| members.iter().find(|m| m.twos && m.code == *party && m.uid != me))
+                    .and_then(|m| Uuid::parse_str(&m.uid).ok())
+                    .and_then(|u| self.queue_player(u));
+                QueueSearcher {
+                    uid: me,
+                    mode: w.mode.name().to_string(),
+                    since: w.started.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+                    partner,
+                }
+            })
+            .collect()
+    }
+
+    /// [`MmStatus::matched`]: the Direct, Unranked, Ranked and 2v2 matches whose chat group still
+    /// has two or more players (their games are on the match's CSS or in its games), with the
+    /// set's game and wins from its stream when there is one.
+    fn queue_matches(&self) -> Vec<QueueMatch> {
+        let mut v: Vec<QueueMatch> = self
+            .chat
+            .match_groups()
+            .into_iter()
+            .filter(|(_, mode, _)| matches!(mode, Mode::Direct | Mode::Unranked | Mode::Ranked | Mode::Twos))
+            .filter_map(|(id, mode, who)| {
+                // None: a set its stream saw end is no longer under way.
+                let p = self.live.match_progress(id)?;
+                let players = who
+                    .iter()
+                    .map(|c| QueueMatchPlayer {
+                        player: QueuePlayer {
+                            uid: c.uid.to_string(),
+                            display_name: c.display_name.clone(),
+                            connect_code: c.connect_code.clone(),
+                        },
+                        wins: p.wins.get(&c.uid).copied().unwrap_or(0),
+                        team: p.teams.get(&c.uid).copied(),
+                        pair: p.pairs.get(&c.uid).copied().unwrap_or(0),
+                    })
+                    .collect();
+                Some(QueueMatch { mode: mode.name().to_string(), players, game: p.game, live_id: p.live_id })
+            })
+            .collect();
+        v.sort_by(|a, b| a.players.first().map(|p| &p.player.uid).cmp(&b.players.first().map(|p| &p.player.uid)));
+        v
     }
 
     /// The live store the loopback listener serves spectators from.
@@ -1943,7 +2040,7 @@ impl Engine {
             self.fail_ticket(out, old, msg::REPLACED, None);
         }
         if let Some(room) = p.room.clone() {
-            return self.on_room_ticket(now, conn, p, user, code, room, out);
+            return self.on_room_ticket(now, wall, conn, p, user, code, room, out);
         }
         Self::send(out, conn, &CreateTicketResp::ok());
         let Some(c) = self.conns.get_mut(&conn) else { return };
@@ -1956,6 +2053,7 @@ impl Engine {
             code: code.clone(),
             mode: p.mode,
             target: target.clone(),
+            started: wall,
             lan: p.lan,
             region: region.clone(),
             loc,
@@ -2105,6 +2203,7 @@ impl Engine {
                 code,
                 mode: Mode::Teams,
                 target: party.clone(),
+                started: wall,
                 lan: p.lan,
                 region,
                 loc: None,
@@ -2125,9 +2224,11 @@ impl Engine {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn on_room_ticket(
         &mut self,
         now: Instant,
+        wall: DateTime<Utc>,
         conn: ConnId,
         p: Pending,
         user: MmUser,
@@ -2150,6 +2251,7 @@ impl Engine {
                 code,
                 mode: Mode::Teams,
                 target: room.clone(),
+                started: wall,
                 lan: p.lan,
                 region,
                 loc: None,
@@ -6048,6 +6150,69 @@ mod tests {
         assert_eq!(splits[0][pa], splits[0][pb]);
         // The party is in the match.
         assert_eq!(state_of(&out, 11)["status"], "in-game");
+    }
+
+    #[test]
+    fn status_names_a_searching_partys_partner() {
+        let mut h = Harness::new(EngineConfig::default());
+        let us = h.users(2);
+        let code = h.party(11, &us[0]);
+        h.connect(12, 9);
+        h.hello(12, &us[1], "3.4.0");
+        h.room(12, json!({"type": "room-join", "code": code}));
+        h.connect(1, 1);
+        let wall = Utc::now();
+        h.twos(1, &us[0], &code, json!({}));
+        let s = h.e.status(wall);
+        assert_eq!(s.searching.len(), 1);
+        assert_eq!(
+            (s.searching[0].uid.as_str(), s.searching[0].mode.as_str()),
+            (us[0].uid.to_string().as_str(), "twos")
+        );
+        let partner = s.searching[0].partner.as_ref().expect("the party's other player");
+        assert_eq!(
+            (partner.uid.clone(), partner.display_name.clone()),
+            (us[1].uid.to_string(), us[1].display_name.clone())
+        );
+        // The internal lists never reach a launcher as such: accounts drops them from /v1/rooms.
+        let json = serde_json::to_value(&s).unwrap();
+        assert_eq!(json["searching"][0]["partner"]["connectCode"], us[1].connect_code.clone().unwrap());
+    }
+
+    #[test]
+    fn status_lists_searches_and_matches_for_the_queue_box() {
+        let mut h = Harness::new(EngineConfig::default());
+        let (a, b) = (user("AA#1", "a"), user("BB#1", "b"));
+        h.chatter(1, &a);
+        h.chatter(2, &b);
+        h.connect(11, 11);
+        h.connect(12, 12);
+        let wall = Utc::now();
+        h.unranked(11, &a);
+        let s = h.e.status(wall);
+        assert_eq!(s.searching.len(), 1);
+        assert_eq!((s.searching[0].uid.clone(), s.searching[0].mode.as_str()), (a.uid.to_string(), "unranked"));
+        assert!(s.searching[0].partner.is_none());
+        let since = DateTime::parse_from_rfc3339(&s.searching[0].since).unwrap();
+        assert!((since.with_timezone(&Utc) - wall).num_seconds().abs() < 60, "{since}");
+        assert!(s.matched.is_empty());
+        // Paired: no search, one match of the two at game 1, 0-0.
+        assert!(!matches(&h.unranked(12, &b)).is_empty());
+        let s = h.e.status(Utc::now());
+        assert!(s.searching.is_empty());
+        assert_eq!(s.matched.len(), 1);
+        let m = &s.matched[0];
+        assert_eq!((m.mode.as_str(), m.game, m.live_id.clone()), ("unranked", 1, None));
+        let mut uids: Vec<String> = m.players.iter().map(|p| p.player.uid.clone()).collect();
+        uids.sort();
+        let mut want = vec![a.uid.to_string(), b.uid.to_string()];
+        want.sort();
+        assert_eq!(uids, want);
+        assert!(m.players.iter().all(|p| p.wins == 0 && p.team.is_none() && p.pair == 0));
+        assert!(m.players.iter().any(|p| p.player.display_name == a.display_name && p.player.connect_code == "AA#1"));
+        // b's game leaves the CSS: the match is over for the queue box.
+        h.raw(2, json!({"type": "chat-leave", "group": h.e.chat.group_of(b.uid).unwrap()}).to_string().as_bytes());
+        assert!(h.e.status(Utc::now()).matched.is_empty());
     }
 
     #[test]

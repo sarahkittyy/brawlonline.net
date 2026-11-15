@@ -408,6 +408,7 @@ pub async fn list(State(state): State<AppState>, headers: HeaderMap) -> ApiResul
             e
         })
         .collect();
+    crate::staging_fake::spectators(&mut games);
     // The list still goes out without them if the ratings can't be read.
     match placed_ratings(&state.pool, &games).await {
         Ok(ratings) => fill_ratings(&mut games, &ratings),
@@ -416,9 +417,16 @@ pub async fn list(State(state): State<AppState>, headers: HeaderMap) -> ApiResul
     Ok(Json(json!({ "games": games })))
 }
 
-/// The Ranked ratings of the live games' placed players (a player still placing has none, as on
-/// the leaderboard).
-async fn placed_ratings(pool: &sqlx::PgPool, games: &[LiveEntry]) -> sqlx::Result<HashMap<Uuid, f64>> {
+/// A placed player's Ranked rating and rank.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Placed {
+    pub rating: f64,
+    pub rank: Option<common::spectate::LiveRank>,
+}
+
+/// The Ranked ratings and ranks of the live games' placed players (a player still placing has
+/// neither, as on the leaderboard).
+async fn placed_ratings(pool: &sqlx::PgPool, games: &[LiveEntry]) -> sqlx::Result<HashMap<Uuid, Placed>> {
     let mut uids: Vec<Uuid> =
         games.iter().flat_map(|g| &g.players).filter_map(|p| Uuid::parse_str(&p.uid).ok()).collect();
     uids.sort_unstable();
@@ -426,18 +434,28 @@ async fn placed_ratings(pool: &sqlx::PgPool, games: &[LiveEntry]) -> sqlx::Resul
     if uids.is_empty() {
         return Ok(HashMap::new());
     }
-    let rows: Vec<(Uuid, f64)> =
-        sqlx::query_as("SELECT uid, rating FROM ratings WHERE uid = ANY($1) AND sets_played >= $2")
+    let rows: Vec<(Uuid, f64, Option<i16>, Option<f64>)> =
+        sqlx::query_as("SELECT uid, rating, rank, rd FROM ratings WHERE uid = ANY($1) AND sets_played >= $2")
             .bind(&uids)
             .bind(common::ranked::PLACEMENT_SETS as i32)
             .fetch_all(pool)
             .await?;
-    Ok(rows.into_iter().collect())
+    Ok(rows
+        .into_iter()
+        .map(|(uid, rating, rank, rd)| {
+            let rank = crate::ranked::RankView::of(crate::ranked::stored_tier(rank, rd).rank)
+                .map(|r| common::spectate::LiveRank { tier: r.tier.to_string(), division: r.division });
+            (uid, Placed { rating, rank })
+        })
+        .collect())
 }
 
-fn fill_ratings(games: &mut [LiveEntry], ratings: &HashMap<Uuid, f64>) {
+/// Every player gets their rating (none while placing) and their rank (null while placing).
+fn fill_ratings(games: &mut [LiveEntry], ratings: &HashMap<Uuid, Placed>) {
     for p in games.iter_mut().flat_map(|g| &mut g.players) {
-        p.rating = Uuid::parse_str(&p.uid).ok().and_then(|uid| ratings.get(&uid).copied());
+        let placed = Uuid::parse_str(&p.uid).ok().and_then(|uid| ratings.get(&uid));
+        p.rating = placed.map(|r| r.rating);
+        p.rank = Some(placed.and_then(|r| r.rank.clone()));
     }
 }
 
@@ -790,11 +808,18 @@ mod tests {
             players: vec![player(placed.to_string()), player(placing.to_string()), player("not-a-uid".into())],
             ..Default::default()
         }];
-        fill_ratings(&mut games, &HashMap::from([(placed, 1523.5)]));
+        let gold = common::spectate::LiveRank { tier: "gold".into(), division: Some(2) };
+        fill_ratings(&mut games, &HashMap::from([(placed, Placed { rating: 1523.5, rank: Some(gold) })]));
         let ratings: Vec<_> = games[0].players.iter().map(|p| p.rating).collect();
         assert_eq!(ratings, [Some(1523.5), None, None]);
         let json = serde_json::to_value(&games[0].players).unwrap();
         assert_eq!(json[0]["rating"], 1523.5);
+        assert_eq!(json[0]["rank"], json!({"tier": "gold", "division": 2}));
         assert!(json[1].get("rating").is_none(), "no rating, no key: {json}");
+        assert!(json[1]["rank"].is_null() && json[1].get("rank").is_some(), "placing: rank null: {json}");
+        assert!(json[2]["rank"].is_null());
+        // mm's entries have no rank key at all.
+        let from_mm = serde_json::to_value(LivePlayer::default()).unwrap();
+        assert!(from_mm.get("rank").is_none(), "{from_mm}");
     }
 }

@@ -14,6 +14,7 @@
 #include "Common/SmallVector.h"
 #include "Common/x64Emitter.h"
 
+#include "Core/PowerPC/BranchProfile.h"
 #include "Core/PowerPC/ConditionRegister.h"
 #include "Core/PowerPC/Interpreter/ExceptionUtils.h"
 #include "Core/PowerPC/Jit64/RegCache/JitRegCache.h"
@@ -450,6 +451,13 @@ void Jit64::DoMergedBranchCondition()
     break;
   }
 
+  if (js.op[1].followTaken)
+  {
+    WriteNotTakenExit(pDontBranch, nextPC, next);
+    WriteBranchWatch<true>(nextPC, js.op[1].branchTo, next, CallerSavedRegistersInUse());
+    return;
+  }
+
   {
     RCForkGuard gpr_guard = gpr.Fork();
     RCForkGuard fpr_guard = fpr.Fork();
@@ -457,10 +465,14 @@ void Jit64::DoMergedBranchCondition()
     gpr.Flush();
     fpr.Flush();
 
+    if (js.op[1].branchCounts)
+      CountBranch(&js.op[1].branchCounts->taken);
     DoMergedBranch();
   }
 
   SetJumpTarget(pDontBranch);
+  if (js.op[1].branchCounts)
+    CountBranch(&js.op[1].branchCounts->not_taken);
 
   if (!analyzer.HasOption(PPCAnalyst::PPCAnalyzer::OPTION_CONDITIONAL_CONTINUE))
   {
@@ -501,6 +513,27 @@ void Jit64::DoMergedBranchImmediate(s64 val)
   case PowerPC::CR_SO_BIT:
     // SO bit, do not branch (we don't emulate SO for cmp).
     break;
+  }
+
+  if (js.op[1].followTaken)
+  {
+    // The analyzer went on at the branch's target (BranchProfile.h). The compare's result is
+    // known here: taken, there is nothing to emit; never taken, the block ends here and what the
+    // analyzer followed is not reached.
+    if (branch)
+    {
+      WriteBranchWatch<true>(nextPC, js.op[1].branchTo, next, CallerSavedRegistersInUse());
+    }
+    else
+    {
+      RCForkGuard gpr_guard = gpr.Fork();
+      RCForkGuard fpr_guard = fpr.Fork();
+      gpr.Flush();
+      fpr.Flush();
+      WriteBranchWatch<false>(nextPC, nextPC + 4, next, {});
+      WriteExit(nextPC + 4);
+    }
+    return;
   }
 
   if (branch)

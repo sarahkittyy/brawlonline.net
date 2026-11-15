@@ -205,6 +205,31 @@ TEST(RoomMessages, TeamColors)
   EXPECT_EQ(RequestJson(r), R"({"colors":false,"on":false,"type":"room-teams"})");
 }
 
+TEST(RoomMessages, FriendsOnlyRooms)
+{
+  // Public / friends only / private (docs/design/friends.md): `friends` only without `public`, and
+  // false when an older server says nothing.
+  const Message plain = Parse(STATE);
+  ASSERT_EQ(plain.kind, Message::Kind::RoomState) << plain.why;
+  EXPECT_FALSE(plain.view->friends);
+  const Message friends =
+      Parse(Replace(STATE, R"("public": true,)", R"("public": false, "friends": true,)"));
+  ASSERT_EQ(friends.kind, Message::Kind::RoomState) << friends.why;
+  EXPECT_FALSE(friends.view->is_public);
+  EXPECT_TRUE(friends.view->friends);
+  const Message both = Parse(Replace(STATE, R"("public": true,)", R"("public": true, "friends": true,)"));
+  ASSERT_EQ(both.kind, Message::Kind::RoomState) << both.why;
+  EXPECT_FALSE(both.view->friends);
+  Request r;
+  r.op = Op::Public;
+  r.flag = true;
+  EXPECT_EQ(RequestJson(r), R"({"public":true,"type":"room-public"})");
+  r.flag = false;
+  EXPECT_EQ(RequestJson(r), R"({"public":false,"type":"room-public"})");
+  r.friends = true;
+  EXPECT_EQ(RequestJson(r), R"({"friends":true,"public":false,"type":"room-public"})");
+}
+
 TEST(RoomMessages, PickedStocks)
 {
   // Stock control: a ready player's picked stock count (1-99), missing or null when none.

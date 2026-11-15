@@ -13,7 +13,7 @@ import { defaultClipsFolder } from "@/pages/settings/clips_settings/clips_settin
 import { FolderButtonsMessages as Messages } from "./folder_buttons.messages";
 import styles from "./folder_buttons.module.css";
 
-export const FolderButtons = React.memo(({ className }: { className?: string }) => {
+export const FolderButtons = React.memo(({ className, row = false }: { className?: string; row?: boolean }) => {
   const [rootSlpPath] = useSetting("rootSlpPath");
   const [clipsFolder] = useSetting("clipsFolder");
   const { showInfo } = useToasts();
@@ -34,7 +34,7 @@ export const FolderButtons = React.memo(({ className }: { className?: string }) 
   );
 
   return (
-    <div className={`${styles.buttons} ${className ?? ""}`}>
+    <div className={`${styles.buttons} ${row ? styles.row : ""} ${className ?? ""}`}>
       {folderButton(Messages.openReplayLocation(), rootSlpPath)}
       {folderButton(Messages.openVideoLocation(), clipsFolder ?? defaultClipsFolder(rootSlpPath))}
     </div>

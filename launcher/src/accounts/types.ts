@@ -264,6 +264,13 @@ export type MatchHistoryItem = {
   games?: number;
 };
 
+/** `GET /v1/me/opponents?q=`: a player the account has played with (Match history's player filter). */
+export type MatchOpponent = {
+  uid: string;
+  displayName: string;
+  connectCode: string;
+} & NameTag;
+
 /** `GET /v1/me/matches?mode=&limit=&before=`: newest first; `next` is the `before` of the next page. */
 export type MatchHistoryPage = {
   matches: MatchHistoryItem[];
@@ -298,6 +305,11 @@ export type PublicRoom = {
   ruleset?: RoomRuleset;
   /** The name its host gave it (docs/design/rooms.md §1.4); absent: none ("alice's room"). */
   name?: string | null;
+  /** Friends only (docs/design/friends.md): listed to the friends of its players. */
+  friends?: boolean;
+  /** Every player's primary main (character key), by slot (as `names`), when they show it beside their name;
+   * null when not. Absent from an older server. */
+  mains?: (string | null)[];
 };
 
 /** P+ rooms or Other Games (Brawl Mods) rooms: each has its own room name. */
@@ -337,6 +349,13 @@ export type RoomList = {
   queues?: { unranked: number; ranked: number; twos?: number };
   /** Players in an Unranked, a Ranked and a 2v2 match (only 2v2's shown since 2026-11-09). Absent from an older server. */
   playing?: { unranked: number; ranked: number; twos?: number };
+  /**
+   * How long a search waits now (docs/design/launcher-redesign.md §7): the median wait in seconds of the
+   * current UTC hour of the day over the last 14 days (`pp-admin stats`' ETA). null: "10+ min" (most
+   * searches that hour gave up, the median is 10 minutes or more, or under 5 searches). Absent from an
+   * older server.
+   */
+  queueEta?: { unranked: number | null; ranked: number | null };
   updatedAt: string;
   /** Public Brawl Mods rooms (docs/design/brawl-mods.md §5), fuller first. Absent from an older server. */
   modRooms?: PublicModRoom[];
@@ -456,10 +475,15 @@ export interface AccountsApi {
   launcherSettings(): Promise<LauncherSettings>;
   /** One leaderboard page (public); `q` searches names and connect codes. */
   leaderboard(query: { limit?: number; after?: string; q?: string }): Promise<LeaderboardPage>;
-  /** One page of this account's match history. */
+  /** Players this account has played with whose name or code contains `q` (Match history's player filter). */
+  opponents(uid: string, q: string): Promise<MatchOpponent[]>;
+  /** The leaderboard rows of this account and its friends (positions on the whole leaderboard), best first. */
+  friendsLeaderboard(uid: string): Promise<LeaderboardPage>;
+  /** One page of this account's match history; `opponent` (comma-separated uids): only the matches all of them played
+   * in. */
   matchHistory(
     uid: string,
-    query: { mode: MatchHistoryFilter; limit?: number; before?: string },
+    query: { mode: MatchHistoryFilter; limit?: number; before?: string; opponent?: string },
   ): Promise<MatchHistoryPage>;
   /** Players online and the public rooms. */
   rooms(uid: string): Promise<RoomList>;

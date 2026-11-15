@@ -16,6 +16,7 @@ Outputs:
   launcher/assets/icon.ico   16-256 (Windows exe, installer; up to 48 the ball alone)
   launcher/assets/icon.icns  16-1024 (macOS app, DMG; 16 and 32 the ball alone)
   website/favicon.ico        16, 32, 48 (the ball alone, no glow)
+  launcher/src/renderer/app/shell/images/logo.png  96 (the ball alone: the folded sidebar's logo)
   website/assets/icon-180.png (apple-touch-icon), icon-512.png (the same)
 """
 
@@ -217,6 +218,8 @@ def main():
     fav[-1].save(web / "favicon.ico", sizes=[(i.width, i.height) for i in fav], append_images=fav[:-1])
     ball(img, 180).save(web / "assets" / "icon-180.png", optimize=True)
     ball(img, 512).save(web / "assets" / "icon-512.png", optimize=True)
+    # The launcher's folded sidebar (32 px, sharp up to 3x zoom).
+    ball(img, 96).save(la.parent / "src" / "renderer" / "app" / "shell" / "images" / "logo.png", optimize=True)
     if "--preview" in sys.argv:
         out = Path(sys.argv[sys.argv.index("--preview") + 1])
         sizes = (256, 128, 64, 48, 32, 16)

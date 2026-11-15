@@ -1,0 +1,29 @@
+/* A replay's row in Replays (replay_file.tsx); the rest of its look is in the component. */
+.row {
+  container-type: inline-size;
+}
+
+/* The play button as far from the right edge as the players are from the left (11 px). */
+.row .actions > :last-child .action {
+  margin-right: -5px;
+}
+
+/* Narrow (the launcher at its smallest with the players rail open): the file name, which only had room for
+   its first characters, goes; the details and the buttons sit closer. */
+@container (width < 560px) {
+  .row .fileName {
+    display: none;
+  }
+
+  .row .detail {
+    margin-right: 14px;
+  }
+
+  .row .action {
+    margin: 0 1px;
+  }
+
+  .row .actions > :last-child .action {
+    margin-right: -5px;
+  }
+}

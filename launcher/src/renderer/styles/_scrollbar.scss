@@ -1,21 +1,19 @@
 /*
- * Customize MacOS style scrollbars.
+ * Scrollbars: a thin rounded line that blends in (Sarah's board: the theme's blue bar, 10 px wide, was too much). The
+ * bar keeps a 10 px area to grab; the line drawn in it is 4 px of faint white, 6 px and brighter under the pointer.
  * Does not support Firefox and IE. Luckily we're using Chromium via Electron.
- * Taken from: https://gist.github.com/spemer/a0e218bbb45433bd611e68446523a00b
  */
 
 $scrolltrack-width: 10px;
-$scrolltrack-background-color: var(--surface-1);
-$scrollbar-color: var(--surface-3);
-$scrollbar-color-hover: var(--surface-4);
-$scrollbar-min-height: 50px;
+$scrollbar-color: color-mix(in oklab, var(--off-white, #fff) 18%, transparent);
+$scrollbar-color-hover: color-mix(in oklab, var(--off-white, #fff) 38%, transparent);
+$scrollbar-min-height: 40px;
 
 /* total width */
 *::-webkit-scrollbar {
-  background-color: $scrolltrack-background-color;
+  background-color: transparent;
   width: $scrolltrack-width;
   height: $scrolltrack-width;
-  border-radius: $scrolltrack-width;
 }
 
 /* background of the scrollbar except button or resizer */
@@ -25,14 +23,18 @@ $scrollbar-min-height: 50px;
   background-color: transparent;
 }
 
-/* scrollbar itself */
+/* the line itself: a transparent border around it, so the area to grab stays wider than what shows */
 *::-webkit-scrollbar-thumb {
   background-color: $scrollbar-color;
+  background-clip: padding-box;
+  border: 3px solid transparent;
   border-radius: $scrolltrack-width;
   min-height: $scrollbar-min-height;
 
-  &:hover {
+  &:hover,
+  &:active {
     background-color: $scrollbar-color-hover;
+    border-width: 2px;
   }
 }
 

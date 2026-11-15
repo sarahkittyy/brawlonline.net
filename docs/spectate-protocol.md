@@ -108,7 +108,7 @@ mm compares each entry with the primary's chunk of the same `first_frame`. An en
 
 - **Pause:** mm moves the upload to a witness, or to a standby that resumed, at once if it has one. The paused player becomes a standby and sends nothing. With nobody to take over, the paused primary keeps its role (held) and resumes by itself.
 - **Resume:** a primary that kept its role just goes on. A standby sends `spectate-resume` too, with the slot it had, once it has had the same 10 s without a signal (2026-10-25). If the game's primary is held, or the game has none, the standby takes the game over at once and the held primary becomes the standby; otherwise it stays standby until a takeover. (Bug report #145: a room's 1v1 whose primary paused went to the witness, which paused 50 ms later. Standbys never sent a resume, so the watchers waited 40 s for that witness to resume by itself, and its next pause froze them again.)
-- **Stop:** the player sends nothing more for this game. If nobody else can take the upload over (no witness, no standby that resumed), mm cuts the game at once: spectators get `bad` "The rest of this game wasn't streamed." (they play what came). The players are still playing it: the row stays playing and the wait between games starts only at the game's end (`spectate-end`). The same holds when the last uploader leaves or sends a bad chunk; a pause is not cut (it comes back within seconds).
+- **Stop:** the player sends nothing more for this game. If nobody else can take the upload over (no witness, no standby that resumed), mm cuts the game: spectators get `bad` "The rest of this game wasn't streamed." (they play what came). With a standby that hasn't resumed yet, mm first waits for it, up to 45 s (spectators see "Buffering…"): it takes the game over from the next frame mm needs when it resumes, and the game is cut once the wait runs out, its game ends (`spectate-end`: a standby resumes only during its game) or it leaves. (Bug report #291, 2026-11-14: 470 of the day's 865 cut games were cut at once while the other player's upload was only paused; standbys resume 12 s after their takeover at the median, 37 s at the 95th percentile.) The players are still playing it: the row stays playing and the wait between games starts only at the game's end (`spectate-end`). The same holds when the last uploader leaves or sends a bad chunk; a pause is not cut (it comes back within seconds).
 
 mm also starts a takeover when the primary has sent no chunk for 5 s while a witness's digests show the game ahead of what mm has. A primary with no `FRMS` yet is given the uploader's start hold too: the witness must be past frame 900 (the game's first 10 s, when nothing was sent before 2026-10-19 and now only a trickle that a queue on the uplink holds, and 5 s more). The stalled player gets a new `witness` role, so it stays a backup that a later takeover can hand the game back to. With nobody to take over, the primary keeps the game, and only after 30 s without a chunk is the game cut. (Production 2026-10-14: the headers' arrival didn't count as progress, so 435 of 572 games were taken from their primary 12-14 s in, as its headers landed, and the stalled player was dropped as a backup; a pause of the new primary then left the stream with no data for 10 s or more, and a stall cut the game.)
 
@@ -177,7 +177,8 @@ Every endpoint needs a session (`Authorization: Bearer`).
   "startedAt": "2026-10-13T18:03:12.345Z", "spectators": 4,
   "game": {"number": 2, "place": 2, "startedAt": "…", "stageId": 3, "state": "playing"},
   "players": [{"uid": "…", "displayName": "Drsmsh", "connectCode": "DRS#1",
-               "characterId": 17, "costume": 0, "teamId": null, "wins": 1, "rating": 1523.4}]
+               "characterId": 17, "costume": 0, "teamId": null, "wins": 1, "rating": 1523.4,
+               "rank": {"tier": "emerald", "division": 3}}]
 }]}
 ```
 
@@ -185,6 +186,7 @@ Every endpoint needs a session (`Authorization: Bearer`).
 - `place` is the current game's place in the stream (the `game` of §2's lines). A launcher joining a set mid-way watches from `?game=<place>` (`place + 1` between games), so it starts with the game being played.
 - `state` is `playing`, `between` (waiting for the set's next game) or `over`.
 - `rating` is the player's Ranked rating once placed, read by accounts for each answer (mm's entries don't have it); a player still placing, or one who never played Ranked, has no `rating` key. The launcher only sorts by it and doesn't show it (the user, 2026-10-24). If the ratings can't be read, the list goes out without them.
+- `rank` (2026-11-14) is the player's Ranked rank, the leaderboard's `{tier, division}` (the emblem beside their name); `null` while placing or never ranked. Read with `rating`; absent when the ratings can't be read.
 - A game marked bad is listed with `state: "over"`.
 - The answer comes from a snapshot about a second old (mm refreshes it every 0.5 s and accounts keeps it for 1 s). It's limited like `/v1/rooms`.
 

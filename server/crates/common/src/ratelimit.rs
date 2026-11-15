@@ -69,6 +69,10 @@ pub const RULESET_LOOKUP_IP_WINDOWS: [Window; 2] = [Window::new(60, MINUTE), Win
 /// profile is opened; search engines and link previews read the page.
 pub const PROFILE_IP_WINDOWS: [Window; 2] = [Window::new(60, MINUTE), Window::new(1000, HOUR)];
 
+/// Friend requests sent per account (`POST /v1/friends/requests`): 10 per minute and 30 per
+/// hour. Each can notify another player; the cap on waiting requests is `accounts::friends`.
+pub const FRIEND_REQUEST_WINDOWS: [Window; 2] = [Window::new(10, MINUTE), Window::new(30, HOUR)];
+
 /// Profile changes per account (`PUT /v1/me/profile`): 30 per minute and 300 per hour. Each social
 /// media username asks the slur filter's model.
 pub const PROFILE_EDIT_WINDOWS: [Window; 2] = [Window::new(30, MINUTE), Window::new(300, HOUR)];

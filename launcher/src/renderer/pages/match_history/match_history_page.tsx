@@ -38,44 +38,66 @@ import {
 import { monthDayHourFormat } from "@/lib/time";
 import { useServices } from "@/services";
 import type { AuthUser } from "@/services/auth/types";
-import type { MatchHistoryFilter, MatchHistoryItem, MatchHistoryPlayer } from "@/services/backend/types";
+import type { MatchHistoryFilter, MatchHistoryItem, MatchHistoryPlayer, MatchOpponent } from "@/services/backend/types";
 
 import { MatchHistoryPageMessages as Messages } from "./match_history_page.messages";
+import { PlayerFilter } from "./player_filter";
 
 /**
- * The logged-in player's matches (docs/design/replays.md §9.2 for the replays column). Their own name,
- * rank and rating are on their profile (the user menu's View Profile, docs/design/profiles.md).
+ * Match history (docs/design/launcher-redesign.md §10), the sidebar's page above Replays: the logged-in player's matches
+ * (docs/design/replays.md §9.2 for the replays column), filtered by mode and by the players they played with.
  */
 export const MatchHistoryPage = React.memo(function MatchHistoryPage({ user }: { user: AuthUser }) {
   return (
-    <div style={{ display: "flex", flexDirection: "column", flex: 1, minWidth: 0, padding: "20px 20px 0" }}>
-      <MatchHistory uid={user.uid} />
+    <div style={{ display: "flex", flexDirection: "column", flex: 1, minWidth: 0, padding: "20px 28px 0" }}>
+      <h1 style={{ margin: "0 0 12px", fontSize: 28, whiteSpace: "nowrap" }}>{Messages.matchHistory()}</h1>
+      <MatchHistory uid={user.uid} compact={true} />
     </div>
   );
 });
 
-const MatchHistory = ({ uid }: { uid: string }) => {
+/**
+ * The player's match history: the mode buttons, and the player filter on their left (the matches every tagged player
+ * played in).
+ */
+export const MatchHistory = ({
+  uid,
+  compact = false,
+}: {
+  uid: string;
+  /** Four columns (beside the sidebar and the players rail): the date under the mode, the player's own rating change
+   * under the score. */
+  compact?: boolean;
+}) => {
+  const [players, setPlayers] = useState<MatchOpponent[]>([]);
+  const opponent = players.map((p) => p.uid).join(",");
   const { backendService } = useServices();
   const [mode, setMode] = useState<MatchHistoryFilter>("all");
   const fetchPage = useCallback(
     async (before: string | undefined) => {
-      const page = await backendService.fetchMatchHistory(mode, before);
+      const page = await backendService.fetchMatchHistory(mode, before, opponent ? { opponent } : undefined);
       return { items: page.matches, next: page.next };
     },
-    [backendService, mode],
+    [backendService, mode, opponent],
   );
   // Fresh on every visit and when the window regains focus (a set settles while the player is in
   // Dolphin), like the rating above; else a set shows "In progress" until the launcher restarts.
-  const pages = useCursorPages<MatchHistoryItem>({ queryKey: ["matchHistory", uid, mode], fetchPage, refresh: true });
+  const pages = useCursorPages<MatchHistoryItem>({
+    queryKey: ["matchHistory", uid, mode, opponent],
+    fetchPage,
+    refresh: true,
+  });
   const replays = useMatchReplays(pages.items);
 
   return (
     <>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
-        <Typography variant="h6">{Messages.matchHistory()}</Typography>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 8, flexWrap: "wrap" }}>
+        <PlayerFilter value={players} onChange={setPlayers} />
+        <span style={{ flex: 1 }} />
         <ToggleButtonGroup
           size="small"
           exclusive={true}
+          sx={{ "& .MuiToggleButton-root": { textTransform: "none", py: "3px", px: "10px", lineHeight: 1.4 } }}
           value={mode}
           onChange={(_, value: MatchHistoryFilter | null) => value && setMode(value)}
         >
@@ -91,15 +113,15 @@ const MatchHistory = ({ uid }: { uid: string }) => {
           onLoadMore={pages.loadMore}
           hasMore={pages.hasMore && !pages.error}
           isLoading={pages.isLoading || pages.isLoadingMore}
-          resetKey={mode}
+          resetKey={`${mode}:${opponent}`}
         >
           {pages.items.length > 0 && (
             <Table size="small" stickyHeader={true}>
               <TableHead>
                 <TableRow>
                   <TableCell>{Messages.mode()}</TableCell>
-                  <TableCell>{Messages.date()}</TableCell>
-                  <TableCell>{Messages.you()}</TableCell>
+                  {!compact && <TableCell>{Messages.date()}</TableCell>}
+                  {!compact && <TableCell>{Messages.you()}</TableCell>}
                   <TableCell align="center">{Messages.score()}</TableCell>
                   <TableCell>{Messages.opponent()}</TableCell>
                   <TableCell>{Messages.replays()}</TableCell>
@@ -107,7 +129,13 @@ const MatchHistory = ({ uid }: { uid: string }) => {
               </TableHead>
               <TableBody>
                 {pages.items.map((m) => (
-                  <MatchRow key={m.matchId} item={m} myUid={uid} replays={replays.data?.[m.matchId] ?? null} />
+                  <MatchRow
+                    key={m.matchId}
+                    item={m}
+                    myUid={uid}
+                    replays={replays.data?.[m.matchId] ?? null}
+                    compact={compact}
+                  />
                 ))}
               </TableBody>
             </Table>
@@ -210,10 +238,12 @@ export const MatchRow = React.memo(function MatchRow({
   item,
   myUid,
   replays = null,
+  compact = false,
 }: {
   item: MatchHistoryItem;
   myUid: string;
   replays?: MatchReplay[] | null;
+  compact?: boolean;
 }) {
   // A room's team battle: my teammates on my side. A free-for-all: everyone else's place.
   const [mine, others] = matchSides(item, myUid);
@@ -225,15 +255,23 @@ export const MatchRow = React.memo(function MatchRow({
         <div>{modeLabel(item.mode, item.room?.mode)}</div>
         {note && <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>{note}</div>}
         {item.room?.ruleset && <RulesetLink ruleset={item.room.ruleset} />}
+        {compact && (
+          <div style={{ fontSize: 12, color: "var(--text-secondary)", whiteSpace: "nowrap" }}>
+            {monthDayHourFormat(new Date(item.createdAt))}
+          </div>
+        )}
       </TableCell>
-      <TableCell sx={{ whiteSpace: "nowrap" }}>{monthDayHourFormat(new Date(item.createdAt))}</TableCell>
-      <TableCell>
-        {mine.map((p) => (
-          <PlayerCell key={p.uid} player={p} />
-        ))}
-      </TableCell>
+      {!compact && <TableCell sx={{ whiteSpace: "nowrap" }}>{monthDayHourFormat(new Date(item.createdAt))}</TableCell>}
+      {!compact && (
+        <TableCell>
+          {mine.map((p) => (
+            <PlayerCell key={p.uid} player={p} />
+          ))}
+        </TableCell>
+      )}
       <TableCell align="center" sx={{ fontWeight: "bold", whiteSpace: "nowrap" }}>
         {formatMatchScore(item, myUid)}
+        {compact && <OwnRatingChange player={mine.find((p) => p.uid === myUid)} />}
         <NoWinGamesNote replays={replays} />
       </TableCell>
       <TableCell>
@@ -247,6 +285,24 @@ export const MatchRow = React.memo(function MatchRow({
     </TableRow>
   );
 });
+
+/** The player's own rating change under the score (the compact rows' "You" column). */
+const OwnRatingChange = ({ player }: { player?: MatchHistoryPlayer }) => {
+  if (!player) {
+    return null;
+  }
+  if (player.ratingHidden) {
+    return <div style={{ fontSize: 12, fontWeight: "normal", color: "var(--text-secondary)" }}>{HIDDEN_RATING}</div>;
+  }
+  if (player.ratingChange == null) {
+    return null;
+  }
+  return (
+    <div style={{ fontSize: 12, fontWeight: "normal", color: ratingChangeColor(player.ratingChange) }}>
+      {formatRatingChange(player.ratingChange)}
+    </div>
+  );
+};
 
 /** A room game's published ruleset: its name, opening its page on the website (`/r/<code>`). */
 const RulesetLink = ({ ruleset }: { ruleset: { code: string; name: string; version: number; link: string } }) => (

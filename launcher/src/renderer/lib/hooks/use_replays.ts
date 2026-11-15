@@ -9,35 +9,12 @@ import type { AuthService } from "@/services/auth/types";
 import { buildReplayFilters, useReplayFilter } from "./use_replay_filter";
 
 const REPLAY_BATCH_SIZE = 50;
-const LAST_FOLDER_KEY = "replay-browser-last-folder";
 
 /**
- * Get the initial folder to load in the replay browser.
- * Validates that the stored folder is still a subdirectory of one of the SLP paths.
- * Falls back to rootSlpPath if validation fails.
+ * The folder the replay browser starts on: the replay folder itself, with every month's folder in it (Sarah's board:
+ * "folder in replays should default to the main parent folder with everything"). A folder picked stays for the session.
  */
-const getInitialFolder = (): string => {
-  const { rootSlpPath, extraSlpPaths } = useSettings.getState().settings;
-
-  // Try to restore the last folder from localStorage
-  const storedFolder = localStorage.getItem(LAST_FOLDER_KEY);
-
-  if (storedFolder) {
-    // Check if the stored folder is a subdirectory of any of the SLP paths
-    const allSlpPaths = [rootSlpPath, ...extraSlpPaths];
-    const isValid = allSlpPaths.some((slpPath) => {
-      // A folder is valid if it equals the SLP path or is a subdirectory of it
-      return storedFolder === slpPath || window.electron.utils.isSubdirectory(slpPath, storedFolder);
-    });
-
-    if (isValid) {
-      return storedFolder;
-    }
-  }
-
-  // Fall back to root SLP path if stored folder is invalid or doesn't exist
-  return rootSlpPath;
-};
+const getInitialFolder = (): string => useSettings.getState().settings.rootSlpPath;
 
 type StoreState = {
   loading: boolean;
@@ -155,7 +132,6 @@ export class ReplayPresenter {
     const folderToLoad = childPath ?? currentFolder;
 
     // Persist the folder to localStorage for next session
-    localStorage.setItem(LAST_FOLDER_KEY, folderToLoad);
 
     useReplays.setState((state) => {
       state.currentFolder = folderToLoad;

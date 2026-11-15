@@ -20,12 +20,14 @@ import type { TooltipProps } from "@mui/material/Tooltip";
 import Tooltip from "@mui/material/Tooltip";
 import type { LiveGameEntry, LiveMode, LivePlayer, SpectateState } from "@spectate/types";
 import { clsx } from "clsx";
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 
+import { ShellMessages } from "@/app/shell/shell.messages";
 import { MiniProfileTooltip } from "@/components/profile/mini_profile";
+import { usePlayerMenuOpener } from "@/lib/social/use_player_menu";
 import { getCharacterIcon } from "@/lib/utils";
+import { useStageIcon } from "@/pages/rulesets/stages_section";
 
-import { ContentBlock } from "../overview/content_block/content_block";
 import { SpectateMessages as Messages } from "./spectate.messages";
 import styles from "./spectate.module.css";
 
@@ -57,6 +59,8 @@ export type SpectateViewProps = {
   freshIds?: ReadonlySet<string>;
   sort?: LiveSort;
   onSortChange?: (sort: LiveSort) => void;
+  /** The highest-rated game above the list, out of it (the Spectate page; off in tests of the list). */
+  showFeatured?: boolean;
 };
 
 /**
@@ -156,45 +160,54 @@ export const SpectateView = ({
   freshIds,
   sort = "newest",
   onSortChange,
+  showFeatured = false,
 }: SpectateViewProps) => {
   const status = watchingStatus(watching);
   const [search, setSearch] = useState("");
+  const featured =
+    showFeatured && state.kind === "ready" && search.trim() === "" ? pickFeatured(state.games, uid) : null;
+  const watchedId = watching && watching.status !== "idle" && watching.status !== "error" ? watching.stream : null;
   return (
     <div className={styles.block}>
-      <ContentBlock
-        fill={true}
-        title={Messages.liveGames()}
-        titleAction={
-          state.kind !== "logged-out" ? (
-            <Tooltip title={Messages.autoPlayTooltip()} placement="top" enterDelay={400} disableInteractive={true}>
-              <FormControlLabel
-                className={styles.autoPlay}
-                sx={{ "& .MuiFormControlLabel-label": { fontSize: 13 } }}
-                control={
-                  <Switch
-                    size="small"
-                    color="secondary"
-                    checked={autoPlay}
-                    onChange={(e) => onAutoPlayChange(e.target.checked)}
-                    inputProps={{ "aria-label": Messages.autoPlay() }}
-                    data-testid="auto-play"
-                  />
-                }
-                label={Messages.autoPlay()}
-              />
-            </Tooltip>
-          ) : undefined
-        }
-        endIcon={
-          status || state.kind === "ready" ? (
-            <div className={styles.headerEnd}>
-              {status && <div className={styles.watchStatus}>{status}</div>}
-              {state.kind === "ready" && renderListControls()}
-            </div>
-          ) : undefined
-        }
-        content={renderBody()}
-      />
+      <div className={styles.head}>
+        <h1 className={styles.title}>{ShellMessages.spectate()}</h1>
+        {status && <div className={styles.watchStatus}>{status}</div>}
+        <span className={styles.grow} />
+        {state.kind !== "logged-out" && (
+          <Tooltip title={Messages.autoPlayTooltip()} placement="top" enterDelay={400} disableInteractive={true}>
+            <FormControlLabel
+              className={styles.autoPlay}
+              sx={{ "& .MuiFormControlLabel-label": { fontSize: 13 } }}
+              control={
+                <Switch
+                  size="small"
+                  color="secondary"
+                  checked={autoPlay}
+                  onChange={(e) => onAutoPlayChange(e.target.checked)}
+                  inputProps={{ "aria-label": Messages.autoPlay() }}
+                  data-testid="auto-play"
+                />
+              }
+              label={Messages.autoPlay()}
+            />
+          </Tooltip>
+        )}
+      </div>
+      {featured && (
+        <FeaturedGame
+          game={featured}
+          now={now}
+          watching={watchedId === featured.id}
+          starting={startingId === featured.id}
+          busy={startingId != null}
+          onWatch={onWatch}
+        />
+      )}
+      <div className={styles.bar}>
+        <h2 className={styles.heading}>{Messages.liveGames()}</h2>
+        {state.kind === "ready" && renderListControls()}
+      </div>
+      <div className={styles.body}>{renderBody(featured?.id)}</div>
     </div>
   );
 
@@ -234,7 +247,7 @@ export const SpectateView = ({
     );
   }
 
-  function renderBody() {
+  function renderBody(featuredId?: string) {
     switch (state.kind) {
       case "logged-out":
         return (
@@ -274,7 +287,10 @@ export const SpectateView = ({
             </div>
           );
         }
-        const shown = searchLiveGames(state.games, search);
+        const shown = searchLiveGames(state.games, search).filter((g) => g.id !== featuredId);
+        if (shown.length === 0 && featuredId) {
+          return null;
+        }
         if (shown.length === 0) {
           return (
             <div className={styles.centered}>
@@ -283,8 +299,6 @@ export const SpectateView = ({
             </div>
           );
         }
-        const watchedId =
-          watching && watching.status !== "idle" && watching.status !== "error" ? watching.stream : null;
         return (
           <ul className={styles.list}>
             {sortLiveGames(shown, sort).map((game) => (
@@ -344,6 +358,70 @@ function RowTooltip(props: Omit<TooltipProps, "open" | "onOpen" | "onClose">) {
   return <Tooltip {...props} open={open} onOpen={() => setOpen(true)} onClose={() => setOpen(false)} />;
 }
 
+/** A live game's player: their hover card, and the player menu on a right click. */
+const LivePlayerName = ({ player }: { player: LivePlayer }) => {
+  const onContextMenu = usePlayerMenuOpener(player);
+  return (
+    <MiniProfileTooltip uid={player.uid}>
+      <span className={styles.name} onContextMenu={onContextMenu}>
+        {player.displayName}
+      </span>
+    </MiniProfileTooltip>
+  );
+};
+
+/**
+ * Who plays, in one of three shapes only (Sarah's board): all on one line; the first side on one line and "vs" with
+ * the second side on the next; or, when a side doesn't fit on a line, each player on a line of their own ("vs" before
+ * the second side's first). Never a side half wrapped beside one that isn't: the row measures its widest side.
+ */
+const SidesCell = ({ sides }: { sides: LivePlayer[][] }) => {
+  const ref = useRef<HTMLDivElement>(null);
+  const [stacked, setStacked] = useState(false);
+  const who = sides.map((side) => side.map((p) => `${p.uid}:${p.displayName}`).join("&")).join("|");
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) {
+      return;
+    }
+    const check = () => {
+      // Each side laid out on one line for a moment, measured, before paint.
+      const was = el.dataset.stacked;
+      delete el.dataset.stacked;
+      const widest = Math.max(0, ...Array.from(el.children).map((c) => (c as HTMLElement).scrollWidth));
+      if (was !== undefined) {
+        el.dataset.stacked = was;
+      }
+      setStacked(widest > el.clientWidth + 0.5);
+    };
+    check();
+    if (typeof ResizeObserver === "undefined") {
+      return;
+    }
+    const observer = new ResizeObserver(check);
+    observer.observe(el);
+    return () => observer.disconnect();
+    // Measured again when the players change (not on each clock tick's new array).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [who]);
+  return (
+    <div ref={ref} className={styles.players} data-stacked={stacked ? "" : undefined}>
+      {sides.map((side, i) => (
+        <span key={i} className={styles.side}>
+          {side.map((p, j) => (
+            <span key={p.uid} className={styles.player}>
+              {i > 0 && j === 0 && <span className={styles.vs}>{Messages.vs()}</span>}
+              <img className={styles.stock} src={getCharacterIcon(p.characterId, p.costume)} alt="" />
+              <LivePlayerName player={p} />
+              {j < side.length - 1 && <span className={styles.vs}>{Messages.and()}</span>}
+            </span>
+          ))}
+        </span>
+      ))}
+    </div>
+  );
+};
+
 export const LiveGameRow = React.memo(function LiveGameRow({
   game,
   now,
@@ -378,6 +456,7 @@ export const LiveGameRow = React.memo(function LiveGameRow({
       ? Messages.betweenGames()
       : Messages.ended();
   const spectators = game.spectators ?? 0;
+  const stageIcon = useStageIcon()(game.game.stageId);
 
   return (
     <RowTooltip title={tooltip} placement="top" enterDelay={600} disableInteractive={true}>
@@ -392,29 +471,16 @@ export const LiveGameRow = React.memo(function LiveGameRow({
           }
         }}
       >
-        <div className={styles.players}>
-          {sides.map((side, i) => (
-            <React.Fragment key={i}>
-              {i > 0 && <span className={styles.vs}>{Messages.vs()}</span>}
-              <span className={styles.side}>
-                {side.map((p, j) => (
-                  <React.Fragment key={p.uid}>
-                    {j > 0 && <span className={styles.vs}>{Messages.and()}</span>}
-                    <span className={styles.player}>
-                      <img className={styles.stock} src={getCharacterIcon(p.characterId, p.costume)} alt="" />
-                      <MiniProfileTooltip uid={p.uid}>
-                        <span className={styles.name}>{p.displayName}</span>
-                      </MiniProfileTooltip>
-                    </span>
-                  </React.Fragment>
-                ))}
-              </span>
-            </React.Fragment>
-          ))}
-        </div>
-        <span className={styles.mode}>{modeLabel(game.mode)}</span>
+        {stageIcon ? (
+          <img className={styles.stageThumb} src={stageIcon} alt="" />
+        ) : (
+          <span className={styles.stageThumb} />
+        )}
+        <SidesCell sides={sides} />
         <div className={styles.game}>
-          <div>{Messages.gameScore(game.game.number, setScore(game))}</div>
+          <div className={styles.gameLine}>
+            {modeLabel(game.mode)} · {Messages.gameScore(game.game.number, setScore(game))}
+          </div>
           {stage && <div className={styles.stage}>{stage}</div>}
         </div>
         <span
@@ -448,3 +514,118 @@ export const LiveGameRow = React.memo(function LiveGameRow({
     </RowTooltip>
   );
 });
+
+/**
+ * The game shown above the list: the highest-rated one the player can watch (the newest without ratings). A 1v1 comes
+ * before any 2v2 or free-for-all, whatever their ratings (Sarah's board, 2026-11-14).
+ */
+export function pickFeatured(games: readonly LiveGameEntry[], uid?: string): LiveGameEntry | null {
+  const watchable = games.filter((g) => g.game.state !== "over" && !(uid && g.players.some((p) => p.uid === uid)));
+  const singles = watchable.filter((g) => !g.isTeams && g.players.length === 2);
+  return sortLiveGames(singles.length > 0 ? singles : watchable, "elo")[0] ?? null;
+}
+
+/**
+ * The game above the list (docs/design/launcher-redesign.md §7): its stage, the clock, mode, game and score and the
+ * players watching, then each side as [character] [name] vs [name] [character], and Watch. When the players wrap onto
+ * more lines, every side reads [character] [name] (Sarah's board): mirrored only while all are on one line.
+ */
+const FeaturedGame = ({
+  game,
+  now,
+  watching,
+  starting,
+  busy,
+  onWatch,
+}: {
+  game: LiveGameEntry;
+  now: number;
+  watching: boolean;
+  starting: boolean;
+  busy: boolean;
+  onWatch: (game: LiveGameEntry) => void;
+}) => {
+  const stageIcon = useStageIcon()(game.game.stageId);
+  const sides = sidesOf(game);
+  const playing = game.game.state === "playing";
+  const playersRef = useRef<HTMLDivElement>(null);
+  const [wrapped, setWrapped] = useState(false);
+  const who = sides.map((side) => side.map((p) => `${p.uid}:${p.displayName}`).join("&")).join("|");
+  useLayoutEffect(() => {
+    const el = playersRef.current;
+    if (!el) {
+      return;
+    }
+    // Wrapped when the last side sits below the first. Mirroring doesn't change a side's width, so no flip-flop.
+    const check = () => {
+      const first = el.firstElementChild as HTMLElement | null;
+      const last = el.lastElementChild as HTMLElement | null;
+      setWrapped(!!first && !!last && last.offsetTop > first.offsetTop + first.offsetHeight / 2);
+    };
+    check();
+    if (typeof ResizeObserver === "undefined") {
+      return;
+    }
+    const observer = new ResizeObserver(check);
+    observer.observe(el);
+    return () => observer.disconnect();
+    // Measured again when the players change (not on each clock tick's new array).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [who]);
+  const person = (p: LivePlayer, mirrored: boolean) => {
+    const parts = [
+      <img key="stock" className={styles.featuredStock} src={getCharacterIcon(p.characterId, p.costume)} alt="" />,
+      <LivePlayerName key="name" player={p} />,
+    ];
+    return <span className={styles.featuredPlayer}>{mirrored ? parts.reverse() : parts}</span>;
+  };
+  return (
+    <section className={styles.featured} data-testid="featured-game" data-stream={game.id}>
+      {stageIcon && <img className={styles.featuredStage} src={stageIcon} alt="" />}
+      <div className={styles.featuredText}>
+        <div className={styles.featuredLine}>
+          <span className={clsx(styles.time, playing && styles.live)}>
+            {playing && <span className={styles.liveDot} />}
+            {playing ? gameClock(game.game.startedAt, now) : Messages.betweenGames()}
+          </span>
+          <span className={styles.mode}>{modeLabel(game.mode)}</span>
+          <span>{Messages.gameScore(game.game.number, setScore(game))}</span>
+          <span className={styles.eye}>
+            <VisibilityOutlinedIcon style={{ fontSize: 16 }} />
+            {game.spectators ?? 0}
+          </span>
+        </div>
+        <div
+          ref={playersRef}
+          className={styles.featuredPlayers}
+          data-testid="featured-players"
+          data-wrapped={wrapped ? "" : undefined}
+        >
+          {sides.map((side, i) => (
+            <React.Fragment key={i}>
+              {i > 0 && <span className={styles.vs}>{Messages.vs()}</span>}
+              <span className={clsx(styles.featuredSide, i === 0 ? styles.sideP1 : styles.sideP2)}>
+                {side.map((p, j) => (
+                  <React.Fragment key={p.uid}>
+                    {j > 0 && <span className={styles.vs}>{Messages.and()}</span>}
+                    {person(p, i > 0 && !wrapped)}
+                  </React.Fragment>
+                ))}
+              </span>
+            </React.Fragment>
+          ))}
+        </div>
+      </div>
+      <Button
+        variant="contained"
+        className={styles.featuredWatch}
+        disabled={busy || watching}
+        onClick={() => onWatch(game)}
+        startIcon={starting ? <CircularProgress color="inherit" size={16} /> : undefined}
+        data-testid="featured-watch"
+      >
+        {watching ? Messages.watching() : Messages.watch()}
+      </Button>
+    </section>
+  );
+};

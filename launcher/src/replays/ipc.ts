@@ -3,11 +3,25 @@ import type { EmptyPayload } from "utils/ipc";
 import { _, makeEndpoint } from "utils/ipc";
 
 import type { AllHighlightsEvent, GameHighlights, ReplayHighlights } from "./highlights/types";
-import type { FileResult, FolderResult, MatchReplay, Progress, SearchGamesOptions, SearchGamesResult } from "./types";
+import type {
+  FileResult,
+  FolderResult,
+  MatchReplay,
+  Progress,
+  ReplayPlayer,
+  SearchGamesOptions,
+  SearchGamesResult,
+} from "./types";
 
 // Handlers
 
 export const ipc_searchGames = makeEndpoint.main("searchGames", <SearchGamesOptions>_, <SearchGamesResult>_);
+
+export const ipc_searchPlayers = makeEndpoint.main(
+  "searchReplayPlayers",
+  <{ query: string; limit: number }>_,
+  <ReplayPlayer[]>_,
+);
 
 export const ipc_getAllFilePaths = makeEndpoint.main("getAllFilePaths", <SearchGamesOptions>_, <string[]>_);
 

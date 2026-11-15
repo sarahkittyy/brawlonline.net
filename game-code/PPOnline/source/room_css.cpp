@@ -532,7 +532,8 @@ namespace RoomCss {
     // ------------------------------------------------------------------------------------------
     // The room's two settings on the CSS's own ITEM and STAGE buttons (right end of the bar,
     // MenSelchrState0005 / 0006 at muSelCharTask +0x420 / +0x424; hidden on the other online
-    // CSSs, online_menu.cpp hideHeaderArt): ITEM shows "PUBLIC" / "PRIVATE", STAGE "FFA" /
+    // CSSs, online_menu.cpp hideHeaderArt): ITEM shows "PUBLIC" / "FRIENDS" / "PRIVATE"
+    // (friends only, docs/design/friends.md: Sarah's board, 2026-11-14), STAGE "FFA" /
     // "TEAMS" in rainbow letters (P+'s rainbow team battle: any costume, a team glow) / "TEAMS"
     // (the teams' costumes; the user's, 2026-10-21), and the game's own press on them (hand
     // buttons 0x19 / 0x1A, online_menu.cpp
@@ -548,7 +549,7 @@ namespace RoomCss {
         int rainbow;           // the state whose letters are rainbow, -1 none
     };
     static const HeaderLabel HEADER[2] = {
-        {0x420, "MenSelchrWifi00Button11", {"PRIVATE", "PUBLIC", NULL}, -1},
+        {0x420, "MenSelchrWifi00Button11", {"PRIVATE", "PUBLIC", "FRIENDS"}, -1},
         {0x424, "MenSelchrWifi00Button12", {"FFA", "TEAMS", "TEAMS"}, 1},
     };
     static u8* s_hdrCopy[2][3];
@@ -624,11 +625,11 @@ namespace RoomCss {
         }
     }
 
-    void headerButtons(bool isPublic, int teams)
+    void headerButtons(int visibility, int teams)
     {
         u8* task = cssTask();
         if (!task) return;
-        showHeaderLabel(task, 0, isPublic ? 1 : 0);
+        showHeaderLabel(task, 0, visibility >= 0 && visibility <= 2 ? visibility : 0);
         showHeaderLabel(task, 1, teams >= 0 && teams <= 2 ? teams : 0);
     }
 

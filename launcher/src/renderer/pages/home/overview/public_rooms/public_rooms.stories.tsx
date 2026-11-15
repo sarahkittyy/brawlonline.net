@@ -4,9 +4,9 @@ import React from "react";
 
 import { SocialMessages } from "@/components/social/social.messages";
 import { ToastProvider } from "@/components/toast_provider";
+import playStyles from "@/pages/play/play_page.module.css";
 import type { PublicRoom } from "@/services/backend/types";
 
-import overviewStyles from "../overview.module.css";
 import type { PublicRoomsState, PublicRoomsViewProps } from "./public_rooms_view";
 import { PublicRoomsView } from "./public_rooms_view";
 import { RulesetBoxView } from "./ruleset_box";
@@ -120,13 +120,13 @@ const mockRooms: PublicRoom[] = [
 const noop = () => undefined;
 const showRuleset = (room: PublicRoom) => console.log("show ruleset", room.ruleset?.code); // eslint-disable-line no-console
 
-/** The view in Home > Overview's grid, at the launcher's default window size. */
+/** The view on the Play page (its page padding), the page as wide as `width`. */
 const Frame = ({
   width = 1100,
   ...props
 }: Partial<PublicRoomsViewProps> & { state: PublicRoomsState; width?: number }) => (
-  <div style={{ width, height: 560, background: "var(--theme-page-background)" }}>
-    <div className={overviewStyles.container}>
+  <div style={{ width, height: 560, display: "flex", background: "var(--theme-page-background)" }}>
+    <div className={playStyles.page}>
       <PublicRoomsView
         onJoin={noop}
         onJoinCode={noop}
@@ -135,7 +135,6 @@ const Frame = ({
         onShowRuleset={showRuleset}
         {...props}
       />
-      <div className={overviewStyles.rankedSidebar} />
     </div>
   </div>
 );
@@ -235,6 +234,10 @@ export const GameBusy = () => {
 
 /** A window of 900 px (the launcher allows 980 px; a larger Interface Size is narrower still). */
 export const NarrowWindow = () => <Frame width={900} state={{ kind: "ready", online: 128, rooms: mockRooms }} />;
+
+/** A narrow page (a small window with the sidebar and players rail open): the rows' cells as wide as they need, the
+ * rest for the room's name. */
+export const NarrowPage = () => <Frame width={640} state={{ kind: "ready", online: 128, rooms: mockRooms }} />;
 
 /** The narrowest window with the whole header: a long ruleset name, its code and Create room. */
 export const NarrowWindowRulesetSet = () => (

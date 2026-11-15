@@ -29,6 +29,7 @@ import type { ModsRoomArg } from "./mods_args";
 import { ModsManager } from "./mods_manager";
 import { matchRoom } from "./room_match";
 import { saveStoreDir, titleDataDir } from "./save_import";
+import type { SdListingStore } from "./sd_listing";
 import type { ModBuild } from "./types";
 
 let tmp: string;
@@ -76,6 +77,8 @@ function manager(
   codeDatabase: (gameId: string) => Promise<string | null> = async () => null,
   /** An SD card's root: every card the same unless a test tells them apart. */
   sdHash: (toolPath: string, sdPath: string) => Promise<string> = async () => "card",
+  /** Room cards' listings on the accounts server: none unless a test has some. */
+  listings?: SdListingStore,
 ): {
   mods: ModsManager;
   builds: () => ModBuild[];
@@ -112,7 +115,7 @@ function manager(
     async () => "DolphinTool",
     async () => room,
     sdHash,
-    undefined,
+    listings,
     // The player's own Dolphin: never this machine's.
     () => [path.join(tmp, "own Dolphin")],
     codeDatabase,
@@ -584,6 +587,59 @@ describe("Brawl Online's own Project+", () => {
     const m = manager([rex], { modBuilds: [rex], settings: { isoPath: null } });
     await m.mods.join({ buildId: "rex", code: "BKSD", uid: "u", sdSync: "overwrite" });
     expect(m.launches).toEqual([expect.objectContaining({ sd_sync: "overwrite" })]);
+    await m.closeAll();
+  });
+
+  it("hands Dolphin the room card's listing the SD card question fetched", async () => {
+    // Sarah's board, 2026-11-14: a joiner of a REX room waited 70 s for the players to send the
+    // 2.3 MB list of the room's card, right after the launcher had fetched it for the question.
+    const iso = await installPPlus();
+    const rex: ModBuild = {
+      id: "rex",
+      name: "REX",
+      discPath: iso,
+      launcherPath: null,
+      sdPath: card(),
+      hash: null,
+      hashKey: null,
+    };
+    const root = "e7".repeat(32);
+    const room: PublicModRoom = {
+      code: "BKSD",
+      build: { hash: "r".repeat(64), name: "REX", disc: BRAWL_NTSC_U_DISC, discLabel: "RSBE01", sd: root },
+      hostName: "NEST",
+      players: 2,
+      open: 2,
+    };
+    const listing = new Uint8Array([4, 0, 0, 0, 1, 2, 3, 4]);
+    const fetched: string[] = [];
+    const listings: SdListingStore = {
+      upload: async () => undefined,
+      fetch: async (_uid, r) => {
+        fetched.push(r);
+        return listing;
+      },
+    };
+    const m = manager([rex], { modBuilds: [rex], settings: { isoPath: null } }, room, undefined, undefined, listings);
+    // The question first (DolphinTool is not there: a card that differs by an unknown size).
+    expect(await m.mods.join({ buildId: "rex", code: "BKSD", uid: "u" })).toMatchObject({ outcome: "sd-card" });
+    expect(m.launches).toEqual([]);
+    // Yes: Dolphin gets the same listing, not fetched again.
+    await m.mods.join({ buildId: "rex", code: "BKSD", uid: "u", sdSync: "yes" });
+    expect(fetched).toEqual([root]);
+    const arg = m.launches[0] as Extract<ModsRoomArg, { join: string }>;
+    expect(arg).toMatchObject({ join: "BKSD", sd_sync: "yes" });
+    expect(arg.sd_listing).toBe(path.join(user(), "Online", "room-sd-listing.bin"));
+    expect(new Uint8Array(await readFile(arg.sd_listing!))).toEqual(listing);
+    await m.closeAll();
+  });
+
+  it("leaves the listing out when the room plays the game's own card", async () => {
+    const iso = await installPPlus();
+    const m = manager([], { modBuilds: [], settings: { isoPath: iso } });
+    const [pplus] = await refreshed(m);
+    await m.mods.join({ buildId: pplus.id, code: "BKSD", uid: "u", sdSync: "yes" });
+    expect(m.launches).toEqual([expect.not.objectContaining({ sd_listing: expect.anything() })]);
     await m.closeAll();
   });
 });

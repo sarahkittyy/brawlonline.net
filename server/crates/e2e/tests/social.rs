@@ -192,3 +192,68 @@ async fn presence_dms_and_invites() {
     drop(game);
     stack.shutdown().await;
 }
+
+/// The launcher's queue box (docs/social-protocol.md `queue`): the player's own search, then their
+/// match with its opponent, game and score, from mm's status through accounts.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_queue_box_follows_a_search_and_its_match() {
+    let engine =
+        mm::engine::EngineConfig { rulesets: mm::ruleset::Rulesets::load(None).unwrap(), ..Default::default() };
+    let stack = Stack::start(StackOptions { engine, ..Default::default() }).await.unwrap();
+    let (sa, alice) = stack.create_player("alice@example.test", "alice", "alic").await;
+    let (sb, bob) = stack.create_player("bob@example.test", "bob", "bo").await;
+    let mut a = connect(&stack, &sa, &alice).await;
+    assert_eq!(a.next().await["queue"], Value::Null, "welcome: no search");
+    let mut b = connect(&stack, &sb, &bob).await;
+    assert_eq!(b.next().await["queue"], Value::Null);
+    // Both games are online with chat keys (a match's chat group is its players on its CSS).
+    let mut games = Vec::new();
+    for u in [&alice, &bob] {
+        let key = mmclient::chat::Identity::generate().public_hex();
+        let (client, hello) = OnlineClient::connect_with_chat(stack.mm_addr, &creds(u), "0.1.0", "", &key).unwrap();
+        assert_eq!(hello["type"], "hello-resp");
+        games.push(client);
+    }
+
+    // Alice searches Unranked: her launcher hears it, bob's doesn't.
+    let started = chrono::Utc::now();
+    let mut opts = mmclient::SearchOptions::unranked(stack.mm_addr, creds(&alice));
+    opts.match_timeout = Some(Duration::from_secs(30));
+    let alice_search = tokio::task::spawn_blocking(move || mmclient::search(&opts));
+    let q = a.next_of("queue").await;
+    assert_eq!(
+        (q["queue"]["state"].as_str(), q["queue"]["mode"].as_str()),
+        (Some("searching"), Some("unranked")),
+        "{q}"
+    );
+    let since = chrono::DateTime::parse_from_rfc3339(q["queue"]["since"].as_str().unwrap()).unwrap();
+    assert!((since.with_timezone(&chrono::Utc) - started).num_seconds().abs() < 10, "{q}");
+
+    // Bob searches too: they're matched, and each launcher shows the other as the opponent.
+    let mut opts = mmclient::SearchOptions::unranked(stack.mm_addr, creds(&bob));
+    opts.match_timeout = Some(Duration::from_secs(30));
+    let bob_search = tokio::task::spawn_blocking(move || mmclient::search(&opts));
+    for (l, other) in [(&mut a, &bob), (&mut b, &alice)] {
+        let q = loop {
+            let q = l.next_of("queue").await;
+            if q["queue"]["state"] == "playing" {
+                break q;
+            }
+        };
+        assert_eq!(
+            q["queue"],
+            json!({"state": "playing", "mode": "unranked", "game": 1, "wins": [0, 0],
+                   "opponents": [{"uid": other.uid, "displayName": other.display_name, "connectCode": other.connect_code}]})
+        );
+    }
+    let (ra, rb) = (alice_search.await.unwrap().unwrap(), bob_search.await.unwrap().unwrap());
+    assert_eq!((ra.status, rb.status), (mmclient::Status::Matched, mmclient::Status::Matched));
+
+    // Bob's game closes: the match is over for alice's queue box.
+    games.pop().unwrap().close();
+    assert_eq!(a.next_of("queue").await["queue"], Value::Null);
+    for g in games {
+        g.close();
+    }
+    stack.shutdown().await;
+}

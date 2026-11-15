@@ -124,11 +124,123 @@ impl From<&RoomMember> for OwnRoom {
     }
 }
 
+/// A player as the queue box names them (the launcher's `SocialPlayer`).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QueuePlayer {
+    pub uid: String,
+    pub display_name: String,
+    pub connect_code: String,
+    /// Their flag and primary main as their launcher's listing has them (none while it is offline).
+    #[serde(flatten)]
+    pub tag: crate::profile::NameTag,
+}
+
+impl From<&common::rooms::QueuePlayer> for QueuePlayer {
+    fn from(p: &common::rooms::QueuePlayer) -> Self {
+        QueuePlayer {
+            uid: p.uid.clone(),
+            display_name: p.display_name.clone(),
+            connect_code: p.connect_code.clone(),
+            tag: Default::default(),
+        }
+    }
+}
+
+/// The player's own search or match (`queue {queue}`, the launcher's sidebar queue box), from
+/// mm's status (`MmStatus::searching`, `MmStatus::matched`).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(tag = "state", rename_all = "lowercase")]
+pub enum QueueState {
+    Searching {
+        /// `unranked`, `ranked` or `twos`.
+        mode: String,
+        /// RFC 3339: when the search's ticket came.
+        since: String,
+        /// 2v2: the party's other player.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        partner: Option<QueuePlayer>,
+    },
+    Playing {
+        /// `direct`, `unranked`, `ranked` or `twos`.
+        mode: String,
+        /// The other side (2v2: both opponents).
+        opponents: Vec<QueuePlayer>,
+        /// The game number the players see.
+        game: u32,
+        /// Games won in the set so far: the player's side first.
+        wins: [u32; 2],
+        /// The match's stream in `GET /v1/live`, when it is listed.
+        #[serde(rename = "liveId", skip_serializing_if = "Option::is_none")]
+        live_id: Option<String>,
+    },
+}
+
+impl QueueState {
+    fn players_mut(&mut self) -> Vec<&mut QueuePlayer> {
+        match self {
+            QueueState::Searching { partner, .. } => partner.iter_mut().collect(),
+            QueueState::Playing { opponents, .. } => opponents.iter_mut().collect(),
+        }
+    }
+}
+
+/// Every searching or matched player's [`QueueState`], by uid. A search comes before a match (a
+/// new search leaves the match). The other side of a match: the other team once a game streamed
+/// says who is on which (2v2); before that in 2v2, those not queued with the player (a pair stays
+/// on one team, so two who searched alone face the pair), or the three others when all four
+/// searched alone; in 1v1, the other player.
+pub fn queue_states(
+    searching: &[common::rooms::QueueSearcher],
+    matched: &[common::rooms::QueueMatch],
+) -> HashMap<String, QueueState> {
+    let mut out = HashMap::new();
+    for m in matched {
+        let any_pair = |except: u8| m.players.iter().any(|p| p.pair != 0 && p.pair != except);
+        for me in &m.players {
+            let others = m.players.iter().filter(|p| p.player.uid != me.player.uid);
+            let opponents: Vec<&common::rooms::QueueMatchPlayer> =
+                if me.team.is_some() && m.players.iter().all(|p| p.team.is_some()) {
+                    others.filter(|p| p.team != me.team).collect()
+                } else if m.mode == "twos" && me.pair != 0 {
+                    others.filter(|p| p.pair != me.pair).collect()
+                } else if m.mode == "twos" && any_pair(0) {
+                    others.filter(|p| p.pair != 0).collect()
+                } else {
+                    others.collect()
+                };
+            let theirs = opponents.iter().map(|p| p.wins).max().unwrap_or(0);
+            out.insert(
+                me.player.uid.clone(),
+                QueueState::Playing {
+                    mode: m.mode.clone(),
+                    opponents: opponents.iter().map(|p| QueuePlayer::from(&p.player)).collect(),
+                    game: m.game.max(1),
+                    wins: [me.wins, theirs],
+                    live_id: m.live_id.clone(),
+                },
+            );
+        }
+    }
+    for s in searching {
+        out.insert(
+            s.uid.clone(),
+            QueueState::Searching {
+                mode: s.mode.clone(),
+                since: s.since.clone(),
+                partner: s.partner.as_ref().map(QueuePlayer::from),
+            },
+        );
+    }
+    out
+}
+
 struct Client {
     conn: u64,
     member: Member,
     tx: mpsc::Sender<String>,
     room: Option<OwnRoom>,
+    queue: Option<QueueState>,
 }
 
 struct Hub {
@@ -140,6 +252,8 @@ struct Hub {
     invite_pairs: RateLimiter<(String, String)>,
     /// The last snapshot's rooms by uid (for a new stream's `welcome`).
     rooms: HashMap<String, OwnRoom>,
+    /// The last snapshot's searches and matches by uid ([`queue_states`], for `welcome`).
+    queues: HashMap<String, QueueState>,
     /// Invites waiting for an answer, by (inviter, invitee).
     pending: HashMap<(String, String), Pending>,
 }
@@ -218,6 +332,7 @@ impl SocialHub {
                 invites: RateLimiter::new(&INVITE_WINDOWS),
                 invite_pairs: RateLimiter::new(&INVITE_PAIR_WINDOWS),
                 rooms: HashMap::new(),
+                queues: HashMap::new(),
                 pending: HashMap::new(),
             }),
             limits,
@@ -249,14 +364,18 @@ impl SocialHub {
         hub.next_conn += 1;
         let (tx, rx) = mpsc::channel(QUEUE);
         let room = hub.rooms.get(&member.uid).cloned();
+        let queue = hub.queues.get(&member.uid).cloned().map(|q| Self::tagged(&hub, q));
+        let fakes = crate::staging_fake::members();
         let mut online: Vec<&Member> = hub.clients.values().map(|c| &c.member).collect();
+        online.extend(fakes.iter().filter(|m| m.uid != member.uid && !hub.clients.contains_key(&m.uid)));
         online.sort_by(|a, b| a.display_name.to_lowercase().cmp(&b.display_name.to_lowercase()));
-        let welcome = json!({"type": "welcome", "you": member.uid, "online": online, "room": room}).to_string();
+        let welcome =
+            json!({"type": "welcome", "you": member.uid, "online": online, "room": room, "queue": queue}).to_string();
         tx.try_send(welcome).expect("a new queue has room");
         let joined = json!({"type": "online", "member": member}).to_string();
         let uid = member.uid.clone();
         Self::broadcast(&mut hub, &uid, &joined);
-        hub.clients.insert(uid, Client { conn, member, tx, room });
+        hub.clients.insert(uid, Client { conn, member, tx, room, queue });
         Ok((conn, rx))
     }
 
@@ -431,6 +550,13 @@ impl SocialHub {
         }
     }
 
+    /// Queues `event` for a player's launcher, if it is connected (friend requests and the like,
+    /// `friends.rs`).
+    pub fn notify(&self, uid: &str, event: String) {
+        let mut hub = self.hub.lock().unwrap();
+        Self::send_to(&mut hub, uid, event);
+    }
+
     /// A player changed their profile's flag or primary main, or whether they show them: listed
     /// again (`online`) with the new ones.
     pub fn name_tag_changed(&self, uid: &str, tag: crate::profile::NameTag) {
@@ -460,6 +586,37 @@ impl SocialHub {
                 c.room = room.clone();
             }
             Self::send_to(&mut hub, &uid, json!({"type": "room", "room": room}).to_string());
+        }
+    }
+
+    /// `q` with each named player's flag and main from their launcher's listing (online ones).
+    fn tagged(hub: &Hub, mut q: QueueState) -> QueueState {
+        for p in q.players_mut() {
+            if let Some(c) = hub.clients.get(&p.uid) {
+                p.tag = c.member.tag.clone();
+            }
+        }
+        q
+    }
+
+    /// Takes mm's latest searches and matches ([`queue_states`]) and sends `queue {queue}` to
+    /// every launcher whose player's changed (a search started or ended, a match began, a game or
+    /// a win went by, or the match ended).
+    pub fn update_queues(&self, states: HashMap<String, QueueState>) {
+        let mut hub = self.hub.lock().unwrap();
+        hub.queues = states;
+        let mut changed = Vec::new();
+        for (uid, c) in hub.clients.iter() {
+            let now = hub.queues.get(uid).cloned().map(|q| Self::tagged(&hub, q));
+            if c.queue != now {
+                changed.push((uid.clone(), now));
+            }
+        }
+        for (uid, queue) in changed {
+            if let Some(c) = hub.clients.get_mut(&uid) {
+                c.queue = queue.clone();
+            }
+            Self::send_to(&mut hub, &uid, json!({"type": "queue", "queue": queue}).to_string());
         }
     }
 }
@@ -648,6 +805,7 @@ pub async fn room_watcher(state: AppState) {
             Ok(s) => {
                 failing = false;
                 state.social.update_rooms(&s.members);
+                state.social.update_queues(queue_states(&s.searching, &s.matched));
             }
             Err(e) => {
                 if !failing {
@@ -887,6 +1045,117 @@ mod tests {
         assert_eq!(next(&mut ra)["room"]["joinable"], false);
         hub.update_rooms(&[]);
         assert_eq!(next(&mut ra), json!({"type": "room", "room": null}));
+    }
+
+    fn qp(m: &Member) -> common::rooms::QueuePlayer {
+        common::rooms::QueuePlayer {
+            uid: m.uid.clone(),
+            display_name: m.display_name.clone(),
+            connect_code: m.connect_code.clone(),
+        }
+    }
+
+    fn in_match(m: &Member, wins: u32, team: Option<u32>, pair: u8) -> common::rooms::QueueMatchPlayer {
+        common::rooms::QueueMatchPlayer { player: qp(m), wins, team, pair }
+    }
+
+    #[test]
+    fn searches_and_matches_reach_their_player() {
+        let hub = SocialHub::new(true);
+        let now = Instant::now();
+        let (a, b) = (member(1), member(2));
+        let mut b_tagged = b.clone();
+        b_tagged.tag.main = Some("fox".into());
+        let since = "2026-11-14T21:00:00.000Z".to_string();
+        let search = common::rooms::QueueSearcher {
+            uid: a.uid.clone(),
+            mode: "ranked".into(),
+            since: since.clone(),
+            partner: None,
+        };
+        // A's search is in the snapshot before A's launcher connects: `welcome` has it.
+        hub.update_queues(queue_states(std::slice::from_ref(&search), &[]));
+        let (_, mut ra) = hub.connect(a.clone(), now).unwrap();
+        let w = next(&mut ra);
+        assert_eq!(w["queue"], json!({"state": "searching", "mode": "ranked", "since": since}));
+        let (_, mut rb) = hub.connect(b_tagged.clone(), now).unwrap();
+        assert!(next(&mut rb)["queue"].is_null(), "B searches nothing");
+        next(&mut ra); // B online
+        hub.update_queues(queue_states(std::slice::from_ref(&search), &[]));
+        assert!(ra.try_recv().is_err() && rb.try_recv().is_err(), "nothing changed");
+
+        // Matched: game 1, 0-0, the other player with their main; then a game goes by.
+        let mut m = common::rooms::QueueMatch {
+            mode: "ranked".into(),
+            players: vec![in_match(&a, 0, None, 0), in_match(&b, 0, None, 0)],
+            game: 1,
+            live_id: None,
+        };
+        hub.update_queues(queue_states(&[], std::slice::from_ref(&m)));
+        let ev = next(&mut ra);
+        assert_eq!(
+            ev,
+            json!({"type": "queue", "queue": {"state": "playing", "mode": "ranked", "game": 1, "wins": [0, 0],
+                "opponents": [{"uid": b.uid, "displayName": "p2", "connectCode": "P#2", "main": "fox"}]}})
+        );
+        assert_eq!(next(&mut rb)["queue"]["opponents"][0]["uid"], a.uid.as_str());
+        m.game = 2;
+        m.players[1].wins = 1;
+        m.live_id = Some("s1".into());
+        hub.update_queues(queue_states(&[], std::slice::from_ref(&m)));
+        let ev = next(&mut ra);
+        assert_eq!((ev["queue"]["game"].as_u64(), &ev["queue"]["wins"]), (Some(2), &json!([0, 1])));
+        assert_eq!(ev["queue"]["liveId"], "s1");
+        assert_eq!(next(&mut rb)["queue"]["wins"], json!([1, 0]), "the player's side first");
+        // The match ends.
+        hub.update_queues(HashMap::new());
+        assert_eq!(next(&mut ra), json!({"type": "queue", "queue": null}));
+        assert_eq!(next(&mut rb), json!({"type": "queue", "queue": null}));
+    }
+
+    #[test]
+    fn twos_opponents_are_the_other_team() {
+        let (a, b, c, d) = (member(1), member(2), member(3), member(4));
+        let uids = |q: &QueueState| match q {
+            QueueState::Playing { opponents, .. } => opponents.iter().map(|p| p.display_name.clone()).collect(),
+            _ => Vec::new(),
+        };
+        // A and B queued together; C and D alone: before a game, the pair faces the two others.
+        let m = common::rooms::QueueMatch {
+            mode: "twos".into(),
+            players: vec![
+                in_match(&a, 0, None, 1),
+                in_match(&b, 0, None, 1),
+                in_match(&c, 0, None, 0),
+                in_match(&d, 0, None, 0),
+            ],
+            game: 1,
+            live_id: None,
+        };
+        let s = queue_states(&[], std::slice::from_ref(&m));
+        assert_eq!(uids(&s[&a.uid]), ["p3", "p4"]);
+        assert_eq!(uids(&s[&c.uid]), ["p1", "p2"]);
+        // A game streamed says the teams: A+C against B+D.
+        let teams = [0, 1, 0, 1];
+        let mut m2 = m.clone();
+        for (p, t) in m2.players.iter_mut().zip(teams) {
+            p.team = Some(t);
+            p.wins = if t == 0 { 1 } else { 0 };
+        }
+        let s = queue_states(&[], std::slice::from_ref(&m2));
+        assert_eq!(uids(&s[&a.uid]), ["p2", "p4"]);
+        assert!(matches!(&s[&b.uid], QueueState::Playing { wins: [0, 1], .. }));
+        // A search wins over a match, with its partner.
+        let search = common::rooms::QueueSearcher {
+            uid: a.uid.clone(),
+            mode: "twos".into(),
+            since: "2026-11-14T21:00:00.000Z".into(),
+            partner: Some(qp(&b)),
+        };
+        let s = queue_states(&[search], std::slice::from_ref(&m));
+        let json = serde_json::to_value(&s[&a.uid]).unwrap();
+        assert_eq!(json["state"], "searching");
+        assert_eq!(json["partner"], json!({"uid": b.uid, "displayName": "p2", "connectCode": "P#2"}));
     }
 
     #[test]

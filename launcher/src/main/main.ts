@@ -20,7 +20,7 @@ import { registerGameAssetScheme } from "@game_assets/protocol";
 import { ipc_statsPageRequestedEvent } from "@replays/ipc";
 import { ipc_openSettingsModalEvent } from "@settings/ipc";
 import type CrossProcessExports from "electron";
-import { app, autoUpdater, BrowserWindow, shell } from "electron";
+import { app, autoUpdater, BrowserWindow, screen, shell } from "electron";
 import log from "electron-log";
 import get from "lodash/get";
 import last from "lodash/last";
@@ -207,9 +207,7 @@ const createWindow = async () => {
     show: false,
     width: 1280,
     height: 750,
-    minHeight: isDevelopment ? undefined : 450,
-    // The header fits down to 756 CSS px (header.tsx); 980 px is 771 at 125 % Interface Size.
-    minWidth: isDevelopment ? undefined : 980,
+    // The minimum size (MIN_WINDOW at 100 %) and the size at the player's Interface Size: attachInterfaceZoom.
     backgroundColor: BACKGROUND_COLOR,
     icon: getWindowIcon(),
 
@@ -229,7 +227,7 @@ const createWindow = async () => {
     },
   });
 
-  attachInterfaceZoom(mainWindow, settingsManager, isMac);
+  attachInterfaceZoom(mainWindow, settingsManager, { isMac, screen, enforceMinimum: !isDevelopment });
   mainWindow.loadURL(resolveHtmlPath("index.html")).catch(log.error);
 
   mainWindow.on("ready-to-show", () => {

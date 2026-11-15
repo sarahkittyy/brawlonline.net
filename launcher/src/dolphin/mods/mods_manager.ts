@@ -112,6 +112,9 @@ export async function fetchCodeDatabase(cacheDir: string, gameId: string): Promi
 /** How often the room file is read while Dolphin runs a room. */
 const POLL_MS = 500;
 const MAX_BUILD_NAME = 64;
+/** How long a room card's listing fetched for the SD card question is kept for the join its answer
+ * starts (the player reads the question first). */
+const LISTING_KEEP_MS = 10 * 60_000;
 
 /** A room code as players type it: letters and digits (mm's codes are upper case). */
 export function normalizeRoomCode(code: string): string | null {
@@ -219,6 +222,9 @@ export class ModsManager {
   private builtInRefresh: Promise<void> = Promise.resolve();
   /** The game the running room plays. */
   private runningBuildId: string | null = null;
+  /** The room card's listing fetched last (the SD card question's), for the join its answer
+   * starts: Dolphin reads it instead of waiting for the players to send the same list. */
+  private lastListing: { uid: string; root: string; listing: Uint8Array; at: number } | null = null;
 
   /** `toolPath` resolves DolphinTool (the bundled Dolphin's, once it is installed). */
   constructor(
@@ -362,7 +368,7 @@ export class ModsManager {
     const toolPath = await this.toolPath();
     const userDir = this.dolphin.netplayUserFolder();
     let listing: Promise<Uint8Array | null> | null = null;
-    const fetchListing = () => (listing ??= this.listings.fetch(options.uid, options.roomRoot));
+    const fetchListing = () => (listing ??= this.roomListing(options.uid, options.roomRoot));
     const checks: Record<string, ModSdCardCheck> = {};
     for (const id of options.buildIds) {
       const build = this.builds().find((b) => b.id === id);
@@ -776,11 +782,54 @@ export class ModsManager {
     const check = await checkRoomCard({
       ownRoot: build.parts?.sdCard ?? null,
       roomRoot,
-      fetchListing: () => this.listings.fetch(uid, roomRoot),
+      fetchListing: () => this.roomListing(uid, roomRoot),
       compare: (listing) => compareSdListing(toolPath, sdPath, userDir, listing, roomRoot),
       log: (message) => log.warn(message),
     });
     return { check, roomName: room.build.name };
+  }
+
+  /** The listing of the room card `root` from the accounts server, or the one fetched last when
+   * it is that card's and recent (the question, then the join its answer starts). */
+  private async roomListing(uid: string, root: string): Promise<Uint8Array | null> {
+    const last = this.lastListing;
+    if (last && last.uid === uid && last.root === root && Date.now() - last.at < LISTING_KEEP_MS) {
+      return last.listing;
+    }
+    const listing = await this.listings.fetch(uid, root);
+    this.lastListing = listing ? { uid, root, listing, at: Date.now() } : null;
+    return listing;
+  }
+
+  /**
+   * A joiner's room card listing for Dolphin (`sd_listing`; Sarah's board, 2026-11-14: SARA#694
+   * waited 70 s in a REX room for the players to send the 2.3 MB list at their upload's pace,
+   * right after this launcher had fetched the same list for the SD card question): written in the
+   * netplay User folder, one file for every join. Dolphin checks it against the room's card root,
+   * and asks the players as before when there is none or it does not match. Null: none.
+   */
+  private async writeRoomListing(build: ModBuild, code: string, uid: string | undefined): Promise<string | null> {
+    if (!build.sdPath || !uid) {
+      return null;
+    }
+    try {
+      const room = await this.lookupRoom(uid, code);
+      const root = room?.build.sd;
+      if (!root || root === build.parts?.sdCard) {
+        return null;
+      }
+      const listing = await this.roomListing(uid, root);
+      if (!listing) {
+        return null;
+      }
+      const file = path.join(this.dolphin.netplayOnlineDir(), "room-sd-listing.bin");
+      await mkdir(path.dirname(file), { recursive: true });
+      await writeFile(file, listing);
+      return file;
+    } catch (err) {
+      log.warn(`room ${code}'s SD card listing for Dolphin: ${err}`);
+      return null;
+    }
   }
 
   async join(options: ModsJoinOptions): Promise<ModsJoinResult> {
@@ -805,11 +854,13 @@ export class ModsManager {
     }
     // Brawl Online's own P+ card is never written over: a room's card is for that room only.
     const sdSync = options.sdSync === "overwrite" && build.builtIn ? "yes" : options.sdSync;
+    const sdListing = sdSync ? await this.writeRoomListing(build, code, options.uid) : null;
     await this.launch(build, {
       join: code,
       build: roomBuild(build),
       controller: await this.launchController(),
       ...(sdSync ? { sd_sync: sdSync } : {}),
+      ...(sdListing ? { sd_listing: sdListing } : {}),
     });
     return { outcome: "joining" };
   }

@@ -200,7 +200,7 @@ def main() -> int:
             took = time.time() - t_start
             hlog = log_of(host)[host_log_at:]
             sent = re.findall(r"machine image for player 2: ([\d.]+) MB", hlog)
-            progress = re.findall(r"(\d\d:\d\d:\d\d\d) .*Sending the game to [^:]*: (\d+)%", hlog)
+            progress = re.findall(r"(\d\d:\d\d:\d\d\d) .*player 2 has (\d+)% of the machine image", hlog)
             # The longest wait between two progress lines of this join (stalls).
             stamps = [int(t[:2]) * 60000 + int(t[3:5]) * 1000 + int(t[6:]) for t, _ in progress]
             gaps = [b - c for c, b in zip(stamps, stamps[1:]) if b >= c]

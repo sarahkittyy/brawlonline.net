@@ -74,3 +74,9 @@
 .header.active:hover {
   background-color: rgb(255 255 255 / 5%);
 }
+
+/* A header of tabs (`heading`): they reach its bottom edge, where the active one's line is. */
+.header.tabbed {
+  align-items: stretch;
+  padding: 0 12px 0 8px;
+}

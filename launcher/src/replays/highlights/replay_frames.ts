@@ -45,6 +45,9 @@ const CHUNK_INFO = fourCC("INFO");
 const CHUNK_FTSP = fourCC("FTSP");
 const CHUNK_FRMS = fourCC("FRMS");
 const CHUNK_FTRM = fourCC("FTRM");
+const CHUNK_AFTR = fourCC("AFTR");
+/** Frames of buttons after the end a file may hold (Dolphin's AFTER_MAX_FRAMES). */
+const MAX_AFTER_FRAMES = 30 * 60;
 const TRAILER_MAGIC = fourCC("BRPT");
 
 export class ReplayFramesError extends Error {}
@@ -88,6 +91,12 @@ export type Timeline = {
   lCancels: Float32Array[];
   /** PAD_KEPT bytes a frame: pad bytes 0x0-0x3, then 0x30-0x35. */
   pads: Uint8Array[];
+  /**
+   * The recording player's buttons (the low 16 bits of the pad's +0x0) a frame from the frame
+   * after the last, while the game still showed the match's end (GAME!), or null: the file's AFTR
+   * chunk (ReplayRecorder.h AfterEnd, since 2026-11-14), written when a button was down there.
+   */
+  after: { port: number; buttons: Uint16Array } | null;
 };
 
 /**
@@ -246,10 +255,13 @@ export function decodeTimeline(data: Buffer): Timeline {
     () => new Column((n) => new Uint8Array(n), PAD_KEPT),
   );
   let fieldOffsets: number[] = [];
+  let after: Timeline["after"] = null;
 
   for (const { type, raw } of chunks(data)) {
     if (type === CHUNK_INFO && raw.length <= MAX_JSON) {
       info = parseJson(raw);
+    } else if (type === CHUNK_AFTR && raw.length <= MAX_JSON) {
+      after = parseAfter(parseJson(raw));
     } else if (type === CHUNK_FTSP && raw.length <= MAX_JSON) {
       const blocks = obj(parseJson(raw)).blocks;
       spec = {};
@@ -438,9 +450,37 @@ export function decodeTimeline(data: Buffer): Timeline {
     lCancels: cols.map((c) => c.lCancels.take(frames)),
     // (The pads cover the same frames: FTRM and FRMS are written together.)
     pads: recorded.map((p) => (padFrames >= frames ? pads[p].take(frames) : emptyPads)),
+    after,
   };
   holdUnrecorded(t, entries);
   return t;
+}
+
+/** AFTR's {"port", "frames", "buttons": [[frame, buttons], ...]} (a pair where they change), per frame. */
+function parseAfter(o: Record<string, unknown>): Timeline["after"] {
+  const port = int(o.port, 1, PORTS);
+  const frames = int(o.frames, 1, MAX_AFTER_FRAMES);
+  if (port == null || frames == null || !Array.isArray(o.buttons)) {
+    return null;
+  }
+  const buttons = new Uint16Array(frames);
+  let from = -1;
+  let value = 0;
+  for (const change of o.buttons.slice(0, MAX_AFTER_FRAMES)) {
+    const at = Array.isArray(change) ? int(change[0], 0, frames - 1) : null;
+    const held = Array.isArray(change) ? int(change[1], 0, 0xffff) : null;
+    if (at == null || held == null || at <= from) {
+      return null;
+    }
+    buttons.fill(value, Math.max(from, 0), at);
+    from = at;
+    value = held;
+  }
+  if (from < 0) {
+    return null;
+  }
+  buttons.fill(value, from);
+  return { port, buttons };
 }
 
 /**

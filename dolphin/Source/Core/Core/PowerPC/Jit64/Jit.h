@@ -142,6 +142,11 @@ public:
   template <bool condition>
   void WriteBranchWatch(u32 origin, u32 destination, UGeckoInstruction inst, BitSet32 caller_save);
   void WriteBranchWatchDestInRSCRATCH(u32 origin, UGeckoInstruction inst, BitSet32 caller_save);
+  // BranchProfile: the exit of a conditional branch whose taken side the block goes on with, and
+  // a recording's count of one side of a branch (clobbers RSCRATCH and the flags).
+  void WriteNotTakenExit(const Gen::FixupBranch& not_taken, u32 branch_address,
+                         UGeckoInstruction inst);
+  void CountBranch(u32* counter);
 
   bool Cleanup();
 
@@ -177,6 +182,10 @@ public:
   void UpdateFPExceptionSummary(Gen::X64Reg fpscr, Gen::X64Reg tmp1, Gen::X64Reg tmp2);
 
   void SetFPRFIfNeeded(const Gen::OpArg& xmm, bool single);
+  // FPSCR[FPRF] is left as the last float result (PowerPCState::fprf_lazy) unless
+  // PPR_JIT_FPRF_EAGER is set; FlushLazyFPRF makes FPSCR current ahead of code that reads it.
+  bool m_fprf_lazy = true;
+  void FlushLazyFPRF();
   void FinalizeSingleResult(Gen::X64Reg output, const Gen::OpArg& input, bool packed = true,
                             bool duplicate = false);
   void FinalizeDoubleResult(Gen::X64Reg output, const Gen::OpArg& input);

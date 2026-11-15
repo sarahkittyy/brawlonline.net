@@ -154,7 +154,7 @@ async fn public_list_private_rooms_and_online_count() {
     b.send(&RoomRequest::Create { public: false, ruleset: None, remembered: false });
     let private = room_state(&mut b)["code"].as_str().unwrap().to_string();
     // The private room shows as private to its members.
-    b.send(&RoomRequest::Public { public: false });
+    b.send(&RoomRequest::Public { public: false, friends: false });
     assert_eq!(room_state(&mut b)["public"], false);
 
     let body =
@@ -171,23 +171,33 @@ async fn public_list_private_rooms_and_online_count() {
             "names": ["alice"],
             "uids": [alice.uid],
             "countries": [null],
+            "mains": [null],
             "joinable": true,
             "ruleset": {"code": null, "name": "P+ default", "version": 0, "by": "", "basedOn": null,
                         "bestOf": 0, "stageChoice": "loser-picks", "alternateStages": true,
                         "stages": {"starters": [1, 4, 9, 33, 46], "counterpicks": [12, 31, 35, 45]}},
         })
     );
-    // A player's flag beside their name once they set one (docs/design/profiles.md §8).
-    let (st, p) = stack.put("/v1/me/profile", Some(&sa), json!({"country": "se"})).await;
+    // A player's flag and primary main beside their name once they set them (docs/design/profiles.md
+    // §8; both shown by default).
+    let (st, p) = stack.put("/v1/me/profile", Some(&sa), json!({"country": "se", "mains": ["fox", "marth"]})).await;
     assert_eq!(st, 200, "{p}");
-    rooms_until(&stack, &sa, |b| b["rooms"][0]["countries"] == json!(["se"])).await;
+    let body = rooms_until(&stack, &sa, |b| {
+        b["rooms"][0]["countries"] == json!(["se"]) && b["rooms"][0]["mains"] == json!(["fox"])
+    })
+    .await;
+    // The hour's ETA (no searches recorded: "10+ min" for both); mm's internal lists stay out.
+    assert_eq!(body["queueEta"], json!({"unranked": null, "ranked": null}), "{body}");
+    for internal in ["searching", "matched", "members", "friendRooms"] {
+        assert!(body.get(internal).is_none(), "{internal}: {body}");
+    }
     // A private room is joinable by code.
     let mut c = c;
     join(&mut c, &private);
     assert_eq!(room_state(&mut c)["public"], false);
 
     // The host makes it public: it is listed (full, so not joinable, and after the joinable one).
-    b.send(&RoomRequest::Public { public: true });
+    b.send(&RoomRequest::Public { public: true, friends: false });
     let body = rooms_until(&stack, &sa, |b| b["rooms"].as_array().is_some_and(|r| r.len() == 2)).await;
     assert_eq!(body["rooms"][0]["code"], public.as_str());
     assert_eq!(body["rooms"][1]["code"], private.as_str());

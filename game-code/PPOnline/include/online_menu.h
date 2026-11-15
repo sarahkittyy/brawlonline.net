@@ -122,7 +122,7 @@ namespace RoomCss {
     // A 2v2 party's CSS (docs/design/2v2.md): the closed slots are not shown, and the open one says
     // "A: Enter Code" under "Open".
     void setTwos(bool on);
-    void headerButtons(bool isPublic, int teams);   // ITEM / STAGE as the room's two settings (teams:
+    void headerButtons(int visibility, int teams);   // visibility: 0 private, 1 public, 2 friends;   // ITEM / STAGE as the room's two settings (teams:
                                                     // 0 FFA, 1 rainbow TEAMS, 2 TEAMS)
     void setLocalSlot(int slot, bool inRoom);   // the room slot the local player's panel is shown at
     int portOfArea(int area);            // the room slot an area (1-3) shows

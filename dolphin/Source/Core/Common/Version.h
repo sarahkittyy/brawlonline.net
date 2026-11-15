@@ -12,6 +12,7 @@ const std::string& GetScmDescStr();
 const std::string& GetScmBranchStr();
 const std::string& GetScmRevStr();
 const std::string& GetScmRevGitStr();
+const std::string& GetShaderCompilerRevStr();
 const std::string& GetUserAgentStr();
 const std::string& GetScmDistributorStr();
 const std::string& GetScmUpdateTrackStr();

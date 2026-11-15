@@ -101,6 +101,49 @@ constexpr size_t MAX_QUEUED_GEKKO_PACKETS = 1024;
 // A pong's round trip larger than this is not a measurement.
 constexpr double MAX_RTT_MS = 5000.0;
 
+// Pongs that arrive within this of each other were held up together: pings go out 200 ms apart
+// (1 s in a match), so their pongs come about as far apart unless something held them. A machine
+// that stops (one side's Dolphin hitching while it loads the match, its net thread waiting, the
+// whole PC freezing) answers or reads all the pings of the stop at once when it goes on, and their
+// round trips are the stop's length, not the link's.
+constexpr double PONG_BURST_MS = 50.0;
+
+// Which pongs' round trips count toward the link's (bug report #295, 2026-11-14: the opponent's
+// Dolphin stopped ~4 s at the first barrier; the pings of those seconds came back together right
+// as it arrived, the smoothed round trip read 1749 ms on a 50 ms link, and both players' Automatic
+// delay was 9 frames for the game). A pong counts unless the one before it or the one after it
+// came less than PONG_BURST_MS apart from it, so it is passed on one pong late.
+class PongFilter
+{
+public:
+  // A pong whose round trip is `rtt_ms` came in at `at_ms` (any steady clock): the round trip of
+  // the pong before it, when that one counts.
+  std::optional<double> Add(double rtt_ms, double at_ms)
+  {
+    const bool burst = m_last_at >= 0 && at_ms - m_last_at < PONG_BURST_MS;
+    std::optional<double> out;
+    if (m_pending >= 0)
+    {
+      if (m_pending_burst || burst)
+        ++m_held;
+      else
+        out = m_pending;
+    }
+    m_pending = rtt_ms;
+    m_pending_burst = burst;
+    m_last_at = at_ms;
+    return out;
+  }
+  // Pongs left out so far as held up.
+  u32 Held() const { return m_held; }
+
+private:
+  double m_pending = -1;
+  bool m_pending_burst = false;
+  double m_last_at = -1;
+  u32 m_held = 0;
+};
+
 // True when `text` is at most `max_depth` arrays/objects deep. picojson parses recursively with
 // no depth limit, so a deeply nested message would overflow the network thread's stack.
 bool JsonDepthOk(std::string_view text, int max_depth = MAX_JSON_DEPTH);

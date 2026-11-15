@@ -175,9 +175,27 @@ struct Recording
   FighterChunk fighters;
   picojson::array events;
   std::string path;
+  int local_port = 0;
+  int local_pad = -1;
 };
 
 Recording s_rec;
+
+// A finished game's file while the game still shows its end (AfterEnd): the recording player's
+// buttons, one value a frame from the frame after the last one recorded.
+struct After
+{
+  std::shared_ptr<Output> out;
+  std::string endg;
+  u32 last_frame = 0;
+  int port = 0;  // in-game, 1-4
+  int pad = -1;  // -1: no window open
+  u32 counter = 0;
+  bool counted = false;
+  bool any = false;
+  std::vector<u16> buttons;
+};
+After s_after;
 std::mutex s_path_mutex;
 std::string s_last_path;
 
@@ -647,6 +665,7 @@ bool Enabled(const MatchMeta& meta)
 
 bool Begin(Core::System& system, const BeginInfo& info)
 {
+  EndAfter();
   if (s_rec.active)
     Abort();
   const bool save = Saving();
@@ -673,6 +692,8 @@ bool Begin(Core::System& system, const BeginInfo& info)
     s_last_path = path;
   }
   s_rec.path = path;
+  s_rec.local_port = info.local_port;
+  s_rec.local_pad = info.local_pad;
   s_rec.out = std::make_shared<Output>();
   s_rec.out->path = path;
   s_rec.out->save = save;
@@ -903,6 +924,15 @@ void End(const EndInfo& info)
           NOTICE_LOG_FMT(BRAWLBACK, "replay: saved {}", out.path);
         },
         endg.size());
+    if (s_rec.save && s_rec.local_pad >= 0 && s_rec.local_port >= 0 && s_rec.local_port < PORTS)
+    {
+      s_after = {};
+      s_after.out = s_rec.out;
+      s_after.endg = endg;
+      s_after.last_frame = last_frame;
+      s_after.port = s_rec.local_port + 1;
+      s_after.pad = s_rec.local_pad;
+    }
   }
   s_rec.active = false;
   s_rec.out.reset();
@@ -927,6 +957,76 @@ void Abort()
         0);
   }
   s_rec = {};
+}
+
+int AfterEndPad()
+{
+  return s_after.pad;
+}
+
+void OnAfterEnd(u32 frame_counter, u16 buttons)
+{
+  if (s_after.pad < 0 || (s_after.counted && frame_counter == s_after.counter))
+    return;
+  // Frames the loop top did not see (none, normally) keep the buttons seen before them.
+  const u32 gap = s_after.counted ? frame_counter - s_after.counter - 1 : 0;
+  if (gap < AFTER_MAX_FRAMES)
+  {
+    const u16 before = s_after.buttons.empty() ? buttons : s_after.buttons.back();
+    for (u32 i = 0; i < gap && s_after.buttons.size() < AFTER_MAX_FRAMES; ++i)
+      s_after.buttons.push_back(before);
+  }
+  s_after.counter = frame_counter;
+  s_after.counted = true;
+  if (s_after.buttons.size() < AFTER_MAX_FRAMES)
+    s_after.buttons.push_back(buttons);
+  s_after.any |= buttons != 0;
+  if (s_after.buttons.size() >= AFTER_MAX_FRAMES)
+    EndAfter();
+}
+
+void EndAfter()
+{
+  if (s_after.pad < 0)
+    return;
+  After a = std::move(s_after);
+  s_after = {};
+  if (!a.any || !a.out || a.buttons.empty())
+    return;
+  // {"port", "pad", "frames", "buttons": [[frame, buttons], ...]}: the buttons from each frame
+  // (0: the frame after the replay's last) on, a pair where they change.
+  picojson::array changes;
+  for (size_t f = 0; f < a.buttons.size(); ++f)
+  {
+    if (f == 0 || a.buttons[f] != a.buttons[f - 1])
+    {
+      changes.emplace_back(picojson::array{picojson::value(static_cast<double>(f)),
+                                           picojson::value(static_cast<double>(a.buttons[f]))});
+    }
+  }
+  picojson::object o;
+  o["port"] = picojson::value(static_cast<double>(a.port));
+  o["pad"] = picojson::value(static_cast<double>(a.pad));
+  o["frames"] = picojson::value(static_cast<double>(a.buttons.size()));
+  o["buttons"] = picojson::value(std::move(changes));
+  const std::string json = picojson::value(o).serialize();
+  const size_t frames = a.buttons.size();
+  const size_t bytes = json.size() + a.endg.size();
+  Writers().Push({[out = std::move(a.out), json, endg = std::move(a.endg),
+                   last_frame = a.last_frame, frames] {
+                    if (!out->save || out->failed)
+                      return;
+                    const auto chunk = EncodeChunk(CHUNK_AFTR, 0, Bytes(json));
+                    if (!chunk || !out->writer.InsertBeforeEnd(*chunk, Bytes(endg), last_frame))
+                    {
+                      WARN_LOG_FMT(BRAWLBACK, "replay: could not add the buttons after the end to {}",
+                                   out->path);
+                      return;
+                    }
+                    INFO_LOG_FMT(BRAWLBACK, "replay: {} frames of buttons after the end added to {}",
+                                 frames, out->path);
+                  },
+                  bytes});
 }
 
 std::string CurrentPath()

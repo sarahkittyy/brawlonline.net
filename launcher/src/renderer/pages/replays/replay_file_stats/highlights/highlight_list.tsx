@@ -7,20 +7,20 @@
  * adds or removes one, Shift+click a range), a double click plays it; the selected rows render to
  * video (docs/design/highlights.md §4): Render (w/ Music) or Render (No Music), a file each, or one combo movie of them all.
  * `HighlightList` is a replay's (its stats page); `HighlightRows` lists rows of any replays (the
- * Replays > Highlights tab's, all of them). The star at a row's start makes it a favorite
- * (favorites.ts), the Play button at its end plays it. Manual clips (the seek bar's, manual_clips.ts)
- * come last, each with a button that removes it.
+ * Replays > Highlights tab's, all of them). A row (docs/design/highlights.md §10) is the stage (rows of
+ * many games), the players, and under them when in the game it plays and the game's stage and date;
+ * at its end, shown when pointed at, selected or playing, the star (favorites.ts; always once
+ * starred) and Play. Manual clips (the seek bar's, manual_clips.ts) come last, each with a button
+ * that removes it.
  */
 import { stageInfo } from "@common/stages";
 import type { ReplayPlaybackStatus } from "@dolphin/types";
 import { DolphinEventType } from "@dolphin/types";
 import CloseIcon from "@mui/icons-material/Close";
-import ContentCutIcon from "@mui/icons-material/ContentCut";
-import CropIcon from "@mui/icons-material/Crop";
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
 import MovieIcon from "@mui/icons-material/Movie";
 import MusicOffIcon from "@mui/icons-material/MusicOff";
-import PlayCircleOutlineIcon from "@mui/icons-material/PlayCircleOutline";
+import PlayArrowRoundedIcon from "@mui/icons-material/PlayArrowRounded";
 import StarIcon from "@mui/icons-material/Star";
 import StarBorderIcon from "@mui/icons-material/StarBorder";
 import Button from "@mui/material/Button";
@@ -59,6 +59,7 @@ import { manualClipEntry, useManualClips } from "./manual_clips";
 import { RenderJobs, useRenderJobs } from "./render_jobs";
 import { clipVideoName, comboVideoName, multiGameComboName } from "./render_names";
 import { ReplayVersionNote } from "./replay_version_note";
+import { useWindowedRows } from "./windowed_rows";
 
 type Row = ReplayHighlight | ReplayClip | ReplayManualClip;
 
@@ -153,7 +154,7 @@ type HighlightRowsProps = {
   hideRows?: boolean;
   /** Shows each row's game date (rows of many games). */
   showDates?: boolean;
-  /** On the list's top bar, left of the render buttons (the Highlights tab's search and sort). */
+  /** The list's top bar (the Highlights tab's search and sort); the render buttons are on its bottom one. */
   headerExtra?: React.ReactNode;
   comboName: (chosen: HighlightEntry[]) => string;
 };
@@ -184,6 +185,8 @@ export const HighlightRows = ({
   const commandId = usePlaylistStore((s) => s.commandId);
   const request = mine && commandId && dismissed !== commandId ? commandId : null;
   const listRef = useRef<HTMLDivElement>(null);
+  const headerRef = useRef<HTMLDivElement>(null);
+  const footerRef = useRef<HTMLDivElement>(null);
   // The rows selected (to render), and the one a Shift+click's range starts from.
   const [ticked, setTicked] = useState<Set<string>>(new Set());
   const [anchor, setAnchor] = useState<string | null>(null);
@@ -332,11 +335,15 @@ export const HighlightRows = ({
       : -1;
   const playing = playingIndex >= 0 ? playingIndex : null;
   const cursor = mine && current ? playing : selected;
+  const keys = useMemo(() => entries.map((e) => e.key), [entries]);
+  const shown = useWindowedRows(keys, listRef);
+  const { scrollToRow } = shown;
+  // (Below the top bar and above the bottom one, both staying as the rows scroll under them.)
   useEffect(() => {
-    if (playing != null) {
-      listRef.current?.querySelector(`[data-row="${playing}"]`)?.scrollIntoView({ block: "nearest" });
+    if (cursor != null) {
+      scrollToRow(cursor, headerRef.current?.offsetHeight ?? 0, footerRef.current?.offsetHeight ?? 0);
     }
-  }, [playing]);
+  }, [cursor, scrollToRow]);
 
   const step = (delta: number) => {
     if (!entries.length) {
@@ -366,17 +373,128 @@ export const HighlightRows = ({
   });
 
   const canRender = chosen.length > 0 && !queuing;
+  const mixedKinds = useMemo(() => new Set(entries.map((e) => e.row.kind)).size > 1, [entries]);
 
   return (
     <div className={styles.container}>
-      {/* One line, staying as the rows scroll under it. */}
-      <div className={styles.header}>
-        <div className={styles.headerActions}>{headerExtra}</div>
-        {entries.length > 0 && (
+      {/* Finding rows on top (one line, staying as the rows scroll under it); what to do with the ones selected at
+          the bottom (Sarah's board: the two on two lines of one bar, one to each side, looked off). */}
+      {headerExtra && (
+        <div className={styles.header} ref={headerRef}>
+          {headerExtra}
+        </div>
+      )}
+      {versionNote}
+      <RenderJobs jobs={jobs} />
+      <PlaybackBanner
+        request={request}
+        status={status}
+        row={playing != null ? entries[playing]?.row : undefined}
+        onDismiss={() => setDismissed(commandId)}
+      />
+      {emptyNote && <div className={styles.note}>{emptyNote}</div>}
+      {!hideRows && (
+        <div className={styles.list} ref={listRef}>
+          <div style={{ height: shown.before }} aria-hidden={true} />
+          {entries.slice(shown.start, shown.end).map((entry, j) => {
+            const i = shown.start + j;
+            const { row, game } = entry;
+            const players = new Map(game.players.map((p) => [p.port, p]));
+            const stocks = stocksAt(game.stocks, row.startFrame);
+            const favorite = favorites.has(favoriteKey(entry));
+            // (A heading only where the list has more than one kind: Manual Clips alone needs none.)
+            const heading = mixedKinds && row.kind !== "highlight" && (i === 0 || entries[i - 1].row.kind !== row.kind);
+            const from = convertFrameCountToDurationString(row.startFrame);
+            const to = convertFrameCountToDurationString(row.endFrame);
+            return (
+              <div key={entry.key} ref={shown.measure(entry.key)} className={styles.item}>
+                {heading && (
+                  <h3 className={styles.section}>{row.kind === "clip" ? Messages.clips() : Messages.manualClips()}</h3>
+                )}
+                <div
+                  className={`${styles.rowBox} ${i === playing ? styles.playing : ""} ${
+                    ticked.has(entry.key) ? styles.selected : ""
+                  } ${row.kind === "manual" ? styles.removable : ""}`}
+                >
+                  {/* The stage (rows of many games), the players, then when in the game it plays and the game's
+                      stage and date (Sarah's board, 2026-11-15: a design pass, "i don't like how cluttered it is"). */}
+                  <button
+                    type="button"
+                    data-row={i}
+                    className={`${styles.row} ${showDates ? styles.withStage : ""}`}
+                    onClick={(e) => clickRow(i, e)}
+                    onDoubleClick={() => void play(i)}
+                  >
+                    {showDates && <StageThumb stageId={game.stageId} />}
+                    <span
+                      className={`${styles.who} ${styles.rowPlayers} ${game.isTeams ? styles.teams : ""}`}
+                      style={game.isTeams ? ({ "--team-size": teamSize(game) } as React.CSSProperties) : undefined}
+                    >
+                      {row.kind === "highlight" ? (
+                        <HighlightWho row={row} data={game} players={players} stocks={stocks} />
+                      ) : (
+                        <GameWho data={game} stocks={stocks} />
+                      )}
+                    </span>
+                    <span className={styles.meta}>
+                      {showDates && <StageName stageId={game.stageId} />}
+                      <span className={styles.time} title={Messages.startsAt(from)}>
+                        {from}–{to}
+                      </span>
+                      {showDates && entry.date && (
+                        <span className={styles.date}>{monthDayHourFormat(new Date(entry.date))}</span>
+                      )}
+                    </span>
+                  </button>
+                  {/* (Over the row, not in it: a button can't hold another.) A star shows when starred; the rest
+                      when the row is pointed at, selected or playing. */}
+                  <span className={styles.actions}>
+                    <IconButton
+                      size="small"
+                      className={`${styles.star} ${favorite ? styles.starred : ""}`}
+                      onClick={() => toggleFavorite(entry)}
+                      aria-label={favorite ? Messages.unfavorite() : Messages.favorite()}
+                      aria-pressed={favorite}
+                    >
+                      {favorite ? <StarIcon fontSize="small" /> : <StarBorderIcon fontSize="small" />}
+                    </IconButton>
+                    {row.kind === "manual" && (
+                      <Tooltip title={Messages.removeClip()} arrow={true}>
+                        <IconButton
+                          size="small"
+                          className={styles.remove}
+                          onClick={() => removeManualClip(entry)}
+                          aria-label={Messages.removeClip()}
+                        >
+                          <DeleteOutlineIcon fontSize="small" />
+                        </IconButton>
+                      </Tooltip>
+                    )}
+                    <Tooltip title={Messages.play()} arrow={true}>
+                      <IconButton
+                        size="small"
+                        className={styles.play}
+                        onClick={() => void play(i)}
+                        aria-label={Messages.play()}
+                      >
+                        <PlayArrowRoundedIcon />
+                      </IconButton>
+                    </Tooltip>
+                  </span>
+                </div>
+              </div>
+            );
+          })}
+          <div style={{ height: shown.after }} aria-hidden={true} />
+        </div>
+      )}
+      {/* Only with rows selected (a click selects one): rendering is what to do with them. */}
+      {chosen.length > 0 && (
+        <div className={styles.footer} ref={footerRef}>
+          <span className={styles.hint}>{Messages.keyHint()}</span>
           <div className={styles.renderBar}>
             <FormControlLabel
               className={styles.combo}
-              disabled={chosen.length === 0}
               control={<Checkbox size="small" checked={combo} onChange={(e) => setCombo(e.target.checked)} />}
               label={<span className={styles.comboLabel}>{Messages.comboMovie()}</span>}
             />
@@ -399,101 +517,8 @@ export const HighlightRows = ({
               {Messages.renderNoMusic()}
             </Button>
           </div>
-        )}
-      </div>
-      {versionNote}
-      <RenderJobs jobs={jobs} />
-      <PlaybackBanner
-        request={request}
-        status={status}
-        row={playing != null ? entries[playing]?.row : undefined}
-        onDismiss={() => setDismissed(commandId)}
-      />
-      {emptyNote && <div className={styles.note}>{emptyNote}</div>}
-      {!hideRows && (
-        <div className={styles.list} ref={listRef}>
-          {entries.map((entry, i) => {
-            const { row, game } = entry;
-            const players = new Map(game.players.map((p) => [p.port, p]));
-            const stocks = stocksAt(game.stocks, row.startFrame);
-            const favorite = favorites.has(favoriteKey(entry));
-            const heading = row.kind !== "highlight" && (i === 0 || entries[i - 1].row.kind !== row.kind);
-            return (
-              <React.Fragment key={entry.key}>
-                {heading && (
-                  <h3 className={styles.section}>{row.kind === "clip" ? Messages.clips() : Messages.manualClips()}</h3>
-                )}
-                <div className={styles.rowBox}>
-                  <button
-                    type="button"
-                    data-row={i}
-                    className={`${styles.row} ${i === playing ? styles.playing : ""} ${
-                      ticked.has(entry.key) ? styles.selected : ""
-                    } ${row.kind === "manual" ? styles.removable : ""}`}
-                    onClick={(e) => clickRow(i, e)}
-                    onDoubleClick={() => void play(i)}
-                  >
-                    <span
-                      className={styles.time}
-                      title={Messages.startsAt(convertFrameCountToDurationString(row.startFrame))}
-                    >
-                      {convertFrameCountToDurationString(row.startFrame)}
-                    </span>
-                    {row.kind === "highlight" ? (
-                      <HighlightWho row={row} data={game} players={players} stocks={stocks} />
-                    ) : row.kind === "manual" ? (
-                      <span className={styles.who}>
-                        <CropIcon fontSize="small" className={styles.clipIcon} />
-                        <span className={styles.vs}>{Messages.manualClip(clipLength(row))}</span>
-                        <GameWho data={game} stocks={stocks} />
-                      </span>
-                    ) : (
-                      <span className={styles.who}>
-                        <ContentCutIcon fontSize="small" className={styles.clipIcon} />
-                        <GameWho data={game} stocks={stocks} />
-                      </span>
-                    )}
-                    {showDates && <GameWhere stageId={game.stageId} date={entry.date} />}
-                  </button>
-                  {/* (Over the row, not in it: a button can't hold another.) */}
-                  <IconButton
-                    size="small"
-                    className={`${styles.star} ${favorite ? styles.starred : ""}`}
-                    onClick={() => toggleFavorite(entry)}
-                    aria-label={favorite ? Messages.unfavorite() : Messages.favorite()}
-                    aria-pressed={favorite}
-                  >
-                    {favorite ? <StarIcon fontSize="small" /> : <StarBorderIcon fontSize="small" />}
-                  </IconButton>
-                  <Tooltip title={Messages.play()} arrow={true}>
-                    <IconButton
-                      size="small"
-                      className={styles.play}
-                      onClick={() => void play(i)}
-                      aria-label={Messages.play()}
-                    >
-                      <PlayCircleOutlineIcon />
-                    </IconButton>
-                  </Tooltip>
-                  {row.kind === "manual" && (
-                    <Tooltip title={Messages.removeClip()} arrow={true}>
-                      <IconButton
-                        size="small"
-                        className={styles.remove}
-                        onClick={() => removeManualClip(entry)}
-                        aria-label={Messages.removeClip()}
-                      >
-                        <DeleteOutlineIcon fontSize="small" />
-                      </IconButton>
-                    </Tooltip>
-                  )}
-                </div>
-              </React.Fragment>
-            );
-          })}
         </div>
       )}
-      {entries.length > 0 && <div className={styles.hint}>{Messages.keyHint()}</div>}
     </div>
   );
 };
@@ -506,12 +531,6 @@ export const comboOfManyName = (chosen: HighlightEntry[]) => {
     return comboVideoName(e.game.players, chosen.length, e.path);
   }
   return multiGameComboName(chosen.length, new Date());
-};
-
-/** A manual clip's length, "0:20". */
-const clipLength = (row: ReplayManualClip) => {
-  const seconds = Math.max(0, Math.round((row.endFrame - row.startFrame) / 60));
-  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
 };
 
 /** A player's stocks at a row's start, and at the game's. */
@@ -549,20 +568,25 @@ const StockPips = ({ stocks }: { stocks: Stocks }) => {
   );
 };
 
-/** A row of many games' lists: the game's stage (its icon and name) and when it was played. */
-const GameWhere = ({ stageId, date }: { stageId?: number | null; date?: string }) => {
+/** A row of many games' lists starts with its game's stage, the stage select's icon. */
+const StageThumb = ({ stageId }: { stageId?: number | null }) => {
   const stageIcon = useStageIcon();
+  const icon = stageId != null ? stageIcon(stageId) : undefined;
+  return icon ? <img className={styles.stageIcon} src={icon} alt="" /> : <span className={styles.stageIcon} />;
+};
+
+const StageName = ({ stageId }: { stageId?: number | null }) => {
   const stage = stageId != null ? stageInfo(stageId) : undefined;
-  const icon = stage ? stageIcon(stage.id) : undefined;
-  return (
-    <span className={styles.where}>
-      {icon && <img className={styles.stageIcon} src={icon} alt="" />}
-      <span className={styles.whereText}>
-        {stage && <span className={styles.stage}>{stage.name}</span>}
-        {date && <span className={styles.date}>{monthDayHourFormat(new Date(date))}</span>}
-      </span>
-    </span>
-  );
+  return stage ? <span className={styles.stage}>{stage.name}</span> : null;
+};
+
+/** The most players on one team (the teams' columns). */
+const teamSize = (data: ReplayHighlights) => {
+  const counts = new Map<number | null, number>();
+  for (const p of data.players) {
+    counts.set(p.teamId, (counts.get(p.teamId) ?? 0) + 1);
+  }
+  return Math.max(1, ...counts.values());
 };
 
 /** Everyone in the game: one vs another; in teams, team vs team. */
@@ -577,18 +601,45 @@ const GameWho = ({ data, stocks }: { data: ReplayHighlights; stocks: Map<number,
   } else {
     sides.push(...data.players.map((p) => [p]));
   }
+  return <Sides sides={sides} isTeams={data.isTeams} stocks={stocks} />;
+};
+
+/**
+ * X vs Y: each later side with its "vs" in front, so a line too narrow for them all breaks before a "vs", never
+ * inside a name (Sarah's board: names must not be cut off at the smallest window). In teams every team is one line,
+ * never more (Sarah's board, 2026-11-15: "2 max, one team on each line"), the first with a hidden "vs" so the teams'
+ * names start in one column; a line too narrow shortens the longest names instead.
+ */
+const Sides = ({
+  sides,
+  isTeams,
+  stocks,
+}: {
+  sides: (HighlightPlayer | undefined)[][];
+  isTeams: boolean;
+  stocks: Map<number, Stocks>;
+}) => {
+  const side = (players: (HighlightPlayer | undefined)[]) => (
+    <span className={styles.side}>
+      {players.map((p, i) => (
+        <PlayerChip key={p?.port ?? i} player={p} isTeams={isTeams} stocks={p && stocks.get(p.port)} />
+      ))}
+    </span>
+  );
   return (
     <>
-      {sides.map((side, i) => (
-        <React.Fragment key={i}>
-          {i > 0 && <span className={styles.vs}>{Messages.vs()}</span>}
-          <span className={styles.side}>
-            {side.map((p) => (
-              <PlayerChip key={p.port} player={p} isTeams={data.isTeams} stocks={stocks.get(p.port)} />
-            ))}
+      {sides.map((players, i) =>
+        i === 0 && !isTeams ? (
+          <React.Fragment key={i}>{side(players)}</React.Fragment>
+        ) : (
+          <span key={i} className={styles.versus}>
+            <span className={`${styles.vs} ${i === 0 ? styles.firstVs : ""}`} aria-hidden={i === 0 || undefined}>
+              {Messages.vs()}
+            </span>
+            {side(players)}
           </span>
-        </React.Fragment>
-      ))}
+        ),
+      )}
     </>
   );
 };
@@ -613,21 +664,7 @@ const HighlightWho = ({
     // The player who did it first, then their teammates.
     return [p, ...data.players.filter((q) => q.teamId === p.teamId && q.port !== port)];
   };
-  return (
-    <span className={styles.who}>
-      <span className={styles.side}>
-        {side(row.attackerPort).map((p, i) => (
-          <PlayerChip key={i} player={p} isTeams={data.isTeams} stocks={p && stocks.get(p.port)} />
-        ))}
-      </span>
-      <span className={styles.vs}>{Messages.vs()}</span>
-      <span className={styles.side}>
-        {side(row.victimPort).map((p, i) => (
-          <PlayerChip key={i} player={p} isTeams={data.isTeams} stocks={p && stocks.get(p.port)} />
-        ))}
-      </span>
-    </span>
-  );
+  return <Sides sides={[side(row.attackerPort), side(row.victimPort)]} isTeams={data.isTeams} stocks={stocks} />;
 };
 
 const PlayerChip = ({

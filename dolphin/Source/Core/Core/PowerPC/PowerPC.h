@@ -184,6 +184,18 @@ struct PowerPCState
 
   u8* mem_ptr = nullptr;
 
+  // Jit64 with Core.FPRF on does not work out FPSCR[FPRF] after every float instruction. It
+  // leaves the result here, and the five bits are worked out when something reads them
+  // (FlushLazyFPRF). fprf_lazy: 0 when FPSCR[FPRF] is current; else the low byte says what
+  // fprf_lazy_value holds (LAZY_FPRF_DOUBLE or LAZY_FPRF_SINGLE, 0 when a compare is all that
+  // happened), and the second byte is the FPCC of a compare since then (a compare leaves C
+  // alone), or 0.
+  // Never part of a saved state: whatever saves FPSCR flushes first, whatever loads it clears.
+  static constexpr u32 LAZY_FPRF_DOUBLE = 1;
+  static constexpr u32 LAZY_FPRF_SINGLE = 2;
+  u64 fprf_lazy_value = 0;
+  u32 fprf_lazy = 0;
+
   u32 pagetable_base = 0;
   u32 pagetable_mask = 0;
 
@@ -231,6 +243,16 @@ struct PowerPCState
 
   void UpdateFPRFDouble(double dvalue);
   void UpdateFPRFSingle(float fvalue);
+
+  // FPSCR with FPRF current (see fprf_lazy), and making it so in place.
+  u32 CurrentFPSCR() const;
+  void FlushLazyFPRF()
+  {
+    if (fprf_lazy == 0)
+      return;
+    fpscr.Hex = CurrentFPSCR();
+    fprf_lazy = 0;
+  }
 };
 
 #ifdef _M_X86_64
@@ -336,6 +358,7 @@ void UpdatePerformanceMonitor(u32 cycles, u32 num_load_stores, u32 num_fp_inst,
                               PowerPCState& ppc_state);
 
 void CheckExceptionsFromJIT(PowerPCManager& power_pc);
+void FlushLazyFPRFFromJIT(PowerPCState& ppc_state);
 void CheckExternalExceptionsFromJIT(PowerPCManager& power_pc);
 void CheckAndHandleBreakPointsFromJIT(PowerPCManager& power_pc);
 

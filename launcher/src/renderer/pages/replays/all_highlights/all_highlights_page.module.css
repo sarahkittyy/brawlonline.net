@@ -9,58 +9,10 @@
   min-height: 0;
 }
 
-/* As Replays' folders: darker than the page, and the open one is the page's own background, joined to the list. */
-.sidebar {
+.split {
   display: flex;
   flex: 1;
-  flex-direction: column;
-  min-width: 0;
-}
-
-.sideItem {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  width: 100%;
-  padding: 8px 14px;
-  border: none;
-  background: rgb(0 0 0 / 30%);
-  color: rgb(255 255 255 / 50%);
-  font: inherit;
-  font-size: 14px;
-  text-align: left;
-  white-space: nowrap;
-  cursor: pointer;
-}
-
-.sideItem:hover {
-  color: var(--off-white);
-}
-
-.sideItem:focus-visible {
-  outline: 2px solid var(--accent-primary);
-  outline-offset: -2px;
-}
-
-.sideSelected {
-  background: transparent;
-  color: var(--off-white);
-  font-weight: bold;
-}
-
-.sideLabel {
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.sideRest {
-  flex: 1;
-  background: rgb(0 0 0 / 30%);
-}
-
-/* The folder buttons at the sidebar's foot, under the empty rest (folder_buttons.tsx). */
-.folders {
-  background: rgb(0 0 0 / 30%);
+  min-height: 0;
 }
 
 .content {
@@ -83,16 +35,73 @@
   font-weight: 600;
 }
 
-.search {
-  width: 170px;
-  height: 30px;
-  padding: 0 4px 0 10px;
-  border-radius: 10px;
-  background-color: black;
+.sort {
+  flex: none;
+  height: 34px;
   font-size: 13px;
 }
 
-.sort {
-  height: 30px;
+/* Which highlights: the category, its icon beside its name (one width for all, so the search beside it doesn't move
+   when another is picked). */
+.viewSelect {
+  flex: none;
+  width: 200px;
+  height: 34px;
   font-size: 13px;
+}
+
+.viewValue {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.viewValue svg {
+  color: var(--text-dim);
+}
+
+.viewMenu {
+  max-width: 340px;
+}
+
+.viewItem {
+  align-items: flex-start;
+  gap: 12px;
+  white-space: normal;
+}
+
+.viewIcon {
+  display: flex;
+  padding-top: 1px;
+  color: var(--text-dim);
+}
+
+.viewLabel {
+  display: block;
+  font-size: 14px;
+}
+
+/* How to make them (the clips' categories), under the name. */
+.viewHint {
+  display: block;
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+/* A narrow toolbar (the smallest window with the players' rail open): the category is its icon, its name in the
+   menu, so the search and the sort keep their room. */
+@container (max-width: 600px) {
+  .viewSelect {
+    width: auto;
+  }
+
+  .viewName {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
 }

@@ -136,6 +136,8 @@ add_library(core
   Harness/HarnessOnline.cpp
   Harness/HarnessServer.cpp
   Harness/HarnessCrash.cpp
+  HLE/HLE_BrawlReverb.cpp
+  HLE/HLE_BrawlReverb.h
   HLE/HLE_Misc.cpp
   HLE/HLE_Misc.h
   HLE/HLE_OS.cpp
@@ -566,6 +568,8 @@ add_library(core
   PowerPC/MMU.h
   PowerPC/PowerPC.cpp
   PowerPC/PowerPC.h
+  PowerPC/BranchProfile.cpp
+  PowerPC/BranchProfile.h
   PowerPC/PPCAnalyst.cpp
   PowerPC/PPCAnalyst.h
   PowerPC/PPCCache.cpp
@@ -594,6 +598,7 @@ add_library(core
   Online/SpeedCheck.h
   Rollback/ChangeCRC.h
   Rollback/KeptGranules.h
+  Rollback/WrittenPages.h
   Rollback/DeltaSaveSlot.cpp
   Rollback/DeltaSaveSlot.h
   Rollback/DolphinEngine.cpp

@@ -10,6 +10,11 @@ const noop = () => undefined;
 
 export const Default = () => <PlayButtonsView twosQueue={2} twosPlaying={8} onPlay={noop} />;
 
+/** Unranked's and Ranked's ETAs beside them (hover one for its tooltip). */
+export const Etas = () => (
+  <PlayButtonsView etas={{ unranked: 28, ranked: null }} twosQueue={2} twosPlaying={8} onPlay={noop} />
+);
+
 /** Three-digit counts: the widest they get in practice. */
 export const BigCounts = () => <PlayButtonsView twosQueue={23} twosPlaying={148} onPlay={noop} />;
 

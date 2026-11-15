@@ -11,6 +11,9 @@ namespace Online {
     const char* currentSceneName();
     bool inScene(const char* name);
 
+    // A pointer into the game's memory (MEM1 or MEM2).
+    inline bool isPtr(u32 p) { return (p >= 0x80000000 && p < 0x81800000) || (p >= 0x90000000 && p < 0x94000000); }
+
     // Rumble (online.cpp, PADControlMotor and WPADControlMotor): mapped, only pad `from`'s
     // rumble (the local player's port's pad in the match: GameCube 0-3, Wii Remote 4-7) reaches a
     // controller, pad `to` (theirs, 0-7); `from` 0xFF: none. Not mapped: every pad's own.

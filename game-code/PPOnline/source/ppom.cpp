@@ -21,7 +21,8 @@ namespace PPOM {
     static_assert(sizeof(Mailbox) == 0x410, "mailbox");
     static_assert(sizeof(LockIn) == 0x0C, "lock-in");
     static_assert(sizeof(PortValues) == 0x3C, "port values");
-    static_assert(sizeof(Local) == 0xF4 && __builtin_offsetof(Local, ownExtra) == 0x80 &&
+    static_assert(sizeof(Local) == 0xF8 && __builtin_offsetof(Local, ownExtra) == 0x80 &&
+                  __builtin_offsetof(Local, aspect) == 0xF4 &&
                   __builtin_offsetof(Local, potato) == 0xF0 &&
                   __builtin_offsetof(Local, readySeconds) == 0xF1 && __builtin_offsetof(Local, readyPorts) == 0xF2,
                   "local");

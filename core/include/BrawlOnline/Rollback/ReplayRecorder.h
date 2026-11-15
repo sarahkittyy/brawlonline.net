@@ -101,6 +101,9 @@ struct BeginInfo
   std::string setup_json;
   // SIM_VERSION, or SIM_VERSION_GC for a game without Wii Remotes.
   u32 sim_version = SIM_VERSION;
+  // The guest pad (gfPadStatus index, Addr::PAD_STATUS) the recording player plays on, whose
+  // buttons are kept after the end (AfterEnd); -1: none.
+  int local_pad = -1;
   // game_uid: the same on every player's file of this game.
   std::array<u8, 16> uid{};
 };
@@ -176,6 +179,19 @@ void AddEvent(s64 frame, picojson::object event);
 void End(const EndInfo& info);
 // A session that never got to run its frames (an error at the start barrier): no file.
 void Abort();
+
+// After End, while the game still shows the match's end (GAME!, until it leaves the match scene;
+// online there is no results screen), the recording player's buttons go on being kept, one value
+// a frame (from the session's loop top; the game's persistent frame counter says which frame, so
+// a frame seen twice counts once): a Manual Clip Hotkey pressed there makes a clip of the match's
+// end (the launcher's lrz_clips.ts). EndAfter writes them into the file, an AFTR chunk before
+// ENDG, if a button was down at all; Begin, Abort and the emulation stopping end the window too.
+// Saved games only, at most AFTER_MAX_FRAMES.
+constexpr u32 AFTER_MAX_FRAMES = 30 * 60;
+// The guest pad whose buttons are being kept (BeginInfo::local_pad), else -1.
+int AfterEndPad();
+void OnAfterEnd(u32 frame_counter, u16 buttons);
+void EndAfter();
 
 // The path of the file being (or last) written, for the harness and the logs.
 std::string CurrentPath();

@@ -259,6 +259,19 @@ impl ChatBook {
             .sum()
     }
 
+    /// The match groups that still have two or more members (as [`Self::match_players`] counts
+    /// them): each one's id (the match id), mode and members, in joining order. For the
+    /// launcher's queue box (`MmStatus::matched`).
+    pub fn match_groups(&self) -> Vec<(&str, Mode, Vec<&Candidate>)> {
+        self.groups
+            .iter()
+            .filter_map(|(id, g)| {
+                let mode = g.mode.filter(|_| g.kind == GroupKind::Match && g.members.len() >= 2)?;
+                Some((id.as_str(), mode, g.members.iter().map(|m| &m.who).collect()))
+            })
+            .collect()
+    }
+
     /// Starts the match group `id` of a `mode` match with these players (the matched players that
     /// can chat). Each leaves its previous group.
     pub fn start_match(&mut self, id: &str, mode: Mode, players: &[Candidate], out: &mut Vec<Output>) {

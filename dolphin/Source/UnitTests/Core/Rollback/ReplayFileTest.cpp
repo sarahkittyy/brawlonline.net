@@ -111,6 +111,66 @@ TEST(ReplayFile, RoundTrip)
   EXPECT_EQ(f->pads[5][1 * PAD_SIZE + 0x38], 0xFF);
 }
 
+// The buttons after the end (ReplayRecorder AfterEnd): a chunk put in before ENDG once the file
+// is finished; the file still ends ENDG-then-trailer and reads as before, the chunk skipped.
+TEST(ReplayFile, AChunkGoesInBeforeTheEndOfAFinishedFile)
+{
+  const auto endg = std::span(reinterpret_cast<const u8*>(ENDG), std::strlen(ENDG));
+  const std::string aftr_json = R"({"port":1,"pad":0,"frames":90,"buttons":[[0,0],[40,112],[44,0]]})";
+  const auto aftr =
+      EncodeChunk(CHUNK_AFTR, 0, std::span(reinterpret_cast<const u8*>(aftr_json.data()), aftr_json.size()));
+  ASSERT_TRUE(aftr);
+  const auto write = [&](const std::string& path, Writer* w) {
+    std::string error;
+    ASSERT_TRUE(w->Open(path, std::array<u8, 16>{}, &error)) << error;
+    ASSERT_TRUE(w->Append(CHUNK_INFO, 0, std::span(reinterpret_cast<const u8*>(INFO), std::strlen(INFO))));
+    ASSERT_TRUE(w->Append(CHUNK_SETP, FLAG_CRITICAL,
+                          std::span(reinterpret_cast<const u8*>(SETUP), std::strlen(SETUP))));
+    ASSERT_TRUE(w->Append(CHUNK_FRMS, FLAG_DEFLATE | FLAG_CRITICAL, EncodeFrames(Frames(0, 60))));
+    // Not before Finish.
+    EXPECT_FALSE(w->InsertBeforeEnd(*aftr, endg, 59));
+    ASSERT_TRUE(w->Finish(endg, 59));
+  };
+
+  const std::string path = TempPath("after.brep");
+  Writer w;
+  write(path, &w);
+  std::string before;
+  ASSERT_TRUE(::File::ReadFileToString(path, before));
+  ASSERT_TRUE(w.InsertBeforeEnd(*aftr, endg, 59));
+  std::string after;
+  ASSERT_TRUE(::File::ReadFileToString(path, after));
+  ASSERT_EQ(after.size(), before.size() + aftr->size());
+  // Everything up to the old ENDG is unchanged; the chunk is where ENDG was.
+  const size_t endg_at = before.size() - TRAILER_SIZE - CHUNK_HEADER_SIZE - std::strlen(ENDG);
+  EXPECT_EQ(after.substr(0, endg_at), before.substr(0, endg_at));
+  EXPECT_EQ(after.substr(endg_at, aftr->size()), std::string(aftr->begin(), aftr->end()));
+  // Then the same ENDG, and a trailer that points at it where it is now.
+  const size_t endg_size = before.size() - TRAILER_SIZE - endg_at;
+  EXPECT_EQ(after.substr(endg_at + aftr->size(), endg_size), before.substr(endg_at, endg_size));
+  u32 trailer_endg = 0;
+  std::memcpy(&trailer_endg, after.data() + after.size() - TRAILER_SIZE + 4, 4);
+  EXPECT_EQ(trailer_endg, endg_at + aftr->size());
+  std::string error;
+  const std::vector<u8> bytes(after.begin(), after.end());
+  const auto f = Parse(bytes, ReadOptions{}, &error);
+  ASSERT_TRUE(f) << error;
+  EXPECT_TRUE(f->trailer);
+  EXPECT_FALSE(f->truncated);
+  EXPECT_EQ(f->endg, ENDG);
+  EXPECT_EQ(f->pads.size(), 60u);
+
+  // A file that changed since (another program wrote it, or it was replaced) is left alone.
+  const std::string other = TempPath("after2.brep");
+  Writer w2;
+  write(other, &w2);
+  ASSERT_TRUE(::File::WriteStringToFile(other, before + "x"));
+  EXPECT_FALSE(w2.InsertBeforeEnd(*aftr, endg, 59));
+  std::string kept;
+  ASSERT_TRUE(::File::ReadFileToString(other, kept));
+  EXPECT_EQ(kept, before + "x");
+}
+
 TEST(ReplayFile, EveryCutReadsAsItsValidPrefix)
 {
   const auto bytes = WriteReplay(TempPath("b.brep"), true);

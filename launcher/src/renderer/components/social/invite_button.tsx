@@ -53,21 +53,26 @@ export const InviteButton = ({ player, className }: { player: SocialPlayer; clas
 
 /**
  * A display name with the connect code after it, lighter, in the chat's look; `profileLink`: the name opens the
- * profile; `showFlag`: the player's flag before it, when they show one.
+ * profile; `showFlag`: the player's flag before it, when they show one. `titleMenu`: right-clicking the name opens
+ * the player menu without Message (a chat window's title; the lists' and tabs' rows have their own menu).
  */
 export const PlayerName = ({
   player,
   profileLink = false,
   showFlag = false,
+  titleMenu = false,
 }: {
   player: SocialPlayer;
   profileLink?: boolean;
   showFlag?: boolean;
+  titleMenu?: boolean;
 }) => (
   <UserName
     user={player}
     profileLink={profileLink}
     showFlag={showFlag}
+    playerMenu={titleMenu}
+    menuMessage={false}
     className={styles.playerName}
     classes={{ name: styles.displayName, code: styles.tag }}
   />

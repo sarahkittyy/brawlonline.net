@@ -9,6 +9,7 @@ pub mod bug_reports;
 pub mod config;
 pub mod cursor;
 pub mod error;
+pub mod friends;
 pub mod history;
 pub mod launcher;
 pub mod leaderboard;
@@ -17,12 +18,14 @@ pub mod mail;
 pub mod pages;
 pub mod password;
 pub mod profile;
+pub mod queue_stats;
 pub mod ranked;
 pub mod rooms;
 pub mod rulesets;
 pub mod sd_cards;
 pub mod slur_filter;
 pub mod social;
+pub mod staging_fake;
 pub mod store;
 pub mod twos;
 pub mod unranked;
@@ -30,14 +33,14 @@ pub mod unranked;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::{Arc, Mutex};
 
-use axum::routing::{get, post, put};
+use axum::routing::{delete, get, post, put};
 use axum::Router;
 use common::playkey::PlayKeySecret;
 use common::ratelimit::{
     RateLimiter, Window, AUTH_WINDOWS, BLOG_IP_WINDOWS, BUG_REPORT_IP_WINDOWS, DAY, HISTORY_WINDOWS,
     LEADERBOARD_IP_WINDOWS, MAIL_RECIPIENT_WINDOWS, PROFILE_EDIT_WINDOWS, PROFILE_IP_WINDOWS, ROOMS_WINDOWS,
     ROOM_NAME_WINDOWS, RULESET_EDIT_WINDOWS, RULESET_LOOKUP_IP_WINDOWS, RULESET_PUBLISH_WINDOWS,
-    SD_LISTING_FETCH_WINDOWS, SD_LISTING_UPLOAD_WINDOWS, SIGNUP_IP_WINDOWS,
+    SD_LISTING_FETCH_WINDOWS, SD_LISTING_UPLOAD_WINDOWS, SIGNUP_IP_WINDOWS, FRIEND_REQUEST_WINDOWS,
 };
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
@@ -61,8 +64,12 @@ pub struct AppState {
     pub social: Arc<social::SocialHub>,
     /// Spectators and spectator chat (`/v1/live`).
     pub live: Arc<live::LiveHub>,
+    /// Each launcher's friends, for the friends-only rooms in `GET /v1/rooms`.
+    pub friend_cache: Arc<friends::FriendCache>,
     /// The slur check of names and codes (off without `DEEPINFRA_API_KEY`).
     pub slur_filter: Arc<slur_filter::SlurFilter>,
+    /// `GET /v1/rooms`' `queueEta`, refreshed by [`queue_stats::eta_watcher`].
+    pub queue_eta: Arc<queue_stats::EtaCache>,
 }
 
 impl AppState {
@@ -80,7 +87,9 @@ impl AppState {
             mm_status: Arc::new(rooms::MmStatusSource::new(&cfg.mm_status_url)),
             social: Arc::new(social::SocialHub::new(!cfg.disable_rate_limits)),
             live: Arc::new(live::LiveHub::new(!cfg.disable_rate_limits)),
+            friend_cache: Arc::new(friends::FriendCache::default()),
             slur_filter,
+            queue_eta: Arc::new(queue_stats::EtaCache::default()),
             cfg: Arc::new(cfg),
         })
     }
@@ -126,6 +135,8 @@ pub struct Limits {
     pub sd_listing_fetch: RateLimiter<uuid::Uuid>,
     /// Blog pages per client IP (IPv6 per /64): [`BLOG_IP_WINDOWS`].
     pub blog_ip: RateLimiter<IpAddr>,
+    /// Friend requests sent per account: [`FRIEND_REQUEST_WINDOWS`].
+    pub friend_requests: RateLimiter<uuid::Uuid>,
 }
 
 impl Limits {
@@ -156,6 +167,7 @@ impl Limits {
             sd_listing_upload: RateLimiter::new(&SD_LISTING_UPLOAD_WINDOWS),
             sd_listing_fetch: RateLimiter::new(&SD_LISTING_FETCH_WINDOWS),
             blog_ip: RateLimiter::new(&BLOG_IP_WINDOWS),
+            friend_requests: RateLimiter::new(&FRIEND_REQUEST_WINDOWS),
         }
     }
 
@@ -208,6 +220,7 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/me/accept-rules", post(api::accept_rules))
         .route("/v1/me/user-json", get(api::user_json))
         .route("/v1/me/matches", get(history::my_matches))
+        .route("/v1/me/opponents", get(history::my_opponents))
         .route("/user/{uid}", get(api::public_user))
         .route("/v1/profiles/{id}", get(profile::lookup))
         .route("/v1/me/profile", put(profile::update))
@@ -231,9 +244,19 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/ranked/report-leave", post(ranked::report_leave))
         .route("/v1/ranked/result", get(ranked::result))
         .route("/v1/ranked/leaderboard", get(leaderboard::leaderboard))
+        .route("/v1/me/friends/leaderboard", get(leaderboard::friends_leaderboard))
         .route("/v1/rooms", get(rooms::rooms))
         .route("/v1/mod-rooms/{code}", get(rooms::mod_room))
         .route("/v1/me/room-name", put(rooms::set_room_name))
+        .route("/v1/friends", get(friends::list))
+        .route("/v1/friends/requests", post(friends::request))
+        .route("/v1/friends/requests/{uid}", delete(friends::cancel))
+        .route("/v1/friends/requests/{uid}/accept", post(friends::accept))
+        .route("/v1/friends/requests/{uid}/decline", post(friends::decline))
+        .route("/v1/friends/{uid}", delete(friends::remove))
+        .route("/v1/me/ignores", get(friends::ignores_list))
+        .route("/v1/me/ignores/import", post(friends::import))
+        .route("/v1/me/ignores/{uid}", put(friends::ignore).delete(friends::unignore))
         .route("/v1/admin/players", get(admin::players))
         .route("/v1/admin/users/{uid}", get(admin::user).put(admin::update_user))
         .route("/v1/admin/users/{uid}/muted", put(admin::set_muted))
@@ -288,6 +311,7 @@ pub async fn serve(listener: tokio::net::TcpListener, state: AppState) -> anyhow
     let room_watcher = social::room_watcher(state.clone());
     let account_watcher = social::account_watcher(state.clone());
     let live_ticker = live::ticker(state.live.clone());
+    let eta_watcher = queue_stats::eta_watcher(state.pool.clone(), state.queue_eta.clone());
     let app = router(state).into_make_service_with_connect_info::<SocketAddr>();
     tokio::select! {
         r = axum::serve(listener, app) => r?,
@@ -295,6 +319,7 @@ pub async fn serve(listener: tokio::net::TcpListener, state: AppState) -> anyhow
         () = room_watcher => {}
         () = account_watcher => {}
         () = live_ticker => {}
+        () = eta_watcher => {}
     }
     Ok(())
 }

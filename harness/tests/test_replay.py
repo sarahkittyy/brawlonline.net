@@ -827,6 +827,58 @@ def test_recording_keeps_its_frames_when_the_game_stops_running(backend: OnlineB
 
 
 @pytest.mark.slow
+def test_recording_keeps_the_buttons_pressed_on_game_set(backend: OnlineBackend,
+                                                         dolphin: Callable[..., DolphinInstance],
+                                                         gpu_backend: str) -> None:
+    """Sarah's board, 2026-11-14: the Manual Clip Hotkey "does not work once the game has ended,
+    like, since inputs stop being recorded". The session (and its replay) ends 20 frames after game
+    set, while the game still shows GAME! before going back to the CSS; a press there is in no
+    recorded frame. Now the recorder keeps the recording player's buttons through that until the
+    game leaves the match and puts them in the file (an AFTR chunk before ENDG), and the launcher
+    makes a press there a clip of the match's end (lrz_clips.ts). Here player A holds L+R+Z from
+    the session's end until the CSS: A's file has the press after its last frame and still ends
+    ENDG-then-trailer."""
+    a, b, _, _ = _connected_direct(backend, dolphin, gpu_backend, "replay-after", ("rita", "seth"),
+                                   stocks=1)
+    held: dict[str, Any] = {}
+
+    def press_on_game_set() -> None:
+        online_set.wait(lambda: online_set.gstatus(a.c)["phase"] == "running", 300, "the match to run")
+        online_set.wait(lambda: online_set.gstatus(a.c)["phase"] != "running", 900, "the session's end",
+                        every=0.05)
+        held["scene"] = a.scene()
+        until = time.monotonic() + 6
+        # Again and again: the fight's own inputs may still come for a moment.
+        while time.monotonic() < until and a.scene() == "scMelee":
+            a.c.pad_set(0, buttons=["L", "R", "Z"], l=255, r=255)
+            held["sets"] = held.get("sets", 0) + 1
+            time.sleep(0.05)
+        a.c.pad_clear(0)
+
+    with concurrent.futures.ThreadPoolExecutor(1) as ex:
+        presser = ex.submit(press_on_game_set)
+        online_set.play_set([a, b], games=1, mode="direct", panels={g.name: g.panel for g in (a, b)})
+        presser.result(timeout=60)
+    assert held.get("scene") == "scMelee" and held.get("sets", 0) > 3, held
+    online_set.wait(lambda: not any(g.c.call("replay_recording")["recording"] for g in (a, b)), 60,
+                    "both recordings to end")
+    fa = _recording(a)
+    out = ARTIFACTS / "after-end"
+    out.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(fa.path, out / fa.path.name)
+    assert fa.trailer and fa.endg and fa.endg["endMethod"] == "game", (fa.truncated, fa.endg)
+    assert fa.chunk_types[-2:] == ["AFTR", "ENDG"], fa.chunk_types
+    after = fa.after
+    assert after and after["port"] == fa.info["recorder"]["port"], after
+    assert 0 < after["frames"] <= 30 * 60, after
+    lrz = 0x70
+    pressed = [f for f, v in after["buttons"] if v & lrz == lrz]
+    assert pressed, after
+    print(f"A's file: frames {fa.first_frame}-{fa.last_frame}, then {after['frames']} frames after the "
+          f"end, L+R+Z from frame {pressed[0]} of them; chunks end {fa.chunk_types[-3:]}")
+
+
+@pytest.mark.slow
 def test_recording_names_its_pplus_release(backend: OnlineBackend,
                                            dolphin: Callable[..., DolphinInstance],
                                            gpu_backend: str) -> None:

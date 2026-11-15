@@ -33,6 +33,7 @@ export const PlayButtons = React.memo(function PlayButtons() {
       // A server before 2v2 sends no twos: 0 in queue, the in-game count not shown.
       twosQueue={queues ? queues.twos ?? 0 : undefined}
       twosPlaying={playing?.twos}
+      etas={known ? query.data?.queueEta : undefined}
       starting={starting}
       onPlay={(q) => void play(q)}
     />

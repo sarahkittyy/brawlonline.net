@@ -53,6 +53,17 @@ struct SyncPipelineCompileStats
 };
 SyncPipelineCompileStats GetSyncPipelineCompileStats();
 
+// What a GX shader or pipeline in the disk cache was made from: a shader's generated source, a
+// pipeline's shaders and state, and the code that compiles them (Common::GetShaderCompilerRevStr).
+// A build that opens another build's cache file keeps the entries it makes the same fingerprint
+// for (ShaderCache.cpp, "Fingerprints").
+struct ShaderCacheFingerprint
+{
+  u64 low = 0;
+  u64 high = 0;
+  bool operator==(const ShaderCacheFingerprint&) const = default;
+};
+
 class ShaderCache final
 {
 public:
@@ -150,20 +161,35 @@ private:
   bool CompileSharedPipelines();
 
   // GX shader compiler methods
-  std::unique_ptr<AbstractShader> CompileVertexShader(const VertexShaderUid& uid) const;
-  std::unique_ptr<AbstractShader>
-  CompileVertexUberShader(const UberShader::VertexShaderUid& uid) const;
-  std::unique_ptr<AbstractShader> CompilePixelShader(const PixelShaderUid& uid) const;
-  std::unique_ptr<AbstractShader>
-  CompilePixelUberShader(const UberShader::PixelShaderUid& uid) const;
-  const AbstractShader* InsertVertexShader(const VertexShaderUid& uid,
-                                           std::unique_ptr<AbstractShader> shader);
+  // A GX shader's generated source and name, as it is compiled.
+  struct ShaderSource
+  {
+    ShaderStage stage;
+    std::string code;
+    std::string name;
+  };
+  struct CompiledShader
+  {
+    std::unique_ptr<AbstractShader> shader;
+    ShaderCacheFingerprint fingerprint;
+  };
+  ShaderSource GetShaderSource(const VertexShaderUid& uid) const;
+  ShaderSource GetShaderSource(const UberShader::VertexShaderUid& uid) const;
+  ShaderSource GetShaderSource(const PixelShaderUid& uid) const;
+  ShaderSource GetShaderSource(const UberShader::PixelShaderUid& uid) const;
+  ShaderSource GetShaderSource(const GeometryShaderUid& uid) const;
+  ShaderCacheFingerprint GetShaderFingerprint(const ShaderSource& source) const;
+  CompiledShader CompileShader(const ShaderSource& source) const;
+  CompiledShader CompileVertexShader(const VertexShaderUid& uid) const;
+  CompiledShader CompileVertexUberShader(const UberShader::VertexShaderUid& uid) const;
+  CompiledShader CompilePixelShader(const PixelShaderUid& uid) const;
+  CompiledShader CompilePixelUberShader(const UberShader::PixelShaderUid& uid) const;
+  const AbstractShader* InsertVertexShader(const VertexShaderUid& uid, CompiledShader shader);
   const AbstractShader* InsertVertexUberShader(const UberShader::VertexShaderUid& uid,
-                                               std::unique_ptr<AbstractShader> shader);
-  const AbstractShader* InsertPixelShader(const PixelShaderUid& uid,
-                                          std::unique_ptr<AbstractShader> shader);
+                                               CompiledShader shader);
+  const AbstractShader* InsertPixelShader(const PixelShaderUid& uid, CompiledShader shader);
   const AbstractShader* InsertPixelUberShader(const UberShader::PixelShaderUid& uid,
-                                              std::unique_ptr<AbstractShader> shader);
+                                              CompiledShader shader);
   const AbstractShader* CreateGeometryShader(const GeometryShaderUid& uid);
   bool NeedsGeometryShader(const GeometryShaderUid& uid) const;
 
@@ -182,6 +208,15 @@ private:
                                            std::unique_ptr<AbstractPipeline> pipeline);
   const AbstractPipeline* InsertGXUberPipeline(const GXUberPipelineUid& config,
                                                std::unique_ptr<AbstractPipeline> pipeline);
+  // From the fingerprints of the compiled shaders the pipeline uses and the config's state; none
+  // while one of those shaders isn't compiled (or has no fingerprint).
+  std::optional<ShaderCacheFingerprint>
+  GetPipelineFingerprint(const GXPipelineUid& uid, const AbstractPipelineConfig& config) const;
+  std::optional<ShaderCacheFingerprint>
+  GetPipelineFingerprint(const GXUberPipelineUid& uid, const AbstractPipelineConfig& config) const;
+  // Whether the shaders the pipeline uses are all compiled (loaded from the disk cache).
+  bool HasPipelineShaders(const GXPipelineUid& uid) const;
+  bool HasPipelineShaders(const GXUberPipelineUid& uid) const;
   void AddSerializedGXPipelineUID(const SerializedGXPipelineUid& uid);
   void AppendGXPipelineUID(const GXPipelineUid& config);
 
@@ -248,6 +283,7 @@ private:
       std::unique_ptr<AbstractShader> shader;
       bool pending = false;
       u32 priority = 0;  // while pending, the lowest priority it was queued at
+      std::optional<ShaderCacheFingerprint> fingerprint;  // with the shader
     };
     std::map<Uid, Shader> shader_map;
     Common::LinearDiskCache<Uid, u8> disk_cache;

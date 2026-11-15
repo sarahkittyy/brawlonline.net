@@ -1,3 +1,5 @@
+import type { Rank } from "@accounts/types";
+
 /**
  * Spectating (docs/design/spectating.md §3.3, §6; docs/spectate-protocol.md §3): the live games
  * (`GET /v1/live`), and watching one in the playback Dolphin.
@@ -17,6 +19,8 @@ export type LivePlayer = {
   wins: number;
   /** Their Ranked rating, once placed (none while placing): only the list's Elo sort uses it, nothing shows it. */
   rating?: number;
+  /** Their Ranked rank (the emblem beside their name); null while placing or never ranked. Absent from an older server. */
+  rank?: Rank | null;
 };
 
 export type LiveGameEntry = {

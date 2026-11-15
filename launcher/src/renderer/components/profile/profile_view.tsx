@@ -48,9 +48,12 @@ export const ProfileView = React.memo(function ProfileView({
   onCopyLink,
   onCopyText,
   editing = null,
+  nameExtra,
 }: {
   profile: PlayerProfile;
   actions?: React.ReactNode;
+  /** Right after the name, before a developer's </>: the friend button (docs/design/friends.md). */
+  nameExtra?: React.ReactNode;
   onCopyLink?: (link: string) => void;
   /** Copies a Discord username (it has no page to open). */
   onCopyText?: (text: string) => void;
@@ -85,6 +88,7 @@ export const ProfileView = React.memo(function ProfileView({
                 {profile.displayName}
               </div>
             )}
+            {nameExtra && !editing && <span className={styles.nameExtra}>{nameExtra}</span>}
             {profile.dev && <DevBadge size={20} className={styles.dev} />}
           </div>
           {profile.connectCode && <div className={styles.code}>{profile.connectCode}</div>}

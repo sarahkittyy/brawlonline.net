@@ -14,6 +14,7 @@ import type {
   LeaderboardPage,
   MatchHistoryFilter,
   MatchHistoryPage,
+  MatchOpponent,
   MyRulesets,
   PlayerProfile,
   ProfileUpdate,
@@ -130,9 +131,22 @@ export class AccountsHttpClient {
 
   matchHistory(
     token: string,
-    query: { mode: MatchHistoryFilter; limit?: number; before?: string },
+    query: { mode: MatchHistoryFilter; limit?: number; before?: string; opponent?: string },
   ): Promise<MatchHistoryPage> {
     return this._request("GET", `/v1/me/matches${queryString(query)}`, { token });
+  }
+
+  /** `GET /v1/me/opponents?q=`: players the account has played with, for Match history's filter. */
+  async opponents(token: string, q: string): Promise<MatchOpponent[]> {
+    const res = await this._request<{ players: MatchOpponent[] }>("GET", `/v1/me/opponents${queryString({ q })}`, {
+      token,
+    });
+    return res.players;
+  }
+
+  /** `GET /v1/me/friends/leaderboard`: the account's and its friends' leaderboard rows. */
+  friendsLeaderboard(token: string): Promise<LeaderboardPage> {
+    return this._request("GET", "/v1/me/friends/leaderboard", { token });
   }
 
   rooms(token: string): Promise<RoomList> {

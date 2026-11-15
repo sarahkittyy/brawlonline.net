@@ -310,11 +310,14 @@ struct Row {
     ruleset_version: Option<i32>,
 }
 
-/// One page of `uid`'s matches older than `before` (newest first).
+/// One page of `uid`'s matches older than `before` (newest first); with `players`, only those
+/// every one of them played in too.
+#[allow(clippy::too_many_arguments)]
 pub async fn matches(
     pool: &PgPool,
     uid: Uuid,
     mode: ModeFilter,
+    players: &[Uuid],
     before: Option<&Key>,
     limit: u32,
     now: DateTime<Utc>,
@@ -328,6 +331,7 @@ pub async fn matches(
                 m.room_code, m.room_mode, m.ports, m.teams, m.ruleset_code, m.ruleset_name, m.ruleset_version
            FROM mm_matches m
           WHERE m.players @> ARRAY[$1]::uuid[]{}
+            AND m.players @> $5::uuid[]
             AND ($2::timestamptz IS NULL OR (m.created_at, m.match_id) < ($2, $3))
             AND (EXISTS (SELECT 1 FROM game_reports g WHERE g.match_id = m.match_id)
                  OR (m.mode = {MODE_RANKED} AND m.status <> 'ASSIGNED'
@@ -344,6 +348,7 @@ pub async fn matches(
         .bind(before.map(|k| k.created_at))
         .bind(before.map(|k| k.match_id.clone()))
         .bind(limit + 1)
+        .bind(players)
         .fetch_all(&mut *tx)
         .await?;
     let more = rows.len() as i64 > limit;
@@ -529,10 +534,30 @@ pub struct MatchesQuery {
     pub mode: Option<String>,
     pub limit: Option<u32>,
     pub before: Option<String>,
+    /// Uids, comma-separated (at most [`MAX_FILTER_PLAYERS`]): only the matches every one of them
+    /// played in (Match history's player filter, docs/design/launcher-redesign.md §10).
+    pub opponent: Option<String>,
 }
 
-/// `GET /v1/me/matches?mode=all|ranked|unranked|rooms&limit=&before=`. Session auth; limited per
-/// account ([`common::ratelimit::HISTORY_WINDOWS`]).
+/// Players Match history filters by at once.
+pub const MAX_FILTER_PLAYERS: usize = 4;
+
+/// The players of `opponent`: comma-separated uids, blanks skipped. None when one isn't a uid or
+/// there are more than [`MAX_FILTER_PLAYERS`].
+pub fn parse_players(opponent: Option<&str>) -> Option<Vec<Uuid>> {
+    let mut out: Vec<Uuid> = Vec::new();
+    for part in opponent.unwrap_or("").split(',').map(str::trim).filter(|p| !p.is_empty()) {
+        let uid = Uuid::parse_str(part).ok()?;
+        if !out.contains(&uid) {
+            out.push(uid);
+        }
+    }
+    (out.len() <= MAX_FILTER_PLAYERS).then_some(out)
+}
+
+/// `GET /v1/me/matches?mode=all|ranked|unranked|rooms|twos&limit=&before=&opponent=`. Session
+/// auth; limited per account ([`common::ratelimit::HISTORY_WINDOWS`]). 400 `invalid_opponent`
+/// when `opponent` is not comma-separated uids (at most [`MAX_FILTER_PLAYERS`]).
 pub async fn my_matches(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -549,9 +574,11 @@ pub async fn my_matches(
         None => None,
         Some(b) => Some(Key::parse(b).ok_or_else(|| ApiError::bad_request("invalid_cursor", "Invalid cursor"))?),
     };
+    let players = parse_players(q.opponent.as_deref())
+        .ok_or_else(|| ApiError::bad_request("invalid_opponent", "opponent must be players' uids"))?;
     let n = cursor::page_limit(q.limit, DEFAULT_LIMIT, MAX_LIMIT);
-    let mut page =
-        matches(&state.pool, user.uid, mode, before.as_ref(), n, Utc::now(), state.cfg.ranked_timing()).await?;
+    let timing = state.cfg.ranked_timing();
+    let mut page = matches(&state.pool, user.uid, mode, &players, before.as_ref(), n, Utc::now(), timing).await?;
     let base = state.cfg.public_base_url.trim_end_matches('/');
     for r in page.matches.iter_mut().filter_map(|m| m.room.as_mut()?.ruleset.as_mut()) {
         r.link = format!("{base}/r/{}", r.code);
@@ -559,9 +586,86 @@ pub async fn my_matches(
     Ok(Json(page))
 }
 
+/// A player the caller has played with (Match history's player filter suggestions).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Opponent {
+    pub uid: String,
+    pub display_name: String,
+    pub connect_code: String,
+    #[serde(flatten)]
+    pub tag: crate::profile::NameTag,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct OpponentsQuery {
+    pub q: Option<String>,
+}
+
+/// Suggestions a request returns.
+const OPPONENT_SUGGESTIONS: i64 = 8;
+
+/// `GET /v1/me/opponents?q=`: the players the caller has played with whose name or connect code
+/// contains `q` (any case), the most recent first, at most [`OPPONENT_SUGGESTIONS`]. Banned and
+/// deleted accounts are left out. Session auth; the match history's limit.
+pub async fn my_opponents(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<OpponentsQuery>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let user = current_user(&state, &headers).await?;
+    limit(&state, |l, now| l.history.check(&user.uid, now)).map_err(|wait| {
+        ApiError::rate_limited(wait)
+            .with_message(format!("Too many requests. Try again in {} s.", wait.as_secs().max(1)))
+    })?;
+    let needle: String = q.q.as_deref().unwrap_or("").trim().to_lowercase().chars().take(64).collect();
+    let rows: Vec<(Uuid, String, String)> = sqlx::query_as(
+        "SELECT u.uid, u.display_name, u.connect_code
+           FROM mm_matches m
+           CROSS JOIN LATERAL unnest(m.players) AS p(uid)
+           JOIN users u ON u.uid = p.uid
+          WHERE m.players @> ARRAY[$1]::uuid[] AND p.uid <> $1
+            AND u.connect_code IS NOT NULL AND u.display_name <> ''
+            AND (u.banned_until IS NULL OR u.banned_until <= now())
+            AND ($2 = '' OR strpos(lower(u.display_name), $2) > 0 OR strpos(lower(u.connect_code), $2) > 0)
+          GROUP BY u.uid, u.display_name, u.connect_code
+          ORDER BY max(m.created_at) DESC
+          LIMIT $3",
+    )
+    .bind(user.uid)
+    .bind(&needle)
+    .bind(OPPONENT_SUGGESTIONS)
+    .fetch_all(&state.pool)
+    .await?;
+    let uids: Vec<Uuid> = rows.iter().map(|r| r.0).collect();
+    let tags = crate::profile::name_tags(&state.pool, &uids).await?;
+    let players: Vec<Opponent> = rows
+        .into_iter()
+        .map(|(uid, display_name, connect_code)| Opponent {
+            uid: uid.to_string(),
+            display_name,
+            connect_code,
+            tag: tags.get(&uid).cloned().unwrap_or_default(),
+        })
+        .collect();
+    Ok(Json(serde_json::json!({ "players": players })))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn filter_players_are_up_to_four_distinct_uids() {
+        let a = "00000000-0000-0000-0000-000000000001";
+        let b = "00000000-0000-0000-0000-000000000002";
+        assert_eq!(parse_players(None), Some(vec![]));
+        assert_eq!(parse_players(Some(" ")), Some(vec![]));
+        assert_eq!(parse_players(Some(&format!("{a}, {b},{a}"))).map(|v| v.len()), Some(2));
+        assert_eq!(parse_players(Some("nope")), None);
+        let five: Vec<String> = (1..=5).map(|i| format!("00000000-0000-0000-0000-00000000000{i}")).collect();
+        assert_eq!(parse_players(Some(&five.join(","))), None);
+    }
 
     #[test]
     fn modes() {

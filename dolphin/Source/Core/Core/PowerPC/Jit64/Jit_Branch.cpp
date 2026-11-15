@@ -7,6 +7,7 @@
 #include "Common/CommonTypes.h"
 #include "Common/x64Emitter.h"
 #include "Core/Debugger/BranchWatch.h"
+#include "Core/PowerPC/BranchProfile.h"
 #include "Core/PowerPC/Gekko.h"
 #include "Core/PowerPC/Jit64/RegCache/JitRegCache.h"
 #include "Core/PowerPC/Jit64Common/Jit64PowerPCState.h"
@@ -105,6 +106,30 @@ void Jit64::WriteBranchWatchDestInRSCRATCH(u32 origin, UGeckoInstruction inst, B
   }
 }
 
+void Jit64::WriteNotTakenExit(const FixupBranch& not_taken, u32 branch_address,
+                              UGeckoInstruction inst)
+{
+  // The analyzer went on at the branch's target (BranchProfile.h), so the code that follows is
+  // the taken side's. Not taken is the rare side: it leaves the block from the far code.
+  SwitchToFarCode();
+  SetJumpTarget(not_taken);
+  {
+    RCForkGuard gpr_guard = gpr.Fork();
+    RCForkGuard fpr_guard = fpr.Fork();
+    gpr.Flush();
+    fpr.Flush();
+    WriteBranchWatch<false>(branch_address, branch_address + 4, inst, {});
+    WriteExit(branch_address + 4);
+  }
+  SwitchToNearCode();
+}
+
+void Jit64::CountBranch(u32* counter)
+{
+  MOV(64, R(RSCRATCH), ImmPtr(counter));
+  ADD(32, MatR(RSCRATCH), Imm8(1));
+}
+
 void Jit64::bx(UGeckoInstruction inst)
 {
   INSTRUCTION_START
@@ -155,6 +180,18 @@ void Jit64::bx(UGeckoInstruction inst)
 void Jit64::bcx(UGeckoInstruction inst)
 {
   INSTRUCTION_START
+
+  // Ahead of JITDISABLE: the instructions after this one are the taken side's, and a fallback to
+  // the interpreter goes on in the block when the branch is not taken.
+  if (js.op->followTaken)
+  {
+    WriteNotTakenExit(
+        JumpIfCRFieldBit(inst.BI >> 2, 3 - (inst.BI & 3), !(inst.BO_2 & BO_BRANCH_IF_TRUE)),
+        js.compilerPC, inst);
+    WriteBranchWatch<true>(js.compilerPC, js.op->branchTo, inst, CallerSavedRegistersInUse());
+    return;
+  }
+
   JITDISABLE(bJITBranchOff);
 
   // USES_CR
@@ -202,6 +239,8 @@ void Jit64::bcx(UGeckoInstruction inst)
     gpr.Flush();
     fpr.Flush();
 
+    if (js.op->branchCounts)
+      CountBranch(&js.op->branchCounts->taken);
     WriteBranchWatch<true>(js.compilerPC, js.op->branchTo, inst, {});
     if (js.op->branchIsIdleLoop)
     {
@@ -217,6 +256,8 @@ void Jit64::bcx(UGeckoInstruction inst)
     SetJumpTarget(pConditionDontBranch);
   if ((inst.BO & BO_DONT_DECREMENT_FLAG) == 0)
     SetJumpTarget(pCTRDontBranch);
+  if (js.op->branchCounts)
+    CountBranch(&js.op->branchCounts->not_taken);
 
   if (!analyzer.HasOption(PPCAnalyst::PPCAnalyzer::OPTION_CONDITIONAL_CONTINUE))
   {

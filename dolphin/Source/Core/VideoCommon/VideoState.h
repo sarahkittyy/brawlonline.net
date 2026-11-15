@@ -6,6 +6,9 @@
 class PointerWrap;
 
 void VideoCommon_DoState(PointerWrap& p);
+// TMEM (s_tex_mem) was written at [offset, offset + size): every writer says so, so that a
+// rollback load copies back those pages only (VideoCommon_DoStateRollbackGPU).
+void VideoCommon_TmemWritten(unsigned int offset, unsigned int size);
 
 // A whole-machine session's machine image: what only drawing uses and the image's digest leaves
 // out (each machine's GPU has its own): the TEV colour registers' both halves

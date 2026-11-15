@@ -1,8 +1,10 @@
+import AlbumIcon from "@mui/icons-material/Album";
 import HistoryIcon from "@mui/icons-material/History";
-import HomeOutlinedIcon from "@mui/icons-material/HomeOutlined";
 import LeaderboardOutlinedIcon from "@mui/icons-material/LeaderboardOutlined";
+import LiveTvIcon from "@mui/icons-material/LiveTv";
 import RuleOutlinedIcon from "@mui/icons-material/RuleOutlined";
 import SlowMotionVideoIcon from "@mui/icons-material/SlowMotionVideo";
+import SportsEsportsOutlinedIcon from "@mui/icons-material/SportsEsportsOutlined";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import React from "react";
 import { HashRouter as Router, Navigate, Route, Routes } from "react-router-dom";
@@ -13,10 +15,12 @@ import { useLastPageTracker } from "@/lib/hooks/use_last_page";
 import { usePageRequestListeners } from "@/lib/hooks/use_page_request_listeners";
 import { usePageNavigationShortcuts } from "@/lib/hooks/use_shortcuts";
 import { useBrawlLinks } from "@/lib/rulesets/use_brawl_links";
-import { HomePage } from "@/pages/home/home_page";
+import { ModsTab } from "@/pages/home/mods/mods_tab";
+import { Spectate } from "@/pages/home/spectate/spectate";
 import { LeaderboardPage } from "@/pages/leaderboard/leaderboard_page";
 import { MatchHistoryPage } from "@/pages/match_history/match_history_page";
 import { NotFoundPage } from "@/pages/not_found/not_found_page";
+import { PlayPage } from "@/pages/play/play_page";
 import { createQuickStartPage } from "@/pages/quick_start/create";
 import { useQuickStartStore } from "@/pages/quick_start/use_quick_start";
 import { createReplaysPage } from "@/pages/replays/create";
@@ -29,6 +33,8 @@ import type { Services } from "@/services/types";
 import type { MainMenuItem } from "./app";
 import { App as AppImpl } from "./app";
 import { CreateAppMessages as Messages } from "./create.messages";
+import { OtherGamesBadge, SpectateBadge } from "./shell/nav_badges";
+import { ShellMessages } from "./shell/shell.messages";
 
 export function createApp({ services }: { services: Services }): {
   App: React.ComponentType;
@@ -37,13 +43,35 @@ export function createApp({ services }: { services: Services }): {
   const { Page: QuickStartPage } = createQuickStartPage();
   const { Page: ReplaysPage } = createReplaysPage();
 
+  // docs/design/launcher-redesign.md §2: the sidebar's pages, in the order they're used.
   const menuItems: MainMenuItem[] = [
     {
-      subpath: "home",
-      title: () => Messages.home(),
-      Component: HomePage,
-      Icon: HomeOutlinedIcon,
+      subpath: "play",
+      title: () => ShellMessages.play(),
+      Component: PlayPage,
+      Icon: SportsEsportsOutlinedIcon,
       default: true,
+    },
+    {
+      subpath: "other-games",
+      title: () => ShellMessages.otherGames(),
+      Component: ModsTab,
+      Icon: AlbumIcon,
+      Badge: OtherGamesBadge,
+    },
+    {
+      subpath: "spectate",
+      title: () => ShellMessages.spectate(),
+      Component: Spectate,
+      Icon: LiveTvIcon,
+      Badge: SpectateBadge,
+    },
+    {
+      subpath: "matches",
+      title: () => Messages.matchHistory(),
+      Component: MatchHistoryPage,
+      Icon: HistoryIcon,
+      private: true,
     },
     {
       subpath: "replays",
@@ -63,17 +91,9 @@ export function createApp({ services }: { services: Services }): {
       Component: RulesetsPage,
       Icon: RuleOutlinedIcon,
     },
-    {
-      // The player's own name, rank and rating are on their profile (the user menu's View Profile).
-      subpath: "matches",
-      title: () => Messages.matchHistory(),
-      Component: MatchHistoryPage,
-      Icon: HistoryIcon,
-      private: true,
-    },
   ];
 
-  const navigationPaths = menuItems.map((item) => item.subpath);
+  const navigationPaths = menuItems.filter((item) => !item.hidden).map((item) => item.subpath);
 
   const MainAppPage = React.memo(() => {
     usePageNavigationShortcuts(navigationPaths);

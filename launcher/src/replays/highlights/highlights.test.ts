@@ -243,6 +243,90 @@ describe("replay highlights", () => {
     expect(findLrzClips(decodeTimeline(encode(game([1, 2, 3, 4], 0))), [0, 1])).toHaveLength(0);
   });
 
+  it("clips the match's end for a press after it, while the game shows GAME!", () => {
+    // Dolphin's AFTR chunk: the recording player's buttons from the frame after the last, a pair
+    // where they change.
+    const after = (buttons: [number, number][], port = 1, frames = 180) =>
+      chunk("AFTR", Buffer.from(JSON.stringify({ port, pad: 0, frames, buttons })), false);
+    const withAfter = (frames: Frame[], ...extra: Buffer[]) =>
+      decodeTimeline(Buffer.concat([encode(frames), ...extra]));
+    const t = withAfter(
+      game([1, 2, 3, 4]),
+      after([
+        [0, 0x100],
+        [30, L_R_Z | 0x100],
+        [34, 0],
+      ]),
+    );
+    expect(t.frames).toBe(600);
+    expect(t.after?.port).toBe(1);
+    expect(Array.from(t.after?.buttons.subarray(28, 36) ?? [])).toEqual([
+      0x100, 0x100, 0x170, 0x170, 0x170, 0x170, 0, 0,
+    ]);
+    expect(findLrzClips(t, [0, 1])).toEqual([{ player: 0, frame: 599, start: 0, end: 599 }]);
+    const options = { highlights: false, clips: true, clipPlayers: "local" as const };
+    expect(analyzeTimeline(t, options).clips).toEqual([
+      { kind: "clip", port: 1, frame: 599, startFrame: 0, endFrame: 599 },
+    ]);
+    // Another hotkey: only its buttons count.
+    expect(findLrzClips(t, [0, 1], 0x0260)).toHaveLength(0);
+    // They are the port's that AFTR names: never another player's.
+    expect(findLrzClips(withAfter(game([1, 2, 3, 4]), after([[0, L_R_Z]], 2)), [0])).toHaveLength(0);
+    // A hold over the end, or a press right after a clip near it (the lockout), is no second clip.
+    const late = game([1, 2, 3, 4]).map((row, f) => ({ ...row, buttons: [f >= 590 ? L_R_Z : 0, 0] }));
+    expect(
+      findLrzClips(
+        withAfter(
+          late,
+          after([
+            [0, L_R_Z],
+            [10, 0],
+          ]),
+        ),
+        [0, 1],
+      ),
+    ).toHaveLength(1);
+    expect(
+      findLrzClips(
+        withAfter(
+          late,
+          after([
+            [0, L_R_Z],
+            [10, 0],
+            [20, L_R_Z],
+          ]),
+        ),
+        [0, 1],
+      ),
+    ).toHaveLength(1);
+    // Two presses after the end: one clip.
+    expect(
+      findLrzClips(
+        withAfter(
+          game([1, 2, 3, 4]),
+          after([
+            [5, L_R_Z],
+            [6, 0],
+            [100, L_R_Z],
+          ]),
+        ),
+        [0, 1],
+      ),
+    ).toHaveLength(1);
+    // Nothing after the end, or a chunk that does not check out: no clip.
+    expect(withAfter(game([1, 2, 3, 4])).after).toBeNull();
+    expect(
+      withAfter(
+        game([1, 2, 3, 4]),
+        after([
+          [5, L_R_Z],
+          [5, 0],
+        ]),
+      ).after,
+    ).toBeNull();
+    expect(withAfter(game([1, 2, 3, 4]), after([[200, L_R_Z]])).after).toBeNull();
+  });
+
   it("finds presses of another hotkey, across both button bytes", () => {
     const L_R_A = 0x0160;
     const lra = decodeTimeline(encode(game([1, 2, 3, 4], 10, L_R_A)));

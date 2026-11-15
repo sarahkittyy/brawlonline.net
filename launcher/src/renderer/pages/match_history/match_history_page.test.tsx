@@ -271,14 +271,15 @@ describe("LeaderboardRow", () => {
     };
     const { container } = render(inTable(<LeaderboardRow entry={entry} isMe={true} />));
     const cells = Array.from(container.querySelectorAll("td")).map((td) => td.textContent);
-    // No rank from an older server, no flag or main shown: those cells stay empty.
-    expect(cells).toEqual(["7", "", "", "ann", "", "ANN#1", "1612.3", "10-5"]);
+    // No rank from an older server, no flag or main shown: those cells stay empty (the flag, name and code share a
+    // cell since the redesign).
+    expect(cells).toEqual(["7", "", "annANN#1", "", "1612.3", "10-5"]);
     expect(container.querySelector("tr")!.getAttribute("data-me")).toBe("true");
     const { container: other } = render(inTable(<LeaderboardRow entry={{ ...entry, uid: "x" }} isMe={false} />));
     expect(other.querySelector("tr")!.getAttribute("data-me")).toBeNull();
   });
 
-  it("shows the player's flag and primary main in their own columns when they show them", () => {
+  it("shows the player's flag beside their name and their primary main in its column when they show them", () => {
     const entry = {
       position: 2,
       uid: "k",
@@ -294,7 +295,7 @@ describe("LeaderboardRow", () => {
     const { container } = render(inTable(<LeaderboardRow entry={entry} isMe={false} />));
     const cells = container.querySelectorAll("td");
     expect(cells[2].querySelector("[title='United States']")).toBeTruthy();
-    expect(cells[4].querySelector("[data-testid=stock-random] text")?.textContent).toBe("?");
+    expect(cells[3].querySelector("[data-testid=stock-random] text")?.textContent).toBe("?");
   });
 
   it("shows the rank's emblem, named in its alt text, or the sets left while placing", () => {

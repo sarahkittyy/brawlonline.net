@@ -1,0 +1,124 @@
+.box {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 10px;
+  padding: 9px 12px;
+  border-radius: 10px;
+  background-color: var(--raised);
+  min-width: 0;
+}
+
+/* In a match: the selected-page frame (sidebar.module.css), or a lighter box with an accent edge without the disc. */
+.playing {
+  background-color: var(--raised-hover);
+  box-shadow: inset 0 0 0 1px var(--accent-primary);
+}
+
+:root[data-game-frames] .playing {
+  background: none;
+  box-shadow: none;
+  border: 7px solid transparent;
+  border-image: var(--theme-selected-source) 7 7 7 7 fill / 7px stretch;
+  padding: 2px 5px;
+}
+
+/* The folded sidebar's box: one thing over another, as wide as the sidebar's icons and the player's card. */
+.folded {
+  flex-direction: column;
+  justify-content: center;
+  gap: 7px;
+  width: 48px;
+  box-sizing: border-box;
+  margin: 0 0 8px;
+  padding: 10px 0 7px;
+}
+
+/* The folded box's tooltip: the open box's lines, in the tooltip's colours. */
+.tip .mode,
+.tip .sub {
+  color: inherit;
+}
+
+.tip .mode {
+  font-size: 13px;
+}
+
+.tip .sub {
+  opacity: 0.8;
+}
+
+.folded .sub {
+  margin-top: 0;
+  font-size: 11px;
+}
+
+:root[data-game-frames] .folded.playing {
+  width: 52px;
+  padding: 1px 0 0;
+  gap: 2px;
+}
+
+.pulse {
+  flex: none;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background-color: var(--accent-primary);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent-primary) 25%, transparent);
+  animation: pulse 1.6s ease-out infinite;
+}
+
+/* The search is live: the dot breathes while it runs. */
+@keyframes pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-primary) 35%, transparent);
+  }
+
+  50% {
+    box-shadow: 0 0 0 5px color-mix(in srgb, var(--accent-primary) 10%, transparent);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pulse {
+    animation: none;
+  }
+}
+
+.text {
+  min-width: 0;
+  flex: 1;
+}
+
+.mode {
+  font-size: 15px;
+  color: #fff;
+}
+
+.sub {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-top: 1px;
+  font-variant-numeric: tabular-nums;
+}
+
+.eta,
+.partner {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 2px;
+}
+
+.etaIcon {
+  font-size: 15px !important;
+}
+
+.ellipsis {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}

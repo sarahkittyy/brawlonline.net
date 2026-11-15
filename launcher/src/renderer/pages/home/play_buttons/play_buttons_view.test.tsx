@@ -6,7 +6,7 @@ import { PlayButtonsView } from "./play_buttons_view";
 describe("PlayButtonsView", () => {
   afterEach(cleanup);
 
-  it("plays the clicked queue and shows counts under Play 2v2 only", () => {
+  it("plays the clicked queue and shows counts beside Play 2v2 only", () => {
     const onPlay = vi.fn();
     const { container, getByTestId } = render(<PlayButtonsView twosQueue={2} twosPlaying={8} onPlay={onPlay} />);
     fireEvent.click(getByTestId("play-ranked"));
@@ -15,6 +15,18 @@ describe("PlayButtonsView", () => {
     expect(onPlay.mock.calls).toEqual([["ranked"], ["unranked"], ["twos"]]);
     expect(getByTestId("play-twos-count").textContent).toBe("2 in queue · 8 in game");
     expect(container.textContent).toBe("Play unrankedPlay rankedPlay 2v22 in queue · 8 in game");
+  });
+
+  it("shows each search's ETA beside Unranked and Ranked, 10+ min when there is none", () => {
+    const { getByTestId } = render(<PlayButtonsView etas={{ unranked: 28, ranked: null }} onPlay={vi.fn()} />);
+    expect(getByTestId("play-unranked-eta").textContent).toBe("0:28");
+    expect(getByTestId("play-ranked-eta").textContent).toBe("10+ min");
+    expect(getByTestId("play-unranked-eta").getAttribute("aria-label")).toBe("Estimated queue time");
+  });
+
+  it("hides the ETAs while they are unknown", () => {
+    const { getByTestId } = render(<PlayButtonsView onPlay={vi.fn()} />);
+    expect(getByTestId("play-unranked-eta").style.visibility).toBe("hidden");
   });
 
   it("shows only 2v2's queue when the server does not send the players in game", () => {

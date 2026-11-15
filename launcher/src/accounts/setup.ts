@@ -18,6 +18,7 @@ import {
   ipc_accountsChangeEmail,
   ipc_accountsCreateRulesetDraft,
   ipc_accountsDeleteRulesetDraft,
+  ipc_accountsFriendsLeaderboard,
   ipc_accountsHasSession,
   ipc_accountsInitNetplay,
   ipc_accountsLauncherSettings,
@@ -27,6 +28,7 @@ import {
   ipc_accountsMatchHistory,
   ipc_accountsMe,
   ipc_accountsMyRulesets,
+  ipc_accountsOpponents,
   ipc_accountsProfile,
   ipc_accountsPublicUser,
   ipc_accountsPublishRuleset,
@@ -72,8 +74,11 @@ export default function setupAccountsIpc() {
   ipc_accountsLauncherSettings.main!.handle(async () => await manager.launcherSettings());
   ipc_accountsLeaderboard.main!.handle(async ({ limit, after, q }) => await manager.leaderboard({ limit, after, q }));
   ipc_accountsMatchHistory.main!.handle(
-    async ({ uid, mode, limit, before }) => await manager.matchHistory(uid, { mode, limit, before }),
+    async ({ uid, mode, limit, before, opponent }) =>
+      await manager.matchHistory(uid, { mode, limit, before, opponent }),
   );
+  ipc_accountsFriendsLeaderboard.main!.handle(async ({ uid }) => await manager.friendsLeaderboard(uid));
+  ipc_accountsOpponents.main!.handle(async ({ uid, q }) => await manager.opponents(uid, q));
   ipc_accountsRooms.main!.handle(async ({ uid }) => await manager.rooms(uid));
   ipc_accountsSetRoomName.main!.handle(async ({ uid, kind, name }) => await manager.setRoomName(uid, kind, name));
   ipc_accountsAdminPlayers.main!.handle(async ({ uid, q }) => await manager.adminPlayers(uid, q));

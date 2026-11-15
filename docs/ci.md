@@ -9,7 +9,7 @@ are excluded from every package.
 |---|---|---|---|
 | `server.yml` | `server/**` except `server/deploy/**` and `*.md` | sarahvps2 | `cargo build --release` (nice 19, idle IO, `-j 2`, target dir kept in `~/ci-cache/server-target`, cleared above 3 GB), then `sudo pp-release deploy <binaries> <yyyymmdd>-<sha10>`: installs, backs up the database, switches, restarts `pp-accounts`/`pp-mm`, health-checks, rolls back by itself on failure, keeps 3 releases. Binaries equal to the active release's are not redeployed (nothing restarts). |
 | `website.yml` | `website/**` except `README.md` | sarahvps2 | Stages `website/` without `*.md`, adds `?v=<sha>` to `script.js`, `style.css` and the video in `index.html` (Cloudflare and browsers cache those for 4 h; `index.html` is not cached), `sudo pp-release website <dir>`, then checks https://brawlonline.net/ serves it. |
-| `client.yml` | `dolphin/**`, `launcher/**`, `game-code/**`, `tools/gamecode/**`, `NOTICE`, `.github/scripts/**` | Namespace Linux and macOS, GitHub-hosted Windows (builds), sarahvps2 (publish) | Version `0.1.<run number>`. Plugin, Dolphin (Linux, Windows, macOS), launcher tests and packages, then `sudo pp-release client <dir>`. |
+| `client.yml` | `dolphin/**`, `launcher/**`, `game-code/**`, `tools/gamecode/**`, `NOTICE`, `.github/scripts/**` | Namespace Linux and macOS, GitHub-hosted Windows (builds), sarahvps2 (publish) | Version `0.2.<run number - 142>` (`0.1.<run number>` up to run 141). Plugin, Dolphin (Linux, Windows, macOS), launcher tests and packages, then `sudo pp-release client <dir>`. |
 
 ## client.yml
 
@@ -39,7 +39,7 @@ The launcher's electron-updater feed is the generic provider at https://brawlonl
 
 Cloudflare caches `.exe` (not `.yml` or `.AppImage`) for up to a few hours, so `/downloads/BrawlOnline-Setup.exe` may serve the previous version for a while after a release. That is harmless: the installed launcher updates itself on its first start. The versioned files the feed names are never cached stale (new names each version).
 
-Versions: `0.1.<run number of client.yml>`. mm follows the releases by itself: `MM_UPDATE_FEED_DIR` in `mm.env` (the feed folder `pp-release client` publishes to) holds every game to its platform's newest published build, so a game older than that cannot search or ready in a room ("Close Dolphin and update to 0.1.43" in red on the CSS; `docs/rooms-protocol.md`, `hello`). `LATEST_VERSION` in `/etc/ppserver/accounts.env` (written into `user.json`; a Dolphin older than it shows Slippi's "update required") and `MM_MIN_APP_VERSION` in `mm.env` are not touched by CI.
+Versions: `0.2.<run number of client.yml - VERSION_FIRST_RUN>` (`VERSION_MINOR` and `VERSION_FIRST_RUN` at the top of `client.yml`: 0.2.0 is run 142; up to run 141 `0.1.<run number>`). A new minor version: set both, `VERSION_FIRST_RUN` to the next run's number. Don't go to 1.x or higher without changing `launcher/src/dolphin/brawl_online_build.ts`: it takes a Dolphin printing a 0.x version for ours (Project+'s and Slippi's are 2.x/3.x). mm follows the releases by itself: `MM_UPDATE_FEED_DIR` in `mm.env` (the feed folder `pp-release client` publishes to) holds every game to its platform's newest published build, so a game older than that cannot search or ready in a room ("Close Dolphin and update to 0.1.43" in red on the CSS; `docs/rooms-protocol.md`, `hello`). `LATEST_VERSION` in `/etc/ppserver/accounts.env` (written into `user.json`; a Dolphin older than it shows Slippi's "update required") and `MM_MIN_APP_VERSION` in `mm.env` are not touched by CI.
 
 ## Runners
 

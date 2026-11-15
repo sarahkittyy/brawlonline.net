@@ -51,6 +51,10 @@ constexpr u32 CHUNK_FTSP = FourCC("FTSP");  // UTF-8 JSON: the layout of the FTR
 constexpr u32 CHUNK_FRMS = FourCC("FRMS");  // frames: inputs and checksums (binary, deflate)
 constexpr u32 CHUNK_FTRM = FourCC("FTRM");  // frames: raw fighter memory (binary, deflate)
 constexpr u32 CHUNK_EVNT = FourCC("EVNT");  // UTF-8 JSON: events (live desyncs, players leaving)
+// UTF-8 JSON: the recording player's buttons after the last frame, while the game still showed
+// the match's end (GAME!), for the Manual Clip Hotkey (ReplayRecorder.h AfterEnd). Written in
+// before ENDG once the game has left the match, so the file stays ENDG-then-trailer.
+constexpr u32 CHUNK_AFTR = FourCC("AFTR");
 constexpr u32 CHUNK_ENDG = FourCC("ENDG");  // UTF-8 JSON: the result
 constexpr u32 TRAILER_MAGIC = FourCC("BRPT");
 
@@ -138,6 +142,10 @@ public:
   bool AppendChunk(std::span<const u8> chunk);
   // ENDG, then the trailer; flushes to the disk and closes.
   bool Finish(std::span<const u8> endg, u32 last_frame);
+  // After Finish: opens the file again and writes `chunk` (EncodeChunk's) where ENDG was, then
+  // ENDG and the trailer after it. Only if the file still ends as Finish left it (its size and
+  // trailer); the new tail is longer than the old one, so nothing of that is left behind.
+  bool InsertBeforeEnd(std::span<const u8> chunk, std::span<const u8> endg, u32 last_frame);
   void Close();
   u64 BytesWritten() const { return m_offset; }
 
@@ -145,6 +153,9 @@ private:
   bool WriteAll(const void* data, size_t size);
   ::File::IOFile m_file;
   u64 m_offset = 0;
+  std::string m_path;
+  u64 m_endg_offset = 0;  // where Finish wrote ENDG (0: not finished)
+  std::vector<u8> m_trailer;
 };
 
 // ---- Reading ----

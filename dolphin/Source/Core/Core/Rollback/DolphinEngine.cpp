@@ -71,7 +71,7 @@ public:
     for (size_t i = 0; i < out->ps.size(); ++i)
       out->ps[i] = {ppc.ps[i].PS0AsU64(), ppc.ps[i].PS1AsU64()};
     std::copy(std::begin(ppc.cr.fields), std::end(ppc.cr.fields), out->cr.begin());
-    out->fpscr = ppc.fpscr.Hex;
+    out->fpscr = ppc.CurrentFPSCR();
     out->xer_ca = ppc.xer_ca;
     out->xer_so_ov = ppc.xer_so_ov;
     out->xer_stringctrl = ppc.xer_stringctrl;
@@ -88,6 +88,7 @@ public:
     std::copy(in.cr.begin(), in.cr.end(), std::begin(ppc.cr.fields));
     const bool rounding_changed = ppc.fpscr.Hex != in.fpscr;
     ppc.fpscr.Hex = in.fpscr;
+    ppc.fprf_lazy = 0;
     if (rounding_changed)
       PowerPC::RoundingModeUpdated(ppc);
     ppc.xer_ca = in.xer_ca;

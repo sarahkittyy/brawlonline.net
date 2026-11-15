@@ -172,6 +172,9 @@ struct View
 {
   std::string code;
   bool is_public = true;
+  // Not public: friends only, listed to its players' friends (docs/design/friends.md); false from
+  // servers before 2026-11-14.
+  bool friends = false;
   bool teams = false;
   // With Teams on: P+'s plain team battle, every player in their team's costume (the user's,
   // 2026-10-21); false is its rainbow team battle, any costume and a team glow on each fighter.
@@ -304,6 +307,7 @@ struct Request
   Op op = Op::Poll;
   bool flag = false;   // Create: public; Slot: open; Teams: on; Public: public; Ready: ready;
                        // SitOut: sits out
+  bool friends = false;  // Public (without `flag`): friends only (docs/design/friends.md)
   bool twos = false;   // Create: a 2v2 party (room-create {kind: "twos"}), not a room
   int slot = 0;        // Slot, SitOut: 1-4
   u8 team = 0;         // Team

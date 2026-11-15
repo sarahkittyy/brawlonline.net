@@ -10,6 +10,14 @@
  * (the user, 2026-10-24: "i can't imagine an actual game situation where you press all 3 and dont
  * intend to clip"); in those replays nothing else had the three down at all, and over the first
  * research's 167 replays they were down together in play 5 times, 4 frames at most.
+ *
+ * A press after the match's last frame, while the game still shows its end (GAME!, before it goes
+ * back to the CSS), clips the match's last CLIP_BEFORE frames (Sarah's board, 2026-11-14: "a
+ * hotkey press in between the game ending and returning to css clips the last N seconds of the
+ * match like normal"). Those buttons are not in the match's pads: Dolphin keeps the recording
+ * player's after the end and adds them to the file (Timeline.after, the AFTR chunk). The hold
+ * and the lockout run on across the end, so a press held over it or right after a clip near the
+ * end makes no second clip.
  */
 import { DEFAULT_CLIP_BUTTONS } from "@common/clip_hotkey";
 
@@ -30,7 +38,7 @@ export const LOCKOUT = 5 * 60;
 
 export type LrzClip = {
   player: number; // timeline player index
-  /** Timeline index of the frame the hold reached HOLD_FRAMES. */
+  /** Timeline index of the frame the hold reached HOLD_FRAMES (the last frame for a press after the end). */
   frame: number;
   start: number;
   end: number;
@@ -54,19 +62,28 @@ export function findLrzClips(t: Timeline, players: readonly number[], buttons: n
   if (buttons === 0) {
     return out;
   }
+  const last = t.frames - 1;
   for (const player of players) {
     const pads = t.pads[player];
+    const after = t.after && t.after.port === t.players[player]?.port ? t.after.buttons : null;
     let run = 0;
     let lockedUntil = -1;
-    for (let f = 0; f < t.frames; f++) {
-      run = (held(pads, f) & buttons) === buttons ? run + 1 : 0;
+    for (let f = 0; f < t.frames + (after?.length ?? 0); f++) {
+      const down = f < t.frames ? held(pads, f) : (after as Uint16Array)[f - t.frames];
+      run = (down & buttons) === buttons ? run + 1 : 0;
       if (run === HOLD_FRAMES && f >= lockedUntil) {
-        out.push({
-          player,
-          frame: f,
-          start: Math.max(f - HOLD_FRAMES + 1 - CLIP_BEFORE, 0),
-          end: Math.min(f + CLIP_AFTER, t.frames - 1),
-        });
+        if (f <= last) {
+          out.push({
+            player,
+            frame: f,
+            start: Math.max(f - HOLD_FRAMES + 1 - CLIP_BEFORE, 0),
+            end: Math.min(f + CLIP_AFTER, last),
+          });
+        } else if (last >= 0) {
+          // After the end: the match's last frames, as a press on its last frame.
+          out.push({ player, frame: last, start: Math.max(last - CLIP_BEFORE, 0), end: last });
+          break;
+        }
         lockedUntil = f + LOCKOUT;
       }
     }

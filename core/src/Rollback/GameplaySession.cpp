@@ -279,6 +279,8 @@ struct PeerView
   // peer's state messages every 50 ms, but GekkoNet heard nothing from it for 0.8 to 7 s).
   u64 rx_gekko = 0, rx_other = 0;
   double rtt_ms = -1;
+  // Its pongs, of which those held up together do not count toward rtt_ms (bug report #295).
+  PeerData::PongFilter pongs;
   // Its first round trips as measured (ms), for Ranked's ping check before the set
   // (GetLinkRoundTrip): the first PING_CHECK_SAMPLES only.
   std::array<float, PING_CHECK_SAMPLES> first_rtts{};
@@ -3631,12 +3633,15 @@ void NetThread()
           if (sent_us <= now_us && (now_us - sent_us) / 1000.0 <= PeerData::MAX_RTT_MS)
           {
             std::lock_guard<std::recursive_timed_mutex> lk(s.mutex);
-            const double rtt = (now_us - sent_us) / 1000.0;
             auto& p = s.peers[slot];
-            p.rtt_ms = p.rtt_ms < 0 ? rtt : 0.8 * p.rtt_ms + 0.2 * rtt;
-            if (p.rtt_samples < PING_CHECK_SAMPLES)
-              p.first_rtts[p.rtt_samples] = static_cast<float>(rtt);
-            ++p.rtt_samples;
+            // Pongs held up together by a stopped machine are left out (PeerData::PongFilter).
+            if (const auto rtt = p.pongs.Add((now_us - sent_us) / 1000.0, now_us / 1000.0))
+            {
+              p.rtt_ms = p.rtt_ms < 0 ? *rtt : 0.8 * p.rtt_ms + 0.2 * *rtt;
+              if (p.rtt_samples < PING_CHECK_SAMPLES)
+                p.first_rtts[p.rtt_samples] = static_cast<float>(*rtt);
+              ++p.rtt_samples;
+            }
           }
         }
       }
@@ -3990,11 +3995,14 @@ bool CreateGekko(bool stress, int num_players)
       gekko_set_advantage_delay_bias(s.gekko, s.early_input ? 1 : 0);
       INFO_LOG_FMT(BRAWLBACK, "gprb: early local input {}", s.early_input ? "on" : "off");
     }
+    u32 held = 0;
+    ForEachPeer([&](int, const PeerView& p) { held += p.pongs.Held(); });
     INFO_LOG_FMT(BRAWLBACK,
                  "gprb: input delay {} ({}, round trip {:.0f} ms, in game {:.0f} ms), controller "
-                 "{}, profile {}",
+                 "{}, profile {}{}",
                  s.input_delay, s.net_opts.delay ? "set" : "auto", rtt, GameRoundTrip(rtt),
-                 PadName(s.local_pad), DelayLevelName(OwnDelayLevel()));
+                 PadName(s.local_pad), DelayLevelName(OwnDelayLevel()),
+                 held ? fmt::format("; {} pongs held up together left out", held) : "");
     if (s.gone_enabled)
     {
       // A player who leaves a 3-4 player match gets the gone marker as its input from the frame
@@ -9725,6 +9733,7 @@ void BeginReplay(Core::System& system)
   Replay::BeginInfo info;
   info.meta = s.net_opts.replay_meta;
   info.local_port = s.local_slot;
+  info.local_pad = LocalPad();
   info.host = IsHost();
   info.match_ports = s.match_ports;
   info.session_game = NextGame();
@@ -9855,6 +9864,7 @@ void EndReplay(Core::System& system, const std::string& reason, const GameResult
 void FinishRecordingAfterStop()
 {
   std::lock_guard<std::recursive_timed_mutex> lk(s.mutex);
+  Replay::EndAfter();
   if (!Replay::Active())
     return;
   // The game never got back to its loop top, where EndRunning ends the replay: it crashed or hung
@@ -10296,6 +10306,24 @@ void OnField(Core::System& system)
     WARN_LOG_FMT(BRAWLBACK, "gprb:   thread {}", ThreadReport(guard, t->GetAddress()));
 }
 
+// After a recorded game's end, while the game still shows it (GAME!; online it then goes straight
+// back to the CSS): the recording player's buttons as the game reads them, for a Manual Clip
+// Hotkey pressed there (Replay::OnAfterEnd; Sarah's board, 2026-11-14). The window closes once the
+// game leaves the match scene.
+void KeepButtonsAfterEnd(Core::System& system, int pad)
+{
+  const Guest g(system.GetMemory());
+  if (!IsSceneMelee(g) || pad < 0 || pad >= 8)
+  {
+    Replay::EndAfter();
+    return;
+  }
+  const auto counter = g.U32(Addr::GAME_FRAME + 0x14);
+  const auto buttons = g.U32(Addr::PAD_STATUS + static_cast<u32>(pad) * Addr::PAD_STRIDE);
+  if (counter && buttons)
+    Replay::OnAfterEnd(*counter, static_cast<u16>(*buttons & 0xFFFF));
+}
+
 bool OnLoopTop(const Core::CPUThreadGuard& guard)
 {
   s.cpu_where = "looptop";
@@ -10303,6 +10331,8 @@ bool OnLoopTop(const Core::CPUThreadGuard& guard)
   auto& system = guard.GetSystem();
   NoteLoopTop(system);
   ResimHide::Restore(system);
+  if (const int pad = Replay::AfterEndPad(); pad >= 0)
+    KeepButtonsAfterEnd(system, pad);
 
   // Sounds of mispredicted runs are stopped here, between passes (guest calls that return here).
   if (s.gcall_active || (s.phase == Phase::Running && !s.snd_to_stop.empty()))

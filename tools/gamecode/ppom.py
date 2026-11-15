@@ -113,7 +113,7 @@ def _parse_block(c: HarnessClient, a: int):
     if hdr[:4] != MAGIC:
         return None
     ver, sz, mbo, mbs, so, ss, lo, ls, dbo, dbs = struct.unpack_from(">HHHHHHHHHH", hdr, 4)
-    if ver in (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11) and 0x100 < sz < 0x4000 and mbo and dbo:
+    if ver in (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12) and 0x100 < sz < 0x4000 and mbo and dbo:
         return Block(a, ver, sz, a + mbo, mbs, a + dbo, dbs, a + so if ss else 0, ss,
                      a + lo if ls else 0, ls)
     return None
@@ -318,7 +318,8 @@ def read_local(c: HarnessClient, b: Block) -> dict:
             **({"own_cursor": sss_cursor(d[L_OWN_CURSOR:L_OWN_CURSOR + 8]),
                 "cursors": [sss_cursor(d[L_CURSORS + 8 * i:L_CURSORS + 8 * (i + 1)]) for i in range(4)]}
                if len(d) >= L_CURSORS + 32 else {}),
-            **({"potato": d[L_POTATO]} if len(d) > L_POTATO else {})}
+            **({"potato": d[L_POTATO]} if len(d) > L_POTATO else {}),
+            **({"aspect": struct.unpack_from(">f", d, L_ASPECT)[0]} if len(d) >= L_ASPECT + 4 else {})}
 
 
 # ---- v10: the stage select's cursors (LOCAL; docs/game-code.md §11) ----
@@ -327,6 +328,9 @@ L_OWN_CURSOR, L_CURSORS = 0xC8, 0xD0
 L_POTATO = 0xF0
 # (still v11) a 2v2 session between games (docs/design/2v2.md): seconds left to ready up, ports ready.
 L_READY_SECONDS, L_READY_PORTS = 0xF1, 0xF2
+# v12: any screen shape (LOCAL; docs/game-code.md, Any screen shape): the shape this machine shows
+# the picture at (width / height, f32), Dolphin's every frame; 0 = as the game draws it.
+L_ASPECT = 0xF4
 
 
 def potato_state(c: HarnessClient, b: Block) -> dict:

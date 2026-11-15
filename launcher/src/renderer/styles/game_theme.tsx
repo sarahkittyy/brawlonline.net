@@ -30,11 +30,20 @@ export const assetUrl = (file: string) => `${GAME_ASSET_BASE_URL}${file.split("/
 const STYLE_ELEMENT_ID = "game-theme";
 const MENU_FONT_FAMILY = "GameMenuFont";
 const TITLE_FONT_FAMILY = "GameTitleFont";
-const FRAME_KEYS = ["button", "buttonHover", "panel"] as const;
+const FRAME_KEYS = ["button", "buttonHover", "panel", "selected"] as const;
 type FrameKey = (typeof FRAME_KEYS)[number];
 
-/** Manifest texture each frame is cut from. The hover frame is a brighter tint of the button plate. */
-const FRAME_TEXTURE: Record<FrameKey, string> = { button: "button", buttonHover: "button", panel: "panel" };
+/**
+ * Manifest texture each frame is cut from. The hover frame is a brighter tint of the button plate. `selected` is the
+ * character select's selected entry (MenSelchrEntryW01b), tinted like the hover plate: the sidebar's current page
+ * (docs/design/launcher-redesign.md).
+ */
+const FRAME_TEXTURE: Record<FrameKey, string> = {
+  button: "button",
+  buttonHover: "button",
+  panel: "panel",
+  selected: "buttonSelected",
+};
 
 /**
  * CSS pixels per texel for each frame. MenCmn00 is the plate of Brawl's notice window
@@ -42,7 +51,7 @@ const FRAME_TEXTURE: Record<FrameKey, string> = { button: "button", buttonHover:
  * 36-45 px button its 7-texel black rim and 16-texel corners swamp the button, so buttons show it at
  * half size (a 3.5 px rim). The name-entry panel frame has thin insets and stays 1:1.
  */
-export const FRAME_SCALE: Record<FrameKey, number> = { button: 0.5, buttonHover: 0.5, panel: 1 };
+export const FRAME_SCALE: Record<FrameKey, number> = { button: 0.5, buttonHover: 0.5, panel: 1, selected: 1 };
 
 type RGB = [number, number, number];
 
@@ -105,6 +114,7 @@ export function framesFromManifest(manifest: GameAssetManifest, prepared?: Prepa
     button: preparedFrameCss(manifest, "button", prepared),
     buttonHover: preparedFrameCss(manifest, "buttonHover", prepared),
     panel: preparedFrameCss(manifest, "panel", prepared),
+    selected: preparedFrameCss(manifest, "selected", prepared),
   };
 }
 
@@ -179,6 +189,8 @@ export function paletteVars(p: ThemePalette): string[] {
 export const buildPlainThemeCss = (palette: ThemePalette) => `:root { ${paletteVars(palette).join(" ")} }`;
 
 export function applyCss(css: string | null) {
+  // The sidebar's current page wears the selected-entry frame only when the theme has one (sidebar.module.css).
+  document.documentElement.toggleAttribute("data-game-frames", css?.includes("--theme-selected-source") ?? false);
   let el = document.getElementById(STYLE_ELEMENT_ID) as HTMLStyleElement | null;
   if (!css) {
     el?.remove();
@@ -353,6 +365,7 @@ export async function prepareTheme(
     ["button", "button", frameTint, 1],
     ["buttonHover", "button", hoverTint, 1],
     ["panel", "panel", panelTint, 1],
+    ["selected", "buttonSelected", hoverTint, 1],
     ["backgroundTile", "backgroundTile", [255, 255, 255], 0.12],
     ["cursor", "cursor", [255, 255, 255], 1],
   ];

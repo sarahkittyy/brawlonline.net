@@ -10,12 +10,14 @@ import Tooltip from "@mui/material/Tooltip";
 import { clsx } from "clsx";
 import React from "react";
 
+import { CharacterIcon, useHasStockIcons } from "@/components/profile/character_icon";
 import { RoomNameMessages } from "@/components/room_name/room_name.messages";
 import { RoomNameField } from "@/components/room_name/room_name_field";
+import { FriendsIcon } from "@/components/social/friend_icons";
+import { SocialMessages } from "@/components/social/social.messages";
 import { UserName } from "@/components/user_name/user_name";
 import type { PublicRoom, RoomMode, YourRoom } from "@/services/backend/types";
 
-import { ContentBlock } from "../content_block/content_block";
 import { JoinCodeBox } from "./join_code_box";
 import { PublicRoomsMessages as Messages } from "./public_rooms.messages";
 import styles from "./public_rooms.module.css";
@@ -86,70 +88,50 @@ export const PublicRoomsView = ({
   onAdminRenameRoom,
   forceEditText,
 }: PublicRoomsViewProps) => {
-  const online =
-    state.kind === "ready" ? (
-      <div className={styles.online} data-testid="players-online">
-        <span className={styles.onlineDot} />
-        {Messages.playersInGame(state.online)}
-      </div>
-    ) : undefined;
-
   return (
-    <div className={styles.block}>
-      <ContentBlock
-        fill={true}
-        title={Messages.publicRooms()}
-        toolbar={
-          state.kind !== "logged-out" && (onJoinCode || onCreate) ? (
-            <div className={styles.toolbar}>
-              {onJoinCode && (
-                <JoinCodeBox
-                  onJoin={onJoinCode}
-                  joining={joiningByCode}
-                  disabled={creating || (joiningCode != null && !joiningByCode)}
-                />
-              )}
-              {onCreate && (
-                <div className={styles.createActions}>
-                  {rulesetBox}
-                  <Tooltip
-                    title={Messages.createRoomTooltip()}
-                    placement="top"
-                    enterDelay={400}
-                    disableInteractive={true}
-                  >
-                    <span className={styles.createRoom}>
-                      <Button
-                        variant="contained"
-                        color="secondary"
-                        size="small"
-                        disableElevation={true}
-                        disabled={creating || joiningCode != null}
-                        startIcon={creating ? <CircularProgress color="inherit" size={14} /> : <AddRoundedIcon />}
-                        onClick={onCreate}
-                        className={clsx(highlightCreate && !creating && styles.createHighlight)}
-                        data-testid="create-room"
-                        sx={{
-                          textTransform: "none",
-                          fontWeight: 600,
-                          borderRadius: "8px",
-                          px: 1.5,
-                          whiteSpace: "nowrap",
-                        }}
-                      >
-                        {Messages.createRoom()}
-                      </Button>
-                    </span>
-                  </Tooltip>
-                </div>
-              )}
-            </div>
-          ) : undefined
-        }
-        endIcon={online}
-        content={renderBody()}
-      />
-    </div>
+    <section className={styles.block}>
+      <div className={styles.bar}>
+        <h2 className={styles.heading}>{Messages.publicRooms()}</h2>
+        {state.kind !== "logged-out" && (onJoinCode || onCreate) && (
+          <div className={styles.toolbar}>
+            {onJoinCode && (
+              <JoinCodeBox
+                onJoin={onJoinCode}
+                joining={joiningByCode}
+                disabled={creating || (joiningCode != null && !joiningByCode)}
+              />
+            )}
+            {onCreate && (
+              <>
+                {rulesetBox}
+                <Tooltip
+                  title={Messages.createRoomTooltip()}
+                  placement="top"
+                  enterDelay={400}
+                  disableInteractive={true}
+                >
+                  <span className={styles.createRoom}>
+                    <Button
+                      variant="outlined"
+                      color="inherit"
+                      disableElevation={true}
+                      disabled={creating || joiningCode != null}
+                      startIcon={creating ? <CircularProgress color="inherit" size={14} /> : <AddRoundedIcon />}
+                      onClick={onCreate}
+                      className={clsx(styles.createButton, highlightCreate && !creating && styles.createHighlight)}
+                      data-testid="create-room"
+                    >
+                      {Messages.createRoom()}
+                    </Button>
+                  </span>
+                </Tooltip>
+              </>
+            )}
+          </div>
+        )}
+      </div>
+      <div className={styles.body}>{renderBody()}</div>
+    </section>
   );
 
   function renderBody() {
@@ -273,6 +255,36 @@ const PlayerNames = ({ room }: { room: PublicRoom }) => {
   );
 };
 
+/** The players' mains (when they show them, and with the disc) and how full the room is. */
+const RoomPlayers = ({ room }: { room: PublicRoom }) => {
+  const hasStocks = useHasStockIcons();
+  const mains = hasStocks ? (room.mains ?? []).filter((m): m is string => !!m) : [];
+  return (
+    <span className={styles.players}>
+      {mains.length > 0 ? (
+        <span className={styles.mains}>
+          {mains.map((m, i) => (
+            <CharacterIcon key={i} character={m} size={20} />
+          ))}
+        </span>
+      ) : (
+        <PersonOutlineIcon style={{ fontSize: 16 }} />
+      )}
+      {Messages.playersInRoom(room.players, room.openSlots)}
+    </span>
+  );
+};
+
+/** A friends-only room (docs/design/friends.md): the friends icon before its name, in the accent. */
+const FriendsOnlyMark = ({ room }: { room: PublicRoom }) =>
+  room.friends ? (
+    <Tooltip title={SocialMessages.friendsOnlyRoom()} placement="top" disableInteractive={true}>
+      <span className={styles.friendsOnly} data-testid={`friends-only-${room.code}`}>
+        <FriendsIcon style={{ fontSize: 16 }} />
+      </span>
+    </Tooltip>
+  ) : null;
+
 /** The player's own room: not a button (they are in it), marked, and its host's pencil names it. */
 const OwnRoomRow = ({
   room,
@@ -291,23 +303,23 @@ const OwnRoomRow = ({
   return (
     <div className={clsx(styles.row, styles.own)} data-room={room.code} data-own-room="true">
       <div className={styles.main}>
-        <div className={styles.host}>
-          <RoomNameField
-            name={room.name ?? null}
-            fallback={RoomNameMessages.defaultName(room.host)}
-            canEdit={host && !!onRename}
-            onSave={async (name) => onRename?.(room.code, name)}
-            initialEditText={forceEditText}
-          />
+        <div className={styles.hostLine}>
+          <FriendsOnlyMark room={room} />
+          <div className={styles.host}>
+            <RoomNameField
+              name={room.name ?? null}
+              fallback={RoomNameMessages.defaultName(room.host)}
+              canEdit={host && !!onRename}
+              onSave={async (name) => onRename?.(room.code, name)}
+              initialEditText={forceEditText}
+            />
+          </div>
         </div>
         <PlayerNames room={room} />
       </div>
       <RulesetCell room={room} onShow={onShowRuleset} />
       <span className={styles.mode}>{modeLabel(room.mode)}</span>
-      <span className={styles.players}>
-        <PersonOutlineIcon style={{ fontSize: 16 }} />
-        {Messages.playersInRoom(room.players, room.openSlots)}
-      </span>
+      <RoomPlayers room={room} />
       <span className={clsx(styles.status, inGame ? styles.inGame : styles.waiting)}>
         <span className={styles.statusDot} />
         {inGame ? Messages.statusInGame() : Messages.statusWaiting()}
@@ -361,30 +373,30 @@ export const RoomRow = React.memo(function RoomRow({
         }}
       >
         <div className={styles.main}>
-          {onRename ? (
-            <div className={styles.host}>
-              <RoomNameField
-                name={room.name ?? null}
-                fallback={RoomNameMessages.defaultName(room.host)}
-                canEdit={true}
-                onSave={async (name) => onRename(room.code, name)}
-                inButton={true}
-              />
-            </div>
-          ) : (
-            // A room its host didn't name: "alice's room" in grey, so a real name stands out.
-            <div className={clsx(styles.host, !room.name && styles.unnamed)}>
-              {room.name ?? RoomNameMessages.defaultName(room.host)}
-            </div>
-          )}
+          <div className={styles.hostLine}>
+            <FriendsOnlyMark room={room} />
+            {onRename ? (
+              <div className={styles.host}>
+                <RoomNameField
+                  name={room.name ?? null}
+                  fallback={RoomNameMessages.defaultName(room.host)}
+                  canEdit={true}
+                  onSave={async (name) => onRename(room.code, name)}
+                  inButton={true}
+                />
+              </div>
+            ) : (
+              // A room its host didn't name: "alice's room" in grey, so a real name stands out.
+              <div className={clsx(styles.host, !room.name && styles.unnamed)}>
+                {room.name ?? RoomNameMessages.defaultName(room.host)}
+              </div>
+            )}
+          </div>
           <PlayerNames room={room} />
         </div>
         <RulesetCell room={room} onShow={onShowRuleset} />
         <span className={styles.mode}>{modeLabel(room.mode)}</span>
-        <span className={styles.players}>
-          <PersonOutlineIcon style={{ fontSize: 16 }} />
-          {Messages.playersInRoom(room.players, room.openSlots)}
-        </span>
+        <RoomPlayers room={room} />
         <span className={clsx(styles.status, inGame ? styles.inGame : styles.waiting)}>
           <span className={styles.statusDot} />
           {inGame ? Messages.statusInGame() : Messages.statusWaiting()}

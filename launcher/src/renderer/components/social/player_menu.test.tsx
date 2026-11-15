@@ -3,14 +3,16 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { UserName } from "@/components/user_name/user_name";
 import { useAccount } from "@/lib/hooks/use_account";
+import { usePlayerMenu } from "@/lib/social/use_player_menu";
 import { useSocial } from "@/lib/social/use_social";
 import { createServiceProvider } from "@/services";
 import type { AdminUser } from "@/services/backend/types";
 import type { Services } from "@/services/types";
 
 import { canonicalCode } from "./admin_rename_dialog";
-import { PlayerMenu } from "./player_menu";
+import { PlayerMenu, PlayerMenuHost } from "./player_menu";
 
 const ness: SocialPlayer = { uid: "ness", displayName: "Ness", connectCode: "NESS#44" };
 
@@ -50,6 +52,8 @@ function setup(opts: { admin: boolean; user?: Partial<AdminUser> }) {
     room: null,
     ignored: [],
     invites: [],
+    friends: { loaded: true, friends: [], incoming: [], outgoing: [] },
+    requestPopups: [],
     conversations: {},
   };
   useSocial.setState({ state, tabs: [] } as any);
@@ -159,5 +163,107 @@ describe("canonicalCode", () => {
     for (const bad of ["", "ABCDE#1", "AB#12345", "AB12", "A1#2", "#12"]) {
       expect(canonicalCode(bad)).toBeNull();
     }
+  });
+});
+
+describe("PlayerMenu friends (docs/design/friends.md)", () => {
+  const since = "2026-11-14T00:00:00Z";
+  const items = () => screen.getAllByRole("menuitem").map((m) => m.textContent);
+
+  function withFriends(friends: Partial<SocialState["friends"]>) {
+    setup({ admin: false });
+    act(() => {
+      const s = useSocial.getState().state;
+      useSocial.setState({ state: { ...s, friends: { ...s.friends, ...friends } } });
+    });
+  }
+
+  it("offers Add friend after Invite for anyone else", () => {
+    withFriends({});
+    expect(items()).toEqual(["Message", "View Profile", "Invite to game", "Add friend", "Ignore user"]);
+  });
+
+  it("puts their request first, apart, and Cancel where Add friend was for a sent one", () => {
+    withFriends({ incoming: [{ ...ness, since }] });
+    expect(items().slice(0, 3)).toEqual(["Accept friend request", "Decline friend request", "Message"]);
+    expect(screen.getByRole("menu").querySelector("hr")).toBeTruthy();
+    cleanup();
+    withFriends({ outgoing: [{ ...ness, since }] });
+    expect(items()).toEqual(["Message", "View Profile", "Invite to game", "Cancel friend request", "Ignore user"]);
+  });
+
+  it("offers Remove friend above Ignore user for a friend", () => {
+    withFriends({ friends: [{ ...ness, since }] });
+    expect(items().slice(-2)).toEqual(["Remove friend", "Ignore user"]);
+    expect(items()).not.toContain("Add friend");
+  });
+});
+
+describe("PlayerMenu icons", () => {
+  it("puts an icon left of every item's text", () => {
+    setup({ admin: true });
+    for (const item of screen.getAllByRole("menuitem")) {
+      const icon = item.querySelector("svg");
+      expect(icon, item.textContent ?? "").toBeTruthy();
+      expect(item.firstElementChild?.contains(icon)).toBe(true);
+    }
+  });
+});
+
+describe("PlayerMenuHost (a hover-card name's right click)", () => {
+  function host(opts: { me?: string } = {}) {
+    const backendService = {
+      fetchProfile: vi.fn(async (uid: string) => ({ uid, displayName: "Ness", connectCode: "NESS#44" })),
+      adminUser: vi.fn(),
+    };
+    const { ServiceProvider } = createServiceProvider({
+      services: { backendService, notificationService: {} } as unknown as Services,
+    });
+    useAccount.setState({ user: { uid: opts.me ?? "me" }, userData: { playKey: {}, admin: false } } as any);
+    useSocial.setState({
+      state: {
+        status: "online",
+        online: [ness],
+        room: null,
+        ignored: [],
+        invites: [],
+        friends: { loaded: true, friends: [], incoming: [], outgoing: [] },
+        requestPopups: [],
+        conversations: {},
+      },
+      tabs: [],
+    } as any);
+    usePlayerMenu.setState({ request: null });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <ServiceProvider>
+          <UserName user={{ uid: "ness", displayName: "Ness" }} showCode={false} />
+          <PlayerMenuHost />
+        </ServiceProvider>
+      </QueryClientProvider>,
+    );
+    return { backendService };
+  }
+
+  it("opens the online list's menu, with the code from the profile", async () => {
+    const { backendService } = host();
+    fireEvent.contextMenu(screen.getByText("Ness"));
+    expect(screen.getAllByRole("menuitem").map((m) => m.textContent)).toEqual([
+      "Message",
+      "View Profile",
+      "Invite to game",
+      "Add friend",
+      "Ignore user",
+    ]);
+    await waitFor(() => expect(backendService.fetchProfile).toHaveBeenCalledWith("ness"));
+    fireEvent.click(screen.getByText("Message"));
+    await waitFor(() => expect(useSocial.getState().tabs.length).toBe(1));
+  });
+
+  it("does nothing on the player's own name", () => {
+    host({ me: "ness" });
+    fireEvent.contextMenu(screen.getByText("Ness"));
+    expect(screen.queryByRole("menu")).toBeNull();
   });
 });

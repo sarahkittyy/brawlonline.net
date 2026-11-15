@@ -165,8 +165,10 @@ pub enum RoomRequest {
     /// P+'s plain team battle, every player in their team's costume; else its rainbow team battle
     /// (any costume, a team glow on each fighter).
     Teams { on: bool, colors: bool },
-    /// `room-public {public}` (host only).
-    Public { public: bool },
+    /// `room-public {public, friends?}` (host only). `friends` (2026-11-14; missing: false) with
+    /// `public: false`: a friends-only room, listed only to the friends of its players
+    /// (`docs/design/friends.md`); a game from before it asks for public or private only.
+    Public { public: bool, friends: bool },
     /// `room-ready {ready, character?, costume?, stocks?}`: START on the CSS (lock-in) or taking it
     /// back. `stocks`: with the rules' stock control, the count the player picked on their panel
     /// (1-99; missing: none picked, the rules' stocks). With `ready: false` the character and
@@ -293,7 +295,13 @@ impl RoomRequest {
             }
             RoomRequest::Slot { slot, open } => json!({ "slot": slot, "open": open }),
             RoomRequest::Teams { on, colors } => json!({ "on": on, "colors": colors }),
-            RoomRequest::Public { public } => json!({ "public": public }),
+            RoomRequest::Public { public, friends } => {
+                let mut v = json!({ "public": public });
+                if *friends {
+                    v["friends"] = json!(true);
+                }
+                v
+            }
             RoomRequest::Ready { ready, character, costume, stocks, hp } => {
                 let mut v = json!({ "ready": ready });
                 if let Some(n) = hp {
@@ -393,7 +401,15 @@ impl RoomRequest {
                     Some(_) => flag("colors")?,
                 },
             },
-            ROOM_PUBLIC => RoomRequest::Public { public: flag("public")? },
+            ROOM_PUBLIC => {
+                let public = flag("public")?;
+                let friends = match v.get("friends") {
+                    None | Some(serde_json::Value::Null) => false,
+                    Some(_) => flag("friends")?,
+                };
+                // Public wins: a public room is listed to everyone anyway.
+                RoomRequest::Public { public, friends: friends && !public }
+            }
             ROOM_READY => RoomRequest::Ready {
                 ready: flag("ready")?,
                 character: small("character", 255)?,
@@ -641,6 +657,10 @@ pub struct RoomState {
     pub kind: String,
     pub code: String,
     pub public: bool,
+    /// With `public: false`: friends only (listed to its players' friends). Absent from servers
+    /// before 2026-11-14: false.
+    #[serde(default)]
+    pub friends: bool,
     pub teams: bool,
     /// With `teams`: every player in their team's costume (P+'s plain team battle); else P+'s
     /// rainbow team battle. Absent from servers before 2026-10-21.
@@ -875,6 +895,10 @@ pub struct PublicRoom {
     /// for one who doesn't. Only accounts fills it in (`GET /v1/rooms`); mm never sends it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub countries: Vec<Option<String>>,
+    /// Every player's primary main (character key), by slot (as `names`), when they show it beside
+    /// their name; null for one who doesn't. Only accounts fills it in, as `countries`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mains: Vec<Option<String>>,
     /// An open slot is empty, so the room can be joined (also during a game).
     pub joinable: bool,
     /// What the room plays (its ruleset's code, name and set), for the room list.
@@ -884,6 +908,10 @@ pub struct PublicRoom {
     /// launcher shows "alice's room". Absent from an older mm.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    /// A friends-only room (`docs/design/friends.md`): listed only to the friends of its players
+    /// ([`MmStatus::friend_rooms`]).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub friends: bool,
 }
 
 /// What mm publishes for the launcher (`GET /status` on mm's local status listener, served to
@@ -932,6 +960,90 @@ pub struct MmStatus {
     /// [`MmStatus::members`] and [`MmStatus::mod_members`]; mm never sends it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub your_room: Option<YourRoom>,
+    /// Friends-only rooms (`docs/design/friends.md`), in [`MmStatus::rooms`]' order. Internal:
+    /// accounts adds to a launcher's `rooms` the ones a friend of the caller plays in, and never
+    /// serves this list.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub friend_rooms: Vec<PublicRoom>,
+    /// How long a search waits now ([`QueueEta`]). Only accounts fills it in (`GET /v1/rooms`),
+    /// from `queue_searches`; mm never sends it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub queue_eta: Option<QueueEta>,
+    /// The players searching Unranked, Ranked or 2v2. Internal, as [`MmStatus::members`]: accounts
+    /// tells each launcher its own player's search (`queue` on the social stream) and never
+    /// serves the list.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub searching: Vec<QueueSearcher>,
+    /// The Direct, Unranked, Ranked and 2v2 matches under way (from the pairing until a player
+    /// searches again or their game leaves the online CSS). Internal, as [`MmStatus::searching`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub matched: Vec<QueueMatch>,
+}
+
+/// [`MmStatus::queue_eta`]: per queue, the median wait in seconds of the current UTC hour of the
+/// day over the last 14 days (`pp-admin stats`' ETA); `None` ("10+ min") when most searches that
+/// hour gave up, the median is 10 minutes or more, or the hour had under 5 searches.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct QueueEta {
+    pub unranked: Option<u32>,
+    pub ranked: Option<u32>,
+}
+
+/// A player as [`QueueSearcher`] and [`QueueMatch`] name them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct QueuePlayer {
+    /// The player's account (hyphenated lowercase UUID).
+    pub uid: String,
+    pub display_name: String,
+    pub connect_code: String,
+}
+
+/// One player searching, for [`MmStatus::searching`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QueueSearcher {
+    /// The player's account (hyphenated lowercase UUID).
+    pub uid: String,
+    /// `unranked`, `ranked` or `twos`.
+    pub mode: String,
+    /// RFC 3339: when the player's current ticket came.
+    pub since: String,
+    /// 2v2: the other player of the party searching with them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub partner: Option<QueuePlayer>,
+}
+
+/// One player of a [`QueueMatch`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct QueueMatchPlayer {
+    #[serde(flatten)]
+    pub player: QueuePlayer,
+    /// Games won in the set so far (from its stream; 0 before its first game's end).
+    pub wins: u32,
+    /// The player's team in the latest game streamed (2v2); `None` before one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub team: Option<u32>,
+    /// 2v2: the players who queued together share a number; 0 searched alone (and in the other
+    /// modes).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub pair: u8,
+}
+
+/// One match under way, for [`MmStatus::matched`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct QueueMatch {
+    /// `direct`, `unranked`, `ranked` or `twos`.
+    pub mode: String,
+    pub players: Vec<QueueMatchPlayer>,
+    /// The game number the players see (the latest one streamed; 1 before one).
+    pub game: u32,
+    /// The match's stream in `GET /v1/live`, when it is listed there.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub live_id: Option<String>,
 }
 
 /// The longest room name, in characters (`users.room_name`'s check).
@@ -1103,7 +1215,8 @@ mod tests {
             RoomRequest::Slot { slot: 3, open: true },
             RoomRequest::Teams { on: true, colors: false },
             RoomRequest::Teams { on: true, colors: true },
-            RoomRequest::Public { public: false },
+            RoomRequest::Public { public: false, friends: false },
+            RoomRequest::Public { public: false, friends: true },
             RoomRequest::Ready { ready: true, character: Some(12), costume: Some(3), stocks: None, hp: None },
             RoomRequest::Ready { ready: true, character: Some(12), costume: Some(3), stocks: Some(2), hp: None },
             RoomRequest::Ready { ready: true, character: Some(12), costume: Some(3), stocks: None, hp: Some(250) },

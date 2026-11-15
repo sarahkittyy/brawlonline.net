@@ -23,6 +23,7 @@ import {
   ipc_initializeFolderTree,
   ipc_loadProgressUpdatedEvent,
   ipc_searchGames,
+  ipc_searchPlayers,
   ipc_selectTreeFolder,
 } from "./ipc";
 import { rebaseReplayPaths } from "./rebase_replay_paths";
@@ -154,6 +155,11 @@ export default function setupReplaysIpc({
     };
 
     return await replayProvider.searchReplays(options.folderPath, limit, continuation, orderBy, filters, onProgress);
+  });
+
+  ipc_searchPlayers.main!.handle(async ({ query, limit }) => {
+    const replayProvider = await replayProviderPromise;
+    return await replayProvider.searchPlayers(query, Math.min(Math.max(limit, 1), 20));
   });
 
   ipc_getAllFilePaths.main!.handle(async (options) => {

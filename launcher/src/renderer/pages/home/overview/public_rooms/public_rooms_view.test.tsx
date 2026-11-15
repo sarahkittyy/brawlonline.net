@@ -49,8 +49,7 @@ afterEach(cleanup);
 
 describe("PublicRoomsView", () => {
   it("lists every room with its host, players, mode, status and names", () => {
-    const { container, getByTestId } = view({ kind: "ready", online: 42, rooms });
-    expect(getByTestId("players-online").textContent).toBe("42 players in-game");
+    const { container } = view({ kind: "ready", online: 42, rooms });
     const rows = container.querySelectorAll("button[data-room]");
     expect(rows.length).toBe(3);
     const text = (code: string) => container.querySelector(`[data-room="${code}"]`)!.textContent;
@@ -75,7 +74,8 @@ describe("PublicRoomsView", () => {
   it("shows a room's name, or its host's room in grey, and crowns the host", () => {
     const named = [{ ...rooms[1], name: "chill ffa", names: ["cy", "bob", "dee"] }, rooms[0]];
     const { container } = view({ kind: "ready", online: 1, rooms: named });
-    const title = (code: string) => container.querySelector(`[data-room="${code}"] > div > div`)!;
+    // The name's line: the friends icon of a friends-only room, then the name.
+    const title = (code: string) => container.querySelector(`[data-room="${code}"] > div > div > div:last-child`)!;
     expect(title("PLNX").textContent).toBe("chill ffa");
     expect(title("KFQB").textContent).toBe("ann's room");
     expect(title("KFQB").className).toMatch(/unnamed/);
@@ -230,7 +230,6 @@ describe("PublicRoomsView", () => {
         />,
       ).getByText(Messages.createAbove()),
     ).toBeTruthy();
-    expect(view({ kind: "ready", online: 1, rooms: [] }).getAllByText("1 player in-game").length).toBeGreaterThan(0);
     expect(view({ kind: "logged-out" }).getByText(Messages.logIn())).toBeTruthy();
     expect(view({ kind: "unreachable" }).getByText(Messages.retry())).toBeTruthy();
   });
@@ -252,19 +251,22 @@ describe("PublicRoomsView", () => {
     const { getByTestId } = codeView(onJoinCode);
     const box = getByTestId("room-code") as HTMLInputElement;
     const button = getByTestId("join-code") as HTMLButtonElement;
-    expect(button.disabled).toBe(true);
+    // Join is a button all along; pressed on what isn't a room code, the box turns red instead.
+    expect(button.disabled).toBe(false);
 
     fireEvent.change(box, { target: { value: "k f-q" } });
     expect(box.value).toBe("KFQ");
-    expect(button.disabled).toBe(true);
+    expect(box.getAttribute("aria-invalid")).toBe("false");
     fireEvent.keyDown(box, { key: "Enter" });
     expect(onJoinCode).not.toHaveBeenCalled();
+    expect(box.getAttribute("aria-invalid")).toBe("true");
+    fireEvent.click(button);
+    expect(onJoinCode).not.toHaveBeenCalled();
 
-    // Four letters with a vowel (or a Y) are no room's code: red, no join.
+    // Four letters with a vowel (or a Y) are no room's code: red at once, no join.
     fireEvent.change(box, { target: { value: "KFQA" } });
     expect(box.getAttribute("aria-invalid")).toBe("true");
-    expect(button.disabled).toBe(true);
-    fireEvent.keyDown(box, { key: "Enter" });
+    fireEvent.click(button);
     expect(onJoinCode).not.toHaveBeenCalled();
 
     fireEvent.change(box, { target: { value: "kfqb" } });

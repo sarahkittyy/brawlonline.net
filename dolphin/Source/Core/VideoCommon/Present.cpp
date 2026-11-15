@@ -12,6 +12,7 @@
 #include "Core/Rollback/FrameProfile.h"
 #include "Core/Rollback/PresentStats.h"
 #include "Core/Host.h"
+#include "BrawlOnline/Online/GameBridge.h"
 #include "Core/System.h"
 
 #include "InputCommon/ControllerInterface/ControllerInterface.h"
@@ -332,7 +333,9 @@ void Presenter::ProcessFrameDumping(u64 ticks) const
     case FrameDumpResolutionType::XFBAspectRatioCorrectedResolution:
     {
       target_rect = m_xfb_rect;
-      const bool allow_stretch = false;
+      // Stretch to Window is not a shape of the picture, except when the game draws for the
+      // window's (our plugin, docs/game-code.md, Any screen shape): the picture then has it.
+      const bool allow_stretch = Online::GameBridge::DrawsForWindow();
       auto [float_width, float_height] =
           ScaleToDisplayAspectRatio(m_xfb_rect.GetWidth(), m_xfb_rect.GetHeight(), allow_stretch);
       const float draw_aspect_ratio = CalculateDrawAspectRatio(allow_stretch);
@@ -780,7 +783,9 @@ void Presenter::UpdateDrawRectangle()
   // Update aspect ratio hack values
   // Won't take effect until next frame
   // Don't know if there is a better place for this code so there isn't a 1 frame delay
-  if (g_ActiveConfig.bWidescreenHack)
+  // Not while our plugin draws for the screen's shape itself (docs/game-code.md, Any screen
+  // shape): the hack would widen the picture a second time.
+  if (g_ActiveConfig.bWidescreenHack && !Online::GameBridge::DrawsForScreen())
   {
     const auto& vi = Core::System::GetInstance().GetVideoInterface();
     float source_aspect_ratio = vi.GetAspectRatio();

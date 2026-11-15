@@ -4,10 +4,13 @@
 #pragma once
 
 #include <algorithm>
+#include <cstddef>
 #include <cstring>
 #include <memory>
 #include <string>
 #include <type_traits>
+#include <utility>
+#include <vector>
 
 #include "Common/CommonTypes.h"
 #include "Common/IOFile.h"
@@ -33,7 +36,13 @@ template <typename K, typename V>
 class LinearDiskCacheReader
 {
 public:
+  virtual ~LinearDiskCacheReader() = default;
   virtual void Read(const K& key, const V* value, u32 value_size) = 0;
+
+  // An entry of a file another build of Dolphin wrote (the header's revision differs, the rest of
+  // it matches): returns whether to keep it, after taking it as Read would. OpenAndRead writes the
+  // file again with this build's header and the kept entries only. By default nothing is kept.
+  virtual bool ReadFromOtherBuild(const K& key, const V* value, u32 value_size) { return false; }
 };
 
 // Dead simple unsorted key-value store with append functionality.
@@ -52,7 +61,7 @@ template <typename K, typename V>
 class LinearDiskCache
 {
 public:
-  // return number of read entries
+  // return number of read entries (of a file another build wrote: the entries kept)
   u32 OpenAndRead(const std::string& filename, LinearDiskCacheReader<K, V>& reader)
   {
     // Since we're reading/writing directly to the storage of K instances,
@@ -66,53 +75,40 @@ public:
     // try opening for reading/writing
     m_file.Open(filename, "r+b");
 
-    const u64 file_size = m_file.GetSize();
-
     m_header.Init();
-    if (m_file.IsOpen() && ValidateHeader())
+    const HeaderMatch match = m_file.IsOpen() ? ValidateHeader() : HeaderMatch::Mismatch;
+    if (match == HeaderMatch::Exact)
     {
       // good header, read some key/value pairs
-      K key;
-
-      std::unique_ptr<V[]> value = nullptr;
-      u32 value_size = 0;
-      u32 entry_number = 0;
-      u64 last_valid_value_start = m_file.Tell();
-
-      while (m_file.ReadArray(&value_size, 1))
-      {
-        const u64 next_extent = m_file.Tell() + sizeof(value_size) + value_size;
-        if (next_extent > file_size)
-          break;
-
-        value = std::make_unique_for_overwrite<V[]>(value_size);
-
-        // read key/value and pass to reader
-        if (m_file.ReadArray(&key, 1) && m_file.ReadArray(value.get(), value_size) &&
-            m_file.ReadArray(&entry_number, 1) && entry_number == m_num_entries + 1)
-        {
-          last_valid_value_start = m_file.Tell();
-          reader.Read(key, value.get(), value_size);
-        }
-        else
-        {
-          break;
-        }
-
-        m_num_entries++;
-      }
+      const u64 last_valid_value_start =
+          ReadEntries([&](const K& key, const V* value, u32 value_size) {
+            reader.Read(key, value, value_size);
+          });
       m_file.ClearError();
       m_file.Seek(last_valid_value_start, File::SeekOrigin::Begin);
 
       return m_num_entries;
     }
 
-    // failed to open file for reading or bad header
+    // Written by another build: the reader picks the entries that are still good for this one.
+    std::vector<std::pair<K, std::vector<V>>> kept;
+    if (match == HeaderMatch::OtherBuild)
+    {
+      ReadEntries([&](const K& key, const V* value, u32 value_size) {
+        if (reader.ReadFromOtherBuild(key, value, value_size))
+          kept.emplace_back(key, std::vector<V>(value, value + value_size));
+      });
+    }
+
+    // failed to open file for reading or bad header (or another build's: its kept entries only)
     // close and recreate file
     Close();
     m_file.Open(filename, "wb");
     WriteHeader();
-    return 0;
+    m_num_entries = 0;
+    for (const auto& [key, value] : kept)
+      Append(key, value.data(), static_cast<u32>(value.size()));
+    return m_num_entries;
   }
 
   void Sync() { m_file.Flush(); }
@@ -135,13 +131,63 @@ public:
   }
 
 private:
+  enum class HeaderMatch
+  {
+    Mismatch,
+    OtherBuild,  // the same format and key and value types, another build's revision
+    Exact,
+  };
+
+  // Reads the key/value pairs after the header, passing each to read(key, value, value_size).
+  // Counts them in m_num_entries and returns where the last whole one ends.
+  template <typename F>
+  u64 ReadEntries(F&& read)
+  {
+    const u64 file_size = m_file.GetSize();
+    K key;
+
+    std::unique_ptr<V[]> value = nullptr;
+    u32 value_size = 0;
+    u32 entry_number = 0;
+    u64 last_valid_value_start = m_file.Tell();
+
+    while (m_file.ReadArray(&value_size, 1))
+    {
+      const u64 next_extent = m_file.Tell() + sizeof(value_size) + value_size;
+      if (next_extent > file_size)
+        break;
+
+      value = std::make_unique_for_overwrite<V[]>(value_size);
+
+      // read key/value and pass to reader
+      if (m_file.ReadArray(&key, 1) && m_file.ReadArray(value.get(), value_size) &&
+          m_file.ReadArray(&entry_number, 1) && entry_number == m_num_entries + 1)
+      {
+        last_valid_value_start = m_file.Tell();
+        read(key, value.get(), value_size);
+      }
+      else
+      {
+        break;
+      }
+
+      m_num_entries++;
+    }
+    return last_valid_value_start;
+  }
+
   void WriteHeader() { m_file.WriteArray(&m_header, 1); }
-  bool ValidateHeader()
+  HeaderMatch ValidateHeader()
   {
     char file_header[sizeof(Header)];
-
-    return (m_file.ReadArray(file_header, sizeof(Header)) &&
-            !memcmp((const char*)&m_header, file_header, sizeof(Header)));
+    if (!m_file.ReadArray(file_header, sizeof(Header)))
+      return HeaderMatch::Mismatch;
+    if (!memcmp(&m_header, file_header, sizeof(Header)))
+      return HeaderMatch::Exact;
+    // Everything before the revision: the format's id and the key and value type sizes.
+    if (!memcmp(&m_header, file_header, offsetof(Header, ver)))
+      return HeaderMatch::OtherBuild;
+    return HeaderMatch::Mismatch;
   }
 
   struct Header

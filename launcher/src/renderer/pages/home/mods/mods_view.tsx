@@ -21,6 +21,7 @@ import CreateNewFolderOutlinedIcon from "@mui/icons-material/CreateNewFolderOutl
 import DeleteOutlineRoundedIcon from "@mui/icons-material/DeleteOutlineRounded";
 import DragIndicatorRoundedIcon from "@mui/icons-material/DragIndicatorRounded";
 import EditOutlinedIcon from "@mui/icons-material/EditOutlined";
+import InfoOutlinedIcon from "@mui/icons-material/InfoOutlined";
 import PersonOutlineIcon from "@mui/icons-material/PersonOutline";
 import Button from "@mui/material/Button";
 import Dialog from "@mui/material/Dialog";
@@ -36,12 +37,11 @@ import { clsx } from "clsx";
 import type { ReactNode } from "react";
 import { useEffect, useRef, useState } from "react";
 
-import { ExternalLink } from "@/components/external_link";
 import { RoomNameMessages } from "@/components/room_name/room_name.messages";
 import { RoomNameField } from "@/components/room_name/room_name_field";
 import { UserName } from "@/components/user_name/user_name";
+import { useLocalStorage } from "@/lib/hooks/use_local_storage";
 
-import { ContentBlock } from "../overview/content_block/content_block";
 import { CodesButton, CodesChip, hasRoomCodes } from "./codes_dialog";
 import { ControllerMenu } from "./controller_menu";
 import type { CardCheckState } from "./join_with_menu";
@@ -100,8 +100,8 @@ export type ModsViewProps = {
 
 const fileName = (p: string | null) => (p ? p.split(/[\\/]/).pop() ?? p : null);
 
-/** Where Wii/GCN Rollback's beta feedback goes. */
-const FEEDBACK_URL = "https://brawlonline.net/discord";
+/** Whether the next room the player hosts is public: the room panel's switch, as last left (on this computer). */
+const HOST_PUBLIC_KEY = "MODS_HOST_PUBLIC";
 /** How long the public switch shows a click the room file does not say yet. */
 const PUBLIC_WAIT_MS = 5000;
 
@@ -121,28 +121,39 @@ export const ModsView = (props: ModsViewProps) => {
     }
   }, [running]);
   const shownError = error ?? (!state?.running && state?.lastError !== dismissed ? state?.lastError : null);
+  // Public or private is the room's: its panel has the switch. A new room opens the way the last one was left.
+  const [hostPublic, setHostPublic] = useLocalStorage(HOST_PUBLIC_KEY, true);
   return (
     <div className={styles.page}>
-      <div className={styles.introRow}>
-        <p className={styles.intro}>{Messages.intro()}</p>
-        <p className={styles.beta}>
-          {Messages.betaLine1()}
-          <br />
-          {Messages.betaLine2Before()}
-          <ExternalLink href={FEEDBACK_URL}>{Messages.discord()}</ExternalLink>
-        </p>
+      <div className={styles.head}>
+        <h1 className={styles.title}>{Messages.tabLabel()}</h1>
+        <Tooltip
+          disableInteractive={false}
+          placement="bottom-start"
+          title={
+            <div className={styles.introTip}>
+              <p>{Messages.intro()}</p>
+            </div>
+          }
+        >
+          <span className={styles.info} tabIndex={0} aria-label={Messages.intro()} data-testid="mods-intro">
+            <InfoOutlinedIcon fontSize="small" />
+          </span>
+        </Tooltip>
+        <div className={styles.headControls}>
+          {state && (
+            <ControllerMenu
+              controller={state.controller}
+              controllers={state.controllers}
+              input={status?.input}
+              gameWants={roomBuild ? defaultController(roomBuild) : null}
+              onChange={props.onControllerChange}
+              onConfigure={props.onConfigureControllers}
+              onOpen={props.onRefreshControllers}
+            />
+          )}
+        </div>
       </div>
-      {state && (
-        <ControllerMenu
-          controller={state.controller}
-          controllers={state.controllers}
-          input={status?.input}
-          gameWants={roomBuild ? defaultController(roomBuild) : null}
-          onChange={props.onControllerChange}
-          onConfigure={props.onConfigureControllers}
-          onOpen={props.onRefreshControllers}
-        />
-      )}
       {shownError && (
         <div className={clsx(styles.error, styles.dismissable)}>
           <span>{shownError}</span>
@@ -157,21 +168,24 @@ export const ModsView = (props: ModsViewProps) => {
           )}
         </div>
       )}
+      {/* Left: the player's own room while Dolphin runs one, then the public rooms; right: the player's games. */}
       <div className={styles.columns}>
-        {/* Left: the public rooms, under the player's own room while Dolphin runs one. */}
         <div className={styles.column}>
           {state?.running && (
-            <div className={styles.roomSlot}>
-              <RoomPanel
-                status={status}
-                onRequest={props.onRequest}
-                onCopyCode={props.onCopyCode}
-                yourRoom={props.yourRoom}
-                onRename={props.onRenameRoom}
-                onAdminRename={props.onAdminRenameRoom}
-                onCodes={roomBuild && props.onCodes ? () => props.onCodes?.(roomBuild) : undefined}
-              />
-            </div>
+            <RoomPanel
+              status={status}
+              onRequest={(request) => {
+                if (request.op === "public") {
+                  setHostPublic(request.public);
+                }
+                props.onRequest(request);
+              }}
+              onCopyCode={props.onCopyCode}
+              yourRoom={props.yourRoom}
+              onRename={props.onRenameRoom}
+              onAdminRename={props.onAdminRenameRoom}
+              onCodes={roomBuild && props.onCodes ? () => props.onCodes?.(roomBuild) : undefined}
+            />
           )}
           <PublicRoomsBlock
             rooms={props.publicRooms}
@@ -190,56 +204,53 @@ export const ModsView = (props: ModsViewProps) => {
             onAdminRename={props.onAdminRenameRoom}
           />
         </div>
-        {/* Right: the player's games. */}
         <div className={styles.column}>
-          <ContentBlock
-            fill={true}
-            title={Messages.yourBuilds()}
-            titleAction={
-              <>
-                <div className={styles.addButtons}>
-                  <Tooltip title={Messages.addBuildTooltip()}>
-                    <Button
-                      size="small"
-                      classes={{ startIcon: styles.addIcon }}
-                      startIcon={<AddRoundedIcon />}
-                      onClick={props.onAddBuild}
-                    >
-                      <span className={styles.addLabel}>{Messages.addBuild()}</span>
-                    </Button>
-                  </Tooltip>
-                  <Tooltip title={Messages.addFolderTooltip()}>
-                    <Button
-                      size="small"
-                      classes={{ startIcon: styles.addIcon }}
-                      startIcon={<CreateNewFolderOutlinedIcon />}
-                      onClick={props.onAddFolder}
-                    >
-                      <span className={styles.addLabel}>{Messages.addFolder()}</span>
-                    </Button>
-                  </Tooltip>
-                </div>
-              </>
-            }
-            content={
-              <div className={styles.builds}>
-                {state && state.builds.length === 0 && <p className={styles.empty}>{Messages.noBuilds()}</p>}
-                {state?.builds.map((build) => (
-                  <BuildRow
-                    key={build.id}
-                    build={build}
-                    progress={props.hashProgress[build.id]}
-                    starting={props.startingBuildId === build.id}
-                    disabled={!!state.running || props.startingBuildId !== null}
-                    onEdit={() => props.onEditBuild(build)}
-                    onRemove={() => props.onRemoveBuild(build)}
-                    onCodes={props.onCodes ? () => props.onCodes?.(build) : undefined}
-                    onHost={(isPublic) => props.onHost(build, isPublic)}
-                  />
-                ))}
+          <section className={styles.section}>
+            <div className={styles.bar}>
+              <h2 className={styles.heading}>{Messages.yourBuilds()}</h2>
+              <div className={styles.addButtons}>
+                <Tooltip title={Messages.addFolderTooltip()}>
+                  <Button
+                    size="small"
+                    color="inherit"
+                    classes={{ startIcon: styles.addIcon }}
+                    startIcon={<CreateNewFolderOutlinedIcon />}
+                    onClick={props.onAddFolder}
+                  >
+                    <span className={styles.addLabel}>{Messages.addFolder()}</span>
+                  </Button>
+                </Tooltip>
+                <Tooltip title={Messages.addBuildTooltip()}>
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    color="inherit"
+                    classes={{ startIcon: styles.addIcon }}
+                    startIcon={<AddRoundedIcon />}
+                    onClick={props.onAddBuild}
+                  >
+                    <span className={styles.addLabel}>{Messages.addBuild()}</span>
+                  </Button>
+                </Tooltip>
               </div>
-            }
-          />
+            </div>
+            <div className={styles.builds}>
+              {state && state.builds.length === 0 && <p className={styles.empty}>{Messages.noBuilds()}</p>}
+              {state?.builds.map((build) => (
+                <BuildRow
+                  key={build.id}
+                  build={build}
+                  progress={props.hashProgress[build.id]}
+                  starting={props.startingBuildId === build.id}
+                  disabled={!!state.running || props.startingBuildId !== null}
+                  onEdit={() => props.onEditBuild(build)}
+                  onRemove={() => props.onRemoveBuild(build)}
+                  onCodes={props.onCodes ? () => props.onCodes?.(build) : undefined}
+                  onHost={() => props.onHost(build, hostPublic)}
+                />
+              ))}
+            </div>
+          </section>
         </div>
       </div>
       <SdSyncDialog
@@ -460,7 +471,11 @@ const PublicRoomsBlock = ({
   // room's, and the open menu (`joinAfter`: opened by Join, which joins once a game is picked).
   const [pickedHere, setPickedHere] = useState<Record<string, string>>({});
   const [checks, setChecks] = useState<Record<string, CardCheckState>>({});
-  const [menu, setMenu] = useState<{ code: string; anchor: HTMLElement; joinAfter: boolean } | null>(null);
+  const [menu, setMenu] = useState<{
+    code: string;
+    anchor: HTMLElement;
+    joinAfter: boolean;
+  } | null>(null);
   const anchors = useRef(new Map<string, HTMLElement>());
   let content: ReactNode;
   const listed = rooms.kind === "ready" ? rooms.rooms : [];
@@ -481,7 +496,10 @@ const PublicRoomsBlock = ({
       return;
     }
     const keyed = need.map((b) => [cardCheckKey(root, b), b.id] as const);
-    setChecks((c) => ({ ...c, ...Object.fromEntries(keyed.map(([k]) => [k, "checking" as const])) }));
+    setChecks((c) => ({
+      ...c,
+      ...Object.fromEntries(keyed.map(([k]) => [k, "checking" as const])),
+    }));
     void checkRoomCards(
       root,
       need.map((b) => b.id),
@@ -577,7 +595,9 @@ const PublicRoomsBlock = ({
                     }
                   }}
                 >
-                  <div className={styles.roomMain}>
+                  {/* The room's name with its players and Join on one line, the host and game under it, then its
+                      parts, codes and "Joins with" in one line that wraps. */}
+                  <div className={styles.roomTop}>
                     {onAdminRename ? (
                       <div className={styles.roomHost}>
                         <RoomNameField
@@ -594,20 +614,44 @@ const PublicRoomsBlock = ({
                         {room.name ?? Messages.roomHost(room.hostName)}
                       </div>
                     )}
-                    <div className={styles.roomGame}>
-                      <span className={styles.crown} title={Messages.hostLabel()}>
-                        {"♛ "}
-                      </span>
-                      <UserName
-                        user={{ uid: room.hostUid, displayName: room.hostName, country: room.hostCountry }}
-                        showCode={false}
-                        showFlag={true}
-                        className={styles.hostName}
-                      />
-                      {` · ${label}`}
-                    </div>
+                    <span className={styles.roomPlayers}>
+                      <PersonOutlineIcon style={{ fontSize: 16 }} />
+                      {Messages.roomPlayers(room.players, room.open)}
+                    </span>
+                    <span className={styles.roomAction}>
+                      {own ? (
+                        Messages.yourRoomLabel()
+                      ) : build ? (
+                        <>
+                          {Messages.join()}
+                          <ChevronRightIcon style={{ fontSize: 18 }} />
+                        </>
+                      ) : match.hasParts && match.build && match.disc === "wrong" ? (
+                        Messages.noJoinDisc()
+                      ) : (
+                        Messages.noGame()
+                      )}
+                    </span>
+                  </div>
+                  <div className={styles.roomGame}>
+                    <span className={styles.crown} title={Messages.hostLabel()}>
+                      {"♛ "}
+                    </span>
+                    <UserName
+                      user={{
+                        uid: room.hostUid,
+                        displayName: room.hostName,
+                        country: room.hostCountry,
+                      }}
+                      showCode={false}
+                      showFlag={true}
+                      className={styles.hostName}
+                    />
+                    {` · ${label}`}
+                  </div>
+                  <div className={styles.roomChips}>
                     {match.hasParts && room.build.disc && (
-                      <div className={styles.partChips}>
+                      <>
                         <PartChip
                           label={Messages.discPart(gameId)}
                           hash={room.build.disc}
@@ -650,7 +694,7 @@ const PublicRoomsBlock = ({
                         )}
                         {/* The host's codes, which the room runs for everyone (room-codes.md). */}
                         {room.build.codes && room.build.codes.length > 0 && <CodesChip names={room.build.codes} />}
-                      </div>
+                      </>
                     )}
                     {!own && (
                       <JoinsWith
@@ -670,24 +714,6 @@ const PublicRoomsBlock = ({
                       />
                     )}
                   </div>
-                  <span className={styles.roomPlayers}>
-                    <PersonOutlineIcon style={{ fontSize: 16 }} />
-                    {Messages.roomPlayers(room.players, room.open)}
-                  </span>
-                  <span className={styles.roomAction}>
-                    {own ? (
-                      Messages.yourRoomLabel()
-                    ) : build ? (
-                      <>
-                        {Messages.join()}
-                        <ChevronRightIcon style={{ fontSize: 18 }} />
-                      </>
-                    ) : match.hasParts && match.build && match.disc === "wrong" ? (
-                      Messages.noJoinDisc()
-                    ) : (
-                      Messages.noGame()
-                    )}
-                  </span>
                 </button>
               </Tooltip>
             </li>
@@ -704,17 +730,15 @@ const PublicRoomsBlock = ({
     }
   };
   return (
-    <ContentBlock
-      fill={true}
-      title={Messages.publicRooms()}
-      titleAction={
-        rooms.kind !== "logged-out" ? (
-          <div className={styles.roomActions}>
+    <section className={styles.section}>
+      <div className={styles.bar}>
+        <h2 className={styles.heading}>{Messages.publicRooms()}</h2>
+        {rooms.kind !== "logged-out" && (
+          <div className={styles.codeBox}>
             <TextField
               size="small"
               variant="outlined"
               fullWidth={false}
-              sx={{ width: 140 }}
               placeholder={Messages.roomCode()}
               value={code}
               inputProps={{ maxLength: 16, "aria-label": Messages.roomCode() }}
@@ -727,41 +751,39 @@ const PublicRoomsBlock = ({
             />
             <Tooltip title={Messages.joinTooltip()}>
               <span>
-                <Button variant="outlined" size="small" disabled={disabled || !code.trim()} onClick={join}>
+                <Button size="small" disabled={disabled || !code.trim()} onClick={join}>
                   {Messages.join()}
                 </Button>
               </span>
             </Tooltip>
           </div>
-        ) : undefined
-      }
-      content={
-        <div className={styles.room}>
-          {content}
-          <JoinWithMenu
-            anchor={menuRoom ? menu!.anchor : null}
-            room={menuRoom?.build ?? null}
-            match={menuMatch}
-            checks={checks}
-            onClose={() => setMenu(null)}
-            onPick={(picked, remember) => {
-              const joinAfter = menu?.joinAfter;
-              setMenu(null);
-              if (!menuRoom) {
-                return;
-              }
-              setPickedHere((p) => ({ ...p, [menuRoom.code]: picked.id }));
-              if (remember) {
-                onSetRoomGame?.(menuRoom.build.hash, picked.id);
-              }
-              if (joinAfter && !disabled) {
-                onJoin(picked, menuRoom.code);
-              }
-            }}
-          />
-        </div>
-      }
-    />
+        )}
+      </div>
+      <div className={styles.room}>
+        {content}
+        <JoinWithMenu
+          anchor={menuRoom ? menu!.anchor : null}
+          room={menuRoom?.build ?? null}
+          match={menuMatch}
+          checks={checks}
+          onClose={() => setMenu(null)}
+          onPick={(picked, remember) => {
+            const joinAfter = menu?.joinAfter;
+            setMenu(null);
+            if (!menuRoom) {
+              return;
+            }
+            setPickedHere((p) => ({ ...p, [menuRoom.code]: picked.id }));
+            if (remember) {
+              onSetRoomGame?.(menuRoom.build.hash, picked.id);
+            }
+            if (joinAfter && !disabled) {
+              onJoin(picked, menuRoom.code);
+            }
+          }}
+        />
+      </div>
+    </section>
   );
 };
 
@@ -783,9 +805,8 @@ const BuildRow = ({
   onEdit: () => void;
   onRemove: () => void;
   onCodes?: () => void;
-  onHost: (isPublic: boolean) => void;
+  onHost: () => void;
 }) => {
-  const [isPublic, setIsPublic] = useState(true);
   const hashing = progress !== undefined;
   return (
     <div className={styles.build}>
@@ -853,24 +874,24 @@ const BuildRow = ({
         </div>
       )}
       <div className={styles.actions}>
-        {/* The codes its rooms run. Not for a mod booted by its launcher (P+'s too): the launcher puts
-            its own Gecko code handler where Dolphin's goes, and the mod's codes are in it. */}
-        {onCodes && hasRoomCodes(build) && (
-          <CodesButton names={(build.codes?.on ?? []).map((c) => c.name)} onClick={onCodes} />
-        )}
-        <Tooltip title={Messages.publicRoomTooltip()}>
-          <label className={styles.toggle}>
-            <Switch size="small" checked={isPublic} onChange={(e) => setIsPublic(e.target.checked)} />
-            <PublicLabel isPublic={isPublic} />
-          </label>
-        </Tooltip>
         <Tooltip title={Messages.hostTooltip()}>
           <span>
-            <Button variant="contained" size="small" disabled={disabled || hashing} onClick={() => onHost(isPublic)}>
+            <Button
+              variant="contained"
+              size="small"
+              className={styles.hostButton}
+              disabled={disabled || hashing}
+              onClick={onHost}
+            >
               {starting && !hashing ? Messages.opening() : Messages.host()}
             </Button>
           </span>
         </Tooltip>
+        {/* The codes its rooms run, after Host so Host never moves. Not for a mod booted by its launcher (P+'s
+            too): the launcher puts its own Gecko code handler where Dolphin's goes, and the mod's codes are in it. */}
+        {onCodes && hasRoomCodes(build) && (
+          <CodesButton names={(build.codes?.on ?? []).map((c) => c.name)} onClick={onCodes} />
+        )}
       </div>
     </div>
   );
@@ -959,10 +980,10 @@ const RoomPanel = ({
     title = Messages.opening();
   }
   return (
-    <ContentBlock
-      title={title}
-      titleAction={
-        room ? (
+    <section className={styles.roomPanel} data-testid="mods-room-panel">
+      <div className={styles.roomPanelHead}>
+        <div className={styles.roomTitle}>{title}</div>
+        {room && (
           <div className={styles.roomActions}>
             <Tooltip title={Messages.copyCode()}>
               <button
@@ -975,6 +996,7 @@ const RoomPanel = ({
                 <ContentCopyRoundedIcon style={{ fontSize: 13 }} />
               </button>
             </Tooltip>
+            <span className={styles.grow} />
             {isHost && (
               <Tooltip title={Messages.publicRoomTooltip()}>
                 <label className={styles.toggle}>
@@ -991,66 +1013,62 @@ const RoomPanel = ({
               </Tooltip>
             )}
             <Tooltip title={Messages.leaveTooltip()}>
-              <Button size="small" color="secondary" onClick={() => onRequest({ op: "leave" })}>
+              <Button size="small" variant="outlined" color="inherit" onClick={() => onRequest({ op: "leave" })}>
                 {Messages.leave()}
               </Button>
             </Tooltip>
           </div>
-        ) : undefined
-      }
-      content={
-        <div className={styles.room}>
-          {status?.error && <div className={styles.error}>{status.error}</div>}
-          {sessionError && <div className={styles.error}>{Messages.sessionError(sessionError)}</div>}
-          {status?.lastRequest?.result === "failed" && status.lastRequest.error && (
-            <div className={styles.error}>{status.lastRequest.error}</div>
-          )}
-          {status?.state === "left" && <p className={styles.empty}>{Messages.left()}</p>}
-          {syncLine && (
-            <div className={styles.progress}>
-              <LinearProgress
-                variant="determinate"
-                value={
-                  sync?.step === "downloading"
-                    ? ((sync.done ?? 0) * 100) / (sync.total || 1)
-                    : (sync?.checked ?? 0) * 100
-                }
-              />
-              <span>{syncLine}</span>
+        )}
+      </div>
+      <div className={styles.room}>
+        {status?.error && <div className={styles.error}>{status.error}</div>}
+        {sessionError && <div className={styles.error}>{Messages.sessionError(sessionError)}</div>}
+        {status?.lastRequest?.result === "failed" && status.lastRequest.error && (
+          <div className={styles.error}>{status.lastRequest.error}</div>
+        )}
+        {status?.state === "left" && <p className={styles.empty}>{Messages.left()}</p>}
+        {syncLine && (
+          <div className={styles.progress}>
+            <LinearProgress
+              variant="determinate"
+              value={
+                sync?.step === "downloading" ? ((sync.done ?? 0) * 100) / (sync.total || 1) : (sync?.checked ?? 0) * 100
+              }
+            />
+            <span>{syncLine}</span>
+          </div>
+        )}
+        {sync?.step === "downloading" && (sync.total ?? 0) > SD_BIG_DIFFERENCE_BYTES && (
+          <div className={styles.sdBigDifference}>{Messages.sdBigDifference()}</div>
+        )}
+        {!room && !status?.error && <LinearProgress />}
+        {room && (
+          <>
+            <div className={styles.roomBuild}>
+              {Messages.buildName(room.build.name, room.build.hash.slice(0, 8))}
+              {room.build.codes && room.build.codes.length > 0 && (
+                <CodesChip names={room.build.codes} onClick={isHost ? onCodes : undefined} />
+              )}
             </div>
-          )}
-          {sync?.step === "downloading" && (sync.total ?? 0) > SD_BIG_DIFFERENCE_BYTES && (
-            <div className={styles.sdBigDifference}>{Messages.sdBigDifference()}</div>
-          )}
-          {!room && !status?.error && <LinearProgress />}
-          {room && (
-            <>
-              <div className={styles.roomBuild}>
-                {Messages.buildName(room.build.name, room.build.hash.slice(0, 8))}
-                {room.build.codes && room.build.codes.length > 0 && (
-                  <CodesChip names={room.build.codes} onClick={isHost ? onCodes : undefined} />
-                )}
-              </div>
-              <div className={styles.slots}>
-                {room.slots.map((slot) => (
-                  <SlotRow
-                    key={slot.slot}
-                    slot={slot}
-                    isHost={isHost}
-                    dragging={dragFrom}
-                    onDragFrom={setDragFrom}
-                    isYou={slot.slot === room.you}
-                    isRoomHost={slot.slot === room.host}
-                    rttMs={status?.session?.peers?.find((p) => p.slot === slot.slot)?.rttMs}
-                    onRequest={onRequest}
-                  />
-                ))}
-              </div>
-            </>
-          )}
-        </div>
-      }
-    />
+            <div className={styles.slots}>
+              {room.slots.map((slot) => (
+                <SlotRow
+                  key={slot.slot}
+                  slot={slot}
+                  isHost={isHost}
+                  dragging={dragFrom}
+                  onDragFrom={setDragFrom}
+                  isYou={slot.slot === room.you}
+                  isRoomHost={slot.slot === room.host}
+                  rttMs={status?.session?.peers?.find((p) => p.slot === slot.slot)?.rttMs}
+                  onRequest={onRequest}
+                />
+              ))}
+            </div>
+          </>
+        )}
+      </div>
+    </section>
   );
 };
 

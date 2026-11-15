@@ -95,7 +95,6 @@
   box-sizing: border-box;
   width: 100%;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 140px) 64px 64px 96px 56px;
   align-items: center;
   gap: 12px;
   padding: 10px 12px;
@@ -133,7 +132,22 @@
   min-width: 0;
 }
 
+/* The room's name, after the friends icon of a friends-only room. */
+.hostLine {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.friendsOnly {
+  display: inline-flex;
+  flex-shrink: 0;
+  color: var(--accent-primary-bright);
+}
+
 .host {
+  min-width: 0;
   color: var(--text-primary);
   font-weight: 600;
   font-size: 14px;
@@ -241,7 +255,6 @@
 
 @media (width <= 1000px) {
   .row {
-    grid-template-columns: minmax(0, 1fr) minmax(0, 110px) 56px 52px 84px 48px;
     gap: 8px;
   }
 }
@@ -362,4 +375,220 @@
 .playerName {
   display: inline-flex;
   vertical-align: bottom;
+}
+
+/* ---- The Play page's section (docs/design/launcher-redesign.md): a heading row that never wraps, then the list. ---- */
+.block {
+  grid-column: auto;
+  flex: 1;
+}
+
+.bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: nowrap;
+  min-height: 40px;
+  margin: 22px 0 8px;
+}
+
+.heading {
+  margin: 0 auto 0 0;
+  flex: none;
+  white-space: nowrap;
+  font-family: var(--font-body, system-ui, sans-serif);
+  font-size: 18px;
+  color: var(--text-primary);
+}
+
+.bar .toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  flex: 0 1 auto;
+  justify-content: flex-end;
+}
+
+.body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: grid;
+}
+
+.list {
+  padding: 0;
+  gap: 0;
+}
+
+.row {
+  min-height: 56px;
+  padding: 8px 12px;
+  border-radius: 6px;
+}
+
+.row:hover,
+.row.hover {
+  background-color: var(--raised);
+}
+
+.row.own,
+.row.own:hover,
+.row.own:active {
+  background-color: var(--raised);
+  box-shadow: none;
+}
+
+.host {
+  font-size: 15px;
+  font-weight: 400;
+}
+
+.mode {
+  font-size: 12px;
+}
+
+.createButton {
+  white-space: nowrap;
+  text-transform: none !important;
+  border-color: var(--line) !important;
+}
+
+.createRoom {
+  flex: none;
+}
+
+.mains {
+  display: inline-flex;
+  margin-right: 4px;
+}
+
+.mains img {
+  margin-right: -3px;
+}
+
+/* The room code box with Join inside it (one control, so the bar stays on one line). */
+.bar .joinCode {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 1 auto;
+  min-width: 0;
+  height: 34px;
+  padding-right: 3px;
+  border: 1px solid var(--line-soft);
+  border-radius: 6px;
+  background-color: var(--shell);
+}
+
+.bar .joinCode fieldset {
+  border: none;
+}
+
+.bar .joinCode > div {
+  min-width: 70px;
+  flex: 0 1 112px;
+}
+
+.bar .joinCode button {
+  border: none !important;
+  min-width: 0;
+  height: 28px;
+  color: var(--text-secondary);
+}
+
+.bar .joinCode button:not(:disabled) {
+  color: var(--accent-primary-bright);
+  cursor: pointer;
+}
+
+/* Not a room code (four letters with a vowel or Y, or Join pressed on it): the box and its letters red. */
+.bar .joinCode[data-error] {
+  border-color: #f28b82;
+}
+
+.bar .joinCode[data-error] input {
+  color: #f28b82;
+}
+
+/* The rows share the list's columns (subgrid), each column as wide as the widest of its cells, so the room's name
+   gets what the other cells don't use (Sarah's board: fixed columns left empty space while names were cut): the
+   ruleset up to 130 px (72 px in a narrow panel; nothing when no room has one), the mode, the mains and count, the
+   status and Join / Full as written. */
+.list {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) fit-content(130px) repeat(4, auto);
+  column-gap: 12px;
+}
+
+.list > li {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: subgrid;
+}
+
+.row {
+  grid-column: 1 / -1;
+  grid-template-columns: subgrid;
+}
+
+@container (width < 700px) {
+  .list {
+    grid-template-columns: minmax(0, 1fr) fit-content(72px) repeat(4, auto);
+  }
+}
+
+@media (width <= 1000px) {
+  .list {
+    column-gap: 8px;
+  }
+}
+
+.action {
+  text-transform: none;
+  font-size: 13px;
+  color: var(--accent-primary-bright);
+}
+
+.row.disabled .action {
+  color: var(--text-dim);
+}
+
+/* Round 4 (Sarah's board): Public rooms in an outlined panel again, its bar the panel's head. */
+.block {
+  margin-top: 20px;
+  margin-bottom: 16px;
+  border: 1px solid var(--line-soft);
+  border-radius: 10px;
+  background-color: color-mix(in oklab, var(--page) 96%, white);
+  overflow: hidden;
+}
+
+.bar {
+  margin: 0;
+  padding: 8px 12px 8px 16px;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.list {
+  padding: 6px;
+}
+
+.row:hover,
+.row.hover {
+  background-color: var(--raised-hover);
+}
+
+/* The room code box is one outlined control: no underline of its own, the whole outline lights on focus. */
+.bar .joinCode div::before,
+.bar .joinCode div::after {
+  display: none;
+}
+
+.bar .joinCode > div > div {
+  background-color: transparent;
+}
+
+.bar .joinCode:focus-within {
+  border-color: var(--accent-primary);
 }

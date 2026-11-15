@@ -552,6 +552,19 @@ pub struct LivePlayer {
     /// doesn't read ratings): the launcher sorts the list by it and never shows it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rating: Option<f64>,
+    /// The player's Ranked rank (the emblem beside their name), filled in by accounts for
+    /// `GET /v1/live`: `Some(None)` is sent as null (placing, or never played Ranked); mm leaves
+    /// it out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rank: Option<Option<LiveRank>>,
+}
+
+/// [`LivePlayer::rank`]: `{"tier": "gold", "division": 2}`, as the leaderboard's (division null for
+/// Legendary).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LiveRank {
+    pub tier: String,
+    pub division: Option<u8>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]

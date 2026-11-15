@@ -12,23 +12,27 @@ import TableRow from "@mui/material/TableRow";
 import TextField from "@mui/material/TextField";
 import Tooltip from "@mui/material/Tooltip";
 import Typography from "@mui/material/Typography";
-import React, { useCallback, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 
 import { Flag } from "@/components/flag/flag";
 import { InfiniteScrollContainer } from "@/components/infinite_scroll_container/infinite_scroll_container";
 import { PagedListStatus } from "@/components/paged_list_status/paged_list_status";
 import { CharacterIcon } from "@/components/profile/character_icon";
 import { RankBadge } from "@/components/rank_badge/rank_badge";
+import { SocialMessages } from "@/components/social/social.messages";
 import { UserName } from "@/components/user_name/user_name";
 import { useAccount } from "@/lib/hooks/use_account";
 import type { CursorPage } from "@/lib/hooks/use_cursor_pages";
 import { useCursorPages } from "@/lib/hooks/use_cursor_pages";
 import { useSearchText } from "@/lib/hooks/use_search_text";
 import { formatRating, formatRecord, RATING_DOWN_COLOR, RATING_UP_COLOR } from "@/lib/ranked_format";
+import { MatchHistoryPageMessages as MatchHistoryMessages } from "@/pages/match_history/match_history_page.messages";
 import { useServices } from "@/services";
 import type { LeaderboardEntry } from "@/services/backend/types";
 
 import { LeaderboardPageMessages as Messages } from "./leaderboard_page.messages";
+import styles from "./leaderboard_page.module.css";
 
 type LeaderboardPageData = CursorPage<LeaderboardEntry> & { total: number };
 
@@ -44,11 +48,40 @@ const SEARCH_STALE_MS = 60_000;
  * cleared box) within {@link SEARCH_STALE_MS} shows its pages without asking again, and the last
  * list stays (dimmed) until the new one arrives.
  */
+/** The element `el` scrolls in. */
+const scrollerOf = (el: HTMLElement): HTMLElement | null => {
+  for (let p = el.parentElement; p; p = p.parentElement) {
+    const { overflowY } = getComputedStyle(p);
+    if (overflowY === "auto" || overflowY === "scroll") {
+      return p;
+    }
+  }
+  return null;
+};
+
 export const LeaderboardPage = React.memo(function LeaderboardPage() {
   const { backendService } = useServices();
   const myUid = useAccount((s) => s.user?.uid);
+  const myCode = useAccount((s) => s.userData?.playKey?.connectCode);
   const [text, setText] = useState("");
   const search = useSearchText(text);
+  // All, or the player and their friends (docs/design/launcher-redesign.md §7).
+  const [scope, setScope] = useState<"all" | "friends">("all");
+  const friendsBoard = useQuery({
+    queryKey: ["friendsLeaderboard", myUid],
+    queryFn: () => backendService.fetchFriendsLeaderboard(),
+    enabled: scope === "friends" && myUid != null,
+  });
+  // The player's own row, pinned under the list: their code searched (positions are the whole board's).
+  const myRow = useQuery({
+    queryKey: ["leaderboardMe", myCode],
+    queryFn: async () => {
+      const page = await backendService.fetchLeaderboard(undefined, myCode);
+      return page.entries.find((e) => e.uid === myUid) ?? null;
+    },
+    enabled: myCode != null && myUid != null,
+    staleTime: SEARCH_STALE_MS,
+  });
 
   const fetchPage = useCallback(
     async (after: string | undefined): Promise<LeaderboardPageData> => {
@@ -64,18 +97,83 @@ export const LeaderboardPage = React.memo(function LeaderboardPage() {
     staleTime: SEARCH_STALE_MS,
   });
   const total = (pages.firstPage as LeaderboardPageData | undefined)?.total;
+  const needle = search.toLowerCase();
+  const friendsRows = (friendsBoard.data?.entries ?? []).filter(
+    (e) => !needle || e.displayName.toLowerCase().includes(needle) || e.connectCode.toLowerCase().includes(needle),
+  );
+  const rows = scope === "friends" ? friendsRows : pages.items;
+  const me = myRow.data;
+  const meListed = rows.some((e) => e.uid === myUid);
+  // The player's own row in the list is sticky (Sarah's board): under the column heads when the list is scrolled
+  // below it, at the list's foot when it is still below; in its place while it is on screen, so it slides in and out
+  // of the list at either edge. Stuck, a line splits it from the rows (Chromium 132 has no stuck queries in CSS: this
+  // finds where its place is). Not loaded yet, it is always below: pinned under the list instead.
+  const listRef = useRef<HTMLDivElement>(null);
+  const [stuck, setStuck] = useState<"top" | "bottom" | null>(null);
+  useEffect(() => {
+    const list = listRef.current;
+    const row = meListed ? list?.querySelector<HTMLElement>("tbody tr[data-me]") : null;
+    const scroller = row ? scrollerOf(row) : null;
+    if (!list || !row || !scroller) {
+      setStuck(null);
+      return;
+    }
+    let frame = 0;
+    const check = () => {
+      frame = 0;
+      const head = list.querySelector("thead")?.getBoundingClientRect().height ?? 0;
+      list.style.setProperty("--leaderboard-head", `${head}px`);
+      const view = scroller.getBoundingClientRect();
+      // Its place: under the row before it (a sticky row's own box is where it is stuck).
+      const before = row.previousElementSibling ?? row.parentElement;
+      const top = before
+        ? before === row.parentElement
+          ? before.getBoundingClientRect().top
+          : before.getBoundingClientRect().bottom
+        : 0;
+      const bottom = top + row.offsetHeight;
+      setStuck(top < view.top + head - 0.5 ? "top" : bottom > view.bottom + 0.5 ? "bottom" : null);
+    };
+    check();
+    const onChange = () => {
+      if (!frame) {
+        frame = requestAnimationFrame(check);
+      }
+    };
+    scroller.addEventListener("scroll", onChange, { passive: true });
+    const resized = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(onChange);
+    resized?.observe(scroller);
+    return () => {
+      scroller.removeEventListener("scroll", onChange);
+      resized?.disconnect();
+      cancelAnimationFrame(frame);
+    };
+  }, [meListed, rows]);
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", flex: 1, minWidth: 0, padding: "20px 20px 0" }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 12 }}>
-        <div style={{ display: "flex", alignItems: "baseline", gap: 12, flex: 1, minWidth: 0 }}>
-          <Typography variant="h5">{Messages.leaderboard()}</Typography>
-          {total != null && (
-            <Typography variant="body2" color="text.secondary">
-              {Messages.rankedPlayers(total)}
-            </Typography>
-          )}
+    <div className={styles.page}>
+      <div className={styles.head}>
+        <div className={styles.titleBlock}>
+          <h1 className={styles.title}>{Messages.leaderboard()}</h1>
+          {total != null && <div className={styles.count}>{Messages.rankedPlayers(total)}</div>}
         </div>
+        {myUid && (
+          <div className={styles.seg} role="tablist">
+            {(["all", "friends"] as const).map((v) => (
+              <button
+                key={v}
+                type="button"
+                role="tab"
+                aria-selected={scope === v}
+                className={scope === v ? styles.segOn : undefined}
+                onClick={() => setScope(v)}
+                data-testid={`leaderboard-${v}`}
+              >
+                {v === "all" ? MatchHistoryMessages.all() : SocialMessages.friends()}
+              </button>
+            ))}
+          </div>
+        )}
         <TextField
           size="small"
           hiddenLabel={true}
@@ -111,38 +209,52 @@ export const LeaderboardPage = React.memo(function LeaderboardPage() {
               </InputAdornment>
             ),
           }}
-          sx={{ width: 280, flexShrink: 0 }}
+          className={styles.search}
         />
       </div>
-      <div style={{ flex: 1, minHeight: 0 }}>
+      <div className={styles.list} ref={listRef}>
         <InfiniteScrollContainer
           onLoadMore={pages.loadMore}
-          hasMore={pages.hasMore && !pages.error}
-          isLoading={pages.isLoading || pages.isLoadingMore}
-          resetKey={search}
+          hasMore={scope === "all" && pages.hasMore && !pages.error}
+          isLoading={scope === "all" ? pages.isLoading || pages.isLoadingMore : friendsBoard.isLoading}
+          resetKey={`${scope}:${search}`}
         >
-          {pages.error && pages.items.length === 0 ? null : (
+          {scope === "all" && pages.error && pages.items.length === 0 ? null : (
             <Table
               size="small"
               stickyHeader={true}
-              style={{ opacity: pages.isPrevious ? 0.5 : 1, transition: "opacity 150ms" }}
+              style={{ opacity: scope === "all" && pages.isPrevious ? 0.5 : 1, transition: "opacity 150ms" }}
             >
               <LeaderboardHead />
               <TableBody>
-                {pages.items.map((e) => (
-                  <LeaderboardRow key={e.uid} entry={e} isMe={e.uid === myUid} />
+                {rows.map((e) => (
+                  <LeaderboardRow
+                    key={e.uid}
+                    entry={e}
+                    isMe={e.uid === myUid}
+                    stuck={e.uid === myUid ? stuck : undefined}
+                  />
                 ))}
               </TableBody>
             </Table>
           )}
-          {!pages.isLoading && !pages.error && pages.items.length === 0 && (
+          {scope === "all" && !pages.isLoading && !pages.error && pages.items.length === 0 && (
             <Typography variant="body2" color="text.secondary" sx={{ padding: 2 }}>
               {search ? Messages.noMatches(search) : Messages.empty()}
             </Typography>
           )}
-          <PagedListStatus pages={pages} />
+          {scope === "all" && <PagedListStatus pages={pages} />}
         </InfiniteScrollContainer>
       </div>
+      {me && !meListed && !search && (
+        <div className={styles.me} data-testid="leaderboard-me">
+          <Table size="small">
+            <TableBody>
+              <LeaderboardRow entry={me} isMe={true} />
+            </TableBody>
+          </Table>
+        </div>
+      )}
     </div>
   );
 });
@@ -151,18 +263,18 @@ export const LeaderboardHead = React.memo(function LeaderboardHead() {
   return (
     <TableHead>
       <TableRow>
-        <TableCell sx={{ width: 84 }}>
+        <TableCell sx={{ width: 72 }}>
           <span style={positionStyle}>{Messages.position()}</span>
         </TableCell>
-        <TableCell align="center" sx={{ width: 96 }}>
+        <TableCell align="center" sx={{ width: 64 }}>
           {Messages.rank()}
         </TableCell>
-        <TableCell sx={{ width: 36, paddingX: "4px" }} aria-label={Messages.country()} />
         <TableCell>{Messages.player()}</TableCell>
         <TableCell sx={{ width: 56 }}>{Messages.main()}</TableCell>
-        <TableCell>{Messages.connectCode()}</TableCell>
         <TableCell align="right">{Messages.rating()}</TableCell>
-        <TableCell align="right">{Messages.record()}</TableCell>
+        <TableCell align="right" sx={{ whiteSpace: "nowrap" }}>
+          {Messages.record()}
+        </TableCell>
       </TableRow>
     </TableHead>
   );
@@ -171,13 +283,16 @@ export const LeaderboardHead = React.memo(function LeaderboardHead() {
 export const LeaderboardRow = React.memo(function LeaderboardRow({
   entry,
   isMe,
+  stuck,
 }: {
   entry: LeaderboardEntry;
   isMe: boolean;
+  /** The player's own row in the list, stuck to the list's top or foot (see LeaderboardPage). */
+  stuck?: "top" | "bottom" | null;
 }) {
   const strong = isMe ? { fontWeight: "bold" } : undefined;
   return (
-    <TableRow data-me={isMe || undefined} sx={isMe ? { backgroundColor: "rgba(255, 255, 255, 0.1)" } : undefined}>
+    <TableRow data-me={isMe || undefined} data-stuck={stuck ?? undefined} className={isMe ? styles.meRow : undefined}>
       <TableCell sx={{ whiteSpace: "nowrap", ...strong }}>
         <span style={positionStyle}>{entry.position}</span>
         <PositionChange change={entry.positionChange} />
@@ -185,18 +300,21 @@ export const LeaderboardRow = React.memo(function LeaderboardRow({
       <TableCell align="center" sx={{ paddingY: "4px" }}>
         <RankBadge rank={entry.rank} setsToPlace={entry.setsToPlace} size="small" />
       </TableCell>
-      <TableCell sx={{ paddingX: "4px" }}>
-        {entry.country && <Flag code={entry.country} height={15} title={countryName(entry.country)} />}
-      </TableCell>
       <TableCell sx={strong}>
-        <UserName user={entry} showCode={false} profileLink={true} />
+        {/* The flag, the name and the code in one cell (docs/design/launcher-redesign.md §7). */}
+        <span className={styles.player}>
+          {entry.country && <Flag code={entry.country} height={13} title={countryName(entry.country)} />}
+          <UserName user={entry} showCode={false} profileLink={true} />
+          <span className={styles.code} data-testid="leaderboard-code">
+            {entry.connectCode}
+          </span>
+        </span>
       </TableCell>
       <TableCell sx={{ paddingY: "2px" }}>{entry.main && <CharacterIcon character={entry.main} size={24} />}</TableCell>
-      <TableCell sx={{ color: "text.secondary", ...strong }}>{entry.connectCode}</TableCell>
-      <TableCell align="right" sx={strong}>
+      <TableCell align="right" sx={{ whiteSpace: "nowrap", ...strong }}>
         {formatRating(entry.rating)}
       </TableCell>
-      <TableCell align="right" sx={strong}>
+      <TableCell align="right" sx={{ whiteSpace: "nowrap", ...strong }}>
         {formatRecord(entry.wins, entry.losses)}
       </TableCell>
     </TableRow>

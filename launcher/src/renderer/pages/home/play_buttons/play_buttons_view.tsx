@@ -1,12 +1,11 @@
 import type { QueueTarget } from "@dolphin/hand_off_target";
 import { QUEUE_RANKED, QUEUE_TWOS, QUEUE_UNRANKED } from "@dolphin/hand_off_target";
-import EmojiEventsRoundedIcon from "@mui/icons-material/EmojiEventsRounded";
-import GroupsRoundedIcon from "@mui/icons-material/GroupsRounded";
-import PlayArrowRoundedIcon from "@mui/icons-material/PlayArrowRounded";
+import TimerOutlinedIcon from "@mui/icons-material/TimerOutlined";
 import Button from "@mui/material/Button";
 import CircularProgress from "@mui/material/CircularProgress";
 import Tooltip from "@mui/material/Tooltip";
-import React from "react";
+
+import { formatEta } from "@/lib/queue/queue_eta";
 
 import { PlayButtonsMessages as Messages } from "./play_buttons.messages";
 import styles from "./play_buttons.module.css";
@@ -16,41 +15,46 @@ export type PlayButtonsViewProps = {
   twosQueue?: number;
   /** Players in a 2v2 match (`playing.twos`); absent while unknown or from an older server (then not shown). */
   twosPlaying?: number;
+  /** How long Unranked and Ranked searches wait this hour (`queueEta`); absent while unknown. null: "10+ min". */
+  etas?: { unranked: number | null; ranked: number | null };
   /** The queue being handed to the game (its button shows a spinner, both wait). */
   starting?: QueueTarget;
   onPlay: (queue: QueueTarget) => void;
 };
 
 /**
- * Home's Play unranked / Play ranked / Play 2v2, beside the Overview tab. Only Play 2v2 has its counts under it
- * ("2 in queue · 8 in game"): Unranked and Ranked lost theirs on 2026-11-09, since an empty queue put players off
- * searching, which kept it empty; 2v2's came back the same day (Sarah's board).
+ * Play's three buttons, stacked on the left of the ranked card (docs/design/launcher-redesign.md §8): each with its
+ * status on its right. Unranked and Ranked show the stopwatch and the hour's ETA (players searching is 0-2 at most
+ * hours, so it told nothing; Sarah's board, 2026-11-14); 2v2 keeps its counts ("2 in queue · 8 in game").
  */
-export const PlayButtonsView = ({ twosQueue, twosPlaying, starting, onPlay }: PlayButtonsViewProps) => (
+export const PlayButtonsView = ({ twosQueue, twosPlaying, etas, starting, onPlay }: PlayButtonsViewProps) => (
   <div className={styles.buttons}>
-    <PlayButton
-      label={Messages.playUnranked()}
-      tooltip={Messages.playUnrankedTooltip()}
-      icon={<PlayArrowRoundedIcon />}
-      starting={starting === QUEUE_UNRANKED}
-      disabled={starting != null}
-      onClick={() => onPlay(QUEUE_UNRANKED)}
-      testId="play-unranked"
-    />
-    <PlayButton
-      label={Messages.playRanked()}
-      tooltip={Messages.playRankedTooltip()}
-      icon={<EmojiEventsRoundedIcon />}
-      starting={starting === QUEUE_RANKED}
-      disabled={starting != null}
-      onClick={() => onPlay(QUEUE_RANKED)}
-      testId="play-ranked"
-    />
+    <div className={styles.play}>
+      <PlayButton
+        label={Messages.playUnranked()}
+        tooltip={Messages.playUnrankedTooltip()}
+        starting={starting === QUEUE_UNRANKED}
+        disabled={starting != null}
+        onClick={() => onPlay(QUEUE_UNRANKED)}
+        testId="play-unranked"
+      />
+      <Eta seconds={etas?.unranked} testId="play-unranked-eta" />
+    </div>
+    <div className={styles.play}>
+      <PlayButton
+        label={Messages.playRanked()}
+        tooltip={Messages.playRankedTooltip()}
+        starting={starting === QUEUE_RANKED}
+        disabled={starting != null}
+        onClick={() => onPlay(QUEUE_RANKED)}
+        testId="play-ranked"
+      />
+      <Eta seconds={etas?.ranked} testId="play-ranked-eta" />
+    </div>
     <div className={styles.play}>
       <PlayButton
         label={Messages.playTwos()}
         tooltip={Messages.playTwosTooltip()}
-        icon={<GroupsRoundedIcon />}
         starting={starting === QUEUE_TWOS}
         disabled={starting != null}
         onClick={() => onPlay(QUEUE_TWOS)}
@@ -69,10 +73,23 @@ export const PlayButtonsView = ({ twosQueue, twosPlaying, starting, onPlay }: Pl
   </div>
 );
 
+/** The stopwatch and the ETA; nothing while it is unknown. */
+const Eta = ({ seconds, testId }: { seconds: number | null | undefined; testId: string }) => (
+  <Tooltip title={Messages.etaTooltip()} placement="bottom" disableInteractive={true}>
+    <span
+      className={styles.count}
+      data-testid={testId}
+      style={{ visibility: seconds === undefined ? "hidden" : undefined }}
+    >
+      <TimerOutlinedIcon className={styles.etaIcon} />
+      {seconds !== undefined && formatEta(seconds)}
+    </span>
+  </Tooltip>
+);
+
 const PlayButton = ({
   label,
   tooltip,
-  icon,
   starting,
   disabled,
   onClick,
@@ -80,31 +97,25 @@ const PlayButton = ({
 }: {
   label: string;
   tooltip: string;
-  icon: React.ReactNode;
   starting: boolean;
   disabled: boolean;
   onClick: () => void;
   testId: string;
 }) => (
   <Tooltip title={tooltip} placement="bottom" enterDelay={400} disableInteractive={true}>
-    <span>
+    <span className={styles.buttonSlot}>
       <Button
         variant="contained"
-        color="secondary"
-        size="small"
+        color="primary"
         disableElevation={true}
         disabled={disabled}
-        startIcon={starting ? <CircularProgress color="inherit" size={14} /> : icon}
         onClick={onClick}
         data-testid={testId}
-        sx={{
-          textTransform: "none",
-          fontWeight: 600,
-          borderRadius: "8px",
-          px: 1.5,
-        }}
+        className={styles.button}
       >
-        {label}
+        {/* The spinner takes the label's place, so the button keeps its width. */}
+        <span style={{ visibility: starting ? "hidden" : undefined }}>{label}</span>
+        {starting && <CircularProgress color="inherit" size={16} className={styles.spinner} />}
       </Button>
     </span>
   </Tooltip>

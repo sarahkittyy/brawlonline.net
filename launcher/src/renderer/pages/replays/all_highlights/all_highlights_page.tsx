@@ -1,37 +1,31 @@
 /**
  * Replays > Highlights: every replay's highlights and L+R+Z clips in one list (all_highlights.ts
  * finds them: the ones already known at once, the others as they are found, one replay at a time),
- * playable and renderable as on a replay's stats page. A sidebar as Replays' folders: All
+ * playable and renderable as on a replay's stats page. A select at the start of the toolbar: All
  * highlights, My Highlights (this machine's player's: the replay's recorder), Opponent Highlights
  * (anyone's not on my side), L+R+Z Highlights (the clips), Manual Clips (the playback Dolphin's
  * seek bar clips, manual_clips.ts), or Favorites (the starred ones, favorites.ts), the same list of
- * fewer rows. The search above the list keeps the games with a player whose name or code has it.
- * Newest first unless Best first is picked. Below the sidebar, buttons open the Root Replay Folder
- * and the rendered videos' folder (Settings > Clips), as on Replays (folder_buttons.tsx).
+ * fewer rows. The player search above the list (Match history's, player_search.tsx) keeps the rows of every player
+ * tagged, and of a player whose name or code has what is typed.
+ * Newest first unless Best first is picked.
  */
 import { currentClipButtons, hotkeyLabel } from "@common/clip_hotkey";
-import CloseIcon from "@mui/icons-material/Close";
 import ContentCutIcon from "@mui/icons-material/ContentCut";
 import CropIcon from "@mui/icons-material/Crop";
 import GroupIcon from "@mui/icons-material/Group";
 import PersonIcon from "@mui/icons-material/Person";
-import SearchIcon from "@mui/icons-material/Search";
 import StarIcon from "@mui/icons-material/Star";
 import VideoLibraryIcon from "@mui/icons-material/VideoLibrary";
-import IconButton from "@mui/material/IconButton";
-import InputAdornment from "@mui/material/InputAdornment";
-import InputBase from "@mui/material/InputBase";
 import LinearProgress from "@mui/material/LinearProgress";
 import MenuItem from "@mui/material/MenuItem";
 import Select from "@mui/material/Select";
-import Tooltip from "@mui/material/Tooltip";
 import type { GameHighlights, HighlightPlayer, ReplayHighlights } from "@replays/highlights/types";
 import { CLIP_BEFORE_SECONDS } from "@replays/highlights/types";
+import type { ReplayPlayer } from "@replays/types";
 import React, { useEffect, useMemo, useState } from "react";
 
-import { DualPane } from "@/components/dual_pane";
+import { ReplayPlayerSearch } from "@/components/player_search/replay_player_search";
 import { useSetting } from "@/lib/hooks/use_settings";
-import { FolderButtons } from "@/pages/replays/folder_buttons/folder_buttons";
 import { favoriteKey, useFavoriteHighlights } from "@/pages/replays/replay_file_stats/highlights/favorites";
 import type { HighlightEntry } from "@/pages/replays/replay_file_stats/highlights/highlight_list";
 import { comboOfManyName, HighlightRows } from "@/pages/replays/replay_file_stats/highlights/highlight_list";
@@ -56,24 +50,35 @@ const sameSide = (game: ReplayHighlights, a: number, b: number) => {
   return team(a) != null && team(a) === team(b);
 };
 
-const named = (p: HighlightPlayer, query: string) =>
-  p.displayName.toLowerCase().includes(query) || p.connectCode.toLowerCase().includes(query);
+type Who = (p: HighlightPlayer) => boolean;
 
-/** A player of the game has `query` (lower case) in their name or code. */
-const hasPlayer = (game: ReplayHighlights, query: string) => game.players.some((p) => named(p, query));
+/** Has `query` (lower case) in their name or code. */
+const named =
+  (query: string): Who =>
+  (p) =>
+    p.displayName.toLowerCase().includes(query) || p.connectCode.toLowerCase().includes(query);
+
+/** A player tagged in the search (by their code). */
+const coded =
+  (code: string): Who =>
+  (p) =>
+    p.connectCode.toLowerCase() === code;
+
+/** A player of the game is `who`. */
+const hasPlayer = (game: ReplayHighlights, who: Who) => game.players.some(who);
 
 /**
- * A player the row shows has `query`: a highlight's attacker and victim (in teams, with their
+ * A player the row shows is `who`: a highlight's attacker and victim (in teams, with their
  * teammates), an L+R+Z clip's player; not the others in the game (a free-for-all's third player).
  * (A manual clip's row shows every player: hasPlayer.)
  */
-const rowHasPlayer = (e: HighlightEntry, query: string) => {
+const rowHasPlayer = (e: HighlightEntry, who: Who) => {
   const { row, game } = e;
   if (row.kind === "manual") {
-    return hasPlayer(game, query);
+    return hasPlayer(game, who);
   }
   const ports = row.kind === "highlight" ? [row.attackerPort, row.victimPort] : [row.port];
-  return game.players.some((p) => ports.some((port) => sameSide(game, port, p.port)) && named(p, query));
+  return game.players.some((p) => ports.some((port) => sameSide(game, port, p.port)) && who(p));
 };
 
 export const AllHighlightsPage = React.memo(() => {
@@ -89,6 +94,7 @@ export const AllHighlightsPage = React.memo(() => {
   const [sort, setSort] = useState<Sort>("newest");
   const [view, setView] = useState<View>("all");
   const [search, setSearch] = useState("");
+  const [tagged, setTagged] = useState<ReplayPlayer[]>([]);
   const { favorites } = useFavoriteHighlights();
   const { clips: manualClips } = useManualClips();
   // Favorites keeps the rows unstarred while it is open (starred again in a click), not moving the others up.
@@ -132,6 +138,12 @@ export const AllHighlightsPage = React.memo(() => {
   }, [replayService, detectionOff, clipOnLrz, clipHotkeys]);
 
   const query = search.trim().toLowerCase();
+  // Every player tagged, and one with what is typed.
+  const whos = useMemo(
+    () => [...tagged.map((p) => coded(p.connectCode.toLowerCase())), ...(query ? [named(query)] : [])],
+    [tagged, query],
+  );
+  const searching = whos.length > 0;
   const entries = useMemo(() => {
     const all = [...games.values()];
     let highlights: HighlightEntry[] = all.flatMap((g) =>
@@ -156,7 +168,7 @@ export const AllHighlightsPage = React.memo(() => {
     let manual: HighlightEntry[] = [...manualClips]
       .sort((a, b) => b.savedAt.localeCompare(a.savedAt))
       .map((c) => manualClipEntry(c, games.get(c.path)?.highlights))
-      .filter((e) => !query || hasPlayer(e.game, query));
+      .filter((e) => whos.every((who) => hasPlayer(e.game, who)));
     // (A replay that doesn't say which player recorded it is in neither mine nor my opponents'.)
     const attacker = (e: HighlightEntry) => (e.row.kind === "highlight" ? e.row.attackerPort : 0);
     if (view === "mine") {
@@ -185,21 +197,22 @@ export const AllHighlightsPage = React.memo(() => {
     const newest = (a: HighlightEntry, b: HighlightEntry) =>
       (b.date ?? "").localeCompare(a.date ?? "") || a.row.startFrame - b.row.startFrame;
     const score = (e: HighlightEntry) => (e.row.kind === "highlight" ? e.row.score : 0);
-    if (query) {
-      highlights = highlights.filter((e) => rowHasPlayer(e, query));
-      clips = clips.filter((e) => rowHasPlayer(e, query));
+    if (searching) {
+      highlights = highlights.filter((e) => whos.every((who) => rowHasPlayer(e, who)));
+      clips = clips.filter((e) => whos.every((who) => rowHasPlayer(e, who)));
     }
     highlights.sort(sort === "best" ? (a, b) => score(b) - score(a) || newest(a, b) : newest);
     clips.sort(newest);
     return [...highlights, ...clips, ...manual];
-  }, [games, sort, view, favorites, shown, query, manualClips]);
+  }, [games, sort, view, favorites, shown, whos, searching, manualClips]);
 
   const finding = progress != null && progress.done < progress.total;
+  const searchWords = [...tagged.map((p) => p.connectCode), search.trim()].filter(Boolean).join(", ");
   const emptyNote =
     view === "manual"
       ? entries.length === 0
-        ? query
-          ? Messages.noMatch(search.trim())
+        ? searching
+          ? Messages.noMatch(searchWords)
           : Messages.noManual()
         : null
       : error != null
@@ -211,8 +224,8 @@ export const AllHighlightsPage = React.memo(() => {
       : view === "clips" && !clipOnLrz
       ? Messages.clipsOff()
       : !loading && !finding && entries.length === 0
-      ? query
-        ? Messages.noMatch(search.trim())
+      ? searching
+        ? Messages.noMatch(searchWords)
         : view === "favorites"
         ? Messages.noFavorites()
         : view === "mine"
@@ -224,104 +237,104 @@ export const AllHighlightsPage = React.memo(() => {
         : Messages.none()
       : null;
 
-  const sidebarItem = (id: View, icon: React.ReactNode, label: string, hint?: string) => {
-    const item = (
-      <button
-        type="button"
-        className={`${styles.sideItem} ${view === id ? styles.sideSelected : ""}`}
-        onClick={() => openView(id)}
-        aria-current={view === id}
-      >
-        {icon}
-        <span className={styles.sideLabel}>{label}</span>
-      </button>
-    );
-    return hint ? (
-      <Tooltip title={hint} placement="right" arrow={true}>
-        {item}
-      </Tooltip>
-    ) : (
-      item
-    );
-  };
+  // The categories as a select at the start of the toolbar (Sarah's board, 2026-11-15: with the app's sidebar and the
+  // players' rail, a column of them left the list too little room), each with its icon and, for the clips, how to make
+  // them.
+  const views: { id: View; icon: React.ReactNode; label: string; hint?: string }[] = [
+    { id: "all", icon: <VideoLibraryIcon fontSize="small" />, label: Messages.allHighlights() },
+    { id: "mine", icon: <PersonIcon fontSize="small" />, label: Messages.myHighlights() },
+    { id: "opponents", icon: <GroupIcon fontSize="small" />, label: Messages.opponentHighlights() },
+    {
+      id: "clips",
+      icon: <ContentCutIcon fontSize="small" />,
+      label: Messages.lrzHighlights(),
+      hint: Messages.lrzHint(hotkey, CLIP_BEFORE_SECONDS),
+    },
+    { id: "manual", icon: <CropIcon fontSize="small" />, label: Messages.manualClips(), hint: Messages.manualHint() },
+    { id: "favorites", icon: <StarIcon fontSize="small" />, label: Messages.favorites() },
+  ];
+  const viewSelect = (
+    <Select
+      size="small"
+      value={view}
+      onChange={(e) => openView(e.target.value as View)}
+      className={styles.viewSelect}
+      data-testid="highlights-view"
+      renderValue={(id) => {
+        const v = views.find((x) => x.id === id);
+        return (
+          <span className={styles.viewValue}>
+            {v?.icon}
+            <span className={styles.viewName}>{v?.label}</span>
+          </span>
+        );
+      }}
+      MenuProps={{
+        // (Under the select, its left edge on the select's: not over the app's sidebar.)
+        anchorOrigin: { vertical: "bottom", horizontal: "left" },
+        transformOrigin: { vertical: "top", horizontal: "left" },
+        slotProps: { paper: { className: styles.viewMenu } },
+      }}
+    >
+      {views.map((v) => (
+        <MenuItem key={v.id} value={v.id} className={styles.viewItem}>
+          <span className={styles.viewIcon}>{v.icon}</span>
+          <span>
+            <span className={styles.viewLabel}>{v.label}</span>
+            {v.hint && <span className={styles.viewHint}>{v.hint}</span>}
+          </span>
+        </MenuItem>
+      ))}
+    </Select>
+  );
 
   return (
     <div className={styles.outer}>
-      <DualPane
-        id="highlights"
-        resizable={true}
-        minWidth={120}
-        maxWidth={300}
-        width={200}
-        leftSide={
-          <div className={styles.sidebar}>
-            {sidebarItem("all", <VideoLibraryIcon fontSize="small" />, Messages.allHighlights())}
-            {sidebarItem("mine", <PersonIcon fontSize="small" />, Messages.myHighlights())}
-            {sidebarItem("opponents", <GroupIcon fontSize="small" />, Messages.opponentHighlights())}
-            {sidebarItem(
-              "clips",
-              <ContentCutIcon fontSize="small" />,
-              Messages.lrzHighlights(),
-              Messages.lrzHint(hotkey, CLIP_BEFORE_SECONDS),
-            )}
-            {sidebarItem("manual", <CropIcon fontSize="small" />, Messages.manualClips(), Messages.manualHint())}
-            {sidebarItem("favorites", <StarIcon fontSize="small" />, Messages.favorites())}
-            <div className={styles.sideRest} />
-            <FolderButtons className={styles.folders} />
-          </div>
-        }
-        rightSide={
-          <div className={styles.content}>
-            {(loading || finding) && (
-              <div className={styles.finding}>
-                <div className={styles.findingText}>
-                  {progress && finding ? Messages.findingOf(progress.done, progress.total) : Messages.finding()}
-                </div>
-                <LinearProgress
-                  variant={progress && finding ? "determinate" : "indeterminate"}
-                  value={progress && progress.total ? (progress.done / progress.total) * 100 : 0}
-                />
+      <div className={styles.split}>
+        <div className={styles.content}>
+          {(loading || finding) && (
+            <div className={styles.finding}>
+              <div className={styles.findingText}>
+                {progress && finding ? Messages.findingOf(progress.done, progress.total) : Messages.finding()}
               </div>
-            )}
-            <HighlightRows
-              sourceId="highlights"
-              entries={entries}
-              resetKey={view}
-              emptyNote={emptyNote}
-              showDates={true}
-              comboName={comboOfManyName}
-              headerExtra={
-                <>
-                  <InputBase
-                    className={styles.search}
-                    placeholder={Messages.search()}
-                    value={search}
-                    onChange={(e) => setSearch(e.target.value)}
-                    inputProps={{ "aria-label": Messages.search() }}
-                    endAdornment={
-                      <InputAdornment position="end">
-                        <IconButton size="small" onClick={() => setSearch("")} disabled={search.length === 0}>
-                          {search.length > 0 ? <CloseIcon fontSize="inherit" /> : <SearchIcon fontSize="inherit" />}
-                        </IconButton>
-                      </InputAdornment>
-                    }
-                  />
-                  <Select
-                    size="small"
-                    value={sort}
-                    onChange={(e) => setSort(e.target.value as Sort)}
-                    className={styles.sort}
-                    inputProps={{ "aria-label": Messages.sort() }}
-                  >
-                    <MenuItem value="best">{Messages.bestFirst()}</MenuItem>
-                    <MenuItem value="newest">{Messages.newestFirst()}</MenuItem>
-                  </Select>
-                </>
-              }
-            />
-          </div>
-        }
-      />
+              <LinearProgress
+                variant={progress && finding ? "determinate" : "indeterminate"}
+                value={progress && progress.total ? (progress.done / progress.total) * 100 : 0}
+              />
+            </div>
+          )}
+          <HighlightRows
+            sourceId="highlights"
+            entries={entries}
+            resetKey={view}
+            emptyNote={emptyNote}
+            showDates={true}
+            comboName={comboOfManyName}
+            headerExtra={
+              <>
+                {viewSelect}
+                <ReplayPlayerSearch
+                  value={tagged}
+                  onChange={setTagged}
+                  text={search}
+                  onTextChange={setSearch}
+                  placeholder={Messages.search()}
+                />
+                <Select
+                  size="small"
+                  value={sort}
+                  onChange={(e) => setSort(e.target.value as Sort)}
+                  className={styles.sort}
+                  inputProps={{ "aria-label": Messages.sort() }}
+                >
+                  <MenuItem value="best">{Messages.bestFirst()}</MenuItem>
+                  <MenuItem value="newest">{Messages.newestFirst()}</MenuItem>
+                </Select>
+              </>
+            }
+          />
+        </div>
+      </div>
     </div>
   );
 });

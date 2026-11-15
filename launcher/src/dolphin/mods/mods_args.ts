@@ -19,7 +19,15 @@ export type ModsRoomArg =
   /** `sd_sync`: the player's answer to the SD card question, asked before Dolphin started (Dolphin
    * asks through the room's status when it is left out: a card that only turned out different
    * there). */
-  | { join: string; build: ModRoomBuild; controller: ModsController; sd_sync?: ModsSdChoice };
+  | {
+      join: string;
+      build: ModRoomBuild;
+      controller: ModsController;
+      sd_sync?: ModsSdChoice;
+      /** A file with the room card's listing the launcher fetched for the question: Dolphin uses
+       * it instead of asking the players for the same list (MachineSession's SDSyncStep). */
+      sd_listing?: string;
+    };
 
 export type ModsArgsInput = {
   /** Arguments selecting the User folder (`-u <User>`), shared with Play (the login, the settings). */

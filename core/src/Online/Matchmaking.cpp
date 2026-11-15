@@ -1229,6 +1229,15 @@ void Matchmaking::HandleMatchmaking()
           INFO_LOG_FMT(NETPLAY, "[Matchmaking] P{} {} ({}): IPv6 {} (tried beside IPv4)",
                        player.port, player.display_name, player.connect_code, e6.ToString());
         }
+        else if (match.local_ip6.empty() && !player.ip_address6.empty())
+        {
+          // Bug #298: the friend had IPv6 and the reporter's PC had none, which only the
+          // server's web log showed. A pair IPv4 can't connect would connect over IPv6 here.
+          INFO_LOG_FMT(NETPLAY,
+                       "[Matchmaking] P{} {} ({}) has IPv6 but this PC has none (or the server "
+                       "never got our IPv6 probe): IPv4 only",
+                       player.port, player.display_name, player.connect_code);
+        }
       }
 
       const std::string& ext_ip = player.ip_address;

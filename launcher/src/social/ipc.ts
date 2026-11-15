@@ -1,7 +1,7 @@
 import type { EmptyPayload, SuccessPayload } from "utils/ipc";
 import { _, makeEndpoint } from "utils/ipc";
 
-import type { InviteResult, SendResult, SocialEvent, SocialState } from "./types";
+import type { FriendRequestResult, InviteResult, SendResult, SocialEvent, SocialState } from "./types";
 
 export const ipc_socialConnect = makeEndpoint.main("social_connect", <{ uid: string }>_, <SuccessPayload>_);
 
@@ -28,6 +28,27 @@ export const ipc_socialDismissInvite = makeEndpoint.main("social_dismissInvite",
 export const ipc_socialSetIgnored = makeEndpoint.main(
   "social_setIgnored",
   <{ uid: string; ignored: boolean }>_,
+  <SuccessPayload>_,
+);
+
+export const ipc_socialSendFriendRequest = makeEndpoint.main(
+  "social_sendFriendRequest",
+  <{ to: string }>_,
+  <{ result: FriendRequestResult }>_,
+);
+
+/** accept / decline a request to the player, cancel their own, remove a friend. */
+export type FriendAction = "accept" | "decline" | "cancel" | "remove";
+
+export const ipc_socialFriendAction = makeEndpoint.main(
+  "social_friendAction",
+  <{ action: FriendAction; uid: string }>_,
+  <{ result: SendResult }>_,
+);
+
+export const ipc_socialDismissRequestPopup = makeEndpoint.main(
+  "social_dismissRequestPopup",
+  <{ uid: string }>_,
   <SuccessPayload>_,
 );
 

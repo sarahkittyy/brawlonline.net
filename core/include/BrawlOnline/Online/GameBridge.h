@@ -87,6 +87,15 @@ u32 SessionSize();
 
 // From the frame-end HLE hook (CPU thread), every game frame.
 void OnFrameEnd(const Core::CPUThreadGuard& guard);
+
+// Any screen shape (docs/game-code.md): true while the game draws for the window's own shape
+// (Graphics > Aspect Ratio > Stretch to Window, told to a v12 plugin every frame). A screenshot or
+// frame dump of that picture has the window's shape. Any thread.
+bool DrawsForWindow();
+// True while the game draws for the shape the picture is shown at (a v12 plugin told it, any
+// Aspect Ratio): Dolphin's Widescreen Hack is then left out, or it would widen the picture twice.
+// Any thread.
+bool DrawsForScreen();
 // A new boot: forget the block.
 void Reset();
 

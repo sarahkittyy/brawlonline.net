@@ -1,24 +1,47 @@
+/* Play's buttons, stacked (docs/design/launcher-redesign.md §8): each with its status on its right. */
 .buttons {
-  display: flex;
-  align-items: flex-start;
-  gap: 12px;
-  padding-top: 8px;
+  display: grid;
+  grid-template-columns: max-content auto;
+  gap: 5px 12px;
+  align-items: center;
+  flex: none;
 }
 
-/* Play 2v2 and its counts. The counts are wider than the button: centred under it without widening it, so the
-   gap to Play ranked stays the same as the others'; the padding keeps their line's height in the row. */
+/* Its button and status are cells of .buttons' grid, so the buttons' column is as wide as the longest label. */
 .play {
-  position: relative;
-  padding-bottom: 16px;
+  display: contents;
 }
 
 .count {
-  position: absolute;
-  bottom: 0;
-  left: 50%;
-  transform: translateX(-50%);
+  justify-self: start;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   font-size: 12px;
-  line-height: 1.2;
   color: var(--text-secondary);
   white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.etaIcon {
+  font-size: 16px !important;
+}
+
+.buttonSlot {
+  display: grid;
+}
+
+/* As wide as the longest label (the grid's column); 2 px above and below the label (Sarah's board). */
+.button {
+  position: relative;
+  height: 36px;
+  font-size: 15px !important;
+  text-transform: none !important;
+  white-space: nowrap;
+}
+
+.spinner {
+  position: absolute;
+  inset: 0;
+  margin: auto;
 }

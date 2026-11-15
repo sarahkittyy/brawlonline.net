@@ -673,6 +673,111 @@ async fn match_history_and_unrated_reports() {
     stack.shutdown().await;
 }
 
+// ---------------------------------------------------------------- friends' leaderboard, history with a player
+
+/// Gives an account a ratings row.
+async fn set_rating(pool: &PgPool, u: &UserJson, rating: f64, sets: i32) {
+    sqlx::query("INSERT INTO ratings (uid, rating, sets_played, wins, losses) VALUES ($1, $2, $3, $3, 0)")
+        .bind(uuid(u))
+        .bind(rating)
+        .bind(sets)
+        .execute(pool)
+        .await
+        .unwrap();
+}
+
+async fn befriend(stack: &Stack, sa: &str, sb: &str, a: &UserJson, b: &UserJson) {
+    let (st, v) = stack.post("/v1/friends/requests", Some(sa), json!({"to": b.connect_code})).await;
+    assert_eq!(st, 200, "{v}");
+    let (st, v) = stack.post(&format!("/v1/friends/requests/{}/accept", a.uid), Some(sb), json!({})).await;
+    assert_eq!(st, 200, "{v}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn friends_leaderboard_has_the_caller_and_their_friends() {
+    let stack = Stack::start(StackOptions::default()).await.unwrap();
+    let u = players(&stack, &["kira", "lena", "milo", "nora", "otto"]).await;
+    let (sk, k) = (&u[0].0, &u[0].1);
+    let placed = PLACEMENT_SETS as i32;
+    // kira 1500, lena (a friend) 1700, milo (a friend still placing), nora (not a friend) 1600,
+    // otto (a friend who never played Ranked).
+    set_rating(&stack.pool, k, 1500.0, placed).await;
+    set_rating(&stack.pool, &u[1].1, 1700.0, placed + 3).await;
+    set_rating(&stack.pool, &u[2].1, 1800.0, placed - 1).await;
+    set_rating(&stack.pool, &u[3].1, 1600.0, placed).await;
+    for i in [1, 2, 4] {
+        befriend(&stack, sk, &u[i].0, k, &u[i].1).await;
+    }
+
+    let (st, body) = stack.get("/v1/me/friends/leaderboard", None).await;
+    assert_eq!(st, 401, "{body}");
+    let (st, body) = stack.get("/v1/me/friends/leaderboard", Some(sk)).await;
+    assert_eq!(st, 200, "{body}");
+    let rows: Vec<(String, u64)> = body["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| (e["displayName"].as_str().unwrap().to_string(), e["position"].as_u64().unwrap()))
+        .collect();
+    // Best first, with their places on the whole leaderboard (nora is 2nd there).
+    assert_eq!(rows, vec![("lena".to_string(), 1), ("kira".to_string(), 3)]);
+    assert_eq!((body["next"].clone(), body["total"].clone()), (Value::Null, json!(2)));
+    // The same row as the whole leaderboard's.
+    let whole = board(&stack, "").await;
+    assert_eq!(body["entries"][0], whole["entries"][0]);
+    // A player without friends: their own row.
+    let (_, body) = stack.get("/v1/me/friends/leaderboard", Some(&u[3].0)).await;
+    assert_eq!(body["entries"].as_array().unwrap().len(), 1);
+    assert_eq!(body["entries"][0]["position"], 2);
+    stack.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn match_history_with_one_opponent() {
+    let stack = Stack::start(StackOptions::default()).await.unwrap();
+    let u = players(&stack, &["pia", "quin", "rosa"]).await;
+    let (sa, a) = (&u[0].0, &u[0].1);
+    let (b, c) = (&u[1].1, &u[2].1);
+    let t0 = Utc::now() - Duration::minutes(30);
+    // a-b Unranked, a-c Unranked, a-b Direct, b-c Unranked (not a's).
+    let m1 = mm_match(&stack, 1, a, b, t0, 1).await;
+    let m2 = mm_match(&stack, 1, a, c, t0, 2).await;
+    let m3 = mm_match(&stack, 2, a, b, t0, 3).await;
+    let m4 = mm_match(&stack, 1, b, c, t0, 4).await;
+    for (id, by) in [(&m1, a), (&m2, a), (&m3, a), (&m4, b)] {
+        ok_report(&stack, by, id, 1, Some(by)).await;
+    }
+    assert_eq!(ids(&history(&stack, sa, "").await), vec![m3.clone(), m2.clone(), m1.clone()]);
+    assert_eq!(ids(&history(&stack, sa, &format!("?opponent={}", b.uid)).await), vec![m3.clone(), m1.clone()]);
+    assert_eq!(ids(&history(&stack, sa, &format!("?opponent={}", c.uid)).await), vec![m2.clone()]);
+    // With the mode filter and pages.
+    let p = history(&stack, sa, &format!("?opponent={}&mode=all&limit=1", b.uid)).await;
+    assert_eq!(ids(&p), vec![m3.clone()]);
+    let next = p["next"].as_str().unwrap().to_string();
+    let p = history(&stack, sa, &format!("?opponent={}&limit=1&before={next}", b.uid)).await;
+    assert_eq!((ids(&p), p["next"].clone()), (vec![m1.clone()], Value::Null));
+    // Unranked and Direct are one filter ("unranked"); a and b played no Ranked set.
+    assert_eq!(ids(&history(&stack, sa, &format!("?opponent={}&mode=unranked", b.uid)).await).len(), 2);
+    assert!(ids(&history(&stack, sa, &format!("?opponent={}&mode=ranked", b.uid)).await).is_empty());
+    // Someone a never played, and nonsense.
+    assert!(ids(&history(&stack, sa, &format!("?opponent={}", Uuid::new_v4())).await).is_empty());
+    let (st, body) = stack.get("/v1/me/matches?opponent=bob", Some(sa)).await;
+    assert_eq!((st, body["error"]["code"].as_str()), (400, Some("invalid_opponent")), "{body}");
+    // Several players: the matches every one of them played in (a never played b and c at once).
+    assert!(ids(&history(&stack, sa, &format!("?opponent={},{}", b.uid, c.uid)).await).is_empty());
+    assert_eq!(ids(&history(&stack, sa, &format!("?opponent={},{}", b.uid, b.uid)).await).len(), 2);
+    // The filter's suggestions: who a played, the most recent first, by name or code.
+    let (st, body) = stack.get("/v1/me/opponents", Some(sa)).await;
+    assert_eq!(st, 200, "{body}");
+    let names: Vec<&str> = body["players"].as_array().unwrap().iter().map(|p| p["displayName"].as_str().unwrap()).collect();
+    assert_eq!(names, vec!["quin", "rosa"]);
+    let (_, body) = stack.get("/v1/me/opponents?q=ROS", Some(sa)).await;
+    let names: Vec<&str> = body["players"].as_array().unwrap().iter().map(|p| p["displayName"].as_str().unwrap()).collect();
+    assert_eq!(names, vec!["rosa"]);
+    assert_eq!(body["players"][0]["connectCode"], c.connect_code.as_str());
+    stack.shutdown().await;
+}
+
 /// A room's game as mm records it (mode 3), made `minutes` after `t0`: the players on `ports`,
 /// `teams` for a team battle.
 async fn room_match(

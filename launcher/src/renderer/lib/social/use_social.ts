@@ -47,6 +47,8 @@ const emptyState: SocialState = {
   ignored: [],
   conversations: {},
   invites: [],
+  friends: { loaded: false, friends: [], incoming: [], outgoing: [] },
+  requestPopups: [],
 };
 
 /**

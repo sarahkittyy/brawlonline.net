@@ -9,36 +9,72 @@
   width: 100%;
 }
 
-/* Stays at the top as the rows scroll under it (the body's background over them). */
+/* Stays at the top as the rows scroll under it: the page's own colour over them, a line under it. */
 .header {
   position: sticky;
+  container-type: inline-size;
   top: 0;
   z-index: 2;
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
   gap: 8px;
   margin: -20px -20px 12px;
-  padding: 14px 20px 10px;
-  background: var(--surface-0);
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--line-soft);
+  background: var(--page);
 }
 
+/* The bottom bar, staying as the rows scroll over it: the keys on the left, rendering the rows selected on the right. */
+.footer {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 12px -20px -20px;
+  padding: 8px 20px;
+  border-top: 1px solid var(--line-soft);
+  background: var(--page);
+}
+
+/* One row with its heading (margins inside it: its measured height is all of it). */
+.item {
+  display: flow-root;
+}
+
+/* Sentence case and quiet: it separates the kinds in a list of several, nothing more. */
 .section {
-  margin: 18px 0 6px;
-  font-size: 14px;
+  margin: 20px 12px 6px;
+  font-size: 13px;
   font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: var(--off-white);
+  color: var(--text-dim);
 }
 
 .list {
   display: flex;
   flex-direction: column;
+  container-type: inline-size;
+}
+
+/* A narrow list (the smallest window with the players' rail open): no stage picture, so the players keep their
+   names whole; the stage's name stays on the second line. */
+@container (max-width: 520px) {
+  .row.withStage {
+    grid-template-areas:
+      "players"
+      "meta";
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .row.withStage .stageIcon {
+    display: none;
+  }
 }
 
 .renderBar {
   display: flex;
+  flex: none;
   align-items: center;
   gap: 8px;
   margin-left: auto;
@@ -49,56 +85,40 @@
   white-space: nowrap;
 }
 
-.headerActions {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-/* When in the game the row starts: a column of the same width on every row, as a list of times. */
+/* When in the game it plays, from-to. */
 .time {
-  flex: none;
-  min-width: 34px;
-  font-size: 13px;
   font-variant-numeric: tabular-nums;
-  text-align: right;
-  opacity: 0.7;
 }
 
-/* Rows of many games: the stage (its icon, its name) over when it was played. */
-.where {
-  display: flex;
-  flex: none;
-  align-items: center;
-  gap: 8px;
-  margin-left: auto;
-}
-
-/* (As tall as a player chip: the row keeps its height.) */
+/* Rows of many games lead with the stage, the stage select's icon (128x112). */
 .stageIcon {
-  width: 34px;
-  height: 30px;
-  border-radius: 4px;
+  grid-area: stage;
+  width: 48px;
+  height: 42px;
+  border-radius: 6px;
+  background: var(--raised);
   object-fit: cover;
 }
 
-.whereText {
+/* The second line: the stage's name, when in the game it plays, the game's date. */
+.meta {
   display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 1px;
-  white-space: nowrap;
+  grid-area: meta;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 14px;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--text-dim);
 }
 
 .stage {
-  font-size: 13px;
-  opacity: 0.9;
+  color: var(--off-white);
+  opacity: 0.85;
 }
 
 .date {
-  font-size: 12px;
   white-space: nowrap;
-  opacity: 0.6;
 }
 
 /* A player's stocks at the row's start, in the player's color: filled left, hollow lost. */
@@ -185,138 +205,207 @@
   margin-top: 6px;
 }
 
-.row {
+/* A list, not cards: flat rows on the page, raised where pointed at (as the app's sidebar marks its page). */
+.rowBox {
+  position: relative;
   display: flex;
+  margin: 1px 0;
+  border-radius: 8px;
+}
+
+.rowBox:hover {
+  background: var(--raised);
+}
+
+/* Selected (to render): the accent's tint; playing: a stronger tint and an accent ring. */
+.selected,
+.selected:hover {
+  background: color-mix(in srgb, var(--accent-primary) 14%, transparent);
+}
+
+.playing,
+.playing:hover {
+  background: color-mix(in srgb, var(--accent-primary) 22%, transparent);
+  box-shadow: inset 0 0 0 1px var(--accent-primary);
+}
+
+/* The players over the meta line; with the stage first in rows of many games. Room at the right for the buttons. */
+.row {
+  display: grid;
+  flex: 1;
+  grid-template-areas:
+    "players"
+    "meta";
+  grid-template-columns: minmax(0, 1fr);
   align-items: center;
-  gap: 12px;
-  width: 100%;
-  margin: 3px 0;
-  padding: 8px 12px;
-  border: 1px solid rgb(159 116 192 / 15%);
-  border-radius: 10px;
-  background: var(--surface-1);
+  gap: 4px 12px;
+  min-width: 0;
+  padding: 8px 78px 8px 12px;
+  border: none;
+  border-radius: 8px;
+  background: none;
   color: inherit;
   font: inherit;
   text-align: left;
   cursor: pointer;
 }
 
-.rowBox {
-  position: relative;
-  display: flex;
-  flex: 1;
-  min-width: 0;
+.row.withStage {
+  grid-template-areas:
+    "stage players"
+    "stage meta";
+  grid-template-columns: auto minmax(0, 1fr);
 }
 
-/* Room on the left for the star (.star), on the right for Play (.play). */
-.rowBox .row {
-  padding-left: 46px;
-  padding-right: 52px;
-}
-
-/* A manual clip's row: room for its remove button too (.remove, left of Play). */
-.rowBox .row.removable {
-  padding-right: 88px;
-}
-
-.rowBox .remove {
-  position: absolute;
-  top: 50%;
-  right: 50px;
-  transform: translateY(-50%);
-  color: rgb(255 255 255 / 45%);
-}
-
-/* As the Replays page's play button. */
-.rowBox .play {
-  position: absolute;
-  top: 50%;
-  right: 8px;
-  padding: 5px;
-  transform: translateY(-50%);
-  color: var(--accent-primary-dark);
-}
-
-.rowBox .remove:hover {
-  color: var(--off-white);
-}
-
-/* (.rowBox first: over MUI's own IconButton styles.) */
-.rowBox .star {
-  position: absolute;
-  top: 50%;
-  left: 8px;
-  transform: translateY(-50%);
-  color: rgb(255 255 255 / 45%);
-}
-
-.rowBox .star:hover {
-  color: var(--off-white);
-}
-
-.rowBox .starred,
-.rowBox .starred:hover {
-  color: #f5c518;
-}
-
-.row:hover {
-  border-color: rgb(255 255 255 / 40%);
+.removable .row {
+  padding-right: 110px;
 }
 
 .row:focus-visible {
   outline: 2px solid var(--accent-primary);
+  outline-offset: -2px;
 }
 
-.playing {
-  border-color: var(--accent-primary);
-  background: rgb(180 130 176 / 18%);
+.actions {
+  position: absolute;
+  top: 50%;
+  right: 8px;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  transform: translateY(-50%);
 }
 
-/* Selected (to render): a brighter outline. */
-.row.selected {
-  border-color: var(--off-white);
-  box-shadow: 0 0 0 1px var(--off-white);
+/* (.actions first: over MUI's own IconButton styles.) Shown when the row is pointed at, selected or playing; a star
+   once starred. */
+.actions .star,
+.actions .remove,
+.actions .play {
+  color: var(--text-dim);
+  opacity: 0;
+}
+
+.rowBox:hover .actions > *,
+.rowBox:focus-within .actions > *,
+.selected .actions > *,
+.playing .actions > *,
+.actions .starred {
+  opacity: 1;
+}
+
+.actions .star:hover,
+.actions .remove:hover {
+  color: var(--off-white);
+}
+
+.actions .starred,
+.actions .starred:hover {
+  color: #f5c518;
+}
+
+.actions .play {
+  padding: 5px;
+}
+
+.actions .play:hover,
+.playing .actions .play {
+  color: var(--accent-primary);
 }
 
 .who {
   display: flex;
-  flex: 1;
   align-items: center;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 6px 10px;
   min-width: 0;
 }
 
 .side {
   display: flex;
-  gap: 6px;
+  flex-wrap: wrap;
+  gap: 6px 10px;
 }
 
 .vs {
-  opacity: 0.7;
-  font-size: 13px;
+  font-size: 12px;
+  color: var(--text-dim);
 }
 
-.clipIcon {
-  opacity: 0.8;
+.rowPlayers {
+  grid-area: players;
 }
 
+/* "vs" and the side after it stay together (Sides). */
+.versus {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* Teams: a line each and never more (Sarah's board: "2 max, one team on each line"), "vs" before every team but the
+   first (there it only holds the column), the players in columns across the teams (--team-size of them). The columns
+   grow alike up to their names' widths, so where a line is too narrow only the longest names shorten. */
+.who.teams {
+  display: grid;
+  grid-template-columns: auto repeat(var(--team-size, 2), minmax(0, max-content));
+  align-items: center;
+  justify-content: start;
+  gap: 4px 10px;
+}
+
+.teams .versus,
+.teams .side {
+  display: contents;
+}
+
+.teams .chip,
+.teams .name {
+  min-width: 0;
+}
+
+.teams .charIcon,
+.teams .pips,
+.teams .stockCount {
+  flex: none;
+}
+
+/* A narrow list (the smallest window with the players' rail open): every row tighter, so a 1v1 stays on one line
+   where it can (Sarah's board: "this 1v1 wrapping might be too aggressive? i think it could fit, if just barely?":
+   sarahkitty vs KoF_comatoast in a 425 px row needed 327 px of 317; ~22 px less now) and a team's names shorten as
+   little as can be. */
+@container (max-width: 600px) {
+  .row .who,
+  .row .versus {
+    column-gap: 8px;
+  }
+
+  .row .chip {
+    gap: 4px;
+  }
+
+  .row .pips {
+    gap: 2px;
+    margin-left: 0;
+  }
+}
+
+.firstVs {
+  visibility: hidden;
+}
+
+/* A player: their character, name and stocks; the port's colour is in the stocks (no outlined pill). */
 .chip {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 2px 10px 2px 3px;
-  border: 2px solid;
-  border-radius: 100px;
-  background: rgb(0 0 0 / 30%);
   font-size: 14px;
-  font-weight: 500;
+  font-weight: 600;
   white-space: nowrap;
 }
 
 .charIcon {
-  width: 24px;
-  height: 24px;
+  width: 22px;
+  height: 22px;
 }
 
 .name {
@@ -382,9 +471,21 @@
 }
 
 .hint {
-  margin-top: 14px;
+  flex: 1;
+  min-width: 0;
   font-size: 12px;
-  opacity: 0.6;
+  color: var(--text-dim);
+}
+
+/* Narrow: the render buttons alone (the keys' hint would take three lines). */
+.footer {
+  container-type: inline-size;
+}
+
+@container (max-width: 800px) {
+  .hint {
+    display: none;
+  }
 }
 
 .versionNote {

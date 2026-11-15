@@ -3188,6 +3188,14 @@ namespace OnlineMenu {
     // "team set"): which of the character's costumes of the team's colour (tickRoom).
     static int s_teamShade = 0;
 
+    // The room's PUBLIC / FRIENDS / PRIVATE as ROOM_PUBLIC takes it: 1 public, 2 friends only (listed
+    // to the friends of its players, docs/design/friends.md), 0 private.
+    static int roomVisibility(const PPOM::Session& se)
+    {
+        if (se.roomFlags & PPOM::RF_PUBLIC) return 1;
+        return (se.roomFlags & PPOM::RF_FRIENDS) ? 2 : 0;
+    }
+
     static int roomTeamsKind(const PPOM::Session& se)
     {
         if (!(se.roomFlags & PPOM::RF_TEAMS)) return 0;
@@ -3197,7 +3205,7 @@ namespace OnlineMenu {
     static void roomButtons(bool in, bool host)
     {
         const PPOM::Session& se = PPOM::g_block.session;
-        RoomCss::headerButtons(in && (se.roomFlags & PPOM::RF_PUBLIC), in ? roomTeamsKind(se) : 0);
+        RoomCss::headerButtons(in ? roomVisibility(se) : 0, in ? roomTeamsKind(se) : 0);
         MuMsg* m = s.cssMsg;
         if (!m || !s.haveWindow) return;
         if (!s.roomBtnsShown) {
@@ -3626,7 +3634,9 @@ namespace OnlineMenu {
             }
             if (RulesButton::pressed()) RoomRules::open(!waiting);   // host edits, others view; End set
             if (publicSwitch && host) {
-                postRoom(PPOM::ROOM_PUBLIC, (se.roomFlags & PPOM::RF_PUBLIC) ? 0 : 1, 0, NULL);
+                // PUBLIC, then FRIENDS, then PRIVATE, then PUBLIC again (Sarah's board, 2026-11-14).
+                static const u8 NEXT[3] = {1, 2, 0};   // by roomVisibility: private, public, friends
+                postRoom(PPOM::ROOM_PUBLIC, NEXT[roomVisibility(se)], 0, NULL);
                 playSE(1);
             }
             if (teamsSwitch) {

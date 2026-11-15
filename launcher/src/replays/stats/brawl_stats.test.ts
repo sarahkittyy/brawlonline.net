@@ -63,6 +63,7 @@ function timeline(frames: number, players = 2): Timeline {
     aerialLandings: make(() => new Float32Array(frames)),
     lCancels: make(() => new Float32Array(frames)),
     pads: make(() => new Uint8Array(frames * PAD_KEPT)),
+    after: null,
   };
 }
 

@@ -53,6 +53,60 @@ if(DOLPHIN_WC_TAG)
   set(DOLPHIN_WC_COMMITS_AHEAD_MASTER 0)
 endif()
 
+# DOLPHIN_SHADER_COMPILER_HASH: the code that turns a GX shader's generated source into what the
+# shader cache keeps on disk (the backends with a disk cache, the GLSL -> SPIR-V -> HLSL/MSL tools
+# and their versions). The cache's entries are fingerprinted with it and their source
+# (VideoCommon/ShaderCache.cpp), so a new build keeps the shaders that compile as before: any
+# change here compiles them again. Without git for the tools' versions it is this build's revision,
+# which keeps nothing from other builds.
+set(_shader_compiler_globs
+  "Source/Core/VideoBackends/D3D/*"
+  "Source/Core/VideoBackends/D3D12/*"
+  "Source/Core/VideoBackends/D3DCommon/*"
+  "Source/Core/VideoBackends/OGL/*"
+  "Source/Core/VideoBackends/Vulkan/*"
+  "Source/Core/Common/GL/*"
+  "Source/Core/Common/LinearDiskCache.h"
+  "Source/Core/VideoCommon/Spirv.*"
+  "Source/Core/VideoCommon/ShaderCompileUtils.*"
+  "Source/Core/VideoCommon/DriverDetails.*"
+  "Externals/glslang/CMakeLists.txt"
+  "Externals/spirv_cross/CMakeLists.txt"
+)
+set(_shader_compiler_files "")
+foreach(_glob IN LISTS _shader_compiler_globs)
+  file(GLOB_RECURSE _found LIST_DIRECTORIES false RELATIVE "${PROJECT_SOURCE_DIR}" "${PROJECT_SOURCE_DIR}/${_glob}")
+  list(APPEND _shader_compiler_files ${_found})
+endforeach()
+list(REMOVE_DUPLICATES _shader_compiler_files)
+list(SORT _shader_compiler_files)
+set(_shader_compiler_input "")
+foreach(_file IN LISTS _shader_compiler_files)
+  file(SHA256 "${PROJECT_SOURCE_DIR}/${_file}" _file_hash)
+  string(APPEND _shader_compiler_input "${_file} ${_file_hash}
+")
+endforeach()
+set(_shader_compiler_tools_known TRUE)
+foreach(_tool IN ITEMS "Externals/glslang/glslang" "Externals/spirv_cross/SPIRV-Cross")
+  set(_tool_rev "")
+  if(GIT_FOUND AND EXISTS "${PROJECT_SOURCE_DIR}/${_tool}/.git")
+    execute_process(WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}/${_tool}" COMMAND ${GIT_EXECUTABLE} rev-parse HEAD
+        OUTPUT_VARIABLE _tool_rev
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET)
+  endif()
+  if(NOT _tool_rev MATCHES "^[0-9a-f]+$")
+    set(_shader_compiler_tools_known FALSE)
+  endif()
+  string(APPEND _shader_compiler_input "${_tool} ${_tool_rev}
+")
+endforeach()
+if(_shader_compiler_tools_known AND _shader_compiler_files)
+  string(SHA256 DOLPHIN_SHADER_COMPILER_HASH "${_shader_compiler_input}")
+else()
+  set(DOLPHIN_SHADER_COMPILER_HASH "${DOLPHIN_WC_REVISION}")
+endif()
+
 function(configure_source_file path)
   configure_file(
     "${PROJECT_SOURCE_DIR}/${path}.in"

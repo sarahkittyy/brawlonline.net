@@ -1,0 +1,55 @@
+/* The folded sidebar's update / set-up ring (sidebar.tsx): a 36 px circle that fills as the download runs. */
+.ring {
+  position: relative;
+  display: inline-flex !important;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 36px;
+  height: 36px;
+  border-radius: 50% !important;
+  color: var(--off-white) !important;
+}
+
+.ring:hover {
+  background-color: var(--raised);
+}
+
+.ring:focus-visible {
+  outline: 2px solid var(--accent-primary);
+}
+
+/* The ring's empty part and its fill: both a full circle around the button's edge. */
+.track,
+.fill {
+  position: absolute;
+  inset: 0;
+}
+
+.track {
+  color: var(--raised-hover) !important;
+}
+
+.fill {
+  color: var(--accent-primary) !important;
+}
+
+.icon {
+  font-size: 18px !important;
+}
+
+/* Downloaded, waiting for a click: the whole circle in the accent, as the open sidebar's full button. */
+.ready {
+  background-color: var(--accent-primary) !important;
+  color: #fff !important;
+}
+
+.ready:hover {
+  filter: brightness(1.15);
+}
+
+.tip {
+  display: flex;
+  flex-direction: column;
+  text-align: center;
+}

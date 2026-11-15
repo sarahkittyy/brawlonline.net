@@ -95,8 +95,8 @@
   box-sizing: border-box;
   width: 100%;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 76px 120px 104px 48px 76px;
-  grid-template-areas: "players mode game time eye action";
+  grid-template-columns: minmax(0, 1fr) 150px 104px 48px 76px;
+  grid-template-areas: "players game time eye action";
   align-items: center;
   gap: 12px;
   padding: 10px 12px;
@@ -216,8 +216,6 @@
 }
 
 .mode {
-  grid-area: mode;
-  justify-self: start;
   padding: 2px 8px;
   border: 1px solid rgb(255 255 255 / 18%);
   border-radius: 10px;
@@ -234,6 +232,11 @@
   color: var(--text-secondary);
   font-size: 13px;
   white-space: nowrap;
+}
+
+.gameLine {
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .stage {
@@ -308,19 +311,6 @@
   color: var(--live-red);
 }
 
-/* Narrower: the mode goes (the row's names and game say enough). */
-@container (width < 720px) {
-  .row {
-    grid-template-columns: minmax(0, 1fr) 96px 92px 40px 64px;
-    grid-template-areas: "players game time eye action";
-    gap: 8px;
-  }
-
-  .mode {
-    display: none;
-  }
-}
-
 /* Narrower still (a small window in a dev build): two lines, the players and Watch over the game, its time and the
    watchers, so the names keep the row's width. The header's watch status goes; the watched row shows it. */
 @container (width < 560px) {
@@ -335,4 +325,220 @@
   .watchStatus {
     display: none;
   }
+}
+
+/* ---- The redesign (docs/design/launcher-redesign.md §7) ---- */
+.page {
+  padding: 20px 28px 0;
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-height: 44px;
+  margin-bottom: 16px;
+}
+
+.title {
+  margin: 0;
+  font-size: 28px;
+  white-space: nowrap;
+}
+
+.grow {
+  flex: 1;
+}
+
+.bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 40px;
+  margin: 22px 0 8px;
+}
+
+.heading {
+  margin: 0 auto 0 0;
+  white-space: nowrap;
+  font-family: var(--font-body, system-ui, sans-serif);
+  font-size: 18px;
+  color: var(--text-primary);
+}
+
+.body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.search {
+  background-color: var(--shell);
+  border: 1px solid var(--line-soft);
+  border-radius: 6px;
+  height: 34px;
+}
+
+.list {
+  padding: 0;
+  gap: 0;
+}
+
+/* The mode leads the game's line ("Ranked · Game 1 · 0-0"), so no width hides it. */
+.row {
+  grid-template-columns: 52px minmax(0, 1fr) 150px 96px 40px 64px;
+  grid-template-areas: "stage players game time eye action";
+  padding: 6px 12px;
+  min-height: 58px;
+  border-radius: 6px;
+}
+
+.row:hover {
+  background-color: var(--raised);
+}
+
+.stageThumb {
+  grid-area: stage;
+  width: 52px;
+  height: 45px;
+  border-radius: 4px;
+  object-fit: cover;
+}
+
+@container (width < 760px) {
+  .row {
+    grid-template-columns: 52px minmax(0, 1fr) 150px 96px 40px 60px;
+    gap: 8px;
+  }
+}
+
+@container (width < 560px) {
+  .row {
+    grid-template-columns: 52px minmax(0, 1fr) auto auto;
+    grid-template-areas:
+      "stage players players action"
+      "stage game time eye";
+  }
+}
+
+/* The game above the list. */
+.featured {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  padding: 16px 18px;
+  border-radius: 10px;
+  background-color: var(--raised);
+}
+
+.featuredStage {
+  width: 112px;
+  height: 98px;
+  border-radius: 6px;
+  object-fit: cover;
+  flex: none;
+}
+
+.featuredText {
+  flex: 1;
+  min-width: 0;
+}
+
+.featuredLine {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.featuredPlayers {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 10px;
+  font-size: 22px;
+}
+
+.featuredSide {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.featuredPlayer {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.featuredStock {
+  width: 32px;
+  height: 32px;
+}
+
+.sideP1 .name {
+  color: #f15959;
+}
+
+.sideP2 .name {
+  color: #8080ff;
+}
+
+.featuredWatch {
+  flex: none;
+  min-width: 120px;
+  height: 46px;
+  font-size: 16px !important;
+  text-transform: none !important;
+}
+
+.page {
+  flex: 1;
+  min-width: 0;
+}
+
+.action {
+  text-transform: none;
+  font-size: 13px;
+}
+
+/* Round 5 (Sarah's board): a side stays on one line; the second side, "vs" first, goes under the first when both
+   don't fit; when even one side doesn't fit, every player gets a line (spectate_view.tsx SidesCell). */
+.players {
+  gap: 2px 10px;
+}
+
+.side {
+  flex-wrap: nowrap;
+  white-space: nowrap;
+  gap: 2px 8px;
+}
+
+.player {
+  gap: 6px;
+}
+
+.players[data-stacked] .side {
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+.players[data-stacked] {
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+/* Names keep their width on a side's line (so the row knows when a side doesn't fit); stacked, a name too long for
+   the cell ends in "…". */
+.side .player {
+  flex-shrink: 0;
+}
+
+.players[data-stacked] .player {
+  flex-shrink: 1;
+  max-width: 100%;
 }

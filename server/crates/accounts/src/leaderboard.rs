@@ -136,6 +136,18 @@ fn page_sql() -> String {
 /// One page of `limit` rows after `after` (from the top without it); with `search`, only the
 /// players whose display name or connect code contains it, ignoring case.
 pub async fn page(pool: &PgPool, after: Option<Key>, limit: u32, search: Option<&str>) -> sqlx::Result<Page> {
+    page_of(pool, after, limit, search, None).await
+}
+
+/// [`page`], with `only`: only these players' rows (each with its position on the whole
+/// leaderboard).
+async fn page_of(
+    pool: &PgPool,
+    after: Option<Key>,
+    limit: u32,
+    search: Option<&str>,
+    only: Option<&[Uuid]>,
+) -> sqlx::Result<Page> {
     let limit = i64::from(limit);
     let mut tx = pool.begin().await?;
     // The page and the counts from one snapshot, so the positions match the rows.
@@ -143,15 +155,21 @@ pub async fn page(pool: &PgPool, after: Option<Key>, limit: u32, search: Option<
     // The cursor's condition only with a cursor, so a deep page stays an index range scan, and
     // the search with strpos rather than LIKE, so `%` and `_` in it are just characters.
     let mut sql = page_sql();
+    let mut n = 1;
     if after.is_some() {
         sql.push_str(" AND (r.rating < $2 OR (r.rating = $2 AND r.uid > $3))");
+        n = 3;
     }
     if search.is_some() {
-        let n = if after.is_some() { 4 } else { 2 };
+        n += 1;
         sql.push_str(&format!(
             " AND (strpos(lower(u.display_name), lower(${n})) > 0
                    OR strpos(lower(COALESCE(u.connect_code, '')), lower(${n})) > 0)"
         ));
+    }
+    if only.is_some() {
+        n += 1;
+        sql.push_str(&format!(" AND r.uid = ANY(${n})"));
     }
     sql.push_str(" ORDER BY r.rating DESC, r.uid LIMIT $1");
     let mut query = sqlx::query_as(&sql).bind(limit + 1);
@@ -160,6 +178,9 @@ pub async fn page(pool: &PgPool, after: Option<Key>, limit: u32, search: Option<
     }
     if let Some(text) = search {
         query = query.bind(text);
+    }
+    if let Some(uids) = only {
+        query = query.bind(uids);
     }
     let mut rows: Vec<Row> = query.fetch_all(&mut *tx).await?;
     // Rows up to and including the cursor's (none without one), and everyone.
@@ -172,8 +193,9 @@ pub async fn page(pool: &PgPool, after: Option<Key>, limit: u32, search: Option<
     .fetch_one(&mut *tx)
     .await?;
     let page_uids: Vec<Uuid> = rows.iter().take(limit as usize).map(|r| r.uid).collect();
-    // A search's rows are not consecutive: each one's position on the whole leaderboard.
-    let positions: HashMap<Uuid, i64> = if search.is_some() {
+    // A search's rows (and `only`'s) are not consecutive: each one's position on the whole
+    // leaderboard.
+    let positions: HashMap<Uuid, i64> = if search.is_some() || only.is_some() {
         sqlx::query_as::<_, (Uuid, i64)>(&format!(
             "SELECT uid, pos FROM (
                  SELECT uid, row_number() OVER (ORDER BY rating DESC, uid) AS pos
@@ -280,6 +302,30 @@ pub async fn leaderboard(
     let n = cursor::page_limit(q.limit, DEFAULT_LIMIT, MAX_LIMIT);
     let search = search_text(q.q.as_deref());
     Ok(Json(page(&state.pool, after, n, search.as_deref()).await?))
+}
+
+/// `GET /v1/me/friends/leaderboard`: the caller's and their friends' rows of the leaderboard
+/// (positions on the whole leaderboard), best first, as one page (`next` null, `total` the rows).
+/// Only those placed: a friend still placing is not on the leaderboard. Session auth; limited per
+/// account as the match history ([`common::ratelimit::HISTORY_WINDOWS`]).
+pub async fn friends_leaderboard(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<Json<Page>> {
+    let user = crate::api::current_user(&state, &headers).await?;
+    limit(&state, |l, now| l.history.check(&user.uid, now)).map_err(|wait| {
+        ApiError::rate_limited(wait)
+            .with_message(format!("Too many requests. Try again in {} s.", wait.as_secs().max(1)))
+    })?;
+    let friends = state.friend_cache.get(&state.pool, user.uid).await?;
+    let mut uids: Vec<Uuid> = friends.iter().copied().collect();
+    uids.push(user.uid);
+    Ok(Json(friends_page(&state.pool, &uids).await?))
+}
+
+/// The rows of `uids` that are on the leaderboard, as [`friends_leaderboard`] serves them.
+pub async fn friends_page(pool: &PgPool, uids: &[Uuid]) -> sqlx::Result<Page> {
+    let mut page = page_of(pool, None, uids.len().min(u32::MAX as usize) as u32, None, Some(uids)).await?;
+    page.next = None;
+    page.total = page.entries.len() as u64;
+    Ok(page)
 }
 
 /// The search text taken from `q`: trimmed and cut to [`MAX_QUERY_CHARS`]; `None` when empty.

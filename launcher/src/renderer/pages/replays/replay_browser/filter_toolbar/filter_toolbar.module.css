@@ -1,0 +1,57 @@
+/*
+ * Replays' bar over the list: the folder, the search and Refresh, then the sort and Hide short games.
+ * Wide: one line, in that order. Narrow (the launcher at its smallest with the players rail open): two
+ * lines, wrapped after Refresh, each starting at the list's left edge.
+ */
+.bar {
+  container-type: inline-size;
+}
+
+.inner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* (One line: the groups' items are the bar's own.) */
+.first,
+.second {
+  display: contents;
+}
+
+.refresh {
+  flex: none;
+}
+
+.hideShort {
+  flex: none;
+  white-space: nowrap;
+}
+
+@container (width < 660px) {
+  .inner {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+
+  .first,
+  .second {
+    display: flex;
+    align-items: center;
+    min-width: 0;
+  }
+
+  .first {
+    gap: 8px;
+  }
+
+  /* The search takes the line to Refresh. */
+  .first .search {
+    max-width: none;
+  }
+
+  .second {
+    gap: 12px;
+  }
+}

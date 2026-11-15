@@ -9,6 +9,7 @@ import { DolphinStatus, useDolphinStore } from "@/lib/dolphin/use_dolphin_store"
 
 import { DraggableFile } from "./draggable_file";
 import { ReplayFileMessages as Messages } from "./replay_file.messages";
+import styles from "./replay_file.module.css";
 import type { PlayerInfo } from "./team_elements/team_elements";
 import { TeamElements } from "./team_elements/team_elements";
 
@@ -53,6 +54,7 @@ export const ReplayFile = React.memo(function ReplayFile({
 }: ReplayFileProps) {
   return (
     <Outer
+      className={styles.row}
       backgroundImage={backgroundImage}
       selected={playing}
       data-replay-highlight={highlightKey ? highlightKey : undefined}
@@ -64,23 +66,32 @@ export const ReplayFile = React.memo(function ReplayFile({
           flex: 1;
           flex-direction: column;
           justify-content: center;
+          /* (Its width is the row's: width 100% and the padding overflowed the row by 20 px, cutting off
+             the file name and the play button's room at the right.) */
+          min-width: 0;
           padding: 10px;
           background-color: ${playing ? "rgba(180, 130, 176, 0.1)" : "transparent"};
-          width: 100%;
         `}
       >
+        {/* (The buttons stay level with the first line of players when the teams take two.) */}
         <div
           css={css`
             display: flex;
-            align-items: center;
+            align-items: flex-start;
             justify-content: space-between;
+            gap: 4px;
             width: 100%;
           `}
         >
           <TeamElements teams={players} />
           <div
+            className={styles.actions}
             css={css`
               display: flex;
+              flex: none;
+              /* (Over the players when a 1v1 or a team runs a little under them.) */
+              position: relative;
+              z-index: 1;
             `}
           >
             {actions.map((action, i) => (
@@ -112,6 +123,7 @@ export const ReplayFile = React.memo(function ReplayFile({
             ))}
           </div>
           <DraggableFile
+            className={styles.fileName}
             onDragStart={onFileNameDragStart}
             css={css`
               max-width: 350px;
@@ -168,8 +180,10 @@ const Outer = styled.div<{
   border-color: ${(p) => (p.selected ? "rgba(255, 255, 255, 0.7)" : "rgba(159, 116, 192, 0.1)")};
   overflow: hidden;
   border-radius: 10px;
-  height: 80px;
-  margin: 10px;
+  /* 80 px; taller when the teams take a line each (team_elements.tsx). */
+  min-height: 80px;
+  contain-intrinsic-size: auto 80px;
+  margin: 0 0 10px;
   /* Off-screen rows skip style, layout and paint: the list keeps every replay it has loaded (#268). */
   content-visibility: auto;
   background: ${(p) =>
@@ -194,6 +208,7 @@ const Outer = styled.div<{
 const InfoItem = React.memo(({ Icon, label }: { Icon: React.ComponentType; label: string }) => {
   return (
     <div
+      className={styles.detail}
       css={css`
         display: flex;
         align-items: center;
@@ -267,6 +282,7 @@ const ReplayActionButton = React.memo(({ label, color, onClick, ...rest }: Repla
     <Tooltip title={label}>
       <span>
         <IconButton
+          className={styles.action}
           css={css`
             padding: 5px;
             margin: 0 5px;

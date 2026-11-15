@@ -44,7 +44,38 @@ void Jit64::SetFPRFIfNeeded(const OpArg& input, bool single)
   else
     MOVSD(xmm, input);
 
+  if (m_fprf_lazy)
+  {
+    // The result and what it is, in place of its class; a compare since an earlier result is
+    // forgotten with it.
+    if (single)
+      MOVSS(PPCSTATE(fprf_lazy_value), xmm);
+    else
+      MOVSD(PPCSTATE(fprf_lazy_value), xmm);
+    MOV(32, PPCSTATE(fprf_lazy), Imm32(single ? PowerPC::PowerPCState::LAZY_FPRF_SINGLE :
+                                                PowerPC::PowerPCState::LAZY_FPRF_DOUBLE));
+    return;
+  }
+
   SetFPRF(xmm, single);
+}
+
+void Jit64::FlushLazyFPRF()
+{
+  if (!m_fprf || !m_fprf_lazy)
+    return;
+
+  CMP(32, PPCSTATE(fprf_lazy), Imm8(0));
+  FixupBranch pending = J_CC(CC_NE, Jump::Near);
+  SwitchToFarCode();
+  SetJumpTarget(pending);
+  const BitSet32 registers_in_use = CallerSavedRegistersInUse();
+  ABI_PushRegistersAndAdjustStack(registers_in_use, 0);
+  ABI_CallFunctionP(PowerPC::FlushLazyFPRFFromJIT, &m_ppc_state);
+  ABI_PopRegistersAndAdjustStack(registers_in_use, 0);
+  FixupBranch done = J(Jump::Near);
+  SwitchToNearCode();
+  SetJumpTarget(done);
 }
 
 void Jit64::FinalizeSingleResult(X64Reg output, const OpArg& input, bool packed, bool duplicate)
@@ -350,6 +381,10 @@ void Jit64::fp_arith(UGeckoInstruction inst)
   else
     FinalizeDoubleResult(Rd, R(dest));
 }
+
+// The even-tie test of an accurate single-precision madd's result (bits & 0x1fffffff ==
+// 0x10000000), both lanes: shifted left by 35, a tie leaves only the sign bit.
+alignas(16) static const u64 madd_tie_bits[2] = {0x8000000000000000ULL, 0x8000000000000000ULL};
 
 void Jit64::fmaddXX(UGeckoInstruction inst)
 {
@@ -694,6 +729,37 @@ void Jit64::fmaddXX(UGeckoInstruction inst)
 
     // We've calculated s := a + b, with a = Ra * Rc_rounded_duplicated, b = subtract ? -Rb : Rb
 
+    // Rounding s to single precision can only differ from rounding a + b exactly when s is an
+    // even tie at single precision (low 29 bits 0x10000000), the test fmadds_eft and ps_madd_eft
+    // start with; for any other s they return it as it is. So test for a tie here and compute
+    // the error terms and call the routine out of line only for one (about 1 in 40 madds in a
+    // Brawl match, GitHub issue #40): the far code is the code as it was, reading the inputs the
+    // test leaves alone, and returns XMM1 to the join; every other result is s, as before. The
+    // test clobbers only XMM0, RSCRATCH, RSCRATCH2 and flags, which the routines clobber too. The
+    // packed test needs SSE4.1 (PCMPEQQ, PTEST): without it, and with software FMA, everything
+    // stays inline as before.
+    std::optional<FixupBranch> tie;
+    if (!software_fma && (!packed || cpu_info.bSSE4_1) && m_far_code.Enabled() &&
+        !m_far_code.IsInSpace(GetCodePtr()))
+    {
+      if (packed)
+      {
+        avx_op(&XEmitter::VPSLLQ, &XEmitter::PSLLQ, XMM0, XMM1, 35);
+        PCMPEQQ(XMM0, MConst(madd_tie_bits));
+        PTEST(XMM0, R(XMM0));
+        tie = J_CC(CC_NZ, Jump::Near);
+      }
+      else
+      {
+        MOVQ_xmm(R(RSCRATCH), XMM1);
+        LEA(32, RSCRATCH2, MScaled(RSCRATCH, SCALE_8, static_cast<s32>(0x80000000)));
+        TEST(32, R(RSCRATCH2), R(RSCRATCH2));
+        tie = J_CC(CC_Z, Jump::Near);
+      }
+      SwitchToFarCode();
+      SetJumpTarget(*tie);
+    }
+
     if (packed)
     {
       // a' := s - b
@@ -805,6 +871,13 @@ void Jit64::fmaddXX(UGeckoInstruction inst)
         SUBSD(XMM2, Rb);
 
       CALL(GetAsmRoutines()->fmadds_eft);
+    }
+
+    if (tie)
+    {
+      FixupBranch join = J(Jump::Near);
+      SwitchToNearCode();
+      SetJumpTarget(join);
     }
   }
 
@@ -1044,6 +1117,12 @@ void Jit64::FloatCompare(UGeckoInstruction inst, bool upper)
   RCX64Reg Rb = fpr.Bind(b, RCMode::Read);
   RegCache::Realize(Ra, Rb);
 
+  // A compare sets FPCC and leaves C: with a lazy FPRF it is one byte beside the last result.
+  const bool lazy = fprf && m_fprf_lazy;
+  if (lazy)
+    fprf = false;
+  const OpArg lazy_compare = MDisp(RPPCSTATE, PPCSTATE_OFF(fprf_lazy) + 1);
+
   if (fprf)
     AND(32, PPCSTATE(fpscr), Imm32(~FPCC_MASK));
 
@@ -1081,6 +1160,8 @@ void Jit64::FloatCompare(UGeckoInstruction inst, bool upper)
       Imm64(PowerPC::ConditionRegister::PPCToInternal(output[PowerPC::CR_EQ_BIT])));
   if (fprf)
     OR(32, PPCSTATE(fpscr), Imm32(PowerPC::CR_EQ << FPRF_SHIFT));
+  if (lazy)
+    MOV(8, lazy_compare, Imm8(PowerPC::CR_EQ));
 
   continue1 = J();
 
@@ -1089,6 +1170,8 @@ void Jit64::FloatCompare(UGeckoInstruction inst, bool upper)
       Imm64(PowerPC::ConditionRegister::PPCToInternal(output[PowerPC::CR_SO_BIT])));
   if (fprf)
     OR(32, PPCSTATE(fpscr), Imm32(PowerPC::CR_SO << FPRF_SHIFT));
+  if (lazy)
+    MOV(8, lazy_compare, Imm8(PowerPC::CR_SO));
 
   if (a != b)
   {
@@ -1099,6 +1182,8 @@ void Jit64::FloatCompare(UGeckoInstruction inst, bool upper)
         Imm64(PowerPC::ConditionRegister::PPCToInternal(output[PowerPC::CR_GT_BIT])));
     if (fprf)
       OR(32, PPCSTATE(fpscr), Imm32(PowerPC::CR_GT << FPRF_SHIFT));
+    if (lazy)
+      MOV(8, lazy_compare, Imm8(PowerPC::CR_GT));
     continue3 = J();
 
     SetJumpTarget(pLesser);
@@ -1106,6 +1191,8 @@ void Jit64::FloatCompare(UGeckoInstruction inst, bool upper)
         Imm64(PowerPC::ConditionRegister::PPCToInternal(output[PowerPC::CR_LT_BIT])));
     if (fprf)
       OR(32, PPCSTATE(fpscr), Imm32(PowerPC::CR_LT << FPRF_SHIFT));
+    if (lazy)
+      MOV(8, lazy_compare, Imm8(PowerPC::CR_LT));
   }
 
   SetJumpTarget(continue1);

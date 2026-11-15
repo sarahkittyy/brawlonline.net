@@ -8,7 +8,8 @@ _2026-10-10. The launcher's player list, its end-to-end encrypted DMs and its ga
 - **Chat tabs** along the bottom of the window (a 32 px bar the pages leave room for), from the bottom left to the right, shrinking to fit. A tab's header holds the name, the tag, the invite button (right-aligned) and a close button; clicking it opens or closes the chat window, which draws over the page above it. A tab with unread messages pulses amber. The same right-click menu works on a tab's header. In the box, Enter sends and keeps the focus; Ctrl+Backspace and Ctrl+W delete the word before the caret; Esc closes the window.
 - **Invites** pop up in the bottom right: "bob invited you to their room. Join?" (or "to a Direct 1v1") with **Yes** (green), **No** (grey) and an X (dismiss without answering). Shown for 110 s (the server keeps an invite answerable for 120 s).
 - **Sounds** (the player's own disc, `src/brawl_assets/catalog.ts`): a message plays Fox's shine unless its chat window is open and the launcher has focus; an invite plays the star KO twinkle. The bell left of the settings gear turns both off ("Toggle Notification Sounds", setting `notificationSounds`).
-- **Ignore**: an ignored player's messages are kept but shown as dark spoiler boxes (a click shows one), open no tab, mark nothing unread and play no sound; their invites are dropped. The list is the game's (`<User>/Online/chat-hidden.json`), so ignoring in the launcher ignores in game and the other way round.
+- **Ignore**: an ignored player's messages are kept but shown as dark spoiler boxes (a click shows one), open no tab, mark nothing unread and play no sound; their invites are dropped. The list is the game's (`<User>/Online/chat-hidden.json`), so ignoring in the launcher ignores in game and the other way round. Since 2026-11-14 it is kept on the account too (`docs/design/friends.md` §3): the launcher uploads the file once per account and writes the account's list to it.
+- **Friends** (2026-11-14, `docs/design/friends.md`): the panel's Friends tab, friend requests, the friend pill in a chat window's title, and Add friend / Remove friend in the player's menu (§7).
 
 ## 2. Keys
 
@@ -26,20 +27,29 @@ The answer is server-sent events: one JSON object per `data:` line, a `: ping` c
 
 | Event | Fields |
 |---|---|
-| `welcome` | `you` (uid), `online` (members, by name, the receiver left out), `room` (the receiver's room or null). Always first. |
+| `welcome` | `you` (uid), `online` (members, by name, the receiver left out), `room` (the receiver's room or null), `queue` (the receiver's search or match or null; absent from an older server). Always first. |
 | `online` | `member`: a player came online, or came back with a new session key. |
 | `offline` | `uid` |
 | `dm` | `from`, `kx` (the sender's session key the box was sealed with), `box` (hex) |
 | `invite` | `from`, `kind`: `room` with `room`, or `direct` with `connectCode` (the inviter's) |
 | `invite-answer` | `by`, `kind`, `accept`, `connectCode` (the invitee's) |
 | `room` | `room`: the receiver's room changed (joined, left, slots, status) or null |
+| `queue` | `queue`: the receiver's own search or match changed (the sidebar's queue box, `docs/design/launcher-redesign.md` §7), or null: neither |
 | `replaced` | another launcher took over the account |
 | `account` | an admin renamed the account (`pp-admin user rename`): read `/v1/me` again; the others got its `online` again with the new name |
 | `banned` | the account was banned (`pp-admin user ban`): the stream ends and its session is gone; the others get its `offline` |
+| `friends` | `change`: `request` (`player` asked the receiver to be friends), `accepted` (`player` accepted the receiver's request) or `changed` (a friend or a request is gone); read `GET /v1/friends` again (§7) |
 
 A member is `{uid, displayName, connectCode, idKey, kx, kxSig}`. A room is `{code, players, openSlots, mode, status, joinable}` (`status` `waiting`, `starting` or `in-game`; `joinable`: an open slot is empty).
 
 Rooms live in mm. mm's status snapshot (`GET /status` on its local listener) carries `members`, every room player's room by uid, public and private rooms alike. accounts reads it at most once a second, only while launchers are connected, to send `room` events and to check invites; `GET /v1/rooms` never includes it.
+
+A queue is one of:
+
+- `{"state": "searching", "mode", "since", "partner"?}`: the player's game has an Unranked, Ranked or 2v2 ticket waiting (`mode` `unranked`, `ranked` or `twos`). `since` (RFC 3339) is when that ticket came: a new ticket (a requeue after a failed connect, a search started again) starts it again. `partner`: in 2v2, the party's other player.
+- `{"state": "playing", "mode", "opponents", "game", "wins", "liveId"?}`: the player is in a Direct, Unranked, Ranked or 2v2 match (`mode` `direct`, `unranked`, `ranked` or `twos`), from the pairing until a player of it searches again, goes to a room or their game leaves the online CSS (the match's chat group has under two players), or its stream saw the set end (a Ranked set won, a disconnect). `opponents`: the other side; in 2v2 the other team of the latest game streamed, before one those not queued with the player (a pair stays on one team), or all three others when all four searched alone. `game`: the latest game number streamed (1 before one); `wins`: games won in the set so far, the player's side first (`[0, 0]` for a set that isn't streamed). `liveId`: its `GET /v1/live` id, when it is listed there.
+
+A player in a queue is `{uid, displayName, connectCode}` with `country` and `main` as the player's own launcher lists them (none while it is offline). Only players whose games are online with a chat key are in a match's chat group, so a match shows only once both players' games run a current build. mm's snapshot carries the searches (`searching`: uid, mode, since, partner) and the matches (`matched`: mode, players with their wins, team and pair, game, liveId) as internal lists, like `members`: accounts sends each launcher its own player's and never serves them.
 
 ## 4. Requests
 
@@ -65,4 +75,8 @@ The launcher hands the game a code the way clicking a public room does (`docs/ro
 
 Everything from the server is checked before it is used: uids by pattern, names through the chat cleaner (32 code points), connect codes by pattern, keys by length, rooms field by field, at most 5000 members, 64 KiB per event (4 MiB for `welcome`). A DM is used only if it comes from a listed player with the session key that player was listed with, whose `kxSig` verifies against their identity key (checked on first use), opens with the pair key, has a `seq` above the last one from that key and a valid signature, and its text survives the cleaner (`docs/chat-protocol.md` §5). Invites must come from a listed player; a Direct invite's code must be that player's own. The renderer only ever gets cleaned text and draws it as text.
 
-Nothing is stored on disk except the identity key and the ignore list: conversations last as long as the launcher runs.
+Nothing is stored on disk except the identity key and the ignore list (with its per-account copy, `chat-hidden-synced-<uid>.json`): conversations last as long as the launcher runs.
+
+## 7. Friends
+
+The lists and the requests live in accounts (`docs/design/friends.md` §2): `GET /v1/friends` `{friends, incoming, outgoing}`, `POST /v1/friends/requests {to}`, `POST /v1/friends/requests/{uid}/accept` and `/decline`, `DELETE /v1/friends/requests/{uid}`, `DELETE /v1/friends/{uid}`; the ignore list in `GET /v1/me/ignores`, `PUT` / `DELETE /v1/me/ignores/{uid}` and `POST /v1/me/ignores/import`. The launcher reads the lists after `welcome` and again on every `friends` event; a `request` also pops up (until answered or closed) and an `accepted` is a toast. Nobody is told of a decline, and a request from a player the receiver ignores sends no event. Every person in the lists is checked like a listed player (uid, cleaned name, code), and the lists are capped at 2,000 each.

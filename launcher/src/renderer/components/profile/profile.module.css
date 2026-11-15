@@ -55,6 +55,13 @@
   min-width: 0;
 }
 
+/* The friend button right after the name (docs/design/friends.md), before a developer's </>. */
+.nameExtra {
+  display: inline-flex;
+  flex-shrink: 0;
+  margin-left: 10px;
+}
+
 /* A developer's </> after the name (dev_badge.tsx). */
 .dev {
   margin-left: 6px;
@@ -637,4 +644,23 @@
 
 .accountLink:hover {
   color: var(--text-primary) !important;
+}
+
+/* The player's own account links sit on the footer's left, beside the link (no row of their own). */
+.footer .account {
+  justify-content: flex-start;
+  margin-top: 0;
+}
+
+/* The player's own profile: Switch account and Log out, then the link, on one row (the link gives way first). */
+.footer:has(.account) {
+  flex-wrap: nowrap;
+}
+
+.footer:has(.account) .actions {
+  flex: none;
+}
+
+.footer .account .todo {
+  flex-basis: auto;
 }

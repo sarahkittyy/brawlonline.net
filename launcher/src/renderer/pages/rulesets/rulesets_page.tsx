@@ -12,6 +12,7 @@ import AddRoundedIcon from "@mui/icons-material/AddRounded";
 import ContentCopyIcon from "@mui/icons-material/ContentCopy";
 import FileDownloadOutlinedIcon from "@mui/icons-material/FileDownloadOutlined";
 import FileUploadOutlinedIcon from "@mui/icons-material/FileUploadOutlined";
+import InfoOutlinedIcon from "@mui/icons-material/InfoOutlined";
 import LockOutlinedIcon from "@mui/icons-material/LockOutlined";
 import RefreshIcon from "@mui/icons-material/Refresh";
 import SearchIcon from "@mui/icons-material/Search";
@@ -274,10 +275,19 @@ export const RulesetsPage = React.memo(function RulesetsPage() {
   const viewed = ownViewed ?? viewing;
 
   return (
-    <div className={styles.page}>
+    // (A ruleset open on a narrow page takes the page: the list comes back with Close.)
+    <div className={styles.page} data-open={editing || viewed ? "" : undefined}>
       <div className={styles.listColumn}>
         <div className={styles.header}>
-          <Typography variant="h5">{Messages.rulesets()}</Typography>
+          <div className={styles.titleRow}>
+            <Typography variant="h5">{Messages.rulesets()}</Typography>
+            {/* The page's words behind an icon, as on Other Games: they took a short window's list (Sarah's board). */}
+            <Tooltip title={Messages.intro()} placement="bottom-start">
+              <span className={styles.info} tabIndex={0} aria-label={Messages.intro()} data-testid="rulesets-intro">
+                <InfoOutlinedIcon fontSize="small" />
+              </span>
+            </Tooltip>
+          </div>
           <div className={styles.headerActions}>
             <Tooltip title={Messages.refresh()}>
               <IconButton
@@ -325,10 +335,6 @@ export const RulesetsPage = React.memo(function RulesetsPage() {
             />
           </div>
         </div>
-        <Typography variant="body2" color="text.secondary" className={styles.intro}>
-          {Messages.intro()}
-        </Typography>
-
         <InfiniteScrollContainer
           className={styles.lists}
           onLoadMore={pub.loadMore}
@@ -466,22 +472,21 @@ export const RulesetsPage = React.memo(function RulesetsPage() {
       {!editing && viewed && (
         <div className={styles.editorColumn} data-testid="ruleset-view">
           <div className={styles.editorHeader}>
-            <Typography variant="h6">{rulesetTitle(viewed)}</Typography>
+            <Typography variant="h6" className={styles.editorTitle}>
+              {rulesetTitle(viewed)}
+            </Typography>
             <CodeCopy code={viewed.code} onCopy={copy} className={styles.headerCode} />
             {viewed.hidden && <span className={styles.unsaved}>{Messages.hiddenLabel()}</span>}
-          </div>
-          <div className={styles.editorScroll}>
-            <RulesetDetails ruleset={viewed.ruleset} />
-          </div>
-          <div className={styles.editorFooter}>
+            {/* By its code (the footer is its buttons alone: on a narrow column the two groups took two lines). */}
             <div className={styles.viewActions}>
-              <Button color="secondary" sx={{ textTransform: "none" }} onClick={() => copy(viewed.link)}>
+              <Button size="small" color="secondary" sx={{ textTransform: "none" }} onClick={() => copy(viewed.link)}>
                 {Messages.copyLink()}
               </Button>
               {remembered.ruleset?.code === viewed.code ? (
                 <span className={styles.inUse}>{Messages.inUse()}</span>
               ) : (
                 <Button
+                  size="small"
                   color="secondary"
                   sx={{ textTransform: "none" }}
                   onClick={() => void rememberForRooms(viewed.code)}
@@ -491,6 +496,11 @@ export const RulesetsPage = React.memo(function RulesetsPage() {
                 </Button>
               )}
             </div>
+          </div>
+          <div className={styles.editorScroll}>
+            <RulesetDetails ruleset={viewed.ruleset} />
+          </div>
+          <div className={styles.editorFooter}>
             <div className={styles.footerButtons}>
               <Button color="secondary" onClick={() => setViewing(null)}>
                 {Messages.close()}
@@ -518,7 +528,7 @@ export const RulesetsPage = React.memo(function RulesetsPage() {
       {editing && (
         <div className={styles.editorColumn} data-testid="ruleset-editor">
           <div className={styles.editorHeader}>
-            <Typography variant="h6">
+            <Typography variant="h6" className={styles.editorTitle}>
               {editing.basedOn
                 ? Messages.editorEditing(editing.basedOn)
                 : editing.draftId

@@ -1,15 +1,12 @@
 import { css } from "@emotion/react";
-import styled from "@emotion/styled";
-import CloseIcon from "@mui/icons-material/Close";
-import SearchIcon from "@mui/icons-material/Search";
 import SyncIcon from "@mui/icons-material/Sync";
 import IconButton from "@mui/material/IconButton";
-import InputAdornment from "@mui/material/InputAdornment";
-import InputBase from "@mui/material/InputBase";
+import Tooltip from "@mui/material/Tooltip";
 import debounce from "lodash/debounce";
 import React from "react";
 
-import { Button, Checkbox, Dropdown } from "@/components/form";
+import { Checkbox, Dropdown } from "@/components/form";
+import { ReplayPlayerSearch } from "@/components/player_search/replay_player_search";
 import { useReplayFilter } from "@/lib/hooks/use_replay_filter";
 import { useReplayPresenter, useReplays } from "@/lib/hooks/use_replays";
 import { useSettings } from "@/lib/hooks/use_settings";
@@ -17,39 +14,35 @@ import { useToasts } from "@/lib/hooks/use_toasts";
 import { ReplaySortOption, SortDirection } from "@/lib/replay_file_sort";
 
 import { FilterToolbarMessages as Messages } from "./filter_toolbar.messages";
+import styles from "./filter_toolbar.module.css";
 
-const Outer = styled.div`
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 20px 10px;
-`;
-
-const ButtonContainer = styled.div`
-  & > * {
-    margin-right: 20px;
-  }
-`;
-
+// The folder, then the player search as in Match history (Sarah's board), then the list's buttons; on two
+// lines when narrow (filter_toolbar.module.css).
 type FilterToolbarProps = {
   disabled?: boolean;
+  /** The replay folders' dropdown, first on the bar. */
+  folderSelect?: React.ReactNode;
 };
 
-export const FilterToolbar = React.forwardRef<HTMLInputElement, FilterToolbarProps>((props, ref) => {
+export const FilterToolbar = (props: FilterToolbarProps) => {
   const presenter = useReplayPresenter();
-  const { disabled } = props;
+  const { disabled, folderSelect } = props;
   const rootSlpPath = useSettings((store) => store.settings.rootSlpPath);
   const extraSlpPaths = useSettings((store) => store.settings.extraSlpPaths);
   const currentFolder = useReplays((store) => store.currentFolder);
   const storeSearchText = useReplayFilter((store) => store.searchText);
+  const storeText = useReplayFilter((store) => store.text);
   const setStoreSearchText = useReplayFilter((store) => store.setSearchText);
+  const players = useReplayFilter((store) => store.players);
+  const setPlayers = useReplayFilter((store) => store.setPlayers);
+  const resets = useReplayFilter((store) => store.resets);
   const sortBy = useReplayFilter((store) => store.sortBy);
   const hideShortGames = useReplayFilter((store) => store.hideShortGames);
   const setHideShortGames = useReplayFilter((store) => store.setHideShortGames);
   const setSortBy = useReplayFilter((store) => store.setSortBy);
   const sortDirection = useReplayFilter((store) => store.sortDirection);
   const setSortDirection = useReplayFilter((store) => store.setSortDirection);
-  const [searchText, setSearchText] = React.useState(storeSearchText ?? "");
+  const [searchText, setSearchText] = React.useState(storeText ?? "");
   const { showError } = useToasts();
 
   const refresh = React.useCallback(() => {
@@ -75,6 +68,14 @@ export const FilterToolbar = React.forwardRef<HTMLInputElement, FilterToolbarPro
     debounceChange(name);
   };
 
+  // The filter cleared (the empty list's button): the box's text too.
+  React.useEffect(() => {
+    if (resets > 0) {
+      debounceChange.cancel();
+      setSearchText("");
+    }
+  }, [resets, debounceChange]);
+
   // Reload when sort, hideShortGames, or searchText changes (backend filters)
   // Skip initial mount to avoid double-loading
   const isInitialMount = React.useRef(true);
@@ -87,87 +88,80 @@ export const FilterToolbar = React.forwardRef<HTMLInputElement, FilterToolbarPro
   }, [sortBy, sortDirection, hideShortGames, storeSearchText]);
 
   return (
-    <Outer>
-      <ButtonContainer>
-        <div style={{ display: "inline-block" }}>
-          <Button onClick={refresh} disabled={disabled} startIcon={<SyncIcon />}>
-            {Messages.refresh()}
-          </Button>
-        </div>
-        <Dropdown
-          value={{
-            key: sortBy,
-            dir: sortDirection,
-          }}
-          options={[
-            {
-              value: {
-                key: ReplaySortOption.DATE,
-                dir: SortDirection.DESC,
-              },
-              label: Messages.mostRecent(),
-            },
-            {
-              value: {
-                key: ReplaySortOption.DATE,
-                dir: SortDirection.ASC,
-              },
-              label: Messages.leastRecent(),
-            },
-            {
-              value: {
-                key: ReplaySortOption.GAME_DURATION,
-                dir: SortDirection.DESC,
-              },
-              label: Messages.longestGame(),
-            },
-            {
-              value: {
-                key: ReplaySortOption.GAME_DURATION,
-                dir: SortDirection.ASC,
-              },
-              label: Messages.shortestGame(),
-            },
-          ]}
-          onChange={(val) => {
-            setSortBy(val.key);
-            setSortDirection(val.dir);
-          }}
-        />
-        <Checkbox
-          label={Messages.hideShortGames()}
-          checked={hideShortGames}
-          onChange={() => setHideShortGames(!hideShortGames)}
-          css={css`
-            .MuiFormControlLabel-label {
-              font-size: 12px;
-            }
-          `}
-        />
-      </ButtonContainer>
-      <div>
-        <InputBase
-          ref={ref}
-          css={css`
-            background-color: black;
-            border-radius: 10px;
-            padding: 5px 10px;
-            font-size: 12px;
-          `}
-          endAdornment={
-            <InputAdornment position="end">
-              <IconButton size="small" onClick={() => setNameFilter("")} disabled={searchText.length === 0}>
-                {searchText.length > 0 ? <CloseIcon fontSize="inherit" /> : <SearchIcon fontSize="inherit" />}
+    <div className={styles.bar}>
+      <div className={styles.inner}>
+        <div className={styles.first}>
+          {folderSelect}
+          <ReplayPlayerSearch
+            className={styles.search}
+            value={players}
+            onChange={setPlayers}
+            text={searchText}
+            onTextChange={setNameFilter}
+            placeholder={Messages.search()}
+          />
+          <Tooltip title={Messages.refresh()}>
+            <span className={styles.refresh}>
+              <IconButton onClick={refresh} disabled={disabled} aria-label={Messages.refresh()} size="small">
+                <SyncIcon />
               </IconButton>
-            </InputAdornment>
-          }
-          placeholder={Messages.search()}
-          value={searchText}
-          onChange={(e) => {
-            setNameFilter(e.target.value);
-          }}
-        />
+            </span>
+          </Tooltip>
+        </div>
+        <div className={styles.second}>
+          <Dropdown
+            value={{
+              key: sortBy,
+              dir: sortDirection,
+            }}
+            options={[
+              {
+                value: {
+                  key: ReplaySortOption.DATE,
+                  dir: SortDirection.DESC,
+                },
+                label: Messages.mostRecent(),
+              },
+              {
+                value: {
+                  key: ReplaySortOption.DATE,
+                  dir: SortDirection.ASC,
+                },
+                label: Messages.leastRecent(),
+              },
+              {
+                value: {
+                  key: ReplaySortOption.GAME_DURATION,
+                  dir: SortDirection.DESC,
+                },
+                label: Messages.longestGame(),
+              },
+              {
+                value: {
+                  key: ReplaySortOption.GAME_DURATION,
+                  dir: SortDirection.ASC,
+                },
+                label: Messages.shortestGame(),
+              },
+            ]}
+            onChange={(val) => {
+              setSortBy(val.key);
+              setSortDirection(val.dir);
+            }}
+          />
+          <Checkbox
+            className={styles.hideShort}
+            label={Messages.hideShortGames()}
+            checked={hideShortGames}
+            onChange={() => setHideShortGames(!hideShortGames)}
+            css={css`
+              .MuiFormControlLabel-label {
+                font-size: 12px;
+              }
+            `}
+          />
+        </div>
       </div>
-    </Outer>
+    </div>
   );
-});
+};

@@ -171,7 +171,7 @@ export const IsoSelectionStep = () => {
         <QuickStartHeader>{Messages.selectMeleeIso()}</QuickStartHeader>
         <div>{Messages.thisApplicationUsesNtsc()}</div>
         <SkipLine>
-          <SkipLink type="button" onClick={() => navigate("/main/home/mods")}>
+          <SkipLink type="button" onClick={() => navigate("/main/other-games")}>
             {Messages.skip()}
           </SkipLink>
           {Messages.notHereForPPlus()}
