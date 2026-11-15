@@ -1,7 +1,7 @@
 import type { SocialPlayer, SocialState } from "@social/types";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 import { useAccount } from "@/lib/hooks/use_account";
 import { useSocial } from "@/lib/social/use_social";
@@ -20,23 +20,8 @@ const { ServiceProvider } = createServiceProvider({
   services: { notificationService: toasts } as unknown as Services,
 });
 
-/**
- * jsdom has no layout: each tab is 40 px of name plus 36 px of count (its 6 px gap, dot and digits), 12 px apart, so
- * both counts need 164 px and the open tab's alone 128 px; `room` is what the header's icons leave the tabs.
- */
-function renderHeader(room: number, tab: "online" | "friends" = "online") {
+function renderHeader(tab: "online" | "friends") {
   localStorage.setItem(TAB_KEY, JSON.stringify(tab));
-  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
-    const width =
-      this.getAttribute("role") === "tablist"
-        ? room
-        : this.getAttribute("role") === "tab"
-        ? 76
-        : this.parentElement?.getAttribute("role") === "tab" && this.hasAttribute("title")
-        ? 30
-        : 0;
-    return { width, height: 20, top: 0, left: 0, right: width, bottom: 20, x: 0, y: 0, toJSON: () => ({}) };
-  });
   useAccount.setState({ user: { uid: "me" }, userData: { playKey: {} } } as any);
   const state: SocialState = {
     status: "online",
@@ -58,39 +43,24 @@ function renderHeader(room: number, tab: "online" | "friends" = "online") {
   );
 }
 
-const countShown = (tab: "online" | "friends") => {
-  const count = screen.getByTestId(`online-tab-${tab}`).querySelector("[title]") as HTMLElement;
-  return !count.hasAttribute("data-hidden");
-};
+const countOf = (tab: "online" | "friends") =>
+  screen.getByTestId(`online-tab-${tab}`).querySelector("[title]") as HTMLElement | null;
 
 afterEach(() => {
-  vi.restoreAllMocks();
   cleanup();
   localStorage.clear();
 });
 
+// Sarah's board: "the numbers should always show" (they hid on the tab not open when the rail was narrow).
 describe("OnlinePlayers tab counts", () => {
-  it("shows both counts when they fit, exactly too", () => {
-    renderHeader(164);
-    expect(countShown("online")).toBe(true);
-    expect(countShown("friends")).toBe(true);
-  });
-
-  it("drops the other tab's count first", () => {
-    renderHeader(163);
-    expect(countShown("online")).toBe(true);
-    expect(countShown("friends")).toBe(false);
-  });
-
-  it("keeps the open tab's count, whichever it is", () => {
-    renderHeader(128, "friends");
-    expect(countShown("online")).toBe(false);
-    expect(countShown("friends")).toBe(true);
-  });
-
-  it("drops both when even the open tab's doesn't fit", () => {
-    renderHeader(127);
-    expect(countShown("online")).toBe(false);
-    expect(countShown("friends")).toBe(false);
+  it.each(["online", "friends"] as const)("shows both tabs' counts with the %s tab open", (open) => {
+    renderHeader(open);
+    for (const [tab, count] of [
+      ["online", "2"],
+      ["friends", "0"],
+    ] as const) {
+      expect(countOf(tab)?.textContent).toBe(count);
+      expect(countOf(tab)?.hasAttribute("data-hidden")).toBe(false);
+    }
   });
 });

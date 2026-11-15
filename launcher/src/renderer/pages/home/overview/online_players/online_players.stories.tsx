@@ -144,7 +144,7 @@ export const Narrow = () => {
 
 /**
  * The players rail as every page has it (app/shell/players_rail.tsx, 272 px), with the redesign mockup's 185 online:
- * both tabs' counts beside Online's icons; the Friends tab's extra icon leaves room for its own count only.
+ * both tabs' counts beside either tab's icons.
  */
 export const Rail = () => {
   useEffect(() => {

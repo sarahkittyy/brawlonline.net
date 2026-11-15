@@ -8,26 +8,16 @@
 
 /*
  * The header: Online / Friends as Home's own tabs (pages/home/tabs), each with its players online
- * after the chat's green dot, the Friends tab with its requests in the unread amber. Spaced as the
- * redesign's players rail (run/design/redesign kit.css: 14 px names 12 px apart, 28 px icons), so
- * in its 272 px both counts fit beside the Online tab's icons. When they don't (the Friends tab's
- * extra icon, big counts), the other tab's count goes first, then the open one's (countsFitIn
- * measures them; a fixed width can't know the font or the numbers).
+ * after the chat's green dot, the Friends tab with its requests in the unread amber. Both counts
+ * always show (Sarah's board: "the numbers should always show"), so the header is spaced to hold
+ * them in the 272 px players rail beside the Friends tab's three icons, in the disc's menu font
+ * too: 14 px names 8 px apart, 24 px icons, 6 px between the tabs and the icons.
  */
 .tabs {
   display: flex;
   align-self: stretch;
-  gap: 12px;
+  gap: 8px;
   min-width: 0;
-}
-
-/* countsFitIn: every count shown and the tabs given all the room the icons leave, for a moment. */
-.tabs.measureCounts {
-  flex: 1 1 0;
-}
-
-.tabs.measureCounts .tabCount[data-hidden] {
-  display: inline-flex;
 }
 
 .tab {
@@ -35,7 +25,7 @@
   position: relative;
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
   padding: 2px 0 0;
   border-bottom: solid 2px transparent;
   color: var(--text-primary);
@@ -72,16 +62,12 @@
   top: 1px;
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: 3px;
   height: 16px;
   color: var(--text-secondary);
   font-size: 12px;
   font-weight: 500;
   line-height: 1;
-}
-
-.tabCount[data-hidden] {
-  display: none;
 }
 
 .tabCount::before {
@@ -108,16 +94,17 @@
   line-height: 1;
 }
 
+/* The header's 14 px gap and 12 px right padding (content_block) are 6 and 8 px here. */
 .headIcons {
   display: flex;
   flex: none;
   align-items: center;
-  gap: 2px;
+  margin: 0 -4px 0 -8px;
 }
 
-/* 28 px icons, as the redesign's rail: the rail's fold button too. */
+/* 24 px icons: the rail's fold button too. */
 .headIcons button {
-  width: 28px;
+  width: 24px;
   padding: 4px 0;
 }
 
