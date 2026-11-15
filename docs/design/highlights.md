@@ -482,8 +482,11 @@ The page now:
 - **Teams** (Sarah's board, 2026-11-15: "the order / layout of the players makes no sense": the
   second team wrapped inside its "vs", one player a line beside it): a line per team, the first
   with an invisible "vs" so the names start in one column, the players in columns across the teams
-  (a grid of `--team-size` columns), "vs" centred on its line. A list under 600 px goes back to a
-  line per team that wraps under its own first player. The order is unchanged: a highlight's
+  (a grid of `--team-size` columns), "vs" centred on its line. A team is never more than one line
+  (Sarah's board, 2026-11-15: "it should never be allowed to fold into this 3 line design. 2 max,
+  one team on each line"): the columns grow alike up to their names' widths, so a line too narrow
+  shortens the longest names (an ellipsis); under 600 px of list the gaps are tighter. At 980 px with
+  the rail open, 2v2 names of 13 characters still fit whole. The order is unchanged: a highlight's
   attacker's team first, the attacker first in it (as X vs Y in a 1v1); a clip's teams by team.
 
 Looked at in a scratch launcher (worktree build, a copy of the profile without the login, Sarah's

@@ -606,9 +606,9 @@ const GameWho = ({ data, stocks }: { data: ReplayHighlights; stocks: Map<number,
 
 /**
  * X vs Y: each later side with its "vs" in front, so a line too narrow for them all breaks before a "vs", never
- * inside a name (Sarah's board: names must not be cut off at the smallest window). In teams every team is a line of
- * its own (Sarah's board, 2026-11-15: a team wrapping inside its "vs" stacked its players beside it, "the order /
- * layout of the players makes no sense"): the first with a hidden "vs" so the teams' names start in one column.
+ * inside a name (Sarah's board: names must not be cut off at the smallest window). In teams every team is one line,
+ * never more (Sarah's board, 2026-11-15: "2 max, one team on each line"), the first with a hidden "vs" so the teams'
+ * names start in one column; a line too narrow shortens the longest names instead.
  */
 const Sides = ({
   sides,

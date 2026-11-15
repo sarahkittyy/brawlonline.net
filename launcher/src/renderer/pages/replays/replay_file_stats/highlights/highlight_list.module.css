@@ -342,11 +342,12 @@
   gap: 10px;
 }
 
-/* Teams: a line each, "vs" before every team but the first (there it only holds the column), the players in columns
-   across the teams (--team-size of them). */
+/* Teams: a line each and never more (Sarah's board: "2 max, one team on each line"), "vs" before every team but the
+   first (there it only holds the column), the players in columns across the teams (--team-size of them). The columns
+   grow alike up to their names' widths, so where a line is too narrow only the longest names shorten. */
 .who.teams {
   display: grid;
-  grid-template-columns: auto repeat(var(--team-size, 2), max-content);
+  grid-template-columns: auto repeat(var(--team-size, 2), minmax(0, max-content));
   align-items: center;
   justify-content: start;
   gap: 4px 10px;
@@ -357,22 +358,29 @@
   display: contents;
 }
 
-/* A narrow list: the columns don't fit, so a line per team as words wrap, a team too long for its line going on under
-   its own first player. */
+.teams .chip,
+.teams .name {
+  min-width: 0;
+}
+
+.teams .charIcon,
+.teams .pips,
+.teams .stockCount {
+  flex: none;
+}
+
+/* A narrow list (the smallest window with the players' rail open): tighter, so names shorten as little as can be. */
 @container (max-width: 600px) {
   .who.teams {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-start;
+    column-gap: 8px;
   }
 
-  .teams .versus {
-    display: flex;
-    align-items: center;
+  .teams .chip {
+    gap: 4px;
   }
 
-  .teams .side {
-    display: flex;
+  .teams .pips {
+    gap: 2px;
   }
 }
 
