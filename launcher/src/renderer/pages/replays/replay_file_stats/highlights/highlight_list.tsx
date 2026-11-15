@@ -413,7 +413,7 @@ export const HighlightRows = ({
                     data-row={i}
                     className={`${styles.row} ${i === playing ? styles.playing : ""} ${
                       ticked.has(entry.key) ? styles.selected : ""
-                    } ${row.kind === "manual" ? styles.removable : ""}`}
+                    } ${row.kind === "manual" ? `${styles.removable} ${styles.manualRow}` : ""}`}
                     onClick={(e) => clickRow(i, e)}
                     onDoubleClick={() => void play(i)}
                   >
@@ -426,11 +426,18 @@ export const HighlightRows = ({
                     {row.kind === "highlight" ? (
                       <HighlightWho row={row} data={game} players={players} stocks={stocks} />
                     ) : row.kind === "manual" ? (
-                      <span className={styles.who}>
-                        <CropIcon fontSize="small" className={styles.clipIcon} />
-                        <span className={styles.vs}>{Messages.manualClip(clipLength(row))}</span>
-                        <GameWho data={game} stocks={stocks} />
-                      </span>
+                      // Two lines (Sarah's board: on one it wrapped into four): its players, then the clip.
+                      <>
+                        <span className={styles.clipHead}>
+                          <CropIcon fontSize="small" className={styles.clipIcon} />
+                          <span className={styles.vs}>{Messages.manualClip(clipLength(row))}</span>
+                        </span>
+                        <span
+                          className={`${styles.who} ${styles.clipPlayers} ${isOneOnOne(game) ? styles.oneLine : ""}`}
+                        >
+                          <GameWho data={game} stocks={stocks} />
+                        </span>
+                      </>
                     ) : (
                       <span className={styles.who}>
                         <ContentCutIcon fontSize="small" className={styles.clipIcon} />
@@ -579,6 +586,9 @@ const GameWhere = ({ stageId, date }: { stageId?: number | null; date?: string }
     </span>
   );
 };
+
+/** Two players, no teams: X vs Y, which keeps to one line (the names shorten). */
+const isOneOnOne = (data: ReplayHighlights) => !data.isTeams && data.players.length === 2;
 
 /** Everyone in the game: one vs another; in teams, team vs team. */
 const GameWho = ({ data, stocks }: { data: ReplayHighlights; stocks: Map<number, Stocks> }) => {

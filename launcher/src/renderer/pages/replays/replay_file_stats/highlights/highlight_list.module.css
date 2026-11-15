@@ -315,6 +315,58 @@
   opacity: 0.8;
 }
 
+/* A manual clip's row on two lines (Sarah's board: on one it wrapped into four): its players across the row, then the
+   clip with the stage and date at the right (the Highlights tab). The time stays in the middle, as the buttons. */
+.row.manualRow {
+  display: grid;
+  grid-template-areas:
+    "time players players"
+    "time head where";
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  row-gap: 6px;
+}
+
+.manualRow .time {
+  grid-area: time;
+}
+
+.manualRow .where {
+  grid-area: where;
+}
+
+.clipHead {
+  display: flex;
+  grid-area: head;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.clipPlayers {
+  grid-area: players;
+}
+
+/* X vs Y keeps to its line: the names shorten (ellipsis) rather than "vs" and Y going under X.
+   (A grid: the sides grow alike up to their names' widths, so only a name too long for its half shortens.) */
+.who.oneLine {
+  display: grid;
+  grid-template-columns: minmax(0, max-content) auto minmax(0, max-content);
+  justify-content: start;
+}
+
+.oneLine .side,
+.oneLine .chip,
+.oneLine .name {
+  min-width: 0;
+}
+
+.oneLine .vs,
+.oneLine .charIcon,
+.oneLine .pips,
+.oneLine .stockCount {
+  flex: none;
+}
+
 .chip {
   display: inline-flex;
   align-items: center;

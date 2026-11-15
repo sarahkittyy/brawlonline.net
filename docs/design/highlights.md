@@ -414,8 +414,10 @@ change). The copy is a replay like any other, in the Replays list too.
 **Replays > Highlights**: the sidebar's **Manual Clips** (between L+R+Z Highlights and Favorites;
 hovering it: "Click Clip on the seek bar of a replay or a spectated game, then Save as
 highlight.") lists them newest saved first; All highlights lists them last, under "Manual clips",
-and Favorites the starred ones; the player search applies. A row: a crop icon, "Clip (0:20)" and
-every player of the game (teams: team vs team), the game's date; it plays, renders (named
+and Favorites the starred ones; the player search applies. A row, on two lines (2026-11-15, Sarah's
+board: on one it wrapped into four): every player of the game (teams: team vs team; a 1v1 keeps
+X vs Y on its line, a name too long for its half shortening), then a crop icon and "Clip (0:20)",
+with the stage and the game's date at the right; it plays, renders (named
 `<date> Clip - sarahkitty (Snake) vs t3o7 (Lucas).mp4`) and stars as the others do, and has a
 remove button left of its Play button (no undo). A replay's stats page lists its manual clips too, also
 when it has no highlight data (a spectated game's copy). My and Opponent Highlights don't list
