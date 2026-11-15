@@ -14,7 +14,7 @@ describe("PlayButtonsView", () => {
     fireEvent.click(getByTestId("play-twos"));
     expect(onPlay.mock.calls).toEqual([["ranked"], ["unranked"], ["twos"]]);
     expect(getByTestId("play-twos-count").textContent).toBe("2 in queue · 8 in game");
-    expect(container.textContent).toBe("Play unrankedPlay ranked2 in queue · 8 in gamePlay 2v2");
+    expect(container.textContent).toBe("Play unrankedPlay rankedPlay 2v22 in queue · 8 in game");
   });
 
   it("shows each search's ETA beside Unranked and Ranked, 10+ min when there is none", () => {

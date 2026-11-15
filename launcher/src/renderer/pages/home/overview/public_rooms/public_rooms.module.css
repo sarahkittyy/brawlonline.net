@@ -517,3 +517,42 @@
 .row.disabled .action {
   color: var(--text-dim);
 }
+
+/* Round 4 (Sarah's board): Public rooms in an outlined panel again, its bar the panel's head. */
+.block {
+  margin-top: 20px;
+  margin-bottom: 16px;
+  border: 1px solid var(--line-soft);
+  border-radius: 10px;
+  background-color: color-mix(in oklab, var(--page) 96%, white);
+  overflow: hidden;
+}
+
+.bar {
+  margin: 0;
+  padding: 8px 12px 8px 16px;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.list {
+  padding: 6px;
+}
+
+.row:hover,
+.row.hover {
+  background-color: var(--raised-hover);
+}
+
+/* The room code box is one outlined control: no underline of its own, the whole outline lights on focus. */
+.bar .joinCode div::before,
+.bar .joinCode div::after {
+  display: none;
+}
+
+.bar .joinCode > div > div {
+  background-color: transparent;
+}
+
+.bar .joinCode:focus-within {
+  border-color: var(--accent-primary);
+}

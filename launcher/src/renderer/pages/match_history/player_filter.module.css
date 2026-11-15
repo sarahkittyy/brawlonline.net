@@ -1,0 +1,56 @@
+/* Match history's player filter (player_filter.tsx). */
+.filter {
+  flex: 1 1 260px;
+  min-width: 160px;
+  max-width: 420px;
+}
+
+/* As the other search boxes: one outlined control on the sidebar's colour, the text at 13 px. */
+.filter > div > div {
+  min-height: 34px;
+  padding-top: 2px !important;
+  padding-bottom: 2px !important;
+  border: 1px solid var(--line-soft);
+  border-radius: 6px;
+  background-color: var(--shell);
+  font-size: 13px;
+}
+
+.filter > div > div:focus-within {
+  border-color: var(--accent-primary);
+}
+
+.filter > div > div::before,
+.filter > div > div::after {
+  display: none;
+}
+
+.filter fieldset {
+  border: none;
+}
+
+.option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.name {
+  font-size: 14px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.code {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.tag {
+  font-size: 12px !important;
+  letter-spacing: 0.02em;
+}

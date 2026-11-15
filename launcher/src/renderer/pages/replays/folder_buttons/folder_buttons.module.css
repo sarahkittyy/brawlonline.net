@@ -33,3 +33,22 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+/* In a footer row (Replays): side by side, never wrapping; in a narrow footer only the icons (the tooltips name them). */
+.row {
+  flex-direction: row;
+  flex: none;
+  padding-bottom: 0;
+}
+
+.row .button {
+  width: auto;
+  padding: 4px 8px;
+  white-space: nowrap;
+}
+
+@container (max-width: 760px) {
+  .row .label {
+    display: none;
+  }
+}

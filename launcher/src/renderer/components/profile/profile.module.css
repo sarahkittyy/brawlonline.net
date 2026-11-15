@@ -645,3 +645,22 @@
 .accountLink:hover {
   color: var(--text-primary) !important;
 }
+
+/* The player's own account links sit on the footer's left, beside the link (no row of their own). */
+.footer .account {
+  justify-content: flex-start;
+  margin-top: 0;
+}
+
+/* The player's own profile: Switch account and Log out, then the link, on one row (the link gives way first). */
+.footer:has(.account) {
+  flex-wrap: nowrap;
+}
+
+.footer:has(.account) .actions {
+  flex: none;
+}
+
+.footer .account .todo {
+  flex-basis: auto;
+}

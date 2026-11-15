@@ -1118,3 +1118,161 @@
   text-transform: none;
   font-size: 13px;
 }
+
+/* ---- Round 4 (Sarah's board): the left / right split again, each side an outlined panel; one column when narrow. ---- */
+.page {
+  container-type: inline-size;
+  overflow: hidden;
+  padding: 20px 28px 16px;
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 6px;
+}
+
+.headControls {
+  display: flex;
+  align-items: center;
+  flex: none;
+}
+
+.introRow {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+  margin-bottom: 14px;
+}
+
+.introRow .intro {
+  flex: 1;
+  max-width: 640px;
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--text-dim);
+}
+
+.introRow .beta {
+  flex: none;
+  margin: 0;
+  text-align: right;
+  font-size: 12px;
+}
+
+.columns {
+  flex: 1;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 16px;
+  min-height: 0;
+}
+
+.column {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.section {
+  flex: 1 0 auto;
+  border: 1px solid var(--line-soft);
+  border-radius: 10px;
+  background-color: color-mix(in oklab, var(--page) 96%, white);
+}
+
+.section .bar {
+  margin: 0;
+  min-height: 52px;
+  padding: 8px 12px 8px 16px;
+  border-bottom: 1px solid var(--line-soft);
+  box-sizing: border-box;
+}
+
+.section .room,
+.section .builds {
+  padding: 6px;
+}
+
+.roomPanel {
+  margin-top: 0;
+  flex: none;
+}
+
+/* The room code box is one outlined control, lit on focus (no underline of its own). */
+.codeBox:focus-within {
+  border-color: var(--accent-primary);
+}
+
+.codeBox div::before,
+.codeBox div::after {
+  display: none;
+}
+
+.codeBox > div > div {
+  background-color: transparent;
+}
+
+@container (max-width: 600px) {
+  .page {
+    overflow-y: auto;
+  }
+
+  .columns {
+    flex: none;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .column {
+    min-height: auto;
+    overflow: visible;
+  }
+
+  .introRow {
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .introRow .beta {
+    text-align: left;
+  }
+}
+
+/* A game's row in the narrow column: its name has the line (the chips wrap under it), the files under that, the edit
+   and remove buttons at the top right. */
+.buildHead {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: start;
+  gap: 4px;
+}
+
+.buildName {
+  flex-wrap: wrap;
+  row-gap: 4px;
+  align-items: center;
+}
+
+.buildName .name {
+  flex: 0 1 auto;
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.parts {
+  grid-column: 1 / -1;
+  grid-row: 2;
+}
+
+/* The host and the game under a room's name wrap rather than lose the game's name. */
+.roomGame {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}

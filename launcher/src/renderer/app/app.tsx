@@ -7,13 +7,13 @@ import type { NavItem } from "@/app/shell/sidebar";
 import { Sidebar } from "@/app/shell/sidebar";
 import { AuthGuard } from "@/components/auth_guard";
 import { LoginNotice } from "@/components/login_notice/login_notice";
+import { ProfileDialog } from "@/components/profile/profile_dialog";
 import { RosettaInstallDialog } from "@/components/rosetta_install_dialog/rosetta_install_dialog";
 import { SocialRoot } from "@/components/social/social_root";
 import { installPPlusBuildDialogPreview, PPlusBuildDialog } from "@/lib/pplus/pplus_build_dialog";
 import { installReplayVersionDialogPreview, ReplayVersionDialog } from "@/lib/pplus/replay_version_dialog";
 import { refreshPPlusVersions } from "@/lib/pplus/use_pplus_versions";
 import { ProjectPunchDialog } from "@/lib/project_punch/project_punch_dialog";
-import { ProfileNavigator } from "@/pages/profile/profile_page";
 import type { AuthUser } from "@/services/auth/types";
 
 type MenuItem = NavItem & {
@@ -53,26 +53,29 @@ export const App = React.memo(({ menuItems }: { menuItems: readonly MainMenuItem
       }}
     >
       <Sidebar items={menuItems.filter((item) => !item.hidden)} />
-      <main style={{ flex: 1, minWidth: 0, overflow: "auto", display: "flex", backgroundColor: "var(--page)" }}>
-        <Routes>
-          {menuItems.map((item) => {
-            const element = item.private ? (
-              <AuthGuard fallback={<LoginNotice />} render={(user) => <item.Component user={user} />} />
-            ) : (
-              <item.Component />
-            );
-            return <Route key={item.subpath} path={`${item.subpath}/*`} element={element} />;
-          })}
-          {/* The Home tabs' old addresses (route memory, links, page requests). */}
-          <Route path="home/spectate/*" element={<Navigate replace={true} to="/main/spectate" />} />
-          <Route path="home/mods/*" element={<Navigate replace={true} to="/main/other-games" />} />
-          <Route path="home/*" element={<Navigate replace={true} to="/main/play" />} />
-          {defaultRoute && <Route path="*" element={<Navigate replace={true} to={`${defaultRoute.subpath}`} />} />}
-        </Routes>
-      </main>
+      {/* The page, with the chat bar under it (its windows open over the page, never over the sidebar or rail). */}
+      <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", backgroundColor: "var(--page)" }}>
+        <main style={{ flex: 1, minWidth: 0, minHeight: 0, overflow: "auto", display: "flex" }}>
+          <Routes>
+            {menuItems.map((item) => {
+              const element = item.private ? (
+                <AuthGuard fallback={<LoginNotice />} render={(user) => <item.Component user={user} />} />
+              ) : (
+                <item.Component />
+              );
+              return <Route key={item.subpath} path={`${item.subpath}/*`} element={element} />;
+            })}
+            {/* The Home tabs' old addresses (route memory, links, page requests). */}
+            <Route path="home/spectate/*" element={<Navigate replace={true} to="/main/spectate" />} />
+            <Route path="home/mods/*" element={<Navigate replace={true} to="/main/other-games" />} />
+            <Route path="home/*" element={<Navigate replace={true} to="/main/play" />} />
+            {defaultRoute && <Route path="*" element={<Navigate replace={true} to={`${defaultRoute.subpath}`} />} />}
+          </Routes>
+        </main>
+        <SocialRoot />
+      </div>
       <PlayersRail />
-      <SocialRoot />
-      <ProfileNavigator />
+      <ProfileDialog />
       <LoginDialog />
       <ReplayVersionDialog />
       <PPlusBuildDialog />

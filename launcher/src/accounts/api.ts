@@ -21,6 +21,7 @@ import {
   ipc_accountsMatchHistory,
   ipc_accountsMe,
   ipc_accountsMyRulesets,
+  ipc_accountsOpponents,
   ipc_accountsProfile,
   ipc_accountsPublicUser,
   ipc_accountsPublishRuleset,
@@ -95,6 +96,9 @@ const accountsApi: AccountsApi = {
   },
   async leaderboard(query) {
     return unwrap(await ipc_accountsLeaderboard.renderer!.trigger(query));
+  },
+  async opponents(uid, q) {
+    return unwrap(await ipc_accountsOpponents.renderer!.trigger({ uid, q }));
   },
   async friendsLeaderboard(uid) {
     return unwrap(await ipc_accountsFriendsLeaderboard.renderer!.trigger({ uid }));

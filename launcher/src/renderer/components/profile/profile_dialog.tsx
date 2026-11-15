@@ -48,18 +48,7 @@ export const ProfileDialog = React.memo(function ProfileDialog() {
   );
 });
 
-export const ProfileDialogBody = ({
-  uid,
-  seedName,
-  onClose,
-  page = false,
-}: {
-  uid: string;
-  seedName?: string;
-  onClose: () => void;
-  /** On the profile page (docs/design/launcher-redesign.md): no X, the page stays. */
-  page?: boolean;
-}) => {
+const ProfileDialogBody = ({ uid, seedName, onClose }: { uid: string; seedName?: string; onClose: () => void }) => {
   const { backendService } = useServices();
   const { showSuccess } = useToasts();
   const myUid = useAccount((s) => s.user?.uid);
@@ -77,7 +66,7 @@ export const ProfileDialogBody = ({
   return (
     <div className={styles.dialog}>
       <ProfileCorner
-        onClose={page ? undefined : onClose}
+        onClose={onClose}
         edit={
           own && data ? (
             editMode ? (
@@ -110,7 +99,14 @@ export const ProfileDialogBody = ({
       {data ? (
         <ProfileView
           profile={data}
-          actions={<ProfileActions profile={data} onDone={page ? noop : onClose} />}
+          actions={
+            own ? (
+              // Switch account and Log out on the left of the link, one row (Sarah's board).
+              <OwnAccountActions ruled={false} onClose={onClose} />
+            ) : (
+              <ProfileActions profile={data} onDone={onClose} />
+            )
+          }
           nameExtra={<ProfileFriendPill profile={data} />}
           editing={own && editMode ? editing : null}
           onCopyLink={(link) => void navigator.clipboard.writeText(link).then(() => showSuccess(Messages.linkCopied()))}
@@ -129,12 +125,11 @@ export const ProfileDialogBody = ({
           <div>{error ? Messages.couldNotLoad() : Messages.notFound()}</div>
         </div>
       )}
-      {own && <OwnAccountActions ruled={!data?.link} onClose={page ? noop : onClose} />}
+      {/* Without the profile (it couldn't load) the account links still show, under the message. */}
+      {own && !data && !isLoading && <OwnAccountActions ruled={true} onClose={onClose} />}
     </div>
   );
 };
-
-const noop = () => undefined;
 
 /** Top right: on the player's own profile the pencil (the check in edit mode), then the X. */
 export const ProfileCorner = ({ edit, onClose }: { edit?: React.ReactNode; onClose?: () => void }) => (

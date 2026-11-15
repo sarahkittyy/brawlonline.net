@@ -15,6 +15,7 @@ import type {
   LeaderboardPage,
   MatchHistoryFilter,
   MatchHistoryPage,
+  MatchOpponent,
   MyRulesets,
   PlayerProfile,
   ProfileUpdate,
@@ -124,6 +125,10 @@ export class AccountsManager {
     query: { mode: MatchHistoryFilter; limit?: number; before?: string; opponent?: string },
   ): Promise<AccountsResult<MatchHistoryPage>> {
     return this._withSession(uid, (token) => this.client.matchHistory(token, query));
+  }
+
+  opponents(uid: string, q: string): Promise<AccountsResult<MatchOpponent[]>> {
+    return this._withSession(uid, (token) => this.client.opponents(token, q));
   }
 
   friendsLeaderboard(uid: string): Promise<AccountsResult<LeaderboardPage>> {

@@ -176,11 +176,21 @@ export const ReplayBrowser = React.memo(() => {
         </div>
       </div>
 
-      <Footer>
+      <Footer
+        css={css`
+          container-type: inline-size;
+          gap: 12px;
+        `}
+      >
         <div
           css={css`
             display: flex;
             align-items: center;
+            flex: 1;
+            min-width: 0;
+            & > * {
+              min-width: 0;
+            }
           `}
         >
           <div>
@@ -198,14 +208,18 @@ export const ReplayBrowser = React.memo(() => {
             label={Messages.currentFolder()}
             css={css`
               margin-left: 10px;
+              min-width: 0;
+              & > * {
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+              }
             `}
           >
             {currentFolder}
           </LabelledText>
-          <div style={{ marginLeft: 16 }}>
-            <FolderButtons />
-          </div>
         </div>
+        <FolderButtons row={true} />
         <div
           css={css`
             display: flex;
@@ -299,12 +313,25 @@ const FolderSelect = ({
       value={flat.some((f) => f.folder.fullPath === value) ? value : ""}
       onChange={(e) => onChange(e.target.value)}
       renderValue={(v) => (
-        <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-          <FolderIcon fontSize="small" style={{ color: "var(--text-dim)" }} />
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 6, minWidth: 0, lineHeight: 1 }}>
+          <FolderIcon fontSize="small" style={{ color: "var(--text-dim)", flex: "none" }} />
           {flat.find((f) => f.folder.fullPath === v)?.folder.name ?? ""}
         </span>
       )}
-      sx={{ minWidth: 150, maxWidth: 220, height: 34, flexShrink: 0 }}
+      sx={{
+        minWidth: 150,
+        maxWidth: 220,
+        height: 34,
+        flexShrink: 0,
+        // The folder icon and the name on one centred line.
+        "& .MuiSelect-select": {
+          display: "flex",
+          alignItems: "center",
+          paddingTop: 0,
+          paddingBottom: 0,
+          height: "100%",
+        },
+      }}
       inputProps={{ "data-testid": "replay-folder" }}
     >
       {flat.map(({ folder, depth }) => (

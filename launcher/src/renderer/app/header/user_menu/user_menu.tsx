@@ -3,7 +3,6 @@ import DialogContentText from "@mui/material/DialogContentText";
 import { clsx } from "clsx";
 import log from "electron-log";
 import React from "react";
-import { useMatch } from "react-router-dom";
 
 import { ConfirmationModal } from "@/components/confirmation_modal/confirmation_modal";
 import { MAIN_PICTURE_HOVER, MainPicture } from "@/components/main_picture/main_picture";
@@ -58,7 +57,6 @@ export const UserMenu = ({
   const openProfile = useProfileView((store) => store.open);
   const ownProfileOpened = useOwnProfileHint((store) => store.opened);
   const rankedProfile = useAccount((store) => store.userData?.rankedNetplayProfile);
-  const onOwnProfile = useMatch(`/main/profile/${encodeURIComponent(user.uid)}`) != null;
   const accountDialog = useAccountDialogs((store) => store.open);
   const closeAccountDialog = useAccountDialogs((store) => store.close);
 
@@ -197,7 +195,6 @@ export const UserMenu = ({
         onClick={() => openProfile({ uid: user.uid, displayName, connectCode: userData?.playKey?.connectCode })}
         className={clsx(
           variant === "sidebar" ? styles.sidebarCard : styles.userInfoButton,
-          variant === "sidebar" && onOwnProfile && styles.sidebarCardOn,
           MAIN_PICTURE_HOVER,
           glowProfile && styles.profileGlow,
         )}

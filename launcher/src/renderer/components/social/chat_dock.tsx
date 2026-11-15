@@ -164,7 +164,9 @@ const TabHeader = React.forwardRef<
           <FriendsIcon style={{ fontSize: 14 }} />
         </span>
       )}
-      <InviteButton player={player} />
+      <span className={styles.tabInvite}>
+        <InviteButton player={player} />
+      </span>
       <button
         type="button"
         className={styles.iconButton}

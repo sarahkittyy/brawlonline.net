@@ -28,6 +28,7 @@ import {
   ipc_accountsMatchHistory,
   ipc_accountsMe,
   ipc_accountsMyRulesets,
+  ipc_accountsOpponents,
   ipc_accountsProfile,
   ipc_accountsPublicUser,
   ipc_accountsPublishRuleset,
@@ -77,6 +78,7 @@ export default function setupAccountsIpc() {
       await manager.matchHistory(uid, { mode, limit, before, opponent }),
   );
   ipc_accountsFriendsLeaderboard.main!.handle(async ({ uid }) => await manager.friendsLeaderboard(uid));
+  ipc_accountsOpponents.main!.handle(async ({ uid, q }) => await manager.opponents(uid, q));
   ipc_accountsRooms.main!.handle(async ({ uid }) => await manager.rooms(uid));
   ipc_accountsSetRoomName.main!.handle(async ({ uid, kind, name }) => await manager.setRoomName(uid, kind, name));
   ipc_accountsAdminPlayers.main!.handle(async ({ uid, q }) => await manager.adminPlayers(uid, q));

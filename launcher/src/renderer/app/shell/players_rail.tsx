@@ -1,6 +1,5 @@
 import KeyboardDoubleArrowLeftRoundedIcon from "@mui/icons-material/KeyboardDoubleArrowLeftRounded";
 import KeyboardDoubleArrowRightRoundedIcon from "@mui/icons-material/KeyboardDoubleArrowRightRounded";
-import MailOutlineRoundedIcon from "@mui/icons-material/MailOutlineRounded";
 import IconButton from "@mui/material/IconButton";
 import Tooltip from "@mui/material/Tooltip";
 import useMediaQuery from "@mui/material/useMediaQuery";
@@ -28,7 +27,7 @@ const NARROW = "(max-width: 1149px)";
 
 /**
  * The right column on every page (docs/design/launcher-redesign.md §2): the Online / Friends panel that was on Home.
- * It folds to a strip of the friends online (a click opens a chat with one) and the unread envelope.
+ * It folds to a strip of the friends online (a click opens a chat with one); unread messages count on the open button.
  */
 export const PlayersRail = React.memo(function PlayersRail() {
   const [choice, setChoice] = useLocalStorage<RailChoice>(RAIL_KEY, "auto");
@@ -71,6 +70,7 @@ const FoldedRail = ({ onOpen }: { onOpen: () => void }) => {
       <Tooltip title={Messages.showPlayers()} placement="left">
         <IconButton className={styles.foldButton} aria-label={Messages.showPlayers()} onClick={onOpen}>
           <KeyboardDoubleArrowLeftRoundedIcon />
+          {unread > 0 && <span className={styles.unread}>{unread}</span>}
         </IconButton>
       </Tooltip>
       <Tooltip title={SocialMessages.friends()} placement="left">
@@ -81,13 +81,6 @@ const FoldedRail = ({ onOpen }: { onOpen: () => void }) => {
       {friendsOnline.map((p) => (
         <FriendPicture key={p.uid} player={p} onClick={() => openTab(p.uid, true)} />
       ))}
-      <span className={styles.rule} />
-      <Tooltip title={SocialMessages.message()} placement="left">
-        <IconButton className={styles.foldButton} aria-label={SocialMessages.message()} onClick={onOpen}>
-          <MailOutlineRoundedIcon />
-          {unread > 0 && <span className={styles.unread}>{unread}</span>}
-        </IconButton>
-      </Tooltip>
     </aside>
   );
 };

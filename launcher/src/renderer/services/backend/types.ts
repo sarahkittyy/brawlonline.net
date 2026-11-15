@@ -6,6 +6,7 @@ import type {
   LeaderboardPage,
   MatchHistoryFilter,
   MatchHistoryPage,
+  MatchOpponent,
   MyRulesets,
   PlayerProfile,
   ProfileUpdate,
@@ -32,6 +33,7 @@ export type {
   MatchHistoryItem,
   MatchHistoryPage,
   MatchHistoryPlayer,
+  MatchOpponent,
   MyRulesets,
   NameTag,
   PlayerProfile,
@@ -105,6 +107,8 @@ export interface BackendService {
     before?: string,
     options?: { opponent?: string; limit?: number },
   ): Promise<MatchHistoryPage>;
+  /** Players the logged-in player has played with whose name or code contains `q` (Match history's filter). */
+  fetchOpponents(q: string): Promise<MatchOpponent[]>;
   /** The logged-in player's and their friends' leaderboard rows (the leaderboard's Friends filter). */
   fetchFriendsLeaderboard(): Promise<LeaderboardPage>;
   /** Players online and the public rooms (Home > Overview); needs a login. */

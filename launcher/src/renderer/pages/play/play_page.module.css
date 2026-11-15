@@ -171,3 +171,36 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+/* Round 4 (Sarah's board): the Play buttons on the left, the rank on the right; narrow windows shrink the card first. */
+.panel {
+  container-type: inline-size;
+}
+
+.rankedSide {
+  display: flex;
+  justify-content: flex-end;
+  container-type: normal;
+}
+
+@container (max-width: 600px) {
+  .ranked {
+    --rank-badge-size: 56px;
+
+    gap: 10px;
+  }
+
+  .spark {
+    display: none;
+  }
+
+  .rating {
+    font-size: 24px;
+  }
+}
+
+@container (max-width: 500px) {
+  .sub {
+    display: none;
+  }
+}

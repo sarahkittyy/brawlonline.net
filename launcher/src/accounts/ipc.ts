@@ -13,6 +13,7 @@ import type {
   LeaderboardPage,
   MatchHistoryFilter,
   MatchHistoryPage,
+  MatchOpponent,
   MyRulesets,
   PlayerProfile,
   ProfileUpdate,
@@ -97,6 +98,12 @@ export const ipc_accountsLeaderboard = makeEndpoint.main(
   "accounts_leaderboard",
   <{ limit?: number; after?: string; q?: string }>_,
   <R<LeaderboardPage>>_,
+);
+
+export const ipc_accountsOpponents = makeEndpoint.main(
+  "accounts_opponents",
+  <{ uid: string; q: string }>_,
+  <R<MatchOpponent[]>>_,
 );
 
 export const ipc_accountsFriendsLeaderboard = makeEndpoint.main(

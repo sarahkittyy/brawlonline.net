@@ -128,11 +128,8 @@ export const ModsView = (props: ModsViewProps) => {
   return (
     <div className={styles.page}>
       <div className={styles.head}>
-        <div className={styles.headText}>
-          <h1 className={styles.title}>{Messages.tabLabel()}</h1>
-          <p className={styles.intro}>{Messages.intro()}</p>
-        </div>
-        <div className={styles.headSide}>
+        <h1 className={styles.title}>{Messages.tabLabel()}</h1>
+        <div className={styles.headControls}>
           {state && (
             <ControllerMenu
               controller={state.controller}
@@ -144,13 +141,16 @@ export const ModsView = (props: ModsViewProps) => {
               onOpen={props.onRefreshControllers}
             />
           )}
-          <p className={styles.beta}>
-            {Messages.betaLine1()}
-            <br />
-            {Messages.betaLine2Before()}
-            <ExternalLink href={FEEDBACK_URL}>{Messages.discord()}</ExternalLink>
-          </p>
         </div>
+      </div>
+      <div className={styles.introRow}>
+        <p className={styles.intro}>{Messages.intro()}</p>
+        <p className={styles.beta}>
+          {Messages.betaLine1()}
+          <br />
+          {Messages.betaLine2Before()}
+          <ExternalLink href={FEEDBACK_URL}>{Messages.discord()}</ExternalLink>
+        </p>
       </div>
       {shownError && (
         <div className={clsx(styles.error, styles.dismissable)}>
@@ -166,85 +166,91 @@ export const ModsView = (props: ModsViewProps) => {
           )}
         </div>
       )}
-      {/* The player's own room while Dolphin runs one, then the public rooms and the player's games. */}
-      {state?.running && (
-        <RoomPanel
-          status={status}
-          onRequest={(request) => {
-            if (request.op === "public") {
-              setHostPublic(request.public);
-            }
-            props.onRequest(request);
-          }}
-          onCopyCode={props.onCopyCode}
-          yourRoom={props.yourRoom}
-          onRename={props.onRenameRoom}
-          onAdminRename={props.onAdminRenameRoom}
-          onCodes={roomBuild && props.onCodes ? () => props.onCodes?.(roomBuild) : undefined}
-        />
-      )}
-      <PublicRoomsBlock
-        rooms={props.publicRooms}
-        ownCode={status?.room?.code ?? null}
-        builds={state?.builds ?? []}
-        discAlone={state?.discAlone}
-        roomGames={state?.roomGames}
-        onSetRoomGame={props.onSetRoomGame}
-        checkRoomCards={props.checkRoomCards}
-        disabled={!!state?.running || props.startingBuildId !== null}
-        onJoin={props.onJoin}
-        onJoinCode={props.onJoinCode}
-        onMissingGame={props.onMissingGame}
-        onFixBuild={props.onFixBuild}
-        onLogIn={props.onLogIn}
-        onAdminRename={props.onAdminRenameRoom}
-      />
-      <section className={styles.section}>
-        <div className={styles.bar}>
-          <h2 className={styles.heading}>{Messages.yourBuilds()}</h2>
-          <div className={styles.addButtons}>
-            <Tooltip title={Messages.addFolderTooltip()}>
-              <Button
-                size="small"
-                color="inherit"
-                classes={{ startIcon: styles.addIcon }}
-                startIcon={<CreateNewFolderOutlinedIcon />}
-                onClick={props.onAddFolder}
-              >
-                <span className={styles.addLabel}>{Messages.addFolder()}</span>
-              </Button>
-            </Tooltip>
-            <Tooltip title={Messages.addBuildTooltip()}>
-              <Button
-                size="small"
-                variant="outlined"
-                color="inherit"
-                classes={{ startIcon: styles.addIcon }}
-                startIcon={<AddRoundedIcon />}
-                onClick={props.onAddBuild}
-              >
-                <span className={styles.addLabel}>{Messages.addBuild()}</span>
-              </Button>
-            </Tooltip>
-          </div>
-        </div>
-        <div className={styles.builds}>
-          {state && state.builds.length === 0 && <p className={styles.empty}>{Messages.noBuilds()}</p>}
-          {state?.builds.map((build) => (
-            <BuildRow
-              key={build.id}
-              build={build}
-              progress={props.hashProgress[build.id]}
-              starting={props.startingBuildId === build.id}
-              disabled={!!state.running || props.startingBuildId !== null}
-              onEdit={() => props.onEditBuild(build)}
-              onRemove={() => props.onRemoveBuild(build)}
-              onCodes={props.onCodes ? () => props.onCodes?.(build) : undefined}
-              onHost={() => props.onHost(build, hostPublic)}
+      {/* Left: the player's own room while Dolphin runs one, then the public rooms; right: the player's games. */}
+      <div className={styles.columns}>
+        <div className={styles.column}>
+          {state?.running && (
+            <RoomPanel
+              status={status}
+              onRequest={(request) => {
+                if (request.op === "public") {
+                  setHostPublic(request.public);
+                }
+                props.onRequest(request);
+              }}
+              onCopyCode={props.onCopyCode}
+              yourRoom={props.yourRoom}
+              onRename={props.onRenameRoom}
+              onAdminRename={props.onAdminRenameRoom}
+              onCodes={roomBuild && props.onCodes ? () => props.onCodes?.(roomBuild) : undefined}
             />
-          ))}
+          )}
+          <PublicRoomsBlock
+            rooms={props.publicRooms}
+            ownCode={status?.room?.code ?? null}
+            builds={state?.builds ?? []}
+            discAlone={state?.discAlone}
+            roomGames={state?.roomGames}
+            onSetRoomGame={props.onSetRoomGame}
+            checkRoomCards={props.checkRoomCards}
+            disabled={!!state?.running || props.startingBuildId !== null}
+            onJoin={props.onJoin}
+            onJoinCode={props.onJoinCode}
+            onMissingGame={props.onMissingGame}
+            onFixBuild={props.onFixBuild}
+            onLogIn={props.onLogIn}
+            onAdminRename={props.onAdminRenameRoom}
+          />
         </div>
-      </section>
+        <div className={styles.column}>
+          <section className={styles.section}>
+            <div className={styles.bar}>
+              <h2 className={styles.heading}>{Messages.yourBuilds()}</h2>
+              <div className={styles.addButtons}>
+                <Tooltip title={Messages.addFolderTooltip()}>
+                  <Button
+                    size="small"
+                    color="inherit"
+                    classes={{ startIcon: styles.addIcon }}
+                    startIcon={<CreateNewFolderOutlinedIcon />}
+                    onClick={props.onAddFolder}
+                  >
+                    <span className={styles.addLabel}>{Messages.addFolder()}</span>
+                  </Button>
+                </Tooltip>
+                <Tooltip title={Messages.addBuildTooltip()}>
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    color="inherit"
+                    classes={{ startIcon: styles.addIcon }}
+                    startIcon={<AddRoundedIcon />}
+                    onClick={props.onAddBuild}
+                  >
+                    <span className={styles.addLabel}>{Messages.addBuild()}</span>
+                  </Button>
+                </Tooltip>
+              </div>
+            </div>
+            <div className={styles.builds}>
+              {state && state.builds.length === 0 && <p className={styles.empty}>{Messages.noBuilds()}</p>}
+              {state?.builds.map((build) => (
+                <BuildRow
+                  key={build.id}
+                  build={build}
+                  progress={props.hashProgress[build.id]}
+                  starting={props.startingBuildId === build.id}
+                  disabled={!!state.running || props.startingBuildId !== null}
+                  onEdit={() => props.onEditBuild(build)}
+                  onRemove={() => props.onRemoveBuild(build)}
+                  onCodes={props.onCodes ? () => props.onCodes?.(build) : undefined}
+                  onHost={() => props.onHost(build, hostPublic)}
+                />
+              ))}
+            </div>
+          </section>
+        </div>
+      </div>
       <SdSyncDialog
         sync={status?.session?.sd_sync ?? null}
         build={state?.builds.find((b) => b.id === state.runningBuildId) ?? null}

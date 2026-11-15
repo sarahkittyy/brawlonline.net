@@ -485,3 +485,42 @@
 .request {
   border-color: rgb(116 194 122 / 45%);
 }
+
+/* The chat bar sits under the page, between the sidebar and the players rail (docs/design/launcher-redesign.md):
+   nothing to keep clear on the right. A narrow tab keeps only the name (cut off) and the X. */
+.tabs {
+  padding: 0 8px;
+}
+
+.tab {
+  container-type: inline-size;
+}
+
+.tabInvite {
+  display: contents;
+}
+
+/* In a tab the name goes before the code: the code gives way first. */
+.tab .displayName {
+  flex-shrink: 0;
+  max-width: 100%;
+}
+
+.tab .tag {
+  flex-shrink: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+@container (max-width: 150px) {
+  .tab .tag,
+  .onlineDot,
+  .offlineDot,
+  .tabFriend,
+  .tabInvite,
+  .tabName img,
+  .tabName svg {
+    display: none;
+  }
+}

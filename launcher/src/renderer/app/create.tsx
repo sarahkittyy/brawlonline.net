@@ -21,7 +21,6 @@ import { LeaderboardPage } from "@/pages/leaderboard/leaderboard_page";
 import { MatchHistoryPage } from "@/pages/match_history/match_history_page";
 import { NotFoundPage } from "@/pages/not_found/not_found_page";
 import { PlayPage } from "@/pages/play/play_page";
-import { ProfilePage } from "@/pages/profile/profile_page";
 import { createQuickStartPage } from "@/pages/quick_start/create";
 import { useQuickStartStore } from "@/pages/quick_start/use_quick_start";
 import { createReplaysPage } from "@/pages/replays/create";
@@ -68,6 +67,13 @@ export function createApp({ services }: { services: Services }): {
       Badge: SpectateBadge,
     },
     {
+      subpath: "matches",
+      title: () => Messages.matchHistory(),
+      Component: MatchHistoryPage,
+      Icon: HistoryIcon,
+      private: true,
+    },
+    {
       subpath: "replays",
       title: () => Messages.replays(),
       Component: ReplaysPage,
@@ -84,21 +90,6 @@ export function createApp({ services }: { services: Services }): {
       title: () => Messages.rulesets(),
       Component: RulesetsPage,
       Icon: RuleOutlinedIcon,
-    },
-    {
-      subpath: "profile",
-      title: () => Messages.matchHistory(),
-      Component: ProfilePage,
-      Icon: HistoryIcon,
-      hidden: true,
-    },
-    {
-      subpath: "matches",
-      title: () => Messages.matchHistory(),
-      Component: MatchHistoryPage,
-      Icon: HistoryIcon,
-      private: true,
-      hidden: true,
     },
   ];
 

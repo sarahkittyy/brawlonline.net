@@ -23,14 +23,13 @@ export type PlayButtonsViewProps = {
 };
 
 /**
- * Play's three buttons, stacked on the right of the ranked card (docs/design/launcher-redesign.md §8): each with its
- * status on its left. Unranked and Ranked show the stopwatch and the hour's ETA (players searching is 0-2 at most
+ * Play's three buttons, stacked on the left of the ranked card (docs/design/launcher-redesign.md §8): each with its
+ * status on its right. Unranked and Ranked show the stopwatch and the hour's ETA (players searching is 0-2 at most
  * hours, so it told nothing; Sarah's board, 2026-11-14); 2v2 keeps its counts ("2 in queue · 8 in game").
  */
 export const PlayButtonsView = ({ twosQueue, twosPlaying, etas, starting, onPlay }: PlayButtonsViewProps) => (
   <div className={styles.buttons}>
     <div className={styles.play}>
-      <Eta seconds={etas?.unranked} testId="play-unranked-eta" />
       <PlayButton
         label={Messages.playUnranked()}
         tooltip={Messages.playUnrankedTooltip()}
@@ -39,9 +38,9 @@ export const PlayButtonsView = ({ twosQueue, twosPlaying, etas, starting, onPlay
         onClick={() => onPlay(QUEUE_UNRANKED)}
         testId="play-unranked"
       />
+      <Eta seconds={etas?.unranked} testId="play-unranked-eta" />
     </div>
     <div className={styles.play}>
-      <Eta seconds={etas?.ranked} testId="play-ranked-eta" />
       <PlayButton
         label={Messages.playRanked()}
         tooltip={Messages.playRankedTooltip()}
@@ -50,8 +49,17 @@ export const PlayButtonsView = ({ twosQueue, twosPlaying, etas, starting, onPlay
         onClick={() => onPlay(QUEUE_RANKED)}
         testId="play-ranked"
       />
+      <Eta seconds={etas?.ranked} testId="play-ranked-eta" />
     </div>
     <div className={styles.play}>
+      <PlayButton
+        label={Messages.playTwos()}
+        tooltip={Messages.playTwosTooltip()}
+        starting={starting === QUEUE_TWOS}
+        disabled={starting != null}
+        onClick={() => onPlay(QUEUE_TWOS)}
+        testId="play-twos"
+      />
       {/* Kept in the layout while unknown, so the row does not move when the count comes in. */}
       <span
         className={styles.count}
@@ -61,14 +69,6 @@ export const PlayButtonsView = ({ twosQueue, twosPlaying, etas, starting, onPlay
         {Messages.inQueue(twosQueue ?? 0)}
         {twosQueue != null && twosPlaying != null && ` · ${Messages.inGame(twosPlaying)}`}
       </span>
-      <PlayButton
-        label={Messages.playTwos()}
-        tooltip={Messages.playTwosTooltip()}
-        starting={starting === QUEUE_TWOS}
-        disabled={starting != null}
-        onClick={() => onPlay(QUEUE_TWOS)}
-        testId="play-twos"
-      />
     </div>
   </div>
 );

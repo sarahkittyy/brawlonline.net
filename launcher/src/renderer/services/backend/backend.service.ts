@@ -25,7 +25,7 @@ import type { DolphinService, PlayKey } from "@dolphin/types";
 import log from "electron-log";
 
 import type { AuthService } from "../auth/types";
-import type { BackendService, RankedProfile, UserData } from "./types";
+import type { BackendService, MatchOpponent, RankedProfile, UserData } from "./types";
 
 /**
  * The online backend, over our accounts API (server/crates/accounts). Replaces
@@ -158,6 +158,10 @@ class AccountsBackendClient implements BackendService {
       before,
       opponent: options?.opponent,
     });
+  }
+
+  async fetchOpponents(q: string): Promise<MatchOpponent[]> {
+    return await this._api.opponents(this._activeUid(), q);
   }
 
   async fetchFriendsLeaderboard(): Promise<LeaderboardPage> {

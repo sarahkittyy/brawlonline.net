@@ -1,6 +1,5 @@
 import { GAME_NAME } from "@common/product";
 import CachedIcon from "@mui/icons-material/Cached";
-import CloseIcon from "@mui/icons-material/Close";
 import PlayArrowRoundedIcon from "@mui/icons-material/PlayArrowRounded";
 import Button from "@mui/material/Button";
 import CircularProgress from "@mui/material/CircularProgress";
@@ -18,7 +17,6 @@ import { usePlay } from "@/lib/dolphin/use_play";
 import { useAccount } from "@/lib/hooks/use_account";
 import { useRatingHistory } from "@/lib/hooks/use_rating_history";
 import { useEnableRankDisplay, useLaunchGameOnPlay } from "@/lib/hooks/use_settings";
-import { useToasts } from "@/lib/hooks/use_toasts";
 import { formatPosition, formatProfileRating } from "@/lib/ranked_format";
 import { useRoomList } from "@/lib/social/use_room_list";
 import { PublicRooms } from "@/pages/home/overview/public_rooms/public_rooms";
@@ -54,11 +52,12 @@ export const PlayPage = React.memo(function PlayPage() {
         <LaunchButton />
         <ProjectPunchButton />
       </div>
+      {/* The Play buttons on the left, the player's rank on the right (Sarah's board). */}
       <section className={styles.panel}>
+        <PlayButtons />
         <div className={styles.rankedSide}>
           <RankedCard />
         </div>
-        <PlayButtons />
       </section>
       <PublicRooms />
     </div>
@@ -85,8 +84,7 @@ const LaunchButton = () => {
 
 /** The player's rank, rating, position and record, and the rating's last sets as a line. */
 const RankedCard = () => {
-  const [enabled, setEnabled] = useEnableRankDisplay();
-  const { showInfo } = useToasts();
+  const [enabled] = useEnableRankDisplay();
   const profile = useAccount((s) => s.userData?.rankedNetplayProfile);
   const history = useRatingHistory();
   if (!enabled || !profile) {
@@ -107,17 +105,9 @@ const RankedCard = () => {
         <div className={styles.sub}>{sub}</div>
         <Sparkline values={history} width={150} height={24} className={styles.spark} />
       </div>
+      {/* Hiding the rank is Settings > Appearance's alone: a hover X here hid it by accident. */}
       <div className={styles.cardTools}>
         <RefreshRating />
-        <Tooltip title={MyRankingMessages.hide()}>
-          <IconButton
-            size="small"
-            aria-label={MyRankingMessages.hide()}
-            onClick={() => void setEnabled(false).then(() => showInfo(MyRankingMessages.rankingHiddenNotification()))}
-          >
-            <CloseIcon fontSize="small" />
-          </IconButton>
-        </Tooltip>
       </div>
     </div>
   );

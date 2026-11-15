@@ -11,7 +11,7 @@ import Typography from "@mui/material/Typography";
 import type { GameEnding, MatchReplay } from "@replays/types";
 import { useQuery } from "@tanstack/react-query";
 import React, { useCallback, useMemo, useState } from "react";
-import { Navigate, useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 
 import { InfiniteScrollContainer } from "@/components/infinite_scroll_container/infinite_scroll_container";
 import { PagedListStatus } from "@/components/paged_list_status/paged_list_status";
@@ -38,34 +38,39 @@ import {
 import { monthDayHourFormat } from "@/lib/time";
 import { useServices } from "@/services";
 import type { AuthUser } from "@/services/auth/types";
-import type { MatchHistoryFilter, MatchHistoryItem, MatchHistoryPlayer } from "@/services/backend/types";
+import type { MatchHistoryFilter, MatchHistoryItem, MatchHistoryPlayer, MatchOpponent } from "@/services/backend/types";
 
 import { MatchHistoryPageMessages as Messages } from "./match_history_page.messages";
+import { PlayerFilter } from "./player_filter";
 
 /**
- * The logged-in player's matches (docs/design/replays.md §9.2 for the replays column). Their own name,
- * rank and rating are on their profile (the user menu's View Profile, docs/design/profiles.md).
+ * Match history (docs/design/launcher-redesign.md §10), the sidebar's page above Replays: the logged-in player's matches
+ * (docs/design/replays.md §9.2 for the replays column), filtered by mode and by the players they played with.
  */
-/** The old Match history page's address: the player's own profile, where their match history is now. */
 export const MatchHistoryPage = React.memo(function MatchHistoryPage({ user }: { user: AuthUser }) {
-  return <Navigate replace={true} to={`/main/profile/${encodeURIComponent(user.uid)}`} />;
+  return (
+    <div style={{ display: "flex", flexDirection: "column", flex: 1, minWidth: 0, padding: "20px 28px 0" }}>
+      <h1 style={{ margin: "0 0 12px", fontSize: 28, whiteSpace: "nowrap" }}>{Messages.matchHistory()}</h1>
+      <MatchHistory uid={user.uid} compact={true} />
+    </div>
+  );
 });
 
 /**
- * The player's match history (their own profile's), or only the matches they played with `opponent` (someone else's
- * profile: match history stays private, so it is the viewer's own sets with that player).
+ * The player's match history: the mode buttons, and the player filter on their left (the matches every tagged player
+ * played in).
  */
 export const MatchHistory = ({
   uid,
-  opponent,
   compact = false,
 }: {
   uid: string;
-  opponent?: string;
-  /** Four columns (the profile page, beside the sidebar and the players rail): the date under the mode, the
-   * player's own rating change under the score. */
+  /** Four columns (beside the sidebar and the players rail): the date under the mode, the player's own rating change
+   * under the score. */
   compact?: boolean;
 }) => {
+  const [players, setPlayers] = useState<MatchOpponent[]>([]);
+  const opponent = players.map((p) => p.uid).join(",");
   const { backendService } = useServices();
   const [mode, setMode] = useState<MatchHistoryFilter>("all");
   const fetchPage = useCallback(
@@ -78,7 +83,7 @@ export const MatchHistory = ({
   // Fresh on every visit and when the window regains focus (a set settles while the player is in
   // Dolphin), like the rating above; else a set shows "In progress" until the launcher restarts.
   const pages = useCursorPages<MatchHistoryItem>({
-    queryKey: ["matchHistory", uid, mode, opponent ?? null],
+    queryKey: ["matchHistory", uid, mode, opponent],
     fetchPage,
     refresh: true,
   });
@@ -86,12 +91,13 @@ export const MatchHistory = ({
 
   return (
     <>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
-        <Typography variant="h6">{Messages.matchHistory()}</Typography>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 8, flexWrap: "wrap" }}>
+        <PlayerFilter value={players} onChange={setPlayers} />
+        <span style={{ flex: 1 }} />
         <ToggleButtonGroup
           size="small"
           exclusive={true}
-          sx={{ "& .MuiToggleButton-root": { textTransform: "none" } }}
+          sx={{ "& .MuiToggleButton-root": { textTransform: "none", py: "3px", px: "10px", lineHeight: 1.4 } }}
           value={mode}
           onChange={(_, value: MatchHistoryFilter | null) => value && setMode(value)}
         >
@@ -107,7 +113,7 @@ export const MatchHistory = ({
           onLoadMore={pages.loadMore}
           hasMore={pages.hasMore && !pages.error}
           isLoading={pages.isLoading || pages.isLoadingMore}
-          resetKey={mode}
+          resetKey={`${mode}:${opponent}`}
         >
           {pages.items.length > 0 && (
             <Table size="small" stickyHeader={true}>

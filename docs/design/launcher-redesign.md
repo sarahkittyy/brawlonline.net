@@ -195,3 +195,14 @@ Old addresses: `/main/home/*` redirect to `/main/play`, `/main/spectate` and `/m
 Not done:
 - the queue box can't bring the game's window forward (there is no call for it);
 - Highlights keeps its own left list of filters.
+
+## 10. Round 4 (Sarah's notes from browsing staging, 2026-11-14)
+
+- **The chat bar** is under the page, between the sidebar and the players rail: its windows open over the page only. A narrow tab keeps the name (cut off) and the X; the dot, the friend mark, the invite and the code go.
+- **Play:** the Play buttons on the left (each status on its right), the rank on the right. The card's hover X is gone: hiding the rank is Settings > Appearance's alone (a staging profile had it off). Public rooms is an outlined panel again; the room code box is one outlined control (no underline), lit on focus.
+- **Other Games:** the left / right split again, as outlined panels: the player's room and the public rooms on the left, the player's games on the right; one column under 600 px of page. The title and the controller share a line; the words and the beta note go under them. A game's name has its row (its chips wrap under it); a room's host and game line wraps.
+- **Profiles are popups again** (the profile page is gone). On the player's own, Switch account and Log out sit left of the link, on its row.
+- **Match history** is a sidebar page above Replays. Left of All / Ranked / ... a player filter suggests the players the player has played with (`GET /v1/me/opponents?q=`: main, name, code); a pick is a tag with only the code and an X; several tags keep the matches all of them played in (`opponent=` takes up to 4 uids). Its rows are four columns. The mode buttons are less tall.
+- **The folded rail** lost its envelope (it only opened the rail, as the arrow does); unread messages count on the arrow.
+- **Replays** opens on the replay folder itself (everything in it), not the last folder picked; the folder dropdown's icon is centred; the folder buttons sit in the footer's row (only their icons when narrow).
+- **Window sizes:** checked at 1400, 1264, 1100 and 980 px (the smallest window): names in the tables, rooms and chat tabs give way with an ellipsis rather than overflowing; the ranked card shrinks first.
