@@ -18,6 +18,7 @@ export const FileListSkeleton = React.memo(({ count = DEFAULT_SKELETON_COUNT }: 
         flex-direction: column;
         flex: 1;
         overflow: hidden;
+        padding: 0 28px;
       `}
     >
       {Array.from({ length: count }).map((_, index) => (
@@ -31,7 +32,7 @@ export const FileListSkeleton = React.memo(({ count = DEFAULT_SKELETON_COUNT }: 
             variant="rounded"
             css={css`
               height: 80px;
-              margin: 10px;
+              margin: 0 0 10px;
               border-radius: 10px;
             `}
           />

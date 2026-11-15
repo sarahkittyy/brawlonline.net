@@ -57,14 +57,18 @@ const ReplaysTabs = () => {
           <h1 style={{ margin: 0, fontSize: 28, whiteSpace: "nowrap", flex: 1 }}>{CreateAppMessages.replays()}</h1>
           <FolderButtons row={true} />
         </div>
-        <Tabs
-          value={current}
-          onChange={(tab) => navigate(`/main/replays/${tab}`)}
-          tabs={[
-            { id: "list", label: ReplayBrowserMessages.replaysTab() },
-            { id: "highlights", label: ReplayBrowserMessages.highlightsTab() },
-          ]}
-        />
+        {/* (The first tab's underline from the page's edge, where the bar and the rows start: the tab list's
+            own 10 px padding drawn back.) */}
+        <div style={{ marginLeft: -10 }}>
+          <Tabs
+            value={current}
+            onChange={(tab) => navigate(`/main/replays/${tab}`)}
+            tabs={[
+              { id: "list", label: ReplayBrowserMessages.replaysTab() },
+              { id: "highlights", label: ReplayBrowserMessages.highlightsTab() },
+            ]}
+          />
+        </div>
       </div>
       <Outlet />
     </div>

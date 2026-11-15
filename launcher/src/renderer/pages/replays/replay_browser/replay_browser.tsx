@@ -45,6 +45,7 @@ export const ReplayBrowser = React.memo(() => {
 
   const currentFolder = useReplays((store) => store.currentFolder);
   const folderTree = useReplays((store) => store.folderTree);
+  const totalFilesInFolder = useReplays((store) => store.totalFilesInFolder);
 
   const showLoading = useDelayedLoading(loading, 300, 500);
   const { showError, showSuccess } = useToasts();
@@ -129,28 +130,44 @@ export const ReplayBrowser = React.memo(() => {
             min-width: 0;
           `}
         >
+          {/* The bar and the count start where the rows do: 28 px in, as the page's title (file_list.tsx). */}
+          <div style={{ padding: "16px 28px 0" }}>
+            <FilterToolbar
+              folderSelect={
+                <FolderSelect
+                  folders={folderTree}
+                  value={currentFolder}
+                  onChange={(path) => onFolderTreeNodeClick(path)}
+                />
+              }
+            />
+          </div>
+          {/* Over the first replay: how many the folder and the filters give, or while the folder is read, how
+              far along (they were in a bar at the page's foot). */}
           <div
             css={css`
               display: flex;
               align-items: center;
               gap: 8px;
-              min-width: 0;
-              padding-left: 28px;
+              min-height: 16px;
+              padding: 12px 28px 8px;
+              font-size: 12px;
+              line-height: 16px;
+              color: var(--text-dim);
+              white-space: nowrap;
             `}
+            data-testid="replay-count"
           >
-            <FolderSelect folders={folderTree} value={currentFolder} onChange={(path) => onFolderTreeNodeClick(path)} />
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <FilterToolbar />
-            </div>
-            {/* While the folder is read: how far along (the bar at the foot that also said it is gone). */}
-            {showLoading && showReplayProgress && (
-              <span
-                style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: 12, whiteSpace: "nowrap" }}
-              >
-                {Messages.processedReplayCount(replayProgress!.current, replayProgress!.total)}
-                <CircularProgress color="secondary" size={16} value={replayProgressPercent} variant="determinate" />
-              </span>
-            )}
+            {showLoading
+              ? showReplayProgress && (
+                  <>
+                    {Messages.processedReplayCount(replayProgress!.current, replayProgress!.total)}
+                    <CircularProgress color="secondary" size={14} value={replayProgressPercent} variant="determinate" />
+                  </>
+                )
+              : filteredFiles.length > 0
+              ? Messages.totalReplayCount(totalFilesInFolder ?? filteredFiles.length)
+              : null}
           </div>
           {showLoading ? (
             <FileListSkeleton />

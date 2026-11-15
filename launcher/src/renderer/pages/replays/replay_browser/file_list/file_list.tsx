@@ -146,12 +146,17 @@ const FileListResults = ({
   }, [onScrollPositionChange]);
 
   return (
+    // The rows 28 px in at both sides, as the bar over them: 18 px and the scrollbar's 10 px at the
+    // right, kept even while the list is too short to scroll.
     <div
       ref={scrollContainerRef}
       style={{
         height: "100%",
         width: "100%",
         overflow: "auto",
+        boxSizing: "border-box",
+        padding: "0 18px 0 28px",
+        scrollbarGutter: "stable",
       }}
     >
       {files.map((file, index) => (

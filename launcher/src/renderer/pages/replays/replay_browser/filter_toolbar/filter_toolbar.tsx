@@ -1,5 +1,4 @@
 import { css } from "@emotion/react";
-import styled from "@emotion/styled";
 import SyncIcon from "@mui/icons-material/Sync";
 import IconButton from "@mui/material/IconButton";
 import Tooltip from "@mui/material/Tooltip";
@@ -15,29 +14,19 @@ import { useToasts } from "@/lib/hooks/use_toasts";
 import { ReplaySortOption, SortDirection } from "@/lib/replay_file_sort";
 
 import { FilterToolbarMessages as Messages } from "./filter_toolbar.messages";
+import styles from "./filter_toolbar.module.css";
 
-// The player search first, as in Match history (Sarah's board), then the list's buttons.
-const Outer = styled.div`
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px 12px;
-  padding: 16px 20px 16px 10px;
-`;
-
-const ButtonContainer = styled.div`
-  display: flex;
-  align-items: center;
-  gap: 12px;
-`;
-
+// The folder, then the player search as in Match history (Sarah's board), then the list's buttons; on two
+// lines when narrow (filter_toolbar.module.css).
 type FilterToolbarProps = {
   disabled?: boolean;
+  /** The replay folders' dropdown, first on the bar. */
+  folderSelect?: React.ReactNode;
 };
 
 export const FilterToolbar = (props: FilterToolbarProps) => {
   const presenter = useReplayPresenter();
-  const { disabled } = props;
+  const { disabled, folderSelect } = props;
   const rootSlpPath = useSettings((store) => store.settings.rootSlpPath);
   const extraSlpPaths = useSettings((store) => store.settings.extraSlpPaths);
   const currentFolder = useReplays((store) => store.currentFolder);
@@ -99,74 +88,80 @@ export const FilterToolbar = (props: FilterToolbarProps) => {
   }, [sortBy, sortDirection, hideShortGames, storeSearchText]);
 
   return (
-    <Outer>
-      <ReplayPlayerSearch
-        value={players}
-        onChange={setPlayers}
-        text={searchText}
-        onTextChange={setNameFilter}
-        placeholder={Messages.search()}
-      />
-      <ButtonContainer>
-        {/* (An icon: the search, the folder and this on one line at the default width.) */}
-        <Tooltip title={Messages.refresh()}>
-          <span>
-            <IconButton onClick={refresh} disabled={disabled} aria-label={Messages.refresh()} size="small">
-              <SyncIcon />
-            </IconButton>
-          </span>
-        </Tooltip>
-        <Dropdown
-          value={{
-            key: sortBy,
-            dir: sortDirection,
-          }}
-          options={[
-            {
-              value: {
-                key: ReplaySortOption.DATE,
-                dir: SortDirection.DESC,
+    <div className={styles.bar}>
+      <div className={styles.inner}>
+        <div className={styles.first}>
+          {folderSelect}
+          <ReplayPlayerSearch
+            className={styles.search}
+            value={players}
+            onChange={setPlayers}
+            text={searchText}
+            onTextChange={setNameFilter}
+            placeholder={Messages.search()}
+          />
+          <Tooltip title={Messages.refresh()}>
+            <span className={styles.refresh}>
+              <IconButton onClick={refresh} disabled={disabled} aria-label={Messages.refresh()} size="small">
+                <SyncIcon />
+              </IconButton>
+            </span>
+          </Tooltip>
+        </div>
+        <div className={styles.second}>
+          <Dropdown
+            value={{
+              key: sortBy,
+              dir: sortDirection,
+            }}
+            options={[
+              {
+                value: {
+                  key: ReplaySortOption.DATE,
+                  dir: SortDirection.DESC,
+                },
+                label: Messages.mostRecent(),
               },
-              label: Messages.mostRecent(),
-            },
-            {
-              value: {
-                key: ReplaySortOption.DATE,
-                dir: SortDirection.ASC,
+              {
+                value: {
+                  key: ReplaySortOption.DATE,
+                  dir: SortDirection.ASC,
+                },
+                label: Messages.leastRecent(),
               },
-              label: Messages.leastRecent(),
-            },
-            {
-              value: {
-                key: ReplaySortOption.GAME_DURATION,
-                dir: SortDirection.DESC,
+              {
+                value: {
+                  key: ReplaySortOption.GAME_DURATION,
+                  dir: SortDirection.DESC,
+                },
+                label: Messages.longestGame(),
               },
-              label: Messages.longestGame(),
-            },
-            {
-              value: {
-                key: ReplaySortOption.GAME_DURATION,
-                dir: SortDirection.ASC,
+              {
+                value: {
+                  key: ReplaySortOption.GAME_DURATION,
+                  dir: SortDirection.ASC,
+                },
+                label: Messages.shortestGame(),
               },
-              label: Messages.shortestGame(),
-            },
-          ]}
-          onChange={(val) => {
-            setSortBy(val.key);
-            setSortDirection(val.dir);
-          }}
-        />
-        <Checkbox
-          label={Messages.hideShortGames()}
-          checked={hideShortGames}
-          onChange={() => setHideShortGames(!hideShortGames)}
-          css={css`
-            .MuiFormControlLabel-label {
-              font-size: 12px;
-            }
-          `}
-        />
-      </ButtonContainer>
-    </Outer>
+            ]}
+            onChange={(val) => {
+              setSortBy(val.key);
+              setSortDirection(val.dir);
+            }}
+          />
+          <Checkbox
+            className={styles.hideShort}
+            label={Messages.hideShortGames()}
+            checked={hideShortGames}
+            onChange={() => setHideShortGames(!hideShortGames)}
+            css={css`
+              .MuiFormControlLabel-label {
+                font-size: 12px;
+              }
+            `}
+          />
+        </div>
+      </div>
+    </div>
   );
 };

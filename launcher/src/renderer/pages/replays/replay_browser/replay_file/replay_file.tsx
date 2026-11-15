@@ -9,6 +9,7 @@ import { DolphinStatus, useDolphinStore } from "@/lib/dolphin/use_dolphin_store"
 
 import { DraggableFile } from "./draggable_file";
 import { ReplayFileMessages as Messages } from "./replay_file.messages";
+import styles from "./replay_file.module.css";
 import type { PlayerInfo } from "./team_elements/team_elements";
 import { TeamElements } from "./team_elements/team_elements";
 
@@ -53,6 +54,7 @@ export const ReplayFile = React.memo(function ReplayFile({
 }: ReplayFileProps) {
   return (
     <Outer
+      className={styles.row}
       backgroundImage={backgroundImage}
       selected={playing}
       data-replay-highlight={highlightKey ? highlightKey : undefined}
@@ -64,9 +66,11 @@ export const ReplayFile = React.memo(function ReplayFile({
           flex: 1;
           flex-direction: column;
           justify-content: center;
+          /* (Its width is the row's: width 100% and the padding overflowed the row by 20 px, cutting off
+             the file name and the play button's room at the right.) */
+          min-width: 0;
           padding: 10px;
           background-color: ${playing ? "rgba(180, 130, 176, 0.1)" : "transparent"};
-          width: 100%;
         `}
       >
         <div
@@ -79,8 +83,10 @@ export const ReplayFile = React.memo(function ReplayFile({
         >
           <TeamElements teams={players} />
           <div
+            className={styles.actions}
             css={css`
               display: flex;
+              flex: none;
             `}
           >
             {actions.map((action, i) => (
@@ -112,6 +118,7 @@ export const ReplayFile = React.memo(function ReplayFile({
             ))}
           </div>
           <DraggableFile
+            className={styles.fileName}
             onDragStart={onFileNameDragStart}
             css={css`
               max-width: 350px;
@@ -169,7 +176,7 @@ const Outer = styled.div<{
   overflow: hidden;
   border-radius: 10px;
   height: 80px;
-  margin: 10px;
+  margin: 0 0 10px;
   /* Off-screen rows skip style, layout and paint: the list keeps every replay it has loaded (#268). */
   content-visibility: auto;
   background: ${(p) =>
@@ -194,6 +201,7 @@ const Outer = styled.div<{
 const InfoItem = React.memo(({ Icon, label }: { Icon: React.ComponentType; label: string }) => {
   return (
     <div
+      className={styles.detail}
       css={css`
         display: flex;
         align-items: center;
@@ -267,6 +275,7 @@ const ReplayActionButton = React.memo(({ label, color, onClick, ...rest }: Repla
     <Tooltip title={label}>
       <span>
         <IconButton
+          className={styles.action}
           css={css`
             padding: 5px;
             margin: 0 5px;

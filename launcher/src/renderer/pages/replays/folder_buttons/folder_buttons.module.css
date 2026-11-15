@@ -34,11 +34,13 @@
   text-overflow: ellipsis;
 }
 
-/* In the Replays title row: side by side, each with its label. */
+/* In the Replays title row: side by side, each with its label. Their words line up with the page's edge
+   (28 px in) at the right, and at the left when they wrap under the title. */
 .row {
   flex-direction: row;
   flex: none;
   padding-bottom: 0;
+  margin: 0 -8px;
 }
 
 .row .button {
@@ -46,4 +48,3 @@
   padding: 4px 8px;
   white-space: nowrap;
 }
-
