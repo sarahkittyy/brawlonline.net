@@ -230,3 +230,15 @@ The page had fixed column widths (320 + 380 px) wider than the room beside the s
 - a row's buttons go under its name, on the right, when they don't fit beside it; its line of code and summary is cut short instead of running under them;
 - an open ruleset's title is smaller and wraps; Copy link and Use sit by its code, the footer has only Close, Hide and Edit; footer buttons wrap whole, never their words;
 - an editor setting's control goes under its name and help when they don't fit side by side.
+
+## 14. The sidebar folds (Sarah's board, 2026-11-15)
+
+"the left sidebar should collapse like the right sidebar. they should be equal width when collapsed": the arrows at the right of "Brawl Online" (the name is 17 px now, 19 before, to leave them room) fold it, the arrows under the logo open it again, and this computer remembers which (it doesn't fold by itself in a narrow window as the rail does). Folded it is as wide as the folded rail (60 px and its line), one centred column:
+- **the logo**: the app icon's ball (`app/shell/images/logo.png`, from `tools/icon/make-icon.py`) in place of the name; a click checks for updates, as the name does;
+- **the update box** is a ring that fills as the launcher update downloads; its tooltip has the button's words ("Update 45%", "v0.2.1 → v0.2.2"). Downloaded, the circle is the accent and a click installs it, as Update does. A set-up step (Downloading Project+ ...) is a ring too, its name and percentage in the tooltip;
+- **the pages** are their icons in 36 px squares, each name in a tooltip as the folded rail's friends; Other Games' and Spectate's counts sit on the icon's top right corner, as the rail's unread count;
+- **the queue box** is the dot and the search's time, or the opponent and the score; its tooltip has the open box's lines;
+- **the player's card** is their stock icon in the card's box, the name and code in its tooltip; logged out, Log in is an arrow in the same box;
+- **the tools** (Settings, Theme Color, Report a bug, Discord, the bell) are a column, their tooltips at their right.
+
+The column fits a 1264 x 711 window with a search and an update showing; shorter windows scroll it, as the open sidebar.

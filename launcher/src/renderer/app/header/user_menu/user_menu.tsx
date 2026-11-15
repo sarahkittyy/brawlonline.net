@@ -1,5 +1,6 @@
 import ButtonBase from "@mui/material/ButtonBase";
 import DialogContentText from "@mui/material/DialogContentText";
+import Tooltip from "@mui/material/Tooltip";
 import { clsx } from "clsx";
 import log from "electron-log";
 import React from "react";
@@ -40,8 +41,11 @@ export const UserMenu = ({
 }: {
   user: AuthUser;
   handleError: (error: any) => void;
-  /** `sidebar`: the sidebar's card (docs/design/launcher-redesign.md): picture, name and code, rank emblem. */
-  variant?: "header" | "sidebar";
+  /**
+   * `sidebar`: the sidebar's card (docs/design/launcher-redesign.md): picture, name and code, rank emblem. `folded`:
+   * the folded sidebar's (§14): the picture alone in the card's box, the name and code in its tooltip.
+   */
+  variant?: "header" | "sidebar" | "folded";
 }) => {
   const { authService, backendService, dolphinService } = useServices();
   const userData = useAccount((store) => store.userData);
@@ -189,45 +193,70 @@ export const UserMenu = ({
   // Until this client's player has clicked their own profile's edit pencil: the name glows gold, then the pencil.
   const glowProfile = !ownProfileOpened && !!userData?.playKey && !errMessage && !loading;
 
-  return (
-    <div>
-      <ButtonBase
-        onClick={() => openProfile({ uid: user.uid, displayName, connectCode: userData?.playKey?.connectCode })}
-        className={clsx(
-          variant === "sidebar" ? styles.sidebarCard : styles.userInfoButton,
-          MAIN_PICTURE_HOVER,
-          glowProfile && styles.profileGlow,
-        )}
-        data-testid="user-card"
-      >
-        {variant === "sidebar" ? (
-          <>
-            <MainPicture url={loading ? undefined : ownPicture} size={32} pencil={true} error={isUserErrorMessage} />
-            <span className={styles.sidebarText}>
-              <span className={styles.sidebarName}>{displayName}</span>
-              {!loading && (
-                <span className={clsx(styles.sidebarCode, errMessage && styles.sidebarError)}>
-                  {errMessage ?? userData?.playKey?.connectCode}
-                </span>
-              )}
-            </span>
-            {rankedProfile && !errMessage && (
-              <span className={styles.sidebarRank}>
-                <RankBadge rank={rankedProfile.rank ?? null} setsToPlace={rankedProfile.setsToPlace} size="inline" />
+  const card = (
+    <ButtonBase
+      onClick={() => openProfile({ uid: user.uid, displayName, connectCode: userData?.playKey?.connectCode })}
+      className={clsx(
+        variant === "header" ? styles.userInfoButton : styles.sidebarCard,
+        variant === "folded" && styles.foldedCard,
+        MAIN_PICTURE_HOVER,
+        glowProfile && styles.profileGlow,
+      )}
+      aria-label={variant === "folded" ? displayName : undefined}
+      data-testid="user-card"
+    >
+      {variant === "folded" ? (
+        <MainPicture url={loading ? undefined : ownPicture} size={32} pencil={true} error={isUserErrorMessage} />
+      ) : variant === "sidebar" ? (
+        <>
+          <MainPicture url={loading ? undefined : ownPicture} size={32} pencil={true} error={isUserErrorMessage} />
+          <span className={styles.sidebarText}>
+            <span className={styles.sidebarName}>{displayName}</span>
+            {!loading && (
+              <span className={clsx(styles.sidebarCode, errMessage && styles.sidebarError)}>
+                {errMessage ?? userData?.playKey?.connectCode}
               </span>
             )}
-          </>
-        ) : (
-          <UserInfo
-            displayName={displayName}
-            picture={ownPicture}
-            connectCode={userData?.playKey?.connectCode}
-            errorBorder={isUserErrorMessage}
-            errorMessage={errMessage}
-            loading={loading}
-          />
-        )}
-      </ButtonBase>
+          </span>
+          {rankedProfile && !errMessage && (
+            <span className={styles.sidebarRank}>
+              <RankBadge rank={rankedProfile.rank ?? null} setsToPlace={rankedProfile.setsToPlace} size="inline" />
+            </span>
+          )}
+        </>
+      ) : (
+        <UserInfo
+          displayName={displayName}
+          picture={ownPicture}
+          connectCode={userData?.playKey?.connectCode}
+          errorBorder={isUserErrorMessage}
+          errorMessage={errMessage}
+          loading={loading}
+        />
+      )}
+    </ButtonBase>
+  );
+
+  return (
+    <div>
+      {variant === "folded" ? (
+        <Tooltip
+          title={
+            <span className={styles.foldedTip}>
+              <span>{displayName}</span>
+              {!loading && (errMessage ?? userData?.playKey?.connectCode) && (
+                <span className={styles.sidebarCode}>{errMessage ?? userData?.playKey?.connectCode}</span>
+              )}
+            </span>
+          }
+          placement="right"
+          disableInteractive={true}
+        >
+          {card}
+        </Tooltip>
+      ) : (
+        card
+      )}
 
       <SwitchAccountDialog
         open={switchOpen}

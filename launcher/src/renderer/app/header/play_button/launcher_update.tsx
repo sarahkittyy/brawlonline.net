@@ -22,6 +22,26 @@ export const useLauncherUpdateVersion = () => useAppStore((store) => store.updat
  * cannot update itself ("download" mode, MAC_SELF_UPDATE) it opens the website's download.
  */
 export const LauncherUpdate = React.memo(() => {
+  const update = useLauncherUpdate();
+  if (!update) {
+    return null;
+  }
+  return <LauncherUpdateButton {...update} />;
+});
+
+export type LauncherUpdateAction = {
+  currentVersion: string;
+  newVersion: string;
+  /** Set while the new version downloads (0 to 1). */
+  downloadProgress: number | undefined;
+  disabled: boolean;
+  onClick: () => void;
+  /** The button's tooltip when it opens the website instead. */
+  title: string | undefined;
+};
+
+/** What the update button shows and does (LauncherUpdate, and the folded sidebar's ring); null while no update is out. */
+export const useLauncherUpdate = (): LauncherUpdateAction | null => {
   const updateVersion = useAppStore((store) => store.updateVersion);
   const updateReady = useAppStore((store) => store.updateReady);
   const updateDownloadProgress = useAppStore((store) => store.updateDownloadProgress);
@@ -70,14 +90,12 @@ export const LauncherUpdate = React.memo(() => {
   // Found and downloading (shown at once: no Dolphin starts until it is installed); the
   // percentage shows a ~100 MB installer on a slow line is moving.
   const downloading = !downloadMode && !manual && !updateReady;
-  return (
-    <LauncherUpdateButton
-      currentVersion={__VERSION__}
-      newVersion={updateVersion}
-      downloadProgress={downloading ? updateDownloadProgress / 100 : undefined}
-      disabled={isInstalling}
-      onClick={onClick}
-      title={manual ? Messages.downloadManually() : undefined}
-    />
-  );
-});
+  return {
+    currentVersion: __VERSION__,
+    newVersion: updateVersion,
+    downloadProgress: downloading ? updateDownloadProgress / 100 : undefined,
+    disabled: isInstalling,
+    onClick,
+    title: manual ? Messages.downloadManually() : undefined,
+  };
+};

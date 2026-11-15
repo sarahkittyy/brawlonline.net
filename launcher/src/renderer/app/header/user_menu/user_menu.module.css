@@ -56,6 +56,17 @@
   background-color: var(--raised-hover) !important;
 }
 
+/* Folded (the sidebar's icons only): the picture alone in the same box. */
+.foldedCard {
+  width: auto;
+  padding: 8px !important;
+}
+
+.foldedTip {
+  display: flex;
+  flex-direction: column;
+}
+
 .sidebarText {
   display: flex;
   flex-direction: column;

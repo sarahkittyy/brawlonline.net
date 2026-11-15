@@ -4,6 +4,7 @@ import CircularProgress from "@mui/material/CircularProgress";
 import DialogContentText from "@mui/material/DialogContentText";
 import IconButton from "@mui/material/IconButton";
 import TextField from "@mui/material/TextField";
+import type { TooltipProps } from "@mui/material/Tooltip";
 import Tooltip from "@mui/material/Tooltip";
 import log from "electron-log";
 import React from "react";
@@ -22,11 +23,11 @@ const MAX_DESCRIPTION = 5000;
  * with a zip of the launcher's and Dolphin's logs (`admin bug list` on the server). Works logged
  * out too, since logging in may be what is broken.
  */
-export const BugReportButton = () => {
+export const BugReportButton = ({ placement }: { placement?: TooltipProps["placement"] }) => {
   const [open, setOpen] = React.useState(false);
   return (
     <>
-      <Tooltip title={Messages.reportABug()}>
+      <Tooltip title={Messages.reportABug()} placement={placement}>
         <IconButton
           onClick={() => setOpen(true)}
           aria-label={Messages.reportABug()}

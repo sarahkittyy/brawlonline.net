@@ -12,6 +12,15 @@
   overflow: hidden auto;
 }
 
+/* Folded to its icons (sidebar.tsx): as wide as the folded players rail (60 px and its 1 px line), everything in one
+   centred column. */
+.folded {
+  width: 61px;
+  padding: 14px 0 10px;
+  align-items: center;
+  scrollbar-width: none;
+}
+
 /* macOS draws its window buttons over the top left (titleBarStyle hiddenInset): room for them, and the top of the
    sidebar drags the window as Slippi's header did. */
 .mac {
@@ -24,21 +33,57 @@
 
 .logoRow {
   display: flex;
+  align-items: center;
   padding: 2px 0 14px;
 }
 
+/* Open: the fold arrows at the right of the name. Folded: under the logo. */
+.foldButton {
+  margin: 0 -6px 0 auto !important;
+  padding: 4px !important;
+  color: var(--text-dim) !important;
+  -webkit-app-region: no-drag;
+}
+
+.foldButton:hover {
+  color: var(--off-white) !important;
+}
+
+.folded .logoRow {
+  flex-direction: column;
+  gap: 2px;
+  padding-bottom: 10px;
+}
+
+.folded .foldButton {
+  margin: 0 !important;
+}
+
+/* 17 px (it was 19 with the row to itself) leaves the fold arrows room at its right. */
 .logo {
   font-family: var(--font-title, system-ui, sans-serif);
-  font-size: 19px;
+  font-size: 17px;
   white-space: nowrap;
   color: var(--off-white);
-  padding: 2px 10px;
+  padding: 2px 6px;
   border-radius: 6px;
   -webkit-app-region: no-drag;
 }
 
 .logo:hover {
   background-color: var(--raised);
+}
+
+/* Folded: the app icon's ball, in a box as wide as the pages' icons. */
+.logoIcon {
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border-radius: 8px;
+}
+
+.logoIcon img {
+  display: block;
 }
 
 .status {
@@ -81,6 +126,21 @@
   flex: none;
   font-size: 20px !important;
   color: var(--text-dim);
+}
+
+/* Folded: the icon alone, centred in a square, a little less tall so the column fits a 711 px window with a search
+   and an update showing (the selected frame's 7 px edges still leave its 20 px icon room). */
+.folded .navItem {
+  position: relative;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  gap: 0;
+  justify-content: center;
+}
+
+:root[data-game-frames] .folded .on {
+  padding: 0;
 }
 
 .navLabel {
@@ -128,6 +188,29 @@
   background-color: rgb(0 0 0 / 25%);
 }
 
+/* Folded: the count on the icon's top right corner, as the folded rail's unread count. */
+.folded .badge {
+  position: absolute;
+  top: 1px;
+  right: -4px;
+  gap: 3px;
+  font-size: 10px;
+  line-height: 14px;
+  padding: 0 4px;
+  box-shadow: 0 0 0 2px var(--shell);
+}
+
+.folded .on .badge {
+  top: -6px;
+  right: -11px;
+  background-color: var(--raised-hover);
+}
+
+.folded .badge .liveDot {
+  width: 5px;
+  height: 5px;
+}
+
 .liveDot {
   width: 7px;
   height: 7px;
@@ -148,6 +231,29 @@
   display: flex;
   justify-content: space-between;
   padding: 6px 0 0;
+}
+
+.folded .tools {
+  flex-direction: column;
+  align-items: center;
+}
+
+.folded .tools button {
+  padding: 5px;
+}
+
+/* Logged out, folded: the Log in arrow in a box like the player's card. */
+.logInIcon {
+  width: 48px;
+  height: 48px;
+  border-radius: 10px !important;
+  margin-bottom: 6px !important;
+  color: var(--off-white) !important;
+  background-color: var(--raised) !important;
+}
+
+.logInIcon:hover {
+  background-color: var(--raised-hover) !important;
 }
 
 .tools button {

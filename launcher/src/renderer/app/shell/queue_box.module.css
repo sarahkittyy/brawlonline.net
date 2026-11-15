@@ -23,6 +23,42 @@
   padding: 2px 5px;
 }
 
+/* The folded sidebar's box: one thing over another, as wide as the sidebar's icons and the player's card. */
+.folded {
+  flex-direction: column;
+  justify-content: center;
+  gap: 7px;
+  width: 48px;
+  box-sizing: border-box;
+  margin: 0 0 8px;
+  padding: 10px 0 7px;
+}
+
+/* The folded box's tooltip: the open box's lines, in the tooltip's colours. */
+.tip .mode,
+.tip .sub {
+  color: inherit;
+}
+
+.tip .mode {
+  font-size: 13px;
+}
+
+.tip .sub {
+  opacity: 0.8;
+}
+
+.folded .sub {
+  margin-top: 0;
+  font-size: 11px;
+}
+
+:root[data-game-frames] .folded.playing {
+  width: 52px;
+  padding: 1px 0 0;
+  gap: 2px;
+}
+
 .pulse {
   flex: none;
   width: 9px;

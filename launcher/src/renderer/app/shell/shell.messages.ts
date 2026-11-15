@@ -7,4 +7,7 @@ export const ShellMessages = {
   // The rail's fold buttons: the Online / Friends panel's own words.
   showPlayers: () => "Online",
   hidePlayers: () => "Close",
+  // The sidebar's fold button (new words, for Sarah's review).
+  foldSidebar: () => "Collapse",
+  openSidebar: () => "Expand",
 };
