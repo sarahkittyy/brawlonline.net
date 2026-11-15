@@ -34,7 +34,7 @@
   text-overflow: ellipsis;
 }
 
-/* In a footer row (Replays): side by side, never wrapping; in a narrow footer only the icons (the tooltips name them). */
+/* In the Replays title row: side by side, each with its label. */
 .row {
   flex-direction: row;
   flex: none;
@@ -47,8 +47,3 @@
   white-space: nowrap;
 }
 
-@container (max-width: 760px) {
-  .row .label {
-    display: none;
-  }
-}

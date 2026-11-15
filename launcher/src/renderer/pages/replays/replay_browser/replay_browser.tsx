@@ -4,22 +4,17 @@ import FolderIcon from "@mui/icons-material/Folder";
 import SearchIcon from "@mui/icons-material/Search";
 import Button from "@mui/material/Button";
 import CircularProgress from "@mui/material/CircularProgress";
-import IconButton from "@mui/material/IconButton";
 import MenuItem from "@mui/material/MenuItem";
 import Select from "@mui/material/Select";
-import Tooltip from "@mui/material/Tooltip";
 import type { FolderResult } from "@replays/types";
 import React from "react";
 
-import { BasicFooter } from "@/components/footer/footer";
-import { LabelledText } from "@/components/labelled_text";
 import { IconMessage } from "@/components/message";
 import { useDelayedLoading } from "@/lib/hooks/use_delayed_loading";
 import { useReplayBrowserList, useReplayBrowserNavigation } from "@/lib/hooks/use_replay_browser_list";
 import { useReplayFilter } from "@/lib/hooks/use_replay_filter";
 import { useReplayPresenter, useReplays } from "@/lib/hooks/use_replays";
 import { useToasts } from "@/lib/hooks/use_toasts";
-import { FolderButtons } from "@/pages/replays/folder_buttons/folder_buttons";
 import { useServices } from "@/services";
 
 import { FileList } from "./file_list/file_list";
@@ -51,7 +46,6 @@ export const ReplayBrowser = React.memo(() => {
 
   const currentFolder = useReplays((store) => store.currentFolder);
   const folderTree = useReplays((store) => store.folderTree);
-  const totalFilesInFolder = useReplays((store) => store.totalFilesInFolder);
 
   const showLoading = useDelayedLoading(loading, 300, 500);
   const { showError, showSuccess } = useToasts();
@@ -149,6 +143,15 @@ export const ReplayBrowser = React.memo(() => {
             <div style={{ flex: 1, minWidth: 0 }}>
               <FilterToolbar ref={searchInputRef} />
             </div>
+            {/* While the folder is read: how far along (the bar at the foot that also said it is gone). */}
+            {showLoading && showReplayProgress && (
+              <span
+                style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: 12, whiteSpace: "nowrap" }}
+              >
+                {Messages.processedReplayCount(replayProgress!.current, replayProgress!.total)}
+                <CircularProgress color="secondary" size={16} value={replayProgressPercent} variant="determinate" />
+              </span>
+            )}
           </div>
           {showLoading ? (
             <FileListSkeleton />
@@ -175,78 +178,6 @@ export const ReplayBrowser = React.memo(() => {
           )}
         </div>
       </div>
-
-      <Footer
-        css={css`
-          container-type: inline-size;
-          gap: 12px;
-        `}
-      >
-        <div
-          css={css`
-            display: flex;
-            align-items: center;
-            flex: 1;
-            min-width: 0;
-            & > * {
-              min-width: 0;
-            }
-          `}
-        >
-          <div>
-            <Tooltip title={Messages.revealLocation()}>
-              <IconButton onClick={() => window.electron.shell.openPath(currentFolder)} size="small">
-                <FolderIcon
-                  css={css`
-                    color: var(--surface-3);
-                  `}
-                />
-              </IconButton>
-            </Tooltip>
-          </div>
-          <LabelledText
-            label={Messages.currentFolder()}
-            css={css`
-              margin-left: 10px;
-              min-width: 0;
-              & > * {
-                overflow: hidden;
-                text-overflow: ellipsis;
-                white-space: nowrap;
-              }
-            `}
-          >
-            {currentFolder}
-          </LabelledText>
-        </div>
-        <FolderButtons row={true} />
-        <div
-          css={css`
-            display: flex;
-            align-items: center;
-            justify-content: flex-end;
-            gap: 1em;
-          `}
-        >
-          {showLoading ? (
-            <>
-              <span>
-                {showReplayProgress
-                  ? Messages.processedReplayCount(replayProgress!.current, replayProgress!.total)
-                  : ""}
-              </span>
-              <CircularProgress
-                color="secondary"
-                size={20}
-                value={replayProgressPercent}
-                variant={replayProgressPercent ? "determinate" : "indeterminate"}
-              />
-            </>
-          ) : (
-            Messages.totalReplayCount(totalFilesInFolder ?? filteredFiles.length)
-          )}
-        </div>
-      </Footer>
     </Outer>
   );
 });
@@ -280,10 +211,6 @@ const Outer = styled.div`
   position: relative;
   min-width: 0;
   min-height: 0;
-`;
-
-const Footer = styled(BasicFooter)`
-  justify-content: space-between;
 `;
 
 /** The replay folders as a dropdown (each a level deeper indented), in place of the folder tree's column. */

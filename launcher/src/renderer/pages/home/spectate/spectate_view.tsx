@@ -20,7 +20,7 @@ import type { TooltipProps } from "@mui/material/Tooltip";
 import Tooltip from "@mui/material/Tooltip";
 import type { LiveGameEntry, LiveMode, LivePlayer, SpectateState } from "@spectate/types";
 import { clsx } from "clsx";
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { ShellMessages } from "@/app/shell/shell.messages";
 import { MiniProfileTooltip } from "@/components/profile/mini_profile";
@@ -371,6 +371,58 @@ const LivePlayerName = ({ player }: { player: LivePlayer }) => {
   );
 };
 
+/**
+ * Who plays, in one of three shapes only (Sarah's board): all on one line; the first side on one line and "vs" with
+ * the second side on the next; or, when a side doesn't fit on a line, each player on a line of their own ("vs" before
+ * the second side's first). Never a side half wrapped beside one that isn't: the row measures its widest side.
+ */
+const SidesCell = ({ sides }: { sides: LivePlayer[][] }) => {
+  const ref = useRef<HTMLDivElement>(null);
+  const [stacked, setStacked] = useState(false);
+  const who = sides.map((side) => side.map((p) => `${p.uid}:${p.displayName}`).join("&")).join("|");
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) {
+      return;
+    }
+    const check = () => {
+      // Each side laid out on one line for a moment, measured, before paint.
+      const was = el.dataset.stacked;
+      delete el.dataset.stacked;
+      const widest = Math.max(0, ...Array.from(el.children).map((c) => (c as HTMLElement).scrollWidth));
+      if (was !== undefined) {
+        el.dataset.stacked = was;
+      }
+      setStacked(widest > el.clientWidth + 0.5);
+    };
+    check();
+    if (typeof ResizeObserver === "undefined") {
+      return;
+    }
+    const observer = new ResizeObserver(check);
+    observer.observe(el);
+    return () => observer.disconnect();
+    // Measured again when the players change (not on each clock tick's new array).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [who]);
+  return (
+    <div ref={ref} className={styles.players} data-stacked={stacked ? "" : undefined}>
+      {sides.map((side, i) => (
+        <span key={i} className={styles.side}>
+          {side.map((p, j) => (
+            <span key={p.uid} className={styles.player}>
+              {i > 0 && j === 0 && <span className={styles.vs}>{Messages.vs()}</span>}
+              <img className={styles.stock} src={getCharacterIcon(p.characterId, p.costume)} alt="" />
+              <LivePlayerName player={p} />
+              {j < side.length - 1 && <span className={styles.vs}>{Messages.and()}</span>}
+            </span>
+          ))}
+        </span>
+      ))}
+    </div>
+  );
+};
+
 export const LiveGameRow = React.memo(function LiveGameRow({
   game,
   now,
@@ -425,24 +477,7 @@ export const LiveGameRow = React.memo(function LiveGameRow({
         ) : (
           <span className={styles.stageThumb} />
         )}
-        <div className={styles.players}>
-          {sides.map((side, i) => (
-            <React.Fragment key={i}>
-              {i > 0 && <span className={styles.vs}>{Messages.vs()}</span>}
-              <span className={styles.side}>
-                {side.map((p, j) => (
-                  <React.Fragment key={p.uid}>
-                    {j > 0 && <span className={styles.vs}>{Messages.and()}</span>}
-                    <span className={styles.player}>
-                      <img className={styles.stock} src={getCharacterIcon(p.characterId, p.costume)} alt="" />
-                      <LivePlayerName player={p} />
-                    </span>
-                  </React.Fragment>
-                ))}
-              </span>
-            </React.Fragment>
-          ))}
-        </div>
+        <SidesCell sides={sides} />
         <span className={styles.mode}>{modeLabel(game.mode)}</span>
         <div className={styles.game}>
           <div>{Messages.gameScore(game.game.number, setScore(game))}</div>

@@ -21,6 +21,7 @@ import CreateNewFolderOutlinedIcon from "@mui/icons-material/CreateNewFolderOutl
 import DeleteOutlineRoundedIcon from "@mui/icons-material/DeleteOutlineRounded";
 import DragIndicatorRoundedIcon from "@mui/icons-material/DragIndicatorRounded";
 import EditOutlinedIcon from "@mui/icons-material/EditOutlined";
+import InfoOutlinedIcon from "@mui/icons-material/InfoOutlined";
 import PersonOutlineIcon from "@mui/icons-material/PersonOutline";
 import Button from "@mui/material/Button";
 import Dialog from "@mui/material/Dialog";
@@ -129,6 +130,23 @@ export const ModsView = (props: ModsViewProps) => {
     <div className={styles.page}>
       <div className={styles.head}>
         <h1 className={styles.title}>{Messages.tabLabel()}</h1>
+        <Tooltip
+          disableInteractive={false}
+          placement="bottom-start"
+          title={
+            <div className={styles.introTip}>
+              <p>{Messages.intro()}</p>
+              <p>
+                {Messages.betaLine1()} {Messages.betaLine2Before()}
+                <ExternalLink href={FEEDBACK_URL}>{Messages.discord()}</ExternalLink>
+              </p>
+            </div>
+          }
+        >
+          <span className={styles.info} tabIndex={0} aria-label={Messages.intro()} data-testid="mods-intro">
+            <InfoOutlinedIcon fontSize="small" />
+          </span>
+        </Tooltip>
         <div className={styles.headControls}>
           {state && (
             <ControllerMenu
@@ -142,15 +160,6 @@ export const ModsView = (props: ModsViewProps) => {
             />
           )}
         </div>
-      </div>
-      <div className={styles.introRow}>
-        <p className={styles.intro}>{Messages.intro()}</p>
-        <p className={styles.beta}>
-          {Messages.betaLine1()}
-          <br />
-          {Messages.betaLine2Before()}
-          <ExternalLink href={FEEDBACK_URL}>{Messages.discord()}</ExternalLink>
-        </p>
       </div>
       {shownError && (
         <div className={clsx(styles.error, styles.dismissable)}>
@@ -857,11 +866,6 @@ const BuildRow = ({
         </div>
       )}
       <div className={styles.actions}>
-        {/* The codes its rooms run. Not for a mod booted by its launcher (P+'s too): the launcher puts
-            its own Gecko code handler where Dolphin's goes, and the mod's codes are in it. */}
-        {onCodes && hasRoomCodes(build) && (
-          <CodesButton names={(build.codes?.on ?? []).map((c) => c.name)} onClick={onCodes} />
-        )}
         <Tooltip title={Messages.hostTooltip()}>
           <span>
             <Button variant="outlined" color="inherit" size="small" disabled={disabled || hashing} onClick={onHost}>
@@ -869,6 +873,11 @@ const BuildRow = ({
             </Button>
           </span>
         </Tooltip>
+        {/* The codes its rooms run, after Host so Host never moves. Not for a mod booted by its launcher (P+'s
+            too): the launcher puts its own Gecko code handler where Dolphin's goes, and the mod's codes are in it. */}
+        {onCodes && hasRoomCodes(build) && (
+          <CodesButton names={(build.codes?.on ?? []).map((c) => c.name)} onClick={onCodes} />
+        )}
       </div>
     </div>
   );

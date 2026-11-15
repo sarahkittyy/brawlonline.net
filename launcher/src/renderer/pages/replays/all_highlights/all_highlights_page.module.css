@@ -58,11 +58,6 @@
   background: rgb(0 0 0 / 30%);
 }
 
-/* The folder buttons at the sidebar's foot, under the empty rest (folder_buttons.tsx). */
-.folders {
-  background: rgb(0 0 0 / 30%);
-}
-
 .content {
   flex: 1;
   min-width: 0;

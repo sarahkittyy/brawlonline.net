@@ -525,3 +525,40 @@
   text-transform: none;
   font-size: 13px;
 }
+
+/* Round 5 (Sarah's board): a side stays on one line; the second side, "vs" first, goes under the first when both
+   don't fit; when even one side doesn't fit, every player gets a line (spectate_view.tsx SidesCell). */
+.players {
+  gap: 2px 10px;
+}
+
+.side {
+  flex-wrap: nowrap;
+  white-space: nowrap;
+  gap: 2px 8px;
+}
+
+.player {
+  gap: 6px;
+}
+
+.players[data-stacked] .side {
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+.players[data-stacked] {
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+/* Names keep their width on a side's line (so the row knows when a side doesn't fit); stacked, a name too long for
+   the cell ends in "…". */
+.side .player {
+  flex-shrink: 0;
+}
+
+.players[data-stacked] .player {
+  flex-shrink: 1;
+  max-width: 100%;
+}

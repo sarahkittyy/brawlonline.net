@@ -1219,7 +1219,7 @@
   background-color: transparent;
 }
 
-@container (max-width: 600px) {
+@container (max-width: 680px) {
   .page {
     overflow-y: auto;
   }
@@ -1275,4 +1275,98 @@
 .roomGame {
   white-space: normal;
   overflow-wrap: anywhere;
+}
+
+/* ---- Round 5 (Sarah's board) ---- */
+
+/* The page scrolls when its columns stack (narrow); side by side, each column scrolls on its own. */
+.page {
+  overflow-y: auto;
+}
+
+.head {
+  justify-content: flex-start;
+  margin-bottom: 14px;
+}
+
+.head .title {
+  flex: none;
+}
+
+/* The words behind the title's info icon. */
+.info {
+  display: inline-flex;
+  color: var(--text-dim);
+  cursor: help;
+  margin-top: 6px;
+}
+
+.info:hover,
+.info:focus-visible {
+  color: var(--text-primary);
+}
+
+.introTip p {
+  margin: 0 0 6px;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.introTip p:last-child {
+  margin-bottom: 0;
+}
+
+/* The controller pushed to the right; on a narrow page its label goes and its name shrinks. */
+.headControls {
+  margin-left: auto;
+  min-width: 0;
+}
+
+.headControls .controllerRow {
+  min-width: 0;
+}
+
+.headControls .controllerRow > div {
+  min-width: 0;
+}
+
+.headControls .controllerValue {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@container (max-width: 600px) {
+  .headControls .controllerLabel {
+    display: none;
+  }
+}
+
+.error {
+  margin-bottom: 12px;
+}
+
+.headControls .controllerRow > div {
+  height: 36px;
+  font-size: 14px;
+}
+
+/* A panel's head: when its buttons don't fit beside the title they go under it, whole (never cut off). */
+.section .bar {
+  flex-wrap: wrap;
+  row-gap: 6px;
+}
+
+.section .bar > :not(.heading) {
+  flex: none;
+}
+
+.addButtons {
+  flex-wrap: nowrap;
+}
+
+.addButtons .addLabel {
+  overflow: visible;
+  white-space: nowrap;
 }

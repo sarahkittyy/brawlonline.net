@@ -31,7 +31,6 @@ import React, { useEffect, useMemo, useState } from "react";
 
 import { DualPane } from "@/components/dual_pane";
 import { useSetting } from "@/lib/hooks/use_settings";
-import { FolderButtons } from "@/pages/replays/folder_buttons/folder_buttons";
 import { favoriteKey, useFavoriteHighlights } from "@/pages/replays/replay_file_stats/highlights/favorites";
 import type { HighlightEntry } from "@/pages/replays/replay_file_stats/highlights/highlight_list";
 import { comboOfManyName, HighlightRows } from "@/pages/replays/replay_file_stats/highlights/highlight_list";
@@ -267,7 +266,6 @@ export const AllHighlightsPage = React.memo(() => {
             {sidebarItem("manual", <CropIcon fontSize="small" />, Messages.manualClips(), Messages.manualHint())}
             {sidebarItem("favorites", <StarIcon fontSize="small" />, Messages.favorites())}
             <div className={styles.sideRest} />
-            <FolderButtons className={styles.folders} />
           </div>
         }
         rightSide={

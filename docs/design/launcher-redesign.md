@@ -206,3 +206,9 @@ Not done:
 - **The folded rail** lost its envelope (it only opened the rail, as the arrow does); unread messages count on the arrow.
 - **Replays** opens on the replay folder itself (everything in it), not the last folder picked; the folder dropdown's icon is centred; the folder buttons sit in the footer's row (only their icons when narrow).
 - **Window sizes:** checked at 1400, 1264, 1100 and 980 px (the smallest window): names in the tables, rooms and chat tabs give way with an ellipsis rather than overflowing; the ranked card shrinks first.
+
+## 11. Round 5 (Sarah's board, 2026-11-14)
+
+- **Other Games:** Host comes before a game's Codes button, so Host never moves. The page's words and the beta note sit behind an info icon beside the title (they took half a short window); the controller is on the title's line and shrinks (its label goes on a narrow page). The panels stack under 680 px of page and the page then scrolls; a panel's head puts its buttons under the title when they don't fit. An error has room under it.
+- **Replays:** no bar at the foot (current folder, the count). Open Replay Location and Open Rendered Video Location sit on the title's line, with their labels; while a folder is read, its progress shows beside the filters.
+- **Spectate:** who plays takes one of three shapes only: all on one line; the first side, then "vs" and the second side on the next line; or every player on a line of their own when a side doesn't fit. The row measures its widest side, so a side is never half wrapped beside one that isn't.

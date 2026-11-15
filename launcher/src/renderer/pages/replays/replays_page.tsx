@@ -6,6 +6,7 @@ import { useReplayBrowserList, useReplayBrowserNavigation } from "@/lib/hooks/us
 import { useReplayPresenter, useReplays } from "@/lib/hooks/use_replays";
 import { useSettings } from "@/lib/hooks/use_settings";
 import { Tabs } from "@/pages/home/tabs/tabs";
+import { FolderButtons } from "@/pages/replays/folder_buttons/folder_buttons";
 
 import { AllHighlightsPage } from "./all_highlights/all_highlights_page";
 import { usePlayFromReplayList } from "./replay_browser/play_from_list";
@@ -51,7 +52,11 @@ const ReplaysTabs = () => {
     <div style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0, minWidth: 0 }}>
       {/* The page's name over its tabs (docs/design/launcher-redesign.md §7). */}
       <div style={{ padding: "20px 28px 6px" }}>
-        <h1 style={{ margin: "0 0 6px", fontSize: 28, whiteSpace: "nowrap" }}>{CreateAppMessages.replays()}</h1>
+        {/* The page's name, and the replay and video folders' buttons on its line (they were at a bar's foot). */}
+        <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", margin: "0 0 6px" }}>
+          <h1 style={{ margin: 0, fontSize: 28, whiteSpace: "nowrap", flex: 1 }}>{CreateAppMessages.replays()}</h1>
+          <FolderButtons row={true} />
+        </div>
         <Tabs
           value={current}
           onChange={(tab) => navigate(`/main/replays/${tab}`)}
