@@ -42,12 +42,18 @@ describe("product identity", () => {
 
   it("offers the website downloads the release workflow checks as the manual download", () => {
     const workflow = readFileSync(path.join(root, "..", ".github", "workflows", "client.yml"), "utf8");
-    const downloads = /^\s*DOWNLOADS: (.+)$/m.exec(workflow)![1].trim().split(/\s+/);
-    for (const platform of ["win32", "linux"]) {
-      const url = launcherDownloadUrl(platform);
+    // Every publish job's DOWNLOADS (Linux and Windows, arm64 Linux).
+    const downloads = [...workflow.matchAll(/^\s*DOWNLOADS: (.+)$/gm)].flatMap((m) => m[1].trim().split(/\s+/));
+    for (const [platform, arch] of [
+      ["win32", "x64"],
+      ["linux", "x64"],
+      ["linux", "arm64"],
+    ]) {
+      const url = launcherDownloadUrl(platform, arch);
       expect(url.startsWith("https://brawlonline.net/downloads/")).toBe(true);
       expect(downloads).toContain(url.slice("https://brawlonline.net/downloads/".length));
     }
+    expect(launcherDownloadUrl("linux", "arm64")).not.toBe(launcherDownloadUrl("linux", "x64"));
     expect(launcherDownloadUrl("darwin")).toBe("https://brawlonline.net/downloads/BrawlOnline.dmg");
   });
 

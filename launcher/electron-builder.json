@@ -103,7 +103,7 @@
     }
   },
   "appImage": {
-    "artifactName": "Brawl-Online-${version}-x86_64.${ext}"
+    "artifactName": "Brawl-Online-${version}-${arch}.${ext}"
   },
   "toolsets": {
     "appimage": "1.0.3"

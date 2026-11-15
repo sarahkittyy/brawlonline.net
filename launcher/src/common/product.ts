@@ -78,15 +78,18 @@ export const MAC_SELF_UPDATE = true;
 export const MAC_DOWNLOAD_URL = `https://${BASE_DOMAIN}/downloads/BrawlOnline.dmg`;
 
 /**
- * The website's download of the newest launcher for a platform (process.platform), which the
- * release workflow keeps current (client.yml's DOWNLOADS): the update bar's "Download manually".
+ * The website's download of the newest launcher for a platform and CPU (process.platform,
+ * process.arch), which the release workflow keeps current (client.yml's DOWNLOADS): the update
+ * bar's "Download manually". Linux has an x86_64 and an arm64 AppImage.
  */
-export function launcherDownloadUrl(platform: string): string {
+export function launcherDownloadUrl(platform: string, arch: string = "x64"): string {
   switch (platform) {
     case "darwin":
       return MAC_DOWNLOAD_URL;
     case "linux":
-      return `https://${BASE_DOMAIN}/downloads/BrawlOnline.AppImage`;
+      return arch === "arm64"
+        ? `https://${BASE_DOMAIN}/downloads/BrawlOnline-arm64.AppImage`
+        : `https://${BASE_DOMAIN}/downloads/BrawlOnline.AppImage`;
     default:
       return `https://${BASE_DOMAIN}/downloads/BrawlOnline-Setup.exe`;
   }

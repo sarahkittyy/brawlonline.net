@@ -1,8 +1,9 @@
 //! The newest client build of each platform, read from the launcher's update feed: the folder
 //! `pp-release client` publishes electron-builder's `latest.yml` (Windows), `latest-mac.yml` and
-//! `latest-linux.yml` to (`/var/www/brawlonline/updates/launcher` in production). A game older
-//! than its platform's newest build may not play online (`MM_UPDATE_FEED_DIR`): each platform
-//! goes live on its own (the macOS build waits for Apple), so each is held to its own feed.
+//! `latest-linux.yml` (x86_64) and `latest-linux-arm64.yml` to (`/var/www/brawlonline/updates/launcher`
+//! in production). A game older than its platform's newest build may not play online
+//! (`MM_UPDATE_FEED_DIR`): each platform goes live on its own (the macOS build waits for Apple, the
+//! arm64 Linux build is published when it is done), so each is held to its own feed.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -10,7 +11,12 @@ use std::path::Path;
 use crate::engine::parse_version;
 
 /// The platforms a build reports (`platform` in `hello` and tickets) and their feed files.
-pub const FEEDS: [(&str, &str); 3] = [("win", "latest.yml"), ("mac", "latest-mac.yml"), ("linux", "latest-linux.yml")];
+pub const FEEDS: [(&str, &str); 4] = [
+    ("win", "latest.yml"),
+    ("mac", "latest-mac.yml"),
+    ("linux", "latest-linux.yml"),
+    ("linux-arm64", "latest-linux-arm64.yml"),
+];
 
 /// The version each platform's feed names.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -121,6 +127,19 @@ mod tests {
         // Versions compare as numbers, not text.
         let v = FeedVersions::from_pairs(&[("win", "0.1.100"), ("mac", "0.1.99")]);
         assert_eq!(v.required("linux", "0.1.50"), Some("0.1.99"));
+    }
+
+    #[test]
+    fn arm64_linux_is_held_to_its_own_feed() {
+        // The arm64 Linux build is published on its own: while it lags, an arm64 build of the
+        // version it names may still play, an x86_64 one may not.
+        let v = FeedVersions::from_pairs(&[("win", "0.2.9"), ("linux", "0.2.9"), ("linux-arm64", "0.2.8")]);
+        assert_eq!(v.required("linux-arm64", "0.2.8"), Some("0.2.8"));
+        assert_eq!(v.required("linux", "0.2.8"), Some("0.2.9"));
+        // Before its first build is published (no feed yet), as any platform without a feed.
+        let v = FeedVersions::from_pairs(&[("win", "0.2.9"), ("mac", "0.2.8"), ("linux", "0.2.9")]);
+        assert_eq!(v.required("linux-arm64", "0.2.9"), Some("0.2.9"));
+        assert_eq!(v.required("linux-arm64", "0.2.10"), None);
     }
 
     #[test]

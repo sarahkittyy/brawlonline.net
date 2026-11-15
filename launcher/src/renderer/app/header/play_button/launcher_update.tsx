@@ -54,8 +54,8 @@ export const useLauncherUpdate = (): LauncherUpdateAction | null => {
 
   // The website's installer for this platform (the update feed's folder is not browsable).
   const openManualDownload = useCallback(() => {
-    const { isMac, isLinux } = window.electron.bootstrap;
-    const url = launcherDownloadUrl(isMac ? "darwin" : isLinux ? "linux" : "win32");
+    const { isMac, isLinux, arch } = window.electron.bootstrap;
+    const url = launcherDownloadUrl(isMac ? "darwin" : isLinux ? "linux" : "win32", arch);
     window.electron.shell.openExternal(url).catch(log.error);
   }, []);
 

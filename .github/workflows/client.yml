@@ -1,5 +1,5 @@
-# Client: the game plugin, our Dolphin (Linux and Windows) and the launcher packages (AppImage,
-# NSIS installer), published to https://brawlonline.net/downloads/ and to the launcher's
+# Client: the game plugin, our Dolphin (Linux, Windows, macOS) and the launcher packages (AppImage
+# for x86_64 and arm64, NSIS installer, DMG), published to https://brawlonline.net/downloads/ and to the launcher's
 # electron-updater feed https://brawlonline.net/updates/launcher/ (generic provider). Installed
 # launchers update themselves from that feed; the bundled Dolphin and plugin update with them.
 #
@@ -17,7 +17,11 @@
 #     on the profile's cache volume; on GitHub-hosted ubuntu-24.04 they install the packages and
 #     keep ccache and the toolchain in the Actions cache; on our own self-hosted machines they use
 #     the runner's own packages and $CI_CACHE. sarahvps2 (production) only publishes.
-#   - Windows: GitHub-hosted (paid per minute on a private repository: paths below, caches).
+#   - Windows: GitHub-hosted (paths below, caches).
+#   - arm64 Linux: GitHub-hosted ubuntu-24.04-arm (linux-arm64 job; free on this public
+#     repository), ccache in the Actions cache. publish-linux-arm64 publishes it on its own as soon
+#     as it is built (latest-linux-arm64.yml): like macOS it never holds back Linux and Windows, and
+#     arm64 launchers read only their own feed, so they see an update once their build is out.
 #   - Publishing: always sarahvps2 (pp-release client). Builds from other machines arrive as
 #     Actions artifacts (1-day retention, deleted after publishing).
 #   - macOS: Namespace runner profile namespace-profile-brawlonline-mac (Apple silicon), $CI_CACHE
@@ -229,6 +233,127 @@ jobs:
         run: |
           rm -rf "$RUNNER_TEMP/out-linux" "$RUNNER_TEMP/plugin" client/launcher/release/build client/launcher/release/dolphin
           # Keep the caches bounded (ccache trims itself to CCACHE_MAXSIZE).
+          du -sh "${CI_CACHE:-$HOME/ci-cache}"/* 2>/dev/null || true
+          df -h / | tail -n 1
+
+  linux-arm64:
+    # The arm64 Linux launcher (AppImage: Asahi Linux on Apple silicon, Snapdragon laptops and the
+    # like), on GitHub's arm64 runner (ubuntu-24.04-arm, free on this public repository; the
+    # optional repository variable CLIENT_LINUX_ARM64_RUNNER, a JSON list of labels, overrides it).
+    # The linux job's steps on the runner's own CPU: Dolphin runs JitArm64, as on macOS.
+    # Its own pipeline, as macOS has: publish-linux-arm64 publishes it (latest-linux-arm64.yml) as
+    # soon as it is built, it never holds back the other platforms, and arm64 launchers only see an
+    # update once their own build is out. DISABLE_LINUX_ARM64="true" turns it off.
+    # Not when finishing another run (windows_from_run): that run's arm64 build is its own.
+    if: ${{ vars.DISABLE_LINUX_ARM64 != 'true' && !inputs.windows_from_run }}
+    needs: plugin
+    concurrency:
+      group: client-linux-arm64
+      cancel-in-progress: false
+    runs-on: ${{ fromJSON(vars.CLIENT_LINUX_ARM64_RUNNER || '["ubuntu-24.04-arm"]') }}
+    timeout-minutes: 240
+    env:
+      VERSION: ${{ needs.plugin.outputs.version }}
+      NODE_OPTIONS: --max-old-space-size=4096
+      USE_HARD_LINKS: "false"
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          path: client
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Build packages (Namespace or GitHub-hosted runner)
+        if: startsWith(runner.name, 'nsc-runner-') || runner.environment == 'github-hosted'
+        run: |
+          # The linux job's packages (Dolphin's Linux build dependencies and qmake6), and the
+          # libraries Electron loads even as node (npm test), which the arm64 image lacks.
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends \
+            cmake ninja-build ccache pkg-config gettext qt6-base-dev qt6-base-private-dev qt6-svg-dev \
+            qmake6 qt6-qpa-plugins libavcodec-dev libavformat-dev libavutil-dev libswscale-dev \
+            libxi-dev libxrandr-dev libudev-dev libevdev-dev libsfml-dev libminiupnpc-dev \
+            libmbedtls-dev libcurl4-openssl-dev libhidapi-dev libsystemd-dev libbluetooth-dev \
+            libasound2-dev libpulse-dev libpugixml-dev libbz2-dev libzstd-dev liblzo2-dev libpng-dev \
+            libusb-1.0-0-dev libgl-dev libegl-dev file patchelf \
+            libnss3 libnspr4 libatk1.0-0t64 libatk-bridge2.0-0t64 libgtk-3-0t64 libxcomposite1 \
+            libxdamage1 libatspi2.0-0t64
+          echo "JOBS=$(nproc)" >> "$GITHUB_ENV"
+          echo "CCACHE_MAXSIZE=2G" >> "$GITHUB_ENV"
+      - name: Cache volume (Namespace runner)
+        if: startsWith(runner.name, 'nsc-runner-')
+        run: |
+          echo "CI_CACHE=$NSC_CACHE_PATH/ci-cache" >> "$GITHUB_ENV"
+          echo "CCACHE_MAXSIZE=5G" >> "$GITHUB_ENV"
+      - uses: actions/cache/restore@v5
+        if: runner.environment == 'github-hosted'
+        with:
+          path: ~/ci-cache/ccache
+          key: linux-arm64-ccache-${{ github.run_id }}
+          restore-keys: linux-arm64-ccache-
+      - name: Stamp version ${{ env.VERSION }}
+        run: client/.github/scripts/stamp-version.sh "$VERSION"
+      - name: Dolphin
+        run: client/.github/scripts/build-dolphin-linux.sh "$VERSION" "$GITHUB_WORKSPACE/client/launcher/release/dolphin"
+      # Saved right after the build, also when a later step fails.
+      - uses: actions/cache/save@v5
+        if: ${{ runner.environment == 'github-hosted' && !cancelled() }}
+        with:
+          path: ~/ci-cache/ccache
+          key: linux-arm64-ccache-${{ github.run_id }}
+      - uses: actions/download-artifact@v7
+        with:
+          name: plugin
+          path: ${{ runner.temp }}/plugin
+      - name: Launcher dependencies
+        working-directory: client/launcher
+        run: |
+          nice -n 19 npm ci --no-audit --no-fund
+          node node_modules/electron/install.js
+      - name: Rank badges (not in git, tools/rank-badges/fetch_badges.sh)
+        working-directory: client
+        shell: bash
+        env:
+          RANK_BADGES_TOKEN: ${{ secrets.RANK_BADGES_TOKEN }}
+        run: bash tools/rank-badges/fetch_badges.sh
+      - name: Launcher build
+        working-directory: client/launcher
+        env:
+          PPO_PLUGIN_PATH: ${{ runner.temp }}/plugin/PPOnline.rel
+        run: |
+          npm run stage:plugin
+          nice -n 19 npm run build
+      - name: Launcher checks and tests
+        working-directory: client/launcher
+        run: |
+          npm run typecheck
+          nice -n 19 npm test
+      - name: Package (AppImage)
+        working-directory: client/launcher
+        run: |
+          nice -n 19 npx electron-builder build --linux --arm64 --publish never
+          ls -l release/build
+      - name: Check the package
+        working-directory: client/launcher/release/build
+        run: |
+          ../../../.github/scripts/check-package.sh linux-arm64-unpacked
+          file linux-arm64-unpacked/resources/dolphin/usr/bin/project-plus-dolphin | grep -q 'ARM aarch64' ||
+            { echo "::error::the bundled Dolphin is not an arm64 build"; exit 1; }
+          mkdir -p "$RUNNER_TEMP/out-linux-arm64"
+          mv latest-linux-arm64.yml *-arm64.AppImage "$RUNNER_TEMP/out-linux-arm64/"
+          ls -l "$RUNNER_TEMP/out-linux-arm64"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: launcher-linux-arm64
+          path: ${{ runner.temp }}/out-linux-arm64/
+          retention-days: 1
+          compression-level: 0
+          if-no-files-found: error
+      - name: Clean up
+        if: always()
+        run: |
+          rm -rf "$RUNNER_TEMP/out-linux-arm64" "$RUNNER_TEMP/plugin" client/launcher/release/build client/launcher/release/dolphin
           du -sh "${CI_CACHE:-$HOME/ci-cache}"/* 2>/dev/null || true
           df -h / | tail -n 1
 
@@ -551,7 +676,8 @@ jobs:
           if-no-files-found: error
 
   publish:
-    # Linux and Windows. The macOS build is published by client-mac-publish.yml once Apple
+    # Linux (x86_64) and Windows. The arm64 Linux build is published by publish-linux-arm64, the
+    # macOS build by client-mac-publish.yml once Apple
     # accepts it. Finishing another run (windows_from_run): that run's Windows build.
     needs: [plugin, linux, windows]
     if: >-
@@ -623,3 +749,70 @@ jobs:
             curl -fsS -X DELETE -H "Authorization: Bearer $GH_TOKEN" "$api/artifacts/$id" && echo "deleted artifact $id"
           done
           rm -rf "$RUNNER_TEMP/client"
+
+  publish-linux-arm64:
+    # The arm64 Linux build, as soon as it is built: the publish job never waits for it, nor it for
+    # the other platforms. Never an older version over a newer one: runs of this job don't overlap
+    # (its concurrency group), and a build older than the site's latest-linux-arm64.yml is dropped.
+    needs: [plugin, linux-arm64]
+    if: ${{ !cancelled() && needs.linux-arm64.result == 'success' }}
+    concurrency:
+      group: client-publish-linux-arm64
+      cancel-in-progress: false
+    runs-on: [self-hosted, linux, x64, sarahvps2, brawlonline]
+    timeout-minutes: 30
+    env:
+      VERSION: ${{ needs.plugin.outputs.version }}
+    permissions:
+      contents: read
+      actions: write # delete this run's artifact after publishing
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          name: launcher-linux-arm64
+          path: ${{ runner.temp }}/client-linux-arm64
+      - name: Publish
+        id: publish
+        run: |
+          dir="$RUNNER_TEMP/client-linux-arm64"
+          ls -l "$dir"
+          got=$(sed -n 's/^version: //p' "$dir/latest-linux-arm64.yml")
+          [ "$got" = "$VERSION" ] || { echo "latest-linux-arm64.yml is $got, not $VERSION" >&2; exit 1; }
+          # The site's arm64 version (none before the first one is published).
+          site=$(curl -fsS --max-time 20 "https://brawlonline.net/updates/launcher/latest-linux-arm64.yml?nocache=$GITHUB_RUN_ID" |
+            sed -n 's/^version: //p') || site=""
+          if [ -n "$site" ] && [ "$site" != "$VERSION" ] &&
+            [ "$(printf '%s\n%s\n' "$site" "$VERSION" | sort -V | tail -n 1)" = "$site" ]; then
+            echo "::notice::the site already has arm64 Linux $site, newer than $VERSION: not published"
+            echo "published=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          sudo -n /usr/local/sbin/pp-release client "$dir"
+          echo "published=true" >> "$GITHUB_OUTPUT"
+      - name: Check
+        if: steps.publish.outputs.published == 'true'
+        env:
+          FEEDS: latest-linux-arm64.yml
+          DOWNLOADS: BrawlOnline-arm64.AppImage
+        run: |
+          base=https://brawlonline.net
+          for f in $FEEDS; do
+            got=$(curl -fsS --max-time 20 "$base/updates/launcher/$f?nocache=$GITHUB_RUN_ID" | sed -n 's/^version: //p')
+            echo "$f: $got"
+            [ "$got" = "$VERSION" ] || { echo "$f does not name $VERSION" >&2; exit 1; }
+          done
+          for f in $DOWNLOADS; do
+            curl -fsS --max-time 20 -o /dev/null -r 0-0 -w "$f: %{http_code}\n" "$base/downloads/$f?v=$VERSION"
+          done
+      - name: Delete the published artifact
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          api="$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions"
+          ids=$(curl -fsS -H "Authorization: Bearer $GH_TOKEN" "$api/runs/$GITHUB_RUN_ID/artifacts?per_page=100" |
+            python3 -c 'import json,sys; print(" ".join(str(a["id"]) for a in json.load(sys.stdin)["artifacts"] if a["name"] == "launcher-linux-arm64"))')
+          for id in $ids; do
+            curl -fsS -X DELETE -H "Authorization: Bearer $GH_TOKEN" "$api/artifacts/$id" && echo "deleted artifact $id"
+          done
+          rm -rf "$RUNNER_TEMP/client-linux-arm64"

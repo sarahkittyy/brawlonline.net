@@ -76,10 +76,20 @@ done
 ccache -s -v   # verbose: shows why calls are uncacheable
 
 # ---- AppDir (linuxdeploy bundles the shared libraries and Qt plugins) ----------------------
+# The tools for the machine's own CPU (x86_64, or aarch64 for the arm64 build): they bundle the
+# libraries of the system they run on.
 LD_TAG=1-alpha-20251107-1
-LD_SHA=c20cd71e3a4e3b80c3483cef793cda3f4e990aca14014d23c544ca3ce1270b4d
 LDQT_TAG=1-alpha-20250213-1
-LDQT_SHA=15106be885c1c48a021198e7e1e9a48ce9d02a86dd0a1848f00bdbf3c1c92724
+ld_arch="$(uname -m)"
+case "$ld_arch" in
+  x86_64)
+    LD_SHA=c20cd71e3a4e3b80c3483cef793cda3f4e990aca14014d23c544ca3ce1270b4d
+    LDQT_SHA=15106be885c1c48a021198e7e1e9a48ce9d02a86dd0a1848f00bdbf3c1c92724 ;;
+  aarch64)
+    LD_SHA=620095110d693282b8ebeb244a95b5e911cf8f65f76c88b4b47d16ae6346fcff
+    LDQT_SHA=bf1c24aff6d749b5cf423afad6f15abd4440f81dec1aab95706b25f6667cdcf1 ;;
+  *) echo "no linuxdeploy for $ld_arch" >&2; exit 1 ;;
+esac
 fetch() { # url sha256 dest
   if [ ! -f "$3" ] || ! echo "$2  $3" | sha256sum -c --status; then
     curl -fsSL --retry 3 -o "$3.part" "$1"
@@ -88,10 +98,10 @@ fetch() { # url sha256 dest
   fi
   chmod +x "$3"
 }
-fetch "https://github.com/linuxdeploy/linuxdeploy/releases/download/$LD_TAG/linuxdeploy-x86_64.AppImage" \
-  "$LD_SHA" "$tools/linuxdeploy-x86_64.AppImage"
-fetch "https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/$LDQT_TAG/linuxdeploy-plugin-qt-x86_64.AppImage" \
-  "$LDQT_SHA" "$tools/linuxdeploy-plugin-qt-x86_64.AppImage"
+fetch "https://github.com/linuxdeploy/linuxdeploy/releases/download/$LD_TAG/linuxdeploy-$ld_arch.AppImage" \
+  "$LD_SHA" "$tools/linuxdeploy-$ld_arch.AppImage"
+fetch "https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/$LDQT_TAG/linuxdeploy-plugin-qt-$ld_arch.AppImage" \
+  "$LDQT_SHA" "$tools/linuxdeploy-plugin-qt-$ld_arch.AppImage"
 
 appdir="$(mktemp -d "${RUNNER_TEMP:-/tmp}/dolphin-appdir.XXXXXX")/AppDir"
 mkdir -p "$appdir/usr/bin" "$appdir/usr/share/applications" "$appdir/usr/share/icons/hicolor/256x256/apps"
@@ -103,7 +113,7 @@ cp "$src/Data/project-plus-dolphin.png" "$appdir/usr/share/icons/hicolor/256x256
   export APPIMAGE_EXTRACT_AND_RUN=1 QMAKE="$(command -v qmake6)"
   export PATH="$tools:$PATH"
   cd "$(dirname "$appdir")"
-  nice -n 19 "$tools/linuxdeploy-x86_64.AppImage" --appdir "$appdir" \
+  nice -n 19 "$tools/linuxdeploy-$ld_arch.AppImage" --appdir "$appdir" \
     --executable "$appdir/usr/bin/project-plus-dolphin" \
     --executable "$appdir/usr/bin/dolphin-tool" \
     --desktop-file "$appdir/usr/share/applications/project-plus-dolphin.desktop" \

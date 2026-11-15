@@ -31,11 +31,14 @@ namespace Online
 constexpr char APP_VERSION[] = "0.1.0";
 
 // The platform this build is published for, sent as `platform` with APP_VERSION: the mm server
-// holds each platform to its own update feed's newest build (the macOS one goes live later).
+// holds each platform to its own update feed's newest build (the macOS one goes live later, and
+// so can the arm64 Linux one: its own build and feed, latest-linux-arm64.yml).
 #if defined(_WIN32)
 constexpr char APP_PLATFORM[] = "win";
 #elif defined(__APPLE__)
 constexpr char APP_PLATFORM[] = "mac";
+#elif defined(__aarch64__)
+constexpr char APP_PLATFORM[] = "linux-arm64";
 #else
 constexpr char APP_PLATFORM[] = "linux";
 #endif

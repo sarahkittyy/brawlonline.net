@@ -232,8 +232,10 @@ publish_website() { # dir
 
 # ---- launcher builds -------------------------------------------------------------------------
 
-# electron-builder's feed files: latest.yml (Windows), latest-linux.yml, latest-mac.yml.
-FEED_RE='^latest(-linux|-mac)?\.yml$'
+# electron-builder's feed files: latest.yml (Windows), latest-linux.yml (x86_64),
+# latest-linux-arm64.yml, latest-mac.yml. A run publishes the feeds in DIR and leaves the others
+# as they are (the macOS and arm64 Linux builds are published on their own runs).
+FEED_RE='^latest(-linux|-linux-arm64|-mac)?\.yml$'
 ART_RE='^Brawl-Online(-Setup)?-[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?(-(x86_64|x64|arm64|universal))?(-(win|linux|mac))?\.(exe|AppImage|dmg|zip)(\.blockmap)?$'
 
 yml_field() { # file key: first "key: value" at top level
@@ -303,6 +305,7 @@ publish_client() { # dir
   # Stable download names for the website (hard links: no extra disk).
   link_stable "$upd" "$dl" latest.yml 'Brawl-Online-Setup-*.exe' BrawlOnline-Setup.exe
   link_stable "$upd" "$dl" latest-linux.yml '*.AppImage' BrawlOnline.AppImage
+  link_stable "$upd" "$dl" latest-linux-arm64.yml '*-arm64.AppImage' BrawlOnline-arm64.AppImage
   link_stable "$upd" "$dl" latest-mac.yml '*.dmg' BrawlOnline.dmg
   prune_client "$upd"
   echo "published $count files from $src"
