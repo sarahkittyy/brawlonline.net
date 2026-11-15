@@ -86,9 +86,18 @@
   background-color: transparent;
 }
 
+/* Each cell its own borders: collapsed ones stay where they are when a cell sticks, which left a pixel above and
+   below the stuck row where the rows scrolling behind it showed (Sarah's board). */
+.list table {
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
 .list .meRow td {
   position: sticky;
-  top: var(--leaderboard-head, 0);
+
+  /* (A pixel under the heads, which are drawn over it: they end mid-pixel, and that pixel showed the rows behind.) */
+  top: calc(var(--leaderboard-head, 1px) - 1px);
   bottom: 0;
   z-index: 1;
   background: linear-gradient(
