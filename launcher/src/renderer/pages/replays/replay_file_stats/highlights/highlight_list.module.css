@@ -342,6 +342,44 @@
   gap: 10px;
 }
 
+/* Teams: a line each, "vs" before every team but the first (there it only holds the column), the players in columns
+   across the teams (--team-size of them). */
+.who.teams {
+  display: grid;
+  grid-template-columns: auto repeat(var(--team-size, 2), max-content);
+  align-items: center;
+  justify-content: start;
+  gap: 4px 10px;
+}
+
+.teams .versus,
+.teams .side {
+  display: contents;
+}
+
+/* A narrow list: the columns don't fit, so a line per team as words wrap, a team too long for its line going on under
+   its own first player. */
+@container (max-width: 600px) {
+  .who.teams {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .teams .versus {
+    display: flex;
+    align-items: center;
+  }
+
+  .teams .side {
+    display: flex;
+  }
+}
+
+.firstVs {
+  visibility: hidden;
+}
+
 /* A player: their character, name and stocks; the port's colour is in the stocks (no outlined pill). */
 .chip {
   display: inline-flex;

@@ -426,7 +426,10 @@ export const HighlightRows = ({
                     onDoubleClick={() => void play(i)}
                   >
                     {showDates && <StageThumb stageId={game.stageId} />}
-                    <span className={`${styles.who} ${styles.rowPlayers}`}>
+                    <span
+                      className={`${styles.who} ${styles.rowPlayers} ${game.isTeams ? styles.teams : ""}`}
+                      style={game.isTeams ? ({ "--team-size": teamSize(game) } as React.CSSProperties) : undefined}
+                    >
                       {row.kind === "highlight" ? (
                         <HighlightWho row={row} data={game} players={players} stocks={stocks} />
                       ) : (
@@ -577,6 +580,15 @@ const StageName = ({ stageId }: { stageId?: number | null }) => {
   return stage ? <span className={styles.stage}>{stage.name}</span> : null;
 };
 
+/** The most players on one team (the teams' columns). */
+const teamSize = (data: ReplayHighlights) => {
+  const counts = new Map<number | null, number>();
+  for (const p of data.players) {
+    counts.set(p.teamId, (counts.get(p.teamId) ?? 0) + 1);
+  }
+  return Math.max(1, ...counts.values());
+};
+
 /** Everyone in the game: one vs another; in teams, team vs team. */
 const GameWho = ({ data, stocks }: { data: ReplayHighlights; stocks: Map<number, Stocks> }) => {
   const sides: HighlightPlayer[][] = [];
@@ -594,7 +606,9 @@ const GameWho = ({ data, stocks }: { data: ReplayHighlights; stocks: Map<number,
 
 /**
  * X vs Y: each later side with its "vs" in front, so a line too narrow for them all breaks before a "vs", never
- * inside a name (Sarah's board: names must not be cut off at the smallest window).
+ * inside a name (Sarah's board: names must not be cut off at the smallest window). In teams every team is a line of
+ * its own (Sarah's board, 2026-11-15: a team wrapping inside its "vs" stacked its players beside it, "the order /
+ * layout of the players makes no sense"): the first with a hidden "vs" so the teams' names start in one column.
  */
 const Sides = ({
   sides,
@@ -615,11 +629,13 @@ const Sides = ({
   return (
     <>
       {sides.map((players, i) =>
-        i === 0 ? (
+        i === 0 && !isTeams ? (
           <React.Fragment key={i}>{side(players)}</React.Fragment>
         ) : (
           <span key={i} className={styles.versus}>
-            <span className={styles.vs}>{Messages.vs()}</span>
+            <span className={`${styles.vs} ${i === 0 ? styles.firstVs : ""}`} aria-hidden={i === 0 || undefined}>
+              {Messages.vs()}
+            </span>
             {side(players)}
           </span>
         ),
