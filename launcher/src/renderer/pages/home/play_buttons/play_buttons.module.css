@@ -1,18 +1,19 @@
-/* Play's buttons, stacked (docs/design/launcher-redesign.md §8): each with its status on its left. */
+/* Play's buttons, stacked (docs/design/launcher-redesign.md §8): each with its status on its right. */
 .buttons {
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
+  display: grid;
+  grid-template-columns: max-content auto;
+  gap: 5px 12px;
+  align-items: center;
   flex: none;
 }
 
+/* Its button and status are cells of .buttons' grid, so the buttons' column is as wide as the longest label. */
 .play {
-  display: flex;
-  align-items: center;
-  gap: 12px;
+  display: contents;
 }
 
 .count {
+  justify-self: start;
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -26,11 +27,21 @@
   font-size: 16px !important;
 }
 
-/* Three no taller than the rank beside them (Sarah's board). */
+.buttonSlot {
+  display: grid;
+}
+
+/* As wide as the longest label (the grid's column); 2 px above and below the label (Sarah's board). */
 .button {
-  width: 180px;
-  height: 32px;
+  position: relative;
+  height: 36px;
   font-size: 15px !important;
   text-transform: none !important;
   white-space: nowrap;
+}
+
+.spinner {
+  position: absolute;
+  inset: 0;
+  margin: auto;
 }

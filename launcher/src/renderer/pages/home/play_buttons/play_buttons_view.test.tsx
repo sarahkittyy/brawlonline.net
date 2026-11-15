@@ -21,6 +21,7 @@ describe("PlayButtonsView", () => {
     const { getByTestId } = render(<PlayButtonsView etas={{ unranked: 28, ranked: null }} onPlay={vi.fn()} />);
     expect(getByTestId("play-unranked-eta").textContent).toBe("0:28");
     expect(getByTestId("play-ranked-eta").textContent).toBe("10+ min");
+    expect(getByTestId("play-unranked-eta").getAttribute("aria-label")).toBe("Estimated queue time");
   });
 
   it("hides the ETAs while they are unknown", () => {

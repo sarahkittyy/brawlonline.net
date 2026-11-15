@@ -75,14 +75,16 @@ export const PlayButtonsView = ({ twosQueue, twosPlaying, etas, starting, onPlay
 
 /** The stopwatch and the ETA; nothing while it is unknown. */
 const Eta = ({ seconds, testId }: { seconds: number | null | undefined; testId: string }) => (
-  <span
-    className={styles.count}
-    data-testid={testId}
-    style={{ visibility: seconds === undefined ? "hidden" : undefined }}
-  >
-    <TimerOutlinedIcon className={styles.etaIcon} />
-    {seconds !== undefined && formatEta(seconds)}
-  </span>
+  <Tooltip title={Messages.etaTooltip()} placement="bottom" disableInteractive={true}>
+    <span
+      className={styles.count}
+      data-testid={testId}
+      style={{ visibility: seconds === undefined ? "hidden" : undefined }}
+    >
+      <TimerOutlinedIcon className={styles.etaIcon} />
+      {seconds !== undefined && formatEta(seconds)}
+    </span>
+  </Tooltip>
 );
 
 const PlayButton = ({
@@ -101,18 +103,19 @@ const PlayButton = ({
   testId: string;
 }) => (
   <Tooltip title={tooltip} placement="bottom" enterDelay={400} disableInteractive={true}>
-    <span>
+    <span className={styles.buttonSlot}>
       <Button
         variant="contained"
         color="primary"
         disableElevation={true}
         disabled={disabled}
-        startIcon={starting ? <CircularProgress color="inherit" size={16} /> : undefined}
         onClick={onClick}
         data-testid={testId}
         className={styles.button}
       >
-        {label}
+        {/* The spinner takes the label's place, so the button keeps its width. */}
+        <span style={{ visibility: starting ? "hidden" : undefined }}>{label}</span>
+        {starting && <CircularProgress color="inherit" size={16} className={styles.spinner} />}
       </Button>
     </span>
   </Tooltip>

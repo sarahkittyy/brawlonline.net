@@ -154,7 +154,7 @@ Sarah: "i love love love the design", with these notes. What changed:
   - **Variant B** lines the buttons up under the card.
   - The unranked game list and the 2v2 line are gone. When the panel is narrow (1150 px window with the rail open), the sparkline hides.
   - The three buttons all wear the Brawl frame: together they are the page's main action.
-- **The ETA is the stopwatch and the time** ("0:44", "10+ min"), with no "ETA:" text.
+- **The ETA is the stopwatch and the time** ("0:44", "10+ min"), with no "ETA:" text, and "Estimated queue time" in its tooltip. The buttons are as wide as the longest label and 36 px tall.
 - **Public rooms row never wraps.** The ruleset is a quiet icon and name with no box ("Auto L Cancel -r v4"; the code is in its tooltip with today's text). The name shrinks to an ellipsis, then to the icon alone. The room code field has Join inside it. It fits on one line in the 980 px minimum window (rail folded) and at 1150 px with the rail open.
 - **Other Games rooms with every chip.** A room with "Brawl: a56ffa ✓", "SD card: f35aaf !" and "Codes (3)":
   - At the default width the three fit on one line, with "Joins with" under them.
