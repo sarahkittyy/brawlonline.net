@@ -3,6 +3,7 @@
 // Based on gtest_main.cc
 
 #include "Common/MsgHandler.h"
+#include "Core/Rollback/DolphinEngine.h"
 
 #include "gtest/gtest.h"
 
@@ -21,6 +22,8 @@ int main(int argc, char** argv)
 {
   fmt::print(stderr, "Running main() from UnitTestsMain.cpp\n");
   Common::RegisterMsgAlertHandler(TestMsgHandler);
+  // The online core's code under test runs on Dolphin, as in Core::Init.
+  Rollback::RegisterDolphinEngine();
 
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();

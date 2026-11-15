@@ -10,9 +10,14 @@
 #pragma once
 
 #include <array>
+#include <chrono>
 #include <cstddef>
+#include <cstdint>
 #include <initializer_list>
+#include <optional>
 #include <string>
+#include <utility>
+#include <vector>
 
 #include "BrawlOnline/CommonTypes.h"
 
@@ -62,6 +67,68 @@ public:
   virtual void RestoreGuestRegs(const GuestRegs& in) = 0;
   // The emulated CPU (or the game's thread) is running, not paused or stopped.
   virtual bool CpuRunning() const = 0;
+
+  // ---- Emulated time and the session's pacing ----
+  // The names and types are Dolphin's CoreTiming / SystemTimers / VideoInterface ones (Dolphin's
+  // engine forwards each to the call of the same name; CoreTiming.h says what each does).
+  using Clock = std::chrono::steady_clock;
+  using DT = Clock::duration;
+  using TimePoint = Clock::time_point;
+
+  // The emulated CPU's ticks, how many make a second, a video field's worth, the time base.
+  virtual u64 GetTicks() const = 0;
+  virtual u32 GetTicksPerSecond() const = 0;
+  virtual u32 GetTicksPerField() const = 0;
+  virtual u64 GetFakeTimeBase() const = 0;
+  // A rollback's re-run is running (unthrottled, not shown).
+  virtual bool IsRollbackResimulating() const = 0;
+  virtual void SetRollbackResimulating(bool resimulating) = 0;
+  // The wait at the loop top for the game's file and sound loads.
+  virtual void SetRollbackLoadWait(bool waiting) = 0;
+  // The audio clock waits for re-runs (by fields added as pauses).
+  virtual void SetRollbackAudioWaits(bool wait) = 0;
+  virtual void AddRollbackAudioPause(s64 ticks) = 0;
+  // Time sync: the emulation speed times this (1.0 = none); the timeline moved earlier.
+  virtual void SetRollbackSpeedAdjustment(double factor) = 0;
+  virtual void AdvanceThrottle(DT amount) = 0;
+  // The frame pacing: present pacing on or off, the sleep lead for a coming rollback, a re-anchor
+  // at the current time, a rollback's burst keeping the schedule.
+  virtual void SetPresentPacing(bool on) = 0;
+  using PacedSleepLead = DT (*)();
+  virtual void SetPacedSleepLead(PacedSleepLead lead) = 0;
+  virtual void ResetThrottleToNow() = 0;
+  virtual void BeginRollbackBurst() = 0;
+  // How far behind its schedule the pacing was at worst since the last call; the host time the
+  // current emulated instant is due at (empty while unthrottled); sleep until a host time.
+  virtual DT TakeMaxBehindSchedule() = 0;
+  virtual std::optional<TimePoint> ScheduledHostTime() = 0;
+  virtual void SleepUntil(TimePoint time_point) = 0;
+
+  // ---- Snapshots: what a rollback saves and restores ----
+  // Dolphin's RollbackManager (RollbackManager.h says what each does); the recomp's snapshot store.
+  // A save is tagged with the session's frame; NO_TAG for one that loads go to by count.
+  static constexpr s64 NO_TAG = INT64_MIN;
+  using Ranges = std::vector<std::pair<u32, u32>>;  // (effective address, size)
+  struct PhysRange
+  {
+    u32 phys_start = 0;  // address & 0x1FFFFFFF
+    u32 phys_end = 0;
+  };
+  // Gameplay-only snapshots of these ranges (never restoring `exclude`), or the whole machine.
+  virtual void BeginRegionMode(const Ranges& ranges, const Ranges& exclude) = 0;
+  virtual void EndRegionMode() = 0;
+  virtual void ToggleFrameSave() = 0;
+  virtual void SaveFrame(s64 tag) = 0;
+  virtual bool LoadFrame(int frames_back) = 0;
+  virtual int SlotsBackForTag(s64 tag) const = 0;
+  virtual int RingCount() const = 0;  // how many saves back a load can go
+  // The plugin's mailbox (Online/GameBridge.h), never restored; set by the bridge.
+  virtual std::optional<PhysRange> MailboxRegion() const = 0;
+  virtual void SetMailboxRegion(u32 virt_addr, u32 size_bytes) = 0;
+  // For the session's stats file: the snapshots' counters by name, and the granules a partial
+  // save skipped by physical address.
+  virtual std::vector<std::pair<std::string, double>> SnapshotStats() const = 0;
+  virtual std::vector<std::pair<u32, u64>> PartialGranuleSkips() const = 0;
 };
 
 // The process's engine (Dolphin registers its own at start-up; EmissaryRecomp its own).

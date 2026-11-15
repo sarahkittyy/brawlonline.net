@@ -3,6 +3,8 @@
 
 #include "BrawlOnline/Rollback/GameplayRollback.h"
 
+#include "BrawlOnline/Engine.h"
+
 #include <algorithm>
 #include <atomic>
 #include <bit>
@@ -22,13 +24,11 @@
 #include "Common/StringUtil.h"
 #include "Common/Swap.h"
 #include "Core/Core.h"
-#include "Core/CoreTiming.h"
 #include "BrawlOnline/Rollback/GameplaySession.h"
 #include "Core/Debugger/OSThread.h"
 #include "Core/Harness/Harness.h"
 #include "Core/HW/GCPad.h"
 #include "Core/HW/Memmap.h"
-#include "Core/HW/SystemTimers.h"
 #include "Core/PowerPC/MMU.h"
 #include "Core/PowerPC/PowerPC.h"
 #include "Core/System.h"
@@ -728,7 +728,7 @@ void FrameTraceOnFrameEnd(Core::System& system, u32 logic_steps, bool resim)
   row.game_frame = g.U32(Addr::GAME_FRAME + 4).value_or(0);
   row.persistent = g.U32(Addr::GAME_FRAME + 0x14).value_or(0);
   row.logic_steps = logic_steps;
-  row.ticks = system.GetCoreTiming().GetTicks();
+  row.ticks = BrawlOnline::GetEngine().GetTicks();
   row.rng = {g.U32(Addr::MTRAND_DEFAULT_SEED).value_or(0), g.U32(Addr::MTRAND_OTHER_SEED).value_or(0),
              g.U32(Addr::LIBC_RAND_NEXT).value_or(0)};
   row.fighters = ReadFighterFields(g);
@@ -1090,7 +1090,7 @@ GCPadStatus ReadHostPad(Core::System& system, int chan, HostPadSource source)
     s_decode.clean = {};
   }
 
-  auto& ct = system.GetCoreTiming();
+  auto& ct = BrawlOnline::GetEngine();
   HostPadRead& last = h.last[chan];
   if (ct.IsRollbackResimulating())
   {
@@ -1313,7 +1313,7 @@ bool HostDecodeReadAt(Core::System& system, int chan, std::array<u8, Addr::PAD_S
   Clock::time_point now = Clock::now();
   if (now < due && due - now <= HOST_PAD_DEFERRED_MAX_WAIT)
   {
-    system.GetCoreTiming().SleepUntil(due);
+    BrawlOnline::GetEngine().SleepUntil(due);
     now = Clock::now();
   }
   // As ReadHostPad on the schedule: now when on time (or ahead), else the state at `due`.
@@ -1553,13 +1553,13 @@ void PadsOnPadThreadUpdated(Core::System& system)
     if (std::FILE* f = PadReadLog())
     {
       std::fprintf(f, "P %lld %d %lld %02x%02x%02x%02x\n", Us(s_pads.latest_at),
-                   system.GetCoreTiming().IsRollbackResimulating() ? 1 : 0, Us(pass.sampled_at[0]),
+                   BrawlOnline::GetEngine().IsRollbackResimulating() ? 1 : 0, Us(pass.sampled_at[0]),
                    pass.pads[0], pass.pads[1], pass.pads[2], pass.pads[3]);
       std::fflush(f);
     }
   }
   // Host decode: the pass of a decoded read must be its decode, byte for byte.
-  if (HostDecodeEnabled() && !s_decode.off && !system.GetCoreTiming().IsRollbackResimulating() &&
+  if (HostDecodeEnabled() && !s_decode.off && !BrawlOnline::GetEngine().IsRollbackResimulating() &&
       s_host_pads.scheduled.load(std::memory_order_relaxed))
   {
     const auto& sampled = s_pads.recent[(s_pads.recent_next + s_pads.recent.size() - 1) %
@@ -1608,7 +1608,7 @@ void PadsOnPadThreadUpdated(Core::System& system)
       }
     }
   }
-  s_pads.latest_ticks = system.GetCoreTiming().GetTicks();
+  s_pads.latest_ticks = BrawlOnline::GetEngine().GetTicks();
   ++s_pads.passes;
   {
     const Guest g(memory);
@@ -1742,7 +1742,7 @@ void ReportPadStall(const Core::CPUThreadGuard& guard, double seconds)
   // The OS alarm queue (OSAlarm: handler +0, fire u64 +8, prev +0x10, next +0x14, period u64 +0x18).
   // "in": timebase ticks from now to the fire time, from the low words (the game's time base and
   // Dolphin's differed by one in the high word; good for +-35 s); the full values are logged too.
-  const u64 now_tb = system.GetSystemTimers().GetFakeTimeBase();
+  const u64 now_tb = BrawlOnline::GetEngine().GetFakeTimeBase();
   const auto in = [now_tb](u64 fire) { return s32(u32(fire) - u32(now_tb)); };
   std::string alarms;
   bool pad_alarm_queued = false;
@@ -1776,16 +1776,15 @@ void ReportPadStall(const Core::CPUThreadGuard& guard, double seconds)
 
 void PadsWatchdog(const Core::CPUThreadGuard& guard)
 {
-  auto& system = guard.GetSystem();
   u64 last;
   {
     std::lock_guard lk(s_pads.mutex);
     last = s_pads.latest_ticks;
   }
-  const u64 now = system.GetCoreTiming().GetTicks();
+  const u64 now = BrawlOnline::GetEngine().GetTicks();
   if (last == 0 || now < last)  // no pass yet, or a savestate went back in time
     return;
-  const double seconds = double(now - last) / system.GetSystemTimers().GetTicksPerSecond();
+  const double seconds = double(now - last) / BrawlOnline::GetEngine().GetTicksPerSecond();
   if (!s_pad_watch.stalled)
   {
     if (seconds < 1.0)

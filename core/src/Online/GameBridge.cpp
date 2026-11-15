@@ -40,7 +40,7 @@
 #include "BrawlOnline/Rollback/GameplaySession.h"
 #include "Core/Rollback/MachineSession.h"
 #include "BrawlOnline/Rollback/PeerData.h"
-#include "Core/Rollback/RollbackManager.h"
+#include "BrawlOnline/Engine.h"
 #include "VideoCommon/OnScreenDisplay.h"
 
 namespace Online::GameBridge
@@ -2446,7 +2446,7 @@ void OnFrameEnd(const Core::CPUThreadGuard& guard)
     located.reset();
     std::lock_guard lk(s_mutex);
     s_located.reset();
-    Rollback::RollbackManager::Get().SetMailboxRegion(0, 0);
+    BrawlOnline::GetEngine().SetMailboxRegion(0, 0);
   }
   if (!located)
   {
@@ -2470,8 +2470,8 @@ void OnFrameEnd(const Core::CPUThreadGuard& guard)
                    located->module);
     // Out of rollback state (design 5.2): the mailbox (the game reads it only outside matches)
     // and LOCAL (what differs between the machines), which follows it.
-    Rollback::RollbackManager::Get().SetMailboxRegion(located->mailbox,
-                                                      MAILBOX_SIZE + LocalSize(located->version));
+    BrawlOnline::GetEngine().SetMailboxRegion(located->mailbox,
+                                              MAILBOX_SIZE + LocalSize(located->version));
     s_session_written.clear();
     s_local_written.clear();
     std::lock_guard lk(s_mutex);
@@ -2515,7 +2515,7 @@ void Reset()
     s_located.reset();
     s_locate_wait = 0;
   }
-  Rollback::RollbackManager::Get().SetMailboxRegion(0, 0);
+  BrawlOnline::GetEngine().SetMailboxRegion(0, 0);
 }
 
 void SetEnabled(bool enabled)

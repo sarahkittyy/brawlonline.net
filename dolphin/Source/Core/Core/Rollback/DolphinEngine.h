@@ -8,6 +8,7 @@
 
 namespace Rollback
 {
-// Makes Dolphin the online core's engine (Core::Init, before a game runs).
+// Makes Dolphin the online core's engine. Already done when the program loads; Core::Init and the
+// unit tests call it too.
 void RegisterDolphinEngine();
 }  // namespace Rollback

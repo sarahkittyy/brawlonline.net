@@ -8,9 +8,13 @@
 
 #include "BrawlOnline/Engine.h"
 #include "Core/Core.h"
+#include "Core/CoreTiming.h"
 #include "Core/HW/CPU.h"
+#include "Core/HW/SystemTimers.h"
+#include "Core/HW/VideoInterface.h"
 #include "Core/PowerPC/MMU.h"
 #include "Core/PowerPC/PowerPC.h"
+#include "Core/Rollback/RollbackManager.h"
 #include "Core/System.h"
 
 namespace Rollback
@@ -98,11 +102,109 @@ public:
     return Core::System::GetInstance().GetCPU().GetState() == CPU::State::Running;
   }
 
+  u64 GetTicks() const override { return Timing().GetTicks(); }
+  u32 GetTicksPerSecond() const override
+  {
+    return Core::System::GetInstance().GetSystemTimers().GetTicksPerSecond();
+  }
+  u32 GetTicksPerField() const override
+  {
+    return Core::System::GetInstance().GetVideoInterface().GetTicksPerField();
+  }
+  u64 GetFakeTimeBase() const override
+  {
+    return Core::System::GetInstance().GetSystemTimers().GetFakeTimeBase();
+  }
+  bool IsRollbackResimulating() const override { return Timing().IsRollbackResimulating(); }
+  void SetRollbackResimulating(bool resimulating) override
+  {
+    Timing().SetRollbackResimulating(resimulating);
+  }
+  void SetRollbackLoadWait(bool waiting) override { Timing().SetRollbackLoadWait(waiting); }
+  void SetRollbackAudioWaits(bool wait) override { Timing().SetRollbackAudioWaits(wait); }
+  void AddRollbackAudioPause(s64 ticks) override { Timing().AddRollbackAudioPause(ticks); }
+  void SetRollbackSpeedAdjustment(double factor) override
+  {
+    Timing().SetRollbackSpeedAdjustment(factor);
+  }
+  void AdvanceThrottle(DT amount) override { Timing().AdvanceThrottle(amount); }
+  void SetPresentPacing(bool on) override { Timing().SetPresentPacing(on); }
+  void SetPacedSleepLead(PacedSleepLead lead) override { Timing().SetPacedSleepLead(lead); }
+  void ResetThrottleToNow() override { Timing().ResetThrottleToNow(); }
+  void BeginRollbackBurst() override { Timing().BeginRollbackBurst(); }
+  DT TakeMaxBehindSchedule() override { return Timing().TakeMaxBehindSchedule(); }
+  std::optional<TimePoint> ScheduledHostTime() override { return Timing().ScheduledHostTime(); }
+  void SleepUntil(TimePoint time_point) override { Timing().SleepUntil(time_point); }
+
+  void BeginRegionMode(const Ranges& ranges, const Ranges& exclude) override
+  {
+    Rollback::RollbackManager::Get().BeginRegionMode(ranges, exclude);
+  }
+  void EndRegionMode() override { Rollback::RollbackManager::Get().EndRegionMode(); }
+  void ToggleFrameSave() override { Rollback::RollbackManager::Get().ToggleFrameSave(); }
+  void SaveFrame(s64 tag) override
+  {
+    Rollback::RollbackManager::Get().SaveFrame(Core::System::GetInstance(), tag);
+  }
+  bool LoadFrame(int frames_back) override
+  {
+    return Rollback::RollbackManager::Get().LoadFrame(Core::System::GetInstance(), frames_back);
+  }
+  int SlotsBackForTag(s64 tag) const override
+  {
+    return Rollback::RollbackManager::Get().SlotsBackForTag(tag);
+  }
+  int RingCount() const override { return Rollback::RollbackManager::Get().m_ring_count; }
+  std::optional<PhysRange> MailboxRegion() const override
+  {
+    const auto& mb = Rollback::RollbackManager::Get().m_mailbox_region;
+    if (!mb)
+      return std::nullopt;
+    return PhysRange{mb->phys_start, mb->phys_end};
+  }
+  void SetMailboxRegion(u32 virt_addr, u32 size_bytes) override
+  {
+    Rollback::RollbackManager::Get().SetMailboxRegion(virt_addr, size_bytes);
+  }
+  std::vector<std::pair<std::string, double>> SnapshotStats() const override
+  {
+    const auto& rbm = Rollback::RollbackManager::Get();
+    const auto t = rbm.GetTimingStats();
+    const auto d = [](auto v) { return static_cast<double>(v); };
+    return {
+        {"partial_granules", d(rbm.RegionPartialGranules())},
+        {"save_count", d(t.save_count)},
+        {"save_us_total", d(t.save_us_total)},
+        {"save_us_max", d(t.save_us_max)},
+        {"load_count", d(t.load_count)},
+        {"load_us_total", d(t.load_us_total)},
+        {"load_us_max", d(t.load_us_max)},
+        {"load_evict_waits", d(t.load_evict_waits)},
+        {"load_evict_wait_us_max", d(t.load_evict_wait_us_max)},
+        {"save_granules_total", d(t.save_granules_total)},
+        {"save_granules_max", d(t.save_granules_max)},
+        {"load_granules_total", d(t.load_granules_total)},
+        {"load_granules_max", d(t.load_granules_max)},
+    };
+  }
+  std::vector<std::pair<u32, u64>> PartialGranuleSkips() const override
+  {
+    const auto m = Rollback::RollbackManager::Get().PartialSkippedStats();
+    return {m.begin(), m.end()};
+  }
+
 private:
   static PowerPC::PowerPCState& Ppc() { return Core::System::GetInstance().GetPPCState(); }
+  static CoreTiming::CoreTimingManager& Timing()
+  {
+    return Core::System::GetInstance().GetCoreTiming();
+  }
 };
 
 DolphinEngine s_engine;
+// Set when the program loads: the session's resets and the bridge run before any game boots (the
+// harness's and the launcher's first commands). Core::Init's call keeps this file linked in.
+[[maybe_unused]] const bool s_registered = (BrawlOnline::SetEngine(&s_engine), true);
 }  // namespace
 
 void RegisterDolphinEngine()

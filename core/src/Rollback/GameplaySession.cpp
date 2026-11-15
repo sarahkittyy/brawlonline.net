@@ -49,11 +49,8 @@
 #include "AudioCommon/SoundStream.h"
 #include "Core/ConfigManager.h"
 #include "Core/Core.h"
-#include "Core/CoreTiming.h"
 #include "Core/HW/CPU.h"
 #include "Core/HW/Memmap.h"
-#include "Core/HW/SystemTimers.h"
-#include "Core/HW/VideoInterface.h"
 #include "BrawlOnline/Online/Chat.h"
 #include "BrawlOnline/Online/ChatText.h"
 #include "BrawlOnline/Online/GameAlive.h"
@@ -68,7 +65,6 @@
 #include "Core/Rollback/PresentStats.h"
 #include "Core/Rollback/ReplayKeyframes.h"
 #include "BrawlOnline/Rollback/ReplayRecorder.h"
-#include "Core/Rollback/RollbackManager.h"
 #include "Core/System.h"
 #include "VideoCommon/AsyncRequests.h"
 #include "VideoCommon/Fifo.h"
@@ -4042,7 +4038,7 @@ std::optional<std::string> PrepareRegionSet(Core::System& system, const std::str
     // comparing costs and behaviour with the gameplay region set.
     s.ranges.clear();
     s.region_bytes = 0;
-    auto& rbm = Rollback::RollbackManager::Get();
+    auto& rbm = BrawlOnline::GetEngine();
     rbm.EndRegionMode();
     rbm.ToggleFrameSave();
     return std::nullopt;
@@ -4064,12 +4060,9 @@ std::optional<std::string> PrepareRegionSet(Core::System& system, const std::str
     excl.emplace_back(r.addr, r.size);
   // The game<->Dolphin mailbox (Online/GameBridge.h) lives in our game plugin's REL .data, which
   // rel_data takes in: never restore it.
-  auto& rbm = Rollback::RollbackManager::Get();
-  if (rbm.m_mailbox_region)
-  {
-    excl.emplace_back(rbm.m_mailbox_region->phys_start | 0x80000000u,
-                      rbm.m_mailbox_region->phys_end - rbm.m_mailbox_region->phys_start);
-  }
+  auto& rbm = BrawlOnline::GetEngine();
+  if (const auto mb = rbm.MailboxRegion())
+    excl.emplace_back(mb->phys_start | 0x80000000u, mb->phys_end - mb->phys_start);
   rbm.BeginRegionMode(rs, excl);
   INFO_LOG_FMT(BRAWLBACK, "gprb: region set {} resolved to {} ranges, {} bytes", spec.name,
                s.ranges.size(), s.region_bytes);
@@ -4129,7 +4122,7 @@ void ResetRunStats()
   s.net_window_t0 = {};
   s.prev_frame_rolled_back = false;
   TakeHostPadReadStats();
-  Core::System::GetInstance().GetCoreTiming().TakeMaxBehindSchedule();
+  BrawlOnline::GetEngine().TakeMaxBehindSchedule();
   Rollback::PresentStats::TakeCadence();
   s.burst_open = false;
   s.burst_ms_per_frame = BURST_MS_PER_FRAME_START;
@@ -4482,11 +4475,11 @@ void EndRunning(Core::System& system, const std::string& reason)
   CostSessionEnd();
   PassLogClose();
   DestroyGekko();
-  Rollback::RollbackManager::Get().EndRegionMode();
+  BrawlOnline::GetEngine().EndRegionMode();
   PadsClearCurrent();
   ClearHostPadPlaysPort();
   SetHostPadsScheduled(false);
-  auto& ct = system.GetCoreTiming();
+  auto& ct = BrawlOnline::GetEngine();
   ct.ResetThrottleToNow();  // drops a rollback burst still pending
   ct.SetRollbackResimulating(false);
   ct.SetRollbackLoadWait(false);
@@ -4500,8 +4493,8 @@ void EndRunning(Core::System& system, const std::string& reason)
                  LoadWaitUnthrottled() ? "" : ", throttled");
   }
   system.GetFifo().SetRollbackSessionDeterminism(false);
-  system.GetCoreTiming().SetPresentPacing(false);
-  system.GetCoreTiming().SetPacedSleepLead(nullptr);
+  BrawlOnline::GetEngine().SetPresentPacing(false);
+  BrawlOnline::GetEngine().SetPacedSleepLead(nullptr);
   s.resim_pass = false;
   s.end_reason = reason;
   s_health_running.store(false, std::memory_order_relaxed);
@@ -4968,7 +4961,7 @@ void PerformQueuedSave(Core::System& system)
   }
   if (NeedsSnapshot(s.queued_save.frame))
   {
-    Rollback::RollbackManager::Get().SaveFrame(system, s.queued_save.frame);
+    BrawlOnline::GetEngine().SaveFrame(s.queued_save.frame);
     s.snapshots_skipped_in_row = 0;
     s.newest_snapshot_skipped = false;
   }
@@ -5081,7 +5074,7 @@ void PerformQueuedSave(Core::System& system)
 // GekkoNet's save of frame 0 (the session's first state): the first snapshot of the region set.
 void InitialSave(Core::System& system, unsigned int* checksum, int frame)
 {
-  Rollback::RollbackManager::Get().SaveFrame(system, frame);
+  BrawlOnline::GetEngine().SaveFrame(frame);
   s.snapshots_skipped_in_row = 0;
   s.newest_snapshot_skipped = false;
   FrameRecord rec;
@@ -5099,7 +5092,7 @@ void BeginBurst(Core::System& system)
 {
   static const bool old_throttle = std::getenv("PPR_GPRB_OLD_THROTTLE") != nullptr;
   if (!old_throttle)
-    system.GetCoreTiming().BeginRollbackBurst();
+    BrawlOnline::GetEngine().BeginRollbackBurst();
   if (!s.burst_open)
   {
     s.burst_open = true;
@@ -5514,7 +5507,7 @@ void CostSessionEnd()
 void LoadForRollback(Core::System& system, int frames_back)
 {
   const auto t0 = Clock::now();
-  Rollback::RollbackManager::Get().LoadFrame(system, frames_back);
+  BrawlOnline::GetEngine().LoadFrame(frames_back);
   CostAddLoad(SinceNs(t0, Clock::now()));
 }
 
@@ -5570,7 +5563,7 @@ void NetStatsOnDisplayedFrame(Core::System& system)
     const bool advanced = std::exchange(s.prev_frame_advanced, s.advanced_this_frame);
     s.advanced_this_frame = false;
     const double ms = std::chrono::duration<double, std::milli>(
-                          system.GetCoreTiming().TakeMaxBehindSchedule())
+                          BrawlOnline::GetEngine().TakeMaxBehindSchedule())
                           .count() -
                       (advanced ? FRAME_US / 1000 : 0.0);
     if (ms > LATE_MS)
@@ -6002,13 +5995,13 @@ bool ProcessGekkoUpdate(Core::System& system, GekkoGameEvent** events, int count
     // ahead of the session from then on (2026-10-10, a 3-player room: "desync at frame 1572",
     // the peer's checksum of frame 1573 was ours of 1572).
     const int frames_back = static_cast<int>(s.current_frame - load_frame);
-    auto& rbm = Rollback::RollbackManager::Get();
+    auto& rbm = BrawlOnline::GetEngine();
     if (frames_back >= 1 && s.newest_snapshot_skipped)
     {
       // The newest frame's snapshot was skipped (NeedsSnapshot) and a rollback came anyway: the
       // machine still holds that frame's end (no guest code ran since the loop top), so take it
       // now; a load restores only what the slots after its target hold. Not expected to happen.
-      rbm.SaveFrame(system, s.current_frame);
+      rbm.SaveFrame(s.current_frame);
       s.snapshots_skipped_in_row = 0;
       s.newest_snapshot_skipped = false;
       --s.snapshots_skipped;
@@ -6032,7 +6025,7 @@ bool ProcessGekkoUpdate(Core::System& system, GekkoGameEvent** events, int count
     {
       ++s.loads_without_slot;
       WARN_LOG_FMT(BRAWLBACK, "gprb: cannot roll back {} frames to frame {} (ring {}, slot {})",
-                   frames_back, load_frame, rbm.m_ring_count, slots_back);
+                   frames_back, load_frame, rbm.RingCount(), slots_back);
     }
   }
   if (initial_save && s.defer_initial_save)
@@ -6240,7 +6233,7 @@ void UpdateTimeSync(Core::System& system)
       return;
     s.last_advance_frame = s.current_frame;
     --s.frames_to_advance;
-    system.GetCoreTiming().AdvanceThrottle(std::chrono::duration_cast<DT>(
+    BrawlOnline::GetEngine().AdvanceThrottle(std::chrono::duration_cast<DT>(
         std::chrono::duration<double, std::micro>(FRAME_US)));
     s.advanced_this_frame = true;
     ++s.net_window.advances;
@@ -6452,7 +6445,7 @@ void CaptureLocalInputs()
     // sample twice or skipped one, a frame apart (bug report #70). Always the pass made from the
     // poll a field before this loop top: each frame's sample a field after the last, as old as
     // on a frame without a rollback. (At an unlimited speed there is no schedule: the newest.)
-    const auto due = Core::System::GetInstance().GetCoreTiming().ScheduledHostTime();
+    const auto due = BrawlOnline::GetEngine().ScheduledHostTime();
     if (due)
       latest = PadsSampledBefore(s.local_pad, *due - HALF_FIELD, &s.local_sampled_at);
     else
@@ -6510,7 +6503,7 @@ void OnPadPassLocked(Core::System& system, const RawPads& pads, Clock::time_poin
 {
   if (!s.early_input || s.mode != Mode::Network || s.phase != Phase::Running || !s.gekko ||
       !s.gekko_started || s.local_handles.empty() || !s.ei_loop_due || s.ei_loop_frame < 0 ||
-      s.local_pad < 4 || system.GetCoreTiming().IsRollbackResimulating())
+      s.local_pad < 4 || BrawlOnline::GetEngine().IsRollbackResimulating())
   {
     return;
   }
@@ -6761,7 +6754,7 @@ void HardTimeSync(Core::System& system)
         return Clock::now() >= until;
       },
       std::chrono::milliseconds(frames * 17 + 100));
-  system.GetCoreTiming().ResetThrottleToNow();
+  BrawlOnline::GetEngine().ResetThrottleToNow();
   const double ms = std::chrono::duration<double, std::milli>(Clock::now() - t0).count();
   ++s.net_window.stalls;
   s.net_window.stall_ms += ms;
@@ -7017,10 +7010,10 @@ bool ReplayNextUpdate(Core::System& system)
     s.ops.adv_frame[i] = frame;
     s.ops.save_after[i] = save != 0;
   }
-  auto& rbm = Rollback::RollbackManager::Get();
+  auto& rbm = BrawlOnline::GetEngine();
   if (load_back > 0)
   {
-    if (load_back < rbm.m_ring_count)
+    if (load_back < rbm.RingCount())
     {
       BeginBurst(system);
       LoadForRollback(system, load_back);
@@ -7030,11 +7023,11 @@ bool ReplayNextUpdate(Core::System& system)
     else
     {
       WARN_LOG_FMT(BRAWLBACK, "gprb replay: cannot roll back {} frames (ring {})", load_back,
-                   rbm.m_ring_count);
+                   rbm.RingCount());
     }
   }
   if (initial)
-    rbm.SaveFrame(system);
+    rbm.SaveFrame(BrawlOnline::Engine::NO_TAG);
   s.ops.adv_count = n;
   if (n > 1)
     s.frames_resimulated += static_cast<u64>(n - 1);
@@ -7062,7 +7055,7 @@ void PreparePlaybackKeyframes(Core::System& system)
   std::vector<std::pair<u32, u32>> holes;
   for (const auto& r : spec.exclude)
     holes.emplace_back(r.addr, r.size);
-  if (const auto& mb = Rollback::RollbackManager::Get().m_mailbox_region)
+  if (const auto mb = BrawlOnline::GetEngine().MailboxRegion())
     holes.emplace_back(mb->phys_start | 0x80000000u, mb->phys_end - mb->phys_start);
   for (const auto& [hole, hole_size] : holes)
   {
@@ -7096,10 +7089,10 @@ void StartRunning(Core::System& system)
   // (InitialSave at the start barrier), with the GPU thread possibly behind: gp-v29 leaves the
   // frame buffer's slots, which it left waiting for a draw done, out of the set.
   system.GetFifo().SetRollbackSessionDeterminism(true);
-  system.GetCoreTiming().SetPresentPacing(true);
+  BrawlOnline::GetEngine().SetPresentPacing(true);
   if (s.mode == Mode::Network)
   {
-    system.GetCoreTiming().SetPacedSleepLead(RerunInSleep() ? &PacedSleepLead : nullptr);
+    BrawlOnline::GetEngine().SetPacedSleepLead(RerunInSleep() ? &PacedSleepLead : nullptr);
     INFO_LOG_FMT(BRAWLBACK, "gprb: rollbacks run in the throttle's sleep: {}",
                  RerunInSleep() ? "on" : "off (PPR_GPRB_RERUN_IN_SLEEP=0)");
   }
@@ -7383,7 +7376,7 @@ void EndClipSegment(Core::System& system)
   if (!s.pb.clip_recording)
     return;
   s.pb.clip_recording = false;
-  Gprb::Clip::MarkSegmentEnd(system.GetCoreTiming().GetTicks());
+  Gprb::Clip::MarkSegmentEnd(BrawlOnline::GetEngine().GetTicks());
 }
 
 PlaybackStep PlaybackLoopTopControls(Core::System& system)
@@ -7489,14 +7482,14 @@ PlaybackStep PlaybackLoopTopControls(Core::System& system)
         std::chrono::milliseconds(33));
     if (!woke && !CpuRunning(system))
       return PlaybackStep::Wait;  // Dolphin pauses or stops: let it, and come back here
-    system.GetCoreTiming().ResetThrottleToNow();
+    BrawlOnline::GetEngine().ResetThrottleToNow();
   }
   const s64 f = first + static_cast<s64>(pb.next);
   const bool ff = f < pb.ff_until;
   // A clip rendered to video: its segment starts with its first frame, in emulated time.
   if (pb.clip_record && !pb.clip_recording && pb.clip_end >= 0 && !ff && f >= pb.clip_start)
   {
-    Gprb::Clip::BeginSegment(system.GetCoreTiming().GetTicks());
+    Gprb::Clip::BeginSegment(BrawlOnline::GetEngine().GetTicks());
     pb.clip_recording = true;
   }
   // Keyframes: the state before frame f.
@@ -7634,7 +7627,7 @@ bool RunFrame(const Core::CPUThreadGuard& guard)
   s.cpu_where = "runframe";
   s.cpu_frame = s.current_frame;
   auto& system = guard.GetSystem();
-  auto& ct = system.GetCoreTiming();
+  auto& ct = BrawlOnline::GetEngine();
   const Guest g(system.GetMemory());
 
   if (!IsSceneMelee(g))
@@ -7945,7 +7938,7 @@ bool RunFrame(const Core::CPUThreadGuard& guard)
     // after a load is about 0.5% short and the presented pass after it as much longer, which a
     // pause by measured lengths would turn into a drift of the audio against the picture.
     const s64 now = static_cast<s64>(ct.GetTicks());
-    const s64 field = static_cast<s64>(system.GetVideoInterface().GetTicksPerField());
+    const s64 field = static_cast<s64>(BrawlOnline::GetEngine().GetTicksPerField());
     if (s.audio_pass_resim)
     {
       const s64 length = now - s.audio_pass_start;
@@ -9279,25 +9272,12 @@ picojson::value Status()
   o["mispredicted_passes"] = picojson::value(static_cast<double>(s.mispredicted_passes));
   {
     picojson::object skipped;
-    for (const auto& [phys, n] : Rollback::RollbackManager::Get().PartialSkippedStats())
+    for (const auto& [phys, n] : BrawlOnline::GetEngine().PartialGranuleSkips())
       skipped[fmt::format("{:08x}", phys | 0x80000000u)] = picojson::value(static_cast<double>(n));
     o["partial_granule_skips"] = picojson::value(skipped);
-    o["partial_granules"] = picojson::value(
-        static_cast<double>(Rollback::RollbackManager::Get().RegionPartialGranules()));
   }
-  const auto t = Rollback::RollbackManager::Get().GetTimingStats();
-  o["save_count"] = picojson::value(static_cast<double>(t.save_count));
-  o["save_us_total"] = picojson::value(static_cast<double>(t.save_us_total));
-  o["save_us_max"] = picojson::value(static_cast<double>(t.save_us_max));
-  o["load_count"] = picojson::value(static_cast<double>(t.load_count));
-  o["load_us_total"] = picojson::value(static_cast<double>(t.load_us_total));
-  o["load_us_max"] = picojson::value(static_cast<double>(t.load_us_max));
-  o["load_evict_waits"] = picojson::value(static_cast<double>(t.load_evict_waits));
-  o["load_evict_wait_us_max"] = picojson::value(static_cast<double>(t.load_evict_wait_us_max));
-  o["save_granules_total"] = picojson::value(static_cast<double>(t.save_granules_total));
-  o["save_granules_max"] = picojson::value(static_cast<double>(t.save_granules_max));
-  o["load_granules_total"] = picojson::value(static_cast<double>(t.load_granules_total));
-  o["load_granules_max"] = picojson::value(static_cast<double>(t.load_granules_max));
+  for (const auto& [key, value] : BrawlOnline::GetEngine().SnapshotStats())
+    o[key] = picojson::value(value);
   o["frame_cost"] = FrameCostJson();
   if (s.mode == Mode::Network)
   {
@@ -10206,7 +10186,7 @@ bool PlaybackLoopTop(const Core::CPUThreadGuard& guard)
     s.pb.catch_frames = 0;
   }
   s.phase = Phase::Countdown;
-  system.GetCoreTiming().ResetThrottleToNow();
+  BrawlOnline::GetEngine().ResetThrottleToNow();
   PadsSetCurrent(0xF, CountdownSlots());
   PadsOnLoopTop(system);
   SetLoopDefault();
@@ -10255,7 +10235,7 @@ void OnPadPass(Core::System& system, const RawPads& pads, Clock::time_point at)
   std::lock_guard<std::recursive_timed_mutex> lk(s.mutex);
   OnPadPassLocked(system, pads, at);
   // The forward pass's pass: whatever happened, the loop top's batch goes now.
-  if (!system.GetCoreTiming().IsRollbackResimulating())
+  if (!BrawlOnline::GetEngine().IsRollbackResimulating())
     EiReleaseBatch();
 }
 
@@ -10273,12 +10253,12 @@ constexpr double LOOP_STALL_SECOND_S = 3.0;
 
 void NoteLoopTop(Core::System& system)
 {
-  const u64 now = system.GetCoreTiming().GetTicks();
+  const u64 now = BrawlOnline::GetEngine().GetTicks();
   if (s.loop_stall_reports > 0)
   {
     WARN_LOG_FMT(BRAWLBACK, "gprb: the game is back at its loop top after {:.1f} s of emulated time",
                  static_cast<double>(now - s.loop_top_ticks) /
-                     system.GetSystemTimers().GetTicksPerSecond());
+                     BrawlOnline::GetEngine().GetTicksPerSecond());
   }
   s.loop_top_ticks = now;
   s.loop_stall_reports = 0;
@@ -10288,12 +10268,12 @@ void OnField(Core::System& system)
 {
   if (s.mode == Mode::None || !DrivesLoop() || s.loop_top_ticks == 0 || s.loop_stall_reports >= 2)
     return;
-  auto& ct = system.GetCoreTiming();
+  auto& ct = BrawlOnline::GetEngine();
   const u64 now = ct.GetTicks();
   if (now < s.loop_top_ticks)
     return;
   const double seconds =
-      static_cast<double>(now - s.loop_top_ticks) / system.GetSystemTimers().GetTicksPerSecond();
+      static_cast<double>(now - s.loop_top_ticks) / BrawlOnline::GetEngine().GetTicksPerSecond();
   if (seconds < (s.loop_stall_reports == 0 ? LOOP_STALL_FIRST_S : LOOP_STALL_SECOND_S))
     return;
   ++s.loop_stall_reports;
@@ -10451,7 +10431,7 @@ bool OnLoopTop(const Core::CPUThreadGuard& guard)
       // set is only resolved, for the keyframes of seeking.
       PreparePlaybackKeyframes(system);
       StartRunning(system);
-      system.GetCoreTiming().ResetThrottleToNow();
+      BrawlOnline::GetEngine().ResetThrottleToNow();
       return RunFrame(guard);
     }
     if (s.mode == Mode::SyncTest)
@@ -10504,7 +10484,7 @@ bool OnLoopTop(const Core::CPUThreadGuard& guard)
     }
     // StartBarrier: wait on the host for GekkoNet's handshake and the peer.
     s.cpu_where = "startbarrier";
-    auto& ct = system.GetCoreTiming();
+    auto& ct = BrawlOnline::GetEngine();
     for (;;)
     {
       if (!s.gekko_started)
@@ -10740,7 +10720,7 @@ bool OnLoopTop(const Core::CPUThreadGuard& guard)
     return false;
 
   // Barrier: wait on the host for the peer, without running guest code.
-  auto& ct = system.GetCoreTiming();
+  auto& ct = BrawlOnline::GetEngine();
   for (;;)
   {
     std::string differs;
@@ -11266,7 +11246,7 @@ bool RunIoWait(const Core::CPUThreadGuard& guard)
       ++s.io_waits;
       s.io_wait_t0 = Clock::now();
       if (LoadWaitUnthrottled())
-        guard.GetSystem().GetCoreTiming().SetRollbackLoadWait(true);
+        BrawlOnline::GetEngine().SetRollbackLoadWait(true);
     }
     if (s.io_wait_update)
     {
@@ -11294,7 +11274,7 @@ bool RunIoWait(const Core::CPUThreadGuard& guard)
       s.strm_wait_off = s.strm_wait_off || s.io_wait_strm;
     }
     RestoreGuestRegs(s.io_saved);
-    guard.GetSystem().GetCoreTiming().SetRollbackLoadWait(false);
+    BrawlOnline::GetEngine().SetRollbackLoadWait(false);
     const double ms =
         std::chrono::duration<double, std::milli>(Clock::now() - s.io_wait_t0).count();
     s.io_wait_ms += ms;
