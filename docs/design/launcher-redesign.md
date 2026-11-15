@@ -239,6 +239,6 @@ The page had fixed column widths (320 + 380 px) wider than the room beside the s
 - **the pages** are their icons in 36 px squares, each name in a tooltip as the folded rail's friends; Other Games' and Spectate's counts sit on the icon's top right corner, as the rail's unread count;
 - **the queue box** is the dot and the search's time, or the opponent and the score; its tooltip has the open box's lines;
 - **the player's card** is their stock icon in the card's box, the name and code in its tooltip; logged out, Log in is an arrow in the same box;
-- **the tools** (Settings, Theme Color, Report a bug, Discord, the bell) are a column, their tooltips at their right.
+- **the tools** are a column the other way up from the open row ("settings on the bottom, notifs on top"): the bell, Discord, Report a bug, Theme Color, Settings, their tooltips at their right.
 
 The column fits a 1264 x 711 window with a search and an update showing. In a shorter window ("at smaller vertical heights, replace it with a menu button that rolls up a vertical pop up over everything that has the 5 buttons in it") the tools are one menu button whose popup rolls up over everything with the five in a column (a pick closes it); the column comes back once it fits again. The bottom group (the arrows, the search, the card, the tools) always shows; if the pages still don't fit (the smallest windows, 450 px), only their icons scroll, faded where they are cut off. New word for review: the menu button's tooltip "Menu".

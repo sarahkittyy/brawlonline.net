@@ -135,7 +135,14 @@ export const Sidebar = ({ items }: { items: readonly NavItem[] }) => {
       <div ref={fit.bottomRef} className={styles.group}>
         {/* The fold arrows: at the bottom, over the search and the player's card (Sarah's board). */}
         <div className={styles.foldRow}>
-          <Tooltip title={foldLabel} placement={folded ? "right" : "top"} disableInteractive={true}>
+          {/* A new tooltip on each fold: the button moves out from under the cursor, so the old one never heard the
+              mouse leave and stayed on the screen with the new label (Sarah's board). */}
+          <Tooltip
+            key={folded ? "folded" : "open"}
+            title={foldLabel}
+            placement={folded ? "right" : "top"}
+            disableInteractive={true}
+          >
             <IconButton
               size="small"
               className={styles.foldButton}
@@ -235,17 +242,21 @@ const useFoldedFit = (folded: boolean) => {
   return { asideRef, topRef, innerRef, bottomRef, menu, cut };
 };
 
-/** Settings, Theme Color, Report a bug, Discord and the bell. */
-const Tools = ({ placement, openSettings }: { placement?: "right"; openSettings: () => void }) => (
-  <>
-    <Tooltip title={HeaderMessages.settings()} placement={placement}>
+/**
+ * Settings, Theme Color, Report a bug, Discord and the bell; in a column (folded, or the folded menu's popup) the other
+ * way up, the bell on top and Settings at the bottom (Sarah's board: "flip the order. settings on the bottom, notifs on
+ * top").
+ */
+const Tools = ({ placement, openSettings }: { placement?: "right"; openSettings: () => void }) => {
+  const tools = [
+    <Tooltip key="settings" title={HeaderMessages.settings()} placement={placement}>
       <IconButton aria-label={HeaderMessages.settings()} onClick={openSettings}>
         <SettingsOutlinedIcon />
       </IconButton>
-    </Tooltip>
-    <ThemeColorButton placement={placement} />
-    <BugReportButton placement={placement} />
-    <Tooltip title={HeaderMessages.discord()} placement={placement}>
+    </Tooltip>,
+    <ThemeColorButton key="theme" placement={placement} />,
+    <BugReportButton key="bug" placement={placement} />,
+    <Tooltip key="discord" title={HeaderMessages.discord()} placement={placement}>
       <IconButton
         component="a"
         href={DISCORD_INVITE_URL}
@@ -255,10 +266,12 @@ const Tools = ({ placement, openSettings }: { placement?: "right"; openSettings:
       >
         <DiscordIcon />
       </IconButton>
-    </Tooltip>
-    <SoundsToggle placement={placement} />
-  </>
-);
+    </Tooltip>,
+    <SoundsToggle key="sounds" placement={placement} />,
+  ];
+  // Beside the column (tooltips at the right) = a column.
+  return <>{placement === "right" ? tools.reverse() : tools}</>;
+};
 
 /**
  * The folded tools in a short window: a menu button whose popup rolls up over everything with the five in a column.
