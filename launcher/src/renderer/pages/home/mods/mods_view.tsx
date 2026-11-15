@@ -37,7 +37,6 @@ import { clsx } from "clsx";
 import type { ReactNode } from "react";
 import { useEffect, useRef, useState } from "react";
 
-import { ExternalLink } from "@/components/external_link";
 import { RoomNameMessages } from "@/components/room_name/room_name.messages";
 import { RoomNameField } from "@/components/room_name/room_name_field";
 import { UserName } from "@/components/user_name/user_name";
@@ -101,8 +100,6 @@ export type ModsViewProps = {
 
 const fileName = (p: string | null) => (p ? p.split(/[\\/]/).pop() ?? p : null);
 
-/** Where Wii/GCN Rollback's beta feedback goes. */
-const FEEDBACK_URL = "https://brawlonline.net/discord";
 /** Whether the next room the player hosts is public: the room panel's switch, as last left (on this computer). */
 const HOST_PUBLIC_KEY = "MODS_HOST_PUBLIC";
 /** How long the public switch shows a click the room file does not say yet. */
@@ -136,10 +133,6 @@ export const ModsView = (props: ModsViewProps) => {
           title={
             <div className={styles.introTip}>
               <p>{Messages.intro()}</p>
-              <p>
-                {Messages.betaLine1()} {Messages.betaLine2Before()}
-                <ExternalLink href={FEEDBACK_URL}>{Messages.discord()}</ExternalLink>
-              </p>
             </div>
           }
         >

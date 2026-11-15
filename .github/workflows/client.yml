@@ -3,8 +3,11 @@
 # electron-updater feed https://brawlonline.net/updates/launcher/ (generic provider). Installed
 # launchers update themselves from that feed; the bundled Dolphin and plugin update with them.
 #
-# Version: 0.1.<run number of this workflow>, stamped into the launcher, Dolphin's version string
-# and its matchmaking appVersion (.github/scripts/stamp-version.sh).
+# Version: 0.2.<run number of this workflow - VERSION_FIRST_RUN> (0.2.0 is the first run after
+# 0.1.141; 0.1.<run number> before), stamped into the launcher, Dolphin's version string and its
+# matchmaking appVersion (.github/scripts/stamp-version.sh). The plugin job works it out (outputs
+# version); the other jobs take it from there. Moving to a new minor version: set VERSION_MINOR and
+# VERSION_FIRST_RUN to the next run's number (gh run list --workflow client.yml --limit 1).
 #
 # Runners:
 #   - Linux builds (plugin, Dolphin, launcher tests, AppImage): Namespace runner profile
@@ -37,7 +40,7 @@
 # (its launcher-windows artifact, kept 1 day); Windows and macOS are not built again and no new
 # version number is used. Dispatch it on a ref with the fix, e.g. a branch of the failed run's
 # commit plus the fix (only pushes to main start this workflow by themselves):
-#   gh workflow run client.yml --ref <branch> -f version=0.1.91 -f windows_from_run=<run id>
+#   gh workflow run client.yml --ref <branch> -f version=0.2.3 -f windows_from_run=<run id>
 name: client
 
 on:
@@ -54,7 +57,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Finishing a run: its version (e.g. 0.1.91). Empty: 0.1.<this run's number>"
+        description: "Finishing a run: its version (e.g. 0.2.3). Empty: the next version"
         required: false
         default: ""
       windows_from_run:
@@ -66,7 +69,8 @@ permissions:
   contents: read
 
 env:
-  VERSION: ${{ inputs.version || format('0.1.{0}', github.run_number) }}
+  VERSION_MINOR: "0.2"
+  VERSION_FIRST_RUN: "142"
   NODE_VERSION: "24"
 
 jobs:
@@ -78,7 +82,23 @@ jobs:
     # Linux client runner (same default as the linux job):
     runs-on: ${{ fromJSON(vars.CLIENT_LINUX_RUNNER || '["namespace-profile-brawlonline"]') }}
     timeout-minutes: 20
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     steps:
+      - name: Version
+        id: version
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          if [ -n "$INPUT_VERSION" ]; then
+            v="$INPUT_VERSION"
+          else
+            n=$((GITHUB_RUN_NUMBER - VERSION_FIRST_RUN))
+            [ "$n" -ge 0 ] || { echo "run $GITHUB_RUN_NUMBER is before VERSION_FIRST_RUN $VERSION_FIRST_RUN" >&2; exit 1; }
+            v="$VERSION_MINOR.$n"
+          fi
+          echo "version $v"
+          echo "version=$v" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@v6
         with:
           path: client
@@ -116,6 +136,7 @@ jobs:
     runs-on: ${{ fromJSON(vars.CLIENT_LINUX_RUNNER || '["namespace-profile-brawlonline"]') }}
     timeout-minutes: 240
     env:
+      VERSION: ${{ needs.plugin.outputs.version }}
       NODE_OPTIONS: --max-old-space-size=4096
       USE_HARD_LINKS: "false"
     steps:
@@ -221,6 +242,7 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 180
     env:
+      VERSION: ${{ needs.plugin.outputs.version }}
       CCACHE_DIR: ${{ github.workspace }}\.ccache
       CCACHE_BASEDIR: ${{ github.workspace }}
       CCACHE_NOHASHDIR: "1"
@@ -417,6 +439,7 @@ jobs:
     runs-on: namespace-profile-brawlonline-mac
     timeout-minutes: 150
     env:
+      VERSION: ${{ needs.plugin.outputs.version }}
       NODE_OPTIONS: --max-old-space-size=4096
       USE_HARD_LINKS: "false"
     steps:
@@ -530,7 +553,7 @@ jobs:
   publish:
     # Linux and Windows. The macOS build is published by client-mac-publish.yml once Apple
     # accepts it. Finishing another run (windows_from_run): that run's Windows build.
-    needs: [linux, windows]
+    needs: [plugin, linux, windows]
     if: >-
       ${{ !cancelled() && needs.linux.result == 'success' && (needs.windows.result == 'success' ||
       (inputs.windows_from_run && needs.windows.result == 'skipped')) }}
@@ -539,6 +562,8 @@ jobs:
       cancel-in-progress: false
     runs-on: [self-hosted, linux, x64, sarahvps2, brawlonline]
     timeout-minutes: 30
+    env:
+      VERSION: ${{ needs.plugin.outputs.version }}
     permissions:
       contents: read
       actions: write # delete this run's artifacts after publishing

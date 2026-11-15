@@ -194,20 +194,6 @@
   gap: 24px;
 }
 
-/* In the free space right of the intro. */
-.beta {
-  flex-shrink: 0;
-  margin: 0;
-  color: var(--text-dim);
-  font-size: 13px;
-  line-height: 1.5;
-  text-align: right;
-}
-
-.beta a {
-  color: var(--accent-primary-bright, inherit);
-}
-
 .intro {
   margin: 0;
   max-width: 720px;
@@ -879,12 +865,6 @@
   flex: none;
 }
 
-.headSide .beta {
-  margin: 0;
-  text-align: right;
-  font-size: 12px;
-}
-
 .section {
   display: flex;
   flex-direction: column;
@@ -1157,13 +1137,6 @@
   color: var(--text-dim);
 }
 
-.introRow .beta {
-  flex: none;
-  margin: 0;
-  text-align: right;
-  font-size: 12px;
-}
-
 .columns {
   flex: 1;
   display: grid;
@@ -1237,10 +1210,6 @@
   .introRow {
     flex-direction: column;
     gap: 6px;
-  }
-
-  .introRow .beta {
-    text-align: left;
   }
 }
 

@@ -11,7 +11,7 @@ export const SILENT_DOLPHIN_VERSION = "no version printed";
  * but never answer its online requests, so a search spins forever (bug report #15: Project+ 3.2's
  * Dolphin, "3.2.0").
  *
- * Our releases print "Project+ Dolphin v0.1.<CI run>"; Project+'s own builds are 2.x/3.x or print
+ * Our releases print "Project+ Dolphin v0.<minor>.<n>" (docs/ci.md); Project+'s own builds are 2.x/3.x or print
  * nothing, and Slippi's 3.x. Our local builds print "Project+ Dolphin <commit>" (no semver), as do
  * old Project+ builds, which therefore pass. An unknown version (`--version` failed) is not judged.
  */
