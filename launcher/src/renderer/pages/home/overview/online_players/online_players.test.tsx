@@ -24,7 +24,7 @@ const { ServiceProvider } = createServiceProvider({
   services: { notificationService: toasts } as unknown as Services,
 });
 
-function renderList(disc: boolean) {
+function renderList(disc: boolean, friends: SocialState["friends"]["friends"] = []) {
   useGameAssets
     .getState()
     .setState({ manifest: { stocks: disc ? { marth: { file: "theme/stocks/marth.png" } } : {} } } as any);
@@ -35,7 +35,7 @@ function renderList(disc: boolean) {
     room: null,
     ignored: [],
     invites: [],
-    friends: { loaded: true, friends: [], incoming: [], outgoing: [] },
+    friends: { loaded: true, friends, incoming: [], outgoing: [] },
     requestPopups: [],
     conversations: {},
   };
@@ -54,6 +54,8 @@ const rowOf = (name: string) => screen.getByText(name).closest("[role=button]") 
 afterEach(() => {
   vi.restoreAllMocks();
   cleanup();
+  // The open tab is remembered (the Friends tab test).
+  localStorage.clear();
   useGameAssets.setState({ state: null });
 });
 
@@ -80,34 +82,30 @@ describe("OnlinePlayers mains", () => {
 });
 
 describe("OnlinePlayers flags", () => {
-  /**
-   * jsdom has no layout: every row is `room` px wide, and while the list measures (rows at their natural width, flags
-   * shown), Lucas's row (the one flagged player) is `lucas` px.
-   */
-  function fakeWidths(room: number, lucas: number) {
+  const flagOf = (row: HTMLElement) => row.querySelector("[class*=flag] img, [class*=flag] svg, [class*=flag] [title]");
+
+  it("shows a flagged player's flag before the invite, however narrow the list", () => {
+    // A 220 px row whose name and code in full would take 400 (the rail is 272 px; the old rule hid every flag then).
     vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
-      const measuring = this.closest("ul")?.className.includes("measure") ?? false;
-      const width = measuring && this.textContent?.includes("Lucas") ? lucas : room;
+      const width = this.closest("ul")?.className.includes("measure") ? 400 : 220;
       return { width, height: 30, top: 0, left: 0, right: width, bottom: 30, x: 0, y: 0 } as DOMRect;
     });
-  }
-
-  it("shows the flags while every flagged name fits beside its flag", () => {
-    fakeWidths(220, 220);
     renderList(true);
-    expect(screen.getByTestId("online-players").dataset.flags).toBe("shown");
-    expect(rowOf("Lucas").querySelector("img[title], [class*=flag]")).toBeTruthy();
+    const row = rowOf("Lucas");
+    expect(flagOf(row)).toBeTruthy();
+    expect(within(row).getByRole("button", { name: /invite/i })).toBeTruthy();
+    expect(flagOf(rowOf("Ness"))).toBeNull();
   });
 
-  it("hides them all, keeping the invite, when a flagged name would not fit", () => {
-    fakeWidths(220, 221);
-    renderList(true);
-    const list = screen.getByTestId("online-players");
-    expect(list.dataset.flags).toBe("hidden");
-    expect(list.className).toMatch(/hideFlags/);
-    // The measuring class is gone again.
-    expect(list.className).not.toMatch(/measure/);
-    expect(within(rowOf("Lucas")).getByRole("button", { name: /invite/i })).toBeTruthy();
+  it("shows online and offline friends' flags in the Friends tab", () => {
+    renderList(true, [
+      { uid: "a", displayName: "Lucas", connectCode: "LUCA#5", country: "se" },
+      { uid: "z", displayName: "Away", connectCode: "AWAY#3", country: "fi" },
+    ] as SocialState["friends"]["friends"]);
+    fireEvent.click(screen.getByRole("tab", { name: /friends/i }));
+    expect(flagOf(screen.getByTestId("friend-online-a"))).toBeTruthy();
+    expect(within(screen.getByTestId("friend-online-a")).getByRole("button", { name: /invite/i })).toBeTruthy();
+    expect(flagOf(screen.getByTestId("friend-offline-z"))).toBeTruthy();
   });
 });
 

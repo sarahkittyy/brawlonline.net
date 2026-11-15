@@ -206,7 +206,12 @@ export const FriendsList = ({
               <ActivityLine activity={activityOf(player.uid, rooms?.rooms, rooms?.yourRoom?.code, live)} />
             </div>
             <ActivityAction activity={activityOf(player.uid, rooms?.rooms, rooms?.yourRoom?.code, live)} />
-            <InviteButton player={player} />
+            {player.country && (
+              <span className={styles.flag}>
+                <Flag code={player.country} height={12} title={countryName(player.country)} />
+              </span>
+            )}
+            <InviteButton player={player} className={player.country ? styles.afterFlag : undefined} />
           </div>
         </li>
       ))}
@@ -233,7 +238,6 @@ export const FriendsList = ({
           <li key={player.uid}>
             <div
               className={clsx(styles.row, styles.offline)}
-              data-flagged={player.country ? "" : undefined}
               data-testid={`friend-offline-${player.uid}`}
               {...rowProps(player)}
             >

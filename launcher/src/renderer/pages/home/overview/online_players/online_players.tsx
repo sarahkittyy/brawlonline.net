@@ -6,7 +6,7 @@ import IconButton from "@mui/material/IconButton";
 import Tooltip from "@mui/material/Tooltip";
 import type { SocialPlayer } from "@social/types";
 import { clsx } from "clsx";
-import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 
 import { Flag } from "@/components/flag/flag";
 import { useHasStockIcons } from "@/components/profile/character_icon";
@@ -47,24 +47,6 @@ const NameCell = ({ player, friend, mark }: { player: SocialPlayer; friend: bool
   ) : (
     <PlayerName player={player} />
   );
-
-/**
- * Whether every flagged row fits in the list with its flag: each row is laid out at its natural width (name and
- * code in full, flag shown) for a moment, and compared with the width a row has. Synchronous, before paint.
- */
-function flagsFitIn(list: HTMLElement): boolean {
-  const rows = list.querySelectorAll<HTMLElement>("[data-flagged]");
-  if (rows.length === 0) {
-    return true;
-  }
-  const room = rows[0].getBoundingClientRect().width;
-  list.classList.add(styles.measure);
-  try {
-    return Array.from(rows).every((row) => row.getBoundingClientRect().width <= room + 0.5);
-  } finally {
-    list.classList.remove(styles.measure);
-  }
-}
 
 /** How long the search box waits after a key before asking the server (an admin's offline players). */
 const ADMIN_SEARCH_DELAY_MS = 300;
@@ -128,11 +110,10 @@ function useOfflinePlayers(enabled: boolean, needle: string, online: SocialPlaye
  * on their main's icon, in the dot's place, or after the code without a disc). A name opens a chat
  * tab, the envelope invites, a right click opens the player's menu. With a disc set up, each name
  * has the player's main before it (MainSlot); without one there are no stock icons and the list has
- * no main column. When any flagged player's name and code no longer fit beside the flag, every
- * flag hides (all at once, so a missing flag never reads as "has none"), the envelope stays at the
- * right, and names that still don't fit end in "…"; the list never scrolls sideways. On an admin
- * account, offline players follow the online ones (dimmed, no envelope; banned ones struck
- * through), and the search finds them too.
+ * no main column. A player's flag sits just left of the envelope, always shown; names that don't
+ * fit end in "…", and the list never scrolls sideways. On an admin account, offline players
+ * follow the online ones (dimmed, no envelope; banned ones struck through), and the search finds
+ * them too.
  *
  * Friends: FriendsList. Its person+ button opens a box for a friend's code under the header.
  *
@@ -163,8 +144,6 @@ export const OnlinePlayers = React.memo(function OnlinePlayers({
   const [adding, setAdding] = useState(false);
   const [query, setQuery] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
-  const listRef = useRef<HTMLUListElement>(null);
-  const [flagsFit, setFlagsFit] = useState(true);
   const { query: rooms } = useRoomList();
 
   const ready = user != null && hasPlayKey && status === "online";
@@ -178,23 +157,6 @@ export const OnlinePlayers = React.memo(function OnlinePlayers({
   }, [online, needle, friendUids]);
   const offline = useOfflinePlayers(ready && !friendsTab, needle, online, user?.uid);
   const friendsOnline = online.filter((p) => friendUids.has(p.uid)).length;
-
-  // Re-checked when the list's width changes (the window, the column) and when the rows change.
-  const listShown = ready && !friendsTab && shown.length + offline.length > 0;
-  useLayoutEffect(() => {
-    const list = listRef.current;
-    if (!list) {
-      return;
-    }
-    const check = () => setFlagsFit(flagsFitIn(list));
-    check();
-    if (typeof ResizeObserver === "undefined") {
-      return;
-    }
-    const observer = new ResizeObserver(check);
-    observer.observe(list);
-    return () => observer.disconnect();
-  }, [listShown, shown, offline]);
 
   const closeSearch = () => {
     setSearching(false);
@@ -364,12 +326,7 @@ export const OnlinePlayers = React.memo(function OnlinePlayers({
       return <p className={styles.notice}>{Messages.noOnlineMatch(query.trim())}</p>;
     }
     return (
-      <ul
-        ref={listRef}
-        className={clsx(styles.list, !flagsFit && styles.hideFlags)}
-        data-testid="online-players"
-        data-flags={flagsFit ? "shown" : "hidden"}
-      >
+      <ul className={styles.list} data-testid="online-players">
         {shown.map((player) => {
           const friend = friendUids.has(player.uid);
           return (
@@ -378,7 +335,6 @@ export const OnlinePlayers = React.memo(function OnlinePlayers({
                 role="button"
                 tabIndex={0}
                 className={clsx(styles.row, ignored.includes(player.uid) && styles.ignored)}
-                data-flagged={player.country ? "" : undefined}
                 data-friend={friend ? "" : undefined}
                 onClick={() => openTab(player.uid, true)}
                 onKeyDown={(e) => {
@@ -415,7 +371,6 @@ export const OnlinePlayers = React.memo(function OnlinePlayers({
               role="button"
               tabIndex={0}
               className={clsx(styles.row, styles.offline, banned && styles.banned)}
-              data-flagged={player.country ? "" : undefined}
               data-offline=""
               onClick={() => openTab(player.uid, true, player)}
               onKeyDown={(e) => {

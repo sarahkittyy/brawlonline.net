@@ -228,28 +228,6 @@
   margin-left: 8px !important;
 }
 
-/* Too narrow for some flagged name in full beside its flag (flagsFitIn): no flags, the envelope at the right. */
-.hideFlags .flag {
-  display: none;
-}
-
-.hideFlags .afterFlag {
-  margin-left: auto !important;
-}
-
-/* For a moment while measuring (flagsFitIn): each row at its natural width, flags shown. */
-.list.measure .row {
-  width: max-content;
-}
-
-.list.measure .flag {
-  display: inline-flex;
-}
-
-.list.measure .afterFlag {
-  margin-left: 8px !important;
-}
-
 /* The player's main before their name: a 20 px stock icon in a fixed slot, so every name lines up. */
 .main {
   display: inline-flex;
