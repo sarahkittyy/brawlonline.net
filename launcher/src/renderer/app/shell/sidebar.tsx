@@ -93,22 +93,6 @@ export const Sidebar = ({ items }: { items: readonly NavItem[] }) => {
     >
       <div className={styles.logoRow}>
         <LogoButton folded={folded} />
-        <Tooltip title={foldLabel} placement={folded ? "right" : "bottom"} disableInteractive={true}>
-          <IconButton
-            size="small"
-            className={styles.foldButton}
-            aria-label={foldLabel}
-            aria-expanded={!folded}
-            data-testid={folded ? "sidebar-open" : "sidebar-fold"}
-            onClick={() => setChoice(folded ? "open" : "folded")}
-          >
-            {folded ? (
-              <KeyboardDoubleArrowRightRoundedIcon fontSize="small" />
-            ) : (
-              <KeyboardDoubleArrowLeftRoundedIcon fontSize="small" />
-            )}
-          </IconButton>
-        </Tooltip>
       </div>
       <SetupStatus onClick={() => onPlay()} folded={folded} />
       <nav className={styles.nav}>
@@ -131,6 +115,25 @@ export const Sidebar = ({ items }: { items: readonly NavItem[] }) => {
         )}
       </nav>
       <div className={styles.spacer} />
+      {/* The fold arrows: at the bottom, over the search and the player's card (Sarah's board). */}
+      <div className={styles.foldRow}>
+        <Tooltip title={foldLabel} placement={folded ? "right" : "top"} disableInteractive={true}>
+          <IconButton
+            size="small"
+            className={styles.foldButton}
+            aria-label={foldLabel}
+            aria-expanded={!folded}
+            data-testid={folded ? "sidebar-open" : "sidebar-fold"}
+            onClick={() => setChoice(folded ? "open" : "folded")}
+          >
+            {folded ? (
+              <KeyboardDoubleArrowRightRoundedIcon fontSize="small" />
+            ) : (
+              <KeyboardDoubleArrowLeftRoundedIcon fontSize="small" />
+            )}
+          </IconButton>
+        </Tooltip>
+      </div>
       <QueueBox folded={folded} />
       {currentUser ? (
         <UserMenu user={currentUser} handleError={showError} variant={folded ? "folded" : "sidebar"} />

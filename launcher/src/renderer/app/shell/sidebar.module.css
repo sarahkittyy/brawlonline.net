@@ -37,12 +37,21 @@
   padding: 2px 0 14px;
 }
 
-/* Open: the fold arrows at the right of the name. Folded: under the logo. */
+/* The fold arrows, over the search and the player's card: open, at the right (the edge the sidebar folds to);
+   folded, centred. */
+.foldRow {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 6px;
+}
+
+.folded .foldRow {
+  justify-content: center;
+}
+
 .foldButton {
-  margin: 0 -6px 0 auto !important;
   padding: 4px !important;
   color: var(--text-dim) !important;
-  -webkit-app-region: no-drag;
 }
 
 .foldButton:hover {
@@ -50,22 +59,15 @@
 }
 
 .folded .logoRow {
-  flex-direction: column;
-  gap: 2px;
   padding-bottom: 10px;
 }
 
-.folded .foldButton {
-  margin: 0 !important;
-}
-
-/* 17 px (it was 19 with the row to itself) leaves the fold arrows room at its right. */
 .logo {
   font-family: var(--font-title, system-ui, sans-serif);
-  font-size: 17px;
+  font-size: 19px;
   white-space: nowrap;
   color: var(--off-white);
-  padding: 2px 6px;
+  padding: 2px 10px;
   border-radius: 6px;
   -webkit-app-region: no-drag;
 }
