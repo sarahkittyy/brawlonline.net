@@ -315,9 +315,10 @@
   opacity: 0.8;
 }
 
-/* A manual clip's row on two lines (Sarah's board: on one it wrapped into four): its players across the row, then the
-   clip with the stage and date at the right (the Highlights tab). The time stays in the middle, as the buttons. */
-.row.manualRow {
+/* A row on two lines (Sarah's board: wrapped, a manual clip's took four): its players across the row, then the clip's
+   kind (manual: "Clip (0:20)", L+R+Z: the scissors) with the stage and date at the right (the Highlights tab). The
+   time stays in the middle, as the buttons. */
+.row.twoLines {
   display: grid;
   grid-template-areas:
     "time players players"
@@ -326,11 +327,11 @@
   row-gap: 6px;
 }
 
-.manualRow .time {
+.twoLines .time {
   grid-area: time;
 }
 
-.manualRow .where {
+.twoLines .where {
   grid-area: where;
 }
 
@@ -342,7 +343,7 @@
   min-width: 0;
 }
 
-.clipPlayers {
+.rowPlayers {
   grid-area: players;
 }
 

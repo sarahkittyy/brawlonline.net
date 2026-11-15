@@ -55,6 +55,11 @@ moment as pips in the player's color (filled left, hollow lost; past 5, "×N"). 
 replay's stage and everyone's stock changes for this (`stageId`, `stocks`; DETECTOR_VERSION 6). A
 manual clip shows them when its replay's highlights are known (stocks), and the stage it was saved
 with (clips saved before have none).
+Since 2026-11-15 (Sarah's board: wrapped, a manual clip's row took four lines) a row is two lines:
+the players across the row (a 1v1 keeps X vs Y on its line, a name too long for its half
+shortening; teams wrap), then what kind of clip it is (manual: crop icon and "Clip (0:20)"; L+R+Z:
+the scissors; a highlight: nothing) with the stage and date at the right. A highlight row on a
+replay's own page (no stage or date) stays one line.
 The row playing is shown selected, and follows the playback Dolphin's buttons and stars; it is
 shown only while the playback Dolphin is open (2026-10-24, the user). A banner
 says what the playback Dolphin does:
@@ -414,10 +419,8 @@ change). The copy is a replay like any other, in the Replays list too.
 **Replays > Highlights**: the sidebar's **Manual Clips** (between L+R+Z Highlights and Favorites;
 hovering it: "Click Clip on the seek bar of a replay or a spectated game, then Save as
 highlight.") lists them newest saved first; All highlights lists them last, under "Manual clips",
-and Favorites the starred ones; the player search applies. A row, on two lines (2026-11-15, Sarah's
-board: on one it wrapped into four): every player of the game (teams: team vs team; a 1v1 keeps
-X vs Y on its line, a name too long for its half shortening), then a crop icon and "Clip (0:20)",
-with the stage and the game's date at the right; it plays, renders (named
+and Favorites the starred ones; the player search applies. A row (two lines, §2): every player of the
+game (teams: team vs team), then a crop icon and "Clip (0:20)" with the stage and the game's date; it plays, renders (named
 `<date> Clip - sarahkitty (Snake) vs t3o7 (Lucas).mp4`) and stars as the others do, and has a
 remove button left of its Play button (no undo). A replay's stats page lists its manual clips too, also
 when it has no highlight data (a spectated game's copy). My and Opponent Highlights don't list

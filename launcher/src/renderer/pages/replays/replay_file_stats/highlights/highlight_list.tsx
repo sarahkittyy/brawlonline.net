@@ -413,7 +413,9 @@ export const HighlightRows = ({
                     data-row={i}
                     className={`${styles.row} ${i === playing ? styles.playing : ""} ${
                       ticked.has(entry.key) ? styles.selected : ""
-                    } ${row.kind === "manual" ? `${styles.removable} ${styles.manualRow}` : ""}`}
+                    } ${row.kind === "manual" ? styles.removable : ""} ${
+                      twoLines(row, showDates) ? styles.twoLines : ""
+                    }`}
                     onClick={(e) => clickRow(i, e)}
                     onDoubleClick={() => void play(i)}
                   >
@@ -423,27 +425,28 @@ export const HighlightRows = ({
                     >
                       {convertFrameCountToDurationString(row.startFrame)}
                     </span>
-                    {row.kind === "highlight" ? (
-                      <HighlightWho row={row} data={game} players={players} stocks={stocks} />
-                    ) : row.kind === "manual" ? (
-                      // Two lines (Sarah's board: on one it wrapped into four): its players, then the clip.
-                      <>
-                        <span className={styles.clipHead}>
-                          <CropIcon fontSize="small" className={styles.clipIcon} />
-                          <span className={styles.vs}>{Messages.manualClip(clipLength(row))}</span>
-                        </span>
-                        <span
-                          className={`${styles.who} ${styles.clipPlayers} ${isOneOnOne(game) ? styles.oneLine : ""}`}
-                        >
-                          <GameWho data={game} stocks={stocks} />
-                        </span>
-                      </>
-                    ) : (
-                      <span className={styles.who}>
-                        <ContentCutIcon fontSize="small" className={styles.clipIcon} />
+                    {/* The players, then (twoLines) what kind of clip it is and the game's stage and date under them. */}
+                    <span
+                      className={`${styles.who} ${styles.rowPlayers} ${
+                        (row.kind === "highlight" ? !game.isTeams : isOneOnOne(game)) ? styles.oneLine : ""
+                      }`}
+                    >
+                      {row.kind === "highlight" ? (
+                        <HighlightWho row={row} data={game} players={players} stocks={stocks} />
+                      ) : (
                         <GameWho data={game} stocks={stocks} />
+                      )}
+                    </span>
+                    {row.kind === "manual" ? (
+                      <span className={styles.clipHead}>
+                        <CropIcon fontSize="small" className={styles.clipIcon} />
+                        <span className={styles.vs}>{Messages.manualClip(clipLength(row))}</span>
                       </span>
-                    )}
+                    ) : row.kind === "clip" ? (
+                      <span className={styles.clipHead}>
+                        <ContentCutIcon fontSize="small" className={styles.clipIcon} />
+                      </span>
+                    ) : null}
                     {showDates && <GameWhere stageId={game.stageId} date={entry.date} />}
                   </button>
                   {/* (Over the row, not in it: a button can't hold another.) */}
@@ -587,6 +590,12 @@ const GameWhere = ({ stageId, date }: { stageId?: number | null; date?: string }
   );
 };
 
+/**
+ * A row on two lines (Sarah's board, 2026-11-15: wrapped, a manual clip's took four): the players, then the clip's
+ * kind and the game's stage and date. A highlight with nothing under it (a replay's own page) stays one line.
+ */
+const twoLines = (row: Row, showDates?: boolean) => row.kind !== "highlight" || !!showDates;
+
 /** Two players, no teams: X vs Y, which keeps to one line (the names shorten). */
 const isOneOnOne = (data: ReplayHighlights) => !data.isTeams && data.players.length === 2;
 
@@ -639,7 +648,7 @@ const HighlightWho = ({
     return [p, ...data.players.filter((q) => q.teamId === p.teamId && q.port !== port)];
   };
   return (
-    <span className={styles.who}>
+    <>
       <span className={styles.side}>
         {side(row.attackerPort).map((p, i) => (
           <PlayerChip key={i} player={p} isTeams={data.isTeams} stocks={p && stocks.get(p.port)} />
@@ -651,7 +660,7 @@ const HighlightWho = ({
           <PlayerChip key={i} player={p} isTeams={data.isTeams} stocks={p && stocks.get(p.port)} />
         ))}
       </span>
-    </span>
+    </>
   );
 };
 
