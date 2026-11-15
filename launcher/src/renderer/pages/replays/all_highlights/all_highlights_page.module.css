@@ -9,16 +9,69 @@
   min-height: 0;
 }
 
+/* The categories beside the list; they fold to their icons with the button at their foot. */
+.split {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
 /* On the page's own colour, a line between it and the list (the list's bars the same colour, Sarah's board); the
    open one raised, as the app's sidebar marks its page. */
 .sidebar {
   display: flex;
-  flex: 1;
+  flex: none;
   flex-direction: column;
   gap: 2px;
-  min-width: 0;
+  width: 200px;
+  min-height: 0;
   padding: 12px 8px;
   border-right: 1px solid var(--line-soft);
+  box-sizing: border-box;
+  overflow: hidden auto;
+}
+
+.sidebar[data-folded] {
+  width: 52px;
+  padding-inline: 6px;
+}
+
+.sidebar[data-folded] .sideItem {
+  justify-content: center;
+  padding-inline: 0;
+}
+
+.sidebar[data-folded] .sideLabel {
+  display: none;
+}
+
+.foldButton {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  align-self: flex-end;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.sidebar[data-folded] .foldButton {
+  align-self: center;
+}
+
+.foldButton:hover {
+  background: var(--raised);
+  color: var(--off-white);
+}
+
+.foldButton:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: -2px;
 }
 
 .sideItem {

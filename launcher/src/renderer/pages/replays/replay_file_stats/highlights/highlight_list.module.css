@@ -407,7 +407,7 @@
   container-type: inline-size;
 }
 
-@container (max-width: 640px) {
+@container (max-width: 800px) {
   .hint {
     display: none;
   }

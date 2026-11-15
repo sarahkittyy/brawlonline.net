@@ -14,6 +14,8 @@ import { currentClipButtons, hotkeyLabel } from "@common/clip_hotkey";
 import ContentCutIcon from "@mui/icons-material/ContentCut";
 import CropIcon from "@mui/icons-material/Crop";
 import GroupIcon from "@mui/icons-material/Group";
+import KeyboardDoubleArrowLeftRoundedIcon from "@mui/icons-material/KeyboardDoubleArrowLeftRounded";
+import KeyboardDoubleArrowRightRoundedIcon from "@mui/icons-material/KeyboardDoubleArrowRightRounded";
 import PersonIcon from "@mui/icons-material/Person";
 import StarIcon from "@mui/icons-material/Star";
 import VideoLibraryIcon from "@mui/icons-material/VideoLibrary";
@@ -26,13 +28,14 @@ import { CLIP_BEFORE_SECONDS } from "@replays/highlights/types";
 import type { ReplayPlayer } from "@replays/types";
 import React, { useEffect, useMemo, useState } from "react";
 
-import { DualPane } from "@/components/dual_pane";
 import { ReplayPlayerSearch } from "@/components/player_search/replay_player_search";
+import { useLocalStorage } from "@/lib/hooks/use_local_storage";
 import { useSetting } from "@/lib/hooks/use_settings";
 import { favoriteKey, useFavoriteHighlights } from "@/pages/replays/replay_file_stats/highlights/favorites";
 import type { HighlightEntry } from "@/pages/replays/replay_file_stats/highlights/highlight_list";
 import { comboOfManyName, HighlightRows } from "@/pages/replays/replay_file_stats/highlights/highlight_list";
 import { manualClipEntry, useManualClips } from "@/pages/replays/replay_file_stats/highlights/manual_clips";
+import { RulesetsPageMessages } from "@/pages/rulesets/rulesets_page.messages";
 import { useServices } from "@/services";
 
 import { AllHighlightsMessages as Messages } from "./all_highlights_page.messages";
@@ -240,6 +243,10 @@ export const AllHighlightsPage = React.memo(() => {
         : Messages.none()
       : null;
 
+  // The categories fold to their icons (Sarah's board: dragging the old resize bar snapped it to its least width and
+  // then it never resized again), remembered on this computer.
+  const [folded, setFolded] = useLocalStorage<boolean>("HIGHLIGHTS_SIDEBAR_FOLDED", false);
+
   const sidebarItem = (id: View, icon: React.ReactNode, label: string, hint?: string) => {
     const item = (
       <button
@@ -247,89 +254,115 @@ export const AllHighlightsPage = React.memo(() => {
         className={`${styles.sideItem} ${view === id ? styles.sideSelected : ""}`}
         onClick={() => openView(id)}
         aria-current={view === id}
+        aria-label={folded ? label : undefined}
       >
         {icon}
         <span className={styles.sideLabel}>{label}</span>
       </button>
     );
-    return hint ? (
-      <Tooltip title={hint} placement="right" arrow={true}>
+    // Folded, its name is the tooltip (with the hint under it).
+    const tip = folded ? (
+      hint ? (
+        <>
+          <b>{label}</b>
+          <br />
+          {hint}
+        </>
+      ) : (
+        label
+      )
+    ) : (
+      hint
+    );
+    return tip ? (
+      <Tooltip key={id} title={tip} placement="right" arrow={true}>
         {item}
       </Tooltip>
     ) : (
-      item
+      <React.Fragment key={id}>{item}</React.Fragment>
     );
   };
 
   return (
     <div className={styles.outer}>
-      <DualPane
-        id="highlights"
-        resizable={true}
-        minWidth={120}
-        maxWidth={300}
-        width={200}
-        leftSide={
-          <div className={styles.sidebar}>
-            {sidebarItem("all", <VideoLibraryIcon fontSize="small" />, Messages.allHighlights())}
-            {sidebarItem("mine", <PersonIcon fontSize="small" />, Messages.myHighlights())}
-            {sidebarItem("opponents", <GroupIcon fontSize="small" />, Messages.opponentHighlights())}
-            {sidebarItem(
-              "clips",
-              <ContentCutIcon fontSize="small" />,
-              Messages.lrzHighlights(),
-              Messages.lrzHint(hotkey, CLIP_BEFORE_SECONDS),
-            )}
-            {sidebarItem("manual", <CropIcon fontSize="small" />, Messages.manualClips(), Messages.manualHint())}
-            {sidebarItem("favorites", <StarIcon fontSize="small" />, Messages.favorites())}
-            <div className={styles.sideRest} />
-          </div>
-        }
-        rightSide={
-          <div className={styles.content}>
-            {(loading || finding) && (
-              <div className={styles.finding}>
-                <div className={styles.findingText}>
-                  {progress && finding ? Messages.findingOf(progress.done, progress.total) : Messages.finding()}
-                </div>
-                <LinearProgress
-                  variant={progress && finding ? "determinate" : "indeterminate"}
-                  value={progress && progress.total ? (progress.done / progress.total) * 100 : 0}
-                />
+      <div className={styles.split}>
+        <div className={styles.sidebar} data-folded={folded ? "" : undefined} data-testid="highlights-sidebar">
+          {sidebarItem("all", <VideoLibraryIcon fontSize="small" />, Messages.allHighlights())}
+          {sidebarItem("mine", <PersonIcon fontSize="small" />, Messages.myHighlights())}
+          {sidebarItem("opponents", <GroupIcon fontSize="small" />, Messages.opponentHighlights())}
+          {sidebarItem(
+            "clips",
+            <ContentCutIcon fontSize="small" />,
+            Messages.lrzHighlights(),
+            Messages.lrzHint(hotkey, CLIP_BEFORE_SECONDS),
+          )}
+          {sidebarItem("manual", <CropIcon fontSize="small" />, Messages.manualClips(), Messages.manualHint())}
+          {sidebarItem("favorites", <StarIcon fontSize="small" />, Messages.favorites())}
+          <div className={styles.sideRest} />
+          <Tooltip
+            title={folded ? RulesetsPageMessages.show() : RulesetsPageMessages.hide()}
+            placement="right"
+            disableInteractive={true}
+          >
+            <button
+              type="button"
+              className={styles.foldButton}
+              onClick={() => setFolded(!folded)}
+              aria-label={folded ? RulesetsPageMessages.show() : RulesetsPageMessages.hide()}
+              aria-expanded={!folded}
+              data-testid="highlights-sidebar-fold"
+            >
+              {folded ? (
+                <KeyboardDoubleArrowRightRoundedIcon fontSize="small" />
+              ) : (
+                <KeyboardDoubleArrowLeftRoundedIcon fontSize="small" />
+              )}
+            </button>
+          </Tooltip>
+        </div>
+        <div className={styles.content}>
+          {(loading || finding) && (
+            <div className={styles.finding}>
+              <div className={styles.findingText}>
+                {progress && finding ? Messages.findingOf(progress.done, progress.total) : Messages.finding()}
               </div>
-            )}
-            <HighlightRows
-              sourceId="highlights"
-              entries={entries}
-              resetKey={view}
-              emptyNote={emptyNote}
-              showDates={true}
-              comboName={comboOfManyName}
-              headerExtra={
-                <>
-                  <ReplayPlayerSearch
-                    value={tagged}
-                    onChange={setTagged}
-                    text={search}
-                    onTextChange={setSearch}
-                    placeholder={Messages.search()}
-                  />
-                  <Select
-                    size="small"
-                    value={sort}
-                    onChange={(e) => setSort(e.target.value as Sort)}
-                    className={styles.sort}
-                    inputProps={{ "aria-label": Messages.sort() }}
-                  >
-                    <MenuItem value="best">{Messages.bestFirst()}</MenuItem>
-                    <MenuItem value="newest">{Messages.newestFirst()}</MenuItem>
-                  </Select>
-                </>
-              }
-            />
-          </div>
-        }
-      />
+              <LinearProgress
+                variant={progress && finding ? "determinate" : "indeterminate"}
+                value={progress && progress.total ? (progress.done / progress.total) * 100 : 0}
+              />
+            </div>
+          )}
+          <HighlightRows
+            sourceId="highlights"
+            entries={entries}
+            resetKey={view}
+            emptyNote={emptyNote}
+            showDates={true}
+            comboName={comboOfManyName}
+            headerExtra={
+              <>
+                <ReplayPlayerSearch
+                  value={tagged}
+                  onChange={setTagged}
+                  text={search}
+                  onTextChange={setSearch}
+                  placeholder={Messages.search()}
+                />
+                <Select
+                  size="small"
+                  value={sort}
+                  onChange={(e) => setSort(e.target.value as Sort)}
+                  className={styles.sort}
+                  inputProps={{ "aria-label": Messages.sort() }}
+                >
+                  <MenuItem value="best">{Messages.bestFirst()}</MenuItem>
+                  <MenuItem value="newest">{Messages.newestFirst()}</MenuItem>
+                </Select>
+              </>
+            }
+          />
+        </div>
+      </div>
     </div>
   );
 });
