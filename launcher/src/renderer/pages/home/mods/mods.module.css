@@ -352,6 +352,18 @@
   gap: 8px;
 }
 
+/* A game's Host: smaller than MUI's small contained button (34 px, 42 px in the P+ key frame).
+   A fixed height fits both: the frame (6 px instead of 8) or the plain padding sit inside it. */
+.hostButton {
+  height: 28px;
+  min-width: 56px !important;
+  padding: 0 10px !important;
+  font-size: 12px !important;
+  line-height: 1 !important;
+  border-width: 6px !important;
+  border-image-width: 6px !important;
+}
+
 .toggle {
   display: flex;
   align-items: center;
