@@ -76,7 +76,7 @@ public:
     m_file.Open(filename, "r+b");
 
     m_header.Init();
-    const HeaderMatch match = m_file.IsOpen() ? ValidateHeader() : HeaderMatch::None;
+    const HeaderMatch match = m_file.IsOpen() ? ValidateHeader() : HeaderMatch::Mismatch;
     if (match == HeaderMatch::Exact)
     {
       // good header, read some key/value pairs
@@ -133,7 +133,7 @@ public:
 private:
   enum class HeaderMatch
   {
-    None,
+    Mismatch,
     OtherBuild,  // the same format and key and value types, another build's revision
     Exact,
   };
@@ -181,13 +181,13 @@ private:
   {
     char file_header[sizeof(Header)];
     if (!m_file.ReadArray(file_header, sizeof(Header)))
-      return HeaderMatch::None;
+      return HeaderMatch::Mismatch;
     if (!memcmp(&m_header, file_header, sizeof(Header)))
       return HeaderMatch::Exact;
     // Everything before the revision: the format's id and the key and value type sizes.
     if (!memcmp(&m_header, file_header, offsetof(Header, ver)))
       return HeaderMatch::OtherBuild;
-    return HeaderMatch::None;
+    return HeaderMatch::Mismatch;
   }
 
   struct Header
