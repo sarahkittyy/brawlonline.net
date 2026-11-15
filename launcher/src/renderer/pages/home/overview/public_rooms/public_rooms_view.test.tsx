@@ -251,19 +251,22 @@ describe("PublicRoomsView", () => {
     const { getByTestId } = codeView(onJoinCode);
     const box = getByTestId("room-code") as HTMLInputElement;
     const button = getByTestId("join-code") as HTMLButtonElement;
-    expect(button.disabled).toBe(true);
+    // Join is a button all along; pressed on what isn't a room code, the box turns red instead.
+    expect(button.disabled).toBe(false);
 
     fireEvent.change(box, { target: { value: "k f-q" } });
     expect(box.value).toBe("KFQ");
-    expect(button.disabled).toBe(true);
+    expect(box.getAttribute("aria-invalid")).toBe("false");
     fireEvent.keyDown(box, { key: "Enter" });
     expect(onJoinCode).not.toHaveBeenCalled();
+    expect(box.getAttribute("aria-invalid")).toBe("true");
+    fireEvent.click(button);
+    expect(onJoinCode).not.toHaveBeenCalled();
 
-    // Four letters with a vowel (or a Y) are no room's code: red, no join.
+    // Four letters with a vowel (or a Y) are no room's code: red at once, no join.
     fireEvent.change(box, { target: { value: "KFQA" } });
     expect(box.getAttribute("aria-invalid")).toBe("true");
-    expect(button.disabled).toBe(true);
-    fireEvent.keyDown(box, { key: "Enter" });
+    fireEvent.click(button);
     expect(onJoinCode).not.toHaveBeenCalled();
 
     fireEvent.change(box, { target: { value: "kfqb" } });

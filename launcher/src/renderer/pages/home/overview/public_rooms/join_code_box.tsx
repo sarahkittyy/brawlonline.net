@@ -19,15 +19,23 @@ export type JoinCodeBoxProps = {
 
 /**
  * Home's room code box: the 4 letters of any room, public or private (as in game, WITH FRIENDS > Join Room), and
- * Join. Letters only, uppercase; four that aren't a room code (a vowel, a Y) turn the box red.
+ * Join. Letters only, uppercase; four that aren't a room code (a vowel, a Y) turn the box red. Join is always a button
+ * (Sarah's board: greyed out until the code was valid, it didn't look clickable); pressed on a code that isn't one, the
+ * box turns red and says what a room code is.
  */
 export const JoinCodeBox = ({ onJoin, joining, disabled }: JoinCodeBoxProps) => {
   const [text, setText] = useState("");
+  // Join was pressed on what isn't a room code (until the code changes).
+  const [tried, setTried] = useState(false);
   const valid = isRoomCode(text);
-  const typo = text.length === 4 && !valid;
+  const typo = (text.length === 4 && !valid) || (tried && !valid);
 
   const join = () => {
-    if (!valid || disabled || joining) {
+    if (disabled || joining) {
+      return;
+    }
+    if (!valid) {
+      setTried(true);
       return;
     }
     void Promise.resolve(onJoin(text)).then((taken) => {
@@ -38,12 +46,14 @@ export const JoinCodeBox = ({ onJoin, joining, disabled }: JoinCodeBoxProps) => 
   };
 
   return (
-    <div className={styles.joinCode}>
+    <div className={styles.joinCode} data-error={typo ? "" : undefined}>
       <Tooltip
         title={typo ? Messages.notARoomCode() : Messages.roomCodeTooltip()}
         placement="top"
         enterDelay={typo ? 0 : 600}
         disableInteractive={true}
+        // (Open by itself after a Join that wasn't a room code; otherwise on hover.)
+        open={tried && !valid ? true : undefined}
       >
         <TextField
           size="small"
@@ -58,14 +68,16 @@ export const JoinCodeBox = ({ onJoin, joining, disabled }: JoinCodeBoxProps) => 
             "aria-label": Messages.roomCodeLabel(),
             "data-testid": "room-code",
           }}
-          onChange={(e) =>
+          onChange={(e) => {
+            setTried(false);
             setText(
               e.target.value
                 .toUpperCase()
                 .replace(/[^A-Z]/g, "")
                 .slice(0, 4),
-            )
-          }
+            );
+          }}
+          onBlur={() => setTried(false)}
           onKeyDown={(e) => {
             if (e.key === "Enter") {
               join();
@@ -91,7 +103,7 @@ export const JoinCodeBox = ({ onJoin, joining, disabled }: JoinCodeBoxProps) => 
         variant="outlined"
         color="secondary"
         size="small"
-        disabled={!valid || disabled || joining}
+        disabled={disabled || joining}
         onClick={join}
         data-testid="join-code"
         startIcon={joining ? <CircularProgress color="inherit" size={14} /> : undefined}

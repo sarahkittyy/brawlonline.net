@@ -501,6 +501,16 @@
 
 .bar .joinCode button:not(:disabled) {
   color: var(--accent-primary-bright);
+  cursor: pointer;
+}
+
+/* Not a room code (four letters with a vowel or Y, or Join pressed on it): the box and its letters red. */
+.bar .joinCode[data-error] {
+  border-color: #f28b82;
+}
+
+.bar .joinCode[data-error] input {
+  color: #f28b82;
 }
 
 /* Room for four mains beside the count; Join / Full as written. */
