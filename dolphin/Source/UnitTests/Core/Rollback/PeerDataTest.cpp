@@ -983,3 +983,33 @@ TEST(PeerData, RecordedCodeMenuValuesAreSlotColours)
   for (const auto& v : RecordedCodeMenuValues(recorded, PPlusLines()))
     EXPECT_EQ(v, std::nullopt);
 }
+
+TEST(PeerData, PongsHeldUpTogetherDoNotCount)
+{
+  // Steady pongs 200 ms apart count, each passed on when the next comes.
+  PongFilter f;
+  EXPECT_FALSE(f.Add(55, 0).has_value());
+  EXPECT_EQ(f.Add(60, 200), 55);
+  EXPECT_EQ(f.Add(52, 400), 60);
+  // The peer stops for 4 s (bug report #295): the 20 pings of the stop come back at once, the
+  // oldest with a 4 s round trip. None of them counts; the pong before them came normally and
+  // counts.
+  std::vector<double> out;
+  for (int i = 0; i < 20; ++i)
+  {
+    if (auto r = f.Add(4000 - 200 * i, 4400 + 0.1 * i))
+      out.push_back(*r);
+  }
+  EXPECT_EQ(out, std::vector<double>{52});
+  // The first pong after the burst comes 200 ms later: the burst's last pong does not count,
+  // the ones after it do.
+  EXPECT_FALSE(f.Add(58, 4600).has_value());
+  EXPECT_EQ(f.Add(61, 4800), 58);
+  EXPECT_EQ(f.Held(), 20u);
+  // Pongs 1 s apart in a match, one lost: they count.
+  PongFilter g;
+  EXPECT_FALSE(g.Add(70, 0).has_value());
+  EXPECT_EQ(g.Add(75, 2000), 70);
+  EXPECT_EQ(g.Add(72, 3000), 75);
+  EXPECT_EQ(g.Held(), 0u);
+}
