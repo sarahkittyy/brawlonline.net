@@ -141,7 +141,12 @@ void Resolve(std::string host, int port)
   }
   else
   {
-    INFO_LOG_FMT(NETPLAY, "IPv6: the matchmaking server {} has no IPv6 address (IPv4 only)", host);
+    // Bug #298: this failed on a PC with no IPv6 of its own while the record resolved for
+    // everyone else, so the record is rarely what is missing.
+    INFO_LOG_FMT(NETPLAY,
+                 "IPv6: the matchmaking server {} has no IPv6 address (IPv4 only; usually this "
+                 "PC or its network has no IPv6)",
+                 host);
   }
   std::lock_guard lk(s_discovery.mutex);
   if (s_discovery.host != host || s_discovery.port != port)
