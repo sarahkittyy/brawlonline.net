@@ -142,7 +142,11 @@ def dolphin(request: pytest.FixtureRequest, dolphin_exe: Path) -> Iterator[Calla
     def factory(name: str | None = None, **kw: Any) -> DolphinInstance:
         kw.setdefault("exe", dolphin_exe)
         kw.setdefault("keep", keep)
-        inst = DolphinInstance(prefix + (name or request.node.name), **kw)
+        full = prefix + (name or request.node.name)
+        # PPHARNESS_RECOMP: EmissaryRecomp with Brawl Online's core instead of Dolphin, for the
+        # instances PPHARNESS_RECOMP_NAMES matches (all by default; ppharness/recomp.py).
+        from ppharness.recomp import RecompInstance, wants_recomp
+        inst = RecompInstance(full, **kw) if wants_recomp(full) else DolphinInstance(full, **kw)
         made.append(inst)
         return inst
 

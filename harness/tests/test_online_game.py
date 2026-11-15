@@ -835,6 +835,31 @@ def test_direct_set_under_the_gameplay_session(backend: OnlineBackend,
 
 
 @pytest.mark.slow
+@pytest.mark.parametrize("preset", ["bad_wifi"])
+def test_direct_set_through_netsim(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
+                                   gpu_backend: str, preset: str) -> None:
+    """test_direct_set_under_the_gameplay_session's three games with the P2P traffic through
+    netsim (_p2p_through_netsim; bad_wifi: 60 ms round trip, 25 ms jitter, 2% burst loss), so the
+    games roll back all the time: the confirmed checksums and the frame traces agree on every game.
+    With PPHARNESS_RECOMP, an EmissaryRecomp instance's own rollbacks (docs/design/brawl-online-core.md
+    §10), against another or against Dolphin."""
+    sims, inis = _p2p_through_netsim(preset)
+    try:
+        a, b, ua, ub = _connected_direct(backend, dolphin, gpu_backend, f"gameplay-set-{preset}",
+                                         ("iris", "jack"), dolphin_ini=inis)
+        rep = online_set.play_set([a, b], games=3, mode="direct")
+        # Rolled back: both games where they run at the same speed; against a slower game (an
+        # EmissaryRecomp that cannot hold 60 fps) only the faster one predicts, so only it rolls back.
+        for g in rep["games"]:
+            assert max(g["rollbacks"]) > 0, ("rolled back", g["rollbacks"])
+        for g in (a, b):
+            g.c.mm_cancel()
+    finally:
+        for sim in sims:
+            sim.stop()
+
+
+@pytest.mark.slow
 def test_opponent_leaves_in_the_middle_of_a_game(backend: OnlineBackend,
                                                   dolphin: Callable[..., DolphinInstance],
                                                   gpu_backend: str) -> None:

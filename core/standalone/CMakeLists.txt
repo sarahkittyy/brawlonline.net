@@ -44,7 +44,11 @@ if(NOT TARGET enet::enet)
   add_subdirectory("${BO_EXT}/enet" "${CMAKE_CURRENT_BINARY_DIR}/ext/enet" EXCLUDE_FROM_ALL)
 endif()
 if(NOT TARGET xxhash::xxhash)
-  add_subdirectory("${BO_EXT}/xxhash" "${CMAKE_CURRENT_BINARY_DIR}/ext/xxhash" EXCLUDE_FROM_ALL)
+  if(TARGET xxhash)  # a parent's (EmissaryRecomp's dependencies bring one)
+    add_library(xxhash::xxhash ALIAS xxhash)
+  else()
+    add_subdirectory("${BO_EXT}/xxhash" "${CMAKE_CURRENT_BINARY_DIR}/ext/xxhash" EXCLUDE_FROM_ALL)
+  endif()
 endif()
 if(NOT TARGET monocypher)
   add_subdirectory("${BO_EXT}/monocypher" "${CMAKE_CURRENT_BINARY_DIR}/ext/monocypher" EXCLUDE_FROM_ALL)
@@ -138,6 +142,7 @@ set(BO_REUSED_HEADERS
   Core/Rollback/FrameProfile.h
   Core/Rollback/UdpSocket6.h
   Core/Rollback/ReplayPlayback.h
+  Core/Rollback/GameplayOnlineBackend.h
 )
 foreach(h IN LISTS BO_REUSED_HEADERS)
   configure_file("${BO_DOLPHIN}/Source/Core/${h}" "${BO_INC}/${h}" COPYONLY)
@@ -146,6 +151,7 @@ set(BO_REUSED_SOURCES
   "${BO_DOLPHIN}/Source/Core/Core/Rollback/FrameProfile.cpp"
   "${BO_DOLPHIN}/Source/Core/Core/Rollback/UdpSocket6.cpp"
   "${BO_DOLPHIN}/Source/Core/Core/Rollback/ReplayPlayback.cpp"
+  "${BO_DOLPHIN}/Source/Core/Core/Rollback/GameplayOnlineBackend.cpp"
 )
 
 add_library(brawl_online_common STATIC ${BO_COMMON_SOURCES})
@@ -199,6 +205,8 @@ file(GLOB_RECURSE BO_CORE_SOURCES CONFIGURE_DEPENDS "${BO_CORE}/src/*.cpp" "${BO
 add_library(brawl_online_core_standalone STATIC ${BO_CORE_SOURCES} ${BO_REUSED_SOURCES})
 target_compile_features(brawl_online_core_standalone PUBLIC cxx_std_23)
 target_include_directories(brawl_online_core_standalone PUBLIC "${BO_CORE}/include")
+# The core's sources include GekkoNet's header from Core/Brawlback, built as a static library.
+target_compile_definitions(brawl_online_core_standalone PUBLIC GEKKONET_STATIC GEKKONET_NO_ASIO)
 target_link_libraries(brawl_online_core_standalone PUBLIC brawl_online_common ${BO_GEKKO_TARGET}
   PRIVATE monocypher xxhash::xxhash ZLIB::ZLIB mbedtls sfml-network sfml-system)
 

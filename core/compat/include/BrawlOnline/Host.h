@@ -46,6 +46,8 @@ public:
   virtual int Revision() const { return 1; }
   // The width over height the picture is shown at (Presenter::CalculateDrawAspectRatio).
   virtual float DrawAspectRatio() const { return 16.0f / 9.0f; }
+  // A test harness drives the game (Dolphin's Harness::IsActive).
+  virtual bool HarnessActive() const { return false; }
 };
 
 Host& GetHost();

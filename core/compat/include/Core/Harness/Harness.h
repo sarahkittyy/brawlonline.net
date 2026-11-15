@@ -2,12 +2,13 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 // Compat stand-in for Dolphin's Core/Harness/Harness.h (core/standalone only): Dolphin's test
-// harness is not there.
+// harness is not there; the host says whether its own one is on (Host::HarnessActive).
 
 #pragma once
 
 #include <optional>
 
+#include "BrawlOnline/Host.h"
 #include "Common/CommonTypes.h"
 #include "InputCommon/GCPadStatus.h"
 
@@ -15,7 +16,7 @@ namespace Harness
 {
 inline bool IsActive()
 {
-  return false;
+  return BrawlOnline::GetHost().HarnessActive();
 }
 inline void ApplyPadOverride(int, GCPadStatus*)
 {
