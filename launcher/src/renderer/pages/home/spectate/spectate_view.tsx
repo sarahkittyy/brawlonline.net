@@ -24,7 +24,6 @@ import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { ShellMessages } from "@/app/shell/shell.messages";
 import { MiniProfileTooltip } from "@/components/profile/mini_profile";
-import { RankBadge } from "@/components/rank_badge/rank_badge";
 import { usePlayerMenuOpener } from "@/lib/social/use_player_menu";
 import { getCharacterIcon } from "@/lib/utils";
 import { useStageIcon } from "@/pages/rulesets/stages_section";
@@ -528,7 +527,8 @@ export function pickFeatured(games: readonly LiveGameEntry[], uid?: string): Liv
 
 /**
  * The game above the list (docs/design/launcher-redesign.md §7): its stage, the clock, mode, game and score and the
- * players watching, then each side as [rank] [character] [name] vs [name] [character] [rank], and Watch.
+ * players watching, then each side as [character] [name] vs [name] [character], and Watch. When the players wrap onto
+ * more lines, every side reads [character] [name] (Sarah's board): mirrored only while all are on one line.
  */
 const FeaturedGame = ({
   game,
@@ -548,9 +548,32 @@ const FeaturedGame = ({
   const stageIcon = useStageIcon()(game.game.stageId);
   const sides = sidesOf(game);
   const playing = game.game.state === "playing";
+  const playersRef = useRef<HTMLDivElement>(null);
+  const [wrapped, setWrapped] = useState(false);
+  const who = sides.map((side) => side.map((p) => `${p.uid}:${p.displayName}`).join("&")).join("|");
+  useLayoutEffect(() => {
+    const el = playersRef.current;
+    if (!el) {
+      return;
+    }
+    // Wrapped when the last side sits below the first. Mirroring doesn't change a side's width, so no flip-flop.
+    const check = () => {
+      const first = el.firstElementChild as HTMLElement | null;
+      const last = el.lastElementChild as HTMLElement | null;
+      setWrapped(!!first && !!last && last.offsetTop > first.offsetTop + first.offsetHeight / 2);
+    };
+    check();
+    if (typeof ResizeObserver === "undefined") {
+      return;
+    }
+    const observer = new ResizeObserver(check);
+    observer.observe(el);
+    return () => observer.disconnect();
+    // Measured again when the players change (not on each clock tick's new array).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [who]);
   const person = (p: LivePlayer, mirrored: boolean) => {
     const parts = [
-      <RankBadge key="rank" rank={p.rank ?? null} size="inline" />,
       <img key="stock" className={styles.featuredStock} src={getCharacterIcon(p.characterId, p.costume)} alt="" />,
       <LivePlayerName key="name" player={p} />,
     ];
@@ -572,7 +595,12 @@ const FeaturedGame = ({
             {game.spectators ?? 0}
           </span>
         </div>
-        <div className={styles.featuredPlayers}>
+        <div
+          ref={playersRef}
+          className={styles.featuredPlayers}
+          data-testid="featured-players"
+          data-wrapped={wrapped ? "" : undefined}
+        >
           {sides.map((side, i) => (
             <React.Fragment key={i}>
               {i > 0 && <span className={styles.vs}>{Messages.vs()}</span>}
@@ -580,7 +608,7 @@ const FeaturedGame = ({
                 {side.map((p, j) => (
                   <React.Fragment key={p.uid}>
                     {j > 0 && <span className={styles.vs}>{Messages.and()}</span>}
-                    {person(p, i > 0)}
+                    {person(p, i > 0 && !wrapped)}
                   </React.Fragment>
                 ))}
               </span>

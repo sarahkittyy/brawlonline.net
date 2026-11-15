@@ -146,6 +146,43 @@ describe("SpectateView", () => {
     expect(onWatch).toHaveBeenCalledWith(rated[1]);
   });
 
+  it("shows the top game's characters without ranks, mirrored on one line and all alike when wrapped", () => {
+    const top = game("dddddddddddd", "2026-10-14T02:01:00Z", {
+      players: [
+        { uid: "d1", displayName: "sosa", connectCode: "S#1", characterId: 2, costume: 0, teamId: null, wins: 0 },
+        { uid: "d2", displayName: "doc", connectCode: "D#2", characterId: 9, costume: 0, teamId: null, wins: 0 },
+      ].map((p) => ({ ...p, rating: 2100, rank: { tier: "gold", division: 2 } as never })),
+    });
+    // jsdom lays nothing out: the second side sits a line lower while `wrap` is set.
+    let wrap = false;
+    const top0 = vi.spyOn(HTMLElement.prototype, "offsetTop", "get").mockImplementation(function (this: HTMLElement) {
+      const row = this.parentElement;
+      return wrap && row?.dataset.testid === "featured-players" && this === row.lastElementChild ? 42 : 0;
+    });
+    const height = vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockReturnValue(32);
+    try {
+      const order = () =>
+        Array.from(screen.getByTestId("featured-players").children)
+          .filter((c) => c.tagName === "SPAN" && c.querySelector("img"))
+          .map((side) => Array.from(side.querySelectorAll("img, [class*=name]")).map((e) => e.tagName));
+      const { unmount } = view({ kind: "ready", games: [top] }, { showFeatured: true });
+      // Only the two characters: no rank badges.
+      expect(screen.getByTestId("featured-players").querySelectorAll("img")).toHaveLength(2);
+      expect(screen.getByTestId("featured-players").hasAttribute("data-wrapped")).toBe(false);
+      const [left, right] = order();
+      expect(left[0]).toBe("IMG");
+      expect(right[right.length - 1]).toBe("IMG");
+      unmount();
+      wrap = true;
+      view({ kind: "ready", games: [top] }, { showFeatured: true });
+      expect(screen.getByTestId("featured-players").hasAttribute("data-wrapped")).toBe(true);
+      expect(order().map((side) => side[0])).toEqual(["IMG", "IMG"]);
+    } finally {
+      top0.mockRestore();
+      height.mockRestore();
+    }
+  });
+
   it("puts a 1v1 on top before any 2v2 or free-for-all, even a higher-rated one", () => {
     const player = (uid: string, teamId: number | null, rating?: number) => ({
       uid,

@@ -159,7 +159,7 @@ Sarah: "i love love love the design", with these notes. What changed:
 - **Other Games rooms with every chip.** A room with "Brawl: a56ffa ✓", "SD card: f35aaf !" and "Codes (3)":
   - At the default width the three fit on one line, with "Joins with" under them.
   - In a 1150 px window with the rail open they wrap to two lines, and the row grows (`05-other-games-1150.png`).
-- **Spectate's top game** reads [rank] [character] [name] vs [name] [character] [rank].
+- **Spectate's top game** reads [character] [name] vs [name] [character] (no ranks); when the players wrap onto more lines, every side reads [character] [name].
 - **Leaderboard:** "871 ranked players" sits under the title, left-aligned.
 - **No P+ pill** on Play. "128 players in-game" stays beside the title.
 - **The player's card** (bottom left) has a lighter rounded background, and is lighter still on hover and on the profile page.
