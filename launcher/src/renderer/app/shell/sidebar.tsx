@@ -285,6 +285,8 @@ const ToolsMenu = ({ openSettings }: { openSettings: () => void }) => {
         anchorEl={anchor}
         onClose={close}
         keepMounted={true}
+        // Centred on the button: MUI's default 16 px from the window's edge pushed it 6 px right of the column.
+        marginThreshold={4}
         anchorOrigin={{ vertical: "top", horizontal: "center" }}
         transformOrigin={{ vertical: "bottom", horizontal: "center" }}
         slotProps={{ paper: { className: styles.toolsPopup } }}
