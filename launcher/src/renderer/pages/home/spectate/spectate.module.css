@@ -95,8 +95,8 @@
   box-sizing: border-box;
   width: 100%;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 76px 120px 104px 48px 76px;
-  grid-template-areas: "players mode game time eye action";
+  grid-template-columns: minmax(0, 1fr) 150px 104px 48px 76px;
+  grid-template-areas: "players game time eye action";
   align-items: center;
   gap: 12px;
   padding: 10px 12px;
@@ -216,8 +216,6 @@
 }
 
 .mode {
-  grid-area: mode;
-  justify-self: start;
   padding: 2px 8px;
   border: 1px solid rgb(255 255 255 / 18%);
   border-radius: 10px;
@@ -234,6 +232,11 @@
   color: var(--text-secondary);
   font-size: 13px;
   white-space: nowrap;
+}
+
+.gameLine {
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .stage {
@@ -306,19 +309,6 @@
 
 .watchingRow .action {
   color: var(--live-red);
-}
-
-/* Narrower: the mode goes (the row's names and game say enough). */
-@container (width < 720px) {
-  .row {
-    grid-template-columns: minmax(0, 1fr) 96px 92px 40px 64px;
-    grid-template-areas: "players game time eye action";
-    gap: 8px;
-  }
-
-  .mode {
-    display: none;
-  }
 }
 
 /* Narrower still (a small window in a dev build): two lines, the players and Watch over the game, its time and the
@@ -394,9 +384,10 @@
   gap: 0;
 }
 
+/* The mode leads the game's line ("Ranked · Game 1 · 0-0"), so no width hides it. */
 .row {
-  grid-template-columns: 52px minmax(0, 1fr) 76px 120px 96px 40px 64px;
-  grid-template-areas: "stage players mode game time eye action";
+  grid-template-columns: 52px minmax(0, 1fr) 150px 96px 40px 64px;
+  grid-template-areas: "stage players game time eye action";
   padding: 6px 12px;
   min-height: 58px;
   border-radius: 6px;
@@ -416,13 +407,8 @@
 
 @container (width < 760px) {
   .row {
-    grid-template-columns: 52px minmax(0, 1fr) 120px 96px 40px 60px;
-    grid-template-areas: "stage players game time eye action";
+    grid-template-columns: 52px minmax(0, 1fr) 150px 96px 40px 60px;
     gap: 8px;
-  }
-
-  .mode {
-    display: none;
   }
 }
 
@@ -464,10 +450,6 @@
   gap: 10px;
   font-size: 12px;
   color: var(--text-secondary);
-}
-
-.featuredLine .mode {
-  display: inline-block;
 }
 
 .featuredPlayers {

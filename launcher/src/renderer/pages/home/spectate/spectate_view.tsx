@@ -478,9 +478,10 @@ export const LiveGameRow = React.memo(function LiveGameRow({
           <span className={styles.stageThumb} />
         )}
         <SidesCell sides={sides} />
-        <span className={styles.mode}>{modeLabel(game.mode)}</span>
         <div className={styles.game}>
-          <div>{Messages.gameScore(game.game.number, setScore(game))}</div>
+          <div className={styles.gameLine}>
+            {modeLabel(game.mode)} · {Messages.gameScore(game.game.number, setScore(game))}
+          </div>
           {stage && <div className={styles.stage}>{stage}</div>}
         </div>
         <span
