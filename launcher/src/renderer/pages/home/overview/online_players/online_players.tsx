@@ -33,7 +33,7 @@ import styles from "./online_players.module.css";
 
 /** The tab shown, remembered on this computer. */
 export const TAB_KEY = "ONLINE_PANEL_TAB";
-type PanelTab = "online" | "friends";
+export type PanelTab = "online" | "friends";
 
 /** A name and code, with a friend's glyph after them when there is no main column (no disc). */
 const NameCell = ({ player, friend, mark }: { player: SocialPlayer; friend: boolean; mark: boolean }) =>

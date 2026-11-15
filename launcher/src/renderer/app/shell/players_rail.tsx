@@ -13,7 +13,7 @@ import { SocialMessages } from "@/components/social/social.messages";
 import { useLocalStorage } from "@/lib/hooks/use_local_storage";
 import { useFriendUids } from "@/lib/social/use_friends";
 import { useSocial } from "@/lib/social/use_social";
-import { OnlinePlayers } from "@/pages/home/overview/online_players/online_players";
+import { type PanelTab, OnlinePlayers, TAB_KEY } from "@/pages/home/overview/online_players/online_players";
 
 import styles from "./players_rail.module.css";
 import { ShellMessages as Messages } from "./shell.messages";
@@ -27,14 +27,25 @@ const NARROW = "(max-width: 1149px)";
 
 /**
  * The right column on every page (docs/design/launcher-redesign.md §2): the Online / Friends panel that was on Home.
- * It folds to a strip of the friends online (a click opens a chat with one); unread messages count on the open button.
+ * It folds to a strip of the friends online (a click opens a chat with one); unread messages count on the open button,
+ * and the friends button opens it on the Friends tab. Folded, the buttons and stock icons keep the open panel's small
+ * sizes (30 px buttons, 20 px icons).
  */
 export const PlayersRail = React.memo(function PlayersRail() {
   const [choice, setChoice] = useLocalStorage<RailChoice>(RAIL_KEY, "auto");
   const narrow = useMediaQuery(NARROW);
   const folded = choice === "folded" || (choice === "auto" && narrow);
+  // The panel reads its tab from this computer's storage when it mounts, which opening the rail does.
+  const openOn = (tab: PanelTab) => {
+    try {
+      localStorage.setItem(TAB_KEY, JSON.stringify(tab));
+    } catch {
+      // Opens on the tab it had.
+    }
+    setChoice("open");
+  };
   if (folded) {
-    return <FoldedRail onOpen={() => setChoice("open")} />;
+    return <FoldedRail onOpen={() => setChoice("open")} onOpenFriends={() => openOn("friends")} />;
   }
   return (
     <aside className={styles.rail} data-testid="players-rail">
@@ -58,7 +69,7 @@ export const PlayersRail = React.memo(function PlayersRail() {
   );
 });
 
-const FoldedRail = ({ onOpen }: { onOpen: () => void }) => {
+const FoldedRail = ({ onOpen, onOpenFriends }: { onOpen: () => void; onOpenFriends: () => void }) => {
   const online = useSocial((s) => s.state.online);
   const conversations = useSocial((s) => s.state.conversations);
   const openTab = useSocial((s) => s.openTab);
@@ -68,14 +79,26 @@ const FoldedRail = ({ onOpen }: { onOpen: () => void }) => {
   return (
     <aside className={styles.folded} data-testid="players-rail-folded">
       <Tooltip title={Messages.showPlayers()} placement="left">
-        <IconButton className={styles.foldButton} aria-label={Messages.showPlayers()} onClick={onOpen}>
-          <KeyboardDoubleArrowLeftRoundedIcon />
+        <IconButton
+          size="small"
+          className={styles.foldButton}
+          aria-label={Messages.showPlayers()}
+          data-testid="rail-open"
+          onClick={onOpen}
+        >
+          <KeyboardDoubleArrowLeftRoundedIcon fontSize="small" />
           {unread > 0 && <span className={styles.unread}>{unread}</span>}
         </IconButton>
       </Tooltip>
       <Tooltip title={SocialMessages.friends()} placement="left">
-        <IconButton className={styles.foldButton} aria-label={SocialMessages.friends()} onClick={onOpen}>
-          <FriendsIcon />
+        <IconButton
+          size="small"
+          className={styles.foldButton}
+          aria-label={SocialMessages.friends()}
+          data-testid="rail-open-friends"
+          onClick={onOpenFriends}
+        >
+          <FriendsIcon fontSize="small" />
         </IconButton>
       </Tooltip>
       {friendsOnline.map((p) => (
@@ -90,7 +113,7 @@ const FriendPicture = ({ player, onClick }: { player: SocialPlayer; onClick: () 
   return (
     <Tooltip title={player.displayName} placement="left">
       <button type="button" className={styles.friend} onClick={onClick} aria-label={player.displayName}>
-        <MainPicture url={player.main ? url ?? null : null} size={30} />
+        <MainPicture url={player.main ? url ?? null : null} size={20} />
         <span className={styles.onlineDot} />
       </button>
     </Tooltip>
