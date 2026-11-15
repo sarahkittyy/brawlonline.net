@@ -59,6 +59,7 @@ import { manualClipEntry, useManualClips } from "./manual_clips";
 import { RenderJobs, useRenderJobs } from "./render_jobs";
 import { clipVideoName, comboVideoName, multiGameComboName } from "./render_names";
 import { ReplayVersionNote } from "./replay_version_note";
+import { useWindowedRows } from "./windowed_rows";
 
 type Row = ReplayHighlight | ReplayClip | ReplayManualClip;
 
@@ -153,7 +154,7 @@ type HighlightRowsProps = {
   hideRows?: boolean;
   /** Shows each row's game date (rows of many games). */
   showDates?: boolean;
-  /** On the list's top bar, left of the render buttons (the Highlights tab's search and sort). */
+  /** The list's top bar (the Highlights tab's search and sort); the render buttons are on its bottom one. */
   headerExtra?: React.ReactNode;
   comboName: (chosen: HighlightEntry[]) => string;
 };
@@ -184,6 +185,8 @@ export const HighlightRows = ({
   const commandId = usePlaylistStore((s) => s.commandId);
   const request = mine && commandId && dismissed !== commandId ? commandId : null;
   const listRef = useRef<HTMLDivElement>(null);
+  const headerRef = useRef<HTMLDivElement>(null);
+  const footerRef = useRef<HTMLDivElement>(null);
   // The rows selected (to render), and the one a Shift+click's range starts from.
   const [ticked, setTicked] = useState<Set<string>>(new Set());
   const [anchor, setAnchor] = useState<string | null>(null);
@@ -332,11 +335,15 @@ export const HighlightRows = ({
       : -1;
   const playing = playingIndex >= 0 ? playingIndex : null;
   const cursor = mine && current ? playing : selected;
+  const keys = useMemo(() => entries.map((e) => e.key), [entries]);
+  const shown = useWindowedRows(keys, listRef);
+  const { scrollToRow } = shown;
+  // (Below the top bar and above the bottom one, both staying as the rows scroll under them.)
   useEffect(() => {
-    if (playing != null) {
-      listRef.current?.querySelector(`[data-row="${playing}"]`)?.scrollIntoView({ block: "nearest" });
+    if (cursor != null) {
+      scrollToRow(cursor, headerRef.current?.offsetHeight ?? 0, footerRef.current?.offsetHeight ?? 0);
     }
-  }, [playing]);
+  }, [cursor, scrollToRow]);
 
   const step = (delta: number) => {
     if (!entries.length) {
@@ -369,38 +376,13 @@ export const HighlightRows = ({
 
   return (
     <div className={styles.container}>
-      {/* One line, staying as the rows scroll under it. */}
-      <div className={styles.header}>
-        <div className={styles.headerActions}>{headerExtra}</div>
-        {entries.length > 0 && (
-          <div className={styles.renderBar}>
-            <FormControlLabel
-              className={styles.combo}
-              disabled={chosen.length === 0}
-              control={<Checkbox size="small" checked={combo} onChange={(e) => setCombo(e.target.checked)} />}
-              label={<span className={styles.comboLabel}>{Messages.comboMovie()}</span>}
-            />
-            <Button
-              size="small"
-              variant="outlined"
-              startIcon={<MovieIcon />}
-              disabled={!canRender}
-              onClick={() => void render(true)}
-            >
-              {Messages.renderWithMusic()}
-            </Button>
-            <Button
-              size="small"
-              variant="outlined"
-              startIcon={<MusicOffIcon />}
-              disabled={!canRender}
-              onClick={() => void render(false)}
-            >
-              {Messages.renderNoMusic()}
-            </Button>
-          </div>
-        )}
-      </div>
+      {/* Finding rows on top (one line, staying as the rows scroll under it); what to do with the ones selected at
+          the bottom (Sarah's board: the two on two lines of one bar, one to each side, looked off). */}
+      {headerExtra && (
+        <div className={styles.header} ref={headerRef}>
+          {headerExtra}
+        </div>
+      )}
       {versionNote}
       <RenderJobs jobs={jobs} />
       <PlaybackBanner
@@ -412,14 +394,16 @@ export const HighlightRows = ({
       {emptyNote && <div className={styles.note}>{emptyNote}</div>}
       {!hideRows && (
         <div className={styles.list} ref={listRef}>
-          {entries.map((entry, i) => {
+          <div style={{ height: shown.before }} aria-hidden={true} />
+          {entries.slice(shown.start, shown.end).map((entry, j) => {
+            const i = shown.start + j;
             const { row, game } = entry;
             const players = new Map(game.players.map((p) => [p.port, p]));
             const stocks = stocksAt(game.stocks, row.startFrame);
             const favorite = favorites.has(favoriteKey(entry));
             const heading = row.kind !== "highlight" && (i === 0 || entries[i - 1].row.kind !== row.kind);
             return (
-              <React.Fragment key={entry.key}>
+              <div key={entry.key} ref={shown.measure(entry.key)} className={styles.item}>
                 {heading && (
                   <h3 className={styles.section}>{row.kind === "clip" ? Messages.clips() : Messages.manualClips()}</h3>
                 )}
@@ -488,12 +472,43 @@ export const HighlightRows = ({
                     </Tooltip>
                   )}
                 </div>
-              </React.Fragment>
+              </div>
             );
           })}
+          <div style={{ height: shown.after }} aria-hidden={true} />
         </div>
       )}
-      {entries.length > 0 && <div className={styles.hint}>{Messages.keyHint()}</div>}
+      {entries.length > 0 && (
+        <div className={styles.footer} ref={footerRef}>
+          <span className={styles.hint}>{Messages.keyHint()}</span>
+          <div className={styles.renderBar}>
+            <FormControlLabel
+              className={styles.combo}
+              disabled={chosen.length === 0}
+              control={<Checkbox size="small" checked={combo} onChange={(e) => setCombo(e.target.checked)} />}
+              label={<span className={styles.comboLabel}>{Messages.comboMovie()}</span>}
+            />
+            <Button
+              size="small"
+              variant="outlined"
+              startIcon={<MovieIcon />}
+              disabled={!canRender}
+              onClick={() => void render(true)}
+            >
+              {Messages.renderWithMusic()}
+            </Button>
+            <Button
+              size="small"
+              variant="outlined"
+              startIcon={<MusicOffIcon />}
+              disabled={!canRender}
+              onClick={() => void render(false)}
+            >
+              {Messages.renderNoMusic()}
+            </Button>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

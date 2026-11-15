@@ -59,6 +59,15 @@ export type FolderResult = {
   subdirectories: FolderResult[];
 };
 
+/** A player of the replays on this computer (the player search's suggestions): their most games' name and character. */
+export type ReplayPlayer = {
+  connectCode: string;
+  displayName: string;
+  characterId: number | null;
+  costume: number | null;
+  games: number;
+};
+
 export type Progress = {
   current: number;
   total: number;
@@ -93,6 +102,7 @@ export interface ReplayProvider {
     filters?: ReplayFilter[],
   ): Promise<string[]>;
   findReplaysForMatches(matchIds: string[], folders: string[]): Promise<Record<string, MatchReplay[]>>;
+  searchPlayers(query: string, limit: number): Promise<ReplayPlayer[]>;
 }
 
 export type SearchGamesOptions = {
@@ -116,6 +126,8 @@ export interface ReplayService {
   initializeFolderTree(folders: readonly string[]): Promise<readonly FolderResult[]>;
   selectTreeFolder(folderPath: string): Promise<readonly FolderResult[]>;
   searchGames(options: SearchGamesOptions): Promise<SearchGamesResult>;
+  /** The players of the replays whose code, name or tag has `query`, the most games first (up to `limit`). */
+  searchPlayers(query: string, limit?: number): Promise<ReplayPlayer[]>;
   getAllFilePaths(options: SearchGamesOptions): Promise<string[]>;
   calculateGameStats(filePath: string): Promise<{ file: FileResult; stats: StatsType | undefined }>;
   calculateStadiumStats(filePath: string): Promise<{ file: FileResult; stadiumStats: StadiumStatsType | undefined }>;

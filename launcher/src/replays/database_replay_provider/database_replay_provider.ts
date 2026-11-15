@@ -5,7 +5,7 @@ import { GameRepository } from "@database/repositories/game_repository";
 import { PlayerRepository } from "@database/repositories/player_repository";
 import type { Database, FileRecord, GameRecord, NewFile, NewGame, NewPlayer, PlayerRecord } from "@database/schema";
 import { boolToInt, boolToIntOrNull } from "@database/utils";
-import type { FileResult, GameEnding, MatchReplay, Progress, ReplayProvider } from "@replays/types";
+import type { FileResult, GameEnding, MatchReplay, Progress, ReplayPlayer, ReplayProvider } from "@replays/types";
 import { STATS_NOT_AVAILABLE } from "@replays/types";
 import type { StadiumStatsType, StatsType } from "@slippi/slippi-js/node";
 import { shell } from "electron";
@@ -222,6 +222,17 @@ export class DatabaseReplayProvider implements ReplayProvider {
       // Gone or not readable as a replay: no result to show.
       return "unfinished";
     }
+  }
+
+  async searchPlayers(query: string, limit: number): Promise<ReplayPlayer[]> {
+    const rows = await PlayerRepository.searchPlayers(this.db, query.trim(), limit);
+    return rows.map((r) => ({
+      connectCode: r.connect_code,
+      displayName: r.display_name ?? "",
+      characterId: r.character_id,
+      costume: r.character_color,
+      games: Number(r.games),
+    }));
   }
 
   async getAllFilePaths(

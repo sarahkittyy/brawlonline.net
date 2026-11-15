@@ -9,12 +9,16 @@
   min-height: 0;
 }
 
-/* As Replays' folders: darker than the page, and the open one is the page's own background, joined to the list. */
+/* On the page's own colour, a line between it and the list (the list's bars the same colour, Sarah's board); the
+   open one raised, as the app's sidebar marks its page. */
 .sidebar {
   display: flex;
   flex: 1;
   flex-direction: column;
+  gap: 2px;
   min-width: 0;
+  padding: 12px 8px;
+  border-right: 1px solid var(--line-soft);
 }
 
 .sideItem {
@@ -22,10 +26,11 @@
   align-items: center;
   gap: 10px;
   width: 100%;
-  padding: 8px 14px;
+  padding: 7px 10px;
   border: none;
-  background: rgb(0 0 0 / 30%);
-  color: rgb(255 255 255 / 50%);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-dim);
   font: inherit;
   font-size: 14px;
   text-align: left;
@@ -34,6 +39,7 @@
 }
 
 .sideItem:hover {
+  background: var(--raised);
   color: var(--off-white);
 }
 
@@ -42,8 +48,9 @@
   outline-offset: -2px;
 }
 
-.sideSelected {
-  background: transparent;
+.sideSelected,
+.sideSelected:hover {
+  background: var(--raised-hover);
   color: var(--off-white);
   font-weight: bold;
 }
@@ -55,7 +62,6 @@
 
 .sideRest {
   flex: 1;
-  background: rgb(0 0 0 / 30%);
 }
 
 .content {
@@ -78,16 +84,8 @@
   font-weight: 600;
 }
 
-.search {
-  width: 170px;
-  height: 30px;
-  padding: 0 4px 0 10px;
-  border-radius: 10px;
-  background-color: black;
-  font-size: 13px;
-}
-
 .sort {
-  height: 30px;
+  flex: none;
+  height: 34px;
   font-size: 13px;
 }

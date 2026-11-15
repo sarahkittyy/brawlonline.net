@@ -1,15 +1,13 @@
 import { css } from "@emotion/react";
 import styled from "@emotion/styled";
-import CloseIcon from "@mui/icons-material/Close";
-import SearchIcon from "@mui/icons-material/Search";
 import SyncIcon from "@mui/icons-material/Sync";
 import IconButton from "@mui/material/IconButton";
-import InputAdornment from "@mui/material/InputAdornment";
-import InputBase from "@mui/material/InputBase";
+import Tooltip from "@mui/material/Tooltip";
 import debounce from "lodash/debounce";
 import React from "react";
 
-import { Button, Checkbox, Dropdown } from "@/components/form";
+import { Checkbox, Dropdown } from "@/components/form";
+import { ReplayPlayerSearch } from "@/components/player_search/replay_player_search";
 import { useReplayFilter } from "@/lib/hooks/use_replay_filter";
 import { useReplayPresenter, useReplays } from "@/lib/hooks/use_replays";
 import { useSettings } from "@/lib/hooks/use_settings";
@@ -18,38 +16,44 @@ import { ReplaySortOption, SortDirection } from "@/lib/replay_file_sort";
 
 import { FilterToolbarMessages as Messages } from "./filter_toolbar.messages";
 
+// The player search first, as in Match history (Sarah's board), then the list's buttons.
 const Outer = styled.div`
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  padding: 20px 10px;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  padding: 16px 20px 16px 10px;
 `;
 
 const ButtonContainer = styled.div`
-  & > * {
-    margin-right: 20px;
-  }
+  display: flex;
+  align-items: center;
+  gap: 12px;
 `;
 
 type FilterToolbarProps = {
   disabled?: boolean;
 };
 
-export const FilterToolbar = React.forwardRef<HTMLInputElement, FilterToolbarProps>((props, ref) => {
+export const FilterToolbar = (props: FilterToolbarProps) => {
   const presenter = useReplayPresenter();
   const { disabled } = props;
   const rootSlpPath = useSettings((store) => store.settings.rootSlpPath);
   const extraSlpPaths = useSettings((store) => store.settings.extraSlpPaths);
   const currentFolder = useReplays((store) => store.currentFolder);
   const storeSearchText = useReplayFilter((store) => store.searchText);
+  const storeText = useReplayFilter((store) => store.text);
   const setStoreSearchText = useReplayFilter((store) => store.setSearchText);
+  const players = useReplayFilter((store) => store.players);
+  const setPlayers = useReplayFilter((store) => store.setPlayers);
+  const resets = useReplayFilter((store) => store.resets);
   const sortBy = useReplayFilter((store) => store.sortBy);
   const hideShortGames = useReplayFilter((store) => store.hideShortGames);
   const setHideShortGames = useReplayFilter((store) => store.setHideShortGames);
   const setSortBy = useReplayFilter((store) => store.setSortBy);
   const sortDirection = useReplayFilter((store) => store.sortDirection);
   const setSortDirection = useReplayFilter((store) => store.setSortDirection);
-  const [searchText, setSearchText] = React.useState(storeSearchText ?? "");
+  const [searchText, setSearchText] = React.useState(storeText ?? "");
   const { showError } = useToasts();
 
   const refresh = React.useCallback(() => {
@@ -75,6 +79,14 @@ export const FilterToolbar = React.forwardRef<HTMLInputElement, FilterToolbarPro
     debounceChange(name);
   };
 
+  // The filter cleared (the empty list's button): the box's text too.
+  React.useEffect(() => {
+    if (resets > 0) {
+      debounceChange.cancel();
+      setSearchText("");
+    }
+  }, [resets, debounceChange]);
+
   // Reload when sort, hideShortGames, or searchText changes (backend filters)
   // Skip initial mount to avoid double-loading
   const isInitialMount = React.useRef(true);
@@ -88,12 +100,22 @@ export const FilterToolbar = React.forwardRef<HTMLInputElement, FilterToolbarPro
 
   return (
     <Outer>
+      <ReplayPlayerSearch
+        value={players}
+        onChange={setPlayers}
+        text={searchText}
+        onTextChange={setNameFilter}
+        placeholder={Messages.search()}
+      />
       <ButtonContainer>
-        <div style={{ display: "inline-block" }}>
-          <Button onClick={refresh} disabled={disabled} startIcon={<SyncIcon />}>
-            {Messages.refresh()}
-          </Button>
-        </div>
+        {/* (An icon: the search, the folder and this on one line at the default width.) */}
+        <Tooltip title={Messages.refresh()}>
+          <span>
+            <IconButton onClick={refresh} disabled={disabled} aria-label={Messages.refresh()} size="small">
+              <SyncIcon />
+            </IconButton>
+          </span>
+        </Tooltip>
         <Dropdown
           value={{
             key: sortBy,
@@ -145,29 +167,6 @@ export const FilterToolbar = React.forwardRef<HTMLInputElement, FilterToolbarPro
           `}
         />
       </ButtonContainer>
-      <div>
-        <InputBase
-          ref={ref}
-          css={css`
-            background-color: black;
-            border-radius: 10px;
-            padding: 5px 10px;
-            font-size: 12px;
-          `}
-          endAdornment={
-            <InputAdornment position="end">
-              <IconButton size="small" onClick={() => setNameFilter("")} disabled={searchText.length === 0}>
-                {searchText.length > 0 ? <CloseIcon fontSize="inherit" /> : <SearchIcon fontSize="inherit" />}
-              </IconButton>
-            </InputAdornment>
-          }
-          placeholder={Messages.search()}
-          value={searchText}
-          onChange={(e) => {
-            setNameFilter(e.target.value);
-          }}
-        />
-      </div>
     </Outer>
   );
-});
+};

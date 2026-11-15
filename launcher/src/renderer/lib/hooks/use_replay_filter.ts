@@ -1,28 +1,44 @@
 import type { ReplayFilter } from "@database/filters/types";
+import type { ReplayPlayer } from "@replays/types";
 import { create } from "zustand";
 import { combine } from "zustand/middleware";
 
 import { convertToReplayFilters, ME_MARKER, parseQuery } from "../query_language/parser";
 import { ReplaySortOption, SortDirection } from "../replay_file_sort";
 
+/** The search the replays are filtered by: a `code:` term for each player tagged, then what is typed. */
+const composeSearch = (players: readonly ReplayPlayer[], text: string) =>
+  [...players.map((p) => `code:${p.connectCode}`), text.trim()].filter(Boolean).join(" ");
+
 export const useReplayFilter = create(
   combine(
     {
+      /** The query the list is filtered by (composeSearch). */
       searchText: "",
+      /** What is typed in the search box (the query language's, README.md in query_language). */
+      text: "",
+      /** The players tagged in the search box: the games every one of them played in. */
+      players: [] as ReplayPlayer[],
+      /** Counts the times the filter was cleared (the search box empties its own text). */
+      resets: 0,
       sortBy: ReplaySortOption.DATE,
       sortDirection: SortDirection.DESC,
       hideShortGames: true,
     },
     (set) => ({
-      setSearchText: (searchText: string) => set({ searchText }),
+      setSearchText: (text: string) => set((s) => ({ text, searchText: composeSearch(s.players, text) })),
+      setPlayers: (players: ReplayPlayer[]) => set((s) => ({ players, searchText: composeSearch(players, s.text) })),
       setSortBy: (sortBy: ReplaySortOption) => set({ sortBy }),
       setSortDirection: (sortDirection: SortDirection) => set({ sortDirection }),
       setHideShortGames: (hideShortGames: boolean) => set({ hideShortGames }),
       resetFilter: () => {
-        set({
+        set((s) => ({
           searchText: "",
+          text: "",
+          players: [],
+          resets: s.resets + 1,
           hideShortGames: false,
-        });
+        }));
       },
     }),
   ),

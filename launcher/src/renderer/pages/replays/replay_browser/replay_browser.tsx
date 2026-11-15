@@ -25,7 +25,6 @@ import { ReplayBrowserMessages as Messages } from "./replay_browser.messages";
 
 export const ReplayBrowser = React.memo(() => {
   const presenter = useReplayPresenter();
-  const searchInputRef = React.createRef<HTMLInputElement>();
   const { replayService } = useServices();
 
   const loading = useReplays((store) => store.loading);
@@ -141,7 +140,7 @@ export const ReplayBrowser = React.memo(() => {
           >
             <FolderSelect folders={folderTree} value={currentFolder} onChange={(path) => onFolderTreeNodeClick(path)} />
             <div style={{ flex: 1, minWidth: 0 }}>
-              <FilterToolbar ref={searchInputRef} />
+              <FilterToolbar />
             </div>
             {/* While the folder is read: how far along (the bar at the foot that also said it is gone). */}
             {showLoading && showReplayProgress && (
@@ -156,14 +155,7 @@ export const ReplayBrowser = React.memo(() => {
           {showLoading ? (
             <FileListSkeleton />
           ) : filteredFiles.length === 0 ? (
-            <EmptyFolder
-              onClearFilter={() => {
-                if (searchInputRef.current) {
-                  searchInputRef.current.value = "";
-                }
-                resetFilter();
-              }}
-            />
+            <EmptyFolder onClearFilter={resetFilter} />
           ) : (
             <FileList
               folderPath={currentFolder}

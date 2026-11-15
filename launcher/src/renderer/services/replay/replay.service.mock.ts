@@ -4,6 +4,7 @@ import type {
   FolderResult,
   MatchReplay,
   Progress,
+  ReplayPlayer,
   ReplayService,
   SearchGamesOptions,
   SearchGamesResult,
@@ -37,6 +38,10 @@ class MockReplayClient implements ReplayService {
   }
 
   @delayAndMaybeError(SHOULD_ERROR)
+  async searchPlayers(): Promise<ReplayPlayer[]> {
+    return [];
+  }
+
   async getAllFilePaths(options: SearchGamesOptions): Promise<string[]> {
     const folderPath = options.folderPath ?? "/default/folder";
     return [1, 2, 3, 4].map((i) => `${folderPath}/Game${i}.slp`);

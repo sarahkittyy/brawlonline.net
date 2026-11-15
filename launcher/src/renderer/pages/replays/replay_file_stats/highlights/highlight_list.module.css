@@ -9,18 +9,37 @@
   width: 100%;
 }
 
-/* Stays at the top as the rows scroll under it (the body's background over them). */
+/* Stays at the top as the rows scroll under it: the page's own colour over them, a line under it. */
 .header {
   position: sticky;
   top: 0;
   z-index: 2;
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
   gap: 8px;
   margin: -20px -20px 12px;
-  padding: 14px 20px 10px;
-  background: var(--surface-0);
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--line-soft);
+  background: var(--page);
+}
+
+/* The bottom bar, staying as the rows scroll over it: the keys on the left, rendering the rows selected on the right. */
+.footer {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 12px -20px -20px;
+  padding: 8px 20px;
+  border-top: 1px solid var(--line-soft);
+  background: var(--page);
+}
+
+/* One row with its heading (margins inside it: its measured height is all of it). */
+.item {
+  display: flow-root;
 }
 
 .section {
@@ -39,6 +58,7 @@
 
 .renderBar {
   display: flex;
+  flex: none;
   align-items: center;
   gap: 8px;
   margin-left: auto;
@@ -47,12 +67,6 @@
 .combo {
   margin-right: 0;
   white-space: nowrap;
-}
-
-.headerActions {
-  display: flex;
-  align-items: center;
-  gap: 10px;
 }
 
 /* When in the game the row starts: a column of the same width on every row, as a list of times. */
@@ -382,9 +396,21 @@
 }
 
 .hint {
-  margin-top: 14px;
+  flex: 1;
+  min-width: 0;
   font-size: 12px;
-  opacity: 0.6;
+  color: var(--text-dim);
+}
+
+/* Narrow: the render buttons alone (the keys' hint would take three lines). */
+.footer {
+  container-type: inline-size;
+}
+
+@container (max-width: 640px) {
+  .hint {
+    display: none;
+  }
 }
 
 .versionNote {

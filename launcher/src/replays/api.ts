@@ -12,6 +12,7 @@ import {
   ipc_initializeFolderTree,
   ipc_loadProgressUpdatedEvent,
   ipc_searchGames,
+  ipc_searchPlayers,
   ipc_selectTreeFolder,
   ipc_statsPageRequestedEvent,
 } from "./ipc";
@@ -28,6 +29,10 @@ const replayApi: ReplayService = {
   },
   async searchGames(options: SearchGamesOptions) {
     const { result } = await ipc_searchGames.renderer!.trigger(options);
+    return result;
+  },
+  async searchPlayers(query: string, limit = 8) {
+    const { result } = await ipc_searchPlayers.renderer!.trigger({ query, limit });
     return result;
   },
   async getAllFilePaths(options: SearchGamesOptions) {
