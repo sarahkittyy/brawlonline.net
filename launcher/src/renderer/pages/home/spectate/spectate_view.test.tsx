@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { SpectateMessages as Messages } from "./spectate.messages";
 import type { SpectateListState } from "./spectate_view";
-import { gameClock, setScore, SpectateView } from "./spectate_view";
+import { gameClock, pickFeatured, setScore, SpectateView } from "./spectate_view";
 
 const fetchProfile = vi.fn(async (uid: string) => ({
   uid,
@@ -144,6 +144,46 @@ describe("SpectateView", () => {
     expect(rows.map((r) => r.getAttribute("data-stream"))).toEqual(["aaaaaaaaaaaa"]);
     fireEvent.click(getByTestId("featured-watch"));
     expect(onWatch).toHaveBeenCalledWith(rated[1]);
+  });
+
+  it("puts a 1v1 on top before any 2v2 or free-for-all, even a higher-rated one", () => {
+    const player = (uid: string, teamId: number | null, rating?: number) => ({
+      uid,
+      displayName: uid,
+      connectCode: `${uid.toUpperCase()}#1`,
+      characterId: 1,
+      costume: 0,
+      teamId,
+      wins: 0,
+      rating,
+    });
+    const twos = game("tttttttttttt", "2026-10-14T02:05:00Z", {
+      mode: "twos",
+      isTeams: true,
+      players: [player("t1", 0, 2200), player("t2", 0, 2200), player("t3", 1, 2200), player("t4", 1, 2200)],
+    });
+    const ffa = game("ffffffffffff", "2026-10-14T02:05:00Z", {
+      mode: "room",
+      players: [player("f1", null, 2100), player("f2", null, 2100), player("f3", null, 2100)],
+    });
+    const low = game("llllllllllll", "2026-10-14T02:00:00Z", {
+      players: [player("l1", null, 1200), player("l2", null, 1200)],
+    });
+    const high = game("hhhhhhhhhhhh", "2026-10-14T02:01:00Z", {
+      mode: "unranked",
+      players: [player("h1", null, 1600), player("h2", null)],
+    });
+    const unrated = game("uuuuuuuuuuuu", "2026-10-14T02:09:00Z", { mode: "direct" });
+    expect(pickFeatured([twos, ffa, low, high, unrated], ME)?.id).toBe("hhhhhhhhhhhh");
+    // An unrated 1v1 still beats the rated team games; without a 1v1 the highest-rated of the rest.
+    expect(pickFeatured([twos, ffa, unrated], ME)?.id).toBe("uuuuuuuuuuuu");
+    expect(pickFeatured([ffa, twos], ME)?.id).toBe("tttttttttttt");
+    // A 1v1 the player is in, or one that is over, doesn't count.
+    const mine = game("mmmmmmmmmmmm", "2026-10-14T02:01:00Z", { players: [player(ME, null, 2500), player("o", null)] });
+    const over = game("oooooooooooo", "2026-10-14T02:01:00Z", {
+      game: { number: 1, place: 1, startedAt: "2026-10-14T02:01:00Z", stageId: 0x02, state: "over" },
+    });
+    expect(pickFeatured([twos, mine, over], ME)?.id).toBe("tttttttttttt");
   });
 
   it("lists the live games newest first, with who plays, the game, its time and how many watch", () => {

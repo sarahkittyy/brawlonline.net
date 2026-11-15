@@ -516,10 +516,14 @@ export const LiveGameRow = React.memo(function LiveGameRow({
   );
 });
 
-/** The game shown above the list: the highest-rated one the player can watch (the newest without ratings). */
+/**
+ * The game shown above the list: the highest-rated one the player can watch (the newest without ratings). A 1v1 comes
+ * before any 2v2 or free-for-all, whatever their ratings (Sarah's board, 2026-11-14).
+ */
 export function pickFeatured(games: readonly LiveGameEntry[], uid?: string): LiveGameEntry | null {
   const watchable = games.filter((g) => g.game.state !== "over" && !(uid && g.players.some((p) => p.uid === uid)));
-  return sortLiveGames(watchable, "elo")[0] ?? null;
+  const singles = watchable.filter((g) => !g.isTeams && g.players.length === 2);
+  return sortLiveGames(singles.length > 0 ? singles : watchable, "elo")[0] ?? null;
 }
 
 /**

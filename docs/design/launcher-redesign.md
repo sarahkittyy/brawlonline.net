@@ -63,7 +63,7 @@ Three columns: a **sidebar** (216 px), the **page**, and the **players rail** (2
 | Home > Overview: Play unranked / ranked / 2v2 buttons, "0 in queue" | Play: one panel with Unranked / Ranked / 2v2 tabs (each with its count of players searching) and one **Find match** |
 | Overview Rating widget (Refresh, Match history) | Play > Ranked tab: emblem, tier, rating, position, sparkline |
 | Overview Public rooms | Play > Rooms (players' mains as little stocks, Waiting / In game, Join) |
-| Home > Spectate | Watch: the highest-rated live game at the top, then the list with stage pictures |
+| Home > Spectate | Watch: the highest-rated live 1v1 at the top (a 2v2 or free-for-all only when no 1v1 is live), then the list with stage pictures |
 | Home > Other Games (a tab) | **Other Games** in the sidebar: rooms first, then Your games as tiles with Host |
 | Project Punch's lab button (far right of the tab row) | A tile in Other Games > Your games (not drawn) |
 | Replays page (folder tree + list), Highlights tab | Replays: tabs Replays / Highlights / Clips, folders in a dropdown (the tree was a third column) |
