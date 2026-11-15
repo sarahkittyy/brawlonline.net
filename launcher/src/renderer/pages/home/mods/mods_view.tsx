@@ -876,7 +876,7 @@ const BuildRow = ({
       <div className={styles.actions}>
         <Tooltip title={Messages.hostTooltip()}>
           <span>
-            <Button variant="outlined" color="inherit" size="small" disabled={disabled || hashing} onClick={onHost}>
+            <Button variant="contained" size="small" disabled={disabled || hashing} onClick={onHost}>
               {starting && !hashing ? Messages.opening() : Messages.host()}
             </Button>
           </span>
