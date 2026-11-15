@@ -88,8 +88,12 @@ const room = (you: number, extra: Partial<ModRoomStatus> = {}): ModRoomStatus =>
 
 type ViewState = Omit<ModsState, "controller" | "controllers" | "lastError" | "hashing"> & Partial<ModsState>;
 
-const Frame = ({ state, ...props }: Omit<Partial<ModsViewProps>, "state"> & { state: ViewState | null }) => (
-  <div style={{ width: 900, height: 640, display: "flex", background: "var(--theme-page-background)" }}>
+const Frame = ({
+  state,
+  width = 900,
+  ...props
+}: Omit<Partial<ModsViewProps>, "state"> & { state: ViewState | null; width?: number }) => (
+  <div style={{ width, height: 640, display: "flex", background: "var(--theme-page-background)" }}>
     <ModsView
       state={
         state && {
@@ -386,3 +390,60 @@ export const JoinsWith = () => {
     />
   );
 };
+
+/** The public rooms at the width of Sarah's board screenshot (2026-11-14): a room on another game's
+ * disc, a joinable REX room with an SD card to download and codes, and an unknown game with codes. */
+export const PublicRoomsNarrow = () => (
+  <Frame
+    width={800}
+    state={{ builds: joinGames, running: false, status: null }}
+    publicRooms={{
+      kind: "ready",
+      rooms: [
+        {
+          code: "KART",
+          build: {
+            hash: "b".repeat(64),
+            name: "Mario Kart Wii",
+            disc: "4796930000",
+            discLabel: "RMCE01",
+          },
+          hostName: "grapejuice",
+          hostCountry: "ph",
+          players: 3,
+          open: 4,
+          name: "kart night",
+        },
+        {
+          code: "ZENK",
+          build: {
+            hash: "a".repeat(64),
+            name: "REX Release 0.5 Hotfix 1",
+            disc: DISC,
+            discLabel: "RSBE01",
+            sd: JOIN_CARD,
+            codes: ["Code A", "Code B", "Code C"],
+          },
+          hostName: "zenkraken",
+          hostCountry: "au",
+          players: 2,
+          open: 4,
+        },
+        {
+          code: "TVCC",
+          build: {
+            hash: "c".repeat(64),
+            name: "Tatsunoko vs. Capcom",
+            disc: "6a1d4f0000",
+            discLabel: "STKE08",
+            codes: ["A", "B", "C", "D"],
+          },
+          hostName: "Metaternal",
+          hostCountry: "us",
+          players: 1,
+          open: 4,
+        },
+      ],
+    }}
+  />
+);

@@ -471,7 +471,11 @@ const PublicRoomsBlock = ({
   // room's, and the open menu (`joinAfter`: opened by Join, which joins once a game is picked).
   const [pickedHere, setPickedHere] = useState<Record<string, string>>({});
   const [checks, setChecks] = useState<Record<string, CardCheckState>>({});
-  const [menu, setMenu] = useState<{ code: string; anchor: HTMLElement; joinAfter: boolean } | null>(null);
+  const [menu, setMenu] = useState<{
+    code: string;
+    anchor: HTMLElement;
+    joinAfter: boolean;
+  } | null>(null);
   const anchors = useRef(new Map<string, HTMLElement>());
   let content: ReactNode;
   const listed = rooms.kind === "ready" ? rooms.rooms : [];
@@ -492,7 +496,10 @@ const PublicRoomsBlock = ({
       return;
     }
     const keyed = need.map((b) => [cardCheckKey(root, b), b.id] as const);
-    setChecks((c) => ({ ...c, ...Object.fromEntries(keyed.map(([k]) => [k, "checking" as const])) }));
+    setChecks((c) => ({
+      ...c,
+      ...Object.fromEntries(keyed.map(([k]) => [k, "checking" as const])),
+    }));
     void checkRoomCards(
       root,
       need.map((b) => b.id),
@@ -588,7 +595,9 @@ const PublicRoomsBlock = ({
                     }
                   }}
                 >
-                  <div className={styles.roomMain}>
+                  {/* The room's name with its players and Join on one line, the host and game under it, then its
+                      parts, codes and "Joins with" in one line that wraps. */}
+                  <div className={styles.roomTop}>
                     {onAdminRename ? (
                       <div className={styles.roomHost}>
                         <RoomNameField
@@ -605,20 +614,44 @@ const PublicRoomsBlock = ({
                         {room.name ?? Messages.roomHost(room.hostName)}
                       </div>
                     )}
-                    <div className={styles.roomGame}>
-                      <span className={styles.crown} title={Messages.hostLabel()}>
-                        {"♛ "}
-                      </span>
-                      <UserName
-                        user={{ uid: room.hostUid, displayName: room.hostName, country: room.hostCountry }}
-                        showCode={false}
-                        showFlag={true}
-                        className={styles.hostName}
-                      />
-                      {` · ${label}`}
-                    </div>
+                    <span className={styles.roomPlayers}>
+                      <PersonOutlineIcon style={{ fontSize: 16 }} />
+                      {Messages.roomPlayers(room.players, room.open)}
+                    </span>
+                    <span className={styles.roomAction}>
+                      {own ? (
+                        Messages.yourRoomLabel()
+                      ) : build ? (
+                        <>
+                          {Messages.join()}
+                          <ChevronRightIcon style={{ fontSize: 18 }} />
+                        </>
+                      ) : match.hasParts && match.build && match.disc === "wrong" ? (
+                        Messages.noJoinDisc()
+                      ) : (
+                        Messages.noGame()
+                      )}
+                    </span>
+                  </div>
+                  <div className={styles.roomGame}>
+                    <span className={styles.crown} title={Messages.hostLabel()}>
+                      {"♛ "}
+                    </span>
+                    <UserName
+                      user={{
+                        uid: room.hostUid,
+                        displayName: room.hostName,
+                        country: room.hostCountry,
+                      }}
+                      showCode={false}
+                      showFlag={true}
+                      className={styles.hostName}
+                    />
+                    {` · ${label}`}
+                  </div>
+                  <div className={styles.roomChips}>
                     {match.hasParts && room.build.disc && (
-                      <div className={styles.partChips}>
+                      <>
                         <PartChip
                           label={Messages.discPart(gameId)}
                           hash={room.build.disc}
@@ -661,7 +694,7 @@ const PublicRoomsBlock = ({
                         )}
                         {/* The host's codes, which the room runs for everyone (room-codes.md). */}
                         {room.build.codes && room.build.codes.length > 0 && <CodesChip names={room.build.codes} />}
-                      </div>
+                      </>
                     )}
                     {!own && (
                       <JoinsWith
@@ -681,24 +714,6 @@ const PublicRoomsBlock = ({
                       />
                     )}
                   </div>
-                  <span className={styles.roomPlayers}>
-                    <PersonOutlineIcon style={{ fontSize: 16 }} />
-                    {Messages.roomPlayers(room.players, room.open)}
-                  </span>
-                  <span className={styles.roomAction}>
-                    {own ? (
-                      Messages.yourRoomLabel()
-                    ) : build ? (
-                      <>
-                        {Messages.join()}
-                        <ChevronRightIcon style={{ fontSize: 18 }} />
-                      </>
-                    ) : match.hasParts && match.build && match.disc === "wrong" ? (
-                      Messages.noJoinDisc()
-                    ) : (
-                      Messages.noGame()
-                    )}
-                  </span>
                 </button>
               </Tooltip>
             </li>

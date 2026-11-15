@@ -62,19 +62,22 @@
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  align-self: start;
 }
 
+/* Rows split by a line, as Your games' (.build + .build). */
+.roomList > li + li {
+  border-top: 1px solid var(--line-soft);
+}
+
+/* A room's row: its name, players and Join on the top line, the host and game under it, then one line of
+   chips (Sarah's board: the rows were chunky, the count and Join each kept a column the whole row's height). */
 .roomRow {
   all: unset;
   box-sizing: border-box;
   width: 100%;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 56px 64px;
-  align-items: center;
-  gap: 12px;
-  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  padding: 8px 10px;
   border-radius: 8px;
   cursor: pointer;
   transition: background-color 0.15s ease-in-out;
@@ -106,17 +109,21 @@
   opacity: 0.45;
 }
 
-.roomMain {
-  min-width: 0;
+.roomTop {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  line-height: 20px;
 }
 
+/* The name wraps rather than being cut off. */
 .roomHost {
+  flex: 1;
+  min-width: 0;
   color: var(--text-primary);
   font-weight: 600;
   font-size: 14px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 
 /* A room its host didn't name ("alice's room"). */
@@ -162,18 +169,23 @@
 }
 
 .roomPlayers {
+  flex: none;
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
+  height: 20px;
   color: var(--text-secondary);
   font-size: 13px;
   font-variant-numeric: tabular-nums;
 }
 
 .roomAction {
-  justify-self: end;
+  flex: none;
   display: flex;
   align-items: center;
+  justify-content: flex-end;
+  min-width: 64px;
+  height: 20px;
   gap: 2px;
   color: var(--text-dim);
   font-size: 12px;
@@ -418,7 +430,6 @@
   }
 }
 
-
 .roomBuild {
   display: flex;
   align-items: center;
@@ -591,6 +602,23 @@
 .partClickable:focus-visible {
   outline: 2px solid var(--accent-primary-bright);
   outline-offset: 1px;
+}
+
+/* A room's parts, codes and "Joins with", in one line that wraps. */
+.roomChips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+  margin-top: 6px;
+}
+
+.roomChips:empty {
+  display: none;
+}
+
+.roomChips .joinsWith {
+  margin-top: 0;
 }
 
 .partIcon {
