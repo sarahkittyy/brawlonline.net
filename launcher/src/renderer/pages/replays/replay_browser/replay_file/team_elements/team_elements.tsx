@@ -3,12 +3,12 @@ import React from "react";
 
 import { PlayerBadge } from "./player_badge/player_badge";
 
-// Who played, a team at a time (Sarah's board): all on one line when they fit; otherwise a team per line, "vs" leading
-// every team after the first, as Highlights and Spectate do. A team only wraps inside itself when it alone is wider
-// than the row.
-const Outer = styled.div`
+// Who played (Sarah's board): all on one line when they fit; otherwise, when a team has two players or more, a team per
+// line with "vs" leading every team after the first, as Highlights and Spectate do. Never more: a 1v1 (or any game of
+// one-player teams) stays on its line and a team never splits; too wide, they run a little under the buttons.
+const Outer = styled.div<{ teamPerLine: boolean }>`
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: ${(p) => (p.teamPerLine ? "wrap" : "nowrap")};
   align-items: center;
   align-content: center;
   row-gap: 10px;
@@ -18,10 +18,8 @@ const Outer = styled.div`
 
 const Team = styled.div`
   display: flex;
-  flex-wrap: wrap;
+  flex: none;
   align-items: center;
-  row-gap: 10px;
-  max-width: 100%;
   & > * {
     margin-right: 8px;
   }
@@ -43,7 +41,7 @@ type TeamElementProps = {
 
 export const TeamElements = ({ teams }: TeamElementProps) => {
   return (
-    <Outer>
+    <Outer teamPerLine={teams.some((team) => team.length > 1)}>
       {teams.map((team, i) => (
         <Team key={`team-${i}`}>
           {i > 0 && <Vs>vs</Vs>}

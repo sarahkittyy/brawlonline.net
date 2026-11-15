@@ -89,6 +89,9 @@ export const ReplayFile = React.memo(function ReplayFile({
             css={css`
               display: flex;
               flex: none;
+              /* (Over the players when a 1v1 or a team runs a little under them.) */
+              position: relative;
+              z-index: 1;
             `}
           >
             {actions.map((action, i) => (
