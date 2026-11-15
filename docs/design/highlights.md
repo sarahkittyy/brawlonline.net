@@ -46,8 +46,9 @@ it was always you). A click only selects it (2026-10-24, the user: clicking is f
 the Play button starts it), a double click plays it as the Play button does (2026-10-24, the
 user); ↑/↓ or Tab/Shift+Tab plays the next one at once; Enter plays the
 selected one (Play all went 2026-10-24: the playback Dolphin's list buttons, §3, took its place).
-A row starts with its favorite star and ends with a Play button (as the Replays page's), which plays
-it without touching the selection (2026-10-24, the user).
+A row ends with its favorite star and a Play button, which plays it without touching the selection
+(2026-10-24, the user; since the design pass of 2026-11-15, §10, both show when the row is pointed
+at, selected or playing, the star always once starred).
 Since 2026-11-08 (the user: "it should say the stage you were on, the time the highlight starts, and
 the stock count of each player") a row also shows, after the star, when in the game it starts
 (m:ss, the header's and the Stats tab's clock), and on each player's chip their stocks at that
@@ -55,11 +56,8 @@ moment as pips in the player's color (filled left, hollow lost; past 5, "×N"). 
 replay's stage and everyone's stock changes for this (`stageId`, `stocks`; DETECTOR_VERSION 6). A
 manual clip shows them when its replay's highlights are known (stocks), and the stage it was saved
 with (clips saved before have none).
-Since 2026-11-15 (Sarah's board: wrapped, a manual clip's row took four lines) a row is two lines:
-the players across the row (a 1v1 keeps X vs Y on its line, a name too long for its half
-shortening; teams wrap), then what kind of clip it is (manual: crop icon and "Clip (0:20)"; L+R+Z:
-the scissors; a highlight: nothing) with the stage and date at the right. A highlight row on a
-replay's own page (no stage or date) stays one line.
+Since 2026-11-15 a row is two lines, the players over when in the game it plays (from-to), with the
+stage first and its name and the date in the Highlights tab (§10).
 The row playing is shown selected, and follows the playback Dolphin's buttons and stars; it is
 shown only while the playback Dolphin is open (2026-10-24, the user). A banner
 says what the playback Dolphin does:
@@ -303,7 +301,8 @@ cached, all found in 5.4 s.
 until clicked, then filled: a favorite. They are kept in the settings (`favoriteHighlights`), each
 as `<replay path>|<highlight or clip>|<start frame>` (`favorites.ts`), so a moved or renamed replay
 loses its stars, as does a highlight whose start a new detector version moves. The back arrow went
-(the page starts right below the tabs); on the left a sidebar as Replays' folders, the same darker
+(the page starts right below the tabs); on the left a sidebar as Replays' folders (a select in the
+toolbar since 2026-11-15, §10), the same darker
 background, the open entry the page's own so it joins the list: **All highlights** (open on
 arriving) and **Favorites**, the same list of the starred rows only. A row unstarred in Favorites
 stays (hollow) until Favorites is opened again, so the rows under it don't move while playing.
@@ -416,11 +415,11 @@ after its last whole chunk (it plays as a replay that ended there, as a crashed 
 copied again every 5 s while the file grows, until its trailer is there (or 15 minutes without a
 change). The copy is a replay like any other, in the Replays list too.
 
-**Replays > Highlights**: the sidebar's **Manual Clips** (between L+R+Z Highlights and Favorites;
+**Replays > Highlights**: the sidebar's (since 2026-11-15 the toolbar select's, §10) **Manual Clips** (between L+R+Z Highlights and Favorites;
 hovering it: "Click Clip on the seek bar of a replay or a spectated game, then Save as
 highlight.") lists them newest saved first; All highlights lists them last, under "Manual clips",
-and Favorites the starred ones; the player search applies. A row (two lines, §2): every player of the
-game (teams: team vs team), then a crop icon and "Clip (0:20)" with the stage and the game's date; it plays, renders (named
+and Favorites the starred ones; the player search applies. A row (§10): every player of the
+game (teams: team vs team) over when in the game the clip is (from-to); it plays, renders (named
 `<date> Clip - sarahkitty (Snake) vs t3o7 (Lucas).mp4`) and stars as the others do, and has a
 remove button left of its Play button (no undo). A replay's stats page lists its manual clips too, also
 when it has no highlight data (a spectated game's copy). My and Opponent Highlights don't list
@@ -431,3 +430,49 @@ its last whole chunk, then whole once it ended); harness
 `test_replay.py::test_launcher_comm_file_saves_manual_clips` (clips saved in a comm file
 playback, listed in the status file, the same frames once, an empty clip refused, the replay
 playing on with no checksum differing).
+
+## 10. Design pass (2026-11-15)
+
+Sarah's board: "could you actually do a full design pass on this entire highlights page? i don't
+like how cluttered it is. that manual clip icon is completely unnecessary in the manual clips
+category ... our free space budget has changed a lot with the new two sidebars in the launcher, so
+maybe a sidebar for all the highlight categories doesn't make sense anymore, but it's up to you",
+using the UI design skills the launcher redesign card researched (Impeccable's Operate mode for app
+screens, Anthropic's frontend-design, Vercel's interface guidelines, ibelick's baseline-ui).
+
+What made it cluttered (at 1232x723 with the players' rail open, the list had ~565 px):
+- the category column took 200 px of it, a third;
+- every row was a bordered card ("the SaaS-card kit": identical rounded boxes as the page's
+  structure); every player a pill with a 2 px outline; every row a Play circle in the accent (the
+  accent is for primary actions, the selection and state, not repeated decoration);
+- kind icons (crop, scissors) under section headings that already said the kind, and "Manual
+  clips" over a list that was nothing else;
+- tracked ALL-CAPS section headings (a named tell);
+- the render bar at the bottom with its disabled buttons when nothing was selected.
+
+The page now:
+- **Toolbar** (one line, as before): the category as a select with its icon (200 px, the same for
+  each so the search doesn't move), the player search, the sort. Its menu lists the six with their
+  icons; Hotkey Clips and Manual Clips have their how-to (the old tooltips) under the name.
+- **Rows, a list:** flat on the page, no border; raised where pointed at, the accent's tint when
+  selected, a stronger tint and an accent ring when playing. 2 px between rows.
+
+```
+[stage 48x42]  [char] sarahkitty ●●●○   vs   [char] P+ Player ●●○○          ☆ ▶
+               Green Hill Zone   1:31–1:38   Nov 15, 2026 · 2:51 AM
+```
+  The stage select's icon leads (rows of many games; a replay's own page has none). Line 1 the
+  players: character, name, stocks as pips in the port's colour (the colour lives there; no
+  outline); a 1v1 keeps X vs Y on its line, a name too long for its half shortening. Line 2, dim and
+  12 px: the stage's name, when in the game it plays as from-to (the old start column, now also
+  saying how long; "Starts at ... of the game" on hover), the date. No kind icon or "Clip (0:20)".
+- **Actions** at the right (star, remove for a manual clip, Play) show when the row is pointed at,
+  focused, selected or playing; a starred row's star always. Play is the plain icon, the accent
+  when hovered or playing.
+- **Section headings** only in a list of several kinds (All highlights, Favorites), sentence case,
+  13 px, dim.
+- **The render bar** shows only with rows selected (a click selects one), with the keys' hint.
+
+Looked at in a scratch launcher (worktree build, a copy of the profile without the login, Sarah's
+replays) at 1232x723 and 982x723: All highlights, the category menu, Manual Clips, hover and
+selection, a replay's own Highlights tab.

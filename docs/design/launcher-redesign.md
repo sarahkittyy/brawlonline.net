@@ -194,7 +194,7 @@ Old addresses: `/main/home/*` redirect to `/main/play`, `/main/spectate` and `/m
 
 Not done:
 - the queue box can't bring the game's window forward (there is no call for it);
-- Highlights keeps its own left list of filters.
+- Highlights keeps its own left list of filters (since 2026-11-15 a select in its toolbar, highlights.md §10).
 
 ## 10. Round 4 (Sarah's notes from browsing staging, 2026-11-14)
 

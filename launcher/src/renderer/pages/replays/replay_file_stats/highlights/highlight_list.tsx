@@ -7,20 +7,20 @@
  * adds or removes one, Shift+click a range), a double click plays it; the selected rows render to
  * video (docs/design/highlights.md §4): Render (w/ Music) or Render (No Music), a file each, or one combo movie of them all.
  * `HighlightList` is a replay's (its stats page); `HighlightRows` lists rows of any replays (the
- * Replays > Highlights tab's, all of them). The star at a row's start makes it a favorite
- * (favorites.ts), the Play button at its end plays it. Manual clips (the seek bar's, manual_clips.ts)
- * come last, each with a button that removes it.
+ * Replays > Highlights tab's, all of them). A row (docs/design/highlights.md §10) is the stage (rows of
+ * many games), the players, and under them when in the game it plays and the game's stage and date;
+ * at its end, shown when pointed at, selected or playing, the star (favorites.ts; always once
+ * starred) and Play. Manual clips (the seek bar's, manual_clips.ts) come last, each with a button
+ * that removes it.
  */
 import { stageInfo } from "@common/stages";
 import type { ReplayPlaybackStatus } from "@dolphin/types";
 import { DolphinEventType } from "@dolphin/types";
 import CloseIcon from "@mui/icons-material/Close";
-import ContentCutIcon from "@mui/icons-material/ContentCut";
-import CropIcon from "@mui/icons-material/Crop";
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
 import MovieIcon from "@mui/icons-material/Movie";
 import MusicOffIcon from "@mui/icons-material/MusicOff";
-import PlayCircleOutlineIcon from "@mui/icons-material/PlayCircleOutline";
+import PlayArrowRoundedIcon from "@mui/icons-material/PlayArrowRounded";
 import StarIcon from "@mui/icons-material/Star";
 import StarBorderIcon from "@mui/icons-material/StarBorder";
 import Button from "@mui/material/Button";
@@ -373,6 +373,7 @@ export const HighlightRows = ({
   });
 
   const canRender = chosen.length > 0 && !queuing;
+  const mixedKinds = useMemo(() => new Set(entries.map((e) => e.row.kind)).size > 1, [entries]);
 
   return (
     <div className={styles.container}>
@@ -401,31 +402,30 @@ export const HighlightRows = ({
             const players = new Map(game.players.map((p) => [p.port, p]));
             const stocks = stocksAt(game.stocks, row.startFrame);
             const favorite = favorites.has(favoriteKey(entry));
-            const heading = row.kind !== "highlight" && (i === 0 || entries[i - 1].row.kind !== row.kind);
+            // (A heading only where the list has more than one kind: Manual Clips alone needs none.)
+            const heading = mixedKinds && row.kind !== "highlight" && (i === 0 || entries[i - 1].row.kind !== row.kind);
+            const from = convertFrameCountToDurationString(row.startFrame);
+            const to = convertFrameCountToDurationString(row.endFrame);
             return (
               <div key={entry.key} ref={shown.measure(entry.key)} className={styles.item}>
                 {heading && (
                   <h3 className={styles.section}>{row.kind === "clip" ? Messages.clips() : Messages.manualClips()}</h3>
                 )}
-                <div className={styles.rowBox}>
+                <div
+                  className={`${styles.rowBox} ${i === playing ? styles.playing : ""} ${
+                    ticked.has(entry.key) ? styles.selected : ""
+                  } ${row.kind === "manual" ? styles.removable : ""}`}
+                >
+                  {/* The stage (rows of many games), the players, then when in the game it plays and the game's
+                      stage and date (Sarah's board, 2026-11-15: a design pass, "i don't like how cluttered it is"). */}
                   <button
                     type="button"
                     data-row={i}
-                    className={`${styles.row} ${i === playing ? styles.playing : ""} ${
-                      ticked.has(entry.key) ? styles.selected : ""
-                    } ${row.kind === "manual" ? styles.removable : ""} ${
-                      twoLines(row, showDates) ? styles.twoLines : ""
-                    }`}
+                    className={`${styles.row} ${showDates ? styles.withStage : ""}`}
                     onClick={(e) => clickRow(i, e)}
                     onDoubleClick={() => void play(i)}
                   >
-                    <span
-                      className={styles.time}
-                      title={Messages.startsAt(convertFrameCountToDurationString(row.startFrame))}
-                    >
-                      {convertFrameCountToDurationString(row.startFrame)}
-                    </span>
-                    {/* The players, then (twoLines) what kind of clip it is and the game's stage and date under them. */}
+                    {showDates && <StageThumb stageId={game.stageId} />}
                     <span
                       className={`${styles.who} ${styles.rowPlayers} ${
                         (row.kind === "highlight" ? !game.isTeams : isOneOnOne(game)) ? styles.oneLine : ""
@@ -437,50 +437,51 @@ export const HighlightRows = ({
                         <GameWho data={game} stocks={stocks} />
                       )}
                     </span>
-                    {row.kind === "manual" ? (
-                      <span className={styles.clipHead}>
-                        <CropIcon fontSize="small" className={styles.clipIcon} />
-                        <span className={styles.vs}>{Messages.manualClip(clipLength(row))}</span>
+                    <span className={styles.meta}>
+                      {showDates && <StageName stageId={game.stageId} />}
+                      <span className={styles.time} title={Messages.startsAt(from)}>
+                        {from}–{to}
                       </span>
-                    ) : row.kind === "clip" ? (
-                      <span className={styles.clipHead}>
-                        <ContentCutIcon fontSize="small" className={styles.clipIcon} />
-                      </span>
-                    ) : null}
-                    {showDates && <GameWhere stageId={game.stageId} date={entry.date} />}
+                      {showDates && entry.date && (
+                        <span className={styles.date}>{monthDayHourFormat(new Date(entry.date))}</span>
+                      )}
+                    </span>
                   </button>
-                  {/* (Over the row, not in it: a button can't hold another.) */}
-                  <IconButton
-                    size="small"
-                    className={`${styles.star} ${favorite ? styles.starred : ""}`}
-                    onClick={() => toggleFavorite(entry)}
-                    aria-label={favorite ? Messages.unfavorite() : Messages.favorite()}
-                    aria-pressed={favorite}
-                  >
-                    {favorite ? <StarIcon fontSize="small" /> : <StarBorderIcon fontSize="small" />}
-                  </IconButton>
-                  <Tooltip title={Messages.play()} arrow={true}>
+                  {/* (Over the row, not in it: a button can't hold another.) A star shows when starred; the rest
+                      when the row is pointed at, selected or playing. */}
+                  <span className={styles.actions}>
                     <IconButton
                       size="small"
-                      className={styles.play}
-                      onClick={() => void play(i)}
-                      aria-label={Messages.play()}
+                      className={`${styles.star} ${favorite ? styles.starred : ""}`}
+                      onClick={() => toggleFavorite(entry)}
+                      aria-label={favorite ? Messages.unfavorite() : Messages.favorite()}
+                      aria-pressed={favorite}
                     >
-                      <PlayCircleOutlineIcon />
+                      {favorite ? <StarIcon fontSize="small" /> : <StarBorderIcon fontSize="small" />}
                     </IconButton>
-                  </Tooltip>
-                  {row.kind === "manual" && (
-                    <Tooltip title={Messages.removeClip()} arrow={true}>
+                    {row.kind === "manual" && (
+                      <Tooltip title={Messages.removeClip()} arrow={true}>
+                        <IconButton
+                          size="small"
+                          className={styles.remove}
+                          onClick={() => removeManualClip(entry)}
+                          aria-label={Messages.removeClip()}
+                        >
+                          <DeleteOutlineIcon fontSize="small" />
+                        </IconButton>
+                      </Tooltip>
+                    )}
+                    <Tooltip title={Messages.play()} arrow={true}>
                       <IconButton
                         size="small"
-                        className={styles.remove}
-                        onClick={() => removeManualClip(entry)}
-                        aria-label={Messages.removeClip()}
+                        className={styles.play}
+                        onClick={() => void play(i)}
+                        aria-label={Messages.play()}
                       >
-                        <DeleteOutlineIcon fontSize="small" />
+                        <PlayArrowRoundedIcon />
                       </IconButton>
                     </Tooltip>
-                  )}
+                  </span>
                 </div>
               </div>
             );
@@ -488,13 +489,13 @@ export const HighlightRows = ({
           <div style={{ height: shown.after }} aria-hidden={true} />
         </div>
       )}
-      {entries.length > 0 && (
+      {/* Only with rows selected (a click selects one): rendering is what to do with them. */}
+      {chosen.length > 0 && (
         <div className={styles.footer} ref={footerRef}>
           <span className={styles.hint}>{Messages.keyHint()}</span>
           <div className={styles.renderBar}>
             <FormControlLabel
               className={styles.combo}
-              disabled={chosen.length === 0}
               control={<Checkbox size="small" checked={combo} onChange={(e) => setCombo(e.target.checked)} />}
               label={<span className={styles.comboLabel}>{Messages.comboMovie()}</span>}
             />
@@ -533,12 +534,6 @@ export const comboOfManyName = (chosen: HighlightEntry[]) => {
   return multiGameComboName(chosen.length, new Date());
 };
 
-/** A manual clip's length, "0:20". */
-const clipLength = (row: ReplayManualClip) => {
-  const seconds = Math.max(0, Math.round((row.endFrame - row.startFrame) / 60));
-  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
-};
-
 /** A player's stocks at a row's start, and at the game's. */
 type Stocks = { left: number; start: number };
 
@@ -574,27 +569,17 @@ const StockPips = ({ stocks }: { stocks: Stocks }) => {
   );
 };
 
-/** A row of many games' lists: the game's stage (its icon and name) and when it was played. */
-const GameWhere = ({ stageId, date }: { stageId?: number | null; date?: string }) => {
+/** A row of many games' lists starts with its game's stage, the stage select's icon. */
+const StageThumb = ({ stageId }: { stageId?: number | null }) => {
   const stageIcon = useStageIcon();
-  const stage = stageId != null ? stageInfo(stageId) : undefined;
-  const icon = stage ? stageIcon(stage.id) : undefined;
-  return (
-    <span className={styles.where}>
-      {icon && <img className={styles.stageIcon} src={icon} alt="" />}
-      <span className={styles.whereText}>
-        {stage && <span className={styles.stage}>{stage.name}</span>}
-        {date && <span className={styles.date}>{monthDayHourFormat(new Date(date))}</span>}
-      </span>
-    </span>
-  );
+  const icon = stageId != null ? stageIcon(stageId) : undefined;
+  return icon ? <img className={styles.stageIcon} src={icon} alt="" /> : <span className={styles.stageIcon} />;
 };
 
-/**
- * A row on two lines (Sarah's board, 2026-11-15: wrapped, a manual clip's took four): the players, then the clip's
- * kind and the game's stage and date. A highlight with nothing under it (a replay's own page) stays one line.
- */
-const twoLines = (row: Row, showDates?: boolean) => row.kind !== "highlight" || !!showDates;
+const StageName = ({ stageId }: { stageId?: number | null }) => {
+  const stage = stageId != null ? stageInfo(stageId) : undefined;
+  return stage ? <span className={styles.stage}>{stage.name}</span> : null;
+};
 
 /** Two players, no teams: X vs Y, which keeps to one line (the names shorten). */
 const isOneOnOne = (data: ReplayHighlights) => !data.isTeams && data.players.length === 2;

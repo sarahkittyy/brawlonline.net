@@ -9,112 +9,10 @@
   min-height: 0;
 }
 
-/* The categories beside the list; they fold to their icons with the button at their foot. */
 .split {
   display: flex;
   flex: 1;
   min-height: 0;
-}
-
-/* On the page's own colour, a line between it and the list (the list's bars the same colour, Sarah's board); the
-   open one raised, as the app's sidebar marks its page. */
-.sidebar {
-  display: flex;
-  flex: none;
-  flex-direction: column;
-  gap: 2px;
-  width: 200px;
-  min-height: 0;
-  padding: 12px 8px;
-  border-right: 1px solid var(--line-soft);
-  box-sizing: border-box;
-  overflow: hidden auto;
-}
-
-.sidebar[data-folded] {
-  width: 52px;
-  padding-inline: 6px;
-}
-
-.sidebar[data-folded] .sideItem {
-  justify-content: center;
-  padding-inline: 0;
-}
-
-.sidebar[data-folded] .sideLabel {
-  display: none;
-}
-
-.foldButton {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  align-self: flex-end;
-  width: 32px;
-  height: 32px;
-  padding: 0;
-  border: none;
-  border-radius: 8px;
-  background: transparent;
-  color: var(--text-dim);
-  cursor: pointer;
-}
-
-.sidebar[data-folded] .foldButton {
-  align-self: center;
-}
-
-.foldButton:hover {
-  background: var(--raised);
-  color: var(--off-white);
-}
-
-.foldButton:focus-visible {
-  outline: 2px solid var(--accent-primary);
-  outline-offset: -2px;
-}
-
-.sideItem {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  width: 100%;
-  padding: 7px 10px;
-  border: none;
-  border-radius: 8px;
-  background: transparent;
-  color: var(--text-dim);
-  font: inherit;
-  font-size: 14px;
-  text-align: left;
-  white-space: nowrap;
-  cursor: pointer;
-}
-
-.sideItem:hover {
-  background: var(--raised);
-  color: var(--off-white);
-}
-
-.sideItem:focus-visible {
-  outline: 2px solid var(--accent-primary);
-  outline-offset: -2px;
-}
-
-.sideSelected,
-.sideSelected:hover {
-  background: var(--raised-hover);
-  color: var(--off-white);
-  font-weight: bold;
-}
-
-.sideLabel {
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.sideRest {
-  flex: 1;
 }
 
 .content {
@@ -141,4 +39,52 @@
   flex: none;
   height: 34px;
   font-size: 13px;
+}
+
+/* Which highlights: the category, its icon beside its name (one width for all, so the search beside it doesn't move
+   when another is picked). */
+.viewSelect {
+  flex: none;
+  width: 200px;
+  height: 34px;
+  font-size: 13px;
+}
+
+.viewValue {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.viewValue svg {
+  color: var(--text-dim);
+}
+
+.viewMenu {
+  max-width: 340px;
+}
+
+.viewItem {
+  align-items: flex-start;
+  gap: 12px;
+  white-space: normal;
+}
+
+.viewIcon {
+  display: flex;
+  padding-top: 1px;
+  color: var(--text-dim);
+}
+
+.viewLabel {
+  display: block;
+  font-size: 14px;
+}
+
+/* How to make them (the clips' categories), under the name. */
+.viewHint {
+  display: block;
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--text-dim);
 }

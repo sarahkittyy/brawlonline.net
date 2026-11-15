@@ -1,41 +1,35 @@
 /**
  * Replays > Highlights: every replay's highlights and L+R+Z clips in one list (all_highlights.ts
  * finds them: the ones already known at once, the others as they are found, one replay at a time),
- * playable and renderable as on a replay's stats page. A sidebar as Replays' folders: All
+ * playable and renderable as on a replay's stats page. A select at the start of the toolbar: All
  * highlights, My Highlights (this machine's player's: the replay's recorder), Opponent Highlights
  * (anyone's not on my side), L+R+Z Highlights (the clips), Manual Clips (the playback Dolphin's
  * seek bar clips, manual_clips.ts), or Favorites (the starred ones, favorites.ts), the same list of
  * fewer rows. The player search above the list (Match history's, player_search.tsx) keeps the rows of every player
  * tagged, and of a player whose name or code has what is typed.
- * Newest first unless Best first is picked. Below the sidebar, buttons open the Root Replay Folder
- * and the rendered videos' folder (Settings > Clips), as on Replays (folder_buttons.tsx).
+ * Newest first unless Best first is picked.
  */
 import { currentClipButtons, hotkeyLabel } from "@common/clip_hotkey";
 import ContentCutIcon from "@mui/icons-material/ContentCut";
 import CropIcon from "@mui/icons-material/Crop";
 import GroupIcon from "@mui/icons-material/Group";
-import KeyboardDoubleArrowLeftRoundedIcon from "@mui/icons-material/KeyboardDoubleArrowLeftRounded";
-import KeyboardDoubleArrowRightRoundedIcon from "@mui/icons-material/KeyboardDoubleArrowRightRounded";
 import PersonIcon from "@mui/icons-material/Person";
 import StarIcon from "@mui/icons-material/Star";
 import VideoLibraryIcon from "@mui/icons-material/VideoLibrary";
 import LinearProgress from "@mui/material/LinearProgress";
 import MenuItem from "@mui/material/MenuItem";
 import Select from "@mui/material/Select";
-import Tooltip from "@mui/material/Tooltip";
 import type { GameHighlights, HighlightPlayer, ReplayHighlights } from "@replays/highlights/types";
 import { CLIP_BEFORE_SECONDS } from "@replays/highlights/types";
 import type { ReplayPlayer } from "@replays/types";
 import React, { useEffect, useMemo, useState } from "react";
 
 import { ReplayPlayerSearch } from "@/components/player_search/replay_player_search";
-import { useLocalStorage } from "@/lib/hooks/use_local_storage";
 import { useSetting } from "@/lib/hooks/use_settings";
 import { favoriteKey, useFavoriteHighlights } from "@/pages/replays/replay_file_stats/highlights/favorites";
 import type { HighlightEntry } from "@/pages/replays/replay_file_stats/highlights/highlight_list";
 import { comboOfManyName, HighlightRows } from "@/pages/replays/replay_file_stats/highlights/highlight_list";
 import { manualClipEntry, useManualClips } from "@/pages/replays/replay_file_stats/highlights/manual_clips";
-import { RulesetsPageMessages } from "@/pages/rulesets/rulesets_page.messages";
 import { useServices } from "@/services";
 
 import { AllHighlightsMessages as Messages } from "./all_highlights_page.messages";
@@ -243,83 +237,60 @@ export const AllHighlightsPage = React.memo(() => {
         : Messages.none()
       : null;
 
-  // The categories fold to their icons (Sarah's board: dragging the old resize bar snapped it to its least width and
-  // then it never resized again), remembered on this computer.
-  const [folded, setFolded] = useLocalStorage<boolean>("HIGHLIGHTS_SIDEBAR_FOLDED", false);
-
-  const sidebarItem = (id: View, icon: React.ReactNode, label: string, hint?: string) => {
-    const item = (
-      <button
-        type="button"
-        className={`${styles.sideItem} ${view === id ? styles.sideSelected : ""}`}
-        onClick={() => openView(id)}
-        aria-current={view === id}
-        aria-label={folded ? label : undefined}
-      >
-        {icon}
-        <span className={styles.sideLabel}>{label}</span>
-      </button>
-    );
-    // Folded, its name is the tooltip (with the hint under it).
-    const tip = folded ? (
-      hint ? (
-        <>
-          <b>{label}</b>
-          <br />
-          {hint}
-        </>
-      ) : (
-        label
-      )
-    ) : (
-      hint
-    );
-    return tip ? (
-      <Tooltip key={id} title={tip} placement="right" arrow={true}>
-        {item}
-      </Tooltip>
-    ) : (
-      <React.Fragment key={id}>{item}</React.Fragment>
-    );
-  };
+  // The categories as a select at the start of the toolbar (Sarah's board, 2026-11-15: with the app's sidebar and the
+  // players' rail, a column of them left the list too little room), each with its icon and, for the clips, how to make
+  // them.
+  const views: { id: View; icon: React.ReactNode; label: string; hint?: string }[] = [
+    { id: "all", icon: <VideoLibraryIcon fontSize="small" />, label: Messages.allHighlights() },
+    { id: "mine", icon: <PersonIcon fontSize="small" />, label: Messages.myHighlights() },
+    { id: "opponents", icon: <GroupIcon fontSize="small" />, label: Messages.opponentHighlights() },
+    {
+      id: "clips",
+      icon: <ContentCutIcon fontSize="small" />,
+      label: Messages.lrzHighlights(),
+      hint: Messages.lrzHint(hotkey, CLIP_BEFORE_SECONDS),
+    },
+    { id: "manual", icon: <CropIcon fontSize="small" />, label: Messages.manualClips(), hint: Messages.manualHint() },
+    { id: "favorites", icon: <StarIcon fontSize="small" />, label: Messages.favorites() },
+  ];
+  const viewSelect = (
+    <Select
+      size="small"
+      value={view}
+      onChange={(e) => openView(e.target.value as View)}
+      className={styles.viewSelect}
+      data-testid="highlights-view"
+      renderValue={(id) => {
+        const v = views.find((x) => x.id === id);
+        return (
+          <span className={styles.viewValue}>
+            {v?.icon}
+            {v?.label}
+          </span>
+        );
+      }}
+      MenuProps={{
+        // (Under the select, its left edge on the select's: not over the app's sidebar.)
+        anchorOrigin: { vertical: "bottom", horizontal: "left" },
+        transformOrigin: { vertical: "top", horizontal: "left" },
+        slotProps: { paper: { className: styles.viewMenu } },
+      }}
+    >
+      {views.map((v) => (
+        <MenuItem key={v.id} value={v.id} className={styles.viewItem}>
+          <span className={styles.viewIcon}>{v.icon}</span>
+          <span>
+            <span className={styles.viewLabel}>{v.label}</span>
+            {v.hint && <span className={styles.viewHint}>{v.hint}</span>}
+          </span>
+        </MenuItem>
+      ))}
+    </Select>
+  );
 
   return (
     <div className={styles.outer}>
       <div className={styles.split}>
-        <div className={styles.sidebar} data-folded={folded ? "" : undefined} data-testid="highlights-sidebar">
-          {sidebarItem("all", <VideoLibraryIcon fontSize="small" />, Messages.allHighlights())}
-          {sidebarItem("mine", <PersonIcon fontSize="small" />, Messages.myHighlights())}
-          {sidebarItem("opponents", <GroupIcon fontSize="small" />, Messages.opponentHighlights())}
-          {sidebarItem(
-            "clips",
-            <ContentCutIcon fontSize="small" />,
-            Messages.lrzHighlights(),
-            Messages.lrzHint(hotkey, CLIP_BEFORE_SECONDS),
-          )}
-          {sidebarItem("manual", <CropIcon fontSize="small" />, Messages.manualClips(), Messages.manualHint())}
-          {sidebarItem("favorites", <StarIcon fontSize="small" />, Messages.favorites())}
-          <div className={styles.sideRest} />
-          <Tooltip
-            title={folded ? RulesetsPageMessages.show() : RulesetsPageMessages.hide()}
-            placement="right"
-            disableInteractive={true}
-          >
-            <button
-              type="button"
-              className={styles.foldButton}
-              onClick={() => setFolded(!folded)}
-              aria-label={folded ? RulesetsPageMessages.show() : RulesetsPageMessages.hide()}
-              aria-expanded={!folded}
-              data-testid="highlights-sidebar-fold"
-            >
-              {folded ? (
-                <KeyboardDoubleArrowRightRoundedIcon fontSize="small" />
-              ) : (
-                <KeyboardDoubleArrowLeftRoundedIcon fontSize="small" />
-              )}
-            </button>
-          </Tooltip>
-        </div>
         <div className={styles.content}>
           {(loading || finding) && (
             <div className={styles.finding}>
@@ -341,6 +312,7 @@ export const AllHighlightsPage = React.memo(() => {
             comboName={comboOfManyName}
             headerExtra={
               <>
+                {viewSelect}
                 <ReplayPlayerSearch
                   value={tagged}
                   onChange={setTagged}
