@@ -1,7 +1,9 @@
 import type { SocialPlayer, SocialState } from "@social/types";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { CSSProperties } from "react";
 import { useEffect } from "react";
 
+import { PlayersRail } from "@/app/shell/players_rail";
 import { useAccount } from "@/lib/hooks/use_account";
 import { useSocial } from "@/lib/social/use_social";
 import { createServiceProvider } from "@/services";
@@ -10,9 +12,19 @@ import { useGameAssets } from "@/styles/game_theme";
 
 import { OnlinePlayers } from "./online_players";
 
+const queryClient = new QueryClient();
+
 export default {
   title: "pages/Home/OnlinePlayers",
   argTypes: {},
+  // The panel reads the rooms and live games (a friend's row says where they are).
+  decorators: [
+    (Story: React.ComponentType) => (
+      <QueryClientProvider client={queryClient}>
+        <Story />
+      </QueryClientProvider>
+    ),
+  ],
 };
 
 const names = ["Bob", "Kim", "Lee", "Alexander", "Sora", "Bobby", "Marth Main", "kimchi", "Zelda", "Robin"];
@@ -125,6 +137,43 @@ export const Narrow = () => {
             <OnlinePlayers />
           </div>
         ))}
+      </div>
+    </ServiceProvider>
+  );
+};
+
+/**
+ * The players rail as every page has it (app/shell/players_rail.tsx, 272 px), with the redesign mockup's 185 online:
+ * both tabs' counts beside Online's icons; the Friends tab's extra icon leaves room for its own count only.
+ */
+export const Rail = () => {
+  useEffect(() => {
+    setUp();
+    useSocial.setState({
+      state: {
+        ...state,
+        online: [
+          ...players,
+          ...Array.from({ length: 175 }, (_, i) => ({
+            uid: `x${i}`,
+            displayName: `Player ${i}`,
+            connectCode: `PL#${i}`,
+          })),
+        ],
+        friends: {
+          loaded: true,
+          friends: players.slice(0, 3).map((p) => ({ ...p, since: "2026-11-14T00:00:00Z" })),
+          incoming: players.slice(3, 5).map((p) => ({ ...p, since: "2026-11-14T00:00:00Z" })),
+          outgoing: [],
+        },
+      },
+      tabs: [],
+    });
+  }, []);
+  return (
+    <ServiceProvider>
+      <div style={{ display: "flex", height: 460 }}>
+        <PlayersRail />
       </div>
     </ServiceProvider>
   );

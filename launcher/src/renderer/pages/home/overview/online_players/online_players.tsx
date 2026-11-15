@@ -6,7 +6,7 @@ import IconButton from "@mui/material/IconButton";
 import Tooltip from "@mui/material/Tooltip";
 import type { SocialPlayer } from "@social/types";
 import { clsx } from "clsx";
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { Flag } from "@/components/flag/flag";
 import { useHasStockIcons } from "@/components/profile/character_icon";
@@ -32,7 +32,7 @@ import { MainSlot } from "./main_slot";
 import styles from "./online_players.module.css";
 
 /** The tab shown, remembered on this computer. */
-const TAB_KEY = "ONLINE_PANEL_TAB";
+export const TAB_KEY = "ONLINE_PANEL_TAB";
 type PanelTab = "online" | "friends";
 
 /** A name and code, with a friend's glyph after them when there is no main column (no disc). */
@@ -47,6 +47,36 @@ const NameCell = ({ player, friend, mark }: { player: SocialPlayer; friend: bool
   ) : (
     <PlayerName player={player} />
   );
+
+/** Which tabs show their players online: both, only the open tab's, or none (the header is too narrow). */
+type CountsShown = "both" | "active" | "none";
+
+/**
+ * How many counts fit beside the tabs' names in the room the header's icons leave: each tab laid out with its count at
+ * its natural width for a moment (a measure class) before paint. The open tab's count goes last. The answer does not
+ * depend on which counts are shown, so it cannot flip back and forth.
+ */
+function countsFitIn(tabs: HTMLElement): CountsShown {
+  tabs.classList.add(styles.measureCounts);
+  try {
+    const room = tabs.getBoundingClientRect().width;
+    const children = Array.from(tabs.children);
+    const need =
+      children.reduce((sum, tab) => sum + tab.getBoundingClientRect().width, 0) + TAB_GAP * (children.length - 1);
+    if (need <= room + 0.5) {
+      return "both";
+    }
+    const other = tabs.querySelector<HTMLElement>(`[role="tab"]:not([data-active]) .${styles.tabCount}`);
+    const otherWidth = other ? other.getBoundingClientRect().width + COUNT_GAP : 0;
+    return need - otherWidth <= room + 0.5 ? "active" : "none";
+  } finally {
+    tabs.classList.remove(styles.measureCounts);
+  }
+}
+
+/** The CSS gaps between the tabs and before a tab's count (online_players.module.css .tabs, .tab). */
+const TAB_GAP = 12;
+const COUNT_GAP = 6;
 
 /** How long the search box waits after a key before asking the server (an admin's offline players). */
 const ADMIN_SEARCH_DELAY_MS = 300;
@@ -144,6 +174,8 @@ export const OnlinePlayers = React.memo(function OnlinePlayers({
   const [adding, setAdding] = useState(false);
   const [query, setQuery] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
+  const tabsRef = useRef<HTMLDivElement>(null);
+  const [counts, setCounts] = useState<CountsShown>("both");
   const { query: rooms } = useRoomList();
 
   const ready = user != null && hasPlayKey && status === "online";
@@ -157,6 +189,26 @@ export const OnlinePlayers = React.memo(function OnlinePlayers({
   }, [online, needle, friendUids]);
   const offline = useOfflinePlayers(ready && !friendsTab, needle, online, user?.uid);
   const friendsOnline = online.filter((p) => friendUids.has(p.uid)).length;
+
+  // The tabs' counts: re-checked when the header's width changes, when a tab's does (a count, the disc's font loading)
+  // and when the icons beside them do (the Friends tab's add icon).
+  useLayoutEffect(() => {
+    const tabs = tabsRef.current;
+    const header = tabs?.parentElement;
+    if (!tabs || !header || !ready) {
+      return;
+    }
+    const check = () => setCounts(countsFitIn(tabs));
+    check();
+    if (typeof ResizeObserver === "undefined") {
+      return;
+    }
+    const observer = new ResizeObserver(check);
+    for (const el of [header, ...Array.from(header.children), ...Array.from(tabs.children)]) {
+      observer.observe(el);
+    }
+    return () => observer.disconnect();
+  }, [ready, tab, online.length, friendsOnline, incoming]);
 
   const closeSearch = () => {
     setSearching(false);
@@ -173,7 +225,7 @@ export const OnlinePlayers = React.memo(function OnlinePlayers({
 
   const heading = (
     <>
-      <div className={styles.tabs} role="tablist">
+      <div ref={tabsRef} className={styles.tabs} role="tablist">
         {(["online", "friends"] as const).map((t) => (
           <button
             key={t}
@@ -189,6 +241,7 @@ export const OnlinePlayers = React.memo(function OnlinePlayers({
             {ready && (
               <span
                 className={styles.tabCount}
+                data-hidden={counts === "none" || (counts === "active" && tab !== t) ? "" : undefined}
                 title={Messages.playersOnline(t === "online" ? online.length : friendsOnline)}
               >
                 {t === "online" ? online.length : friendsOnline}

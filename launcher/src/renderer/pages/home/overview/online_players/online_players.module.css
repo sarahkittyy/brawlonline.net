@@ -8,15 +8,26 @@
 
 /*
  * The header: Online / Friends as Home's own tabs (pages/home/tabs), each with its players online
- * after the chat's green dot, the Friends tab with its requests in the unread amber (Sarah's board,
- * 2026-11-14: the title font was too wide for two tabs, the icons and a count in the column).
- * Narrow columns drop the counts first.
+ * after the chat's green dot, the Friends tab with its requests in the unread amber. Spaced as the
+ * redesign's players rail (run/design/redesign kit.css: 14 px names 12 px apart, 28 px icons), so
+ * in its 272 px both counts fit beside the Online tab's icons. When they don't (the Friends tab's
+ * extra icon, big counts), the other tab's count goes first, then the open one's (countsFitIn
+ * measures them; a fixed width can't know the font or the numbers).
  */
 .tabs {
   display: flex;
   align-self: stretch;
-  gap: 2px;
+  gap: 12px;
   min-width: 0;
+}
+
+/* countsFitIn: every count shown and the tabs given all the room the icons leave, for a moment. */
+.tabs.measureCounts {
+  flex: 1 1 0;
+}
+
+.tabs.measureCounts .tabCount[data-hidden] {
+  display: inline-flex;
 }
 
 .tab {
@@ -25,10 +36,10 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 2px 10px 0;
+  padding: 2px 0 0;
   border-bottom: solid 2px transparent;
   color: var(--text-primary);
-  font-size: 15px;
+  font-size: 14px;
   white-space: nowrap;
   cursor: pointer;
   opacity: 0.6;
@@ -69,6 +80,10 @@
   line-height: 1;
 }
 
+.tabCount[data-hidden] {
+  display: none;
+}
+
 .tabCount::before {
   content: "";
   width: 6px;
@@ -93,21 +108,17 @@
   line-height: 1;
 }
 
-@container (max-width: 280px) {
-  .tabCount {
-    display: none;
-  }
-
-  .tab {
-    padding: 2px 8px 0;
-  }
-}
-
 .headIcons {
   display: flex;
   flex: none;
   align-items: center;
   gap: 2px;
+}
+
+/* 28 px icons, as the redesign's rail: the rail's fold button too. */
+.headIcons button {
+  width: 28px;
+  padding: 4px 0;
 }
 
 .iconButton {
