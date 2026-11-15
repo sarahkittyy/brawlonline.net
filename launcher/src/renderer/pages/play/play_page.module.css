@@ -48,7 +48,6 @@
 .launch {
   text-transform: none !important;
   white-space: nowrap;
-  border-color: var(--line) !important;
 }
 
 /* The ranked card and the three Play buttons, one panel. */

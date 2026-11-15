@@ -70,8 +70,7 @@ const LaunchButton = () => {
   const [launchGame] = useLaunchGameOnPlay();
   return (
     <Button
-      variant="outlined"
-      color="inherit"
+      variant="contained"
       className={styles.launch}
       startIcon={<PlayArrowRoundedIcon />}
       onClick={() => void play({})}
