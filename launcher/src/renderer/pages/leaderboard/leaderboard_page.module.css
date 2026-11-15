@@ -68,7 +68,7 @@
   min-height: 0;
 }
 
-/* The player's own row, pinned under the list when it isn't in view. */
+/* The player's own row, pinned under the list while it isn't loaded in it yet (it is then below). */
 .me {
   flex: none;
   padding: 6px 0 10px;
@@ -77,6 +77,35 @@
 
 .meRow {
   background-color: color-mix(in srgb, var(--accent-primary) 18%, transparent);
+}
+
+/* In the list it is sticky: under the column heads when the list is below it, at the foot when it is above; a line
+   splits it from the rows while it is stuck (data-stuck, set as the list scrolls). The cells are opaque:
+   the rows pass under them. */
+.list .meRow {
+  background-color: transparent;
+}
+
+.list .meRow td {
+  position: sticky;
+  top: var(--leaderboard-head, 0);
+  bottom: 0;
+  z-index: 1;
+  background: linear-gradient(
+      color-mix(in srgb, var(--accent-primary) 18%, transparent),
+      color-mix(in srgb, var(--accent-primary) 18%, transparent)
+    )
+    var(--page);
+  transition: box-shadow 0.2s ease;
+}
+
+/* (A line only: a shadow per cell left seams where the cells meet.) */
+.list .meRow[data-stuck="top"] td {
+  box-shadow: inset 0 -2px 0 color-mix(in srgb, var(--accent-primary) 55%, transparent);
+}
+
+.list .meRow[data-stuck="bottom"] td {
+  box-shadow: inset 0 2px 0 color-mix(in srgb, var(--accent-primary) 55%, transparent);
 }
 
 .player {

@@ -48,6 +48,17 @@ const SEARCH_STALE_MS = 60_000;
  * cleared box) within {@link SEARCH_STALE_MS} shows its pages without asking again, and the last
  * list stays (dimmed) until the new one arrives.
  */
+/** The element `el` scrolls in. */
+const scrollerOf = (el: HTMLElement): HTMLElement | null => {
+  for (let p = el.parentElement; p; p = p.parentElement) {
+    const { overflowY } = getComputedStyle(p);
+    if (overflowY === "auto" || overflowY === "scroll") {
+      return p;
+    }
+  }
+  return null;
+};
+
 export const LeaderboardPage = React.memo(function LeaderboardPage() {
   const { backendService } = useServices();
   const myUid = useAccount((s) => s.user?.uid);
@@ -93,22 +104,50 @@ export const LeaderboardPage = React.memo(function LeaderboardPage() {
   const rows = scope === "friends" ? friendsRows : pages.items;
   const me = myRow.data;
   const meListed = rows.some((e) => e.uid === myUid);
-  // The player's own row in the list on screen (all of it): the pinned one goes, and comes back once it scrolls out of
-  // view again (Sarah's board: it went for good once the row had been loaded).
+  // The player's own row in the list is sticky (Sarah's board): under the column heads when the list is scrolled
+  // below it, at the list's foot when it is still below; in its place while it is on screen, so it slides in and out
+  // of the list at either edge. Stuck, a line splits it from the rows (Chromium 132 has no stuck queries in CSS: this
+  // finds where its place is). Not loaded yet, it is always below: pinned under the list instead.
   const listRef = useRef<HTMLDivElement>(null);
-  const [meInView, setMeInView] = useState(false);
+  const [stuck, setStuck] = useState<"top" | "bottom" | null>(null);
   useEffect(() => {
-    const row = meListed ? listRef.current?.querySelector("[data-me]") : null;
-    if (!row || typeof IntersectionObserver === "undefined") {
-      setMeInView(false);
+    const list = listRef.current;
+    const row = meListed ? list?.querySelector<HTMLElement>("tbody tr[data-me]") : null;
+    const scroller = row ? scrollerOf(row) : null;
+    if (!list || !row || !scroller) {
+      setStuck(null);
       return;
     }
-    // (Hiding or showing the pinned row moves the list's foot; either state then holds, so it doesn't flicker.)
-    const observer = new IntersectionObserver(([e]) => setMeInView(e.intersectionRatio > 0.95), {
-      threshold: [0, 0.5, 0.96, 1],
-    });
-    observer.observe(row);
-    return () => observer.disconnect();
+    let frame = 0;
+    const check = () => {
+      frame = 0;
+      const head = list.querySelector("thead")?.getBoundingClientRect().height ?? 0;
+      list.style.setProperty("--leaderboard-head", `${head}px`);
+      const view = scroller.getBoundingClientRect();
+      // Its place: under the row before it (a sticky row's own box is where it is stuck).
+      const before = row.previousElementSibling ?? row.parentElement;
+      const top = before
+        ? before === row.parentElement
+          ? before.getBoundingClientRect().top
+          : before.getBoundingClientRect().bottom
+        : 0;
+      const bottom = top + row.offsetHeight;
+      setStuck(top < view.top + head - 0.5 ? "top" : bottom > view.bottom + 0.5 ? "bottom" : null);
+    };
+    check();
+    const onChange = () => {
+      if (!frame) {
+        frame = requestAnimationFrame(check);
+      }
+    };
+    scroller.addEventListener("scroll", onChange, { passive: true });
+    const resized = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(onChange);
+    resized?.observe(scroller);
+    return () => {
+      scroller.removeEventListener("scroll", onChange);
+      resized?.disconnect();
+      cancelAnimationFrame(frame);
+    };
   }, [meListed, rows]);
 
   return (
@@ -189,7 +228,12 @@ export const LeaderboardPage = React.memo(function LeaderboardPage() {
               <LeaderboardHead />
               <TableBody>
                 {rows.map((e) => (
-                  <LeaderboardRow key={e.uid} entry={e} isMe={e.uid === myUid} />
+                  <LeaderboardRow
+                    key={e.uid}
+                    entry={e}
+                    isMe={e.uid === myUid}
+                    stuck={e.uid === myUid ? stuck : undefined}
+                  />
                 ))}
               </TableBody>
             </Table>
@@ -202,7 +246,7 @@ export const LeaderboardPage = React.memo(function LeaderboardPage() {
           {scope === "all" && <PagedListStatus pages={pages} />}
         </InfiniteScrollContainer>
       </div>
-      {me && !meInView && !search && (
+      {me && !meListed && !search && (
         <div className={styles.me} data-testid="leaderboard-me">
           <Table size="small">
             <TableBody>
@@ -239,13 +283,16 @@ export const LeaderboardHead = React.memo(function LeaderboardHead() {
 export const LeaderboardRow = React.memo(function LeaderboardRow({
   entry,
   isMe,
+  stuck,
 }: {
   entry: LeaderboardEntry;
   isMe: boolean;
+  /** The player's own row in the list, stuck to the list's top or foot (see LeaderboardPage). */
+  stuck?: "top" | "bottom" | null;
 }) {
   const strong = isMe ? { fontWeight: "bold" } : undefined;
   return (
-    <TableRow data-me={isMe || undefined} className={isMe ? styles.meRow : undefined}>
+    <TableRow data-me={isMe || undefined} data-stuck={stuck ?? undefined} className={isMe ? styles.meRow : undefined}>
       <TableCell sx={{ whiteSpace: "nowrap", ...strong }}>
         <span style={positionStyle}>{entry.position}</span>
         <PositionChange change={entry.positionChange} />

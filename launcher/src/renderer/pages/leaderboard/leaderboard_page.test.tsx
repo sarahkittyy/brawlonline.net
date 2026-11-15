@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, fireEvent, render, waitFor } from "@testing-library/react";
+import { fireEvent, render, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import type { LeaderboardEntry, LeaderboardPage as Page } from "@/services/backend/types";
@@ -20,11 +20,13 @@ const entry = (position: number, displayName: string, connectCode: string): Lead
 const everyone = [entry(1, "ann", "ANN#1"), entry(2, "bob", "BOB#2"), entry(3, "annie", "ANNI#3")];
 
 const calls: { after?: string; search?: string }[] = [];
+let firstPage: number | undefined;
 const fetchLeaderboard = vi.fn(async (after?: string, search?: string): Promise<Page> => {
   calls.push({ after, search });
   const q = search?.toLowerCase() ?? "";
   const entries = everyone.filter((e) => e.displayName.includes(q) || e.connectCode.toLowerCase().includes(q));
-  return { entries, next: null, total: everyone.length };
+  // (A first page of `firstPage` rows when a test sets it: the rest not loaded yet.)
+  return { entries: search ? entries : entries.slice(0, firstPage), next: null, total: everyone.length };
 });
 
 vi.mock("@/services", () => ({
@@ -82,36 +84,25 @@ describe("LeaderboardPage search", () => {
 });
 
 describe("LeaderboardPage own row", () => {
-  it("pins the player's own row under the list whenever their row in the list isn't on screen", async () => {
-    account = { user: { uid: "u2" }, userData: { playKey: { connectCode: "BOB#2" } } };
-    // The list's row seen or not, as the IntersectionObserver says.
-    const observers: ((entries: { intersectionRatio: number }[]) => void)[] = [];
-    vi.stubGlobal(
-      "IntersectionObserver",
-      class {
-        constructor(cb: (entries: { intersectionRatio: number }[]) => void) {
-          observers.push(cb);
-        }
-        observe() {}
-        disconnect() {}
-      },
-    );
+  it("is pinned under the list until it loads, then sticks in the list (to the top or the foot when away)", async () => {
     try {
-      const { container, queryByTestId } = renderPage();
-      await waitFor(() => expect(names(container)).toContain("bob"));
-      await waitFor(() => expect(queryByTestId("leaderboard-me")).not.toBeNull());
-      const seen = (ratio: number) => act(() => observers[observers.length - 1]([{ intersectionRatio: ratio }]));
+      // annie (#3) isn't on the first page: pinned under the list.
+      firstPage = 2;
+      account = { user: { uid: "u3" }, userData: { playKey: { connectCode: "ANNI#3" } } };
+      const first = renderPage();
+      await waitFor(() => expect(first.queryByTestId("leaderboard-me")).not.toBeNull());
+      expect(names(first.container).slice(0, 2)).toEqual(["ann", "bob"]);
+      first.unmount();
 
-      seen(1);
-      expect(queryByTestId("leaderboard-me")).toBeNull();
-      // Scrolled away again: pinned again (it used to stay gone once the row had loaded).
-      seen(0);
-      expect(queryByTestId("leaderboard-me")).not.toBeNull();
-      // Half in view isn't in view.
-      seen(0.5);
-      expect(queryByTestId("leaderboard-me")).not.toBeNull();
+      // bob (#2) is: no pinned row, his row in the list is the sticky one.
+      firstPage = undefined;
+      account = { user: { uid: "u2" }, userData: { playKey: { connectCode: "BOB#2" } } };
+      const second = renderPage();
+      await waitFor(() => expect(names(second.container)).toEqual(["ann", "bob", "annie"]));
+      await waitFor(() => expect(second.container.querySelector("tbody tr[data-me]")).not.toBeNull());
+      expect(second.queryByTestId("leaderboard-me")).toBeNull();
     } finally {
-      vi.unstubAllGlobals();
+      firstPage = undefined;
       account = { user: null };
     }
   });
