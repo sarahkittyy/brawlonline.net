@@ -220,3 +220,12 @@ Not done:
 - **One player search** for Match history, Replays and Highlights (`components/player_search/`): suggestions with a picture, name and code; a pick is a tag of the code with an X; several tags keep what all of them are in. Match history's suggestions are the server's (`/v1/me/opponents`); Replays' and Highlights' are the players of the replays on this computer, the most games first (`searchPlayers`, the replay database's player table). In those two, what is typed still filters as before (Replays' query language, Highlights' name or code); a tag adds `code:` to Replays' query.
 - **Highlights' bars:** the top bar is the search and the sort, on one line; the render buttons and One combo movie moved to a bar at the bottom of the list with the keys' hint (the hint goes on a narrow list). Both bars are the page's colour with a line between them and the rows. The category list is on the page's colour too, a line on its right, the open one raised as in the app's sidebar (it was darker than the page, the open one the page's colour).
 - **Replays:** the search first, then Refresh (an icon now, its label a tooltip), the sort and Hide short games: one line at the default window.
+
+## 13. Rulesets at any size (Sarah's board, 2026-11-14)
+
+The page had fixed column widths (320 + 380 px) wider than the room beside the sidebar and an open players rail, so rows ran under their buttons, the footers' buttons squeezed into walls of one word a line, and a setting's help went one word a line beside its control. Now:
+- the page's words are behind an info icon by the title (as on Other Games);
+- the list and an open ruleset sit side by side only when the page has 760 px; narrower, the open ruleset takes the page and Close brings the list back;
+- a row's buttons go under its name, on the right, when they don't fit beside it; its line of code and summary is cut short instead of running under them;
+- an open ruleset's title is smaller and wraps; Copy link and Use sit by its code, the footer has only Close, Hide and Edit; footer buttons wrap whole, never their words;
+- an editor setting's control goes under its name and help when they don't fit side by side.

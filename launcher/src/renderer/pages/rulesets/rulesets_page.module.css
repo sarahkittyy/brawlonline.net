@@ -8,13 +8,14 @@
   padding: 20px 20px 0;
   box-sizing: border-box;
   overflow: hidden;
+  container-type: inline-size;
 }
 
 .listColumn {
   display: flex;
   flex-direction: column;
   flex: 1 1 0;
-  min-width: 320px;
+  min-width: 0;
   min-height: 0;
 }
 
@@ -22,25 +23,51 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: 8px 12px;
   flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+.titleRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.info {
+  display: inline-flex;
+  color: var(--text-secondary);
+  cursor: help;
 }
 
 .headerActions {
   display: flex;
+  align-items: center;
   gap: 8px;
 }
 
-.intro {
-  margin: 8px 0 12px;
-  max-width: 70ch;
+.headerActions button {
+  white-space: nowrap;
+}
+
+/* Too narrow for the list and an open ruleset side by side: the open one takes the page (Close brings the list back). */
+@container (max-width: 760px) {
+  .page[data-open] .listColumn {
+    display: none;
+  }
+
+  .page[data-open] .editorColumn {
+    padding-left: 0;
+    border-left: none;
+  }
 }
 
 .lists {
   flex: 1;
   min-height: 0;
-  overflow-y: auto;
+  overflow: hidden auto;
   padding-bottom: 20px;
+  container-type: inline-size;
 }
 
 .listTitleRow {
@@ -61,10 +88,12 @@
   padding: 4px 0 8px;
 }
 
+/* The name and its line, the buttons on the right; when they don't fit beside it, the buttons go under, on the right. */
 .item {
   display: flex;
   align-items: center;
-  gap: 8px;
+  flex-wrap: wrap;
+  gap: 0 8px;
   padding: 6px 8px;
   border-radius: 8px;
   background-color: rgb(255 255 255 / 4%);
@@ -82,7 +111,7 @@
 .itemMain {
   display: flex;
   flex-direction: column;
-  flex: 1;
+  flex: 1 1 220px;
   min-width: 0;
   background: none;
   border: none;
@@ -112,6 +141,8 @@ button.itemMain {
 .itemMeta {
   display: flex;
   gap: 10px;
+  min-width: 0;
+  max-width: 100%;
   font-size: 12px;
   color: var(--text-secondary);
 }
@@ -121,6 +152,11 @@ button.itemMain {
   align-items: center;
   gap: 2px;
   flex-shrink: 0;
+  margin-left: auto;
+}
+
+.itemActions button {
+  white-space: nowrap;
 }
 
 .code {
@@ -178,7 +214,7 @@ button.itemMain {
   display: flex;
   flex-direction: column;
   flex: 1.2 1 0;
-  min-width: 380px;
+  min-width: 0;
   min-height: 0;
   border-left: 1px solid rgb(255 255 255 / 10%);
   padding-left: 20px;
@@ -187,7 +223,16 @@ button.itemMain {
 .editorHeader {
   display: flex;
   align-items: baseline;
-  gap: 12px;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+}
+
+/* (The theme's display font at h6 size took three lines for a name and its publisher.) */
+.editorTitle {
+  min-width: 0;
+  font-size: 1.15rem !important;
+  line-height: 1.25 !important;
+  overflow-wrap: anywhere;
 }
 
 .unsaved {
@@ -202,16 +247,18 @@ button.itemMain {
   padding: 12px 8px 12px 0;
 }
 
+/* Its words on the left, the buttons on the right; buttons that don't fit go to the next line, each on one line. */
 .editorFooter {
   display: flex;
   align-items: center;
-  gap: 12px;
+  flex-wrap: wrap;
+  gap: 8px 12px;
   padding: 10px 0 14px;
   border-top: 1px solid rgb(255 255 255 / 10%);
 }
 
 .problem {
-  flex: 1;
+  flex: 1 1 160px;
   min-width: 0;
   font-size: 13px;
   color: #f28b82;
@@ -224,8 +271,15 @@ button.itemMain {
 .footerButtons {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   gap: 8px;
-  flex-shrink: 0;
+  margin-left: auto;
+}
+
+.editorFooter button,
+.editorFooter .inUse {
+  white-space: nowrap;
 }
 
 .editorFields {
@@ -247,16 +301,20 @@ button.itemMain {
   font-size: 12px;
 }
 
+/* A setting: its name and help on the left, its control on the right, or under them when the column is narrow (the
+   help no longer squeezed into a word a line beside a wide control, Sarah's board). */
 .row {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   justify-content: space-between;
-  gap: 16px;
+  gap: 6px 16px;
   min-height: 36px;
 }
 
 .rowLabel {
   display: flex;
+  flex: 1 1 200px;
   flex-direction: column;
   min-width: 0;
 }
@@ -269,8 +327,10 @@ button.itemMain {
 .rowControl {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 6px;
-  flex-shrink: 0;
+  max-width: 100%;
+  margin-left: auto;
 }
 
 .centered {
@@ -354,9 +414,13 @@ button.itemMain {
 .viewActions {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 4px;
-  flex: 1;
-  min-width: 0;
+}
+
+.viewActions button,
+.viewActions .inUse {
+  white-space: nowrap;
 }
 
 .previewTitle {
