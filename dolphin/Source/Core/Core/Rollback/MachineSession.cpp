@@ -1721,6 +1721,16 @@ std::string LanHost(const ENetAddress& towards)
 // open, and mm passes on a new address if it changed anyway (nothing when it is the same).
 constexpr auto PROBE_REFRESH = std::chrono::seconds(15);
 
+// A probe that 15 attempts got no answer for (about 2 min). It goes on at PROBE_REFRESH's pace:
+// until mm has the endpoint no joiner even tries to reach this player, and a router can block the
+// way to mm for a while and then let it through again. Bug report #296 (SAUZ#378's REX room,
+// 2026-11-15): their router gave the new session's socket the public port 1025, which the
+// session it had closed 7 s before had used toward mm too, and nothing from mm came back on it
+// (most likely the closed session's NAT entry, which a router keeps for 2-3 min after the last
+// packet); ONYX#210's two joins in those 112 s got "no link ... 0 hellos", the probe then gave
+// up (only a change in the room started it again), and the room the host opened next worked.
+const std::string PROBE_NO_ANSWER = "failed: the server did not answer";
+
 // Net thread: the endpoint probe (docs/design/brawl-mods.md §5): a connection of its own to mm
 // from the session's socket, one `mods-endpoint` message, closed by mm after its answer.
 void StepProbe(Clock::time_point now)
@@ -1742,6 +1752,13 @@ void StepProbe(Clock::time_point now)
     if (now - pr.last < PROBE_REFRESH)
       return;
   }
+  else if (pr.state == PROBE_NO_ANSWER)
+  {
+    // Still tried, as often as a refresh; its answer logs "answered (attempt N)".
+    if (now - pr.last < PROBE_REFRESH)
+      return;
+    ++pr.attempts;
+  }
   else if (pr.state != "probing" || now - pr.last < std::chrono::seconds(2))
   {
     return;
@@ -1749,8 +1766,8 @@ void StepProbe(Clock::time_point now)
   else if (++pr.attempts > 15)
   {
     pr.last = now;
-    pr.state = "failed: the server did not answer";
-    AddLog("endpoint probe: the server did not answer");
+    pr.state = PROBE_NO_ANSWER;
+    AddLog("endpoint probe: the server did not answer; trying again every 15 s");
     return;
   }
   pr.last = now;
@@ -2570,10 +2587,18 @@ void LogNoLink(PeerLink& p, Clock::time_point now)
                        p.connecting->state == ENET_PEER_STATE_CONNECTING ? "no answer" :
                        p.connecting->state == ENET_PEER_STATE_CONNECTED  ? "connected, no hello" :
                                                                            "answered, not connected";
+  // Without the probe's answer mm has no endpoint of this player to pass on, and the player never
+  // tries to reach this side (bug report #296).
+  const std::string probe =
+      s.probe.state.empty() || s.probe.state == "done" ?
+          "" :
+          fmt::format("; this player's endpoint probe to the server: {} (attempt {})",
+                      s.probe.state, s.probe.attempts);
   AddLog(fmt::format("no link to player {} ({}) at {}:{} after {} s: {} attempts from here "
-                     "(latest: {}), {} hellos on the other connection (only the lower slot's is kept)",
+                     "(latest: {}), {} hellos on the other connection (only the lower slot's is "
+                     "kept){}",
                      p.slot + 1, p.code, p.host, p.port, after.count(), p.attempts, latest,
-                     p.unkept_hellos));
+                     p.unkept_hellos, probe));
 }
 
 // Net thread, before anything is sent from the session's socket: a room session asks the router

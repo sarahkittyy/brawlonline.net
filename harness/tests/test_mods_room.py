@@ -431,7 +431,9 @@ class _ForgetfulNat:
     """A UDP NAT between one player's Dolphin and mm (127.0.0.1): each of the player's sockets gets
     a "public" socket of its own toward mm, forgotten once nothing went out on it for `idle`
     seconds, as a router or carrier-grade NAT forgets a mapping; the socket's next datagram gets a
-    new one, with a new port. Only what the player sends keeps a mapping (mm's answers do not)."""
+    new one, with a new port. Only what the player sends keeps a mapping (mm's answers do not).
+    While `deaf`, mm's answers to every socket but the first one (the room's connection to mm) are
+    dropped: a router whose way back from mm is closed to the session's socket (bug report #296)."""
 
     def __init__(self, mm_port: int, idle: float) -> None:
         self.mm = ("127.0.0.1", mm_port)
@@ -444,6 +446,9 @@ class _ForgetfulNat:
         self.maps: dict[tuple[str, int], list[Any]] = {}  # player's address -> [socket, last sent]
         self.lock = threading.Lock()
         self.run = True
+        self.deaf = False
+        self.first: tuple[str, int] | None = None
+        self.dropped = 0
         self.thread = threading.Thread(target=self._loop, daemon=True)
 
     def start(self) -> "_ForgetfulNat":
@@ -476,9 +481,13 @@ class _ForgetfulNat:
                             sock.bind(("127.0.0.1", 0))
                             self.sel.register(sock, selectors.EVENT_READ, src)
                             m = self.maps[src] = [sock, 0.0]
+                            self.first = self.first or src
                         m[1] = time.monotonic()
                         m[0].sendto(data, self.mm)
                     elif key.data in self.maps and src == self.mm:
+                        if self.deaf and key.data != self.first:
+                            self.dropped += 1
+                            continue
                         self.inner.sendto(data, key.data)
             with self.lock:
                 now = time.monotonic()
@@ -525,6 +534,44 @@ def test_the_room_keeps_the_hosts_endpoint_open(backend: OnlineBackend,
             assert len(seen) >= 3, seen
             assert len(re.findall(r"room: the server sees this player at", _log(host))) >= 3
         assert _log(host).count("machine: endpoint probe answered") == 1
+    finally:
+        nat.stop()
+
+
+def test_a_room_whose_probe_went_unanswered_takes_joiners_once_it_is(backend: OnlineBackend,
+                                                                     dolphin: Callable[..., DolphinInstance]) -> None:
+    """Bug report #296: SAUZ#378's REX room got no answer from mm to its endpoint probe for its
+    first 2 min (their router had just given the session's socket the public port the session
+    closed 7 s before had used toward mm), so mm had no endpoint of the host to pass on and ONYX#210's
+    two joins in that time got "no link ... 0 hellos". The probe gave up after 15 attempts; only
+    a change in the room started it again. Now it goes on every 15 s: here mm's answers to the
+    host's session socket are lost until after that give-up, then get through, and with nobody
+    joining in between, mm gets the host's endpoint and the next joiner joins."""
+    nat = _ForgetfulNat(backend.mm_port, 3600).start()
+    nat.deaf = True
+    try:
+        host_user = backend.create_user("hostd", "HSDF")
+        join_user = backend.create_user("joind", "JNDF")
+        host = _boot(dolphin, backend, "mods-deaf-host", host_user,
+                     {"host": True, "build": BUILD, "public": False, "controller": "gc"}, mm_port=nat.port)
+        code = _wait(lambda: (host.client.call("mods_status").get("room") or {}).get("code"), 60, "the room's code")
+
+        def endpoint() -> str:
+            room = host.client.call("mods_status").get("room") or {}
+            return next((s["endpoint"] for s in room.get("slots", []) if s.get("endpoint")), "")
+
+        _wait(lambda: "machine: endpoint probe: the server did not answer" in _log(host), 240,
+              "the probe's give-up", interval=2)
+        assert not endpoint() and nat.dropped > 0, nat.dropped
+        nat.deaf = False
+        _wait(endpoint, 40, "the host's endpoint", interval=1)
+        m = re.search(r"machine: endpoint probe answered \(attempt (\d+)\)", _log(host))
+        assert m and int(m.group(1)) > 15, _log(host)[-3000:]
+        joiner = _boot(dolphin, backend, "mods-deaf-join", join_user,
+                       {"join": code, "build": BUILD, "controller": "gc", "sd_sync": "yes"})
+        _wait(lambda: "machine: running" in _log(joiner), 90, "the joiner's session running", interval=1)
+        st = joiner.client.call("mods_status")
+        assert not st.get("error"), st
     finally:
         nat.stop()
 
