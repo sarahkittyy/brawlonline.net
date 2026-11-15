@@ -43,6 +43,18 @@ const std::string& GetScmRevGitStr()
   return scm_rev_git_str;
 }
 
+// The shader cache's entries carry it (VideoCommon/ShaderCache.cpp): see CMake/ScmRevGen.cmake.
+// A build that doesn't define it (not CMake's) keeps nothing from other builds.
+const std::string& GetShaderCompilerRevStr()
+{
+#ifdef SCM_SHADER_COMPILER_STR
+  static const std::string shader_compiler_rev_str = SCM_SHADER_COMPILER_STR;
+#else
+  static const std::string shader_compiler_rev_str = SCM_REV_STR;
+#endif
+  return shader_compiler_rev_str;
+}
+
 const std::string& GetScmDescStr()
 {
   static const std::string scm_desc_str = SCM_DESC_STR;

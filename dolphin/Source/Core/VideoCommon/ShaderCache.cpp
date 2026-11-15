@@ -5,14 +5,20 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstring>
+#include <string_view>
 #include <thread>
+#include <type_traits>
 #include <utility>
+#include <vector>
 
 #include <fmt/format.h>
+#include <xxh3.h>
 
 #include "Common/Assert.h"
 #include "Common/FileUtil.h"
 #include "Common/MsgHandler.h"
+#include "Common/Version.h"
 #include "Core/ConfigManager.h"
 
 #include "VideoCommon/AbstractGfx.h"
@@ -330,6 +336,145 @@ void ShaderCache::WaitForAsyncCompiler()
   g_presenter->Present();
 }
 
+// Fingerprints. Each disk cache entry starts with FINGERPRINTED_ENTRY_MAGIC and the fingerprint
+// of what it was made from, then the shader binary or the pipeline's cache data. A file's header
+// holds the git revision of the build that wrote it (LinearDiskCache), which every update changes,
+// though most updates change no shader: the first boot after each one compiled every shader
+// again (GitHub issue #50; the white menus of c8c89fd7). A file of another build is read entry by
+// entry instead: a shader is kept if the source this build generates for its UID, with the same
+// compiler code (Common::GetShaderCompilerRevStr: the backends, glslang, SPIRV-Cross; any change
+// there compiles everything again), has the same fingerprint, and a pipeline if its shaders and
+// state do. The file is then written again with this build's header and the kept entries. A file
+// of this build is trusted as before. Entries without the magic (written before fingerprints)
+// are never used.
+namespace
+{
+constexpr u32 FINGERPRINTED_ENTRY_MAGIC = 0x31504653;  // "SFP1"
+constexpr size_t FINGERPRINT_PREFIX_SIZE = sizeof(u32) + 2 * sizeof(u64);
+
+std::vector<u8> MakeFingerprintedEntry(const ShaderCacheFingerprint& fingerprint, const u8* data,
+                                       size_t size)
+{
+  std::vector<u8> entry(FINGERPRINT_PREFIX_SIZE + size);
+  std::memcpy(entry.data(), &FINGERPRINTED_ENTRY_MAGIC, sizeof(u32));
+  std::memcpy(entry.data() + sizeof(u32), &fingerprint.low, sizeof(u64));
+  std::memcpy(entry.data() + sizeof(u32) + sizeof(u64), &fingerprint.high, sizeof(u64));
+  if (size != 0)
+    std::memcpy(entry.data() + FINGERPRINT_PREFIX_SIZE, data, size);
+  return entry;
+}
+
+struct FingerprintedEntry
+{
+  ShaderCacheFingerprint fingerprint;
+  const u8* data;
+  u32 size;
+};
+
+std::optional<FingerprintedEntry> ParseFingerprintedEntry(const u8* value, u32 value_size)
+{
+  u32 magic = 0;
+  if (value_size < FINGERPRINT_PREFIX_SIZE)
+    return std::nullopt;
+  std::memcpy(&magic, value, sizeof(u32));
+  if (magic != FINGERPRINTED_ENTRY_MAGIC)
+    return std::nullopt;
+  FingerprintedEntry entry;
+  std::memcpy(&entry.fingerprint.low, value + sizeof(u32), sizeof(u64));
+  std::memcpy(&entry.fingerprint.high, value + sizeof(u32) + sizeof(u64), sizeof(u64));
+  entry.data = value + FINGERPRINT_PREFIX_SIZE;
+  entry.size = value_size - static_cast<u32>(FINGERPRINT_PREFIX_SIZE);
+  return entry;
+}
+
+class FingerprintHasher
+{
+public:
+  // kind names what is hashed and how: change it with what a fingerprint covers.
+  FingerprintHasher(std::string_view kind, APIType api_type)
+  {
+    XXH3_INITSTATE(&m_state);
+    XXH3_128bits_reset(&m_state);
+    AddString(kind);
+    AddString(Common::GetShaderCompilerRevStr());
+    AddValue(api_type);
+  }
+
+  void AddString(std::string_view str)
+  {
+    AddValue(static_cast<u64>(str.size()));
+    XXH3_128bits_update(&m_state, str.data(), str.size());
+  }
+
+  template <typename T>
+  void AddValue(const T& value)
+  {
+    static_assert(std::is_trivially_copyable_v<T>);
+    XXH3_128bits_update(&m_state, &value, sizeof(T));
+  }
+
+  ShaderCacheFingerprint Finish()
+  {
+    const XXH128_hash_t hash = XXH3_128bits_digest(&m_state);
+    return {hash.low64, hash.high64};
+  }
+
+private:
+  XXH3_state_t m_state;
+};
+
+template <typename Uid>
+void AppendShader(Common::LinearDiskCache<Uid, u8>& disk_cache, const Uid& uid,
+                  const AbstractShader& shader, const ShaderCacheFingerprint& fingerprint)
+{
+  const AbstractShader::BinaryData binary = shader.GetBinary();
+  if (binary.empty())
+    return;
+  const std::vector<u8> entry = MakeFingerprintedEntry(fingerprint, binary.data(), binary.size());
+  disk_cache.Append(uid, entry.data(), static_cast<u32>(entry.size()));
+}
+
+template <typename Cache, typename Uid>
+bool HasCompiledShader(const Cache& cache, const Uid& uid)
+{
+  const auto it = cache.shader_map.find(uid);
+  return it != cache.shader_map.end() && !it->second.pending && it->second.shader;
+}
+
+template <typename Cache, typename Uid>
+std::optional<ShaderCacheFingerprint> FindShaderFingerprint(const Cache& cache, const Uid& uid)
+{
+  if (!HasCompiledShader(cache, uid))
+    return std::nullopt;
+  return cache.shader_map.find(uid)->second.fingerprint;
+}
+
+std::optional<ShaderCacheFingerprint>
+HashPipeline(APIType api_type, const AbstractPipelineConfig& config,
+             const std::optional<ShaderCacheFingerprint>& vs, bool needs_gs,
+             const std::optional<ShaderCacheFingerprint>& gs,
+             const std::optional<ShaderCacheFingerprint>& ps)
+{
+  if (!vs || !ps || (needs_gs && !gs))
+    return std::nullopt;
+  FingerprintHasher hasher("GX pipeline 1", api_type);
+  hasher.AddValue(config.usage);
+  hasher.AddValue(*vs);
+  hasher.AddValue(needs_gs);
+  if (needs_gs)
+    hasher.AddValue(*gs);
+  hasher.AddValue(*ps);
+  hasher.AddValue(config.rasterization_state.hex);
+  hasher.AddValue(config.depth_state.hex);
+  hasher.AddValue(config.blending_state.hex);
+  hasher.AddValue(config.framebuffer_state.hex);
+  hasher.AddValue(config.vertex_format != nullptr);
+  if (config.vertex_format)
+    hasher.AddValue(config.vertex_format->GetVertexDeclaration());
+  return hasher.Finish();
+}
+}  // namespace
+
 template <typename SerializedUidType, typename UidType>
 static void SerializePipelineUid(const UidType& uid, SerializedUidType& serialized_uid)
 {
@@ -362,39 +507,71 @@ void ShaderCache::LoadShaderCache(T& cache, APIType api_type, const char* type, 
   class CacheReader : public Common::LinearDiskCacheReader<K, u8>
   {
   public:
-    CacheReader(T& cache_) : cache(cache_) {}
+    CacheReader(const ShaderCache* this_ptr_, T& cache_) : this_ptr(this_ptr_), cache(cache_) {}
     void Read(const K& key, const u8* value, u32 value_size) override
     {
-      auto shader = g_gfx->CreateShaderFromBinary(stage, value, value_size);
-      if (shader)
-      {
-        auto& entry = cache.shader_map[key];
-        entry.shader = std::move(shader);
-        entry.pending = false;
-
-        switch (stage)
-        {
-        case ShaderStage::Vertex:
-          INCSTAT(g_stats.num_vertex_shaders_created);
-          INCSTAT(g_stats.num_vertex_shaders_alive);
-          break;
-        case ShaderStage::Pixel:
-          INCSTAT(g_stats.num_pixel_shaders_created);
-          INCSTAT(g_stats.num_pixel_shaders_alive);
-          break;
-        default:
-          break;
-        }
-      }
+      Load(key, value, value_size, false);
+    }
+    bool ReadFromOtherBuild(const K& key, const u8* value, u32 value_size) override
+    {
+      ++other_build_entries;
+      return Load(key, value, value_size, true);
     }
 
+    u32 other_build_entries = 0;
+
   private:
+    bool Load(const K& key, const u8* value, u32 value_size, bool other_build)
+    {
+      const std::optional<FingerprintedEntry> entry = ParseFingerprintedEntry(value, value_size);
+      if (!entry)
+        return false;
+      // Another build's: only if this build makes the same shader for the UID.
+      if (other_build &&
+          this_ptr->GetShaderFingerprint(this_ptr->GetShaderSource(key)) != entry->fingerprint)
+      {
+        return false;
+      }
+      const auto found = cache.shader_map.find(key);
+      if (found != cache.shader_map.end() && found->second.shader)
+        return false;
+      auto shader = g_gfx->CreateShaderFromBinary(stage, entry->data, entry->size);
+      if (!shader)
+        return false;
+
+      auto& map_entry = cache.shader_map[key];
+      map_entry.shader = std::move(shader);
+      map_entry.pending = false;
+      map_entry.fingerprint = entry->fingerprint;
+
+      switch (stage)
+      {
+      case ShaderStage::Vertex:
+        INCSTAT(g_stats.num_vertex_shaders_created);
+        INCSTAT(g_stats.num_vertex_shaders_alive);
+        break;
+      case ShaderStage::Pixel:
+        INCSTAT(g_stats.num_pixel_shaders_created);
+        INCSTAT(g_stats.num_pixel_shaders_alive);
+        break;
+      default:
+        break;
+      }
+      return true;
+    }
+
+    const ShaderCache* this_ptr;
     T& cache;
   };
 
   std::string filename = GetDiskShaderCacheFileName(api_type, type, include_gameid, true);
-  CacheReader reader(cache);
+  CacheReader reader(this, cache);
   u32 count = cache.disk_cache.OpenAndRead(filename, reader);
+  if (reader.other_build_entries != 0)
+  {
+    INFO_LOG_FMT(VIDEO, "Kept {} of {} shaders another build cached in {}", count,
+                 reader.other_build_entries, filename);
+  }
   INFO_LOG_FMT(VIDEO, "Loaded {} cached shaders from {}", count, filename);
 }
 
@@ -417,31 +594,60 @@ void ShaderCache::LoadPipelineCache(T& cache, Common::LinearDiskCache<DiskKeyTyp
     bool AnyFailed() const { return failed; }
     void Read(const DiskKeyType& key, const u8* value, u32 value_size) override
     {
+      Load(key, value, value_size, false);
+    }
+    bool ReadFromOtherBuild(const DiskKeyType& key, const u8* value, u32 value_size) override
+    {
+      ++other_build_entries;
+      return Load(key, value, value_size, true);
+    }
+
+    u32 other_build_entries = 0;
+
+  private:
+    bool Load(const DiskKeyType& key, const u8* value, u32 value_size, bool other_build)
+    {
+      const std::optional<FingerprintedEntry> entry = ParseFingerprintedEntry(value, value_size);
+      if (!entry)
+        return false;
+
       KeyType real_uid;
       UnserializePipelineUid(key, real_uid);
 
       // Skip those which are already compiled.
       if (failed || cache.contains(real_uid))
-        return;
+        return false;
+
+      // Another build's: not if a shader it needs wasn't kept (GetGXPipelineConfig would compile
+      // it here, while the game waits to start).
+      if (other_build && g_backend_info.bSupportsShaderBinaries &&
+          !this_ptr->HasPipelineShaders(real_uid))
+      {
+        return false;
+      }
 
       auto config = this_ptr->GetGXPipelineConfig(real_uid);
       if (!config)
-        return;
+        return false;
 
-      auto pipeline = g_gfx->CreatePipeline(*config, value, value_size);
+      // Another build's: only if this build makes the same shaders and state for the UID.
+      if (other_build && this_ptr->GetPipelineFingerprint(real_uid, *config) != entry->fingerprint)
+        return false;
+
+      auto pipeline = g_gfx->CreatePipeline(*config, entry->data, entry->size);
       if (!pipeline)
       {
         // If any of the pipelines fail to create, consider the cache stale.
         failed = true;
-        return;
+        return false;
       }
 
-      auto& entry = cache[real_uid];
-      entry.first = std::move(pipeline);
-      entry.second = false;
+      auto& map_entry = cache[real_uid];
+      map_entry.first = std::move(pipeline);
+      map_entry.second = false;
+      return true;
     }
 
-  private:
     ShaderCache* this_ptr;
     T& cache;
     bool failed = false;
@@ -450,6 +656,11 @@ void ShaderCache::LoadPipelineCache(T& cache, Common::LinearDiskCache<DiskKeyTyp
   std::string filename = GetDiskShaderCacheFileName(api_type, type, include_gameid, true);
   CacheReader reader(this, cache);
   const u32 count = disk_cache.OpenAndRead(filename, reader);
+  if (reader.other_build_entries != 0)
+  {
+    INFO_LOG_FMT(VIDEO, "Kept {} of {} pipelines another build cached in {}", count,
+                 reader.other_build_entries, filename);
+  }
   INFO_LOG_FMT(VIDEO, "Loaded {} cached pipelines from {}", count, filename);
 
   // If any of the pipelines in the cache failed to create, it's likely because of a change of
@@ -567,121 +778,150 @@ void ShaderCache::CompileMissingPipelines()
   }
 }
 
-std::unique_ptr<AbstractShader> ShaderCache::CompileVertexShader(const VertexShaderUid& uid) const
+ShaderCache::ShaderSource ShaderCache::GetShaderSource(const VertexShaderUid& uid) const
 {
-  const ShaderCode source_code =
-      GenerateVertexShaderCode(m_api_type, m_host_config, uid.GetUidData(), {});
-  return g_gfx->CreateShaderFromSource(ShaderStage::Vertex, source_code.GetBuffer());
+  return {ShaderStage::Vertex,
+          GenerateVertexShaderCode(m_api_type, m_host_config, uid.GetUidData(), {}).GetBuffer(),
+          {}};
 }
 
-std::unique_ptr<AbstractShader>
+ShaderCache::ShaderSource
+ShaderCache::GetShaderSource(const UberShader::VertexShaderUid& uid) const
+{
+  return {ShaderStage::Vertex,
+          UberShader::GenVertexShader(m_api_type, m_host_config, uid.GetUidData()).GetBuffer(),
+          fmt::to_string(*uid.GetUidData())};
+}
+
+ShaderCache::ShaderSource ShaderCache::GetShaderSource(const PixelShaderUid& uid) const
+{
+  return {ShaderStage::Pixel,
+          GeneratePixelShaderCode(m_api_type, m_host_config, uid.GetUidData(), {}).GetBuffer(),
+          {}};
+}
+
+ShaderCache::ShaderSource ShaderCache::GetShaderSource(const UberShader::PixelShaderUid& uid) const
+{
+  return {ShaderStage::Pixel,
+          UberShader::GenPixelShader(m_api_type, m_host_config, uid.GetUidData()).GetBuffer(),
+          fmt::to_string(*uid.GetUidData())};
+}
+
+ShaderCache::ShaderSource ShaderCache::GetShaderSource(const GeometryShaderUid& uid) const
+{
+  return {ShaderStage::Geometry,
+          GenerateGeometryShaderCode(m_api_type, m_host_config, uid.GetUidData()).GetBuffer(),
+          fmt::format("Geometry shader: {}", *uid.GetUidData())};
+}
+
+ShaderCacheFingerprint ShaderCache::GetShaderFingerprint(const ShaderSource& source) const
+{
+  FingerprintHasher hasher("GX shader 1", m_api_type);
+  hasher.AddValue(source.stage);
+  hasher.AddString(source.name);
+  hasher.AddString(source.code);
+  return hasher.Finish();
+}
+
+ShaderCache::CompiledShader ShaderCache::CompileShader(const ShaderSource& source) const
+{
+  return {g_gfx->CreateShaderFromSource(source.stage, source.code, nullptr, source.name),
+          GetShaderFingerprint(source)};
+}
+
+ShaderCache::CompiledShader ShaderCache::CompileVertexShader(const VertexShaderUid& uid) const
+{
+  return CompileShader(GetShaderSource(uid));
+}
+
+ShaderCache::CompiledShader
 ShaderCache::CompileVertexUberShader(const UberShader::VertexShaderUid& uid) const
 {
-  const ShaderCode source_code =
-      UberShader::GenVertexShader(m_api_type, m_host_config, uid.GetUidData());
-  return g_gfx->CreateShaderFromSource(ShaderStage::Vertex, source_code.GetBuffer(), nullptr,
-                                       fmt::to_string(*uid.GetUidData()));
+  return CompileShader(GetShaderSource(uid));
 }
 
-std::unique_ptr<AbstractShader> ShaderCache::CompilePixelShader(const PixelShaderUid& uid) const
+ShaderCache::CompiledShader ShaderCache::CompilePixelShader(const PixelShaderUid& uid) const
 {
-  const ShaderCode source_code =
-      GeneratePixelShaderCode(m_api_type, m_host_config, uid.GetUidData(), {});
-  return g_gfx->CreateShaderFromSource(ShaderStage::Pixel, source_code.GetBuffer());
+  return CompileShader(GetShaderSource(uid));
 }
 
-std::unique_ptr<AbstractShader>
+ShaderCache::CompiledShader
 ShaderCache::CompilePixelUberShader(const UberShader::PixelShaderUid& uid) const
 {
-  const ShaderCode source_code =
-      UberShader::GenPixelShader(m_api_type, m_host_config, uid.GetUidData());
-  return g_gfx->CreateShaderFromSource(ShaderStage::Pixel, source_code.GetBuffer(), nullptr,
-                                       fmt::to_string(*uid.GetUidData()));
+  return CompileShader(GetShaderSource(uid));
 }
 
 const AbstractShader* ShaderCache::InsertVertexShader(const VertexShaderUid& uid,
-                                                      std::unique_ptr<AbstractShader> shader)
+                                                      CompiledShader shader)
 {
   auto& entry = m_vs_cache.shader_map[uid];
   entry.pending = false;
 
-  if (shader && !entry.shader)
+  if (shader.shader && !entry.shader)
   {
     if (g_ActiveConfig.bShaderCache && g_backend_info.bSupportsShaderBinaries)
-    {
-      auto binary = shader->GetBinary();
-      if (!binary.empty())
-        m_vs_cache.disk_cache.Append(uid, binary.data(), static_cast<u32>(binary.size()));
-    }
+      AppendShader(m_vs_cache.disk_cache, uid, *shader.shader, shader.fingerprint);
     INCSTAT(g_stats.num_vertex_shaders_created);
     INCSTAT(g_stats.num_vertex_shaders_alive);
-    entry.shader = std::move(shader);
+    entry.shader = std::move(shader.shader);
+    entry.fingerprint = shader.fingerprint;
   }
 
   return entry.shader.get();
 }
 
 const AbstractShader* ShaderCache::InsertVertexUberShader(const UberShader::VertexShaderUid& uid,
-                                                          std::unique_ptr<AbstractShader> shader)
+                                                          CompiledShader shader)
 {
   auto& entry = m_uber_vs_cache.shader_map[uid];
   entry.pending = false;
 
-  if (shader && !entry.shader)
+  if (shader.shader && !entry.shader)
   {
     if (g_ActiveConfig.bShaderCache && g_backend_info.bSupportsShaderBinaries)
-    {
-      auto binary = shader->GetBinary();
-      if (!binary.empty())
-        m_uber_vs_cache.disk_cache.Append(uid, binary.data(), static_cast<u32>(binary.size()));
-    }
+      AppendShader(m_uber_vs_cache.disk_cache, uid, *shader.shader, shader.fingerprint);
     INCSTAT(g_stats.num_vertex_shaders_created);
     INCSTAT(g_stats.num_vertex_shaders_alive);
-    entry.shader = std::move(shader);
+    entry.shader = std::move(shader.shader);
+    entry.fingerprint = shader.fingerprint;
   }
 
   return entry.shader.get();
 }
 
 const AbstractShader* ShaderCache::InsertPixelShader(const PixelShaderUid& uid,
-                                                     std::unique_ptr<AbstractShader> shader)
+                                                     CompiledShader shader)
 {
   auto& entry = m_ps_cache.shader_map[uid];
   entry.pending = false;
 
-  if (shader && !entry.shader)
+  if (shader.shader && !entry.shader)
   {
     if (g_ActiveConfig.bShaderCache && g_backend_info.bSupportsShaderBinaries)
-    {
-      auto binary = shader->GetBinary();
-      if (!binary.empty())
-        m_ps_cache.disk_cache.Append(uid, binary.data(), static_cast<u32>(binary.size()));
-    }
+      AppendShader(m_ps_cache.disk_cache, uid, *shader.shader, shader.fingerprint);
     INCSTAT(g_stats.num_pixel_shaders_created);
     INCSTAT(g_stats.num_pixel_shaders_alive);
-    entry.shader = std::move(shader);
+    entry.shader = std::move(shader.shader);
+    entry.fingerprint = shader.fingerprint;
   }
 
   return entry.shader.get();
 }
 
 const AbstractShader* ShaderCache::InsertPixelUberShader(const UberShader::PixelShaderUid& uid,
-                                                         std::unique_ptr<AbstractShader> shader)
+                                                         CompiledShader shader)
 {
   auto& entry = m_uber_ps_cache.shader_map[uid];
   entry.pending = false;
 
-  if (shader && !entry.shader)
+  if (shader.shader && !entry.shader)
   {
     if (g_ActiveConfig.bShaderCache && g_backend_info.bSupportsShaderBinaries)
-    {
-      auto binary = shader->GetBinary();
-      if (!binary.empty())
-        m_uber_ps_cache.disk_cache.Append(uid, binary.data(), static_cast<u32>(binary.size()));
-    }
+      AppendShader(m_uber_ps_cache.disk_cache, uid, *shader.shader, shader.fingerprint);
     INCSTAT(g_stats.num_pixel_shaders_created);
     INCSTAT(g_stats.num_pixel_shaders_alive);
-    entry.shader = std::move(shader);
+    entry.shader = std::move(shader.shader);
+    entry.fingerprint = shader.fingerprint;
   }
 
   return entry.shader.get();
@@ -689,24 +929,17 @@ const AbstractShader* ShaderCache::InsertPixelUberShader(const UberShader::Pixel
 
 const AbstractShader* ShaderCache::CreateGeometryShader(const GeometryShaderUid& uid)
 {
-  const ShaderCode source_code =
-      GenerateGeometryShaderCode(m_api_type, m_host_config, uid.GetUidData());
-  std::unique_ptr<AbstractShader> shader =
-      g_gfx->CreateShaderFromSource(ShaderStage::Geometry, source_code.GetBuffer(), nullptr,
-                                    fmt::format("Geometry shader: {}", *uid.GetUidData()));
+  CompiledShader shader = CompileShader(GetShaderSource(uid));
 
   auto& entry = m_gs_cache.shader_map[uid];
   entry.pending = false;
 
-  if (shader && !entry.shader)
+  if (shader.shader && !entry.shader)
   {
     if (g_ActiveConfig.bShaderCache && g_backend_info.bSupportsShaderBinaries)
-    {
-      auto binary = shader->GetBinary();
-      if (!binary.empty())
-        m_gs_cache.disk_cache.Append(uid, binary.data(), static_cast<u32>(binary.size()));
-    }
-    entry.shader = std::move(shader);
+      AppendShader(m_gs_cache.disk_cache, uid, *shader.shader, shader.fingerprint);
+    entry.shader = std::move(shader.shader);
+    entry.fingerprint = shader.fingerprint;
   }
 
   return entry.shader.get();
@@ -872,6 +1105,57 @@ ShaderCache::GetGXPipelineConfig(const GXUberPipelineUid& config_in)
                              AbstractPipelineUsage::GXUber);
 }
 
+std::optional<ShaderCacheFingerprint>
+ShaderCache::GetPipelineFingerprint(const GXPipelineUid& uid,
+                                    const AbstractPipelineConfig& config) const
+{
+  // The shaders GetGXPipelineConfig uses for the UID.
+  const GXPipelineUid actual_uid = VideoCommon::ApplyDriverBugs(uid);
+  PixelShaderUid ps_uid = actual_uid.ps_uid;
+  ClearUnusedPixelShaderUidBits(m_api_type, m_host_config, &ps_uid);
+  const bool needs_gs = NeedsGeometryShader(actual_uid.gs_uid);
+  return HashPipeline(m_api_type, config, FindShaderFingerprint(m_vs_cache, actual_uid.vs_uid),
+                      needs_gs,
+                      needs_gs ? FindShaderFingerprint(m_gs_cache, actual_uid.gs_uid) : std::nullopt,
+                      FindShaderFingerprint(m_ps_cache, ps_uid));
+}
+
+std::optional<ShaderCacheFingerprint>
+ShaderCache::GetPipelineFingerprint(const GXUberPipelineUid& uid,
+                                    const AbstractPipelineConfig& config) const
+{
+  const GXUberPipelineUid actual_uid = ApplyDriverBugs(uid);
+  UberShader::PixelShaderUid ps_uid = actual_uid.ps_uid;
+  UberShader::ClearUnusedPixelShaderUidBits(m_api_type, m_host_config, &ps_uid);
+  const bool needs_gs = NeedsGeometryShader(actual_uid.gs_uid);
+  return HashPipeline(m_api_type, config,
+                      FindShaderFingerprint(m_uber_vs_cache, actual_uid.vs_uid), needs_gs,
+                      needs_gs ? FindShaderFingerprint(m_gs_cache, actual_uid.gs_uid) : std::nullopt,
+                      FindShaderFingerprint(m_uber_ps_cache, ps_uid));
+}
+
+bool ShaderCache::HasPipelineShaders(const GXPipelineUid& uid) const
+{
+  const GXPipelineUid actual_uid = VideoCommon::ApplyDriverBugs(uid);
+  PixelShaderUid ps_uid = actual_uid.ps_uid;
+  ClearUnusedPixelShaderUidBits(m_api_type, m_host_config, &ps_uid);
+  return HasCompiledShader(m_vs_cache, actual_uid.vs_uid) &&
+         HasCompiledShader(m_ps_cache, ps_uid) &&
+         (!NeedsGeometryShader(actual_uid.gs_uid) ||
+          HasCompiledShader(m_gs_cache, actual_uid.gs_uid));
+}
+
+bool ShaderCache::HasPipelineShaders(const GXUberPipelineUid& uid) const
+{
+  const GXUberPipelineUid actual_uid = ApplyDriverBugs(uid);
+  UberShader::PixelShaderUid ps_uid = actual_uid.ps_uid;
+  UberShader::ClearUnusedPixelShaderUidBits(m_api_type, m_host_config, &ps_uid);
+  return HasCompiledShader(m_uber_vs_cache, actual_uid.vs_uid) &&
+         HasCompiledShader(m_uber_ps_cache, ps_uid) &&
+         (!NeedsGeometryShader(actual_uid.gs_uid) ||
+          HasCompiledShader(m_gs_cache, actual_uid.gs_uid));
+}
+
 const AbstractPipeline* ShaderCache::InsertGXPipeline(const GXPipelineUid& config,
                                                       std::unique_ptr<AbstractPipeline> pipeline)
 {
@@ -885,12 +1169,16 @@ const AbstractPipeline* ShaderCache::InsertGXPipeline(const GXPipelineUid& confi
     if (g_ActiveConfig.bShaderCache)
     {
       auto cache_data = entry.first->GetCacheData();
-      if (!cache_data.empty())
+      const std::optional<ShaderCacheFingerprint> fingerprint =
+          cache_data.empty() ? std::nullopt : GetPipelineFingerprint(config, entry.first->m_config);
+      if (fingerprint)
       {
         SerializedGXPipelineUid disk_uid;
         SerializePipelineUid(config, disk_uid);
-        m_gx_pipeline_disk_cache.Append(disk_uid, cache_data.data(),
-                                        static_cast<u32>(cache_data.size()));
+        const std::vector<u8> disk_entry =
+            MakeFingerprintedEntry(*fingerprint, cache_data.data(), cache_data.size());
+        m_gx_pipeline_disk_cache.Append(disk_uid, disk_entry.data(),
+                                        static_cast<u32>(disk_entry.size()));
       }
     }
   }
@@ -911,12 +1199,16 @@ ShaderCache::InsertGXUberPipeline(const GXUberPipelineUid& config,
     if (g_ActiveConfig.bShaderCache)
     {
       auto cache_data = entry.first->GetCacheData();
-      if (!cache_data.empty())
+      const std::optional<ShaderCacheFingerprint> fingerprint =
+          cache_data.empty() ? std::nullopt : GetPipelineFingerprint(config, entry.first->m_config);
+      if (fingerprint)
       {
         SerializedGXUberPipelineUid disk_uid;
         SerializePipelineUid(config, disk_uid);
-        m_gx_uber_pipeline_disk_cache.Append(disk_uid, cache_data.data(),
-                                             static_cast<u32>(cache_data.size()));
+        const std::vector<u8> disk_entry =
+            MakeFingerprintedEntry(*fingerprint, cache_data.data(), cache_data.size());
+        m_gx_uber_pipeline_disk_cache.Append(disk_uid, disk_entry.data(),
+                                             static_cast<u32>(disk_entry.size()));
       }
     }
   }
@@ -1051,7 +1343,7 @@ void ShaderCache::QueueVertexShaderCompile(const VertexShaderUid& uid, u32 prior
 
   private:
     ShaderCache* shader_cache;
-    std::unique_ptr<AbstractShader> shader;
+    CompiledShader shader;
     VertexShaderUid uid;
   };
 
@@ -1082,7 +1374,7 @@ void ShaderCache::QueueVertexUberShaderCompile(const UberShader::VertexShaderUid
 
   private:
     ShaderCache* shader_cache;
-    std::unique_ptr<AbstractShader> shader;
+    CompiledShader shader;
     UberShader::VertexShaderUid uid;
   };
 
@@ -1111,7 +1403,7 @@ void ShaderCache::QueuePixelShaderCompile(const PixelShaderUid& uid, u32 priorit
 
   private:
     ShaderCache* shader_cache;
-    std::unique_ptr<AbstractShader> shader;
+    CompiledShader shader;
     PixelShaderUid uid;
   };
 
@@ -1142,7 +1434,7 @@ void ShaderCache::QueuePixelUberShaderCompile(const UberShader::PixelShaderUid& 
 
   private:
     ShaderCache* shader_cache;
-    std::unique_ptr<AbstractShader> shader;
+    CompiledShader shader;
     UberShader::PixelShaderUid uid;
   };
 
