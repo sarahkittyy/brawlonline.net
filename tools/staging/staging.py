@@ -21,11 +21,15 @@ Everything lives in run/staging/ on this PC (gitignored) and on the Mac in
     run/staging/cargo-target/ the staging server binaries, built from that commit
     run/staging/win/app/      the packaged Windows launcher (electron-builder's win-unpacked)
     run/staging/win/profiles/ launcher profiles (PPO_USER_DATA_DIR): settings, logins, Dolphin
-    ~/code/brawlonline.net/brawl-staging/  on the Mac: repo.git, src/, cache/, app/, profiles/
+    run/staging/pplus/        P+'s release zip, downloaded once for every profile
+    ~/code/brawlonline.net/brawl-staging/  on the Mac: repo.git, src/, cache/, app/, profiles/, pplus/
 
 A client is the packaged app, started in the launcher's test mode (PPO_TEST_MODE=1) with its own
 profile folder, so it never reads or writes the real install's settings, logins or Dolphin.
-`--fresh` deletes that profile first: the next start is a first run (ISO, P+ download, sign-up).
+`--fresh` deletes that profile first: the next start is a first run (ISO, P+ install, sign-up).
+A profile without P+ (new, or --fresh) gets the P+ release zip kept in run/staging/pplus (the
+Mac's pplus/) linked into its download folder, so the launcher installs P+ from it instead of
+downloading 1.9 GB again: only the first profile ever downloads it.
 The launcher talks to the staging accounts server (PPO_ACCOUNTS_URL), and its Dolphin gets the
 staging matchmaking server and accounts URL as -C overrides (PPO_DOLPHIN_EXTRA_ARGS). The update
 feed points at the staging server, so a staging build never updates itself to a release.
@@ -64,6 +68,9 @@ FAKE_STATE = STAGE / "fake-state.json"
 SRC = STAGE / "src"
 CARGO_TARGET = STAGE / "cargo-target"
 WIN = STAGE / "win"
+PPLUS_CACHE = STAGE / "pplus"
+# The launcher's pinned P+ release (PPLUS_RELEASE), in the commit a build is made from.
+PPLUS_RELEASE_TS = Path("launcher") / "src" / "dolphin" / "install" / "pplus_release.ts"
 PG_BIN = ROOT / "run" / "postgres-portable" / "pgsql" / "bin"
 IS_WINDOWS = os.name == "nt"
 EXE = ".exe" if IS_WINDOWS else ""
@@ -526,6 +533,122 @@ def resolve_ref(ref: str) -> str:
         raise
 
 
+# --------------------------------------------------------------------------- P+ for new profiles
+#
+# A profile's first start downloads P+'s release zip (1.9 GB) to <profile>/netplay/pplus/downloads,
+# installs P+ from it and deletes it. The launcher uses a zip it finds there if it verifies
+# (installProjectPlusFiles), so a profile without P+ gets a hard link to the one zip staging keeps:
+# after the first, no profile downloads P+ again, and the install is still the launcher's own.
+
+
+def pinned_pplus(ts: str) -> dict | None:
+    """PPLUS_RELEASE's version, url, size and sha256 from pplus_release.ts's text (None if absent)."""
+    m = re.search(r"PPLUS_RELEASE\b[^=]*=\s*\{(.*?)\n\};", ts, re.S)
+    if not m:
+        return None
+    rel = {}
+    for key in ("version", "url", "size", "sha256"):
+        f = re.search(rf'^\s*{key}:\s*"?([^",\n]+)"?,', m.group(1), re.M)
+        if not f:
+            return None
+        rel[key] = f.group(1).strip()
+    rel["size"] = int(rel["size"].replace("_", ""))
+    return rel
+
+
+def download_pplus(rel: dict, dest: Path) -> None:
+    """Downloads the release zip to `dest` (continuing a .part an earlier try left) and checks its
+    size and sha256 as the launcher does."""
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    part = dest.with_name(dest.name + ".part")
+    have = part.stat().st_size if part.exists() else 0
+    if have > rel["size"]:
+        part.unlink()
+        have = 0
+    if have < rel["size"]:
+        say(f"downloading Project+ {rel['version']} once for every staging profile: {rel['url']}"
+            + (f" (from byte {have})" if have else ""))
+        headers = {"User-Agent": "brawl-staging"} | ({"Range": f"bytes={have}-"} if have else {})
+        with urllib.request.urlopen(urllib.request.Request(rel["url"], headers=headers), timeout=60) as r:
+            resumed = have > 0 and r.status == 206
+            done = have if resumed else 0
+            shown = done
+            with open(part, "ab" if resumed else "wb") as f:
+                while chunk := r.read(1 << 20):
+                    f.write(chunk)
+                    done += len(chunk)
+                    if done - shown >= rel["size"] // 10:
+                        shown = done
+                        say(f"  {done * 100 // rel['size']}%")
+    h = hashlib.sha256()
+    with open(part, "rb") as f:
+        while chunk := f.read(8 << 20):
+            h.update(chunk)
+    size = part.stat().st_size
+    if size != rel["size"] or h.hexdigest() != rel["sha256"]:
+        part.unlink()
+        die(f"the Project+ {rel['version']} download has {size} bytes, sha256 {h.hexdigest()}; "
+            f"expected {rel['size']}, {rel['sha256']} (deleted: run again)")
+    part.replace(dest)
+    say(f"kept {dest} for every staging profile")
+
+
+def seed_pplus_win(profile: Path) -> None:
+    """Gives a Windows profile without P+ (new, or --fresh) the kept release zip (see above)."""
+    ts = SRC / PPLUS_RELEASE_TS
+    rel = pinned_pplus(ts.read_text(encoding="utf-8")) if ts.exists() else None
+    if not rel:
+        say(f"warning: no PPLUS_RELEASE in {ts}: the launcher downloads P+ itself")
+        return
+    try:
+        if json.loads((profile / "netplay" / "pplus" / "pplus.json").read_text()).get("version") == rel["version"]:
+            return
+    except (OSError, ValueError, AttributeError):
+        pass
+    name = f"pplus-{rel['version']}.zip"
+    kept = PPLUS_CACHE / name
+    if not kept.exists():
+        download_pplus(rel, kept)
+    dest = profile / "netplay" / "pplus" / "downloads" / name
+    if not dest.exists():
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            os.link(kept, dest)  # the launcher deletes it after the install; the kept one stays
+        except OSError:
+            shutil.copy2(kept, dest)
+    say(f"profile {profile.name} installs Project+ {rel['version']} from {kept} (no download)")
+
+
+def mac_seed_pplus(rel: dict, profile: str) -> str:
+    """seed_pplus_win's script for a Mac profile (zip kept in brawl-staging/pplus). A failed
+    download only warns: the launcher then downloads P+ itself."""
+    q = shlex.quote
+    name = f"pplus-{rel['version']}.zip"
+    marker = f'"version": "{rel["version"]}"'
+    return f"""
+if ! grep -qsF {q(marker)} "{profile}/netplay/pplus/pplus.json"; then
+  Z="{MAC_HOME}/pplus/{name}"; D="{profile}/netplay/pplus/downloads"
+  if [ ! -f "$Z" ]; then
+    mkdir -p "{MAC_HOME}/pplus"
+    echo "[staging] downloading Project+ {rel['version']} once for every staging profile"
+    if [ "$(stat -f %z "$Z.part" 2>/dev/null || echo 0)" = {rel['size']} ] || curl -fsSL --retry 3 -C - -o "$Z.part" {q(rel['url'])}; then
+      if [ "$(stat -f %z "$Z.part")" = {rel['size']} ] && [ "$(shasum -a 256 "$Z.part" | cut -d' ' -f1)" = {rel['sha256']} ]; then
+        mv "$Z.part" "$Z"
+      else
+        rm -f "$Z.part"; echo "[staging] warning: the Project+ download did not verify (deleted)"
+      fi
+    else
+      echo "[staging] warning: the Project+ download failed"
+    fi
+  fi
+  if [ -f "$Z" ]; then
+    mkdir -p "$D"; [ -e "$D/{name}" ] || ln "$Z" "$D/{name}" || cp "$Z" "$D/{name}"
+    echo "[staging] profile {profile.rsplit('/', 1)[-1]} installs Project+ {rel['version']} from $Z (no download)"
+  fi
+fi
+"""
+
+
 # --------------------------------------------------------------------------- Windows client
 
 
@@ -835,6 +958,7 @@ def win_run(args: argparse.Namespace) -> None:
     if args.fresh:
         win_reset(args)
     profile.mkdir(parents=True, exist_ok=True)
+    seed_pplus_win(profile)
     env = dict(os.environ, **client_env(cfg, profile))
     flags = 0x00000008 | 0x00000200  # detached, own process group
     subprocess.Popen([str(exe)], cwd=exe.parent, env=env, creationflags=flags,
@@ -1022,8 +1146,15 @@ def mac_run(args: argparse.Namespace) -> None:
     profile = f"{MAC_HOME}/profiles/{args.profile}"
     envs = " ".join(f"--env {shlex.quote(f'{k}={v}')}" for k, v in client_env(cfg, Path("PROFILE")).items()
                     if k != "PPO_USER_DATA_DIR")
+    # The P+ release the Mac's build pins (its src/ is the commit it was built from).
+    ts = subprocess.run([*mac_target(cfg), f'cat "{MAC_HOME}/src/{PPLUS_RELEASE_TS.as_posix()}"'],
+                        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60).stdout
+    rel = pinned_pplus(ts)
+    if not rel:
+        say("warning: no PPLUS_RELEASE in the Mac's src/: the launcher downloads P+ itself")
     mac(cfg, f'[ -d "{MAC_APP}" ] || {{ echo "no macOS staging build yet: mac build" >&2; exit 1; }}; '
-             f'mkdir -p "{profile}"; open -n {envs} --env "PPO_USER_DATA_DIR={profile}" "{MAC_APP}"')
+             f'mkdir -p "{profile}"; {mac_seed_pplus(rel, profile) if rel else ""}\n'
+             f'open -n {envs} --env "PPO_USER_DATA_DIR={profile}" "{MAC_APP}"')
     say(f"started the macOS client on {cfg['mac_host']}, profile ~/code/brawlonline.net/brawl-staging/profiles/{args.profile}")
 
 

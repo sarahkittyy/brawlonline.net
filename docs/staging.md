@@ -29,6 +29,7 @@ python tools/staging/staging.py down                 # stop clients and server; 
 | Windows profiles | `run/staging/win/profiles/<name>` | `win reset` / `run --fresh` delete one |
 | Mac build | `~/code/brawlonline.net/brawl-staging/src`, app in `~/code/brawlonline.net/brawl-staging/app/Brawl Online Staging.app` | rebuilt by `mac build` |
 | Mac profiles | `~/code/brawlonline.net/brawl-staging/profiles/<name>` | `mac reset` / `run --fresh` |
+| P+ release zip | `run/staging/pplus/pplus-<version>.zip` (Mac: `~/code/brawlonline.net/brawl-staging/pplus/`) | kept; downloaded once per P+ release |
 
 Ports and addresses are in `run/staging/config.json` (written on first use, with the database
 password and play-key secret). The LAN IP is the one that reaches the Mac; edit `lan_ip` there if
@@ -136,8 +137,14 @@ ratings, and deletes the state file, which turns the live fakes off at once.
 - Windows asks once whether `accounts.exe`, `mm.exe` and the staging `Dolphin.exe` may accept
   connections. Allow them on private networks, or the Mac can't reach the server or play against
   this PC.
-- A fresh profile goes through the real first run: pick the Brawl ISO, download P+, sign up. Sign-up
+- A fresh profile goes through the real first run: pick the Brawl ISO, install P+, sign up. Sign-up
   needs the verification link: `server mail` prints it, or `server verify <email>` skips it.
+- P+ is downloaded once, not by every profile. `win run` / `mac run` give a profile without the
+  launcher's pinned P+ release (a new profile, `--fresh`, or one on an older release) a hard link to
+  the kept release zip in its `netplay/pplus/downloads/`, where the launcher looks for a download it
+  can reuse: it checks the zip's sha256 and installs P+ from it (the install's own progress, no
+  download), then deletes its link. The first time, `run` downloads the zip itself (1.9 GB) and keeps
+  it. The release is the one `pplus_release.ts` pins in the commit that was built.
 - The Mac connection settings (`mac_host`, `mac_user`, `mac_key`, `mac_qt`, `mac_ssh`) are in the
   config file. On Windows the Mac commands use Git's `ssh`/`scp` (`<Git>\usr\bin`), not Windows'
   own: its OpenSSH 9.5 stopped passing on a remote command's output after the first chunk and never
