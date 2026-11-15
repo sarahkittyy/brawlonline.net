@@ -1,6 +1,7 @@
 // Copyright 2008 Dolphin Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include "Core/PowerPC/BranchProfile.h"
 #include "Core/PowerPC/Jit64/Jit.h"
 
 #include <algorithm>
@@ -304,6 +305,7 @@ void Jit64::Init()
   code_block.m_gpa = &js.gpa;
   code_block.m_fpa = &js.fpa;
   EnableOptimization();
+  BranchProfile::Init();
 
   ResetFreeMemoryRanges();
 }
@@ -345,6 +347,7 @@ void Jit64::ResetFreeMemoryRanges()
 
 void Jit64::Shutdown()
 {
+  BranchProfile::Shutdown();
   FreeCodeSpace();
 
   auto& memory = m_system.GetMemory();
@@ -1567,6 +1570,7 @@ void Jit64::EnableOptimization()
   analyzer.SetOption(PPCAnalyst::PPCAnalyzer::OPTION_CROR_MERGE);
   analyzer.SetOption(PPCAnalyst::PPCAnalyzer::OPTION_CARRY_MERGE);
   analyzer.SetOption(PPCAnalyst::PPCAnalyzer::OPTION_BRANCH_FOLLOW);
+  analyzer.SetOption(PPCAnalyst::PPCAnalyzer::OPTION_BRANCH_PROFILE);
 }
 
 void Jit64::IntializeSpeculativeConstants()

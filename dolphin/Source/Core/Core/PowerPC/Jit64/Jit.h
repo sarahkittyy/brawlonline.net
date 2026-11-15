@@ -142,6 +142,11 @@ public:
   template <bool condition>
   void WriteBranchWatch(u32 origin, u32 destination, UGeckoInstruction inst, BitSet32 caller_save);
   void WriteBranchWatchDestInRSCRATCH(u32 origin, UGeckoInstruction inst, BitSet32 caller_save);
+  // BranchProfile: the exit of a conditional branch whose taken side the block goes on with, and
+  // a recording's count of one side of a branch (clobbers RSCRATCH and the flags).
+  void WriteNotTakenExit(const Gen::FixupBranch& not_taken, u32 branch_address,
+                         UGeckoInstruction inst);
+  void CountBranch(u32* counter);
 
   bool Cleanup();
 

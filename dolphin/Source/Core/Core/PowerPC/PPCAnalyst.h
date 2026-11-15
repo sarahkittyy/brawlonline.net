@@ -14,6 +14,11 @@
 
 class PPCSymbolDB;
 
+namespace BranchProfile
+{
+struct Counts;
+}
+
 namespace Common
 {
 struct Symbol;
@@ -51,6 +56,10 @@ struct CodeOp  // 16B
   bool canCauseException = false;
   bool skipLRStack = false;
   bool skip = false;  // followed BL-s for example
+  // BranchProfile: the block goes on at this conditional branch's target (not taken leaves it),
+  // or a recording counts the branch's two sides here.
+  bool followTaken = false;
+  BranchProfile::Counts* branchCounts = nullptr;
   BitSet8 crWillBeRead;
   BitSet8 crWillBeWritten;
   BitSet8 crDiscardable;
@@ -174,6 +183,11 @@ public:
 
     // Reorder cror instructions next to their associated fcmp.
     OPTION_CROR_MERGE = (1 << 6),
+
+    // Go on at the target of a conditional branch that the profile says is taken nearly every
+    // time (BranchProfile.h). Requires JIT support: CodeOp::followTaken and
+    // CodeOp::branchCounts.
+    OPTION_BRANCH_PROFILE = (1 << 7),
   };
 
   // Option setting/getting

@@ -570,6 +570,8 @@ add_library(core
   PowerPC/MMU.h
   PowerPC/PowerPC.cpp
   PowerPC/PowerPC.h
+  PowerPC/BranchProfile.cpp
+  PowerPC/BranchProfile.h
   PowerPC/PPCAnalyst.cpp
   PowerPC/PPCAnalyst.h
   PowerPC/PPCCache.cpp

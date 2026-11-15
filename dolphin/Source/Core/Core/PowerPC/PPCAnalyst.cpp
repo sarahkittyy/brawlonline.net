@@ -16,6 +16,7 @@
 #include "Core/ConfigManager.h"
 #include "Core/Core.h"
 #include "Core/HLE/HLE.h"
+#include "Core/PowerPC/BranchProfile.h"
 #include "Core/PowerPC/JitCommon/JitBase.h"
 #include "Core/PowerPC/MMU.h"
 #include "Core/PowerPC/PPCSymbolDB.h"
@@ -851,9 +852,13 @@ u32 PPCAnalyzer::Analyze(u32 address, CodeBlock* block, CodeBuffer* buffer,
   bool found_call = false;
   size_t caller = 0;
   u32 numFollows = 0;
+  u32 num_taken_follows = 0;
   u32 num_inst = 0;
 
   const bool enable_follow = m_enable_branch_following;
+  const bool profile_branches = enable_follow && block_size > 1 && HasOption(OPTION_BRANCH_FOLLOW) &&
+                                HasOption(OPTION_CONDITIONAL_CONTINUE) &&
+                                HasOption(OPTION_BRANCH_PROFILE) && BranchProfile::IsActive();
 
   auto& system = Core::System::GetInstance();
   auto& mmu = system.GetMMU();
@@ -977,7 +982,31 @@ u32 PPCAnalyzer::Analyze(u32 address, CodeBlock* block, CodeBuffer* buffer,
     code[i].branchIsIdleLoop =
         code[i].branchTo == block->m_address && IsBusyWaitLoop(block, code, i);
 
-    if (follow && numFollows < BRANCH_FOLLOWING_THRESHOLD)
+    // A branch on a CR bit alone that the profile says is taken nearly every time
+    // (BranchProfile.h): the block goes on at its target, unless that is an instruction the block
+    // already has (a loop).
+    bool follow_taken = false;
+    if (profile_branches && inst.OPCD == 16 && !inst.LK && (inst.BO & BO_DONT_DECREMENT_FLAG) &&
+        (inst.BO & BO_DONT_CHECK_CONDITION) == 0 && !code[i].branchIsIdleLoop)
+    {
+      code[i].branchCounts = BranchProfile::Recording(address, inst.hex);
+      if (BranchProfile::FollowsTaken(address, inst.hex))
+      {
+        follow_taken = num_taken_follows < BranchProfile::MAX_FOLLOWS_PER_BLOCK;
+        for (std::size_t j = 0; follow_taken && j <= i; ++j)
+          follow_taken = code[j].address != code[i].branchTo;
+      }
+    }
+
+    if (follow_taken)
+    {
+      code[i].followTaken = true;
+      num_taken_follows++;
+      address = code[i].branchTo;
+      // As after any conditional branch, a return further on is left to the BLR optimization.
+      found_call = false;
+    }
+    else if (follow && numFollows < BRANCH_FOLLOWING_THRESHOLD)
     {
       // Follow the unconditional branch.
       numFollows++;
