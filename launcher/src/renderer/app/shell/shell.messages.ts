@@ -10,4 +10,6 @@ export const ShellMessages = {
   // The sidebar's fold button (new words, for Sarah's review).
   foldSidebar: () => "Collapse",
   openSidebar: () => "Expand",
+  // The folded sidebar's tools in a short window (new word, for Sarah's review).
+  toolsMenu: () => "Menu",
 };

@@ -241,4 +241,4 @@ The page had fixed column widths (320 + 380 px) wider than the room beside the s
 - **the player's card** is their stock icon in the card's box, the name and code in its tooltip; logged out, Log in is an arrow in the same box;
 - **the tools** (Settings, Theme Color, Report a bug, Discord, the bell) are a column, their tooltips at their right.
 
-The column fits a 1264 x 711 window with a search and an update showing; shorter windows scroll it, as the open sidebar.
+The column fits a 1264 x 711 window with a search and an update showing. In a shorter window ("at smaller vertical heights, replace it with a menu button that rolls up a vertical pop up over everything that has the 5 buttons in it") the tools are one menu button whose popup rolls up over everything with the five in a column (a pick closes it); the column comes back once it fits again. The bottom group (the arrows, the search, the card, the tools) always shows; if the pages still don't fit (the smallest windows, 450 px), only their icons scroll, faded where they are cut off. New word for review: the menu button's tooltip "Menu".

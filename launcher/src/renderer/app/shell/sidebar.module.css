@@ -17,8 +17,31 @@
 .folded {
   width: 61px;
   padding: 14px 0 10px;
+  overflow: hidden;
+}
+
+/* The pages (with the logo and the update) over the spacer, and the bottom group under it. Folded, the bottom group
+   always shows and only the pages scroll when the window is too short, faded where they are cut off. */
+.top,
+.group {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+}
+
+.folded .group {
   align-items: center;
+}
+
+.folded .top {
+  flex: 0 1 auto;
+  min-height: 0;
+  overflow: hidden auto;
   scrollbar-width: none;
+}
+
+.folded .top[data-cut] {
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 28px), transparent);
 }
 
 /* macOS draws its window buttons over the top left (titleBarStyle hiddenInset): room for them, and the top of the
@@ -242,6 +265,38 @@
 
 .folded .tools button {
   padding: 5px;
+}
+
+/* The tools' menu popup (short windows, folded): the five in a column over everything, rolled up from the button. */
+.toolsPopup {
+  margin-top: -4px;
+  padding: 4px;
+  border-radius: 10px !important;
+  background-color: var(--shell) !important;
+  background-image: none !important;
+  border: 1px solid var(--line-soft);
+}
+
+.toolsColumn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.toolsColumn button,
+.toolsColumn a {
+  padding: 5px;
+  opacity: 0.6;
+  color: var(--off-white);
+}
+
+.toolsColumn button:hover,
+.toolsColumn a:hover {
+  opacity: 1;
+}
+
+.toolsColumn svg {
+  font-size: 20px;
 }
 
 /* Logged out, folded: the Log in arrow in a box like the player's card. */

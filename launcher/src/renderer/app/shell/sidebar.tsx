@@ -3,17 +3,19 @@ import EmojiEventsRoundedIcon from "@mui/icons-material/EmojiEventsRounded";
 import KeyboardDoubleArrowLeftRoundedIcon from "@mui/icons-material/KeyboardDoubleArrowLeftRounded";
 import KeyboardDoubleArrowRightRoundedIcon from "@mui/icons-material/KeyboardDoubleArrowRightRounded";
 import LoginRoundedIcon from "@mui/icons-material/LoginRounded";
+import MenuRoundedIcon from "@mui/icons-material/MenuRounded";
 import NotificationsOffOutlinedIcon from "@mui/icons-material/NotificationsOffOutlined";
 import NotificationsOutlinedIcon from "@mui/icons-material/NotificationsOutlined";
 import SettingsOutlinedIcon from "@mui/icons-material/SettingsOutlined";
 import Button from "@mui/material/Button";
 import ButtonBase from "@mui/material/ButtonBase";
 import IconButton from "@mui/material/IconButton";
+import Popover from "@mui/material/Popover";
 import Tooltip from "@mui/material/Tooltip";
 import { clsx } from "clsx";
 import log from "electron-log";
 import debounce from "lodash/debounce";
-import React, { useMemo } from "react";
+import React, { useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Link, useMatch, useResolvedPath } from "react-router-dom";
 
 import { ActivateOnlineDialog } from "@/app/header/activate_online_dialog";
@@ -51,6 +53,11 @@ const isMac = window.electron.bootstrap.isMac;
 type SidebarChoice = "open" | "folded";
 const SIDEBAR_KEY = "SIDEBAR";
 
+/** The spacer's least height between the pages and the bottom group (sidebar.module.css .spacer). */
+const SPACER_MIN = 12;
+/** The folded tools as a column (6 px over five 30 px buttons) less as the menu button (6 px over one). */
+const TOOLS_SAVED = 4 * 30;
+
 export type NavItem = {
   subpath: string;
   title: () => string;
@@ -68,7 +75,11 @@ export type NavItem = {
  *
  * It folds as the players rail does, to a column as wide as the folded rail (§14): the logo (the app icon's ball; it
  * still checks for updates), a ring for a set-up step or a launcher update, the pages' icons with their names in
- * tooltips, the player's stock icon in the card's box, and the tools one under another.
+ * tooltips, the player's stock icon in the card's box, and the tools one under another. In a window too short for
+ * that column the tools are one menu button whose popup rolls up over everything with the five in it; the bottom
+ * group (the arrows, the search, the card, the tools) always shows and only the pages' icons scroll, faded where they
+ * are cut off (Sarah's board: "at smaller vertical heights, replace it with a menu button that rolls up a vertical pop
+ * up over everything that has the 5 buttons in it").
  */
 export const Sidebar = ({ items }: { items: readonly NavItem[] }) => {
   const openLogin = useLoginModal((store) => store.openModal);
@@ -84,90 +95,84 @@ export const Sidebar = ({ items }: { items: readonly NavItem[] }) => {
   // Folded, the tools are a column: their names show beside them, not over the next one.
   const toolTip = folded ? "right" : undefined;
   const foldLabel = folded ? Messages.openSidebar() : Messages.foldSidebar();
+  const fit = useFoldedFit(folded);
 
   return (
     <aside
+      ref={fit.asideRef}
       className={clsx(styles.side, folded && styles.folded, isMac && styles.mac)}
       data-testid="sidebar"
       data-folded={folded ? "" : undefined}
     >
-      <div className={styles.logoRow}>
-        <LogoButton folded={folded} />
-      </div>
-      <SetupStatus onClick={() => onPlay()} folded={folded} />
-      <nav className={styles.nav}>
-        {items.map((item) => (
-          <NavLink key={item.subpath} item={item} folded={folded} />
-        ))}
-        {tournamentsUrl && (
-          <Tooltip title={folded ? HeaderMessages.tournaments() : ""} placement="right" disableInteractive={true}>
-            <a
-              className={clsx(styles.navItem, styles.trophy)}
-              href={tournamentsUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              aria-label={folded ? HeaderMessages.tournaments() : undefined}
-            >
-              <EmojiEventsRoundedIcon className={styles.navIcon} />
-              {!folded && <span className={styles.navLabel}>{HeaderMessages.tournaments()}</span>}
-            </a>
-          </Tooltip>
-        )}
-      </nav>
-      <div className={styles.spacer} />
-      {/* The fold arrows: at the bottom, over the search and the player's card (Sarah's board). */}
-      <div className={styles.foldRow}>
-        <Tooltip title={foldLabel} placement={folded ? "right" : "top"} disableInteractive={true}>
-          <IconButton
-            size="small"
-            className={styles.foldButton}
-            aria-label={foldLabel}
-            aria-expanded={!folded}
-            data-testid={folded ? "sidebar-open" : "sidebar-fold"}
-            onClick={() => setChoice(folded ? "open" : "folded")}
-          >
-            {folded ? (
-              <KeyboardDoubleArrowRightRoundedIcon fontSize="small" />
-            ) : (
-              <KeyboardDoubleArrowLeftRoundedIcon fontSize="small" />
+      <div ref={fit.topRef} className={styles.top} data-cut={fit.cut ? "" : undefined}>
+        <div ref={fit.innerRef} className={styles.group}>
+          <div className={styles.logoRow}>
+            <LogoButton folded={folded} />
+          </div>
+          <SetupStatus onClick={() => onPlay()} folded={folded} />
+          <nav className={styles.nav}>
+            {items.map((item) => (
+              <NavLink key={item.subpath} item={item} folded={folded} />
+            ))}
+            {tournamentsUrl && (
+              <Tooltip title={folded ? HeaderMessages.tournaments() : ""} placement="right" disableInteractive={true}>
+                <a
+                  className={clsx(styles.navItem, styles.trophy)}
+                  href={tournamentsUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  aria-label={folded ? HeaderMessages.tournaments() : undefined}
+                >
+                  <EmojiEventsRoundedIcon className={styles.navIcon} />
+                  {!folded && <span className={styles.navLabel}>{HeaderMessages.tournaments()}</span>}
+                </a>
+              </Tooltip>
             )}
-          </IconButton>
-        </Tooltip>
+          </nav>
+        </div>
       </div>
-      <QueueBox folded={folded} />
-      {currentUser ? (
-        <UserMenu user={currentUser} handleError={showError} variant={folded ? "folded" : "sidebar"} />
-      ) : folded ? (
-        <Tooltip title={HeaderMessages.logIn()} placement="right" disableInteractive={true}>
-          <IconButton className={styles.logInIcon} aria-label={HeaderMessages.logIn()} onClick={openLogin}>
-            <LoginRoundedIcon />
-          </IconButton>
-        </Tooltip>
-      ) : (
-        <Button className={styles.logIn} variant="contained" onClick={openLogin}>
-          {HeaderMessages.logIn()}
-        </Button>
-      )}
-      <div className={styles.tools}>
-        <Tooltip title={HeaderMessages.settings()} placement={toolTip}>
-          <IconButton aria-label={HeaderMessages.settings()} onClick={() => openSettings()}>
-            <SettingsOutlinedIcon />
-          </IconButton>
-        </Tooltip>
-        <ThemeColorButton placement={toolTip} />
-        <BugReportButton placement={toolTip} />
-        <Tooltip title={HeaderMessages.discord()} placement={toolTip}>
-          <IconButton
-            component="a"
-            href={DISCORD_INVITE_URL}
-            target="_blank"
-            rel="noopener noreferrer"
-            aria-label={HeaderMessages.discord()}
-          >
-            <DiscordIcon />
-          </IconButton>
-        </Tooltip>
-        <SoundsToggle placement={toolTip} />
+      <div className={styles.spacer} />
+      <div ref={fit.bottomRef} className={styles.group}>
+        {/* The fold arrows: at the bottom, over the search and the player's card (Sarah's board). */}
+        <div className={styles.foldRow}>
+          <Tooltip title={foldLabel} placement={folded ? "right" : "top"} disableInteractive={true}>
+            <IconButton
+              size="small"
+              className={styles.foldButton}
+              aria-label={foldLabel}
+              aria-expanded={!folded}
+              data-testid={folded ? "sidebar-open" : "sidebar-fold"}
+              onClick={() => setChoice(folded ? "open" : "folded")}
+            >
+              {folded ? (
+                <KeyboardDoubleArrowRightRoundedIcon fontSize="small" />
+              ) : (
+                <KeyboardDoubleArrowLeftRoundedIcon fontSize="small" />
+              )}
+            </IconButton>
+          </Tooltip>
+        </div>
+        <QueueBox folded={folded} />
+        {currentUser ? (
+          <UserMenu user={currentUser} handleError={showError} variant={folded ? "folded" : "sidebar"} />
+        ) : folded ? (
+          <Tooltip title={HeaderMessages.logIn()} placement="right" disableInteractive={true}>
+            <IconButton className={styles.logInIcon} aria-label={HeaderMessages.logIn()} onClick={openLogin}>
+              <LoginRoundedIcon />
+            </IconButton>
+          </Tooltip>
+        ) : (
+          <Button className={styles.logIn} variant="contained" onClick={openLogin}>
+            {HeaderMessages.logIn()}
+          </Button>
+        )}
+        {fit.menu ? (
+          <ToolsMenu openSettings={() => openSettings()} />
+        ) : (
+          <div className={styles.tools}>
+            <Tools placement={toolTip} openSettings={() => openSettings()} />
+          </div>
+        )}
       </div>
       <StartGameOfflineDialog
         open={startGameOpen}
@@ -180,6 +185,115 @@ export const Sidebar = ({ items }: { items: readonly NavItem[] }) => {
         onSubmit={() => onPlay()}
       />
     </aside>
+  );
+};
+
+/**
+ * Folded: whether the tools must be a menu (the page icons, the bottom group with the tools' column and the spacer
+ * don't fit the sidebar's height) and whether the page icons are cut off at the bottom. The column comes back once
+ * there is room for it again, so a window at the edge doesn't flip between the two.
+ */
+const useFoldedFit = (folded: boolean) => {
+  const asideRef = useRef<HTMLElement>(null);
+  const topRef = useRef<HTMLDivElement>(null);
+  const innerRef = useRef<HTMLDivElement>(null);
+  const bottomRef = useRef<HTMLDivElement>(null);
+  const [menu, setMenu] = useState(false);
+  const [cut, setCut] = useState(false);
+  const menuNow = useRef(menu);
+  menuNow.current = menu;
+
+  useLayoutEffect(() => {
+    const aside = asideRef.current;
+    const top = topRef.current;
+    const inner = innerRef.current;
+    const bottom = bottomRef.current;
+    if (!folded || !aside || !top || !inner || !bottom || typeof ResizeObserver === "undefined") {
+      setMenu(false);
+      setCut(false);
+      return;
+    }
+    const check = () => {
+      const style = getComputedStyle(aside);
+      const room = aside.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom) - SPACER_MIN;
+      const withColumn = inner.offsetHeight + bottom.offsetHeight + (menuNow.current ? TOOLS_SAVED : 0);
+      setMenu(withColumn > room + 0.5);
+      setCut(top.scrollTop + top.clientHeight < top.scrollHeight - 1);
+    };
+    check();
+    const observer = new ResizeObserver(check);
+    for (const el of [aside, top, inner, bottom]) {
+      observer.observe(el);
+    }
+    top.addEventListener("scroll", check, { passive: true });
+    return () => {
+      observer.disconnect();
+      top.removeEventListener("scroll", check);
+    };
+  }, [folded]);
+
+  return { asideRef, topRef, innerRef, bottomRef, menu, cut };
+};
+
+/** Settings, Theme Color, Report a bug, Discord and the bell. */
+const Tools = ({ placement, openSettings }: { placement?: "right"; openSettings: () => void }) => (
+  <>
+    <Tooltip title={HeaderMessages.settings()} placement={placement}>
+      <IconButton aria-label={HeaderMessages.settings()} onClick={openSettings}>
+        <SettingsOutlinedIcon />
+      </IconButton>
+    </Tooltip>
+    <ThemeColorButton placement={placement} />
+    <BugReportButton placement={placement} />
+    <Tooltip title={HeaderMessages.discord()} placement={placement}>
+      <IconButton
+        component="a"
+        href={DISCORD_INVITE_URL}
+        target="_blank"
+        rel="noopener noreferrer"
+        aria-label={HeaderMessages.discord()}
+      >
+        <DiscordIcon />
+      </IconButton>
+    </Tooltip>
+    <SoundsToggle placement={placement} />
+  </>
+);
+
+/**
+ * The folded tools in a short window: a menu button whose popup rolls up over everything with the five in a column.
+ * A pick closes it; the popup stays mounted so Report a bug's dialog (inside its button) stays open.
+ */
+const ToolsMenu = ({ openSettings }: { openSettings: () => void }) => {
+  const [anchor, setAnchor] = useState<HTMLElement | null>(null);
+  const close = () => setAnchor(null);
+  return (
+    <div className={styles.tools}>
+      <Tooltip title={anchor ? "" : Messages.toolsMenu()} placement="right" disableInteractive={true}>
+        <IconButton
+          aria-label={Messages.toolsMenu()}
+          aria-haspopup="true"
+          aria-expanded={anchor != null}
+          data-testid="sidebar-tools-menu"
+          onClick={(event) => setAnchor(event.currentTarget)}
+        >
+          <MenuRoundedIcon />
+        </IconButton>
+      </Tooltip>
+      <Popover
+        open={anchor != null}
+        anchorEl={anchor}
+        onClose={close}
+        keepMounted={true}
+        anchorOrigin={{ vertical: "top", horizontal: "center" }}
+        transformOrigin={{ vertical: "bottom", horizontal: "center" }}
+        slotProps={{ paper: { className: styles.toolsPopup } }}
+      >
+        <div className={styles.toolsColumn} onClick={close} data-testid="sidebar-tools-popup">
+          <Tools placement="right" openSettings={openSettings} />
+        </div>
+      </Popover>
+    </div>
   );
 };
 
