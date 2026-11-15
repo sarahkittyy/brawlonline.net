@@ -8,6 +8,7 @@
   min-height: 0;
   padding: 14px 12px 10px;
   background-color: var(--shell);
+  border-right: 1px solid var(--line-soft);
   overflow: hidden auto;
 }
 
