@@ -77,6 +77,9 @@ add_dolphin_test(ChangeCRCTest Rollback/ChangeCRCTest.cpp)
 # Changed-only whole-machine snapshots (Core/Rollback/KeptGranules.h): the copy jobs' kept granules
 # put together in scan order.
 add_dolphin_test(KeptGranulesTest Rollback/KeptGranulesTest.cpp)
+# A whole-machine load's TMEM, copied back by the pages written since the snapshot
+# (Core/Rollback/WrittenPages.h).
+add_dolphin_test(WrittenPagesTest Rollback/WrittenPagesTest.cpp)
 # What a whole-machine session's JIT compiled each block from, journaled for rollbacks
 # (PowerPC::JitCodeRecord, Core/PowerPC/PPCCache.h).
 add_dolphin_test(JitCodeRecordTest Rollback/JitCodeRecordTest.cpp)

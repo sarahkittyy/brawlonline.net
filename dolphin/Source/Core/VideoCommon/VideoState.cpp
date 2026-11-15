@@ -3,8 +3,11 @@
 
 #include "VideoCommon/VideoState.h"
 
+#include <cstring>
+
 #include "Common/ChunkFile.h"
 #include "Core/Rollback/MachineSession.h"
+#include "Core/Rollback/WrittenPages.h"
 #include "Core/System.h"
 #include "VideoCommon/AsyncRequests.h"
 #include "VideoCommon/BPMemory.h"
@@ -56,6 +59,19 @@ void VideoCommon_DoStateRollbackCPU(PointerWrap& p)
   p.DoMarker("PixelEngine");
 }
 
+namespace
+{
+// TMEM's pages written since each rollback snapshot's capture. Used where TMEM is: on the video
+// thread in dual core (its writers are BP commands; captures and loads run there too).
+constexpr size_t TMEM_PAGE_SIZE = 4096;
+Rollback::WrittenPages<TMEM_SIZE / TMEM_PAGE_SIZE, TMEM_PAGE_SIZE> s_tmem_written;
+}  // namespace
+
+void VideoCommon_TmemWritten(unsigned int offset, unsigned int size)
+{
+  s_tmem_written.Mark(offset, size);
+}
+
 void VideoCommon_DoStateRollbackGPU(PointerWrap& p)
 {
   auto& system = Core::System::GetInstance();
@@ -71,7 +87,23 @@ void VideoCommon_DoStateRollbackGPU(PointerWrap& p)
   p.Do(xfmem);
   p.DoMarker("XF Memory");
 
-  p.DoArray(s_tex_mem);
+  // TMEM is 1 MiB and games seldom write it (Brawl: the same two pages, with the same bytes): a
+  // load copies back the pages written since this capture, not all of it.
+  u64 tmem_capture = p.IsReadMode() ? 0 : s_tmem_written.Capture();
+  p.Do(tmem_capture);
+  u32 tmem_size = TMEM_SIZE;
+  u8* const tmem = p.DoExternal(tmem_size);
+  if (p.IsWriteMode())
+  {
+    std::memcpy(tmem, s_tex_mem.data(), TMEM_SIZE);
+  }
+  else if (p.IsReadMode() && tmem_size == TMEM_SIZE)
+  {
+    s_tmem_written.RestoreTo(tmem_capture, [tmem](size_t page) {
+      std::memcpy(s_tex_mem.data() + page * TMEM_PAGE_SIZE, tmem + page * TMEM_PAGE_SIZE,
+                  TMEM_PAGE_SIZE);
+    });
+  }
   p.DoMarker("texMem");
 
   TMEM::DoState(p);
@@ -171,6 +203,8 @@ void VideoCommon_DoState(PointerWrap& p)
   // Texture decoder
   p.DoArray(s_tex_mem);
   p.DoMarker("texMem");
+  if (p.IsReadMode())
+    s_tmem_written.MarkAll();
 
   // TMEM
   TMEM::DoState(p);

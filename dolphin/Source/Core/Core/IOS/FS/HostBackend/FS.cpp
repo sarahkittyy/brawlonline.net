@@ -352,13 +352,23 @@ void HostFileSystem::DoState(PointerWrap& p)
   // Rollback snapshots read no file contents, so saving one leaves the host files open.
   const bool rollback_snapshot = Rollback::InSnapshotDoState();
   const bool keep_files_open = rollback_snapshot && !p.IsReadMode();
+  // Loading one closes them only if the journal has something to undo (known once the snapshot's
+  // mark is read, below). With nothing to undo no NAND file changed since the snapshot (every
+  // change is journaled), and every read and write seeks to its handle's own offset first: a
+  // handle that names the same file as before keeps its host file. Closing, checking and opening
+  // each open file again was a fifth of a whole-machine load in a Brawl match.
+  const bool rollback_load = rollback_snapshot && p.IsReadMode();
+  bool reuse_host_files = false;
   decltype(m_handles) handles_copy{};
   if (!keep_files_open)
   {
     handles_copy = std::move(m_handles);
     m_handles = {};
-    for (Handle& handle : handles_copy)
-      handle.host_file.reset();
+    if (!rollback_load)
+    {
+      for (Handle& handle : handles_copy)
+        handle.host_file.reset();
+    }
   }
 
   // The format for the next part of the save state is follows:
@@ -389,7 +399,15 @@ void HostFileSystem::DoState(PointerWrap& p)
     u64 journal_mark = p.IsWriteMode() ? JournalMark() : m_journal_mark;
     p.Do(journal_mark);
     if (p.IsReadMode())
+    {
+      reuse_host_files = m_journal.empty() || m_journal.back().seq < journal_mark;
+      if (!reuse_host_files)
+      {
+        for (Handle& handle : handles_copy)
+          handle.host_file.reset();
+      }
       JournalUndo(journal_mark);
+    }
   }
   else if (!p.IsReadMode())
   {
@@ -450,6 +468,16 @@ void HostFileSystem::DoState(PointerWrap& p)
                     handle.wii_path);
       handle = Handle{};
       continue;
+    }
+    if (reuse_host_files)
+    {
+      const Handle& old = handles_copy[static_cast<size_t>(&handle - m_handles.data())];
+      if (old.opened && old.host_file && old.host_file->IsOpen() &&
+          old.wii_path == handle.wii_path)
+      {
+        handle.host_file = old.host_file;
+        continue;
+      }
     }
     const std::string_view state_context =
         p.IsReadMode()    ? "DoState read/restore" :

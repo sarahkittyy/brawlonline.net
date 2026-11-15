@@ -159,8 +159,15 @@ void PowerPCManager::DoState(PointerWrap& p)
     RoundingModeUpdated(m_ppc_state);
     RecalculateAllFeatureFlags(m_ppc_state);
 
-    mmu.IBATUpdated();
-    mmu.DBATUpdated();
+    // A rollback's load leaves the registers to the rollback (s_skip_cpu_regs_for_rollback), the
+    // BAT registers with them: the tables still match them, and RestoreMachineRegisters builds
+    // them again if the snapshot's BAT registers differ. Building both here was two 128 KiB tables
+    // filled and compared on every load.
+    if (!s_skip_cpu_regs_for_rollback)
+    {
+      mmu.IBATUpdated();
+      mmu.DBATUpdated();
+    }
 
     // The JITs' memory base follows MSR.DR (the logical or the physical mapping). A state loaded
     // while the JIT runs (a whole-machine session's machine image or rollback, from inside a
