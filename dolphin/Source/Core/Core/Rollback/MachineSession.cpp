@@ -9512,7 +9512,7 @@ void IoLogRegs(const PowerPC::PowerPCState& ppc)
   *s_io_current += fmt::format(" f {:08x} g {:08x} cr {:08x} fpscr {:08x}\n",
                                Common::ComputeCRC32(reinterpret_cast<const u8*>(ppc.ps), sizeof(ppc.ps)),
                                Common::ComputeCRC32(reinterpret_cast<const u8*>(ppc.gpr), sizeof(ppc.gpr)),
-                               ppc.cr.Get(), ppc.fpscr.Hex);
+                               ppc.cr.Get(), ppc.CurrentFPSCR());
   if (s_io_frame - s.frame_base == regs_at[0] && static_cast<s64>(n) >= regs_at[1] && static_cast<s64>(n) <= regs_at[2])
   {
     for (int i = 0; i < 32; ++i)

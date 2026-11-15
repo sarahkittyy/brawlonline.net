@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdlib>
 #include <cstring>
 #include <map>
 #include <span>
@@ -263,6 +264,7 @@ bool Jit64::BackPatch(SContext* ctx)
 
 void Jit64::Init()
 {
+  m_fprf_lazy = std::getenv("PPR_JIT_FPRF_EAGER") == nullptr;
   InitFastmemArena();
 
   RefreshConfig();
@@ -371,6 +373,9 @@ void Jit64::FallBackToInterpreter(UGeckoInstruction inst)
     MOV(32, PPCSTATE(pc), Imm32(js.compilerPC));
     MOV(32, PPCSTATE(npc), Imm32(js.compilerPC + 4));
   }
+
+  if (js.op->opinfo->flags & FL_READ_FPRF)
+    FlushLazyFPRF();
 
   Interpreter::Instruction instr = Interpreter::GetInterpreterOp(inst);
   ABI_PushRegistersAndAdjustStack({}, 0);
@@ -829,6 +834,8 @@ void Jit64::Run()
   CompiledCode pExecAddr = (CompiledCode)asm_routines.enter_code;
   pExecAddr();
 
+  // Outside the JIT's code FPSCR is always current.
+  m_ppc_state.FlushLazyFPRF();
   UnprotectStack();
 }
 
@@ -840,6 +847,8 @@ void Jit64::SingleStep()
   CompiledCode pExecAddr = (CompiledCode)asm_routines.enter_code;
   pExecAddr();
 
+  // Outside the JIT's code FPSCR is always current.
+  m_ppc_state.FlushLazyFPRF();
   UnprotectStack();
 }
 
@@ -1167,6 +1176,10 @@ bool Jit64::DoJit(u32 em_address, JitBlock* b, u32 nextPC)
 
     if (HandleFunctionHooking(op.address))
       break;
+
+    // mffs, mcrfs and the mtfs instructions read FPSCR or write part of it.
+    if (!op.skip && op.opinfo->type == OpType::SystemFP && (op.opinfo->flags & FL_READ_FPRF))
+      FlushLazyFPRF();
 
     if (op.skip)
     {

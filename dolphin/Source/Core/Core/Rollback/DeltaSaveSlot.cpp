@@ -254,7 +254,7 @@ void SaveCPURegisters(const PowerPC::PowerPCState& ppc, DeltaSaveSlot::CPURegist
   std::copy(std::begin(ppc.gpr), std::end(ppc.gpr), out.gpr.begin());
   std::copy(std::begin(ppc.ps), std::end(ppc.ps), out.ps.begin());
   std::copy(std::begin(ppc.cr.fields), std::end(ppc.cr.fields), out.cr.begin());
-  out.fpscr = ppc.fpscr.Hex;
+  out.fpscr = ppc.CurrentFPSCR();
   out.xer_ca = ppc.xer_ca;
   out.xer_so_ov = ppc.xer_so_ov;
   out.xer_stringctrl = ppc.xer_stringctrl;
@@ -269,6 +269,7 @@ void RestoreCPURegisters(PowerPC::PowerPCState& ppc, const DeltaSaveSlot::CPUReg
   std::copy(in.cr.begin(), in.cr.end(), std::begin(ppc.cr.fields));
   const bool rounding_changed = ppc.fpscr.Hex != in.fpscr;
   ppc.fpscr.Hex = in.fpscr;
+  ppc.fprf_lazy = 0;
   if (rounding_changed)
     PowerPC::RoundingModeUpdated(ppc);
   ppc.xer_ca = in.xer_ca;

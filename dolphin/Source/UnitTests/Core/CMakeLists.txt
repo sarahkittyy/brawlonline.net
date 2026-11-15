@@ -24,6 +24,7 @@ if(_M_X86_64)
     PowerPC/PageTableHostMappingTest.cpp
     PowerPC/Jit64Common/ConvertDoubleToSingle.cpp
     PowerPC/Jit64Common/Fres.cpp
+    PowerPC/Jit64Common/FPRF.cpp
     PowerPC/Jit64Common/Frsqrte.cpp
     PowerPC/Jit64Common/MaddTieFastPath.cpp
     PowerPC/Jit64Common/PsMaddEft.cpp

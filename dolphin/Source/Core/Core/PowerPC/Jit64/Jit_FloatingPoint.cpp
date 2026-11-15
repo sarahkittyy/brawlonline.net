@@ -44,7 +44,38 @@ void Jit64::SetFPRFIfNeeded(const OpArg& input, bool single)
   else
     MOVSD(xmm, input);
 
+  if (m_fprf_lazy)
+  {
+    // The result and what it is, in place of its class; a compare since an earlier result is
+    // forgotten with it.
+    if (single)
+      MOVSS(PPCSTATE(fprf_lazy_value), xmm);
+    else
+      MOVSD(PPCSTATE(fprf_lazy_value), xmm);
+    MOV(32, PPCSTATE(fprf_lazy), Imm32(single ? PowerPC::PowerPCState::LAZY_FPRF_SINGLE :
+                                                PowerPC::PowerPCState::LAZY_FPRF_DOUBLE));
+    return;
+  }
+
   SetFPRF(xmm, single);
+}
+
+void Jit64::FlushLazyFPRF()
+{
+  if (!m_fprf || !m_fprf_lazy)
+    return;
+
+  CMP(32, PPCSTATE(fprf_lazy), Imm8(0));
+  FixupBranch pending = J_CC(CC_NE, Jump::Near);
+  SwitchToFarCode();
+  SetJumpTarget(pending);
+  const BitSet32 registers_in_use = CallerSavedRegistersInUse();
+  ABI_PushRegistersAndAdjustStack(registers_in_use, 0);
+  ABI_CallFunctionP(PowerPC::FlushLazyFPRFFromJIT, &m_ppc_state);
+  ABI_PopRegistersAndAdjustStack(registers_in_use, 0);
+  FixupBranch done = J(Jump::Near);
+  SwitchToNearCode();
+  SetJumpTarget(done);
 }
 
 void Jit64::FinalizeSingleResult(X64Reg output, const OpArg& input, bool packed, bool duplicate)
@@ -1086,6 +1117,12 @@ void Jit64::FloatCompare(UGeckoInstruction inst, bool upper)
   RCX64Reg Rb = fpr.Bind(b, RCMode::Read);
   RegCache::Realize(Ra, Rb);
 
+  // A compare sets FPCC and leaves C: with a lazy FPRF it is one byte beside the last result.
+  const bool lazy = fprf && m_fprf_lazy;
+  if (lazy)
+    fprf = false;
+  const OpArg lazy_compare = MDisp(RPPCSTATE, PPCSTATE_OFF(fprf_lazy) + 1);
+
   if (fprf)
     AND(32, PPCSTATE(fpscr), Imm32(~FPCC_MASK));
 
@@ -1123,6 +1160,8 @@ void Jit64::FloatCompare(UGeckoInstruction inst, bool upper)
       Imm64(PowerPC::ConditionRegister::PPCToInternal(output[PowerPC::CR_EQ_BIT])));
   if (fprf)
     OR(32, PPCSTATE(fpscr), Imm32(PowerPC::CR_EQ << FPRF_SHIFT));
+  if (lazy)
+    MOV(8, lazy_compare, Imm8(PowerPC::CR_EQ));
 
   continue1 = J();
 
@@ -1131,6 +1170,8 @@ void Jit64::FloatCompare(UGeckoInstruction inst, bool upper)
       Imm64(PowerPC::ConditionRegister::PPCToInternal(output[PowerPC::CR_SO_BIT])));
   if (fprf)
     OR(32, PPCSTATE(fpscr), Imm32(PowerPC::CR_SO << FPRF_SHIFT));
+  if (lazy)
+    MOV(8, lazy_compare, Imm8(PowerPC::CR_SO));
 
   if (a != b)
   {
@@ -1141,6 +1182,8 @@ void Jit64::FloatCompare(UGeckoInstruction inst, bool upper)
         Imm64(PowerPC::ConditionRegister::PPCToInternal(output[PowerPC::CR_GT_BIT])));
     if (fprf)
       OR(32, PPCSTATE(fpscr), Imm32(PowerPC::CR_GT << FPRF_SHIFT));
+    if (lazy)
+      MOV(8, lazy_compare, Imm8(PowerPC::CR_GT));
     continue3 = J();
 
     SetJumpTarget(pLesser);
@@ -1148,6 +1191,8 @@ void Jit64::FloatCompare(UGeckoInstruction inst, bool upper)
         Imm64(PowerPC::ConditionRegister::PPCToInternal(output[PowerPC::CR_LT_BIT])));
     if (fprf)
       OR(32, PPCSTATE(fpscr), Imm32(PowerPC::CR_LT << FPRF_SHIFT));
+    if (lazy)
+      MOV(8, lazy_compare, Imm8(PowerPC::CR_LT));
   }
 
   SetJumpTarget(continue1);

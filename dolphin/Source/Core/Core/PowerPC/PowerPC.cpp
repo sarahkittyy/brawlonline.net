@@ -95,6 +95,9 @@ void PowerPCManager::DoState(PointerWrap& p)
 
   const std::array<u32, 16> old_sr = m_ppc_state.sr;
 
+  // FPSCR is saved as every core would have it, and a loaded one is current.
+  m_ppc_state.FlushLazyFPRF();
+
   // BeginDoState sets s_skip_cpu_regs_for_rollback for *both* the Save pass
   // (WriteMode) and the Load pass (ReadMode).  Skipping in both keeps the
   // buffer layout identical, so the read pointer never goes out of sync.
@@ -219,6 +222,7 @@ void PowerPCManager::ResetRegisters()
   m_ppc_state.spr[SPR_ECID_L] = 0x82bb08e8;
 
   m_ppc_state.fpscr.Hex = 0;
+  m_ppc_state.fprf_lazy = 0;
   m_ppc_state.pc = 0;
   m_ppc_state.npc = 0;
   m_ppc_state.Exceptions = 0;
@@ -741,11 +745,33 @@ void PowerPCManager::MSRUpdated()
 void PowerPCState::UpdateFPRFDouble(double dvalue)
 {
   fpscr.FPRF = Common::ClassifyDouble(dvalue);
+  fprf_lazy = 0;
 }
 
 void PowerPCState::UpdateFPRFSingle(float fvalue)
 {
   fpscr.FPRF = Common::ClassifyFloat(fvalue);
+  fprf_lazy = 0;
+}
+
+u32 PowerPCState::CurrentFPSCR() const
+{
+  if (fprf_lazy == 0)
+    return fpscr.Hex;
+  u32 fprf = fpscr.FPRF;
+  const u32 kind = fprf_lazy & 0xFF;
+  if (kind == LAZY_FPRF_DOUBLE)
+    fprf = Common::ClassifyDouble(std::bit_cast<double>(fprf_lazy_value));
+  else if (kind == LAZY_FPRF_SINGLE)
+    fprf = Common::ClassifyFloat(std::bit_cast<float>(static_cast<u32>(fprf_lazy_value)));
+  if (const u32 compare = (fprf_lazy >> 8) & 0xFF; compare != 0)
+    fprf = (fprf & ~(FPCC_MASK >> FPRF_SHIFT)) | compare;
+  return (fpscr.Hex & ~FPRF_MASK) | (fprf << FPRF_SHIFT);
+}
+
+void FlushLazyFPRFFromJIT(PowerPCState& ppc_state)
+{
+  ppc_state.FlushLazyFPRF();
 }
 
 void RoundingModeUpdated(PowerPCState& ppc_state)

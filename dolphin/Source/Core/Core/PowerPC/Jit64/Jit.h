@@ -182,6 +182,10 @@ public:
   void UpdateFPExceptionSummary(Gen::X64Reg fpscr, Gen::X64Reg tmp1, Gen::X64Reg tmp2);
 
   void SetFPRFIfNeeded(const Gen::OpArg& xmm, bool single);
+  // FPSCR[FPRF] is left as the last float result (PowerPCState::fprf_lazy) unless
+  // PPR_JIT_FPRF_EAGER is set; FlushLazyFPRF makes FPSCR current ahead of code that reads it.
+  bool m_fprf_lazy = true;
+  void FlushLazyFPRF();
   void FinalizeSingleResult(Gen::X64Reg output, const Gen::OpArg& input, bool packed = true,
                             bool duplicate = false);
   void FinalizeDoubleResult(Gen::X64Reg output, const Gen::OpArg& input);
