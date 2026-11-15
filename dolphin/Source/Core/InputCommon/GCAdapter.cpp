@@ -940,15 +940,16 @@ GCPadStatus Peek(int chan)
 
 // A controller's first state on a connection is its origin (the game reads every later state
 // against it), as on the console. A wireless controller that drops out mid-game, or a loose cable,
-// comes back while the player holds the stick or a trigger, and that origin left the stick pushed
-// the other way for the rest of the session (bug report #292: stick 134,24 = full up at rest; that
-// player's logs had 64,111, 129,63, 29,127 and R 80 too). No controller rests that far off, so an
-// axis past these is held: it rests at the centre (a trigger at 0). True rests, a few units off,
-// stay the controller's own.
+// comes back while the player holds the stick, and that origin left the stick pushed the other way
+// for the rest of the session (bug report #292: stick 134,24 = full up at rest; that player's logs
+// had 64,111, 129,63, 29,127 too). No stick rests that far off, so a stick axis past this is held:
+// it rests at the centre. True rests, a few units off, stay the controller's own.
+// The triggers keep their origin as they are: players with springless triggers hold R (or L) down
+// while the controller connects so that a trigger resting pressed reads as released, and a held
+// trigger's origin only makes that trigger need a deeper press.
 constexpr int HELD_STICK_OFF_CENTER = 32;
-constexpr int HELD_TRIGGER = 48;
 
-static bool HeldAxesToRest(GCPadStatus* pad)
+static bool HeldSticksToRest(GCPadStatus* pad)
 {
   bool changed = false;
   const auto stick = [&changed](u8& v, u8 center) {
@@ -958,19 +959,10 @@ static bool HeldAxesToRest(GCPadStatus* pad)
       changed = true;
     }
   };
-  const auto trigger = [&changed](u8& v) {
-    if (v > HELD_TRIGGER)
-    {
-      v = 0;
-      changed = true;
-    }
-  };
   stick(pad->stickX, GCPadStatus::MAIN_STICK_CENTER_X);
   stick(pad->stickY, GCPadStatus::MAIN_STICK_CENTER_Y);
   stick(pad->substickX, GCPadStatus::C_STICK_CENTER_X);
   stick(pad->substickY, GCPadStatus::C_STICK_CENTER_Y);
-  trigger(pad->triggerLeft);
-  trigger(pad->triggerRight);
   return changed;
 }
 
@@ -1066,14 +1058,13 @@ void ProcessInputPayload(const u8* data, std::size_t size)
                        chan + 1, channel_data[0]);
 
         pad.button |= PAD_GET_ORIGIN;
-        if (HeldAxesToRest(&pad))
+        if (HeldSticksToRest(&pad))
         {
           NOTICE_LOG_FMT(BRAWLBACK,
                          "GC adapter: port {} controller connected while held (stick {},{} C-stick "
-                         "{},{} triggers {},{}); at rest: stick {},{} C-stick {},{} triggers {},{}",
+                         "{},{}); at rest: stick {},{} C-stick {},{}",
                          chan + 1, channel_data[3], channel_data[4], channel_data[5],
-                         channel_data[6], channel_data[7], channel_data[8], pad.stickX, pad.stickY,
-                         pad.substickX, pad.substickY, pad.triggerLeft, pad.triggerRight);
+                         channel_data[6], pad.stickX, pad.stickY, pad.substickX, pad.substickY);
         }
         pad_state.origin = pad;
         pad_state.is_new_connection = true;
