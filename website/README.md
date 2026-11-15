@@ -71,12 +71,13 @@ const DOWNLOADS = {
   windows: "/downloads/BrawlOnline-Setup.exe",
   macos: "/downloads/BrawlOnline.dmg",
   linux: "/downloads/BrawlOnline.AppImage",
+  "linux-arm64": "/downloads/BrawlOnline-arm64.AppImage",
 };
 ```
 
-These are placeholders: there are no builds yet. Also update the three `href`s in the `<ul id="other">` list in `index.html`, which are the fallback for visitors without JavaScript.
+These are placeholders: there are no builds yet. Also update the `href`s in the `<ul id="other">` list in `index.html`, which are the fallback for visitors without JavaScript.
 
-The script picks the visitor's OS (Windows, macOS, Linux; the Steam Deck counts as Linux) and puts that OS's icon and link on the button. It then reads that OS's update feed (`/updates/launcher/latest.yml`, `latest-mac.yml`, `latest-linux.yml`; `FEEDS` in `script.js`), points the button at the installer the feed names and writes the version and size under it (the Windows feed gives no size, so the script asks the server with a HEAD request). This needs `connect-src 'self'` in the CSP. If the feed can't be read, the button keeps the stable `/downloads/` link and the line stays empty. Phones, tablets (iPad included), ChromeOS and anything unrecognised get a neutral download icon that opens the list of all three. `window.BrawlOnline.detectOS({ ua, platform, touchPoints, uaData })` is exposed for testing the detection with any user agent.
+The script picks the visitor's OS (Windows, macOS, Linux, Linux on arm64; the Steam Deck counts as Linux) and puts that OS's icon and link on the button. An arm64 Linux machine is told apart by "aarch64" in Firefox's user agent and `navigator.platform`, and in Chromium (whose user agent says x86_64 on every Linux) by `navigator.userAgentData.getHighEntropyValues(["architecture"])`, asked only on Linux. It then reads that OS's update feed (`/updates/launcher/latest.yml`, `latest-mac.yml`, `latest-linux.yml`, `latest-linux-arm64.yml`; `FEEDS` in `script.js`), points the button at the installer the feed names and writes the version and size under it (the Windows feed gives no size, so the script asks the server with a HEAD request). This needs `connect-src 'self'` in the CSP. If the feed can't be read, the button keeps the stable `/downloads/` link and the line stays empty. Phones, tablets (iPad included), ChromeOS and anything unrecognised get a neutral download icon that opens the list of all four. `window.BrawlOnline.detectOS({ ua, platform, touchPoints, uaData, arch })` is exposed for testing the detection with any user agent.
 
 The launcher's own update feed (electron-updater, `generic` provider) is `https://brawlonline.net/updates/launcher` (`launcher/src/common/product.ts`). The download links can point at the installers there once releases are published, or at a stable copy under `/downloads/`.
 
