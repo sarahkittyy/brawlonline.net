@@ -95,7 +95,6 @@
   box-sizing: border-box;
   width: 100%;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 140px) 64px 64px 96px 56px;
   align-items: center;
   gap: 12px;
   padding: 10px 12px;
@@ -256,7 +255,6 @@
 
 @media (width <= 1000px) {
   .row {
-    grid-template-columns: minmax(0, 1fr) minmax(0, 110px) 56px 52px 84px 48px;
     gap: 8px;
   }
 }
@@ -513,9 +511,37 @@
   color: #f28b82;
 }
 
-/* Room for four mains beside the count; Join / Full as written. */
+/* The rows share the list's columns (subgrid), each column as wide as the widest of its cells, so the room's name
+   gets what the other cells don't use (Sarah's board: fixed columns left empty space while names were cut): the
+   ruleset up to 130 px (72 px in a narrow panel; nothing when no room has one), the mode, the mains and count, the
+   status and Join / Full as written. */
+.list {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) fit-content(130px) repeat(4, auto);
+  column-gap: 12px;
+}
+
+.list > li {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: subgrid;
+}
+
 .row {
-  grid-template-columns: minmax(0, 1fr) minmax(0, 130px) 56px 112px 88px 52px;
+  grid-column: 1 / -1;
+  grid-template-columns: subgrid;
+}
+
+@container (width < 700px) {
+  .list {
+    grid-template-columns: minmax(0, 1fr) fit-content(72px) repeat(4, auto);
+  }
+}
+
+@media (width <= 1000px) {
+  .list {
+    column-gap: 8px;
+  }
 }
 
 .action {
