@@ -13,7 +13,7 @@ import TextField from "@mui/material/TextField";
 import Tooltip from "@mui/material/Tooltip";
 import Typography from "@mui/material/Typography";
 import { useQuery } from "@tanstack/react-query";
-import React, { useCallback, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 
 import { Flag } from "@/components/flag/flag";
 import { InfiniteScrollContainer } from "@/components/infinite_scroll_container/infinite_scroll_container";
@@ -92,7 +92,24 @@ export const LeaderboardPage = React.memo(function LeaderboardPage() {
   );
   const rows = scope === "friends" ? friendsRows : pages.items;
   const me = myRow.data;
-  const meShown = rows.some((e) => e.uid === myUid);
+  const meListed = rows.some((e) => e.uid === myUid);
+  // The player's own row in the list on screen (all of it): the pinned one goes, and comes back once it scrolls out of
+  // view again (Sarah's board: it went for good once the row had been loaded).
+  const listRef = useRef<HTMLDivElement>(null);
+  const [meInView, setMeInView] = useState(false);
+  useEffect(() => {
+    const row = meListed ? listRef.current?.querySelector("[data-me]") : null;
+    if (!row || typeof IntersectionObserver === "undefined") {
+      setMeInView(false);
+      return;
+    }
+    // (Hiding or showing the pinned row moves the list's foot; either state then holds, so it doesn't flicker.)
+    const observer = new IntersectionObserver(([e]) => setMeInView(e.intersectionRatio > 0.95), {
+      threshold: [0, 0.5, 0.96, 1],
+    });
+    observer.observe(row);
+    return () => observer.disconnect();
+  }, [meListed, rows]);
 
   return (
     <div className={styles.page}>
@@ -156,7 +173,7 @@ export const LeaderboardPage = React.memo(function LeaderboardPage() {
           className={styles.search}
         />
       </div>
-      <div className={styles.list}>
+      <div className={styles.list} ref={listRef}>
         <InfiniteScrollContainer
           onLoadMore={pages.loadMore}
           hasMore={scope === "all" && pages.hasMore && !pages.error}
@@ -185,7 +202,7 @@ export const LeaderboardPage = React.memo(function LeaderboardPage() {
           {scope === "all" && <PagedListStatus pages={pages} />}
         </InfiniteScrollContainer>
       </div>
-      {me && !meShown && !search && (
+      {me && !meInView && !search && (
         <div className={styles.me} data-testid="leaderboard-me">
           <Table size="small">
             <TableBody>

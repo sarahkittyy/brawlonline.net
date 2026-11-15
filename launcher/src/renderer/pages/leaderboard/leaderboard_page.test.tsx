@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import type { LeaderboardEntry, LeaderboardPage as Page } from "@/services/backend/types";
@@ -27,9 +27,13 @@ const fetchLeaderboard = vi.fn(async (after?: string, search?: string): Promise<
   return { entries, next: null, total: everyone.length };
 });
 
-vi.mock("@/services", () => ({ useServices: () => ({ backendService: { fetchLeaderboard } }) }));
+vi.mock("@/services", () => ({
+  useServices: () => ({ backendService: { fetchLeaderboard, fetchFriendsLeaderboard: vi.fn() } }),
+}));
+// Logged out unless a test logs in as one of `everyone`.
+let account: { user: { uid: string } | null; userData?: { playKey: { connectCode: string } } } = { user: null };
 vi.mock("@/lib/hooks/use_account", () => ({
-  useAccount: (select: (s: { user: null }) => unknown) => select({ user: null }),
+  useAccount: (select: (s: typeof account) => unknown) => select(account),
 }));
 
 function renderPage() {
@@ -74,5 +78,41 @@ describe("LeaderboardPage search", () => {
     fireEvent.click(getByLabelText("Clear search"));
     await waitFor(() => expect(names(container)).toEqual(["ann", "bob", "annie"]));
     expect(calls.map((c) => c.search)).toEqual([undefined, "ann", "zed"]);
+  });
+});
+
+describe("LeaderboardPage own row", () => {
+  it("pins the player's own row under the list whenever their row in the list isn't on screen", async () => {
+    account = { user: { uid: "u2" }, userData: { playKey: { connectCode: "BOB#2" } } };
+    // The list's row seen or not, as the IntersectionObserver says.
+    const observers: ((entries: { intersectionRatio: number }[]) => void)[] = [];
+    vi.stubGlobal(
+      "IntersectionObserver",
+      class {
+        constructor(cb: (entries: { intersectionRatio: number }[]) => void) {
+          observers.push(cb);
+        }
+        observe() {}
+        disconnect() {}
+      },
+    );
+    try {
+      const { container, queryByTestId } = renderPage();
+      await waitFor(() => expect(names(container)).toContain("bob"));
+      await waitFor(() => expect(queryByTestId("leaderboard-me")).not.toBeNull());
+      const seen = (ratio: number) => act(() => observers[observers.length - 1]([{ intersectionRatio: ratio }]));
+
+      seen(1);
+      expect(queryByTestId("leaderboard-me")).toBeNull();
+      // Scrolled away again: pinned again (it used to stay gone once the row had loaded).
+      seen(0);
+      expect(queryByTestId("leaderboard-me")).not.toBeNull();
+      // Half in view isn't in view.
+      seen(0.5);
+      expect(queryByTestId("leaderboard-me")).not.toBeNull();
+    } finally {
+      vi.unstubAllGlobals();
+      account = { user: null };
+    }
   });
 });
