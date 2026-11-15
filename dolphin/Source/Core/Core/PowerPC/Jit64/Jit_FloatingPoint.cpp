@@ -351,6 +351,10 @@ void Jit64::fp_arith(UGeckoInstruction inst)
     FinalizeDoubleResult(Rd, R(dest));
 }
 
+// The even-tie test of an accurate single-precision madd's result (bits & 0x1fffffff ==
+// 0x10000000), both lanes: shifted left by 35, a tie leaves only the sign bit.
+alignas(16) static const u64 madd_tie_bits[2] = {0x8000000000000000ULL, 0x8000000000000000ULL};
+
 void Jit64::fmaddXX(UGeckoInstruction inst)
 {
   INSTRUCTION_START
@@ -694,6 +698,37 @@ void Jit64::fmaddXX(UGeckoInstruction inst)
 
     // We've calculated s := a + b, with a = Ra * Rc_rounded_duplicated, b = subtract ? -Rb : Rb
 
+    // Rounding s to single precision can only differ from rounding a + b exactly when s is an
+    // even tie at single precision (low 29 bits 0x10000000), the test fmadds_eft and ps_madd_eft
+    // start with; for any other s they return it as it is. So test for a tie here and compute
+    // the error terms and call the routine out of line only for one (about 1 in 40 madds in a
+    // Brawl match, GitHub issue #40): the far code is the code as it was, reading the inputs the
+    // test leaves alone, and returns XMM1 to the join; every other result is s, as before. The
+    // test clobbers only XMM0, RSCRATCH, RSCRATCH2 and flags, which the routines clobber too. The
+    // packed test needs SSE4.1 (PCMPEQQ, PTEST): without it, and with software FMA, everything
+    // stays inline as before.
+    std::optional<FixupBranch> tie;
+    if (!software_fma && (!packed || cpu_info.bSSE4_1) && m_far_code.Enabled() &&
+        !m_far_code.IsInSpace(GetCodePtr()))
+    {
+      if (packed)
+      {
+        avx_op(&XEmitter::VPSLLQ, &XEmitter::PSLLQ, XMM0, XMM1, 35);
+        PCMPEQQ(XMM0, MConst(madd_tie_bits));
+        PTEST(XMM0, R(XMM0));
+        tie = J_CC(CC_NZ, Jump::Near);
+      }
+      else
+      {
+        MOVQ_xmm(R(RSCRATCH), XMM1);
+        LEA(32, RSCRATCH2, MScaled(RSCRATCH, SCALE_8, static_cast<s32>(0x80000000)));
+        TEST(32, R(RSCRATCH2), R(RSCRATCH2));
+        tie = J_CC(CC_Z, Jump::Near);
+      }
+      SwitchToFarCode();
+      SetJumpTarget(*tie);
+    }
+
     if (packed)
     {
       // a' := s - b
@@ -805,6 +840,13 @@ void Jit64::fmaddXX(UGeckoInstruction inst)
         SUBSD(XMM2, Rb);
 
       CALL(GetAsmRoutines()->fmadds_eft);
+    }
+
+    if (tie)
+    {
+      FixupBranch join = J(Jump::Near);
+      SwitchToNearCode();
+      SetJumpTarget(join);
     }
   }
 
