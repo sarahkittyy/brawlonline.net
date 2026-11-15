@@ -42,7 +42,7 @@ pub struct Config {
     pub latest_version: Option<String>,
 
     /// The launcher's update feed folder (electron-builder's latest.yml, latest-mac.yml,
-    /// latest-linux.yml): a game older than its platform's newest build may not play online.
+    /// latest-linux.yml, latest-linux-arm64.yml): a game older than its platform's newest build may not play online.
     /// Production: /var/www/brawlonline/updates/launcher.
     #[arg(long, env = "MM_UPDATE_FEED_DIR")]
     pub update_feed_dir: Option<std::path::PathBuf>,

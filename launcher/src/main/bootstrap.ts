@@ -16,6 +16,8 @@ export type AppBootstrap = {
   isMac: boolean;
   isLinux: boolean;
   isWindows: boolean;
+  /** process.arch: "x64" or "arm64" (Linux has a build of each). */
+  arch: string;
   locale: string;
   updateState?: UpdateState;
   /** How a launcher update is offered: installed in place, or as a download (macOS, see MAC_SELF_UPDATE). */
@@ -40,6 +42,7 @@ export function getAppBootstrap(flags: ConfigFlags, updateState?: UpdateState): 
     isMac: process.platform === "darwin",
     isLinux: process.platform === "linux",
     isWindows: process.platform === "win32",
+    arch: process.arch,
     locale: app.getLocale(),
     updateState,
     launcherUpdateMode: getLauncherUpdateMode(process.platform),

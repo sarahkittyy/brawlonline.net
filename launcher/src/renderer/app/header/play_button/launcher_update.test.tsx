@@ -18,6 +18,7 @@ const { openExternal, installAppUpdate, showError, bootstrap } = vi.hoisted(() =
       updateState: undefined as { status: "succeeded" | "failed"; version: string } | undefined,
       isMac: false,
       isLinux: false,
+      arch: "x64",
     },
   };
   (window as any).electron = {
@@ -41,6 +42,8 @@ describe("LauncherUpdate", () => {
     showError.mockClear();
     bootstrap.launcherUpdateMode = "install";
     bootstrap.updateState = undefined;
+    bootstrap.isLinux = false;
+    bootstrap.arch = "x64";
     useAppStore.setState({
       updateVersion: "",
       updateReady: false,
@@ -107,6 +110,15 @@ describe("LauncherUpdate", () => {
     fireEvent.click(button(container));
     expect(openExternal).toHaveBeenCalledWith(launcherDownloadUrl("win32"));
     expect(installAppUpdate).not.toHaveBeenCalled();
+  });
+
+  it("opens the arm64 AppImage on an arm64 Linux launcher", () => {
+    bootstrap.isLinux = true;
+    bootstrap.arch = "arm64";
+    useAppStore.setState({ updateVersion: "0.1.99", updateDownloadProgress: 10, updateDownloadFailed: true });
+    const { container } = render(<LauncherUpdate />);
+    fireEvent.click(button(container));
+    expect(openExternal).toHaveBeenCalledWith("https://brawlonline.net/downloads/BrawlOnline-arm64.AppImage");
   });
 
   it("installs a newer version by itself after an older one failed to install", async () => {

@@ -7,8 +7,9 @@ const DOWNLOADS = {
   windows: "/downloads/BrawlOnline-Setup.exe",
   macos: "/downloads/BrawlOnline.dmg",
   linux: "/downloads/BrawlOnline.AppImage",
+  "linux-arm64": "/downloads/BrawlOnline-arm64.AppImage",
 };
-const OS_NAMES = { windows: "Windows", macos: "macOS", linux: "Linux" };
+const OS_NAMES = { windows: "Windows", macos: "macOS", linux: "Linux", "linux-arm64": "Linux (ARM64)" };
 // The launcher's update feed (electron-updater). The button links the installer it names, so the
 // version and size under the button are always those of the file it downloads.
 const FEED_DIR = "/updates/launcher/";
@@ -16,12 +17,16 @@ const FEEDS = {
   windows: { feed: "latest.yml", file: /\.exe$/ },
   macos: { feed: "latest-mac.yml", file: /\.dmg$/, note: "Apple Silicon" },
   linux: { feed: "latest-linux.yml", file: /\.AppImage$/ },
+  "linux-arm64": { feed: "latest-linux-arm64.yml", file: /\.AppImage$/ },
 };
 // ----------------------------------------------------------------------------
 
 /**
- * "windows" | "macos" | "linux" | "mobile" | "unknown".
- * Pure, so it can be tested with any inputs: detectOS({ ua, platform, touchPoints, uaData }).
+ * "windows" | "macos" | "linux" | "linux-arm64" | "mobile" | "unknown".
+ * Pure, so it can be tested with any inputs: detectOS({ ua, platform, touchPoints, uaData, arch }).
+ * arch is Chromium's userAgentData architecture ("arm", "x86"), which it gives only when asked
+ * (getHighEntropyValues): its user agent and navigator.platform say x86_64 on every Linux.
+ * Firefox names the CPU in both ("Linux aarch64").
  */
 function detectOS(env) {
   const ua = env.ua || "";
@@ -36,17 +41,30 @@ function detectOS(env) {
     // iPadOS asks for the desktop site with a Mac user agent; only a touch screen tells it apart.
     return env.touchPoints > 1 ? "mobile" : "macos";
   }
-  if (/linux/.test(p) || /Linux/.test(ua)) return "linux"; // Includes the Steam Deck.
+  if (/linux/.test(p) || /Linux/.test(ua)) {
+    // Includes the Steam Deck (x86_64).
+    const arm = env.arch === "arm" || /aarch64|arm64|armv8/i.test(platform + " " + ua);
+    return arm ? "linux-arm64" : "linux";
+  }
   return "unknown";
 }
 
-function currentOS() {
-  return detectOS({
+async function currentOS() {
+  const env = {
     ua: navigator.userAgent,
     platform: navigator.platform,
     touchPoints: navigator.maxTouchPoints || 0,
     uaData: navigator.userAgentData || null,
-  });
+  };
+  // On Linux, Chromium tells an arm64 machine apart only when asked.
+  if (detectOS(env) === "linux" && env.uaData && env.uaData.getHighEntropyValues) {
+    try {
+      env.arch = (await env.uaData.getHighEntropyValues(["architecture"])).architecture;
+    } catch (e) {
+      // Not given: x86_64.
+    }
+  }
+  return detectOS(env);
 }
 
 function setupDownloads(os) {
@@ -65,7 +83,7 @@ function setupDownloads(os) {
     dl.querySelector(".dl-label").textContent = "Download for " + OS_NAMES[os];
     showRelease(os, dl);
   } else {
-    // Unknown OS or a phone: the neutral icon opens the list of all three.
+    // Unknown OS or a phone: the neutral icon opens the list of all of them.
     dl.href = "#other";
     dl.addEventListener("click", (e) => {
       e.preventDefault();
@@ -330,7 +348,7 @@ async function setupBlogBadge() {
 }
 
 window.BrawlOnline = { detectOS, parseFeed, blogHasNew, DOWNLOADS };
-setupDownloads(currentOS());
+currentOS().then(setupDownloads);
 setupVideo();
 setupDialogs();
 setupTop10();
