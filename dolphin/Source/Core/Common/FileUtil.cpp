@@ -6,6 +6,9 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#if defined(_WIN32) && !defined(_MSC_VER)  // MinGW (the core's standalone build)
+#include <share.h>
+#endif
 #include <cstring>
 #include <fcntl.h>
 #include <filesystem>
