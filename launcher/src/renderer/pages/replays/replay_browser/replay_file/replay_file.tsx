@@ -73,11 +73,13 @@ export const ReplayFile = React.memo(function ReplayFile({
           background-color: ${playing ? "rgba(180, 130, 176, 0.1)" : "transparent"};
         `}
       >
+        {/* (The buttons stay level with the first line of players when the teams take two.) */}
         <div
           css={css`
             display: flex;
-            align-items: center;
+            align-items: flex-start;
             justify-content: space-between;
+            gap: 4px;
             width: 100%;
           `}
         >
@@ -175,7 +177,9 @@ const Outer = styled.div<{
   border-color: ${(p) => (p.selected ? "rgba(255, 255, 255, 0.7)" : "rgba(159, 116, 192, 0.1)")};
   overflow: hidden;
   border-radius: 10px;
-  height: 80px;
+  /* 80 px; taller when the teams take a line each (team_elements.tsx). */
+  min-height: 80px;
+  contain-intrinsic-size: auto 80px;
   margin: 0 0 10px;
   /* Off-screen rows skip style, layout and paint: the list keeps every replay it has loaded (#268). */
   content-visibility: auto;
