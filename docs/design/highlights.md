@@ -477,8 +477,11 @@ The page now:
   the menu); under 520 px of list the rows drop the stage picture (its name stays on line 2). Each
   later side is "vs" + side kept together, so players that don't fit on one line break before a
   "vs" ("KoF_comatoast" / "vs sarahkitty"), never inside a name; the 1v1 that shortened names
-  (adaebbd9) is gone. Less room is kept at the right for the hidden buttons (84 px, 116 with
-  remove).
+  (adaebbd9) is gone. Less room is kept at the right for the hidden buttons (78 px, 110 with
+  remove). Under 600 px of list every row is tighter (gaps around "vs" 8 px, in a player 4 px,
+  between pips 2 px; Sarah's board: "this 1v1 wrapping might be too aggressive? i think it could
+  fit, if just barely?"): sarahkitty vs KoF_comatoast needed 327 px and now 305, so it stays on one
+  line in a 425 px row (323 px for the players).
 - **Teams** (Sarah's board, 2026-11-15: "the order / layout of the players makes no sense": the
   second team wrapped inside its "vs", one player a line beside it): a line per team, the first
   with an invisible "vs" so the names start in one column, the players in columns across the teams

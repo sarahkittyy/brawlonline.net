@@ -240,7 +240,7 @@
   align-items: center;
   gap: 4px 12px;
   min-width: 0;
-  padding: 8px 84px 8px 12px;
+  padding: 8px 78px 8px 12px;
   border: none;
   border-radius: 8px;
   background: none;
@@ -258,7 +258,7 @@
 }
 
 .removable .row {
-  padding-right: 116px;
+  padding-right: 110px;
 }
 
 .row:focus-visible {
@@ -369,18 +369,23 @@
   flex: none;
 }
 
-/* A narrow list (the smallest window with the players' rail open): tighter, so names shorten as little as can be. */
+/* A narrow list (the smallest window with the players' rail open): every row tighter, so a 1v1 stays on one line
+   where it can (Sarah's board: "this 1v1 wrapping might be too aggressive? i think it could fit, if just barely?":
+   sarahkitty vs KoF_comatoast in a 425 px row needed 327 px of 317; ~22 px less now) and a team's names shorten as
+   little as can be. */
 @container (max-width: 600px) {
-  .who.teams {
+  .row .who,
+  .row .versus {
     column-gap: 8px;
   }
 
-  .teams .chip {
+  .row .chip {
     gap: 4px;
   }
 
-  .teams .pips {
+  .row .pips {
     gap: 2px;
+    margin-left: 0;
   }
 }
 
