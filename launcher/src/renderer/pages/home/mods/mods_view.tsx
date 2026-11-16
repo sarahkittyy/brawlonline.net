@@ -246,6 +246,8 @@ export const ModsView = (props: ModsViewProps) => {
                   onEdit={() => props.onEditBuild(build)}
                   onRemove={() => props.onRemoveBuild(build)}
                   onCodes={props.onCodes ? () => props.onCodes?.(build) : undefined}
+                  isPublic={hostPublic}
+                  onPublicChange={setHostPublic}
                   onHost={() => props.onHost(build, hostPublic)}
                 />
               ))}
@@ -795,6 +797,8 @@ const BuildRow = ({
   onEdit,
   onRemove,
   onCodes,
+  isPublic,
+  onPublicChange,
   onHost,
 }: {
   build: ModBuild;
@@ -805,6 +809,9 @@ const BuildRow = ({
   onEdit: () => void;
   onRemove: () => void;
   onCodes?: () => void;
+  /** Whether Host opens a public room: one value for every game (the room panel's switch, as last left). */
+  isPublic: boolean;
+  onPublicChange: (isPublic: boolean) => void;
   onHost: () => void;
 }) => {
   const hashing = progress !== undefined;
@@ -892,6 +899,12 @@ const BuildRow = ({
         {onCodes && hasRoomCodes(build) && (
           <CodesButton names={(build.codes?.on ?? []).map((c) => c.name)} onClick={onCodes} />
         )}
+        <Tooltip title={Messages.publicRoomTooltip()}>
+          <label className={clsx(styles.toggle, styles.buildToggle)}>
+            <Switch size="small" checked={isPublic} onChange={(e) => onPublicChange(e.target.checked)} />
+            <PublicLabel isPublic={isPublic} />
+          </label>
+        </Tooltip>
       </div>
     </div>
   );
