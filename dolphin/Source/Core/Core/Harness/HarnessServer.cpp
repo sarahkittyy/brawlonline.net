@@ -750,6 +750,120 @@ Result CmdPadCounter(const Args& args)
   return {};
 }
 
+s64 SteadyUs(Clock::time_point t)
+{
+  return std::chrono::duration_cast<std::chrono::microseconds>(t.time_since_epoch()).count();
+}
+
+Clock::time_point FromSteadyUs(s64 us)
+{
+  return Clock::time_point(std::chrono::duration_cast<Clock::duration>(std::chrono::microseconds(us)));
+}
+
+// pad_tape: rows [[t_us, buttons, stick_x, stick_y, c_x, c_y, l, r], ...] with t_us on the host's
+// steady clock (CLOCK_MONOTONIC on Linux, as Python's time.monotonic_ns()).
+Result CmdPadTape(const Args& args)
+{
+  const int port = GetPadPort(args);
+  Result r;
+  if (GetBool(args, "clear", false))
+  {
+    PadTapeClear(port);
+    r["now_us"] = picojson::value(static_cast<double>(SteadyUs(Clock::now())));
+    return r;
+  }
+  const picojson::value* rows_v = Find(args, "rows");
+  if (!rows_v)
+  {
+    // The host clock alone (the caller's offset check).
+    r["now_us"] = picojson::value(static_cast<double>(SteadyUs(Clock::now())));
+    return r;
+  }
+  if (!rows_v->is<picojson::array>() || rows_v->get<picojson::array>().empty())
+    Fail("'rows' must be a non-empty list");
+  PadTapeSpec tape;
+  const std::string model = GetString(args, "model", "ideal");
+  if (model == "ideal")
+  {
+    tape.model = PadTapeModel::Ideal;
+  }
+  else if (model == "mapped")
+  {
+    tape.model = PadTapeModel::Mapped;
+  }
+  else if (model == "adapter")
+  {
+    tape.model = PadTapeModel::Adapter;
+    const picojson::value* hz = Find(args, "hz");
+    const double rate = hz && hz->is<double>() ? hz->get<double>() : 125.0;
+    if (!(rate >= 1 && rate <= 8000))
+      Fail("'hz' must be 1-8000");
+    tape.period = std::chrono::duration_cast<Clock::duration>(std::chrono::duration<double>(1.0 / rate));
+    if (const picojson::value* ph = Find(args, "phase_us"))
+    {
+      if (!ph->is<double>())
+        Fail("'phase_us' must be a number");
+      tape.phase = FromSteadyUs(static_cast<s64>(ph->get<double>()));
+    }
+    if (const picojson::value* lat = Find(args, "latency_us"))
+    {
+      if (!lat->is<double>() || lat->get<double>() < 0)
+        Fail("'latency_us' must be a number >= 0");
+      tape.latency = std::chrono::microseconds(static_cast<s64>(lat->get<double>()));
+    }
+    tape.history = static_cast<u32>(GetU64(args, "history", 128));
+    if (tape.history < 1)
+      Fail("'history' must be at least 1");
+  }
+  else
+  {
+    Fail("'model' must be ideal, mapped or adapter");
+  }
+  for (const auto& rv : rows_v->get<picojson::array>())
+  {
+    if (!rv.is<picojson::array>() || rv.get<picojson::array>().size() != 8)
+      Fail("each row must be [t_us, buttons, stick_x, stick_y, c_x, c_y, l, r]");
+    const auto& a = rv.get<picojson::array>();
+    std::array<double, 8> v{};
+    for (size_t i = 0; i < 8; ++i)
+    {
+      if (!a[i].is<double>())
+        Fail("row values must be numbers");
+      v[i] = a[i].get<double>();
+      if (i > 0 && (v[i] < 0 || v[i] > (i == 1 ? 0xFFFF : 255)))
+        Fail("row values out of range");
+    }
+    GCPadStatus pad{};
+    pad.isConnected = true;
+    pad.button = static_cast<u16>(v[1]);
+    pad.stickX = static_cast<u8>(v[2]);
+    pad.stickY = static_cast<u8>(v[3]);
+    pad.substickX = static_cast<u8>(v[4]);
+    pad.substickY = static_cast<u8>(v[5]);
+    pad.triggerLeft = static_cast<u8>(v[6]);
+    pad.triggerRight = static_cast<u8>(v[7]);
+    pad.analogA = (pad.button & PAD_BUTTON_A) ? 0xFF : 0;
+    pad.analogB = (pad.button & PAD_BUTTON_B) ? 0xFF : 0;
+    const Clock::time_point at = FromSteadyUs(static_cast<s64>(v[0]));
+    if (!tape.rows.empty() && at < tape.rows.back().at)
+      Fail("rows must be in time order");
+    tape.rows.push_back({at, pad});
+  }
+  const size_t n = tape.rows.size();
+  if (GetBool(args, "append", false))
+  {
+    if (const auto error = PadTapeAppend(port, std::move(tape.rows)))
+      Fail(*error);
+    r["now_us"] = picojson::value(static_cast<double>(SteadyUs(Clock::now())));
+    r["rows"] = Num(static_cast<u64>(n));
+    return r;
+  }
+  const Clock::time_point took = PadTape(port, std::move(tape));
+  r["now_us"] = picojson::value(static_cast<double>(SteadyUs(took)));
+  r["rows"] = Num(static_cast<u64>(n));
+  return r;
+}
+
 Result CmdPadClear(const Args& args)
 {
   const u64 port = GetU64(args, "port");
@@ -2269,6 +2383,7 @@ const std::vector<std::pair<std::string_view, Handler>>& Handlers()
       {"pad_set", CmdPadSet},
       {"pad_clear", CmdPadClear},
       {"pad_counter", CmdPadCounter},
+      {"pad_tape", CmdPadTape},
       {"pad_script", CmdPadScript},
       {"pad_script_status", CmdPadScriptStatus},
       {"rumble_status", CmdRumbleStatus},

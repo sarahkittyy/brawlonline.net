@@ -40,6 +40,10 @@ std::atomic<u32> g_pad_override_mask{0};
 
 namespace
 {
+using Internal::PadTapeModel;
+using Internal::PadTapeRow;
+using Internal::PadTapeSpec;
+
 HostCallbacks s_host;
 
 std::atomic<u64> s_frame{0};
@@ -89,6 +93,11 @@ struct PortState
   };
   std::optional<Counter> counter;
 
+  // pad_tape: the port's state as a function of host time (PadTape), with a device model.
+  std::optional<PadTapeSpec> tape;
+  // What the port presented when the tape was submitted: its state before the first row.
+  GCPadStatus tape_before{};
+
   // Cached result for the current poll.
   bool overriding = false;
   GCPadStatus current{};
@@ -120,6 +129,34 @@ GCPadStatus CounterPad(const PortState::Counter& c, Clock::time_point t)
   return pad;
 }
 
+// The instant a device model's state at host time `t` was the controller's: `t` itself, or for
+// an adapter the last report it delivered by then (reports every period from `phase`, each
+// `latency` after the controller was read).
+Clock::time_point TapeDataTime(const PadTapeSpec& tape, Clock::time_point t)
+{
+  if (tape.model != PadTapeModel::Adapter || tape.period.count() <= 0)
+    return t;
+  const auto read = t - tape.latency;
+  const auto since = read - tape.phase;
+  auto k = since.count() / tape.period.count();
+  if (since.count() < 0 && since.count() % tape.period.count() != 0)
+    --k;  // floor
+  return tape.phase + k * tape.period;
+}
+
+// The tape's state at host time `t` (as the device model presents it); `before` until the first
+// row.
+GCPadStatus TapePad(const PadTapeSpec& tape, const GCPadStatus& before, Clock::time_point t)
+{
+  const Clock::time_point at = TapeDataTime(tape, t);
+  const auto it = std::upper_bound(
+      tape.rows.begin(), tape.rows.end(), at,
+      [](Clock::time_point v, const PadTapeRow& row) { return v < row.at; });
+  if (it == tape.rows.begin())
+    return before;
+  return std::prev(it)->pad;
+}
+
 // s_pad_mutex must be held.
 void RecomputePort(int port, u64 poll_index)
 {
@@ -134,7 +171,12 @@ void RecomputePort(int port, u64 poll_index)
       state.neutral = true;
   }
 
-  if (state.counter)
+  if (state.tape)
+  {
+    state.overriding = true;
+    state.current = TapePad(*state.tape, state.tape_before, Clock::now());
+  }
+  else if (state.counter)
   {
     state.overriding = true;
     state.current = CounterPad(*state.counter, Clock::now());
@@ -223,7 +265,9 @@ void ApplyPadOverrideSlow(int port, GCPadStatus* status)
     return;
   std::lock_guard lk(s_pad_mutex);
   const PortState& state = s_ports[port];
-  if (state.counter)
+  if (state.tape)
+    *status = TapePad(*state.tape, state.tape_before, Clock::now());
+  else if (state.counter)
     *status = CounterPad(*state.counter, Clock::now());
   else if (state.overriding)
     *status = state.current;
@@ -235,6 +279,26 @@ std::optional<GCPadStatus> PadOverrideAtSlow(int port, Clock::time_point t)
     return std::nullopt;
   std::lock_guard lk(s_pad_mutex);
   const PortState& state = s_ports[port];
+  if (state.tape)
+  {
+    // A pad mapped in Dolphin (SDL, XInput, a keyboard...) is read when called and keeps no past.
+    if (state.tape->model == PadTapeModel::Mapped)
+      return std::nullopt;
+    // The adapter keeps its last `history` reports: an instant before the oldest has no past
+    // (GCAdapter::InputAt's nullopt: the read takes the controller now).
+    const PadTapeSpec& tape = *state.tape;
+    if (tape.model == PadTapeModel::Adapter && tape.period.count() > 0 &&
+        t < TapeDataTime(tape, Clock::now()) - static_cast<s64>(tape.history - 1) * tape.period)
+    {
+      return std::nullopt;
+    }
+    if (t < tape.submitted)
+    {
+      if (const std::optional<GCPadStatus>* then = state.history.At(t))
+        return *then;
+    }
+    return TapePad(tape, state.tape_before, t);
+  }
   if (state.counter)
     return CounterPad(*state.counter, t);
   // A script steps with the game's reads, not with time: its current entry.
@@ -492,6 +556,7 @@ void PadSet(int port, const GCPadStatus& status)
   ps.set = status;
   ps.neutral = false;
   ps.counter.reset();
+  ps.tape.reset();
   RecomputePort(port, s_current_poll_index);
 }
 
@@ -511,6 +576,46 @@ void PadCounter(int port, double rate_hz, std::vector<u16> buttons)
   PortState& ps = s_ports[port];
   ps.counter = PortState::Counter{Clock::now(), rate_hz, std::move(buttons)};
   ps.neutral = false;
+  ps.tape.reset();
+  RecomputePort(port, s_current_poll_index);
+}
+
+Clock::time_point PadTape(int port, PadTapeSpec tape)
+{
+  std::lock_guard lk(s_pad_mutex);
+  PortState& ps = s_ports[port];
+  const Clock::time_point now = Clock::now();
+  // Before its first row the port goes on presenting what it presents now.
+  ps.tape_before = ps.overriding ? ps.current : NeutralPad();
+  tape.submitted = now;
+  ps.tape = std::move(tape);
+  ps.counter.reset();
+  ps.neutral = false;
+  RecomputePort(port, s_current_poll_index);
+  return now;
+}
+
+std::optional<std::string> PadTapeAppend(int port, std::vector<PadTapeRow> rows)
+{
+  std::lock_guard lk(s_pad_mutex);
+  PortState& ps = s_ports[port];
+  if (!ps.tape)
+    return "the port has no tape to append to";
+  if (!rows.empty() && !ps.tape->rows.empty() && rows.front().at < ps.tape->rows.back().at)
+    return "appended rows must not start before the tape's last row";
+  ps.tape->rows.insert(ps.tape->rows.end(), rows.begin(), rows.end());
+  return std::nullopt;
+}
+
+void PadTapeClear(int port)
+{
+  std::lock_guard lk(s_pad_mutex);
+  PortState& ps = s_ports[port];
+  if (!ps.tape)
+    return;
+  // The port keeps the tape's state of now, as a pad_set, so the game sees no unplugged pad.
+  ps.set = TapePad(*ps.tape, ps.tape_before, Clock::now());
+  ps.tape.reset();
   RecomputePort(port, s_current_poll_index);
 }
 
@@ -531,6 +636,7 @@ std::optional<std::string> PadScript(int port, std::vector<GCPadStatus> timeline
                        starts_at, next_poll);
 
   PortState& ps = s_ports[port];
+  ps.tape.reset();
   // Bridge the polls until the new script starts with what the port presents now.
   if (ps.overriding)
     ps.gap = ps.current;

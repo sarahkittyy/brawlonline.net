@@ -130,11 +130,16 @@ TEST_F(HostPadReadTest, ReadsFarBehindScheduleTakeTheControllerNow)
   ct.ResetThrottleToNow();
   EXPECT_EQ(Read(), PAD_BUTTON_A);
 
-  // A PC that cannot keep full speed: the read comes 40 ms (over a field) behind its due instant.
-  // Not the controller of then (A) but the one now (B).
+  // The reads come 40 ms (over a field) behind their due instant. The first ones are a frame
+  // catching up after a hitch: the controller of then (A), from its past.
   std::this_thread::sleep_for(10ms);
   Harness::Internal::PadSet(0, Pad(PAD_BUTTON_B));
   std::this_thread::sleep_for(30ms);
+  for (int i = 0; i < 24; ++i)
+    EXPECT_EQ(Read(), PAD_BUTTON_A) << i;
+
+  // Still that far behind 24 reads later: a PC that cannot keep full speed. Not the controller of
+  // then (A) but the one now (B).
   EXPECT_EQ(Read(), PAD_BUTTON_B);
 
   // The re-run right after takes that read (it is fresh, whatever instant it stands for).
@@ -145,6 +150,7 @@ TEST_F(HostPadReadTest, ReadsFarBehindScheduleTakeTheControllerNow)
 
   const Gprb::HostPadReadStats st = Gprb::TakeHostPadReadStats();
   EXPECT_EQ(st.on_time, 1u);
+  EXPECT_EQ(st.catch_up, 24u);
   EXPECT_EQ(st.late_far, 1u);
   EXPECT_EQ(st.late_history, 0u);
   EXPECT_EQ(st.latched, 1u);
@@ -602,4 +608,67 @@ TEST_F(HostPadReadTest, ALocalPadPlayingAnotherPortGetsThatPortsLightPresses)
   stats = Gprb::TakeHostPadReadStats();
   EXPECT_EQ(stats.decode_mismatched, 0u);
   Gprb::ClearHostPadPlaysPort();
+}
+
+// pad_tape (harness/tools/input_fidelity.py): a port's state as a function of host time, with the
+// device model's past.
+TEST_F(HostPadReadTest, TapeIsTheStateAtEachInstantAsTheDeviceShowsIt)
+{
+  using Harness::Internal::PadTapeModel;
+  using Harness::Internal::PadTapeRow;
+  using Harness::Internal::PadTapeSpec;
+  Harness::Internal::PadSet(0, Pad(PAD_BUTTON_Y));
+  const auto t0 = std::chrono::steady_clock::now() + 100ms;
+  const auto tape = [&](PadTapeModel model) {
+    PadTapeSpec spec;
+    spec.model = model;
+    spec.rows = {{t0, Pad(PAD_BUTTON_A)}, {t0 + 3ms, Pad(PAD_BUTTON_B)}, {t0 + 20ms, Pad(0)}};
+    return spec;
+  };
+  const auto at = [](Clock::time_point t) {
+    const auto pad = Harness::PadOverrideAt(0, t);
+    return pad ? std::optional<u16>(pad->button) : std::nullopt;
+  };
+
+  // Ideal: the row in force at any instant; before the first, what the port presented.
+  Harness::Internal::PadTape(0, tape(PadTapeModel::Ideal));
+  EXPECT_EQ(at(t0 - 1ms), std::optional<u16>(PAD_BUTTON_Y));
+  EXPECT_EQ(at(t0), std::optional<u16>(PAD_BUTTON_A));
+  EXPECT_EQ(at(t0 + 2999us), std::optional<u16>(PAD_BUTTON_A));
+  EXPECT_EQ(at(t0 + 3ms), std::optional<u16>(PAD_BUTTON_B));
+  EXPECT_EQ(at(t0 + 1s), std::optional<u16>(0));
+  GCPadStatus now{};
+  Harness::ApplyPadOverride(0, &now);
+  EXPECT_EQ(now.button, PAD_BUTTON_Y);  // the first row is 100 ms away
+
+  // Mapped: no past at all (ReadHostPad then reads it now).
+  Harness::Internal::PadTape(0, tape(PadTapeModel::Mapped));
+  EXPECT_EQ(at(t0 + 4ms), std::nullopt);
+
+  // Adapter at 125 Hz, reports read at t0 - 2 ms + k * 8 ms and in Dolphin 1 ms later: the last
+  // report by then.
+  PadTapeSpec adapter = tape(PadTapeModel::Adapter);
+  adapter.period = 8ms;
+  adapter.phase = t0 - 2ms;
+  adapter.latency = 1ms;
+  Harness::Internal::PadTape(0, adapter);
+  EXPECT_EQ(at(t0 + 5ms), std::optional<u16>(PAD_BUTTON_Y));     // the report read at t0 - 2 ms
+  EXPECT_EQ(at(t0 + 6999us), std::optional<u16>(PAD_BUTTON_Y));  // still that one
+  EXPECT_EQ(at(t0 + 7ms), std::optional<u16>(PAD_BUTTON_B));     // read at t0 + 6 ms (A not seen)
+  EXPECT_EQ(at(t0 + 22ms), std::optional<u16>(PAD_BUTTON_B));    // read at t0 + 14 ms
+  EXPECT_EQ(at(t0 + 23ms), std::optional<u16>(0));               // read at t0 + 22 ms
+  // It keeps its last `history` reports: before the oldest there is no past (read it now).
+  adapter.history = 2;
+  Harness::Internal::PadTape(0, adapter);
+  EXPECT_EQ(at(std::chrono::steady_clock::now() - 50ms), std::nullopt);
+  EXPECT_EQ(at(t0 + 23ms), std::optional<u16>(0));
+
+  // More rows at the end; none before its last row.
+  EXPECT_FALSE(Harness::Internal::PadTapeAppend(0, {{t0 + 30ms, Pad(PAD_BUTTON_X)}}).has_value());
+  EXPECT_EQ(at(t0 + 40ms), std::optional<u16>(PAD_BUTTON_X));
+  EXPECT_TRUE(Harness::Internal::PadTapeAppend(0, {{t0 + 25ms, Pad(PAD_TRIGGER_Z)}}).has_value());
+
+  // pad_set ends the tape.
+  Harness::Internal::PadSet(0, Pad(PAD_TRIGGER_Z));
+  EXPECT_EQ(at(t0 + 40ms), std::optional<u16>(PAD_TRIGGER_Z));
 }

@@ -63,6 +63,7 @@
 #include "Core/Rollback/ClipRecorder.h"
 #include "Core/Rollback/FrameProfile.h"
 #include "Core/Rollback/GameplayRollback.h"
+#include "Core/Rollback/InputTrace.h"
 #include "Core/Rollback/PeerData.h"
 #include "Core/Rollback/PresentStats.h"
 #include "Core/Rollback/ReplayKeyframes.h"
@@ -517,6 +518,13 @@ struct State
   // The local controller port the local player uses this game (fixed in CreateGekko).
   int local_pad = 0;
   Clock::time_point local_sampled_at{};  // the local input's controller read (CaptureLocalInputs)
+  bool local_decoded = false;  // ... the host decode of that read (else the pad thread's pass)
+  // Input trace (Rollback::InputTrace): GekkoNet's confirmed frame at the last update, and the
+  // last pass run (its frame and that confirmed frame): the picture the next displayed pass shows.
+  s64 trace_confirmed = -1;
+  s64 trace_last_pass_frame = -1;
+  s64 trace_last_pass_confirmed = -1;
+  s64 test_hitch_frame = -1;  // PPR_GPRB_TEST_HITCH's last hitch
   // Early local input for a Wii controller (a GameCube controller has the host decode). The pass of
   // the pad thread that the next loop top's CaptureLocalInputs would take is made on most frames
   // just after the loop top before it, so its pad waited a field for nothing. It is handed to
@@ -4493,6 +4501,7 @@ void Hide(Core::System& system)
 
 void EndRunning(Core::System& system, const std::string& reason)
 {
+  Rollback::InputTrace::Flush();
   ResimHide::Restore(system);
   EiReleaseBatch();
   CostSessionEnd();
@@ -5197,11 +5206,11 @@ std::string NetStatsLine(const State::NetStats& w)
     line += fmt::format(", pad reads {} on time, {} in re-runs ({} read anew), late {} from history "
                         "{} live, {} far behind read now (max {:.1f} ms); host decode used {}, "
                         "declined {}, checked {}, differed {}; passes of an older read {}; read "
-                        "after a rollback {} (declined {})",
+                        "after a rollback {} (declined {}); catching up {}, held {}",
                         r.on_time, r.latched + r.relatched, r.relatched, r.late_history,
                         r.late_live, r.late_far, r.late_max_ms, r.decode_used, r.decode_declined,
                         r.decode_checked, r.decode_mismatched, r.pass_older, r.deferred_read,
-                        r.deferred_declined);
+                        r.deferred_declined, r.catch_up, r.held);
   }
   return line;
 }
@@ -5258,6 +5267,8 @@ void NetStatsFold(State::NetStats& t, const State::NetStats& w)
   t.pad_reads.relatched += w.pad_reads.relatched;
   t.pad_reads.deferred_read += w.pad_reads.deferred_read;
   t.pad_reads.deferred_declined += w.pad_reads.deferred_declined;
+  t.pad_reads.catch_up += w.pad_reads.catch_up;
+  t.pad_reads.held += w.pad_reads.held;
   t.pad_reads.late_max_ms = std::max(t.pad_reads.late_max_ms, w.pad_reads.late_max_ms);
   t.cadence.presents += w.cadence.presents;
   t.cadence.hitches += w.cadence.hitches;
@@ -5644,9 +5655,32 @@ void NetStatsOnDisplayedFrame(Core::System& system)
   s.net_window_first = -1;
 }
 
+u32 StartFrame();
+
+// Input trace (Rollback::InputTrace): a local input went to GekkoNet for its frame `frame`, made
+// of the controller read that stands for `instant` (`decoded`: the host decode of it).
+void TraceLocalInput(int frame, const u8* in, Clock::time_point instant, const char* how,
+                     bool decoded)
+{
+  if (s.mode != Mode::Network || !Rollback::InputTrace::Enabled())
+    return;
+  Clock::time_point data_at = instant;
+  const char* kind = "?";
+  HostPadReadNote(s.local_pad, instant, &data_at, &kind);
+  using Rollback::InputTrace::Us;
+  // "@catchup": the frame after a time sync catch-up frame (UpdateTimeSync's AdvanceThrottle put
+  // the schedule a frame earlier, so its read stands for the instant of the frame before).
+  Rollback::InputTrace::Write(fmt::format(
+      "L {} {} {} {} {}{} {} {:02x}{:02x}{:02x}{:02x} {:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+      static_cast<s64>(StartFrame()) + frame, instant == Clock::time_point{} ? 0 : Us(instant),
+      instant == Clock::time_point{} ? 0 : Us(data_at), kind, how,
+      s.prev_frame_advanced ? "@catchup" : "", decoded ? "decode" : "pass",
+      in[0], in[1], in[2], in[3], in[0x30], in[0x31], in[0x32], in[0x33], in[0x34], in[0x35]));
+}
+
 // Network: the loop top's local input (CaptureLocalInputs) for GekkoNet, unless the pass that
 // carries it was handed over early (OnPadPass): then it is compared with that one.
-void AddLocalInputAtLoopTop(int h, u8* in)
+void AddLocalInputAtLoopTop(int h, u8* in, const char* how = "looptop")
 {
   const int before = gekko_local_input_frame(s.gekko, h);
   const int target = gekko_current_frame(s.gekko) + GekkoDelayFor(s.input_delay);
@@ -5668,6 +5702,7 @@ void AddLocalInputAtLoopTop(int h, u8* in)
   const int after = gekko_local_input_frame(s.gekko, h);
   if (after > before)
   {
+    TraceLocalInput(after, in, s.local_sampled_at, how, s.local_decoded);
     State::EiFrame& f = s.ei_frames[static_cast<size_t>(after) % s.ei_frames.size()];
     f.frame = after;
     f.read = s.local_sampled_at;
@@ -5781,7 +5816,7 @@ bool HandleGekkoFrame(Core::System& system)
     {
       // No frame to run (a wait for the peer follows): the loop top's read goes now, as without.
       s.local_deferred = false;
-      AddLocalInputAtLoopTop(s.local_handles[0], s.local_deferred_in.data());
+      AddLocalInputAtLoopTop(s.local_handles[0], s.local_deferred_in.data(), "deferred-now");
     }
     if (s.mode == Mode::Network && gekko_current_frame(s.gekko) > frame_before)
     {
@@ -6071,6 +6106,18 @@ bool ProcessGekkoUpdate(Core::System& system, GekkoGameEvent** events, int count
     s.current_frame = s.ops.adv_frame[num_adv - 1];
   if (s.mode == Mode::Network)
     s.frames_ahead = gekko_frames_ahead(s.gekko);
+  if (num_adv > 0 && s.mode == Mode::Network && s.gekko)
+  {
+    const int confirmed = gekko_confirmed_frame(s.gekko);
+    s.trace_confirmed = confirmed >= 0 ? static_cast<s64>(StartFrame()) + confirmed : -1;
+    if (Rollback::InputTrace::Enabled())
+    {
+      Rollback::InputTrace::Write(fmt::format(
+          "U {} {} {} {} {}", Rollback::InputTrace::Us(Clock::now()),
+          static_cast<s64>(StartFrame()) + s.ops.adv_frame[0], num_adv, s.last_load_back,
+          s.trace_confirmed));
+    }
+  }
   return true;
 }
 
@@ -6475,6 +6522,7 @@ void CaptureLocalInputs()
       latest = PadsSampledBefore(s.local_pad, Clock::time_point::max(), &s.local_sampled_at);
     s.ei_loop_due = due;
     s.ei_loop_frame = s.gekko ? gekko_current_frame(s.gekko) : -1;
+    s.local_decoded = false;
     // A GameCube controller: the read the SI made just before this loop top, made into the pad
     // the pad thread will make of it after the loop top (host decode): a field fresher than that
     // pass. Only a read newer than the pass's and at most a field and a half old by the schedule
@@ -6487,6 +6535,7 @@ void CaptureLocalInputs()
     {
       std::memcpy(latest.data() + s.local_pad * INPUT_SIZE, decoded.data(), INPUT_SIZE);
       s.local_sampled_at = decoded_at;
+      s.local_decoded = true;
     }
   }
   else
@@ -6611,7 +6660,7 @@ void ArmDeferredLocalInput()
 }
 
 // The deferred local input to GekkoNet (under s.mutex): `in`, read at `read`.
-void AddDeferredLocalInput(const u8* in, Clock::time_point read)
+void AddDeferredLocalInput(const u8* in, Clock::time_point read, const char* how, bool decoded)
 {
   s.local_deferred = false;
   if (!s.gekko || s.local_handles.empty())
@@ -6627,6 +6676,7 @@ void AddDeferredLocalInput(const u8* in, Clock::time_point read)
                  target, gekko_local_input_frame(s.gekko, h));
     return;
   }
+  TraceLocalInput(target, in, read, how, decoded);
   State::EiFrame& f = s.ei_frames[static_cast<size_t>(target) % s.ei_frames.size()];
   f.frame = target;
   f.read = read;
@@ -6669,10 +6719,24 @@ void TakeDeferredLocalInput(Core::System& system)
     read = at;
   }
   std::lock_guard<std::recursive_timed_mutex> lk(s.mutex);
-  AddDeferredLocalInput(in.data(), read);
+  AddDeferredLocalInput(in.data(), read, decoded ? "deferred" : "deferred-declined",
+                        decoded || s.local_decoded);
   if (s.gekko)
     gekko_send_local_inputs(s.gekko);
   EiReleaseBatch();
+}
+
+// A rollback's re-run pass: the deferred local input's read is due (HostDecodeReadAt's instant,
+// the loop top's SI read's), so it is taken now rather than after the rest of the re-runs
+// (Gprb::DeferredReadDueOn). A pad mapped in Dolphin has no past: read after re-runs that ended
+// past that instant, it came that much late (harness/tools/input_fidelity.py: up to 7.7 ms, on
+// 0.8-7% of reads on links that roll back), and is now late by one re-run pass at most.
+bool DeferredReadDueInRerun()
+{
+  if (!s.local_deferred || !DeferredReadDueOn())
+    return false;
+  const std::optional<Clock::time_point> due = HostPadLastDue(s.local_pad);
+  return due && Clock::now() >= *due;
 }
 
 // The next loop top: a deferred input the presented pass did not take goes as the loop top read
@@ -6682,7 +6746,7 @@ void FlushDeferredLocalInput()
   if (!s.local_deferred)
     return;
   std::lock_guard<std::recursive_timed_mutex> lk(s.mutex);
-  AddDeferredLocalInput(s.local_deferred_in.data(), s.local_sampled_at);
+  AddDeferredLocalInput(s.local_deferred_in.data(), s.local_sampled_at, "flush", s.local_decoded);
 }
 
 void SetLoopDefault(PowerPC::PowerPCState& ppc)
@@ -6780,6 +6844,11 @@ void HardTimeSync(Core::System& system)
       },
       std::chrono::milliseconds(frames * 17 + 100));
   system.GetCoreTiming().ResetThrottleToNow();
+  if (Rollback::InputTrace::Enabled())
+  {
+    Rollback::InputTrace::Write(fmt::format("W {} {} sync", Rollback::InputTrace::Us(t0),
+                                            Rollback::InputTrace::Us(Clock::now())));
+  }
   const double ms = std::chrono::duration<double, std::milli>(Clock::now() - t0).count();
   ++s.net_window.stalls;
   s.net_window.stall_ms += ms;
@@ -7766,6 +7835,11 @@ bool RunFrame(const Core::CPUThreadGuard& guard)
           },
           std::chrono::milliseconds(2000));
       ct.ResetThrottleToNow();
+      if (Rollback::InputTrace::Enabled())
+      {
+        Rollback::InputTrace::Write(fmt::format("W {} {} peer", Rollback::InputTrace::Us(wait_t0),
+                                                Rollback::InputTrace::Us(Clock::now())));
+      }
       const double ms = std::chrono::duration<double, std::milli>(Clock::now() - wait_t0).count();
       ++s.net_window.stalls;
       s.net_window.stall_ms += ms;
@@ -7801,7 +7875,7 @@ bool RunFrame(const Core::CPUThreadGuard& guard)
                          !((s.pb.clip_ff || s.pb.seek_ff) &&
                            s.ops.adv_frame[i] % CLIP_SHOW_EVERY == 0) :
                      s.ops.adv_count > 1 && i != s.ops.adv_count - 1;
-  if (!s.resim_pass)
+  if (!s.resim_pass || DeferredReadDueInRerun())
     TakeDeferredLocalInput(system);
 
   if (s.force_final_at_active)
@@ -7984,9 +8058,15 @@ bool RunFrame(const Core::CPUThreadGuard& guard)
   if (!s.resim_pass)
   {
     Rollback::PresentStats::OnDisplayedFrameStart(s.ops.adv_count > 1);
+    Rollback::PresentStats::TagDisplayedFrame(
+        static_cast<s64>(StartFrame()) + s.ops.adv_frame[i], s.trace_last_pass_frame,
+        s.trace_last_pass_confirmed, s.ops.adv_count > 1);
     ++s.frames;
     NetStatsOnDisplayedFrame(system);
   }
+  // The picture this pass draws is the one the next displayed pass copies.
+  s.trace_last_pass_frame = static_cast<s64>(StartFrame()) + s.ops.adv_frame[i];
+  s.trace_last_pass_confirmed = s.trace_confirmed;
   // The replay: this pass's input (a later pass of the frame overwrites it), once per update the
   // frames no rollback can reach any more.
   if (i == 0)
@@ -8046,6 +8126,24 @@ bool RunFrame(const Core::CPUThreadGuard& guard)
     while (Clock::now() < until)
     {
     }
+    s.mutex.lock();
+  }
+  // Test (PPR_GPRB_TEST_HITCH=<frames>:<ms>): every <frames>th displayed pass stops the CPU
+  // thread <ms> (a shader compile, the OS, a disk that holds a write), so a harness peer hitches.
+  static const std::pair<long, long> test_hitch = [] {
+    const char* v = std::getenv("PPR_GPRB_TEST_HITCH");
+    long every = 0, ms = 0;
+    if (v && std::sscanf(v, "%ld:%ld", &every, &ms) != 2)
+      every = ms = 0;
+    return std::pair<long, long>{every, ms};
+  }();
+  if (test_hitch.first > 0 && test_hitch.second > 0 && !s.resim_pass && s.mode == Mode::Network &&
+      s.ops.adv_frame[i] > 0 && s.ops.adv_frame[i] % test_hitch.first == 0 &&
+      static_cast<s64>(s.ops.adv_frame[i]) > s.test_hitch_frame)
+  {
+    s.test_hitch_frame = s.ops.adv_frame[i];
+    s.mutex.unlock();
+    std::this_thread::sleep_for(std::chrono::milliseconds(test_hitch.second));
     s.mutex.lock();
   }
   // Only another re-run pass follows this one: nobody sees its picture (ResimHide).

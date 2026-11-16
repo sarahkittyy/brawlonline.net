@@ -42,6 +42,12 @@ bool OnEFBCopy(bool to_xfb, bool preprocessed);
 // CPU thread, at the start of every displayed (not resimulated) frame of the rollback game loop.
 // `after_resimulation` is true when frames were resimulated just before it.
 void OnDisplayedFrameStart(bool after_resimulation);
+// CPU thread, right after OnDisplayedFrameStart (input trace: Rollback::InputTrace's P lines):
+// the game frame this displayed pass produces, and the picture its XFB copy will hold, the one
+// the pass before it drew (`picture_frame`, when GekkoNet's confirmed frame was
+// `picture_confirmed`).
+void TagDisplayedFrame(s64 pass_frame, s64 picture_frame, s64 picture_confirmed,
+                       bool after_resimulation);
 
 // Video thread: the presenter showed a frame (`duplicate`: the same XFB as the previous one).
 void OnPresent(bool duplicate);
