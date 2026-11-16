@@ -13,7 +13,7 @@ import { fileExists } from "utils/file_exists";
 
 import { sanitizeAppImageEnv } from "./app_image_env/app_image_env";
 import { spawnRefusedError } from "./spawn_refused";
-import type { ReplayCommunication, ReplayPlaybackStatus, SpectatorChatFile } from "./types";
+import type { ReplayCommunication, ReplayPlaybackStatus, SpectatorChatFile, SpectatorListFile } from "./types";
 
 const log = electronLog.scope("dolphin/instance");
 const isMac = process.platform === "darwin";
@@ -171,7 +171,7 @@ export class PlaybackDolphinInstance extends DolphinInstance {
       }
       // Its last status first: a clip saved just before it closed (manual_clips.ts) is in it.
       await this.readStatus();
-      for (const file of [this.commPath, `${this.commPath}.status.json`, this.chatPath]) {
+      for (const file of [this.commPath, `${this.commPath}.status.json`, this.chatPath, this.listPath]) {
         try {
           if (await fileExists(file)) {
             await unlink(file);
@@ -187,21 +187,34 @@ export class PlaybackDolphinInstance extends DolphinInstance {
     return `${this.commPath}.chat.json`;
   }
 
+  private get listPath(): string {
+    return `${this.commPath}.spectators.json`;
+  }
+
   /**
    * Spectator chat for Dolphin's window (`<comm>.chat.json`, Online/SpectatorChat.h), or none (null). Written to
    * a temporary file renamed over it, so Dolphin never reads half of one.
    */
   async writeChat(chat: SpectatorChatFile | null): Promise<void> {
-    if (!chat) {
-      await unlink(this.chatPath).catch(() => undefined);
+    await this.writeJson(this.chatPath, chat);
+  }
+
+  /** The Spectators window's list, as far as it was loaded (`<comm>.spectators.json`), or none (null). */
+  async writeSpectators(list: SpectatorListFile | null): Promise<void> {
+    await this.writeJson(this.listPath, list);
+  }
+
+  private async writeJson(file: string, data: unknown): Promise<void> {
+    if (data === null) {
+      await unlink(file).catch(() => undefined);
       return;
     }
-    const tmp = `${this.chatPath}.launcher.tmp`;
-    await writeFile(tmp, JSON.stringify(chat));
+    const tmp = `${file}.launcher.tmp`;
+    await writeFile(tmp, JSON.stringify(data));
     // On Windows a rename fails while Dolphin has the file open for reading: try again.
     for (let attempt = 0; ; attempt++) {
       try {
-        await rename(tmp, this.chatPath);
+        await rename(tmp, file);
         return;
       } catch (err) {
         if (attempt >= 10) {

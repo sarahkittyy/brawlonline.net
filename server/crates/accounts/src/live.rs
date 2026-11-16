@@ -53,6 +53,9 @@ pub const REPORT_CONTEXT: usize = 20;
 pub const COUNT_EVERY: Duration = Duration::from_secs(5);
 /// Spectators named in `welcome` and `spectators` events (the count says how many watch in all).
 pub const NAMES_LISTED: usize = 100;
+/// `GET /v1/live/{id}/spectators`: a page's default and largest size.
+pub const PAGE_DEFAULT: usize = 100;
+pub const PAGE_MAX: usize = 200;
 /// A stream's chat is forgotten this long after its last spectator left.
 pub const FORGET_AFTER: Duration = Duration::from_secs(600);
 /// mm sends an empty line every 15 s; nothing for this long means it is gone.
@@ -61,6 +64,9 @@ const MM_SILENCE: Duration = Duration::from_secs(45);
 const CHAT_WINDOWS: [Window; 2] = [Window::new(5, Duration::from_secs(5)), Window::new(30, Duration::from_secs(60))];
 const REPORT_WINDOWS: [Window; 1] = [Window::new(5, Duration::from_secs(3600))];
 const WATCH_WINDOWS: [Window; 1] = [Window::new(30, Duration::from_secs(60))];
+/// Pages of who watches: scrolling through 10,000 spectators is 50 pages of 200.
+const PAGE_WINDOWS: [Window; 2] =
+    [Window::new(30, Duration::from_secs(10)), Window::new(200, Duration::from_secs(600))];
 
 /// Slow mode: one line per this long per account, by spectator count.
 pub fn slow_mode(spectators: usize) -> Option<Duration> {
@@ -117,6 +123,9 @@ struct Room {
     count_sent: usize,
     /// Who watches changed since the last `spectators` event (someone came or went).
     names_changed: bool,
+    /// The names that event last sent: they go again only when they changed (with a crowd, the first
+    /// [`NAMES_LISTED`] who came seldom change while the rest come and go).
+    names_sent: Vec<SpectatorName>,
     empty_since: Option<Instant>,
 }
 
@@ -127,6 +136,7 @@ struct Hub {
     chat: RateLimiter<String>,
     reports: RateLimiter<String>,
     watches: RateLimiter<String>,
+    pages: RateLimiter<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -189,19 +199,34 @@ pub struct LiveHub {
 
 /// The stream's spectators in the order they came, each account once, at most [`NAMES_LISTED`].
 fn names_of(room: &Room) -> Vec<SpectatorName> {
-    let mut conns: Vec<(&u64, &Watcher)> = room.watchers.iter().collect();
-    conns.sort_unstable_by_key(|(conn, _)| **conn);
+    page_of(room, 0, NAMES_LISTED).0
+}
+
+/// A page of who watches, in the order they came, each account once: at most `limit` who came after
+/// the watch `after` (0: from the first), and where the next page starts (none: this was the last).
+fn page_of(room: &Room, after: u64, limit: usize) -> (Vec<SpectatorName>, Option<u64>) {
+    let mut conns: Vec<(u64, &Watcher)> = room.watchers.iter().map(|(c, w)| (*c, w)).collect();
+    conns.sort_unstable_by_key(|(conn, _)| *conn);
     let mut seen = std::collections::HashSet::new();
-    conns
-        .into_iter()
-        .filter(|(_, w)| seen.insert(w.who.uid.as_str()))
-        .take(NAMES_LISTED)
-        .map(|(_, w)| SpectatorName {
+    let mut names = Vec::new();
+    let mut last = None;
+    for (conn, w) in conns {
+        // (An account watching twice is named where it first came.)
+        let first = seen.insert(w.who.uid.as_str());
+        if conn <= after || !first {
+            continue;
+        }
+        if names.len() == limit {
+            return (names, last);
+        }
+        names.push(SpectatorName {
             uid: w.who.uid.clone(),
             display_name: w.who.display_name.clone(),
             connect_code: w.who.connect_code.clone(),
-        })
-        .collect()
+        });
+        last = Some(conn);
+    }
+    (names, None)
 }
 
 fn now_rfc3339() -> String {
@@ -220,6 +245,7 @@ impl LiveHub {
                 chat: RateLimiter::new(&CHAT_WINDOWS),
                 reports: RateLimiter::new(&REPORT_WINDOWS),
                 watches: RateLimiter::new(&WATCH_WINDOWS),
+                pages: RateLimiter::new(&PAGE_WINDOWS),
             }),
             limits,
         }
@@ -349,6 +375,29 @@ impl LiveHub {
         Ok(line)
     }
 
+    /// A page of who watches the stream (`GET /v1/live/{id}/spectators`), for a spectator of it:
+    /// the count, the names and where the next page starts.
+    pub fn spectators(
+        &self,
+        stream: &str,
+        uid: &str,
+        after: u64,
+        limit: usize,
+        now: Instant,
+    ) -> Result<(usize, Vec<SpectatorName>, Option<u64>), LiveError> {
+        let mut hub = self.lock();
+        let Hub { rooms, pages, .. } = &mut *hub;
+        let room = rooms.get(stream).ok_or(LiveError::NotWatching)?;
+        if !room.watchers.values().any(|w| w.who.uid == uid) {
+            return Err(LiveError::NotWatching);
+        }
+        if self.limits {
+            pages.check(&uid.to_string(), now).map_err(LiveError::TooManyWatches)?;
+        }
+        let (names, next) = page_of(room, after, limit.clamp(1, PAGE_MAX));
+        Ok((room.watchers.len(), names, next))
+    }
+
     /// A report of line `id`: the line's author and the line with up to [`REPORT_CONTEXT`] lines
     /// before it (oldest first). Nobody reports their own line.
     pub fn report_lines(
@@ -384,7 +433,13 @@ impl LiveHub {
                 room.count_sent = n;
                 room.names_changed = false;
                 let names = names_of(room);
-                Self::deliver(room, &json!({"type": "spectators", "count": n, "names": names}).to_string());
+                let event = if names == room.names_sent {
+                    json!({"type": "spectators", "count": n})
+                } else {
+                    room.names_sent = names.clone();
+                    json!({"type": "spectators", "count": n, "names": names})
+                };
+                Self::deliver(room, &event.to_string());
             }
         }
         let watching = hub.rooms.values().map(|r| r.watchers.len()).sum();
@@ -591,6 +646,32 @@ async fn pump(mut resp: reqwest::Response, tx: mpsc::Sender<String>, hub: Arc<Li
         }
     }
     hub.unwatch(&stream, conn, Instant::now());
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SpectatorsQuery {
+    /// The page's start: the last page's `next` (none: from the first who came).
+    pub after: Option<String>,
+    pub limit: Option<usize>,
+}
+
+/// `GET /v1/live/{id}/spectators?after=&limit=`: who watches, a page at a time (the chat window's
+/// Spectators list, which loads more as it is scrolled). Only a spectator of the stream may ask.
+/// `{"count", "spectators": [{uid, displayName, connectCode}], "next": "<after>" | null}`.
+pub async fn spectators(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(q): Query<SpectatorsQuery>,
+    headers: HeaderMap,
+) -> ApiResult<Json<serde_json::Value>> {
+    let user = current_user(&state, &headers).await?;
+    let after = match q.after.as_deref() {
+        None | Some("") => 0,
+        Some(a) => a.parse::<u64>().map_err(|_| LiveError::Invalid)?,
+    };
+    let limit = q.limit.unwrap_or(PAGE_DEFAULT);
+    let (count, names, next) = state.live.spectators(&id, &user.uid.to_string(), after, limit, Instant::now())?;
+    Ok(Json(json!({ "count": count, "spectators": names, "next": next.map(|n| n.to_string()) })))
 }
 
 #[derive(Debug, Deserialize)]
@@ -837,6 +918,16 @@ mod tests {
         let ev = events(&mut a);
         assert_eq!((ev.len(), ev[0]["count"].as_u64()), (1, Some(2)));
         assert_eq!(ev[0]["names"][1]["uid"], "u3");
+        // Past the first NAMES_LISTED, comings and goings change only the count: no names sent.
+        let crowd: Vec<_> = (10..=120u8).map(|n| hub.watch("s", &author(n), now).unwrap()).collect();
+        hub.tick(now);
+        assert!(events(&mut a)[0].get("names").is_some());
+        hub.unwatch("s", crowd.last().unwrap().conn, now);
+        hub.tick(now);
+        assert_eq!(events(&mut a), vec![json!({"type": "spectators", "count": 112})]);
+        for w in &crowd {
+            hub.unwatch("s", w.conn, now);
+        }
         hub.unwatch("s", _w3.conn, now);
         hub.unwatch("s", c1, now);
         hub.tick(now + FORGET_AFTER);
@@ -866,6 +957,33 @@ mod tests {
         // Another stream's spectators are not named here.
         let other = hub.watch("t", &author(9), now).unwrap();
         assert_eq!(other.names.len(), 1);
+    }
+
+    /// The Spectators list, a page at a time: every account once, in the order they came, and the
+    /// pages go on where the last one ended even when others leave meanwhile.
+    #[test]
+    fn who_watches_comes_in_pages() {
+        let hub = LiveHub::new(false);
+        let now = Instant::now();
+        let mut keep: Vec<_> = (0..=250u8).map(|n| hub.watch("s", &author(n), now).unwrap()).collect();
+        keep.push(hub.watch("s", &author(5), now).unwrap()); // u5 twice
+        assert_eq!(hub.spectators("s", "nobody", 0, 10, now), Err(LiveError::NotWatching));
+        assert_eq!(hub.spectators("t", "u1", 0, 10, now), Err(LiveError::NotWatching));
+        let (count, page, next) = hub.spectators("s", "u1", 0, 100, now).unwrap();
+        assert_eq!((count, page.len()), (252, 100));
+        assert_eq!((page[0].uid.as_str(), page[99].uid.as_str()), ("u0", "u99"));
+        // Some of the first page and of the next leave: the next page starts after u99 all the same.
+        hub.unwatch("s", keep[3].conn, now);
+        hub.unwatch("s", keep[150].conn, now);
+        let (_, page2, next2) = hub.spectators("s", "u1", next.unwrap(), 100, now).unwrap();
+        assert_eq!(page2.len(), 100);
+        assert_eq!((page2[0].uid.as_str(), page2[99].uid.as_str()), ("u100", "u200"));
+        assert!(page2.iter().all(|n| n.uid != "u150"));
+        // (At most PAGE_MAX a page, whatever is asked.)
+        let (_, page3, next3) = hub.spectators("s", "u1", next2.unwrap(), 1000, now).unwrap();
+        // The rest: u201 to u250; u5's second watch is not named again.
+        assert_eq!((page3.len(), next3), (50, None));
+        assert_eq!(page3.last().unwrap().uid, "u250");
     }
 
     #[test]

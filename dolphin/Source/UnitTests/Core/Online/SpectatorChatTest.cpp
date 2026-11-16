@@ -7,6 +7,7 @@
 
 #include <string>
 
+#include <fmt/format.h>
 #include <gtest/gtest.h>
 #include <picojson.h>
 
@@ -98,7 +99,7 @@ TEST_F(SpectatorChatTest, NoFileNoChat)
   EXPECT_TRUE(SC::Outbox().is<picojson::null>());
   EXPECT_EQ(SC::Send("hi"), Chat::SendResult::NoGroup);
   // A missing file is no spectator chat, and the players' chat is what the window gets.
-  SC::Follow("this file does not exist.chat.json");
+  SC::Follow("this file does not exist.chat.json", "nor this.spectators.json");
   EXPECT_FALSE(SC::Active());
   EXPECT_FALSE(Chat::GetView(0).value_or(Chat::View{}).spectate);
 }
@@ -317,4 +318,82 @@ TEST_F(SpectatorChatTest, AnythingInTheFile)
     many.lines.emplace_back(LineOf(i, BOB, "bob", "line"));
   SC::Apply(many.Text());
   EXPECT_EQ(View().lines.size(), Chat::MAX_LINES);
+}
+
+TEST_F(SpectatorChatTest, TheSpectatorsWindowLoadsPageByPage)
+{
+  File f;
+  SC::Apply(f.Text());
+  EXPECT_FALSE(SC::GetList(0).value_or(SC::List{}).open);
+  // Scrolled to the end of a list never opened: nothing asked.
+  SC::LoadMore();
+  EXPECT_TRUE(SC::Outbox().is<picojson::null>());
+
+  SC::OpenList();
+  SC::List l = SC::GetList(0).value_or(SC::List{});
+  EXPECT_TRUE(l.open);
+  EXPECT_TRUE(l.loading);
+  EXPECT_TRUE(l.names.empty());
+  picojson::object out = Out();
+  const std::string run = out["run"].to_str();
+  auto items = out["out"].get<picojson::array>();
+  ASSERT_EQ(items.size(), 1u);
+  EXPECT_EQ(items[0].get<picojson::object>().at("list").get<std::string>(), "first");
+  // Asked again while a page is on its way: nothing more.
+  SC::LoadMore();
+  EXPECT_EQ(Out()["out"].get<picojson::array>().size(), 1u);
+
+  // The launcher's first page, then "done".
+  const auto page = [](int n, bool more, const char* stream = STREAM) {
+    picojson::object o;
+    o["stream"] = picojson::value(stream);
+    o["count"] = picojson::value(10000.0);
+    o["more"] = picojson::value(more);
+    picojson::array names;
+    for (int i = 0; i < n; ++i)
+    {
+      picojson::object p;
+      p["uid"] = picojson::value(fmt::format("{:08x}-cccc-4ccc-8ccc-cccccccccccc", i));
+      p["name"] = picojson::value(fmt::format("n{}", i));
+      p["code"] = picojson::value("C#1");
+      names.emplace_back(p);
+    }
+    picojson::object bad;
+    bad["uid"] = picojson::value("not a uid");
+    names.emplace_back(bad);
+    o["names"] = picojson::value(names);
+    return picojson::value(o).serialize();
+  };
+  SC::ApplyList(page(200, true));
+  f.Done(run, 1);
+  SC::Apply(f.Text());
+  l = SC::GetList(l.serial).value_or(SC::List{});
+  EXPECT_TRUE(l.open);
+  EXPECT_FALSE(l.loading);
+  EXPECT_TRUE(l.more);
+  EXPECT_EQ(l.count, 10000u);
+  ASSERT_EQ(l.names.size(), 200u);
+  EXPECT_EQ(l.names[199].name, "n199");
+  SC::LoadMore();
+  items = Out()["out"].get<picojson::array>();
+  ASSERT_EQ(items.size(), 1u);
+  EXPECT_EQ(items[0].get<picojson::object>().at("list").get<std::string>(), "next");
+
+  // Another game's list: not this one.
+  SC::ApplyList(page(5, false, "0123456789ab"));
+  EXPECT_EQ(SC::GetList(0).value_or(SC::List{}).names.size(), 200u);
+  // The last page.
+  SC::ApplyList(page(400, false));
+  l = SC::GetList(0).value_or(SC::List{});
+  EXPECT_EQ(l.names.size(), 400u);
+  EXPECT_FALSE(l.more);
+
+  // Closed, then another stream: the list is gone and stays closed.
+  SC::CloseList();
+  EXPECT_FALSE(SC::GetList(0).value_or(SC::List{}).open);
+  SC::OpenList();
+  EXPECT_TRUE(SC::GetList(0).value_or(SC::List{}).open);
+  File g("0123456789ab");
+  SC::Apply(g.Text());
+  EXPECT_FALSE(SC::GetList(0).value_or(SC::List{}).open);
 }

@@ -64,6 +64,7 @@ struct OutItem
     Send,
     Hide,
     Report,
+    List,  // text: "first" or "next"
   } kind = Kind::Send;
   std::string text;  // Send: the cleaned text; Hide: the uid
   bool hidden = false;
@@ -100,6 +101,17 @@ struct State
   u64 serial = SERIAL_BASE;
   u64 last_message_ms = 0;
   u64 files = 0, bad_files = 0;
+
+  // The Spectators window.
+  std::string list_path;
+  bool list_stamped = false;
+  std::filesystem::file_time_type list_mtime{};
+  u64 list_size = 0;
+  bool list_open = false;
+  std::vector<Spectator> listed;
+  u32 list_count = 0;
+  bool list_more = false;
+  u64 list_serial = 1;
 };
 
 std::mutex s_mutex;
@@ -201,8 +213,109 @@ void QueueOut(OutItem item)
     s.out.pop_front();
 }
 
+void TouchList()
+{
+  ++s.list_serial;
+}
+
+void ForgetList()
+{
+  s.list_open = false;
+  s.listed.clear();
+  s.list_count = 0;
+  s.list_more = false;
+  s.list_stamped = false;
+  TouchList();
+}
+
+bool ListLoading()
+{
+  return std::ranges::any_of(s.out, [](const OutItem& i) { return i.kind == OutItem::Kind::List; });
+}
+
+void QueueList(const char* which)
+{
+  OutItem item;
+  item.kind = OutItem::Kind::List;
+  item.text = which;
+  QueueOut(std::move(item));
+  TouchList();
+}
+
+void ApplyListLocked(std::string_view text)
+{
+  picojson::value root;
+  if (!Gprb::PeerData::JsonSafeToParse(text, 4) ||
+      !picojson::parse(root, std::string(text)).empty() || !root.is<picojson::object>())
+  {
+    return;
+  }
+  const auto& o = root.get<picojson::object>();
+  // Another game's list (the launcher hasn't caught up yet): not this one.
+  if (Str(o, "stream") != s.stream || s.stream.empty())
+    return;
+  std::vector<Spectator> names;
+  if (const picojson::value* list = Get(o, "names"); list && list->is<picojson::array>())
+  {
+    std::set<std::string> seen;
+    for (const picojson::value& v : list->get<picojson::array>())
+    {
+      if (names.size() >= MAX_LIST_NAMES)
+        break;
+      if (!v.is<picojson::object>())
+        continue;
+      const auto& no = v.get<picojson::object>();
+      Spectator sp{Str(no, "uid"), CleanName(Str(no, "name"), MAX_NAME_BYTES, "?"),
+                   CleanName(Str(no, "code"), MAX_CODE_BYTES, "")};
+      if (IsUid(sp.uid) && seen.insert(sp.uid).second)
+        names.push_back(std::move(sp));
+    }
+  }
+  const picojson::value* more = Get(o, "more");
+  const picojson::value* count = Get(o, "count");
+  s.listed = std::move(names);
+  s.list_more = more && more->is<bool>() && more->get<bool>() && s.listed.size() < MAX_LIST_NAMES;
+  s.list_count = count && count->is<double>() ?
+                     static_cast<u32>(std::clamp(count->get<double>(), 0.0, 1e7)) :
+                     0;
+  s.list_count = std::max<u32>(s.list_count, static_cast<u32>(s.listed.size()));
+  TouchList();
+}
+
+// Reads a file the launcher writes when its time or size changed; nullopt if it didn't (or can't
+// be read now: it is being renamed in place, read again next time).
+std::optional<std::string> ReadIfChanged(const std::string& path, bool* stamped,
+                                         std::filesystem::file_time_type* mtime, u64* size,
+                                         size_t max_bytes, bool* gone)
+{
+  *gone = false;
+  std::error_code error;
+  const std::filesystem::path p = StringToPath(path);
+  const auto now_mtime = std::filesystem::last_write_time(p, error);
+  const u64 now_size = error ? 0 : std::filesystem::file_size(p, error);
+  if (error)
+  {
+    *gone = *stamped;
+    *stamped = false;
+    return std::nullopt;
+  }
+  if (*stamped && now_mtime == *mtime && now_size == *size)
+    return std::nullopt;
+  if (now_size == 0 || now_size > max_bytes)
+    return std::nullopt;
+  std::string text;
+  if (!File::ReadFileToString(path, text) || text.size() > max_bytes)
+    return std::nullopt;
+  *stamped = true;
+  *mtime = now_mtime;
+  *size = now_size;
+  return text;
+}
+
 void Forget()
 {
+  if (s.list_open || !s.listed.empty())
+    ForgetList();
   if (s.stream.empty() && s.lines.empty())
     return;
   s.stream.clear();
@@ -336,7 +449,10 @@ void ApplyLocked(std::string_view text)
         s.done = std::max(s.done, *seq);
     }
   }
+  const bool was_loading = ListLoading();
   std::erase_if(s.out, [](const OutItem& i) { return i.seq <= s.done; });
+  if (was_loading && !ListLoading())
+    TouchList();
   // An ignore not taken yet stays as it was clicked.
   for (const OutItem& i : s.out)
   {
@@ -352,7 +468,7 @@ void ApplyLocked(std::string_view text)
 }
 }  // namespace
 
-void Follow(const std::string& path)
+void Follow(const std::string& path, const std::string& list_path)
 {
   std::lock_guard lk(s_mutex);
   if (path != s.path)
@@ -362,33 +478,29 @@ void Follow(const std::string& path)
     if (path.empty())
       Forget();
   }
+  if (list_path != s.list_path)
+  {
+    s.list_path = list_path;
+    s.list_stamped = false;
+  }
   if (s.path.empty())
     return;
-  std::error_code error;
-  const std::filesystem::path p = StringToPath(s.path);
-  const auto mtime = std::filesystem::last_write_time(p, error);
-  const u64 size = error ? 0 : std::filesystem::file_size(p, error);
-  if (error)
+  // The list first: the launcher writes it before the chat file says the page was taken.
+  bool gone = false;
+  if (s.list_open && !s.list_path.empty())
   {
-    // No file (yet, or the launcher removed it): no spectator chat.
-    if (s.stamped)
+    if (auto text = ReadIfChanged(s.list_path, &s.list_stamped, &s.list_mtime, &s.list_size,
+                                  MAX_LIST_FILE_BYTES, &gone))
     {
-      s.stamped = false;
-      Forget();
+      ApplyListLocked(*text);
     }
-    return;
   }
-  if (s.stamped && mtime == s.mtime && size == s.size)
-    return;
-  if (size == 0 || size > MAX_FILE_BYTES)
-    return;
-  std::string text;
-  if (!File::ReadFileToString(s.path, text) || text.size() > MAX_FILE_BYTES)
-    return;  // the launcher is renaming it in place: read again next time
-  s.stamped = true;
-  s.mtime = mtime;
-  s.size = size;
-  ApplyLocked(text);
+  auto text = ReadIfChanged(s.path, &s.stamped, &s.mtime, &s.size, MAX_FILE_BYTES, &gone);
+  // No file (any more: the launcher removed it): no spectator chat.
+  if (gone)
+    Forget();
+  else if (text)
+    ApplyLocked(*text);
 }
 
 void Apply(std::string_view text)
@@ -559,6 +671,69 @@ bool Report(const std::string& uid)
   return true;
 }
 
+std::optional<List> GetList(u64 known_serial)
+{
+  std::lock_guard lk(s_mutex);
+  if (known_serial == s.list_serial)
+    return std::nullopt;
+  List l;
+  l.serial = s.list_serial;
+  l.open = s.list_open && !s.stream.empty();
+  if (!l.open)
+    return l;
+  l.count = std::max<u32>(s.list_count, s.count);
+  l.more = s.list_more;
+  l.loading = ListLoading();
+  l.names.reserve(s.listed.size());
+  for (const Spectator& sp : s.listed)
+  {
+    Chat::Member m;
+    m.uid = sp.uid;
+    m.name = sp.name;
+    m.code = sp.code;
+    m.is_me = sp.uid == s.you;
+    m.has_key = true;
+    m.hidden = s.hidden.contains(sp.uid);
+    m.color = ColorOf(sp.uid);
+    l.names.push_back(std::move(m));
+  }
+  return l;
+}
+
+void OpenList()
+{
+  std::lock_guard lk(s_mutex);
+  if (s.stream.empty())
+    return;
+  // From the first page again: who watches has changed since.
+  s.list_open = true;
+  s.listed.clear();
+  s.list_more = false;
+  s.list_stamped = false;
+  QueueList("first");
+}
+
+void CloseList()
+{
+  std::lock_guard lk(s_mutex);
+  if (s.list_open)
+    ForgetList();
+}
+
+void LoadMore()
+{
+  std::lock_guard lk(s_mutex);
+  if (!s.list_open || !s.list_more || ListLoading() || s.stream.empty())
+    return;
+  QueueList("next");
+}
+
+void ApplyList(std::string_view text)
+{
+  std::lock_guard lk(s_mutex);
+  ApplyListLocked(text);
+}
+
 picojson::value Outbox()
 {
   std::lock_guard lk(s_mutex);
@@ -583,6 +758,9 @@ picojson::value Outbox()
       break;
     case OutItem::Kind::Report:
       io["report"] = picojson::value(static_cast<double>(i.line));
+      break;
+    case OutItem::Kind::List:
+      io["list"] = picojson::value(i.text);
       break;
     }
     out.emplace_back(std::move(io));
@@ -617,6 +795,10 @@ picojson::object Status()
   }
   o["lines"] = picojson::value(std::move(lines));
   o["waiting"] = picojson::value(static_cast<double>(s.out.size()));
+  o["list_open"] = picojson::value(s.list_open);
+  o["list_names"] = picojson::value(static_cast<double>(s.listed.size()));
+  o["list_more"] = picojson::value(s.list_more);
+  o["list_loading"] = picojson::value(ListLoading());
   o["files"] = picojson::value(static_cast<double>(s.files));
   o["bad_files"] = picojson::value(static_cast<double>(s.bad_files));
   return o;

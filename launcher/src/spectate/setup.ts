@@ -43,6 +43,7 @@ export default function setupSpectateIpc({
     userAgent,
     getToken: (uid) => accountsManager.sessionToken(uid),
     write: (file) => dolphinManager.writePlaybackChat(PLAYBACK, file),
+    writeList: (list) => dolphinManager.writePlaybackSpectators(PLAYBACK, list),
     // The game's ignore list: the social client syncs it with the account.
     readHidden: () => readHidden(dolphinManager.netplayOnlineDir()),
     setHidden: async (uid, hidden) => {

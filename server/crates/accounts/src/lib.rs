@@ -283,6 +283,7 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/live/{id}/watch", get(live::watch))
         .route("/v1/live/{id}/chat", post(live::chat))
         .route("/v1/live/{id}/report", post(live::report))
+        .route("/v1/live/{id}/spectators", get(live::spectators))
         .route("/verify-email", get(pages::verify_email_page))
         .route("/reset-password", get(pages::reset_password_page).post(pages::reset_password_submit))
         .route("/healthz", get(api::healthz))

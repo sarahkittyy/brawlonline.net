@@ -1155,9 +1155,12 @@ void Loop()
       }
       if (!stopping)
         Step();
-      // Spectating: the launcher's <comm>.chat.json.
-      Online::SpectatorChat::Follow(s_comm_path.empty() ? std::string() :
-                                                          s_comm_path + ".chat.json");
+      // Spectating: the launcher's <comm>.chat.json, and the Spectators window's list.
+      if (s_comm_path.empty())
+        Online::SpectatorChat::Follow({}, {});
+      else
+        Online::SpectatorChat::Follow(s_comm_path + ".chat.json",
+                                      s_comm_path + ".spectators.json");
       WriteStatus();
       s_can_save_clip.store(CanSaveClipLocked(), std::memory_order_relaxed);
       UpdateNavView();

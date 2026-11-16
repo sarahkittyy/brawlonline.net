@@ -202,7 +202,7 @@ The answer is server-sent events, one JSON object per `data:` line, with a `: pi
 | `welcome` | `stream` (its `/v1/live` entry), `you` (uid), `chat` (the last 20 lines), `spectators` (who watches, this spectator included: `[{uid, displayName, connectCode}]`, each account once in the order they came, at most 100) |
 | `game`, `chunk`, `end`, `bad`, `over` | as in §2 |
 | `chat` | `line`: `{id, uid, displayName, connectCode, text, at}` |
-| `spectators` | `count`, `names` (as `welcome`'s `spectators`); every 5 s at most, when the count or who watches changed |
+| `spectators` | `count`, and `names` (as `welcome`'s `spectators`) only when those first 100 changed; every 5 s at most, when the count or who watches changed. (With a crowd, the first 100 who came seldom change while the rest come and go: every spectator getting 100 names every 5 s would be most of the stream's traffic.) |
 
 ### `POST /v1/live/{id}/chat`
 
@@ -216,6 +216,10 @@ The body is `{"text": "…"}`, and the answer is 200 with `{"line": {...}}`: the
 | 429 | `busy` "Chat is busy. Try again in a moment." | the stream already delivered 5 lines in the last second |
 
 The text goes through `common::chat::clean_text` (100 code points, 300 bytes). Names come from the account.
+
+### `GET /v1/live/{id}/spectators?after=<next>&limit=<n>`
+
+Who watches, a page at a time, for the chat's Spectators window (§4.1): `{"count", "spectators": [{uid, displayName, connectCode}], "next": "<after>" | null}`, in the order they came, each account once, `limit` 100 by default and at most 200. `next` is where the next page starts (`null`: that was the last); a page goes on after the last one's end even when others left meanwhile. Only a spectator of the stream may ask (403 `not_watching`); 30 pages in 10 s and 200 in 10 minutes per account (429).
 
 ### `POST /v1/live/{id}/report`
 
@@ -263,11 +267,13 @@ The chat of §3 is drawn in the playback Dolphin's chat window (`Online/Spectato
 |---|---|
 | `stream` | the stream watched. No file, or no `stream`: no spectator chat (stopped watching, or the launcher's Disable Chat). A new `stream` is a new chat. |
 | `over` | the stream ended (`over`, or gone): the lines stay, nothing can be sent ("Watch the game to chat."). |
-| `count`, `spectators` | the eye on the window's title bar: how many watch, and who (the tooltip). |
+| `count`, `spectators` | the eye on the window's title bar: how many watch, and who (the tooltip: the first 100). |
 | `lines` | the last 100, oldest first. `id`s are the launcher's (increasing over every stream); a `notice` is a line the launcher adds: a send or a report refused (the server's message), or "Reported <name>.". |
 | `hidden` | the ignore list, `chat-hidden.json` of the netplay User folder (the one the game and the account share). |
 | `done` | the outbox items (below) of Dolphin's run `run` the launcher has taken, up to `seq`. |
 
-- **Dolphin → launcher, the status's `chat`**: `{"run": "<16 hex, one per Dolphin run>", "out": [{"seq": 1, "stream", "send": "<text>"}, {"seq": 2, "stream", "hide": "<uid>", "hidden": true}, {"seq": 3, "stream", "report": <line id>}]}`. The launcher reads the status every 250 ms while watching, does each new item in order (`POST …/chat`, the ignore list, `POST …/report` with the line's server id) and writes `done`. An item for another stream than the one watched is dropped. Until then Dolphin shows a line typed as the spectator's own, and an ignore as done; then the file's line (the server's answer) takes its place.
+- **Launcher → Dolphin, `<comm>.spectators.json`**, the Spectators window (a click on the eye) as far as it was loaded: `{"stream", "count": 10000, "names": [{"uid", "name", "code"}], "more": true}`, at most 20,000 names. Written before the chat file's `done` for the page; removed when the stream changes or watching stops. Dolphin reads it only while the window is open, and draws only the rows on screen (`ImGuiListClipper`).
+
+- **Dolphin → launcher, the status's `chat`**: `{"run": "<16 hex, one per Dolphin run>", "out": [{"seq": 1, "stream", "send": "<text>"}, {"seq": 2, "stream", "hide": "<uid>", "hidden": true}, {"seq": 3, "stream", "report": <line id>}, {"seq": 4, "stream", "list": "first" | "next"}]}`. `list`: the Spectators window opened (its first page, again each time) or scrolled to the end of what is loaded (the next 200, `GET …/spectators?after=`); one at a time. The launcher reads the status every 250 ms while watching, does each new item in order (`POST …/chat`, the ignore list, `POST …/report` with the line's server id) and writes `done`. An item for another stream than the one watched is dropped. Until then Dolphin shows a line typed as the spectator's own, and an ignore as done; then the file's line (the server's answer) takes its place.
 
 Text is cleaned by Dolphin again before it is drawn, as any chat. Typing is limited in Dolphin as on the server (5 in 5 s, 30 a minute). The players' Dolphins never get any of this: it only ever goes to the playback Dolphin of a spectator, and the players' own chat (end-to-end encrypted) never reaches a spectator.

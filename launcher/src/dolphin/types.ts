@@ -100,13 +100,28 @@ export type SpectatorChatFile = {
   done?: { run: string; seq: number };
 };
 
-/** Spectator chat: Dolphin's outbox in its status, one `run` per Dolphin process, `seq` increasing in it. */
+/**
+ * The chat's Spectators window (`<comm>.spectators.json`): who watches, as far as it was loaded a page at a time
+ * (`GET /v1/live/{id}/spectators`); `more` while there are more pages.
+ */
+export type SpectatorListFile = {
+  stream: string;
+  count: number;
+  names: { uid: string; name: string; code: string }[];
+  more: boolean;
+};
+
+/**
+ * Spectator chat: Dolphin's outbox in its status, one `run` per Dolphin process, `seq` increasing in it. `list`:
+ * the Spectators window was opened (`first`: load its first page again) or scrolled to its end (`next`).
+ */
 export type SpectatorChatOutbox = {
   run: string;
   out: ({ seq: number; stream: string } & (
     | { send: string }
     | { hide: string; hidden: boolean }
     | { report: number }
+    | { list: "first" | "next" }
   ))[];
 };
 

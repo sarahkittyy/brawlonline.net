@@ -1,4 +1,4 @@
-import type { SpectatorChatFile, SpectatorChatOutbox } from "@dolphin/types";
+import type { SpectatorChatFile, SpectatorChatOutbox, SpectatorListFile } from "@dolphin/types";
 import log from "electron-log";
 
 /**
@@ -15,6 +15,9 @@ import log from "electron-log";
 
 /** The lines the file keeps (Dolphin's window keeps as many). */
 export const MAX_LINES = 100;
+/** The Spectators window's page (the server's largest), and how many names it loads at most. */
+export const LIST_PAGE = 200;
+export const MAX_LISTED = 20_000;
 
 type ServerLine = { id: number; uid: string; displayName: string; connectCode: string; text: string };
 type ServerName = { uid: string; displayName: string; connectCode: string };
@@ -26,6 +29,8 @@ export type SpectatorChatDeps = {
   getToken: (uid: string) => Promise<string | undefined>;
   /** Writes the file for the playback Dolphin (null: no spectator chat); false when it isn't open. */
   write: (chat: SpectatorChatFile | null) => Promise<boolean>;
+  /** Writes the Spectators window's list (null: none). */
+  writeList: (list: SpectatorListFile | null) => Promise<boolean>;
   /** The ignore list shared with the game and the account (`chat-hidden.json` in the netplay User folder). */
   readHidden: () => Promise<string[]>;
   setHidden: (uid: string, hidden: boolean) => Promise<void>;
@@ -67,6 +72,10 @@ export class SpectatorChat {
   /** The outbox items taken, of Dolphin's run `run`. */
   private done: { run: string; seq: number } | null = null;
   private busy = false;
+  /** The Spectators window's list so far, and where its next page starts (null: no more). */
+  private listed: SpectatorListFile["names"] = [];
+  private listNext: string | null = null;
+  private listLoaded = false;
   private writing: Promise<void> = Promise.resolve();
   private dirty = false;
 
@@ -88,7 +97,18 @@ export class SpectatorChat {
     this.count = count;
     this.spectators = [];
     this.lines = [];
+    this.forgetList();
     this.changed();
+  }
+
+  private forgetList() {
+    const had = this.listLoaded;
+    this.listed = [];
+    this.listNext = null;
+    this.listLoaded = false;
+    if (had) {
+      void this.deps.writeList(null).catch(() => undefined);
+    }
   }
 
   /** Not watching any more: the window goes. */
@@ -100,6 +120,7 @@ export class SpectatorChat {
     this.account = null;
     this.lines = [];
     this.spectators = [];
+    this.forgetList();
     this.changed();
   }
 
@@ -286,27 +307,73 @@ export class SpectatorChat {
         // The game's own words for it (Online/Chat.cpp).
         this.notice(r.ok ? `Reported ${line.name}.` : r.message);
       }
+      return;
+    }
+    if ("list" in item && (item.list === "first" || item.list === "next")) {
+      await this.loadList(account, stream, item.list === "first");
     }
   }
 
-  private async post(
+  /** The Spectators window's first page (again), or its next one: written for Dolphin before `done` says so. */
+  private async loadList(account: string, stream: string, first: boolean) {
+    if (first) {
+      this.listed = [];
+      this.listNext = null;
+    } else if (!this.listLoaded || this.listNext === null || this.listed.length >= MAX_LISTED) {
+      return;
+    }
+    const after = first ? "" : `&after=${encodeURIComponent(this.listNext ?? "")}`;
+    const r = await this.get(account, `/v1/live/${stream}/spectators?limit=${LIST_PAGE}${after}`);
+    if (this.stream !== stream) {
+      return;
+    }
+    if (!r.ok) {
+      this.notice(r.message);
+      return;
+    }
+    const page = names(r.body?.spectators) ?? [];
+    const known = new Set(this.listed.map((n) => n.uid));
+    this.listed.push(...page.filter((n) => !known.has(n.uid)));
+    this.listNext = typeof r.body?.next === "string" ? r.body.next : null;
+    if (Number.isInteger(r.body?.count)) {
+      this.count = r.body.count;
+    }
+    this.listLoaded = true;
+    await this.deps.writeList({
+      stream,
+      count: Math.max(this.count, this.listed.length),
+      names: this.listed,
+      more: this.listNext !== null && this.listed.length < MAX_LISTED,
+    });
+  }
+
+  private async get(account: string, p: string): Promise<{ ok: true; body: any } | { ok: false; message: string }> {
+    return await this.request(account, "GET", p);
+  }
+
+  private async post(account: string, p: string, body: unknown) {
+    return await this.request(account, "POST", p, body);
+  }
+
+  private async request(
     account: string,
+    method: "GET" | "POST",
     p: string,
-    body: unknown,
+    body?: unknown,
   ): Promise<{ ok: true; body: any } | { ok: false; message: string }> {
     try {
       const token = await this.deps.getToken(account);
       if (!token) {
         return { ok: false, message: "Log in to watch live games." };
       }
+      const headers: Record<string, string> = { Authorization: `Bearer ${token}`, "User-Agent": this.deps.userAgent };
+      if (body !== undefined) {
+        headers["Content-Type"] = "application/json";
+      }
       const resp = await this.fetch(`${this.deps.baseUrl}${p}`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json",
-          "User-Agent": this.deps.userAgent,
-        },
-        body: JSON.stringify(body),
+        method,
+        headers,
+        body: body === undefined ? undefined : JSON.stringify(body),
       });
       const json = await resp.json().catch(() => null);
       if (!resp.ok) {

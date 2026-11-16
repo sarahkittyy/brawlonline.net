@@ -1,7 +1,7 @@
-import type { SpectatorChatFile } from "@dolphin/types";
+import type { SpectatorChatFile, SpectatorListFile } from "@dolphin/types";
 import { describe, expect, it } from "vitest";
 
-import { MAX_LINES, SpectatorChat } from "./spectator_chat";
+import { LIST_PAGE, MAX_LINES, SpectatorChat } from "./spectator_chat";
 
 const ME = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const BOB = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
@@ -19,7 +19,11 @@ const line = (id: number, uid: string, displayName: string, text: string) => ({
 
 function setup({ answer }: { answer?: (url: string, body: any) => { status: number; body: unknown } } = {}) {
   const writes: (SpectatorChatFile | null)[] = [];
+  const lists: (SpectatorListFile | null)[] = [];
   const posts: { url: string; body: any }[] = [];
+  const gets: string[] = [];
+  // 450 spectators, served a page at a time as accounts does.
+  const crowd = Array.from({ length: 450 }, (_, i) => ({ uid: `u${i}`, displayName: `n${i}`, connectCode: `C#${i}` }));
   let hidden: string[] = [];
   let open = true;
   let disabled = false;
@@ -35,12 +39,25 @@ function setup({ answer }: { answer?: (url: string, body: any) => { status: numb
       writes.push(file);
       return true;
     },
+    writeList: async (list) => {
+      lists.push(list);
+      return true;
+    },
     readHidden: async () => hidden,
     setHidden: async (uid, on) => {
       hidden = on ? [...hidden.filter((u) => u !== uid), uid] : hidden.filter((u) => u !== uid);
     },
     disabled: () => disabled,
     fetch: (async (url: string, init: RequestInit) => {
+      if (init.method === "GET") {
+        gets.push(url);
+        const u = new URL(url);
+        const after = Number(u.searchParams.get("after") ?? "0");
+        const limit = Number(u.searchParams.get("limit"));
+        const page = crowd.slice(after, after + limit);
+        const next = after + limit < crowd.length ? String(after + limit) : null;
+        return new Response(JSON.stringify({ count: crowd.length, spectators: page, next }), { status: 200 });
+      }
       const body = JSON.parse(String(init.body));
       posts.push({ url, body });
       const r = answer?.(url, body) ?? {
@@ -58,6 +75,8 @@ function setup({ answer }: { answer?: (url: string, body: any) => { status: numb
     chat,
     writes,
     posts,
+    gets,
+    lists,
     last,
     setOpen: (o: boolean) => (open = o),
     setDisabled: (d: boolean) => (disabled = d),
@@ -208,5 +227,36 @@ describe("SpectatorChat", () => {
     const f = (await t.last())!;
     expect(f.lines).toHaveLength(MAX_LINES);
     expect(f.lines.at(-1)).toMatchObject({ text: `line ${MAX_LINES + 20}` });
+  });
+
+  it("loads the Spectators window's list a page at a time", async () => {
+    const t = setup();
+    t.chat.start(ME, STREAM);
+    // Scrolled to the end before it was ever opened: nothing to load yet.
+    await t.chat.onOutbox({ run: "r", out: [{ seq: 1, stream: STREAM, list: "next" }] });
+    expect(t.gets).toHaveLength(0);
+    await t.chat.onOutbox({ run: "r", out: [{ seq: 2, stream: STREAM, list: "first" }] });
+    expect(t.gets).toEqual([`https://example.test/v1/live/${STREAM}/spectators?limit=${LIST_PAGE}`]);
+    let list = t.lists.at(-1)!;
+    expect(list.more).toBe(true);
+    expect(list.names).toHaveLength(LIST_PAGE);
+    expect(list.names[0]).toEqual({ uid: "u0", name: "n0", code: "C#0" });
+    expect(list.count).toBe(450);
+    await t.chat.onOutbox({ run: "r", out: [{ seq: 3, stream: STREAM, list: "next" }] });
+    expect(t.gets.at(-1)).toContain(`&after=${LIST_PAGE}`);
+    await t.chat.onOutbox({ run: "r", out: [{ seq: 4, stream: STREAM, list: "next" }] });
+    list = t.lists.at(-1)!;
+    expect(list.more).toBe(false);
+    expect(list.names).toHaveLength(450);
+    // No more pages: nothing asked.
+    await t.chat.onOutbox({ run: "r", out: [{ seq: 5, stream: STREAM, list: "next" }] });
+    expect(t.gets).toHaveLength(3);
+    expect((await t.last())!.done).toEqual({ run: "r", seq: 5 });
+    // Opened again: from the first page.
+    await t.chat.onOutbox({ run: "r", out: [{ seq: 6, stream: STREAM, list: "first" }] });
+    expect(t.lists.at(-1)!.names).toHaveLength(LIST_PAGE);
+    // Another stream: the list goes.
+    t.chat.start(ME, OTHER);
+    expect(t.lists.at(-1)).toBeNull();
   });
 });

@@ -103,6 +103,7 @@ import type {
   ReplayPlayChoice,
   ReplayPlayResult,
   SpectatorChatFile,
+  SpectatorListFile,
 } from "./types";
 import { DolphinErrorType, DolphinEventType, DolphinLaunchType } from "./types";
 
@@ -420,6 +421,16 @@ export class DolphinManager {
       return false;
     }
     await instance.writeChat(chat);
+    return true;
+  }
+
+  /** Writes the spectator list (the chat's Spectators window) for the playback Dolphin `id`; false when it isn't open. */
+  async writePlaybackSpectators(id: string, list: SpectatorListFile | null): Promise<boolean> {
+    const instance = this.playbackDolphinInstances.get(id);
+    if (!instance) {
+      return false;
+    }
+    await instance.writeSpectators(list);
     return true;
   }
 

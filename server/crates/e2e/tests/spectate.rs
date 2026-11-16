@@ -180,6 +180,12 @@ async fn a_direct_game_is_listed_watched_and_chatted_about() {
     assert_eq!((line["line"]["text"].as_str(), line["line"]["displayName"].as_str()), (Some("nice"), Some("carol")));
     // The answer is the very line the watch streams get.
     assert_eq!(line["line"]["id"], body["line"]["id"]);
+    // Who watches, a page at a time: carol; only a spectator may ask.
+    let (st, body) = stack.get(&format!("/v1/live/{id}/spectators?limit=50"), Some(&carol_token)).await;
+    assert_eq!((st, body["count"].as_u64(), body["next"].is_null()), (200, Some(1), true), "{body}");
+    assert_eq!(body["spectators"][0]["displayName"], "carol");
+    let (st, body) = stack.get(&format!("/v1/live/{id}/spectators"), Some(&alice_token)).await;
+    assert_eq!((st, body["error"]["code"].as_str()), (403, Some("not_watching")));
     // Alice isn't watching: she can't chat there.
     let (st, body) = stack.post(&format!("/v1/live/{id}/chat"), Some(&alice_token), json!({"text": "hi"})).await;
     assert_eq!((st, body["error"]["code"].as_str()), (403, Some("not_watching")));

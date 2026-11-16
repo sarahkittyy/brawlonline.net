@@ -24,6 +24,12 @@
 // typed shows at once, until the launcher has taken it (the file then has it as the server sent
 // it).
 //
+// A click on the eye opens the Spectators window: everyone watching, loaded a page at a time as it
+// is scrolled (accounts' GET /v1/live/{id}/spectators), so a crowd of thousands costs a page at a
+// time. Its outbox items are {"list": "first"} (opened) and {"list": "next"} (scrolled to the end
+// of what is loaded); the launcher writes what it loaded so far to <comm.json>.spectators.json:
+//   {"stream", "count": 10000, "names": [{"uid", "name", "code"}, ...], "more": true}
+//
 // Online::Chat's window functions (GetView, Send, SetHidden, IsHidden, Report) come here while a
 // spectator chat is active. Everything in the file is checked and cleaned as peer text.
 //
@@ -45,10 +51,13 @@ namespace Online::SpectatorChat
 constexpr size_t MAX_FILE_BYTES = 256 * 1024;
 constexpr size_t MAX_SPECTATORS_LISTED = 100;
 constexpr size_t MAX_OUT = 16;
+// The Spectators window: at most this many names loaded (the launcher's limit too).
+constexpr size_t MAX_LIST_NAMES = 20000;
+constexpr size_t MAX_LIST_FILE_BYTES = 4 * 1024 * 1024;
 
-// Reads `path` again when its time or size changed (the playback loop). An empty path forgets
-// the spectator chat.
-void Follow(const std::string& path);
+// Reads the chat file `path` again when its time or size changed (the playback loop), and the
+// Spectators window's `list_path` while that is open. An empty path forgets the spectator chat.
+void Follow(const std::string& path, const std::string& list_path);
 // Takes the file's contents (Follow, and the unit tests). A file that doesn't parse changes
 // nothing.
 void Apply(std::string_view text);
@@ -60,6 +69,26 @@ Chat::SendResult Send(const std::string& text);
 void SetHidden(const std::string& uid, bool hidden);
 bool IsHidden(const std::string& uid);
 bool Report(const std::string& uid);
+
+// The Spectators window (a click on the eye): open or not, the names loaded so far, whether there
+// are more to load and whether a page is on its way.
+struct List
+{
+  bool open = false;
+  std::vector<Chat::Member> names;
+  u32 count = 0;
+  bool more = false;
+  bool loading = false;
+  u64 serial = 0;
+};
+std::optional<List> GetList(u64 known_serial);
+// Opens it (from its first page again) or closes it.
+void OpenList();
+void CloseList();
+// Scrolled to the end of what is loaded: the next page, unless one is on its way or there is none.
+void LoadMore();
+// Takes the list file's contents (Follow, and the unit tests).
+void ApplyList(std::string_view text);
 
 // The status's "chat" (null while nothing was ever done).
 picojson::value Outbox();
