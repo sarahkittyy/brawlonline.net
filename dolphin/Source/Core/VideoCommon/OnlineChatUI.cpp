@@ -7,6 +7,7 @@
 #include <array>
 #include <atomic>
 #include <cctype>
+#include <cfloat>
 #include <cmath>
 #include <cstdio>
 #include <deque>
@@ -615,6 +616,41 @@ void SpectatorsIcon(const Online::Chat::View& v, float scale)
   draw->AddText({x1 + gap, p.y}, col, count.data(), count.data() + count.size());
 }
 
+// The widest "name (code)" a spectator can have, at the current font size: a display name is at
+// most 15 printable ASCII, hiragana or katakana characters and a connect code at most 8 (up to 4
+// letters, '#', up to 3 digits, or 3 letters and 4 digits; server/crates/common/src/codes.rs).
+// Every character the widest one allowed, each part measured in the font.
+float WidestSpectatorRow()
+{
+  static float s_size = -1.0f;
+  static float s_width = 0.0f;
+  const float size = ImGui::GetFontSize();
+  if (size == s_size)
+    return s_width;
+  ImFontBaked* const font = ImGui::GetFontBaked();
+  const auto widest = [font](ImWchar first, ImWchar last) {
+    float w = 0.0f;
+    for (ImWchar c = first; c <= last; ++c)
+    {
+      if (c != '\\' && c != '`')
+        w = std::max(w, font->GetCharAdvance(c));
+    }
+    return w;
+  };
+  constexpr int NAME_CHARS = 15;
+  const float name_char =
+      std::max({widest(0x20, 0x7E), widest(0x3041, 0x3093), widest(0x30A1, 0x30F3)});
+  const float letter = widest('A', 'Z');
+  const float digit = widest('0', '9');
+  const float code =
+      std::max(4.0f * letter + 3.0f * digit, 3.0f * letter + 4.0f * digit) +
+      font->GetCharAdvance('#');
+  s_width = NAME_CHARS * name_char + font->GetCharAdvance(' ') + font->GetCharAdvance('(') + code +
+            font->GetCharAdvance(')');
+  s_size = size;
+  return s_width;
+}
+
 // The Spectators window (a click on the eye): everyone watching, loaded a page at a time as it is
 // scrolled to the end of what is there ("..." while there is more), and only the rows on screen
 // drawn, so thousands of names cost no more than a screenful. Next to the chat window when opened.
@@ -628,14 +664,19 @@ void DrawSpectatorsWindow(float scale, ImVec2 chat_pos, ImVec2 chat_size)
   if (!s.list || !s.list->open)
     return;
   const ImGuiIO& io = ImGui::GetIO();
+  const ImGuiStyle& style = ImGui::GetStyle();
   const float line = ImGui::GetTextLineHeightWithSpacing();
-  const ImVec2 size{16.0f * line, 14.0f * line};
+  // Exactly as wide as the widest name can be (and its scrollbar); only its height can change.
+  const float width = std::ceil(WidestSpectatorRow() + 2.0f * style.WindowPadding.x +
+                                style.ScrollbarSize + 2.0f * style.WindowBorderSize);
+  const ImVec2 size{width, 14.0f * line};
   const float gap = 8.0f * scale;
   ImVec2 pos{chat_pos.x + chat_size.x + gap, chat_pos.y};
   if (pos.x + size.x > io.DisplaySize.x)
     pos.x = std::max(0.0f, chat_pos.x - size.x - gap);
   ImGui::SetNextWindowPos(pos, ImGuiCond_Appearing);
   ImGui::SetNextWindowSize(size, ImGuiCond_Appearing);
+  ImGui::SetNextWindowSizeConstraints({width, 4.0f * line}, {width, FLT_MAX});
   bool open = true;
   if (ImGui::Begin("Spectators###SpectatorsList", &open,
                    ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings))
