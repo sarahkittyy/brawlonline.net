@@ -1,6 +1,6 @@
 # Spectating
 
-Status (2026-10-14): uploading, the relay, the safety tests (§4.5), the Spectate tab and watching live are built; spectator chat in Dolphin is not. mm's `MM_SPECTATE` stays `off` in production until it is turned on.
+Status (2026-10-14): uploading, the relay, the safety tests (§4.5), the Spectate tab and watching live are built. Spectator chat in Dolphin is built since 2026-11-15 (bug report #299, §6.4). mm's `MM_SPECTATE` stays `off` in production until it is turned on.
 
 What was built, and where it differs from the plan below:
 - **Upload and relay** (§3.1, §3.2): as planned, except the watch stream is server-sent events from accounts (which relays mm's loopback `GET /live/{stream}`), not a WebSocket to mm, so no new public listener or nginx location. `docs/spectate-protocol.md` is the wire protocol.
@@ -10,7 +10,7 @@ What was built, and where it differs from the plan below:
 - **Auto play** picks the newest game being played, and a game waiting for its set's next game only when none is (2026-10-14). While a picked game's first frames haven't come, Dolphin shows "Game found, waiting for data..." (its stage loaded once the setup came). Found in the harness, where three Dolphins on one PC made the uploader stop for most games.
 - **Windows file sharing:** Dolphin's default open (`_tfopen_s`) refuses a file another program is writing, so a growing game file could only be read once its game had ended. `ReplayFile::ReadFile` now opens shared (`SharedAccess::ReadWrite`).
 - **A room's own members** (2026-10-19, `rooms.md` §1.3): a member who is not in the room's game (SIT OUT, or joined during it) watches it automatically in their own Dolphin, from the room CSS, with the same chunks on the online connection (channel 2) instead of the launcher's stream; START or B leaves it, the room never waits for a watcher, and "Game ended, press B to return to CSS." shows once the players are done.
-- Not built yet: spectator chat in Dolphin (§6.4; the server side exists), "Lost sync with this game" reports, the launcher coming to the front when Dolphin closes, and the version check's own message for spectating (a different build gets the replay's "recorded with another version" error, without Play anyway).
+- Not built yet: "Lost sync with this game" reports, the launcher coming to the front when Dolphin closes, and the version check's own message for spectating (a different build gets the replay's "recorded with another version" error, without Play anyway).
 
 ## 0. What the user asked for (2026-10-13)
 
@@ -267,7 +267,7 @@ The user's decisions (2026-10-13): a chat window for everyone watching a game; *
 - A group key (Signal's sender keys, MLS) would fix the size. But every join or leave would mean redistributing keys among up to 1,000 members, and spectators come and go all the time.
 - It would also protect nothing. Anyone logged in can open the Spectate tab and join the chat, so a reader doesn't have to break anything; they just watch the game.
 
-So spectator chat is **in the clear to mm, and encrypted on the wire by TLS** (it travels on the spectator's WebSocket, §3.2). The window has **no padlock**. Its title reads "Spectators · 214" instead of the players' codes.
+So spectator chat is **in the clear to mm, and encrypted on the wire by TLS** (it travels on the spectator's WebSocket, §3.2). The window has **no padlock**, and no names on its title bar: where the padlock was, an eye and how many watch; hovering the eye lists who watches, "name (code)", in columns of 20, at most 100 and "+N" for the rest (Sarah, 2026-11-15, bug report #299).
 
 **Players never see it:**
 - Spectator chat is its own group kind, `spectate:<stream>`. Only spectator WebSockets join it, and mm never sends it on a game's online connection (ENet). A player's Dolphin has no way to receive it.
@@ -275,9 +275,11 @@ So spectator chat is **in the clear to mm, and encrypted on the wire by TLS** (i
 - The rule can't stop a friend from relaying spectator chat to a player some other way. That's out of scope.
 
 **Where it's drawn:** in the playback Dolphin, with the same `OnlineChatUI` window players know: the same look, hotkey, typing, Ignore/Report menu, and drag, resize and folding to the title bar at the top.
-- The playback Dolphin stays without credentials and without an internet connection (`replays.md` §6.2). The launcher owns the WebSocket and passes chat to Dolphin over a **loopback-only** channel: `127.0.0.1`, a random port, and a per-launch token on Dolphin's command line, so no other program can inject lines.
-- Lines the spectator types go back the same way, and the launcher sends them.
+- The playback Dolphin stays without credentials and without an internet connection (`replays.md` §6.2). The launcher holds the watch stream and passes chat to Dolphin in a file next to the comm file, `<comm>.chat.json`, as it already passes the games (`spectate-protocol.md` §4.1). (Built 2026-11-15 that way instead of the loopback socket proposed here: it is as private, in the launcher's own folder, and needs no port, token or second channel.)
+- Lines the spectator types go back in the playback status, as the replay list's buttons do, and the launcher sends them. A line typed shows at once.
 - Ignoring uses the same shared `chat-hidden.json`. The launcher reads it from the netplay User folder, and Dolphin's Ignore goes back to the launcher, which writes it as today.
+- Report sends the reported spectator's newest line (accounts adds the 20 before it).
+- The launcher's Disable Chat hides it too, and the chat key is the game's.
 
 **Server (mm):**
 - Text goes through the same cleaner as players' chat (`common::chat::clean_text`), with the same 100 code points and 300 bytes. mm cleans it before fan-out, and Dolphin cleans again before drawing.

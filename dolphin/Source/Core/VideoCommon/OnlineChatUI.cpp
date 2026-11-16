@@ -516,11 +516,103 @@ void LockIcon(float scale)
                         ImGui::GetColorU32(ImGuiCol_MenuBarBg));
 }
 
+// Who watches, in the eye's tooltip: "name (code)" in their colours, in columns of 20 when there
+// are many, and "+N" for those the list leaves out.
+void DrawSpectatorList(const Online::Chat::View& v)
+{
+  constexpr size_t PER_COLUMN = 20;
+  const size_t n = v.watching.size();
+  const int columns = static_cast<int>(std::clamp<size_t>((n + PER_COLUMN - 1) / PER_COLUMN, 1, 5));
+  if (n > 0 && ImGui::BeginTable("##watching", columns, ImGuiTableFlags_SizingFixedFit))
+  {
+    const size_t rows = (n + static_cast<size_t>(columns) - 1) / static_cast<size_t>(columns);
+    for (size_t row = 0; row < rows; ++row)
+    {
+      ImGui::TableNextRow();
+      for (int col = 0; col < columns; ++col)
+      {
+        const size_t i = static_cast<size_t>(col) * rows + row;
+        ImGui::TableSetColumnIndex(col);
+        if (i >= n)
+          continue;
+        const Online::Chat::Member& m = v.watching[i];
+        const std::string who = m.code.empty() ? m.name : fmt::format("{} ({})", m.name, m.code);
+        ImGui::PushStyleColor(ImGuiCol_Text, ColorOf(m.color));
+        ImGui::TextUnformatted(who.data(), who.data() + who.size());
+        ImGui::PopStyleColor();
+      }
+    }
+    ImGui::EndTable();
+  }
+  if (v.spectators > n)
+  {
+    const std::string more = fmt::format("+{}", v.spectators - n);
+    ImGui::PushStyleColor(ImGuiCol_Text, SYSTEM_COLOR);
+    ImGui::TextUnformatted(more.data(), more.data() + more.size());
+    ImGui::PopStyleColor();
+  }
+}
+
+// Spectator chat's place for the padlock (it isn't end-to-end encrypted): an eye drawn from
+// shapes and how many watch; hovering it lists who.
+void SpectatorsIcon(const Online::Chat::View& v, float scale)
+{
+  const float h = ImGui::GetTextLineHeight();
+  const float eye_w = 1.1f * h;
+  const float gap = 4.0f * scale;
+  const std::string count = fmt::format("{}", v.spectators);
+  const float count_w = ImGui::CalcTextSize(count.data(), count.data() + count.size()).x;
+  const ImVec2 item = ImGui::GetCursorScreenPos();
+  ImGui::InvisibleButton("##spectators", ImVec2(eye_w + gap + count_w, h));
+  const bool hovered = ImGui::IsItemHovered();
+  if (hovered)
+  {
+    ImGui::BeginTooltip();
+    DrawSpectatorList(v);
+    ImGui::EndTooltip();
+  }
+  // On the menu bar's text line, as the names.
+  const ImVec2 p{item.x, item.y + ImGui::GetStyle().FramePadding.y};
+  const ImU32 col = hovered ? ImGui::GetColorU32(ImGuiCol_Text) : ImGui::GetColorU32(SYSTEM_COLOR);
+  ImDrawList* draw = ImGui::GetWindowDrawList();
+  const float cy = p.y + 0.5f * h;
+  const float x0 = p.x + 0.05f * eye_w;
+  const float x1 = p.x + 0.95f * eye_w;
+  const float cx = 0.5f * (x0 + x1);
+  const float lid = 0.42f * h;
+  const float thick = std::max(1.5f * scale, 0.09f * h);
+  // The lids: one closed path, upper then lower.
+  draw->PathLineTo({x0, cy});
+  draw->PathBezierQuadraticCurveTo({cx, cy - lid}, {x1, cy});
+  draw->PathBezierQuadraticCurveTo({cx, cy + lid}, {x0, cy});
+  draw->PathStroke(col, ImDrawFlags_Closed, thick);
+  draw->AddCircleFilled({cx, cy}, 0.17f * h, col);
+  draw->AddText({p.x + eye_w + gap, p.y}, col, count.data(), count.data() + count.size());
+}
+
+// Spectator chat's menu bar after Options: nobody's names (a crowd), only the eye at the right.
+void DrawMenuBarSpectators(float scale)
+{
+  const auto& v = *s.view;
+  const std::string count = fmt::format("{}", v.spectators);
+  const float w = 1.1f * ImGui::GetTextLineHeight() + 4.0f * scale +
+                  ImGui::CalcTextSize(count.data(), count.data() + count.size()).x;
+  const float right = ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x;
+  if (right - w > ImGui::GetCursorPosX() + 8.0f * scale)
+    ImGui::SetCursorPosX(right - w);
+  SpectatorsIcon(v, scale);
+}
+
 // In the menu bar after Options: the other players' names (click: their menu), then the room's
 // code (or the opponent's connect code) at the right with the padlock after it.
 void DrawMenuBarPlayers(float scale)
 {
   const auto& v = *s.view;
+  if (v.spectate)
+  {
+    DrawMenuBarSpectators(scale);
+    return;
+  }
   bool anyone = false;
   for (const Online::Chat::Member& m : v.members)
   {
@@ -804,7 +896,8 @@ void Submit()
     s.input.fill(0);
     break;
   case Online::Chat::SendResult::NoGroup:
-    SetNotice("Not in a room or match.");
+    // (Spectating: the stream is over. accounts' words for a spectator not watching.)
+    SetNotice(s.view && s.view->spectate ? "Watch the game to chat." : "Not in a room or match.");
     break;
   case Online::Chat::SendResult::NoReaders:
     SetNotice("Nobody can read chat yet.");

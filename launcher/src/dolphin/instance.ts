@@ -7,13 +7,13 @@ import electronLog from "electron-log";
 import { EventEmitter } from "events";
 import debounce from "lodash/debounce";
 import { mkdirSync } from "node:fs";
-import { readFile, unlink, writeFile } from "node:fs/promises";
+import { readFile, rename, unlink, writeFile } from "node:fs/promises";
 import path from "path";
 import { fileExists } from "utils/file_exists";
 
 import { sanitizeAppImageEnv } from "./app_image_env/app_image_env";
 import { spawnRefusedError } from "./spawn_refused";
-import type { ReplayCommunication, ReplayPlaybackStatus } from "./types";
+import type { ReplayCommunication, ReplayPlaybackStatus, SpectatorChatFile } from "./types";
 
 const log = electronLog.scope("dolphin/instance");
 const isMac = process.platform === "darwin";
@@ -171,7 +171,7 @@ export class PlaybackDolphinInstance extends DolphinInstance {
       }
       // Its last status first: a clip saved just before it closed (manual_clips.ts) is in it.
       await this.readStatus();
-      for (const file of [this.commPath, `${this.commPath}.status.json`]) {
+      for (const file of [this.commPath, `${this.commPath}.status.json`, this.chatPath]) {
         try {
           if (await fileExists(file)) {
             await unlink(file);
@@ -181,6 +181,36 @@ export class PlaybackDolphinInstance extends DolphinInstance {
         }
       }
     });
+  }
+
+  private get chatPath(): string {
+    return `${this.commPath}.chat.json`;
+  }
+
+  /**
+   * Spectator chat for Dolphin's window (`<comm>.chat.json`, Online/SpectatorChat.h), or none (null). Written to
+   * a temporary file renamed over it, so Dolphin never reads half of one.
+   */
+  async writeChat(chat: SpectatorChatFile | null): Promise<void> {
+    if (!chat) {
+      await unlink(this.chatPath).catch(() => undefined);
+      return;
+    }
+    const tmp = `${this.chatPath}.launcher.tmp`;
+    await writeFile(tmp, JSON.stringify(chat));
+    // On Windows a rename fails while Dolphin has the file open for reading: try again.
+    for (let attempt = 0; ; attempt++) {
+      try {
+        await rename(tmp, this.chatPath);
+        return;
+      } catch (err) {
+        if (attempt >= 10) {
+          await unlink(tmp).catch(() => undefined);
+          throw err;
+        }
+        await delay(20);
+      }
+    }
   }
 
   /** Dolphin's status of what it plays (`<comm>.status.json`), or null before it wrote one. */

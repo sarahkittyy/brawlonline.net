@@ -6,6 +6,7 @@
 // the Rooms thread hands every chat-* message to OnServerMessage and sends what TakeOutbox
 // returns, so decryption, signing and every check of what other players send run on that thread.
 // The window (VideoCommon/OnlineChatUI.cpp) reads GetView and calls Send, SetHidden and Report.
+// While a playback Dolphin shows a spectator chat (Online/SpectatorChat.h), those go there.
 //
 // Everything that arrives is hostile until checked: the server's JSON (size, depth, types), the
 // members (uids, keys, signatures), each box (length, authentication, version, sequence number,
@@ -98,6 +99,11 @@ struct View
   u64 group_number = 0;     // which group this is: a new number for each group joined (0: none)
   u64 serial = 0;           // changes whenever anything above changes
   u64 last_message_ms = 0;  // Common::Timer::NowMs() of the newest Message or Own line
+  // Spectator chat (Online/SpectatorChat.h, a playback Dolphin watching a live game): not
+  // end-to-end encrypted (no padlock); `spectators` watch, `watching` lists who (at most 100).
+  bool spectate = false;
+  u32 spectators = 0;
+  std::vector<Member> watching;
 };
 // The view, or nullopt if `known_serial` is still current (nothing to copy).
 std::optional<View> GetView(u64 known_serial);

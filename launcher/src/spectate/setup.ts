@@ -3,6 +3,7 @@ import { appVersion } from "@common/constants";
 import { PRODUCT_SLUG } from "@common/product";
 import type { DolphinManager } from "@dolphin/manager";
 import type { SettingsManager } from "@settings/settings_manager";
+import { readHidden, writeHidden } from "@social/shared_files";
 import log from "electron-log";
 import { rm } from "fs/promises";
 
@@ -15,6 +16,7 @@ import {
   ipc_spectateWatch,
 } from "./ipc";
 import { SpectateClient } from "./spectate_client";
+import { SpectatorChat } from "./spectator_chat";
 
 const PLAYBACK = "playback";
 
@@ -34,9 +36,27 @@ export default function setupSpectateIpc({
     log.warn(`spectate: could not clear the old games: ${err}`),
   );
 
+  const baseUrl = accountsApi.replace(/\/+$/, "");
+  const userAgent = `${PRODUCT_SLUG}-launcher/${appVersion}`;
+  const chat = new SpectatorChat({
+    baseUrl,
+    userAgent,
+    getToken: (uid) => accountsManager.sessionToken(uid),
+    write: (file) => dolphinManager.writePlaybackChat(PLAYBACK, file),
+    // The game's ignore list: the social client syncs it with the account.
+    readHidden: () => readHidden(dolphinManager.netplayOnlineDir()),
+    setHidden: async (uid, hidden) => {
+      const dir = dolphinManager.netplayOnlineDir();
+      const list = (await readHidden(dir)).filter((u) => u !== uid);
+      await writeHidden(dir, hidden ? [...list, uid] : list);
+    },
+    disabled: () => settingsManager.getDisableChat(),
+  });
+  settingsManager.onSettingChange("disableChat", () => chat.refresh());
+
   const client = new SpectateClient({
-    baseUrl: accountsApi.replace(/\/+$/, ""),
-    userAgent: `${PRODUCT_SLUG}-launcher/${appVersion}`,
+    baseUrl,
+    userAgent,
     getToken: (uid) => accountsManager.sessionToken(uid),
     spectateDir: () => dolphinManager.spectateDir(),
     play: (comm) => dolphinManager.launchPlaybackDolphin(PLAYBACK, comm),
@@ -44,6 +64,7 @@ export default function setupSpectateIpc({
     isPlaybackOpen: () => dolphinManager.isPlaybackOpen(PLAYBACK),
     closePlayback: async () => dolphinManager.closePlaybackDolphin(PLAYBACK),
     closeOnEnd: () => settingsManager.getCloseDolphinAfterSpectating(),
+    chat,
   });
   client.onState((state) => void ipc_spectateStateChangedEvent.main!.trigger({ state }));
 

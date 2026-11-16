@@ -78,6 +78,36 @@ export type ReplayPlaybackStatus = {
    */
   navRequest?: { seq: number; action: "prevReplay" | "prevClip" | "nextClip" | "nextReplay"; frame: number };
   highlightPick?: { seq: number; startFrame: number; endFrame: number };
+  /** Spectator chat (spectate/spectator_chat.ts): what the spectator did in the window, for the launcher to do. */
+  chat?: SpectatorChatOutbox;
+};
+
+/**
+ * Spectator chat (docs/spectate-protocol.md §4.1): the launcher writes `<comm>.chat.json` for the playback
+ * Dolphin's chat window. No file, or no `stream`: no spectator chat.
+ */
+export type SpectatorChatFile = {
+  stream: string;
+  you: string;
+  /** The stream ended: the lines stay, nothing more can be sent. */
+  over: boolean;
+  count: number;
+  spectators: { uid: string; name: string; code: string }[];
+  /** Oldest first; `id`s are the launcher's, increasing. A notice is the launcher's (a send refused). */
+  lines: ({ id: number; uid: string; name: string; code: string; text: string } | { id: number; notice: string })[];
+  hidden: string[];
+  /** The outbox items taken (sent, or refused with a notice), of Dolphin's run `run`. */
+  done?: { run: string; seq: number };
+};
+
+/** Spectator chat: Dolphin's outbox in its status, one `run` per Dolphin process, `seq` increasing in it. */
+export type SpectatorChatOutbox = {
+  run: string;
+  out: ({ seq: number; stream: string } & (
+    | { send: string }
+    | { hide: string; hidden: boolean }
+    | { report: number }
+  ))[];
 };
 
 /**

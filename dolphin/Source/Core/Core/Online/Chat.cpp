@@ -31,6 +31,7 @@
 #include "Core/Online/ChatCrypto.h"
 #include "Core/Online/ChatText.h"
 #include "Core/Online/OnlineClient.h"
+#include "Core/Online/SpectatorChat.h"
 #include "Core/Online/User.h"
 #include "Core/Rollback/PeerData.h"
 
@@ -1099,6 +1100,8 @@ void LeaveMatchGroup()
 
 std::optional<View> GetView(u64 known_serial)
 {
+  if (SpectatorChat::Active())
+    return SpectatorChat::GetView(known_serial);
   std::lock_guard lk(s_mutex);
   LoadHiddenLocked();
   if (known_serial == s.serial)
@@ -1132,6 +1135,8 @@ std::optional<View> GetView(u64 known_serial)
 
 SendResult Send(const std::string& text)
 {
+  if (SpectatorChat::Active())
+    return SpectatorChat::Send(text);
   auto cleaned = ChatText::Clean(text);
   if (!cleaned)
     return SendResult::Empty;
@@ -1176,6 +1181,8 @@ void AddNotice(std::string_view text)
 
 void SetHidden(const std::string& uid, bool hidden)
 {
+  if (SpectatorChat::Active())
+    return SpectatorChat::SetHidden(uid, hidden);
   if (!IsUid(uid))
     return;
   std::lock_guard lk(s_mutex);
@@ -1199,6 +1206,8 @@ void SetHidden(const std::string& uid, bool hidden)
 
 bool IsHidden(const std::string& uid)
 {
+  if (SpectatorChat::Active())
+    return SpectatorChat::IsHidden(uid);
   std::lock_guard lk(s_mutex);
   LoadHiddenLocked();
   return s.hidden.contains(uid);
@@ -1212,6 +1221,8 @@ void CheckIgnoreFile()
 
 bool Report(const std::string& uid, const std::string& reason)
 {
+  if (SpectatorChat::Active())
+    return SpectatorChat::Report(uid);
   std::lock_guard lk(s_mutex);
   if (s.kind == GroupKind::None || uid == s.you || !FindMember(uid))
     return false;
@@ -1328,6 +1339,7 @@ picojson::object Status()
   for (const std::string& l : s.log)
     log.emplace_back(l);
   o["log"] = picojson::value(log);
+  o["spectate"] = picojson::value(SpectatorChat::Status());
   return o;
 }
 

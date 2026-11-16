@@ -594,6 +594,8 @@ add_library(core
   Online/ChatCrypto.h
   Online/ChatText.cpp
   Online/ChatText.h
+  Online/SpectatorChat.cpp
+  Online/SpectatorChat.h
   Online/GameAlive.cpp
   Online/GameAlive.h
   Online/Ipv6.cpp

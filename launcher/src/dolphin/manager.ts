@@ -102,6 +102,7 @@ import type {
   ReplayPlaybackStatus,
   ReplayPlayChoice,
   ReplayPlayResult,
+  SpectatorChatFile,
 } from "./types";
 import { DolphinErrorType, DolphinEventType, DolphinLaunchType } from "./types";
 
@@ -412,6 +413,16 @@ export class DolphinManager {
     return (await this.playbackDolphinInstances.get(id)?.readStatus()) ?? null;
   }
 
+  /** Writes the spectator chat for the playback Dolphin `id`'s window; false when it isn't open. */
+  async writePlaybackChat(id: string, chat: SpectatorChatFile | null): Promise<boolean> {
+    const instance = this.playbackDolphinInstances.get(id);
+    if (!instance) {
+      return false;
+    }
+    await instance.writeChat(chat);
+    return true;
+  }
+
   /** Closes the playback Dolphin `id`. */
   closePlaybackDolphin(id = "playback"): void {
     this.playbackDolphinInstances.get(id)?.stop();
@@ -520,7 +531,15 @@ export class DolphinManager {
       // The launcher's Music setting: off applies P+'s Music Off code here too. (A render's is the
       // job's, on its command line.)
       if (!render) {
-        await playbackInstallation.updateSettings({ enableMusic: this.settingsManager.getEnableMusic() });
+        // And chat as in the game (spectator chat): Disable Chat, and the key that opens the box.
+        await playbackInstallation.updateSettings({
+          enableMusic: this.settingsManager.getEnableMusic(),
+          disableChat: this.settingsManager.getDisableChat(),
+        });
+        const chatKey = await netplayInstallation.getChatKey().catch(() => "");
+        if (chatKey) {
+          await playbackInstallation.setChatKey(chatKey);
+        }
       }
       // A Play Dolphin (a game, a queue, a room) may have the card open: spectating then shares it.
       const inUse = this.netplayDolphinInstance != null || this.playbackDolphinInstances.size > 0;

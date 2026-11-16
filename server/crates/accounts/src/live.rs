@@ -33,6 +33,7 @@ use uuid::Uuid;
 
 use crate::api::{current_user, limit, me};
 use crate::error::{ApiError, ApiResult};
+use crate::store::UserRow;
 use crate::AppState;
 
 /// Events waiting for one spectator. One that falls this far behind is dropped (it reconnects
@@ -50,6 +51,8 @@ pub const DELIVER_PER_SECOND: usize = 5;
 pub const REPORT_CONTEXT: usize = 20;
 /// How often spectator counts are sent to the spectators (when they changed).
 pub const COUNT_EVERY: Duration = Duration::from_secs(5);
+/// Spectators named in `welcome` and `spectators` events (the count says how many watch in all).
+pub const NAMES_LISTED: usize = 100;
 /// A stream's chat is forgotten this long after its last spectator left.
 pub const FORGET_AFTER: Duration = Duration::from_secs(600);
 /// mm sends an empty line every 15 s; nothing for this long means it is gone.
@@ -88,8 +91,17 @@ pub struct Author {
 }
 
 struct Watcher {
-    uid: String,
+    who: Author,
     tx: mpsc::Sender<String>,
+}
+
+/// One spectator in the list of who watches (the chat window's eye, `docs/design/spectating.md` §6.4).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SpectatorName {
+    pub uid: String,
+    pub display_name: String,
+    pub connect_code: String,
 }
 
 #[derive(Default)]
@@ -103,6 +115,8 @@ struct Room {
     last_by: HashMap<String, Instant>,
     /// The count last sent to the spectators.
     count_sent: usize,
+    /// Who watches changed since the last `spectators` event (someone came or went).
+    names_changed: bool,
     empty_since: Option<Instant>,
 }
 
@@ -163,12 +177,31 @@ pub struct Watching {
     pub chat: Vec<ChatLine>,
     /// How many watch the stream, this spectator included.
     pub count: usize,
+    /// Who watches (this spectator included), at most [`NAMES_LISTED`].
+    pub names: Vec<SpectatorName>,
 }
 
 /// Every stream's spectators and chat.
 pub struct LiveHub {
     hub: Mutex<Hub>,
     limits: bool,
+}
+
+/// The stream's spectators in the order they came, each account once, at most [`NAMES_LISTED`].
+fn names_of(room: &Room) -> Vec<SpectatorName> {
+    let mut conns: Vec<(&u64, &Watcher)> = room.watchers.iter().collect();
+    conns.sort_unstable_by_key(|(conn, _)| **conn);
+    let mut seen = std::collections::HashSet::new();
+    conns
+        .into_iter()
+        .filter(|(_, w)| seen.insert(w.who.uid.as_str()))
+        .take(NAMES_LISTED)
+        .map(|(_, w)| SpectatorName {
+            uid: w.who.uid.clone(),
+            display_name: w.who.display_name.clone(),
+            connect_code: w.who.connect_code.clone(),
+        })
+        .collect()
 }
 
 fn now_rfc3339() -> String {
@@ -196,11 +229,11 @@ impl LiveHub {
         self.hub.lock().unwrap_or_else(|e| e.into_inner())
     }
 
-    /// Adds a spectator: its id, its event queue, the stream's last chat lines and how many watch.
-    pub fn watch(&self, stream: &str, uid: &str, now: Instant) -> Result<Watching, LiveError> {
+    /// Adds a spectator: its id, its event queue, the stream's last chat lines, how many watch and who.
+    pub fn watch(&self, stream: &str, who: &Author, now: Instant) -> Result<Watching, LiveError> {
         let mut hub = self.lock();
         if self.limits {
-            hub.watches.check(&uid.to_string(), now).map_err(LiveError::TooManyWatches)?;
+            hub.watches.check(&who.uid, now).map_err(LiveError::TooManyWatches)?;
         }
         if hub.watching >= MAX_WATCHERS {
             return Err(LiveError::Full);
@@ -210,11 +243,12 @@ impl LiveHub {
         hub.watching += 1;
         let (tx, rx) = mpsc::channel(QUEUE);
         let room = hub.rooms.entry(stream.to_string()).or_default();
-        room.watchers.insert(conn, Watcher { uid: uid.to_string(), tx: tx.clone() });
+        room.watchers.insert(conn, Watcher { who: who.clone(), tx: tx.clone() });
         room.empty_since = None;
+        room.names_changed = true;
         let skip = room.lines.len().saturating_sub(WELCOME_LINES);
         let lines = room.lines.iter().skip(skip).cloned().collect();
-        Ok(Watching { conn, tx, rx, chat: lines, count: room.watchers.len() })
+        Ok(Watching { conn, tx, rx, chat: lines, count: room.watchers.len(), names: names_of(room) })
     }
 
     /// A spectator's stream ended (both its pump and its response call this; the second does
@@ -223,6 +257,9 @@ impl LiveHub {
         let mut hub = self.lock();
         let gone = hub.rooms.get_mut(stream).and_then(|r| {
             let w = r.watchers.remove(&conn);
+            if w.is_some() {
+                r.names_changed = true;
+            }
             if r.watchers.is_empty() {
                 r.empty_since = Some(now);
             }
@@ -247,6 +284,7 @@ impl LiveHub {
         // A spectator that stopped reading is dropped; its stream ends and it reconnects.
         for conn in slow {
             room.watchers.remove(&conn);
+            room.names_changed = true;
         }
     }
 
@@ -265,7 +303,7 @@ impl LiveHub {
         let mut hub = self.lock();
         let Hub { rooms, chat, .. } = &mut *hub;
         let room = rooms.get_mut(stream).ok_or(LiveError::NotWatching)?;
-        if !room.watchers.values().any(|w| w.uid == author.uid) {
+        if !room.watchers.values().any(|w| w.who.uid == author.uid) {
             return Err(LiveError::NotWatching);
         }
         if let Some(gap) = slow_mode(room.watchers.len()) {
@@ -298,7 +336,7 @@ impl LiveHub {
         };
         let event = json!({"type": "chat", "line": line}).to_string();
         if muted {
-            for w in room.watchers.values().filter(|w| w.uid == author.uid) {
+            for w in room.watchers.values().filter(|w| w.who.uid == author.uid) {
                 let _ = w.tx.try_send(event.clone());
             }
             return Ok(line);
@@ -335,16 +373,18 @@ impl LiveHub {
         Ok((author, room.lines.iter().skip(from).take(at - from + 1).cloned().collect()))
     }
 
-    /// Sends each stream's spectator count to its spectators when it changed, and forgets the
-    /// chat of streams nobody watched for [`FORGET_AFTER`].
+    /// Sends each stream's spectator count and who watches to its spectators when they changed,
+    /// and forgets the chat of streams nobody watched for [`FORGET_AFTER`].
     pub fn tick(&self, now: Instant) {
         let mut hub = self.lock();
         hub.rooms.retain(|_, r| !r.empty_since.is_some_and(|t| now.duration_since(t) >= FORGET_AFTER));
         for room in hub.rooms.values_mut() {
             let n = room.watchers.len();
-            if n != room.count_sent && n > 0 {
+            if (n != room.count_sent || room.names_changed) && n > 0 {
                 room.count_sent = n;
-                Self::deliver(room, &json!({"type": "spectators", "count": n}).to_string());
+                room.names_changed = false;
+                let names = names_of(room);
+                Self::deliver(room, &json!({"type": "spectators", "count": n, "names": names}).to_string());
             }
         }
         let watching = hub.rooms.values().map(|r| r.watchers.len()).sum();
@@ -497,6 +537,7 @@ pub async fn watch(
 ) -> ApiResult<impl IntoResponse> {
     let user = current_user(&state, &headers).await?;
     let uid = user.uid.to_string();
+    let who = author_of(&state, &user);
     let mut entry = entry(&state, &id).await?;
     if entry.players.iter().any(|p| p.uid == uid) {
         return Err(ApiError::forbidden("playing", "You're playing in this game."));
@@ -508,9 +549,10 @@ pub async fn watch(
     if !resp.status().is_success() {
         return Err(mm_unavailable(resp.status()));
     }
-    let Watching { conn, tx, rx, chat, count } = state.live.watch(&id, &uid, Instant::now())?;
+    let Watching { conn, tx, rx, chat, count, names } = state.live.watch(&id, &who, Instant::now())?;
     entry.spectators = Some(count as u32);
-    let welcome = json!({"type": "welcome", "stream": entry, "you": uid, "chat": chat}).to_string();
+    let welcome =
+        json!({"type": "welcome", "stream": entry, "you": uid, "chat": chat, "spectators": names}).to_string();
     let _ = tx.try_send(welcome);
     tokio::spawn(pump(resp, tx, state.live.clone(), id.clone(), conn));
     let events = WatchStream { rx, hub: state.live.clone(), stream: id, conn };
@@ -556,25 +598,31 @@ pub struct ChatBody {
     pub text: String,
 }
 
+/// An account as spectator chat names it.
+fn author_of(state: &AppState, user: &UserRow) -> Author {
+    let profile = me(state, user);
+    Author {
+        uid: user.uid.to_string(),
+        display_name: user.display_name.clone(),
+        connect_code: profile.connect_code.unwrap_or_default(),
+    }
+}
+
 /// `POST /v1/live/{id}/chat`: a line to the stream's spectators (the sender must be watching).
+/// The answer is the line as sent, `{"line": ...}`: the same one the watch streams get.
 pub async fn chat(
     State(state): State<AppState>,
     Path(id): Path<String>,
     headers: HeaderMap,
     Json(body): Json<ChatBody>,
-) -> ApiResult<StatusCode> {
+) -> ApiResult<Json<serde_json::Value>> {
     let user = current_user(&state, &headers).await?;
     if body.text.len() > 4096 {
         return Err(LiveError::Invalid.into());
     }
-    let profile = me(&state, &user);
-    let author = Author {
-        uid: user.uid.to_string(),
-        display_name: user.display_name.clone(),
-        connect_code: profile.connect_code.unwrap_or_default(),
-    };
-    state.live.chat(&id, &author, &body.text, user.chat_muted_at.is_some(), Instant::now())?;
-    Ok(StatusCode::NO_CONTENT)
+    let author = author_of(&state, &user);
+    let line = state.live.chat(&id, &author, &body.text, user.chat_muted_at.is_some(), Instant::now())?;
+    Ok(Json(json!({ "line": line })))
 }
 
 #[derive(Debug, Deserialize)]
@@ -653,10 +701,10 @@ mod tests {
     fn chat_reaches_every_spectator_of_the_stream_only() {
         let hub = LiveHub::new(true);
         let now = Instant::now();
-        let mut a = hub.watch("s1", "u1", now).unwrap().rx;
-        let w = hub.watch("s1", "u2", now).unwrap();
+        let mut a = hub.watch("s1", &author(1), now).unwrap().rx;
+        let w = hub.watch("s1", &author(2), now).unwrap();
         let (mut b, n) = (w.rx, w.count);
-        let mut other = hub.watch("s2", "u3", now).unwrap().rx;
+        let mut other = hub.watch("s2", &author(3), now).unwrap().rx;
         assert_eq!(n, 2);
         hub.chat("s1", &author(1), "  hi\u{200b} there ", false, now).unwrap();
         for rx in [&mut a, &mut b] {
@@ -678,15 +726,15 @@ mod tests {
     fn a_muted_spectators_lines_reach_only_itself() {
         let hub = LiveHub::new(true);
         let now = Instant::now();
-        let mut a = hub.watch("s1", "u1", now).unwrap().rx;
-        let mut b = hub.watch("s1", "u2", now).unwrap().rx;
+        let mut a = hub.watch("s1", &author(1), now).unwrap().rx;
+        let mut b = hub.watch("s1", &author(2), now).unwrap().rx;
         events(&mut a);
         events(&mut b);
         hub.chat("s1", &author(1), "psst", true, now).unwrap();
         let ev = events(&mut a);
         assert_eq!((ev.len(), ev[0]["line"]["text"].as_str()), (1, Some("psst")));
         assert!(events(&mut b).is_empty());
-        let mut c = hub.watch("s1", "u3", now).unwrap().rx;
+        let mut c = hub.watch("s1", &author(3), now).unwrap().rx;
         assert!(events(&mut c).iter().all(|e| e["type"] != "chat"));
     }
 
@@ -694,12 +742,12 @@ mod tests {
     fn a_late_joiner_gets_the_last_lines() {
         let hub = LiveHub::new(false);
         let mut now = Instant::now();
-        let _w = hub.watch("s", "u1", now).unwrap();
+        let _w = hub.watch("s", &author(1), now).unwrap();
         for i in 0..30 {
             now += Duration::from_secs(1);
             hub.chat("s", &author(1), &format!("line {i}"), false, now).unwrap();
         }
-        let lines = hub.watch("s", "u2", now).unwrap().chat;
+        let lines = hub.watch("s", &author(2), now).unwrap().chat;
         assert_eq!(lines.len(), WELCOME_LINES);
         assert_eq!(lines.last().unwrap().text, "line 29");
         assert_eq!(lines[0].text, "line 10");
@@ -709,7 +757,7 @@ mod tests {
     fn the_stream_cap_and_account_limits() {
         let hub = LiveHub::new(true);
         let now = Instant::now();
-        let _w: Vec<_> = (1..=7u8).map(|n| hub.watch("s", &format!("u{n}"), now).unwrap()).collect();
+        let _w: Vec<_> = (1..=7u8).map(|n| hub.watch("s", &author(n), now).unwrap()).collect();
         for n in 1..=5u8 {
             hub.chat("s", &author(n), "hello", false, now).unwrap();
         }
@@ -737,7 +785,7 @@ mod tests {
         let now = Instant::now();
         let mut keep = Vec::new();
         for n in 0..60 {
-            keep.push(hub.watch("s", &format!("u{n}"), now).unwrap());
+            keep.push(hub.watch("s", &author(n), now).unwrap());
         }
         let a = Author { uid: "u1".into(), display_name: "a".into(), connect_code: "A#1".into() };
         hub.chat("s", &a, "one", false, now).unwrap();
@@ -749,8 +797,8 @@ mod tests {
     fn reports_take_the_line_and_its_context() {
         let hub = LiveHub::new(true);
         let mut now = Instant::now();
-        let _w1 = hub.watch("s", "u1", now).unwrap();
-        let _w2 = hub.watch("s", "u2", now).unwrap();
+        let _w1 = hub.watch("s", &author(1), now).unwrap();
+        let _w2 = hub.watch("s", &author(2), now).unwrap();
         let mut last = 0;
         for i in 0..25 {
             now += Duration::from_secs(2);
@@ -768,20 +816,56 @@ mod tests {
     fn counts_go_out_when_they_change_and_old_chats_are_forgotten() {
         let hub = LiveHub::new(false);
         let now = Instant::now();
-        let w1 = hub.watch("s", "u1", now).unwrap();
+        let w1 = hub.watch("s", &author(1), now).unwrap();
         let (c1, mut a) = (w1.conn, w1.rx);
-        let w2 = hub.watch("s", "u2", now).unwrap();
+        let w2 = hub.watch("s", &author(2), now).unwrap();
         let c2 = w2.conn;
         hub.tick(now);
-        assert_eq!(events(&mut a), vec![json!({"type": "spectators", "count": 2})]);
+        let names = json!([
+            {"uid": "u1", "displayName": "name1", "connectCode": "C#1"},
+            {"uid": "u2", "displayName": "name2", "connectCode": "C#2"},
+        ]);
+        assert_eq!(events(&mut a), vec![json!({"type": "spectators", "count": 2, "names": names})]);
         hub.tick(now);
         assert!(events(&mut a).is_empty());
         hub.unwatch("s", c2, now);
         hub.unwatch("s", c2, now);
         assert_eq!(hub.counts()["s"], 1);
+        // Someone else came as u2 went: the same count, other names, so it goes out.
+        let _w3 = hub.watch("s", &author(3), now).unwrap();
+        hub.tick(now);
+        let ev = events(&mut a);
+        assert_eq!((ev.len(), ev[0]["count"].as_u64()), (1, Some(2)));
+        assert_eq!(ev[0]["names"][1]["uid"], "u3");
+        hub.unwatch("s", _w3.conn, now);
         hub.unwatch("s", c1, now);
         hub.tick(now + FORGET_AFTER);
         assert!(hub.counts().is_empty());
+    }
+
+    /// Who watches: in the order they came, an account with two streams open once, at most
+    /// [`NAMES_LISTED`]; the welcome has them too.
+    #[test]
+    fn spectators_are_named_once_each() {
+        let hub = LiveHub::new(false);
+        let now = Instant::now();
+        let first = hub.watch("s", &author(7), now).unwrap();
+        assert_eq!(first.names.len(), 1);
+        assert_eq!((first.names[0].uid.as_str(), first.names[0].display_name.as_str()), ("u7", "name7"));
+        let again = hub.watch("s", &author(7), now).unwrap();
+        assert_eq!((again.count, again.names.len()), (2, 1));
+        let mut keep = vec![first, again];
+        for n in 0..=200u8 {
+            keep.push(hub.watch("s", &author(n), now).unwrap());
+        }
+        let last = keep.last().unwrap();
+        assert_eq!(last.count, 203);
+        assert_eq!(last.names.len(), NAMES_LISTED);
+        assert_eq!(last.names[0].uid, "u7");
+        assert_eq!(last.names[1].uid, "u0");
+        // Another stream's spectators are not named here.
+        let other = hub.watch("t", &author(9), now).unwrap();
+        assert_eq!(other.names.len(), 1);
     }
 
     #[test]

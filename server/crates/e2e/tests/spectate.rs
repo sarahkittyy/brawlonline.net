@@ -156,6 +156,8 @@ async fn a_direct_game_is_listed_watched_and_chatted_about() {
     let mut ev = Events { resp, buf: String::new() };
     let welcome = ev.next().await;
     assert_eq!((welcome["type"].as_str(), welcome["stream"]["spectators"].as_u64()), (Some("welcome"), Some(1)));
+    // Who watches: carol, by name.
+    assert_eq!(welcome["spectators"][0]["displayName"], "carol");
     let game = ev.next().await;
     assert_eq!(
         (game["type"].as_str(), game["game"].as_u64(), game["uid"].as_str()),
@@ -173,9 +175,11 @@ async fn a_direct_game_is_listed_watched_and_chatted_about() {
 
     // Carol chats; she hears it, with her account's name.
     let (st, body) = stack.post(&format!("/v1/live/{id}/chat"), Some(&carol_token), json!({"text": "nice"})).await;
-    assert_eq!(st, 204, "{body}");
+    assert_eq!((st, body["line"]["text"].as_str()), (200, Some("nice")), "{body}");
     let line = ev.until("chat").await;
     assert_eq!((line["line"]["text"].as_str(), line["line"]["displayName"].as_str()), (Some("nice"), Some("carol")));
+    // The answer is the very line the watch streams get.
+    assert_eq!(line["line"]["id"], body["line"]["id"]);
     // Alice isn't watching: she can't chat there.
     let (st, body) = stack.post(&format!("/v1/live/{id}/chat"), Some(&alice_token), json!({"text": "hi"})).await;
     assert_eq!((st, body["error"]["code"].as_str()), (403, Some("not_watching")));
