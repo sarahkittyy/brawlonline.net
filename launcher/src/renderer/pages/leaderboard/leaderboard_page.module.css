@@ -68,6 +68,12 @@
   min-height: 0;
 }
 
+/* Column widths from LeaderboardColumns only, never from the rows loaded so far (they moved as pages loaded). */
+.list table,
+.me table {
+  table-layout: fixed;
+}
+
 /* The player's own row, pinned under the list while it isn't loaded in it yet (it is then below). */
 .me {
   flex: none;
@@ -117,6 +123,12 @@
   box-shadow: inset 0 2px 0 color-mix(in srgb, var(--accent-primary) 55%, transparent);
 }
 
+/* A name too long for the player's column at a narrow window is cut, not drawn over the next column. */
+.playerCell {
+  overflow: hidden;
+  white-space: nowrap;
+}
+
 .player {
   display: inline-flex;
   align-items: center;
@@ -136,4 +148,14 @@
 
 .list > div {
   overflow-x: hidden !important;
+
+  /* The scrollbar's room is kept whether the list overflows or not (All with pages, Friends with a few rows), so the
+     columns don't move when it comes and goes. */
+  scrollbar-gutter: stable;
+}
+
+/* The same room beside the pinned row, so its columns line up with the list's. */
+.me {
+  overflow-y: hidden;
+  scrollbar-gutter: stable;
 }

@@ -225,6 +225,7 @@ export const LeaderboardPage = React.memo(function LeaderboardPage() {
               stickyHeader={true}
               style={{ opacity: scope === "all" && pages.isPrevious ? 0.5 : 1, transition: "opacity 150ms" }}
             >
+              <LeaderboardColumns />
               <LeaderboardHead />
               <TableBody>
                 {rows.map((e) => (
@@ -249,6 +250,7 @@ export const LeaderboardPage = React.memo(function LeaderboardPage() {
       {me && !meListed && !search && (
         <div className={styles.me} data-testid="leaderboard-me">
           <Table size="small">
+            <LeaderboardColumns />
             <TableBody>
               <LeaderboardRow entry={me} isMe={true} />
             </TableBody>
@@ -259,18 +261,35 @@ export const LeaderboardPage = React.memo(function LeaderboardPage() {
   );
 });
 
+/**
+ * The columns' widths, the same in the list and the pinned row under it. The table's layout is fixed (the CSS): sized
+ * from its rows, the columns moved left and right as pages of other names and numbers loaded in while scrolling
+ * (Sarah's board). Each width holds its widest content (padding included): the position with a change beside it
+ * ("1234 ▼-123"), the badge, the main, "9999.9", "999-999"; the player's column takes the rest.
+ */
+export const LeaderboardColumns = React.memo(function LeaderboardColumns() {
+  return (
+    <colgroup>
+      <col style={{ width: 120 }} />
+      <col style={{ width: 88 }} />
+      <col />
+      <col style={{ width: 72 }} />
+      <col style={{ width: 104 }} />
+      <col style={{ width: 104 }} />
+    </colgroup>
+  );
+});
+
 export const LeaderboardHead = React.memo(function LeaderboardHead() {
   return (
     <TableHead>
       <TableRow>
-        <TableCell sx={{ width: 72 }}>
+        <TableCell>
           <span style={positionStyle}>{Messages.position()}</span>
         </TableCell>
-        <TableCell align="center" sx={{ width: 64 }}>
-          {Messages.rank()}
-        </TableCell>
+        <TableCell align="center">{Messages.rank()}</TableCell>
         <TableCell>{Messages.player()}</TableCell>
-        <TableCell sx={{ width: 56 }}>{Messages.main()}</TableCell>
+        <TableCell>{Messages.main()}</TableCell>
         <TableCell align="right">{Messages.rating()}</TableCell>
         <TableCell align="right" sx={{ whiteSpace: "nowrap" }}>
           {Messages.record()}
@@ -300,7 +319,7 @@ export const LeaderboardRow = React.memo(function LeaderboardRow({
       <TableCell align="center" sx={{ paddingY: "4px" }}>
         <RankBadge rank={entry.rank} setsToPlace={entry.setsToPlace} size="small" />
       </TableCell>
-      <TableCell sx={strong}>
+      <TableCell className={styles.playerCell} sx={strong}>
         {/* The flag, the name and the code in one cell (docs/design/launcher-redesign.md §7). */}
         <span className={styles.player}>
           {entry.country && <Flag code={entry.country} height={13} title={countryName(entry.country)} />}
