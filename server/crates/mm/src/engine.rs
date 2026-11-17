@@ -111,7 +111,11 @@
 //! Direct holds such a pair back (P2P window + `repair_backoff` × failures) and errors
 //! after `max_connect_failures`; Unranked and Ranked pair each of them with someone else when they
 //! can, re-pair them only after the same backoff, and after `max_connect_failures` stop pairing
-//! them with each other (they keep searching) until the window has passed.
+//! them with each other (they keep searching) for `unconnectable_hold` (30 min). Bug report #310:
+//! that used to last only until the window had passed (60 s after the last match), so two players
+//! whose networks cannot reach each other were paired three times a minute, minute after minute
+//! (UWU#684 and RASH#34: 12 failed matches in 6 minutes). Prod 2026-11-10..17: 165 matches of a
+//! pair within 30 min of its third failed connect in a row, 162 of them failed again.
 
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr, SocketAddrV6};
@@ -259,6 +263,9 @@ pub struct EngineConfig {
     /// Ranked: two players whose set ended in its ping check (`search.avoid`) are paired again only
     /// after this long.
     pub ranked_avoid: Duration,
+    /// Unranked and Ranked: two players whose connect failed `max_connect_failures` times in a row
+    /// are paired again only after this long (bug report #310).
+    pub unconnectable_hold: Duration,
 }
 
 impl Default for EngineConfig {
@@ -304,6 +311,7 @@ impl Default for EngineConfig {
             game_stall: Duration::from_secs(30),
             twos_avoid: Duration::from_secs(600),
             ranked_avoid: Duration::from_secs(3 * 3600),
+            unconnectable_hold: Duration::from_secs(30 * 60),
         }
     }
 }
@@ -742,6 +750,9 @@ pub struct Engine {
     twos_avoid: HashMap<(Uuid, Uuid), Instant>,
     /// Ranked: pairs of players (sorted uids) whose set ended in its ping check, and when.
     ranked_avoid: HashMap<(Uuid, Uuid), Instant>,
+    /// Unranked and Ranked: pairs of players (sorted uids) whose connect failed
+    /// `max_connect_failures` times in a row, and when the last one failed.
+    unconnectable: HashMap<(Uuid, Uuid), Instant>,
     /// 2v2 matches made lately: their players and when, for `twos-off` (a player's connect failed).
     twos_matches: HashMap<String, (Vec<Uuid>, Instant)>,
     /// Recently matched pairs (sorted uids), to space out re-pairing after a
@@ -885,6 +896,7 @@ impl Engine {
             twos: Vec::new(),
             twos_avoid: HashMap::new(),
             ranked_avoid: HashMap::new(),
+            unconnectable: HashMap::new(),
             twos_matches: HashMap::new(),
             history: HashMap::new(),
             last_opponent: HashMap::new(),
@@ -2343,6 +2355,8 @@ impl Engine {
         self.twos_avoid.retain(|_, at| now.saturating_duration_since(*at) < avoid);
         let avoid = self.cfg.ranked_avoid;
         self.ranked_avoid.retain(|_, at| now.saturating_duration_since(*at) < avoid);
+        let hold = self.cfg.unconnectable_hold;
+        self.unconnectable.retain(|_, at| now.saturating_duration_since(*at) < hold);
         self.twos_matches.retain(|_, (_, at)| now.saturating_duration_since(*at) < TWOS_MATCH_MEMORY);
         let window = self.cfg.requeue_window;
         self.history.retain(|_, h| now.saturating_duration_since(h.last_match) < window);
@@ -2428,11 +2442,18 @@ impl Engine {
 
     /// `uid` searches again within `FAILED_REQUEUE` of its last match (Slippi requeues 8 s after a
     /// failed P2P connect): the two never played, so neither counts the other as their last
-    /// opponent; each goes back to the one before.
+    /// opponent; each goes back to the one before. If that was the pair's `max_connect_failures`th
+    /// failed connect in a row, the two are kept apart for `unconnectable_hold`.
     fn forget_failed_opponent(&mut self, now: Instant, uid: Uuid) {
         let Some(last) = self.last_opponent.get(&uid).copied() else { return };
         if now.saturating_duration_since(last.at) >= FAILED_REQUEUE {
             return;
+        }
+        let key = pair_key(uid, last.opponent);
+        let failures = self.history.get(&key).filter(|h| h.last_match == last.at).map(|h| h.failures + 1);
+        if failures.is_some_and(|n| n >= self.cfg.max_connect_failures) && !self.unconnectable.contains_key(&key) {
+            tracing::info!(%uid, other = %last.opponent, tries = failures, "queue pair kept apart: could not connect");
+            self.unconnectable.insert(key, now);
         }
         for (x, y) in [(uid, last.opponent), (last.opponent, uid)] {
             let Some(l) = self.last_opponent.get(&x).copied() else { continue };
@@ -2543,8 +2564,8 @@ impl Engine {
     /// the lowest ping (no estimate counts as `ping_limit`). Ties: arrival order. Two who just played each other wait until both have waited
     /// `rematch_hold` (`rematch_repeat_hold` after two or more matches in a row). A pair matched within `requeue_window` whose new search came within
     /// `FAILED_REQUEUE` of it failed its P2P connect (Slippi requeues with a new ticket): anyone
-    /// else in the queue goes first; the same two again only after the backoff, and not at all
-    /// after `max_connect_failures`. Returns (older, newer, failures so far).
+    /// else in the queue goes first; the same two again only after the backoff, and not for
+    /// `unconnectable_hold` after `max_connect_failures`. Returns (older, newer, failures so far).
     fn next_queue_pair(&self, mode: Mode, now: Instant) -> Option<(ConnId, ConnId, u32)> {
         let ranked = mode == Mode::Ranked;
         let queue: Vec<(ConnId, &Waiting)> = self
@@ -2566,6 +2587,13 @@ impl Engine {
                     continue;
                 }
                 if ranked && self.ranked_avoid.contains_key(&pair_key(wa.user.uid, wb.user.uid)) {
+                    continue;
+                }
+                if self
+                    .unconnectable
+                    .get(&pair_key(wa.user.uid, wb.user.uid))
+                    .is_some_and(|at| now.saturating_duration_since(*at) < self.cfg.unconnectable_hold)
+                {
                     continue;
                 }
                 if wa.region != wb.region && !widened(wa) && !widened(wb) {
@@ -3955,10 +3983,18 @@ mod tests {
         h.connect(100, 3);
         let m = matches(&h.unranked(100, &u[2]));
         assert_eq!(pair_of(&m[0]), pair_key(u[0].uid, u[2].uid));
-        // Once the window has passed they are strangers again.
+        // Bug report #310: not again once the 60 s window has passed either; they kept failing
+        // three times a minute. Searching on, they wait for anyone else.
         h.now = third + Duration::from_secs(61);
         h.advance(Duration::ZERO);
-        let m = matches(&requeue(&mut h));
+        assert!(matches(&requeue(&mut h)).is_empty());
+        h.now = third + Duration::from_secs(29 * 60);
+        assert!(matches(&h.advance(Duration::ZERO)).is_empty());
+        assert!(matches(&requeue(&mut h)).is_empty());
+        // `unconnectable_hold` (30 min) after the third failure showed (its requeue at 9 s) they
+        // are strangers again: the two searches waiting since 29 min are paired.
+        h.now = third + Duration::from_secs(9 + 30 * 60);
+        let m = matches(&h.advance(Duration::ZERO));
         assert_eq!(m.len(), 1);
         assert_eq!(pair_of(&m[0]), pair_key(u[0].uid, u[1].uid));
     }
