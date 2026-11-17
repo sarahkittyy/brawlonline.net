@@ -2,7 +2,7 @@ import type { NameBadge } from "@common/badges";
 
 /**
  * Icons for the stories (fixtures/, served by Storybook at /v1/icons as accounts serves them; .storybook/main.ts):
- * the developers' `</>` (tools/badges/dev.png) and three made from MUI icons.
+ * a copy of the developers' `</>` and three made from MUI icons.
  */
 export const STORY_ICONS = {
   dev: "8127fbba5bab2a89c3a1",

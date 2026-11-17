@@ -114,7 +114,7 @@ Data: the server adds what to show beside each name (`profile::NameTag`: `countr
 
 ## 10. Badges and custom main icons (2026-11-17)
 
-Sarah's board: "i'd like to be able to manually, as admin, customize people's names and stuff. like how i have the </> logo". Her picks: `pp-admin` only for now, PNG only, the server decides (the player's own "Show next to name" switches don't apply), a badge still shows when the name beside it is cut short, and each badge has its own hover text (as the `</>` said "Dev"). The `</>` is no longer tied to `users.role = 'admin'`: it is a badge like any other (`tools/badges/dev.png`, `#c9a6f2`, given by hand on prod).
+Sarah's board: "i'd like to be able to manually, as admin, customize people's names and stuff. like how i have the </> logo". Her picks: `pp-admin` only for now, PNG only, the server decides (the player's own "Show next to name" switches don't apply), a badge still shows when the name beside it is cut short, and each badge has its own hover text (as the `</>` said "Dev"). The `</>` is no longer tied to `users.role = 'admin'`: it is a badge like any other, given by hand on prod. Badge icons live only on prod (in its database), not in the repository.
 
 **What there is**
 
@@ -151,7 +151,7 @@ pp-admin main-icon set <player> <icon>
 pp-admin main-icon clear <player>
 ```
 
-`badge add` on a badge the player already has changes only what is given (hover text, places, position). Every change is in `audit_log` (`icon.add`, `badge.set`, `main_icon.set`, ...). The `</>` on prod: `scp tools/badges/dev.png sarahvps2:/tmp/` then `pp-admin icon add /tmp/dev.png` and `pp-admin badge add SARA#694 dev --label Dev`.
+`badge add` on a badge the player already has changes only what is given (hover text, places, position). Every change is in `audit_log` (`icon.add`, `badge.set`, `main_icon.set`, ...). A new icon on prod: copy the PNG to the server (`/tmp`), then `sudo pp-admin icon add /tmp/<file>.png` and `sudo pp-admin badge add <code> <icon> --label ...`.
 
 **Not included**: in game (the names over the fighters and on the HUD are text the game draws), Spectate and Match history's rows (their names come without name tags), a launcher upload for admins.
 
