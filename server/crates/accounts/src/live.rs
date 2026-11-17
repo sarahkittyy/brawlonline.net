@@ -185,7 +185,7 @@ pub struct Watching {
     pub rx: mpsc::Receiver<String>,
     /// The stream's last chat lines.
     pub chat: Vec<ChatLine>,
-    /// How many watch the stream, this spectator included.
+    /// How many accounts watch the stream, this spectator included.
     pub count: usize,
     /// Who watches (this spectator included), at most [`NAMES_LISTED`].
     pub names: Vec<SpectatorName>,
@@ -195,6 +195,14 @@ pub struct Watching {
 pub struct LiveHub {
     hub: Mutex<Hub>,
     limits: bool,
+}
+
+/// How many accounts watch the stream: what spectators are shown as the count (bug report #299:
+/// "game in prod says 5 spectators but the list only shows 2"). An account's watch connections
+/// are counted once, as the list names it once: a launcher reconnecting while its last stream is
+/// still open, or one client watching a game over several connections, is one spectator.
+fn audience(room: &Room) -> usize {
+    room.watchers.values().map(|w| w.who.uid.as_str()).collect::<std::collections::HashSet<_>>().len()
 }
 
 /// The stream's spectators in the order they came, each account once, at most [`NAMES_LISTED`].
@@ -274,7 +282,7 @@ impl LiveHub {
         room.names_changed = true;
         let skip = room.lines.len().saturating_sub(WELCOME_LINES);
         let lines = room.lines.iter().skip(skip).cloned().collect();
-        Ok(Watching { conn, tx, rx, chat: lines, count: room.watchers.len(), names: names_of(room) })
+        Ok(Watching { conn, tx, rx, chat: lines, count: audience(room), names: names_of(room) })
     }
 
     /// A spectator's stream ended (both its pump and its response call this; the second does
@@ -297,7 +305,7 @@ impl LiveHub {
     }
 
     pub fn counts(&self) -> HashMap<String, usize> {
-        self.lock().rooms.iter().map(|(id, r)| (id.clone(), r.watchers.len())).collect()
+        self.lock().rooms.iter().map(|(id, r)| (id.clone(), audience(r))).collect()
     }
 
     fn deliver(room: &mut Room, event: &str) {
@@ -332,7 +340,7 @@ impl LiveHub {
         if !room.watchers.values().any(|w| w.who.uid == author.uid) {
             return Err(LiveError::NotWatching);
         }
-        if let Some(gap) = slow_mode(room.watchers.len()) {
+        if let Some(gap) = slow_mode(audience(room)) {
             if let Some(last) = room.last_by.get(&author.uid) {
                 let since = now.duration_since(*last);
                 if since < gap {
@@ -395,7 +403,7 @@ impl LiveHub {
             pages.check(&uid.to_string(), now).map_err(LiveError::TooManyWatches)?;
         }
         let (names, next) = page_of(room, after, limit.clamp(1, PAGE_MAX));
-        Ok((room.watchers.len(), names, next))
+        Ok((audience(room), names, next))
     }
 
     /// A report of line `id`: the line's author and the line with up to [`REPORT_CONTEXT`] lines
@@ -428,7 +436,7 @@ impl LiveHub {
         let mut hub = self.lock();
         hub.rooms.retain(|_, r| !r.empty_since.is_some_and(|t| now.duration_since(t) >= FORGET_AFTER));
         for room in hub.rooms.values_mut() {
-            let n = room.watchers.len();
+            let n = audience(room);
             if (n != room.count_sent || room.names_changed) && n > 0 {
                 room.count_sent = n;
                 room.names_changed = false;
@@ -944,13 +952,14 @@ mod tests {
         assert_eq!(first.names.len(), 1);
         assert_eq!((first.names[0].uid.as_str(), first.names[0].display_name.as_str()), ("u7", "name7"));
         let again = hub.watch("s", &author(7), now).unwrap();
-        assert_eq!((again.count, again.names.len()), (2, 1));
+        // One account watching twice is one spectator, in the count as in the list.
+        assert_eq!((again.count, again.names.len()), (1, 1));
         let mut keep = vec![first, again];
         for n in 0..=200u8 {
             keep.push(hub.watch("s", &author(n), now).unwrap());
         }
         let last = keep.last().unwrap();
-        assert_eq!(last.count, 203);
+        assert_eq!(last.count, 201);
         assert_eq!(last.names.len(), NAMES_LISTED);
         assert_eq!(last.names[0].uid, "u7");
         assert_eq!(last.names[1].uid, "u0");
@@ -970,7 +979,7 @@ mod tests {
         assert_eq!(hub.spectators("s", "nobody", 0, 10, now), Err(LiveError::NotWatching));
         assert_eq!(hub.spectators("t", "u1", 0, 10, now), Err(LiveError::NotWatching));
         let (count, page, next) = hub.spectators("s", "u1", 0, 100, now).unwrap();
-        assert_eq!((count, page.len()), (252, 100));
+        assert_eq!((count, page.len()), (251, 100));
         assert_eq!((page[0].uid.as_str(), page[99].uid.as_str()), ("u0", "u99"));
         // Some of the first page and of the next leave: the next page starts after u99 all the same.
         hub.unwatch("s", keep[3].conn, now);
@@ -984,6 +993,31 @@ mod tests {
         // The rest: u201 to u250; u5's second watch is not named again.
         assert_eq!((page3.len(), next3), (50, None));
         assert_eq!(page3.last().unwrap().uid, "u250");
+    }
+
+    /// The count is of accounts, whatever their connections (bug report #299: the eye said 5, the
+    /// list named 2), in the welcome, the `spectators` event, the live list and the pages alike.
+    #[test]
+    fn the_count_is_the_accounts_watching() {
+        let hub = LiveHub::new(false);
+        let now = Instant::now();
+        let mut a = hub.watch("s", &author(1), now).unwrap();
+        let b: Vec<_> = (0..4).map(|_| hub.watch("s", &author(2), now).unwrap()).collect();
+        assert_eq!((b[3].count, b[3].names.len()), (2, 2));
+        assert_eq!(hub.counts()["s"], 2);
+        assert_eq!(hub.spectators("s", "u1", 0, 10, now).unwrap().0, 2);
+        while a.rx.try_recv().is_ok() {}
+        hub.tick(now);
+        assert_eq!(events(&mut a.rx)[0]["count"], 2);
+        // Three of u2's connections end: still 2, so no new count goes out.
+        for w in &b[..3] {
+            hub.unwatch("s", w.conn, now);
+        }
+        hub.tick(now);
+        assert!(events(&mut a.rx).iter().all(|e| e["count"] == 2));
+        hub.unwatch("s", b[3].conn, now);
+        hub.tick(now);
+        assert_eq!(events(&mut a.rx).last().unwrap()["count"], 1);
     }
 
     #[test]
