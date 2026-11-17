@@ -111,6 +111,7 @@ async fn with_flags(pool: &sqlx::PgPool, mut s: MmStatus) -> sqlx::Result<MmStat
     let flag = |u: &String| tag(u).and_then(|t| t.country.clone());
     let main = |u: &String| tag(u).and_then(|t| t.main.clone());
     let main_icon = |u: &String| tag(u).and_then(|t| t.main_icon.clone());
+    let main_icon_label = |u: &String| tag(u).and_then(|t| t.main_icon_label.clone());
     // Only the badges for the room list, and without their places.
     let badges = |u: &String| -> Vec<NameBadge> {
         tag(u).map_or_else(Vec::new, |t| {
@@ -127,6 +128,10 @@ async fn with_flags(pool: &sqlx::PgPool, mut s: MmStatus) -> sqlx::Result<MmStat
         r.main_icons = r.uids.iter().map(main_icon).collect();
         if r.main_icons.iter().all(Option::is_none) {
             r.main_icons.clear();
+        }
+        r.main_icon_labels = r.uids.iter().map(main_icon_label).collect();
+        if r.main_icon_labels.iter().all(Option::is_none) {
+            r.main_icon_labels.clear();
         }
         r.badges = r.uids.iter().map(badges).collect();
         if r.badges.iter().all(Vec::is_empty) {

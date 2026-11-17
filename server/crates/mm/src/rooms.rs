@@ -707,6 +707,7 @@ impl Room {
             countries: Vec::new(),
             mains: Vec::new(),
             main_icons: Vec::new(),
+            main_icon_labels: Vec::new(),
             badges: Vec::new(),
             joinable: self.free_slot().is_some(),
             ruleset: self.ruleset_view(),

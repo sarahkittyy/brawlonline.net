@@ -348,7 +348,14 @@ export const OnlinePlayers = React.memo(function OnlinePlayers({
                   setMenu({ player, x: e.clientX, y: e.clientY });
                 }}
               >
-                {hasStockIcons && <MainSlot main={player.main} icon={player.mainIcon} friend={friend} />}
+                {hasStockIcons && (
+                  <MainSlot
+                    main={player.main}
+                    icon={player.mainIcon}
+                    iconLabel={player.mainIconLabel}
+                    friend={friend}
+                  />
+                )}
                 <NameCell player={player} friend={friend} mark={!hasStockIcons} />
                 {player.country && (
                   <span className={styles.flag}>

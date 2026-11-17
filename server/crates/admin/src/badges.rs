@@ -65,7 +65,13 @@ pub enum BadgeCmd {
 pub enum MainIconCmd {
     /// Show this icon wherever the player's primary main's stock icon shows beside their name,
     /// whatever their own "Show next to name" switch says.
-    Set { ident: String, icon: String },
+    Set {
+        ident: String,
+        icon: String,
+        /// The hover text (at most 60 characters), as a stock icon shows its character's name.
+        #[arg(long, default_value = "")]
+        label: String,
+    },
     /// Back to the primary main's stock icon.
     Clear { ident: String },
 }
@@ -183,7 +189,8 @@ async fn print_badges(pool: &PgPool, u: &UserRow) -> anyhow::Result<()> {
         println!("  {}. {}{label} ({})", b.pos, b.name, places_text(&b.places));
     }
     match icons::main_icon_of(pool, u.uid).await? {
-        Some((_, name)) => println!("  main icon: {name}"),
+        Some((_, name, label)) if label.is_empty() => println!("  main icon: {name}"),
+        Some((_, name, label)) => println!("  main icon: {name} {label:?}"),
         None => println!("  main icon: none (their primary main's stock icon)"),
     }
     Ok(())
@@ -191,12 +198,17 @@ async fn print_badges(pool: &PgPool, u: &UserRow) -> anyhow::Result<()> {
 
 pub async fn main_icon(pool: &PgPool, actor: &str, cmd: MainIconCmd) -> anyhow::Result<()> {
     match cmd {
-        MainIconCmd::Set { ident, icon } => {
+        MainIconCmd::Set { ident, icon, label } => {
             let u = crate::find(pool, &ident).await?;
             let (id, name) = icons::find_icon(pool, &icon).await?;
-            icons::set_main_icon(pool, u.uid, Some(&id)).await?;
-            store::audit(pool, actor, "main_icon.set", Some(&u.uid.to_string()), json!({"icon": name})).await?;
-            println!("{}'s main icon is {name:?}", who(&u));
+            icons::set_main_icon(pool, u.uid, Some((&id, &label))).await?;
+            store::audit(pool, actor, "main_icon.set", Some(&u.uid.to_string()), json!({"icon": name, "label": label}))
+                .await?;
+            println!(
+                "{}'s main icon is {name:?}{}",
+                who(&u),
+                if label.is_empty() { String::new() } else { format!(" ({label:?} on hover)") }
+            );
         }
         MainIconCmd::Clear { ident } => {
             let u = crate::find(pool, &ident).await?;

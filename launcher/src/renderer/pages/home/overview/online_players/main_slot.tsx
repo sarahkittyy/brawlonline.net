@@ -14,11 +14,14 @@ import styles from "./online_players.module.css";
 export const MainSlot = ({
   main,
   icon,
+  iconLabel,
   friend = false,
 }: {
   main?: string;
   /** The icon an admin set in place of the player's primary main (docs/design/profiles.md §10): shown instead. */
   icon?: string | null;
+  /** Its hover text. */
+  iconLabel?: string | null;
   friend?: boolean;
 }) => {
   const url = useStockIcon(main ?? "");
@@ -26,7 +29,7 @@ export const MainSlot = ({
   return (
     <span className={styles.main} data-testid="online-main" style={friend ? { position: "relative" } : undefined}>
       {hasMain ? (
-        <CharacterIcon character={main ?? ""} icon={icon} size={20} />
+        <CharacterIcon character={main ?? ""} icon={icon} iconLabel={iconLabel} size={20} />
       ) : friend ? (
         <FriendsIcon className={styles.friendGlyph} style={{ fontSize: 14 }} data-testid="online-friend" />
       ) : (

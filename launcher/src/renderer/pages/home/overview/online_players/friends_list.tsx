@@ -154,7 +154,7 @@ export const FriendsList = ({
             data-testid={`friend-incoming-${player.uid}`}
             {...rowProps(player)}
           >
-            {hasStockIcons && <MainSlot main={player.main} icon={player.mainIcon} />}
+            {hasStockIcons && <MainSlot main={player.main} icon={player.mainIcon} iconLabel={player.mainIconLabel} />}
             <div className={styles.nameCol}>
               <PlayerName player={player} badgePlace="online" />
               <span className={styles.status}>{Messages.wantsToBeFriends()}</span>
@@ -200,7 +200,7 @@ export const FriendsList = ({
             data-testid={`friend-online-${player.uid}`}
             {...rowProps(player)}
           >
-            {hasStockIcons && <MainSlot main={player.main} icon={player.mainIcon} />}
+            {hasStockIcons && <MainSlot main={player.main} icon={player.mainIcon} iconLabel={player.mainIconLabel} />}
             <div className={styles.nameCol}>
               <PlayerName player={player} badgePlace="online" />
               <ActivityLine activity={activityOf(player.uid, rooms?.rooms, rooms?.yourRoom?.code, live)} />
@@ -241,7 +241,7 @@ export const FriendsList = ({
               data-testid={`friend-offline-${player.uid}`}
               {...rowProps(player)}
             >
-              {hasStockIcons && <MainSlot main={player.main} icon={player.mainIcon} />}
+              {hasStockIcons && <MainSlot main={player.main} icon={player.mainIcon} iconLabel={player.mainIconLabel} />}
               <PlayerName player={player} badgePlace="online" />
               {player.country && (
                 <span className={styles.flag}>
@@ -263,7 +263,7 @@ export const FriendsList = ({
             data-testid={`friend-outgoing-${player.uid}`}
             {...rowProps(player)}
           >
-            {hasStockIcons && <MainSlot main={player.main} icon={player.mainIcon} />}
+            {hasStockIcons && <MainSlot main={player.main} icon={player.mainIcon} iconLabel={player.mainIconLabel} />}
             <PlayerName player={player} badgePlace="online" />
             <button
               type="button"

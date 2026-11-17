@@ -336,7 +336,7 @@ async fn admins_give_badges_and_main_icons_that_show_whatever_the_player_chose()
     icons::set_badge(pool, ua, &star, None, None, Some(1)).await.unwrap();
     // Changing one keeps what isn't given (its hover text, its place).
     icons::set_badge(pool, ua, &dev, None, Some(None), None).await.unwrap();
-    icons::set_main_icon(pool, ua, Some(&star)).await.unwrap();
+    icons::set_main_icon(pool, ua, Some((&star, "Star"))).await.unwrap();
     let names: Vec<String> = icons::badges_of(pool, ua).await.unwrap().into_iter().map(|b| b.name).collect();
     assert_eq!(names, ["star", "dev", "crown"]);
 
@@ -346,7 +346,7 @@ async fn admins_give_badges_and_main_icons_that_show_whatever_the_player_chose()
         {"icon": crown, "label": "Champion", "places": ["profile", "chat"]},
     ]);
     let (_, p) = profile(&stack, &a.uid).await;
-    assert_eq!((&p["badges"], &p["mainIcon"]), (&want, &json!(star)), "{p}");
+    assert_eq!((&p["badges"], &p["mainIcon"], &p["mainIconLabel"]), (&want, &json!(star), &json!("Star")), "{p}");
     let (_, p) = profile(&stack, &b.uid).await;
     assert_eq!((&p["badges"], &p["mainIcon"]), (&json!([]), &Value::Null), "{p}");
 
@@ -356,6 +356,7 @@ async fn admins_give_badges_and_main_icons_that_show_whatever_the_player_chose()
     let entry = |u: &UserJson| page["entries"].as_array().unwrap().iter().find(|e| e["uid"] == u.uid.as_str()).cloned();
     let e = entry(&a).unwrap();
     assert_eq!((&e["badges"], &e["mainIcon"], e.get("main")), (&want, &json!(star), None), "{e}");
+    assert_eq!(e["mainIconLabel"], "Star", "{e}");
     let e = entry(&b).unwrap();
     assert!(e.get("badges").is_none() && e.get("mainIcon").is_none(), "{e}");
 
@@ -366,12 +367,12 @@ async fn admins_give_badges_and_main_icons_that_show_whatever_the_player_chose()
     let order: Vec<usize> =
         [&star, &dev, &crown].iter().map(|id| h1.find(&format!("/v1/icons/{id}.png")).unwrap()).collect();
     assert!(order[0] < order[1] && order[1] < order[2] && h1.contains("title=\"Champion\""), "{h1}");
-    assert!(
-        h1.ends_with(&format!(
-            "badged<img class=\"main-icon\" src=\"/v1/icons/{star}.png\" alt=\"\" width=\"28\" height=\"28\">"
-        )),
-        "{h1}"
+    // The main icon is the first of the mains (the player has none of their own here), not by the name.
+    assert!(h1.ends_with("badged"), "{h1}");
+    let mains = format!(
+        "<ul class=\"mains\"><li class=\"main primary main-icon\" title=\"Star (primary)\"><img src=\"/v1/icons/{star}.png\" alt=\"Star\""
     );
+    assert!(html.contains(&mains), "{html}");
 
     // Taking them off; an icon in use is only removed with force (and leaves everyone).
     assert!(icons::remove_badge(pool, ua, &dev).await.unwrap());

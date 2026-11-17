@@ -312,7 +312,12 @@ const ChatWindow = ({
         <PlayerName player={player} profileLink={true} showFlag={true} titleMenu={true} badgePlace="chat" />
         {(player.main || player.mainIcon) && (
           <span className={styles.titleMain}>
-            <CharacterIcon character={player.main ?? ""} icon={player.mainIcon} size={18} />
+            <CharacterIcon
+              character={player.main ?? ""}
+              icon={player.mainIcon}
+              iconLabel={player.mainIconLabel}
+              size={18}
+            />
           </span>
         )}
         <FriendPill player={player} />

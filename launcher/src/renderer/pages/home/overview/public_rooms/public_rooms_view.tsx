@@ -264,7 +264,11 @@ const RoomPlayers = ({ room }: { room: PublicRoom }) => {
   const hasStocks = useHasStockIcons();
   const mains = hasStocks
     ? room.names
-        .map((_, i) => ({ main: room.mains?.[i] ?? null, icon: room.mainIcons?.[i] ?? null }))
+        .map((_, i) => ({
+          main: room.mains?.[i] ?? null,
+          icon: room.mainIcons?.[i] ?? null,
+          label: room.mainIconLabels?.[i] ?? null,
+        }))
         .filter((m) => m.main || m.icon)
     : [];
   return (
@@ -272,7 +276,7 @@ const RoomPlayers = ({ room }: { room: PublicRoom }) => {
       {mains.length > 0 ? (
         <span className={styles.mains}>
           {mains.map((m, i) => (
-            <CharacterIcon key={i} character={m.main ?? ""} icon={m.icon} size={20} />
+            <CharacterIcon key={i} character={m.main ?? ""} icon={m.icon} iconLabel={m.label} size={20} />
           ))}
         </span>
       ) : (

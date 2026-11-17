@@ -152,6 +152,8 @@ function parsePlayer(v: any): SocialPlayer | undefined {
   const country = typeof v.country === "string" && countryName(v.country) ? v.country : undefined;
   const main = typeof v.main === "string" && characterName(v.main) ? v.main : undefined;
   const mainIcon = isIconId(v.mainIcon) ? v.mainIcon : undefined;
+  const mainIconLabel =
+    mainIcon && typeof v.mainIconLabel === "string" ? cleanText(v.mainIconLabel.slice(0, 256), 60) : undefined;
   const badges = parseBadges(v.badges);
   return {
     uid: v.uid,
@@ -160,6 +162,7 @@ function parsePlayer(v: any): SocialPlayer | undefined {
     ...(country && { country }),
     ...(main && { main }),
     ...(mainIcon && { mainIcon }),
+    ...(mainIconLabel && { mainIconLabel }),
     ...(badges && { badges }),
   };
 }

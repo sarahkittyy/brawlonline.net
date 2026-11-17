@@ -111,6 +111,8 @@ export type PlayerProfile = {
   badges?: NameBadge[];
   /** The icon an admin set in place of the primary main's stock icon; null for none. */
   mainIcon?: string | null;
+  /** Its hover text (as a stock icon's is the character's name). */
+  mainIconLabel?: string | null;
 };
 
 /** `GET /v1/admin/players`: a player in an admin's online list (the offline part). */
@@ -152,6 +154,8 @@ export type NameTag = {
   main?: string | null;
   /** An icon id, shown in place of the primary main's stock icon. */
   mainIcon?: string | null;
+  /** Its hover text. */
+  mainIconLabel?: string | null;
   /** The badges before the name, each with where it shows. */
   badges?: NameBadge[];
 };
@@ -322,6 +326,8 @@ export type PublicRoom = {
   mains?: (string | null)[];
   /** Every player's custom main icon, by slot (as `names`); absent when nobody in the room has one. */
   mainIcons?: (string | null)[];
+  /** Their hover texts, by slot (as `mainIcons`). */
+  mainIconLabels?: (string | null)[];
   /** Every player's badges for the room list, by slot (as `names`); absent when nobody in the room has one. */
   badges?: NameBadge[][];
 };

@@ -33,6 +33,8 @@ export type SocialPlayer = {
   main?: string;
   /** The icon an admin set in place of their primary main (docs/design/profiles.md §10). */
   mainIcon?: string;
+  /** Its hover text. */
+  mainIconLabel?: string;
   /** The badges an admin gave them, each with where it shows. */
   badges?: NameBadge[];
 };

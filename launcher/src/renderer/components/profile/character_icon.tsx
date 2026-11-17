@@ -42,6 +42,7 @@ export const CharacterIcon = ({
   primary = false,
   forceTag = false,
   icon,
+  iconLabel,
 }: {
   character: string;
   size: number;
@@ -50,10 +51,12 @@ export const CharacterIcon = ({
   forceTag?: boolean;
   /** The custom main icon's id: shown instead of the character. */
   icon?: string | null;
+  /** The custom main icon's hover text. */
+  iconLabel?: string | null;
 }) => {
   const url = useStockIcon(character);
   if (icon) {
-    return <MainIcon icon={icon} size={size} />;
+    return <MainIcon icon={icon} label={iconLabel} size={size} />;
   }
   const name = characterName(character) ?? character;
   const title = primary ? `${name} (primary)` : name;

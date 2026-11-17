@@ -331,7 +331,7 @@ export const LeaderboardRow = React.memo(function LeaderboardRow({
       </TableCell>
       <TableCell sx={{ paddingY: "2px" }}>
         {(entry.main || entry.mainIcon) && (
-          <CharacterIcon character={entry.main ?? ""} icon={entry.mainIcon} size={24} />
+          <CharacterIcon character={entry.main ?? ""} icon={entry.mainIcon} iconLabel={entry.mainIconLabel} size={24} />
         )}
       </TableCell>
       <TableCell align="right" sx={{ whiteSpace: "nowrap", ...strong }}>

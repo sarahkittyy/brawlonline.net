@@ -903,6 +903,9 @@ pub struct PublicRoom {
     /// without. Only accounts fills it in, as `countries`, and only when someone has one.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub main_icons: Vec<Option<String>>,
+    /// Each main icon's hover text, by slot (as `main_icons`); absent when no main icon has one.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub main_icon_labels: Vec<Option<String>>,
     /// Every player's badges for the room list ([`crate::badges::Place::Rooms`]), by slot (as
     /// `names`). Only accounts fills it in, as `countries`, and only when someone has one.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

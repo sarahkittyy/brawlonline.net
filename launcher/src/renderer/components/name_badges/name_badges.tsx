@@ -64,29 +64,39 @@ const BadgeIcon = ({ badge, size }: { badge: NameBadge; size: number }) => {
   );
 };
 
-/** The icon an admin set in place of a player's primary main (docs/design/profiles.md §10), `size` px square. */
+/**
+ * The icon an admin set in place of a player's primary main (docs/design/profiles.md §10), `size` px square, with
+ * its hover text as a tooltip (as a badge's; a stock icon shows its character's name).
+ */
 export const MainIcon = ({
   icon,
   size,
   className,
-  title,
+  label,
 }: {
   icon: string;
   size: number;
   className?: string;
-  title?: string;
+  label?: string | null;
 }) => {
   const url = useIconUrl(icon);
-  return (
+  const img = (
     <img
       className={clsx(styles.icon, className)}
       src={url}
-      alt=""
-      title={title}
+      alt={label ?? ""}
       width={size}
       height={size}
       draggable={false}
       data-testid="main-icon"
     />
+  );
+  if (!label) {
+    return img;
+  }
+  return (
+    <Tooltip title={label} placement="top" enterDelay={200} disableInteractive={true}>
+      {img}
+    </Tooltip>
   );
 };

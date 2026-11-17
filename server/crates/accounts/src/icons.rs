@@ -150,11 +150,14 @@ pub async fn badges_of(pool: &PgPool, uid: Uuid) -> sqlx::Result<Vec<BadgeRow>> 
     .await
 }
 
-pub async fn main_icon_of(pool: &PgPool, uid: Uuid) -> sqlx::Result<Option<(String, String)>> {
-    sqlx::query_as("SELECT m.icon, i.name FROM user_main_icons m JOIN icons i ON i.id = m.icon WHERE m.uid = $1")
-        .bind(uid)
-        .fetch_optional(pool)
-        .await
+/// A player's main icon: its id, name and hover text.
+pub async fn main_icon_of(pool: &PgPool, uid: Uuid) -> sqlx::Result<Option<(String, String, String)>> {
+    sqlx::query_as(
+        "SELECT m.icon, i.name, m.label FROM user_main_icons m JOIN icons i ON i.id = m.icon WHERE m.uid = $1",
+    )
+    .bind(uid)
+    .fetch_optional(pool)
+    .await
 }
 
 fn places_column(places: &Option<Vec<Place>>) -> Option<Vec<String>> {
@@ -234,17 +237,22 @@ pub async fn remove_badge(pool: &PgPool, uid: Uuid, icon: &str) -> sqlx::Result<
     Ok(gone)
 }
 
-/// Sets (Some) or clears (None) a player's main icon.
-pub async fn set_main_icon(pool: &PgPool, uid: Uuid, icon: Option<&str>) -> sqlx::Result<()> {
+/// Sets (Some: the icon and its hover text, "" for none) or clears (None) a player's main icon.
+pub async fn set_main_icon(pool: &PgPool, uid: Uuid, icon: Option<(&str, &str)>) -> anyhow::Result<()> {
+    let icon = match icon {
+        Some((id, label)) => Some((id, check_label(label).map_err(|e| anyhow::anyhow!(e))?)),
+        None => None,
+    };
     let mut tx = pool.begin().await?;
     match icon {
-        Some(icon) => {
+        Some((icon, label)) => {
             sqlx::query(
-                "INSERT INTO user_main_icons (uid, icon) VALUES ($1, $2)
-                 ON CONFLICT (uid) DO UPDATE SET icon = $2, created_at = now()",
+                "INSERT INTO user_main_icons (uid, icon, label) VALUES ($1, $2, $3)
+                 ON CONFLICT (uid) DO UPDATE SET icon = $2, label = $3, created_at = now()",
             )
             .bind(uid)
             .bind(icon)
+            .bind(label)
             .execute(&mut *tx)
             .await?;
         }

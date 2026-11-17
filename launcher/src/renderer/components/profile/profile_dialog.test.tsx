@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, fireEvent, render, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { useAccountDialogs } from "@/lib/hooks/use_account_dialogs";
@@ -56,6 +56,8 @@ const dev: PlayerProfile = {
     { icon: STAR_ICON, places: ["chat"] },
   ],
   mainIcon: STAR_ICON,
+  mainIconLabel: "Claude",
+  mains: ["fox", "falco"],
 };
 
 const profiles: Record<string, PlayerProfile> = { them: gold, me: placing, dev };
@@ -130,7 +132,7 @@ describe("ProfileDialog", () => {
     await waitFor(() => expect(document.querySelector("[data-testid=profile-view]")).toBeNull());
   });
 
-  it("shows the badges an admin gave for the profile before the name, the main icon after it", async () => {
+  it("shows the badges an admin gave for the profile before the name, the main icon as the primary main", async () => {
     const view = open("dev");
     await view.findByTestId("profile-name");
     // Only the profile's badges (the chat-only one is left out), with the hover text as their label.
@@ -139,8 +141,13 @@ describe("ProfileDialog", () => {
     expect(badges[0].getAttribute("alt")).toBe("Dev");
     const row = view.getByTestId("profile-name").parentElement!;
     const order = Array.from(row.querySelectorAll("[data-testid]")).map((e) => e.getAttribute("data-testid"));
-    expect(order.slice(0, 4)).toEqual(["name-badges", "name-badge", "profile-name", "main-icon"]);
-    expect(view.getByTestId("main-icon").getAttribute("src")).toContain(`/v1/icons/${STAR_ICON}.png`);
+    expect(order.slice(0, 3)).toEqual(["name-badges", "name-badge", "profile-name"]);
+    // The main icon is the first of the mains, the primary, with its hover text; the player's own mains follow.
+    const mains = view.getByTestId("profile-mains");
+    const icon = within(mains).getByTestId("main-icon");
+    expect(icon.getAttribute("src")).toContain(`/v1/icons/${STAR_ICON}.png`);
+    expect(icon.getAttribute("alt")).toBe("Claude (primary)");
+    expect(mains.querySelector("[data-testid=main-icon] ~ *")?.textContent).toBe("Fox");
     cleanup();
     useProfileView.setState({ target: null });
     const other = open("them");
