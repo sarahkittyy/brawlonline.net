@@ -251,7 +251,7 @@ Encoders are the operating system's, so rendering adds nothing to the download:
 
 | | Encoder | Where |
 |---|---|---|
-| Windows | Media Foundation's sink writer: the GPU's H.264 encoder if a test picture (30 frames of white and black quadrants to a temporary file, decoded back in software) comes back right, else Microsoft's software one (bug #305: an RX 9070 XT's wrote a green screen); no B-frames; its AAC encoder ("N" editions need the Media Feature Pack) | `ClipEncoderMF.cpp` (mfplat, mfreadwrite, mfuuid; the two DLLs delay-loaded and looked for first, so Dolphin starts without them) |
+| Windows | Media Foundation's sink writer: the GPU's H.264 encoder, else Microsoft's software one (told to make no B-frames); its AAC encoder ("N" editions need the Media Feature Pack) | `ClipEncoderMF.cpp` (mfplat, mfreadwrite, mfuuid; the two DLLs delay-loaded and looked for first, so Dolphin starts without them) |
 | macOS | AVFoundation's asset writer (VideoToolbox H.264, Apple's AAC) | `ClipEncoderAVF.mm` (ARC; AVFoundation, CoreMedia, CoreVideo) |
 | Linux | FFmpeg as Dolphin links it (the AppImage's): libx264, OpenH264 or MPEG-4 Part 2, FFmpeg's AAC | `ClipEncoderFFmpeg.cpp` |
 
