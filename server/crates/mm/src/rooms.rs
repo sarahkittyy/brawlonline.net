@@ -706,6 +706,8 @@ impl Room {
             uids: self.members().map(|(_, m)| m.info.uid.to_string()).collect(),
             countries: Vec::new(),
             mains: Vec::new(),
+            main_icons: Vec::new(),
+            badges: Vec::new(),
             joinable: self.free_slot().is_some(),
             ruleset: self.ruleset_view(),
             name: self.name.clone(),

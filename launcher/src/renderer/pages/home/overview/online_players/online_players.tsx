@@ -39,13 +39,13 @@ export type PanelTab = "online" | "friends";
 const NameCell = ({ player, friend, mark }: { player: SocialPlayer; friend: boolean; mark: boolean }) =>
   friend && mark ? (
     <span className={styles.nameWithMark}>
-      <PlayerName player={player} />
+      <PlayerName player={player} badgePlace="online" />
       <span className={styles.friendAfterName} title={Messages.friend()} data-testid="online-friend">
         <FriendsIcon style={{ fontSize: 13 }} />
       </span>
     </span>
   ) : (
-    <PlayerName player={player} />
+    <PlayerName player={player} badgePlace="online" />
   );
 
 /** How long the search box waits after a key before asking the server (an admin's offline players). */
@@ -348,7 +348,7 @@ export const OnlinePlayers = React.memo(function OnlinePlayers({
                   setMenu({ player, x: e.clientX, y: e.clientY });
                 }}
               >
-                {hasStockIcons && <MainSlot main={player.main} friend={friend} />}
+                {hasStockIcons && <MainSlot main={player.main} icon={player.mainIcon} friend={friend} />}
                 <NameCell player={player} friend={friend} mark={!hasStockIcons} />
                 {player.country && (
                   <span className={styles.flag}>
@@ -385,7 +385,7 @@ export const OnlinePlayers = React.memo(function OnlinePlayers({
               }}
             >
               {hasStockIcons && <MainSlot main={player.main} />}
-              <PlayerName player={player} />
+              <PlayerName player={player} badgePlace="online" />
               {player.country && (
                 <span className={styles.flag}>
                   <Flag code={player.country} height={12} title={countryName(player.country)} />

@@ -323,13 +323,17 @@ export const LeaderboardRow = React.memo(function LeaderboardRow({
         {/* The flag, the name and the code in one cell (docs/design/launcher-redesign.md §7). */}
         <span className={styles.player}>
           {entry.country && <Flag code={entry.country} height={13} title={countryName(entry.country)} />}
-          <UserName user={entry} showCode={false} profileLink={true} />
+          <UserName user={entry} showCode={false} profileLink={true} badgePlace="leaderboard" />
           <span className={styles.code} data-testid="leaderboard-code">
             {entry.connectCode}
           </span>
         </span>
       </TableCell>
-      <TableCell sx={{ paddingY: "2px" }}>{entry.main && <CharacterIcon character={entry.main} size={24} />}</TableCell>
+      <TableCell sx={{ paddingY: "2px" }}>
+        {(entry.main || entry.mainIcon) && (
+          <CharacterIcon character={entry.main ?? ""} icon={entry.mainIcon} size={24} />
+        )}
+      </TableCell>
       <TableCell align="right" sx={{ whiteSpace: "nowrap", ...strong }}>
         {formatRating(entry.rating)}
       </TableCell>

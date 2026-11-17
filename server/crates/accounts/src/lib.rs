@@ -11,6 +11,7 @@ pub mod cursor;
 pub mod error;
 pub mod friends;
 pub mod history;
+pub mod icons;
 pub mod launcher;
 pub mod leaderboard;
 pub mod live;
@@ -223,6 +224,7 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/me/opponents", get(history::my_opponents))
         .route("/user/{uid}", get(api::public_user))
         .route("/v1/profiles/{id}", get(profile::lookup))
+        .route("/v1/icons/{file}", get(icons::file))
         .route("/v1/me/profile", put(profile::update))
         .route("/profile/{slug}", get(profile::page))
         .route("/profile/profile.css", get(profile::site_file))

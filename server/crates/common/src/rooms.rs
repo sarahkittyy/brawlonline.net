@@ -899,6 +899,14 @@ pub struct PublicRoom {
     /// their name; null for one who doesn't. Only accounts fills it in, as `countries`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub mains: Vec<Option<String>>,
+    /// Every player's custom main icon (`crate::badges`), by slot (as `names`); null for one
+    /// without. Only accounts fills it in, as `countries`, and only when someone has one.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub main_icons: Vec<Option<String>>,
+    /// Every player's badges for the room list ([`crate::badges::Place::Rooms`]), by slot (as
+    /// `names`). Only accounts fills it in, as `countries`, and only when someone has one.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub badges: Vec<Vec<crate::badges::NameBadge>>,
     /// An open slot is empty, so the room can be joined (also during a game).
     pub joinable: bool,
     /// What the room plays (its ruleset's code, name and set), for the room list.

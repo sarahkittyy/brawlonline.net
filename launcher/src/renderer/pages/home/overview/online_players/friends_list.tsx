@@ -154,9 +154,9 @@ export const FriendsList = ({
             data-testid={`friend-incoming-${player.uid}`}
             {...rowProps(player)}
           >
-            {hasStockIcons && <MainSlot main={player.main} />}
+            {hasStockIcons && <MainSlot main={player.main} icon={player.mainIcon} />}
             <div className={styles.nameCol}>
-              <PlayerName player={player} />
+              <PlayerName player={player} badgePlace="online" />
               <span className={styles.status}>{Messages.wantsToBeFriends()}</span>
             </div>
             <Tooltip title={Messages.accept()} placement="top" disableInteractive={true}>
@@ -200,9 +200,9 @@ export const FriendsList = ({
             data-testid={`friend-online-${player.uid}`}
             {...rowProps(player)}
           >
-            {hasStockIcons && <MainSlot main={player.main} />}
+            {hasStockIcons && <MainSlot main={player.main} icon={player.mainIcon} />}
             <div className={styles.nameCol}>
-              <PlayerName player={player} />
+              <PlayerName player={player} badgePlace="online" />
               <ActivityLine activity={activityOf(player.uid, rooms?.rooms, rooms?.yourRoom?.code, live)} />
             </div>
             <ActivityAction activity={activityOf(player.uid, rooms?.rooms, rooms?.yourRoom?.code, live)} />
@@ -241,8 +241,8 @@ export const FriendsList = ({
               data-testid={`friend-offline-${player.uid}`}
               {...rowProps(player)}
             >
-              {hasStockIcons && <MainSlot main={player.main} />}
-              <PlayerName player={player} />
+              {hasStockIcons && <MainSlot main={player.main} icon={player.mainIcon} />}
+              <PlayerName player={player} badgePlace="online" />
               {player.country && (
                 <span className={styles.flag}>
                   <Flag code={player.country} height={12} title={countryName(player.country)} />
@@ -263,8 +263,8 @@ export const FriendsList = ({
             data-testid={`friend-outgoing-${player.uid}`}
             {...rowProps(player)}
           >
-            {hasStockIcons && <MainSlot main={player.main} />}
-            <PlayerName player={player} />
+            {hasStockIcons && <MainSlot main={player.main} icon={player.mainIcon} />}
+            <PlayerName player={player} badgePlace="online" />
             <button
               type="button"
               className={styles.cancelSent}

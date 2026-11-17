@@ -1,3 +1,4 @@
+import { MAX_BADGES } from "@common/badges";
 import { countryName, SOCIAL_PLATFORMS } from "@common/profile";
 import ContentCopyIcon from "@mui/icons-material/ContentCopy";
 import EditOutlinedIcon from "@mui/icons-material/EditOutlined";
@@ -8,8 +9,8 @@ import Tooltip from "@mui/material/Tooltip";
 import { clsx } from "clsx";
 import React, { useEffect, useState } from "react";
 
-import { DevBadge } from "@/components/dev_badge/dev_badge";
 import { Flag, NoFlag } from "@/components/flag/flag";
+import { MainIcon, NameBadges } from "@/components/name_badges/name_badges";
 import { RankBadge } from "@/components/rank_badge/rank_badge";
 import { RankBadgeMessages } from "@/components/rank_badge/rank_badge.messages";
 import { formatPosition, formatRating, HIDDEN_RATING } from "@/lib/ranked_format";
@@ -52,7 +53,7 @@ export const ProfileView = React.memo(function ProfileView({
 }: {
   profile: PlayerProfile;
   actions?: React.ReactNode;
-  /** Right after the name, before a developer's </>: the friend button (docs/design/friends.md). */
+  /** After the name (and its custom main icon): the friend button (docs/design/friends.md). */
   nameExtra?: React.ReactNode;
   onCopyLink?: (link: string) => void;
   /** Copies a Discord username (it has no page to open). */
@@ -81,6 +82,15 @@ export const ProfileView = React.memo(function ProfileView({
         )}
         <div className={styles.names}>
           <div className={styles.nameRow}>
+            {!editing && (
+              <NameBadges
+                badges={profile.badges}
+                place="profile"
+                size={22}
+                max={MAX_BADGES}
+                className={styles.badges}
+              />
+            )}
             {editing ? (
               <NameInput name={profile.displayName} onRename={editing.rename} />
             ) : (
@@ -88,8 +98,8 @@ export const ProfileView = React.memo(function ProfileView({
                 {profile.displayName}
               </div>
             )}
+            {profile.mainIcon && !editing && <MainIcon icon={profile.mainIcon} size={24} className={styles.mainIcon} />}
             {nameExtra && !editing && <span className={styles.nameExtra}>{nameExtra}</span>}
-            {profile.dev && <DevBadge size={20} className={styles.dev} />}
           </div>
           {profile.connectCode && <div className={styles.code}>{profile.connectCode}</div>}
           {(country || editing) && (

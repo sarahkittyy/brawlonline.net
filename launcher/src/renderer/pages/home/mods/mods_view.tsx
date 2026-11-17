@@ -644,9 +644,11 @@ const PublicRoomsBlock = ({
                         uid: room.hostUid,
                         displayName: room.hostName,
                         country: room.hostCountry,
+                        badges: room.hostBadges,
                       }}
                       showCode={false}
                       showFlag={true}
+                      badgePlace="rooms"
                       className={styles.hostName}
                     />
                     {` · ${label}`}

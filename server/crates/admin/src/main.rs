@@ -2,6 +2,7 @@
 //! `audit_log`. Reads DATABASE_URL (and, for `reset-password --send-email`,
 //! the mail settings) from the environment or `server/.env`.
 
+mod badges;
 mod filter;
 
 use std::time::Duration as StdDuration;
@@ -61,6 +62,15 @@ enum Cmd {
     /// usernames): add, test against every name players have now, turn on and off.
     #[command(subcommand)]
     Filter(filter::FilterCmd),
+    /// PNG icons for badges and main icons (docs/design/profiles.md §10).
+    #[command(subcommand)]
+    Icon(badges::IconCmd),
+    /// Badges before players' names (an icon from `icon add`, with hover text and where it shows).
+    #[command(subcommand)]
+    Badge(badges::BadgeCmd),
+    /// The icon shown in place of a player's primary main.
+    #[command(subcommand)]
+    MainIcon(badges::MainIconCmd),
     /// Bug reports from the launcher's bug button, with their logs zips.
     #[command(subcommand)]
     Bug(BugCmd),
@@ -686,6 +696,9 @@ async fn main() -> anyhow::Result<()> {
             );
         }
         Cmd::Filter(cmd) => filter::run(&pool, &actor, cmd).await?,
+        Cmd::Icon(cmd) => badges::icon(&pool, &actor, cmd).await?,
+        Cmd::Badge(cmd) => badges::badge(&pool, &actor, cmd).await?,
+        Cmd::MainIcon(cmd) => badges::main_icon(&pool, &actor, cmd).await?,
         Cmd::Stats { days, offset, mm_status_url } => {
             print_stats(&pool, days.clamp(1, 365), offset, &mm_status_url).await?
         }

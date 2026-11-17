@@ -11,13 +11,22 @@ import styles from "./online_players.module.css";
  * A friend (docs/design/friends.md): the friends glyph at the icon's bottom-right corner, or in the
  * dot's place.
  */
-export const MainSlot = ({ main, friend = false }: { main?: string; friend?: boolean }) => {
+export const MainSlot = ({
+  main,
+  icon,
+  friend = false,
+}: {
+  main?: string;
+  /** The icon an admin set in place of the player's primary main (docs/design/profiles.md §10): shown instead. */
+  icon?: string | null;
+  friend?: boolean;
+}) => {
   const url = useStockIcon(main ?? "");
-  const hasMain = main != null && (main === "random" || url != null);
+  const hasMain = icon != null || (main != null && (main === "random" || url != null));
   return (
     <span className={styles.main} data-testid="online-main" style={friend ? { position: "relative" } : undefined}>
       {hasMain ? (
-        <CharacterIcon character={main} size={20} />
+        <CharacterIcon character={main ?? ""} icon={icon} size={20} />
       ) : friend ? (
         <FriendsIcon className={styles.friendGlyph} style={{ fontSize: 14 }} data-testid="online-friend" />
       ) : (

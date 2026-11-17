@@ -157,7 +157,7 @@ const TabHeader = React.forwardRef<
     >
       <span className={online ? styles.onlineDot : styles.offlineDot} />
       <span className={styles.tabName}>
-        <PlayerName player={player} showFlag={true} />
+        <PlayerName player={player} showFlag={true} badgePlace="chat" />
       </span>
       {friend && (
         <span className={styles.tabFriend} title={Messages.friend()} data-testid={`chat-tab-friend-${player.uid}`}>
@@ -309,10 +309,10 @@ const ChatWindow = ({
             <LockOutlinedIcon style={{ fontSize: 14 }} />
           </span>
         </Tooltip>
-        <PlayerName player={player} profileLink={true} showFlag={true} titleMenu={true} />
-        {player.main && (
+        <PlayerName player={player} profileLink={true} showFlag={true} titleMenu={true} badgePlace="chat" />
+        {(player.main || player.mainIcon) && (
           <span className={styles.titleMain}>
-            <CharacterIcon character={player.main} size={18} />
+            <CharacterIcon character={player.main ?? ""} icon={player.mainIcon} size={18} />
           </span>
         )}
         <FriendPill player={player} />

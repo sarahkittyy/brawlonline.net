@@ -4,6 +4,8 @@
  * connection, the keys and this state, and sends the renderer a fresh copy on every change.
  */
 
+import type { NameBadge } from "@common/badges";
+
 export type RoomMode = "1v1" | "ffa" | "teams";
 
 /** The player's own room (from mm, through accounts), or the inviter's in an invite. */
@@ -29,6 +31,10 @@ export type SocialPlayer = {
   country?: string;
   /** Their primary main's character key, when they show it. */
   main?: string;
+  /** The icon an admin set in place of their primary main (docs/design/profiles.md §10). */
+  mainIcon?: string;
+  /** The badges an admin gave them, each with where it shows. */
+  badges?: NameBadge[];
 };
 
 export type ChatLine = {

@@ -244,9 +244,10 @@ const PlayerNames = ({ room }: { room: PublicRoom }) => {
             </span>
           )}
           <UserName
-            user={{ uid: room.uids?.[i], displayName: n, country: room.countries?.[i] }}
+            user={{ uid: room.uids?.[i], displayName: n, country: room.countries?.[i], badges: room.badges?.[i] }}
             showCode={false}
             showFlag={true}
+            badgePlace="rooms"
             className={styles.playerName}
           />
         </React.Fragment>
@@ -255,16 +256,23 @@ const PlayerNames = ({ room }: { room: PublicRoom }) => {
   );
 };
 
-/** The players' mains (when they show them, and with the disc) and how full the room is. */
+/**
+ * The players' mains (when they show them, and with the disc; an admin's custom main icon in place of one,
+ * docs/design/profiles.md §10) and how full the room is.
+ */
 const RoomPlayers = ({ room }: { room: PublicRoom }) => {
   const hasStocks = useHasStockIcons();
-  const mains = hasStocks ? (room.mains ?? []).filter((m): m is string => !!m) : [];
+  const mains = hasStocks
+    ? room.names
+        .map((_, i) => ({ main: room.mains?.[i] ?? null, icon: room.mainIcons?.[i] ?? null }))
+        .filter((m) => m.main || m.icon)
+    : [];
   return (
     <span className={styles.players}>
       {mains.length > 0 ? (
         <span className={styles.mains}>
           {mains.map((m, i) => (
-            <CharacterIcon key={i} character={m} size={20} />
+            <CharacterIcon key={i} character={m.main ?? ""} icon={m.icon} size={20} />
           ))}
         </span>
       ) : (

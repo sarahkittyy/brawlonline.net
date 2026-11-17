@@ -55,16 +55,21 @@
   min-width: 0;
 }
 
-/* The friend button right after the name (docs/design/friends.md), before a developer's </>. */
+/* The friend button after the name (docs/design/friends.md). */
 .nameExtra {
   display: inline-flex;
   flex-shrink: 0;
   margin-left: 10px;
 }
 
-/* A developer's </> after the name (dev_badge.tsx). */
-.dev {
-  margin-left: 6px;
+/* The badges an admin gave the player, before the name, and their custom main icon after it
+   (docs/design/profiles.md §10). */
+.badges {
+  margin-right: 8px;
+}
+
+.mainIcon {
+  margin-left: 8px;
 }
 
 .badge {
@@ -543,7 +548,12 @@
   overflow-wrap: anywhere;
 }
 
-.miniDev {
+.miniBadges {
+  margin-right: 5px;
+  vertical-align: -2px;
+}
+
+.miniMainIcon {
   margin-left: 5px;
   vertical-align: -3px;
 }

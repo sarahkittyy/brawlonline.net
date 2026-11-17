@@ -1,9 +1,13 @@
 import "../src/renderer/styles/styles.scss"
 
 import { fallbackTheme } from "../src/renderer/styles/theme";
+import { setIconBase } from "../src/renderer/lib/icons";
 import { ThemeProvider as MuiThemeProvider } from "@mui/material/styles";
 import React from 'react';
 import type { Preview } from "@storybook/react-webpack5";
+
+// Badge icons from Storybook itself (main.ts staticDirs), not the accounts server.
+setIconBase("");
 
 const preview: Preview = {
   decorators: [

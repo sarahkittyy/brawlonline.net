@@ -1,0 +1,15 @@
+/* Badges before a name (name_badges.tsx): never shrunk, so a name cut short for width keeps them. */
+.badges {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-self: center;
+  align-items: center;
+  gap: 3px;
+}
+
+.icon {
+  flex-shrink: 0;
+  object-fit: contain;
+  cursor: default;
+  user-select: none;
+}

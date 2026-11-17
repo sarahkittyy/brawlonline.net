@@ -1,5 +1,6 @@
 import Paper from "@mui/material/Paper";
 
+import { DEV_BADGE, STAR_BADGE, STORY_ICONS, TROPHY_BADGE } from "@/components/name_badges/story_badges";
 import type { PlayerProfile } from "@/services/backend/types";
 
 import styles from "./profile.module.css";
@@ -148,6 +149,23 @@ export const Customized = () => (
           { platform: "discord", handle: "sonder", display: "sonder", url: null },
           { platform: "twitch", handle: "sonder", display: "@sonder", url: "https://twitch.tv/sonder" },
         ],
+      }}
+      actions={<Buttons />}
+      onCopyLink={() => undefined}
+    />
+  </Frame>
+);
+
+/** Badges an admin gave, before the name (Dev on hover), and a custom main icon after it (docs/design/profiles.md §10). */
+export const Badges = () => (
+  <Frame>
+    <ProfileView
+      profile={{
+        ...gold,
+        mains: ["fox", "falco"],
+        country: "se",
+        badges: [DEV_BADGE, TROPHY_BADGE, { ...STAR_BADGE, places: ["chat"] }],
+        mainIcon: STORY_ICONS.heart,
       }}
       actions={<Buttons />}
       onCopyLink={() => undefined}

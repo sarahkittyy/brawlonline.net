@@ -4,6 +4,7 @@ import type { CSSProperties } from "react";
 import { useEffect } from "react";
 
 import { PlayersRail } from "@/app/shell/players_rail";
+import { DEV_BADGE, STAR_BADGE, STORY_ICONS, TROPHY_BADGE } from "@/components/name_badges/story_badges";
 import { useAccount } from "@/lib/hooks/use_account";
 import { useSocial } from "@/lib/social/use_social";
 import { createServiceProvider } from "@/services";
@@ -31,12 +32,24 @@ const names = ["Bob", "Kim", "Lee", "Alexander", "Sora", "Bobby", "Marth Main", 
 // Some with a main shown, some without (a dot before the name), some with a flag.
 const mains = ["fox", undefined, "sheik", "ike", undefined, "random", "marth", undefined, undefined, "wolf"];
 const countries = ["us", "se", undefined, "jp", undefined, "us", "se", "br", "fr", undefined];
+// Badges an admin gave (docs/design/profiles.md §10): Bob also has a custom main icon.
+const badges = [
+  [DEV_BADGE, TROPHY_BADGE],
+  undefined,
+  undefined,
+  [STAR_BADGE],
+  undefined,
+  undefined,
+  [TROPHY_BADGE, STAR_BADGE, DEV_BADGE],
+];
 const players: SocialPlayer[] = names.map((name, i) => ({
   uid: `p${i}`,
   displayName: name,
   connectCode: `${name.replace(/\W/g, "").slice(0, 4).toUpperCase()}#${i + 10}`,
   main: mains[i],
   country: countries[i],
+  ...(badges[i] && { badges: badges[i] }),
+  ...(i === 0 && { mainIcon: STORY_ICONS.heart }),
 }));
 const STOCKS = Object.fromEntries(
   ["fox", "sheik", "ike", "marth", "wolf"].map((c) => [c, { file: `stocks/${c}.png` }]),
@@ -118,7 +131,16 @@ const narrowPlayers: SocialPlayer[] = [
   ["roy jones jr", "BOOM#216", "us", "marth"],
   ["Ozakai", "OZAK#924"],
   ["KoF_Rise", "HONE#802"],
-].map(([displayName, connectCode, country, main], i) => ({ uid: `n${i}`, displayName, connectCode, country, main }));
+].map(([displayName, connectCode, country, main], i) => ({
+  uid: `n${i}`,
+  displayName,
+  connectCode,
+  country,
+  main,
+  // Long names with badges: the name is cut short, the badges stay.
+  ...(i === 2 && { badges: [DEV_BADGE, TROPHY_BADGE] }),
+  ...(i === 4 && { badges: [STAR_BADGE] }),
+}));
 
 /**
  * The list at the overview column's width for a 1280, 1100 and 980 px window ((W - 72) / 4): flags show while every
