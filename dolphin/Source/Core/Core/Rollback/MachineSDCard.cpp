@@ -189,10 +189,23 @@ std::optional<FatVolume> ParseBootSector(const std::array<u8, 512>& bs, u64 volu
   return v;
 }
 
-std::string HashCachePath(const std::string& image_path)
+std::string CacheFileFor(std::string_view key)
 {
-  const XXH64_hash_t key = XXH3_64bits(image_path.data(), image_path.size());
-  return fmt::format("{}MachineSD/{:016x}.hashes", File::GetUserPath(D_CACHE_IDX), key);
+  const XXH64_hash_t hash = XXH3_64bits(key.data(), key.size());
+  return fmt::format("{}MachineSD/{:016x}.hashes", File::GetUserPath(D_CACHE_IDX), hash);
+}
+
+// One cache file per image, whichever separators its path is written with: on Windows a room's
+// Dolphin has the card's path with '/' (File::SetUserPath) and the launcher gives DolphinTool
+// sdhash the same path with '\'. Keyed by the path as given, the room's Dolphin never found the
+// hashes the launcher's check had just cached and read the whole card again at every Host (bug
+// report #315: Cobalt's and REX's 8 GB cards, the window closed before the read ended).
+std::string HashCachePath(std::string image_path)
+{
+#ifdef _WIN32
+  std::ranges::replace(image_path, '\\', '/');
+#endif
+  return CacheFileFor(image_path);
 }
 
 std::optional<s64> ModificationTime(const std::string& path)
@@ -207,6 +220,15 @@ std::optional<s64> ModificationTime(const std::string& path)
 std::optional<ImageHashes> LoadHashCache(const std::string& image_path, u64 size, s64 mtime)
 {
   File::IOFile file(HashCachePath(image_path), "rb");
+#ifdef _WIN32
+  if (!file)
+  {
+    // Cached before the key ignored separators: DolphinTool wrote it under the '\' path.
+    std::string legacy = image_path;
+    std::ranges::replace(legacy, '/', '\\');
+    file.Open(CacheFileFor(legacy), "rb");
+  }
+#endif
   if (!file)
     return std::nullopt;
 

@@ -411,6 +411,9 @@ struct State
   std::recursive_timed_mutex mutex;
   Options opts;
   std::atomic<Phase> phase{Phase::Idle};
+  // Set by Stop: the starter's card read at boot (CreateSDCard) gives up, so a game closed while
+  // a big card is read stops at once instead of being "stuck" (bug report #315).
+  std::atomic<bool> card_read_cancel{false};
   std::string error;
   bool env_checked = false;
   // The player's controller is a GameCube controller adapter (their own SI device setting).
@@ -7803,6 +7806,7 @@ bool Arm(const Options& options, std::string* error)
   StopNetwork();
   DestroyGekko();
   ResetSD();
+  s.card_read_cancel = false;
   s.opts = options;
   s.error.clear();
   // The host's codes (a joiner has none until its image brings the session's): synced before
@@ -7926,6 +7930,7 @@ void Stop()
 {
   if (s.phase == Phase::Idle)
     return;
+  s.card_read_cancel = true;
   // First, without the lock: a CPU thread waiting at a boundary (WaitForFrames, which holds the
   // lock) sees it and lets go.
   if (Active())
@@ -8343,10 +8348,24 @@ std::shared_ptr<SDCard::SessionCard> CreateSDCard(const std::string& image_path)
     return SessionCard::CreateOwnCard(image_path);
   }
   const auto start = Clock::now();
-  std::optional<SDCard::Manifest> manifest = SDCard::BuildManifest(image_path);
+  std::optional<SDCard::Manifest> manifest;
+  if (std::optional<SDCard::ImageHashes> cached = SDCard::CachedImageHashes(image_path))
+  {
+    manifest = SDCard::ManifestFromHashes(image_path, *cached);
+  }
+  else
+  {
+    // Every chunk read and hashed: a minute or more for an 8 GB card on a slow drive.
+    AddLog(fmt::format("SD card: reading the whole card (its hashes are not cached): {}",
+                       image_path));
+    manifest = SDCard::BuildManifest(image_path, &s.card_read_cancel);
+  }
   if (!manifest)
   {
-    AddLog(fmt::format("SD card: could not read {}", image_path));
+    if (s.card_read_cancel)
+      AddLog(fmt::format("SD card: the game stopped while {} was read", image_path));
+    else
+      AddLog(fmt::format("SD card: could not read {}", image_path));
     return SessionCard::CreateOwnCard(image_path);
   }
   const u64 in_use = static_cast<u64>(std::ranges::count_if(

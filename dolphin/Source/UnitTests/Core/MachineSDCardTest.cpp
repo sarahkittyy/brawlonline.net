@@ -454,6 +454,28 @@ TEST_F(MachineSDCardTest, HashesAreCachedUntilTheImageChanges)
   EXPECT_FALSE(HashImage(path, &cancel));
 }
 
+#ifdef _WIN32
+// The launcher's DolphinTool sdhash gets the card's path with '\', a room's Dolphin the same path
+// with '/' (File::SetUserPath): both are one cache, so a card checked by the launcher is not read
+// again when it hosts (bug report #315).
+TEST_F(MachineSDCardTest, HashesAreCachedWhicheverSeparatorsThePathHas)
+{
+  std::string slashes = Path("card.raw");
+  std::ranges::replace(slashes, '\\', '/');
+  std::string backslashes = slashes;
+  std::ranges::replace(backslashes, '/', '\\');
+  WriteFile(slashes, PatternCard(4, 3));
+
+  EXPECT_FALSE(CachedImageHashes(slashes));
+  const auto hashed = HashImage(backslashes);
+  ASSERT_TRUE(hashed);
+  const auto cached = CachedImageHashes(slashes);
+  ASSERT_TRUE(cached);
+  EXPECT_EQ(cached->hashes, hashed->hashes);
+  EXPECT_EQ(cached->zero, hashed->zero);
+}
+#endif
+
 TEST_F(MachineSDCardTest, ManifestZeroesFreeAndEmptyChunks)
 {
   const std::string path = Path("card.raw");
