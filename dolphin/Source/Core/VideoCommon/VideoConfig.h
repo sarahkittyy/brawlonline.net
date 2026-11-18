@@ -76,6 +76,8 @@ enum class OutputResamplingMode : int
   CatmullRom,
   SharpBilinear,
   AreaSampling,
+  // Values 7 and 8 are used by the shader's legacy nearest and Hermite modes.
+  MagicKernelSharp2021 = 9,
 };
 
 enum class ColorCorrectionRegion : int
@@ -222,6 +224,7 @@ struct VideoConfig final
   int iEFBScale = 0;
   TextureFilteringMode texture_filtering_mode = TextureFilteringMode::Default;
   OutputResamplingMode output_resampling_mode = OutputResamplingMode::Default;
+  float fOutputResamplingSharpness = 1.0f;
   AnisotropicFilteringMode iMaxAnisotropy = AnisotropicFilteringMode::Default;
   std::string sPostProcessingShader;
   bool bForceTrueColor = false;

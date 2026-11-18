@@ -131,9 +131,15 @@ void EnhancementsWidget::CreateWidgets()
   m_texture_filtering_combo->Refresh();
   m_texture_filtering_combo->setEnabled(Get(m_game_layer, Config::GFX_HACK_FAST_TEXTURE_SAMPLING));
 
-  m_output_resampling_combo = new ConfigChoice(
-      {tr("Default"), tr("Bilinear"), tr("Bicubic: B-Spline"), tr("Bicubic: Mitchell-Netravali"),
-       tr("Bicubic: Catmull-Rom"), tr("Sharp Bilinear"), tr("Area Sampling")},
+  m_output_resampling_combo = new ConfigChoiceMap<OutputResamplingMode>(
+      {{tr("Default"), OutputResamplingMode::Default},
+       {tr("Bilinear"), OutputResamplingMode::Bilinear},
+       {tr("Bicubic: B-Spline"), OutputResamplingMode::BSpline},
+       {tr("Bicubic: Mitchell-Netravali"), OutputResamplingMode::MitchellNetravali},
+       {tr("Bicubic: Catmull-Rom"), OutputResamplingMode::CatmullRom},
+       {tr("Sharp Bilinear"), OutputResamplingMode::SharpBilinear},
+       {tr("Area Sampling"), OutputResamplingMode::AreaSampling},
+       {tr("Magic Kernel Sharp 2021"), OutputResamplingMode::MagicKernelSharp2021}},
       Config::GFX_ENHANCE_OUTPUT_RESAMPLING, m_game_layer);
 
   m_configure_color_correction = new ToolTipPushButton(tr("Configure"));
@@ -489,9 +495,16 @@ void EnhancementsWidget::AddDescriptions()
 
                  "<br><br><b>Area Sampling</b> - [up to 324 samples]"
                  "<br>Weighs pixels by the percentage of area they occupy. Gamma corrected."
-                 "<br>Best for downscaling by more than 2x."
+                 "<br>Recommended for downscaling."
 
-                 "<br><br><dolphin_emphasis>If unsure, select 'Default'.</dolphin_emphasis>");
+                 "<br><br><b>Magic Kernel Sharp 2021</b>"
+                 "<br>Gamma corrected resampling with a separate sharpening filter."
+                 "<br>Uses up to three passes and two floating-point textures."
+                 "<br>May introduce halos around sharp edges and increases GPU load."
+                 "<br>Area Sampling remains recommended for downscaling pending comparison."
+
+                 "<br><br><dolphin_emphasis>For downscaling, select 'Area Sampling'."
+                 " Otherwise, if unsure, select 'Default'.</dolphin_emphasis>");
   static const char TR_COLOR_CORRECTION_DESCRIPTION[] =
       QT_TR_NOOP("A group of features to make the colors more accurate, matching the color space "
                  "Wii and GC games were meant for.");

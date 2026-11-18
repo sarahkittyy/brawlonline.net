@@ -56,6 +56,12 @@ float Luminance(float3 color, bool native_color_space)
 
 /***** COLOR SAMPLING *****/
 
+float4 LinearizeSample(float4 color, float gamma)
+{
+	color.rgb = pow(color.rgb, float3(gamma));
+	return color;
+}
+
 // Non filtered gamma corrected sample (nearest neighbor)
 float4 QuickSample(float3 uvw, float gamma)
 {
@@ -70,9 +76,7 @@ float4 QuickSample(float3 uvw, float gamma)
 		return float4(0.5, 0, 0.5, 1);
 #endif
 
-	float4 color = texture(samp1, uvw);
-	color.rgb = pow(color.rgb, float3(gamma));
-	return color;
+	return LinearizeSample(texture(samp1, uvw), gamma);
 }
 float4 QuickSample(float2 uv, float w, float gamma)
 {
@@ -361,6 +365,168 @@ float4 AreaSampling(float3 uvw, float gamma)
 	return nrm_color;
 }
 
+/***** Magic Kernel Sharp *****/
+
+// John Costella's Magic Kernel Sharp 2021: https://johncostella.com/magic/
+// PostProcessing.cpp runs it as up to three passes (see OutputResampling.h) and compiles a
+// copy of this shader for each kind of pass, with these defined as constants:
+//   RESAMPLING_PASS          1 = table, 2 = sharpen, 3 = enlarge
+//   RESAMPLING_AXES          table and sharpen: 0 = horizontal, 1 = vertical
+//                            enlarge: bit 0 = horizontal, bit 1 = vertical
+//   RESAMPLING_DECODE_INPUT  1 for the first pass, which reads the gamma-encoded source
+//   RESAMPLING_FINAL_PASS    1 for the last pass, which goes on to color correction and encoding
+#ifndef RESAMPLING_PASS
+#define RESAMPLING_PASS 0
+#endif
+
+#if RESAMPLING_PASS != 0
+
+#if RESAMPLING_DECODE_INPUT
+#define ResamplingFetch(texel) LinearizeSample(texelFetch(samp1, texel, 0), game_gamma)
+#else
+#define ResamplingFetch(texel) texelFetch(samp1, texel, 0)
+#endif
+
+// The first texel of the source rectangle, and the source layer.
+int3 ResamplingOrigin()
+{
+	// Match ordinary array sampling when only one stereo source layer is available.
+	int layer = clamp(int(v_tex0.z), 0, textureSize(samp1, 0).z - 1);
+	return int3(int2(floor(src_rect.xy * GetResolution() + 0.5)), layer);
+}
+
+// The nearest value a half-float target can hold. Some GPUs round towards zero when they
+// write one, which would darken every pass a little and turn 1.0 into 0.9995.
+float4 RoundToHalfFloat(float4 color)
+{
+	// Half-floats have 11 significant bits down to 2^-14, and steps of 2^-24 below that.
+	float4 magnitude = max(abs(color), float4(6.103515625e-05, 6.103515625e-05, 6.103515625e-05, 6.103515625e-05));
+	float4 step_size = exp2(floor(log2(magnitude)) - 10.0);
+	return round(color / step_size) * step_size;
+}
+
+#endif
+
+#if RESAMPLING_PASS == 1
+
+// Taps i + k of the table row, in groups: the GPU overlaps the fetches of one group,
+// but waits for each turn of a loop.
+#define RESAMPLING_TAP(k) color += texelFetch(samp2, int3(i + (k), index, 0), 0).r * ResamplingFetch(tap + texel_step * (k));
+#define RESAMPLING_TAPS_2(k) RESAMPLING_TAP(k) RESAMPLING_TAP((k) + 1)
+#define RESAMPLING_TAPS_4(k) RESAMPLING_TAPS_2(k) RESAMPLING_TAPS_2((k) + 2)
+#define RESAMPLING_TAPS_8(k) RESAMPLING_TAPS_4(k) RESAMPLING_TAPS_4((k) + 4)
+
+// One axis, point taps. Row i of the table in samp2 is for output pixel i along the axis:
+// the first source texel, then resampling_taps weights (Magic Kernel reduction, with or
+// without Sharp 2021 on the reduced grid). The table never reads outside the source rectangle.
+float4 ResamplingTablePass()
+{
+	int3 origin = ResamplingOrigin();
+	// The other axis is unchanged in this pass, so v_tex0 is at a texel center there.
+	int2 texel = int2(floor(v_tex0.xy * GetResolution()));
+	// Along the filtered axis, v_tex0 crosses the source rectangle over the target's pixels.
+	float2 target_pixel = (v_tex0.xy - src_rect.xy) / src_rect.zw * GetWindowResolution();
+#if RESAMPLING_AXES == 0
+	int index = int(floor(target_pixel.x));
+	int3 texel_step = int3(1, 0, 0);
+	int3 tap = int3(origin.x, texel.y, origin.z);
+#else
+	int index = int(floor(target_pixel.y));
+	int3 texel_step = int3(0, 1, 0);
+	int3 tap = int3(texel.x, origin.y, origin.z);
+#endif
+	tap += texel_step * int(texelFetch(samp2, int3(0, index, 0), 0).r);
+
+	float4 color = float4(0.0, 0.0, 0.0, 0.0);
+	int i = 1;
+	while (i + 7 <= resampling_taps)
+	{
+		RESAMPLING_TAPS_8(0)
+		tap += texel_step * 8;
+		i += 8;
+	}
+	if (i + 3 <= resampling_taps)
+	{
+		RESAMPLING_TAPS_4(0)
+		tap += texel_step * 4;
+		i += 4;
+	}
+	if (i + 1 <= resampling_taps)
+	{
+		RESAMPLING_TAPS_2(0)
+		tap += texel_step * 2;
+		i += 2;
+	}
+	if (i <= resampling_taps)
+	{
+		RESAMPLING_TAP(0)
+	}
+	return color;
+}
+
+#elif RESAMPLING_PASS == 2
+
+// One axis of Sharp 2021, [-1, 6, -35, 204, -35, 6, -1] / 144, on the grid of its source.
+// resampling_sharp_weights holds the center weight and the three others, already blended
+// with the identity by the sharpness setting.
+float4 ResamplingSharpPass()
+{
+	int3 origin = ResamplingOrigin();
+	int2 first_texel = origin.xy;
+	int2 last_texel = first_texel + int2(floor(src_rect.zw * GetResolution() + 0.5)) - int2(1, 1);
+	int2 texel = int2(floor(v_tex0.xy * GetResolution()));
+#if RESAMPLING_AXES == 0
+	int2 texel_step = int2(1, 0);
+#else
+	int2 texel_step = int2(0, 1);
+#endif
+
+	float4 color = float4(0.0, 0.0, 0.0, 0.0);
+	for (int i = -3; i <= 3; ++i)
+		color += resampling_sharp_weights[abs(i)] * ResamplingFetch(int3(clamp(texel + texel_step * i, first_texel, last_texel), origin.z));
+	return color;
+}
+
+#elif RESAMPLING_PASS == 3
+
+// Magic Kernel enlargement of one or both axes: the three nearest texels of each.
+float4 ResamplingEnlargePass()
+{
+	int3 origin = ResamplingOrigin();
+	int2 first_texel = origin.xy;
+	int2 last_texel = first_texel + int2(floor(src_rect.zw * GetResolution() + 0.5)) - int2(1, 1);
+	// Position in texels, with texel centers on the integers, and the nearest texel.
+	// An unchanged axis is at a texel center and takes that texel alone.
+	float2 position = v_tex0.xy * GetResolution() - 0.5;
+	float2 nearest = floor(position + 0.5);
+	float2 offset = position - nearest;
+	// Quadratic B-spline weights of the texels before, at and after the nearest one.
+	float2 before = 0.5 * (0.5 - offset) * (0.5 - offset);
+	float2 center = 0.75 - offset * offset;
+	float2 after = 0.5 * (0.5 + offset) * (0.5 + offset);
+	int2 texel = clamp(int2(nearest), first_texel, last_texel);
+	int2 texel_before = max(texel - int2(1, 1), first_texel);
+	int2 texel_after = min(texel + int2(1, 1), last_texel);
+
+#if RESAMPLING_AXES == 1
+	return before.x * ResamplingFetch(int3(texel_before.x, texel.y, origin.z)) +
+	       center.x * ResamplingFetch(int3(texel.x, texel.y, origin.z)) +
+	       after.x * ResamplingFetch(int3(texel_after.x, texel.y, origin.z));
+#elif RESAMPLING_AXES == 2
+	return before.y * ResamplingFetch(int3(texel.x, texel_before.y, origin.z)) +
+	       center.y * ResamplingFetch(int3(texel.x, texel.y, origin.z)) +
+	       after.y * ResamplingFetch(int3(texel.x, texel_after.y, origin.z));
+#else
+#define RESAMPLING_ROW(y) (before.x * ResamplingFetch(int3(texel_before.x, y, origin.z)) + \
+                           center.x * ResamplingFetch(int3(texel.x, y, origin.z)) + \
+                           after.x * ResamplingFetch(int3(texel_after.x, y, origin.z)))
+	return before.y * RESAMPLING_ROW(texel_before.y) + center.y * RESAMPLING_ROW(texel.y) +
+	       after.y * RESAMPLING_ROW(texel_after.y);
+#endif
+}
+
+#endif
+
 /***** Main Functions *****/
 
 // Returns an accurate (gamma corrected) sample of a gamma space space texture.
@@ -402,6 +568,15 @@ float4 LinearGammaCorrectedSample(float gamma)
 	{
 		color = BicubicSample(uvw, gamma, CUBIC_COEFF_GEN(0.0, 0.0));
 	}
+	else if (resampling_method == 9) // Magic Kernel Sharp: fallback if the extra render target failed
+	{
+		// No extra pass is needed for a 1:1 copy, even when the texture has stride padding.
+		float2 source_extent = floor(src_rect.zw * GetResolution() + 0.5);
+		if (source_extent == GetWindowResolution())
+			color = QuickSample(uvw, gamma);
+		else
+			color = AreaSampling(uvw, gamma);
+	}
 
 	return color;
 }
@@ -416,6 +591,23 @@ void main()
 
 	float4 color;
 
+#if RESAMPLING_PASS != 0
+#if RESAMPLING_PASS == 1
+	color = ResamplingTablePass();
+#elif RESAMPLING_PASS == 2
+	color = ResamplingSharpPass();
+#else
+	color = ResamplingEnlargePass();
+#endif
+#if !RESAMPLING_FINAL_PASS
+	// Signed linear light goes from pass to pass.
+	SetOutput(RoundToHalfFloat(color));
+	return;
+#endif
+	// Negative filter lobes can undershoot black; pow() requires nonnegative input.
+	color.rgb = max(color.rgb, float3(0.0, 0.0, 0.0));
+	color.a = clamp(color.a, 0.0, 1.0);
+#else
 	if (needs_resampling)
 	{
 		// Doing linear sampling in "gamma space" on linear texture formats isn't correct.
@@ -437,6 +629,7 @@ void main()
 		// Convert to linear before doing any other of follow up operations.
 		color.rgb = pow(color.rgb, float3(game_gamma));
 	}
+#endif
 
 	if (OptionEnabled(correct_color_space))
 	{

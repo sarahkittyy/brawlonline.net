@@ -151,6 +151,8 @@ const Info<AnisotropicFilteringMode> GFX_ENHANCE_MAX_ANISOTROPY{
     {System::GFX, "Enhancements", "MaxAnisotropy"}, AnisotropicFilteringMode::Default};
 const Info<OutputResamplingMode> GFX_ENHANCE_OUTPUT_RESAMPLING{
     {System::GFX, "Enhancements", "OutputResampling"}, OutputResamplingMode::Default};
+const Info<float> GFX_ENHANCE_OUTPUT_RESAMPLING_SHARPNESS{
+    {System::GFX, "Enhancements", "OutputResamplingSharpness"}, 1.0f};
 const Info<std::string> GFX_ENHANCE_POST_SHADER{
     {System::GFX, "Enhancements", "PostProcessingShader"}, ""};
 const Info<bool> GFX_ENHANCE_FORCE_TRUE_COLOR{{System::GFX, "Enhancements", "ForceTrueColor"},

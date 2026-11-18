@@ -11,6 +11,7 @@
 #include "Common/CommonTypes.h"
 #include "Common/MathUtil.h"
 #include "Common/Timer.h"
+#include "VideoCommon/OutputResampling.h"
 #include "VideoCommon/TextureConfig.h"
 
 class AbstractPipeline;
@@ -125,11 +126,22 @@ protected:
   bool CompilePixelShader();
   bool CompilePipeline();
 
+  // Magic Kernel Sharp: the passes and weight tables for these sizes. False if they can't be made.
+  bool UpdateResamplingPlan(u32 source_width, u32 source_height, u32 target_width,
+                            u32 target_height);
+  void BindResamplingTable(u32 pass_index);
+  // The pipeline of the copy of the default shader compiled for this kind of pass.
+  const AbstractPipeline* GetResamplingPipeline(const OutputResamplingPass& pass);
+  void ResetResamplingPrograms();
+  bool ResampleToTexture(const MathUtil::Rectangle<int>& src, const AbstractTexture* src_tex,
+                         int src_layer, u32 target_layers, u32 target_index,
+                         const OutputResamplingPass& pass);
+
   size_t CalculateUniformsSize(bool user_post_process) const;
   void FillUniformBuffer(const MathUtil::Rectangle<int>& src, const AbstractTexture* src_tex,
                          int src_layer, const MathUtil::Rectangle<int>& dst,
                          const MathUtil::Rectangle<int>& wnd, u8* buffer, bool user_post_process,
-                         bool intermediary_buffer);
+                         bool intermediary_buffer, const OutputResamplingPass* pass = nullptr);
 
   // Timer for determining our time value
   Common::Timer m_timer;
@@ -139,6 +151,20 @@ protected:
   std::unique_ptr<AbstractShader> m_default_vertex_shader;
   std::unique_ptr<AbstractShader> m_default_pixel_shader;
   std::unique_ptr<AbstractPipeline> m_default_pipeline;
+  struct ResamplingProgram
+  {
+    std::unique_ptr<AbstractShader> shader;
+    std::unique_ptr<AbstractPipeline> pipeline;
+  };
+  std::string m_default_pixel_shader_code;
+  std::map<u32, ResamplingProgram> m_resampling_programs;
+  std::array<std::unique_ptr<AbstractTexture>, 2> m_resampling_color_textures;
+  std::array<std::unique_ptr<AbstractFramebuffer>, 2> m_resampling_frame_buffers;
+  std::array<std::unique_ptr<AbstractTexture>, 3> m_resampling_tables;
+  std::array<u32, 4> m_resampling_dimensions{};
+  float m_resampling_sharpness = 0.0f;
+  OutputResamplingPlan m_resampling_plan;
+  bool m_resampling_plan_valid = false;
   std::unique_ptr<AbstractFramebuffer> m_intermediary_frame_buffer;
   std::unique_ptr<AbstractTexture> m_intermediary_color_texture;
   std::vector<u8> m_default_uniform_staging_buffer;
