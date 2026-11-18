@@ -68,9 +68,13 @@ export async function hasTexturePack(
   return search(textures);
 }
 
-/** False when the Dolphin whose User folder holds `load` has custom textures off in its GFX.ini. */
-async function customTexturesOn(load: string): Promise<boolean> {
-  const ini = await readFile(path.join(load, "..", "Config", "GFX.ini"), "utf8").catch(() => "");
+/**
+ * `[Settings] HiresTextures` in the GFX.ini of the User folder `userFolder` (Graphics > Advanced >
+ * Load Custom Textures): true or false as written there, or null when it isn't (Dolphin's default
+ * is off, GFX_HIRES_TEXTURES).
+ */
+export async function readHiresTexturesSetting(userFolder: string): Promise<boolean | null> {
+  const ini = await readFile(path.join(userFolder, "Config", "GFX.ini"), "utf8").catch(() => "");
   let section = "";
   for (const raw of ini.split(/\r?\n/)) {
     const line = raw.trim();
@@ -81,10 +85,15 @@ async function customTexturesOn(load: string): Promise<boolean> {
     }
     const setting = /^HiresTextures\s*=\s*(\S+)/i.exec(line);
     if (section === "Settings" && setting) {
-      return setting[1].toLowerCase() !== "false";
+      return setting[1].toLowerCase() !== "false" && setting[1] !== "0";
     }
   }
-  return true;
+  return null;
+}
+
+/** False when the Dolphin whose User folder holds `load` has custom textures off in its GFX.ini. */
+async function customTexturesOn(load: string): Promise<boolean> {
+  return (await readHiresTexturesSetting(path.join(load, ".."))) ?? true;
 }
 
 /**

@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildNetplayDolphinArgs,
+  buildPlaybackDolphinArgs,
   buildRenderDolphinArgs,
   LOGGING_CONFIG_ARGS,
   WII_SETTINGS_CONFIG_ARGS,
@@ -97,6 +98,40 @@ describe("buildNetplayDolphinArgs", () => {
       testMode: readTestMode({ ...env, PPO_TEST_MODE: "1" }, true),
     });
     expect(optedIn.slice(-tail.length)).toEqual(tail);
+  });
+});
+
+describe("buildPlaybackDolphinArgs", () => {
+  const playbackUserArgs = ["-u", path.resolve("/data/playback/User")];
+  const input = { userArgs: playbackUserArgs, sdCardImage: sd, bootFile: dol, testMode: INACTIVE_TEST_MODE };
+
+  it("never writes the shared SD card or records the replay again", () => {
+    const args = buildPlaybackDolphinArgs(input);
+    expect(args.slice(0, 2)).toEqual(playbackUserArgs);
+    expect(args.slice(-4)).toEqual([
+      "-C",
+      "Dolphin.Core.WiiSDCardAllowWrites=False",
+      "-C",
+      "Dolphin.Online.SaveReplays=False",
+    ]);
+    expect(args.some((a) => a.includes("LoadPath") || a.includes("HiresTextures"))).toBe(false);
+  });
+
+  it("reads the netplay User folder's textures with custom textures on, as Play does", () => {
+    const load = path.resolve("/data/netplay/User/Load");
+    const args = buildPlaybackDolphinArgs({ ...input, textures: { loadPath: load } });
+    expect(args.slice(-4)).toEqual([
+      "-C",
+      `Dolphin.General.LoadPath=${load}`,
+      "-C",
+      "Graphics.Settings.HiresTextures=True",
+    ]);
+  });
+
+  it("leaves the textures out, not the replay, for a Load path with '='", () => {
+    const args = buildPlaybackDolphinArgs({ ...input, textures: { loadPath: path.resolve("/a=b/User/Load") } });
+    expect(args.some((a) => a.includes("LoadPath") || a.includes("HiresTextures"))).toBe(false);
+    expect(args).toContain("-e");
   });
 });
 

@@ -87,6 +87,7 @@ import { clearTemplateSeededSaves } from "./mods/template_saves";
 import type { ModBuild } from "./mods/types";
 import type { RenderDolphinSettings } from "./netplay_args";
 import { buildNetplayDolphinArgs, buildPlaybackDolphinArgs, buildRenderDolphinArgs } from "./netplay_args";
+import { findPlaybackTextures } from "./playback_textures";
 import { closeIfIdle } from "./quit_if_idle";
 import type { RenderDolphin, RenderKey } from "./render_queue";
 import { RenderQueue } from "./render_queue";
@@ -560,10 +561,19 @@ export class DolphinManager {
           : this._installOnlinePlugin(netplayInstallation, true, inUse, onProgress),
       );
       this.playbackReleases.set(id, release);
+      // The texture pack Play shows (playback_textures.ts): replays, highlights, spectating, renders.
+      const textures = await findPlaybackTextures(
+        netplayInstallation.userFolder,
+        playbackInstallation.userFolder,
+      ).catch((err) => {
+        log.warn(`Could not look for the netplay Dolphin's custom textures: ${err}`);
+        return null;
+      });
       const params = buildPlaybackDolphinArgs({
         userArgs: playbackInstallation.userArgs(),
         sdCardImage,
         bootFile: netplayInstallation.netplayLauncherDol,
+        textures,
         testMode: readTestMode(process.env, app.isPackaged),
       });
       if (render) {
