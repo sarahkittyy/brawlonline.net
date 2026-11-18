@@ -750,6 +750,18 @@ Result CmdPadCounter(const Args& args)
   return {};
 }
 
+Result CmdPadScriptTiming(const Args& args)
+{
+  const picojson::value* mode = Find(args, "mode");
+  if (!mode || !mode->is<std::string>() ||
+      (mode->get<std::string>() != "time" && mode->get<std::string>() != "poll"))
+  {
+    Fail("'mode' must be \"time\" or \"poll\"");
+  }
+  SetScriptTiming(mode->get<std::string>() == "time", GetU64(args, "seed", 0));
+  return {};
+}
+
 Result CmdPadClear(const Args& args)
 {
   const u64 port = GetU64(args, "port");
@@ -2269,6 +2281,7 @@ const std::vector<std::pair<std::string_view, Handler>>& Handlers()
       {"pad_set", CmdPadSet},
       {"pad_clear", CmdPadClear},
       {"pad_counter", CmdPadCounter},
+      {"pad_script_timing", CmdPadScriptTiming},
       {"pad_script", CmdPadScript},
       {"pad_script_status", CmdPadScriptStatus},
       {"rumble_status", CmdRumbleStatus},

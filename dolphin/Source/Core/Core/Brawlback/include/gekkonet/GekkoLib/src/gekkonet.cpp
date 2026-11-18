@@ -146,6 +146,18 @@ bool gekko_accept_late_input(GekkoSession* session, int player, int frame)
     return session->AcceptLateInput(player, frame);
 }
 
+void gekko_add_input_suggestion(GekkoSession* session, int player, int frame, unsigned int seq,
+                                const void* input)
+{
+    session->AddInputSuggestion(player, frame, seq, input);
+}
+
+void gekko_suggestion_stats(GekkoSession* session, GekkoSuggestionStats* stats)
+{
+    *stats = {};
+    session->SuggestionStats(stats);
+}
+
 void gekko_set_advantage_delay_bias(GekkoSession* session, int frames)
 {
     session->SetAdvantageDelayBias(frames);

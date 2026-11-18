@@ -414,6 +414,14 @@ bool PadsHostDecoded(int chan, std::array<u8, Addr::PAD_STRIDE>* pad, Clock::tim
 // (Session's deferred loop-top read): that SI read came early, the read is made again on time.
 bool HostDecodeReadAt(Core::System& system, int chan, std::array<u8, Addr::PAD_STRIDE>* pad,
                       Clock::time_point* instant);
+// Any thread: whether channel `chan`'s newest decoded read came from `source` (input suggestions:
+// which of the channel's controllers the game reads).
+bool HostDecodeReads(int chan, HostPadSource source);
+// Any thread: `st`, channel `chan`'s controller from `source`, made into the pad a decode of it
+// would be now, with the context (origin, light presses, START hold) of the channel's newest
+// decoded read: what the local input would carry if the SI read `st` (input suggestions). False
+// when the decode is not in use for the channel or its newest read came from another source.
+bool HostDecodeLatest(int chan, HostPadSource source, const GCPadStatus& st, u8* pad);
 // The decode itself (tests).
 constexpr u8 HOST_DECODE_LIGHT_PRESS = 45;
 void HostDecodePadSlot(const GCPadStatus& st, const std::array<u8, 6>& origin, u16 light, u8* pad);

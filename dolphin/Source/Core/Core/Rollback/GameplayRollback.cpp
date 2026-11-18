@@ -877,6 +877,30 @@ struct HostDecodeState
 };
 HostDecodeState s_decode;
 constexpr u32 HOST_DECODE_MAX_MISMATCHES = 10;
+
+// What a decode takes besides the controller's state: the origin, P+'s light presses and its START
+// hold, and where the read came from. Each channel's newest, for decodes off the CPU thread
+// (HostDecodeLatest: input suggestions); not valid while the decode is not in use for the channel.
+struct HostDecodeContext
+{
+  bool valid = false;
+  HostPadSource source = HostPadSource::Mapped;
+  std::array<u8, 6> origin{};
+  u16 light = 0;
+  bool holds_start = false;
+};
+std::mutex s_decode_ctx_mutex;
+std::array<HostDecodeContext, 4> s_decode_ctx;
+
+void HostDecodeWith(const GCPadStatus& st, const HostDecodeContext& c, u8* pad)
+{
+  HostDecodePadSlot(st, c.origin, c.light, pad);
+  if ((st.button & PAD_BUTTON_START) && c.holds_start)
+  {
+    pad[2] &= ~(PAD_BUTTON_START >> 8);
+    pad[6] = pad[2];
+  }
+}
 constexpr u32 HOST_DECODE_RESUME = 120;
 
 bool HostDecodeEnabled()
@@ -957,8 +981,8 @@ bool HostDecodeHoldsStart(const Memory::MemoryManager& memory, int chan)
 
 // A read the game gets (ReadHostPad, a session's schedule): its decode, kept for the loop top and
 // the passes' check. A re-run's latched read is the same read: kept once.
-void HostDecodeKeep(const Memory::MemoryManager& memory, int chan, const GCPadStatus& st,
-                    Clock::time_point instant)
+void HostDecodeKeep(const Memory::MemoryManager& memory, int chan, HostPadSource source,
+                    const GCPadStatus& st, Clock::time_point instant)
 {
   if (chan < 0 || chan >= 4 || !HostDecodeEnabled())
     return;
@@ -973,12 +997,13 @@ void HostDecodeKeep(const Memory::MemoryManager& memory, int chan, const GCPadSt
   if (e.valid)
   {
     e.raw_buttons = st.button;
-    HostDecodePadSlot(st, s_decode.origin[chan], LightPressesOf(memory, chan), e.pad.data());
-    if ((st.button & PAD_BUTTON_START) && HostDecodeHoldsStart(memory, chan))
-    {
-      e.pad[2] &= ~(PAD_BUTTON_START >> 8);
-      e.pad[6] = e.pad[2];
-    }
+    const HostDecodeContext c{!s_decode.off && !s_decode.guest_error[chan] &&
+                                  !s_decode.suspended[chan],
+                              source, s_decode.origin[chan], LightPressesOf(memory, chan),
+                              HostDecodeHoldsStart(memory, chan)};
+    HostDecodeWith(st, c, e.pad.data());
+    std::lock_guard lk(s_decode_ctx_mutex);
+    s_decode_ctx[chan] = c;
   }
 }
 
@@ -1083,6 +1108,10 @@ GCPadStatus ReadHostPad(Core::System& system, int chan, HostPadSource source)
     h.seen_generation = gen;
     h.last = {};  // nothing from an earlier session
     s_decode.ring = {};
+    {
+      std::lock_guard lk(s_decode_ctx_mutex);
+      s_decode_ctx = {};
+    }
     s_decode.mismatches = 0;
     s_decode.off = false;
     s_decode.guest_error = {};
@@ -1158,7 +1187,7 @@ GCPadStatus ReadHostPad(Core::System& system, int chan, HostPadSource source)
   }
   last = {true, status, instant, data_at};
   h.instant[chan] = instant;
-  HostDecodeKeep(system.GetMemory(), chan, status, instant);
+  HostDecodeKeep(system.GetMemory(), chan, source, status, instant);
   LogRead(chan, now, due, false, kind, status, instant);
   return status;
 }
@@ -1270,6 +1299,26 @@ void HostPadOriginReported(int chan, u8 stick_x, u8 stick_y, u8 substick_x, u8 s
                  chan, stick_x, stick_y, substick_x, substick_y, trigger_left, trigger_right);
   }
   s_decode.origin[chan] = o;
+}
+
+bool HostDecodeReads(int chan, HostPadSource source)
+{
+  if (chan < 0 || chan >= 4 || !HostDecodeEnabled())
+    return false;
+  std::lock_guard lk(s_decode_ctx_mutex);
+  return s_decode_ctx[chan].valid && s_decode_ctx[chan].source == source;
+}
+
+bool HostDecodeLatest(int chan, HostPadSource source, const GCPadStatus& st, u8* pad)
+{
+  if (chan < 0 || chan >= 4 || !HostDecodeEnabled())
+    return false;
+  std::lock_guard lk(s_decode_ctx_mutex);
+  const HostDecodeContext& c = s_decode_ctx[chan];
+  if (!c.valid || c.source != source || !st.isConnected)
+    return false;
+  HostDecodeWith(st, c, pad);
+  return true;
 }
 
 bool PadsHostDecoded(int chan, std::array<u8, Addr::PAD_STRIDE>* pad, Clock::time_point* instant)

@@ -1,6 +1,7 @@
 #include "input.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cstdlib>
 #include <cstring>
 
@@ -44,6 +45,77 @@ void Gekko::InputBuffer::Init(u8 delay, u8 input_window, u32 input_size, u32 buf
         _inputs.push_back(std::make_unique<GameInput>());
 		_inputs[i]->Init(GameInput::NULL_FRAME, _empty_input.get(), _input_size);
 	}
+
+	_suggestions = {};
+	_shown.assign(static_cast<size_t>(_buff_size) * _input_size, 0);
+	_sugg_stats = {};
+	_worse_bucket = 0;
+	_sugg_ignored = false;
+}
+
+namespace {
+	std::atomic<GekkoSuggestionJudge> s_judge{nullptr};
+	constexpr u32 JUDGE_DRAIN = 200;       // a cost point lasts this many real inputs
+	constexpr u32 JUDGE_IGNORE_AFTER = 15; // points
+}
+
+void gekko_set_suggestion_judge(GekkoSuggestionJudge judge)
+{
+	s_judge.store(judge, std::memory_order_relaxed);
+}
+
+void Gekko::InputBuffer::AddSuggestion(Frame frame, u32 seq, const u8* input)
+{
+	if (_sugg_ignored) {
+		return;
+	}
+	// only for frames whose input has not come, and not further ahead than predictions go.
+	if (frame <= _last_received_input || frame > _last_received_input + static_cast<Frame>(_buff_size / 2)) {
+		++_sugg_stats.stale;
+		return;
+	}
+	for (const auto& s : _suggestions) {
+		if (s.frame > _last_received_input && s.seq == seq) {
+			return;  // a copy (UDP can deliver one twice)
+		}
+	}
+	// replace one whose frame's input came (or an empty one), else the oldest.
+	Suggestion* slot = &_suggestions[0];
+	for (auto& s : _suggestions) {
+		if (s.frame <= _last_received_input) {
+			slot = &s;
+			break;
+		}
+		if (s.seq < slot->seq) {
+			slot = &s;
+		}
+	}
+	slot->frame = frame;
+	slot->seq = seq;
+	slot->input.assign(input, input + _input_size);
+	++_sugg_stats.received;
+}
+
+const u8* Gekko::InputBuffer::InputOf(Frame frame) const
+{
+	return frame == GameInput::NULL_FRAME ? _empty_input.get() : _inputs[frame % _buff_size]->input.get();
+}
+
+void Gekko::InputBuffer::Predict(Frame frame, Frame last, bool first)
+{
+	const Suggestion* best = nullptr;
+	for (const auto& s : _suggestions) {
+		if (s.frame > last && s.frame <= frame && (!best || s.seq > best->seq)) {
+			best = &s;
+		}
+	}
+	const u8* in = best ? best->input.data() : InputOf(last);
+	const u32 idx = frame % _buff_size;
+	_inputs[idx]->Init(frame, const_cast<u8*>(in), _input_size);
+	if (first) {
+		std::memcpy(&_shown[static_cast<size_t>(idx) * _input_size], in, _input_size);
+		_sugg_stats.changed += best && std::memcmp(in, InputOf(last), _input_size) != 0;
+	}
 }
 
 void Gekko::InputBuffer::SetDelayFillInput(const u8* input)
@@ -74,23 +146,55 @@ void Gekko::InputBuffer::AddInput(Frame frame, u8* input)
         return;
     }
 
+    // the suggestion for exactly this frame, checked once against its real input (Slippi's
+    // input suggestions): a player whose suggestions keep doing worse than their last input
+    // is not followed any more.
+    const GekkoSuggestionJudge judge = s_judge.load(std::memory_order_relaxed);
+    if (judge && !_sugg_ignored && _last_received_input != GameInput::NULL_FRAME) {
+        _worse_bucket = _worse_bucket > 0 ? _worse_bucket - 1 : 0;
+        const Suggestion* best = nullptr;
+        for (const auto& s : _suggestions) {
+            if (s.frame == frame && (!best || s.seq > best->seq)) {
+                best = &s;
+            }
+        }
+        if (best) {
+            const u32 cost = judge(InputOf(_last_received_input), best->input.data(), input);
+            _worse_bucket += cost * JUDGE_DRAIN;
+            _sugg_stats.worse += cost > 0;
+            if (_worse_bucket > JUDGE_IGNORE_AFTER * JUDGE_DRAIN) {
+                _sugg_ignored = true;
+                _suggestions = {};
+                ++_sugg_stats.ignored;
+            }
+        }
+    }
+
     const Frame idx = frame % _buff_size;
     if (_input_prediction_window > 0 && _first_predicted_input == frame) {
-        if (!_inputs[idx]->IsEqualTo(input)) {
+        const bool right = _inputs[idx]->IsEqualTo(input);
+        // without suggestions every prediction is the last input (a wrong one refills them).
+        const bool last_right = std::memcmp(InputOf(_last_received_input), input, _input_size) == 0;
+        ++_sugg_stats.checked;
+        _sugg_stats.wrong += !right;
+        _sugg_stats.helped += right && !last_right;
+        _sugg_stats.hurt += !right && last_right;
+        _sugg_stats.shown_wrong +=
+            std::memcmp(&_shown[static_cast<size_t>(idx) * _input_size], input, _input_size) != 0;
+        if (!right) {
             // incorrect prediction
             _incorrent_predicted_inputs.push_back(_first_predicted_input);
 
-            // last prediction frame ? add correct input and reset prediction
+            // add correct input; last prediction frame ? reset prediction
+            _inputs[idx]->Init(frame, input, _input_size);
             if (_first_predicted_input == _last_predicted_input) {
-                _inputs[idx]->Init(frame, input, _input_size);
                 ResetPrediction();
             } else {
 
-                // repeat the correct inputs instead of the wrong one.
-                const Frame diff = _last_predicted_input - _first_predicted_input;
-                for (Frame i = 0; i <= diff; i++) {
-                    const Frame pred_frame = _first_predicted_input + i;
-                    _inputs[pred_frame % _buff_size]->Init(pred_frame, input, _input_size);
+                // predict the frames after it again from the correct input (the rollback re-runs
+                // them all).
+                for (Frame p = frame + 1; p <= _last_predicted_input; p++) {
+                    Predict(p, frame, false);
                 }
 
                 // move along this frame since the previous is verified now.
@@ -247,15 +351,8 @@ bool Gekko::InputBuffer::HandleInputPrediction(Frame frame)
 		             _first_predicted_input, _last_predicted_input);
 	}
 	if (_first_predicted_input == GameInput::NULL_FRAME) {
-		// if the prev frame happends to be an empty frame add a dummy input
-		if (_inputs[prev_input % _buff_size]->frame == GameInput::NULL_FRAME) {
-			_inputs[frame % _buff_size]->Init(frame, _empty_input.get(), _input_size);
-		}
-		else {
-			// predict by copying the previous input
-			_inputs[frame % _buff_size]->Init(_inputs[prev_input % _buff_size].get());
-			_inputs[frame % _buff_size]->frame = frame;
-		}
+		// predict with the last input (an empty one if none came), or a suggestion.
+		Predict(frame, _last_received_input, true);
 		// set prediction values
 		_first_predicted_input = frame;
 		_last_predicted_input = frame;
@@ -265,8 +362,7 @@ bool Gekko::InputBuffer::HandleInputPrediction(Frame frame)
 		// continue predicting if the diff is within the window
 		const u32 diff = _last_predicted_input - _first_predicted_input + 1;
 		if (_input_prediction_window > diff) {
-			_inputs[frame % _buff_size]->Init(_inputs[prev_input % _buff_size].get());
-			_inputs[frame % _buff_size]->frame = frame;
+			Predict(frame, _last_received_input, true);
 			// move the last predicted input along with the requested frame
 			_last_predicted_input = frame;
 			return true;

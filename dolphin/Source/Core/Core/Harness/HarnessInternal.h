@@ -51,6 +51,11 @@ struct ScriptTiming
   u64 ends_at;
 };
 // start: nullopt means "next poll". Returns an error message on failure.
+// pad_script_timing: scripts submitted from now on step with the host clock (one entry a field,
+// 59.94 Hz) from a moment a random fraction of a field after they are submitted, instead of with
+// the game's reads, as a player's presses fall anywhere between two reads (`timed`); `seed` seeds
+// those fractions.
+void SetScriptTiming(bool timed, u64 seed);
 std::optional<std::string> PadScript(int port, std::vector<GCPadStatus> timeline,
                                      std::optional<u64> start, ScriptTiming* timing);
 struct ScriptStatus

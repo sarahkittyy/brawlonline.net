@@ -1,8 +1,11 @@
 #pragma once
 
+#include "gekkonet.h"
 #include "gekko_types.h"
+#include <array>
 #include <deque>
 #include <memory>
+#include <vector>
 
 namespace Gekko {
 	struct GameInput {
@@ -62,6 +65,12 @@ namespace Gekko {
 
         void ClearIncorrectFrames(Frame clear_limit);
 
+		// input suggestions (a remote player's, gekko_add_input_suggestion): its input of `frame`
+		// and later frames unless it changes again; predictions use the newest one (highest `seq`).
+		void AddSuggestion(Frame frame, u32 seq, const u8* input);
+
+		const GekkoSuggestionStats& GetSuggestionStats() const { return _sugg_stats; }
+
 	private:
 		void ResetPrediction();
 
@@ -71,7 +80,32 @@ namespace Gekko {
 
 		bool CanPredictInput();
 
+		// predicts `frame` (its slot) when the last input received is that of frame `last`: the
+		// newest suggestion for a frame after `last` and no later than `frame`, else `last`'s input.
+		// `first`: the frame's first prediction (the one the screen shows), not a refill.
+		void Predict(Frame frame, Frame last, bool first);
+
+		// frame `frame`'s input (an empty one for NULL_FRAME).
+		const u8* InputOf(Frame frame) const;
+
 	private:
+		struct Suggestion {
+			Frame frame = GameInput::NULL_FRAME;
+			u32 seq = 0;
+			std::vector<u8> input;
+		};
+		std::array<Suggestion, 8> _suggestions;
+
+		// per slot: the frame's first prediction (the stats' shown_wrong).
+		std::vector<u8> _shown;
+
+		GekkoSuggestionStats _sugg_stats{};
+
+		// the judge's bucket (gekko_set_suggestion_judge), and whether it stopped this player's
+		// suggestions.
+		u32 _worse_bucket = 0;
+		bool _sugg_ignored = false;
+
 		bool _running_ahead;
 
 		u8 _input_delay;

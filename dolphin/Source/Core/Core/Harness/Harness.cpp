@@ -80,6 +80,11 @@ struct PortState
   // new script starts. Empty if the port was not overridden then (real controller).
   std::optional<GCPadStatus> gap;
 
+  // A script that steps with the host clock (SetScriptTiming): entry i from script_t0 + i fields.
+  bool script_timed = false;
+  Clock::time_point script_t0{};
+  Clock::time_point script_submitted{};
+
   // pad_counter: the buttons count periods of the host clock since t0.
   struct Counter
   {
@@ -99,6 +104,20 @@ struct PortState
 
 std::mutex s_pad_mutex;
 std::array<PortState, 4> s_ports;
+
+// SetScriptTiming (under s_pad_mutex).
+bool s_timed_scripts = false;
+u64 s_timed_rng = 0x9E3779B97F4A7C15ull;
+constexpr auto FIELD = std::chrono::duration<double, std::micro>(1e6 * 1001.0 / 60000.0);
+
+u64 NextTimedRandom()
+{
+  // splitmix64
+  u64 z = (s_timed_rng += 0x9E3779B97F4A7C15ull);
+  z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ull;
+  z = (z ^ (z >> 27)) * 0x94D049BB133111EBull;
+  return z ^ (z >> 31);
+}
 
 GCPadStatus NeutralPad()
 {
@@ -120,12 +139,34 @@ GCPadStatus CounterPad(const PortState::Counter& c, Clock::time_point t)
   return pad;
 }
 
+// Where a timed script is at `t`, in entries (negative before it starts).
+double TimedScriptPos(const PortState& state, Clock::time_point t)
+{
+  return std::chrono::duration<double, std::micro>(t - state.script_t0) / FIELD;
+}
+
+// A timed script's pad at `t` (s_pad_mutex held): before it starts, what the port presented when it
+// was submitted; after its last entry, the persistent pad_set value or neutral.
+GCPadStatus TimedScriptPad(const PortState& state, Clock::time_point t)
+{
+  const double pos = TimedScriptPos(state, t);
+  if (pos < 0)
+    return state.gap ? *state.gap : NeutralPad();
+  if (pos < static_cast<double>(state.script.size()))
+    return state.script[static_cast<size_t>(pos)];
+  return state.set ? *state.set : NeutralPad();
+}
+
 // s_pad_mutex must be held.
 void RecomputePort(int port, u64 poll_index)
 {
   PortState& state = s_ports[port];
+  const Clock::time_point now = Clock::now();
 
-  if (state.script_active && poll_index >= state.script_start + state.script.size())
+  const bool script_over =
+      state.script_timed ? TimedScriptPos(state, now) >= static_cast<double>(state.script.size()) :
+                           poll_index >= state.script_start + state.script.size();
+  if (state.script_active && script_over)
   {
     state.script_active = false;
     state.script.clear();
@@ -138,6 +179,11 @@ void RecomputePort(int port, u64 poll_index)
   {
     state.overriding = true;
     state.current = CounterPad(*state.counter, Clock::now());
+  }
+  else if (state.script_active && state.script_timed)
+  {
+    state.overriding = true;
+    state.current = TimedScriptPad(state, now);
   }
   else if (state.script_active && poll_index >= state.script_start)
   {
@@ -225,6 +271,8 @@ void ApplyPadOverrideSlow(int port, GCPadStatus* status)
   const PortState& state = s_ports[port];
   if (state.counter)
     *status = CounterPad(*state.counter, Clock::now());
+  else if (state.script_active && state.script_timed)
+    *status = TimedScriptPad(state, Clock::now());
   else if (state.overriding)
     *status = state.current;
 }
@@ -237,8 +285,10 @@ std::optional<GCPadStatus> PadOverrideAtSlow(int port, Clock::time_point t)
   const PortState& state = s_ports[port];
   if (state.counter)
     return CounterPad(*state.counter, t);
+  if (state.script_active && state.script_timed && t >= state.script_submitted)
+    return TimedScriptPad(state, t);
   // A script steps with the game's reads, not with time: its current entry.
-  if (!state.script_active)
+  if (!state.script_active || state.script_timed)
   {
     if (const std::optional<GCPadStatus>* then = state.history.At(t))
       return *then;
@@ -505,6 +555,13 @@ void PadClear(int port)
   RecomputePort(port, s_current_poll_index);
 }
 
+void SetScriptTiming(bool timed, u64 seed)
+{
+  std::lock_guard lk(s_pad_mutex);
+  s_timed_scripts = timed;
+  s_timed_rng = seed ^ 0x9E3779B97F4A7C15ull;
+}
+
 void PadCounter(int port, double rate_hz, std::vector<u16> buttons)
 {
   std::lock_guard lk(s_pad_mutex);
@@ -532,12 +589,21 @@ std::optional<std::string> PadScript(int port, std::vector<GCPadStatus> timeline
 
   PortState& ps = s_ports[port];
   // Bridge the polls until the new script starts with what the port presents now.
-  if (ps.overriding)
+  if (ps.script_active && ps.script_timed)
+    ps.gap = TimedScriptPad(ps, Clock::now());
+  else if (ps.overriding)
     ps.gap = ps.current;
   else
     ps.gap.reset();
   ps.script = std::move(timeline);
   ps.script_start = starts_at;
+  ps.script_timed = s_timed_scripts && !start;
+  if (ps.script_timed)
+  {
+    ps.script_submitted = Clock::now();
+    const double frac = static_cast<double>(NextTimedRandom() >> 11) * 0x1p-53;  // [0, 1)
+    ps.script_t0 = ps.script_submitted + std::chrono::duration_cast<Clock::duration>(FIELD * frac);
+  }
   ps.script_active = !ps.script.empty();
   if (!ps.script_active && !ps.set)
     ps.neutral = true;

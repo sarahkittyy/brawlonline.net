@@ -227,6 +227,40 @@ bool Gekko::GameSession::AcceptLateInput(i32 player, i32 frame)
     return false;
 }
 
+void Gekko::GameSession::AddInputSuggestion(i32 player, i32 frame, u32 seq, const void* input)
+{
+    // a remote player's only; a disconnected player's inputs are settled by claims.
+    if (_msg.GetDisconnectHoldFrame() != INT32_MAX) {
+        return;
+    }
+    for (auto& remote : _msg.remotes) {
+        if (remote->handle == player) {
+            _sync.AddSuggestion(player, frame, seq, (const u8*)input);
+            return;
+        }
+    }
+}
+
+void Gekko::GameSession::SuggestionStats(GekkoSuggestionStats* stats)
+{
+    for (auto& remote : _msg.remotes) {
+        const GekkoSuggestionStats* s = _sync.GetSuggestionStats(remote->handle);
+        if (!s) {
+            continue;
+        }
+        stats->received += s->received;
+        stats->stale += s->stale;
+        stats->changed += s->changed;
+        stats->checked += s->checked;
+        stats->wrong += s->wrong;
+        stats->helped += s->helped;
+        stats->hurt += s->hurt;
+        stats->shown_wrong += s->shown_wrong;
+        stats->worse += s->worse;
+        stats->ignored += s->ignored;
+    }
+}
+
 void Gekko::GameSession::SetLocalDelayInput(i32 player, const void* input)
 {
     for (u32 i = 0; i < _msg.locals.size(); i++) {

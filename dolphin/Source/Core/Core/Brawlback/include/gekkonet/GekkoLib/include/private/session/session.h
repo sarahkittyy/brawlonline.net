@@ -21,6 +21,8 @@ struct GekkoSession {
     virtual void ReceiveOnly() {}
     virtual bool ReceivedInput(i32 player, i32 frame, void* input) { return false; }
     virtual bool AcceptLateInput(i32 player, i32 frame) { return false; }
+    virtual void AddInputSuggestion(i32 player, i32 frame, u32 seq, const void* input) {}
+    virtual void SuggestionStats(GekkoSuggestionStats* stats) {}
     virtual void SetAdvantageDelayBias(i32 frames) {}
     virtual void SetFrameLimit(i32 frame) {}
     virtual void SetLocalDelayInput(i32 player, const void* input) {}

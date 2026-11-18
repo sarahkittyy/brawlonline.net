@@ -234,3 +234,18 @@ void Gekko::SyncSystem::ClearIncorrectFramesUpTo(Frame clear_limit)
     }
 }
 
+void Gekko::SyncSystem::AddSuggestion(Handle player, Frame frame, u32 seq, const u8* input)
+{
+    if (player >= _num_players || player < 0) {
+        return;
+    }
+    _input_buffers[player].AddSuggestion(frame, seq, input);
+}
+
+const GekkoSuggestionStats* Gekko::SyncSystem::GetSuggestionStats(Handle player) const
+{
+    if (player >= _num_players || player < 0) {
+        return nullptr;
+    }
+    return &_input_buffers[player].GetSuggestionStats();
+}

@@ -1603,6 +1603,57 @@ Depth-1 rollbacks gain nothing (their only re-run pass is the one that is seen).
 
 **Tests.** gtests `FixLightPresses.APadPlayingAnotherPortTakesThatPortsLightPresses` and `HostPadReadTest.ALocalPadPlayingAnotherPortGetsThatPortsLightPresses` (P+'s hooks in place, pad 0 on Shield, pad 1 R on Jump, pad 0 playing port 2: a light R press is in the decode and the pass, which still match; swapped layouts: a light press goes, a digital one stays), with the other HostPadRead and HostDecodePadSlot tests (13 pass; a scratch tests.exe from build/v6's objects). Not tested: a two-instance session, a real controller, macOS / Linux.
 
+## Input suggestions: a press reaches the other players between frames (GitHub issue #35, 2026-11-17)
+
+The game reads a controller once a frame, so a press made just after a read waits almost a frame
+before its input goes out, and meanwhile the other players predict the old input and later roll
+back. Now, when the local GameCube controller changes in a way that can start an action, the change
+goes to the other players at once as a suggestion ('S' datagram, `Gprb::Suggest`), tagged with the
+frame whose read will first see it (from the reads' scheduled instants). A machine that has to
+predict that player uses the newest suggestion for the frame instead of the last input
+(`gekko_add_input_suggestion`). Suggestions only change predictions: every prediction is still
+checked against the real input, so the game always runs on the real inputs and no checksum,
+replay or spectate stream changes. This is Arte's "subframe rollback" (Kristal, 2021), the same
+design as Slippi 3.7's input suggestions and Melee Unlocked's early inputs.
+
+- **What goes out** (`Meaningful`): a press or release of A, B, X, Y, Z, L, R or Start; a trigger
+  crossing P+'s light shield (45); a stick crossing a line P+ acts on, either way. The lines were
+  measured in the game (`harness/tools/pplus_stick_lines.py`): main stick x 28 walk/tilt, 71 dash,
+  78 forward smash; y 28 tilt, 68 tap jump, -61 crouch, 71 smash; C-stick 51. After a crossing,
+  later changes before that frame's read follow, at most one every 2 ms (a prediction is right
+  only if every byte is, and a stick keeps moving after it crosses a line). Stick noise inside a
+  zone is never sent. `PPR_GPRB_SUGGEST_RULES=all|cross|follow` (default `follow`).
+- **Who sends**: a GameCube adapter's reports (the adapter thread's hook), or for a controller
+  mapped in Dolphin a sampler thread at up to 1000 Hz (about 460 Hz on Windows) that runs only
+  while some peer takes suggestions. Wii controllers send none but use the others'.
+- **Old builds**: a player says in its state message that it takes suggestions (`sg`); nobody
+  else gets any, and a build without them plays as before.
+- **Trust**: each suggestion is judged once against the real input of its frame
+  (`gekko_set_suggestion_judge`, `Suggest::WorseCost`): a wrong button the last input had right
+  costs 3, a stick or trigger on the wrong side of a line where the last input was on the right
+  one costs 1; a bucket drains one per frame and holds a point for 200 frames; over 15 points the
+  player's suggestions are not used for the rest of the session (Slippi's rule, weighed by zones
+  instead of bytes: a stick that jitters by a unit made honest suggestions "worse" by bytes). A
+  lying peer (`PPR_GPRB_SUGGEST_LIE=1`) was cut off within seconds.
+- **Measured** (harness, Direct games through netsim, each player replaying one port of a real
+  Unranked game's inputs at random points between reads; 4 games each, on/off at random):
+  frames whose fighter action differed between what was shown and what the rollback ran
+  (`gprb_status` `pops`, new): -47% at 40 ms (delay 1), -42% at 25 +- 6 ms, -19% at 80 ms,
+  -32% at 110 ms (delay 2), -22% at 170 ms (delay 3), -22% with Wi-Fi interference bursts.
+  Rollbacks per input change -3..-14% (over 90% of rollbacks change nothing on screen: a stick a
+  few units off). +17-18% packets (~11 suggestions a second a player). Smoothness the same on
+  clean links. On links whose delay is drawn per packet with a heavy tail (in-game jitter
+  40+ ms, already 2-7 s of waits a minute, 0.38% of prod's games in Nov 2026) frames come out
+  less evenly (present interval sd +25-50%), caused by the extra packets themselves (receiving
+  them unused did the same; sampling without sending did not). 85 games, 719,657 confirmed
+  frames compared, 0 mismatches.
+- **Cost**: GekkoNet +60-90 ns per remote player per frame; the filter 7 ns, the judge 11 ns;
+  the mapped-controller sampler ~10 us a sample (0.5% of a core) and the SI device update's p99
+  +6-14 us while it runs.
+- **Not tested**: real controllers and adapters (a digital controller on an overclocked adapter
+  can report stray states, per Arte; the judge then stops following it), macOS / Linux / Steam
+  Deck in a game, 3-4 players beyond sync (a 4-player session stayed in sync).
+
 ## Open issues
 
 Resolved in Phase 6: the dual-core divergence (ground-collision list heads, gp-v11), the Peach article crash and the `GXWaitDrawDone` stalls (the GX FIFO ring tail), the 11-frame sync-test bursts (camera quake controller, gp-v12), stopping and re-attaching sounds. Resolved in Phase 8: every failure of the coverage sweep (gp-v13 to gp-v19, the file IO wait). Resolved in Phase 9: the nondeterministic render/effect hang (a load read the base snapshot while the eviction job was still merging into it). Resolved in Phase 12: the Smashville desync from frame 0 (issue 7).

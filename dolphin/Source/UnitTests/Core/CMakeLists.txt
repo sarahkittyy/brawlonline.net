@@ -64,6 +64,14 @@ target_include_directories(OnlineSecurityTest PRIVATE
 )
 target_compile_definitions(OnlineSecurityTest PRIVATE GEKKONET_STATIC GEKKONET_NO_ASIO)
 
+# Input suggestions in GekkoNet's input buffer (Core/Rollback/InputSuggest).
+add_dolphin_test(InputSuggestTest Rollback/InputSuggestTest.cpp)
+target_include_directories(InputSuggestTest PRIVATE
+  ${CMAKE_SOURCE_DIR}/Source/Core/Core/Brawlback/include/gekkonet/GekkoLib/include
+  ${CMAKE_SOURCE_DIR}/Source/Core/Core/Brawlback/include/gekkonet/GekkoLib/include/private
+)
+target_compile_definitions(InputSuggestTest PRIVATE GEKKONET_STATIC GEKKONET_NO_ASIO)
+
 # The SD card of a whole-machine session (Core/Rollback/MachineSDCard): the throwaway layer and its
 # rollback, a joiner on the session's card, and hostile manifests, requests and chunks.
 add_dolphin_test(MachineSDCardTest MachineSDCardTest.cpp)

@@ -48,6 +48,8 @@ namespace Gekko {
         bool ReceivedInput(i32 player, i32 frame, void* input) override;
 
         bool AcceptLateInput(i32 player, i32 frame) override;
+        void AddInputSuggestion(i32 player, i32 frame, u32 seq, const void* input) override;
+        void SuggestionStats(GekkoSuggestionStats* stats) override;
 
         void SetAdvantageDelayBias(i32 frames) override;
 
