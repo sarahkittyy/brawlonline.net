@@ -6,6 +6,8 @@
  * file Dolphin writes (`mods-room.json`).
  */
 
+import type { PlusFamilyLaunchResult } from "../types";
+
 /** What a player plays with (design §6.2): a GameCube controller or a Wii Remote. Dolphin plays
  * the first one of the kind plugged in, of the ones set up in its Controllers settings. */
 export type ModsController = "gc" | "wiimote";
@@ -342,6 +344,11 @@ export interface ModsService {
   /** Hashes the build's parts (when they changed since): progress comes as events. */
   hashBuild(id: string): Promise<ModBuild>;
   host(options: ModsHostOptions): Promise<void>;
+  /** The supported mod of Project+ the game is (mm's id and its name; plus_family.ts), or null:
+   * such a game also plays online in P+'s own menus, with `playOnline`. */
+  onlineBuildOf(id: string): Promise<{ id: string; name: string } | null>;
+  /** Starts the game in the P+ online flow: matchmaking and rooms with players of its build. */
+  playOnline(id: string): Promise<PlusFamilyLaunchResult>;
   join(options: ModsJoinOptions): Promise<ModsJoinResult>;
   /** Joins the room with this code with the game whose hash it needs, if the player has it. */
   joinByCode(options: ModsJoinByCodeOptions): Promise<ModsJoinByCodeResult>;

@@ -15,6 +15,7 @@ room games need the real Dolphin and servers (harness/tests/test_rooms_game.py).
 
 from __future__ import annotations
 
+import os
 import struct
 from pathlib import Path
 import time
@@ -128,6 +129,21 @@ class RoomSim:
         # builds it (None: answered unavailable).
         self.special_card: str | None = str(Path(__file__).resolve().parents[2] / "run" / "template-user" / "Wii" / "sd.raw")
         self.special_writes = 0
+        # CMD_MENU_ARCHIVE: the rules menu's archive from the build's own card (the harness's
+        # template and PPHARNESS_MOD_FOLDER), as Dolphin reads it from the card it boots.
+        self.menu_card: str | None = str(self._template_card())
+        self.menu_writes = 0
+        # The build's layout as Dolphin writes it into the plugin's LAYOUT from mm's hello-resp
+        # (ppom.layout_of): the build's card folder is the harness's PPHARNESS_MOD_FOLDER, P+'s
+        # without it. Written once per block (a game booted again has a new one).
+        self.layout = ppom.layout_of(os.environ.get("PPHARNESS_MOD_FOLDER") or "Project+")
+        self.layout_block = 0
+
+    @staticmethod
+    def _template_card() -> Path:
+        t = os.environ.get("PPHARNESS_TEMPLATE")
+        root = Path(__file__).resolve().parents[2]
+        return (Path(t) if t else root / "run" / "template-user") / "Wii" / "sd.raw"
 
     # ---- the room model -------------------------------------------------------------------
     def me(self) -> int:
@@ -439,6 +455,8 @@ class RoomSim:
         c.write_mem(b.session, struct.pack(">I", seq + 1))
         c.write_mem(b.local + 5, bytes(lo[5:6]))
         c.write_mem(b.local + ppom.L_ROOM_JOIN, bytes(lo[ppom.L_ROOM_JOIN:ppom.L_ROOM + 1]))
+        if self.layout_block != b.addr and ppom.write_layout(c, b, self.layout):
+            self.layout_block = b.addr
 
     def screen(self) -> int:
         return self.c.read_mem(self.b.local + ppom.L_SCREEN, 1)[0]
@@ -462,6 +480,8 @@ class RoomSim:
                     pass
                 elif cmd == 0xD2:   # v9: CMD_SPECIAL_ASSETS {addr, capacity, nonce}
                     self.pending.append((seq, cmd, self.special_assets(pl)))
+                elif cmd == 0xD3:   # CMD_MENU_ARCHIVE {addr, capacity, nonce}
+                    self.pending.append((seq, cmd, self.menu_archive(pl)))
                 elif cmd == ppom.CMD_RULESETS:   # v6: RulesetList
                     body = bytearray(4 + 15 * 32)
                     n = min(15, len(self.rulesets))
@@ -475,7 +495,7 @@ class RoomSim:
                 ppom.consume(self.c, self.b, seq)
             if self.pending and rc == rs:
                 seq, cmd, body = self.pending.pop(0)
-                status = 0xFF if (cmd not in (0xB9, ppom.CMD_ROOM, ppom.CMD_RULESETS, 0xD2)) else 0
+                status = 0xFF if (cmd not in (0xB9, ppom.CMD_ROOM, ppom.CMD_RULESETS, 0xD2, 0xD3)) else 0
                 ppom.write_response(self.c, self.b, seq, cmd, body, status)
             self.lock_in()
             view = (self.phase, repr(self.room), self.room_join_counter)
@@ -503,6 +523,24 @@ class RoomSim:
             self.c.write_mem(addr, bundle)
             self.special_writes += 1
         return bytes([2, 1 if written else 0, 0, 0]) + struct.pack(">I", len(bundle))
+
+    def menu_archive(self, pl: bytes) -> bytes:
+        """Dolphin's CMD_MENU_ARCHIVE: the build's rules archive into the game's buffer when it is
+        big enough and still the game's (its magic and nonce), and {state, written, pad, size}."""
+        import special_bundle
+        addr, cap, nonce = struct.unpack_from(">III", pl, 0)
+        try:
+            arc = special_bundle.menu_archive_from_card(self.menu_card or "",
+                                                        os.environ.get("PPHARNESS_MOD_FOLDER") or "Project+")
+        except (OSError, ValueError):
+            return bytes([3, 0, 0, 0]) + struct.pack(">I", 0)
+        head = self.c.read_mem(addr, 8) if 0x80000000 <= addr < 0x94000000 and cap >= 8 else b""
+        written = len(arc) <= cap and head == struct.pack(">II", special_bundle.MENU_MAGIC, nonce)
+        if written:
+            for off in range(0, len(arc), 0x10000):
+                self.c.write_mem(addr + off, arc[off:off + 0x10000])
+            self.menu_writes += 1
+        return bytes([2, 1 if written else 0, 0, 0]) + struct.pack(">I", len(arc))
 
     def room_ops(self, op: str) -> list[bytes]:
         """Payloads of the CMD_ROOM requests with this op seen so far."""

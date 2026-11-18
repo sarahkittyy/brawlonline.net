@@ -218,13 +218,17 @@ struct MatchRow {
     status: String,
     winner: Option<Uuid>,
     end_reason: Option<String>,
+    /// The build of the game it was played on: empty for P+ (`migrations/0038_match_game.sql`).
+    game: String,
 }
 
 async fn match_row(pool: &PgPool, match_id: &str) -> sqlx::Result<Option<MatchRow>> {
-    sqlx::query_as("SELECT mode, players, created_at, status, winner, end_reason FROM mm_matches WHERE match_id = $1")
-        .bind(match_id)
-        .fetch_optional(pool)
-        .await
+    sqlx::query_as(
+        "SELECT mode, players, created_at, status, winner, end_reason, game FROM mm_matches WHERE match_id = $1",
+    )
+    .bind(match_id)
+    .fetch_optional(pool)
+    .await
 }
 
 async fn reports(
@@ -315,7 +319,7 @@ pub async fn settle(
 ) -> sqlx::Result<Option<Outcome>> {
     let mut tx = pool.begin().await?;
     let row: Option<MatchRow> = sqlx::query_as(
-        "SELECT mode, players, created_at, status, winner, end_reason FROM mm_matches WHERE match_id = $1 FOR UPDATE",
+        "SELECT mode, players, created_at, status, winner, end_reason, game FROM mm_matches WHERE match_id = $1 FOR UPDATE",
     )
     .bind(match_id)
     .fetch_optional(&mut *tx)
@@ -621,7 +625,10 @@ pub async fn report_game(State(state): State<AppState>, Json(req): Json<ReportGa
         tracing::info!(match_id = %req.match_id, mode = row.mode, game = req.game_index, %uid, winner = ?winner, "game reported");
     }
     if !is_ranked {
-        if let (crate::unranked::MODE_UNRANKED, Some(w), &[a, b]) = (row.mode, winner, &row.players[..]) {
+        // (Unranked's hidden rating is P+'s: a mod's games, other characters and stages, leave it.)
+        if let (crate::unranked::MODE_UNRANKED, Some(w), &[a, b], true) =
+            (row.mode, winner, &row.players[..], row.game.is_empty())
+        {
             let loser = if w == a { b } else { a };
             let rated =
                 crate::unranked::rate_game(&state.pool, &req.match_id, req.game_index as i32, w, loser, Utc::now());

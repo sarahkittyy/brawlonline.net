@@ -23,6 +23,7 @@
 #include "Common/Config/Config.h"
 #include "Common/FileUtil.h"
 #include "Common/Logging/Log.h"
+#include "Common/VariantUtil.h"
 
 #include "Core/AchievementManager.h"
 #include "Core/Boot/Boot.h"
@@ -39,6 +40,7 @@
 #include "Core/HW/WiimoteReal/WiimoteReal.h"
 #include "Core/Movie.h"
 #include "Core/NetPlayProto.h"
+#include "Core/Online/GameBuild.h"
 #include "Core/Rollback/MachineSession.h"
 #include "Core/System.h"
 #include "Core/WiiRoot.h"
@@ -58,6 +60,13 @@ bool BootCore(Core::System& system, std::unique_ptr<BootParameters> boot,
 
   if (!StartUp.SetPathsAndGameMetadata(system, *boot))
     return false;
+
+  // The file this boot runs (a launcher .dol, or the disc): part of the build's name online.
+  Online::GameBuild::OnBoot(std::visit(
+      overloaded{[](const BootParameters::Disc& disc) { return disc.path; },
+                 [](const BootParameters::Executable& exe) { return exe.path; },
+                 [](const auto&) { return std::string(); }},
+      boot->parameters));
 
   // Movie settings
   auto& movie = system.GetMovie();

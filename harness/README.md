@@ -306,6 +306,87 @@ The model tests check loss, burst length, duplication and reordering over 100k-3
 
 For the two noisiest presets, FIFO compression of a 60 packets/s stream adds about 8 ms (`bad_wifi`) and about 34 ms (`awful`) to the median RTT. Use `--order none` when you need the exact distribution per packet.
 
+## Mods of P+
+
+P+'s online tests also run on a mod of P+ that plays in the P+ online flow (Cobalt, Project+ Ex,
+REX; `docs/design/pplus-mods.md`). The mod boots from P+'s launcher files on its own SD card, or
+from its own launchers (REX):
+
+```
+# once per build: the P+ template with the mod's card (prints its folder and its keys for mm)
+python harness/tools/mod_template.py --card "<mod>/sd.raw" --out run/mods/cobalt-1.34
+
+# the online tests on it, six files at a time, and on stock P+ as the control
+python harness/tools/mod_suite.py --template run/mods/cobalt-1.34 --out run/mods/out/cobalt
+python harness/tools/mod_suite.py --out run/mods/out/pplus
+python harness/tools/mod_suite.py --summary run/mods/out/cobalt --control run/mods/out/pplus
+
+# or any test by hand
+PPHARNESS_TEMPLATE=run/mods/cobalt-1.34 python -m pytest harness/tests/test_waiting_room.py
+
+# a build with launchers of its own: the files from its card's root into the template's Launcher
+# folder, its game settings with the MMU off
+python harness/tools/mod_template.py --card "<rex>/sd.raw" --out run/mods/rex-0.5 \
+    --offline-launcher "REX Offline Launcher.elf" --netplay-launcher "REX Netplay Launcher.elf"
+python harness/tools/mod_suite.py --template run/mods/rex-0.5 --out run/mods/out/rex
+```
+
+`--split` runs every test as a job of its own instead of a file's tests one after another (a
+file like `test_rooms_game.py` takes 35-50 minutes alone): on a 32-thread PC the whole scope (188
+tests) runs in about 25 minutes per build at `--jobs 16 --split`. Keep to one build at a time at
+that level: two mods side by side at 9 jobs each (about 40 games at once, load 32 on 32 threads)
+made tests that pass alone fail with "screenshot was not written" and steering timeouts. The
+first jobs start `--stagger` seconds apart (default 4), as games all booting at once time out the
+harness's start probe. A target that has no result after `--timeout` seconds (default 1800) is
+stopped with its games and counted as failed: a game that hung would otherwise hold its job.
+
+A template says which build it is: `mod_template.py` writes `<template>/build.json` (the build's
+folder on its card, and its own launcher files when it has them), and the harness sets the build
+from it when it is imported (`ppharness/paths.py`), so `PPHARNESS_TEMPLATE` alone names the build
+for the tests, the tools and `mod_suite.py`. (`PPHARNESS_MOD_FOLDER`, `PPHARNESS_OFFLINE_LAUNCHER`
+and `PPHARNESS_NETPLAY_LAUNCHER` are what it sets; set by hand they win, for a template without
+the file.) On a mod:
+
+- the plugin is the one built for the build's kind: `ppharness.paths.plugin_path()` takes the
+  build's `plugin` from `server/config/games.json` by its folder (`PPOnline-pex.rel` for Cobalt
+  and Project+ Ex, `PPOnline-rex.rel` for REX; `game-code/build.sh` builds all three), and
+  `plugin_map()` the link map beside it, whose addresses differ between the three.
+  `PPHARNESS_PLUGIN` (a frozen copy) still wins; `PPHARNESS_PLUGIN_VARIANT` picks another kind's
+  (`test_build_profile.py` puts P+'s own on a mod and sees its online modes locked);
+- it goes to `/<folder>/pf/plugins` as `PPOnline.rel` (`tools/sdcard/patch_sd.py PLUGIN_DIR`);
+- `tests/mod_adapt.py` replaces the helpers of the collected tests that go by P+'s screens and
+  tables (cursor picks by place, P+'s slot table and Code Menu size, the alt costume words, the
+  card folder, the stage select's pages) with ones that read the build. What a test asserts about
+  the game stays;
+- the tests' fake players (`mmclient`) name the mod's build (`MMCLIENT_GAME`), as mm takes into a
+  room and pairs only players of one build;
+- the backend's mm runs with the games table without the mods' own stage lists (`backend.py`), so
+  the tests' rules reach every build. `PPHARNESS_GAMES_FILE` gives mm another table.
+
+- the rulesets the tests publish for their rooms are the mod's (`game`: a room plays its own
+  build's rulesets only);
+- the scripted Dolphin of the room UI tests (`tools/gamecode/roomsim.py`) writes the build's
+  layout into the plugin's LAYOUT (`ppom.layout_of`: the games table's `layout` of that build), as
+  Dolphin does from mm's `hello-resp`, and answers the rules menu's archive (`CMD_MENU_ARCHIVE`)
+  from the template's card (`special_bundle.menu_archive_from_card`), as Dolphin does from the
+  card it boots.
+
+A test of files a build may not have says so: `@pytest.mark.needs_files("pf/fighter/fox/FitFoxAltZ.pac")`
+skips it on a card without them (REX has no alt costumes; `mod_adapt.card_has`).
+
+What a build plays decides which tests are its own. `@pytest.mark.pplus_only("Ranked")` (or "The
+2v2 queue") marks a test of something only Project+ has: it is skipped on a mod, where mm
+refuses that search by name (`test_waiting_room.py::test_a_mods_ranked_search_is_refused_by_name`,
+`@pytest.mark.mods_only`: skipped on P+).
+
+A test should read what differs between builds from the running game: a costume's file from the
+build's costume list (`test_special_modes.costume_files`), a stage's place from its stage pages
+(`ppharness.brawl.read_stage_pages`), a card's colour by hue (`test_rooms_ui.plate_colours`), the
+cards' name plates from the plugin's table (`test_room_sit_out_ui.card_plates`). A test that
+expects P+'s own data instead fails on a mod and says nothing about it; the summary lists what
+fails on the control too apart. `PPHARNESS_VIDEO` also picks the video backend of the scripted
+games (`tools/gamecode/ppboot.py`), for a PC whose Vulkan driver crashes.
+
 ## Layout
 
 ```
@@ -323,5 +404,6 @@ ppharness/
   fake_dolphin.py  DolphinNoGUI stand-in running the mock server
   _platform.py     everything OS-specific
   cli.py           python -m ppharness
-tests/             pytest suite (test_dolphin.py needs the real build)
+tests/             pytest suite (test_dolphin.py needs the real build); mod_adapt.py: the tests on a mod of P+
+tools/             mod_template.py, mod_suite.py (mods of P+), the rollback tools
 ```

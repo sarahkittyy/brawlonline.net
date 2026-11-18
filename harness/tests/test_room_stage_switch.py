@@ -22,14 +22,15 @@ import struct
 
 import pytest
 
+from ppharness import brawl as B
+
 from test_rooms_ui import FOX, ROOT, Game, PadInput, ppom, roomsim
 
 pytestmark = [pytest.mark.dolphin, pytest.mark.gpu]
 
 ART = ROOT / "run" / "artifacts" / "game-code" / "rooms" / "stage-switch"
-RSS_EXDATA = 0x8042C4E8
 TASK_RULES, TASK_RULES_OPEN, RULES_SWITCH = 0x62C, 0x630, 0x274
-PAGE_COL, PAGE_ROW = 0x670, 0x674
+PAGE_COL, PAGE_ROW, PAGE_TILES, PAGE_TILES_2 = 0x670, 0x674, 0x704, 0x730
 # Page 1's positions (launcher/src/common/stages.ts): Yoshi's Story 0, Fountain of Dreams 9, FD 10, BF 17.
 YS, FOD, FD, BF, SV, DL, PS2 = 0x2A, 0x1F, 0x02, 0x01, 0x21, 0x2D, 0x2E
 POS = {YS: 0, FOD: 9, FD: 10, BF: 17}
@@ -59,9 +60,12 @@ def cursor(g: Game) -> tuple[int, int]:
 
 
 def tile(g: Game) -> int:
-    """The tile under the cursor (P+'s cursor counts rows of 5), -1 on the top row."""
+    """The tile under the cursor, -1 on the top row. The game's cursor counts the page's first 31
+    tiles in rows of 5 (columns 0-4) and the rest in rows of 2 right of them (columns 5-6)."""
     c, r = cursor(g)
-    return (r - 1) * 5 + c if r >= 1 else -1
+    if r < 1:
+        return -1
+    return (r - 1) * 5 + c if c < 5 else 31 + (r - 1) * 2 + (c - 5)
 
 
 def to_bar(g: Game) -> None:
@@ -77,10 +81,34 @@ def to_bar(g: Game) -> None:
     assert cursor(g) == (0, 0), cursor(g)
 
 
+def page1(g: Game) -> list[int]:
+    """The build's first stage page, as stage kinds by position (P+'s: 21, POS; a mod's own)."""
+    return B.read_stage_pages(g.c.read_mem)[0]
+
+
+def tiles(g: Game) -> int:
+    """How many tiles the page shows: its two groups', 31 and 10 at the most (P+'s pages have 21
+    stages at the most, REX's first 37)."""
+    return g.u32(page(g) + PAGE_TILES) + g.u32(page(g) + PAGE_TILES_2)
+
+
+def by_role(g: Game, starters: list[int], counterpicks: list[int]) -> tuple[int, int, int]:
+    """A starter, a counterpick and a stage that is off, of those the build's first page shows:
+    P+'s FD, Fountain of Dreams and Yoshi's Story where the page has them so (a build with its own
+    stage kinds: REX's Fountain of Dreams is 0x07), else the first starter, the last counterpick
+    (on a page with more than 31 stages one of its second group of tiles) and the first one off."""
+    shown = page1(g)[:41]
+
+    def pick(want: int, pool: list[int], last: bool = False) -> int:
+        return want if want in pool else pool[-1 if last else 0]
+    return (pick(FD, [k for k in shown if k in starters]), pick(FOD, [k for k in shown if k in counterpicks], last=True),
+            pick(YS, [k for k in shown if k not in starters and k not in counterpicks]))
+
+
 def goto_stage(g: Game, kind: int) -> None:
     """Down from the bar to the stage's row, then along it: the page is drawn in rows of 7 (page 1's
     21 stages: three full rows), and the cursor moves so (down from the bar keeps the column)."""
-    p = POS[kind]
+    p = page1(g).index(kind)
     to_bar(g)
     g.tap("DDOWN")
     g.wait(10)
@@ -132,13 +160,16 @@ def close_menu(g: Game) -> None:
 
 
 def switch_bits(g: Game) -> int:
-    """P+'s switch, page 1's positions 0..30."""
-    return struct.unpack(">I", g.c.read_mem(RSS_EXDATA + 2, 4))[0]
+    """P+'s switch of page 1: {u16 positions 31.., u32 positions 0..30} (a build's page may be
+    longer than 31: REX's has 37)."""
+    ext, main = struct.unpack(">HI", g.c.read_mem(B.stage_random_switch(g.c.read_mem), 6))
+    return ext << 31 | main
 
 
-def page1_bits(kinds: list[int]) -> int:
-    pos = {YS: 0, 0x06: 1, 0x19: 2, 0x43: 3, 0x47: 4, 0x49: 5, 0x1D: 6, 0x0D: 7, 0x1C: 8, FOD: 9, FD: 10,
-           0x05: 11, DL: 12, 0x0C: 13, 0x09: 14, 0x23: 15, SV: 16, BF: 17, PS2: 18, 0x03: 19, 0x04: 20}
+def page1_bits(g: Game, kinds: list[int]) -> int:
+    """The switch of page 1 with `kinds` on, by the build's own page (P+'s: Yoshi's Story 0 ...
+    Luigi's Mansion 20, POS)."""
+    pos = {k: i for i, k in enumerate(page1(g))}
     return sum(1 << pos[k] for k in kinds if k in pos)
 
 
@@ -166,15 +197,22 @@ def in_room(g: Game, host: bool) -> roomsim.RoomSim:
 def test_host_edits_the_rooms_stages(game: Game) -> None:
     g = game
     sim = in_room(g, host=True)
-    own = g.c.read_mem(RSS_EXDATA, 30)
+    own = g.c.read_mem(B.stage_random_switch(g.c.read_mem), 30)
     room = sim.room.starters + sim.room.counterpicks
+    room_starters = list(sim.room.starters)
+    # The stages edited, by what they are in the room (P+'s: FD, Fountain of Dreams, Yoshi's
+    # Story), and the room's one stage with hazards of its own: the counterpick (P+'s room has
+    # Fountain of Dreams so already).
+    starter, counterpick, off = by_role(g, sim.room.starters, sim.room.counterpicks)
+    sim.room.rules = bytes(sim.room.rules[:0x18]) + bytes([counterpick]).ljust(8, b"\0") + bytes(sim.room.rules[0x20:])
+    g.wait(40)
     open_switch(g)
-    assert switch_bits(g) == page1_bits(room), (hex(switch_bits(g)), hex(page1_bits(room)))
+    assert switch_bits(g) == page1_bits(g, room), (hex(switch_bits(g)), hex(page1_bits(g, room)))
     g.shot("01-open")
 
-    # FD: starter -> off; Fountain of Dreams: counterpick -> starter; Yoshi's Story: off ->
-    # counterpick; the bar: the loser picks from the list; Z: hazards on.
-    for kind in (FD, FOD, YS):
+    # The starter -> off; the counterpick -> starter; the stage that is off -> counterpick; the
+    # bar: the loser picks from the list; Z: hazards on.
+    for kind in (starter, counterpick, off):
         goto_stage(g, kind)
         g.tap("A")
         g.wait(10)
@@ -184,9 +222,10 @@ def test_host_edits_the_rooms_stages(game: Game) -> None:
     g.c.pad_script(0, [PadInput(buttons=["Z"], hold=3), PadInput(hold=6)])
     g.wait(15)
     g.shot("02-edited")
-    # Z on a stage: its own hazards. Fountain of Dreams (the room's one stage the other way) goes
-    # back to the default (now on); Yoshi's Story twice: its own, then not; FD its own (off).
-    for kind, times in ((FOD, 1), (YS, 2), (FD, 1)):
+    # Z on a stage: its own hazards. The counterpick (the room's one stage the other way) goes
+    # back to the default (now on); the stage that was off twice: its own, then not; the starter
+    # its own (off).
+    for kind, times in ((counterpick, 1), (off, 2), (starter, 1)):
         goto_stage(g, kind)
         for _ in range(times):
             g.c.pad_script(0, [PadInput(buttons=["Z"], hold=3), PadInput(hold=6)])
@@ -196,15 +235,22 @@ def test_host_edits_the_rooms_stages(game: Game) -> None:
     g.wait(10)
     g.shot("02c-hazards-default")     # "Hazards (Z): ON, OFF on 1 stage"
     # Rows of 7: from the first stage, down is the 8th (Yoshi's Island), then the 15th (Temple of
-    # Time), then the bar; down again keeps the column; left from the first wraps to the 7th.
-    goto_stage(g, YS)
+    # Time), then the bar; down again keeps the column the cursor came up in: the last row's first
+    # tile's, which a short, centred last row draws further right (half a column rounds up); left
+    # from there goes round the row.
+    # (P+'s page 1 has three full rows; a mod's as many as the stages it shows fill.)
+    n = tiles(g)
+    rows = (n + 6) // 7
+    goto_stage(g, page1(g)[0])
     to_bar(g)
     seen = []
-    for k in ("DDOWN", "DDOWN", "DDOWN", "DDOWN", "DDOWN", "DLEFT"):
+    for k in ["DDOWN"] * (rows + 2) + ["DLEFT"]:
         g.tap(k)
         g.wait(10)
         seen.append(tile(g))
-    assert seen == [0, 7, 14, -1, 0, 6], seen
+    col = int((7 - (n - (rows - 1) * 7)) * 0.5 + 0.5)
+    assert seen[:rows + 1] == [7 * r for r in range(rows)] + [-1], seen
+    assert seen[rows + 1] == col and seen[-1] == (col - 1) % 7, (seen, col)
     # The cursor's frame on its tile on every frame of a move, across rows of 5 and of 7.
     wrong = []
     for k in ["DRIGHT"] * 3 + ["DDOWN", "DDOWN", "DUP", "DLEFT", "DDOWN"]:
@@ -214,7 +260,7 @@ def test_host_edits_the_rooms_stages(game: Game) -> None:
             for f in range(12):
                 g.c.frame_advance(1)
                 t, xy = tile(g), cursor_xy(g)
-                if t >= 0 and xy != tile_xy(t):
+                if t >= 0 and xy != tile_xy(t, n):
                     wrong.append((k, f, t, xy))
         finally:
             g.c.resume()
@@ -223,21 +269,21 @@ def test_host_edits_the_rooms_stages(game: Game) -> None:
     # L / R (P+'s presets) change nothing.
     g.tap("R")
     g.wait(15)
-    assert switch_bits(g) == page1_bits(room), "a preset was loaded"
+    assert switch_bits(g) == page1_bits(g, room), "a preset was loaded"
     close_menu(g)
     g.wait(30)
 
-    assert g.c.read_mem(RSS_EXDATA, 30) == own, "the player's own switch was not put back"
+    assert g.c.read_mem(B.stage_random_switch(g.c.read_mem), 30) == own, "the player's own switch was not put back"
     assert len(sim.stages_requests) == 1, sim.stages_requests
     choice, starters, counterpicks = sim.stages_requests[0]
     assert choice == 3
-    assert starters == sorted([BF, FOD, SV, DL, PS2]), starters
-    assert YS in counterpicks and FD not in counterpicks and FD not in starters, counterpicks
+    assert starters == sorted(set(room_starters) - {starter} | {counterpick}), starters   # (P+: BF, FoD, SV, DL, PS2)
+    assert off in counterpicks and starter not in counterpicks and starter not in starters, counterpicks
     assert sim.room.rules[0x10] == 1, "the hazards did not go with the rules"
-    assert sim.room.rules[0x18:0x20] == bytes([FD]).ljust(8, b"\0"), sim.room.rules[0x18:0x20].hex()
+    assert sim.room.rules[0x18:0x20] == bytes([starter]).ljust(8, b"\0"), sim.room.rules[0x18:0x20].hex()
     # The page shows the room's new stages when it opens again.
     open_switch(g)
-    assert switch_bits(g) == page1_bits(starters + counterpicks)
+    assert switch_bits(g) == page1_bits(g, starters + counterpicks)
     g.shot("03-reopened")
     close_menu(g)
 

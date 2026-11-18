@@ -474,6 +474,12 @@ pub struct Ruleset {
     pub bans: u8,
     /// Games 2+ of a set: the loser can't pick a stage they won on (Slippi's and Ranked's rule).
     pub dsr: bool,
+    /// The build of the game its stage ids are of: mm's id of a mod of P+ (`cobalt-1.34`,
+    /// `docs/design/pplus-mods.md` section 3), empty for Project+. A stage id names another stage
+    /// on another build, so a room plays only rulesets of its own. Not written when empty, so the
+    /// hash of every P+ ruleset stays the same.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub game: String,
 }
 
 impl Default for Ruleset {
@@ -494,6 +500,7 @@ impl Default for Ruleset {
             strikes: Vec::new(),
             bans: 0,
             dsr: false,
+            game: String::new(),
         }
     }
 }
@@ -566,6 +573,11 @@ impl Ruleset {
         }
         if !self.name.chars().all(crate::codes::is_name_char) {
             return Err("The name can only have letters, numbers, Hiragana, Katakana and punctuation".into());
+        }
+        if self.game.len() > 32
+            || !self.game.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b"-._".contains(&b))
+        {
+            return Err("game is not a game's id".into());
         }
         self.rules.validate()?;
 

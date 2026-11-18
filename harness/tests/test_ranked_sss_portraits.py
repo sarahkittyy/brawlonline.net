@@ -21,6 +21,7 @@ from typing import Any, Callable
 
 import pytest
 
+from ppharness import paths as ppharness_paths
 from ppharness import brawl as B
 from ppharness.instance import DolphinInstance
 
@@ -28,7 +29,7 @@ from test_online_game import PLUGIN, Game, _boot, _both, _peer_shown, online_set
 from test_online_ranked import (SSS, STARTERS, _both_on, _paired, _search_ranked, _to_ranked_css,
                                 _wait, _wait_view, backend)  # noqa: F401
 
-pytestmark = [pytest.mark.dolphin, pytest.mark.server, pytest.mark.gpu]
+pytestmark = [pytest.mark.dolphin, pytest.mark.server, pytest.mark.gpu, pytest.mark.pplus_only("Ranked")]
 
 # g_sssPortraits: shown, loads, failed, made, deleted, freed (u32s), texNo[2] (u16), port[2], state,
 # remake (u8), pos[2][3], scale (floats), plateFrame, objs (u32).
@@ -52,7 +53,7 @@ def _sym(g: Game, name: str) -> int:
         m = nxt
     assert addrs, "the plugin is not loaded"
     cur = None
-    for line in (PLUGIN.parent / "PPOnlineMain.map").read_text().splitlines():
+    for line in ppharness_paths.plugin_map(PLUGIN).read_text().splitlines():
         parts = line.split()
         if len(parts) == 5 and parts[4].startswith("."):
             cur = parts[4]

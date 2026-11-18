@@ -29,6 +29,33 @@ def pytest_addoption(parser: pytest.Parser) -> None:
     parser.addoption("--video", default=None, help="video backend for gpu tests")
 
 
+def pytest_collection_finish(session: pytest.Session) -> None:
+    """On a mod of P+ (PPHARNESS_MOD_FOLDER; harness/README.md, "Mods of P+"): the collected test
+    modules' P+-shaped helpers are replaced with ones that read the build (mod_adapt.py)."""
+    import mod_adapt
+    mod_adapt.install()
+
+
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    """What a build of the game plays (docs/design/pplus-mods.md section 3): Ranked and the 2v2
+    queue are Project+'s alone, so their tests (`pplus_only`) are not a mod's, and a test about a
+    mod as such (`mods_only`) is not P+'s. A test of files a build may not have (`needs_files`:
+    alt costumes, which REX has none of) is skipped on a card without them."""
+    import mod_adapt
+    for item in items:
+        files = item.get_closest_marker("needs_files")
+        if files is not None:
+            missing = [f for f in files.args if not mod_adapt.card_has(f)]
+            if missing:
+                item.add_marker(pytest.mark.skip(reason=f"the build's card has no {', '.join(missing)}"))
+        only = item.get_closest_marker("pplus_only")
+        if only is not None and mod_adapt.active():
+            what = only.args[0] if only.args else "this"
+            item.add_marker(pytest.mark.skip(reason=f"{what} is Project+'s alone, not {mod_adapt.MOD_FOLDER}'s"))
+        if item.get_closest_marker("mods_only") is not None and not mod_adapt.active():
+            item.add_marker(pytest.mark.skip(reason="about a mod of Project+ (PPHARNESS_MOD_FOLDER)"))
+
+
 @pytest.hookimpl(hookwrapper=True)
 def pytest_runtest_makereport(item: pytest.Item, call: Any) -> Iterator[None]:
     outcome = yield

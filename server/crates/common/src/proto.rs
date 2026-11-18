@@ -100,6 +100,15 @@ pub struct CreateTicket {
     /// the version it must have. Empty from builds older than the field.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub platform: String,
+    /// The build of the game the ticket's Dolphin runs (`<folder>:<hash>`, Dolphin's
+    /// `Online/GameBuild.h`; `docs/design/pplus-mods.md` §2): mm pairs only tickets of one build.
+    /// Empty from builds older than the field: P+.
+    #[serde(
+        default,
+        skip_serializing_if = "String::is_empty",
+        deserialize_with = "crate::rooms::string_or_empty"
+    )]
+    pub game: String,
     #[serde(default)]
     pub ip_address_lan: String,
     /// The token of the game's IPv6 probes (`common::probe6`): mm tells the match's players the

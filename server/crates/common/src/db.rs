@@ -134,10 +134,27 @@ pub async fn insert_match(
     region: &str,
     room: Option<&MatchRoom>,
 ) -> sqlx::Result<()> {
+    insert_match_of(pool, match_id, mode, players, is_host, stages, region, room, "").await
+}
+
+/// [`insert_match`] of a match played on the build `game` of the game (mm's id of a mod of P+,
+/// `migrations/0038_match_game.sql`; empty for P+).
+#[allow(clippy::too_many_arguments)]
+pub async fn insert_match_of(
+    pool: &sqlx::PgPool,
+    match_id: &str,
+    mode: i16,
+    players: &[Uuid],
+    is_host: Uuid,
+    stages: &[i16],
+    region: &str,
+    room: Option<&MatchRoom>,
+    game: &str,
+) -> sqlx::Result<()> {
     sqlx::query(
         "INSERT INTO mm_matches (match_id, mode, players, is_host, stages, region, room_code, room_mode, ports, teams,
-                                 ruleset_code, ruleset_name, ruleset_version, ruleset_hash)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+                                 ruleset_code, ruleset_name, ruleset_version, ruleset_hash, game)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
          ON CONFLICT (match_id) DO NOTHING",
     )
     .bind(match_id)
@@ -154,6 +171,7 @@ pub async fn insert_match(
     .bind(room.and_then(|r| r.ruleset.as_ref()).map(|s| s.name.as_str()))
     .bind(room.and_then(|r| r.ruleset.as_ref()).map(|s| s.version))
     .bind(room.and_then(|r| r.ruleset.as_ref()).map(|s| s.hash.as_str()))
+    .bind(game)
     .execute(pool)
     .await
     .map(|_| ())
@@ -200,6 +218,8 @@ pub struct RecentMatch {
     pub room_code: Option<String>,
     /// How long ago it was made, by the database's clock.
     pub age_ms: i64,
+    /// The build of the game it is played on (empty for P+).
+    pub game: String,
 }
 
 /// The matches made in the last `within` (oldest first): mm keeps its matches in memory, so after
@@ -207,7 +227,7 @@ pub struct RecentMatch {
 pub async fn recent_matches(pool: &sqlx::PgPool, within: std::time::Duration) -> sqlx::Result<Vec<RecentMatch>> {
     sqlx::query_as(
         "SELECT match_id, mode, players, is_host, room_code,
-                (extract(epoch FROM now() - created_at) * 1000)::bigint AS age_ms
+                (extract(epoch FROM now() - created_at) * 1000)::bigint AS age_ms, game
            FROM mm_matches WHERE created_at > now() - make_interval(secs => $1)
           ORDER BY created_at",
     )

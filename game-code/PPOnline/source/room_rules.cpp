@@ -20,10 +20,12 @@
 
 #include <string.h>
 
+#include "build.h"
 #include "online_menu.h"
 #include "ppom.h"
 #include "room_play.h"
 #include "rules_pages.h"
+#include "rules_rebuild.h"
 #include "stage_switch.h"
 
 namespace RoomRules {
@@ -142,6 +144,7 @@ namespace RoomRules {
         s.opened = s.asHost = s.readOnly = s.setOnly = false;
         s.haveRules = false;
         s.statusFrames = 0;
+        RulesRebuild::forget();
     }
 
     // P+'s openRules (sel_char text+0x105D8) called with every non-volatile register (r14-r31,
@@ -173,11 +176,36 @@ namespace RoomRules {
             "blr\n\t");
     }
 
+    // The build's own openRules (sel_char text+0x105D8) is Brawl's, as P+ has it. (A build whose
+    // codeset replaces it, or whose character select has no rules menu: rules_rebuild.h.)
+    static bool vanillaOpenRules() { return *(const u32*)(OPEN_RULES + 0xC) == 0x39610020; }   // addi r11,r1,0x20
+
     void open(bool setOnly)
     {
         u8* task = cssTask();
         const PPOM::Session& se = PPOM::g_block.session;
         if (!task || isOpen() || !se.rules.valid) return;
+        // The build's own way to open the menu where it is Brawl's; else, and on a character
+        // select whose archive has no rules menu, the menu made again (rules_rebuild.h), which
+        // may have to be loaded first.
+        u32 openFn = vanillaOpenRules() ? OPEN_RULES : RulesRebuild::openFn();
+        switch (RulesRebuild::prepare(task, setOnly)) {
+        case RulesRebuild::MENU_OWN:
+            break;
+        case RulesRebuild::MENU_REBUILT:
+            openFn = RulesRebuild::openFn();
+            break;
+        case RulesRebuild::MENU_LOADING:   // (opened once it is here: RulesRebuild::tick)
+            say("Loading the rules...", false);
+            return;
+        case RulesRebuild::MENU_MISSING:
+            say("The rules menu isn't on this game's card.", true);
+            playSE(3);
+            return;
+        default:
+            return;
+        }
+        if (!openFn) return;
         int me = PPOM::g_block.local.localPort;
         s.asHost = me < PPOM::SESSION_PLAYERS && se.roomHost == me;
         s.readOnly = !s.asHost || setOnly;
@@ -203,7 +231,7 @@ namespace RoomRules {
             if (keep[1] == 2) rule[7] = 0;
             rule[0x18] = rule[0x1A] = 0;
         }
-        pponline_callPreserving(OPEN_RULES, (u32)task, 0);
+        RulesRebuild::call(openFn, task);
         if (rule) {
             rule[7] = keep[0];
             rule[0x18] = keep[1];
@@ -282,6 +310,8 @@ namespace RoomRules {
             s.haveRules = false;
             s.changedNow = false;
         }
+
+        RulesRebuild::tick(cssTask(), inRoom, waiting || setBetween);   // (a rules menu to load: rules_rebuild.h)
 
         bool menuOpen = isOpen();
         if (s.opened && menuOpen) {

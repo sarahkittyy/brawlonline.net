@@ -91,6 +91,13 @@ export type ReplayMeta = {
   dolphin: string;
   /** The Project+ release it was recorded on (common/pplus_releases.ts), or null when unknown. */
   pplusRelease: string | null;
+  /**
+   * The build of the game it was played on (INFO `build.gameBuild`, Dolphin's Online/GameBuild.h:
+   * "<folder on the SD card>:<hash>"), or null from recordings before the field. A mod of P+
+   * (docs/design/pplus-mods.md) has another folder than "Project+": its replay plays back only on
+   * that mod's card.
+   */
+  gameBuild: string | null;
 };
 
 /** The result (ENDG), or null while the game is in progress or after a crash. */
@@ -221,6 +228,7 @@ function parseMeta(info: Record<string, unknown>): ReplayMeta {
     game: text(build.game, 8),
     dolphin: text(build.dolphin, 64),
     pplusRelease: replayPPlusRelease({ pplus: text(build.pplus, 16), dolphin: text(build.dolphin, 64) }),
+    gameBuild: /^[^:\s]{1,48}:[0-9a-f]{32}$/.test(text(build.gameBuild, 96)) ? text(build.gameBuild, 96) : null,
   };
 }
 

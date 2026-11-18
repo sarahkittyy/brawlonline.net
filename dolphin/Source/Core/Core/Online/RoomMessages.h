@@ -16,6 +16,7 @@
 #include <picojson.h>
 
 #include "Common/CommonTypes.h"
+#include "Core/Online/GameBuild.h"
 #include "Core/Online/MatchRules.h"
 
 namespace Online::Rooms
@@ -242,6 +243,8 @@ struct Message
   std::string error;       // HelloResp / RoomError / Error
   std::string latest_version;  // HelloResp
   bool game_alive = false;     // HelloResp: this mm takes `game-alive` (Online/GameAlive.h)
+  GameBuild::Layout layout;    // HelloResp: the build's places on its screens (`layout`, mm's
+                               // games table; Online/GameBuild.h), `set` 0 from an mm with none
   std::string op;          // RoomError
   std::string code;        // RoomLeft / RoomStart
   std::string reason;      // RoomLeft
@@ -266,9 +269,10 @@ std::optional<View> ParseView(const picojson::object& o, std::string* why);
 
 // Requests (client -> server).
 // `chat_key`: the chat identity's public key (docs/chat-protocol.md §1), left out when empty.
+// `game`: the build of the game this Dolphin runs (Online/GameBuild.h), left out when empty.
 std::string HelloJson(const std::string& uid, const std::string& play_key,
                       const std::string& app_version, const std::string& platform,
-                      const std::string& chat_key = {});
+                      const std::string& chat_key = {}, const std::string& game = {});
 enum class Op : u8
 {
   Poll = 0,

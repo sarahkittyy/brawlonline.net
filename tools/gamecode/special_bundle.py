@@ -3,6 +3,11 @@ special-rules.md §5), for tests whose Dolphin side is a script (roomsim): P+'s 
 (/Project+/pf/menu2/mu_menumain.pac) from an SD card image, the box's ARC entries kept.
 
     bundle = special_bundle.from_card("run/template-user/Wii/sd.raw")
+
+And the rules menu's archive (SpecialAssets::FindMenuArchive, CMD_MENU_ARCHIVE): the ARC named
+MenuRule_* in the build's own main-menu archive, whole.
+
+    arc = special_bundle.menu_archive_from_card("run/scratch/rex/template-mod/Wii/sd.raw", "rex_")
 """
 from __future__ import annotations
 
@@ -61,3 +66,25 @@ def from_card(image: str) -> bytes:
     from fat32 import open_image
     fs = open_image(image)
     return build(fs.read_file("/Project+/pf/menu2/mu_menumain.pac"))
+
+
+MENU_MAGIC = 0x4D415243   # "MARC"
+
+
+def menu_archive(archive: bytes) -> bytes:
+    archive = brawlarc.maybe_decompress(archive)
+    for _i, _t, _idx, _g, top in brawlarc.parse_arc(archive):
+        top = bytes(top)
+        if top[:4] != b"ARC\0" or top[0x10:0x18] != b"MenuRule":
+            continue
+        if not any(t == 2 and idx == 0 and bytes(d[:4]) == b"bres" for _j, t, idx, _g2, d in brawlarc.parse_arc(top)):
+            raise ValueError("the MenuRule ARC has no models (type 2, index 0)")
+        return top
+    raise ValueError("no MenuRule ARC in the main-menu archive")
+
+
+@functools.lru_cache(maxsize=2)
+def menu_archive_from_card(image: str, folder: str = "Project+") -> bytes:
+    from fat32 import open_image
+    fs = open_image(image)
+    return menu_archive(fs.read_file(f"/{folder}/pf/menu2/mu_menumain.pac"))

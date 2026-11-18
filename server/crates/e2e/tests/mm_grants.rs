@@ -113,6 +113,8 @@ async fn mm_queries_work_as_pp_mm() {
     assert_eq!((room_game.mode, room_game.is_host), (3, a));
     assert_eq!((room_game.players.as_slice(), room_game.room_code.as_deref()), (&[a, b][..], Some("ABCD")));
     assert!((0..60_000).contains(&room_game.age_ms), "{}", room_game.age_ms);
+    // (with its build of the game: 0039_mm_reads_match_game.sql; P+'s is empty)
+    assert_eq!(room_game.game, "");
     assert!(recent.iter().any(|m| m.match_id.starts_with("mode.ranked-grants-") && m.room_code.is_none()));
 
     // Chat (0006_chat.sql): identity keys recorded (again, and pruned past 20), read, a report

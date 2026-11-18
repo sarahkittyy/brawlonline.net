@@ -25,6 +25,7 @@
 #include "Common/Timer.h"
 #include "Common/UPnP.h"
 #include "Core/Config/OnlineSettings.h"
+#include "Core/Online/GameBuild.h"
 #include "Core/Online/Ipv6.h"
 #include "Core/Online/Timeouts.h"
 #include "Core/Online/User.h"
@@ -926,6 +927,9 @@ void Matchmaking::StartMatchmaking()
   request["search"] = picojson::value(std::move(search));
   request["appVersion"] = picojson::value(APP_VERSION);
   request["platform"] = picojson::value(APP_PLATFORM);
+  // The build of the game (Online/GameBuild.h): mm pairs only players of one build.
+  if (const std::string game = GameBuild::Key(); !game.empty())
+    request["game"] = picojson::value(game);
   request["ipAddressLan"] = picojson::value(lan_addr);
   if (!m_ipv6_token.empty())
   {

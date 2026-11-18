@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include "Core/Online/GameBridge.h"
+#include "Core/Online/GameBuild.h"
 
 #include <algorithm>
 #include <array>
@@ -11,6 +12,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <tuple>
 #include <vector>
 
 #include <fmt/format.h>
@@ -90,6 +92,21 @@ constexpr u32 HEADER_SIZE = 0x24;
 constexpr u32 H_VERSION = 0x04, H_SIZE = 0x06, H_MAILBOX_OFF = 0x08, H_MAILBOX_SIZE = 0x0A;
 constexpr u32 H_SESSION_OFF = 0x0C, H_SESSION_SIZE = 0x0E, H_LOCAL_OFF = 0x10,
               H_LOCAL_SIZE = 0x12;
+// BUILD (ppom.h Build; the header words were reserved, and are 0 in a plugin from before
+// 2026-11-14, whatever its version): what the build of the game can produce, game-written. +0 a
+// counter bumped with each write (0: not written yet), +4 a bit per gmCharacterKind its character
+// select can lock in. Dolphin's character checks take it (PeerData::ValidCharKind): a mod of P+
+// has characters P+ v3.2 has not. +0x28 (a BUILD of 0x48 bytes or more, 2026-11-16) a bit per
+// srStageKind its stage select offers, for the stage checks (PeerData::ValidStageKind): REX's
+// reach 0x8A.
+constexpr u32 H_BUILD_OFF = 0x18, H_BUILD_SIZE = 0x1A;
+constexpr u32 BUILD_SEQ = 0x00, BUILD_CHAR_KINDS = 0x04, BUILD_STAGE_KINDS = 0x28;
+// The build's profile (the plugin's build.h Build::profileWord), from a BUILD of 0x4C bytes or
+// more: what the game has of P+'s codes and what the plugin's contract misses.
+constexpr u32 BUILD_PROFILE = 0x48;
+constexpr u32 BUILD_MIN_SIZE = BUILD_CHAR_KINDS + Gprb::PeerData::BUILD_CHAR_KINDS_SIZE;
+// The File Patch Code's path of the build's folder on the SD card (P+ and its mods).
+constexpr u32 FILE_PATCH_PATH = 0x80406920, FILE_PATCH_PATH_MAX = 48;
 
 // Mailbox
 constexpr u32 MB_REQ_WRITE = 0x00, MB_REQ_READ = 0x04, MB_RESP_COUNT = 0x08, MB_RESP_SEEN = 0x0C;
@@ -114,6 +131,12 @@ constexpr u32 L_OWN_CURSOR = 0xC8, L_CURSORS = 0xD0, CURSOR_SIZE = 8;
 constexpr u32 CUR_STATE = 0, CUR_PAGE = 1, CUR_TURNS = 2, CUR_X = 4, CUR_Y = 6;
 // v11: 1 = potato mode (Config::ONLINE_POTATO_MODE): the game draws less in matches (ppom.h Local.potato).
 constexpr u32 L_POTATO = 0xF0;
+// Still v11 (it was padding): where the build's stage select has room for the turn line and
+// where its cards' name plates are, from mm (Online/GameBuild.h Places; ppom.h Local.places).
+// LAYOUT (the plugin's ppom.h Layout): named by two header words that were reserved, 0xD0 bytes.
+constexpr u32 H_LAYOUT_OFF = 0x1C, H_LAYOUT_SIZE = 0x1E;
+constexpr u32 LAYOUT_SEQ = 0x00, LAYOUT_SET = 0x04, LAYOUT_VALUES = 0x08;
+constexpr u32 LAYOUT_SIZE = LAYOUT_VALUES + 4 * static_cast<u32>(GameBuild::Layout::VALUES);
 // Still v11 (they were padding): a 2v2 session between games (docs/design/2v2.md), the seconds
 // left to ready up for the next game (0: none running) and the ports locked in for it (bits, this
 // player's included); 0 outside one (ppom.h Local.readySeconds / readyPorts).
@@ -277,6 +300,10 @@ constexpr u8 CMD_RULESETS = 0xD1;
 // copies it into the buffer first, only while those 8 bytes are still there (a buffer the game
 // freed in between is never written).
 constexpr u8 CMD_SPECIAL_ASSETS = 0xD2;
+// The rules menu's archive for a character select that has none (SpecialAssets::MenuArchive):
+// SpecialAssetsRequest, answered as CMD_SPECIAL_ASSETS ({state, written, pad[2], size}); a buffer
+// smaller than the archive is not written, and the size tells the game what to allocate.
+constexpr u8 CMD_MENU_ARCHIVE = 0xD3;
 constexpr u32 RL_ENTRIES = 4, RL_ENTRY = 32, RL_CODE = 0, RL_NAME = 8, RL_NAME_LEN = 24;
 // RoomRequest payload: op, arg, arg2, pad, code u16[9]. RoomStatus: phase, error, localPort, pad,
 // serial u32, text u16[64].
@@ -348,10 +375,16 @@ struct Located
   u32 session = 0;
   u32 module = 0;
   u16 version = 0;
+  u32 build = 0;  // BUILD, 0 when the plugin has none
+  u32 build_size = 0;
+  u32 layout = 0;  // LAYOUT, 0 when the plugin has none
 };
 
 std::mutex s_mutex;
 std::optional<Located> s_located;
+// CPU thread: BUILD's counter as last taken (0: the game's list is not in use).
+u32 s_build_seq = 0;
+u32 s_layout_serial = 0;  // GameBuild's layout serial last written into the plugin's LAYOUT
 u64 s_frames = 0;
 u64 s_locate_attempts = 0;
 int s_locate_wait = 0;
@@ -417,6 +450,21 @@ u16 R16(const Core::CPUThreadGuard& guard, u32 addr)
 u8 R8(const Core::CPUThreadGuard& guard, u32 addr)
 {
   return PowerPC::MMU::HostRead<u8>(guard, addr);
+}
+
+// The path the game loads its files from: the File Patch Code's (P+ and its mods keep it at
+// 0x80406920: "/Project+/", "/Cobalt/./").
+std::string GamePath(const Core::CPUThreadGuard& guard)
+{
+  std::string path;
+  for (u32 i = 0; i < FILE_PATCH_PATH_MAX && IsRam(guard, FILE_PATCH_PATH + i, 1); ++i)
+  {
+    const u8 ch = R8(guard, FILE_PATCH_PATH + i);
+    if (ch == 0)
+      break;
+    path += static_cast<char>(ch);
+  }
+  return path;
 }
 void W32(const Core::CPUThreadGuard& guard, u32 v, u32 addr)
 {
@@ -599,7 +647,19 @@ std::optional<Located> Locate(const Core::CPUThreadGuard& guard)
           {
             continue;
           }
-          return Located{a, a + mb_off, a + lo_off, a + se_off, module, version};
+          // BUILD, if the plugin has it: inside the block, after the header.
+          const u32 bu_off = R16(guard, a + H_BUILD_OFF);
+          const u32 bu_size = R16(guard, a + H_BUILD_SIZE);
+          const bool has_build = bu_off >= HEADER_SIZE && bu_size >= BUILD_MIN_SIZE &&
+                                 bu_off + bu_size <= block_size;
+          // LAYOUT, likewise.
+          const u32 la_off = R16(guard, a + H_LAYOUT_OFF);
+          const u32 la_size = R16(guard, a + H_LAYOUT_SIZE);
+          const bool has_layout = la_off >= HEADER_SIZE && la_size >= LAYOUT_SIZE &&
+                                  la_off + la_size <= block_size;
+          return Located{a, a + mb_off, a + lo_off, a + se_off, module, version,
+                         has_build ? a + bu_off : 0, has_build ? bu_size : 0,
+                         has_layout ? a + la_off : 0};
         }
       }
       return std::nullopt;
@@ -1139,6 +1199,8 @@ const char* CmdName(u8 cmd)
     return "RULESETS";
   case CMD_SPECIAL_ASSETS:
     return "SPECIAL_ASSETS";
+  case CMD_MENU_ARCHIVE:
+    return "MENU_ARCHIVE";
   default:
     return "?";
   }
@@ -1396,7 +1458,8 @@ void Service(const Core::CPUThreadGuard& guard, u32 mailbox, u16 version)
       const u32 addr = R32(guard, payload);
       const u32 capacity = R32(guard, payload + 4);
       const u32 nonce = R32(guard, payload + 8);
-      SpecialAssets::State state = SpecialAssets::Request(File::GetUserPath(F_WIISDCARDIMAGE_IDX));
+      SpecialAssets::State state = SpecialAssets::Request(
+          File::GetUserPath(F_WIISDCARDIMAGE_IDX), SpecialAssets::CardFolder(GamePath(guard)));
       u32 size = 0;
       bool wrote = false;
       if (state == SpecialAssets::State::Ready)
@@ -1423,6 +1486,42 @@ void Service(const Core::CPUThreadGuard& guard, u32 mailbox, u16 version)
       r.summary = fmt::format("SPECIAL_ASSETS state={} size={}{}", static_cast<int>(state), size,
                               wrote ? " written" : "");
       request = fmt::format("SPECIAL_ASSETS {:08x} {}", addr, capacity);
+      response = r;
+      break;
+    }
+    case CMD_MENU_ARCHIVE:
+    {
+      const u32 addr = R32(guard, payload);
+      const u32 capacity = R32(guard, payload + 4);
+      const u32 nonce = R32(guard, payload + 8);
+      const SpecialAssets::State state = SpecialAssets::RequestMenuArchive(
+          File::GetUserPath(F_WIISDCARDIMAGE_IDX), SpecialAssets::CardFolder(GamePath(guard)));
+      u32 size = 0;
+      bool wrote = false;
+      if (state == SpecialAssets::State::Ready)
+      {
+        const std::vector<u8> arc = SpecialAssets::MenuArchive();
+        size = static_cast<u32>(arc.size());
+        const bool fits = capacity <= SpecialAssets::MAX_MENU_ARCHIVE && size <= capacity && capacity >= 8 &&
+                          (addr & 0x1F) == 0 && IsRam(guard, addr, capacity);
+        if (fits && R32(guard, addr) == SpecialAssets::MENU_MAGIC && R32(guard, addr + 4) == nonce)
+        {
+          guard.GetSystem().GetMemory().CopyToEmu(addr, arc.data(), arc.size());
+          wrote = true;
+        }
+      }
+      Response r;
+      r.cmd = CMD_MENU_ARCHIVE;
+      r.status = STATUS_OK;
+      r.payload[0] = static_cast<u8>(state);
+      r.payload[1] = wrote ? 1 : 0;
+      r.payload[4] = static_cast<u8>(size >> 24);
+      r.payload[5] = static_cast<u8>(size >> 16);
+      r.payload[6] = static_cast<u8>(size >> 8);
+      r.payload[7] = static_cast<u8>(size);
+      r.summary = fmt::format("MENU_ARCHIVE state={} size={}{}", static_cast<int>(state), size,
+                              wrote ? " written" : "");
+      request = fmt::format("MENU_ARCHIVE {:08x} {}", addr, capacity);
       response = r;
       break;
     }
@@ -1705,6 +1804,41 @@ void PutPotato(std::vector<u8>& local, bool playing)
     local[L_POTATO] =
         playing && Config::Get(Config::ONLINE_POTATO_MODE) && !Machine::IsArmed() ? 1 : 0;
   }
+}
+
+// The build's places on its screens (GameBuild::Layout, from mm's hello-resp) into the plugin's
+// LAYOUT, over the plugin's own (P+'s), when they changed. LAYOUT is in the plugin's own data, which a gameplay session saves
+// and restores with the game's, so it is written only on the menus that read it (never in a
+// match or on the way into one); both machines of a match are of one build and have the same.
+void PutLayout(const Core::CPUThreadGuard& guard, const Located& loc)
+{
+  if (loc.layout == 0)
+    return;
+  u32 serial = 0;
+  const GameBuild::Layout layout = GameBuild::GetLayout(&serial);
+  if (serial == s_layout_serial)
+    return;
+  const std::string scene = Gprb::CurrentSceneName(Gprb::Guest(guard.GetSystem().GetMemory()));
+  if (scene != "muMenuMain" && scene != "scSelctCharacter" && scene != "scSelStage")
+    return;
+  // Only the groups the build's entry has: the plugin put P+'s places there when it was loaded,
+  // and a group without numbers of the build's own stays P+'s.
+  using L = GameBuild::Layout;
+  for (const auto& [bit, at, count] :
+       {std::tuple<u32, size_t, size_t>{L::SSS_LINE, L::SSS_LINE_AT, 5}, {L::CARD_PLATES, L::CARD_PLATES_AT, 3},
+        {L::CSS_BAR, L::CSS_BAR_AT, 14}, {L::CSS_BUTTONS, L::CSS_BUTTONS_AT, 28}})
+  {
+    if (!(layout.set & bit))
+      continue;
+    for (size_t i = at; i < at + count; ++i)
+      W32(guard, std::bit_cast<u32>(layout.values[i]), loc.layout + LAYOUT_VALUES + static_cast<u32>(4 * i));
+  }
+  if (layout.set != 0)
+  {
+    W32(guard, R32(guard, loc.layout + LAYOUT_SET) | layout.set, loc.layout + LAYOUT_SET);
+    W32(guard, serial, loc.layout + LAYOUT_SEQ);
+  }
+  s_layout_serial = serial;
 }
 
 // LOCAL's Direct invite bytes. The code is Rooms' canonical one (NormalizeConnectCode: 2-4
@@ -2278,6 +2412,7 @@ void SyncSession(const Core::CPUThreadGuard& guard, const Located& loc)
     local[i] = R8(guard, loc.local + i);
   PutPotato(local, true);
   PutAspect(local);
+  PutLayout(guard, loc);
   if (local.size() >= L_READY_PORTS + 1)
   {
     local[L_READY_SECONDS] = lobby.twos ? lobby.ready_seconds : 0;
@@ -2507,6 +2642,106 @@ bool DrawsForScreen()
   return s_draws_for_screen.load(std::memory_order_relaxed);
 }
 
+namespace
+{
+// The build's own character list (BUILD) into the character checks, whenever the game wrote it
+// anew. CPU thread.
+// The build as the plugin found it, once per change, for the log a player sends: which of P+'s
+// codes it has, and, when the plugin's contract is not met, what is missing (the game then keeps
+// its online modes locked: docs/design/pplus-mods.md section 0).
+void LogBuildProfile(const Core::CPUThreadGuard& guard, const Located& located)
+{
+  if (located.build_size < BUILD_PROFILE + 4)
+    return;
+  const u32 word = R32(guard, located.build + BUILD_PROFILE);
+  static constexpr std::array<const char*, 4> STAGES = {"none known", "P+'s older design",
+                                                        "P+ v3.2's", "?"};
+  static constexpr std::array<const char*, 4> ALTS = {"none", "P+'s", "hidden alt sets", "?"};
+  std::string missing;
+  for (const auto& [bit, what] : {std::pair<u32, const char*>{0x100, "the character slot table"},
+                                  {0x200, "a stage select of P+'s"},
+                                  {0x400, "the File Patch Code's folder"},
+                                  {0x800, "the plugin built for this kind of build (it has "
+                                          "another's: PPOnline.rel is Project+'s own, "
+                                          "PPOnline-pex.rel BrawlEx builds', PPOnline-rex.rel REX's)"}})
+  {
+    if (word & bit)
+      missing += (missing.empty() ? "" : ", ") + std::string(what);
+  }
+  // (the plugin's variant: game-code/PPOnline/include/variant.h)
+  static constexpr std::array<const char*, 4> PLUGINS = {"pplus", "pex", "rex", "?"};
+  NOTICE_LOG_FMT(NETPLAY,
+                 "GameBridge: the game's build: stage select {}, alt costumes {}, Code Menu {}, "
+                 "alternate stages {}, plugin {}; {}",
+                 STAGES[word & 3], ALTS[(word >> 2) & 3], (word & 0x10) ? "yes" : "no",
+                 (word & 0x20) ? "yes" : "no", PLUGINS[(word >> 16) & 3],
+                 missing.empty() ? "it meets the plugin's contract" :
+                                   "online modes locked, missing: " + missing);
+}
+
+void TakeBuild(const Core::CPUThreadGuard& guard, const Located& located)
+{
+  if (located.build == 0)
+    return;
+  const u32 seq = R32(guard, located.build + BUILD_SEQ);
+  if (seq == 0 || seq == s_build_seq)
+    return;
+  std::array<u8, Gprb::PeerData::BUILD_CHAR_KINDS_SIZE> kinds{};
+  for (size_t i = 0; i < kinds.size(); ++i)
+    kinds[i] = R8(guard, located.build + BUILD_CHAR_KINDS + static_cast<u32>(i));
+  std::array<u8, Gprb::PeerData::BUILD_STAGE_KINDS_SIZE> stages{};
+  bool any_stage = false;
+  if (located.build_size >= BUILD_STAGE_KINDS + stages.size())
+  {
+    for (size_t i = 0; i < stages.size(); ++i)
+    {
+      stages[i] = R8(guard, located.build + BUILD_STAGE_KINDS + static_cast<u32>(i));
+      any_stage |= stages[i] != 0;
+    }
+  }
+  // The game overwrites the list in place: taken again next frame if it changed meanwhile.
+  if (R32(guard, located.build + BUILD_SEQ) != seq)
+    return;
+  s_build_seq = seq;
+  LogBuildProfile(guard, located);
+  int listed = 0;
+  for (const u8 b : kinds)
+    listed += std::popcount(b);
+  // No character (the game found no slot table: its profile says so): the check stays P+ v3.2's.
+  if (listed == 0)
+  {
+    Gprb::PeerData::ClearBuildCharKinds();
+    Gprb::PeerData::ClearBuildStageKinds();
+    return;
+  }
+  Gprb::PeerData::SetBuildCharKinds(kinds);
+  // No stage on any page (no tables found): the stage checks keep their own range.
+  if (any_stage)
+    Gprb::PeerData::SetBuildStageKinds(stages);
+  else
+    Gprb::PeerData::ClearBuildStageKinds();
+  int count = 0, highest = -1;
+  for (int k = 0; k < 0x100; ++k)
+  {
+    if (kinds[static_cast<size_t>(k) >> 3] & (1 << (k & 7)))
+    {
+      ++count;
+      highest = k;
+    }
+  }
+  NOTICE_LOG_FMT(NETPLAY, "GameBridge: the game's build locks in {} characters (kinds up to {:#04x})",
+                 count, highest);
+}
+
+void ForgetBuild()
+{
+  s_build_seq = 0;
+  s_layout_serial = 0;  // (another game's block: its LAYOUT is written again)
+  Gprb::PeerData::ClearBuildCharKinds();
+  Gprb::PeerData::ClearBuildStageKinds();
+}
+}  // namespace
+
 void OnFrameEnd(const Core::CPUThreadGuard& guard)
 {
   // What this frame's LOCAL write told the game (PutAspect); none (no plugin, a pre-v12 one, a
@@ -2532,6 +2767,7 @@ void OnFrameEnd(const Core::CPUThreadGuard& guard)
     std::lock_guard lk(s_mutex);
     s_located.reset();
     Rollback::RollbackManager::Get().SetMailboxRegion(0, 0);
+    ForgetBuild();
   }
   if (!located)
   {
@@ -2559,9 +2795,12 @@ void OnFrameEnd(const Core::CPUThreadGuard& guard)
                                                       MAILBOX_SIZE + LocalSize(located->version));
     s_session_written.clear();
     s_local_written.clear();
+    // The build this game is, for mm (once a boot; before anything the game asks of mm).
+    GameBuild::Resolve(GamePath(guard), File::GetUserPath(F_WIISDCARDIMAGE_IDX));
     std::lock_guard lk(s_mutex);
     s_located = located;
   }
+  TakeBuild(guard, *located);
 
   // Never during a netplay session: what Dolphin would answer differs between the machines.
   const bool netplay = NetPlay::IsNetPlayRunning();
@@ -2603,6 +2842,7 @@ void Reset()
     s_locate_wait = 0;
   }
   Rollback::RollbackManager::Get().SetMailboxRegion(0, 0);
+  ForgetBuild();
 }
 
 void SetEnabled(bool enabled)

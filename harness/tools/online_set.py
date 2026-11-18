@@ -115,7 +115,10 @@ def check_css_remembers(p: Any, before: Dict[str, int], where: str) -> Dict[str,
     return now
 
 
-STRIKE_TABLE = 0x8042C822   # P+'s stage striking (5 pages x 6 bytes); all zero = nothing struck
+def struck(c) -> bytes:
+    """P+'s stage striking (5 pages x 6 bytes; all zero = nothing struck), where the build keeps it
+    (B.stage_strike_table: P+ v3.2's 0x8042C822 or P+'s older design's)."""
+    return c.read_mem(B.stage_strike_table(c.read_mem), 30)
 
 
 # --------------------------------------------------------------------------- no reboot
@@ -354,7 +357,7 @@ def lock_in_next(players: Sequence[Any], game: int, mode: str = "direct",
             for q in players:   # the others wait for the pick: nothing is set up before it
                 assert not (session(q.c)["state"] == 2 and session(q.c)["game"] == game), (q.name, "set up before the pick")
             # Slippi parity: Direct's loser may pick any stage, nothing is struck.
-            assert p.c.read_mem(STRIKE_TABLE, 30) == bytes(30), (p.name, "stages struck on the SSS")
+            assert struck(p.c) == bytes(30), (p.name, "stages struck on the SSS")
             stage = STAGE_PICKS.get(game, STAGE_PICK)
             held = STAGE_PICK_HELD.get(game, [])
             B.sss_pick_stage(p.c, B.STAGE_KIND[stage], 0, held=held)
@@ -396,7 +399,7 @@ def _lock_in_anyone_picks(players: Sequence[Any], game: int, log: Callable[[str]
         assert scene(picker.c) == "scSelStage" and local(picker.c)["lock"]["ready"], (
             picker.name, "B left the stage select where everyone picks", scene(picker.c), local(picker.c)["lock"])
     picker.shot(f"g{game}-stage-select")
-    assert picker.c.read_mem(STRIKE_TABLE, 30) == bytes(30), (picker.name, "stages struck on the SSS")
+    assert struck(picker.c) == bytes(30), (picker.name, "stages struck on the SSS")
     stage = STAGE_PICKS.get(game, STAGE_PICK)
     held = STAGE_PICK_HELD.get(game, [])
     B.sss_pick_stage(picker.c, B.STAGE_KIND[stage], 0, held=held)

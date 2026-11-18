@@ -157,6 +157,57 @@ TEST(PeerData, Whitelists)
     EXPECT_FALSE(ValidStageKind(k)) << k;
 }
 
+TEST(PeerData, TheGamesOwnCharacterList)
+{
+  // A mod of P+ (Cobalt): its plugin lists what its character select can lock in, here Mario,
+  // Dark Samus 0x40, Wii Fit Trainer 0x7F and, wrongly, Giga Bowser.
+  std::array<u8, BUILD_CHAR_KINDS_SIZE> kinds{};
+  for (u32 k : {0x00u, 0x40u, 0x7Fu, 0x2Cu})
+    kinds[k >> 3] |= static_cast<u8>(1 << (k & 7));
+  EXPECT_FALSE(HasBuildCharKinds());
+  EXPECT_FALSE(ValidCharKind(0x40));
+  SetBuildCharKinds(kinds);
+  EXPECT_TRUE(HasBuildCharKinds());
+  for (u32 k : {0x00u, 0x40u, 0x7Fu})
+    EXPECT_TRUE(ValidCharKind(k)) << k;
+  // Not in the game's list (P+'s Roy among them), the Final Smash forms whatever it says, garbage.
+  for (u32 k : {0x07u, 0x32u, 0x41u, 0x2Cu, 0x2Du, 0x80u, 0xFFu, 0x100u, 0x10040u})
+    EXPECT_FALSE(ValidCharKind(k)) << k;
+  // An All-Star roster entry of that build: its character and its character select id.
+  std::array<u8, PX_ROSTER + ROSTER_MAX * PX_ENTRY> px{};
+  px[PX_ROSTER_COUNT] = 2;
+  px[PX_ROSTER + 0] = 0x40, px[PX_ROSTER + 3] = 0x40;
+  px[PX_ROSTER + 4] = 0x7F, px[PX_ROSTER + 7] = 0x7F;
+  SanitizePortExtra(px);
+  EXPECT_EQ(px[PX_ROSTER_COUNT], 2);
+  // The game is gone: P+ v3.2's list again.
+  ClearBuildCharKinds();
+  EXPECT_FALSE(HasBuildCharKinds());
+  EXPECT_FALSE(ValidCharKind(0x40));
+  EXPECT_TRUE(ValidCharKind(0x32));
+}
+
+TEST(PeerData, TheGamesOwnStageList)
+{
+  // REX's stage select: Battlefield, Fountain of Dreams 0x07, Pokémon Stadium 2 0x2E, Pridemoor
+  // Keep 0x8A, Poké Floats 0x80 and its Training stage 0x37; and, wrongly, Home-Run Contest 0x34.
+  std::array<u8, BUILD_STAGE_KINDS_SIZE> kinds{};
+  for (u32 k : {0x01u, 0x07u, 0x2Eu, 0x8Au, 0x80u, 0x37u, 0x34u})
+    kinds[k >> 3] |= static_cast<u8>(1 << (k & 7));
+  EXPECT_FALSE(ValidStageKind(0x8A));
+  SetBuildStageKinds(kinds);
+  for (u32 k : {0x01u, 0x07u, 0x2Eu, 0x8Au, 0x80u, 0x37u})
+    EXPECT_TRUE(ValidStageKind(k)) << k;
+  // Not on its pages (P+'s Smashville 0x21, Final Destination), never a versus stage whatever it
+  // says, garbage.
+  for (u32 k : {0x21u, 0x02u, 0x34u, 0x00u, 0x100u, 0x1008Au})
+    EXPECT_FALSE(ValidStageKind(k)) << k;
+  // The game is gone: the range again.
+  ClearBuildStageKinds();
+  EXPECT_TRUE(ValidStageKind(0x21));
+  EXPECT_FALSE(ValidStageKind(0x8A));
+}
+
 TEST(PeerData, InitBlockTakesOnlyTheStageVariant)
 {
   // A real pair (Smashville, the host's lighting 06 against the joiner's 03).
@@ -439,12 +490,16 @@ TEST(PeerData, PortExtra)
   SanitizePortExtra(px);
   EXPECT_EQ(px[PX_HP] | px[PX_HP + 1], 0);
   EXPECT_EQ(px[PX_ROSTER_COUNT], ROSTER_MAX);
-  // A character the game has no fighter for ends it, and a CSS id past the CSS's.
+  // A character the game has no fighter for ends it, and a CSS id that is none (a mod's slot
+  // table has up to 0x100 slots: any other byte may be one).
   px[PX_ROSTER + 3 * PX_ENTRY] = 0xFE;
   SanitizePortExtra(px);
   EXPECT_EQ(px[PX_ROSTER_COUNT], 3);
   px[PX_ROSTER_COUNT] = 3;
-  px[PX_ROSTER + 1 * PX_ENTRY + 3] = 0x40;
+  px[PX_ROSTER + 2 * PX_ENTRY + 3] = 0xFE;
+  SanitizePortExtra(px);
+  EXPECT_EQ(px[PX_ROSTER_COUNT], 3);
+  px[PX_ROSTER + 1 * PX_ENTRY + 3] = 0xFF;
   SanitizePortExtra(px);
   EXPECT_EQ(px[PX_ROSTER_COUNT], 1);
 }

@@ -1,6 +1,7 @@
 import type { EmptyPayload, SuccessPayload } from "utils/ipc";
 import { _, makeEndpoint } from "utils/ipc";
 
+import type { PlusFamilyLaunchResult } from "../types";
 import type {
   ModBuild,
   ModBuildCodes,
@@ -46,6 +47,20 @@ export const ipc_modsInspectFolder = makeEndpoint.main(
 export const ipc_modsHost = makeEndpoint.main("mods_host", <ModsHostOptions>_, <SuccessPayload>_);
 
 export const ipc_modsJoin = makeEndpoint.main("mods_join", <ModsJoinOptions>_, <ModsJoinResult>_);
+
+/**
+ * A game that is a supported mod of Project+ (Cobalt, P+Ex; plus_family.ts) plays online in the
+ * P+ flow too: matchmaking and rooms in the game's own menus, with other players of that build
+ * (docs/design/pplus-mods.md §4). `mods_onlineBuildOf` says whether a game is one (its card is
+ * read, nothing starts); `mods_playOnline` starts it.
+ */
+export const ipc_modsOnlineBuildOf = makeEndpoint.main(
+  "mods_onlineBuildOf",
+  <{ id: string }>_,
+  <{ build: { id: string; name: string } | null }>_,
+);
+
+export const ipc_modsPlayOnline = makeEndpoint.main("mods_playOnline", <{ id: string }>_, <PlusFamilyLaunchResult>_);
 
 export const ipc_modsJoinByCode = makeEndpoint.main(
   "mods_joinByCode",

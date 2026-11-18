@@ -42,7 +42,7 @@ SCR_CSS = 15      # locked ITEM/STAGE presses (low byte) | keypad page << 8 | re
 
 # muSelCharTask (the CSS task): the ITEM and STAGE buttons' models; a ScnMdlSimple's +0xCC flags
 # have 0x60 set while nwSMSetVisibility hides it.
-TASK_ITEM, TASK_STAGE = 0x420, 0x424
+TASK_ITEM, TASK_STAGE = "MenSelchrState0005_TopN", "MenSelchrState0006_TopN"   # (B.css_model)
 HAND_X = 0x90
 HAND_BUTTON = 0xAC
 BUTTON_ITEM, BUTTON_STAGE = 0x19, 0x1A
@@ -62,8 +62,8 @@ def _task(g: Game) -> int:
     return _u(g.c, _u(g.c, _u(g.c, 0x805A0060) + 4) + 0x400)
 
 
-def _hidden(g: Game, off: int) -> bool:
-    mdl = _u(g.c, _u(g.c, _task(g) + off) + 0xC)
+def _hidden(g: Game, model: str) -> bool:
+    mdl = _u(g.c, B.css_model(g.c.read_mem, _task(g), model) + 0xC)
     return bool(_u(g.c, mdl + 0xCC) & 0x60)
 
 
@@ -102,7 +102,7 @@ def test_online_css_settings_are_locked(backend: OnlineBackend,
         g.to_css(mode)
         g.steps("wait 20")
         assert _hidden(g, TASK_ITEM) and _hidden(g, TASK_STAGE), mode
-        before = (g.c.read_mem(RECORD_MENU, 0x10), g.c.read_mem(B.RSS_EXDATA, 0x40))
+        before = (g.c.read_mem(RECORD_MENU, 0x10), g.c.read_mem(B.stage_random_switch(g.c.read_mem), 0x40))
         g.shot(f"{mode}-01-css")
         for i, (xy, button) in enumerate(((ITEM_XY, BUTTON_ITEM), (STAGE_XY, BUTTON_STAGE))):
             presses = _scratch(g, SCR_CSS) & 0xFF
@@ -114,7 +114,7 @@ def test_online_css_settings_are_locked(backend: OnlineBackend,
             assert _scratch(g, SCR_CSS) & 0xFF == presses + (1 if hit else 0)
             g.shot(f"{mode}-0{2 + i}-A-on-{'item' if button == BUTTON_ITEM else 'stage'}")
             assert g.scene() == "scSelctCharacter"
-        assert (g.c.read_mem(RECORD_MENU, 0x10), g.c.read_mem(B.RSS_EXDATA, 0x40)) == before
+        assert (g.c.read_mem(RECORD_MENU, 0x10), g.c.read_mem(B.stage_random_switch(g.c.read_mem), 0x40)) == before
         refused = _scratch(g, SCR_CSS) >> 24
         g.c.pad_script(0, CODE_MENU_COMBO)
         g.steps("wait 40")
@@ -146,7 +146,7 @@ def test_online_css_settings_are_locked(backend: OnlineBackend,
         assert not _hidden(g, TASK_READY), "no READY TO FIGHT after cancelling the search"
 
 
-TASK_READY = 0x3C4          # MenSelchrReady: the READY TO FIGHT banner
+TASK_READY = "MenSelchrReady_TopN"   # the READY TO FIGHT banner
 HAND_TARGET = 0x80          # 5 = over the banner
 BANNER_XY = (0.0, -3.0)
 

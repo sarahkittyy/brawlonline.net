@@ -21,6 +21,8 @@
 #include <gf/gf_memory_pool.h>
 #include <memory.h>
 #include <string.h>
+#include "font_cmap.h"
+#include "other_fonts.h"
 #include "labels.h"
 #include "ppom.h"
 
@@ -42,12 +44,18 @@ namespace Labels {
     static bool s_fontTried = false;
 
     // g_HeapInfos (0x80494958): {name, pool, size, arena} x 0x48; MeleeFont is heap 0x30.
+    // Brawl loads two fonts there, its regular one (20x24 cells) and then its bold 32-pixel one.
+    // A build may load another second font: REX's MeleeFont heap is smaller (0.33 MB, P+'s 0.45),
+    // and its second font has 20x24 cells too. The renderer works from any I4 font's own cells,
+    // so: the bold 32-pixel font where there is one (P+ and its mods), else the heap's last font.
     static bool findFont()
     {
         if (s_font.rfnt) return true;
         u32* info = (u32*)(0x80494958 + 16 * 0x30);
         u32 start = info[1], size = info[2];
         if (!isPtr(start) || size < 0x100 || size > 0x200000) return false;
+        Font last;
+        last.rfnt = NULL;
         for (u32 a = start; a + 0x60 < start + size; a += 4) {
             u32 magic = *(u32*)a;   // RFNU once the game has loaded it (RFNT on disc)
             if ((magic != 0x52464E55 && magic != 0x52464E54) || *(u16*)(a + 4) != 0xFEFF) continue;
@@ -57,8 +65,8 @@ namespace Labels {
             if (!isPtr(glyph)) continue;
             u8* tglp = (u8*)(glyph - 8);
             if (*(u32*)tglp != 0x54474C50 /* TGLP */) continue;
-            // the bold 32-pixel font, I4 sheets
-            if (tglp[8] != 32 || tglp[9] != 32 || *(u16*)(tglp + 0x12) != 0) continue;
+            // I4 sheets (the bold 32-pixel font: 32x32 cells)
+            if (*(u16*)(tglp + 0x12) != 0 || tglp[8] < 8 || tglp[9] < 8) continue;
             Font f;
             f.rfnt = (u8*)a;
             f.finf = finf;
@@ -76,32 +84,20 @@ namespace Labels {
             f.cwdh = *(u32*)(finf + 0x14);
             f.cmap = *(u32*)(finf + 0x18);
             if (!isPtr((u32)f.sheets) || !isPtr(f.cwdh) || !isPtr(f.cmap) || !f.rows || !f.lines) continue;
-            s_font = f;
-            return true;
+            // (a plugin not built for a build with other fonts takes the bold 32-pixel one alone)
+            if (!OtherFonts::ANY_CELL && (f.cellW != 32 || f.cellH != 32)) continue;
+            last = f;
+            if (f.cellW == 32 && f.cellH == 32) break;
         }
-        return false;
+        if (!last.rfnt) return false;
+        s_font = last;
+        return true;
     }
 
     static int glyphIndex(u16 code)
     {
-        u32 p = s_font.cmap;
-        for (int guard = 0; isPtr(p) && guard < 64; guard++) {
-            u8* b = (u8*)p;
-            u16 lo = *(u16*)b, hi = *(u16*)(b + 2), method = *(u16*)(b + 4);
-            if (code >= lo && code <= hi) {
-                if (method == 0) return *(u16*)(b + 0xC) + (code - lo);
-                if (method == 1) return *(u16*)(b + 0xC + 2 * (code - lo));
-                if (method == 2) {
-                    u16 n = *(u16*)(b + 0xC);
-                    u16* t = (u16*)(b + 0xE);
-                    for (u16 i = 0; i < n; i++) {
-                        if (t[2 * i] == code) return t[2 * i + 1];
-                    }
-                }
-            }
-            p = *(u32*)(b + 8);
-        }
-        return s_font.alt;
+        int g = FontCmap::index(s_font.cmap, code);
+        return g >= 0 ? g : s_font.alt;
     }
 
     struct Width {

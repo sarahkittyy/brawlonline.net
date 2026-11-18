@@ -2,6 +2,8 @@
 #include <sy_core.h>
 #include <types.h>
 
+#include "ppom.h"
+
 // The room's rules on the room CSS (docs/design/room-rules.md, docs/game-code.md §14 "Room rules
 // RE"): P+'s own rules menu (muRuleTask, sora_menu_rule.rel) opened over the room CSS. The host
 // edits the room's rules there and they go to the server when the menu closes; everyone else

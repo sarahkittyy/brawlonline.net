@@ -29,7 +29,7 @@ namespace OnlineMenu {
     // The local panel's colour as drawn (P1's line) and the L / R / Z presses on its player box,
     // which change when P+ steps or resets the colour; -1 without P+'s Code Menu.
     int localColourKey();
-    bool selectableCharKind(int kind);  // a gmCharacterKind P+'s CSS can lock in
+    bool selectableCharKind(int kind);  // a gmCharacterKind this build's CSS can lock in (build.h)
     const char* cssLine(MuMsg* msg, u32 window, u32 line, const void* msbin, u32 caller);
     // Ranked's game setup step in Ranked (NULL otherwise; inactive while not connected), and
     // its line.

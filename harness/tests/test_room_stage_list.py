@@ -123,13 +123,26 @@ def test_room_loser_picks_from_the_list(backend: OnlineBackend, dolphin: Callabl
 
     loser = to_losers_stage_select(a, b, game)
     loser.shot("02-stage-select")
-    # Every stage of page 1 but the room's three is struck (P+'s strike art, P+'s striking on);
-    # pages 2-3 all of it. Page 1's positions: Yoshi's Story 0, Fountain of Dreams 9, Final
-    # Destination 10, Battlefield 17 (src/common/stages.ts).
-    struck = loser.c.read_mem(online_set.STRIKE_TABLE, 30)
-    page1 = int.from_bytes(struck[2:6], "big")
-    assert [page1 >> pos & 1 for pos in (0, 9, 10, 17)] == [0, 1, 0, 0], f"page 1 struck {page1:#x}"
-    assert struck[6:18] == b"\xff" * 12, f"pages 2-3 not struck: {struck.hex()}"
+    # Every stage but the room's three is struck (P+'s strike art, P+'s striking on), on every
+    # page. The stages' places are the build's own pages' (P+'s page 1: Yoshi's Story 0, Fountain
+    # of Dreams 9, Final Destination 10, Battlefield 17, src/common/stages.ts; a mod of P+ has the
+    # four elsewhere, REX on other pages). A page's strikes are {u16 positions 31.., u32 positions
+    # 0..30}, position 0 the lowest.
+    pages = B.read_stage_pages(loser.c.read_mem)
+    struck = online_set.struck(loser.c)
+
+    def page_bits(p: int) -> int:
+        ext, main = struct.unpack(">HI", struck[6 * p:6 * p + 6])
+        return ext << 31 | main & 0x7FFFFFFF
+
+    def bit(kind: int) -> int:
+        p = next(p for p, kinds in enumerate(pages) if kind in kinds)
+        return page_bits(p) >> pages[p].index(kind) & 1
+    assert [bit(kind) for kind in (YS, FOD, FD, BF)] == [0, 1, 0, 0], f"struck {struck.hex()}"
+    for p, kinds in enumerate(pages):
+        whole = (1 << len(kinds)) - 1
+        want = whole & ~sum(1 << i for i, kind in enumerate(kinds) if kind in (YS, FD, BF))
+        assert page_bits(p) & whole == want, f"page {p + 1} struck {page_bits(p):#x}, not {want:#x}"
     # A struck stage cannot even be highlighted (P+ drops the selection on it): the pick fails.
     with pytest.raises(B.RecipeError):
         B.sss_pick_stage(loser.c, FOD, 0, timeout_frames=400)
@@ -157,7 +170,7 @@ def test_room_loser_picks_any_stage(backend: OnlineBackend, dolphin: Callable[..
 
     # Game 2: nothing struck; a stage off the list, L held: its normal layout (alternate stages off).
     loser = to_losers_stage_select(a, b, game)
-    assert loser.c.read_mem(online_set.STRIKE_TABLE, 30) == bytes(30), "stages struck with any stage"
+    assert online_set.struck(loser.c) == bytes(30), "stages struck with any stage"
     loser.shot("02-stage-select")
     B.sss_pick_stage(loser.c, FOD, 0, held=["L"])
     _wait(lambda: online_set.gstatus(loser.c)["phase"] in ("running", "error", "ended"), 90,
@@ -310,14 +323,15 @@ def test_host_edits_the_stages_in_game(backend: OnlineBackend, dolphin: Callable
         a.steps(f"tap {k} 8", "wait 14")
     a.steps("wait 40")
     assert cursor() == (0, 0), cursor()
-    a.steps("tap DDOWN 8", "wait 14")             # Yoshi's Story, page 1's first stage
+    a.steps("tap DDOWN 8", "wait 14")             # page 1's first stage (P+'s: Yoshi's Story)
     assert cursor() == (0, 1), cursor()
+    first = B.read_stage_pages(a.c.read_mem)[0][0]
     a.steps("tap A 8", "wait 14", "tap DUP 8", "wait 14", "tap A 8", "wait 14")   # counterpick; the bar
     a.shot("10-host-switch")
     close_menu(a)
     for g in (a, b):
-        _wait(lambda g=g: YS in (session(g).get("stages") or {}).get("counterpicks", []), 20,
-              f"{g.name}: Yoshi's Story on the room's list")
+        _wait(lambda g=g: first in (session(g).get("stages") or {}).get("counterpicks", []), 20,
+              f"{g.name}: {first:#x} (P+'s Yoshi's Story) on the room's list")
         se = session(g)
         assert se["play"]["stage_choice"] == CHOICE_LOSER_PICKS_LIST, se["play"]
         assert se["play"]["name"] == "Custom", se["play"]

@@ -14,11 +14,18 @@ namespace PPOM {
         (u16)__builtin_offsetof(Block, session), (u16)sizeof(Session),
         (u16)__builtin_offsetof(Block, local), (u16)sizeof(Local),
         (u16)__builtin_offsetof(Block, debug), (u16)sizeof(Debug),
-        {0, 0, 0},
+        (u16)__builtin_offsetof(Block, build), (u16)sizeof(Build),
+        (u16)__builtin_offsetof(Block, layout), (u16)sizeof(Layout),
+        0,
     };
 
     // The contract with Dolphin (GameBridge.cpp): sizes and the mailbox/LOCAL adjacency.
     static_assert(sizeof(Mailbox) == 0x410, "mailbox");
+    static_assert(sizeof(Build) == 0x4C && __builtin_offsetof(Build, charKinds) == 4 &&
+                  __builtin_offsetof(Build, stageKinds) == 0x28 && __builtin_offsetof(Build, profile) == 0x48 &&
+                  __builtin_offsetof(Block, buildOff) == 0x18 && __builtin_offsetof(Block, mailbox) == 0x24, "build");
+    static_assert(sizeof(Layout) == 0xD0 && __builtin_offsetof(Layout, cssButtons) == 0x60 &&
+                  __builtin_offsetof(Block, layoutOff) == 0x1C, "layout");
     static_assert(sizeof(LockIn) == 0x0C, "lock-in");
     static_assert(sizeof(PortValues) == 0x3C, "port values");
     static_assert(sizeof(Local) == 0xF8 && __builtin_offsetof(Local, ownExtra) == 0x80 &&

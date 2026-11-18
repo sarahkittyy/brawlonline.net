@@ -13,7 +13,9 @@ import {
   ipc_modsInspectFolder,
   ipc_modsJoin,
   ipc_modsJoinByCode,
+  ipc_modsOnlineBuildOf,
   ipc_modsOpenSaveFolder,
+  ipc_modsPlayOnline,
   ipc_modsRefreshControllers,
   ipc_modsRemoveBuild,
   ipc_modsRequest,
@@ -50,6 +52,14 @@ const modsApi: ModsService = {
   },
   async host(options) {
     await ipc_modsHost.renderer!.trigger(options);
+  },
+  async onlineBuildOf(id) {
+    const { result } = await ipc_modsOnlineBuildOf.renderer!.trigger({ id });
+    return result.build;
+  },
+  async playOnline(id) {
+    const { result } = await ipc_modsPlayOnline.renderer!.trigger({ id });
+    return result;
   },
   async join(options) {
     const { result } = await ipc_modsJoin.renderer!.trigger(options);

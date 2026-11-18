@@ -5,6 +5,7 @@ use clap::Parser;
 
 use crate::engine::EngineConfig;
 use crate::region::RegionMap;
+use crate::games::Games;
 use crate::ruleset::Rulesets;
 
 #[derive(Debug, Clone, Parser)]
@@ -50,6 +51,11 @@ pub struct Config {
     /// Rulesets JSON (stage lists per mode). Defaults to the built-in config/rulesets.json.
     #[arg(long, env = "MM_RULESETS_FILE")]
     pub rulesets_file: Option<String>,
+
+    /// The builds of the game that may play (P+ and the mods of it, each with its stage lists).
+    /// Defaults to the built-in config/games.json.
+    #[arg(long, env = "MM_GAMES_FILE")]
+    pub games_file: Option<String>,
 
     /// Region table for the Unranked queue: JSON `{"region": ["a.b.c.d/len", ...]}`. Without it
     /// every ticket is in one region.
@@ -185,6 +191,7 @@ impl Config {
             latest_version: self.latest_version.clone().filter(|s| !s.is_empty()),
             update_feed_dir: self.update_feed_dir.clone().filter(|p| !p.as_os_str().is_empty()),
             rulesets: Rulesets::load(self.rulesets_file.as_deref())?,
+            games: Games::load(self.games_file.as_deref())?,
             regions: RegionMap::load(self.regions_file.as_deref())?,
             region_widen: Duration::from_secs(self.region_widen_secs),
             ranked_band: self.ranked_band.max(0.0),
@@ -232,6 +239,7 @@ impl Config {
             latest_version: None,
             update_feed_dir: None,
             rulesets_file: None,
+            games_file: None,
             regions_file: None,
             region_widen_secs: 30,
             ranked_band: 150.0,

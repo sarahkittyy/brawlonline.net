@@ -14,6 +14,7 @@
 #include "netmenu.h"
 #include "online_menu.h"
 #include "ppom.h"
+#include "restore_online.h"
 
 extern "C" {
     // Set while our online flow owns the Wi-Fi CSS (read by removeDisconnectPanel).
@@ -500,6 +501,7 @@ namespace NetMenu {
         for (int k = 0; k < 3; k++) s_pillFrom[k] = s_pillTo[k] = 0;
     }
 
+
     // muProcTop's update (vtable slot 5, sora_menu_main text+0x14FAC; vtable .data+0x1E10, name
     // "muProcTop"): the main menu's top page is one the launcher's requests can leave from.
     typedef int (*PageUpdateFn)(u8*);
@@ -507,6 +509,7 @@ namespace NetMenu {
     static int topUpdate(u8* page)
     {
         OnlineMenu::topPageRunning(page);
+        RestoreOnline::fix(page);   // (a main menu that took PLAY ONLINE off: restore_online.h)
         return s_origTopUpdate(page);
     }
 

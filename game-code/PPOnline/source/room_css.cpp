@@ -56,9 +56,13 @@
 #include <memory.h>
 #include <mu/mu_msg.h>
 #include <string.h>
+#include "build.h"
 #include "labels.h"
+#include "layout.h"
 #include "online_menu.h"
 #include "ppom.h"
+#include "rules_button.h"
+#include "word_buttons.h"
 
 extern "C" {
     // Set while showTeamAt has another player number in an area: OnlineMenu's cssCharPic then
@@ -531,7 +535,7 @@ namespace RoomCss {
 
     // ------------------------------------------------------------------------------------------
     // The room's two settings on the CSS's own ITEM and STAGE buttons (right end of the bar,
-    // MenSelchrState0005 / 0006 at muSelCharTask +0x420 / +0x424; hidden on the other online
+    // MenSelchrState0005 / 0006, P+ v3.2's muSelCharTask +0x420 / +0x424; hidden on the other online
     // CSSs, online_menu.cpp hideHeaderArt): ITEM shows "PUBLIC" / "FRIENDS" / "PRIVATE"
     // (friends only, docs/design/friends.md: Sarah's board, 2026-11-14), STAGE "FFA" /
     // "TEAMS" in rainbow letters (P+'s rainbow team battle: any costume, a team glow) / "TEAMS"
@@ -543,14 +547,14 @@ namespace RoomCss {
     // the border (texels 4..44 x 4..20, the border kept), and the button is pointed at the copy
     // for its state, as the state labels are (labelModel / labelWords).
     struct HeaderLabel {
-        u32 obj;          // muSelCharTask offset
+        int obj;          // the model (Build::cssModel)
         const char* tex;
         const char* text[3];   // NULL: no such state
         int rainbow;           // the state whose letters are rainbow, -1 none
     };
     static const HeaderLabel HEADER[2] = {
-        {0x420, "MenSelchrWifi00Button11", {"PRIVATE", "PUBLIC", "FRIENDS"}, -1},
-        {0x424, "MenSelchrWifi00Button12", {"FFA", "TEAMS", "TEAMS"}, 1},
+        {Build::CSS_ITEM, "MenSelchrWifi00Button11", {"PRIVATE", "PUBLIC", "FRIENDS"}, -1},
+        {Build::CSS_STAGE, "MenSelchrWifi00Button12", {"FFA", "TEAMS", "TEAMS"}, 1},
     };
     static u8* s_hdrCopy[2][3];
     static u32 s_hdrOrig[2];      // the game's image word of each
@@ -560,7 +564,7 @@ namespace RoomCss {
     static void showHeaderLabel(u8* task, int b, int which)
     {
         const HeaderLabel& H = HEADER[b];
-        u8* obj = *(u8**)(task + H.obj);
+        u8* obj = Build::cssModel(task, H.obj);
         if (!isPtr((u32)obj)) return;
         u8* mdl = *(u8**)(obj + 8);
         if (!isPtr((u32)mdl) || *(u32*)mdl != 0x4D444C30) return;
@@ -704,8 +708,12 @@ namespace RoomCss {
                 if (isPtr((u32)scn)) scn[0xD0] = scn[0xD1] = STATE_PRIORITY_FRONT;
             }
             setGrey(a, i, sitting);
+            // A CSS without Brawl's online art has no state box to say it (WordButtons::artless,
+            // REX): an empty slot's plate says whether it is open or closed.
+            const bool art = !WordButtons::artless();
             plate(a, v.kind == PV_SEARCHING && s_twos               ? TWOS_OPEN_PLATE :
-                     v.kind == PV_CLOSED || v.kind == PV_SEARCHING ? "" :
+                     v.kind == PV_CLOSED                           ? (art || !s_inRoom ? "" : "Closed") :
+                     v.kind == PV_SEARCHING                        ? (art || !s_inRoom ? "" : "Open") :
                      sitShown == 2                                ? WATCHING_PLATE :
                      sitting                                      ? SIT_OUT_PLATE :
                                                                     v.name);
@@ -1172,6 +1180,10 @@ namespace RoomCss {
     // about 31 pixels a unit in a 2484-wide screenshot; x 0 is the screen's middle, y up); the four
     // panels are centred at about x -22, -7, 8, 23, from y -1.5 (their top) to -20 (the plates).
     static const u32 HAND_X = 0x90, HAND_Y = 0x94;
+    // muSelCharHand +0x80: what the hand is over (2 a character of the grid, 7 the same with the
+    // coin in the hand).
+    static const u32 HAND_TARGET = 0x80;
+    static const int HAND_ON_GRID = 2, HAND_ON_GRID_HOLDING = 7;
     static const float PANEL_X0 = -22.0f, PANEL_STEP = 15.0f, PANEL_HALF = 7.0f;
     static const float PANEL_TOP = -1.5f, PANEL_BOTTOM = -20.0f;
 
@@ -1181,7 +1193,7 @@ namespace RoomCss {
         u8* a = task ? area(task, 0) : NULL;
         if (!a) return;
         int css = *(int*)(a + 0x1B8);
-        if (css < 0 || css >= 0x40 || css == CSS_NONE || css == 0x29) return;
+        if (css < 0 || css >= Build::CSS_IDS || css == CSS_NONE || css == 0x29) return;
         *(u32*)(a + 0x1BC) = (u32)costume;
         SET_CHAR_PIC(a, css, 1, costume, 0, *(u32*)(a + 0x1C0), 0);
     }
@@ -1211,9 +1223,21 @@ namespace RoomCss {
     // the name tags (the user's, 2026-10-23: the plate reached into the strip below, and they sat
     // out going to change their tag), and the hand on anything else of Brawl's (the tag list's
     // rows) is not on a plate.
+    //
+    // Where the plates are is the build's card art, which nothing in the game says: layout.h's
+    // g_cardPlates (P1's plate's middle, the step to the next card's, half its width), P+'s card
+    // (the pencil in a strip left of the plate: above) unless the build's entry of mm's games
+    // table has its own (`layout.cardPlates`; docs/design/pplus-mods.md section 3). Cobalt has
+    // Brawl's own card: the pencil stands at the plate's right end, inside the game's one button
+    // (0x1C from x -27 to -16 on P1's card, and nothing left of it), so there the plate is the
+    // name alone, x -26.9..-18.3, and the pencil right of it opens the name tags (with P+'s
+    // numbers an A on Cobalt's pencil sat the player out).
     static const int BUTTON_TAGS = 0x1C;
-    static const float PLATE_X0 = -21.5f, PLATE_STEP = 16.0f, PLATE_HALF = 6.0f;
     static const float PLATE_TOP = -17.75f, PLATE_BOTTOM = -21.1f;
+}
+
+
+namespace RoomCss {
     int plateUnderHand()
     {
         u8* task = cssTask();
@@ -1221,13 +1245,19 @@ namespace RoomCss {
         u8* a0 = area(task, 0);
         u8* hand = a0 ? *(u8**)(a0 + 0x1A8) : NULL;
         if (!isPtr((u32)hand)) return -1;
+        // Not with the STOCKS box's picker open (hand mode 5): the hand's button then reads 0
+        // wherever it is, and the A that takes the pick, with the hand on the box's lower edge
+        // (y -17.78, found by the stock control test on Cobalt), was an A on the plate below: it
+        // sat the player out.
+        if (*(int*)(hand + HAND_MODE) == HAND_MODE_PICKER) return -1;
         int button = *(int*)(hand + HAND_BUTTON);
         if (button != 0 && button != BUTTON_TAGS) return -1;
         float x = *(float*)(hand + HAND_X), y = *(float*)(hand + HAND_Y);
         if (y > PLATE_TOP || y < PLATE_BOTTOM) return -1;
+        const float* plates = g_cardPlates;
         for (int i = 0; i < 4; i++) {
-            float dx = x - (PLATE_X0 + PLATE_STEP * i);
-            if (dx >= -PLATE_HALF && dx <= PLATE_HALF) return i;
+            float dx = x - (plates[0] + plates[1] * i);
+            if (dx >= -plates[2] && dx <= plates[2]) return i;
         }
         return -1;
     }
@@ -1251,6 +1281,11 @@ namespace RoomCss {
         if (!isPtr((u32)hand)) return -1;
         float x = *(float*)(hand + HAND_X), y = *(float*)(hand + HAND_Y);
         if (y > PANEL_TOP || y < PANEL_BOTTOM) return -1;
+        // On a character of the grid the hand is not on a panel: a mod's grid has more rows than
+        // P+'s (Cobalt's seven reach y -2.6, under the panels' top), and an A on its last row was
+        // taken as an A on the panel there, so those characters could not be picked in a room.
+        const int target = *(int*)(hand + HAND_TARGET);
+        if (target == HAND_ON_GRID || target == HAND_ON_GRID_HOLDING) return -1;
         for (int i = 0; i < 4; i++) {
             if (i == s_localSlot) continue;   // the player's own
             float cx = PANEL_X0 + PANEL_STEP * i;

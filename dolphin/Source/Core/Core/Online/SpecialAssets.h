@@ -14,6 +14,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "Common/CommonTypes.h"
@@ -50,16 +51,35 @@ constexpr u64 MAX_ARCHIVE = 32ull << 20;
 
 // Starts building the bundle from the SD card image at `image_path` (once; later calls do nothing
 // while it is Loading or Ready, and build again a few seconds after it was Unavailable). Returns
-// the state now.
-State Request(const std::string& image_path);
+// the state now. `folder`: the running build's folder on the card (CardFolder), looked in first;
+// empty: P+'s.
+State Request(const std::string& image_path, const std::string& folder = {});
+// The card folder in the path the game's File Patch Code loads its files from ("/Project+/";
+// a mod's is padded to that length: "/Cobalt/./", "/P+Ex/././"): "Project+", "Cobalt", "P+Ex".
+// Empty for anything that is not a plain path (control characters, "..", a drive).
+std::string CardFolder(std::string_view game_path);
 State GetState();
 // The bundle, once Ready (empty otherwise).
 std::vector<u8> Bundle();
 // Why it is Unavailable, for the log.
 std::string Error();
 
-// The steps, pure (unit-tested): LZ11 (Nintendo's "LZ77 type 0x11"), and the bundle from an
-// unpacked archive (nullopt with `why` when it is not P+'s main-menu archive).
+// The rules menu's archive from the same file: its ARC named MenuRule_* (the RULES pages' models,
+// textures and messages). P+'s character select loads a copy of it (sc_selcharacter2.pac); a build
+// whose sc_selcharacter2.pac is an empty archive (REX: its rules are on the main menu only) has
+// no rules menu on the character select, so a room's RULES asks for this one (CMD_MENU_ARCHIVE)
+// and the plugin makes a gfArchive of it (room_rules.cpp). The game's buffer starts with MENU_MAGIC
+// and its nonce, as the box's does; Dolphin writes the ARC over them.
+constexpr u32 MENU_MAGIC = 0x4D415243;  // "MARC"
+constexpr u32 MAX_MENU_ARCHIVE = 0x400000;
+// As Request, for the rules archive (one read of the card makes both): its state now.
+State RequestMenuArchive(const std::string& image_path, const std::string& folder = {});
+// The rules archive, once ready (empty otherwise).
+std::vector<u8> MenuArchive();
+
+// The steps, pure (unit-tested): LZ11 (Nintendo's "LZ77 type 0x11"), the bundle from an unpacked
+// archive (nullopt with `why` when it is not P+'s main-menu archive), and its rules archive.
 std::optional<std::vector<u8>> DecompressLz11(std::span<const u8> in, u64 max_out);
 std::optional<std::vector<u8>> BuildBundle(std::span<const u8> archive, std::string* why);
+std::optional<std::vector<u8>> FindMenuArchive(std::span<const u8> archive, std::string* why);
 }  // namespace Online::SpecialAssets

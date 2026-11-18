@@ -12,7 +12,9 @@
 #include <mu/mu_msg.h>
 #include <string.h>
 
+#include "variant.h"
 #include "online.h"
+#include "build.h"
 #include "online_menu.h"
 #include "training_room.h"
 #include "ppom.h"
@@ -23,7 +25,10 @@
 #include "stage_switch.h"
 #include "room_rules.h"
 #include "rules_button.h"
+#include "rules_rebuild.h"
+#include "word_buttons.h"
 #include "labels.h"
+#include "layout.h"
 #include "stage_legal.h"
 
 extern "C" {
@@ -396,7 +401,7 @@ namespace OnlineMenu {
         if (!area) return -1;
         if (area[0x1F8] || area[0x1F9]) return -1;
         int c = *(int*)(area + 0x1B8);
-        return (c >= 0 && c < 0x40 && c != 0x28) ? c : -1;
+        return (c >= 0 && c < Build::CSS_IDS && c != Build::CSS_NONE) ? c : -1;
     }
 
     // P+'s "Hold Z for AltZ Characters, R/C for AltR Characters" (LegacyTE/AltCostume.asm, hook
@@ -427,44 +432,39 @@ namespace OnlineMenu {
         return (c >= 0 && c < 0x20) ? c : 0;
     }
 
-    // The gmCharacterKind of a CSS id (P+'s table, through the game's own conversion); Random is
-    // drawn here, so that the lock-in Dolphin sends is a real character, as Slippi resolves
-    // random before it sends its selections.
-    static const u8 PPLUS_ROSTER[] = {
-        0x00, 0x09, 0x0D, 0x15, 0x05, 0x0C, 0x01, 0x1A, 0x0A, 0x07, 0x13, 0x25, 0x02, 0x24, 0x0E,
-        0x0F, 0x14, 0x08, 0x23, 0x2E, 0x2B, 0x2C, 0x2A, 0x20, 0x03, 0x04, 0x0B, 0x19, 0x06, 0x16,
-        0x1F, 0x11, 0x2D, 0x21, 0x12, 0x22, 0x10, 0x17, 0x18, 0x26, 0x27, 0x30};
+    // The gmCharacterKind of a CSS id (the build's table, through the game's own conversion);
+    // Random is drawn here, so that the lock-in Dolphin sends is a real character, as Slippi
+    // resolves random before it sends its selections. The draw is from what the build's own RANDOM
+    // draws from (Build::randomCss), not from a list of P+'s: a mod's characters are in it.
     static int resolveCss(int css)
     {
-        if (css != 0x29) return css;
-        typedef int (*RandiFn)(int);
-        int i = ((RandiFn)0x8003FC7C)((int)sizeof(PPLUS_ROSTER));
-        return PPLUS_ROSTER[i % sizeof(PPLUS_ROSTER)];
+        if (css != Build::CSS_RANDOM) return css;
+        return Build::randomCss();
     }
     static u8 charKindOf(int css)
     {
-        typedef int (*ExchangeFn)(int);
-        return (u8)((ExchangeFn)0x800AF80C)(css);   // muMenu::exchangeMuSelchkind2GmCharacterKind
+        return Build::charKindOf(css);
     }
 
-    // P+'s hold-shield slots (docs/brawl-memory-map.md): 0x36 Wario-Man and 0x38 Giga Bowser are
-    // not played online in any mode; they lock in as Wario and Bowser. 0x37 (solo Popo) stays.
+    // The hold-shield slots of Bowser and Wario (P+ 0x38 and 0x36; docs/brawl-memory-map.md):
+    // Giga Bowser and Wario-Man are not played online in any mode; they lock in as Bowser and
+    // Wario. By the slot's character, whatever slot a build gives them. P+'s 0x37 (solo Popo)
+    // stays.
     static int plainCss(int css)
     {
-        if (css == 0x36) return 0x15;
-        if (css == 0x38) return 0x0C;
-        return css;
+        if (css < 0 || css >= Build::CSS_IDS || css == Build::CSS_NONE || css == Build::CSS_RANDOM) return css;
+        int kind = charKindOf(css);
+        int plain = kind == Build::KIND_WARIOMAN ? Build::cssOfKind(Build::KIND_WARIO) :
+                    kind == Build::KIND_GIGA_BOWSER ? Build::cssOfKind(Build::KIND_BOWSER) : css;
+        return plain >= 0 ? plain : css;
     }
 
-    // SESSION's characters come from the other player's machine. Only what this CSS could lock in
-    // reaches the match setup: the roster, plus solo Popo (P+'s hold-shield slot 0x37).
+    // SESSION's characters come from the other player's machine. Only what this build's character
+    // select could lock in reaches the match setup (Build::playableCharKind: a slot of the build's
+    // table has it, P+'s solo Popo and a mod's own characters included; never a Final Smash form).
     bool selectableCharKind(int kind)
     {
-        if (kind < 0 || kind > 0xFF) return false;
-        for (u32 i = 0; i < sizeof(PPLUS_ROSTER); i++) {
-            if (charKindOf(PPLUS_ROSTER[i]) == kind) return true;
-        }
-        return charKindOf(0x37) == kind;
+        return Build::playableCharKind(kind);
     }
 
     // The character to lock in: the one on the coin, else (connected, back from a match or
@@ -874,13 +874,18 @@ namespace OnlineMenu {
     // are locked online (cssSwitchButtons below), and the status line takes their place.
     // The READY TO FIGHT banner (MenSelchrReady) shows while START would ready the player
     // (startReadies) and is hidden otherwise; it stays inert either way (cssReadyBanner).
+    // Each from Build::cssModel: P+ v3.2's task keeps them at +0x418, +0x158 / +0x15C,
+    // +0x420 / +0x424 and +0x3C4; REX's (BrawlEx's task) at others, where those offsets held face
+    // icons, so REX's numeral (its stock count, a "4" at the bar's start) stayed over the code.
     static bool roomIn();
     static bool startReadies();
+    static const int RULE_MODEL = Build::CSS_RULE;
+    static const int READY_MODEL = Build::CSS_READY;
     static void hideHeaderArt()
     {
-        static const u32 OBJS[] = {0x418 /* TitleW */, 0x158 /* Rnum1 */, 0x15C /* Rnum2 */,
-                                   0x420 /* State0005: ITEM */, 0x424 /* State0006: STAGE */,
-                                   0x3C4 /* Ready: the READY TO FIGHT banner (cssReadyBanner) */};
+        static const u8 OBJS[] = {Build::CSS_TITLE, Build::CSS_RNUM1, Build::CSS_RNUM2,
+                                  Build::CSS_ITEM, Build::CSS_STAGE,
+                                  Build::CSS_READY /* the READY TO FIGHT banner (cssReadyBanner) */};
         typedef void (*SetVisFn)(void* scnMdl, bool vis);
         u8* task = cssTask();
         if (!task) return;
@@ -889,12 +894,12 @@ namespace OnlineMenu {
         // were hidden first and stayed hidden (a player's report, 2026-10-24).
         bool roomButtons = roomCss() && roomIn() && !twosParty();
         for (u32 i = 0; i < sizeof(OBJS) / sizeof(OBJS[0]); i++) {
-            u32 obj = *(u32*)(task + OBJS[i]);
+            u32 obj = (u32)Build::cssModel(task, OBJS[i]);
             if (!isPtr(obj)) continue;
             u32 mdl = *(u32*)(obj + 0xC);   // MuObject::m_scnMdl
             if (!isPtr(mdl)) continue;
-            bool header = OBJS[i] == 0x420 || OBJS[i] == 0x424;
-            bool vis = OBJS[i] == 0x3C4 ? startReadies() : header && roomButtons;
+            bool header = i == 3 || i == 4;
+            bool vis = OBJS[i] == READY_MODEL ? startReadies() : header && roomButtons;
             ((SetVisFn)0x80043D20)((void*)mdl, vis);   // nwSMSetVisibility
         }
     }
@@ -956,8 +961,19 @@ namespace OnlineMenu {
     // lines are found by that layout (all 85 value lines of P+ v3.2's menu, checked against a
     // dump; docs/game-code.md §6); their values are saved on the way in and put back when the
     // menus load, as the set rule.
-    static const u32 CODE_MENU = 0x804E0000, CODE_MENU_SIZE = 0x2520;
-    static const int CODE_MENU_LINES = 96;   // P+ v3.2 has 85; the Syringe heap has no room for more
+    // A mod's menu is its own file, bigger than P+'s (P+ 0x2520 bytes and 85 value lines, Cobalt
+    // 0x3D20 and 158, P+Ex 0x3B10 and 158: their own mechanics' switches, a longer character
+    // list), so the lines are found by walking the menu and not within P+'s size: the header's
+    // +4 is the main page, the pages follow one another, a page is 0x14 bytes (its +0 the
+    // current line's offset, a u32 under 0x10000) and then its lines, each as long as its +0
+    // says (types 0-2 the value lines, 3 a submenu, 4 a comment, 5 a print). The walk ends at
+    // what is neither (P+Ex's menus end in pointer tables, P+'s in the file's end). On P+ it
+    // finds the same 85 lines in the same order as a scan of the 0x2520 bytes did.
+    static const u32 CODE_MENU = 0x804E0000, CODE_MENU_MAX = 0x10000;
+    static const u32 CODE_MENU_MAIN_PAGE = CODE_MENU + 4, CODE_MENU_PAGE_HEADER = 0x14;
+    // (Project+'s own plugin keeps room for P+'s 85 and a few more; lines past it are left as
+    // they are, as past 256 in the others.)
+    static const int CODE_MENU_LINES = PPON_BRAWLEX ? 256 : 96;
     static u32 s_codeMenuSaved[CODE_MENU_LINES];
     static int s_codeMenuSavedCount = -1;
     // The defaults as the menu file has them, read once at boot: a line's +0x10 is not always
@@ -966,14 +982,17 @@ namespace OnlineMenu {
     static u32 s_codeMenuDefault[CODE_MENU_LINES];
     static int s_codeMenuDefaults = 0;
 
+    // A line's text offset: a u16 at +5 (Cobalt's P1 Character Select has its text at 0x1A4).
+    static u32 codeMenuText(u32 p) { return ((u32)((u8*)p)[5] << 8) | ((u8*)p)[6]; }
+
     static bool codeMenuLine(u32 p)
     {
         u8* l = (u8*)p;
-        u32 size = *(u16*)l, type = l[2], text = l[6];
-        if ((size & 3) || size < 0x20 || size > 0x400 || p + size > CODE_MENU + CODE_MENU_SIZE) return false;
+        u32 size = *(u16*)l, type = l[2], text = codeMenuText(p);
+        if ((size & 3) || size < 0x20 || size > 0x1000 || p + size > CODE_MENU + CODE_MENU_MAX) return false;
         if (type > 2 || text < 0x1C || text >= size) return false;
         u32 options = *(u32*)(l + 0x18);
-        if (type == 0 ? (options < CODE_MENU || options >= CODE_MENU + CODE_MENU_SIZE) : text != 0x20) return false;
+        if (type == 0 ? (options < CODE_MENU || options >= CODE_MENU + CODE_MENU_MAX) : text != 0x20) return false;
         const char* t = (const char*)l + text;
         if (!((t[0] >= 'A' && t[0] <= 'Z') || (t[0] >= 'a' && t[0] <= 'z'))) return false;
         for (u32 i = 0; text + i < size && t[i]; i++) {
@@ -983,13 +1002,34 @@ namespace OnlineMenu {
         return false;
     }
 
+    // The value line after `p` (0: the first one); 0 when there is none.
+    static u32 codeMenuNext(u32 p)
+    {
+        const u32 end = CODE_MENU + CODE_MENU_MAX - 0x20;
+        u32 q;
+        if (p) {
+            q = p + *(u16*)p;
+        } else {
+            q = *(u32*)CODE_MENU_MAIN_PAGE;
+            if (q < CODE_MENU + 0x40 || q >= end || (q & 3) || *(u16*)q != 0) return 0;
+        }
+        while (q < end) {
+            bool page = *(u16*)q == 0;
+            if (page) q += CODE_MENU_PAGE_HEADER;
+            u32 size = *(u16*)q, type = ((u8*)q)[2];
+            if (size < 8 || (size & 3) || type > 8 || q >= end) return 0;
+            if (type <= 2 && codeMenuLine(q)) return q;
+            q += size;
+        }
+        return 0;
+    }
+
     // mode 0: save the values, 1: put the defaults in, 2: put the saved values back,
     // 3: read the defaults (at boot).
     static int codeMenuLines(int mode)
     {
         int n = 0;
-        for (u32 p = CODE_MENU; p + 0x20 <= CODE_MENU + CODE_MENU_SIZE && n < CODE_MENU_LINES; p += 4) {
-            if (!codeMenuLine(p)) continue;
+        for (u32 p = codeMenuNext(0); p && n < CODE_MENU_LINES; p = codeMenuNext(p)) {
             u32* value = (u32*)(p + 8);
             if (mode == 0) s_codeMenuSaved[n] = *value;
             else if (mode == 1) *value = n < s_codeMenuDefaults ? s_codeMenuDefault[n] : *(u32*)(p + 0x10);
@@ -1021,9 +1061,9 @@ namespace OnlineMenu {
     static void codeMenuSelect(const char* name, u32 value)
     {
         u32 len = strlen(name);
-        for (u32 p = CODE_MENU; p + 0x20 <= CODE_MENU + CODE_MENU_SIZE; p += 4) {
-            if (!codeMenuLine(p) || ((u8*)p)[2] != 0) continue;
-            if (strncmp((const char*)p + ((u8*)p)[6], name, len) != 0) continue;
+        for (u32 p = codeMenuNext(0); p; p = codeMenuNext(p)) {
+            if (((u8*)p)[2] != 0) continue;
+            if (strncmp((const char*)p + codeMenuText(p), name, len) != 0) continue;
             *(u32*)(p + 8) = value;
             return;
         }
@@ -1057,7 +1097,7 @@ namespace OnlineMenu {
     static u32* slotColourLine(int port)
     {
         u32 l = *(u32*)(SLOT_COLOUR_LINES + 4 * port);
-        if (l < CODE_MENU || l + 0x14 > CODE_MENU + CODE_MENU_SIZE || (l & 3)) return NULL;
+        if (l < CODE_MENU || l + 0x14 > CODE_MENU + CODE_MENU_MAX || (l & 3)) return NULL;
         return (u32*)l;
     }
 
@@ -1492,14 +1532,37 @@ namespace OnlineMenu {
         u8 _38[0x48 - 0x38];
     };
 
-    static const float STATUS_X1 = -318.0f;     // the rule window's own: -208 .. 144
-    // In a room: up to the RULES button (rules_button.cpp, left of the ITEM / STAGE buttons; it was
-    // 222 / 530 before RULES). The fit decides where a line ends (the window does not cut it): a
-    // font unit is about 1.5 px at 2000 wide ("Waiting for players" 318 units), and the room's
-    // line has about 570 px from its start to RULES.
-    static const float ROOM_STATUS_X2 = 158.0f;
-    static const int ROOM_STATUS_FIT = 378;
-    static const float STATUS_X2 = 330.0f;
+    // Where the rule line's windows go: layout.h's g_cssPlaces, P+'s bar unless the build's
+    // entry of mm's games table has its own (`layout.cssBar`: REX's art has a shorter bar further
+    // left, its grid right under it). The windows hang from the bar's rule model
+    // (MenSelchrRule, Build::cssModel), so a window unit is the same on each (about 0.62 px at
+    // 828 wide). In window units (MuMsg+0xC), as the constants they were:
+    //   [0] the status line's x1 (the rule window's own: -208 .. 144)
+    //   [1] its x2 off a room, [2] in a room: up to the RULES button (rules_button.cpp, left of
+    //       the ITEM / STAGE buttons; it was 222 / 530 before RULES)
+    //   [3] the room's fit (font units): it decides where a line ends (the window does not cut
+    //       it): a font unit is about 1.5 px at 2000 wide ("Waiting for players" 318 units), and
+    //       the room's line has about 570 px from its start to RULES
+    //   [4] [5] the own code's x1 x2, [6] its y offset from the status line
+    //   [7] [8] the room host's x1 x2, [9] its y (below the bar's middle; y grows down)
+    //   [10] [11] the room's play line's x1 x2, [12] its y
+    //   [13] the size of the text in windows 1-7
+    // Not const: tests move a place and see the windows follow (cssPlaceChanged).
+}
+namespace OnlineMenu {
+    static const float* cssPlace() { return g_cssPlaces; }
+    // The row's values as last laid out: a change re-attaches and reprints the windows.
+    static float s_placeSeen[14];
+    static bool cssPlaceChanged()
+    {
+        const float* p = cssPlace();
+        bool changed = false;
+        for (int i = 0; i < 14; i++) {
+            if (s_placeSeen[i] != p[i]) changed = true;
+            s_placeSeen[i] = p[i];
+        }
+        return changed;
+    }
     static const float WRAP_SCALE = 0.7f;
     // A text too wide for one line at scale 1 is one line, smaller (down to this), rather than
     // two lines at WRAP_SCALE (staging feedback 2026-10-12: "Press START to select stage" on two
@@ -1656,7 +1719,6 @@ namespace OnlineMenu {
     // In Ranked the same window shows the player's rating instead (Slippi's CSS shows the rank
     // there): the Elo number and, after a set, its change, e.g. "1523 (+14)"; "????" while placing.
     static const u32 OWN_WINDOW = 1;
-    static const float OWN_X1 = -640.0f, OWN_X2 = -395.0f;
     static char s_roomTop[24];
     static const char* ownText()
     {
@@ -1681,8 +1743,15 @@ namespace OnlineMenu {
         if (s.mode == PPOM::MODE_RANKED) return s.rankText;
         return "";
     }
+    static void printCssStatus();
     static void showOwnCode()
     {
+        // The build's places changed (tests move them): every window of the bar again.
+        if (cssPlaceChanged() && s.haveWindow && s.cssMsg) {
+            s.ownShown = false;
+            s.roomBtnsShown = false;
+            printCssStatus();
+        }
         const char* text = ownText();
         if (!s.cssMsg || !text[0]) return;
         if (s.ownShown) {
@@ -1699,7 +1768,7 @@ namespace OnlineMenu {
         if (!s.haveWindow) return;
         MuMsg* m = s.cssMsg;
         u8* task = cssTask();
-        u32 obj = task ? *(u32*)(task + 0x150) : 0;   // MenSelchrRule, the rule line's model
+        u32 obj = (u32)Build::cssModel(task, RULE_MODEL);   // the rule line's model
         u32 mdl = isPtr(obj) ? *(u32*)(obj + 0x10) : 0;
         u8* message = (u8*)m->m_message;
         u32 bufs = isPtr((u32)message) ? *(u32*)(message + 0x1D8) : 0;
@@ -1708,10 +1777,12 @@ namespace OnlineMenu {
         typedef void (*AttachFn)(MuMsg*, u32, u32 scnMdl, u32 node, float size);
         ((AttachFn)0x800B8C90)(m, OWN_WINDOW, mdl, 0, size);   // MuMsg::attachScnMdlSimple
         WindowSetting* ws = (WindowSetting*)(*(u32*)((u8*)m + 0xC) + 0x48 * OWN_WINDOW);
-        ws->x1 = OWN_X1;
-        ws->x2 = OWN_X2;   // a room's code lined up as the connect code
-        ws->y1 = s.windowY1;
-        ws->y2 = s.windowY2;
+        const float* place = cssPlace();
+        ws->x1 = place[4];
+        ws->x2 = place[5];   // a room's code lined up as the connect code
+        ws->y1 = s.windowY1 + place[6];
+        ws->y2 = s.windowY2 + place[6];
+        if (place[13] != 1.0f) ws->scaleX = ws->scaleY = place[13];
         m->setAlignMode(OWN_WINDOW, MuMsg::Align_Right);
         m->setFontColor(OWN_WINDOW, 0xFF, 0xFF, 0xFF, 0xFF);
         m->printf(OWN_WINDOW, "%s", text);
@@ -1739,9 +1810,10 @@ namespace OnlineMenu {
                 s.windowY2 = ws->y2;
                 s.windowLineSpace = ws->lineSpace;
             }
-            ws->x1 = STATUS_X1;
-            ws->x2 = roomCss() && roomIn() ? ROOM_STATUS_X2 : STATUS_X2;
-            int fit = roomCss() && roomIn() ? ROOM_STATUS_FIT : STATUS_FIT;
+            const float* place = cssPlace();
+            ws->x1 = place[0];
+            ws->x2 = roomCss() && roomIn() ? place[2] : place[1];
+            int fit = roomCss() && roomIn() ? (int)place[3] : STATUS_FIT;
             layout = layoutStatus(s.status, text, fit);
             bool two = layout == LAYOUT_TWO;
             // one small line: as large as fits (at least WRAP_SCALE: a single long word, or
@@ -2231,7 +2303,9 @@ namespace OnlineMenu {
 
     // Slippi's HandleOnlineLockedOptions.asm: logged out (0) or with an update required (2),
     // Ranked, Unranked, Direct and Teams are locked. Not before Dolphin has answered.
-    bool modesLocked() { return s.appState >= 0 && s.appState != 1; }
+    // And on a build that does not meet the plugin's contract (Build::conforms, build.h): its
+    // matches could not be set up, so nothing is started.
+    bool modesLocked() { return (s.appState >= 0 && s.appState != 1) || !Build::conforms(); }
 
     void codeEntered(const char* code)
     {
@@ -2584,6 +2658,10 @@ namespace OnlineMenu {
             SpecialBox::onAssets(*r);
             return;
         }
+        if (r->cmd == PPOM::CMD_MENU_ARCHIVE) {
+            RulesRebuild::onMenuArchive(*r);
+            return;
+        }
         if (r->cmd == PPOM::CMD_GET_MATCH_STATE) {
             // The answer to FIND_OPPONENT or to one of the polls that follow it.
             if (s.mode >= 0 && s.searchSeq && r->seq >= s.searchSeq) {
@@ -2913,14 +2991,10 @@ namespace OnlineMenu {
         out[o] = 0;
     }
 
-    // The CSS id of a gmCharacterKind (the inverse of charKindOf over the CSS's ids).
+    // The CSS id of a gmCharacterKind (the inverse of charKindOf over the build's slots).
     static int cssOfKind(int kind)
     {
-        for (int css = 0; css < 0x40; css++) {
-            if (css == 0x28 || css == 0x29) continue;
-            if (charKindOf(css) == kind) return css;
-        }
-        return -1;
+        return Build::cssOfKind(kind);
     }
 
     // The other three areas' panels (areas 1-3): each shows the room slot it stands at
@@ -3167,13 +3241,13 @@ namespace OnlineMenu {
     // (window 2 of the rule line's MuMsg, attached as the own-code window). Window units are 1.3
     // screen pixels (2000 wide) from x = 1265 px (found live).
     static const u32 ROOM_HOST_WINDOW = 2;
-    static const float ROOM_HOST_X1 = -905.0f, ROOM_HOST_X2 = -690.0f;
-    static const float ROOM_HOST_Y = 95.0f, ROOM_HOST_HALF = 40.0f, ROOM_HOST_SCALE = 0.72f;
+    // (x1, x2 and y: cssPlace() [7..9])
+    static const float ROOM_HOST_HALF = 40.0f, ROOM_HOST_SCALE = 0.72f;
     // The room's ruleset and set (room_play.cpp cssLine), centred on the gap between the character
     // grid and the panels: window 3 (unused by the CSS), attached as window 2.
     static const u32 ROOM_PLAY_WINDOW = 3;
-    static const float ROOM_PLAY_X1 = -817.0f, ROOM_PLAY_X2 = 260.0f;
-    static const float ROOM_PLAY_Y = 348.0f, ROOM_PLAY_HALF = 20.0f, ROOM_PLAY_SCALE = 0.6f;
+    // (x1, x2 and y: cssPlace() [10..12])
+    static const float ROOM_PLAY_HALF = 20.0f, ROOM_PLAY_SCALE = 0.6f;
     // Staging feedback 2026-10-12: a long ruleset name with the score did not fit and was cut. One
     // line while it fits (ROOM_PLAY_FIT: font units at scale 1, as statusWidths measures, about
     // 1.5 px each at 2000 wide, for the window's 1400 px), else the ruleset and the set on two
@@ -3206,11 +3280,12 @@ namespace OnlineMenu {
     {
         const PPOM::Session& se = PPOM::g_block.session;
         RoomCss::headerButtons(in ? roomVisibility(se) : 0, in ? roomTeamsKind(se) : 0);
+        WordButtons::header(in, in ? roomVisibility(se) : 0, in ? roomTeamsKind(se) : 0);   // (a CSS without the art)
         MuMsg* m = s.cssMsg;
         if (!m || !s.haveWindow) return;
         if (!s.roomBtnsShown) {
             u8* task = cssTask();
-            u32 obj = task ? *(u32*)(task + 0x150) : 0;   // MenSelchrRule
+            u32 obj = (u32)Build::cssModel(task, RULE_MODEL);
             u32 mdl = isPtr(obj) ? *(u32*)(obj + 0x10) : 0;
             u8* message = (u8*)m->m_message;
             u32 bufs = isPtr((u32)message) ? *(u32*)(message + 0x1D8) : 0;
@@ -3219,24 +3294,25 @@ namespace OnlineMenu {
             typedef void (*AttachFn)(MuMsg*, u32, u32 scnMdl, u32 node, float size);
             ((AttachFn)0x800B8C90)(m, ROOM_HOST_WINDOW, mdl, 0, size);
             WindowSetting* ws = (WindowSetting*)(*(u32*)((u8*)m + 0xC) + 0x48 * ROOM_HOST_WINDOW);
-            ws->x1 = ROOM_HOST_X1;
-            ws->x2 = ROOM_HOST_X2;
+            const float* place = cssPlace();
+            ws->x1 = place[7];
+            ws->x2 = place[8];
             // the bar's own vertical place (the status window's), lower (window y grows down)
             float mid = (s.windowY1 + s.windowY2) * 0.5f;
-            ws->y1 = mid + ROOM_HOST_HALF + ROOM_HOST_Y;
-            ws->y2 = mid - ROOM_HOST_HALF + ROOM_HOST_Y;
-            ws->scaleX = ws->scaleY = ROOM_HOST_SCALE;
-            ws->lineSpace = 30.0f;
+            ws->y1 = mid + ROOM_HOST_HALF * place[13] + place[9];
+            ws->y2 = mid - ROOM_HOST_HALF * place[13] + place[9];
+            ws->scaleX = ws->scaleY = ROOM_HOST_SCALE * place[13];
+            ws->lineSpace = 30.0f * place[13];
             m->setAlignMode(ROOM_HOST_WINDOW, MuMsg::Align_Left);
             m->setFontColor(ROOM_HOST_WINDOW, 0xFF, 0xFF, 0xFF, 0xFF);
             s.roomBtnPrinted[0][0] = 1;   // not printed yet
             ((AttachFn)0x800B8C90)(m, ROOM_PLAY_WINDOW, mdl, 0, size);
             WindowSetting* wp = (WindowSetting*)(*(u32*)((u8*)m + 0xC) + 0x48 * ROOM_PLAY_WINDOW);
-            wp->x1 = ROOM_PLAY_X1;
-            wp->x2 = ROOM_PLAY_X2;
-            wp->y1 = mid + ROOM_PLAY_HALF + ROOM_PLAY_Y;
-            wp->y2 = mid - ROOM_PLAY_HALF + ROOM_PLAY_Y;
-            wp->scaleX = wp->scaleY = ROOM_PLAY_SCALE;
+            wp->x1 = place[10];
+            wp->x2 = place[11];
+            wp->y1 = mid + ROOM_PLAY_HALF * place[13] + place[12];
+            wp->y2 = mid - ROOM_PLAY_HALF * place[13] + place[12];
+            wp->scaleX = wp->scaleY = ROOM_PLAY_SCALE * place[13];
             m->setAlignMode(ROOM_PLAY_WINDOW, MuMsg::Align_Center);
             m->setFontColor(ROOM_PLAY_WINDOW, 0xFF, 0xFF, 0xFF, 0xFF);
             s_playPrinted[0] = 1;
@@ -3280,12 +3356,13 @@ namespace OnlineMenu {
         }
         if (strcmp(line, s_playPrinted) != 0) {
             WindowSetting* wp = (WindowSetting*)(*(u32*)((u8*)m + 0xC) + 0x48 * ROOM_PLAY_WINDOW);
-            float mid = (s.windowY1 + s.windowY2) * 0.5f + ROOM_PLAY_Y;
-            float half = two ? ROOM_PLAY_HALF * 2.0f : ROOM_PLAY_HALF;
+            const float k = cssPlace()[13];   // (the build's text size in these windows)
+            float mid = (s.windowY1 + s.windowY2) * 0.5f + cssPlace()[12];
+            float half = (two ? ROOM_PLAY_HALF * 2.0f : ROOM_PLAY_HALF) * k;
             wp->y1 = mid + half;
             wp->y2 = mid - half;
-            wp->scaleX = wp->scaleY = scale;
-            if (two) wp->lineSpace = ROOM_PLAY_LINES;
+            wp->scaleX = wp->scaleY = scale * k;
+            if (two) wp->lineSpace = ROOM_PLAY_LINES * k;
             m->printf(ROOM_PLAY_WINDOW, "%s", line);
             strcpy(s_playPrinted, line);
         }
@@ -3394,6 +3471,7 @@ namespace OnlineMenu {
         const PPOM::Session& se = PPOM::g_block.session;
         const u32 BTN_A = 0x100;
         (void)held;
+        WordButtons::bar(s.cssMsg, s.haveWindow, s.windowY1, s.windowY2);
         RulesButton::tick(false, false);
         SitOutButton::tick(false, false, false);
         const int me = roomMe();
@@ -3485,6 +3563,7 @@ namespace OnlineMenu {
         bool rulesOpen = RoomRules::tick(in, host, waiting, setBetween);
         // RULES next to PUBLIC / FFA (rules_button.cpp); greyed while the menu would not open
         // (a game starting, no room rules), and passed over by the hand under the open menu.
+        WordButtons::bar(s.cssMsg, s.haveWindow, s.windowY1, s.windowY2);   // (where its words go, on a CSS without the art)
         RulesButton::tick(in, (waiting || setBetween) && se.rules.valid);
         // SIT OUT / PLAY under it (the user's, 2026-10-18): greyed in this player's own game and
         // while a set is on (its sides play it to the end; mm refuses it then).
@@ -3714,7 +3793,7 @@ namespace OnlineMenu {
             u8* myArea = teamColours && me >= 0 && !g_onlineCssLock ? playerArea() : NULL;
             if (myArea && se.players[me].roomTeam < PPOM::TEAM_COUNT) {
                 int css = *(int*)(myArea + 0x1B8), cur = *(int*)(myArea + 0x1BC);
-                if (css >= 0 && css < 0x40 && css != 0x28 && css != 0x29 && cur >= 0 && cur < 0x20) {
+                if (css >= 0 && css < Build::CSS_IDS && css != Build::CSS_NONE && css != Build::CSS_RANDOM && cur >= 0 && cur < 0x20) {
                     u8 kind = charKindOf(css), team = se.players[me].roomTeam;
                     int shade = OnlineMatch::teamShadeOf(kind, team, (u8)cur);
                     if (shade >= 0) s_teamShade = shade;
@@ -4754,7 +4833,10 @@ namespace Text {
         for (u32 i = 0; i < sizeof(RELABELS) / sizeof(RELABELS[0]); i++) {
             const Relabel& r = RELABELS[i];
             if (strcmp(scene, r.scene) != 0) continue;
-            if (Online::msbinLineContains(msbin, (int)line, r.match)) return r.text;
+            if (!Online::msbinLineContains(msbin, (int)line, r.match)) continue;
+            // The ONLINE page's two buttons on a build that cannot play (Build::conforms): why.
+            if ((i == 1 || i == 2) && !Build::conforms()) return Build::NOT_ONLINE;
+            return r.text;
         }
         return NULL;
     }

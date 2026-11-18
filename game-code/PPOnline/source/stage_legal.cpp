@@ -36,6 +36,8 @@
 #include <string.h>
 #include <mu/mu_msg.h>
 
+#include "build.h"
+#include "layout.h"
 #include "online.h"
 #include "online_menu.h"
 #include "ppom.h"
@@ -49,19 +51,19 @@ extern "C" {
     // page, 1 no ranked step, 2 inactive, 3 no lists, 4 the custom page, 5 no starter on P+'s
     // pages, 6 a room's set), P+'s pages put back.
     __attribute__((used)) u32 g_sssPage[4];
+    // Tests: stage builder pages an online stage select turned past (StageLegal::builderPage).
+    __attribute__((used)) u32 g_sssBuilderSkips;
 }
 
 namespace StageLegal {
 
-    static const u32 RSS_EXDATA = 0x8042C4E8;         // random switch: page p at +6p {u16 31.., u32 0..30}
-    static const u32 STAGE_PAGES = 0x8042C524;        // page p at +0x28p: {u8 count, u8 slot[39]}
-    static const u32 SLOT_KINDS = 0x8042C5EC;         // slot s at +2s: {u8 srStageKind, u8 cosmetic}
-    static const u32 PAGE_INDEX = 0x8042C821;         // page P+'s strike art was last drawn for
-    static const u32 STRIKE_TABLE = 0x8042C822;       // same layout as the random switch
-    static const u32 RSS_EXDATA_BONUS = 0x8042C840;   // bit 0: P+'s random may draw a custom (stage builder) stage
-    const u32 STRIKE_TABLE_ADDR = STRIKE_TABLE;
-    const u32 CURRENT_PAGE = 0x80496000;
-    static const int PAGES = 5;
+    // The build's tables (Build::stage*, build.cpp: P+ v3.2's at 0x8042C4E8.., REX's older design
+    // elsewhere). The random switch: page p at +6p {u16 positions 31.., u32 0..30}; the strike
+    // table the same; the page index the page P+'s strike art was last drawn for; bit 0 of the
+    // bonus byte lets P+'s random draw a custom (stage builder) stage. 0 for a build whose tables
+    // are not where its design keeps them: nothing of them is written.
+    const u32 CURRENT_PAGE = Build::STAGE_CURRENT_PAGE;
+    static const int PAGES = Build::STAGE_PAGES;
     static const int PAGE_BYTES = PAGES * 6;
 
     // P+ v3.2's legal list (Switch00.rss "Default", docs/game-code.md section 11), srStageKind.
@@ -89,13 +91,8 @@ namespace StageLegal {
     {
         if (kind <= 0 || kind > 0xFF) return false;
         for (int p = 0; p < PAGES; p++) {
-            const u8* page = (const u8*)(STAGE_PAGES + 0x28 * p);
-            int count = page[0];
-            if (count > 39) count = 39;
-            for (int i = 0; i < count; i++) {
-                const u8 slot = page[1 + i];
-                if (slot >= 0x80) continue;
-                if (((const u8*)SLOT_KINDS)[2 * slot] == kind) return true;
+            for (int i = 0; i < Build::stagePageCount(p); i++) {
+                if (Build::stageKindOfSlot(Build::stageSlotAt(p, i)) == kind) return true;
             }
         }
         return false;
@@ -174,15 +171,25 @@ namespace StageLegal {
     static void showTurn(const char* text)
     {
         if (!s_sssMsg || !text[0]) return;
-        if (!s_sssDirty && strcmp(text, s_sssText) == 0) return;
+        // Where it goes on this build (layout.h g_sssLine: P+'s header strip, on the "STAGE
+        // SELECT" line, or the build's own from its entry of mm's games table). The window is
+        // laid out when it is printed, so a place that changed prints the line again.
+        static float s_place[5];
+        const float* place = g_sssLine;
+        bool moved = false;
+        for (int i = 0; i < 5; i++) {
+            if (s_place[i] != place[i]) moved = true;
+            s_place[i] = place[i];
+        }
+        if (!s_sssDirty && !moved && strcmp(text, s_sssText) == 0) return;
         strncpy(s_sssText, text, sizeof(s_sssText) - 1);
         s_sssDirty = false;
         float* ws = (float*)*(u32*)((u8*)s_sssMsg + 0xC);   // WindowSetting 0: x1 y1 x2 y2 at +4
-        ws[1] = 237.0f;
-        ws[2] = -347.0f;
-        ws[3] = 537.0f;
-        ws[4] = -387.0f;
-        ws[12] = ws[13] = 0.8f;                             // scaleX, scaleY (+0x30)
+        ws[1] = place[0];
+        ws[2] = place[1];
+        ws[3] = place[2];
+        ws[4] = place[3];
+        ws[12] = ws[13] = place[4];                         // scaleX, scaleY (+0x30)
         s_sssMsg->printf(0, "%s", text);
     }
 
@@ -212,9 +219,7 @@ namespace StageLegal {
     int kindAt(int page, int pos)
     {
         if (page < 0 || page >= PAGES || pos < 0) return -1;
-        const u8* p = (const u8*)(STAGE_PAGES + page * 0x28);
-        if (pos >= p[0] || pos >= 39) return -1;
-        return *(const u8*)(SLOT_KINDS + 2 * p[1 + pos]);
+        return Build::stageKindOfSlot(Build::stageSlotAt(page, pos));
     }
 
     // Ranked's stage select shows only the set's stages, not P+'s pages with the rest struck (the
@@ -243,7 +248,7 @@ namespace StageLegal {
             int count = page[0] > PAGE_MAX ? PAGE_MAX : page[0];
             for (int i = 0; i < count; i++) {
                 const u8 slot = page[1 + i];
-                if (slot < 0x80 && ((const u8*)SLOT_KINDS)[2 * slot] == kind) return slot;
+                if (slot < 0x80 && Build::stageKindOfSlot(slot) == kind) return slot;
             }
         }
         return -1;
@@ -255,13 +260,19 @@ namespace StageLegal {
         const PPOM::GameStep* st = ranked();
         g_sssPage[2] = !st ? 1 : OnlineMenu::currentMode() != PPOM::MODE_RANKED ? 6 : !st->active ? 2 : !st->nPage ? 3 : 0;
         if (g_sssPage[2]) return;
-        int page = *(u8*)CURRENT_PAGE;
+        int page = Build::stageCurrentPage();
         if (page >= PAGES) {
             g_sssPage[2] = 4;
             return;
         }
+        // Only P+ v3.2's page table is rewritten (another design: its own page, the rest struck).
+        const u32 table = Build::stagePageTable();
+        if (!table) {
+            g_sssPage[2] = 5;
+            return;
+        }
         if (!s_pagesSaved) {
-            memcpy(s_savedPages, (const void*)STAGE_PAGES, sizeof(s_savedPages));
+            memcpy(s_savedPages, (const void*)table, sizeof(s_savedPages));
             s_pagesSaved = true;
         }
         u8 slots[PAGE_MAX];
@@ -275,7 +286,7 @@ namespace StageLegal {
             g_sssPage[2] = 5;   // none on P+'s pages: its own page, the rest struck
             return;
         }
-        u8* p = (u8*)(STAGE_PAGES + PAGE_SIZE * page);
+        u8* p = (u8*)(table + PAGE_SIZE * page);
         p[0] = (u8)n;
         memcpy(p + 1, slots, n);
         s_page = true;
@@ -287,8 +298,7 @@ namespace StageLegal {
     {
         *ext = 0;
         *main = 0;
-        const u8* p = (const u8*)(STAGE_PAGES + page * 0x28);
-        int count = p[0] > 39 ? 39 : p[0];
+        int count = Build::stagePageCount(page);
         for (int pos = 0; pos < count; pos++) {
             if (!allowedKind(kindAt(page, pos))) continue;
             if (pos < 31) *main |= 1u << pos;
@@ -307,6 +317,9 @@ namespace StageLegal {
     // pick (only the random switch: P+'s random draws from the list). Idempotent.
     static void apply(bool strike = true)
     {
+        const u32 RSS_EXDATA = Build::stageRandomSwitch(), STRIKE_TABLE = Build::stageStrikeTable();
+        const u32 PAGE_INDEX = Build::stageStrikePageIndex(), RSS_EXDATA_BONUS = Build::stageRandomBonus();
+        if (!RSS_EXDATA) return;
         if (!s_switchSaved) {
             memcpy(s_savedSwitch, (const void*)RSS_EXDATA, PAGE_BYTES);
             s_savedBonus = *(u8*)RSS_EXDATA_BONUS;
@@ -332,8 +345,38 @@ namespace StageLegal {
         PPOM::g_block.debug.scratch[12]++;
     }
 
+    // The stage builder page. Brawl's stage select ends in a page of the player's custom stages;
+    // P+ shows it only when there are some, P+Ex always (its three sample stages: page 4 of
+    // P+Ex 1.8, after the three of the page table, whose count for it is 0). Those stages are
+    // the player's own (their save, their card), no other machine has them, and they are not a
+    // stage kind a lock-in can carry. So an online stage select has no such page: it turns on to
+    // the next one as soon as it shows (pponline_sssButtons, P+'s own page button), takes none of
+    // its stages (pponline_sssCustomAllowed), and P+'s random draws none (noBuilderRandom; the
+    // player's own switch is put back by tick).
+    static bool s_bonusOff = false;
+    static u8 s_bonusWas = 0;
+    bool builderPage(int page)
+    {
+        return page >= PAGES || Build::stagePageCount(page) == 0;
+    }
+    void noBuilderRandom()
+    {
+        const u32 RSS_EXDATA_BONUS = Build::stageRandomBonus();
+        if (!RSS_EXDATA_BONUS) return;
+        if (!s_bonusOff) {
+            s_bonusWas = *(u8*)RSS_EXDATA_BONUS & 1;
+            s_bonusOff = true;
+        }
+        *(u8*)RSS_EXDATA_BONUS &= ~1;
+    }
+
     void tick()
     {
+        const u32 RSS_EXDATA = Build::stageRandomSwitch(), STRIKE_TABLE = Build::stageStrikeTable();
+        const u32 RSS_EXDATA_BONUS = Build::stageRandomBonus();
+        if (!RSS_EXDATA) {   // (set only where these are)
+            s_switchSaved = s_bonusOff = false;
+        }
         if (!Online::inScene("scSelStage")) {
             s_sssMsg = NULL;
             s_sssText[0] = 0;
@@ -346,11 +389,15 @@ namespace StageLegal {
             memset((void*)STRIKE_TABLE, 0, PAGE_BYTES);   // P+'s random without a screen reads it too
             s_switchSaved = false;
         }
+        if (s_bonusOff && !Online::inScene("scSelStage")) {
+            *(u8*)RSS_EXDATA_BONUS = (u8)((*(u8*)RSS_EXDATA_BONUS & ~1) | s_bonusWas);
+            s_bonusOff = false;
+        }
         // P+'s pages back once the stage select that showed the set's page is gone (seen as the
         // scene first: the page is written while the stage select is being made).
         if (s_pagesSaved && Online::inScene("scSelStage")) s_pagesSeen = true;
         if (s_pagesSaved && s_pagesSeen && !Online::inScene("scSelStage")) {
-            memcpy((void*)STAGE_PAGES, s_savedPages, sizeof(s_savedPages));
+            if (Build::stagePageTable()) memcpy((void*)Build::stagePageTable(), s_savedPages, sizeof(s_savedPages));
             g_sssPage[3]++;
             s_pagesSaved = false;
             s_pagesSeen = false;
@@ -369,6 +416,24 @@ extern "C" {
     // H1: returns the pressed buttons the rest of buttonProc (P+'s hooks) sees in r3.
     __attribute__((used)) u32 pponline_sssButtons(u8* task, u32 pressed)
     {
+        if (g_onlineCss && g_onlinePickStage) {
+            // No stage builder page online: on to the next page, with P+'s own page button (an A
+            // on it; one turn an A, as where the page follows another player's), and no A, START,
+            // B, X or Z of the player's own while it shows.
+            StageLegal::noBuilderRandom();
+            if (StageLegal::builderPage(Build::stageCurrentPage())) {
+                static u32 s_skipAt = 0;
+                const u32 now = PPOM::g_block.debug.frames;
+                u32 out = pressed & ~(0x100u | 0x1000u | 0x200u | 0x400u | 0x80000u | 0x10u);
+                if (now - s_skipAt >= 8) {
+                    s_skipAt = now;
+                    *(u32*)(task + 0x244) = 0x35;
+                    out |= 0x100u;
+                    g_sssBuilderSkips++;
+                }
+                return out;
+            }
+        }
         const int any = OnlineMenu::anyoneSss();
         if (any != OnlineMenu::ANY_NONE) {
             // Anyone picks (online_menu.cpp anyoneSss): A on a stage is a pick (H2 sends it and keeps
@@ -388,7 +453,7 @@ extern "C" {
             // so this stage select turns too, with P+'s own page button (an A on it, as when the
             // cursor is there: P+ turns one page an A), until it shows theirs (sss_cursors.cpp).
             const int follow = SssCursors::pageToFollow();
-            if (follow >= 0 && follow != *(u8*)StageLegal::CURRENT_PAGE) {
+            if (follow >= 0 && follow != Build::stageCurrentPage()) {
                 static u32 s_turnAt = 0;
                 const u32 now = PPOM::g_block.debug.frames;
                 if (now - s_turnAt >= 8) {
@@ -419,7 +484,9 @@ extern "C" {
         // without it, though its picks were refused.)
         u32 mgr = *(u32*)0x805A0060;
         bool online = st || StageLegal::roomPicksFromList();
-        if (online && mgr >= 0x80000000 && mgr < 0x81800000) *(int*)(mgr + 0x284) = 1;
+        // (only for P+'s strike art, so only where the build has P+'s strike table: with 1
+        // Brawl's own stage select is the Versus one, which loads the stage itself as it leaves)
+        if (online && Build::stageStrikeTable() && mgr >= 0x80000000 && mgr < 0x81800000) *(int*)(mgr + 0x284) = 1;
         if (!st) return out;
         out &= ~(0x1000u | 0x10u);   // START (random), Z (hazards: the online rules set them)
         // The set's page is the only one: A on P+'s page button would show its next page.
@@ -436,9 +503,13 @@ extern "C" {
             if (*hovered - 0x30u <= 7u) *hovered = 0;
             return out | 0x100u;
         }
-        if (!(st->myTurn && st->type == PPOM::STEP_PICK)) out &= ~0x100u;   // A only to pick
+        // A only to pick, and on the page button on the player's turn where the stage select shows
+        // the build's own pages (a room's set: REX's older stage select spreads P+'s list over its
+        // three pages, so a strike can be on page 2).
+        const bool pageButton = !StageLegal::s_page && *(u32*)(task + 0x244) == 0x35;
+        if (!(st->myTurn && (st->type == PPOM::STEP_PICK || pageButton))) out &= ~0x100u;
         if (st->myTurn && st->type == PPOM::STEP_STRIKE && (pressed & (0x400u | 0x80000u))) {
-            int kind = StageLegal::kindAt(*(u8*)StageLegal::CURRENT_PAGE, *(int*)(task + 0x248));
+            int kind = StageLegal::kindAt(Build::stageCurrentPage(), *(int*)(task + 0x248));
             if (StageLegal::allowedKind(kind)) {
                 u8 k = (u8)kind;
                 PPOM::post(PPOM::CMD_GP_COMPLETE_STEP, &k, 1);
@@ -452,7 +523,7 @@ extern "C" {
     {
         const int any = OnlineMenu::anyoneSss();
         if (any != OnlineMenu::ANY_NONE) {
-            int page = *(u8*)StageLegal::CURRENT_PAGE;
+            int page = Build::stageCurrentPage();
             if (s_anyLeave) {
                 // The stage the host took where this page has it (its icon is the one picked on
                 // every screen), else any stage: the match plays SESSION's whatever this says.
@@ -471,7 +542,7 @@ extern "C" {
             return -1;
         }
         if (!StageLegal::active()) return pos;
-        int page = *(u8*)StageLegal::CURRENT_PAGE;
+        int page = Build::stageCurrentPage();
         if (StageLegal::ranked() && s_autoLeave) {
             // Any stage P+ still lets A take (not struck); the steps decided the real one.
             for (int p = 0; p < 39; p++) {
@@ -631,7 +702,7 @@ extern "C" {
     // B on a restricted stage select: let Brawl's back-out happen (see hookBack).
     __attribute__((used)) void pponline_sssBack()
     {
-        if (StageLegal::active()) memset((void*)StageLegal::STRIKE_TABLE_ADDR, 0, 30);
+        if (StageLegal::active() && Build::stageStrikeTable()) memset((void*)Build::stageStrikeTable(), 0, 30);
     }
 
     // H3: 1 if a stage-builder / custom-list stage may be taken.
@@ -642,7 +713,9 @@ extern "C" {
         // (once it leaves, any stage it takes does: the match plays SESSION's)
         const int any = OnlineMenu::anyoneSss();
         if (any == OnlineMenu::ANY_DECIDED || any == OnlineMenu::ANY_GONE) return 1;
-        if (!StageLegal::active() && any == OnlineMenu::ANY_NONE) return 1;
+        // (offline the stage builder page is the player's as ever; online none of its stages is
+        // taken: StageLegal::builderPage)
+        if (!(g_onlineCss && g_onlinePickStage) && !StageLegal::active() && any == OnlineMenu::ANY_NONE) return 1;
         PPOM::g_block.debug.scratch[13]++;
         return 0;
     }

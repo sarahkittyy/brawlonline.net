@@ -98,6 +98,7 @@ def _check_match(a: Game, b: Game, want: dict[int, int]) -> dict[str, Any]:
     return {"words": words, "costumes": costumes, "checksums": ck}
 
 
+@pytest.mark.needs_files("pf/fighter/fox/FitFoxAltZ.pac", "pf/fighter/fox/FitFoxAltR.pac")
 def test_alt_costumes_held_on_start(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
                                     gpu_backend: str) -> None:
     """A holds Z on the CSS's START, B holds R (each over Fox): the lock-ins carry AltZ / AltR, and

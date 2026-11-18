@@ -20,7 +20,8 @@ err() {
   fail=1
 }
 
-for f in LICENSE NOTICE plugins/PPOnline.rel plugins/PPOnline.json dolphin/dolphin.json app.asar app-update.yml; do
+for f in LICENSE NOTICE plugins/PPOnline.rel plugins/PPOnline.json plugins/PPOnline-pex.rel plugins/PPOnline-pex.json \
+  plugins/PPOnline-rex.rel plugins/PPOnline-rex.json dolphin/dolphin.json app.asar app-update.yml; do
   [ -e "$res/$f" ] || err "missing resources/$f"
 done
 [ -e "$res/dolphin/COPYING" ] || err "missing the Dolphin license (resources/dolphin/COPYING)"

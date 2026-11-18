@@ -25,6 +25,7 @@
 #include "Core/Config/OnlineSettings.h"
 #include "Core/ConfigManager.h"
 #include "Core/HW/Memmap.h"
+#include "Core/Online/GameBuild.h"
 #include "Core/Online/GameSetup.h"
 #include "Core/Online/Ranked.h"
 #include "Core/Online/Spectate.h"
@@ -399,6 +400,10 @@ std::string InfoJson(const BeginInfo& info)
   {
     build["pplus"] = picojson::value(pplus);
   }
+  // The build of the game it was played on (Online/GameBuild.h: "<folder>:<hash>"; P+'s folder
+  // or a mod of P+'s): a replay plays back only on that build's card.
+  if (const std::string game_build = Online::GameBuild::Key(); !game_build.empty())
+    build["gameBuild"] = picojson::value(game_build);
   o["build"] = picojson::value(build);
   picojson::object session;
   session["regionSet"] = picojson::value(info.region_set);

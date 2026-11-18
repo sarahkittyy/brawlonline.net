@@ -194,6 +194,14 @@ class MockModsClient implements ModsService {
     this.open(build, "KFQB", true, this.controller);
   }
 
+  async onlineBuildOf(_id: string) {
+    return null;
+  }
+
+  async playOnline(_id: string) {
+    return { status: "unsupported" as const };
+  }
+
   async join(options: ModsJoinOptions): Promise<ModsJoinResult> {
     const build = await this.hashBuild(options.buildId);
     const code = options.code.toUpperCase();

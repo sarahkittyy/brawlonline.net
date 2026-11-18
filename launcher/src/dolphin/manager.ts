@@ -12,7 +12,7 @@ import type { MessageBoxOptions } from "electron";
 import { app, BrowserWindow, dialog } from "electron";
 import electronLog from "electron-log";
 import { existsSync } from "fs";
-import { mkdir, readdir, rmdir } from "fs/promises";
+import { mkdir, readdir, rmdir, writeFile } from "fs/promises";
 import { Observable, Subject } from "observable-fns";
 import path from "path";
 import { fileExists } from "utils/file_exists";
@@ -82,6 +82,13 @@ import { DolphinInstance, MacOsRosettaRequiredError, PlaybackDolphinInstance } f
 import { findModTextures } from "./mods/mod_textures";
 import type { ModsRoomArg } from "./mods/mods_args";
 import { buildModsDolphinArgs } from "./mods/mods_args";
+import {
+  identifyPlusFamilyCard,
+  plusFamilyGameSettings,
+  plusFamilyPluginPath,
+  plusFamilySdCardFolder,
+  replayPlaysOn,
+} from "./mods/plus_family";
 import { clearModRoomFiles } from "./mods/room_files";
 import { clearTemplateSeededSaves } from "./mods/template_saves";
 import type { ModBuild } from "./mods/types";
@@ -98,6 +105,7 @@ import type {
   DolphinEvent,
   DolphinSetupPhase,
   NetplayLaunchResult,
+  PlusFamilyLaunchResult,
   ReplayCommunication,
   ReplayPlaybackStatus,
   ReplayPlayChoice,
@@ -146,6 +154,8 @@ export class DolphinManager {
   private netplayOtherGame: string | null = null;
   /** The Play start that is running, per boot choice: Play pressed again waits for it (repeat_play.ts). */
   private netplayStarts = new SharedStart<boolean, NetplayLaunchResult>();
+  /** A mod of Project+ started for online play (launchPlusFamilyDolphin), by the game's id. */
+  private plusFamilyStarts = new SharedStart<string, PlusFamilyLaunchResult>();
   private versionCache = new Map<string, string>();
   private bundledInstall: Promise<void> | null = null;
   /** Whether bundledInstall finished: one that did is redone when the executable has gone since. */
@@ -868,6 +878,11 @@ export class DolphinManager {
     return this._pplusRelease().version;
   }
 
+  /** P+'s Netplay Launcher in the netplay User folder: what Play and a mod of P+ boot. */
+  netplayLauncherDol(): string {
+    return this.getInstallation(DolphinLaunchType.NETPLAY).netplayLauncherDol;
+  }
+
   /** P+'s plain SD card in the netplay User folder: Project Punch's card is copied from it. */
   plainSdCardImage(): string {
     return this.getInstallation(DolphinLaunchType.NETPLAY).sdCardImage;
@@ -939,6 +954,157 @@ export class DolphinManager {
     }
     this.netplayDolphinInstance = dolphinInstance;
     this.netplayOtherGame = "Project Punch";
+  }
+
+  /**
+   * Starts the netplay Dolphin on a mod of Project+ in the P+ online flow (mods/plus_family.ts,
+   * docs/design/pplus-mods.md §4): the build's own SD card, copied once with our plugin in its
+   * folder (`<netplay>/pponline-sd-<id>`; the player's card is only read), booted from P+'s
+   * Netplay Launcher on the build's disc (a build with launchers of its own, REX: the game's, with
+   * MMU emulation off: plus_family.ts plusFamilyGameSettings). The game then names its build to mm itself, which pairs
+   * it and admits it to rooms only with the same build. A build that is not a supported release
+   * (another mod, another release, no card) is not started: `unsupported`.
+   * It is the netplay Dolphin (its User folder, the login): Play and a mod do not run at once.
+   * As Play: one start at a time (the first start copies a card of several GB, and a second
+   * call meanwhile would pass the "no Dolphin open" check too and start another Dolphin on the
+   * same User folder and card). A call for the same game while one runs gets that start's
+   * result; Play, a playback or another game waits for it.
+   */
+  async launchPlusFamilyDolphin(
+    build: ModBuild,
+    onClose?: () => void | Promise<void>,
+  ): Promise<PlusFamilyLaunchResult> {
+    try {
+      return await this.plusFamilyStarts.run(
+        build.id,
+        () => this.sdCardStarts.runExclusive(() => this._launchPlusFamilyDolphin(build, onClose)),
+        () => log.warn(`${build.name} is asked for again while it is starting: waiting for that start`),
+      );
+    } catch (err) {
+      throw await asDiskSpaceError(err, this.netplayFolder(), "the game");
+    }
+  }
+
+  private async _launchPlusFamilyDolphin(
+    build: ModBuild,
+    onClose?: () => void | Promise<void>,
+  ): Promise<PlusFamilyLaunchResult> {
+    if (this.netplayDolphinInstance && !(await this.closeNetplayIfIdle())) {
+      throw new Error("Dolphin is already open with a game. Close it first.");
+    }
+    Preconditions.checkState(this.netplayDolphinInstance == null, "Dolphin is already open. Close it first.");
+    this._assertNotMoving();
+    await this.launchGate();
+    const installation = this.getInstallation(DolphinLaunchType.NETPLAY);
+    await this._repairBundledDolphin();
+    const dolphinPath = await installation.findDolphinExecutable();
+    await this._assertBrawlOnlineDolphin(DolphinLaunchType.NETPLAY);
+    await installation.ensureUserFolder();
+    await this._updateDolphinSettings(DolphinLaunchType.NETPLAY);
+    // P+'s Netplay Launcher boots a P+Ex build (they ship P+'s own launcher files), the game's own
+    // launcher a build with its own (REX): the key mm knows the build by is of that boot file.
+    const pplusBoot = installation.netplayLauncherDol;
+    if (!(await fileExists(pplusBoot))) {
+      throw new Error("Project+'s game files are missing. Start Project+ once from Play, then try again.");
+    }
+    const card = await identifyPlusFamilyCard(build, pplusBoot);
+    if (!card || !build.sdPath) {
+      log.warn(`Not starting ${build.name} for online play: its SD card is not a supported release`);
+      return { status: "unsupported" };
+    }
+    const bootFile = card.bootFile;
+    const settings = plusFamilyGameSettings(card);
+    if (settings) {
+      const file = path.join(installation.userFolder, settings.file);
+      await mkdir(path.dirname(file), { recursive: true });
+      await writeFile(file, settings.text);
+    }
+    if (!(await fileExists(build.discPath))) {
+      throw new Error(`Could not find the disc image: ${build.discPath}`);
+    }
+    const storeDir = projectPlusStoreFolder(this.netplayFolder());
+    await ensureNetplaySave(storeDir, installation.userFolder);
+    await this._ensureBrawlSave(installation, storeDir);
+    await installation.setDefaultIso(build.discPath);
+    const env = this._pathEnv();
+    const template = defaultUserTemplate(env);
+    const inUse = this.playbackDolphinInstances.size > 0;
+    const sourceImage = build.sdPath;
+    let sdCardImage: string;
+    try {
+      // The build's own of the plugin's files (the games table's `plugin`).
+      const plugin = await loadPlugin(
+        defaultPluginLocation({ ...env, resourcesPath: process.resourcesPath }, card.build.plugin),
+      );
+      // (under sdCardStarts, as the whole start: launchPlusFamilyDolphin)
+      const result = await this._withProgress(DolphinLaunchType.NETPLAY, "prepareSdCard", (onProgress) =>
+        installPluginOnSdCard({
+          sourceImage,
+          outputDir: plusFamilySdCardFolder(env.netplayFolder, card.build.id),
+          plugin,
+          sdPath: plusFamilyPluginPath(card.build.folder),
+          protectedPaths: template ? [template] : [],
+          log: (message) => log.info(message),
+          onProgress,
+          inUse,
+        }),
+      );
+      log.info(`Online plugin ${plugin.sha256.slice(0, 12)} on ${result.image} (${card.build.id}): ${result.action}`);
+      sdCardImage = result.image;
+    } catch (err) {
+      log.error(err);
+      if (err instanceof SdCardInUseError) {
+        throw new Error("The game's SD card needs an update. Close the other Dolphin window, then try again.");
+      }
+      throw new Error(
+        `Could not install the online game plugin on ${card.build.name}'s SD card: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+    const params = buildNetplayDolphinArgs({
+      userArgs: installation.userArgs(),
+      sdCardImage,
+      bootFile,
+      testMode: readTestMode(process.env, app.isPackaged),
+    });
+    log.info(`Launching dolphin for ${card.build.name} (${card.key}) at path: ${dolphinPath} ${params.join(" ")}`);
+    const dolphinInstance = new DolphinInstance(dolphinPath, params);
+    dolphinInstance.on("close", async (exitCode: number | null, signal: string | null) => {
+      try {
+        await this._updateLauncherSettings(DolphinLaunchType.NETPLAY);
+      } catch (e) {
+        log.error("Error encountered updating launcher settings.", e);
+      }
+      this.netplayDolphinInstance = null;
+      this.netplayOtherGame = null;
+      this.netplayStart = null;
+      this.eventSubject.next({ type: DolphinEventType.CLOSED, dolphinType: DolphinLaunchType.NETPLAY, exitCode });
+      // A room request the game never picked up must not act on the next start.
+      void clearRoomRequest(this.netplayOnlineDir()).catch(() => undefined);
+      log.warn(`Dolphin (${card.build.id}) exit code: ${exitCode?.toString(16)}, signal: ${signal}`);
+      await Promise.resolve(onClose?.()).catch((err) => log.error(err));
+      await this._keepCrashLog(installation, exitCode, signal);
+    });
+    dolphinInstance.on("error", (err: Error) => {
+      log.error(err);
+    });
+    try {
+      await dolphinInstance.start();
+    } catch (err) {
+      await Promise.resolve(onClose?.()).catch(() => undefined);
+      if (err instanceof MacOsRosettaRequiredError) {
+        this.eventSubject.next({
+          type: DolphinEventType.ERROR,
+          errorType: DolphinErrorType.ROSETTA_REQUIRED,
+          dolphinType: DolphinLaunchType.NETPLAY,
+        });
+      }
+      throw err;
+    }
+    this.netplayDolphinInstance = dolphinInstance;
+    this.netplayOtherGame = card.build.name;
+    return { status: "started", id: card.build.id, name: card.build.name };
   }
 
   /** `extraArgs` (netplay only): more arguments (`--controllers`); `onClose`: after it closed. */
@@ -1741,14 +1907,18 @@ export class DolphinManager {
   ): Promise<{ result: ReplayPlayResult; paths: string[]; release: string | null; playAnyway: boolean }> {
     const versions = this.pplusVersions();
     const current = versions.currentRelease;
-    const releases = await Promise.all(
+    // A replay of a mod of Project+ (docs/design/pplus-mods.md) plays back only on that mod's
+    // card, which the playback Dolphin does not have yet: it is "another release", named by the
+    // mod (its name when it is a supported build, else its folder), and not playable.
+    const plays = await Promise.all(
       paths.map((p) =>
         readReplayHeader(p).then(
-          (h) => (h.meta.pplusRelease === current ? null : h.meta.pplusRelease),
-          () => null,
+          (h) => replayPlaysOn(h.meta, current),
+          () => ({ release: null, mod: false }),
         ),
       ),
     );
+    const releases = plays.map((p) => p.release);
     const first = releases[0] ?? null;
     const group = paths.filter((_, i) => releases[i] === first);
     const skippedAt = releases.findIndex((r) => r !== first);
@@ -1762,6 +1932,15 @@ export class DolphinManager {
     });
     if (first == null) {
       return playing(null, false);
+    }
+    if (plays[0].mod) {
+      // (also when asked to play it on the launcher's release: that is Project+'s card)
+      return {
+        result: { status: "unplayable", release: first, current, mod: true },
+        paths: group,
+        release: null,
+        playAnyway: false,
+      };
     }
     if (choice === "current") {
       return playing(null, true);
@@ -1803,14 +1982,25 @@ export class DolphinManager {
   }> {
     const versions = this.pplusVersions();
     const current = versions.currentRelease;
-    const releases = await Promise.all(
+    const plays = await Promise.all(
       paths.map((p) =>
         readReplayHeader(p).then(
-          (h) => (h.meta.pplusRelease === current ? null : h.meta.pplusRelease),
-          () => null,
+          (h) => replayPlaysOn(h.meta, current),
+          () => ({ release: null, mod: false }),
         ),
       ),
     );
+    const releases = plays.map((p) => p.release);
+    // A replay of a mod of Project+ renders only on that mod's card, which the playback Dolphin
+    // does not have (as decideReplayRelease): nothing of the request is rendered, on any release.
+    const mod = plays.find((p) => p.mod);
+    if (mod?.release != null) {
+      return {
+        result: { status: "unplayable", release: mod.release, current, mod: true },
+        releases,
+        playAnyway: false,
+      };
+    }
     if (choice === "current") {
       return { result: null, releases: paths.map(() => null), playAnyway: releases.some((r) => r != null) };
     }

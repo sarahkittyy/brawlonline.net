@@ -522,6 +522,28 @@ TEST(RoomMessages, OtherMessages)
   EXPECT_FALSE(m.game_alive) << "an older mm: no game-alive";
   EXPECT_TRUE(Parse(R"({"type": "hello-resp", "gameAlive": true})").game_alive);
   EXPECT_FALSE(Parse(R"({"type": "hello-resp", "gameAlive": 1})").game_alive);
+  // The build's places on its screens (mm's games table, `layout`): each group that is there
+  // with its own count of numbers; absent or anything else leaves the group to the plugin.
+  using L = Online::GameBuild::Layout;
+  EXPECT_EQ(Parse(R"({"type": "hello-resp"})").layout.set, 0u);
+  EXPECT_EQ(Parse(R"({"type": "hello-resp", "layout": 1})").layout.set, 0u);
+  m = Parse(R"({"type": "hello-resp", "layout": {"sssLine": [726, -191, 1046, -231, 0.8],
+               "cardPlates": [-22.6, 14.5, 4.3]}})");
+  EXPECT_EQ(m.layout.set, L::SSS_LINE | L::CARD_PLATES);
+  EXPECT_FLOAT_EQ(m.layout.values[L::SSS_LINE_AT + 2], 1046.0f);
+  EXPECT_FLOAT_EQ(m.layout.values[L::SSS_LINE_AT + 4], 0.8f);
+  EXPECT_FLOAT_EQ(m.layout.values[L::CARD_PLATES_AT], -22.6f);
+  EXPECT_FLOAT_EQ(m.layout.values[L::CSS_BAR_AT], 0.0f);
+  // a group of another length, of something that is no number, or out of any screen's range
+  EXPECT_EQ(Parse(R"({"type": "hello-resp", "layout": {"sssLine": [1, 2, 3, 4]}})").layout.set, 0u);
+  EXPECT_EQ(Parse(R"({"type": "hello-resp", "layout": {"cardPlates": [1, "2", 3]}})").layout.set, 0u);
+  EXPECT_EQ(Parse(R"({"type": "hello-resp", "layout": {"cardPlates": [1, 2, 1e9]}})").layout.set, 0u);
+  m = Parse(R"({"type": "hello-resp", "layout": {"cardPlates": [1, 2], "cssButtons":
+               [[1, 2, 3, 4, 5, 6, 7], [8, 9, 10, 11, 12, 13, 14], [1, 2, 3, 4, 5, 6, 7], [1, 2, 3, 4, 5, 6, 28]]}})");
+  EXPECT_EQ(m.layout.set, L::CSS_BUTTONS);
+  EXPECT_FLOAT_EQ(m.layout.values[L::CSS_BUTTONS_AT + 7], 8.0f);
+  EXPECT_FLOAT_EQ(m.layout.values[L::CSS_BUTTONS_AT + 27], 28.0f);
+  EXPECT_EQ(Parse(R"({"type": "hello-resp", "layout": {"cssButtons": [[1, 2, 3, 4, 5, 6, 7]]}})").layout.set, 0u);
   m = Parse(R"({"type": "hello-resp", "error": "Update to 0.2.1 to play online.", "latestVersion": "0.2.1"})");
   EXPECT_EQ(m.error, "Update to 0.2.1 to play online.");
   EXPECT_EQ(m.latest_version, "0.2.1");
@@ -672,6 +694,11 @@ TEST(RoomMessages, Requests)
   EXPECT_EQ(HelloJson("u", "k", "0.1.0", "win", "ab12"),
             R"({"appVersion":"0.1.0","chatKey":"ab12","gameAlive":true,"pairRoom":true,)"
             R"("platform":"win","type":"hello","user":{"playKey":"k","uid":"u"}})");
+  // The game's build (Online/GameBuild.h), when it is known.
+  EXPECT_EQ(HelloJson("u", "k", "0.1.0", "win", "", "Cobalt:0123456789abcdef0123456789abcdef"),
+            R"({"appVersion":"0.1.0","game":"Cobalt:0123456789abcdef0123456789abcdef",)"
+            R"("gameAlive":true,"pairRoom":true,"platform":"win","type":"hello",)"
+            R"("user":{"playKey":"k","uid":"u"}})");
 }
 
 TEST(RoomMessages, RulesetCodesAndRequests)

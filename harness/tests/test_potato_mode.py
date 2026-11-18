@@ -31,12 +31,13 @@ sys.path.insert(0, str(ROOT / "tools" / "sdcard"))
 import gameplay_rollback as G  # noqa: E402
 import gprb_synctest as T  # noqa: E402
 import patch_sd  # noqa: E402
+from ppharness import paths as ppharness_paths
 import ppom  # noqa: E402
 from ppharness import brawl as B  # noqa: E402
 
 pytestmark = [pytest.mark.dolphin, pytest.mark.slow]
 
-PLUGIN = Path(os.environ.get("PPHARNESS_PLUGIN") or ROOT / "game-code" / "PPOnline" / "PPOnline.rel")
+PLUGIN = ppharness_paths.plugin_path()
 
 # potato.cpp's Battlefield rows: the sky, the sun, moon, stars, clouds, the distant land, the flare.
 BATTLEFIELD_HIDDEN = ["grBattleFieldSky[0]", "grBattleFieldSun[0]", "grBattleFieldMoon[0]", "grBattleFieldStar[0]",

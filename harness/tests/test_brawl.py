@@ -648,5 +648,36 @@ class RecipeTests(unittest.TestCase):
         self.assertEqual(g.m.read(g.w.scd + b.SCD_PLAYERS, 2), bytes([0x07, 0]))
 
 
+
+class CssModelTests(unittest.TestCase):
+    """css_model finds a character select model by its MDL0's name wherever the build's task keeps
+    it (P+ v3.2's READY at +0x3C4, BrawlEx's at +0xA4)."""
+
+    def model(self, m, name, version=11):
+        mdl = m.alloc(0x100)
+        m.write(mdl, b"MDL0")
+        m.u32(mdl + 8, version)
+        sections = 14 if version >= 10 else 11
+        m.s32(mdl + 0x10 + 4 * sections, m.string(name) - mdl)
+        obj = m.alloc(0x40)
+        m.u32(obj + 8, mdl)
+        return obj
+
+    def test_found_at_either_builds_offset(self):
+        for off in (0x3C4, 0xA4):
+            m = FakeMem()
+            task = m.alloc(0x600)
+            m.u32(task + 0x90, self.model(m, "MenSelchrRnum1_TopN"))
+            ready = self.model(m, "MenSelchrReady_TopN", version=9)
+            m.u32(task + off, ready)
+            self.assertEqual(b.css_model(m.read, task, "MenSelchrReady_TopN"), ready)
+            self.assertEqual(b.css_model(m.read, task, "MenSelchrReady"), 0)   # whole names only
+
+    def test_none(self):
+        m = FakeMem()
+        task = m.alloc(0x600)
+        m.u32(task + 0x100, 0x12345678)   # not a pointer
+        self.assertEqual(b.css_model(m.read, task, "MenSelchrState0005_TopN"), 0)
+
 if __name__ == "__main__":
     unittest.main()

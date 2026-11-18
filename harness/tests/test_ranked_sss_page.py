@@ -28,7 +28,7 @@ from test_ranked_sss_portraits import _sym
 from test_online_ranked import (SSS, STARTERS, _both_on, _paired, _ranked, _search_ranked, _strike,
                                 _strike_to, _to_ranked_css, _wait, _wait_view)
 
-pytestmark = [pytest.mark.dolphin, pytest.mark.server, pytest.mark.gpu]
+pytestmark = [pytest.mark.dolphin, pytest.mark.server, pytest.mark.gpu, pytest.mark.pplus_only("Ranked")]
 
 # server/config/rulesets.json "ranked": its stages and starters, in order (the stage select's rows,
 # the user's, 2026-10-16: Green Hill Zone, Fountain of Dreams, Frigate Husk, Dream Land over Temple

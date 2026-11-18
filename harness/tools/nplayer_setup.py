@@ -38,12 +38,13 @@ sys.path.insert(0, str(ROOT / "tools" / "sdcard"))
 
 import drive  # noqa: E402
 import ppboot  # noqa: E402
+from ppharness import paths as ppharness_paths
 import ppom  # noqa: E402
 from ppharness import brawl as B  # noqa: E402
 from ppharness.client import HarnessClient, PadInput  # noqa: E402
 from test_online_game import keypad_steps  # noqa: E402
 
-PLUGIN = Path(os.environ.get("PPHARNESS_PLUGIN") or ROOT / "game-code" / "PPOnline" / "PPOnline.rel")
+PLUGIN = ppharness_paths.plugin_path()
 ART = ROOT / "run" / "artifacts" / "nplayer"
 
 GG = 0x805A00E0

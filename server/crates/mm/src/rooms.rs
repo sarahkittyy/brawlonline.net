@@ -69,9 +69,21 @@ pub struct RoomsConfig {
     pub request_windows: Vec<Window>,
     /// Stages and items sent with a room's game (Direct's: rooms play like Direct).
     pub rules: ModeRules,
+    /// The same for a room of a mod of P+ (`crate::games`), by the game's id: its name, its
+    /// Direct rules and the stages of its default ruleset (none: P+'s).
+    pub games: HashMap<String, GameDefaults>,
     /// Rooms put back after a restart ([`RoomBook::restore`]) keep each member's slot this long for
     /// their game to join again.
     pub restore_grace: Duration,
+}
+
+/// What a room of a mod of P+ plays until its host picks a ruleset ([`RoomsConfig::games`]).
+#[derive(Debug, Clone, Default)]
+pub struct GameDefaults {
+    pub name: String,
+    pub rules: ModeRules,
+    pub starters: Vec<u16>,
+    pub counterpicks: Vec<u16>,
 }
 
 impl Default for RoomsConfig {
@@ -86,6 +98,7 @@ impl Default for RoomsConfig {
             join_windows: vec![Window::new(10, minute), Window::new(60, Duration::from_secs(3600))],
             request_windows: vec![Window::new(40, Duration::from_secs(10))],
             rules: ModeRules::default(),
+            games: HashMap::new(),
             restore_grace: Duration::from_secs(60),
         }
     }
@@ -127,6 +140,10 @@ pub struct MemberInfo {
     /// The member's game plays a 2v2 party's pair room (its `hello`'s `pairRoom`).
     #[serde(default)]
     pub pair_room: bool,
+    /// The build of the game the member's Dolphin runs (`crate::games`: a mod's id, empty for
+    /// P+): a room takes only members of its own.
+    #[serde(default)]
+    pub game: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -258,6 +275,9 @@ struct Room {
     /// players search the 2v2 queue together once all are ready ([`Room::party_status`]).
     #[serde(default)]
     twos: bool,
+    /// The build of the game the room plays: its creator's ([`MemberInfo::game`]; empty: P+).
+    #[serde(default)]
+    game: String,
 }
 
 impl Room {
@@ -693,7 +713,7 @@ impl Room {
         })
     }
 
-    fn public_entry(&self) -> PublicRoom {
+    fn public_entry(&self, games: &HashMap<String, GameDefaults>) -> PublicRoom {
         let host = self.slots[self.host].as_ref().map(|m| m.info.display_name.clone()).unwrap_or_default();
         PublicRoom {
             code: self.code.clone(),
@@ -713,6 +733,8 @@ impl Room {
             ruleset: self.ruleset_view(),
             name: self.name.clone(),
             friends: self.friends && !self.public,
+            game: (!self.game.is_empty()).then(|| self.game.clone()),
+            game_name: games.get(&self.game).map(|g| g.name.clone()),
         }
     }
 }
@@ -738,6 +760,8 @@ pub struct RoomRecord {
     pub host: Uuid,
     pub stages: Vec<u16>,
     pub room: common::db::MatchRoom,
+    /// The build of the game the room plays ([`MemberInfo::game`]).
+    pub game: String,
 }
 
 pub struct RoomBook {
@@ -933,7 +957,7 @@ impl RoomBook {
     /// then older.
     pub fn public_rooms(&self, limit: usize) -> Vec<PublicRoom> {
         let mut list: Vec<(&Room, PublicRoom)> =
-            self.rooms.values().filter(|r| r.public).map(|r| (r, r.public_entry())).collect();
+            self.rooms.values().filter(|r| r.public).map(|r| (r, r.public_entry(&self.cfg.games))).collect();
         list.sort_by(|(ra, a), (rb, b)| {
             b.joinable
                 .cmp(&a.joinable)
@@ -948,8 +972,12 @@ impl RoomBook {
     /// Friends-only rooms ([`MmStatus::friend_rooms`](common::rooms::MmStatus::friend_rooms)), in
     /// the order of [`Self::public_rooms`]: accounts lists each to the friends of its players.
     pub fn friend_rooms(&self, limit: usize) -> Vec<PublicRoom> {
-        let mut list: Vec<(&Room, PublicRoom)> =
-            self.rooms.values().filter(|r| !r.public && r.friends && !r.twos).map(|r| (r, r.public_entry())).collect();
+        let mut list: Vec<(&Room, PublicRoom)> = self
+            .rooms
+            .values()
+            .filter(|r| !r.public && r.friends && !r.twos)
+            .map(|r| (r, r.public_entry(&self.cfg.games)))
+            .collect();
         list.sort_by(|(ra, a), (rb, b)| {
             b.joinable
                 .cmp(&a.joinable)
@@ -966,7 +994,7 @@ impl RoomBook {
     pub fn member_rooms(&self, limit: usize) -> Vec<RoomMember> {
         let mut list = Vec::new();
         for room in self.rooms.values() {
-            let entry = room.public_entry();
+            let entry = room.public_entry(&self.cfg.games);
             for (i, m) in room.members() {
                 if list.len() >= limit {
                     return list;
@@ -995,8 +1023,34 @@ impl RoomBook {
     /// match rules and P+'s alternate stages on, as Direct (the user's, 2026-10-27, bug report #164:
     /// players hold L/R/Z on the loser's pick). Not in `Ruleset::default`, which fills a published
     /// ruleset's missing keys: every ruleset written without `alternateStages` keeps it off.
-    fn pplus_default(&self) -> Ruleset {
-        Ruleset { rules: self.cfg.rules.rules.clone(), alternate_stages: true, ..Default::default() }
+    /// A room of a mod of P+ (`game`, `crate::games`) plays that mod's Direct rules, and its own
+    /// starters and counterpicks when it has some (the strikes then fit its starters).
+    fn pplus_default(&self, game: &str) -> Ruleset {
+        let Some(g) = self.cfg.games.get(game) else {
+            return Ruleset {
+                rules: self.cfg.rules.rules.clone(),
+                alternate_stages: true,
+                game: game.into(),
+                ..Default::default()
+            };
+        };
+        let mut r =
+            Ruleset { rules: g.rules.rules.clone(), alternate_stages: true, game: game.into(), ..Default::default() };
+        if !g.starters.is_empty() {
+            r.strikes = room_set::default_strikes(g.starters.len());
+            r.stages = StageLists { starters: g.starters.clone(), counterpicks: g.counterpicks.clone() };
+        }
+        r
+    }
+
+    /// The build of the game a room plays (empty: P+).
+    pub fn game_of(&self, code: &str) -> Option<&str> {
+        self.rooms.get(code).map(|r| r.game.as_str())
+    }
+
+    /// A room's items bitfield: its game's.
+    fn items_of(&self, game: &str) -> u32 {
+        self.cfg.games.get(game).map_or(self.cfg.rules.items, |g| g.rules.items)
     }
 
     fn settle_pickers(&mut self, code: &str, before: Option<u8>) {
@@ -1035,7 +1089,8 @@ impl RoomBook {
         let result = match req {
             RoomRequest::Create { public, ruleset, remembered } => {
                 self.create(now, conn, who, public, false, out).map(|()| {
-                    // The room is there at once with P+'s default; the ruleset follows its lookup.
+                    // The room is there at once with its build's default; the ruleset follows its
+                    // lookup (one of the room's build: apply_ruleset).
                     if ruleset.is_some() || remembered {
                         if let Some(room) = self.member_of.get(&conn).cloned() {
                             out.push(Output::FetchRuleset(RulesetFetch {
@@ -1045,6 +1100,7 @@ impl RoomBook {
                                 code: ruleset,
                                 op: rooms::ROOM_CREATE,
                                 remember: false,
+                                game: who.game.clone(),
                             }));
                         }
                     }
@@ -1136,7 +1192,7 @@ impl RoomBook {
                 phase: Phase::Waiting,
                 created: now,
                 serial: self.room_counter,
-                ruleset: self.pplus_default(),
+                ruleset: self.pplus_default(&who.game),
                 ruleset_code: None,
                 based_on: None,
                 set: None,
@@ -1147,6 +1203,7 @@ impl RoomBook {
                 pick_draw: 0,
                 game_over_at: None,
                 twos,
+                game: who.game.clone(),
             },
         );
         self.changed.push((code.clone(), self.room_counter));
@@ -1190,6 +1247,10 @@ impl RoomBook {
         // The 2V2 character select's partner panel takes 2v2 party codes only.
         if in_party && !room.twos {
             return Err(msg::NOT_A_PARTY);
+        }
+        // A room plays one build of the game: its creator's.
+        if room.game != who.game {
+            return Err(msg::ROOM_OTHER_GAME);
         }
         if room.slot_of(conn).is_some() {
             // Already in it: the answer is the state, as for a join.
@@ -2040,9 +2101,10 @@ impl RoomBook {
         if room.set_on() {
             return Err(msg::SET_ON);
         }
+        let game = room.game.clone();
         match code {
             None => {
-                let default = self.pplus_default();
+                let default = self.pplus_default(self.game_of(&room_code).unwrap_or_default());
                 self.apply_ruleset(&room_code, default, None, out)?;
                 // P+'s default becomes the remembered choice too (decision 12).
                 out.push(Output::FetchRuleset(RulesetFetch {
@@ -2052,6 +2114,7 @@ impl RoomBook {
                     code: None,
                     op: rooms::ROOM_RULESET,
                     remember: true,
+                    game,
                 }));
                 Ok(())
             }
@@ -2063,6 +2126,7 @@ impl RoomBook {
                     code: Some(code),
                     op: rooms::ROOM_RULESET,
                     remember: true,
+                    game,
                 }));
                 Ok(())
             }
@@ -2109,6 +2173,11 @@ impl RoomBook {
         }
         if room.set_on() {
             return Err(msg::SET_ON);
+        }
+        // A ruleset's stage ids are of one build of the game (`Ruleset::game`): a room plays its
+        // own build's only.
+        if ruleset.game != room.game {
+            return Err(msg::RULESET_OTHER_GAME);
         }
         tracing::info!(code = %room_code, ruleset = ?code, name = %ruleset.name, "room ruleset");
         room.ruleset = ruleset;
@@ -2248,6 +2317,7 @@ impl RoomBook {
         uid: Uuid,
         code: &str,
     ) -> Result<TicketOutcome, &'static str> {
+        let items = self.items_of(self.game_of(code).unwrap_or_default());
         let room = self.rooms.get_mut(code).ok_or(msg::ROOM_NOT_FOUND)?;
         let slot = room.members().find(|(_, m)| m.info.uid == uid).map(|(i, _)| i).ok_or(msg::NOT_A_MEMBER)?;
         let (match_id, tickets, old, member_slots, host) = {
@@ -2313,7 +2383,7 @@ impl RoomBook {
                     is_host: Some(*i == host),
                     players: Some(ps),
                     stages: Some(room.ruleset.stages.all().collect()),
-                    items: Some(self.cfg.rules.items),
+                    items: Some(items),
                     rules: Some(room.ruleset.rules.clone()),
                     set: set_ticket.clone(),
                     pick_from_stages: room.ruleset.pick_from_stages().then_some(true),
@@ -2335,6 +2405,7 @@ impl RoomBook {
             players: in_game.iter().map(|(_, m)| m.info.uid).collect(),
             host: room.slots[host].as_ref().map_or(Uuid::nil(), |m| m.info.uid),
             stages: room.ruleset.stages.all().collect(),
+            game: room.game.clone(),
             room: common::db::MatchRoom {
                 code: code.to_string(),
                 mode: match mode {
@@ -2508,6 +2579,7 @@ mod tests {
             connect_code: format!("P#{n}"),
             room_name: None,
             pair_room: true,
+            game: String::new(),
         }
     }
 
@@ -3015,6 +3087,60 @@ mod tests {
         assert_eq!(last_state(&out, 1)["status"], "waiting");
         let set = play(&mut t, &code, 103);
         assert_eq!((set.game, set.wins), (1, [0, 0]));
+    }
+
+    /// A ruleset's stage ids are of one build of the game (`Ruleset::game`): a room plays its own
+    /// build's rulesets only, a mod's room as a P+ room.
+    #[test]
+    fn a_room_plays_rulesets_of_its_own_build() {
+        let mut t = T::new();
+        let cobalt = MemberInfo { game: "cobalt-1.34".into(), ..info(1) };
+        let fetch = |out: &[Output]| {
+            out.iter().find_map(|o| match o {
+                Output::FetchRuleset(f) => Some(f.clone()),
+                _ => None,
+            })
+        };
+        // The game's own Create Room asks for the remembered ruleset: looked up for the room's build.
+        let mut out = vec![];
+        let create = RoomRequest::Create { public: true, ruleset: None, remembered: true };
+        t.book.request(t.now, 1, &cobalt, create, &mut out);
+        let f = fetch(&out).expect("the remembered ruleset's lookup");
+        assert_eq!((f.code.as_deref(), f.game.as_str(), f.remember), (None, "cobalt-1.34", false));
+        let room = last_state(&out, 1)["code"].as_str().unwrap().to_string();
+        assert_eq!(t.book.game_of(&room), Some("cobalt-1.34"));
+        // A published P+ ruleset is refused; the room keeps its own.
+        let mut out = vec![];
+        t.book.request(t.now, 1, &cobalt, RoomRequest::Ruleset { code: Some("BCDFGH".into()) }, &mut out);
+        let f = fetch(&out).expect("the ruleset's lookup");
+        assert_eq!((f.game.as_str(), f.remember), ("cobalt-1.34", true));
+        let pplus = Ruleset { name: "Weekly".into(), version: 1, ..Default::default() };
+        let mut out = vec![];
+        t.book.ruleset_fetched(f.clone(), Ok(Some(("BCDFGH".into(), pplus.clone()))), &mut out);
+        assert_eq!(msgs(&out, 1)[0]["error"], msg::RULESET_OTHER_GAME);
+        // One made for Cobalt is played.
+        let own = Ruleset { name: "Cobalt Weekly".into(), version: 1, game: "cobalt-1.34".into(), ..Default::default() };
+        let mut out = vec![];
+        t.book.ruleset_fetched(f, Ok(Some(("CDFGHJ".into(), own.clone()))), &mut out);
+        let s = last_state(&out, 1);
+        assert_eq!((s["ruleset"]["code"].as_str(), s["ruleset"]["name"].as_str()), (Some("CDFGHJ"), Some("Cobalt Weekly")));
+        // Back to the build's default.
+        let mut out = vec![];
+        t.book.request(t.now, 1, &cobalt, RoomRequest::Ruleset { code: None }, &mut out);
+        let s = last_state(&out, 1);
+        assert_eq!((s["ruleset"]["name"].as_str(), s["ruleset"]["code"].as_str()), (Some("P+ default"), None));
+        // And a P+ room does not play Cobalt's ruleset.
+        let code = create_room_of(&mut t, 2);
+        let f = fetch(&t.req(2, RoomRequest::Ruleset { code: Some("CDFGHJ".into()) })).unwrap();
+        assert_eq!(f.game, "");
+        let mut out = vec![];
+        t.book.ruleset_fetched(f, Ok(Some(("CDFGHJ".into(), own))), &mut out);
+        assert_eq!(msgs(&out, 2)[0]["error"], msg::RULESET_OTHER_GAME);
+        assert!(t.book.game_of(&code).is_some_and(str::is_empty));
+    }
+
+    fn create_room_of(t: &mut T, conn: ConnId) -> String {
+        create(t, conn)
     }
 
     #[test]

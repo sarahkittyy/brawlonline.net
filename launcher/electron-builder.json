@@ -137,7 +137,11 @@
       "to": "plugins",
       "filter": [
         "PPOnline.rel",
-        "PPOnline.json"
+        "PPOnline.json",
+        "PPOnline-pex.rel",
+        "PPOnline-pex.json",
+        "PPOnline-rex.rel",
+        "PPOnline-rex.json"
       ]
     }
   ],

@@ -84,6 +84,19 @@ describe("dolphin paths", () => {
       binary: "/x/P.rel",
       manifest: null,
     });
+
+    // A mod's build takes the plugin built for its kind (the games table's `plugin`): the file of
+    // that name in the same place, with its own manifest.
+    expect(defaultPluginLocation({ ...ctx({ isDevelopment: true }), resourcesPath }, "pex").binary).toBe(
+      path.resolve("/repo/game-code/PPOnline/PPOnline-pex.rel"),
+    );
+    expect(defaultPluginLocation({ ...ctx(), resourcesPath }, "rex")).toEqual({
+      binary: path.join(resourcesPath, "plugins", "PPOnline-rex.rel"),
+      manifest: path.join(resourcesPath, "plugins", "PPOnline-rex.json"),
+    });
+    expect(
+      defaultPluginLocation({ ...ctx({ env: { PPO_PLUGIN_PATH: "/x/PPOnline.rel" } }), resourcesPath }, "pex"),
+    ).toEqual({ binary: path.join("/x", "PPOnline-pex.rel"), manifest: null });
   });
 
   it("keeps the patched SD card under userData/netplay", () => {

@@ -57,7 +57,7 @@ impl OnlineClient {
         platform: &str,
         chat_key: &str,
     ) -> anyhow::Result<(Self, Value)> {
-        Self::open(server, creds, app_version, platform, chat_key, false)
+        Self::open(server, creds, app_version, platform, chat_key, false, "")
     }
 
     /// [`Self::connect`] as a game that sends `game-alive` while it runs (`hello.gameAlive`): mm
@@ -67,7 +67,18 @@ impl OnlineClient {
         creds: &Credentials,
         app_version: &str,
     ) -> anyhow::Result<(Self, Value)> {
-        Self::open(server, creds, app_version, "", "", true)
+        Self::open(server, creds, app_version, "", "", true, "")
+    }
+
+    /// [`Self::connect`] as a Dolphin that runs the build `game` (`hello.game`,
+    /// `<folder>:<hash>`): a mod of P+.
+    pub fn connect_as_game(
+        server: SocketAddr,
+        creds: &Credentials,
+        app_version: &str,
+        game: &str,
+    ) -> anyhow::Result<(Self, Value)> {
+        Self::open(server, creds, app_version, "", "", false, game)
     }
 
     /// `game-alive`: this game runs.
@@ -82,6 +93,7 @@ impl OnlineClient {
         platform: &str,
         chat_key: &str,
         game_alive: bool,
+        game: &str,
     ) -> anyhow::Result<(Self, Value)> {
         let sock = EnetSocket::bind(SocketAddr::from((Ipv4Addr::UNSPECIFIED, 0)))?;
         let local_port = sock.local_addr()?.port();
@@ -109,6 +121,7 @@ impl OnlineClient {
             chat_key: chat_key.into(),
             game_alive,
             pair_room: false,
+            game: if game.is_empty() { crate::default_game() } else { game.into() },
         };
         client.send_json(&serde_json::to_value(&hello)?);
         let resp = client.wait_for(Duration::from_secs(5), |m| m["type"] == "hello-resp")?;

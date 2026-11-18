@@ -28,4 +28,7 @@ markers = [
     "gpu: needs a real video backend (D3D11/Vulkan); skipped with --no-gpu or when none works",
     "server: needs the online backend (server/ binaries built, and a Postgres: PPHARNESS_PG_URL, run/postgres-portable or Docker); skipped otherwise",
     "launcher: drives the built Electron launcher (launcher/ npm run build); opens real windows",
+    "pplus_only(what): plays what only Project+ has (Ranked, the 2v2 queue); skipped on a mod of P+ (PPHARNESS_MOD_FOLDER; docs/design/pplus-mods.md section 3)",
+    "mods_only: about a mod of P+ as such; skipped on Project+ itself",
+    "needs_files(*paths): files of the build's folder on its card ('pf/fighter/fox/FitFoxAltZ.pac'), skipped on a card without them (REX has no alt costumes)",
 ]

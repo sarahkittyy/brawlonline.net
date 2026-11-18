@@ -18,7 +18,9 @@ import {
   ipc_modsInspectFolder,
   ipc_modsJoin,
   ipc_modsJoinByCode,
+  ipc_modsOnlineBuildOf,
   ipc_modsOpenSaveFolder,
+  ipc_modsPlayOnline,
   ipc_modsRefreshControllers,
   ipc_modsRemoveBuild,
   ipc_modsRequest,
@@ -29,6 +31,7 @@ import {
   ipc_modsUpdateBuild,
 } from "./ipc";
 import { ModsManager } from "./mods_manager";
+import { identifyPlusFamilyCard } from "./plus_family";
 
 const log = electronLog.scope("dolphin/mods");
 
@@ -107,6 +110,19 @@ export default function setupModsIpc({
     return { success: true };
   });
   ipc_modsJoin.main!.handle(async (options) => await mods.join(options));
+  // A supported mod of Project+ in the P+ online flow (plus_family.ts).
+  const buildOf = (id: string) => {
+    const build = mods.builds().find((b) => b.id === id);
+    if (!build) {
+      throw new Error("That game is no longer in the list.");
+    }
+    return build;
+  };
+  ipc_modsOnlineBuildOf.main!.handle(async ({ id }) => {
+    const card = await identifyPlusFamilyCard(buildOf(id), dolphinManager.netplayLauncherDol());
+    return { build: card ? { id: card.build.id, name: card.build.name } : null };
+  });
+  ipc_modsPlayOnline.main!.handle(async ({ id }) => await dolphinManager.launchPlusFamilyDolphin(buildOf(id)));
   ipc_modsJoinByCode.main!.handle(async (options) => await mods.joinByCode(options));
   ipc_modsSetRoomGame.main!.handle(async ({ roomHash, buildId }) => {
     await mods.setRoomGame(roomHash, buildId);

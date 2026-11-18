@@ -34,6 +34,7 @@ from typing import Any, Callable
 
 import pytest
 
+from ppharness import paths as ppharness_paths
 from ppharness import paths
 from ppharness.backend import OnlineBackend, OnlineUser, server_binary
 from ppharness.instance import DolphinInstance, InstanceConfig
@@ -51,7 +52,7 @@ from ppharness import brawl as B  # noqa: E402
 
 pytestmark = [pytest.mark.dolphin, pytest.mark.server]
 
-PLUGIN = Path(os.environ.get("PPHARNESS_PLUGIN") or ROOT / "game-code" / "PPOnline" / "PPOnline.rel")
+PLUGIN = ppharness_paths.plugin_path()
 
 S_STATE, S_GAME = 4, 6
 L_LOCK = 0x28
@@ -164,7 +165,7 @@ def _boot(dolphin: Callable[..., DolphinInstance], name: str, be: OnlineBackend,
     inst = dolphin(name, config=cfg, client_timeout=60.0)
     d = inst.create()
     patch_sd.patch_image(d / "Wii" / "sd.raw",
-                         [(PLUGIN.read_bytes(), f"{patch_sd.PLUGIN_DIR}/{PLUGIN.name}")])
+                         [(PLUGIN.read_bytes(), patch_sd.plugin_sd_path(PLUGIN))])
     user.write_user_json(d)
     if before_launch:
         before_launch(d)
@@ -173,6 +174,9 @@ def _boot(dolphin: Callable[..., DolphinInstance], name: str, be: OnlineBackend,
     if after_connect:
         after_connect(inst.client)
     p = Player(inst, user)
+    # (The harness answers before emulation runs: a test that reads the game's memory at once
+    # found "emulation is not running" on a loaded PC and on a mod's larger card.)
+    p.c.wait_state("running", timeout=120)
     p.c.online_session_backend("gameplay")
     _logged_in(inst, user)
     return p

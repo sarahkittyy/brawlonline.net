@@ -1,0 +1,68 @@
+{
+  "games": [
+    {
+      "id": "pplus",
+      "name": "Project+",
+      "folder": "Project+"
+    },
+    {
+      "id": "pex-1.8",
+      "name": "Project+ Ex 1.8",
+      "folder": "P+Ex",
+      "plugin": "pex",
+      "codes": ["812d2df3a26681ce57c335c54e675a8a", "1107eae3a660b2b98e6e2d535ef8730a"]
+    },
+    {
+      "id": "cobalt-1.34",
+      "name": "Cobalt 1.34",
+      "folder": "Cobalt",
+      "plugin": "pex",
+      "codes": ["fe22b89a8cf4cdaac89bc39227111c9f", "ee8a6422b0cd2077861a51574b09e742"],
+      "layout": {
+        "sssLine": [726, -191, 1046, -231, 0.8],
+        "cardPlates": [-22.6, 14.5, 4.3]
+      },
+      "starters": [1, 46, 33, 25, 74],
+      "counterpicks": [19, 42, 7, 4, 2, 76, 12, 35, 68, 30],
+      "rulesets": {
+        "direct": {
+          "stages": [1, 46, 33, 25, 74, 19, 42, 7, 4, 2, 76, 12, 35, 68, 30],
+          "items": 0,
+          "rules": {"style": "stock", "stocks": 4, "timeMinutes": 8, "pause": "normal", "hazards": false}
+        },
+        "unranked": {
+          "stages": [1, 46, 33, 25, 74, 19, 42, 7, 4, 2, 76, 12, 35, 68, 30],
+          "items": 0,
+          "rules": {"style": "stock", "stocks": 4, "timeMinutes": 8, "pause": "hold", "hazards": false}
+        }
+      }
+    },
+    {
+      "id": "rex-0.5",
+      "name": "REX 0.5",
+      "folder": "rex_",
+      "plugin": "rex",
+      "codes": ["747b3fc31200c2aea36293fa91b2c657", "2ca73eed0dbd9a83044d040a74bede71"],
+      "ownLauncher": true,
+      "layout": {
+        "sssLine": [-437, -200, -12, -240, 0.8],
+        "cssBar": [-318, 330, 46, 378, -690, -390, 0, -707, -400, 387, -625, 455, 386, 1.0],
+        "cssButtons": [[27, 187, 0, 8.85, 14.05, 21.3, 18.7], [160, 310, 0, 15.9, 23.1, 21.3, 18.7], [293, 443, 0, 24.7, 31.1, 21.3, 18.7], [411, 561, 0, 32.4, 38.4, 21.3, 18.7]]
+      },
+      "starters": [1, 4, 41, 33, 46],
+      "counterpicks": [12, 7, 35, 45],
+      "rulesets": {
+        "direct": {
+          "stages": [1, 4, 41, 12, 7, 33, 35, 45, 46],
+          "items": 0,
+          "rules": {"style": "stock", "stocks": 4, "timeMinutes": 8, "pause": "normal", "hazards": false, "hazardStages": [7]}
+        },
+        "unranked": {
+          "stages": [1, 2, 4, 121, 107, 41, 12, 13, 28, 7, 33, 35, 45, 46],
+          "items": 0,
+          "rules": {"style": "stock", "stocks": 4, "timeMinutes": 8, "pause": "hold", "hazards": false, "hazardStages": [7]}
+        }
+      }
+    }
+  ]
+}

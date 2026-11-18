@@ -25,13 +25,15 @@ sys.path.insert(0, str(ROOT / "tools" / "sdcard"))
 
 import drive  # noqa: E402
 import ppboot  # noqa: E402
+from ppharness import paths as ppharness_paths
 import ppom  # noqa: E402
 import roomsim  # noqa: E402
+from ppharness import brawl as B  # noqa: E402
 from ppharness.client import HarnessClient, PadInput  # noqa: E402
 
 pytestmark = [pytest.mark.dolphin, pytest.mark.gpu]
 
-PLUGIN = Path(os.environ.get("PPHARNESS_PLUGIN") or ROOT / "game-code" / "PPOnline" / "PPOnline.rel")
+PLUGIN = ppharness_paths.plugin_path()
 ART = ROOT / "run" / "artifacts" / "game-code" / "rooms" / "ui"
 
 # Brawl's CSS hand (muSelCharHand, the local area's +0x1A8): +0x90 x, +0x94 y, in the CSS's own
@@ -116,10 +118,11 @@ class Game:
         return self.u32(self.u32(self.area(i) + 0x41C) + 8)
 
     def banner_shown(self) -> bool:
-        """Brawl's READY TO FIGHT banner (muSelCharTask+0x3C4, MenSelchrReady) is visible: its
-        ScnMdlSimple's +0xCC flags have 0x60 set while nwSMSetVisibility hides it."""
+        """Brawl's READY TO FIGHT banner (MenSelchrReady, P+'s muSelCharTask+0x3C4: B.css_model)
+        is visible: its ScnMdlSimple's +0xCC flags have 0x60 set while nwSMSetVisibility hides it."""
         task = self.u32(self.u32(self.u32(0x805A0060) + 4) + 0x400)
-        return not self.u32(self.u32(self.u32(task + 0x3C4) + 0xC) + 0xCC) & 0x60
+        obj = B.css_model(self.c.read_mem, task, "MenSelchrReady_TopN")
+        return not self.u32(self.u32(obj + 0xC) + 0xCC) & 0x60
 
     def panel_offset(self, i: int) -> float:
         """Area i's panel model (+0xB0) offset, MuObject +0x3C."""
@@ -138,8 +141,11 @@ class Game:
                 v = max(45, min(127, int(abs(d) * 15)))
                 return 128 + (v if d > 0 else -v)
             sx, sy = axis(dx), axis(dy)
-            self.c.pad_script(0, [PadInput(main=(sx, sy), hold=3), PadInput(hold=2)])
-            self.sim.service(5)
+            # (close to it one frame of stick at a time: three overshoot a small `tol`, and the
+            # hand then goes back and forth around the target)
+            near = max(abs(dx), abs(dy)) < 1.5
+            self.c.pad_script(0, [PadInput(main=(sx, sy), hold=1 if near else 3), PadInput(hold=2)])
+            self.sim.service(3 if near else 5)
         raise AssertionError(f"hand did not reach {(x, y)}: {self.hand()}")
 
 
@@ -217,7 +223,7 @@ def test_room_ui_with_a_scripted_dolphin(game: Game) -> None:
     # The FFA button (the bar's STAGE button; A on it, as R): Teams on (three players: a team battle);
     # the panels in team colours. A room starts as FFA.
     assert not sim.room.teams
-    g.hand_to(*MODE_BUTTON, tol=0.5)
+    g.hand_to(*header_button(g, "mode"), tol=0.5)
     g.tap("A")
     g.wait(40)
     assert sim.room.teams
@@ -262,7 +268,7 @@ def test_room_ui_with_a_scripted_dolphin(game: Game) -> None:
     g.wait(20)
     assert ppom.read_local(c, sim.b)["lock"]["ready"] == 0
     # The PUBLIC button (the bar's ITEM button; A on it, as L): private.
-    g.hand_to(*PUBLIC_BUTTON, tol=0.5)
+    g.hand_to(*header_button(g, "public"), tol=0.5)
     g.tap("A")
     g.wait(30)
     assert not sim.room.public
@@ -415,11 +421,26 @@ def to_join_room(g: Game, pick: tuple[float, float] = FOX) -> None:
     g.wait(20)
 
 
+def header_button(g: Game, which: str) -> tuple[float, float]:
+    """PUBLIC ("public") or FFA ("mode") where a hand finds it: the plugin's g_headerRects (ITEM's
+    and STAGE's colL / colR, or on a CSS without Brawl's online art the words in the bar,
+    rules_button.cpp); P+'s places until the plugin has them."""
+    i = 0 if which == "public" else 1
+    try:
+        r = struct.unpack(">4f", g.c.read_mem(ppom_sym(g, "g_headerRects") + 16 * i, 16))
+    except (KeyError, OSError, ValueError, TypeError):
+        r = (0.0, 0.0, 0.0, 0.0)
+    if r[1] - r[0] > 0.5 and r[2] - r[3] > 0.5:
+        return ((r[0] + r[1]) / 2, (r[2] + r[3]) / 2)
+    return PUBLIC_BUTTON if i == 0 else MODE_BUTTON
+
+
 def header_buttons_shown(g: Game) -> tuple[bool, bool]:
-    """ITEM / STAGE (PUBLIC / FFA in a room: muSelCharTask +0x420 / +0x424) visible, as
-    banner_shown reads the READY TO FIGHT banner."""
+    """ITEM / STAGE (PUBLIC / FFA in a room: MenSelchrState0005 / 0006, P+'s muSelCharTask +0x420 /
+    +0x424: B.css_model) visible, as banner_shown reads the READY TO FIGHT banner."""
     task = css_task(g)
-    return tuple(not g.u32(g.u32(g.u32(task + o) + 0xC) + 0xCC) & 0x60 for o in (0x420, 0x424))
+    objs = [B.css_model(g.c.read_mem, task, f"MenSelchrState000{n}_TopN") for n in (5, 6)]
+    return tuple(not g.u32(g.u32(o + 0xC) + 0xCC) & 0x60 for o in objs)
 
 
 @pytest.fixture
@@ -465,7 +486,7 @@ def test_room_buttons_after_a_slow_create(slow_create_game: Game) -> None:
     assert header_buttons_shown(g) == (True, True), "no PUBLIC / FFA once the room is there"
     g.shot("41-slow-create-room")
     # They work: the FFA button switches Teams.
-    g.hand_to(*MODE_BUTTON, tol=0.5)
+    g.hand_to(*header_button(g, "mode"), tol=0.5)
     g.tap("A")
     g.wait(40)
     assert sim.room.teams
@@ -609,7 +630,8 @@ def test_rules_button(rules_game: Game) -> None:
     st = rb.read()
     l, r, t, b = st["rect"]
     assert st["made"] == 1, st
-    assert r < PUBLIC_BUTTON[0] - 2.0 and r - l > 3.0 and b < PUBLIC_BUTTON[1] < t, st
+    pub = header_button(g, "public")
+    assert r < pub[0] - 2.0 and r - l > 3.0 and b < pub[1] < t, (st, pub)
     g.shot("01-room-css")
 
     # The hand on it: its button in the hand (+0xAC), the highlight playing, as on PUBLIC.
@@ -1288,7 +1310,7 @@ def ppom_sym(g: Game, name: str) -> int:
             break
         m = nxt
     cur = None
-    for line in (PLUGIN.parent / "PPOnlineMain.map").read_text().splitlines():
+    for line in ppharness_paths.plugin_map(PLUGIN).read_text().splitlines():
         parts = line.split()
         if len(parts) == 5 and parts[4].startswith("."):
             cur = parts[4]
@@ -1477,28 +1499,37 @@ def slot_lines(g: Game) -> list[int]:
 
 
 def plate_colours(g: Game, name: str) -> list[str]:
-    """Each slot's card colour on a screenshot: the name plate's left end, left of the name
-    (1/1159 of the height a unit: x 330 + 375 * slot, y 1035-1075 on a 2000x1159 shot)."""
+    """Each slot's card colour on a screenshot: the hue most of its name plate's coloured pixels
+    have (1/1159 of the height a unit: x 335-545 + 375 * slot, y 1040-1070 on a 2000x1159 shot).
+    Grey and dark pixels are not counted (the name, the controller icon a mod's card has at the
+    plate's left end), and the hue is read whatever the brightness: a mod's cards are dimmer than
+    P+'s (Cobalt's yellow plate is 115,108,68)."""
     Image = pytest.importorskip("PIL.Image")
     g.shot(name)
     im = Image.open(g.art / f"{name}.png").convert("RGB")
+    return plate_colours_of(im)
+
+
+def plate_colours_of(im: Any) -> list[str]:
+    import colorsys
     k = im.size[1] / 1159.0
     out = []
     for slot in range(4):
         x0 = 335 + 375 * slot
-        box = im.crop((int(x0 * k), int(1040 * k), int((x0 + 30) * k), int(1070 * k)))
-        px = list(box.getdata())
-        r, gr, b = (sum(p[i] for p in px) / len(px) for i in range(3))
-        if r > 1.6 * b and gr > 1.6 * b and abs(r - gr) < 0.35 * max(r, gr):
-            out.append("yellow")
-        elif r > 1.4 * gr and r > 1.4 * b:
-            out.append("red")
-        elif b > 1.3 * r and b > 1.1 * gr:
-            out.append("blue")
-        elif gr > 1.3 * r and gr > 1.3 * b:
-            out.append("green")
-        else:
-            out.append(f"? {int(r)},{int(gr)},{int(b)}")
+        box = im.crop((int(x0 * k), int(1040 * k), int((x0 + 210) * k), int(1070 * k)))
+        votes: dict[str, int] = {}
+        for r, gr, b in box.get_flattened_data() if hasattr(box, "get_flattened_data") else box.getdata():
+            h, sat, val = colorsys.rgb_to_hsv(r / 255.0, gr / 255.0, b / 255.0)
+            if sat < 0.12 or val < 0.12:
+                continue
+            deg = h * 360.0
+            hue = ("red" if deg < 20 or deg >= 340 else "yellow" if 35 <= deg < 75 else
+                   "green" if 90 <= deg < 170 else "blue" if 200 <= deg < 265 else None)
+            if hue:
+                votes[hue] = votes.get(hue, 0) + 1
+        total = sum(votes.values())
+        best = max(votes, key=lambda c: votes[c]) if votes else ""
+        out.append(best if best and total >= 20 and votes[best] >= 0.6 * total else f"? {votes}")
     return out
 
 

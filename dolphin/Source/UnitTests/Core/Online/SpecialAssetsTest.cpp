@@ -119,3 +119,33 @@ TEST(SpecialAssets, BundleHasTheBoxsEntriesInRoleOrder)
   EXPECT_NE(why.find("part 0"), std::string::npos) << why;
   EXPECT_FALSE(BuildBundle(std::vector<u8>(0x100, 0), &why));
 }
+
+TEST(SpecialAssets, TheRulesMenusArchive)
+{
+  // The MenuRule ARC whole (P+'s sc_selcharacter2.pac holds a copy of it; REX's is empty).
+  const std::vector<u8> rules = Arc("MenuRule_en", {{2, 0, Bres("MenMainSwitch0001_TopN")}, {1, 0, {1, 2, 3}}});
+  std::string why;
+  const auto found = FindMenuArchive(Arc("arc", {{1, 13, Arc("MenuMain_en", {})}, {1, 14, rules}}), &why);
+  ASSERT_TRUE(found) << why;
+  EXPECT_EQ(*found, rules);
+  // None, or one without its models, is none.
+  EXPECT_FALSE(FindMenuArchive(MenuArchive(true), &why));
+  EXPECT_NE(why.find("no MenuRule"), std::string::npos) << why;
+  EXPECT_FALSE(FindMenuArchive(Arc("arc", {{1, 14, Arc("MenuRule_en", {{1, 0, {1}}})}}), &why));
+  EXPECT_NE(why.find("no models"), std::string::npos) << why;
+}
+
+TEST(SpecialAssets, TheBuildsCardFolder)
+{
+  // The File Patch Code's path as P+ and two of its mods have it (found live, 2026-11-14).
+  EXPECT_EQ(CardFolder("/Project+/"), "Project+");
+  EXPECT_EQ(CardFolder("/Cobalt/./"), "Cobalt");
+  EXPECT_EQ(CardFolder("/P+Ex/././"), "P+Ex");
+  EXPECT_EQ(CardFolder("/mods/Build 2/"), "");   // (a space: not a folder a build has)
+  EXPECT_EQ(CardFolder("/a/b/"), "a/b");
+  EXPECT_EQ(CardFolder(""), "");
+  EXPECT_EQ(CardFolder("/"), "");
+  EXPECT_EQ(CardFolder("/../etc/"), "");
+  EXPECT_EQ(CardFolder("sd:/Project+/"), "");
+  EXPECT_EQ(CardFolder("/Proj\x01" "ect/"), "");
+}

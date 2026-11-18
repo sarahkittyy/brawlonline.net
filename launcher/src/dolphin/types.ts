@@ -179,7 +179,9 @@ export type ReplayListPlay = { commandId: string; nav: HighlightListView["nav"] 
 export type ReplayPlayResult =
   | { status: "playing"; release: string | null; skipped: number; skippedRelease?: string }
   | { status: "needs-files"; release: string; current: string; downloadBytes: number }
-  | { status: "unplayable"; release: string; current: string };
+  // `mod`: a replay of a mod of Project+ (`release` is the mod's name). It plays on that mod's
+  // card only, so not on the launcher's release either: no "play anyway" for it.
+  | { status: "unplayable"; release: string; current: string; mod?: true };
 
 /** `auto`: on the replays' own release when it is ready; `current`: on the launcher's release anyway. */
 export type ReplayPlayChoice = "auto" | "current";
@@ -366,6 +368,13 @@ export type DolphinEvent = DolphinEventMap[DolphinEventType];
 export type NetplayLaunchResult =
   | { status: "started" }
   | { status: "wrongPPlusBuild"; cardRelease: string; release: string };
+
+/**
+ * A mod of Project+ started in the P+ online flow (DolphinManager.launchPlusFamilyDolphin): which
+ * supported build it is (mm's id and its name), or `unsupported` when the build's SD card is not
+ * a release mm lets play (mods/plus_family.ts).
+ */
+export type PlusFamilyLaunchResult = { status: "started"; id: string; name: string } | { status: "unsupported" };
 
 /**
  * Settings > Dolphin's Brawl Online folder move (DolphinManager.moveMainFolder): where everything

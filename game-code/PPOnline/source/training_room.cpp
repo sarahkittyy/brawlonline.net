@@ -26,6 +26,7 @@
 #include <it/it_manager.h>
 #include <mu/mu_msg.h>
 
+#include "build.h"
 #include "online.h"
 #include "online_menu.h"
 #include "ppom.h"
@@ -437,7 +438,9 @@ namespace TrainingRoom {
         u32 selp = isPtr(gg) ? *(u32*)(gg + 0x10) : 0;
         if (!isPtr(selp)) return;
         const PPOM::LockIn& li = PPOM::g_block.local.lockIn;
-        if (!li.ready || li.charKind >= 0x3E) return;
+        // (Any character the build can lock in, Build::playableCharKind: a mod's own fighters have
+        // kinds past P+'s, and with P+'s bound the room came up with no fighter at all.)
+        if (!li.ready || !Build::playableCharKind(li.charKind)) return;
         u8* rec = (u8*)selp + 0xB8;
         rec[0x00] = li.charKind;
         rec[0x01] = 0;                                   // human

@@ -1091,10 +1091,16 @@ constexpr u32 MM_ITEM_SWITCH = 0x30, ITEM_SWITCH_SIZE = 0x10;
 // L-cancelling, the hitstun and shield modifiers, Special Modes...) are read straight from its
 // lines by P+'s codes, so every machine must have the same. Online the plugin writes every value
 // line (its defaults, the session's auto L-cancel; online_menu.cpp codeMenuLines). The lines are
-// found by the same layout the plugin uses (fudgepop's: +0 size u16, +2 type, +6 text offset,
-// +8 value, a selection's options pointer at +0x18). The per-player Character Select lines are
-// left out: P+ keeps the fighter being played in them.
-constexpr u32 CODE_MENU = 0x804E0000, CODE_MENU_SIZE = 0x2520, CODE_MENU_VALUE = 8;
+// found the way the plugin finds them (online_menu.cpp codeMenuNext): from the main page (the
+// header's +4) the pages follow one another, a page is 0x14 bytes (its +0 a u32 under 0x10000)
+// and then its lines, each as long as its +0 says (fudgepop's layout: +0 size u16, +2 type, +5
+// text offset u16, +8 value, a selection's options pointer at +0x18; types 0-2 are the value
+// lines). The walk ends at what is neither a page nor a line. A mod's menu is longer than P+'s
+// (P+ 0x2520 bytes and 85 value lines; Cobalt and P+Ex 158), so nothing here goes by P+'s size;
+// on P+ the walk gives the 85 lines a scan of those 0x2520 bytes gave, in the same order. The
+// per-player Character Select lines are left out: P+ keeps the fighter being played in them.
+constexpr u32 CODE_MENU = 0x804E0000, CODE_MENU_MAX = 0x10000, CODE_MENU_VALUE = 8;
+constexpr u32 CODE_MENU_MAIN_PAGE = 4, CODE_MENU_PAGE_HEADER = 0x14;
 
 struct CodeMenuLine
 {
@@ -1106,20 +1112,39 @@ struct CodeMenuLine
 std::vector<CodeMenuLine> CodeMenuValueLines(const Guest& g)
 {
   std::vector<CodeMenuLine> out;
-  const u8* m = g.Ptr(CODE_MENU, CODE_MENU_SIZE);
+  const u8* m = g.Ptr(CODE_MENU, CODE_MENU_MAX);
   if (!m)
     return out;
-  for (u32 o = 0; o + 0x20 <= CODE_MENU_SIZE; o += 4)
+  const auto u16_at = [m](u32 o) { return u32(m[o]) << 8 | m[o + 1]; };
+  const auto u32_at = [m](u32 o) {
+    return u32(m[o]) << 24 | u32(m[o + 1]) << 16 | u32(m[o + 2]) << 8 | m[o + 3];
+  };
+  const u32 end = CODE_MENU_MAX - 0x20;
+  const u32 main_page = u32_at(CODE_MENU_MAIN_PAGE);
+  if (main_page < CODE_MENU + 0x40 || main_page >= CODE_MENU + end || (main_page & 3))
+    return out;
+  u32 o = main_page - CODE_MENU;
+  if (u16_at(o) != 0)
+    return out;
+  while (o < end)
   {
+    if (u16_at(o) == 0)
+      o += CODE_MENU_PAGE_HEADER;
+    if (o >= end)
+      break;
     const u8* l = m + o;
-    const u32 size = u32(l[0]) << 8 | l[1];
-    const u32 type = l[2], text = l[6];
-    if ((size & 3) || size < 0x20 || size > 0x400 || o + size > CODE_MENU_SIZE)
+    const u32 size = u16_at(o);
+    const u32 type = l[2], text = u32(l[5]) << 8 | l[6];
+    if (size < 8 || (size & 3) || type > 8)
+      break;
+    const u32 at = o;
+    o += size;
+    if (type > 2 || size < 0x20 || size > 0x1000 || at + size > CODE_MENU_MAX)
       continue;
-    if (type > 2 || text < 0x1C || text >= size)
+    if (text < 0x1C || text >= size)
       continue;
-    const u32 options = u32(l[0x18]) << 24 | u32(l[0x19]) << 16 | u32(l[0x1A]) << 8 | l[0x1B];
-    if (type == 0 ? (options < CODE_MENU || options >= CODE_MENU + CODE_MENU_SIZE) : text != 0x20)
+    const u32 options = u32_at(at + 0x18);
+    if (type == 0 ? (options < CODE_MENU || options >= CODE_MENU + CODE_MENU_MAX) : text != 0x20)
       continue;
     const std::string_view t(reinterpret_cast<const char*>(l) + text, size - text);
     if (!std::isalpha(static_cast<unsigned char>(t[0])))
@@ -1134,7 +1159,7 @@ std::vector<CodeMenuLine> CodeMenuValueLines(const Guest& g)
     }
     if (t.substr(0, percent).find("Character Select") != std::string_view::npos)
       continue;
-    out.push_back({CODE_MENU + o, std::string(t.substr(0, percent))});
+    out.push_back({CODE_MENU + at, std::string(t.substr(0, percent))});
   }
   return out;
 }

@@ -28,7 +28,7 @@ import online_set  # noqa: E402  (test_online_game put harness/tools on the path
 import ppom  # noqa: E402
 from ppharness import brawl as B  # noqa: E402
 
-pytestmark = [pytest.mark.dolphin, pytest.mark.server, pytest.mark.gpu, pytest.mark.slow]
+pytestmark = [pytest.mark.dolphin, pytest.mark.server, pytest.mark.gpu, pytest.mark.slow, pytest.mark.pplus_only("The 2v2 queue")]
 
 ART = ROOT / "run" / "artifacts" / "game-code" / "twos-pair-room"
 CSS = "scSelctCharacter"

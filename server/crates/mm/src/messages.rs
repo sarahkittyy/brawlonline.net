@@ -57,6 +57,28 @@ pub const NO_OPPONENT: &str = "No opponent in range\nTry making a room";
 pub const ROOM_NOT_FOUND: &str = "Room not found.";
 /// Rooms: every open slot is taken.
 pub const ROOM_FULL: &str = "This room is full.";
+/// A join from a game of another build than the room's (`crate::games`): P+ and a mod of it,
+/// or two mods.
+pub const ROOM_OTHER_GAME: &str = "That room plays another game.";
+/// A published ruleset of another build of the game than the room's (`Ruleset::game`: its stage
+/// ids name other stages there).
+pub const RULESET_OTHER_GAME: &str = "That ruleset is for another game.";
+/// A `hello` or a ticket from a build of the game that is not in mm's games table.
+pub fn unknown_game(folder: &str) -> String {
+    if folder.is_empty() {
+        "This game can't play online here.".into()
+    } else {
+        format!("This version of {folder}\ncan't play online here yet.")
+    }
+}
+/// A mode a mod does not play (Ranked, the 2v2 queue).
+pub fn mode_not_on(mode: &str, game: &str) -> String {
+    format!("{mode} isn't on {game} yet.")
+}
+/// Direct: the other player's game is another build.
+pub fn other_game(code: &str, game: &str) -> String {
+    format!("{code} is playing\n{game}.")
+}
 /// Rooms: the host closed this player's slot (and the room refuses them from then on).
 pub const REMOVED: &str = "Removed from the room.";
 /// Rooms: a host-only request from someone else.
