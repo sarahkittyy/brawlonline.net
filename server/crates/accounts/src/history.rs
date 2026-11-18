@@ -275,6 +275,10 @@ pub struct MatchItem {
     pub end_reason: Option<String>,
     /// A room's game: the room; null for the other modes.
     pub room: Option<MatchRoom>,
+    /// The build of the game it was played on when that is a mod of P+ (mm's id: `cobalt-1.34`):
+    /// its characters and stages are that build's, not P+'s. Absent for P+.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub game: String,
     /// A 2v2 match: its rated games (each player's `wins` are the ones their team won). Absent for
     /// the other modes.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -308,6 +312,7 @@ struct Row {
     ruleset_code: Option<String>,
     ruleset_name: Option<String>,
     ruleset_version: Option<i32>,
+    game: String,
 }
 
 /// One page of `uid`'s matches older than `before` (newest first); with `players`, only those
@@ -328,7 +333,7 @@ pub async fn matches(
     sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY").execute(&mut *tx).await?;
     let sql = format!(
         "SELECT m.match_id, m.mode, m.created_at, m.status, m.players, m.winner, m.end_reason,
-                m.room_code, m.room_mode, m.ports, m.teams, m.ruleset_code, m.ruleset_name, m.ruleset_version
+                m.room_code, m.room_mode, m.ports, m.teams, m.ruleset_code, m.ruleset_name, m.ruleset_version, m.game
            FROM mm_matches m
           WHERE m.players @> ARRAY[$1]::uuid[]{}
             AND m.players @> $5::uuid[]
@@ -522,6 +527,7 @@ pub async fn matches(
                 winner: r.winner,
                 end_reason: r.end_reason,
                 room,
+                game: r.game,
                 games: twos.map(|(_, games)| games),
             }
         })

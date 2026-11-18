@@ -26,6 +26,8 @@ from ppharness.backend import OnlineBackend
 from ppharness.instance import DolphinInstance
 
 from test_online_game import Game, _confirmed_checksums, _connected_direct, backend  # noqa: F401 (fixture)
+from test_special_modes import costume_files
+import mod_adapt  # noqa: E402
 import online_set  # noqa: E402  (test_online_game put harness/tools on the path)
 
 pytestmark = [pytest.mark.dolphin, pytest.mark.server, pytest.mark.gpu, pytest.mark.slow]
@@ -79,9 +81,15 @@ def test_biggest_costumes_load_online(backend: OnlineBackend, dolphin: Callable[
     a.steps("wait 300")
     host, join = (a, b) if online_set.local(a.c)["local_port"] == 0 else (b, a)
     port_a, port_b = online_set.local(a.c)["local_port"], online_set.local(b.c)["local_port"]
+    # The file of Samus's costume 9 by the build's own costume list: P+'s is FitSamus27.pac, the
+    # big one; a mod has its own list (Cobalt's ninth is FitSamus30.pac).
+    fit_samus = costume_files(a, B.CSS_ID["samus"])[SAMUS_EOD]
+    assert mod_adapt.active() or fit_samus == FIT_SAMUS_EOD, fit_samus
+    # Link's AltR where the build has the file (REX has no alt costumes: R held is his first).
+    link_r = FIT_ALT_R if mod_adapt.card_has("pf/fighter/link/FitLinkAltR.pac") else 0
     for g in (a, b):
         c = _mm_costumes(g)
-        assert c[port_a] == FIT_SAMUS_EOD and c[port_b] == FIT_ALT_R, (g.name, c)
+        assert c[port_a] == fit_samus and c[port_b] == link_r, (g.name, c)
         kinds = {p.port: p.character for p in B.read_players(g.c.read_mem)}
         assert kinds.get(port_a) == B.CSS_TO_CHAR_KIND[B.CSS_ID["samus"]], (g.name, kinds)
         assert kinds.get(port_b) == B.CSS_TO_CHAR_KIND[B.CSS_ID["link"]], (g.name, kinds)

@@ -147,6 +147,7 @@ use crate::messages as msg;
 use crate::mod_rooms::{ModRoomBook, ModRoomsConfig};
 use crate::region::RegionMap;
 use crate::rooms::{MemberInfo, RoomBook, RoomsConfig};
+use crate::games::Games;
 use crate::ruleset::Rulesets;
 use crate::versions::FeedVersions;
 
@@ -204,6 +205,8 @@ pub struct EngineConfig {
     /// [`FEED_REFRESH`].
     pub update_feed_dir: Option<PathBuf>,
     pub rulesets: Rulesets,
+    /// The builds of the game that may play, each with its modes and stage lists.
+    pub games: Games,
     /// Region of a ticket's source address (Unranked buckets).
     pub regions: RegionMap,
     /// An Unranked or Ranked ticket that has waited this long takes an opponent from any region.
@@ -284,6 +287,7 @@ impl Default for EngineConfig {
             latest_version: None,
             update_feed_dir: None,
             rulesets: Rulesets::default(),
+            games: Games::default(),
             regions: RegionMap::default(),
             region_widen: Duration::from_secs(30),
             ranked_band: 150.0,
@@ -328,6 +332,10 @@ pub struct RulesetFetch {
     pub op: &'static str,
     /// Make the code the account's remembered ruleset (a host's in-game choice).
     pub remember: bool,
+    /// The build of the game the room plays ([`common::rules::Ruleset::game`]: empty for P+): a
+    /// ruleset of another build is not remembered, and a remembered one of another is not the
+    /// room's.
+    pub game: String,
 }
 
 /// Result of the account lookup the engine asked for.
@@ -406,6 +414,8 @@ pub struct MatchRecord {
     pub region: String,
     /// A room's game: the room, each player's slot and team.
     pub room: Option<common::db::MatchRoom>,
+    /// The build of the game it is played on (`crate::games`): empty for P+.
+    pub game: String,
     /// 2v2: each player's pair (`mm_matches.pairs`), in `players` order: 0 searched alone, else the
     /// same number for two who queued together. Zeros in every other mode.
     pub pairs: [u8; 4],
@@ -541,11 +551,13 @@ struct TwosSearch {
     after: Option<String>,
 }
 
-/// The build a game says it is (`appVersion`, `platform`).
+/// The build a game says it is (`appVersion`, `platform`), and the build of the game it runs
+/// (`game`, resolved in [`crate::games`]: its id there, empty for P+).
 #[derive(Debug, Clone, Default)]
 struct ClientBuild {
     app_version: String,
     platform: String,
+    game: String,
 }
 
 #[derive(Debug, Clone)]
@@ -569,6 +581,8 @@ struct Waiting {
     /// The game's IPv6 probe token, and the address it came from if it came by the ticket.
     ipv6_token: Option<String>,
     addr6: Option<SocketAddrV6>,
+    /// The build of the game ([`ClientBuild::game`]): only tickets of one build are paired.
+    game: String,
 }
 
 /// An online connection: a running, logged-in game (rooms, the online count).
@@ -778,8 +792,15 @@ pub struct Engine {
     geoip_read: Option<Instant>,
 }
 
-fn hello_ok() -> HelloResp {
-    HelloResp { kind: common::rooms::HELLO_RESP.into(), error: None, latest_version: None, game_alive: true }
+/// `layout`: the client's build's places on its screens (games.json `layout`), if its art is not P+'s.
+fn hello_ok(layout: Option<common::rooms::Layout>) -> HelloResp {
+    HelloResp {
+        kind: common::rooms::HELLO_RESP.into(),
+        error: None,
+        latest_version: None,
+        game_alive: true,
+        layout,
+    }
 }
 
 /// The rating a queue pairs by: the Ranked rating in Ranked, the hidden Unranked one in Unranked.
@@ -881,6 +902,20 @@ impl Engine {
         let hello_limiter = RateLimiter::new(&[cfg.hello_window]);
         let mut rooms_cfg = cfg.rooms.clone();
         rooms_cfg.rules = cfg.rulesets.for_mode(Mode::Direct);
+        // Each mod of P+: its Direct rules and its default ruleset's stages (`crate::games`).
+        rooms_cfg.games = cfg
+            .games
+            .mods()
+            .map(|g| {
+                let d = crate::rooms::GameDefaults {
+                    name: g.name.clone(),
+                    rules: cfg.games.rules(g, Mode::Direct, &cfg.rulesets),
+                    starters: g.starters.clone(),
+                    counterpicks: g.counterpicks.clone(),
+                };
+                (g.id.clone(), d)
+            })
+            .collect();
         let chat = ChatBook::new(cfg.chat.clone());
         let mod_rooms_cfg = cfg.mod_rooms.clone();
         let live = LiveBook::new(cfg.live.clone());
@@ -1267,6 +1302,7 @@ impl Engine {
                 host: r.is_host,
                 room: r.room_code,
                 age: Duration::from_millis(r.age_ms.max(0) as u64),
+                game: r.game,
             };
             self.live.restore_match(now, restored, names, out);
         }
@@ -1681,6 +1717,7 @@ impl Engine {
                     connect_code: o.code.clone(),
                     room_name: o.user.room_name.clone(),
                     pair_room: o.pair_room,
+                    game: o.client.game.clone(),
                 };
                 // Going to a room ends the match chat (the room's own group comes with the room).
                 if matches!(req, RoomRequest::Create { .. } | RoomRequest::Join { .. }) {
@@ -1700,6 +1737,7 @@ impl Engine {
                     connect_code: o.code.clone(),
                     room_name: o.user.mods_room_name.clone(),
                     pair_room: o.pair_room,
+                    game: o.client.game.clone(),
                 };
                 // One room at a time: a mod room leaves the P+ room.
                 if matches!(req, common::mods::ModsRequest::Create { .. } | common::mods::ModsRequest::Join { .. })
@@ -1759,7 +1797,7 @@ impl Engine {
                     },
                 );
             }
-            Ok(ClientMessage::Hello(_)) => Self::send(out, conn, &hello_ok()),
+            Ok(ClientMessage::Hello(_)) => Self::send(out, conn, &hello_ok(self.layout_of(conn))),
             Ok(ClientMessage::CreateTicket(_)) => Self::send(out, conn, &CreateTicketResp::error(msg::INVALID_REQUEST)),
             Ok(ClientMessage::Unknown(kind)) => room_error(out, &kind, msg::UNKNOWN_REQUEST),
             Err(e) => {
@@ -1821,9 +1859,16 @@ impl Engine {
     /// `hello`: the same checks as a ticket (version, uid, play key), then the connection stays
     /// open as an online connection.
     fn on_hello(&mut self, now: Instant, conn: ConnId, h: common::rooms::Hello, out: &mut Vec<Output>) {
-        let client = ClientBuild { app_version: h.app_version, platform: h.platform };
+        let mut client = ClientBuild { app_version: h.app_version, platform: h.platform, game: String::new() };
         if let Some(latest) = self.outdated(&client) {
             return self.refuse_hello(out, conn, &msg::update_to(&latest), Some(latest.clone()));
+        }
+        match self.cfg.games.resolve(&h.game) {
+            Ok(game) => client.game = self.cfg.games.record_id(game),
+            Err(crate::games::UnknownGame(folder)) => {
+                tracing::info!(conn, game = %h.game.chars().take(96).collect::<String>(), "hello refused: unknown game");
+                return self.refuse_hello(out, conn, &msg::unknown_game(&folder), None);
+            }
         }
         let Ok(uid) = Uuid::parse_str(h.user.uid.trim()) else {
             return self.refuse_hello(out, conn, msg::NOT_LOGGED_IN, None);
@@ -1861,6 +1906,15 @@ impl Engine {
         out.push(Output::FetchUser { conn, seq, uid });
     }
 
+    /// An online connection's build's places on its screens (games.json `layout`, for its
+    /// `hello-resp`); none for P+'s art and for a connection that is not online.
+    fn layout_of(&self, conn: ConnId) -> Option<common::rooms::Layout> {
+        match self.conns.get(&conn) {
+            Some(Conn { state: State::Online(o), .. }) => self.cfg.games.get(&o.client.game).layout.clone(),
+            _ => None,
+        }
+    }
+
     /// Refuses a `hello`: `hello-resp {error}`, then the connection is closed.
     fn refuse_hello(&mut self, out: &mut Vec<Output>, conn: ConnId, msg: &str, latest: Option<String>) {
         tracing::info!(conn, "hello refused: {msg}");
@@ -1872,6 +1926,7 @@ impl Engine {
                 error: Some(clamp_error(msg.into())),
                 latest_version: latest,
                 game_alive: false,
+                layout: None,
             },
         );
         self.finish(out, conn);
@@ -1889,9 +1944,29 @@ impl Engine {
         if let Some(name) = unsupported {
             return self.refuse(out, conn, msg::not_available(name));
         }
-        let client = ClientBuild { app_version: t.app_version, platform: t.platform };
+        let mut client = ClientBuild { app_version: t.app_version, platform: t.platform, game: String::new() };
         if let Some(latest) = self.outdated(&client) {
             return self.refuse(out, conn, msg::update_to(&latest));
+        }
+        // The build of the game: a mod must be one mm knows, and plays only its own modes.
+        match self.cfg.games.resolve(&t.game) {
+            Ok(game) => {
+                if !self.cfg.games.plays(game, mode) {
+                    let name = match mode {
+                        Mode::Ranked => "Ranked",
+                        Mode::Twos => "2v2",
+                        Mode::Unranked => "Unranked",
+                        Mode::Direct => "Direct",
+                        Mode::Teams | Mode::Party => "Rooms",
+                    };
+                    return self.refuse(out, conn, msg::mode_not_on(name, &game.name));
+                }
+                client.game = self.cfg.games.record_id(game);
+            }
+            Err(crate::games::UnknownGame(folder)) => {
+                tracing::info!(conn, game = %t.game.chars().take(96).collect::<String>(), "ticket refused: unknown game");
+                return self.refuse(out, conn, msg::unknown_game(&folder));
+            }
         }
         let Ok(uid) = Uuid::parse_str(t.user.uid.trim()) else {
             return self.refuse(out, conn, msg::NOT_LOGGED_IN);
@@ -2073,6 +2148,7 @@ impl Engine {
             requeue: p.twos.as_ref().is_some_and(|t| t.requeue),
             addr6: self.ipv6_seen.get(p.ipv6_token.as_deref().unwrap_or_default()).map(|(a, _)| *a),
             ipv6_token: p.ipv6_token.clone(),
+            game: p.client.game.clone(),
         });
         self.fail_room_tickets(out);
         if let Some(t) = p.twos {
@@ -2176,7 +2252,7 @@ impl Engine {
             self.live.named(uid, &o.user.display_name, &o.code);
         }
         self.live.presence(now, uid, true, None, out);
-        Self::send(out, conn, &hello_ok());
+        Self::send(out, conn, &hello_ok(self.layout_of(conn)));
     }
 
     /// A room's game ticket from a verified account.
@@ -2216,6 +2292,7 @@ impl Engine {
                 mode: Mode::Teams,
                 target: party.clone(),
                 started: wall,
+                game: p.client.game.clone(),
                 lan: p.lan,
                 region,
                 loc: None,
@@ -2250,6 +2327,10 @@ impl Engine {
     ) {
         let Some(addr) = self.conns.get(&conn).and_then(|c| to_v4(c.addr)) else { return };
         let addr6 = self.addr6_of(p.ipv6_token.as_deref());
+        // (The ticket comes on its own connection: its game must be the build the room plays.)
+        if self.rooms.game_of(&room).is_some_and(|g| g != p.client.game) {
+            return self.refuse(out, conn, msg::ROOM_OTHER_GAME);
+        }
         let outcome = match self.rooms.ticket(conn, addr, addr6, p.lan.clone(), user.uid, &room) {
             Ok(o) => o,
             Err(e) => return self.refuse(out, conn, e),
@@ -2264,6 +2345,7 @@ impl Engine {
                 mode: Mode::Teams,
                 target: room.clone(),
                 started: wall,
+                game: p.client.game.clone(),
                 lan: p.lan,
                 region,
                 loc: None,
@@ -2302,6 +2384,7 @@ impl Engine {
                 stages: rec.stages,
                 region: regions.join("+"),
                 room: Some(rec.room),
+                game: rec.game,
                 pairs: [0; 4],
             }));
         }
@@ -2381,6 +2464,15 @@ impl Engine {
         let key = pair_key(me.user.uid, them.user.uid);
         let (my_code, their_code) = (me.code.clone(), them.code.clone());
         let searched = me.since.min(them.since);
+        // Two builds of the game can't play each other: each is told what the other plays.
+        if me.game != them.game {
+            let (mine, theirs) =
+                (self.cfg.games.get(&me.game).name.clone(), self.cfg.games.get(&them.game).name.clone());
+            tracing::info!(%my_code, %their_code, %mine, %theirs, "direct: two builds of the game");
+            self.fail_ticket(out, conn, msg::other_game(&their_code, &theirs), None);
+            self.fail_ticket(out, other, msg::other_game(&my_code, &mine), None);
+            return;
+        }
 
         if let Some(h) = self.history.get(&key).copied() {
             if self.failed_connect(now, &h, searched) {
@@ -2586,6 +2678,10 @@ impl Engine {
                 if wa.user.uid == wb.user.uid {
                     continue;
                 }
+                // Two builds of the game can't play each other (`crate::games`).
+                if wa.game != wb.game {
+                    continue;
+                }
                 if ranked && self.ranked_avoid.contains_key(&pair_key(wa.user.uid, wb.user.uid)) {
                     continue;
                 }
@@ -2674,7 +2770,8 @@ impl Engine {
         // Deterministic host ("decider"): the lowest hash of the uid (design 2.3).
         entrants.sort_by_key(|(_, _, w)| uid_hash(w.user.uid));
         let mode = entrants[0].2.mode;
-        let rules = self.cfg.rulesets.for_mode(mode);
+        let game = entrants[0].2.game.clone();
+        let rules = self.cfg.games.rules(self.cfg.games.get(&game), mode, &self.cfg.rulesets);
         self.match_counter += 1;
         let match_id = format!(
             "mode.{}-{}-{:x}",
@@ -2808,6 +2905,7 @@ impl Engine {
             stages: rules.stages.clone(),
             region,
             room: None,
+            game,
             pairs,
         }));
         for (conn, _, w) in &entrants {
@@ -2959,6 +3057,9 @@ impl Engine {
             }
         }
         if players.len() != 4 {
+            return None;
+        }
+        if players.iter().any(|(w, _)| w.game != players[0].0.game) {
             return None;
         }
         let waited = |w: &Waiting| now.saturating_duration_since(w.since);
@@ -5763,6 +5864,7 @@ mod tests {
             is_host: a.uid,
             room_code: None,
             age_ms: 20 * 60 * 1000,
+            game: String::new(),
         };
         let presence = |out: &[Output]| -> Vec<(Uuid, bool)> {
             out.iter()
@@ -5813,6 +5915,7 @@ mod tests {
             players,
             room_code: None,
             age_ms: 60 * 1000,
+            game: String::new(),
         };
         h.input(Input::MatchesRestored(vec![set("ab", vec![a.uid, b.uid]), set("ac", vec![a.uid, c.uid])]));
         // (match, uid, online, stalled)
@@ -5885,6 +5988,7 @@ mod tests {
             players: vec![a.uid, b.uid],
             room_code: None,
             age_ms: 60 * 1000,
+            game: String::new(),
         };
         h.input(Input::MatchesRestored(vec![set]));
         // (uid, kind, length in ms)
@@ -6425,5 +6529,200 @@ mod tests {
         let r = twos_splits(&[2000.0, 1000.0, 1900.0, 1100.0], &[0, 1, 2, 3]);
         assert_eq!(r[0].0, [0, 0, 1, 1]);
         assert!(r[0].1 <= r[1].1 && r[1].1 <= r[2].1);
+    }
+
+    // ---- The builds of the game (`crate::games`, docs/design/pplus-mods.md §3) ----
+
+    const COBALT: &str = "Cobalt:fe22b89a8cf4cdaac89bc39227111c9f";
+    const PEX: &str = "P+Ex:812d2df3a26681ce57c335c54e675a8a";
+    const PPLUS: &str = "Project+:bc298983bc1e2e55afc2156e77069341";
+
+    impl Harness {
+        /// A ticket of `mode` from a Dolphin that runs the build `game` ("": none named).
+        fn ticket_of(&mut self, conn: ConnId, u: &MmUser, target: &str, mode: u8, game: &str) -> Vec<Output> {
+            let mut v = self.ticket_json(u, target, mode);
+            if !game.is_empty() {
+                v["game"] = json!(game);
+            }
+            self.raw(conn, v.to_string().as_bytes())
+        }
+        fn hello_of(&mut self, conn: ConnId, u: &MmUser, game: &str) -> Vec<Output> {
+            let v = json!({
+                "type": "hello",
+                "user": {"uid": u.uid.to_string(), "playKey": self.secret.derive(u.uid, u.play_key_version)},
+                "appVersion": "3.4.0",
+                "game": game,
+            });
+            self.raw(conn, v.to_string().as_bytes())
+        }
+    }
+
+    #[test]
+    fn unranked_pairs_only_within_one_build_of_the_game() {
+        let mut h = Harness::new(default_rules());
+        let u = h.users(6);
+        for c in 1..=6 {
+            h.connect(c, 41000 + c as u16);
+        }
+        // P+ (named or not), Cobalt and P+Ex wait side by side: nobody is paired across.
+        assert!(matches(&h.ticket_of(1, &u[0], "", 1, "")).is_empty());
+        assert!(matches(&h.ticket_of(2, &u[1], "", 1, COBALT)).is_empty());
+        assert!(matches(&h.ticket_of(3, &u[2], "", 1, PEX)).is_empty());
+        assert!(matches(&h.advance(Duration::from_secs(5))).is_empty());
+        assert_eq!(h.e.waiting_count(), 3);
+        // A second Cobalt player: Cobalt's match, with Cobalt's stages and rules.
+        let out = h.ticket_of(4, &u[3], "", 1, COBALT);
+        let m = matches(&out);
+        assert_eq!(m.len(), 1);
+        assert_eq!(pair_of(&m[0]), pair_key(u[1].uid, u[3].uid));
+        assert_eq!(m[0].game, "cobalt-1.34");
+        let cobalt = json!([1, 46, 33, 25, 74, 19, 42, 7, 4, 2, 76, 12, 35, 68, 30]);
+        assert_eq!(serde_json::to_value(&m[0].stages).unwrap(), cobalt);
+        for g in [&sent(&out, 2)[0], &sent(&out, 4)[1]] {
+            assert_eq!(g["type"], "get-ticket-resp");
+            assert_eq!(g["stages"], cobalt);
+            let rules: common::rules::MatchRules = serde_json::from_value(g["rules"].clone()).unwrap();
+            assert_eq!(rules, common::rules::MatchRules { pause: common::rules::Pause::Hold, ..Default::default() });
+        }
+        // P+ named by its key pairs with the P+ that named nothing (a build before the field);
+        // P+Ex plays P+'s stage lists.
+        let out = h.ticket_of(5, &u[4], "", 1, PPLUS);
+        let m = matches(&out);
+        assert_eq!(m.len(), 1);
+        assert_eq!(pair_of(&m[0]), pair_key(u[0].uid, u[4].uid));
+        assert_eq!(m[0].game, "");
+        assert_eq!(sent(&out, 1)[0]["stages"], json!([1, 2, 4, 5, 6, 9, 12, 13, 28, 31, 33, 35, 45, 46]));
+        let out = h.ticket_of(6, &u[5], "", 1, PEX);
+        let m = matches(&out);
+        assert_eq!((m.len(), m[0].game.as_str()), (1, "pex-1.8"));
+        assert_eq!(sent(&out, 3)[0]["stages"], json!([1, 2, 4, 5, 6, 9, 12, 13, 28, 31, 33, 35, 45, 46]));
+        assert_eq!(h.e.waiting_count(), 0);
+    }
+
+    #[test]
+    fn a_build_mm_does_not_know_and_a_mode_a_mod_does_not_play_are_refused() {
+        let mut h = Harness::new(default_rules());
+        let u = h.users(2);
+        for c in 1..=8 {
+            h.connect(c, 41000 + c as u16);
+        }
+        // Another release of Cobalt, another mod, something that is no key at all.
+        for (conn, game, error) in [
+            (1, "Cobalt:00000000000000000000000000000000", "This version of Cobalt\ncan't play online here yet."),
+            (2, "REX:812d2df3a26681ce57c335c54e675a8a", "This version of REX\ncan't play online here yet."),
+            (3, "nonsense", "This version of nonsense\ncan't play online here yet."),
+        ] {
+            let out = h.ticket_of(conn, &u[0], "", 1, game);
+            assert_eq!(sent(&out, conn)[0]["error"], error, "{game}");
+            assert!(disconnected(&out, conn));
+            let out = h.hello_of(conn + 3, &u[0], game);
+            assert_eq!(sent(&out, conn + 3)[0]["error"], error, "{game}");
+            assert!(disconnected(&out, conn + 3));
+        }
+        assert_eq!((h.e.waiting_count(), h.e.online_count()), (0, 0));
+        // Ranked and the 2v2 queue are P+'s.
+        let out = h.ticket_of(7, &u[0], "", 0, COBALT);
+        assert_eq!(sent(&out, 7)[0]["error"], "Ranked isn't on Cobalt 1.34 yet.");
+        let out = h.ticket_of(8, &u[1], "", 5, PEX);
+        assert_eq!(sent(&out, 8)[0]["error"], "2v2 isn't on Project+ Ex 1.8 yet.");
+        assert_eq!(h.e.waiting_count(), 0);
+        // A `game` that is not a string reads as none: P+ (never a reason to refuse).
+        h.connect(9, 41009);
+        let mut v = h.ticket_json(&u[0], "", 1);
+        v["game"] = json!({"id": 5});
+        let out = h.raw(9, v.to_string().as_bytes());
+        assert_eq!(sent(&out, 9), vec![json!({"type": "create-ticket-resp"})]);
+    }
+
+    #[test]
+    fn direct_between_two_builds_tells_both() {
+        let mut h = Harness::new(EngineConfig::default());
+        let (a, b) = (user("AAAA#1", "alice"), user("BB#22", "bob"));
+        h.add(&a);
+        h.add(&b);
+        h.connect(1, 41001);
+        h.connect(2, 41002);
+        h.ticket_of(1, &a, "BB#22", 2, COBALT);
+        let out = h.ticket_of(2, &b, "AAAA#1", 2, "");
+        assert!(matches(&out).is_empty());
+        assert_eq!(sent(&out, 1)[0]["error"], "BB#22 is playing\nProject+.");
+        assert_eq!(sent(&out, 2).last().unwrap()["error"], "AAAA#1 is playing\nCobalt 1.34.");
+        assert!(disconnected(&out, 1) && disconnected(&out, 2));
+        // On one build they are matched, with that build's Direct rules.
+        h.connect(3, 41003);
+        h.connect(4, 41004);
+        h.now += Duration::from_secs(5);
+        h.ticket_of(3, &a, "BB#22", 2, COBALT);
+        let out = h.ticket_of(4, &b, "AAAA#1", 2, COBALT);
+        let m = matches(&out);
+        assert_eq!((m.len(), m[0].game.as_str(), m[0].stages.len()), (1, "cobalt-1.34", 15));
+        let rules: common::rules::MatchRules = serde_json::from_value(sent(&out, 3)[0]["rules"].clone()).unwrap();
+        assert_eq!(rules, common::rules::MatchRules::default());
+    }
+
+    #[test]
+    fn a_room_plays_its_creators_build_of_the_game() {
+        let mut h = Harness::new(EngineConfig { rulesets: Rulesets::load(None).unwrap(), ..Default::default() });
+        let (a, b, c) = (user("AA#1", "alice"), user("BB#1", "bob"), user("CC#1", "carol"));
+        for u in [&a, &b, &c] {
+            h.add(u);
+        }
+        h.connect(1, 1);
+        h.connect(2, 2);
+        h.connect(3, 3);
+        // A Cobalt game is told where its stage select has room for the turn line; P+'s is not
+        // told anything (its own place).
+        let out = h.hello_of(1, &a, COBALT);
+        // (Cobalt's own places on its screens, as numbers: games.json `layout`)
+        assert_eq!(
+            sent(&out, 1)[0],
+            json!({"type": "hello-resp", "gameAlive": true, "layout": {
+                "sssLine": [726.0, -191.0, 1046.0, -231.0, 0.8], "cardPlates": [-22.6, 14.5, 4.3]}})
+        );
+        let out = h.hello_of(2, &b, "");
+        assert_eq!(sent(&out, 2)[0], json!({"type": "hello-resp", "gameAlive": true}));
+        h.hello_of(3, &c, COBALT);
+        // The game's own Create Room asks for the account's remembered ruleset: looked up for a
+        // Cobalt room as one of Cobalt's (rooms.rs: a_room_plays_rulesets_of_its_own_build).
+        let out = h.room(1, json!({"type": "room-create", "remembered": true}));
+        let asked = out.iter().find_map(|o| match o {
+            Output::FetchRuleset(f) => Some(f.game.clone()),
+            _ => None,
+        });
+        assert_eq!(asked.as_deref(), Some("cobalt-1.34"));
+        let code = state_of(&out, 1)["code"].as_str().unwrap().to_string();
+        // Its default ruleset is Cobalt's: five starters struck 1-2-1, their partners and the
+        // counterpicks after game 1.
+        let listed = h.e.status(Utc::now()).rooms;
+        assert_eq!(listed.len(), 1);
+        assert_eq!((listed[0].game.as_deref(), listed[0].game_name.as_deref()), (Some("cobalt-1.34"), Some("Cobalt 1.34")));
+        // A P+ game can't join; a Cobalt game can.
+        let out = h.room(2, json!({"type": "room-join", "code": code}));
+        assert_eq!(sent(&out, 2).last().unwrap()["error"], msg::ROOM_OTHER_GAME);
+        let out = h.room(3, json!({"type": "room-join", "code": code}));
+        assert_eq!(state_of(&out, 1)["slots"][1]["player"]["connectCode"], "CC#1");
+        // A P+ room shows no game, and a Cobalt game can't join it.
+        let out = h.room(2, json!({"type": "room-create"}));
+        let pplus = state_of(&out, 2)["code"].as_str().unwrap().to_string();
+        let listed = h.e.status(Utc::now()).rooms;
+        let entry = listed.iter().find(|r| r.code == pplus).unwrap();
+        assert_eq!((entry.game.as_deref(), entry.game_name.as_deref()), (None, None));
+        assert!(serde_json::to_value(entry).unwrap().get("game").is_none());
+        // The game: Cobalt's 15 stages, its Direct rules; a ticket from a P+ game is refused.
+        h.room(1, json!({"type": "room-ready", "ready": true}));
+        let out = h.room(3, json!({"type": "room-ready", "ready": true, "character": 3, "costume": 1}));
+        assert!(sent(&out, 1).iter().any(|m| m["type"] == "room-start"));
+        h.connect(11, 41011);
+        h.connect(12, 41012);
+        h.connect(13, 41013);
+        let out = h.ticket_of(13, &a, &code, 3, "");
+        assert_eq!(sent(&out, 13)[0]["error"], msg::ROOM_OTHER_GAME);
+        h.ticket_of(11, &a, &code, 3, COBALT);
+        let out = h.ticket_of(12, &c, &code, 3, COBALT);
+        let resp = sent(&out, 11).into_iter().find(|m| m["type"] == "get-ticket-resp").unwrap();
+        assert_eq!(resp["stages"], json!([1, 46, 33, 25, 74, 19, 42, 7, 4, 2, 76, 12, 35, 68, 30]));
+        assert_eq!(resp["rules"], serde_json::to_value(common::rules::MatchRules::default()).unwrap());
+        let rec = matches(&out);
+        assert_eq!((rec.len(), rec[0].game.as_str(), rec[0].mode), (1, "cobalt-1.34", Mode::Teams));
     }
 }

@@ -64,7 +64,9 @@
 // MuMsg::printf(+0x64, +0x70, text).
 #include <mu/mu_msg.h>
 #include <string.h>
+#include "labels.h"
 #include "online_menu.h"
+#include "other_fonts.h"
 #include "ppom.h"
 
 namespace CodeEntry {
@@ -100,6 +102,14 @@ namespace CodeEntry {
     const int PAGE_DIGITS = 3;
     static Key s_savedKeys[11];
     static u32 s_savedPages[6];         // helper+0x24 .. +0x3C
+
+    static bool isPtr(u32 p) { return (p >= 0x80000000 && p < 0x81800000) || (p >= 0x90000000 && p < 0x94000000); }
+
+    // The '#' the keypad types and prints: the full-width '＃' as the other keys' letters, or
+    // the ASCII '#' where the keypad's font has only that (REX: the full-width one drew as the
+    // font's box). Decided per font when the keypad opens (hashFor); decodeFullWidth takes both.
+    static const char* const HASH_FW = "\xEF\xBC\x83";   // ＃
+    static bool s_asciiHash = false;   // (OtherFonts::asciiHash: never true in a plugin without them)
 
     // Alphabet page, upper case only; key 1 (the symbols key) is the '#'.
     static const char* const ALPHA_KEYS[11] = {
@@ -197,7 +207,7 @@ namespace CodeEntry {
         const char* const* keys = ALPHA_KEYS;
         for (int i = 0; i < 11; i++) {
             s_savedKeys[i] = KEYS[PAGE_ALPHA * 11 + i];
-            if (keys[i]) KEYS[PAGE_ALPHA * 11 + i].chars = keys[i];
+            if (keys[i]) KEYS[PAGE_ALPHA * 11 + i].chars = i == KEY_HASH - 1 && s_asciiHash ? "#" : keys[i];
         }
         memcpy(s_savedPages, helper + 0x24, sizeof(s_savedPages));
         u32* pages = (u32*)(helper + 0x24);
@@ -296,6 +306,10 @@ namespace CodeEntry {
     {
         int o = 0;
         for (; *in; in++) {
+            if (*in == '#' && s_asciiHash) {
+                out[o++] = '#';
+                continue;
+            }
             u32 x = (u8)*in - 0x20;   // U+FF00 + x
             out[o++] = (char)0xEF;
             out[o++] = (char)(0xBC + (x >> 6));
@@ -527,7 +541,6 @@ namespace CodeEntry {
         return s[i] == 0;
     }
 
-    static bool isPtr(u32 p) { return (p >= 0x80000000 && p < 0x81800000) || (p >= 0x90000000 && p < 0x94000000); }
 
     // The VIS0 entry flags of `bone` in the MuObject's visibility animation
     // (+0x14 gfModelAnimation -> +0x08 AnmObjVisRes -> +0x2C ResAnmVis data).
@@ -591,7 +604,6 @@ namespace CodeEntry {
     static u8* s_lblMdl = NULL;
     static u32 s_lblOldCallback = 0;
     static u32 s_lblCallback = 0;
-    static const char* const HASH_LABEL = "\xEF\xBC\x83";   // ＃
 
     void forgetLabels()
     {
@@ -632,6 +644,8 @@ namespace CodeEntry {
         float* sc = (float*)(ws + 0x30);
         sc[0] = sc[1] = scale;
         ((MsgSetFaceFn)0x800B9488)(m, 0, 1);   // the face the CSS gives its windows
+        // Face 1 is the text field's face, so its font (the window has none until drawn).
+        if (text == HASH_FW && s_asciiHash) text = "#";
         m->setAlignMode(0, MuMsg::Align_Center);
         m->setFontColor(0, 0x30, 0x30, 0x30, 0xFF);   // as the keys' printed labels
         m->printf(0, "%s", text);
@@ -650,7 +664,7 @@ namespace CodeEntry {
         u8* mdl = alphaModel(helper);
         if (!mdl) return;
         hideOurLabels();
-        addLabel(mdl, "pPlane65", HASH_LABEL, 1.3f, 16.0f);
+        addLabel(mdl, "pPlane65", HASH_FW, 1.3f, 16.0f);
     }
 
     static void patchLabels(u8* helper)
@@ -690,6 +704,7 @@ namespace CodeEntry {
         u8* helper = area + 0x370;
         memset(s_buf, 0, sizeof(s_buf));
         *(u32*)(area + 0x400) = *(u32*)(area + 0x1DC);
+        s_asciiHash = OtherFonts::asciiHash(*(MuMsg**)(helper + 0x64));   // the text field's font
         patchKeys(helper);
         patchLabels(helper);
         s_lastKey = -1;

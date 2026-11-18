@@ -29,7 +29,9 @@ from ppharness import DolphinInstance, InstanceConfig  # noqa: E402
 from ppharness import _platform  # noqa: E402
 import patch_sd  # noqa: E402
 
-DEFAULT_VIDEO = "D3D11" if os.name == "nt" else "Vulkan"
+# (PPHARNESS_VIDEO picks another backend, as for the tests' gpu_backend fixture: on a PC whose
+# Vulkan driver is not sound, e.g. Mesa's RADV crashing in radv_UpdateDescriptorSets, 2026-11-14.)
+DEFAULT_VIDEO = os.environ.get("PPHARNESS_VIDEO") or ("D3D11" if os.name == "nt" else "Vulkan")
 
 
 def make_instance(name: str, plugins: list[str] = (), adds: list[str] = (), boot: str = "offline",

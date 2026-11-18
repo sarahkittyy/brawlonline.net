@@ -375,7 +375,9 @@ fn queue_fetch(jobs: &tk_mpsc::Sender<FetchJob>, done: &std_mpsc::Sender<Fetched
 
 /// A room's ruleset: the code's (made the account's remembered one when `remember`), or with no
 /// code the account's remembered one (`remember`: forget it, P+'s default). Hidden rulesets play
-/// by their code (room-rules.md §2).
+/// by their code (room-rules.md §2). The remembered ruleset is one of the room's build of the game
+/// (`RulesetFetch::game`): another build's is not made it, not taken for the room, and not
+/// forgotten from a room of this build.
 async fn fetch_room_ruleset(
     pool: &PgPool,
     f: &crate::engine::RulesetFetch,
@@ -384,16 +386,21 @@ async fn fetch_room_ruleset(
         match &f.code {
             Some(code) => {
                 let found = db::fetch_ruleset(pool, code).await?;
-                if found.is_some() && f.remember {
+                if found.as_ref().is_some_and(|p| p.ruleset.game == f.game) && f.remember {
                     db::set_remembered_ruleset(pool, f.uid, Some(code)).await?;
                 }
                 Ok::<_, sqlx::Error>(found.map(|p| (p.code, p.ruleset)))
             }
-            None if f.remember => {
-                db::set_remembered_ruleset(pool, f.uid, None).await?;
-                Ok(None)
+            None => {
+                let remembered = db::remembered_ruleset(pool, f.uid).await?.filter(|p| p.ruleset.game == f.game);
+                if f.remember {
+                    if remembered.is_some() {
+                        db::set_remembered_ruleset(pool, f.uid, None).await?;
+                    }
+                    return Ok(None);
+                }
+                Ok(remembered.map(|p| (p.code, p.ruleset)))
             }
-            None => Ok(db::remembered_ruleset(pool, f.uid).await?.map(|p| (p.code, p.ruleset))),
         }
     };
     match tokio::time::timeout(Duration::from_secs(3), work).await {
@@ -465,7 +472,7 @@ async fn record_match(pool: PgPool, m: MatchRecord) {
         }
         return;
     }
-    if let Err(e) = db::insert_match(
+    if let Err(e) = db::insert_match_of(
         &pool,
         &m.match_id,
         m.mode.as_u8() as i16,
@@ -474,6 +481,7 @@ async fn record_match(pool: PgPool, m: MatchRecord) {
         &stages,
         &m.region,
         m.room.as_ref(),
+        &m.game,
     )
     .await
     {

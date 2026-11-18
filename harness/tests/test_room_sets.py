@@ -954,6 +954,7 @@ def hand_onto_own_token(g: Game, port: int = 0, timeout: int = 1200) -> B.CssAre
     c = g.c
     route = B._serpentine(B.CSS_SCAN_X, B.CSS_SCAN_Y)
     start, wp = B.polls(c), 0
+    prev, still = None, 0
     while B.polls(c) - start < timeout:
         a = B.read_css_area(c.read_mem, port)
         assert a is not None, "left the CSS"
@@ -964,8 +965,11 @@ def hand_onto_own_token(g: Game, port: int = 0, timeout: int = 1200) -> B.CssAre
             if a is not None and a.hand_target == B.CSS_HAND_OWN_TOKEN:
                 return a
         tx, ty = route[wp % len(route)]
-        if math.hypot(tx - a.hand_x, ty - a.hand_y) < 2.5:
-            wp += 1
+        # (on when the hand stops short of a waypoint: a mod's sweep is wider than its hand's reach)
+        still = still + 1 if prev is not None and math.hypot(a.hand_x - prev[0], a.hand_y - prev[1]) < 0.05 else 0
+        prev = (a.hand_x, a.hand_y)
+        if math.hypot(tx - a.hand_x, ty - a.hand_y) < 2.5 or still > 10:
+            wp, still = wp + 1, 0
         c.pad_set(port, buttons=(), main=B.steer_toward(a.hand_x, a.hand_y, tx, ty, full_tilt_at=3.0))
         B.step(c, 1)
     B.neutral(c, port)

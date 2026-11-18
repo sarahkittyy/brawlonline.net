@@ -672,6 +672,7 @@ mod tests {
             connect_code: format!("P{n}#1"),
             room_name: None,
             pair_room: false,
+            game: String::new(),
         }
     }
 

@@ -22,6 +22,7 @@
 #include <OS/OSCache.h>
 #include <string.h>
 
+#include "build.h"
 #include "online.h"
 #include "online_menu.h"
 #include "ppom.h"
@@ -63,7 +64,6 @@ namespace SssCursors {
     static const u32 MU_OBJECT_VTABLE = 0x80455D70;                // MuObject's (its +0x5C)
     static const int MENU_HEAP = 0x2A;
     static const char* const MODEL = "MenSelmapCursorA";
-    static const u32 CURRENT_PAGE = 0x80496000;
     // The animations' slots in a MuObject's anim block (+0x14) and an AnmObj's frame (+0x18) and
     // rate (+0x1C), as sss_portraits.cpp sets them.
     static const u32 ANIM_VIS = 0x08, ANIM_CHR = 0x0C, ANIM_PAT = 0x10, ANIM_CLR = 0x18;
@@ -228,7 +228,7 @@ namespace SssCursors {
             writeOwn(mine);
             return;
         }
-        const u8 page = *(u8*)CURRENT_PAGE;
+        const u8 page = (u8)Build::stageCurrentPage();
         const PPOM::Local& lo = PPOM::g_block.local;
         // A page turn of this player's own (not one stepping after another player's) counts.
         if (s_lastPage >= 0 && page != s_lastPage && s_follow < 0) s_turns++;

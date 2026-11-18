@@ -21,7 +21,10 @@ namespace Online::SpecialAssets
 {
 namespace
 {
-// P+'s main-menu archive on its card, then where an older card layout kept it.
+// The main-menu archive in the build's folder on the card, as the running game names it (a mod of
+// P+ has a folder of its own: Cobalt's is Cobalt); then P+'s, then where an older card layout
+// kept it.
+constexpr std::string_view ARCHIVE = "pf/menu2/mu_menumain.pac";
 constexpr std::array<std::string_view, 2> ARCHIVE_PATHS = {"Project+/pf/menu2/mu_menumain.pac",
                                                             "pf/menu2/mu_menumain.pac"};
 
@@ -33,6 +36,9 @@ std::chrono::steady_clock::time_point s_failed_at;
 constexpr auto RETRY_AFTER = std::chrono::seconds(3);
 std::vector<u8> s_bundle;
 std::string s_error;
+// The rules archive (FindMenuArchive), made by the same Build.
+State s_menu_state = State::None;
+std::vector<u8> s_menu;
 
 u32 BE32(const u8* p)
 {
@@ -89,10 +95,10 @@ std::vector<ArcEntry> ArcEntries(std::span<const u8> arc)
   return out;
 }
 
-void Build(std::string path)
+void Build(std::string path, std::string folder)
 {
-  std::string why;
-  std::optional<std::vector<u8>> bundle;
+  std::string why, menu_why;
+  std::optional<std::vector<u8>> bundle, menu;
   // Shared: the emulated SD slot has the image open for reading and writing (SDCardFileStorage);
   // a plain open asks to deny writers and fails while the game runs (staging, 2026-10-27).
   File::IOFile image(path, "rb", File::SharedAccess::ReadWrite);
@@ -103,11 +109,16 @@ void Build(std::string path)
   else
   {
     std::optional<std::vector<u8>> packed;
+    if (!folder.empty())
+    {
+      packed = Machine::SDCard::ReadCardFile(image, image.GetSize(),
+                                             fmt::format("{}/{}", folder, ARCHIVE), MAX_ARCHIVE);
+    }
     for (const std::string_view p : ARCHIVE_PATHS)
     {
-      packed = Machine::SDCard::ReadCardFile(image, image.GetSize(), p, MAX_ARCHIVE);
       if (packed)
         break;
+      packed = Machine::SDCard::ReadCardFile(image, image.GetSize(), p, MAX_ARCHIVE);
     }
     if (!packed)
     {
@@ -119,9 +130,21 @@ void Build(std::string path)
       const std::span<const u8> arc =
           archive ? std::span<const u8>(*archive) : std::span<const u8>(*packed);
       bundle = BuildBundle(arc, &why);
+      menu = FindMenuArchive(arc, &menu_why);
     }
   }
   std::lock_guard lk(s_mutex);
+  if (menu)
+  {
+    s_menu = std::move(*menu);
+    s_menu_state = State::Ready;
+    NOTICE_LOG_FMT(NETPLAY, "SpecialAssets: the rules menu's archive is ready ({} bytes)", s_menu.size());
+  }
+  else
+  {
+    s_menu_state = State::Unavailable;
+    WARN_LOG_FMT(NETPLAY, "SpecialAssets: no rules menu archive: {}", menu_why.empty() ? why : menu_why);
+  }
   if (bundle)
   {
     s_bundle = std::move(*bundle);
@@ -307,16 +330,88 @@ std::optional<std::vector<u8>> BuildBundle(std::span<const u8> archive, std::str
   return out;
 }
 
-State Request(const std::string& image_path)
+std::optional<std::vector<u8>> FindMenuArchive(std::span<const u8> archive, std::string* why)
+{
+  for (const ArcEntry& top : ArcEntries(archive))
+  {
+    if (top.data.size() < 0x20 || std::memcmp(top.data.data(), "ARC\0", 4) != 0 ||
+        std::memcmp(top.data.data() + 0x10, "MenuRule", 8) != 0)
+    {
+      continue;
+    }
+    // Its pages' models: the brres the rules task takes first (type 2, index 0).
+    for (const ArcEntry& e : ArcEntries(top.data))
+    {
+      if (e.type == 2 && e.index == 0 && e.data.size() >= 4 && std::memcmp(e.data.data(), "bres", 4) == 0)
+      {
+        if (top.data.size() > MAX_MENU_ARCHIVE)
+        {
+          *why = fmt::format("the rules archive is {} bytes, more than {}", top.data.size(), MAX_MENU_ARCHIVE);
+          return std::nullopt;
+        }
+        return std::vector<u8>(top.data.begin(), top.data.end());
+      }
+    }
+    *why = "the MenuRule ARC has no models (type 2, index 0)";
+    return std::nullopt;
+  }
+  *why = "no MenuRule ARC in the main-menu archive";
+  return std::nullopt;
+}
+
+std::string CardFolder(std::string_view game_path)
+{
+  std::string out;
+  size_t at = 0;
+  while (at <= game_path.size())
+  {
+    const size_t slash = std::min(game_path.find('/', at), game_path.size());
+    const std::string_view part = game_path.substr(at, slash - at);
+    at = slash + 1;
+    if (part.empty() || part == ".")
+      continue;
+    const bool plain = part != ".." && std::all_of(part.begin(), part.end(), [](char c) {
+      const auto u = static_cast<unsigned char>(c);
+      return u > 0x20 && u < 0x7F && c != '\\' && c != ':';
+    });
+    if (!plain)
+      return {};
+    if (!out.empty())
+      out += '/';
+    out += part;
+  }
+  return out;
+}
+
+State Request(const std::string& image_path, const std::string& folder)
 {
   std::lock_guard lk(s_mutex);
   if (s_state == State::None ||
       (s_state == State::Unavailable && std::chrono::steady_clock::now() - s_failed_at >= RETRY_AFTER))
   {
     s_state = State::Loading;
-    std::thread(Build, image_path).detach();
+    s_menu_state = State::Loading;
+    std::thread(Build, image_path, folder).detach();
   }
   return s_state;
+}
+
+State RequestMenuArchive(const std::string& image_path, const std::string& folder)
+{
+  {
+    std::lock_guard lk(s_mutex);
+    if (s_menu_state == State::Ready || s_menu_state == State::Loading)
+      return s_menu_state;
+  }
+  Request(image_path, folder);
+  std::lock_guard lk(s_mutex);
+  return s_menu_state == State::None ? State::Loading : s_menu_state;
+}
+
+std::vector<u8> MenuArchive()
+{
+  std::lock_guard lk(s_mutex);
+  return s_menu_state == State::Ready ? s_menu : std::vector<u8>{};
 }
 
 State GetState()

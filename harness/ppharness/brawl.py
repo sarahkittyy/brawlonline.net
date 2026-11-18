@@ -1184,6 +1184,30 @@ class CssArea:
         return self.kind == CSS_AREA_HUMAN and self.character != CSS_NONE and not self.in_hand and not self.flying
 
 
+def css_model(read_mem: ReadMem, task: int, name: str) -> int:
+    """The character select's model of that name ("MenSelchrReady_TopN"), a MuObject, found among
+    muSelCharTask's object pointers (+0x40..+0x440) by its MDL0's name, as the plugin's
+    Build::cssModel finds it: P+ v3.2's task keeps READY at +0x3C4 and ITEM / STAGE at +0x420 /
+    +0x424, BrawlEx's (REX) at +0xA4 and +0x100 / +0x104. 0 if the task has none."""
+    def u32(a: int) -> int:
+        return struct.unpack(">I", read_mem(a, 4))[0]
+
+    def ptr(v: int) -> bool:
+        return 0x80000000 <= v < 0x81800000 or 0x90000000 <= v < 0x94000000
+    words = struct.unpack(">256I", read_mem(task + 0x40, 0x400))
+    for obj in words:
+        if not ptr(obj):
+            continue
+        mdl = u32(obj + 8)
+        if not ptr(mdl) or read_mem(mdl, 4) != b"MDL0":
+            continue
+        sections = 14 if u32(mdl + 8) >= 10 else 11
+        off = struct.unpack(">i", read_mem(mdl + 0x10 + 4 * sections, 4))[0]
+        if 0 < off < 0x800000 and read_mem(mdl + off, len(name) + 1) == name.encode() + b"\0":
+            return obj
+    return 0
+
+
 def read_css_area(read_mem: ReadMem, port: int) -> Optional[CssArea]:
     """``[[[[0x805A0060]+4]+0x400]+0x44+4*port]``: muSelCharPlayerArea (orca OnlineRules.cpp:597)."""
     m = Mem(read_mem)
@@ -1239,7 +1263,13 @@ def read_sss(read_mem: ReadMem) -> Optional[SssView]:
     def w(off: int, signed: bool = False) -> int:
         return struct.unpack_from(">i" if signed else ">I", b, off - SSS_STATE)[0]
 
-    return SssView(task, cx, cy, w(SSS_STATE), w(SSS_PAGE), w(SSS_HOVERED_ITEM), w(SSS_SELECTED, True),
+    page = w(SSS_PAGE)
+    # The older stage select (REX's) keeps something else at task+0x228: its page is P+'s
+    # CURRENT_PAGE byte, which both designs' Random.asm keep.
+    if _older_stage_design(m) is not None:
+        page = _try(lambda: m.read(SSS_CURRENT_PAGE, 1)[0])
+        page = page if page is not None else w(SSS_PAGE)
+    return SssView(task, cx, cy, w(SSS_STATE), page, w(SSS_HOVERED_ITEM), w(SSS_SELECTED, True),
                    w(SSS_CLOCK), w(SSS_TAKEN_KIND), w(SSS_CONTROLLER))
 
 
@@ -1259,12 +1289,56 @@ def sss_position_under_cursor(v: SssView) -> int:
     return -1
 
 
+# P+'s older stage select design (REX 0.5's StageTable.asm / Random.asm; the game code's
+# build.cpp "Stage select"): pointers to the slot table and each page's slots, the page counts in
+# the stage select's page records (pages 1-2) and after CURRENT_PAGE (pages 3-5), and its random
+# switch at another address. The ".rss" path string says where a design's random switch is.
+RSS_PATH = b"%s%s%s%s/%s%02X.rss\0"
+V32_RSS_PATH = 0x8042C808
+OLD_SLOTS_PTR, OLD_RSS_EXDATA, OLD_RSS_PATH = 0x80495D00, 0x806AEDA0, 0x806AEDE0
+OLD_COUNTS = (0x806B929C, 0x806B92A4, 0x80496002, 0x80496003, 0x80496004)
+
+
+def _older_stage_design(m: "Mem") -> Optional[Tuple[int, List[int]]]:
+    """(slot table, [page pointer] * 5) of the older design, or None."""
+    ptrs = _try(lambda: struct.unpack(">6I", m.read(OLD_SLOTS_PTR, 24)))
+    if not ptrs or not all(0x80000000 <= p < 0x81800000 for p in ptrs):
+        return None
+    if _try(lambda: m.read(OLD_RSS_PATH, len(RSS_PATH))) != RSS_PATH:
+        return None
+    return ptrs[0], list(ptrs[1:])
+
+
+def stage_random_switch(read_mem: ReadMem) -> int:
+    """The build's random switch (5 pages x {u16 31.., u32 0..30}), P+ v3.2's when neither design
+    is recognised (as the tests always read it)."""
+    return OLD_RSS_EXDATA if _older_stage_design(Mem(read_mem)) else RSS_EXDATA
+
+
+def stage_strike_table(read_mem: ReadMem) -> int:
+    """The build's stage strike table: 0x1A after its .rss path string in both designs."""
+    return (OLD_RSS_PATH if _older_stage_design(Mem(read_mem)) else V32_RSS_PATH) + 0x1A
+
+
 def read_stage_pages(read_mem: Optional[ReadMem] = None) -> List[List[int]]:
     """P+ stage-select pages as stage kinds: pages[page][position] = kind (orca RankedPPlus.cpp
-    PageZero). Falls back to the SwitchFF.rss constants if memory is unavailable/empty."""
+    PageZero), from the build's own tables (P+ v3.2's or P+'s older design). Falls back to the
+    SwitchFF.rss constants if memory is unavailable/empty."""
     raw = None
     if read_mem is not None:
-        raw = _try(lambda: Mem(read_mem).read(RSS_PAGES, len(SWITCHFF_PAGES_AND_SLOTS)))
+        m = Mem(read_mem)
+        older = _older_stage_design(m)
+        if older:
+            slots_at, page_ptrs = older
+            pages = []
+            for p in range(5):
+                count = _try(lambda: m.u8(OLD_COUNTS[p])) or 0
+                count = min(count, 39)
+                slots = _try(lambda: m.read(page_ptrs[p], count)) if count else b""
+                kinds = [(_try(lambda: m.u8(slots_at + 2 * s)) if s < 0x80 else -1) for s in (slots or b"")]
+                pages.append([k if k is not None else -1 for k in kinds])
+            return pages
+        raw = _try(lambda: m.read(RSS_PAGES, len(SWITCHFF_PAGES_AND_SLOTS)))
     if raw is None or raw[0] == 0 or raw[0] > 39:
         raw = SWITCHFF_PAGES_AND_SLOTS
     kinds = raw[0x28 * 5:]
@@ -1637,7 +1711,9 @@ def css_pick_character(drv: Driver, port: int, css_id: int, pad_port: Optional[i
         return a
     if a.placed:  # token down on something else: one-frame B takes it back up
         tap(drv, pp, ["B"], hold=1, release=8)
-    route = _serpentine(CSS_SCAN_X, CSS_SCAN_Y)
+    # P+'s rows, then rows half a step lower: a build with a denser grid (REX: six rows of small
+    # icons) has rows the first pass's hand goes between.
+    route = _serpentine(CSS_SCAN_X, CSS_SCAN_Y) + _serpentine(CSS_SCAN_X, [y - 1.5 for y in CSS_SCAN_Y])
     wp = 0
     prev: Optional[Tuple[float, float]] = None
     stuck = 0

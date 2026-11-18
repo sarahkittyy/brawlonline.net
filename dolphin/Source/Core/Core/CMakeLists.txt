@@ -602,6 +602,8 @@ add_library(core
   Online/Ipv6.h
   Online/GameBridge.cpp
   Online/GameBridge.h
+  Online/GameBuild.cpp
+  Online/GameBuild.h
   Online/GameSetup.cpp
   Online/GameSetup.h
   Online/Matchmaking.cpp

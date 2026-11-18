@@ -122,6 +122,8 @@ The packaged launcher reads `<resources>/plugins/PPOnline.rel` and `<resources>/
 2. runs `npm run stage:plugin` (`.erb/scripts/stage-plugin.js`), which copies it to `release/plugins/` (gitignored) and writes the manifest; `PPO_PLUGIN_PATH` overrides the source;
 3. runs `npm run package`: `electron-builder.json` ships `release/plugins/{PPOnline.rel,PPOnline.json}` as `extraResources` to `<resources>/plugins/`.
 
+Since 2026-11-16 the plugin is three files, one per kind of build (`game-code/build.sh`; `docs/design/pplus-mods.md` section 0): `PPOnline.rel` (Project+), `PPOnline-pex.rel` (Project+ Ex, Cobalt) and `PPOnline-rex.rel` (REX), each staged and shipped with its own manifest (`PPOnline-pex.json`). Play installs `PPOnline.rel`; a mod started in the P+ online flow gets the file its entry of `server/config/games.json` names (`plugin`; `defaultPluginLocation(env, build.plugin)`, `pluginFileName`), written to its card as `PPOnline.rel`. `PPO_PLUGIN_PATH` names Project+'s own; the others are taken from beside it. `check-package.sh` checks all six files are in a package.
+
 Without step 2, electron-builder only warns ("file source doesn't exist"), and Play in that package fails with "The online game plugin was not found". Upstream's CI workflow (`npm run package`) has no game-code checkout, so staging is not part of `package`.
 
 ### 3.3 First-run progress

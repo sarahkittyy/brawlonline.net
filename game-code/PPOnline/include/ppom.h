@@ -72,6 +72,7 @@ namespace PPOM {
         CMD_ROOM = 0xD0,          // rooms: RoomRequest, answered with RoomStatus
         CMD_RULESETS = 0xD1,      // v6: the Ruleset line's list, answered with RulesetList
         CMD_SPECIAL_ASSETS = 0xD2,  // v9: the Special Versus box's models, SpecialAssetsRequest
+        CMD_MENU_ARCHIVE = 0xD3,    // the rules menu's archive (room_rules.cpp), SpecialAssetsRequest
     };
 
     // CMD_SPECIAL_ASSETS (v9, docs/design/special-rules.md §5): the game's buffer for the box's
@@ -507,13 +508,16 @@ namespace PPOM {
         // in for it, this player's included; 0 outside one.
         u8 readySeconds;
         u8 readyPorts;
-        u8 _potatoPad[1];
+        // Unused (2026-11-15 to 16 it was two rows of the plugin's tables of places, from mm's
+        // games table; a build's places are now numbers in PPOM's LAYOUT).
+        u8 _places;       // +0xF3
         // v12: Dolphin, every frame: the shape this machine shows the picture at, width / height
         // (2.333 a 21:9 window, 1.333 a 4:3 one; 0: as the game draws it). The game draws for
         // that shape (local_aspect.cpp): only what this machine draws changes, the cameras the
         // match is played with stay the 16:9 ones on every machine.
         f32 aspect;
     };                    // 0xF8
+
 
     // ---- SESSION ----
 
@@ -827,6 +831,46 @@ namespace PPOM {
                                   // Versus match (a sync test)
     };
 
+    // ---- BUILD ----
+    // What this build of the game can produce (build.cpp), game-written: P+, a mod of it with
+    // more characters, Brawl. Dolphin lets through only these when another machine or a file names
+    // a character (GameBridge / PeerData ValidCharKind); without it (seq 0, or a plugin from before
+    // 2026-11-14, whose header has zeroes where buildOff is) Dolphin takes P+ v3.2's own list.
+    // Named by the header's buildOff / buildSize, which were reserved: no version change, and no
+    // size or offset of the other sections changed. stageKinds came later (2026-11-16, REX's
+    // stage kinds reach 0x8A): Dolphin reads it only from a BUILD of 0x48 bytes or more, and
+    // checks stages by its own range without it.
+    struct Build {
+        u32 seq;              // bumped after each write, never 0 once written
+        u8 charKinds[32];     // bit (kind & 7) of byte (kind >> 3): a gmCharacterKind the character
+                              // select can lock in
+        u16 slots;            // the character select's slots (MuSelchkind ids below this; up
+                              // to 0x100)
+        u8 _pad[2];
+        u8 stageKinds[32];    // +0x28, same bits: a srStageKind on a page of the stage select
+                              // (Build::stagePageCount..); all 0 when no page has one
+        u32 profile;          // +0x48, Build::profile (build.h): what the build has of P+'s
+                              // codes and what the contract misses (bits 8-15; 0: it plays
+                              // online). Dolphin reads it from a BUILD of 0x4C bytes or more.
+    };                        // 0x4C
+
+    // LAYOUT (2026-11-16): where the plugin's own things go on this build's screens (layout.h).
+    // The plugin puts P+'s places there when it is loaded; for a build whose menu art is not
+    // P+'s, Dolphin writes the build's own over them, on the menus, from the `layout` of mm's
+    // hello-resp (the build's entry of mm's games table): only the groups the entry has (`set`
+    // says which; the others stay P+'s), then `seq` (0 while Dolphin has written none). Named by the header's layoutOff /
+    // layoutSize, which were reserved, and the block's last section: no version change, and no
+    // size or offset of the other sections changed.
+    enum { LAYOUT_SSS_LINE = 1, LAYOUT_CARD_PLATES = 2, LAYOUT_CSS_BAR = 4, LAYOUT_CSS_BUTTONS = 8 };
+    struct Layout {
+        u32 seq;
+        u32 set;                  // LAYOUT_* bits
+        f32 sssLine[5];           // +0x08
+        f32 cardPlates[3];        // +0x1C
+        f32 cssBar[14];           // +0x28
+        f32 cssButtons[4][7];     // +0x60
+    };                            // 0xD0
+
     struct Block {
         u32 magic;
         u16 version;
@@ -835,11 +879,15 @@ namespace PPOM {
         u16 sessionOff, sessionSize;
         u16 localOff, localSize;
         u16 debugOff, debugSize;
-        u32 _reserved[3];     // header = 0x24 bytes
+        u16 buildOff, buildSize;   // BUILD (0 in a plugin without it); these were reserved
+        u16 layoutOff, layoutSize; // LAYOUT (0 in a plugin without it); these were reserved
+        u32 _reserved;        // header = 0x24 bytes
         Mailbox mailbox;
         Local local;          // must follow the mailbox (one range excluded from rollback)
         Session session;
         Debug debug;
+        Build build;
+        Layout layout;
     };
 
     // The lock-in (LOCAL): write it and bump its sequence.

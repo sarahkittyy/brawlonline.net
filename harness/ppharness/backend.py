@@ -99,7 +99,8 @@ class OnlineBackend:
                  ticket_ttl_secs: int | None = None,
                  rulesets_file: str | os.PathLike[str] | None = None, keep: bool = False,
                  mm_host: str = "127.0.0.1", spectate: str | None = None,
-                 rematch_hold_secs: int | None = 0, ipv6: bool | None = None):
+                 rematch_hold_secs: int | None = 0, ipv6: bool | None = None,
+                 sss_line: list[float] | None = None):
         root = paths.workspace_root() / "run" / "backends"
         self.run_dir = Path(run_dir) if run_dir else root / f"be-{int(time.time())}-{secrets.token_hex(3)}"
         self.latest_version = latest_version
@@ -107,6 +108,10 @@ class OnlineBackend:
         self.ticket_ttl_secs = ticket_ttl_secs
         # mm's per-mode rules (stage lists); None: the built-in server/config/rulesets.json.
         self.rulesets_file = Path(rulesets_file) if rulesets_file else None
+        # mm's games table gives every build this place for the stage select's turn line
+        # (`layout.sssLine`: x1 y1 x2 y2 scale; docs/design/pplus-mods.md section 3); None: what
+        # the table says.
+        self.sss_line = sss_line
         self.keep = keep
         # The address mm listens on. Dolphin skips its UPnP mapping for a server on 127.0.0.1, so
         # a test of the mapping puts mm on the machine's LAN address.
@@ -347,6 +352,26 @@ class OnlineBackend:
             env["MM_TICKET_TTL_SECS"] = str(self.ticket_ttl_secs)
         if self.rulesets_file is not None:
             env["MM_RULESETS_FILE"] = str(self.rulesets_file.resolve())
+        # mm's games table (server/config/games.json) without the mods' own stage lists: every
+        # build plays the rules this backend was given (the tests' two-stage lists, P+'s
+        # defaults), so a test reads the same on a mod's card. A mod's real lists are tested at
+        # the server (mm::games, crates/e2e/tests/games.rs). PPHARNESS_GAMES_FILE: another file,
+        # as it is.
+        games_file = os.environ.get("PPHARNESS_GAMES_FILE")
+        if not games_file:
+            source = paths.workspace_root() / "server" / "config" / "games.json"
+            if source.is_file():
+                games = json.loads(source.read_text())
+                for g in games.get("games", []):
+                    for key in ("rulesets", "starters", "counterpicks"):
+                        g.pop(key, None)
+                    if self.sss_line is not None:
+                        g["layout"] = dict(g.get("layout") or {}, sssLine=list(self.sss_line))
+                plain = self.run_dir / "games.json"
+                plain.write_text(json.dumps(games))
+                games_file = str(plain)
+        if games_file:
+            env["MM_GAMES_FILE"] = str(Path(games_file).resolve())
         if self.spectate is not None:
             env["MM_SPECTATE"] = self.spectate
         if self.rematch_hold_secs is not None:

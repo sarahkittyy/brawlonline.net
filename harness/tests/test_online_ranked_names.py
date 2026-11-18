@@ -29,7 +29,7 @@ from test_online import _wait  # noqa: F401  (the backend's helpers)
 from test_online_game import _boot, _both, _peer_shown, online_set, ppom
 import test_online_ranked as R
 
-pytestmark = [pytest.mark.dolphin, pytest.mark.server, pytest.mark.gpu]
+pytestmark = [pytest.mark.dolphin, pytest.mark.server, pytest.mark.gpu, pytest.mark.pplus_only("Ranked")]
 
 backend = R.backend
 

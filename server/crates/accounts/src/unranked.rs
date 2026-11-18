@@ -162,7 +162,7 @@ async fn reported_games(conn: &mut PgConnection) -> sqlx::Result<Vec<Game>> {
     let rows: Vec<(String, i32, DateTime<Utc>, Vec<Uuid>, Uuid)> = sqlx::query_as(
         "SELECT DISTINCT ON (g.match_id, g.game_index) g.match_id, g.game_index, g.created_at, m.players, g.winner
            FROM game_reports g JOIN mm_matches m USING (match_id)
-          WHERE m.mode = $1 AND cardinality(m.players) = 2 AND g.winner IS NOT NULL
+          WHERE m.mode = $1 AND cardinality(m.players) = 2 AND g.winner IS NOT NULL AND m.game = ''
           ORDER BY g.match_id, g.game_index, g.created_at",
     )
     .bind(MODE_UNRANKED)

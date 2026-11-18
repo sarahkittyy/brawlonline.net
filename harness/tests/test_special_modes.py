@@ -26,6 +26,7 @@ from test_room_rules import session_rules
 from test_room_stage_list import FD, STAGES
 from test_rooms_game import (ART, CSS, _all, launcher_answer, lock_of, pick, room_view, to_join_room, type_room_code,
                              until_view, write_create)
+import mod_adapt  # noqa: E402
 import online_set  # noqa: E402
 import ppom  # noqa: E402
 
@@ -266,14 +267,18 @@ def test_all_star_costume_files(backend: OnlineBackend, dolphin: Callable[..., D
                                ruleset_with("All-Star files", special={"other": "all-star"}))
     samus, falcon = B.CSS_ID["samus"], B.CSS_ID["captain_falcon"]
     files = {css: costume_files(a, css) for css in (samus, falcon)}
-    assert len(files[samus]) > 9 and len(files[falcon]) > 17, files
-    want_a, want_b = files[falcon][17], files[samus][9]
-    assert (want_a, want_b) == (44, 27), (want_a, want_b)   # P+ v3.2.1
+    assert len(files[samus]) > 9 and len(files[falcon]) > 1, files
+    # Falcon's costume whose file number is the highest of his list (P+'s 17, FitCaptain44.pac:
+    # a file past 31, and not its costume number), by the build's own list: a mod has other
+    # costumes (Cobalt's Falcon has 17, numbered 0-16).
+    falcon_costume = max(range(len(files[falcon])), key=lambda k: files[falcon][k])
+    want_a, want_b = files[falcon][falcon_costume], files[samus][9]
+    assert mod_adapt.active() or (falcon_costume, want_a, want_b) == (17, 44, 27), (falcon_costume, want_a, want_b)   # P+ v3.2.1
     falcon_kind, samus_kind = B.CSS_TO_CHAR_KIND[falcon], B.CSS_TO_CHAR_KIND[samus]
     all_star_roster(a, [])
-    costume_on_css(a, falcon, 17)
+    costume_on_css(a, falcon, falcon_costume)
     # A's roster as P+'s CSS made it: Falcon, his costume's file and its number.
-    assert a.c.read_mem(ALL_STAR_TABLE, 4) == bytes((falcon_kind, want_a, 17, 0xCC)), a.c.read_mem(ALL_STAR_TABLE, 4).hex()
+    assert a.c.read_mem(ALL_STAR_TABLE, 4) == bytes((falcon_kind, want_a, falcon_costume, 0xCC)), a.c.read_mem(ALL_STAR_TABLE, 4).hex()
     costume_on_css(b, samus, 9)
     all_star_roster(b, [])   # none placed since All-Star came on
     players = [a, b]
@@ -288,7 +293,7 @@ def test_all_star_costume_files(backend: OnlineBackend, dolphin: Callable[..., D
     a.steps("wait 200")
     for g in players:
         se = ppom.read_session(g.c, ppom.find_block(g.c))
-        assert [x["roster"] for x in se["extra"][:2]] == [[(falcon_kind, want_a, 17, falcon)], [(samus_kind, want_b, 9, samus)]],             se["extra"][:2]
+        assert [x["roster"] for x in se["extra"][:2]] == [[(falcon_kind, want_a, falcon_costume, falcon)], [(samus_kind, want_b, 9, samus)]],             se["extra"][:2]
         mm = g.c.read_mem(u32(g, u32(g, GG) + MODE_MELEE) + MM_PLAYERS, 2 * PLAYER_SIZE)
         assert [mm[i * PLAYER_SIZE + 5] for i in range(2)] == [want_a, want_b], (g.name, mm[5], mm[PLAYER_SIZE + 5])
         g.shot("match")

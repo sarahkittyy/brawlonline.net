@@ -20,6 +20,7 @@ from typing import Any, Callable
 
 import pytest
 
+from ppharness import paths as ppharness_paths
 from ppharness.backend import OnlineBackend
 from ppharness.instance import DolphinInstance
 
@@ -28,6 +29,7 @@ from test_online_game import ROOT, WIFI_INTERFACE_TASK, Game, _boot, backend  # 
 
 sys.path.insert(0, str(ROOT / "harness" / "tools"))
 sys.path.insert(0, str(ROOT / "tools" / "gamecode"))
+import mod_adapt  # noqa: E402
 import online_set  # noqa: E402
 import ppom  # noqa: E402
 from ppharness import brawl as B  # noqa: E402
@@ -476,6 +478,16 @@ def hand(g: Game) -> tuple[float, float]:
 def hand_to(g: Game, x: float, y: float, tol: float = 1.2) -> None:
     """Closed loop: the stick toward (x, y) until the hand is there."""
     from ppharness.client import PadInput
+    # The scene is the CSS a little before its task is made (longer on a loaded PC, and on a mod
+    # with more characters): wait for the local player's area.
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        try:
+            if css_area(g):
+                break
+        except ValueError:
+            pass
+        time.sleep(0.25)
     for _ in range(80):
         hx, hy = hand(g)
         dx, dy = x - hx, y - hy
@@ -1129,6 +1141,17 @@ def test_play_buttons_from_the_launcher(backend: OnlineBackend, dolphin: Callabl
     n = g.finds()
     g.press_until("START", lambda: g.finds() > n, "FIND_OPPONENT")
     _find_logged(g, 0, "")
+    if mod_adapt.active():
+        # Ranked is Project+'s alone (docs/design/pplus-mods.md section 3): mm refuses a mod's
+        # search by name, and nobody is counted in the queue.
+        st = _wait(lambda: (lambda s: s if s["state"] == "error" else None)(g.c.mm_status()), 15,
+                   "the Ranked search refused")
+        assert st["error"] == f"Ranked isn't on {mod_adapt.game_name()} yet.", st
+        rooms = backend._http("GET", "/v1/rooms", token=ua.session_token)
+        assert rooms["queues"] == {**rooms["queues"], "ranked": 0, "unranked": 0}, rooms
+        g.steps("wait 30")
+        g.shot("04-ranked-refused-on-a-mod")
+        return
     rooms = _wait(lambda: (lambda r: r if r["queues"]["ranked"] == 1 else None)(
         backend._http("GET", "/v1/rooms", token=ua.session_token)), 15, "/v1/rooms counts the ranked ticket")
     assert rooms["queues"]["unranked"] == 0, rooms
@@ -1905,7 +1928,7 @@ def test_room_player_quits_with_lras(backend: OnlineBackend, dolphin: Callable[.
 # the plugin module (REL 20560) and its .bss as the OS module list has it once linked.
 def _plugin_bss_symbol(g: Game, name: str) -> int:
     from test_online_game import PLUGIN
-    lines = (PLUGIN.parent / "PPOnlineMain.map").read_text(errors="replace").splitlines()
+    lines = ppharness_paths.plugin_map(PLUGIN).read_text(errors="replace").splitlines()
     section, off = "", None
     for line in lines:
         f = line.split()

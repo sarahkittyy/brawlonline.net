@@ -37,6 +37,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "build.h"
 #include "labels.h"
 #include "online.h"
 #include "online_menu.h"
@@ -60,17 +61,24 @@ namespace StageSwitch {
     }
     static u32 fileSize(u8* bres) { return isPtr((u32)bres) && *(u32*)bres == 0x62726573 /* bres */ ? *(u32*)(bres + 8) : 0; }
 
-    static const u32 RSS_EXDATA = 0x8042C4E8;   // P+'s random switch: page p at +6p {u16 31.., u32 0..30}
-    static const int PAGES = 5, PAGE_BYTES = PAGES * 6;
+    // P+'s random switch, page p at +6p {u16 31.., u32 0..30}, where this build's design keeps it
+    // (Build::stageRandomSwitch: 0 when it is not there, and the menu leaves it alone).
+    static const int PAGES = Build::STAGE_PAGES, PAGE_BYTES = PAGES * 6;
     static const u32 RULES_SWITCH = 0x274;      // muRuleTask: the stage switch page
     static const u32 RULES_MORE_ROW = 0xA4;     // muRuleTask: MORE RULES' RANDOM STAGE SWITCH row
-    // muProcStageSwitch (P+ Random.asm): the objects, the cursor, the page shown, its tile count.
-    static const u32 PAGE_OBJS = 0x64C, PAGE_COL = 0x670, PAGE_ROW = 0x674, PAGE_TILES = 0x704;
+    // muProcStageSwitch (P+ Random.asm): the objects, the cursor, the page shown, its tile counts.
+    // The page's tiles are Brawl's two groups (its own stages and its Melee stages), which P+
+    // fills with a page's first 31 stages and the rest: 31 at the most in rows of 5 (the cursor's
+    // columns 0-4, rows from 1; row 0 is the bar and the page button), then 10 at the most in rows
+    // of 2 right of them (columns 5-6), one object after another. P+ v3.2's pages have 21 stages
+    // at the most; REX's first has 37, and its last six were under the first group's tiles as this
+    // lays them out, never shown or reached (2026-11-17).
+    static const u32 PAGE_OBJS = 0x64C, PAGE_COL = 0x670, PAGE_ROW = 0x674, PAGE_TILES = 0x704, PAGE_TILES_2 = 0x730;
     static const u32 PAGE_NUMBER = 0x763;
-    static const int COLS = 5;                  // the page's tiles in rows of 5 (row 0: bar, page button)
+    static const int COLS = 5;
+    static const int GROUP_1 = 31, MAX_TILES = 41;
     // The page's objects (P+'s muObjects indices).
     static const int OBJ_FRAME = 0x54, OBJ_BAR = 0x55, OBJ_TILE0 = 0x57, OBJ_CURSOR = 0x81;
-    static const int MAX_TILES = 31;
     static const int ANIM_CLR = 0x10;
     // module 18 (sora_menu_rule) and the DOL
     typedef void (*SetAnimFn)(u8* page, int obj, int kinds, float value);
@@ -87,6 +95,8 @@ namespace StageSwitch {
     // spacing on the page (world units, measured from the tiles' ScnMdl matrices).
     static const int GRID = 7;
     static const float TILE_DX = 8.4f, TILE_DY = 4.4f;
+    // The second group's tiles from where a sixth column of the first would be (measured, REX).
+    static const float GROUP_2_DX = 0.2f, GROUP_2_DY = 0.3f;
     static const int FW_Y1 = 8;      // MuMsg::WindowSetting: y1 .. scaleY (+8 .. +0x38)
     static const float FOOT_HALF = 44.0f, FOOT_SCALE = 0.85f;   // the footer's two lines
     static const int SE_MOVE = 0;    static const int SE_TOGGLE = 0x24, SE_ERROR = 3;
@@ -186,6 +196,34 @@ namespace StageSwitch {
         return isPtr((u32)o) ? o : NULL;
     }
 
+    // How many tiles the page shows: the first group's, and the second's once the first is full.
+    static int tileCount(u8* page)
+    {
+        int a = *(int*)(page + PAGE_TILES), b = *(int*)(page + PAGE_TILES_2);
+        if (a < 0) a = 0;
+        if (a < GROUP_1 || b < 0) return a;
+        return GROUP_1 + (b > MAX_TILES - GROUP_1 ? MAX_TILES - GROUP_1 : b);
+    }
+
+    // The tile under the page's cursor (-1: the top row), and the cursor put on a tile.
+    static int cursorTile(u8* page)
+    {
+        int col = *(int*)(page + PAGE_COL), row = *(int*)(page + PAGE_ROW);
+        if (row < 1) return -1;
+        return col < COLS ? (row - 1) * COLS + col : GROUP_1 + (row - 1) * 2 + (col - COLS);
+    }
+    static void cursorToTile(u8* page, int tile)
+    {
+        if (tile < GROUP_1) {
+            *(int*)(page + PAGE_COL) = tile % COLS;
+            *(int*)(page + PAGE_ROW) = tile / COLS + 1;
+        } else {
+            int k = tile - GROUP_1;
+            *(int*)(page + PAGE_COL) = COLS + (k & 1);
+            *(int*)(page + PAGE_ROW) = (k >> 1) + 1;
+        }
+    }
+
     void open(bool canEdit)
     {
         const PPOM::Session& se = PPOM::g_block.session;
@@ -209,6 +247,8 @@ namespace StageSwitch {
         memcpy(s.hazStages, se.rules.hazardStages, sizeof(s.hazStages));
         s.canEdit = canEdit;
         // P+'s switch for the menu: the room's stages on.
+        const u32 RSS_EXDATA = Build::stageRandomSwitch();
+        if (!RSS_EXDATA) return;
         memcpy(s.savedSwitch, (const void*)RSS_EXDATA, PAGE_BYTES);
         s.saved = true;
         for (int p = 0; p < PAGES; p++) {
@@ -272,9 +312,8 @@ namespace StageSwitch {
     static int hoveredKind(u8* page)
     {
         if (!isPtr((u32)page)) return 0;
-        int col = *(int*)(page + PAGE_COL), row = *(int*)(page + PAGE_ROW);
-        int tile = row >= 1 ? (row - 1) * COLS + col : -1;
-        if (tile < 0 || tile >= *(int*)(page + PAGE_TILES) || tile >= MAX_TILES) return 0;
+        int tile = cursorTile(page);
+        if (tile < 0 || tile >= tileCount(page)) return 0;
         return StageLegal::kindAt(*(u8*)(page + PAGE_NUMBER), tile);
     }
 
@@ -285,7 +324,7 @@ namespace StageSwitch {
         unlabel(s.title, "MenMainSwitch10Panel");
         unlabel(s.bar, "MenMainSwitch11Panel");
         unlabel(s.moreRow, "MenMainAddRulefont05");
-        if (s.saved) memcpy((void*)RSS_EXDATA, s.savedSwitch, PAGE_BYTES);
+        if (s.saved && Build::stageRandomSwitch()) memcpy((void*)Build::stageRandomSwitch(), s.savedSwitch, PAGE_BYTES);
         s.saved = false;
         bool changed = s.on && s.canEdit &&
                        (!same(s.starters, s.roomStarters, 32) || !same(s.counterpicks, s.roomCounterpicks, 32) ||
@@ -425,16 +464,23 @@ namespace StageSwitch {
         return (i % GRID) + shift;
     }
 
-    // P+ draws tile i at column i % 5, row i / 5: the offset to its column and row of 7.
+    // P+ draws tile i at column i % 5, row i / 5 (the second group's k-th at column 5 + k % 2, row
+    // k / 2, a little off the first group's grid): the offset to its column and row of 7.
     static void tileOffset(int i, int n, float* pos)
     {
-        pos[0] = (gridCol(i, n) - (i % 5)) * TILE_DX;
         // The row of 7 through an empty asm: at -Oz `x - i / 7` becomes `x + i / -7`, a division by a
         // constant Dolphin's JIT gets wrong (reltool.py _jit_bad_divisor; the tiles and the cursor went
         // to y = +-2e9, test_room_stage_switch.py).
         int row7 = i / GRID;
         asm("" : "+r"(row7));
-        pos[1] = ((i / 5) - row7) * TILE_DY;
+        if (i < GROUP_1) {
+            pos[0] = (gridCol(i, n) - (i % 5)) * TILE_DX;
+            pos[1] = ((i / 5) - row7) * TILE_DY;
+        } else {
+            int k = i - GROUP_1;
+            pos[0] = (gridCol(i, n) - (COLS + (k & 1))) * TILE_DX - GROUP_2_DX;
+            pos[1] = ((k >> 1) - row7) * TILE_DY - GROUP_2_DY;
+        }
         pos[2] = 0.0f;
     }
 
@@ -443,8 +489,7 @@ namespace StageSwitch {
     {
         u8* cur = objs[OBJ_CURSOR];
         if (!isPtr((u32)cur)) return;
-        int col = *(int*)(page + PAGE_COL), row = *(int*)(page + PAGE_ROW);
-        int tile = row >= 1 ? (row - 1) * COLS + col : -1;
+        int tile = cursorTile(page);
         float pos[3] = {0.0f, 0.0f, 0.0f};
         if (tile >= 0 && tile < n) tileOffset(tile, n, pos);
         SET_POS(cur, pos);
@@ -481,12 +526,11 @@ namespace StageSwitch {
     // page button (right, over the last two columns).
     static void navigate(u8* page, u32 dirs)
     {
-        int n = *(int*)(page + PAGE_TILES);
+        int n = tileCount(page);
         if (n <= 0) return;
-        if (n > MAX_TILES) n = MAX_TILES;
         int col = *(int*)(page + PAGE_COL), row = *(int*)(page + PAGE_ROW);
         int rows = (n + GRID - 1) / GRID;
-        int tile = row >= 1 ? (row - 1) * COLS + col : -1;   // -1: row 0
+        int tile = cursorTile(page);   // -1: row 0
         if (tile >= n) tile = n - 1;
         float vcol = tile >= 0 ? gridCol(tile, n) : (col >= COLS ? GRID - 1 : (s.navCol < GRID - 2 ? s.navCol : 0));
         int target = tile;                 // -1: row 0
@@ -510,8 +554,7 @@ namespace StageSwitch {
             }
         }
         if (target >= 0) {
-            *(int*)(page + PAGE_COL) = target % COLS;
-            *(int*)(page + PAGE_ROW) = target / COLS + 1;
+            cursorToTile(page, target);
             s.navCol = (int)(gridCol(target, n) + 0.5f);
         } else {
             *(int*)(page + PAGE_COL) = pageButton ? COLS : 0;
@@ -564,8 +607,7 @@ namespace StageSwitch {
             s.shownPage = pnum;
             s.drawn = true;
         }
-        int n = *(int*)(page + PAGE_TILES);
-        if (n > MAX_TILES) n = MAX_TILES;
+        int n = tileCount(page);
         placeTiles(page, objs, n);
         for (int i = 0; i < n; i++) {
             int kind = StageLegal::kindAt(pnum, i);
@@ -612,8 +654,8 @@ namespace StageSwitch {
         if ((bits & IN_A) && pageButton) keep |= bits & IN_A;   // P+ turns the page, for everyone
         if (!s.on || !s.canEdit) return keep;
         if (bits & IN_A) {
-            int tile = row >= 1 ? (row - 1) * COLS + col : -1;
-            int n = *(int*)(page + PAGE_TILES);
+            int tile = cursorTile(page);
+            int n = tileCount(page);
             if (row == 0 && !pageButton) {
                 if (s.choice == 0xFF) {
                     playSE(SE_ERROR);   // strike, random, a set: the launcher's ruleset decides
@@ -622,7 +664,7 @@ namespace StageSwitch {
                     playSE(SE_TOGGLE);
                     reprintFooter();   // it says what A does now
                 }
-            } else if (tile >= 0 && tile < n && tile < MAX_TILES) {
+            } else if (tile >= 0 && tile < n) {
                 int kind = StageLegal::kindAt(*(u8*)(page + PAGE_NUMBER), tile);
                 if (kind > 0) {
                     int role = (roleOf(kind) + 1) % 3;   // Off -> Counterpick -> Starter -> Off

@@ -18,6 +18,7 @@
 pub mod chat;
 pub mod config;
 pub mod engine;
+pub mod games;
 pub mod geo;
 pub mod live;
 pub mod messages;

@@ -49,7 +49,7 @@ from test_online import _make_backend, _wait
 from test_online_game import (Game, _boot, _both, _find_logged, _p1_damage_addr, _peer_shown, online_set,
                               ppom)
 
-pytestmark = [pytest.mark.dolphin, pytest.mark.server, pytest.mark.gpu]
+pytestmark = [pytest.mark.dolphin, pytest.mark.server, pytest.mark.gpu, pytest.mark.pplus_only("Ranked")]
 
 DEFAULT_RATING = 1400.0   # common::ranked::DEFAULT_RATING
 FIRST_SET_SWING = 100.0   # K_START / 2: a first set between two players at the same rating

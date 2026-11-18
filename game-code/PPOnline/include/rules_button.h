@@ -5,7 +5,8 @@
 namespace RulesButton {
     // The room CSS's RULES button (docs/design/room-rules.md decision 4; docs/game-code.md §14
     // "RULES button"): a third button in the bar next to PUBLIC / PRIVATE and FFA / TEAMS, made
-    // and hit-tested as Brawl makes and hit-tests those two (rules_button.cpp).
+    // and hit-tested as Brawl makes and hit-tests those two (rules_button.cpp); words in the bar on a
+    // character select without Brawl's online art (word_buttons.h).
     void install(CoreApi* api);
     // Every frame on the room CSS: show / hide the button; enabled = false draws it greyed and
     // the hand passes over it (non-hosts normally get enabled = true: they press it to view the

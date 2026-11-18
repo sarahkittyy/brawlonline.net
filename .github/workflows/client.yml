@@ -55,6 +55,8 @@ on:
       - "launcher/**"
       - "game-code/**"
       - "tools/gamecode/**"
+      # (mm's games table, which the launcher bundles: its list of supported builds)
+      - "server/config/games.json"
       - "NOTICE"
       - ".github/workflows/client.yml"
       - ".github/scripts/**"
@@ -79,7 +81,8 @@ env:
 
 jobs:
   plugin:
-    # The game plugin (PPOnline.rel) is platform independent: built once, on Linux.
+    # The game plugin (PPOnline.rel and the mods' PPOnline-pex.rel / PPOnline-rex.rel) is platform
+    # independent: built once, on Linux.
     concurrency:
       group: client-plugin
       cancel-in-progress: false
@@ -127,7 +130,11 @@ jobs:
       - uses: actions/upload-artifact@v7
         with:
           name: plugin
-          path: client/game-code/PPOnline/PPOnline.rel
+          # (one folder, so the artifact holds the three files side by side)
+          path: |
+            client/game-code/PPOnline/PPOnline.rel
+            client/game-code/PPOnline/PPOnline-pex.rel
+            client/game-code/PPOnline/PPOnline-rex.rel
           retention-days: 1
           if-no-files-found: error
 

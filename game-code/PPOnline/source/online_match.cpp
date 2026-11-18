@@ -29,6 +29,7 @@
 #include <memory.h>
 #include <string.h>
 
+#include "build.h"
 #include "online.h"
 #include "online_menu.h"
 #include "ppom.h"
@@ -73,13 +74,12 @@ namespace OnlineMatch {
     static const u32 MM_TIME_LIMIT = 0x20;     // gmGlobalModeMelee: the time limit (s32 frames)
     static const u32 MM_HANDICAP = 0x26;       // gmPlayerInitData: the handicap (u16; P+: tenths of a stock)
     static const u32 MM_NAME = 0x0C;           // gmPlayerInitData: the name tag's name (wchar[5] + 0)
-    static const u32 ASL_BUTTONS = 0x800B9EA2; // P+: buttons held on the stage select (u16)
     // P+'s alt costume word per slot (LegacyTE/AltCostume.asm: gmSelCharData + 0x43AD8 + slot *
     // 0x5C, which its Gecko lines read as 0x90180F20 + 0x436F8): 1 AltZ, 2 AltR, else none. Every
     // frame, while it is 1 or 2, P+ sets the slot's costume in gmGlobalModeMelee to 62 (AltZ) or
     // 61 (AltR), and the loader then takes Fit<Char>AltZ/AltR.pac. P+ writes the words when its
-    // CSS is left; the online CSS never is, so setupMatch writes all four from SESSION.
-    static const u32 ALT_COSTUME_WORDS = 0x901C4618;
+    // CSS is left; the online CSS never is, so setupMatch writes all four from SESSION
+    // (Build::setAltCostumes, which also knows P+Ex's own alt code).
 
     // gmSelCharData of the local CSS, saved before the match overwrites it and put back after,
     // so the CSS comes back with this player's own character and not the host's.
@@ -94,7 +94,7 @@ namespace OnlineMatch {
     static u8 s_pickedAsl = 0;
     // The buttons held at the last A/START press on the online stage select (noteSssButtons). P+'s
     // ASL Helper (LegacyTE/ASLHelper.asm, a hook at 0x800B99FC) writes the held buttons to
-    // ASL_BUTTONS only in sqVsMelee, sqSpMelee, sqTraining and a few other sequences, not in
+    // its buttons word (Build::setStageAlternate) only in sqVsMelee, sqSpMelee, sqTraining and a few other sequences, not in
     // sqNetAnyOkiraku, so online the address kept 0 (the stage load clears it) and every pick
     // was the base stage. Its low byte is what P+ v3.2's stage files select by: L 0x40,
     // R 0x20, Z 0x10 (the D-pad below them).
@@ -186,15 +186,24 @@ namespace OnlineMatch {
         seq[0x11] = type;
     }
 
-    // The character's costume list: its length and each costume's colour. P+ v3.2 keeps it in
-    // the character's CSS slot table (0x80585B00 + slot * 0x10, +8: 2-byte entries whose first
-    // byte is the costume's colour, ending with colour 0x0C; Legacy TE UnboundedTeamEngine.asm).
+    // The character's costume list in the build's CSS slot table (Build::slotTable; P+ v3.2's is
+    // at 0x80585B00, a P+Ex build's elsewhere, the same entries): slot * 0x10, +8: 2-byte entries
+    // whose first byte is the costume's colour, ending with colour 0x0C (Legacy TE
+    // UnboundedTeamEngine.asm). 0 without one.
+    static u32 costumeListOf(u8 charKind)
+    {
+        u32 table = Build::slotTable();
+        int slot = Build::cssOfKind(charKind);
+        if (!table || slot < 0) return 0;
+        u32 list = *(u32*)(table + 8 + (u32)slot * 0x10);
+        return isPtr(list) ? list : 0;
+    }
+
+    // Its length and each costume's colour.
     static int costumeList(u8 charKind, u8* colours)
     {
-        typedef int (*ToSelchFn)(int);
-        int slot = ((ToSelchFn)0x800AF708)(charKind);   // exchangeGmCharacterKind2MuSelchkind
-        u32 list = *(u32*)(0x80585B08 + ((u32)slot & 0xFF) * 0x10);
-        if (!isPtr(list)) return 0;
+        u32 list = costumeListOf(charKind);
+        if (!list) return 0;
         int n = 0;
         for (; n < 0x20; n++) {
             u8 c = *(u8*)(list + 2 * n);
@@ -209,10 +218,8 @@ namespace OnlineMatch {
     // `costume` itself if the list has no such entry.
     u8 costumeFile(u8 charKind, u8 costume)
     {
-        typedef int (*ToSelchFn)(int);
-        int slot = ((ToSelchFn)0x800AF708)(charKind);
-        u32 list = *(u32*)(0x80585B08 + ((u32)slot & 0xFF) * 0x10);
-        if (!isPtr(list) || costume >= 0x20) return costume;
+        u32 list = costumeListOf(charKind);
+        if (!list || costume >= 0x20) return costume;
         for (int n = 0; n <= costume; n++) {
             if (*(u8*)(list + 2 * n) == 0x0C) return costume;
         }
@@ -327,10 +334,9 @@ namespace OnlineMatch {
     // waiting room): P+ applies them every frame, and what the last match left would come back.
     void setAltCostumes(const u8* alt)
     {
-        for (int i = 0; i < 4; i++) {
-            *(volatile u32*)(ALT_COSTUME_WORDS + i * PLAYER_SIZE) =
-                alt[i] == PPOM::COSTUME_ALT_Z ? 1 : alt[i] == PPOM::COSTUME_ALT_R ? 2 : 0;
-        }
+        u8 a[4];
+        for (int i = 0; i < 4; i++) a[i] = alt[i] == PPOM::COSTUME_ALT_Z ? 1 : alt[i] == PPOM::COSTUME_ALT_R ? 2 : 0;
+        Build::setAltCostumes(a);
     }
     void clearPickedStage() { s_pickedStage = 0xFFFF; s_pickedAsl = 0; }
     void noteSssButtons(u32 held, u32 pressed)
@@ -474,7 +480,7 @@ namespace OnlineMatch {
         se.quitBy = 0;
         se.quitRunback = 0;
         s_seen = 0;
-        *(u16*)ASL_BUTTONS = se.asl;
+        Build::setStageAlternate(se.asl);
         keepPortValues(se);
         PPOM::g_block.local.hudDisconnected = 0;
         // The online ruleset, written again right before the setup reads it: nothing set on this

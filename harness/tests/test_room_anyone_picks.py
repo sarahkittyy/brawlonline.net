@@ -30,7 +30,7 @@ from __future__ import annotations
 import re
 import struct
 import threading
-from typing import Any, Callable
+from typing import Any, Callable, Iterator
 
 import pytest
 
@@ -38,7 +38,7 @@ from ppharness import brawl as B
 from ppharness.backend import OnlineBackend
 from ppharness.instance import DolphinInstance
 
-from test_online import _wait
+from test_online import _make_backend, _wait
 from test_online_game import Game, _boot, _both, _connected_direct, _peer_shown, backend  # noqa: F401  (the backend fixture)
 from test_online_ranked import SSS as RANKED_SSS, STARTERS, _both_on, _paired, _search_ranked, _to_ranked_css
 from test_ranked_sss_portraits import _sym
@@ -47,6 +47,7 @@ from test_room_stage_list import BF, FD, STAGES, YS, room_with, session
 from test_room_sit_out import _join, _open_slot, _plate, _players, _running
 from test_rooms_game import (ART, CSS, _all, launcher_answer, lock_of, pick, room_view, to_join_room, until_view,
                              write_create)
+import mod_adapt  # noqa: E402
 import online_set  # noqa: E402
 import ppom  # noqa: E402
 
@@ -339,6 +340,7 @@ def test_room_anyone_picks_three_players(backend: OnlineBackend, dolphin: Callab
 
 
 @pytest.mark.slow
+@pytest.mark.pplus_only("Ranked")
 def test_ranked_strikes_show_the_opponents_cursor(backend, dolphin: Callable[..., DolphinInstance],
                                                   gpu_backend: str) -> None:
     test = "anyone-picks"
@@ -414,3 +416,62 @@ def test_direct_anyone_picks(backend, dolphin: Callable[..., DolphinInstance], g
     assert rep["stage"] in starters, ("START left Direct's stages", rep, starters)
     cursors_gone(gs)
 
+
+# ---- Where the turn line goes (mm's games table, `layout.sssLine`; docs/design/pplus-mods.md section 3) ----
+
+SSS_TASK_MSG = 0x6064  # the stage select task's message object (sel_stage+0xC38 keeps it there)
+# A place no build has: left of the preview, a little smaller.
+TEST_SSS_LINE = [-400.0, -150.0, -80.0, -190.0, 0.7]
+PPLUS_SSS_LINE = (237.0, -347.0, 537.0, -387.0, 0.8)   # the plugin's own (layout.cpp)
+
+
+@pytest.fixture
+def line_backend() -> Iterator[OnlineBackend]:
+    """An mm whose games table gives every build that place for the stage select's turn line."""
+    be = _make_backend(sss_line=TEST_SSS_LINE)
+    try:
+        yield be
+    finally:
+        be.stop()
+
+
+def turn_line(g: Game) -> dict[str, Any]:
+    """The plugin's LAYOUT (the places it puts things at: the line's x1 y1 x2 y2 scale, the cards'
+    plates; and which groups Dolphin wrote), and the stage select's window 0 as it was last
+    printed."""
+    u32 = lambda a: struct.unpack(">I", g.c.read_mem(a, 4))[0]
+    task = u32(u32(u32(0x805A0060) + 4) + 0x3AC)
+    ws = u32(u32(task + SSS_TASK_MSG) + 0xC)
+    w = struct.unpack(">13f", g.c.read_mem(ws + 4, 52))
+    return {"layout": ppom.read_layout(g.c, ppom.find_block(g.c)), "window": (*w[:4], w[11])}
+
+
+def near(a: Any, b: Any) -> bool:
+    return len(a) == len(b) and all(abs(x - y) < 0.01 for x, y in zip(a, b))
+
+
+def test_the_turn_line_goes_where_mm_says(line_backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
+                                          gpu_backend: str) -> None:
+    """A build whose stage select has something in its header (Cobalt's draws the hovered stage's
+    name there) has another place for the turn line in its entry of mm's games table, as numbers:
+    mm says them in its hello-resp, Dolphin writes them into the plugin's LAYOUT, and the plugin
+    prints the line there. No place is the plugin's but P+'s."""
+    a, b, _, _ = _connected_direct(line_backend, dolphin, gpu_backend, "sss-line", ("slna", "slnb"), stocks=1,
+                                  pick_game_1=False)
+    gs = [a, b]
+    _wait(lambda: all(g.scene() == SSS for g in gs), 90, "both on the stage select")
+    own = ppom.layout_of(mod_adapt.MOD_FOLDER or "Project+")
+    for g in gs:
+        g.out = ANY_ART / "turn-line" / g.name
+        B.step(g.c, 40)
+        t = turn_line(g)
+        assert not near(TEST_SSS_LINE, PPLUS_SSS_LINE)
+        assert t["layout"]["seq"] != 0 and "sssLine" in t["layout"]["set"], (g.name, t)
+        assert near(t["layout"]["sssLine"], TEST_SSS_LINE) and near(t["window"], TEST_SSS_LINE), (g.name, t)
+        # (the cards' name plates are the build's own in the games table: this mm changed the
+        # line only, and a group the entry has not stays P+'s)
+        assert ("cardPlates" in t["layout"]["set"]) == ("cardPlates" in own), (g.name, t)
+        assert near(t["layout"]["cardPlates"], own.get("cardPlates", (-21.5, 16.0, 6.0))), (g.name, t)
+        g.shot("01-line-at-the-table's-place")
+    for g in gs:
+        g.c.mm_cancel()

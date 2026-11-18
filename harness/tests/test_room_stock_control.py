@@ -38,6 +38,9 @@ HAND_MODE_PICKER = 5
 RU_STOCK_CONTROL = 0x13
 BOX_Y = -17.3                 # the STOCKS box, lower right of the panel (room_css.cpp STOCK_BOX_DY)
 BOX_DX = 1.5                  # the box's centre from the panel's (room_css.cpp STOCK_BOX_DX moved it left of P+'s place)
+# (a build's card may hang the box a little lower: REX's is hit from y -17.4 to -18.7; the hand
+# steps down onto it, BOX_STEPS below BOX_Y)
+BOX_STEPS = (0.0, -0.4, -0.8, -1.2)
 
 
 def css_task(g: Game) -> int:
@@ -81,8 +84,11 @@ def roomsim_rules() -> bytes:
 def pick_stocks(g: Game, n: int, slot: int = 0) -> None:
     """The local panel's STOCKS box: A opens Brawl's picker at the current pick, the D-pad moves
     one entry (10% = 1 stock) a press, A takes it."""
-    g.hand_to(PANEL_X[slot] + BOX_DX, BOX_Y, tol=0.5)
-    g.wait(5)
+    for dy in BOX_STEPS:
+        g.hand_to(PANEL_X[slot] + BOX_DX, BOX_Y + dy, tol=0.3 if dy else 0.5)
+        g.wait(5)
+        if g.u32(hand(g) + 0xAC) == BUTTON_STOCK_BOX:
+            break
     assert g.u32(hand(g) + 0xAC) == BUTTON_STOCK_BOX, hex(g.u32(hand(g) + 0xAC))
     cur = stocks_shown(g, 0)
     g.tap("A")
@@ -147,10 +153,17 @@ def test_stock_boxes_on_the_room_css(game: Game) -> None:
     g.tap("A")
     g.wait(20)
     assert g.u32(hand(g) + 0xA4) != HAND_MODE_PICKER, "the picker opened while locked in"
+    # The D-pad changes nothing either. With the picker shut it moves the hand (down from the
+    # box's lower edge it can reach the player's own name plate, where A sits out), so the A
+    # that follows goes on the box again.
     g.tap("DDOWN")
     g.wait(10)
+    assert stocks_shown(g, 0) == 3
+    g.hand_to(PANEL_X[0] + BOX_DX, BOX_Y, tol=0.5)
+    g.wait(5)
     g.tap("A")
     g.wait(20)
+    assert g.u32(hand(g) + 0xA4) != HAND_MODE_PICKER, "the picker opened while locked in"
     assert stocks_shown(g, 0) == 3 and ppom.read_local(g.c, sim.b)["own"]["stocks"] == 3
     g.shot("04-locked")
     g.tap("B")
@@ -201,11 +214,15 @@ def _online_hand_to(g, x: float, y: float, tol: float = 0.5) -> None:
 
 def _online_pick_stocks(g, slot: int, n: int) -> None:
     """On the room CSS: our panel (drawn at our slot)'s STOCKS box, Brawl's picker, `n`."""
-    _online_hand_to(g, PANEL_X[slot] + BOX_DX, BOX_Y)
-    g.steps("wait 5")
     area = B.read_css_area(g.c.read_mem, 0).area
-    assert struct.unpack(">I", g.c.read_mem(struct.unpack(">I", g.c.read_mem(area + 0x1A8, 4))[0] + 0xAC, 4))[0] \
-        == BUTTON_STOCK_BOX, f"{g.name}: the hand is not on the STOCKS box"
+    on_box = lambda: struct.unpack(">I", g.c.read_mem(struct.unpack(">I", g.c.read_mem(area + 0x1A8, 4))[0] + 0xAC,  # noqa: E731
+                                                       4))[0] == BUTTON_STOCK_BOX
+    for dy in BOX_STEPS:
+        _online_hand_to(g, PANEL_X[slot] + BOX_DX, BOX_Y + dy)
+        g.steps("wait 5")
+        if on_box():
+            break
+    assert on_box(), f"{g.name}: the hand is not on the STOCKS box"
     g.steps("tap A 8", "wait 30")
     for _ in range(n):
         g.steps("tap DDOWN 6", "wait 10")

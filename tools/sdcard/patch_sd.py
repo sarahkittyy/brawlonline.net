@@ -32,7 +32,9 @@ import fat32  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 TEMPLATE_SD = ROOT / "run" / "template-user" / "Wii" / "sd.raw"
-PLUGIN_DIR = "/Project+/pf/plugins"
+# The plugins folder of the build on the card: P+'s, or a mod of P+'s own folder
+# (PPHARNESS_MOD_FOLDER: "Cobalt", "P+Ex"; docs/design/pplus-mods.md §5).
+PLUGIN_DIR = f"/{os.environ.get('PPHARNESS_MOD_FOLDER') or 'Project+'}/pf/plugins"
 
 
 def plugin_sd_path(path: str | Path) -> str:

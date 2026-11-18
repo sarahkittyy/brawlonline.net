@@ -103,6 +103,7 @@ add_dolphin_test(RoomMessagesTest Online/RoomMessagesTest.cpp)
 add_dolphin_test(RoomWatchTest Online/RoomWatchTest.cpp)
 # Match rules: get-ticket-resp's `rules`, checked before they reach the game (Core/Online/MatchRules).
 add_dolphin_test(MatchRulesTest Online/MatchRulesTest.cpp)
+add_dolphin_test(GameBuildTest Online/GameBuildTest.cpp)
 add_dolphin_test(SpecialAssetsTest Online/SpecialAssetsTest.cpp)
 # Sets: the stage steps of a set's format (Core/Online/SetFormat).
 add_dolphin_test(SetFormatTest Online/SetFormatTest.cpp)

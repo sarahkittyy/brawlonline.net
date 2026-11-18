@@ -33,6 +33,7 @@
 // scTitle skip at 0x806CA1F8/0x806CA204), used with attribution. Orca patches memory from
 // Dolphin; this is our own plugin code, no Orca code is copied.
 #include <string.h>
+#include "variant.h"
 #include "online_menu.h"
 #include "ppom.h"
 
@@ -99,6 +100,13 @@ namespace BootMenu {
             } else if (strcmp(name, "sqTitle") != 0) {
                 s_toOnline = false;   // not the way to the menus: leave it alone
             }
+        } else if (PPON_OWN_BOOT && strcmp(currentSequence(), "sqBoot") == 0 && strcmp(name, "sqVsMelee") != 0
+                   && !pplusBootsToCss()) {
+            // A build without P+'s BootToCSS (REX) takes the game's own way from the boot to the
+            // title and the menus: the same title skip and ONLINE page on it. (PPON_OWN_BOOT,
+            // variant.h: only a plugin built for such a build takes this way.)
+            s_toOnline = true;
+            note(1);
         } else if (arg == 0 && strcmp(name, "sqVsMelee") == 0 && strcmp(currentSequence(), "sqBoot") == 0
                    && pplusBootsToCss()) {
             // The game's own string, which the Start case passes (0x80701C94).

@@ -29,6 +29,7 @@ from typing import Any, Callable
 
 import pytest
 
+from ppharness import paths as ppharness_paths
 from ppharness.backend import OnlineBackend
 from ppharness.instance import DolphinInstance
 from ppharness.netsim import LinkProfile
@@ -38,7 +39,7 @@ from test_online_game import (PLUGIN, Game, _boot, _both, _p2p_through_netsim, _
 from test_online_ranked import (SSS, STARTERS, _both_on, _search_ranked, _strike, _view, _wait,
                                 _wait_view, backend)  # noqa: F401
 
-pytestmark = [pytest.mark.dolphin, pytest.mark.server, pytest.mark.gpu]
+pytestmark = [pytest.mark.dolphin, pytest.mark.server, pytest.mark.gpu, pytest.mark.pplus_only("Ranked")]
 
 TEST = "ranked-ping-check"
 STEP_PING, STEP_CHAR = 6, 3
@@ -61,7 +62,7 @@ def _sym(g: Game, name: str) -> int:
         m = nxt
     assert addrs, "the plugin is not loaded"
     cur = None
-    for line in (PLUGIN.parent / "PPOnlineMain.map").read_text().splitlines():
+    for line in ppharness_paths.plugin_map(PLUGIN).read_text().splitlines():
         parts = line.split()
         if len(parts) == 5 and parts[4].startswith("."):
             cur = parts[4]

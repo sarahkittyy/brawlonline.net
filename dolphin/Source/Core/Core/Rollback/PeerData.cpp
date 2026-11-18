@@ -4,6 +4,8 @@
 #include "Core/Rollback/PeerData.h"
 
 #include <algorithm>
+#include <array>
+#include <atomic>
 #include <bit>
 #include <cmath>
 #include <cstdlib>
@@ -181,8 +183,42 @@ std::optional<SssCursorValues> ParseSssCursor(const picojson::value* v, u8 max_p
   return SssCursorValues{static_cast<u8>(*page), xy[0], xy[1], static_cast<u8>(*turns)};
 }
 
+namespace
+{
+// The running game's own list (SetBuildCharKinds), eight words of 32 kinds, and whether it has one.
+std::array<std::atomic<u32>, BUILD_CHAR_KINDS_SIZE / 4> s_build_kinds{};
+std::atomic<bool> s_has_build_kinds{false};
+constexpr u32 KIND_GIGA_BOWSER = 0x2C, KIND_WARIOMAN = 0x2D;
+}  // namespace
+
+void SetBuildCharKinds(const std::array<u8, BUILD_CHAR_KINDS_SIZE>& kinds)
+{
+  for (size_t w = 0; w < s_build_kinds.size(); ++w)
+  {
+    u32 bits = 0;
+    for (size_t b = 0; b < 4; ++b)
+      bits |= static_cast<u32>(kinds[4 * w + b]) << (8 * b);
+    s_build_kinds[w].store(bits, std::memory_order_relaxed);
+  }
+  s_has_build_kinds.store(true, std::memory_order_release);
+}
+
+void ClearBuildCharKinds()
+{
+  s_has_build_kinds.store(false, std::memory_order_release);
+}
+
+bool HasBuildCharKinds()
+{
+  return s_has_build_kinds.load(std::memory_order_acquire);
+}
+
 bool ValidCharKind(u32 kind)
 {
+  if (kind > 0xFF || kind == KIND_GIGA_BOWSER || kind == KIND_WARIOMAN)
+    return false;
+  if (s_has_build_kinds.load(std::memory_order_acquire))
+    return (s_build_kinds[kind >> 5].load(std::memory_order_relaxed) >> (kind & 31)) & 1;
   return kind <= 0x11 || (kind >= 0x13 && kind <= 0x2B) || kind == 0x32 || kind == 0x33 ||
          kind == 0x35;
 }
@@ -223,20 +259,48 @@ void ClearGoneMarkerBytes(u8* pad)
   std::memset(pad + GONE_MARK_OFFSET, 0, GONE_MARK.size());
 }
 
+namespace
+{
+// The running game's stage select (SetBuildStageKinds), eight words of 32 kinds, and whether it
+// has one.
+std::array<std::atomic<u32>, BUILD_STAGE_KINDS_SIZE / 4> s_build_stages{};
+std::atomic<bool> s_has_build_stages{false};
+}  // namespace
+
+void SetBuildStageKinds(const std::array<u8, BUILD_STAGE_KINDS_SIZE>& kinds)
+{
+  for (size_t w = 0; w < s_build_stages.size(); ++w)
+  {
+    u32 bits = 0;
+    for (size_t b = 0; b < 4; ++b)
+      bits |= static_cast<u32>(kinds[4 * w + b]) << (8 * b);
+    s_build_stages[w].store(bits, std::memory_order_relaxed);
+  }
+  s_has_build_stages.store(true, std::memory_order_release);
+}
+
+void ClearBuildStageKinds()
+{
+  s_has_build_stages.store(false, std::memory_order_release);
+}
+
 bool ValidStageKind(u32 kind)
 {
   // P+ v3.2's stage select offers 0x01-0x33 and 0x37 (Brawl's kinds) and 0x40-0x52 (P+'s own
   // stages), read from its page and slot tables. Never a versus stage: 0x26 Config (the rules
   // menu), 0x27, 0x28 Result, and the single-player modes 0x34-0x36 (Home-Run Contest, Stage
   // Builder, rest area) and 0x38-0x3F (Target Smash, roll call, Subspace). 0x7F bounds room for
-  // more of P+'s stages; the game plugin checks the exact list.
-  if (kind < 0x01 || kind > 0x7F)
+  // more of P+'s stages; the game plugin checks the exact list. A build that says which stages
+  // its stage select has (REX's reach 0x8A) is checked by that list instead of 0x7F.
+  if (kind < 0x01 || kind > 0xFF)
     return false;
   if (kind >= 0x26 && kind <= 0x28)
     return false;
   if ((kind >= 0x34 && kind <= 0x36) || (kind >= 0x38 && kind <= 0x3F))
     return false;
-  return true;
+  if (s_has_build_stages.load(std::memory_order_acquire))
+    return (s_build_stages[kind >> 5].load(std::memory_order_relaxed) >> (kind & 31)) & 1;
+  return kind <= 0x7F;
 }
 
 std::vector<u8> MergeInitBlock(const std::vector<u8>& mine, const std::vector<u8>& host,

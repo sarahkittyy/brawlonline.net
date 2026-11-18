@@ -26,6 +26,7 @@
 #include "Core/Core.h"
 #include "Core/Online/Chat.h"
 #include "Core/Online/GameAlive.h"
+#include "Core/Online/GameBuild.h"
 #include "Core/Online/GameSetup.h"
 #include "Core/Online/Matchmaking.h"
 #include "Core/Online/ModsRoom.h"
@@ -448,6 +449,7 @@ void Handle(const Message& m, Actions* a, Clock::time_point now)
     s.conn = Conn::Online;
     s.online_since = now;
     s.mm_game_alive = m.game_alive;
+    GameBuild::SetLayout(m.layout);
     s.conn_error.clear();
     ++s.serial;
     Log("online");
@@ -1416,6 +1418,8 @@ void Thread()
   ENetHost* host = nullptr;
   ENetPeer* peer = nullptr;
   Clock::time_point conn_started{};
+  // The build of the game the connection's `hello` named (Online/GameBuild.h).
+  std::string hello_game;
   Clock::time_point next_file{};
   bool was_logged_in = false;
   bool was_twos_busy = false;
@@ -1450,10 +1454,38 @@ void Thread()
     const UserInfo info = user.GetUserInfo();
     const bool logged_in = user.IsLoggedIn() && !info.uid.empty() && !info.play_key.empty();
 
+    // The connection waits for the game's build (known once its plugin is up, a few seconds
+    // after boot): `hello` names it, so nothing the game or the launcher asks comes before mm
+    // knows it. A whole-machine session's game has no plugin and is not waited for.
+    bool build_ready = false;
+
     // Logged out (or another account): close; the room is gone with the connection.
     bool want = false;
     {
       std::lock_guard lk(s_mutex);
+      // A create or join the launcher handed over waits for the build itself (a slow boot is
+      // not a game without the plugin), and does not time out meanwhile.
+      build_ready = GameBuild::ReadyForHello(Machine::IsArmed(),
+                                             s.pending ? GameBuild::REQUEST_WAIT_SECONDS :
+                                                         GameBuild::HELLO_WAIT_SECONDS);
+      if (!build_ready && s.pending)
+        s.pending_since = now;
+      // The game's build is not the one `hello` named (another game was booted in this Dolphin,
+      // or this one's plugin came up after the wait): a new connection, unless a room would go
+      // with it. A request that is still pending goes again on the new one, under the right
+      // build. Never under a whole-machine session, whose connection names no build.
+      if (host && s.conn == Conn::Online && !s.view && s.rejoin.empty() && !Machine::IsArmed())
+      {
+        const std::string game = GameBuild::Key();
+        if (!game.empty() && game != hello_game)
+        {
+          Log(fmt::format("the game is now {}: connecting again", game));
+          OnDropped(now, "another game", false);
+          s.attempts = 0;
+          s.next_attempt = now;
+          close(true);
+        }
+      }
       if (host && (!logged_in || info.uid != s.conn_uid))
       {
         OnDropped(now, logged_in ? "another account" : "logged out", false);
@@ -1488,7 +1520,7 @@ void Thread()
     was_logged_in = logged_in;
 
     // Connect.
-    if (want && !host)
+    if (want && !host && build_ready)
     {
       bool due;
       {
@@ -1556,7 +1588,9 @@ void Thread()
         std::unique_lock lk(s_mutex);
         if (ev.type == ENET_EVENT_TYPE_CONNECT)
         {
-          Send(peer, HelloJson(info.uid, info.play_key, APP_VERSION, APP_PLATFORM, chat_key));
+          hello_game = GameBuild::Key();
+          Send(peer, HelloJson(info.uid, info.play_key, APP_VERSION, APP_PLATFORM, chat_key,
+                               hello_game));
           s.conn = Conn::Hello;
           ++s.hellos;
           conn_started = now;

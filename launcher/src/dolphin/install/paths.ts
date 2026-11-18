@@ -87,8 +87,22 @@ export function defaultUserTemplate(ctx: DolphinPathEnv): string | null {
   return null;
 }
 
-/** Our game plugin's file name; P+'s Syriinge loads every `/Project+/pf/plugins/*.rel`. */
+/**
+ * Our game plugin's file name on a card; P+'s Syriinge loads every `/Project+/pf/plugins/*.rel`
+ * (and the plugin's loader reads itself again by this name, whichever variant it is).
+ */
 export const PLUGIN_FILE_NAME = "PPOnline.rel";
+/**
+ * The plugin is built once per kind of build (game-code/PPOnline/include/variant.h,
+ * game-code/build.sh): Project+'s own, the one for P+ v3.2 with BrawlEx (Project+ Ex, Cobalt) and
+ * REX's. A build's entry of server/config/games.json names the one it takes (`plugin`).
+ */
+export const PLUGIN_VARIANTS = ["pplus", "pex", "rex"] as const;
+export type PluginVariant = (typeof PLUGIN_VARIANTS)[number];
+/** A variant's file where the plugins are built and shipped: PPOnline.rel, PPOnline-pex.rel, PPOnline-rex.rel. */
+export function pluginFileName(variant: PluginVariant = "pplus"): string {
+  return variant === "pplus" ? PLUGIN_FILE_NAME : `PPOnline-${variant}.rel`;
+}
 /** Where the plugin goes on the P+ SD card (see docs/game-code.md section 2). */
 export const PLUGIN_SD_PATH = `/Project+/pf/plugins/${PLUGIN_FILE_NAME}`;
 
@@ -105,22 +119,30 @@ export type PluginLocation = {
 /**
  * Where the game plugin (`PPOnline.rel`) installed on the SD card on Play comes from:
  *
- * 1. `PPO_PLUGIN_PATH` if set (no manifest).
+ * 1. `PPO_PLUGIN_PATH` if set (no manifest): Project+'s own plugin; another variant's file is
+ *    the one of its name beside it.
  * 2. Development: game-code's build output next to the launcher repo,
  *    `<repo>/../game-code/PPOnline/PPOnline.rel` (no manifest).
  * 3. Packaged: `<resources>/plugins/PPOnline.rel` with its manifest `<resources>/plugins/PPOnline.json`,
  *    shipped through electron-builder's `extraResources` (see PPLUS_PORTING.md, "Shipping the plugin").
+ *
+ * `variant`: the plugin of the build being started (a mod's `plugin`); Project+'s own when omitted.
  */
-export function defaultPluginLocation(ctx: DolphinPathEnv & { resourcesPath: string }): PluginLocation {
+export function defaultPluginLocation(
+  ctx: DolphinPathEnv & { resourcesPath: string },
+  variant: PluginVariant = "pplus",
+): PluginLocation {
+  const file = pluginFileName(variant);
   const fromEnv = ctx.env.PPO_PLUGIN_PATH;
   if (fromEnv && fromEnv.trim() !== "") {
-    return { binary: fromEnv.trim(), manifest: null };
+    const own = fromEnv.trim();
+    return { binary: variant === "pplus" ? own : path.join(path.dirname(own), file), manifest: null };
   }
   if (ctx.isDevelopment) {
-    return { binary: path.resolve(ctx.devRepoRoot, "..", "game-code", "PPOnline", PLUGIN_FILE_NAME), manifest: null };
+    return { binary: path.resolve(ctx.devRepoRoot, "..", "game-code", "PPOnline", file), manifest: null };
   }
   const dir = path.join(ctx.resourcesPath, "plugins");
-  return { binary: path.join(dir, PLUGIN_FILE_NAME), manifest: path.join(dir, "PPOnline.json") };
+  return { binary: path.join(dir, file), manifest: path.join(dir, file.replace(/\.rel$/, ".json")) };
 }
 
 /**

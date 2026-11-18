@@ -75,6 +75,66 @@ std::optional<u8> OptByte(const picojson::object& o, const char* key, bool* bad)
   return static_cast<u8>(*n);
 }
 
+// `count` finite numbers of a screen's size (a place is a few hundred units at most), flat or as
+// `rows` arrays of count / rows each; false for anything else.
+bool Numbers(const picojson::value& v, size_t count, size_t rows, float* out)
+{
+  if (!v.is<picojson::array>())
+    return false;
+  const picojson::array& a = v.get<picojson::array>();
+  if (rows > 1)
+  {
+    if (a.size() != rows)
+      return false;
+    for (size_t r = 0; r < rows; ++r)
+    {
+      if (!Numbers(a[r], count / rows, 1, out + r * (count / rows)))
+        return false;
+    }
+    return true;
+  }
+  if (a.size() != count)
+    return false;
+  for (size_t i = 0; i < count; ++i)
+  {
+    if (!a[i].is<double>() || !std::isfinite(a[i].get<double>()) || std::abs(a[i].get<double>()) > 10000.0)
+      return false;
+    out[i] = static_cast<float>(a[i].get<double>());
+  }
+  return true;
+}
+
+// hello-resp's `layout` (mm's games table, the build's entry): each group that is there and
+// well-formed; a group that is not is left to the plugin's own (P+'s).
+GameBuild::Layout ParseLayout(const picojson::object& o)
+{
+  using L = GameBuild::Layout;
+  L layout;
+  const picojson::value* v = Find(o, "layout");
+  if (!v || !v->is<picojson::object>())
+    return layout;
+  const picojson::object& l = v->get<picojson::object>();
+  struct Group
+  {
+    const char* key;
+    u32 bit;
+    size_t at, count, rows;
+  };
+  for (const Group& g : {Group{"sssLine", L::SSS_LINE, L::SSS_LINE_AT, 5, 1},
+                         Group{"cardPlates", L::CARD_PLATES, L::CARD_PLATES_AT, 3, 1},
+                         Group{"cssBar", L::CSS_BAR, L::CSS_BAR_AT, 14, 1},
+                         Group{"cssButtons", L::CSS_BUTTONS, L::CSS_BUTTONS_AT, 28, 4}})
+  {
+    std::array<float, 28> values{};
+    const picojson::value* group = Find(l, g.key);
+    if (!group || !Numbers(*group, g.count, g.rows, values.data()))
+      continue;
+    std::copy_n(values.begin(), g.count, layout.values.begin() + g.at);
+    layout.set |= g.bit;
+  }
+  return layout;
+}
+
 std::optional<Player> ParsePlayer(const picojson::object& o, std::string* why)
 {
   Player p;
@@ -617,6 +677,7 @@ Message Parse(const std::string& packet)
     m.error = Str(o, "error", MAX_TEXT_BYTES).value_or("");
     m.latest_version = Str(o, "latestVersion", 32).value_or("");
     m.game_alive = Bool(o, "gameAlive").value_or(false);
+    m.layout = ParseLayout(o);
   }
   else if (m.type == "room-state")
   {
@@ -746,7 +807,7 @@ Message Parse(const std::string& packet)
 
 std::string HelloJson(const std::string& uid, const std::string& play_key,
                       const std::string& app_version, const std::string& platform,
-                      const std::string& chat_key)
+                      const std::string& chat_key, const std::string& game)
 {
   picojson::object user;
   user["uid"] = picojson::value(uid);
@@ -758,6 +819,9 @@ std::string HelloJson(const std::string& uid, const std::string& play_key,
   o["platform"] = picojson::value(platform);
   if (!chat_key.empty())
     o["chatKey"] = picojson::value(chat_key);
+  // The build of the game it runs (Online/GameBuild.h); none: P+, as before the field.
+  if (!game.empty())
+    o["game"] = picojson::value(game);
   // This build sends `game-alive` while its emulation runs (Online/GameAlive.h).
   o["gameAlive"] = picojson::value(true);
   // ... and plays a 2v2 party's pair room (docs/design/2v2.md, "The pair room").

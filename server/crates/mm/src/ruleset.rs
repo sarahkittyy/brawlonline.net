@@ -84,7 +84,14 @@ impl Rulesets {
     /// Parses and checks a rulesets file: known mode names, stage ids in range, no duplicates.
     pub fn parse(json: &str) -> anyhow::Result<Self> {
         let r: Rulesets = serde_json::from_str(json)?;
-        for (name, rules) in &r.modes {
+        r.validate()?;
+        Ok(r)
+    }
+
+    /// Known mode names, stage ids in range, no duplicates (also a game's own entries,
+    /// `crate::games`).
+    pub fn validate(&self) -> anyhow::Result<()> {
+        for (name, rules) in &self.modes {
             anyhow::ensure!(
                 ["ranked", "unranked", "direct", "teams", "party", "twos"].contains(&name.as_str()),
                 "unknown mode {name:?} in rulesets"
@@ -105,7 +112,7 @@ impl Rulesets {
             );
             rules.rules.validate().map_err(|e| anyhow::anyhow!("{name}: {e}"))?;
         }
-        Ok(r)
+        Ok(())
     }
 
     pub fn load(path: Option<&str>) -> anyhow::Result<Self> {

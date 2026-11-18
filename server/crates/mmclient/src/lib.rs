@@ -69,6 +69,14 @@ impl From<UserJsonFile> for Credentials {
     }
 }
 
+/// The build of the game a fake client says its Dolphin runs when nothing else names one:
+/// `MMCLIENT_GAME` (`<folder>:<hash>`), for the harness's tests on a mod of P+, whose fake room
+/// members and searches must be of the room's build (`docs/design/pplus-mods.md` §5). Unset: none
+/// (P+).
+pub fn default_game() -> String {
+    std::env::var("MMCLIENT_GAME").unwrap_or_default()
+}
+
 #[derive(Debug, Clone)]
 pub struct SearchOptions {
     pub server: SocketAddr,
@@ -80,6 +88,8 @@ pub struct SearchOptions {
     pub app_version: String,
     /// `platform` (`win`, `mac`, `linux`; empty like builds older than the field).
     pub platform: String,
+    /// The ticket's `game` (the build its Dolphin runs, `<folder>:<hash>`; empty: P+).
+    pub game: String,
     /// Forced local port ("Force Netplay Port"); random 41000-50999 otherwise.
     pub local_port: Option<u16>,
     /// Forced LAN IP ("Force LAN IP").
@@ -104,6 +114,7 @@ impl SearchOptions {
             encoding: CodeEncoding::Fullwidth,
             app_version: "0.1.0".into(),
             platform: String::new(),
+            game: String::new(),
             local_port: None,
             lan_ip: None,
             match_timeout: Some(Duration::from_secs(30)),
@@ -399,6 +410,7 @@ fn search_once(opts: &SearchOptions) -> anyhow::Result<SearchResult> {
         search: Search { mode: opts.mode, connect_code: code_bytes, game: None, ..Search::default() },
         app_version: opts.app_version.clone(),
         platform: opts.platform.clone(),
+        game: if opts.game.is_empty() { default_game() } else { opts.game.clone() },
         ip_address_lan: lan_address,
         ipv6_token: None,
     };
@@ -511,6 +523,7 @@ pub fn search_and_linger(
         search: Search { mode: 2, connect_code: encode_search_code_fullwidth(target), game: None, ..Search::default() },
         app_version: opts.app_version.clone(),
         platform: opts.platform.clone(),
+        game: if opts.game.is_empty() { default_game() } else { opts.game.clone() },
         ip_address_lan: format!("127.0.0.1:{local_port}"),
         ipv6_token: None,
     };

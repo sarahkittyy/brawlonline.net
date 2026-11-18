@@ -30,6 +30,7 @@ from typing import Any, Callable
 
 import pytest
 
+from ppharness import paths as ppharness_paths
 from ppharness import paths
 from ppharness.backend import OnlineBackend, OnlineUser
 from ppharness.client import HarnessClient, PadInput
@@ -53,7 +54,7 @@ pytestmark = [pytest.mark.dolphin, pytest.mark.server, pytest.mark.gpu]
 
 # The plugin put on each instance's SD card. PPHARNESS_PLUGIN picks another build (e.g. one frozen
 # at the game-code commit the Dolphin under test speaks PPOM with).
-PLUGIN = Path(os.environ.get("PPHARNESS_PLUGIN") or ROOT / "game-code" / "PPOnline" / "PPOnline.rel")
+PLUGIN = ppharness_paths.plugin_path()
 ARTIFACTS = ROOT / "run" / "artifacts" / "game-bridge"
 GAME_CODE_ARTIFACTS = ROOT / "run" / "artifacts" / "game-code"
 

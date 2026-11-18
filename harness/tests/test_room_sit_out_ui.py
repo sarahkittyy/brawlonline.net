@@ -25,6 +25,7 @@ import pytest
 from test_rooms_ui import (FOX, GMKIND_FOX, GMKIND_MARIO, PANEL_X, ROOT, Game, create_room,  # noqa: F401
                            css_area, hand_button, ppom_sym)
 
+import mod_adapt  # noqa: E402
 import ppom  # noqa: E402
 
 pytestmark = [pytest.mark.dolphin, pytest.mark.gpu]
@@ -49,6 +50,33 @@ def button_centre(g: Game, sym: str) -> tuple[float, float]:
     made, presses, hits, l, r, t, b = struct.unpack(">3I4f", g.c.read_mem(ppom_sym(g, sym), 0x1C))
     assert made >= 1, sym
     return (l + r) / 2, (t + b) / 2
+
+
+PPLUS_CARD_PLATES = (-21.5, 16.0, 6.0)   # the plugin's own (layout.cpp): P+'s card
+
+
+def card_plates(g: Game) -> tuple[float, float, float, bool]:
+    """The build's name plates as the plugin has them (PPOM's LAYOUT, P+'s unless the scripted
+    Dolphin wrote the build's own there as Dolphin does): P1's plate's middle, the step to the next card's,
+    half its width; and whether they are the build's own (Brawl's own card, the pencil at the
+    plate's right end) and not P+'s (the pencil left of the plate)."""
+    x0, step, half = ppom.read_layout(g.c, g.sim.b)["cardPlates"]
+    own = any(abs(a - b) > 0.01 for a, b in zip((x0, step, half), PPLUS_CARD_PLATES))
+    assert own == ("cardPlates" in ppom.layout_of(mod_adapt.MOD_FOLDER or "Project+")), (x0, step, half)
+    return x0, step, half, own
+
+
+def plate_x(g: Game, slot: int) -> float:
+    """A spot on slot `slot`'s name plate (P+'s: a little right of the card's centre)."""
+    x0, step, _half, own = card_plates(g)
+    return x0 + step * slot if own else PANEL_X[slot] + 1.5
+
+
+def pencil_x(g: Game) -> float:
+    """The local card's pencil: P+'s in the strip left of the plate, Brawl's own card's at the
+    plate's right end."""
+    x0, _step, half, own = card_plates(g)
+    return x0 + half + 1.0 if own else x0 - half - 1.5
 
 
 def backplate_frame(g: Game, area: int) -> float:
@@ -121,8 +149,9 @@ def test_sit_out_and_the_placed_coin(game: Game) -> None:
     g.shot("05-start-plays-again")
 
     # A on one's own plate (the name) sits out and back in; the pencil's backdrop below it and
-    # left of it opens the name tags (the user's, 2026-10-23: changing a tag sat them out).
-    g.hand_to(PANEL_X[0] + 1.5, PLATE_Y, tol=0.6)
+    # the pencil (P+'s: left of the plate; Brawl's own card, which Cobalt has: at its right end)
+    # open the name tags (the user's, 2026-10-23: changing a tag sat them out).
+    g.hand_to(plate_x(g, 0), PLATE_Y, tol=0.6)
     g.wait(5)
     assert hand_button(g) == BUTTON_TAGS, hex(hand_button(g))
     g.tap("A")
@@ -134,8 +163,8 @@ def test_sit_out_and_the_placed_coin(game: Game) -> None:
     assert sit_ops(g)[-1] == (0, 0) and not me.sitting_out
     hand_mode = g.u32(g.u32(g.area(0) + 0x1A8) + 0xA4)
     n = len(sit_ops(g))
-    for name, pos in (("05b-below-plate-opens-tags", (PANEL_X[0] + 1.5, BELOW_PLATE_Y)),
-                      ("05c-pencil-opens-tags", (PANEL_X[0] - 7.0, PLATE_Y))):
+    for name, pos in (("05b-below-plate-opens-tags", (plate_x(g, 0), BELOW_PLATE_Y)),
+                      ("05c-pencil-opens-tags", (pencil_x(g), PLATE_Y))):
         g.hand_to(*pos, tol=0.3)
         g.wait(5)
         assert hand_button(g) == BUTTON_TAGS, hex(hand_button(g))
@@ -151,7 +180,7 @@ def test_sit_out_and_the_placed_coin(game: Game) -> None:
 
     # The host's A on alice's plate: she sits out (grey, "SIT OUT", no state box), and back.
     alice = sim.room.members[1]
-    g.hand_to(PANEL_X[1] + 1.5, PLATE_Y, tol=0.6)
+    g.hand_to(plate_x(g, 1), PLATE_Y, tol=0.6)
     g.wait(5)
     g.tap("A")
     g.wait(40)
@@ -228,7 +257,7 @@ def test_own_game_before_its_match(game: Game) -> None:
     g.wait(5)
     g.tap("A")
     g.wait(40)
-    g.hand_to(PANEL_X[0] + 1.5, PLATE_Y, tol=0.6)
+    g.hand_to(plate_x(g, 0), PLATE_Y, tol=0.6)
     g.wait(5)
     g.tap("A")
     g.wait(40)

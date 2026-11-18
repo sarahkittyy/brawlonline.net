@@ -15,6 +15,7 @@
 #include <mu/mu_msg.h>
 #include <string.h>
 
+#include "build.h"
 #include "potato.h"
 #include "local_aspect.h"
 #include "online.h"
@@ -114,6 +115,7 @@ namespace Online {
     {
         s_origPadUpdate(padSystem);
         PPOM::g_block.debug.frames++;
+        Build::publish();
         OnlineMenu::tick();
         StageLegal::tick();
         SssPortraits::tick();

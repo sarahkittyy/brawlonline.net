@@ -71,7 +71,7 @@ def boot_qt(be: OnlineBackend, name: str, chat_key: str) -> Player:
                       config=cfg, client_timeout=60.0)
     d = inst.create()
     patch_sd.patch_image(d / "Wii" / "sd.raw",
-                         [(PLUGIN.read_bytes(), f"{patch_sd.PLUGIN_DIR}/{PLUGIN.name}")])
+                         [(PLUGIN.read_bytes(), patch_sd.plugin_sd_path(PLUGIN))])
     user.write_user_json(d)
     inst.launch()
     inst.connect()

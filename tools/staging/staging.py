@@ -1079,13 +1079,17 @@ def mac_build(args: argparse.Namespace) -> None:
     # 2. The plugin: built here from the same commit (the Mac has no PowerPC toolchain).
     plugin = SRC / "game-code" / "PPOnline" / "PPOnline.rel"
     built = json.loads((WIN / "build.json").read_text()) if (WIN / "build.json").exists() else {}
-    if built.get("sha") != sha or not plugin.exists():
+    if built.get("sha") != sha or not all(plugin.with_name(n).exists()
+                                           for n in ("PPOnline.rel", "PPOnline-pex.rel", "PPOnline-rex.rel")):
         say("building the plugin for this commit here first")
         below_normal_priority()
         prepare_worktree(sha)
         run([bash(), "./build.sh"], cwd=SRC / "game-code", log=log)
-    run([ssh_tool(cfg, "scp"), "-q", "-i", key, "-o", "BatchMode=yes", str(plugin),
-         f"{cfg['mac_user']}@{cfg['mac_host']}:code/brawlonline.net/brawl-staging/PPOnline.rel"], log=log)
+    # (its three files, one per kind of build: game-code/build.sh; stage-plugin.js takes the
+    # mods' two from beside Project+'s own)
+    for name in ("PPOnline.rel", "PPOnline-pex.rel", "PPOnline-rex.rel"):
+        run([ssh_tool(cfg, "scp"), "-q", "-i", key, "-o", "BatchMode=yes", str(plugin.with_name(name)),
+             f"{cfg['mac_user']}@{cfg['mac_host']}:code/brawlonline.net/brawl-staging/{name}"], log=log)
     rank_badges_here(log)
     badges = STAGE / "rank-badges.tar"
     with tarfile.open(badges, "w") as tar:

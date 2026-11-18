@@ -14,9 +14,21 @@ include $(TOPDIR)/lib/base_rules
 # SOURCES is a list of directories containing source code
 # INCLUDES is a list of directories containing extra header files
 #---------------------------------------------------------------------------------
-TARGET		:=	PPOnlineMain
+# VARIANT: which builds of the game the plugin is for (include/variant.h): pplus (Project+
+# itself; PPOnlineMain), pex (P+ v3.2 with BrawlEx: Project+ Ex, Cobalt; PPOnlineMain-pex) or
+# rex (an older P+ with BrawlEx and its own menus: REX; PPOnlineMain-rex). Each has its own
+# objects (build, build-pex, build-rex); game-code/build.sh makes all three.
+VARIANT		?=	pplus
+ifeq ($(filter $(VARIANT),pplus pex rex),)
+$(error VARIANT is pplus, pex or rex, not "$(VARIANT)")
+endif
+VSUFFIX		:=	$(if $(filter pplus,$(VARIANT)),,-$(VARIANT))
+VDEFINE_pplus	:=
+VDEFINE_pex	:=	-DPPON_VARIANT_PEX
+VDEFINE_rex	:=	-DPPON_VARIANT_REX
+TARGET		:=	PPOnlineMain$(VSUFFIX)
 RELID		:=  20560
-BUILD		:=	build
+BUILD		:=	build$(VSUFFIX)
 SOURCES		:=	source $(wildcard source/*) ../lib/BrawlHeaders/PowerPC_EABI_Support/Runtime/Src/
 INCLUDES	:=	include
 
@@ -34,6 +46,7 @@ CCFLAGS		:= -target powerpc-gekko-ibm-kuribo-eabi -fuse-ld=lld \
 			   -u _prolog -u _epilog -u _unresolved
 # No -mlongcall (until 2026-11-03): calls inside the plugin are plain `bl`, the game's functions
 # called by name go through source/dol_calls.cpp's stubs (about 18 KB less).
+CCFLAGS		+= $(VDEFINE_$(VARIANT))
 CXXFLAGS	:= $(CCFLAGS)
 LDFLAGS		:= -T $(TOPDIR)/test.ld --unresolved-symbols=ignore-all -e _prolog -r
 
@@ -182,6 +195,10 @@ sss_cursors.o sss_portraits.o labels.o: CXXFLAGS += -Oz
 potato.o: CXXFLAGS += -Oz
 # Any screen shape (2026-11-13): the same.
 local_aspect.o: CXXFLAGS += -Oz
+# The build's own tables (2026-11-14): -Oz from the start, for the same heap room.
+build.o: CXXFLAGS += -Oz
+# What only some kinds of build have (source/variant, include/variant.h; 2026-11-17): the same.
+brawlex.o old_stage_select.o models_by_name.o other_fonts.o rebuild_rules.o restore_online.o word_buttons.o: CXXFLAGS += -Oz
 # The waiting room (2026-11-03): -O0 until a 2v2 party's pair room grew the plugin about 3.5 KB and
 # the biggest costume no longer loaded (test_online_big_costumes.py); at -Oz the plugin is back to
 # its size before (test_waiting_room.py, test_twos_pair_room.py).

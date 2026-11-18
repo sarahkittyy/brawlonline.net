@@ -24,7 +24,7 @@ from test_online_game import Game, _boot, _both, _peer_shown, online_set, ppom
 from test_online_ranked import (SSS, STARTERS, _both_on, _locks, _ranked, _search_ranked, _strike,
                                 _wait, _wait_view, backend)  # noqa: F401
 
-pytestmark = [pytest.mark.dolphin, pytest.mark.server, pytest.mark.gpu]
+pytestmark = [pytest.mark.dolphin, pytest.mark.server, pytest.mark.gpu, pytest.mark.pplus_only("Ranked")]
 
 
 @pytest.mark.slow

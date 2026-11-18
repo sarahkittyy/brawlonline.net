@@ -175,10 +175,21 @@ struct SssCursorValues
 };
 std::optional<SssCursorValues> ParseSssCursor(const picojson::value* v, u8 max_page, s16 range);
 
-// gmCharacterKind values the online character select can lock in (docs/brawl-memory-map.md):
-// the playable kinds 0x00-0x11 and 0x13-0x2B, and P+'s Roy 0x32, Mewtwo 0x33 and Knuckles 0x35.
-// Not P+'s hold-shield forms 0x2C (Giga Bowser) and 0x2D (Wario-Man): they are not played online.
+// gmCharacterKind values the online character select can lock in (docs/brawl-memory-map.md).
+// The running game says which (SetBuildCharKinds): its plugin reads the build's own character
+// select table, so a mod of P+ with more characters (Cobalt: ids up to 0x7F) needs no list here.
+// Without that (no game yet, or a plugin from before 2026-11-14) it is P+ v3.2's: the playable
+// kinds 0x00-0x11 and 0x13-0x2B, and P+'s Roy 0x32, Mewtwo 0x33 and Knuckles 0x35.
+// Never the Final Smash forms 0x2C (Giga Bowser) and 0x2D (Wario-Man), whatever the game says:
+// they are not played online.
 bool ValidCharKind(u32 kind);
+// The game's list (the plugin's PPOM BUILD, ppom.h Build.charKinds): bit (kind & 7) of byte
+// (kind >> 3). GameBridge sets it when the game wrote it and clears it when the game is gone.
+// Any thread may ask ValidCharKind meanwhile.
+constexpr size_t BUILD_CHAR_KINDS_SIZE = 32;
+void SetBuildCharKinds(const std::array<u8, BUILD_CHAR_KINDS_SIZE>& kinds);
+void ClearBuildCharKinds();
+bool HasBuildCharKinds();
 // Colour numbers: the character select's own bound (game-code online_menu.cpp selectedCostume),
 // with at most one of P+'s alt costume bits above it (ppom.h COSTUME_ALT_Z 0x40 / COSTUME_ALT_R
 // 0x80: Z or R held on the START that locked in).
@@ -208,11 +219,15 @@ constexpr std::array<u8, 3> GONE_MARK{'G', 'O', 'N'};
 void SetGoneMarker(u8* pad);
 bool TakeGoneMarker(u8* pad);
 void ClearGoneMarkerBytes(u8* pad);
-// srStageKind values a versus match can be played on (0x01-0x7F without menus, results and
-// single-player modes; P+ v3.2's stage select uses 0x01-0x33, 0x37 and 0x40-0x52). The game
-// plugin checks the exact list against P+'s stage select tables (game-code online_match.cpp);
-// this rejects what is never a stage.
+// srStageKind values a versus match can be played on: never the menus, results and single-player
+// modes; of the rest, those the running game's stage select offers when its plugin said
+// (SetBuildStageKinds: P+ v3.2's 0x01-0x33, 0x37 and 0x40-0x52, REX's up to 0x8A), else
+// 0x01-0x7F. The game plugin checks the exact list against its stage select's tables too
+// (game-code online_match.cpp).
 bool ValidStageKind(u32 kind);
+constexpr size_t BUILD_STAGE_KINDS_SIZE = 32;
+void SetBuildStageKinds(const std::array<u8, BUILD_STAGE_KINDS_SIZE>& kinds);
+void ClearBuildStageKinds();
 
 // The host's gmGlobalModeMelee init block (0x20 bytes): both machines build it from the same
 // SESSION, and only the stage variant (+0x14, Smashville's lighting from the console clock) may
@@ -319,7 +334,9 @@ constexpr size_t PX_HP = 0, PX_ROSTER_COUNT = 2, PX_ROSTER = 8, PX_ENTRY = 4;
 // 0x3E). Up to 99, the files' two digits.
 constexpr u8 MAX_ROSTER_COLOUR = 99;
 bool ValidRosterColour(u8 colour);
-constexpr u8 MAX_CSS_ID = 0x3F;
+// A character select id (MuSelchkind), a byte: a build's slot table has up to 0x100 slots (REX's;
+// Cobalt's 0x80, P+ v3.2 uses 0x00-0x38), 0xFF never one (the tables' "none").
+constexpr u8 MAX_CSS_ID = 0xFE;
 template <size_t N>
 void SanitizePortExtra(std::array<u8, N>& px)
 {

@@ -27,6 +27,7 @@ from test_online_game import NOTAP_TAG, Game, _boot, _both, _find_logged, _peer_
 from test_online_ranked import STARTERS, _ranked, _strike_to, _wait_view
 from test_online_alt_costumes import ALT_R, ALT_Z, COSTUME_ALT_R, COSTUME_ALT_Z, _alt_words, _check_match, _mm_costumes, _stale_words
 
+import mod_adapt  # noqa: E402
 import patch_sd  # noqa: E402  (tools/sdcard, on the path from test_online_game)
 
 pytestmark = [pytest.mark.dolphin, pytest.mark.server, pytest.mark.gpu]
@@ -406,6 +407,7 @@ def test_waiting_room_speed_check(backend: OnlineBackend, dolphin: Callable[...,
 
 
 @pytest.mark.slow
+@pytest.mark.pplus_only("Ranked")
 def test_ranked_game_1_from_the_waiting_room(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
                                              gpu_backend: str) -> None:
     """Ranked waits in the room too; once connected both rooms end on the CSS, the game setup
@@ -448,6 +450,7 @@ def test_ranked_game_1_from_the_waiting_room(backend: OnlineBackend, dolphin: Ca
 
 
 @pytest.mark.slow
+@pytest.mark.pplus_only("Ranked")
 def test_ranked_cancel_before_the_stage_select(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
                                                gpu_backend: str) -> None:
     """Bug report #37 (2026-10-16): a ranked search cancelled in the room just as its match was
@@ -495,6 +498,7 @@ def _room_alt(g: Game, want: int, shot: str) -> None:
 
 
 @pytest.mark.slow
+@pytest.mark.needs_files("pf/fighter/fox/FitFoxAltZ.pac", "pf/fighter/fox/FitFoxAltR.pac")
 def test_waiting_room_alt_costumes(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
                                    gpu_backend: str) -> None:
     """Bug report #38 (2026-10-16): after a match in a Z-alt the room's fighter wore the Z-alt on
@@ -570,6 +574,7 @@ def test_waiting_room_tag_controls(backend: OnlineBackend, dolphin: Callable[...
 
 
 @pytest.mark.slow
+@pytest.mark.pplus_only("Ranked")
 def test_ranked_game_1_alt_costumes(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
                                     gpu_backend: str) -> None:
     """Bug report #38: Ranked's game 1 plays the alts held on its START (A Z, B R), on both
@@ -603,3 +608,31 @@ def test_ranked_game_1_alt_costumes(backend: OnlineBackend, dolphin: Callable[..
     _check_match(a, b, {port_a: ALT_Z, port_b: ALT_R})
     for g in (a, b):
         _logs_clean(g)
+
+
+@pytest.mark.mods_only
+def test_a_mods_ranked_search_is_refused_by_name(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
+                                                 gpu_backend: str) -> None:
+    """Ranked is Project+'s alone (docs/design/pplus-mods.md section 3). A mod's game has P+'s
+    menus, so its Ranked button is there: the search ends at once with mm's line, which names the
+    build, shown on the CSS as any search error, and B clears it."""
+    test = "waiting-room-mod-ranked"
+    u = backend.create_user("rafa", "RAFA")
+    g = _boot(dolphin, "wr-mr", backend, u, gpu_backend, test, "record")
+    g.to_main_menu()
+    g.to_online_page()
+    g.to_css("ranked")
+    n = g.finds()
+    g.press_until("START", lambda: g.finds() > n, "FIND_OPPONENT")
+    st = _wait(lambda: (lambda s: s if s["state"] == "error" else None)(g.c.mm_status()), 20,
+               "the Ranked search refused")
+    assert st["error"] == f"Ranked isn't on {mod_adapt.game_name()} yet.", st
+    _wait(lambda: g.scene() == "scSelctCharacter", 30, "the CSS with the error")
+    g.steps("wait 40")
+    g.shot("01-ranked-refused")
+    assert g.locked()
+    g.press_until("B", lambda: g.c.mm_status()["state"] == "idle", "the cleanup")
+    _wait(lambda: not g.locked(), 5, "the CSS to unlock")
+    g.steps("wait 20")
+    g.shot("02-after-clear")
+

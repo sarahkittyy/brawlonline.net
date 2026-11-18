@@ -20,7 +20,7 @@ from test_online_game import Game, _boot, _both, _peer_shown, online_set, ppom
 from test_online_ranked import (SSS, STARTERS, _both_on, _locks, _ranked, _search_ranked, _strike,  # noqa: F401
                                 _view, _wait_view, backend)
 
-pytestmark = [pytest.mark.dolphin, pytest.mark.server, pytest.mark.gpu]
+pytestmark = [pytest.mark.dolphin, pytest.mark.server, pytest.mark.gpu, pytest.mark.pplus_only("Ranked")]
 
 BUTTONS = ["A", "B", "X", "Y", "Z", "L", "R", "START"]
 

@@ -37,13 +37,22 @@
 // BUTTON_SIT_OUT), so the hand's +0xAC, its look and the highlight work as for ITEM; and
 // buttonProcInAllArea's dispatch (text+0x7AF0) takes them as ITEM's press is taken: noted for
 // pressed(), then the function's exit (A on them does not reach the coin).
+//
+// A CSS without Brawl's online art (REX 0.5) has no model or label to make them from: there the
+// room's four buttons are words in the bar (word_buttons.h), which this asks first: the hit test
+// and the tests' counters go through it (made: the words shown), and nothing is made here.
 #include <OS/OSCache.h>
 #include <gf/gf_heap_manager.h>
 #include <memory.h>
 #include <string.h>
+#include "build.h"
 #include "labels.h"
 #include "online_menu.h"
+#include "ppom.h"
 #include "rules_button.h"
+#include "room_rules.h"
+#include "rules_rebuild.h"
+#include "word_buttons.h"
 
 // Tests (harness/tests/test_rooms_ui.py test_rules_button, test_room_sit_out_ui.py), read through
 // PPOnlineMain.map.
@@ -58,6 +67,9 @@ struct ButtonDebug {
 // FFA (STAGE), both one button's width to the left.
 extern "C" ButtonDebug g_rulesButton = {0, 0, 0, {0, 0, 0, 0}, {-5.3f, 0.0f, 0.0f}};
 extern "C" ButtonDebug g_sitOutButton = {0, 0, 0, {0, 0, 0, 0}, {-5.3f, -2.5f, 0.0f}};
+// The room's PUBLIC and FFA buttons where a hand finds them (left, right, top, bottom in hand
+// units; ITEM's and STAGE's colL / colR, or the text buttons' rects), for tests.
+extern "C" __attribute__((used)) float g_headerRects[2][4] = {{0, 0, 0, 0}, {0, 0, 0, 0}};
 
 namespace {
 
@@ -66,7 +78,10 @@ namespace {
     // Hand button numbers Brawl does not use: its table has 2-0x1A, the panels 0x1B-0x26.
     const int BUTTON_RULES = 0x30, BUTTON_SIT_OUT = 0x31;
     const int BRAWL_RULES = 4;                // Brawl's own (buttonProcInAllArea: openRules, text+0x7C34)
-    const u32 ITEM_OBJ = 0x420;               // muSelCharTask: MenSelchrState0005 (ITEM)
+    // muSelCharTask's ITEM and STAGE (MenSelchrState0005 / 0006: P+ v3.2's +0x420 / +0x424, found by
+    // name as their offsets differ between builds, Build::cssModel).
+    u8* itemObj(u8* task) { return Build::cssModel(task, Build::CSS_ITEM); }
+    u8* stageObj(u8* task) { return Build::cssModel(task, Build::CSS_STAGE); }
     const char* const MODEL = "MenSelchrState0005_TopN";
     const char* const ANIM = "MenSelchrState0005_TopN__0";
     const char* const LABEL_TEX = "MenSelchrWifi00Button11";
@@ -214,7 +229,7 @@ namespace {
     // ------------------------------------------------------------------------------------------
     u8* make(Button& b, u8* task)
     {
-        u8* item = *(u8**)(task + ITEM_OBJ);
+        u8* item = itemObj(task);
         if (!isPtr((u32)item)) return NULL;
         u8* itemMdl = *(u8**)(item + 8);
         if (!isPtr((u32)itemMdl) || *(u32*)itemMdl != 0x4D444C30 /* MDL0 */) return NULL;
@@ -293,7 +308,7 @@ namespace {
 
     bool live(const Button& b, u8* task)
     {
-        return b.obj && task == b.task && b.show && b.enabled && *(u32*)(task + TASK_RULES_OPEN) == 0;
+        return (b.obj || WordButtons::on(task)) && task == b.task && b.show && b.enabled && *(u32*)(task + TASK_RULES_OPEN) == 0;
     }
 
     void tickButton(Button& b, bool show, bool enabled, bool state)
@@ -307,7 +322,18 @@ namespace {
         b.show = show;
         b.enabled = enabled;
         b.state = state;
+        const int word = b.id == BUTTON_RULES ? WordButtons::RULES : WordButtons::SIT_OUT;
+        WordButtons::button(word, task, show, enabled, state, &b.dbg->made);
         if (!task) return;
+        if (WordButtons::on(task)) {
+            // (a word in the bar, WordButtons::tick; the rect and the counters as the model's)
+            const float* r = WordButtons::rect(word);
+            for (int k = 0; k < 4; k++) b.dbg->rect[k] = r[k];
+            bool on = show && live(b, task) && handOnIt(task, b.id);
+            if (on) b.dbg->hits++;
+            if (!show) b.pressed = false;
+            return;
+        }
         if (!b.obj && show) b.obj = make(b, task);
         if (!b.obj) return;
         u8* scn = *(u8**)(b.obj + 0xC);
@@ -321,7 +347,7 @@ namespace {
             return;
         }
         place(b);
-        u8* item = *(u8**)(task + ITEM_OBJ);
+        u8* item = itemObj(task);
         if (isPtr((u32)item)) pointLabel(b, *(u8**)(item + 8));
         GET_RECT(b.obj, b.dbg->rect, "colL", "colR");
         bool on = live(b, task) && handOnIt(task, b.id);
@@ -346,6 +372,12 @@ namespace {
         // (its STAGE CHOICE row STAMINA TYPE, skipped by the cursor), not RoomRules::open's
         // (Sarah's board, 2026-10-29). The room has one RULES button: ours.
         const Button& rules = s_buttons[0];
+        if (WordButtons::on(task)) {
+            // The words are drawn over whatever is under them, so they are hit first.
+            int word = WordButtons::at(task, pos, rect);
+            if (word) return word;
+            return hit == BRAWL_RULES && live(rules, task) ? 0 : hit;
+        }
         if (hit == BRAWL_RULES && rules.obj && rules.task == task && rules.show) hit = 0;
         if (hit) return hit;
         for (int i = 0; i < 2; i++) {
@@ -365,7 +397,9 @@ namespace {
     // slot's MuObject: vtable at +0x5C, entry +8, with 1 = delete).
     void* hkTaskDtor(u8* task, int flags)
     {
+        WordButtons::taskGone(task);   // (the words are the CSS's)
         RoomCss::taskGone(task);   // (stamina's HP boxes: the areas' own STOCKS boxes they stood in for)
+        RulesRebuild::taskGone(task);   // (the rules menu made for a CSS without one)
         for (int i = 0; i < 2; i++) {
             Button& b = s_buttons[i];
             if (task && task == b.task && b.obj) {
@@ -439,11 +473,35 @@ namespace RulesButton {
     {
         api->syReplaceFuncRel(0xDC78, reinterpret_cast<void*>(hkHit), (void**)&s_origHit, 10 /* sora_menu_sel_char */);
         api->syReplaceFuncRel(0x434, reinterpret_cast<void*>(hkTaskDtor), (void**)&s_origDtor, 10);
+        WordButtons::install(api);
         api->sySimpleHookRel(0x7AF0, reinterpret_cast<void*>(rulesButtonPress), 10);
     }
 }
 
+namespace {
+    // For tests, on every room CSS: where PUBLIC and FFA are.
+    void headerRects()
+    {
+        u8* task = cssTask();
+        if (!task) return;
+        for (int b = 0; b < 2; b++) {
+            if (WordButtons::on(task)) {
+                const float* r = WordButtons::rect(b ? WordButtons::FFA : WordButtons::PUBLIC);
+                for (int k = 0; k < 4; k++) g_headerRects[b][k] = r[k];
+                continue;
+            }
+            u8* obj = b ? stageObj(task) : itemObj(task);
+            if (isPtr((u32)obj)) GET_RECT(obj, g_headerRects[b], "colL", "colR");
+        }
+    }
+}
+
 namespace SitOutButton {
-    void tick(bool show, bool enabled, bool sittingOut) { tickButton(s_buttons[1], show, enabled, sittingOut); }
+    void tick(bool show, bool enabled, bool sittingOut)
+    {
+        tickButton(s_buttons[1], show, enabled, sittingOut);
+        headerRects();
+        WordButtons::tick();
+    }
     bool pressed() { return takePressed(s_buttons[1]); }
 }

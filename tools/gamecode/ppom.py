@@ -333,6 +333,96 @@ L_READY_SECONDS, L_READY_PORTS = 0xF1, 0xF2
 L_ASPECT = 0xF4
 
 
+# BUILD (ppom.h Build; docs/game-code.md, "The build's own tables"): what the build of the game can
+# produce, game-written. The header names it at +0x18 (offset) / +0x1A (size), words that were
+# reserved: 0 in a plugin from before 2026-11-14.
+H_BUILD_OFF = 0x18
+
+
+def read_build(c: HarnessClient, b: Block) -> dict | None:
+    """The game's own lists: {"seq", "char_kinds": [gmCharacterKind, ...], "slots",
+    "stage_kinds": [srStageKind, ...] (None from a BUILD without them, before 0x48 bytes)}, or
+    None when the plugin has no BUILD."""
+    off, size = struct.unpack(">HH", c.read_mem(b.addr + H_BUILD_OFF, 4))
+    if off < 0x24 or size < 0x28 or off + size > b.size:
+        return None
+    d = c.read_mem(b.addr + off, min(size, 0x48))
+    kinds = [k for k in range(0x100) if d[4 + (k >> 3)] & (1 << (k & 7))]
+    stages = [k for k in range(0x100) if d[0x28 + (k >> 3)] & (1 << (k & 7))] if len(d) >= 0x48 else None
+    out = {"seq": struct.unpack_from(">I", d, 0)[0], "char_kinds": kinds,
+           "slots": struct.unpack_from(">H", d, 0x24)[0], "stage_kinds": stages}
+    if size >= 0x4C:
+        # The build's profile (game-code build.h Build::profileWord).
+        word = struct.unpack(">I", c.read_mem(b.addr + off + 0x48, 4))[0]
+        out["profile"] = {"stage_design": ("none", "pplus-old", "pplus", "?")[word & 3],
+                          "alt_costumes": ("none", "pplus", "hidden-sets", "?")[(word >> 2) & 3],
+                          "code_menu": bool(word & 0x10), "stage_alternates": bool(word & 0x20),
+                          "card_folder": bool(word & 0x40), "slot_table": bool(word & 0x80),
+                          "plugin": ("pplus", "pex", "rex", "?")[(word >> 16) & 3],
+                          "missing": [n for bit, n in ((0x100, "slot table"), (0x200, "stage select"),
+                                                       (0x400, "card folder"), (0x800, "plugin"))
+                                      if word & bit]}
+    return out
+
+
+# LAYOUT (ppom.h Layout): where the plugin's own things go on the build's screens, for a build
+# whose menu art is not P+'s. Dolphin writes it from mm's hello-resp (`layout`, the build's entry
+# of server/config/games.json). Named by the header's words at 0x1C (offset, size); the groups
+# in its order: (name, the `set` bit, the index of its first value, how many).
+H_LAYOUT_OFF = 0x1C
+LAYOUT_GROUPS = (("sssLine", 1, 0, 5), ("cardPlates", 2, 5, 3), ("cssBar", 4, 8, 14), ("cssButtons", 8, 22, 28))
+LAYOUT_VALUES = 50
+
+
+def layout_of(folder: str) -> dict:
+    """The `layout` of the build in card folder `folder` ("Cobalt") in server/config/games.json,
+    {} for a build with P+'s art (or none listed)."""
+    import json
+    games = json.loads((Path(__file__).resolve().parents[2] / "server" / "config" / "games.json").read_text())
+    g = next((g for g in games["games"] if g["folder"] == folder), {})
+    return g.get("layout") or {}
+
+
+def layout_section(c: HarnessClient, b: Block) -> int:
+    """The address of the plugin's LAYOUT, 0 in a plugin without it."""
+    off, size = struct.unpack(">HH", c.read_mem(b.addr + H_LAYOUT_OFF, 4))
+    return b.addr + off if off >= 0x24 and size >= 8 + 4 * LAYOUT_VALUES and off + size <= b.size else 0
+
+
+def write_layout(c: HarnessClient, b: Block, layout: dict, seq: int = 1) -> bool:
+    """A build's layout into the plugin's LAYOUT, as Dolphin writes it (GameBridge PutLayout): the
+    groups the entry has over the plugin's own (P+'s), then which and `seq`."""
+    at = layout_section(c, b)
+    if not at:
+        return False
+    bits = 0
+    for name, bit, first, count in LAYOUT_GROUPS:
+        group = layout.get(name)
+        if group is None:
+            continue
+        flat = [x for row in group for x in row] if name == "cssButtons" else list(group)
+        assert len(flat) == count, (name, len(flat))
+        c.write_mem(at + 8 + 4 * first, struct.pack(f">{count}f", *flat))
+        bits |= bit
+    if bits:
+        old = struct.unpack(">I", c.read_mem(at + 4, 4))[0]
+        c.write_mem(at, struct.pack(">II", seq, old | bits))
+    return True
+
+
+def read_layout(c: HarnessClient, b: Block) -> dict | None:
+    """The plugin's LAYOUT: {"seq", "set": the groups Dolphin wrote, and each group's values as
+    the plugin places by them (P+'s where Dolphin wrote none)}; None in a plugin without it."""
+    at = layout_section(c, b)
+    if not at:
+        return None
+    seq, bits, *values = struct.unpack(f">II{LAYOUT_VALUES}f", c.read_mem(at, 8 + 4 * LAYOUT_VALUES))
+    out: dict = {"seq": seq, "set": [name for name, bit, _, _ in LAYOUT_GROUPS if bits & bit]}
+    for name, _bit, first, count in LAYOUT_GROUPS:
+        out[name] = values[first:first + count]
+    return out
+
+
 def potato_state(c: HarnessClient, b: Block) -> dict:
     """Potato mode as this machine runs it (docs/game-code.md, Potato mode), read in a match:
     LOCAL.potato, the scene root's shadow bit (g_gfSceneRoot+0x464 & 0x40) and the stage pieces'

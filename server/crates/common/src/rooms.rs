@@ -134,9 +134,15 @@ pub struct Hello {
     /// gets [`RoomState::pair_room`].
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub pair_room: bool,
+    /// The build of the game this connection's Dolphin runs (as a ticket's `game`): its rooms
+    /// take only players of that build. Empty from builds older than the field: P+.
+    #[serde(default, skip_serializing_if = "String::is_empty", deserialize_with = "string_or_empty")]
+    pub game: String,
 }
 
-fn string_or_empty<'de, D: serde::Deserializer<'de>>(d: D) -> Result<String, D::Error> {
+/// A string field that reads anything else as empty (a malformed value is ignored, never a reason
+/// to refuse the message): `hello`'s `chatKey` and `game`, a ticket's `game`.
+pub(crate) fn string_or_empty<'de, D: serde::Deserializer<'de>>(d: D) -> Result<String, D::Error> {
     Ok(match serde_json::Value::deserialize(d)? {
         serde_json::Value::String(s) => s,
         _ => String::new(),
@@ -871,6 +877,42 @@ pub struct HelloResp {
     /// older mm answers an unknown message with a `room-error`, which the game shows).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub game_alive: bool,
+    /// Where the game code's own things go on the client's build's screens (mm's games table,
+    /// `layout`): left out for a build with P+'s menu art, and Dolphin passes it on to the game.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layout: Option<Layout>,
+}
+
+/// A build's places on its screens, for a build whose menu art is not P+'s
+/// (`docs/design/pplus-mods.md` section 3; the game code's `layout.h` says each number). Each
+/// group is left out where the build's art is P+'s there.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Layout {
+    /// The stage select's turn line: its window's x1, y1, x2, y2 and its scale.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sss_line: Option<[f32; 5]>,
+    /// A room's cards' name plates: P1's plate's middle, the step to the next card's, half its width.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub card_plates: Option<[f32; 3]>,
+    /// The character select's bar: the status line, the own code, the room's lines, the text size.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub css_bar: Option<[f32; 14]>,
+    /// The room's buttons as words (RULES, PUBLIC, SIT OUT, FFA), on a character select without
+    /// Brawl's online art: per button the window's x1, x2, y and the hand's left, right, top, bottom.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub css_buttons: Option<[[f32; 7]; 4]>,
+}
+
+impl Layout {
+    /// Every number finite and within any screen's units.
+    pub fn is_sane(&self) -> bool {
+        let ok = |v: &[f32]| v.iter().all(|x| x.is_finite() && x.abs() <= 10000.0);
+        self.sss_line.as_ref().map_or(true, |v| ok(v))
+            && self.card_plates.as_ref().map_or(true, |v| ok(v))
+            && self.css_bar.as_ref().map_or(true, |v| ok(v))
+            && self.css_buttons.as_ref().map_or(true, |rows| rows.iter().all(|r| ok(r)))
+    }
 }
 
 /// One public room in the launcher's list.
@@ -920,6 +962,13 @@ pub struct PublicRoom {
     /// ([`MmStatus::friend_rooms`]).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub friends: bool,
+    /// The build of the game the room plays, when it is not P+ (`docs/design/pplus-mods.md` §3):
+    /// its id in mm's games table (`cobalt-1.34`) and its name. Only players of that build can
+    /// join. Absent for P+ and from an older mm.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub game: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub game_name: Option<String>,
 }
 
 /// What mm publishes for the launcher (`GET /status` on mm's local status listener, served to
@@ -1344,7 +1393,9 @@ mod tests {
             chat_key: String::new(),
             game_alive: false,
             pair_room: false,
+            game: String::new(),
         };
+        assert!(serde_json::to_value(&hello).unwrap().get("game").is_none());
         assert!(serde_json::to_value(&hello).unwrap().get("chatKey").is_none());
         assert!(serde_json::to_value(&hello).unwrap().get("gameAlive").is_none());
         let mut v = base.clone();

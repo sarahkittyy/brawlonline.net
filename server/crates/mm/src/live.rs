@@ -278,6 +278,8 @@ pub struct RestoredMatch {
     pub room: Option<String>,
     /// How long ago it was made.
     pub age: Duration,
+    /// The build of the game it is played on (`mm_matches.game`: empty for P+).
+    pub game: String,
 }
 
 /// [`LiveBook::match_progress`].
@@ -307,6 +309,10 @@ struct MatchInfo {
     /// 2v2: who queued together (`MatchRecord::pairs`, in `players` order); zeros otherwise and
     /// for a match read back after a restart.
     pairs: [u8; 4],
+    /// Played on a mod of P+ ([`MatchRecord::game`] is not empty): its stream is never shown to
+    /// spectators, whose Dolphin plays streams on P+'s card (a mod's characters and stages are
+    /// not there).
+    mods_game: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -748,6 +754,7 @@ impl LiveBook {
                 made: now,
                 stream,
                 pairs: m.pairs,
+                mods_game: !m.game.is_empty(),
             },
         );
     }
@@ -794,6 +801,7 @@ impl LiveBook {
                 made,
                 stream: String::new(),
                 pairs: [0; 4],
+                mods_game: !r.game.is_empty(),
             },
         );
     }
@@ -1018,8 +1026,10 @@ impl LiveBook {
         if game.match_id != o.match_id {
             return Err(errors::NOT_YOUR_MATCH);
         }
-        // Spectators may see the stream once a player of it lets others watch.
-        if o.listed && self.cfg.mode == SpectateMode::On {
+        // Spectators may see the stream once a player of it lets others watch: a P+ match's only
+        // (a mod's stays hidden, as a stream kept for the server's record).
+        let mods_game = self.matches.get(&o.match_id).is_some_and(|m| m.mods_game);
+        if o.listed && !mods_game && self.cfg.mode == SpectateMode::On {
             let stream = game.stream.clone();
             if let Some(b) = self.streams.get_mut(&stream).filter(|b| !b.public) {
                 b.public = true;
@@ -2154,6 +2164,7 @@ mod tests {
                 stages: vec![],
                 region: String::new(),
                 room: None,
+                game: String::new(),
                 pairs: [0; 4],
             };
             let names = HashMap::from([(a, ("alice".into(), "ALI#1".into())), (b, ("bob".into(), "BOB#2".into()))]);
@@ -2328,6 +2339,67 @@ mod tests {
         assert_eq!(role(&t.offer(B, b, 1, 0), B).unwrap()["role"], "none");
     }
 
+    /// A match on a mod of P+ (`MatchRecord::game`): streamed between its players' games as any
+    /// other, never listed for spectators, whose Dolphin would play it on P+'s card. A match of
+    /// such a build read back after a restart too.
+    #[test]
+    fn a_mods_match_is_never_listed_for_spectators() {
+        let (a, b) = (Uuid::new_v4(), Uuid::new_v4());
+        let names = || HashMap::from([(a, ("alice".into(), "ALI#1".into())), (b, ("bob".into(), "BOB#2".into()))]);
+        for restored in [false, true] {
+            let mut book = LiveBook::new(LiveConfig { mode: SpectateMode::On, ..Default::default() });
+            let now = Instant::now();
+            if restored {
+                let r = RestoredMatch {
+                    match_id: MATCH.into(),
+                    mode: Mode::Unranked,
+                    players: vec![a, b],
+                    host: a,
+                    room: None,
+                    age: Duration::from_secs(60),
+                    game: "cobalt-1.34".into(),
+                };
+                book.restore_match(now, r, names(), &mut vec![]);
+            } else {
+                let rec = MatchRecord {
+                    match_id: MATCH.into(),
+                    mode: Mode::Unranked,
+                    players: vec![a, b],
+                    host: a,
+                    stages: vec![],
+                    region: String::new(),
+                    room: None,
+                    game: "cobalt-1.34".into(),
+                    pairs: [0; 4],
+                };
+                book.register_match(now, &rec, names(), &mut vec![]);
+            }
+            let mut t = T { book, now, a, b };
+            // Both let others watch.
+            t.offer_with(A, a, 1, 0, true);
+            let out = t.offer_with(B, b, 1, 1, true);
+            let ra = role(&out, A).unwrap();
+            assert_eq!(ra["role"], "primary", "restored {restored}");
+            let slot = ra["slot"].as_u64().unwrap() as u32;
+            let info = t.info(1);
+            t.send_chunk(A, slot, 0, &info);
+            t.send_chunk(A, slot, 1, &encode_chunk(b"SETP", b"{}", false));
+            t.send_chunk(A, slot, 2, &encode_chunk(b"FRMS", &frms(120, 60, 1), true));
+            let id = t.book.matches[MATCH].stream.clone();
+            assert!(t.book.store.entries().is_empty(), "restored {restored}");
+            assert!(t.book.store.read(&id, &mut Cursor::default()).is_none(), "restored {restored}");
+        }
+        // The same on P+ is listed.
+        let mut t = T::with_match_mode(SpectateMode::On, Mode::Unranked);
+        let (a, b) = (t.a, t.b);
+        t.offer_with(A, a, 1, 0, true);
+        let out = t.offer_with(B, b, 1, 1, true);
+        let slot = role(&out, A).unwrap()["slot"].as_u64().unwrap() as u32;
+        let info = t.info(1);
+        t.send_chunk(A, slot, 0, &info);
+        assert_eq!(t.book.store.entries().len(), 1);
+    }
+
     fn presence(out: &[Output]) -> Vec<(Uuid, bool)> {
         out.iter()
             .filter_map(|o| match o {
@@ -2361,6 +2433,7 @@ mod tests {
             stages: vec![],
             region: String::new(),
             room: None,
+            game: String::new(),
             pairs: [0; 4],
         };
         // Only A has an online connection when the set is made.
@@ -2429,6 +2502,7 @@ mod tests {
             host: players[0],
             room: room.map(str::to_string),
             age: Duration::from_secs(age),
+            game: String::new(),
         };
         // A fresh book: mm restarted. Only A's game is online again when the matches are read.
         let mut t = T::new(SpectateMode::On);
@@ -3384,6 +3458,7 @@ mod tests {
             host: t.a,
             stages: vec![],
             region: String::new(),
+            game: String::new(),
             room: Some(common::db::MatchRoom {
                 code: "TLSZ".into(),
                 mode: "1v1".into(),

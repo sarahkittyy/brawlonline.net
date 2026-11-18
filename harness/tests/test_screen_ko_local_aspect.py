@@ -33,6 +33,7 @@ from typing import Any, Callable, Dict, List
 
 import pytest
 
+from ppharness import paths as ppharness_paths
 from ppharness import brawl as B
 from ppharness import paths
 from ppharness.instance import DolphinInstance, InstanceConfig
@@ -45,7 +46,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from test_screen_ko_aspect import STAR_KO_BRANCH, _top_kos  # noqa: E402
 
-PLUGIN = Path(os.environ.get("PPHARNESS_PLUGIN") or ROOT / "game-code" / "PPOnline" / "PPOnline.rel")
+PLUGIN = ppharness_paths.plugin_path()
 ARTIFACTS = ROOT / "run" / "artifacts" / "local-aspect"
 
 CAMERA_MANAGER_PTR = 0x8059FFC0   # gfCameraManager: six cameras of 0x134 (aspect at +0xE4), its own at +0x738
