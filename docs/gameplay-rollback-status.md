@@ -1603,6 +1603,29 @@ Depth-1 rollbacks gain nothing (their only re-run pass is the one that is seen).
 
 **Tests.** gtests `FixLightPresses.APadPlayingAnotherPortTakesThatPortsLightPresses` and `HostPadReadTest.ALocalPadPlayingAnotherPortGetsThatPortsLightPresses` (P+'s hooks in place, pad 0 on Shield, pad 1 R on Jump, pad 0 playing port 2: a light R press is in the decode and the pass, which still match; swapped layouts: a light press goes, a digital one stays), with the other HostPadRead and HostDecodePadSlot tests (13 pass; a scratch tests.exe from build/v6's objects). Not tested: a two-instance session, a real controller, macOS / Linux.
 
+## Display lists are preprocessed once (2026-11-17)
+
+**Why.** With the deterministic GPU thread (gameplay sessions, replays and spectating, whole-machine sessions) the CPU thread preprocesses every command before the GPU thread runs it, so that what the game can see of the GPU (PE tokens, draw done, the GPU's time) happens at the same emulated time on every machine. For a display list that is two jobs: copy the list into the aux FIFO (the GPU thread runs the copy, since guest memory can change before it gets there) and parse every command in it. A P+ pass that draws calls 611 display lists, 320 KiB (Final Destination, Mario and Marth), nearly all the same models and materials as the pass before; hidden re-run passes (above) call none. Before this change (main at 83fc6b35) this preprocessing was ~12% of the CPU thread at rollback distance 2 (perf, FD replay), about 170 us of every pass that draws, and every frame's shown pass draws.
+
+**Change** (`VideoCommon/OpcodeDecoding.cpp`, `Fifo.cpp`). The preprocessor keeps a copy of each display list, by address and size, with the side effects its parse had, in order: CP writes (the vertex format), the BP writes `LoadBPRegPreprocess` acts on (EFB copy size, address and stride, draw done, the two PE tokens, the EFB copy trigger), indexed XF loads, and before each the cycles of the commands in between. When a list's bytes equal the copy (`memcmp`) and, if it has primitives, the vertex descriptor and the VATs they use equal those it was parsed under, it is not parsed again: its effects are replayed in order (a BP write gets the same cycle count it got in the parse; an indexed load reads memory now, as a parse would), the remaining cycles are added, and the aux FIFO gets a 16-byte header pointing at the cached copy, which the GPU thread runs instead of a fresh copy. A list with an unknown opcode is not cached; one whose bytes or format change more than 4 times is preprocessed as before. Replaced copies are freed in `SyncGPU` once the aux FIFO is empty (no header can point at them any more); the cache is emptied there when it holds more than 32 MiB. The aux FIFO is in no savestate or rollback snapshot. `PPR_DL_CACHE=0` turns the cache off (A/B).
+
+**Hits.** FD replay: 96.2% of display list calls (1,144 lists, ~480 KB cached; 3.7% from 31 lists that change); whole-machine vanilla Brawl match: 98.8% (4,055 lists, ~870 KB); Tatsunoko vs. Capcom's attract mode: 99.1% (113 lists, 10.7 KB).
+
+**Speed** (one binary, `PPR_DL_CACHE=0` against the default, interleaved rounds, Null video; `gprb_mispredict.py` FD recording). Frame cost:
+
+| | frame | shown pass | re-run pass | FIFO events per drawn pass |
+|---|---|---|---|---|
+| no rollback (4 rounds) | −4.7% (4/4, −7.5 to −1.5%) | same | | 171 → 135 us |
+| distance 2 (6 rounds) | −3.0% (5/6) | −3.1% | −2.9% | shown 171 → 138, re-run 195 → 154 us |
+| distance 7 (4 rounds) | −1.3% (4/4) | −2.5% | −0.9% | (only 2 of 7 passes draw) |
+
+Whole-machine vanilla Brawl (sync test at distance 6, a closed-loop match against a level 3 CPU, 3 rounds): FIFO events per re-run frame 0.187-0.189 → 0.159-0.162 ms in every round; re-run frame −1.8%, +3.2%, −2.5% (each run is a different match: about ±3% spread). Tatsunoko vs. Capcom: no change (0.41-0.43 ms a re-run frame either way). At distance 7 the frame profile times events in one pass of 7 (`EVENT_SAMPLE_EVERY`), always the same position, so compare whole passes there.
+
+**Checks.**
+- The GPU thread gets the same bytes: a running hash of every display list it ran and every indexed XF load it popped, cache off against on, was identical on the FD replay (1,713 checkpoints of 1,024 lists) and a ranked game on stage 45 (14,261 checkpoints), and during development on the FD replay at distances 2 and 7 and 6 ranked games on 6 stages (~88M display lists in all).
+- The game sees the same thing: every FD replay run above equals the reference trace frame by frame (RNG, fighters); 34 ranked games recorded on 0.1.136 by players without the cache (all 42 characters, the 9 stages in the sample) played back with every checksum equal, 372,965 frames; whole-machine sync tests (every RAM byte checked every frame) on vanilla Brawl (11 matches) and Tatsunoko vs. Capcom: 0 desyncs.
+- Not checked: Windows/MSVC and macOS builds, a two-machine session (the ranked replays come from machines without the cache), a picture comparison on a real video backend (the GPU thread's input is the same bytes).
+
 ## Open issues
 
 Resolved in Phase 6: the dual-core divergence (ground-collision list heads, gp-v11), the Peach article crash and the `GXWaitDrawDone` stalls (the GX FIFO ring tail), the 11-frame sync-test bursts (camera quake controller, gp-v12), stopping and re-attaching sounds. Resolved in Phase 8: every failure of the coverage sweep (gp-v13 to gp-v19, the file IO wait). Resolved in Phase 9: the nondeterministic render/effect hang (a load read the base snapshot while the eviction job was still merging into it). Resolved in Phase 12: the Smashville desync from frame 0 (issue 7).
