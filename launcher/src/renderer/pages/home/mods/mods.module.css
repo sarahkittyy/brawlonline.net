@@ -672,7 +672,7 @@
   word-break: break-all;
 }
 
-/* The field of a game a room's part pointed at: gold, pulsing, until it is clicked. */
+/* The field of a game a room's part pointed at: it pulses briefly and stays gold until clicked. */
 @keyframes fixPulse {
   0%,
   100% {
@@ -690,7 +690,13 @@
   border: 1px solid rgb(245 197 66 / 50%);
   border-radius: 6px;
   padding: 4px 6px;
-  animation: fixPulse 1.2s ease-in-out infinite;
+  box-shadow: 0 0 0 2px rgb(245 197 66 / 35%);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .fixField {
+    animation: fixPulse 1.2s ease-in-out 2;
+  }
 }
 
 .fixField > div:first-child {

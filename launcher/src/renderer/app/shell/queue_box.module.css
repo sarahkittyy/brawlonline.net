@@ -66,10 +66,15 @@
   border-radius: 50%;
   background-color: var(--accent-primary);
   box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent-primary) 25%, transparent);
-  animation: pulse 1.6s ease-out infinite;
 }
 
-/* The search is live: the dot breathes while it runs. */
+@media (prefers-reduced-motion: no-preference) {
+  .pulse {
+    animation: pulse 1.6s ease-out 2;
+  }
+}
+
+/* The dot pulses when a search starts and stays lit while it runs. */
 @keyframes pulse {
   0%,
   100% {
@@ -78,12 +83,6 @@
 
   50% {
     box-shadow: 0 0 0 5px color-mix(in srgb, var(--accent-primary) 10%, transparent);
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .pulse {
-    animation: none;
   }
 }
 

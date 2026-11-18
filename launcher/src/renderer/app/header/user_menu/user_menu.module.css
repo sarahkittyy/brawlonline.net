@@ -12,7 +12,13 @@
 .profileGlow {
   --profile-glow: 255 205 70;
 
-  animation: profileGlow 1.8s ease-in-out infinite;
+  box-shadow: 0 0 0 2px rgb(var(--profile-glow) / 85%);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .profileGlow {
+    animation: profileGlow 1.8s ease-in-out 2;
+  }
 }
 
 @keyframes profileGlow {
@@ -27,13 +33,6 @@
     box-shadow:
       0 0 0 2px rgb(var(--profile-glow) / 90%),
       0 0 12px 3px rgb(var(--profile-glow) / 45%);
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .profileGlow {
-    animation: none;
-    box-shadow: 0 0 0 2px rgb(var(--profile-glow) / 85%);
   }
 }
 

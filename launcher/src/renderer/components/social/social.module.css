@@ -57,7 +57,13 @@
 }
 
 .tab.unread {
-  animation: unreadPulse 1.6s ease-in-out infinite;
+  background-color: rgb(var(--unread) / 50%);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .tab.unread {
+    animation: unreadPulse 1.6s ease-in-out 2;
+  }
 }
 
 @keyframes unreadPulse {
@@ -68,13 +74,6 @@
 
   50% {
     background-color: rgb(var(--unread) / 62%);
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .tab.unread {
-    animation: none;
-    background-color: rgb(var(--unread) / 50%);
   }
 }
 
