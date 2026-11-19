@@ -89,7 +89,9 @@
 #include "Core/PowerPC/MMU.h"
 #include "Core/PowerPC/PowerPC.h"
 #include "Core/Rollback/FrameProfile.h"
+#include "Core/Rollback/GameplayRollback.h"
 #include "Core/Rollback/GameplaySession.h"
+#include "Core/Rollback/InputSuggest.h"
 #include "Core/Rollback/MachineSDCard.h"
 #include "Core/Rollback/PresentStats.h"
 #include "Core/Rollback/RollbackManager.h"
@@ -134,7 +136,10 @@ constexpr u8 CHANNEL_GEKKO = 0;    // GekkoNet's packets (unsequenced)
 constexpr u8 CHANNEL_CONTROL = 1;  // small JSON messages (reliable)
 constexpr u8 CHANNEL_IMAGE = 2;    // a machine image for a joiner (reliable, in chunks)
 constexpr u8 CHANNEL_SD = 3;       // the session's SD card: chunk requests and chunks (reliable)
-constexpr u8 CHANNEL_COUNT = 4;
+// Input suggestions (Gprb::Suggest, unsequenced), only to a player whose hello says it takes them
+// ("sg"). ENet gives a link the fewer channels of its two ends, so a build with four still links.
+constexpr u8 CHANNEL_SUGGEST = 4;
+constexpr u8 CHANNEL_COUNT = 5;
 // A CHANNEL_SD packet: one of these, then a chunk request or a chunk, or (a joiner before it asks
 // to join) a request for the session card's manifest and file list, and those.
 constexpr u8 SD_REQUEST = 0;
@@ -286,6 +291,7 @@ struct PeerLink
   ENetPeer* peer = nullptr;  // the connection kept for this slot
   bool hello = false;        // its hello arrived on `peer`
   int proto = 1;             // its PROTOCOL_VERSION (a hello without one: 1)
+  bool suggestions = false;  // its hello says it takes input suggestions (CHANNEL_SUGGEST)
   // ENet's round trip on this link, a sample every 10 ms (net thread), for PaceSD.
   std::deque<std::pair<Clock::time_point, enet_uint32>> rtt_window;
   // Its game has an SD card, and the session card's root it plays (RootHex; "" until it has
@@ -471,6 +477,20 @@ struct State
   std::deque<std::pair<int, std::vector<u8>>> gekko_rx;  // (slot, packet)
   std::vector<GekkoNetResult*> gekko_rx_ptrs;
   std::vector<std::pair<int, std::vector<u8>>> gekko_tx;  // (slot, packet)
+  // Input suggestions (Gprb::Suggest): the players' datagrams for the CPU thread (net thread, under
+  // net_mutex), this machine's for the net thread to send (the sender's threads, under
+  // suggest_tx_mutex), and whether the sender was told some player takes them (net thread).
+  std::deque<std::pair<int, std::vector<u8>>> suggest_rx;  // (slot, datagram)
+  std::mutex suggest_tx_mutex;
+  std::vector<std::vector<u8>> suggest_tx;
+  bool suggest_peers = false;
+  // The SI channel and source of the local GameCube controller the session reads (ReadLocalInput;
+  // -1: none, a Wii Remote), for the sender's threads.
+  std::atomic<int> suggest_chan{-1};
+  std::atomic<Gprb::HostPadSource> suggest_source{Gprb::HostPadSource::Mapped};
+  // GekkoNet's suggestion stats of the epochs' sessions before the running one.
+  GekkoSuggestionStats suggest_done{};
+  bool suggest_armed = false;  // the sender runs for this session (CPU thread)
   // The decider's epoch_go (the epoch's players), from the net thread.
   struct EpochGo
   {
@@ -1047,6 +1067,8 @@ void KeepLink(PeerLink& p, ENetPeer* peer, const picojson::object& msg, bool six
   {
     const auto pr = msg.find("proto");
     p.proto = pr != msg.end() && pr->second.is<double>() ? static_cast<int>(pr->second.get<double>()) : 1;
+    const auto sg = msg.find("sg");
+    p.suggestions = sg != msg.end() && sg->second.is<double>() && sg->second.get<double>() >= 1;
     const auto card = msg.find("sd_card");
     p.sd_card = card != msg.end() && card->second.is<bool>() && card->second.get<bool>();
     const auto root = msg.find("sd");
@@ -2572,6 +2594,46 @@ void SendQueuedGekko(Clock::time_point now)
   s.gekko_tx.clear();
 }
 
+// Input suggestions (Gprb::Suggest): a datagram of this machine's for every player that takes them
+// (the sender's threads; the net thread sends it with its next pass, as GekkoNet's own packets).
+void QueueSuggestion(const u8* data, std::size_t size)
+{
+  std::lock_guard lk(s.suggest_tx_mutex);
+  if (s.suggest_tx.size() < 64)
+    s.suggest_tx.emplace_back(data, data + size);
+}
+
+// Under net_mutex: the queued suggestions to the players whose hello says they take them, and the
+// sender told whether there is any (it samples a mapped controller only then).
+void SendQueuedSuggestions()
+{
+  std::vector<std::vector<u8>> tx;
+  {
+    std::lock_guard lk(s.suggest_tx_mutex);
+    tx.swap(s.suggest_tx);
+  }
+  bool any = false;
+  for (PeerLink& p : s.peers)
+  {
+    if (!p.peer || !p.hello || !p.suggestions || p.left || p.slot < 0 || !Plays(p.slot) ||
+        p.slot == s.opts.local_slot)
+    {
+      continue;
+    }
+    any = true;
+    for (const auto& d : tx)
+    {
+      enet_peer_send(p.peer, CHANNEL_SUGGEST,
+                     enet_packet_create(d.data(), d.size(), ENET_PACKET_FLAG_UNSEQUENCED));
+    }
+  }
+  if (any != s.suggest_peers)
+  {
+    s.suggest_peers = any;
+    Gprb::Suggest::SetHasPeers(any);
+  }
+}
+
 // Net thread, under net_mutex: a room member still without a link 10 s and 30 s after it came,
 // once each, with how far this side got, so a joiner that never connects says why in its log
 // (bug report #133: three REX joins with no "peer connected" and nothing else).
@@ -2691,6 +2753,7 @@ void NetThread()
     {
       SendQueuedGekko(now);
     }
+    SendQueuedSuggestions();
     // A machine image for a joiner: a few chunks at a time, so ENet's queue stays short.
     if (!s.image_tx.empty() && s.image_to >= 0)
     {
@@ -2847,6 +2910,9 @@ void NetThread()
           hello["name"] = picojson::value(s.opts.name);
           hello["playing"] = picojson::value(LocalPlays());
           hello["proto"] = picojson::value(static_cast<double>(PROTOCOL_VERSION));
+          // Takes input suggestions (CHANNEL_SUGGEST).
+          if (Gprb::Suggest::Enabled())
+            hello["sg"] = picojson::value(1.0);
           hello["sd_card"] = picojson::value(Config::Get(Config::MAIN_WII_SD_CARD));
           hello["sd"] = picojson::value(s.sd_root);
           const std::string text = picojson::value(hello).serialize();
@@ -2893,6 +2959,19 @@ void NetThread()
                 s.peers[slot].hello)
             {
               HandleSDPacket(slot, ev.packet->data, ev.packet->dataLength);
+            }
+          }
+          else if (ev.channelID == CHANNEL_SUGGEST &&
+                   ev.packet->dataLength == Gprb::Suggest::HEADER_SIZE + INPUT_SIZE)
+          {
+            const int slot = SlotOf(ev.peer);
+            if (slot >= 0 && slot < MAX_PLAYERS && s.peers[slot].peer == ev.peer &&
+                s.peers[slot].hello && Gprb::Suggest::Enabled())
+            {
+              const u8* d = ev.packet->data;
+              s.suggest_rx.emplace_back(slot, std::vector<u8>(d, d + ev.packet->dataLength));
+              if (s.suggest_rx.size() > 256)
+                s.suggest_rx.pop_front();
             }
           }
           else if (ev.channelID == CHANNEL_GEKKO && ev.packet->dataLength <= MAX_GEKKO_PACKET)
@@ -3058,12 +3137,27 @@ bool StartNetwork()
   return true;
 }
 
+void LogSuggestStats();
+
 void StopNetwork()
 {
+  if (s.suggest_armed)
+  {
+    LogSuggestStats();
+    Gprb::Suggest::Disarm();
+    s.suggest_armed = false;
+  }
+  s.suggest_chan = -1;
   s.net_run = false;
   if (s.net_thread.joinable())
     s.net_thread.join();
+  {
+    std::lock_guard tlk(s.suggest_tx_mutex);
+    s.suggest_tx.clear();
+  }
   std::lock_guard lk(s.net_mutex);
+  s.suggest_rx.clear();
+  s.suggest_peers = false;
   s.probe.peer = nullptr;
   if (s.host)
   {
@@ -3139,8 +3233,13 @@ void GekkoFree(void* p)
   std::free(p);
 }
 
+GekkoSuggestionStats SuggestGekkoStats();
+const Gprb::Suggest::Format& SuggestFormat();
+
 void DestroyGekko()
 {
+  if (s.gekko && s.opts.synctest == 0)
+    s.suggest_done = SuggestGekkoStats();
   if (s.gekko)
     gekko_destroy(&s.gekko);
   s.gekko = nullptr;
@@ -3272,6 +3371,19 @@ bool CreateGekko()
   }
   if (!stress)
   {
+    // Input suggestions (Gprb::Suggest): the players' predict this player's GameCube controller
+    // with them; this machine predicts theirs with theirs, and stops following a player whose
+    // suggestions keep doing worse than their last input. The sender runs from the session's first
+    // GekkoNet session to its end (its frames are the session's, across epochs).
+    gekko_set_suggestion_judge(Gprb::Suggest::Enabled() ? Gprb::Suggest::MachineWorseCost :
+                                                          nullptr);
+    if (!s.suggest_armed)
+    {
+      Gprb::Suggest::Arm(SuggestFormat(), QueueSuggestion, s.suggest_chan.load());
+      s.suggest_armed = true;
+      std::lock_guard nlk(s.net_mutex);
+      s.suggest_peers = false;  // the net thread tells the new sender again
+    }
     double rtt = -1;
     s.input_delay = PickInputDelay(&rtt);
     {
@@ -3676,9 +3788,8 @@ void AddLocalRequest(Input* in)
 // so the session moves the player's own origin into the values, as Dolphin's adapter device tells
 // the game the origin itself: a C-stick that rests off center reaches as far in every direction
 // (P+ in Dolphin's own netplay does the same).
-GCPadStatus AdapterInput(int chan)
+GCPadStatus ShiftAdapterOrigin(int chan, GCPadStatus pad)
 {
-  GCPadStatus pad = GCAdapter::Input(chan);
   const auto origin = GCAdapter::Origin(chan);
   if (!origin)
     return pad;
@@ -3692,6 +3803,177 @@ GCPadStatus AdapterInput(int chan)
   pad.triggerLeft = shift(pad.triggerLeft, origin->triggerLeft, 0);
   pad.triggerRight = shift(pad.triggerRight, origin->triggerRight, 0);
   return pad;
+}
+
+GCPadStatus AdapterInput(int chan)
+{
+  return ShiftAdapterOrigin(chan, GCAdapter::Input(chan));
+}
+
+// ------------------------------------------------------------------------- input suggestions
+
+// Input suggestions (Gprb::Suggest, docs/design/brawl-mods.md 6.2): the local GameCube
+// controller's changes between two reads go to the other players at once, and their predictions
+// of this player use them. The session's input carries the pad as the SI reports it, so a
+// suggestion is the input with the pad as the controller is now.
+static_assert(Gprb::Suggest::MACHINE_PAD == 1 && INPUT_SIZE <= Gprb::Suggest::INPUT_BYTES);
+
+bool SuggestReads(int chan, Gprb::HostPadSource source)
+{
+  return s.suggest_chan.load(std::memory_order_relaxed) == chan &&
+         s.suggest_source.load(std::memory_order_relaxed) == source;
+}
+
+bool SuggestMake(int chan, Gprb::HostPadSource source, const GCPadStatus& st, const u8* last,
+                 u8* out)
+{
+  if (!SuggestReads(chan, source) || (source == Gprb::HostPadSource::Adapter && !st.isConnected))
+    return false;
+  const GCPadStatus pad =
+      source == Gprb::HostPadSource::Adapter ? ShiftAdapterOrigin(chan, st) : st;
+  // As CaptureLocalInput makes the input, with the newest one's requests.
+  Input in{};
+  EncodePad(pad, &in);
+  in[INPUT_REQUEST] = last[INPUT_REQUEST];
+  in[INPUT_MOVE] = last[INPUT_MOVE];
+  std::memcpy(out, in.data(), INPUT_SIZE);
+  return true;
+}
+
+bool SuggestButtonsDiffer(const u8* prev, const u8* next)
+{
+  return prev[1] != next[1] || prev[2] != next[2];
+}
+
+void SuggestLie(u8* in, u32 random)
+{
+  in[1] ^= static_cast<u8>(PAD_BUTTON_A >> 8);
+  in[3] = static_cast<u8>(random >> 24);
+}
+
+const Gprb::Suggest::Format SUGGEST_FORMAT{INPUT_SIZE,
+                                           SuggestReads,
+                                           SuggestMake,
+                                           Gprb::Suggest::MachineMeaningful,
+                                           SuggestButtonsDiffer,
+                                           SuggestLie};
+
+const Gprb::Suggest::Format& SuggestFormat()
+{
+  return SUGGEST_FORMAT;
+}
+
+// The controller the session read (CPU thread, each capture): the sender follows it.
+void SuggestFollow(int chan, Gprb::HostPadSource source)
+{
+  s.suggest_source.store(source, std::memory_order_relaxed);
+  if (s.suggest_chan.exchange(chan, std::memory_order_relaxed) != chan)
+    Gprb::Suggest::SetChannel(chan);
+}
+
+// GekkoNet took the local input of its frame `frame` (CPU thread): from it the sender tags its
+// suggestions with the frames their changes will first be in (the session's frames, the same on
+// every machine across epochs).
+void SuggestNoteLocalInput(int frame, Clock::time_point read, const u8* in)
+{
+  const double hz = Core::System::GetInstance().GetVideoInterface().GetTargetRefreshRate();
+  const double field_us = hz > 1 ? 1e6 / hz : 1e6 * 1001.0 / 60000.0;
+  Gprb::Suggest::NoteLocalInput(static_cast<int>(s.frame_base + frame), read, in,
+                                field_us / std::max(s.speed, 0.25));
+}
+
+// The players' suggestions that came (CPU thread, before GekkoNet takes its packets): to GekkoNet
+// for their players' predictions.
+void TakeSuggestions()
+{
+  std::deque<std::pair<int, std::vector<u8>>> rx;
+  {
+    std::lock_guard lk(s.net_mutex);
+    rx.swap(s.suggest_rx);
+  }
+  if (!s.gekko || s.opts.synctest > 0)
+    return;
+  for (const auto& [slot, d] : rx)
+  {
+    s32 frame;
+    u32 seq;
+    const u8* input;
+    if (!Gprb::Suggest::Decode(d.data(), d.size(), INPUT_SIZE, &frame, &seq, &input))
+      continue;
+    const int h = s.slot_handle[slot];
+    const s64 local = static_cast<s64>(frame) - s.frame_base;
+    if (h < 0 || h == s.local_handle || local < 0 || ((s.gone >> slot) & 1))
+      continue;
+    gekko_add_input_suggestion(s.gekko, h, static_cast<int>(local), seq, input);
+  }
+}
+
+// GekkoNet takes the players' packets now (CPU thread), the suggestions that came before them
+// first.
+void ReceiveRemote()
+{
+  TakeSuggestions();
+  gekko_receive(s.gekko);
+}
+
+GekkoSuggestionStats SuggestGekkoStats()
+{
+  GekkoSuggestionStats st = s.suggest_done;
+  if (s.gekko && s.opts.synctest == 0)
+  {
+    GekkoSuggestionStats now{};
+    gekko_suggestion_stats(s.gekko, &now);
+    st.received += now.received;
+    st.stale += now.stale;
+    st.changed += now.changed;
+    st.checked += now.checked;
+    st.wrong += now.wrong;
+    st.helped += now.helped;
+    st.hurt += now.hurt;
+    st.shown_wrong += now.shown_wrong;
+    st.worse += now.worse;
+    st.ignored += now.ignored;
+  }
+  return st;
+}
+
+// What this machine sent, and what the players' suggestions did to its predictions of them (the
+// session's end, for the logs players send in).
+void LogSuggestStats()
+{
+  const Gprb::Suggest::SenderStats tx = Gprb::Suggest::Stats();
+  const GekkoSuggestionStats rx = SuggestGekkoStats();
+  INFO_LOG_FMT(BRAWLBACK,
+               "machine suggest: {}, sent {} for {} input changes ({} crossings, {} follow-ups; {} "
+               "reports, {} held back, {} too late, {} undecoded; {} mapped samples, {:.0f} us "
+               "each, at most {}); received {} ({} stale), {} predictions changed; predictions "
+               "checked {}, wrong {} ({} right only by a suggestion, {} wrong only by one); first "
+               "predictions (shown) wrong {}; judged worse {}, players ignored {}",
+               Gprb::Suggest::Enabled() ? "on" : "off", tx.sent, tx.local_changes, tx.crossings,
+               tx.follow_ups, tx.reports, tx.held_back, tx.too_late, tx.undecoded, tx.samples,
+               static_cast<double>(tx.sample_us) / std::max<u64>(tx.samples, 1), tx.sample_us_max,
+               rx.received, rx.stale, rx.changed, rx.checked, rx.wrong, rx.helped, rx.hurt,
+               rx.shown_wrong, rx.worse, rx.ignored);
+}
+
+picojson::value SuggestStatsJson()
+{
+  const Gprb::Suggest::SenderStats tx = Gprb::Suggest::Stats();
+  const GekkoSuggestionStats rx = SuggestGekkoStats();
+  picojson::object o;
+  o["enabled"] = picojson::value(Gprb::Suggest::Enabled());
+  for (const auto& [k, v] :
+       {std::pair<const char*, u64>{"local_changes", tx.local_changes}, {"reports", tx.reports},
+        {"sent", tx.sent}, {"held_back", tx.held_back}, {"too_late", tx.too_late},
+        {"crossings", tx.crossings}, {"follow_ups", tx.follow_ups}, {"undecoded", tx.undecoded},
+        {"samples", tx.samples}, {"sample_us", tx.sample_us}, {"sample_us_max", tx.sample_us_max},
+        {"received", rx.received}, {"stale", rx.stale}, {"changed", rx.changed},
+        {"checked", rx.checked}, {"wrong", rx.wrong}, {"helped", rx.helped}, {"hurt", rx.hurt},
+        {"shown_wrong", rx.shown_wrong}, {"worse", rx.worse}, {"ignored", rx.ignored}})
+  {
+    o[k] = picojson::value(static_cast<double>(v));
+  }
+  return picojson::value(o);
 }
 
 constexpr u32 INPUT_LOG_EVERY = 600;
@@ -3782,6 +4064,7 @@ Input ReadLocalInput()
   Input in{};
   if (s.controller[s.opts.local_slot] == Controller::WiiRemote)
   {
+    SuggestFollow(-1, Gprb::HostPadSource::Mapped);
     CaptureLocalWiimote(Core::System::GetInstance(), &in);
     return in;
   }
@@ -3797,7 +4080,10 @@ Input ReadLocalInput()
     g_controller_interface.UpdateInput();
     pad = Pad::GetStatus(s.opts.local_pad);
   }
-  TestInput(&pad);
+  // A test input replaces the controller at the reads only: nothing to suggest then.
+  const bool test = TestInput(&pad);
+  SuggestFollow(test ? -1 : s.opts.local_pad,
+                s.local_adapter ? Gprb::HostPadSource::Adapter : Gprb::HostPadSource::Mapped);
   LogLocalInput(pad);
   EncodePad(pad, &in);
   return in;
@@ -3931,6 +4217,9 @@ void ApplyRequestedDelay()
 void Update(Core::System& system)
 {
   s.ops.Clear();
+  // Before GekkoNet's packets: a suggestion that came before its frame's real input goes in first
+  // (and is judged by it), as it came.
+  TakeSuggestions();
   gekko_network_poll(s.gekko);
   ApplyRequestedDelay();
   {
@@ -3950,7 +4239,10 @@ void Update(Core::System& system)
       }
       const int before = gekko_local_input_frame(s.gekko, s.local_handle);
       gekko_add_local_input(s.gekko, s.local_handle, s.local_input.data());
-      if (s.late_input && gekko_local_input_frame(s.gekko, s.local_handle) > before)
+      const int after = gekko_local_input_frame(s.gekko, s.local_handle);
+      if (after > before)
+        SuggestNoteLocalInput(after, s.local_read_at, s.local_input.data());
+      if (s.late_input && after > before)
       {
         ++s.late.fallback;
         ++s.late_window.fallback;
@@ -6965,7 +7257,7 @@ void BoundarySleep(CoreTiming::CoreTimingManager& ct, Clock::time_point due)
     auto wake = due;
     if (rerun_in_sleep && s.gekko)
     {
-      gekko_receive(s.gekko);
+      ReceiveRemote();
       if (const int frames = gekko_rollback_frames(s.gekko); frames > 0)
       {
         wake -= std::chrono::duration_cast<Clock::duration>(
@@ -7802,6 +8094,7 @@ bool Arm(const Options& options, std::string* error)
   }
   StopNetwork();
   DestroyGekko();
+  s.suggest_done = {};
   ResetSD();
   s.opts = options;
   s.error.clear();
@@ -8598,6 +8891,7 @@ void LateLocalInput()
     ++s.late_window.skipped;
     return;
   }
+  SuggestNoteLocalInput(target, read_at, in.data());
   gekko_send_local_inputs(s.gekko);
   if (s.direct_send)
     FlushGekkoNow();
@@ -8620,7 +8914,7 @@ void LateRemoteInput(int slot, u8 device)
   Input real{};
   if (!gekko_received_input(s.gekko, h, frame, real.data()))
   {
-    gekko_receive(s.gekko);
+    ReceiveRemote();
     if (!gekko_received_input(s.gekko, h, frame, real.data()))
     {
       ++s.late.missed;
@@ -8673,7 +8967,7 @@ void LateEndOfFrame()
       continue;
     if (!received)
     {
-      gekko_receive(s.gekko);
+      ReceiveRemote();
       received = true;
     }
     Input real{};
@@ -9294,6 +9588,7 @@ picojson::value Status()
   o["speed"] = picojson::value(s.speed);
   o["synctest"] = picojson::value(static_cast<double>(s.opts.synctest));
   o["epoch"] = picojson::value(static_cast<double>(s.epoch));
+  o["suggest"] = SuggestStatsJson();
   {
     // What this machine's UDP socket sent and received (ENet's counters; datagrams, UDP payload
     // bytes): the session's upload, for traffic tests.

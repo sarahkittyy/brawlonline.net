@@ -6,11 +6,14 @@
 // last input, and every prediction is still checked against the real input.
 
 #include <array>
+#include <cstring>
 
 #include <gtest/gtest.h>
 
 #include "Common/CommonTypes.h"
 #include "Core/Rollback/InputSuggest.h"
+#include "Core/Rollback/MachineSession.h"
+#include "InputCommon/GCPadStatus.h"
 #include "input.h"
 
 namespace
@@ -293,6 +296,117 @@ TEST(InputSuggest, WorseCostOfGfPadStatus)
   EXPECT_EQ(WorseCost(Pad(48, 0, 0, 0, 0, 0, 0x01).data(), Pad(46, 0, 0, 0, 0, 0, 0x01).data(),
                       Pad(47, 0, 0, 0, 0, 0, 0x01).data()),
             0u);
+}
+
+// The rules on Other Games' inputs (Machine::Input, made by the session's own EncodePad).
+namespace
+{
+Machine::Input MPad(int x = 0, int y = 0, int cx = 0, int cy = 0, u8 l = 0, u8 r = 0,
+                    u16 buttons = 0)
+{
+  GCPadStatus st{};
+  st.button = buttons;
+  st.stickX = static_cast<u8>(0x80 + x);
+  st.stickY = static_cast<u8>(0x80 + y);
+  st.substickX = static_cast<u8>(0x80 + cx);
+  st.substickY = static_cast<u8>(0x80 + cy);
+  st.triggerLeft = l;
+  st.triggerRight = r;
+  Machine::Input in{};
+  Machine::EncodePad(st, &in);
+  return in;
+}
+
+bool MMeans(const Machine::Input& a, const Machine::Input& b)
+{
+  return Gprb::Suggest::MachineMeaningful(a.data(), b.data());
+}
+}  // namespace
+
+TEST(InputSuggest, MachineInputLayout)
+{
+  // The pad where the rules look for it (MACHINE_PAD), as DecodePad reads it back.
+  const auto in = MPad(20, -30, 5, -60, 40, 200, PAD_BUTTON_A | PAD_TRIGGER_Z | PAD_BUTTON_UP);
+  constexpr auto at = Gprb::Suggest::MACHINE_PAD;
+  EXPECT_EQ(in[at], PAD_BUTTON_A >> 8);
+  EXPECT_EQ(in[at + 1], PAD_TRIGGER_Z | PAD_BUTTON_UP);
+  EXPECT_EQ(in[at + 2], 0x80 + 20);
+  EXPECT_EQ(in[at + 3], 0x80 - 30);
+  EXPECT_EQ(in[at + 6], 40);
+  EXPECT_EQ(in[at + 7], 200);
+  const GCPadStatus back = Machine::DecodePad(in);
+  EXPECT_EQ(back.substickY, 0x80 - 60);
+}
+
+TEST(InputSuggest, MachineMeaningfulChanges)
+{
+  // Every button, the D-pad too, both ways.
+  EXPECT_TRUE(MMeans(MPad(), MPad(0, 0, 0, 0, 0, 0, PAD_BUTTON_A)));
+  EXPECT_TRUE(MMeans(MPad(0, 0, 0, 0, 0, 0, PAD_BUTTON_START), MPad()));
+  EXPECT_TRUE(MMeans(MPad(), MPad(0, 0, 0, 0, 0, 0, PAD_BUTTON_LEFT)));
+  EXPECT_TRUE(MMeans(MPad(), MPad(0, 0, 0, 0, 0, 0, PAD_TRIGGER_R)));
+  // P+'s lines against the center: noise and moves inside a zone are not.
+  EXPECT_FALSE(MMeans(MPad(0), MPad(3)));
+  EXPECT_FALSE(MMeans(MPad(-20), MPad(20)));
+  EXPECT_FALSE(MMeans(MPad(30), MPad(60)));
+  EXPECT_FALSE(MMeans(MPad(80), MPad(100)));
+  EXPECT_FALSE(MMeans(MPad(0, 0, 0, 0, 10), MPad(0, 0, 0, 0, 40)));
+  // Lines, both ways, either sign, either stick.
+  EXPECT_TRUE(MMeans(MPad(0), MPad(28)));
+  EXPECT_TRUE(MMeans(MPad(-28), MPad(0)));
+  EXPECT_TRUE(MMeans(MPad(60), MPad(71)));
+  EXPECT_TRUE(MMeans(MPad(0, 0), MPad(0, -61)));
+  EXPECT_TRUE(MMeans(MPad(0, 0), MPad(0, 68)));
+  EXPECT_TRUE(MMeans(MPad(0, 0, 40), MPad(0, 0, 51)));
+  EXPECT_TRUE(MMeans(MPad(0, 0, 0, 0), MPad(0, 0, 0, -51)));
+  // Triggers: P+'s light shield.
+  EXPECT_TRUE(MMeans(MPad(0, 0, 0, 0, 0), MPad(0, 0, 0, 0, 45)));
+  EXPECT_FALSE(MMeans(MPad(0, 0, 0, 0, 0, 100), MPad(0, 0, 0, 0, 0, 200)));
+  // The stick's ends: a raw 0 is -128 from center, 255 is +127.
+  EXPECT_TRUE(MMeans(MPad(0), MPad(-128)));
+  EXPECT_FALSE(MMeans(MPad(100), MPad(127)));
+}
+
+TEST(InputSuggest, MachineWorseCost)
+{
+  using Gprb::Suggest::MachineWorseCost;
+  const auto real = MPad(50, 0, 0, 0, 0, 0, PAD_BUTTON_B);
+  // A wrong button the last input had right: 3; right where the last input was wrong: 0.
+  EXPECT_EQ(MachineWorseCost(real.data(), MPad(50).data(), real.data()), 3u);
+  EXPECT_EQ(MachineWorseCost(MPad(50).data(), real.data(), real.data()), 0u);
+  // Same buttons: a stick back at rest where the last input had it pushed, 1; the other way, 0.
+  EXPECT_EQ(MachineWorseCost(MPad(40, 0, 0, 0, 0, 0, PAD_BUTTON_B).data(),
+                             MPad(0, 0, 0, 0, 0, 0, PAD_BUTTON_B).data(), real.data()),
+            1u);
+  EXPECT_EQ(MachineWorseCost(MPad(0, 0, 0, 0, 0, 0, PAD_BUTTON_B).data(),
+                             MPad(40, 0, 0, 0, 0, 0, PAD_BUTTON_B).data(), real.data()),
+            0u);
+  // A stick off by some units inside the same zone is no worse.
+  EXPECT_EQ(MachineWorseCost(MPad(49, 0, 0, 0, 0, 0, PAD_BUTTON_B).data(),
+                             MPad(30, 0, 0, 0, 0, 0, PAD_BUTTON_B).data(), real.data()),
+            0u);
+}
+
+TEST(InputSuggest, DatagramOfAnyInputSize)
+{
+  const auto in = MPad(10, 20, 0, 0, 0, 0, PAD_BUTTON_X);
+  std::array<u8, Gprb::Suggest::DATAGRAM_SIZE> d{};
+  Gprb::Suggest::Encode(-3, 77, in.data(), in.size(), d.data());
+  const std::size_t size = Gprb::Suggest::HEADER_SIZE + in.size();
+  s32 frame;
+  u32 seq;
+  const u8* got;
+  ASSERT_TRUE(Gprb::Suggest::Decode(d.data(), size, in.size(), &frame, &seq, &got));
+  EXPECT_EQ(frame, -3);
+  EXPECT_EQ(seq, 77u);
+  EXPECT_EQ(std::memcmp(got, in.data(), in.size()), 0);
+  // Another session's size, or P+'s, is not one.
+  EXPECT_FALSE(
+      Gprb::Suggest::Decode(d.data(), size, Gprb::Suggest::INPUT_BYTES, &frame, &seq, &got));
+  EXPECT_FALSE(Gprb::Suggest::Decode(d.data(), size - 1, in.size(), &frame, &seq, &got));
+  const auto full = Gprb::Suggest::Encode(5, 1, std::array<u8, 0x40>{}.data());
+  EXPECT_FALSE(Gprb::Suggest::Decode(full.data(), full.size(), in.size(), &frame, &seq, &got));
+  EXPECT_TRUE(Gprb::Suggest::Decode(full.data(), full.size(), &frame, &seq, &got));
 }
 
 // Profile (run with --gtest_also_run_disabled_tests --gtest_filter=*InputSuggestBench*): the cost
