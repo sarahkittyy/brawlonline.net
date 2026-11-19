@@ -237,9 +237,9 @@ void SendAIBuffer(Core::System& system, const short* samples, unsigned int num_s
 // disc (Super Monkey Ball 2), whose streaming samples went to the mixer in re-runs too, so every
 // rollback played its frames' music again and the mixer then skipped ahead to catch up.
 //
-// A loading fast-forward (CoreTimingManager::SetLoadFastForward) drops its audio too: the boot's
-// and the loading screens' sounds at several times their speed would only chirp, and would fill
-// the mixer with more than it can play before the game's next sound.
+// The boot's fast-forward (CoreTimingManager::SetLoadFastForward) drops its audio too: sound at
+// several times its speed would only chirp, and would fill the mixer with more than it can play
+// before the game's next sound.
 bool DropsResimulatedAudio(const Core::System& system)
 {
   const auto& core_timing = system.GetCoreTiming();

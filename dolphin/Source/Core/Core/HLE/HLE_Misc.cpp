@@ -172,7 +172,7 @@ void BrawlbackGekkoNetUnconditionalFrame(const Core::CPUThreadGuard& guard)
   // session's wait that spins on the loop top (no field comes then).
   Online::GameAlive::Beat();
 
-  // Loads run unthrottled (Online/LoadFastForward.h); off in a whole-machine session.
+  // The boot runs unthrottled until its first menu (Online/LoadFastForward.h).
   Online::LoadFastForward::OnLoopTop(guard);
 
   // A whole-machine session (Brawl Mods) owns the loop when armed.

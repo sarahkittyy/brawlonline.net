@@ -200,7 +200,7 @@ public:
   // instead of skipping the emulated time it took. CPU thread only.
   void SetRollbackLoadWait(bool waiting);
   bool IsRollbackLoadWait() const { return m_rollback_load_wait; }
-  // Loading fast-forward (Online/LoadFastForward.h): unthrottled until emulated tick
+  // Boot fast-forward (Online/LoadFastForward.h): unthrottled until emulated tick
   // `until_ticks`, a cap that ends it even if no caller turns it off (Throttle). It changes no
   // emulated state: the same frames run, only sooner. While on, the game's audio is dropped
   // (AudioCommon::DropsResimulatedAudio) and VSync is off (VideoConfig). CPU thread only; the

@@ -43,7 +43,7 @@ static Common::EventHook s_check_config_event;
 
 static bool IsVSyncActive(bool enabled)
 {
-  // Vsync is disabled when the throttler is disabled by the tab key, and while the game loads
+  // Vsync is disabled when the throttler is disabled by the tab key, and while the boot runs
   // fast-forwarded (CoreTimingManager::SetLoadFastForward): each present would wait for the
   // screen's refresh and hold the load back to the refresh rate.
   return enabled && !Core::GetIsThrottlerTempDisabled() &&
