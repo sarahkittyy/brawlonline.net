@@ -19,6 +19,7 @@
 #include <SFML/Network/Socket.hpp>
 
 #include "Common/CommonTypes.h"
+#include "Core/Online/MatchQoS.h"
 
 namespace Gprb
 {
@@ -46,5 +47,6 @@ public:
 
 private:
   u16 m_port = 0;
+  std::optional<Online::MatchQoS::Marking> m_qos;  // what it sends goes as voice
 };
 }  // namespace Gprb

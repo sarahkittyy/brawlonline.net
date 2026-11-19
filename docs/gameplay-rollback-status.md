@@ -1654,6 +1654,17 @@ design as Slippi 3.7's input suggestions and Melee Unlocked's early inputs.
   can report stray states, per Arte; the judge then stops following it), macOS / Linux / Steam
   Deck in a game, 3-4 players beyond sync (a 4-player session stayed in sync).
 
+## Match traffic as voice for Wi-Fi and routers (2026-11-18)
+
+In the harness's Wi-Fi model, busy channels made most of the waits for the peer. Wi-Fi (WMM) and
+routers that queue by DSCP send voice first, so both session types mark their sockets' traffic as
+voice (`Online::MatchQoS`): DSCP 46 with `IP_TOS` / `IPV6_TCLASS`, plus the voice service type on
+macOS; on Windows, qWAVE's voice traffic type per destination. A whole-machine session's sockets go
+unmarked while they send a joiner's machine image or SD card, and a second after. Windows also turns
+on Wi-Fi media streaming mode (no background scans) while a session's network is up.
+`PPR_MATCH_QOS=0` turns it off. Checked on Linux (`MatchQoSTest`, and DSCP 46 on every datagram of
+sessions through netsim); not on Windows or macOS.
+
 ## Open issues
 
 Resolved in Phase 6: the dual-core divergence (ground-collision list heads, gp-v11), the Peach article crash and the `GXWaitDrawDone` stalls (the GX FIFO ring tail), the 11-frame sync-test bursts (camera quake controller, gp-v12), stopping and re-attaching sounds. Resolved in Phase 8: every failure of the coverage sweep (gp-v13 to gp-v19, the file IO wait). Resolved in Phase 9: the nondeterministic render/effect hang (a load read the base snapshot while the eviction job was still merging into it). Resolved in Phase 12: the Smashville desync from frame 0 (issue 7).
