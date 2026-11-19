@@ -366,6 +366,24 @@ extern "C" {
     // Anyone picks: leave at once with SESSION's stage (the host took the first pick).
     static bool s_anyLeave = false;
 
+    // The A that leaves by itself (Ranked, anyone picks) is pressed by the controller that locked
+    // in. No pad pressed it, and with any controller in charge (task+0x278 = 0xF0) the decide
+    // (sel_stage+0x4EF0) scans the eight pads for the one that did, finds none (-1), and reads
+    // gfPadSystem::getSysPadStatus(-1): the word before pad 0 (0x805BA480) as the controller
+    // type, which indexes the type table (sel_stage .rodata+0x1B0) far outside MEM1 (0x8348B5C8;
+    // EmissaryRecomp crashed there, Dolphin reads whatever is at 0x8148B5C8). With the pad: its
+    // own type's row (X/Y or L/R held: the stage select data's sub stage kind, +0x24, which only
+    // vanilla Mushroomy Kingdom reads and P+'s STEX replaces), and the decide's rumble on it
+    // (10 frames, with the player's rumble on, as their own A on a stage). The task leaves on
+    // this A. After kalomaze's a3393d88c (his fork); a pad that is not one (never written: the
+    // lock-in always has 0-7) is port 0, the CSS's own default.
+    static u32 leaveWithA(u8* task, u32 buttons)
+    {
+        const u8 pad = PPOM::g_block.local.lockPad;
+        *(u32*)(task + 0x278) = pad < 8 ? pad : 0;
+        return buttons | 0x100u;
+    }
+
     // H1: returns the pressed buttons the rest of buttonProc (P+'s hooks) sees in r3.
     __attribute__((used)) u32 pponline_sssButtons(u8* task, u32 pressed)
     {
@@ -382,7 +400,7 @@ extern "C" {
             s_anyLeave = any == OnlineMenu::ANY_DECIDED || any == OnlineMenu::ANY_GONE;
             if (s_anyLeave) {
                 if (*hovered - 0x30u <= 7u) *hovered = 0;
-                return out | 0x100u;
+                return leaveWithA(task, out);
             }
             // One page for everyone (Sarah's board, 2026-10-29): another player turned the page,
             // so this stage select turns too, with P+'s own page button (an A on it, as when the
@@ -434,7 +452,7 @@ extern "C" {
             // takes the stage pponline_sssFilterPos gives; setHover sets +0x244 again next frame.
             u32* hovered = (u32*)(task + 0x244);
             if (*hovered - 0x30u <= 7u) *hovered = 0;
-            return out | 0x100u;
+            return leaveWithA(task, out);
         }
         if (!(st->myTurn && st->type == PPOM::STEP_PICK)) out &= ~0x100u;   // A only to pick
         if (st->myTurn && st->type == PPOM::STEP_STRIKE && (pressed & (0x400u | 0x80000u))) {
