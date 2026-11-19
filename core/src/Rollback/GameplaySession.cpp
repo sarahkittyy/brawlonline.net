@@ -930,9 +930,10 @@ struct State
     bool catch_up_at_start = false;  // ArmPlayback's `catch_up`
     bool join_catch_up = false;      // ... and the barrier started that catch-up
     bool catch_up = false;
-    // The catch-up a spectator starts with (not Go Live's) runs muted, as does a seek's
-    // fast-forward made during it: the sound stream's volume is 0 meanwhile and comes back from
-    // the user's settings after (UpdateSoundStream).
+    // The catch-up a spectator starts with runs muted, as does a seek's fast-forward made during
+    // it, until normal play (a click on the game plays at once): the sound stream's volume is 0
+    // meanwhile and comes back from the user's settings after (UpdateSoundStream). Any other
+    // forward run of a live playback is muted while it runs (bug report #309).
     bool joining = false;
     bool muted = false;
     s64 catch_frames = 0;
@@ -7407,6 +7408,10 @@ PlaybackStep PlaybackLoopTopControls(Core::System& system)
     // Muted while the spectator's first catch-up runs (the user, 2026-10-14), and through the
     // fast-forward of a seek or jump made during it (a click on the bar stops the catch-up: bug
     // report #103, the skipped frames' sound effects played in bursts), until normal play.
+    // Any other forward run of a live playback (Go Live's catch-up, a seek or jump made after the
+    // first catch-up stopped) is muted the same way while it runs: it too shows one frame in
+    // CATCH_UP_SHOW_EVERY, and its skipped frames' sound effects came out in bursts (bug report
+    // #309: paused during the catch-up, played, then a click ahead on the bar).
     const bool ff = f < pb.ff_until;
     if (!pb.catch_up && !ff)
       pb.joining = false;
@@ -7415,7 +7420,7 @@ PlaybackStep PlaybackLoopTopControls(Core::System& system)
       pb.clip_ff = false;
       pb.seek_ff = false;
     }
-    PlaybackMute(system, pb.joining || pb.clip_ff || pb.seek_ff);
+    PlaybackMute(system, pb.joining || pb.clip_ff || pb.seek_ff || (pb.live && (ff || pb.catch_up)));
     const bool waiting = !ff && LiveWaiting(f);
     // A highlight's end, or clip mode's: paused there (the launcher plays the next one, or it
     // stays). Stepped past while paused, it is passed all the same.

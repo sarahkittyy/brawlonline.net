@@ -557,8 +557,14 @@ impl SocialHub {
         Self::send_to(&mut hub, uid, event);
     }
 
-    /// A player changed their profile's flag or primary main, or whether they show them: listed
-    /// again (`online`) with the new ones.
+    /// Those of `uids` whose launchers are connected.
+    pub fn connected(&self, uids: &[uuid::Uuid]) -> Vec<uuid::Uuid> {
+        let hub = self.hub.lock().unwrap();
+        uids.iter().filter(|u| hub.clients.contains_key(&u.to_string())).copied().collect()
+    }
+
+    /// A player changed their profile's flag or primary main, or whether they show them, or an
+    /// admin changed their badges or main icon: listed again (`online`) with the new ones.
     pub fn name_tag_changed(&self, uid: &str, tag: crate::profile::NameTag) {
         let mut hub = self.hub.lock().unwrap();
         let Some(c) = hub.clients.get_mut(uid).filter(|c| c.member.tag != tag) else {
@@ -786,6 +792,18 @@ pub async fn account_watcher(state: AppState) {
                 since = now - common::db::ACCOUNT_POLL_OVERLAP;
                 if !users.is_empty() {
                     state.social.accounts_changed(&users, chrono::Utc::now());
+                    // pp-admin's badges and main icons (`icons.rs`) touch the account too.
+                    let uids: Vec<uuid::Uuid> = users.iter().map(|u| u.uid).collect();
+                    let online = state.social.connected(&uids);
+                    match crate::profile::name_tags(&state.pool, &online).await {
+                        Ok(mut tags) => {
+                            for uid in online {
+                                let tag = tags.remove(&uid).unwrap_or_default();
+                                state.social.name_tag_changed(&uid.to_string(), tag);
+                            }
+                        }
+                        Err(e) => tracing::warn!("reading changed accounts' name tags failed: {e}"),
+                    }
                 }
             }
             Ok(Err(e)) => tracing::warn!("reading changed accounts failed: {e}"),

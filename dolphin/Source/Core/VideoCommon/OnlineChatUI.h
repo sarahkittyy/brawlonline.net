@@ -91,6 +91,13 @@ struct TestFrame
   bool typing = false;
   std::string title;  // the title bar's text
   int unread = 0;     // messages that came while it was folded
+  // Spectator chat: the eye (click: the Spectators window), and that window if open: where, the
+  // rows it drew this frame (only those on screen), the names loaded and whether more can come.
+  std::array<float, 4> spectators_icon{};
+  std::array<float, 4> spectators_window{};
+  int spectators_rows = 0;
+  int spectators_loaded = 0;
+  bool spectators_more = false;
 };
 // Any thread. At most the last 600 frames are kept.
 void SetRecording(bool on);

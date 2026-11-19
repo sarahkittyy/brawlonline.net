@@ -7,7 +7,7 @@ import type { SocialPlayer } from "@social/types";
 import React, { useMemo } from "react";
 
 import { MainPicture } from "@/components/main_picture/main_picture";
-import { useStockIcon } from "@/components/profile/character_icon";
+import { useMainPictureUrl } from "@/components/profile/character_icon";
 import { FriendsIcon } from "@/components/social/friend_icons";
 import { SocialMessages } from "@/components/social/social.messages";
 import { useLocalStorage } from "@/lib/hooks/use_local_storage";
@@ -109,11 +109,11 @@ const FoldedRail = ({ onOpen, onOpenFriends }: { onOpen: () => void; onOpenFrien
 };
 
 const FriendPicture = ({ player, onClick }: { player: SocialPlayer; onClick: () => void }) => {
-  const url = useStockIcon(player.main ?? "");
+  const url = useMainPictureUrl(player.main, player.mainIcon);
   return (
     <Tooltip title={player.displayName} placement="left">
       <button type="button" className={styles.friend} onClick={onClick} aria-label={player.displayName}>
-        <MainPicture url={player.main ? url ?? null : null} size={20} />
+        <MainPicture url={url ?? null} size={20} />
         <span className={styles.onlineDot} />
       </button>
     </Tooltip>

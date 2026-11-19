@@ -18,7 +18,7 @@ vi.mock("electron-updater", async () => {
     setFeedURL: vi.fn(),
     quitAndInstall: vi.fn(),
   });
-  return { autoUpdater };
+  return { autoUpdater, AppImageUpdater: class AppImageUpdater {} };
 });
 vi.mock("@accounts/config", () => ({
   resolveServiceUrls: () => ({ launcherUpdates: "https://example.test/updates" }),

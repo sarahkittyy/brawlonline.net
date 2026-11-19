@@ -1,3 +1,4 @@
+import type { BadgePlace } from "@common/badges";
 import MailOutlinedIcon from "@mui/icons-material/MailOutlined";
 import Tooltip from "@mui/material/Tooltip";
 import type { SocialPlayer } from "@social/types";
@@ -61,16 +62,20 @@ export const PlayerName = ({
   profileLink = false,
   showFlag = false,
   titleMenu = false,
+  badgePlace,
 }: {
   player: SocialPlayer;
   profileLink?: boolean;
   showFlag?: boolean;
   titleMenu?: boolean;
+  /** The badges for this place before the name (docs/design/profiles.md §10). */
+  badgePlace?: BadgePlace;
 }) => (
   <UserName
     user={player}
     profileLink={profileLink}
     showFlag={showFlag}
+    badgePlace={badgePlace}
     playerMenu={titleMenu}
     menuMessage={false}
     className={styles.playerName}

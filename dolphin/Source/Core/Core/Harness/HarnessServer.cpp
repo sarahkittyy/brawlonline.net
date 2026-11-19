@@ -2114,6 +2114,14 @@ Result CmdChatUi(const Args& args)
       names.emplace_back(std::move(no));
     }
     o["names"] = picojson::value(names);
+    const auto rect = [&](const std::array<float, 4>& r) {
+      return picojson::value(picojson::array{num(r[0]), num(r[1]), num(r[2]), num(r[3])});
+    };
+    o["spectators_icon"] = rect(f.spectators_icon);
+    o["spectators_window"] = rect(f.spectators_window);
+    o["spectators_rows"] = num(f.spectators_rows);
+    o["spectators_loaded"] = num(f.spectators_loaded);
+    o["spectators_more"] = picojson::value(f.spectators_more);
     frames.emplace_back(std::move(o));
   }
   VideoCommon::OnlineChatUI::SetRecording(GetBool(args, "record", true));
@@ -2125,7 +2133,8 @@ Result CmdChatUi(const Args& args)
 }
 
 // The mouse over the OSD (ImGui), as the render widget passes it: `x`, `y` in backbuffer pixels
-// and `buttons` (bit 0 left, 1 right, 2 middle; omitted: unchanged).
+// and `buttons` (bit 0 left, 1 right, 2 middle; omitted: unchanged), and `wheel` (notches, up
+// positive).
 Result CmdOsdMouse(const Args& args)
 {
   RequireRunning();
@@ -2141,6 +2150,9 @@ Result CmdOsdMouse(const Args& args)
   const auto buttons = args.find("buttons");
   if (buttons != args.end() && buttons->second.is<double>())
     g_presenter->SetMousePress(static_cast<u32>(buttons->second.get<double>()));
+  const auto wheel = args.find("wheel");
+  if (wheel != args.end() && wheel->second.is<double>())
+    g_presenter->SetMouseWheel(0.0f, static_cast<float>(wheel->second.get<double>()));
   return {};
 }
 

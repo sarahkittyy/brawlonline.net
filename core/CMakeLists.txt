@@ -23,6 +23,7 @@ add_library(brawl_online_core STATIC
   include/BrawlOnline/Online/Rooms.h
   include/BrawlOnline/Online/SetFormat.h
   include/BrawlOnline/Online/Spectate.h
+  include/BrawlOnline/Online/SpectatorChat.h
   include/BrawlOnline/Online/Timeouts.h
   include/BrawlOnline/Online/User.h
   include/BrawlOnline/Rollback/GameplayRollback.h
@@ -49,6 +50,7 @@ add_library(brawl_online_core STATIC
   src/Online/Rooms.cpp
   src/Online/SetFormat.cpp
   src/Online/Spectate.cpp
+  src/Online/SpectatorChat.cpp
   src/Online/User.cpp
   src/Rollback/GameplayRollback.cpp
   src/Rollback/GameplaySession.cpp

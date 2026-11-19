@@ -1,6 +1,6 @@
 //! The launcher's admin tools (`/v1/admin/...`, `accounts/src/admin.rs`): only an account with
 //! `role = 'admin'` gets them; mute, ban, rename, connect code, name lock and room names change what
-//! `pp-admin` would, audit-logged with the admin as the actor. And the public profile's `dev` flag.
+//! `pp-admin` would, audit-logged with the admin as the actor.
 //! Postgres + accounts (HTTP) + mm (ENet/UDP), as `rooms.rs`.
 
 use std::time::{Duration, Instant};
@@ -147,17 +147,9 @@ async fn admins_mute_ban_and_rename_players() {
     assert_eq!(audits(&s, "user.ban").await.len(), 1);
     assert_eq!(audits(&s, "user.unban").await.len(), 1);
 
-    // The developer's mark: on the admin's profile (launcher and web page), nobody else's.
+    // No mark of its own any more: the </> is a badge pp-admin gives (docs/design/profiles.md §10).
     let (_, p) = s.get(&format!("/v1/profiles/{}", sarah_json.uid), None).await;
-    assert_eq!(p["dev"], true, "{p}");
-    let (_, p) = s.get(&format!("/v1/profiles/{}", bob_json.uid), None).await;
-    assert_eq!(p["dev"], false, "{p}");
-    let slug = sarah_json.connect_code.to_lowercase().replace('#', "-");
-    let html = s.http.get(s.url(&format!("/profile/{slug}"))).send().await.unwrap().text().await.unwrap();
-    assert!(html.contains("<span class=\"dev\" title=\"Dev\""), "{html}");
-    let slug = bob_json.connect_code.to_lowercase().replace('#', "-");
-    let html = s.http.get(s.url(&format!("/profile/{slug}"))).send().await.unwrap().text().await.unwrap();
-    assert!(!html.contains("class=\"dev\""), "{html}");
+    assert!(p.get("dev").is_none() && p["badges"] == json!([]), "{p}");
 }
 
 fn online(stack: &Stack, user: &UserJson) -> OnlineClient {

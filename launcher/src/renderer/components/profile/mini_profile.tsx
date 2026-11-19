@@ -1,11 +1,12 @@
+import { MAX_BADGES } from "@common/badges";
 import { countryName } from "@common/profile";
 import CircularProgress from "@mui/material/CircularProgress";
 import Tooltip from "@mui/material/Tooltip";
 import { useQuery } from "@tanstack/react-query";
 import React from "react";
 
-import { DevBadge } from "@/components/dev_badge/dev_badge";
 import { Flag } from "@/components/flag/flag";
+import { MainIcon, NameBadges } from "@/components/name_badges/name_badges";
 import { RankBadge } from "@/components/rank_badge/rank_badge";
 import { RankBadgeMessages } from "@/components/rank_badge/rank_badge.messages";
 import { formatRating, HIDDEN_RATING } from "@/lib/ranked_format";
@@ -20,7 +21,7 @@ const CARD_MAINS = 8;
 
 /**
  * A name's hover card (docs/design/profiles.md §8): after a short pause on the name, a small profile floats beside it
- * (badge, name, code, flag, rank and rating, mains). The profile is fetched the first time and kept a few minutes, as
+ * (badge, the admin-given badges and name, code, flag, rank and rating, mains with an admin's custom main icon first). The profile is fetched the first time and kept a few minutes, as
  * the profile dialog's.
  */
 export const MiniProfileTooltip = ({ uid, children }: { uid: string; children: React.ReactElement }) => (
@@ -54,14 +55,16 @@ const MiniProfile = ({ uid }: { uid: string }) => {
   const r = data.ranked;
   const placing = r.rank == null && r.setsPlayed > 0 && r.setsToPlace > 0;
   const mains = data.mains ?? [];
+  const mainIcon = data.mainIcon ?? null;
+  const shownMains = mainIcon ? CARD_MAINS - 1 : CARD_MAINS;
   return (
     <div className={styles.mini} data-testid="mini-profile">
       <div className={styles.miniTop}>
         {(r.rank || placing) && <RankBadge rank={r.rank} setsToPlace={placing ? r.setsToPlace : 0} size="small" />}
         <div className={styles.names}>
           <div className={styles.miniName}>
+            <NameBadges badges={data.badges} place="hover" size={15} max={MAX_BADGES} className={styles.miniBadges} />
             {data.displayName}
-            {data.dev && <DevBadge size={15} className={styles.miniDev} />}
           </div>
           <div className={styles.code}>{data.connectCode}</div>
           {data.country && (
@@ -78,12 +81,14 @@ const MiniProfile = ({ uid }: { uid: string }) => {
           <span className={styles.miniRating}>{r.rating != null ? formatRating(r.rating) : HIDDEN_RATING}</span>
         )}
       </div>
-      {mains.length > 0 && (
+      {(mains.length > 0 || mainIcon) && (
         <div className={icons ? styles.miniMains : styles.mainTags}>
-          {mains.slice(0, CARD_MAINS).map((m, i) => (
-            <CharacterIcon key={m} character={m} size={20} primary={i === 0} forceTag={!icons} />
+          {/* An admin's custom main icon is the primary, before the player's own (docs/design/profiles.md §10). */}
+          {mainIcon && <MainIcon icon={mainIcon} label={data.mainIconLabel} size={20} />}
+          {mains.slice(0, shownMains).map((m, i) => (
+            <CharacterIcon key={m} character={m} size={20} primary={i === 0 && !mainIcon} forceTag={!icons} />
           ))}
-          {mains.length > CARD_MAINS && <span className={styles.none}>+{mains.length - CARD_MAINS}</span>}
+          {mains.length > shownMains && <span className={styles.none}>+{mains.length - shownMains}</span>}
         </div>
       )}
     </div>

@@ -1,15 +1,27 @@
 import type { SocialPlayer, SocialState } from "@social/types";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useEffect } from "react";
 
+import { DEV_BADGE, STAR_BADGE, STORY_ICONS, TROPHY_BADGE } from "@/components/name_badges/story_badges";
 import { useSocial } from "@/lib/social/use_social";
 import { createServiceProvider } from "@/services";
 import type { Services } from "@/services/types";
 
 import { ChatDock } from "./chat_dock";
 
+const queryClient = new QueryClient();
+
 export default {
   title: "components/Social/ChatDock",
   argTypes: {},
+  // The player menu (right-click a name) reads the account's friends.
+  decorators: [
+    (Story: React.ComponentType) => (
+      <QueryClientProvider client={queryClient}>
+        <Story />
+      </QueryClientProvider>
+    ),
+  ],
 };
 
 const player = (uid: string, name: string, code: string): SocialPlayer => ({
@@ -17,7 +29,12 @@ const player = (uid: string, name: string, code: string): SocialPlayer => ({
   displayName: name,
   connectCode: code,
 });
-const players = [player("bob", "Bob", "BOB#123"), player("kim", "Kim", "KIM#45"), player("lee", "Lee", "LEE#7")];
+const players = [
+  // Badges and a custom main icon an admin gave (docs/design/profiles.md §10).
+  { ...player("bob", "Bob", "BOB#123"), badges: [DEV_BADGE, TROPHY_BADGE], mainIcon: STORY_ICONS.heart },
+  player("kim", "Kim", "KIM#45"),
+  { ...player("lee", "Lee", "LEE#7"), badges: [STAR_BADGE] },
+];
 
 const state: SocialState = {
   status: "online",

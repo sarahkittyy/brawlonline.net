@@ -20,6 +20,7 @@ use axum::extract::{ConnectInfo, Path, State};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::Json;
+use common::badges::{icon_path, valid_icon_id, NameBadge, Place};
 use common::codes::{parse_connect_code, ConnectCode};
 use common::countries::country_name;
 use common::net::ip_key;
@@ -58,13 +59,18 @@ pub struct Profile {
     pub show_country: bool,
     /// The same for their primary main (the leaderboard, chat).
     pub show_main: bool,
-    /// One of the game's developers (`users.role = 'admin'`): a purple `</>` beside the name, in the
-    /// launcher's profiles and on the profile page.
-    pub dev: bool,
+    /// The badges an admin gave the player (docs/design/profiles.md §10), in order, each with where
+    /// it shows (the profile shows those for [`Place::Profile`]).
+    pub badges: Vec<NameBadge>,
+    /// The icon an admin set in place of the primary main's stock icon (`common::badges::icon_id`).
+    pub main_icon: Option<String>,
+    /// Its hover text (as a stock icon's is the character's name); null for none.
+    pub main_icon_label: Option<String>,
 }
 
 /// What shows beside a player's name in the launcher's lists ([`name_tags`]): the flag and the
-/// primary main, each only when set and the player chose to show it.
+/// primary main, each only when set and the player chose to show it; the custom main icon and the
+/// badges an admin gave them (docs/design/profiles.md §10), whatever the player chose.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NameTag {
@@ -72,13 +78,40 @@ pub struct NameTag {
     pub country: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub main: Option<String>,
+    /// The icon (`common::badges::icon_id`) shown in place of the primary main's stock icon.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub main_icon: Option<String>,
+    /// The main icon's hover text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub main_icon_label: Option<String>,
+    /// The badges before the name, in order; each says where it shows.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub badges: Vec<NameBadge>,
 }
 
 impl NameTag {
     pub fn is_empty(&self) -> bool {
-        self.country.is_none() && self.main.is_none()
+        self.country.is_none() && self.main.is_none() && self.main_icon.is_none() && self.badges.is_empty()
     }
 }
+
+/// A `user_badges` row as [`name_tags`] reads it (places as stored, unknown ones dropped).
+#[derive(Deserialize)]
+struct BadgeRow {
+    icon: String,
+    label: String,
+    places: Option<Vec<String>>,
+}
+
+impl BadgeRow {
+    fn badge(self) -> NameBadge {
+        let places = self.places.map(|p| p.iter().filter_map(|p| Place::parse(p)).collect());
+        NameBadge { icon: self.icon, label: self.label, places }
+    }
+}
+
+type NameTagRow =
+    (Uuid, Option<String>, Option<String>, Option<String>, Option<String>, sqlx::types::Json<Vec<BadgeRow>>);
 
 /// Each player's [`NameTag`] (players with nothing to show are left out).
 pub async fn name_tags<'e, E: sqlx::PgExecutor<'e>>(
@@ -88,19 +121,27 @@ pub async fn name_tags<'e, E: sqlx::PgExecutor<'e>>(
     if uids.is_empty() {
         return Ok(Default::default());
     }
-    let rows: Vec<(Uuid, Option<String>, Option<String>)> = sqlx::query_as(
-        "SELECT uid, CASE WHEN show_country THEN country END, CASE WHEN show_main THEN mains[1] END
-           FROM profiles WHERE uid = ANY($1) AND ((show_country AND country IS NOT NULL) OR (show_main AND cardinality(mains) > 0))",
+    let rows: Vec<NameTagRow> = sqlx::query_as(
+        "SELECT u.uid, CASE WHEN p.show_country THEN p.country END, CASE WHEN p.show_main THEN p.mains[1] END,
+                (SELECT m.icon FROM user_main_icons m WHERE m.uid = u.uid),
+                (SELECT NULLIF(m.label, '') FROM user_main_icons m WHERE m.uid = u.uid),
+                COALESCE((SELECT json_agg(json_build_object('icon', b.icon, 'label', b.label, 'places', b.places)
+                                          ORDER BY b.pos, b.created_at)
+                            FROM user_badges b WHERE b.uid = u.uid), '[]'::json)
+           FROM unnest($1::uuid[]) AS u(uid) LEFT JOIN profiles p ON p.uid = u.uid",
     )
     .bind(uids)
     .fetch_all(e)
     .await?;
     Ok(rows
         .into_iter()
-        .map(|(uid, country, main)| {
+        .map(|(uid, country, main, main_icon, main_icon_label, badges)| {
             let tag = NameTag {
                 country: country.filter(|c| country_name(c).is_some()),
                 main: main.filter(|m| character_name(m).is_some()),
+                main_icon_label: main_icon_label.filter(|_| main_icon.is_some()),
+                main_icon,
+                badges: badges.0.into_iter().map(BadgeRow::badge).collect(),
             };
             (uid, tag)
         })
@@ -244,6 +285,7 @@ async fn profile_of(pool: &PgPool, user: &UserRow, base_url: &str) -> sqlx::Resu
     let mains = stored.mains.into_iter().filter(|m| character_name(m).is_some()).collect();
     let country = stored.country.filter(|c| country_name(c).is_some());
     let socials = Platform::ALL.into_iter().zip(stored.handles).filter_map(|(p, h)| Some(Social::of(p, h?))).collect();
+    let tag = name_tags(pool, &[user.uid]).await?.remove(&user.uid).unwrap_or_default();
     Ok(Profile {
         uid: user.uid,
         display_name: user.display_name.clone(),
@@ -264,7 +306,9 @@ async fn profile_of(pool: &PgPool, user: &UserRow, base_url: &str) -> sqlx::Resu
         socials,
         show_country: stored.show_country,
         show_main: stored.show_main,
-        dev: user.role == "admin",
+        badges: tag.badges,
+        main_icon: tag.main_icon,
+        main_icon_label: tag.main_icon_label,
     })
 }
 
@@ -678,7 +722,7 @@ pub fn page_html(p: &Profile, base: &str) -> String {
   <section class=\"card who\" data-tier=\"{tier}\">
     <div class=\"badge\">{badge}</div>
     <div>
-      <h1 class=\"name\">{name}{dev}</h1>
+      <h1 class=\"name\">{badges}{name}</h1>
       <p class=\"code\">{code}</p>
 {country}
       <p class=\"standing\">{standing}</p>
@@ -703,19 +747,39 @@ pub fn page_html(p: &Profile, base: &str) -> String {
         about = about_html(p),
         country = country_html(p),
         socials = socials_html(p),
-        dev = if p.dev { DEV_BADGE } else { "" },
+        badges = badges_html(p),
     )
 }
 
-/// The developers' mark after the name: the launcher's `</>` (MUI CodeRounded) in the room codes'
-/// purple, "Dev" on hover.
-const DEV_BADGE: &str = concat!(
-    r#"<span class="dev" title="Dev" aria-label="Dev" role="img"><svg viewBox="0 0 24 24" aria-hidden="true">"#,
-    r#"<path d="M8.7 15.9 4.8 12l3.9-3.9c.39-.39.39-1.01 0-1.4a.9839.9839 0 0 0-1.4 0l-4.59 4.59c-.39.39-.39 1.02 0 "#,
-    r#"1.41l4.59 4.6c.39.39 1.01.39 1.4 0 .39-.39.39-1.01 0-1.4m6.6 0 3.9-3.9-3.9-3.9a.9839.9839 0 0 1 0-1.4c.39-.39 "#,
-    r#"1.01-.39 1.4 0l4.59 4.59c.39.39.39 1.02 0 1.41l-4.59 4.6c-.39.39-1.01.39-1.4 0a.9839.9839 0 0 1 0-1.4"/>"#,
-    r#"</svg></span>"#,
-);
+/// The badges an admin gave the player for the profile (docs/design/profiles.md §10), before the
+/// name; the hover text is the label.
+fn badges_html(p: &Profile) -> String {
+    p.badges
+        .iter()
+        .filter(|b| b.shows_in(Place::Profile) && valid_icon_id(&b.icon))
+        .map(|b| {
+            let label = esc(&b.label);
+            let title = if label.is_empty() { String::new() } else { format!(" title=\"{label}\"") };
+            format!(
+                "<img class=\"badge-icon\" src=\"{}\" alt=\"{label}\"{title} width=\"28\" height=\"28\">",
+                icon_path(&b.icon)
+            )
+        })
+        .collect()
+}
+
+/// The icon an admin set in place of the primary main (docs/design/profiles.md §10): the primary, first among
+/// the mains (the page has no stock icons, so the player's own are name tags after it).
+fn main_icon_html(p: &Profile) -> Option<String> {
+    let id = p.main_icon.as_deref().filter(|id| valid_icon_id(id))?;
+    // Its hover text, as the launcher's "Fox (primary)"; the tags' "Primary" without one.
+    let label = esc(p.main_icon_label.as_deref().unwrap_or(""));
+    let title = if label.is_empty() { "Primary".to_string() } else { format!("{label} (primary)") };
+    Some(format!(
+        "<li class=\"main primary main-icon\" title=\"{title}\"><img src=\"{}\" alt=\"{label}\" width=\"20\" height=\"20\"></li>",
+        icon_path(id)
+    ))
+}
 
 /// The flag and the country's name, under the code (as in the launcher); nothing without one.
 fn country_html(p: &Profile) -> String {
@@ -733,19 +797,19 @@ fn country_html(p: &Profile) -> String {
 /// nothing without any.
 fn about_html(p: &Profile) -> String {
     let mut rows = String::new();
-    if !p.mains.is_empty() {
-        let tags: String = p
-            .mains
-            .iter()
-            .enumerate()
-            .filter_map(|(i, m)| {
+    let icon = main_icon_html(p);
+    if !p.mains.is_empty() || icon.is_some() {
+        let has_icon = icon.is_some();
+        let tags: String = icon
+            .into_iter()
+            .chain(p.mains.iter().enumerate().filter_map(|(i, m)| {
                 let name = esc(character_name(m)?);
-                Some(if i == 0 {
+                Some(if i == 0 && !has_icon {
                     format!("<li class=\"main primary\" title=\"Primary\">{name}</li>")
                 } else {
                     format!("<li class=\"main\">{name}</li>")
                 })
-            })
+            }))
             .collect();
         rows.push_str(&format!(
             "<div class=\"row\"><span class=\"label\">Mains:</span><ul class=\"mains\">{tags}</ul></div>"
@@ -864,7 +928,9 @@ mod tests {
             socials: vec![],
             show_country: true,
             show_main: true,
-            dev: false,
+            badges: vec![],
+            main_icon: None,
+            main_icon_label: None,
         }
     }
 
@@ -935,13 +1001,42 @@ mod tests {
     }
 
     #[test]
-    fn page_marks_a_dev() {
+    fn page_shows_badges_and_the_main_icon() {
         let mut p = profile(None, None, 0);
-        assert!(!page_html(&p, "").contains("class=\"dev\""));
-        p.dev = true;
         let html = page_html(&p, "");
-        assert!(html.contains("&amp;<span class=\"dev\" title=\"Dev\""), "{html}");
-        assert!(html.contains("4.59 4.59c") && html.contains("</svg></span></h1>"), "{html}");
+        assert!(!html.contains("badge-icon") && !html.contains("main-icon"));
+        let id = |c: char| c.to_string().repeat(20);
+        p.badges = vec![
+            NameBadge { icon: id('a'), label: "Top <8>".into(), places: None },
+            NameBadge { icon: id('b'), label: String::new(), places: Some(vec![Place::Chat]) },
+            NameBadge { icon: id('c'), label: String::new(), places: Some(vec![Place::Profile, Place::Chat]) },
+            NameBadge { icon: "../x".into(), label: String::new(), places: None },
+        ];
+        p.main_icon = Some(id('d'));
+        p.mains = vec!["fox".into(), "falco".into()];
+        let html = page_html(&p, "");
+        let a = format!(
+            "<img class=\"badge-icon\" src=\"/v1/icons/{}.png\" alt=\"Top &lt;8&gt;\" title=\"Top &lt;8&gt;\"",
+            id('a')
+        );
+        assert!(html.contains(&format!("<h1 class=\"name\">{a}")), "{html}");
+        assert!(html.contains(&format!("/v1/icons/{}.png", id('c'))), "{html}");
+        // Not for the profile, or not an icon id.
+        assert!(!html.contains(&id('b')) && !html.contains("../x"), "{html}");
+        // The main icon is the primary main, first; the player's own mains follow, none marked primary.
+        assert!(html.contains("<h1 class=\"name\">") && !html.contains("main-icon\" src"), "{html}");
+        let mains = format!(
+            "<ul class=\"mains\"><li class=\"main primary main-icon\" title=\"Primary\"><img src=\"/v1/icons/{}.png\" alt=\"\" width=\"20\" height=\"20\"></li><li class=\"main\">Fox</li><li class=\"main\">Falco</li></ul>",
+            id('d')
+        );
+        assert!(html.contains(&mains), "{html}");
+        // Its hover text, escaped.
+        p.main_icon_label = Some("C<l>aude".into());
+        assert!(page_html(&p, "").contains("title=\"C&lt;l&gt;aude (primary)\"><img src="), "with a label");
+        p.main_icon_label = None;
+        // Without mains of their own, the icon alone.
+        p.mains.clear();
+        assert!(page_html(&p, "").contains("Mains:</span><ul class=\"mains\"><li class=\"main primary main-icon\""));
     }
 
     #[test]

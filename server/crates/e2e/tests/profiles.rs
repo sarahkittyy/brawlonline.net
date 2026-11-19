@@ -282,3 +282,109 @@ async fn the_leaderboard_shows_flags_and_mains_players_show_next_to_their_name()
     assert_eq!((&p["country"], &p["mains"][0], &p["showCountry"]), (&json!("us"), &json!("random"), &json!(false)));
     stack.shutdown().await;
 }
+
+/// A PNG `common::badges::check_png` takes (a header and an end; enough for the server, which
+/// never decodes it). `tag` makes each one a different file.
+fn png(tag: u8) -> Vec<u8> {
+    let mut v = b"\x89PNG\r\n\x1a\n\0\0\0\x0dIHDR".to_vec();
+    v.extend(64u32.to_be_bytes());
+    v.extend(64u32.to_be_bytes());
+    v.extend([8, 6, 0, 0, 0, tag, 0, 0, 0]);
+    v.extend(b"\0\0\0\0IEND\xaeB`\x82");
+    v
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn admins_give_badges_and_main_icons_that_show_whatever_the_player_chose() {
+    use accounts::icons;
+    use common::badges::Place;
+    let stack = Stack::start(StackOptions::default()).await.unwrap();
+    let (session, a) = stack.create_player("badge-a@example.test", "badged", "BADG").await;
+    let (_, b) = stack.create_player("badge-b@example.test", "plain", "PLAI").await;
+    let placed = PLACEMENT_SETS as i32;
+    set_rating(&stack.pool, uuid(&a), 1600.0, placed, Some(9)).await;
+    set_rating(&stack.pool, uuid(&b), 1500.0, placed, Some(8)).await;
+    let pool = &stack.pool;
+
+    let (dev, new) = icons::add_icon(pool, "dev", &png(1), "test").await.unwrap();
+    assert!(new);
+    assert_eq!(icons::add_icon(pool, "dev", &png(1), "test").await.unwrap(), (dev.clone(), false));
+    assert!(icons::add_icon(pool, "dev2", &png(1), "test").await.is_err(), "the same file twice");
+    assert!(icons::add_icon(pool, "dev", &png(2), "test").await.is_err(), "a taken name");
+    assert!(icons::add_icon(pool, "Bad Name", &png(3), "test").await.is_err());
+    assert!(icons::add_icon(pool, "gif", b"GIF89a", "test").await.is_err());
+    let (crown, _) = icons::add_icon(pool, "crown", &png(4), "test").await.unwrap();
+    let (star, _) = icons::add_icon(pool, "star", &png(5), "test").await.unwrap();
+
+    // The file: cached for good; unknown ids and names 404.
+    let resp = stack.http.get(stack.url(&format!("/v1/icons/{dev}.png"))).send().await.unwrap();
+    assert_eq!(resp.status(), 200);
+    assert_eq!(resp.headers()["content-type"], "image/png");
+    assert!(resp.headers()["cache-control"].to_str().unwrap().contains("immutable"));
+    assert_eq!(resp.bytes().await.unwrap().to_vec(), png(1));
+    for bad in ["00000000000000000000.png", "dev.png", &format!("{dev}.gif"), &dev] {
+        let st = stack.http.get(stack.url(&format!("/v1/icons/{bad}"))).send().await.unwrap().status();
+        assert_eq!(st, 404, "{bad}");
+    }
+
+    // Badges in order (a new one last, --pos moves it), places, hover text; the main icon.
+    let ua = uuid(&a);
+    icons::set_badge(pool, ua, &dev, Some("Dev"), None, None).await.unwrap();
+    icons::set_badge(pool, ua, &crown, Some("Champion"), Some(Some(vec![Place::Profile, Place::Chat])), None)
+        .await
+        .unwrap();
+    icons::set_badge(pool, ua, &star, None, None, Some(1)).await.unwrap();
+    // Changing one keeps what isn't given (its hover text, its place).
+    icons::set_badge(pool, ua, &dev, None, Some(None), None).await.unwrap();
+    icons::set_main_icon(pool, ua, Some((&star, "Star"))).await.unwrap();
+    let names: Vec<String> = icons::badges_of(pool, ua).await.unwrap().into_iter().map(|b| b.name).collect();
+    assert_eq!(names, ["star", "dev", "crown"]);
+
+    let want = json!([
+        {"icon": star},
+        {"icon": dev, "label": "Dev"},
+        {"icon": crown, "label": "Champion", "places": ["profile", "chat"]},
+    ]);
+    let (_, p) = profile(&stack, &a.uid).await;
+    assert_eq!((&p["badges"], &p["mainIcon"], &p["mainIconLabel"]), (&want, &json!(star), &json!("Star")), "{p}");
+    let (_, p) = profile(&stack, &b.uid).await;
+    assert_eq!((&p["badges"], &p["mainIcon"]), (&json!([]), &Value::Null), "{p}");
+
+    // Beside the name in the lists too, even with the player's own switches off (and no main).
+    stack.put("/v1/me/profile", Some(&session), json!({"showMain": false, "showCountry": false})).await;
+    let page = stack.get("/v1/ranked/leaderboard", None).await.1;
+    let entry = |u: &UserJson| page["entries"].as_array().unwrap().iter().find(|e| e["uid"] == u.uid.as_str()).cloned();
+    let e = entry(&a).unwrap();
+    assert_eq!((&e["badges"], &e["mainIcon"], e.get("main")), (&want, &json!(star), None), "{e}");
+    assert_eq!(e["mainIconLabel"], "Star", "{e}");
+    let e = entry(&b).unwrap();
+    assert!(e.get("badges").is_none() && e.get("mainIcon").is_none(), "{e}");
+
+    // The web page: the profile's badges before the name, the main icon after it.
+    let slug = a.connect_code.replace('#', "-").to_lowercase();
+    let html = stack.http.get(stack.url(&format!("/profile/{slug}"))).send().await.unwrap().text().await.unwrap();
+    let h1 = html.split("<h1 class=\"name\">").nth(1).unwrap().split("</h1>").next().unwrap().to_string();
+    let order: Vec<usize> =
+        [&star, &dev, &crown].iter().map(|id| h1.find(&format!("/v1/icons/{id}.png")).unwrap()).collect();
+    assert!(order[0] < order[1] && order[1] < order[2] && h1.contains("title=\"Champion\""), "{h1}");
+    // The main icon is the first of the mains (the player has none of their own here), not by the name.
+    assert!(h1.ends_with("badged"), "{h1}");
+    let mains = format!(
+        "<ul class=\"mains\"><li class=\"main primary main-icon\" title=\"Star (primary)\"><img src=\"/v1/icons/{star}.png\" alt=\"Star\""
+    );
+    assert!(html.contains(&mains), "{html}");
+
+    // Taking them off; an icon in use is only removed with force (and leaves everyone).
+    assert!(icons::remove_badge(pool, ua, &dev).await.unwrap());
+    assert!(!icons::remove_badge(pool, ua, &dev).await.unwrap());
+    assert!(icons::remove_icon(pool, &crown, false).await.is_err());
+    assert_eq!(icons::remove_icon(pool, &star, true).await.unwrap(), vec![ua]);
+    icons::set_main_icon(pool, ua, None).await.unwrap();
+    let (_, p) = profile(&stack, &a.uid).await;
+    assert_eq!(
+        (&p["badges"], &p["mainIcon"]),
+        (&json!([{"icon": crown, "label": "Champion", "places": ["profile", "chat"]}]), &Value::Null),
+        "{p}"
+    );
+    stack.shutdown().await;
+}

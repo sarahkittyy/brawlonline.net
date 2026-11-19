@@ -106,11 +106,13 @@ add_dolphin_test(MatchRulesTest Online/MatchRulesTest.cpp)
 add_dolphin_test(SpecialAssetsTest Online/SpecialAssetsTest.cpp)
 # Sets: the stage steps of a set's format (Core/Online/SetFormat).
 add_dolphin_test(SetFormatTest Online/SetFormatTest.cpp)
-# Chat: the text cleaner, the crypto, and the chat state against hostile messages (Core/Online/Chat*).
+# Chat: the text cleaner, the crypto, and the chat state against hostile messages (Core/Online/Chat*),
+# and spectator chat's file from the launcher (Core/Online/SpectatorChat).
 add_dolphin_test(ChatTest
   Online/ChatTextTest.cpp
   Online/ChatCryptoTest.cpp
   Online/ChatTest.cpp
+  Online/SpectatorChatTest.cpp
 )
 if(MSVC)
   # zpp_bits (GekkoNet's serializer) trips /W4 warnings; GekkoNet's own sources do the same.

@@ -8,7 +8,7 @@ waiting (package-launcher-macos.sh, MAC_NOTARY_SUBMIT) and uploads two artifacts
     launcher-mac   the DMG, the update zip, latest-mac.yml, blockmaps (what pp-release publishes)
     mac-notary     notary.json: {"id": <Apple submission ID>, "version": "0.1.N", "file": <DMG>}
 
-This script (client-mac-publish.yml, after each client run and on a schedule, on sarahvps2)
+This script (client-mac-publish.yml, right after each macos job and on a schedule, on sarahvps2)
 looks at every pending mac-notary artifact and asks Apple about its submission:
 
     - In Progress: left alone, asked again next time. There is no time limit: a build waits as long

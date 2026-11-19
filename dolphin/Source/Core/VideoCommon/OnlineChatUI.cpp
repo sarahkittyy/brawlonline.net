@@ -7,6 +7,7 @@
 #include <array>
 #include <atomic>
 #include <cctype>
+#include <cfloat>
 #include <cmath>
 #include <cstdio>
 #include <deque>
@@ -29,6 +30,7 @@
 #include "BrawlOnline/Online/Chat.h"
 #include "BrawlOnline/Online/ChatText.h"
 #include "BrawlOnline/Online/Rooms.h"
+#include "BrawlOnline/Online/SpectatorChat.h"
 #include "InputCommon/ControllerInterface/CoreDevice.h"
 #include "VideoCommon/Present.h"
 
@@ -175,6 +177,10 @@ struct UiState
 
   std::string notice;
   u64 notice_until = 0;
+
+  // Spectator chat's Spectators window (a click on the eye).
+  std::optional<Online::SpectatorChat::List> list;
+  u64 list_serial = 0;
 };
 UiState s;
 
@@ -516,11 +522,229 @@ void LockIcon(float scale)
                         ImGui::GetColorU32(ImGuiCol_MenuBarBg));
 }
 
+// Who watches, in the eye's tooltip: "name (code)" in their colours, in columns of 20 when there
+// are many, and "+N" for those the list leaves out.
+void DrawSpectatorList(const Online::Chat::View& v)
+{
+  constexpr size_t PER_COLUMN = 20;
+  const size_t n = v.watching.size();
+  const int columns = static_cast<int>(std::clamp<size_t>((n + PER_COLUMN - 1) / PER_COLUMN, 1, 5));
+  if (n > 0 && ImGui::BeginTable("##watching", columns, ImGuiTableFlags_SizingFixedFit))
+  {
+    const size_t rows = (n + static_cast<size_t>(columns) - 1) / static_cast<size_t>(columns);
+    for (size_t row = 0; row < rows; ++row)
+    {
+      ImGui::TableNextRow();
+      for (int col = 0; col < columns; ++col)
+      {
+        const size_t i = static_cast<size_t>(col) * rows + row;
+        ImGui::TableSetColumnIndex(col);
+        if (i >= n)
+          continue;
+        const Online::Chat::Member& m = v.watching[i];
+        const std::string who = m.code.empty() ? m.name : fmt::format("{} ({})", m.name, m.code);
+        ImGui::PushStyleColor(ImGuiCol_Text, ColorOf(m.color));
+        ImGui::TextUnformatted(who.data(), who.data() + who.size());
+        ImGui::PopStyleColor();
+      }
+    }
+    ImGui::EndTable();
+  }
+  if (v.spectators > n)
+  {
+    const std::string more = fmt::format("+{}", v.spectators - n);
+    ImGui::PushStyleColor(ImGuiCol_Text, SYSTEM_COLOR);
+    ImGui::TextUnformatted(more.data(), more.data() + more.size());
+    ImGui::PopStyleColor();
+  }
+}
+
+// The eye's width for a text line `h` tall: whole pixels, an even number (its middle on a pixel
+// edge, as its top and bottom).
+float EyeWidth(float h)
+{
+  return 2.0f * std::round(0.42f * h);
+}
+
+// Spectator chat's place for the padlock (it isn't end-to-end encrypted): an eye drawn from
+// shapes and how many watch; hovering it lists who, a click opens (or closes) the Spectators
+// window.
+void SpectatorsIcon(const Online::Chat::View& v, float scale)
+{
+  const float h = ImGui::GetTextLineHeight();
+  const float eye_w = EyeWidth(h);
+  const float gap = 4.0f * scale;
+  const std::string count = fmt::format("{}", v.spectators);
+  const float count_w = ImGui::CalcTextSize(count.data(), count.data() + count.size()).x;
+  const ImVec2 item = ImGui::GetCursorScreenPos();
+  if (ImGui::InvisibleButton("##spectators", ImVec2(eye_w + gap + count_w, h)))
+  {
+    if (s.list && s.list->open)
+      Online::SpectatorChat::CloseList();
+    else
+      Online::SpectatorChat::OpenList();
+  }
+  const bool hovered = ImGui::IsItemHovered();
+  if (s_recording)
+  {
+    s_frame.spectators_icon = {ImGui::GetItemRectMin().x, ImGui::GetItemRectMin().y,
+                               ImGui::GetItemRectMax().x, ImGui::GetItemRectMax().y};
+  }
+  if (hovered)
+  {
+    ImGui::BeginTooltip();
+    DrawSpectatorList(v);
+    ImGui::EndTooltip();
+  }
+  // On the menu bar's text line, as the names. Filled shapes on whole pixels (a thin outline at
+  // this size was a blur): the eye, its iris cut out in the bar's colour, and the pupil.
+  const ImVec2 p{item.x, item.y + ImGui::GetStyle().FramePadding.y};
+  const ImU32 col = hovered ? ImGui::GetColorU32(ImGuiCol_Text) : ImGui::GetColorU32(SYSTEM_COLOR);
+  ImDrawList* draw = ImGui::GetWindowDrawList();
+  const float x0 = std::round(p.x);
+  const float x1 = x0 + eye_w;
+  const float cx = x0 + 0.5f * eye_w;
+  const float cy = std::round(p.y + 0.5f * h);
+  // A quadratic curve bulges half as far as its control point: the eye is 0.64 of a line tall.
+  const float lid = 0.64f * h;
+  draw->PathLineTo({x0, cy});
+  draw->PathBezierQuadraticCurveTo({cx, cy - lid}, {x1, cy});
+  draw->PathBezierQuadraticCurveTo({cx, cy + lid}, {x0, cy});
+  draw->PathFillConvex(col);
+  draw->AddCircleFilled({cx, cy}, std::max(0.2f * h, 2.0f), ImGui::GetColorU32(ImGuiCol_MenuBarBg));
+  draw->AddCircleFilled({cx, cy}, std::max(0.11f * h, 1.2f), col);
+  draw->AddText({x1 + gap, p.y}, col, count.data(), count.data() + count.size());
+}
+
+// The widest "name (code)" a spectator can have, at the current font size: a display name is at
+// most 15 printable ASCII, hiragana or katakana characters and a connect code at most 8 (up to 4
+// letters, '#', up to 3 digits, or 3 letters and 4 digits; server/crates/common/src/codes.rs).
+// Every character the widest one allowed, each part measured in the font.
+float WidestSpectatorRow()
+{
+  static float s_size = -1.0f;
+  static float s_width = 0.0f;
+  const float size = ImGui::GetFontSize();
+  if (size == s_size)
+    return s_width;
+  ImFontBaked* const font = ImGui::GetFontBaked();
+  const auto widest = [font](ImWchar first, ImWchar last) {
+    float w = 0.0f;
+    for (ImWchar c = first; c <= last; ++c)
+    {
+      if (c != '\\' && c != '`')
+        w = std::max(w, font->GetCharAdvance(c));
+    }
+    return w;
+  };
+  constexpr int NAME_CHARS = 15;
+  const float name_char =
+      std::max({widest(0x20, 0x7E), widest(0x3041, 0x3093), widest(0x30A1, 0x30F3)});
+  const float letter = widest('A', 'Z');
+  const float digit = widest('0', '9');
+  const float code =
+      std::max(4.0f * letter + 3.0f * digit, 3.0f * letter + 4.0f * digit) +
+      font->GetCharAdvance('#');
+  s_width = NAME_CHARS * name_char + font->GetCharAdvance(' ') + font->GetCharAdvance('(') + code +
+            font->GetCharAdvance(')');
+  s_size = size;
+  return s_width;
+}
+
+// The Spectators window (a click on the eye): everyone watching, loaded a page at a time as it is
+// scrolled to the end of what is there ("..." while there is more), and only the rows on screen
+// drawn, so thousands of names cost no more than a screenful. Next to the chat window when opened.
+void DrawSpectatorsWindow(float scale, ImVec2 chat_pos, ImVec2 chat_size)
+{
+  if (auto l = Online::SpectatorChat::GetList(s.list_serial))
+  {
+    s.list_serial = l->serial;
+    s.list = std::move(*l);
+  }
+  if (!s.list || !s.list->open)
+    return;
+  const ImGuiIO& io = ImGui::GetIO();
+  const ImGuiStyle& style = ImGui::GetStyle();
+  const float line = ImGui::GetTextLineHeightWithSpacing();
+  // Exactly as wide as the widest name can be (and its scrollbar); only its height can change.
+  const float width = std::ceil(WidestSpectatorRow() + 2.0f * style.WindowPadding.x +
+                                style.ScrollbarSize + 2.0f * style.WindowBorderSize);
+  const ImVec2 size{width, 14.0f * line};
+  const float gap = 8.0f * scale;
+  ImVec2 pos{chat_pos.x + chat_size.x + gap, chat_pos.y};
+  if (pos.x + size.x > io.DisplaySize.x)
+    pos.x = std::max(0.0f, chat_pos.x - size.x - gap);
+  ImGui::SetNextWindowPos(pos, ImGuiCond_Appearing);
+  ImGui::SetNextWindowSize(size, ImGuiCond_Appearing);
+  ImGui::SetNextWindowSizeConstraints({width, 4.0f * line}, {width, FLT_MAX});
+  bool open = true;
+  if (ImGui::Begin("Spectators###SpectatorsList", &open,
+                   ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings))
+  {
+    const auto& names = s.list->names;
+    int drawn = 0;
+    ImGuiListClipper clipper;
+    clipper.Begin(static_cast<int>(names.size()));
+    while (clipper.Step())
+    {
+      for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; ++i)
+      {
+        const Online::Chat::Member& m = names[static_cast<size_t>(i)];
+        const std::string who = m.code.empty() ? m.name : fmt::format("{} ({})", m.name, m.code);
+        ImGui::PushStyleColor(ImGuiCol_Text, ColorOf(m.color));
+        ImGui::TextUnformatted(who.data(), who.data() + who.size());
+        ImGui::PopStyleColor();
+        ++drawn;
+      }
+    }
+    clipper.End();
+    if (s.list->more || s.list->loading)
+    {
+      ImGui::PushStyleColor(ImGuiCol_Text, SYSTEM_COLOR);
+      ImGui::TextUnformatted("...");
+      ImGui::PopStyleColor();
+      // Scrolled to the end of what is loaded: the next page.
+      if (ImGui::IsItemVisible() && !s.list->loading)
+        Online::SpectatorChat::LoadMore();
+    }
+    if (s_recording)
+    {
+      const ImVec2 wp = ImGui::GetWindowPos();
+      const ImVec2 ws = ImGui::GetWindowSize();
+      s_frame.spectators_window = {wp.x, wp.y, ws.x, ws.y};
+      s_frame.spectators_rows = drawn;
+      s_frame.spectators_loaded = static_cast<int>(names.size());
+      s_frame.spectators_more = s.list->more;
+    }
+  }
+  ImGui::End();
+  if (!open)
+    Online::SpectatorChat::CloseList();
+}
+
+// Spectator chat's menu bar after Options: nobody's names (a crowd), only the eye at the right.
+void DrawMenuBarSpectators(float scale)
+{
+  const auto& v = *s.view;
+  const std::string count = fmt::format("{}", v.spectators);
+  const float w = EyeWidth(ImGui::GetTextLineHeight()) + 4.0f * scale +
+                  ImGui::CalcTextSize(count.data(), count.data() + count.size()).x;
+  const float right = ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x;
+  if (right - w > ImGui::GetCursorPosX() + 8.0f * scale)
+    ImGui::SetCursorPosX(right - w);
+  SpectatorsIcon(v, scale);
+}
+
 // In the menu bar after Options: the other players' names (click: their menu), then the room's
 // code (or the opponent's connect code) at the right with the padlock after it.
 void DrawMenuBarPlayers(float scale)
 {
   const auto& v = *s.view;
+  if (v.spectate)
+  {
+    DrawMenuBarSpectators(scale);
+    return;
+  }
   bool anyone = false;
   for (const Online::Chat::Member& m : v.members)
   {
@@ -804,7 +1028,8 @@ void Submit()
     s.input.fill(0);
     break;
   case Online::Chat::SendResult::NoGroup:
-    SetNotice("Not in a room or match.");
+    // (Spectating: the stream is over. accounts' words for a spectator not watching.)
+    SetNotice(s.view && s.view->spectate ? "Watch the game to chat." : "Not in a room or match.");
     break;
   case Online::Chat::SendResult::NoReaders:
     SetNotice("Nobody can read chat yet.");
@@ -1341,7 +1566,11 @@ void DisplayFrame(float scale)
       SaveGeometry(now_geometry, io.DisplaySize);
     }
   }
+  const ImVec2 chat_pos = ImGui::GetWindowPos();
+  const ImVec2 chat_size = ImGui::GetWindowSize();
   ImGui::End();
+  if (s.view->spectate)
+    DrawSpectatorsWindow(scale, chat_pos, chat_size);
   ImGui::PopFont();
   if (faded)
     ImGui::PopStyleVar();

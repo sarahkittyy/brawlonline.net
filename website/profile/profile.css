@@ -298,17 +298,24 @@ h2 {
   font-size: 14px;
 }
 
-/* A developer's mark after the name: the launcher's </> in the room codes' purple; "Dev" on hover. */
-.dev {
-  display: inline-flex;
-  vertical-align: 0.05em;
-  margin-left: 8px;
-  color: #c9a6f2;
-  cursor: default;
+/* Badges an admin gave the player, before the name (docs/design/profiles.md §10). The label is the
+   hover text. */
+.badge-icon {
+  width: 0.9em;
+  height: 0.9em;
+  margin-right: 6px;
+  object-fit: contain;
+  vertical-align: -0.08em;
 }
 
-.dev svg {
-  width: 0.85em;
-  height: 0.85em;
-  fill: currentColor;
+/* The icon an admin set in place of the primary main: the first of the mains. */
+.main.main-icon {
+  display: flex;
+  align-items: center;
+  padding: 2px 8px;
+}
+
+.main-icon img {
+  display: block;
+  object-fit: contain;
 }

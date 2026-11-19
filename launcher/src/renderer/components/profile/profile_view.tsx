@@ -1,3 +1,4 @@
+import { MAX_BADGES } from "@common/badges";
 import { countryName, SOCIAL_PLATFORMS } from "@common/profile";
 import ContentCopyIcon from "@mui/icons-material/ContentCopy";
 import EditOutlinedIcon from "@mui/icons-material/EditOutlined";
@@ -8,8 +9,8 @@ import Tooltip from "@mui/material/Tooltip";
 import { clsx } from "clsx";
 import React, { useEffect, useState } from "react";
 
-import { DevBadge } from "@/components/dev_badge/dev_badge";
 import { Flag, NoFlag } from "@/components/flag/flag";
+import { MainIcon, NameBadges } from "@/components/name_badges/name_badges";
 import { RankBadge } from "@/components/rank_badge/rank_badge";
 import { RankBadgeMessages } from "@/components/rank_badge/rank_badge.messages";
 import { formatPosition, formatRating, HIDDEN_RATING } from "@/lib/ranked_format";
@@ -52,7 +53,7 @@ export const ProfileView = React.memo(function ProfileView({
 }: {
   profile: PlayerProfile;
   actions?: React.ReactNode;
-  /** Right after the name, before a developer's </>: the friend button (docs/design/friends.md). */
+  /** After the name: the friend button (docs/design/friends.md). */
   nameExtra?: React.ReactNode;
   onCopyLink?: (link: string) => void;
   /** Copies a Discord username (it has no page to open). */
@@ -70,7 +71,9 @@ export const ProfileView = React.memo(function ProfileView({
     ? Messages.placing(r.setsToPlace)
     : Messages.notRanked();
   const position = formatPosition(r.position, r.rankedPlayers);
-  const showMains = editing != null || mains.length > 0;
+  const mainIcon = profile.mainIcon ?? null;
+  const mainIconLabel = profile.mainIconLabel ?? null;
+  const showMains = editing != null || mains.length > 0 || mainIcon != null;
   return (
     <div className={styles.profile} data-testid="profile-view">
       <div className={styles.who} data-tier={r.rank?.tier ?? "none"}>
@@ -81,6 +84,15 @@ export const ProfileView = React.memo(function ProfileView({
         )}
         <div className={styles.names}>
           <div className={styles.nameRow}>
+            {!editing && (
+              <NameBadges
+                badges={profile.badges}
+                place="profile"
+                size={22}
+                max={MAX_BADGES}
+                className={styles.badges}
+              />
+            )}
             {editing ? (
               <NameInput name={profile.displayName} onRename={editing.rename} />
             ) : (
@@ -89,7 +101,6 @@ export const ProfileView = React.memo(function ProfileView({
               </div>
             )}
             {nameExtra && !editing && <span className={styles.nameExtra}>{nameExtra}</span>}
-            {profile.dev && <DevBadge size={20} className={styles.dev} />}
           </div>
           {profile.connectCode && <div className={styles.code}>{profile.connectCode}</div>}
           {(country || editing) && (
@@ -103,7 +114,13 @@ export const ProfileView = React.memo(function ProfileView({
 
       {showMains && (
         <div className={styles.about}>
-          <MainsRow mains={mains} editing={editing} show={profile.showMain ?? true} />
+          <MainsRow
+            mains={mains}
+            mainIcon={mainIcon}
+            mainIconLabel={mainIconLabel}
+            editing={editing}
+            show={profile.showMain ?? true}
+          />
         </div>
       )}
 
@@ -205,26 +222,56 @@ const EditButton = ({ label, onClick }: { label: string; onClick: (el: HTMLEleme
 /**
  * "Mains:" and the mains, the primary first: up to BIG_MAINS stock icons full size in a row, more at half size in
  * two rows; name tags (wrapping) without a disc. Edit mode: a pencil before "Mains:" opens the picker.
+ *
+ * `mainIcon`: the icon an admin set in place of the primary (docs/design/profiles.md §10) is the primary, first, and
+ * the player's own mains follow it; the picker still edits only those (the admin's icon stays, in edit mode too).
  */
-const MainsRow = ({ mains, editing, show }: { mains: string[]; editing: ProfileEditing | null; show: boolean }) => {
+const MainsRow = ({
+  mains,
+  mainIcon,
+  mainIconLabel,
+  editing,
+  show,
+}: {
+  mains: string[];
+  mainIcon: string | null;
+  /** Its hover text: "<label> (primary)", as a stock primary's "Fox (primary)". */
+  mainIconLabel: string | null;
+  editing: ProfileEditing | null;
+  show: boolean;
+}) => {
   const icons = useHasStockIcons();
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
-  const small = mains.length > BIG_MAINS;
+  const count = mains.length + (mainIcon ? 1 : 0);
+  const small = count > BIG_MAINS;
   return (
     <>
       <div className={styles.row} data-testid="profile-mains">
         {editing && <EditButton label={Messages.editMains()} onClick={setAnchor} />}
         <span className={styles.label}>{Messages.mains()}</span>
-        {mains.length === 0 ? (
+        {count === 0 ? (
           <span className={styles.none}>{Messages.none()}</span>
         ) : (
           <div
             className={clsx(icons ? styles.mainIcons : styles.mainTags, small && styles.small)}
             // Half size: two even rows (10 mains are two rows of 5).
-            style={icons && small ? { gridTemplateColumns: `repeat(${Math.ceil(mains.length / 2)}, 16px)` } : undefined}
+            style={icons && small ? { gridTemplateColumns: `repeat(${Math.ceil(count / 2)}, 16px)` } : undefined}
           >
+            {mainIcon && (
+              <MainIcon
+                icon={mainIcon}
+                label={mainIconLabel ? `${mainIconLabel} (primary)` : null}
+                size={small ? 16 : 32}
+              />
+            )}
             {mains.map((m, i) => (
-              <CharacterIcon key={m} character={m} size={small ? 16 : 32} primary={i === 0} forceTag={!icons} />
+              <CharacterIcon
+                key={m}
+                character={m}
+                size={small ? 16 : 32}
+                primary={i === 0 && !mainIcon}
+                forceTag={!icons}
+              />
             ))}
           </div>
         )}

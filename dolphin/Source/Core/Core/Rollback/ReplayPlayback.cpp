@@ -22,6 +22,7 @@
 #include "Core/Config/GraphicsSettings.h"
 #include "Core/ConfigManager.h"
 #include "BrawlOnline/Online/GameBridge.h"
+#include "BrawlOnline/Online/SpectatorChat.h"
 #include "Core/Rollback/ClipRecorder.h"
 #include "BrawlOnline/Rollback/GameplaySession.h"
 #include "BrawlOnline/Rollback/PeerData.h"
@@ -558,6 +559,9 @@ picojson::object StatusLocked()
     o["rendered"] = picojson::value(static_cast<double>(s_rendered));
     o["framesWritten"] = picojson::value(static_cast<double>(Clip::FramesWritten()));
   }
+  // Spectator chat (Online/SpectatorChat.h): what the spectator typed, ignored or reported.
+  if (auto chat = Online::SpectatorChat::Outbox(); !chat.is<picojson::null>())
+    o["chat"] = std::move(chat);
   if (s_close_at)
   {
     o["closeIn"] = picojson::value(std::max(0.0, std::chrono::duration<double>(
@@ -1151,6 +1155,12 @@ void Loop()
       }
       if (!stopping)
         Step();
+      // Spectating: the launcher's <comm>.chat.json, and the Spectators window's list.
+      if (s_comm_path.empty())
+        Online::SpectatorChat::Follow({}, {});
+      else
+        Online::SpectatorChat::Follow(s_comm_path + ".chat.json",
+                                      s_comm_path + ".spectators.json");
       WriteStatus();
       s_can_save_clip.store(CanSaveClipLocked(), std::memory_order_relaxed);
       UpdateNavView();
