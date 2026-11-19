@@ -11243,6 +11243,11 @@ bool IsRunning()
   return s.phase == Phase::Running;
 }
 
+bool IsPlayback()
+{
+  return s.mode == Mode::Playback;
+}
+
 LinkHealth GetLinkHealth()
 {
   LinkHealth h;

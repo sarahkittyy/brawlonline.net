@@ -64,6 +64,9 @@ extern const Info<bool> ONLINE_MUSIC;
 // drawing changes (docs/game-code.md, Potato mode).
 extern const Info<bool> ONLINE_POTATO_MODE;
 
+// A Brawl build's loads run unthrottled (Online/LoadFastForward.h).
+extern const Info<bool> ONLINE_LOAD_FAST_FORWARD;
+
 // The Project+ release on the card the launcher gives this Dolphin ("v3.2.1"; empty: not said).
 // Replays record it (INFO build.pplus), so the launcher plays each on its own release's files.
 extern const Info<std::string> ONLINE_PPLUS_RELEASE;

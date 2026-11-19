@@ -71,6 +71,7 @@
 #include "Core/NetPlayClient.h"
 #include "Core/NetPlayProto.h"
 #include "Core/Online/GameAlive.h"
+#include "Core/Online/LoadFastForward.h"
 #include "Core/Rollback/MachineSDCard.h"
 #include "Core/Rollback/GameplaySession.h"
 #include "Core/Rollback/MachineSession.h"
@@ -944,6 +945,8 @@ void Callback_NewField(Core::System& system)
   StallTracer::OnField();
   // A P+ online game whose main loop stopped coming back to its loop top (GameplaySession.cpp).
   Gprb::Session::OnField(system);
+  // A load whose main loop pass outlasts many fields (Online/LoadFastForward.h).
+  Online::LoadFastForward::OnField(system);
   // The emulation runs: mm's `game-alive` (Online/GameAlive.h).
   Online::GameAlive::Beat();
   if (s_frame_step)

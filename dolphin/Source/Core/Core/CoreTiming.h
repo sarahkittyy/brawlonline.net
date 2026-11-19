@@ -17,6 +17,7 @@
 //   ScheduleEvent(periodInCycles - cyclesLate, callback, "whatever")
 
 #include <array>
+#include <atomic>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -199,6 +200,13 @@ public:
   // instead of skipping the emulated time it took. CPU thread only.
   void SetRollbackLoadWait(bool waiting);
   bool IsRollbackLoadWait() const { return m_rollback_load_wait; }
+  // Loading fast-forward (Online/LoadFastForward.h): unthrottled until emulated tick
+  // `until_ticks`, a cap that ends it even if no caller turns it off (Throttle). It changes no
+  // emulated state: the same frames run, only sooner. While on, the game's audio is dropped
+  // (AudioCommon::DropsResimulatedAudio) and VSync is off (VideoConfig). CPU thread only; the
+  // flag is read by the GPU thread too.
+  void SetLoadFastForward(bool on, s64 until_ticks);
+  bool IsLoadFastForward() const { return m_load_fast_forward.load(std::memory_order_relaxed); }
 
   // Rush Frame Presentation in a gameplay rollback session. Rush lets the CPU sleep only at the
   // first throttle (an SI poll) after each frame is presented, and the GPU thread used to re-arm it
@@ -347,6 +355,8 @@ private:
   double m_emulation_speed = 1.0;
   bool m_rollback_resimulating = false;
   bool m_rollback_load_wait = false;
+  std::atomic<bool> m_load_fast_forward{false};
+  s64 m_load_fast_forward_until = 0;
   bool m_rollback_audio_waits = false;
   s64 m_rollback_audio_pause = 0;
   double m_rollback_speed_factor = 1.0;

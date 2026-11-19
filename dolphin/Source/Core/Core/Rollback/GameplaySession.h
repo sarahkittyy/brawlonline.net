@@ -783,6 +783,8 @@ bool OnLoopEnd(const Core::CPUThreadGuard& guard);
 bool IsResimulationPass();
 // True while a session drives the game loop (between the barrier and the end of the match).
 bool IsRunning();
+// True while a replay or a spectated game is armed or plays (ArmPlayback).
+bool IsPlayback();
 // True while the main loop must run exactly one logic step per pass (countdown, start barrier,
 // running): see GprbPacingStepsHook.
 bool DrivesLoop();
