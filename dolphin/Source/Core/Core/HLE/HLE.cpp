@@ -20,6 +20,7 @@
 #include "Core/HLE/HLE_OS.h"
 #include "Core/HW/Memmap.h"
 #include "Core/Host.h"
+#include "Core/Online/BootFastForward.h"
 #include "Core/PowerPC/PPCSymbolDB.h"
 #include "Core/PowerPC/PowerPC.h"
 #include "Core/Rollback/MachineSession.h"
@@ -138,6 +139,10 @@ void PatchFixedFunctions(Core::System& system)
   // This has to always be installed even if cheats are not enabled because of the possibility of
   // loading a savestate where PC is inside the code handler while cheats are disabled.
   Patch(system, Gecko::HLE_TRAMPOLINE_ADDRESS, "GeckoHandlerReturnTrampoline");
+
+  // A Brawl build's boot runs unthrottled until its first menu (Online/BootFastForward.h); every
+  // boot tells it, so a later game in the same process is not taken for Brawl.
+  Online::BootFastForward::OnBoot(system);
 
   // Brawl's hooks below sit at fixed addresses in Brawl's main.dol (and its RELs): any other
   // game has its own code there.

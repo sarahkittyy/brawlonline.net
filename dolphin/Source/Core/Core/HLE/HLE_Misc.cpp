@@ -19,6 +19,7 @@
 #include "Core/NetPlayClient.h"
 #include "Core/Online/GameAlive.h"
 #include "Core/Online/GameBridge.h"
+#include "Core/Online/BootFastForward.h"
 #include "Core/Online/SpeedCheck.h"
 #include "Core/PowerPC/MMU.h"
 #include "Core/PowerPC/PowerPC.h"
@@ -170,6 +171,9 @@ void BrawlbackGekkoNetUnconditionalFrame(const Core::CPUThreadGuard& guard)
   // The game runs (Online/GameAlive.h): every game frame, also every round of a gameplay
   // session's wait that spins on the loop top (no field comes then).
   Online::GameAlive::Beat();
+
+  // The boot runs unthrottled to the first menu (Online/BootFastForward.h).
+  Online::BootFastForward::OnLoopTop(guard);
 
   // A whole-machine session (Brawl Mods) owns the loop when armed.
   if (Machine::OnLoopTop(guard))

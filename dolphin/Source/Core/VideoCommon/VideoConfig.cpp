@@ -15,6 +15,7 @@
 #include "Core/Config/MainSettings.h"
 #include "Core/ConfigManager.h"
 #include "Core/Core.h"
+#include "Core/CoreTiming.h"
 #include "Core/Movie.h"
 #include "Core/System.h"
 
@@ -42,8 +43,11 @@ static Common::EventHook s_check_config_event;
 
 static bool IsVSyncActive(bool enabled)
 {
-  // Vsync is disabled when the throttler is disabled by the tab key.
+  // Vsync is disabled when the throttler is disabled by the tab key, and while the game boots
+  // fast-forwarded (CoreTimingManager::SetBootFastForward): each present would wait for the
+  // screen's refresh and hold the boot back to the refresh rate.
   return enabled && !Core::GetIsThrottlerTempDisabled() &&
+         !Core::System::GetInstance().GetCoreTiming().IsBootFastForward() &&
          Config::Get(Config::MAIN_EMULATION_SPEED) == 1.0;
 }
 

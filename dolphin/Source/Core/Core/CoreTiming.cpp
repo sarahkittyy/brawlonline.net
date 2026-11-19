@@ -104,6 +104,8 @@ void CoreTimingManager::Init()
   // Reset data used by the throttling system
   ResetThrottle(0);
   m_rollback_resimulating = false;
+  m_boot_fast_forward.store(false, std::memory_order_relaxed);
+  m_boot_fast_forward_until = 0;
   m_rollback_audio_waits = false;
   m_rollback_audio_pause = 0;
   m_rollback_speed_factor = 1.0;
@@ -478,7 +480,20 @@ TimePoint CoreTimingManager::CalculateTargetHostTimeInternal(s64 target_cycle)
 bool CoreTimingManager::IsSpeedUnlimited() const
 {
   return m_throttle_adj_clock_per_sec == 0 || Core::GetIsThrottlerTempDisabled() ||
-         m_rollback_resimulating || m_rollback_load_wait;
+         m_rollback_resimulating || m_rollback_load_wait ||
+         m_boot_fast_forward.load(std::memory_order_relaxed);
+}
+
+void CoreTimingManager::SetBootFastForward(bool on, s64 until_ticks)
+{
+  const bool now_on = on && static_cast<s64>(GetTicks()) < until_ticks;
+  m_boot_fast_forward_until = until_ticks;
+  if (m_boot_fast_forward.exchange(now_on, std::memory_order_relaxed) == now_on)
+    return;
+  // (Throttle keeps re-anchoring the reference while unlimited; once more at the end, so the
+  // frames after the stretch are paced from now and do not race to make up for it.)
+  if (!now_on && !m_rollback_resimulating && !m_rollback_load_wait)
+    ResetThrottle(GetTicks());
 }
 
 void CoreTimingManager::SetRollbackResimulating(bool resimulating)
@@ -606,6 +621,14 @@ void CoreTimingManager::SleepUntil(TimePoint time_point)
 void CoreTimingManager::Throttle(const s64 target_cycle)
 {
   const TimePoint time = Clock::now();
+
+  // A boot fast-forward ends at its cap even when nothing turns it off (a launcher that never
+  // starts the game, a save prompt waiting for a press).
+  if (m_boot_fast_forward.load(std::memory_order_relaxed) &&
+      target_cycle >= m_boot_fast_forward_until)
+  {
+    SetBootFastForward(false, m_boot_fast_forward_until);
+  }
 
   if (!IsSpeedUnlimited())
   {

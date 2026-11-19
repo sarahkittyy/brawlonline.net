@@ -7,6 +7,7 @@
 #include <bitset>
 #include <string>
 
+#include "AudioCommon/AudioCommon.h"
 #include "Common/Config/Config.h"
 #include "Common/FileUtil.h"
 #include "Core/Config/MainSettings.h"
@@ -392,4 +393,41 @@ TEST(CoreTiming, Overclocking)
   AdvanceAndCheck(system, 3, 80);  // (1600 - 800) / 10
   Config::SetCurrent(Config::MAIN_OVERCLOCK, 1.0f);
   AdvanceAndCheck(system, 4, MAX_SLICE_LENGTH);
+}
+
+// A boot fast-forward (Online/BootFastForward.h) runs unthrottled with its audio dropped, and
+// ends at its cap even when nothing turns it off.
+TEST(CoreTiming, BootFastForwardEndsAtItsCap)
+{
+  auto& system = Core::System::GetInstance();
+
+  ScopeInit guard(system);
+  ASSERT_TRUE(guard.UserDirectoryExists());
+
+  auto& core_timing = system.GetCoreTiming();
+  core_timing.Advance();
+  ASSERT_TRUE(core_timing.ScheduledHostTime().has_value());
+  EXPECT_FALSE(AudioCommon::DropsResimulatedAudio(system));
+
+  // On until the cap: unthrottled (no scheduled host time), its audio dropped.
+  core_timing.SetBootFastForward(true, core_timing.GetTicks() + 1000);
+  EXPECT_TRUE(core_timing.IsBootFastForward());
+  EXPECT_FALSE(core_timing.ScheduledHostTime().has_value());
+  EXPECT_TRUE(AudioCommon::DropsResimulatedAudio(system));
+
+  // A throttle short of the cap leaves it on; one at the cap ends it.
+  core_timing.Throttle(core_timing.GetTicks() + 999);
+  EXPECT_TRUE(core_timing.IsBootFastForward());
+  core_timing.Throttle(core_timing.GetTicks() + 1000);
+  EXPECT_FALSE(core_timing.IsBootFastForward());
+  EXPECT_TRUE(core_timing.ScheduledHostTime().has_value());
+  EXPECT_FALSE(AudioCommon::DropsResimulatedAudio(system));
+
+  // A cap already passed never turns it on; off is off.
+  core_timing.SetBootFastForward(true, core_timing.GetTicks());
+  EXPECT_FALSE(core_timing.IsBootFastForward());
+  core_timing.SetBootFastForward(true, core_timing.GetTicks() + 1000);
+  core_timing.SetBootFastForward(false, core_timing.GetTicks() + 1000);
+  EXPECT_FALSE(core_timing.IsBootFastForward());
+  EXPECT_TRUE(core_timing.ScheduledHostTime().has_value());
 }
