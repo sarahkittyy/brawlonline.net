@@ -15,6 +15,10 @@
 
 #include <SFML/Network/UdpSocket.hpp>
 
+#ifdef _WIN32
+#include <Windows.h>
+#endif
+
 #include "Common/Thread.h"
 #include "Core/Config/MainSettings.h"
 #include "Core/Core.h"
@@ -208,6 +212,58 @@ void OnAdapterReport(int chan, const GCPadStatus& st, Clock::time_point t)
 std::thread s_sampler;
 std::atomic<bool> s_sampler_run{false};
 
+// The sampler's sleep to its next sample time. MSVC's sleep_until sleeps whole milliseconds
+// (Sleep(ceil(ms))), and Sleep(1) at Dolphin's 1 ms timer resolution lasts one to two timer ticks,
+// so on Windows it waits on a high-resolution waitable timer (Windows 10 1803 and later), which
+// takes the time in 100 ns units and doesn't wait for the tick. No spinning: the sampler sleeps
+// most of every millisecond.
+class SamplerSleep
+{
+public:
+  SamplerSleep()
+  {
+#ifdef _WIN32
+    m_timer = CreateWaitableTimerExW(nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
+                                     TIMER_ALL_ACCESS);
+#endif
+  }
+  ~SamplerSleep()
+  {
+#ifdef _WIN32
+    if (m_timer)
+      CloseHandle(m_timer);
+#endif
+  }
+  SamplerSleep(const SamplerSleep&) = delete;
+  SamplerSleep& operator=(const SamplerSleep&) = delete;
+
+  void Until(Clock::time_point t)
+  {
+#ifdef _WIN32
+    if (m_timer)
+    {
+      using Ticks = std::chrono::duration<LONGLONG, std::ratio<1, 10'000'000>>;
+      const LONGLONG left = std::chrono::duration_cast<Ticks>(t - Clock::now()).count();
+      if (left <= 0)
+        return;
+      LARGE_INTEGER due;
+      due.QuadPart = -left;  // relative
+      if (SetWaitableTimerEx(m_timer, &due, 0, nullptr, nullptr, nullptr, 0))
+      {
+        WaitForSingleObject(m_timer, INFINITE);
+        return;
+      }
+    }
+#endif
+    std::this_thread::sleep_until(t);
+  }
+
+private:
+#ifdef _WIN32
+  HANDLE m_timer = nullptr;
+#endif
+};
+
 void SamplerLoop(int chan)
 {
   Common::SetCurrentThreadName("GPRB suggest sampler");
@@ -216,14 +272,22 @@ void SamplerLoop(int chan)
   g_controller_interface.SetCurrentInputChannel(ciface::InputChannel::Suggestions);
   const auto period = std::chrono::duration_cast<Clock::duration>(
       std::chrono::duration<double>(1.0 / SampleHz()));
+  SamplerSleep waiter;
+  // Samples are due on a grid of periods, so a sleep that ends late doesn't push the later ones
+  // back; they also wait for `earliest` (the devices' share, SAMPLE_IDLE_PER_BUSY).
   auto next = Clock::now();
+  Clock::time_point earliest{};
+  // The previous sample's start while sampling, for the gaps between samples.
+  Clock::time_point last{};
   while (s_sampler_run.load(std::memory_order_relaxed))
   {
     next += period;
-    std::this_thread::sleep_until(next);
+    waiter.Until(std::max(next, earliest));
     const auto start = Clock::now();
-    if (start - next > 10 * period)
-      next = start;  // fell far behind (a suspended process): no burst of catch-up samples
+    // Times that passed meanwhile (a sleep or sample over a period, a suspended process) are
+    // skipped, not sampled in a burst.
+    if (start - next >= period)
+      next += period * ((start - next) / period);
     bool any_peer;
     {
       std::lock_guard lk(s_mutex);
@@ -235,6 +299,7 @@ void SamplerLoop(int chan)
         !g_controller_interface.IsInit() || !Pad::IsInitialized())
     {
       next = start + std::chrono::milliseconds(50);
+      last = {};
       continue;
     }
     g_controller_interface.UpdateInput();
@@ -252,10 +317,19 @@ void SamplerLoop(int chan)
       ++c.samples;
       c.sample_us += us;
       c.sample_us_max = std::max(c.sample_us_max, us);
+      if (last != Clock::time_point{})
+      {
+        const u64 gap = std::chrono::duration_cast<std::chrono::microseconds>(start - last).count();
+        ++c.sample_gaps;
+        c.sample_gap_us += gap;
+        c.sample_gap_us_sq += gap * gap;
+        c.sample_gap_us_max = std::max(c.sample_gap_us_max, gap);
+      }
     }
+    last = start;
     // Stamped after the read: a later time can only tag a later frame, which the change is in too.
     OnReport(chan, HostPadSource::Mapped, st, now);
-    next = std::max(next, now + SAMPLE_IDLE_PER_BUSY * busy);
+    earliest = now + SAMPLE_IDLE_PER_BUSY * busy;
   }
 }
 }  // namespace
