@@ -1,3 +1,4 @@
+import type { Ruleset } from "@common/rulesets";
 import React, { useState } from "react";
 
 import { useIsAdmin } from "@/lib/hooks/use_account";
@@ -10,8 +11,10 @@ import { useRoomName } from "@/lib/social/use_room_name";
 import { RulesetChip } from "@/pages/play/ruleset_chip";
 import { RulesetPreviewDialog } from "@/pages/rulesets/ruleset_preview_dialog";
 
+import { PublicRoomsMessages as Messages } from "./public_rooms.messages";
 import type { PublicRoomsState } from "./public_rooms_view";
 import { PublicRoomsView } from "./public_rooms_view";
+import { roomCustomRuleset } from "./room_ruleset";
 import { useJoinRoom } from "./use_join_room";
 
 /** How long a list stays shown while polls fail. */
@@ -30,6 +33,8 @@ export const PublicRooms = React.memo(function PublicRooms() {
   const isAdmin = useIsAdmin();
   /** The ruleset whose rules are shown (a click on a room's ruleset). */
   const [showRuleset, setShowRuleset] = useState<string | null>(null);
+  /** A room's custom rules being shown (a click on its "Custom"). */
+  const [showCustom, setShowCustom] = useState<Ruleset | null>(null);
   /** The join in progress came from the room code box. */
   const [joiningByCode, setJoiningByCode] = useState(false);
   const [hasCreatedRoom, setHasCreatedRoom] = useLocalStorage(CREATED_ROOM_STORAGE_KEY, false);
@@ -88,10 +93,17 @@ export const PublicRooms = React.memo(function PublicRooms() {
         onShowRuleset={(room) => {
           if (room.ruleset?.code) {
             setShowRuleset(room.ruleset.code);
+          } else {
+            setShowCustom(roomCustomRuleset(room));
           }
         }}
       />
       <RulesetPreviewDialog open={showRuleset !== null} code={showRuleset} onClose={() => setShowRuleset(null)} />
+      <RulesetPreviewDialog
+        open={showCustom !== null}
+        custom={showCustom && { title: Messages.customRuleset(), ruleset: showCustom }}
+        onClose={() => setShowCustom(null)}
+      />
     </>
   );
 });

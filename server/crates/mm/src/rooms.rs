@@ -569,7 +569,13 @@ impl Room {
             strikes: self.ruleset.strikes.clone(),
             bans: self.ruleset.bans,
             dsr: self.ruleset.dsr,
+            rules: None,
         }
+    }
+
+    /// Custom rules: the host edited a published ruleset or P+ default ([`Self::edited`]).
+    fn custom(&self) -> bool {
+        self.ruleset_code.is_none() && (self.based_on.is_some() || self.ruleset.name == "Custom")
     }
 
     fn status_text(&self, me: &Member) -> String {
@@ -710,7 +716,12 @@ impl Room {
             main_icon_labels: Vec::new(),
             badges: Vec::new(),
             joinable: self.free_slot().is_some(),
-            ruleset: self.ruleset_view(),
+            // Custom rules have no code to look them up by: the list carries them (a published
+            // ruleset's are shown by its code, P+ default's not at all).
+            ruleset: rooms::RoomRuleset {
+                rules: self.custom().then(|| self.ruleset.rules.clone()),
+                ..self.ruleset_view()
+            },
             name: self.name.clone(),
             friends: self.friends && !self.public,
         }
@@ -3161,6 +3172,35 @@ mod tests {
         let resp = start(&mut t, &code, 300);
         assert!(serde_json::to_string(&resp).unwrap().contains(r#""alternateStages":true"#));
         assert_eq!(resp.alternate_stages, Some(true));
+    }
+
+    /// The room list's ruleset (bug report: a room's "Custom" rules could not be looked at): custom
+    /// rules carry their match rules, P+ default and a published ruleset (shown by its code) none.
+    #[test]
+    fn the_room_list_carries_custom_rules() {
+        let mut t = T::new();
+        let code = create(&mut t, 1);
+        let listed = |t: &T| t.book.public_rooms(10)[0].ruleset.clone();
+        // P+ default: nothing to show.
+        assert_eq!(listed(&t).rules, None);
+        // P+ default edited: Custom, with its rules.
+        let rules = MatchRules { stocks: 2, ..t.book.rooms[&code].ruleset.rules.clone() };
+        let out = t.req(1, RoomRequest::Rules { rules: rules.clone() });
+        assert_eq!(listed(&t).name, "Custom");
+        assert_eq!(listed(&t).rules, Some(rules));
+        // room-state has them as `rules`, not in its ruleset.
+        assert!(last_state(&out, 1)["ruleset"].get("rules").is_none());
+        // A published ruleset is looked up by its code.
+        let mut r = Ruleset { name: "Weekly".into(), version: 3, ..Default::default() };
+        r.normalize();
+        let mut out = vec![];
+        t.book.apply_ruleset(&code, r, Some("BCDFGH".into()), &mut out).unwrap();
+        assert_eq!((listed(&t).code.as_deref(), listed(&t).rules), (Some("BCDFGH"), None));
+        // Edited, it is Custom based on it, its rules (and the rest of the ruleset) in the list.
+        let rules = MatchRules { stocks: 3, ..t.book.rooms[&code].ruleset.rules.clone() };
+        t.req(1, RoomRequest::Rules { rules: rules.clone() });
+        let l = listed(&t);
+        assert_eq!((l.code, l.based_on.as_deref(), l.rules), (None, Some("Weekly v3"), Some(rules)));
     }
 
     /// The host's STAGE SWITCH (`room-stages`): the room's stages and the loser's choice between any

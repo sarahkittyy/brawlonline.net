@@ -11,7 +11,7 @@
 
 import type { NameBadge } from "@common/badges";
 import type { ServiceUrls } from "@common/product";
-import type { Ruleset, StageChoice } from "@common/rulesets";
+import type { MatchRules, Ruleset, StageChoice, StageLists } from "@common/rulesets";
 
 export type { Ruleset } from "@common/rulesets";
 
@@ -355,6 +355,15 @@ export type RoomRuleset = {
   basedOn: string | null;
   bestOf: number;
   stageChoice: StageChoice;
+  /** The rest of the ruleset (absent from an older server). */
+  stages?: StageLists;
+  alternateStages?: boolean;
+  strikes?: number[];
+  bans?: number;
+  dsr?: boolean;
+  /** Custom rules' match rules: with the fields above the whole ruleset, shown on a click on "Custom". Absent from an
+   * older server, for P+ default and for a published ruleset (looked up by its `code`). */
+  rules?: MatchRules;
 };
 
 /**

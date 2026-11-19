@@ -1,4 +1,5 @@
 import type { RulesetView } from "@accounts/types";
+import type { Ruleset } from "@common/rulesets";
 import ArrowBackIcon from "@mui/icons-material/ArrowBack";
 import ContentCopyIcon from "@mui/icons-material/ContentCopy";
 import Button from "@mui/material/Button";
@@ -21,19 +22,21 @@ import styles from "./rulesets_page.module.css";
 
 /**
  * A published ruleset in a dialog: the Rulesets page's read-only view (ruleset_details.tsx) with copy code / link and
- * Use for my rooms. Give it the ruleset (`view`) or its `code` (fetched when the dialog opens). Esc or the back arrow
- * closes it.
+ * Use for my rooms. Give it the ruleset (`view`) or its `code` (fetched when the dialog opens); or `custom`, rules that
+ * were never published (a room's "Custom"): those are only shown, under their title. Esc or the back arrow closes it.
  */
 export const RulesetPreviewDialog = ({
   open,
   onClose,
   code,
   view,
+  custom,
 }: {
   open: boolean;
   onClose: () => void;
   code?: string | null;
   view?: RulesetView | null;
+  custom?: { title: string; ruleset: Ruleset } | null;
 }) => {
   const { backendService } = useServices();
   const { showError, showSuccess } = useToasts();
@@ -41,10 +44,11 @@ export const RulesetPreviewDialog = ({
   const query = useQuery({
     queryKey: ["ruleset", code],
     queryFn: () => backendService.fetchRuleset(code!),
-    enabled: open && !view && !!code,
+    enabled: open && !view && !custom && !!code,
     retry: false,
   });
-  const shown = view ?? query.data;
+  const shown = custom ? null : view ?? query.data;
+  const title = custom ? custom.title : shown ? rulesetTitle(shown) : code ?? "";
 
   const copy = (text: string) => {
     void navigator.clipboard.writeText(text).then(() => showSuccess(Messages.copied()));
@@ -59,11 +63,13 @@ export const RulesetPreviewDialog = ({
         <IconButton size="small" onClick={onClose} aria-label={Messages.back()} data-testid="ruleset-preview-back">
           <ArrowBackIcon fontSize="small" />
         </IconButton>
-        <span className={styles.previewTitle}>{shown ? rulesetTitle(shown) : code ?? ""}</span>
+        <span className={styles.previewTitle}>{title}</span>
         {shown && <span className={styles.code}>{shown.code}</span>}
       </DialogTitle>
       <DialogContent dividers={true}>
-        {shown ? (
+        {custom ? (
+          <RulesetDetails ruleset={custom.ruleset} />
+        ) : shown ? (
           <RulesetDetails ruleset={shown.ruleset} />
         ) : query.isError ? (
           <p className={styles.problem}>{Messages.lookupFailed()}</p>

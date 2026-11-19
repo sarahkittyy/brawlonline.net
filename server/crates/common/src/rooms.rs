@@ -744,6 +744,12 @@ pub struct RoomRuleset {
     pub bans: u8,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub dsr: bool,
+    /// Custom rules' match rules, in the room list only ([`PublicRoom::ruleset`]): with the fields
+    /// above they are the whole ruleset, which the launcher shows on a click on "Custom" (a
+    /// published one is looked up by its code; `room-state` has them as `rules`). Absent from an
+    /// older mm, for P+ default and for a published ruleset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rules: Option<crate::rules::MatchRules>,
 }
 
 fn is_zero(n: &u8) -> bool {
