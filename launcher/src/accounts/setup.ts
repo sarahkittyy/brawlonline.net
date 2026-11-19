@@ -56,6 +56,7 @@ export default function setupAccountsIpc() {
   log.info(`Accounts API: ${urls.accountsApi}`);
   const client = new AccountsHttpClient(urls.accountsApi, `${PRODUCT_SLUG}-launcher/${appVersion}`);
   const sessions = new SessionStore(SessionStore.defaultPath(app.getPath("userData")), safeStorage);
+  sessions.loadSync();
   const manager = new AccountsManager(client, sessions);
 
   ipc_accountsSignUp.main!.handle(async ({ req }) => await manager.signUp(req));

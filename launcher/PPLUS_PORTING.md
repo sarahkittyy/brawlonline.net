@@ -218,7 +218,7 @@ PPO_DOLPHIN_PATH=D:/path/to/Dolphin.exe PPO_DOLPHIN_EXTRA_ARGS='["-C","Dolphin.D
 PPO_USER_DATA_DIR=D:/tmp/ppo-b PPO_REMOTE_DEBUGGING_PORT=9302 PPO_HARNESS_PORT=50102 \
 PPO_DOLPHIN_PATH=D:/path/to/Dolphin.exe PPO_DOLPHIN_EXTRA_ARGS='["-C","Dolphin.DSP.Muted=True"]' \
   node_modules/electron/dist/electron.exe release/app &
-curl http://127.0.0.1:9301/json   # each lists its own page: file:///.../release/app/dist/renderer/index.html#/landing
+curl http://127.0.0.1:9301/json   # each lists its own page: app://launcher/index.html#/landing
 ```
 
 Each new user-data dir seeds its netplay User folder from the template on start-up (2 GB: the SD card) and makes its own patched copy on the first Play (another 2 GB). Kill the instances with their process tree (`taskkill /T /F /PID <pid>`): Electron starts GPU and renderer child processes. Three fixes were needed for this mode: the preload script and the replay database migrations are taken from the production build whenever `NODE_ENV` is `production` (they were looked up in the dev locations when unpackaged), and `electron release/app` no longer treats the app folder (`argv[1]`) as a replay file to open (it started a playback Dolphin with `-i`).

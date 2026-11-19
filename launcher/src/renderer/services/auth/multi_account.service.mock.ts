@@ -112,6 +112,10 @@ class MockMultiAccountClient implements MultiAccountService {
     return this._activeAccountId ? this._records.get(this._activeAccountId) ?? null : null;
   }
 
+  takeRestoredUser(): AccountsMe | null {
+    return null;
+  }
+
   async refreshActiveUser(): Promise<AccountsMe | null> {
     return this.getActiveUser();
   }

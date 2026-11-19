@@ -17,6 +17,15 @@ import type { AppBootstrap } from "./bootstrap";
 
 const bootstrap = ipcRenderer.sendSync("getAppBootstrapSync") as AppBootstrap;
 
+// Once, at the first start served from app://launcher (app_scheme.ts): the localStorage the file://
+// page kept, written before any page script reads it.
+const legacyStorage = ipcRenderer.sendSync("takeLegacyLocalStorage") as [string, string][] | null;
+if (legacyStorage && localStorage.length === 0) {
+  for (const [key, value] of legacyStorage) {
+    localStorage.setItem(key, value);
+  }
+}
+
 const api = {
   bootstrap,
   common: commonApi,

@@ -56,6 +56,11 @@ export interface MultiAccountService {
   getActiveUser(): AccountsMe | null;
   /** Re-fetches the active account record from the server. */
   refreshActiveUser(): Promise<AccountsMe | null>;
+  /**
+   * Once, after init(): the active account's record as the server sent it while init() waited for
+   * it, so the start does not ask for it again; null if it did not answer in time (or no account).
+   */
+  takeRestoredUser(): AccountsMe | null;
   /** Replaces the cached record of an account (after a mutation returned a fresh one). */
   setUserRecord(user: AccountsMe): void;
 

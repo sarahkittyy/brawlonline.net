@@ -9,6 +9,7 @@ import { SettingsManager } from "@settings/settings_manager";
 import setupSettingsIpc from "@settings/setup";
 import setupSocialIpc from "@social/setup";
 import setupSpectateIpc from "@spectate/setup";
+import { app } from "electron";
 
 import { AppUpdater } from "./app_updater";
 import { BrowserWindowManager } from "./browser_window_manager";
@@ -25,6 +26,14 @@ export function installModules(flags: ConfigFlags) {
   setupDolphinIpc({ dolphinManager });
   setupProjectPunchIpc({ dolphinManager });
   const { accountsManager, serviceUrls } = setupAccountsIpc();
+  // The page's start waits for the account's record and ranked profile: asked for now, not when it
+  // gets there (AccountsManager.prefetchAtStart). After ready: Linux decrypts the stored session only then.
+  void app.whenReady().then(() => {
+    const uid = settingsManager.get().accounts.activeId;
+    if (uid) {
+      accountsManager.prefetchAtStart(uid);
+    }
+  });
   setupSocialIpc({ accountsManager, accountsApi: serviceUrls.accountsApi, dolphinManager });
   setupSpectateIpc({ accountsManager, accountsApi: serviceUrls.accountsApi, dolphinManager, settingsManager });
   setupReplaysIpc({ settingsManager, dolphinManager });
