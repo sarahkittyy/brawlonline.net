@@ -94,6 +94,9 @@ add_dolphin_test(WrittenPagesTest Rollback/WrittenPagesTest.cpp)
 # What a whole-machine session's JIT compiled each block from, journaled for rollbacks
 # (PowerPC::JitCodeRecord, Core/PowerPC/PPCCache.h).
 add_dolphin_test(JitCodeRecordTest Rollback/JitCodeRecordTest.cpp)
+# The present hold's offset from the recent frames' arrivals, stalls left out (Core/Rollback/
+# PresentStats.h, bug report #314).
+add_dolphin_test(PresentHoldTest Rollback/PresentHoldTest.cpp)
 # The rollback job pool (Core/Rollback/job.h) stopped and started again (GitHub issue #3).
 add_dolphin_test(JobPoolTest Rollback/JobPoolTest.cpp)
 # A room's codes as the launcher gives them (Machine::ParseCodes, docs/design/room-codes.md).

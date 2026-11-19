@@ -4,6 +4,8 @@
 #pragma once
 
 #include <array>
+#include <cstddef>
+#include <optional>
 
 #include "Common/CommonTypes.h"
 
@@ -54,6 +56,30 @@ void OnPresent(bool duplicate);
 // apart and only the rare slower frame is shown late, at the cost of a few milliseconds.
 // Video thread, before the present: the time to present at, or `now` when not held.
 TimePoint PresentHoldUntil(TimePoint now);
+
+// The hold's window and its longest hold.
+static constexpr size_t HOLD_WINDOW = 120;
+static constexpr int HOLD_MAX_MS = 8;
+// An arrival a whole field (59.94 Hz) or more after the window's median arrival is a stall (the
+// GPU, its driver or the CPU thread held up), not the lateness the hold evens out: a hold moves
+// the other frames at most HOLD_MAX_MS, so that frame is a repeated field on screen whatever they
+// do. Counted, a few stalls a second (a PC whose GPU or driver hitched for minutes, bug report
+// #314) kept the percentile past the cap, so every frame was held the whole 8 ms: frames came that
+// much later and the rollbacks' re-runs waited for the held GPU thread. Frames up to a field
+// behind the median still count, as a slow PC's rollbacks every few frames. From the median, not
+// the due time: where a PC's frames come against their due times depends on its slack.
+static constexpr double HOLD_STALL_MS = 1000.0 * 1001.0 / 60000.0;
+// The hold's offset after the due time from the window's arrivals (ms after their due times, `n`
+// of them): their 95th percentile, of those less than `stall_ms` after their median (every one
+// with 0). None with fewer than 20 of them: no hold.
+std::optional<double> HoldOffsetMs(const double* arrivals_ms, size_t n,
+                                   double stall_ms = HOLD_STALL_MS);
+
+// Tests: PPR_TEST_GPU_STALL=<stalls a second>,<min ms>,<max ms>[,<ms every frame>[,<seed>]] makes
+// the video thread sleep before a present, as a GPU or driver that hitches does (bug report #314):
+// at random, that many times a second (at 60 presents a second) for a uniform min..max ms, and
+// every present for the fixed ms. Video thread, before PresentHoldUntil.
+void TestGpuStall();
 
 // Present cadence as a 59.94 Hz screen without VSync would show it: a hitch is a present that does
 // not land in the refresh right after the previous present's (a repeated or a skipped frame),

@@ -1027,6 +1027,8 @@ void Presenter::Present(PresentInfo* present_info)
       m_onscreen_ui->DrawImGui();
   }
 
+  Rollback::PresentStats::TestGpuStall();
+
   // Present to the window system.
   {
     Rollback::FrameProfile::Scope present_scope{Rollback::FrameProfile::AddGpuPresent};

@@ -13,6 +13,7 @@
 #include <cstring>
 #include <deque>
 #include <mutex>
+#include <random>
 #include <string>
 #include <utility>
 #ifdef _WIN32
@@ -341,19 +342,55 @@ void TracePresent()
 namespace
 {
 // PresentHoldUntil: the offset is the 95th percentile of the last HOLD_WINDOW frames' arrivals
-// (a stall leaves it within about two seconds), and a hold never exceeds HOLD_MAX or the CPU's
+// but the stalls (HoldOffsetMs, PresentStats.h), and a hold never exceeds HOLD_MAX or the CPU's
 // slack, the throttle's sleep before the copy. In deterministic dual core the CPU thread waits for
 // the GPU thread's work, so a hold longer than the CPU would sleep anyway stalls the emulation. A PC
 // behind its schedule never sleeps there: holding each of its frames ~7.6 ms kept one at ~58 FPS and
 // 3-4 frames behind the peer for a whole game, and 59.9 FPS in sync without the hold (prod,
 // 2026-10-11). Such a frame is not held.
 constexpr double HOLD_QUANTILE = 0.95;
-constexpr size_t HOLD_WINDOW = 120;
 constexpr size_t HOLD_MIN_SAMPLES = 20;
-constexpr auto HOLD_MAX = std::chrono::milliseconds{8};
+constexpr auto HOLD_MAX = std::chrono::milliseconds{HOLD_MAX_MS};
 std::array<double, HOLD_WINDOW> s_hold_arrivals{};  // ms after the due time, a ring
 size_t s_hold_count = 0;
+
+// PPR_PRESENT_HOLD_STALL_MS=<ms> (A/B runs): how far after the median a stall starts instead of
+// HOLD_STALL_MS; 0 counts every arrival, as the hold did before bug report #314.
+double HoldStallMs()
+{
+  static const double value = [] {
+    const char* env = std::getenv("PPR_PRESENT_HOLD_STALL_MS");
+    return env && *env ? std::atof(env) : HOLD_STALL_MS;
+  }();
+  return value;
+}
 }  // namespace
+
+std::optional<double> HoldOffsetMs(const double* arrivals_ms, size_t n, double stall_ms)
+{
+  n = std::min(n, HOLD_WINDOW);
+  if (n < HOLD_MIN_SAMPLES)
+    return std::nullopt;
+  std::array<double, HOLD_WINDOW> kept;
+  std::copy(arrivals_ms, arrivals_ms + n, kept.begin());
+  size_t m = n;
+  if (stall_ms > 0)
+  {
+    std::nth_element(kept.begin(), kept.begin() + n / 2, kept.begin() + n);
+    const double line = kept[n / 2] + stall_ms;
+    m = 0;
+    for (size_t i = 0; i < n; ++i)
+    {
+      if (arrivals_ms[i] < line)
+        kept[m++] = arrivals_ms[i];
+    }
+  }
+  if (m < HOLD_MIN_SAMPLES)
+    return std::nullopt;
+  const auto nth = kept.begin() + static_cast<ptrdiff_t>(HOLD_QUANTILE * (m - 1));
+  std::nth_element(kept.begin(), nth, kept.begin() + m);
+  return *nth;
+}
 
 TimePoint PresentHoldUntil(TimePoint now)
 {
@@ -365,18 +402,52 @@ TimePoint PresentHoldUntil(TimePoint now)
   const double arrival_ms = std::chrono::duration<double, std::milli>(now - s_gpu_copy.due).count();
   TimePoint until = now;
   const size_t n = std::min(s_hold_count, HOLD_WINDOW);
-  if (n >= HOLD_MIN_SAMPLES)
+  if (const auto offset_ms = HoldOffsetMs(s_hold_arrivals.data(), n, HoldStallMs()))
   {
-    std::array<double, HOLD_WINDOW> sorted = s_hold_arrivals;
-    const auto nth = sorted.begin() + static_cast<ptrdiff_t>(HOLD_QUANTILE * (n - 1));
-    std::nth_element(sorted.begin(), nth, sorted.begin() + n);
-    const TimePoint target = s_gpu_copy.due + std::chrono::duration_cast<Clock::duration>(
-                                                  std::chrono::duration<double, std::milli>(*nth));
+    const TimePoint target =
+        s_gpu_copy.due + std::chrono::duration_cast<Clock::duration>(
+                             std::chrono::duration<double, std::milli>(*offset_ms));
     until = std::clamp(target, now, now + std::min<DT>(HOLD_MAX, s_gpu_copy.slack));
   }
   s_hold_arrivals[s_hold_count++ % HOLD_WINDOW] = arrival_ms;
   s_last_hold_ms = std::chrono::duration<double, std::milli>(until - now).count();
   return until;
+}
+
+void TestGpuStall()
+{
+  struct Config
+  {
+    bool on = false;
+    double chance = 0, min_ms = 0, max_ms = 0, every_ms = 0;
+    std::mt19937 rng;
+  };
+  static Config config = [] {
+    Config c;
+    const char* env = std::getenv("PPR_TEST_GPU_STALL");
+    double rate = 0;
+    unsigned seed = 1;
+    if (env && std::sscanf(env, "%lf,%lf,%lf,%lf,%u", &rate, &c.min_ms, &c.max_ms, &c.every_ms,
+                           &seed) >= 3)
+    {
+      c.on = true;
+      c.chance = rate / 60.0;
+      c.max_ms = std::max(c.min_ms, c.max_ms);
+      c.rng.seed(seed);
+    }
+    return c;
+  }();
+  if (!config.on)
+    return;
+  double ms = config.every_ms;
+  if (std::uniform_real_distribution<double>(0, 1)(config.rng) < config.chance)
+    ms += std::uniform_real_distribution<double>(config.min_ms, config.max_ms)(config.rng);
+  if (ms > 0)
+  {
+    Core::System::GetInstance().GetCoreTiming().SleepUntil(
+        Clock::now() + std::chrono::duration_cast<Clock::duration>(
+                           std::chrono::duration<double, std::milli>(ms)));
+  }
 }
 
 bool PresentTraceEnabled()
