@@ -1632,7 +1632,8 @@ void CardServer::ThreadFunc()
 
 SessionCard::SessionCard(Mode mode, const std::string& image_path,
                          std::shared_ptr<const Manifest> manifest)
-    : m_mode(mode), m_image_path(image_path), m_manifest(std::move(manifest))
+    : m_mode(mode), m_image_path(image_path), m_manifest(std::move(manifest)),
+      m_image(image_path, /*read_only=*/true)
 {
   m_clock = [] { return Core::System::GetInstance().GetCoreTiming().GetTicks(); };
   m_history_ticks = u64{Core::System::GetInstance().GetSystemTimers().GetTicksPerSecond()} * 10;
@@ -1641,8 +1642,7 @@ SessionCard::SessionCard(Mode mode, const std::string& image_path,
 std::shared_ptr<SessionCard> SessionCard::CreateOwnCard(const std::string& image_path)
 {
   std::shared_ptr<SessionCard> card(new SessionCard(Mode::OwnCard, image_path, nullptr));
-  card->m_image.Open(image_path, "rb", File::SharedAccess::ReadWrite);
-  card->m_size = card->m_image ? card->m_image.GetSize() : 0;
+  card->m_size = card->m_image.GetSize();
   if (card->m_size > MAX_CARD_SIZE)
     card->m_size = 0;
   return card;
@@ -1653,7 +1653,6 @@ std::shared_ptr<SessionCard> SessionCard::CreateHostCard(const std::string& imag
 {
   std::shared_ptr<SessionCard> card(
       new SessionCard(Mode::HostCard, image_path, std::move(manifest)));
-  card->m_image.Open(image_path, "rb", File::SharedAccess::ReadWrite);
   card->m_size = card->m_manifest->size;
   return card;
 }
@@ -1669,8 +1668,7 @@ std::shared_ptr<SessionCard> SessionCard::CreateGuestCard(const std::string& ima
       new SessionCard(Mode::GuestCard, image_path, std::move(manifest)));
   card->m_size = card->m_manifest->size;
   card->m_remote = std::move(remote);
-  card->m_image.Open(image_path, "rb", File::SharedAccess::ReadWrite);
-  const u64 own_size = card->m_image ? card->m_image.GetSize() : 0;
+  const u64 own_size = card->m_image.GetSize();
 
   // This card's hashes: given (the join's check), or from an earlier check in the cache. With
   // them, every chunk is known now to match or not; without, a chunk is checked when first read.
@@ -1830,16 +1828,14 @@ bool SessionCard::ReadBase(u32 index, u64 from, u64 len, u8* dst)
   switch (m_mode)
   {
   case Mode::OwnCard:
-    return m_image.Seek(static_cast<s64>(start), File::SeekOrigin::Begin) &&
-           m_image.ReadBytes(dst, len);
+    return m_image.Read(start, dst, len);
   case Mode::HostCard:
     if (m_manifest->chunks[index].zero)
     {
       std::memset(dst, 0, len);
       return true;
     }
-    return m_image.Seek(static_cast<s64>(start), File::SeekOrigin::Begin) &&
-           m_image.ReadBytes(dst, len);
+    return m_image.Read(start, dst, len);
   case Mode::GuestCard:
   {
     std::lock_guard lock(m_fetch_mutex);
@@ -1849,14 +1845,11 @@ bool SessionCard::ReadBase(u32 index, u64 from, u64 len, u8* dst)
       std::memset(dst, 0, len);
       return true;
     case Source::Local:
-      return m_image.Seek(static_cast<s64>(start), File::SeekOrigin::Begin) &&
-             m_image.ReadBytes(dst, len);
+      return m_image.Read(start, dst, len);
     case Source::Moved:
     {
       const auto it = m_moved.find(index);
-      return it != m_moved.end() &&
-             m_image.Seek(static_cast<s64>(it->second + from), File::SeekOrigin::Begin) &&
-             m_image.ReadBytes(dst, len);
+      return it != m_moved.end() && m_image.Read(it->second + from, dst, len);
     }
     case Source::Fetched:
     {
