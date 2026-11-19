@@ -236,10 +236,15 @@ void SendAIBuffer(Core::System& system, const short* samples, unsigned int num_s
 // all go through this: Other Games sessions re-run GameCube games that stream their music from the
 // disc (Super Monkey Ball 2), whose streaming samples went to the mixer in re-runs too, so every
 // rollback played its frames' music again and the mixer then skipped ahead to catch up.
+//
+// The boot's fast-forward (CoreTimingManager::SetLoadFastForward) drops its audio too: sound at
+// several times its speed would only chirp, and would fill the mixer with more than it can play
+// before the game's next sound.
 bool DropsResimulatedAudio(const Core::System& system)
 {
   const auto& core_timing = system.GetCoreTiming();
-  return core_timing.IsRollbackResimulating() && !core_timing.RollbackAudioWaits();
+  return (core_timing.IsRollbackResimulating() && !core_timing.RollbackAudioWaits()) ||
+         core_timing.IsLoadFastForward();
 }
 
 void StartAudioDump(Core::System& system)

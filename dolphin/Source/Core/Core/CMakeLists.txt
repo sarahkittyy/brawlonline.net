@@ -632,6 +632,8 @@ add_library(core
   Online/RoomWatch.h
   Online/Spectate.cpp
   Online/Spectate.h
+  Online/LoadFastForward.cpp
+  Online/LoadFastForward.h
   Online/SpeedCheck.cpp
   Online/SpeedCheck.h
   Online/Timeouts.h

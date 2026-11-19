@@ -71,6 +71,8 @@ All names were found as strings in Rev 1 `sora_scene.rel` / `main.dol`; `muMenuM
 start -> scStrap -> scMemoryChange -> scBoot -> [sqBoot -> sqVsMelee] -> scMemoryChange -> scSelctCharacter
 ```
 
+Dolphin runs these boot scenes unthrottled until the first other scene, which is the CSS here (`Core/Online/LoadFastForward.h`, `[Online] LoadFastForward`): about 5.4 s of game in about 1 s.
+
 This happens because of P+'s **"Boot Directly to CSS v5.4"** (`Source/Project+/BootToCSS.asm`, HOOK @ 0x806DD5F8 in `sqBoot::setNext`). It starts `sqVsMelee` instead of `sqPrizeCheck` unless some pad holds one of these at that moment (it reads pads at 0x805BA684 + 0x40·port):
 
 | Held button | Boots to |
