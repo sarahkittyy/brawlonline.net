@@ -25,6 +25,12 @@ const BLOCKS = [
 const BLOCK = 1592;
 // P+'s L-cancel counters, recorded since 2026-11-08.
 const L_CANCEL_BLOCK = { name: "lCancel", offset: 1592, size: 8 };
+// The rest of what a hit writes (replay_frames.ts HIT_FIELDS): the stop and collision hit modules.
+const HIT_BLOCKS = [
+  { name: "stop", offset: 1592, size: 36 },
+  { name: "collisionHit", offset: 1628, size: 128 },
+];
+const HIT_BLOCKS_SIZE = 36 + 128;
 const L_R_Z = 0x70;
 
 type FighterFrame = {
@@ -39,6 +45,8 @@ type FighterFrame = {
   kind?: number;
   landings?: number;
   lCancels?: number;
+  /** soStopModuleImpl's hitlag frames (with `hitBlocks`). */
+  hitStop?: number;
   /** Not read on this frame (the recorder writes zeros: between lives, a disconnect's last frame). */
   blank?: boolean;
 };
@@ -57,10 +65,13 @@ function chunk(type: string, raw: Buffer, deflate = true): Buffer {
 
 const ENTRY_IDS = [0x10001, 0x10002];
 
-/** `lCancel`: with the L-cancel counters' block (a file from before 2026-11-08 has none). */
-function encode(frames: Frame[], recorderPort = 1, lCancel = false): Buffer {
-  const blocks = lCancel ? [...BLOCKS, L_CANCEL_BLOCK] : BLOCKS;
-  const block = lCancel ? BLOCK + L_CANCEL_BLOCK.size : BLOCK;
+/**
+ * `lCancel`: with the L-cancel counters' block (a file from before 2026-11-08 has none);
+ * `hitBlocks`: with the stop and collision hit modules (not with `lCancel`).
+ */
+function encode(frames: Frame[], recorderPort = 1, lCancel = false, hitBlocks = false): Buffer {
+  const blocks = lCancel ? [...BLOCKS, L_CANCEL_BLOCK] : hitBlocks ? [...BLOCKS, ...HIT_BLOCKS] : BLOCKS;
+  const block = lCancel ? BLOCK + L_CANCEL_BLOCK.size : hitBlocks ? BLOCK + HIT_BLOCKS_SIZE : BLOCK;
   const header = Buffer.alloc(32);
   MAGIC.copy(header, 0);
   header.writeUInt16LE(1, 8);
@@ -115,6 +126,9 @@ function encode(frames: Frame[], recorderPort = 1, lCancel = false): Buffer {
           if (lCancel) {
             r.writeFloatBE(s.landings ?? 0, 1592);
             r.writeFloatBE(s.lCancels ?? 0, 1592 + 4);
+          }
+          if (hitBlocks) {
+            r.writeInt32BE(s.hitStop ?? 0, 1592 + 0x10);
           }
         }
         for (let k = 0; k < 0x40; k++) {
@@ -205,6 +219,25 @@ describe("replay highlights", () => {
     const older = decodeTimeline(encode(frames));
     expect(older.aerialLandings[0][599]).toBe(0);
     expect(older.damage[1][599]).toBe(40);
+    expect(older.hitRecord).toBeNull();
+  });
+
+  it("hashes what a hit writes: it changes with the attacker info and the hitlag, not with the damage alone", () => {
+    const frames = game([1, 2]).map((row, f) => ({
+      ...row,
+      fighters: row.fighters.map((s, p) => ({
+        ...s,
+        attacker: p === 1 && f >= 100 ? ENTRY_IDS[0] : 0,
+        hitStop: p === 1 && f >= 120 && f < 125 ? 125 - f : 0,
+        damage: p === 1 && f >= 300 ? s.damage + 1 : s.damage, // the off-screen bubble's 1%
+      })),
+    }));
+    const t = decodeTimeline(encode(frames, 1, false, true));
+    const r = t.hitRecord?.[1];
+    expect(r).toBeDefined();
+    const changes = r ? [...r.keys()].filter((f) => f > 0 && r[f] !== r[f - 1]) : [];
+    expect(changes).toEqual([100, 120, 121, 122, 123, 124, 125]);
+    expect(t.damage[1][300] - t.damage[1][299]).toBe(1);
   });
 
   it("finds a string of four different moves as a combo", () => {
