@@ -99,6 +99,8 @@ import type {
   DolphinEvent,
   DolphinSetupPhase,
   NetplayLaunchResult,
+  PlaybackMark,
+  PlaybackOverlayFile,
   ReplayCommunication,
   ReplayPlaybackStatus,
   ReplayPlayChoice,
@@ -135,6 +137,13 @@ export class DolphinManager {
   private playbackReleases = new Map<string, string | null>();
   /** A render Dolphin's music and video height (set on its command line). */
   private renderSettings = new Map<string, string>();
+  /** The seek bar's launcher side (`<comm>.overlay.json`): the renderer's (use_playback_overlay.ts), for every playback Dolphin. */
+  private playbackOverlay: PlaybackOverlayFile | null = null;
+  /**
+   * A replay's stars on the seek bar (its highlights, hotkey clips and manual clips: replays/replay_marks.ts), given
+   * to every replay played (`normal` / `queue`) once they are known; none without it.
+   */
+  replayMarks: ((paths: string[]) => Promise<PlaybackMark[]>) | null = null;
   private pplusVersionStore: PPlusVersions | null = null;
   private netplayDolphinInstance: DolphinInstance | null = null;
   /** When Play started the open netplay Dolphin, and whether it boots P+ (null: Configure's, or none). */
@@ -435,6 +444,32 @@ export class DolphinManager {
     return true;
   }
 
+  /** The seek bar's launcher side for the playback Dolphins (also each one started later). */
+  async setPlaybackOverlay(overlay: PlaybackOverlayFile | null): Promise<void> {
+    this.playbackOverlay = overlay;
+    await Promise.all(
+      [...this.playbackDolphinInstances.entries()]
+        .filter(([id]) => id !== "render" && id !== "configure")
+        .map(([, instance]) => instance.writeOverlay(overlay).catch((err) => log.warn(`overlay: ${err}`))),
+    );
+  }
+
+  /** A replay request's stars, once they are known: written to it again (the same commandId). */
+  private async addReplayMarks(instance: PlaybackDolphinInstance, comm: ReplayCommunication): Promise<void> {
+    const paths = comm.mode === "normal" && comm.replay ? [comm.replay] : (comm.queue ?? []).map((q) => q.path);
+    if (!this.replayMarks || !comm.commandId || !paths.length) {
+      return;
+    }
+    try {
+      const marks = await this.replayMarks(paths);
+      if (marks.length && !(await instance.update(comm.commandId, { marks }))) {
+        log.info("replay marks: another request plays now");
+      }
+    } catch (err) {
+      log.warn(`replay marks: ${err instanceof Error ? err.message : err}`);
+    }
+  }
+
   /** Closes the playback Dolphin `id`. */
   closePlaybackDolphin(id = "playback"): void {
     this.playbackDolphinInstances.get(id)?.stop();
@@ -632,7 +667,14 @@ export class DolphinManager {
     }
 
     try {
+      if (!render && id !== "configure") {
+        await playbackInstance.writeOverlay(this.playbackOverlay).catch((err) => log.warn(`overlay: ${err}`));
+      }
       await playbackInstance.play(replayComm);
+      // A replay (not a list's highlight, a spectated game or a render): its stars as soon as they are known.
+      if (!render && (replayComm.mode === "queue" || replayComm.mode === "normal") && !replayComm.marks) {
+        void this.addReplayMarks(playbackInstance, replayComm);
+      }
     } catch (err) {
       if (err instanceof MacOsRosettaRequiredError) {
         this.eventSubject.next({

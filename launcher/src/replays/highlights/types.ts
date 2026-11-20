@@ -81,6 +81,8 @@ export type ManualClip = {
   stageId?: number | null;
   /** Clipped while spectating. */
   spectated?: boolean;
+  /** A spectated game's: the stream's file it was clipped from (a cache cleared at every start), as Dolphin named it. */
+  source?: string;
 };
 
 /** A manual clip as a row of the lists. */

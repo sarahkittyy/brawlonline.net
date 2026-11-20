@@ -495,3 +495,61 @@ The page now:
 Looked at in a scratch launcher (worktree build, a copy of the profile without the login, Sarah's
 replays) at 1232x723, 980x723 and 980x450 (rail open and folded): All highlights, the category menu, Manual Clips, hover and
 selection, a replay's own Highlights tab.
+
+## 11. The seek bar's redesign, stars in every replay, Render from clip mode (2026-11-20)
+
+Sarah's board card: the in-game replay / spectate seek bar was "more functional than pretty";
+highlights showed only when a replay was started from a highlight; nothing could be rendered from
+the game; and Auto play could drag a spectator away from a game they wanted to clip. She approved
+a mockup (run/scratch/overlay-mock, not in the repo) and answered: the played part in the
+launcher's colour; every highlight, hotkey clip and manual clip as a star; Render only from clip
+mode, as mocked; Auto play counts down "Next game in {} s." with an X on its left and a ring on its
+right, held while in clip mode; -5 / +5 buttons.
+
+**Look** (`VideoCommon/ReplayOverlayUI.cpp`; the same file is `core/ui/src/ReplayOverlayUI.cpp` on
+the emissary branches, so a merge of main carries it). No box: the bar runs across the bottom (28 px
+in from each side, scaled) over a dark fade drawn behind every window. Above the controls' row, the
+track (5 px, 7 px under the mouse) with what has played in the launcher's colour and a white knob
+ringed in it; each star's highlight is a gold span on the track with the star over its start (lit
+while hovered or playing); the desync mark is red; the playing highlight's end line stays white.
+Hover tips (the time under the mouse, "Play this highlight (2:31)", "Clip end (2:33)") are boxes
+above the bar. The row: play / pause, -5 / +5 (as the Left / Right hotkeys), the time ("1:44" and
+"/ 4:05" dimmed), LIVE (red) or GO LIVE -14 s when spectating, "Seeking...", "Buffering..." or the
+catch-up line when there is one, the speed when not 1x, then the title and the players ("vs"
+dimmed), clipped before the right side: Clip (scissors), the list's count and buttons (|< <* *> >|),
+and the fold chevron at the right end. Folded: a 3 px line in the launcher's colour along the
+window's bottom and a chevron up at the bottom left. Clip mode: the bar outside the clip dimmed, a
+blue box over it with a grip at each end; the row says "Clip 2:13 - 2:33 (20 s)" and has Cancel
+clip, Save as highlight (star) and Render (w/ Music) with a menu (the chevron right of it) for
+Render (No Music). Text is the chat's Noto Sans at 14.5 px (scaled). Every word is one the overlay
+or the launcher already had, but "Next game in {} s." (Sarah's).
+
+**The launcher's side** (`<comm>.overlay.json`, written by `dolphin/instance.ts` writeOverlay for
+every playback Dolphin, from `renderer/lib/dolphin/use_playback_overlay.ts`): `accent` (the page's
+`--accent-primary`, looked at every second, so a Theme Color change shows at once; the plain grey
+#d0d0d0 without it) and `toasts`, the renders asked for from the game. Dolphin reads it every poll
+(200 ms) and draws the toasts at the top right ("Clip (0:20)", "Rendering 42%", a bar in the
+launcher's colour), also with the seek bar hidden; a finished one stays 6 s.
+
+**Stars in every replay** (`replays/highlights/replay_marks.ts`, `DolphinManager.replayMarks`): a
+replay played as a replay (`normal` / `queue`: the Replays list, Play selected, Match history) gets,
+once known, every highlight found in it, every hotkey (L+R+Z) clip and every manual clip, by start,
+each once, 500 at most: the same request written again with `marks`, each with its `path` (a queue's
+other replays don't show them). Dolphin now reads `marks` for any request but a render or a
+spectated game, and a clip saved in this run that is one of them is one star. A star plays its clip
+in the running match and pauses at its end (the session's PlayHighlight, as saved clips' stars
+always did); the Replays list's < > (shown while the replay has stars) go from star to star in it.
+
+**Render from clip mode** (`Replay::Playback::RequestRender`): saves the clip as Save as highlight
+does (so it is a Manual Clip, spectated games' copied) and lists it in the status,
+`"renderRequests": [{"seq", "path", "startFrame", "endFrame", "music"}]` (every one of the
+Dolphin's run). The renderer's hook waits for the Manual Clip (up to 20 s: a spectated game is
+copied first), then queues the render as the Highlights tab's Render does (the file named as a
+manual clip's, `<date> Clip - <players>.mp4`; the version and update checks as always), and the
+toast follows its RENDER_PROGRESS.
+
+Tests: `replay_marks.test.ts`, `spectate_client.test.ts` (Auto play waits for `next`; the X ends the
+wait); harness `test_replay.py::test_launcher_comm_file_saves_manual_clips` (a replay's stars from a
+rewrite, only its path's, one with a saved clip; a star playing and pausing at its end; Render with
+and without music in `renderRequests` and `savedClips`; the overlay file read and a broken one
+ignored; Auto play's countdown on a finished stream, held in clip mode, then `next`, and its X).

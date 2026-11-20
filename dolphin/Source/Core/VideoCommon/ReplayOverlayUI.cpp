@@ -36,10 +36,10 @@ bool s_dragging = false;
 float s_drag_at = 0;
 // A press on a highlight's mark in the bar: which (-1: none); it plays on release, never seeks.
 int s_mark_held = -1;
-// Clip mode (Clip, then "Save as highlight" or "Cancel clip"): the clip's first and last frames,
-// the replay it is of (its title and first frame: another replay armed ends it), and the handle
-// held (0: none, 1: the start, 2: the end): where it was pressed, its frame then, and whether it
-// has been dragged (past HANDLE_DRAG_PX; until then a release is a click, which seeks there).
+// Clip mode (Clip, then "Save as highlight", Render or "Cancel clip"): the clip's first and last
+// frames, the replay it is of (its title and first frame: another replay armed ends it), and the
+// handle held (0: none, 1: the start, 2: the end): where it was pressed, its frame then, and whether
+// it has been dragged (past HANDLE_DRAG_PX; until then a release is a click, which seeks there).
 bool s_clip_mode = false;
 s64 s_clip_start = 0;
 s64 s_clip_end = 0;
@@ -64,6 +64,30 @@ constexpr float HANDLE_DRAG_PX = 4.0f;
 // < (previous clip) this far into a highlight plays it again from its start; nearer its start, the
 // one before it (as media players' Previous).
 constexpr s64 PREV_RESTARTS_AFTER = 60;
+// The -5 / +5 buttons (as the hotkeys' Jump).
+constexpr double JUMP_SECONDS = 5;
+
+// The look (the user's mockup, 2026-11-20): a bar across the bottom over a dark fade, the
+// launcher's colour for what has played (<comm>.overlay.json; its plain grey without a launcher).
+constexpr ImU32 TEXT = IM_COL32(242, 242, 242, 255);
+constexpr ImU32 TEXT_2 = IM_COL32(180, 180, 180, 255);
+constexpr ImU32 TEXT_DIM = IM_COL32(147, 147, 147, 255);
+constexpr ImU32 ICON_OFF = IM_COL32(255, 255, 255, 77);
+constexpr ImU32 HOVER_BG = IM_COL32(255, 255, 255, 36);
+constexpr ImU32 GHOST_BG = IM_COL32(255, 255, 255, 31);
+constexpr ImU32 GHOST_HOVER = IM_COL32(255, 255, 255, 56);
+constexpr ImU32 TRACK = IM_COL32(255, 255, 255, 56);
+constexpr ImU32 GOLD = IM_COL32(255, 200, 60, 255);
+constexpr ImU32 GOLD_LIT = IM_COL32(255, 226, 122, 255);
+constexpr ImU32 GOLD_SPAN = IM_COL32(255, 200, 60, 115);
+constexpr ImU32 GOLD_SPAN_LIT = IM_COL32(255, 200, 60, 217);
+constexpr ImU32 CLIP_BLUE = IM_COL32(61, 139, 255, 255);
+constexpr ImU32 CLIP_BLUE_HOVER = IM_COL32(90, 160, 255, 255);
+constexpr ImU32 LIVE_RED = IM_COL32(210, 44, 44, 255);
+constexpr ImU32 DESYNC_RED = IM_COL32(255, 77, 77, 255);
+constexpr ImU32 PANEL = IM_COL32(15, 15, 15, 222);
+constexpr ImU32 PANEL_BORDER = IM_COL32(255, 255, 255, 26);
+constexpr ImU32 DEFAULT_ACCENT = IM_COL32(208, 208, 208, 255);
 
 std::string Clock60(s64 frames)
 {
@@ -71,19 +95,9 @@ std::string Clock60(s64 frames)
   return fmt::format("{}:{:02}", seconds / 60, seconds % 60);
 }
 
-std::string Players(const Gprb::Session::PlaybackInfo& info)
+ImU32 WithAlpha(ImU32 col, int alpha)
 {
-  std::string out;
-  for (size_t port = 0; port < info.names.size(); ++port)
-  {
-    if (info.names[port].empty())
-      continue;
-    if (!out.empty())
-      out += "  vs  ";
-    out += fmt::format("{} ({})", info.names[port],
-                       Online::GameSetup::CharacterName(info.chars[port]));
-  }
-  return out;
+  return (col & ~IM_COL32_A_MASK) | (static_cast<ImU32>(std::clamp(alpha, 0, 255)) << IM_COL32_A_SHIFT);
 }
 
 // The overlay is drawn on the GPU thread, which must never wait on the session's lock (nor the
@@ -118,24 +132,48 @@ void EndClipMode()
   SetStop(-1);
 }
 
-// The list buttons' arrows: `count` triangles pointing left or right, centred in [a, z].
-void Arrows(ImDrawList* dl, ImVec2 a, ImVec2 z, int count, bool left, ImU32 col)
+// ---- Icons, drawn in a box of side `s` centred on `c`. ----
+
+void IconPlay(ImDrawList* dl, ImVec2 c, float s, ImU32 col)
 {
-  const float h = (z.y - a.y) * 0.55f;
-  const float w = h * 0.75f;
-  const float total = w * count;
-  float x = (a.x + z.x - total) * 0.5f;
-  const float cy = (a.y + z.y) * 0.5f;
-  for (int i = 0; i < count; ++i, x += w)
-  {
-    if (left)
-      dl->AddTriangleFilled(ImVec2(x + w, cy - h * 0.5f), ImVec2(x + w, cy + h * 0.5f), ImVec2(x, cy), col);
-    else
-      dl->AddTriangleFilled(ImVec2(x, cy - h * 0.5f), ImVec2(x, cy + h * 0.5f), ImVec2(x + w, cy), col);
-  }
+  const float h = s * 0.62f;
+  const float w = h * 0.86f;
+  const float x = c.x - w * 0.4f;
+  dl->AddTriangleFilled(ImVec2(x, c.y - h * 0.5f), ImVec2(x, c.y + h * 0.5f), ImVec2(x + w, c.y), col);
 }
 
-// A highlight's star (the seek bar's marks), its points at radius r around c.
+void IconPause(ImDrawList* dl, ImVec2 c, float s, ImU32 col)
+{
+  const float h = s * 0.62f;
+  const float w = s * 0.2f;
+  const float gap = s * 0.16f;
+  const float r = w * 0.25f;
+  dl->AddRectFilled(ImVec2(c.x - gap * 0.5f - w, c.y - h * 0.5f), ImVec2(c.x - gap * 0.5f, c.y + h * 0.5f), col, r);
+  dl->AddRectFilled(ImVec2(c.x + gap * 0.5f, c.y - h * 0.5f), ImVec2(c.x + gap * 0.5f + w, c.y + h * 0.5f), col, r);
+}
+
+// A circular arrow with a 5 in it: back (counter-clockwise) or forward.
+void IconJump(ImDrawList* dl, ImVec2 c, float s, ImU32 col, bool forward, float font_px)
+{
+  const float r = s * 0.36f;
+  const float t = std::max(1.5f, s * 0.085f);
+  constexpr float PI = 3.14159265f;
+  // An open ring, its gap at the top on the arrow's side.
+  const float a0 = forward ? -PI * 0.5f + 0.35f : -PI * 0.5f - 0.35f;
+  const float a1 = forward ? -PI * 0.5f - 1.65f * PI + 0.35f : -PI * 0.5f + 1.65f * PI - 0.35f;
+  dl->PathArcTo(c, r, a0, a1, 24);
+  dl->PathStroke(col, 0, t);
+  // The arrowhead at the ring's start, pointing along it.
+  const ImVec2 p(c.x + std::cos(a0) * r, c.y + std::sin(a0) * r);
+  const float dir = forward ? 1.0f : -1.0f;
+  const float k = s * 0.17f;
+  dl->AddTriangleFilled(ImVec2(p.x + dir * k * 1.1f, p.y), ImVec2(p.x - dir * k * 0.2f, p.y - k),
+                        ImVec2(p.x - dir * k * 0.2f, p.y + k), col);
+  ImFont* font = ImGui::GetFont();
+  const ImVec2 ts = font->CalcTextSizeA(font_px, FLT_MAX, 0.0f, "5");
+  dl->AddText(font, font_px, ImVec2(c.x - ts.x * 0.5f, c.y - ts.y * 0.5f + s * 0.02f), col, "5");
+}
+
 void Star(ImDrawList* dl, ImVec2 c, float r, ImU32 col)
 {
   ImVec2 pts[10];
@@ -148,33 +186,334 @@ void Star(ImDrawList* dl, ImVec2 c, float r, ImU32 col)
   dl->AddConcavePolyFilled(pts, 10, col);
 }
 
-// The fold button at the overlay's top left: a - that folds it to a thin bar, a + on that bar that
-// opens it again (the user, 2026-11-01: "so moving my mouse doesn't keep showing it all the time
-// and i can hide it for my stream"). Kept in [Online] SeekBarCollapsed. True when clicked.
-bool FoldButton(float size, float scale, bool collapsed)
+void StarOutline(ImDrawList* dl, ImVec2 c, float r, ImU32 col, float t)
 {
-  const ImVec2 b0 = ImGui::GetCursorScreenPos();
-  const bool pressed = ImGui::InvisibleButton("##replayfold", ImVec2(size, size));
+  ImVec2 pts[10];
+  for (int i = 0; i < 10; ++i)
+  {
+    const float a = -1.5707964f + i * 0.62831855f;
+    const float k = i % 2 == 0 ? r : r * 0.45f;
+    pts[i] = ImVec2(c.x + std::cos(a) * k, c.y + std::sin(a) * k);
+  }
+  dl->AddPolyline(pts, 10, col, ImDrawFlags_Closed, t);
+}
+
+// |< (previous replay) or >| (next replay).
+void IconSkip(ImDrawList* dl, ImVec2 c, float s, ImU32 col, bool left)
+{
+  const float h = s * 0.56f;
+  const float bar = s * 0.11f;
+  const float w = h * 0.8f;
+  const float total = bar + w;
+  const float x0 = c.x - total * 0.5f;
+  if (left)
+  {
+    dl->AddRectFilled(ImVec2(x0, c.y - h * 0.5f), ImVec2(x0 + bar, c.y + h * 0.5f), col, bar * 0.3f);
+    dl->AddTriangleFilled(ImVec2(x0 + total, c.y - h * 0.5f), ImVec2(x0 + total, c.y + h * 0.5f),
+                          ImVec2(x0 + bar, c.y), col);
+  }
+  else
+  {
+    dl->AddRectFilled(ImVec2(x0 + w, c.y - h * 0.5f), ImVec2(x0 + total, c.y + h * 0.5f), col, bar * 0.3f);
+    dl->AddTriangleFilled(ImVec2(x0, c.y - h * 0.5f), ImVec2(x0, c.y + h * 0.5f), ImVec2(x0 + w, c.y), col);
+  }
+}
+
+// <* (previous clip) or *> (next clip): a triangle and a small star on the far side.
+void IconClipStep(ImDrawList* dl, ImVec2 c, float s, ImU32 col, bool left)
+{
+  const float h = s * 0.5f;
+  const float w = h * 0.8f;
+  const float sr = s * 0.2f;
+  const float total = w + sr * 2.0f;
+  const float x0 = c.x - total * 0.5f;
+  if (left)
+  {
+    Star(dl, ImVec2(x0 + sr, c.y - h * 0.15f), sr, col);
+    dl->AddTriangleFilled(ImVec2(x0 + total, c.y - h * 0.5f), ImVec2(x0 + total, c.y + h * 0.5f),
+                          ImVec2(x0 + sr * 2.0f, c.y), col);
+  }
+  else
+  {
+    dl->AddTriangleFilled(ImVec2(x0, c.y - h * 0.5f), ImVec2(x0, c.y + h * 0.5f), ImVec2(x0 + w, c.y), col);
+    Star(dl, ImVec2(x0 + w + sr, c.y - h * 0.15f), sr, col);
+  }
+}
+
+void IconScissors(ImDrawList* dl, ImVec2 c, float s, ImU32 col)
+{
+  const float t = std::max(1.5f, s * 0.11f);
+  const float r = s * 0.15f;
+  const ImVec2 a(c.x - s * 0.24f, c.y - s * 0.24f);
+  const ImVec2 b(c.x - s * 0.24f, c.y + s * 0.24f);
+  dl->AddCircle(a, r, col, 16, t);
+  dl->AddCircle(b, r, col, 16, t);
+  dl->AddLine(ImVec2(a.x + r * 0.75f, a.y + r * 0.75f), ImVec2(c.x + s * 0.38f, c.y + s * 0.38f), col, t);
+  dl->AddLine(ImVec2(b.x + r * 0.75f, b.y - r * 0.75f), ImVec2(c.x + s * 0.38f, c.y - s * 0.38f), col, t);
+}
+
+void IconFilm(ImDrawList* dl, ImVec2 c, float s, ImU32 col)
+{
+  const float t = std::max(1.2f, s * 0.09f);
+  const ImVec2 a(c.x - s * 0.4f, c.y - s * 0.3f);
+  const ImVec2 z(c.x + s * 0.4f, c.y + s * 0.3f);
+  dl->AddRect(a, z, col, s * 0.08f, 0, t);
+  const float y1 = a.y + (z.y - a.y) * 0.3f;
+  const float y2 = z.y - (z.y - a.y) * 0.3f;
+  dl->AddLine(ImVec2(a.x, y1), ImVec2(z.x, y1), col, t);
+  dl->AddLine(ImVec2(a.x, y2), ImVec2(z.x, y2), col, t);
+  for (float fx : {0.33f, 0.67f})
+  {
+    const float x = a.x + (z.x - a.x) * fx;
+    dl->AddLine(ImVec2(x, a.y), ImVec2(x, y1), col, t);
+    dl->AddLine(ImVec2(x, y2), ImVec2(x, z.y), col, t);
+  }
+}
+
+// A chevron pointing down (fold) or up (unfold).
+void IconChevron(ImDrawList* dl, ImVec2 c, float s, ImU32 col, bool up)
+{
+  const float w = s * 0.3f;
+  const float h = s * 0.16f;
+  const float t = std::max(1.5f, s * 0.12f);
+  const float d = up ? -1.0f : 1.0f;
+  const ImVec2 pts[3] = {ImVec2(c.x - w, c.y - d * h), ImVec2(c.x, c.y + d * h), ImVec2(c.x + w, c.y - d * h)};
+  dl->AddPolyline(pts, 3, col, ImDrawFlags_None, t);
+}
+
+void IconX(ImDrawList* dl, ImVec2 c, float s, ImU32 col)
+{
+  const float k = s * 0.26f;
+  const float t = std::max(1.5f, s * 0.11f);
+  dl->AddLine(ImVec2(c.x - k, c.y - k), ImVec2(c.x + k, c.y + k), col, t);
+  dl->AddLine(ImVec2(c.x - k, c.y + k), ImVec2(c.x + k, c.y - k), col, t);
+}
+
+// ---- Widgets ----
+
+// An icon button at `p` (side `s`): a rounded light square under the mouse. True when clicked.
+bool IconButton(const char* id, ImVec2 p, float s, bool enabled, const char* tip,
+                const std::function<void(ImDrawList*, ImVec2, float, ImU32)>& icon, float scale)
+{
+  ImGui::SetCursorScreenPos(p);
+  const bool pressed = ImGui::InvisibleButton(id, ImVec2(s, s));
+  const bool over = ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled);
+  ImDrawList* dl = ImGui::GetWindowDrawList();
+  if (over && enabled)
+    dl->AddRectFilled(p, ImVec2(p.x + s, p.y + s), HOVER_BG, 8.0f * scale);
+  icon(dl, ImVec2(p.x + s * 0.5f, p.y + s * 0.5f), s * 0.56f, enabled ? TEXT : ICON_OFF);
+  if (over && tip)
+    ImGui::SetTooltip("%s", tip);
+  return pressed && enabled;
+}
+
+enum class ButtonLook
+{
+  Ghost,
+  Solid,
+};
+
+float TextButtonWidth(const char* label, bool icon, float scale)
+{
+  return ImGui::CalcTextSize(label).x + 24.0f * scale + (icon ? 24.0f * scale : 0.0f);
+}
+
+// A text button (with an icon left of it), `h` tall at `p`. `round`: which corners are rounded.
+bool TextButton(const char* id, const char* label, ImVec2 p, float h, ButtonLook look,
+                const std::function<void(ImDrawList*, ImVec2, float, ImU32)>& icon, float scale,
+                ImDrawFlags round = ImDrawFlags_RoundCornersAll)
+{
+  const float w = TextButtonWidth(label, static_cast<bool>(icon), scale);
+  ImGui::SetCursorScreenPos(p);
+  const bool pressed = ImGui::InvisibleButton(id, ImVec2(w, h));
   const bool over = ImGui::IsItemHovered();
   ImDrawList* dl = ImGui::GetWindowDrawList();
-  const ImVec2 b1(b0.x + size, b0.y + size);
-  if (over)
-    dl->AddRectFilled(b0, b1, IM_COL32(255, 255, 255, 40), 3.0f * scale);
-  const ImU32 col = over ? IM_COL32(255, 255, 255, 255) : IM_COL32(230, 230, 230, 220);
-  const ImVec2 c((b0.x + b1.x) * 0.5f, (b0.y + b1.y) * 0.5f);
-  const float h = size * 0.3f;
-  const float t = std::max(1.0f, 1.0f * scale);
-  dl->AddRectFilled(ImVec2(c.x - h, c.y - t), ImVec2(c.x + h, c.y + t), col);
-  if (collapsed)
-    dl->AddRectFilled(ImVec2(c.x - t, c.y - h), ImVec2(c.x + t, c.y + h), col);
-  if (over)
-    ImGui::SetTooltip("%s", collapsed ? "Show the seek bar" : "Fold the seek bar to a thin bar");
+  const ImU32 bg = look == ButtonLook::Solid ? (over ? CLIP_BLUE_HOVER : CLIP_BLUE) : (over ? GHOST_HOVER : GHOST_BG);
+  dl->AddRectFilled(p, ImVec2(p.x + w, p.y + h), bg, 7.0f * scale, round);
+  float x = p.x + 12.0f * scale;
+  if (icon)
+  {
+    icon(dl, ImVec2(x + 8.0f * scale, p.y + h * 0.5f), 17.0f * scale, TEXT);
+    x += 24.0f * scale;
+  }
+  const ImVec2 ts = ImGui::CalcTextSize(label);
+  dl->AddText(ImVec2(x, p.y + (h - ts.y) * 0.5f), TEXT, label);
+  return pressed;
+}
+
+// A tooltip box drawn above `anchor` (centred on it), over everything.
+void TipAbove(ImVec2 anchor, const std::string& text, float scale, float min_x, float max_x)
+{
+  ImDrawList* dl = ImGui::GetForegroundDrawList();
+  const ImVec2 ts = ImGui::CalcTextSize(text.c_str());
+  const ImVec2 pad(8.0f * scale, 4.0f * scale);
+  const float w = ts.x + pad.x * 2.0f;
+  const float h = ts.y + pad.y * 2.0f;
+  const float x = std::clamp(anchor.x - w * 0.5f, min_x, std::max(min_x, max_x - w));
+  const ImVec2 a(x, anchor.y - h);
+  dl->AddRectFilled(a, ImVec2(a.x + w, a.y + h), PANEL, 6.0f * scale);
+  dl->AddRect(a, ImVec2(a.x + w, a.y + h), PANEL_BORDER, 6.0f * scale);
+  dl->AddText(ImVec2(a.x + pad.x, a.y + pad.y), TEXT, text.c_str());
+}
+
+// The fold button at the bar's right end: a chevron down that folds it to a thin line, a chevron up
+// on that line that opens it again (the user, 2026-11-01: "so moving my mouse doesn't keep showing
+// it all the time and i can hide it for my stream"). Kept in [Online] SeekBarCollapsed. True when
+// clicked.
+bool FoldButton(ImVec2 p, float s, float scale, bool collapsed)
+{
+  const bool pressed =
+      IconButton("##replayfold", p, s, true, collapsed ? "Show the seek bar" : "Fold the seek bar to a thin bar",
+                 [collapsed](ImDrawList* dl, ImVec2 c, float sz, ImU32 col) { IconChevron(dl, c, sz, col, collapsed); },
+                 scale);
   if (pressed)
   {
     Config::SetBaseOrCurrent(Config::ONLINE_SEEK_BAR_COLLAPSED, !collapsed);
     Config::Save();
   }
   return pressed;
+}
+
+constexpr ImGuiWindowFlags WINDOW_FLAGS =
+    ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
+    ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoSavedSettings |
+    ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoBringToFrontOnFocus;
+
+// The overlay's windows: no padding or border (only for the window: tooltips and menus keep theirs).
+bool BeginBare(const char* name, ImGuiWindowFlags extra = 0)
+{
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+  const bool open = ImGui::Begin(name, nullptr, WINDOW_FLAGS | extra);
+  ImGui::PopStyleVar(2);
+  return open;
+}
+
+// The launcher's renders asked for here ("Clip (0:20)  Rendering 42%"), at the top right.
+void Toasts(const Gprb::Replay::Playback::OverlayView& view, ImU32 accent, float scale)
+{
+  if (view.toasts.empty())
+    return;
+  const ImGuiIO& io = ImGui::GetIO();
+  const float w = 270.0f * scale;
+  const float pad = 12.0f * scale;
+  const float line = ImGui::GetTextLineHeight();
+  const float h = pad * 2.0f + line + 12.0f * scale;
+  const float gap = 8.0f * scale;
+  const float total = view.toasts.size() * (h + gap);
+  ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x - 20.0f * scale - w, 18.0f * scale), ImGuiCond_Always);
+  ImGui::SetNextWindowSize(ImVec2(w, total), ImGuiCond_Always);
+  if (BeginBare("##ReplayOverlayToasts", ImGuiWindowFlags_NoInputs))
+  {
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    float y = ImGui::GetWindowPos().y;
+    const float x = ImGui::GetWindowPos().x;
+    for (const auto& t : view.toasts)
+    {
+      dl->AddRectFilled(ImVec2(x, y), ImVec2(x + w, y + h), PANEL, 10.0f * scale);
+      dl->AddRect(ImVec2(x, y), ImVec2(x + w, y + h), PANEL_BORDER, 10.0f * scale);
+      const ImVec2 rs = ImGui::CalcTextSize(t.text.c_str());
+      dl->PushClipRect(ImVec2(x + pad, y), ImVec2(x + w - pad - rs.x - 8.0f * scale, y + h), true);
+      dl->AddText(ImVec2(x + pad, y + pad), TEXT, t.label.c_str());
+      dl->PopClipRect();
+      dl->AddText(ImVec2(x + w - pad - rs.x, y + pad), t.state == "error" ? DESYNC_RED : TEXT_2, t.text.c_str());
+      const float by = y + pad + line + 6.0f * scale;
+      const float bh = 4.0f * scale;
+      dl->AddRectFilled(ImVec2(x + pad, by), ImVec2(x + w - pad, by + bh), IM_COL32(255, 255, 255, 38), bh * 0.5f);
+      const float p = t.state == "done" ? 1.0f : t.progress;
+      if (p > 0)
+      {
+        dl->AddRectFilled(ImVec2(x + pad, by), ImVec2(x + pad + (w - pad * 2.0f) * p, by + bh),
+                          t.state == "error" ? DESYNC_RED : accent, bh * 0.5f);
+      }
+      y += h + gap;
+    }
+  }
+  ImGui::End();
+}
+
+// Above the bar: the stream's line (the launcher's banner, "Closing in 5 s ..."), or Auto play's
+// countdown "Next game in 3 s." with an X that stays on this game and a ring of the time left (the
+// user, 2026-11-20). `bottom`: the pill's bottom edge.
+void Pill(const Gprb::Session::PlaybackInfo& info, const Gprb::Replay::Playback::NextCountdown& next, float bottom,
+          float scale)
+{
+  std::string text;
+  if (next.shown)
+  {
+    if (next.waiting)
+    {
+      text = info.banner;
+    }
+    else
+    {
+      const double left = std::chrono::duration<double>(next.deadline - Clock::now()).count();
+      text = fmt::format("Next game in {} s.", std::max<long long>(static_cast<long long>(std::ceil(left)), 1));
+    }
+  }
+  else
+  {
+    text = info.banner;
+  }
+  if (text.empty() && !next.shown)
+    return;
+  const ImGuiIO& io = ImGui::GetIO();
+  const float h = 34.0f * scale;
+  const float icon = 20.0f * scale;
+  const float pad = 14.0f * scale;
+  const ImVec2 ts = ImGui::CalcTextSize(text.c_str());
+  const float x_w = next.shown ? icon + 10.0f * scale : 0.0f;
+  const float ring_w = next.shown ? icon + 10.0f * scale : 0.0f;
+  const float w = pad * 2.0f + x_w + ts.x + ring_w;
+  ImGui::SetNextWindowPos(ImVec2((io.DisplaySize.x - w) * 0.5f, bottom - h), ImGuiCond_Always);
+  ImGui::SetNextWindowSize(ImVec2(w, h), ImGuiCond_Always);
+  if (BeginBare("##ReplayOverlayPill"))
+  {
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImVec2 p = ImGui::GetWindowPos();
+    dl->AddRectFilled(p, ImVec2(p.x + w, p.y + h), PANEL, h * 0.5f);
+    dl->AddRect(p, ImVec2(p.x + w, p.y + h), PANEL_BORDER, h * 0.5f);
+    float x = p.x + pad;
+    if (next.shown)
+    {
+      // The X: stay on this game.
+      const ImVec2 b0(x - 4.0f * scale, p.y + (h - icon - 8.0f * scale) * 0.5f);
+      ImGui::SetCursorScreenPos(b0);
+      const ImVec2 bs(icon + 8.0f * scale, icon + 8.0f * scale);
+      if (ImGui::InvisibleButton("##replaynextcancel", bs))
+        Send([] { Gprb::Replay::Playback::CancelNext(); });
+      const bool over = ImGui::IsItemHovered();
+      if (over)
+        dl->AddRectFilled(b0, ImVec2(b0.x + bs.x, b0.y + bs.y), HOVER_BG, bs.x * 0.5f);
+      IconX(dl, ImVec2(b0.x + bs.x * 0.5f, b0.y + bs.y * 0.5f), icon * 0.8f, over ? TEXT : TEXT_2);
+      x += x_w;
+    }
+    dl->AddText(ImVec2(x, p.y + (h - ts.y) * 0.5f), TEXT, text.c_str());
+    x += ts.x + 10.0f * scale;
+    if (next.shown)
+    {
+      // The ring: the time gone of the countdown (spinning while the launcher gets the next game).
+      const ImVec2 c(x + icon * 0.5f, p.y + h * 0.5f);
+      const float r = icon * 0.42f;
+      const float t = 2.5f * scale;
+      dl->AddCircle(c, r, IM_COL32(255, 255, 255, 51), 32, t);
+      constexpr float PI = 3.14159265f;
+      if (next.waiting)
+      {
+        const float a = static_cast<float>(
+            std::fmod(std::chrono::duration<double>(Clock::now().time_since_epoch()).count() * 5.0, 2.0 * PI));
+        dl->PathArcTo(c, r, a, a + PI * 0.6f, 16);
+      }
+      else
+      {
+        const double left = std::chrono::duration<double>(next.deadline - Clock::now()).count();
+        const float done = static_cast<float>(std::clamp(1.0 - left / next.total_seconds, 0.0, 1.0));
+        dl->PathArcTo(c, r, -PI * 0.5f, -PI * 0.5f + std::max(done, 0.01f) * 2.0f * PI, 32);
+      }
+      dl->PathStroke(TEXT, 0, t);
+    }
+  }
+  ImGui::End();
 }
 }  // namespace
 
@@ -203,6 +542,7 @@ void Display(float scale)
     s_dragging = false;
     s_mark_held = -1;
     EndClipMode();
+    Gprb::Replay::Playback::SetClipMode(false);
     return;
   }
   // (A clip is of one replay: another one armed, e.g. a spectated set's next game, ends it.)
@@ -242,74 +582,135 @@ void Display(float scale)
                          fmt::format("Catching up to live ({}%). Click to watch", pct), 600,
                          OSD::Color::CYAN);
   }
-  // Spectating: also while catching up, buffering, or with something to say (the banner).
-  const bool wanted = info.paused || info.seeking || s_dragging || s_mark_held >= 0 || s_clip_mode || info.catching_up ||
-                      info.buffering || !info.banner.empty() || now - s_mouse_moved < SHOW_AFTER_MOUSE;
-  if (s_hidden || !wanted)
+  // Clip mode holds Auto play's countdown at a stream's end.
+  Gprb::Replay::Playback::SetClipMode(s_clip_mode);
+  const auto next = Gprb::Replay::Playback::GetNextCountdown();
+  const auto view = Gprb::Replay::Playback::GetOverlayView();
+  const ImU32 accent =
+      view.has_accent ? IM_COL32(view.accent[0], view.accent[1], view.accent[2], 255) : DEFAULT_ACCENT;
+  if (s_hidden)
     return;
 
-  if (s_font)
-    ImGui::PushFont(s_font);
-  const float width = std::min(io.DisplaySize.x * 0.8f, 900.0f * scale);
-  constexpr ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
-                                     ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar |
-                                     ImGuiWindowFlags_NoSavedSettings |
-                                     ImGuiWindowFlags_NoFocusOnAppearing |
-                                     ImGuiWindowFlags_AlwaysAutoResize;
-  // Folded: a + and a thin line of how far it has played, at the bottom where the overlay is, shown
-  // when the overlay would be. Nothing else of it (clip mode ends with the fold).
-  if (Config::Get(Config::ONLINE_SEEK_BAR_COLLAPSED))
+  // (The OSD's font size is the user's; the overlay's text is the chat's font at a fixed size.)
+  const float main_scale = ImGui::GetStyle().FontScaleMain > 0 ? ImGui::GetStyle().FontScaleMain : 1.0f;
+  ImGui::PushFont(s_font, 14.5f * scale / main_scale);
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 6.0f * scale);
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8.0f * scale, 4.0f * scale));
+  ImGui::PushStyleVar(ImGuiStyleVar_PopupRounding, 8.0f * scale);
+  ImGui::PushStyleVar(ImGuiStyleVar_PopupBorderSize, 1.0f);
+  ImGui::PushStyleColor(ImGuiCol_PopupBg, PANEL);
+  ImGui::PushStyleColor(ImGuiCol_Border, PANEL_BORDER);
+  ImGui::PushStyleColor(ImGuiCol_Text, TEXT);
+  const auto pop = [] {
+    ImGui::PopStyleColor(3);
+    ImGui::PopStyleVar(4);
+    ImGui::PopFont();
+  };
+
+  // The renders asked for here, while the launcher has them (also with the bar hidden).
+  Toasts(view, accent, scale);
+
+  // Spectating: also while catching up, buffering, or with something to say (the banner, Auto
+  // play's countdown).
+  const bool wanted = info.paused || info.seeking || s_dragging || s_mark_held >= 0 || s_clip_mode ||
+                      info.catching_up || info.buffering || !info.banner.empty() || next.shown ||
+                      now - s_mouse_moved < SHOW_AFTER_MOUSE;
+  if (!wanted)
   {
-    const float line_h = ImGui::GetTextLineHeight();
-    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y - 12.0f * scale),
-                            ImGuiCond_Always, ImVec2(0.5f, 1.0f));
-    ImGui::SetNextWindowSize(ImVec2(width, 0), ImGuiCond_Always);
-    ImGui::SetNextWindowBgAlpha(0.5f);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(4.0f * scale, 3.0f * scale));
-    if (ImGui::Begin("##ReplayOverlayFolded", nullptr, flags))
-    {
-      FoldButton(line_h, scale, true);
-      ImGui::SameLine();
-      const ImVec2 r0 = ImGui::GetCursorScreenPos();
-      const float bar_w = std::max(ImGui::GetContentRegionAvail().x, 1.0f);
-      const bool live = info.live && !info.ended;
-      const s64 end = live ? std::max(info.live_edge, info.first) : info.last;
-      const float done = std::clamp(
-          static_cast<float>(info.shown - info.first) / static_cast<float>(std::max<s64>(end - info.first, 1)),
-          0.0f, 1.0f);
-      const float bar_h = 3.0f * scale;
-      const ImVec2 p0(r0.x, r0.y + (line_h - bar_h) * 0.5f);
-      ImDrawList* dl = ImGui::GetWindowDrawList();
-      dl->AddRectFilled(p0, ImVec2(p0.x + bar_w, p0.y + bar_h), IM_COL32(255, 255, 255, 50), bar_h * 0.5f);
-      dl->AddRectFilled(p0, ImVec2(p0.x + done * bar_w, p0.y + bar_h), IM_COL32(110, 200, 120, 220), bar_h * 0.5f);
-      ImGui::Dummy(ImVec2(bar_w, line_h));
-    }
-    ImGui::End();
-    ImGui::PopStyleVar();
-    if (s_font)
-      ImGui::PopFont();
+    pop();
     return;
   }
-  ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y - 12.0f * scale),
-                          ImGuiCond_Always, ImVec2(0.5f, 1.0f));
-  ImGui::SetNextWindowSize(ImVec2(width, 0), ImGuiCond_Always);
-  ImGui::SetNextWindowBgAlpha(0.7f);
-  if (ImGui::Begin("##ReplayOverlay", nullptr, flags))
+
+  const float W = io.DisplaySize.x;
+  const float H = io.DisplaySize.y;
+  const float margin = 28.0f * scale;
+  const float bottom_pad = 12.0f * scale;
+  const float ctl_h = 40.0f * scale;
+  const float track_h = 36.0f * scale;
+  const float btn = 34.0f * scale;
+  const bool live = info.live && !info.ended;
+  const s64 end = live ? std::max(info.live_edge, info.first) : info.last;
+  const s64 span = std::max<s64>(end - info.first, 1);
+  const s64 shown = std::clamp(info.shown, info.first, end);
+
+  // Folded: a thin line of how far it has played along the bottom, and a chevron up to open it,
+  // shown when the overlay would be. Nothing else of it (clip mode ends with the fold).
+  if (Config::Get(Config::ONLINE_SEEK_BAR_COLLAPSED))
   {
-    // The launcher's list (highlights, not spectating): "3/40  << < > >>" right of the title (the
-    // user, 2026-10-24). < > go to the previous / next highlight from the frame shown, in this
-    // replay at once (its marks), past them in the replay before / after it (the launcher picks
-    // it); << >> to the replay before / after. The Replays tab's replays: "12/340  << >>".
+    ImDrawList* bg = ImGui::GetBackgroundDrawList();
+    const float line = 3.0f * scale;
+    const float done = std::clamp(static_cast<float>(shown - info.first) / static_cast<float>(span), 0.0f, 1.0f);
+    bg->AddRectFilled(ImVec2(0, H - line), ImVec2(W, H), IM_COL32(255, 255, 255, 46));
+    bg->AddRectFilled(ImVec2(0, H - line), ImVec2(W * done, H), accent);
+    const ImVec2 bs(30.0f * scale, 24.0f * scale);
+    const ImVec2 p0(12.0f * scale, H - line - 8.0f * scale - bs.y);
+    ImGui::SetNextWindowPos(p0, ImGuiCond_Always);
+    ImGui::SetNextWindowSize(bs, ImGuiCond_Always);
+    if (BeginBare("##ReplayOverlayFolded"))
+    {
+      ImGui::GetWindowDrawList()->AddRectFilled(p0, ImVec2(p0.x + bs.x, p0.y + bs.y), IM_COL32(15, 15, 15, 180),
+                                                6.0f * scale);
+      ImGui::SetCursorScreenPos(p0);
+      if (ImGui::InvisibleButton("##replayunfold", bs))
+      {
+        Config::SetBaseOrCurrent(Config::ONLINE_SEEK_BAR_COLLAPSED, false);
+        Config::Save();
+      }
+      const bool over = ImGui::IsItemHovered();
+      if (over)
+      {
+        ImGui::GetWindowDrawList()->AddRectFilled(p0, ImVec2(p0.x + bs.x, p0.y + bs.y), HOVER_BG, 6.0f * scale);
+        ImGui::SetTooltip("%s", "Show the seek bar");
+      }
+      IconChevron(ImGui::GetWindowDrawList(), ImVec2(p0.x + bs.x * 0.5f, p0.y + bs.y * 0.5f), 16.0f * scale, TEXT,
+                  true);
+    }
+    ImGui::End();
+    Pill(info, next, p0.y - 10.0f * scale, scale);
+    pop();
+    return;
+  }
+
+  const float win_h = bottom_pad + ctl_h + track_h;
+  const float win_y = H - win_h;
+  // The fade under it, over the game's bottom (behind every window, the chat too).
+  {
+    ImDrawList* bg = ImGui::GetBackgroundDrawList();
+    const float fade = win_h + 70.0f * scale;
+    const float mid = H - fade * 0.55f;
+    bg->AddRectFilledMultiColor(ImVec2(0, H - fade), ImVec2(W, mid), IM_COL32(0, 0, 0, 0), IM_COL32(0, 0, 0, 0),
+                                IM_COL32(0, 0, 0, 140), IM_COL32(0, 0, 0, 140));
+    bg->AddRectFilledMultiColor(ImVec2(0, mid), ImVec2(W, H), IM_COL32(0, 0, 0, 140), IM_COL32(0, 0, 0, 140),
+                                IM_COL32(0, 0, 0, 210), IM_COL32(0, 0, 0, 210));
+  }
+  Pill(info, next, win_y - 8.0f * scale, scale);
+
+  ImGui::SetNextWindowPos(ImVec2(0, win_y), ImGuiCond_Always);
+  ImGui::SetNextWindowSize(ImVec2(W, win_h), ImGuiCond_Always);
+  if (BeginBare("##ReplayOverlay"))
+  {
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const float bar_x = margin;
+    const float bar_w = std::max(W - margin * 2.0f, 1.0f);
+    const float track_y = win_y + 24.0f * scale;  // the track's centre line
+    const float row_y = win_y + track_h;          // the controls' row
+    const auto bar_frac = [&](s64 frame) {
+      return std::clamp(static_cast<float>(frame - info.first) / span, 0.0f, 1.0f);
+    };
+    const auto x_of = [&](s64 frame) { return bar_x + bar_frac(frame) * bar_w; };
+
+    // The launcher's list (highlights, not spectating): "3/40  << < > >>" (the user, 2026-10-24).
+    // < > go to the previous / next star from the frame shown, in this replay at once (its marks),
+    // past them in the replay before / after it (the launcher picks it); << >> to the replay
+    // before / after. The Replays tab's replays: "12/340  << >>", and < > while it has stars.
     const Gprb::Replay::Playback::NavView nav = Gprb::Replay::Playback::GetNav();
-    const float line_h = ImGui::GetTextLineHeight();
-    const float nav_button = line_h * 1.4f;
     // (On the way to a highlight, it is where the frame shown is going.)
     const s64 cursor = info.seeking && info.clip_armed ? info.clip_start : info.shown;
     int prev_mark = -1, next_mark = -1, playing_position = 0;
     for (size_t i = 0; i < info.marks.size(); ++i)
     {
       const auto& m = info.marks[i];
-      if (m.position <= 0)
+      if (nav.shown && nav.clips && m.position <= 0)
         continue;
       if (m.start < cursor - PREV_RESTARTS_AFTER && (prev_mark < 0 || m.start > info.marks[prev_mark].start))
         prev_mark = static_cast<int>(i);
@@ -318,241 +719,36 @@ void Display(float scale)
       if (m.start == info.clip_start && m.end == info.clip_end)
         playing_position = m.position;
     }
-    const int position = playing_position > 0 ? playing_position : nav.position;
+    const int position = nav.clips && playing_position > 0 ? playing_position : nav.position;
     const std::string count =
         nav.shown ? fmt::format("{}/{}", position > 0 ? std::to_string(position) : std::string("-"), nav.total) :
                     std::string();
-    const int nav_buttons = nav.clips ? 4 : 2;
-    const float nav_w = nav.shown ? ImGui::CalcTextSize(count.c_str()).x + ImGui::GetStyle().ItemSpacing.x +
-                                        nav_button * nav_buttons + 2.0f * scale * (nav_buttons - 1) :
-                                    0.0f;
-    // The fold button, left of the title.
-    if (FoldButton(line_h, scale, false))
-    {
-      s_dragging = false;
-      s_mark_held = -1;
+    const bool clip_buttons = (nav.shown && nav.clips) || !info.marks.empty();
+
+    // Clip mode: its frames kept within the replay (a live game's: the live edge).
+    const bool can_clip = Gprb::Replay::Playback::CanSaveClip();
+    if (!can_clip)
       EndClipMode();
-    }
-    ImGui::SameLine();
-    const ImVec2 title0 = ImGui::GetCursorScreenPos();
-    if (nav.shown)
-    {
-      ImGui::PushClipRect(title0, ImVec2(title0.x + std::max(0.0f, ImGui::GetContentRegionAvail().x - nav_w - 8.0f * scale),
-                                         title0.y + line_h + 2.0f), true);
-    }
-    // What is playing (display text from the file: drawn, never formatted or used as a label).
-    ImGui::TextUnformatted(info.title.c_str());
-    const std::string players = Players(info);
-    if (!players.empty())
-    {
-      ImGui::SameLine();
-      ImGui::TextDisabled("|");
-      ImGui::SameLine();
-      ImGui::TextUnformatted(players.c_str());
-    }
-    if (nav.shown)
-    {
-      ImGui::PopClipRect();
-      ImGui::SameLine(width - ImGui::GetStyle().WindowPadding.x - nav_w);
-      ImGui::TextUnformatted(count.c_str());
-      using Gprb::Replay::Playback::NavAction;
-      struct Button
-      {
-        const char* id;
-        const char* tip;
-        int arrows;
-        bool left;
-        bool enabled;
-        NavAction action;
-        int mark;  // a mark of this replay to play instead (-1: ask the launcher)
-      };
-      const Button buttons[] = {
-          {"##navprevreplay", "Previous replay", 2, true, nav.prev_replay, NavAction::PrevReplay, -1},
-          {"##navprevclip", "Previous clip", 1, true, prev_mark >= 0 || nav.prev_replay, NavAction::PrevClip,
-           prev_mark},
-          {"##navnextclip", "Next clip", 1, false, next_mark >= 0 || nav.next_replay, NavAction::NextClip,
-           next_mark},
-          {"##navnextreplay", "Next replay", 2, false, nav.next_replay, NavAction::NextReplay, -1},
-      };
-      for (const Button& b : buttons)
-      {
-        // (A list of replays: << >> only.)
-        if (!nav.clips && (b.action == NavAction::PrevClip || b.action == NavAction::NextClip))
-          continue;
-        ImGui::SameLine(0.0f, 2.0f * scale);
-        const ImVec2 b0 = ImGui::GetCursorScreenPos();
-        const ImVec2 b1(b0.x + nav_button, b0.y + line_h);
-        const bool pressed = ImGui::InvisibleButton(b.id, ImVec2(nav_button, line_h));
-        const bool over = ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled);
-        ImDrawList* dl = ImGui::GetWindowDrawList();
-        if (over && b.enabled)
-          dl->AddRectFilled(b0, b1, IM_COL32(255, 255, 255, 40), 3.0f * scale);
-        Arrows(dl, b0, b1, b.arrows, b.left,
-               !b.enabled ? IM_COL32(230, 230, 230, 70) :
-               over       ? IM_COL32(255, 255, 255, 255) :
-                            IM_COL32(230, 230, 230, 220));
-        if (over)
-          ImGui::SetTooltip("%s", b.tip);
-        if (pressed && b.enabled)
-        {
-          if (b.mark >= 0)
-            Control(Gprb::Session::PlaybackCommand::PlayHighlight, b.mark);
-          else
-            Send([action = b.action, cursor] { Gprb::Replay::Playback::RequestNav(action, cursor); });
-        }
-      }
-    }
-
-    if (!info.banner.empty())
-      ImGui::TextUnformatted(info.banner.c_str());
-
-    // A live game's bar ends at the live edge (the frames past it are the 3 s buffer, not there to
-    // be played yet), so live is the bar's very end; a seek there is Go Live.
-    const bool live = info.live && !info.ended;
-    const s64 end = live ? std::max(info.live_edge, info.first) : info.last;
-    const s64 span = std::max<s64>(end - info.first, 1);
-    const s64 shown = std::clamp(info.shown, info.first, end);
-    std::string state = info.seeking ? "Seeking..." : info.paused ? "Paused" : "Playing";
-    if (live && info.catching_up)
-    {
-      // "Catching up to live - 2:14 / 4:05 - about 20 s": the edge moves on at 1x, so it closes
-      // at the catch-up rate less one.
-      state = fmt::format("Catching up to live - {} / {}", Clock60(shown - info.first),
-                          Clock60(info.live_edge - info.first));
-      if (info.catch_rate > 0 && info.catch_rate < 1.5)
-        state += " - your computer is catching up slowly";
-      else if (info.catch_rate > 1.0)
-        state += fmt::format(" - about {} s", static_cast<s64>(std::ceil(
-                                                  (info.live_edge - shown) / ((info.catch_rate - 1.0) * 60.0))));
-    }
-    else if (live && info.buffering)
-    {
-      state = "Buffering...";
-    }
-    else if (live && info.at_live)
-    {
-      state = "Live";
-    }
-    if (info.speed != 1.0)
-      state += fmt::format("   {}x", info.speed);
-    // Clip mode: the clip's place and length instead (the user, 2026-10-24: Clip shows a left and
-    // a right point, ending where it was clicked and starting 20 s earlier).
     if (s_clip_mode)
     {
       s_clip_end = std::clamp(s_clip_end, info.first + MIN_CLIP_FRAMES, std::max(end, info.first + MIN_CLIP_FRAMES));
       s_clip_start = std::clamp(s_clip_start, info.first, s_clip_end - MIN_CLIP_FRAMES);
-      state = fmt::format("Clip {} - {} ({} s): Move the start and end position.",
-                          Clock60(s_clip_start - info.first), Clock60(s_clip_end - info.first),
-                          (s_clip_end - s_clip_start + 30) / 60);
-    }
-    const std::string time = fmt::format("{} / {}", Clock60(shown - info.first), Clock60(span));
-    ImGui::TextUnformatted(state.c_str());
-    // Clip, or Cancel clip and Save as highlight, left of the time; only when the launcher keeps
-    // what is saved (ReplayPlayback.h, manual clips).
-    const bool can_clip = Gprb::Replay::Playback::CanSaveClip();
-    if (!can_clip)
-      EndClipMode();
-    // Clip mode's end pauses playing as a highlight's does (the user, 2026-10-24).
-    if (s_clip_mode)
+      // Clip mode's end pauses playing as a highlight's does (the user, 2026-10-24).
       SetStop(s_clip_end);
-    const ImGuiStyle& style = ImGui::GetStyle();
-    const auto button_w = [&](const char* label) {
-      return ImGui::CalcTextSize(label).x + style.FramePadding.x * 2.0f;
-    };
-    constexpr const char* CLIP = "Clip";
-    constexpr const char* CANCEL = "Cancel clip";
-    constexpr const char* SAVE = "Save as highlight";
-    const float time_x = width - ImGui::CalcTextSize(time.c_str()).x - style.WindowPadding.x;
-    if (can_clip)
-    {
-      const float buttons =
-          s_clip_mode ? button_w(CANCEL) + style.ItemSpacing.x + button_w(SAVE) : button_w(CLIP);
-      ImGui::SameLine(time_x - style.ItemSpacing.x * 2.0f - buttons);
-      if (!s_clip_mode)
-      {
-        if (ImGui::SmallButton(CLIP))
-        {
-          // Ends at the frame shown, starts 20 s before it; paused at its start (the user,
-          // 2026-10-24: "creating a clip should seek to the start of the clip"), so Play plays it
-          // and pauses at its end.
-          s_clip_mode = true;
-          s_clip_handle = 0;
-          s_clip_title = info.title;
-          s_clip_first = info.first;
-          s_clip_end = std::clamp(shown, info.first + MIN_CLIP_FRAMES, std::max(end, info.first + MIN_CLIP_FRAMES));
-          s_clip_start = std::max(info.first, s_clip_end - CLIP_BEFORE_FRAMES);
-          if (!info.paused)
-            Control(Gprb::Session::PlaybackCommand::Pause);
-          Control(Gprb::Session::PlaybackCommand::Seek, static_cast<double>(s_clip_start));
-          SetStop(s_clip_end);
-        }
-        if (ImGui::IsItemHovered())
-        {
-          ImGui::SetTooltip("Clip the last %d seconds, then move the start and end position",
-                            static_cast<int>(CLIP_BEFORE_FRAMES / 60));
-        }
-      }
-      else
-      {
-        if (ImGui::SmallButton(CANCEL))
-          EndClipMode();
-        ImGui::SameLine();
-        if (ImGui::SmallButton(SAVE))
-        {
-          Send([start = s_clip_start, end = s_clip_end] {
-            if (Gprb::Replay::Playback::SaveClip(start, end))
-            {
-              OSD::AddMessage("Clip saved to Replays > Highlights > Manual Clips", OSD::Duration::NORMAL,
-                              OSD::Color::GREEN);
-            }
-            else
-            {
-              OSD::AddMessage("The clip could not be saved", OSD::Duration::NORMAL, OSD::Color::RED);
-            }
-          });
-          EndClipMode();
-        }
-        if (ImGui::IsItemHovered())
-          ImGui::SetTooltip("Keep it in the launcher's Replays > Highlights > Manual Clips");
-      }
     }
-    ImGui::SameLine(time_x);
-    ImGui::TextUnformatted(time.c_str());
 
-    // Spectating: LIVE (red, playing at the live edge) or GO LIVE with how far behind, right of
-    // the bar (End, or a click).
-    std::string live_label;
-    if (live)
-    {
-      const s64 behind = std::max<s64>(info.live_edge - shown, 0) / 60;
-      live_label = info.at_live || behind == 0 ? std::string("LIVE") :
-                                                 fmt::format("GO LIVE  -{} s", behind);
-    }
-    const float live_w =
-        live ? ImGui::CalcTextSize(live_label.c_str()).x + 16.0f * scale + ImGui::GetStyle().ItemSpacing.x : 0.0f;
-
-    // Play / pause, left of the bar: a triangle while paused (or held at the end), two bars while
-    // playing.
-    const float row_h = 24.0f * scale;
-    const float bar_h = 14.0f * scale;
-    // Where the bar goes (right of the button, left of Go Live).
-    const float bar_x = ImGui::GetCursorScreenPos().x + row_h + ImGui::GetStyle().ItemSpacing.x;
-    const float bar_w = ImGui::GetContentRegionAvail().x - row_h - ImGui::GetStyle().ItemSpacing.x - live_w;
-    const auto bar_frac = [&](s64 frame) {
-      return std::clamp(static_cast<float>(frame - info.first) / span, 0.0f, 1.0f);
-    };
-
-    // Highlights: each one asked for in this replay is a line on the bar with a star above it; a
-    // click on either plays it from its start (the user, 2026-10-24: a click on the bar leaves the
-    // highlight for the replay, this goes back).
-    const float mark_r = 6.0f * scale;
-    const float mark_grab = 7.0f * scale;
+    // ---- The bar ----
+    // Highlights: each one of this replay is a gold span on the bar with a star above its start; a
+    // click on the star or the span's start plays it from its start (the user, 2026-10-24: a click
+    // on the bar leaves the highlight for the replay, this goes back).
+    const float mark_r = 8.0f * scale;
+    const float mark_grab = 8.0f * scale;
     const auto mark_at = [&](float x) {
       int best = -1;
       float best_d = mark_grab;
       for (size_t i = 0; i < info.marks.size(); ++i)
       {
-        const float d = std::abs(bar_x + bar_frac(info.marks[i].start) * bar_w - x);
+        const float d = std::abs(x_of(info.marks[i].start) - x);
         if (d <= best_d)
         {
           best = static_cast<int>(i);
@@ -561,14 +757,12 @@ void Display(float scale)
       }
       return best;
     };
+    const float stars_y = track_y - 14.0f * scale;
     int mark_hovered = -1;
-    float stars_y = 0;
     if (!info.marks.empty())
     {
-      const ImVec2 s0 = ImGui::GetCursorScreenPos();
-      stars_y = s0.y + mark_r;
-      ImGui::SetCursorScreenPos(ImVec2(bar_x, s0.y));
-      if (ImGui::InvisibleButton("##replaymarks", ImVec2(std::max(bar_w, 1.0f), mark_r * 2.0f)))
+      ImGui::SetCursorScreenPos(ImVec2(bar_x - mark_grab, stars_y - mark_r * 1.3f));
+      if (ImGui::InvisibleButton("##replaymarks", ImVec2(bar_w + mark_grab * 2.0f, mark_r * 2.2f)))
       {
         if (const int m = mark_at(io.MousePos.x); m >= 0)
           Control(Gprb::Session::PlaybackCommand::PlayHighlight, m);
@@ -577,56 +771,28 @@ void Display(float scale)
         mark_hovered = mark_at(io.MousePos.x);
     }
 
-    {
-      const ImVec2 b0 = ImGui::GetCursorScreenPos();
-      if (ImGui::InvisibleButton("##replayplay", ImVec2(row_h, row_h)))
-        Control(Gprb::Session::PlaybackCommand::TogglePause);
-      const bool over = ImGui::IsItemHovered();
-      ImDrawList* dl = ImGui::GetWindowDrawList();
-      const ImU32 col = over ? IM_COL32(255, 255, 255, 255) : IM_COL32(230, 230, 230, 220);
-      const float pad = 6.0f * scale;
-      const ImVec2 a(b0.x + pad, b0.y + pad);
-      const ImVec2 z(b0.x + row_h - pad, b0.y + row_h - pad);
-      if (over)
-        dl->AddRectFilled(b0, ImVec2(b0.x + row_h, b0.y + row_h), IM_COL32(255, 255, 255, 40), 4.0f * scale);
-      if (info.paused || info.at_end)
-      {
-        dl->AddTriangleFilled(a, ImVec2(a.x, z.y), ImVec2(z.x, (a.y + z.y) * 0.5f), col);
-      }
-      else
-      {
-        const float w = (z.x - a.x) / 3.0f;
-        dl->AddRectFilled(a, ImVec2(a.x + w, z.y), col);
-        dl->AddRectFilled(ImVec2(z.x - w, a.y), z, col);
-      }
-      if (over)
-        ImGui::SetTooltip("%s", info.paused || info.at_end ? "Play (Space)" : "Pause (Space)");
-      ImGui::SameLine();
-    }
-
-    // The bar: click or drag to seek (the whole row's height takes the click; the bar is drawn
-    // in its middle).
-    const ImVec2 row0 = ImGui::GetCursorScreenPos();
-    ImGui::InvisibleButton("##replayseek", ImVec2(std::max(bar_w, 1.0f), row_h));
-    const ImVec2 p0(row0.x, row0.y + (row_h - bar_h) * 0.5f);
+    // The seek area: the track and some height around it (click or drag to seek).
+    const float seek_top = track_y - 8.0f * scale;
+    const float seek_h = 18.0f * scale;
+    ImGui::SetCursorScreenPos(ImVec2(bar_x, seek_top));
+    ImGui::InvisibleButton("##replayseek", ImVec2(bar_w, seek_h));
     const bool hovered = ImGui::IsItemHovered();
     const bool active = ImGui::IsItemActive();
-    const auto at = [&](float x) { return std::clamp((x - p0.x) / std::max(bar_w, 1.0f), 0.0f, 1.0f); };
+    const auto at = [&](float x) { return std::clamp((x - bar_x) / bar_w, 0.0f, 1.0f); };
     // Clip mode: the clip's ends are handles on the bar (the nearer one within reach; a press
     // elsewhere seeks as always). A handle let go shows its frame.
-    const float handle_grab = 8.0f * scale;
-    const auto frame_at = [&](float x) { return info.first + static_cast<s64>(std::lround(at(x) * span)); };
+    const float handle_grab = 9.0f * scale;
     int handle_hovered = 0;
     if (s_clip_mode && hovered && !s_dragging && s_clip_handle == 0)
     {
-      const float ds = std::abs(bar_x + bar_frac(s_clip_start) * bar_w - io.MousePos.x);
-      const float de = std::abs(bar_x + bar_frac(s_clip_end) * bar_w - io.MousePos.x);
+      const float ds = std::abs(x_of(s_clip_start) - io.MousePos.x);
+      const float de = std::abs(x_of(s_clip_end) - io.MousePos.x);
       if (std::min(ds, de) <= handle_grab)
         handle_hovered = de <= ds ? 2 : 1;
     }
     if (hovered && !s_dragging && mark_hovered < 0 && handle_hovered == 0 && s_clip_handle == 0)
       mark_hovered = mark_at(io.MousePos.x);
-    // A press on a mark's line plays its highlight once released (no drag, no seek); on a clip's
+    // A press on a mark's start plays its highlight once released (no drag, no seek); on a clip's
     // handle, it moves that end.
     if (ImGui::IsItemActivated())
     {
@@ -649,8 +815,8 @@ void Display(float scale)
         s_handle_moved = true;
       if (s_handle_moved)
       {
-        const s64 frame = s_handle_press_frame +
-                          static_cast<s64>(std::lround(dx / std::max(bar_w, 1.0f) * static_cast<float>(span)));
+        const s64 frame =
+            s_handle_press_frame + static_cast<s64>(std::lround(dx / bar_w * static_cast<float>(span)));
         if (s_clip_handle == 1)
         {
           s_clip_start = std::clamp(frame, info.first, s_clip_end - MIN_CLIP_FRAMES);
@@ -684,98 +850,454 @@ void Display(float scale)
       s_dragging = false;
       Control(Gprb::Session::PlaybackCommand::Seek, static_cast<double>(info.first + s_drag_at * span));
     }
-    ImDrawList* dl = ImGui::GetWindowDrawList();
-    const ImVec2 p1(p0.x + bar_w, p0.y + bar_h);
-    dl->AddRectFilled(p0, p1, IM_COL32(255, 255, 255, 50), 3.0f * scale);
-    const float done = s_dragging ? s_drag_at : static_cast<float>(shown - info.first) / span;
-    dl->AddRectFilled(p0, ImVec2(p0.x + done * bar_w, p1.y), IM_COL32(110, 200, 120, 220),
-                      3.0f * scale);
+
+    // Drawn: the track (thicker under the mouse), what has played in the launcher's colour, the
+    // highlights' spans, where the replay stopped matching, the clip, the stars, the knob.
+    const bool track_lit = hovered || s_dragging;
+    const float th = (track_lit ? 7.0f : 5.0f) * scale;
+    const ImVec2 t0(bar_x, track_y - th * 0.5f);
+    const ImVec2 t1(bar_x + bar_w, track_y + th * 0.5f);
+    dl->AddRectFilled(t0, t1, TRACK, th * 0.5f);
+    const float done = s_dragging ? s_drag_at : bar_frac(shown);
+    if (done > 0)
+      dl->AddRectFilled(t0, ImVec2(bar_x + done * bar_w, t1.y), accent, th * 0.5f);
+    for (size_t i = 0; i < info.marks.size(); ++i)
+    {
+      const auto& mark = info.marks[i];
+      const bool lit = static_cast<int>(i) == mark_hovered || static_cast<int>(i) == s_mark_held ||
+                       (info.clip_end >= 0 && mark.end == info.clip_end && mark.start == info.clip_start);
+      const float xs = x_of(mark.start);
+      const float xe = std::max(x_of(mark.end), xs + 2.0f * scale);
+      dl->AddRectFilled(ImVec2(xs, t0.y), ImVec2(xe, t1.y), lit ? GOLD_SPAN_LIT : GOLD_SPAN);
+    }
     if (info.desync_frame >= info.first && info.desync_frame <= end)
     {
-      // Where the replay stopped matching what was played.
-      const float x = p0.x + static_cast<float>(info.desync_frame - info.first) / span * bar_w;
-      dl->AddRectFilled(ImVec2(x - 1.0f * scale, p0.y), ImVec2(x + 1.0f * scale, p1.y),
-                        IM_COL32(230, 60, 60, 255));
+      const float x = x_of(info.desync_frame);
+      dl->AddRectFilled(ImVec2(x - 1.5f * scale, t0.y - 3.0f * scale), ImVec2(x + 1.5f * scale, t1.y + 3.0f * scale),
+                        DESYNC_RED, 1.0f * scale);
+    }
+    // Where the highlight playing ends while it is ahead (it pauses there). Not in clip mode: only
+    // the clip's end pauses then (GitHub #41).
+    if (!s_clip_mode && info.clip_armed && info.clip_end >= 0)
+    {
+      const float x = x_of(info.clip_end);
+      dl->AddRectFilled(ImVec2(x - 1.0f * scale, t0.y - 4.0f * scale), ImVec2(x + 1.0f * scale, t1.y + 4.0f * scale),
+                        IM_COL32(255, 255, 255, 230));
     }
     if (s_clip_mode)
     {
-      // The clip: its span over the bar, a handle at each end (taller than the bar).
-      const float xs = bar_x + bar_frac(s_clip_start) * bar_w;
-      const float xe = bar_x + bar_frac(s_clip_end) * bar_w;
-      dl->AddRectFilled(ImVec2(xs, p0.y), ImVec2(xe, p1.y), IM_COL32(90, 170, 255, 110));
-      dl->AddRect(ImVec2(xs, p0.y), ImVec2(xe, p1.y), IM_COL32(90, 170, 255, 255), 0.0f, 0, 1.5f * scale);
+      // The clip: the bar outside it dimmed, a box over it, a grip at each end.
+      const float xs = x_of(s_clip_start);
+      const float xe = x_of(s_clip_end);
+      dl->AddRectFilled(ImVec2(bar_x, t0.y), ImVec2(xs, t1.y), IM_COL32(0, 0, 0, 115));
+      dl->AddRectFilled(ImVec2(xe, t0.y), ImVec2(bar_x + bar_w, t1.y), IM_COL32(0, 0, 0, 115));
+      const ImVec2 b0(xs, track_y - 9.0f * scale);
+      const ImVec2 b1(xe, track_y + 9.0f * scale);
+      dl->AddRectFilled(b0, b1, WithAlpha(CLIP_BLUE, 56), 4.0f * scale);
+      dl->AddRect(b0, b1, CLIP_BLUE, 4.0f * scale, 0, 2.0f * scale);
       for (int h = 1; h <= 2; ++h)
       {
         const float x = h == 1 ? xs : xe;
         const bool lit = h == handle_hovered || h == s_clip_handle;
-        const float hw = (lit ? 4.0f : 3.0f) * scale;
-        const ImVec2 a(x - hw, row0.y + 1.0f * scale);
-        const ImVec2 z(x + hw, row0.y + row_h - 1.0f * scale);
-        dl->AddRectFilled(a, z, lit ? IM_COL32(255, 255, 255, 255) : IM_COL32(220, 235, 255, 240), 2.0f * scale);
-        dl->AddRect(a, z, IM_COL32(30, 90, 170, 255), 2.0f * scale, 0, 1.0f * scale);
+        const float hw = (lit ? 6.0f : 5.0f) * scale;
+        const float hh = (lit ? 13.0f : 12.0f) * scale;
+        const ImVec2 a(x - hw, track_y - hh);
+        const ImVec2 z(x + hw, track_y + hh);
+        dl->AddRectFilled(ImVec2(a.x - 2.0f * scale, a.y - 2.0f * scale), ImVec2(z.x + 2.0f * scale, z.y + 2.0f * scale),
+                          CLIP_BLUE, 5.0f * scale);
+        dl->AddRectFilled(a, z, IM_COL32(255, 255, 255, 255), 4.0f * scale);
+        for (float gx : {-1.5f, 1.5f})
+        {
+          dl->AddLine(ImVec2(x + gx * scale, track_y - 4.5f * scale), ImVec2(x + gx * scale, track_y + 4.5f * scale),
+                      IM_COL32(120, 120, 120, 255), 1.0f * scale);
+        }
       }
     }
-    // Where a highlight ends: the one playing while its end is ahead (it pauses there), the
-    // hovered star's while hovered (the user, 2026-10-24). Not in clip mode: only the clip's end
-    // pauses then (GitHub #41).
-    const auto end_line = [&](s64 frame, ImU32 col) {
-      const float x = bar_x + bar_frac(frame) * bar_w;
-      dl->AddRectFilled(ImVec2(x - 1.0f * scale, p0.y - 3.0f * scale), ImVec2(x + 1.0f * scale, p1.y + 3.0f * scale),
-                        col);
-    };
-    if (!s_clip_mode && info.clip_armed && info.clip_end >= 0)
-      end_line(info.clip_end, IM_COL32(255, 255, 255, 230));
-    if (mark_hovered >= 0 && static_cast<size_t>(mark_hovered) < info.marks.size())
-      end_line(info.marks[mark_hovered].end, IM_COL32(255, 230, 120, 230));
     for (size_t i = 0; i < info.marks.size(); ++i)
     {
       const auto& mark = info.marks[i];
-      const float x = bar_x + bar_frac(mark.start) * bar_w;
       const bool lit = static_cast<int>(i) == mark_hovered || static_cast<int>(i) == s_mark_held;
-      const bool playing = info.clip_end >= 0 && mark.end == info.clip_end;
-      const ImU32 col = lit ? IM_COL32(255, 230, 120, 255) :
-                        playing ? IM_COL32(255, 200, 50, 255) :
-                                  IM_COL32(255, 200, 50, 200);
-      dl->AddRectFilled(ImVec2(x - 1.0f * scale, stars_y + mark_r * 0.5f), ImVec2(x + 1.0f * scale, p1.y), col);
-      Star(dl, ImVec2(x, stars_y), lit ? mark_r * 1.2f : mark_r, col);
+      const float r = lit ? mark_r * 1.3f : mark_r;
+      const ImVec2 c(x_of(mark.start), stars_y);
+      Star(dl, ImVec2(c.x, c.y + 1.0f * scale), r * 1.12f, IM_COL32(0, 0, 0, 140));
+      Star(dl, c, r, lit ? GOLD_LIT : GOLD);
     }
+    if (!s_clip_mode)
+    {
+      // The knob: where it is (or would seek to), ringed in the launcher's colour.
+      const ImVec2 k(bar_x + done * bar_w, track_y);
+      const float kr = (track_lit ? 8.5f : 7.5f) * scale;
+      dl->AddCircleFilled(k, kr + 4.0f * scale, WithAlpha(accent, 90), 24);
+      dl->AddCircleFilled(k, kr, IM_COL32(255, 255, 255, 255), 24);
+    }
+    const float tip_y = stars_y - mark_r * 1.6f;
     if (s_clip_mode && (handle_hovered || s_clip_handle))
     {
       const int h = s_clip_handle ? s_clip_handle : handle_hovered;
-      ImGui::SetTooltip("%s (%s)", h == 1 ? "Clip start" : "Clip end",
-                        Clock60((h == 1 ? s_clip_start : s_clip_end) - info.first).c_str());
+      const s64 f = h == 1 ? s_clip_start : s_clip_end;
+      TipAbove(ImVec2(x_of(f), tip_y), fmt::format("{} ({})", h == 1 ? "Clip start" : "Clip end", Clock60(f - info.first)),
+               scale, 4.0f * scale, W - 4.0f * scale);
     }
     else if (mark_hovered >= 0 && !s_dragging)
     {
-      ImGui::SetTooltip("Play this highlight (%s)",
-                        Clock60(info.marks[mark_hovered].start - info.first).c_str());
+      const auto& m = info.marks[mark_hovered];
+      TipAbove(ImVec2(x_of(m.start), tip_y), fmt::format("Play this highlight ({})", Clock60(m.start - info.first)),
+               scale, 4.0f * scale, W - 4.0f * scale);
     }
     else if (hovered || s_dragging)
     {
       const float hx = s_dragging ? s_drag_at : at(io.MousePos.x);
-      ImGui::SetTooltip("%s", Clock60(static_cast<s64>(hx * span)).c_str());
+      TipAbove(ImVec2(bar_x + hx * bar_w, tip_y), Clock60(static_cast<s64>(hx * span)), scale, 4.0f * scale,
+               W - 4.0f * scale);
     }
-    if (live)
+
+    // ---- The controls' row ----
+    const float by = row_y + (ctl_h - btn) * 0.5f;
+    const float text_y = row_y + (ctl_h - ImGui::GetTextLineHeight()) * 0.5f;
+    float x = bar_x - 6.0f * scale;
+    // Play / pause.
     {
-      ImGui::SameLine();
-      const ImVec2 b0 = ImGui::GetCursorScreenPos();
-      const float w = live_w - ImGui::GetStyle().ItemSpacing.x;
-      if (ImGui::InvisibleButton("##replaylive", ImVec2(w, row_h)) && !info.at_live)
-        Control(Gprb::Session::PlaybackCommand::GoLive);
-      const bool over = ImGui::IsItemHovered();
-      const ImU32 bg = info.at_live ? IM_COL32(200, 40, 40, 230) :
-                       over         ? IM_COL32(255, 255, 255, 70) :
-                                      IM_COL32(255, 255, 255, 40);
-      dl->AddRectFilled(b0, ImVec2(b0.x + w, b0.y + row_h), bg, 4.0f * scale);
-      const ImVec2 ts = ImGui::CalcTextSize(live_label.c_str());
-      dl->AddText(ImVec2(b0.x + (w - ts.x) * 0.5f, b0.y + (row_h - ts.y) * 0.5f),
-                  IM_COL32(255, 255, 255, 255), live_label.c_str());
-      if (over && !info.at_live)
-        ImGui::SetTooltip("Go live (End)");
+      const bool show_play = info.paused || info.at_end;
+      if (IconButton("##replayplay", ImVec2(x, by), btn, true, show_play ? "Play (Space)" : "Pause (Space)",
+                     [show_play](ImDrawList* d, ImVec2 c, float s, ImU32 col) {
+                       show_play ? IconPlay(d, c, s, col) : IconPause(d, c, s, col);
+                     },
+                     scale))
+      {
+        Control(Gprb::Session::PlaybackCommand::TogglePause);
+      }
+      x += btn + 2.0f * scale;
+    }
+    // -5 s / +5 s (the user, 2026-11-20).
+    const float small_px = 9.0f * scale;
+    if (IconButton("##replayback5", ImVec2(x, by), btn, true, nullptr,
+                   [small_px](ImDrawList* d, ImVec2 c, float s, ImU32 col) { IconJump(d, c, s * 1.1f, col, false, small_px); },
+                   scale))
+    {
+      Control(Gprb::Session::PlaybackCommand::Jump, -JUMP_SECONDS);
+    }
+    x += btn + 2.0f * scale;
+    if (IconButton("##replayfwd5", ImVec2(x, by), btn, true, nullptr,
+                   [small_px](ImDrawList* d, ImVec2 c, float s, ImU32 col) { IconJump(d, c, s * 1.1f, col, true, small_px); },
+                   scale))
+    {
+      Control(Gprb::Session::PlaybackCommand::Jump, JUMP_SECONDS);
+    }
+    x += btn + 10.0f * scale;
+
+    // The right side, laid out from the right edge: the fold, the list's buttons, Clip (or clip
+    // mode's buttons).
+    float rx = bar_x + bar_w + 6.0f * scale;
+    rx -= btn;
+    if (FoldButton(ImVec2(rx, by), btn, scale, false))
+    {
+      s_dragging = false;
+      s_mark_held = -1;
+      EndClipMode();
+    }
+    const auto separator = [&] {
+      rx -= 9.0f * scale;
+      dl->AddRectFilled(ImVec2(rx + 4.0f * scale, row_y + ctl_h * 0.5f - 10.0f * scale),
+                        ImVec2(rx + 5.0f * scale, row_y + ctl_h * 0.5f + 10.0f * scale), IM_COL32(255, 255, 255, 46));
+    };
+    separator();
+    const float bh = 30.0f * scale;
+    const float bty = row_y + (ctl_h - bh) * 0.5f;
+    if (s_clip_mode)
+    {
+      // Cancel clip, Save as highlight, and Render (w/ Music) with a menu for Render (No Music)
+      // (the user, 2026-11-20: "rendering should be an option from Clip mode only").
+      constexpr const char* CANCEL = "Cancel clip";
+      constexpr const char* SAVE = "Save as highlight";
+      constexpr const char* RENDER_MUSIC = "Render (w/ Music)";
+      constexpr const char* RENDER_NO_MUSIC = "Render (No Music)";
+      const float caret_w = 28.0f * scale;
+      rx -= caret_w + 2.0f * scale;
+      const ImVec2 caret0(rx, bty);
+      ImGui::SetCursorScreenPos(caret0);
+      const bool caret = ImGui::InvisibleButton("##replayrendermenu", ImVec2(caret_w, bh));
+      const bool caret_over = ImGui::IsItemHovered();
+      dl->AddRectFilled(caret0, ImVec2(caret0.x + caret_w, caret0.y + bh), caret_over ? CLIP_BLUE_HOVER : CLIP_BLUE,
+                        7.0f * scale, ImDrawFlags_RoundCornersRight);
+      dl->AddRectFilled(ImVec2(caret0.x - 1.0f, caret0.y), ImVec2(caret0.x, caret0.y + bh), IM_COL32(0, 0, 0, 90));
+      IconChevron(dl, ImVec2(caret0.x + caret_w * 0.5f, caret0.y + bh * 0.5f), 14.0f * scale, TEXT, false);
+      if (caret)
+        ImGui::OpenPopup("##replayrenderpopup");
+      const auto film = [](ImDrawList* d, ImVec2 c, float s, ImU32 col) { IconFilm(d, c, s, col); };
+      const auto render = [](bool music) {
+        Send([start = s_clip_start, end = s_clip_end, music] {
+          if (!Gprb::Replay::Playback::RequestRender(start, end, music))
+            OSD::AddMessage("The clip could not be saved", OSD::Duration::NORMAL, OSD::Color::RED);
+        });
+        EndClipMode();
+      };
+      const float rw = TextButtonWidth(RENDER_MUSIC, true, scale);
+      rx -= rw;
+      if (TextButton("##replayrender", RENDER_MUSIC, ImVec2(rx, bty), bh, ButtonLook::Solid, film, scale,
+                     ImDrawFlags_RoundCornersLeft))
+      {
+        render(true);
+      }
+      // The menu, above the button (its right edge at the caret's).
+      ImGui::SetNextWindowPos(ImVec2(caret0.x + caret_w, bty - 6.0f * scale), ImGuiCond_Always, ImVec2(1.0f, 1.0f));
+      ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(4.0f * scale, 4.0f * scale));
+      ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0, 0));
+      ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(10.0f * scale, 6.0f * scale));
+      ImGui::PushStyleColor(ImGuiCol_HeaderHovered, IM_COL32(255, 255, 255, 31));
+      ImGui::PushStyleColor(ImGuiCol_HeaderActive, IM_COL32(255, 255, 255, 46));
+      if (ImGui::BeginPopup("##replayrenderpopup"))
+      {
+        const ImVec2 item(std::max(TextButtonWidth(RENDER_NO_MUSIC, false, scale), 150.0f * scale),
+                          ImGui::GetTextLineHeight() + 12.0f * scale);
+        if (ImGui::Selectable(RENDER_MUSIC, false, 0, item))
+          render(true);
+        if (ImGui::Selectable(RENDER_NO_MUSIC, false, 0, item))
+          render(false);
+        ImGui::EndPopup();
+      }
+      ImGui::PopStyleColor(2);
+      ImGui::PopStyleVar(3);
+      rx -= 8.0f * scale;
+      const auto star = [](ImDrawList* d, ImVec2 c, float s, ImU32 col) {
+        StarOutline(d, c, s * 0.5f, col, std::max(1.3f, s * 0.09f));
+      };
+      const float sw = TextButtonWidth(SAVE, true, scale);
+      rx -= sw;
+      if (TextButton("##replaysaveclip", SAVE, ImVec2(rx, bty), bh, ButtonLook::Ghost, star, scale))
+      {
+        Send([start = s_clip_start, end = s_clip_end] {
+          if (Gprb::Replay::Playback::SaveClip(start, end))
+          {
+            OSD::AddMessage("Clip saved to Replays > Highlights > Manual Clips", OSD::Duration::NORMAL,
+                            OSD::Color::GREEN);
+          }
+          else
+          {
+            OSD::AddMessage("The clip could not be saved", OSD::Duration::NORMAL, OSD::Color::RED);
+          }
+        });
+        EndClipMode();
+      }
+      if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Keep it in the launcher's Replays > Highlights > Manual Clips");
+      rx -= 8.0f * scale;
+      const float cw = TextButtonWidth(CANCEL, false, scale);
+      rx -= cw;
+      if (TextButton("##replaycancelclip", CANCEL, ImVec2(rx, bty), bh, ButtonLook::Ghost, nullptr, scale))
+        EndClipMode();
+    }
+    else
+    {
+      if (nav.shown)
+      {
+        using Gprb::Replay::Playback::NavAction;
+        struct Button
+        {
+          const char* id;
+          const char* tip;
+          bool clip;
+          bool left;
+          bool enabled;
+          NavAction action;
+          int mark;  // a mark of this replay to play instead (-1: ask the launcher)
+        };
+        // (A replay list's < > only go from star to star of this replay.)
+        const bool ask_clip = nav.clips;
+        const Button buttons[] = {
+            {"##navnextreplay", "Next replay", false, false, nav.next_replay, NavAction::NextReplay, -1},
+            {"##navnextclip", "Next clip", true, false, next_mark >= 0 || (ask_clip && nav.next_replay),
+             NavAction::NextClip, next_mark},
+            {"##navprevclip", "Previous clip", true, true, prev_mark >= 0 || (ask_clip && nav.prev_replay),
+             NavAction::PrevClip, prev_mark},
+            {"##navprevreplay", "Previous replay", false, true, nav.prev_replay, NavAction::PrevReplay, -1},
+        };
+        for (const Button& b : buttons)
+        {
+          if (b.clip && !clip_buttons)
+            continue;
+          rx -= btn;
+          const bool clip = b.clip;
+          const bool left = b.left;
+          if (IconButton(b.id, ImVec2(rx, by), btn, b.enabled, b.tip,
+                         [clip, left](ImDrawList* d, ImVec2 c, float s, ImU32 col) {
+                           clip ? IconClipStep(d, c, s, col, left) : IconSkip(d, c, s, col, left);
+                         },
+                         scale))
+          {
+            if (b.mark >= 0)
+              Control(Gprb::Session::PlaybackCommand::PlayHighlight, b.mark);
+            else
+              Send([action = b.action, cursor] { Gprb::Replay::Playback::RequestNav(action, cursor); });
+          }
+        }
+        const ImVec2 cs = ImGui::CalcTextSize(count.c_str());
+        rx -= cs.x + 6.0f * scale;
+        dl->AddText(ImVec2(rx, text_y), TEXT_2, count.c_str());
+        separator();
+      }
+      else if (clip_buttons)
+      {
+        // (No list, e.g. spectating with stars: < > between them.)
+        for (int i = 0; i < 2; ++i)
+        {
+          const bool left = i == 1;
+          const int mark = left ? prev_mark : next_mark;
+          rx -= btn;
+          if (IconButton(left ? "##navprevclip" : "##navnextclip", ImVec2(rx, by), btn, mark >= 0,
+                         left ? "Previous clip" : "Next clip",
+                         [left](ImDrawList* d, ImVec2 c, float s, ImU32 col) { IconClipStep(d, c, s, col, left); },
+                         scale))
+          {
+            Control(Gprb::Session::PlaybackCommand::PlayHighlight, mark);
+          }
+        }
+        separator();
+      }
+      if (can_clip)
+      {
+        constexpr const char* CLIP = "Clip";
+        const float cw = TextButtonWidth(CLIP, true, scale);
+        rx -= cw + 4.0f * scale;
+        const auto scissors = [](ImDrawList* d, ImVec2 c, float s, ImU32 col) { IconScissors(d, c, s, col); };
+        if (TextButton("##replayclip", CLIP, ImVec2(rx, bty), bh, ButtonLook::Ghost, scissors, scale))
+        {
+          // Ends at the frame shown, starts 20 s before it; paused at its start (the user,
+          // 2026-10-24: "creating a clip should seek to the start of the clip"), so Play plays it
+          // and pauses at its end.
+          s_clip_mode = true;
+          s_clip_handle = 0;
+          s_clip_title = info.title;
+          s_clip_first = info.first;
+          s_clip_end = std::clamp(shown, info.first + MIN_CLIP_FRAMES, std::max(end, info.first + MIN_CLIP_FRAMES));
+          s_clip_start = std::max(info.first, s_clip_end - CLIP_BEFORE_FRAMES);
+          if (!info.paused)
+            Control(Gprb::Session::PlaybackCommand::Pause);
+          Control(Gprb::Session::PlaybackCommand::Seek, static_cast<double>(s_clip_start));
+          SetStop(s_clip_end);
+        }
+        if (ImGui::IsItemHovered())
+        {
+          ImGui::SetTooltip("Clip the last %d seconds, then move the start and end position",
+                            static_cast<int>(CLIP_BEFORE_FRAMES / 60));
+        }
+      }
+    }
+    const float right_edge = rx - 12.0f * scale;
+
+    // Left side after the buttons: the time (or the clip's frames), live, what it is doing, the
+    // title.
+    if (s_clip_mode)
+    {
+      const std::string label =
+          fmt::format("Clip {} - {} ({} s)", Clock60(s_clip_start - info.first), Clock60(s_clip_end - info.first),
+                      (s_clip_end - s_clip_start + 30) / 60);
+      // (Clipped before the buttons in a narrow window.)
+      dl->PushClipRect(ImVec2(x, row_y), ImVec2(std::max(x, right_edge), row_y + ctl_h), true);
+      dl->AddText(ImVec2(x, text_y), TEXT, label.c_str());
+      dl->PopClipRect();
+    }
+    else
+    {
+      const std::string now_s = Clock60(shown - info.first);
+      const std::string total_s = fmt::format(" / {}", Clock60(span));
+      dl->AddText(ImVec2(x, text_y), TEXT, now_s.c_str());
+      x += ImGui::CalcTextSize(now_s.c_str()).x;
+      dl->AddText(ImVec2(x, text_y), TEXT_2, total_s.c_str());
+      x += ImGui::CalcTextSize(total_s.c_str()).x + 12.0f * scale;
+
+      // Spectating: LIVE (red, playing at the live edge) or GO LIVE with how far behind (End, or
+      // a click).
+      if (live)
+      {
+        const s64 behind = std::max<s64>(info.live_edge - shown, 0) / 60;
+        const bool at_live = info.at_live || behind == 0;
+        const std::string label = at_live ? std::string("LIVE") : fmt::format("GO LIVE  -{} s", behind);
+        ImGui::PushFont(nullptr, 12.0f * scale / main_scale);
+        const ImVec2 ls = ImGui::CalcTextSize(label.c_str());
+        const float dot = 7.0f * scale;
+        const ImVec2 lp(x, row_y + (ctl_h - 24.0f * scale) * 0.5f);
+        const ImVec2 lsz(ls.x + dot + 26.0f * scale, 24.0f * scale);
+        ImGui::SetCursorScreenPos(lp);
+        if (ImGui::InvisibleButton("##replaylive", lsz) && !at_live)
+          Control(Gprb::Session::PlaybackCommand::GoLive);
+        const bool over = ImGui::IsItemHovered();
+        dl->AddRectFilled(lp, ImVec2(lp.x + lsz.x, lp.y + lsz.y),
+                          at_live ? LIVE_RED : over ? GHOST_HOVER : GHOST_BG, 6.0f * scale);
+        dl->AddCircleFilled(ImVec2(lp.x + 10.0f * scale + dot * 0.5f, lp.y + lsz.y * 0.5f), dot * 0.5f,
+                            at_live ? IM_COL32(255, 255, 255, 255) : IM_COL32(255, 90, 90, 255), 12);
+        dl->AddText(ImVec2(lp.x + 16.0f * scale + dot, lp.y + (lsz.y - ls.y) * 0.5f), TEXT, label.c_str());
+        ImGui::PopFont();
+        if (over && !at_live)
+          ImGui::SetTooltip("Go live (End)");
+        x += lsz.x + 12.0f * scale;
+      }
+      // What it is doing, when not just playing or paused (the button says that): seeking,
+      // buffering, catching up; and the speed.
+      std::string state;
+      if (info.seeking)
+      {
+        state = "Seeking...";
+      }
+      else if (live && info.catching_up)
+      {
+        // "Catching up to live - about 20 s": the edge moves on at 1x, so it closes at the
+        // catch-up rate less one.
+        state = "Catching up to live";
+        if (info.catch_rate > 0 && info.catch_rate < 1.5)
+          state += " - your computer is catching up slowly";
+        else if (info.catch_rate > 1.0)
+          state += fmt::format(" - about {} s", static_cast<s64>(std::ceil(
+                                                    (info.live_edge - shown) / ((info.catch_rate - 1.0) * 60.0))));
+      }
+      else if (live && info.buffering)
+      {
+        state = "Buffering...";
+      }
+      if (!state.empty() && x < right_edge)
+      {
+        dl->PushClipRect(ImVec2(x, row_y), ImVec2(right_edge, row_y + ctl_h), true);
+        dl->AddText(ImVec2(x, text_y), TEXT_DIM, state.c_str());
+        dl->PopClipRect();
+        x += ImGui::CalcTextSize(state.c_str()).x + 12.0f * scale;
+      }
+      if (info.speed != 1.0 && x < right_edge)
+      {
+        const std::string sp = fmt::format("{}x", info.speed);
+        ImGui::PushFont(nullptr, 12.0f * scale / main_scale);
+        const ImVec2 ss = ImGui::CalcTextSize(sp.c_str());
+        const ImVec2 cp(x, row_y + (ctl_h - ss.y - 6.0f * scale) * 0.5f);
+        dl->AddRectFilled(cp, ImVec2(cp.x + ss.x + 14.0f * scale, cp.y + ss.y + 6.0f * scale), GHOST_HOVER,
+                          5.0f * scale);
+        dl->AddText(ImVec2(cp.x + 7.0f * scale, cp.y + 3.0f * scale), TEXT, sp.c_str());
+        ImGui::PopFont();
+        x += ss.x + 14.0f * scale + 12.0f * scale;
+      }
+      // What is playing (display text from the file: drawn, never formatted or used as a label):
+      // the title, then the players, "vs" dimmed.
+      if (x < right_edge)
+      {
+        dl->PushClipRect(ImVec2(x, row_y), ImVec2(right_edge, row_y + ctl_h), true);
+        const auto put = [&](const std::string& s, ImU32 col, float after) {
+          dl->AddText(ImVec2(x, text_y), col, s.c_str());
+          x += ImGui::CalcTextSize(s.c_str()).x + after;
+        };
+        put(info.title, TEXT, 10.0f * scale);
+        bool first = true;
+        for (size_t port = 0; port < info.names.size(); ++port)
+        {
+          if (info.names[port].empty())
+            continue;
+          if (!first)
+            put("vs", TEXT_DIM, 6.0f * scale);
+          first = false;
+          put(fmt::format("{} ({})", info.names[port], Online::GameSetup::CharacterName(info.chars[port])), TEXT_2,
+              6.0f * scale);
+        }
+        dl->PopClipRect();
+      }
     }
   }
   ImGui::End();
-  if (s_font)
-    ImGui::PopFont();
+  pop();
 }
 }  // namespace VideoCommon::ReplayOverlayUI

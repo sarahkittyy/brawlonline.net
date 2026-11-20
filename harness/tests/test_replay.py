@@ -560,7 +560,16 @@ def test_launcher_comm_file_saves_manual_clips(backend: OnlineBackend,
     changes them without starting the clip again, and a new request starts both counts again.
     The Replays tab's list (a `queue` request with "nav" "clips": false) shows its count and the
     replay buttons only, asked of the launcher the same way. The replay plays on to its end with no
-    checksum differing."""
+    checksum differing.
+
+    2026-11-20 (Sarah's board): a replay played gets its stars once the launcher has them (its
+    highlights, hotkey and manual clips: `marks` with each one's `path`, the same request written
+    again), only its own path's, a saved clip among them one star, and a star plays there and pauses
+    at its end; clip mode's Render (w/ Music) / Render (No Music) saves the clip and asks the
+    launcher to render it (`renderRequests`); the launcher's <comm>.overlay.json (its colour, the
+    renders' progress) is read as it changes; and Auto play at a spectated stream's end (a `mirror`
+    request of the finished game) counts down, held while in clip mode, then says `next`, and its X
+    keeps the game ("ended", no countdown)."""
     fa, out = _recorded_direct_game(backend, dolphin, gpu_backend, "manual-clips", ("mona", "nils"))
     first, last = fa.first_frame, fa.last_frame
     assert last - first > 1500, (first, last)
@@ -671,6 +680,7 @@ def test_launcher_comm_file_saves_manual_clips(backend: OnlineBackend,
                                         "hasNextReplay": True, "clips": False}}))
     st = _wait(lambda: (lambda s: s if s["started"] and s["nav"]["shown"] and s["serial"] != serial else None)(
         _status(v)), 300, "the replay list's replay")
+    serial = st["serial"]
     assert st["nav"] == {"shown": True, "position": 12, "total": 340, "prev_replay": True, "next_replay": True,
                          "clips": False}, st["nav"]
     assert "navRequest" not in v.c.call("replay_nav", action="nextClip"), "no clips in a replay list"
@@ -678,13 +688,92 @@ def test_launcher_comm_file_saves_manual_clips(backend: OnlineBackend,
     fs = _wait(lambda: (lambda fs: fs if fs.get("commandId") == "R1" and "navRequest" in fs else None)(file_status()),
                10, "the replay list's button")
     assert fs["navRequest"]["seq"] == 1 and fs["navRequest"]["action"] == "prevReplay", fs
+    # Its stars, once the launcher has them: the same request again with `marks`. Another replay's
+    # aren't shown; one that is a clip saved here is one star.
+    comm.write_text(json.dumps({
+        "mode": "queue", "commandId": "R1", "queue": [{"path": str(fa.path)}],
+        "nav": {"position": 12, "total": 340, "hasPrevReplay": True, "hasNextReplay": True, "clips": False},
+        "marks": [{"path": str(fa.path), "startFrame": c[0], "endFrame": c[1], "position": 0},
+                  {"path": str(fa.path), "startFrame": a[0], "endFrame": a[1], "position": 0},
+                  {"path": str(out / "another.brep"), "startFrame": first + 10, "endFrame": first + 70,
+                   "position": 0}]}))
+    want = [(c[0], False), (a[0], False), (b[0], True)]
+    st = _wait(lambda: (lambda s: s if [(m["start"], m["saved"]) for m in s["marks"]] == want else None)(
+        _status(v)), 30, "the replay's stars")
+    assert st["serial"] == serial and st["nav"]["total"] == 340, st
+    # A star plays its clip in this match and pauses at its end.
+    v.c.call("replay_control", action="highlight", arg=0)
+    st = wait_paused_at(c[1], "the replay's star's end")
+    assert st["serial"] == serial, st
+    # Clip mode's Render: saved as a clip and asked of the launcher, with or without music.
+    r = v.c.call("replay_save_clip", start=c[0], end=c[1], render="music")
+    assert r["saved"], r
+    r = v.c.call("replay_save_clip", start=a[0], end=a[1], render="nomusic")
+    assert r["saved"], r
+    want_c = {"path": str(fa.path), "startFrame": c[0], "endFrame": c[1]}
+    assert r["comm"]["savedClips"] == [want_a, want_b, want_c], r["comm"]
+    want_renders = [{**want_c, "seq": 1, "music": True}, {**want_a, "seq": 2, "music": False}]
+    assert r["comm"]["renderRequests"] == want_renders, r["comm"]
+    _wait(lambda: file_status().get("renderRequests") == want_renders or None, 10, "the status file's renders")
+    # The launcher's side of the overlay: its colour and the renders' progress, as the file changes.
+    overlay = Path(str(comm) + ".overlay.json")
+    overlay.write_text(json.dumps({"accent": "#3366CC", "toasts": [
+        {"label": "Clip (0:05)", "text": "Rendering 42%", "progress": 0.42, "state": "rendering"}]}))
+    st = _wait(lambda: (lambda s: s if s["overlay"]["accent"] else None)(_status(v)), 10, "the overlay file")
+    assert st["overlay"]["accent"] == "#3366cc", st["overlay"]
+    [t] = st["overlay"]["toasts"]
+    assert (t["label"], t["text"], t["state"]) == ("Clip (0:05)", "Rendering 42%", "rendering"), t
+    assert abs(t["progress"] - 0.42) < 1e-4, t
+    overlay.write_text("{not json")
+    _wait(lambda: not _status(v)["overlay"]["accent"] or None, 10, "a broken overlay file to be nothing")
+    overlay.unlink()
     # On to the replay's end (past every end line).
     v.c.call("replay_control", action="seek", arg=last - 120)
     v.c.call("replay_control", action="play")
     st = _wait(lambda: (lambda s: s if s["at_end"] or s["finished"] else None)(_status(v)), 900,
                "the replay's last frame")
     assert st["phase"] != "error" and st["desync_frame"] == -1, st
-    assert inst.log.read().count("replay: clip saved") == 3
+    log = inst.log.read()
+    assert log.count("replay: clip saved") == 5 and log.count("render 2 asked for") == 1
+
+    # Auto play at a spectated stream's end (the finished game as a stream that is over).
+    def mirror(command: str) -> None:
+        comm.write_text(json.dumps({"mode": "mirror", "commandId": command, "queue": [{"path": str(fa.path)}],
+                                    "streamOver": True, "closeOnEnd": False, "autoPlay": True}))
+
+    def at_the_end(command: str, after: int) -> int:
+        st = _wait(lambda: (lambda s: s if s["started"] and s["serial"] != after else None)(_status(v)), 300,
+                   f"{command} to play")
+        v.c.call("replay_control", action="seek", arg=last - 60)
+        v.c.call("replay_control", action="play")
+        _wait(lambda: _status(v)["at_end"] or None, 120, f"{command}'s end")
+        return st["serial"]
+
+    mirror("M1")
+    serial = at_the_end("M1", serial)
+    fs = _wait(lambda: (lambda fs: fs if "nextIn" in fs else None)(file_status()), 10, "the countdown")
+    assert fs["state"] == "ended" and 0 < fs["nextIn"] <= 5, fs
+    assert _status(v)["next"] == {"shown": True, "waiting": False}
+    # Clip mode holds it; out of it, it counts again from 5 s.
+    v.c.call("replay_next", action="clip_mode")
+    _wait(lambda: "nextIn" not in file_status() or None, 10, "clip mode to hold the countdown")
+    time.sleep(6)
+    fs = file_status()
+    assert fs["state"] == "ended" and "nextIn" not in fs and not _status(v)["next"]["shown"], fs
+    v.c.call("replay_next", action="clip_mode_off")
+    fs = _wait(lambda: (lambda fs: fs if "nextIn" in fs else None)(file_status()), 10, "the countdown again")
+    assert fs["nextIn"] > 3.5, fs
+    _wait(lambda: file_status().get("state") == "next" or None, 15, "the countdown to run out")
+    assert _status(v)["next"] == {"shown": True, "waiting": True}
+    # Its X: the game stays, for good.
+    mirror("M2")
+    at_the_end("M2", serial)
+    _wait(lambda: "nextIn" in file_status() or None, 10, "M2's countdown")
+    v.c.call("replay_next", action="cancel")
+    time.sleep(7)
+    fs = file_status()
+    assert fs["commandId"] == "M2" and fs["state"] == "ended" and "nextIn" not in fs, fs
+    assert not _status(v)["next"]["shown"]
 
 
 @pytest.mark.slow

@@ -13,7 +13,13 @@ import { fileExists } from "utils/file_exists";
 
 import { sanitizeAppImageEnv } from "./app_image_env/app_image_env";
 import { spawnRefusedError } from "./spawn_refused";
-import type { ReplayCommunication, ReplayPlaybackStatus, SpectatorChatFile, SpectatorListFile } from "./types";
+import type {
+  PlaybackOverlayFile,
+  ReplayCommunication,
+  ReplayPlaybackStatus,
+  SpectatorChatFile,
+  SpectatorListFile,
+} from "./types";
 
 const log = electronLog.scope("dolphin/instance");
 const isMac = process.platform === "darwin";
@@ -171,7 +177,13 @@ export class PlaybackDolphinInstance extends DolphinInstance {
       }
       // Its last status first: a clip saved just before it closed (manual_clips.ts) is in it.
       await this.readStatus();
-      for (const file of [this.commPath, `${this.commPath}.status.json`, this.chatPath, this.listPath]) {
+      for (const file of [
+        this.commPath,
+        `${this.commPath}.status.json`,
+        this.chatPath,
+        this.listPath,
+        this.overlayPath,
+      ]) {
         try {
           if (await fileExists(file)) {
             await unlink(file);
@@ -189,6 +201,31 @@ export class PlaybackDolphinInstance extends DolphinInstance {
 
   private get listPath(): string {
     return `${this.commPath}.spectators.json`;
+  }
+
+  private get overlayPath(): string {
+    return `${this.commPath}.overlay.json`;
+  }
+
+  /** The seek bar's launcher side (`<comm>.overlay.json`: its colour, the renders asked for from it), or none (null). */
+  async writeOverlay(overlay: PlaybackOverlayFile | null): Promise<void> {
+    await this.writeJson(this.overlayPath, overlay);
+  }
+
+  /**
+   * The request `commandId` written again with `patch` (the same commandId: Dolphin updates what it can, e.g. the
+   * stars, without playing it again). Nothing when another request (or none) is Dolphin's now. True when written.
+   */
+  async update(commandId: string, patch: Partial<ReplayCommunication>): Promise<boolean> {
+    const last = this.lastOptions;
+    // (Play anyway asked again as `<id>+anyway`: still the same request.)
+    if (!last?.commandId || (last.commandId !== commandId && last.commandId !== `${commandId}+anyway`)) {
+      return false;
+    }
+    const next = { ...last, ...patch, commandId: last.commandId };
+    this.lastOptions = next;
+    await this.writeCommsFile(next);
+    return true;
   }
 
   /**

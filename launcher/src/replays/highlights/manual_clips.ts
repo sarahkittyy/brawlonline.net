@@ -112,7 +112,7 @@ export class ManualClips {
       isTeams: header.meta.isTeams,
       recorderPort: spectated ? null : header.meta.recorderPort,
       stageId: header.meta.stageId,
-      ...(spectated ? { spectated: true } : {}),
+      ...(spectated ? { spectated: true, source: clip.path } : {}),
     };
     // (From the settings as they are now: the player may have removed one meanwhile.)
     await this.deps.save([...this.deps.clips(), saved]);

@@ -36,6 +36,7 @@ import {
   ipc_renderHighlights,
   ipc_replaceProjectPlusCard,
   ipc_setChatKey,
+  ipc_setPlaybackOverlay,
   ipc_softResetDolphin,
   ipc_storePlayKeyFile,
   ipc_viewSlpReplay,
@@ -168,6 +169,11 @@ export default function setupDolphinIpc({ dolphinManager }: { dolphinManager: Do
       );
     }
     return d.result;
+  });
+
+  ipc_setPlaybackOverlay.main!.handle(async ({ overlay }) => {
+    await dolphinManager.setPlaybackOverlay(overlay);
+    return { success: true };
   });
 
   ipc_playHighlights.main!.handle(async ({ items, commandId, choice = "auto", list, updateOnly }) => {

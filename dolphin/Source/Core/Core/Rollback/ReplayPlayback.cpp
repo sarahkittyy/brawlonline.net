@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <memory>
@@ -53,18 +54,22 @@ struct Request
   bool mirror = false;
   bool stream_over = false;
   bool close_on_end = false;
+  // Auto play: the next live game after a countdown at the stream's end (state "next").
+  bool auto_play = false;
   std::string banner;
   // Highlights (`highlights`): each path plays from its clip's first frame to its last, then the
   // next one; the same replay as the one before goes on in the running match.
   bool highlights = false;
   std::vector<std::pair<s64, s64>> clips;
   // The launcher's list (`marks`, `nav`): its highlights of the replay, each with its place in the
-  // list, marked instead of the queue's; the overlay's list buttons.
+  // list, marked instead of the queue's; the overlay's list buttons. A replay's (normal / queue):
+  // its highlights, hotkey clips and manual clips, `path` the replay's (empty: any).
   struct ListMark
   {
     s64 start = 0;
     s64 end = 0;
     int position = 0;
+    std::string path;
   };
   bool has_marks = false;
   std::vector<ListMark> marks;
@@ -164,10 +169,34 @@ s64 s_pick_start = 0, s_pick_end = 0;
 u64 s_nav_seq = 0;
 std::string s_nav_action;
 s64 s_nav_frame = 0;
-// GetNav's view, as of the loop's last step.
+// GetNav's and GetNextCountdown's views, as of the loop's last step.
 std::mutex s_nav_mutex;
 Playback::NavView s_nav_view;
+Playback::NextCountdown s_next_view;
 constexpr size_t MAX_MARKS = 500;
+// Clip mode's Render: the clips the launcher is asked to render (every one of this run).
+struct RenderAsk
+{
+  u64 seq = 0;
+  std::string path;
+  s64 start = 0;
+  s64 end = 0;
+  bool music = true;
+};
+std::vector<RenderAsk> s_render_asks;
+// Auto play at a spectated stream's end: the countdown's end, its X, and the countdown ran out
+// (state "next" until the launcher's next request); clip mode holds it (the overlay's).
+constexpr auto NEXT_AFTER = std::chrono::seconds(5);
+std::optional<std::chrono::steady_clock::time_point> s_next_at;
+bool s_next_cancelled = false;
+bool s_next_go = false;
+std::atomic<bool> s_clip_mode{false};
+// <comm>.overlay.json as last read, and its view (under s_overlay_mutex).
+std::string s_overlay_text;
+std::mutex s_overlay_mutex;
+Playback::OverlayView s_overlay_view;
+constexpr size_t MAX_OVERLAY_SIZE = 16 << 10;
+constexpr size_t MAX_TOASTS = 4;
 void ApplyMarks();
 // (A run saves a few; this many is far more than anyone makes, and keeps the status small.)
 constexpr size_t MAX_SAVED_CLIPS = 500;
@@ -226,6 +255,7 @@ std::optional<Request> ReadComm(const std::string& path)
     r.play_anyway = false;
     r.stream_over = flag("streamOver");
     r.close_on_end = flag("closeOnEnd");
+    r.auto_play = flag("autoPlay");
     r.banner = str("banner").substr(0, 120);
   }
   r.render = str("mode") == "render";
@@ -238,17 +268,43 @@ std::optional<Request> ReadComm(const std::string& path)
     if (r.output.size() > 4096)
       r.output.clear();
   }
+  const auto frame = [](const picojson::object& io, const char* k) -> std::optional<s64> {
+    const auto it = io.find(k);
+    if (it == io.end() || !it->second.is<double>())
+      return std::nullopt;
+    const double v = it->second.get<double>();
+    if (!std::isfinite(v) || v < 0 || v > static_cast<double>(MAX_FRAMES))
+      return std::nullopt;
+    return static_cast<s64>(v);
+  };
+  // The stars: the launcher list's highlights of a highlight's replay, or a replay's own (its
+  // highlights, hotkey and manual clips); never rendered or spectated.
+  const auto m = o.find("marks");
+  if (!r.render && !r.mirror && m != o.end() && m->second.is<picojson::array>())
+  {
+    r.has_marks = true;
+    for (const auto& item : m->second.get<picojson::array>())
+    {
+      if (r.marks.size() >= MAX_MARKS || !item.is<picojson::object>())
+        continue;
+      const auto& io = item.get<picojson::object>();
+      const auto start = frame(io, "startFrame");
+      const auto end = frame(io, "endFrame");
+      const auto pos = io.find("position");
+      if (!start || !end || *end < *start)
+        continue;
+      const double p = pos != io.end() && pos->second.is<double>() ? pos->second.get<double>() : 0;
+      std::string mark_path;
+      if (const auto pp = io.find("path"); pp != io.end() && pp->second.is<std::string>())
+        mark_path = pp->second.get<std::string>();
+      if (mark_path.size() > 4096)
+        continue;
+      r.marks.push_back({*start, *end, std::isfinite(p) ? static_cast<int>(std::clamp(p, 0.0, 1e6)) : 0,
+                         std::move(mark_path)});
+    }
+  }
   if (r.highlights)
   {
-    const auto frame = [](const picojson::object& io, const char* k) -> std::optional<s64> {
-      const auto it = io.find(k);
-      if (it == io.end() || !it->second.is<double>())
-        return std::nullopt;
-      const double v = it->second.get<double>();
-      if (!std::isfinite(v) || v < 0 || v > static_cast<double>(MAX_FRAMES))
-        return std::nullopt;
-      return static_cast<s64>(v);
-    };
     const auto q = o.find("queue");
     if (q != o.end() && q->second.is<picojson::array>())
     {
@@ -264,24 +320,6 @@ std::optional<Request> ReadComm(const std::string& path)
           continue;
         r.paths.push_back(p->second.get<std::string>());
         r.clips.emplace_back(*start, *end);
-      }
-    }
-    const auto m = o.find("marks");
-    if (!r.render && m != o.end() && m->second.is<picojson::array>())
-    {
-      r.has_marks = true;
-      for (const auto& item : m->second.get<picojson::array>())
-      {
-        if (r.marks.size() >= MAX_MARKS || !item.is<picojson::object>())
-          continue;
-        const auto& io = item.get<picojson::object>();
-        const auto start = frame(io, "startFrame");
-        const auto end = frame(io, "endFrame");
-        const auto pos = io.find("position");
-        if (!start || !end || *end < *start)
-          continue;
-        const double p = pos != io.end() && pos->second.is<double>() ? pos->second.get<double>() : 0;
-        r.marks.push_back({*start, *end, std::isfinite(p) ? static_cast<int>(std::clamp(p, 0.0, 1e6)) : 0});
       }
     }
   }
@@ -346,6 +384,9 @@ void ArmCurrent()
   s_close_at.reset();
   s_close_cancelled = false;
   s_close_saved = false;
+  s_next_at.reset();
+  s_next_cancelled = false;
+  s_next_go = false;
   if (s_index >= s_request.paths.size())
   {
     s_state = "ended";
@@ -410,7 +451,8 @@ void ArmCurrent()
       }
       if (!s_request.close_on_end)
       {
-        s_state = "ended";
+        // (Auto play: nothing here to stay for or clip, so on to the next live game at once.)
+        s_state = s_request.auto_play && !s_next_cancelled ? "next" : "ended";
         show(s_request.banner.empty() ? std::string("This game wasn't streamed.") : s_request.banner);
         return;
       }
@@ -545,6 +587,27 @@ picojson::object StatusLocked()
     }
     o["savedClips"] = picojson::value(std::move(clips));
   }
+  if (!s_render_asks.empty())
+  {
+    picojson::array asks;
+    for (const auto& a : s_render_asks)
+    {
+      picojson::object ask;
+      ask["seq"] = picojson::value(static_cast<double>(a.seq));
+      ask["path"] = picojson::value(a.path);
+      ask["startFrame"] = picojson::value(static_cast<double>(a.start));
+      ask["endFrame"] = picojson::value(static_cast<double>(a.end));
+      ask["music"] = picojson::value(a.music);
+      asks.emplace_back(std::move(ask));
+    }
+    o["renderRequests"] = picojson::value(std::move(asks));
+  }
+  if (s_next_at)
+  {
+    o["nextIn"] = picojson::value(std::max(0.0, std::chrono::duration<double>(
+                                                   *s_next_at - std::chrono::steady_clock::now())
+                                                   .count()));
+  }
   if (s_request.highlights && s_index < s_request.clips.size())
   {
     o["highlights"] = picojson::value(true);
@@ -618,6 +681,36 @@ void MirrorAtEnd(const picojson::object& st)
     return;
   }
   s_state = "ended";
+  if (s_request.auto_play)
+  {
+    // Auto play: "Next game in N s." with an X (the overlay's), held while in clip mode (the user,
+    // 2026-11-20: "if you're in clip mode it waits to count down until you leave clip mode"); then
+    // "next", and the launcher plays the next live game (or says in the banner that it waits).
+    s_close_at.reset();
+    Session::SetPlaybackBanner(s_next_cancelled ? std::string() : s_request.banner);
+    if (s_next_cancelled)
+      return;
+    if (s_next_go)
+    {
+      s_state = "next";
+      return;
+    }
+    const auto now = steady_clock::now();
+    if (s_clip_mode.load(std::memory_order_relaxed))
+    {
+      s_next_at.reset();
+      return;
+    }
+    if (!s_next_at)
+      s_next_at = now + NEXT_AFTER;
+    if (now >= *s_next_at)
+    {
+      s_next_at.reset();
+      s_next_go = true;
+      s_state = "next";
+    }
+    return;
+  }
   if (!s_request.close_on_end || s_close_cancelled)
   {
     s_close_at.reset();
@@ -942,6 +1035,9 @@ void Step()
   if (s_request.mirror)
   {
     s_close_at.reset();
+    // (Away from the end again: back there, Auto play counts down again.)
+    s_next_at.reset();
+    s_next_go = false;
     Session::SetPlaybackBanner("");
   }
   s_state = get_bool("started") ? "playing" : "waiting";
@@ -953,21 +1049,91 @@ void UpdateNavView()
   Playback::NavView v;
   if (!s_request.render && !s_request.mirror && s_request.nav.shown && s_armed)
     v = s_request.nav;
+  // Auto play's countdown, or its wait for the next game once it ran out.
+  Playback::NextCountdown n;
+  if (s_request.mirror && s_request.auto_play && !s_next_cancelled && (s_next_at || s_next_go))
+  {
+    n.shown = true;
+    n.waiting = !s_next_at;
+    if (s_next_at)
+      n.deadline = *s_next_at;
+    n.total_seconds = std::chrono::duration<double>(NEXT_AFTER).count();
+  }
   std::lock_guard nk(s_nav_mutex);
   s_nav_view = v;
+  s_next_view = n;
 }
 
-// Under s_mutex: the armed replay's marks to the session: the launcher's list's (or, without one,
-// the queue's of this replay), then the clips saved of it in this run that aren't among them.
+// The launcher's <comm>.overlay.json (its accent colour, its renders' progress), when it changed.
+void FollowOverlay()
+{
+  std::string text;
+  const std::string path = s_comm_path + ".overlay.json";
+  if (::File::Exists(path) && ::File::GetSize(path) <= MAX_OVERLAY_SIZE)
+    ::File::ReadFileToString(path, text);
+  if (text == s_overlay_text)
+    return;
+  s_overlay_text = text;
+  Playback::OverlayView v;
+  picojson::value root;
+  if (!text.empty() && picojson::parse(root, text).empty() && root.is<picojson::object>())
+  {
+    const auto& o = root.get<picojson::object>();
+    if (const auto a = o.find("accent"); a != o.end() && a->second.is<std::string>())
+    {
+      const std::string& hex = a->second.get<std::string>();
+      if (hex.size() == 7 && hex[0] == '#' &&
+          std::all_of(hex.begin() + 1, hex.end(), [](char c) { return std::isxdigit(static_cast<unsigned char>(c)); }))
+      {
+        v.has_accent = true;
+        for (int i = 0; i < 3; ++i)
+          v.accent[i] = static_cast<u8>(std::stoi(hex.substr(1 + i * 2, 2), nullptr, 16));
+      }
+    }
+    if (const auto t = o.find("toasts"); t != o.end() && t->second.is<picojson::array>())
+    {
+      for (const auto& item : t->second.get<picojson::array>())
+      {
+        if (v.toasts.size() >= MAX_TOASTS || !item.is<picojson::object>())
+          continue;
+        const auto& io = item.get<picojson::object>();
+        const auto str = [&](const char* k) {
+          const auto it = io.find(k);
+          return it != io.end() && it->second.is<std::string>() ? it->second.get<std::string>().substr(0, 160) :
+                                                                  std::string();
+        };
+        Playback::OverlayToast toast;
+        toast.label = str("label");
+        toast.text = str("text");
+        toast.state = str("state");
+        if (const auto p = io.find("progress"); p != io.end() && p->second.is<double>())
+        {
+          const double d = p->second.get<double>();
+          toast.progress = std::isfinite(d) ? static_cast<float>(std::clamp(d, 0.0, 1.0)) : 0.0f;
+        }
+        v.toasts.push_back(std::move(toast));
+      }
+    }
+  }
+  std::lock_guard ok(s_overlay_mutex);
+  s_overlay_view = std::move(v);
+}
+
+// Under s_mutex: the armed replay's marks to the session: the launcher's (a list's, or a replay's
+// own; or, without them, the highlights queue's of this replay), then the clips saved of it in this
+// run that aren't among them.
 void ApplyMarks()
 {
   if (!s_armed || s_request.render)
     return;
   s_marks.clear();
-  if (s_request.highlights && s_request.has_marks)
+  if (s_request.has_marks)
   {
     for (const auto& m : s_request.marks)
-      s_marks.push_back({m.start, m.end, SIZE_MAX, m.position, false});
+    {
+      if ((m.path.empty() || m.path == s_armed_path) && s_marks.size() < MAX_MARKS)
+        s_marks.push_back({m.start, m.end, SIZE_MAX, m.position, false});
+    }
   }
   else if (s_request.highlights)
   {
@@ -1038,6 +1204,7 @@ void Loop()
           }
           s_request.stream_over = r->stream_over;
           s_request.close_on_end = r->close_on_end;
+          s_request.auto_play = r->auto_play;
           s_request.banner = std::move(r->banner);
         }
         else if (r && r->command_id == last_command && !r->render && !s_request.render && !r->mirror &&
@@ -1045,7 +1212,7 @@ void Loop()
         {
           // The same request written again: the launcher's list changed (its marks, the count).
           const auto same = [](const Request::ListMark& a, const Request::ListMark& b) {
-            return a.start == b.start && a.end == b.end && a.position == b.position;
+            return a.start == b.start && a.end == b.end && a.position == b.position && a.path == b.path;
           };
           const bool marks_changed =
               r->has_marks != s_request.has_marks ||
@@ -1161,6 +1328,8 @@ void Loop()
       else
         Online::SpectatorChat::Follow(s_comm_path + ".chat.json",
                                       s_comm_path + ".spectators.json");
+      if (!s_comm_path.empty())
+        FollowOverlay();
       WriteStatus();
       s_can_save_clip.store(CanSaveClipLocked(), std::memory_order_relaxed);
       UpdateNavView();
@@ -1238,9 +1407,11 @@ void RequestNav(NavAction action, s64 frame)
   WriteStatus();
 }
 
-bool SaveClip(s64 start, s64 end)
+namespace
 {
-  std::lock_guard lk(s_mutex);
+// Under s_mutex: SaveClip's work.
+bool SaveClipLocked(s64 start, s64 end)
+{
   if (!CanSaveClipLocked() || end <= start || s_saved_clips.size() >= MAX_SAVED_CLIPS)
     return false;
   // (The same frames saved again are one clip.)
@@ -1254,8 +1425,64 @@ bool SaveClip(s64 start, s64 end)
     ApplyMarks();
   }
   NOTICE_LOG_FMT(BRAWLBACK, "replay: clip saved, frames {} to {} of {}", start, end, s_armed_path);
+  return true;
+}
+}  // namespace
+
+bool SaveClip(s64 start, s64 end)
+{
+  std::lock_guard lk(s_mutex);
+  if (!SaveClipLocked(start, end))
+    return false;
   WriteStatus();
   return true;
+}
+
+bool RequestRender(s64 start, s64 end, bool music)
+{
+  std::lock_guard lk(s_mutex);
+  // (Saved first, as Save as highlight: the launcher renders the Manual Clip it keeps of it.)
+  if (s_render_asks.size() >= MAX_SAVED_CLIPS || !SaveClipLocked(start, end))
+    return false;
+  const u64 seq = s_render_asks.size() + 1;
+  s_render_asks.push_back({seq, s_armed_path, start, end, music});
+  NOTICE_LOG_FMT(BRAWLBACK, "replay: render {} asked for, frames {} to {} ({})", seq, start, end,
+                 music ? "music" : "no music");
+  WriteStatus();
+  return true;
+}
+
+OverlayView GetOverlayView()
+{
+  std::lock_guard ok(s_overlay_mutex);
+  return s_overlay_view;
+}
+
+NextCountdown GetNextCountdown()
+{
+  std::lock_guard nk(s_nav_mutex);
+  return s_next_view;
+}
+
+void CancelNext()
+{
+  std::lock_guard lk(s_mutex);
+  if (!s_request.mirror || !s_request.auto_play)
+    return;
+  s_next_cancelled = true;
+  s_next_at.reset();
+  s_next_go = false;
+  if (s_state == "next")
+    s_state = "ended";
+  Session::SetPlaybackBanner("");
+  NOTICE_LOG_FMT(BRAWLBACK, "replay: auto play's next game cancelled");
+  UpdateNavView();
+  WriteStatus();
+}
+
+void SetClipMode(bool on)
+{
+  s_clip_mode.store(on, std::memory_order_relaxed);
 }
 
 picojson::object Status()

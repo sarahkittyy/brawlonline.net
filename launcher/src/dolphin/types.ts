@@ -34,9 +34,39 @@ export type ReplayCommunication = {
   streamOver?: boolean;
   closeOnEnd?: boolean;
   banner?: string;
-  /** Ours, `highlights` from a list (highlight_playlist.ts): its stars on the seek bar and the overlay's list buttons. */
-  marks?: HighlightListView["marks"];
+  /**
+   * Ours, `mirror` with Auto play: at the stream's end Dolphin counts down "Next game in N s." (its X stays on the
+   * game, clip mode holds it), then says `next` in its status, and the launcher plays the newest live game.
+   */
+  autoPlay?: boolean;
+  /**
+   * Ours: the stars on the seek bar. `highlights` from a list (highlight_playlist.ts): the list's of that replay; a
+   * replay played (`normal` / `queue`, replay_marks.ts): its highlights, hotkey clips and manual clips, each with
+   * the replay's `path`.
+   */
+  marks?: PlaybackMark[];
+  /** Ours: the overlay's list buttons. */
   nav?: HighlightListView["nav"];
+};
+
+/** A star on the playback Dolphin's seek bar (`path`: only on that replay of the request). */
+export type PlaybackMark = HighlightListView["marks"][number] & { path?: string };
+
+/**
+ * The launcher's side of the playback Dolphin's seek bar (`<comm file>.overlay.json`, ReplayPlayback.h): the
+ * launcher's colour, and the renders asked for from its clip mode, as they go.
+ */
+export type PlaybackOverlayFile = {
+  /** "#rrggbb". */
+  accent?: string;
+  toasts: PlaybackOverlayToast[];
+};
+export type PlaybackOverlayToast = {
+  label: string;
+  text: string;
+  /** 0..1 */
+  progress: number;
+  state: "queued" | "rendering" | "done" | "error";
 };
 
 /** What the playback Dolphin writes to `<comm file>.status.json` (Core/Rollback/ReplayPlayback.h). */
@@ -44,7 +74,8 @@ export type ReplayPlaybackStatus = {
   commandId?: string;
   /** `between`: a spectated set's next game is coming; `close`: a spectated stream's end asks to be closed. */
   /** `seeking`: highlights, on the way to the clip's first frame (a fast-forward). */
-  state?: "idle" | "loading" | "waiting" | "seeking" | "playing" | "between" | "ended" | "close" | "error";
+  /** `next`: Auto play's countdown at a spectated stream's end ran out: the launcher plays the next live game. */
+  state?: "idle" | "loading" | "waiting" | "seeking" | "playing" | "between" | "ended" | "close" | "next" | "error";
   replay?: string;
   error?: string;
   needsPlayAnyway?: boolean;
@@ -71,6 +102,13 @@ export type ReplayPlaybackStatus = {
    * (replays/highlights/manual_clips.ts).
    */
   savedClips?: { path: string; startFrame: number; endFrame: number }[];
+  /**
+   * Clip mode's Render (w/ Music) / Render (No Music) in this Dolphin's run (`seq` from 1): each clip is in
+   * `savedClips` too; the launcher renders each once (renderer/lib/dolphin/use_playback_overlay.ts).
+   */
+  renderRequests?: { seq: number; path: string; startFrame: number; endFrame: number; music: boolean }[];
+  /** Auto play's countdown at a spectated stream's end: the seconds left. */
+  nextIn?: number;
   /**
    * A list's highlights (`nav` asked for), each counted from 1 for the commandId: a list button that
    * needs another replay ("<<", ">>", or "<" / ">" past this replay's stars) at the frame shown, and
@@ -422,6 +460,8 @@ export interface DolphinService {
    * Renders highlights to video in the Clips folder (Settings > Clips), with no Dolphin window:
    * queued jobs, their progress as RENDER_PROGRESS events. `choice` as for playing (Project+ versions).
    */
+  /** The playback Dolphin's seek bar, the launcher's side: its colour and the renders asked for from it. */
+  setPlaybackOverlay(overlay: PlaybackOverlayFile | null): Promise<void>;
   renderHighlights(request: RenderRequest, choice?: ReplayPlayChoice): Promise<RenderResult>;
   /** Stops a render job (a finished file is kept). */
   cancelRender(jobId: string): Promise<void>;

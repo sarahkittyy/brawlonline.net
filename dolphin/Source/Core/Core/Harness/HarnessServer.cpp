@@ -1921,8 +1921,10 @@ Result CmdReplayNav(const Args& args)
   Fail("unknown list button " + action);
 }
 
-// replay_save_clip {start, end}: the overlay's Clip, then "Save as highlight" (ReplayPlayback.h's
-// manual clips): `saved`, and the comm status with its `savedClips`.
+// replay_save_clip {start, end, render?: "music" | "nomusic"}: the overlay's Clip, then "Save as
+// highlight" (ReplayPlayback.h's manual clips), or Render (w/ Music) / Render (No Music), which
+// also asks the launcher to render it: `saved`, and the comm status with its `savedClips` (and
+// `renderRequests`).
 Result CmdReplaySaveClip(const Args& args)
 {
   const auto frame = [&](const char* k) {
@@ -1935,9 +1937,29 @@ Result CmdReplaySaveClip(const Args& args)
   const s64 end = frame("end");
   Result r;
   r["can_save"] = picojson::value(Gprb::Replay::Playback::CanSaveClip());
-  r["saved"] = picojson::value(Gprb::Replay::Playback::SaveClip(start, end));
+  const std::string render = GetString(args, "render", std::string());
+  if (!render.empty() && render != "music" && render != "nomusic")
+    Fail("render must be music or nomusic");
+  r["saved"] = picojson::value(render.empty() ?
+                                   Gprb::Replay::Playback::SaveClip(start, end) :
+                                   Gprb::Replay::Playback::RequestRender(start, end, render == "music"));
   r["comm"] = picojson::value(Gprb::Replay::Playback::Status());
   return r;
+}
+
+// replay_next {action: "cancel" | "clip_mode" | "clip_mode_off"}: Auto play's countdown at a
+// spectated stream's end (ReplayPlayback.h): its X, or the overlay's clip mode on or off (which
+// holds it). Returns the comm status.
+Result CmdReplayNext(const Args& args)
+{
+  const std::string action = GetString(args, "action");
+  if (action == "cancel")
+    Gprb::Replay::Playback::CancelNext();
+  else if (action == "clip_mode" || action == "clip_mode_off")
+    Gprb::Replay::Playback::SetClipMode(action == "clip_mode");
+  else
+    Fail("unknown action " + action);
+  return Gprb::Replay::Playback::Status();
 }
 
 Result CmdReplayStatus(const Args&)
@@ -1965,6 +1987,29 @@ Result CmdReplayStatus(const Args&)
   n["next_replay"] = picojson::value(nav.next_replay);
   n["clips"] = picojson::value(nav.clips);
   r["nav"] = picojson::value(std::move(n));
+  // Auto play's countdown, and the launcher's side of the overlay (<comm>.overlay.json).
+  const auto next = Gprb::Replay::Playback::GetNextCountdown();
+  picojson::object nx;
+  nx["shown"] = picojson::value(next.shown);
+  nx["waiting"] = picojson::value(next.waiting);
+  r["next"] = picojson::value(std::move(nx));
+  const auto ov = Gprb::Replay::Playback::GetOverlayView();
+  picojson::object ovo;
+  ovo["accent"] = picojson::value(ov.has_accent ? fmt::format("#{:02x}{:02x}{:02x}", ov.accent[0], ov.accent[1],
+                                                              ov.accent[2]) :
+                                                  std::string());
+  picojson::array toasts;
+  for (const auto& t : ov.toasts)
+  {
+    picojson::object to;
+    to["label"] = picojson::value(t.label);
+    to["text"] = picojson::value(t.text);
+    to["progress"] = picojson::value(static_cast<double>(t.progress));
+    to["state"] = picojson::value(t.state);
+    toasts.emplace_back(std::move(to));
+  }
+  ovo["toasts"] = picojson::value(std::move(toasts));
+  r["overlay"] = picojson::value(std::move(ovo));
   return r;
 }
 
@@ -2465,6 +2510,7 @@ const std::vector<std::pair<std::string_view, Handler>>& Handlers()
       {"replay_control", CmdReplayControl},
       {"replay_save_clip", CmdReplaySaveClip},
       {"replay_nav", CmdReplayNav},
+      {"replay_next", CmdReplayNext},
       {"replay_recording", CmdReplayRecording},
       {"spectate_status", CmdSpectateStatus},
       {"spectate_config", CmdSpectateConfig},
