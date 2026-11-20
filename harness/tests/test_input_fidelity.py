@@ -33,13 +33,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 CASES = [
     pytest.param("lan", "ideal", [], id="lan-ideal"),
     pytest.param("r114j1", "ideal", [], id="r114j1-ideal"),
-    pytest.param("r114j1", "ideal", ["--env-b", "PPR_GPRB_TEST_HITCH=300:60"], id="r114j1-ideal-hitch",
-                 marks=pytest.mark.xfail(reason="main: the frames that catch up after a hitch read the "
-                                                "controller now (input-fix-hitch-catch-up)", strict=False)),
+    pytest.param("r114j1", "ideal", ["--env-b", "PPR_GPRB_TEST_HITCH=300:60"], id="r114j1-ideal-hitch"),
     pytest.param("r114j1", "mapped", [], id="r114j1-mapped",
                  # A pad with no past: the read after a rollback comes late by up to the rest of the re-runs
-                 # on main (input-fix-deferred-read-due takes it to one re-run pass), and nothing can catch
-                 # up after a hitch. Informative, not a gate.
+                 # before GitHub issue #53 (now one re-run pass at most), and nothing can catch up after a
+                 # hitch. Informative, not a gate.
                  marks=pytest.mark.xfail(reason="a mapped pad has no past: late reads after rollbacks and "
                                                 "hitches", strict=False)),
 ]

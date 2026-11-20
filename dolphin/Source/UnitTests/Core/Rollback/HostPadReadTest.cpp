@@ -390,6 +390,39 @@ TEST_F(HostPadReadTest, TheNewestScheduledReadIsDecoded)
   EXPECT_FALSE(Gprb::PadsHostDecoded(0, &pad, &at));
 }
 
+// GitHub issue #53: the read after a rollback (HostDecodeReadAt) stands for the due instant of the
+// loop top's read. Coming in under a ms after it, it took the controller as it was then, so a press
+// in that sliver went into the frame before its own.
+TEST_F(HostPadReadTest, TheReadAfterARollbackJustPastItsDueTakesTheDueInstant)
+{
+  auto& ct = m_system.GetCoreTiming();
+  Gprb::SetHostPadsScheduled(true);
+  Gprb::TakeHostPadReadStats();
+  Gprb::HostPadOriginReported(0, 0x80, 0x80, 0x80, 0x80, 0, 0);
+  Harness::Internal::PadSet(0, Pad(PAD_BUTTON_A));
+  std::this_thread::sleep_for(2ms);
+  ct.ResetThrottleToNow();
+  const auto due = std::chrono::steady_clock::now();
+  EXPECT_EQ(Read(), PAD_BUTTON_A);
+  // B pressed 200 us after the due instant; the read after the re-runs comes 600 us after it.
+  Spin(std::chrono::duration_cast<std::chrono::microseconds>(due + 200us -
+                                                             std::chrono::steady_clock::now()));
+  Harness::Internal::PadSet(0, Pad(PAD_BUTTON_B));
+  Spin(std::chrono::duration_cast<std::chrono::microseconds>(due + 600us -
+                                                             std::chrono::steady_clock::now()));
+  std::array<u8, 0x40> pad{};
+  std::chrono::steady_clock::time_point at{};
+  ASSERT_TRUE(Gprb::HostDecodeReadAt(m_system, 0, &pad, &at));
+  EXPECT_EQ(pad[2], PAD_BUTTON_A >> 8);
+  EXPECT_LE(at, due + 200us);
+  // Taken in a re-run pass (Session's DeferredReadDueInRerun), the same.
+  ct.SetRollbackResimulating(true);
+  ASSERT_TRUE(Gprb::HostDecodeReadAt(m_system, 0, &pad, &at));
+  EXPECT_EQ(pad[2], PAD_BUTTON_A >> 8);
+  ct.SetRollbackResimulating(false);
+  EXPECT_EQ(Gprb::TakeHostPadReadStats().deferred_read, 2u);
+}
+
 // Bug report #173: an SI poll between updateLowGC and the end of the pad thread's pass (the poll's
 // interrupt, the Wii controllers, P+'s post-processing). The pass is made of the read updateLowGC
 // took: it is checked against that read's decode and stands for that read's instant, not the

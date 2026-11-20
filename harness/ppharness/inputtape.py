@@ -2,7 +2,7 @@
 
 A tape is a player's controller as a function of host time: segments, each a whole pad state held
 from its start until the next segment's. Starts fall anywhere in time (microseconds of the host's
-steady clock, Python's ``time.monotonic_ns() // 1000`` on Linux), not on the game's reads, as a
+steady clock, Python's ``time.perf_counter_ns() // 1000``), not on the game's reads, as a
 player's presses do. The generator makes what a player does: taps (some shorter than a frame),
 holds, mashing, light and full shield presses, dashes and flicks, short hops into air dodges,
 neutral gaps.

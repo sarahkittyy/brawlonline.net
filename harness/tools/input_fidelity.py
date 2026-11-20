@@ -56,10 +56,12 @@ def add_presets(names: str) -> None:
 
 
 def host_us(c) -> int:
-    """Dolphin's steady clock (us), checked against ours: both are CLOCK_MONOTONIC on Linux."""
-    t0 = time.monotonic_ns() // 1000
+    """Dolphin's steady clock (us), checked against ours: time.perf_counter_ns() is the same clock
+    (CLOCK_MONOTONIC on Linux, QueryPerformanceCounter on Windows, where time.monotonic() is
+    GetTickCount64)."""
+    t0 = time.perf_counter_ns() // 1000
     now = int(c.call("pad_tape", port=0)["now_us"])
-    t1 = time.monotonic_ns() // 1000
+    t1 = time.perf_counter_ns() // 1000
     off = now - (t0 + t1) // 2
     if abs(off) > (t1 - t0) // 2 + 2000:
         raise RuntimeError(f"Dolphin's clock is {off} us off ours: pad_tape rows would land at the wrong time")
@@ -127,14 +129,14 @@ def tape_fight(seats, frames, *, mode=None, seed=None, stage_kind=None, stop=Non
     if opts.poll_status > 0:
         def poll() -> None:
             nxt = time.monotonic() + opts.poll_status
-            while not stop() and (time.monotonic_ns() // 1000) < end:
+            while not stop() and (time.perf_counter_ns() // 1000) < end:
                 time.sleep(max(0.0, nxt - time.monotonic()))
                 nxt += opts.poll_status
-                t_us = time.monotonic_ns() // 1000
+                t_us = time.perf_counter_ns() // 1000
                 with contextlib.suppress(Exception):
                     c.call("gprb_status")
                 with ctx.lock:
-                    ctx.polls.setdefault(name, []).append((t_us, time.monotonic_ns() // 1000))
+                    ctx.polls.setdefault(name, []).append((t_us, time.perf_counter_ns() // 1000))
         threading.Thread(target=poll, daemon=True).start()
     args: Dict[str, Any] = {"model": model.name}
     if model.name == "adapter":
@@ -144,7 +146,7 @@ def tape_fight(seats, frames, *, mode=None, seed=None, stage_kind=None, stop=Non
     sent = len(tape.segments)
     while t < end and not stop():
         # Keep 1 s of tape ahead; lean the stick back towards the middle of the stage.
-        while (time.monotonic_ns() // 1000) < t - 1_000_000 and not stop():
+        while (time.perf_counter_ns() // 1000) < t - 1_000_000 and not stop():
             time.sleep(0.05)
         x = fighter_x(c, seat.port) if not opts.no_lean else None
         bias = 0 if x is None else (-1 if x > opts.lean_at else (1 if x < -opts.lean_at else 0))
@@ -152,7 +154,7 @@ def tape_fight(seats, frames, *, mode=None, seed=None, stage_kind=None, stop=Non
         c.call("pad_tape", port=pad, rows=tape.rows(sent), append=True)
         sent = len(tape.segments)
     # Let the last presses through, then take the frames' pads before the session ends.
-    while (time.monotonic_ns() // 1000) < t + 300_000:
+    while (time.perf_counter_ns() // 1000) < t + 300_000:
         time.sleep(0.05)
     with ctx.lock:
         ctx.tapes[name] = tape

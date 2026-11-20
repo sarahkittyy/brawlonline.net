@@ -761,7 +761,8 @@ Clock::time_point FromSteadyUs(s64 us)
 }
 
 // pad_tape: rows [[t_us, buttons, stick_x, stick_y, c_x, c_y, l, r], ...] with t_us on the host's
-// steady clock (CLOCK_MONOTONIC on Linux, as Python's time.monotonic_ns()).
+// steady clock (Python's time.perf_counter_ns(): CLOCK_MONOTONIC on Linux, QueryPerformanceCounter
+// on Windows).
 Result CmdPadTape(const Args& args)
 {
   const int port = GetPadPort(args);

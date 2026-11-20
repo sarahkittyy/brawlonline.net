@@ -1178,26 +1178,26 @@ GCPadStatus ReadHostPad(Core::System& system, int chan, HostPadSource source)
   if (due && *due < now)
   {
     const auto behind = now - *due;
-    const bool far = behind > HostPadFarLate();
-    h.far_streak[chan] = far ? h.far_streak[chan] + 1 : 0;
+    const bool far_behind = behind > HostPadFarLate();
+    h.far_streak[chan] = far_behind ? h.far_streak[chan] + 1 : 0;
     // A frame catching up after a hitch: its due instant from the past, as a little behind.
-    const bool catch_up = far && PadCatchUpOn() && h.far_streak[chan] <= HOST_PAD_FAR_STREAK;
+    const bool catch_up = far_behind && PadCatchUpOn() && h.far_streak[chan] <= HOST_PAD_FAR_STREAK;
     std::optional<GCPadStatus> then;
-    if (!far || catch_up)
+    if (!far_behind || catch_up)
       then = ReadHostPadAt(chan, source, *due);
     if (then)
     {
       status = *then;
       instant = data_at = *due;
-      kind = far ? "catchup" : "hist";
-      if (far)
+      kind = far_behind ? "catchup" : "hist";
+      if (far_behind)
         ++h.stats.catch_up;
       else if (behind > HOST_PAD_LATE)
         ++h.stats.late_history;
       else
         ++h.stats.on_time;
     }
-    else if (far)
+    else if (far_behind)
     {
       // Far behind: the controller now, standing for its due instant.
       status = ReadHostPadNow(chan, source);
@@ -1416,14 +1416,14 @@ bool HostDecodeReadAt(Core::System& system, int chan, std::array<u8, Addr::PAD_S
   if (due < now && (DeferredReadDueOn() || now - due > HOST_PAD_LATE))
   {
     std::optional<GCPadStatus> then;
-    const bool far = now - due > HostPadFarLate();
-    if (!far || (PadCatchUpOn() && h.far_streak[chan] <= HOST_PAD_FAR_STREAK))
+    const bool far_behind = now - due > HostPadFarLate();
+    if (!far_behind || (PadCatchUpOn() && h.far_streak[chan] <= HOST_PAD_FAR_STREAK))
       then = ReadHostPadAt(chan, source, due);
     st = then ? *then : ReadHostPadNow(chan, source);
     *instant = due;
     if (then)
       data_at = due;
-    kind = then ? "deferred-hist" : far ? "deferred-far" : "deferred-live";
+    kind = then ? "deferred-hist" : far_behind ? "deferred-far" : "deferred-live";
   }
   else
   {
@@ -1433,6 +1433,7 @@ bool HostDecodeReadAt(Core::System& system, int chan, std::array<u8, Addr::PAD_S
   {
     st = h.newest[chan].status;
     data_at = h.newest[chan].data_at;
+    kind = "deferred-held";
     ++h.stats.held;
   }
   h.newest[chan] = {true, st, *instant, data_at};
@@ -1442,13 +1443,20 @@ bool HostDecodeReadAt(Core::System& system, int chan, std::array<u8, Addr::PAD_S
     ++h.stats.deferred_declined;
     return false;
   }
-  HostDecodePadSlot(st, s_decode.origin[chan], LightPressesOf(system.GetMemory(), chan),
-                    pad->data());
-  if ((st.button & PAD_BUTTON_START) && HostDecodeHoldsStart(system.GetMemory(), chan))
+  // In a rollback's re-run pass (DeferredReadDueInRerun) guest memory is an earlier frame's: P+'s
+  // light presses and START hold timer are taken as this frame's loop top read had them.
+  HostDecodeContext c{};
+  if (system.GetCoreTiming().IsRollbackResimulating())
   {
-    (*pad)[2] &= ~(PAD_BUTTON_START >> 8);
-    (*pad)[6] = (*pad)[2];
+    std::lock_guard lk(s_decode_ctx_mutex);
+    c = s_decode_ctx[chan];
   }
+  if (!c.valid || c.source != source)
+  {
+    c = {true, source, s_decode.origin[chan], LightPressesOf(system.GetMemory(), chan),
+         HostDecodeHoldsStart(system.GetMemory(), chan)};
+  }
+  HostDecodeWith(st, c, pad->data());
   ++h.stats.deferred_read;
   LogRead(chan, now, due, false, "deferred", st, *instant);
   return true;
