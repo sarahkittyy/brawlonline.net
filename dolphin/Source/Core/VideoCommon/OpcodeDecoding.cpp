@@ -97,10 +97,11 @@ constexpr u32 DL_MAX_CHANGES = 4;
 constexpr size_t DL_CACHE_MAX_BYTES = 32 * 1024 * 1024;
 
 std::unordered_map<u64, DlSlot> s_dl_cache;
-// Replaced copies: the GPU thread may still read them through headers in the aux FIFO, so they are
-// freed only when the aux FIFO is empty (DisplayListCacheOnGpuIdle).
+// Replaced copies, and those of a cache emptied for its size: the GPU thread may still read them
+// through headers in the aux FIFO, so they are freed only when the aux FIFO is empty
+// (DisplayListCacheOnGpuIdle).
 std::vector<std::unique_ptr<DlEntry>> s_dl_retired;
-size_t s_dl_bytes = 0;
+size_t s_dl_bytes = 0;  // the copies in s_dl_cache
 
 bool DlCacheEnabled()
 {
@@ -141,14 +142,9 @@ bool PreprocessedBP(u8 reg)
 
 void DisplayListCacheOnGpuIdle()
 {
-  for (const auto& e : s_dl_retired)
-    s_dl_bytes -= e->bytes.size();
+  // Only retired copies: SyncGPU also runs inside PushFifoAuxBuffer (AuxSpace), so this can be
+  // called in the middle of PreprocessCachedList, which still uses its slot and entry.
   s_dl_retired.clear();
-  if (s_dl_bytes > DL_CACHE_MAX_BYTES)
-  {
-    s_dl_cache.clear();
-    s_dl_bytes = 0;
-  }
 }
 
 template <bool is_preprocess>
@@ -445,6 +441,18 @@ public:
       return;
     }
 
+    if (s_dl_bytes > DL_CACHE_MAX_BYTES)
+    {
+      // Start over. Headers in the aux FIFO may still point at these copies: they are retired.
+      for (auto& kv : s_dl_cache)
+      {
+        if (kv.second.entry)
+          s_dl_retired.push_back(std::move(kv.second.entry));
+      }
+      s_dl_cache.clear();
+      s_dl_bytes = 0;
+    }
+
     DlSlot& slot = s_dl_cache[(static_cast<u64>(address) << 32) | size];
     if (slot.dynamic)
     {
@@ -480,6 +488,7 @@ public:
     // New or changed (another list at the same address and size, other bytes, another format).
     if (cached)
     {
+      s_dl_bytes -= cached->bytes.size();
       s_dl_retired.push_back(std::move(slot.entry));
       if (++slot.changes > DL_MAX_CHANGES)
       {
