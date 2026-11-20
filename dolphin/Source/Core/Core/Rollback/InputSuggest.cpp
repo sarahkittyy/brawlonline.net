@@ -94,9 +94,14 @@ constexpr int SAMPLE_IDLE_PER_BUSY = 3;
 struct Sender
 {
   bool armed = false;
+  const Format* format = &GFPAD_FORMAT;
+  // Where suggestions go: `socket` to `peers`, or a session's own transport (`send`, while
+  // `has_peers`).
   sf::UdpSocket* socket = nullptr;
-  int chan = -1;
   std::vector<Peer> peers;
+  void (*send)(const u8* data, std::size_t size) = nullptr;
+  bool has_peers = false;
+  int chan = -1;
   // The newest local input GekkoNet took, the instant its read stands for, and a field then.
   int last_frame = -1;
   Clock::time_point last_instant{};
@@ -117,17 +122,20 @@ struct Sender
 std::mutex s_mutex;
 Sender s_sender;
 
+bool HasPeers(const Sender& x)
+{
+  return x.send ? x.has_peers : !x.peers.empty();
+}
+
 // SI channel `chan`'s controller from `source` was `st` at host time `t`. Only the source the game
 // reads counts: an adapter can be plugged in while the player plays a mapped controller.
 void OnReport(int chan, HostPadSource source, const GCPadStatus& st, Clock::time_point t)
 {
   std::lock_guard lk(s_mutex);
   Sender& x = s_sender;
-  if (!x.armed || chan != x.chan || x.last_frame < 0 || x.peers.empty() ||
-      !HostDecodeReads(chan, source))
-  {
+  const Format& fmt = *x.format;
+  if (!x.armed || chan != x.chan || x.last_frame < 0 || !HasPeers(x) || !fmt.reads(chan, source))
     return;
-  }
   ++x.stats.reports;
   // A read at or after `t` took it (a frame GekkoNet has).
   if (t <= x.last_instant)
@@ -141,8 +149,8 @@ void OnReport(int chan, HostPadSource source, const GCPadStatus& st, Clock::time
     ++x.stats.too_late;
     return;
   }
-  std::array<u8, INPUT_BYTES> in;
-  if (!HostDecodeLatest(chan, source, st, in.data()))
+  std::array<u8, INPUT_BYTES> in{};
+  if (!fmt.make(chan, source, st, x.last_input.data(), in.data()))
   {
     ++x.stats.undecoded;
     return;
@@ -150,8 +158,7 @@ void OnReport(int chan, HostPadSource source, const GCPadStatus& st, Clock::time
   if (in == x.known)
     return;
   const int frame = x.last_frame + k;
-  // gfPadStatus's buttons (+2, +3), P+'s light trigger presses included.
-  const bool buttons = in[2] != x.known[2] || in[3] != x.known[3];
+  const bool buttons = fmt.buttons_differ(x.known.data(), in.data());
   const int analog_sent = frame == x.sugg_frame ? x.analog_sent : 0;
   const Rules rules = RulesMode();
   if (rules == Rules::All)
@@ -162,7 +169,7 @@ void OnReport(int chan, HostPadSource source, const GCPadStatus& st, Clock::time
       return;
     }
   }
-  else if (Meaningful(x.known.data(), in.data()))
+  else if (fmt.meaningful(x.known.data(), in.data()))
   {
     ++x.stats.crossings;
     x.cross_frame = frame;
@@ -181,21 +188,25 @@ void OnReport(int chan, HostPadSource source, const GCPadStatus& st, Clock::time
   if (Lies())
   {
     x.lie_rng = x.lie_rng * 1664525u + 1013904223u;
-    wire[2] ^= 0x01;  // A
-    wire[6] = wire[2];
-    wire[0x30] = static_cast<u8>(x.lie_rng >> 24);
+    fmt.lie(wire.data(), x.lie_rng);
   }
-  const auto d = Encode(frame, x.seq++, wire.data());
+  std::array<u8, DATAGRAM_SIZE> d;
+  const std::size_t size = HEADER_SIZE + fmt.input_bytes;
+  Encode(frame, x.seq++, wire.data(), fmt.input_bytes, d.data());
   // Tests (PPR_GPRB_SUGGEST_SEND=0): everything up to the send, nothing sent (the sampler's cost
   // without the traffic).
   static const bool sends = [] {
     const char* e = std::getenv("PPR_GPRB_SUGGEST_SEND");
     return !(e && *e == '0');
   }();
-  if (sends)
+  if (sends && x.send)
+  {
+    x.send(d.data(), size);
+  }
+  else if (sends)
   {
     for (const Peer& p : x.peers)
-      (void)x.socket->send(d.data(), d.size(), p.ip, p.port);
+      (void)x.socket->send(d.data(), size, p.ip, p.port);
   }
   ++x.stats.sent;
   x.known = in;
@@ -264,7 +275,7 @@ private:
 #endif
 };
 
-void SamplerLoop(int chan)
+void SamplerLoop()
 {
   Common::SetCurrentThreadName("GPRB suggest sampler");
   // Its own input channel: a relative input (a mouse's motion) gives each channel the motion since
@@ -289,13 +300,17 @@ void SamplerLoop(int chan)
     if (start - next >= period)
       next += period * ((start - next) / period);
     bool any_peer;
+    int chan;
+    const Format* fmt;
     {
       std::lock_guard lk(s_mutex);
-      any_peer = !s_sender.peers.empty();
+      any_peer = HasPeers(s_sender);
+      chan = s_sender.chan;
+      fmt = s_sender.format;
     }
     // The game reads the adapter (its reports come on their own) or nothing yet, or no peer takes
     // suggestions.
-    if (!any_peer || !HostDecodeReads(chan, HostPadSource::Mapped) ||
+    if (!any_peer || chan < 0 || !fmt->reads(chan, HostPadSource::Mapped) ||
         !g_controller_interface.IsInit() || !Pad::IsInitialized())
     {
       next = start + std::chrono::milliseconds(50);
@@ -442,24 +457,126 @@ unsigned int WorseCost(const u8* previous, const u8* suggested, const u8* real)
   return ((Zones(suggested) ^ real_zones) & ~(Zones(previous) ^ real_zones)) != 0 ? 1 : 0;
 }
 
-std::array<u8, DATAGRAM_SIZE> Encode(s32 frame, u32 seq, const u8* input)
+void Encode(s32 frame, u32 seq, const u8* input, std::size_t input_bytes, u8* out)
 {
-  std::array<u8, DATAGRAM_SIZE> d{};
-  d[0] = DATAGRAM;
-  d[1] = VERSION;
+  out[0] = DATAGRAM;
+  out[1] = VERSION;
   const u32 f = static_cast<u32>(frame);
   for (int i = 0; i < 4; ++i)
   {
-    d[2 + i] = static_cast<u8>(f >> (8 * i));
-    d[6 + i] = static_cast<u8>(seq >> (8 * i));
+    out[2 + i] = static_cast<u8>(f >> (8 * i));
+    out[6 + i] = static_cast<u8>(seq >> (8 * i));
   }
-  std::memcpy(d.data() + 10, input, INPUT_BYTES);
+  std::memcpy(out + HEADER_SIZE, input, input_bytes);
+}
+
+namespace
+{
+// Other Games' lines: P+'s (LINES and the light shield, as of 2026-11-19) kept as their own table,
+// so a change to P+'s map (it is P+'s fighters' thresholds) leaves other games' alone. Each is a
+// pad axis (0 stick X, 1 stick Y, 2 C-stick X, 3 C-stick Y) against its center (0x80) and the
+// value at or past which (at > 0: v >= at, at < 0: v <= at) the stick is inside the line.
+struct MachineLine
+{
+  u8 axis;
+  s8 at;
+};
+constexpr MachineLine MACHINE_LINES[] = {
+    {0, 28}, {0, -28}, {0, 71}, {0, -71}, {0, 78}, {0, -78},
+    {1, 28}, {1, -28}, {1, 68}, {1, -61}, {1, 71}, {1, -71},
+    {2, 51}, {2, -51}, {3, 51}, {3, -51},
+};
+constexpr u8 MACHINE_TRIGGER_AT = 45;
+static_assert(std::size(MACHINE_LINES) + 2 <= 32);
+
+// Every button of the pad (+0 Start, Y, X, B, A; +1 L, R, Z and the D-pad): P+ leaves the D-pad out,
+// other games use it.
+u16 MachineButtons(const u8* in)
+{
+  return static_cast<u16>(((in[MACHINE_PAD] << 8) | in[MACHINE_PAD + 1]) & 0x1F7F);
+}
+
+// Which side of each line (MACHINE_LINES, then L and R at MACHINE_TRIGGER_AT) the pad is on.
+u32 MachineZones(const u8* in)
+{
+  u32 z = 0;
+  int bit = 0;
+  for (const MachineLine& l : MACHINE_LINES)
+  {
+    const int v = int{in[MACHINE_PAD + 2 + l.axis]} - 0x80;
+    z |= static_cast<u32>(l.at > 0 ? v >= l.at : v <= l.at) << bit++;
+  }
+  z |= static_cast<u32>(in[MACHINE_PAD + 6] >= MACHINE_TRIGGER_AT) << bit++;
+  z |= static_cast<u32>(in[MACHINE_PAD + 7] >= MACHINE_TRIGGER_AT) << bit++;
+  return z;
+}
+}  // namespace
+
+bool MachineMeaningful(const u8* prev, const u8* next)
+{
+  return MachineButtons(prev) != MachineButtons(next) || MachineZones(prev) != MachineZones(next);
+}
+
+unsigned int MachineWorseCost(const u8* previous, const u8* suggested, const u8* real)
+{
+  // As WorseCost (zones), with every button.
+  const u16 previous_wrong = MachineButtons(previous) ^ MachineButtons(real);
+  const u16 suggested_wrong = MachineButtons(suggested) ^ MachineButtons(real);
+  if (suggested_wrong & ~previous_wrong)
+    return 3;
+  if (suggested_wrong != previous_wrong)
+    return 0;
+  const u32 real_zones = MachineZones(real);
+  return ((MachineZones(suggested) ^ real_zones) & ~(MachineZones(previous) ^ real_zones)) != 0 ?
+             1 :
+             0;
+}
+
+namespace
+{
+bool GfPadReads(int chan, HostPadSource source)
+{
+  return HostDecodeReads(chan, source);
+}
+
+bool GfPadMake(int chan, HostPadSource source, const GCPadStatus& st, const u8*, u8* out)
+{
+  return HostDecodeLatest(chan, source, st, out);
+}
+
+// gfPadStatus's buttons (+2, +3), P+'s light trigger presses included.
+bool GfPadButtonsDiffer(const u8* prev, const u8* next)
+{
+  return prev[2] != next[2] || prev[3] != next[3];
+}
+
+void GfPadLie(u8* in, u32 random)
+{
+  in[2] ^= 0x01;  // A
+  in[6] = in[2];
+  in[0x30] = static_cast<u8>(random >> 24);
+}
+}  // namespace
+
+const Format GFPAD_FORMAT{INPUT_BYTES,        GfPadReads, GfPadMake, Meaningful,
+                          GfPadButtonsDiffer, GfPadLie};
+
+std::array<u8, DATAGRAM_SIZE> Encode(s32 frame, u32 seq, const u8* input)
+{
+  std::array<u8, DATAGRAM_SIZE> d{};
+  Encode(frame, seq, input, INPUT_BYTES, d.data());
   return d;
 }
 
 bool Decode(const u8* data, std::size_t size, s32* frame, u32* seq, const u8** input)
 {
-  if (size != DATAGRAM_SIZE || data[0] != DATAGRAM || data[1] != VERSION)
+  return Decode(data, size, INPUT_BYTES, frame, seq, input);
+}
+
+bool Decode(const u8* data, std::size_t size, std::size_t input_bytes, s32* frame, u32* seq,
+            const u8** input)
+{
+  if (size != HEADER_SIZE + input_bytes || data[0] != DATAGRAM || data[1] != VERSION)
     return false;
   u32 f = 0, q = 0;
   for (int i = 0; i < 4; ++i)
@@ -469,7 +586,7 @@ bool Decode(const u8* data, std::size_t size, s32* frame, u32* seq, const u8** i
   }
   *frame = static_cast<s32>(f);
   *seq = q;
-  *input = data + 10;
+  *input = data + HEADER_SIZE;
   return true;
 }
 
@@ -482,23 +599,42 @@ bool Enabled()
   return on;
 }
 
-void Arm(sf::UdpSocket* socket, int chan)
+namespace
+{
+void ArmWith(const Format& format, sf::UdpSocket* socket,
+             void (*send)(const u8* data, std::size_t size), int chan)
 {
   Disarm();
-  if (!socket || chan < 0 || chan >= 4)
+  if ((!socket && !send) || chan < -1 || chan >= 4 || format.input_bytes > INPUT_BYTES)
     return;
   {
     std::lock_guard lk(s_mutex);
     s_sender = {};
     s_sender.armed = true;
+    s_sender.format = &format;
     s_sender.socket = socket;
+    s_sender.send = send;
     s_sender.chan = chan;
   }
   if (!Enabled())
     return;
   GCAdapter::SetReportHook(OnAdapterReport);
   s_sampler_run = true;
-  s_sampler = std::thread(SamplerLoop, chan);
+  s_sampler = std::thread(SamplerLoop);
+}
+}  // namespace
+
+void Arm(sf::UdpSocket* socket, int chan)
+{
+  if (chan >= 0)
+    ArmWith(GFPAD_FORMAT, socket, nullptr, chan);
+  else
+    Disarm();
+}
+
+void Arm(const Format& format, void (*send)(const u8* data, std::size_t size), int chan)
+{
+  ArmWith(format, nullptr, send, chan);
 }
 
 void Disarm()
@@ -511,6 +647,8 @@ void Disarm()
   s_sender.armed = false;
   s_sender.socket = nullptr;
   s_sender.peers.clear();
+  s_sender.send = nullptr;
+  s_sender.has_peers = false;
 }
 
 void SetPeers(std::vector<Peer> peers)
@@ -520,18 +658,33 @@ void SetPeers(std::vector<Peer> peers)
     s_sender.peers = std::move(peers);
 }
 
+void SetHasPeers(bool any)
+{
+  std::lock_guard lk(s_mutex);
+  if (s_sender.armed)
+    s_sender.has_peers = any;
+}
+
+void SetChannel(int chan)
+{
+  std::lock_guard lk(s_mutex);
+  if (s_sender.armed && chan >= -1 && chan < 4)
+    s_sender.chan = chan;
+}
+
 void NoteLocalInput(int frame, Clock::time_point instant, const u8* input, double field_us)
 {
   std::lock_guard lk(s_mutex);
   Sender& x = s_sender;
   if (!x.armed || frame <= x.last_frame)
     return;
-  if (x.last_frame >= 0 && std::memcmp(x.last_input.data(), input, INPUT_BYTES) != 0)
+  const std::size_t n = x.format->input_bytes;
+  if (x.last_frame >= 0 && std::memcmp(x.last_input.data(), input, n) != 0)
     ++x.stats.local_changes;
   x.last_frame = frame;
   x.last_instant = instant;
   x.field_us = field_us;
-  std::memcpy(x.last_input.data(), input, INPUT_BYTES);
+  std::memcpy(x.last_input.data(), input, n);
   // The peers know this input, unless a suggestion for a later frame (a newer state) went out.
   if (x.sugg_frame <= frame)
     x.known = x.last_input;

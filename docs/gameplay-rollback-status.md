@@ -1657,6 +1657,8 @@ design as Slippi 3.7's input suggestions and Melee Unlocked's early inputs.
 - **Not tested**: real controllers and adapters (a digital controller on an overclocked adapter
   can report stray states, per Arte; the judge then stops following it), macOS / Linux / Steam
   Deck in a game, 3-4 players beyond sync (a 4-player session stayed in sync).
+- **Other Games** (2026-11-19): whole-machine sessions send and use them too, with their own
+  input format and game-independent rules (`docs/design/brawl-mods.md` §6.2).
 
 ## A PC that hitches no longer holds every frame 8 ms (bug report #314, 2026-11-18)
 
