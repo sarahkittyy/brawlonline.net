@@ -70,6 +70,7 @@ export default function setupEmissaryIpc({
         root,
         isoPath,
         isoValid: () => discValid,
+        checkDisc: recheckDisc,
         dolphinTool: () => dolphinManager.dolphinToolPath(),
         // Installs an older release, to try updating (`PPO_EMISSARY_TAG=v0.6.0`).
         tag: testing ? process.env.PPO_EMISSARY_TAG?.trim() || undefined : undefined,

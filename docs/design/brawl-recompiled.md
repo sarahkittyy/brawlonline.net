@@ -296,7 +296,7 @@ Sarah, 2026-11-19: "other games and mods stay on dolphin. that's fine. we should
 
 **Other Games, Project Punch** (`closeNetplayForOtherGame`, used by the mods manager and Project Punch): an idle recomp closes and Dolphin opens the room; one in a game stays and the click is refused as with a Dolphin in a game. This replaces §8.4's dialog. Quitting the launcher in its Launch Project+ mode closes the recomp too.
 
-**Falling back to Dolphin is never silent** (§4.3): Play's result carries why (`emissaryFallback`: its state, a release that can't play online, or the update's error) and Home shows a warning toast. Its text reuses the card's strings (`noOnline`, `statusText`) with one new one, `usingDolphin`: "EmissaryRecomp: {why} Using Dolphin."
+**Falling back to Dolphin is never silent** (§4.3): Play's result carries why (`emissaryFallback`: its state, a release that can't play online, or the update's error) and Home shows a warning toast. Play refuses a missing or invalid disc before the recomp comes into it (Dolphin couldn't play either), so the add-on's "needs your disc" only means its disc check hasn't come back yet: Play waits for that check instead of falling back. Its text reuses the card's strings (`noOnline`, `statusText`) with one new one, `usingDolphin`: "EmissaryRecomp: {why} Using Dolphin."
 
 **Logs:** the bug report zip (and Download logs) has `emissary-recomp/Logs/<run>/` of its last 3 runs, its Config.toml, and the core's crash dumps `recomp-<pid>.dmp` from the netplay User folder's Logs (the newest 3, whole, only when they fit the report's per-file cap; they are no longer cut to their end with the netplay Dolphin's logs).
 

@@ -329,6 +329,12 @@ export type EmissaryOptions = {
   isoPath: () => string | null;
   /** The Settings disc is a valid NTSC-U Brawl image. */
   isoValid: () => boolean;
+  /**
+   * Checks the Settings disc again (isoValid answers from the last check, which runs in the
+   * background at start-up and after the disc changes). Play waits for it: Play refuses a missing
+   * or invalid disc before it gets here, so "needs your disc" then only means "not checked yet".
+   */
+  checkDisc?: () => Promise<void>;
   /** The bundled DolphinTool. */
   dolphinTool: () => string;
   /** Install this tag instead of the latest (`PPO_EMISSARY_TAG`, to test updates). */
@@ -621,6 +627,10 @@ export class EmissaryRecomp {
         await this.applyStaged();
       }
       let s = await this.state();
+      if (s.status === "needsDisc" && this.opts.checkDisc) {
+        await this.opts.checkDisc();
+        s = await this.state();
+      }
       if (s.status === "updateAvailable") {
         this.log(
           `EmissaryRecomp: ${s.installed?.version} is not the latest (${s.latest?.version}): updating before playing`,

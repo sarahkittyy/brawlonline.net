@@ -182,7 +182,6 @@ export const PlayDownloadsTheUpdateFirst = () => (
 const fallbacks: EmissaryFallback[] = [
   { reason: "noOnline" },
   { reason: "status", status: "needsFiles" },
-  { reason: "status", status: "needsDisc" },
   { reason: "updateFailed", message: "Could not download EmissaryRecomp: HTTP 503" },
 ];
 

@@ -419,6 +419,32 @@ describe("EmissaryRecomp", () => {
     expect(await em.prepareForPlay()).toEqual({ fallback: { reason: "status", status: "needsFiles" } });
   });
 
+  it("waits for the disc check instead of falling back when the disc wasn't checked yet", async () => {
+    latest = { tag: "v0.7.0", zip: await ciZip("0.7.0") };
+    await make().install();
+    // Another disc image chosen: its files aren't extracted, and its check hasn't come back yet.
+    iso = path.join(dir, "other.iso");
+    await fs.promises.writeFile(iso, "another disc");
+    isoValid = false;
+    let checks = 0;
+    const em = new EmissaryRecomp({
+      root: path.join(dir, "emissary-recomp"),
+      platform: "win32",
+      isoPath: () => iso,
+      isoValid: () => isoValid,
+      checkDisc: async () => {
+        checks++;
+        isoValid = true;
+      },
+      dolphinTool: () => "x",
+      fetch: fetchImpl,
+    });
+    expect((await em.state()).status).toBe("needsDisc");
+    // Checked: the disc is fine, its files are another disc's, which Play doesn't extract.
+    expect(await em.prepareForPlay()).toEqual({ fallback: { reason: "status", status: "needsFiles" } });
+    expect(checks).toBe(1);
+  });
+
   it("plays a release staged while the game ran", async () => {
     latest = { tag: "v0.7.0", zip: await ciZip("0.7.0") };
     const em = make();
