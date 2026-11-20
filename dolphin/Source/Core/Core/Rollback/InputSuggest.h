@@ -85,6 +85,12 @@ struct SenderStats
   u64 samples = 0;
   u64 sample_us = 0;
   u64 sample_us_max = 0;
+  // The gaps between one sample's start and the next's while sampling: how many, their sum, the
+  // sum of their squares (a change waits sum_sq / (2 sum) on average to be sampled) and the longest.
+  u64 sample_gaps = 0;
+  u64 sample_gap_us = 0;
+  u64 sample_gap_us_sq = 0;
+  u64 sample_gap_us_max = 0;
 };
 SenderStats Stats();
 }  // namespace Gprb::Suggest
