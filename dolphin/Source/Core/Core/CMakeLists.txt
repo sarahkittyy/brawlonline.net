@@ -660,6 +660,8 @@ add_library(core
   Rollback/GprbCpuTrace.cpp
   Rollback/FullMemcpySaveSlot.h
   Rollback/IRollbackSaveSlot.h
+  Rollback/InputTrace.cpp
+  Rollback/InputTrace.h
   Rollback/MachineSession.cpp
   Rollback/MachineSession.h
   Rollback/PeerData.cpp

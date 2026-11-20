@@ -331,6 +331,9 @@ u32 PadsInjectedCount();
 //   (unless older than 100 ms, after a long wait for the peer: then read now);
 // - more than a field behind schedule (a PC that cannot keep full speed runs up to MaxFallback
 //   behind on every frame): the controller now, standing for its due instant (HostPadFarLate);
+//   but a frame catching up after a hitch (more than a field behind for a few reads, then on
+//   schedule again) reads its due instant from the past, as below (PadCatchUpOn); and no read
+//   stands for an earlier state than the channel's newest one (PadMonotonicOn);
 // - behind schedule (the instant was due earlier, CoreTimingManager::ScheduledHostTime): the
 //   state the controller had then, from a timestamped history: the Wii U adapter's read thread
 //   keeps one (GCAdapter::InputAt), and the harness (Harness::PadOverrideAt). Pads mapped in
@@ -375,12 +378,28 @@ struct HostPadReadStats
   // HostDecodeReadAt: local inputs read after a rollback's re-runs, and declined (no decode).
   u64 deferred_read = 0;
   u64 deferred_declined = 0;
+  // More than a field behind but catching up after a hitch: from the history (PadCatchUpOn).
+  u64 catch_up = 0;
+  // Would have stood for an earlier state than the newest read: the newest again (PadMonotonicOn).
+  u64 held = 0;
   double late_max_ms = 0;
 };
 // Since the last call.
 HostPadReadStats TakeHostPadReadStats();
 // Diagnostics (PPR_GPRB_PAD_READ_LOG): a line of the session's own (loop tops, captures).
 void HostPadLogLine(const char* kind, long long a, long long b, long long c);
+// Input trace (Rollback::InputTrace): the recent read of channel `chan` (0-3) that stands for
+// `instant`: when its state was the controller's and how it was taken (now, hist, live, far,
+// relatch, deferred...). False when no recent read stands for it. CPU thread.
+bool HostPadReadNote(int chan, Clock::time_point instant, Clock::time_point* data_at,
+                     const char** kind);
+// The due time of channel `chan`'s last scheduled read outside a re-run (the one the loop top's
+// local input came from), if any. CPU thread.
+std::optional<Clock::time_point> HostPadLastDue(int chan);
+// The read after a rollback (HostDecodeReadAt) stands for its due instant: from the past when it
+// comes behind it at all, and taken in a re-run pass once due (Session's deferred local input).
+// PPR_GPRB_DEFERRED_READ_DUE=0: off (an on-time read within 1 ms of it, after the re-runs).
+bool DeferredReadDueOn();
 
 // Host decode (GitHub issue #1, DHNishi): a GameCube controller's read made into the gfPadStatus
 // Brawl's pad thread makes of it (updateLowGC and P+'s post-processing: buttons at +0 and +4,

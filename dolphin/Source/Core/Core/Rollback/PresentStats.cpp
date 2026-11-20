@@ -16,6 +16,8 @@
 #include <random>
 #include <string>
 #include <utility>
+
+#include <fmt/format.h>
 #ifdef _WIN32
 #include <process.h>
 #else
@@ -26,6 +28,7 @@
 #include "Core/HW/Memmap.h"
 
 #include "Core/CoreTiming.h"
+#include "Core/Rollback/InputTrace.h"
 #include "Core/System.h"
 #include "VideoCommon/VideoConfig.h"
 
@@ -78,6 +81,9 @@ struct CpuStamp
   double burst_behind_ms = 0;
   TimePoint token;  // the last end-of-render token since the previous copy
   int tokens = 0;   // end-of-render tokens since the previous copy
+  // TagDisplayedFrame (input trace): the displayed pass the copy is in and the picture it holds.
+  s64 pass_frame = -1, picture_frame = -1, picture_confirmed = -1;
+  bool after_resim = false;
 };
 // Brawl's draw sync token after renderNormal (fn_80023C70; docs/gameplay-rollback-status.md
 // Phase 28).
@@ -133,6 +139,21 @@ bool OnXFBField(bool resimulating)
   return true;
 }
 
+// CPU thread, a presented XFB copy (PresentTraceEnabled): its stamp, and a new pending one.
+static CpuStamp TakeCpuStamp()
+{
+  s_cpu_pending.copy = Clock::now();
+  auto& core_timing = Core::System::GetInstance().GetCoreTiming();
+  s_cpu_pending.due = core_timing.GetTargetHostTime(core_timing.GetTicks());
+  const CpuStamp stamp = std::exchange(s_cpu_pending, {});
+  // A copy without a throttle in between keeps the previous one's.
+  s_cpu_pending.throttle_target = stamp.throttle_target;
+  s_cpu_pending.throttle_woke = stamp.throttle_woke;
+  s_cpu_pending.throttle_start = stamp.throttle_start;
+  s_cpu_pending.loop_top = stamp.loop_top;
+  return stamp;
+}
+
 void OnEFBCopyPreprocess(bool to_xfb)
 {
   const bool present = !to_xfb || DecideXFBCopy();
@@ -140,17 +161,9 @@ void OnEFBCopyPreprocess(bool to_xfb)
     Core::System::GetInstance().GetCoreTiming().OnPresentedXFBCopy();
   if (to_xfb && present && PresentTraceEnabled())
   {
-    s_cpu_pending.copy = Clock::now();
-    const CpuStamp last = s_cpu_pending;
-    auto& core_timing = Core::System::GetInstance().GetCoreTiming();
-    s_cpu_pending.due = core_timing.GetTargetHostTime(core_timing.GetTicks());
+    const CpuStamp stamp = TakeCpuStamp();
     std::lock_guard lk(s_trace_mutex);
-    s_cpu_stamps.push_back(std::exchange(s_cpu_pending, {}));
-    // A copy without a throttle in between keeps the previous one's.
-    s_cpu_pending.throttle_target = last.throttle_target;
-    s_cpu_pending.throttle_woke = last.throttle_woke;
-    s_cpu_pending.throttle_start = last.throttle_start;
-    s_cpu_pending.loop_top = last.loop_top;
+    s_cpu_stamps.push_back(stamp);
   }
   CopyDecision decision{present, false, {}};
   if (to_xfb && present)
@@ -175,7 +188,17 @@ bool OnEFBCopy(bool to_xfb, bool preprocessed)
     const bool present = !to_xfb || DecideXFBCopy();
     // Single core: the copy runs on the CPU thread.
     if (to_xfb && present && !Core::System::GetInstance().IsDualCoreMode())
+    {
       Core::System::GetInstance().GetCoreTiming().OnPresentedXFBCopy();
+      if (PresentTraceEnabled())
+      {
+        // The present that shows it follows on this thread.
+        const CpuStamp stamp = TakeCpuStamp();
+        std::lock_guard lk(s_trace_mutex);
+        s_gpu_stamp = stamp;
+        s_gpu_have_stamp = true;
+      }
+    }
     return present;
   }
 
@@ -227,6 +250,17 @@ void OnDisplayedFrameStart(bool after_resimulation)
   s_displayed_frames.fetch_add(1, std::memory_order_relaxed);
   if (after_resimulation)
     s_displayed_frames_after_resim.fetch_add(1, std::memory_order_relaxed);
+}
+
+void TagDisplayedFrame(s64 pass_frame, s64 picture_frame, s64 picture_confirmed,
+                       bool after_resimulation)
+{
+  if (!PresentTraceEnabled())
+    return;
+  s_cpu_pending.pass_frame = pass_frame;
+  s_cpu_pending.picture_frame = picture_frame;
+  s_cpu_pending.picture_confirmed = picture_confirmed;
+  s_cpu_pending.after_resim = after_resimulation;
 }
 
 namespace
@@ -315,6 +349,18 @@ void TracePresent()
     return;
   const TimePoint done = Clock::now();
   const CpuStamp& c = s_gpu_stamp;
+  if (c.pass_frame >= 0 && InputTrace::Enabled())
+  {
+    InputTrace::Write(fmt::format("P {} {} {} {} {} {}", c.pass_frame, c.picture_frame,
+                                  c.picture_confirmed, c.after_resim ? 1 : 0,
+                                  InputTrace::Us(c.copy), InputTrace::Us(done)));
+  }
+  if (!f)
+  {
+    s_gpu_have_stamp = false;
+    s_have_target = false;
+    return;
+  }
   if (!s_have_origin)
   {
     s_have_origin = true;
@@ -452,7 +498,8 @@ void TestGpuStall()
 
 bool PresentTraceEnabled()
 {
-  return PresentTraceFile() != nullptr;
+  // The input trace's P lines come from the same stamps.
+  return PresentTraceFile() != nullptr || InputTrace::Enabled();
 }
 
 void TraceCpuWaitForGpu(double ms)

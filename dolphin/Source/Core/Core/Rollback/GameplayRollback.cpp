@@ -24,6 +24,7 @@
 #include "Core/Core.h"
 #include "Core/CoreTiming.h"
 #include "Core/Rollback/GameplaySession.h"
+#include "Core/Rollback/InputTrace.h"
 #include "Core/Debugger/OSThread.h"
 #include "Core/Harness/Harness.h"
 #include "Core/HW/GCPad.h"
@@ -819,6 +820,37 @@ std::chrono::microseconds HostPadFarLate()
   return value;
 }
 
+// A frame catching up after a hitch (a stall longer than a field: the throttle then runs the
+// frames it owes back to back, up to MaxFallback) reads the instant it stands for from the past,
+// as a frame a little behind does, instead of the controller now: taken now, the catch-up frames
+// got about the same sample each, the presses of the hitch were skipped, and the first frame back
+// on schedule went back to an earlier instant than the frame before it (harness/tools/
+// input_fidelity.py). Only a channel that stays more than a field behind for this many reads in
+// a row (a PC that cannot keep full speed: Phase 32's 100 ms old controller) takes it now.
+// PPR_GPRB_PAD_CATCH_UP=0: never (every read more than a field behind is taken now).
+constexpr u32 HOST_PAD_FAR_STREAK = 24;  // about 12 frames (the SI reads twice a field)
+bool PadCatchUpOn()
+{
+  static const bool on = [] {
+    const char* env = std::getenv("PPR_GPRB_PAD_CATCH_UP");
+    return !(env && env[0] == '0');
+  }();
+  return on;
+}
+
+// No read of a channel stands for an earlier state than its newest outside a re-run: a read taken
+// now (late, far behind or in the deferred read after a rollback) is ahead of the schedule, and
+// the next read on schedule would give the state of an instant before it (a press seen, then not,
+// then seen again). Such a read takes the newest state again. PPR_GPRB_PAD_MONOTONIC=0: off.
+bool PadMonotonicOn()
+{
+  static const bool on = [] {
+    const char* env = std::getenv("PPR_GPRB_PAD_MONOTONIC");
+    return !(env && env[0] == '0');
+  }();
+  return on;
+}
+
 struct HostPadRead
 {
   bool valid = false;
@@ -844,8 +876,32 @@ struct HostPads
   // that read's due time on the schedule (outside a re-run).
   std::array<std::optional<HostPadSource>, 4> source{};
   std::array<std::optional<Clock::time_point>, 4> last_due{};
+  // Each channel's newest state outside a re-run (ReadHostPad and HostDecodeReadAt) and when it
+  // was the controller's (PadMonotonicOn), and its scheduled reads in a row more than a field
+  // behind (PadCatchUpOn).
+  std::array<HostPadRead, 4> newest{};
+  std::array<u32, 4> far_streak{};
 };
 HostPads s_host_pads;
+
+// The recent reads of each channel: the instant each stands for, when its state was the
+// controller's, and how it was taken (InputTrace's L lines: HostPadReadNote). CPU thread only.
+struct ReadNote
+{
+  Clock::time_point instant{};
+  Clock::time_point data_at{};
+  const char* kind = nullptr;
+};
+std::array<std::array<ReadNote, 16>, 4> s_read_notes{};
+std::array<size_t, 4> s_read_note_next{};
+
+void NoteRead(int chan, Clock::time_point instant, Clock::time_point data_at, const char* kind)
+{
+  if (chan < 0 || chan >= 4 || !Rollback::InputTrace::Enabled())
+    return;
+  s_read_notes[chan][s_read_note_next[chan]] = {instant, data_at, kind};
+  s_read_note_next[chan] = (s_read_note_next[chan] + 1) % s_read_notes[chan].size();
+}
 
 // Host decode (PadsHostDecoded). CPU thread only.
 struct HostDecodeEntry
@@ -1072,8 +1128,9 @@ GCPadStatus ReadHostPadNow(int chan, HostPadSource source)
 // The state at `t` (a recent past), if something kept it.
 std::optional<GCPadStatus> ReadHostPadAt(int chan, HostPadSource source, Clock::time_point t)
 {
-  if (auto overridden = Harness::PadOverrideAt(chan, t))
-    return overridden;
+  // A port the harness drives has the past its device model gives, never the real adapter's.
+  if (Harness::IsPadOverridden(chan))
+    return Harness::PadOverrideAt(chan, t);
   if (source == HostPadSource::Adapter)
     return GCAdapter::InputAt(chan, t);
   return std::nullopt;
@@ -1107,6 +1164,8 @@ GCPadStatus ReadHostPad(Core::System& system, int chan, HostPadSource source)
   {
     h.seen_generation = gen;
     h.last = {};  // nothing from an earlier session
+    h.newest = {};
+    h.far_streak = {};
     s_decode.ring = {};
     {
       std::lock_guard lk(s_decode_ctx_mutex);
@@ -1134,6 +1193,7 @@ GCPadStatus ReadHostPad(Core::System& system, int chan, HostPadSource source)
     ++h.stats.relatched;
     last = {true, ReadHostPadNow(chan, source), now, now};
     h.instant[chan] = now;
+    NoteRead(chan, now, now, "relatch");
     LogRead(chan, now, std::nullopt, true, "relatch", last.status, now);
     return last.status;
   }
@@ -1147,23 +1207,32 @@ GCPadStatus ReadHostPad(Core::System& system, int chan, HostPadSource source)
   if (due && *due < now)
   {
     const auto behind = now - *due;
-    if (behind > HostPadFarLate())
+    const bool far_behind = behind > HostPadFarLate();
+    h.far_streak[chan] = far_behind ? h.far_streak[chan] + 1 : 0;
+    // A frame catching up after a hitch: its due instant from the past, as a little behind.
+    const bool catch_up = far_behind && PadCatchUpOn() && h.far_streak[chan] <= HOST_PAD_FAR_STREAK;
+    std::optional<GCPadStatus> then;
+    if (!far_behind || catch_up)
+      then = ReadHostPadAt(chan, source, *due);
+    if (then)
+    {
+      status = *then;
+      instant = data_at = *due;
+      kind = far_behind ? "catchup" : "hist";
+      if (far_behind)
+        ++h.stats.catch_up;
+      else if (behind > HOST_PAD_LATE)
+        ++h.stats.late_history;
+      else
+        ++h.stats.on_time;
+    }
+    else if (far_behind)
     {
       // Far behind: the controller now, standing for its due instant.
       status = ReadHostPadNow(chan, source);
       instant = *due;
       kind = "far";
       ++h.stats.late_far;
-    }
-    else if (const std::optional<GCPadStatus> then = ReadHostPadAt(chan, source, *due))
-    {
-      status = *then;
-      instant = data_at = *due;
-      kind = "hist";
-      if (behind > HOST_PAD_LATE)
-        ++h.stats.late_history;
-      else
-        ++h.stats.on_time;
     }
     else
     {
@@ -1184,9 +1253,20 @@ GCPadStatus ReadHostPad(Core::System& system, int chan, HostPadSource source)
   {
     status = ReadHostPadNow(chan, source);
     ++h.stats.on_time;
+    h.far_streak[chan] = 0;
+  }
+  if (PadMonotonicOn() && h.newest[chan].valid && data_at < h.newest[chan].data_at)
+  {
+    // Not back to an earlier state than the newest read gave.
+    status = h.newest[chan].status;
+    data_at = h.newest[chan].data_at;
+    kind = "held";
+    ++h.stats.held;
   }
   last = {true, status, instant, data_at};
+  h.newest[chan] = last;
   h.instant[chan] = instant;
+  NoteRead(chan, instant, data_at, kind);
   HostDecodeKeep(system.GetMemory(), chan, source, status, instant);
   LogRead(chan, now, due, false, kind, status, instant);
   return status;
@@ -1344,6 +1424,15 @@ bool PadsHostDecoded(int chan, std::array<u8, Addr::PAD_STRIDE>* pad, Clock::tim
   return true;
 }
 
+bool DeferredReadDueOn()
+{
+  static const bool on = [] {
+    const char* env = std::getenv("PPR_GPRB_DEFERRED_READ_DUE");
+    return !(env && env[0] == '0');
+  }();
+  return on;
+}
+
 bool HostDecodeReadAt(Core::System& system, int chan, std::array<u8, Addr::PAD_STRIDE>* pad,
                       Clock::time_point* instant)
 {
@@ -1368,30 +1457,55 @@ bool HostDecodeReadAt(Core::System& system, int chan, std::array<u8, Addr::PAD_S
   // As ReadHostPad on the schedule: now when on time (or ahead), else the state at `due`.
   GCPadStatus st{};
   *instant = now;
-  if (due < now && now - due > HOST_PAD_LATE)
+  Clock::time_point data_at = now;
+  const char* kind = "deferred";
+  // Behind its due instant at all (as ReadHostPad): the state then. With the 1 ms of an on-time
+  // read, a fifth of these reads were 0.05-1.5 ms late (0.36 on average) and took the controller
+  // now, so a press ending in that ms was seen a frame short (harness/tools/input_fidelity.py).
+  if (due < now && (DeferredReadDueOn() || now - due > HOST_PAD_LATE))
   {
     std::optional<GCPadStatus> then;
-    if (now - due <= HostPadFarLate())
+    const bool far_behind = now - due > HostPadFarLate();
+    if (!far_behind || (PadCatchUpOn() && h.far_streak[chan] <= HOST_PAD_FAR_STREAK))
       then = ReadHostPadAt(chan, source, due);
     st = then ? *then : ReadHostPadNow(chan, source);
     *instant = due;
+    if (then)
+      data_at = due;
+    kind = then ? "deferred-hist" : far_behind ? "deferred-far" : "deferred-live";
   }
   else
   {
     st = ReadHostPadNow(chan, source);
   }
+  if (PadMonotonicOn() && h.newest[chan].valid && data_at < h.newest[chan].data_at)
+  {
+    st = h.newest[chan].status;
+    data_at = h.newest[chan].data_at;
+    kind = "deferred-held";
+    ++h.stats.held;
+  }
+  h.newest[chan] = {true, st, *instant, data_at};
+  NoteRead(chan, *instant, data_at, kind);
   if (!st.isConnected)
   {
     ++h.stats.deferred_declined;
     return false;
   }
-  HostDecodePadSlot(st, s_decode.origin[chan], LightPressesOf(system.GetMemory(), chan),
-                    pad->data());
-  if ((st.button & PAD_BUTTON_START) && HostDecodeHoldsStart(system.GetMemory(), chan))
+  // In a rollback's re-run pass (DeferredReadDueInRerun) guest memory is an earlier frame's: P+'s
+  // light presses and START hold timer are taken as this frame's loop top read had them.
+  HostDecodeContext c{};
+  if (system.GetCoreTiming().IsRollbackResimulating())
   {
-    (*pad)[2] &= ~(PAD_BUTTON_START >> 8);
-    (*pad)[6] = (*pad)[2];
+    std::lock_guard lk(s_decode_ctx_mutex);
+    c = s_decode_ctx[chan];
   }
+  if (!c.valid || c.source != source)
+  {
+    c = {true, source, s_decode.origin[chan], LightPressesOf(system.GetMemory(), chan),
+         HostDecodeHoldsStart(system.GetMemory(), chan)};
+  }
+  HostDecodeWith(st, c, pad->data());
   ++h.stats.deferred_read;
   LogRead(chan, now, due, false, "deferred", st, *instant);
   return true;
@@ -1401,6 +1515,32 @@ void HostPadLogLine(const char* kind, long long a, long long b, long long c)
 {
   if (std::FILE* f = PadReadLog())
     std::fprintf(f, "%s %lld %lld %lld %lld\n", kind, Us(Clock::now()), a, b, c);
+}
+
+bool HostPadReadNote(int chan, Clock::time_point instant, Clock::time_point* data_at,
+                     const char** kind)
+{
+  if (chan < 0 || chan >= 4)
+    return false;
+  const auto& notes = s_read_notes[chan];
+  for (size_t i = 0; i < notes.size(); ++i)
+  {
+    const ReadNote& n = notes[(s_read_note_next[chan] + notes.size() - 1 - i) % notes.size()];
+    if (n.kind && n.instant == instant)
+    {
+      *data_at = n.data_at;
+      *kind = n.kind;
+      return true;
+    }
+  }
+  return false;
+}
+
+std::optional<Clock::time_point> HostPadLastDue(int chan)
+{
+  if (chan < 0 || chan >= 4)
+    return std::nullopt;
+  return s_host_pads.last_due[chan];
 }
 
 HostPadReadStats TakeHostPadReadStats()
