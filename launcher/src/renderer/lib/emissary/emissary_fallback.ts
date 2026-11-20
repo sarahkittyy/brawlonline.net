@@ -14,8 +14,8 @@ export function emissaryFallbackText(fallback: EmissaryFallback): string {
     case "noOnline":
       return Messages.noOnline();
     case "status":
-      return Messages.playUsesDolphin(Messages.statusText(fallback.status));
+      return Messages.usingDolphin(Messages.statusText(fallback.status));
     case "updateFailed":
-      return Messages.playUsesDolphin(sentence(fallback.message));
+      return Messages.usingDolphin(sentence(fallback.message));
   }
 }
