@@ -1624,8 +1624,10 @@ design as Slippi 3.7's input suggestions and Melee Unlocked's early inputs.
   only if every byte is, and a stick keeps moving after it crosses a line). Stick noise inside a
   zone is never sent. `PPR_GPRB_SUGGEST_RULES=all|cross|follow` (default `follow`).
 - **Who sends**: a GameCube adapter's reports (the adapter thread's hook), or for a controller
-  mapped in Dolphin a sampler thread at up to 1000 Hz (about 460 Hz on Windows) that runs only
-  while some peer takes suggestions. Wii controllers send none but use the others'.
+  mapped in Dolphin a sampler thread at 1000 Hz that runs only while some peer takes suggestions
+  (on a 1 ms grid; on Windows it waits on a high-resolution waitable timer: `sleep_until` rounds
+  up to whole milliseconds there, and the sampler got about 440 Hz until PR #69). Wii
+  controllers send none but use the others'.
 - **Old builds**: a player says in its state message that it takes suggestions (`sg`); nobody
   else gets any, and a build without them plays as before.
 - **Trust**: each suggestion is judged once against the real input of its frame
@@ -1648,8 +1650,10 @@ design as Slippi 3.7's input suggestions and Melee Unlocked's early inputs.
   them unused did the same; sampling without sending did not). 85 games, 719,657 confirmed
   frames compared, 0 mismatches.
 - **Cost**: GekkoNet +60-90 ns per remote player per frame; the filter 7 ns, the judge 11 ns;
-  the mapped-controller sampler ~10 us a sample (0.5% of a core) and the SI device update's p99
-  +6-14 us while it runs.
+  the mapped-controller sampler ~10 us a sample (about 1% of a core at 1000 Hz; 26-36 us, about
+  3%, on a PC busy with other Dolphins) and the SI device update's p99 +6-14 us while it runs
+  (measured at 460 Hz). A change waits 0.6 ms on average before a sample sees it (1.2 ms at
+  440 Hz); "gprb suggest:" and `gprb_status` give the rate, that wait and the longest gap.
 - **Not tested**: real controllers and adapters (a digital controller on an overclocked adapter
   can report stray states, per Arte; the judge then stops following it), macOS / Linux / Steam
   Deck in a game, 3-4 players beyond sync (a 4-player session stayed in sync).
