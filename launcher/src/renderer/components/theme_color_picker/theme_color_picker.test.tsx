@@ -16,13 +16,14 @@ const updateSettings = vi.hoisted(() => {
 
 import { useSettingsStore } from "@/lib/hooks/use_settings";
 import { ThemeColorSetting } from "@/pages/settings/appearance_settings/theme_color/theme_color";
-import { useDefaultThemeColor, useShownThemeColor, useThemeColorDraft } from "@/styles/game_theme_provider";
+import { useShownThemeColor, useThemeColorDraft } from "@/styles/game_theme_provider";
+import { DEFAULT_THEME_COLOR } from "@/styles/theme_color";
 
 import { ThemeColorButton } from "./theme_color_button";
 import { ThemeColorPicker } from "./theme_color_picker";
 import { THEME_COLOR_PICKER_PAGE, THEME_COLOR_SETTINGS_PAGE, useThemeColorPickerOpen } from "./use_theme_color_picker";
 
-let shown: string | null = null;
+let shown = "";
 let path = "";
 let navigateTo: (to: string) => void = () => undefined;
 const Probe = () => {
@@ -60,19 +61,16 @@ describe("Theme Color", () => {
   beforeEach(() => {
     updateSettings.mockClear();
     setThemeColor(null);
-    useDefaultThemeColor.setState({ color: null });
     useThemeColorPickerOpen.setState({ open: false, returnTo: null });
     useThemeColorDraft.setState({ draft: undefined });
   });
 
-  it("shows the default look's colour with no reset while no colour is chosen", () => {
+  it("shows PM's blue, the default, with no reset while no colour is chosen", () => {
     renderApp(THEME_COLOR_SETTINGS_PAGE);
     const swatch = screen.getByRole("button", { name: "Change theme color" });
-    expect(swatch.style.background).toBe("rgb(208, 208, 208)");
-    expect(screen.queryByRole("button", { name: "Reset to default" })).toBeNull();
-
-    act(() => useDefaultThemeColor.setState({ color: "#209a7a" }));
-    expect(swatch.style.background).toBe("rgb(32, 154, 122)");
+    expect(DEFAULT_THEME_COLOR).toBe("#5463c8");
+    expect(swatch.style.background).toBe("rgb(84, 99, 200)");
+    expect(shown).toBe(DEFAULT_THEME_COLOR);
     expect(screen.queryByRole("button", { name: "Reset to default" })).toBeNull();
   });
 
@@ -84,7 +82,7 @@ describe("Theme Color", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Reset to default" }));
     await waitFor(() => expect(updateSettings).toHaveBeenCalledWith([{ key: "themeColor", value: null }]));
-    expect(shown).toBeNull();
+    expect(shown).toBe(DEFAULT_THEME_COLOR);
     expect(screen.queryByRole("button", { name: "Reset to default" })).toBeNull();
   });
 
@@ -118,7 +116,7 @@ describe("Theme Color", () => {
     for (let i = 0; i < 10; i++) {
       fireEvent.keyDown(wheel, { key: "ArrowUp" });
     }
-    await waitFor(() => expect(shown).not.toBeNull());
+    await waitFor(() => expect(shown).not.toBe(DEFAULT_THEME_COLOR));
     const picked = shown;
 
     fireEvent.click(screen.getByRole("button", { name: "Apply" }));
@@ -147,7 +145,7 @@ describe("Theme Color", () => {
     await waitFor(() => expect(useThemeColorPickerOpen.getState().open).toBe(false));
     expect(updateSettings).toHaveBeenCalledWith([{ key: "themeColor", value: null }]);
     expect(useSettingsStore.getState().settings.themeColor).toBeNull();
-    expect(shown).toBeNull();
+    expect(shown).toBe(DEFAULT_THEME_COLOR);
     expect(path).toBe("/main/replays/list");
   });
 
@@ -155,17 +153,17 @@ describe("Theme Color", () => {
     renderApp(THEME_COLOR_SETTINGS_PAGE);
     fireEvent.click(screen.getByRole("button", { name: "Change theme color" }));
     fireEvent.keyDown(screen.getByRole("slider", { name: "Color wheel" }), { key: "ArrowUp" });
-    await waitFor(() => expect(shown).not.toBeNull());
+    await waitFor(() => expect(shown).not.toBe(DEFAULT_THEME_COLOR));
     fireEvent.keyDown(window, { key: "Escape" });
     expect(path).toBe(THEME_COLOR_SETTINGS_PAGE);
-    expect(shown).toBeNull();
+    expect(shown).toBe(DEFAULT_THEME_COLOR);
 
     fireEvent.click(screen.getByRole("button", { name: "Change theme color" }));
     fireEvent.keyDown(screen.getByRole("slider", { name: "Color wheel" }), { key: "ArrowUp" });
-    await waitFor(() => expect(shown).not.toBeNull());
+    await waitFor(() => expect(shown).not.toBe(DEFAULT_THEME_COLOR));
     act(() => navigateTo("/settings/advanced-settings"));
     expect(useThemeColorPickerOpen.getState().open).toBe(false);
-    expect(shown).toBeNull();
+    expect(shown).toBe(DEFAULT_THEME_COLOR);
     expect(updateSettings).not.toHaveBeenCalled();
   });
 
@@ -176,15 +174,15 @@ describe("Theme Color", () => {
     expect(path).toBe("/main/replays/list");
 
     fireEvent.keyDown(wheel, { key: "ArrowUp" });
-    await waitFor(() => expect(shown).not.toBeNull());
+    await waitFor(() => expect(shown).not.toBe(DEFAULT_THEME_COLOR));
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(path).toBe("/main/replays/list");
-    expect(shown).toBeNull();
+    expect(shown).toBe(DEFAULT_THEME_COLOR);
     expect(screen.queryByRole("slider", { name: "Color wheel" })).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "Theme Color" }));
     fireEvent.keyDown(screen.getByRole("slider", { name: "Color wheel" }), { key: "ArrowUp" });
-    await waitFor(() => expect(shown).not.toBeNull());
+    await waitFor(() => expect(shown).not.toBe(DEFAULT_THEME_COLOR));
     const picked = shown;
     fireEvent.click(screen.getByRole("button", { name: "Apply" }));
     await waitFor(() => expect(useThemeColorPickerOpen.getState().open).toBe(false));

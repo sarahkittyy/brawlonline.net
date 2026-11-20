@@ -5,23 +5,21 @@ import React from "react";
 
 import { saveThemeColor, useOpenThemeColorPicker } from "@/components/theme_color_picker/use_theme_color_picker";
 import { useThemeColor } from "@/lib/hooks/use_settings";
-import { useDefaultThemeColor } from "@/styles/game_theme_provider";
-import { normalizeThemeColor, PLAIN_THEME_SEED, relativeLuminance } from "@/styles/theme_color";
+import { DEFAULT_THEME_COLOR, normalizeThemeColor, relativeLuminance } from "@/styles/theme_color";
 
 import { SettingItem } from "../../setting_item_section";
 import { ThemeColorMessages as Messages } from "./theme_color.messages";
 import styles from "./theme_color.module.css";
 
 /**
- * The theme colour: a swatch of the current colour (the default look's own when none is chosen) with a
+ * The theme colour: a swatch of the current colour (PM's blue, the default, when none is chosen) with a
  * pencil, which opens the colour wheel over the main page; "Reset to default" beside it once one is chosen.
  */
 export const ThemeColorSetting = React.memo(() => {
   const [setting] = useThemeColor();
   const chosen = normalizeThemeColor(setting);
-  const defaultColor = useDefaultThemeColor((s) => s.color);
   const openPicker = useOpenThemeColorPicker();
-  const shown = chosen ?? defaultColor ?? PLAIN_THEME_SEED;
+  const shown = chosen ?? DEFAULT_THEME_COLOR;
 
   return (
     <SettingItem name={Messages.themeColor()} description={Messages.themeColorDescription()} inline={true}>

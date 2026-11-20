@@ -10,10 +10,11 @@ import React from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 
 import { useThemeColor } from "@/lib/hooks/use_settings";
-import { useDefaultThemeColor, useThemeColorDraft } from "@/styles/game_theme_provider";
+import { useThemeColorDraft } from "@/styles/game_theme_provider";
 import type { WheelPosition } from "@/styles/theme_color";
 import {
   colorAtWheelPosition,
+  DEFAULT_THEME_COLOR,
   maxChroma,
   normalizeThemeColor,
   THEME_LIGHTNESS,
@@ -162,12 +163,9 @@ export const ThemeColorPicker = React.memo(() => {
 const ThemeColorPickerPanel = () => {
   const navigate = useNavigate();
   const [setting] = useThemeColor();
-  const defaultColor = useDefaultThemeColor((s) => s.color);
   const draft = useThemeColorDraft((s) => s.draft);
-  // The plain look's light grey is above the wheel's lightness: it starts in the grey centre at a middle one.
-  const startColor = normalizeThemeColor(setting) ?? defaultColor;
   const [position, setPosition] = React.useState<WheelPosition>(() =>
-    startColor ? wheelPositionOf(startColor) : { h: 0, r: 0, l: THEME_LIGHTNESS.initial },
+    wheelPositionOf(normalizeThemeColor(setting) ?? DEFAULT_THEME_COLOR),
   );
   const color = draft ?? colorAtWheelPosition(position);
 

@@ -18,8 +18,13 @@ export type Oklch = { l: number; c: number; h: number };
 /** The colour wheel's lightness range: darker frames hide their light labels' shadow, lighter ones the labels. */
 export const THEME_LIGHTNESS = { min: 0.4, max: 0.68, initial: 0.61 } as const;
 
-/** The plain look's accent, standing in for a colour while no theme colour is set and there is no P+ card. */
-export const PLAIN_THEME_SEED = "#d0d0d0";
+/**
+ * The launcher's colour while the player has not chosen one: Project M's blue. Its hue (OKLCH 274) is the
+ * border colour of projectmgame.com (#364086, on its #131736 page) and the M of PM's logo (#384593 at its
+ * lightest); those are L 0.40, which made the tinted buttons dark, so it is lifted to L 0.54 with its
+ * chroma scaled along (0.117 -> 0.157).
+ */
+export const DEFAULT_THEME_COLOR = "#5463c8";
 
 /** The page's lightness (P+'s gradient middle, L 0.277; the plain grey page is 0.269). */
 const PAGE_LIGHTNESS = 0.277;
@@ -140,7 +145,7 @@ export const oklchToHex = (color: Oklch) => rgbToHex(oklchToRgb(color));
  * frames with them exactly as it does with the card's own gradient.
  */
 export function gradientFromThemeColor(color: string): { top: RGB; middle: RGB; bottom: RGB } {
-  const top = parseHexColor(color) ?? parseHexColor(PLAIN_THEME_SEED)!;
+  const top = parseHexColor(color) ?? parseHexColor(DEFAULT_THEME_COLOR)!;
   const { l, c, h } = rgbToOklch(top);
   return {
     top,
@@ -157,7 +162,7 @@ const secondaryOf = ({ l, c, h }: Oklch): Oklch => ({
 
 /** The launcher's colours (MUI palette and the CSS variables, see game_theme.tsx paletteVars) from a theme colour. */
 export function paletteFromThemeColor(color: string): ThemePalette {
-  const seed = rgbToOklch(parseHexColor(color) ?? parseHexColor(PLAIN_THEME_SEED)!);
+  const seed = rgbToOklch(parseHexColor(color) ?? parseHexColor(DEFAULT_THEME_COLOR)!);
   const second = secondaryOf(seed);
   return {
     ...fallbackPalette,
@@ -183,7 +188,7 @@ export function paletteFromThemeColor(color: string): ThemePalette {
 export type WheelPosition = { h: number; r: number; l: number };
 
 export function wheelPositionOf(color: string): WheelPosition {
-  const { l: rawL, c, h } = rgbToOklch(parseHexColor(color) ?? parseHexColor(PLAIN_THEME_SEED)!);
+  const { l: rawL, c, h } = rgbToOklch(parseHexColor(color) ?? parseHexColor(DEFAULT_THEME_COLOR)!);
   const l = Math.max(THEME_LIGHTNESS.min, Math.min(THEME_LIGHTNESS.max, rawL));
   const max = maxChroma(l, h);
   return { h, r: max > 0 ? Math.min(1, c / max) : 0, l };
