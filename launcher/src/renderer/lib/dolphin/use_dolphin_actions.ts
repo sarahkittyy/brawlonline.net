@@ -5,6 +5,7 @@ import type { HighlightListView, HighlightPlayItem } from "@replays/highlights/t
 import log from "electron-log";
 import { useCallback } from "react";
 
+import { emissaryFallbackText } from "@/lib/emissary/emissary_fallback";
 import { useAppStore } from "@/lib/hooks/use_app_store";
 import { useToasts } from "@/lib/hooks/use_toasts";
 import { showWrongPPlusBuild } from "@/lib/pplus/pplus_build_dialog";
@@ -14,7 +15,7 @@ import { DolphinMessages as Messages } from "./dolphin.messages";
 import { DolphinStatus, setDolphinOpened, useDolphinStore } from "./use_dolphin_store";
 
 export const useDolphinActions = (dolphinService: DolphinService) => {
-  const { showError, showInfo } = useToasts();
+  const { showError, showInfo, showWarning } = useToasts();
   const netplayStatus = useDolphinStore((store) => store.netplayStatus);
   const playbackStatus = useDolphinStore((store) => store.playbackStatus);
 
@@ -130,13 +131,17 @@ export const useDolphinActions = (dolphinService: DolphinService) => {
           return false;
         }
         setDolphinOpened(DolphinLaunchType.NETPLAY);
+        if (result.emissaryFallback) {
+          // Settings > Game says EmissaryRecomp, but Dolphin plays: never silently.
+          showWarning(emissaryFallbackText(result.emissaryFallback));
+        }
         return true;
       } catch (err) {
         showError(err);
         return false;
       }
     },
-    [getInstallStatus, launcherIsUpToDate, dolphinService, showError],
+    [getInstallStatus, launcherIsUpToDate, dolphinService, showError, showWarning],
   );
 
   /** Starts P+ on Project Punch's own SD card (dolphin/project_punch); resolves to whether it started. */

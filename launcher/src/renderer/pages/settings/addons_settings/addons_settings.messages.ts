@@ -25,6 +25,8 @@ export const AddonsSettingsMessages = {
   autoUpdateDescription: () => "Newer releases download by themselves and play the next time the game starts.",
   playWith: () => "Play with it in Settings > Game.",
   noOnline: () => "This release can't play online yet: Play uses Dolphin until an update can.",
+  // Play with EmissaryRecomp chosen, but Dolphin played: why (its state, or its update's error).
+  playUsesDolphin: (why: string) => `EmissaryRecomp: ${why} Play uses Dolphin.`,
   chooseDisc: () => "Choose disc image",
   staged: (version: string) => `${version} is downloaded and plays the next time the game starts.`,
   jobDownload: () => "Downloading",

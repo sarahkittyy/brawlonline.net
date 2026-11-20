@@ -8,10 +8,12 @@
 //   portable.txt, UserData/     the game's settings, saves and logs (the runtime looks for
 //                               portable.txt up to 4 folders above its program, so they outlive
 //                               every version)
-//   versions/<tag>/engine/      a release's program (`brawl-engine[.exe]`), without the upstream
-//                               launcher (whose updater would replace files under us) and without
-//                               its own portable.txt
-//   current.json                the version that plays
+//   versions/<tag>/             a release's program: CI's builds have `WiiCompiled[.exe]` with its
+//                               DLLs, Sys/ and wii_bootstrap/ at the top; upstream's v0.6.0 had
+//                               `engine/brawl-engine[.exe]` (it plays no one online). Without the
+//                               upstream launcher (whose updater would replace files under us) and
+//                               without the release's own portable.txt and UserData
+//   current.json                the version that plays (its program, its manifest, what it can do)
 //   staged.json                 a newer version, downloaded while the game ran: played next time
 //   game/DATA/                  the disc's game partition (sys/, files/); game.json says whose
 //
@@ -23,13 +25,21 @@ import { createHash } from "crypto";
 import fs from "fs";
 import { async as AsyncStreamZip } from "node-stream-zip";
 import path from "path";
+import { Readable } from "stream";
 import type { ByteProgress } from "utils/copy_file";
 import { throttleProgress } from "utils/copy_file";
 import { removeTree } from "utils/remove_tree";
 
 import { asDiskSpaceError, ensureFreeSpace } from "../install/disk_space";
-import type { EmissaryJob, EmissaryRelease, EmissaryState, EmissaryStatus } from "./types";
-import { EMISSARY_REPO } from "./types";
+import type {
+  EmissaryFallback,
+  EmissaryJob,
+  EmissaryManifest,
+  EmissaryRelease,
+  EmissaryState,
+  EmissaryStatus,
+} from "./types";
+import { EMISSARY_PROTOCOL, EMISSARY_REPO } from "./types";
 
 export const EMISSARY_FOLDER = "emissary-recomp";
 export const EMISSARY_API = `https://api.github.com/repos/${EMISSARY_REPO}/releases`;
@@ -37,6 +47,14 @@ const DOWNLOAD_PREFIX = `https://github.com/${EMISSARY_REPO}/releases/download/`
 
 const MAX_ARCHIVE = 1024 * 1024 * 1024;
 const RELEASE_TTL_MS = 10 * 60 * 1000;
+/**
+ * Play asks for the latest release again when it was last asked longer ago than this (as the
+ * launcher's own update check before Dolphin starts, app_updater.ts), and waits for the answer at
+ * most PLAY_CHECK_TIMEOUT_MS: past it (offline, GitHub down) the installed release plays.
+ */
+export const PLAY_CHECK_MAX_AGE_MS = 60 * 1000;
+export const PLAY_CHECK_TIMEOUT_MS = 5000;
+const MAX_MANIFEST_BYTES = 64 * 1024;
 /** The game partition of NTSC-U Brawl, extracted (6.8 GB). */
 export const GAME_FILES_BYTES = 7_300_000_000;
 /** An unpacked release is about twice its archive (two engines of ~180 MB, compressed ~2:1). */
@@ -59,9 +77,35 @@ export function assetPattern(platform: Platform): RegExp | null {
   }
 }
 
-/** The program inside a version folder. */
+/** The program inside a version folder of upstream's v0.6.0 layout. */
 export function engineRelativePath(platform: Platform): string {
   return path.join("engine", platform === "win32" ? "brawl-engine.exe" : "brawl-engine");
+}
+
+/** The program inside a version folder of CI's builds (with Brawl Online's core). */
+export function wiiCompiledRelativePath(platform: Platform): string {
+  return platform === "win32" ? "WiiCompiled.exe" : "WiiCompiled";
+}
+
+/** Where a release's program may be, the newer layout first. */
+export function programRelativePaths(platform: Platform): string[] {
+  return [wiiCompiledRelativePath(platform), engineRelativePath(platform)];
+}
+
+/** `manifest.json` (EmissaryManifest), or null when it is not one. */
+export function parseManifest(v: unknown): EmissaryManifest | null {
+  const m = v as { version?: unknown; brawlOnline?: unknown; protocol?: unknown };
+  if (
+    !m ||
+    typeof m !== "object" ||
+    typeof m.version !== "string" ||
+    typeof m.brawlOnline !== "string" ||
+    typeof m.protocol !== "number" ||
+    !Number.isInteger(m.protocol)
+  ) {
+    return null;
+  }
+  return { version: m.version.slice(0, 40), brawlOnline: m.brawlOnline.slice(0, 64), protocol: m.protocol };
 }
 
 export class EmissaryError extends Error {}
@@ -97,12 +141,83 @@ export function parseRelease(v: unknown, platform: Platform): EmissaryRelease {
     throw new EmissaryError(`EmissaryRecomp ${r.tag_name} has no download for this computer.`);
   }
   const digest = typeof asset.digest === "string" ? /^sha256:([0-9a-f]{64})$/i.exec(asset.digest) : null;
+  const manifest = (r.assets as { name?: unknown; browser_download_url?: unknown }[]).find(
+    (a) =>
+      a?.name === "manifest.json" &&
+      typeof a.browser_download_url === "string" &&
+      a.browser_download_url.startsWith(DOWNLOAD_PREFIX),
+  );
   return {
     version: r.tag_name,
     assetName: String(asset.name),
     url: asset.browser_download_url,
     size: asset.size,
     sha256: digest ? digest[1].toLowerCase() : null,
+    manifestUrl: manifest ? String(manifest.browser_download_url) : null,
+    manifest: null,
+  };
+}
+
+/** Compares release tags by their numbers (`v0.7.10` after `v0.7.9`). */
+export function compareTags(a: string, b: string): number {
+  const nums = (t: string) => (t.match(/\d+/g) ?? []).map(Number);
+  const x = nums(a);
+  const y = nums(b);
+  for (let i = 0; i < Math.max(x.length, y.length); i++) {
+    const d = (x[i] ?? -1) - (y[i] ?? -1);
+    if (d !== 0) {
+      return d;
+    }
+  }
+  return a.localeCompare(b);
+}
+
+/**
+ * A release feed from a folder, for testing (`PPO_EMISSARY_RELEASES`): `<dir>/<tag>/` holds a
+ * release's assets (`EmissaryRecomp-<tag>-Windows.zip`, `manifest.json`). Answers GitHub's API
+ * (`/releases/latest`: the highest tag; `/releases/tags/<tag>`) and its download URLs, so the
+ * add-on installs and updates from it exactly as from GitHub.
+ */
+export function localReleasesFetch(dir: string): Fetch {
+  const releaseOf = async (tag: string) => {
+    const names = await fs.promises.readdir(path.join(dir, tag)).catch(() => [] as string[]);
+    const assets = [];
+    for (const name of names) {
+      const stat = await fs.promises.stat(path.join(dir, tag, name)).catch(() => null);
+      if (stat?.isFile()) {
+        assets.push({ name, size: stat.size, browser_download_url: `${DOWNLOAD_PREFIX}${tag}/${name}` });
+      }
+    }
+    return { tag_name: tag, assets };
+  };
+  return async (url) => {
+    if (url === `${EMISSARY_API}/latest` || url.startsWith(`${EMISSARY_API}/tags/`)) {
+      let tag = url.startsWith(`${EMISSARY_API}/tags/`)
+        ? decodeURIComponent(url.slice(`${EMISSARY_API}/tags/`.length))
+        : null;
+      if (!tag) {
+        const entries = await fs.promises.readdir(dir, { withFileTypes: true }).catch(() => [] as fs.Dirent[]);
+        tag =
+          entries
+            .filter((e) => e.isDirectory())
+            .map((e) => e.name)
+            .sort(compareTags)
+            .pop() ?? null;
+      }
+      if (!tag || !/^[\w.+-]{1,40}$/.test(tag) || !fs.existsSync(path.join(dir, tag))) {
+        return new Response("", { status: 404 });
+      }
+      return new Response(JSON.stringify(await releaseOf(tag)), { status: 200 });
+    }
+    if (url.startsWith(DOWNLOAD_PREFIX)) {
+      const [tag, name] = url.slice(DOWNLOAD_PREFIX.length).split("/");
+      const file = path.join(dir, path.basename(tag ?? ""), path.basename(name ?? ""));
+      if (!fs.existsSync(file)) {
+        return new Response("", { status: 404 });
+      }
+      return new Response(Readable.toWeb(fs.createReadStream(file)) as ReadableStream, { status: 200 });
+    }
+    return new Response("", { status: 404 });
   };
 }
 
@@ -121,37 +236,76 @@ type Current = {
   installedAt: string;
   /** What the release can do, read from its program (releaseFeatures); absent in records from before. */
   features?: EmissaryFeatures;
+  /** The program, relative to the version folder (programRelativePaths); absent: v0.6.0's layout. */
+  program?: string;
+  /** Its manifest.json; absent for releases without one. */
+  manifest?: EmissaryManifest;
 };
 
 /**
  * What a release supports, found by the switches its program reads. Play needs both: without the
  * read-only card the game would write into the online card the netplay Dolphin also boots, and
- * without the online control it plays no one (EmissaryRecomp v0.6.0 has neither; PR #2 adds them).
+ * without Brawl Online's core (BRAWL_ONLINE_CORE: its online code, in-process) it plays no one.
+ * EmissaryRecomp v0.6.0 has neither. (Records from before the core say `online`, for kalomaze's
+ * companion, which is gone: they count as without it.)
  */
-export type EmissaryFeatures = { readOnlyCard: boolean; online: boolean };
+export type EmissaryFeatures = { readOnlyCard: boolean; core: boolean };
 
 const FEATURE_MARKERS: Record<keyof EmissaryFeatures, string> = {
   readOnlyCard: "BRAWL_SD_VOLATILE_WRITES",
-  online: "BRAWL_ONLINE_IPC",
+  core: "BRAWL_ONLINE_CORE",
 };
 
-/** Scans the program's files (the engine DLLs or the Linux program) for the feature switches' names. */
-export async function releaseFeatures(engineDir: string): Promise<EmissaryFeatures> {
-  const found: EmissaryFeatures = { readOnlyCard: false, online: false };
-  const names = await fs.promises.readdir(engineDir).catch(() => [] as string[]);
-  const targets = names.filter((n) => /^(engine_usa.*\.dll|brawl-engine(\.exe)?|libengine.*\.so)$/i.test(n));
-  for (const name of targets) {
-    const data = await fs.promises.readFile(path.join(engineDir, name)).catch(() => null);
-    if (!data) {
-      continue;
-    }
-    for (const [key, marker] of Object.entries(FEATURE_MARKERS) as [keyof EmissaryFeatures, string][]) {
-      if (!found[key] && data.includes(marker)) {
-        found[key] = true;
+/** Whether `file` holds each of `markers` (read in chunks: the program is about 240 MB). */
+async function fileHolds(file: string, markers: string[]): Promise<boolean[]> {
+  const found = markers.map(() => false);
+  const needles = markers.map((m) => Buffer.from(m, "latin1"));
+  const overlap = Math.max(...needles.map((n) => n.length)) - 1;
+  let tail = Buffer.alloc(0);
+  try {
+    for await (const chunk of fs.createReadStream(file, { highWaterMark: 4 * 1024 * 1024 })) {
+      const data = Buffer.concat([tail, chunk as Buffer]);
+      needles.forEach((n, i) => {
+        found[i] ||= data.includes(n);
+      });
+      if (found.every(Boolean)) {
+        break;
       }
+      tail = data.subarray(Math.max(0, data.length - overlap));
     }
+  } catch {
+    // unreadable: none found
   }
   return found;
+}
+
+/** Scans the program's files (CI's WiiCompiled, v0.6.0's engine DLLs or Linux program) for the feature switches' names. */
+export async function releaseFeatures(programDir: string): Promise<EmissaryFeatures> {
+  const found: EmissaryFeatures = { readOnlyCard: false, core: false };
+  const names = await fs.promises.readdir(programDir).catch(() => [] as string[]);
+  const targets = names.filter((n) =>
+    /^(WiiCompiled(\.exe)?|engine_usa.*\.dll|brawl-engine(\.exe)?|libengine.*\.so)$/i.test(n),
+  );
+  const keys = Object.keys(FEATURE_MARKERS) as (keyof EmissaryFeatures)[];
+  for (const name of targets) {
+    const holds = await fileHolds(
+      path.join(programDir, name),
+      keys.map((k) => FEATURE_MARKERS[k]),
+    );
+    keys.forEach((k, i) => {
+      found[k] ||= holds[i];
+    });
+  }
+  return found;
+}
+
+/** The record plays online with this launcher: the read-only card, the core, and (with a manifest) our protocol. */
+function playsOnline(record: Current | null): boolean {
+  return (
+    record?.features?.readOnlyCard === true &&
+    record.features.core === true &&
+    (!record.manifest || record.manifest.protocol === EMISSARY_PROTOCOL)
+  );
 }
 type GameFiles = { v: 1; iso: string; size: number; mtimeMs: number; bytes: number; extractedAt: string };
 
@@ -198,6 +352,10 @@ export class EmissaryRecomp {
   private abort: AbortController | null = null;
   private lastError: string | null = null;
   private running = false;
+  /** The install() that runs (Play waits for it). */
+  private installing: Promise<EmissaryState> | null = null;
+  /** Play's progress (prepareForPlay), while it waits for a download. */
+  private onJob: ((job: EmissaryJob) => void) | null = null;
 
   constructor(private readonly opts: EmissaryOptions) {
     this.fetchImpl = opts.fetch ?? ((url, init) => fetch(url, init));
@@ -237,8 +395,18 @@ export class EmissaryRecomp {
     if (!current) {
       return null;
     }
-    const exe = path.join(this.versionDir(current.version), engineRelativePath(this.platform));
+    const exe = path.join(this.versionDir(current.version), current.program ?? engineRelativePath(this.platform));
     return (await exists(exe)) ? exe : null;
+  }
+
+  /** Its game is open. */
+  get isRunning(): boolean {
+    return this.running;
+  }
+
+  /** A newer version is downloaded and waits for the game to close (staged.json). */
+  async stagedVersion(): Promise<string | null> {
+    return (await this.readJson<Current>("staged.json"))?.version ?? null;
   }
 
   /** Its game is open (or closed): nothing is removed or switched meanwhile; a staged version is switched to at close. */
@@ -291,7 +459,9 @@ export class EmissaryRecomp {
       if (!res.ok) {
         throw new EmissaryError(`GitHub answered HTTP ${res.status}`);
       }
-      this.release = parseRelease(await res.json(), this.platform);
+      const release = parseRelease(await res.json(), this.platform);
+      release.manifest = await this.readManifest(release);
+      this.release = release;
       this.releaseAt = Date.now();
       this.releaseError = null;
     } catch (err) {
@@ -299,6 +469,33 @@ export class EmissaryRecomp {
       this.log(`EmissaryRecomp: could not read the latest release (${this.releaseError})`);
     }
     return this.release;
+  }
+
+  /** A release's manifest.json (the same one again for the same release); null without one or when unreadable. */
+  private async readManifest(release: EmissaryRelease): Promise<EmissaryManifest | null> {
+    if (!release.manifestUrl) {
+      return null;
+    }
+    if (this.release?.version === release.version && this.release.manifest) {
+      return this.release.manifest;
+    }
+    try {
+      const res = await this.fetchImpl(release.manifestUrl, { headers: { "User-Agent": "BrawlOnline-Launcher" } });
+      const text = res.ok ? await res.text() : "";
+      const manifest = text.length <= MAX_MANIFEST_BYTES ? parseManifest(JSON.parse(text)) : null;
+      if (!manifest) {
+        this.log(`EmissaryRecomp ${release.version}: its manifest.json could not be read (HTTP ${res.status})`);
+      }
+      return manifest;
+    } catch (err) {
+      this.log(`EmissaryRecomp ${release.version}: its manifest.json could not be read (${err})`);
+      return null;
+    }
+  }
+
+  /** The release can play with this launcher, as far as its manifest says (one without a manifest may). */
+  private static manifestFits(release: EmissaryRelease): boolean {
+    return !release.manifest || release.manifest.protocol === EMISSARY_PROTOCOL;
   }
 
   /** The extracted files are the Settings disc's. */
@@ -323,7 +520,9 @@ export class EmissaryRecomp {
     const discReady = this.opts.isoPath() != null && this.opts.isoValid();
     const latest = this.release;
     const newest = staged?.version ?? program?.version;
-    const upToDate = program != null && (latest == null || latest.version === newest);
+    // A latest release made for another launcher protocol is not an update for this launcher.
+    const upToDate =
+      program != null && (latest == null || latest.version === newest || !EmissaryRecomp.manifestFits(latest));
 
     let status: EmissaryStatus;
     if (!this.supported) {
@@ -353,7 +552,8 @@ export class EmissaryRecomp {
             version: program.version,
             programBytes: program.programBytes,
             installedAt: program.installedAt,
-            playsOnline: program.features?.readOnlyCard === true && program.features.online === true,
+            playsOnline: playsOnline(program),
+            brawlOnline: program.manifest?.brawlOnline ?? null,
           }
         : null,
       gameFiles: files ? { bytes: files.bytes } : null,
@@ -382,11 +582,71 @@ export class EmissaryRecomp {
     if (!exe) {
       throw new EmissaryError("EmissaryRecomp is not installed.");
     }
-    const features = (await this.readJson<Current>("current.json"))?.features;
-    if (!features?.readOnlyCard || !features.online) {
+    if (!playsOnline(await this.readJson<Current>("current.json"))) {
       throw new EmissaryError(`EmissaryRecomp ${s.installed?.version} can't play online yet.`);
     }
     return exe;
+  }
+
+  /**
+   * Play with EmissaryRecomp (manager._launchEmissary), the way the launcher's own update gates a
+   * Dolphin start (app_updater.ts assertUpToDate): the latest release is asked for again when the
+   * last answer is older than a minute (waiting at most 5 s; offline, the installed release plays),
+   * a release downloaded while the game ran is switched to, and a newer one is downloaded now
+   * (`onJob`: its progress, for the Play button) before the game starts. Only ever before a start:
+   * a running game is never stopped for an update (it is staged and played next time, setup.ts).
+   * Resolves to the program to start, or to why Dolphin plays instead.
+   */
+  async prepareForPlay(
+    onJob?: (job: EmissaryJob) => void,
+  ): Promise<{ exe: string; version: string } | { fallback: EmissaryFallback }> {
+    if (!this.supported) {
+      return { fallback: { reason: "status", status: "unavailable" } };
+    }
+    if (Date.now() - this.releaseAt > PLAY_CHECK_MAX_AGE_MS) {
+      let timer: NodeJS.Timeout | undefined;
+      const timeout = new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, PLAY_CHECK_TIMEOUT_MS);
+      });
+      await Promise.race([this.latest({ refresh: true }), timeout]);
+      clearTimeout(timer);
+    }
+    // A download the auto-update started: Play waits for it, with its progress.
+    this.onJob = onJob ?? null;
+    try {
+      if (this.installing) {
+        await this.installing.catch(() => undefined);
+      }
+      if (!this.running) {
+        await this.applyStaged();
+      }
+      let s = await this.state();
+      if (s.status === "updateAvailable") {
+        this.log(
+          `EmissaryRecomp: ${s.installed?.version} is not the latest (${s.latest?.version}): updating before playing`,
+        );
+        try {
+          s = await this.install();
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          this.log(`EmissaryRecomp: the update failed, Dolphin plays (${message})`);
+          return { fallback: { reason: "updateFailed", message } };
+        }
+      }
+      if (s.status !== "ready") {
+        return { fallback: { reason: "status", status: s.status } };
+      }
+      const exe = await this.engine();
+      if (!exe || !s.installed) {
+        return { fallback: { reason: "status", status: "notInstalled" } };
+      }
+      if (!s.installed.playsOnline) {
+        return { fallback: { reason: "noOnline" } };
+      }
+      return { exe, version: s.installed.version };
+    } finally {
+      this.onJob = null;
+    }
   }
 
   /** Stops the job that runs. */
@@ -403,9 +663,19 @@ export class EmissaryRecomp {
     if (!this.supported) {
       throw new EmissaryError("EmissaryRecomp has no release for this computer yet.");
     }
-    if (this.job) {
+    if (this.job || this.installing) {
       throw new EmissaryError("EmissaryRecomp is already being downloaded.");
     }
+    const run = this._installJob();
+    this.installing = run;
+    try {
+      return await run;
+    } finally {
+      this.installing = null;
+    }
+  }
+
+  private async _installJob(): Promise<EmissaryState> {
     const abort = new AbortController();
     this.abort = abort;
     this.lastError = null;
@@ -430,6 +700,9 @@ export class EmissaryRecomp {
 
   private setJob(job: EmissaryJob | null) {
     this.job = job;
+    if (job) {
+      this.onJob?.(job);
+    }
     void this.emit();
   }
 
@@ -448,7 +721,9 @@ export class EmissaryRecomp {
         `Could not reach GitHub to download EmissaryRecomp (${this.releaseError ?? "no answer"}).`,
       );
     }
-    if (release && release.version !== have) {
+    // A release for another launcher protocol doesn't replace one that plays (it is installed when
+    // there is none: the card then says it can't play online).
+    if (release && release.version !== have && (!have || EmissaryRecomp.manifestFits(release))) {
       await this.installRelease(release, have ? "update" : "install", signal);
     }
     check();
@@ -470,6 +745,7 @@ export class EmissaryRecomp {
     const report = throttleProgress((c, t) => {
       if (this.job) {
         this.job = { ...this.job, current: c, total: t };
+        this.onJob?.(this.job);
         void this.emit();
       }
     }, 150);
@@ -486,24 +762,30 @@ export class EmissaryRecomp {
     const partial = `${dest}.partial`;
     await removeTree(partial);
     await fs.promises.mkdir(partial, { recursive: true });
+    let top = partial;
+    let program = wiiCompiledRelativePath(this.platform);
     try {
       await (this.opts.unpack ?? unpackArchive)(archive, partial, signal);
       if (signal.aborted) {
         throw new EmissaryCancelled();
       }
-      const top = await findProgramRoot(partial, this.platform);
-      if (!top) {
+      const found = await findProgramRoot(partial, this.platform);
+      if (!found) {
         throw new EmissaryError(
-          `EmissaryRecomp ${release.version}'s download has no ${engineRelativePath(this.platform)}.`,
+          `EmissaryRecomp ${release.version}'s download has no ${wiiCompiledRelativePath(this.platform)}.`,
         );
       }
+      top = found.top;
+      program = found.program;
       // Only the game: the upstream launcher would update files under us, and the release's own
       // portable.txt and UserData would hide ours above it.
       for (const name of ["Brawl Recompiled.exe", "Brawl Recompiled"]) {
         await fs.promises.rm(path.join(top, name), { force: true });
       }
-      await fs.promises.rm(path.join(top, "engine", "portable.txt"), { force: true });
-      await removeTree(path.join(top, "engine", "UserData"));
+      for (const dir of [path.dirname(path.join(top, program)), top]) {
+        await fs.promises.rm(path.join(dir, "portable.txt"), { force: true });
+        await removeTree(path.join(dir, "UserData"));
+      }
       await removeTree(dest);
       await fs.promises.rename(top, dest);
     } catch (err) {
@@ -512,16 +794,28 @@ export class EmissaryRecomp {
       await removeTree(partial).catch(() => undefined);
     }
     if (this.platform !== "win32") {
-      await fs.promises.chmod(path.join(dest, engineRelativePath(this.platform)), 0o755);
+      await fs.promises.chmod(path.join(dest, program), 0o755);
     }
     await this.ensurePortableRoot();
+    if (release.manifest && release.manifest.version !== release.version) {
+      this.log(`EmissaryRecomp ${release.version}: its manifest says version ${release.manifest.version}`);
+    }
     const record: Current = {
       v: 1,
       version: release.version,
       programBytes: await folderBytes(dest),
       installedAt: new Date().toISOString(),
-      features: await releaseFeatures(path.join(dest, "engine")),
+      features: await releaseFeatures(path.dirname(path.join(dest, program))),
+      program,
+      ...(release.manifest ? { manifest: release.manifest } : {}),
     };
+    this.log(
+      `EmissaryRecomp ${release.version}: ${program}, read-only card ${record.features?.readOnlyCard}, ` +
+        `Brawl Online core ${record.features?.core}` +
+        (release.manifest
+          ? `, built from Brawl Online ${release.manifest.brawlOnline}, protocol ${release.manifest.protocol}`
+          : ", no manifest"),
+    );
     if (this.running) {
       await this.writeJson("staged.json", record);
       this.log(`EmissaryRecomp ${release.version} downloaded; it plays once the game is closed`);
@@ -690,15 +984,25 @@ async function exists(p: string): Promise<boolean> {
   );
 }
 
-/** The folder holding `engine/brawl-engine[.exe]`: the archive's top folder (`BrawlRecompiled/`) or itself. */
-export async function findProgramRoot(dir: string, platform: Platform): Promise<string | null> {
-  const rel = engineRelativePath(platform);
-  if (await exists(path.join(dir, rel))) {
-    return dir;
-  }
+/**
+ * The release's folder (the archive itself, or its one top folder, `EmissaryRecomp/`) and its
+ * program in it: CI's `WiiCompiled[.exe]`, or v0.6.0's `engine/brawl-engine[.exe]`.
+ */
+export async function findProgramRoot(
+  dir: string,
+  platform: Platform,
+): Promise<{ top: string; program: string } | null> {
+  const tops = [dir];
   for (const entry of await fs.promises.readdir(dir, { withFileTypes: true })) {
-    if (entry.isDirectory() && (await exists(path.join(dir, entry.name, rel)))) {
-      return path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      tops.push(path.join(dir, entry.name));
+    }
+  }
+  for (const top of tops) {
+    for (const program of programRelativePaths(platform)) {
+      if (await exists(path.join(top, program))) {
+        return { top, program };
+      }
     }
   }
   return null;

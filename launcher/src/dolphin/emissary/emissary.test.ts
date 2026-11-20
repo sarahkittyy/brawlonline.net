@@ -6,16 +6,21 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ZipFile } from "yazl";
 
 import {
+  compareTags,
   EMISSARY_API,
   EmissaryCancelled,
   EmissaryRecomp,
   engineRelativePath,
+  localReleasesFetch,
   parseExtractProgress,
+  parseManifest,
   parseRelease,
+  releaseFeatures,
   unpackArchive,
 } from "./emissary";
-import { emissaryConfig, setTomlValue } from "./launch";
-import type { EmissaryState } from "./types";
+import { configIniOverrides, emissaryConfig, setTomlValue } from "./launch";
+import type { EmissaryJob, EmissaryManifest, EmissaryState } from "./types";
+import { EMISSARY_PROTOCOL } from "./types";
 
 const sha256 = (b: Buffer) => createHash("sha256").update(b).digest("hex");
 const DL = "https://github.com/kalomaze/EmissaryRecomp/releases/download/";
@@ -39,15 +44,28 @@ const releaseZip = (marker: string, online = true) =>
     "BrawlRecompiled/Brawl Recompiled.exe": "upstream launcher",
     "BrawlRecompiled/README.txt": "readme",
     "BrawlRecompiled/engine/brawl-engine.exe": `engine ${marker}`,
-    "BrawlRecompiled/engine/engine_usa.dll": online ? "dll BRAWL_SD_VOLATILE_WRITES BRAWL_ONLINE_IPC" : "dll",
+    "BrawlRecompiled/engine/engine_usa.dll": online ? "dll BRAWL_SD_VOLATILE_WRITES BRAWL_ONLINE_CORE" : "dll",
     "BrawlRecompiled/engine/portable.txt": "upstream portable",
     "BrawlRecompiled/engine/UserData/SD/.keep": "",
   });
 
-function githubRelease(tag: string, zip: Buffer, digest = true) {
+// A release from EmissaryRecomp's CI: WiiCompiled.exe with Brawl Online's core, its DLLs, Sys/,
+// wii_bootstrap/ and a portable.txt + UserData of its own, in one top folder.
+const ciZip = (marker: string, { core = true } = {}) =>
+  zipOf({
+    "EmissaryRecomp/WiiCompiled.exe": `exe ${marker} BRAWL_SD_VOLATILE_WRITES${core ? " BRAWL_ONLINE_CORE" : ""}`,
+    "EmissaryRecomp/SDL3.dll": "sdl",
+    "EmissaryRecomp/Sys/files.txt": "sys",
+    "EmissaryRecomp/wii_bootstrap/shared2/x": "x",
+    "EmissaryRecomp/portable.txt": "theirs",
+    "EmissaryRecomp/UserData/Config.toml": "theirs",
+  });
+
+function githubRelease(tag: string, zip: Buffer, digest = true, manifest = false) {
   return {
     tag_name: tag,
     assets: [
+      ...(manifest ? [{ name: "manifest.json", size: 80, browser_download_url: `${DL}${tag}/manifest.json` }] : []),
       { name: `BrawlRecompiled-${tag}-Linux.tar.gz`, size: 10, browser_download_url: `${DL}${tag}/l.tar.gz` },
       {
         name: `BrawlRecompiled-${tag}-Windows.zip`,
@@ -111,15 +129,26 @@ describe("launch config", () => {
 describe("EmissaryRecomp", () => {
   let dir: string;
   let iso: string;
-  let latest: { tag: string; zip: Buffer };
+  let latest: { tag: string; zip: Buffer; manifest?: EmissaryManifest };
+  let downloads: number;
+  let failDownloads: boolean;
   let extracts: number;
   let isoValid: boolean;
 
   const fetchImpl = async (url: string) => {
     if (url === `${EMISSARY_API}/latest`) {
-      return new Response(JSON.stringify(githubRelease(latest.tag, latest.zip)), { status: 200 });
+      return new Response(JSON.stringify(githubRelease(latest.tag, latest.zip, true, latest.manifest != null)), {
+        status: 200,
+      });
+    }
+    if (url.endsWith("/manifest.json") && latest.manifest) {
+      return new Response(JSON.stringify(latest.manifest), { status: 200 });
     }
     if (url.endsWith("-Windows.zip")) {
+      downloads++;
+      if (failDownloads) {
+        return new Response("", { status: 503 });
+      }
       return new Response(new Uint8Array(latest.zip), { status: 200 });
     }
     return new Response("", { status: 404 });
@@ -149,6 +178,8 @@ describe("EmissaryRecomp", () => {
     await fs.promises.writeFile(iso, "disc");
     latest = { tag: "v0.6.0", zip: await releaseZip("0.6.0") };
     extracts = 0;
+    downloads = 0;
+    failDownloads = false;
     isoValid = true;
   });
 
@@ -194,7 +225,11 @@ describe("EmissaryRecomp", () => {
     expect(extracts).toBe(1);
 
     em.setRunning(false);
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    // The switch runs in the background: wait for it (a busy disk makes it slow).
+    const old = path.join(em.root, "versions", "v0.6.0");
+    for (let i = 0; i < 200 && ((await em.stagedVersion()) != null || fs.existsSync(old)); i++) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
     const after = await em.state();
     expect(after.installed?.version).toBe("v0.6.1");
     expect(after.staged).toBeNull();
@@ -280,6 +315,125 @@ describe("EmissaryRecomp", () => {
     expect(await em.engineForPlay()).toContain("v0.7.0");
   });
 
+  it("installs a CI release (WiiCompiled with the core, its manifest) and plays it", async () => {
+    const manifest = { version: "v0.7.0", brawlOnline: "0.2.6", protocol: EMISSARY_PROTOCOL };
+    latest = { tag: "v0.7.0", zip: await ciZip("0.7.0"), manifest };
+    const em = make();
+    const s = await em.install();
+    expect(s.installed).toMatchObject({ version: "v0.7.0", playsOnline: true, brawlOnline: "0.2.6" });
+    const version = path.join(em.root, "versions", "v0.7.0");
+    expect(await em.engineForPlay()).toBe(path.join(version, "WiiCompiled.exe"));
+    expect(fs.existsSync(path.join(version, "Sys", "files.txt"))).toBe(true);
+    expect(fs.existsSync(path.join(version, "wii_bootstrap", "shared2", "x"))).toBe(true);
+    // The release's own portable root would hide ours: only <emissary-recomp>/portable.txt stays.
+    expect(fs.existsSync(path.join(version, "portable.txt"))).toBe(false);
+    expect(fs.existsSync(path.join(version, "UserData"))).toBe(false);
+    expect(fs.existsSync(path.join(em.root, "portable.txt"))).toBe(true);
+  });
+
+  it("doesn't play a release without the core, or one for another launcher protocol", async () => {
+    latest = { tag: "v0.7.0", zip: await ciZip("0.7.0", { core: false }) };
+    const em = make();
+    expect((await em.install()).installed?.playsOnline).toBe(false);
+    expect(await em.prepareForPlay()).toEqual({ fallback: { reason: "noOnline" } });
+
+    const other = { version: "v0.8.0", brawlOnline: "0.3.0", protocol: EMISSARY_PROTOCOL + 1 };
+    latest = { tag: "v0.8.0", zip: await ciZip("0.8.0"), manifest: other };
+    await em.remove();
+    const s = await em.install();
+    expect(s.installed).toMatchObject({ version: "v0.8.0", playsOnline: false });
+    await expect(em.engineForPlay()).rejects.toThrow(/can't play online yet/);
+  });
+
+  it("keeps the release that plays when the latest is for another launcher protocol", async () => {
+    const fits = { version: "v0.7.0", brawlOnline: "x", protocol: EMISSARY_PROTOCOL };
+    latest = { tag: "v0.7.0", zip: await ciZip("0.7.0"), manifest: fits };
+    const em = make();
+    await em.install();
+    const other = { version: "v0.8.0", brawlOnline: "y", protocol: 99 };
+    latest = { tag: "v0.8.0", zip: await ciZip("0.8.0"), manifest: other };
+    const s = await em.state({ refresh: true });
+    expect(s.upToDate).toBe(true);
+    expect(s.status).toBe("ready");
+    expect(await em.prepareForPlay()).toMatchObject({ version: "v0.7.0" });
+    expect(downloads).toBe(1);
+  });
+
+  it("downloads a newer release before Play starts the game, with its progress", async () => {
+    latest = { tag: "v0.7.0", zip: await ciZip("0.7.0") };
+    const em = make();
+    await em.install();
+    latest = { tag: "v0.7.1", zip: await ciZip("0.7.1") };
+    const jobs: EmissaryJob[] = [];
+    // The last answer is older than a minute: Play asks again and finds v0.7.1.
+    (em as unknown as { releaseAt: number }).releaseAt = 0;
+    const played = await em.prepareForPlay((job) => jobs.push(job));
+    expect(played).toMatchObject({ version: "v0.7.1" });
+    expect("exe" in played && played.exe).toContain(path.join("v0.7.1", "WiiCompiled.exe"));
+    expect(jobs.some((j) => j.kind === "update" && j.phase === "download")).toBe(true);
+    expect(fs.existsSync(path.join(em.root, "versions", "v0.7.0"))).toBe(false);
+  });
+
+  it("falls back to Dolphin when the update can't be downloaded", async () => {
+    latest = { tag: "v0.7.0", zip: await ciZip("0.7.0") };
+    const em = make();
+    await em.install();
+    latest = { tag: "v0.7.1", zip: await ciZip("0.7.1") };
+    failDownloads = true;
+    (em as unknown as { releaseAt: number }).releaseAt = 0;
+    expect(await em.prepareForPlay()).toEqual({
+      fallback: { reason: "updateFailed", message: expect.stringMatching(/HTTP 503/) },
+    });
+    // Nothing half-installed: the old one is still there.
+    expect((await em.state()).installed?.version).toBe("v0.7.0");
+  });
+
+  it("plays the installed release when GitHub can't be reached", async () => {
+    latest = { tag: "v0.7.0", zip: await ciZip("0.7.0") };
+    let offline = false;
+    const em = new EmissaryRecomp({
+      root: path.join(dir, "emissary-recomp"),
+      platform: "win32",
+      isoPath: () => iso,
+      isoValid: () => true,
+      dolphinTool: () => "x",
+      fetch: async (url) => (offline ? Promise.reject(new Error("offline")) : fetchImpl(url)),
+      extract: async (_t, _i, out) => {
+        await fs.promises.mkdir(path.join(out, "DATA", "sys"), { recursive: true });
+        await fs.promises.writeFile(path.join(out, "DATA", "sys", "main.dol"), "dol");
+      },
+    });
+    await em.install();
+    offline = true;
+    (em as unknown as { releaseAt: number }).releaseAt = 0;
+    expect(await em.prepareForPlay()).toMatchObject({ version: "v0.7.0" });
+  });
+
+  it("says why Dolphin plays when it is not ready", async () => {
+    const em = make();
+    expect(await em.prepareForPlay()).toEqual({ fallback: { reason: "status", status: "notInstalled" } });
+    latest = { tag: "v0.7.0", zip: await ciZip("0.7.0") };
+    await em.install();
+    iso = path.join(dir, "other.iso");
+    await fs.promises.writeFile(iso, "another disc");
+    expect(await em.prepareForPlay()).toEqual({ fallback: { reason: "status", status: "needsFiles" } });
+  });
+
+  it("plays a release staged while the game ran", async () => {
+    latest = { tag: "v0.7.0", zip: await ciZip("0.7.0") };
+    const em = make();
+    await em.install();
+    latest = { tag: "v0.7.1", zip: await ciZip("0.7.1") };
+    em.setRunning(true);
+    await em.install();
+    expect(await em.stagedVersion()).toBe("v0.7.1");
+    // Closed without setRunning(false) having switched yet: Play switches.
+    (em as unknown as { running: boolean }).running = false;
+    expect(await em.prepareForPlay()).toMatchObject({ version: "v0.7.1" });
+    expect(await em.stagedVersion()).toBeNull();
+    expect(downloads).toBe(2);
+  });
+
   it("can't be removed while the game runs", async () => {
     const em = make();
     await em.install();
@@ -301,5 +455,92 @@ describe("EmissaryRecomp", () => {
     expect(s.status).toBe("unavailable");
     expect(s.supported).toBe(false);
     await expect(em.install()).rejects.toThrow(/no release for this computer/);
+  });
+});
+
+describe("release manifest and features", () => {
+  it("reads manifest.json", () => {
+    expect(parseManifest({ version: "v0.7.0", brawlOnline: "0.2.6", protocol: 1 })).toEqual({
+      version: "v0.7.0",
+      brawlOnline: "0.2.6",
+      protocol: 1,
+    });
+    expect(parseManifest({ version: "v0.7.0", protocol: 1 })).toBeNull();
+    expect(parseManifest({ version: "v0.7.0", brawlOnline: "x", protocol: "1" })).toBeNull();
+    expect(parseManifest(null)).toBeNull();
+  });
+
+  it("finds the manifest asset", () => {
+    const r = parseRelease(githubRelease("v0.7.0", Buffer.from("z"), true, true), "win32");
+    expect(r.manifestUrl).toBe(`${DL}v0.7.0/manifest.json`);
+    expect(parseRelease(githubRelease("v0.6.0", Buffer.from("z")), "win32").manifestUrl).toBeNull();
+  });
+
+  it("finds the switches across read chunks", async () => {
+    const dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "emissary-f-"));
+    try {
+      const big = Buffer.alloc(4 * 1024 * 1024 - 5, 0x41);
+      await fs.promises.writeFile(
+        path.join(dir, "WiiCompiled.exe"),
+        Buffer.concat([big, Buffer.from("BRAWL_ONLINE_CORE..BRAWL_SD_VOLATILE_WRITES")]),
+      );
+      expect(await releaseFeatures(dir)).toEqual({ readOnlyCard: true, core: true });
+      await fs.promises.writeFile(path.join(dir, "WiiCompiled.exe"), "BRAWL_ONLINE_IPC BRAWL_SD_VOLATILE_WRITES");
+      expect(await releaseFeatures(dir)).toEqual({ readOnlyCard: true, core: false });
+    } finally {
+      await fs.promises.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("orders tags by their numbers", () => {
+    expect(["v0.7.10", "v0.7.9", "v0.6.0"].sort(compareTags)).toEqual(["v0.6.0", "v0.7.9", "v0.7.10"]);
+  });
+});
+
+describe("local releases (PPO_EMISSARY_RELEASES)", () => {
+  it("serves the highest tag's assets as GitHub would", async () => {
+    const dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "emissary-l-"));
+    try {
+      for (const tag of ["v0.7.0", "v0.7.10"]) {
+        await fs.promises.mkdir(path.join(dir, tag));
+        await fs.promises.writeFile(path.join(dir, tag, `EmissaryRecomp-${tag}-Windows.zip`), `zip ${tag}`);
+        await fs.promises.writeFile(
+          path.join(dir, tag, "manifest.json"),
+          JSON.stringify({ version: tag, brawlOnline: "dev", protocol: 1 }),
+        );
+      }
+      const f = localReleasesFetch(dir);
+      const release = parseRelease(await (await f(`${EMISSARY_API}/latest`)).json(), "win32");
+      expect(release).toMatchObject({ version: "v0.7.10", size: "zip v0.7.10".length });
+      expect(await (await f(release.url)).text()).toBe("zip v0.7.10");
+      expect(await (await f(release.manifestUrl!)).json()).toMatchObject({ version: "v0.7.10" });
+      expect(parseRelease(await (await f(`${EMISSARY_API}/tags/v0.7.0`)).json(), "win32").version).toBe("v0.7.0");
+      expect((await f(`${EMISSARY_API}/tags/v9`)).status).toBe(404);
+    } finally {
+      await fs.promises.rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("configIniOverrides", () => {
+  it("takes the -C settings of the ini files the core reads and leaves the rest", () => {
+    expect(
+      configIniOverrides([
+        "-C",
+        "Dolphin.Online.MatchmakingHost=192.168.0.226",
+        "-C",
+        "Dolphin.Online.AccountsUrl=http://192.168.0.226:18080",
+        "-C",
+        "Logger.Options.WriteToFile=True",
+        "--harness-port",
+        "5000",
+        "-C",
+        "SYSCONF.IPL.AR=True",
+      ]),
+    ).toEqual([
+      { file: "Dolphin.ini", section: "Online", key: "MatchmakingHost", value: "192.168.0.226" },
+      { file: "Dolphin.ini", section: "Online", key: "AccountsUrl", value: "http://192.168.0.226:18080" },
+      { file: "Logger.ini", section: "Options", key: "WriteToFile", value: "True" },
+    ]);
   });
 });

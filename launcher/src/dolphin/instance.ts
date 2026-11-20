@@ -48,7 +48,12 @@ export class DolphinInstance extends EventEmitter {
   constructor(
     execPath: string,
     baseParams: string[] = [],
-    private readonly spawnOptions: { env?: Record<string, string>; cwd?: string } = {},
+    private readonly spawnOptions: {
+      env?: Record<string, string>;
+      cwd?: string;
+      /** No pipes for its output (EmissaryRecomp keeps its own console.log, and writes a lot). */
+      ignoreOutput?: boolean;
+    } = {},
   ) {
     super();
     this.baseParams = [...baseParams];
@@ -88,6 +93,11 @@ export class DolphinInstance extends EventEmitter {
     });
   }
 
+  /** The process id, while it runs. */
+  get pid(): number | undefined {
+    return this.process?.pid;
+  }
+
   /** Ends the Dolphin process (a spectated stream's end, docs/design/spectating.md §6.2). */
   stop() {
     this.process?.kill();
@@ -118,6 +128,7 @@ export class DolphinInstance extends EventEmitter {
           child = spawn(executablePath, params, {
             env: { ...sanitizeAppImageEnv(), ...this.spawnOptions.env },
             ...(this.spawnOptions.cwd ? { cwd: this.spawnOptions.cwd } : {}),
+            ...(this.spawnOptions.ignoreOutput ? { stdio: "ignore" as const } : {}),
           });
         }
 

@@ -1,5 +1,6 @@
 import type { AccountsManager } from "@accounts/accounts_manager";
 import { IsoValidity } from "@common/types";
+import { EMISSARY_FOLDER } from "@dolphin/emissary/emissary";
 import { patchedSdCardFolder } from "@dolphin/install/paths";
 import { describeSdCard, PATCHED_SD_IMAGE_NAME } from "@dolphin/install/sd_card";
 import type { DolphinManager } from "@dolphin/manager";
@@ -38,6 +39,7 @@ import type { ArchiveFile } from "./logs_archive";
 import {
   BUG_REPORT_MAX_FILE_BYTES,
   dolphinUserFiles,
+  emissaryFiles,
   folderFiles,
   logsArchiveBuffer,
   writeLogsArchive,
@@ -243,6 +245,19 @@ async function logFiles(
     } catch (err) {
       log.error(`Could not find the ${launchType} Dolphin's User folder: `, err);
     }
+  }
+  // EmissaryRecomp (Settings > Add-ons): its last runs' logs and the crash dumps of the core in it.
+  try {
+    files.push(
+      ...(await emissaryFiles(
+        path.join(dolphinManager.netplayFolder(), EMISSARY_FOLDER, "UserData"),
+        dolphinManager.getInstallation(DolphinLaunchType.NETPLAY).userFolder,
+        "emissary-recomp",
+        BUG_REPORT_MAX_FILE_BYTES,
+      )),
+    );
+  } catch (err) {
+    log.error("Could not read EmissaryRecomp's logs: ", err);
   }
   // The render Dolphin (highlights and replays rendered to video) has a User folder of its own.
   try {

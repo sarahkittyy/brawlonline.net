@@ -1,7 +1,11 @@
-import type { EmissaryState } from "@dolphin/emissary/types";
+import type { EmissaryFallback, EmissaryState } from "@dolphin/emissary/types";
+import Alert from "@mui/material/Alert";
 
+import { UpdatingButton } from "@/app/header/play_button/play_button";
 import { EmissarySettingView } from "@/pages/settings/addons_settings/emissary_setting_view";
 import { PlayProjectPlusWithView } from "@/pages/settings/game_settings/play_project_plus_with_view";
+
+import { emissaryFallbackText } from "./emissary_fallback";
 
 export default {
   title: "lib/EmissaryRecomp",
@@ -14,6 +18,8 @@ const latest = {
   url: "https://github.com/kalomaze/EmissaryRecomp/releases/download/v0.6.0/BrawlRecompiled-v0.6.0-Windows.zip",
   size: 208_641_617,
   sha256: null,
+  manifestUrl: null,
+  manifest: null,
 };
 const base: EmissaryState = {
   status: "notInstalled",
@@ -38,6 +44,7 @@ const installed = (version: string) => ({
   programBytes: 452_000_000,
   installedAt: "2026-11-12T20:00:00.000Z",
   playsOnline: true,
+  brawlOnline: null,
 });
 const files = { bytes: 7_296_000_000 };
 
@@ -163,3 +170,28 @@ export const PlayWithNeedsDisc = choice("dolphin", states.needsDisc);
 export const PlayWithUnavailable = choice("dolphin", states.unavailable);
 export const PlayWithReleaseWithoutOnline = choice("emissary", states.offlineOnly);
 export const PlayWithWhileGameOpen = choice("emissary", states.ready, true);
+
+// Play while a newer release downloads first (EmissaryRecomp.prepareForPlay): the Play button.
+export const PlayDownloadsTheUpdateFirst = () => (
+  <div style={{ padding: 16 }}>
+    <UpdatingButton fillPercent={0.43} phase="updateEmissary" />
+  </div>
+);
+
+// Play with EmissaryRecomp chosen, Dolphin plays: the warning toast (ToastProvider's Alert), per reason.
+const fallbacks: EmissaryFallback[] = [
+  { reason: "noOnline" },
+  { reason: "status", status: "needsFiles" },
+  { reason: "status", status: "needsDisc" },
+  { reason: "updateFailed", message: "Could not download EmissaryRecomp: HTTP 503" },
+];
+
+export const PlayFellBackToDolphin = () => (
+  <div style={{ display: "flex", flexDirection: "column", gap: 12, padding: 16 }}>
+    {fallbacks.map((f, i) => (
+      <Alert key={i} variant="standard" severity="warning" onClose={noop} sx={{ maxWidth: 500, width: "100%" }}>
+        {emissaryFallbackText(f)}
+      </Alert>
+    ))}
+  </div>
+);

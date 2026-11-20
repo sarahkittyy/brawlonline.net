@@ -10,7 +10,7 @@ import electronLog from "electron-log";
 import path from "path";
 
 import type { DolphinManager } from "../manager";
-import { EMISSARY_FOLDER, EmissaryCancelled, EmissaryRecomp } from "./emissary";
+import { EMISSARY_FOLDER, EmissaryCancelled, EmissaryRecomp, localReleasesFetch } from "./emissary";
 import {
   ipc_emissaryCancel,
   ipc_emissaryGetState,
@@ -22,6 +22,9 @@ import {
 const log = electronLog.scope("dolphin/emissary");
 
 const AUTO_UPDATE_FIRST_MS = 60 * 1000;
+/** How often the auto-update looks for a newer release while Play plays with EmissaryRecomp... */
+const AUTO_UPDATE_PLAYING_MS = 30 * 60 * 1000;
+/** ...and otherwise (installed, Dolphin chosen). */
 const AUTO_UPDATE_EVERY_MS = 6 * 60 * 60 * 1000;
 
 // eslint-disable-next-line import/no-default-export
@@ -56,13 +59,21 @@ export default function setupEmissaryIpc({
     const root = path.join(dolphinManager.netplayFolder(), EMISSARY_FOLDER);
     if (!store || store.root !== root) {
       const test = readTestMode(process.env, app.isPackaged);
+      const testing = test.active || !app.isPackaged;
+      // Releases from a folder instead of GitHub (`PPO_EMISSARY_RELEASES=<dir>`, `<dir>/<tag>/`
+      // with the release's assets), to try installs and updates with local builds.
+      const localReleases = testing ? process.env.PPO_EMISSARY_RELEASES?.trim() || undefined : undefined;
+      if (localReleases) {
+        log.warn(`EmissaryRecomp releases come from ${localReleases} (PPO_EMISSARY_RELEASES)`);
+      }
       store = new EmissaryRecomp({
         root,
         isoPath,
         isoValid: () => discValid,
         dolphinTool: () => dolphinManager.dolphinToolPath(),
         // Installs an older release, to try updating (`PPO_EMISSARY_TAG=v0.6.0`).
-        tag: test.active || !app.isPackaged ? process.env.PPO_EMISSARY_TAG?.trim() || undefined : undefined,
+        tag: testing ? process.env.PPO_EMISSARY_TAG?.trim() || undefined : undefined,
+        ...(localReleases ? { fetch: localReleasesFetch(localReleases) } : {}),
         log: (message) => log.info(message),
         onChange: (state) => {
           void ipc_emissaryState.main!.trigger(state).catch(log.error);
@@ -103,11 +114,21 @@ export default function setupEmissaryIpc({
   });
 
   // "Keep up to date automatically": a newer release downloads by itself (staged while the game is
-  // open, emissary.ts). Only once installed; never the first download.
+  // open, emissary.ts; a room, Direct or queue click then starts it once the game is idle,
+  // DolphinManager.closeEmissaryForUpdate). Only once installed; never the first download. Every
+  // 30 minutes while Play plays with it, else every 6 hours. Play itself downloads a newer release
+  // before it starts the game whatever this says (prepareForPlay).
+  let lastAutoUpdate = 0;
   const autoUpdate = async () => {
-    if (!settingsManager.get().settings.emissaryAutoUpdate) {
+    const { emissaryAutoUpdate, playProjectPlusWith } = settingsManager.get().settings;
+    if (!emissaryAutoUpdate) {
       return;
     }
+    const every = playProjectPlusWith === "emissary" ? AUTO_UPDATE_PLAYING_MS : AUTO_UPDATE_EVERY_MS;
+    if (Date.now() - lastAutoUpdate < every - 1000) {
+      return;
+    }
+    lastAutoUpdate = Date.now();
     const em = emissary();
     const state = await em.state({ refresh: true });
     if (state.installed && !state.upToDate && !state.job) {
@@ -119,7 +140,7 @@ export default function setupEmissaryIpc({
   };
   setTimeout(() => {
     void autoUpdate();
-    setInterval(() => void autoUpdate(), AUTO_UPDATE_EVERY_MS).unref();
+    setInterval(() => void autoUpdate(), AUTO_UPDATE_PLAYING_MS).unref();
   }, AUTO_UPDATE_FIRST_MS).unref();
 
   return emissary;

@@ -2,6 +2,7 @@ import type { ChatKeyPress } from "@common/chat_key";
 import type { HighlightListView, HighlightPlayItem } from "@replays/highlights/types";
 
 import type { SyncedDolphinSettings } from "./config/config";
+import type { EmissaryFallback } from "./emissary/types";
 import type { DolphinVersionResponse } from "./install/fetch_latest_version";
 import type { RoomHandOffResult } from "./room_handoff";
 
@@ -258,7 +259,9 @@ export type DolphinSetupPhase =
   | "extractProjectPlus"
   | "updateProjectPlus"
   | "prepareSdCard"
-  | "moveGameFiles";
+  | "moveGameFiles"
+  /** EmissaryRecomp's update, downloaded before it plays (the button says "Updating"). */
+  | "updateEmissary";
 
 export type DolphinDownloadProgressEvent = {
   type: DolphinEventType.DOWNLOAD_PROGRESS;
@@ -319,7 +322,8 @@ export type DolphinEvent = DolphinEventMap[DolphinEventType];
  * release (`cardRelease`) than the launcher's (`release`; install/pplus_builds.ts).
  */
 export type NetplayLaunchResult =
-  | { status: "started" }
+  /** `emissaryFallback`: Settings > Game says EmissaryRecomp, but Dolphin plays (why). */
+  | { status: "started"; emissaryFallback?: EmissaryFallback }
   | { status: "wrongPPlusBuild"; cardRelease: string; release: string };
 
 /**
