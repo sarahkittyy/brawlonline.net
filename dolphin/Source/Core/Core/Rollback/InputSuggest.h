@@ -62,9 +62,10 @@ void SetPeers(std::vector<Peer> peers);
 void NoteLocalInput(int frame, Clock::time_point instant, const u8* input, double field_us);
 
 // Whether `next` (a gfPadStatus) can start an action that `prev` could not, or end one: a press
-// or release of A, B, X, Y, Z, L, R or Start, an analog trigger crossing P+'s light shield, a stick
-// crossing one of the lines P+ acts on (either way). Only such changes go out as suggestions
-// (rules cross and follow).
+// or release of A, B, X, Y, Z, L, R, Start or the D-pad (P+'s taunts), an analog trigger crossing
+// P+'s light shield, a stick crossing one of the lines P+ compares it with (either way), the
+// C-stick starting or ending an input or changing the attack it makes. Only such changes go out
+// as suggestions (rules cross and follow).
 bool Meaningful(const u8* prev, const u8* next);
 // GekkoNet's suggestion judge (gekko_set_suggestion_judge) for gfPadStatus inputs.
 unsigned int WorseCost(const u8* previous, const u8* suggested, const u8* real);
