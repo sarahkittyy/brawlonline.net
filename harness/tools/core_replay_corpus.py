@@ -86,7 +86,17 @@ def play_one(path: Path, idx: int, args: argparse.Namespace) -> Dict[str, Any]:
         try:
             d.stop()
         finally:
-            d.cleanup()
+            # A Dolphin that was killed (it did not exit in time) can hold its log a moment longer:
+            # the folder is removed once it lets go, or left for `ppharness clean`, and the replay's
+            # record is kept either way (the run used to end there, losing the replays still playing).
+            for attempt in range(10):
+                try:
+                    d.cleanup()
+                    break
+                except Exception as e:  # noqa: BLE001 - see above
+                    if attempt == 9:
+                        print(f"{d.name}: left in place ({e})", flush=True)
+                    time.sleep(3)
     rec["seconds"] = round(time.monotonic() - started, 1)
     return rec
 

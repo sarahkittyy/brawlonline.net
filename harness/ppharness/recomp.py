@@ -108,6 +108,12 @@ class RecompInstance(DolphinInstance):
             "SDL_JOYSTICK_HIDAPI_GAMECUBE": "0",
             "SDL_JOYSTICK_HIDAPI": "0",
         })
+        # PPHARNESS_RECOMP_ENV: "NAME=value;NAME=value" for the recomp instances only (a test hook
+        # such as PPR_GPRB_TEST_STALL_AT on the recomp side of a crossplay set).
+        for item in os.environ.get("PPHARNESS_RECOMP_ENV", "").split(";"):
+            name, sep, value = item.partition("=")
+            if sep and name.strip():
+                self.env[name.strip()] = value
         if self.port is None:
             from .instance import find_free_port
             self.port = find_free_port()

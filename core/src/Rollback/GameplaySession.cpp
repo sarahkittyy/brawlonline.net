@@ -61,6 +61,7 @@
 #include "Core/Rollback/ClipRecorder.h"
 #include "Core/Rollback/FrameProfile.h"
 #include "BrawlOnline/Rollback/GameplayRollback.h"
+#include "BrawlOnline/Rollback/LoopWatch.h"
 #include "BrawlOnline/Rollback/PeerData.h"
 #include "Core/Rollback/PresentStats.h"
 #include "Core/Rollback/ReplayKeyframes.h"
@@ -337,6 +338,18 @@ struct State
   // Where the CPU thread is (lock-free, for Status() when the mutex is busy).
   std::atomic<const char*> cpu_where{""};
   std::atomic<s64> cpu_frame{-1};
+  // The loop watch (WatchLoop, on the network thread), lock-free from the CPU thread: when the
+  // session frame last moved (a presented pass began) and cpu_where last changed (steady clock
+  // ns), the loop tops, passes and skipped passes so far, why the last pass was skipped, and the
+  // CPU thread's last GekkoNet update or network poll.
+  std::atomic<bool> watch_armed{false};
+  std::atomic<s64> watch_moved_ns{0};
+  std::atomic<s64> watch_where_ns{0};
+  std::atomic<u32> watch_loop_tops{0};
+  std::atomic<u32> watch_passes{0};
+  std::atomic<u32> watch_skips{0};
+  std::atomic<const char*> watch_skip_why{""};
+  std::atomic<s64> watch_gekko_ns{0};
   Mode mode = Mode::None;
   Phase phase = Phase::Idle;
   std::string error;
@@ -958,6 +971,25 @@ struct State
 };
 
 State s;
+
+s64 SteadyNs()
+{
+  return std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now().time_since_epoch())
+      .count();
+}
+
+// Where the CPU thread is, for Status() and the loop watch.
+void SetWhere(const char* where)
+{
+  s.cpu_where = where;
+  s.watch_where_ns.store(SteadyNs(), std::memory_order_relaxed);
+}
+
+// The CPU thread polled or updated GekkoNet (the loop watch says how long ago).
+void NoteGekkoPoll()
+{
+  s.watch_gekko_ns.store(SteadyNs(), std::memory_order_relaxed);
+}
 
 // LinkHealth (GetLinkHealth): written on the CPU thread, read by the spectate uploader.
 std::atomic<bool> s_health_running{false};
@@ -3493,6 +3525,194 @@ void UpdatePaths(Clock::time_point now)
   });
 }
 
+// ---- The loop watch -----------------------------------------------------------------------------
+// A network session whose frames stop coming. EmissaryRecomp against Dolphin, 2026-11-18: after the
+// start barrier the recomp ran one frame in 10.3 s, its GekkoNet sent nothing (the peer dropped it
+// after 8 s), and neither log said where its game was meanwhile. The network thread (this one,
+// which keeps running whatever the game does) watches the CPU thread's lock-free marks, and once
+// the session frame has not moved for 1 s (then 3 s, 8 s and every 10 s) logs where the CPU
+// thread is and since when, what the main loop did meanwhile (loop tops, passes, skipped passes
+// and why), how much processor time the game's thread got against how busy the PC was (starved,
+// running the whole time, or waiting), GekkoNet's last poll and traffic, and what the engine adds
+// (Engine::StallReport); then how long it was once the frames come again.
+struct WatchBase
+{
+  s64 moved_ns = 0;  // the watch_moved_ns this base belongs to
+  s64 cpu_at_ns = 0;
+  s64 cpu_ns = -1;
+  std::pair<s64, s64> sys{-1, -1};
+  u32 loop_tops = 0, passes = 0, skips = 0;
+  std::array<u64, MAX_LOBBY_PLAYERS> rx_gekko{}, rx_other{}, tx_gekko{}, tx_other{};
+};
+
+struct Watch
+{
+  WatchBase base;
+  int reports = 0;
+};
+Watch s_watch;  // network thread only
+
+constexpr std::array<s64, 3> WATCH_FIRST_MS{1000, 3000, 8000};
+constexpr s64 WATCH_EVERY_MS = 10000;
+// The processor times are read at most this often (a frame moves 60 times a second).
+constexpr s64 WATCH_CPU_EVERY_NS = 200'000'000;
+
+const char* WhereText(std::string_view where)
+{
+  if (where == "guest")
+    return "in the game's code, running the pass it was given";
+  if (where == "frameend")
+    return "in the game's code after the frame's end (drawing, the wait for the retrace)";
+  if (where == "loopend")
+    return "after the loop's end";
+  if (where == "loopend skipped")
+    return "after a skipped pass's loop end (the engine's wait for the retrace)";
+  if (where == "skipped")
+    return "skipping a pass";
+  if (where == "looptop lock")
+    return "at the loop top, waiting for the session's lock";
+  if (where == "looptop" || where == "runframe")
+    return "in the session's code at the loop top";
+  if (where == "hostwait")
+    return "waiting on the host (the other players' inputs, time sync)";
+  if (where == "iowait")
+    return "waiting at the loop top for file and sound loads (guest calls)";
+  if (where == "startbarrier")
+    return "at the start barrier";
+  return "";
+}
+
+// Under s.mutex, or on the network thread for the counters it alone writes.
+void TakeWatchCounters(WatchBase* b)
+{
+  ForEachPeer([&](int slot, const PeerView& p) {
+    b->rx_gekko[slot] = p.rx_gekko;
+    b->rx_other[slot] = p.rx_other;
+    b->tx_gekko[slot] = s_tx[slot].gekko;
+    b->tx_other[slot] = s_tx[slot].other;
+  });
+}
+
+void LogLoopStall(s64 now)
+{
+  const WatchBase& b = s_watch.base;
+  const std::string_view where = s.cpu_where.load();
+  const char* where_text = WhereText(where);
+  const double where_s =
+      static_cast<double>(now - s.watch_where_ns.load(std::memory_order_relaxed)) / 1e9;
+  const u32 tops = s.watch_loop_tops.load(std::memory_order_relaxed) - b.loop_tops;
+  const u32 passes = s.watch_passes.load(std::memory_order_relaxed) - b.passes;
+  const u32 skips = s.watch_skips.load(std::memory_order_relaxed) - b.skips;
+  std::string loop = fmt::format("{} loop tops, {} passes, {} skipped", tops, passes, skips);
+  if (skips > 0)
+    loop += fmt::format(" (the last: {})", s.watch_skip_why.load(std::memory_order_relaxed));
+
+  const s64 cpu = LoopWatch::GameThreadCpuNs();
+  const auto sys = LoopWatch::SystemCpuNs();
+  const double span_s = static_cast<double>(now - b.cpu_at_ns) / 1e9;
+  std::string cpu_text = "its processor time is not known";
+  if (cpu >= 0 && b.cpu_ns >= 0 && span_s > 0)
+  {
+    const double ms = static_cast<double>(cpu - b.cpu_ns) / 1e6;
+    cpu_text = fmt::format("the game's thread got {:.0f} ms of processor time in the last {:.1f} s "
+                           "({:.0f}% of one processor)",
+                           ms, span_s, ms / (span_s * 10.0));
+  }
+  if (sys.second > 0 && b.sys.second > 0 && sys.second > b.sys.second)
+  {
+    cpu_text += fmt::format(", the PC's processors {:.0f}% busy",
+                            100.0 * static_cast<double>(sys.first - b.sys.first) /
+                                static_cast<double>(sys.second - b.sys.second));
+  }
+
+  const s64 gekko_ns = s.watch_gekko_ns.load(std::memory_order_relaxed);
+  std::string net = gekko_ns > 0 ? fmt::format("; GekkoNet last polled {:.0f} ms ago",
+                                               static_cast<double>(now - gekko_ns) / 1e6) :
+                                   std::string("; GekkoNet not polled yet");
+  std::unique_lock<std::recursive_timed_mutex> lk(s.mutex, std::chrono::milliseconds(50));
+  if (!lk.owns_lock())
+  {
+    net += ", the session's lock busy (50 ms)";
+  }
+  else
+  {
+    if (s.gekko && !s.local_handles.empty())
+    {
+      net += fmt::format(", at frame {}, our inputs to {}", gekko_current_frame(s.gekko),
+                         gekko_local_input_frame(s.gekko, s.local_handles[0]));
+    }
+    ForEachPeer([&](int slot, const PeerView& p) {
+      if (p.left)
+        return;
+      net += fmt::format("; P{}: from it {} GekkoNet datagrams and {} others, to it {} and {}",
+                         slot + 1, p.rx_gekko - b.rx_gekko[slot], p.rx_other - b.rx_other[slot],
+                         s_tx[slot].gekko - b.tx_gekko[slot], s_tx[slot].other - b.tx_other[slot]);
+      if (s.gekko && p.handle >= 0 && !p.gekko_dropped)
+      {
+        GekkoNetworkStats st{};
+        gekko_network_stats(s.gekko, p.handle, &st);
+        net += fmt::format(", its inputs to frame {}, ours acked to {}", st.received_frame,
+                           st.acked_frame);
+      }
+    });
+  }
+  if (lk.owns_lock())
+    lk.unlock();
+  const std::string engine = BrawlOnline::GetEngine().StallReport();
+  WARN_LOG_FMT(BRAWLBACK,
+               "gprb: loop watch: session frame {} has not moved for {:.1f} s; the CPU thread is at "
+               "'{}'{}{}{} for {:.1f} s; meanwhile {}; {}{}{}{}",
+               s.cpu_frame.load(), static_cast<double>(now - b.moved_ns) / 1e9, where,
+               *where_text ? " (" : "", where_text, *where_text ? ")" : "", where_s, loop, cpu_text,
+               net, engine.empty() ? "" : "; ", engine);
+}
+
+// Every pass of the network thread.
+void WatchLoop()
+{
+  if (!s.watch_armed.load())
+  {
+    s_watch = {};
+    return;
+  }
+  const s64 now = SteadyNs();
+  const s64 moved = s.watch_moved_ns.load(std::memory_order_relaxed);
+  if (moved != s_watch.base.moved_ns)
+  {
+    if (s_watch.reports > 0)
+    {
+      WARN_LOG_FMT(BRAWLBACK,
+                   "gprb: loop watch: the session frame moves again (frame {}), after {:.1f} s",
+                   s.cpu_frame.load(), static_cast<double>(moved - s_watch.base.moved_ns) / 1e9);
+    }
+    WatchBase& b = s_watch.base;
+    b.moved_ns = moved;
+    b.loop_tops = s.watch_loop_tops.load(std::memory_order_relaxed);
+    b.passes = s.watch_passes.load(std::memory_order_relaxed);
+    b.skips = s.watch_skips.load(std::memory_order_relaxed);
+    if (b.cpu_ns < 0 || now - b.cpu_at_ns >= WATCH_CPU_EVERY_NS)
+    {
+      b.cpu_at_ns = now;
+      b.cpu_ns = LoopWatch::GameThreadCpuNs();
+      b.sys = LoopWatch::SystemCpuNs();
+    }
+    std::unique_lock<std::recursive_timed_mutex> lk(s.mutex, std::try_to_lock);
+    if (lk.owns_lock())
+      TakeWatchCounters(&b);
+    s_watch.reports = 0;
+    return;
+  }
+  const size_t n = static_cast<size_t>(s_watch.reports);
+  const s64 due = n < WATCH_FIRST_MS.size() ?
+                      WATCH_FIRST_MS[n] :
+                      WATCH_FIRST_MS.back() + static_cast<s64>(n + 1 - WATCH_FIRST_MS.size()) *
+                                                 WATCH_EVERY_MS;
+  if ((now - moved) / 1'000'000 < due)
+    return;
+  ++s_watch.reports;
+  LogLoopStall(now);
+}
+
 void NetThread()
 {
   Common::SetCurrentThreadName("GPRB net");
@@ -3508,6 +3728,7 @@ void NetThread()
   auto last_ping = Clock::now() - std::chrono::seconds(1);
   while (s.net_run.load())
   {
+    WatchLoop();
     if (selector.wait(sf::milliseconds(5)))
     {
       // IPv4's datagrams, then IPv6's (Rollback/UdpSocket6.h).
@@ -4478,6 +4699,7 @@ void Hide(Core::System& system)
 
 void EndRunning(Core::System& system, const std::string& reason)
 {
+  s.watch_armed.store(false);
   ResimHide::Restore(system);
   EiReleaseBatch();
   CostSessionEnd();
@@ -5739,7 +5961,10 @@ bool HandleGekkoFrame(Core::System& system)
     // This frame's messages to each peer in one datagram (GekkoBatch).
     GekkoBatch batch;
     if (s.mode == Mode::Network)
+    {
       gekko_network_poll(s.gekko);
+      NoteGekkoPoll();
+    }
     ApplyLiveDelay();
     if (s.local_deferred &&
         (gekko_current_frame(s.gekko) + GekkoDelayFor(s.input_delay) != s.local_deferred_target ||
@@ -5762,6 +5987,7 @@ bool HandleGekkoFrame(Core::System& system)
     }
     const int frame_before = s.mode == Mode::Network ? gekko_current_frame(s.gekko) : -1;
     events = gekko_update_session(s.gekko, &count);
+    NoteGekkoPoll();
     if (s.local_deferred && gekko_current_frame(s.gekko) == frame_before)
     {
       // No frame to run (a wait for the peer follows): the loop top's read goes now, as without.
@@ -6675,11 +6901,15 @@ void SetLoopDefault()
   BrawlOnline::GetEngine().ContinueFrame();  // the replaced li r25,1, then the frame
 }
 
-void Spin()
+// `why`: for the loop watch's log line (WatchLoop), when passes are skipped for a second or more.
+void Spin(const char* why)
 {
   // Skip this pass through the loop without running any game logic.
   BrawlOnline::GetEngine().SkipFrame();
   s.spinning = true;
+  s.watch_skips.fetch_add(1, std::memory_order_relaxed);
+  s.watch_skip_why.store(why, std::memory_order_relaxed);
+  SetWhere("skipped");
 }
 
 bool CpuRunning(Core::System&)
@@ -6712,7 +6942,7 @@ bool PlaybackWait(Core::System& system, Pred pred, std::chrono::milliseconds max
 template <typename Pred>
 bool HostWait(Core::System& system, Pred pred, std::chrono::milliseconds max)
 {
-  s.cpu_where = "hostwait";
+  SetWhere("hostwait");
   const auto deadline = Clock::now() + max;
   while (!pred())
   {
@@ -6759,6 +6989,7 @@ void HardTimeSync(Core::System& system)
       system,
       [&] {
         gekko_network_poll(s.gekko);
+        NoteGekkoPoll();
         return Clock::now() >= until;
       },
       std::chrono::milliseconds(frames * 17 + 100));
@@ -6807,10 +7038,12 @@ bool PumpGekkoInCountdown(Core::System& system)
   if (s.gekko_started)
   {
     gekko_network_poll(s.gekko);
+    NoteGekkoPoll();
     return true;
   }
   int count = 0;
   GekkoGameEvent** events = gekko_update_session(s.gekko, &count);
+  NoteGekkoPoll();
   if (!ProcessGekkoUpdate(system, events, count))
     return false;
   if (s.ops.adv_count > 0)
@@ -7128,6 +7361,10 @@ void StartRunning(Core::System& system)
   s.frames = 0;
   if (s.mode == Mode::Network)
   {
+    // The loop watch (WatchLoop) from here: this is the game's thread.
+    LoopWatch::MarkGameThread();
+    s.watch_moved_ns.store(SteadyNs(), std::memory_order_relaxed);
+    s.watch_armed.store(true);
     s_rollback_ema = 0;
     s_health_rollback.store(0, std::memory_order_relaxed);
     s_health_ping.store(-1, std::memory_order_relaxed);
@@ -7471,7 +7708,7 @@ PlaybackStep PlaybackLoopTopControls(Core::System& system)
     // 30 times a second, so the overlay draws and a screenshot or a capture of the window still
     // gets the paused frame. Commands (PlaybackControl) and frames arriving (ExtendPlayback) wake
     // it.
-    s.cpu_where = waiting ? "replay buffering" : "replay paused";
+    SetWhere(waiting ? "replay buffering" : "replay paused");
     AsyncRequests::GetInstance()->PushEventWhileStopped([] {
       if (g_presenter)
         g_presenter->RedrawLastFrame();
@@ -7632,7 +7869,7 @@ void LogPeerWait(double ms, const std::array<double, MAX_LOBBY_PLAYERS>& silent_
 bool RunFrame(const Core::CPUThreadGuard& guard)
 {
   CostPassEnd();
-  s.cpu_where = "runframe";
+  SetWhere("runframe");
   s.cpu_frame = s.current_frame;
   auto& system = guard.GetSystem();
   auto& ct = BrawlOnline::GetEngine();
@@ -7683,7 +7920,7 @@ bool RunFrame(const Core::CPUThreadGuard& guard)
     switch (PlaybackLoopTopControls(system))
     {
     case PlaybackStep::Wait:
-      Spin();
+      Spin("the replay waits (paused or buffering)");
       return true;
     case PlaybackStep::End:
       s.pb.finished = true;
@@ -7762,8 +7999,10 @@ bool RunFrame(const Core::CPUThreadGuard& guard)
   if (s.ops.adv_count == 0 || s.iteration >= s.ops.adv_count)
   {
     ct.SetRollbackResimulating(false);
+    const bool none = s.ops.adv_count == 0;
     s.iteration = 0;
-    Spin();
+    Spin(none ? "GekkoNet had no frame to run (the other players' inputs had not come)" :
+                "the update's frames were all run");
     return true;
   }
 
@@ -8030,8 +8269,31 @@ bool RunFrame(const Core::CPUThreadGuard& guard)
   if (s.mode != Mode::Playback && s.resim_pass && i + 2 < s.ops.adv_count && ResimHide::Enabled())
     ResimHide::Hide(system);
   SetLoopDefault();
-  s.cpu_where = "guest";
+  SetWhere("guest");
+  s.watch_passes.fetch_add(1, std::memory_order_relaxed);
+  if (!s.resim_pass)
+    s.watch_moved_ns.store(SteadyNs(), std::memory_order_relaxed);
   CostPassStart(s.resim_pass);
+  // Test (PPR_GPRB_TEST_STALL_AT=<session frame>:<ms>): that frame's first presented pass holds
+  // the game's thread this long, as the game's code would if it stalled (the loop watch, and what
+  // the session does meanwhile). Sleeping: the PC's processors stay free.
+  static const std::pair<s64, long> test_stall = [] {
+    const char* v = std::getenv("PPR_GPRB_TEST_STALL_AT");
+    const char* colon = v ? std::strchr(v, ':') : nullptr;
+    if (!colon)
+      return std::pair<s64, long>{-1, 0};
+    return std::pair<s64, long>{std::strtoll(v, nullptr, 10), std::strtol(colon + 1, nullptr, 10)};
+  }();
+  if (!s.resim_pass && test_stall.second > 0 && s.mode == Mode::Network &&
+      static_cast<s64>(s.ops.adv_frame[i]) == test_stall.first && s.snd_first_run)
+  {
+    WARN_LOG_FMT(BRAWLBACK,
+                 "gprb: test: frame {} holds the game's thread {} ms (PPR_GPRB_TEST_STALL_AT)",
+                 test_stall.first, test_stall.second);
+    s.mutex.unlock();
+    std::this_thread::sleep_for(std::chrono::milliseconds(test_stall.second));
+    s.mutex.lock();
+  }
   return true;
 }
 }  // namespace
@@ -10099,7 +10361,7 @@ bool PlaybackLoopTop(const Core::CPUThreadGuard& guard)
       s.await_scene_exit = true;
       return false;
     }
-    s.cpu_where = "replay waiting for frames";
+    SetWhere("replay waiting for frames");
     OSD::AddTypedMessage(OSD::MessageType::SpectateWaiting, "Game found, waiting for data...",
                          1000, OSD::Color::CYAN);
     AsyncRequests::GetInstance()->PushEventWhileStopped([] {
@@ -10115,7 +10377,7 @@ bool PlaybackLoopTop(const Core::CPUThreadGuard& guard)
         std::chrono::milliseconds(33));
     if (s.phase != Phase::Armed)
       return false;
-    Spin();
+    Spin("the replay waits for its first frames");
     return true;
   }
 
@@ -10326,8 +10588,10 @@ void KeepButtonsAfterEnd(Core::System& system, int pad)
 
 bool OnLoopTop(const Core::CPUThreadGuard& guard)
 {
-  s.cpu_where = "looptop";
+  s.watch_loop_tops.fetch_add(1, std::memory_order_relaxed);
+  SetWhere("looptop lock");
   std::lock_guard<std::recursive_timed_mutex> lk(s.mutex);
+  SetWhere("looptop");
   auto& system = guard.GetSystem();
   NoteLoopTop(system);
   ResimHide::Restore(system);
@@ -10513,7 +10777,7 @@ bool OnLoopTop(const Core::CPUThreadGuard& guard)
                    fc + 1, s.gekko_started);
     }
     // StartBarrier: wait on the host for GekkoNet's handshake and the peer.
-    s.cpu_where = "startbarrier";
+    SetWhere("startbarrier");
     auto& ct = BrawlOnline::GetEngine();
     for (;;)
     {
@@ -10525,6 +10789,7 @@ bool OnLoopTop(const Core::CPUThreadGuard& guard)
         // from the local delay): keep them for the first RunFrame.
         int count = 0;
         GekkoGameEvent** events = gekko_update_session(s.gekko, &count);
+        NoteGekkoPoll();
         if (!ProcessGekkoUpdate(system, events, count))
         {
           s.error = s.error.empty() ? "gekko session failed at the start barrier" : s.error;
@@ -10542,6 +10807,7 @@ bool OnLoopTop(const Core::CPUThreadGuard& guard)
       else
       {
         gekko_network_poll(s.gekko);
+        NoteGekkoPoll();
       }
       ApplyPeerDrops();
       // Every player still in the match is at the start barrier; the host waits for the slowest
@@ -10588,7 +10854,7 @@ bool OnLoopTop(const Core::CPUThreadGuard& guard)
       }
       if (!CpuRunning(system))
       {
-        Spin();
+        Spin("the emulation is paused or stopping (at the start barrier)");
         return true;
       }
       LogWait("at the start barrier", s.barrier_since);
@@ -10648,7 +10914,7 @@ bool OnLoopTop(const Core::CPUThreadGuard& guard)
       case MatchStart::Error:
         return false;
       case MatchStart::Stopped:
-        Spin();
+        Spin("the match start stopped the loop");
         return true;
       case MatchStart::Done:
         break;
@@ -10885,7 +11151,7 @@ bool OnLoopTop(const Core::CPUThreadGuard& guard)
     }
     if (!CpuRunning(system))
     {
-      Spin();
+      Spin("the emulation is paused or stopping (at the barrier)");
       return true;
     }
     LogWait("at the barrier", s.barrier_since);
@@ -10901,7 +11167,7 @@ bool OnFrameEnd(const Core::CPUThreadGuard& guard)
 {
   if (s.phase != Phase::Running)
     return false;
-  s.cpu_where = "frameend";
+  SetWhere("frameend");
   auto& system = guard.GetSystem();
   auto& engine = BrawlOnline::GetEngine();
   // The replaced instruction: stw r0,0x100(r23).
@@ -10925,6 +11191,7 @@ bool OnLoopEnd(const Core::CPUThreadGuard& guard)
   if (s.phase != Phase::Running)
     return false;
   std::lock_guard<std::recursive_timed_mutex> lk(s.mutex);
+  SetWhere(s.spinning ? "loopend skipped" : "loopend");
   if (s.spinning)
   {
     s.spinning = false;
@@ -11290,7 +11557,7 @@ bool RunIoWait(const Core::CPUThreadGuard& guard)
       ++s.io_wait_retraces;
     }
     s.io_wait_update = !s.io_wait_update;
-    s.cpu_where = "iowait";
+    SetWhere("iowait");
     return true;
   }
   if (s.io_wait_active)

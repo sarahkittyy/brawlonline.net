@@ -129,6 +129,15 @@ public:
   // save skipped by physical address.
   virtual std::vector<std::pair<std::string, double>> SnapshotStats() const = 0;
   virtual std::vector<std::pair<u32, u64>> PartialGranuleSkips() const = 0;
+
+  // ---- Diagnostics ----
+  // Called from the session's network thread (any thread but the game's) when the game has not
+  // run a session frame for a second or more (GameplaySession's loop watch): what the engine can
+  // tell about its game thread then, appended to that log line ("" for nothing more). Dolphin's
+  // own stall tracer covers its CPU thread. (BRAWL_ONLINE_ENGINE_STALL_REPORT: an engine built
+  // against older cores can leave its override out.)
+#define BRAWL_ONLINE_ENGINE_STALL_REPORT 1
+  virtual std::string StallReport() const { return {}; }
 };
 
 // The process's engine (Dolphin registers its own at start-up; EmissaryRecomp its own).
