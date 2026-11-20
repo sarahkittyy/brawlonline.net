@@ -84,6 +84,7 @@
 #include "Core/Harness/Harness.h"
 #include "Core/NetPlayProto.h"
 #include "Core/Online/Chat.h"
+#include "Core/Online/MatchQoS.h"
 #include "Core/Online/ModsRoom.h"
 #include "Core/PowerPC/JitInterface.h"
 #include "Core/PowerPC/MMU.h"
@@ -450,6 +451,11 @@ struct State
   // Network (net thread, under `net_mutex`).
   std::mutex net_mutex;
   ENetHost* host = nullptr;
+  // The hosts' voice marks, off while bulk goes out and a second after, and Windows' Wi-Fi media
+  // streaming mode, from StartNetwork to StopNetwork (Online/MatchQoS.h).
+  std::optional<Online::MatchQoS::Marking> qos4, qos6;
+  Clock::time_point qos_bulk_until{};
+  std::optional<Online::MatchQoS::StreamingMode> streaming;
   std::thread net_thread;
   std::atomic<bool> net_run{false};
   // A room session's UPnP mapping of its port (MapRoomPort), removed by StopNetwork.
@@ -2751,6 +2757,17 @@ void NetThread()
       if (s.peers[slot].slot == slot)
         PaceSD(s.peers[slot], s.sd_pace[slot], now);
     }
+    // Bulk goes unmarked: a joiner's machine image, SD card chunks, and a second after the last.
+    bool bulk = !s.image_tx.empty();
+    for (const State::SDPace& pace : s.sd_pace)
+      bulk |= !pace.queue.empty();
+    if (bulk)
+      s.qos_bulk_until = now + std::chrono::seconds(1);
+    for (auto* qos : {&s.qos4, &s.qos6})
+    {
+      if (*qos)
+        (*qos)->SetBulk(now < s.qos_bulk_until);
+    }
     // Keep connecting to every peer without a link (both sides do).
     StepProbe(now);
     for (PeerLink& p : s.peers)
@@ -2826,6 +2843,18 @@ void NetThread()
             SendProbe(ev.peer);
             break;
           }
+#ifdef _WIN32
+          // Windows marks the traffic to each peer (Online/MatchQoS.h).
+          if (auto& qos = host == s.host ? s.qos4 : s.qos6)
+          {
+            const ENetAddress& a = ev.peer->address;
+            u8 ip6[16];
+            if (!Common::ENet::IsIpv6(a))
+              qos->Track(ntohl(a.host), a.port);
+            else if (enet_ipv6_handle_bytes(a.host, ip6) == 0)
+              qos->Track(ip6, a.port);
+          }
+#endif
           // ENet hands out its peers again without clearing `data`: a connection this side did not
           // start learns its slot from its hello, whatever an earlier one left there.
           bool outgoing = false;
@@ -3036,6 +3065,7 @@ void StartIpv6Host()
     return;
   }
   s.host6->intercept = InterceptAcks;
+  s.qos6.emplace(static_cast<Online::MatchQoS::NativeSocket>(s.host6->socket), true);
   s.server6 = *server;
   AddLog(fmt::format("IPv6: on {} beside IPv4", Common::ENet::EndpointText(s.host6->address)));
 }
@@ -3055,7 +3085,10 @@ bool StartNetwork()
     return false;
   }
   s.host->intercept = InterceptAcks;
+  s.qos4.emplace(static_cast<Online::MatchQoS::NativeSocket>(s.host->socket), false);
   StartIpv6Host();
+  s.qos_bulk_until = {};
+  s.streaming.emplace();
   s.net_run = true;
   s.net_thread = std::thread(NetThread);
   return true;
@@ -3084,15 +3117,18 @@ void StopNetwork()
     if (s.upnp_mapped)
       Common::UPnP::UnmapUdpPort(s.host->address.port);
 #endif
+    s.qos4.reset();
     enet_host_destroy(s.host);
     s.host = nullptr;
   }
   if (s.host6)
   {
     enet_host_flush(s.host6);
+    s.qos6.reset();
     enet_host_destroy(s.host6);
     s.host6 = nullptr;
   }
+  s.streaming.reset();
   s.seen_endpoint6.clear();
   s.upnp_mapped = false;
   s.gekko_rx.clear();

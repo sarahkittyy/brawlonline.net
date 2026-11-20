@@ -1679,6 +1679,24 @@ Under stalls the hold, the delay, the hitches and the modelled screen improved i
 
 **Tests.** New `PresentHoldTest` (9: without stalls the offset is the old one for 2,000 random windows; late rollbacks within a field still count; stalls a field after the median are left out, just under it counted; a PC behind its schedule as before; under 20 left, no hold; only the window is read). Dolphin unit tests: 1,664 pass, the 3 that fail on main fail (IniFile, PatchAllowlist, PageTableHostMapping MemChecks). **Not tested:** a real GPU or driver that hitches (the reporter's), VSync, fullscreen, a real slow PC, macOS / Linux / Steam Deck, the Qt Dolphin.exe.
 
+## Match traffic as voice for Wi-Fi and routers (2026-11-18)
+
+In the harness's Wi-Fi model, busy channels made most of the waits for the peer. Wi-Fi (WMM) and
+routers that queue by DSCP send voice first, so both session types mark their sockets' traffic as
+voice (`Online::MatchQoS`): DSCP 46 with `IP_TOS` / `IPV6_TCLASS`, plus the voice service type on
+macOS; on Windows, qWAVE's voice traffic type per destination, which goes out as DSCP 56 (CS7,
+802.1p 7): without administrator rights a flow's DSCP cannot be set to 46 (`QOSSetOutgoingDSCPValue`
+fails with access denied). A whole-machine session's sockets go
+unmarked while they send a joiner's machine image or SD card, and a second after. Windows also turns
+on Wi-Fi media streaming mode (no background scans) while a session's network is up.
+`PPR_MATCH_QOS=0` turns it off. Checked on Linux (`MatchQoSTest`, and DSCP 46 on every datagram of
+sessions through netsim). On Windows 11 (PR #64 review), the same qWAVE calls from a small program
+(not Dolphin) to a receiver in WSL: no mark before the flow, DSCP 56 with it (IPv4 and IPv6), 0 while
+set to best effort and after the handle closes, `IP_TOS` ignored, no change in `sendto`'s cost, and
+`SetSocketMediaStreamingMode` returns S_OK at once even with no Wi-Fi connected; the four changed
+files compile with MSVC (/W4 /WX). Not checked: a real Dolphin session on Windows, macOS at all, any
+gain on a real Wi-Fi network.
+
 ## Open issues
 
 Resolved in Phase 6: the dual-core divergence (ground-collision list heads, gp-v11), the Peach article crash and the `GXWaitDrawDone` stalls (the GX FIFO ring tail), the 11-frame sync-test bursts (camera quake controller, gp-v12), stopping and re-attaching sounds. Resolved in Phase 8: every failure of the coverage sweep (gp-v13 to gp-v19, the file IO wait). Resolved in Phase 9: the nondeterministic render/effect hang (a load read the base snapshot while the eviction job was still merging into it). Resolved in Phase 12: the Smashville desync from frame 0 (issue 7).

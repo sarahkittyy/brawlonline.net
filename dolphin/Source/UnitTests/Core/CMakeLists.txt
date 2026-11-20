@@ -113,6 +113,8 @@ add_dolphin_test(GameAliveTest Online/GameAliveTest.cpp)
 add_dolphin_test(RoomMessagesTest Online/RoomMessagesTest.cpp)
 # Watching the room's game: the watch channel's packets into a live replay (Core/Online/RoomWatch).
 add_dolphin_test(RoomWatchTest Online/RoomWatchTest.cpp)
+# A match's sockets mark what they send as voice, checked on the wire (Core/Online/MatchQoS).
+add_dolphin_test(MatchQoSTest Online/MatchQoSTest.cpp)
 # Match rules: get-ticket-resp's `rules`, checked before they reach the game (Core/Online/MatchRules).
 add_dolphin_test(MatchRulesTest Online/MatchRulesTest.cpp)
 add_dolphin_test(SpecialAssetsTest Online/SpecialAssetsTest.cpp)

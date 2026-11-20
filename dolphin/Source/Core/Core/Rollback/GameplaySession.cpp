@@ -58,6 +58,7 @@
 #include "Core/Online/GameAlive.h"
 #include "Core/Online/GameBridge.h"
 #include "Core/Online/GameSetup.h"
+#include "Core/Online/MatchQoS.h"
 #include "Core/PowerPC/MMU.h"
 #include "Core/PowerPC/PowerPC.h"
 #include "Core/Rollback/ClipRecorder.h"
@@ -353,6 +354,10 @@ struct State
   std::unique_ptr<sf::UdpSocket> socket;
   // IPv6 beside it (ConnectOptions::local_ip6), if this match has IPv6.
   std::unique_ptr<UdpSocket6> socket6;
+  // The IPv4 socket's voice mark (UdpSocket6 marks itself) and Windows' Wi-Fi media streaming
+  // mode, from Connect to CloseNetwork (Online/MatchQoS.h).
+  std::optional<Online::MatchQoS::Marking> qos4;
+  std::optional<Online::MatchQoS::StreamingMode> streaming;
   // This player's in-game port, the deciding player's (-1: not known yet), and whether the
   // session was configured with ports (ConnectOptions::local_slot) rather than as a 1v1.
   int local_slot = 0;
@@ -1731,6 +1736,8 @@ sf::Socket::Status SendTo(const void* data, std::size_t size, const sf::IpAddres
     return sf::Socket::Status::Error;
   if (TestIpv4Dropped())
     return sf::Socket::Status::Done;
+  if (s.qos4)
+    s.qos4->Track(to.toInteger(), port);
   return s.socket->send(data, size, to, port);
 }
 
@@ -3839,6 +3846,8 @@ void CloseNetwork()
     // GekkoNet sends from the CPU thread under s.mutex.
     std::lock_guard<std::recursive_timed_mutex> slk(s.mutex);
     Suggest::Disarm();
+    s.qos4.reset();
+    s.streaming.reset();
     if (s.socket)
       s.socket->unbind();
     s.socket.reset();
@@ -8268,6 +8277,13 @@ std::optional<std::string> ArmSyncTest(const SyncTestOptions& options)
   return std::nullopt;
 }
 
+// SFML keeps a socket's handle protected; the match's IPv4 socket is marked by it.
+class MarkableUdpSocket : public sf::UdpSocket
+{
+public:
+  using sf::Socket::getNativeHandle;
+};
+
 std::optional<std::string> Connect(const ConnectOptions& options)
 {
   std::lock_guard<std::recursive_timed_mutex> lk(s.mutex);
@@ -8430,13 +8446,12 @@ std::optional<std::string> Connect(const ConnectOptions& options)
   s.unheard_ports = 0;
   s.twos_ready_until.reset();
   s.twos_end = {};
-  s.socket = std::make_unique<sf::UdpSocket>();
-  s.socket->setBlocking(false);
-  if (s.socket->bind(options.local_port) != sf::Socket::Status::Done)
-  {
-    s.socket.reset();
+  auto socket4 = std::make_unique<MarkableUdpSocket>();
+  socket4->setBlocking(false);
+  if (socket4->bind(options.local_port) != sf::Socket::Status::Done)
     return fmt::format("cannot bind UDP port {}", options.local_port);
-  }
+  s.qos4.emplace(static_cast<Online::MatchQoS::NativeSocket>(socket4->getNativeHandle()), false);
+  s.socket = std::move(socket4);
   s.socket6.reset();
   bool any6 = false;
   ForEachPeer([&](int, const PeerView& p) { any6 |= p.ip6.has_value(); });
@@ -8477,6 +8492,7 @@ std::optional<std::string> Connect(const ConnectOptions& options)
                options.host ? "host" : "joiner", s.local_slot + 1, ActivePlayers() - 1);
   s.phase = Phase::Connecting;
   s.connecting_since = Clock::now();
+  s.streaming.emplace();
   s.net_run = true;
   s.net_thread = std::thread(NetThread);
   return std::nullopt;

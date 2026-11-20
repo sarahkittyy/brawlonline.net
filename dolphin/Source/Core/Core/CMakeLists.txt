@@ -606,6 +606,8 @@ add_library(core
   Online/GameSetup.h
   Online/Matchmaking.cpp
   Online/Matchmaking.h
+  Online/MatchQoS.cpp
+  Online/MatchQoS.h
   Online/MatchRules.cpp
   Online/MatchRules.h
   Online/SpecialAssets.cpp
