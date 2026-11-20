@@ -1,4 +1,5 @@
 import type {
+  AccountsMe,
   AdminCodeOwner,
   AdminPlayer,
   AdminUser,
@@ -87,7 +88,8 @@ export type UserData = {
 
 export interface BackendService {
   validateUserId(userId: string): Promise<{ displayName: string; connectCode: string }>;
-  fetchUserData(): Promise<UserData | undefined>;
+  /** `account`: the record the start's session restore just got (takeRestoredUser), not asked for again. */
+  fetchUserData(options?: { account?: AccountsMe }): Promise<UserData | undefined>;
   fetchRankedNetplayProfile(userId: string): Promise<RankedProfile | undefined>;
   /** A player's public profile (docs/design/profiles.md) by uid or connect code; anyone's, no login needed. */
   fetchProfile(id: string): Promise<PlayerProfile>;

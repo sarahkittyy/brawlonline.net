@@ -132,6 +132,8 @@ export interface RootSettingsSchema {
   modsHashVersion?: string;
   previousVersion?: string;
   pendingUpdateVersion?: string;
+  // The page's localStorage was moved from file:// to app://launcher (main/app_scheme.ts); absent before.
+  rendererStorageMoved?: boolean;
 }
 
 /**

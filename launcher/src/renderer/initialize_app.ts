@@ -58,7 +58,9 @@ export async function initializeApp(services: Services) {
       if (user) {
         // Past the deadline the launcher opens as if the server were down; the error still shows
         // if the request fails later, and the header gets the answer either way (refreshUserData).
-        const fetched = backendService.fetchUserData().then(
+        // The record the restore just got from the server, if it answered in time: no second request.
+        const account = authService.getMultiAccountService().takeRestoredUser() ?? undefined;
+        const fetched = backendService.fetchUserData({ account }).then(
           (data) => ({ data }),
           () => {
             const reason = !navigator.onLine ? Messages.youAreOffline() : Messages.serversMayBeDown(PRODUCT_NAME);

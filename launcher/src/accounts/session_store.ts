@@ -1,4 +1,5 @@
 import electronLog from "electron-log";
+import { readFileSync } from "node:fs";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "path";
 
@@ -29,6 +30,22 @@ export class SessionStore {
 
   static defaultPath(userDataDir: string): string {
     return path.join(userDataDir, "sessions.json");
+  }
+
+  /**
+   * Reads the file now, synchronously (it is tiny), at start before the app is ready (only
+   * decrypting a token needs it). An async read's callback runs only once Electron's message loop
+   * does, after the window's creation: the first request after ready waited ~80 ms for its token.
+   */
+  loadSync(): void {
+    if (this.cache) {
+      return;
+    }
+    try {
+      this.cache = parseSessionFile(readFileSync(this.filePath, "utf8"));
+    } catch {
+      this.cache = {};
+    }
   }
 
   async get(uid: string): Promise<string | undefined> {
@@ -84,8 +101,7 @@ export class SessionStore {
       return this.cache;
     }
     try {
-      const parsed = JSON.parse(await readFile(this.filePath, "utf8")) as SessionFile;
-      this.cache = parsed && parsed.version === 1 && parsed.sessions ? { ...parsed.sessions } : {};
+      this.cache = parseSessionFile(await readFile(this.filePath, "utf8"));
     } catch {
       this.cache = {};
     }
@@ -100,4 +116,9 @@ export class SessionStore {
     await writeFile(tmp, JSON.stringify(data, null, 2), { mode: 0o600 });
     await rename(tmp, this.filePath);
   }
+}
+
+function parseSessionFile(text: string): Record<string, string> {
+  const parsed = JSON.parse(text) as SessionFile;
+  return parsed && parsed.version === 1 && parsed.sessions ? { ...parsed.sessions } : {};
 }
