@@ -11,9 +11,13 @@
 import { readdir } from "fs/promises";
 import path from "path";
 
-import { readHiresTexturesSetting } from "./mods/mod_textures";
+import { readCacheHiresTexturesSetting, readHiresTexturesSetting } from "./mods/mod_textures";
 
-export type PlaybackTextures = { loadPath: string };
+/**
+ * `loadPath`: the netplay User folder's `Load`. `prefetch` false: Play has Prefetch Custom Textures
+ * off, so playback doesn't load the whole pack into memory at boot either (its own default is on).
+ */
+export type PlaybackTextures = { loadPath: string; prefetch?: false };
 
 async function hasEntries(dir: string): Promise<boolean> {
   return (await readdir(dir).catch(() => [])).length > 0;
@@ -40,5 +44,6 @@ export async function findPlaybackTextures(
   if (await hasEntries(path.join(playbackUser, "Load", "Textures"))) {
     return null;
   }
-  return { loadPath: path.join(netplayUser, "Load") };
+  const loadPath = path.join(netplayUser, "Load");
+  return (await readCacheHiresTexturesSetting(netplayUser)) === false ? { loadPath, prefetch: false } : { loadPath };
 }

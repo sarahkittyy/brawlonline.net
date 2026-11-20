@@ -46,6 +46,14 @@ describe("findPlaybackTextures", () => {
     expect(await findPlaybackTextures(netplayUser, playbackUser)).toBeNull();
   });
 
+  it("doesn't prefetch the pack when Play doesn't (Dolphin's default is on)", async () => {
+    const loadPath = path.join(netplayUser, "Load");
+    await put("netplay/User/Config/GFX.ini", "[Settings]\nHiresTextures = True\nCacheHiresTextures = False\n");
+    expect(await findPlaybackTextures(netplayUser, playbackUser)).toEqual({ loadPath, prefetch: false });
+    await put("netplay/User/Config/GFX.ini", "[Settings]\nCacheHiresTextures = True\nHiresTextures = True\n");
+    expect(await findPlaybackTextures(netplayUser, playbackUser)).toEqual({ loadPath });
+  });
+
   it("keeps textures a player put in the playback User folder itself", async () => {
     await put("netplay/User/Config/GFX.ini", "[Settings]\nHiresTextures = True\n");
     await put("playback/User/Load/Textures/RSBE01/tex.png");

@@ -128,6 +128,19 @@ describe("buildPlaybackDolphinArgs", () => {
     ]);
   });
 
+  it("doesn't prefetch the textures when Play doesn't", () => {
+    const load = path.resolve("/data/netplay/User/Load");
+    const args = buildPlaybackDolphinArgs({ ...input, textures: { loadPath: load, prefetch: false } });
+    expect(args.slice(-6)).toEqual([
+      "-C",
+      `Dolphin.General.LoadPath=${load}`,
+      "-C",
+      "Graphics.Settings.HiresTextures=True",
+      "-C",
+      "Graphics.Settings.CacheHiresTextures=False",
+    ]);
+  });
+
   it("leaves the textures out, not the replay, for a Load path with '='", () => {
     const args = buildPlaybackDolphinArgs({ ...input, textures: { loadPath: path.resolve("/a=b/User/Load") } });
     expect(args.some((a) => a.includes("LoadPath") || a.includes("HiresTextures"))).toBe(false);
