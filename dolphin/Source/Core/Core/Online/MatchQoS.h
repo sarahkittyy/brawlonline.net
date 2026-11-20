@@ -4,7 +4,10 @@
 // A match's packets marked as voice, so Wi-Fi (WMM) and routers that queue by DSCP send them
 // first: busy Wi-Fi channels made most of the waits for the peer in the harness's Wi-Fi model.
 // DSCP 46 with IP_TOS / IPV6_TCLASS (and the voice service type on macOS); Windows ignores IP_TOS,
-// so qWAVE marks the traffic to each destination there (Track). PPR_MATCH_QOS=0 turns it off.
+// so qWAVE marks the traffic to each destination there (Track). qWAVE's voice type goes out as
+// DSCP 56 (CS7, 802.1p 7), not 46: only an administrator may set a flow's DSCP
+// (QOSSetOutgoingDSCPValue fails with ERROR_ACCESS_DENIED), as for Dolphin netplay's
+// Common::QoSSession. PPR_MATCH_QOS=0 turns it off.
 
 #pragma once
 

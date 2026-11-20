@@ -1659,11 +1659,18 @@ design as Slippi 3.7's input suggestions and Melee Unlocked's early inputs.
 In the harness's Wi-Fi model, busy channels made most of the waits for the peer. Wi-Fi (WMM) and
 routers that queue by DSCP send voice first, so both session types mark their sockets' traffic as
 voice (`Online::MatchQoS`): DSCP 46 with `IP_TOS` / `IPV6_TCLASS`, plus the voice service type on
-macOS; on Windows, qWAVE's voice traffic type per destination. A whole-machine session's sockets go
+macOS; on Windows, qWAVE's voice traffic type per destination, which goes out as DSCP 56 (CS7,
+802.1p 7): without administrator rights a flow's DSCP cannot be set to 46 (`QOSSetOutgoingDSCPValue`
+fails with access denied). A whole-machine session's sockets go
 unmarked while they send a joiner's machine image or SD card, and a second after. Windows also turns
 on Wi-Fi media streaming mode (no background scans) while a session's network is up.
 `PPR_MATCH_QOS=0` turns it off. Checked on Linux (`MatchQoSTest`, and DSCP 46 on every datagram of
-sessions through netsim); not on Windows or macOS.
+sessions through netsim). On Windows 11 (PR #64 review), the same qWAVE calls from a small program
+(not Dolphin) to a receiver in WSL: no mark before the flow, DSCP 56 with it (IPv4 and IPv6), 0 while
+set to best effort and after the handle closes, `IP_TOS` ignored, no change in `sendto`'s cost, and
+`SetSocketMediaStreamingMode` returns S_OK at once even with no Wi-Fi connected; the four changed
+files compile with MSVC (/W4 /WX). Not checked: a real Dolphin session on Windows, macOS at all, any
+gain on a real Wi-Fi network.
 
 ## Open issues
 
