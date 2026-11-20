@@ -32,11 +32,15 @@ public:
   virtual void RewindTo(u64 write_seq) {}
 };
 
-// The SD card image file, read and written in place (Dolphin outside a session).
+class SDCardReadAhead;
+
+// The SD card image file, read and written in place (Dolphin outside a session; a whole-machine
+// session reads the player's own image through one, read only). Its reads are read ahead.
 class SDCardFileStorage final : public SDCardStorage
 {
 public:
-  explicit SDCardFileStorage(const std::string& path);
+  explicit SDCardFileStorage(const std::string& path, bool read_only = false);
+  ~SDCardFileStorage() override;
 
   bool IsOpen() const override;
   u64 GetSize() const override;
@@ -45,6 +49,7 @@ public:
 
 private:
   File::IOFile m_file;
+  std::unique_ptr<SDCardReadAhead> m_read_ahead;
 };
 
 // The storage of the emulated session about to boot, or nullptr for the image file. Set by
