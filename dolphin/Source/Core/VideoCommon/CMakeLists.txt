@@ -130,6 +130,8 @@ add_library(videocommon
   OnScreenUIKeyMap.h
   OpcodeDecoding.cpp
   OpcodeDecoding.h
+  OutputResampling.cpp
+  OutputResampling.h
   PerfQueryBase.cpp
   PerfQueryBase.h
   PerformanceMetrics.cpp

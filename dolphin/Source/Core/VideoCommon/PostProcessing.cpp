@@ -3,6 +3,7 @@
 
 #include "VideoCommon/PostProcessing.h"
 
+#include <cstddef>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -434,6 +435,7 @@ void PostProcessing::RecompileShader()
   // and pipelines even if there might not be need to.
 
   m_default_pipeline.reset();
+  ResetResamplingPrograms();
   m_pipeline.reset();
   m_default_pixel_shader.reset();
   m_pixel_shader.reset();
@@ -450,6 +452,7 @@ void PostProcessing::RecompileShader()
 void PostProcessing::RecompilePipeline()
 {
   m_default_pipeline.reset();
+  ResetResamplingPrograms();
   m_pipeline.reset();
   CompilePipeline();
 }
@@ -470,10 +473,165 @@ bool PostProcessing::NeedsIntermediaryBuffer() const
   return !m_config.GetShader().empty();
 }
 
+bool PostProcessing::UpdateResamplingPlan(u32 source_width, u32 source_height, u32 target_width,
+                                          u32 target_height)
+{
+  const std::array<u32, 4> dimensions{source_width, source_height, target_width, target_height};
+  const float sharpness = g_ActiveConfig.fOutputResamplingSharpness;
+  if (dimensions == m_resampling_dimensions && sharpness == m_resampling_sharpness)
+    return m_resampling_plan_valid;
+
+  m_resampling_dimensions = dimensions;
+  m_resampling_sharpness = sharpness;
+  m_resampling_plan =
+      CreateOutputResamplingPlan(source_width, source_height, target_width, target_height);
+  m_resampling_plan_valid = false;
+  for (auto& texture : m_resampling_tables)
+    texture.reset();
+
+  // Usually nothing to compile: a resize changes the sizes and the weights, seldom the passes.
+  for (u32 i = 0; i < m_resampling_plan.count; ++i)
+  {
+    if (!GetResamplingPipeline(m_resampling_plan.passes[i]))
+      return false;
+  }
+
+  // The weights depend only on the sizes and the sharpness, so they are made once and stay
+  // on the GPU until one of those changes.
+  for (u32 i = 0; i < m_resampling_plan.count; ++i)
+  {
+    OutputResamplingPass& pass = m_resampling_plan.passes[i];
+    if (pass.type != OutputResamplingPassType::Table)
+      continue;
+
+    const OutputResamplingTable table = CreateOutputResamplingTable(
+        pass.kernel, pass.source_length, pass.target_length, sharpness);
+    const u32 width = table.taps + 1;
+    if (table.taps == 0 || width > g_backend_info.MaxTextureSize ||
+        table.rows > g_backend_info.MaxTextureSize)
+    {
+      return false;
+    }
+    const TextureConfig config(width, table.rows, 1, 1, 1, AbstractTextureFormat::R32F, 0,
+                               AbstractTextureType::Texture_2DArray);
+    m_resampling_tables[i] = g_gfx->CreateTexture(config, "Magic Kernel Sharp weights");
+    if (!m_resampling_tables[i])
+      return false;
+    m_resampling_tables[i]->Load(0, width, table.rows, width,
+                                 reinterpret_cast<const u8*>(table.data.data()),
+                                 table.data.size() * sizeof(float));
+    pass.table_taps = table.taps;
+  }
+  m_resampling_plan_valid = true;
+  return true;
+}
+
+void PostProcessing::ResetResamplingPrograms()
+{
+  m_resampling_programs.clear();
+  // Have the next blit make its passes again.
+  m_resampling_dimensions = {};
+}
+
+static bool UseGeometryShaderForPostProcess(bool is_intermediary_buffer);
+
+const AbstractPipeline* PostProcessing::GetResamplingPipeline(const OutputResamplingPass& pass)
+{
+  const u32 axes = pass.type == OutputResamplingPassType::Enlarge ? pass.enlarge_axes : pass.axis;
+  const u32 key = static_cast<u32>(pass.type) | (axes << 8) | (pass.decode_input ? 1u << 16 : 0u) |
+                  (pass.final_pass ? 1u << 17 : 0u);
+  const auto [it, inserted] = m_resampling_programs.try_emplace(key);
+  ResamplingProgram& program = it->second;
+  if (!inserted)
+    return program.pipeline.get();
+  if (m_default_pixel_shader_code.empty() || !m_default_vertex_shader)
+    return nullptr;
+
+  // The pass is a constant of its copy of the shader, which leaves just its own few lines of
+  // work in it and lets the compiler see through all of them. Only the tap count stays a uniform.
+  const std::string defines = fmt::format("#define RESAMPLING_PASS {}\n"
+                                          "#define RESAMPLING_AXES {}\n"
+                                          "#define RESAMPLING_DECODE_INPUT {}\n"
+                                          "#define RESAMPLING_FINAL_PASS {}\n",
+                                          static_cast<int>(pass.type), axes,
+                                          pass.decode_input ? 1 : 0, pass.final_pass ? 1 : 0);
+  program.shader = g_gfx->CreateShaderFromSource(
+      ShaderStage::Pixel, defines + GetHeader(false) + m_default_pixel_shader_code + GetFooter(),
+      nullptr, "Magic Kernel Sharp pixel shader");
+  if (!program.shader)
+    return nullptr;
+
+  // The last pass takes the default pipeline's place; the others write signed linear values
+  // to floating-point textures.
+  const bool to_intermediary = !pass.final_pass || NeedsIntermediaryBuffer();
+  AbstractPipelineConfig config = {};
+  config.vertex_shader = m_default_vertex_shader.get();
+  config.geometry_shader = UseGeometryShaderForPostProcess(to_intermediary) ?
+                               g_shader_cache->GetTexcoordGeometryShader() :
+                               nullptr;
+  config.pixel_shader = program.shader.get();
+  config.rasterization_state = RenderState::GetNoCullRasterizationState(PrimitiveType::Triangles);
+  config.depth_state = RenderState::GetNoDepthTestingDepthState();
+  config.blending_state = RenderState::GetNoBlendingBlendState();
+  config.framebuffer_state = RenderState::GetColorFramebufferState(
+      to_intermediary ? s_intermediary_buffer_format : m_framebuffer_format);
+  config.usage = AbstractPipelineUsage::Utility;
+  program.pipeline = g_gfx->CreatePipeline(config);
+  return program.pipeline.get();
+}
+
+void PostProcessing::BindResamplingTable(u32 pass_index)
+{
+  if (!m_resampling_tables[pass_index])
+    return;
+  g_gfx->SetSamplerState(2, RenderState::GetPointSamplerState());
+  g_gfx->SetTexture(2, m_resampling_tables[pass_index].get());
+}
+
+bool PostProcessing::ResampleToTexture(const MathUtil::Rectangle<int>& src,
+                                       const AbstractTexture* src_tex, int src_layer,
+                                       u32 target_layers, u32 target_index,
+                                       const OutputResamplingPass& pass)
+{
+  auto& texture = m_resampling_color_textures[target_index];
+  auto& framebuffer = m_resampling_frame_buffers[target_index];
+  const TextureConfig texture_config(pass.width, pass.height, 1, target_layers, 1,
+                                     s_intermediary_buffer_format, AbstractTextureFlag_RenderTarget,
+                                     AbstractTextureType::Texture_2DArray);
+  if (!texture || texture->GetConfig() != texture_config)
+  {
+    framebuffer.reset();
+    texture = g_gfx->CreateTexture(texture_config, "Magic Kernel Sharp intermediate texture");
+  }
+  if (texture && !framebuffer)
+    framebuffer = g_gfx->CreateFramebuffer(texture.get(), nullptr);
+  if (!framebuffer)
+    return false;
+
+  AbstractFramebuffer* const previous_framebuffer = g_gfx->GetCurrentFramebuffer();
+  g_gfx->SetFramebuffer(framebuffer.get());
+  BindResamplingTable(target_index);
+  const auto target_rect = framebuffer->GetRect();
+  FillUniformBuffer(src, src_tex, src_layer, target_rect, target_rect,
+                    m_default_uniform_staging_buffer.data(), false, true, &pass);
+  g_vertex_manager->UploadUtilityUniforms(
+      m_default_uniform_staging_buffer.data(),
+      static_cast<u32>(m_default_uniform_staging_buffer.size()));
+  g_gfx->SetViewportAndScissor(g_gfx->ConvertFramebufferRectangle(target_rect, framebuffer.get()));
+  g_gfx->SetPipeline(GetResamplingPipeline(pass));
+  g_gfx->Draw(0, 3);
+  g_gfx->SetFramebuffer(previous_framebuffer);
+  texture->FinishedRendering();
+  return true;
+}
+
 void PostProcessing::BlitFromTexture(const MathUtil::Rectangle<int>& dst,
                                      const MathUtil::Rectangle<int>& src,
                                      const AbstractTexture* src_tex, int src_layer)
 {
+  if (src.GetWidth() <= 0 || src.GetHeight() <= 0 || dst.GetWidth() <= 0 || dst.GetHeight() <= 0)
+    return;
+
   if (g_gfx->GetCurrentFramebuffer()->GetColorFormat() != m_framebuffer_format)
   {
     m_framebuffer_format = g_gfx->GetCurrentFramebuffer()->GetColorFormat();
@@ -502,13 +660,76 @@ void PostProcessing::BlitFromTexture(const MathUtil::Rectangle<int>& dst,
   bool default_uniform_staging_buffer = true;
   const MathUtil::Rectangle<int> present_rect = g_presenter->GetTargetRectangle();
 
+  // Magic Kernel Sharp: every pass but the last goes to a texture of its own here. Only the
+  // first one decodes, and signed linear values go from pass to pass until the last one, which
+  // goes on to color correction and output encoding like the default pipeline.
+  const bool use_magic_kernel_sharp =
+      g_ActiveConfig.output_resampling_mode == OutputResamplingMode::MagicKernelSharp2021;
+  const OutputResamplingPass* resampling_pass = nullptr;
+  if (use_magic_kernel_sharp && m_default_pipeline &&
+      (src_rect.GetWidth() != dst.GetWidth() || src_rect.GetHeight() != dst.GetHeight()))
+  {
+    const u32 target_layers = copy_all_layers ? src_tex->GetLayers() : 1;
+    const AbstractTexture* const original_texture = src_tex;
+    const int original_layer = src_layer;
+    bool success = UpdateResamplingPlan(
+        static_cast<u32>(src_rect.GetWidth()), static_cast<u32>(src_rect.GetHeight()),
+        static_cast<u32>(dst.GetWidth()), static_cast<u32>(dst.GetHeight()));
+    for (u32 i = 0; success && i + 1 < m_resampling_plan.count; ++i)
+    {
+      if (!ResampleToTexture(src_rect, src_tex, src_layer, target_layers, i,
+                             m_resampling_plan.passes[i]))
+      {
+        success = false;
+        break;
+      }
+      src_tex = m_resampling_color_textures[i].get();
+      src_rect = src_tex->GetRect();
+      src_layer = 0;
+      g_gfx->SetTexture(0, src_tex);
+      g_gfx->SetTexture(1, src_tex);
+    }
+    if (success)
+    {
+      resampling_pass = &m_resampling_plan.passes[m_resampling_plan.count - 1];
+      BindResamplingTable(m_resampling_plan.count - 1);
+    }
+    else
+    {
+      // Fall back using the original gamma-encoded image, even if a later allocation failed.
+      src_tex = original_texture;
+      src_rect = src;
+      src_layer = original_layer;
+      g_gfx->SetTexture(0, src_tex);
+      g_gfx->SetTexture(1, src_tex);
+    }
+  }
+  else
+  {
+    for (auto& framebuffer : m_resampling_frame_buffers)
+      framebuffer.reset();
+    for (auto& texture : m_resampling_color_textures)
+      texture.reset();
+    for (auto& texture : m_resampling_tables)
+      texture.reset();
+    m_resampling_dimensions = {};
+    if (!use_magic_kernel_sharp)
+      m_resampling_programs.clear();
+  }
+  // The last Magic Kernel Sharp pass does the default pipeline's work, in its own copy of
+  // the default shader.
+  const AbstractPipeline* const default_pipeline =
+      resampling_pass ? GetResamplingPipeline(*resampling_pass) : m_default_pipeline.get();
+  // Use the per-eye destination size for the separable filter in side-by-side / top-bottom stereo.
+  const auto& resampling_rect = use_magic_kernel_sharp ? dst : present_rect;
+
   // Intermediary pass.
   // We draw to a high quality intermediary texture for a couple reasons:
   // -Consistently do high quality gamma corrected resampling (upscaling/downscaling)
   // -Keep quality for gamma and gamut conversions, and HDR output
   //  (low bit depths lose too much quality with gamma conversions)
   // -Keep the post process phase in linear space, to better operate with colors
-  if (m_default_pipeline && needs_default_pipeline && needs_intermediary_buffer)
+  if (default_pipeline && needs_default_pipeline && needs_intermediary_buffer)
   {
     AbstractFramebuffer* const previous_framebuffer = g_gfx->GetCurrentFramebuffer();
 
@@ -519,9 +740,9 @@ void PostProcessing::BlitFromTexture(const MathUtil::Rectangle<int>& dst,
     const u32 target_layers = copy_all_layers ? src_tex->GetLayers() : 1;
 
     const u32 target_width =
-        needs_resampling ? present_rect.GetWidth() : static_cast<u32>(src_rect.GetWidth());
+        needs_resampling ? resampling_rect.GetWidth() : static_cast<u32>(src_rect.GetWidth());
     const u32 target_height =
-        needs_resampling ? present_rect.GetHeight() : static_cast<u32>(src_rect.GetHeight());
+        needs_resampling ? resampling_rect.GetHeight() : static_cast<u32>(src_rect.GetHeight());
 
     if (!m_intermediary_frame_buffer || !m_intermediary_color_texture ||
         m_intermediary_color_texture->GetWidth() != target_width ||
@@ -542,14 +763,14 @@ void PostProcessing::BlitFromTexture(const MathUtil::Rectangle<int>& dst,
     g_gfx->SetFramebuffer(m_intermediary_frame_buffer.get());
 
     FillUniformBuffer(src_rect, src_tex, src_layer, g_gfx->GetCurrentFramebuffer()->GetRect(),
-                      present_rect, uniform_staging_buffer->data(), !default_uniform_staging_buffer,
-                      true);
+                      resampling_rect, uniform_staging_buffer->data(),
+                      !default_uniform_staging_buffer, true, resampling_pass);
     g_vertex_manager->UploadUtilityUniforms(uniform_staging_buffer->data(),
                                             static_cast<u32>(uniform_staging_buffer->size()));
 
     g_gfx->SetViewportAndScissor(g_gfx->ConvertFramebufferRectangle(
         m_intermediary_color_texture->GetRect(), m_intermediary_frame_buffer.get()));
-    g_gfx->SetPipeline(m_default_pipeline.get());
+    g_gfx->SetPipeline(default_pipeline);
     g_gfx->Draw(0, 3);
 
     g_gfx->SetFramebuffer(previous_framebuffer);
@@ -564,15 +785,16 @@ void PostProcessing::BlitFromTexture(const MathUtil::Rectangle<int>& dst,
     src_layer = 0;
     uniform_staging_buffer = &m_uniform_staging_buffer;
     default_uniform_staging_buffer = false;
+    resampling_pass = nullptr;
   }
   else
   {
     // If we have no custom user shader selected, and color correction
     // is active, directly run the fixed pipeline shader instead of
     // doing two passes, with the second one doing nothing useful.
-    if (m_default_pipeline && needs_default_pipeline)
+    if (default_pipeline && needs_default_pipeline)
     {
-      final_pipeline = m_default_pipeline.get();
+      final_pipeline = default_pipeline;
     }
     else
     {
@@ -593,8 +815,9 @@ void PostProcessing::BlitFromTexture(const MathUtil::Rectangle<int>& dst,
   if (final_pipeline)
   {
     FillUniformBuffer(src_rect, src_tex, src_layer, g_gfx->GetCurrentFramebuffer()->GetRect(),
-                      present_rect, uniform_staging_buffer->data(), !default_uniform_staging_buffer,
-                      false);
+                      default_uniform_staging_buffer ? resampling_rect : present_rect,
+                      uniform_staging_buffer->data(), !default_uniform_staging_buffer, false,
+                      resampling_pass);
     g_vertex_manager->UploadUtilityUniforms(uniform_staging_buffer->data(),
                                             static_cast<u32>(uniform_staging_buffer->size()));
 
@@ -637,6 +860,9 @@ std::string PostProcessing::GetUniformBufferHeader(bool user_post_process) const
   ss << "  int hdr_output;\n";
   ss << "  float hdr_paper_white_nits;\n";
   ss << "  float hdr_sdr_white_nits;\n";
+  // Magic Kernel Sharp: weights per row of a table pass's table, and the Sharp 2021 weights.
+  ss << "  int resampling_taps;\n";
+  ss << "  float4 resampling_sharp_weights;\n";
 
   if (user_post_process)
   {
@@ -687,6 +913,8 @@ std::string PostProcessing::GetHeader(bool user_post_process) const
   ss << GetUniformBufferHeader(user_post_process);
   ss << "SAMPLER_BINDING(0) uniform sampler2DArray samp0;\n";
   ss << "SAMPLER_BINDING(1) uniform sampler2DArray samp1;\n";
+  // Weights of a Magic Kernel Sharp table pass.
+  ss << "SAMPLER_BINDING(2) uniform sampler2DArray samp2;\n";
 
   if (g_backend_info.bSupportsGeometryShaders)
   {
@@ -856,7 +1084,11 @@ struct BuiltinUniforms
   s32 hdr_output;
   float hdr_paper_white_nits;
   float hdr_sdr_white_nits;
+  s32 resampling_taps;
+  std::array<float, 4> resampling_sharp_weights;
 };
+static_assert(offsetof(BuiltinUniforms, resampling_sharp_weights) % 16 == 0);
+static_assert(sizeof(BuiltinUniforms) % 16 == 0);
 
 size_t PostProcessing::CalculateUniformsSize(bool user_post_process) const
 {
@@ -869,12 +1101,13 @@ void PostProcessing::FillUniformBuffer(const MathUtil::Rectangle<int>& src,
                                        const AbstractTexture* src_tex, int src_layer,
                                        const MathUtil::Rectangle<int>& dst,
                                        const MathUtil::Rectangle<int>& wnd, u8* buffer,
-                                       bool user_post_process, bool intermediary_buffer)
+                                       bool user_post_process, bool intermediary_buffer,
+                                       const OutputResamplingPass* pass)
 {
   const float rcp_src_width = 1.0f / src_tex->GetWidth();
   const float rcp_src_height = 1.0f / src_tex->GetHeight();
 
-  BuiltinUniforms builtin_uniforms;
+  BuiltinUniforms builtin_uniforms{};
   builtin_uniforms.source_resolution = {static_cast<float>(src_tex->GetWidth()),
                                         static_cast<float>(src_tex->GetHeight()), rcp_src_width,
                                         rcp_src_height};
@@ -912,6 +1145,12 @@ void PostProcessing::FillUniformBuffer(const MathUtil::Rectangle<int>& src,
   builtin_uniforms.hdr_paper_white_nits = g_ActiveConfig.color_correction.fHDRPaperWhiteNits;
   // A value of 1 1 1 usually matches 80 nits in HDR
   builtin_uniforms.hdr_sdr_white_nits = 80.f;
+  if (pass)
+  {
+    builtin_uniforms.resampling_taps = static_cast<s32>(pass->table_taps);
+    builtin_uniforms.resampling_sharp_weights =
+        GetOutputResamplingSharpWeights(g_ActiveConfig.fOutputResamplingSharpness);
+  }
 
   std::memcpy(buffer, &builtin_uniforms, sizeof(builtin_uniforms));
   buffer += sizeof(builtin_uniforms);
@@ -965,11 +1204,11 @@ bool PostProcessing::CompilePixelShader()
 
   // Generate GLSL and compile the new shaders:
 
-  std::string default_pixel_shader_code;
-  if (LoadShaderFromFile(s_default_pixel_shader_name, "", default_pixel_shader_code))
+  m_default_pixel_shader_code.clear();
+  if (LoadShaderFromFile(s_default_pixel_shader_name, "", m_default_pixel_shader_code))
   {
     m_default_pixel_shader = g_gfx->CreateShaderFromSource(
-        ShaderStage::Pixel, GetHeader(false) + default_pixel_shader_code + GetFooter(), nullptr,
+        ShaderStage::Pixel, GetHeader(false) + m_default_pixel_shader_code + GetFooter(), nullptr,
         "Default post-processing pixel shader");
     // We continue even if all of this failed, it doesn't matter
     m_default_uniform_staging_buffer.resize(CalculateUniformsSize(false));

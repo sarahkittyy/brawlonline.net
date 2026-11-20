@@ -7,6 +7,8 @@
 
 class ConfigBool;
 class ConfigChoice;
+template <typename T>
+class ConfigChoiceMap;
 class ConfigComplexChoice;
 class ConfigStringChoice;
 class ConfigFloatSlider;
@@ -14,6 +16,7 @@ class GraphicsPane;
 class QPushButton;
 class QLabel;
 class ToolTipPushButton;
+enum class OutputResamplingMode : int;
 
 namespace Config
 {
@@ -45,7 +48,7 @@ private:
   ConfigChoice* m_ir_combo;
   ConfigComplexChoice* m_antialiasing_combo;
   ConfigComplexChoice* m_texture_filtering_combo;
-  ConfigChoice* m_output_resampling_combo;
+  ConfigChoiceMap<OutputResamplingMode>* m_output_resampling_combo;
   ConfigStringChoice* m_post_processing_effect;
   ToolTipPushButton* m_configure_color_correction;
   QPushButton* m_configure_post_processing_effect;
