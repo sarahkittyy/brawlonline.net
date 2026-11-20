@@ -18,8 +18,11 @@ import type { AppBootstrap } from "./bootstrap";
 const bootstrap = ipcRenderer.sendSync("getAppBootstrapSync") as AppBootstrap;
 
 // Once, at the first start served from app://launcher (app_scheme.ts): the localStorage the file://
-// page kept, written before any page script reads it.
-const legacyStorage = ipcRenderer.sendSync("takeLegacyLocalStorage") as [string, string][] | null;
+// page kept, written before any page script reads it. Asked for only in the app:// page: the main
+// window's preload also runs once before it, outside app://launcher, and entries taken there were
+// written where the page never sees them.
+const legacyStorage =
+  location.protocol === "app:" ? (ipcRenderer.sendSync("takeLegacyLocalStorage") as [string, string][] | null) : null;
 if (legacyStorage && localStorage.length === 0) {
   for (const [key, value] of legacyStorage) {
     localStorage.setItem(key, value);
