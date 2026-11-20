@@ -117,13 +117,8 @@ add_library(videocommon
   LightingShaderGen.h
   LookUpTables.h
   NativeVertexFormat.h
-  OnlineChatUI.cpp
-  OnlineChatUI.h
-  ReplayOverlayUI.cpp
-  ReplayOverlayUI.h
   NetPlayGolfUI.cpp
   NetPlayGolfUI.h
-  OnScreenDisplay.cpp
   OnScreenDisplay.h
   OnScreenUI.cpp
   OnScreenUI.h
@@ -242,6 +237,8 @@ target_link_libraries(videocommon
 PUBLIC
   core
   glslang::glslang
+  # Brawl Online's in-game UI (core/ui): the on-screen messages, the chat window, the replay overlay.
+  brawl_online_ui
 PRIVATE
   fmt::fmt
   spng::spng

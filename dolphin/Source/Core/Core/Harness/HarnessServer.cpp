@@ -83,7 +83,7 @@
 #include "Core/Rollback/PresentStats.h"
 #include "Core/Rollback/ReplayPlayback.h"
 #include "VideoCommon/OnScreenDisplay.h"
-#include "VideoCommon/OnlineChatUI.h"
+#include "BrawlOnline/UI/OnlineChatUI.h"
 #include "VideoCommon/Present.h"
 #include "Core/Rollback/RollbackManager.h"
 #include "Core/State.h"

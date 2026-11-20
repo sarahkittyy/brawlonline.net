@@ -268,18 +268,21 @@ void MemoryManager::Write_U32(u32 var, u32 address)
 // None: the plugin then draws for Brawl's own 16:9, as under a Dolphin without a presenter.
 VideoCommon::Presenter* g_presenter = nullptr;
 
+// With the UI (core/ui) the messages are its own; else they go to the host.
+#ifdef BRAWL_ONLINE_NO_UI
 namespace OSD
 {
-void AddMessage(std::string message, u32 ms, u32 argb)
+void AddMessage(std::string message, u32 ms, u32 argb, const void*)
 {
   if (BrawlOnline::HasHost())
     BrawlOnline::GetHost().OnScreenMessage(message, ms, argb);
 }
-void AddTypedMessage(MessageType, std::string message, u32 ms, u32 argb)
+void AddTypedMessage(MessageType, std::string message, u32 ms, u32 argb, const void* icon)
 {
-  AddMessage(std::move(message), ms, argb);
+  AddMessage(std::move(message), ms, argb, icon);
 }
 }  // namespace OSD
+#endif
 
 // ---- Config keys of Dolphin's the core reads (same names and defaults) ----------------------------
 namespace Config

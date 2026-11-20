@@ -50,6 +50,17 @@ def _link(src: Path, dst: Path) -> None:
         shutil.copyfile(src, dst)
 
 
+def _mute(config: Path) -> None:
+    """Test runs are silent, as Dolphin's (InstanceConfig.audio): [audio] muted, volume 0."""
+    lines = config.read_text(encoding="utf-8").splitlines()
+    keep = [ln for ln in lines if not ln.strip().startswith(("muted", "volume ", "volume="))]
+    if "[audio]" not in (ln.strip() for ln in keep):
+        keep.append("[audio]")
+    i = [ln.strip() for ln in keep].index("[audio]")
+    keep[i + 1:i + 1] = ["muted = true", "volume = 0.0"]
+    config.write_text("\n".join(keep) + "\n", encoding="utf-8")
+
+
 class RecompInstance(DolphinInstance):
     """DolphinInstance's user folder and harness client, EmissaryRecomp's game."""
 
@@ -79,6 +90,7 @@ class RecompInstance(DolphinInstance):
         ud = d / "UserData"
         ud.mkdir(exist_ok=True)
         shutil.copyfile(self.build / "UserData" / "Config.toml", ud / "Config.toml")
+        _mute(ud / "Config.toml")
         for sub in ("NAND", "Codes"):
             if (self.build / "UserData" / sub).is_dir() and not (ud / sub).exists():
                 shutil.copytree(self.build / "UserData" / sub, ud / sub)

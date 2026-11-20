@@ -149,7 +149,7 @@
 
 #include "UICommon/UICommon.h"
 
-#include "VideoCommon/OnlineChatUI.h"
+#include "BrawlOnline/UI/OnlineChatUI.h"
 
 #ifdef HAVE_XRANDR
 #include "UICommon/X11Utils.h"

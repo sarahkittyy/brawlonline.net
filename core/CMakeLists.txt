@@ -58,7 +58,9 @@ add_library(brawl_online_core STATIC
   src/Rollback/ReplayFile.cpp
   src/Rollback/ReplayRecorder.cpp
 )
-target_include_directories(brawl_online_core PUBLIC include)
+# ui/include: the on-screen messages the core shows (BrawlOnline/UI/OnScreenDisplay.h, Dolphin's
+# VideoCommon/OnScreenDisplay.h); the UI itself is its own library (core/ui).
+target_include_directories(brawl_online_core PUBLIC include ui/include)
 target_compile_features(brawl_online_core PUBLIC cxx_std_20)
 target_link_libraries(brawl_online_core PUBLIC fmt::fmt monocypher)
 

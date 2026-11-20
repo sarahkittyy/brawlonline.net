@@ -1,7 +1,7 @@
 // Copyright 2026 Dolphin Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-#include "VideoCommon/OnlineChatUI.h"
+#include "BrawlOnline/UI/OnlineChatUI.h"
 
 #include <algorithm>
 #include <array>
@@ -31,8 +31,7 @@
 #include "BrawlOnline/Online/ChatText.h"
 #include "BrawlOnline/Online/Rooms.h"
 #include "BrawlOnline/Online/SpectatorChat.h"
-#include "InputCommon/ControllerInterface/CoreDevice.h"
-#include "VideoCommon/Present.h"
+#include "BrawlOnline/UI/Hooks.h"
 
 namespace VideoCommon::OnlineChatUI
 {
@@ -295,8 +294,8 @@ void SaveGeometry(const Geometry& g, ImVec2 display)
 // lines of a few words: it covers little of the game (the player can make it bigger).
 Geometry DefaultGeometry(ImVec2 display, float scale, float font_px)
 {
-  MathUtil::Rectangle<int> r = g_presenter ? g_presenter->GetTargetRectangle() :
-                                             MathUtil::Rectangle<int>{};
+  const auto& game_rect = BrawlOnline::UI::GetHooks().game_rect;
+  BrawlOnline::UI::Rect r = game_rect ? game_rect() : BrawlOnline::UI::Rect{};
   if (r.right <= r.left || r.bottom <= r.top)
     r = {0, 0, static_cast<int>(display.x), static_cast<int>(display.y)};
   const float game_w = static_cast<float>(r.right - r.left);
@@ -1040,13 +1039,20 @@ void Submit()
   }
 }
 
+// The game's keyboard and mouse while the box has the keyboard (the engine's hook).
+void BlockKeyboardMouse(bool blocked)
+{
+  if (const auto& block = BrawlOnline::UI::GetHooks().block_keyboard_mouse)
+    block(blocked);
+}
+
 void StopTyping()
 {
   s.was_typing = false;
   s.refocus_frames = 0;
   s.edit = Edit::None;
   s_typing = false;
-  ciface::Core::SetKeyboardMouseBlocked(false);
+  BlockKeyboardMouse(false);
 }
 
 // A new view: what changed for the ignored-players collapse.
@@ -1593,7 +1599,7 @@ void DisplayFrame(float scale)
     s.fold_back = !(s.hovered && (ImGui::IsMouseDown(ImGuiMouseButton_Left) ||
                                   ImGui::IsMouseReleased(ImGuiMouseButton_Left)));
   }
-  ciface::Core::SetKeyboardMouseBlocked(s.was_typing);
+  BlockKeyboardMouse(s.was_typing);
 }
 }  // namespace
 }  // namespace VideoCommon::OnlineChatUI

@@ -11,6 +11,7 @@
 // while the replay just plays, so a capture of the window (OBS) has only the game. The "Show /
 // Hide Seek Bar" hotkey hides it for good (or brings it back). Its - (left of the title) folds it to
 // a thin bar with a + ([Online] SeekBarCollapsed, kept), shown when the overlay would be.
+// Shared by Dolphin and EmissaryRecomp (core/ui).
 
 #pragma once
 

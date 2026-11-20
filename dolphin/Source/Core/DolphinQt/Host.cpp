@@ -37,7 +37,7 @@
 
 #include "VideoCommon/AbstractGfx.h"
 #include "VideoCommon/Fifo.h"
-#include "VideoCommon/OnlineChatUI.h"
+#include "BrawlOnline/UI/OnlineChatUI.h"
 #include "VideoCommon/Present.h"
 #include "VideoCommon/VideoConfig.h"
 

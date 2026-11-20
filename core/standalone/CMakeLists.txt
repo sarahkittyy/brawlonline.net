@@ -209,6 +209,18 @@ target_include_directories(brawl_online_core_standalone PUBLIC "${BO_CORE}/inclu
 target_compile_definitions(brawl_online_core_standalone PUBLIC GEKKONET_STATIC GEKKONET_NO_ASIO)
 target_link_libraries(brawl_online_core_standalone PUBLIC brawl_online_common ${BO_GEKKO_TARGET}
   PRIVATE monocypher xxhash::xxhash ZLIB::ZLIB mbedtls sfml-network sfml-system)
+# The UI's headers (core/ui): the on-screen messages' (VideoCommon/OnScreenDisplay.h's stand-in).
+target_include_directories(brawl_online_core_standalone PUBLIC "${BO_CORE}/ui/include")
+
+# ---- The in-game UI (core/ui), for a parent that draws it -------------------------------------
+# It needs the parent's `imgui` target (ImGui 1.92.2b, Dolphin's version). Without it, on-screen
+# messages go to the host (BrawlOnline::Host::OnScreenMessage).
+option(BRAWL_ONLINE_UI "Build the in-game UI (core/ui) with the parent's imgui target" OFF)
+if(BRAWL_ONLINE_UI)
+  add_subdirectory("${BO_CORE}/ui" "${CMAKE_CURRENT_BINARY_DIR}/ui")
+else()
+  target_compile_definitions(brawl_online_core_standalone PRIVATE BRAWL_ONLINE_NO_UI=1)
+endif()
 
 # ---- A smoke test: the core links and runs its start-up with a do-nothing engine --------------
 if(PROJECT_IS_TOP_LEVEL)
