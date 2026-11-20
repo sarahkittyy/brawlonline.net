@@ -51,11 +51,13 @@ s64 s_handle_press_frame = 0;
 bool s_handle_moved = false;
 // The session's clip mode end as last set (Session::SetPlaybackStop; -1: none).
 s64 s_stop_sent = -1;
-// The last star's highlight Render was asked for (its replay's title and frames): its button
-// doesn't show again while it plays.
-s64 s_star_rendered_start = -1;
-s64 s_star_rendered_end = -1;
-std::string s_star_rendered_title;
+// A render just asked for (its replay and frames, when): until the launcher's overlay file has it,
+// its row says it waits instead of offering Render again.
+std::string s_pending_path;
+s64 s_pending_start = -1;
+s64 s_pending_end = -1;
+std::chrono::steady_clock::time_point s_pending_since{};
+constexpr auto PENDING_FOR = std::chrono::seconds(10);
 
 constexpr auto SHOW_AFTER_MOUSE = std::chrono::seconds(3);
 // A clip starts this long before the frame Clip was clicked on (as L+R+Z's, the launcher's
@@ -286,6 +288,19 @@ void IconChevron(ImDrawList* dl, ImVec2 c, float s, ImU32 col, bool up)
   dl->AddPolyline(pts, 3, col, ImDrawFlags_None, t);
 }
 
+// A folder (a finished render's: open the file explorer at its video).
+void IconFolder(ImDrawList* dl, ImVec2 c, float s, ImU32 col)
+{
+  const float t = std::max(1.3f, s * 0.1f);
+  const float w = s * 0.42f;
+  const float h = s * 0.3f;
+  const ImVec2 pts[] = {ImVec2(c.x - w, c.y - h),          ImVec2(c.x - w * 0.25f, c.y - h),
+                        ImVec2(c.x - w * 0.05f, c.y - h * 0.6f), ImVec2(c.x + w, c.y - h * 0.6f),
+                        ImVec2(c.x + w, c.y + h),          ImVec2(c.x - w, c.y + h)};
+  dl->AddPolyline(pts, 6, col, ImDrawFlags_Closed, t);
+  dl->AddLine(ImVec2(c.x - w, c.y - h * 0.2f), ImVec2(c.x + w, c.y - h * 0.2f), col, t);
+}
+
 void IconX(ImDrawList* dl, ImVec2 c, float s, ImU32 col)
 {
   const float k = s * 0.26f;
@@ -393,6 +408,38 @@ float RenderSplit(float right, float top, float h, float scale, const std::funct
   return left;
 }
 
+// "Clip 2:13 - 2:20 (7 s)": clip mode's own line, for the launcher's toast of a render.
+std::string ClipLabel(s64 start, s64 end, s64 first)
+{
+  return fmt::format("Clip {} - {} ({} s)", Clock60(start - first), Clock60(end - first), (end - start + 30) / 60);
+}
+
+// A render's state on the row (the launcher's words: "Waiting", "Rendering 42%", "Saved"), with a
+// folder button when `folder_id` is a finished one's, its right edge at `right`. Returns its left.
+float RenderState(float right, float top, float h, float scale, const std::string& text, const std::string& folder_id)
+{
+  ImDrawList* dl = ImGui::GetWindowDrawList();
+  const ImVec2 ts = ImGui::CalcTextSize(text.c_str());
+  const float pad = 12.0f * scale;
+  const float fs = folder_id.empty() ? 0.0f : h;
+  const float w = pad + ts.x + (fs > 0 ? 6.0f * scale + fs : pad);
+  const float left = right - w;
+  dl->AddRectFilled(ImVec2(left, top), ImVec2(right, top + h), WithAlpha(CLIP_BLUE, 60), 7.0f * scale);
+  dl->AddText(ImVec2(left + pad, top + (h - ts.y) * 0.5f), TEXT, text.c_str());
+  if (fs > 0)
+  {
+    const ImVec2 f0(right - fs, top);
+    ImGui::SetCursorScreenPos(f0);
+    if (ImGui::InvisibleButton("##replayrenderfolder", ImVec2(fs, h)))
+      Send([id = folder_id] { Gprb::Replay::Playback::ShowRenderFolder(id); });
+    const bool over = ImGui::IsItemHovered();
+    if (over)
+      dl->AddRectFilled(f0, ImVec2(f0.x + fs, f0.y + h), HOVER_BG, 7.0f * scale, ImDrawFlags_RoundCornersRight);
+    IconFolder(dl, ImVec2(f0.x + fs * 0.5f, f0.y + h * 0.5f), h * 0.62f, TEXT);
+  }
+  return left;
+}
+
 // A tooltip box drawn above `anchor` (centred on it), over everything.
 void TipAbove(ImVec2 anchor, const std::string& text, float scale, float min_x, float max_x)
 {
@@ -441,10 +488,20 @@ bool BeginBare(const char* name, ImGuiWindowFlags extra = 0)
   return open;
 }
 
-// The launcher's renders asked for here ("Clip (0:20)  Rendering 42%"), at the top right.
+// The launcher's renders asked for here ("Clip 2:13 - 2:20 (7 s)  Rendering 42%"), at the top
+// right while the launcher shows them; a finished one has a folder button that opens the file
+// explorer at its video (Sarah's board, 2026-11-20).
 void Toasts(const Gprb::Replay::Playback::OverlayView& view, ImU32 accent, float scale)
 {
-  if (view.toasts.empty())
+  std::vector<const Gprb::Replay::Playback::OverlayToast*> shown;
+  for (const auto& t : view.toasts)
+  {
+    if (t.toast)
+      shown.push_back(&t);
+  }
+  if (shown.size() > 4)
+    shown.erase(shown.begin(), shown.end() - 4);
+  if (shown.empty())
     return;
   const ImGuiIO& io = ImGui::GetIO();
   const float w = 270.0f * scale;
@@ -452,23 +509,41 @@ void Toasts(const Gprb::Replay::Playback::OverlayView& view, ImU32 accent, float
   const float line = ImGui::GetTextLineHeight();
   const float h = pad * 2.0f + line + 12.0f * scale;
   const float gap = 8.0f * scale;
-  const float total = view.toasts.size() * (h + gap);
+  const float total = shown.size() * (h + gap);
   ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x - 20.0f * scale - w, 18.0f * scale), ImGuiCond_Always);
   ImGui::SetNextWindowSize(ImVec2(w, total), ImGuiCond_Always);
-  if (BeginBare("##ReplayOverlayToasts", ImGuiWindowFlags_NoInputs))
+  if (BeginBare("##ReplayOverlayToasts"))
   {
     ImDrawList* dl = ImGui::GetWindowDrawList();
     float y = ImGui::GetWindowPos().y;
     const float x = ImGui::GetWindowPos().x;
-    for (const auto& t : view.toasts)
+    for (const auto* tp : shown)
     {
+      const auto& t = *tp;
       dl->AddRectFilled(ImVec2(x, y), ImVec2(x + w, y + h), PANEL, 10.0f * scale);
       dl->AddRect(ImVec2(x, y), ImVec2(x + w, y + h), PANEL_BORDER, 10.0f * scale);
+      // The folder button at the right of a finished one's first line.
+      float right = x + w - pad;
+      if (t.folder && !t.id.empty())
+      {
+        const float fs = line + 6.0f * scale;
+        const ImVec2 f0(right - fs + 3.0f * scale, y + pad - 3.0f * scale);
+        ImGui::SetCursorScreenPos(f0);
+        ImGui::PushID(t.id.c_str());
+        if (ImGui::InvisibleButton("##toastfolder", ImVec2(fs, fs)))
+          Send([id = t.id] { Gprb::Replay::Playback::ShowRenderFolder(id); });
+        const bool over = ImGui::IsItemHovered();
+        ImGui::PopID();
+        if (over)
+          dl->AddRectFilled(f0, ImVec2(f0.x + fs, f0.y + fs), HOVER_BG, 5.0f * scale);
+        IconFolder(dl, ImVec2(f0.x + fs * 0.5f, f0.y + fs * 0.5f), fs * 0.8f, over ? TEXT : TEXT_2);
+        right -= fs + 4.0f * scale;
+      }
       const ImVec2 rs = ImGui::CalcTextSize(t.text.c_str());
-      dl->PushClipRect(ImVec2(x + pad, y), ImVec2(x + w - pad - rs.x - 8.0f * scale, y + h), true);
+      dl->PushClipRect(ImVec2(x + pad, y), ImVec2(right - rs.x - 8.0f * scale, y + h), true);
       dl->AddText(ImVec2(x + pad, y + pad), TEXT, t.label.c_str());
       dl->PopClipRect();
-      dl->AddText(ImVec2(x + w - pad - rs.x, y + pad), t.state == "error" ? DESYNC_RED : TEXT_2, t.text.c_str());
+      dl->AddText(ImVec2(right - rs.x, y + pad), t.state == "error" ? DESYNC_RED : TEXT_2, t.text.c_str());
       const float by = y + pad + line + 6.0f * scale;
       const float bh = 4.0f * scale;
       dl->AddRectFilled(ImVec2(x + pad, by), ImVec2(x + w - pad, by + bh), IM_COL32(255, 255, 255, 38), bh * 0.5f);
@@ -791,6 +866,32 @@ void Display(float scale)
       SetStop(s_clip_end);
     }
 
+    // A star's highlight being watched: reached (not on the way there: Sarah's board, 2026-11-20,
+    // "the render button appears when im skimming to a clip even though i havent reached it yet"),
+    // playing or paused at its end, until it is left or played past. Its star is outlined in blue,
+    // and the row has its Render (or that render's state).
+    int watching = -1;
+    if (!s_clip_mode && can_clip && !info.seeking && info.clip_start >= 0 && info.clip_end > info.clip_start &&
+        (info.clip_armed || (info.paused && info.shown == info.clip_end)) && info.shown >= info.clip_start - 1 &&
+        info.shown <= info.clip_end)
+    {
+      for (size_t i = 0; i < info.marks.size(); ++i)
+      {
+        if (info.marks[i].start == info.clip_start && info.marks[i].end == info.clip_end)
+          watching = static_cast<int>(i);
+      }
+    }
+    // The launcher's newest render of frames `start` to `end` of this replay (nullptr: none).
+    const auto render_of = [&](s64 start, s64 stop) -> const Gprb::Replay::Playback::OverlayToast* {
+      const Gprb::Replay::Playback::OverlayToast* found = nullptr;
+      for (const auto& t : view.toasts)
+      {
+        if (t.start == start && t.end == stop && !nav.armed_path.empty() && t.path == nav.armed_path)
+          found = &t;
+      }
+      return found;
+    };
+
     // ---- The bar ----
     // Highlights: each one of this replay is a gold span on the bar with a star above its start; a
     // click on the star or the span's start plays it from its start (the user, 2026-10-24: a click
@@ -978,7 +1079,15 @@ void Display(float scale)
       const bool lit = static_cast<int>(i) == mark_hovered || static_cast<int>(i) == s_mark_held;
       const float r = lit ? mark_r * 1.3f : mark_r;
       const ImVec2 c(x_of(mark.start), stars_y);
-      Star(dl, ImVec2(c.x, c.y + 1.0f * scale), r * 1.12f, IM_COL32(0, 0, 0, 140));
+      // (Sarah's board, 2026-11-20: "a blue outline on the star on the last clip you selected
+      // that you're currently on / rendering".)
+      const auto* job = render_of(mark.start, mark.end);
+      const bool outlined =
+          static_cast<int>(i) == watching || (job && (job->state == "queued" || job->state == "rendering"));
+      if (outlined)
+        Star(dl, c, r * 1.45f, CLIP_BLUE);
+      else
+        Star(dl, ImVec2(c.x, c.y + 1.0f * scale), r * 1.12f, IM_COL32(0, 0, 0, 140));
       Star(dl, c, r, lit ? GOLD_LIT : GOLD);
     }
     if (!s_clip_mode)
@@ -1068,9 +1177,9 @@ void Display(float scale)
       // (the user, 2026-11-20: "rendering should be an option from Clip mode only").
       constexpr const char* CANCEL = "Cancel clip";
       constexpr const char* SAVE = "Save as highlight";
-      rx = RenderSplit(rx, bty, bh, scale, [](bool music) {
-        Send([start = s_clip_start, end = s_clip_end, music] {
-          if (!Gprb::Replay::Playback::RequestRender(start, end, music))
+      rx = RenderSplit(rx, bty, bh, scale, [first = info.first](bool music) {
+        Send([start = s_clip_start, end = s_clip_end, music, label = ClipLabel(s_clip_start, s_clip_end, first)] {
+          if (!Gprb::Replay::Playback::RequestRender(start, end, music, true, label))
             OSD::AddMessage("The clip could not be saved", OSD::Duration::NORMAL, OSD::Color::RED);
         });
         EndClipMode();
@@ -1178,30 +1287,37 @@ void Display(float scale)
         // (Sarah's board, 2026-11-20: "the render button should appear when you click on a star
         // ... when our ui state machine knows for sure the user is watching a specific starred
         // replay"). Asked once per highlight shown.
-        int watching = -1;
-        const bool on_clip = info.clip_start >= 0 && info.clip_end > info.clip_start &&
-                             (info.clip_armed || (info.paused && info.shown == info.clip_end)) &&
-                             cursor >= info.clip_start - PREV_RESTARTS_AFTER && cursor <= info.clip_end;
-        for (size_t i = 0; on_clip && i < info.marks.size(); ++i)
-        {
-          if (info.marks[i].start == info.clip_start && info.marks[i].end == info.clip_end)
-            watching = static_cast<int>(i);
-        }
-        const bool rendered = watching >= 0 && s_star_rendered_start == info.clip_start &&
-                              s_star_rendered_end == info.clip_end && s_star_rendered_title == info.title;
-        if (watching >= 0 && !rendered)
+        // Once rendered (or rendering), its state instead ("Rendering 42%", "Saved" and a folder
+        // button: Sarah's board, 2026-11-20); Render again once it failed or was cancelled.
+        if (watching >= 0)
         {
           const s64 start = info.clip_start;
           const s64 end_frame = info.clip_end;
-          const std::string title = info.title;
-          rx = RenderSplit(rx, bty, bh, scale, [start, end_frame, title](bool music) {
-            s_star_rendered_start = start;
-            s_star_rendered_end = end_frame;
-            s_star_rendered_title = title;
-            Send([start, end_frame, music] {
-              Gprb::Replay::Playback::RequestRender(start, end_frame, music, false);
+          const auto* job = render_of(start, end_frame);
+          const bool pending = !job && s_pending_path == nav.armed_path && s_pending_start == start &&
+                               s_pending_end == end_frame && now - s_pending_since < PENDING_FOR;
+          if (job && job->state != "error")
+          {
+            rx = RenderState(rx, bty, bh, scale, job->text, job->folder ? job->id : std::string());
+          }
+          else if (pending)
+          {
+            rx = RenderState(rx, bty, bh, scale, "Waiting", {});
+          }
+          else
+          {
+            const std::string path = nav.armed_path;
+            const std::string label = ClipLabel(start, end_frame, info.first);
+            rx = RenderSplit(rx, bty, bh, scale, [start, end_frame, path, label](bool music) {
+              s_pending_path = path;
+              s_pending_start = start;
+              s_pending_end = end_frame;
+              s_pending_since = Clock::now();
+              Send([start, end_frame, music, label] {
+                Gprb::Replay::Playback::RequestRender(start, end_frame, music, false, label);
+              });
             });
-          });
+          }
           rx -= 8.0f * scale;
         }
         constexpr const char* CLIP = "Clip";

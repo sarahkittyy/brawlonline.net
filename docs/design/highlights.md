@@ -552,9 +552,19 @@ toast follows its RENDER_PROGRESS.
 on a star ... when our ui state machine knows for sure the user is watching a specific starred
 replay"; the seek bar froze while a seek ran; the clip's box looked "askew a little bit".
 - **Render on a star**: while a star's highlight is being watched (from its star, a list's row or
-  < >: on the way to it, playing it, or paused at its end) the row has Render (w/ Music) and its
-  menu left of Clip; a seek away from it (before its start less 1 s, or past its end) or playing
-  past its end hides it, and once asked it doesn't show again for that highlight while it plays.
+  < >: reached and playing, or paused at its end; not on its way there, third round) the row has
+  Render (w/ Music) and its menu left of Clip; a seek away from it or playing past its end hides
+  it.
+- **Third round** (Sarah's QA on staging, 2026-11-20): the star being watched, and any star still
+  rendering, has a blue outline; once a render of it is asked the row shows that render's state
+  instead of Render ("Waiting" until the launcher has it, "Rendering 42%", "Saved" with a folder
+  button; Render again after an error or a cancel); a finished toast has a folder button too. Both
+  folder buttons put `"showRender": {"seq", "id"}` in the status and the launcher opens the file
+  explorer at the video (`shell.showItemInFolder`). The launcher keeps every render asked for from
+  the game in the overlay file (24 newest, `toast` false once a finished one's 6 s are over), with
+  its job id, the replay as Dolphin asked for it and its frames. The toast's label is Dolphin's
+  clip mode wording, "Clip 2:13 - 2:20 (7 s)" (the request's `label`; it said "Clip (0:07)", the
+  length, read as a time).
   It isn't saved as a Manual Clip (`RequestRender(.., save false)`, the request's `"clip": false`):
   the launcher names the video from the replay's own highlight or hotkey clip (`findHighlight`),
   or the Manual Clip it is.

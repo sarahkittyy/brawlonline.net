@@ -183,6 +183,7 @@ struct RenderAsk
   s64 end = 0;
   bool music = true;
   bool clip = true;  // saved as a Manual Clip first (clip mode's), not a star's
+  std::string label;
 };
 std::vector<RenderAsk> s_render_asks;
 // Auto play at a spectated stream's end: the countdown's end, its X, and the countdown ran out
@@ -197,7 +198,10 @@ std::string s_overlay_text;
 std::mutex s_overlay_mutex;
 Playback::OverlayView s_overlay_view;
 constexpr size_t MAX_OVERLAY_SIZE = 16 << 10;
-constexpr size_t MAX_TOASTS = 4;
+constexpr size_t MAX_TOASTS = 24;
+// A finished render's folder button: the last one asked (from 1 for the Dolphin's run).
+u64 s_show_seq = 0;
+std::string s_show_id;
 void ApplyMarks();
 // (A run saves a few; this many is far more than anyone makes, and keeps the status small.)
 constexpr size_t MAX_SAVED_CLIPS = 500;
@@ -567,6 +571,13 @@ picojson::object StatusLocked()
     nav["frame"] = picojson::value(static_cast<double>(s_nav_frame));
     o["navRequest"] = picojson::value(std::move(nav));
   }
+  if (s_show_seq > 0)
+  {
+    picojson::object show;
+    show["seq"] = picojson::value(static_cast<double>(s_show_seq));
+    show["id"] = picojson::value(s_show_id);
+    o["showRender"] = picojson::value(std::move(show));
+  }
   if (s_pick_seq > 0)
   {
     picojson::object pick;
@@ -600,6 +611,8 @@ picojson::object StatusLocked()
       ask["endFrame"] = picojson::value(static_cast<double>(a.end));
       ask["music"] = picojson::value(a.music);
       ask["clip"] = picojson::value(a.clip);
+      if (!a.label.empty())
+        ask["label"] = picojson::value(a.label);
       asks.emplace_back(std::move(ask));
     }
     o["renderRequests"] = picojson::value(std::move(asks));
@@ -1051,6 +1064,8 @@ void UpdateNavView()
   Playback::NavView v;
   if (!s_request.render && !s_request.mirror && s_request.nav.shown && s_armed)
     v = s_request.nav;
+  if (s_armed && !s_request.render)
+    v.armed_path = s_armed_path;
   // Auto play's countdown, or its wait for the next game once it ran out.
   Playback::NextCountdown n;
   if (s_request.mirror && s_request.auto_play && !s_next_cancelled && (s_next_at || s_next_go))
@@ -1105,9 +1120,29 @@ void FollowOverlay()
                                                                   std::string();
         };
         Playback::OverlayToast toast;
+        toast.id = str("id");
         toast.label = str("label");
         toast.text = str("text");
         toast.state = str("state");
+        if (const auto pp = io.find("path"); pp != io.end() && pp->second.is<std::string>() &&
+                                             pp->second.get<std::string>().size() <= 4096)
+        {
+          toast.path = pp->second.get<std::string>();
+        }
+        const auto num = [&](const char* k) -> s64 {
+          const auto it = io.find(k);
+          if (it == io.end() || !it->second.is<double>() || !std::isfinite(it->second.get<double>()))
+            return -1;
+          return static_cast<s64>(std::clamp(it->second.get<double>(), -1.0, 1e9));
+        };
+        toast.start = num("startFrame");
+        toast.end = num("endFrame");
+        const auto yes = [&](const char* k, bool otherwise) {
+          const auto it = io.find(k);
+          return it != io.end() && it->second.is<bool>() ? it->second.get<bool>() : otherwise;
+        };
+        toast.toast = yes("toast", true);
+        toast.folder = yes("folder", false);
         if (const auto p = io.find("progress"); p != io.end() && p->second.is<double>())
         {
           const double d = p->second.get<double>();
@@ -1440,7 +1475,7 @@ bool SaveClip(s64 start, s64 end)
   return true;
 }
 
-bool RequestRender(s64 start, s64 end, bool music, bool save)
+bool RequestRender(s64 start, s64 end, bool music, bool save, const std::string& label)
 {
   std::lock_guard lk(s_mutex);
   // (Clip mode's is saved first, as Save as highlight: the launcher renders the Manual Clip it
@@ -1451,11 +1486,19 @@ bool RequestRender(s64 start, s64 end, bool music, bool save)
     return false;
   }
   const u64 seq = s_render_asks.size() + 1;
-  s_render_asks.push_back({seq, s_armed_path, start, end, music, save});
+  s_render_asks.push_back({seq, s_armed_path, start, end, music, save, label.substr(0, 120)});
   NOTICE_LOG_FMT(BRAWLBACK, "replay: render {} asked for, frames {} to {} ({})", seq, start, end,
                  music ? "music" : "no music");
   WriteStatus();
   return true;
+}
+
+void ShowRenderFolder(const std::string& id)
+{
+  std::lock_guard lk(s_mutex);
+  ++s_show_seq;
+  s_show_id = id.substr(0, 128);
+  WriteStatus();
 }
 
 OverlayView GetOverlayView()

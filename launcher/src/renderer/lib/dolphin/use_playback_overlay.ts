@@ -27,6 +27,8 @@ import { clipLength, cssColorToHex, findClip, findHighlight } from "./playback_o
 const ACCENT_POLL_MS = 1000;
 /** How long a render's clip may take to be kept as a Manual Clip (a spectated game is copied first). */
 const CLIP_WAIT_MS = 20_000;
+/** How many of this run's in-game renders the overlay file has (a star's row shows its own). */
+const MAX_KEPT = 24;
 /** How long a finished render stays in the game. */
 const DONE_SHOWN_MS = 6000;
 
@@ -42,7 +44,7 @@ function currentAccent(): string | null {
 }
 
 /** A render job as the game shows it. */
-export function toastOf(job: RenderJobInfo, label: string): PlaybackOverlayToast {
+export function toastOf(job: RenderJobInfo, ask: RenderAsk, label: string, toast: boolean): PlaybackOverlayToast {
   const state: PlaybackOverlayToast["state"] =
     job.state === "done"
       ? "done"
@@ -51,10 +53,21 @@ export function toastOf(job: RenderJobInfo, label: string): PlaybackOverlayToast
       : job.state === "rendering"
       ? "rendering"
       : "queued";
-  return { label, text: renderStatusText(job), progress: job.progress, state };
+  return {
+    id: job.jobId,
+    path: ask.path,
+    startFrame: ask.startFrame,
+    endFrame: ask.endFrame,
+    label,
+    text: renderStatusText(job),
+    progress: job.progress,
+    state,
+    toast,
+    folder: job.state === "done" && !!job.output,
+  };
 }
 
-type Tracked = { label: string; job: RenderJobInfo | null; doneAt: number | null };
+type Tracked = { ask: RenderAsk; label: string; job: RenderJobInfo | null; doneAt: number | null };
 
 export const usePlaybackOverlay = () => {
   const { dolphinService, replayService } = useServices();
@@ -69,22 +82,21 @@ export const usePlaybackOverlay = () => {
     let lastSent = "";
     // Renders asked for in this playback Dolphin's run (its seqs start at 1 again in the next one).
     let handled = new Set<number>();
+    let shownSeq = 0;
     const tracked = new Map<string, Tracked>();
     let alive = true;
 
+    // Every render asked for from the game in this launcher run (a star's row shows its state), the
+    // newest MAX_KEPT; a finished one shows at the top right for DONE_SHOWN_MS.
     const send = () => {
       const now = Date.now();
       const toasts: PlaybackOverlayToast[] = [];
-      for (const [id, t] of tracked) {
-        if (t.doneAt != null && now - t.doneAt >= DONE_SHOWN_MS) {
-          tracked.delete(id);
-          continue;
-        }
+      for (const t of tracked.values()) {
         if (t.job) {
-          toasts.push(toastOf(t.job, t.label));
+          toasts.push(toastOf(t.job, t.ask, t.label, t.doneAt == null || now - t.doneAt < DONE_SHOWN_MS));
         }
       }
-      const overlay: PlaybackOverlayFile = { ...(accent ? { accent } : {}), toasts: toasts.slice(-4) };
+      const overlay: PlaybackOverlayFile = { ...(accent ? { accent } : {}), toasts: toasts.slice(-MAX_KEPT) };
       const text = JSON.stringify(overlay);
       if (text !== lastSent) {
         lastSent = text;
@@ -127,7 +139,7 @@ export const usePlaybackOverlay = () => {
           name = clipVideoName(row, new Map(found.players.map((p) => [p.port, p])), path);
         }
       }
-      const label = Messages.manualClip(clipLength(ask.startFrame, ask.endFrame));
+      const label = ask.label || Messages.manualClip(clipLength(ask.startFrame, ask.endFrame));
       const jobs = await renderRef.current({
         items: [{ path, startFrame: ask.startFrame, endFrame: ask.endFrame }],
         names: [name],
@@ -135,7 +147,7 @@ export const usePlaybackOverlay = () => {
         combo: false,
       });
       for (const job of jobs ?? []) {
-        tracked.set(job.jobId, { label, job, doneAt: null });
+        tracked.set(job.jobId, { ask, label, job, doneAt: null });
       }
       send();
     };
@@ -150,6 +162,15 @@ export const usePlaybackOverlay = () => {
         }
         handled.add(ask.seq);
         void render(ask).catch(() => undefined);
+      }
+      // A finished render's folder button.
+      const show = status.showRender;
+      if (show && Number.isFinite(show.seq) && show.seq > shownSeq) {
+        shownSeq = show.seq;
+        const output = tracked.get(show.id)?.job?.output;
+        if (output) {
+          window.electron.shell.showItemInFolder(output);
+        }
       }
     });
     const offProgress = dolphinService.onEvent(DolphinEventType.RENDER_PROGRESS, ({ job }) => {
@@ -171,6 +192,7 @@ export const usePlaybackOverlay = () => {
         event.instanceId === "playback"
       ) {
         handled = new Set();
+        shownSeq = 0;
       }
     });
     return () => {

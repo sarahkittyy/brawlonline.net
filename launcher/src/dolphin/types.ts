@@ -62,11 +62,20 @@ export type PlaybackOverlayFile = {
   toasts: PlaybackOverlayToast[];
 };
 export type PlaybackOverlayToast = {
+  /** The render job; the replay (as Dolphin asked for it) and its frames: a star's row shows its state. */
+  id: string;
+  path: string;
+  startFrame: number;
+  endFrame: number;
   label: string;
   text: string;
   /** 0..1 */
   progress: number;
   state: "queued" | "rendering" | "done" | "error";
+  /** Still shown at the top right (a finished one for a few seconds). */
+  toast: boolean;
+  /** Done: its folder button opens the file explorer at the video (status `showRender`). */
+  folder: boolean;
 };
 
 /** What the playback Dolphin writes to `<comm file>.status.json` (Core/Rollback/ReplayPlayback.h). */
@@ -114,7 +123,11 @@ export type ReplayPlaybackStatus = {
     music: boolean;
     /** False: a star's highlight playing (not saved as a Manual Clip); else clip mode's (saved first). */
     clip?: boolean;
+    /** What the toast calls it ("Clip 2:13 - 2:20 (7 s)", Dolphin's clip mode wording). */
+    label?: string;
   }[];
+  /** A finished render's folder button, the last one clicked (`seq` from 1 for the Dolphin's run). */
+  showRender?: { seq: number; id: string };
   /** Auto play's countdown at a spectated stream's end: the seconds left. */
   nextIn?: number;
   /**

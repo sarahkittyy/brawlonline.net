@@ -67,8 +67,10 @@
 //
 // The launcher's side of the overlay, <comm.json>.overlay.json (read every poll; none: nothing):
 //   {"accent": "#rrggbb" (the launcher's colour: the seek bar's played part),
-//    "toasts": [{"label", "text", "progress" (0..1), "state": "queued" | "rendering" | "done" |
-//    "error"}, ...] (the renders asked for here, shown at the top right)}
+//    "toasts": [{"id", "path", "startFrame", "endFrame", "label", "text", "progress" (0..1),
+//    "state": "queued" | "rendering" | "done" | "error", "toast", "folder"}, ...] (the renders
+//    asked for here: at the top right while `toast`, and on the row of a star of them; a done one's
+//    folder button says "showRender": {"seq", "id"} in the status)}
 //
 // Auto play (spectating, `"autoPlay": true` in a mirror request): at the stream's end the overlay
 // counts down "Next game in N s." (an X stays, clip mode holds it), then the state is "next" (the
@@ -110,6 +112,9 @@ struct NavView
   bool prev_replay = false;
   bool next_replay = false;
   bool clips = true;
+  // The replay armed (its path as the request gave it; empty: none), for the overlay to find its
+  // renders in the launcher's overlay file.
+  std::string armed_path;
 };
 NavView GetNav();
 enum class NavAction
@@ -127,15 +132,28 @@ bool SaveClip(s64 start, s64 end);
 // Asks the launcher to render frames `start` to `end` of the replay armed (status
 // "renderRequests"): clip mode's (`save`: saved as SaveClip does first, a Manual Clip), or a
 // star's highlight playing (not saved: it is one already).
-bool RequestRender(s64 start, s64 end, bool music, bool save = true);
+// `label`: what the launcher's toast calls it ("Clip 2:13 - 2:20 (7 s)").
+bool RequestRender(s64 start, s64 end, bool music, bool save = true, const std::string& label = {});
+// A finished render's folder button (the launcher's overlay file's `id`): status "showRender"
+// {"seq", "id"}, the launcher opens the file explorer at the video.
+void ShowRenderFolder(const std::string& id);
 
 // The launcher's side of the overlay (<comm.json>.overlay.json), as last read. Any thread.
+// A render asked for from the game, as the launcher has it: which (`id`, the replay and frames),
+// what to say, whether it still shows at the top right (`toast`), and whether its video can be
+// shown in its folder (`folder`: done).
 struct OverlayToast
 {
+  std::string id;
+  std::string path;
+  s64 start = -1;
+  s64 end = -1;
   std::string label;
   std::string text;
   float progress = 0;
   std::string state;
+  bool toast = true;
+  bool folder = false;
 };
 struct OverlayView
 {
