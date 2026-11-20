@@ -13,6 +13,10 @@ if (process.env.NODE_ENV === "production") {
   checkNodeEnv("development");
 }
 
+// Started by `npm start`'s dev server: the watch stops once that process is gone.
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+require("../scripts/exit-with-dev-server")(() => process.exit(0));
+
 const configuration: webpack.Configuration = {
   devtool: "inline-source-map",
 

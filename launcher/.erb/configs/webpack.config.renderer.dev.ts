@@ -236,10 +236,13 @@ export default (env?: Record<string, string | true>, _argv?: any) => {
         verbose: true,
       },
       setupMiddlewares(middlewares) {
+        // Both close once this process is gone, however it ends (.erb/scripts/exit-with-dev-server.js).
+        const env = { ...process.env, ERB_DEV_SERVER_PID: String(process.pid) };
         console.log("Starting preload.js builder...");
         const preloadProcess = spawn("npm", ["run", "start:preload"], {
           shell: true,
           stdio: "inherit",
+          env,
         })
           .on("close", (code: number) => process.exit(code!))
           .on("error", (spawnError) => console.error(spawnError));
@@ -248,6 +251,7 @@ export default (env?: Record<string, string | true>, _argv?: any) => {
         spawn("npm", ["run", "start:main"], {
           shell: true,
           stdio: "inherit",
+          env,
         })
           .on("close", (code: number) => {
             preloadProcess.kill();
