@@ -9,6 +9,7 @@
 
 #include <fmt/format.h>
 #include <mbedtls/sha256.h>
+#include <mbedtls/version.h>
 
 #include "Common/Logging/Log.h"
 #include "BrawlOnline/Rollback/PeerData.h"
@@ -106,7 +107,10 @@ void Uploader::FinishGame()
 void Uploader::BeginGame(const GameInfo& game)
 {
   FinishGame();
-  m_game.emplace();
+  // Game{}, not emplace(): clang with libstdc++ (the recomp's Linux build) judges the nested
+  // struct not default-constructible, its member initializers not being parsed yet where
+  // std::optional<Game> is declared.
+  m_game.emplace(Game{});
   m_game->info = game;
 }
 
@@ -136,7 +140,11 @@ void Uploader::AddChunk(const std::array<u8, 16>& uid, u32 type, std::vector<u8>
     c.frames = true;
     c.first_frame = GetU32(raw, 0);
     std::array<u8, 32> sha{};
+#if MBEDTLS_VERSION_MAJOR >= 3  // the recomp's Linux build links mbed TLS 3, which dropped _ret
+    mbedtls_sha256(raw.data(), raw.size(), sha.data(), 0);
+#else
     mbedtls_sha256_ret(raw.data(), raw.size(), sha.data(), 0);
+#endif
     std::copy_n(sha.begin(), c.digest.size(), c.digest.begin());
   }
   g.bytes += chunk.size();
