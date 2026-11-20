@@ -614,6 +614,14 @@ void CoreTimingManager::Throttle(const s64 target_cycle)
                  std::chrono::duration_cast<DT>(time - CalculateTargetHostTimeInternal(target_cycle)));
   }
 
+  // A rollback's re-run frames leave the paced sleep to the presented frame (SetPresentPacing).
+  if (PaceSleepToCopy() && IsSpeedUnlimited())
+  {
+    ResetThrottle(target_cycle);
+    m_throttle_disable_vi_int = false;
+    return;
+  }
+
   const bool already_throttled =
       m_throttled_after_presentation.exchange(true, std::memory_order_relaxed);
 
@@ -650,7 +658,14 @@ void CoreTimingManager::Throttle(const s64 target_cycle)
     m_throttle_reference_time += std::chrono::seconds{sec_adj};
   }
 
-  TimePoint target_time = CalculateTargetHostTimeInternal(target_cycle);
+  // The paced sleep in a whole-machine session: to the presented copy's own due time, whichever
+  // throttle call (an SI poll, a Wii Remote update, the Brawl loop top) takes it. A copy more than
+  // 1/30 s back is from another timeline (a joiner's machine before it loaded the image).
+  const s64 since_copy = target_cycle - m_paced_copy_ticks;
+  const bool sleep_to_copy = !already_throttled && PaceSleepToCopy() && since_copy >= 0 &&
+                             since_copy <= m_system.GetSystemTimers().GetTicksPerSecond() / 30;
+  TimePoint target_time =
+      CalculateTargetHostTimeInternal(sleep_to_copy ? m_paced_copy_ticks : target_cycle);
 
   const TimePoint min_target = time - m_max_fallback;
 
@@ -702,7 +717,19 @@ bool CoreTimingManager::PresentPacingActive() const
 void CoreTimingManager::OnPresentedXFBCopy()
 {
   if (PresentPacingActive())
+  {
+    m_paced_copy_ticks = GetTicks();
     m_throttled_after_presentation.store(false, std::memory_order_relaxed);
+  }
+}
+
+void CoreTimingManager::TakePendingPacedSleep()
+{
+  if (PaceSleepToCopy() && !IsSpeedUnlimited() &&
+      !m_throttled_after_presentation.load(std::memory_order_relaxed))
+  {
+    Throttle(GetTicks());
+  }
 }
 
 // Until `target` less the lead provider's lead (SetPacedSleepLead), in slices: the lead is asked

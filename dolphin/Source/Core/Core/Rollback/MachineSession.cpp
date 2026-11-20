@@ -7010,6 +7010,16 @@ Wait WaitForFrames(Core::System& system)
     if (const auto due = ct.ScheduledHostTime(); due && *due > Clock::now())
       BoundarySleep(ct, *due);
   }
+  else if (s.phase == Phase::Running && SessionBoundary() == Boundary::BrawlLoop)
+  {
+    // Brawl's loop top comes after the throttle's sleep for the copy before it, as a VI-field
+    // boundary does after its boundary sleep: where no SI poll or Wii Remote update came between
+    // that copy and the loop top (a copy late in its field), the loop top read the local
+    // controller and ran the frame's rollback before the sleep.
+    s.mutex.unlock();
+    system.GetCoreTiming().TakePendingPacedSleep();
+    s.mutex.lock();
+  }
   Phase timed_phase = s.phase;
   auto since = Clock::now();
   for (;;)
@@ -7067,7 +7077,13 @@ Wait WaitForFrames(Core::System& system)
         // Rush Frame Presentation's pacing, as P+ online (GameplaySession's StartRunning): each
         // frame is shown at its copy's due time, not whenever the throttle let the CPU reach the
         // copy (bug #30: a REX room's frames came 16 ms apart with a 21 ms gap every seventh).
-        system.GetCoreTiming().SetPresentPacing(true);
+        // The throttle's sleep ends at the copy's due time, whichever call takes it
+        // (SetPresentPacing's `sleep_to_copy`; PPR_MACHINE_SLEEP_TO_COPY=0: off, for A/B runs).
+        static const bool sleep_to_copy = [] {
+          const char* e = std::getenv("PPR_MACHINE_SLEEP_TO_COPY");
+          return !(e && *e == '0');
+        }();
+        system.GetCoreTiming().SetPresentPacing(true, sleep_to_copy);
         AddLog("running");
         OSD::AddMessage("Session started", 3000, OSD::Color::GREEN);
       }
