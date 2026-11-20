@@ -25,6 +25,7 @@
 #include "Common/Timer.h"
 #include "Common/UPnP.h"
 #include "BrawlOnline/Config/OnlineSettings.h"
+#include "BrawlOnline/Engine.h"
 #include "BrawlOnline/Online/Ipv6.h"
 #include "BrawlOnline/Online/Timeouts.h"
 #include "BrawlOnline/Online/User.h"
@@ -926,6 +927,10 @@ void Matchmaking::StartMatchmaking()
   request["search"] = picojson::value(std::move(search));
   request["appVersion"] = picojson::value(APP_VERSION);
   request["platform"] = picojson::value(APP_PLATFORM);
+  // Which engine runs the game (Dolphin or EmissaryRecomp), for mm's logs and numbers.
+  const BrawlOnline::EngineIdentity engine = BrawlOnline::ThisEngine();
+  request["engine"] = picojson::value(engine.name);
+  request["engineVersion"] = picojson::value(engine.version);
   request["ipAddressLan"] = picojson::value(lan_addr);
   if (!m_ipv6_token.empty())
   {

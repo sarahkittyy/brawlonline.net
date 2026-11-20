@@ -28,7 +28,15 @@ namespace Online
 {
 // The version this build reports as appVersion in matchmaking tickets and compares with
 // user.json's latestVersion. The launcher's PlusOnline 0.1.0 writes latestVersion 0.1.0.
+// It is the Brawl Online release the core belongs to, whatever engine runs it: CI stamps it into
+// this line (.github/scripts/stamp-version.sh); EmissaryRecomp, which builds a pinned core outside
+// our CI, defines BRAWL_ONLINE_APP_VERSION to the release of that core (docs/design/
+// brawl-online-core.md §10, "Which engine"), so mm holds it to an update as it holds that Dolphin.
+#ifdef BRAWL_ONLINE_APP_VERSION
+constexpr char APP_VERSION[] = BRAWL_ONLINE_APP_VERSION;
+#else
 constexpr char APP_VERSION[] = "0.1.0";
+#endif
 
 // The platform this build is published for, sent as `platform` with APP_VERSION: the mm server
 // holds each platform to its own update feed's newest build (the macOS one goes live later, and

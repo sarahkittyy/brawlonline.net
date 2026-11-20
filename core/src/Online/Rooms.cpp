@@ -23,6 +23,7 @@
 #include "Common/Logging/Log.h"
 #include "Common/Thread.h"
 #include "BrawlOnline/Config/OnlineSettings.h"
+#include "BrawlOnline/Engine.h"
 #include "Core/Core.h"
 #include "BrawlOnline/Online/Chat.h"
 #include "BrawlOnline/Online/GameAlive.h"
@@ -1556,7 +1557,9 @@ void Thread()
         std::unique_lock lk(s_mutex);
         if (ev.type == ENET_EVENT_TYPE_CONNECT)
         {
-          Send(peer, HelloJson(info.uid, info.play_key, APP_VERSION, APP_PLATFORM, chat_key));
+          const BrawlOnline::EngineIdentity engine = BrawlOnline::ThisEngine();
+          Send(peer, HelloJson(info.uid, info.play_key, APP_VERSION, APP_PLATFORM, chat_key,
+                               engine.name, engine.version));
           s.conn = Conn::Hello;
           ++s.hellos;
           conn_started = now;

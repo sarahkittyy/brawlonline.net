@@ -830,8 +830,24 @@ def test_direct_set_under_the_gameplay_session(backend: OnlineBackend,
         assert g.bridge()["lost"] == 0
         # No reboot: the GameBridge found the plugin's block once and never lost it.
         assert "is gone" not in (g.inst.user_dir / "Logs" / "dolphin.log").read_text(errors="replace")
+    # Each game reported each game with the engine that ran it (docs/design/brawl-online-core.md
+    # §10, "Which engine"): our Dolphin here, EmissaryRecomp for a recomp instance.
+    _engines_reported(backend, 2 * len(rep["games"]))
     for g in (a, b):
         g.c.mm_cancel()
+
+
+def _engines_reported(backend: OnlineBackend, n: int) -> None:
+    """accounts logged `n` game reports, each naming its game's engine: `dolphin` with its version,
+    or `emissary` where PPHARNESS_RECOMP runs a recomp."""
+    def reported() -> list[str]:
+        log = re.sub(r"\x1b\[[0-9;]*m", "", backend.log_text("accounts"))
+        return [l for l in log.splitlines() if " game reported" in l]
+    lines = _wait(lambda: (lambda ls: ls if len(ls) >= n else None)(reported()), 30, f"{n} game reports")
+    engines = [m.group(1) if (m := re.search(r"engine=(\w+)", l)) else None for l in lines]
+    allowed = {"dolphin", "emissary"} if os.environ.get("PPHARNESS_RECOMP") else {"dolphin"}
+    assert set(engines) <= allowed, lines
+    assert all(re.search(r"engine=dolphin v?\S+", l) for l in lines if "engine=dolphin" in l), lines
 
 
 @pytest.mark.slow

@@ -10,7 +10,9 @@
 #include <gtest/gtest.h>
 #include <picojson.h>
 
+#include "BrawlOnline/Engine.h"
 #include "BrawlOnline/Online/RoomMessages.h"
+#include "Common/Version.h"
 
 using namespace Online::Rooms;
 
@@ -672,6 +674,30 @@ TEST(RoomMessages, Requests)
   EXPECT_EQ(HelloJson("u", "k", "0.1.0", "win", "ab12"),
             R"({"appVersion":"0.1.0","chatKey":"ab12","gameAlive":true,"pairRoom":true,)"
             R"("platform":"win","type":"hello","user":{"playKey":"k","uid":"u"}})");
+  // Which engine runs the game (BrawlOnline::EngineIdentity): left out when empty (mm reads an
+  // absent one as Dolphin, as from builds before the field).
+  EXPECT_EQ(HelloJson("u", "k", "0.2.5", "win", "ab12", "emissary", "0.7.0"),
+            R"({"appVersion":"0.2.5","chatKey":"ab12","engine":"emissary","engineVersion":"0.7.0",)"
+            R"("gameAlive":true,"pairRoom":true,"platform":"win","type":"hello",)"
+            R"("user":{"playKey":"k","uid":"u"}})");
+  EXPECT_EQ(HelloJson("u", "k", "0.2.5", "linux", "", "dolphin", ""),
+            R"({"appVersion":"0.2.5","engine":"dolphin","gameAlive":true,"pairRoom":true,)"
+            R"("platform":"linux","type":"hello","user":{"playKey":"k","uid":"u"}})");
+}
+
+// The engine the servers learn (core/include/BrawlOnline/Engine.h): Dolphin says so with its own
+// version; with no engine set (or one that does not say) it is "unknown", never Dolphin.
+TEST(RoomMessages, EngineIdentity)
+{
+  const BrawlOnline::EngineIdentity dolphin = BrawlOnline::ThisEngine();
+  EXPECT_EQ(dolphin.name, "dolphin");
+  EXPECT_EQ(dolphin.version, Common::GetScmDescStr());
+  BrawlOnline::Engine* const engine = &BrawlOnline::GetEngine();
+  BrawlOnline::SetEngine(nullptr);
+  const BrawlOnline::EngineIdentity none = BrawlOnline::ThisEngine();
+  BrawlOnline::SetEngine(engine);
+  EXPECT_EQ(none.name, "unknown");
+  EXPECT_EQ(none.version, "");
 }
 
 TEST(RoomMessages, RulesetCodesAndRequests)

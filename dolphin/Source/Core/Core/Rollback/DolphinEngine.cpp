@@ -7,6 +7,7 @@
 #include <iterator>
 
 #include "BrawlOnline/Engine.h"
+#include "Common/Version.h"
 #include "Core/Core.h"
 #include "Core/CoreTiming.h"
 #include "Core/HW/CPU.h"
@@ -26,6 +27,12 @@ namespace
 class DolphinEngine final : public BrawlOnline::Engine
 {
 public:
+  // Our Dolphin's version: git describe of the build ("v0.2.5" for a release, whose tag CI makes).
+  BrawlOnline::EngineIdentity Identity() const override
+  {
+    return {"dolphin", Common::GetScmDescStr()};
+  }
+
   void ContinueFrame() override
   {
     auto& ppc = Ppc();

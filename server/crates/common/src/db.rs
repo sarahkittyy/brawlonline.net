@@ -364,6 +364,9 @@ pub struct SpeedReportRecord {
     pub perf: crate::speed::GamePerf,
     pub app_version: String,
     pub platform: String,
+    /// [`crate::client_engine::name`] and [`crate::client_engine::version`].
+    pub engine: String,
+    pub engine_version: String,
 }
 
 pub async fn record_speed_report(pool: &sqlx::PgPool, r: &SpeedReportRecord) -> sqlx::Result<()> {
@@ -373,9 +376,9 @@ pub async fn record_speed_report(pool: &sqlx::PgPool, r: &SpeedReportRecord) -> 
                                     followed, peer_fps, slow, peer_slow, app_version, platform,
                                     delay, delay_profile, delay_asked, delay_fixed, rtt_start, ping, jitter,
                                     rollbacks, depth, rollback_ms, late_after_rollback, hitches, waits, wait_ms,
-                                    resim_ms)
+                                    resim_ms, engine, engine_version)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
-                 $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30)
+                 $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32)
          ON CONFLICT (game_uid, uid) DO NOTHING",
     )
     .bind(r.uid)
@@ -408,6 +411,8 @@ pub async fn record_speed_report(pool: &sqlx::PgPool, r: &SpeedReportRecord) -> 
     .bind(d.map(|d| d.waits as i32))
     .bind(d.map(|d| d.wait_ms as f32))
     .bind(d.map(|d| d.resim_ms as f32))
+    .bind(&r.engine)
+    .bind(&r.engine_version)
     .execute(pool)
     .await?;
     Ok(())
@@ -446,13 +451,16 @@ pub struct SpeedCheckRecord {
     pub check: crate::speed::SpeedCheck,
     pub app_version: String,
     pub platform: String,
+    /// As [`SpeedReportRecord::engine`].
+    pub engine: String,
+    pub engine_version: String,
 }
 
 pub async fn record_speed_check(pool: &sqlx::PgPool, r: &SpeedCheckRecord) -> sqlx::Result<()> {
     let windows: Vec<f32> = r.check.windows.iter().map(|w| *w as f32).collect();
     sqlx::query(
-        "INSERT INTO speed_checks (uid, mode, windows, gaps, backend, app_version, platform)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)",
+        "INSERT INTO speed_checks (uid, mode, windows, gaps, backend, app_version, platform, engine, engine_version)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
     )
     .bind(r.uid)
     .bind(&r.check.mode)
@@ -461,6 +469,8 @@ pub async fn record_speed_check(pool: &sqlx::PgPool, r: &SpeedCheckRecord) -> sq
     .bind(&r.check.backend)
     .bind(&r.app_version)
     .bind(&r.platform)
+    .bind(&r.engine)
+    .bind(&r.engine_version)
     .execute(pool)
     .await?;
     Ok(())

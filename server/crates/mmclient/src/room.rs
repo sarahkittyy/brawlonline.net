@@ -57,7 +57,7 @@ impl OnlineClient {
         platform: &str,
         chat_key: &str,
     ) -> anyhow::Result<(Self, Value)> {
-        Self::open(server, creds, app_version, platform, chat_key, false)
+        Self::open(server, creds, app_version, platform, chat_key, false, ("", ""))
     }
 
     /// [`Self::connect`] as a game that sends `game-alive` while it runs (`hello.gameAlive`): mm
@@ -67,7 +67,20 @@ impl OnlineClient {
         creds: &Credentials,
         app_version: &str,
     ) -> anyhow::Result<(Self, Value)> {
-        Self::open(server, creds, app_version, "", "", true)
+        Self::open(server, creds, app_version, "", "", true, ("", ""))
+    }
+
+    /// [`Self::connect_on`] as a game run by `engine` (`hello.engine`, `hello.engineVersion`:
+    /// `dolphin`, `emissary`; [`common::client_engine`]).
+    pub fn connect_engine(
+        server: SocketAddr,
+        creds: &Credentials,
+        app_version: &str,
+        platform: &str,
+        engine: &str,
+        engine_version: &str,
+    ) -> anyhow::Result<(Self, Value)> {
+        Self::open(server, creds, app_version, platform, "", false, (engine, engine_version))
     }
 
     /// `game-alive`: this game runs.
@@ -82,6 +95,7 @@ impl OnlineClient {
         platform: &str,
         chat_key: &str,
         game_alive: bool,
+        (engine, engine_version): (&str, &str),
     ) -> anyhow::Result<(Self, Value)> {
         let sock = EnetSocket::bind(SocketAddr::from((Ipv4Addr::UNSPECIFIED, 0)))?;
         let local_port = sock.local_addr()?.port();
@@ -106,6 +120,8 @@ impl OnlineClient {
             user: HelloUser { uid: creds.uid.clone(), play_key: creds.play_key.clone() },
             app_version: app_version.into(),
             platform: platform.into(),
+            engine: engine.into(),
+            engine_version: engine_version.into(),
             chat_key: chat_key.into(),
             game_alive,
             pair_room: false,

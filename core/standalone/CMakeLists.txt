@@ -17,6 +17,11 @@ project(brawl_online_core_standalone C CXX)
 
 set(BRAWL_ONLINE_ROOT "${CMAKE_CURRENT_LIST_DIR}/../.." CACHE PATH "The repository checkout (core/ and dolphin/ under it)")
 set(BRAWL_ONLINE_VERSION "emissary" CACHE STRING "What the core reports as its build (Common::GetScmDescStr)")
+# The Brawl Online release this core is (0.2.N; empty: an unstamped "0.1.0"): its `appVersion`,
+# which mm holds to the update feeds as it holds that release's Dolphin (docs/design/
+# brawl-online-core.md §10, "Which engine"). EmissaryRecomp's release build sets it to the release
+# whose commit it pins.
+set(BRAWL_ONLINE_APP_VERSION "" CACHE STRING "The Brawl Online release of this core (appVersion)")
 get_filename_component(BO_ROOT "${BRAWL_ONLINE_ROOT}" ABSOLUTE)
 set(BO_CORE "${BO_ROOT}/core")
 set(BO_DOLPHIN "${BO_ROOT}/dolphin")
@@ -207,6 +212,13 @@ target_compile_features(brawl_online_core_standalone PUBLIC cxx_std_23)
 target_include_directories(brawl_online_core_standalone PUBLIC "${BO_CORE}/include")
 # The core's sources include GekkoNet's header from Core/Brawlback, built as a static library.
 target_compile_definitions(brawl_online_core_standalone PUBLIC GEKKONET_STATIC GEKKONET_NO_ASIO)
+if(BRAWL_ONLINE_APP_VERSION)
+  if(NOT BRAWL_ONLINE_APP_VERSION MATCHES "^[0-9]+\.[0-9]+\.[0-9]+$")
+    message(FATAL_ERROR "BRAWL_ONLINE_APP_VERSION must be major.minor.patch, not ${BRAWL_ONLINE_APP_VERSION}")
+  endif()
+  target_compile_definitions(brawl_online_core_standalone PUBLIC
+    BRAWL_ONLINE_APP_VERSION="${BRAWL_ONLINE_APP_VERSION}")
+endif()
 target_link_libraries(brawl_online_core_standalone PUBLIC brawl_online_common ${BO_GEKKO_TARGET}
   PRIVATE monocypher xxhash::xxhash ZLIB::ZLIB mbedtls sfml-network sfml-system)
 

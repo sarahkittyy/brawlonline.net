@@ -4,6 +4,13 @@
 //! in production). A game older than its platform's newest build may not play online
 //! (`MM_UPDATE_FEED_DIR`): each platform goes live on its own (the macOS build waits for Apple, the
 //! arm64 Linux build is published when it is done), so each is held to its own feed.
+//!
+//! EmissaryRecomp runs the same online core (`engine: emissary`; docs/design/brawl-online-core.md
+//! §10, "Which engine"). Its `appVersion` is the Brawl Online release of the core it was built
+//! from, so it is compared exactly as a Dolphin of that release: against the same platform's
+//! Dolphin feed, or, once recomp builds are published with their own feed
+//! ([`EMISSARY_FEEDS`], naming the core release of the newest recomp build), against that one,
+//! as the macOS build is held to its own while it trails.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -18,22 +25,38 @@ pub const FEEDS: [(&str, &str); 4] = [
     ("linux-arm64", "latest-linux-arm64.yml"),
 ];
 
+/// EmissaryRecomp's feeds, per platform (as [`FEEDS`]'s): `version:` is the Brawl Online release
+/// of the core in the newest published recomp build (not the recomp's own version). None is
+/// published yet; until a platform's is, its recomp is held to that platform's Dolphin feed.
+pub const EMISSARY_FEEDS: [(&str, &str); 4] = [
+    ("win", "latest-emissary.yml"),
+    ("mac", "latest-emissary-mac.yml"),
+    ("linux", "latest-emissary-linux.yml"),
+    ("linux-arm64", "latest-emissary-linux-arm64.yml"),
+];
+
 /// The version each platform's feed names.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct FeedVersions {
     by_platform: BTreeMap<&'static str, String>,
+    /// [`EMISSARY_FEEDS`]' versions.
+    emissary: BTreeMap<&'static str, String>,
+}
+
+fn read_feeds(dir: &Path, feeds: &[(&'static str, &str)]) -> BTreeMap<&'static str, String> {
+    let mut by_platform = BTreeMap::new();
+    for (platform, file) in feeds {
+        if let Some(v) = std::fs::read_to_string(dir.join(file)).ok().as_deref().and_then(feed_version) {
+            by_platform.insert(*platform, v);
+        }
+    }
+    by_platform
 }
 
 impl FeedVersions {
     /// Reads the feeds in `dir`. A missing or unreadable feed is left out.
     pub fn read(dir: &Path) -> Self {
-        let mut by_platform = BTreeMap::new();
-        for (platform, file) in FEEDS {
-            if let Some(v) = std::fs::read_to_string(dir.join(file)).ok().as_deref().and_then(feed_version) {
-                by_platform.insert(platform, v);
-            }
-        }
-        FeedVersions { by_platform }
+        FeedVersions { by_platform: read_feeds(dir, &FEEDS), emissary: read_feeds(dir, &EMISSARY_FEEDS) }
     }
 
     pub fn from_pairs(pairs: &[(&str, &str)]) -> Self {
@@ -43,11 +66,21 @@ impl FeedVersions {
                 by_platform.insert(*p, version.to_string());
             }
         }
-        FeedVersions { by_platform }
+        FeedVersions { by_platform, emissary: BTreeMap::new() }
+    }
+
+    /// With the recomp's feeds of [`EMISSARY_FEEDS`] (platform, version).
+    pub fn with_emissary(mut self, pairs: &[(&str, &str)]) -> Self {
+        for (platform, version) in pairs {
+            if let Some((p, _)) = EMISSARY_FEEDS.iter().find(|(p, _)| p == platform) {
+                self.emissary.insert(*p, version.to_string());
+            }
+        }
+        self
     }
 
     pub fn is_empty(&self) -> bool {
-        self.by_platform.is_empty()
+        self.by_platform.is_empty() && self.emissary.is_empty()
     }
 
     /// The version a build of `version` for `platform` must have: its own feed's. A build that
@@ -56,7 +89,15 @@ impl FeedVersions {
     /// feeds): the oldest of those feeds. So a Windows 0.1.41 is refused while the macOS feed is
     /// still at 0.1.28, and a macOS 0.1.28 is not. A build newer than every feed (a development
     /// build) has nothing to meet.
-    pub fn required(&self, platform: &str, version: &str) -> Option<&str> {
+    ///
+    /// `engine` ([`common::client_engine::name`]): an `emissary` build is held to its platform's
+    /// recomp feed when there is one; otherwise, and for any other engine, as our Dolphin.
+    pub fn required(&self, engine: &str, platform: &str, version: &str) -> Option<&str> {
+        if engine == common::client_engine::EMISSARY {
+            if let Some(v) = self.emissary.get(platform) {
+                return Some(v);
+            }
+        }
         if let Some(v) = self.by_platform.get(platform) {
             return Some(v);
         }
@@ -71,10 +112,12 @@ impl FeedVersions {
 
 impl std::fmt::Display for FeedVersions {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if self.by_platform.is_empty() {
+        if self.is_empty() {
             return f.write_str("none");
         }
-        let parts: Vec<String> = self.by_platform.iter().map(|(p, v)| format!("{p} {v}")).collect();
+        let parts: Vec<String> = (self.by_platform.iter().map(|(p, v)| format!("{p} {v}")))
+            .chain(self.emissary.iter().map(|(p, v)| format!("emissary-{p} {v}")))
+            .collect();
         f.write_str(&parts.join(", "))
     }
 }
@@ -109,24 +152,24 @@ mod tests {
     #[test]
     fn each_platform_has_its_own_feed_and_others_the_oldest() {
         let v = FeedVersions::from_pairs(&[("win", "0.1.43"), ("mac", "0.1.42"), ("linux", "0.1.43")]);
-        assert_eq!(v.required("win", "0.1.40"), Some("0.1.43"));
-        assert_eq!(v.required("mac", "0.1.40"), Some("0.1.42"));
-        assert_eq!(v.required("linux", "0.1.40"), Some("0.1.43"));
+        assert_eq!(v.required("dolphin", "win", "0.1.40"), Some("0.1.43"));
+        assert_eq!(v.required("dolphin", "mac", "0.1.40"), Some("0.1.42"));
+        assert_eq!(v.required("dolphin", "linux", "0.1.40"), Some("0.1.43"));
         // A build older than the platform field, or a platform without a feed: held to the oldest
         // feed it can be from.
-        assert_eq!(v.required("", "0.1.42"), Some("0.1.42"));
-        assert_eq!(v.required("bsd", "0.1.40"), Some("0.1.42"));
-        assert_eq!(FeedVersions::default().required("win", "0.1.40"), None);
+        assert_eq!(v.required("dolphin", "", "0.1.42"), Some("0.1.42"));
+        assert_eq!(v.required("dolphin", "bsd", "0.1.40"), Some("0.1.42"));
+        assert_eq!(FeedVersions::default().required("dolphin", "win", "0.1.40"), None);
         // The macOS build of 0.1.40-0.1.42 waits for Apple: a 0.1.41 that names no platform is not
         // a macOS build, a 0.1.28 may be one.
         let v = FeedVersions::from_pairs(&[("win", "0.1.42"), ("mac", "0.1.28"), ("linux", "0.1.42")]);
-        assert_eq!(v.required("", "0.1.41"), Some("0.1.42"));
-        assert_eq!(v.required("", "0.1.28"), Some("0.1.28"));
-        assert_eq!(v.required("", "0.1.20"), Some("0.1.28"));
-        assert_eq!(v.required("", "0.2.0"), None, "newer than every feed");
+        assert_eq!(v.required("dolphin", "", "0.1.41"), Some("0.1.42"));
+        assert_eq!(v.required("dolphin", "", "0.1.28"), Some("0.1.28"));
+        assert_eq!(v.required("dolphin", "", "0.1.20"), Some("0.1.28"));
+        assert_eq!(v.required("dolphin", "", "0.2.0"), None, "newer than every feed");
         // Versions compare as numbers, not text.
         let v = FeedVersions::from_pairs(&[("win", "0.1.100"), ("mac", "0.1.99")]);
-        assert_eq!(v.required("linux", "0.1.50"), Some("0.1.99"));
+        assert_eq!(v.required("dolphin", "linux", "0.1.50"), Some("0.1.99"));
     }
 
     #[test]
@@ -134,12 +177,37 @@ mod tests {
         // The arm64 Linux build is published on its own: while it lags, an arm64 build of the
         // version it names may still play, an x86_64 one may not.
         let v = FeedVersions::from_pairs(&[("win", "0.2.9"), ("linux", "0.2.9"), ("linux-arm64", "0.2.8")]);
-        assert_eq!(v.required("linux-arm64", "0.2.8"), Some("0.2.8"));
-        assert_eq!(v.required("linux", "0.2.8"), Some("0.2.9"));
+        assert_eq!(v.required("dolphin", "linux-arm64", "0.2.8"), Some("0.2.8"));
+        assert_eq!(v.required("dolphin", "linux", "0.2.8"), Some("0.2.9"));
         // Before its first build is published (no feed yet), as any platform without a feed.
         let v = FeedVersions::from_pairs(&[("win", "0.2.9"), ("mac", "0.2.8"), ("linux", "0.2.9")]);
-        assert_eq!(v.required("linux-arm64", "0.2.9"), Some("0.2.9"));
-        assert_eq!(v.required("linux-arm64", "0.2.10"), None);
+        assert_eq!(v.required("dolphin", "linux-arm64", "0.2.9"), Some("0.2.9"));
+        assert_eq!(v.required("dolphin", "linux-arm64", "0.2.10"), None);
+    }
+
+    #[test]
+    fn a_recomp_is_held_as_a_dolphin_of_its_core_until_it_has_its_own_feed() {
+        // No recomp feed: an EmissaryRecomp built from the 0.2.8 core is refused or let in exactly
+        // as our Dolphin 0.2.8 of its platform, and so is an engine that does not say.
+        let v = FeedVersions::from_pairs(&[("win", "0.2.9"), ("mac", "0.2.8"), ("linux", "0.2.9")]);
+        for engine in ["emissary", "unknown", "dolphin"] {
+            assert_eq!(v.required(engine, "win", "0.2.8"), Some("0.2.9"), "{engine}");
+            assert_eq!(v.required(engine, "mac", "0.2.8"), Some("0.2.8"), "{engine}");
+            assert_eq!(v.required(engine, "linux-arm64", "0.2.9"), Some("0.2.9"), "{engine}");
+            assert_eq!(v.required(engine, "linux-arm64", "0.2.10"), None, "{engine}");
+        }
+        // With its own feed (the core release of the newest recomp build on that platform), a
+        // recomp is held to that one, as the macOS build is while it trails; Dolphins are not.
+        let v = v.with_emissary(&[("win", "0.2.7"), ("bsd", "9.9.9")]);
+        assert_eq!(v.required("emissary", "win", "0.2.6"), Some("0.2.7"));
+        assert_eq!(v.required("emissary", "win", "0.2.7"), Some("0.2.7"));
+        assert_eq!(v.required("dolphin", "win", "0.2.7"), Some("0.2.9"));
+        assert_eq!(v.required("emissary", "linux", "0.2.7"), Some("0.2.9"), "no linux recomp feed");
+        // The recomp feeds never stand in for a Dolphin that names no platform.
+        let only = FeedVersions::default().with_emissary(&[("win", "0.2.7")]);
+        assert!(!only.is_empty());
+        assert_eq!(only.required("dolphin", "", "0.2.6"), None);
+        assert_eq!(only.to_string(), "emissary-win 0.2.7");
     }
 
     #[test]
@@ -148,10 +216,14 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("latest.yml"), "version: 0.1.43\n").unwrap();
         std::fs::write(dir.join("latest-mac.yml"), "version: 0.1.42\n").unwrap();
+        std::fs::write(dir.join("latest-emissary.yml"), "version: 0.1.41\n").unwrap();
         let v = FeedVersions::read(&dir);
         std::fs::remove_dir_all(&dir).unwrap();
-        assert_eq!(v, FeedVersions::from_pairs(&[("win", "0.1.43"), ("mac", "0.1.42")]));
-        assert_eq!(v.to_string(), "mac 0.1.42, win 0.1.43");
+        assert_eq!(
+            v,
+            FeedVersions::from_pairs(&[("win", "0.1.43"), ("mac", "0.1.42")]).with_emissary(&[("win", "0.1.41")])
+        );
+        assert_eq!(v.to_string(), "mac 0.1.42, win 0.1.43, emissary-win 0.1.41");
         assert!(FeedVersions::read(&dir).is_empty());
     }
 }

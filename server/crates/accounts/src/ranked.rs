@@ -563,6 +563,12 @@ pub struct ReportGameReq {
     /// review; the history reads a room game's places from it.
     #[serde(default)]
     pub players: serde_json::Value,
+    /// The engine that ran the reporter's game and its version (`common::client_engine`; absent
+    /// from builds before the field: our Dolphin).
+    #[serde(default)]
+    pub engine: String,
+    #[serde(default)]
+    pub engine_version: String,
 }
 
 /// `reportOnlineGame`. For a ranked game the set is settled after the report. Unranked, Direct
@@ -590,9 +596,12 @@ pub async fn report_game(State(state): State<AppState>, Json(req): Json<ReportGa
         },
     };
     let detail = serde_json::json!({ "players": req.players });
+    let engine = common::client_engine::name(&req.engine);
+    let engine_version = common::client_engine::version(&req.engine_version);
     let inserted = sqlx::query(
-        "INSERT INTO game_reports (match_id, game_index, reporter, winner, stage_id, duration_frames, detail, created_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT DO NOTHING",
+        "INSERT INTO game_reports (match_id, game_index, reporter, winner, stage_id, duration_frames, detail, created_at,
+                                   engine, engine_version)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) ON CONFLICT DO NOTHING",
     )
     .bind(&req.match_id)
     .bind(req.game_index as i32)
@@ -602,6 +611,8 @@ pub async fn report_game(State(state): State<AppState>, Json(req): Json<ReportGa
     .bind(req.duration_frames)
     .bind(&detail)
     .bind(Utc::now())
+    .bind(&engine)
+    .bind(&engine_version)
     .execute(&state.pool)
     .await?
     .rows_affected();
@@ -618,7 +629,8 @@ pub async fn report_game(State(state): State<AppState>, Json(req): Json<ReportGa
             return Err(ApiError::conflict("already_reported", "This game was already reported with another winner"));
         }
     } else {
-        tracing::info!(match_id = %req.match_id, mode = row.mode, game = req.game_index, %uid, winner = ?winner, "game reported");
+        let engine = common::client_engine::label(&engine, &engine_version);
+        tracing::info!(match_id = %req.match_id, mode = row.mode, game = req.game_index, %uid, winner = ?winner, %engine, "game reported");
     }
     if !is_ranked {
         if let (crate::unranked::MODE_UNRANKED, Some(w), &[a, b]) = (row.mode, winner, &row.players[..]) {
@@ -690,6 +702,11 @@ pub struct ReportLeaveReq {
     /// schedule), `peer` (the other PC said it did) or `link`. Anything else is dropped.
     #[serde(default)]
     pub cause: Option<String>,
+    /// As [`ReportGameReq::engine`].
+    #[serde(default)]
+    pub engine: String,
+    #[serde(default)]
+    pub engine_version: String,
 }
 
 /// `reportOnlineMatchStatus(abandoned)`: the set ended before it was decided.
@@ -700,9 +717,12 @@ pub async fn report_leave(State(state): State<AppState>, Json(req): Json<ReportL
     let before_stage_select = req.before_stage_select && kind == Leave::Left;
     let early = req.early.filter(|_| matches!(kind, Leave::OpponentLeft | Leave::MatchQuality));
     let cause = req.cause.as_deref().and_then(Cause::parse).filter(|_| kind == Leave::MatchQuality);
+    let engine = common::client_engine::name(&req.engine);
+    let engine_version = common::client_engine::version(&req.engine_version);
     sqlx::query(
-        "INSERT INTO leave_reports (match_id, reporter, kind, created_at, before_stage_select, early, cause)
-         VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT DO NOTHING",
+        "INSERT INTO leave_reports (match_id, reporter, kind, created_at, before_stage_select, early, cause,
+                                    engine, engine_version)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) ON CONFLICT DO NOTHING",
     )
     .bind(&req.match_id)
     .bind(uid)
@@ -711,11 +731,14 @@ pub async fn report_leave(State(state): State<AppState>, Json(req): Json<ReportL
     .bind(before_stage_select)
     .bind(early)
     .bind(cause.map(Cause::as_str))
+    .bind(&engine)
+    .bind(&engine_version)
     .execute(&state.pool)
     .await?;
+    let engine = common::client_engine::label(&engine, &engine_version);
     tracing::info!(
         match_id = %req.match_id, %uid, kind = kind.as_str(), before_stage_select, ?early, cause = cause.map(Cause::as_str),
-        "ranked leave reported"
+        %engine, "ranked leave reported"
     );
     let timing = state.cfg.ranked_timing();
     settle(&state.pool, &req.match_id, Utc::now(), timing).await?;

@@ -319,6 +319,9 @@ def test_ranked_set_is_rated(backend: OnlineBackend, dolphin: Callable[..., Dolp
         assert abs(pub["rank"]["ratingOrdinal"] - want) < 0.01 and pub["rank"]["ratingUpdateCount"] == 1, pub
     log = backend.log_text("accounts")
     assert log.count(" game reported") == 2 * len(games), log[-3000:]
+    # ... each with the engine that played it (docs/design/brawl-online-core.md §10, "Which engine").
+    plain = re.sub(r"\x1b\[[0-9;]*m", "", log)
+    assert len(re.findall(r" game reported.*engine=dolphin", plain)) == 2 * len(games), log[-3000:]
     assert "ranked set settled" in log and "ranked leave reported" not in log
     for g in players:
         assert g.bridge()["lost"] == 0
@@ -338,6 +341,11 @@ def test_ranked_set_is_rated(backend: OnlineBackend, dolphin: Callable[..., Dolp
     for u in (ua, ub):
         shown = [l for l in backend.admin("speed", "show", u.email).splitlines() if "  game  ranked" in l]
         assert len(shown) == len(games) and not any("SLOW" in l for l in shown), shown
+        # ... from our Dolphin, which says so (`engine` in its hello; absent would read the same).
+        assert all(re.search(r"  dolphin v?\S+$", l) for l in shown), shown
+    summary = backend.admin("speed", "summary")
+    assert re.search(rf"ranked +dolphin +{2 * len(games)} +0 +0 +0", summary), summary
+    assert re.search(rf"dolphin\+dolphin +{len(games)} +0 +0\.00%", summary), summary
     assert "recording a speed report failed" not in mm_log, mm_log[-3000:]
 
 

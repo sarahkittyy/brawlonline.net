@@ -20,6 +20,7 @@
 #include "Common/Logging/Log.h"
 #include "Common/UPnP.h"
 #include "BrawlOnline/Config/OnlineSettings.h"
+#include "BrawlOnline/Engine.h"
 #include "Core/Core.h"
 #include "BrawlOnline/Online/OnlineSession.h"
 #include "BrawlOnline/Online/Ranked.h"
@@ -618,6 +619,10 @@ picojson::object OnlineStatus()
   o["connect_code"] = picojson::value(info.connect_code);
   o["latest_version"] = picojson::value(info.latest_version);
   o["app_version"] = picojson::value(APP_VERSION);
+  o["platform"] = picojson::value(APP_PLATFORM);
+  const BrawlOnline::EngineIdentity engine = BrawlOnline::ThisEngine();
+  o["engine"] = picojson::value(engine.name);
+  o["engine_version"] = picojson::value(engine.version);
   o["has_play_key"] = picojson::value(!info.play_key.empty());
   const char* fetch = "not_fetched";
   switch (user.GetFetchStatus())

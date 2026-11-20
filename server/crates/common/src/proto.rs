@@ -100,6 +100,12 @@ pub struct CreateTicket {
     /// the version it must have. Empty from builds older than the field.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub platform: String,
+    /// The engine that runs the game (`dolphin`, `emissary`; [`crate::client_engine`]) and its own
+    /// version. Empty from builds older than the field (our Dolphin).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub engine: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub engine_version: String,
     #[serde(default)]
     pub ip_address_lan: String,
     /// The token of the game's IPv6 probes (`common::probe6`): mm tells the match's players the

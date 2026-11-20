@@ -541,3 +541,54 @@ async fn opponent_left_about_a_frozen_game_counts_at_once() {
     pump.join().unwrap();
     stack.shutdown().await;
 }
+
+/// Game and leave reports keep the engine that ran the reporter's game (`engine`,
+/// `engineVersion`; docs/design/brawl-online-core.md §10, "Which engine"): absent, our Dolphin.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn reports_keep_the_engine() {
+    let stack = Stack::start(StackOptions { engine: engine(), ..Default::default() }).await.unwrap();
+    let u = players(&stack, &["edda", "egon"]).await;
+    let (a, b) = (&u[0], &u[1]);
+    let id = direct_set(&stack, a, b, 1).await;
+    let (st, body) = stack
+        .post(
+            "/v1/ranked/report-game",
+            None,
+            json!({
+                "uid": a.uid, "playKey": a.play_key, "matchId": id, "gameIndex": 1, "winner": a.uid,
+                "players": [], "engine": "Emissary", "engineVersion": "0.7.0+771c27b",
+            }),
+        )
+        .await;
+    assert_eq!(st, 200, "{body}");
+    assert_eq!(report(&stack, b, &id, 1, Some(a)).await.0, 200);
+    let (st, body) = stack
+        .post(
+            "/v1/ranked/report-leave",
+            None,
+            json!({"uid": b.uid, "playKey": b.play_key, "matchId": id, "kind": "left",
+                   "engine": "not an engine!", "engineVersion": "x\u{1b}y"}),
+        )
+        .await;
+    assert_eq!(st, 200, "{body}");
+    let games: Vec<(Uuid, String, String)> =
+        sqlx::query_as("SELECT reporter, engine, engine_version FROM game_reports WHERE match_id = $1 ORDER BY engine")
+            .bind(&id)
+            .fetch_all(&stack.pool)
+            .await
+            .unwrap();
+    let (ua, ub) = (Uuid::parse_str(&a.uid).unwrap(), Uuid::parse_str(&b.uid).unwrap());
+    assert_eq!(
+        games,
+        vec![(ub, "dolphin".to_string(), String::new()), (ua, "emissary".to_string(), "0.7.0+771c27b".to_string())]
+    );
+    let leave: (String, String) =
+        sqlx::query_as("SELECT engine, engine_version FROM leave_reports WHERE match_id = $1 AND reporter = $2")
+            .bind(&id)
+            .bind(ub)
+            .fetch_one(&stack.pool)
+            .await
+            .unwrap();
+    assert_eq!(leave, ("unknown".to_string(), "xy".to_string()));
+    stack.shutdown().await;
+}

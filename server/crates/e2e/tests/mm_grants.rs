@@ -223,6 +223,51 @@ async fn mm_queries_work_as_pp_mm() {
     let err = sqlx::query("SELECT waited_ms FROM queue_searches").execute(&pool).await.unwrap_err();
     assert!(err.to_string().contains("permission denied"), "{err}");
 
+    // A game's speed and a waiting-room check, with the engine that ran it (0019, 0044).
+    let perf = common::speed::GamePerf {
+        frames: 7000,
+        fps: 59.9,
+        own_late: 0.0,
+        followed: 0.0,
+        peer_fps: None,
+        slow: false,
+        peer_slow: false,
+        delay: None,
+    };
+    let speed = db::SpeedReportRecord {
+        uid: a,
+        match_id: id.clone(),
+        mode: "ranked".into(),
+        game_uid: "00112233445566778899aabbccddeeff".into(),
+        set_game: Some(1),
+        end_method: "desync".into(),
+        perf,
+        app_version: "0.2.5".into(),
+        platform: "win".into(),
+        engine: "emissary".into(),
+        engine_version: "0.7.0".into(),
+    };
+    db::record_speed_report(&pool, &speed).await.unwrap();
+    db::record_speed_report(&pool, &speed).await.unwrap(); // ON CONFLICT reads the conflict columns
+    let check =
+        common::speed::SpeedCheck { mode: "ranked".into(), windows: vec![59.9], gaps: 0, backend: "Vulkan".into() };
+    let check = db::SpeedCheckRecord {
+        uid: a,
+        check,
+        app_version: "0.2.5".into(),
+        platform: "win".into(),
+        engine: "emissary".into(),
+        engine_version: "0.7.0".into(),
+    };
+    db::record_speed_check(&pool, &check).await.unwrap();
+    let engines: Vec<(String, String)> = sqlx::query_as(
+        "SELECT engine, engine_version FROM speed_reports UNION ALL SELECT engine, engine_version FROM speed_checks",
+    )
+    .fetch_all(&stack.pool)
+    .await
+    .unwrap();
+    assert_eq!(engines, vec![("emissary".to_string(), "0.7.0".to_string()); 2]);
+
     // And nothing else: no password hashes or emails.
     let err = sqlx::query("SELECT email FROM users LIMIT 1").execute(&pool).await.unwrap_err();
     assert!(err.to_string().contains("permission denied"), "{err}");
