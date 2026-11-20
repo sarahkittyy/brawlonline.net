@@ -44,13 +44,17 @@
   mask-image: linear-gradient(to bottom, #000 calc(100% - 28px), transparent);
 }
 
-/* macOS draws its window buttons over the top left (titleBarStyle hiddenInset): room for them, and the top of the
-   sidebar drags the window as Slippi's header did. */
+/* macOS draws its window buttons over the top left (titleBarStyle hiddenInset): room for them. With no title bar, the
+   sidebar's empty space drags the window (GitHub #56): the strip by the window buttons (sidebar.tsx), the logo's row
+   around the logo, and the gap between the pages and the bottom group. Its buttons don't (styles.scss: every element
+   is no-drag). */
 .mac {
+  position: relative;
   padding-top: 34px;
 }
 
-.mac .logoRow {
+.mac .logoRow,
+.mac .spacer {
   -webkit-app-region: drag;
 }
 

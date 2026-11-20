@@ -46,6 +46,7 @@ import { QueueBox } from "./queue_box";
 import { ShellMessages as Messages } from "./shell.messages";
 import styles from "./sidebar.module.css";
 import { LauncherUpdateRing, SetupRing } from "./update_ring";
+import { WindowDragStrip } from "./window_drag_strip";
 
 const isMac = window.electron.bootstrap.isMac;
 
@@ -191,6 +192,8 @@ export const Sidebar = ({ items }: { items: readonly NavItem[] }) => {
         onClose={() => setActivateOnlineOpen(false)}
         onSubmit={() => onPlay()}
       />
+      {/* The strip by the window buttons (sidebar.module.css .mac). */}
+      <WindowDragStrip height={34} />
     </aside>
   );
 };

@@ -1,4 +1,5 @@
 .rail {
+  position: relative;
   width: 272px;
   flex: none;
   min-height: 0;
@@ -16,6 +17,7 @@
 }
 
 .folded {
+  position: relative;
   width: 60px;
   flex: none;
   min-height: 0;
