@@ -102,7 +102,7 @@ describe("buildModsDolphinArgs", () => {
       "-C",
       `Dolphin.General.LoadPath=${load}`,
       "-C",
-      "GFX.Settings.HiresTextures=True",
+      "Graphics.Settings.HiresTextures=True",
     ]);
     expect(args.slice(-4)).toEqual(["-e", dol, "--mods-room", args[args.length - 1]]);
   });
@@ -115,7 +115,9 @@ describe("buildModsDolphinArgs", () => {
       room: { join: "KFQB", build: { hash, name: "" }, controller: "gc" },
       testMode: INACTIVE_TEST_MODE,
     });
-    expect(args.some((a) => a.startsWith("Dolphin.General.LoadPath=") || a.startsWith("GFX."))).toBe(false);
+    expect(
+      args.some((a) => a.startsWith("Dolphin.General.LoadPath=") || a.startsWith("Graphics.Settings.HiresTextures")),
+    ).toBe(false);
   });
 
   it("sets no Load path or textures without a pack in the mod folder", () => {
@@ -125,7 +127,9 @@ describe("buildModsDolphinArgs", () => {
       room: { join: "KFQB", build: { hash, name: "" }, controller: "gc" },
       testMode: INACTIVE_TEST_MODE,
     });
-    expect(args.some((a) => a.startsWith("Dolphin.General.LoadPath=") || a.startsWith("GFX."))).toBe(false);
+    expect(
+      args.some((a) => a.startsWith("Dolphin.General.LoadPath=") || a.startsWith("Graphics.Settings.HiresTextures")),
+    ).toBe(false);
   });
 
   it("puts the harness port last in test mode", () => {

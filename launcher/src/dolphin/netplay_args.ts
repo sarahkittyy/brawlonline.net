@@ -2,6 +2,8 @@ import type { ClipResolution } from "@common/clip_resolution";
 import type { TestModeOptions } from "@common/test_mode";
 import path from "path";
 
+import type { PlaybackTextures } from "./playback_textures";
+
 export type NetplayArgsInput = {
   /** Arguments selecting the User folder (`-u <User>`). */
   userArgs: string[];
@@ -80,17 +82,32 @@ export function buildNetplayDolphinArgs(input: NetplayArgsInput): string[] {
   return args;
 }
 
+export type PlaybackArgsInput = NetplayArgsInput & {
+  /** The netplay User folder's HD textures (playback_textures.ts), or null for its own User folder's. */
+  textures?: PlaybackTextures | null;
+};
+
 /**
  * The playback Dolphin's command line (docs/design/replays.md §6.2): its own User folder (its own
  * graphics, hotkeys and window), but the game from the netplay install: P+'s netplay launcher DOL
  * and the same patched SD card, never a second copy. The card is shared with a Play Dolphin that
  * may run at the same time, so this run may not write to it (`[Core] WiiSDCardAllowWrites`), and
- * a replay is never recorded again (`[Online] SaveReplays`). The comm file (`-i`) says what to
- * play; PlaybackDolphinInstance adds it.
+ * a replay is never recorded again (`[Online] SaveReplays`). With `textures`, the netplay User
+ * folder's `Load` (`[General] LoadPath`) and custom textures on (`[Settings] HiresTextures`), so a
+ * replay shows the texture pack the game was played with, not prefetched when Play doesn't
+ * prefetch it (`[Settings] CacheHiresTextures`); a path with "=" leaves them out. The comm file
+ * (`-i`) says what to play; PlaybackDolphinInstance adds it.
  */
-export function buildPlaybackDolphinArgs(input: NetplayArgsInput): string[] {
+export function buildPlaybackDolphinArgs({ textures, ...input }: PlaybackArgsInput): string[] {
   const args = buildNetplayDolphinArgs({ ...input, testMode: { ...input.testMode, harnessPort: null } });
   args.push("-C", "Dolphin.Core.WiiSDCardAllowWrites=False", "-C", "Dolphin.Online.SaveReplays=False");
+  const load = textures ? path.resolve(textures.loadPath) : null;
+  if (load && !load.includes("=")) {
+    args.push("-C", `Dolphin.General.LoadPath=${load}`, "-C", "Graphics.Settings.HiresTextures=True");
+    if (textures?.prefetch === false) {
+      args.push("-C", "Graphics.Settings.CacheHiresTextures=False");
+    }
+  }
   return args;
 }
 
