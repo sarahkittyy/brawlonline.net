@@ -762,7 +762,6 @@ if(_M_X86_64)
     PowerPC/Jit64/Jit_SystemRegisters.cpp
     PowerPC/Jit64/JitAsm.cpp
     PowerPC/Jit64/JitAsm.h
-    PowerPC/Jit64/RegCache/CachedReg.h
     PowerPC/Jit64/RegCache/FPURegCache.cpp
     PowerPC/Jit64/RegCache/FPURegCache.h
     PowerPC/Jit64/RegCache/GPRRegCache.cpp
@@ -770,6 +769,7 @@ if(_M_X86_64)
     PowerPC/Jit64/RegCache/JitRegCache.cpp
     PowerPC/Jit64/RegCache/JitRegCache.h
     PowerPC/Jit64/RegCache/RCMode.h
+    PowerPC/Jit64Common/BackPatchTable.h
     PowerPC/Jit64Common/BlockCache.cpp
     PowerPC/Jit64Common/BlockCache.h
     PowerPC/Jit64Common/ConstantPool.cpp

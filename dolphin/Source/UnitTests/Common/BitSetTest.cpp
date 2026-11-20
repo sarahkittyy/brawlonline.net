@@ -18,16 +18,38 @@ TEST(BitSet, Basics)
   EXPECT_EQ(bs2, bs2);
   EXPECT_NE(bs2, bs3);
   EXPECT_EQ(BitSet32(0xfff), BitSet32::AllTrue(12));
-  EXPECT_EQ(BitSet64(0xffffffffffffffff), BitSet64::AllTrue(64));
+  EXPECT_EQ(BitSet64(0xffffffffffffffff), BitSet64::AllTrue());
 }
 
 TEST(BitSet, BitGetSet)
 {
   BitSet32 bs;
-  bs[3] = bs[8] = bs[11] = true;
+  bs[3] = true;
+  bs[8] = true;
+  bs[11] = true;
   EXPECT_TRUE(bs[3]);
   EXPECT_FALSE(bs[4]);
   EXPECT_EQ((u32)((1 << 3) | (1 << 8) | (1 << 11)), bs.m_val);
+  bs[8] = false;
+  EXPECT_EQ((u32)((1 << 3) | (1 << 11)), bs.m_val);
+
+  // The top bit of each width, and bits past an int's width.
+  bs[31] = true;
+  EXPECT_EQ(0x80000808u, bs.m_val);
+  BitSet8 bs8;
+  bs8[7] = true;
+  EXPECT_EQ(0x80, bs8.m_val);
+  BitSet16 bs16(0xffff);
+  bs16[15] = false;
+  EXPECT_EQ(0x7fff, bs16.m_val);
+  BitSet64 bs64;
+  bs64[31] = true;
+  bs64[40] = true;
+  bs64[63] = true;
+  EXPECT_EQ(0x8000010080000000ull, bs64.m_val);
+  bs64[31] = false;
+  bs64[63] = false;
+  EXPECT_EQ(0x0000010000000000ull, bs64.m_val);
 }
 
 TEST(BitSet, Count)

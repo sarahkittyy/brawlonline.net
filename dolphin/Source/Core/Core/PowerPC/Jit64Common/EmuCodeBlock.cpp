@@ -1280,6 +1280,6 @@ void EmuCodeBlock::SetFPRF(Gen::X64Reg xmm, bool single)
 
 void EmuCodeBlock::Clear()
 {
-  m_back_patch_info.clear();
+  m_back_patch_info.Clear();
   m_exception_handler_at_loc.clear();
 }
