@@ -35,11 +35,13 @@ namespace
 // Which controller changes go out (PPR_GPRB_SUGGEST_RULES):
 // - all: any change; at most ANALOG_PER_FRAME a frame that change only the sticks or triggers
 //   (GitHub issue #35's patch as posted).
-// - cross: only a change that can start an action in P+ (Meaningful: Slippi's and Melee
-//   Unlocked's rules with P+'s lines).
-// - follow (default): cross, and after a crossing for a frame, any later change before that frame's
-//   read, at most one every FOLLOW_GAP (Melee Unlocked's follow-ups): a prediction is right only if
-//   every byte is, and a stick keeps moving after it crosses a line.
+// - cross (default): only a change that can start an action in P+ (Meaningful, on P+'s input
+//   map).
+// - follow: cross, and after a crossing for a frame, any later change before that frame's read, at
+//   most one every FOLLOW_GAP. With the 16 lines measured from idle
+//   they caught what the coarse lines missed; with P+'s whole map they show nothing more and send
+//   about 1.7x as many datagrams on sticks that move between reads (an offline model of the
+//   suggestions on 1,536 ranked replays).
 enum class Rules
 {
   All,
@@ -52,7 +54,7 @@ Rules RulesMode()
   static const Rules v = [] {
     const char* e = std::getenv("PPR_GPRB_SUGGEST_RULES");
     const std::string s = e ? e : "";
-    return s == "all" ? Rules::All : s == "cross" ? Rules::Cross : Rules::Follow;
+    return s == "all" ? Rules::All : s == "follow" ? Rules::Follow : Rules::Cross;
   }();
   return v;
 }
@@ -351,35 +353,122 @@ void SamplerLoop()
 
 namespace
 {
-// The lines P+ acts on, in gfPadStatus units (the stick against its origin, s8: +0x30 main x, +0x31
-// main y, +0x32 C x, +0x33 C y), measured in the game (harness/tools/pplus_stick_lines.py):
-// a value at or past `at` (at > 0: v >= at, at < 0: v <= at) is inside the line.
-struct Line
-{
-  u8 off;
-  s8 at;
-};
-constexpr Line LINES[] = {
-    // Main stick x: walk and forward tilt 28, dash 71, forward smash 78.
-    {0x30, 28}, {0x30, -28}, {0x30, 71}, {0x30, -71}, {0x30, 78}, {0x30, -78},
-    // Main stick y: up/down tilt 28, tap jump 68, crouch -61, up/down smash 71.
-    {0x31, 28}, {0x31, -28}, {0x31, 68}, {0x31, -61}, {0x31, 71}, {0x31, -71},
-    // C-stick: smashes 51 (nothing below it).
-    {0x32, 51}, {0x32, -51}, {0x33, 51}, {0x33, -51},
-};
-// The analog triggers (+0x34 L, +0x35 R, against the origin): P+'s light shield.
+// P+ 3.2's input map, read off the game's code (ipPadConfig, soController, the common Fighter.pac's
+// PSA and P+'s codes on top) and checked in the game (harness/tools/pplus_stick_lines.py): the
+// controller values the game can tell apart, in gfPadStatus units (the sticks against their
+// origin, s8: +0x30 main x, +0x31 main y, +0x32 C x, +0x33 C y; the triggers, u8: +0x34 L, +0x35 R).
+//
+// The main stick becomes a float in ipPadConfig (0x8004819C with P+'s "Directional Input Capped at
+// Distance of 1" and "General Directional Input Multiplier 0.010325"): a vector longer than 100 is
+// scaled to 100 and truncated, then each axis is times 0.010325, clamped to +-1, and 0 when
+// |v| <= 0.28. Each line is the first value past a threshold the game compares that float with
+// (the common fighter parameters, IC-Basic, as P+ sets them; none falls exactly on a value). x
+// lines count both ways (the game also reads x against the fighter's facing): dead zone 28, 0.3 30
+// and 0.325 32 (C-stick attacks), flick 0.35 34 (soController counts the frames since a stick
+// passed it: a dash needs fewer than 2), 0.375 37, pivot 0.475 47, 0.6 59, run 0.62 61, 0.7 68
+// (shield), dash 0.73 71, roll and tumble wiggle 0.75 73, forward smash 0.8 78, 0.85 83, 0.945 92.
+constexpr int X_LINES[] = {28, 30, 32, 34, 37, 47, 59, 61, 68, 71, 73, 78, 83, 92};
+// y up: dead zone 28, 0.3 30, 0.55 54, 0.6 59, tap jump from a dash or run 0.635 62, tap jump 0.7
+// 68, up smash 0.73 71.
+constexpr int Y_UP[] = {28, 30, 54, 59, 62, 68, 71};
+// y down (y <= -line): dead zone 28, -0.375 37, 0.55 54, 0.6 59, crouch -0.625 61, -0.66 64, fast
+// fall -0.665 65, UCF shield drop -0.675 66, -0.7 68, platform drop -0.71 69, down smash -0.73 71,
+// spot dodge -0.75 73, UCF spot dodge -0.8 78.
+constexpr int Y_DOWN[] = {28, 37, 54, 59, 61, 64, 65, 66, 68, 69, 71, 73, 78};
+// The C-stick (0x8004897C) is an input while cx^2 + cy^2 > 2500 (a diagonal from 36, 36); as the
+// default attack stick it presses A with the main stick at trunc(32 * its direction). P+'s shield
+// C-stick buffers read cx and cy alone (times 0.011775, against +-0.6: 51).
+constexpr int C_RADIUS2 = 2500;
+constexpr int C_AXIS = 51;
+// The analog triggers: (min(v, 150) / 150) at 0.3 is a new L or R press (P+'s light shield), 45.
 constexpr u8 TRIGGER_AT = HOST_DECODE_LIGHT_PRESS;
+static_assert(TRIGGER_AT == 45);
 
-bool Inside(const Line& l, const u8* pad)
+template <std::size_t N>
+s8 LinesPassed(int v, const int (&lines)[N])
 {
-  const s8 v = static_cast<s8>(pad[l.off]);
-  return l.at > 0 ? v >= l.at : v <= l.at;
+  int n = 0;
+  for (const int l : lines)
+    n += v >= l;
+  return static_cast<s8>(n);
+}
+s8 XZone(int x)
+{
+  return x >= 0 ? LinesPassed(x, X_LINES) : static_cast<s8>(-LinesPassed(-x, X_LINES));
+}
+s8 YZone(int y)
+{
+  return y >= 0 ? LinesPassed(y, Y_UP) : static_cast<s8>(-LinesPassed(-y, Y_DOWN));
 }
 
-// gfPadStatus's buttons: Start, Y, X, B, A (+2) and L, R, Z (+3), not the D-pad.
-u16 ActionButtons(const u8* pad)
+// Where a pad is in the map: per axis, the lines it is past (negative: on the minus side).
+struct Zones
 {
-  return static_cast<u16>(((pad[2] & 0x1F) << 8) | (pad[3] & 0x70));
+  s8 x, y;      // main stick (after the cap)
+  s8 c;         // C-stick input (1) or not (0)
+  s8 cx, cy;    // the direction of the attack it makes (while c)
+  s8 cax, cay;  // cx, cy against +-51
+  s8 l, r;      // triggers at 45
+};
+
+Zones ZonesOf(const u8* pad)
+{
+  Zones z{};
+  int x = static_cast<s8>(pad[0x30]);
+  int y = static_cast<s8>(pad[0x31]);
+  if (x * x + y * y > 10000)
+  {
+    // The game scales with frsqrte's estimate: at a line's very edge on a long diagonal this can
+    // be a unit off.
+    const float s = 100.0f / std::sqrt(static_cast<float>(x * x + y * y));
+    x = static_cast<int>(static_cast<float>(x) * s);
+    y = static_cast<int>(static_cast<float>(y) * s);
+  }
+  z.x = XZone(x);
+  z.y = YZone(y);
+  const int cx = static_cast<s8>(pad[0x32]);
+  const int cy = static_cast<s8>(pad[0x33]);
+  const int c2 = cx * cx + cy * cy;
+  if (c2 > C_RADIUS2)
+  {
+    // Its attack's direction: which of the main stick's axes leave the dead zone (32 * a
+    // direction's component from 28: within 29 degrees of an axis). The finer lines at that
+    // scale would only tell an exactly level C-stick (32) from one a unit off (31).
+    const float k = 100.0f / std::sqrt(static_cast<float>(c2));
+    const int mx = static_cast<int>(static_cast<float>(cx) * k * 0.32f);
+    const int my = static_cast<int>(static_cast<float>(cy) * k * 0.32f);
+    z.c = 1;
+    z.cx = static_cast<s8>(mx >= X_LINES[0] ? 1 : mx <= -X_LINES[0] ? -1 : 0);
+    z.cy = static_cast<s8>(my >= Y_UP[0] ? 1 : my <= -Y_DOWN[0] ? -1 : 0);
+  }
+  z.cax = static_cast<s8>(cx >= C_AXIS ? 1 : cx <= -C_AXIS ? -1 : 0);
+  z.cay = static_cast<s8>(cy >= C_AXIS ? 1 : cy <= -C_AXIS ? -1 : 0);
+  z.l = pad[0x34] >= TRIGGER_AT;
+  z.r = pad[0x35] >= TRIGGER_AT;
+  return z;
+}
+
+bool SameZones(const Zones& a, const Zones& b)
+{
+  return a.x == b.x && a.y == b.y && a.c == b.c && a.cx == b.cx && a.cy == b.cy &&
+         a.cax == b.cax && a.cay == b.cay && a.l == b.l && a.r == b.r;
+}
+
+// One axis of the judge: `s` (suggested) is on the wrong side of a line, seen from `r` (real), that
+// `p` (the last input) was on the right side of.
+bool AxisWorse(int p, int s, int r)
+{
+  if (s == r)
+    return false;
+  if (p == r || (s > r) != (p > r))
+    return true;
+  return std::abs(s - r) > std::abs(p - r);
+}
+
+// gfPadStatus's buttons: Start, Y, X, B, A (+2) and L, R, Z and the D-pad (+3; P+'s taunts).
+u16 Buttons(const u8* pad)
+{
+  return static_cast<u16>(((pad[2] & 0x1F) << 8) | (pad[3] & 0x7F));
 }
 
 u32 AnalogError(const u8* a, const u8* b)
@@ -395,19 +484,6 @@ u32 AnalogError(const u8* a, const u8* b)
   return std::max(axis(0x30), axis(0x31)) + std::max(axis(0x32), axis(0x33)) +
          std::max(trigger(0x34), trigger(0x35));
 }
-
-// Which side of each line (LINES, then the two triggers' light shield) the pad is on.
-u32 Zones(const u8* pad)
-{
-  u32 z = 0;
-  int bit = 0;
-  for (const Line& l : LINES)
-    z |= static_cast<u32>(Inside(l, pad)) << bit++;
-  z |= static_cast<u32>(pad[0x34] >= TRIGGER_AT) << bit++;
-  z |= static_cast<u32>(pad[0x35] >= TRIGGER_AT) << bit++;
-  return z;
-}
-static_assert(std::size(LINES) + 2 <= 32);
 
 // How the judge weighs sticks and triggers (PPR_GPRB_SUGGEST_JUDGE): "bytes", Slippi's, a value
 // further off than the last input's; else (default) "zones", on the wrong side of a line P+ acts on
@@ -426,35 +502,28 @@ bool JudgeByBytes()
 
 bool Meaningful(const u8* prev, const u8* next)
 {
-  if (ActionButtons(prev) != ActionButtons(next))
-    return true;
-  for (const int t : {0x34, 0x35})
-  {
-    if ((prev[t] >= TRIGGER_AT) != (next[t] >= TRIGGER_AT))
-      return true;
-  }
-  for (const Line& l : LINES)
-  {
-    if (Inside(l, prev) != Inside(l, next))
-      return true;
-  }
-  return false;
+  return Buttons(prev) != Buttons(next) || !SameZones(ZonesOf(prev), ZonesOf(next));
 }
 
 unsigned int WorseCost(const u8* previous, const u8* suggested, const u8* real)
 {
   // Slippi's costs: a wrong button the last input had right, 3; else, with the buttons as right as
   // the last input's, a stick or trigger worse than it (JudgeByBytes), 1.
-  const u16 previous_wrong = ActionButtons(previous) ^ ActionButtons(real);
-  const u16 suggested_wrong = ActionButtons(suggested) ^ ActionButtons(real);
+  const u16 previous_wrong = Buttons(previous) ^ Buttons(real);
+  const u16 suggested_wrong = Buttons(suggested) ^ Buttons(real);
   if (suggested_wrong & ~previous_wrong)
     return 3;
   if (suggested_wrong != previous_wrong)
     return 0;
   if (JudgeByBytes())
     return AnalogError(suggested, real) > AnalogError(previous, real) ? 1 : 0;
-  const u32 real_zones = Zones(real);
-  return ((Zones(suggested) ^ real_zones) & ~(Zones(previous) ^ real_zones)) != 0 ? 1 : 0;
+  const Zones p = ZonesOf(previous), s = ZonesOf(suggested), r = ZonesOf(real);
+  const bool worse = AxisWorse(p.x, s.x, r.x) || AxisWorse(p.y, s.y, r.y) ||
+                     AxisWorse(p.c, s.c, r.c) || AxisWorse(p.cx, s.cx, r.cx) ||
+                     AxisWorse(p.cy, s.cy, r.cy) || AxisWorse(p.cax, s.cax, r.cax) ||
+                     AxisWorse(p.cay, s.cay, r.cay) || AxisWorse(p.l, s.l, r.l) ||
+                     AxisWorse(p.r, s.r, r.r);
+  return worse ? 1 : 0;
 }
 
 void Encode(s32 frame, u32 seq, const u8* input, std::size_t input_bytes, u8* out)

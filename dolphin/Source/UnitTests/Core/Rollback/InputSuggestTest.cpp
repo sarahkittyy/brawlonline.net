@@ -256,22 +256,39 @@ bool Means(const std::array<u8, 0x40>& a, const std::array<u8, 0x40>& b)
 
 TEST(InputSuggest, MeaningfulChanges)
 {
-  // Buttons, both ways; not the D-pad.
+  // Buttons, both ways, the D-pad too (P+'s taunts).
   EXPECT_TRUE(Means(Pad(), Pad(0, 0, 0, 0, 0, 0, 0x01)));          // A
   EXPECT_TRUE(Means(Pad(0, 0, 0, 0, 0, 0, 0x10), Pad()));          // Start released
   EXPECT_TRUE(Means(Pad(), Pad(0, 0, 0, 0, 0, 0, 0, 0x10)));       // Z
-  EXPECT_FALSE(Means(Pad(), Pad(0, 0, 0, 0, 0, 0, 0, 0x08)));      // D-pad up
+  EXPECT_TRUE(Means(Pad(), Pad(0, 0, 0, 0, 0, 0, 0, 0x08)));       // D-pad up
   // Noise and moves inside a zone are not.
   EXPECT_FALSE(Means(Pad(0), Pad(3)));
-  EXPECT_FALSE(Means(Pad(40), Pad(50)));
+  EXPECT_FALSE(Means(Pad(0), Pad(27)));   // inside the dead zone
+  EXPECT_FALSE(Means(Pad(40), Pad(46)));
+  EXPECT_FALSE(Means(Pad(48), Pad(58)));
   EXPECT_FALSE(Means(Pad(0, 0, 0, 0, 10), Pad(0, 0, 0, 0, 20)));
   // Lines, both ways and both signs.
   EXPECT_TRUE(Means(Pad(0), Pad(28)));     // walk
   EXPECT_TRUE(Means(Pad(28), Pad(0)));
   EXPECT_TRUE(Means(Pad(0), Pad(-28)));
+  EXPECT_TRUE(Means(Pad(33), Pad(34)));    // a flick's frames count from 34
+  EXPECT_TRUE(Means(Pad(-46), Pad(-47)));  // pivot
   EXPECT_TRUE(Means(Pad(50), Pad(71)));    // dash
+  EXPECT_TRUE(Means(Pad(72), Pad(73)));    // roll
   EXPECT_TRUE(Means(Pad(0, 0), Pad(0, 68)));    // tap jump
+  EXPECT_TRUE(Means(Pad(0, 61), Pad(0, 62)));   // tap jump from a run
   EXPECT_TRUE(Means(Pad(0, 0), Pad(0, -61)));   // crouch
+  EXPECT_TRUE(Means(Pad(0, -64), Pad(0, -65))); // fast fall
+  EXPECT_TRUE(Means(Pad(0, -68), Pad(0, -69))); // platform drop
+  EXPECT_FALSE(Means(Pad(0, 63), Pad(0, 67)));  // up: no line between 62 and 68
+  // A vector past 100 is scaled to 100: x 73 is 72 with y 69 (r^2 10090), still 73 with y 68.
+  EXPECT_TRUE(Means(Pad(73, 68), Pad(73, 69)));
+  // C-stick: an input past a radius of 50, so a diagonal from 36, 36; along an axis from 51.
+  EXPECT_FALSE(Means(Pad(0, 0, 0, 0), Pad(0, 0, 35, 35)));
+  EXPECT_TRUE(Means(Pad(0, 0, 35, 35), Pad(0, 0, 36, 36)));
+  EXPECT_TRUE(Means(Pad(0, 0, 50, 0), Pad(0, 0, 51, 0)));
+  EXPECT_TRUE(Means(Pad(0, 0, 60, 0), Pad(0, 0, 0, 60)));     // another attack
+  EXPECT_FALSE(Means(Pad(0, 0, 60, 0), Pad(0, 0, 70, 2)));    // the same one
   // Triggers: light shield.
   EXPECT_TRUE(Means(Pad(0, 0, 0, 0, 0, 0), Pad(0, 0, 0, 0, 0, 80)));
   EXPECT_FALSE(Means(Pad(0, 0, 0, 0, 0, 0), Pad(0, 0, 0, 0, 0, 20)));
@@ -293,9 +310,16 @@ TEST(InputSuggest, WorseCostOfGfPadStatus)
                       real.data()),
             0u);
   // A stick that jitters inside a zone is no worse (bytes further off, zones the same).
-  EXPECT_EQ(WorseCost(Pad(48, 0, 0, 0, 0, 0, 0x01).data(), Pad(46, 0, 0, 0, 0, 0, 0x01).data(),
-                      Pad(47, 0, 0, 0, 0, 0, 0x01).data()),
+  EXPECT_EQ(WorseCost(Pad(50, 0, 0, 0, 0, 0, 0x01).data(), Pad(48, 0, 0, 0, 0, 0, 0x01).data(),
+                      Pad(49, 0, 0, 0, 0, 0, 0x01).data()),
             0u);
+  // Past a line that the real input and the last one are both short of: 1.
+  EXPECT_EQ(WorseCost(Pad(0, 60).data(), Pad(0, 64).data(), Pad(0, 61).data()), 1u);
+  // C-stick: the opposite attack where the last input made none: 1; no attack either: 0.
+  const auto up = Pad(0, 0, 0, 60);
+  EXPECT_EQ(WorseCost(Pad().data(), Pad(0, 0, 0, -60).data(), up.data()), 1u);
+  EXPECT_EQ(WorseCost(Pad().data(), Pad(0, 0, 0, 30).data(), up.data()), 0u);
+  EXPECT_EQ(WorseCost(Pad().data(), up.data(), up.data()), 0u);
 }
 
 // The rules on Other Games' inputs (Machine::Input, made by the session's own EncodePad).

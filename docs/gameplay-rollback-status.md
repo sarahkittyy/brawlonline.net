@@ -1616,13 +1616,22 @@ checked against the real input, so the game always runs on the real inputs and n
 replay or spectate stream changes. This is Arte's "subframe rollback" (Kristal, 2021), the same
 design as Slippi 3.7's input suggestions and Melee Unlocked's early inputs.
 
-- **What goes out** (`Meaningful`): a press or release of A, B, X, Y, Z, L, R or Start; a trigger
-  crossing P+'s light shield (45); a stick crossing a line P+ acts on, either way. The lines were
-  measured in the game (`harness/tools/pplus_stick_lines.py`): main stick x 28 walk/tilt, 71 dash,
-  78 forward smash; y 28 tilt, 68 tap jump, -61 crouch, 71 smash; C-stick 51. After a crossing,
-  later changes before that frame's read follow, at most one every 2 ms (a prediction is right
-  only if every byte is, and a stick keeps moving after it crosses a line). Stick noise inside a
-  zone is never sent. `PPR_GPRB_SUGGEST_RULES=all|cross|follow` (default `follow`).
+- **What goes out** (`Meaningful`): a press or release of A, B, X, Y, Z, L, R, Start or the D-pad
+  (P+'s taunts); a trigger crossing P+'s light shield (45); a stick crossing a line P+ compares it
+  with, either way; the C-stick starting an input, ending one or changing the attack it makes.
+  The map is P+ 3.2's own, read off its code (ipPadConfig's stick conversion, soController's flick
+  counters, the common Fighter.pac's PSA and P+'s codes, with P+'s fighter constants) and checked
+  in the game (`harness/tools/pplus_stick_lines.py`). The main stick past a length of 100 is first
+  scaled to 100, as the game does; then x (either side) 28 dead zone, 30, 32, 34 flick (a dash
+  needs 71 within a frame of passing 34), 37, 47 pivot, 59, 61 run, 68, 71 dash, 73 roll, 78
+  forward smash, 83, 92; y up 28, 30, 54, 59, 62 tap jump from a dash or run, 68 tap jump, 71 up
+  smash; y down 28, 37, 54, 59, 61 crouch, 64, 65 fast fall, 66 UCF shield drop, 68, 69 platform
+  drop, 71 down smash, 73 spot dodge, 78 UCF spot dodge. The C-stick is an input past a radius of
+  50 (36, 36 on a diagonal); the attack's direction is which axes of trunc(32 x its direction)
+  leave the dead zone; shield buffers read each axis at 51. Stick noise inside a zone is never
+  sent. `PPR_GPRB_SUGGEST_RULES=all|cross|follow` (default `cross`; `follow` adds the later
+  changes before the frame's read, at most one every 2 ms, which the 16 lines first measured from
+  idle needed and the whole map does not).
 - **Who sends**: a GameCube adapter's reports (the adapter thread's hook), or for a controller
   mapped in Dolphin a sampler thread at 1000 Hz that runs only while some peer takes suggestions
   (on a 1 ms grid; on Windows it waits on a high-resolution waitable timer: `sleep_until` rounds
