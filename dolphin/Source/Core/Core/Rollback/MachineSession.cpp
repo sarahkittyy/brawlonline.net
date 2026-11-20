@@ -2615,8 +2615,10 @@ void SendQueuedSuggestions()
   bool any = false;
   for (PeerLink& p : s.peers)
   {
+    // A link has the fewer channels of its two ends: a peer whose hello says "sg" but whose link
+    // has no CHANNEL_SUGGEST would refuse every packet (enet_peer_send fails and the packet leaks).
     if (!p.peer || !p.hello || !p.suggestions || p.left || p.slot < 0 || !Plays(p.slot) ||
-        p.slot == s.opts.local_slot)
+        p.slot == s.opts.local_slot || p.peer->channelCount <= CHANNEL_SUGGEST)
     {
       continue;
     }

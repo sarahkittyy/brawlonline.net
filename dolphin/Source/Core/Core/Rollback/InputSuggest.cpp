@@ -398,17 +398,22 @@ void Encode(s32 frame, u32 seq, const u8* input, std::size_t input_bytes, u8* ou
 
 namespace
 {
-// Other Games' pads (MACHINE_PAD) through P+'s rules: the sticks against their center as gfPadStatus
-// holds them (+0x30 to +0x33, s8), the triggers (+0x34, +0x35), for Zones.
-std::array<u8, INPUT_BYTES> MachineAsGfPad(const u8* in)
+// Other Games' lines: P+'s (LINES and the light shield, as of 2026-11-19) kept as their own table,
+// so a change to P+'s map (it is P+'s fighters' thresholds) leaves other games' alone. Each is a
+// pad axis (0 stick X, 1 stick Y, 2 C-stick X, 3 C-stick Y) against its center (0x80) and the
+// value at or past which (at > 0: v >= at, at < 0: v <= at) the stick is inside the line.
+struct MachineLine
 {
-  std::array<u8, INPUT_BYTES> p{};
-  for (int i = 0; i < 4; ++i)
-    p[0x30 + i] = static_cast<u8>(static_cast<s8>(int{in[MACHINE_PAD + 2 + i]} - 0x80));
-  p[0x34] = in[MACHINE_PAD + 6];
-  p[0x35] = in[MACHINE_PAD + 7];
-  return p;
-}
+  u8 axis;
+  s8 at;
+};
+constexpr MachineLine MACHINE_LINES[] = {
+    {0, 28}, {0, -28}, {0, 71}, {0, -71}, {0, 78}, {0, -78},
+    {1, 28}, {1, -28}, {1, 68}, {1, -61}, {1, 71}, {1, -71},
+    {2, 51}, {2, -51}, {3, 51}, {3, -51},
+};
+constexpr u8 MACHINE_TRIGGER_AT = 45;
+static_assert(std::size(MACHINE_LINES) + 2 <= 32);
 
 // Every button of the pad (+0 Start, Y, X, B, A; +1 L, R, Z and the D-pad): P+ leaves the D-pad out,
 // other games use it.
@@ -417,9 +422,19 @@ u16 MachineButtons(const u8* in)
   return static_cast<u16>(((in[MACHINE_PAD] << 8) | in[MACHINE_PAD + 1]) & 0x1F7F);
 }
 
+// Which side of each line (MACHINE_LINES, then L and R at MACHINE_TRIGGER_AT) the pad is on.
 u32 MachineZones(const u8* in)
 {
-  return Zones(MachineAsGfPad(in).data());
+  u32 z = 0;
+  int bit = 0;
+  for (const MachineLine& l : MACHINE_LINES)
+  {
+    const int v = int{in[MACHINE_PAD + 2 + l.axis]} - 0x80;
+    z |= static_cast<u32>(l.at > 0 ? v >= l.at : v <= l.at) << bit++;
+  }
+  z |= static_cast<u32>(in[MACHINE_PAD + 6] >= MACHINE_TRIGGER_AT) << bit++;
+  z |= static_cast<u32>(in[MACHINE_PAD + 7] >= MACHINE_TRIGGER_AT) << bit++;
+  return z;
 }
 }  // namespace
 
