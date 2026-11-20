@@ -495,16 +495,14 @@ void EnhancementsWidget::AddDescriptions()
 
                  "<br><br><b>Area Sampling</b> - [up to 324 samples]"
                  "<br>Weighs pixels by the percentage of area they occupy. Gamma corrected."
-                 "<br>Recommended for downscaling."
+                 "<br>Best for downscaling by more than 2x."
 
                  "<br><br><b>Magic Kernel Sharp 2021</b>"
                  "<br>Gamma corrected resampling with a separate sharpening filter."
                  "<br>Uses up to three passes and two floating-point textures."
                  "<br>May introduce halos around sharp edges and increases GPU load."
-                 "<br>Area Sampling remains recommended for downscaling pending comparison."
 
-                 "<br><br><dolphin_emphasis>For downscaling, select 'Area Sampling'."
-                 " Otherwise, if unsure, select 'Default'.</dolphin_emphasis>");
+                 "<br><br><dolphin_emphasis>If unsure, select 'Default'.</dolphin_emphasis>");
   static const char TR_COLOR_CORRECTION_DESCRIPTION[] =
       QT_TR_NOOP("A group of features to make the colors more accurate, matching the color space "
                  "Wii and GC games were meant for.");
