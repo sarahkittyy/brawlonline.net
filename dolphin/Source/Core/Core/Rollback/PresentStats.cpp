@@ -28,6 +28,7 @@
 #include "Core/HW/Memmap.h"
 
 #include "Core/CoreTiming.h"
+#include "Core/Rollback/GameplaySession.h"
 #include "Core/Rollback/InputTrace.h"
 #include "Core/System.h"
 #include "VideoCommon/VideoConfig.h"
@@ -58,6 +59,7 @@ struct CopyDecision
   bool paced;     // CoreTiming's present pacing was on
   TimePoint due;  // paced: the copy's due time on the throttle's clock
   DT slack{};     // paced: the throttle's sleep since the previous presented copy
+  bool redraw = false;  // not presented: the last frame shown again (a replay's seek)
 };
 std::mutex s_copy_decisions_mutex;
 std::deque<CopyDecision> s_copy_decisions;
@@ -166,6 +168,7 @@ void OnEFBCopyPreprocess(bool to_xfb)
     s_cpu_stamps.push_back(stamp);
   }
   CopyDecision decision{present, false, {}};
+  decision.redraw = to_xfb && !present && Gprb::Session::RedrawUnshownFrameDue();
   if (to_xfb && present)
   {
     auto& core_timing = Core::System::GetInstance().GetCoreTiming();
@@ -181,11 +184,15 @@ void OnEFBCopyPreprocess(bool to_xfb)
   s_copy_decisions.push_back(decision);
 }
 
-bool OnEFBCopy(bool to_xfb, bool preprocessed)
+bool OnEFBCopy(bool to_xfb, bool preprocessed, bool* redraw)
 {
+  if (redraw)
+    *redraw = false;
   if (!preprocessed)
   {
     const bool present = !to_xfb || DecideXFBCopy();
+    if (redraw)
+      *redraw = to_xfb && !present && Gprb::Session::RedrawUnshownFrameDue();
     // Single core: the copy runs on the CPU thread.
     if (to_xfb && present && !Core::System::GetInstance().IsDualCoreMode())
     {
@@ -213,6 +220,8 @@ bool OnEFBCopy(bool to_xfb, bool preprocessed)
     const CopyDecision decision = s_copy_decisions.front();
     s_copy_decisions.pop_front();
     present = decision.present;
+    if (redraw)
+      *redraw = decision.redraw;
     if (to_xfb && present)
     {
       s_gpu_copy = decision;

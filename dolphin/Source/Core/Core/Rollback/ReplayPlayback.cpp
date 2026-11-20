@@ -182,6 +182,7 @@ struct RenderAsk
   s64 start = 0;
   s64 end = 0;
   bool music = true;
+  bool clip = true;  // saved as a Manual Clip first (clip mode's), not a star's
 };
 std::vector<RenderAsk> s_render_asks;
 // Auto play at a spectated stream's end: the countdown's end, its X, and the countdown ran out
@@ -598,6 +599,7 @@ picojson::object StatusLocked()
       ask["startFrame"] = picojson::value(static_cast<double>(a.start));
       ask["endFrame"] = picojson::value(static_cast<double>(a.end));
       ask["music"] = picojson::value(a.music);
+      ask["clip"] = picojson::value(a.clip);
       asks.emplace_back(std::move(ask));
     }
     o["renderRequests"] = picojson::value(std::move(asks));
@@ -1438,14 +1440,18 @@ bool SaveClip(s64 start, s64 end)
   return true;
 }
 
-bool RequestRender(s64 start, s64 end, bool music)
+bool RequestRender(s64 start, s64 end, bool music, bool save)
 {
   std::lock_guard lk(s_mutex);
-  // (Saved first, as Save as highlight: the launcher renders the Manual Clip it keeps of it.)
-  if (s_render_asks.size() >= MAX_SAVED_CLIPS || !SaveClipLocked(start, end))
+  // (Clip mode's is saved first, as Save as highlight: the launcher renders the Manual Clip it
+  // keeps of it. A star's is a highlight, a hotkey clip or a Manual Clip already.)
+  if (s_render_asks.size() >= MAX_SAVED_CLIPS || end <= start ||
+      !(save ? SaveClipLocked(start, end) : CanSaveClipLocked()))
+  {
     return false;
+  }
   const u64 seq = s_render_asks.size() + 1;
-  s_render_asks.push_back({seq, s_armed_path, start, end, music});
+  s_render_asks.push_back({seq, s_armed_path, start, end, music, save});
   NOTICE_LOG_FMT(BRAWLBACK, "replay: render {} asked for, frames {} to {} ({})", seq, start, end,
                  music ? "music" : "no music");
   WriteStatus();

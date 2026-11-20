@@ -83,6 +83,12 @@ namespace
 {
 using Clock = std::chrono::steady_clock;
 
+// RedrawUnshownFrameDue: a playback's seek runs unseen now (CPU thread), and when the last frame
+// was last shown again for it.
+std::atomic<bool> s_redraw_unshown{false};
+Clock::time_point s_unshown_redrawn{};
+std::atomic<u64> s_unshown_redraws{0};  // how many (PlaybackStatus "seek_redraws")
+
 // Brawl's game loop (gfApplication::mainLoop), see HLE_Misc.cpp.
 constexpr u32 LOOP_TOP = 0x800171b4;       // li r25,1 (BrawlbackGekkoNetUnconditionalFrame)
 constexpr u32 FRAME_END = 0x80017504;      // stw r0,0x100(r23)
@@ -8052,6 +8058,7 @@ bool RunFrame(const Core::CPUThreadGuard& guard)
   if (s.ops.adv_count == 0 || s.iteration >= s.ops.adv_count)
   {
     ct.SetRollbackResimulating(false);
+    s_redraw_unshown.store(false, std::memory_order_relaxed);
     s.iteration = 0;
     Spin(ppc);
     return true;
@@ -8069,6 +8076,11 @@ bool RunFrame(const Core::CPUThreadGuard& guard)
                          !((s.pb.clip_ff || s.pb.seek_ff) &&
                            s.ops.adv_frame[i] % CLIP_SHOW_EVERY == 0) :
                      s.ops.adv_count > 1 && i != s.ops.adv_count - 1;
+  // A replay's seek running unseen: the last frame is shown again with the overlay meanwhile
+  // (RedrawUnshownFrameDue), so the seek bar follows the mouse and says "Seeking...". Not a
+  // render's (its frames go to the video file).
+  s_redraw_unshown.store(s.mode == Mode::Playback && s.resim_pass && !Gprb::Clip::WantsFrames(),
+                         std::memory_order_relaxed);
   if (!s.resim_pass || DeferredReadDueInRerun())
     TakeDeferredLocalInput(system);
 
@@ -9475,6 +9487,8 @@ picojson::object PlaybackStatus()
   o["clip_done"] = picojson::value(s.pb.clip_done);
   o["clip_armed"] = picojson::value(s.pb.clip_armed);
   o["stop_end"] = picojson::value(static_cast<double>(s.pb.stop_end));
+  o["seek_redraws"] =
+      picojson::value(static_cast<double>(s_unshown_redraws.load(std::memory_order_relaxed)));
   o["stop_armed"] = picojson::value(s.pb.stop_armed);
   o["highlight_picks"] = picojson::value(static_cast<double>(s.pb.mark_picks));
   o["highlight_pick"] = picojson::value(static_cast<double>(s.pb.mark_pick));
@@ -11365,6 +11379,18 @@ bool IsRunning()
 bool IsPlayback()
 {
   return s.mode == Mode::Playback;
+}
+
+bool RedrawUnshownFrameDue()
+{
+  if (!s_redraw_unshown.load(std::memory_order_relaxed))
+    return false;
+  const auto now = Clock::now();
+  if (now - s_unshown_redrawn < std::chrono::milliseconds(33))
+    return false;
+  s_unshown_redrawn = now;
+  s_unshown_redraws.fetch_add(1, std::memory_order_relaxed);
+  return true;
 }
 
 LinkHealth GetLinkHealth()

@@ -548,8 +548,33 @@ copied first), then queues the render as the Highlights tab's Render does (the f
 manual clip's, `<date> Clip - <players>.mp4`; the version and update checks as always), and the
 toast follows its RENDER_PROGRESS.
 
-Tests: `replay_marks.test.ts`, `spectate_client.test.ts` (Auto play waits for `next`; the X ends the
-wait); harness `test_replay.py::test_launcher_comm_file_saves_manual_clips` (a replay's stars from a
+**Second round** (Sarah, 2026-11-20, on the build): "the render button should appear when you click
+on a star ... when our ui state machine knows for sure the user is watching a specific starred
+replay"; the seek bar froze while a seek ran; the clip's box looked "askew a little bit".
+- **Render on a star**: while a star's highlight is being watched (from its star, a list's row or
+  < >: on the way to it, playing it, or paused at its end) the row has Render (w/ Music) and its
+  menu left of Clip; a seek away from it (before its start less 1 s, or past its end) or playing
+  past its end hides it, and once asked it doesn't show again for that highlight while it plays.
+  It isn't saved as a Manual Clip (`RequestRender(.., save false)`, the request's `"clip": false`):
+  the launcher names the video from the replay's own highlight or hotkey clip (`findHighlight`),
+  or the Manual Clip it is.
+- **The overlay during a seek**: the frames before a seek's target run unseen (a keyframe put
+  back, then up to 5 s of frames; a short jump forward), and nothing was presented until the
+  target, the overlay included. Now, at an XFB copy that isn't presented (Immediate XFB, this
+  Dolphin's default: `PresentStats` decides it with the copy's present on the CPU thread, and
+  `BPStructs` redraws where it would have swapped) or a VI field that isn't (`Video_OutputXFB`), of
+  a replay's seek (`Session::RedrawUnshownFrameDue`, at most every 33 ms; never online, nor while
+  rendering), `Presenter::RedrawLastFrame(false)` shows the last frame again with the overlay
+  drawn ("Seeking...", the knob where it goes), not dumped to a video. Counted in the playback
+  status' `seek_redraws`. Long seeks forward already showed a frame in 30. Also: once the
+  countdown of Auto play ran out with no line from the launcher, the pill keeps "Next game in 1
+  s." rather than the X and the ring alone.
+- **The clip's box**: the bar is laid out on whole pixels, and the box's top and bottom edges are
+  filled bars rather than a stroked rounded rectangle, whose anti-aliased edges stepped a pixel
+  partway along at fractional positions (its sides are under the grips).
+
+Tests: `replay_marks.test.ts`, `playback_overlay.test.ts`, `spectate_client.test.ts` (Auto play waits
+for `next`; the X ends the wait); harness `test_replay.py::test_launcher_comm_file_saves_manual_clips` (a replay's stars from a
 rewrite, only its path's, one with a saved clip; a star playing and pausing at its end; Render with
 and without music in `renderRequests` and `savedClips`; the overlay file read and a broken one
 ignored; Auto play's countdown on a finished stream, held in clip mode, then `next`, and its X).

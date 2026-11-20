@@ -62,7 +62,8 @@
 // "endFrame"}, ...] (path: the replay armed, a spectated game's file too); the launcher keeps each
 // once, as a Manual Clip. Clip mode's "Render (w/ Music)" / "Render (No Music)" saves the clip so
 // and asks the launcher to render it to video: "renderRequests": [{"seq", "path", "startFrame",
-// "endFrame", "music"}, ...] (every one of this run, seq from 1; the launcher renders each once).
+// "endFrame", "music", "clip"}, ...] (every one of this run, seq from 1; the launcher renders each
+// once). A star's highlight playing has Render too, not saved ("clip": false).
 //
 // The launcher's side of the overlay, <comm.json>.overlay.json (read every poll; none: nothing):
 //   {"accent": "#rrggbb" (the launcher's colour: the seek bar's played part),
@@ -123,8 +124,10 @@ void RequestNav(NavAction action, s64 frame);
 // Saves frames `start` to `end` of the replay armed (any thread: the overlay's); false when
 // CanSaveClip is not, or the session's replay is no longer the armed one.
 bool SaveClip(s64 start, s64 end);
-// Saves the clip as SaveClip does and asks the launcher to render it (status "renderRequests").
-bool RequestRender(s64 start, s64 end, bool music);
+// Asks the launcher to render frames `start` to `end` of the replay armed (status
+// "renderRequests"): clip mode's (`save`: saved as SaveClip does first, a Manual Clip), or a
+// star's highlight playing (not saved: it is one already).
+bool RequestRender(s64 start, s64 end, bool music, bool save = true);
 
 // The launcher's side of the overlay (<comm.json>.overlay.json), as last read. Any thread.
 struct OverlayToast

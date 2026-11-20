@@ -55,6 +55,8 @@ static constexpr Common::EnumMap<float, GammaCorrection::Invalid2_2> s_gammaLUT 
 // XFB copies of resimulated rollback frames (see Core/Rollback/PresentStats.h). Set by LoadBPReg
 // just before BPWritten runs the copy, on the same thread.
 static bool s_present_efb_copy = true;
+// Not presented, the last frame shown again instead (a replay's seek running unseen).
+static bool s_redraw_efb_copy = false;
 
 // ArmNoSkipDraws (BPStructs.h): 0 off; NO_SKIP_DRAWS_ARMED armed, the copy that ends it not known
 // yet; else that copy's destination (physical, as bpmem.copyTexDest << 5). Written by the CPU
@@ -431,6 +433,8 @@ static void BPWritten(PixelShaderManager& pixel_shader_manager, XFStateManager& 
           // below div two to convert from bytes to pixels - it expects width, not stride
           if (s_present_efb_copy)
             g_presenter->ImmediateSwap(destAddr, destStride / 2, destStride, height);
+          else if (s_redraw_efb_copy)
+            g_presenter->RedrawLastFrame(false);
         }
         else
         {
@@ -894,7 +898,7 @@ void LoadBPReg(u8 reg, u32 value, int cycles_into_future)
     UPE_Copy copy;
     copy.Hex = newval;
     s_present_efb_copy = Rollback::PresentStats::OnEFBCopy(
-        copy.copy_to_xfb != 0, system.GetFifo().UseDeterministicGPUThread());
+        copy.copy_to_xfb != 0, system.GetFifo().UseDeterministicGPUThread(), &s_redraw_efb_copy);
   }
 
   BPWritten(system.GetPixelShaderManager(), system.GetXFStateManager(),

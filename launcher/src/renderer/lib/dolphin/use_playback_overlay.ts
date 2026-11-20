@@ -3,19 +3,14 @@
  * the launcher's colour for the bar's played part (Sarah's board, 2026-11-20: "the played part should be your
  * launcher's color"), and clip mode's Render (w/ Music) / Render (No Music): Dolphin asks (status
  * `renderRequests`), this queues the render as the Highlights tab's Render does (the clip is a Manual Clip by
- * then), and the render's progress shows in the game, at its top right.
+ * then; a star's highlight playing has Render too, named from the replay's highlight), and the render's progress
+ * shows in the game, at its top right.
  *
  * Mounted once for the whole window (app/create.tsx).
  */
-import type {
-  DolphinService,
-  PlaybackOverlayFile,
-  PlaybackOverlayToast,
-  RenderJobInfo,
-  ReplayPlaybackStatus,
-} from "@dolphin/types";
+import type { DolphinService, PlaybackOverlayFile, PlaybackOverlayToast, RenderJobInfo } from "@dolphin/types";
 import { DolphinEventType, DolphinLaunchType } from "@dolphin/types";
-import type { HighlightPlayer, ManualClip } from "@replays/highlights/types";
+import type { HighlightPlayer } from "@replays/highlights/types";
 import { useEffect, useRef } from "react";
 
 import { useDolphinActions } from "@/lib/dolphin/use_dolphin_actions";
@@ -25,7 +20,8 @@ import { renderStatusText } from "@/pages/replays/replay_file_stats/highlights/r
 import { clipVideoName, replayDateOf } from "@/pages/replays/replay_file_stats/highlights/render_names";
 import { useServices } from "@/services";
 
-type RenderAsk = NonNullable<ReplayPlaybackStatus["renderRequests"]>[number];
+import type { RenderAsk } from "./playback_overlay";
+import { clipLength, cssColorToHex, findClip, findHighlight } from "./playback_overlay";
 
 /** How often the launcher's colour is looked at (the theme can change while Dolphin is open). */
 const ACCENT_POLL_MS = 1000;
@@ -33,20 +29,6 @@ const ACCENT_POLL_MS = 1000;
 const CLIP_WAIT_MS = 20_000;
 /** How long a finished render stays in the game. */
 const DONE_SHOWN_MS = 6000;
-
-/** "#rrggbb" of a CSS colour (as the page computes it), or null. */
-export function cssColorToHex(css: string): string | null {
-  const m = /^rgba?\(\s*(\d+)[\s,]+(\d+)[\s,]+(\d+)/i.exec(css.trim());
-  if (m) {
-    return `#${[m[1], m[2], m[3]].map((v) => Math.min(255, Number(v)).toString(16).padStart(2, "0")).join("")}`;
-  }
-  const hex = /^#([0-9a-f]{6})$/i.exec(css.trim());
-  if (hex) {
-    return `#${hex[1].toLowerCase()}`;
-  }
-  const short = /^#([0-9a-f])([0-9a-f])([0-9a-f])$/i.exec(css.trim());
-  return short ? `#${short[1]}${short[1]}${short[2]}${short[2]}${short[3]}${short[3]}`.toLowerCase() : null;
-}
 
 /** The launcher's accent colour as the page has it now (`--accent-primary`). */
 function currentAccent(): string | null {
@@ -57,24 +39,6 @@ function currentAccent(): string | null {
   const color = getComputedStyle(probe).color;
   probe.remove();
   return cssColorToHex(color);
-}
-
-/** "0:20" */
-export function clipLength(startFrame: number, endFrame: number): string {
-  const seconds = Math.max(0, Math.round((endFrame - startFrame) / 60));
-  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
-}
-
-/** The Manual Clip Dolphin's render request is of (a spectated game's: its copy, `source` the stream's file). */
-export function findClip(clips: readonly ManualClip[], ask: RenderAsk): ManualClip | null {
-  return (
-    clips.find(
-      (c) =>
-        c.startFrame === ask.startFrame &&
-        c.endFrame === ask.endFrame &&
-        (c.path === ask.path || c.source === ask.path),
-    ) ?? null
-  );
 }
 
 /** A render job as the game shows it. */
@@ -93,10 +57,12 @@ export function toastOf(job: RenderJobInfo, label: string): PlaybackOverlayToast
 type Tracked = { label: string; job: RenderJobInfo | null; doneAt: number | null };
 
 export const usePlaybackOverlay = () => {
-  const { dolphinService } = useServices();
+  const { dolphinService, replayService } = useServices();
   const { renderHighlights } = useDolphinActions(dolphinService);
   const renderRef = useRef(renderHighlights);
   renderRef.current = renderHighlights;
+  const replayRef = useRef(replayService);
+  replayRef.current = replayService;
 
   useEffect(() => {
     let accent: string | null = null;
@@ -137,22 +103,30 @@ export const usePlaybackOverlay = () => {
     const timer = setInterval(tick, ACCENT_POLL_MS);
 
     const render = async (ask: RenderAsk) => {
-      // The clip as the launcher keeps it (manual_clips.ts): its file (a spectated game's copy) and players.
+      // The clip as the launcher keeps it (manual_clips.ts): its file (a spectated game's copy) and players. Clip
+      // mode's is being kept now; a star's (`clip: false`) is a Manual Clip already, or one of the replay's highlights.
       const until = Date.now() + CLIP_WAIT_MS;
       let clip = findClip(useSettingsStore.getState().settings.manualClips, ask);
-      while (!clip && alive && Date.now() < until) {
+      while (!clip && ask.clip !== false && alive && Date.now() < until) {
         await new Promise((resolve) => setTimeout(resolve, 250));
         clip = findClip(useSettingsStore.getState().settings.manualClips, ask);
       }
       const path = clip?.path ?? ask.path;
-      const players = new Map<number, HighlightPlayer>((clip?.players ?? []).map((p) => [p.port, p]));
-      const name = clip
-        ? clipVideoName(
-            { kind: "manual", startFrame: ask.startFrame, endFrame: ask.endFrame, savedAt: clip.savedAt },
-            players,
-            path,
-          )
-        : [replayDateOf(path), "Clip"].filter(Boolean).join(" ");
+      let name = [replayDateOf(path), "Clip"].filter(Boolean).join(" ");
+      if (clip) {
+        const players = new Map<number, HighlightPlayer>(clip.players.map((p) => [p.port, p]));
+        name = clipVideoName(
+          { kind: "manual", startFrame: ask.startFrame, endFrame: ask.endFrame, savedAt: clip.savedAt },
+          players,
+          path,
+        );
+      } else if (ask.clip === false) {
+        const found = await replayRef.current.getHighlights(path).catch(() => null);
+        const row = found ? findHighlight(found, ask) : null;
+        if (found && row) {
+          name = clipVideoName(row, new Map(found.players.map((p) => [p.port, p])), path);
+        }
+      }
       const label = Messages.manualClip(clipLength(ask.startFrame, ask.endFrame));
       const jobs = await renderRef.current({
         items: [{ path, startFrame: ask.startFrame, endFrame: ask.endFrame }],

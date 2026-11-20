@@ -23,6 +23,7 @@
 #include "Core/DolphinAnalytics.h"
 #include "Core/HW/SystemTimers.h"
 #include "Core/HW/VideoInterface.h"
+#include "Core/Rollback/GameplaySession.h"
 #include "Core/System.h"
 
 // TODO: ugly
@@ -105,7 +106,13 @@ void VideoBackendBase::Video_OutputXFB(u32 xfb_addr, u32 fb_width, u32 fb_stride
   {
     system.GetFifo().SyncGPU(Fifo::SyncGPUReason::Swap);
     if (!present)
+    {
+      // A replay's seek running unseen: the last frame shown again, with the seek bar over it, so
+      // the overlay keeps moving (where a swap would be in the GPU's commands, as a swap's is).
+      if (Gprb::Session::RedrawUnshownFrameDue())
+        AsyncRequests::GetInstance()->PushEvent([] { g_presenter->RedrawLastFrame(false); });
       return;
+    }
 
     const TimePoint presentation_time = core_timing.GetTargetHostTime(ticks);
     AsyncRequests::GetInstance()->PushEvent([=] {

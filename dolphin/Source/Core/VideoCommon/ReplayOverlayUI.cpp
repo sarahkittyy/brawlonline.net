@@ -51,6 +51,11 @@ s64 s_handle_press_frame = 0;
 bool s_handle_moved = false;
 // The session's clip mode end as last set (Session::SetPlaybackStop; -1: none).
 s64 s_stop_sent = -1;
+// The last star's highlight Render was asked for (its replay's title and frames): its button
+// doesn't show again while it plays.
+s64 s_star_rendered_start = -1;
+s64 s_star_rendered_end = -1;
+std::string s_star_rendered_title;
 
 constexpr auto SHOW_AFTER_MOUSE = std::chrono::seconds(3);
 // A clip starts this long before the frame Clip was clicked on (as L+R+Z's, the launcher's
@@ -341,6 +346,53 @@ bool TextButton(const char* id, const char* label, ImVec2 p, float h, ButtonLook
   return pressed;
 }
 
+// Render (w/ Music), with a chevron right of it that opens a menu with Render (No Music), its
+// right edge at `right`: `render(music)` once one is chosen. Returns its left edge.
+float RenderSplit(float right, float top, float h, float scale, const std::function<void(bool)>& render)
+{
+  constexpr const char* RENDER_MUSIC = "Render (w/ Music)";
+  constexpr const char* RENDER_NO_MUSIC = "Render (No Music)";
+  ImDrawList* dl = ImGui::GetWindowDrawList();
+  const float caret_w = 28.0f * scale;
+  const ImVec2 caret0(right - caret_w - 2.0f * scale, top);
+  ImGui::SetCursorScreenPos(caret0);
+  const bool caret = ImGui::InvisibleButton("##replayrendermenu", ImVec2(caret_w, h));
+  const bool caret_over = ImGui::IsItemHovered();
+  dl->AddRectFilled(caret0, ImVec2(caret0.x + caret_w, caret0.y + h), caret_over ? CLIP_BLUE_HOVER : CLIP_BLUE,
+                    7.0f * scale, ImDrawFlags_RoundCornersRight);
+  dl->AddRectFilled(ImVec2(caret0.x - 1.0f, caret0.y), ImVec2(caret0.x, caret0.y + h), IM_COL32(0, 0, 0, 90));
+  IconChevron(dl, ImVec2(caret0.x + caret_w * 0.5f, caret0.y + h * 0.5f), 14.0f * scale, TEXT, false);
+  if (caret)
+    ImGui::OpenPopup("##replayrenderpopup");
+  const auto film = [](ImDrawList* d, ImVec2 c, float s, ImU32 col) { IconFilm(d, c, s, col); };
+  const float left = caret0.x - TextButtonWidth(RENDER_MUSIC, true, scale);
+  if (TextButton("##replayrender", RENDER_MUSIC, ImVec2(left, top), h, ButtonLook::Solid, film, scale,
+                 ImDrawFlags_RoundCornersLeft))
+  {
+    render(true);
+  }
+  // The menu, above the button (its right edge at the caret's).
+  ImGui::SetNextWindowPos(ImVec2(caret0.x + caret_w, top - 6.0f * scale), ImGuiCond_Always, ImVec2(1.0f, 1.0f));
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(4.0f * scale, 4.0f * scale));
+  ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0, 0));
+  ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(10.0f * scale, 6.0f * scale));
+  ImGui::PushStyleColor(ImGuiCol_HeaderHovered, IM_COL32(255, 255, 255, 31));
+  ImGui::PushStyleColor(ImGuiCol_HeaderActive, IM_COL32(255, 255, 255, 46));
+  if (ImGui::BeginPopup("##replayrenderpopup"))
+  {
+    const ImVec2 item(std::max(TextButtonWidth(RENDER_NO_MUSIC, false, scale), 150.0f * scale),
+                      ImGui::GetTextLineHeight() + 12.0f * scale);
+    if (ImGui::Selectable(RENDER_MUSIC, false, 0, item))
+      render(true);
+    if (ImGui::Selectable(RENDER_NO_MUSIC, false, 0, item))
+      render(false);
+    ImGui::EndPopup();
+  }
+  ImGui::PopStyleColor(2);
+  ImGui::PopStyleVar(3);
+  return left;
+}
+
 // A tooltip box drawn above `anchor` (centred on it), over everything.
 void TipAbove(ImVec2 anchor, const std::string& text, float scale, float min_x, float max_x)
 {
@@ -443,7 +495,9 @@ void Pill(const Gprb::Session::PlaybackInfo& info, const Gprb::Replay::Playback:
   {
     if (next.waiting)
     {
-      text = info.banner;
+      // Ran out: the launcher's line while it waits for a live game, else still the countdown's
+      // (never the X and the ring alone).
+      text = info.banner.empty() ? std::string("Next game in 1 s.") : info.banner;
     }
     else
     {
@@ -672,7 +726,7 @@ void Display(float scale)
   }
 
   const float win_h = bottom_pad + ctl_h + track_h;
-  const float win_y = H - win_h;
+  const float win_y = std::floor(H - win_h);
   // The fade under it, over the game's bottom (behind every window, the chat too).
   {
     ImDrawList* bg = ImGui::GetBackgroundDrawList();
@@ -690,14 +744,14 @@ void Display(float scale)
   if (BeginBare("##ReplayOverlay"))
   {
     ImDrawList* dl = ImGui::GetWindowDrawList();
-    const float bar_x = margin;
-    const float bar_w = std::max(W - margin * 2.0f, 1.0f);
-    const float track_y = win_y + 24.0f * scale;  // the track's centre line
+    const float bar_x = std::round(margin);
+    const float bar_w = std::max(std::round(W - margin * 2.0f), 1.0f);
+    const float track_y = std::round(win_y + 24.0f * scale);  // the track's centre line
     const float row_y = win_y + track_h;          // the controls' row
     const auto bar_frac = [&](s64 frame) {
       return std::clamp(static_cast<float>(frame - info.first) / span, 0.0f, 1.0f);
     };
-    const auto x_of = [&](s64 frame) { return bar_x + bar_frac(frame) * bar_w; };
+    const auto x_of = [&](s64 frame) { return std::round(bar_x + bar_frac(frame) * bar_w); };
 
     // The launcher's list (highlights, not spectating): "3/40  << < > >>" (the user, 2026-10-24).
     // < > go to the previous / next star from the frame shown, in this replay at once (its marks),
@@ -891,16 +945,21 @@ void Display(float scale)
       const float xe = x_of(s_clip_end);
       dl->AddRectFilled(ImVec2(bar_x, t0.y), ImVec2(xs, t1.y), IM_COL32(0, 0, 0, 115));
       dl->AddRectFilled(ImVec2(xe, t0.y), ImVec2(bar_x + bar_w, t1.y), IM_COL32(0, 0, 0, 115));
-      const ImVec2 b0(xs, track_y - 9.0f * scale);
-      const ImVec2 b1(xe, track_y + 9.0f * scale);
-      dl->AddRectFilled(b0, b1, WithAlpha(CLIP_BLUE, 56), 4.0f * scale);
-      dl->AddRect(b0, b1, CLIP_BLUE, 4.0f * scale, 0, 2.0f * scale);
+      // (Filled rectangles on whole pixels, not a stroked rounded one: its anti-aliased edges
+      // stepped a pixel partway along at fractional positions, Sarah's board 2026-11-20: "the
+      // seek rectangle is ... askew a little bit". Its sides are under the grips.)
+      const float bt = std::max(1.0f, std::round(2.0f * scale));
+      const ImVec2 b0(xs, track_y - std::round(9.0f * scale));
+      const ImVec2 b1(xe, track_y + std::round(9.0f * scale));
+      dl->AddRectFilled(b0, b1, WithAlpha(CLIP_BLUE, 56));
+      dl->AddRectFilled(b0, ImVec2(b1.x, b0.y + bt), CLIP_BLUE);
+      dl->AddRectFilled(ImVec2(b0.x, b1.y - bt), b1, CLIP_BLUE);
       for (int h = 1; h <= 2; ++h)
       {
         const float x = h == 1 ? xs : xe;
         const bool lit = h == handle_hovered || h == s_clip_handle;
-        const float hw = (lit ? 6.0f : 5.0f) * scale;
-        const float hh = (lit ? 13.0f : 12.0f) * scale;
+        const float hw = std::round((lit ? 6.0f : 5.0f) * scale);
+        const float hh = std::round((lit ? 13.0f : 12.0f) * scale);
         const ImVec2 a(x - hw, track_y - hh);
         const ImVec2 z(x + hw, track_y + hh);
         dl->AddRectFilled(ImVec2(a.x - 2.0f * scale, a.y - 2.0f * scale), ImVec2(z.x + 2.0f * scale, z.y + 2.0f * scale),
@@ -1009,54 +1068,13 @@ void Display(float scale)
       // (the user, 2026-11-20: "rendering should be an option from Clip mode only").
       constexpr const char* CANCEL = "Cancel clip";
       constexpr const char* SAVE = "Save as highlight";
-      constexpr const char* RENDER_MUSIC = "Render (w/ Music)";
-      constexpr const char* RENDER_NO_MUSIC = "Render (No Music)";
-      const float caret_w = 28.0f * scale;
-      rx -= caret_w + 2.0f * scale;
-      const ImVec2 caret0(rx, bty);
-      ImGui::SetCursorScreenPos(caret0);
-      const bool caret = ImGui::InvisibleButton("##replayrendermenu", ImVec2(caret_w, bh));
-      const bool caret_over = ImGui::IsItemHovered();
-      dl->AddRectFilled(caret0, ImVec2(caret0.x + caret_w, caret0.y + bh), caret_over ? CLIP_BLUE_HOVER : CLIP_BLUE,
-                        7.0f * scale, ImDrawFlags_RoundCornersRight);
-      dl->AddRectFilled(ImVec2(caret0.x - 1.0f, caret0.y), ImVec2(caret0.x, caret0.y + bh), IM_COL32(0, 0, 0, 90));
-      IconChevron(dl, ImVec2(caret0.x + caret_w * 0.5f, caret0.y + bh * 0.5f), 14.0f * scale, TEXT, false);
-      if (caret)
-        ImGui::OpenPopup("##replayrenderpopup");
-      const auto film = [](ImDrawList* d, ImVec2 c, float s, ImU32 col) { IconFilm(d, c, s, col); };
-      const auto render = [](bool music) {
+      rx = RenderSplit(rx, bty, bh, scale, [](bool music) {
         Send([start = s_clip_start, end = s_clip_end, music] {
           if (!Gprb::Replay::Playback::RequestRender(start, end, music))
             OSD::AddMessage("The clip could not be saved", OSD::Duration::NORMAL, OSD::Color::RED);
         });
         EndClipMode();
-      };
-      const float rw = TextButtonWidth(RENDER_MUSIC, true, scale);
-      rx -= rw;
-      if (TextButton("##replayrender", RENDER_MUSIC, ImVec2(rx, bty), bh, ButtonLook::Solid, film, scale,
-                     ImDrawFlags_RoundCornersLeft))
-      {
-        render(true);
-      }
-      // The menu, above the button (its right edge at the caret's).
-      ImGui::SetNextWindowPos(ImVec2(caret0.x + caret_w, bty - 6.0f * scale), ImGuiCond_Always, ImVec2(1.0f, 1.0f));
-      ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(4.0f * scale, 4.0f * scale));
-      ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0, 0));
-      ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(10.0f * scale, 6.0f * scale));
-      ImGui::PushStyleColor(ImGuiCol_HeaderHovered, IM_COL32(255, 255, 255, 31));
-      ImGui::PushStyleColor(ImGuiCol_HeaderActive, IM_COL32(255, 255, 255, 46));
-      if (ImGui::BeginPopup("##replayrenderpopup"))
-      {
-        const ImVec2 item(std::max(TextButtonWidth(RENDER_NO_MUSIC, false, scale), 150.0f * scale),
-                          ImGui::GetTextLineHeight() + 12.0f * scale);
-        if (ImGui::Selectable(RENDER_MUSIC, false, 0, item))
-          render(true);
-        if (ImGui::Selectable(RENDER_NO_MUSIC, false, 0, item))
-          render(false);
-        ImGui::EndPopup();
-      }
-      ImGui::PopStyleColor(2);
-      ImGui::PopStyleVar(3);
+      });
       rx -= 8.0f * scale;
       const auto star = [](ImDrawList* d, ImVec2 c, float s, ImU32 col) {
         StarOutline(d, c, s * 0.5f, col, std::max(1.3f, s * 0.09f));
@@ -1155,6 +1173,37 @@ void Display(float scale)
       }
       if (can_clip)
       {
+        // A star's highlight being watched (played from its star or the launcher's list, on its
+        // way there, playing, or paused at its end): Render too, until it is left or played past
+        // (Sarah's board, 2026-11-20: "the render button should appear when you click on a star
+        // ... when our ui state machine knows for sure the user is watching a specific starred
+        // replay"). Asked once per highlight shown.
+        int watching = -1;
+        const bool on_clip = info.clip_start >= 0 && info.clip_end > info.clip_start &&
+                             (info.clip_armed || (info.paused && info.shown == info.clip_end)) &&
+                             cursor >= info.clip_start - PREV_RESTARTS_AFTER && cursor <= info.clip_end;
+        for (size_t i = 0; on_clip && i < info.marks.size(); ++i)
+        {
+          if (info.marks[i].start == info.clip_start && info.marks[i].end == info.clip_end)
+            watching = static_cast<int>(i);
+        }
+        const bool rendered = watching >= 0 && s_star_rendered_start == info.clip_start &&
+                              s_star_rendered_end == info.clip_end && s_star_rendered_title == info.title;
+        if (watching >= 0 && !rendered)
+        {
+          const s64 start = info.clip_start;
+          const s64 end_frame = info.clip_end;
+          const std::string title = info.title;
+          rx = RenderSplit(rx, bty, bh, scale, [start, end_frame, title](bool music) {
+            s_star_rendered_start = start;
+            s_star_rendered_end = end_frame;
+            s_star_rendered_title = title;
+            Send([start, end_frame, music] {
+              Gprb::Replay::Playback::RequestRender(start, end_frame, music, false);
+            });
+          });
+          rx -= 8.0f * scale;
+        }
         constexpr const char* CLIP = "Clip";
         const float cw = TextButtonWidth(CLIP, true, scale);
         rx -= cw + 4.0f * scale;

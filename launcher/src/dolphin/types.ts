@@ -106,7 +106,15 @@ export type ReplayPlaybackStatus = {
    * Clip mode's Render (w/ Music) / Render (No Music) in this Dolphin's run (`seq` from 1): each clip is in
    * `savedClips` too; the launcher renders each once (renderer/lib/dolphin/use_playback_overlay.ts).
    */
-  renderRequests?: { seq: number; path: string; startFrame: number; endFrame: number; music: boolean }[];
+  renderRequests?: {
+    seq: number;
+    path: string;
+    startFrame: number;
+    endFrame: number;
+    music: boolean;
+    /** False: a star's highlight playing (not saved as a Manual Clip); else clip mode's (saved first). */
+    clip?: boolean;
+  }[];
   /** Auto play's countdown at a spectated stream's end: the seconds left. */
   nextIn?: number;
   /**

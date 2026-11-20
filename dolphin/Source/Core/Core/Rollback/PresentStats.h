@@ -39,7 +39,10 @@ void OnEFBCopyPreprocess(bool to_xfb);
 // The EFB copy trigger is executed (GPU thread in dual core, CPU thread in single core).
 // `preprocessed`: the decision was made by OnEFBCopyPreprocess. Returns whether an immediate-XFB
 // present of this copy may happen.
-bool OnEFBCopy(bool to_xfb, bool preprocessed);
+// `redraw` (optional): set when an XFB copy that isn't presented should show the last frame
+// again instead (a replay's seek running unseen: Gprb::Session::RedrawUnshownFrameDue, decided on
+// the CPU thread with the copy's present).
+bool OnEFBCopy(bool to_xfb, bool preprocessed, bool* redraw = nullptr);
 
 // CPU thread, at the start of every displayed (not resimulated) frame of the rollback game loop.
 // `after_resimulation` is true when frames were resimulated just before it.

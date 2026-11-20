@@ -705,6 +705,14 @@ def test_launcher_comm_file_saves_manual_clips(backend: OnlineBackend,
     v.c.call("replay_control", action="highlight", arg=0)
     st = wait_paused_at(c[1], "the replay's star's end")
     assert st["serial"] == serial, st
+    # A seek back runs its frames unseen: meanwhile the last frame is shown again with the overlay
+    # (2026-11-20: the seek bar froze until the seek was done).
+    redraws = st["seek_redraws"]
+    v.c.call("replay_control", action="seek", arg=first + 200)
+    wait_paused_at(first + 200, "the seek back")
+    assert _status(v)["seek_redraws"] > redraws, "no redraw while the seek ran"
+    v.c.call("replay_control", action="highlight", arg=0)
+    wait_paused_at(c[1], "the replay's star's end again")
     # Clip mode's Render: saved as a clip and asked of the launcher, with or without music.
     r = v.c.call("replay_save_clip", start=c[0], end=c[1], render="music")
     assert r["saved"], r
@@ -712,7 +720,14 @@ def test_launcher_comm_file_saves_manual_clips(backend: OnlineBackend,
     assert r["saved"], r
     want_c = {"path": str(fa.path), "startFrame": c[0], "endFrame": c[1]}
     assert r["comm"]["savedClips"] == [want_a, want_b, want_c], r["comm"]
-    want_renders = [{**want_c, "seq": 1, "music": True}, {**want_a, "seq": 2, "music": False}]
+    want_renders = [{**want_c, "seq": 1, "music": True, "clip": True},
+                    {**want_a, "seq": 2, "music": False, "clip": True}]
+    assert r["comm"]["renderRequests"] == want_renders, r["comm"]
+    # A star's highlight playing has Render too (2026-11-20), not saved again as a clip.
+    r = v.c.call("replay_save_clip", start=c[0], end=c[1], render="music", star=True)
+    assert r["saved"], r
+    assert r["comm"]["savedClips"] == [want_a, want_b, want_c], r["comm"]
+    want_renders.append({**want_c, "seq": 3, "music": True, "clip": False})
     assert r["comm"]["renderRequests"] == want_renders, r["comm"]
     _wait(lambda: file_status().get("renderRequests") == want_renders or None, 10, "the status file's renders")
     # The launcher's side of the overlay: its colour and the renders' progress, as the file changes.
@@ -734,7 +749,7 @@ def test_launcher_comm_file_saves_manual_clips(backend: OnlineBackend,
                "the replay's last frame")
     assert st["phase"] != "error" and st["desync_frame"] == -1, st
     log = inst.log.read()
-    assert log.count("replay: clip saved") == 5 and log.count("render 2 asked for") == 1
+    assert log.count("replay: clip saved") == 5 and log.count("render 3 asked for") == 1
 
     # Auto play at a spectated stream's end (the finished game as a stream that is over).
     def mirror(command: str) -> None:

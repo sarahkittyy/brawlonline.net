@@ -1921,10 +1921,10 @@ Result CmdReplayNav(const Args& args)
   Fail("unknown list button " + action);
 }
 
-// replay_save_clip {start, end, render?: "music" | "nomusic"}: the overlay's Clip, then "Save as
+// replay_save_clip {start, end, render?: "music" | "nomusic", star?}: the overlay's Clip, then "Save as
 // highlight" (ReplayPlayback.h's manual clips), or Render (w/ Music) / Render (No Music), which
-// also asks the launcher to render it: `saved`, and the comm status with its `savedClips` (and
-// `renderRequests`).
+// also asks the launcher to render it (`star`: a star's highlight playing, rendered without saving
+// it): `saved`, and the comm status with its `savedClips` (and `renderRequests`).
 Result CmdReplaySaveClip(const Args& args)
 {
   const auto frame = [&](const char* k) {
@@ -1940,9 +1940,10 @@ Result CmdReplaySaveClip(const Args& args)
   const std::string render = GetString(args, "render", std::string());
   if (!render.empty() && render != "music" && render != "nomusic")
     Fail("render must be music or nomusic");
+  const bool star = GetBool(args, "star", false);
   r["saved"] = picojson::value(render.empty() ?
                                    Gprb::Replay::Playback::SaveClip(start, end) :
-                                   Gprb::Replay::Playback::RequestRender(start, end, render == "music"));
+                                   Gprb::Replay::Playback::RequestRender(start, end, render == "music", !star));
   r["comm"] = picojson::value(Gprb::Replay::Playback::Status());
   return r;
 }
