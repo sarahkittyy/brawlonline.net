@@ -332,9 +332,12 @@ void FifoManager::SyncGPU(SyncGPUReason reason, bool may_move_read_ptr)
                     fmt::ptr(m_fifo_aux_read_ptr));
     }
 
+    const bool aux_empty = m_fifo_aux_write_ptr == m_fifo_aux_read_ptr;
     memmove(m_fifo_aux_data, m_fifo_aux_read_ptr, m_fifo_aux_write_ptr - m_fifo_aux_read_ptr);
     m_fifo_aux_write_ptr -= (m_fifo_aux_read_ptr - m_fifo_aux_data);
     m_fifo_aux_read_ptr = m_fifo_aux_data;
+    if (aux_empty)
+      OpcodeDecoder::DisplayListCacheOnGpuIdle();
 
     if (may_move_read_ptr)
     {

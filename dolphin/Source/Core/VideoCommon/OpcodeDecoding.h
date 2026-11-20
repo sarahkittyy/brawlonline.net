@@ -18,6 +18,10 @@ class DataReader;
 
 namespace OpcodeDecoder
 {
+// The deterministic GPU thread's display-list cache: called on the CPU thread when the aux FIFO is
+// empty (the GPU thread has read every list it was given), to free replaced copies.
+void DisplayListCacheOnGpuIdle();
+
 // Global flag to signal if FifoRecorder is active.
 extern bool g_record_fifo_data;
 
