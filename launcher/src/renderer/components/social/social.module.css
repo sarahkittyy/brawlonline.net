@@ -62,18 +62,24 @@
 
 @media (prefers-reduced-motion: no-preference) {
   .tab.unread {
-    animation: unreadPulse 1.6s ease-in-out 2;
+    animation: unreadPulse 3.2s ease-in-out;
   }
 }
 
 @keyframes unreadPulse {
   0%,
-  100% {
+  50% {
     background-color: rgb(var(--unread) / 18%);
   }
 
-  50% {
+  25%,
+  75% {
     background-color: rgb(var(--unread) / 62%);
+  }
+
+  /* Two pulses, then it eases into the resting style, so it does not jump there when it ends. */
+  100% {
+    background-color: rgb(var(--unread) / 50%);
   }
 }
 

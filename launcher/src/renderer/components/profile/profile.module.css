@@ -598,22 +598,28 @@
 
 @media (prefers-reduced-motion: no-preference) {
   .pencilGlow {
-    animation: pencilGlow 1.8s ease-in-out 2;
+    animation: pencilGlow 3.6s ease-in-out;
   }
 }
 
 @keyframes pencilGlow {
   0%,
-  100% {
+  50% {
     box-shadow:
       0 0 0 1px rgb(var(--profile-glow) / 55%),
       0 0 4px 1px rgb(var(--profile-glow) / 20%);
   }
 
-  50% {
+  25%,
+  75% {
     box-shadow:
       0 0 0 2px rgb(var(--profile-glow) / 90%),
       0 0 12px 3px rgb(var(--profile-glow) / 45%);
+  }
+
+  /* Two pulses, then it eases into the resting style, so it does not jump there when it ends. */
+  100% {
+    box-shadow: 0 0 0 2px rgb(var(--profile-glow) / 85%);
   }
 }
 

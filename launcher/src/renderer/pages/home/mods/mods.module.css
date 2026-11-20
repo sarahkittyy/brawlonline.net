@@ -675,14 +675,21 @@
 /* The field of a game a room's part pointed at: it pulses briefly and stays gold until clicked. */
 @keyframes fixPulse {
   0%,
-  100% {
+  50% {
     box-shadow: 0 0 0 0 rgb(245 197 66 / 0%);
     border-color: rgb(245 197 66 / 50%);
   }
 
-  50% {
+  25%,
+  75% {
     box-shadow: 0 0 0 4px rgb(245 197 66 / 35%);
     border-color: rgb(245 197 66);
+  }
+
+  /* Two pulses, then it eases into the resting style, so it does not jump there when it ends. */
+  100% {
+    box-shadow: 0 0 0 2px rgb(245 197 66 / 35%);
+    border-color: rgb(245 197 66 / 50%);
   }
 }
 
@@ -695,7 +702,7 @@
 
 @media (prefers-reduced-motion: no-preference) {
   .fixField {
-    animation: fixPulse 1.2s ease-in-out 2;
+    animation: fixPulse 2.4s ease-in-out;
   }
 }
 
