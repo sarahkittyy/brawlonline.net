@@ -35,13 +35,13 @@ namespace
 // Which controller changes go out (PPR_GPRB_SUGGEST_RULES):
 // - all: any change; at most ANALOG_PER_FRAME a frame that change only the sticks or triggers
 //   (GitHub issue #35's patch as posted).
-// - cross (default): only a change that can start an action in P+ (Meaningful, on P+'s input
-//   map).
+// - cross: only a change that can start an action (the format's meaningful: P+'s input map, or
+//   Other Games' 16 lines).
 // - follow: cross, and after a crossing for a frame, any later change before that frame's read, at
-//   most one every FOLLOW_GAP. With the 16 lines measured from idle
-//   they caught what the coarse lines missed; with P+'s whole map they show nothing more and send
-//   about 1.7x as many datagrams on sticks that move between reads (an offline model of the
-//   suggestions on 1,536 ranked replays).
+//   most one every FOLLOW_GAP. A follow-up never crosses a line, but it brings the prediction's
+//   bytes closer to the real input's, and the game also uses the stick between the lines.
+// Unset, each format has its own (Format::follow_ups): P+'s whole map is cross (the follow-ups
+// changed nothing shown, GitHub PR #70), Other Games' coarse lines follow (as PR #67 measured).
 enum class Rules
 {
   All,
@@ -49,14 +49,17 @@ enum class Rules
   Follow,
 };
 
-Rules RulesMode()
+Rules RulesFor(const Format& fmt)
 {
-  static const Rules v = [] {
+  // 0: unset.
+  static const int set = [] {
     const char* e = std::getenv("PPR_GPRB_SUGGEST_RULES");
     const std::string s = e ? e : "";
-    return s == "all" ? Rules::All : s == "follow" ? Rules::Follow : Rules::Cross;
+    return s == "all" ? 1 : s == "cross" ? 2 : s == "follow" ? 3 : 0;
   }();
-  return v;
+  if (set)
+    return set == 1 ? Rules::All : set == 2 ? Rules::Cross : Rules::Follow;
+  return fmt.follow_ups ? Rules::Follow : Rules::Cross;
 }
 
 constexpr int ANALOG_PER_FRAME = 3;
@@ -162,7 +165,7 @@ void OnReport(int chan, HostPadSource source, const GCPadStatus& st, Clock::time
   const int frame = x.last_frame + k;
   const bool buttons = fmt.buttons_differ(x.known.data(), in.data());
   const int analog_sent = frame == x.sugg_frame ? x.analog_sent : 0;
-  const Rules rules = RulesMode();
+  const Rules rules = RulesFor(fmt);
   if (rules == Rules::All)
   {
     if (!buttons && analog_sent >= ANALOG_PER_FRAME)
@@ -356,7 +359,8 @@ namespace
 // P+ 3.2's input map, read off the game's code (ipPadConfig, soController, the common Fighter.pac's
 // PSA and P+'s codes on top) and checked in the game (harness/tools/pplus_stick_lines.py): the
 // controller values the game can tell apart, in gfPadStatus units (the sticks against their
-// origin, s8: +0x30 main x, +0x31 main y, +0x32 C x, +0x33 C y; the triggers, u8: +0x34 L, +0x35 R).
+// origin, s8: +0x30 main x, +0x31 main y, +0x32 C x, +0x33 C y; the triggers, u8: +0x34 L,
+// +0x35 R).
 //
 // The main stick becomes a float in ipPadConfig (0x8004819C with P+'s "Directional Input Capped at
 // Distance of 1" and "General Directional Input Multiplier 0.010325"): a vector longer than 100 is
@@ -558,8 +562,8 @@ constexpr MachineLine MACHINE_LINES[] = {
 constexpr u8 MACHINE_TRIGGER_AT = 45;
 static_assert(std::size(MACHINE_LINES) + 2 <= 32);
 
-// Every button of the pad (+0 Start, Y, X, B, A; +1 L, R, Z and the D-pad): P+ leaves the D-pad out,
-// other games use it.
+// Every button of the pad (+0 Start, Y, X, B, A; +1 L, R, Z and the D-pad): P+ leaves the D-pad
+// out, other games use it.
 u16 MachineButtons(const u8* in)
 {
   return static_cast<u16>(((in[MACHINE_PAD] << 8) | in[MACHINE_PAD + 1]) & 0x1F7F);
@@ -666,6 +670,11 @@ bool Enabled()
     return !(e && *e == '0');
   }();
   return on;
+}
+
+bool FollowsUp(const Format& format)
+{
+  return RulesFor(format) == Rules::Follow;
 }
 
 namespace

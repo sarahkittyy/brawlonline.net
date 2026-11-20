@@ -5,14 +5,15 @@
 
 // Input suggestions (Slippi's, after Arte's "subframe rollback", Slippi Ishiiruka PR #481): the
 // game reads the local controller once a frame, but the controller can be looked at more often (a
-// Wii U adapter reports every 1-8 ms; a controller mapped in Dolphin is sampled by a thread). When a
-// look changes what the local input of the next frame would be, the session sends it at once to the
-// other players, tagged with the GekkoNet frame its change will first be in. A machine that has to predict that player's input for that frame or a later one
-// predicts with it instead of the player's last input (gekko_add_input_suggestion). Only
-// predictions change: every prediction is checked against the real input as before, so the game
-// always runs on the real inputs, and a rollback is fixed with them. A change made between two of
-// the player's reads reaches the others up to a frame sooner than the read that takes it, so fewer
-// of their predictions are wrong and their rollbacks are shorter.
+// Wii U adapter reports every 1-8 ms; a controller mapped in Dolphin is sampled by a thread). When
+// a look changes what the local input of the next frame would be, the session sends it at once to
+// the other players, tagged with the GekkoNet frame its change will first be in. A machine that has
+// to predict that player's input for that frame or a later one predicts with it instead of the
+// player's last input (gekko_add_input_suggestion). Only predictions change: every prediction is
+// checked against the real input as before, so the game always runs on the real inputs, and a
+// rollback is fixed with them. A change made between two of the player's reads reaches the others
+// up to a frame sooner than the read that takes it, so fewer of their predictions are wrong and
+// their rollbacks are shorter.
 //
 // Two kinds of session send them: P+'s gameplay sessions (Gprb::Session: the input is the game's
 // gfPadStatus, decoded on the host) and Other Games' whole-machine sessions (Machine::Session: the
@@ -88,9 +89,16 @@ struct Format
   bool (*buttons_differ)(const u8* prev, const u8* next);
   // Tests (PPR_GPRB_SUGGEST_LIE=1): `in` made a lie, A the other way and the main stick's X random.
   void (*lie)(u8* in, u32 random);
+  // The rule without PPR_GPRB_SUGGEST_RULES: after a crossing, its frame's later changes go out too
+  // (follow), or only crossings (cross). Lines as fine as P+'s whole map leave the follow-ups
+  // nothing to show; coarse ones (Other Games') don't.
+  bool follow_ups = false;
 };
 // P+'s gameplay sessions' (gfPadStatus, decoded on the host: HostDecodeLatest).
 extern const Format GFPAD_FORMAT;
+// Whether a sender with `format` sends a crossing's later changes too (rule follow):
+// PPR_GPRB_SUGGEST_RULES, else the format's follow_ups.
+bool FollowsUp(const Format& format);
 
 // CPU thread, under the session's mutex. A network match whose local player plays a GameCube
 // controller on SI channel `chan` (0-3) runs: suggestions for it go out on `socket` (alive until
@@ -144,7 +152,8 @@ struct SenderStats
   u64 sample_us = 0;
   u64 sample_us_max = 0;
   // The gaps between one sample's start and the next's while sampling: how many, their sum, the
-  // sum of their squares (a change waits sum_sq / (2 sum) on average to be sampled) and the longest.
+  // sum of their squares (a change waits sum_sq / (2 sum) on average to be sampled) and the
+  // longest.
   u64 sample_gaps = 0;
   u64 sample_gap_us = 0;
   u64 sample_gap_us_sq = 0;

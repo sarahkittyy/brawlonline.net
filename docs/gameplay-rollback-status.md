@@ -1629,9 +1629,10 @@ design as Slippi 3.7's input suggestions and Melee Unlocked's early inputs.
   drop, 71 down smash, 73 spot dodge, 78 UCF spot dodge. The C-stick is an input past a radius of
   50 (36, 36 on a diagonal); the attack's direction is which axes of trunc(32 x its direction)
   leave the dead zone; shield buffers read each axis at 51. Stick noise inside a zone is never
-  sent. `PPR_GPRB_SUGGEST_RULES=all|cross|follow` (default `cross`; `follow` adds the later
-  changes before the frame's read, at most one every 2 ms, which the 16 lines first measured from
-  idle needed and the whole map does not).
+  sent. `PPR_GPRB_SUGGEST_RULES=all|cross|follow` (unset, each session's input format has its
+  own, `Format::follow_ups`: `cross` here; `follow`, which adds the later changes before the
+  frame's read at most one every 2 ms, is what the 16 lines first measured from idle needed, and
+  what Other Games' coarse lines keep).
 - **Who sends**: a GameCube adapter's reports (the adapter thread's hook), or for a controller
   mapped in Dolphin a sampler thread at 1000 Hz that runs only while some peer takes suggestions
   (on a 1 ms grid; on Windows it waits on a high-resolution waitable timer: `sleep_until` rounds
@@ -1658,6 +1659,23 @@ design as Slippi 3.7's input suggestions and Melee Unlocked's early inputs.
   less evenly (present interval sd +25-50%), caused by the extra packets themselves (receiving
   them unused did the same; sampling without sending did not). 85 games, 719,657 confirmed
   frames compared, 0 mismatches.
+- **P+'s whole map** (PR #70, `cross`, against the 16 lines with `follow`; harness, Direct games
+  through netsim, both players replaying bug report #50's inputs, pairs of games with one seed for
+  both, order random; four 45 s segments a game: 70 ms with delay 1 and 110 ms with delay 2, the
+  sticks set at once at a random point between reads, or moving in a straight line over 35% of a
+  field, set about 1,000 times a second): frames whose fighter action differed from what was
+  shown, sampler at ~460 Hz (8 pairs) -5% / -12% (70 / 110 ms, sticks at once; 7 of 8 pairs
+  better at 110), -7% / -6% (moving); at 1000 Hz (PR #69, 4 pairs) -9% / -9% (4 of 4 at 110),
+  -7% / -1%. Rollbacks unchanged, but +1% with moving sticks at 110 ms (4 of 4; without the
+  follow-ups a prediction's bytes are further off). Suggestions +20% with sticks at once
+  (11.5 -> 14 a second a player) and +9-12% with moving sticks (460 Hz 24.7 -> 27.0, 1000 Hz
+  31.2 -> 34.9); the PR's offline model said fewer. For scale (3 games, the first 3 seeds,
+  460 Hz): suggestions off 34-37 such frames per 1000, the 16 lines 27-31, the map 25-30. In the
+  game (`pplus_stick_lines.py`): fast fall from 65, tap jump out of a run from 62, the C-stick on
+  a diagonal from 36, as the map says; roll and spot dodge out of shield came only from 77-79,
+  and not every time, so their 73 is unconfirmed (a wrong line is only a suggestion too many or
+  too few). The filter 1-11 ns, the judge 16-30 ns. 27 games, 342,253 confirmed frames compared,
+  0 mismatches.
 - **Cost**: GekkoNet +60-90 ns per remote player per frame; the filter 7 ns, the judge 11 ns;
   the mapped-controller sampler ~10 us a sample (about 1% of a core at 1000 Hz; 26-36 us, about
   3%, on a PC busy with other Dolphins) and the SI device update's p99 +6-14 us while it runs
@@ -1667,7 +1685,9 @@ design as Slippi 3.7's input suggestions and Melee Unlocked's early inputs.
   can report stray states, per Arte; the judge then stops following it), macOS / Linux / Steam
   Deck in a game, 3-4 players beyond sync (a 4-player session stayed in sync).
 - **Other Games** (2026-11-19): whole-machine sessions send and use them too, with their own
-  input format and game-independent rules (`docs/design/brawl-mods.md` §6.2).
+  input format and game-independent rules (`docs/design/brawl-mods.md` §6.2): their own copy of
+  the 16 lines, every button, and `follow` by default, so P+'s whole map (PR #70) changes nothing
+  there.
 
 ## A PC that hitches no longer holds every frame 8 ms (bug report #314, 2026-11-18)
 

@@ -6,6 +6,7 @@
 // last input, and every prediction is still checked against the real input.
 
 #include <array>
+#include <cstdlib>
 #include <cstring>
 
 #include <gtest/gtest.h>
@@ -253,6 +254,17 @@ bool Means(const std::array<u8, 0x40>& a, const std::array<u8, 0x40>& b)
   return Gprb::Suggest::Meaningful(a.data(), b.data());
 }
 }  // namespace
+
+TEST(InputSuggest, EachFormatHasItsOwnRule)
+{
+  if (std::getenv("PPR_GPRB_SUGGEST_RULES"))
+    GTEST_SKIP() << "PPR_GPRB_SUGGEST_RULES is set";
+  // P+'s whole map sends crossings only; coarse lines (Other Games') send the follow-ups too.
+  EXPECT_FALSE(Gprb::Suggest::FollowsUp(Gprb::Suggest::GFPAD_FORMAT));
+  Gprb::Suggest::Format coarse = Gprb::Suggest::GFPAD_FORMAT;
+  coarse.follow_ups = true;
+  EXPECT_TRUE(Gprb::Suggest::FollowsUp(coarse));
+}
 
 TEST(InputSuggest, MeaningfulChanges)
 {

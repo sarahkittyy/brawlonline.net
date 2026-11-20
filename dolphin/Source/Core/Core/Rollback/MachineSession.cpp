@@ -3897,7 +3897,9 @@ const Gprb::Suggest::Format SUGGEST_FORMAT{INPUT_SIZE,
                                            SuggestMake,
                                            Gprb::Suggest::MachineMeaningful,
                                            SuggestButtonsDiffer,
-                                           SuggestLie};
+                                           SuggestLie,
+                                           // Coarse lines: the follow-ups go out too.
+                                           true};
 
 const Gprb::Suggest::Format& SuggestFormat()
 {
@@ -3987,14 +3989,17 @@ void LogSuggestStats()
   INFO_LOG_FMT(BRAWLBACK,
                "machine suggest: {}, sent {} for {} input changes ({} crossings, {} follow-ups; {} "
                "reports, {} held back, {} too late, {} undecoded; {} mapped samples, {:.0f} us "
-               "each, at most {}); received {} ({} stale), {} predictions changed; predictions "
+               "each, at most {}, {:.0f} Hz, a change waited {:.2f} ms to be sampled, gaps at "
+               "most {:.1f} ms); received {} ({} stale), {} predictions changed; predictions "
                "checked {}, wrong {} ({} right only by a suggestion, {} wrong only by one); first "
                "predictions (shown) wrong {}; judged worse {}, players ignored {}",
                Gprb::Suggest::Enabled() ? "on" : "off", tx.sent, tx.local_changes, tx.crossings,
                tx.follow_ups, tx.reports, tx.held_back, tx.too_late, tx.undecoded, tx.samples,
                static_cast<double>(tx.sample_us) / std::max<u64>(tx.samples, 1), tx.sample_us_max,
-               rx.received, rx.stale, rx.changed, rx.checked, rx.wrong, rx.helped, rx.hurt,
-               rx.shown_wrong, rx.worse, rx.ignored);
+               tx.sample_gaps * 1e6 / std::max<u64>(tx.sample_gap_us, 1),
+               tx.sample_gap_us_sq / 2e3 / std::max<u64>(tx.sample_gap_us, 1),
+               tx.sample_gap_us_max / 1e3, rx.received, rx.stale, rx.changed, rx.checked,
+               rx.wrong, rx.helped, rx.hurt, rx.shown_wrong, rx.worse, rx.ignored);
 }
 
 picojson::value SuggestStatsJson()
@@ -4008,6 +4013,8 @@ picojson::value SuggestStatsJson()
         {"sent", tx.sent}, {"held_back", tx.held_back}, {"too_late", tx.too_late},
         {"crossings", tx.crossings}, {"follow_ups", tx.follow_ups}, {"undecoded", tx.undecoded},
         {"samples", tx.samples}, {"sample_us", tx.sample_us}, {"sample_us_max", tx.sample_us_max},
+        {"sample_gaps", tx.sample_gaps}, {"sample_gap_us", tx.sample_gap_us},
+        {"sample_gap_us_sq", tx.sample_gap_us_sq}, {"sample_gap_us_max", tx.sample_gap_us_max},
         {"received", rx.received}, {"stale", rx.stale}, {"changed", rx.changed},
         {"checked", rx.checked}, {"wrong", rx.wrong}, {"helped", rx.helped}, {"hurt", rx.hurt},
         {"shown_wrong", rx.shown_wrong}, {"worse", rx.worse}, {"ignored", rx.ignored}})
