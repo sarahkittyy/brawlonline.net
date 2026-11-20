@@ -214,9 +214,26 @@ public:
   // The presenter then holds a frame that came late (a rollback's re-run runs between its input
   // and its copy) to keep the presents a field apart (PresentStats::PresentHoldUntil).
   // CPU thread. The session turns it on for its running phase.
-  void SetPresentPacing(bool on) { m_pace_on.store(on, std::memory_order_relaxed); }
+  // With `sleep_to_copy` (whole-machine sessions) that sleep ends at the presented copy's own due
+  // time, not at the due time of the throttle call that takes it, and a rollback's re-run frames
+  // leave it to the presented frame. A Wii game's throttle calls are its SI polls (twice a field)
+  // and the Bluetooth's Wii Remote updates (200 a second, not locked to the field), so the first
+  // call after a copy came 0 to 8 ms after it: where a game's copy straddles one of its polls
+  // (Project+ copies its frame about 15.5 ms into the field, right around its second poll), the
+  // sleep ended up to 8 ms later from one frame to the next and the pictures came as unevenly. A
+  // re-run frame's poll took the sleep from the presented frame after a rollback, which then ran
+  // without one (up to the skip limit, half the audio buffer, ahead of schedule), and the frame
+  // after it slept twice as long. TakePendingPacedSleep takes it at the Brawl loop top.
+  void SetPresentPacing(bool on, bool sleep_to_copy = false)
+  {
+    m_pace_sleep_to_copy.store(on && sleep_to_copy, std::memory_order_relaxed);
+    m_pace_on.store(on, std::memory_order_relaxed);
+  }
   bool PresentPacingActive() const;
   void OnPresentedXFBCopy();
+  // CPU thread, with `sleep_to_copy`: the paced sleep now, if no throttle call took it since the
+  // last presented copy (a whole-machine session's Brawl loop top).
+  void TakePendingPacedSleep();
   // With present pacing, a rollback's load and re-runs come between that one sleep and the next
   // presented copy. A lead provider makes the sleep end that much before its target: it is asked
   // again every PACED_SLEEP_SLICE while the sleep lasts (remote inputs come in meanwhile) and
@@ -333,7 +350,13 @@ private:
   bool m_config_rush_frame_presentation = false;
   bool m_config_present_pacing = false;
 
-  std::atomic<bool> m_pace_on{false};  // SetPresentPacing
+  std::atomic<bool> m_pace_on{false};             // SetPresentPacing
+  std::atomic<bool> m_pace_sleep_to_copy{false};  // SetPresentPacing
+  bool PaceSleepToCopy() const
+  {
+    return m_pace_sleep_to_copy.load(std::memory_order_relaxed) && PresentPacingActive();
+  }
+  s64 m_paced_copy_ticks = 0;  // the last presented copy's ticks (OnPresentedXFBCopy)
   PacedSleepLead m_paced_sleep_lead = nullptr;
 
   s64 m_throttle_reference_cycle = 0;
