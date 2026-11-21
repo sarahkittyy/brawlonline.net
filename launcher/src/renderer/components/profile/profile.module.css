@@ -160,6 +160,26 @@
   display: none;
 }
 
+/* Someone else's profile: Invite to game and Message on a row of their own, then Ignore user (quiet, as the player's
+   own account links) and the web link on the row under them. */
+.actions:has(.peerButtons) {
+  display: contents;
+}
+
+.peerButtons {
+  flex-basis: 100%;
+  display: flex;
+  gap: 8px;
+}
+
+.peerButtons > * {
+  flex: 1;
+}
+
+.footer:has(.peerButtons) .accountLink {
+  margin-left: -6px;
+}
+
 .webLink {
   display: flex;
   align-items: center;
