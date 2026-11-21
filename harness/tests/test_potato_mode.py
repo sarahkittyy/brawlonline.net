@@ -83,11 +83,13 @@ def test_potato_mode_draws_less_and_nothing_else() -> None:
 
 def test_potato_mode_fountain_keeps_its_sky() -> None:
     # Fountain of Dreams keeps its Sky model: without it the stage's clear colour (mint) shows as a
-    # flat void. Hidden are only the water's reflection, BG and MainRing (the scenery ring), as
-    # grIzumiMainBg[1] on the first ground and [3]/[4] on the second; Sky is [2] and still draws.
+    # flat void, and its MainRing, the stage's body (the walls under the grass rim, the fountain,
+    # towers and trees; without it the side platforms show where they sink into the stage). Hidden
+    # are only the water's reflection and BG (the aurora and rings behind), as grIzumiMainBg[1] on
+    # the first ground and [3] on the second; Sky [2] and MainRing [4] still draw.
     on = _local_match_potato_state(True, "fountain_of_dreams")
     assert on == {"potato": 1, "shadow_bit": 0,
-                  "no_draw_models": ["grIzumiMainBg[1]", "grIzumiMainBg[3]", "grIzumiMainBg[4]"]}, on
+                  "no_draw_models": ["grIzumiMainBg[1]", "grIzumiMainBg[3]"]}, on
 
 
 def test_potato_player_against_a_normal_player_stays_in_sync(tmp_path: Path) -> None:
