@@ -59,6 +59,24 @@ void PunchLowPorts(ENetHost* host, const ENetAddress& to)
   }
 }
 
+void OpenOurRouter(ENetSocket socket, const ENetAddress& to)
+{
+  // Past our router (hop 1), not their router: a peer's router at hop 2 would be on our ISP's
+  // first device, which no home connection is.
+  constexpr int OPEN_TTL = 2;
+  int old_ttl = 0;
+  if (enet_socket_get_option(socket, ENET_SOCKOPT_TTL, &old_ttl) != 0 || old_ttl <= 0)
+    return;
+  if (enet_socket_set_option(socket, ENET_SOCKOPT_TTL, OPEN_TTL) != 0)
+    return;
+  u8 byte = 0;
+  ENetBuffer buffer{};
+  buffer.data = &byte;
+  buffer.dataLength = 1;
+  enet_socket_send(socket, &to, &buffer, 1);
+  enet_socket_set_option(socket, ENET_SOCKOPT_TTL, old_ttl);
+}
+
 bool HasIpv6()
 {
 #ifdef ENET_BRAWL_IPV6
