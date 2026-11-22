@@ -8761,9 +8761,12 @@ NetPlay::NetSettings MakeNetSettings()
   NetPlay::NetSettings ns{};
   ns.m_RollbackMode = true;
   ns.rollback_delay = s.opts.delay < 0 ? Gprb::Session::DEFAULT_INPUT_DELAY : s.opts.delay;
-  // The CPU thread is the player's choice: with the deterministic GPU thread (forced for rollback
-  // by the netplay layer) single and dual core compute the same.
-  ns.cpu_thread = Config::Get(Config::MAIN_CPU_THREAD);
+  // Dual core on every machine, whatever the player's own setting (docs/design/brawl-mods.md,
+  // decision 14). Single core does not compute the same: its CPU thread runs the GPU's commands
+  // and charges their cycles (FifoManager::RunGpuOnCpu), where the deterministic GPU thread takes
+  // the whole FIFO at once, so a game that times its frames read other ticks on the two. A
+  // single-core player and a dual-core player desynced 5-50 s after every join (bug report #319).
+  ns.cpu_thread = true;
   ns.cpu_core = Config::Get(Config::MAIN_CPU_CORE);
   // Cheats are on with the session's codes only (room-codes.md): those Arm or the machine image
   // gave (UseCodes), never the player's own from the game's inis (sync_codes as a netplay guest:
