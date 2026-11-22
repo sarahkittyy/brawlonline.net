@@ -17,6 +17,27 @@ export function characterName(characterId: number): string {
   return STOCK_CHARACTERS.find((c) => c.key === key)?.name ?? "";
 }
 
+/**
+ * The game's players as a highlight shows them: a Zelda or Sheik as the form they were in for most
+ * of the string (ReplayHighlight.forms; bug report #323).
+ */
+export function highlightPlayers(
+  players: Map<number, HighlightPlayer>,
+  row: ReplayHighlight,
+): Map<number, HighlightPlayer> {
+  if (!row.forms?.length) {
+    return players;
+  }
+  const shown = new Map(players);
+  for (const { port, characterId } of row.forms) {
+    const p = shown.get(port);
+    if (p) {
+      shown.set(port, { ...p, characterId });
+    }
+  }
+  return shown;
+}
+
 function who(player: HighlightPlayer | undefined): string {
   if (!player) {
     return "";
@@ -33,9 +54,10 @@ export function clipVideoName(
   filePath: string,
 ): string {
   const date = replayDateOf(filePath);
+  const shown = row.kind === "highlight" ? highlightPlayers(players, row) : players;
   const what =
     row.kind === "highlight"
-      ? `${who(players.get(row.attackerPort))} vs ${who(players.get(row.victimPort))}`
+      ? `${who(shown.get(row.attackerPort))} vs ${who(shown.get(row.victimPort))}`
       : row.kind === "manual"
       ? `Clip - ${[...players.values()].map(who).join(" vs ")}`
       : `Clip by ${who(players.get(row.port))}`;

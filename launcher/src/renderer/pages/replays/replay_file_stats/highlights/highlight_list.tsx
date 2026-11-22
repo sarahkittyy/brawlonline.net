@@ -57,7 +57,7 @@ import { setPlaylistEntries, usePlaylistStore } from "./highlight_nav";
 import { useHighlightPlayer } from "./highlight_playlist";
 import { manualClipEntry, useManualClips } from "./manual_clips";
 import { RenderJobs, useRenderJobs } from "./render_jobs";
-import { clipVideoName, comboVideoName, multiGameComboName } from "./render_names";
+import { clipVideoName, comboVideoName, highlightPlayers, multiGameComboName } from "./render_names";
 import { ReplayVersionNote } from "./replay_version_note";
 import { useWindowedRows } from "./windowed_rows";
 
@@ -656,13 +656,17 @@ const HighlightWho = ({
   players: Map<number, HighlightPlayer>;
   stocks: Map<number, Stocks>;
 }) => {
+  const shown = highlightPlayers(players, row);
   const side = (port: number) => {
-    const p = players.get(port);
+    const p = shown.get(port);
     if (!data.isTeams || p?.teamId == null) {
       return [p];
     }
     // The player who did it first, then their teammates.
-    return [p, ...data.players.filter((q) => q.teamId === p.teamId && q.port !== port)];
+    return [
+      p,
+      ...data.players.filter((q) => q.teamId === p.teamId && q.port !== port).map((q) => shown.get(q.port) ?? q),
+    ];
   };
   return <Sides sides={[side(row.attackerPort), side(row.victimPort)]} isTeams={data.isTeams} stocks={stocks} />;
 };

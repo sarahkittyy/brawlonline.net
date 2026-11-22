@@ -56,6 +56,12 @@ moment as pips in the player's color (filled left, hollow lost; past 5, "×N"). 
 replay's stage and everyone's stock changes for this (`stageId`, `stocks`; DETECTOR_VERSION 6). A
 manual clip shows them when its replay's highlights are known (stocks), and the stage it was saved
 with (clips saved before have none).
+A Zelda or Sheik shows on a highlight's row (and in its rendered video's name) as the form they
+were in for most of the string, from the live fighter's ftKind (bug report #323, 2026-11-22: "would
+it be possible for the character icon in the highlights to update based on who you are when you do
+the combo"); `forms` on the highlight, DETECTOR_VERSION 7. Version 6 results of games without a
+Zelda or Sheik stay cached (`sameAsCurrent` in highlight_service.ts), so only those games are read
+again. The game's header and clip rows still show the character picked.
 Since 2026-11-15 a row is two lines, the players over when in the game it plays (from-to), with the
 stage first and its name and the date in the Highlights tab (§10).
 The row playing is shown selected, and follows the playback Dolphin's buttons and stars; it is

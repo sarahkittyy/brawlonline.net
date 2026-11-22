@@ -21,6 +21,12 @@ export type ReplayHighlight = {
   startFrame: number;
   endFrame: number;
   kill: boolean;
+  /**
+   * The players who were their other form for most of the string (a Zelda who was Sheik, a Sheik who
+   * was Zelda), with that form's characterId, so the row shows who did it (bug report #323); none
+   * for everyone else. Results cached before detector version 7 have none.
+   */
+  forms?: { port: number; characterId: number }[];
   /** Private (DESIGN.md): only used to sort. */
   score: number;
 };

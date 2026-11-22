@@ -436,6 +436,34 @@ describe("replay highlights", () => {
     ]);
   });
 
+  it("shows a Zelda or Sheik as the form they were in for most of a string (bug report #323)", () => {
+    // Alice's live fighter: `kind` from frame 90 (just before the string's first hit at 100) on.
+    const withKind = (kind: number, from = 90) =>
+      game([1, 2, 3, 4]).map((row, f) => ({
+        ...row,
+        fighters: row.fighters.map((s, p) => (p === 0 ? { ...s, kind: f >= from ? kind : 0x0d } : s)),
+      }));
+    const forms = (frames: Frame[], characterId: number) => {
+      const t = decodeTimeline(encode(frames));
+      t.players[0].characterId = characterId;
+      const r = analyzeTimeline(t, { highlights: true, clips: false, clipPlayers: "local" });
+      expect(r.highlights).toHaveLength(1);
+      return r.highlights[0].forms;
+    };
+    const ZELDA = 0x0e;
+    const SHEIK = 0x0f;
+    const FT_ZELDA = 0x0d;
+    const FT_SHEIK = 0x0e;
+    // Picked Zelda, transformed before the string: Sheik's. Picked Sheik and stayed: none.
+    expect(forms(withKind(FT_SHEIK), ZELDA)).toEqual([{ port: 1, characterId: SHEIK }]);
+    expect(forms(withKind(FT_SHEIK, 0), SHEIK)).toBeUndefined();
+    // Picked Sheik, Zelda for the string: Zelda's. Turning into Sheik after most of it: still Zelda's.
+    expect(forms(withKind(FT_ZELDA, 0), SHEIK)).toEqual([{ port: 1, characterId: ZELDA }]);
+    expect(forms(withKind(FT_SHEIK, 170), SHEIK)).toEqual([{ port: 1, characterId: ZELDA }]);
+    // Anyone else: their character, whatever the fighter (another character's ftKind of 0x0e).
+    expect(forms(withKind(FT_SHEIK), 2)).toBeUndefined();
+  });
+
   it("refuses a file without fighter memory, and damaged chunks", () => {
     const frames = encode(game([1, 2, 3, 4]));
     const noFighters = Buffer.concat([frames.subarray(0, 32)]);
