@@ -7,6 +7,7 @@
 #include <memory>
 #include <optional>
 #include <tuple>
+#include <vector>
 
 #include "Common/CommonTypes.h"
 #include "Common/EnumFormatter.h"
@@ -131,6 +132,12 @@ public:
   // Save state load/save.
   void DoState(PointerWrap& p);
 
+  // Smooth motion (FrameInterpolation.h): one more EFB per in-between picture, the EFB's size and
+  // formats. SwapInterpolationEFB(i) exchanges it with the EFB (again to swap back), so that draws,
+  // clears, resolves and copies use it; re-bind after.
+  bool EnsureInterpolationEFBs(u32 count);
+  void SwapInterpolationEFB(u32 index);
+
 protected:
   struct EFBPokeVertex
   {
@@ -212,6 +219,19 @@ protected:
 
   // Pipeline for restoring the contents of the EFB from a save state
   std::unique_ptr<AbstractPipeline> m_efb_restore_pipeline;
+
+  // The in-between pictures' EFBs (SwapInterpolationEFB).
+  struct EFBSet
+  {
+    std::unique_ptr<AbstractTexture> color_texture;
+    std::unique_ptr<AbstractTexture> depth_texture;
+    std::unique_ptr<AbstractTexture> resolve_color_texture;
+    std::unique_ptr<AbstractTexture> depth_resolve_texture;
+    std::unique_ptr<AbstractFramebuffer> framebuffer;
+    std::unique_ptr<AbstractFramebuffer> color_resolve_framebuffer;
+    std::unique_ptr<AbstractFramebuffer> depth_resolve_framebuffer;
+  };
+  std::vector<EFBSet> m_interpolation_efbs;
 
   // Format conversion shaders
   std::array<std::unique_ptr<AbstractPipeline>, 6> m_format_conversion_pipelines;

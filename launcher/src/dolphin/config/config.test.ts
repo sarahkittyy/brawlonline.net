@@ -70,6 +70,26 @@ describe("online settings: potato mode", () => {
   });
 });
 
+describe("online settings: smooth motion", () => {
+  it("is off without the key and round-trips through [Online] SmoothMotion", async () => {
+    const ini = await IniFile.init(iniPath);
+    expect((await getOnlineSettings(ini)).smoothMotion).toBe(0);
+
+    await setOnlineSettings(ini, { smoothMotion: 120 });
+    expect(await fs.promises.readFile(iniPath, "utf8")).toMatch(/\[Online\][^[]*SmoothMotion = 120/);
+    expect((await getOnlineSettings(await IniFile.init(iniPath))).smoothMotion).toBe(120);
+
+    await setOnlineSettings(ini, { smoothMotion: 0 });
+    expect((await getOnlineSettings(await IniFile.init(iniPath))).smoothMotion).toBe(0);
+  });
+
+  it("writes a rate Dolphin does not take as off", async () => {
+    const ini = await IniFile.init(iniPath);
+    await setOnlineSettings(ini, { smoothMotion: 144 });
+    expect(await fs.promises.readFile(iniPath, "utf8")).toMatch(/\[Online\][^[]*SmoothMotion = 0/);
+  });
+});
+
 describe("online settings: let others stream my games", () => {
   it("is on in a Dolphin.ini without the key", async () => {
     const ini = await IniFile.init(iniPath);

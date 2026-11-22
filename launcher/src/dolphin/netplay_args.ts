@@ -123,8 +123,9 @@ export const renderInternalResolution = (resolution: ClipResolution) => Math.cei
  * (`[DSP] Volume`: the video gets the game's samples before the volume), not fullscreen, at the
  * internal resolution the video's height needs (480: 1x, 720 and 1080: 2x and 3x... ), the
  * job's music (`[Online] Music`: off applies P+'s Music Off code), never potato mode (`[Online]
- * PotatoMode`: a video shows the whole stage whatever this PC plays with), and shaders compiled before the
- * draw that needs them (`ShaderCompilationMode` 0, synchronous): the default skip-drawing mode
+ * PotatoMode`: a video shows the whole stage whatever this PC plays with), no smooth motion (`[Online]
+ * SmoothMotion`: a video has the game's own frames, and in-between pictures would only cost), and
+ * shaders compiled before the draw that needs them (`ShaderCompilationMode` 0, synchronous): the default skip-drawing mode
  * leaves out every draw whose shader is still compiling, which a render, running faster than real
  * time from its own shader cache, put in its videos as fighters, HUD and stage parts missing from
  * the first second of a clip.
@@ -145,6 +146,8 @@ export function buildRenderDolphinArgs({ music, resolution }: RenderDolphinSetti
     `Dolphin.Online.Music=${music ? "True" : "False"}`,
     "-C",
     "Dolphin.Online.PotatoMode=False",
+    "-C",
+    "Dolphin.Online.SmoothMotion=0",
     "-C",
     "Graphics.Settings.ShaderCompilationMode=0",
   ];

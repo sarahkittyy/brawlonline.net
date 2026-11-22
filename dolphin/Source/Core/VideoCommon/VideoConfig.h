@@ -301,6 +301,8 @@ struct VideoConfig final
   bool bDisableCopyToVRAM = false;
   bool bDeferEFBCopies = false;
   bool bImmediateXFB = false;
+  // Smooth motion: 0, or 120 to 360 in 60s (Config::ONLINE_SMOOTH_MOTION, FrameInterpolation.h).
+  int iSmoothMotion = 0;
   bool bSkipPresentingDuplicateXFBs = false;
   bool bCopyEFBScaled = false;
   int iSafeTextureCache_ColorSamples = 0;

@@ -24,6 +24,11 @@ export const GameSettingsMessages = {
   disableChatDescription: () => "Hide the chat window everywhere in the game.",
   potatoMode: () => "Potato Mode",
   potatoModeDescription: () => "Disables shadows and backgrounds.",
+  smoothMotion: () => "Smooth Motion",
+  smoothMotionDescription: () =>
+    "Draws in-between pictures for a 120 Hz or faster screen, in online matches and replays; the game still runs at 60. The pictures take 8 to 14 ms, so a match plays one frame (17 ms) less input delay than your setting to make up for it: your inputs show sooner than with it off, with more rollbacks on your screen. At an input delay of 0 frames (1 with a Wii Remote or Classic Controller) there is no frame to take, and each frame shows that much later.",
+  smoothMotionOff: () => "Off",
+  smoothMotionRate: (rate: number) => `${rate} Hz`,
   enableStreamGames: () => "Show my games on the Spectate tab",
   enableStreamGamesDescription: () =>
     "Streams inputs to the server for others to spectate you. Very minimal network load. Your opponent's setting may still show the match. Ranked games are always sent to the server to check results, and shown only if a player allows it.",

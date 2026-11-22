@@ -1,6 +1,7 @@
 import { DEFAULT_CHAT_KEY } from "@common/chat_key";
 import { normalizeInputDelay } from "@common/input_delay";
 import { DOLPHIN_INI_SECTION } from "@common/product";
+import { normalizeSmoothMotion } from "@common/smooth_motion";
 import { defaultAppSettings } from "@settings/default_settings";
 
 import type { IniFile } from "./ini_file";
@@ -18,6 +19,8 @@ export type SyncedDolphinSettings = {
   disableChat: boolean;
   /** Potato mode: matches draw less (`[Online] PotatoMode`, docs/game-code.md). */
   potatoMode: boolean;
+  /** Smooth Motion: 0, or 120 to 360 in 60s (`[Online] SmoothMotion`, VideoCommon/FrameInterpolation.h). */
+  smoothMotion: number;
   /** "Show my games on the Spectate tab" (`[Online] StreamGames`, docs/design/spectating.md). */
   enableStreamGames: boolean;
   /**
@@ -74,6 +77,9 @@ export async function setOnlineSettings(iniFile: IniFile, options: Partial<Synce
   if (options.potatoMode !== undefined) {
     section.set("PotatoMode", convertBooleanToIniVal(options.potatoMode));
   }
+  if (options.smoothMotion !== undefined) {
+    section.set("SmoothMotion", String(normalizeSmoothMotion(options.smoothMotion)));
+  }
   if (options.enableStreamGames !== undefined) {
     section.set("StreamGames", convertBooleanToIniVal(options.enableStreamGames));
   }
@@ -102,6 +108,7 @@ export async function getOnlineSettings(iniFile: IniFile): Promise<SyncedDolphin
   const enableMusic = section.get("Music", "True") === "True";
   const disableChat = section.get("DisableChat", "False") === "True";
   const potatoMode = section.get("PotatoMode", "False") === "True";
+  const smoothMotion = normalizeSmoothMotion(section.get("SmoothMotion", "0"));
   const enableStreamGames = section.get("StreamGames", "True") === "True";
 
   return {
@@ -112,6 +119,7 @@ export async function getOnlineSettings(iniFile: IniFile): Promise<SyncedDolphin
     enableMusic,
     disableChat,
     potatoMode,
+    smoothMotion,
     enableStreamGames,
   };
 }

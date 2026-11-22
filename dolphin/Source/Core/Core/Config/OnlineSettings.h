@@ -67,6 +67,14 @@ extern const Info<bool> ONLINE_POTATO_MODE;
 // A Brawl build's boot runs unthrottled until its first menu (Online/LoadFastForward.h).
 extern const Info<bool> ONLINE_LOAD_FAST_FORWARD;
 
+// Smooth motion (the launcher's setting): 0 off, or 120, 180, 240, 300 or 360 for one to five
+// in-between pictures a frame, drawn by geometry-based frame interpolation on the video thread
+// (VideoCommon/FrameInterpolation.h). Only this machine's pictures change; each frame's own picture
+// is shown a part of a frame later, so a match with it plays one frame of input delay lower
+// (Gprb::Session::SmoothMotionDelay; at 0 frames there is none to take), and only a match and a
+// replay get the pictures.
+extern const Info<int> ONLINE_SMOOTH_MOTION;
+
 // The Project+ release on the card the launcher gives this Dolphin ("v3.2.1"; empty: not said).
 // Replays record it (INFO build.pplus), so the launcher plays each on its own release's files.
 extern const Info<std::string> ONLINE_PPLUS_RELEASE;

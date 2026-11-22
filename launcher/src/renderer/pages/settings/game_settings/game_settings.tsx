@@ -1,4 +1,5 @@
 import { GAME_NAME } from "@common/product";
+import { normalizeSmoothMotion, SMOOTH_MOTION_RATES } from "@common/smooth_motion";
 import { IsoValidity } from "@common/types";
 import { css } from "@emotion/react";
 import styled from "@emotion/styled";
@@ -24,6 +25,7 @@ import {
   useIsoPath,
   useLaunchGameOnPlay,
   usePotatoMode,
+  useSmoothMotion,
 } from "@/lib/hooks/use_settings";
 
 import { DISC_IMAGE_EXTENSIONS } from "../../quick_start/steps/iso_selection_step/iso_file";
@@ -73,6 +75,7 @@ export const GameSettings = React.memo(() => {
   const [enableMusic, setEnableMusic] = useEnableMusic();
   const [disableChat, setDisableChat] = useDisableChat();
   const [potatoMode, setPotatoMode] = usePotatoMode();
+  const [smoothMotion, setSmoothMotion] = useSmoothMotion();
   const [enableStreamGames, setEnableStreamGames] = useEnableStreamGames();
   const [closeAfterSpectating, setCloseAfterSpectating] = useCloseDolphinAfterSpectating();
   const netplayDolphinOpen = useDolphinStore((store) => store.netplayOpened);
@@ -167,6 +170,30 @@ export const GameSettings = React.memo(() => {
               description={Messages.potatoModeDescription()}
               disabled={netplayDolphinOpen}
             />
+          </div>
+        </Tooltip>
+      </SettingItem>
+      <SettingItem name={Messages.smoothMotion()} description={Messages.smoothMotionDescription()}>
+        <Tooltip
+          title={netplayDolphinOpen || playbackDolphinOpen ? Messages.closeDolphinToChange() : ""}
+          placement="bottom-start"
+        >
+          <div>
+            <RadioGroup
+              row={true}
+              value={String(normalizeSmoothMotion(smoothMotion))}
+              onChange={(_event, value) => setSmoothMotion(Number(value))}
+            >
+              {[0, ...SMOOTH_MOTION_RATES].map((rate) => (
+                <FormControlLabel
+                  key={rate}
+                  value={String(rate)}
+                  label={rate === 0 ? Messages.smoothMotionOff() : Messages.smoothMotionRate(rate)}
+                  control={<Radio />}
+                  disabled={netplayDolphinOpen || playbackDolphinOpen}
+                />
+              ))}
+            </RadioGroup>
           </div>
         </Tooltip>
       </SettingItem>

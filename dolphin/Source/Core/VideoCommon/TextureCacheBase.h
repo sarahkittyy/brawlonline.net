@@ -242,6 +242,27 @@ struct TCacheEntry
 
 using RcTcacheEntry = std::shared_ptr<TCacheEntry>;
 
+// Smooth motion (FrameInterpolation.h): an EFB copy to VRAM as it was made, to make again from an
+// in-between picture's EFB (TextureCacheBase::MakeEFBCopyTwin).
+struct EFBCopyReplay
+{
+  u32 dst_addr = 0;
+  TextureFormat base_format{};
+  bool is_xfb_copy = false;
+  u32 tex_w = 0;
+  u32 tex_h = 0;
+  bool is_depth_copy = false;
+  MathUtil::Rectangle<int> src_rect;
+  bool scale_by_half = false;
+  bool linear_filter = false;
+  EFBCopyFormat dst_format{};
+  bool is_intensity = false;
+  float gamma = 1.0f;
+  bool clamp_top = false;
+  bool clamp_bottom = false;
+  std::array<u32, 3> filter_coefficients{};
+};
+
 class TextureCacheBase
 {
 public:
@@ -279,6 +300,11 @@ public:
   void ReleaseToPool(TCacheEntry* entry);
 
   TCacheEntry* Load(u32 stage);
+  // The texture bound to a unit by the last Load (frame interpolation records it with the draw).
+  const RcTcacheEntry& GetBoundTexture(u32 stage) const { return m_bound_textures[stage]; }
+  // Smooth motion: `copy` made again, from the EFB as it is now, into a new texture like
+  // `native`'s. Not in the cache.
+  RcTcacheEntry MakeEFBCopyTwin(const TCacheEntry& native, const EFBCopyReplay& copy);
   RcTcacheEntry GetTexture(const int textureCacheSafetyColorSampleSize,
                            const TextureInfo& texture_info);
   RcTcacheEntry GetXFBTexture(u32 address, u32 width, u32 height, u32 stride,

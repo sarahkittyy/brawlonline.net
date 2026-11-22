@@ -4,6 +4,7 @@
 #include "VideoCommon/Present.h"
 
 #include "Common/ChunkFile.h"
+#include "Common/Thread.h"
 #include "Core/Config/GraphicsSettings.h"
 #include "Core/Config/MainSettings.h"
 #include "Core/CoreTiming.h"
@@ -19,7 +20,9 @@
 
 #include "Present.h"
 #include "VideoCommon/AbstractGfx.h"
+#include "VideoCommon/Fifo.h"
 #include "VideoCommon/FrameDumper.h"
+#include "VideoCommon/FrameInterpolation.h"
 #include "VideoCommon/FramebufferManager.h"
 #include "VideoCommon/OnScreenUI.h"
 #include "VideoCommon/PostProcessing.h"
@@ -123,6 +126,17 @@ Presenter::Presenter()
 
 Presenter::~Presenter()
 {
+  if (m_queue_timer.joinable())
+  {
+    {
+      std::lock_guard lock(m_queue_timer_mutex);
+      m_queue_timer_stop = true;
+    }
+    m_queue_timer_cv.notify_all();
+    m_queue_timer.join();
+  }
+  m_queued_presents.clear();
+
   // Disable ControllerInterface's aspect ratio adjustments so mapping dialog behaves normally.
   g_controller_interface.SetAspectRatioAdjustment(1);
 }
@@ -155,6 +169,9 @@ bool Presenter::Initialize()
 
 bool Presenter::FetchXFB(u32 xfb_addr, u32 fb_width, u32 fb_stride, u32 fb_height, u64 ticks)
 {
+  // Smooth motion: a picture still queued from the frame before is late. It goes now, while the
+  // XFB copy among the queued pictures still has its content lock.
+  RunDuePresents(true);
   ReleaseXFBContentLock();
   u64 old_xfb_id = m_last_xfb_id;
 
@@ -283,6 +300,7 @@ void Presenter::ImmediateSwap(u32 xfb_addr, u32 fb_width, u32 fb_stride, u32 fb_
 
 void Presenter::RedrawLastFrame(bool dump)
 {
+  RunDuePresents(true);
   Present();
   if (dump && m_xfb_entry)
   {
@@ -980,21 +998,131 @@ void Presenter::Present(PresentInfo* present_info)
 {
   m_present_count++;
 
-  if (g_gfx->IsHeadless() || (!m_onscreen_ui && !m_xfb_entry))
+  // Smooth motion (FrameInterpolation.h): a frame's in-between pictures first, its own picture a
+  // part of a frame later. (Nothing is queued here: FetchXFB and RedrawLastFrame ran the queue.)
+  const bool deferred = present_info != nullptr && m_xfb_entry && !g_gfx->IsHeadless() &&
+                        g_gfx->SupportsUtilityDrawing() &&
+                        FrameInterpolation::PresentsDeferred();
+  if (!deferred)
+  {
+    PresentPicture(m_xfb_entry ? m_xfb_entry->texture.get() : nullptr, m_xfb_rect, present_info);
+    return;
+  }
+
+  const TimePoint now = Clock::now();
+  if (m_last_frame_present != TimePoint{})
+  {
+    const DT since = now - m_last_frame_present;
+    if (since > std::chrono::milliseconds(10) && since < std::chrono::milliseconds(40))
+      m_frame_interval += (since - m_frame_interval) / 8;
+  }
+  m_last_frame_present = now;
+
+  std::vector<RcTcacheEntry> twins = FrameInterpolation::TakeXFBTwins(m_xfb_entry.get());
+  const u32 slots =
+      twins.empty() ? FrameInterpolation::ConfiguredSlots() : static_cast<u32>(twins.size());
+  const DT step = m_frame_interval / (slots + 1);
+  TimePoint base;
+  if (!twins.empty())
+  {
+    PresentPicture(twins[0]->texture.get(), m_xfb_rect, present_info);
+    base = present_info->actual_present_time != TimePoint{} ? present_info->actual_present_time :
+                                                               Clock::now();
+  }
+  else
+  {
+    // None this frame (FrameInterpolation said why): its own picture still comes at its place,
+    // so that the frames stay the same time apart.
+    base = std::max(GetUpdatedPresentationTime(present_info->intended_present_time),
+                    Rollback::PresentStats::PresentHoldUntil(now));
+  }
+  for (size_t i = 1; i < twins.size(); ++i)
+    QueuePresent(std::move(twins[i]), m_xfb_rect, base + step * static_cast<int>(i));
+  QueuePresent(m_xfb_entry, m_xfb_rect, base + step * static_cast<int>(slots));
+}
+
+void Presenter::QueuePresent(RcTcacheEntry entry, const MathUtil::Rectangle<int>& rect,
+                             TimePoint due)
+{
+  m_queued_presents.push_back({std::move(entry), rect, due});
+  if (!m_queue_timer.joinable())
+    m_queue_timer = std::thread([this] { QueuedPresentTimer(); });
+  UpdateQueueTimer();
+}
+
+void Presenter::UpdateQueueTimer()
+{
+  {
+    std::lock_guard lock(m_queue_timer_mutex);
+    m_next_queued_due = m_queued_presents.empty() ? TimePoint{} : m_queued_presents.front().due;
+  }
+  m_queue_timer_cv.notify_one();
+}
+
+void Presenter::RunDuePresents(bool all)
+{
+  if (m_running_queued_presents || m_queued_presents.empty())
+    return;
+  if (!all && Clock::now() < m_queued_presents.front().due)
+    return;
+
+  m_running_queued_presents = true;
+  while (!m_queued_presents.empty() && (all || Clock::now() >= m_queued_presents.front().due))
+  {
+    QueuedPresent queued = std::move(m_queued_presents.front());
+    m_queued_presents.pop_front();
+    if (queued.entry)
+      PresentPicture(queued.entry->texture.get(), queued.rect, nullptr);
+  }
+  UpdateQueueTimer();
+  m_running_queued_presents = false;
+}
+
+void Presenter::QueuedPresentTimer()
+{
+  Common::SetCurrentThreadName("Present timer");
+  std::unique_lock lock(m_queue_timer_mutex);
+  while (!m_queue_timer_stop)
+  {
+    const TimePoint due = m_next_queued_due;
+    const auto changed = [this, due] { return m_queue_timer_stop || m_next_queued_due != due; };
+    if (due == TimePoint{})
+    {
+      m_queue_timer_cv.wait(lock, changed);
+      continue;
+    }
+    if (Clock::now() < due)
+    {
+      m_queue_timer_cv.wait_until(lock, due, changed);
+      continue;
+    }
+    // Due: the GPU thread presents it (FifoManager::RunGpuLoop runs RunDuePresents), or the next
+    // draw it flushes does.
+    lock.unlock();
+    Core::System::GetInstance().GetFifo().WakeGpuThread();
+    lock.lock();
+    m_queue_timer_cv.wait_for(lock, std::chrono::microseconds(500), changed);
+  }
+}
+
+void Presenter::PresentPicture(AbstractTexture* texture, const MathUtil::Rectangle<int>& rect,
+                               PresentInfo* present_info)
+{
+  if (g_gfx->IsHeadless() || (!m_onscreen_ui && !texture))
     return;
 
   if (!g_gfx->SupportsUtilityDrawing())
   {
     // Video Software doesn't support drawing a UI or doing post-processing
     // So just show the XFB
-    if (m_xfb_entry)
+    if (texture)
     {
-      const MathUtil::Rectangle<int> rect = AdjustForCustomCrop(m_xfb_rect);
-      g_gfx->ShowImage(m_xfb_entry->texture.get(), rect);
+      const MathUtil::Rectangle<int> crop = AdjustForCustomCrop(rect);
+      g_gfx->ShowImage(texture, crop);
 
       // Update the window size based on the frame that was just rendered.
       // Due to depending on guest state, we need to call this every frame.
-      SetSuggestedWindowSize(rect.GetWidth(), rect.GetHeight());
+      SetSuggestedWindowSize(crop.GetWidth(), crop.GetHeight());
     }
     return;
   }
@@ -1010,14 +1138,14 @@ void Presenter::Present(PresentInfo* present_info)
   const bool backbuffer_bound = g_gfx->BindBackbuffer({{0.0f, 0.0f, 0.0f, 1.0f}});
 
   // Render the XFB to the screen.
-  if (backbuffer_bound && m_xfb_entry)
+  if (backbuffer_bound && texture)
   {
     // Adjust the source rectangle instead of using an oversized viewport to render the XFB.
     MathUtil::Rectangle<int> render_target_rc = GetTargetRectangle();
-    MathUtil::Rectangle<int> render_source_rc = AdjustForCustomCrop(m_xfb_rect);
+    MathUtil::Rectangle<int> render_source_rc = AdjustForCustomCrop(rect);
     AdjustRectanglesToFitBounds(&render_target_rc, &render_source_rc, m_backbuffer_width,
                                 m_backbuffer_height);
-    RenderXFBToScreen(render_target_rc, m_xfb_entry->texture.get(), render_source_rc);
+    RenderXFBToScreen(render_target_rc, texture, render_source_rc);
   }
 
   if (m_onscreen_ui && !NetPlay::IsRollingBack())
@@ -1051,12 +1179,12 @@ void Presenter::Present(PresentInfo* present_info)
     g_gfx->PresentBackbuffer();
   }
 
-  if (m_xfb_entry)
+  if (texture)
   {
     // Update the window size based on the frame that was just rendered.
     // Due to depending on guest state, we need to call this every frame.
-    const MathUtil::Rectangle<int> rect = AdjustForCustomCrop(m_xfb_rect);
-    SetSuggestedWindowSize(rect.GetWidth(), rect.GetHeight());
+    const MathUtil::Rectangle<int> crop = AdjustForCustomCrop(rect);
+    SetSuggestedWindowSize(crop.GetWidth(), crop.GetHeight());
   }
 
   if (m_onscreen_ui && !NetPlay::IsRollingBack())
@@ -1137,6 +1265,15 @@ void Presenter::DoState(PointerWrap& p)
   p.Do(m_last_xfb_width);
   p.Do(m_last_xfb_stride);
   p.Do(m_last_xfb_height);
+
+  // Smooth motion: the pictures queued before a load that shows its own picture below are of the
+  // state before it. (A rollback's load shows nothing: the queued pictures still come at their
+  // time.)
+  if (p.IsReadMode() && !VideoCommon_GetSkipGPUReadbackForRollback())
+  {
+    m_queued_presents.clear();
+    UpdateQueueTimer();
+  }
 
   // Skip the ImmediateSwap during rollback: restoring the frame buffer to the GPU takes
   // ~2ms and causes a GPU bubble.  The correct image will be displayed naturally on the

@@ -31,6 +31,7 @@
 #include "VideoCommon/DataReader.h"
 #include "VideoCommon/FramebufferManager.h"
 #include "VideoCommon/OpcodeDecoding.h"
+#include "VideoCommon/Present.h"
 #include "VideoCommon/VertexLoaderManager.h"
 #include "VideoCommon/VertexManagerBase.h"
 #include "VideoCommon/VideoBackendBase.h"
@@ -496,6 +497,10 @@ void FifoManager::RunGpuLoop()
       [this] {
         // Run events from the CPU thread.
         AsyncRequests::GetInstance()->PullEvents();
+
+        // Smooth motion: a frame's own picture queued after its in-between ones (Present.cpp).
+        if (g_presenter)
+          g_presenter->RunDuePresents();
 
         // Do nothing while paused
         if (!m_emu_running_state.IsSet())

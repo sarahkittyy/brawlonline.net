@@ -577,11 +577,14 @@ export class DolphinManager {
       await playbackInstallation.setDefaultIso(isoPath);
       // The launcher's Music setting: off applies P+'s Music Off code here too. (A render's is the
       // job's, on its command line.)
+      // Smooth Motion too (a render's is off, on its command line): the setting's change wrote it,
+      // but a playback Dolphin.ini made since (a new folder, a reset) has none.
       if (!render) {
         // And chat as in the game (spectator chat): Disable Chat, and the key that opens the box.
         await playbackInstallation.updateSettings({
           enableMusic: this.settingsManager.getEnableMusic(),
           disableChat: this.settingsManager.getDisableChat(),
+          smoothMotion: this.settingsManager.getSmoothMotion(),
         });
         const chatKey = await netplayInstallation.getChatKey().catch(() => "");
         if (chatKey) {
@@ -1980,6 +1983,7 @@ export class DolphinManager {
       disableChat: this.settingsManager.getDisableChat(),
       // Only the games this PC plays: replays, spectated games and clips draw the whole stage.
       potatoMode: launchType === DolphinLaunchType.NETPLAY && this.settingsManager.getPotatoMode(),
+      smoothMotion: this.settingsManager.getSmoothMotion(),
       enableStreamGames: this.settingsManager.getEnableStreamGames(),
       netplayNetwork: this.settingsManager.getNetplayNetwork(),
       pplusRelease: this.pplusVersions().currentRelease,
@@ -2020,6 +2024,9 @@ export class DolphinManager {
     if (launchType === DolphinLaunchType.NETPLAY) {
       await this._updateLauncherSetting(this.settingsManager.getPotatoMode(), newSettings.potatoMode, (val) =>
         this.settingsManager.updateSetting("potatoMode", val),
+      );
+      await this._updateLauncherSetting(this.settingsManager.getSmoothMotion(), newSettings.smoothMotion, (val) =>
+        this.settingsManager.updateSetting("smoothMotion", val),
       );
     }
     await this._updateLauncherSetting(

@@ -3,9 +3,13 @@
 
 #include "VideoCommon/VertexManagerBase.h"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstring>
 #include <memory>
+
+#include <xxhash.h>
 
 #include "Common/ChunkFile.h"
 #include "Common/CommonTypes.h"
@@ -24,6 +28,7 @@
 #include "VideoCommon/BPStructs.h"
 #include "VideoCommon/BoundingBox.h"
 #include "VideoCommon/DataReader.h"
+#include "VideoCommon/FrameInterpolation.h"
 #include "VideoCommon/FramebufferManager.h"
 #include "VideoCommon/GeometryShaderManager.h"
 #include "VideoCommon/GraphicsModSystem/Runtime/CustomShaderCache.h"
@@ -35,6 +40,7 @@
 #include "VideoCommon/PerfQueryBase.h"
 #include "VideoCommon/PixelShaderGen.h"
 #include "VideoCommon/PixelShaderManager.h"
+#include "VideoCommon/Present.h"
 #include "VideoCommon/Statistics.h"
 #include "VideoCommon/TextureCacheBase.h"
 #include "VideoCommon/VertexLoaderManager.h"
@@ -189,6 +195,7 @@ DataReader VertexManagerBase::PrepareForAdditionalData(OpcodeDecoder::Primitive 
     if (cullall)
     {
       // This buffer isn't getting sent to the GPU. Just allocate it on the cpu.
+      m_staged_vertices = nullptr;
       m_cur_buffer_pointer = m_base_buffer_pointer = m_cpu_vertex_buffer.data();
       m_end_buffer_pointer = m_base_buffer_pointer + m_cpu_vertex_buffer.size();
       m_index_generator.Start(m_cpu_index_buffer.data());
@@ -196,6 +203,7 @@ DataReader VertexManagerBase::PrepareForAdditionalData(OpcodeDecoder::Primitive 
     else
     {
       ResetBuffer(stride);
+      StageBatchInCPUMemory();
     }
 
     remaining_index_generator_indices = m_index_generator.GetRemainingIndices(primitive);
@@ -229,6 +237,7 @@ DataReader VertexManagerBase::DisableCullAll(u32 stride)
   {
     m_cull_all = false;
     ResetBuffer(stride);
+    StageBatchInCPUMemory();
   }
   return DataReader(m_cur_buffer_pointer, m_end_buffer_pointer);
 }
@@ -386,6 +395,7 @@ void VertexManagerBase::UploadUtilityVertices(const void* vertices, u32 vertex_s
   ASSERT(m_is_flushed);
 
   // Copy into the buffers usually used for GX drawing.
+  m_staged_vertices = nullptr;
   ResetBuffer(std::max(vertex_stride, 1u));
   if (vertices)
   {
@@ -661,6 +671,8 @@ void VertexManagerBase::Flush()
             pipeline_object = custom_pipeline;
           }
         }
+        m_flush_samplers = &samplers;
+        m_flush_used_textures = used_textures;
         RenderDrawCall(pixel_shader_manager, geometry_shader_manager, custom_pixel_shader_contents,
                        custom_pixel_shader_uniforms, m_current_primitive_type, pipeline_object);
       }
@@ -671,6 +683,10 @@ void VertexManagerBase::Flush()
 
     // The EFB cache is now potentially stale.
     g_framebuffer_manager->FlagPeekCacheAsOutOfDate();
+
+    // Smooth motion: a frame's own picture that came due while the GPU thread draws.
+    if (g_presenter && !FrameInterpolation::Replaying())
+      g_presenter->RunDuePresents();
   }
 
   if (xfmem.numTexGen.numTexGens != bpmem.genMode.numtexgens)
@@ -1087,11 +1103,17 @@ void VertexManagerBase::RenderDrawCall(
     pixel_shader_manager.custom_constants_dirty = true;
   }
   pixel_shader_manager.custom_constants = custom_pixel_shader_uniforms;
+  // Smooth motion: the draw as it is drawn now, to draw again into the in-between pictures.
+  if (FrameInterpolation::Recording())
+    RecordForInterpolation(primitive_type, current_pipeline);
   UploadUniforms();
 
   g_gfx->SetPipeline(current_pipeline);
 
   u32 base_vertex, base_index;
+  CommitStagedBatch(m_index_generator.GetNumVerts(),
+                    VertexLoaderManager::GetCurrentVertexFormat()->GetVertexStride(),
+                    m_index_generator.GetIndexLen());
   CommitBuffer(m_index_generator.GetNumVerts(),
                VertexLoaderManager::GetCurrentVertexFormat()->GetVertexStride(),
                m_index_generator.GetIndexLen(), &base_vertex, &base_index);
@@ -1115,6 +1137,98 @@ void VertexManagerBase::RenderDrawCall(
 
   if (PerfQueryBase::ShouldEmulate())
     g_perf_query->DisableQuery(bpmem.zcontrol.early_ztest ? PQG_ZCOMP_ZCOMPLOC : PQG_ZCOMP);
+}
+
+void VertexManagerBase::RecordForInterpolation(PrimitiveType primitive_type,
+                                               const AbstractPipeline* pipeline)
+{
+  const NativeVertexFormat* format = VertexLoaderManager::GetCurrentVertexFormat();
+  const PortableVertexDeclaration& decl = format->GetVertexDeclaration();
+  FrameInterpolation::DrawInput input;
+  input.pipeline = pipeline;
+  input.pipeline_hash = XXH3_64bits(&m_current_pipeline_config, sizeof(m_current_pipeline_config));
+  input.primitive = primitive_type;
+  input.vertex_stride = format->GetVertexStride();
+  input.num_vertices = m_index_generator.GetNumVerts();
+  // The batch's vertices end at the write pointer (the buffer's base is not the batch's start on
+  // every backend).
+  input.vertices =
+      m_cur_buffer_pointer - static_cast<size_t>(input.vertex_stride) * input.num_vertices;
+  input.indices = m_index_generator.GetIndexDataStart();
+  input.num_indices = m_index_generator.GetIndexLen();
+  input.posmtx_per_vertex = decl.posmtx.enable;
+  input.posmtx_offset = static_cast<u32>(decl.posmtx.offset);
+  input.perspective = xfmem.projection.type == ProjectionType::Perspective;
+  input.used_textures = m_flush_used_textures.m_val;
+  input.samplers = m_flush_samplers;
+  input.bounding_box = g_bounding_box->IsEnabled() && g_ActiveConfig.bBBoxEnable;
+  FrameInterpolation::RecordDraw(input);
+}
+
+void VertexManagerBase::StageBatchInCPUMemory()
+{
+  m_staged_vertices = nullptr;
+  if (m_cur_buffer_pointer == m_cpu_vertex_buffer.data() || !FrameInterpolation::Recording())
+    return;  // already in CPU memory (D3D11), or not recording
+
+  m_staged_base_pointer = m_base_buffer_pointer;
+  m_staged_vertices = m_cur_buffer_pointer;
+  m_staged_end_pointer = m_end_buffer_pointer;
+  m_staged_indices = const_cast<u16*>(m_index_generator.GetIndexDataStart());
+  const size_t room = std::min<size_t>(m_end_buffer_pointer - m_cur_buffer_pointer,
+                                       m_cpu_vertex_buffer.size());
+  m_base_buffer_pointer = m_cpu_vertex_buffer.data();
+  m_cur_buffer_pointer = m_cpu_vertex_buffer.data();
+  m_end_buffer_pointer = m_cpu_vertex_buffer.data() + room;
+  m_index_generator.Start(m_cpu_index_buffer.data());
+}
+
+void VertexManagerBase::CommitStagedBatch(u32 num_vertices, u32 vertex_stride, u32 num_indices)
+{
+  if (!m_staged_vertices)
+    return;
+  const size_t vertex_bytes = static_cast<size_t>(num_vertices) * vertex_stride;
+  std::memcpy(m_staged_vertices, m_cpu_vertex_buffer.data(), vertex_bytes);
+  std::memcpy(m_staged_indices, m_cpu_index_buffer.data(), num_indices * sizeof(u16));
+  // Where the backend expects the batch to have been written.
+  m_base_buffer_pointer = m_staged_base_pointer;
+  m_cur_buffer_pointer = m_staged_vertices + vertex_bytes;
+  m_end_buffer_pointer = m_staged_end_pointer;
+  m_staged_vertices = nullptr;
+}
+
+void VertexManagerBase::ReplayInterpolatedDraw(const AbstractPipeline* pipeline,
+                                               PrimitiveType primitive, const u8* vertices,
+                                               u32 vertex_stride, u32 num_vertices,
+                                               const u16* indices, u32 num_indices,
+                                               const VertexShaderConstants& vs,
+                                               const PixelShaderConstants& ps,
+                                               const GeometryShaderConstants& gs)
+{
+  auto& system = Core::System::GetInstance();
+  auto& vertex_shader_manager = system.GetVertexShaderManager();
+  auto& pixel_shader_manager = system.GetPixelShaderManager();
+  auto& geometry_shader_manager = system.GetGeometryShaderManager();
+  vertex_shader_manager.constants = vs;
+  vertex_shader_manager.dirty = true;
+  pixel_shader_manager.constants = ps;
+  pixel_shader_manager.dirty = true;
+  geometry_shader_manager.constants = gs;
+  geometry_shader_manager.dirty = true;
+  UploadUniforms();
+
+  g_gfx->SetPipeline(pipeline);
+
+  // Uploaded again like a utility draw's: every backend binds its buffers (and stride) for it.
+  u32 base_vertex, base_index;
+  UploadUtilityVertices(vertices, vertex_stride, num_vertices, indices, num_indices, &base_vertex,
+                        &base_index);
+  if (g_backend_info.api_type != APIType::D3D && g_ActiveConfig.UseVSForLinePointExpand() &&
+      (primitive == PrimitiveType::Points || primitive == PrimitiveType::Lines))
+  {
+    base_vertex <<= 2;
+  }
+  DrawCurrentBatch(base_index, num_indices, base_vertex);
 }
 
 const AbstractPipeline* VertexManagerBase::GetCustomPipeline(

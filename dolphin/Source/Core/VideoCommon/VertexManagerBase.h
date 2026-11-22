@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <array>
 #include <memory>
 #include <vector>
 
@@ -19,8 +20,11 @@ struct CustomPixelShaderContents;
 class CustomShaderCache;
 class DataReader;
 class GeometryShaderManager;
+struct GeometryShaderConstants;
 class NativeVertexFormat;
 class PixelShaderManager;
+struct PixelShaderConstants;
+struct VertexShaderConstants;
 class PointerWrap;
 struct PortableVertexDeclaration;
 
@@ -171,6 +175,13 @@ public:
   // Call at the end of a frame.
   void OnEndFrame();
 
+  // Smooth motion (FrameInterpolation.h): draws a recorded GX draw again with the given
+  // constants into the bound framebuffer. The caller sets textures, samplers, viewport, scissor.
+  void ReplayInterpolatedDraw(const AbstractPipeline* pipeline, PrimitiveType primitive,
+                              const u8* vertices, u32 vertex_stride, u32 num_vertices,
+                              const u16* indices, u32 num_indices, const VertexShaderConstants& vs,
+                              const PixelShaderConstants& ps, const GeometryShaderConstants& gs);
+
 protected:
   // When utility uniforms are used, the GX uniforms need to be re-written afterwards.
   static void InvalidateConstants();
@@ -230,6 +241,20 @@ private:
                       const AbstractPipeline* current_pipeline);
   void UpdatePipelineConfig();
   void UpdatePipelineObject();
+  void RecordForInterpolation(PrimitiveType primitive_type, const AbstractPipeline* pipeline);
+  // Smooth motion: while it records, a batch is built in CPU memory and copied to the backend's
+  // buffer at its draw: recording reads it back, and the backend's (write-combined) buffer is
+  // slow to read.
+  void StageBatchInCPUMemory();
+  void CommitStagedBatch(u32 num_vertices, u32 vertex_stride, u32 num_indices);
+  u8* m_staged_base_pointer = nullptr;
+  u8* m_staged_vertices = nullptr;  // the backend's pointer for the batch, while staged
+  u8* m_staged_end_pointer = nullptr;
+  u16* m_staged_indices = nullptr;
+
+  // The draw being flushed, for RecordForInterpolation.
+  const std::array<SamplerState, 8>* m_flush_samplers = nullptr;
+  BitSet32 m_flush_used_textures;
 
   const AbstractPipeline*
   GetCustomPipeline(const CustomPixelShaderContents& custom_pixel_shader_contents,
