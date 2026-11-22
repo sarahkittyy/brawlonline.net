@@ -46,6 +46,11 @@ s64 s_clip_end = 0;
 std::string s_clip_title;
 s64 s_clip_first = 0;
 int s_clip_handle = 0;
+// A live game's bar in clip mode: its end held at the live edge when Clip was clicked (or at the
+// clip's end, once its handle is let go past that), so the clip does not drift left as the game
+// goes on (Sarah's board, 2026-11-22: "the current latest live position keeps moving right, so the
+// CLIP bounds keep slowly shifting to the left").
+s64 s_clip_bar_end = 0;
 float s_handle_press_x = 0;
 s64 s_handle_press_frame = 0;
 bool s_handle_moved = false;
@@ -759,7 +764,8 @@ void Display(float scale)
   const float btn = 34.0f * scale;
   const bool live = info.live && !info.ended;
   const s64 end = live ? std::max(info.live_edge, info.first) : info.last;
-  const s64 span = std::max<s64>(end - info.first, 1);
+  const s64 bar_end = live && s_clip_mode ? std::clamp(s_clip_bar_end, info.first, end) : end;
+  const s64 span = std::max<s64>(bar_end - info.first, 1);
   const s64 shown = std::clamp(info.shown, info.first, end);
 
   // Folded: a thin line of how far it has played along the bottom, and a chevron up to open it,
@@ -989,6 +995,7 @@ void Display(float scale)
       Control(Gprb::Session::PlaybackCommand::Seek,
               static_cast<double>(s_clip_handle == 1 ? s_clip_start : s_clip_end));
       s_clip_handle = 0;
+      s_clip_bar_end = std::max(s_clip_bar_end, s_clip_end);
     }
     else if (active && s_mark_held < 0)
     {
@@ -1334,6 +1341,7 @@ void Display(float scale)
           s_clip_title = info.title;
           s_clip_first = info.first;
           s_clip_end = std::clamp(shown, info.first + MIN_CLIP_FRAMES, std::max(end, info.first + MIN_CLIP_FRAMES));
+          s_clip_bar_end = std::max(end, s_clip_end);
           s_clip_start = std::max(info.first, s_clip_end - CLIP_BEFORE_FRAMES);
           if (!info.paused)
             Control(Gprb::Session::PlaybackCommand::Pause);
