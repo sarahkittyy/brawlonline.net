@@ -43,6 +43,7 @@
 #include "Core/Rollback/ReplayPlayback.h"
 #include "Core/System.h"
 
+#include "DolphinQt/CrashReporter.h"
 #include "DolphinQt/HangWatchdog.h"
 #include "DolphinQt/Host.h"
 #include "DolphinQt/MainWindow.h"
@@ -382,6 +383,9 @@ int main(int argc, char* argv[])
         return 1;
       }
     }
+
+    // After the harness's crash reporter (this one chains to it), before the main window.
+    CrashReporter::Install();
 
     // Before the main window: its constructor runs before the event loop and can hang too.
     HangWatchdog hang_watchdog;
