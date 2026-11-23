@@ -304,6 +304,10 @@ bool GetPad(int port, GCPadStatus* status);
 // they play with (`adapter`: a GameCube controller adapter's port); every other port is another
 // player's.
 int LocalRumblePad(int port, bool* adapter);
+// CPU thread, while armed: the game's motor command for in-game port `port` (the SI's CMD_WRITE: 0
+// stop, 1 rumble, 2 stop hard). This player's own port's goes to their controller, outside a
+// rollback's re-runs (the pass after them sets the motor as the game left it).
+void MotorCommand(int port, u32 type);
 // CPU thread, from the emulated Bluetooth stack's Wii Remote update: replaces `state` with Wii
 // Remote `index`'s state for the frame running now. False when the session is not armed or no
 // player plays that Wii Remote.

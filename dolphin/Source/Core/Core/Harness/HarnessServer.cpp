@@ -49,6 +49,7 @@
 #include "Core/ConfigManager.h"
 #include "Core/Core.h"
 #include "Core/HW/CPU.h"
+#include "Core/HW/MMIO.h"
 #include "Core/HW/Memmap.h"
 #include "Core/CoreTiming.h"
 #include "Core/HW/ProcessorInterface.h"
@@ -659,6 +660,24 @@ Result CmdGpuState(const Args&)
   r["dual_core"] = picojson::value(Sys().IsDualCoreMode());
   r["ticks"] = Num(Sys().GetCoreTiming().GetTicks());
   return r;
+}
+
+// A 32-bit store to a hardware register (0xCC00xxxx / 0xCD00xxxx, or its physical address), as the
+// game's store would make it, between two of its instructions: tests drive a device as the game
+// would (an SI command the game did not send, test_machine_rumble.py). The MMU's host writes skip
+// the registers, so the store goes to the MMIO mapping itself.
+Result CmdMmioWrite(const Args& args)
+{
+  const u32 phys = static_cast<u32>(GetU64(args, "addr")) & 0x3FFFFFFF;
+  const u32 value = static_cast<u32>(GetU64(args, "value"));
+  if ((phys & 0xFE000000) != 0x0C000000)
+    Fail("addr must be a hardware register (0xCC000000-0xCDFFFFFF)");
+  RequireRunning();
+  auto& system = Sys();
+  const Core::CPUThreadGuard guard(system);
+  RequireRunning();
+  system.GetMemory().GetMMIOMapping()->Write<u32>(system, phys, value);
+  return {};
 }
 
 Result CmdReadU32(const Args& args)
@@ -2447,6 +2466,7 @@ const std::vector<std::pair<std::string_view, Handler>>& Handlers()
       {"pad_script", CmdPadScript},
       {"pad_script_status", CmdPadScriptStatus},
       {"rumble_status", CmdRumbleStatus},
+      {"mmio_write", CmdMmioWrite},
       {"wait_frame", CmdWaitFrame},
       {"pause", CmdPause},
       {"resume", CmdResume},

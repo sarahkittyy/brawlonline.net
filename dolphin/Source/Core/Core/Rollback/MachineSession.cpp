@@ -61,6 +61,7 @@
 #include "Core/HW/GCPad.h"
 #include "Core/HW/Memmap.h"
 #include "Core/HW/SI/SI_Device.h"
+#include "Core/HW/SI/SI_DeviceGCController.h"
 #include "Core/HW/WII_IPC.h"
 #include "Common/ChunkFile.h"
 #include "VideoCommon/PixelEngine.h"
@@ -452,7 +453,13 @@ struct State
     bool raw_pushed = false, sampled_pushed = false;
     double max_gap_ms = 0;
     int peak = 0;
+    u32 motor_starts = 0;  // this player's controller's motor turned on
   } input_log;
+  // The motor of this player's controller as last set (CPU thread; -1: not set this session), and
+  // which controller that was (LocalRumblePad).
+  int motor_on = -1;
+  int motor_pad = -1;
+  bool motor_adapter = false;
 
   // Network (net thread, under `net_mutex`).
   std::mutex net_mutex;
@@ -4056,14 +4063,15 @@ void LogLocalInput(const GCPadStatus& pad)
   l.peak = std::max(l.peak, push);
   if (l.frames < INPUT_LOG_EVERY)
     return;
-  if (l.raw_pushes > 0 || l.sampled_pushes > 0)
+  if (l.raw_pushes > 0 || l.sampled_pushes > 0 || l.motor_starts > 0)
   {
     AddLog(fmt::format("input: {} frames, C-stick pushed {} times ({} in the frames' samples, "
-                       "furthest {}), at most {:.1f} ms between samples, adapter at {:.0f} Hz",
+                       "furthest {}), at most {:.1f} ms between samples, adapter at {:.0f} Hz, "
+                       "rumble started {} times",
                        l.frames, l.raw_pushes, l.sampled_pushes, l.peak, l.max_gap_ms,
-                       GCAdapter::GetCurrentPollRate()));
+                       GCAdapter::GetCurrentPollRate(), l.motor_starts));
   }
-  l.frames = l.raw_pushes = l.sampled_pushes = 0;
+  l.frames = l.raw_pushes = l.sampled_pushes = l.motor_starts = 0;
   l.max_gap_ms = 0;
   l.peak = 0;
 }
@@ -7791,6 +7799,52 @@ void LatOnRead(bool si, int port)
   }
 }
 
+// This player's controller's motor on or off (CPU thread), once per change.
+void SetLocalMotor(bool on)
+{
+  bool adapter = false;
+  const int pad = LocalRumblePad(s.opts.local_slot, &adapter);
+  if (pad < 0)
+    return;
+  if (pad == s.motor_pad && adapter == s.motor_adapter && s.motor_on == static_cast<int>(on))
+    return;
+  if (on && s.motor_on != 1)
+    ++s.input_log.motor_starts;
+  // A controller switched to (another adapter port, Dolphin's pad) starts from the game's state;
+  // the one before is stopped so none keeps running.
+  if (s.motor_pad >= 0 && s.motor_on == 1 && (pad != s.motor_pad || adapter != s.motor_adapter))
+  {
+    SerialInterface::CSIDevice_GCController::Rumble(
+        s.motor_pad, 0.0,
+        s.motor_adapter ? SerialInterface::SIDEVICE_WIIU_ADAPTER :
+                          SerialInterface::SIDEVICE_GC_CONTROLLER);
+  }
+  s.motor_pad = pad;
+  s.motor_adapter = adapter;
+  s.motor_on = on ? 1 : 0;
+  SerialInterface::CSIDevice_GCController::Rumble(
+      pad, on ? 1.0 : 0.0,
+      adapter ? SerialInterface::SIDEVICE_WIIU_ADAPTER : SerialInterface::SIDEVICE_GC_CONTROLLER);
+}
+
+// At each shown pass: the motor as the game left it in this player's port, its SI channel's
+// command (on a console the SI sends it with every poll, so the motor is that command's). A
+// rollback's re-runs leave the controller alone (MotorCommand), and the game, which writes the
+// command only when its rumble changes, never stops a rumble that only a mispredicted frame
+// started: that controller rumbled until the next rumble of the game ended (bug report #331: a
+// PhobGCC on a Wii U adapter dropped off the adapter and came back every second or few through
+// Other Games matches, never in P+'s own online play, where the player's own Rumble setting decides).
+void SyncLocalMotor(Core::System& system)
+{
+  const int port = s.opts.local_slot;
+  if (port < 0 || port >= SerialInterface::MAX_SI_CHANNELS)
+    return;
+  const SerialInterface::UCommand c(system.GetSerialInterface().GetChannelCommand(port));
+  if (c.command != 0x40)  // not a standard controller's poll command yet
+    return;
+  SetLocalMotor(c.parameter1 == 1);
+}
+
 void BeginPass(Core::System& system)
 {
   // The inputs this pass runs with, for the SI (GetPad) and the Wii Remotes (GetWiimote).
@@ -7822,6 +7876,7 @@ void BeginPass(Core::System& system)
     LatOnForwardPass(s.current_frame);
     s.consumed = {};
     s.read_outside_pass = false;
+    SyncLocalMotor(system);
   }
   SyncWiimotes(system);
   PlanEpoch(s.current_frame);
@@ -8327,6 +8382,7 @@ bool Arm(const Options& options, std::string* error)
   s.desync_notice_at = {};
   s.desync_lines = s.desync_unlogged = 0;
   s.input_log = {};
+  s.motor_on = s.motor_pad = -1;
   s.pick_frame = -1;
   for (auto& e : s.history)
     e.frame = -1;
@@ -9192,6 +9248,13 @@ int LocalRumblePad(int port, bool* adapter)
   }
   *adapter = s.local_adapter;
   return s.opts.local_pad;
+}
+
+void MotorCommand(int port, u32 type)
+{
+  if (port != s.opts.local_slot || IsResimulationPass())
+    return;
+  SetLocalMotor(type == 1);
 }
 
 bool GetWiimote(int index, WiimoteEmu::DesiredWiimoteState* state)
