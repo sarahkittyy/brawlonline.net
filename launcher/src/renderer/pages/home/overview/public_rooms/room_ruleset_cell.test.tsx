@@ -1,9 +1,11 @@
+import { newRuleset } from "@common/rulesets";
 import { fireEvent, render } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import type { PublicRoom, RoomRuleset } from "@/services/backend/types";
 
 import { PublicRoomsView } from "./public_rooms_view";
+import { roomCustomRuleset } from "./room_ruleset";
 
 const ruleset = (over: Partial<RoomRuleset>): RoomRuleset => ({
   code: null,
@@ -35,6 +37,20 @@ describe("the room list's ruleset column", () => {
     room("CSTM", ruleset({ name: "Custom" })),
     room("HBPL", ruleset({})),
     room("MXWW"),
+    // Custom rules with their rules (a server since the bug report): a click shows them.
+    room(
+      "RLZS",
+      ruleset({
+        name: "Custom",
+        basedOn: "NorCal Weekly v3",
+        bestOf: 3,
+        stages: { starters: [1, 4, 9], counterpicks: [12] },
+        strikes: [1, 1],
+        bans: 2,
+        dsr: true,
+        rules: { ...newRuleset().rules, stocks: 3 },
+      }),
+    ),
   ];
 
   it("names a published ruleset, says custom rules, and stays empty for P+ default", () => {
@@ -73,9 +89,25 @@ describe("the room list's ruleset column", () => {
     expect(onJoin).not.toHaveBeenCalled();
     fireEvent.keyDown(container.querySelector('[data-ruleset-cell="KFQBTR"]')!, { key: "Enter" });
     expect(onShowRuleset).toHaveBeenCalledTimes(2);
-    // Custom rules have no published ruleset to show; the row still joins.
-    fireEvent.click(container.querySelector('[data-ruleset-cell="custom"]')!);
+    // Custom rules from an older server came without their rules: nothing to show, the row still joins.
+    fireEvent.click(container.querySelector('[data-room="PLNX"] [data-ruleset-cell="custom"]')!);
     expect(onShowRuleset).toHaveBeenCalledTimes(2);
     expect(onJoin).toHaveBeenCalledWith(rooms[1]);
+    // With them, a click (or Enter) shows them, without joining.
+    onJoin.mockClear();
+    fireEvent.click(container.querySelector('[data-room="RLZS"] [data-ruleset-cell="custom"]')!);
+    expect(onShowRuleset).toHaveBeenLastCalledWith(rooms[5]);
+    fireEvent.keyDown(container.querySelector('[data-room="RLZS"] [data-ruleset-cell="custom"]')!, { key: "Enter" });
+    expect(onShowRuleset).toHaveBeenCalledTimes(4);
+    expect(onJoin).not.toHaveBeenCalled();
+  });
+
+  it("makes the ruleset a room's custom rules play", () => {
+    expect(roomCustomRuleset(rooms[1])).toBeNull(); // an older server's: no rules
+    expect(roomCustomRuleset(rooms[0])).toBeNull(); // published: looked up by its code
+    const r = roomCustomRuleset(rooms[5])!;
+    expect(r.rules.stocks).toBe(3);
+    expect(r.stages).toEqual({ starters: [1, 4, 9], counterpicks: [12] });
+    expect([r.bestOf, r.strikes, r.bans, r.dsr]).toEqual([3, [1, 1], 2, true]);
   });
 });

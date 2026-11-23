@@ -46,8 +46,8 @@ extern "C" {
     extern u8 g_onlineCss;
     extern u8 g_onlinePickStage;
     // Tests (PPOnlineMain.map): page setups, set pages, the last setup's outcome (0 the set's
-    // page, 1 no ranked step, 2 inactive, 3 no lists, 4 the custom page, 5 no starter on P+'s
-    // pages, 6 a room's set), P+'s pages put back.
+    // page, 1 no set step, 2 inactive, 3 no lists, 4 the custom page, 5 no stage on P+'s pages,
+    // 7 more stages than one page lays out), P+'s pages put back.
     __attribute__((used)) u32 g_sssPage[4];
 }
 
@@ -209,6 +209,23 @@ namespace StageLegal {
         OnlineMenu::anyonePick(kinds[(seed >> 16) % (u32)n], OnlineMatch::sssAsl());
     }
 
+    // A random stage of a set's pick step (A on RANDOM): this machine's own draw among the step's
+    // selectable stages this stage select has, sent as the player's pick.
+    static void stepRandom(const PPOM::GameStep* st)
+    {
+        u8 kinds[40];
+        int n = 0;
+        const int count = st->nKinds > 40 ? 40 : st->nKinds;
+        for (int i = 0; i < count; i++) {
+            if (selectableKind(st->kinds[i])) kinds[n++] = st->kinds[i];
+        }
+        if (n == 0) return;
+        static u32 seed = 0;
+        seed = seed * 1664525u + 1013904223u + PPOM::g_block.debug.frames * 2654435761u;
+        u8 k[2] = {kinds[(seed >> 16) % (u32)n], OnlineMatch::sssAsl()};
+        PPOM::post(PPOM::CMD_GP_COMPLETE_STEP, k, 2);
+    }
+
     int kindAt(int page, int pos)
     {
         if (page < 0 || page >= PAGES || pos < 0) return -1;
@@ -217,19 +234,24 @@ namespace StageLegal {
         return *(const u8*)(SLOT_KINDS + 2 * p[1 + pos]);
     }
 
-    // Ranked's stage select shows only the set's stages, not P+'s pages with the rest struck (the
-    // user's, 2026-10-16): the same page in every game, the stages not selectable now struck as
+    // A set's stage select (Ranked's and a room's) shows only the set's stages, not P+'s pages
+    // with the rest struck (the user's, 2026-10-16 for Ranked; Sarah's board 2026-11-22 for rooms:
+    // in a set the page could not be turned, so a ruleset's page 2 / 3 stages could be neither
+    // struck nor picked): the same page in every game, the stages not selectable now struck as
     // before (game 1 the counterpicks). Its page is the set's stages in the ruleset's order
-    // (GameStep page). P+ places a page's icons with MenSelmapPos_TopN__0 (sc_selmap.pac) at frame
-    // count + 1, icon n on bone pos<n+1>: nine stages are a row of four over a row of five, so
-    // Ranked's list (its four counterpicks, then its five starters) puts the counterpicks on top
-    // and the starters below. The page is written as the stage select sets its pages up
-    // (hookPageSetup, before the first page is drawn) and P+'s pages come back once the stage
-    // select is gone (tick). Not a room's set (the user's, 2026-10-16): its ruleset can have any
-    // stages, more than one page holds or a count P+ has no layout for, so it keeps P+'s pages
-    // with the rest struck.
+    // (GameStep page: the counterpicks, then the starters). P+ places a page's icons with
+    // MenSelmapPos_TopN__0 (sc_selmap.pac) at frame count + 1, icon n on bone pos<n+1>, the first
+    // icons on the top row: nine stages are a row of four over a row of five, so Ranked's list
+    // (its four counterpicks, then its five starters) puts the counterpicks on top and the
+    // starters below. The model lays out every count from 1 to 37 (P+ v3.2.x's, read from its
+    // CHR0): 1-4 one row, 5-14 two, 15-33 the three rows of P+'s own 19- and 21-stage pages, 34-37
+    // a fourth row above them that no P+ page uses. A set of more than SET_PAGE_MAX keeps P+'s
+    // pages with the rest struck (on every page) and its page button (pponline_sssButtons). The
+    // page is written as the stage select sets its pages up (hookPageSetup, before the first page
+    // is drawn) and P+'s pages come back once the stage select is gone (tick).
     static const int PAGE_SIZE = 0x28;
     static const int PAGE_MAX = 39;
+    static const int SET_PAGE_MAX = 33;
     static u8 s_savedPages[PAGES * PAGE_SIZE];
     static bool s_pagesSaved = false;
     static bool s_pagesSeen = false;
@@ -253,7 +275,7 @@ namespace StageLegal {
     {
         g_sssPage[0]++;
         const PPOM::GameStep* st = ranked();
-        g_sssPage[2] = !st ? 1 : OnlineMenu::currentMode() != PPOM::MODE_RANKED ? 6 : !st->active ? 2 : !st->nPage ? 3 : 0;
+        g_sssPage[2] = !st ? 1 : !st->active ? 2 : !st->nPage ? 3 : 0;
         if (g_sssPage[2]) return;
         int page = *(u8*)CURRENT_PAGE;
         if (page >= PAGES) {
@@ -267,12 +289,24 @@ namespace StageLegal {
         u8 slots[PAGE_MAX];
         int n = 0;
         int count = st->nPage > PAGE_MAX ? PAGE_MAX : st->nPage;
-        for (int i = 0; i < count; i++) {
-            int slot = slotOf(st->page[i]);
-            if (slot >= 0) slots[n++] = (u8)slot;
+        // A room's format lists its starters among its counterpicks (games 2+ pick from both), so
+        // its page comes starters first: the room's starters (SESSION RoomStages) go after the
+        // rest, as Ranked's list has them (the counterpicks on top, the starters below). Ranked's
+        // page is already in that order (and has no room stages: one pass).
+        const u8* starters = PPOM::g_block.session.stages.starters;
+        for (int pass = 0; pass < 2; pass++) {
+            for (int i = 0; i < count; i++) {
+                if (PPOM::stageBit(starters, st->page[i]) != (pass == 1)) continue;
+                int slot = slotOf(st->page[i]);
+                if (slot >= 0) slots[n++] = (u8)slot;
+            }
         }
         if (!n) {
             g_sssPage[2] = 5;   // none on P+'s pages: its own page, the rest struck
+            return;
+        }
+        if (n > SET_PAGE_MAX) {
+            g_sssPage[2] = 7;   // P+'s pages, the rest struck, its page button on
             return;
         }
         u8* p = (u8*)(STAGE_PAGES + PAGE_SIZE * page);
@@ -366,6 +400,24 @@ extern "C" {
     // Anyone picks: leave at once with SESSION's stage (the host took the first pick).
     static bool s_anyLeave = false;
 
+    // The A that leaves by itself (Ranked, anyone picks) is pressed by the controller that locked
+    // in. No pad pressed it, and with any controller in charge (task+0x278 = 0xF0) the decide
+    // (sel_stage+0x4EF0) scans the eight pads for the one that did, finds none (-1), and reads
+    // gfPadSystem::getSysPadStatus(-1): the word before pad 0 (0x805BA480) as the controller
+    // type, which indexes the type table (sel_stage .rodata+0x1B0) far outside MEM1 (0x8348B5C8;
+    // EmissaryRecomp crashed there, Dolphin reads whatever is at 0x8148B5C8). With the pad: its
+    // own type's row (X/Y or L/R held: the stage select data's sub stage kind, +0x24, which only
+    // vanilla Mushroomy Kingdom reads and P+'s STEX replaces), and the decide's rumble on it
+    // (10 frames, with the player's rumble on, as their own A on a stage). The task leaves on
+    // this A. After kalomaze's a3393d88c (his fork); a pad that is not one (never written: the
+    // lock-in always has 0-7) is port 0, the CSS's own default.
+    static u32 leaveWithA(u8* task, u32 buttons)
+    {
+        const u8 pad = PPOM::g_block.local.lockPad;
+        *(u32*)(task + 0x278) = pad < 8 ? pad : 0;
+        return buttons | 0x100u;
+    }
+
     // H1: returns the pressed buttons the rest of buttonProc (P+'s hooks) sees in r3.
     __attribute__((used)) u32 pponline_sssButtons(u8* task, u32 pressed)
     {
@@ -382,7 +434,7 @@ extern "C" {
             s_anyLeave = any == OnlineMenu::ANY_DECIDED || any == OnlineMenu::ANY_GONE;
             if (s_anyLeave) {
                 if (*hovered - 0x30u <= 7u) *hovered = 0;
-                return out | 0x100u;
+                return leaveWithA(task, out);
             }
             // One page for everyone (Sarah's board, 2026-10-29): another player turned the page,
             // so this stage select turns too, with P+'s own page button (an A on it, as when the
@@ -422,8 +474,11 @@ extern "C" {
         if (online && mgr >= 0x80000000 && mgr < 0x81800000) *(int*)(mgr + 0x284) = 1;
         if (!st) return out;
         out &= ~(0x1000u | 0x10u);   // START (random), Z (hazards: the online rules set them)
-        // The set's page is the only one: A on P+'s page button would show its next page.
-        if (StageLegal::s_page && *(u32*)(task + 0x244) == 0x35) out &= ~0x100u;
+        // The set's page is the only one: A on P+'s page button would show its next page. On
+        // P+'s pages (a set of more stages than one page holds) it turns the page in every step,
+        // whoever's turn it is: the strikes are on every page (apply).
+        const bool onPageButton = *(u32*)(task + 0x244) == 0x35;
+        if (StageLegal::s_page && onPageButton) out &= ~0x100u;
         StageLegal::showTurn(OnlineMenu::rankedText());
         s_autoLeave = !st->active || (st->type != PPOM::STEP_STRIKE && st->type != PPOM::STEP_PICK);
         if (s_autoLeave) {
@@ -434,9 +489,18 @@ extern "C" {
             // takes the stage pponline_sssFilterPos gives; setHover sets +0x244 again next frame.
             u32* hovered = (u32*)(task + 0x244);
             if (*hovered - 0x30u <= 7u) *hovered = 0;
-            return out | 0x100u;
+            return leaveWithA(task, out);
         }
-        if (!(st->myTurn && st->type == PPOM::STEP_PICK)) out &= ~0x100u;   // A only to pick
+        if (!(st->myTurn && st->type == PPOM::STEP_PICK) && !(onPageButton && !StageLegal::s_page))
+            out &= ~0x100u;   // A only to pick, or to turn P+'s page
+        // A on RANDOM in this player's pick: a random stage of the selectable ones, sent as the
+        // pick (the stage select then leaves by itself, as with any pick). P+'s own random left
+        // the stage select without a pick (sel_stage's button table, not the stage path H2
+        // filters): back to the stage select, and only the pick's timer decided the stage.
+        if ((out & 0x100u) && *(u32*)(task + 0x244) == 0x36) {
+            out &= ~0x100u;
+            StageLegal::stepRandom(st);
+        }
         if (st->myTurn && st->type == PPOM::STEP_STRIKE && (pressed & (0x400u | 0x80000u))) {
             int kind = StageLegal::kindAt(*(u8*)StageLegal::CURRENT_PAGE, *(int*)(task + 0x248));
             if (StageLegal::allowedKind(kind)) {

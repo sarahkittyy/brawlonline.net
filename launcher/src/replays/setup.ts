@@ -11,6 +11,7 @@ import { FolderTreeService } from "./folder_tree_service";
 import { AllHighlights } from "./highlights/all_highlights";
 import { HighlightService } from "./highlights/highlight_service";
 import { ManualClips } from "./highlights/manual_clips";
+import { requestMarks } from "./highlights/replay_marks";
 import {
   ipc_allHighlightsEvent,
   ipc_calculateGameStats,
@@ -109,6 +110,10 @@ export default function setupReplaysIpc({
       manualClips.onStatus(event.status);
     }
   });
+
+  // A replay played gets its highlights, hotkey clips and manual clips as stars on the seek bar.
+  dolphinManager.replayMarks = (paths) =>
+    requestMarks(paths, (p) => highlightService.getHighlights(p), settingsManager.get().settings.manualClips);
 
   ipc_getAllHighlights.main!.handle(async () => {
     return await allHighlights.list();

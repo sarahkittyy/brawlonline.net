@@ -5,6 +5,7 @@ import { LoginDialog } from "@/app/header/login_dialog";
 import { PlayersRail } from "@/app/shell/players_rail";
 import type { NavItem } from "@/app/shell/sidebar";
 import { Sidebar } from "@/app/shell/sidebar";
+import { WindowDragStrip } from "@/app/shell/window_drag_strip";
 import { AuthGuard } from "@/components/auth_guard";
 import { LoginNotice } from "@/components/login_notice/login_notice";
 import { ProfileDialog } from "@/components/profile/profile_dialog";
@@ -54,7 +55,16 @@ export const App = React.memo(({ menuItems }: { menuItems: readonly MainMenuItem
     >
       <Sidebar items={menuItems.filter((item) => !item.hidden)} />
       {/* The page, with the chat bar under it (its windows open over the page, never over the sidebar or rail). */}
-      <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", backgroundColor: "var(--page)" }}>
+      <div
+        style={{
+          position: "relative",
+          flex: 1,
+          minWidth: 0,
+          display: "flex",
+          flexDirection: "column",
+          backgroundColor: "var(--page)",
+        }}
+      >
         <main style={{ flex: 1, minWidth: 0, minHeight: 0, overflow: "auto", display: "flex" }}>
           <Routes>
             {menuItems.map((item) => {
@@ -72,6 +82,8 @@ export const App = React.memo(({ menuItems }: { menuItems: readonly MainMenuItem
             {defaultRoute && <Route path="*" element={<Navigate replace={true} to={`${defaultRoute.subpath}`} />} />}
           </Routes>
         </main>
+        {/* Over the pages' top padding, under the chat's windows (after it, they win). */}
+        <WindowDragStrip height={16} />
         <SocialRoot />
       </div>
       <PlayersRail />

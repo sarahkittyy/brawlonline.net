@@ -45,20 +45,18 @@ export const ProjectPunchButtonView = ({ job, onClick }: ProjectPunchButtonViewP
         <LabIcon />
       </IconButton>
     </Tooltip>
-    {/* Kept in the layout, so the row does not move when a download starts. */}
-    <LinearProgress
-      data-testid="project-punch-progress"
-      variant={job && job.total > 0 ? "determinate" : "indeterminate"}
-      value={jobPercent(job)}
-      color="secondary"
-      sx={{
-        width: 24,
-        height: 2,
-        mt: "1px",
-        borderRadius: 1,
-        visibility: job ? "visible" : "hidden",
-      }}
-    />
+    {/* Reserve the space for the bar. A hidden indeterminate bar still runs its animations. */}
+    <div style={{ height: 2, marginTop: 1 }}>
+      {job && (
+        <LinearProgress
+          data-testid="project-punch-progress"
+          variant={job.total > 0 ? "determinate" : "indeterminate"}
+          value={jobPercent(job)}
+          color="secondary"
+          sx={{ width: 24, height: 2, borderRadius: 1 }}
+        />
+      )}
+    </div>
   </div>
 );
 

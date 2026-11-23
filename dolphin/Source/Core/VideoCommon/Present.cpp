@@ -281,10 +281,10 @@ void Presenter::ImmediateSwap(u32 xfb_addr, u32 fb_width, u32 fb_stride, u32 fb_
   video_events.after_present_event.Trigger(present_info);
 }
 
-void Presenter::RedrawLastFrame()
+void Presenter::RedrawLastFrame(bool dump)
 {
   Present();
-  if (m_xfb_entry)
+  if (dump && m_xfb_entry)
   {
     ProcessFrameDumping(m_last_swap_ticks);
     // (Normally at the end of the frame, which a paused game never reaches.)
@@ -1026,6 +1026,8 @@ void Presenter::Present(PresentInfo* present_info)
     if (backbuffer_bound)
       m_onscreen_ui->DrawImGui();
   }
+
+  Rollback::PresentStats::TestGpuStall();
 
   // Present to the window system.
   {

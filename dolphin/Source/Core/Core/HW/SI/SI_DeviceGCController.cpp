@@ -369,18 +369,19 @@ void CSIDevice_GCController::SendCommand(u32 command, u8 poll)
     SIDevices device = pad_num >= 0 && pad_num < 4 ?
                            m_system.GetSerialInterface().GetDeviceType(pad_num) :
                            SIDEVICE_NONE;
-    if (Machine::IsArmed())
+    // The playback Dolphin: nobody plays (its controllers read neutral), nothing rumbles.
+    if (Gprb::Replay::Playback::Following())
+    {
+      pad_num = -1;
+    }
+    else if (Machine::IsArmed())
     {
       // A machine session: every port is a standard controller played by the session's players
       // (SI.cpp), so the port's own device says nothing; only this player's port rumbles, on the
-      // controller they play with.
-      bool adapter = false;
-      pad_num = Machine::LocalRumblePad(m_device_number, &adapter);
-      device = adapter ? SIDEVICE_WIIU_ADAPTER : SIDEVICE_GC_CONTROLLER;
-    }
-    // The playback Dolphin: nobody plays (its controllers read neutral), nothing rumbles.
-    if (Gprb::Replay::Playback::Following())
+      // controller they play with, and never from a rollback's re-run.
+      Machine::MotorCommand(m_device_number, type);
       pad_num = -1;
+    }
 
     if (pad_num >= 0 && pad_num < 4)
     {

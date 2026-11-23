@@ -63,6 +63,9 @@ public:
   void AddDevice(std::unique_ptr<ISIDevice> device);
 
   SIDevices GetDeviceType(int channel) const;
+  // The command the channel's controller gets with every poll (a standard controller's: 0x40, the
+  // analog mode, the motor), as the game last wrote it.
+  u32 GetChannelCommand(int channel) const { return m_channel[channel].out.hex; }
 
   u32 GetPollXLines();
 

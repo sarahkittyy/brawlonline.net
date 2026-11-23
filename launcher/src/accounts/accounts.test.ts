@@ -4,7 +4,7 @@ import os from "os";
 import path from "path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { AccountsManager } from "./accounts_manager";
+import { AccountsManager, START_ANSWER_MS } from "./accounts_manager";
 import { AccountsHttpClient } from "./client";
 import { resolveServiceUrls } from "./config";
 import type { Cipher } from "./session_store";
@@ -59,6 +59,9 @@ const fakeCipher: Cipher = {
   encryptString: (s) => Buffer.from(s.split("").reverse().join(""), "utf8"),
   decryptString: (b) => b.toString("utf8").split("").reverse().join(""),
 };
+
+/** Lets pending fetches start (a call with a session reads it first). */
+const tick = () => new Promise<void>((resolve) => setImmediate(resolve));
 
 const unauthorized = { status: 401, body: { error: { code: "unauthorized", message: "Not logged in" } } };
 
@@ -405,5 +408,95 @@ describe("accounts", () => {
     const manager = new AccountsManager(new AccountsHttpClient("http://api", "test", failing), store);
     expect((await manager.logout("uid-1")).ok).toBe(true);
     expect(await store.get("uid-1")).toBeUndefined();
+  });
+
+  it("asks at start for what the page's start needs, and answers its first call for each with it", async () => {
+    let meAnswers = 0;
+    const { impl, calls } = fakeFetch({
+      "GET /v1/me": () => ({ status: 200, body: me({ displayName: `alice ${++meAnswers}` }) }),
+      [`GET /user/${UID}`]: () => ({ status: 200, body: { uid: UID, displayName: "alice", connectCode: "ALIC#1" } }),
+    });
+    const store = new SessionStore(path.join(dir, "s.json"), null);
+    await store.set(UID, "tok");
+    const manager = new AccountsManager(new AccountsHttpClient("http://api", "test", impl), store);
+
+    manager.prefetchAtStart(UID);
+    // Both asked for at once, before the page calls.
+    await tick();
+    expect(calls.map((c) => new URL(c.url).pathname).sort()).toEqual([`/user/${UID}`, "/v1/me"]);
+    const first = await manager.me(UID);
+    expect(first.ok && first.value.displayName).toBe("alice 1");
+    expect((await manager.publicUser(UID)).ok).toBe(true);
+    expect(calls).toHaveLength(2);
+
+    // Later calls ask the server.
+    const second = await manager.me(UID);
+    expect(second.ok && second.value.displayName).toBe("alice 2");
+    await manager.publicUser(UID);
+    expect(calls).toHaveLength(4);
+  });
+
+  it("asks again after a start answer that never reached the server, and drops stale or other accounts' ones", async () => {
+    let up = false;
+    const calls: string[] = [];
+    const flaky = (async (url: string) => {
+      calls.push(new URL(url).pathname);
+      if (!up) {
+        throw new TypeError("fetch failed");
+      }
+      return new Response(JSON.stringify(me()), { status: 200 });
+    }) as unknown as typeof fetch;
+    const store = new SessionStore(path.join(dir, "s.json"), null);
+    await store.set(UID, "tok");
+    await store.set("uid-2", "tok-2");
+    let now = 1_000;
+    const manager = new AccountsManager(new AccountsHttpClient("http://api", "test", flaky), store, () => now);
+
+    manager.prefetchAtStart(UID);
+    await tick();
+    up = true;
+    expect(await manager.me(UID)).toEqual({ ok: true, value: me() });
+    expect(calls.filter((c) => c === "/v1/me")).toHaveLength(2);
+
+    // Another account's call is not answered with it, and none is after START_ANSWER_MS.
+    up = false;
+    manager.prefetchAtStart(UID);
+    await tick();
+    up = true;
+    expect((await manager.me("uid-2")).ok).toBe(true);
+    now += START_ANSWER_MS + 1;
+    expect((await manager.publicUser(UID)).ok).toBe(true);
+    expect(calls.filter((c) => c.startsWith("/user/"))).toHaveLength(3);
+  });
+
+  it("passes on an expired session from the start's answer, and forgets the answers at a login", async () => {
+    let expired = true;
+    const { impl, calls } = fakeFetch({ "GET /v1/me": () => (expired ? unauthorized : { status: 200, body: me() }) });
+    const store = new SessionStore(path.join(dir, "s.json"), null);
+    await store.set(UID, "tok");
+    const manager = new AccountsManager(new AccountsHttpClient("http://api", "test", impl), store);
+
+    manager.prefetchAtStart(UID);
+    const res = await manager.me(UID);
+    expect(res.ok === false && res.error.status).toBe(401);
+    expect(calls.filter((c) => c.url.endsWith("/v1/me"))).toHaveLength(1);
+
+    expired = false;
+    await store.set(UID, "tok");
+    manager.prefetchAtStart(UID);
+    await manager.login("a@b.c", "pw");
+    expect((await manager.me(UID)).ok).toBe(true);
+    expect(calls.filter((c) => c.url.endsWith("/v1/me"))).toHaveLength(3);
+  });
+
+  it("reads the stored sessions synchronously at start", async () => {
+    const file = path.join(dir, "s.json");
+    await new SessionStore(file, fakeCipher).set(UID, "tok-1");
+    const store = new SessionStore(file, fakeCipher);
+    store.loadSync();
+    expect(await store.get(UID)).toBe("tok-1");
+    const missing = new SessionStore(path.join(dir, "none.json"), fakeCipher);
+    missing.loadSync();
+    expect(await missing.get(UID)).toBeUndefined();
   });
 });

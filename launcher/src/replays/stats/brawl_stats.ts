@@ -292,6 +292,28 @@ function deathDirection(t: Timeline, p: number, lostAt: number): number {
   return x < 0 ? DEAD_LEFT : DEAD_RIGHT;
 }
 
+/**
+ * Whether a damage rise at frame `f` is a hit: the victim's hit record (Timeline.hitRecord) changed
+ * on it or the frame after, the victim was held the frame before (a throw writes none), or the rise
+ * put it in another state (a hit on a sleeping fighter wrote none). Otherwise the damage is from no
+ * one (the off-screen bubble's 1% a second, some stages) or the repeat hit of a multi-hit; a file
+ * without the record counts every rise.
+ */
+function isHit(t: Timeline, v: number, f: number): boolean {
+  const record = t.hitRecord?.[v];
+  if (!record || f === 0) {
+    return true;
+  }
+  const before = t.status[v][f - 1];
+  return (
+    record[f] !== record[f - 1] ||
+    (f + 1 < t.frames && record[f + 1] !== record[f]) ||
+    isGrabbed(before) ||
+    isCommandGrabbed(before) ||
+    t.status[v][f] !== before
+  );
+}
+
 type Pair = { player: number; opponent: number }; // fighter indices in the timeline
 
 function pairs(t: Timeline): Pair[] {
@@ -338,7 +360,9 @@ function conversions(t: Timeline, starts: Int32Array[], attacks: Int32Array[]): 
           };
           out.push(current);
         }
-        if (taken > DAMAGE_EPSILON) {
+        // A rise with no hit record is not a new move: the one that hit last if it is still on
+        // (a multi-hit's repeat), else nobody's (off-screen, after the KO's hit: GitHub #58).
+        if (taken > DAMAGE_EPSILON && (lastHitMove !== undefined || isHit(t, v, f))) {
           const hitBy = f > 0 ? f - 1 : f; // the move that connected
           if (lastHitMove === undefined) {
             move = { playerIndex: index(a), frame: frame(f), moveId: attacks[a][hitBy], hitCount: 0, damage: 0 };

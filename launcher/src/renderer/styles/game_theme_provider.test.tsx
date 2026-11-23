@@ -15,8 +15,7 @@ vi.hoisted(() => {
 import { useSettingsStore } from "@/lib/hooks/use_settings";
 
 import { GameThemeProvider, useThemeColorDraft } from "./game_theme_provider";
-import { fallbackPalette } from "./theme";
-import { paletteFromThemeColor } from "./theme_color";
+import { DEFAULT_THEME_COLOR, paletteFromThemeColor } from "./theme_color";
 
 let muiPrimary = "";
 const Probe = () => {
@@ -48,11 +47,13 @@ describe("GameThemeProvider and the theme colour picker", () => {
         <Probe />
       </GameThemeProvider>,
     );
-    expect(muiPrimary).toBe(fallbackPalette.primary);
+    // No colour chosen: PM's blue, without the disc too.
+    expect(muiPrimary).toBe(paletteFromThemeColor(DEFAULT_THEME_COLOR).primary);
+    expect(cssPrimary()).toBe(paletteFromThemeColor(DEFAULT_THEME_COLOR).primary);
 
     act(() => useThemeColorDraft.setState({ draft: RED }));
     expect(cssPrimary()).toBe(paletteFromThemeColor(RED).primary);
-    expect(muiPrimary).toBe(fallbackPalette.primary);
+    expect(muiPrimary).toBe(paletteFromThemeColor(DEFAULT_THEME_COLOR).primary);
 
     act(() => {
       vi.advanceTimersByTime(100);
@@ -63,7 +64,7 @@ describe("GameThemeProvider and the theme colour picker", () => {
       vi.advanceTimersByTime(100);
     });
     // Still moving: red never reached the MUI theme.
-    expect(muiPrimary).toBe(fallbackPalette.primary);
+    expect(muiPrimary).toBe(paletteFromThemeColor(DEFAULT_THEME_COLOR).primary);
 
     act(() => {
       vi.advanceTimersByTime(60);

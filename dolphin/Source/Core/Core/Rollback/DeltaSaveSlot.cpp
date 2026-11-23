@@ -318,6 +318,7 @@ void DeltaSaveSlot::Save(Core::System& system)
   m_downcount = system.GetPPCState().downcount;
   m_jit_invalidations = system.GetJitInterface().Invalidations();
   m_jit_code_mark = system.GetPPCState().iCache.jit_code.Mark();
+  m_gpu_written_mark = GPUWrittenBitmap::Get().JournalMark();
   m_slice_length = system.GetCoreTiming().GetGlobals().slice_length;
   m_exceptions = system.GetPPCState().Exceptions;
   m_msr = system.GetPPCState().msr.Hex;

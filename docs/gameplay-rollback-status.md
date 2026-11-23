@@ -985,7 +985,7 @@ Not the fix: Dolphin's Smooth Early Presentation (an earlier headless A/B was a 
 **Fix** (`[Core] RollbackPresentPacing`, default on, active while a session runs with Immediate XFB and Rush in single core or deterministic dual core):
 
 - `CoreTimingManager::OnPresentedXFBCopy`: the CPU thread re-arms Rush's throttle when it sends a presented XFB copy (the FIFO preprocessor in deterministic dual core, the copy itself in single core) instead of the GPU thread at its present. The sleep is then always at the first poll after the copy: VI-locked, before the loop top, and every frame runs from its input to its present in one go.
-- `PresentStats::PresentHoldUntil`: the presenter holds each paced frame until its copy's due time (throttle clock, taken with the copy decision) plus the 95th percentile of the last 120 frames' arrivals after theirs, at most 8 ms. A frame that rolled back comes ~4 ms late; the hold keeps the presents a field apart and shows only the rare slower frame late. A rolling window rather than a quantile tracker: after a stall the tracker stayed high for ~30 s.
+- `PresentStats::PresentHoldUntil`: the presenter holds each paced frame until its copy's due time (throttle clock, taken with the copy decision) plus the 95th percentile of the last 120 frames' arrivals after theirs, at most 8 ms. A frame that rolled back comes ~4 ms late; the hold keeps the presents a field apart and shows only the rare slower frame late. A rolling window rather than a quantile tracker: after a stall the tracker stayed high for ~30 s. Arrivals a field or more after the window's median are stalls and left out of the percentile ([bug report #314](#a-pc-that-hitches-no-longer-holds-every-frame-8-ms-bug-report-314-2026-11-18)).
 - The `gprb net:` line reports the holds: `held N (avg X ms, max Y ms)`.
 
 **Results.** `gprb_session.py --cpu dc --video D3D11 --platform win32 --minutes 2`, Fox/Falco Battlefield, off (`--config Dolphin.Core.RollbackPresentPacing=False`) and on back to back, both peers, match frames only (raw: `run/scratch/pacing/ab-*`):
@@ -1602,6 +1602,173 @@ Depth-1 rollbacks gain nothing (their only re-run pass is the one that is seen).
 **Change.** The session tells GameplayRollback which port its local GameCube pad plays (`SetHostPadPlaysPort`, from CreateGekko to EndRunning). The host decode takes that port's light presses (`LayoutPadOf`), and `PadsOnPadThreadUpdated` corrects the pad thread's pass of that pad before it is kept or checked (`FixLightPresses`): a trigger at 45 or more after the origin presses its button when the port's layout has it off Shield, and a press that only the pad's own layout made goes unless the SI read behind the pass (its decode entry's `raw_buttons`) pressed it digitally. With `PPR_GPRB_HOST_DECODE=0` there is no such read and that press stays. Players whose port is their pad (hosts on controller port 1) and players on the same layouts see no change. Guest memory is untouched: the corrected pad is only the local input GekkoNet sends.
 
 **Tests.** gtests `FixLightPresses.APadPlayingAnotherPortTakesThatPortsLightPresses` and `HostPadReadTest.ALocalPadPlayingAnotherPortGetsThatPortsLightPresses` (P+'s hooks in place, pad 0 on Shield, pad 1 R on Jump, pad 0 playing port 2: a light R press is in the decode and the pass, which still match; swapped layouts: a light press goes, a digital one stays), with the other HostPadRead and HostDecodePadSlot tests (13 pass; a scratch tests.exe from build/v6's objects). Not tested: a two-instance session, a real controller, macOS / Linux.
+
+## Input suggestions: a press reaches the other players between frames (GitHub issue #35, 2026-11-17)
+
+The game reads a controller once a frame, so a press made just after a read waits almost a frame
+before its input goes out, and meanwhile the other players predict the old input and later roll
+back. Now, when the local GameCube controller changes in a way that can start an action, the change
+goes to the other players at once as a suggestion ('S' datagram, `Gprb::Suggest`), tagged with the
+frame whose read will first see it (from the reads' scheduled instants). A machine that has to
+predict that player uses the newest suggestion for the frame instead of the last input
+(`gekko_add_input_suggestion`). Suggestions only change predictions: every prediction is still
+checked against the real input, so the game always runs on the real inputs and no checksum,
+replay or spectate stream changes. This is Arte's "subframe rollback" (Kristal, 2021), the same
+design as Slippi 3.7's input suggestions and Melee Unlocked's early inputs.
+
+- **What goes out** (`Meaningful`): a press or release of A, B, X, Y, Z, L, R, Start or the D-pad
+  (P+'s taunts); a trigger crossing P+'s light shield (45); a stick crossing a line P+ compares it
+  with, either way; the C-stick starting an input, ending one or changing the attack it makes.
+  The map is P+ 3.2's own, read off its code (ipPadConfig's stick conversion, soController's flick
+  counters, the common Fighter.pac's PSA and P+'s codes, with P+'s fighter constants) and checked
+  in the game (`harness/tools/pplus_stick_lines.py`). The main stick past a length of 100 is first
+  scaled to 100, as the game does; then x (either side) 28 dead zone, 30, 32, 34 flick (a dash
+  needs 71 within a frame of passing 34), 37, 47 pivot, 59, 61 run, 68, 71 dash, 73 roll, 78
+  forward smash, 83, 92; y up 28, 30, 54, 59, 62 tap jump from a dash or run, 68 tap jump, 71 up
+  smash; y down 28, 37, 54, 59, 61 crouch, 64, 65 fast fall, 66 UCF shield drop, 68, 69 platform
+  drop, 71 down smash, 73 spot dodge, 78 UCF spot dodge. The C-stick is an input past a radius of
+  50 (36, 36 on a diagonal); the attack's direction is which axes of trunc(32 x its direction)
+  leave the dead zone; shield buffers read each axis at 51. Stick noise inside a zone is never
+  sent. `PPR_GPRB_SUGGEST_RULES=all|cross|follow` (unset, each session's input format has its
+  own, `Format::follow_ups`: `cross` here; `follow`, which adds the later changes before the
+  frame's read at most one every 2 ms, is what the 16 lines first measured from idle needed, and
+  what Other Games' coarse lines keep).
+- **Who sends**: a GameCube adapter's reports (the adapter thread's hook), or for a controller
+  mapped in Dolphin a sampler thread at 1000 Hz that runs only while some peer takes suggestions
+  (on a 1 ms grid; on Windows it waits on a high-resolution waitable timer: `sleep_until` rounds
+  up to whole milliseconds there, and the sampler got about 440 Hz until PR #69). Wii
+  controllers send none but use the others'.
+- **Old builds**: a player says in its state message that it takes suggestions (`sg`); nobody
+  else gets any, and a build without them plays as before.
+- **Trust**: each suggestion is judged once against the real input of its frame
+  (`gekko_set_suggestion_judge`, `Suggest::WorseCost`): a wrong button the last input had right
+  costs 3, a stick or trigger on the wrong side of a line where the last input was on the right
+  one costs 1; a bucket drains one per frame and holds a point for 200 frames; over 15 points the
+  player's suggestions are not used for the rest of the session (Slippi's rule, weighed by zones
+  instead of bytes: a stick that jitters by a unit made honest suggestions "worse" by bytes). A
+  lying peer (`PPR_GPRB_SUGGEST_LIE=1`) was cut off within seconds.
+- **Measured** (harness, Direct games through netsim, each player replaying one port of a real
+  Unranked game's inputs at random points between reads; 4 games each, on/off at random):
+  frames whose fighter action differed between what was shown and what the rollback ran
+  (`gprb_status` `pops`, new): -47% at 40 ms (delay 1), -42% at 25 +- 6 ms, -19% at 80 ms,
+  -32% at 110 ms (delay 2), -22% at 170 ms (delay 3), -22% with Wi-Fi interference bursts.
+  Rollbacks per input change -3..-14% (over 90% of rollbacks change nothing on screen: a stick a
+  few units off). +17-18% packets (~11 suggestions a second a player). Smoothness the same on
+  clean links. On links whose delay is drawn per packet with a heavy tail (in-game jitter
+  40+ ms, already 2-7 s of waits a minute, 0.38% of prod's games in Nov 2026) frames come out
+  less evenly (present interval sd +25-50%), caused by the extra packets themselves (receiving
+  them unused did the same; sampling without sending did not). 85 games, 719,657 confirmed
+  frames compared, 0 mismatches.
+- **P+'s whole map** (PR #70, `cross`, against the 16 lines with `follow`; harness, Direct games
+  through netsim, both players replaying bug report #50's inputs, pairs of games with one seed for
+  both, order random; four 45 s segments a game: 70 ms with delay 1 and 110 ms with delay 2, the
+  sticks set at once at a random point between reads, or moving in a straight line over 35% of a
+  field, set about 1,000 times a second): frames whose fighter action differed from what was
+  shown, sampler at ~460 Hz (8 pairs) -5% / -12% (70 / 110 ms, sticks at once; 7 of 8 pairs
+  better at 110), -7% / -6% (moving); at 1000 Hz (PR #69, 4 pairs) -9% / -9% (4 of 4 at 110),
+  -7% / -1%. Rollbacks unchanged, but +1% with moving sticks at 110 ms (4 of 4; without the
+  follow-ups a prediction's bytes are further off). Suggestions +20% with sticks at once
+  (11.5 -> 14 a second a player) and +9-12% with moving sticks (460 Hz 24.7 -> 27.0, 1000 Hz
+  31.2 -> 34.9); the PR's offline model said fewer. For scale (3 games, the first 3 seeds,
+  460 Hz): suggestions off 34-37 such frames per 1000, the 16 lines 27-31, the map 25-30. In the
+  game (`pplus_stick_lines.py`): fast fall from 65, tap jump out of a run from 62, the C-stick on
+  a diagonal from 36, as the map says; roll and spot dodge out of shield came only from 77-79,
+  and not every time, so their 73 is unconfirmed (a wrong line is only a suggestion too many or
+  too few). The filter 1-11 ns, the judge 16-30 ns. 27 games, 342,253 confirmed frames compared,
+  0 mismatches.
+- **Cost**: GekkoNet +60-90 ns per remote player per frame; the filter 7 ns, the judge 11 ns;
+  the mapped-controller sampler ~10 us a sample (about 1% of a core at 1000 Hz; 26-36 us, about
+  3%, on a PC busy with other Dolphins) and the SI device update's p99 +6-14 us while it runs
+  (measured at 460 Hz). A change waits 0.6 ms on average before a sample sees it (1.2 ms at
+  440 Hz); "gprb suggest:" and `gprb_status` give the rate, that wait and the longest gap.
+- **Not tested**: real controllers and adapters (a digital controller on an overclocked adapter
+  can report stray states, per Arte; the judge then stops following it), macOS / Linux / Steam
+  Deck in a game, 3-4 players beyond sync (a 4-player session stayed in sync).
+- **Other Games** (2026-11-19): whole-machine sessions send and use them too, with their own
+  input format and game-independent rules (`docs/design/brawl-mods.md` §6.2): their own copy of
+  the 16 lines, every button, and `follow` by default, so P+'s whole map (PR #70) changes nothing
+  there.
+
+## A PC that hitches no longer holds every frame 8 ms (bug report #314, 2026-11-18)
+
+**Report.** KLON#304 (launcher 0.2.5, Windows 11, i7-14700K, NVIDIA): "craaaazy frame drops during game 1 vs bobby big ballz. it got better after". In Ranked game 1 (Smashville), for about 2.5 minutes (frames 1800-11400), 40-230 of every 600 frames were late (by up to 300 ms), rollbacks cost up to 191 ms where they cost ~2.5 ms before and after, and the `gprb frame cost:` lines' "GPU thread busy" went from ~6.5 to 12-14.5 ms. Bug report #311 (the same PC, a day earlier) had the same minute. "presenting" is the present hold plus the swap (`FrameProfile`), and the `gprb net:` lines' "held ... avg" matched it (7.2-7.8 ms against ~1.5 in clean games). The GPU's own work (busy minus presenting) rose only 1.5-4.5 ms, and a stall trace had the GPU thread inside the NVIDIA driver for 250 ms: the GPU or its driver hitched, which is not ours. But the hold made it worse. With a few late frames a second, the 95th percentile of the last 120 arrivals was always one of them, past `HOLD_MAX`, so every frame was held the whole 8 ms: 6 ms more delay on every frame, and the re-runs of rollbacks waited for the GPU thread asleep in the hold ("waiting for the GPU thread" 1.5-7.2 ms a re-run frame against 0.2-0.5).
+
+**Change.** `PresentStats::HoldOffsetMs`: the percentile leaves out the window's stalls, arrivals a field (16.68 ms) or more after the window's median. A hold moves the other frames by at most 8 ms, so such a frame is a repeated field whatever they do. Frames up to a field behind the median still count (a slow PC's late rollbacks: the hold still evens them out). The line is from the median, not the due time, since where a PC's frames come against their due times depends on its slack (here 98% of them 5-12 ms before it, so an "8 ms after the due time" line would already sit 20 ms behind the typical frame). A window that is mostly late (a PC behind its schedule, Phase 19) is that PC's pace, not stalls, and holds as before; a window with fewer than 20 arrivals left holds nothing. A first version left out arrivals more than 8 ms after the due time; it measured about the same under stalls (late frames 54.7 → 36.9 per 1000, hitches 106.6 → 69.6, 6 pairs) but leaves the median's place out. `PPR_PRESENT_HOLD_STALL_MS=<ms>` sets the line (A/B; `0`: every arrival counts, the hold before). `PPR_TEST_GPU_STALL=<stalls a second>,<min ms>,<max ms>[,<ms every frame>[,<seed>]]` (tests) makes the video thread sleep before a present, as a GPU or driver that hitches does.
+
+**Measured.** `gprb_session.py` (D3D11, dual core, windowed, delay 1, two matches a run), pairs of runs with one stall seed, old and new back to back in random order, the stalls on the host only. Scratch DolphinNoGUI linked against `build/i35` (HEAD of 2026-11-18), scripts and runs in `run/scratch/bug314` (driver `ab314.ps1`, analysis `an314.py`, `paired.py`, rule replay `cf2.py`). The PC had other sessions' launcher dev servers and playback Dolphins running, so the no-stall conditions swing between pairs. The host, per 1000 frames (present − due: each present against its frame's due time in the `PPR_PRESENT_LOG` trace; 60 Hz: presents not in the refresh after the previous one's on a modelled 59.94 Hz screen):
+
+| Condition (pairs) | Hold avg | Present − due p50 | Screen hitches | 60 Hz misplaced | Late frames |
+|---|---|---|---|---|---|
+| Report-like: 0.8 stalls/s of 20-120 ms, +2 ms GPU a frame, `typical` (6) | 5.43 → 1.49 ms | −4.4 → −9.8 ms | 101.5 → 72.2 | 14.7 → 11.7% | 38.0 → 37.2 |
+| Heavy: 1.5/s, +3 ms (3) | 6.98 → 2.23 ms | −3.1 → −8.3 ms | 162.4 → 126.2 | 20.6 → 16.8% | 95.6 → 60.4 |
+| Light: 0.2/s of 10-60 ms (3) | 1.22 → 1.12 ms | −11.7 → −11.6 ms | 11.5 → 11.6 | 4.4 → 5.5% | 13.2 → 18.3 |
+| No stalls, `typical` (4) | 1.49 → 1.02 ms | −12.1 → −12.2 ms | 9.5 → 4.0 | 4.3 → 3.2% | 10.1 → 7.0 |
+| Slow PC: host on one core (2 threads), `cross_country` (7) | 1.91 → 1.65 ms | −11.5 → −11.5 ms | 18.6 → 19.9 | 5.4 → 5.0% | 21.1 → 26.4 |
+| Slow rollbacks: host passes +5 ms (`PPR_GPRB_TEST_FRAME_COST_US`), `cross_country` (4) | 3.87 → 3.92 ms | −5.9 → −5.7 ms | 76.3 → 76.0 | 10.5 → 10.1% | 699.8 → 695.6 |
+
+Under stalls the hold, the delay, the hitches and the modelled screen improved in every pair (6/6 and 3/3; paired t 12-46), and with heavy stalls the late frames (t −6.1) and the rollback cost (3.97 → 2.33 ms avg, max 97 → 13 ms) too; the other player's late frames and hitches went down as well (heavy: 3/3, report-like: 5/6). Elsewhere nothing changed beyond the noise (|t| ≤ 2.1, signs mixed): replaying both rules over the same recorded arrivals, they gave a different hold on 2-8% of those frames (0.04-0.2 ms on average) against 36-39% under stalls. 79 runs, 372,664 confirmed frames compared, 0 checksum mismatches, no trace divergence (the hold is host timing only: nothing the game computes changes).
+
+**Tests.** New `PresentHoldTest` (9: without stalls the offset is the old one for 2,000 random windows; late rollbacks within a field still count; stalls a field after the median are left out, just under it counted; a PC behind its schedule as before; under 20 left, no hold; only the window is read). Dolphin unit tests: 1,664 pass, the 3 that fail on main fail (IniFile, PatchAllowlist, PageTableHostMapping MemChecks). **Not tested:** a real GPU or driver that hitches (the reporter's), VSync, fullscreen, a real slow PC, macOS / Linux / Steam Deck, the Qt Dolphin.exe.
+
+## Match traffic as voice for Wi-Fi and routers (2026-11-18)
+
+In the harness's Wi-Fi model, busy channels made most of the waits for the peer. Wi-Fi (WMM) and
+routers that queue by DSCP send voice first, so both session types mark their sockets' traffic as
+voice (`Online::MatchQoS`): DSCP 46 with `IP_TOS` / `IPV6_TCLASS`, plus the voice service type on
+macOS; on Windows, qWAVE's voice traffic type per destination, which goes out as DSCP 56 (CS7,
+802.1p 7): without administrator rights a flow's DSCP cannot be set to 46 (`QOSSetOutgoingDSCPValue`
+fails with access denied). A whole-machine session's sockets go
+unmarked while they send a joiner's machine image or SD card, and a second after. Windows also turns
+on Wi-Fi media streaming mode (no background scans) while a session's network is up.
+`PPR_MATCH_QOS=0` turns it off. Checked on Linux (`MatchQoSTest`, and DSCP 46 on every datagram of
+sessions through netsim). On Windows 11 (PR #64 review), the same qWAVE calls from a small program
+(not Dolphin) to a receiver in WSL: no mark before the flow, DSCP 56 with it (IPv4 and IPv6), 0 while
+set to best effort and after the handle closes, `IP_TOS` ignored, no change in `sendto`'s cost, and
+`SetSocketMediaStreamingMode` returns S_OK at once even with no Wi-Fi connected; the four changed
+files compile with MSVC (/W4 /WX). Not checked: a real Dolphin session on Windows, macOS at all, any
+gain on a real Wi-Fi network.
+
+## Display lists are preprocessed once (2026-11-17)
+
+**Why.** With the deterministic GPU thread (gameplay sessions, replays and spectating, whole-machine sessions) the CPU thread preprocesses every command before the GPU thread runs it, so that what the game can see of the GPU (PE tokens, draw done, the GPU's time) happens at the same emulated time on every machine. For a display list that is two jobs: copy the list into the aux FIFO (the GPU thread runs the copy, since guest memory can change before it gets there) and parse every command in it. A P+ pass that draws calls 611 display lists, 320 KiB (Final Destination, Mario and Marth), nearly all the same models and materials as the pass before; hidden re-run passes (above) call none. Before this change (main at 83fc6b35) this preprocessing was ~12% of the CPU thread at rollback distance 2 (perf, FD replay), about 170 us of every pass that draws, and every frame's shown pass draws.
+
+**Change** (`VideoCommon/OpcodeDecoding.cpp`, `Fifo.cpp`). The preprocessor keeps a copy of each display list, by address and size, with the side effects its parse had, in order: CP writes (the vertex format), the BP writes `LoadBPRegPreprocess` acts on (EFB copy size, address and stride, draw done, the two PE tokens, the EFB copy trigger), indexed XF loads, and before each the cycles of the commands in between. When a list's bytes equal the copy (`memcmp`) and, if it has primitives, the vertex descriptor and the VATs they use equal those it was parsed under, it is not parsed again: its effects are replayed in order (a BP write gets the same cycle count it got in the parse; an indexed load reads memory now, as a parse would), the remaining cycles are added, and the aux FIFO gets a 16-byte header pointing at the cached copy, which the GPU thread runs instead of a fresh copy. A list with an unknown opcode is not cached; one whose bytes or format change more than 4 times is preprocessed as before. Replaced copies are freed in `SyncGPU` once the aux FIFO is empty (no header can point at them any more). When the cache holds more than 32 MiB, the next list empties it and its copies are retired the same way: emptying it in `SyncGPU` itself could free the copy and slot of the list being preprocessed, since `PushFifoAuxBuffer` runs `SyncGPU` when the aux FIFO is full (PR #61 review). The aux FIFO is in no savestate or rollback snapshot. `PPR_DL_CACHE=0` turns the cache off (A/B).
+
+**Hits.** FD replay: 96.2% of display list calls (1,144 lists, ~480 KB cached; 3.7% from 31 lists that change); whole-machine vanilla Brawl match: 98.8% (4,055 lists, ~870 KB); Tatsunoko vs. Capcom's attract mode: 99.1% (113 lists, 10.7 KB).
+
+**Speed** (one binary, `PPR_DL_CACHE=0` against the default, interleaved rounds, Null video; `gprb_mispredict.py` FD recording). Frame cost:
+
+| | frame | shown pass | re-run pass | FIFO events per drawn pass |
+|---|---|---|---|---|
+| no rollback (4 rounds) | −4.7% (4/4, −7.5 to −1.5%) | same | | 171 → 135 us |
+| distance 2 (6 rounds) | −3.0% (5/6) | −3.1% | −2.9% | shown 171 → 138, re-run 195 → 154 us |
+| distance 7 (4 rounds) | −1.3% (4/4) | −2.5% | −0.9% | (only 2 of 7 passes draw) |
+
+Whole-machine vanilla Brawl (sync test at distance 6, a closed-loop match against a level 3 CPU, 3 rounds): FIFO events per re-run frame 0.187-0.189 → 0.159-0.162 ms in every round; re-run frame −1.8%, +3.2%, −2.5% (each run is a different match: about ±3% spread). Tatsunoko vs. Capcom: no change (0.41-0.43 ms a re-run frame either way). At distance 7 the frame profile times events in one pass of 7 (`EVENT_SAMPLE_EVERY`), always the same position, so compare whole passes there.
+
+**Checks.**
+- The GPU thread gets the same bytes: a running hash of every display list it ran and every indexed XF load it popped, cache off against on, was identical on the FD replay (1,713 checkpoints of 1,024 lists) and a ranked game on stage 45 (14,261 checkpoints), and during development on the FD replay at distances 2 and 7 and 6 ranked games on 6 stages (~88M display lists in all).
+- The game sees the same thing: every FD replay run above equals the reference trace frame by frame (RNG, fighters); 34 ranked games recorded on 0.1.136 by players without the cache (all 42 characters, the 9 stages in the sample) played back with every checksum equal, 372,965 frames; whole-machine sync tests (every RAM byte checked every frame) on vanilla Brawl (11 matches) and Tatsunoko vs. Capcom: 0 desyncs.
+- Not checked: Windows/MSVC and macOS builds, a two-machine session (the ranked replays come from machines without the cache), a picture comparison on a real video backend (the GPU thread's input is the same bytes).
+## Presses during a hitch and after a long rollback (GitHub issue #53, 2026-11-20)
+
+**Report.** AlephZeroChill built a harness that plays human-like presses at any instant of the host clock (not on the game's reads) through a real two-instance session and checks every frame against them (`tools/input_fidelity.py`, `ppharness/inputtape.py`, `ppharness/inputoracle.py`, harness `pad_tape`, `PPR_GPRB_INPUT_TRACE`), and found two ways a press could be lost or moved by a frame:
+
+1. After a hitch longer than a field (a shader compile, the OS, the disk) or a rollback that ran past the next frame's due time, the throttle runs the frames it owes back to back, and every read more than a field behind (`HostPadFarLate`, Phase 32's slow-PC rule) took the controller as it was then. The catch-up frames got about the same sample each, so a press made during the hitch was skipped and holds came out frames too long or short. With a controller that keeps a history (the Wii U adapter), the first frame back within a field read its due instant from the past, earlier than the frame before it: the input went backwards (a press seen, then not, then seen again).
+2. The read after a rollback (`HostDecodeReadAt`, see "Held buttons ... after a rollback") waited for all the re-runs, so a pad mapped in Dolphin (no history) was read up to the rest of the re-runs late (up to ~12 ms); and with a history, a read less than 1 ms late (a fifth of them, 0.36 ms on average) took the controller then, so a press or release in that sliver went into the frame before its own.
+
+**Change** (their patches, `ef6c29b5d`, and a commit after it). `ReadHostPad`: a read more than a field behind takes its due instant from the history (`catchup`) for up to `HOST_PAD_FAR_STREAK` (24) such reads in a row; a channel still that far behind after them is a PC that cannot keep full speed and reads now as before (`PPR_GPRB_PAD_CATCH_UP=0`: never). No read outside a re-run stands for an earlier state than the channel's newest (`held`, `PPR_GPRB_PAD_MONOTONIC=0`: off). `HostDecodeReadAt` takes the history whenever it comes behind its due instant, and the session takes the read in the first re-run pass at or after that instant instead of after the last one (`DeferredReadDueInRerun`, `PPR_GPRB_DEFERRED_READ_DUE=0`: neither). In a re-run pass guest memory is an earlier frame's, so there the read's decode takes P+'s light presses and START hold as the frame's loop top read had them (`s_decode_ctx`). A mapped pad still has no past: nothing can bring back a press made during a hitch with one. Telemetry: `catching up N, held N` in the `gprb net:` pad reads.
+
+**Measured** (`input_fidelity.py` on Windows, two DolphinNoGUI in one PC through netsim `r114j1` = 57 ms each way, dual core, Null video, 90 s of tape, fixes on and off in one build by the variables above, the same tape seeds in both arms; other sessions' Dolphins shared the PC). The player whose machine hitches (`PPR_GPRB_TEST_HITCH=300:60` on B, a controller with a past), 2 runs each:
+
+| | presses held > a frame never seen | holds a frame too long / short | input went back | reads one field apart | reads > 1.5 ms off their grid |
+|---|---|---|---|---|---|
+| off | 5, 4 | 22, 21 | 0, 3 | 98.70, 98.75% | 0.97, 0.91% |
+| on | 0, 0 | 0, 0 | 0, 0 | 99.98, 100% | 0, 0% |
+
+A mapped pad (`--model mapped`, delay 2, no hitch, 2 runs x 2 players): reads more than 1.5 ms off their grid 3.3-4.2% -> 0.3-0.7% (p99 3.7-4.1 -> 1.1-1.3 ms), holds a frame off 73 -> 39 in all; with B hitching, B 46 -> 28 and 5 -> 3 presses unseen (no past to catch up from), A 32 -> 10. No hitch, a controller with a past: holds off 2 -> 0. A slow PC (B's every pass +14 ms, `PPR_GPRB_TEST_FRAME_COST_US`): B reads far behind on every frame in both arms and never catches up (the streak), as before. Latency from a press to the own screen at delay 2: median +0.2-0.6 ms with the fix in all six comparisons (the late reads after a rollback were a little fresher than their frame), p99 the same, the other screen the same. 15 runs, 83,798 confirmed checksums compared, 0 mismatches, 0 desyncs. `test_diag_bug70.py` rtt130: 99.68% of frames one sample after the last.
+
+**Tests.** `HostPadReadTest`: ReadsFarBehindScheduleTakeTheControllerNow (24 catch-up reads, then now), TapeIsTheStateAtEachInstantAsTheDeviceShowsIt (theirs), new TheReadAfterARollbackJustPastItsDueTakesTheDueInstant (fails with `PPR_GPRB_DEFERRED_READ_DUE=0`); `test_inputoracle.py` (11, no Dolphin); `test_input_fidelity.py` (two instances: lan, r114j1, r114j1 with a hitch; mapped informative). **Not tested:** a real Wii U adapter or a mapped controller, a real hitch (shader compile) rather than a sleep, a real slow PC, macOS / Linux in this tree (their runs were Linux), the Qt Dolphin.exe, 3-4 players.
 
 ## Open issues
 

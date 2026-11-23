@@ -55,6 +55,8 @@ static constexpr Common::EnumMap<float, GammaCorrection::Invalid2_2> s_gammaLUT 
 // XFB copies of resimulated rollback frames (see Core/Rollback/PresentStats.h). Set by LoadBPReg
 // just before BPWritten runs the copy, on the same thread.
 static bool s_present_efb_copy = true;
+// Not presented, the last frame shown again instead (a replay's seek running unseen).
+static bool s_redraw_efb_copy = false;
 
 // ArmNoSkipDraws (BPStructs.h): 0 off; NO_SKIP_DRAWS_ARMED armed, the copy that ends it not known
 // yet; else that copy's destination (physical, as bpmem.copyTexDest << 5). Written by the CPU
@@ -431,6 +433,8 @@ static void BPWritten(PixelShaderManager& pixel_shader_manager, XFStateManager& 
           // below div two to convert from bytes to pixels - it expects width, not stride
           if (s_present_efb_copy)
             g_presenter->ImmediateSwap(destAddr, destStride / 2, destStride, height);
+          else if (s_redraw_efb_copy)
+            g_presenter->RedrawLastFrame(false);
         }
         else
         {
@@ -894,7 +898,7 @@ void LoadBPReg(u8 reg, u32 value, int cycles_into_future)
     UPE_Copy copy;
     copy.Hex = newval;
     s_present_efb_copy = Rollback::PresentStats::OnEFBCopy(
-        copy.copy_to_xfb != 0, system.GetFifo().UseDeterministicGPUThread());
+        copy.copy_to_xfb != 0, system.GetFifo().UseDeterministicGPUThread(), &s_redraw_efb_copy);
   }
 
   BPWritten(system.GetPixelShaderManager(), system.GetXFStateManager(),
@@ -951,12 +955,18 @@ void LoadBPRegPreprocess(u8 reg, u32 value, int cycles_into_future)
     // (PresentStats::CopiesLeaveGuestRAM): nothing to skip, and those bytes stay in the checksum.
     // (A mark also stays when a rollback undoes the frame that made it: a copy only one machine
     // predicted would leave its bytes skipped on that machine alone.)
-    if (!Rollback::PresentStats::CopiesLeaveGuestRAM())
+    // A game whose EFB copies a session writes to RAM (PresentStats::SessionEFBCopiesToRAM) has
+    // them marked here, and the CPU thread waits for the video thread once it has preprocessed
+    // this, so the copy is in RAM at the same emulated time on every machine.
+    const bool session = Rollback::PresentStats::CopiesLeaveGuestRAM();
+    if (!session || (!copy.copy_to_xfb && Rollback::PresentStats::SessionEFBCopiesToRAM()))
     {
       const u32 height = ((s_pp_efb_wh >> 10) & 0x3FF) + 1;
       const u32 stride = (s_pp_efb_stride & 0x3FF) << 5;
       const u32 rows = copy.copy_to_xfb ? 2 * height + 2 : height + 1;
       Rollback::GPUWrittenBitmap::Get().Mark(s_pp_efb_addr << 5, stride * rows);
+      if (session)
+        system.GetFifo().SyncAfterPreprocess();
     }
     break;
   }

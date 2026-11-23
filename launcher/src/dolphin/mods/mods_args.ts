@@ -72,7 +72,7 @@ export function buildModsDolphinArgs(input: ModsArgsInput): string[] {
   // A path with "=" would be cut short: the textures are left out rather than the room.
   const load = input.textures ? path.resolve(input.textures.loadPath) : null;
   if (load && !load.includes("=")) {
-    args.push("-C", `Dolphin.General.LoadPath=${load}`, "-C", "GFX.Settings.HiresTextures=True");
+    args.push("-C", `Dolphin.General.LoadPath=${load}`, "-C", "Graphics.Settings.HiresTextures=True");
   }
   const disc = configPath(build.discPath, "disc");
   args.push("-C", `Dolphin.Core.DefaultISO=${disc}`);

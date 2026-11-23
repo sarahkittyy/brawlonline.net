@@ -10,6 +10,7 @@ import React from "react";
 import { HashRouter as Router, Navigate, Route, Routes } from "react-router-dom";
 
 import { ThemeColorPicker } from "@/components/theme_color_picker/theme_color_picker";
+import { usePlaybackOverlay } from "@/lib/dolphin/use_playback_overlay";
 import { useAppStore } from "@/lib/hooks/use_app_store";
 import { useLastPageTracker } from "@/lib/hooks/use_last_page";
 import { usePageRequestListeners } from "@/lib/hooks/use_page_request_listeners";
@@ -127,6 +128,7 @@ export function createApp({ services }: { services: Services }): {
 
     // The playback Dolphin's highlight list buttons and stars (highlight_playlist.ts), with any page open.
     useHighlightNavigation();
+    usePlaybackOverlay();
 
     return (
       <>

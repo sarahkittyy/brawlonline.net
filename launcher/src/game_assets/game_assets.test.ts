@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { ExtractFn, FillMissingFn } from "./game_assets_manager";
 import { GameAssetsManager } from "./game_assets_manager";
-import { resolveAssetPath } from "./protocol";
+import { resolveAssetPath, resolveSchemePath } from "./protocol";
 import type { GameAssetManifest } from "./types";
 import { GameAssetsStatus } from "./types";
 
@@ -36,6 +36,17 @@ describe("game assets", () => {
     expect(resolveAssetPath(root, "game-asset://cache/../secret.txt")).toBe(path.join(root, "secret.txt"));
     expect(resolveAssetPath(root, "game-asset://cache/%2e%2e%2fsecret.txt")).toBeNull();
     expect(resolveAssetPath(root, "game-asset://other/x.png")).toBeNull();
+  });
+
+  it("serves the launcher's page (app://launcher, main/app_scheme.ts) only from its folder", () => {
+    const root = path.join(dir, "renderer");
+    expect(resolveSchemePath(root, "app://launcher/index.html", "launcher")).toBe(path.join(root, "index.html"));
+    expect(resolveSchemePath(root, "app://launcher/i18n/en.json?x=1", "launcher")).toBe(
+      path.join(root, "i18n", "en.json"),
+    );
+    expect(resolveSchemePath(root, "app://launcher/%2e%2e%2fmain%2fapp.js", "launcher")).toBeNull();
+    expect(resolveSchemePath(root, "app://launcher/", "launcher")).toBe(root);
+    expect(resolveSchemePath(root, "app://cache/index.html", "launcher")).toBeNull();
   });
 
   it("keeps the fallback look until a disc is set, then extracts once and reuses the cache", async () => {

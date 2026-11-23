@@ -1102,6 +1102,8 @@ void RollbackManager::SaveFrame(Core::System& system, s64 tag)
   {
     system.GetPPCState().iCache.jit_code.Trim(
         m_slots[Wrap(m_ring_next - m_ring_count, NUM_SAVE_SLOTS)].m_jit_code_mark);
+    GPUWrittenBitmap::Get().Trim(
+        m_slots[Wrap(m_ring_next - m_ring_count, NUM_SAVE_SLOTS)].m_gpu_written_mark);
   }
 
   static const bool census = std::getenv("PPR_GPRB_CENSUS") != nullptr;
@@ -1804,6 +1806,8 @@ bool RollbackManager::LoadFrame(Core::System& system, int frames_back)
     static std::vector<PowerPC::JitCodeRecord::Undone> undone;
     undone.clear();
     system.GetPPCState().iCache.jit_code.Undo(deltaSave.m_jit_code_mark, &undone);
+    // The GPU-written marks the thrown-away frames made go too (GPUWrittenBitmap).
+    GPUWrittenBitmap::Get().Undo(deltaSave.m_gpu_written_mark);
     auto& jit = system.GetJitInterface();
     for (const auto& u : undone)
       jit.DropBlocksOfEntry(u.physical_address, u.address, u.feature_flags);

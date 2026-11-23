@@ -112,7 +112,7 @@ export const RenderJobs = ({ jobs }: { jobs: RenderJobInfo[] }) => {
   );
 };
 
-function statusText(job: RenderJobInfo): string {
+export function renderStatusText(job: RenderJobInfo): string {
   switch (job.state) {
     case "queued":
       return Messages.renderQueued();
@@ -171,7 +171,7 @@ const RenderJobRow = ({
         <span className={styles.renderMusic}>
           {Messages.resolution(job.resolution)} · {job.music ? Messages.withMusic() : Messages.noMusic()}
         </span>
-        <span className={styles.renderStatus}>{statusText(job)}</span>
+        <span className={styles.renderStatus}>{renderStatusText(job)}</span>
         {active && (
           <Button size="small" onClick={cancel}>
             {Messages.cancel()}

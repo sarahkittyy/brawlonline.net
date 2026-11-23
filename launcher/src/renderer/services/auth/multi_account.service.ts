@@ -51,6 +51,7 @@ class MultiAccountClient implements MultiAccountService {
   private _activeAccountId: string | null = null;
   private _accounts: StoredAccount[] = [];
   private _records = new Map<string, AccountsMe>();
+  private _restoredUser: AccountsMe | null = null;
   private _initialized = false;
 
   /**
@@ -186,7 +187,8 @@ class MultiAccountClient implements MultiAccountService {
    * (a real record, or none once the session turns out expired).
    */
   private async _restoreAtStart(account: StoredAccount): Promise<void> {
-    const restore = this._restoreAccount(account).catch((err: unknown) => {
+    let fetched: AccountsMe | null = null;
+    const restore = this._restoreAccount(account, (user) => (fetched = user)).catch((err: unknown) => {
       log.error(`Could not restore account ${account.id}:`, err);
       return false;
     });
@@ -197,6 +199,7 @@ class MultiAccountClient implements MultiAccountService {
     const late = await Promise.race([restore.then(() => false), timedOut]);
     clearTimeout(timer);
     if (!late) {
+      this._restoredUser = fetched;
       return;
     }
 
@@ -216,10 +219,11 @@ class MultiAccountClient implements MultiAccountService {
    * Restore the session of a stored account by fetching its record.
    * Returns false if the session is gone and the user has to log in again.
    */
-  private async _restoreAccount(account: StoredAccount): Promise<boolean> {
+  private async _restoreAccount(account: StoredAccount, onFetched?: (user: AccountsMe) => void): Promise<boolean> {
     try {
       const user = await accounts().me(account.id);
       this._records.set(account.id, user);
+      onFetched?.(user);
       this._updateStoredAccount(account, user);
       log.info(`Session restored for account: ${account.displayName}`);
       return true;
@@ -356,6 +360,12 @@ class MultiAccountClient implements MultiAccountService {
 
   getActiveAccountId(): string | null {
     return this._activeAccountId;
+  }
+
+  takeRestoredUser(): AccountsMe | null {
+    const user = this._restoredUser;
+    this._restoredUser = null;
+    return user;
   }
 
   getActiveUser(): AccountsMe | null {

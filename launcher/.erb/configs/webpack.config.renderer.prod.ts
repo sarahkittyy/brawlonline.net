@@ -154,6 +154,14 @@ const configuration: webpack.Configuration = {
       isDevelopment,
     }),
 
+    // A blank file:// page whose localStorage the launcher moves to app://launcher once (main/app_scheme.ts).
+    new HtmlWebpackPlugin({
+      filename: "storage.html",
+      templateContent: "<!DOCTYPE html><html><head><meta charset=utf-8></head><body></body></html>",
+      inject: false,
+      minify: false,
+    }),
+
     new I18nextAutoKeyEmitPlugin({
       jsonOutputPath: "i18n/en.json",
     }),

@@ -306,6 +306,51 @@ describe("SpectateClient", () => {
     expect(client.getState().status).toBe("idle");
   });
 
+  it("Auto play waits for Dolphin's countdown (state next) before it plays the newest live game", async () => {
+    const server = new FakeServer();
+    const OTHER = "bbbbbbbbbbbb";
+    server.list.games.push(entry(OTHER, "2026-10-14T01:05:00Z"));
+    const { client, comms, setStatus } = make(server);
+    const watching = client.watch(ME, STREAM);
+    await connected(server, 1);
+    server.send({ type: "welcome", stream: server.list.games[0], you: ME, chat: [] });
+    await watching;
+    client.setAutoPlay(true);
+    await vi.waitFor(() => expect(comms.at(-1)).toMatchObject({ autoPlay: true, closeOnEnd: false }));
+    server.send({ type: "over" });
+    await vi.waitFor(() => expect(comms.at(-1)!.streamOver).toBe(true));
+    const id = comms.at(-1)!.commandId;
+    // At the end, counting down (or held in clip mode, or its X clicked): it stays.
+    setStatus({ commandId: id, state: "ended", nextIn: 3 });
+    await new Promise((resolve) => setTimeout(resolve, 800));
+    expect(server.watchUrls).toHaveLength(1);
+    // The countdown ran out.
+    setStatus({ commandId: id, state: "next" });
+    await connected(server, 2);
+    expect(server.watchUrls[1]).toContain(`/v1/live/${OTHER}/watch`);
+  });
+
+  it("Auto play waiting for a live game stops when Dolphin's X keeps the game (state ended)", async () => {
+    const server = new FakeServer();
+    const { client, comms, setStatus } = make(server);
+    const watching = client.watch(ME, STREAM);
+    await connected(server, 1);
+    server.send({ type: "welcome", stream: server.list.games[0], you: ME, chat: [] });
+    await watching;
+    client.setAutoPlay(true);
+    server.send({ type: "over" });
+    await vi.waitFor(() => expect(comms.at(-1)).toMatchObject({ autoPlay: true, streamOver: true }));
+    const id = comms.at(-1)!.commandId;
+    // Nothing else live: it waits, and says so.
+    setStatus({ commandId: id, state: "next" });
+    await vi.waitFor(() => expect(comms.at(-1)!.banner).toBe("Waiting for the next live game..."), { timeout: 3000 });
+    expect(client.getState().waitingForGame).toBe(true);
+    setStatus({ commandId: id, state: "ended" });
+    await vi.waitFor(() => expect(client.getState().waitingForGame).toBe(false), { timeout: 3000 });
+    await vi.waitFor(() => expect(comms.at(-1)!.banner).toBeUndefined());
+    expect(server.watchUrls).toHaveLength(1);
+  });
+
   it("says why the playback Dolphin can't open, and tries no more (bug report #19)", async () => {
     const server = new FakeServer();
     const why = "Another Dolphin is using the game files. Close it, then try again.";

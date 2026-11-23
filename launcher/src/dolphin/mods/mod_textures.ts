@@ -68,9 +68,12 @@ export async function hasTexturePack(
   return search(textures);
 }
 
-/** False when the Dolphin whose User folder holds `load` has custom textures off in its GFX.ini. */
-async function customTexturesOn(load: string): Promise<boolean> {
-  const ini = await readFile(path.join(load, "..", "Config", "GFX.ini"), "utf8").catch(() => "");
+/**
+ * A `[Settings]` switch in the GFX.ini of the User folder `userFolder`: true or false as written
+ * there, or null when it isn't.
+ */
+async function readGfxSwitch(userFolder: string, key: string): Promise<boolean | null> {
+  const ini = await readFile(path.join(userFolder, "Config", "GFX.ini"), "utf8").catch(() => "");
   let section = "";
   for (const raw of ini.split(/\r?\n/)) {
     const line = raw.trim();
@@ -79,12 +82,34 @@ async function customTexturesOn(load: string): Promise<boolean> {
       section = header[1];
       continue;
     }
-    const setting = /^HiresTextures\s*=\s*(\S+)/i.exec(line);
-    if (section === "Settings" && setting) {
-      return setting[1].toLowerCase() !== "false";
+    const setting = /^(\w+)\s*=\s*(\S+)/.exec(line);
+    if (section === "Settings" && setting && setting[1].toLowerCase() === key.toLowerCase()) {
+      return setting[2].toLowerCase() !== "false" && setting[2] !== "0";
     }
   }
-  return true;
+  return null;
+}
+
+/**
+ * `[Settings] HiresTextures` in the GFX.ini of the User folder `userFolder` (Graphics > Advanced >
+ * Load Custom Textures): true or false as written there, or null when it isn't (Dolphin's default
+ * is off, GFX_HIRES_TEXTURES).
+ */
+export async function readHiresTexturesSetting(userFolder: string): Promise<boolean | null> {
+  return readGfxSwitch(userFolder, "HiresTextures");
+}
+
+/**
+ * `[Settings] CacheHiresTextures` (Graphics > Advanced > Prefetch Custom Textures), or null when it
+ * isn't written (Dolphin's default is on, GFX_CACHE_HIRES_TEXTURES).
+ */
+export async function readCacheHiresTexturesSetting(userFolder: string): Promise<boolean | null> {
+  return readGfxSwitch(userFolder, "CacheHiresTextures");
+}
+
+/** False when the Dolphin whose User folder holds `load` has custom textures off in its GFX.ini. */
+async function customTexturesOn(load: string): Promise<boolean> {
+  return (await readHiresTexturesSetting(path.join(load, ".."))) ?? true;
 }
 
 /**

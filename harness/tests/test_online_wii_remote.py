@@ -15,6 +15,8 @@ player from it:
 - the game's own quit buttons for their controller end an Unranked game with no pause (L+R+A+PLUS
   on a Classic Controller, B+1+2+PLUS on a Wii Remote alone, 1+B+Z+PLUS with a Nunchuk), and with
   MINUS (a Wii Remote has no Y) they are P+'s runback;
+- PLUS shows the quit hint as the pause screen's top for their controller (its quit buttons and
+  "Back:" PLUS, the pictures of the pause screen for that controller; card 748), on their screen only;
 - the replay is a version 3 file (SIM_VERSION, a Wii Remote in the game) and plays back in step.
 
 Instances are named ``wii-*`` (``ppharness clean --prefix wii-``). Screenshots go to
@@ -37,7 +39,7 @@ from ppharness.instance import DolphinInstance
 from test_online import _wait
 from test_online_game import (Game, _boot, _both, _confirmed_checksums, _peer_shown, online_set,
                               ppom)
-from test_online_unranked import _search_unranked, backend  # noqa: F401
+from test_online_unranked import _pause_art_frames, _pause_art_pad, _search_unranked, backend  # noqa: F401
 from test_replay import _play, _viewer
 
 pytestmark = [pytest.mark.dolphin, pytest.mark.server, pytest.mark.gpu]
@@ -159,6 +161,23 @@ def _recording(g: Game) -> R.Replay:
     return R.read(st["path"])
 
 
+def _quit_hint(g: Game, other: Game, plus: Callable[[], None], kind: int, shot: str) -> None:
+    """`g`'s PLUS shows its quit hint as the pause screen's top for controller `kind`, drawn on
+    `g`'s screen only (match_hud.cpp g_pauseArt / g_pauseArtPad); PLUS again hides it."""
+    drawn, theirs = _pause_art_frames(g), _pause_art_frames(other)
+    plus()
+    g.steps("wait 20")
+    g.shot(shot)
+    assert _pause_art_frames(g) > drawn, (g.name, drawn)
+    assert _pause_art_pad(g) == kind, (g.name, _pause_art_pad(g))
+    assert _pause_art_frames(other) == theirs, other.name
+    plus()
+    g.steps("wait 10")
+    shown = _pause_art_frames(g)
+    g.steps("wait 20")
+    assert _pause_art_frames(g) == shown, (g.name, "still shown")
+
+
 @pytest.mark.slow
 def test_classic_controller_plays_unranked(backend: OnlineBackend,  # noqa: F811
                                            dolphin: Callable[..., DolphinInstance],
@@ -195,6 +214,8 @@ def test_classic_controller_plays_unranked(backend: OnlineBackend,  # noqa: F811
     a.shot("02-classic-moved")
     ck = _confirmed_checksums(a, b)
     assert ck["compared"] > 200 and ck["mismatches"] == 0, ck
+    # PLUS shows the quit hint: the pause screen's top for a Classic Controller, on A's screen.
+    _quit_hint(a, b, lambda: classic.press(classic={"Buttons/+": 1}), CLASSIC, "02b-quit-hint")
     # The game's own quit for a Classic Controller, no pause first.
     classic.press(frames=20, classic={"Triggers/L": 1, "Triggers/R": 1, "Buttons/A": 1, "Buttons/+": 1})
     online_set.wait(lambda: all(online_set.scene(g.c) == online_set.CSS for g in players), 90,
@@ -256,6 +277,9 @@ def test_wii_remote_and_nunchuk_play_unranked(backend: OnlineBackend,  # noqa: F
     b.shot("02-both-moved")
     ck = _confirmed_checksums(a, b)
     assert ck["compared"] > 200 and ck["mismatches"] == 0, ck
+    # PLUS shows each player's quit hint, the pause screen's top for their controller.
+    _quit_hint(a, b, lambda: remote.press(wiimote={"Buttons/+": 1}), WIIMOTE, "02b-quit-hint-remote")
+    _quit_hint(b, a, lambda: nunchuk.press(wiimote={"Buttons/+": 1}), NUNCHUK, "02c-quit-hint-nunchuk")
     # A's runback: the Wii Remote's quit buttons and MINUS.
     first = online_set.gstatus(a.c)["match_index"]
     remote.press(frames=20, wiimote={"Buttons/B": 1, "Buttons/1": 1, "Buttons/2": 1, "Buttons/+": 1,

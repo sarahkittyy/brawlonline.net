@@ -49,6 +49,7 @@
 #include "Core/ConfigManager.h"
 #include "Core/Core.h"
 #include "Core/HW/CPU.h"
+#include "Core/HW/MMIO.h"
 #include "Core/HW/Memmap.h"
 #include "Core/CoreTiming.h"
 #include "Core/HW/ProcessorInterface.h"
@@ -661,6 +662,24 @@ Result CmdGpuState(const Args&)
   return r;
 }
 
+// A 32-bit store to a hardware register (0xCC00xxxx / 0xCD00xxxx, or its physical address), as the
+// game's store would make it, between two of its instructions: tests drive a device as the game
+// would (an SI command the game did not send, test_machine_rumble.py). The MMU's host writes skip
+// the registers, so the store goes to the MMIO mapping itself.
+Result CmdMmioWrite(const Args& args)
+{
+  const u32 phys = static_cast<u32>(GetU64(args, "addr")) & 0x3FFFFFFF;
+  const u32 value = static_cast<u32>(GetU64(args, "value"));
+  if ((phys & 0xFE000000) != 0x0C000000)
+    Fail("addr must be a hardware register (0xCC000000-0xCDFFFFFF)");
+  RequireRunning();
+  auto& system = Sys();
+  const Core::CPUThreadGuard guard(system);
+  RequireRunning();
+  system.GetMemory().GetMMIOMapping()->Write<u32>(system, phys, value);
+  return {};
+}
+
 Result CmdReadU32(const Args& args)
 {
   const u64 addr = GetU64(args, "addr");
@@ -748,6 +767,133 @@ Result CmdPadCounter(const Args& args)
     buttons.push_back(ButtonMask(b));
   PadCounter(port, rate, std::move(buttons));
   return {};
+}
+
+Result CmdPadScriptTiming(const Args& args)
+{
+  const picojson::value* mode = Find(args, "mode");
+  if (!mode || !mode->is<std::string>() ||
+      (mode->get<std::string>() != "time" && mode->get<std::string>() != "poll"))
+  {
+    Fail("'mode' must be \"time\" or \"poll\"");
+  }
+  SetScriptTiming(mode->get<std::string>() == "time", GetU64(args, "seed", 0));
+  return {};
+}
+
+s64 SteadyUs(Clock::time_point t)
+{
+  return std::chrono::duration_cast<std::chrono::microseconds>(t.time_since_epoch()).count();
+}
+
+Clock::time_point FromSteadyUs(s64 us)
+{
+  return Clock::time_point(std::chrono::duration_cast<Clock::duration>(std::chrono::microseconds(us)));
+}
+
+// pad_tape: rows [[t_us, buttons, stick_x, stick_y, c_x, c_y, l, r], ...] with t_us on the host's
+// steady clock (Python's time.perf_counter_ns(): CLOCK_MONOTONIC on Linux, QueryPerformanceCounter
+// on Windows).
+Result CmdPadTape(const Args& args)
+{
+  const int port = GetPadPort(args);
+  Result r;
+  if (GetBool(args, "clear", false))
+  {
+    PadTapeClear(port);
+    r["now_us"] = picojson::value(static_cast<double>(SteadyUs(Clock::now())));
+    return r;
+  }
+  const picojson::value* rows_v = Find(args, "rows");
+  if (!rows_v)
+  {
+    // The host clock alone (the caller's offset check).
+    r["now_us"] = picojson::value(static_cast<double>(SteadyUs(Clock::now())));
+    return r;
+  }
+  if (!rows_v->is<picojson::array>() || rows_v->get<picojson::array>().empty())
+    Fail("'rows' must be a non-empty list");
+  PadTapeSpec tape;
+  const std::string model = GetString(args, "model", "ideal");
+  if (model == "ideal")
+  {
+    tape.model = PadTapeModel::Ideal;
+  }
+  else if (model == "mapped")
+  {
+    tape.model = PadTapeModel::Mapped;
+  }
+  else if (model == "adapter")
+  {
+    tape.model = PadTapeModel::Adapter;
+    const picojson::value* hz = Find(args, "hz");
+    const double rate = hz && hz->is<double>() ? hz->get<double>() : 125.0;
+    if (!(rate >= 1 && rate <= 8000))
+      Fail("'hz' must be 1-8000");
+    tape.period = std::chrono::duration_cast<Clock::duration>(std::chrono::duration<double>(1.0 / rate));
+    if (const picojson::value* ph = Find(args, "phase_us"))
+    {
+      if (!ph->is<double>())
+        Fail("'phase_us' must be a number");
+      tape.phase = FromSteadyUs(static_cast<s64>(ph->get<double>()));
+    }
+    if (const picojson::value* lat = Find(args, "latency_us"))
+    {
+      if (!lat->is<double>() || lat->get<double>() < 0)
+        Fail("'latency_us' must be a number >= 0");
+      tape.latency = std::chrono::microseconds(static_cast<s64>(lat->get<double>()));
+    }
+    tape.history = static_cast<u32>(GetU64(args, "history", 128));
+    if (tape.history < 1)
+      Fail("'history' must be at least 1");
+  }
+  else
+  {
+    Fail("'model' must be ideal, mapped or adapter");
+  }
+  for (const auto& rv : rows_v->get<picojson::array>())
+  {
+    if (!rv.is<picojson::array>() || rv.get<picojson::array>().size() != 8)
+      Fail("each row must be [t_us, buttons, stick_x, stick_y, c_x, c_y, l, r]");
+    const auto& a = rv.get<picojson::array>();
+    std::array<double, 8> v{};
+    for (size_t i = 0; i < 8; ++i)
+    {
+      if (!a[i].is<double>())
+        Fail("row values must be numbers");
+      v[i] = a[i].get<double>();
+      if (i > 0 && (v[i] < 0 || v[i] > (i == 1 ? 0xFFFF : 255)))
+        Fail("row values out of range");
+    }
+    GCPadStatus pad{};
+    pad.isConnected = true;
+    pad.button = static_cast<u16>(v[1]);
+    pad.stickX = static_cast<u8>(v[2]);
+    pad.stickY = static_cast<u8>(v[3]);
+    pad.substickX = static_cast<u8>(v[4]);
+    pad.substickY = static_cast<u8>(v[5]);
+    pad.triggerLeft = static_cast<u8>(v[6]);
+    pad.triggerRight = static_cast<u8>(v[7]);
+    pad.analogA = (pad.button & PAD_BUTTON_A) ? 0xFF : 0;
+    pad.analogB = (pad.button & PAD_BUTTON_B) ? 0xFF : 0;
+    const Clock::time_point at = FromSteadyUs(static_cast<s64>(v[0]));
+    if (!tape.rows.empty() && at < tape.rows.back().at)
+      Fail("rows must be in time order");
+    tape.rows.push_back({at, pad});
+  }
+  const size_t n = tape.rows.size();
+  if (GetBool(args, "append", false))
+  {
+    if (const auto error = PadTapeAppend(port, std::move(tape.rows)))
+      Fail(*error);
+    r["now_us"] = picojson::value(static_cast<double>(SteadyUs(Clock::now())));
+    r["rows"] = Num(static_cast<u64>(n));
+    return r;
+  }
+  const Clock::time_point took = PadTape(port, std::move(tape));
+  r["now_us"] = picojson::value(static_cast<double>(SteadyUs(took)));
+  r["rows"] = Num(static_cast<u64>(n));
+  return r;
 }
 
 Result CmdPadClear(const Args& args)
@@ -1794,8 +1940,10 @@ Result CmdReplayNav(const Args& args)
   Fail("unknown list button " + action);
 }
 
-// replay_save_clip {start, end}: the overlay's Clip, then "Save as highlight" (ReplayPlayback.h's
-// manual clips): `saved`, and the comm status with its `savedClips`.
+// replay_save_clip {start, end, render?: "music" | "nomusic", star?}: the overlay's Clip, then "Save as
+// highlight" (ReplayPlayback.h's manual clips), or Render (w/ Music) / Render (No Music), which
+// also asks the launcher to render it (`star`: a star's highlight playing, rendered without saving
+// it): `saved`, and the comm status with its `savedClips` (and `renderRequests`).
 Result CmdReplaySaveClip(const Args& args)
 {
   const auto frame = [&](const char* k) {
@@ -1808,9 +1956,30 @@ Result CmdReplaySaveClip(const Args& args)
   const s64 end = frame("end");
   Result r;
   r["can_save"] = picojson::value(Gprb::Replay::Playback::CanSaveClip());
-  r["saved"] = picojson::value(Gprb::Replay::Playback::SaveClip(start, end));
+  const std::string render = GetString(args, "render", std::string());
+  if (!render.empty() && render != "music" && render != "nomusic")
+    Fail("render must be music or nomusic");
+  const bool star = GetBool(args, "star", false);
+  r["saved"] = picojson::value(render.empty() ?
+                                   Gprb::Replay::Playback::SaveClip(start, end) :
+                                   Gprb::Replay::Playback::RequestRender(start, end, render == "music", !star));
   r["comm"] = picojson::value(Gprb::Replay::Playback::Status());
   return r;
+}
+
+// replay_next {action: "cancel" | "clip_mode" | "clip_mode_off"}: Auto play's countdown at a
+// spectated stream's end (ReplayPlayback.h): its X, or the overlay's clip mode on or off (which
+// holds it). Returns the comm status.
+Result CmdReplayNext(const Args& args)
+{
+  const std::string action = GetString(args, "action");
+  if (action == "cancel")
+    Gprb::Replay::Playback::CancelNext();
+  else if (action == "clip_mode" || action == "clip_mode_off")
+    Gprb::Replay::Playback::SetClipMode(action == "clip_mode");
+  else
+    Fail("unknown action " + action);
+  return Gprb::Replay::Playback::Status();
 }
 
 Result CmdReplayStatus(const Args&)
@@ -1838,6 +2007,29 @@ Result CmdReplayStatus(const Args&)
   n["next_replay"] = picojson::value(nav.next_replay);
   n["clips"] = picojson::value(nav.clips);
   r["nav"] = picojson::value(std::move(n));
+  // Auto play's countdown, and the launcher's side of the overlay (<comm>.overlay.json).
+  const auto next = Gprb::Replay::Playback::GetNextCountdown();
+  picojson::object nx;
+  nx["shown"] = picojson::value(next.shown);
+  nx["waiting"] = picojson::value(next.waiting);
+  r["next"] = picojson::value(std::move(nx));
+  const auto ov = Gprb::Replay::Playback::GetOverlayView();
+  picojson::object ovo;
+  ovo["accent"] = picojson::value(ov.has_accent ? fmt::format("#{:02x}{:02x}{:02x}", ov.accent[0], ov.accent[1],
+                                                              ov.accent[2]) :
+                                                  std::string());
+  picojson::array toasts;
+  for (const auto& t : ov.toasts)
+  {
+    picojson::object to;
+    to["label"] = picojson::value(t.label);
+    to["text"] = picojson::value(t.text);
+    to["progress"] = picojson::value(static_cast<double>(t.progress));
+    to["state"] = picojson::value(t.state);
+    toasts.emplace_back(std::move(to));
+  }
+  ovo["toasts"] = picojson::value(std::move(toasts));
+  r["overlay"] = picojson::value(std::move(ovo));
   return r;
 }
 
@@ -2269,9 +2461,12 @@ const std::vector<std::pair<std::string_view, Handler>>& Handlers()
       {"pad_set", CmdPadSet},
       {"pad_clear", CmdPadClear},
       {"pad_counter", CmdPadCounter},
+      {"pad_script_timing", CmdPadScriptTiming},
+      {"pad_tape", CmdPadTape},
       {"pad_script", CmdPadScript},
       {"pad_script_status", CmdPadScriptStatus},
       {"rumble_status", CmdRumbleStatus},
+      {"mmio_write", CmdMmioWrite},
       {"wait_frame", CmdWaitFrame},
       {"pause", CmdPause},
       {"resume", CmdResume},
@@ -2336,6 +2531,7 @@ const std::vector<std::pair<std::string_view, Handler>>& Handlers()
       {"replay_control", CmdReplayControl},
       {"replay_save_clip", CmdReplaySaveClip},
       {"replay_nav", CmdReplayNav},
+      {"replay_next", CmdReplayNext},
       {"replay_recording", CmdReplayRecording},
       {"spectate_status", CmdSpectateStatus},
       {"spectate_config", CmdSpectateConfig},

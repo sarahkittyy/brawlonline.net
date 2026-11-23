@@ -24,9 +24,11 @@ const THROW = 0x3c;
 const CAPTURE_PULLED = 0x3d;
 const CAPTURE_THROWN = 0x42;
 const DAMAGE_FLY = 0x45;
+const DAMAGE_SONG = 0x5d; // asleep
 const DEAD = 0xbd;
 const SPECIAL = 0x115; // a fighter-specific status
 const MOTION_ATTACK_AIR_F = 0x63;
+const MOTION_ATTACK_AIR_B = 0x64;
 const MOTION_LANDING_AIR_F = 0x68;
 const MOTION_THROW_F = 0x73;
 const B = 0x200;
@@ -62,6 +64,7 @@ function timeline(frames: number, players = 2): Timeline {
     kind: make(() => new Uint32Array(frames).fill(6)),
     aerialLandings: make(() => new Float32Array(frames)),
     lCancels: make(() => new Float32Array(frames)),
+    hitRecord: make(() => new Uint32Array(frames)),
     pads: make(() => new Uint8Array(frames * PAD_KEPT)),
     after: null,
   };
@@ -83,11 +86,20 @@ function press(t: Timeline, p: number, f: number, buttons: number, stick: [numbe
   t.pads[p][at + 5] = stick[1] & 0xff;
 }
 
-/** P2's damage goes up by `amount` at frame `f` (and stays). */
-function hit(t: Timeline, victim: number, f: number, amount: number) {
+/** The victim's damage goes up by `amount` at frame `f` (and stays), with no hit recorded. */
+function damageOnly(t: Timeline, victim: number, f: number, amount: number) {
   const d = t.damage[victim];
   for (let g = f; g < t.frames; g++) {
     d[g] += amount;
+  }
+}
+
+/** The victim is hit for `amount` at frame `f`: its damage goes up and its hit record changes. */
+function hit(t: Timeline, victim: number, f: number, amount: number) {
+  damageOnly(t, victim, f, amount);
+  const record = t.hitRecord?.[victim];
+  if (record) {
+    record.fill(record[f] + 1, f);
   }
 }
 
@@ -217,6 +229,60 @@ describe("conversions, kills and moves", () => {
     state(t, 1, 25, 60, DAMAGE_FLY);
     const c = computeStats(t, true).conversions[0];
     expect(c.moves.map((m) => [moves.getMoveName(m.moveId), m.hitCount])).toEqual([["Up B", 2]]);
+  });
+
+  it("keeps the KO's move when the KO'd fighter takes the off-screen bubble's 1% after it (GitHub #58)", () => {
+    // P1 (Lucario) back airs P2 off the side, then begins Neutral B (an aura sphere charge) at once;
+    // P2, off-screen, takes 1% a second there before the blast zone: no hit, nothing recorded.
+    const t = timeline(400);
+    state(t, 0, 20, 40, ATTACK_AIR, MOTION_ATTACK_AIR_B);
+    press(t, 0, 45, B);
+    state(t, 0, 45, 200, SPECIAL);
+    hit(t, 1, 30, 14);
+    state(t, 1, 30, 160, DAMAGE_FLY);
+    damageOnly(t, 1, 90, 1);
+    damageOnly(t, 1, 150, 1);
+    state(t, 1, 160, 170, DEAD);
+    t.x[1].fill(-260, 160, 170);
+    t.stocks[1].fill(3, 161);
+    for (let f = 161; f < 400; f++) {
+      t.damage[1][f] = 0;
+    }
+    const s = computeStats(t, true);
+    const c = s.conversions[0];
+    expect([c.didKill, c.endPercent]).toEqual([true, 16]);
+    expect(c.moves.map((m) => [moves.getMoveName(m.moveId), m.hitCount, m.damage])).toEqual([["Back Air", 1, 14]]);
+    // A file without the hit record: every rise is a hit, by the newest move (what #58 saw).
+    const old = computeStats({ ...t, hitRecord: null }, true).conversions[0];
+    expect(old.moves.map((m) => moves.getMoveName(m.moveId))).toEqual(["Back Air", "Neutral B"]);
+  });
+
+  it("counts a rise with no hit record as the move still hitting, a throw, or a hit that changes the state", () => {
+    const t = timeline(300);
+    // A multi-hit's repeat (no new record) while its move is still on: the same move.
+    press(t, 0, 10, B, [0, 127]);
+    state(t, 0, 10, 40, SPECIAL);
+    hit(t, 1, 20, 4);
+    damageOnly(t, 1, 24, 2);
+    state(t, 1, 20, 50, DAMAGE_FLY);
+    // A throw (P2 held the frame before) writes no record either.
+    state(t, 0, 100, 110, CATCH_WAIT);
+    state(t, 0, 110, 130, THROW, MOTION_THROW_F);
+    state(t, 1, 100, 110, CAPTURE_PULLED);
+    state(t, 1, 110, 120, CAPTURE_THROWN);
+    state(t, 1, 120, 150, DAMAGE_FLY);
+    damageOnly(t, 1, 120, 9);
+    // A hit on a sleeping fighter wrote none: it sends P2 from asleep into hitstun.
+    state(t, 0, 200, 220, ATTACK_AIR, MOTION_ATTACK_AIR_F);
+    state(t, 1, 190, 210, DAMAGE_SONG);
+    state(t, 1, 210, 250, DAMAGE_FLY);
+    damageOnly(t, 1, 210, 13);
+    const s = computeStats(t, true);
+    expect(s.conversions.map((c) => c.moves.map((m) => [moves.getMoveName(m.moveId), m.hitCount]))).toEqual([
+      [["Up B", 2]],
+      [["Forward Throw", 1]],
+      [["Forward Air", 1]],
+    ]);
   });
 
   it("names a throw by its motion", () => {

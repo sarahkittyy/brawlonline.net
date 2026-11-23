@@ -41,6 +41,10 @@
 //
 // The Replays tab's replays (`normal` / `queue`) may have "nav" too, with "clips": false: the
 // overlay then shows "12/340  << >>" (the replay list's), asked of the launcher as above.
+// They may have "marks" too (any replay played, not spectated: its highlights, hotkey clips and
+// manual clips), each with an optional "path" (only that replay of the queue; none: every one);
+// the launcher writes them once it has them, the same commandId again. A star plays its clip in
+// the running match (the session's own) and pauses at its end; < > go from star to star.
 //
 // Ours, `render` (docs/design/highlights.md section 5): highlights as above, written to a video
 // instead of watched: {"mode": "render", "output": "<path>.mp4", "height": 720, "queue": [...]}
@@ -56,12 +60,29 @@
 // "Save as highlight", keeps the replay playing's frames from one handle to the other (SaveClip).
 // The status lists every clip saved in this Dolphin's run, "savedClips": [{"path", "startFrame",
 // "endFrame"}, ...] (path: the replay armed, a spectated game's file too); the launcher keeps each
-// once, as a Manual Clip.
+// once, as a Manual Clip. Clip mode's "Render (w/ Music)" / "Render (No Music)" saves the clip so
+// and asks the launcher to render it to video: "renderRequests": [{"seq", "path", "startFrame",
+// "endFrame", "music", "clip"}, ...] (every one of this run, seq from 1; the launcher renders each
+// once). A star's highlight playing has Render too, not saved ("clip": false).
+//
+// The launcher's side of the overlay, <comm.json>.overlay.json (read every poll; none: nothing):
+//   {"accent": "#rrggbb" (the launcher's colour: the seek bar's played part),
+//    "toasts": [{"id", "path", "startFrame", "endFrame", "label", "text", "progress" (0..1),
+//    "state": "queued" | "rendering" | "done" | "error", "toast", "folder"}, ...] (the renders
+//    asked for here: at the top right while `toast`, and on the row of a star of them; a done one's
+//    folder button says "showRender": {"seq", "id"} in the status)}
+//
+// Auto play (spectating, `"autoPlay": true` in a mirror request): at the stream's end the overlay
+// counts down "Next game in N s." (an X stays, clip mode holds it), then the state is "next" (the
+// launcher plays the next live game, or says it waits for one in `banner`); X makes it "ended"
+// for good. The status adds "nextIn" (seconds) while it counts.
 
 #pragma once
 
+#include <chrono>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include <picojson.h>
 
@@ -91,6 +112,9 @@ struct NavView
   bool prev_replay = false;
   bool next_replay = false;
   bool clips = true;
+  // The replay armed (its path as the request gave it; empty: none), for the overlay to find its
+  // renders in the launcher's overlay file.
+  std::string armed_path;
 };
 NavView GetNav();
 enum class NavAction
@@ -105,6 +129,54 @@ void RequestNav(NavAction action, s64 frame);
 // Saves frames `start` to `end` of the replay armed (any thread: the overlay's); false when
 // CanSaveClip is not, or the session's replay is no longer the armed one.
 bool SaveClip(s64 start, s64 end);
+// Asks the launcher to render frames `start` to `end` of the replay armed (status
+// "renderRequests"): clip mode's (`save`: saved as SaveClip does first, a Manual Clip), or a
+// star's highlight playing (not saved: it is one already).
+// `label`: what the launcher's toast calls it ("Clip 2:13 - 2:20 (7 s)").
+bool RequestRender(s64 start, s64 end, bool music, bool save = true, const std::string& label = {});
+// A finished render's folder button (the launcher's overlay file's `id`): status "showRender"
+// {"seq", "id"}, the launcher opens the file explorer at the video.
+void ShowRenderFolder(const std::string& id);
+
+// The launcher's side of the overlay (<comm.json>.overlay.json), as last read. Any thread.
+// A render asked for from the game, as the launcher has it: which (`id`, the replay and frames),
+// what to say, whether it still shows at the top right (`toast`), and whether its video can be
+// shown in its folder (`folder`: done).
+struct OverlayToast
+{
+  std::string id;
+  std::string path;
+  s64 start = -1;
+  s64 end = -1;
+  std::string label;
+  std::string text;
+  float progress = 0;
+  std::string state;
+  bool toast = true;
+  bool folder = false;
+};
+struct OverlayView
+{
+  bool has_accent = false;
+  u8 accent[3] = {0, 0, 0};
+  std::vector<OverlayToast> toasts;
+};
+OverlayView GetOverlayView();
+
+// Auto play's countdown at a spectated stream's end: shown, until when (none: it ran out and the
+// launcher is getting the next game). Any thread.
+struct NextCountdown
+{
+  bool shown = false;
+  bool waiting = false;
+  std::chrono::steady_clock::time_point deadline{};
+  double total_seconds = 5;
+};
+NextCountdown GetNextCountdown();
+// The countdown's X: stay on this game (any thread but the GPU thread: it takes the playback lock).
+void CancelNext();
+// The overlay's clip mode, which holds the countdown (any thread, every frame).
+void SetClipMode(bool on);
 // Stops following the comm file (emulation shutdown).
 void Shutdown();
 }  // namespace Gprb::Replay::Playback

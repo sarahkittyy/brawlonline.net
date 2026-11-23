@@ -77,12 +77,17 @@ describe("MultiAccountService start", () => {
     me.resolve(record);
     await init;
     expect(service.getActiveUser()?.displayName).toBe("Server Name");
+    // The start's user data takes this record instead of asking for it again, once.
+    expect(service.takeRestoredUser()).toEqual(record);
+    expect(service.takeRestoredUser()).toBeNull();
   });
 
   it("starts with the stored details when the server doesn't answer, then takes the record", async () => {
     const service = await initPastTheWait();
     expect(service.getActiveUser()?.displayName).toBe("Stored Name");
     expect(service.getActiveUser()?.playKey).toBeNull();
+    // No server record to reuse: the start asks again.
+    expect(service.takeRestoredUser()).toBeNull();
 
     const seen: (AccountsMe | null)[] = [];
     service.onActiveUserChange((user) => seen.push(user));

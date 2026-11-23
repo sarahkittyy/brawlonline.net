@@ -160,6 +160,26 @@
   display: none;
 }
 
+/* Someone else's profile: Invite to game and Message on a row of their own, then Ignore user (quiet, as the player's
+   own account links) and the web link on the row under them. */
+.actions:has(.peerButtons) {
+  display: contents;
+}
+
+.peerButtons {
+  flex-basis: 100%;
+  display: flex;
+  gap: 8px;
+}
+
+.peerButtons > * {
+  flex: 1;
+}
+
+.footer:has(.peerButtons) .accountLink {
+  margin-left: -6px;
+}
+
 .webLink {
   display: flex;
   align-items: center;
@@ -583,27 +603,32 @@
   --profile-glow: 255 205 70;
 
   color: rgb(var(--profile-glow)) !important;
-  animation: pencilGlow 1.8s ease-in-out infinite;
+  box-shadow: 0 0 0 2px rgb(var(--profile-glow) / 85%);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .pencilGlow {
+    animation: pencilGlow 3.6s ease-in-out;
+  }
 }
 
 @keyframes pencilGlow {
   0%,
-  100% {
+  50% {
     box-shadow:
       0 0 0 1px rgb(var(--profile-glow) / 55%),
       0 0 4px 1px rgb(var(--profile-glow) / 20%);
   }
 
-  50% {
+  25%,
+  75% {
     box-shadow:
       0 0 0 2px rgb(var(--profile-glow) / 90%),
       0 0 12px 3px rgb(var(--profile-glow) / 45%);
   }
-}
 
-@media (prefers-reduced-motion: reduce) {
-  .pencilGlow {
-    animation: none;
+  /* Two pulses, then it eases into the resting style, so it does not jump there when it ends. */
+  100% {
     box-shadow: 0 0 0 2px rgb(var(--profile-glow) / 85%);
   }
 }

@@ -86,10 +86,12 @@ namespace Potato {
         {"grCrayonStatic", "StgCrayon00F"},
         {"grCrayonKumom", "StgCrayon00K"},
         {"grCrayonSeason", "StgCrayon00N"},
-        // Fountain of Dreams: the scenery around the stage, the water's reflection. Not its Sky:
-        // without it the stage's mint clear colour shows as a flat void (2026-11-01).
+        // Fountain of Dreams: the aurora and rings behind the stage, the water's reflection. Not
+        // its Sky: without it the stage's mint clear colour shows as a flat void (2026-11-01).
+        // Not MainRing either: it is the stage's body (the grass rim, the walls under it, the
+        // fountain, towers and trees), and without it the side platforms show where they sink
+        // into the stage (Sarah's board, 2026-11-21).
         {"grIzumiMainBg", "BG"},
-        {"grIzumiMainBg", "MainRing"},
         {"grIzumiMainBg", "StgDXFountain_Reflection_V3"},
         // Smashville: the town and its lit windows, the sky, the passers-by.
         {"grVillageMainBg", "yStgVillageChikeAll"},

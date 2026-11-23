@@ -45,4 +45,10 @@ std::optional<GCPadStatus> Origin(int chan);
 // Callable from any thread. Returns 0 when the adapter is not detected.
 double GetCurrentPollRate();
 
+// Called on the read thread for every payload, once for each port with a controller (not on a new
+// connection's first payload, whose state is the origin): the port's state and the host time the
+// payload arrived. nullptr: none. The hook may still be running for a payload when this returns.
+using ReportHook = void (*)(int chan, const GCPadStatus& status, Clock::time_point t);
+void SetReportHook(ReportHook hook);
+
 }  // namespace GCAdapter

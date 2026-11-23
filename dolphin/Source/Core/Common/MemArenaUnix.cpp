@@ -142,6 +142,21 @@ LazyMemoryRegion::~LazyMemoryRegion()
 #define MAP_NORESERVE 0
 #endif
 
+// A lazy region is mostly pages never touched, but a Linux core dump writes all of a private
+// mapping that has been written to, the untouched pages as zeros when the dump goes to a pipe
+// (systemd-coredump, apport). The JIT's fast block map is 64 GiB, so a crashed Dolphin's core was
+// ~68 GB: it streamed zeros for minutes while the launcher waited for it to exit and the core
+// service wrote them to disk (bug report #321: a render that crashed "seemed to be printing an
+// infinite size broken file to my drive"). Its contents (a cache of block pointers, or a cached
+// disc) are no use in a core.
+static void ExcludeFromCoreDumps([[maybe_unused]] void* memory, [[maybe_unused]] size_t size)
+{
+#ifdef MADV_DONTDUMP
+  if (madvise(memory, size, MADV_DONTDUMP) != 0)
+    WARN_LOG_FMT(MEMMAP, "madvise(MADV_DONTDUMP) failed: {}", LastStrerrorString());
+#endif
+}
+
 void* LazyMemoryRegion::Create(size_t size)
 {
   ASSERT(!m_memory);
@@ -157,6 +172,8 @@ void* LazyMemoryRegion::Create(size_t size)
     return nullptr;
   }
 
+  ExcludeFromCoreDumps(memory, size);
+
   m_memory = memory;
   m_size = size;
 
@@ -170,6 +187,8 @@ void LazyMemoryRegion::Clear()
   void* new_memory = mmap(m_memory, m_size, PROT_READ | PROT_WRITE,
                           MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE | MAP_FIXED, -1, 0);
   ASSERT(new_memory == m_memory);
+  // The new mapping does not inherit the old one's MADV_DONTDUMP.
+  ExcludeFromCoreDumps(m_memory, m_size);
 }
 
 void LazyMemoryRegion::Release()

@@ -45,12 +45,52 @@ void PadClear(int port);
 // earlier time: PadOverrideAt). A time base with no jitter for timing tests. Until pad_set or
 // pad_clear.
 void PadCounter(int port, double rate_hz, std::vector<u16> buttons);
+// pad_tape: the port's state as a function of host time, for input timing tests
+// (harness/tools/input_fidelity.py). Each row takes effect at its host time and lasts until the
+// next; the port is read whenever the game reads it, also for an earlier time (PadOverrideAt), as
+// the device model allows:
+enum class PadTapeModel
+{
+  Ideal,    // the state at any time, past ones included (what every harness pad does)
+  Mapped,   // a pad mapped in Dolphin (SDL, XInput, a keyboard): read now, no past
+  Adapter,  // the Wii U adapter: the last report by then (one per period from phase, each latency
+            // after its controller read), and its last `history` reports for past instants
+            // (GCAdapter::InputAt keeps 128: 128 ms at 1000 Hz, 1 s at the stock 125 Hz)
+};
+struct PadTapeRow
+{
+  Clock::time_point at;
+  GCPadStatus pad;
+};
+struct PadTapeSpec
+{
+  std::vector<PadTapeRow> rows;  // in time order
+  PadTapeModel model = PadTapeModel::Ideal;
+  Clock::duration period{};
+  Clock::time_point phase{};
+  Clock::duration latency{};
+  u32 history = 128;  // Adapter: reports kept for past instants
+  Clock::time_point submitted{};  // set by PadTape
+};
+// Replaces the port's override (pad_set, pad_counter, a script) until pad_set, pad_script,
+// pad_counter, pad_clear or PadTapeClear. Returns the host time it took effect.
+Clock::time_point PadTape(int port, PadTapeSpec tape);
+// More rows at the tape's end (none before its last row); the model stays. An error message when
+// the port has no tape.
+std::optional<std::string> PadTapeAppend(int port, std::vector<PadTapeRow> rows);
+// Ends the tape; the port keeps presenting the tape's current state (as pad_set).
+void PadTapeClear(int port);
 struct ScriptTiming
 {
   u64 starts_at;
   u64 ends_at;
 };
 // start: nullopt means "next poll". Returns an error message on failure.
+// pad_script_timing: scripts submitted from now on step with the host clock (one entry a field,
+// 59.94 Hz) from a moment a random fraction of a field after they are submitted, instead of with
+// the game's reads, as a player's presses fall anywhere between two reads (`timed`); `seed` seeds
+// those fractions.
+void SetScriptTiming(bool timed, u64 seed);
 std::optional<std::string> PadScript(int port, std::vector<GCPadStatus> timeline,
                                      std::optional<u64> start, ScriptTiming* timing);
 struct ScriptStatus

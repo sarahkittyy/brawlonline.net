@@ -22,10 +22,12 @@ if(_M_X86_64)
   add_dolphin_test(PowerPCTest
     PowerPC/DivUtilsTest.cpp
     PowerPC/PageTableHostMappingTest.cpp
+    PowerPC/Jit64Common/BackPatchTableTest.cpp
     PowerPC/Jit64Common/ConvertDoubleToSingle.cpp
     PowerPC/Jit64Common/Fres.cpp
     PowerPC/Jit64Common/FPRF.cpp
     PowerPC/Jit64Common/Frsqrte.cpp
+    PowerPC/Jit64Common/MaddExactProduct.cpp
     PowerPC/Jit64Common/MaddTieFastPath.cpp
     PowerPC/Jit64Common/PsMaddEft.cpp
   )
@@ -64,6 +66,14 @@ target_include_directories(OnlineSecurityTest PRIVATE
 )
 target_compile_definitions(OnlineSecurityTest PRIVATE GEKKONET_STATIC GEKKONET_NO_ASIO)
 
+# Input suggestions in GekkoNet's input buffer (Core/Rollback/InputSuggest).
+add_dolphin_test(InputSuggestTest Rollback/InputSuggestTest.cpp)
+target_include_directories(InputSuggestTest PRIVATE
+  ${CMAKE_SOURCE_DIR}/Source/Core/Core/Brawlback/include/gekkonet/GekkoLib/include
+  ${CMAKE_SOURCE_DIR}/Source/Core/Core/Brawlback/include/gekkonet/GekkoLib/include/private
+)
+target_compile_definitions(InputSuggestTest PRIVATE GEKKONET_STATIC GEKKONET_NO_ASIO)
+
 # The SD card of a whole-machine session (Core/Rollback/MachineSDCard): the throwaway layer and its
 # rollback, a joiner on the session's card, and hostile manifests, requests and chunks.
 add_dolphin_test(MachineSDCardTest MachineSDCardTest.cpp)
@@ -85,6 +95,9 @@ add_dolphin_test(WrittenPagesTest Rollback/WrittenPagesTest.cpp)
 # What a whole-machine session's JIT compiled each block from, journaled for rollbacks
 # (PowerPC::JitCodeRecord, Core/PowerPC/PPCCache.h).
 add_dolphin_test(JitCodeRecordTest Rollback/JitCodeRecordTest.cpp)
+# The present hold's offset from the recent frames' arrivals, stalls left out (Core/Rollback/
+# PresentStats.h, bug report #314).
+add_dolphin_test(PresentHoldTest Rollback/PresentHoldTest.cpp)
 # The rollback job pool (Core/Rollback/job.h) stopped and started again (GitHub issue #3).
 add_dolphin_test(JobPoolTest Rollback/JobPoolTest.cpp)
 # A room's codes as the launcher gives them (Machine::ParseCodes, docs/design/room-codes.md).
@@ -101,6 +114,8 @@ add_dolphin_test(GameAliveTest Online/GameAliveTest.cpp)
 add_dolphin_test(RoomMessagesTest Online/RoomMessagesTest.cpp)
 # Watching the room's game: the watch channel's packets into a live replay (Core/Online/RoomWatch).
 add_dolphin_test(RoomWatchTest Online/RoomWatchTest.cpp)
+# A match's sockets mark what they send as voice, checked on the wire (Core/Online/MatchQoS).
+add_dolphin_test(MatchQoSTest Online/MatchQoSTest.cpp)
 # Match rules: get-ticket-resp's `rules`, checked before they reach the game (Core/Online/MatchRules).
 add_dolphin_test(MatchRulesTest Online/MatchRulesTest.cpp)
 add_dolphin_test(SpecialAssetsTest Online/SpecialAssetsTest.cpp)

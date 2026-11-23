@@ -40,6 +40,7 @@
 #include "Core/Movie.h"
 #include "Core/NetPlayProto.h"
 #include "Core/Rollback/MachineSession.h"
+#include "Core/Rollback/PresentStats.h"
 #include "Core/System.h"
 #include "Core/WiiRoot.h"
 
@@ -95,6 +96,9 @@ bool BootCore(Core::System& system, std::unique_ptr<BootParameters> boot,
     // A whole-machine session (Brawl Mods): the settings that change what the game computes are
     // the session's, through the same layer as Dolphin's netplay.
     const NetPlay::NetSettings settings = Machine::MakeNetSettings();
+    // The game's EFB copies go to guest RAM too if it needs them there (bug report #328).
+    Rollback::PresentStats::SetSessionEFBCopiesToRAM(
+        Rollback::PresentStats::GameNeedsEFBCopiesInRAM(StartUp.GetGameID()));
     // Real Wii Remotes play through Dolphin's controller interface ("Connect Wii Remotes for
     // Emulated Controllers"): the session reads an emulated Wii Remote they drive and sends its
     // state, as for any other controller. Set before the layer makes every Wii Remote emulated, so

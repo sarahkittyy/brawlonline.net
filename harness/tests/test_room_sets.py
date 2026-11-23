@@ -43,6 +43,10 @@ def setup_view(g: Game) -> dict[str, Any]:
     return g.c.online_status()["ranked"]["setup"]["view"]
 
 
+def setup_starters(g: Game) -> list[int]:
+    return [int(k) for k in g.c.online_status()["ranked"]["setup"]["starters"]]
+
+
 def rooms(g: Game) -> dict[str, Any]:
     return g.c.call("rooms_status")
 
@@ -55,9 +59,10 @@ def strike(g: Game, kind: int) -> None:
     B.sss_pick_stage(g.c, kind, 0, button="X")
 
 
-def play_steps(players: list[Game], game: int, pick_held: tuple[str, ...] = ()) -> None:
+def play_steps(players: list[Game], game: int, pick_held: tuple[str, ...] = (), random_pick: bool = False) -> None:
     """Whoever's turn it is strikes or bans the first selectable stage, or picks one (holding
-    `pick_held`, P+'s alternate stages), until the stage is decided (both machines see every step)."""
+    `pick_held`, P+'s alternate stages; with `random_pick` A on RANDOM), until the stage is decided
+    (both machines see every step)."""
     for _ in range(12):
         views = {g.name: setup_view(g) for g in players}
         mover = next((g for g in players if views[g.name]["active"] and views[g.name]["my_turn"] and
@@ -70,7 +75,10 @@ def play_steps(players: list[Game], game: int, pick_held: tuple[str, ...] = ()) 
         v = views[mover.name]
         assert v["game"] >= 1 and v["selectable"], v
         kind = v["selectable"][0]
-        if v["type"] == 2:
+        if v["type"] == 2 and random_pick:
+            B.sss_hover_item(mover.c, B.SSS_ITEM_RANDOM)
+            mover.steps("tap A 8")
+        elif v["type"] == 2:
             B.sss_pick_stage(mover.c, kind, 0, held=pick_held)
         else:
             strike(mover, kind)
@@ -163,10 +171,12 @@ def test_room_bo3_set(backend: OnlineBackend, dolphin: Callable[..., DolphinInst
     online_set.wait(lambda: all(online_set.scene(g.c) == SSS for g in players), 120, "game 1: both on the stage select")
     for g in players:
         v = until_setup(g, lambda v: v["active"] and v["type"] == 1 and sorted(v["selectable"]) == STARTERS, "the starters")
-        # Not Ranked's page of the set's stages (stage_legal.cpp): a room's ruleset can have any
-        # stages, so P+'s own page with the rest struck (the user's, 2026-10-16).
-        assert _page(g) == pplus_page, (g.name, _page(g), _debug(g))
-        assert _debug(g)["outcome"] == 6 and _debug(g)["set"] == 0, _debug(g)
+        # The set's stages on one page, as Ranked's (stage_legal.cpp; Sarah's board, 2026-11-22: P+'s
+        # page could not be turned in a set): its counterpicks (the top row), then its starters.
+        page = _page(g)
+        assert page != pplus_page and len(page) == len(set(page)) <= 33, (g.name, page, _debug(g))
+        assert sorted(page[-len(STARTERS):]) == sorted(setup_starters(g)) == STARTERS, (g.name, page, _debug(g))
+        assert _debug(g)["outcome"] == 0 and _debug(g)["set"] >= 1, _debug(g)
     a.shot("03-g1-strikes")
     play_steps(players, 1)
     games = [online_set.play_game(players, 1)]
@@ -187,7 +197,11 @@ def test_room_bo3_set(backend: OnlineBackend, dolphin: Callable[..., DolphinInst
                         f"game {game}: both on the stage select")
         v = until_setup(a, lambda v: v["game"] == game and v["type"] in (1, 2), "the bans")
         a.shot(f"04-g{game}-bans")
-        play_steps(players, game)
+        # Game 2's pick with A on RANDOM: a random selectable stage, sent as the pick (P+'s own
+        # random left the stage select without one, and only the pick's timer decided the stage).
+        play_steps(players, game, random_pick=game == 2)
+        for g in players:   # nothing decided by a step's timer
+            assert g.c.online_status()["ranked"]["setup"]["auto_actions"] == 0, (g.name, setup_view(g))
         games.append(online_set.play_game(players, game))
 
     for rep in games:
@@ -206,6 +220,64 @@ def test_room_bo3_set(backend: OnlineBackend, dolphin: Callable[..., DolphinInst
         g.steps("wait 60")
         g.shot("05-set-over")
     _all(lambda: a.steps("wait 1"), lambda: b.steps("wait 1"))
+
+
+def turn_page(g: Game, page: int) -> None:
+    """P+'s page button (A on it) until the stage select shows P+'s `page`."""
+    for _ in range(6):
+        if g.c.read_mem(B.SSS_CURRENT_PAGE, 1)[0] == page:
+            return
+        B.sss_hover_item(g.c, B.SSS_ITEM_PAGE)
+        B.tap(g.c, 0, ["A"], hold=3, release=3)
+        g.steps("wait 20")
+    raise AssertionError(f"{g.name}: P+'s page {page} not shown: {g.c.read_mem(B.SSS_CURRENT_PAGE, 1)[0]}")
+
+
+@pytest.mark.slow
+def test_room_set_with_more_stages_than_a_page(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
+                                               gpu_backend: str) -> None:
+    """A ruleset with every stage of P+'s pages (more than one page lays out, stage_legal.cpp
+    SET_PAGE_MAX): P+'s own pages with the rest struck, and its page button turns them in every
+    step (Sarah's board, 2026-11-22: in a set the page could not be turned, so page 2 / 3 stages
+    could be neither struck nor picked). The starters are all on P+'s page 2: the player whose
+    turn it is not turns to it during the other's strike, the striker turns to it and strikes there,
+    and game 1's strikes end on a page 2 stage."""
+    pages = B.read_stage_pages(None)
+    starters = pages[1][:5]
+    counterpicks = [k for k in pages[0] + pages[1] + pages[2] if k not in starters]
+    ruleset = dict(BO3, name="Big Stage List", stages={"starters": starters, "counterpicks": counterpicks})
+    a, b, _code = bo3_room(backend, dolphin, gpu_backend, "bigpage", ruleset=ruleset)
+    live = B.read_stage_pages(a.c.read_mem)
+    assert all(k in live[1] for k in starters), (starters, live)
+
+    a.steps("tap START 8", "wait 40")
+    _wait(lambda: ppom.read_room(b.c, ppom.find_block(b.c))["slots"][0]["bits"] & ppom.SLOT_READY, 20, "B sees A ready")
+    b.steps("tap START 8", "wait 10")
+    players = [a, b]
+    online_set.wait(lambda: all(online_set.scene(g.c) == SSS for g in players), 120, "game 1: both on the stage select")
+    for g in players:
+        until_setup(g, lambda v: v["active"] and v["type"] == 1 and sorted(v["selectable"]) == sorted(starters),
+                    "the starters")
+        assert _page(g) == live[0], (g.name, _page(g), _debug(g))
+        # 3: Dolphin sends no page over 39 stages (GS_MAX_PAGE); 7: 34-39, more than one page lays out.
+        assert _debug(g)["outcome"] in (3, 7) and _debug(g)["set"] == 0, _debug(g)
+    mover = _wait(lambda: next((g for g in players if setup_view(g)["my_turn"]), None), 30, "the first striker")
+    other = b if mover is a else a
+    # Not this player's turn: the page still turns.
+    turn_page(other, 1)
+    other.shot("03-page-2-not-my-turn")
+    turn_page(mover, 1)
+    struck = starters[0]
+    strike(mover, struck)
+    for g in players:
+        until_setup(g, lambda v: struck not in v["selectable"], "the page 2 strike seen")
+    mover.shot("04-page-2-strike")
+    play_steps(players, 1)
+    online_set.wait(lambda: all(online_set.gstatus(g.c)["phase"] == "running" for g in players), 240,
+                    "game 1 running on both")
+    for g in players:
+        kind = B.read_match_setup(g.c.read_mem).stage_kind
+        assert kind in starters and kind != struck, (g.name, kind, starters)
 
 
 QUIT_NOTICE = 0x2000000   # debug scratch[10]: "<name> quit" on the CSS, the quitter's port in bits 26-27

@@ -97,6 +97,7 @@ import {
   buildRenderDolphinArgs,
   LOGGING_CONFIG_ARGS,
 } from "./netplay_args";
+import { findPlaybackTextures } from "./playback_textures";
 import { closeIfIdle } from "./quit_if_idle";
 import type { RenderDolphin, RenderKey } from "./render_queue";
 import { RenderQueue } from "./render_queue";
@@ -108,6 +109,8 @@ import type {
   DolphinEvent,
   DolphinSetupPhase,
   NetplayLaunchResult,
+  PlaybackMark,
+  PlaybackOverlayFile,
   ReplayCommunication,
   ReplayPlaybackStatus,
   ReplayPlayChoice,
@@ -144,6 +147,13 @@ export class DolphinManager {
   private playbackReleases = new Map<string, string | null>();
   /** A render Dolphin's music and video height (set on its command line). */
   private renderSettings = new Map<string, string>();
+  /** The seek bar's launcher side (`<comm>.overlay.json`): the renderer's (use_playback_overlay.ts), for every playback Dolphin. */
+  private playbackOverlay: PlaybackOverlayFile | null = null;
+  /**
+   * A replay's stars on the seek bar (its highlights, hotkey clips and manual clips: replays/replay_marks.ts), given
+   * to every replay played (`normal` / `queue`) once they are known; none without it.
+   */
+  replayMarks: ((paths: string[]) => Promise<PlaybackMark[]>) | null = null;
   private pplusVersionStore: PPlusVersions | null = null;
   private netplayDolphinInstance: DolphinInstance | null = null;
   private emissary: (() => EmissaryRecomp) | null = null;
@@ -523,6 +533,32 @@ export class DolphinManager {
     return true;
   }
 
+  /** The seek bar's launcher side for the playback Dolphins (also each one started later). */
+  async setPlaybackOverlay(overlay: PlaybackOverlayFile | null): Promise<void> {
+    this.playbackOverlay = overlay;
+    await Promise.all(
+      [...this.playbackDolphinInstances.entries()]
+        .filter(([id]) => id !== "render" && id !== "configure")
+        .map(([, instance]) => instance.writeOverlay(overlay).catch((err) => log.warn(`overlay: ${err}`))),
+    );
+  }
+
+  /** A replay request's stars, once they are known: written to it again (the same commandId). */
+  private async addReplayMarks(instance: PlaybackDolphinInstance, comm: ReplayCommunication): Promise<void> {
+    const paths = comm.mode === "normal" && comm.replay ? [comm.replay] : (comm.queue ?? []).map((q) => q.path);
+    if (!this.replayMarks || !comm.commandId || !paths.length) {
+      return;
+    }
+    try {
+      const marks = await this.replayMarks(paths);
+      if (marks.length && !(await instance.update(comm.commandId, { marks }))) {
+        log.info("replay marks: another request plays now");
+      }
+    } catch (err) {
+      log.warn(`replay marks: ${err instanceof Error ? err.message : err}`);
+    }
+  }
+
   /** Closes the playback Dolphin `id`. */
   closePlaybackDolphin(id = "playback"): void {
     this.playbackDolphinInstances.get(id)?.stop();
@@ -649,10 +685,19 @@ export class DolphinManager {
           : this._installOnlinePlugin(netplayInstallation, true, inUse, onProgress),
       );
       this.playbackReleases.set(id, release);
+      // The texture pack Play shows (playback_textures.ts): replays, highlights, spectating, renders.
+      const textures = await findPlaybackTextures(
+        netplayInstallation.userFolder,
+        playbackInstallation.userFolder,
+      ).catch((err) => {
+        log.warn(`Could not look for the netplay Dolphin's custom textures: ${err}`);
+        return null;
+      });
       const params = buildPlaybackDolphinArgs({
         userArgs: playbackInstallation.userArgs(),
         sdCardImage,
         bootFile: netplayInstallation.netplayLauncherDol,
+        textures,
         testMode: readTestMode(process.env, app.isPackaged),
       });
       if (render) {
@@ -711,7 +756,14 @@ export class DolphinManager {
     }
 
     try {
+      if (!render && id !== "configure") {
+        await playbackInstance.writeOverlay(this.playbackOverlay).catch((err) => log.warn(`overlay: ${err}`));
+      }
       await playbackInstance.play(replayComm);
+      // A replay (not a list's highlight, a spectated game or a render): its stars as soon as they are known.
+      if (!render && (replayComm.mode === "queue" || replayComm.mode === "normal") && !replayComm.marks) {
+        void this.addReplayMarks(playbackInstance, replayComm);
+      }
     } catch (err) {
       if (err instanceof MacOsRosettaRequiredError) {
         this.eventSubject.next({
@@ -1630,6 +1682,8 @@ export class DolphinManager {
         },
         // Once per launcher update: kept in the warn-level main.log a bug report sends.
         log: (message) => log.warn(message),
+        // A packaged launcher's own bundle carries its version; a bundle given by hand may not.
+        launcherVersion: app.isPackaged && !process.env.PPO_BUNDLED_DOLPHIN?.trim() ? app.getVersion() : undefined,
       })
         .then(({ action, manifest }) => {
           log.info(`Bundled Dolphin ${manifest.version}: ${action}`);

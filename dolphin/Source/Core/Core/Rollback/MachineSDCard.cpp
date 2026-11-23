@@ -189,10 +189,23 @@ std::optional<FatVolume> ParseBootSector(const std::array<u8, 512>& bs, u64 volu
   return v;
 }
 
-std::string HashCachePath(const std::string& image_path)
+std::string CacheFileFor(std::string_view key)
 {
-  const XXH64_hash_t key = XXH3_64bits(image_path.data(), image_path.size());
-  return fmt::format("{}MachineSD/{:016x}.hashes", File::GetUserPath(D_CACHE_IDX), key);
+  const XXH64_hash_t hash = XXH3_64bits(key.data(), key.size());
+  return fmt::format("{}MachineSD/{:016x}.hashes", File::GetUserPath(D_CACHE_IDX), hash);
+}
+
+// One cache file per image, whichever separators its path is written with: on Windows a room's
+// Dolphin has the card's path with '/' (File::SetUserPath) and the launcher gives DolphinTool
+// sdhash the same path with '\'. Keyed by the path as given, the room's Dolphin never found the
+// hashes the launcher's check had just cached and read the whole card again at every Host (bug
+// report #315: Cobalt's and REX's 8 GB cards, the window closed before the read ended).
+std::string HashCachePath(std::string image_path)
+{
+#ifdef _WIN32
+  std::ranges::replace(image_path, '\\', '/');
+#endif
+  return CacheFileFor(image_path);
 }
 
 std::optional<s64> ModificationTime(const std::string& path)
@@ -207,6 +220,15 @@ std::optional<s64> ModificationTime(const std::string& path)
 std::optional<ImageHashes> LoadHashCache(const std::string& image_path, u64 size, s64 mtime)
 {
   File::IOFile file(HashCachePath(image_path), "rb");
+#ifdef _WIN32
+  if (!file)
+  {
+    // Cached before the key ignored separators: DolphinTool wrote it under the '\' path.
+    std::string legacy = image_path;
+    std::ranges::replace(legacy, '/', '\\');
+    file.Open(CacheFileFor(legacy), "rb");
+  }
+#endif
   if (!file)
     return std::nullopt;
 
@@ -1632,7 +1654,8 @@ void CardServer::ThreadFunc()
 
 SessionCard::SessionCard(Mode mode, const std::string& image_path,
                          std::shared_ptr<const Manifest> manifest)
-    : m_mode(mode), m_image_path(image_path), m_manifest(std::move(manifest))
+    : m_mode(mode), m_image_path(image_path), m_manifest(std::move(manifest)),
+      m_image(image_path, /*read_only=*/true)
 {
   m_clock = [] { return Core::System::GetInstance().GetCoreTiming().GetTicks(); };
   m_history_ticks = u64{Core::System::GetInstance().GetSystemTimers().GetTicksPerSecond()} * 10;
@@ -1641,8 +1664,7 @@ SessionCard::SessionCard(Mode mode, const std::string& image_path,
 std::shared_ptr<SessionCard> SessionCard::CreateOwnCard(const std::string& image_path)
 {
   std::shared_ptr<SessionCard> card(new SessionCard(Mode::OwnCard, image_path, nullptr));
-  card->m_image.Open(image_path, "rb", File::SharedAccess::ReadWrite);
-  card->m_size = card->m_image ? card->m_image.GetSize() : 0;
+  card->m_size = card->m_image.GetSize();
   if (card->m_size > MAX_CARD_SIZE)
     card->m_size = 0;
   return card;
@@ -1653,7 +1675,6 @@ std::shared_ptr<SessionCard> SessionCard::CreateHostCard(const std::string& imag
 {
   std::shared_ptr<SessionCard> card(
       new SessionCard(Mode::HostCard, image_path, std::move(manifest)));
-  card->m_image.Open(image_path, "rb", File::SharedAccess::ReadWrite);
   card->m_size = card->m_manifest->size;
   return card;
 }
@@ -1669,8 +1690,7 @@ std::shared_ptr<SessionCard> SessionCard::CreateGuestCard(const std::string& ima
       new SessionCard(Mode::GuestCard, image_path, std::move(manifest)));
   card->m_size = card->m_manifest->size;
   card->m_remote = std::move(remote);
-  card->m_image.Open(image_path, "rb", File::SharedAccess::ReadWrite);
-  const u64 own_size = card->m_image ? card->m_image.GetSize() : 0;
+  const u64 own_size = card->m_image.GetSize();
 
   // This card's hashes: given (the join's check), or from an earlier check in the cache. With
   // them, every chunk is known now to match or not; without, a chunk is checked when first read.
@@ -1830,16 +1850,14 @@ bool SessionCard::ReadBase(u32 index, u64 from, u64 len, u8* dst)
   switch (m_mode)
   {
   case Mode::OwnCard:
-    return m_image.Seek(static_cast<s64>(start), File::SeekOrigin::Begin) &&
-           m_image.ReadBytes(dst, len);
+    return m_image.Read(start, dst, len);
   case Mode::HostCard:
     if (m_manifest->chunks[index].zero)
     {
       std::memset(dst, 0, len);
       return true;
     }
-    return m_image.Seek(static_cast<s64>(start), File::SeekOrigin::Begin) &&
-           m_image.ReadBytes(dst, len);
+    return m_image.Read(start, dst, len);
   case Mode::GuestCard:
   {
     std::lock_guard lock(m_fetch_mutex);
@@ -1849,14 +1867,11 @@ bool SessionCard::ReadBase(u32 index, u64 from, u64 len, u8* dst)
       std::memset(dst, 0, len);
       return true;
     case Source::Local:
-      return m_image.Seek(static_cast<s64>(start), File::SeekOrigin::Begin) &&
-             m_image.ReadBytes(dst, len);
+      return m_image.Read(start, dst, len);
     case Source::Moved:
     {
       const auto it = m_moved.find(index);
-      return it != m_moved.end() &&
-             m_image.Seek(static_cast<s64>(it->second + from), File::SeekOrigin::Begin) &&
-             m_image.ReadBytes(dst, len);
+      return it != m_moved.end() && m_image.Read(it->second + from, dst, len);
     }
     case Source::Fetched:
     {

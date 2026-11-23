@@ -148,6 +148,8 @@ set(BO_REUSED_HEADERS
   Core/Rollback/UdpSocket6.h
   Core/Rollback/ReplayPlayback.h
   Core/Rollback/GameplayOnlineBackend.h
+  Core/Rollback/InputTrace.h
+  Core/Online/MatchQoS.h
 )
 foreach(h IN LISTS BO_REUSED_HEADERS)
   configure_file("${BO_DOLPHIN}/Source/Core/${h}" "${BO_INC}/${h}" COPYONLY)
@@ -157,6 +159,8 @@ set(BO_REUSED_SOURCES
   "${BO_DOLPHIN}/Source/Core/Core/Rollback/UdpSocket6.cpp"
   "${BO_DOLPHIN}/Source/Core/Core/Rollback/ReplayPlayback.cpp"
   "${BO_DOLPHIN}/Source/Core/Core/Rollback/GameplayOnlineBackend.cpp"
+  "${BO_DOLPHIN}/Source/Core/Core/Rollback/InputTrace.cpp"
+  "${BO_DOLPHIN}/Source/Core/Core/Online/MatchQoS.cpp"
 )
 
 add_library(brawl_online_common STATIC ${BO_COMMON_SOURCES})
@@ -182,7 +186,8 @@ endif()
 target_link_libraries(brawl_online_common PUBLIC fmt::fmt enet::enet
   PRIVATE CURL::libcurl Miniupnpc::miniupnpc ZLIB::ZLIB mbedtls sfml-network sfml-system)
 if(WIN32)
-  target_link_libraries(brawl_online_common PUBLIC ws2_32 iphlpapi winmm shlwapi bcrypt)
+  # qwave: Online/MatchQoS.cpp marks a match's traffic as voice (qWAVE).
+  target_link_libraries(brawl_online_common PUBLIC ws2_32 iphlpapi winmm shlwapi bcrypt qwave)
 else()
   target_link_libraries(brawl_online_common PUBLIC pthread ${CMAKE_DL_LIBS})
 endif()

@@ -1,0 +1,9 @@
+/* window_drag_strip.tsx: over the top of its box, invisible. */
+.strip {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  pointer-events: none;
+  -webkit-app-region: drag;
+}

@@ -242,3 +242,13 @@ The page had fixed column widths (320 + 380 px) wider than the room beside the s
 - **the tools** are a column the other way up from the open row ("settings on the bottom, notifs on top"): the bell, Discord, Report a bug, Theme Color, Settings, their tooltips at their right.
 
 The column fits a 1264 x 711 window with a search and an update showing. In a shorter window ("at smaller vertical heights, replace it with a menu button that rolls up a vertical pop up over everything that has the 5 buttons in it") the tools are one menu button whose popup rolls up over everything with the five in a column (a pick closes it); the column comes back once it fits again. The bottom group (the arrows, the search, the card, the tools) always shows; if the pages still don't fit (the smallest windows, 450 px), only their icons scroll, faded where they are cut off. New word for review: the menu button's tooltip "Menu".
+
+## 15. Moving the window on macOS (GitHub #56, Sarah's board, 2026-11-20)
+
+The Mac window has no title bar (`titleBarStyle: "hiddenInset"`), so only what the page marks as a drag area moves it. Since §2 that was the sidebar's logo row around "Brawl Online" (about 3,100 px² at 1280 x 750, a rim of 2 px over the logo and 14 px under it; folded, 36 px wide), so a player could hardly grab the window ("like a pixel or two"). Now, on macOS only, with nothing moved ("there is definitely enough space up top to add some grabbable area without affecting the layout or usage of any buttons"):
+
+- **the sidebar**: the 34 px strip by the window buttons, the logo's row around the logo, and the gap between the pages and the bottom group;
+- **the page**: a 16 px strip over the pages' top padding (the first buttons start at 16 px on Other Games, 20-30 px elsewhere; a replay's back arrow box starts at 8.7 px, its arrow below 16), under the chat's windows;
+- **the players rail**: a 12 px strip over the top of the Online / Friends tabs (their names start lower; folded, its 12 px over the first button).
+
+Together about 62,000 px² at 1280 x 750. The strips (app/shell/window_drag_strip.tsx) are invisible and last in their box: Electron takes drag and no-drag areas in document order, later ones over earlier ones, and every element is no-drag (styles.scss), so a button in the sidebar's gaps still clicks. A drag area takes the click on a Mac: anything clickable put in these strips later won't work there, and a page scrolled under its strip can't be clicked in its top 16 px.

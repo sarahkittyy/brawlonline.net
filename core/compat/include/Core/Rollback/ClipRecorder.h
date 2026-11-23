@@ -54,4 +54,9 @@ inline std::string LastError()
 {
   return {};
 }
+// No frame dumper outside Dolphin: presented frames are never wanted.
+inline bool WantsFrames()
+{
+  return false;
+}
 }  // namespace Gprb::Clip

@@ -586,6 +586,8 @@ add_library(core
   PowerPC/SignatureDB/MEGASignatureDB.h
   PowerPC/SignatureDB/SignatureDB.cpp
   PowerPC/SignatureDB/SignatureDB.h
+  Online/MatchQoS.cpp
+  Online/MatchQoS.h
   Online/SpecialAssets.cpp
   Online/SpecialAssets.h
   Online/NetPlaySession.cpp
@@ -594,6 +596,8 @@ add_library(core
   Online/ModsRoom.h
   Online/RoomWatch.cpp
   Online/RoomWatch.h
+  Online/LoadFastForward.cpp
+  Online/LoadFastForward.h
   Online/SpeedCheck.cpp
   Online/SpeedCheck.h
   Rollback/ChangeCRC.h
@@ -604,6 +608,8 @@ add_library(core
   Rollback/DolphinEngine.cpp
   Rollback/DolphinEngine.h
   Rollback/FullMemcpySaveSlot.cpp
+  Rollback/InputSuggest.cpp
+  Rollback/InputSuggest.h
   Rollback/GameplayOnlineBackend.cpp
   Rollback/GameplayOnlineBackend.h
   Rollback/UdpSocket6.cpp
@@ -611,6 +617,8 @@ add_library(core
   Rollback/GprbCpuTrace.cpp
   Rollback/FullMemcpySaveSlot.h
   Rollback/IRollbackSaveSlot.h
+  Rollback/InputTrace.cpp
+  Rollback/InputTrace.h
   Rollback/MachineSession.cpp
   Rollback/MachineSession.h
   Rollback/Perf.cpp
@@ -707,7 +715,6 @@ if(_M_X86_64)
     PowerPC/Jit64/Jit_SystemRegisters.cpp
     PowerPC/Jit64/JitAsm.cpp
     PowerPC/Jit64/JitAsm.h
-    PowerPC/Jit64/RegCache/CachedReg.h
     PowerPC/Jit64/RegCache/FPURegCache.cpp
     PowerPC/Jit64/RegCache/FPURegCache.h
     PowerPC/Jit64/RegCache/GPRRegCache.cpp
@@ -715,6 +722,7 @@ if(_M_X86_64)
     PowerPC/Jit64/RegCache/JitRegCache.cpp
     PowerPC/Jit64/RegCache/JitRegCache.h
     PowerPC/Jit64/RegCache/RCMode.h
+    PowerPC/Jit64Common/BackPatchTable.h
     PowerPC/Jit64Common/BlockCache.cpp
     PowerPC/Jit64Common/BlockCache.h
     PowerPC/Jit64Common/ConstantPool.cpp

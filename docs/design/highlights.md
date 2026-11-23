@@ -56,6 +56,12 @@ moment as pips in the player's color (filled left, hollow lost; past 5, "×N"). 
 replay's stage and everyone's stock changes for this (`stageId`, `stocks`; DETECTOR_VERSION 6). A
 manual clip shows them when its replay's highlights are known (stocks), and the stage it was saved
 with (clips saved before have none).
+A Zelda or Sheik shows on a highlight's row (and in its rendered video's name) as the form they
+were in for most of the string, from the live fighter's ftKind (bug report #323, 2026-11-22: "would
+it be possible for the character icon in the highlights to update based on who you are when you do
+the combo"); `forms` on the highlight, DETECTOR_VERSION 7. Version 6 results of games without a
+Zelda or Sheik stay cached (`sameAsCurrent` in highlight_service.ts), so only those games are read
+again. The game's header and clip rows still show the character picked.
 Since 2026-11-15 a row is two lines, the players over when in the game it plays (from-to), with the
 stage first and its name and the date in the Highlights tab (§10).
 The row playing is shown selected, and follows the playback Dolphin's buttons and stars; it is
@@ -495,3 +501,96 @@ The page now:
 Looked at in a scratch launcher (worktree build, a copy of the profile without the login, Sarah's
 replays) at 1232x723, 980x723 and 980x450 (rail open and folded): All highlights, the category menu, Manual Clips, hover and
 selection, a replay's own Highlights tab.
+
+## 11. The seek bar's redesign, stars in every replay, Render from clip mode (2026-11-20)
+
+Sarah's board card: the in-game replay / spectate seek bar was "more functional than pretty";
+highlights showed only when a replay was started from a highlight; nothing could be rendered from
+the game; and Auto play could drag a spectator away from a game they wanted to clip. She approved
+a mockup (run/scratch/overlay-mock, not in the repo) and answered: the played part in the
+launcher's colour; every highlight, hotkey clip and manual clip as a star; Render only from clip
+mode, as mocked; Auto play counts down "Next game in {} s." with an X on its left and a ring on its
+right, held while in clip mode; -5 / +5 buttons.
+
+**Look** (`VideoCommon/ReplayOverlayUI.cpp`; the same file is `core/ui/src/ReplayOverlayUI.cpp` on
+the emissary branches, so a merge of main carries it). No box: the bar runs across the bottom (28 px
+in from each side, scaled) over a dark fade drawn behind every window. Above the controls' row, the
+track (5 px, 7 px under the mouse) with what has played in the launcher's colour and a white knob
+ringed in it; each star's highlight is a gold span on the track with the star over its start (lit
+while hovered or playing); the desync mark is red; the playing highlight's end line stays white.
+Hover tips (the time under the mouse, "Play this highlight (2:31)", "Clip end (2:33)") are boxes
+above the bar. The row: play / pause, -5 / +5 (as the Left / Right hotkeys), the time ("1:44" and
+"/ 4:05" dimmed), LIVE (red) or GO LIVE -14 s when spectating, "Seeking...", "Buffering..." or the
+catch-up line when there is one, the speed when not 1x, then the title and the players ("vs"
+dimmed), clipped before the right side: Clip (scissors), the list's count and buttons (|< <* *> >|),
+and the fold chevron at the right end. Folded: a 3 px line in the launcher's colour along the
+window's bottom and a chevron up at the bottom left. Clip mode: the bar outside the clip dimmed, a
+blue box over it with a grip at each end; the row says "Clip 2:13 - 2:33 (20 s)" and has Cancel
+clip, Save as highlight (star) and Render (w/ Music) with a menu (the chevron right of it) for
+Render (No Music). Text is the chat's Noto Sans at 14.5 px (scaled). Every word is one the overlay
+or the launcher already had, but "Next game in {} s." (Sarah's).
+
+**The launcher's side** (`<comm>.overlay.json`, written by `dolphin/instance.ts` writeOverlay for
+every playback Dolphin, from `renderer/lib/dolphin/use_playback_overlay.ts`): `accent` (the page's
+`--accent-primary`, looked at every second, so a Theme Color change shows at once; the plain grey
+#d0d0d0 without it) and `toasts`, the renders asked for from the game. Dolphin reads it every poll
+(200 ms) and draws the toasts at the top right ("Clip (0:20)", "Rendering 42%", a bar in the
+launcher's colour), also with the seek bar hidden; a finished one stays 6 s.
+
+**Stars in every replay** (`replays/highlights/replay_marks.ts`, `DolphinManager.replayMarks`): a
+replay played as a replay (`normal` / `queue`: the Replays list, Play selected, Match history) gets,
+once known, every highlight found in it, every hotkey (L+R+Z) clip and every manual clip, by start,
+each once, 500 at most: the same request written again with `marks`, each with its `path` (a queue's
+other replays don't show them). Dolphin now reads `marks` for any request but a render or a
+spectated game, and a clip saved in this run that is one of them is one star. A star plays its clip
+in the running match and pauses at its end (the session's PlayHighlight, as saved clips' stars
+always did); the Replays list's < > (shown while the replay has stars) go from star to star in it.
+
+**Render from clip mode** (`Replay::Playback::RequestRender`): saves the clip as Save as highlight
+does (so it is a Manual Clip, spectated games' copied) and lists it in the status,
+`"renderRequests": [{"seq", "path", "startFrame", "endFrame", "music"}]` (every one of the
+Dolphin's run). The renderer's hook waits for the Manual Clip (up to 20 s: a spectated game is
+copied first), then queues the render as the Highlights tab's Render does (the file named as a
+manual clip's, `<date> Clip - <players>.mp4`; the version and update checks as always), and the
+toast follows its RENDER_PROGRESS.
+
+**Second round** (Sarah, 2026-11-20, on the build): "the render button should appear when you click
+on a star ... when our ui state machine knows for sure the user is watching a specific starred
+replay"; the seek bar froze while a seek ran; the clip's box looked "askew a little bit".
+- **Render on a star**: while a star's highlight is being watched (from its star, a list's row or
+  < >: reached and playing, or paused at its end; not on its way there, third round) the row has
+  Render (w/ Music) and its menu left of Clip; a seek away from it or playing past its end hides
+  it.
+- **Third round** (Sarah's QA on staging, 2026-11-20): the star being watched, and any star still
+  rendering, has a blue outline; once a render of it is asked the row shows that render's state
+  instead of Render ("Waiting" until the launcher has it, "Rendering 42%", "Saved" with a folder
+  button; Render again after an error or a cancel); a finished toast has a folder button too. Both
+  folder buttons put `"showRender": {"seq", "id"}` in the status and the launcher opens the file
+  explorer at the video (`shell.showItemInFolder`). The launcher keeps every render asked for from
+  the game in the overlay file (24 newest, `toast` false once a finished one's 6 s are over), with
+  its job id, the replay as Dolphin asked for it and its frames. The toast's label is Dolphin's
+  clip mode wording, "Clip 2:13 - 2:20 (7 s)" (the request's `label`; it said "Clip (0:07)", the
+  length, read as a time).
+  It isn't saved as a Manual Clip (`RequestRender(.., save false)`, the request's `"clip": false`):
+  the launcher names the video from the replay's own highlight or hotkey clip (`findHighlight`),
+  or the Manual Clip it is.
+- **The overlay during a seek**: the frames before a seek's target run unseen (a keyframe put
+  back, then up to 5 s of frames; a short jump forward), and nothing was presented until the
+  target, the overlay included. Now, at an XFB copy that isn't presented (Immediate XFB, this
+  Dolphin's default: `PresentStats` decides it with the copy's present on the CPU thread, and
+  `BPStructs` redraws where it would have swapped) or a VI field that isn't (`Video_OutputXFB`), of
+  a replay's seek (`Session::RedrawUnshownFrameDue`, at most every 33 ms; never online, nor while
+  rendering), `Presenter::RedrawLastFrame(false)` shows the last frame again with the overlay
+  drawn ("Seeking...", the knob where it goes), not dumped to a video. Counted in the playback
+  status' `seek_redraws`. Long seeks forward already showed a frame in 30. Also: once the
+  countdown of Auto play ran out with no line from the launcher, the pill keeps "Next game in 1
+  s." rather than the X and the ring alone.
+- **The clip's box**: the bar is laid out on whole pixels, and the box's top and bottom edges are
+  filled bars rather than a stroked rounded rectangle, whose anti-aliased edges stepped a pixel
+  partway along at fractional positions (its sides are under the grips).
+
+Tests: `replay_marks.test.ts`, `playback_overlay.test.ts`, `spectate_client.test.ts` (Auto play waits
+for `next`; the X ends the wait); harness `test_replay.py::test_launcher_comm_file_saves_manual_clips` (a replay's stars from a
+rewrite, only its path's, one with a saved clip; a star playing and pausing at its end; Render with
+and without music in `renderRequests` and `savedClips`; the overlay file read and a broken one
+ignored; Auto play's countdown on a finished stream, held in clip mode, then `next`, and its X).

@@ -783,6 +783,13 @@ bool OnLoopEnd(const Core::CPUThreadGuard& guard);
 bool IsResimulationPass();
 // True while a session drives the game loop (between the barrier and the end of the match).
 bool IsRunning();
+// True while a replay or a spectated game is armed or plays (ArmPlayback).
+bool IsPlayback();
+// CPU thread, at a VI field that is not shown (a resimulated frame): whether the playback
+// Dolphin should show its last frame again now, with the overlay drawn over it. True while a
+// replay's seek runs the frames before its target unseen, at most every 33 ms (Sarah's board,
+// 2026-11-20: the seek bar froze while a seek ran); never online, nor while rendering.
+bool RedrawUnshownFrameDue();
 // True while the main loop must run exactly one logic step per pass (countdown, start barrier,
 // running): see GprbPacingStepsHook.
 bool DrivesLoop();

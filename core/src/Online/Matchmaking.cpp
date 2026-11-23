@@ -1413,6 +1413,34 @@ void Matchmaking::HandleMatchmaking()
     WARN_LOG_FMT(NETPLAY, "[Matchmaking] IPv6: the server never answered our probe; IPv4 only");
   }
 
+  // Not in Slippi: open our router toward every peer now, from the port the P2P connect uses, with
+  // a datagram that stops short of their router (Common::ENet::OpenOurRouter). The disconnect
+  // below waits a round trip to mm before either side's connect leaves, and the side whose round
+  // trip is shorter starts first: a router that shuts a pair of ports when the peer's packet comes
+  // in before its own went out lost 20 of one pair's 23 room games to that race (bug report
+  // #325). Not to this machine (the tests), where nothing is in the way.
+  if (m_client)
+  {
+    size_t opened = 0;
+    for (const auto& r : match.remotes)
+    {
+      ENetAddress addr{};
+      if (enet_address_set_host(&addr, r.ip.c_str()) != 0 ||
+          reinterpret_cast<const u8*>(&addr.host)[0] == 127)
+      {
+        continue;
+      }
+      addr.port = r.port;
+      Common::ENet::OpenOurRouter(m_client->socket, addr);
+      opened++;
+    }
+    if (opened > 0)
+    {
+      INFO_LOG_FMT(NETPLAY, "[Matchmaking] Opened our router toward {} player(s) before the connect",
+                   opened);
+    }
+  }
+
   // Disconnect and destroy enet client to mm server
   TerminateMmConnection();
 

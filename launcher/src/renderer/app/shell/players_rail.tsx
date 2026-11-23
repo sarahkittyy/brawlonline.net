@@ -17,6 +17,7 @@ import { type PanelTab, OnlinePlayers, TAB_KEY } from "@/pages/home/overview/onl
 
 import styles from "./players_rail.module.css";
 import { ShellMessages as Messages } from "./shell.messages";
+import { WindowDragStrip } from "./window_drag_strip";
 
 /** The player's choice, remembered on this computer: `auto` folds the rail in a narrow window. */
 type RailChoice = "auto" | "open" | "folded";
@@ -65,6 +66,8 @@ export const PlayersRail = React.memo(function PlayersRail() {
           </Tooltip>
         }
       />
+      {/* Over the top of the tabs, above their names; the icons start lower. */}
+      <WindowDragStrip height={12} />
     </aside>
   );
 });
@@ -104,6 +107,8 @@ const FoldedRail = ({ onOpen, onOpenFriends }: { onOpen: () => void; onOpenFrien
       {friendsOnline.map((p) => (
         <FriendPicture key={p.uid} player={p} onClick={() => openTab(p.uid, true)} />
       ))}
+      {/* Its 12 px over the first button. */}
+      <WindowDragStrip height={12} />
     </aside>
   );
 };

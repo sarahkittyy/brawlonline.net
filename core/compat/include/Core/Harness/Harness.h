@@ -25,4 +25,9 @@ inline std::optional<GCPadStatus> PadOverrideAt(int, Clock::time_point)
 {
   return std::nullopt;
 }
+// The host's harness drives its pads itself (Host::LocalPad): no port is overridden here.
+inline bool IsPadOverridden(int)
+{
+  return false;
+}
 }  // namespace Harness

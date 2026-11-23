@@ -15,13 +15,20 @@ import { stat } from "node:fs/promises";
 
 import { readStats } from "../stats/brawl_stats";
 import type { AnalyzeOptions } from "./analyze_replay";
-import { analyzeReplay } from "./analyze_replay";
+import { analyzeReplay, hasForms } from "./analyze_replay";
 import { DETECTOR_VERSION } from "./detect_highlights";
 import type { HighlightsWorker } from "./highlights.worker.interface";
 import { createHighlightsWorker } from "./highlights.worker.interface";
 import type { ReplayHighlights } from "./types";
 
 const log = electronLog.scope("highlights");
+
+/**
+ * Version 7 only added Zelda/Sheik forms to highlights: a version 6 result of a game without a
+ * Zelda or a Sheik is the same, and is kept rather than every replay being read again.
+ */
+const sameAsCurrent = (version: number, result: ReplayHighlights) =>
+  version === DETECTOR_VERSION || (version === 6 && !result.players.some((p) => hasForms(p.characterId)));
 
 /**
  * Whose L+R+Z presses make clips: only the recording player's (this machine's), so an opponent
@@ -100,14 +107,11 @@ export class HighlightService {
     const db = await this.db;
     try {
       const row = await db.selectFrom("highlight_cache").selectAll().where("path", "=", fullPath).executeTakeFirst();
-      if (
-        row &&
-        row.size_bytes === size &&
-        row.mtime_ms === mtime &&
-        row.detector_version === DETECTOR_VERSION &&
-        row.mode === mode
-      ) {
-        const result = JSON.parse(row.result) as ReplayHighlights;
+      const result =
+        row && row.size_bytes === size && row.mtime_ms === mtime && row.mode === mode
+          ? (JSON.parse(row.result) as ReplayHighlights)
+          : null;
+      if (row && result && sameAsCurrent(row.detector_version, result)) {
         // Cached before the recorder was kept: from the replay's header, once.
         if (result.recorderPort === undefined && !result.error) {
           result.recorderPort = await readReplayHeader(fullPath).then(

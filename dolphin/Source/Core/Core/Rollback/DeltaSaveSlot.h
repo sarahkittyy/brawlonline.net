@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <deque>
 #include <functional>
 #include <memory>
 #include <vector>
@@ -244,9 +245,19 @@ private:
 // XFB copies, fills; PresentStats::OnGpuRamWrite). Never cleared while a game runs. Those bytes are
 // rendered output whose arrival time depends on the host GPU and thread timing, so the
 // game-independent desync checksum (RollbackManager::LastSaveChecksum) skips them.
+//
+// A whole-machine session of a game whose EFB copies go to guest RAM
+// (PresentStats::SessionEFBCopiesToRAM) marks on the CPU thread only, where the FIFO's
+// preprocessing reaches the copy, and journals the marks: a rollback's load takes back the marks
+// made after its snapshot, so a copy only a mispredicted pass made leaves no granule skipped on
+// that machine alone (the players' checksums would count different granules from then on).
 struct alignas(64) GPUWrittenBitmap
 {
   uint8_t entries[JITDirtyBitmap::ENTRY_COUNT];
+  // The granules first marked since the journal began, in order (only while journaled).
+  std::deque<uint32_t> journal;
+  uint64_t journal_base = 0;  // the mark of journal.front()
+  bool journaled = false;
 
   static GPUWrittenBitmap& Get()
   {
@@ -254,7 +265,11 @@ struct alignas(64) GPUWrittenBitmap
     return s_instance;
   }
 
-  void Clear() { std::memset(entries, 0, sizeof(entries)); }
+  void Clear()
+  {
+    std::memset(entries, 0, sizeof(entries));
+    ResetJournal();
+  }
   void Mark(uint32_t address, uint32_t size)
   {
     if (size == 0)
@@ -263,7 +278,39 @@ struct alignas(64) GPUWrittenBitmap
     const uint64_t first = phys >> ROLLBACK_PAGE_SHIFT;
     const uint64_t last = (static_cast<uint64_t>(phys) + size - 1) >> ROLLBACK_PAGE_SHIFT;
     for (uint64_t p = first; p <= last && p < JITDirtyBitmap::ENTRY_COUNT; ++p)
+    {
+      if (entries[p])
+        continue;
       entries[p] = 1;
+      if (journaled)
+        journal.push_back(static_cast<uint32_t>(p));
+    }
+  }
+  // The journal's position now (a snapshot keeps it: DeltaSaveSlot::m_gpu_written_mark).
+  uint64_t JournalMark() const { return journal_base + journal.size(); }
+  // Unmarks the granules first marked after `mark`.
+  void Undo(uint64_t mark)
+  {
+    while (!journal.empty() && JournalMark() > mark)
+    {
+      entries[journal.back()] = 0;
+      journal.pop_back();
+    }
+  }
+  // Forgets the entries before `mark` (no load goes back past the oldest snapshot).
+  void Trim(uint64_t mark)
+  {
+    while (!journal.empty() && journal_base < mark)
+    {
+      journal.pop_front();
+      ++journal_base;
+    }
+  }
+  // The marks so far stay for good (a machine image's load brings the players' marks).
+  void ResetJournal()
+  {
+    journal_base += journal.size();
+    journal.clear();
   }
 };
 
@@ -326,6 +373,8 @@ public:
   u64 m_jit_invalidations = 0;
   // PowerPC::JitCodeRecord's journal at the save.
   u64 m_jit_code_mark = 0;
+  // GPUWrittenBitmap's journal at the save.
+  u64 m_gpu_written_mark = 0;
   int m_slice_length = 0;  // CoreTiming's, which DoState restores; again with the downcount
   uint32_t m_exceptions = 0;
   // A whole-machine session restores these too (RestoreMachineRegisters): the MSR (its FP bit is

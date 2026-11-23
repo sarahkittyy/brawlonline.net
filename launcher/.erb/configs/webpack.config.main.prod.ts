@@ -29,6 +29,25 @@ function resolveWorkers(rootFolder: string): Record<string, string> {
   return workers;
 }
 
+/**
+ * Electron starts its entry script (package.json `main`) through Node's ES module loader, which
+ * reads the whole file to guess its module format and then scans it for named exports: about
+ * 70 ms of every start for the 2.4 MB bundle on a fast PC, more on a slow one. So the bundle is
+ * app.js and main.js is two lines that require() it: require() compiles it as CommonJS directly.
+ */
+class EntryStubPlugin {
+  apply(compiler: webpack.Compiler) {
+    compiler.hooks.thisCompilation.tap("EntryStubPlugin", (compilation) => {
+      compilation.hooks.processAssets.tap(
+        { name: "EntryStubPlugin", stage: webpack.Compilation.PROCESS_ASSETS_STAGE_ADDITIONAL },
+        () => {
+          compilation.emitAsset("main.js", new webpack.sources.RawSource('"use strict";\nrequire("./app.js");\n'));
+        },
+      );
+    });
+  }
+}
+
 const devtoolsConfig =
   process.env.DEBUG_PROD === "true"
     ? {
@@ -44,7 +63,8 @@ const configuration: webpack.Configuration = {
   target: "electron-main",
 
   entry: {
-    main: path.join(webpackPaths.srcMainPath, "main.ts"),
+    // Started by main.js (EntryStubPlugin).
+    app: path.join(webpackPaths.srcMainPath, "main.ts"),
     preload: path.join(webpackPaths.srcMainPath, "preload.ts"),
     ...resolveWorkers(webpackPaths.srcPath),
   },
@@ -86,6 +106,8 @@ const configuration: webpack.Configuration = {
   },
 
   plugins: [
+    new EntryStubPlugin(),
+
     new BundleAnalyzerPlugin({
       analyzerMode: process.env.ANALYZE === "true" ? "server" : "disabled",
     }),

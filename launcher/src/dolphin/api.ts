@@ -30,6 +30,7 @@ import {
   ipc_renderHighlights,
   ipc_replaceProjectPlusCard,
   ipc_setChatKey,
+  ipc_setPlaybackOverlay,
   ipc_softResetDolphin,
   ipc_storePlayKeyFile,
   ipc_viewSlpReplay,
@@ -39,6 +40,7 @@ import type {
   DolphinEventType,
   DolphinLaunchType,
   DolphinService,
+  PlaybackOverlayFile,
   PlayKey,
   RenderRequest,
   ReplayListPlay,
@@ -99,6 +101,9 @@ const dolphinApi: DolphinService = {
   },
   async updateHighlightList(item: HighlightPlayItem, commandId: string, list: HighlightListView) {
     await ipc_playHighlights.renderer!.trigger({ items: [item], commandId, list, updateOnly: true });
+  },
+  async setPlaybackOverlay(overlay: PlaybackOverlayFile | null) {
+    await ipc_setPlaybackOverlay.renderer!.trigger({ overlay });
   },
   async renderHighlights(request: RenderRequest, choice?: ReplayPlayChoice) {
     const { result } = await ipc_renderHighlights.renderer!.trigger({

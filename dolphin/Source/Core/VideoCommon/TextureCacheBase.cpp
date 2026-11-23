@@ -2314,9 +2314,12 @@ void TextureCacheBase::CopyRenderTargetToTexture(
       !(is_xfb_copy ? g_ActiveConfig.bSkipXFBCopyToRam : g_ActiveConfig.bSkipEFBCopyToRam) ||
       !copy_to_vram;
   // A whole-machine session: never into guest RAM from this thread (PresentStats.h). Every real
-  // backend keeps the copy in VRAM; one that cannot (Null, Software) has it nowhere.
-  if (Rollback::PresentStats::CopiesLeaveGuestRAM())
-    copy_to_ram = false;
+  // backend keeps the copy in VRAM; one that cannot (Null, Software) has it nowhere. A game that
+  // needs its EFB copies in RAM has them there too, while the CPU thread waits for this one
+  // (PresentStats::SessionEFBCopiesToRAM).
+  const bool session = Rollback::PresentStats::CopiesLeaveGuestRAM();
+  if (session)
+    copy_to_ram = !is_xfb_copy && Rollback::PresentStats::SessionEFBCopiesToRAM();
 
   // tex_w and tex_h are the native size of the texture in the GC memory.
   // The size scaled_* represents the emulated texture. Those differ
@@ -2526,8 +2529,9 @@ void TextureCacheBase::CopyRenderTargetToTexture(
       CopyEFB(staging_texture.get(), format, tex_w, bytes_per_row, num_blocks_y, dstStride, srcRect,
               scaleByHalf, linear_filter, y_scale, gamma, clamp_top, clamp_bottom, coefficients);
 
-      // We can't defer if there is no VRAM copy (since we need to update the hash).
-      if (!copy_to_vram || !g_ActiveConfig.bDeferEFBCopies)
+      // We can't defer if there is no VRAM copy (since we need to update the hash). A session's
+      // copy lands now, while the CPU thread waits for it.
+      if (!copy_to_vram || !g_ActiveConfig.bDeferEFBCopies || session)
       {
         // Immediately flush it.
         WriteEFBCopyToRAM(dst, bytes_per_row / sizeof(u32), num_blocks_y, dstStride,

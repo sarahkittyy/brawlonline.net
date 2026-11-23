@@ -45,7 +45,8 @@ public:
   // Shows the last frame again, with the on-screen UI, and takes a pending screenshot of it:
   // while a replay is paused (the game makes no frames), so that its overlay still draws and a
   // screenshot or capture still works. Video thread.
-  void RedrawLastFrame();
+  // `dump`: also to the frame dumper (a paused frame is part of a render; a seek's redraw is not).
+  void RedrawLastFrame(bool dump = true);
   void ClearLastXfbId() { m_last_xfb_id = std::numeric_limits<u64>::max(); }
 
   bool Initialize();

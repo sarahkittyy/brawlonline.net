@@ -13,12 +13,11 @@ import {
   buildPlainThemeCss,
   buildThemeCss,
   framesFromManifest,
-  gradientTopColor,
   prepareTheme,
   useGameAssets,
 } from "./game_theme";
-import { createAppTheme, fallbackPalette, fallbackTheme } from "./theme";
-import { normalizeThemeColor, paletteFromThemeColor } from "./theme_color";
+import { createAppTheme, fallbackPalette } from "./theme";
+import { DEFAULT_THEME_COLOR, normalizeThemeColor, paletteFromThemeColor } from "./theme_color";
 
 /**
  * The theme colour picker's colour while it is open (components/theme_color_picker): the launcher shows it
@@ -26,11 +25,11 @@ import { normalizeThemeColor, paletteFromThemeColor } from "./theme_color";
  */
 export const useThemeColorDraft = create<{ draft: string | undefined }>(() => ({ draft: undefined }));
 
-/** The theme colour the launcher shows: the picker's draft, else the setting (null = the default look). */
-export function useShownThemeColor(): string | null {
+/** The theme colour the launcher shows: the picker's draft, else the setting, else the default (PM's blue). */
+export function useShownThemeColor(): string {
   const [setting] = useThemeColor();
   const draft = useThemeColorDraft((s) => s.draft);
-  return normalizeThemeColor(draft ?? setting);
+  return normalizeThemeColor(draft ?? setting) ?? DEFAULT_THEME_COLOR;
 }
 
 /** How long the picker's colour rests before the MUI theme takes it (game_theme_provider's second effect). */
@@ -50,15 +49,12 @@ function useSettled<T>(value: T, delayMs: number): T {
   return delayMs <= 0 ? value : settled;
 }
 
-/** The default look's colour (the picker's start, the setting's swatch): P+'s gradient top, null for plain grey. */
-export const useDefaultThemeColor = create<{ color: string | null }>(() => ({ color: null }));
-
 /**
- * Provides the MUI/emotion theme and keeps it in sync with the extracted game
- * assets and the theme colour. Renders the fallback theme until (and unless) either is there.
+ * Provides the MUI/emotion theme and keeps it in sync with the extracted game assets and the theme colour
+ * (the player's, or PM's blue while none is chosen: card or no card, P+'s own gradient colours are not used).
  */
 export const GameThemeProvider = ({ children }: React.PropsWithChildren) => {
-  const [theme, setTheme] = React.useState<Theme>(fallbackTheme);
+  const [theme, setTheme] = React.useState<Theme>(() => createAppTheme(paletteFromThemeColor(DEFAULT_THEME_COLOR)));
   const assetsState = useGameAssets((s) => s.state);
   const themeColor = useShownThemeColor();
 
@@ -73,23 +69,6 @@ export const GameThemeProvider = ({ children }: React.PropsWithChildren) => {
   }, []);
 
   const manifest = assetsState?.manifest ?? null;
-  React.useEffect(() => {
-    let cancelled = false;
-    if (!manifest) {
-      useDefaultThemeColor.setState({ color: null });
-      return;
-    }
-    void gradientTopColor(manifest)
-      .then((color) => {
-        if (!cancelled) {
-          useDefaultThemeColor.setState({ color });
-        }
-      })
-      .catch(log.error);
-    return () => {
-      cancelled = true;
-    };
-  }, [manifest]);
 
   // While the picker's colour moves, only the CSS follows it (palette variables and tinted frames, both cheap);
   // the MUI theme waits until it rests. Each new MUI theme re-renders the whole launcher and adds new emotion
@@ -102,15 +81,15 @@ export const GameThemeProvider = ({ children }: React.PropsWithChildren) => {
   const fontsApplied = React.useRef<GameAssetManifest | null>(null);
   React.useEffect(() => {
     let cancelled = false;
-    const palette = themeColor ? paletteFromThemeColor(themeColor) : null;
+    const palette = paletteFromThemeColor(themeColor);
     if (!manifest) {
       fontsApplied.current = null;
-      applyCss(palette ? buildPlainThemeCss(palette) : null);
+      applyCss(buildPlainThemeCss(palette));
       return;
     }
     if (fontsApplied.current !== manifest) {
       fontsApplied.current = manifest;
-      applyCss(buildThemeCss(manifest, palette ? { palette, images: {} } : null));
+      applyCss(buildThemeCss(manifest, { palette, images: {} }));
     }
     void prepareTheme(manifest, themeColor)
       .then((prepared) => {
@@ -127,7 +106,7 @@ export const GameThemeProvider = ({ children }: React.PropsWithChildren) => {
   React.useEffect(() => {
     let cancelled = false;
     if (!manifest) {
-      setTheme(settledColor ? createAppTheme(paletteFromThemeColor(settledColor)) : fallbackTheme);
+      setTheme(createAppTheme(paletteFromThemeColor(settledColor)));
       return;
     }
     void prepareTheme(manifest, settledColor)

@@ -5,7 +5,7 @@ import { create } from "zustand";
 
 import type { FrameCss, ThemeFrames, ThemePalette } from "./theme";
 import { fallbackPalette } from "./theme";
-import { gradientFromThemeColor, paletteFromThemeColor, rgbToHex } from "./theme_color";
+import { gradientFromThemeColor, paletteFromThemeColor } from "./theme_color";
 import { SYSTEM_FONT_STACK } from "./with_font";
 
 /**
@@ -308,13 +308,6 @@ async function sampleGradient(url: string): Promise<{ top: RGB; middle: RGB; bot
     return [data.data[i], data.data[i + 1], data.data[i + 2]];
   };
   return { top: at(0), middle: at(Math.floor(data.height / 2)), bottom: at(data.height - 1) };
-}
-
-/** The colour at the top of P+'s menu gradient (its frame tint, #209a7a in P+ 3.x), or null without one. */
-export async function gradientTopColor(manifest: GameAssetManifest): Promise<string | null> {
-  const background = manifest.textures.background;
-  const gradient = background ? await sampleGradient(assetUrl(background.file)) : null;
-  return gradient ? rgbToHex(gradient.top) : null;
 }
 
 /**

@@ -4,10 +4,10 @@ Settings > Appearance > Theme Color: the player picks the launcher's colour on a
 
 ## Rules
 
-- **Default.** With no colour chosen, nothing changes. The launcher is grey without the disc. With the disc and P+'s card it uses P+'s colours, which `styles/game_theme.tsx` samples from P+'s menu gradient texture (`menu2/sc_selmap.pac` bg_gradient: top #209a7a, middle #092f2a, bottom #205e84).
+- **Default.** With no colour chosen, the launcher is Project M's blue, #5463c8 (`DEFAULT_THEME_COLOR` in `styles/theme_color.ts`), with or without the disc, exactly as if a player had picked it. Its hue (OKLCH 274) is the border colour of projectmgame.com (#364086, on its #131736 page) and the M of PM's logo (#384593 at its lightest; its middle is #2a3268). Those are L 0.40 and made the tinted buttons dark ("buttons could be brighter"), so the default is lifted to L 0.54 with the chroma scaled along (0.117 to 0.157). Asked for on Sarah's board, 2026-11-20 ("the blue you'd see in the back of the css or the M in the logo or the website"). Until then the default was grey without the disc and P+'s own menu gradient with it (`menu2/sc_selmap.pac` bg_gradient: top #209a7a, middle #092f2a, bottom #205e84); `prepareTheme(manifest)` without a colour still builds that look, but the launcher no longer asks for it.
 - **Chosen colour.** It is used with or without the disc and is kept when the disc is loaded later. Without the disc only the colours change. With the disc, the game's frames (Play buttons, dialogs) are tinted with the chosen colour instead of the gradient, and the game fonts and grid tile stay.
 - **Setting.** `themeColor` is `"#rrggbb"`, or `null` for the default. Any other value counts as `null`.
-- **Settings row.** The row shows a swatch of the current colour with a pencil. With no colour chosen, the swatch shows the default look's colour (grey, or P+'s teal). "Reset to default" sits to its left, and only while a colour is chosen.
+- **Settings row.** The row shows a swatch of the current colour with a pencil. With no colour chosen, the swatch shows the default, PM's blue. "Reset to default" sits to its left, and only while a colour is chosen.
   - Inline controls (this swatch and the App Language dropdown) end where the switches' thumbs end (`SettingItem inline`, `SWITCH_RIGHT_INSET`).
 - **Picker.** The pencil takes the player to Home with a wheel in the middle of the window. Cancel is on the left under the wheel and Apply on the right.
   - The header's grey palette icon (right of the bug report icon) opens the same wheel over the page the player is on, and Cancel/Apply/Escape just close it there instead of going to Settings.
@@ -32,7 +32,7 @@ All of it is done in OKLCH (perceived lightness, chroma and hue), so every hue c
 - **The wheel.** Hue goes around the circle. The distance from the centre is the share of that hue's most sRGB chroma at the current lightness, so every point is a usable colour and the centre is grey. The brightness slider runs from L 0.40 to 0.68.
   - Above 0.68, the light labels on the tinted frames get hard to read (yellow at 0.75 was).
   - Below 0.40, the frames are too dark for their black rim.
-  - The plain look's #d0d0d0 is above the range, so the wheel starts in the grey centre at L 0.61.
+  - With no colour chosen, the wheel starts on the default, PM's blue (L 0.54).
 - **Test.** `theme_color.test.ts` checks every wheel colour (24 hues × centre/mid/rim × min/mid/max lightness) against these contrast ratios:
   - accent on the page and on paper: at least 3:1
   - second colour on the page: at least 2:1

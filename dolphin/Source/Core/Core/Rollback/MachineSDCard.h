@@ -418,7 +418,7 @@ private:
   u64 m_size = 0;
 
   // The image (read only), for the chunks this machine has (emulation thread).
-  File::IOFile m_image;
+  IOS::HLE::SDCardFileStorage m_image;
 
   // The session's writes and their history (emulation thread only).
   std::map<u32, std::shared_ptr<const std::vector<u8>>> m_overlay;

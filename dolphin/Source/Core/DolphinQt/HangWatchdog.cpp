@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdlib>
 #include <ctime>
 #include <filesystem>
 #include <system_error>
@@ -63,16 +64,24 @@ void CleanUpOldDumps()
   }
 }
 
-std::string WalkStack(HANDLE process, HANDLE thread)
+// From `start` (a crash's context, read from the crashed process) or where the thread is now.
+std::string WalkStack(HANDLE process, HANDLE thread, const CONTEXT* start)
 {
   CONTEXT context{};
-  context.ContextFlags = CONTEXT_FULL;
-  if (SuspendThread(thread) == static_cast<DWORD>(-1))
-    return fmt::format("(SuspendThread failed: {})\n", GetLastError());
-  const BOOL got_context = GetThreadContext(thread, &context);
-  ResumeThread(thread);
-  if (!got_context)
-    return fmt::format("(GetThreadContext failed: {})\n", GetLastError());
+  if (start)
+  {
+    context = *start;
+  }
+  else
+  {
+    context.ContextFlags = CONTEXT_FULL;
+    if (SuspendThread(thread) == static_cast<DWORD>(-1))
+      return fmt::format("(SuspendThread failed: {})\n", GetLastError());
+    const BOOL got_context = GetThreadContext(thread, &context);
+    ResumeThread(thread);
+    if (!got_context)
+      return fmt::format("(GetThreadContext failed: {})\n", GetLastError());
+  }
 
   STACKFRAME64 frame{};
 #if defined(_M_ARM64)
@@ -256,8 +265,14 @@ int HangWatchdog::RunDumpHelper(const std::vector<std::string>& args)
 {
   DWORD pid = 0;
   DWORD tid = 0;
-  if (args.size() != 6 || !TryParse(args[2], &pid) || !TryParse(args[3], &tid))
+  if ((args.size() != 6 && args.size() != 7) || !TryParse(args[2], &pid) ||
+      !TryParse(args[3], &tid))
+  {
     return 1;
+  }
+  // A crash (CrashReporter.h) passes the address of its EXCEPTION_POINTERS in the crashed process
+  // (0: none): the dump gets the exception, and the stack is walked from where it happened.
+  const u64 exception_pointers = args.size() == 7 ? std::strtoull(args[6].c_str(), nullptr, 16) : 0;
   const HANDLE process =
       OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ | PROCESS_DUP_HANDLE, FALSE, pid);
   if (!process)
@@ -276,7 +291,13 @@ int HangWatchdog::RunDumpHelper(const std::vector<std::string>& args)
     const auto type =
         static_cast<MINIDUMP_TYPE>(MiniDumpWithIndirectlyReferencedMemory | MiniDumpWithThreadInfo |
                                    MiniDumpWithHandleData | MiniDumpWithUnloadedModules);
-    const BOOL written = MiniDumpWriteDump(process, pid, file, type, nullptr, nullptr, nullptr);
+    MINIDUMP_EXCEPTION_INFORMATION exception_info{
+        .ThreadId = tid,
+        .ExceptionPointers = reinterpret_cast<PEXCEPTION_POINTERS>(exception_pointers),
+        .ClientPointers = TRUE};
+    const BOOL written =
+        MiniDumpWriteDump(process, pid, file, type, exception_pointers ? &exception_info : nullptr,
+                          nullptr, nullptr);
     CloseHandle(file);
     if (!written || !MoveFileExW(part_path.c_str(), dump_path.c_str(), MOVEFILE_REPLACE_EXISTING))
     {
@@ -291,8 +312,23 @@ int HangWatchdog::RunDumpHelper(const std::vector<std::string>& args)
 
   const HANDLE thread =
       OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT | THREAD_QUERY_INFORMATION, FALSE, tid);
-  const std::string stack = thread ? WalkStack(process, thread) :
-                                     fmt::format("(OpenThread failed: {})\n", GetLastError());
+  CONTEXT crash_context{};
+  bool have_crash_context = false;
+  if (exception_pointers)
+  {
+    EXCEPTION_POINTERS pointers{};
+    SIZE_T read = 0;
+    have_crash_context =
+        ReadProcessMemory(process, reinterpret_cast<LPCVOID>(exception_pointers), &pointers,
+                          sizeof(pointers), &read) &&
+        read == sizeof(pointers) && pointers.ContextRecord &&
+        ReadProcessMemory(process, pointers.ContextRecord, &crash_context, sizeof(crash_context),
+                          &read) &&
+        read == sizeof(crash_context);
+  }
+  const std::string stack =
+      thread ? WalkStack(process, thread, have_crash_context ? &crash_context : nullptr) :
+               fmt::format("(OpenThread failed: {})\n", GetLastError());
   if (thread)
     CloseHandle(thread);
   File::WriteStringToFile(args[5], stack);

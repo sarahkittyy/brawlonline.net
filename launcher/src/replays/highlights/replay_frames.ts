@@ -10,7 +10,8 @@
  * soMotionModule+0x58, the attacker's ftEntry id soDamageModuleImpl+0x84 (m_attackerInfo's indirect
  * entry id), the player's own id ftEntry+0x04; for stats also position x/y f32 soPostureModule+0xC
  * / +0x10, ftKind u32 Fighter+0x110 and P+'s L-cancel counters (block `lCancel`: aerial landings
- * f32 +0, L-cancelled f32 +4; files from before 2026-11-08 have none: zeros). Pads
+ * f32 +0, L-cancelled f32 +4; files from before 2026-11-08 have none: zeros), and a hash of the
+ * words a hit writes (HIT_FIELDS). Pads
  * (gfPadStatus): buttons u32 +0x0 (GameCube bits), stick s8 +0x30/+0x31 (full tilt ±127), C-stick
  * +0x32/+0x33, L/R analog u8 +0x34/+0x35. All big-endian.
  *
@@ -89,6 +90,12 @@ export type Timeline = {
    */
   aerialLandings: Float32Array[];
   lCancels: Float32Array[];
+  /**
+   * A hash of the words a hit writes in the fighter's memory (HIT_FIELDS), or null (a file without
+   * those blocks): it changes on the frames a hit lands (or the frame after), and not on damage
+   * from no one, such as the 1% a second of Brawl's off-screen bubble.
+   */
+  hitRecord: Uint32Array[] | null;
   /** PAD_KEPT bytes a frame: pad bytes 0x0-0x3, then 0x30-0x35. */
   pads: Uint8Array[];
   /**
@@ -117,6 +124,26 @@ const FIELDS = [
   ["lCancel", 0x0, false], // aerial landings
   ["lCancel", 0x4, false], // L-cancelled
 ] as const;
+/**
+ * The words a hit writes in the victim's memory (BrawlHeaders): soStopModuleImpl's hitlag
+ * (m_hitStopRealFrame +0x10) and its flags (+0x1C: m_isStop, m_isHit, m_isDamage),
+ * soDamageModuleImpl's m_attackerInfo (+0x64-+0x8B: what hit, directly and for whom, and when that
+ * clears) and soCollisionHitModuleImpl's +0x50-+0x67. In 672 replays of 2026-10/11, 53,142 of
+ * 59,683 damage rises wrote one of them on their frame or the next; those that wrote none were
+ * throws (the victim held the frame before), a multi-hit's repeats, a hit on a sleeping fighter,
+ * and damage from no one: the off-screen bubble's 1% a second, some stages' damage.
+ */
+const HIT_FIELDS: [string, number][] = [
+  ["stop", 0x10],
+  ["stop", 0x1c],
+  ...Array.from({ length: 10 }, (_, i): [string, number] => ["damage", 0x64 + 4 * i]),
+  ...Array.from({ length: 6 }, (_, i): [string, number] => ["collisionHit", 0x50 + 4 * i]),
+];
+const ALL_FIELDS: (readonly [string, number, boolean])[] = [
+  ...FIELDS,
+  ...HIT_FIELDS.map(([name, at]) => [name, at, false] as const),
+];
+const F_HIT = FIELDS.length;
 const F_ENTRY = 0;
 const F_DAMAGE = 1;
 const F_STOCKS = 2;
@@ -249,12 +276,14 @@ export function decodeTimeline(data: Buffer): Timeline {
     kind: Column<Uint32Array>;
     landings: Column<Float32Array>;
     lCancels: Column<Float32Array>;
+    hit: Column<Uint32Array>;
   }[] = [];
   const pads: Column<Uint8Array>[] = Array.from(
     { length: PORTS },
     () => new Column((n) => new Uint8Array(n), PAD_KEPT),
   );
   let fieldOffsets: number[] = [];
+  let hitRecorded = false;
   let after: Timeline["after"] = null;
 
   for (const { type, raw } of chunks(data)) {
@@ -322,7 +351,7 @@ export function decodeTimeline(data: Buffer): Timeline {
       if (fighterFrames === 0) {
         block = blockSize;
         fighterPorts = ports;
-        fieldOffsets = FIELDS.map(([name, at, needed]) => {
+        fieldOffsets = ALL_FIELDS.map(([name, at, needed]) => {
           const base = spec?.[name];
           const size = spec?.[`${name}.size`] ?? 0;
           if (base == null || at + 4 > size || base + at + 4 > block) {
@@ -346,7 +375,9 @@ export function decodeTimeline(data: Buffer): Timeline {
           kind: new Column((n) => new Uint32Array(n)),
           landings: new Column((n) => new Float32Array(n)),
           lCancels: new Column((n) => new Float32Array(n)),
+          hit: new Column((n) => new Uint32Array(n)),
         }));
+        hitRecorded = fieldOffsets.slice(F_HIT).every((o) => o >= 0);
       }
       if (
         blockSize !== block ||
@@ -358,7 +389,7 @@ export function decodeTimeline(data: Buffer): Timeline {
         break;
       }
       let off = 16;
-      const acc = Buffer.alloc(FIELDS.length * 4);
+      const acc = Buffer.alloc(ALL_FIELDS.length * 4);
       for (const c of cols) {
         for (const col of Object.values(c)) {
           col.ensure(fighterFrames + count);
@@ -366,7 +397,7 @@ export function decodeTimeline(data: Buffer): Timeline {
         acc.fill(0);
         for (let f = 0; f < count; f++) {
           const row = off + f * block;
-          for (let k = 0; k < FIELDS.length; k++) {
+          for (let k = 0; k < ALL_FIELDS.length; k++) {
             if (fieldOffsets[k] < 0) {
               continue;
             }
@@ -390,6 +421,13 @@ export function decodeTimeline(data: Buffer): Timeline {
           c.kind.data[i] = acc.readUInt32BE(F_KIND * 4);
           c.landings.data[i] = acc.readFloatBE(F_LANDINGS * 4);
           c.lCancels.data[i] = acc.readFloatBE(F_LCANCELS * 4);
+          if (hitRecorded) {
+            let h = 0x811c9dc5;
+            for (let k = F_HIT; k < ALL_FIELDS.length; k++) {
+              h = Math.imul(h ^ acc.readUInt32BE(k * 4), 0x01000193);
+            }
+            c.hit.data[i] = h >>> 0;
+          }
         }
         off += count * block;
       }
@@ -448,6 +486,7 @@ export function decodeTimeline(data: Buffer): Timeline {
     kind: cols.map((c) => c.kind.take(frames)),
     aerialLandings: cols.map((c) => c.landings.take(frames)),
     lCancels: cols.map((c) => c.lCancels.take(frames)),
+    hitRecord: hitRecorded ? cols.map((c) => c.hit.take(frames)) : null,
     // (The pads cover the same frames: FTRM and FRMS are written together.)
     pads: recorded.map((p) => (padFrames >= frames ? pads[p].take(frames) : emptyPads)),
     after,
@@ -501,6 +540,7 @@ function holdUnrecorded(t: Timeline, entries: Uint32Array[]) {
     t.kind,
     t.aerialLandings,
     t.lCancels,
+    ...(t.hitRecord ? [t.hitRecord] : []),
   ];
   entries.forEach((ids, i) => {
     for (let f = 1; f < t.frames; f++) {

@@ -67,6 +67,9 @@ public:
 
   // In deterministic GPU thread mode this waits for the GPU to be done with pending work.
   void SyncGPU(SyncGPUReason reason, bool may_move_read_ptr = true);
+  // The deterministic GPU thread: once the CPU thread has preprocessed the FIFO data at hand, it
+  // waits for the video thread to run it (an EFB copy a session writes to guest RAM; CPU thread).
+  void SyncAfterPreprocess() { m_sync_after_preprocess = true; }
 
   // In single core mode, this runs the GPU for a single slice.
   // In dual core mode, this synchronizes with the GPU thread.
@@ -170,6 +173,7 @@ private:
   // Rollback load: the CPU part's FIFO bytes, waiting for ApplyRollbackFifo.
   std::vector<u8> m_rollback_fifo_tail;
   bool m_rollback_fifo_pending = false;
+  bool m_sync_after_preprocess = false;
 
   std::atomic<int> m_sync_ticks = 0;
   bool m_syncing_suspended = false;

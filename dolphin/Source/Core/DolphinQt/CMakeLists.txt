@@ -30,6 +30,8 @@ add_executable(project-plus-dolphin
   CheatSearchWidget.h
   CheatsManager.cpp
   CheatsManager.h
+  CrashReporter.cpp
+  CrashReporter.h
   Achievements/AchievementBox.cpp
   Achievements/AchievementBox.h
   Achievements/AchievementHeaderWidget.cpp

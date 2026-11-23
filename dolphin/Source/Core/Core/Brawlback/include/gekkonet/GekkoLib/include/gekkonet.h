@@ -184,6 +184,33 @@ typedef struct GekkoNetworkStats {
     unsigned int dropped_packets;
 } GekkoNetworkStats;
 
+// what input suggestions did to the remote players' predictions (gekko_suggestion_stats), summed
+// over them since the session started. "the last input" is what a prediction is without them.
+typedef struct GekkoSuggestionStats {
+    unsigned long long received;     // suggestions taken
+    unsigned long long stale;        // dropped: their frame's input had come, or out of range
+    unsigned long long changed;      // predictions made with a suggestion other than the last input
+    unsigned long long checked;      // predictions checked against the real input
+    unsigned long long wrong;        // of them, wrong
+    unsigned long long helped;       // of them, right where the last input would have been wrong
+    unsigned long long hurt;         // of them, wrong where the last input would have been right
+    // frames whose first prediction was wrong: the one the screen showed (a rollback re-runs from
+    // its first wrong frame, but a later frame first predicted right was shown right)
+    unsigned long long shown_wrong;
+    // real inputs a suggestion for their frame made worse than the player's last input (the judge's
+    // cost > 0), and players whose suggestions the judge stopped using for the rest of the session
+    unsigned long long worse;
+    unsigned long long ignored;
+} GekkoSuggestionStats;
+
+// how much worse `suggested` was than `previous` (the player's last real input) at predicting `real`,
+// the input of the frame the suggestion was for; 0: no worse. Each real input drains a remote
+// player's bucket by 1 and adds cost * 200; above 15 * 200 that player's suggestions are not used
+// for the rest of the session (Slippi's input suggestions).
+typedef unsigned int (*GekkoSuggestionJudge)(const unsigned char* previous,
+                                             const unsigned char* suggested,
+                                             const unsigned char* real);
+
 // Public Facing API
 
 // creates a session of the given type. the handle has to be empty.
@@ -268,6 +295,20 @@ GEKKONET_API bool gekko_received_input(GekkoSession* session, int player, int fr
 // arrived: a misprediction of that frame alone is forgotten (no rollback), as if the frame had run
 // with the input. False when an earlier frame of the player is mispredicted too.
 GEKKONET_API bool gekko_accept_late_input(GekkoSession* session, int player, int frame);
+
+// input suggestions (Slippi's, after Arte's "subframe rollback"): a remote player's controller as
+// its machine saw it after its newest input was taken, its input for `frame` and the frames after
+// unless it changes again. `seq` orders a player's suggestions (the highest is the newest). Only
+// predictions use them: a frame of that player that has to be predicted gets the newest suggestion
+// for it (frame <= that frame, after the player's last input) instead of its last input, and the
+// real input is checked against it as before.
+GEKKONET_API void gekko_add_input_suggestion(GekkoSession* session, int player, int frame,
+                                             unsigned int seq, const void* input);
+
+GEKKONET_API void gekko_suggestion_stats(GekkoSession* session, GekkoSuggestionStats* stats);
+
+// process-wide; nullptr (the default): suggestions are never judged.
+GEKKONET_API void gekko_set_suggestion_judge(GekkoSuggestionJudge judge);
 
 // frames added to the local delay in the frame advantage this session reports and records: a
 // session that hands its local input over a frame before the update that used to (one frame less

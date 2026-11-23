@@ -60,7 +60,10 @@
 #include "Core/PowerPC/PowerPC.h"
 #include "Core/Rollback/ClipRecorder.h"
 #include "Core/Rollback/FrameProfile.h"
+#include "Core/Online/MatchQoS.h"
 #include "BrawlOnline/Rollback/GameplayRollback.h"
+#include "Core/Rollback/InputSuggest.h"
+#include "Core/Rollback/InputTrace.h"
 #include "BrawlOnline/Rollback/LoopWatch.h"
 #include "BrawlOnline/Rollback/PeerData.h"
 #include "Core/Rollback/PresentStats.h"
@@ -77,6 +80,12 @@ namespace Gprb::Session
 namespace
 {
 using Clock = std::chrono::steady_clock;
+
+// RedrawUnshownFrameDue: a playback's seek runs unseen now (CPU thread), and when the last frame
+// was last shown again for it.
+std::atomic<bool> s_redraw_unshown{false};
+Clock::time_point s_unshown_redrawn{};
+std::atomic<u64> s_unshown_redraws{0};  // how many (PlaybackStatus "seek_redraws")
 
 // Brawl's game loop (gfApplication::mainLoop), see HLE_Misc.cpp.
 constexpr u32 LOOP_TOP = 0x800171b4;       // li r25,1 (BrawlbackGekkoNetUnconditionalFrame)
@@ -297,6 +306,8 @@ struct PeerView
   // Its state says it takes GekkoNet's messages bundled ('B', PeerData::AppendGekkoBundle);
   // builds before 2026-10-13 do not.
   bool gekko_bundles = false;
+  // Its state says it takes input suggestions ('S', Gprb::Suggest); older builds do not.
+  bool suggestions = false;
 };
 
 struct FrameRecord
@@ -360,6 +371,10 @@ struct State
   std::unique_ptr<sf::UdpSocket> socket;
   // IPv6 beside it (ConnectOptions::local_ip6), if this match has IPv6.
   std::unique_ptr<UdpSocket6> socket6;
+  // The IPv4 socket's voice mark (UdpSocket6 marks itself) and Windows' Wi-Fi media streaming
+  // mode, from Connect to CloseNetwork (Online/MatchQoS.h).
+  std::optional<Online::MatchQoS::Marking> qos4;
+  std::optional<Online::MatchQoS::StreamingMode> streaming;
   // This player's in-game port, the deciding player's (-1: not known yet), and whether the
   // session was configured with ports (ConnectOptions::local_slot) rather than as a 1v1.
   int local_slot = 0;
@@ -527,6 +542,13 @@ struct State
   // The local controller port the local player uses this game (fixed in CreateGekko).
   int local_pad = 0;
   Clock::time_point local_sampled_at{};  // the local input's controller read (CaptureLocalInputs)
+  bool local_decoded = false;  // ... the host decode of that read (else the pad thread's pass)
+  // Input trace (Rollback::InputTrace): GekkoNet's confirmed frame at the last update, and the
+  // last pass run (its frame and that confirmed frame): the picture the next displayed pass shows.
+  s64 trace_confirmed = -1;
+  s64 trace_last_pass_frame = -1;
+  s64 trace_last_pass_confirmed = -1;
+  s64 test_hitch_frame = -1;  // PPR_GPRB_TEST_HITCH's last hitch
   // Early local input for a Wii controller (a GameCube controller has the host decode). The pass of
   // the pad thread that the next loop top's CaptureLocalInputs would take is made on most frames
   // just after the loop top before it, so its pad waited a field for nothing. It is handed to
@@ -847,6 +869,17 @@ struct State
   GuestRegs force_final_at_saved;
   u64 pass_serial = 0;  // counts session passes (diagnostics)
   u64 mispredicted_passes = 0;  // misprediction sync test: first runs given a wrong input
+  // Network sessions (input suggestions' measurements): each frame's first re-run against its first run, the
+  // one the screen showed: frames compared, frames whose fighters' action differed, whose position
+  // moved more than half a unit, and the position moves (sum, largest), in stage units.
+  struct Pops
+  {
+    u64 compared = 0;
+    u64 action = 0;
+    u64 moved = 0;
+    double move_sum = 0;
+    double move_max = 0;
+  } pops;
   // Pass log (PPR_GPRB_PASS_LOG=path): every GekkoNet update's load and passes, for replays.
   FILE* pass_log = nullptr;
   int last_load_back = 0;
@@ -1010,6 +1043,7 @@ void LogEarlyInputWindow();
 void CloseNetWindowClock();
 void NetStatsFold(State::NetStats& t, const State::NetStats& w);
 void LogPerfVerdict(const State::NetStats& t);
+void LogSuggestStats();
 }  // namespace
 
 bool InMatchPhase();
@@ -1737,6 +1771,8 @@ sf::Socket::Status SendTo(const void* data, std::size_t size, const sf::IpAddres
     return sf::Socket::Status::Error;
   if (TestIpv4Dropped())
     return sf::Socket::Status::Done;
+  if (s.qos4)
+    s.qos4->Track(to.toInteger(), port);
   return s.socket->send(data, size, to, port);
 }
 
@@ -1767,6 +1803,46 @@ void SendRaw(int slot, const std::vector<u8>& data)
     ++tx.failed;
     tx.last_status = static_cast<int>(st);
   }
+}
+
+// The peers input suggestions go to (Gprb::Suggest): those whose state says they take them and
+// that have not left (under s.mutex).
+void UpdateSuggestPeers()
+{
+  std::vector<Suggest::Peer> to;
+  ForEachPeer([&](int, const PeerView& p) {
+    if (p.suggestions && !p.left && p.expected && p.ip && p.port != 0)
+      to.push_back({*p.ip, p.port});
+  });
+  Suggest::SetPeers(std::move(to));
+}
+
+// A peer's suggestion datagram (net thread): to GekkoNet for that player's predictions.
+void OnSuggestDatagram(int slot, const u8* data, std::size_t size)
+{
+  s32 frame;
+  u32 seq;
+  const u8* input;
+  if (!Suggest::Enabled() || !Suggest::Decode(data, size, &frame, &seq, &input))
+    return;
+  // Tests (PPR_GPRB_SUGGEST_USE=0): the peers' suggestions come and are not used (their traffic
+  // without their predictions).
+  static const bool use = [] {
+    const char* e = std::getenv("PPR_GPRB_SUGGEST_USE");
+    return !(e && *e == '0');
+  }();
+  if (!use)
+    return;
+  std::lock_guard<std::recursive_timed_mutex> lk(s.mutex);
+  const PeerView& p = s.peers[slot];
+  if (!s.gekko || !s.gekko_started || s.mode != Mode::Network || p.handle < 0 || p.left)
+    return;
+  std::array<u8, INPUT_SIZE> in;
+  std::memcpy(in.data(), input, INPUT_SIZE);
+  // Real input never carries the gone marker; nor may a guess at it.
+  if (s.gone_enabled)
+    PeerData::ClearGoneMarkerBytes(in.data());
+  gekko_add_input_suggestion(s.gekko, p.handle, frame, seq, in.data());
 }
 
 void SendToAll(const std::vector<u8>& data)
@@ -2742,6 +2818,9 @@ void SendState(bool tick = false)
     o["v"] = picojson::value(1.0);
     // Takes GekkoNet's messages bundled ('B', GekkoBatch).
     o["gb"] = picojson::value(1.0);
+    // Takes input suggestions ('S', Gprb::Suggest).
+    if (Suggest::Enabled())
+      o["sg"] = picojson::value(1.0);
     o["host"] = picojson::value(host);
     o["slot"] = picojson::value(static_cast<double>(s.local_slot));
     o["name"] = picojson::value(s.net_opts.name);
@@ -2942,6 +3021,7 @@ void OnPeerLeft(int slot, const std::string& reason)
   p.left = true;
   p.left_reason = reason;
   p.drop_requested = true;
+  UpdateSuggestPeers();
   const int active = ActivePlayers();
   INFO_LOG_FMT(BRAWLBACK, "gprb: P{} left the session ({}); {} player(s) left", slot + 1, reason,
                active);
@@ -3235,6 +3315,11 @@ void HandleControl(std::string_view text, const sf::IpAddress& from, u16 from_po
     p.behind = x->get<bool>();
   if (const auto* x = get("gb"); x && x->is<double>())
     p.gekko_bundles = x->get<double>() >= 1;
+  if (const auto* x = get("sg"); x && x->is<double>() && (x->get<double>() >= 1) != p.suggestions)
+  {
+    p.suggestions = x->get<double>() >= 1;
+    UpdateSuggestPeers();
+  }
   // The decider: the first peer that says it is, unless the host was configured.
   if (const auto* x = get("host"); x && x->is<bool>())
     p.claims_host = x->get<bool>();
@@ -3828,6 +3913,10 @@ void NetThread()
           if (auto text = s.reassembler.Add(source, buf.data(), received))
             HandleControl(*text, *from, from_port);
         }
+        else if (buf[0] == Suggest::DATAGRAM && known)
+        {
+          OnSuggestDatagram(slot, buf.data(), received);
+        }
         else if (buf[0] == 'P' && received == 9 && known)
         {
           // ping: answer with the same payload
@@ -3980,6 +4069,9 @@ void CloseNetwork()
   {
     // GekkoNet sends from the CPU thread under s.mutex.
     std::lock_guard<std::recursive_timed_mutex> slk(s.mutex);
+    Suggest::Disarm();
+    s.qos4.reset();
+    s.streaming.reset();
     if (s.socket)
       s.socket->unbind();
     s.socket.reset();
@@ -4072,8 +4164,23 @@ void ApplyLiveDelay()
   gekko_set_disconnect_timeout(s.gekko, Online::PeerSilenceTimeoutMs(delay));
 }
 
+// GekkoNet's input suggestion stats of the last session it ran (kept past gekko_destroy).
+GekkoSuggestionStats s_last_sugg_stats{};
+
+GekkoSuggestionStats SuggestGekkoStats()
+{
+  if (!s.gekko || s.mode != Mode::Network)
+    return s_last_sugg_stats;
+  GekkoSuggestionStats st{};
+  gekko_suggestion_stats(s.gekko, &st);
+  return st;
+}
+
 void DestroyGekko()
 {
+  Suggest::Disarm();
+  if (s.gekko && s.mode == Mode::Network)
+    gekko_suggestion_stats(s.gekko, &s_last_sugg_stats);
   if (s.gekko)
     gekko_destroy(&s.gekko);
   s.gekko = nullptr;
@@ -4197,6 +4304,15 @@ bool CreateGekko(bool stress, int num_players)
     ClearHostPadPlaysPort();
     if (s.mode == Mode::Network && s.local_pad < 4)
       SetHostPadPlaysPort(s.local_pad, s.local_slot);
+    // Input suggestions (Gprb::Suggest): the peers' predict this player's GameCube controller
+    // with them; this machine predicts the peers' with theirs, and stops following a peer whose
+    // suggestions keep doing worse than its last input.
+    gekko_set_suggestion_judge(Suggest::Enabled() ? Suggest::WorseCost : nullptr);
+    if (s.local_pad < 4)
+    {
+      Suggest::Arm(s.socket.get(), s.local_pad);
+      UpdateSuggestPeers();
+    }
     {
       // A Wii controller's pad goes to GekkoNet early (a GameCube one's read is decoded at the loop
       // top instead: PadsHostDecoded).
@@ -4432,6 +4548,7 @@ void ResetRunStats()
     }
   }
   s.mispredicted_passes = 0;
+  s.pops = {};
   s.sample_chunks.clear();
   s.sample_bytes.clear();
   s.sample_ranges = s.ranges;
@@ -4701,6 +4818,7 @@ void Hide(Core::System& system)
 void EndRunning(Core::System& system, const std::string& reason)
 {
   s.watch_armed.store(false);
+  Rollback::InputTrace::Flush();
   ResimHide::Restore(system);
   EiReleaseBatch();
   CostSessionEnd();
@@ -4743,6 +4861,7 @@ void EndRunning(Core::System& system, const std::string& reason)
     {
       INFO_LOG_FMT(BRAWLBACK, "gprb net: session: {}", NetStatsLine(s.net_total));
       LogPerfVerdict(s.net_total);
+      LogSuggestStats();
     }
   }
   s.end_game_frame = GuestOf(system).U32(Addr::GAME_FRAME + 4).value_or(0);
@@ -5261,6 +5380,41 @@ void PerformQueuedSave(Core::System& system)
         s.region_chunks.erase(s.region_chunks.begin());
     }
   }
+  if (s.mode == Mode::Network)
+  {
+    // What a rollback changed on screen: a frame's first re-run against its first run.
+    auto& first = s.first_runs[static_cast<size_t>(s.queued_save.frame) % s.first_runs.size()];
+    if (first.frame != s.queued_save.frame)
+    {
+      first = rec;
+      first.frame = s.queued_save.frame;
+      first.checksum = 0;  // not compared yet
+    }
+    else if (first.checksum == 0)
+    {
+      first.checksum = 1;
+      ++s.pops.compared;
+      bool action = false;
+      double move = 0;
+      for (size_t port = 0; port < rec.fighters.size(); ++port)
+      {
+        const auto& a = first.fighters[port];
+        const auto& b = rec.fighters[port];
+        if (a[0] == 0xff || b[0] == 0xff)
+          continue;
+        action |= a[5] != b[5];
+        const auto f = [](u32 v) { return std::bit_cast<float>(v); };
+        move = std::max<double>(move, std::hypot(f(a[3]) - f(b[3]), f(a[4]) - f(b[4])));
+      }
+      s.pops.action += action;
+      if (move > 0.5)
+      {
+        ++s.pops.moved;
+        s.pops.move_sum += move;
+        s.pops.move_max = std::max(s.pops.move_max, move);
+      }
+    }
+  }
   if (s.mode == Mode::SyncTest)
   {
     // Sync test diagnostics: compare each part with the frame's first run. In a network session a
@@ -5351,6 +5505,14 @@ bool WorstLink(GekkoNetworkStats* out)
 
 constexpr u64 NET_STATS_WINDOW = 600;  // displayed frames (10 s)
 constexpr double FRAME_US = 1e6 * 1001.0 / 60000.0;
+
+// GekkoNet took the local input of `frame`, read at `read` (input suggestions: what the peers know
+// of this player's controller from now on). Under s.mutex.
+void SuggestNoteLocalInput(int frame, Clock::time_point read, const u8* in)
+{
+  Suggest::NoteLocalInput(frame, read, in, FRAME_US / std::max(s.speed_factor, 0.25));
+}
+
 constexpr double LATE_MS = 2.0;
 
 std::string NetStatsLine(const State::NetStats& w)
@@ -5405,11 +5567,11 @@ std::string NetStatsLine(const State::NetStats& w)
     line += fmt::format(", pad reads {} on time, {} in re-runs ({} read anew), late {} from history "
                         "{} live, {} far behind read now (max {:.1f} ms); host decode used {}, "
                         "declined {}, checked {}, differed {}; passes of an older read {}; read "
-                        "after a rollback {} (declined {})",
+                        "after a rollback {} (declined {}); catching up {}, held {}",
                         r.on_time, r.latched + r.relatched, r.relatched, r.late_history,
                         r.late_live, r.late_far, r.late_max_ms, r.decode_used, r.decode_declined,
                         r.decode_checked, r.decode_mismatched, r.pass_older, r.deferred_read,
-                        r.deferred_declined);
+                        r.deferred_declined, r.catch_up, r.held);
   }
   return line;
 }
@@ -5466,6 +5628,8 @@ void NetStatsFold(State::NetStats& t, const State::NetStats& w)
   t.pad_reads.relatched += w.pad_reads.relatched;
   t.pad_reads.deferred_read += w.pad_reads.deferred_read;
   t.pad_reads.deferred_declined += w.pad_reads.deferred_declined;
+  t.pad_reads.catch_up += w.pad_reads.catch_up;
+  t.pad_reads.held += w.pad_reads.held;
   t.pad_reads.late_max_ms = std::max(t.pad_reads.late_max_ms, w.pad_reads.late_max_ms);
   t.cadence.presents += w.cadence.presents;
   t.cadence.hitches += w.cadence.hitches;
@@ -5475,6 +5639,51 @@ void NetStatsFold(State::NetStats& t, const State::NetStats& w)
   t.cadence.interval_ms_sum += w.cadence.interval_ms_sum;
   t.cadence.interval_ms_sq += w.cadence.interval_ms_sq;
   t.cadence.interval_ms_max = std::max(t.cadence.interval_ms_max, w.cadence.interval_ms_max);
+}
+
+// Input suggestions (Gprb::Suggest): what this machine sent, and what the peers' did to its
+// predictions of them.
+void LogSuggestStats()
+{
+  const Suggest::SenderStats tx = Suggest::Stats();
+  const GekkoSuggestionStats rx = SuggestGekkoStats();
+  INFO_LOG_FMT(BRAWLBACK,
+               "gprb suggest: {}, sent {} for {} input changes ({} crossings, {} follow-ups; {} "
+               "reports, {} held back, {} too late, {} undecoded; {} mapped samples, {:.0f} us "
+               "each, at most {}, {:.0f} Hz, a change waited {:.2f} ms to be sampled, gaps at "
+               "most {:.1f} ms); received {} ({} stale), {} predictions changed; predictions "
+               "checked {}, wrong {} ({} right only by a suggestion, {} wrong only by one); first "
+               "predictions (shown) wrong {}; judged worse {}, players ignored {}",
+               Suggest::Enabled() ? "on" : "off", tx.sent, tx.local_changes, tx.crossings,
+               tx.follow_ups, tx.reports, tx.held_back, tx.too_late, tx.undecoded, tx.samples,
+               static_cast<double>(tx.sample_us) / std::max<u64>(tx.samples, 1), tx.sample_us_max,
+               tx.sample_gaps * 1e6 / std::max<u64>(tx.sample_gap_us, 1),
+               tx.sample_gap_us_sq / 2e3 / std::max<u64>(tx.sample_gap_us, 1),
+               tx.sample_gap_us_max / 1e3, rx.received, rx.stale, rx.changed, rx.checked,
+               rx.wrong, rx.helped, rx.hurt, rx.shown_wrong, rx.worse, rx.ignored);
+}
+
+picojson::value SuggestStatsJson()
+{
+  const Suggest::SenderStats tx = Suggest::Stats();
+  const GekkoSuggestionStats rx = SuggestGekkoStats();
+  picojson::object o;
+  o["enabled"] = picojson::value(Suggest::Enabled());
+  for (const auto& [k, v] :
+       {std::pair<const char*, u64>{"local_changes", tx.local_changes}, {"reports", tx.reports},
+        {"sent", tx.sent}, {"held_back", tx.held_back}, {"too_late", tx.too_late},
+        {"crossings", tx.crossings}, {"follow_ups", tx.follow_ups}, {"worse", rx.worse},
+        {"ignored", rx.ignored},
+        {"undecoded", tx.undecoded}, {"samples", tx.samples}, {"sample_us", tx.sample_us},
+        {"sample_us_max", tx.sample_us_max}, {"sample_gaps", tx.sample_gaps},
+        {"sample_gap_us", tx.sample_gap_us}, {"sample_gap_us_sq", tx.sample_gap_us_sq},
+        {"sample_gap_us_max", tx.sample_gap_us_max}, {"received", rx.received}, {"stale", rx.stale},
+        {"changed", rx.changed}, {"checked", rx.checked}, {"wrong", rx.wrong},
+        {"helped", rx.helped}, {"hurt", rx.hurt}, {"shown_wrong", rx.shown_wrong}})
+  {
+    o[k] = picojson::value(static_cast<double>(v));
+  }
+  return picojson::value(o);
 }
 
 // At the end of a network session, one line on whether a PC held the match back, for the logs
@@ -5852,9 +6061,32 @@ void NetStatsOnDisplayedFrame(Core::System& system)
   s.net_window_first = -1;
 }
 
+u32 StartFrame();
+
+// Input trace (Rollback::InputTrace): a local input went to GekkoNet for its frame `frame`, made
+// of the controller read that stands for `instant` (`decoded`: the host decode of it).
+void TraceLocalInput(int frame, const u8* in, Clock::time_point instant, const char* how,
+                     bool decoded)
+{
+  if (s.mode != Mode::Network || !Rollback::InputTrace::Enabled())
+    return;
+  Clock::time_point data_at = instant;
+  const char* kind = "?";
+  HostPadReadNote(s.local_pad, instant, &data_at, &kind);
+  using Rollback::InputTrace::Us;
+  // "@catchup": the frame after a time sync catch-up frame (UpdateTimeSync's AdvanceThrottle put
+  // the schedule a frame earlier, so its read stands for the instant of the frame before).
+  Rollback::InputTrace::Write(fmt::format(
+      "L {} {} {} {} {}{} {} {:02x}{:02x}{:02x}{:02x} {:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+      static_cast<s64>(StartFrame()) + frame, instant == Clock::time_point{} ? 0 : Us(instant),
+      instant == Clock::time_point{} ? 0 : Us(data_at), kind, how,
+      s.prev_frame_advanced ? "@catchup" : "", decoded ? "decode" : "pass",
+      in[0], in[1], in[2], in[3], in[0x30], in[0x31], in[0x32], in[0x33], in[0x34], in[0x35]));
+}
+
 // Network: the loop top's local input (CaptureLocalInputs) for GekkoNet, unless the pass that
 // carries it was handed over early (OnPadPass): then it is compared with that one.
-void AddLocalInputAtLoopTop(int h, u8* in)
+void AddLocalInputAtLoopTop(int h, u8* in, const char* how = "looptop")
 {
   const int before = gekko_local_input_frame(s.gekko, h);
   const int target = gekko_current_frame(s.gekko) + GekkoDelayFor(s.input_delay);
@@ -5876,6 +6108,8 @@ void AddLocalInputAtLoopTop(int h, u8* in)
   const int after = gekko_local_input_frame(s.gekko, h);
   if (after > before)
   {
+    SuggestNoteLocalInput(after, s.local_sampled_at, in);
+    TraceLocalInput(after, in, s.local_sampled_at, how, s.local_decoded);
     State::EiFrame& f = s.ei_frames[static_cast<size_t>(after) % s.ei_frames.size()];
     f.frame = after;
     f.read = s.local_sampled_at;
@@ -5993,7 +6227,7 @@ bool HandleGekkoFrame(Core::System& system)
     {
       // No frame to run (a wait for the peer follows): the loop top's read goes now, as without.
       s.local_deferred = false;
-      AddLocalInputAtLoopTop(s.local_handles[0], s.local_deferred_in.data());
+      AddLocalInputAtLoopTop(s.local_handles[0], s.local_deferred_in.data(), "deferred-now");
     }
     if (s.mode == Mode::Network && gekko_current_frame(s.gekko) > frame_before)
     {
@@ -6283,6 +6517,18 @@ bool ProcessGekkoUpdate(Core::System& system, GekkoGameEvent** events, int count
     s.current_frame = s.ops.adv_frame[num_adv - 1];
   if (s.mode == Mode::Network)
     s.frames_ahead = gekko_frames_ahead(s.gekko);
+  if (num_adv > 0 && s.mode == Mode::Network && s.gekko)
+  {
+    const int confirmed = gekko_confirmed_frame(s.gekko);
+    s.trace_confirmed = confirmed >= 0 ? static_cast<s64>(StartFrame()) + confirmed : -1;
+    if (Rollback::InputTrace::Enabled())
+    {
+      Rollback::InputTrace::Write(fmt::format(
+          "U {} {} {} {} {}", Rollback::InputTrace::Us(Clock::now()),
+          static_cast<s64>(StartFrame()) + s.ops.adv_frame[0], num_adv, s.last_load_back,
+          s.trace_confirmed));
+    }
+  }
   return true;
 }
 
@@ -6687,6 +6933,7 @@ void CaptureLocalInputs()
       latest = PadsSampledBefore(s.local_pad, Clock::time_point::max(), &s.local_sampled_at);
     s.ei_loop_due = due;
     s.ei_loop_frame = s.gekko ? gekko_current_frame(s.gekko) : -1;
+    s.local_decoded = false;
     // A GameCube controller: the read the SI made just before this loop top, made into the pad
     // the pad thread will make of it after the loop top (host decode): a field fresher than that
     // pass. Only a read newer than the pass's and at most a field and a half old by the schedule
@@ -6699,6 +6946,7 @@ void CaptureLocalInputs()
     {
       std::memcpy(latest.data() + s.local_pad * INPUT_SIZE, decoded.data(), INPUT_SIZE);
       s.local_sampled_at = decoded_at;
+      s.local_decoded = true;
     }
   }
   else
@@ -6823,7 +7071,7 @@ void ArmDeferredLocalInput()
 }
 
 // The deferred local input to GekkoNet (under s.mutex): `in`, read at `read`.
-void AddDeferredLocalInput(const u8* in, Clock::time_point read)
+void AddDeferredLocalInput(const u8* in, Clock::time_point read, const char* how, bool decoded)
 {
   s.local_deferred = false;
   if (!s.gekko || s.local_handles.empty())
@@ -6839,6 +7087,8 @@ void AddDeferredLocalInput(const u8* in, Clock::time_point read)
                  target, gekko_local_input_frame(s.gekko, h));
     return;
   }
+  SuggestNoteLocalInput(target, read, copy.data());
+  TraceLocalInput(target, in, read, how, decoded);
   State::EiFrame& f = s.ei_frames[static_cast<size_t>(target) % s.ei_frames.size()];
   f.frame = target;
   f.read = read;
@@ -6881,10 +7131,24 @@ void TakeDeferredLocalInput(Core::System& system)
     read = at;
   }
   std::lock_guard<std::recursive_timed_mutex> lk(s.mutex);
-  AddDeferredLocalInput(in.data(), read);
+  AddDeferredLocalInput(in.data(), read, decoded ? "deferred" : "deferred-declined",
+                        decoded || s.local_decoded);
   if (s.gekko)
     gekko_send_local_inputs(s.gekko);
   EiReleaseBatch();
+}
+
+// A rollback's re-run pass: the deferred local input's read is due (HostDecodeReadAt's instant,
+// the loop top's SI read's), so it is taken now rather than after the rest of the re-runs
+// (Gprb::DeferredReadDueOn). A pad mapped in Dolphin has no past: read after re-runs that ended
+// past that instant, it came that much late (harness/tools/input_fidelity.py: up to 7.7 ms, on
+// 0.8-7% of reads on links that roll back), and is now late by one re-run pass at most.
+bool DeferredReadDueInRerun()
+{
+  if (!s.local_deferred || !DeferredReadDueOn())
+    return false;
+  const std::optional<Clock::time_point> due = HostPadLastDue(s.local_pad);
+  return due && Clock::now() >= *due;
 }
 
 // The next loop top: a deferred input the presented pass did not take goes as the loop top read
@@ -6894,7 +7158,7 @@ void FlushDeferredLocalInput()
   if (!s.local_deferred)
     return;
   std::lock_guard<std::recursive_timed_mutex> lk(s.mutex);
-  AddDeferredLocalInput(s.local_deferred_in.data(), s.local_sampled_at);
+  AddDeferredLocalInput(s.local_deferred_in.data(), s.local_sampled_at, "flush", s.local_decoded);
 }
 
 void SetLoopDefault()
@@ -6995,6 +7259,11 @@ void HardTimeSync(Core::System& system)
       },
       std::chrono::milliseconds(frames * 17 + 100));
   BrawlOnline::GetEngine().ResetThrottleToNow();
+  if (Rollback::InputTrace::Enabled())
+  {
+    Rollback::InputTrace::Write(fmt::format("W {} {} sync", Rollback::InputTrace::Us(t0),
+                                            Rollback::InputTrace::Us(Clock::now())));
+  }
   const double ms = std::chrono::duration<double, std::milli>(Clock::now() - t0).count();
   ++s.net_window.stalls;
   s.net_window.stall_ms += ms;
@@ -7986,6 +8255,11 @@ bool RunFrame(const Core::CPUThreadGuard& guard)
           },
           std::chrono::milliseconds(2000));
       ct.ResetThrottleToNow();
+      if (Rollback::InputTrace::Enabled())
+      {
+        Rollback::InputTrace::Write(fmt::format("W {} {} peer", Rollback::InputTrace::Us(wait_t0),
+                                                Rollback::InputTrace::Us(Clock::now())));
+      }
       const double ms = std::chrono::duration<double, std::milli>(Clock::now() - wait_t0).count();
       ++s.net_window.stalls;
       s.net_window.stall_ms += ms;
@@ -8005,6 +8279,7 @@ bool RunFrame(const Core::CPUThreadGuard& guard)
   {
     ct.SetRollbackResimulating(false);
     const bool none = s.ops.adv_count == 0;
+    s_redraw_unshown.store(false, std::memory_order_relaxed);
     s.iteration = 0;
     Spin(none ? "GekkoNet had no frame to run (the other players' inputs had not come)" :
                 "the update's frames were all run");
@@ -8023,7 +8298,12 @@ bool RunFrame(const Core::CPUThreadGuard& guard)
                          !((s.pb.clip_ff || s.pb.seek_ff) &&
                            s.ops.adv_frame[i] % CLIP_SHOW_EVERY == 0) :
                      s.ops.adv_count > 1 && i != s.ops.adv_count - 1;
-  if (!s.resim_pass)
+  // A replay's seek running unseen: the last frame is shown again with the overlay meanwhile
+  // (RedrawUnshownFrameDue), so the seek bar follows the mouse and says "Seeking...". Not a
+  // render's (its frames go to the video file).
+  s_redraw_unshown.store(s.mode == Mode::Playback && s.resim_pass && !Gprb::Clip::WantsFrames(),
+                         std::memory_order_relaxed);
+  if (!s.resim_pass || DeferredReadDueInRerun())
     TakeDeferredLocalInput(system);
 
   if (s.force_final_at_active)
@@ -8206,9 +8486,15 @@ bool RunFrame(const Core::CPUThreadGuard& guard)
   if (!s.resim_pass)
   {
     Rollback::PresentStats::OnDisplayedFrameStart(s.ops.adv_count > 1);
+    Rollback::PresentStats::TagDisplayedFrame(
+        static_cast<s64>(StartFrame()) + s.ops.adv_frame[i], s.trace_last_pass_frame,
+        s.trace_last_pass_confirmed, s.ops.adv_count > 1);
     ++s.frames;
     NetStatsOnDisplayedFrame(system);
   }
+  // The picture this pass draws is the one the next displayed pass copies.
+  s.trace_last_pass_frame = static_cast<s64>(StartFrame()) + s.ops.adv_frame[i];
+  s.trace_last_pass_confirmed = s.trace_confirmed;
   // The replay: this pass's input (a later pass of the frame overwrites it), once per update the
   // frames no rollback can reach any more.
   if (i == 0)
@@ -8270,6 +8556,24 @@ bool RunFrame(const Core::CPUThreadGuard& guard)
     }
     s.mutex.lock();
   }
+  // Test (PPR_GPRB_TEST_HITCH=<frames>:<ms>): every <frames>th displayed pass stops the CPU
+  // thread <ms> (a shader compile, the OS, a disk that holds a write), so a harness peer hitches.
+  static const std::pair<long, long> test_hitch = [] {
+    const char* v = std::getenv("PPR_GPRB_TEST_HITCH");
+    long every = 0, ms = 0;
+    if (v && std::sscanf(v, "%ld:%ld", &every, &ms) != 2)
+      every = ms = 0;
+    return std::pair<long, long>{every, ms};
+  }();
+  if (test_hitch.first > 0 && test_hitch.second > 0 && !s.resim_pass && s.mode == Mode::Network &&
+      s.ops.adv_frame[i] > 0 && s.ops.adv_frame[i] % test_hitch.first == 0 &&
+      static_cast<s64>(s.ops.adv_frame[i]) > s.test_hitch_frame)
+  {
+    s.test_hitch_frame = s.ops.adv_frame[i];
+    s.mutex.unlock();
+    std::this_thread::sleep_for(std::chrono::milliseconds(test_hitch.second));
+    s.mutex.lock();
+  }
   // Only another re-run pass follows this one: nobody sees its picture (ResimHide).
   if (s.mode != Mode::Playback && s.resim_pass && i + 2 < s.ops.adv_count && ResimHide::Enabled())
     ResimHide::Hide(system);
@@ -8327,6 +8631,13 @@ std::optional<std::string> ArmSyncTest(const SyncTestOptions& options)
   s.error.clear();
   return std::nullopt;
 }
+
+// SFML keeps a socket's handle protected; the match's IPv4 socket is marked by it.
+class MarkableUdpSocket : public sf::UdpSocket
+{
+public:
+  using sf::Socket::getNativeHandle;
+};
 
 std::optional<std::string> Connect(const ConnectOptions& options)
 {
@@ -8490,13 +8801,12 @@ std::optional<std::string> Connect(const ConnectOptions& options)
   s.unheard_ports = 0;
   s.twos_ready_until.reset();
   s.twos_end = {};
-  s.socket = std::make_unique<sf::UdpSocket>();
-  s.socket->setBlocking(false);
-  if (s.socket->bind(options.local_port) != sf::Socket::Status::Done)
-  {
-    s.socket.reset();
+  auto socket4 = std::make_unique<MarkableUdpSocket>();
+  socket4->setBlocking(false);
+  if (socket4->bind(options.local_port) != sf::Socket::Status::Done)
     return fmt::format("cannot bind UDP port {}", options.local_port);
-  }
+  s.qos4.emplace(static_cast<Online::MatchQoS::NativeSocket>(socket4->getNativeHandle()), false);
+  s.socket = std::move(socket4);
   s.socket6.reset();
   bool any6 = false;
   ForEachPeer([&](int, const PeerView& p) { any6 |= p.ip6.has_value(); });
@@ -8537,6 +8847,7 @@ std::optional<std::string> Connect(const ConnectOptions& options)
                options.host ? "host" : "joiner", s.local_slot + 1, ActivePlayers() - 1);
   s.phase = Phase::Connecting;
   s.connecting_since = Clock::now();
+  s.streaming.emplace();
   s.net_run = true;
   s.net_thread = std::thread(NetThread);
   return std::nullopt;
@@ -9421,6 +9732,8 @@ picojson::object PlaybackStatus()
   o["clip_done"] = picojson::value(s.pb.clip_done);
   o["clip_armed"] = picojson::value(s.pb.clip_armed);
   o["stop_end"] = picojson::value(static_cast<double>(s.pb.stop_end));
+  o["seek_redraws"] =
+      picojson::value(static_cast<double>(s_unshown_redraws.load(std::memory_order_relaxed)));
   o["stop_armed"] = picojson::value(s.pb.stop_armed);
   o["highlight_picks"] = picojson::value(static_cast<double>(s.pb.mark_picks));
   o["highlight_pick"] = picojson::value(static_cast<double>(s.pb.mark_pick));
@@ -9545,6 +9858,16 @@ picojson::value Status()
       picojson::value(static_cast<double>(s.snd_gone_why[2]))});
   o["await_scene_exit"] = picojson::value(s.await_scene_exit);
   o["mispredicted_passes"] = picojson::value(static_cast<double>(s.mispredicted_passes));
+  {
+    picojson::object pops;
+    pops["compared"] = picojson::value(static_cast<double>(s.pops.compared));
+    pops["action"] = picojson::value(static_cast<double>(s.pops.action));
+    pops["moved"] = picojson::value(static_cast<double>(s.pops.moved));
+    pops["move_sum"] = picojson::value(s.pops.move_sum);
+    pops["move_max"] = picojson::value(s.pops.move_max);
+    o["pops"] = picojson::value(pops);
+  }
+  o["suggest"] = SuggestStatsJson();
   {
     picojson::object skipped;
     for (const auto& [phys, n] : BrawlOnline::GetEngine().PartialGranuleSkips())
@@ -11284,6 +11607,23 @@ bool IsResimulationPass()
 bool IsRunning()
 {
   return s.phase == Phase::Running;
+}
+
+bool IsPlayback()
+{
+  return s.mode == Mode::Playback;
+}
+
+bool RedrawUnshownFrameDue()
+{
+  if (!s_redraw_unshown.load(std::memory_order_relaxed))
+    return false;
+  const auto now = Clock::now();
+  if (now - s_unshown_redrawn < std::chrono::milliseconds(33))
+    return false;
+  s_unshown_redrawn = now;
+  s_unshown_redraws.fetch_add(1, std::memory_order_relaxed);
+  return true;
 }
 
 LinkHealth GetLinkHealth()

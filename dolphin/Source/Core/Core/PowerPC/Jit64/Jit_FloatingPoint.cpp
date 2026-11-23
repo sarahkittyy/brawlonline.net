@@ -385,6 +385,13 @@ void Jit64::fp_arith(UGeckoInstruction inst)
 // The even-tie test of an accurate single-precision madd's result (bits & 0x1fffffff ==
 // 0x10000000), both lanes: shifted left by 35, a tie leaves only the sign bit.
 alignas(16) static const u64 madd_tie_bits[2] = {0x8000000000000000ULL, 0x8000000000000000ULL};
+// Bug report #313: on a CPU without FMA instructions std::fma rounds in software and ignores
+// MXCSR, so with flush-to-zero on (the game's FPSCR.NI, which Brawl sets) it can return a denormal
+// where an FMA instruction returns a signed zero, in a session that pins FMA on (Other Games
+// rooms). Multiplying the result by 1.0 is exact and keeps zeros, infinities and NaNs as they are,
+// so it changes the result only under flush-to-zero, where the denormal becomes the instruction's
+// zero.
+alignas(16) static const double madd_one[2] = {1.0, 1.0};
 
 void Jit64::fmaddXX(UGeckoInstruction inst)
 {
@@ -407,12 +414,27 @@ void Jit64::fmaddXX(UGeckoInstruction inst)
   // is created on a CPU that has FMA instructions and then gets played back on a CPU that doesn't.
   // (Or if the user just really wants to override the setting and knows how to do so.)
   const bool use_fma = Config::Get(Config::SESSION_USE_FMA);
-  const bool software_fma = use_fma && !cpu_info.bFMA;
 
   const int a = inst.FA;
   const int b = inst.FB;
   const int c = inst.FC;
   const int d = inst.FD;
+
+  // When both factors are known to be single-precision values (at most 24 significant bits and
+  // a single's exponent: loaded with lfs/psq_l or the result of a single-precision instruction),
+  // their product has at most 48 bits and can neither overflow nor underflow a double, so it is
+  // exact in double precision. Then a multiply followed by an add rounds once, the same as a fused
+  // multiply-add, and a CPU without FMA instructions gets FMA's bits without the software FMA call.
+  // Whole-machine rollback sessions (Other Games rooms) set SESSION_USE_FMA on every machine, so
+  // on such a CPU nearly every madd of the game called std::fma, two to four times with the
+  // error-free transformation (bug report #313: an i7-4930K at ~47 frames/s in a Cobalt room).
+  const bool exact_product = js.op->fprIsSingle[a] && js.op->fprIsSingle[c];
+  const bool software_fma = use_fma && !cpu_info.bFMA && !exact_product;
+  // The host's FMA instructions; otherwise a multiply and an add (or subtract), which equals FMA
+  // when use_fma is set (only reached then with an exact product).
+  const bool host_fma = use_fma && cpu_info.bFMA;
+  // After each std::fma call (the result in XMM0): flush-to-zero as an FMA instruction applies it.
+  const auto flush_software_fma_result = [this] { MULSD(XMM0, MConst(madd_one)); };
 
   const bool subtract = inst.SUBOP5 == 28 || inst.SUBOP5 == 30;  // msub, nmsub
   const bool negate = inst.SUBOP5 == 30 || inst.SUBOP5 == 31;    // nmsub, nmadd
@@ -495,12 +517,13 @@ void Jit64::fmaddXX(UGeckoInstruction inst)
   }
   else
   {
-    // For use_fma == true:
+    // For host_fma:
     //   Statistics suggests b is a lot less likely to be unbound in practice, so
     //   if we have to pick one of a or b to bind, let's make it b.
     Ra = error_free_transformation ? fpr.Bind(a, RCMode::Read) : fpr.Use(a, RCMode::Read);
     Rb =
-        use_fma || error_free_transformation ? fpr.Bind(b, RCMode::Read) : fpr.Use(b, RCMode::Read);
+        host_fma || error_free_transformation ? fpr.Bind(b, RCMode::Read) :
+                                                fpr.Use(b, RCMode::Read);
     Rc = error_free_transformation && !want_rc_rounded && !want_rc_duplicated ?
              fpr.Bind(c, RCMode::Read) :
              fpr.Use(c, RCMode::Read);
@@ -599,6 +622,7 @@ void Jit64::fmaddXX(UGeckoInstruction inst)
       const BitSet32 registers_in_use = registers_to_save(scratch_registers_to_save);
       ABI_PushRegistersAndAdjustStack(registers_in_use, 0);
       ABI_CallFunction(static_cast<double (*)(double, double, double)>(&std::fma));
+      flush_software_fma_result();
       ABI_PopRegistersAndAdjustStack(registers_in_use, 0);
     }
 
@@ -651,7 +675,7 @@ void Jit64::fmaddXX(UGeckoInstruction inst)
     if (want_rc_rounded)
       MOVAPD(R(Rc_rounded), result_xmm);
 
-    if (use_fma)
+    if (host_fma)
     {
       if (subtract)
       {
@@ -719,12 +743,14 @@ void Jit64::fmaddXX(UGeckoInstruction inst)
     if (want_rc_rounded)
     {
       Rc_rounded_duplicated = Rc_rounded;
-      scratch_registers_to_save[Rc_rounded] = true;
+      // + 16: an XMM register's bit (bug report #313: without it the software FMA calls below
+      // left Rc_rounded / Rc_duplicated unsaved and set a GPR's bit instead).
+      scratch_registers_to_save[Rc_rounded + 16] = true;
     }
     else if (want_rc_duplicated)
     {
       Rc_rounded_duplicated = Rc_duplicated;
-      scratch_registers_to_save[want_rc_duplicated] = true;
+      scratch_registers_to_save[Rc_duplicated + 16] = true;
     }
 
     // We've calculated s := a + b, with a = Ra * Rc_rounded_duplicated, b = subtract ? -Rb : Rb
@@ -783,6 +809,7 @@ void Jit64::fmaddXX(UGeckoInstruction inst)
         MOVAPD(XMM1, Ra);
 
         ABI_CallFunction(static_cast<double (*)(double, double, double)>(&std::fma));
+        flush_software_fma_result();
 
         // We will read from the upper lane of Rc_rounded_duplicated later,
         // so we need to make sure that that lane isn't overwritten.
@@ -804,12 +831,17 @@ void Jit64::fmaddXX(UGeckoInstruction inst)
         MOVHLPS(XMM1, Ra.GetSimpleReg());
 
         ABI_CallFunction(static_cast<double (*)(double, double, double)>(&std::fma));
+        flush_software_fma_result();
 
         ABI_PopRegistersAndAdjustStack(registers_in_use_2, 0);
 
+        // The first call's da (ps0) is in XMM3, the second's (ps1) in XMM0. UNPCKLPD alone left
+        // them swapped, [ps1, ps0], and ps_madd_eft corrected each lane's tie with the other
+        // lane's error terms (bug report #313).
         UNPCKLPD(XMM0, R(XMM3));
+        SHUFPD(XMM0, R(XMM0), 1);
       }
-      else if (use_fma)
+      else if (host_fma)
       {
         VFMSUB231PD(XMM0, Rc_rounded_duplicated, Ra);
       }
@@ -850,10 +882,11 @@ void Jit64::fmaddXX(UGeckoInstruction inst)
         MOVAPD(XMM1, Ra);
 
         ABI_CallFunction(static_cast<double (*)(double, double, double)>(&std::fma));
+        flush_software_fma_result();
 
         ABI_PopRegistersAndAdjustStack(registers_in_use, 0);
       }
-      else if (use_fma)
+      else if (host_fma)
       {
         VFMSUB231SD(XMM0, Rc_rounded_duplicated, Ra);
       }

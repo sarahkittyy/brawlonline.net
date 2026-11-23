@@ -45,7 +45,6 @@ import {
   writeLogsArchive,
 } from "./logs_archive";
 import { listNetplayNetworks } from "./netplay_networks";
-import { getNetworkDiagnostics } from "./network_diagnostics";
 import type { NetworkDiagnostics } from "./network_report";
 import { BUG_REPORT_NETWORK_TIMEOUT_MS, networkReportText } from "./network_report";
 import { clearTempFolder } from "./util";
@@ -194,7 +193,7 @@ export default function setupMainIpc({
   });
 
   ipc_runNetworkDiagnostics.main!.handle(async () => {
-    return getNetworkDiagnostics();
+    return (await loadNetworkDiagnostics()).getNetworkDiagnostics();
   });
 
   ipc_listNetplayNetworks.main!.handle(async () => {
@@ -207,6 +206,12 @@ export default function setupMainIpc({
   });
 }
 
+/**
+ * The network check's module (UPnP/NAT-PMP, STUN and the HTTP client under them: about a fifth of
+ * main.js), loaded when a check runs instead of at every start.
+ */
+const loadNetworkDiagnostics = () => import("./network_diagnostics");
+
 /** The network check for a bug report's network.txt; never rejects. */
 async function bugReportNetworkText(): Promise<string> {
   let timer: NodeJS.Timeout | undefined;
@@ -216,6 +221,7 @@ async function bugReportNetworkText(): Promise<string> {
   // What the check has found so far, written as it is if the timeout comes first.
   const found: Partial<NetworkDiagnostics> = {};
   try {
+    const { getNetworkDiagnostics } = await loadNetworkDiagnostics();
     return networkReportText((await Promise.race([getNetworkDiagnostics(found), timeout])) ?? found);
   } catch (err) {
     return networkReportText(null, err);

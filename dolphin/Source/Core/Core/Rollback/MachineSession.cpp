@@ -61,6 +61,7 @@
 #include "Core/HW/GCPad.h"
 #include "Core/HW/Memmap.h"
 #include "Core/HW/SI/SI_Device.h"
+#include "Core/HW/SI/SI_DeviceGCController.h"
 #include "Core/HW/WII_IPC.h"
 #include "Common/ChunkFile.h"
 #include "VideoCommon/PixelEngine.h"
@@ -84,12 +85,15 @@
 #include "Core/Harness/Harness.h"
 #include "Core/NetPlayProto.h"
 #include "BrawlOnline/Online/Chat.h"
+#include "Core/Online/MatchQoS.h"
 #include "Core/Online/ModsRoom.h"
 #include "Core/PowerPC/JitInterface.h"
 #include "Core/PowerPC/MMU.h"
 #include "Core/PowerPC/PowerPC.h"
 #include "Core/Rollback/FrameProfile.h"
+#include "BrawlOnline/Rollback/GameplayRollback.h"
 #include "BrawlOnline/Rollback/GameplaySession.h"
+#include "Core/Rollback/InputSuggest.h"
 #include "Core/Rollback/MachineSDCard.h"
 #include "Core/Rollback/PresentStats.h"
 #include "Core/Rollback/RollbackManager.h"
@@ -134,7 +138,10 @@ constexpr u8 CHANNEL_GEKKO = 0;    // GekkoNet's packets (unsequenced)
 constexpr u8 CHANNEL_CONTROL = 1;  // small JSON messages (reliable)
 constexpr u8 CHANNEL_IMAGE = 2;    // a machine image for a joiner (reliable, in chunks)
 constexpr u8 CHANNEL_SD = 3;       // the session's SD card: chunk requests and chunks (reliable)
-constexpr u8 CHANNEL_COUNT = 4;
+// Input suggestions (Gprb::Suggest, unsequenced), only to a player whose hello says it takes them
+// ("sg"). ENet gives a link the fewer channels of its two ends, so a build with four still links.
+constexpr u8 CHANNEL_SUGGEST = 4;
+constexpr u8 CHANNEL_COUNT = 5;
 // A CHANNEL_SD packet: one of these, then a chunk request or a chunk, or (a joiner before it asks
 // to join) a request for the session card's manifest and file list, and those.
 constexpr u8 SD_REQUEST = 0;
@@ -286,6 +293,7 @@ struct PeerLink
   ENetPeer* peer = nullptr;  // the connection kept for this slot
   bool hello = false;        // its hello arrived on `peer`
   int proto = 1;             // its PROTOCOL_VERSION (a hello without one: 1)
+  bool suggestions = false;  // its hello says it takes input suggestions (CHANNEL_SUGGEST)
   // ENet's round trip on this link, a sample every 10 ms (net thread), for PaceSD.
   std::deque<std::pair<Clock::time_point, enet_uint32>> rtt_window;
   // Its game has an SD card, and the session card's root it plays (RootHex; "" until it has
@@ -411,6 +419,9 @@ struct State
   std::recursive_timed_mutex mutex;
   Options opts;
   std::atomic<Phase> phase{Phase::Idle};
+  // Set by Stop: the starter's card read at boot (CreateSDCard) gives up, so a game closed while
+  // a big card is read stops at once instead of being "stuck" (bug report #315).
+  std::atomic<bool> card_read_cancel{false};
   std::string error;
   bool env_checked = false;
   // The player's controller is a GameCube controller adapter (their own SI device setting).
@@ -442,11 +453,22 @@ struct State
     bool raw_pushed = false, sampled_pushed = false;
     double max_gap_ms = 0;
     int peak = 0;
+    u32 motor_starts = 0;  // this player's controller's motor turned on
   } input_log;
+  // The motor of this player's controller as last set (CPU thread; -1: not set this session), and
+  // which controller that was (LocalRumblePad).
+  int motor_on = -1;
+  int motor_pad = -1;
+  bool motor_adapter = false;
 
   // Network (net thread, under `net_mutex`).
   std::mutex net_mutex;
   ENetHost* host = nullptr;
+  // The hosts' voice marks, off while bulk goes out and a second after, and Windows' Wi-Fi media
+  // streaming mode, from StartNetwork to StopNetwork (Online/MatchQoS.h).
+  std::optional<Online::MatchQoS::Marking> qos4, qos6;
+  Clock::time_point qos_bulk_until{};
+  std::optional<Online::MatchQoS::StreamingMode> streaming;
   std::thread net_thread;
   std::atomic<bool> net_run{false};
   // A room session's UPnP mapping of its port (MapRoomPort), removed by StopNetwork.
@@ -471,6 +493,20 @@ struct State
   std::deque<std::pair<int, std::vector<u8>>> gekko_rx;  // (slot, packet)
   std::vector<GekkoNetResult*> gekko_rx_ptrs;
   std::vector<std::pair<int, std::vector<u8>>> gekko_tx;  // (slot, packet)
+  // Input suggestions (Gprb::Suggest): the players' datagrams for the CPU thread (net thread, under
+  // net_mutex), this machine's for the net thread to send (the sender's threads, under
+  // suggest_tx_mutex), and whether the sender was told some player takes them (net thread).
+  std::deque<std::pair<int, std::vector<u8>>> suggest_rx;  // (slot, datagram)
+  std::mutex suggest_tx_mutex;
+  std::vector<std::vector<u8>> suggest_tx;
+  bool suggest_peers = false;
+  // The SI channel and source of the local GameCube controller the session reads (ReadLocalInput;
+  // -1: none, a Wii Remote), for the sender's threads.
+  std::atomic<int> suggest_chan{-1};
+  std::atomic<Gprb::HostPadSource> suggest_source{Gprb::HostPadSource::Mapped};
+  // GekkoNet's suggestion stats of the epochs' sessions before the running one.
+  GekkoSuggestionStats suggest_done{};
+  bool suggest_armed = false;  // the sender runs for this session (CPU thread)
   // The decider's epoch_go (the epoch's players), from the net thread.
   struct EpochGo
   {
@@ -1047,6 +1083,8 @@ void KeepLink(PeerLink& p, ENetPeer* peer, const picojson::object& msg, bool six
   {
     const auto pr = msg.find("proto");
     p.proto = pr != msg.end() && pr->second.is<double>() ? static_cast<int>(pr->second.get<double>()) : 1;
+    const auto sg = msg.find("sg");
+    p.suggestions = sg != msg.end() && sg->second.is<double>() && sg->second.get<double>() >= 1;
     const auto card = msg.find("sd_card");
     p.sd_card = card != msg.end() && card->second.is<bool>() && card->second.get<bool>();
     const auto root = msg.find("sd");
@@ -2572,6 +2610,48 @@ void SendQueuedGekko(Clock::time_point now)
   s.gekko_tx.clear();
 }
 
+// Input suggestions (Gprb::Suggest): a datagram of this machine's for every player that takes them
+// (the sender's threads; the net thread sends it with its next pass, as GekkoNet's own packets).
+void QueueSuggestion(const u8* data, std::size_t size)
+{
+  std::lock_guard lk(s.suggest_tx_mutex);
+  if (s.suggest_tx.size() < 64)
+    s.suggest_tx.emplace_back(data, data + size);
+}
+
+// Under net_mutex: the queued suggestions to the players whose hello says they take them, and the
+// sender told whether there is any (it samples a mapped controller only then).
+void SendQueuedSuggestions()
+{
+  std::vector<std::vector<u8>> tx;
+  {
+    std::lock_guard lk(s.suggest_tx_mutex);
+    tx.swap(s.suggest_tx);
+  }
+  bool any = false;
+  for (PeerLink& p : s.peers)
+  {
+    // A link has the fewer channels of its two ends: a peer whose hello says "sg" but whose link
+    // has no CHANNEL_SUGGEST would refuse every packet (enet_peer_send fails and the packet leaks).
+    if (!p.peer || !p.hello || !p.suggestions || p.left || p.slot < 0 || !Plays(p.slot) ||
+        p.slot == s.opts.local_slot || p.peer->channelCount <= CHANNEL_SUGGEST)
+    {
+      continue;
+    }
+    any = true;
+    for (const auto& d : tx)
+    {
+      enet_peer_send(p.peer, CHANNEL_SUGGEST,
+                     enet_packet_create(d.data(), d.size(), ENET_PACKET_FLAG_UNSEQUENCED));
+    }
+  }
+  if (any != s.suggest_peers)
+  {
+    s.suggest_peers = any;
+    Gprb::Suggest::SetHasPeers(any);
+  }
+}
+
 // Net thread, under net_mutex: a room member still without a link 10 s and 30 s after it came,
 // once each, with how far this side got, so a joiner that never connects says why in its log
 // (bug report #133: three REX joins with no "peer connected" and nothing else).
@@ -2691,6 +2771,7 @@ void NetThread()
     {
       SendQueuedGekko(now);
     }
+    SendQueuedSuggestions();
     // A machine image for a joiner: a few chunks at a time, so ENet's queue stays short.
     if (!s.image_tx.empty() && s.image_to >= 0)
     {
@@ -2747,6 +2828,17 @@ void NetThread()
     {
       if (s.peers[slot].slot == slot)
         PaceSD(s.peers[slot], s.sd_pace[slot], now);
+    }
+    // Bulk goes unmarked: a joiner's machine image, SD card chunks, and a second after the last.
+    bool bulk = !s.image_tx.empty();
+    for (const State::SDPace& pace : s.sd_pace)
+      bulk |= !pace.queue.empty();
+    if (bulk)
+      s.qos_bulk_until = now + std::chrono::seconds(1);
+    for (auto* qos : {&s.qos4, &s.qos6})
+    {
+      if (*qos)
+        (*qos)->SetBulk(now < s.qos_bulk_until);
     }
     // Keep connecting to every peer without a link (both sides do).
     StepProbe(now);
@@ -2823,6 +2915,18 @@ void NetThread()
             SendProbe(ev.peer);
             break;
           }
+#ifdef _WIN32
+          // Windows marks the traffic to each peer (Online/MatchQoS.h).
+          if (auto& qos = host == s.host ? s.qos4 : s.qos6)
+          {
+            const ENetAddress& a = ev.peer->address;
+            u8 ip6[16];
+            if (!Common::ENet::IsIpv6(a))
+              qos->Track(ntohl(a.host), a.port);
+            else if (enet_ipv6_handle_bytes(a.host, ip6) == 0)
+              qos->Track(ip6, a.port);
+          }
+#endif
           // ENet hands out its peers again without clearing `data`: a connection this side did not
           // start learns its slot from its hello, whatever an earlier one left there.
           bool outgoing = false;
@@ -2847,6 +2951,9 @@ void NetThread()
           hello["name"] = picojson::value(s.opts.name);
           hello["playing"] = picojson::value(LocalPlays());
           hello["proto"] = picojson::value(static_cast<double>(PROTOCOL_VERSION));
+          // Takes input suggestions (CHANNEL_SUGGEST).
+          if (Gprb::Suggest::Enabled())
+            hello["sg"] = picojson::value(1.0);
           hello["sd_card"] = picojson::value(Config::Get(Config::MAIN_WII_SD_CARD));
           hello["sd"] = picojson::value(s.sd_root);
           const std::string text = picojson::value(hello).serialize();
@@ -2893,6 +3000,19 @@ void NetThread()
                 s.peers[slot].hello)
             {
               HandleSDPacket(slot, ev.packet->data, ev.packet->dataLength);
+            }
+          }
+          else if (ev.channelID == CHANNEL_SUGGEST &&
+                   ev.packet->dataLength == Gprb::Suggest::HEADER_SIZE + INPUT_SIZE)
+          {
+            const int slot = SlotOf(ev.peer);
+            if (slot >= 0 && slot < MAX_PLAYERS && s.peers[slot].peer == ev.peer &&
+                s.peers[slot].hello && Gprb::Suggest::Enabled())
+            {
+              const u8* d = ev.packet->data;
+              s.suggest_rx.emplace_back(slot, std::vector<u8>(d, d + ev.packet->dataLength));
+              if (s.suggest_rx.size() > 256)
+                s.suggest_rx.pop_front();
             }
           }
           else if (ev.channelID == CHANNEL_GEKKO && ev.packet->dataLength <= MAX_GEKKO_PACKET)
@@ -3033,6 +3153,7 @@ void StartIpv6Host()
     return;
   }
   s.host6->intercept = InterceptAcks;
+  s.qos6.emplace(static_cast<Online::MatchQoS::NativeSocket>(s.host6->socket), true);
   s.server6 = *server;
   AddLog(fmt::format("IPv6: on {} beside IPv4", Common::ENet::EndpointText(s.host6->address)));
 }
@@ -3052,18 +3173,36 @@ bool StartNetwork()
     return false;
   }
   s.host->intercept = InterceptAcks;
+  s.qos4.emplace(static_cast<Online::MatchQoS::NativeSocket>(s.host->socket), false);
   StartIpv6Host();
+  s.qos_bulk_until = {};
+  s.streaming.emplace();
   s.net_run = true;
   s.net_thread = std::thread(NetThread);
   return true;
 }
 
+void LogSuggestStats();
+
 void StopNetwork()
 {
+  if (s.suggest_armed)
+  {
+    LogSuggestStats();
+    Gprb::Suggest::Disarm();
+    s.suggest_armed = false;
+  }
+  s.suggest_chan = -1;
   s.net_run = false;
   if (s.net_thread.joinable())
     s.net_thread.join();
+  {
+    std::lock_guard tlk(s.suggest_tx_mutex);
+    s.suggest_tx.clear();
+  }
   std::lock_guard lk(s.net_mutex);
+  s.suggest_rx.clear();
+  s.suggest_peers = false;
   s.probe.peer = nullptr;
   if (s.host)
   {
@@ -3081,15 +3220,18 @@ void StopNetwork()
     if (s.upnp_mapped)
       Common::UPnP::UnmapUdpPort(s.host->address.port);
 #endif
+    s.qos4.reset();
     enet_host_destroy(s.host);
     s.host = nullptr;
   }
   if (s.host6)
   {
     enet_host_flush(s.host6);
+    s.qos6.reset();
     enet_host_destroy(s.host6);
     s.host6 = nullptr;
   }
+  s.streaming.reset();
   s.seen_endpoint6.clear();
   s.upnp_mapped = false;
   s.gekko_rx.clear();
@@ -3139,8 +3281,13 @@ void GekkoFree(void* p)
   std::free(p);
 }
 
+GekkoSuggestionStats SuggestGekkoStats();
+const Gprb::Suggest::Format& SuggestFormat();
+
 void DestroyGekko()
 {
+  if (s.gekko && s.opts.synctest == 0)
+    s.suggest_done = SuggestGekkoStats();
   if (s.gekko)
     gekko_destroy(&s.gekko);
   s.gekko = nullptr;
@@ -3272,6 +3419,19 @@ bool CreateGekko()
   }
   if (!stress)
   {
+    // Input suggestions (Gprb::Suggest): the players' predict this player's GameCube controller
+    // with them; this machine predicts theirs with theirs, and stops following a player whose
+    // suggestions keep doing worse than their last input. The sender runs from the session's first
+    // GekkoNet session to its end (its frames are the session's, across epochs).
+    gekko_set_suggestion_judge(Gprb::Suggest::Enabled() ? Gprb::Suggest::MachineWorseCost :
+                                                          nullptr);
+    if (!s.suggest_armed)
+    {
+      Gprb::Suggest::Arm(SuggestFormat(), QueueSuggestion, s.suggest_chan.load());
+      s.suggest_armed = true;
+      std::lock_guard nlk(s.net_mutex);
+      s.suggest_peers = false;  // the net thread tells the new sender again
+    }
     double rtt = -1;
     s.input_delay = PickInputDelay(&rtt);
     {
@@ -3676,9 +3836,8 @@ void AddLocalRequest(Input* in)
 // so the session moves the player's own origin into the values, as Dolphin's adapter device tells
 // the game the origin itself: a C-stick that rests off center reaches as far in every direction
 // (P+ in Dolphin's own netplay does the same).
-GCPadStatus AdapterInput(int chan)
+GCPadStatus ShiftAdapterOrigin(int chan, GCPadStatus pad)
 {
-  GCPadStatus pad = GCAdapter::Input(chan);
   const auto origin = GCAdapter::Origin(chan);
   if (!origin)
     return pad;
@@ -3692,6 +3851,184 @@ GCPadStatus AdapterInput(int chan)
   pad.triggerLeft = shift(pad.triggerLeft, origin->triggerLeft, 0);
   pad.triggerRight = shift(pad.triggerRight, origin->triggerRight, 0);
   return pad;
+}
+
+GCPadStatus AdapterInput(int chan)
+{
+  return ShiftAdapterOrigin(chan, GCAdapter::Input(chan));
+}
+
+// ------------------------------------------------------------------------- input suggestions
+
+// Input suggestions (Gprb::Suggest, docs/design/brawl-mods.md 6.2): the local GameCube
+// controller's changes between two reads go to the other players at once, and their predictions
+// of this player use them. The session's input carries the pad as the SI reports it, so a
+// suggestion is the input with the pad as the controller is now.
+static_assert(Gprb::Suggest::MACHINE_PAD == 1 && INPUT_SIZE <= Gprb::Suggest::INPUT_BYTES);
+
+bool SuggestReads(int chan, Gprb::HostPadSource source)
+{
+  return s.suggest_chan.load(std::memory_order_relaxed) == chan &&
+         s.suggest_source.load(std::memory_order_relaxed) == source;
+}
+
+bool SuggestMake(int chan, Gprb::HostPadSource source, const GCPadStatus& st, const u8* last,
+                 u8* out)
+{
+  if (!SuggestReads(chan, source) || (source == Gprb::HostPadSource::Adapter && !st.isConnected))
+    return false;
+  const GCPadStatus pad =
+      source == Gprb::HostPadSource::Adapter ? ShiftAdapterOrigin(chan, st) : st;
+  // As CaptureLocalInput makes the input, with the newest one's requests.
+  Input in{};
+  EncodePad(pad, &in);
+  in[INPUT_REQUEST] = last[INPUT_REQUEST];
+  in[INPUT_MOVE] = last[INPUT_MOVE];
+  std::memcpy(out, in.data(), INPUT_SIZE);
+  return true;
+}
+
+bool SuggestButtonsDiffer(const u8* prev, const u8* next)
+{
+  return prev[1] != next[1] || prev[2] != next[2];
+}
+
+void SuggestLie(u8* in, u32 random)
+{
+  in[1] ^= static_cast<u8>(PAD_BUTTON_A >> 8);
+  in[3] = static_cast<u8>(random >> 24);
+}
+
+const Gprb::Suggest::Format SUGGEST_FORMAT{INPUT_SIZE,
+                                           SuggestReads,
+                                           SuggestMake,
+                                           Gprb::Suggest::MachineMeaningful,
+                                           SuggestButtonsDiffer,
+                                           SuggestLie,
+                                           // Coarse lines: the follow-ups go out too.
+                                           true};
+
+const Gprb::Suggest::Format& SuggestFormat()
+{
+  return SUGGEST_FORMAT;
+}
+
+// The controller the session read (CPU thread, each capture): the sender follows it.
+void SuggestFollow(int chan, Gprb::HostPadSource source)
+{
+  s.suggest_source.store(source, std::memory_order_relaxed);
+  if (s.suggest_chan.exchange(chan, std::memory_order_relaxed) != chan)
+    Gprb::Suggest::SetChannel(chan);
+}
+
+// GekkoNet took the local input of its frame `frame` (CPU thread): from it the sender tags its
+// suggestions with the frames their changes will first be in (the session's frames, the same on
+// every machine across epochs).
+void SuggestNoteLocalInput(int frame, Clock::time_point read, const u8* in)
+{
+  const double hz = Core::System::GetInstance().GetVideoInterface().GetTargetRefreshRate();
+  const double field_us = hz > 1 ? 1e6 / hz : 1e6 * 1001.0 / 60000.0;
+  Gprb::Suggest::NoteLocalInput(static_cast<int>(s.frame_base + frame), read, in,
+                                field_us / std::max(s.speed, 0.25));
+}
+
+// The players' suggestions that came (CPU thread, before GekkoNet takes its packets): to GekkoNet
+// for their players' predictions.
+void TakeSuggestions()
+{
+  std::deque<std::pair<int, std::vector<u8>>> rx;
+  {
+    std::lock_guard lk(s.net_mutex);
+    rx.swap(s.suggest_rx);
+  }
+  if (!s.gekko || s.opts.synctest > 0)
+    return;
+  for (const auto& [slot, d] : rx)
+  {
+    s32 frame;
+    u32 seq;
+    const u8* input;
+    if (!Gprb::Suggest::Decode(d.data(), d.size(), INPUT_SIZE, &frame, &seq, &input))
+      continue;
+    const int h = s.slot_handle[slot];
+    const s64 local = static_cast<s64>(frame) - s.frame_base;
+    if (h < 0 || h == s.local_handle || local < 0 || ((s.gone >> slot) & 1))
+      continue;
+    gekko_add_input_suggestion(s.gekko, h, static_cast<int>(local), seq, input);
+  }
+}
+
+// GekkoNet takes the players' packets now (CPU thread), the suggestions that came before them
+// first.
+void ReceiveRemote()
+{
+  TakeSuggestions();
+  gekko_receive(s.gekko);
+}
+
+GekkoSuggestionStats SuggestGekkoStats()
+{
+  GekkoSuggestionStats st = s.suggest_done;
+  if (s.gekko && s.opts.synctest == 0)
+  {
+    GekkoSuggestionStats now{};
+    gekko_suggestion_stats(s.gekko, &now);
+    st.received += now.received;
+    st.stale += now.stale;
+    st.changed += now.changed;
+    st.checked += now.checked;
+    st.wrong += now.wrong;
+    st.helped += now.helped;
+    st.hurt += now.hurt;
+    st.shown_wrong += now.shown_wrong;
+    st.worse += now.worse;
+    st.ignored += now.ignored;
+  }
+  return st;
+}
+
+// What this machine sent, and what the players' suggestions did to its predictions of them (the
+// session's end, for the logs players send in).
+void LogSuggestStats()
+{
+  const Gprb::Suggest::SenderStats tx = Gprb::Suggest::Stats();
+  const GekkoSuggestionStats rx = SuggestGekkoStats();
+  INFO_LOG_FMT(BRAWLBACK,
+               "machine suggest: {}, sent {} for {} input changes ({} crossings, {} follow-ups; {} "
+               "reports, {} held back, {} too late, {} undecoded; {} mapped samples, {:.0f} us "
+               "each, at most {}, {:.0f} Hz, a change waited {:.2f} ms to be sampled, gaps at "
+               "most {:.1f} ms); received {} ({} stale), {} predictions changed; predictions "
+               "checked {}, wrong {} ({} right only by a suggestion, {} wrong only by one); first "
+               "predictions (shown) wrong {}; judged worse {}, players ignored {}",
+               Gprb::Suggest::Enabled() ? "on" : "off", tx.sent, tx.local_changes, tx.crossings,
+               tx.follow_ups, tx.reports, tx.held_back, tx.too_late, tx.undecoded, tx.samples,
+               static_cast<double>(tx.sample_us) / std::max<u64>(tx.samples, 1), tx.sample_us_max,
+               tx.sample_gaps * 1e6 / std::max<u64>(tx.sample_gap_us, 1),
+               tx.sample_gap_us_sq / 2e3 / std::max<u64>(tx.sample_gap_us, 1),
+               tx.sample_gap_us_max / 1e3, rx.received, rx.stale, rx.changed, rx.checked,
+               rx.wrong, rx.helped, rx.hurt, rx.shown_wrong, rx.worse, rx.ignored);
+}
+
+picojson::value SuggestStatsJson()
+{
+  const Gprb::Suggest::SenderStats tx = Gprb::Suggest::Stats();
+  const GekkoSuggestionStats rx = SuggestGekkoStats();
+  picojson::object o;
+  o["enabled"] = picojson::value(Gprb::Suggest::Enabled());
+  for (const auto& [k, v] :
+       {std::pair<const char*, u64>{"local_changes", tx.local_changes}, {"reports", tx.reports},
+        {"sent", tx.sent}, {"held_back", tx.held_back}, {"too_late", tx.too_late},
+        {"crossings", tx.crossings}, {"follow_ups", tx.follow_ups}, {"undecoded", tx.undecoded},
+        {"samples", tx.samples}, {"sample_us", tx.sample_us}, {"sample_us_max", tx.sample_us_max},
+        {"sample_gaps", tx.sample_gaps}, {"sample_gap_us", tx.sample_gap_us},
+        {"sample_gap_us_sq", tx.sample_gap_us_sq}, {"sample_gap_us_max", tx.sample_gap_us_max},
+        {"received", rx.received}, {"stale", rx.stale}, {"changed", rx.changed},
+        {"checked", rx.checked}, {"wrong", rx.wrong}, {"helped", rx.helped}, {"hurt", rx.hurt},
+        {"shown_wrong", rx.shown_wrong}, {"worse", rx.worse}, {"ignored", rx.ignored}})
+  {
+    o[k] = picojson::value(static_cast<double>(v));
+  }
+  return picojson::value(o);
 }
 
 constexpr u32 INPUT_LOG_EVERY = 600;
@@ -3726,14 +4063,15 @@ void LogLocalInput(const GCPadStatus& pad)
   l.peak = std::max(l.peak, push);
   if (l.frames < INPUT_LOG_EVERY)
     return;
-  if (l.raw_pushes > 0 || l.sampled_pushes > 0)
+  if (l.raw_pushes > 0 || l.sampled_pushes > 0 || l.motor_starts > 0)
   {
     AddLog(fmt::format("input: {} frames, C-stick pushed {} times ({} in the frames' samples, "
-                       "furthest {}), at most {:.1f} ms between samples, adapter at {:.0f} Hz",
+                       "furthest {}), at most {:.1f} ms between samples, adapter at {:.0f} Hz, "
+                       "rumble started {} times",
                        l.frames, l.raw_pushes, l.sampled_pushes, l.peak, l.max_gap_ms,
-                       GCAdapter::GetCurrentPollRate()));
+                       GCAdapter::GetCurrentPollRate(), l.motor_starts));
   }
-  l.frames = l.raw_pushes = l.sampled_pushes = 0;
+  l.frames = l.raw_pushes = l.sampled_pushes = l.motor_starts = 0;
   l.max_gap_ms = 0;
   l.peak = 0;
 }
@@ -3782,6 +4120,7 @@ Input ReadLocalInput()
   Input in{};
   if (s.controller[s.opts.local_slot] == Controller::WiiRemote)
   {
+    SuggestFollow(-1, Gprb::HostPadSource::Mapped);
     CaptureLocalWiimote(Core::System::GetInstance(), &in);
     return in;
   }
@@ -3797,7 +4136,10 @@ Input ReadLocalInput()
     g_controller_interface.UpdateInput();
     pad = Pad::GetStatus(s.opts.local_pad);
   }
-  TestInput(&pad);
+  // A test input replaces the controller at the reads only: nothing to suggest then.
+  const bool test = TestInput(&pad);
+  SuggestFollow(test ? -1 : s.opts.local_pad,
+                s.local_adapter ? Gprb::HostPadSource::Adapter : Gprb::HostPadSource::Mapped);
   LogLocalInput(pad);
   EncodePad(pad, &in);
   return in;
@@ -3931,6 +4273,9 @@ void ApplyRequestedDelay()
 void Update(Core::System& system)
 {
   s.ops.Clear();
+  // Before GekkoNet's packets: a suggestion that came before its frame's real input goes in first
+  // (and is judged by it), as it came.
+  TakeSuggestions();
   gekko_network_poll(s.gekko);
   ApplyRequestedDelay();
   {
@@ -3950,7 +4295,10 @@ void Update(Core::System& system)
       }
       const int before = gekko_local_input_frame(s.gekko, s.local_handle);
       gekko_add_local_input(s.gekko, s.local_handle, s.local_input.data());
-      if (s.late_input && gekko_local_input_frame(s.gekko, s.local_handle) > before)
+      const int after = gekko_local_input_frame(s.gekko, s.local_handle);
+      if (after > before)
+        SuggestNoteLocalInput(after, s.local_read_at, s.local_input.data());
+      if (s.late_input && after > before)
       {
         ++s.late.fallback;
         ++s.late_window.fallback;
@@ -4957,11 +5305,19 @@ struct ImageParts
   u32 copies_count = 0;
   // The session's codes (PackCodes; empty: none).
   std::vector<u8> codes;
+  // A game whose EFB copies go to guest RAM (PresentStats::SessionEFBCopiesToRAM): those bytes
+  // are what this player's GPU drew, so `state` has zeros in every granule GPUWrittenBitmap marks
+  // and every player's digest of it is the same; `marks` is that bitmap (MEM1's granules, then
+  // MEM2's), vouched for, and `drawn` the marked granules' real bytes (u32 granule, then its
+  // bytes), which the joiner writes back into marked granules only (bug report #328).
+  std::vector<u8> marks;
+  std::vector<u8> drawn;
 };
 
 std::string ImageDigest(s64 frame, u32 mem1, u32 mem2, const std::array<Input, MAX_PLAYERS>& last,
                         std::span<const u8> state, std::span<const u8> nand,
-                        std::span<const u8> sd, std::span<const u8> codes)
+                        std::span<const u8> sd, std::span<const u8> codes,
+                        std::span<const u8> marks1 = {}, std::span<const u8> marks2 = {})
 {
   mbedtls_sha256_context ctx;
   mbedtls_sha256_init(&ctx);
@@ -4988,6 +5344,14 @@ std::string ImageDigest(s64 frame, u32 mem1, u32 mem2, const std::array<Input, M
     const u64 codes_size = codes.size();
     put(&codes_size, sizeof(codes_size));
     put(codes.data(), codes.size());
+  }
+  // Only for a game whose EFB copies go to guest RAM (ImageParts::marks).
+  if (!marks1.empty() || !marks2.empty())
+  {
+    const u64 marks_size = marks1.size() + marks2.size();
+    put(&marks_size, sizeof(marks_size));
+    put(marks1.data(), marks1.size());
+    put(marks2.data(), marks2.size());
   }
   std::array<unsigned char, 32> out{};
   mbedtls_sha256_finish_ret(&ctx, out.data());
@@ -5034,9 +5398,40 @@ bool MakeImageParts(Core::System& system, s64 frame, ImageParts* parts, bool cop
   // Image mode on both sides: the host-only video state (textures, EFB contents, bounding box: the
   // joiner rebuilds them) stays out, and the loader refuses device changes.
   s_image_dostate = true;
+  // A game's EFB copies in guest RAM (ImageParts::marks and drawn): the state is saved with zeros
+  // in the marked granules, which keep their bytes aside.
+  const bool drawn_aside = Rollback::PresentStats::SessionEFBCopiesToRAM();
+  std::vector<std::pair<u8*, u32>> drawn;  // each marked granule's RAM and index
+  if (drawn_aside)
+  {
+    const u8* gpu = Rollback::GPUWrittenBitmap::Get().entries;
+    const u32 g1 = memory.GetRamSizeReal() / ROLLBACK_PAGE_SIZE;
+    const u32 g2 = memory.GetExRamSizeReal() / ROLLBACK_PAGE_SIZE;
+    parts->marks.assign(gpu, gpu + g1);
+    parts->marks.insert(parts->marks.end(), gpu + MEM2_FIRST_PAGE, gpu + MEM2_FIRST_PAGE + g2);
+    auto aside = [&](u8* ram, u32 first_page, u32 count) {
+      for (u32 i = 0; ram && i < count; ++i)
+      {
+        if (!gpu[first_page + i])
+          continue;
+        u8* p = ram + size_t{i} * ROLLBACK_PAGE_SIZE;
+        drawn.emplace_back(p, first_page + i);
+        Put32(&parts->drawn, first_page + i);
+        parts->drawn.insert(parts->drawn.end(), p, p + ROLLBACK_PAGE_SIZE);
+        std::memset(p, 0, ROLLBACK_PAGE_SIZE);
+      }
+    };
+    aside(memory.GetRAM(), 0, g1);
+    aside(memory.GetEXRAM(), MEM2_FIRST_PAGE, g2);
+  }
   VideoCommon_SetSkipGPUReadbackForRollback(true);
   const size_t state_size = ::State::SaveToBuffer(system, state);
   VideoCommon_SetSkipGPUReadbackForRollback(false);
+  for (size_t i = 0; i < drawn.size(); ++i)
+  {
+    std::memcpy(drawn[i].first, parts->drawn.data() + i * (4 + ROLLBACK_PAGE_SIZE) + 4,
+                ROLLBACK_PAGE_SIZE);
+  }
   s_image_dostate = false;
   if (state_size == 0)
     return false;
@@ -5058,7 +5453,10 @@ bool MakeImageParts(Core::System& system, s64 frame, ImageParts* parts, bool cop
 
 std::string ImageDigest(const ImageParts& p)
 {
-  return ImageDigest(p.frame, p.mem1, p.mem2, p.last, p.state, p.nand, p.sd, p.codes);
+  const std::span<const u8> marks(p.marks);
+  const size_t g1 = std::min<size_t>(marks.size(), p.mem1 / ROLLBACK_PAGE_SIZE);
+  return ImageDigest(p.frame, p.mem1, p.mem2, p.last, p.state, p.nand, p.sd, p.codes,
+                     marks.first(g1), marks.subspan(g1));
 }
 
 std::optional<ImageParts> s_image_parts;  // this player's, at the epoch it admits a joiner at
@@ -5109,6 +5507,13 @@ std::vector<u8> BuildImage(const ImageParts& parts, u32 sum, u64* raw_size)
   {
     Put32(&raw, static_cast<u32>(parts.codes.size()));
     raw.insert(raw.end(), parts.codes.begin(), parts.codes.end());
+  }
+  // Last, only for a game whose EFB copies go to guest RAM (ImageParts::drawn): a joiner whose
+  // session has them (the same game) reads it.
+  if (!parts.marks.empty())
+  {
+    Put32(&raw, static_cast<u32>(parts.drawn.size()));
+    raw.insert(raw.end(), parts.drawn.begin(), parts.drawn.end());
   }
   *raw_size = raw.size();
 
@@ -5276,6 +5681,22 @@ bool LoadImage(Core::System& system, std::string* error, bool self = false)
       return false;
     }
   }
+  // The real bytes of the granules a game's EFB copies drew (ImageParts::drawn), not vouched for:
+  // written below into granules the vouched bitmap marks, and nowhere else.
+  const bool drawn_aside = Rollback::PresentStats::SessionEFBCopiesToRAM();
+  std::span<const u8> drawn;
+  if (drawn_aside)
+  {
+    u32 drawn_size;
+    if (!get32(&drawn_size) || raw.size() - pos < drawn_size ||
+        drawn_size % (4 + ROLLBACK_PAGE_SIZE) != 0)
+    {
+      *error = "the machine image is cut short";
+      return false;
+    }
+    drawn = std::span<const u8>(raw.data() + pos, drawn_size);
+    pos += drawn_size;
+  }
   // The session's SD card (checked like everything a peer sends; the players vouch for it below).
   std::shared_ptr<const SDCard::Manifest> sd_manifest;
   std::vector<u8> sd_canon;
@@ -5298,7 +5719,9 @@ bool LoadImage(Core::System& system, std::string* error, bool self = false)
   {
     const std::string digest =
         ImageDigest(frame, mem1, mem2, last, std::span<const u8>(raw.data() + state_pos, state_size),
-                    std::span<const u8>(raw.data() + nand_pos, nand_size), sd_canon, codes);
+                    std::span<const u8>(raw.data() + nand_pos, nand_size), sd_canon, codes,
+                    drawn_aside ? std::span<const u8>(raw.data() + g1_pos, g1) : std::span<const u8>{},
+                    drawn_aside ? std::span<const u8>(raw.data() + g2_pos, g2) : std::span<const u8>{});
     std::lock_guard lk(s.net_mutex);
     for (const PeerLink& p : s.peers)
     {
@@ -5430,6 +5853,20 @@ bool LoadImage(Core::System& system, std::string* error, bool self = false)
   u8* gpu = Rollback::GPUWrittenBitmap::Get().entries;
   std::memcpy(gpu, raw.data() + g1_pos, g1);
   std::memcpy(gpu + MEM2_FIRST_PAGE, raw.data() + g2_pos, g2);
+  Rollback::GPUWrittenBitmap::Get().ResetJournal();  // the players' marks, for good
+  for (size_t at = 0; at < drawn.size(); at += 4 + ROLLBACK_PAGE_SIZE)
+  {
+    u32 page;
+    std::memcpy(&page, drawn.data() + at, 4);
+    u8* ram = nullptr;
+    if (page < g1)
+      ram = memory.GetRAM() + size_t{page} * ROLLBACK_PAGE_SIZE;
+    else if (page >= MEM2_FIRST_PAGE && page - MEM2_FIRST_PAGE < g2 && memory.GetEXRAM())
+      ram = memory.GetEXRAM() + size_t{page - MEM2_FIRST_PAGE} * ROLLBACK_PAGE_SIZE;
+    if (!ram || !gpu[page])
+      continue;  // only where the players' bitmap says a copy drew
+    std::memcpy(ram, drawn.data() + at + 4, ROLLBACK_PAGE_SIZE);
+  }
   if (!self)
   {
     rb.ToggleFrameSave();
@@ -6965,7 +7402,7 @@ void BoundarySleep(CoreTiming::CoreTimingManager& ct, Clock::time_point due)
     auto wake = due;
     if (rerun_in_sleep && s.gekko)
     {
-      gekko_receive(s.gekko);
+      ReceiveRemote();
       if (const int frames = gekko_rollback_frames(s.gekko); frames > 0)
       {
         wake -= std::chrono::duration_cast<Clock::duration>(
@@ -7362,6 +7799,52 @@ void LatOnRead(bool si, int port)
   }
 }
 
+// This player's controller's motor on or off (CPU thread), once per change.
+void SetLocalMotor(bool on)
+{
+  bool adapter = false;
+  const int pad = LocalRumblePad(s.opts.local_slot, &adapter);
+  if (pad < 0)
+    return;
+  if (pad == s.motor_pad && adapter == s.motor_adapter && s.motor_on == static_cast<int>(on))
+    return;
+  if (on && s.motor_on != 1)
+    ++s.input_log.motor_starts;
+  // A controller switched to (another adapter port, Dolphin's pad) starts from the game's state;
+  // the one before is stopped so none keeps running.
+  if (s.motor_pad >= 0 && s.motor_on == 1 && (pad != s.motor_pad || adapter != s.motor_adapter))
+  {
+    SerialInterface::CSIDevice_GCController::Rumble(
+        s.motor_pad, 0.0,
+        s.motor_adapter ? SerialInterface::SIDEVICE_WIIU_ADAPTER :
+                          SerialInterface::SIDEVICE_GC_CONTROLLER);
+  }
+  s.motor_pad = pad;
+  s.motor_adapter = adapter;
+  s.motor_on = on ? 1 : 0;
+  SerialInterface::CSIDevice_GCController::Rumble(
+      pad, on ? 1.0 : 0.0,
+      adapter ? SerialInterface::SIDEVICE_WIIU_ADAPTER : SerialInterface::SIDEVICE_GC_CONTROLLER);
+}
+
+// At each shown pass: the motor as the game left it in this player's port, its SI channel's
+// command (on a console the SI sends it with every poll, so the motor is that command's). A
+// rollback's re-runs leave the controller alone (MotorCommand), and the game, which writes the
+// command only when its rumble changes, never stops a rumble that only a mispredicted frame
+// started: that controller rumbled until the next rumble of the game ended (bug report #331: a
+// PhobGCC on a Wii U adapter dropped off the adapter and came back every second or few through
+// Other Games matches, never in P+'s own online play, where the player's own Rumble setting decides).
+void SyncLocalMotor(Core::System& system)
+{
+  const int port = s.opts.local_slot;
+  if (port < 0 || port >= SerialInterface::MAX_SI_CHANNELS)
+    return;
+  const SerialInterface::UCommand c(system.GetSerialInterface().GetChannelCommand(port));
+  if (c.command != 0x40)  // not a standard controller's poll command yet
+    return;
+  SetLocalMotor(c.parameter1 == 1);
+}
+
 void BeginPass(Core::System& system)
 {
   // The inputs this pass runs with, for the SI (GetPad) and the Wii Remotes (GetWiimote).
@@ -7393,6 +7876,7 @@ void BeginPass(Core::System& system)
     LatOnForwardPass(s.current_frame);
     s.consumed = {};
     s.read_outside_pass = false;
+    SyncLocalMotor(system);
   }
   SyncWiimotes(system);
   PlanEpoch(s.current_frame);
@@ -7802,7 +8286,9 @@ bool Arm(const Options& options, std::string* error)
   }
   StopNetwork();
   DestroyGekko();
+  s.suggest_done = {};
   ResetSD();
+  s.card_read_cancel = false;
   s.opts = options;
   s.error.clear();
   // The host's codes (a joiner has none until its image brings the session's): synced before
@@ -7896,6 +8382,7 @@ bool Arm(const Options& options, std::string* error)
   s.desync_notice_at = {};
   s.desync_lines = s.desync_unlogged = 0;
   s.input_log = {};
+  s.motor_on = s.motor_pad = -1;
   s.pick_frame = -1;
   for (auto& e : s.history)
     e.frame = -1;
@@ -7926,6 +8413,7 @@ void Stop()
 {
   if (s.phase == Phase::Idle)
     return;
+  s.card_read_cancel = true;
   // First, without the lock: a CPU thread waiting at a boundary (WaitForFrames, which holds the
   // lock) sees it and lets go.
   if (Active())
@@ -8343,10 +8831,24 @@ std::shared_ptr<SDCard::SessionCard> CreateSDCard(const std::string& image_path)
     return SessionCard::CreateOwnCard(image_path);
   }
   const auto start = Clock::now();
-  std::optional<SDCard::Manifest> manifest = SDCard::BuildManifest(image_path);
+  std::optional<SDCard::Manifest> manifest;
+  if (std::optional<SDCard::ImageHashes> cached = SDCard::CachedImageHashes(image_path))
+  {
+    manifest = SDCard::ManifestFromHashes(image_path, *cached);
+  }
+  else
+  {
+    // Every chunk read and hashed: a minute or more for an 8 GB card on a slow drive.
+    AddLog(fmt::format("SD card: reading the whole card (its hashes are not cached): {}",
+                       image_path));
+    manifest = SDCard::BuildManifest(image_path, &s.card_read_cancel);
+  }
   if (!manifest)
   {
-    AddLog(fmt::format("SD card: could not read {}", image_path));
+    if (s.card_read_cancel)
+      AddLog(fmt::format("SD card: the game stopped while {} was read", image_path));
+    else
+      AddLog(fmt::format("SD card: could not read {}", image_path));
     return SessionCard::CreateOwnCard(image_path);
   }
   const u64 in_use = static_cast<u64>(std::ranges::count_if(
@@ -8404,9 +8906,12 @@ NetPlay::NetSettings MakeNetSettings()
   NetPlay::NetSettings ns{};
   ns.m_RollbackMode = true;
   ns.rollback_delay = s.opts.delay < 0 ? Gprb::Session::DEFAULT_INPUT_DELAY : s.opts.delay;
-  // The CPU thread is the player's choice: with the deterministic GPU thread (forced for rollback
-  // by the netplay layer) single and dual core compute the same.
-  ns.cpu_thread = Config::Get(Config::MAIN_CPU_THREAD);
+  // Dual core on every machine, whatever the player's own setting (docs/design/brawl-mods.md,
+  // decision 14). Single core does not compute the same: its CPU thread runs the GPU's commands
+  // and charges their cycles (FifoManager::RunGpuOnCpu), where the deterministic GPU thread takes
+  // the whole FIFO at once, so a game that times its frames read other ticks on the two. A
+  // single-core player and a dual-core player desynced 5-50 s after every join (bug report #319).
+  ns.cpu_thread = true;
   ns.cpu_core = Config::Get(Config::MAIN_CPU_CORE);
   // Cheats are on with the session's codes only (room-codes.md): those Arm or the machine image
   // gave (UseCodes), never the player's own from the game's inis (sync_codes as a netplay guest:
@@ -8598,6 +9103,7 @@ void LateLocalInput()
     ++s.late_window.skipped;
     return;
   }
+  SuggestNoteLocalInput(target, read_at, in.data());
   gekko_send_local_inputs(s.gekko);
   if (s.direct_send)
     FlushGekkoNow();
@@ -8620,7 +9126,7 @@ void LateRemoteInput(int slot, u8 device)
   Input real{};
   if (!gekko_received_input(s.gekko, h, frame, real.data()))
   {
-    gekko_receive(s.gekko);
+    ReceiveRemote();
     if (!gekko_received_input(s.gekko, h, frame, real.data()))
     {
       ++s.late.missed;
@@ -8673,7 +9179,7 @@ void LateEndOfFrame()
       continue;
     if (!received)
     {
-      gekko_receive(s.gekko);
+      ReceiveRemote();
       received = true;
     }
     Input real{};
@@ -8742,6 +9248,13 @@ int LocalRumblePad(int port, bool* adapter)
   }
   *adapter = s.local_adapter;
   return s.opts.local_pad;
+}
+
+void MotorCommand(int port, u32 type)
+{
+  if (port != s.opts.local_slot || IsResimulationPass())
+    return;
+  SetLocalMotor(type == 1);
 }
 
 bool GetWiimote(int index, WiimoteEmu::DesiredWiimoteState* state)
@@ -9294,6 +9807,7 @@ picojson::value Status()
   o["speed"] = picojson::value(s.speed);
   o["synctest"] = picojson::value(static_cast<double>(s.opts.synctest));
   o["epoch"] = picojson::value(static_cast<double>(s.epoch));
+  o["suggest"] = SuggestStatsJson();
   {
     // What this machine's UDP socket sent and received (ENet's counters; datagrams, UDP payload
     // bytes): the session's upload, for traffic tests.

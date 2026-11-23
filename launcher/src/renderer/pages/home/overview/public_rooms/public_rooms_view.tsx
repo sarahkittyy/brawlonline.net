@@ -21,6 +21,7 @@ import type { PublicRoom, RoomMode, YourRoom } from "@/services/backend/types";
 import { JoinCodeBox } from "./join_code_box";
 import { PublicRoomsMessages as Messages } from "./public_rooms.messages";
 import styles from "./public_rooms.module.css";
+import { roomCustomRuleset } from "./room_ruleset";
 
 /** What the block shows. */
 export type PublicRoomsState =
@@ -433,7 +434,7 @@ export const RoomRow = React.memo(function RoomRow({
 /**
  * The room's ruleset, left of the mode: a published ruleset's name (a click shows it), "Custom" for rules the host
  * changed (whatever they started from: the server's `basedOn` is not shown, since one change or many read the same;
- * the user's, 2026-10-12), nothing for P+ default. Long names are cut, the whole name in the tooltip. Inside the row's
+ * the user's, 2026-10-12; a click shows the rules the room plays, as the room list has them), nothing for P+ default. Long names are cut, the whole name in the tooltip. Inside the row's
  * button, so it stops the click (and Enter / Space) from joining the room.
  */
 const RulesetCell = ({ room, onShow }: { room: PublicRoom; onShow?: (room: PublicRoom) => void }) => {
@@ -443,39 +444,40 @@ const RulesetCell = ({ room, onShow }: { room: PublicRoom; onShow?: (room: Publi
   if (!r || (!r.code && !custom)) {
     return <span className={styles.ruleset} />;
   }
-  if (!r.code) {
-    return (
-      <span className={clsx(styles.ruleset, styles.rulesetCustom)} data-ruleset-cell="custom">
-        {Messages.customRuleset()}
-      </span>
-    );
-  }
-  const full = Messages.rulesetTooltip(r.name, r.version, r.by);
+  // Custom rules can be shown when the server sent them (an older one did not).
+  const showable = !!onShow && (!!r.code || !!roomCustomRuleset(room));
   const show = (e: React.SyntheticEvent) => {
     e.stopPropagation();
     e.preventDefault();
     onShow?.(room);
   };
+  const cell = (
+    <span
+      className={clsx(styles.ruleset, !r.code && styles.rulesetCustom, showable && styles.rulesetLink)}
+      role={showable ? "button" : undefined}
+      tabIndex={showable ? 0 : undefined}
+      data-ruleset-cell={r.code ?? "custom"}
+      onClick={showable ? show : undefined}
+      onKeyDown={
+        showable
+          ? (e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                show(e);
+              }
+            }
+          : undefined
+      }
+    >
+      {r.code ? r.name : Messages.customRuleset()}
+    </span>
+  );
+  if (!r.code) {
+    return cell;
+  }
+  const full = Messages.rulesetTooltip(r.name, r.version, r.by);
   return (
     <Tooltip title={full} placement="top" enterDelay={400} disableInteractive={true}>
-      <span
-        className={clsx(styles.ruleset, onShow && styles.rulesetLink)}
-        role={onShow ? "button" : undefined}
-        tabIndex={onShow ? 0 : undefined}
-        data-ruleset-cell={r.code}
-        onClick={onShow ? show : undefined}
-        onKeyDown={
-          onShow
-            ? (e) => {
-                if (e.key === "Enter" || e.key === " ") {
-                  show(e);
-                }
-              }
-            : undefined
-        }
-      >
-        {r.name}
-      </span>
+      {cell}
     </Tooltip>
   );
 };

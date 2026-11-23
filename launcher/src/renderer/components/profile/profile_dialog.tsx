@@ -1,8 +1,9 @@
-import BlockIcon from "@mui/icons-material/Block";
+import BlockRoundedIcon from "@mui/icons-material/BlockRounded";
+import ChatBubbleOutlineRoundedIcon from "@mui/icons-material/ChatBubbleOutlineRounded";
 import CheckIcon from "@mui/icons-material/Check";
 import CloseIcon from "@mui/icons-material/Close";
 import EditOutlinedIcon from "@mui/icons-material/EditOutlined";
-import MailOutlinedIcon from "@mui/icons-material/MailOutlined";
+import MailOutlineRoundedIcon from "@mui/icons-material/MailOutlineRounded";
 import Button from "@mui/material/Button";
 import CircularProgress from "@mui/material/CircularProgress";
 import Dialog from "@mui/material/Dialog";
@@ -295,7 +296,11 @@ const ProfileActions = ({ profile, onDone }: { profile: PlayerProfile; onDone: (
   );
 };
 
-/** The Message and Ignore user buttons themselves (also the stories'). */
+/**
+ * The buttons themselves (also the stories'): Invite to game and Message a pair of main buttons, and Ignore user quiet
+ * and grey on the web link's row, as the player's own Switch account and Log out (Sarah's board: "these buttons at
+ * the bottom are ugly"). The icons are the right-click menu's.
+ */
 export const ProfileButtons = ({
   ignored,
   onMessage,
@@ -309,19 +314,26 @@ export const ProfileButtons = ({
   onInvite?: () => void;
 }) => (
   <>
-    {onInvite && (
-      <Button variant="contained" size="small" onClick={onInvite} data-testid="profile-invite">
-        {SocialMessages.inviteToGame()}
+    <div className={styles.peerButtons}>
+      {onInvite && (
+        <Button
+          variant="contained"
+          size="small"
+          startIcon={<MailOutlineRoundedIcon />}
+          onClick={onInvite}
+          data-testid="profile-invite"
+        >
+          {SocialMessages.inviteToGame()}
+        </Button>
+      )}
+      <Button variant="contained" size="small" startIcon={<ChatBubbleOutlineRoundedIcon />} onClick={onMessage}>
+        {Messages.message()}
       </Button>
-    )}
-    <Button variant="outlined" size="small" color="inherit" startIcon={<MailOutlinedIcon />} onClick={onMessage}>
-      {Messages.message()}
-    </Button>
+    </div>
     <Button
-      variant="outlined"
       size="small"
-      color={ignored ? "inherit" : "secondary"}
-      startIcon={<BlockIcon />}
+      className={styles.accountLink}
+      startIcon={<BlockRoundedIcon sx={{ fontSize: "15px !important" }} />}
       onClick={onIgnore}
     >
       {ignored ? Messages.unignoreUser() : Messages.ignoreUser()}

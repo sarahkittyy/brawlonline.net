@@ -297,6 +297,9 @@ export class SpectateClient {
       streamOver: w.over,
       // Auto play overrides "Close Dolphin after a spectated game ends" (the user, 2026-10-13).
       closeOnEnd: this.deps.closeOnEnd() && !autoPlay,
+      // At the stream's end Dolphin counts down "Next game in N s." (its X stays, clip mode holds it), then says
+      // `next` (Sarah's board, 2026-11-20: "we wouldn't want the user to be dragged away while they're clipping").
+      autoPlay: autoPlay || undefined,
       banner: this.state.waitingForGame ? "Waiting for the next live game..." : undefined,
     };
   }
@@ -597,8 +600,13 @@ export class SpectateClient {
       await this.deps.closePlayback();
       return;
     }
-    if (w.over && st.state === "ended" && this.state.autoPlay && !this.waitTimer) {
+    if (w.over && st.state === "next" && this.state.autoPlay && !this.waitTimer) {
       await this.autoPlay(w);
+    } else if (st.state !== "next" && this.state.waitingForGame) {
+      // The countdown's X (or a seek back from the end) while waiting for a live game: it stays on this one.
+      this.clearWait();
+      this.update({ waitingForGame: false });
+      this.enqueue(w, () => this.writeComm(w));
     }
   }
 

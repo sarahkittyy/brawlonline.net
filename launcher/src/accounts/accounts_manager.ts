@@ -31,14 +31,53 @@ import type {
   SignUpRequest,
 } from "./types";
 
+/** How long the answers asked for at start (prefetchAtStart) wait for the page's first call. */
+export const START_ANSWER_MS = 30_000;
+
+type StartAnswers = {
+  uid: string;
+  at: number;
+  me: Promise<AccountsResult<AccountsMe>> | null;
+  publicUser: Promise<AccountsResult<AccountsPublicUser>> | null;
+};
+
 /**
  * Main-process side of the accounts integration: owns the session tokens and
  * turns every call into an `AccountsResult` for the renderer.
  */
 export class AccountsManager {
-  constructor(private readonly client: AccountsHttpClient, private readonly sessions: SessionStore) {}
+  private start: StartAnswers | null = null;
+
+  constructor(
+    private readonly client: AccountsHttpClient,
+    private readonly sessions: SessionStore,
+    private readonly now: () => number = Date.now,
+  ) {}
+
+  /**
+   * Asks the server for what the page's start waits for before it shows anything (the active
+   * account's record, then its ranked profile), as soon as the app is ready: the page asks about
+   * half a second later on a fast PC, once its own start is done, and then waited for both, one
+   * after the other, the first over a new connection. Each answer goes to the page's first call for
+   * it within START_ANSWER_MS, if the server gave it (after a network error the call asks again).
+   */
+  prefetchAtStart(uid: string): void {
+    this.start = { uid, at: this.now(), me: this._me(uid), publicUser: this._publicUser(uid) };
+  }
+
+  /** The start's answer of `kind` for `uid`, once, if it is still fresh. */
+  private takeStart<K extends "me" | "publicUser">(uid: string, kind: K): StartAnswers[K] {
+    const start = this.start;
+    if (!start || start.uid !== uid || this.now() - start.at > START_ANSWER_MS) {
+      return null;
+    }
+    const answer = start[kind];
+    start[kind] = null;
+    return answer;
+  }
 
   signUp(req: SignUpRequest): Promise<AccountsResult<AccountsMe>> {
+    this.start = null;
     return wrap(async () => {
       const { sessionToken, user } = await this.client.signUp(req);
       await this.sessions.set(user.uid, sessionToken);
@@ -47,6 +86,7 @@ export class AccountsManager {
   }
 
   login(email: string, password: string): Promise<AccountsResult<AccountsMe>> {
+    this.start = null;
     return wrap(async () => {
       const { sessionToken, user } = await this.client.login(email, password);
       await this.sessions.set(user.uid, sessionToken);
@@ -55,6 +95,7 @@ export class AccountsManager {
   }
 
   logout(uid: string): Promise<AccountsResult<null>> {
+    this.start = null;
     return wrap(async () => {
       const token = await this.sessions.get(uid);
       await this.sessions.delete(uid);
@@ -70,7 +111,12 @@ export class AccountsManager {
     return wrap(async () => Boolean(await this.sessions.get(uid)));
   }
 
-  me(uid: string): Promise<AccountsResult<AccountsMe>> {
+  async me(uid: string): Promise<AccountsResult<AccountsMe>> {
+    const early = await this.takeStart(uid, "me");
+    return early && serverAnswered(early) ? early : this._me(uid);
+  }
+
+  private _me(uid: string): Promise<AccountsResult<AccountsMe>> {
     return this._withSession(uid, (token) => this.client.me(token));
   }
 
@@ -100,7 +146,12 @@ export class AccountsManager {
     return this._withSession(uid, (token) => this.client.rename(token, displayName));
   }
 
-  publicUser(uid: string): Promise<AccountsResult<AccountsPublicUser>> {
+  async publicUser(uid: string): Promise<AccountsResult<AccountsPublicUser>> {
+    const early = await this.takeStart(uid, "publicUser");
+    return early && serverAnswered(early) ? early : this._publicUser(uid);
+  }
+
+  private _publicUser(uid: string): Promise<AccountsResult<AccountsPublicUser>> {
     return wrap(() => this.client.publicUser(uid));
   }
 
@@ -279,6 +330,18 @@ export class AccountsManager {
       }
     });
   }
+}
+
+/**
+ * A settled answer: a value, or an error that asking again would not change (no stored session, an
+ * expired one, a 4xx). Not a request that never reached the server or a 5xx, which may pass.
+ */
+function serverAnswered(result: AccountsResult<unknown>): boolean {
+  if (result.ok || result.error.code === "no_session") {
+    return true;
+  }
+  const status = result.error.status;
+  return status !== undefined && status >= 400 && status < 500;
 }
 
 async function wrap<T>(fn: () => Promise<T>): Promise<AccountsResult<T>> {

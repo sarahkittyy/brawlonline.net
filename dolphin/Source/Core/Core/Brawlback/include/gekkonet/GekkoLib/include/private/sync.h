@@ -57,6 +57,10 @@ namespace Gekko {
 
         void ClearIncorrectFramesUpTo(Frame clear_limit);
 
+		void AddSuggestion(Handle player, Frame frame, u32 seq, const u8* input);
+
+		const GekkoSuggestionStats* GetSuggestionStats(Handle player) const;
+
 	private:
 		u8 _num_players;
 

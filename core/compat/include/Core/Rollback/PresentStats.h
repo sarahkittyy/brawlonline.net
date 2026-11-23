@@ -26,4 +26,7 @@ inline Cadence TakeCadence()
 inline void OnDisplayedFrameStart(bool)
 {
 }
+inline void TagDisplayedFrame(s64, s64, s64, bool)
+{
+}
 }  // namespace Rollback::PresentStats

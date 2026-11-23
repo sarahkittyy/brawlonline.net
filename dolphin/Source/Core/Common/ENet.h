@@ -38,6 +38,17 @@ bool SendPacket(ENetPeer* socket, const sf::Packet& packet, u8 channel_id, _ENet
 // connects.
 void PunchLowPorts(ENetHost* host, const ENetAddress& to);
 
+// A datagram from `socket` to `to` that opens our router for `to` but dies at the hop after it
+// (IP TTL 2, as Dolphin's TraversalClient starts with), so it never reaches their router. Some
+// routers, when a peer's packet comes in before they have sent anything to that peer, keep that
+// pair of ports shut for the whole connect: everything after it in either direction is dropped
+// (bug report #325, TEST#709 and OHM#217: 20 of 23 room games "Heard: nothing", 5 sent and 0
+// received on both sides, and the 3 that connected were the ones where TEST's first connect left
+// before OHM's arrived). Sent to every peer as soon as the match is known, both sides open their
+// routers before either side's real connect leaves. One byte, which ENet drops (PunchLowPorts).
+// Our TTL is put back after. Not for IPv6 sockets.
+void OpenOurRouter(ENetSocket socket, const ENetAddress& to);
+
 // IPv6 (Externals/enet/ipv6/enet_ipv6.h): an IPv6 socket names each IPv6 address by a handle in
 // ENetAddress::host. False when Dolphin was built against a system ENet without it, and then
 // nothing here makes or meets an IPv6 address.

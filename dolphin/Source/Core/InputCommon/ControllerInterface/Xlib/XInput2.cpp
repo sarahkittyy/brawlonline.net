@@ -98,6 +98,15 @@ void InputBackend::PopulateDevices()
 
   const auto hwnd = wsi.render_window;
 
+  // No window (rendering clips to video, --render; or a batch-mode Dolphin before its game
+  // boots): there is nothing to read the cursor against, and the X calls on window 0 fail
+  // (XIQueryPointer then leaves its button mask unset and the device freed whatever the stack
+  // held, its own Display once: "double free or corruption (out)" or "The X11 connection broke"
+  // on a mouse move, the render Dolphin closing, bug reports #274/#279/#287/#317).
+  // The device is added once the window exists (ChangeWindow -> HandleWindowChange).
+  if (!hwnd)
+    return;
+
   Display* dpy = XOpenDisplay(nullptr);
 
   // xi_opcode is important; it will be used to identify XInput events by
@@ -271,19 +280,23 @@ void KeyboardMouse::UpdateCursor(bool should_center_mouse)
   double root_x, root_y, win_x, win_y;
   Window root, child;
 
-  XWindowAttributes win_attribs;
+  XWindowAttributes win_attribs{};
   XGetWindowAttributes(m_display, m_window, &win_attribs);
   const auto win_width = std::max(win_attribs.width, 1);
   const auto win_height = std::max(win_attribs.height, 1);
 
   {
-    XIButtonState button_state;
+    XIButtonState button_state{};
     XIModifierState mods;
     XIGroupState group;
 
-    // Get the absolute position of the mouse pointer and the button state.
-    XIQueryPointer(m_display, pointer_deviceid, m_window, &root, &child, &root_x, &root_y, &win_x,
-                   &win_y, &button_state, &mods, &group);
+    // Get the absolute position of the mouse pointer and the button state. When this fails (the
+    // window is gone, say) it fills in nothing, and the mask must not be freed.
+    if (!XIQueryPointer(m_display, pointer_deviceid, m_window, &root, &child, &root_x, &root_y,
+                        &win_x, &win_y, &button_state, &mods, &group))
+    {
+      return;
+    }
 
     // X buttons are 1-indexed, so to get 32 button bits we need a larger type
     // for the shift.

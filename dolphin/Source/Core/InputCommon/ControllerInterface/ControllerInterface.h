@@ -51,6 +51,8 @@ enum class InputChannel
   SerialInterface,
   Bluetooth,
   FreeLook,
+  // Rollback sessions' input suggestions: a sampler of the local mapped controller (InputSuggest).
+  Suggestions,
   Count,
 };
 

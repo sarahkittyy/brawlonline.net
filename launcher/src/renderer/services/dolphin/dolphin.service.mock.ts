@@ -11,6 +11,7 @@ import type {
   MainFolderMoveOutcome,
   MissingDll,
   NetplayLaunchResult,
+  PlaybackOverlayFile,
   PlayKey,
   PPlusPrepareResult,
   PPlusVersionInfo,
@@ -126,6 +127,10 @@ class MockDolphinClient implements DolphinService {
   }
 
   @delayAndMaybeError(SHOULD_ERROR)
+  async setPlaybackOverlay(_overlay: PlaybackOverlayFile | null): Promise<void> {
+    // nothing
+  }
+
   async renderHighlights(_request: RenderRequest, _choice?: ReplayPlayChoice): Promise<RenderResult> {
     throw new Error("Method not implemented.");
   }

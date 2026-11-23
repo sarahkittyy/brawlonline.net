@@ -109,6 +109,7 @@ bool UdpSocket6::Bind(const std::string& ip6, u16 port)
   }
   // sf::Socket owns it from here (and closes it).
   create(static_cast<sf::SocketHandle>(fd));
+  m_qos.emplace(static_cast<Online::MatchQoS::NativeSocket>(fd), true);
   setBlocking(false);
   m_port = port;
   return true;
@@ -131,6 +132,8 @@ sf::Socket::Status UdpSocket6::Send(const void* data, std::size_t size, const sf
   {
     return Status::Error;
   }
+  if (m_qos)
+    m_qos->Track(reinterpret_cast<const u8*>(&sin6.sin6_addr), port);
   const auto n = sendto(getNativeHandle(), static_cast<const char*>(data), static_cast<int>(size),
                         0, reinterpret_cast<const sockaddr*>(&sin6), sizeof(sin6));
   if (n < 0)

@@ -16,7 +16,6 @@ import { Preconditions } from "@common/preconditions";
 import { APP_ID, LEGACY_PRODUCT_NAMES, PRODUCT_NAME } from "@common/product";
 import { readTestMode } from "@common/test_mode";
 import { DolphinLaunchType } from "@dolphin/types";
-import { registerGameAssetScheme } from "@game_assets/protocol";
 import { ipc_statsPageRequestedEvent } from "@replays/ipc";
 import { ipc_openSettingsModalEvent } from "@settings/ipc";
 import type CrossProcessExports from "electron";
@@ -28,6 +27,7 @@ import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import path from "path";
 import { fileExists } from "utils/file_exists";
 
+import { handleAppScheme, LegacyLocalStorage, registerPrivilegedSchemes } from "./app_scheme";
 import { getConfigFlags } from "./flags/flags";
 import { installModules } from "./install_modules";
 import { attachInterfaceZoom } from "./interface_zoom";
@@ -137,10 +137,15 @@ if (!lockObtained) {
   app.quit();
 }
 
-registerGameAssetScheme();
+registerPrivilegedSchemes();
 
 const flags = getConfigFlags();
 const { dolphinManager, settingsManager, appUpdater, browserWindowManager } = installModules(flags);
+
+// The page: the webpack dev server in development, else dist/renderer as app://launcher (app_scheme.ts).
+const servesAppScheme = process.env.NODE_ENV !== "development";
+const rendererDir = path.resolve(__dirname, "../renderer");
+const legacyLocalStorage = new LegacyLocalStorage(settingsManager, rendererDir);
 
 // Settings > Advanced > Hardware Acceleration, before the app is ready (Electron's rule).
 if (!settingsManager.get().settings.hardwareAcceleration) {
@@ -228,6 +233,9 @@ const createWindow = async () => {
   });
 
   attachInterfaceZoom(mainWindow, settingsManager, { isMac, screen, enforceMinimum: !isDevelopment });
+  if (servesAppScheme) {
+    legacyLocalStorage.start();
+  }
   mainWindow.loadURL(resolveHtmlPath("index.html")).catch(log.error);
 
   mainWindow.on("ready-to-show", () => {
@@ -468,6 +476,9 @@ const main = async () => {
   await app.whenReady();
   if (!lockObtained) {
     return;
+  }
+  if (servesAppScheme) {
+    handleAppScheme(rendererDir);
   }
 
   await appUpdater.verifyPendingUpdate();

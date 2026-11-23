@@ -5,6 +5,8 @@ import { mkdir, rm } from "node:fs/promises";
 import path from "path";
 import { URL } from "url";
 
+import { appSchemeUrl } from "./app_scheme";
+
 export let resolveHtmlPath: (htmlFileName: string) => string;
 
 if (process.env.NODE_ENV === "development") {
@@ -15,8 +17,9 @@ if (process.env.NODE_ENV === "development") {
     return url.href;
   };
 } else {
+  // dist/renderer, served as app://launcher/ (app_scheme.ts).
   resolveHtmlPath = (htmlFileName: string) => {
-    return `file://${path.resolve(__dirname, "../renderer/", htmlFileName)}`;
+    return appSchemeUrl(htmlFileName);
   };
 }
 

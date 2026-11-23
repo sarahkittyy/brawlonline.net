@@ -10,6 +10,7 @@ import type {
   MainFolderMoveOutcome,
   MissingDll,
   NetplayLaunchResult,
+  PlaybackOverlayFile,
   PlayKey,
   PPlusPrepareResult,
   PPlusVersionInfo,
@@ -90,6 +91,13 @@ export const ipc_renderHighlights = makeEndpoint.main(
   "renderHighlights",
   <{ request: RenderRequest; choice?: ReplayPlayChoice }>_,
   <RenderResult>_,
+);
+
+/** The playback Dolphin's seek bar, the launcher's side (`<comm>.overlay.json`): its colour, the in-game renders. */
+export const ipc_setPlaybackOverlay = makeEndpoint.main(
+  "setPlaybackOverlay",
+  <{ overlay: PlaybackOverlayFile | null }>_,
+  <SuccessPayload>_,
 );
 
 export const ipc_cancelRender = makeEndpoint.main("cancelRender", <{ jobId: string }>_, <SuccessPayload>_);

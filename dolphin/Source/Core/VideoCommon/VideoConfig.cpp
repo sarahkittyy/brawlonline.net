@@ -15,6 +15,7 @@
 #include "Core/Config/MainSettings.h"
 #include "Core/ConfigManager.h"
 #include "Core/Core.h"
+#include "Core/CoreTiming.h"
 #include "Core/Movie.h"
 #include "Core/System.h"
 
@@ -42,8 +43,11 @@ static Common::EventHook s_check_config_event;
 
 static bool IsVSyncActive(bool enabled)
 {
-  // Vsync is disabled when the throttler is disabled by the tab key.
+  // Vsync is disabled when the throttler is disabled by the tab key, and while the boot runs
+  // fast-forwarded (CoreTimingManager::SetLoadFastForward): each present would wait for the
+  // screen's refresh and hold the load back to the refresh rate.
   return enabled && !Core::GetIsThrottlerTempDisabled() &&
+         !Core::System::GetInstance().GetCoreTiming().IsLoadFastForward() &&
          Config::Get(Config::MAIN_EMULATION_SPEED) == 1.0;
 }
 
@@ -150,6 +154,8 @@ void VideoConfig::Refresh()
   texture_filtering_mode = Config::Get(Config::GFX_ENHANCE_FORCE_TEXTURE_FILTERING);
   iMaxAnisotropy = Config::Get(Config::GFX_ENHANCE_MAX_ANISOTROPY);
   output_resampling_mode = Config::Get(Config::GFX_ENHANCE_OUTPUT_RESAMPLING);
+  fOutputResamplingSharpness =
+      std::clamp(Config::Get(Config::GFX_ENHANCE_OUTPUT_RESAMPLING_SHARPNESS), 0.0f, 1.0f);
   sPostProcessingShader = Config::Get(Config::GFX_ENHANCE_POST_SHADER);
   bForceTrueColor = Config::Get(Config::GFX_ENHANCE_FORCE_TRUE_COLOR);
   bDisableCopyFilter = Config::Get(Config::GFX_ENHANCE_DISABLE_COPY_FILTER);

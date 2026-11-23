@@ -103,9 +103,9 @@ class AccountsBackendClient implements BackendService {
     throw new Error("No user with that ID");
   }
 
-  async fetchUserData(): Promise<UserData | undefined> {
+  async fetchUserData(options: { account?: AccountsMe } = {}): Promise<UserData | undefined> {
     this._activeUid();
-    const me = await this.authService.getMultiAccountService().refreshActiveUser();
+    const me = options.account ?? (await this.authService.getMultiAccountService().refreshActiveUser());
     if (!me) {
       return undefined;
     }

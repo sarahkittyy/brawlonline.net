@@ -180,6 +180,7 @@ static std::atomic_bool s_is_adapter_wanted = false;
 static std::array<std::atomic_bool, SerialInterface::MAX_SI_CHANNELS> s_config_rumble_enabled{};
 
 static std::atomic<double> s_adapter_poll_rate{};
+static std::atomic<ReportHook> s_report_hook{nullptr};
 static u64 s_consecutive_slow_transfers = 0;
 
 static void ReadThreadFunc()
@@ -993,7 +994,9 @@ void ProcessInputPayload(const u8* data, std::size_t size)
   else
   {
     const Clock::time_point now = Clock::now();
-    std::lock_guard lk(s_read_mutex);
+    const ReportHook hook = s_report_hook.load(std::memory_order_acquire);
+    std::array<std::optional<GCPadStatus>, SerialInterface::MAX_SI_CHANNELS> reports;
+    std::unique_lock lk(s_read_mutex);
 
     for (int chan = 0; chan != SerialInterface::MAX_SI_CHANNELS; ++chan)
     {
@@ -1074,8 +1077,22 @@ void ProcessInputPayload(const u8* data, std::size_t size)
       pad_state.controller_type = type;
       pad_state.status = pad;
       s_port_history[chan].Push(now, pad);
+      if (hook && type != ControllerType::None && !pad_state.is_new_connection)
+        reports[chan] = pad;
+    }
+    lk.unlock();
+
+    for (int chan = 0; chan != SerialInterface::MAX_SI_CHANNELS; ++chan)
+    {
+      if (reports[chan])
+        hook(chan, *reports[chan], now);
     }
   }
+}
+
+void SetReportHook(ReportHook hook)
+{
+  s_report_hook.store(hook, std::memory_order_release);
 }
 
 bool DeviceConnected(int chan)
