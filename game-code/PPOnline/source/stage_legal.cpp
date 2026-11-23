@@ -209,6 +209,23 @@ namespace StageLegal {
         OnlineMenu::anyonePick(kinds[(seed >> 16) % (u32)n], OnlineMatch::sssAsl());
     }
 
+    // A random stage of a set's pick step (A on RANDOM): this machine's own draw among the step's
+    // selectable stages this stage select has, sent as the player's pick.
+    static void stepRandom(const PPOM::GameStep* st)
+    {
+        u8 kinds[40];
+        int n = 0;
+        const int count = st->nKinds > 40 ? 40 : st->nKinds;
+        for (int i = 0; i < count; i++) {
+            if (selectableKind(st->kinds[i])) kinds[n++] = st->kinds[i];
+        }
+        if (n == 0) return;
+        static u32 seed = 0;
+        seed = seed * 1664525u + 1013904223u + PPOM::g_block.debug.frames * 2654435761u;
+        u8 k[2] = {kinds[(seed >> 16) % (u32)n], OnlineMatch::sssAsl()};
+        PPOM::post(PPOM::CMD_GP_COMPLETE_STEP, k, 2);
+    }
+
     int kindAt(int page, int pos)
     {
         if (page < 0 || page >= PAGES || pos < 0) return -1;
@@ -476,6 +493,14 @@ extern "C" {
         }
         if (!(st->myTurn && st->type == PPOM::STEP_PICK) && !(onPageButton && !StageLegal::s_page))
             out &= ~0x100u;   // A only to pick, or to turn P+'s page
+        // A on RANDOM in this player's pick: a random stage of the selectable ones, sent as the
+        // pick (the stage select then leaves by itself, as with any pick). P+'s own random left
+        // the stage select without a pick (sel_stage's button table, not the stage path H2
+        // filters): back to the stage select, and only the pick's timer decided the stage.
+        if ((out & 0x100u) && *(u32*)(task + 0x244) == 0x36) {
+            out &= ~0x100u;
+            StageLegal::stepRandom(st);
+        }
         if (st->myTurn && st->type == PPOM::STEP_STRIKE && (pressed & (0x400u | 0x80000u))) {
             int kind = StageLegal::kindAt(*(u8*)StageLegal::CURRENT_PAGE, *(int*)(task + 0x248));
             if (StageLegal::allowedKind(kind)) {

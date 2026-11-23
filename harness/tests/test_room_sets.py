@@ -59,9 +59,10 @@ def strike(g: Game, kind: int) -> None:
     B.sss_pick_stage(g.c, kind, 0, button="X")
 
 
-def play_steps(players: list[Game], game: int, pick_held: tuple[str, ...] = ()) -> None:
+def play_steps(players: list[Game], game: int, pick_held: tuple[str, ...] = (), random_pick: bool = False) -> None:
     """Whoever's turn it is strikes or bans the first selectable stage, or picks one (holding
-    `pick_held`, P+'s alternate stages), until the stage is decided (both machines see every step)."""
+    `pick_held`, P+'s alternate stages; with `random_pick` A on RANDOM), until the stage is decided
+    (both machines see every step)."""
     for _ in range(12):
         views = {g.name: setup_view(g) for g in players}
         mover = next((g for g in players if views[g.name]["active"] and views[g.name]["my_turn"] and
@@ -74,7 +75,10 @@ def play_steps(players: list[Game], game: int, pick_held: tuple[str, ...] = ()) 
         v = views[mover.name]
         assert v["game"] >= 1 and v["selectable"], v
         kind = v["selectable"][0]
-        if v["type"] == 2:
+        if v["type"] == 2 and random_pick:
+            B.sss_hover_item(mover.c, B.SSS_ITEM_RANDOM)
+            mover.steps("tap A 8")
+        elif v["type"] == 2:
             B.sss_pick_stage(mover.c, kind, 0, held=pick_held)
         else:
             strike(mover, kind)
@@ -193,7 +197,11 @@ def test_room_bo3_set(backend: OnlineBackend, dolphin: Callable[..., DolphinInst
                         f"game {game}: both on the stage select")
         v = until_setup(a, lambda v: v["game"] == game and v["type"] in (1, 2), "the bans")
         a.shot(f"04-g{game}-bans")
-        play_steps(players, game)
+        # Game 2's pick with A on RANDOM: a random selectable stage, sent as the pick (P+'s own
+        # random left the stage select without one, and only the pick's timer decided the stage).
+        play_steps(players, game, random_pick=game == 2)
+        for g in players:   # nothing decided by a step's timer
+            assert g.c.online_status()["ranked"]["setup"]["auto_actions"] == 0, (g.name, setup_view(g))
         games.append(online_set.play_game(players, game))
 
     for rep in games:
