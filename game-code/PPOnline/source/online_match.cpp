@@ -1507,12 +1507,16 @@ namespace OnlineMatch {
         return true;
     }
 
-    const char* quitHintText()
+    u32 quitHintPad()
     {
         u8 me = PPOM::g_block.local.localPort;
         u32 ps = *(u32*)PAD_SYSTEM;
-        const u32 type = me < 4 && isPtr(ps) ? padType(ps, s_portPad[me]) : 0;
-        switch (type) {
+        return me < 4 && isPtr(ps) ? padType(ps, s_portPad[me]) : 0;
+    }
+
+    const char* quitHintText()
+    {
+        switch (quitHintPad()) {
         case 1: return "L+R+A+PLUS to quit";    // Classic Controller
         case 2: return "B+1+2+PLUS to quit";    // Wii Remote alone
         case 3: return "1+B+Z+PLUS to quit";    // Wii Remote and Nunchuk

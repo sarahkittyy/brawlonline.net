@@ -139,6 +139,7 @@ namespace OnlineMatch {
     bool disconnectShown();
     bool quitHintShown();             // Unranked: this player's START shows the quit hint
     const char* quitHintText();       // its text: this player's controller's quit buttons
+    u32 quitHintPad();                // that controller: 0 GameCube, 1 Classic, 2 Wii Remote, 3 + Nunchuk
     bool pairRoom();                  // the match is a 2v2 party's pair room (SESSION MODE_PAIR)
     // The pair room's line at the top of the screen (UTF-16 into `out`, `max` >= 64 units): false
     // when none is shown.

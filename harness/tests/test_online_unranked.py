@@ -283,6 +283,13 @@ def test_direct_loser_picks_off_the_server_list(direct_backend: OnlineBackend,
 PPLUS_PAUSE_OFF = 0x80584084
 
 
+def _pause_art_frames(g: Any) -> int:
+    """match_hud.cpp g_pauseArt: the frames the quit hint was drawn as the pause screen's pictures."""
+    import test_rooms_ui
+    shim = type("Shim", (), {"c": g.c, "u32": lambda self, a: g.c.read_u32(a)})()
+    return g.c.read_u32(test_rooms_ui.ppom_sym(shim, "g_pauseArt"))
+
+
 @pytest.mark.slow
 def test_unranked_quits_without_a_pause(backend: OnlineBackend,
                                         dolphin: Callable[..., DolphinInstance],
@@ -318,9 +325,12 @@ def test_unranked_quits_without_a_pause(backend: OnlineBackend,
         assert not g.debug_scratch()[10] & 0x40000, (g.name, "a quit")
         assert online_set.gstatus(g.c)["phase"] == "running", g.name
     a.shot("01-start-hint")
-    # The quit hint, on A's screen only (drawn: scratch[10] 0x10000000).
+    # The quit hint, on A's screen only (drawn: scratch[10] 0x10000000), as the pause screen's top
+    # (its "Quit:" and "Back:" lines in the pause screen's own pictures; A has a GameCube controller).
     assert a.debug_scratch()[10] & 0x10000000, hex(a.debug_scratch()[10])
     assert not b.debug_scratch()[10] & 0x10000000, hex(b.debug_scratch()[10])
+    assert _pause_art_frames(a) > 0
+    assert _pause_art_frames(b) == 0
     first_file = a.c.call("replay_recording")["path"]
     # P+'s salty runback with no pause either (L+R+Y held with the quit): straight into the same
     # match on both, never the CSS (scratch[10]: the quit marked as a runback, state 10 into it).

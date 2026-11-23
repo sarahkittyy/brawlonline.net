@@ -295,6 +295,190 @@ namespace MatchHud {
         s_gxCurrentMtx(0);
     }
 
+    // ---- Unranked's quit hint, drawn as the pause screen's top -----------------------------------
+    // Sarah's board, 2026-11-22 (card 748; first asked on bug #290's card, 2026-11-14: "get the full
+    // start-menu UI to show up on the screen instead of the placeholder text ... it wouldn't actually
+    // affect the camera or allow controls ... it would basically be drawing only the pause menu hud
+    // overlay"; then "we can hide all the camera controls and just have it be the START + LRASTART
+    // thing at the top"). With a GameCube controller the hint is the pause screen's own "Quit:
+    // L + R + A + START" at the top left and "Back: START" at the top right, from the pictures the
+    // pause screen draws them with, where it draws them (measured on a real pause at 16:9: P+'s
+    // pause in a local Versus match, every picture matched to the screenshot). The camera controls,
+    // "P1 PAUSE" and the song title are left out.
+    // The pictures are the info archive's, in the InfoResource heap for the whole match: TEX0
+    // InfPause03Info3 (IA4 128x20: "Back:", "Quit:" and "+") and InfPauseButton00 (C8 120x132 and its
+    // PLT0: the buttons, START/PAUSE). They are drawn from there, as they are (the C8 one through its
+    // palette in TLUT 0): nothing is allocated or copied, and nothing of the game's state is
+    // touched. Found by name once a match (one pass over the heap); a picture that is not as P+
+    // ships it leaves the white text as before. Other controllers keep the text too.
+    typedef void (*InitTexFn)(void* obj, void* image, u16 w, u16 h, u32 fmt, u32 s, u32 t, u8 mip);
+    typedef void (*InitTexCIFn)(void* obj, void* image, u16 w, u16 h, u32 fmt, u32 s, u32 t, u8 mip, u32 tlut);
+    typedef void (*InitLodFn)(void* obj, u32 minF, u32 magF, float minLod, float maxLod, float bias, u8 clamp,
+                              u8 edge, u32 aniso);
+    typedef void (*LoadTexFn)(void* obj, u32 map);
+    typedef void (*InitTlutFn)(void* obj, void* lut, u32 fmt, u16 n);
+    typedef void (*LoadTlutFn)(void* obj, u32 name);
+    typedef void (*VoidFn)();
+    static const InitTexFn s_gxInitTex = (InitTexFn)0x801F28F0;         // GXInitTexObj
+    static const InitTexCIFn s_gxInitTexCI = (InitTexCIFn)0x801F2AFC;   // GXInitTexObjCI
+    static const InitLodFn s_gxInitLod = (InitLodFn)0x801F2B44;         // GXInitTexObjLOD
+    static const LoadTexFn s_gxLoadTex = (LoadTexFn)0x801F2FB0;         // GXLoadTexObj
+    static const InitTlutFn s_gxInitTlut = (InitTlutFn)0x801F3004;      // GXInitTlutObj
+    static const LoadTlutFn s_gxLoadTlut = (LoadTlutFn)0x801F302C;      // GXLoadTlut
+    static const VoidFn s_setup2DTex = (VoidFn)0x8001A7AC;   // gfDrawSetVtxPosColorTexPrimEnvironment
+    typedef void (*BeginFn)(int prim, int fmt, u16 verts);
+    static const BeginFn s_gxBeginTex = (BeginFn)0x801F1088;      // GXBegin
+    typedef void (*InvalidateFn)(u32 flags);
+    static const InvalidateFn s_g3dInvalidate = (InvalidateFn)0x801A12AC;   // nw4r::g3d::G3DState::Invalidate
+
+    static const u32 HEAP_INFOS = 0x80494958;   // g_HeapInfos: {name, start, size, arena}, 0x10 each
+    static const int HEAP_INFO_RESOURCE = 9;
+    static const u32 MAGIC_TEX0 = 0x54455830, MAGIC_PLT0 = 0x504C5430;
+
+    static struct {
+        u8* words;     // TEX0 InfPause03Info3
+        u8* buttons;   // TEX0 InfPauseButton00
+        u8* palette;   // its PLT0
+        u32 lookedAt;  // the game frame of the last search + 1 (0: not this match)
+    } s_art;
+
+    static bool isMem(u32 p) { return p >= 0x80000000 && p < 0x81800000; }
+
+    // The section at `p` is `magic` named `name` (a BRRES sub-file: +0x14 the name's offset).
+    static bool sectionIs(const u8* p, u32 magic, const char* name)
+    {
+        if (!isMem((u32)p) || *(const u32*)p != magic) return false;
+        s32 noff = *(const s32*)(p + 0x14);
+        if (noff <= 0 || noff > 0x200000) return false;
+        const char* s = (const char*)p + noff;
+        for (int k = 0;; k++) {
+            if (s[k] != name[k]) return false;
+            if (!name[k]) return true;
+        }
+    }
+
+    // A C8 / IA4 picture of the size P+ ships, its texels 32-byte aligned (GX reads them there).
+    static bool texIs(const u8* t, u32 fmt, u16 w, u16 h)
+    {
+        return *(const u32*)(t + 0x20) == fmt && *(const u16*)(t + 0x1C) == w && *(const u16*)(t + 0x1E) == h &&
+               ((u32)t + *(const u32*)(t + 0x10)) % 32 == 0;
+    }
+
+    static bool artFound()
+    {
+        return sectionIs(s_art.words, MAGIC_TEX0, "InfPause03Info3") && texIs(s_art.words, 2, 128, 20) &&
+               sectionIs(s_art.buttons, MAGIC_TEX0, "InfPauseButton00") && texIs(s_art.buttons, 9, 120, 132) &&
+               sectionIs(s_art.palette, MAGIC_PLT0, "InfPauseButton00") &&
+               ((u32)s_art.palette + *(const u32*)(s_art.palette + 0x10)) % 32 == 0;
+    }
+
+    static bool findArt()
+    {
+        if (artFound()) return true;
+        // At most one search a second (a match whose archive is not there keeps the text).
+        const u32 gf = *(u32*)GAME_FRAME;
+        if (s_art.lookedAt && gf + 1 - s_art.lookedAt < 60) return false;
+        s_art.lookedAt = gf + 1;
+        s_art.words = s_art.buttons = s_art.palette = NULL;
+        const u8* hi = (const u8*)(HEAP_INFOS + 0x10 * HEAP_INFO_RESOURCE);
+        u8* base = *(u8**)(hi + 4);
+        u32 size = *(const u32*)(hi + 8);
+        if (!isMem((u32)base) || size == 0 || size > 0x400000) return false;
+        for (u32 o = 0; o + 0x40 < size; o += 4) {
+            u8* p = base + o;
+            const u32 m = *(u32*)p;
+            if (m == MAGIC_TEX0) {
+                if (sectionIs(p, m, "InfPause03Info3")) s_art.words = p;
+                else if (sectionIs(p, m, "InfPauseButton00")) s_art.buttons = p;
+            } else if (m == MAGIC_PLT0 && sectionIs(p, m, "InfPauseButton00")) {
+                s_art.palette = p;
+            }
+        }
+        return artFound();
+    }
+
+    // The pictures: in which texture (0 the words, 1 the buttons), their box there (texels), a
+    // quarter turn to the left (the START/PAUSE label is upright in the atlas), and where they go
+    // in the 640x480 space (left, top, width, height; measured at 16:9).
+    struct Piece {
+        u8 tex, turn, x, y, w, h;
+        float left, top, width, height;
+    };
+    static const Piece PIECES[] = {
+        {0, 0, 62, 0, 45, 20, 120.32f, 50.00f, 29.37f, 14.67f},      // Quit:
+        {1, 0, 70, 46, 47, 31, 152.53f, 49.67f, 21.38f, 18.33f},     // L
+        {0, 0, 113, 4, 14, 14, 172.11f, 53.33f, 7.73f, 10.00f},      // +
+        {1, 0, 70, 80, 48, 30, 178.55f, 50.00f, 21.64f, 17.67f},     // R
+        {0, 0, 113, 4, 14, 14, 197.36f, 53.00f, 7.99f, 10.33f},      // +
+        {1, 0, 2, 94, 36, 36, 206.63f, 49.67f, 13.66f, 18.00f},      // A
+        {0, 0, 113, 4, 14, 14, 220.29f, 53.00f, 7.99f, 10.33f},      // +
+        {1, 0, 40, 10, 16, 16, 232.66f, 51.67f, 10.56f, 13.00f},     // START
+        {1, 1, 57, 0, 8, 37, 226.22f, 44.33f, 23.96f, 6.67f},        // START/PAUSE
+        {0, 0, 0, 0, 49, 20, 456.55f, 79.67f, 39.68f, 19.33f},       // Back:
+        {1, 0, 40, 10, 16, 16, 503.70f, 79.00f, 18.55f, 24.00f},     // START
+        {1, 1, 57, 0, 8, 37, 492.11f, 66.00f, 42.77f, 12.00f},       // START/PAUSE
+    };
+
+    static void loadArt(int tex)
+    {
+        u32 obj[8];
+        if (tex == 0) {
+            u8* t = s_art.words;
+            s_gxInitTex(obj, t + *(u32*)(t + 0x10), 128, 20, 2 /* GX_TF_IA4 */, 0, 0, 0);
+        } else {
+            u32 tlut[3];
+            u8* p = s_art.palette;
+            s_gxInitTlut(tlut, p + *(u32*)(p + 0x10), *(u32*)(p + 0x18), *(u16*)(p + 0x1C));
+            s_gxLoadTlut(tlut, 0 /* GX_TLUT0 */);
+            u8* t = s_art.buttons;
+            s_gxInitTexCI(obj, t + *(u32*)(t + 0x10), 120, 132, 9 /* GX_TF_C8 */, 0, 0, 0, 0);
+        }
+        s_gxInitLod(obj, 1, 1, 0.0f, 0.0f, 0.0f, 0, 0, 0);
+        s_gxLoadTex(obj, 0);
+    }
+
+    extern "C" {
+        u32 g_pauseArt;   // tests: frames the hint was drawn as the pause screen's pictures
+    }
+
+    static bool drawPauseArt()
+    {
+        if (OnlineMatch::quitHintPad() != 0 || !findArt()) return false;
+        s_setup2DTex();
+        s_gxZMode(0, 7 /* GX_ALWAYS */, 0);
+        s_gxCullMode(0 /* GX_CULL_NONE */);
+        int loaded = -1;
+        volatile float* fifoF = (volatile float*)0xCC008000;   // the GX write-gather pipe
+        volatile u32* fifoU = (volatile u32*)0xCC008000;
+        for (u32 i = 0; i < sizeof(PIECES) / sizeof(PIECES[0]); i++) {
+            const Piece& P = PIECES[i];
+            if (P.tex != loaded) {
+                loadArt(P.tex);
+                loaded = P.tex;
+            }
+            const float tw = P.tex ? 120.0f : 128.0f, th = P.tex ? 132.0f : 20.0f;
+            const float u0 = P.x / tw, u1 = (P.x + P.w) / tw, v0 = P.y / th, v1 = (P.y + P.h) / th;
+            // screen corners: top left, top right, bottom right, bottom left (y down); the
+            // texture's corner on each, turned a quarter to the left for the label
+            const float xs[4] = {P.left, P.left + P.width, P.left + P.width, P.left};
+            const float ys[4] = {P.top, P.top, P.top + P.height, P.top + P.height};
+            const float us[4] = {u0, u1, u1, u0}, vs[4] = {v0, v0, v1, v1};
+            s_gxBeginTex(0x80 /* GX_QUADS */, 1 /* GX_VTXFMT1 */, 4);
+            for (int k = 0; k < 4; k++) {
+                const int j = (k + P.turn) & 3;
+                *fifoF = xs[k];
+                *fifoF = ys[k];
+                *fifoF = 0.0f;
+                *fifoU = 0xFFFFFFFF;
+                *fifoF = us[j];
+                *fifoF = vs[j];
+            }
+        }
+        s_g3dInvalidate(0x7FF);   // g3d loads its own textures and TLUTs again
+        g_pauseArt++;
+        return true;
+    }
+
     static void drawPairBanner(const u16* text);
     static void draw()
     {
@@ -327,9 +511,11 @@ namespace MatchHud {
         }
         if (!s_on) {
             // Unranked: START shows how to quit (Slippi's client pause screen, which shows only
-            // L+R+A+START; here the player's own controller's buttons), white where DISCONNECTED
-            // would be; START again hides it.
-            if (hint) {
+            // L+R+A+START; here the player's own controller's buttons): the pause screen's top
+            // (drawPauseArt), or white text where DISCONNECTED would be; START again hides it.
+            if (hint && drawPauseArt()) {
+                PPOM::g_block.debug.scratch[10] |= 0x10000000;   // tests: the hint was drawn
+            } else if (hint) {
                 const char* s = OnlineMatch::quitHintText();
                 u16 text[24];
                 int n = 0;
