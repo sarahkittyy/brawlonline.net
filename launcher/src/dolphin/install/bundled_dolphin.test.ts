@@ -7,6 +7,7 @@ import type { DolphinBundleManifest } from "./bundled_dolphin";
 import {
   bundledDolphinSource,
   bundleTotals,
+  inOneDriveFolder,
   installBundledDolphin,
   PROGRESS_BYTES_PER_FILE,
   readDolphinManifest,
@@ -256,6 +257,45 @@ describe("installBundledDolphin", () => {
     },
     30_000,
   );
+
+  it("refuses a bundle of another version than the launcher's, keeping a whole install of its own", async () => {
+    // Bug report #326: launcher 0.2.8, installed in a OneDrive folder, still had the bundle of
+    // 0.1.129 (plus the new files of 0.2.8), so it installed a Dolphin the server refused.
+    const old = await makeBundle("0.1.129", { "Dolphin.exe": "exe-129", "Sys/a.ini": "ini" });
+    await installBundledDolphin({ sourceDir: old, destDir: dest });
+    const logs: string[] = [];
+    await expect(
+      installBundledDolphin({ sourceDir: old, destDir: dest, launcherVersion: "0.2.8", log: (m) => logs.push(m) }),
+    ).rejects.toThrow(/copy of Dolphin is from version 0\.1\.129, not 0\.2\.8.*install it over this one/);
+    expect(logs.join(" ")).toContain("is 0.1.129, not the launcher's 0.2.8");
+    expect(await read("Dolphin.exe")).toBe("exe-129");
+
+    // In a OneDrive folder, the error says to install outside it.
+    const oneDrive = path.join(root, `od-${n}`, "OneDrive", "Desktop", "Brawl Online", "resources", "dolphin");
+    await fs.promises.mkdir(path.dirname(oneDrive), { recursive: true });
+    await fs.promises.cp(old, oneDrive, { recursive: true });
+    await expect(
+      installBundledDolphin({ sourceDir: oneDrive, destDir: dest, launcherVersion: "0.2.8" }),
+    ).rejects.toThrow(/Choose a folder outside OneDrive: .*Brawl Online is in one/);
+    expect(inOneDriveFolder("C:\\Users\\a\\OneDrive - Contoso\\Desktop\\x")).toBe(true);
+    expect(inOneDriveFolder("C:\\Users\\a\\AppData\\Local\\Programs\\Brawl Online\\resources\\dolphin")).toBe(false);
+
+    // The launcher's own version installs; a staging build's pre-release of it counts as its own.
+    const own = await makeBundle("0.2.8", { "Dolphin.exe": "exe-208", "Sys/a.ini": "ini" });
+    expect((await installBundledDolphin({ sourceDir: own, destDir: dest, launcherVersion: "0.2.8" })).action).toBe(
+      "installed",
+    );
+    const staging = await makeBundle("0.1.0-staging.abcdef1234", { "Dolphin.exe": "exe-s" });
+    const stagingDest = path.join(dest, "..", "staging");
+    expect(
+      (await installBundledDolphin({ sourceDir: staging, destDir: stagingDest, launcherVersion: "0.1.0" })).action,
+    ).toBe("installed");
+
+    // An old bundle after that (OneDrive put the old files back) keeps the whole install of 0.2.8.
+    const kept = await installBundledDolphin({ sourceDir: old, destDir: dest, launcherVersion: "0.2.8" });
+    expect(kept).toMatchObject({ action: "unchanged", manifest: { version: "0.2.8" } });
+    expect(await read("Dolphin.exe")).toBe("exe-208");
+  });
 
   it("refuses a bundle without a manifest or with an entry that would replace user data", async () => {
     const empty = path.join(root, `empty-${n}`);

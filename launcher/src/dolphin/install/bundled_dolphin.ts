@@ -15,7 +15,9 @@
 // the file the bundle lacks is Dolphin's executable, an antivirus took it (bug report #205: copying
 // Dolphin.exe failed with UNKNOWN, Windows' answer for a file it calls a virus, then the bundle had
 // 1069 of 1070 files, short by Dolphin.exe's 24.8 MB, and installing the launcher again did not help):
-// the error says so instead of only telling the player to reinstall.
+// the error says so instead of only telling the player to reinstall. A bundle of another version
+// than the launcher's is refused too (bug report #326: launcher 0.2.8 installed in a OneDrive
+// folder kept the bundle of 0.1.129, whose Dolphin the matchmaking server turns away).
 //
 // SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -176,6 +178,34 @@ function incompleteBundleMessage(files: number, manifest: DolphinBundleManifest)
   );
 }
 
+/** "0.2.8" of "0.2.8" and of "0.2.8-staging.abc" (a staging build's Dolphin, tools/staging). */
+function releaseOf(version: string): string {
+  return version.trim().split(/[-+]/)[0];
+}
+
+/** Whether `dir` is in a folder OneDrive syncs ("OneDrive", or "OneDrive - <organization>"). */
+export function inOneDriveFolder(dir: string): boolean {
+  return dir.split(/[\\/]/).some((part) => /^OneDrive( - .+)?$/i.test(part));
+}
+
+/** The error for a bundle from another version than the launcher's (bug report #326). */
+function otherVersionBundleMessage(
+  sourceDir: string,
+  manifest: DolphinBundleManifest,
+  launcherVersion: string,
+): string {
+  // <install folder>/resources/dolphin
+  const installFolder = path.dirname(path.dirname(sourceDir));
+  const oneDrive = inOneDriveFolder(sourceDir)
+    ? ` Choose a folder outside OneDrive: ${installFolder} is in one, and OneDrive can keep old files there.`
+    : "";
+  return (
+    `The launcher's copy of Dolphin is from version ${manifest.version}, not ${launcherVersion}: its last ` +
+    `update did not replace every file. Download ${PRODUCT_NAME} again from https://${BASE_DOMAIN} and ` +
+    `install it over this one; your settings, games and save are kept.${oneDrive}`
+  );
+}
+
 /** The error for a bundle whose Dolphin executable is gone: an antivirus quarantined it. */
 function quarantinedExecutableMessage(
   sourceDir: string,
@@ -262,9 +292,17 @@ export async function installBundledDolphin({
   log = () => undefined,
   freeBytes = freeDiskBytes,
   platform = process.platform,
+  launcherVersion,
 }: {
   sourceDir: string;
   destDir: string;
+  /**
+   * The launcher's own version, which a release's bundle always carries (stamp-version.sh, the
+   * Dolphin build scripts). A bundle of another version is never installed: an update that left
+   * the old one's files in place (bug report #326: launcher 0.2.8 with the Dolphin of 0.1.129,
+   * which the matchmaking server refuses) would install a Dolphin that cannot play online.
+   */
+  launcherVersion?: string;
   onProgress?: (current: number, total: number) => void;
   log?: (message: string) => void;
   /** Test hook: the free space on the disk of `destDir`. */
@@ -289,6 +327,26 @@ export async function installBundledDolphin({
       () => true,
       () => false,
     ));
+  if (launcherVersion && releaseOf(manifest.version) !== releaseOf(launcherVersion)) {
+    log(
+      `The bundled Dolphin (${sourceDir}) is ${manifest.version}, not the launcher's ${launcherVersion}: ` +
+        `the launcher's last update did not replace every file`,
+    );
+    // An install of the launcher's own version that is whole still plays.
+    if (
+      installed !== null &&
+      releaseOf(installed.version) === releaseOf(launcherVersion) &&
+      (await fs.promises.access(path.join(destDir, installed.executable)).then(
+        () => true,
+        () => false,
+      )) &&
+      !shortOf(installed, await bundleTotals(destDir, installed.entries))
+    ) {
+      log(`The installed Dolphin ${installed.version} is the launcher's own and complete: keeping it`);
+      return { action: "unchanged", manifest: installed };
+    }
+    throw new Error(otherVersionBundleMessage(sourceDir, manifest, launcherVersion));
+  }
   const bundled = await bundleTotals(sourceDir, manifest.entries);
   if (shortOf(manifest, bundled)) {
     // A complete install of this version (the bundle lost a file since) still plays.

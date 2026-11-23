@@ -1510,6 +1510,8 @@ export class DolphinManager {
         },
         // Once per launcher update: kept in the warn-level main.log a bug report sends.
         log: (message) => log.warn(message),
+        // A packaged launcher's own bundle carries its version; a bundle given by hand may not.
+        launcherVersion: app.isPackaged && !process.env.PPO_BUNDLED_DOLPHIN?.trim() ? app.getVersion() : undefined,
       })
         .then(({ action, manifest }) => {
           log.info(`Bundled Dolphin ${manifest.version}: ${action}`);
