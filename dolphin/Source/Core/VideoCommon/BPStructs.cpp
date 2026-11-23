@@ -955,12 +955,18 @@ void LoadBPRegPreprocess(u8 reg, u32 value, int cycles_into_future)
     // (PresentStats::CopiesLeaveGuestRAM): nothing to skip, and those bytes stay in the checksum.
     // (A mark also stays when a rollback undoes the frame that made it: a copy only one machine
     // predicted would leave its bytes skipped on that machine alone.)
-    if (!Rollback::PresentStats::CopiesLeaveGuestRAM())
+    // A game whose EFB copies a session writes to RAM (PresentStats::SessionEFBCopiesToRAM) has
+    // them marked here, and the CPU thread waits for the video thread once it has preprocessed
+    // this, so the copy is in RAM at the same emulated time on every machine.
+    const bool session = Rollback::PresentStats::CopiesLeaveGuestRAM();
+    if (!session || (!copy.copy_to_xfb && Rollback::PresentStats::SessionEFBCopiesToRAM()))
     {
       const u32 height = ((s_pp_efb_wh >> 10) & 0x3FF) + 1;
       const u32 stride = (s_pp_efb_stride & 0x3FF) << 5;
       const u32 rows = copy.copy_to_xfb ? 2 * height + 2 : height + 1;
       Rollback::GPUWrittenBitmap::Get().Mark(s_pp_efb_addr << 5, stride * rows);
+      if (session)
+        system.GetFifo().SyncAfterPreprocess();
     }
     break;
   }

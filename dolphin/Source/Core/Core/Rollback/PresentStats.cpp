@@ -623,11 +623,57 @@ std::FILE* GpuRamWriteLog()
 namespace
 {
 std::atomic<bool> s_copies_leave_guest_ram{false};
+std::atomic<bool> s_session_efb_copies_to_ram{false};
 }  // namespace
 
 void SetCopiesLeaveGuestRAM(bool on)
 {
   s_copies_leave_guest_ram.store(on, std::memory_order_relaxed);
+  if (!on)
+    SetSessionEFBCopiesToRAM(false);
+}
+
+void SetSessionEFBCopiesToRAM(bool on)
+{
+  s_session_efb_copies_to_ram.store(on, std::memory_order_relaxed);
+  GPUWrittenBitmap::Get().journaled = on;
+  GPUWrittenBitmap::Get().ResetJournal();
+}
+
+bool SessionEFBCopiesToRAM()
+{
+  return s_session_efb_copies_to_ram.load(std::memory_order_relaxed);
+}
+
+bool GameNeedsEFBCopiesInRAM(std::string_view game_id)
+{
+  // Data/Sys/GameSettings of upstream Dolphin (2506), every INI with EFBToTextureEnable = False.
+  // GCCE01 sets it back to True for its region.
+  static constexpr std::string_view GAMES[] = {
+      "D43", "D44", "D56E01", "E52", "E53", "E54", "E55", "E56", "E57", "E6N", "E6Q", "E73",
+      "E78", "E79", "E7Z", "F",   "G2M", "G3R", "G4P", "G5B", "G8M", "GAA", "GCC", "GCD",
+      "GCI", "GEA", "GF7", "GGZ", "GHV", "GIA", "GK4", "GKB", "GL8", "GLZ", "GMS", "GMX",
+      "GNO", "GP5", "GPA", "GR6", "GRJ", "GSV", "GVD", "GW2", "GW9", "GWP", "GWY", "GYA",
+      "GZL", "HA8", "HA9", "HAA", "HAY", "HBA", "HBB", "HBC", "HBD", "HBK", "JAP", "JB6",
+      "JBC", "JBH", "JBK", "JC6", "JC8", "JC9", "JCE", "JCL", "JCT", "JCY", "JDA", "JDV",
+      "JEC", "NAB", "NAC", "NAE", "NAF", "NAK", "NAO", "NAR", "P2M", "PZL", "R2R", "R2V",
+      "R32", "R38", "R3A", "R3M", "R3R", "R4E", "R4F", "R4Z", "R59", "R5X", "R6B", "R6C",
+      "R6Q", "R7X", "R8P", "R9D", "RB9", "RBY", "RCH", "RDF", "REX", "RFB", "RFN", "RFP",
+      "RGW", "RLS", "RM3", "RM8", "RNB", "RNO", "RRL", "RSH", "RSI", "RTU", "RUU", "RW7",
+      "RYW", "S25", "S2L", "S3C", "S72", "SAK", "SB3", "SBD", "SDB", "SDM", "SE2", "SEC",
+      "SFI", "SG8", "SGX", "SH6", "SH8", "SHP", "SJB", "SL2", "SLS", "SOM", "SON", "SP7",
+      "SPD", "SSQ", "ST6", "SUV", "SVM", "SZB", "WBK", "WCH", "WHW", "WIC", "WL9", "WLO",
+      "WR2", "WRI", "WSL", "WTE", "XHD",
+  };
+  if (game_id.empty() || game_id == "GCCE01")
+    return false;
+  for (std::string_view g : GAMES)
+  {
+    if (g.size() <= game_id.size() && game_id.substr(0, g.size()) == g &&
+        (g.size() == 1 || g.size() == 3 || g.size() == game_id.size()))
+      return true;
+  }
+  return false;
 }
 
 bool CopiesLeaveGuestRAM()
@@ -637,7 +683,8 @@ bool CopiesLeaveGuestRAM()
 
 void OnGpuRamWrite(GpuRamWriteKind kind, u32 address, u32 size)
 {
-  if (kind != GpuRamWriteKind::EFBCopyDeferred)
+  // In a whole-machine session only the CPU thread marks (SessionEFBCopiesToRAM).
+  if (kind != GpuRamWriteKind::EFBCopyDeferred && !CopiesLeaveGuestRAM())
     GPUWrittenBitmap::Get().Mark(address, size);
   switch (kind)
   {

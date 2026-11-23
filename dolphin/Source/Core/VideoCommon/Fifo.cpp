@@ -666,6 +666,11 @@ int FifoManager::RunGpuOnCpu(int ticks)
     {
       ReadDataFromFifoOnCPU(fifo.CPReadPointer.load(std::memory_order_relaxed));
       m_gpu_mainloop.Wakeup();
+      if (m_sync_after_preprocess)
+      {
+        m_sync_after_preprocess = false;
+        SyncGPU(SyncGPUReason::Other);
+      }
     }
     else
     {

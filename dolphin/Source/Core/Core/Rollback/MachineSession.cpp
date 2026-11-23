@@ -5297,11 +5297,19 @@ struct ImageParts
   u32 copies_count = 0;
   // The session's codes (PackCodes; empty: none).
   std::vector<u8> codes;
+  // A game whose EFB copies go to guest RAM (PresentStats::SessionEFBCopiesToRAM): those bytes
+  // are what this player's GPU drew, so `state` has zeros in every granule GPUWrittenBitmap marks
+  // and every player's digest of it is the same; `marks` is that bitmap (MEM1's granules, then
+  // MEM2's), vouched for, and `drawn` the marked granules' real bytes (u32 granule, then its
+  // bytes), which the joiner writes back into marked granules only (bug report #328).
+  std::vector<u8> marks;
+  std::vector<u8> drawn;
 };
 
 std::string ImageDigest(s64 frame, u32 mem1, u32 mem2, const std::array<Input, MAX_PLAYERS>& last,
                         std::span<const u8> state, std::span<const u8> nand,
-                        std::span<const u8> sd, std::span<const u8> codes)
+                        std::span<const u8> sd, std::span<const u8> codes,
+                        std::span<const u8> marks1 = {}, std::span<const u8> marks2 = {})
 {
   mbedtls_sha256_context ctx;
   mbedtls_sha256_init(&ctx);
@@ -5328,6 +5336,14 @@ std::string ImageDigest(s64 frame, u32 mem1, u32 mem2, const std::array<Input, M
     const u64 codes_size = codes.size();
     put(&codes_size, sizeof(codes_size));
     put(codes.data(), codes.size());
+  }
+  // Only for a game whose EFB copies go to guest RAM (ImageParts::marks).
+  if (!marks1.empty() || !marks2.empty())
+  {
+    const u64 marks_size = marks1.size() + marks2.size();
+    put(&marks_size, sizeof(marks_size));
+    put(marks1.data(), marks1.size());
+    put(marks2.data(), marks2.size());
   }
   std::array<unsigned char, 32> out{};
   mbedtls_sha256_finish_ret(&ctx, out.data());
@@ -5374,9 +5390,40 @@ bool MakeImageParts(Core::System& system, s64 frame, ImageParts* parts, bool cop
   // Image mode on both sides: the host-only video state (textures, EFB contents, bounding box: the
   // joiner rebuilds them) stays out, and the loader refuses device changes.
   s_image_dostate = true;
+  // A game's EFB copies in guest RAM (ImageParts::marks and drawn): the state is saved with zeros
+  // in the marked granules, which keep their bytes aside.
+  const bool drawn_aside = Rollback::PresentStats::SessionEFBCopiesToRAM();
+  std::vector<std::pair<u8*, u32>> drawn;  // each marked granule's RAM and index
+  if (drawn_aside)
+  {
+    const u8* gpu = Rollback::GPUWrittenBitmap::Get().entries;
+    const u32 g1 = memory.GetRamSizeReal() / ROLLBACK_PAGE_SIZE;
+    const u32 g2 = memory.GetExRamSizeReal() / ROLLBACK_PAGE_SIZE;
+    parts->marks.assign(gpu, gpu + g1);
+    parts->marks.insert(parts->marks.end(), gpu + MEM2_FIRST_PAGE, gpu + MEM2_FIRST_PAGE + g2);
+    auto aside = [&](u8* ram, u32 first_page, u32 count) {
+      for (u32 i = 0; ram && i < count; ++i)
+      {
+        if (!gpu[first_page + i])
+          continue;
+        u8* p = ram + size_t{i} * ROLLBACK_PAGE_SIZE;
+        drawn.emplace_back(p, first_page + i);
+        Put32(&parts->drawn, first_page + i);
+        parts->drawn.insert(parts->drawn.end(), p, p + ROLLBACK_PAGE_SIZE);
+        std::memset(p, 0, ROLLBACK_PAGE_SIZE);
+      }
+    };
+    aside(memory.GetRAM(), 0, g1);
+    aside(memory.GetEXRAM(), MEM2_FIRST_PAGE, g2);
+  }
   VideoCommon_SetSkipGPUReadbackForRollback(true);
   const size_t state_size = ::State::SaveToBuffer(system, state);
   VideoCommon_SetSkipGPUReadbackForRollback(false);
+  for (size_t i = 0; i < drawn.size(); ++i)
+  {
+    std::memcpy(drawn[i].first, parts->drawn.data() + i * (4 + ROLLBACK_PAGE_SIZE) + 4,
+                ROLLBACK_PAGE_SIZE);
+  }
   s_image_dostate = false;
   if (state_size == 0)
     return false;
@@ -5398,7 +5445,10 @@ bool MakeImageParts(Core::System& system, s64 frame, ImageParts* parts, bool cop
 
 std::string ImageDigest(const ImageParts& p)
 {
-  return ImageDigest(p.frame, p.mem1, p.mem2, p.last, p.state, p.nand, p.sd, p.codes);
+  const std::span<const u8> marks(p.marks);
+  const size_t g1 = std::min<size_t>(marks.size(), p.mem1 / ROLLBACK_PAGE_SIZE);
+  return ImageDigest(p.frame, p.mem1, p.mem2, p.last, p.state, p.nand, p.sd, p.codes,
+                     marks.first(g1), marks.subspan(g1));
 }
 
 std::optional<ImageParts> s_image_parts;  // this player's, at the epoch it admits a joiner at
@@ -5449,6 +5499,13 @@ std::vector<u8> BuildImage(const ImageParts& parts, u32 sum, u64* raw_size)
   {
     Put32(&raw, static_cast<u32>(parts.codes.size()));
     raw.insert(raw.end(), parts.codes.begin(), parts.codes.end());
+  }
+  // Last, only for a game whose EFB copies go to guest RAM (ImageParts::drawn): a joiner whose
+  // session has them (the same game) reads it.
+  if (!parts.marks.empty())
+  {
+    Put32(&raw, static_cast<u32>(parts.drawn.size()));
+    raw.insert(raw.end(), parts.drawn.begin(), parts.drawn.end());
   }
   *raw_size = raw.size();
 
@@ -5616,6 +5673,22 @@ bool LoadImage(Core::System& system, std::string* error, bool self = false)
       return false;
     }
   }
+  // The real bytes of the granules a game's EFB copies drew (ImageParts::drawn), not vouched for:
+  // written below into granules the vouched bitmap marks, and nowhere else.
+  const bool drawn_aside = Rollback::PresentStats::SessionEFBCopiesToRAM();
+  std::span<const u8> drawn;
+  if (drawn_aside)
+  {
+    u32 drawn_size;
+    if (!get32(&drawn_size) || raw.size() - pos < drawn_size ||
+        drawn_size % (4 + ROLLBACK_PAGE_SIZE) != 0)
+    {
+      *error = "the machine image is cut short";
+      return false;
+    }
+    drawn = std::span<const u8>(raw.data() + pos, drawn_size);
+    pos += drawn_size;
+  }
   // The session's SD card (checked like everything a peer sends; the players vouch for it below).
   std::shared_ptr<const SDCard::Manifest> sd_manifest;
   std::vector<u8> sd_canon;
@@ -5638,7 +5711,9 @@ bool LoadImage(Core::System& system, std::string* error, bool self = false)
   {
     const std::string digest =
         ImageDigest(frame, mem1, mem2, last, std::span<const u8>(raw.data() + state_pos, state_size),
-                    std::span<const u8>(raw.data() + nand_pos, nand_size), sd_canon, codes);
+                    std::span<const u8>(raw.data() + nand_pos, nand_size), sd_canon, codes,
+                    drawn_aside ? std::span<const u8>(raw.data() + g1_pos, g1) : std::span<const u8>{},
+                    drawn_aside ? std::span<const u8>(raw.data() + g2_pos, g2) : std::span<const u8>{});
     std::lock_guard lk(s.net_mutex);
     for (const PeerLink& p : s.peers)
     {
@@ -5770,6 +5845,20 @@ bool LoadImage(Core::System& system, std::string* error, bool self = false)
   u8* gpu = Rollback::GPUWrittenBitmap::Get().entries;
   std::memcpy(gpu, raw.data() + g1_pos, g1);
   std::memcpy(gpu + MEM2_FIRST_PAGE, raw.data() + g2_pos, g2);
+  Rollback::GPUWrittenBitmap::Get().ResetJournal();  // the players' marks, for good
+  for (size_t at = 0; at < drawn.size(); at += 4 + ROLLBACK_PAGE_SIZE)
+  {
+    u32 page;
+    std::memcpy(&page, drawn.data() + at, 4);
+    u8* ram = nullptr;
+    if (page < g1)
+      ram = memory.GetRAM() + size_t{page} * ROLLBACK_PAGE_SIZE;
+    else if (page >= MEM2_FIRST_PAGE && page - MEM2_FIRST_PAGE < g2 && memory.GetEXRAM())
+      ram = memory.GetEXRAM() + size_t{page - MEM2_FIRST_PAGE} * ROLLBACK_PAGE_SIZE;
+    if (!ram || !gpu[page])
+      continue;  // only where the players' bitmap says a copy drew
+    std::memcpy(ram, drawn.data() + at + 4, ROLLBACK_PAGE_SIZE);
+  }
   if (!self)
   {
     rb.ToggleFrameSave();

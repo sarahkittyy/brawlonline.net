@@ -6,6 +6,7 @@
 #include <array>
 #include <cstddef>
 #include <optional>
+#include <string_view>
 
 #include "Common/CommonTypes.h"
 
@@ -146,6 +147,20 @@ void OnGpuRamWrite(GpuRamWriteKind kind, u32 address, u32 size);
 // yet on the other, and the two machines ran apart (docs/design/brawl-mods.md §6.6).
 void SetCopiesLeaveGuestRAM(bool on);
 bool CopiesLeaveGuestRAM();
+// A whole-machine session of a game that needs its EFB copies in guest RAM (bug report #328, Mario
+// Party 5's Pushy Penguins: each penguin is an EFB copy the game reads back as another texture;
+// from VRAM alone they came out as black squares and noise). Set before the boot, for the session's
+// game (Machine::GameNeedsEFBCopiesInRAM); cleared with SetCopiesLeaveGuestRAM(false). Then an EFB
+// copy to a texture (XFB copies stay in VRAM) is written to guest RAM at once, and the CPU thread
+// waits for the video thread right after it preprocesses the copy (FifoManager::RunGpuOnCpu), so
+// the bytes land at the same emulated time on every machine. What they hold depends on the host GPU
+// and resolution: the CPU thread marks them in GPUWrittenBitmap (journaled), and the checksums and
+// the machine image's digest leave them out.
+void SetSessionEFBCopiesToRAM(bool on);
+bool SessionEFBCopiesToRAM();
+// The games upstream Dolphin's GameSettings mark EFBToTextureEnable = False (copies to RAM), by
+// game ID as Dolphin matches its INIs: the ID's first letter, its first three, or all of it.
+bool GameNeedsEFBCopiesInRAM(std::string_view game_id);
 // Video thread: an EFB copy readback (host GPU -> guest RAM) took `us` microseconds.
 void OnGpuReadback(u64 us);
 
