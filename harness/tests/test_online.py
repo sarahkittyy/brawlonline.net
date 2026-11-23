@@ -8,6 +8,7 @@ see ``ppharness/backend.py``): ``cargo build --workspace`` in ``server/``, then
 
 from __future__ import annotations
 
+import os
 import re
 import socket
 import sys
@@ -26,6 +27,8 @@ pytestmark = [pytest.mark.dolphin, pytest.mark.server]
 
 
 def _wait(pred: Callable[[], Any], timeout: float, what: str, interval: float = 0.2) -> Any:
+    # PPHARNESS_TIMEOUT_SCALE: a game that runs slowly (a recomp in WSL renders in software) gets longer.
+    timeout *= float(os.environ.get("PPHARNESS_TIMEOUT_SCALE") or 1)
     deadline = time.monotonic() + timeout
     while True:
         v = pred()
@@ -82,7 +85,9 @@ def _logged_in(inst: DolphinInstance, user: OnlineUser) -> dict[str, Any]:
     assert st["display_name"] == user.display_name
     assert st["app_state_name"] == "logged_in"
     assert st["has_play_key"] and "playKey" not in st and "play_key" not in st
-    assert Path(st["user_json_path"]) == Path(inst.user_dir) / "Online" / "user.json"
+    # The game names it as it sees it (a recomp in WSL: /mnt/<drive>/..., RecompInstance.game_path).
+    expected = Path(inst.user_dir) / "Online" / "user.json"
+    assert Path(st["user_json_path"]) == Path(getattr(inst, "game_path", str)(expected))
     return st
 
 
