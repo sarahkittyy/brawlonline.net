@@ -21,6 +21,8 @@ namespace OpcodeDecoder
 // The deterministic GPU thread's display-list cache: called on the CPU thread when the aux FIFO is
 // empty (the GPU thread has read every list it was given), to free replaced copies.
 void DisplayListCacheOnGpuIdle();
+// GPU thread: true while OpcodeDecoder::RunFifo<false> is inside a display list.
+bool IsGpuInDisplayList();
 
 // Global flag to signal if FifoRecorder is active.
 extern bool g_record_fifo_data;
@@ -120,6 +122,8 @@ public:
     const CPState& cpmem = GetCPState();
     return VertexLoaderBase::GetVertexSize(cpmem.vtx_desc, cpmem.vtx_attr[vat]);
   }
+
+  virtual bool ShouldAbort() const { return false; }
 #endif
 };
 
@@ -274,6 +278,8 @@ DOLPHIN_FORCE_INLINE u32 Run(const u8* data, u32 available,
   u32 size = 0;
   while (size < available)
   {
+    if (callback.ShouldAbort())
+      break;
     const u32 command_size = RunCommand(&data[size], available - size, callback);
     if (command_size == 0)
       break;

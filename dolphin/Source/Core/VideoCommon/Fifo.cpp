@@ -23,6 +23,7 @@
 #include "Core/Rollback/FrameProfile.h"
 #include "Core/Rollback/MachineSession.h"
 #include "Core/Rollback/PresentStats.h"
+#include "Core/Rollback/RollbackManager.h"
 #include "Core/System.h"
 
 #include "VideoCommon/AsyncRequests.h"
@@ -90,6 +91,7 @@ void FifoManager::DoState(PointerWrap& p)
   {
     // We're good and paused, right?
     m_video_buffer_seen_ptr = m_video_buffer_pp_read_ptr = m_video_buffer_read_ptr;
+    ResetGpuSyncState();
   }
 
   p.Do(m_sync_ticks);
@@ -143,6 +145,7 @@ void FifoManager::ApplyRollbackFifo()
   m_video_buffer_pp_read_ptr = m_video_buffer;
   m_video_buffer_write_ptr = m_video_buffer + tail;
   m_video_buffer_seen_ptr = m_video_buffer;
+  ResetGpuSyncState();
 }
 
 void FifoManager::QueueVideoThreadCapture(Common::MoveOnlyFunction<void(bool)> capture)
@@ -202,6 +205,11 @@ void FifoManager::RunVideoThreadCaptures(const u8* write_ptr)
     {
       m_video_buffer_read_ptr =
           OpcodeDecoder::RunFifo(DataReader(m_video_buffer_read_ptr, c.position), nullptr);
+    }
+    if (m_abort_for_rollback.load(std::memory_order_acquire))
+    {
+      c.capture(false);
+      return;
     }
     if (m_video_buffer_read_ptr != c.position)
     {
@@ -289,15 +297,25 @@ void FifoManager::ExitGpuLoop()
   // Terminate GPU thread loop
   m_emu_running_state.Set();
   m_gpu_mainloop.Stop(Common::BlockingLoop::StopMode::NonBlock);
+  {
+    std::lock_guard lk(m_read_seq_mutex);
+    m_read_seq_cv.notify_all();
+  }
 }
 
 void FifoManager::EmulatorState(bool running)
 {
   m_emu_running_state.Set(running);
   if (running)
+  {
     m_gpu_mainloop.Wakeup();
+  }
   else
+  {
     m_gpu_mainloop.AllowSleep();
+    std::lock_guard lk(m_read_seq_mutex);
+    m_read_seq_cv.notify_all();
+  }
 }
 
 void FifoManager::SyncGPU(SyncGPUReason reason, bool may_move_read_ptr)
@@ -486,6 +504,107 @@ void FifoManager::ResetVideoBuffer()
   m_video_buffer_pp_read_ptr = m_video_buffer;
   m_fifo_aux_write_ptr = m_fifo_aux_data;
   m_fifo_aux_read_ptr = m_fifo_aux_data;
+  ResetGpuSyncState();
+}
+
+void FifoManager::ResetGpuSyncState()
+{
+  m_pp_read_seq = 0;
+  m_gpu_read_seq_local = 0;
+  m_gpu_read_seq.store(0, std::memory_order_release);
+}
+
+void FifoManager::PublishGpuReadSeq(u64 seq)
+{
+  if (seq > m_gpu_read_seq.load(std::memory_order_relaxed))
+    m_gpu_read_seq.store(seq, std::memory_order_seq_cst);
+  if (m_read_seq_waiting.load(std::memory_order_seq_cst))
+  {
+    std::lock_guard lk(m_read_seq_mutex);
+    m_read_seq_cv.notify_all();
+  }
+}
+
+void FifoManager::AdvanceGpuReadSeq()
+{
+  ++m_gpu_read_seq_local;
+  PublishGpuReadSeq(m_gpu_read_seq_local);
+}
+
+void FifoManager::PublishGpuReadSeqAhead()
+{
+  if (m_use_deterministic_gpu_thread)
+    PublishGpuReadSeq(m_gpu_read_seq_local + 1);
+}
+
+void FifoManager::WaitForGpuReads()
+{
+  if (!m_use_deterministic_gpu_thread)
+    return;
+  const u64 target = m_pp_read_seq;
+  if (m_gpu_read_seq.load(std::memory_order_acquire) >= target)
+    return;
+  if (!m_gpu_mainloop.IsRunning() || !m_emu_running_state.IsSet())
+    return;
+  const bool trace =
+      Rollback::PresentStats::PresentTraceEnabled() || Rollback::FrameProfile::Enabled();
+  const auto t0 = trace ? Clock::now() : TimePoint{};
+  m_gpu_mainloop.Wakeup();
+  {
+    std::unique_lock lk(m_read_seq_mutex);
+    m_read_seq_waiting.store(true, std::memory_order_seq_cst);
+    m_read_seq_cv.wait(lk, [&] {
+      return m_gpu_read_seq.load(std::memory_order_acquire) >= target ||
+             !m_gpu_mainloop.IsRunning() || !m_emu_running_state.IsSet();
+    });
+    m_read_seq_waiting.store(false, std::memory_order_relaxed);
+  }
+  if (trace)
+  {
+    const auto t1 = Clock::now();
+    if (Rollback::PresentStats::PresentTraceEnabled())
+    {
+      Rollback::PresentStats::TraceCpuWaitForGpu(
+          std::chrono::duration<double, std::milli>(t1 - t0).count());
+    }
+    Rollback::FrameProfile::AddGpuWait(
+        static_cast<size_t>(SyncGPUReason::Other),
+        static_cast<u64>(std::chrono::duration_cast<std::chrono::nanoseconds>(t1 - t0).count()));
+  }
+}
+
+u64 FifoManager::SyncGPUForRollbackLoad()
+{
+  if (!m_system.IsDualCoreMode())
+    return 0;
+  if (!m_use_deterministic_gpu_thread || !m_emu_running_state.IsSet())
+    return Rollback::RollbackManager::SyncGPUForDoState(m_system);
+
+  const auto t0 = Clock::now();
+  m_abort_for_rollback.store(true, std::memory_order_release);
+  m_gpu_mainloop.Wait();
+  DropVideoThreadCaptures();
+  const auto t1 = Clock::now();
+  const u64 ns =
+      static_cast<u64>(std::chrono::duration_cast<std::chrono::nanoseconds>(t1 - t0).count());
+  if (Rollback::PresentStats::PresentTraceEnabled())
+    Rollback::PresentStats::TraceCpuWaitForGpu(ns / 1e6);
+  Rollback::FrameProfile::AddGpuWait(static_cast<size_t>(SyncGPUReason::Other), ns);
+
+  if (m_gpu_mainloop.IsRunning())
+  {
+    m_fifo_aux_write_ptr = m_fifo_aux_data;
+    m_fifo_aux_read_ptr = m_fifo_aux_data;
+    OpcodeDecoder::DisplayListCacheOnGpuIdle();
+    Rollback::PresentStats::ClearPendingCopyDecisions();
+    m_video_buffer_read_ptr = m_video_buffer;
+    m_video_buffer_pp_read_ptr = m_video_buffer;
+    m_video_buffer_write_ptr = m_video_buffer;
+    m_video_buffer_seen_ptr = m_video_buffer;
+    ResetGpuSyncState();
+  }
+  m_abort_for_rollback.store(false, std::memory_order_release);
+  return ns / 1000;
 }
 
 // Description: Main FIFO update loop
@@ -510,6 +629,14 @@ void FifoManager::RunGpuLoop()
           // load of write_ptr above is either at or before it, or waits for the next iteration.
           if (m_captures_pending.load(std::memory_order_acquire))
             RunVideoThreadCaptures(write_ptr);
+          // A rollback load drops the rest (SyncGPUForRollbackLoad).
+          if (m_abort_for_rollback.load(std::memory_order_acquire))
+          {
+            if (g_vertex_manager)
+              g_vertex_manager->Flush();
+            m_video_buffer_seen_ptr = write_ptr;
+            return;
+          }
           // See comment in SyncGPU
           if (write_ptr > seen_ptr)
           {
@@ -517,6 +644,8 @@ void FifoManager::RunGpuLoop()
             m_video_buffer_read_ptr =
                 OpcodeDecoder::RunFifo(DataReader(m_video_buffer_read_ptr, write_ptr), nullptr);
             m_video_buffer_seen_ptr = write_ptr;
+            if (m_abort_for_rollback.load(std::memory_order_acquire) && g_vertex_manager)
+              g_vertex_manager->Flush();
           }
         }
         else
@@ -758,6 +887,7 @@ void FifoManager::UpdateWantDeterminism(bool want)
     {
       // These haven't been updated in non-deterministic mode.
       m_video_buffer_seen_ptr = m_video_buffer_pp_read_ptr = m_video_buffer_read_ptr;
+      ResetGpuSyncState();
       CopyPreprocessCPStateFromMain();
       VertexLoaderManager::MarkAllDirty();
     }

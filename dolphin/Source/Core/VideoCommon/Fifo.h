@@ -4,6 +4,7 @@
 #pragma once
 
 #include <atomic>
+#include <condition_variable>
 #include <cstddef>
 #include <deque>
 #include <mutex>
@@ -67,6 +68,25 @@ public:
 
   // In deterministic GPU thread mode this waits for the GPU to be done with pending work.
   void SyncGPU(SyncGPUReason reason, bool may_move_read_ptr = true);
+
+  // Deterministic dual core, CPU thread: waits until the GPU thread has finished every
+  // preprocessed command that reads guest RAM (draws, display lists, indexed XF loads, TLUTs, EFB
+  // copies) without blocking behind Presenter's present-hold sleep. Used by PixelEngine draw sync
+  // in whole-machine sessions so the game can safely reuse vertex/texture buffers (bug #151)
+  // without stalling behind present pacing.
+  void WaitForGpuReads();
+  void AdvancePreprocessReadSeq() { ++m_pp_read_seq; }
+  void AdvanceGpuReadSeq();
+  // GPU thread, right before Present's hold sleep: publishes that the EFB->XFB copy in progress has
+  // already finished reading guest RAM (its commands are done; only the present sleep remains).
+  void PublishGpuReadSeqAhead();
+
+  // Deterministic dual core, CPU thread: aborts unexecuted GPU commands from the rolled-back
+  // timeline when the target snapshot's video state is already captured, then resets the video and
+  // aux FIFOs before LoadFromBuffer + RestoreVideoState. Returns microseconds spent waiting.
+  u64 SyncGPUForRollbackLoad();
+  bool AbortForRollback() const { return m_abort_for_rollback.load(std::memory_order_relaxed); }
+
 
   // In single core mode, this runs the GPU for a single slice.
   // In dual core mode, this synchronizes with the GPU thread.
@@ -170,6 +190,21 @@ private:
   // Rollback load: the CPU part's FIFO bytes, waiting for ApplyRollbackFifo.
   std::vector<u8> m_rollback_fifo_tail;
   bool m_rollback_fifo_pending = false;
+
+  // Deterministic dual core read-sync (WaitForGpuReads): top-level commands that read guest RAM
+  // increment m_pp_read_seq on the CPU thread and m_gpu_read_seq_local on the GPU thread.
+  void PublishGpuReadSeq(u64 seq);
+  // The read sequence, with the video FIFO emptied (GPU thread idle).
+  void ResetGpuSyncState();
+  u64 m_pp_read_seq = 0;
+  u64 m_gpu_read_seq_local = 0;
+  std::atomic<u64> m_gpu_read_seq{0};
+  std::atomic<bool> m_read_seq_waiting{false};
+  std::mutex m_read_seq_mutex;
+  std::condition_variable m_read_seq_cv;
+
+  // Rollback load abort (deterministic dual core).
+  std::atomic<bool> m_abort_for_rollback{false};
 
   std::atomic<int> m_sync_ticks = 0;
   bool m_syncing_suspended = false;

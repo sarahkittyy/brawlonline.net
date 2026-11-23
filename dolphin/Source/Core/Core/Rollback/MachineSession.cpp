@@ -7292,18 +7292,44 @@ void LateEndOfFrame();
 // at the session's average per frame, and a margin), looked at again as remote inputs come in
 // during it; with none pending it sleeps to `due` as before. PPR_MACHINE_RERUN_IN_SLEEP=0: the
 // whole sleep always (A/B).
-void BoundarySleep(CoreTiming::CoreTimingManager& ct, Clock::time_point due)
+bool RerunInSleep()
 {
-  static const bool rerun_in_sleep = [] {
+  static const bool on = [] {
     const char* e = std::getenv("PPR_MACHINE_RERUN_IN_SLEEP");
     return !(e && *e == '0');
   }();
+  return on;
+}
+
+// BrawlLoop sessions throttle inside CoreTiming::Throttle (not BoundarySleep). Providing a
+// PacedSleepLead mirrors BoundarySleep and GameplaySession: the throttle sleep wakes early when a
+// remote input arriving during the sleep triggers a rollback, so the rollback's load and re-runs
+// run inside the sleep rather than pushing the presented frame's XFB copy late.
+DT PacedSleepLead()
+{
+  if (Rollback::PresentStats::IsGpuInPresentHold())
+    return {};
+  std::lock_guard lk(s.mutex);
+  if (s.phase != Phase::Running || !s.gekko || !s.gekko_started)
+    return {};
+  ReceiveRemote();
+  const int frames = gekko_rollback_frames(s.gekko);
+  if (frames <= 0)
+    return {};
+  constexpr double MARGIN_MS = 1.0;
+  const double ms = frames * s.burst_ms_per_frame + MARGIN_MS;
+  return std::chrono::duration_cast<DT>(std::chrono::duration<double, std::milli>(ms));
+}
+
+void BoundarySleep(CoreTiming::CoreTimingManager& ct, Clock::time_point due)
+{
+  const bool rerun_in_sleep = RerunInSleep();
   constexpr auto SLICE = std::chrono::milliseconds(2);
   constexpr auto MARGIN = std::chrono::milliseconds(1);
   for (;;)
   {
     auto wake = due;
-    if (rerun_in_sleep && s.gekko)
+    if (rerun_in_sleep && s.gekko && !Rollback::PresentStats::IsGpuInPresentHold())
     {
       ReceiveRemote();
       if (const int frames = gekko_rollback_frames(s.gekko); frames > 0)
@@ -7408,6 +7434,8 @@ Wait WaitForFrames(Core::System& system)
         // frame is shown at its copy's due time, not whenever the throttle let the CPU reach the
         // copy (bug #30: a REX room's frames came 16 ms apart with a 21 ms gap every seventh).
         system.GetCoreTiming().SetPresentPacing(true);
+        if (SessionBoundary() == Boundary::BrawlLoop)
+          system.GetCoreTiming().SetPacedSleepLead(RerunInSleep() ? &PacedSleepLead : nullptr);
         AddLog("running");
         OSD::AddMessage("Session started", 3000, OSD::Color::GREEN);
       }
@@ -8308,6 +8336,7 @@ void Stop()
   Rollback::RollbackManager::Get().SetChecksumMasks({});
   Rollback::PresentStats::SetCopiesLeaveGuestRAM(false);
   Core::System::GetInstance().GetCoreTiming().SetPresentPacing(false);
+  Core::System::GetInstance().GetCoreTiming().SetPacedSleepLead(nullptr);
   if (auto* fs = HostFS(Core::System::GetInstance()))
     fs->JournalStop();
   s.journal_marks.clear();
@@ -9410,6 +9439,7 @@ Top FrameTop(Core::System& system)
     system.GetCoreTiming().SetRollbackResimulating(false);
     system.GetCoreTiming().SetRollbackSpeedAdjustment(1.0);
     system.GetCoreTiming().SetPresentPacing(false);
+    system.GetCoreTiming().SetPacedSleepLead(nullptr);
     return Top::Run;
   }
 
@@ -9426,7 +9456,8 @@ Top FrameTop(Core::System& system)
       system.GetCoreTiming().SetRollbackResimulating(false);
       system.GetCoreTiming().SetRollbackSpeedAdjustment(1.0);
       system.GetCoreTiming().SetPresentPacing(false);
-      return Top::Run;
+      system.GetCoreTiming().SetPacedSleepLead(nullptr);
+        return Top::Run;
     case Wait::Yield:
       s.ops.count = 0;
       return Top::Yield;

@@ -1492,15 +1492,48 @@ bool RollbackManager::LoadFrame(Core::System& system, int frames_back)
 
   // indexing + RAM restore happens on a worker thread so they overlap with DoState on the main
   // thread
+  static std::vector<u32> live_dirty;
   auto restore_ram = [&]() {
     return job::KickRootJob(m_dispatch_thread, [&](job::JobTaskThread& w, job::Job& j) {
     u32 remaining = 0;
+    bool live_dirty_empty = true;
     {
       ROLLBACK_ZONE_N("ram page indexing - forward");
       flagged_mem1.clear();
       flagged_mem2.clear();
 
-      for (int n = 0; n <= frames_back; n++)
+      // Any write since the newest saved slot (for instance skipped saves in region mode, or
+      // writes before LoadFrame) is still marked in JITDirtyBitmap. Draining it here both covers
+      // those granules and eliminates a second full bitmap scan at the end of LoadFrame.
+      ScanDirtyMarks(0, UINT32_MAX, &live_dirty);
+      live_dirty_empty = live_dirty.empty();
+      for (const u32 entry : live_dirty)
+      {
+        if (entry < MEM2_FIRST_PAGE)
+        {
+          if (!m_needs_source_mem1[entry])
+          {
+            m_needs_source_mem1[entry] = 1;
+            flagged_mem1.push_back(entry);
+            remaining++;
+          }
+        }
+        else
+        {
+          const u32 idx = entry - MEM2_FIRST_PAGE;
+          if (!m_needs_source_mem2[idx])
+          {
+            m_needs_source_mem2[idx] = 1;
+            flagged_mem2.push_back(idx);
+            remaining++;
+          }
+        }
+      }
+
+      // The granules written after target_slot's save: a slot's delta holds what changed since
+      // the slot before it, so target_slot's own (n = 0) already hold its bytes in RAM and the
+      // shadow unless a later slot or a live mark names them.
+      for (int n = 1; n <= frames_back; n++)
       {
         const int slot = Wrap(target_slot + n, NUM_SAVE_SLOTS);
         const RegionDelta& d1 = m_slots[slot].m_mem1_delta;
@@ -1615,8 +1648,8 @@ bool RollbackManager::LoadFrame(Core::System& system, int frames_back)
       {
         const u32 count = std::min(chunk, total - offset);
         page_jobs.push_back(w.create_job_as_child(
-            j, [this, sorted_exclude_regions, offset, count, shadow_base](job::JobTaskThread&,
-                                                                          job::Job&) {
+            j, [this, sorted_exclude_regions, offset, count, shadow_base, live_dirty_empty](
+                   job::JobTaskThread&, job::Job&) {
               for (u32 n = offset; n < offset + count; n++)
               {
                 const u32 page_key = restore_keys[n];
@@ -1676,10 +1709,12 @@ bool RollbackManager::LoadFrame(Core::System& system, int frames_back)
                     shadow_base[isMem2] ?
                         shadow_base[isMem2] + static_cast<size_t>(local_page) * ROLLBACK_PAGE_SIZE :
                         nullptr;
+                // The shadow holds the newest save's bytes, which are RAM's unless a live mark
+                // named the granule.
                 if (std::memcmp(dst, src, ROLLBACK_PAGE_SIZE) == 0)
                 {
                   restore_changed[n] = 0;
-                  if (shadow)
+                  if (shadow && !live_dirty_empty)
                     std::memcpy(shadow, dst, ROLLBACK_PAGE_SIZE);
                   continue;
                 }
@@ -1716,22 +1751,48 @@ bool RollbackManager::LoadFrame(Core::System& system, int frames_back)
   };
 
   bool ok = true;
+  bool l1_restored = false;
   // With the IOS devices in the snapshots (a whole-machine session), RAM must be back before their
   // states load: the emulated Bluetooth stack, for one, re-reads its pending IPC requests from
   // guest RAM while loading (it read the newer timeline's RAM and crashed on a null request). The
   // netplay path overlaps the two.
   job::Job* ram_job = nullptr;
-  if (!m_region_mode && m_full_ios_in_snapshots)
-  {
-    ROLLBACK_ZONE_N("RAM restore before devices");
-    job::DrainJobsUntilComplete(m_dispatch_thread, restore_ram());
-  }
   if (!m_region_mode)
   {
     ROLLBACK_ZONE_N("DoState restore");
-    // The video thread finishes everything queued, including the captures of every snapshot.
+    // When target_slot already captured its GPU state, any commands still queued on the video
+    // thread belong to the discarded frames after target_slot: abort them instead of waiting for
+    // the video thread to finish rendering frames we are about to overwrite.
+    static const bool abort_gpu_load = [] {
+      const char* e = std::getenv("PPR_MACHINE_ABORT_GPU_LOAD");
+      return !(e && *e == '0');
+    }();
+    const bool can_abort_gpu =
+        abort_gpu_load && deltaSave.m_split_video &&
+        deltaSave.m_video_capture.load(std::memory_order_acquire) ==
+            DeltaSaveSlot::VideoCapture::Ready;
+    m_last_load_sync_us =
+        can_abort_gpu ? system.GetFifo().SyncGPUForRollbackLoad() : SyncGPUForDoState(system);
+
+    if (m_full_ios_in_snapshots)
+    {
+      ROLLBACK_ZONE_N("RAM restore before devices");
+      // Overlap L1 cache restore (256 KB memcpy) on the CPU thread with parallel RAM restore.
+      ram_job = restore_ram();
+      if (m_l1_cache_ptr && m_l1_cache_size > 0 && deltaSave.m_l1_cache_snapshot.data())
+      {
+        std::memcpy(m_l1_cache_ptr, deltaSave.m_l1_cache_snapshot.data(), m_l1_cache_size);
+        l1_restored = true;
+      }
+      job::DrainJobsUntilComplete(m_dispatch_thread, ram_job);
+      ram_job = nullptr;
+    }
+    else
+    {
+      ram_job = restore_ram();
+    }
+
     const auto dostate_start = std::chrono::steady_clock::now();
-    m_last_load_sync_us = SyncGPUForDoState(system);
     BeginDoState();
     VideoCommon_SetRollbackSplitState(deltaSave.m_split_video);
     ok = State::LoadFromBuffer(
@@ -1744,11 +1805,10 @@ bool RollbackManager::LoadFrame(Core::System& system, int frames_back)
     system.GetMemory().LoadFakeVMEMSnapshot(deltaSave.m_fake_vmem);
     m_last_load_dostate_us = static_cast<u64>(std::chrono::duration_cast<std::chrono::microseconds>(
                                                   std::chrono::steady_clock::now() - dostate_start)
-                                                  .count()) -
-                             m_last_load_sync_us;
+                                                  .count());
   }
 
-  if (m_region_mode || !m_full_ios_in_snapshots)
+  if (m_region_mode)
     ram_job = restore_ram();
 
   if (m_region_mode)
@@ -1782,7 +1842,7 @@ bool RollbackManager::LoadFrame(Core::System& system, int frames_back)
     RestoreMachineRegisters(system, deltaSave);
   }
 
-  if (!m_region_mode)
+  if (!m_region_mode && !l1_restored)
   {
     ROLLBACK_ZONE_N("L1 cache restore");
     if (m_l1_cache_ptr && m_l1_cache_size > 0 && deltaSave.m_l1_cache_snapshot.data())
@@ -1853,12 +1913,6 @@ bool RollbackManager::LoadFrame(Core::System& system, int frames_back)
 #if ROLLBACK_VALIDATE
   CompareValSnapshot(target_slot, frames_back);
 #endif
-
-
-  {
-    ROLLBACK_ZONE_N("Clear JIT dirty bitmap");
-    ScanDirtyMarks(0, UINT32_MAX, nullptr);
-  }
 
   RecordTiming(timing_start, m_stat_load_count, m_stat_load_us_total, m_stat_load_us_max);
 
