@@ -309,7 +309,7 @@ export function normalizeRuleset(r: Ruleset): Ruleset {
 function isNameChar(c: string): boolean {
   const code = c.codePointAt(0) ?? 0;
   const ascii = code >= 0x20 && code <= 0x7e && c !== "\\" && c !== "`";
-  return ascii || (code >= 0x3041 && code <= 0x3093) || (code >= 0x30a1 && code <= 0x30f3);
+  return ascii || (code >= 0x3041 && code <= 0x3093) || (code >= 0x30a1 && code <= 0x30f4);
 }
 
 /** `MatchRules::validate`. */
