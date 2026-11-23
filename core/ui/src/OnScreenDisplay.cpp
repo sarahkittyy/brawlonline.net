@@ -1,27 +1,21 @@
 // Copyright 2009 Dolphin Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-#include "VideoCommon/OnScreenDisplay.h"
+#include "BrawlOnline/UI/OnScreenDisplay.h"
 
 #include <algorithm>
 #include <atomic>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <string>
 
 #include <fmt/format.h>
 #include <imgui.h>
 
+#include "BrawlOnline/UI/Hooks.h"
 #include "Common/CommonTypes.h"
-#include "Common/Config/Config.h"
 #include "Common/Timer.h"
-
-#include "Core/Config/MainSettings.h"
-
-#include "VideoCommon/AbstractGfx.h"
-#include "VideoCommon/AbstractTexture.h"
-#include "VideoCommon/Assets/CustomTextureData.h"
-#include "VideoCommon/TextureConfig.h"
 
 namespace OSD
 {
@@ -37,8 +31,7 @@ static std::atomic<int> s_obscured_pixels_top = 0;
 struct Message
 {
   Message() = default;
-  Message(std::string text_, u32 duration_, u32 color_,
-          const VideoCommon::CustomTextureData::ArraySlice::Level* icon_ = nullptr)
+  Message(std::string text_, u32 duration_, u32 color_, const void* icon_ = nullptr)
       : text(std::move(text_)), duration(duration_), color(color_), icon(icon_)
   {
     timer.Start();
@@ -50,8 +43,8 @@ struct Message
   bool ever_drawn = false;
   bool should_discard = false;
   u32 color = 0;
-  const VideoCommon::CustomTextureData::ArraySlice::Level* icon;
-  std::unique_ptr<AbstractTexture> texture;
+  const void* icon;
+  std::unique_ptr<BrawlOnline::UI::IconTexture> texture;
 };
 static std::multimap<MessageType, Message> s_messages;
 static std::mutex s_messages_mutex;
@@ -90,27 +83,18 @@ static float DrawMessage(int index, Message& msg, const ImVec2& position, int ti
     {
       if (!msg.texture)
       {
-        const u32 width = msg.icon->width;
-        const u32 height = msg.icon->height;
-        TextureConfig tex_config(width, height, 1, 1, 1, AbstractTextureFormat::RGBA8, 0,
-                                 AbstractTextureType::Texture_2DArray);
-        msg.texture = g_gfx->CreateTexture(tex_config);
-        if (msg.texture)
-        {
-          msg.texture->Load(0, width, height, width, msg.icon->data.data(),
-                            sizeof(u32) * width * height);
-        }
-        else
-        {
-          // don't try again next time
+        const auto& make_icon = BrawlOnline::UI::GetHooks().make_icon;
+        if (make_icon)
+          msg.texture = make_icon(msg.icon);
+        // don't try again next time
+        if (!msg.texture)
           msg.icon = nullptr;
-        }
       }
 
       if (msg.texture)
       {
-        ImGui::Image(*msg.texture.get(), ImVec2(static_cast<float>(msg.icon->width),
-                                                static_cast<float>(msg.icon->height)));
+        ImGui::Image(static_cast<ImTextureID>(msg.texture->Id()),
+                     ImVec2(msg.texture->Width(), msg.texture->Height()));
         ImGui::SameLine();
       }
     }
@@ -130,9 +114,11 @@ static float DrawMessage(int index, Message& msg, const ImVec2& position, int ti
   return window_height;
 }
 
-void AddTypedMessage(MessageType type, std::string message, u32 ms, u32 argb,
-                     const VideoCommon::CustomTextureData::ArraySlice::Level* icon)
+void AddTypedMessage(MessageType type, std::string message, u32 ms, u32 argb, const void* icon)
 {
+  if (const auto& added = BrawlOnline::UI::GetHooks().message_added)
+    added(message, ms, argb);
+
   std::lock_guard lock{s_messages_mutex};
 
   // A message may hold a reference to a texture that can only be destroyed on the video thread, so
@@ -145,9 +131,11 @@ void AddTypedMessage(MessageType type, std::string message, u32 ms, u32 argb,
   s_messages.emplace(type, Message(std::move(message), ms, argb, icon));
 }
 
-void AddMessage(std::string message, u32 ms, u32 argb,
-                const VideoCommon::CustomTextureData::ArraySlice::Level* icon)
+void AddMessage(std::string message, u32 ms, u32 argb, const void* icon)
 {
+  if (const auto& added = BrawlOnline::UI::GetHooks().message_added)
+    added(message, ms, argb);
+
   std::lock_guard lock{s_messages_mutex};
   s_messages.emplace(MessageType::Typeless, Message(std::move(message), ms, argb, icon));
 }
@@ -166,7 +154,8 @@ std::vector<std::string> GetMessageTexts()
 
 void DrawMessages(float min_top)
 {
-  const bool draw_messages = Config::Get(Config::MAIN_OSD_MESSAGES);
+  const auto& show_messages = BrawlOnline::UI::GetHooks().show_messages;
+  const bool draw_messages = !show_messages || show_messages();
   const ImVec2 scale = ImGui::GetIO().DisplayFramebufferScale;
   // P+ change: the FPS box is in the top-left corner, so the messages go under it, as in Slippi.
   const float current_x = LEFT_MARGIN * scale.x + s_obscured_pixels_left;

@@ -49,6 +49,9 @@
 // file is complete, "error" (the file deleted) when it could not be. A new request gives up a
 // render still going.
 //
+// Spectator chat (Online/SpectatorChat.h): the launcher writes it to <comm.json>.chat.json, and
+// what the spectator types goes back in the status as "chat".
+//
 // Manual clips (docs/design/highlights.md section 9): the overlay's Clip on the seek bar, then
 // "Save as highlight", keeps the replay playing's frames from one handle to the other (SaveClip).
 // The status lists every clip saved in this Dolphin's run, "savedClips": [{"path", "startFrame",

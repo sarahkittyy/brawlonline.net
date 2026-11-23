@@ -10,6 +10,7 @@
  * only ever sees cleaned text.
  */
 
+import { isIconId, parseBadges } from "@common/badges";
 import { characterName, countryName } from "@common/profile";
 import { randomUUID } from "crypto";
 import electronLog from "electron-log";
@@ -150,7 +151,20 @@ function parsePlayer(v: any): SocialPlayer | undefined {
   const code = typeof v.connectCode === "string" && /^[A-Z]{1,4}#[0-9]{1,4}$/.test(v.connectCode) ? v.connectCode : "";
   const country = typeof v.country === "string" && countryName(v.country) ? v.country : undefined;
   const main = typeof v.main === "string" && characterName(v.main) ? v.main : undefined;
-  return { uid: v.uid, displayName, connectCode: code, ...(country && { country }), ...(main && { main }) };
+  const mainIcon = isIconId(v.mainIcon) ? v.mainIcon : undefined;
+  const mainIconLabel =
+    mainIcon && typeof v.mainIconLabel === "string" ? cleanText(v.mainIconLabel.slice(0, 256), 60) : undefined;
+  const badges = parseBadges(v.badges);
+  return {
+    uid: v.uid,
+    displayName,
+    connectCode: code,
+    ...(country && { country }),
+    ...(main && { main }),
+    ...(mainIcon && { mainIcon }),
+    ...(mainIconLabel && { mainIconLabel }),
+    ...(badges && { badges }),
+  };
 }
 
 function parseFriend(v: any): Friend | undefined {

@@ -2,9 +2,12 @@
 # them (.github/scripts/mac_publish.py).
 #
 # The client workflow's macos job submits its DMG to Apple without waiting and uploads the build
-# (launcher-mac) and the submission (mac-notary). Apple can answer in minutes or hours. After each
-# client run the wait-for-apple job asks Apple every minute (up to 30 minutes, on a GitHub-hosted
-# runner, free on this public repository) until it answers a pending build, then publish-mac
+# (launcher-mac) and the submission (mac-notary). Apple can answer in minutes or hours. The client
+# run's start-mac-publish job starts this workflow (workflow_dispatch) as soon as the macos job is
+# done, without waiting for the rest of the run (arm64 Linux takes longer); the workflow_run
+# trigger, when the whole client run has finished, is only a backup. Then the wait-for-apple job
+# asks Apple every minute (up to 30 minutes, on a GitHub-hosted runner, free on this public
+# repository) until it answers a pending build, then publish-mac
 # publishes; if builds still wait, publish-mac starts this workflow again (workflow_dispatch), for
 # up to 24 hours after their client run. The schedule is only a fallback: GitHub runs this
 # "every 10 minutes" cron every 3-10 hours (Macs stayed on 0.1.133 after 0.1.135 on 2026-11-09).

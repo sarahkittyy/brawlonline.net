@@ -3,7 +3,7 @@ import { useState } from "react";
 
 import { MainPicture } from "@/components/main_picture/main_picture";
 import { PlayerSearch } from "@/components/player_search/player_search";
-import { useStockIcon } from "@/components/profile/character_icon";
+import { useMainPictureUrl } from "@/components/profile/character_icon";
 import { useSearchText } from "@/lib/hooks/use_search_text";
 import { SpectateMessages } from "@/pages/home/spectate/spectate.messages";
 import { useServices } from "@/services";
@@ -44,14 +44,14 @@ export const PlayerFilter = ({
       getKey={(p) => p.uid}
       getCode={(p) => p.connectCode}
       getName={(p) => p.displayName}
-      renderPicture={(p) => <Picture main={p.main} />}
+      renderPicture={(p) => <Picture main={p.main} mainIcon={p.mainIcon} />}
       placeholder={SpectateMessages.search()}
       max={MAX_PLAYERS}
     />
   );
 };
 
-const Picture = ({ main }: { main?: string | null }) => {
-  const url = useStockIcon(main ?? "");
-  return <MainPicture url={main ? url ?? null : null} size={22} />;
+const Picture = ({ main, mainIcon }: { main?: string | null; mainIcon?: string | null }) => {
+  const url = useMainPictureUrl(main, mainIcon);
+  return <MainPicture url={url ?? null} size={22} />;
 };

@@ -372,6 +372,11 @@
   cursor: pointer;
 }
 
+/* A game's switch: at the row's right end, under the edit and remove buttons. */
+.buildToggle {
+  margin-left: auto;
+}
+
 /* "Public" / "Private" in one cell: as wide as the longer word, so the switch and Host don't move. */
 .toggleText {
   display: inline-grid;

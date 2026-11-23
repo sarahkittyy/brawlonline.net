@@ -4,6 +4,7 @@ import { mkdir } from "fs/promises";
 import path from "path";
 
 import { LiveGameFile } from "./live_game_file";
+import type { SpectatorChat } from "./spectator_chat";
 import type { LiveGameEntry, LiveList, SpectateState, WatchResult } from "./types";
 
 /**
@@ -19,13 +20,16 @@ import type { LiveGameEntry, LiveList, SpectateState, WatchResult } from "./type
  * the chunk after the newest one. At the stream's end the playback Dolphin holds the last frame
  * and, with "Close Dolphin after a spectated game ends", counts down and asks to be closed. Auto
  * play takes the place of both: it switches to the newest live game at once, or waits for one.
+ *
+ * Spectator chat (spectator_chat.ts) rides on the same watch stream: its events go to the playback Dolphin's chat
+ * window, and what the spectator does there comes back in playback's status.
  */
 
 /** No event (not even the server's 15 s ping) for this long: reconnect. */
 const IDLE_TIMEOUT_MS = 45_000;
 const BACKOFF_MS = [1000, 2000, 5000, 10_000];
-/** How often playback's status is read while watching. */
-const STATUS_POLL_MS = 500;
+/** How often playback's status is read while watching (spectator chat's lines typed come in it). */
+const STATUS_POLL_MS = 250;
 /** Auto play with no live game: how often the list is asked again. */
 const WAIT_POLL_MS = 3000;
 /** A watch event is at most a chunk's base64 (64 KiB → ~88 KiB) and its JSON. */
@@ -44,6 +48,8 @@ export type SpectateClientDeps = {
   closePlayback: () => Promise<void>;
   /** The launcher setting "Close Dolphin after a spectated game ends". */
   closeOnEnd: () => boolean;
+  /** Spectator chat in the playback Dolphin's window. */
+  chat?: SpectatorChat;
   fetch?: typeof fetch;
   sleep?: (ms: number, signal: AbortSignal) => Promise<void>;
 };
@@ -226,6 +232,7 @@ export class SpectateClient {
     }
     this.current = w;
     this.playbackSeen = false;
+    this.deps.chat?.start(uid, stream, entry.spectators ?? 0);
     this.update({
       status: "connecting",
       stream,
@@ -257,6 +264,7 @@ export class SpectateClient {
   stop() {
     this.stopWatching();
     this.clearWait();
+    this.deps.chat?.stop();
     this.update({ status: "idle", stream: null, entry: null, spectators: 0, waitingForGame: false });
   }
 
@@ -302,6 +310,8 @@ export class SpectateClient {
     }
     try {
       await this.deps.play(this.comm(w));
+      // (The first play opens the playback Dolphin: the chat waited for it.)
+      await this.deps.chat?.flush();
     } catch (err) {
       // Stop: each later event would only try to open it again.
       const message = err instanceof Error ? err.message : String(err);
@@ -438,6 +448,9 @@ export class SpectateClient {
   /** One watch event (exposed for tests). */
   handle(w: Watch, ev: any) {
     const live = this.current === w;
+    if (live) {
+      this.deps.chat?.onEvent(w.stream, ev);
+    }
     switch (ev?.type) {
       case "welcome": {
         w.first?.({ ok: true });
@@ -522,6 +535,9 @@ export class SpectateClient {
   private endStream(w: Watch, message: string | undefined) {
     w.over = true;
     w.run.abort();
+    if (this.current === w) {
+      this.deps.chat?.end();
+    }
     this.enqueue(w, async () => {
       for (const f of w.files.values()) {
         if (!f.ended) {
@@ -568,6 +584,10 @@ export class SpectateClient {
       return;
     }
     const st = await this.deps.playbackStatus();
+    if (this.deps.chat) {
+      await this.deps.chat.flush();
+      void this.deps.chat.onOutbox(st?.chat);
+    }
     if (!st || st.commandId !== w.commandId) {
       return;
     }

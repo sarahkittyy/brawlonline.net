@@ -1,6 +1,8 @@
 import type { ModBuild, ModRoomStatus, ModsState } from "@dolphin/mods/types";
 import { useState } from "react";
 
+import { DEV_BADGE, TROPHY_BADGE } from "@/components/name_badges/story_badges";
+
 import type { ModsViewProps } from "./mods_view";
 import { ModsView } from "./mods_view";
 
@@ -116,6 +118,7 @@ const Frame = ({
             hostName: "Keiko",
             hostUid: "u-keiko",
             hostCountry: "jp",
+            hostBadges: [TROPHY_BADGE, DEV_BADGE],
             players: 3,
             open: 4,
             name: "REX nights",

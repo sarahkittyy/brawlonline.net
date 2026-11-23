@@ -1,6 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import React from "react";
 
+import { DEV_BADGE, STAR_BADGE, STORY_ICONS, TROPHY_BADGE } from "@/components/name_badges/story_badges";
 import { createServiceProvider } from "@/services";
 import type { BackendService, LeaderboardEntry, RankTier } from "@/services/backend/types";
 import type { Services } from "@/services/types";
@@ -26,6 +27,9 @@ const players: LeaderboardEntry[] = Array.from({ length: 137 }, (_, i) => {
     },
     setsToPlace: 0,
     positionChange: [0, 2, -1, 0, 5, -3, 1, 0, -1, 11, 1][i % 11],
+    // Badges and a custom main icon an admin gave (docs/design/profiles.md §10).
+    ...(i === 0 && { badges: [DEV_BADGE, TROPHY_BADGE], mainIcon: STORY_ICONS.heart }),
+    ...(i === 2 && { badges: [STAR_BADGE] }),
   };
 });
 

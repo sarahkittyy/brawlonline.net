@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, fireEvent, render, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { useAccountDialogs } from "@/lib/hooks/use_account_dialogs";
@@ -44,7 +44,21 @@ const placing: PlayerProfile = {
   },
 };
 
-const dev: PlayerProfile = { ...gold, uid: "dev", displayName: "Sarah", connectCode: "SARA#694", dev: true };
+const DEV_ICON = "0123456789abcdef0123";
+const STAR_ICON = "aaaaaaaaaaaaaaaaaaaa";
+const dev: PlayerProfile = {
+  ...gold,
+  uid: "dev",
+  displayName: "Sarah",
+  connectCode: "SARA#694",
+  badges: [
+    { icon: DEV_ICON, label: "Dev" },
+    { icon: STAR_ICON, places: ["chat"] },
+  ],
+  mainIcon: STAR_ICON,
+  mainIconLabel: "Claude",
+  mains: ["fox", "falco"],
+};
 
 const profiles: Record<string, PlayerProfile> = { them: gold, me: placing, dev };
 const fetchProfile = vi.fn(async (id: string) => {
@@ -118,17 +132,28 @@ describe("ProfileDialog", () => {
     await waitFor(() => expect(document.querySelector("[data-testid=profile-view]")).toBeNull());
   });
 
-  it("marks a developer's name with the </> (Dev on hover), and nobody else's", async () => {
+  it("shows the badges an admin gave for the profile before the name, the main icon as the primary main", async () => {
     const view = open("dev");
     await view.findByTestId("profile-name");
-    const badge = view.getByTestId("dev-badge");
-    expect(badge.getAttribute("aria-label")).toBe("Dev");
-    expect(badge.parentElement?.textContent).toBe("Sarah");
+    // Only the profile's badges (the chat-only one is left out), with the hover text as their label.
+    const badges = view.getAllByTestId("name-badge");
+    expect(badges.map((b) => b.getAttribute("src"))).toEqual([`https://brawlonline.net/v1/icons/${DEV_ICON}.png`]);
+    expect(badges[0].getAttribute("alt")).toBe("Dev");
+    const row = view.getByTestId("profile-name").parentElement!;
+    const order = Array.from(row.querySelectorAll("[data-testid]")).map((e) => e.getAttribute("data-testid"));
+    expect(order.slice(0, 3)).toEqual(["name-badges", "name-badge", "profile-name"]);
+    // The main icon is the first of the mains, the primary, with its hover text; the player's own mains follow.
+    const mains = view.getByTestId("profile-mains");
+    const icon = within(mains).getByTestId("main-icon");
+    expect(icon.getAttribute("src")).toContain(`/v1/icons/${STAR_ICON}.png`);
+    expect(icon.getAttribute("alt")).toBe("Claude (primary)");
+    expect(mains.querySelector("[data-testid=main-icon] ~ *")?.textContent).toBe("Fox");
     cleanup();
     useProfileView.setState({ target: null });
     const other = open("them");
     await other.findByTestId("profile-name");
-    expect(other.queryByTestId("dev-badge")).toBeNull();
+    expect(other.queryByTestId("name-badge")).toBeNull();
+    expect(other.queryByTestId("main-icon")).toBeNull();
   });
 
   it("shows the player's own profile while placing, without the buttons", async () => {

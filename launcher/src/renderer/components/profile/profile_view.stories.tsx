@@ -1,6 +1,9 @@
 import Paper from "@mui/material/Paper";
+import { useEffect } from "react";
 
+import { DEV_BADGE, STAR_BADGE, STORY_ICONS, TROPHY_BADGE } from "@/components/name_badges/story_badges";
 import type { PlayerProfile } from "@/services/backend/types";
+import { useGameAssets } from "@/styles/game_theme";
 
 import styles from "./profile.module.css";
 import { EditPencil, OwnAccountButtons, ProfileButtons, ProfileCorner } from "./profile_dialog";
@@ -28,15 +31,33 @@ const gold: PlayerProfile = {
   },
 };
 
+const STOCKS = Object.fromEntries(["fox", "falco"].map((c) => [c, { file: `stocks/${c}.png` }]));
+
 /** As the dialog shows it (the dialog's paper, padding and X, with the player's own pencil beside it). */
-const Frame = ({ edit, children }: { edit?: React.ReactNode; children: React.ReactNode }) => (
-  <Paper sx={{ width: 444 }}>
-    <div className={styles.dialog}>
-      <ProfileCorner edit={edit} onClose={() => undefined} />
-      {children}
-    </div>
-  </Paper>
-);
+const Frame = ({
+  edit,
+  stocks = false,
+  children,
+}: {
+  edit?: React.ReactNode;
+  /** Stock icons for the mains, as with a disc set up (the Storybook build has no extracted assets to show). */
+  stocks?: boolean;
+  children: React.ReactNode;
+}) => {
+  useEffect(() => {
+    if (stocks) {
+      useGameAssets.getState().setState({ manifest: { stocks: STOCKS } } as any);
+    }
+  }, [stocks]);
+  return (
+    <Paper sx={{ width: 444 }}>
+      <div className={styles.dialog}>
+        <ProfileCorner edit={edit} onClose={() => undefined} />
+        {children}
+      </div>
+    </Paper>
+  );
+};
 
 const Buttons = () => <ProfileButtons ignored={false} onMessage={() => undefined} onIgnore={() => undefined} />;
 
@@ -155,11 +176,43 @@ export const Customized = () => (
   </Frame>
 );
 
+/**
+ * Badges an admin gave, before the name (Dev on hover), and a custom main icon, the primary main: first of the mains,
+ * the player's own after it (docs/design/profiles.md §10).
+ */
+export const Badges = () => (
+  <Frame stocks={true}>
+    <ProfileView
+      profile={{
+        ...gold,
+        mains: ["fox", "falco"],
+        country: "se",
+        badges: [DEV_BADGE, TROPHY_BADGE, { ...STAR_BADGE, places: ["chat"] }],
+        mainIcon: STORY_ICONS.heart,
+        mainIconLabel: "Heart",
+      }}
+      actions={<Buttons />}
+      onCopyLink={() => undefined}
+    />
+  </Frame>
+);
+
 /** Edit mode on the player's own profile (nothing is saved here). */
 export const Editing = () => (
   <Frame>
     <ProfileView
       profile={{ ...gold, mains: ["marth"], country: null, socials: [] }}
+      editing={{ rename: async () => undefined, save: async () => undefined }}
+      onCopyLink={() => undefined}
+    />
+  </Frame>
+);
+
+/** Edit mode with a custom main icon: it stays first; the picker edits only the player's own mains. */
+export const EditingWithMainIcon = () => (
+  <Frame stocks={true}>
+    <ProfileView
+      profile={{ ...gold, mains: ["fox", "falco"], country: "se", socials: [], mainIcon: STORY_ICONS.heart }}
       editing={{ rename: async () => undefined, save: async () => undefined }}
       onCopyLink={() => undefined}
     />

@@ -183,7 +183,17 @@ private:
     MFSetAttributeSize(in.Get(), MF_MT_FRAME_SIZE, m_width, m_height);
     MFSetAttributeRatio(in.Get(), MF_MT_FRAME_RATE, 60000, 1001);
     MFSetAttributeRatio(in.Get(), MF_MT_PIXEL_ASPECT_RATIO, 1, 1);
-    hr = m_writer->SetInputMediaType(m_video, in.Get(), nullptr);
+    // No B-frames from Microsoft's software encoder (it makes them otherwise): the files have no
+    // edit list for the delay they add, which mp4_concat.ts counts on (docs/design/highlights.md).
+    ComPtr<IMFAttributes> params;
+    if (!hardware)
+    {
+      hr = MFCreateAttributes(&params, 1);
+      if (FAILED(hr))
+        return hr;
+      params->SetUINT32(CODECAPI_AVEncMPVDefaultBPictureCount, 0);
+    }
+    hr = m_writer->SetInputMediaType(m_video, in.Get(), params.Get());
     if (FAILED(hr))
       return hr;
 

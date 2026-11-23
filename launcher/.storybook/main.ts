@@ -35,6 +35,8 @@ const config: StorybookConfig = {
       builder: {},
     },
   },
+  // Badge and main icons (docs/design/profiles.md §10) where accounts serves them; preview.tsx points the icons there.
+  staticDirs: [{ from: "../src/renderer/components/name_badges/fixtures", to: "/v1/icons" }],
   // Storybook collects telemetry by default so disable it
   core: {
     disableTelemetry: true,

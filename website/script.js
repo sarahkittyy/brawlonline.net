@@ -11,13 +11,16 @@ const DOWNLOADS = {
 };
 const OS_NAMES = { windows: "Windows", macos: "macOS", linux: "Linux", "linux-arm64": "Linux (ARM64)" };
 // The launcher's update feed (electron-updater). The button links the installer it names, so the
-// version and size under the button are always those of the file it downloads.
+// version and size under the button are always those of the file it downloads. `stable` keeps the
+// /downloads/ link (the same file, hard-linked by pp-release): an AppImage is run from where it is
+// saved, and electron-updater renames one whose name holds a version to the new version's name at
+// every update, breaking menu entries and Steam shortcuts to it. BrawlOnline.AppImage keeps its name.
 const FEED_DIR = "/updates/launcher/";
 const FEEDS = {
   windows: { feed: "latest.yml", file: /\.exe$/ },
   macos: { feed: "latest-mac.yml", file: /\.dmg$/, note: "Apple Silicon" },
-  linux: { feed: "latest-linux.yml", file: /\.AppImage$/ },
-  "linux-arm64": { feed: "latest-linux-arm64.yml", file: /\.AppImage$/ },
+  linux: { feed: "latest-linux.yml", file: /\.AppImage$/, stable: true },
+  "linux-arm64": { feed: "latest-linux-arm64.yml", file: /\.AppImage$/, stable: true },
 };
 // ----------------------------------------------------------------------------
 
@@ -131,8 +134,9 @@ function formatSize(bytes) {
   return Math.round(bytes / (1024 * 1024)) + " MB";
 }
 
-// Points the button at the feed's newest installer and writes "v0.1.46 · 95 MB" under it. If the
-// feed can't be read, the button keeps the stable /downloads/ link and the line stays empty.
+// Points the button at the feed's newest installer (a `stable` one keeps its /downloads/ link) and
+// writes "v0.1.46 · 95 MB" under it. If the feed can't be read, the button keeps the stable
+// /downloads/ link and the line stays empty.
 async function showRelease(os, dl) {
   const meta = document.getElementById("dl-meta");
   const conf = FEEDS[os];
@@ -149,7 +153,7 @@ async function showRelease(os, dl) {
       const head = await fetch(url, { method: "HEAD" });
       size = head.ok ? Number(head.headers.get("Content-Length")) || 0 : 0;
     }
-    dl.href = url;
+    if (!conf.stable) dl.href = url;
     meta.textContent = ["v" + feed.version, size && formatSize(size), conf.note].filter(Boolean).join(" \u00b7 ");
   } catch (e) {
     // Offline or blocked: the stable link still works.

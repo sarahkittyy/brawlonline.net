@@ -1,7 +1,7 @@
 // Copyright 2026 Dolphin Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-#include "VideoCommon/ReplayOverlayUI.h"
+#include "BrawlOnline/UI/ReplayOverlayUI.h"
 
 #include <algorithm>
 #include <atomic>
@@ -19,7 +19,7 @@
 #include "BrawlOnline/Online/GameSetup.h"
 #include "BrawlOnline/Rollback/GameplaySession.h"
 #include "Core/Rollback/ReplayPlayback.h"
-#include "VideoCommon/OnScreenDisplay.h"
+#include "BrawlOnline/UI/OnScreenDisplay.h"
 
 namespace VideoCommon::ReplayOverlayUI
 {

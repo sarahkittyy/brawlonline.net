@@ -28,9 +28,10 @@
 #     (Qt, build tree, ccache) on its cache volume. Developer ID signed (repository secrets, see
 #     the macos job). Its DMG is submitted to Apple's notary service without waiting, and the job
 #     uploads the build (launcher-mac) and the submission (mac-notary), kept 90 days.
-#     client-mac-publish.yml publishes it once Apple accepts it, however long that takes, and never
-#     an older version over a newer one. Linux and Windows never wait for it, and a failed or
-#     skipped macOS build never holds them back.
+#     start-mac-publish starts client-mac-publish.yml right after it (not when the whole run ends,
+#     which waits for arm64 Linux), and that publishes it once Apple accepts it, however long that
+#     takes, and never an older version over a newer one. Linux and Windows never wait for it,
+#     and a failed or skipped macOS build never holds them back.
 #
 # Concurrency is per job (group client-<job>, never cancelled while running): a newer push's
 # Linux and Windows builds start as soon as the previous ones finish, even while that run's macOS
@@ -674,6 +675,22 @@ jobs:
           path: ${{ runner.temp }}/notary/notary.json
           retention-days: 90
           if-no-files-found: error
+
+  start-mac-publish:
+    # Starts client-mac-publish.yml as soon as the macOS build is uploaded. Its workflow_run
+    # trigger fires only when this whole run has finished, and linux-arm64 takes longer than the
+    # other builds, so Macs used to wait for arm64 Linux (0.2.4 on 2026-11-17). GITHUB_TOKEN may
+    # start workflow_dispatch runs. A GitHub-hosted runner: the Mac runner keeps read-only rights.
+    needs: macos
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+    steps:
+      - name: Start client-mac-publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run client-mac-publish.yml -R "$GITHUB_REPOSITORY" --ref "$GITHUB_REF_NAME"
 
   publish:
     # Linux (x86_64) and Windows. The arm64 Linux build is published by publish-linux-arm64, the

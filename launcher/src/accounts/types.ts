@@ -9,6 +9,7 @@
  * the server's accept-rules endpoint and `rulesVersion` fields go unused.
  */
 
+import type { NameBadge } from "@common/badges";
 import type { ServiceUrls } from "@common/product";
 import type { Ruleset, StageChoice } from "@common/rulesets";
 
@@ -106,8 +107,12 @@ export type PlayerProfile = {
   showCountry?: boolean;
   /** The primary main shows beside the player's name (leaderboard, chat). */
   showMain?: boolean;
-  /** One of the game's developers (an admin account): a purple `</>` beside the name. */
-  dev?: boolean;
+  /** The badges an admin gave the player (docs/design/profiles.md §10), in order; absent from an older server. */
+  badges?: NameBadge[];
+  /** The icon an admin set in place of the primary main's stock icon; null for none. */
+  mainIcon?: string | null;
+  /** Its hover text (as a stock icon's is the character's name). */
+  mainIconLabel?: string | null;
 };
 
 /** `GET /v1/admin/players`: a player in an admin's online list (the offline part). */
@@ -138,12 +143,21 @@ export type AdminUserUpdate = { displayName?: string; connectCode?: string; name
 /** `GET /v1/admin/codes`: who has a connect code (`uid` null: nobody). */
 export type AdminCodeOwner = { code: string; uid: string | null; displayName: string | null };
 
-/** What shows beside a name in a list: the flag and the primary main, each only when the player shows it. */
+/**
+ * What shows beside a name in a list: the flag and the primary main, each only when the player shows it; the badges
+ * and the custom main icon an admin gave them, always (docs/design/profiles.md §10).
+ */
 export type NameTag = {
   /** A flag-icons code. */
   country?: string | null;
   /** A character key (the primary main). */
   main?: string | null;
+  /** An icon id, shown in place of the primary main's stock icon. */
+  mainIcon?: string | null;
+  /** Its hover text. */
+  mainIconLabel?: string | null;
+  /** The badges before the name, each with where it shows. */
+  badges?: NameBadge[];
 };
 
 export type SocialPlatform = "discord" | "twitter" | "twitch" | "youtube" | "tiktok" | "instagram";
@@ -310,6 +324,12 @@ export type PublicRoom = {
   /** Every player's primary main (character key), by slot (as `names`), when they show it beside their name;
    * null when not. Absent from an older server. */
   mains?: (string | null)[];
+  /** Every player's custom main icon, by slot (as `names`); absent when nobody in the room has one. */
+  mainIcons?: (string | null)[];
+  /** Their hover texts, by slot (as `mainIcons`). */
+  mainIconLabels?: (string | null)[];
+  /** Every player's badges for the room list, by slot (as `names`); absent when nobody in the room has one. */
+  badges?: NameBadge[][];
 };
 
 /** P+ rooms or Other Games (Brawl Mods) rooms: each has its own room name. */
@@ -374,6 +394,8 @@ export type PublicModRoom = {
   hostUid?: string;
   /** The host's flag code when they show it beside their name. */
   hostCountry?: string | null;
+  /** The host's badges for the room list. */
+  hostBadges?: NameBadge[];
   players: number;
   /** Open slots (the room's size). */
   open: number;

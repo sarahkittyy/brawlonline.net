@@ -117,6 +117,23 @@ describe("ModsView", () => {
     expect(p.onJoinCode).toHaveBeenCalledWith("KFQB");
   });
 
+  it("hosts private from a game's own switch, which every game shares", () => {
+    localStorage.clear();
+    const pplus = { ...minus, id: "pplus", name: "Project+ v3.2.1" };
+    const p = props({ builds: [minus, pplus], running: false, status: null });
+    const { getAllByRole, getAllByText } = render(<ModsView {...p} />);
+    // One switch on each game's row, by Host (Sarah's board, 2026-11-15: "put the public/private switch back").
+    const toggles = () => getAllByRole("checkbox") as HTMLInputElement[];
+    expect(toggles().map((t) => t.checked)).toEqual([true, true]);
+    fireEvent.click(toggles()[1]);
+    // One value for every game: both say Private, and Host opens a private room.
+    expect(toggles().map((t) => t.checked)).toEqual([false, false]);
+    expect(getAllByText(Messages.privateRoom()).every((e) => e.getAttribute("aria-hidden") === "false")).toBe(true);
+    fireEvent.click(getAllByText(Messages.host())[0]);
+    expect(p.onHost).toHaveBeenCalledWith(minus, false);
+    localStorage.clear();
+  });
+
   it("edits a build from its pencil, by the trash can", () => {
     const p = props({ builds: [minus], running: false, status: null });
     const { getByLabelText } = render(<ModsView {...p} />);
@@ -182,7 +199,7 @@ describe("ModsView", () => {
     try {
       const p = props({ builds: [minus], running: true, status: room(1) });
       const { getAllByRole, rerender } = render(<ModsView {...p} />);
-      // The room's switch comes first (the build row's own is for the next Host). Its label says
+      // The room's switch comes first (the game rows' are for the next Host). Its label says
       // which the room is: "Private" off, "Public" on (bug report #282).
       const toggle = () => getAllByRole("checkbox")[0] as HTMLInputElement;
       const label = () =>

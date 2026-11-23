@@ -2,6 +2,7 @@ import type { RulesetView } from "@accounts/types";
 import { enqueueSnackbar } from "notistack";
 import React from "react";
 
+import { DEV_BADGE, STAR_BADGE, TROPHY_BADGE } from "@/components/name_badges/story_badges";
 import { SocialMessages } from "@/components/social/social.messages";
 import { ToastProvider } from "@/components/toast_provider";
 import playStyles from "@/pages/play/play_page.module.css";
@@ -28,6 +29,8 @@ const mockRooms: PublicRoom[] = [
     names: ["Sarah"],
     uids: ["u-sarah"],
     countries: ["se"],
+    // A badge an admin gave (docs/design/profiles.md §10).
+    badges: [[DEV_BADGE]],
     joinable: true,
     ruleset: {
       code: "KFQBTR",
@@ -62,6 +65,7 @@ const mockRooms: PublicRoom[] = [
     names: ["Lucas", "Toon Link Main", "ギガクッパ"],
     uids: ["u-lucas", "u-tl", "u-giga"],
     countries: ["se", "br", "jp"],
+    badges: [[TROPHY_BADGE], [], [STAR_BADGE]],
     joinable: true,
   },
   {
@@ -113,6 +117,7 @@ const mockRooms: PublicRoom[] = [
     mode: "teams",
     status: "waiting",
     names: ["WWWWWWWWWWWWWWW", "MMMMMMMMMMMMMMM", "Pikachu Enjoyer"],
+    badges: [[TROPHY_BADGE, STAR_BADGE], [DEV_BADGE], []],
     joinable: true,
   },
 ];

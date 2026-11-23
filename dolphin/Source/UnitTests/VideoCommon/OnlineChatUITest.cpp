@@ -23,7 +23,7 @@
 #include "BrawlOnline/Online/Chat.h"
 #include "BrawlOnline/Online/ChatCrypto.h"
 #include "BrawlOnline/Online/Rooms.h"
-#include "VideoCommon/OnlineChatUI.h"
+#include "BrawlOnline/UI/OnlineChatUI.h"
 
 namespace CC = Online::ChatCrypto;
 namespace Chat = Online::Chat;

@@ -351,6 +351,10 @@ pub struct PublicModRoom {
     /// (`GET /v1/rooms`); mm never sends it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub host_country: Option<String>,
+    /// The host's badges for the room list ([`crate::badges::Place::Rooms`]). Only accounts fills
+    /// it in, as `host_country`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub host_badges: Vec<crate::badges::NameBadge>,
     pub players: u8,
     pub open: u8,
     /// The host's name for it (`users.mods_room_name`); `None`: the launcher shows "alice's room".

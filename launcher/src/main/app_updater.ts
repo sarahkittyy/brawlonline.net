@@ -6,11 +6,12 @@ import type { SettingsManager } from "@settings/settings_manager";
 import { app } from "electron";
 import log from "electron-log";
 import type { ProgressInfo, UpdateInfo } from "electron-updater";
-import { autoUpdater } from "electron-updater";
+import { AppImageUpdater, autoUpdater } from "electron-updater";
 import { readFileSync, statSync } from "node:fs";
 import os from "os";
 import path from "path";
 
+import { keepAppImageName } from "./appimage_name";
 import { ipc_launcherUpdateFailedEvent } from "./ipc";
 
 export type UpdateState = {
@@ -127,6 +128,11 @@ export class AppUpdater {
     // a feed with PPO_UPDATES_URL checks it, so the update bar and the launch gate can be tried.
     if (!app.isPackaged && process.env.PPO_UPDATES_URL) {
       autoUpdater.forceDevUpdateConfig = true;
+    }
+
+    // An AppImage update replaces the file in place instead of saving it under the new version's name.
+    if (autoUpdater instanceof AppImageUpdater) {
+      keepAppImageName(autoUpdater as unknown as Parameters<typeof keepAppImageName>[0]);
     }
 
     autoUpdater.on("update-available", (info: UpdateInfo) => {

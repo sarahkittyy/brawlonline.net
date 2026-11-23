@@ -28,8 +28,12 @@
 #include "VideoCommon/FramebufferShaderGen.h"
 #include "VideoCommon/NetPlayGolfUI.h"
 #include "VideoCommon/OnScreenDisplay.h"
-#include "VideoCommon/OnlineChatUI.h"
-#include "VideoCommon/ReplayOverlayUI.h"
+#include "BrawlOnline/UI/Hooks.h"
+#include "BrawlOnline/UI/OnlineChatUI.h"
+#include "BrawlOnline/UI/Style.h"
+#include "InputCommon/ControllerInterface/CoreDevice.h"
+#include "VideoCommon/Assets/CustomTextureData.h"
+#include "BrawlOnline/UI/ReplayOverlayUI.h"
 #include "VideoCommon/PerformanceMetrics.h"
 #include "VideoCommon/Present.h"
 #include "VideoCommon/Statistics.h"
@@ -44,6 +48,51 @@
 
 namespace VideoCommon
 {
+namespace
+{
+// An OSD message's icon (an achievement's badge) as a texture.
+class IconTexture final : public BrawlOnline::UI::IconTexture
+{
+public:
+  explicit IconTexture(std::unique_ptr<AbstractTexture> texture) : m_texture(std::move(texture)) {}
+  u64 Id() const override { return static_cast<AbstractTexture::imgui_texture_id>(*m_texture); }
+  float Width() const override { return static_cast<float>(m_texture->GetWidth()); }
+  float Height() const override { return static_cast<float>(m_texture->GetHeight()); }
+
+private:
+  std::unique_ptr<AbstractTexture> m_texture;
+};
+
+// What Brawl Online's shared UI (core/ui) needs of Dolphin.
+void SetUIHooks()
+{
+  BrawlOnline::UI::Hooks hooks;
+  hooks.game_rect = [] {
+    if (!g_presenter)
+      return BrawlOnline::UI::Rect{};
+    const MathUtil::Rectangle<int> r = g_presenter->GetTargetRectangle();
+    return BrawlOnline::UI::Rect{r.left, r.top, r.right, r.bottom};
+  };
+  hooks.show_messages = [] { return Config::Get(Config::MAIN_OSD_MESSAGES); };
+  hooks.block_keyboard_mouse = [](bool blocked) {
+    ciface::Core::SetKeyboardMouseBlocked(blocked);
+  };
+  hooks.make_icon = [](const void* icon) -> std::unique_ptr<BrawlOnline::UI::IconTexture> {
+    const auto* level = static_cast<const CustomTextureData::ArraySlice::Level*>(icon);
+    const u32 width = level->width;
+    const u32 height = level->height;
+    TextureConfig tex_config(width, height, 1, 1, 1, AbstractTextureFormat::RGBA8, 0,
+                             AbstractTextureType::Texture_2DArray);
+    std::unique_ptr<AbstractTexture> texture = g_gfx->CreateTexture(tex_config);
+    if (!texture)
+      return nullptr;
+    texture->Load(0, width, height, width, level->data.data(), sizeof(u32) * width * height);
+    return std::make_unique<IconTexture>(std::move(texture));
+  };
+  BrawlOnline::UI::SetHooks(std::move(hooks));
+}
+}  // namespace
+
 bool OnScreenUI::Initialize(u32 width, u32 height, float scale)
 {
   std::unique_lock<std::mutex> imgui_lock(m_imgui_mutex);
@@ -82,48 +131,17 @@ bool OnScreenUI::Initialize(u32 width, u32 height, float scale)
     return false;
   }
 
-  // Font defaults
+  SetUIHooks();
+
+  // Font defaults: the OSD font (a user supplied one, else Sys's) as the atlas's first, and the
+  // chat's (core/ui, as EmissaryRecomp loads them).
   ImGuiIO& io = ImGui::GetIO();
   m_imgui_textures.clear();
-
-  // User supplied font
-  std::string file = File::GetUserPath(D_LOAD_IDX) + "OSD_Font.ttf";
-
-  bool font_exists = File::Exists(file);
-  if (!font_exists)
-  {
-    // Default supplied font
-    file = File::GetSysDirectory() + DIR_SEP + RESOURCES_DIR + DIR_SEP + "OSD_Font.ttf";
-    font_exists = File::Exists(file);
-  }
-
-  if (font_exists)
-  {
-    io.Fonts->Clear();
-    io.Fonts->AddFontFromFileTTF(file.c_str());
-  }
-  else
-  {
-    // The first font is the default: keep ImGui's own ahead of the chat font.
-    io.Fonts->AddFontDefault();
-  }
-
-  // The online chat's font: Noto Sans with Noto Sans JP merged in for kana and kanji. Glyphs are
-  // rasterized when first drawn, and only these fonts' glyphs exist (others draw as the fallback).
-  const std::string resources = File::GetSysDirectory() + DIR_SEP + RESOURCES_DIR + DIR_SEP;
-  ImFont* chat_font = nullptr;
-  if (File::Exists(resources + "NotoSans-Regular.ttf"))
-  {
-    chat_font = io.Fonts->AddFontFromFileTTF((resources + "NotoSans-Regular.ttf").c_str());
-    if (chat_font && File::Exists(resources + "NotoSansJP-Regular.ttf"))
-    {
-      ImFontConfig merge;
-      merge.MergeMode = true;
-      io.Fonts->AddFontFromFileTTF((resources + "NotoSansJP-Regular.ttf").c_str(), 0.0f, &merge);
-    }
-  }
-  OnlineChatUI::SetFont(chat_font);
-  ReplayOverlayUI::SetFont(chat_font);
+  const BrawlOnline::UI::Fonts fonts = BrawlOnline::UI::AddFonts(
+      io.Fonts, File::GetUserPath(D_LOAD_IDX) + "OSD_Font.ttf",
+      File::GetSysDirectory() + DIR_SEP + RESOURCES_DIR + DIR_SEP, true);
+  OnlineChatUI::SetFont(fonts.chat);
+  ReplayOverlayUI::SetFont(fonts.chat);
 
   // Setup new font management behavior
   io.BackendFlags |= ImGuiBackendFlags_RendererHasTextures | ImGuiBackendFlags_RendererHasVtxOffset;
@@ -582,13 +600,7 @@ void OnScreenUI::SetScale(float backbuffer_scale)
   ImGui::GetIO().DisplayFramebufferScale.x = backbuffer_scale;
   ImGui::GetIO().DisplayFramebufferScale.y = backbuffer_scale;
 
-  // ScaleAllSizes scales in-place, so calling it twice will double-apply the scale
-  // Reset the style first so that the scale is applied to the base style, not an already-scaled one
-  ImGuiStyle& style = ImGui::GetStyle();
-  style = {};
-  style.FontScaleMain = backbuffer_scale;
-  style.WindowRounding = 7.0f;
-  style.ScaleAllSizes(backbuffer_scale);
+  BrawlOnline::UI::SetStyle(ImGui::GetStyle(), backbuffer_scale);
 
   m_backbuffer_scale = backbuffer_scale;
 }

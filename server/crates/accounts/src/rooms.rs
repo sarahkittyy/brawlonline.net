@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::Json;
+use common::badges::{NameBadge, Place};
 use common::rooms::{clean_room_name, MmStatus, RoomKind, YourRoom};
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
@@ -96,7 +97,8 @@ impl MmStatusSource {
     }
 }
 
-/// Fills in the room players' flags and mains and the Brawl Mods hosts' flags.
+/// Fills in the room players' flags, mains, main icons and badges and the Brawl Mods hosts' flags
+/// and badges.
 async fn with_flags(pool: &sqlx::PgPool, mut s: MmStatus) -> sqlx::Result<MmStatus> {
     let parse = |u: &String| uuid::Uuid::parse_str(u).ok();
     let mut uids: Vec<uuid::Uuid> =
@@ -108,12 +110,37 @@ async fn with_flags(pool: &sqlx::PgPool, mut s: MmStatus) -> sqlx::Result<MmStat
     let tag = |u: &String| parse(u).and_then(|u| tags.get(&u));
     let flag = |u: &String| tag(u).and_then(|t| t.country.clone());
     let main = |u: &String| tag(u).and_then(|t| t.main.clone());
+    let main_icon = |u: &String| tag(u).and_then(|t| t.main_icon.clone());
+    let main_icon_label = |u: &String| tag(u).and_then(|t| t.main_icon_label.clone());
+    // Only the badges for the room list, and without their places.
+    let badges = |u: &String| -> Vec<NameBadge> {
+        tag(u).map_or_else(Vec::new, |t| {
+            t.badges
+                .iter()
+                .filter(|b| b.shows_in(Place::Rooms))
+                .map(|b| NameBadge { places: None, ..b.clone() })
+                .collect()
+        })
+    };
     for r in s.rooms.iter_mut().chain(s.friend_rooms.iter_mut()) {
         r.countries = r.uids.iter().map(flag).collect();
         r.mains = r.uids.iter().map(main).collect();
+        r.main_icons = r.uids.iter().map(main_icon).collect();
+        if r.main_icons.iter().all(Option::is_none) {
+            r.main_icons.clear();
+        }
+        r.main_icon_labels = r.uids.iter().map(main_icon_label).collect();
+        if r.main_icon_labels.iter().all(Option::is_none) {
+            r.main_icon_labels.clear();
+        }
+        r.badges = r.uids.iter().map(badges).collect();
+        if r.badges.iter().all(Vec::is_empty) {
+            r.badges.clear();
+        }
     }
     for r in &mut s.mod_rooms {
         r.host_country = flag(&r.host_uid);
+        r.host_badges = badges(&r.host_uid);
     }
     Ok(s)
 }

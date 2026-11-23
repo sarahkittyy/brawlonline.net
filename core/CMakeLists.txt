@@ -23,6 +23,7 @@ add_library(brawl_online_core STATIC
   include/BrawlOnline/Online/Rooms.h
   include/BrawlOnline/Online/SetFormat.h
   include/BrawlOnline/Online/Spectate.h
+  include/BrawlOnline/Online/SpectatorChat.h
   include/BrawlOnline/Online/Timeouts.h
   include/BrawlOnline/Online/User.h
   include/BrawlOnline/Rollback/GameplayRollback.h
@@ -50,6 +51,7 @@ add_library(brawl_online_core STATIC
   src/Online/Rooms.cpp
   src/Online/SetFormat.cpp
   src/Online/Spectate.cpp
+  src/Online/SpectatorChat.cpp
   src/Online/User.cpp
   src/Rollback/GameplayRollback.cpp
   src/Rollback/GameplaySession.cpp
@@ -58,7 +60,9 @@ add_library(brawl_online_core STATIC
   src/Rollback/ReplayFile.cpp
   src/Rollback/ReplayRecorder.cpp
 )
-target_include_directories(brawl_online_core PUBLIC include)
+# ui/include: the on-screen messages the core shows (BrawlOnline/UI/OnScreenDisplay.h, Dolphin's
+# VideoCommon/OnScreenDisplay.h); the UI itself is its own library (core/ui).
+target_include_directories(brawl_online_core PUBLIC include ui/include)
 target_compile_features(brawl_online_core PUBLIC cxx_std_20)
 target_link_libraries(brawl_online_core PUBLIC fmt::fmt monocypher)
 

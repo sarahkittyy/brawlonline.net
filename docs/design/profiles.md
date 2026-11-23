@@ -111,3 +111,48 @@ Data: the server adds what to show beside each name (`profile::NameTag`: `countr
 - website: `website/profile/profile.css` (the page's only style), the flags (`assets/flags/`), the placing badge, and the top 10 links (`script.js`, `style.css`).
 - **nginx (by hand on sarahvps2)**: `/profile/<code>` goes to accounts (`server/deploy/sarahvps2/nginx-brawl-online.conf`, the accounts `location`). Installed on prod 2026-11-09 (backup `/etc/nginx/brawl-online.conf.bak-20261109T215204Z`), ahead of the accounts code: until it ships, `/profile/...` is accounts' plain 404. The Caddyfile has the same route.
 - **Staging and local runs** have nothing in front of accounts, so accounts serves the page's own files (`/profile/profile.css`, `/assets/...`: flags, rank badges, the font) from `WEBSITE_DIR` (staging.py sets it to its checkout's `website/`). Unset in production, where nginx serves them and accounts never sees those paths.
+
+## 10. Badges and custom main icons (2026-11-17)
+
+Sarah's board: "i'd like to be able to manually, as admin, customize people's names and stuff. like how i have the </> logo". Her picks: `pp-admin` only for now, PNG only, the server decides (the player's own "Show next to name" switches don't apply), a badge still shows when the name beside it is cut short, and each badge has its own hover text (as the `</>` said "Dev"). The `</>` is no longer tied to `users.role = 'admin'`: it is a badge like any other, given by hand on prod. Badge icons live only on prod (in its database), not in the repository.
+
+**What there is**
+
+- **Icons**: PNG files (animated ones too), at most 64 KiB and 256x256 (`common::badges::check_png`), uploaded once with `pp-admin icon add` and kept in the database (`icons`, migration 0037), each under a name for pp-admin and an id, the start of its SHA-256. accounts serves them at `/v1/icons/<id>.png`, cached for good (a new file is a new address). The launcher builds that address from the id alone (on the accounts server it talks to), so nothing the server sends can point it anywhere else. The `/v1/` location already goes to accounts, so nginx needs no change.
+- **Badges**: up to 8 a player (`user_badges`), in order, each an icon, hover text (at most 60 characters; MUI's tooltip in the launcher, `title` on the web page) and where it shows. They go **before the name**.
+- **Custom main icon** (`user_main_icons`): one icon that is the player's primary main: shown wherever the primary main's stock icon shows beside their name, whether or not they show their main, and first in their Mains (the profile, the hover card, the web page) with the player's own mains after it, none of those marked primary (Sarah, 2026-11-17: "just show it where his main is normally shown. he can have his other mains too, just have claude be the primary"). Its hover text (`--label`, migration 0038) is a tooltip as a badge's, as a stock icon shows its character's name; in the Mains it reads "<label> (primary)". The player's own picker edits only their own mains: the icon stays first, in edit mode too, until `pp-admin main-icon clear`.
+
+**Where** (`common::badges::Place`; a badge with no places listed shows in all of them; `pp-admin badge add --places`):
+
+| Place | Badges (before the name) | Custom main icon |
+|---|---|---|
+| `profile`: the profile dialog and the web page | All of them, 22 px (28 on the page) | First of the Mains, the primary |
+| `hover`: the small profile on hovering a name | All of them, 15 px | First of the mains |
+| `online`: the online list and the Friends tab | Up to 3, 16 px | The 20 px main slot (only with a disc set up, as the stock icons); the players rail's friend pictures |
+| `chat`: the chat tab and the open window's title | Up to 3 | By the minimize button |
+| `leaderboard` | Up to 3 | The Main column |
+| `rooms`: P+ rooms' players and Other Games hosts | Up to 3 | P+ rooms' mains row |
+| Always (not a place) | | The player's own picture (header, Switch account), the queue box, Match history's player filter |
+
+Badges never shrink (`name_badges.module.css`): a name too long for its space ends in "…" and the badges before it stay whole. In lists that align by baseline (the chat look) they are centred on the row.
+
+**Data**: `profile::NameTag` (what the lists get beside each name) carries `mainIcon`, `mainIconLabel` and `badges` (each with its `places`), from the same one query as the flag and main (`name_tags`), so the leaderboard, the social stream (online list, chat, friends, queue), Match history's opponents and the room list all have them. The room list sends only each player's `rooms` badges, by slot (`badges`, `mainIcons`, `mainIconLabels`; `hostBadges` for Other Games). The profile (`GET /v1/profiles/<id>`, the page) has all of them. Every pp-admin change also sets `users.updated_at`, so accounts' account watcher (every 3 s) lists an online player again with the new ones; the leaderboard, profiles and rooms show them on their next read (the hover card and the profile keep a profile for 5 minutes).
+
+**pp-admin**
+
+```
+pp-admin icon add <file.png> [--name crown]     # read on the machine pp-admin runs on
+pp-admin icon list
+pp-admin icon remove <name> [--force]           # --force: also takes it off everyone who has it
+pp-admin badge add <player> <icon> [--label "Dev"] [--places all|profile,hover,online,chat,leaderboard,rooms] [--pos 1]
+pp-admin badge list <player>
+pp-admin badge remove <player> <icon>
+pp-admin main-icon set <player> <icon> [--label "Claude"]
+pp-admin main-icon clear <player>
+```
+
+`badge add` on a badge the player already has changes only what is given (hover text, places, position). Every change is in `audit_log` (`icon.add`, `badge.set`, `main_icon.set`, ...). A new icon on prod: copy the PNG to the server (`/tmp`), then `sudo pp-admin icon add /tmp/<file>.png` and `sudo pp-admin badge add <code> <icon> --label ...`.
+
+**Not included**: in game (the names over the fighters and on the HUD are text the game draws), Spectate and Match history's rows (their names come without name tags), a launcher upload for admins.
+
+Storybook shows every place with badges (the fixture icons in `launcher/src/renderer/components/name_badges/fixtures/`, served at `/v1/icons` by `.storybook/main.ts`).

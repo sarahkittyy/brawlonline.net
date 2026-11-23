@@ -83,6 +83,8 @@ add_subdirectory(Core)
 # The online code Dolphin shares with EmissaryRecomp (docs/design/brawl-online-core.md): built
 # here, after Core (whose libraries it still calls), with the definitions above and Dolphin's precompiled header, as when it was part of core.
 add_subdirectory(${CMAKE_SOURCE_DIR}/../core ${CMAKE_BINARY_DIR}/brawl-online-core)
+# Its in-game UI (on-screen messages, chat), which EmissaryRecomp draws too, over Externals/imgui.
+add_subdirectory(${CMAKE_SOURCE_DIR}/../core/ui ${CMAKE_BINARY_DIR}/brawl-online-ui)
 if (ANDROID)
   add_subdirectory(Android/jni)
 endif()

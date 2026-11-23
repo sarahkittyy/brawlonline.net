@@ -5,7 +5,7 @@ import { clsx } from "clsx";
 import React from "react";
 
 import { MainPicture } from "@/components/main_picture/main_picture";
-import { useStockIcon } from "@/components/profile/character_icon";
+import { useMainPictureUrl } from "@/components/profile/character_icon";
 import { QueueMessages } from "@/lib/queue/queue.messages";
 import { formatClock, formatEta } from "@/lib/queue/queue_eta";
 import { useRoomList } from "@/lib/social/use_room_list";
@@ -146,8 +146,11 @@ const PlayingBox = ({ queue, folded }: { queue: Extract<QueueState, { state: "pl
   );
 };
 
-/** A player's main's stock icon; without one (no main shown, no disc) the dotted outline, as the player's own card. */
+/**
+ * A player's main's stock icon (or the icon an admin set in its place); without one (no main shown, no disc) the
+ * dotted outline, as the player's own card.
+ */
 const PlayerPicture = ({ player, size }: { player: SocialPlayer; size: number }) => {
-  const url = useStockIcon(player.main ?? "");
-  return <MainPicture url={player.main ? url ?? null : null} size={size} />;
+  const url = useMainPictureUrl(player.main, player.mainIcon);
+  return <MainPicture url={url ?? null} size={size} />;
 };

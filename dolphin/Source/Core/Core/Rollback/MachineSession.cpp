@@ -102,7 +102,7 @@
 #include "VideoCommon/AsyncRequests.h"
 #include "VideoCommon/Fifo.h"
 #include "VideoCommon/OnScreenDisplay.h"
-#include "VideoCommon/OnlineChatUI.h"
+#include "BrawlOnline/UI/OnlineChatUI.h"
 #include "VideoCommon/Present.h"
 #include "VideoCommon/VideoState.h"
 

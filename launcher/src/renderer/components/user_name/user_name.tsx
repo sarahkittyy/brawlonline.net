@@ -1,7 +1,9 @@
+import type { BadgePlace, NameBadge } from "@common/badges";
 import { countryName } from "@common/profile";
 import { clsx } from "clsx";
 
 import { Flag } from "@/components/flag/flag";
+import { NameBadges } from "@/components/name_badges/name_badges";
 import { MiniProfileTooltip } from "@/components/profile/mini_profile";
 import { RankBadge } from "@/components/rank_badge/rank_badge";
 import { useProfileView } from "@/lib/hooks/use_profile_view";
@@ -23,14 +25,17 @@ export type UserNameData = {
   rank?: Rank | null;
   /** A flag code, when the player shows it beside their name. */
   country?: string | null;
+  /** The badges an admin gave them (docs/design/profiles.md §10). */
+  badges?: NameBadge[] | null;
 };
 
 /**
  * A player's name, as the launcher shows it everywhere (the online list, chat, rooms, the leaderboard, the match
- * history): the rank badge and the flag before it, the connect code after it, lighter. Each part is switched on
- * where it's wanted. `profileLink` makes the name a button that opens the player's profile (View Profile); with a
- * uid, hovering the name shows a small profile card (`hoverCard`, on by default) and right-clicking it opens the
- * online list's player menu (`playerMenu`, on by default with the hover card; off where the row has its own menu).
+ * history): the rank badge, the flag and the badges an admin gave the player before it, the connect code after it,
+ * lighter. Each part is switched on where it's wanted (the badges by `badgePlace`). `profileLink` makes the name a
+ * button that opens the player's profile (View Profile); with a uid, hovering the name shows a small profile card
+ * (`hoverCard`, on by default) and right-clicking it opens the online list's player menu (`playerMenu`, on by
+ * default with the hover card; off where the row has its own menu).
  *
  * `classes` restyles the parts for a place with its own look (the chat's names are its own CSS).
  */
@@ -39,6 +44,7 @@ export const UserName = ({
   showCode = true,
   showBadge = false,
   showFlag = false,
+  badgePlace,
   profileLink = false,
   hoverCard = true,
   playerMenu = true,
@@ -56,6 +62,8 @@ export const UserName = ({
   showBadge?: boolean;
   /** The player's flag before the name, when they show one. */
   showFlag?: boolean;
+  /** The place this is, for the badges before the name (those for it); none without. */
+  badgePlace?: BadgePlace;
   /** Clicking the name opens the player's profile (needs `uid`). */
   profileLink?: boolean;
   /** Hovering the name shows a small profile card (needs `uid`). */
@@ -105,6 +113,7 @@ export const UserName = ({
       {showFlag && user.country && (
         <Flag code={user.country} height={12} title={countryName(user.country)} className={styles.flag} />
       )}
+      {badgePlace && <NameBadges badges={user.badges} place={badgePlace} />}
       <span className={styles.text}>
         {name}
         {showCode && user.connectCode && <span className={clsx(styles.code, classes?.code)}>{user.connectCode}</span>}

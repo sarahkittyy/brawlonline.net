@@ -2,6 +2,7 @@ import ButtonBase from "@mui/material/ButtonBase";
 import { clsx } from "clsx";
 
 import { MAIN_PICTURE_HOVER, RANDOM_PICTURE } from "@/components/main_picture/main_picture";
+import { STORY_ICONS } from "@/components/name_badges/story_badges";
 
 import menuStyles from "../user_menu/user_menu.module.css";
 import { UserInfo } from "./user_info";
@@ -30,6 +31,13 @@ export const StandardUserInfo = () => (
 export const RandomMainUserInfo = () => (
   <InButton>
     <UserInfo displayName="Player name" picture={RANDOM_PICTURE} connectCode="TEST#000" />
+  </InButton>
+);
+
+// A custom main icon an admin set (docs/design/profiles.md §10), in place of the primary main.
+export const CustomMainIconUserInfo = () => (
+  <InButton>
+    <UserInfo displayName="Player name" picture={`/v1/icons/${STORY_ICONS.heart}.png`} connectCode="TEST#000" />
   </InButton>
 );
 
