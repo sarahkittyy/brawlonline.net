@@ -27,6 +27,7 @@ add_library(brawl_online_core STATIC
   include/BrawlOnline/Online/User.h
   include/BrawlOnline/Rollback/GameplayRollback.h
   include/BrawlOnline/Rollback/GameplaySession.h
+  include/BrawlOnline/Rollback/LoopWatch.h
   include/BrawlOnline/Rollback/PeerData.h
   include/BrawlOnline/Rollback/ReplayFile.h
   include/BrawlOnline/Rollback/ReplayRecorder.h
@@ -52,6 +53,7 @@ add_library(brawl_online_core STATIC
   src/Online/User.cpp
   src/Rollback/GameplayRollback.cpp
   src/Rollback/GameplaySession.cpp
+  src/Rollback/LoopWatch.cpp
   src/Rollback/PeerData.cpp
   src/Rollback/ReplayFile.cpp
   src/Rollback/ReplayRecorder.cpp
