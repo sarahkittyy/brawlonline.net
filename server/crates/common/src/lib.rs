@@ -7,6 +7,7 @@
 //! module docs for what was taken.
 
 pub mod chat;
+pub mod client_engine;
 pub mod codes;
 pub mod countries;
 pub mod db;

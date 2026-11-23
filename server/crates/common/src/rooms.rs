@@ -118,6 +118,11 @@ pub struct Hello {
     /// As a ticket's `platform`.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub platform: String,
+    /// As a ticket's `engine` and `engineVersion`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub engine: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub engine_version: String,
     /// The install's chat identity key (64 hex digits, Ed25519; `docs/chat-protocol.md` §1). Empty
     /// from builds older than chat: such a connection can't chat. Anything but a string reads as
     /// empty (a malformed key is ignored, never a reason to refuse the `hello`).
@@ -1333,11 +1338,21 @@ mod tests {
             user: HelloUser { uid: "u".into(), play_key: "k".into() },
             app_version: "0.1.0".into(),
             platform: String::new(),
+            engine: String::new(),
+            engine_version: String::new(),
             chat_key: String::new(),
             game_alive: false,
             pair_room: false,
         };
         assert!(serde_json::to_value(&hello).unwrap().get("chatKey").is_none());
+        // The engine (absent from builds before the field: read as our Dolphin by mm).
+        assert!(serde_json::to_value(&hello).unwrap().get("engine").is_none());
+        let mut v = base.clone();
+        v["engine"] = json!("emissary");
+        v["engineVersion"] = json!("0.7.0");
+        let h: Hello = serde_json::from_value(v).unwrap();
+        assert_eq!((h.engine.as_str(), h.engine_version.as_str()), ("emissary", "0.7.0"));
+        assert_eq!(serde_json::from_value::<Hello>(base.clone()).unwrap().engine, "");
         assert!(serde_json::to_value(&hello).unwrap().get("gameAlive").is_none());
         let mut v = base.clone();
         v["gameAlive"] = json!(true);

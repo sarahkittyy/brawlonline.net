@@ -122,17 +122,25 @@ enum RoomCmd {
 
 #[derive(Subcommand)]
 enum SpeedCmd {
-    /// Games reported per mode and how many were slow; waiting-room checks per platform and video
-    /// backend; how many players the Ranked rule would lock now.
+    /// Games reported per mode and engine, how many were slow and how many desynced; games by the
+    /// engines of their players (dolphin+emissary, ...) and how many desynced; waiting-room checks
+    /// per platform, engine and video backend; how many players the Ranked rule would lock now.
     Summary {
         #[arg(long, default_value_t = 7)]
         days: i64,
+        /// Only this engine (`dolphin`, `emissary`): its reports and checks, and the games one of
+        /// whose players ran it.
+        #[arg(long)]
+        engine: Option<String>,
     },
     /// Players the rule would lock out of Ranked now (two slow Ranked games in a row, no passing
     /// waiting-room check since), latest first.
     Locked {
         #[arg(long, default_value_t = 30)]
         days: i64,
+        /// Only players with a slow Ranked game on this engine (`dolphin`, `emissary`).
+        #[arg(long)]
+        engine: Option<String>,
     },
     /// One player's games and checks, oldest first, and what the rule says. IDENT as for `user`.
     Show {
@@ -689,37 +697,53 @@ async fn main() -> anyhow::Result<()> {
         Cmd::Stats { days, offset, mm_status_url } => {
             print_stats(&pool, days.clamp(1, 365), offset, &mm_status_url).await?
         }
-        Cmd::Speed(SpeedCmd::Summary { days }) => {
+        Cmd::Speed(SpeedCmd::Summary { days, engine }) => {
             let days = days.clamp(1, 365);
-            let s = admin::speed_summary(&pool, days).await?;
-            println!("games, last {days} days: mode, reported, slow (this PC's own), players with a slow one");
-            for (mode, n, slow, players) in &s.games {
-                println!("  {mode:<10} {n:>7} {slow:>7} {players:>7}");
+            let engine = engine.as_deref().map(common::client_engine::name);
+            let s = admin::speed_summary(&pool, days, engine.as_deref()).await?;
+            if let Some(e) = &engine {
+                println!("engine {e} only");
             }
-            println!("waiting-room checks: platform, backend, pass, slow, unsure, players");
-            for c in &s.checks {
+            println!(
+                "games, last {days} days: mode, engine, reported, slow (this PC's own), players with a slow one, desynced"
+            );
+            for g in &s.games {
                 println!(
                     "  {:<10} {:<10} {:>7} {:>7} {:>7} {:>7}",
-                    c.platform, c.backend, c.pass, c.slow, c.unsure, c.players
+                    g.mode, g.engine, g.reported, g.slow, g.slow_players, g.desynced
+                );
+            }
+            println!("games reported by two or more players: their engines, games, desynced, desync rate");
+            for p in &s.pairs {
+                let rate = 100.0 * p.desynced as f64 / p.games.max(1) as f64;
+                println!("  {:<20} {:>7} {:>7} {:>6.2}%", p.engines, p.games, p.desynced, rate);
+            }
+            println!("waiting-room checks: platform, engine, backend, pass, slow, unsure, players");
+            for c in &s.checks {
+                println!(
+                    "  {:<10} {:<10} {:<10} {:>7} {:>7} {:>7} {:>7}",
+                    c.platform, c.engine, c.backend, c.pass, c.slow, c.unsure, c.players
                 );
             }
             println!("the Ranked rule would lock {} player(s) now (log only; see `speed locked`)", s.locked);
         }
-        Cmd::Speed(SpeedCmd::Locked { days }) => {
-            let locked = admin::speed_locked(&pool, days.clamp(1, 365)).await?;
+        Cmd::Speed(SpeedCmd::Locked { days, engine }) => {
+            let engine = engine.as_deref().map(common::client_engine::name);
+            let locked = admin::speed_locked(&pool, days.clamp(1, 365), engine.as_deref()).await?;
             if locked.is_empty() {
                 println!("nobody");
             }
             for l in &locked {
                 println!(
-                    "{}  {} slow Ranked game(s) in a row, last {} at {:.1} fps ({:.0}% late), {} {}",
+                    "{}  {} slow Ranked game(s) in a row, last {} at {:.1} fps ({:.0}% late), {} {} {}",
                     who(Some(l.uid), &l.connect_code, &l.display_name),
                     l.streak,
                     l.last.at.format("%Y-%m-%d %H:%M UTC"),
                     l.last.fps.unwrap_or(0.0),
                     100.0 * l.last.own_late.unwrap_or(0.0),
                     l.last.platform,
-                    l.last.app_version
+                    l.last.app_version,
+                    common::client_engine::label(&l.last.engine, &l.last.engine_version)
                 );
             }
         }
@@ -730,14 +754,15 @@ async fn main() -> anyhow::Result<()> {
                 let when = r.at.format("%Y-%m-%d %H:%M UTC");
                 if let Some(p) = r.perf() {
                     println!(
-                        "{when}  game  {:<9} {:>6.2} fps, {:>3.0}% late (own), {:>3.0}% at the peer's speed{}{}  {}",
+                        "{when}  game  {:<9} {:>6.2} fps, {:>3.0}% late (own), {:>3.0}% at the peer's speed{}{}  {}  {}",
                         r.mode,
                         p.fps,
                         100.0 * p.own_late,
                         100.0 * p.followed,
                         p.peer_fps.map(|f| format!(" ({f:.1} fps)")).unwrap_or_default(),
                         if p.slow_game() { "  SLOW" } else { "" },
-                        r.match_id.as_deref().unwrap_or("")
+                        r.match_id.as_deref().unwrap_or(""),
+                        common::client_engine::label(&r.engine, &r.engine_version)
                     );
                     if let Some(d) = &p.delay {
                         println!(
@@ -764,11 +789,12 @@ async fn main() -> anyhow::Result<()> {
                     }
                 } else if let Some(c) = r.check() {
                     println!(
-                        "{when}  check {:<9} {:?} {c:?}  {} {}",
+                        "{when}  check {:<9} {:?} {c:?}  {} {} {}",
                         r.mode,
                         r.windows.as_deref().unwrap_or(&[]),
                         r.backend.as_deref().unwrap_or(""),
-                        r.platform
+                        r.platform,
+                        common::client_engine::label(&r.engine, &r.engine_version)
                     );
                 }
             }

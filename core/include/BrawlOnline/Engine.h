@@ -42,10 +42,26 @@ struct GuestRegs
   u32 ctr = 0;
 };
 
+// Which engine this is, as the servers learn it (docs/design/brawl-online-core.md §10, "Which
+// engine"): mm's hello and tickets and the game reports carry it as `engine` and `engineVersion`,
+// so desync and speed numbers can be split by engine. `name`: "dolphin", "emissary"
+// (EmissaryRecomp) or "unknown"; `version`: the engine's own build ("v0.2.5" for our Dolphin, the
+// recomp's release), at most 64 printable ASCII characters (the servers cut the rest).
+struct EngineIdentity
+{
+  std::string name;
+  std::string version;
+};
+
 class Engine
 {
 public:
   virtual ~Engine() = default;
+
+  // ---- Which engine ----
+
+  // Not pure: an engine that does not say is "unknown" to the servers (never taken for Dolphin).
+  virtual EngineIdentity Identity() const { return {"unknown", ""}; }
 
   // ---- Brawl's main loop, at the session's hooks ----
 
@@ -134,4 +150,7 @@ public:
 // The process's engine (Dolphin registers its own at start-up; EmissaryRecomp its own).
 Engine& GetEngine();
 void SetEngine(Engine* engine);
+// The process's engine's Identity(), or "unknown" before one is set (never aborts: the online
+// connections can start before any game does).
+EngineIdentity ThisEngine();
 }  // namespace BrawlOnline

@@ -746,7 +746,8 @@ Message Parse(const std::string& packet)
 
 std::string HelloJson(const std::string& uid, const std::string& play_key,
                       const std::string& app_version, const std::string& platform,
-                      const std::string& chat_key)
+                      const std::string& chat_key, const std::string& engine,
+                      const std::string& engine_version)
 {
   picojson::object user;
   user["uid"] = picojson::value(uid);
@@ -758,6 +759,10 @@ std::string HelloJson(const std::string& uid, const std::string& play_key,
   o["platform"] = picojson::value(platform);
   if (!chat_key.empty())
     o["chatKey"] = picojson::value(chat_key);
+  if (!engine.empty())
+    o["engine"] = picojson::value(engine);
+  if (!engine_version.empty())
+    o["engineVersion"] = picojson::value(engine_version);
   // This build sends `game-alive` while its emulation runs (Online/GameAlive.h).
   o["gameAlive"] = picojson::value(true);
   // ... and plays a 2v2 party's pair room (docs/design/2v2.md, "The pair room").

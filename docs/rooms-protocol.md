@@ -22,8 +22,10 @@ All messages are JSON in reliable ENet packets on channel 0, like tickets (`serv
 ### `hello` (client → server)
 
 ```json
-{"type": "hello", "user": {"uid": "…", "playKey": "…"}, "appVersion": "0.1.0", "platform": "win", "chatKey": "3d40…", "gameAlive": true}
+{"type": "hello", "user": {"uid": "…", "playKey": "…"}, "appVersion": "0.1.0", "platform": "win", "engine": "dolphin", "engineVersion": "v0.1.0", "chatKey": "3d40…", "gameAlive": true}
 ```
+
+`engine`, `engineVersion` (optional, from builds after 2026-11-19): the engine that runs the game, `dolphin` (our Dolphin; `engineVersion` its git describe, `v0.2.5` for a release) or `emissary` (EmissaryRecomp running the same online core; its own release), and `unknown` from an engine that does not say. Absent: our Dolphin (every older build). mm keeps them with the connection: its speed checks and speed reports are stored with them, and its log lines name them (`docs/design/brawl-online-core.md` §10, "Which engine"). Tickets carry the same two fields.
 
 `chatKey` (optional): the install's chat identity key, 64 hex digits; chat on this connection is `docs/chat-protocol.md`.
 
@@ -43,7 +45,7 @@ The same checks as a ticket, in the same order: the build (below), the uid and p
 {"type": "hello-resp", "error": "Close Dolphin and update to 0.2.1", "latestVersion": "0.2.1"}
 ```
 
-- **The build.** `appVersion` (CI stamps the release version into Dolphin) and `platform` (`win`, `mac`, `linux`) are checked against the newest build of that platform in the launcher's update feed (`MM_UPDATE_FEED_DIR`: `latest.yml`, `latest-mac.yml`, `latest-linux.yml`, read again every 10 s), and against `MM_MIN_APP_VERSION` if set. Each platform has its own: the macOS build goes live later (Apple's notarization), and its players keep playing on the previous one meanwhile. A build that sends no `platform` (older than the field) is held to the oldest feed among the platforms it can be from: builds are published only through the feeds, so a 0.1.41 cannot be a macOS build while the macOS feed is at 0.1.28. Tickets (`create-ticket` also carries `platform`) are checked the same way, and so is a room's `room-ready` with `ready: true`, which a game left running across a release is refused: `room-error {op: "room-ready", error: "Close Dolphin and update to 0.2.1"}`. The game shows the text in red on the CSS; Dolphin keeps its build until it is closed, and the launcher updates then.
+- **The build.** `appVersion` (CI stamps the release version into the online core; EmissaryRecomp sends the release of the core it was built from) and `platform` (`win`, `mac`, `linux`, `linux-arm64`) are checked against the newest build of that platform in the launcher's update feed (`MM_UPDATE_FEED_DIR`: `latest.yml`, `latest-mac.yml`, `latest-linux.yml`, read again every 10 s), and against `MM_MIN_APP_VERSION` if set. Each platform has its own: the macOS build goes live later (Apple's notarization), and its players keep playing on the previous one meanwhile. A build that sends no `platform` (older than the field) is held to the oldest feed among the platforms it can be from: builds are published only through the feeds, so a 0.1.41 cannot be a macOS build while the macOS feed is at 0.1.28. A game with `engine: "emissary"` is checked exactly as a Dolphin of its `appVersion` on its platform until recomp builds have their own feed (`latest-emissary.yml`, `latest-emissary-mac.yml`, `latest-emissary-linux.yml`, `latest-emissary-linux-arm64.yml`: the core release of the newest recomp build), then against that one (`server/crates/mm/src/versions.rs`). Tickets (`create-ticket` also carries `platform`) are checked the same way, and so is a room's `room-ready` with `ready: true`, which a game left running across a release is refused: `room-error {op: "room-ready", error: "Close Dolphin and update to 0.2.1"}`. The game shows the text in red on the CSS; Dolphin keeps its build until it is closed, and the launcher updates then.
 
 - **One per account.** A second `hello` from the same account (another game) closes the older connection with `{"type": "error", "error": "Signed in from another game."}`; the older one leaves its room.
 - **Heartbeat.** ENet's own keepalive: mm drops a peer it has not heard from for 10 s (`set_timeout(32, 5000, 10000)`, as for tickets). The game must keep servicing this host (also during matches; it is a separate ENet host from the P2P one). Nothing else is sent while idle.
@@ -200,7 +202,8 @@ The room starts by itself once **two or more members play (not sitting out), eve
    ```json
    {"type": "create-ticket", "user": {"uid": "…", "playKey": "…", "connectCode": "…", "displayName": "…"},
     "search": {"mode": 3, "connectCode": [130, 106, 130, 101, 130, 112, 130, 97]},
-    "appVersion": "0.1.0", "ipAddressLan": "192.168.1.20:41234"}
+    "appVersion": "0.1.0", "platform": "win", "engine": "dolphin", "engineVersion": "v0.1.0",
+    "ipAddressLan": "192.168.1.20:41234"}
    ```
 
    `search.connectCode` is the room code as the keypad's Shift-JIS bytes (full width, as Direct sends a connect code) or plain ASCII. mm answers `create-ticket-resp {}`, or an error (`Room not found.`, `You are not in this room.`, `The room is not starting a game.`).

@@ -154,7 +154,7 @@ Unpacks it into `versions/<tag>/`, without the upstream launcher (`Brawl Recompi
 
 ### 7.4 Compatibility
 
-The recomp and Dolphin must simulate identically and speak the same protocol, so the launcher carries `RECOMP_PROTOCOL` (bumped whenever the plugin protocol, the gameplay region set, the setup sync or the checksum changes on the Dolphin side). A recomp whose manifest `protocol` differs is `required` (§5). mm learns the engine too: the ticket and the game report carry `engine: "dolphin" | "recomp"` and the recomp's version, so desync and speed numbers can be split by engine (`pp-admin speed`), and Ranked could refuse it if its numbers were bad (it is allowed: §10, D3).
+The recomp and Dolphin must simulate identically and speak the same protocol, so the launcher carries `RECOMP_PROTOCOL` (bumped whenever the plugin protocol, the gameplay region set, the setup sync or the checksum changes on the Dolphin side). A recomp whose manifest `protocol` differs is `required` (§5). mm learns the engine too: the hello, the ticket and the game report carry `engine: "dolphin" | "emissary"` and the engine's version (built 2026-11-19: brawl-online-core.md §10, "Which engine"), so desync and speed numbers can be split by engine (`pp-admin speed`), and Ranked could refuse it if its numbers were bad (it is allowed: §10, D3).
 
 ### 7.5 What the launcher needs from EmissaryRecomp
 

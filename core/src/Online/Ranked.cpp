@@ -22,6 +22,7 @@
 #include "Common/Logging/Log.h"
 #include "Common/Thread.h"
 #include "BrawlOnline/Config/OnlineSettings.h"
+#include "BrawlOnline/Engine.h"
 #include "Core/Core.h"
 #include "BrawlOnline/Online/GameSetup.h"
 #include "BrawlOnline/Online/OnlineClient.h"
@@ -188,6 +189,10 @@ Outcome Post(const std::string& what, const std::string& path, picojson::object 
     WARN_LOG_FMT(NETPLAY, "Ranked: {}: not logged in", what);
     return Outcome::Fail;
   }
+  // Which engine played (report-game, report-leave): the servers split numbers by it.
+  const BrawlOnline::EngineIdentity engine = BrawlOnline::ThisEngine();
+  body["engine"] = picojson::value(engine.name);
+  body["engineVersion"] = picojson::value(engine.version);
   Common::HttpRequest request(HTTP_TIMEOUT);
   const auto response =
       request.Post(Url(path), picojson::value(body).serialize(),

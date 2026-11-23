@@ -533,11 +533,30 @@ struct TwosSearch {
     after: Option<String>,
 }
 
-/// The build a game says it is (`appVersion`, `platform`).
+/// The build a game says it is (`appVersion`, `platform`, `engine`, `engineVersion`).
 #[derive(Debug, Clone, Default)]
 struct ClientBuild {
     app_version: String,
     platform: String,
+    /// [`common::client_engine::name`]: `dolphin` (also from builds before the field), `emissary`.
+    engine: String,
+    engine_version: String,
+}
+
+impl ClientBuild {
+    fn new(app_version: String, platform: String, engine: &str, engine_version: &str) -> Self {
+        ClientBuild {
+            app_version,
+            platform,
+            engine: common::client_engine::name(engine),
+            engine_version: common::client_engine::version(engine_version),
+        }
+    }
+
+    /// `dolphin`, `emissary 0.7.0`: for log lines.
+    fn engine_label(&self) -> String {
+        common::client_engine::label(&self.engine, &self.engine_version)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -554,6 +573,8 @@ struct Waiting {
     region: String,
     /// Where the ticket's address is (GeoIP), for the ping estimate.
     loc: Option<Loc>,
+    /// The ticket's build (its engine for the match lines).
+    client: ClientBuild,
     /// 2v2: the player's party (its code); its players search as one unit.
     party: Option<String>,
     /// 2v2: the search started again by itself after its group broke up (`queue_searches`).
@@ -967,10 +988,13 @@ impl Engine {
     }
 
     /// The version to update to when `client` is older than what it must have: its platform's
-    /// newest published build (`update_feed_dir`), or `min_app_version`.
+    /// newest published build (`update_feed_dir`; a recomp's own feed once it has one, else the
+    /// one a Dolphin of its core's version is held to: [`FeedVersions::required`]), or
+    /// `min_app_version`.
     fn outdated(&self, client: &ClientBuild) -> Option<String> {
         let have = parse_version(&client.app_version);
-        if let Some(f) = self.feed.required(&client.platform, &client.app_version).filter(|f| have < parse_version(f)) {
+        let required = self.feed.required(&client.engine, &client.platform, &client.app_version);
+        if let Some(f) = required.filter(|f| have < parse_version(f)) {
             return Some(f.to_string());
         }
         let min = self.cfg.min_app_version.as_deref().filter(|m| have < parse_version(m))?;
@@ -1722,14 +1746,16 @@ impl Engine {
                 }
                 tracing::info!(
                     uid = %o.user.uid, mode = %check.mode, windows = ?check.windows, gaps = check.gaps,
-                    backend = %check.backend, platform = %o.client.platform, verdict = ?check.verdict(),
-                    "speed check"
+                    backend = %check.backend, platform = %o.client.platform, engine = %o.client.engine_label(),
+                    verdict = ?check.verdict(), "speed check"
                 );
                 out.push(Output::SpeedCheck(Box::new(SpeedCheckRecord {
                     uid: o.user.uid,
                     check,
                     app_version: o.client.app_version.clone(),
                     platform: o.client.platform.clone(),
+                    engine: o.client.engine.clone(),
+                    engine_version: o.client.engine_version.clone(),
                 })));
             }
             // A newer build's or a broken one: nothing to answer (the game expects no reply).
@@ -1765,7 +1791,8 @@ impl Engine {
         if perf.slow_game() {
             tracing::info!(
                 uid = %o.user.uid, match_id = %e.match_id, mode, fps = perf.fps, own_late = perf.own_late,
-                platform = %o.client.platform, "slow game: this player's PC could not keep full speed"
+                platform = %o.client.platform, engine = %o.client.engine_label(),
+                "slow game: this player's PC could not keep full speed"
             );
         }
         out.push(Output::SpeedReport(Box::new(SpeedReportRecord {
@@ -1778,6 +1805,8 @@ impl Engine {
             perf,
             app_version: o.client.app_version.clone(),
             platform: o.client.platform.clone(),
+            engine: o.client.engine.clone(),
+            engine_version: o.client.engine_version.clone(),
         })));
     }
 
@@ -1809,7 +1838,7 @@ impl Engine {
     /// `hello`: the same checks as a ticket (version, uid, play key), then the connection stays
     /// open as an online connection.
     fn on_hello(&mut self, now: Instant, conn: ConnId, h: common::rooms::Hello, out: &mut Vec<Output>) {
-        let client = ClientBuild { app_version: h.app_version, platform: h.platform };
+        let client = ClientBuild::new(h.app_version, h.platform, &h.engine, &h.engine_version);
         if let Some(latest) = self.outdated(&client) {
             return self.refuse_hello(out, conn, &msg::update_to(&latest), Some(latest.clone()));
         }
@@ -1877,7 +1906,7 @@ impl Engine {
         if let Some(name) = unsupported {
             return self.refuse(out, conn, msg::not_available(name));
         }
-        let client = ClientBuild { app_version: t.app_version, platform: t.platform };
+        let client = ClientBuild::new(t.app_version, t.platform, &t.engine, &t.engine_version);
         if let Some(latest) = self.outdated(&client) {
             return self.refuse(out, conn, msg::update_to(&latest));
         }
@@ -2057,6 +2086,7 @@ impl Engine {
             lan: p.lan,
             region: region.clone(),
             loc,
+            client: p.client.clone(),
             party: p.twos.as_ref().and_then(|t| t.party.clone()),
             requeue: p.twos.as_ref().is_some_and(|t| t.requeue),
             addr6: self.ipv6_seen.get(p.ipv6_token.as_deref().unwrap_or_default()).map(|(a, _)| *a),
@@ -2141,7 +2171,7 @@ impl Engine {
             self.fail_online(out, old, msg::SIGNED_IN_ELSEWHERE);
         }
         self.fail_room_tickets(out);
-        tracing::info!(conn, %code, chat = p.chat_key.is_some(), "online");
+        tracing::info!(conn, %code, chat = p.chat_key.is_some(), engine = %p.client.engine_label(), "online");
         if let Some(key) = p.chat_key {
             out.push(Output::RecordChatKey { uid: user.uid, key });
         }
@@ -2207,6 +2237,7 @@ impl Engine {
                 lan: p.lan,
                 region,
                 loc: None,
+                client: p.client.clone(),
                 party: None,
                 requeue: false,
                 ipv6_token: None,
@@ -2255,6 +2286,7 @@ impl Engine {
                 lan: p.lan,
                 region,
                 loc: None,
+                client: p.client.clone(),
                 party: None,
                 requeue: false,
                 ipv6_token: None,
@@ -2271,6 +2303,16 @@ impl Engine {
             Self::send(out, *c, resp);
         }
         if let Some(rec) = outcome.record {
+            // Which engine each player's game runs (the "room matched" line has their codes).
+            let engines: Vec<String> = outcome
+                .matched
+                .iter()
+                .filter_map(|(c, _)| match self.conns.get(c).map(|c| &c.state) {
+                    Some(State::Waiting(w)) => Some(format!("{} {}", w.code, w.client.engine_label())),
+                    _ => None,
+                })
+                .collect();
+            tracing::info!(match_id = %rec.match_id, ?engines, "room match engines");
             // For the match history (`docs/rooms-protocol.md` §3): the players' games report it.
             let mut regions: Vec<String> = outcome
                 .matched
@@ -2724,6 +2766,7 @@ impl Engine {
             ?rating_gap,
             ?splits,
             players = ?entrants.iter().map(|(_, a, w)| format!("{}@{}", w.code, a)).collect::<Vec<_>>(),
+            engines = ?entrants.iter().map(|(_, _, w)| w.client.engine_label()).collect::<Vec<_>>(),
             "matched"
         );
         for (i, (conn, _, _)) in entrants.iter().enumerate() {
@@ -5079,6 +5122,75 @@ mod tests {
         v["appVersion"] = json!("3.6.0");
         let out = h.raw(5, v.to_string().as_bytes());
         assert_eq!(sent(&out, 5), vec![json!({"type": "create-ticket-resp"})]);
+    }
+
+    /// The engine a game names (`hello.engine`, `engineVersion`; absent: our Dolphin) goes with its
+    /// speed numbers, and EmissaryRecomp is held to an update as a Dolphin of its core's release,
+    /// or to its own feed once there is one (docs/design/brawl-online-core.md §10, "Which engine").
+    #[test]
+    fn the_engine_goes_with_the_numbers_and_the_update_rule() {
+        let mut h = Harness::new(EngineConfig::default());
+        h.e.set_feed_versions(FeedVersions::from_pairs(&[("win", "3.6.0"), ("mac", "3.5.0")]));
+        let users: Vec<MmUser> =
+            (b'A'..b'G').map(|c| user(&format!("E{}#1", c as char), &format!("e{}", c as char))).collect();
+        for u in &users {
+            h.add(u);
+        }
+        let hello = |h: &mut Harness, conn: ConnId, u: &MmUser, version: &str, engine: Option<&str>| {
+            let mut v = json!({
+                "type": "hello",
+                "user": {"uid": u.uid.to_string(), "playKey": h.secret.derive(u.uid, u.play_key_version)},
+                "appVersion": version,
+                "platform": "win",
+            });
+            if let Some(e) = engine {
+                v["engine"] = json!(e);
+                v["engineVersion"] = json!("0.7.0+771c27b");
+            }
+            h.connect(conn, conn as u16);
+            h.raw(conn, v.to_string().as_bytes())
+        };
+        let check = json!({"type": "speed-check", "mode": "ranked", "windows": [59.9, 59.9], "gaps": 0,
+                           "backend": "Vulkan"});
+
+        // A recomp built from the 3.5.0 core: refused on Windows exactly as our Dolphin 3.5.0 is.
+        let out = hello(&mut h, 1, &users[0], "3.5.0", Some("emissary"));
+        assert_eq!(sent(&out, 1)[0]["error"], msg::update_to("3.6.0"));
+        assert!(disconnected(&out, 1));
+        // From the 3.6.0 core: in, and its numbers say which engine.
+        let out = hello(&mut h, 2, &users[1], "3.6.0", Some(" Emissary "));
+        assert!(sent(&out, 2)[0].get("error").is_none(), "{:?}", sent(&out, 2));
+        let c = speed_checks(&h.room(2, check.clone()));
+        assert_eq!((c[0].engine.as_str(), c[0].engine_version.as_str()), ("emissary", "0.7.0+771c27b"));
+        // A game that does not say is our Dolphin (every build before the field); a malformed name
+        // is "unknown", never taken for Dolphin.
+        hello(&mut h, 3, &users[2], "3.6.0", None);
+        let c = speed_checks(&h.room(3, check.clone()));
+        assert_eq!((c[0].engine.as_str(), c[0].engine_version.as_str()), ("dolphin", ""));
+        hello(&mut h, 4, &users[3], "3.6.0", Some("<b>x</b>"));
+        assert_eq!(speed_checks(&h.room(4, check.clone()))[0].engine, "unknown");
+
+        // Recomp builds published with their own Windows feed (its core's release, 3.5.0): a recomp
+        // is held to that one, a Dolphin still to its own.
+        h.e.set_feed_versions(
+            FeedVersions::from_pairs(&[("win", "3.6.0"), ("mac", "3.5.0")]).with_emissary(&[("win", "3.5.0")]),
+        );
+        let out = hello(&mut h, 5, &users[4], "3.5.0", Some("emissary"));
+        assert!(sent(&out, 5)[0].get("error").is_none(), "{:?}", sent(&out, 5));
+        let out = hello(&mut h, 6, &users[5], "3.5.0", Some("dolphin"));
+        assert_eq!(sent(&out, 6)[0]["error"], msg::update_to("3.6.0"));
+        // Tickets the same way.
+        h.connect(7, 7);
+        let mut v = h.ticket_json(&users[0], "EB#1", 2);
+        v["appVersion"] = json!("3.4.0");
+        v["platform"] = json!("win");
+        v["engine"] = json!("emissary");
+        let out = h.raw(7, v.to_string().as_bytes());
+        assert_eq!(sent(&out, 7), vec![json!({"type": "create-ticket-resp", "error": msg::update_to("3.5.0")})]);
+        h.connect(8, 8);
+        v["appVersion"] = json!("3.5.0");
+        let out = h.raw(8, v.to_string().as_bytes());
+        assert_eq!(sent(&out, 8), vec![json!({"type": "create-ticket-resp"})]);
     }
 
     #[test]
