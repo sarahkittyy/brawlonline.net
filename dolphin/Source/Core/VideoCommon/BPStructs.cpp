@@ -27,6 +27,7 @@
 #include "VideoCommon/BPMemory.h"
 #include "VideoCommon/BoundingBox.h"
 #include "VideoCommon/Fifo.h"
+#include "VideoCommon/FrameInterpolation.h"
 #include "VideoCommon/FramebufferManager.h"
 #include "VideoCommon/GeometryShaderManager.h"
 #include "VideoCommon/OpcodeDecoding.h"
@@ -410,6 +411,8 @@ static void BPWritten(PixelShaderManager& pixel_shader_manager, XFStateManager& 
             destAddr, EFBCopyFormat::XFB, copy_width, height, destStride, is_depth_copy, srcRect,
             false, false, yScale, s_gammaLUT[PE_copy.gamma], bpmem.triggerEFBCopy.clamp_top,
             bpmem.triggerEFBCopy.clamp_bottom, bpmem.copyfilter.GetCoefficients());
+        // Smooth motion: the frame's in-between pictures, for the present below.
+        FrameInterpolation::AfterXFBCopy(s_present_efb_copy);
 
         auto& system = Core::System::GetInstance();
 

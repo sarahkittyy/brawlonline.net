@@ -164,6 +164,25 @@ static_assert(ProfileInputDelay(1, 30) == 1 && ProfileInputDelay(1, 60) == 2 &&
               ProfileInputDelay(1, 184) == 4 && ProfileInputDelay(1, 300) == 7);
 static_assert(ProfileInputDelay(-1, -1) == 2 && ProfileInputDelay(1, -1) == 2);
 
+// Smooth motion (VideoCommon/FrameInterpolation.h) shows each frame's own picture a part of a
+// frame later (8.3 ms at 120 Hz, up to 13.9 at 360), so a game with it plays one frame
+// (16.7 ms) of input delay lower than the setting gave: the player's input is on screen sooner
+// than with it off, not later. The frame comes off this player's own delay, so the rollbacks it
+// costs are a frame deeper on their own screen and nobody else's (5be14305). At 0 frames there is
+// none to take: the game plays 0 and shows the pictures all the same (the user's call,
+// 2026-11-21), each frame's own picture that part of a frame later than without them. `delay`
+// is GekkoNet's: a Wii controller's early input (GameplaySession.cpp's GekkoDelayFor) already
+// plays a delay of 1 as GekkoNet's 0, so it has none to take at 1 either.
+constexpr int SmoothMotionDelay(int delay)
+{
+  return delay >= 1 ? delay - 1 : delay;
+}
+static_assert(SmoothMotionDelay(0) == 0 && SmoothMotionDelay(1) == 0 && SmoothMotionDelay(2) == 1 &&
+              SmoothMotionDelay(MAX_INPUT_DELAY) == MAX_INPUT_DELAY - 1);
+// Every profile leaves a frame to take, at any round trip (but for early input at 1).
+static_assert(ProfileInputDelay(-1, 0) >= 1 && ProfileInputDelay(0, 0) >= 1 &&
+              ProfileInputDelay(1, 0) >= 1 && ProfileInputDelay(0, -1) >= 1);
+
 // The game frame the rollback starts at. The match's first frames are the countdown, during which
 // the game loads RNG-chosen resources (Pokemon, Assist Trophies) and each fighter's HUD portrait
 // on a loader thread into heaps of the region set (the last at about game frame 95: the last

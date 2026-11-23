@@ -52,6 +52,7 @@
 #include "VideoCommon/EFBInterface.h"
 #include "VideoCommon/Fifo.h"
 #include "VideoCommon/FrameDumper.h"
+#include "VideoCommon/FrameInterpolation.h"
 #include "VideoCommon/FramebufferManager.h"
 #include "VideoCommon/GeometryShaderManager.h"
 #include "VideoCommon/GraphicsModSystem/Runtime/GraphicsModManager.h"
@@ -391,6 +392,9 @@ void VideoBackendBase::ShutdownShared()
 {
   auto& system = Core::System::GetInstance();
   system.GetCustomResourceManager().Shutdown();
+
+  // Smooth motion holds texture cache entries.
+  FrameInterpolation::Shutdown();
 
   g_frame_dumper.reset();
   g_presenter.reset();

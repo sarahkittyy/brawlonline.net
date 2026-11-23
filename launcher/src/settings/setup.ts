@@ -98,6 +98,15 @@ function setupSettingsSubscriptions(settingsManager: SettingsManager, dolphinMan
     await installation.updateSettings({ potatoMode });
   });
 
+  // Replays and spectated games are drawn smoothly too (clip renders turn it off: netplay_args.ts).
+  settingsManager.onSettingChange("smoothMotion", async (smoothMotion) => {
+    await Promise.all(
+      [DolphinLaunchType.NETPLAY, DolphinLaunchType.PLAYBACK].map((launchType) =>
+        dolphinManager.getInstallation(launchType).updateSettings({ smoothMotion }),
+      ),
+    );
+  });
+
   settingsManager.onSettingChange("disableChat", async (disableChat) => {
     const installation = dolphinManager.getInstallation(DolphinLaunchType.NETPLAY);
     await installation.updateSettings({ disableChat });

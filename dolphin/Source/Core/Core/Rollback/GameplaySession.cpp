@@ -74,6 +74,7 @@
 #include "Core/System.h"
 #include "VideoCommon/AsyncRequests.h"
 #include "VideoCommon/Fifo.h"
+#include "VideoCommon/FrameInterpolation.h"
 #include "VideoCommon/Present.h"
 #include "VideoCommon/OnScreenDisplay.h"
 
@@ -495,6 +496,9 @@ struct State
   // The round trip this player's delay was picked from when the game's GekkoNet session was
   // created: a change of profile mid-game picks it again from the same round trip.
   double delay_rtt = -1;
+  // This game draws smooth motion's in-between pictures (SmoothDelayFor). Like input_delay, the
+  // last game's until the next one's.
+  bool smooth_motion = false;
   // The last change of the setting this session took (s_live_delay's sequence number).
   u32 live_delay_seq = 0;
   SyncBlock sync;  // host: the values the joiner copies
@@ -3911,6 +3915,23 @@ int PickInputDelay(double* rtt_ms)
                             ProfileInputDelay(OwnDelayLevel(), GameRoundTrip(*rtt_ms));
 }
 
+// The delay a game plays for the delay the setting gave (`picked`), and whether it draws smooth
+// motion's in-between pictures (s.smooth_motion, which OnLoopTop passes to
+// FrameInterpolation::SetAllowed): with them a frame less (SmoothMotionDelay), so that they do
+// not show the player's input later. The frame is one of GekkoNet's: with early local input a
+// delay of 1 is GekkoNet's 0 already (GekkoDelayFor) and has none to give, as 0 frames has none.
+int SmoothDelayFor(int picked)
+{
+  s.smooth_motion = s.mode == Mode::Network && FrameInterpolation::Available();
+  if (!s.smooth_motion)
+    return picked;
+  const int gekko = GekkoDelayFor(picked);
+  const int delay = picked - (gekko - SmoothMotionDelay(gekko));
+  INFO_LOG_FMT(BRAWLBACK, "gprb: smooth motion: input delay {} for the setting's {}", delay,
+               picked);
+  return delay;
+}
+
 // A change of the player's setting since this session last looked (SetInputDelay) becomes the
 // session's: this game's from its next frame, and every later game's. False when none.
 bool TakeLiveDelay()
@@ -3940,8 +3961,9 @@ void ApplyLiveDelay()
   const int level = OwnDelayLevel();
   if (s.delay_rtt < 0)
     s.delay_rtt = OwnRoundTrip();
-  const int delay = s.net_opts.delay ? std::clamp(*s.net_opts.delay, 0, MAX_INPUT_DELAY) :
-                                       ProfileInputDelay(level, GameRoundTrip(s.delay_rtt));
+  const int delay =
+      SmoothDelayFor(s.net_opts.delay ? std::clamp(*s.net_opts.delay, 0, MAX_INPUT_DELAY) :
+                                        ProfileInputDelay(level, GameRoundTrip(s.delay_rtt)));
   if (delay == s.input_delay)
     return;
   INFO_LOG_FMT(BRAWLBACK,
@@ -4117,6 +4139,10 @@ bool CreateGekko(bool stress, int num_players)
       s.ei_window = {};
       s.ei_lat.clear();
       s.ei_lead.clear();
+      // With smooth motion a frame less, now that this game's early input is known.
+      s.input_delay = SmoothDelayFor(s.input_delay);
+      s_current_delay = s.input_delay;
+      gekko_set_disconnect_timeout(s.gekko, Online::PeerSilenceTimeoutMs(s.input_delay));
       gekko_set_local_delay(s.gekko, s.local_handles[0],
                             static_cast<unsigned char>(GekkoDelayFor(s.input_delay)));
       // The frame advantage counts the delay as without early input (its lead is the same).
@@ -8517,6 +8543,7 @@ std::optional<std::string> Connect(const ConnectOptions& options)
   s.init_match = -1;
   s.setup = {};
   s.input_delay = DEFAULT_INPUT_DELAY;
+  s.smooth_motion = false;
   s.delay_rtt = -1;
   s.last_winner = 0xFF;
   s.last_pickers = options.initial_pickers & 0x0F;
@@ -9696,6 +9723,7 @@ picojson::value Status()
     o["selections"] = picojson::value(s.local_selections);
     o["setup_hash"] = picojson::value(fmt::format("{:016x}", s.setup_hash));
     o["input_delay"] = picojson::value(static_cast<double>(s.input_delay));
+    o["smooth_motion"] = picojson::value(s.smooth_motion);
     o["delay_profile"] = picojson::value(DelayLevelName(OwnDelayLevel()));
     picojson::object lobby;
     lobby["game"] = picojson::value(static_cast<double>(NextGame()));
@@ -10693,6 +10721,10 @@ bool OnLoopTop(const Core::CPUThreadGuard& guard)
   ResimHide::Restore(system);
   if (const int pad = Replay::AfterEndPad(); pad >= 0)
     KeepButtonsAfterEnd(system, pad);
+  // Smooth motion's in-between pictures only in a game, which plays a frame of input delay lower
+  // for them (SmoothDelayFor), and in a replay (no input).
+  FrameInterpolation::SetAllowed(s.mode == Mode::Playback ||
+                                 (s.mode == Mode::Network && s.gekko && s.smooth_motion));
 
   // Sounds of mispredicted runs are stopped here, between passes (guest calls that return here).
   if (s.gcall_active || (s.phase == Phase::Running && !s.snd_to_stop.empty()))

@@ -12,8 +12,12 @@
 #include "VideoCommon/VideoCommon.h"
 
 #include <array>
+#include <atomic>
+#include <condition_variable>
+#include <deque>
 #include <memory>
 #include <mutex>
+#include <thread>
 #include <tuple>
 
 class AbstractTexture;
@@ -42,6 +46,10 @@ public:
   void SetNextSwapEstimatedTime(u64 ticks, TimePoint host_time);
 
   void Present(PresentInfo* present_info = nullptr);
+  // Smooth motion (FrameInterpolation.h): presents the pictures queued for later (a frame's own
+  // picture, after its in-between ones) whose time has come; `all`: every one, now. GPU thread;
+  // cheap when nothing is queued.
+  void RunDuePresents(bool all = false);
   // Shows the last frame again, with the on-screen UI, and takes a pending screenshot of it:
   // while a replay is paused (the game makes no frames), so that its overlay still draws and a
   // screenshot or capture still works. Video thread.
@@ -118,6 +126,15 @@ public:
   const MathUtil::Rectangle<int>& GetTargetRectangle() const { return m_target_rectangle; }
 
 private:
+  // Draws `texture` (its XFB rectangle `rect`) and the on-screen UI to the window and presents it:
+  // at `present_info`'s present time (sleeping until then) if given, else now.
+  void PresentPicture(AbstractTexture* texture, const MathUtil::Rectangle<int>& rect,
+                      PresentInfo* present_info);
+  void QueuePresent(RcTcacheEntry entry, const MathUtil::Rectangle<int>& rect, TimePoint due);
+  // Tells the timer thread when the first queued picture is due (after the queue changed).
+  void UpdateQueueTimer();
+  void QueuedPresentTimer();
+
   // Fetches the XFB texture from the texture cache.
   // Returns true the contents have changed since last time
   bool FetchXFB(u32 xfb_addr, u32 fb_width, u32 fb_stride, u32 fb_height, u64 ticks);
@@ -202,6 +219,25 @@ private:
   TimePoint m_next_swap_estimated_time{Clock::now()};
 
   std::atomic_bool m_immediate_swap_happened_this_field{};
+
+  // Smooth motion: pictures to present later, oldest first (GPU thread), and a thread that wakes
+  // the GPU thread when the first is due.
+  struct QueuedPresent
+  {
+    RcTcacheEntry entry;
+    MathUtil::Rectangle<int> rect;
+    TimePoint due;
+  };
+  std::deque<QueuedPresent> m_queued_presents;
+  bool m_running_queued_presents = false;
+  TimePoint m_next_queued_due{};  // protected by m_queue_timer_mutex; zero = nothing queued
+  std::thread m_queue_timer;
+  std::mutex m_queue_timer_mutex;
+  std::condition_variable m_queue_timer_cv;
+  bool m_queue_timer_stop = false;
+  // The time between two frames' presents, which the in-between pictures divide.
+  TimePoint m_last_frame_present{};
+  DT m_frame_interval = std::chrono::duration_cast<DT>(std::chrono::microseconds(16683));
 };
 
 }  // namespace VideoCommon

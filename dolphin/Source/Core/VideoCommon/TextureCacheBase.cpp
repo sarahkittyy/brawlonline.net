@@ -41,6 +41,7 @@
 #include "VideoCommon/Assets/CustomTextureData.h"
 #include "VideoCommon/Assets/TextureAssetUtils.h"
 #include "VideoCommon/BPMemory.h"
+#include "VideoCommon/FrameInterpolation.h"
 #include "VideoCommon/FramebufferManager.h"
 #include "VideoCommon/GraphicsModSystem/Runtime/FBInfo.h"
 #include "VideoCommon/GraphicsModSystem/Runtime/GraphicsModActionData.h"
@@ -419,6 +420,7 @@ void TextureCacheBase::ScaleTextureCacheEntryTo(RcTcacheEntry& entry, u32 new_wi
   // No need to convert the coordinates here since they'll be the same.
   g_gfx->ScaleTexture(new_texture->framebuffer.get(), new_texture->texture->GetConfig().GetRect(),
                       entry->texture.get(), entry->texture->GetConfig().GetRect());
+  FrameInterpolation::TextureChanged(entry.get());
   entry->texture.swap(new_texture->texture);
   entry->framebuffer.swap(new_texture->framebuffer);
 
@@ -1070,6 +1072,7 @@ RcTcacheEntry TextureCacheBase::DoPartialTextureUpdates(RcTcacheEntry& entry_to_
         dstrect.bottom = (dst_y + copy_height);
 
         // If one copy is stereo, and the other isn't... not much we can do here :/
+        FrameInterpolation::TextureChanged(entry_to_update.get());
         const u32 layers_to_copy = std::min(entry->GetNumLayers(), entry_to_update->GetNumLayers());
         for (u32 layer = 0; layer < layers_to_copy; layer++)
         {
@@ -2175,6 +2178,7 @@ void TextureCacheBase::StitchXFBCopy(RcTcacheEntry& stitched_entry)
     dstrect.bottom = (dst_y + dst_height);
 
     // We may have to scale if one of the copies is not internal resolution.
+    FrameInterpolation::TextureChanged(stitched_entry.get());
     if (srcrect.GetWidth() != dstrect.GetWidth() || srcrect.GetHeight() != dstrect.GetHeight())
     {
       g_gfx->ScaleTexture(stitched_entry->framebuffer.get(), dstrect, entry->texture.get(),
@@ -2250,6 +2254,9 @@ void TextureCacheBase::CopyRenderTargetToTexture(
     float gamma, bool clamp_top, bool clamp_bottom,
     const CopyFilterCoefficients::Values& filter_coefficients)
 {
+  // Smooth motion: the batch being built is part of what this copy holds (FrameInterpolation.h).
+  FrameInterpolation::BeforeEFBCopy();
+
   // Emulation methods:
   //
   // - EFB to RAM:
@@ -2456,6 +2463,13 @@ void TextureCacheBase::CopyRenderTargetToTexture(
                           isIntensity, gamma, clamp_top, clamp_bottom,
                           GetVRAMCopyFilterCoefficients(filter_coefficients));
 
+      // Smooth motion: made again from each in-between picture's EFB at the end of the frame.
+      FrameInterpolation::RecordCopy(
+          entry, EFBCopyReplay{dstAddr, baseFormat, is_xfb_copy, tex_w, tex_h, is_depth_copy,
+                               srcRect, scaleByHalf, linear_filter, dstFormat, isIntensity, gamma,
+                               clamp_top, clamp_bottom,
+                               GetVRAMCopyFilterCoefficients(filter_coefficients)});
+
       if (g_ActiveConfig.bGraphicMods)
       {
         FBInfo info;
@@ -2511,6 +2525,9 @@ void TextureCacheBase::CopyRenderTargetToTexture(
       }
     }
   }
+  // Smooth motion: a copy that made no texture is not made again for the in-between pictures.
+  if (!entry)
+    FrameInterpolation::MarkUnsafe("EFB copy without a texture");
 
   if (copy_to_ram)
   {
@@ -2804,6 +2821,23 @@ void TextureCacheBase::UninitializeXFBMemory(u8* dst, u32 stride, u32 bytes_per_
   }
 }
 
+RcTcacheEntry TextureCacheBase::MakeEFBCopyTwin(const TCacheEntry& native,
+                                               const EFBCopyReplay& copy)
+{
+  if (!native.texture)
+    return {};
+  RcTcacheEntry twin = AllocateCacheEntry(native.texture->GetConfig());
+  if (!twin)
+    return {};
+  twin->SetGeneralParameters(copy.dst_addr, 0, copy.base_format, copy.is_xfb_copy);
+  twin->SetDimensions(copy.tex_w, copy.tex_h, 1);
+  twin->frameCount = FRAMECOUNT_INVALID;
+  CopyEFBToCacheEntry(twin, copy.is_depth_copy, copy.src_rect, copy.scale_by_half,
+                      copy.linear_filter, copy.dst_format, copy.is_intensity, copy.gamma,
+                      copy.clamp_top, copy.clamp_bottom, copy.filter_coefficients);
+  return twin;
+}
+
 RcTcacheEntry TextureCacheBase::AllocateCacheEntry(const TextureConfig& config)
 {
   std::optional<TexPoolEntry> alloc = AllocateTexture(config);
@@ -2950,6 +2984,7 @@ void TextureCacheBase::ReleaseToPool(TCacheEntry* entry)
 {
   if (!entry->texture)
     return;
+  FrameInterpolation::TextureChanged(entry);
   auto config = entry->texture->GetConfig();
   m_texture_pool.emplace(config,
                          TexPoolEntry(std::move(entry->texture), std::move(entry->framebuffer)));
@@ -3292,6 +3327,7 @@ void TextureCacheBase::ApplyMaterialToCacheEntry(const VideoCommon::MaterialReso
   new_entry->texture->FinishedRendering();
 
   // Swap new entry and existing entry
+  FrameInterpolation::TextureChanged(entry);
   std::swap(entry->texture, new_entry->texture);
   std::swap(entry->framebuffer, new_entry->framebuffer);
 

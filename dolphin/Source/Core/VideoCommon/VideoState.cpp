@@ -17,6 +17,7 @@
 #include "VideoCommon/CommandProcessor.h"
 #include "VideoCommon/Fifo.h"
 #include "VideoCommon/FrameDumper.h"
+#include "VideoCommon/FrameInterpolation.h"
 #include "VideoCommon/FramebufferManager.h"
 #include "VideoCommon/GeometryShaderManager.h"
 #include "VideoCommon/PixelEngine.h"
@@ -75,6 +76,9 @@ void VideoCommon_TmemWritten(unsigned int offset, unsigned int size)
 void VideoCommon_DoStateRollbackGPU(PointerWrap& p)
 {
   auto& system = Core::System::GetInstance();
+  // Smooth motion: discard the old timeline's recording, keeping the last presented frame.
+  if (p.IsReadMode())
+    FrameInterpolation::DiscardFrame();
 
   p.Do(bpmem);
   p.DoMarker("BP Memory");
@@ -177,6 +181,14 @@ void VideoCommon_DoState(PointerWrap& p)
 {
   bool software = false;
   p.Do(software);
+
+  if (p.IsReadMode())
+  {
+    if (VideoCommon_GetSkipGPUReadbackForRollback() && !Machine::InImageDoState())
+      FrameInterpolation::DiscardFrame();
+    else
+      FrameInterpolation::Reset();
+  }
 
   if (p.IsReadMode() && software == true)
   {

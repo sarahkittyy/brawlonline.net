@@ -155,7 +155,9 @@ describe("buildRenderDolphinArgs", () => {
     expect(args).toContain("Graphics.Settings.InternalResolution=2");
   });
 
-  it("never renders in potato mode, so a video shows the whole stage", () => {
-    expect(buildRenderDolphinArgs({ music: true, resolution: 720 })).toContain("Dolphin.Online.PotatoMode=False");
+  it("never renders in potato mode or with smooth motion, so a video shows the whole stage in the game's own frames", () => {
+    const args = buildRenderDolphinArgs({ music: true, resolution: 720 });
+    expect(args).toContain("Dolphin.Online.PotatoMode=False");
+    expect(args).toContain("Dolphin.Online.SmoothMotion=0");
   });
 });

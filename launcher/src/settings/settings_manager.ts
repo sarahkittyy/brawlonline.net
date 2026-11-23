@@ -1,4 +1,5 @@
 import { normalizeInputDelay } from "@common/input_delay";
+import { normalizeSmoothMotion } from "@common/smooth_motion";
 import { DolphinLaunchType } from "@dolphin/types";
 import { Mutex } from "async-mutex";
 import electronSettings from "electron-settings";
@@ -142,6 +143,11 @@ export class SettingsManager extends EventEmitter {
 
   getPotatoMode(): boolean {
     return this.get().settings.potatoMode;
+  }
+
+  getSmoothMotion(): number {
+    // (A settings file from before the setting has no value, a hand-edited one may have a string.)
+    return normalizeSmoothMotion(this.get().settings.smoothMotion);
   }
 
   getEnableStreamGames(): boolean {

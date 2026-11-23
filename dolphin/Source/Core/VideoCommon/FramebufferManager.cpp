@@ -3,8 +3,10 @@
 
 #include "VideoCommon/FramebufferManager.h"
 
+#include <algorithm>
 #include <fmt/format.h>
 #include <memory>
+#include <string_view>
 
 #include "Common/ChunkFile.h"
 #include "Common/Logging/Log.h"
@@ -19,6 +21,7 @@
 #include "VideoCommon/AbstractTexture.h"
 #include "VideoCommon/BPFunctions.h"
 #include "VideoCommon/DriverDetails.h"
+#include "VideoCommon/FrameInterpolation.h"
 #include "VideoCommon/FramebufferShaderGen.h"
 #include "VideoCommon/PixelShaderManager.h"
 #include "VideoCommon/Present.h"
@@ -301,6 +304,7 @@ bool FramebufferManager::CreateEFBFramebuffer(int efb_scale)
 
 void FramebufferManager::DestroyEFBFramebuffer()
 {
+  m_interpolation_efbs.clear();
   m_efb_framebuffer.reset();
   m_efb_convert_framebuffer.reset();
   m_efb_color_texture.reset();
@@ -309,6 +313,84 @@ void FramebufferManager::DestroyEFBFramebuffer()
   m_efb_resolve_color_texture.reset();
   m_efb_depth_resolve_framebuffer.reset();
   m_efb_depth_resolve_texture.reset();
+}
+
+bool FramebufferManager::EnsureInterpolationEFBs(u32 count)
+{
+  // Kept while they are still the EFB's size and formats.
+  const auto like_efb = [this](const EFBSet& set) {
+    return set.color_texture->GetConfig() == m_efb_color_texture->GetConfig() &&
+           set.depth_texture->GetConfig() == m_efb_depth_texture->GetConfig();
+  };
+  if (m_interpolation_efbs.size() >= count &&
+      std::all_of(m_interpolation_efbs.begin(), m_interpolation_efbs.end(), like_efb))
+  {
+    return true;
+  }
+
+  m_interpolation_efbs.clear();
+  const auto like = [](const std::unique_ptr<AbstractTexture>& texture, std::string_view name) {
+    return texture ? g_gfx->CreateTexture(texture->GetConfig(), name) :
+                     std::unique_ptr<AbstractTexture>();
+  };
+  for (u32 i = 0; i < count; ++i)
+  {
+    // No convert texture: an EFB format change is not replayed (ReinterpretPixelData).
+    EFBSet set;
+    set.color_texture = like(m_efb_color_texture, "EFB color texture (in-between picture)");
+    set.depth_texture = like(m_efb_depth_texture, "EFB depth texture (in-between picture)");
+    if (!set.color_texture || !set.depth_texture)
+    {
+      m_interpolation_efbs.clear();
+      return false;
+    }
+    set.framebuffer =
+        g_gfx->CreateFramebuffer(set.color_texture.get(), set.depth_texture.get());
+    if (m_efb_resolve_color_texture)
+    {
+      set.resolve_color_texture =
+          like(m_efb_resolve_color_texture, "EFB color resolve texture (in-between picture)");
+      if (m_efb_color_resolve_framebuffer && set.resolve_color_texture)
+      {
+        set.color_resolve_framebuffer =
+            g_gfx->CreateFramebuffer(set.resolve_color_texture.get(), nullptr);
+      }
+    }
+    if (m_efb_depth_resolve_texture)
+    {
+      set.depth_resolve_texture =
+          like(m_efb_depth_resolve_texture, "EFB depth resolve texture (in-between picture)");
+      if (set.depth_resolve_texture)
+      {
+        set.depth_resolve_framebuffer =
+            g_gfx->CreateFramebuffer(set.depth_resolve_texture.get(), nullptr);
+      }
+    }
+    if (!set.framebuffer || (m_efb_resolve_color_texture && !set.resolve_color_texture) ||
+        (m_efb_color_resolve_framebuffer && !set.color_resolve_framebuffer) ||
+        (m_efb_depth_resolve_framebuffer && !set.depth_resolve_framebuffer))
+    {
+      m_interpolation_efbs.clear();
+      return false;
+    }
+    g_gfx->SetAndClearFramebuffer(set.framebuffer.get(), {{0.0f, 0.0f, 0.0f, 0.0f}},
+                                  g_backend_info.bSupportsReversedDepthRange ? 1.0f : 0.0f);
+    m_interpolation_efbs.push_back(std::move(set));
+  }
+  BindEFBFramebuffer();
+  return true;
+}
+
+void FramebufferManager::SwapInterpolationEFB(u32 index)
+{
+  EFBSet& set = m_interpolation_efbs[index];
+  std::swap(m_efb_color_texture, set.color_texture);
+  std::swap(m_efb_depth_texture, set.depth_texture);
+  std::swap(m_efb_resolve_color_texture, set.resolve_color_texture);
+  std::swap(m_efb_depth_resolve_texture, set.depth_resolve_texture);
+  std::swap(m_efb_framebuffer, set.framebuffer);
+  std::swap(m_efb_color_resolve_framebuffer, set.color_resolve_framebuffer);
+  std::swap(m_efb_depth_resolve_framebuffer, set.depth_resolve_framebuffer);
 }
 
 void FramebufferManager::BindEFBFramebuffer()
@@ -384,6 +466,9 @@ bool FramebufferManager::ReinterpretPixelData(EFBReinterpretType convtype)
 {
   if (!m_format_conversion_pipelines[static_cast<u32>(convtype)])
     return false;
+
+  // Not replayed into the in-between pictures' EFBs.
+  FrameInterpolation::MarkUnsafe("EFB format change");
 
   // Draw to the secondary framebuffer.
   // We don't discard here because discarding the framebuffer also throws away the depth
@@ -859,6 +944,13 @@ void FramebufferManager::ClearEFB(const MathUtil::Rectangle<int>& rc, bool color
                                   bool alpha_enable, bool z_enable, u32 color, u32 z,
                                   PixelFormat pixel_format)
 {
+  // Replayed into the in-between pictures' EFBs, in order with the draws.
+  if (!FrameInterpolation::Replaying())
+  {
+    FrameInterpolation::RecordClear(rc, color_enable, alpha_enable, z_enable, color, z,
+                                    pixel_format);
+  }
+
   FlushEFBPokes();
   FlagPeekCacheAsOutOfDate();
 
@@ -944,6 +1036,7 @@ AbstractPipeline* FramebufferManager::GetClearPipeline(bool colorEnable, bool al
 
 void FramebufferManager::PokeEFBColor(u32 x, u32 y, u32 color)
 {
+  FrameInterpolation::MarkUnsafe("EFB poke");
   // Flush if we exceeded the number of vertices per batch.
   if ((m_color_poke_vertices.size() + 6) > MAX_POKE_VERTICES)
     FlushEFBPokes();
@@ -962,6 +1055,7 @@ void FramebufferManager::PokeEFBColor(u32 x, u32 y, u32 color)
 
 void FramebufferManager::PokeEFBDepth(u32 x, u32 y, float depth)
 {
+  FrameInterpolation::MarkUnsafe("EFB poke");
   // Flush if we exceeded the number of vertices per batch.
   if ((m_depth_poke_vertices.size() + 6) > MAX_POKE_VERTICES)
     FlushEFBPokes();

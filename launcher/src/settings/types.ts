@@ -57,6 +57,13 @@ export interface SettingsSchema {
   // (docs/game-code.md, Potato mode). Synced to Dolphin.ini `[Online] PotatoMode`.
   potatoMode: boolean;
 
+  // "Smooth Motion": 0 (off), 120, 180, 240, 300 or 360. Dolphin draws one to five in-between
+  // pictures a frame for a fast screen, by geometry-based frame interpolation; the game still runs at 60 and
+  // each frame's own picture shows a part of a frame later (VideoCommon/FrameInterpolation.h), so
+  // an online match with it plays one frame of input delay lower (Dolphin's GameplaySession).
+  // Only this PC's pictures and delay change. Synced to Dolphin.ini `[Online] SmoothMotion`.
+  smoothMotion: number;
+
   // Online: "Show my games on the Spectate tab" (docs/design/spectating.md): this player's game
   // uploads its games' inputs for spectators (Ranked's always, listed only when a player allows
   // it). Synced to Dolphin.ini `[Online] StreamGames`.
