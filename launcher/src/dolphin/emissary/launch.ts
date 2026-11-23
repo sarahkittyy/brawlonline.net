@@ -10,7 +10,11 @@
 //   `UserData/NAND`, fresh each start: unlocks and rules are part of the match setup both
 //   engines compare;
 // - Config.toml: the extracted disc, and the game's own 16:9 mode (Dolphin pins SYSCONF IPL.AR on;
-//   the game frames its camera, and screen KOs, by it), whatever the player chose in F10.
+//   the game frames its camera, and screen KOs, by it), whatever the player chose in F10;
+// - BRAWL_ONLINE_CORE: the netplay Dolphin's User folder (Config/Dolphin.ini with the [Online]
+//   settings, Online/ with the account and the room hand-off files, Logs/, the replays), which the
+//   recomp's in-process Brawl Online core reads as Dolphin does (docs/design/brawl-online-core.md
+//   §10). Without it the recomp plays no one online.
 //
 // SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -31,7 +35,36 @@ export type EmissaryLaunchInput = {
   sdCardImage: string;
   /** The Brawl save template folder (`<netplay>/pplus/NetplaySave`), holding `title/...`. */
   netplaySave: string;
+  /** The netplay Dolphin's User folder: the core's (BRAWL_ONLINE_CORE). */
+  onlineUserFolder: string;
 };
+
+/** The User folder's Config/ files of the `-C` systems the core reads (its config layer: Dolphin.ini, GFX.ini, Logger.ini). */
+const CONFIG_FILES: Record<string, string> = { Dolphin: "Dolphin.ini", GFX: "GFX.ini", Logger: "Logger.ini" };
+
+export type ConfigIniOverride = { file: string; section: string; key: string; value: string };
+
+/**
+ * The `-C <System>.<Section>.<Key>=<Value>` settings of a Dolphin command line, which the recomp's
+ * core can't be given (it reads the User folder's Config/*.ini only): the launcher writes them into
+ * those files before a recomp starts: the logging Dolphin gets on every Play (LOGGING_CONFIG_ARGS,
+ * so the core writes Logs/dolphin.log), and in test mode the extra arguments (the staging servers,
+ * PPO_DOLPHIN_EXTRA_ARGS). Other systems (SYSCONF.) are left out.
+ */
+export function configIniOverrides(args: readonly string[]): ConfigIniOverride[] {
+  const out: ConfigIniOverride[] = [];
+  for (let i = 0; i + 1 < args.length; i++) {
+    if (args[i] !== "-C" && args[i] !== "--config") {
+      continue;
+    }
+    const m = /^([^.=]+)\.([^.=]+)\.([^=]+)=(.*)$/.exec(args[i + 1]);
+    if (m && CONFIG_FILES[m[1]]) {
+      out.push({ file: CONFIG_FILES[m[1]], section: m[2], key: m[3], value: m[4] });
+    }
+    i++;
+  }
+  return out;
+}
 
 /** Sets `key = value` in `[section]` of a TOML text (adding either), leaving every other line as it was. */
 export function setTomlValue(text: string, section: string, key: string, value: string): string {
@@ -125,5 +158,5 @@ export async function prepareEmissaryLaunch(input: EmissaryLaunchInput): Promise
   await removeTree(nand);
   await fs.promises.cp(input.netplaySave, nand, { recursive: true });
 
-  return { BRAWL_SD_VOLATILE_WRITES: "1" };
+  return { BRAWL_SD_VOLATILE_WRITES: "1", BRAWL_ONLINE_CORE: path.resolve(input.onlineUserFolder) };
 }

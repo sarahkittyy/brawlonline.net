@@ -27,9 +27,17 @@ export async function folderFiles(folder: string, zipFolder: string): Promise<Ar
     .map((e) => ({ name: `${zipFolder}/${e.name}`, source: { path: path.join(folder, e.name) } }));
 }
 
+/** EmissaryRecomp's crash dumps, written by the Brawl Online core in it into the netplay User folder's Logs. */
+const EMISSARY_DUMP = /^recomp-\d+\.dmp$/;
+/** How many of EmissaryRecomp's last runs a zip has (its run folders and its dumps). */
+export const EMISSARY_RUNS_ARCHIVED = 3;
+
 /** A Dolphin User folder's logs and the config files that say how it was set up, under `zipFolder`. */
 export async function dolphinUserFiles(userFolder: string, zipFolder: string): Promise<ArchiveFile[]> {
-  const files = await folderFiles(path.join(userFolder, "Logs"), `${zipFolder}/Logs`);
+  // EmissaryRecomp's dumps go in whole with its logs (emissaryFiles), never cut to their end.
+  const files = (await folderFiles(path.join(userFolder, "Logs"), `${zipFolder}/Logs`)).filter(
+    (f) => !EMISSARY_DUMP.test(path.posix.basename(f.name)),
+  );
   for (const name of DOLPHIN_CONFIG_FILES) {
     const file = path.join(userFolder, "Config", name);
     const text = await readFile(file, "utf-8").catch(() => null);
@@ -39,6 +47,54 @@ export async function dolphinUserFiles(userFolder: string, zipFolder: string): P
         source: { text: name === "Dolphin.ini" ? redactDolphinIni(text) : text },
       });
     }
+  }
+  return files;
+}
+
+/** `count` newest entries of `entries`, by modification time. */
+async function newest(folder: string, names: string[], count: number): Promise<string[]> {
+  const dated = await Promise.all(
+    names.map(async (name) => ({ name, at: (await stat(path.join(folder, name)).catch(() => null))?.mtimeMs ?? 0 })),
+  );
+  return dated
+    .sort((a, b) => b.at - a.at)
+    .slice(0, count)
+    .map((d) => d.name);
+}
+
+/**
+ * EmissaryRecomp's logs under `zipFolder`: its last runs' folders (`<UserData>/Logs/<run>/`:
+ * console.log and what a crash left) and the crash dumps of the Brawl Online core in it
+ * (`<netplay User>/Logs/recomp-<pid>.dmp`), the newest of each, the dumps only when they fit
+ * whole (`maxDumpBytes`): a dump cut to its end can't be read.
+ */
+export async function emissaryFiles(
+  userData: string,
+  netplayUserFolder: string,
+  zipFolder: string,
+  maxDumpBytes: number,
+): Promise<ArchiveFile[]> {
+  const files: ArchiveFile[] = [];
+  const logs = path.join(userData, "Logs");
+  const runs = (await readdir(logs, { withFileTypes: true }).catch(() => [])).filter((e) => e.isDirectory());
+  for (const run of await newest(
+    logs,
+    runs.map((e) => e.name),
+    EMISSARY_RUNS_ARCHIVED,
+  )) {
+    files.push(...(await folderFiles(path.join(logs, run), `${zipFolder}/Logs/${run}`)));
+  }
+  const coreLogs = path.join(netplayUserFolder, "Logs");
+  const dumps = (await readdir(coreLogs).catch(() => [] as string[])).filter((n) => EMISSARY_DUMP.test(n));
+  for (const name of await newest(coreLogs, dumps, EMISSARY_RUNS_ARCHIVED)) {
+    const size = (await stat(path.join(coreLogs, name)).catch(() => null))?.size ?? 0;
+    if (size > 0 && size <= maxDumpBytes) {
+      files.push({ name: `${zipFolder}/dumps/${name}`, source: { path: path.join(coreLogs, name) } });
+    }
+  }
+  const config = await readFile(path.join(userData, "Config.toml"), "utf-8").catch(() => null);
+  if (config !== null) {
+    files.push({ name: `${zipFolder}/Config.toml`, source: { text: config } });
   }
   return files;
 }

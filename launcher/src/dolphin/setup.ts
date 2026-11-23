@@ -308,6 +308,11 @@ export default function setupDolphinIpc({ dolphinManager }: { dolphinManager: Do
     if (!dolphinManager.isNetplayRunning()) {
       return { outcome: "not-running" };
     }
+    // A newer EmissaryRecomp was downloaded while it ran: an idle one closes, and the click starts
+    // the new version (closeEmissaryForUpdate). One in a match, a search or a set gets the click.
+    if (await dolphinManager.closeEmissaryForUpdate()) {
+      return { outcome: "not-running" };
+    }
     // A Dolphin open without a game (its game was stopped, or Configure's) closes, and the click
     // starts one. Dolphin itself says (quit_if_idle.ts): game-status.json stays fresh after a
     // stopped game, so a hand-off to it was "accepted" and never happened.

@@ -5,6 +5,23 @@ export const EMISSARY_REPO = "kalomaze/EmissaryRecomp";
 export const EMISSARY_REPO_URL = `https://github.com/${EMISSARY_REPO}`;
 export const EMISSARY_AUTHOR = "kalomaze";
 
+/**
+ * What the launcher can play with: bumped when what a release needs from the launcher changes (the
+ * launch set-up: BRAWL_ONLINE_CORE's user folder, the hand-off files, the card and codes). A release
+ * whose manifest names another protocol is not played (Dolphin plays instead).
+ */
+export const EMISSARY_PROTOCOL = 1;
+
+/**
+ * A release's `manifest.json` asset (EmissaryRecomp's CI): its version, the Brawl Online core it
+ * was built from (a launcher version or a commit) and the launcher protocol it speaks.
+ */
+export type EmissaryManifest = {
+  version: string;
+  brawlOnline: string;
+  protocol: number;
+};
+
 /** A release's download for this computer, as GitHub's API lists it. */
 export type EmissaryRelease = {
   /** The release's tag (`v0.6.0`). */
@@ -15,7 +32,21 @@ export type EmissaryRelease = {
   size: number;
   /** GitHub's sha256 of the archive, when it gives one. */
   sha256: string | null;
+  /** Its manifest.json asset's URL, when it has one (releases before CI have none). */
+  manifestUrl: string | null;
+  /** That manifest, once read; null without one (or when it could not be read). */
+  manifest: EmissaryManifest | null;
 };
+
+/**
+ * Why Play used Dolphin although Settings > Game says EmissaryRecomp (manager._launchEmissary):
+ * `status` the add-on is not ready (its state), `noOnline` the release can't play online with this
+ * launcher, `updateFailed` the required update could not be downloaded (`message` says why).
+ */
+export type EmissaryFallback =
+  | { reason: "status"; status: EmissaryStatus }
+  | { reason: "noOnline" }
+  | { reason: "updateFailed"; message: string };
 
 export type EmissaryJob = {
   kind: "install" | "update" | "gameFiles";
@@ -51,8 +82,10 @@ export type EmissaryState = {
     /** The program's folder size. */
     programBytes: number;
     installedAt: string;
-    /** It has Brawl Online's online play (the read-only card and the online control); Play uses Dolphin otherwise. */
+    /** It has Brawl Online's online play (the read-only card and the core), for this launcher; Play uses Dolphin otherwise. */
     playsOnline: boolean;
+    /** The Brawl Online core it was built from (its manifest), null when unknown. */
+    brawlOnline: string | null;
   } | null;
   /** The disc's extracted files (how big), null when there are none. */
   gameFiles: { bytes: number } | null;

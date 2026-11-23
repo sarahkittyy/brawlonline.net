@@ -20,10 +20,13 @@ import { isSubdirectory } from "utils/is_subdirectory";
 import { removeTree } from "utils/remove_tree";
 
 import { isBrawlOnlineDolphinVersion, notBrawlOnlineDolphinMessage } from "./brawl_online_build";
+import { IniFile } from "./config/ini_file";
 import { isAbnormalExit, keepCrashLog } from "./crash_log";
 import { dolphinToolNextTo } from "./dolphin_tool";
+import { closeEmissary, emissaryIdle } from "./emissary/close";
 import type { EmissaryRecomp } from "./emissary/emissary";
-import { prepareEmissaryLaunch } from "./emissary/launch";
+import { configIniOverrides, prepareEmissaryLaunch } from "./emissary/launch";
+import type { EmissaryFallback, EmissaryJob } from "./emissary/types";
 import { clearInputDelayRequest, writeInputDelayRequest } from "./input_delay_handoff";
 import { brawlSaveDir, ensureBrawlSave, isUsableBrawlSave, listBrawlSaveFiles } from "./install/brawl_save";
 import { bundledDolphinSource, installBundledDolphin } from "./install/bundled_dolphin";
@@ -88,7 +91,12 @@ import { clearModRoomFiles } from "./mods/room_files";
 import { clearTemplateSeededSaves } from "./mods/template_saves";
 import type { ModBuild } from "./mods/types";
 import type { RenderDolphinSettings } from "./netplay_args";
-import { buildNetplayDolphinArgs, buildPlaybackDolphinArgs, buildRenderDolphinArgs } from "./netplay_args";
+import {
+  buildNetplayDolphinArgs,
+  buildPlaybackDolphinArgs,
+  buildRenderDolphinArgs,
+  LOGGING_CONFIG_ARGS,
+} from "./netplay_args";
 import { closeIfIdle } from "./quit_if_idle";
 import type { RenderDolphin, RenderKey } from "./render_queue";
 import { RenderQueue } from "./render_queue";
@@ -137,6 +145,8 @@ export class DolphinManager {
   private pplusVersionStore: PPlusVersions | null = null;
   private netplayDolphinInstance: DolphinInstance | null = null;
   private emissary: (() => EmissaryRecomp) | null = null;
+  /** The open netplay instance is EmissaryRecomp (not Dolphin): it is always in its game. */
+  private netplayIsEmissary = false;
   /** When Play started the open netplay Dolphin, and whether it boots P+ (null: Configure's, or none). */
   private netplayStart: NetplayStart | null = null;
   /**
@@ -247,6 +257,11 @@ export class DolphinManager {
     if (!this.netplayDolphinInstance) {
       return true;
     }
+    // EmissaryRecomp has no window without its game: it is never "open without a game", and
+    // Project+ clicks are handed to it (closeNetplayForOtherGame closes it for another game).
+    if (this.netplayIsEmissary) {
+      return false;
+    }
     const dir = this.netplayOnlineDir();
     await mkdir(dir, { recursive: true });
     return await closeIfIdle(dir, () => this.netplayDolphinInstance != null, { log: (message) => log.info(message) });
@@ -264,6 +279,11 @@ export class DolphinManager {
     if (!instance || !this.settingsManager.get().settings.launchGameOnPlay) {
       return;
     }
+    if (this.netplayIsEmissary) {
+      log.info("The launcher is quitting: closing EmissaryRecomp");
+      await this._closeEmissary(instance);
+      return;
+    }
     log.info("The launcher is quitting: closing the netplay Dolphin");
     const dir = this.netplayOnlineDir();
     await mkdir(dir, { recursive: true });
@@ -275,6 +295,67 @@ export class DolphinManager {
       log.warn("The netplay Dolphin did not close: ending it");
       instance.stop();
     }
+  }
+
+  /** True while EmissaryRecomp is the open netplay game. */
+  isEmissaryRunning(): boolean {
+    return this.netplayDolphinInstance != null && this.netplayIsEmissary;
+  }
+
+  /**
+   * Another game (an Other Games room, Project Punch, Dolphin's controller settings for them) is
+   * about to start in Dolphin. An open Dolphin closes if it has no game (closeNetplayIfIdle);
+   * EmissaryRecomp closes unless its game is busy (a match, a search, a set between its games:
+   * emissary/close.ts). True when nothing is open any more.
+   */
+  async closeNetplayForOtherGame(): Promise<boolean> {
+    const instance = this.netplayDolphinInstance;
+    if (!instance) {
+      return true;
+    }
+    if (!this.netplayIsEmissary) {
+      return await this.closeNetplayIfIdle();
+    }
+    const idle = await emissaryIdle(this.netplayOnlineDir(), instance.pid);
+    if (!idle.idle) {
+      log.info(`EmissaryRecomp stays open for another game: ${idle.why}`);
+      return false;
+    }
+    log.info("Closing EmissaryRecomp: another game plays in Dolphin");
+    return await this._closeEmissary(instance);
+  }
+
+  /**
+   * A newer EmissaryRecomp was downloaded while it ran (staged): a room, Direct or queue click
+   * closes it when its game is idle, so the click starts the new version (the update applies
+   * before the next game, never during one, and never between a set's games). True when it closed.
+   */
+  async closeEmissaryForUpdate(): Promise<boolean> {
+    const instance = this.netplayDolphinInstance;
+    const emissary = this.emissary?.();
+    if (!instance || !this.netplayIsEmissary || !emissary) {
+      return false;
+    }
+    const staged = await emissary.stagedVersion();
+    if (!staged) {
+      return false;
+    }
+    const idle = await emissaryIdle(this.netplayOnlineDir(), instance.pid);
+    if (!idle.idle) {
+      log.info(`EmissaryRecomp ${staged} is downloaded; the open one stays: ${idle.why}`);
+      return false;
+    }
+    log.info(`Closing EmissaryRecomp: ${staged} is downloaded and its game is idle`);
+    return await this._closeEmissary(instance);
+  }
+
+  private async _closeEmissary(instance: DolphinInstance): Promise<boolean> {
+    return await closeEmissary(
+      instance.pid,
+      () => this.netplayDolphinInstance === instance,
+      () => instance.stop(),
+      { log: (message) => log.info(message) },
+    );
   }
 
   /**
@@ -725,12 +806,15 @@ export class DolphinManager {
       this._installOnlinePlugin(netplayInstallation, launchGameOnPlay, inUse, onProgress),
     );
     // "Play Project+ with: EmissaryRecomp": the same card, save and codes, in the recomp instead.
-    // When it can't play yet (not installed, updating, no game files), Dolphin plays.
+    // When it can't play (not installed, no game files, its update failed, a release that can't
+    // play online), Dolphin plays and the player is told why (emissaryFallback).
+    let emissaryFallback: EmissaryFallback | undefined;
     if (launchGameOnPlay && sdCardImage && this.settingsManager.get().settings.playProjectPlusWith === "emissary") {
-      const started = await this._launchEmissary(sdCardImage);
-      if (started) {
+      const started = await this._launchEmissary(sdCardImage, testMode.active ? testMode.dolphinExtraArgs : []);
+      if ("status" in started) {
         return started;
       }
+      emissaryFallback = started.fallback;
     }
     const params = buildNetplayDolphinArgs({
       userArgs: netplayInstallation.userArgs(),
@@ -780,40 +864,70 @@ export class DolphinManager {
       throw err;
     }
     this.netplayDolphinInstance = dolphinInstance;
+    this.netplayIsEmissary = false;
     this.netplayStart = { bootsGame: launchGameOnPlay, at: Date.now() };
-    return { status: "started" };
+    return { status: "started", ...(emissaryFallback ? { emissaryFallback } : {}) };
   }
 
   /**
    * Starts EmissaryRecomp as the netplay game (docs/design/brawl-recompiled.md §8): it is the
-   * netplay instance while it runs, so Play, the room hand-off (`User/Online`) and quit-if-idle
-   * treat it as they treat Dolphin. Null when it can't play (Dolphin plays instead).
+   * netplay instance while it runs, so Play and the room hand-off (`User/Online`) treat it as they
+   * treat Dolphin; Brawl Online's core in it reads the netplay User folder (BRAWL_ONLINE_CORE).
+   * A newer release is downloaded first, with its progress on the Play button
+   * (EmissaryRecomp.prepareForPlay). Resolves to why Dolphin plays instead when it can't.
+   * `dolphinOverrides`: test mode's `-C` settings, written into Dolphin.ini for the core.
    */
-  private async _launchEmissary(sdCardImage: string): Promise<NetplayLaunchResult | null> {
+  private async _launchEmissary(
+    sdCardImage: string,
+    dolphinOverrides: readonly string[],
+  ): Promise<NetplayLaunchResult | { fallback: EmissaryFallback }> {
     const emissary = this.emissary?.();
     if (!emissary) {
-      return null;
+      return { fallback: { reason: "status", status: "notInstalled" } };
     }
-    let exe: string;
-    try {
-      exe = await emissary.engineForPlay();
-    } catch (err) {
-      log.warn(`Playing with Dolphin: ${err instanceof Error ? err.message : String(err)}`);
-      return null;
+    const jobProgress = (job: EmissaryJob): [number, number] => (job.total > 0 ? [job.current, job.total] : [1, 1]);
+    const prepared = await this._withProgress(DolphinLaunchType.NETPLAY, "updateEmissary", (onProgress) =>
+      emissary.prepareForPlay((job) => onProgress(...jobProgress(job))),
+    );
+    if ("fallback" in prepared) {
+      log.warn(`Playing with Dolphin, not EmissaryRecomp: ${JSON.stringify(prepared.fallback)}`);
+      return prepared;
+    }
+    const installation = this.getInstallation(DolphinLaunchType.NETPLAY);
+    const overrides = configIniOverrides([...LOGGING_CONFIG_ARGS, ...dolphinOverrides]);
+    for (const file of new Set(overrides.map((o) => o.file))) {
+      await IniFile.modify(path.join(installation.userFolder, "Config", file), async (ini) => {
+        for (const o of overrides.filter((x) => x.file === file)) {
+          ini.getOrCreateSection(o.section).set(o.key, o.value);
+        }
+        await ini.save();
+      });
+    }
+    if (dolphinOverrides.length) {
+      log.info(
+        `EmissaryRecomp (test mode): Config gets ${overrides.map((o) => `${o.file} ${o.section}.${o.key}`).join(", ")}`,
+      );
     }
     const env = await prepareEmissaryLaunch({
       userData: emissary.userData,
       gameFolder: emissary.gameFolder,
       sdCardImage,
       netplaySave: netplaySaveStore(projectPlusStoreFolder(this.netplayFolder())),
+      onlineUserFolder: installation.userFolder,
     });
-    log.info(`Launching EmissaryRecomp at path: ${exe}`);
-    const instance = new DolphinInstance(exe, [], { env, cwd: path.dirname(exe) });
+    const exe = prepared.exe;
+    log.info(
+      `Launching EmissaryRecomp ${prepared.version} at path: ${exe} (BRAWL_ONLINE_CORE=${env.BRAWL_ONLINE_CORE})`,
+    );
+    const instance = new DolphinInstance(exe, [], { env, cwd: path.dirname(exe), ignoreOutput: true });
     instance.on("close", (exitCode: number | null, signal: string | null) => {
       emissary.setRunning(false);
       this.eventSubject.next({ type: DolphinEventType.CLOSED, dolphinType: DolphinLaunchType.NETPLAY, exitCode });
-      this.netplayDolphinInstance = null;
-      this.netplayStart = null;
+      if (this.netplayDolphinInstance === instance) {
+        this.netplayDolphinInstance = null;
+        this.netplayIsEmissary = false;
+        this.netplayStart = null;
+      }
       void clearRoomRequest(this.netplayOnlineDir()).catch(() => undefined);
       log.warn(`EmissaryRecomp exit code: ${exitCode?.toString(16)}, signal: ${signal}`);
     });
@@ -821,6 +935,7 @@ export class DolphinManager {
     await instance.start();
     emissary.setRunning(true);
     this.netplayDolphinInstance = instance;
+    this.netplayIsEmissary = true;
     this.netplayStart = { bootsGame: true, at: Date.now() };
     return { status: "started" };
   }
@@ -907,7 +1022,7 @@ export class DolphinManager {
    * `onClose` runs when it exits.
    */
   async launchProjectPunchDolphin(sdCardImage: string, onClose?: () => void): Promise<void> {
-    if (this.netplayDolphinInstance && !(await this.closeNetplayIfIdle())) {
+    if (this.netplayDolphinInstance && !(await this.closeNetplayForOtherGame())) {
       throw new Error("Dolphin is already open with a game. Close it first.");
     }
     Preconditions.checkState(this.netplayDolphinInstance == null, "Dolphin is already open. Close it first.");
