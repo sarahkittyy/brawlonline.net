@@ -290,6 +290,13 @@ def _pause_art_frames(g: Any) -> int:
     return g.c.read_u32(test_rooms_ui.ppom_sym(shim, "g_pauseArt"))
 
 
+def _pause_art_pad(g: Any) -> int:
+    """match_hud.cpp g_pauseArtPad: the controller type (gfPadType) it was last drawn for."""
+    import test_rooms_ui
+    shim = type("Shim", (), {"c": g.c, "u32": lambda self, a: g.c.read_u32(a)})()
+    return g.c.read_u32(test_rooms_ui.ppom_sym(shim, "g_pauseArtPad"))
+
+
 @pytest.mark.slow
 def test_unranked_quits_without_a_pause(backend: OnlineBackend,
                                         dolphin: Callable[..., DolphinInstance],
@@ -329,7 +336,7 @@ def test_unranked_quits_without_a_pause(backend: OnlineBackend,
     # (its "Quit:" and "Back:" lines in the pause screen's own pictures; A has a GameCube controller).
     assert a.debug_scratch()[10] & 0x10000000, hex(a.debug_scratch()[10])
     assert not b.debug_scratch()[10] & 0x10000000, hex(b.debug_scratch()[10])
-    assert _pause_art_frames(a) > 0
+    assert _pause_art_frames(a) > 0 and _pause_art_pad(a) == 0
     assert _pause_art_frames(b) == 0
     first_file = a.c.call("replay_recording")["path"]
     # P+'s salty runback with no pause either (L+R+Y held with the quit): straight into the same
