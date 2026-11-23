@@ -847,6 +847,9 @@ def _engines_reported(backend: OnlineBackend, n: int) -> None:
     engines = [m.group(1) if (m := re.search(r"engine=(\w+)", l)) else None for l in lines]
     allowed = {"dolphin", "emissary"} if os.environ.get("PPHARNESS_RECOMP") else {"dolphin"}
     assert set(engines) <= allowed, lines
+    if os.environ.get("PPHARNESS_RECOMP"):
+        # A recomp player names itself (RecompEngine::Identity), never "unknown" or "dolphin".
+        assert "emissary" in engines, lines
     assert all(re.search(r"engine=dolphin v?\S+", l) for l in lines if "engine=dolphin" in l), lines
 
 
