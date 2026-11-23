@@ -215,6 +215,82 @@ export function deleteWordBefore(text: string, caret: number): { text: string; c
   return { text: text.slice(0, i) + text.slice(caret), caret: i };
 }
 
+/** A web address in a message: http(s)://, www. or discord.gg/, up to the next space. */
+const LINK_RE = /(?:https?:\/\/|www\.|discord\.gg\/)[^\s<>"]+/gi;
+
+export type ChatSegment = { text: string; url?: string };
+
+/**
+ * A message cut into plain text and links. A link drops the punctuation a sentence puts after it
+ * ("see discord.gg/abc." links discord.gg/abc), and a closing bracket it has no opening one for.
+ * Only http and https addresses are links; a bare www. or discord.gg/ one opens as https.
+ */
+export function chatSegments(text: string): ChatSegment[] {
+  const out: ChatSegment[] = [];
+  let at = 0;
+  for (const m of text.matchAll(LINK_RE)) {
+    const start = m.index ?? 0;
+    // Only at a word's start (not the "www." in "awww.").
+    if (start > 0 && /[\p{L}\p{N}_.]/u.test(text[start - 1])) {
+      continue;
+    }
+    let link = m[0];
+    for (;;) {
+      const trimmed = link.replace(/[.,!?;:'*~]+$/, "");
+      const unopened = /\)$/.test(trimmed) && !trimmed.includes("(") ? trimmed.slice(0, -1) : trimmed;
+      if (unopened === link) {
+        break;
+      }
+      link = unopened;
+    }
+    const href = /^https?:\/\//i.test(link) ? link : `https://${link}`;
+    let url: URL | null = null;
+    try {
+      url = new URL(href);
+    } catch {
+      url = null;
+    }
+    if (!url || (url.protocol !== "http:" && url.protocol !== "https:") || !url.hostname.includes(".")) {
+      continue;
+    }
+    if (start > at) {
+      out.push({ text: text.slice(at, start) });
+    }
+    out.push({ text: link, url: url.href });
+    at = start + link.length;
+  }
+  if (at < text.length || out.length === 0) {
+    out.push({ text: text.slice(at) });
+  }
+  return out;
+}
+
+const ChatLineText = ({ text }: { text: string }) => (
+  <>
+    {chatSegments(text).map((s, i) =>
+      s.url ? (
+        <a
+          key={i}
+          className={styles.link}
+          href={s.url}
+          onClick={(e) => {
+            e.preventDefault();
+            // A drag that selected text across the link isn't a click on it.
+            if (!window.getSelection()?.isCollapsed) {
+              return;
+            }
+            window.electron.shell.openExternal(s.url!).catch(() => undefined);
+          }}
+        >
+          {s.text}
+        </a>
+      ) : (
+        <React.Fragment key={i}>{s.text}</React.Fragment>
+      ),
+    )}
+  </>
+);
+
 const ChatWindow = ({
   player,
   conversation,
@@ -349,7 +425,7 @@ const ChatWindow = ({
           }
           return (
             <div key={line.id} className={clsx(styles.line, line.own ? styles.mine : styles.theirs)}>
-              {line.text}
+              <ChatLineText text={line.text} />
             </div>
           );
         })}

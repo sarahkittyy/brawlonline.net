@@ -181,6 +181,25 @@
   white-space: pre-wrap;
 }
 
+/* The page's `*` rule makes every element unselectable, so the lines say otherwise themselves. */
+.line,
+.line * {
+  user-select: text;
+  cursor: text;
+}
+
+.line .link {
+  color: inherit;
+  text-decoration: underline;
+  text-decoration-color: rgb(255 255 255 / 45%);
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.line .link:hover {
+  text-decoration-color: currentcolor;
+}
+
 .theirs {
   align-self: flex-start;
   background-color: rgb(255 255 255 / 7%);
