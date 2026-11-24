@@ -196,6 +196,33 @@ export function wheelPositionOf(color: string): WheelPosition {
 
 export const colorAtWheelPosition = ({ h, r, l }: WheelPosition) => oklchToHex({ l, c: r * maxChroma(l, h), h });
 
+/** The clip colour's lightness and chroma (the old clip blue's, L 0.65 C 0.19), and the blue a grey accent keeps. */
+const CLIP_COLOR = { l: 0.66, c: 0.19, minAccentChroma: 0.03, grey: "#3d8bff" } as const;
+/**
+ * Hues the clip colour skips (OKLCH degrees): the stars' gold (#ffc83c) is 86. Below `split` it goes to `from`
+ * (orange), from there to `to` (lime).
+ */
+const CLIP_AWAY_FROM_GOLD = { from: 52, split: 100, to: 125 } as const;
+
+/**
+ * The playback Dolphin's clip mode (the clip on the seek bar, Render): the colour opposite the launcher's accent,
+ * which is the bar's played part (Sarah's board, 2026-11-24: "should use color theory to be the complimentary
+ * color to the launcher color that's used as the scrubber"). The highlights' stars and spans are gold, so an
+ * opposite near it moves out of CLIP_AWAY_FROM_GOLD: a blue theme's clip is orange, a violet one's lime. All at one lightness and chroma, the old fixed clip blue's (#3d8bff, white text on it). A grey
+ * accent, which has no opposite, keeps that blue.
+ */
+export function clipColorOf(accent: string): string {
+  const seed = rgbToOklch(parseHexColor(accent) ?? parseHexColor(DEFAULT_THEME_COLOR)!);
+  if (seed.c < CLIP_COLOR.minAccentChroma) {
+    return CLIP_COLOR.grey;
+  }
+  let h = (seed.h + 180) % 360;
+  if (h > CLIP_AWAY_FROM_GOLD.from && h < CLIP_AWAY_FROM_GOLD.to) {
+    h = h < CLIP_AWAY_FROM_GOLD.split ? CLIP_AWAY_FROM_GOLD.from : CLIP_AWAY_FROM_GOLD.to;
+  }
+  return oklchToHex({ l: CLIP_COLOR.l, c: Math.min(CLIP_COLOR.c, maxChroma(CLIP_COLOR.l, h)), h });
+}
+
 /** Relative luminance (WCAG) of a colour, 0-1: picks a light or dark pencil over the theme swatch. */
 export function relativeLuminance(color: string): number {
   const [r, g, b] = (parseHexColor(color) ?? [0, 0, 0]).map(toLinear);

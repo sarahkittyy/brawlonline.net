@@ -59,6 +59,8 @@ export type PlaybackMark = HighlightListView["marks"][number] & { path?: string 
 export type PlaybackOverlayFile = {
   /** "#rrggbb". */
   accent?: string;
+  /** "#rrggbb": clip mode's colour, opposite the accent (theme_color.ts clipColorOf). */
+  clip?: string;
   toasts: PlaybackOverlayToast[];
 };
 export type PlaybackOverlayToast = {

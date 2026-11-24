@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  clipColorOf,
   colorAtWheelPosition,
   gradientFromThemeColor,
   normalizeThemeColor,
@@ -100,5 +101,25 @@ describe("theme colour", () => {
     expect(plain.r).toBeCloseTo(0, 4);
     expect(plain.l).toBe(THEME_LIGHTNESS.max);
     expect(wheelPositionOf("#101010").l).toBe(THEME_LIGHTNESS.min);
+  });
+
+  it("gives clip mode the colour opposite the accent, never the stars' gold", () => {
+    const hueGap = (a: number, b: number) => Math.min(Math.abs(a - b), 360 - Math.abs(a - b));
+    const gold = oklchOf("#ffc83c").h;
+    // The default PM blue's opposite is the gold's yellow: orange.
+    expect(clipColorOf(paletteFromThemeColor("#5463c8").primary)).toBe("#e06d00");
+    for (const color of WHEEL_COLORS) {
+      const accent = paletteFromThemeColor(color).primary;
+      const clip = clipColorOf(accent);
+      const [a, c] = [oklchOf(accent), oklchOf(clip)];
+      if (a.c < 0.03) {
+        expect(clip, `${accent} (grey)`).toBe("#3d8bff");
+        continue;
+      }
+      expect(hueGap(c.h, gold), `${accent} -> ${clip}`).toBeGreaterThanOrEqual(33);
+      expect(hueGap(c.h, a.h), `${accent} -> ${clip}`).toBeGreaterThanOrEqual(130);
+      // Render's white label on it.
+      expect(contrast(clip, "#f2f2f2"), `${accent} -> ${clip}`).toBeGreaterThanOrEqual(2.4);
+    }
   });
 });

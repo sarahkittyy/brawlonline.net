@@ -93,8 +93,13 @@ constexpr ImU32 GOLD = IM_COL32(255, 200, 60, 255);
 constexpr ImU32 GOLD_LIT = IM_COL32(255, 226, 122, 255);
 constexpr ImU32 GOLD_SPAN = IM_COL32(255, 200, 60, 115);
 constexpr ImU32 GOLD_SPAN_LIT = IM_COL32(255, 200, 60, 217);
-constexpr ImU32 CLIP_BLUE = IM_COL32(61, 139, 255, 255);
-constexpr ImU32 CLIP_BLUE_HOVER = IM_COL32(90, 160, 255, 255);
+// Clip mode's colour (the clip on the bar, Render, the star being watched): the launcher's, the
+// colour opposite its own (Sarah's board, 2026-11-24: "should use color theory to be the
+// complimentary color to the launcher color that's used as the scrubber"), this blue without it.
+constexpr ImU32 DEFAULT_CLIP = IM_COL32(61, 139, 255, 255);
+constexpr ImU32 DEFAULT_CLIP_HOVER = IM_COL32(90, 160, 255, 255);
+ImU32 s_clip_col = DEFAULT_CLIP;
+ImU32 s_clip_hover = DEFAULT_CLIP_HOVER;
 constexpr ImU32 LIVE_RED = IM_COL32(210, 44, 44, 255);
 constexpr ImU32 DESYNC_RED = IM_COL32(255, 77, 77, 255);
 constexpr ImU32 PANEL = IM_COL32(15, 15, 15, 222);
@@ -353,7 +358,7 @@ bool TextButton(const char* id, const char* label, ImVec2 p, float h, ButtonLook
   const bool pressed = ImGui::InvisibleButton(id, ImVec2(w, h));
   const bool over = ImGui::IsItemHovered();
   ImDrawList* dl = ImGui::GetWindowDrawList();
-  const ImU32 bg = look == ButtonLook::Solid ? (over ? CLIP_BLUE_HOVER : CLIP_BLUE) : (over ? GHOST_HOVER : GHOST_BG);
+  const ImU32 bg = look == ButtonLook::Solid ? (over ? s_clip_hover : s_clip_col) : (over ? GHOST_HOVER : GHOST_BG);
   dl->AddRectFilled(p, ImVec2(p.x + w, p.y + h), bg, 7.0f * scale, round);
   float x = p.x + 12.0f * scale;
   if (icon)
@@ -378,7 +383,7 @@ float RenderSplit(float right, float top, float h, float scale, const std::funct
   ImGui::SetCursorScreenPos(caret0);
   const bool caret = ImGui::InvisibleButton("##replayrendermenu", ImVec2(caret_w, h));
   const bool caret_over = ImGui::IsItemHovered();
-  dl->AddRectFilled(caret0, ImVec2(caret0.x + caret_w, caret0.y + h), caret_over ? CLIP_BLUE_HOVER : CLIP_BLUE,
+  dl->AddRectFilled(caret0, ImVec2(caret0.x + caret_w, caret0.y + h), caret_over ? s_clip_hover : s_clip_col,
                     7.0f * scale, ImDrawFlags_RoundCornersRight);
   dl->AddRectFilled(ImVec2(caret0.x - 1.0f, caret0.y), ImVec2(caret0.x, caret0.y + h), IM_COL32(0, 0, 0, 90));
   IconChevron(dl, ImVec2(caret0.x + caret_w * 0.5f, caret0.y + h * 0.5f), 14.0f * scale, TEXT, false);
@@ -429,7 +434,7 @@ float RenderState(float right, float top, float h, float scale, const std::strin
   const float fs = folder_id.empty() ? 0.0f : h;
   const float w = pad + ts.x + (fs > 0 ? 6.0f * scale + fs : pad);
   const float left = right - w;
-  dl->AddRectFilled(ImVec2(left, top), ImVec2(right, top + h), WithAlpha(CLIP_BLUE, 60), 7.0f * scale);
+  dl->AddRectFilled(ImVec2(left, top), ImVec2(right, top + h), WithAlpha(s_clip_col, 60), 7.0f * scale);
   dl->AddText(ImVec2(left + pad, top + (h - ts.y) * 0.5f), TEXT, text.c_str());
   if (fs > 0)
   {
@@ -722,6 +727,10 @@ void Display(float scale)
   const auto view = Gprb::Replay::Playback::GetOverlayView();
   const ImU32 accent =
       view.has_accent ? IM_COL32(view.accent[0], view.accent[1], view.accent[2], 255) : DEFAULT_ACCENT;
+  // (Hovered: a fifth of the way to white.)
+  const auto lighter = [&view](int i) { return view.clip[i] + (255 - view.clip[i]) / 5; };
+  s_clip_col = view.has_clip ? IM_COL32(view.clip[0], view.clip[1], view.clip[2], 255) : DEFAULT_CLIP;
+  s_clip_hover = view.has_clip ? IM_COL32(lighter(0), lighter(1), lighter(2), 255) : DEFAULT_CLIP_HOVER;
   if (s_hidden)
     return;
 
@@ -1059,9 +1068,9 @@ void Display(float scale)
       const float bt = std::max(1.0f, std::round(2.0f * scale));
       const ImVec2 b0(xs, track_y - std::round(9.0f * scale));
       const ImVec2 b1(xe, track_y + std::round(9.0f * scale));
-      dl->AddRectFilled(b0, b1, WithAlpha(CLIP_BLUE, 56));
-      dl->AddRectFilled(b0, ImVec2(b1.x, b0.y + bt), CLIP_BLUE);
-      dl->AddRectFilled(ImVec2(b0.x, b1.y - bt), b1, CLIP_BLUE);
+      dl->AddRectFilled(b0, b1, WithAlpha(s_clip_col, 56));
+      dl->AddRectFilled(b0, ImVec2(b1.x, b0.y + bt), s_clip_col);
+      dl->AddRectFilled(ImVec2(b0.x, b1.y - bt), b1, s_clip_col);
       for (int h = 1; h <= 2; ++h)
       {
         const float x = h == 1 ? xs : xe;
@@ -1071,7 +1080,7 @@ void Display(float scale)
         const ImVec2 a(x - hw, track_y - hh);
         const ImVec2 z(x + hw, track_y + hh);
         dl->AddRectFilled(ImVec2(a.x - 2.0f * scale, a.y - 2.0f * scale), ImVec2(z.x + 2.0f * scale, z.y + 2.0f * scale),
-                          CLIP_BLUE, 5.0f * scale);
+                          s_clip_col, 5.0f * scale);
         dl->AddRectFilled(a, z, IM_COL32(255, 255, 255, 255), 4.0f * scale);
         for (float gx : {-1.5f, 1.5f})
         {
@@ -1087,12 +1096,12 @@ void Display(float scale)
       const float r = lit ? mark_r * 1.3f : mark_r;
       const ImVec2 c(x_of(mark.start), stars_y);
       // (Sarah's board, 2026-11-20: "a blue outline on the star on the last clip you selected
-      // that you're currently on / rendering".)
+      // that you're currently on / rendering"; clip mode's colour since.)
       const auto* job = render_of(mark.start, mark.end);
       const bool outlined =
           static_cast<int>(i) == watching || (job && (job->state == "queued" || job->state == "rendering"));
       if (outlined)
-        Star(dl, c, r * 1.45f, CLIP_BLUE);
+        Star(dl, c, r * 1.45f, s_clip_col);
       else
         Star(dl, ImVec2(c.x, c.y + 1.0f * scale), r * 1.12f, IM_COL32(0, 0, 0, 140));
       Star(dl, c, r, lit ? GOLD_LIT : GOLD);
