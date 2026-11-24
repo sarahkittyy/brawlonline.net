@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { findBrawlLink, parseBrawlLink } from "./brawl_link";
+import { type BrawlLink, findBrawlLink, parseBrawlLink } from "./brawl_link";
+
+/** A create-room link, or undefined. */
+const created = (link: string) => {
+  const l = parseBrawlLink(link);
+  return l?.kind === "create-room" ? (l as Extract<BrawlLink, { kind: "create-room" }>) : undefined;
+};
 
 describe("brawlonline:// links", () => {
   it("reads room/create with a ruleset", () => {
@@ -14,7 +20,7 @@ describe("brawlonline:// links", () => {
       ruleset: "KFQBTR",
       isPrivate: false,
     });
-    expect(parseBrawlLink("BRAWLONLINE://Room/Create?ruleset=KFQBTR&x=1")?.ruleset).toBe("KFQBTR");
+    expect(created("BRAWLONLINE://Room/Create?ruleset=KFQBTR&x=1")?.ruleset).toBe("KFQBTR");
     expect(parseBrawlLink("brawlonline://room/create")).toEqual({
       kind: "create-room",
       ruleset: null,
@@ -28,16 +34,19 @@ describe("brawlonline:// links", () => {
       ruleset: "KFQBTR",
       isPrivate: true,
     });
-    expect(parseBrawlLink("brawlonline://room/create?private=true")?.isPrivate).toBe(true);
-    expect(parseBrawlLink("brawlonline://room/create?ruleset=KFQBTR&private=0")?.isPrivate).toBe(false);
-    expect(parseBrawlLink("brawlonline://room/create?ruleset=KFQBTR&private=")?.isPrivate).toBe(false);
+    expect(created("brawlonline://room/create?private=true")?.isPrivate).toBe(true);
+    expect(created("brawlonline://room/create?ruleset=KFQBTR&private=0")?.isPrivate).toBe(false);
+    expect(created("brawlonline://room/create?ruleset=KFQBTR&private=")?.isPrivate).toBe(false);
   });
 
   it("drops everything else", () => {
     for (const bad of [
       "brawlonline://room/create?ruleset=KFQB",
       "brawlonline://room/create?ruleset=AEIOUY",
-      "brawlonline://room/join?code=KFQB",
+      "brawlonline://room/join?code=KFQA",
+      "brawlonline://room/join",
+      "brawlonline://watch?stream=0123456789",
+      "brawlonline://watch?stream=0123456789xy",
       "brawlonline://ruleset/KFQBTR",
       "brawlonline:",
       "https://brawlonline.net/r/KFQBTR",
@@ -46,6 +55,15 @@ describe("brawlonline:// links", () => {
     ]) {
       expect(parseBrawlLink(bad), bad).toBeNull();
     }
+  });
+
+  it("reads the Discord activity's room/join and watch (through the website's /?join= and /?watch=)", () => {
+    expect(parseBrawlLink("brawlonline://room/join?code=KFQB")).toEqual({ kind: "join-room", code: "KFQB" });
+    expect(parseBrawlLink("brawlonline://room/join/?code=kfqb")).toEqual({ kind: "join-room", code: "KFQB" });
+    expect(parseBrawlLink("brawlonline://watch?stream=0123456789AB")).toEqual({
+      kind: "watch",
+      stream: "0123456789ab",
+    });
   });
 
   it("finds a link on a command line", () => {

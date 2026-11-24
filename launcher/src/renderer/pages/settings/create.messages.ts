@@ -4,6 +4,7 @@ export const SettingsCreateMessages = {
   replays: () => "Replays",
   clips: () => "Clips",
   training: () => "Training",
+  social: () => "Social",
   dolphinSettings: () => "Dolphin Settings",
   netplay: () => "Netplay",
   playback: () => "Replays & Spectating",

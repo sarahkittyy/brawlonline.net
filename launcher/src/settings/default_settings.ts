@@ -66,5 +66,8 @@ export const defaultAppSettings: AppSettings = {
     notificationVolume: 15,
     interfaceZoom: 100,
     themeColor: null,
+    discordActivity: true,
+    discordShowPlayers: true,
+    discordButtons: false,
   },
 };

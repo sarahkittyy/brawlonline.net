@@ -8,7 +8,8 @@
  *   a room in the list is clicked. A running game picks it up, deletes it and jumps to the room's
  *   character select; a game that is starting reads it once it reaches the menus.
  * - `game-status.json`, game -> launcher: `{version, state, screen, room, updatedAt, pid,
- *   lastRequest}`. Rewritten on every change and at least every 5 s. `state` is `idle` (menus, an
+ *   lastRequest, inputDelay, scene, game}` (`scene` and `game` for the Discord activity,
+ *   social/discord/setup.ts). Rewritten on every change and at least every 5 s. `state` is `idle` (menus, an
  *   idle online character select, a room) or `busy` (a match, a search, a single-player mode);
  *   `lastRequest` answers the last `join-room.json` by its `id`.
  *

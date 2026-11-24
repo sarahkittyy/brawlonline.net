@@ -6,6 +6,7 @@ import gameAssetsApi from "@game_assets/api";
 import replaysApi from "@replays/api";
 import settingsApi from "@settings/api";
 import socialApi from "@social/api";
+import discordApi from "@social/discord/api";
 import spectateApi from "@spectate/api";
 import { contextBridge, ipcRenderer, shell, webUtils } from "electron";
 import { pathExists } from "fs-extra";
@@ -40,6 +41,7 @@ const api = {
   projectPunch: projectPunchApi,
   replays: replaysApi,
   social: socialApi,
+  discord: discordApi,
   spectate: spectateApi,
   utils: {
     isSubdirectory,

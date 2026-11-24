@@ -351,7 +351,34 @@ async function setupBlogBadge() {
   window.addEventListener("pageshow", sync);
 }
 
-window.BrawlOnline = { detectOS, parseFeed, blogHasNew, DOWNLOADS };
+/**
+ * The launcher link a Discord activity's button opens (the launcher's renderer/lib/discord): `/?join=KFQB`
+ * joins that room, `/?watch=<stream>` watches that live game on the Spectate tab. Discord's buttons
+ * take only web links, so the page hands them on as brawlonline:// links; without the launcher the
+ * page is the download page. Pure: launcherLink("?join=KFQB").
+ */
+function launcherLink(search) {
+  const q = new URLSearchParams(search || "");
+  const join = (q.get("join") || "").toUpperCase();
+  if (/^[BCDFGHJKLMNPQRSTVWXZ]{4}$/.test(join)) {
+    return "brawlonline://room/join?code=" + join;
+  }
+  const watch = (q.get("watch") || "").toLowerCase();
+  if (/^[0-9a-f]{12}$/.test(watch)) {
+    return "brawlonline://watch?stream=" + watch;
+  }
+  return null;
+}
+
+function openLauncherLink() {
+  const link = launcherLink(window.location.search);
+  if (link) {
+    window.location.href = link;
+  }
+}
+
+window.BrawlOnline = { detectOS, parseFeed, blogHasNew, launcherLink, DOWNLOADS };
+openLauncherLink();
 currentOS().then(setupDownloads);
 setupVideo();
 setupDialogs();
