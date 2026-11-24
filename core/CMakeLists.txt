@@ -20,6 +20,7 @@ add_library(brawl_online_core STATIC
   include/BrawlOnline/Online/Ranked.h
   include/BrawlOnline/Online/RecentCodes.h
   include/BrawlOnline/Online/RoomMessages.h
+  include/BrawlOnline/Online/RoomWatch.h
   include/BrawlOnline/Online/Rooms.h
   include/BrawlOnline/Online/SetFormat.h
   include/BrawlOnline/Online/Spectate.h
@@ -48,6 +49,7 @@ add_library(brawl_online_core STATIC
   src/Online/Ranked.cpp
   src/Online/RecentCodes.cpp
   src/Online/RoomMessages.cpp
+  src/Online/RoomWatch.cpp
   src/Online/Rooms.cpp
   src/Online/SetFormat.cpp
   src/Online/Spectate.cpp

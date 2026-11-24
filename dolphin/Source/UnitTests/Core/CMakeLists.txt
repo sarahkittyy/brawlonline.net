@@ -112,7 +112,7 @@ add_dolphin_test(NPlayerSetupTest Online/NPlayerSetupTest.cpp)
 add_dolphin_test(GameAliveTest Online/GameAliveTest.cpp)
 # Rooms: the mm server's room messages, validated before they reach the game (Core/Online/RoomMessages).
 add_dolphin_test(RoomMessagesTest Online/RoomMessagesTest.cpp)
-# Watching the room's game: the watch channel's packets into a live replay (Core/Online/RoomWatch).
+# Watching the room's game: the watch channel's packets into a live replay (BrawlOnline/Online/RoomWatch).
 add_dolphin_test(RoomWatchTest Online/RoomWatchTest.cpp)
 # A match's sockets mark what they send as voice, checked on the wire (Core/Online/MatchQoS).
 add_dolphin_test(MatchQoSTest Online/MatchQoSTest.cpp)

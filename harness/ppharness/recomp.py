@@ -123,6 +123,31 @@ class RecompInstance(DolphinInstance):
             user32.PostMessageW(h, 0x0010, 0, 0)  # WM_CLOSE
         return len(hwnds)
 
+    def window_hung(self) -> bool | None:
+        """Windows' own test of a window that stopped handling its messages (IsHungAppWindow: none
+        for 5 s), for this recomp's visible top-level windows; None without one (or off Windows).
+        The recomp handles its window's events on the game's thread, so a game held between two
+        frames (a replay paused) must keep doing so (the core's Engine::WhileStandingStill)."""
+        if os.name != "nt" or self.process is None:
+            return None
+        import ctypes
+        import ctypes.wintypes as wt
+        user32 = ctypes.windll.user32
+        pid = self.process.pid
+        found: list[int] = []
+
+        @ctypes.WINFUNCTYPE(wt.BOOL, wt.HWND, wt.LPARAM)
+        def visit(hwnd: int, _: int) -> bool:
+            owner = wt.DWORD()
+            user32.GetWindowThreadProcessId(hwnd, ctypes.byref(owner))
+            if owner.value == pid and user32.IsWindowVisible(hwnd):
+                found.append(hwnd)
+            return True
+        user32.EnumWindows(visit, 0)
+        if not found:
+            return None
+        return any(bool(user32.IsHungAppWindow(h)) for h in found)
+
     def build_args(self) -> list[str]:
         exe = self.recomp_dir / ("WiiCompiled.exe" if os.name == "nt" else "WiiCompiled")
         # PPHARNESS_RECOMP_LLDB: run it under lldb, which prints every thread's stack when it stops
@@ -144,6 +169,11 @@ class RecompInstance(DolphinInstance):
             "SDL_JOYSTICK_HIDAPI_GAMECUBE": "0",
             "SDL_JOYSTICK_HIDAPI": "0",
         })
+        # A playback instance's comm file (Dolphin's `-i <comm.json>`, the launcher's playback Dolphin):
+        # the recomp follows it from BRAWL_ONLINE_REPLAY_COMM.
+        extra = list(self.config.extra_args)
+        if "-i" in extra and extra.index("-i") + 1 < len(extra):
+            self.env["BRAWL_ONLINE_REPLAY_COMM"] = extra[extra.index("-i") + 1]
         # PPHARNESS_RECOMP_ENV: "NAME=value;NAME=value" for the recomp instances only (a test hook
         # such as PPR_GPRB_TEST_STALL_AT on the recomp side of a crossplay set).
         for item in os.environ.get("PPHARNESS_RECOMP_ENV", "").split(";"):

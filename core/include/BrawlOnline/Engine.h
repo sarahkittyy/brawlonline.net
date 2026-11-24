@@ -146,6 +146,19 @@ public:
   virtual std::vector<std::pair<std::string, double>> SnapshotStats() const = 0;
   virtual std::vector<std::pair<u32, u64>> PartialGranuleSkips() const = 0;
 
+  // ---- The picture while the game stands still ----
+  // The game's thread waits at the loop top, between two frames (a replay paused, held at its end
+  // or seeking nothing; a live playback waiting for frames: spectating, a room's game watched):
+  // show the last frame again with the on-screen UI over it (the replay overlay, messages), and
+  // keep the window and controllers answering. Called on the game's thread about 30 times a second
+  // while it waits, without the session's lock. Dolphin's video thread redraws by itself (the
+  // session asks it to: Presenter::RedrawLastFrame) and its host thread runs the window, so
+  // Dolphin's engine does nothing here; EmissaryRecomp presents and handles its window's events on
+  // the game's thread. (BRAWL_ONLINE_ENGINE_STANDING_STILL: an engine built against older cores can
+  // leave its override out.)
+#define BRAWL_ONLINE_ENGINE_STANDING_STILL 1
+  virtual void WhileStandingStill() {}
+
   // ---- Diagnostics ----
   // Called from the session's network thread (any thread but the game's) when the game has not
   // run a session frame for a second or more (GameplaySession's loop watch): what the engine can

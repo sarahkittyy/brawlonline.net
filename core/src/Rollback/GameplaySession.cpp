@@ -7203,6 +7203,16 @@ bool PlaybackWait(Core::System& system, Pred pred, std::chrono::milliseconds max
   return true;
 }
 
+// A playback standing still at its loop top: the engine shows the last frame again and keeps its
+// window answering (Engine::WhileStandingStill), without the session's lock (held once here, as in
+// HostWait): what the engine draws reads the playback's state.
+void StandStill()
+{
+  s.mutex.unlock();
+  BrawlOnline::GetEngine().WhileStandingStill();
+  s.mutex.lock();
+}
+
 // Waits on the host (not in guest code, so emulated time stands still) until `pred` holds.
 template <typename Pred>
 bool HostWait(Core::System& system, Pred pred, std::chrono::milliseconds max)
@@ -7991,6 +8001,7 @@ PlaybackStep PlaybackLoopTopControls(Core::System& system)
     // is a CoreTiming event (1000 a second of emulated time), and emulated time stands still here:
     // without this the GPU thread spun until the playback went on (bug report #17).
     system.GetFifo().GpuMaySleep();
+    StandStill();
     const bool woke = PlaybackWait(
         system,
         [] {
@@ -10697,6 +10708,7 @@ bool PlaybackLoopTop(const Core::CPUThreadGuard& guard)
         g_presenter->RedrawLastFrame();
     });
     system.GetFifo().GpuMaySleep();
+    StandStill();
     PlaybackWait(
         system,
         [] {
