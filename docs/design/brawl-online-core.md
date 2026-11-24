@@ -345,3 +345,30 @@ After merging brawlonline/windows-build (733667d: room CSS panel texts, Discord 
 Found and fixed on the way: a short B (8 polls) on an all-recomp room watch did nothing: the watch flipped between playing and buffering at the stream's start, and the recomp noted START/B only in its standing-still reads, so a press read by a played frame was missed; FrameInput::SampleLocal now notes them at every read.
 
 Seen on the shared PC while testing (not from these changes): loopback stalls (harness, Postgres and mm connections timing out for minutes; a monitor of its own saw 10 s connect timeouts on 127.0.0.1, and on ::1 too, at the same moments), dolphin.log writes of 6-7 s with instances on E:, after which a recomp's mm connection dropped 3.5 s after a game and the rest of its upload never went (an upload does not survive a reconnect, Dolphin's neither); and the LG and AORUS monitors leaving the display topology (asleep), the TV becoming the primary display: recomp windows then waited up to 25 s on a swapchain image, and once aurora's presentation thread raised 0xC00000FF (a C++ unwind through the Vulkan driver's frames).
+
+## 13. Everything together for rc.2 (2026-11-24, board card 762)
+
+Board card 762: merge the feature cards, release candidate rc.2, and a staging stage for Sarah to try it. Sarah, 2026-11-24, before the tests: "maybe make sure everything is together first? ... we should get them all together."
+
+**Merged.** Monorepo `emissary-integration` (off `emissary-recomp` f3028136c): `emissary-sync-hooks` (758), `emissary-modes` (759), `emissary-watch` (760), `emissary-linux-ci` (761), `emissary-recomp` again (2b7e0fab6), `emissary-video-settings` (774's docs), `emissary-ux` (770), `input-display` (775), and main twice (1a3e98495, then fad847670). EmissaryRecomp `brawlonline/integration` (off `brawlonline/windows-build` 733667d): `brawlonline/sync-hooks`, `modes`, `watch`, `linux-ci`, `windows-build` again (e13eeec: release CI in kalomaze's repo; the recomp's own Discord presence off), `predict` (771), `video-settings` (774), `ux` (770), `input-display` (775). Card 776 (the graphics cards' merge) is in it.
+
+**Conflicts**, all side by side: two §10.2s here (758's kept, 759's is §10.3); 760's `window_hung` and 761's WSL launch beside 759's `close_window` in harness/ppharness/recomp.py; brawl-recompiled.md §13 (770) and §14 (774); 775's input display paragraph above §12 (its stale "RoomWatch is still Dolphin's" paragraph dropped); main's ReplayRecorder includes as `BrawlOnline/` ones (main's Rooms/GameBridge changes for the Discord activity landed in core/ by rename); Settings keeps Add-ons and gains main's Social. In the recomp: the harness commands of 759 (game_setup_act, log_mark, emu_stop) and 760 (replay_*, spectate_*, screenshot) in brawl_online_harness.cpp; two include lines; settings_menu.inc's Graphics rows (771's Frame interpolation row, then 774's V-Sync row).
+
+**Changed while merging** (recomp ed8cc2e, card 776's "make the quality presets include the sub-frame mode"): Medium, High and Ultra keep a frame rate above 60 and make it with Predict (no added delay), and still read as that preset (Ultra at 4K above 60); Low goes back to 60. Before, every preset reset the frame rate to 60, because in-between frames always cost a frame then.
+
+**Checked** on the merged build (Dolphin NoGUI, servers and plugin of this branch; the recomp of `brawlonline/integration` linked with this core; all on this PC alongside three other agents' builds and harness runs):
+
+| What | Result |
+|---|---|
+| Dolphin unit tests | 1,694 pass (InputDisplay included); the 3 old failures (IniFileTest.ConcurrentSavesWriteOneWholeFile, PatchAllowlist.VerifyHashes, PageTableHostMappingTest.MemChecks) |
+| Standalone core | builds with llvm-mingw; brawl_online_core_smoke passes |
+| Launcher | typecheck clean; vitest of the merged areas (Discord activity and RPC, emissary, settings, brawl links, validate): 61 pass |
+| 758, Direct sets, recomp vs Dolphin and recomp vs recomp | on_random, on_sound_stages, time_sync[bad_wifi], [stall], under_the_gameplay_session both ways; [asymmetric], [skew] vs Dolphin: all pass |
+| 759, every mode, both variants | Unranked (+ quit), waiting room, Ranked waiting room, rematch hold, Ranked (+ RANDOM, desync, window close x2), ping check, 2v2 (+ party), 2v2 pair room, rooms (+ teams, LRAS), room sets (+ stage page, desync, 2v2 set), open slot, sit out, anyone picks, room chat, launcher room jump, Direct invite, Hold Start to Pause, Play buttons, the window: all pass (test_room_set_quit_crossplay not run: it fails with two Dolphins too, §10.3) |
+| 760 | replay played and seeked by a recomp viewer and of recomp players, highlight render from a recomp's replay, game-set buttons, streaming, a spectator mid-set, room watch (recomp sitter / recomp players / all recomp), a sitter leaving a buffering watch, a joiner watching: all pass |
+| 775 | test_input_display, Dolphin and recomp (inp-b): pass |
+| UI chat crossplay (693) and Dolphin basics (Direct set, Unranked, a room, replay, room watch, Ranked) | pass |
+
+Every confirmed-checksum count the Direct-set style tests print: 302,880 over 51 runs, 0 mismatches. The crossplay tests check every machine's log for desyncs as well.
+
+What failed on the way was this PC: test instances run below normal, and other agents' compiles starved them (the loop watch's "the game's thread got 0 ms of processor time ..., the PC's processors 100% busy", then "peer timed out"); IPv4 loopback stalls (harness connects to 127.0.0.1 timing out, accounts answering HTTP 0, Postgres "pool timed out"); and a 1-stock replay game ending before the test's 600 frames. The runner (card 762's scripts, not in git) waited for other compiles and for 127.0.0.1 to answer before each test, and ran a test again when its logs showed one of those; each such test then passed whole.
