@@ -293,6 +293,8 @@ struct PeerLink
   bool hello = false;        // its hello arrived on `peer`
   int proto = 1;             // its PROTOCOL_VERSION (a hello without one: 1)
   bool suggestions = false;  // its hello says it takes input suggestions (CHANNEL_SUGGEST)
+  // Its hello says it joins while a player's game is that player's own (LoneDigest).
+  bool own_games = false;
   // ENet's round trip on this link, a sample every 10 ms (net thread), for PaceSD.
   std::deque<std::pair<Clock::time_point, enet_uint32>> rtt_window;
   // Its game has an SD card, and the session card's root it plays (RootHex; "" until it has
@@ -951,6 +953,19 @@ bool MustVouch(const PeerLink& p, int epoch)
   return p.slot >= 0 && p.hello && !p.left && (!p.late || p.epoch_at == epoch);
 }
 
+// Whether a player's game is its own: its digest of the image is one no other player's at the
+// epoch is (`all`: every player's, its own included). A tool that writes into the game's memory
+// from outside (TvC-Continuo's Win Score and music, 2026-11-23) does that: those writes set no
+// dirty marks, so only the sweep of all memory sees them (as desyncs) and that player plays on
+// with the others, but its image differs.
+// A joiner takes the image without such a player's word, so it plays with that player as the
+// others do. Two players whose games match each other and not the image are another side: then
+// the joiner is refused, as it was for every difference before.
+bool LoneDigest(const std::string& digest, const std::vector<std::string>& all)
+{
+  return !digest.empty() && std::count(all.begin(), all.end(), digest) == 1;
+}
+
 // A player in the chat window's notices: its room name, or its slot.
 std::string NameOf(int slot)
 {
@@ -1078,6 +1093,8 @@ void KeepLink(PeerLink& p, ENetPeer* peer, const picojson::object& msg, bool six
     p.proto = pr != msg.end() && pr->second.is<double>() ? static_cast<int>(pr->second.get<double>()) : 1;
     const auto sg = msg.find("sg");
     p.suggestions = sg != msg.end() && sg->second.is<double>() && sg->second.get<double>() >= 1;
+    const auto og = msg.find("own_games");
+    p.own_games = og != msg.end() && og->second.is<double>() && og->second.get<double>() >= 1;
     const auto card = msg.find("sd_card");
     p.sd_card = card != msg.end() && card->second.is<bool>() && card->second.get<bool>();
     const auto root = msg.find("sd");
@@ -2947,6 +2964,8 @@ void NetThread()
           // Takes input suggestions (CHANNEL_SUGGEST).
           if (Gprb::Suggest::Enabled())
             hello["sg"] = picojson::value(1.0);
+          // Joins while a player's game is that player's own (LoneDigest).
+          hello["own_games"] = picojson::value(1.0);
           hello["sd_card"] = picojson::value(Config::Get(Config::MAIN_WII_SD_CARD));
           hello["sd"] = picojson::value(s.sd_root);
           const std::string text = picojson::value(hello).serialize();
@@ -5634,21 +5653,47 @@ bool LoadImage(Core::System& system, std::string* error, bool self = false)
   }
 
   // Every player vouches for the machine: its own digest of the image at this epoch must be this
-  // image's (a player who sends a crafted machine is outvoted by any honest one).
+  // image's (a player who sends a crafted machine is outvoted by any honest one), but for a player
+  // whose game is its own (LoneDigest), and at least one player does.
   {
     const std::string digest =
         ImageDigest(frame, mem1, mem2, last, std::span<const u8>(raw.data() + state_pos, state_size),
                     std::span<const u8>(raw.data() + nand_pos, nand_size), sd_canon, codes);
     std::lock_guard lk(s.net_mutex);
+    std::vector<std::string> all;
     for (const PeerLink& p : s.peers)
     {
       if (!MustVouch(p, rx.epoch))
         continue;
-      if (p.epoch_at != rx.epoch || p.epoch_digest != digest)
+      if (p.epoch_at != rx.epoch)
       {
         *error = fmt::format("player {} does not vouch for this machine", p.slot + 1);
         return false;
       }
+      all.push_back(p.epoch_digest);
+    }
+    int vouchers = 0;
+    for (const PeerLink& p : s.peers)
+    {
+      if (!MustVouch(p, rx.epoch))
+        continue;
+      if (p.epoch_digest == digest)
+        vouchers++;
+      else if (self || !LoneDigest(p.epoch_digest, all))
+      {
+        *error = fmt::format("player {} does not vouch for this machine", p.slot + 1);
+        return false;
+      }
+      else
+      {
+        AddLog(fmt::format("player {}'s game is its own: this machine plays with it as the others "
+                           "do", p.slot + 1));
+      }
+    }
+    if (!self && vouchers == 0)
+    {
+      *error = "no player vouches for this machine";
+      return false;
     }
   }
 
@@ -6265,26 +6310,45 @@ void EpochStep(Core::System& system)
   if (!all_at)
     return;
   const bool admitting = joiner >= 0 && !Plays(joiner);
-  // The joiner loads the image only if every player's own digest of it is this one (LoadImage),
-  // so while a player's game differs from this one (a desync) nobody can join. Said at once, with
-  // why, instead of sending the image for nothing (bug report #214: a TvC room's host and one
-  // player had desynced; every joiner got the 25 MB image, then "player 2 does not vouch for this
-  // machine" and nothing more; the players saw "could not join" until that player left).
+  // The joiner loads the image only if every player's own digest of it is this one, but for a
+  // player whose game is its own (LoneDigest; LoadImage). Another side, or a joiner whose build
+  // would not take the image without that player's word, is said at once, with why, instead of
+  // sending the image for nothing (bug report #214: a TvC room's host and one player had desynced;
+  // every joiner got the 25 MB image, then "player 2 does not vouch for this machine" and nothing
+  // more; the players saw "could not join" until that player left).
+  static const bool own_games_on = [] {
+    const char* e = std::getenv("PPR_MACHINE_OWN_GAMES");
+    return !e || std::strcmp(e, "0") != 0;
+  }();
   std::string refused_why = "the machine image did not load", go_why;
   if (admitting && !joiner_gone && !s.image_built && !s.epoch_digest.empty())
   {
     std::string differ;
     int count = 0;
     std::lock_guard lk(s.net_mutex);
+    std::vector<std::string> all{s.epoch_digest};
+    for (int slot = 0; slot < MAX_PLAYERS; ++slot)
+    {
+      if ((others >> slot) & 1)
+        all.push_back(s.peers[slot].epoch_digest);
+    }
+    bool lone = own_games_on && s.peers[joiner].own_games;
     for (int slot = 0; slot < MAX_PLAYERS; ++slot)
     {
       if (((others >> slot) & 1) && s.peers[slot].epoch_digest != s.epoch_digest)
       {
         differ += (differ.empty() ? "" : " and ") + NameOf(slot);
         count++;
+        lone = lone && LoneDigest(s.peers[slot].epoch_digest, all);
       }
     }
-    if (count > 0)
+    if (count > 0 && lone)
+    {
+      AddLog(fmt::format("player {} joins: the game of {} differs from this one, each its own; it "
+                         "plays with {} as this machine does",
+                         joiner + 1, differ, count == 1 ? "it" : "them"));
+    }
+    else if (count > 0)
     {
       const std::string self = !s.room_name.empty() ? s.room_name :
                                !s.opts.name.empty() ? s.opts.name :

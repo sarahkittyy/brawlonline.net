@@ -577,7 +577,17 @@ Result CmdWriteMem(const Args& args)
     const Core::CPUThreadGuard guard(system);
     RequireRunning();
     const u32 phys = TranslateRange(addr, data.size());
-    system.GetMemory().CopyToEmu(phys, data.data(), data.size());
+    if (GetBool(args, "dirty", true))
+    {
+      system.GetMemory().CopyToEmu(phys, data.data(), data.size());
+    }
+    else
+    {
+      // "dirty": false writes as a tool outside Dolphin does (another process writing into the
+      // emulated RAM): no dirty marks, so rollback snapshots and checksums do not see the write.
+      std::memcpy(system.GetMemory().GetPointerForRange(phys, data.size()), data.data(),
+                  data.size());
+    }
     system.GetJitInterface().InvalidateICache(static_cast<u32>(addr), static_cast<u32>(data.size()),
                                               true);
   }
