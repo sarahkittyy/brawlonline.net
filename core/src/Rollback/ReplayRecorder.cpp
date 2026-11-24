@@ -27,6 +27,7 @@
 #include "Core/HW/Memmap.h"
 #include "BrawlOnline/Online/GameSetup.h"
 #include "BrawlOnline/Online/Ranked.h"
+#include "BrawlOnline/Online/Rooms.h"
 #include "BrawlOnline/Online/Spectate.h"
 #include "BrawlOnline/Rollback/GameplayRollback.h"
 #include "Core/System.h"
@@ -668,6 +669,9 @@ bool Begin(Core::System& system, const BeginInfo& info)
   EndAfter();
   if (s_rec.active)
     Abort();
+  const std::string info_json = InfoJson(info);
+  // The launcher's Discord activity shows this game (game-status.json `game`), recorded or not.
+  Online::Rooms::SetGame(info_json);
   const bool save = Saving();
   const bool stream = Streamed(info.meta);
   if (!save && !stream)
@@ -700,7 +704,6 @@ bool Begin(Core::System& system, const BeginInfo& info)
   s_rec.out->stream = stream;
   s_rec.out->uid = info.uid;
   s_rec.active = true;
-  const std::string info_json = InfoJson(info);
   const std::string setup_json = info.setup_json;
   const std::string spec_json = save ? FighterSpecJson() : std::string();
   const bool ranked = info.meta.mode == 0 && !info.meta.room;

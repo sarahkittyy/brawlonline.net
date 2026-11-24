@@ -325,6 +325,8 @@ What the launcher shows (suggested): `accepted`: "Creating a room in your game."
 | `room` | The room the player is in, or null. |
 | `lastRequest` | The answer to the last `join-room.json` (a room request, a Direct invite or a create): `accepted`, `refused` (with `message`), or `failed` (with `message`, e.g. the server's "Room not found."). |
 | `inputDelay` | `{setting, current, request}`: the Input Delay setting Dolphin plays with (a profile: 0 Normal, -1 Aggressive, -2 Smooth; or 1-9 frames), the running game's delay (null when no game runs: a P+ game or an Other Games room's session), and the `id` of the last `input-delay.json` taken (null for none). |
+| `scene` | The game's current scene (`scSelCharacter`, `scSelStage`, `scMelee`, ...), read twice a second in P+ (2026-11-24); null before the first read. The launcher's Discord activity says Character Select / Stage Select from it. |
+| `game` | While a match is played: the online game that started, as the replay's INFO has it (`mode`, `gameIndex`, `stageId`, `isTeams`, `startTime`, `players` with names, codes and characters, `recorder.port` = this player's), set at every online game's barrier whether it is recorded or not; null otherwise. For the Discord activity's stage and the 2v2 partner. |
 
 **`input-delay.json`**, launcher → game (2026-10-20, the user's: the launcher's Input Delay while Dolphin is open, mid-game too, everywhere), written atomically when the setting changes while the netplay Dolphin runs (Play, a room, Other Games):
 

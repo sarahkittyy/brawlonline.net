@@ -12,6 +12,7 @@ import { GameSettings } from "./game_settings/game_settings";
 import { HelpPage } from "./help_page/help_page";
 import { ReplaySettings } from "./replay_settings/replay_settings";
 import { SettingsPage } from "./settings_page";
+import { SocialSettings } from "./social_settings/social_settings";
 import type { SettingSection } from "./types";
 
 export function createSettingsPage(): { Page: React.ComponentType } {
@@ -38,6 +39,11 @@ export function createSettingsPage(): { Page: React.ComponentType } {
           name: () => Messages.addons(),
           path: ADDONS_PATH,
           component: <AddonsSettings />,
+        },
+        {
+          name: () => Messages.social(),
+          path: "social-options",
+          component: <SocialSettings />,
         },
       ],
     },

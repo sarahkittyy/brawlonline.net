@@ -124,6 +124,12 @@ export interface SettingsSchema {
   // The player's theme colour (Settings > Appearance > Theme Color), "#rrggbb"; null = the default look (grey,
   // or P+'s own menu colours once the disc and card are set up). renderer/styles/theme_color.ts derives the rest.
   themeColor: string | null;
+
+  // Settings > Social: the player's Discord activity (social/discord): shown at all, with the other players'
+  // names, with the Join their room / Watch their game buttons.
+  discordActivity: boolean;
+  discordShowPlayers: boolean;
+  discordButtons: boolean;
 }
 
 /**

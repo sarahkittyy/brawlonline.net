@@ -10,6 +10,7 @@ import React from "react";
 import { HashRouter as Router, Navigate, Route, Routes } from "react-router-dom";
 
 import { ThemeColorPicker } from "@/components/theme_color_picker/theme_color_picker";
+import { useDiscordPresence } from "@/lib/discord/use_discord_activity";
 import { usePlaybackOverlay } from "@/lib/dolphin/use_playback_overlay";
 import { useAppStore } from "@/lib/hooks/use_app_store";
 import { useLastPageTracker } from "@/lib/hooks/use_last_page";
@@ -100,6 +101,8 @@ export function createApp({ services }: { services: Services }): {
     usePageNavigationShortcuts(navigationPaths);
     // `brawlonline://room/create?ruleset=...` links (the website's /r/<code> pages).
     useBrawlLinks();
+    // The player's Discord activity (Settings > Social).
+    useDiscordPresence();
 
     return <AppImpl menuItems={menuItems} />;
   });
