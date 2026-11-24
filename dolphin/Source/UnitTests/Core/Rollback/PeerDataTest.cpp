@@ -616,6 +616,41 @@ TEST(PeerData, LargeControlMessageIsSplitUnderTheMtuAndPutBackTogether)
   EXPECT_EQ(r.InProgress(), 1u);
 }
 
+TEST(PeerData, CopiesThatLoseTheirLastPiecesStillMakeTheMessage)
+{
+  // Bug report #336: a path that passes only the first two datagrams of a burst. Copies of one
+  // message under one id, each starting a piece further on (SendState), complete it once every
+  // piece has come first or second in some copy; copies under their own ids never did.
+  const std::string text(6 * FRAGMENT_PIECE - 100, 's');
+  const size_t count = ControlDatagrams(text, 9).size();
+  ASSERT_EQ(count, 6u);
+  // The pieces of a copy: every piece once, from `first` on.
+  const auto rotated = ControlDatagrams(text, 9, 4);
+  ASSERT_EQ(rotated.size(), count);
+  for (size_t k = 0; k < count; ++k)
+    EXPECT_EQ(rotated[k][5], (4 + k) % count);
+
+  ControlReassembler same_id;
+  int copies = 0;
+  std::optional<std::string> got;
+  while (!got && copies < 20)
+  {
+    const auto d = ControlDatagrams(text, 9, copies++);
+    for (size_t k = 0; k < 2 && !got; ++k)
+      got = same_id.Add(1, d[k].data(), d[k].size());
+  }
+  EXPECT_EQ(got, text);
+  EXPECT_EQ(copies, 5);
+
+  ControlReassembler own_ids;
+  for (u32 copy = 0; copy < 20; ++copy)
+  {
+    const auto d = ControlDatagrams(text, 100 + copy, copy);
+    for (size_t k = 0; k < 2; ++k)
+      EXPECT_FALSE(own_ids.Add(1, d[k].data(), d[k].size()));
+  }
+}
+
 TEST(PeerData, ReassemblyKeepsSourcesAndMessagesApart)
 {
   const std::string a(3000, 'a'), b(3000, 'b');

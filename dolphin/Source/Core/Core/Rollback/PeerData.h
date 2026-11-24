@@ -38,8 +38,13 @@ constexpr size_t MAX_TASK_NAME_LEN = 64;
 // such a joiner, which then dropped the host after 7.2 s of silence (prod 2026-10-13). So a
 // control message whose 'C' packet would be larger than MAX_DATAGRAM goes as 'F' packets:
 // 'F', the message's id (u32, little-endian), the piece's index and the number of pieces (u8
-// each), then the piece. The receiver puts the pieces back together (ControlReassembler); a lost
-// piece loses that copy of the message, as a lost 'C' packet does (state is resent every 50 ms).
+// each), then the piece. The receiver puts the pieces back together (ControlReassembler), from
+// any copies of the message that share its id: the state message keeps its id while its text
+// stays the same and starts each copy one piece further on (SendState), so a path that drops
+// every piece after the first one or two of a burst still delivers the whole message within a
+// few copies. Before (bug report #336, 2026-11-24), every copy had its own id and a lost piece
+// lost that copy: such a path never let the host's 4-6 piece state at the barrier through, and
+// the joiner dropped the host 7.2 s after it got there.
 constexpr size_t MAX_DATAGRAM = 1200;
 constexpr size_t FRAGMENT_HEADER = 1 + 4 + 1 + 1;
 constexpr size_t FRAGMENT_PIECE = MAX_DATAGRAM - FRAGMENT_HEADER;
@@ -48,8 +53,9 @@ constexpr size_t MAX_FRAGMENTS = (MAX_CONTROL_SIZE + FRAGMENT_PIECE - 1) / FRAGM
 constexpr size_t MAX_REASSEMBLY_SOURCES = 8;
 
 // The datagrams for one control message `text` (at most MAX_CONTROL_SIZE): one 'C' packet when
-// it fits in MAX_DATAGRAM, else its 'F' packets with message id `id`.
-std::vector<std::vector<u8>> ControlDatagrams(std::string_view text, u32 id);
+// it fits in MAX_DATAGRAM, else its 'F' packets with message id `id`, from piece `first` (modulo
+// their number) on, round to the one before it.
+std::vector<std::vector<u8>> ControlDatagrams(std::string_view text, u32 id, size_t first = 0);
 
 // GekkoNet sends several small messages a frame to each peer (the frame's inputs, an ack, the
 // checksum of a confirmed frame, a ping now and then), each its own 'G' datagram: about four a

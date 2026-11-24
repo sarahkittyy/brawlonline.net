@@ -437,6 +437,9 @@ struct State
   // running match (SendState).
   std::string state_sent;
   Clock::time_point state_sent_at{};
+  // The 'F' id of state_sent and the piece its last copy started at (SendState).
+  u32 state_id = 0;
+  u32 state_first = 0;
   int state_repeats = 0;
   std::array<PeerView, MAX_LOBBY_PLAYERS> peers;  // by in-game port (this player's unused)
   picojson::object local_selections;
@@ -2912,7 +2915,22 @@ void SendState(bool tick = false)
                   text.size(), PeerData::MAX_CONTROL_SIZE,
                   tasks != o.end() ? tasks->second.serialize().size() : 0);
   }
-  const size_t datagrams = SendControlToAll(text);
+  // A copy of the same text keeps its 'F' id and starts one piece further on (PeerData.h), so the
+  // others put it together from the pieces of several copies: a path that passes only the first
+  // pieces of a burst no longer loses every copy of the host's 4-6 piece state at the barrier.
+  if (text != s.state_sent)
+  {
+    s.state_id = s.control_id.fetch_add(1);
+    s.state_first = 0;
+  }
+  else
+  {
+    ++s.state_first;
+  }
+  const auto pieces = PeerData::ControlDatagrams(text, s.state_id, s.state_first);
+  for (const auto& d : pieces)
+    SendToAll(d);
+  const size_t datagrams = pieces.size();
   s.state_sent = std::move(text);
   if (datagrams > 1 && !s.split_logged)
   {

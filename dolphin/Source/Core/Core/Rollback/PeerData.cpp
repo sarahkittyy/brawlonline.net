@@ -340,7 +340,7 @@ void SanitizePad(u8* pad)
   }
 }
 
-std::vector<std::vector<u8>> ControlDatagrams(std::string_view text, u32 id)
+std::vector<std::vector<u8>> ControlDatagrams(std::string_view text, u32 id, size_t first)
 {
   std::vector<std::vector<u8>> out;
   if (text.size() + 1 <= MAX_DATAGRAM)
@@ -354,8 +354,9 @@ std::vector<std::vector<u8>> ControlDatagrams(std::string_view text, u32 id)
   const size_t count = (text.size() + FRAGMENT_PIECE - 1) / FRAGMENT_PIECE;
   if (count > MAX_FRAGMENTS)
     return out;  // over MAX_CONTROL_SIZE: the others would refuse it anyway
-  for (size_t i = 0; i < count; ++i)
+  for (size_t k = 0; k < count; ++k)
   {
+    const size_t i = (first + k) % count;
     const std::string_view piece = text.substr(i * FRAGMENT_PIECE, FRAGMENT_PIECE);
     std::vector<u8> pkt(FRAGMENT_HEADER + piece.size());
     pkt[0] = 'F';
