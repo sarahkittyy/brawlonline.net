@@ -20,6 +20,7 @@ from typing import Any, Callable
 
 import pytest
 
+from ppharness import crossplay
 from ppharness.backend import OnlineBackend
 from ppharness.instance import DolphinInstance
 
@@ -2057,3 +2058,62 @@ def test_room_runback_restarts_for_everyone(backend: OnlineBackend, dolphin: Cal
     print(f"runback match: frames {[s['current_frame'] for s in ends]}, checksums compared {len(common)}, "
           f"mismatches {len(bad)}")
     assert common and not bad, (len(common), bad[:5])
+
+
+
+# Crossplay (docs/design/brawl-online-core.md §10.2): rooms with EmissaryRecomp players,
+# against a Dolphin (vs_dolphin) and against each other (vs_recomp). PPHARNESS_RECOMP names the build.
+@pytest.mark.slow
+@crossplay.VARIANTS
+def test_room_crossplay(variant: str, backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
+                        gpu_backend: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Two players through a room's games: create, join by code, ready, play, the next game."""
+    crossplay.run(variant, "room-b$", "room-[ab]$", monkeypatch, backend, dolphin,
+                  lambda d: test_room_two_players_through_the_game(backend, d, gpu_backend))
+
+
+@pytest.mark.slow
+@crossplay.VARIANTS
+def test_room_teams_crossplay(variant: str, backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
+                              gpu_backend: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Three players, Teams, a costume, joins by code (B the recomp)."""
+    crossplay.run(variant, "room3-b$", "room3-[abc]$", monkeypatch, backend, dolphin,
+                  lambda d: test_room_three_players_teams(backend, d, gpu_backend))
+
+
+@pytest.mark.slow
+@crossplay.VARIANTS
+def test_room_launcher_jump_crossplay(variant: str, backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
+                                      gpu_backend: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The launcher's room join handed to a running game."""
+    crossplay.run(variant, "room-lb$", "room-l[ab]$", monkeypatch, backend, dolphin,
+                  lambda d: test_room_launcher_jump(backend, d, gpu_backend), game_reports=False,
+                  mm_engines=False, sessions=False)
+
+
+@pytest.mark.slow
+@crossplay.VARIANTS
+def test_direct_invite_crossplay(variant: str, backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
+                                 gpu_backend: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The launcher's Direct invite handed to both running games (the "record" backend: no game)."""
+    crossplay.run(variant, "dinv-b$", "dinv-[ab]$", monkeypatch, backend, dolphin,
+                  lambda d: test_direct_invite_from_the_launcher(backend, d, gpu_backend), game_reports=False,
+                  mm_engines=False, sessions=False)
+
+
+@pytest.mark.slow
+@crossplay.VARIANTS
+def test_room_lras_crossplay(variant: str, backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
+                             gpu_backend: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Three in a free-for-all, P2 (the recomp) quits with L+R+A+START, the others play on."""
+    crossplay.run(variant, "roomlras1-b$", "roomlras1-[abc]$", monkeypatch, backend, dolphin,
+                  lambda d: test_room_player_quits_with_lras(backend, d, gpu_backend, (1,)))
+
+
+@pytest.mark.slow
+@crossplay.SOLO
+def test_play_buttons_recomp(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance], gpu_backend: str,
+                             monkeypatch: pytest.MonkeyPatch) -> None:
+    """Home's Play ranked / Play unranked handed to a running EmissaryRecomp."""
+    crossplay.solo(monkeypatch, "play-a$", dolphin, lambda d: test_play_buttons_from_the_launcher(backend, d, gpu_backend))
+

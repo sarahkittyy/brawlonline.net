@@ -14,6 +14,7 @@ from typing import Any, Callable
 
 import pytest
 
+from ppharness import crossplay
 from ppharness import brawl as B
 from ppharness import flows as F
 from ppharness.backend import OnlineBackend
@@ -1099,3 +1100,51 @@ def test_room_set_token_picked_up_between_games(backend: OnlineBackend, dolphin:
     v = setup_view(b)
     assert v["my_turn"] and v["may_lock"] and not v["time_up"], v
     b.shot("03-placed-again")
+
+
+
+# Crossplay (docs/design/brawl-online-core.md §10.2): room sets with rulesets with EmissaryRecomp players,
+# against a Dolphin (vs_dolphin) and against each other (vs_recomp). PPHARNESS_RECOMP names the build.
+@pytest.mark.slow
+@crossplay.VARIANTS
+def test_room_set_crossplay(variant: str, backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
+                            gpu_backend: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A Bo3 set: blind game 1, strikes, bans, counterpicks, the set's result."""
+    crossplay.run(variant, "set-b$", "set-[ab]$", monkeypatch, backend, dolphin,
+                  lambda d: test_room_bo3_set(backend, d, gpu_backend))
+
+
+@pytest.mark.slow
+@crossplay.VARIANTS
+def test_room_set_stage_page_crossplay(variant: str, backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
+                                       gpu_backend: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A set whose stage list is more than one page."""
+    crossplay.run(variant, "set-b$", "set-[ab]$", monkeypatch, backend, dolphin,
+                  lambda d: test_room_set_with_more_stages_than_a_page(backend, d, gpu_backend))
+
+
+@pytest.mark.slow
+@crossplay.VARIANTS
+def test_room_set_quit_crossplay(variant: str, backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
+                                 gpu_backend: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A set's quit (the game as if never played) and its runback, the recomp quitting."""
+    crossplay.run(variant, "set-a$", "set-[ab]$", monkeypatch, backend, dolphin,
+                  lambda d: test_room_set_quit_and_runback(backend, d, gpu_backend), game_reports=False)
+
+
+@pytest.mark.slow
+@crossplay.VARIANTS
+def test_room_set_desync_crossplay(variant: str, backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
+                                   gpu_backend: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A set game's desync restarts it from the last agreed frame."""
+    crossplay.run(variant, "set-a$", "set-[ab]$", monkeypatch, backend, dolphin,
+                  lambda d: test_room_set_desync_restarts_the_game(backend, d, gpu_backend), desyncs_expected=True)
+
+
+@pytest.mark.slow
+@crossplay.VARIANTS
+def test_room_2v2_set_crossplay(variant: str, backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
+                                gpu_backend: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A 2v2 room set (two recomps against two Dolphins)."""
+    crossplay.run(variant, "dbl-[bd]$", "dbl-[a-d]$", monkeypatch, backend, dolphin,
+                  lambda d: test_room_2v2_set(backend, d, gpu_backend))

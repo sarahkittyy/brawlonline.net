@@ -38,6 +38,7 @@ from test_online_game import (CMD_GET_MATCH_STATE, Game, _boot, _both, _connecte
                               _find_logged, _peer_shown, online_set, ppom)
 from ppharness import brawl as B
 from test_online_ranked import _paused
+from ppharness import crossplay
 
 pytestmark = [pytest.mark.dolphin, pytest.mark.server, pytest.mark.gpu]
 
@@ -424,3 +425,24 @@ def test_unranked_search_ends_with_the_server_error(backend: OnlineBackend,
     g.steps("wait 20")
     assert g.css() == before
     g.shot("06-after-clear")
+
+
+# Crossplay (docs/design/brawl-online-core.md §10.2): the same tests with EmissaryRecomp players,
+# against a Dolphin (vs_dolphin) and against each other (vs_recomp). PPHARNESS_RECOMP names the build.
+@pytest.mark.slow
+@crossplay.VARIANTS
+def test_unranked_crossplay(variant: str, backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
+                            gpu_backend: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Unranked's pairing, its two-game set on server stages and both games' reports."""
+    crossplay.run(variant, "unr-b$", "unr-[ab]$", monkeypatch, backend, dolphin,
+                  lambda d: test_unranked_pairs_strangers_on_a_server_stage(backend, d, gpu_backend))
+
+
+@pytest.mark.slow
+@crossplay.VARIANTS
+def test_unranked_quit_crossplay(variant: str, backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
+                                 gpu_backend: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The pause screen's quit (LRAS) and runback, the recomp quitting (A) against a Dolphin. A quit
+    game is not reported."""
+    crossplay.run(variant, "unr-qa$", "unr-q[ab]$", monkeypatch, backend, dolphin,
+                  lambda d: test_unranked_quits_without_a_pause(backend, d, gpu_backend), game_reports=False)

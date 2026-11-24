@@ -41,6 +41,7 @@ from typing import Any, Callable, Iterator
 import pytest
 
 from ppharness import brawl as B
+from ppharness import crossplay
 from ppharness import flows as F
 from ppharness.backend import OnlineBackend
 from ppharness.instance import DolphinInstance
@@ -321,7 +322,11 @@ def test_ranked_set_is_rated(backend: OnlineBackend, dolphin: Callable[..., Dolp
     assert log.count(" game reported") == 2 * len(games), log[-3000:]
     # ... each with the engine that played it (docs/design/brawl-online-core.md §10, "Which engine").
     plain = re.sub(r"\x1b\[[0-9;]*m", "", log)
-    assert len(re.findall(r" game reported.*engine=dolphin", plain)) == 2 * len(games), log[-3000:]
+    # A recomp player's own reports say emissary (PPHARNESS_RECOMP, ppharness/recomp.py).
+    from ppharness.recomp import RecompInstance
+    recomps = sum(isinstance(g.inst, RecompInstance) for g in players)
+    assert len(re.findall(r" game reported.*engine=dolphin", plain)) == (2 - recomps) * len(games), log[-3000:]
+    assert len(re.findall(r" game reported.*engine=emissary", plain)) == recomps * len(games), log[-3000:]
     assert "ranked set settled" in log and "ranked leave reported" not in log
     for g in players:
         assert g.bridge()["lost"] == 0
@@ -338,14 +343,21 @@ def test_ranked_set_is_rated(backend: OnlineBackend, dolphin: Callable[..., Dolp
     assert "recording ranked" not in mm_log and "recording a ranked" not in mm_log, mm_log[-3000:]
     # Each player's game's word on its speed over each game (docs/design/speed-check.md, log
     # only), recorded by mm; this PC holds full speed, so none is slow.
+    from ppharness.recomp import RecompInstance
+    engine_of = {u.uid: "emissary" if isinstance(g.inst, RecompInstance) else "dolphin" for u, g in ((ua, a), (ub, b))}
     for u in (ua, ub):
         shown = [l for l in backend.admin("speed", "show", u.email).splitlines() if "  game  ranked" in l]
         assert len(shown) == len(games) and not any("SLOW" in l for l in shown), shown
-        # ... from our Dolphin, which says so (`engine` in its hello; absent would read the same).
-        assert all(re.search(r"  dolphin v?\S+$", l) for l in shown), shown
+        # ... from its engine, which says so (`engine` in its hello; absent would read dolphin): our
+        # Dolphin with its version, an EmissaryRecomp with its release ("dev" for a build without one).
+        assert all(re.search(rf"  {engine_of[u.uid]} v?\S+$", l) for l in shown), shown
     summary = backend.admin("speed", "summary")
-    assert re.search(rf"ranked +dolphin +{2 * len(games)} +0 +0 +0", summary), summary
-    assert re.search(rf"dolphin\+dolphin +{len(games)} +0 +0\.00%", summary), summary
+    for engine in set(engine_of.values()):
+        n = len(games) * list(engine_of.values()).count(engine)
+        assert re.search(rf"ranked +{engine} +{n} +0 +0 +0", summary), summary
+    # The pair line names both reporters' engines, sorted (pp-admin speed summary).
+    pair = r"\+".join(sorted(engine_of.values()))
+    assert re.search(rf"{pair} +{len(games)} +0 +0\.00%", summary), summary
     assert "recording a speed report failed" not in mm_log, mm_log[-3000:]
 
 
@@ -364,7 +376,7 @@ def _paused(g: Game) -> bool:
 
 
 @pytest.mark.slow
-@pytest.mark.parametrize("how", ["window", "app"])
+@pytest.mark.parametrize("how", ["window", "app", "x"])
 def test_ranked_has_no_pause_and_closing_abandons(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
                                                   gpu_backend: str, how: str) -> None:
     """Ranked has no pause, as Slippi's (the user's, 2026-10-14: a player could pause a ranked game
@@ -374,8 +386,13 @@ def test_ranked_has_no_pause_and_closing_abandons(backend: OnlineBackend, dolphi
     (`window`: emulation stops, as the window's X does) or the whole app (`app`: the harness's
     quit, as Cmd-Q). A reports its own leave right away, so the server settles the set as
     abandoned by A at once, not after the opponent's report and the 2-minute grace; A takes the
-    set loss and B the win, though no game was played (since 2026-10-23)."""
+    set loss and B the win, though no game was played (since 2026-10-23). `x`: A is an
+    EmissaryRecomp whose window gets the close of its X (WM_CLOSE: SDL's quit), the program's own
+    close path (test_ranked_crossplay_window_close)."""
     test = f"ranked-no-pause-{how}"
+    from ppharness.recomp import RecompInstance, wants_recomp
+    if how == "x" and not wants_recomp(f"rnp{how[0]}-a"):
+        pytest.skip("`x` closes an EmissaryRecomp's window: PPHARNESS_RECOMP with rnpx-a a recomp")
     ua, ub = backend.create_user(f"rnp{how[0]}a", f"RNA{how[0].upper()}"), backend.create_user(f"rnp{how[0]}b", f"RNB{how[0].upper()}")
     a = _boot(dolphin, f"rnp{how[0]}-a", backend, ua, gpu_backend, test, "gameplay")
     b = _boot(dolphin, f"rnp{how[0]}-b", backend, ub, gpu_backend, test, "gameplay")
@@ -425,6 +442,8 @@ def test_ranked_has_no_pause_and_closing_abandons(backend: OnlineBackend, dolphi
     left_at = time.monotonic()
     if how == "window":
         a.c.call("emu_stop")
+    elif how == "x":
+        assert isinstance(a.inst, RecompInstance) and a.inst.close_window() >= 1, "no recomp window to close"
     else:
         a.inst.stop()
     _wait(lambda: _ranked(b)["peer_gone"], 30, "B sees A gone")
@@ -442,11 +461,11 @@ def test_ranked_has_no_pause_and_closing_abandons(backend: OnlineBackend, dolphi
     pub_b = backend._http("GET", f"/user/{ub.uid}?additionalFields=chatMessages,rank")
     assert pub_b["rank"]["ratingUpdateCount"] == 1 and pub_b["rank"]["ratingOrdinal"] > DEFAULT_RATING, pub_b
     assert res["winner"] == ub.uid and res["rating"]["change"] > 0, res
-    if how == "app":
-        assert a.inst.process is None or a.inst.process.poll() is not None
+    if how in ("app", "x"):
+        _wait(lambda: a.inst.process is None or a.inst.process.poll() is not None, 10, "A's program to end")
     else:
         a.inst.stop()
-    want = "the game is closing" if how == "window" else "Ranked: reports at exit sent"
+    want = "Ranked: reports at exit sent" if how == "app" else "the game is closing"
     text = _log(a)
     assert "Ranked: leaving set" in text and want in text, text[-3000:]
 
@@ -615,9 +634,12 @@ def test_ranked_desync_restarts_the_game(backend: OnlineBackend, dolphin: Callab
     for g in players:
         _wait(lambda g=g: sum(_ranked(g)["wins"]) == 1, 30, f"{g.name}: the restarted game counted")
         assert _ranked(g)["wins"][_ranked(host)["local_port"]] == 1, _ranked(g)
-    _wait(lambda: backend.log_text("accounts").count(" game reported") >= 2, 30, "both reports")
+    # This set's reports only (the module's backend has other tests' sets too).
+    match_id = a.c.mm_status()["match"]["match_id"]
+    _wait(lambda: sum(1 for l in backend.log_text("accounts").splitlines()
+                      if " game reported" in l and match_id in l) >= 2, 30, "both reports")
     reports = [re.sub(r"\x1b\[[0-9;]*m", "", l) for l in backend.log_text("accounts").splitlines()
-               if " game reported" in l]
+               if " game reported" in l and match_id in l]
     assert len(reports) == 2 and all(re.search(r"\bgame=1\b", l) for l in reports), reports
 
 
@@ -1075,3 +1097,59 @@ def test_ranked_pc_slowing_down_mid_set_loses_it(backend: OnlineBackend,
     assert ra["status"] == "ABANDONED" and ra["winner"] == ub.uid, ra
     assert ra["reason"] == f"abandoned by {ua.uid}: match quality low", ra
     assert ra["rating"]["change"] < 0 < rb["rating"]["change"], (ra, rb)
+
+
+
+@pytest.fixture
+def fresh_backend() -> Iterator[OnlineBackend]:
+    """A backend for one test: the Ranked tests count the server's rows and log lines as if they were
+    alone on it, and each crossplay variant runs the same test again."""
+    be = _make_backend()
+    try:
+        yield be
+    finally:
+        be.stop()
+
+
+# Crossplay (docs/design/brawl-online-core.md §10.2): Ranked with EmissaryRecomp players, against a
+# Dolphin (vs_dolphin) and against each other (vs_recomp). PPHARNESS_RECOMP names the build.
+@pytest.mark.slow
+@crossplay.VARIANTS
+def test_ranked_crossplay(variant: str, fresh_backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
+                          gpu_backend: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A rated set: game 1 blind pick, strikes, the winner's bans and the loser's pick, reports
+    with each player's engine, the ratings."""
+    crossplay.run(variant, "rk-b$", "rk-[ab]$", monkeypatch, fresh_backend, dolphin,
+                  lambda d: test_ranked_set_is_rated(fresh_backend, d, gpu_backend))
+
+
+@pytest.mark.slow
+@crossplay.VARIANTS
+def test_ranked_random_crossplay(variant: str, fresh_backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
+                                 gpu_backend: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """RANDOM in the strikes and picks of every game."""
+    crossplay.run(variant, "rr-a$", "rr-[ab]$", monkeypatch, fresh_backend, dolphin,
+                  lambda d: test_ranked_random_draws_every_game(fresh_backend, d, gpu_backend))
+
+
+@pytest.mark.slow
+@crossplay.VARIANTS
+def test_ranked_desync_crossplay(variant: str, fresh_backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
+                                 gpu_backend: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Desync recovery: the game restarted from the last agreed frame, the recomp being the machine
+    whose memory is changed (A)."""
+    crossplay.run(variant, "rkd-a$", "rkd-[ab]$", monkeypatch, fresh_backend, dolphin,
+                  lambda d: test_ranked_desync_restarts_the_game(fresh_backend, d, gpu_backend), desyncs_expected=True)
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("how", ["window", "x"])
+@crossplay.VARIANTS
+def test_ranked_crossplay_window_close(variant: str, how: str, fresh_backend: OnlineBackend,
+                                       dolphin: Callable[..., DolphinInstance], gpu_backend: str,
+                                       monkeypatch: pytest.MonkeyPatch) -> None:
+    """No pause, and closing the recomp (A) abandons the set at once: the harness's stop (`window`)
+    and the window's own X (`x`). No game is played, so none is reported."""
+    crossplay.run(variant, f"rnp{how[0]}-a$", f"rnp{how[0]}-[ab]$", monkeypatch, fresh_backend, dolphin,
+                  lambda d: test_ranked_has_no_pause_and_closing_abandons(fresh_backend, d, gpu_backend, how),
+                  game_reports=False, sessions=False)
