@@ -50,13 +50,23 @@ export const LauncherUpdateRing = ({ update }: { update: LauncherUpdateAction })
 };
 
 /** A set-up step (installing Dolphin, downloading Project+...) as a ring: its name and percentage in the tooltip. */
-export const SetupRing = ({ phase, fillPercent }: { phase: DolphinSetupPhase | undefined; fillPercent: number }) => {
+export const SetupRing = ({
+  phase,
+  fillPercent,
+  name,
+}: {
+  phase: DolphinSetupPhase | undefined;
+  fillPercent: number;
+  /** A step that is not the Dolphin's (EmissaryRecomp's download), named by its caller. */
+  name?: string;
+}) => {
   const percent = percentOf(fillPercent);
-  const label = phase ? `${setupPhaseLabel(phase)} ${percent}%` : PlayButtonMessages.updating();
+  const step = name ?? (phase ? setupPhaseLabel(phase) : undefined);
+  const label = step ? `${step} ${percent}%` : PlayButtonMessages.updating();
   return (
     <Tooltip title={label} placement="right" disableInteractive={true}>
       <span className={styles.ring} role="progressbar" aria-label={label} data-testid="setup-ring">
-        {phase ? <Ring value={percent} /> : <CircularProgress className={styles.fill} size={36} thickness={3} />}
+        {step ? <Ring value={percent} /> : <CircularProgress className={styles.fill} size={36} thickness={3} />}
         <DownloadRoundedIcon className={styles.icon} />
       </span>
     </Tooltip>

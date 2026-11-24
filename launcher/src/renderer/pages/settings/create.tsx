@@ -1,4 +1,5 @@
 import { AddonsSettings } from "./addons_settings/addons_settings";
+import { ADDONS_PATH } from "./addons_settings/paths";
 import { AdvancedAppSettings } from "./advanced_app_settings/advanced_app_settings";
 import { AppearanceSettings } from "./appearance_settings/appearance_settings";
 import { ClipsSettings } from "./clips_settings/clips_settings";
@@ -35,7 +36,7 @@ export function createSettingsPage(): { Page: React.ComponentType } {
         },
         {
           name: () => Messages.addons(),
-          path: "addons",
+          path: ADDONS_PATH,
           component: <AddonsSettings />,
         },
       ],

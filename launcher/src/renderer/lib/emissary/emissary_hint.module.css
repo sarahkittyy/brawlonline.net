@@ -1,0 +1,34 @@
+/* The way to EmissaryRecomp's card glows gold until Settings > Add-ons has been seen (use_emissary_hint.ts): the
+   profile hint's gold and pulses (user_menu.module.css .profileGlow). */
+.glow {
+  --emissary-glow: 255 205 70;
+
+  box-shadow: 0 0 0 2px rgb(var(--emissary-glow) / 85%);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .glow {
+    animation: emissaryGlow 3.6s ease-in-out;
+  }
+}
+
+@keyframes emissaryGlow {
+  0%,
+  50% {
+    box-shadow:
+      0 0 0 1px rgb(var(--emissary-glow) / 55%),
+      0 0 4px 1px rgb(var(--emissary-glow) / 20%);
+  }
+
+  25%,
+  75% {
+    box-shadow:
+      0 0 0 2px rgb(var(--emissary-glow) / 90%),
+      0 0 12px 3px rgb(var(--emissary-glow) / 45%);
+  }
+
+  /* Two pulses, then it eases into the resting style, so it does not jump there when it ends. */
+  100% {
+    box-shadow: 0 0 0 2px rgb(var(--emissary-glow) / 85%);
+  }
+}

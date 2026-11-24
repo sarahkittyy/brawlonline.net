@@ -30,15 +30,19 @@ import { ThemeColorButton } from "@/components/theme_color_picker/theme_color_bu
 import { useDolphinActions } from "@/lib/dolphin/use_dolphin_actions";
 import { DolphinStatus, useDolphinStore } from "@/lib/dolphin/use_dolphin_store";
 import { usePlay, usePlayDialogs } from "@/lib/dolphin/use_play";
+import hintStyles from "@/lib/emissary/emissary_hint.module.css";
+import { useEmissary } from "@/lib/emissary/use_emissary";
+import { useEmissaryHintGlows } from "@/lib/emissary/use_emissary_hint";
 import { useAccount } from "@/lib/hooks/use_account";
 import { useAppUpdate } from "@/lib/hooks/use_app_update";
 import { useLocalStorage } from "@/lib/hooks/use_local_storage";
 import { useLoginModal } from "@/lib/hooks/use_login_modal";
 import { useRouteMemory } from "@/lib/hooks/use_route_memory";
-import { useNotificationSounds } from "@/lib/hooks/use_settings";
+import { useNotificationSounds, usePlayProjectPlusWith } from "@/lib/hooks/use_settings";
 import { useSettingsModal } from "@/lib/hooks/use_settings_modal";
 import { useToasts } from "@/lib/hooks/use_toasts";
 import { useTournamentsUrl } from "@/lib/hooks/use_tournaments_url";
+import { AddonsSettingsMessages } from "@/pages/settings/addons_settings/addons_settings.messages";
 import { useServices } from "@/services";
 
 import logo from "./images/logo.png";
@@ -251,9 +255,15 @@ const useFoldedFit = (folded: boolean) => {
  * top").
  */
 const Tools = ({ placement, openSettings }: { placement?: "right"; openSettings: () => void }) => {
+  // Settings glows until Add-ons has been seen, the first step of EmissaryRecomp's hint (use_emissary_hint.ts).
+  const settingsGlows = useEmissaryHintGlows();
   const tools = [
     <Tooltip key="settings" title={HeaderMessages.settings()} placement={placement}>
-      <IconButton aria-label={HeaderMessages.settings()} onClick={openSettings}>
+      <IconButton
+        aria-label={HeaderMessages.settings()}
+        onClick={openSettings}
+        className={settingsGlows ? hintStyles.glow : undefined}
+      >
         <SettingsOutlinedIcon />
       </IconButton>
     </Tooltip>,
@@ -283,6 +293,8 @@ const Tools = ({ placement, openSettings }: { placement?: "right"; openSettings:
 const ToolsMenu = ({ openSettings }: { openSettings: () => void }) => {
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
   const close = () => setAnchor(null);
+  // Settings is inside: the menu button carries its glow (Tools).
+  const settingsGlows = useEmissaryHintGlows();
   return (
     <div className={styles.tools}>
       <Tooltip title={anchor ? "" : Messages.toolsMenu()} placement="right" disableInteractive={true}>
@@ -291,6 +303,7 @@ const ToolsMenu = ({ openSettings }: { openSettings: () => void }) => {
           aria-haspopup="true"
           aria-expanded={anchor != null}
           data-testid="sidebar-tools-menu"
+          className={settingsGlows && anchor == null ? hintStyles.glow : undefined}
           onClick={(event) => setAnchor(event.currentTarget)}
         >
           <MenuRoundedIcon />
@@ -377,7 +390,7 @@ const SetupStatus = ({ onClick, folded }: { onClick: () => void; folded: boolean
     );
   }
   if (installStatus === DolphinStatus.READY) {
-    return null;
+    return <EmissarySetupStatus folded={folded} />;
   }
   return (
     <div className={styles.status}>
@@ -385,6 +398,33 @@ const SetupStatus = ({ onClick, folded }: { onClick: () => void; folded: boolean
         <SetupRing phase={installProgress?.phase} fillPercent={fillPercent} />
       ) : (
         <UpdatingButton onClick={onClick} fillPercent={fillPercent} phase={installProgress?.phase} />
+      )}
+    </div>
+  );
+};
+
+/**
+ * EmissaryRecomp's download or its game files' extraction while Play plays with it (Settings > Game), as P+'s first
+ * set-up shows (Sarah's board, 2026-11-24): the download by what comes over the network, not what it takes on disk.
+ */
+const EmissarySetupStatus = ({ folded }: { folded: boolean }) => {
+  const [playWith] = usePlayProjectPlusWith();
+  const job = useEmissary((s) => s.state?.job ?? null);
+  if (playWith !== "emissary" || !job) {
+    return null;
+  }
+  const name =
+    job.phase === "gameFiles"
+      ? AddonsSettingsMessages.extractingGameFiles()
+      : AddonsSettingsMessages.downloadingEmissary();
+  // Unpacking comes after the whole download: it stays full.
+  const fill = job.phase === "unpack" ? 1 : job.total > 0 ? job.current / job.total : 0;
+  return (
+    <div className={styles.status} data-testid="emissary-setup-status">
+      {folded ? (
+        <SetupRing phase={undefined} fillPercent={fill} name={name} />
+      ) : (
+        <UpdatingButton fillPercent={fill} label={name} />
       )}
     </div>
   );

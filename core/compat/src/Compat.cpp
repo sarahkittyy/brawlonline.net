@@ -265,8 +265,12 @@ void MemoryManager::Write_U32(u32 var, u32 address)
 }  // namespace Memory
 
 // ---- VideoCommon ----------------------------------------------------------------------------------
-// None: the plugin then draws for Brawl's own 16:9, as under a Dolphin without a presenter.
-VideoCommon::Presenter* g_presenter = nullptr;
+// The host's picture (Host::DrawAspectRatio, EmissaryRecomp's DisplaySettings::PictureAspect): GameBridge's PutAspect
+// tells the plugin the shape the picture is shown at through it, and the plugin draws for that shape (docs/game-code.md,
+// "Any screen shape"). It was none, so the plugin was always told 0 and drew Brawl's own 16:9, squeezed or stretched
+// into a 4:3 or a 21:9 picture (EmissaryRecomp's F10 aspect and Fill Window), menus and matches alike.
+static VideoCommon::Presenter s_presenter;
+VideoCommon::Presenter* g_presenter = &s_presenter;
 
 // With the UI (core/ui) the messages are its own; else they go to the host.
 #ifdef BRAWL_ONLINE_NO_UI

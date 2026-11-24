@@ -2,9 +2,12 @@ import type { EmissaryFallback, EmissaryState } from "@dolphin/emissary/types";
 import Alert from "@mui/material/Alert";
 
 import { UpdatingButton } from "@/app/header/play_button/play_button";
+import { SetupRing } from "@/app/shell/update_ring";
+import { AddonsSettingsMessages } from "@/pages/settings/addons_settings/addons_settings.messages";
 import { EmissarySettingView } from "@/pages/settings/addons_settings/emissary_setting_view";
 import { PlayProjectPlusWithView } from "@/pages/settings/game_settings/play_project_plus_with_view";
 
+import { EmissaryDialogView } from "./emissary_dialog_view";
 import { emissaryFallbackText } from "./emissary_fallback";
 
 export default {
@@ -118,22 +121,28 @@ const states: Record<string, EmissaryState> = {
   },
 };
 
-const card = (state: EmissaryState) => () =>
-  (
-    <div style={{ width: 640, padding: 16 }}>
-      <EmissarySettingView
-        state={state}
-        autoUpdate={true}
-        onGet={noop}
-        onCancel={noop}
-        onRemove={noop}
-        onOpenFolder={noop}
-        onOpenRepo={noop}
-        onChooseDisc={noop}
-        onAutoUpdate={noop}
-      />
-    </div>
-  );
+const card =
+  (state: EmissaryState, { playWith = false, glow = false, gameOpen = false } = {}) =>
+  () =>
+    (
+      <div style={{ width: 640, padding: 16 }}>
+        <EmissarySettingView
+          state={state}
+          autoUpdate={true}
+          onGet={noop}
+          onCancel={noop}
+          onRemove={noop}
+          onOpenFolder={noop}
+          onOpenRepo={noop}
+          onChooseDisc={noop}
+          onAutoUpdate={noop}
+          playWithEmissary={playWith}
+          playWithDisabledReason={gameOpen ? "Close Dolphin to change this setting" : undefined}
+          onPlayWithEmissary={noop}
+          glow={glow}
+        />
+      </div>
+    );
 
 export const CardUnavailable = card(states.unavailable);
 export const CardNeedsDisc = card(states.needsDisc);
@@ -143,8 +152,10 @@ export const CardUnpacking = card(states.unpacking);
 export const CardPreparingFiles = card(states.preparingFiles);
 export const CardNeedsFiles = card(states.needsFiles);
 export const CardReady = card(states.ready);
+export const CardReadyPlayingWithEmissary = card(states.ready, { playWith: true });
+export const CardFirstVisitGlows = card(states.notInstalled, { glow: true });
 export const CardUpdateAvailable = card(states.updateAvailable);
-export const CardUpdateStagedWhilePlaying = card(states.staged);
+export const CardUpdateStagedWhilePlaying = card(states.staged, { playWith: true, gameOpen: true });
 export const CardError = card(states.error);
 export const CardReleaseWithoutOnline = card(states.offlineOnly);
 
@@ -192,5 +203,37 @@ export const PlayFellBackToDolphin = () => (
         {emissaryFallbackText(f)}
       </Alert>
     ))}
+  </div>
+);
+
+// Play with EmissaryRecomp chosen before it is set up: its popup (Project Punch's), per state.
+const dialog = (state: EmissaryState) => () =>
+  (
+    <EmissaryDialogView
+      open={true}
+      state={state}
+      onClose={noop}
+      onGet={noop}
+      onCancel={noop}
+      onPlay={noop}
+      onOpenRepo={noop}
+    />
+  );
+
+export const DialogNotInstalled = dialog(states.notInstalled);
+export const DialogDownloading = dialog(states.downloading);
+export const DialogPreparingFiles = dialog(states.preparingFiles);
+export const DialogReady = dialog(states.ready);
+
+// The sidebar's set-up status while it downloads or extracts with Play set to it (open and folded).
+export const SidebarStatus = () => (
+  <div style={{ display: "flex", gap: 24, alignItems: "center", padding: 16 }}>
+    <div style={{ width: 176 }}>
+      <UpdatingButton fillPercent={0.41} label={AddonsSettingsMessages.downloadingEmissary()} />
+    </div>
+    <div style={{ width: 176 }}>
+      <UpdatingButton fillPercent={0.37} label={AddonsSettingsMessages.extractingGameFiles()} />
+    </div>
+    <SetupRing phase={undefined} fillPercent={0.41} name={AddonsSettingsMessages.downloadingEmissary()} />
   </div>
 );
