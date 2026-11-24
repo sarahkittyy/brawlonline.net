@@ -238,7 +238,7 @@ export const InputDisplayPreview = ({
       css={css`
         position: relative;
         width: 100%;
-        max-width: 360px;
+        box-sizing: border-box;
         aspect-ratio: 16 / 9;
         border-radius: 6px;
         border: 1px solid var(--line-soft);
