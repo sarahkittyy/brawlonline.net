@@ -104,6 +104,14 @@ public:
   // The audio clock waits for re-runs (by fields added as pauses).
   virtual void SetRollbackAudioWaits(bool wait) = 0;
   virtual void AddRollbackAudioPause(s64 ticks) = 0;
+  // The game's sound silenced (true), or back to the user's settings (false), while a playback runs
+  // fast: a spectator's or a room watcher's catch-up to the live edge, a seek's fast-forward
+  // (GameplaySession's PlaybackMute; bug reports #103, #309). Dolphin sets its sound stream's volume
+  // to 0, then back from its settings (never the saved ones); EmissaryRecomp drops its output
+  // meanwhile. (BRAWL_ONLINE_ENGINE_PLAYBACK_MUTE: an engine built against older cores can leave its
+  // override out.)
+#define BRAWL_ONLINE_ENGINE_PLAYBACK_MUTE 1
+  virtual void SetPlaybackMuted(bool /*muted*/) {}
   // Time sync: the emulation speed times this (1.0 = none); the timeline moved earlier.
   virtual void SetRollbackSpeedAdjustment(double factor) = 0;
   virtual void AdvanceThrottle(DT amount) = 0;

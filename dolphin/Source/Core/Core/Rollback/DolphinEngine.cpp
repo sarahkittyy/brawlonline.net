@@ -6,6 +6,8 @@
 #include <algorithm>
 #include <iterator>
 
+#include "AudioCommon/AudioCommon.h"
+#include "AudioCommon/SoundStream.h"
 #include "BrawlOnline/Engine.h"
 #include "Common/Version.h"
 #include "Core/Core.h"
@@ -131,6 +133,15 @@ public:
   void SetRollbackLoadWait(bool waiting) override { Timing().SetRollbackLoadWait(waiting); }
   void SetRollbackAudioWaits(bool wait) override { Timing().SetRollbackAudioWaits(wait); }
   void AddRollbackAudioPause(s64 ticks) override { Timing().AddRollbackAudioPause(ticks); }
+  // The sound stream at 0 volume, or back to the user's settings (never their saved settings).
+  void SetPlaybackMuted(bool muted) override
+  {
+    auto& system = Core::System::GetInstance();
+    if (!muted)
+      AudioCommon::UpdateSoundStream(system);
+    else if (SoundStream* stream = system.GetSoundStream())
+      stream->SetVolume(0);
+  }
   void SetRollbackSpeedAdjustment(double factor) override
   {
     Timing().SetRollbackSpeedAdjustment(factor);

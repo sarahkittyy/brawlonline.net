@@ -423,6 +423,15 @@ def test_a_spectator_joins_a_set_mid_game_and_watches_it_live(
     (out / "samples.json").write_text(json.dumps(samples, indent=1))
     states = [s["file"].get("state") for s in samples]
     print("viewer states:", sorted(set(s for s in states if s)))
+    from ppharness.recomp import RecompInstance
+    if isinstance(v.inst, RecompInstance):
+        # An EmissaryRecomp viewer's catch-ups run muted, as Dolphin's do (Engine::SetPlaybackMuted): its output
+        # dropped until normal play (its `recomp audio: unmuted` lines).
+        muted = [float(m.group(1)) for m in re.finditer(r"recomp audio: unmuted, ([\d.]+) s of sound dropped",
+                                                        _viewer_log(v))]
+        print(f"the recomp viewer's muted catch-ups: {muted} s of sound dropped", flush=True)
+        # (A catch-up can be a few frames long, the viewer just behind live: then there is next to nothing to drop.)
+        assert muted, "the recomp's catch-up was not muted"
     assert "loading" in states, "it waited for the game's first frames"
     # Game 2, there from its start (the user, 2026-10-14): from its first frame at normal speed,
     # behind the players by the stream's delay, never catching up by itself...

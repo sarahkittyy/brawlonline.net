@@ -7,7 +7,6 @@
 
 #include "Common/CommonTypes.h"
 
-class SoundStream;
 namespace Fifo
 {
 class FifoManager;
@@ -33,7 +32,6 @@ public:
   Fifo::FifoManager& GetFifo() const;
   PowerPC::PowerPCManager& GetPowerPC() const;
   PowerPC::PowerPCState& GetPPCState() const;
-  SoundStream* GetSoundStream() const { return nullptr; }
   bool IsDualCoreMode() const;
   bool IsWii() const { return true; }
 

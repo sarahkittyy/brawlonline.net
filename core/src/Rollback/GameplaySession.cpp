@@ -47,8 +47,6 @@
 #include "Core/Brawlback/include/gekkonet/GekkoLib/include/gekkonet.h"
 #include "Core/Config/GraphicsSettings.h"
 #include "Core/Config/MainSettings.h"
-#include "AudioCommon/AudioCommon.h"
-#include "AudioCommon/SoundStream.h"
 #include "Core/ConfigManager.h"
 #include "Core/Core.h"
 #include "Core/HW/CPU.h"
@@ -979,8 +977,8 @@ struct State
     bool join_catch_up = false;      // ... and the barrier started that catch-up
     bool catch_up = false;
     // The catch-up a spectator starts with runs muted, as does a seek's fast-forward made during
-    // it, until normal play (a click on the game plays at once): the sound stream's volume is 0
-    // meanwhile and comes back from the user's settings after (UpdateSoundStream). Any other
+    // it, until normal play (a click on the game plays at once): the game's sound is silenced
+    // meanwhile and comes back from the user's settings after (PlaybackMute). Any other
     // forward run of a live playback is muted while it runs (bug report #309).
     bool joining = false;
     bool muted = false;
@@ -4672,21 +4670,14 @@ GameResult ReadGameResult(Core::System& system)
 }
 void CostSessionEnd();
 
-// The sound stream at 0 volume, or back to the user's settings (never their saved settings).
-void PlaybackMute(Core::System& system, bool mute)
+// The game's sound silenced, or back to the user's settings (never their saved settings): the
+// engine's (Engine::SetPlaybackMuted).
+void PlaybackMute(bool mute)
 {
   if (s.pb.muted == mute)
     return;
   s.pb.muted = mute;
-  if (mute)
-  {
-    if (SoundStream* stream = system.GetSoundStream())
-      stream->SetVolume(0);
-  }
-  else
-  {
-    AudioCommon::UpdateSoundStream(system);
-  }
+  BrawlOnline::GetEngine().SetPlaybackMuted(mute);
 }
 
 // The throttle's paced sleep before the next loop top (CoreTimingManager::SetPacedSleepLead). A
@@ -4880,7 +4871,7 @@ void EndRunning(Core::System& system, const std::string& reason)
     // desync with DESYNC DETECTED, a quit of a 3-4 player match as that player's own.
     s.phase = Phase::Ended;
     s.pb.finished = true;
-    PlaybackMute(system, false);
+    PlaybackMute(false);
     if (reason == "replay ended")
     {
       const std::string& m = s.pb.end_method;
@@ -7938,7 +7929,7 @@ PlaybackStep PlaybackLoopTopControls(Core::System& system)
       pb.clip_ff = false;
       pb.seek_ff = false;
     }
-    PlaybackMute(system, pb.joining || pb.clip_ff || pb.seek_ff || (pb.live && (ff || pb.catch_up)));
+    PlaybackMute(pb.joining || pb.clip_ff || pb.seek_ff || (pb.live && (ff || pb.catch_up)));
     const bool waiting = !ff && LiveWaiting(f);
     // A highlight's end, or clip mode's: paused there (the launcher plays the next one, or it
     // stays). Stepped past while paused, it is passed all the same.

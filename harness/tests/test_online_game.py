@@ -36,6 +36,8 @@ from ppharness.backend import OnlineBackend, OnlineUser
 from ppharness.client import HarnessClient, PadInput
 from ppharness.instance import DolphinInstance, InstanceConfig
 from ppharness.netsim import LinkProfile, NetProfile, NetSim, Spike
+from ppharness import crossplay
+from ppharness.recomp import wants_recomp
 
 from test_online import _logged_in, _make_backend, _wait
 
@@ -1095,6 +1097,130 @@ def test_direct_set_time_sync(backend: OnlineBackend, dolphin: Callable[..., Dol
         for p in s["pacing"]:
             print(f"{name} pacing: {p}", flush=True)
     problems = [p for name, s in sync.items() for p in _check_time_sync(name, s, case)]
+    assert not problems, problems
+
+
+# An EmissaryRecomp's audio per match (docs/design/brawl-online-core.md §10.4): its AI DMA blocks played against the
+# shown timeline, those held for rollback re-runs against the re-runs' own time, those played while a re-run ran, and
+# its output queue.
+AUDIO_LINE = re.compile(
+    r"recomp audio: played (\d+) blocks \(([\d.]+) s\) for (-?[\d.]+) s shown \((-?[\d.]+)%\), held (\d+) for "
+    r"re-runs \(([\d.]+) s; re-runs ([\d.]+) s\), (\d+) in load waits, (\d+) played during re-runs, (\d+) muted; "
+    r"output queue avg ([\d.]+) ms, max ([\d.]+) ms, (\d+) of (\d+) blocks dropped")
+AUDIO_BLOCK_S = 0x180 / (32000 * 4)  # one AI DMA block: 0x180 bytes of 32 kHz stereo, 3 ms
+
+
+def recomp_audio(g: Game) -> list[dict[str, Any]]:
+    """An EmissaryRecomp's `recomp audio` lines, one per match."""
+    text = (g.inst.user_dir / "Logs" / "dolphin.log").read_text(errors="replace")
+    keys = ("played", "played_s", "shown_s", "percent", "held", "held_s", "reruns_s", "load_held", "played_in_reruns",
+            "muted", "queue_avg_ms", "queue_max_ms", "dropped", "offered")
+    return [{k: (float(v) if "." in v else int(v)) for k, v in zip(keys, m.groups())} for m in AUDIO_LINE.finditer(text)]
+
+
+def _pcm_to_wav(pcm: Path) -> Path | None:
+    """WIICOMPILED_AUDIO_DUMP's raw 32 kHz stereo 16-bit PCM as a WAV beside it."""
+    import wave
+    if not pcm.exists() or pcm.stat().st_size == 0:
+        return None
+    out = pcm.with_suffix(".wav")
+    with wave.open(str(out), "wb") as w:
+        w.setnchannels(2)
+        w.setsampwidth(2)
+        w.setframerate(32000)
+        w.writeframes(pcm.read_bytes())
+    pcm.unlink()
+    return out
+
+
+@pytest.mark.slow
+@crossplay.VARIANTS
+@pytest.mark.parametrize("rerun_audio", ["waits", "advance"])
+def test_direct_set_recomp_audio_follows_the_shown_frames(backend: OnlineBackend,
+                                                           dolphin: Callable[..., DolphinInstance],
+                                                           gpu_backend: str, variant: str, rerun_audio: str,
+                                                           monkeypatch: pytest.MonkeyPatch) -> None:
+    """The audio clock waits for rollback re-runs on an EmissaryRecomp, as on Dolphin (CoreTiming's
+    SetRollbackAudioWaits; the recomp's AI DMA, hle_stubs.h Audio_HLE_SetRollbackWaits): a three-game Direct set
+    over bad_wifi (a rollback every few frames), a recomp against Dolphin or against a recomp. Per match, each recomp's
+    `recomp audio` line must show its audio played for the shown timeline only (100% +- 1% of it: the timeline less
+    the re-runs and load waits), the blocks it held for re-runs as long as the re-runs (+-5%), next to none played
+    while a re-run ran (under 10% of the re-runs' blocks), and its output queue dropping under 1% of its blocks.
+    `advance` (PPR_GPRB_RESIM_AUDIO=advance on the recomps: the waits off, the audio as it was before them) is the
+    A side: the re-runs' audio played too, at once, so the audio ran ahead of the shown timeline by the re-runs. The
+    recomps' sound goes to run/artifacts/game-bridge/recomp-audio-<variant>-<rerun_audio>/: <instance>-ai-set.wav
+    (WIICOMPILED_AUDIO_DUMP: what the AI DMA sent to the output) and <instance>-heard-set.wav
+    (WIICOMPILED_AUDIO_DUMP_OUTPUT: what the output queue took, as it was played)."""
+    out = ARTIFACTS / f"recomp-audio-{variant}-{rerun_audio}"
+    shutil.rmtree(out, ignore_errors=True)
+    out.mkdir(parents=True, exist_ok=True)
+    rep: dict[str, Any] = {}
+    games: list[Game] = []
+
+    def body(factory: Callable[..., DolphinInstance]) -> None:
+        sims, inis = _p2p_through_netsim("bad_wifi")
+        env: list[dict[str, str] | None] = []
+        for name in ("game-a", "game-b"):
+            e: dict[str, str] | None = None
+            if wants_recomp(name):
+                e = {"WIICOMPILED_AUDIO_DUMP": str(out / f"{name}-ai.pcm"),
+                     "WIICOMPILED_AUDIO_DUMP_OUTPUT": str(out / f"{name}-heard.pcm")}
+                if rerun_audio == "advance":
+                    e["PPR_GPRB_RESIM_AUDIO"] = "advance"
+            env.append(e)
+        try:
+            a, b, ua, ub = _connected_direct(backend, factory, gpu_backend, f"recomp-audio-{rerun_audio}",
+                                             ("aura", "audi"), stocks=5, dolphin_ini=inis, env=(env[0], env[1]))
+            games.extend((a, b))
+            rep.update(online_set.play_set([a, b], games=3, mode="direct"))
+            for g in (a, b):
+                g.c.mm_cancel()
+        finally:
+            for sim in sims:
+                sim.stop()
+
+    crossplay.run(variant, "b$", "[ab]$", monkeypatch, backend, dolphin, body)
+    from ppharness.recomp import RecompInstance
+    lines = {g.inst.name: recomp_audio(g) for g in games if isinstance(g.inst, RecompInstance)}
+    wavs = {}
+    for pcm in sorted(out.glob("*.pcm")):
+        # (The dump is flushed per block; the recomp may still be running: the copy is what it played so far.)
+        copy = out / f"{pcm.stem}-set.pcm"
+        shutil.copyfile(pcm, copy)
+        wavs[pcm.stem] = str(_pcm_to_wav(copy))
+    (out / "audio.json").write_text(json.dumps({"variant": variant, "rerun_audio": rerun_audio, "audio": lines,
+                                                "rollbacks": [g["rollbacks"] for g in rep["games"]],
+                                                "wav": wavs}, indent=1))
+    problems = []
+    for name, ls in lines.items():
+        for i, l in enumerate(ls):
+            print(f"{name} match {i + 1}: {l}", flush=True)
+        if len(ls) < 3:
+            problems.append(f"{name}: {len(ls)} recomp audio lines for 3 games")
+        reruns = sum(l["reruns_s"] for l in ls)
+        if reruns < 1.0:
+            problems.append(f"{name}: only {reruns:.2f} s of re-runs over the set: too few rollbacks to tell")
+        for i, l in enumerate(ls):
+            rerun_blocks = l["reruns_s"] / AUDIO_BLOCK_S
+            if rerun_audio == "waits":
+                if abs(l["percent"] - 100) > 1.0:
+                    problems.append(f"{name} match {i + 1}: audio {l['percent']:.2f}% of the shown timeline")
+                if abs(l["held_s"] - l["reruns_s"]) > max(0.05 * l["reruns_s"], 0.05):
+                    problems.append(f"{name} match {i + 1}: held {l['held_s']:.3f} s for {l['reruns_s']:.3f} s of re-runs")
+                if l["played_in_reruns"] > 0.1 * rerun_blocks + 2:
+                    problems.append(f"{name} match {i + 1}: {l['played_in_reruns']} blocks played during re-runs "
+                                    f"({rerun_blocks:.0f} blocks of re-runs)")
+                if l["dropped"] > 0.01 * l["offered"]:
+                    problems.append(f"{name} match {i + 1}: the output queue dropped {l['dropped']} of {l['offered']}")
+            else:
+                if l["held"] or l["load_held"]:
+                    problems.append(f"{name} match {i + 1}: held {l['held']} + {l['load_held']} blocks with the waits off")
+                if l["played_in_reruns"] < 0.8 * rerun_blocks:
+                    problems.append(f"{name} match {i + 1}: {l['played_in_reruns']} blocks during {rerun_blocks:.0f} of re-runs")
+                if l["reruns_s"] > 0.2 and l["percent"] < 100 + 50 * l["reruns_s"] / max(l["shown_s"], 1):
+                    problems.append(f"{name} match {i + 1}: audio {l['percent']:.2f}% of the shown timeline "
+                                    f"with {l['reruns_s']:.2f} s of re-runs played")
+    assert lines, "no recomp played"
     assert not problems, problems
 
 
