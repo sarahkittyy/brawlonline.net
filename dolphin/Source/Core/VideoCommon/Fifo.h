@@ -4,6 +4,7 @@
 #pragma once
 
 #include <atomic>
+#include <condition_variable>
 #include <cstddef>
 #include <deque>
 #include <mutex>
@@ -70,6 +71,34 @@ public:
   // The deterministic GPU thread: once the CPU thread has preprocessed the FIFO data at hand, it
   // waits for the video thread to run it (an EFB copy a session writes to guest RAM; CPU thread).
   void SyncAfterPreprocess() { m_sync_after_preprocess = true; }
+
+  // Deterministic dual core, CPU thread: waits until the GPU thread has reached the sync point
+  // recorded by the latest preprocessed draw done or token (m_pp_pending_sync_seq), without
+  // blocking behind Presenter's present sleep or commands preprocessed after that sync. Used by
+  // PixelEngine draw sync in whole-machine sessions so the game can safely reuse vertex/texture
+  // buffers (bug #151) without stalling behind present pacing.
+  void WaitForGpuReads();
+  // Deterministic dual core, CPU thread (preprocess): notes a command that reads guest RAM
+  // (primitive/display list, indexed XF load, TLUT load, TMEM preload) since the last sync BP.
+  void NotePreprocessRead() { m_pp_dirty = true; }
+  // Deterministic dual core, CPU thread (preprocess): records one of the four sync BPs
+  // (BPMEM_TRIGGER_EFB_COPY, BPMEM_SETDRAWDONE, BPMEM_PE_TOKEN_ID, BPMEM_PE_TOKEN_INT_ID) that
+  // run 1-for-1 with OnGpuSyncBP() on the GPU thread.
+  void OnPreprocessSyncBP(bool flushes_always, bool raises_sync, bool in_display_list);
+  // Deterministic dual core, GPU thread (LoadBPReg): publishes completion of one of the four
+  // sync BPs.
+  void OnGpuSyncBP();
+  // GPU thread, right before Present's hold sleep / swap: publishes that the EFB->XFB copy in
+  // progress has already finished reading guest RAM (its commands are done; only the present
+  // sleep and swap remain).
+  void PublishGpuReadSeqAhead();
+
+  // Deterministic dual core, CPU thread: aborts unexecuted GPU commands from the rolled-back
+  // timeline when the target snapshot's video state is already captured, then resets the video and
+  // aux FIFOs before LoadFromBuffer + RestoreVideoState. Returns microseconds spent waiting.
+  u64 SyncGPUForRollbackLoad();
+  bool AbortForRollback() const { return m_abort_for_rollback.load(std::memory_order_relaxed); }
+
 
   // In single core mode, this runs the GPU for a single slice.
   // In dual core mode, this synchronizes with the GPU thread.
@@ -174,6 +203,25 @@ private:
   std::vector<u8> m_rollback_fifo_tail;
   bool m_rollback_fifo_pending = false;
   bool m_sync_after_preprocess = false;
+
+  // Deterministic dual core read-sync (WaitForGpuReads): only the four sync BPs (EFB copy, draw
+  // done, PE tokens) advance m_pp_sync_seq on the CPU thread and m_gpu_sync_seq_local on the GPU
+  // thread 1-for-1; m_pp_dirty is CPU-only.
+  void PublishGpuReadSeq(u64 seq);
+  // The sync sequence, with the video FIFO emptied (GPU thread idle).
+  void ResetGpuSyncState();
+  u64 m_pp_sync_seq = 0;
+  u64 m_pp_last_flush_seq = 0;
+  u64 m_pp_pending_sync_seq = 0;
+  bool m_pp_dirty = false;
+  u64 m_gpu_sync_seq_local = 0;
+  std::atomic<u64> m_gpu_sync_seq{0};
+  std::atomic<bool> m_read_seq_waiting{false};
+  std::mutex m_read_seq_mutex;
+  std::condition_variable m_read_seq_cv;
+
+  // Rollback load abort (deterministic dual core).
+  std::atomic<bool> m_abort_for_rollback{false};
 
   std::atomic<int> m_sync_ticks = 0;
   bool m_syncing_suspended = false;

@@ -126,6 +126,7 @@ using Clock = std::chrono::steady_clock;
 // docs/design/brawl-mods.md 6.4), and the weight of each new rollback in the average.
 constexpr double BURST_MS_PER_FRAME_START = 5.0;
 constexpr double BURST_AVERAGE_WEIGHT = 0.25;
+constexpr double BURST_MS_START = 6.0;
 
 // The Brawl game loop (main.dol; the same in every Brawl build).
 constexpr u32 BRAWL_LOOP_TOP = 0x800171b4;      // li r25,1
@@ -759,6 +760,19 @@ struct State
   Clock::time_point burst_start{};
   int burst_frames = 0;
   double burst_ms_per_frame = BURST_MS_PER_FRAME_START;
+  // The same, a whole rollback's time (an average): how close to the boundary a remote input may
+  // come and still roll back before it (BoundarySleep).
+  double burst_ms = BURST_MS_START;
+  // While the session runs: its frames are paced at their boundary (BoundarySleep, with the
+  // throttle's reserve), and the presenter holds none (PresentHoldUntil, video thread).
+  std::atomic<bool> paced_at_boundary{false};
+  // The scheduled host time of the boundary the last wait for frames came to (BoundarySleep's
+  // `due`): a rollback's presented frame starts no earlier (BeginPass).
+  Clock::time_point boundary_due{};
+  // During the update after a boundary sleep that ended within a rollback's time of the boundary:
+  // GekkoNet takes no packets (GekkoReceive) and no suggestions, so a remote input that came in
+  // that time rolls back in the next frame's sleep instead of making this frame late.
+  bool hold_rx = false;
   u64 load_mismatches = 0;
   Clock::time_point desync_notice_at{};  // the last desync the players were told of
   u32 desync_lines = 0, desync_unlogged = 0;  // since that notice: frames logged, and not
@@ -3257,6 +3271,11 @@ void GekkoSend(GekkoNetAddress* addr, const char* data, int length)
 
 GekkoNetResult** GekkoReceive(int* length)
 {
+  if (s.hold_rx)
+  {
+    *length = 0;
+    return nullptr;
+  }
   std::lock_guard lk(s.net_mutex);
   s.gekko_rx_ptrs.clear();
   for (auto& [slot, data] : s.gekko_rx)
@@ -3936,6 +3955,8 @@ void SuggestNoteLocalInput(int frame, Clock::time_point read, const u8* in)
 // for their players' predictions.
 void TakeSuggestions()
 {
+  if (s.hold_rx)
+    return;
   std::deque<std::pair<int, std::vector<u8>>> rx;
   {
     std::lock_guard lk(s.net_mutex);
@@ -7389,20 +7410,88 @@ void LateEndOfFrame();
 // at the session's average per frame, and a margin), looked at again as remote inputs come in
 // during it; with none pending it sleeps to `due` as before. PPR_MACHINE_RERUN_IN_SLEEP=0: the
 // whole sleep always (A/B).
-void BoundarySleep(CoreTiming::CoreTimingManager& ct, Clock::time_point due)
+bool RerunInSleep()
 {
-  static const bool rerun_in_sleep = [] {
+  static const bool on = [] {
     const char* e = std::getenv("PPR_MACHINE_RERUN_IN_SLEEP");
     return !(e && *e == '0');
   }();
-  constexpr auto SLICE = std::chrono::milliseconds(2);
+  return on;
+}
+
+bool BoundarySleepOn()
+{
+  static const bool on = [] {
+    const char* e = std::getenv("PPR_MACHINE_BOUNDARY_SLEEP");
+    return !(e && *e == '0');
+  }();
+  return on;
+}
+
+// How far ahead of schedule the throttle keeps the CPU thread in a running session
+// (CoreTimingManager::SetThrottleReserve): the session's average rollback time and a margin,
+// 4-10 ms. The throttle sleeps at a game's SI polls and Wii Remote updates, the first after a
+// presented copy sleeping to its schedule: a game that copies early in the field (SoulCalibur II),
+// a Wii game (a Wii Remote update every ~5 ms) or P+ came to the boundary with no time left there,
+// so a rollback ran after the sleep and made its frame late. With the reserve the boundary sleep
+// has the time; unused, it sleeps it out, and the local controller is read at the boundary's time
+// as before. PPR_MACHINE_THROTTLE_RESERVE_MS: the reserve in ms (0: none, A/B).
+DT ThrottleReserve()
+{
+  static const double override_ms = [] {
+    const char* e = std::getenv("PPR_MACHINE_THROTTLE_RESERVE_MS");
+    return e ? std::atof(e) : -1.0;
+  }();
+  if (!BoundarySleepOn() || !RerunInSleep())
+    return {};
+  const double ms = override_ms >= 0 ? override_ms : std::clamp(s.burst_ms + 2.0, 4.0, 10.0);
+  return std::chrono::duration_cast<DT>(std::chrono::duration<double, std::milli>(ms));
+}
+
+// Pacing off, when the session stops or ends.
+void StopPacing(CoreTiming::CoreTimingManager& ct)
+{
+  ct.SetPresentPacing(false);
+  ct.SetThrottleReserve({});
+  s.paced_at_boundary.store(false, std::memory_order_relaxed);
+}
+
+// When it returns true, the sleep ended within a rollback's time of `due` (the session's average,
+// 5.5-8 ms) and GekkoNet takes no packets in the update after it (hold_rx). A remote input that
+// comes that late would start a rollback that ends after `due`, making this frame late; held, it
+// rolls back early in the next frame's sleep, which has the time. Inputs taken before then still
+// end the sleep early for their rollback, as above. PPR_MACHINE_DEFER_LATE_RX_MS: that time in ms
+// (0: never hold, A/B).
+bool BoundarySleep(Core::System& system, CoreTiming::CoreTimingManager& ct, Clock::time_point due)
+{
+  const bool rerun_in_sleep = RerunInSleep();
+  static const double defer_ms_override = [] {
+    const char* e = std::getenv("PPR_MACHINE_DEFER_LATE_RX_MS");
+    return e ? std::atof(e) : -1.0;
+  }();
+  const double defer_ms =
+      defer_ms_override >= 0 ? defer_ms_override : std::clamp(s.burst_ms + 0.5, 5.5, 8.0);
+  const auto defer = std::chrono::duration_cast<Clock::duration>(
+      std::chrono::duration<double, std::milli>(defer_ms));
+  // The slices are OS sleeps: the precision timer spins the last ~1 ms of every sleep
+  // (Common::PrecisionTimer), so slices of it spun the whole sleep. The last few ms, and the held
+  // part, are one SleepUntil.
+  constexpr auto SLICE = std::chrono::milliseconds(1);
+  constexpr auto FINAL = std::chrono::milliseconds(3);
   constexpr auto MARGIN = std::chrono::milliseconds(1);
+  auto& cpu = system.GetCPU();
+  bool first = true;
   for (;;)
   {
+    if (s.phase != Phase::Running || cpu.GetState() != CPU::State::Running)
+      return false;
+    const auto now = Clock::now();
+    const bool hold = defer > Clock::duration::zero() && due - now <= defer && !s.plan.active;
     auto wake = due;
-    if (rerun_in_sleep && s.gekko)
+    if (rerun_in_sleep && s.gekko && !Rollback::PresentStats::IsGpuInPresentHold())
     {
-      ReceiveRemote();
+      if (first || !hold)
+        ReceiveRemote();
       if (const int frames = gekko_rollback_frames(s.gekko); frames > 0)
       {
         wake -= std::chrono::duration_cast<Clock::duration>(
@@ -7410,15 +7499,20 @@ void BoundarySleep(CoreTiming::CoreTimingManager& ct, Clock::time_point due)
                 MARGIN;
       }
     }
-    const auto now = Clock::now();
+    first = false;
     if (now >= wake)
-      return;
+      return hold;
     s.mutex.unlock();
     {
       Rollback::FrameProfile::Scope sleep_scope{Rollback::FrameProfile::AddThrottle};
-      ct.SleepUntil(rerun_in_sleep ? std::min(wake, now + SLICE) : wake);
+      if (hold || !rerun_in_sleep || wake - now <= FINAL)
+        ct.SleepUntil(wake);
+      else
+        std::this_thread::sleep_for(SLICE);
     }
     s.mutex.lock();
+    if (hold)
+      return true;
   }
 }
 
@@ -7433,19 +7527,20 @@ Wait WaitForFrames(Core::System& system)
   // Each limit counts from the start of its own phase: an epoch (or a joiner's wait for the
   // machine image) can take up to EPOCH_TIMEOUT inside this same wait, and the handshake after it
   // gets its own CONNECT_LIMIT.
-  // The boundary sleep (on; PPR_MACHINE_BOUNDARY_SLEEP=0: off): at a VI-field boundary the
-  // throttle's sleep comes before the local controller is read, not at the frame's first SI poll
-  // or Wii Remote update after it, so the read is as fresh as the game's own and still sent at the
-  // frame's start (docs/design/brawl-mods.md 6.2).
-  static const bool boundary_sleep = [] {
-    const char* e = std::getenv("PPR_MACHINE_BOUNDARY_SLEEP");
-    return !(e && *e == '0');
-  }();
-  if (boundary_sleep && s.phase == Phase::Running && SessionBoundary() == Boundary::ViField)
+  // The boundary sleep (on; PPR_MACHINE_BOUNDARY_SLEEP=0: off): at the frame's boundary (a VI
+  // field, or Brawl's loop) the throttle's sleep comes before the local controller is read, not at
+  // the frame's first SI poll or Wii Remote update after it, so the read is as fresh as the game's
+  // own and still sent at the frame's start (docs/design/brawl-mods.md 6.2).
+  bool hold_rx = false;
+  s.boundary_due = {};
+  if (BoundarySleepOn() && s.phase == Phase::Running)
   {
     auto& ct = system.GetCoreTiming();
     if (const auto due = ct.ScheduledHostTime(); due && *due > Clock::now())
-      BoundarySleep(ct, *due);
+    {
+      s.boundary_due = *due;
+      hold_rx = BoundarySleep(system, ct, *due);
+    }
   }
   Phase timed_phase = s.phase;
   auto since = Clock::now();
@@ -7505,6 +7600,7 @@ Wait WaitForFrames(Core::System& system)
         // frame is shown at its copy's due time, not whenever the throttle let the CPU reach the
         // copy (bug #30: a REX room's frames came 16 ms apart with a 21 ms gap every seventh).
         system.GetCoreTiming().SetPresentPacing(true);
+        s.paced_at_boundary.store(true, std::memory_order_relaxed);
         AddLog("running");
         OSD::AddMessage("Session started", 3000, OSD::Color::GREEN);
       }
@@ -7515,12 +7611,14 @@ Wait WaitForFrames(Core::System& system)
     }
     if (s.phase == Phase::Running)
     {
+      s.hold_rx = std::exchange(hold_rx, false);
       DropLeftPeers();
       UpdateLocalRequest();
       if (s.late_input)
         LateEndOfFrame();
       CaptureLocalInput();
       Update(system);
+      s.hold_rx = false;
       if (s.phase == Phase::Error)
         return Wait::Ended;
       UpdatePingDisplay();
@@ -7863,12 +7961,13 @@ void BeginPass(Core::System& system)
       s_schedule_log_until = -1;
     }
   }
-  if (!s.resim && s.burst_frames > 0)
+  const bool after_rollback = !s.resim && s.burst_frames > 0;
+  if (after_rollback)
   {
     const double ms =
-        std::chrono::duration<double, std::milli>(Clock::now() - s.burst_start).count() /
-        s.burst_frames;
-    s.burst_ms_per_frame += (ms - s.burst_ms_per_frame) * BURST_AVERAGE_WEIGHT;
+        std::chrono::duration<double, std::milli>(Clock::now() - s.burst_start).count();
+    s.burst_ms_per_frame += (ms / s.burst_frames - s.burst_ms_per_frame) * BURST_AVERAGE_WEIGHT;
+    s.burst_ms += (ms - s.burst_ms) * BURST_AVERAGE_WEIGHT;
     s.burst_frames = 0;
   }
   if (!s.resim)
@@ -7887,6 +7986,20 @@ void BeginPass(Core::System& system)
   core_timing.SetRollbackResimulating(s.resim);
   UpdateTimeSync(system);
   core_timing.SetRollbackSpeedAdjustment(s.speed);
+  if (!s.resim)
+    core_timing.SetThrottleReserve(ThrottleReserve());
+  if (after_rollback && Clock::now() < s.boundary_due)
+  {
+    // The rest of the boundary sleep the rollback ended early by (BoundarySleep ends early by its
+    // expected time): a frame without one starts at its boundary's time too. Starting at once,
+    // its picture came early, and the next one a field and that much after it.
+    s.mutex.unlock();
+    {
+      Rollback::FrameProfile::Scope sleep_scope{Rollback::FrameProfile::AddThrottle};
+      core_timing.SleepUntil(s.boundary_due);
+    }
+    s.mutex.lock();
+  }
   PaceFrame(system, s.resim);
   if (!s.resim)
     Rollback::PresentStats::OnDisplayedFrameStart(s.ops.count > 1);
@@ -8376,6 +8489,7 @@ bool Arm(const Options& options, std::string* error)
   s.loaded.reset();
   s.burst_frames = 0;
   s.burst_ms_per_frame = BURST_MS_PER_FRAME_START;
+  s.burst_ms = BURST_MS_START;
   s.load_mismatches = 0;
   s.desyncs = s.saves = 0;
   s.last_desync_frame = -1;
@@ -8452,7 +8566,7 @@ void Stop()
   Rollback::RollbackManager::Get().m_full_ios_in_snapshots = false;
   Rollback::RollbackManager::Get().SetChecksumMasks({});
   Rollback::PresentStats::SetCopiesLeaveGuestRAM(false);
-  Core::System::GetInstance().GetCoreTiming().SetPresentPacing(false);
+  StopPacing(Core::System::GetInstance().GetCoreTiming());
   if (auto* fs = HostFS(Core::System::GetInstance()))
     fs->JournalStop();
   s.journal_marks.clear();
@@ -8777,6 +8891,11 @@ std::string ProbeState()
 bool IsRunning()
 {
   return s.phase == Phase::Running;
+}
+
+bool PacedAtBoundary()
+{
+  return s.paced_at_boundary.load(std::memory_order_relaxed);
 }
 
 void SetSDSyncChoice(SDSyncChoice choice)
@@ -9564,7 +9683,7 @@ Top FrameTop(Core::System& system)
   {
     system.GetCoreTiming().SetRollbackResimulating(false);
     system.GetCoreTiming().SetRollbackSpeedAdjustment(1.0);
-    system.GetCoreTiming().SetPresentPacing(false);
+    StopPacing(system.GetCoreTiming());
     return Top::Run;
   }
 
@@ -9580,8 +9699,8 @@ Top FrameTop(Core::System& system)
       // The session ended: from here the game runs on its own (as a local game).
       system.GetCoreTiming().SetRollbackResimulating(false);
       system.GetCoreTiming().SetRollbackSpeedAdjustment(1.0);
-      system.GetCoreTiming().SetPresentPacing(false);
-      return Top::Run;
+      StopPacing(system.GetCoreTiming());
+        return Top::Run;
     case Wait::Yield:
       s.ops.count = 0;
       return Top::Yield;
