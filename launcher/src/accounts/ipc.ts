@@ -26,6 +26,8 @@ import type {
   RulesetPage,
   RulesetView,
   SignUpRequest,
+  TwitchLink,
+  TwitchStream,
 } from "./types";
 
 type R<T> = AccountsResult<T>;
@@ -86,6 +88,26 @@ export const ipc_accountsUpdateProfile = makeEndpoint.main(
   "accounts_updateProfile",
   <{ uid: string; update: ProfileUpdate }>_,
   <R<PlayerProfile>>_,
+);
+
+export const ipc_accountsTwitchLink = makeEndpoint.main("accounts_twitchLink", <{ uid: string }>_, <R<TwitchLink>>_);
+
+export const ipc_accountsTwitchConnect = makeEndpoint.main(
+  "accounts_twitchConnect",
+  <{ uid: string }>_,
+  <R<{ url: string }>>_,
+);
+
+export const ipc_accountsTwitchDisconnect = makeEndpoint.main(
+  "accounts_twitchDisconnect",
+  <{ uid: string }>_,
+  <R<void>>_,
+);
+
+export const ipc_accountsTwitchStreams = makeEndpoint.main(
+  "accounts_twitchStreams",
+  <{ uid: string }>_,
+  <R<TwitchStream[]>>_,
 );
 
 export const ipc_accountsLauncherSettings = makeEndpoint.main(

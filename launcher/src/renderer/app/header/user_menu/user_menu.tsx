@@ -16,6 +16,7 @@ import { useMainPictures } from "@/lib/hooks/use_main_pictures";
 import { useOwnProfileHint } from "@/lib/hooks/use_own_profile_hint";
 import { useProfileView } from "@/lib/hooks/use_profile_view";
 import { useToasts } from "@/lib/hooks/use_toasts";
+import { useTwitchHint } from "@/lib/twitch/use_twitch";
 import { useServices } from "@/services";
 import type { AuthUser } from "@/services/auth/types";
 import { SessionExpiredError } from "@/services/auth/types";
@@ -191,7 +192,9 @@ export const UserMenu = ({
   }
 
   // Until this client's player has clicked their own profile's edit pencil: the name glows gold, then the pencil.
-  const glowProfile = !ownProfileOpened && !!userData?.playKey && !errMessage && !loading;
+  // A typed Twitch handle never connected brings it back (lib/twitch/use_twitch.ts).
+  const twitchHint = useTwitchHint();
+  const glowProfile = (!ownProfileOpened || twitchHint) && !!userData?.playKey && !errMessage && !loading;
 
   const card = (
     <ButtonBase

@@ -31,6 +31,8 @@ import type {
   RulesetPage,
   RulesetView,
   SocialPlatform,
+  TwitchLink,
+  TwitchStream,
   UserData,
 } from "./types";
 
@@ -491,6 +493,29 @@ class MockBackendClient implements BackendService {
         : others;
     }
     return { ...mockProfile(fakeUserId), ...mockOwnProfileExtras };
+  }
+
+  private _twitch: TwitchLink = { available: true, linked: null, handle: "demo" };
+
+  @delayAndMaybeError(SHOULD_ERROR)
+  async fetchTwitchLink(): Promise<TwitchLink> {
+    return this._twitch;
+  }
+
+  @delayAndMaybeError(SHOULD_ERROR)
+  async twitchConnectUrl(): Promise<string> {
+    this._twitch = { ...this._twitch, linked: { login: "demo", displayName: "Demo" } };
+    return "https://www.twitch.tv/";
+  }
+
+  @delayAndMaybeError(SHOULD_ERROR)
+  async disconnectTwitch(): Promise<void> {
+    this._twitch = { ...this._twitch, linked: null };
+  }
+
+  @delayAndMaybeError(SHOULD_ERROR)
+  async fetchTwitchStreams(): Promise<TwitchStream[]> {
+    return [];
   }
 
   @delayAndMaybeError(SHOULD_ERROR)

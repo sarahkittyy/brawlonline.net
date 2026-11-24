@@ -330,3 +330,20 @@
 .tools svg {
   font-size: 20px;
 }
+
+/* Spectate's Twitch logo and live games count together, right-aligned (nav_badges.tsx). */
+.badges {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.badges > .badge {
+  margin-left: 0;
+}
+
+/* Folded there is no room beside the icon: the count alone. */
+.folded .badges > svg {
+  display: none;
+}

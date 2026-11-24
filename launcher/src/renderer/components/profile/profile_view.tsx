@@ -13,9 +13,16 @@ import { Flag, NoFlag } from "@/components/flag/flag";
 import { MainIcon, NameBadges } from "@/components/name_badges/name_badges";
 import { RankBadge } from "@/components/rank_badge/rank_badge";
 import { RankBadgeMessages } from "@/components/rank_badge/rank_badge.messages";
+import { TwitchConnection, TwitchStreamPanel } from "@/components/twitch/twitch";
 import { formatPosition, formatRating, HIDDEN_RATING } from "@/lib/ranked_format";
 import { validateDisplayName } from "@/lib/validate/validate";
-import type { PlayerProfile, ProfileSocial, ProfileUpdate, SocialPlatform } from "@/services/backend/types";
+import type {
+  PlayerProfile,
+  ProfileSocial,
+  ProfileUpdate,
+  SocialPlatform,
+  TwitchStream,
+} from "@/services/backend/types";
 
 import { CharacterIcon, useHasStockIcons } from "./character_icon";
 import { CountryPicker, MainsPicker } from "./pickers";
@@ -32,6 +39,8 @@ export type ProfileEditing = {
   rename: (name: string) => Promise<void>;
   /** Mains, country or social media accounts. */
   save: (update: ProfileUpdate) => Promise<void>;
+  /** Connect account glows: the last step of the Twitch hint (lib/twitch/use_twitch.ts). */
+  twitchGlow?: boolean;
 };
 
 /**
@@ -50,6 +59,7 @@ export const ProfileView = React.memo(function ProfileView({
   onCopyText,
   editing = null,
   nameExtra,
+  stream = null,
 }: {
   profile: PlayerProfile;
   actions?: React.ReactNode;
@@ -59,6 +69,8 @@ export const ProfileView = React.memo(function ProfileView({
   /** Copies a Discord username (it has no page to open). */
   onCopyText?: (text: string) => void;
   editing?: ProfileEditing | null;
+  /** The player's Twitch stream while they're live (docs/design/twitch-live.md): under the mains, opens it. */
+  stream?: TwitchStream | null;
 }) {
   const r = profile.ranked;
   const mains = profile.mains ?? [];
@@ -124,6 +136,12 @@ export const ProfileView = React.memo(function ProfileView({
         </div>
       )}
 
+      {stream && (
+        <div className={styles.stream}>
+          <TwitchStreamPanel stream={stream} size="big" />
+        </div>
+      )}
+
       <div className={styles.section}>
         <div className={styles.sectionTitle}>{Messages.ranked()}</div>
         <dl className={styles.stats}>
@@ -140,7 +158,7 @@ export const ProfileView = React.memo(function ProfileView({
         <div className={styles.section}>
           <div className={styles.sectionTitle}>{Messages.socials()}</div>
           {editing ? (
-            <SocialsEditor socials={socials} save={editing.save} />
+            <SocialsEditor socials={socials} save={editing.save} twitchGlow={editing.twitchGlow ?? false} />
           ) : (
             <SocialsRow socials={socials} onCopyText={onCopyText} />
           )}
@@ -418,21 +436,34 @@ const SocialsRow = ({ socials, onCopyText }: { socials: ProfileSocial[]; onCopyT
 const SocialsEditor = ({
   socials,
   save,
+  twitchGlow,
 }: {
   socials: ProfileSocial[];
   save: (update: ProfileUpdate) => Promise<void>;
+  twitchGlow: boolean;
 }) => (
   <div className={styles.socialsEditor} data-testid="profile-socials-editor">
-    {SOCIAL_PLATFORMS.map(({ platform, name, placeholder }) => (
-      <SocialField
-        key={platform}
-        platform={platform}
-        name={name}
-        placeholder={placeholder}
-        value={socials.find((s) => s.platform === platform)?.handle ?? ""}
-        save={save}
-      />
-    ))}
+    {SOCIAL_PLATFORMS.map(({ platform, name, placeholder }) => {
+      const field = (
+        <SocialField
+          key={platform}
+          platform={platform}
+          name={name}
+          placeholder={placeholder}
+          value={socials.find((s) => s.platform === platform)?.handle ?? ""}
+          save={save}
+        />
+      );
+      // Twitch: Connect account beside the handle (docs/design/twitch-live.md); a typed handle never shows as live.
+      return platform === "twitch" ? (
+        <div key={platform} className={styles.socialWithAction}>
+          {field}
+          <TwitchConnection glow={twitchGlow} />
+        </div>
+      ) : (
+        field
+      );
+    })}
   </div>
 );
 

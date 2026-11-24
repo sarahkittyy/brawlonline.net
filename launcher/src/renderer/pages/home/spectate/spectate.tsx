@@ -1,10 +1,12 @@
 import type { LiveGameEntry } from "@spectate/types";
 import React, { useEffect, useRef, useState } from "react";
 
+import { TwitchConnectButton } from "@/components/twitch/twitch";
 import { useLocalStorage } from "@/lib/hooks/use_local_storage";
 import { useLoginModal } from "@/lib/hooks/use_login_modal";
 import { useToasts } from "@/lib/hooks/use_toasts";
 import { useLiveGames, useNow, useSpectateState } from "@/lib/spectate/use_spectate";
+import { useTwitchLink, useTwitchStreams } from "@/lib/twitch/use_twitch";
 
 import { SpectateMessages as Messages } from "./spectate.messages";
 import styles from "./spectate.module.css";
@@ -29,6 +31,8 @@ export const Spectate = React.memo(function Spectate() {
   const [sort, setSort] = useLocalStorage<LiveSort>(SORT_STORAGE_KEY, "newest");
   const [startingId, setStartingId] = useState<string | undefined>();
   const freshIds = useFreshIds(query.data?.games);
+  const streams = useTwitchStreams();
+  const twitch = useTwitchLink();
 
   // The main process keeps Auto play for the stream's end (also when this tab isn't showing).
   useEffect(() => {
@@ -82,6 +86,8 @@ export const Spectate = React.memo(function Spectate() {
         freshIds={freshIds}
         sort={sort === "elo" ? "elo" : "newest"}
         onSortChange={setSort}
+        streams={streams}
+        twitchAction={twitch?.available && !twitch.linked ? <TwitchConnectButton /> : null}
       />
     </div>
   );

@@ -20,6 +20,8 @@ import type {
   RulesetDraftRequest,
   RulesetPage,
   RulesetView,
+  TwitchLink,
+  TwitchStream,
 } from "@accounts/types";
 import type { PlayKey } from "@dolphin/types";
 
@@ -56,6 +58,8 @@ export type {
   RulesetPage,
   RulesetView,
   SocialPlatform,
+  TwitchLink,
+  TwitchStream,
   YourRoom,
 } from "@accounts/types";
 
@@ -98,6 +102,14 @@ export interface BackendService {
   /** The page the header's gold trophy opens, or null for no trophy: the server's `TOURNAMENTS_URL`
    * (docs/trophy-button.md). No login needed. */
   fetchTournamentsUrl(): Promise<string | null>;
+  /** The logged-in player's Twitch connection (docs/design/twitch-live.md). */
+  fetchTwitchLink(): Promise<TwitchLink>;
+  /** The Twitch sign-in address that connects the logged-in player's Twitch account. */
+  twitchConnectUrl(): Promise<string>;
+  /** Disconnects the logged-in player's Twitch account. */
+  disconnectTwitch(): Promise<void>;
+  /** The live streams of players playing Brawl Online, most viewers first. */
+  fetchTwitchStreams(): Promise<TwitchStream[]>;
   /**
    * One leaderboard page; `after` is the previous page's `next`. With `search`, only the players whose
    * name or connect code contains it.

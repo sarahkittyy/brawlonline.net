@@ -10,9 +10,11 @@ import { MainPicture } from "@/components/main_picture/main_picture";
 import { useMainPictureUrl } from "@/components/profile/character_icon";
 import { FriendsIcon } from "@/components/social/friend_icons";
 import { SocialMessages } from "@/components/social/social.messages";
+import { TwitchGlyph } from "@/components/twitch/twitch";
 import { useLocalStorage } from "@/lib/hooks/use_local_storage";
 import { useFriendUids } from "@/lib/social/use_friends";
 import { useSocial } from "@/lib/social/use_social";
+import { useTwitchStream } from "@/lib/twitch/use_twitch";
 import { type PanelTab, OnlinePlayers, TAB_KEY } from "@/pages/home/overview/online_players/online_players";
 
 import styles from "./players_rail.module.css";
@@ -115,11 +117,14 @@ const FoldedRail = ({ onOpen, onOpenFriends }: { onOpen: () => void; onOpenFrien
 
 const FriendPicture = ({ player, onClick }: { player: SocialPlayer; onClick: () => void }) => {
   const url = useMainPictureUrl(player.main, player.mainIcon);
+  // Live on Twitch: the logo over the picture's top-right corner (no room for it beside a name here).
+  const live = useTwitchStream(player.uid) != null;
   return (
     <Tooltip title={player.displayName} placement="left">
       <button type="button" className={styles.friend} onClick={onClick} aria-label={player.displayName}>
         <MainPicture url={url ?? null} size={20} />
         <span className={styles.onlineDot} />
+        {live && <TwitchGlyph size={13} className={styles.twitchCorner} />}
       </button>
     </Tooltip>
   );

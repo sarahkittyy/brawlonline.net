@@ -452,3 +452,12 @@
   text-align: left;
   text-transform: none !important;
 }
+
+/* A live player's Twitch logo (docs/design/twitch-live.md), right-aligned before the flag. */
+.twitch {
+  margin-left: auto;
+}
+
+.twitch ~ .flag {
+  margin-left: 6px;
+}

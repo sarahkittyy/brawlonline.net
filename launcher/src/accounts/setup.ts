@@ -44,6 +44,10 @@ import {
   ipc_accountsSetRoomName,
   ipc_accountsSetRulesetHidden,
   ipc_accountsSignUp,
+  ipc_accountsTwitchConnect,
+  ipc_accountsTwitchDisconnect,
+  ipc_accountsTwitchLink,
+  ipc_accountsTwitchStreams,
   ipc_accountsUpdateProfile,
   ipc_accountsUpdateRulesetDraft,
 } from "./ipc";
@@ -73,6 +77,10 @@ export default function setupAccountsIpc() {
   ipc_accountsProfile.main!.handle(async ({ id }) => await manager.profile(id));
   ipc_accountsUpdateProfile.main!.handle(async ({ uid, update }) => await manager.updateProfile(uid, update));
   ipc_accountsLauncherSettings.main!.handle(async () => await manager.launcherSettings());
+  ipc_accountsTwitchLink.main!.handle(async ({ uid }) => await manager.twitchLink(uid));
+  ipc_accountsTwitchConnect.main!.handle(async ({ uid }) => await manager.twitchConnect(uid));
+  ipc_accountsTwitchDisconnect.main!.handle(async ({ uid }) => await manager.twitchDisconnect(uid));
+  ipc_accountsTwitchStreams.main!.handle(async ({ uid }) => await manager.twitchStreams(uid));
   ipc_accountsLeaderboard.main!.handle(async ({ limit, after, q }) => await manager.leaderboard({ limit, after, q }));
   ipc_accountsMatchHistory.main!.handle(
     async ({ uid, mode, limit, before, opponent }) =>

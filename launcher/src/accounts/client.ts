@@ -28,6 +28,8 @@ import type {
   RulesetPage,
   RulesetView,
   SignUpRequest,
+  TwitchLink,
+  TwitchStream,
   UserJson,
 } from "./types";
 
@@ -119,6 +121,23 @@ export class AccountsHttpClient {
 
   profile(id: string): Promise<PlayerProfile> {
     return this._request("GET", `/v1/profiles/${encodeURIComponent(id)}`, {});
+  }
+
+  twitchLink(token: string): Promise<TwitchLink> {
+    return this._request("GET", "/v1/me/twitch", { token });
+  }
+
+  twitchConnect(token: string): Promise<{ url: string }> {
+    return this._request("POST", "/v1/me/twitch/connect", { token, body: {} });
+  }
+
+  async twitchDisconnect(token: string): Promise<void> {
+    await this._request("DELETE", "/v1/me/twitch", { token });
+  }
+
+  async twitchStreams(token: string): Promise<TwitchStream[]> {
+    const body: { streams: TwitchStream[] } = await this._request("GET", "/v1/twitch/streams", { token });
+    return body.streams;
   }
 
   launcherSettings(): Promise<LauncherSettings> {

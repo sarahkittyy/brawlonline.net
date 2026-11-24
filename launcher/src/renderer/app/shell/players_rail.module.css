@@ -90,3 +90,12 @@
   color: #2a1d05;
   background-color: #e8b45a;
 }
+
+/* A friend live on Twitch (docs/design/twitch-live.md): Twitch's logo over the picture's top-right corner, outlined in
+   the rail's colour so it reads on any main. */
+.twitchCorner {
+  position: absolute;
+  top: -1px;
+  right: -2px;
+  filter: drop-shadow(0 0 1px var(--shell)) drop-shadow(0 0 1px var(--shell));
+}

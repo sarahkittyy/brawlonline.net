@@ -23,6 +23,7 @@ import { useProfileView } from "@/lib/hooks/use_profile_view";
 import { useToasts } from "@/lib/hooks/use_toasts";
 import { inviteBlocked, useSocial, waitsForRoom } from "@/lib/social/use_social";
 import { useSocialActions } from "@/lib/social/use_social_actions";
+import { useTwitchHint, useTwitchHintDone, useTwitchStream } from "@/lib/twitch/use_twitch";
 import { useServices } from "@/services";
 import type { PlayerProfile, ProfileUpdate } from "@/services/backend/types";
 
@@ -37,7 +38,8 @@ import { ProfileView } from "./profile_view";
  * set up (the chat's own actions). The player's own has a pencil beside the X: edit mode (name, mains, country,
  * social media), where every change is saved as it is made; a check in its place leaves it. Under it are Switch account
  * and Log out (the header's name opens it: there is no account menu), and Activate online play / Verify email until
- * they're done. Until the player has clicked that pencil once on this client, it glows gold.
+ * they're done. Until the player has clicked that pencil once on this client, it glows gold; it glows again for a player
+ * with a typed Twitch handle never connected, and then Connect account in edit mode (docs/design/twitch-live.md).
  */
 export const ProfileDialog = React.memo(function ProfileDialog() {
   const target = useProfileView((s) => s.target);
@@ -64,6 +66,13 @@ const ProfileDialogBody = ({ uid, seedName, onClose }: { uid: string; seedName?:
   const own = myUid != null && myUid === uid;
   const pencilFound = useOwnProfileHint((s) => s.opened);
   const markPencilFound = useOwnProfileHint((s) => s.markOpened);
+  const stream = useTwitchStream(uid);
+  // A typed Twitch handle that was never connected: the pencil glows again, then Connect account in edit mode; the
+  // pencil's click ends the hint on this client, connected or not (lib/twitch/use_twitch.ts).
+  const twitchHint = useTwitchHint() && own;
+  const markTwitchHintDone = useTwitchHintDone((s) => s.markDone);
+  const [connectGlow, setConnectGlow] = useState(false);
+  const ownEditing = useMemo(() => ({ ...editing, twitchGlow: connectGlow }), [editing, connectGlow]);
   return (
     <div className={styles.dialog}>
       <ProfileCorner
@@ -85,11 +94,15 @@ const ProfileDialogBody = ({ uid, seedName, onClose }: { uid: string; seedName?:
               </Tooltip>
             ) : (
               <EditPencil
-                glow={!pencilFound}
+                glow={!pencilFound || twitchHint}
                 onClick={() => {
                   setEditMode(true);
                   if (!pencilFound) {
                     markPencilFound();
+                  }
+                  if (twitchHint) {
+                    markTwitchHintDone();
+                    setConnectGlow(true);
                   }
                 }}
               />
@@ -109,7 +122,8 @@ const ProfileDialogBody = ({ uid, seedName, onClose }: { uid: string; seedName?:
             )
           }
           nameExtra={<ProfileFriendPill profile={data} />}
-          editing={own && editMode ? editing : null}
+          editing={own && editMode ? ownEditing : null}
+          stream={stream}
           onCopyLink={(link) => void navigator.clipboard.writeText(link).then(() => showSuccess(Messages.linkCopied()))}
           onCopyText={(text) =>
             void navigator.clipboard.writeText(text).then(() => showSuccess(Messages.discordCopied(text)))

@@ -9,7 +9,9 @@ import { Flag } from "@/components/flag/flag";
 import { MainIcon, NameBadges } from "@/components/name_badges/name_badges";
 import { RankBadge } from "@/components/rank_badge/rank_badge";
 import { RankBadgeMessages } from "@/components/rank_badge/rank_badge.messages";
+import { TwitchStreamPanel } from "@/components/twitch/twitch";
 import { formatRating, HIDDEN_RATING } from "@/lib/ranked_format";
+import { useTwitchStream } from "@/lib/twitch/use_twitch";
 import { useServices } from "@/services";
 
 import { CharacterIcon, useHasStockIcons } from "./character_icon";
@@ -21,7 +23,8 @@ const CARD_MAINS = 8;
 
 /**
  * A name's hover card (docs/design/profiles.md §8): after a short pause on the name, a small profile floats beside it
- * (badge, the admin-given badges and name, code, flag, rank and rating, mains with an admin's custom main icon first). The profile is fetched the first time and kept a few minutes, as
+ * (badge, the admin-given badges and name, code, flag, rank and rating, mains with an admin's custom main icon first,
+ * the player's Twitch stream while they're live). The profile is fetched the first time and kept a few minutes, as
  * the profile dialog's.
  */
 export const MiniProfileTooltip = ({ uid, children }: { uid: string; children: React.ReactElement }) => (
@@ -45,6 +48,7 @@ const MiniProfile = ({ uid }: { uid: string }) => {
     queryFn: () => backendService.fetchProfile(uid),
     staleTime: 5 * 60_000,
   });
+  const stream = useTwitchStream(uid);
   if (!data) {
     return (
       <div className={styles.mini}>
@@ -58,7 +62,8 @@ const MiniProfile = ({ uid }: { uid: string }) => {
   const mainIcon = data.mainIcon ?? null;
   const shownMains = mainIcon ? CARD_MAINS - 1 : CARD_MAINS;
   return (
-    <div className={styles.mini} data-testid="mini-profile">
+    // With a stream, wide enough for its picture and two lines of title beside it.
+    <div className={styles.mini} data-testid="mini-profile" style={stream ? { minWidth: 260 } : undefined}>
       <div className={styles.miniTop}>
         {(r.rank || placing) && <RankBadge rank={r.rank} setsToPlace={placing ? r.setsToPlace : 0} size="small" />}
         <div className={styles.names}>
@@ -91,6 +96,8 @@ const MiniProfile = ({ uid }: { uid: string }) => {
           {mains.length > shownMains && <span className={styles.none}>+{mains.length - shownMains}</span>}
         </div>
       )}
+      {/* Live on Twitch while playing (docs/design/twitch-live.md). */}
+      {stream && <TwitchStreamPanel stream={stream} size="mini" />}
     </div>
   );
 };

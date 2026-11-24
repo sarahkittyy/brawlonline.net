@@ -689,3 +689,20 @@
 .footer .account .todo {
   flex-basis: auto;
 }
+
+/* The player's live Twitch stream (docs/design/twitch-live.md), under the mains. */
+.stream {
+  display: flex;
+}
+
+/* Edit mode's Twitch handle with Connect account (or the connected account) beside it. */
+.socialWithAction {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.socialWithAction > :first-child {
+  flex: 1;
+  min-width: 0;
+}
