@@ -594,8 +594,8 @@ add_library(core
   Online/NetPlaySession.h
   Online/ModsRoom.cpp
   Online/ModsRoom.h
-  Online/RoomWatch.cpp
-  Online/RoomWatch.h
+  Online/RoomWatchInput.cpp
+  Online/RoomWatchInput.h
   Online/LoadFastForward.cpp
   Online/LoadFastForward.h
   Online/SpeedCheck.cpp

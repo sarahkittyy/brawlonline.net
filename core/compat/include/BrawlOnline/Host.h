@@ -35,6 +35,21 @@ public:
   virtual void OnScreenMessage(std::string_view text, u32 ms, u32 argb) = 0;
   // The local controller on port `chan` as the game would read it now.
   virtual GCPadStatus LocalPad(int chan) = 0;
+  // START or B held on any of the player's controllers now (a Wii Remote's B or +), from any
+  // thread: a room's game watched that stands still (buffering) stands the game's pad thread still
+  // with it, so its pad memory is from before (BrawlOnline/Online/RoomWatch.h). The default reads
+  // LocalPad on the calling thread; an engine whose controllers may only be read on its game's
+  // thread answers from its own newest read.
+  virtual bool LeaveButtonsHeld()
+  {
+    for (int chan = 0; chan < 4; ++chan)
+    {
+      const GCPadStatus pad = LocalPad(chan);
+      if (pad.isConnected && (pad.button & (PAD_BUTTON_START | PAD_BUTTON_B)) != 0)
+        return true;
+    }
+    return false;
+  }
   // The game's own thread runs separately from the host's (Dolphin's dual core).
   virtual bool DualCore() const { return false; }
   // Stop the game (Core::Stop): the program closes as when its window is closed.

@@ -32,7 +32,7 @@
 #include "Core/Online/ModsRoom.h"
 #include "BrawlOnline/Online/OnlineClient.h"
 #include "BrawlOnline/Online/Ranked.h"
-#include "Core/Online/RoomWatch.h"
+#include "BrawlOnline/Online/RoomWatch.h"
 #include "Core/Online/SpeedCheck.h"
 #include "BrawlOnline/Online/Spectate.h"
 #include "BrawlOnline/Online/User.h"

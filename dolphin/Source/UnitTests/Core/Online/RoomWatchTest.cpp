@@ -1,7 +1,7 @@
 // Copyright 2026 Dolphin Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-// Watching the room's game (Core/Online/RoomWatch): the watch channel's packets put together into a
+// Watching the room's game (BrawlOnline/Online/RoomWatch): the watch channel's packets put together into a
 // live replay file, and hostile packets.
 
 #include <cstring>
@@ -10,7 +10,7 @@
 
 #include <gtest/gtest.h>
 
-#include "Core/Online/RoomWatch.h"
+#include "BrawlOnline/Online/RoomWatch.h"
 #include "BrawlOnline/Rollback/ReplayFile.h"
 
 using namespace Online::RoomWatch;

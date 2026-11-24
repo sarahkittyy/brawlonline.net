@@ -99,6 +99,31 @@ class RecompInstance(DolphinInstance):
             _link(card, ud / "sd.raw")
         return d
 
+    def window_hung(self) -> bool | None:
+        """Windows' own test of a window that stopped handling its messages (IsHungAppWindow: none
+        for 5 s), for this recomp's visible top-level windows; None without one (or off Windows).
+        The recomp handles its window's events on the game's thread, so a game held between two
+        frames (a replay paused) must keep doing so (the core's Engine::WhileStandingStill)."""
+        if os.name != "nt" or self.process is None:
+            return None
+        import ctypes
+        import ctypes.wintypes as wt
+        user32 = ctypes.windll.user32
+        pid = self.process.pid
+        found: list[int] = []
+
+        @ctypes.WINFUNCTYPE(wt.BOOL, wt.HWND, wt.LPARAM)
+        def visit(hwnd: int, _: int) -> bool:
+            owner = wt.DWORD()
+            user32.GetWindowThreadProcessId(hwnd, ctypes.byref(owner))
+            if owner.value == pid and user32.IsWindowVisible(hwnd):
+                found.append(hwnd)
+            return True
+        user32.EnumWindows(visit, 0)
+        if not found:
+            return None
+        return any(bool(user32.IsHungAppWindow(h)) for h in found)
+
     def build_args(self) -> list[str]:
         exe = self.recomp_dir / ("WiiCompiled.exe" if os.name == "nt" else "WiiCompiled")
         # PPHARNESS_RECOMP_LLDB: run it under lldb, which prints every thread's stack when it stops

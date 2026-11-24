@@ -32,6 +32,7 @@ import pytest
 from ppharness.backend import OnlineBackend
 from ppharness.client import HarnessCommandError, HarnessConnectionError
 from ppharness.instance import DolphinInstance, InstanceConfig
+from ppharness.recomp import RecompInstance
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from test_online_game import (  # noqa: E402
@@ -115,7 +116,12 @@ def _seek_around(v: Game, path: Path) -> dict[str, Any]:
     f = st["shown"]
     time.sleep(1)
     assert _status(v)["shown"] == f, "paused, the frame must not move"
-    v.shot(f"{path.stem[:30]}-paused")
+    # Paused, the picture stays (the engine shows the last frame again: EmissaryRecomp from the
+    # core's Engine::WhileStandingStill, its window answering meanwhile).
+    if isinstance(v.inst, RecompInstance):
+        time.sleep(6)
+        assert v.inst.window_hung() is False, "the recomp's window stopped answering while paused"
+    assert _picture(v.shot(f"{path.stem[:30]}-paused")), "paused, the picture is gone"
     ctl("step")
     _shown(v, f + 1, "one step forward")
     for k in range(3):
@@ -140,6 +146,19 @@ def _seek_around(v: Game, path: Path) -> dict[str, Any]:
           60, "the end again")
     ctl("play")   # at the end: the match ends as it did for its player
     return _wait(lambda: (lambda s: s if s["finished"] else None)(_status(v)), 120, "the replay to end")
+
+
+def _picture(shot: Path) -> bool:
+    """A screenshot with a picture in it, not a black (or one-colour) frame. Without Pillow, or
+    without a file (an engine that takes none), nothing is checked."""
+    try:
+        from PIL import Image, ImageStat
+    except ImportError:
+        return True
+    if not shot.exists():
+        return True
+    stat = ImageStat.Stat(Image.open(shot).convert("L"))
+    return stat.mean[0] > 8 and stat.stddev[0] > 4
 
 
 def _check_pair(fa: R.Replay, fb: R.Replay) -> None:
