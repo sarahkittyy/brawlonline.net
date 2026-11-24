@@ -305,11 +305,12 @@ export function normalizeRuleset(r: Ruleset): Ruleset {
   return n;
 }
 
-/** A display name's characters (common::codes::is_name_char): printable ASCII, Hiragana, Katakana. */
+/** A display name's characters (common::codes::is_name_char): printable ASCII, Hiragana, Katakana, ・ and ー. */
 function isNameChar(c: string): boolean {
   const code = c.codePointAt(0) ?? 0;
   const ascii = code >= 0x20 && code <= 0x7e && c !== "\\" && c !== "`";
-  return ascii || (code >= 0x3041 && code <= 0x3093) || (code >= 0x30a1 && code <= 0x30f4);
+  const kana = (code >= 0x3041 && code <= 0x3093) || (code >= 0x30a1 && code <= 0x30f4);
+  return ascii || kana || code === 0x30fb || code === 0x30fc;
 }
 
 /** `MatchRules::validate`. */
