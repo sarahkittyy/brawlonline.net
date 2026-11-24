@@ -1,4 +1,6 @@
 import { normalizeInputDelay } from "@common/input_delay";
+import type { InputDisplaySettings } from "@common/input_display";
+import { normalizeInputDisplay } from "@common/input_display";
 import { DolphinLaunchType } from "@dolphin/types";
 import { Mutex } from "async-mutex";
 import electronSettings from "electron-settings";
@@ -138,6 +140,10 @@ export class SettingsManager extends EventEmitter {
 
   getDisableChat(): boolean {
     return this.get().settings.disableChat;
+  }
+
+  getInputDisplay(): InputDisplaySettings {
+    return normalizeInputDisplay(this.get().settings.inputDisplay);
   }
 
   getPotatoMode(): boolean {

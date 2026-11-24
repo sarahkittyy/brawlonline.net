@@ -55,6 +55,11 @@ const Info<std::string> ONLINE_CHAT_WINDOW{{System::Main, "Online", "ChatWindow"
 const Info<int> ONLINE_CHAT_TEXT_SIZE{{System::Main, "Online", "ChatTextSize"}, 100};
 const Info<std::string> ONLINE_CHAT_KEY{{System::Main, "Online", "ChatKey"}, ""};
 const Info<bool> ONLINE_DISABLE_CHAT{{System::Main, "Online", "DisableChat"}, false};
+const Info<bool> ONLINE_INPUT_DISPLAY{{System::Main, "Online", "InputDisplay"}, false};
+const Info<int> ONLINE_INPUT_DISPLAY_X{{System::Main, "Online", "InputDisplayX"}, 20};
+const Info<int> ONLINE_INPUT_DISPLAY_Y{{System::Main, "Online", "InputDisplayY"}, 760};
+const Info<int> ONLINE_INPUT_DISPLAY_WIDTH{{System::Main, "Online", "InputDisplayWidth"}, 220};
+const Info<bool> ONLINE_INPUT_DISPLAY_EVERYONE{{System::Main, "Online", "InputDisplayEveryone"}, false};
 const Info<bool> ONLINE_SAVE_REPLAYS{{System::Main, "Online", "SaveReplays"}, true};
 const Info<std::string> ONLINE_REPLAY_DIR{{System::Main, "Online", "ReplayDir"}, ""};
 const Info<bool> ONLINE_STREAM_GAMES{{System::Main, "Online", "StreamGames"}, true};

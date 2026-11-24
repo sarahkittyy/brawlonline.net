@@ -33,6 +33,7 @@
 #include "BrawlOnline/UI/Style.h"
 #include "InputCommon/ControllerInterface/CoreDevice.h"
 #include "VideoCommon/Assets/CustomTextureData.h"
+#include "BrawlOnline/UI/InputDisplayUI.h"
 #include "BrawlOnline/UI/ReplayOverlayUI.h"
 #include "VideoCommon/PerformanceMetrics.h"
 #include "VideoCommon/Present.h"
@@ -366,6 +367,7 @@ void OnScreenUI::DrawDebugText()
   if (Config::Get(Config::NETPLAY_GOLF_MODE_OVERLAY) && g_netplay_golf_ui)
     g_netplay_golf_ui->Display();
 
+  BrawlOnline::UI::InputDisplay::Display(m_backbuffer_scale);
   OnlineChatUI::Display(m_backbuffer_scale);
   ReplayOverlayUI::Display(m_backbuffer_scale);
 

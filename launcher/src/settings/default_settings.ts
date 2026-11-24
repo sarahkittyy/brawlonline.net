@@ -1,4 +1,5 @@
 import { INPUT_DELAY_NORMAL } from "@common/input_delay";
+import { DEFAULT_INPUT_DISPLAY } from "@common/input_display";
 import { LEGACY_PRODUCT_NAMES, PRODUCT_NAME } from "@common/product";
 import { app } from "electron";
 import log from "electron-log";
@@ -50,6 +51,7 @@ export const defaultAppSettings: AppSettings = {
     enableStreamGames: true,
     netplayNetwork: "",
     closeDolphinAfterSpectating: true,
+    inputDisplay: DEFAULT_INPUT_DISPLAY,
     clipOnLrz: true,
     clipHotkeys: [],
     disableHighlightDetection: false,

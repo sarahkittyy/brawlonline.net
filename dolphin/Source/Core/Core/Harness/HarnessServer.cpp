@@ -84,6 +84,7 @@
 #include "Core/Rollback/PresentStats.h"
 #include "Core/Rollback/ReplayPlayback.h"
 #include "VideoCommon/OnScreenDisplay.h"
+#include "BrawlOnline/UI/InputDisplayUI.h"
 #include "BrawlOnline/UI/OnlineChatUI.h"
 #include "VideoCommon/Present.h"
 #include "Core/Rollback/RollbackManager.h"
@@ -2272,6 +2273,17 @@ Result CmdChatLeave(const Args& args)
   return ChatRequest("chat_leave", args);
 }
 
+// The input display as its last frame drew it (core/ui InputDisplayUI): whether it is on, the
+// frames sampled, and each box (window pixels) with the controller and what it holds.
+Result CmdInputDisplay(const Args&)
+{
+  picojson::value v;
+  const std::string err = picojson::parse(v, BrawlOnline::UI::InputDisplay::Status());
+  if (!err.empty() || !v.is<picojson::object>())
+    Fail("input display status: " + err);
+  return v.get<picojson::object>();
+}
+
 // The chat window as ImGui drew it (VideoCommon/OnlineChatUI): `record` (default true) starts or
 // stops recording each frame, `activate` presses the "Activate NetPlay Chat" hotkey; returns the
 // frames recorded since the last call (at most 600).
@@ -2498,6 +2510,7 @@ const std::vector<std::pair<std::string_view, Handler>>& Handlers()
       {"chat_report", CmdChatReport},
       {"chat_leave", CmdChatLeave},
       {"chat_ui", CmdChatUi},
+      {"input_display", CmdInputDisplay},
       {"osd_mouse", CmdOsdMouse},
       {"osd_messages", CmdOsdMessages},
       {"online_recent_codes", CmdOnlineRecentCodes},

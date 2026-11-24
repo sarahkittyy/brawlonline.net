@@ -785,6 +785,11 @@ bool IsResimulationPass();
 bool IsRunning();
 // True while a replay or a spectated game is armed or plays (ArmPlayback).
 bool IsPlayback();
+// CPU thread: the in-game ports the input display shows (Online/InputView.h, a bit each) while
+// the session's input is in the game's pads (countdown to the end of the match): online this
+// player's own (every player's with [Online] InputDisplayEveryone), in a replay or a spectated
+// game every player's. 0 otherwise: this machine's controller.
+u32 InputDisplayPorts();
 // CPU thread, at a VI field that is not shown (a resimulated frame): whether the playback
 // Dolphin should show its last frame again now, with the overlay drawn over it. True while a
 // replay's seek runs the frames before its target unseen, at most every 33 ms (Sarah's board,
