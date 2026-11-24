@@ -32,6 +32,7 @@ struct BatchedChangeCRC
     std::memcpy(m_buffer.data() + m_len, &page, sizeof(page));
     std::memcpy(m_buffer.data() + m_len + sizeof(page), granule, kGranuleSize);
     m_len += kEntrySize;
+    m_total_bytes += kEntrySize;
   }
 
   // The CRC of everything fed so far.
@@ -40,6 +41,8 @@ struct BatchedChangeCRC
     Flush();
     return m_crc;
   }
+
+  size_t TotalBytes() const { return m_total_bytes; }
 
 private:
   void Flush()
@@ -53,6 +56,7 @@ private:
   // Not value-initialized: only [0, m_len) is read.
   std::array<u8, kGranulesPerFlush * kEntrySize> m_buffer;
   size_t m_len = 0;
+  size_t m_total_bytes = 0;
   u32 m_crc = Common::StartCRC32();
 };
 
@@ -72,6 +76,7 @@ struct RunCRC
       m_run = data;
     }
     m_len += len;
+    m_total_bytes += len;
   }
 
   // For a buffer reused after this call (a masked granule's copy): counted now.
@@ -79,6 +84,7 @@ struct RunCRC
   {
     Flush();
     m_crc = Common::UpdateCRC32(m_crc, data, len);
+    m_total_bytes += len;
   }
 
   // The CRC of everything fed so far.
@@ -87,6 +93,8 @@ struct RunCRC
     Flush();
     return m_crc;
   }
+
+  size_t TotalBytes() const { return m_total_bytes; }
 
 private:
   void Flush()
@@ -99,6 +107,7 @@ private:
 
   const u8* m_run = nullptr;
   size_t m_len = 0;
+  size_t m_total_bytes = 0;
   u32 m_crc;
 };
 

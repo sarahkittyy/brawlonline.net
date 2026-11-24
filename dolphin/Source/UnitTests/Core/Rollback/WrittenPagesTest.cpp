@@ -14,6 +14,8 @@
 
 #include "Common/CommonTypes.h"
 #include "Core/Rollback/WrittenPages.h"
+#include "VideoCommon/TextureDecoder.h"
+#include "VideoCommon/VideoState.h"
 
 namespace
 {
@@ -145,6 +147,61 @@ TEST(WrittenPagesTest, RandomWritesCapturesAndLoads)
       // Any capture still kept, older or newer than the last one loaded: a rollback's ring drops
       // the newer ones, and this must hold without that.
       m.Load(rng() % m.captures.size());
+    }
+  }
+}
+
+TEST(TmemSnapshotTest, IncrementalSavesAndLoadsMatchFullCopies)
+{
+  constexpr size_t PAGE = VideoCommon::TMEM_SNAPSHOT_PAGE_SIZE;
+  constexpr size_t TOTAL = TMEM_SIZE;
+  std::mt19937 rng(20261124);
+
+  // Initialize TMEM and mark all written.
+  for (size_t i = 0; i < TOTAL; i += 64)
+    s_tex_mem[i] = static_cast<u8>(rng());
+  VideoCommon_TmemWritten(0, TOTAL);
+
+  constexpr size_t SLOTS = 4;
+  std::array<VideoCommon::TmemSnapshot, SLOTS> snaps;
+  std::array<std::vector<u8>, SLOTS> truth;
+  for (size_t s = 0; s < SLOTS; ++s)
+  {
+    const size_t copied = VideoCommon_SaveTmemSnapshot(snaps[s]);
+    EXPECT_EQ(copied, TOTAL);
+    truth[s].assign(s_tex_mem.begin(), s_tex_mem.end());
+  }
+
+  // With no writes, re-saving and re-loading copy 0 bytes.
+  EXPECT_EQ(VideoCommon_SaveTmemSnapshot(snaps[0]), 0u);
+  EXPECT_EQ(VideoCommon_LoadTmemSnapshot(snaps[0]), 0u);
+
+  // Random writes, saves, and loads across slots must leave s_tex_mem equal to truth[slot]
+  // while only copying touched 4 KiB pages.
+  for (int step = 0; step < 200; ++step)
+  {
+    const u32 op = rng() % 10;
+    if (op < 5)
+    {
+      const unsigned int off = static_cast<unsigned int>(rng() % TOTAL);
+      const unsigned int len =
+          static_cast<unsigned int>(1 + rng() % std::min<size_t>(TOTAL - off, 3 * PAGE));
+      const u8 val = static_cast<u8>(rng());
+      std::memset(s_tex_mem.data() + off, val, len);
+      VideoCommon_TmemWritten(off, len);
+    }
+    else if (op < 8)
+    {
+      const size_t s = rng() % SLOTS;
+      const size_t copied = VideoCommon_SaveTmemSnapshot(snaps[s]);
+      EXPECT_LE(copied, TOTAL);
+      truth[s].assign(s_tex_mem.begin(), s_tex_mem.end());
+    }
+    else
+    {
+      const size_t s = rng() % SLOTS;
+      VideoCommon_LoadTmemSnapshot(snaps[s]);
+      EXPECT_EQ(std::memcmp(s_tex_mem.data(), truth[s].data(), TOTAL), 0) << "step " << step;
     }
   }
 }

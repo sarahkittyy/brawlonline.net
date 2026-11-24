@@ -1484,6 +1484,7 @@ void Jit64::PlanDirtyMarks(std::span<const PPCAnalyst::CodeOp> ops,
 
     // D-form stores without update, through a base register: the bytes [base + d, + size).
     s32 size = 0;
+    s32 disp = static_cast<s16>(inst.SIMM_16);
     switch (inst.OPCD)
     {
     case 36:  // stw
@@ -1502,13 +1503,17 @@ void Jit64::PlanDirtyMarks(std::span<const PPCAnalyst::CodeOp> ops,
     case 47:  // stmw
       size = (32 - static_cast<s32>(inst.RS)) * 4;
       break;
+    case 60:  // psq_st (at most 4 bytes if W=1, 8 bytes if W=0 across all GQR types)
+      size = inst.W ? 4 : 8;
+      disp = static_cast<s32>(inst.SIMM_12);
+      break;
     default:
       break;
     }
     if (size != 0 && inst.RA != 0 && !op.skip)
     {
       const u32 base = inst.RA;
-      const s32 first = static_cast<s16>(inst.SIMM_16);
+      const s32 first = disp;
       const s32 last = first + size - 1;
       Group& group = groups[base];
       if (group.leader >= 0 && std::max(last, group.last) - std::min(first, group.first) <

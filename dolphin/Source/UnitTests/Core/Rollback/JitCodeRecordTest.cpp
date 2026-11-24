@@ -14,6 +14,7 @@
 
 #include "Common/CommonTypes.h"
 #include "Core/PowerPC/PPCCache.h"
+#include "Core/PowerPC/JitCommon/JitCache.h"
 
 namespace
 {
@@ -180,4 +181,32 @@ TEST(JitCodeRecord, EntriesDifferByFeatureFlags)
   record.Record(JitCodeRecord::Entry(0x80009000, 0), MakeBlock(0x9000, 4, 1));
   EXPECT_EQ(record.Find(JitCodeRecord::Entry(0x80009000, 3)), nullptr);
   EXPECT_NE(record.Find(JitCodeRecord::Entry(0x80009000, 0)), nullptr);
+}
+
+TEST(ValidBlockBitSet, CoarseSummaryCoversEverySetBit)
+{
+  ValidBlockBitSet bits;
+  EXPECT_FALSE(bits.TestCoarse(0));
+  EXPECT_FALSE(bits.TestCoarse(0x10000000u / 32));
+
+  const u32 line_mem1 = 0x00123400u / 32;
+  const u32 line_mem2 = 0x10456780u / 32;
+  bits.Set(line_mem1);
+  bits.Set(line_mem2);
+  EXPECT_TRUE(bits.TestCoarse(line_mem1));
+  EXPECT_TRUE(bits.Test(line_mem1));
+  EXPECT_TRUE(bits.TestCoarse(line_mem2));
+  EXPECT_TRUE(bits.Test(line_mem2));
+  // Unrelated 64 KiB regions stay clear in the coarse summary.
+  EXPECT_FALSE(bits.TestCoarse((0x00123400u + 0x20000u) / 32));
+  EXPECT_FALSE(bits.TestCoarse((0x10456780u + 0x20000u) / 32));
+
+  // Individual Clear leaves the coarse bit conservatively set; ClearAll clears everything.
+  bits.Clear(line_mem1);
+  EXPECT_FALSE(bits.Test(line_mem1));
+  EXPECT_TRUE(bits.TestCoarse(line_mem1));
+
+  bits.ClearAll();
+  EXPECT_FALSE(bits.TestCoarse(line_mem1));
+  EXPECT_FALSE(bits.TestCoarse(line_mem2));
 }

@@ -19,6 +19,7 @@ u64 GetHash64(const u8* src, u32 len, u32 samples);
 
 u32 StartCRC32();
 u32 UpdateCRC32(u32 crc, const u8* data, size_t len);
+u32 CombineCRC32(u32 crc1, u32 crc2, size_t len2);
 u32 ComputeCRC32(const u8* data, size_t len);
 u32 ComputeCRC32(std::string_view data);
 }  // namespace Common

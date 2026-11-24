@@ -133,6 +133,12 @@ public:
   };
   // Directly accessed by Jit64.
   std::unique_ptr<u32[]> m_valid_block;
+  // Coarse L1-resident summary of m_valid_block: 1 bit per 64 KiB physical region (2048 32-byte
+  // lines = 11 bits). Conservative superset cleared only on ClearAll(): lets HasCodeAt reject
+  // data-heap granules in L1d without cache misses into the 16 MiB m_valid_block array.
+  static constexpr u32 COARSE_SHIFT = 11;  // 2048 * 32 B = 64 KiB per bit
+  static constexpr size_t COARSE_WORDS = (VALID_BLOCK_MASK_SIZE >> COARSE_SHIFT) / 64;
+  std::array<u64, COARSE_WORDS> m_coarse_block{};
 
   ValidBlockBitSet()
   {
@@ -140,10 +146,24 @@ public:
     ClearAll();
   }
 
-  void Set(u32 bit) { m_valid_block[bit / 32] |= 1u << (bit % 32); }
+  void Set(u32 bit)
+  {
+    m_valid_block[bit / 32] |= 1u << (bit % 32);
+    const u32 c = bit >> COARSE_SHIFT;
+    m_coarse_block[c >> 6] |= u64{1} << (c & 63);
+  }
   void Clear(u32 bit) { m_valid_block[bit / 32] &= ~(1u << (bit % 32)); }
-  void ClearAll() { memset(m_valid_block.get(), 0, sizeof(u32) * VALID_BLOCK_ALLOC_ELEMENTS); }
+  void ClearAll()
+  {
+    memset(m_valid_block.get(), 0, sizeof(u32) * VALID_BLOCK_ALLOC_ELEMENTS);
+    m_coarse_block.fill(0);
+  }
   bool Test(u32 bit) const { return (m_valid_block[bit / 32] & (1u << (bit % 32))) != 0; }
+  bool TestCoarse(u32 bit) const
+  {
+    const u32 c = bit >> COARSE_SHIFT;
+    return (m_coarse_block[c >> 6] & (u64{1} << (c & 63))) != 0;
+  }
 };
 
 class JitBaseBlockCache

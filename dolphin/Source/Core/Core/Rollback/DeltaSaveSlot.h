@@ -25,6 +25,7 @@
 #include "Core/HW/Memmap.h"
 #include "Core/PowerPC/PowerPC.h"
 #include "Core/Rollback/IRollbackSaveSlot.h"
+#include "VideoCommon/VideoState.h"
 
 // One cache line. A 4 KB granule turned every stray 4-byte store into 4 KB of snapshot.
 static constexpr size_t ROLLBACK_PAGE_SIZE = 64;
@@ -34,6 +35,7 @@ static constexpr uint32_t MEM2_FIRST_PAGE = MEM2_BASE >> ROLLBACK_PAGE_SHIFT;
 
 namespace Rollback
 {
+static constexpr u32 SAVESTATE_NUM_WORK_CHUNKS = 5;
 
 // Specified as a Wii virtual address, stored internally as physical offsets
 struct MemoryRegion
@@ -132,13 +134,18 @@ namespace Rollback
 
 // One byte per ROLLBACK_PAGE_SIZE-byte physical granule in the Wii fastmem arena (0x00000000-0x1FFFFFFF).
 // JIT stores write 1 to entries[phys_addr >> ROLLBACK_PAGE_SHIFT]
-// Plain global so jit can embed its address as an absolute immediate (see EmitJITDirtyBitmapUpdate)
+// One instance, whose entries never move: the JITs embed their address (EmitJITDirtyBitmapUpdate).
 struct alignas(64) JITDirtyBitmap
 {
   static constexpr size_t ARENA_SIZE = 512ULL * 1024 * 1024;  // 512 MB
   static constexpr size_t ENTRY_COUNT = ARENA_SIZE / ROLLBACK_PAGE_SIZE;
 
-  uint8_t entries[ENTRY_COUNT];
+  // ENTRY_COUNT entries, and ENTRY_SLACK more that a mark store reaching past the last granule
+  // may write. Below 2 GB wherever the system has room there: Jit64 then marks an entry as
+  // [index + disp32], with no register for the bitmap's address. A static array is that low only
+  // in an executable that is not position independent (Linux); Windows loads it above 4 GB.
+  static constexpr size_t ENTRY_SLACK = 64;
+  uint8_t* const entries = AllocateEntries();
 
   static JITDirtyBitmap& Get()
   {
@@ -146,7 +153,7 @@ struct alignas(64) JITDirtyBitmap
     return s_instance;
   }
 
-  void Clear() { std::memset(entries, 0, sizeof(entries)); }
+  void Clear() { std::memset(entries, 0, ENTRY_COUNT); }
   void ClearRange(uint32_t first_page, uint32_t page_count)
   {
     std::memset(&entries[first_page], 0, page_count);
@@ -194,6 +201,8 @@ struct alignas(64) JITDirtyBitmap
   }
 
 private:
+  static uint8_t* AllocateEntries();
+
   // The 8 entries at `i` (a multiple of 8).
   template <typename F>
   void ScanWord(uint32_t i, F& on_dirty)
@@ -295,7 +304,9 @@ public:
 
   bool HasState() const override { return m_has_state; }
   void Reset() override;
-  void Save(Core::System& system) override;
+  void Save(Core::System& system) override { Save(system, true); }
+  void Save(Core::System& system, bool full_state, s64 slice_frame = -1,
+            u32* out_slice_crc = nullptr, size_t* out_slice_bytes = nullptr);
   void Load(Core::System& system) override {}
 
   EvictedDelta ExtractDeltas();
@@ -316,6 +327,25 @@ public:
   // The granules a Save found dirty (absolute bitmap indices), kept to reuse their storage.
   std::vector<u32> m_mem1_scan;
   std::vector<u32> m_mem2_scan;
+
+  // Per-worker scratch for fused whole-machine scan + shadow compare + copy + change CRC.
+  // Cache-line aligned so workers never false-share adjacent chunk state.
+  struct Granule
+  {
+    u8 bytes[ROLLBACK_PAGE_SIZE];
+  };
+  struct alignas(64) ChunkScratch
+  {
+    std::vector<u32> indices;
+    std::vector<Granule> data;
+    u32 crc = 0;
+    size_t crc_bytes = 0;
+  };
+  std::array<ChunkScratch, SAVESTATE_NUM_WORK_CHUNKS> m_mem1_chunks;
+  std::array<ChunkScratch, SAVESTATE_NUM_WORK_CHUNKS> m_mem2_chunks;
+  u32 m_last_change_crc = 0;
+  bool m_has_change_crc = false;
+  bool m_has_full_state = false;
 
   uint32_t brawl_frame = 0;
 
@@ -383,11 +413,16 @@ public:
   };
   bool m_split_video = false;
   std::atomic<VideoCapture> m_video_capture{VideoCapture::None};
+  std::atomic<u32> m_video_restore_done{1};
   Common::UniqueBuffer<uint8_t> m_video_state;  // written by the video thread while Pending
   size_t m_video_state_size = 0;
+  VideoCommon::TmemSnapshot m_tmem;  // incremental 4 KiB TMEM snapshot (video thread)
   // Video thread: serialize its part of the video state into m_video_state.
   void CaptureVideoState(bool run);
-  // CPU thread, the video thread synced: restore it. False if there was nothing to restore.
+  // CPU thread, the video thread synced: restore video state. Begin queues the restore on the
+  // video thread without blocking; Finish waits for it so CPU-side load work overlaps with it.
+  bool BeginRestoreVideoState();
+  void FinishRestoreVideoState();
   bool RestoreVideoState();
 
   bool m_has_state = false;

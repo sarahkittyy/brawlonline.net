@@ -4698,6 +4698,39 @@ void DiagnoseSave(s64 frame)
   }
 }
 
+// Whether a rollback could still load the end state of `frame`. A rollback loads the frame before
+// the first mispredicted one, so once `frame + 1` is confirmed (every player's input for it is in)
+// `frame` can never be loaded again: we still record its RAM delta and exact desync checksum, but
+// skip device DoState, GPU capture, L1 cache, ARAM and FakeVMEM.
+// PPR_MACHINE_FULL_CONFIRMED_SAVE=1 saves full state on every frame (A/B).
+bool NeedsFullSnapshot(s64 frame)
+{
+  static const bool always_full = [] {
+    const char* e = std::getenv("PPR_MACHINE_FULL_CONFIRMED_SAVE");
+    return e && *e == '1';
+  }();
+  if (always_full || s.opts.synctest > 0 || !s.gekko || !s.gekko_started)
+    return true;
+  if (s.gone.load() != 0)
+    return true;
+  if (s.plan.active && frame >= s.plan.frame - 1)
+    return true;
+  {
+    std::lock_guard lk(s.net_mutex);
+    for (const auto& p : s.peers)
+    {
+      if (p.left)
+        return true;
+    }
+  }
+  if (s.iteration == 0)
+    ReceiveRemote();
+  const int confirmed = gekko_confirmed_frame(s.gekko);
+  if (confirmed < 0 || s.frame_base + confirmed < frame + 1)
+    return true;
+  return gekko_rollback_frames(s.gekko) != 0;
+}
+
 void PerformQueuedSave(Core::System& system)
 {
   if (!s.queued_save.pending)
@@ -4705,11 +4738,12 @@ void PerformQueuedSave(Core::System& system)
   s.queued_save.pending = false;
   auto& rb = Rollback::RollbackManager::Get();
   const auto save_start = Clock::now();
-  rb.SaveFrame(system);
+  rb.SetCollectChecksumParts(DigestsEnabled());
+  const bool full_state = NeedsFullSnapshot(s.queued_save.frame);
+  rb.SaveFrame(system, Rollback::RollbackManager::NO_TAG, full_state, s.queued_save.frame);
   AfterSave(system);
   s.saves++;
   DiagnoseSave(s.queued_save.frame);
-  rb.SetCollectChecksumParts(DigestsEnabled());
   const u32 sum = rb.SaveChecksumWithSlice(s.queued_save.frame);
   PaceSave(Clock::now() - save_start);
   if (DigestsEnabled() && s.queued_save.frame >= 0)
