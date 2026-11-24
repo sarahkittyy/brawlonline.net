@@ -7,10 +7,11 @@ import { useAccount } from "@/lib/hooks/use_account";
 /**
  * What a friend is doing, as the Friends tab shows it (docs/design/friends.md): in a room the player
  * can see (public, or friends only), playing a game others can watch, or just online. Private rooms
- * stay private: a friend in one is "online".
+ * stay private: a friend in one is "online". A room's `game` is the friend's game in it that others
+ * can watch, if any: a full room can't be joined, but its game can be watched.
  */
 export type FriendActivity =
-  | { kind: "room"; room: PublicRoom; yours: boolean }
+  | { kind: "room"; room: PublicRoom; yours: boolean; game?: LiveGameEntry }
   | { kind: "game"; game: LiveGameEntry }
   | { kind: "online" };
 
@@ -20,11 +21,11 @@ export function activityOf(
   yourRoomCode: string | undefined,
   live: LiveGameEntry[] | undefined,
 ): FriendActivity {
+  const game = live?.find((g) => g.game.state !== "over" && g.players.some((p) => p.uid === uid));
   const room = rooms?.find((r) => r.uids?.includes(uid));
   if (room) {
-    return { kind: "room", room, yours: room.code === yourRoomCode };
+    return { kind: "room", room, yours: room.code === yourRoomCode, game };
   }
-  const game = live?.find((g) => g.game.state !== "over" && g.players.some((p) => p.uid === uid));
   if (game) {
     return { kind: "game", game };
   }
