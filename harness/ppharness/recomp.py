@@ -99,6 +99,30 @@ class RecompInstance(DolphinInstance):
             _link(card, ud / "sd.raw")
         return d
 
+    def close_window(self) -> int:
+        """Closes the recomp's window as its X does (WM_CLOSE to the process's visible top-level
+        windows: SDL's quit, the runtime's window-close exit). Returns how many windows got it."""
+        if os.name != "nt" or self.process is None:
+            raise InstanceError("close_window needs a running recomp on Windows")
+        import ctypes
+        from ctypes import wintypes
+        user32 = ctypes.windll.user32
+        pid = self.process.pid
+        hwnds: list[int] = []
+        proc = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+
+        def each(hwnd: int, _lp: int) -> bool:
+            owner = wintypes.DWORD()
+            user32.GetWindowThreadProcessId(hwnd, ctypes.byref(owner))
+            if owner.value == pid and user32.IsWindowVisible(hwnd):
+                hwnds.append(hwnd)
+            return True
+
+        user32.EnumWindows(proc(each), 0)
+        for h in hwnds:
+            user32.PostMessageW(h, 0x0010, 0, 0)  # WM_CLOSE
+        return len(hwnds)
+
     def build_args(self) -> list[str]:
         exe = self.recomp_dir / ("WiiCompiled.exe" if os.name == "nt" else "WiiCompiled")
         # PPHARNESS_RECOMP_LLDB: run it under lldb, which prints every thread's stack when it stops
@@ -133,3 +157,22 @@ class RecompInstance(DolphinInstance):
         # DolphinInstance.launch with the recomp's command line and folder.
         self.command_prefix = [str(self.build_args()[0])]
         return super().launch()
+
+
+def game_output(inst: DolphinInstance) -> str:
+    """What the game printed (P+'s OSReport lines among it) and the core logged: Dolphin's log
+    (OSREPORT lines), and for an EmissaryRecomp also its stdout, where it prints OSReport
+    ("[OSReport] ..."), and its stderr (its runtime's own lines)."""
+    d = inst.user_dir
+    if d is None:
+        return ""
+    text = ""
+    log = d / "Logs" / "dolphin.log"
+    if log.exists():
+        text = log.read_text(encoding="utf-8", errors="replace")
+    if isinstance(inst, RecompInstance):
+        for name in ("harness-stdout.txt", "harness-stderr.txt"):
+            f = d / name
+            if f.exists():
+                text += "\n" + f.read_text(encoding="utf-8", errors="replace")
+    return text

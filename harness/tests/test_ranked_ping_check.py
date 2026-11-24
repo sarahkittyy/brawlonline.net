@@ -29,6 +29,7 @@ from typing import Any, Callable
 
 import pytest
 
+from ppharness import crossplay
 from ppharness.backend import OnlineBackend
 from ppharness.instance import DolphinInstance
 from ppharness.netsim import LinkProfile
@@ -204,3 +205,15 @@ def test_a_cancel_voids_the_set_and_both_search_again(backend: OnlineBackend,
     for g in players:
         assert g.c.mm_status()["state"] in ("matchmaking", "initializing"), g.c.mm_status()
     b.shot("02-searching-again")
+
+
+
+# Crossplay (docs/design/brawl-online-core.md §10.2): Ranked's ping check with EmissaryRecomp players,
+# against a Dolphin (vs_dolphin) and against each other (vs_recomp). PPHARNESS_RECOMP names the build.
+@pytest.mark.slow
+@crossplay.VARIANTS
+def test_ping_check_crossplay(variant: str, backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
+                              gpu_backend: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Both accept the high ping popup and play."""
+    crossplay.run(variant, "pc-pob$", "pc-p(ia|ob)$", monkeypatch, backend, dolphin,
+                  lambda d: test_both_play_at_a_high_ping(backend, d, gpu_backend), game_reports=False)

@@ -1803,3 +1803,66 @@ def test_online_menus_match_the_modes(backend: OnlineBackend, dolphin: Callable[
     g.steps("wait 60")
     g.shot("24-ranked-css-searching")
     g.c.mm_cancel()
+
+
+# P+'s "Hold Start to Pause" (its NETPLAY codes: a C2 hook at 0x801E6D24 in the SDK's SI response
+# handling, with the word at 0x80584084 = 2 in a match whose pause is off): START reaches the game
+# once held 50 frames, a timer per channel at 0x80584080 + 8 * chan. Ranked's no-pause sets the
+# timers back to 0 every frame (the plugin's noPause). EmissaryRecomp replaces the SDK's PADRead, so
+# the hook never ran there and START paused at once (Ranked too); it runs the code itself now
+# (EmissaryRecomp runtime/include/pplus_si_codes.h).
+PPLUS_HOLD_TIMERS = 0x80584080
+PPLUS_PAUSE_OFF_WORD = 0x80584084
+MATCH_FRAME = 0x901812A4   # g_GameFrame's frame counter
+
+
+def _hold_series(g: Game, polls: int = 60, held: int = 40) -> list[tuple[int, int]]:
+    """START held `held` polls with P+'s word forced to 2 on this machine: per poll, the frames the
+    match ran since the press and this channel's hold timer."""
+    g.c.write_mem(PPLUS_PAUSE_OFF_WORD, bytes.fromhex("00000002"))
+    p0 = g.c.status().input_polls
+    f0 = g.c.read_u32(MATCH_FRAME)
+    g.c.pad_script(0, [PadInput(buttons=["START"], hold=held), PadInput(hold=polls - held)])
+    rows = []
+    for k in range(1, polls + 1):
+        g.c.wait_frame(input_polls=p0 + k, timeout_ms=10000)
+        g.c.write_mem(PPLUS_PAUSE_OFF_WORD, bytes.fromhex("00000002"))
+        rows.append((g.c.read_u32(MATCH_FRAME) - f0, g.c.read_u32(PPLUS_HOLD_TIMERS)))
+    return rows
+
+
+@pytest.mark.slow
+def test_hold_start_to_pause_on_both_engines(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
+                                             gpu_backend: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A Direct match between an EmissaryRecomp (A) and a Dolphin (B). Each holds START for 40
+    frames with P+'s hold word at 2: on both, START is held back (the match runs on, no pause) and
+    the hold timer counts one a frame to the same count on both engines."""
+    if not os.environ.get("PPHARNESS_RECOMP"):
+        pytest.skip("PPHARNESS_RECOMP is not set")
+    monkeypatch.setenv("PPHARNESS_RECOMP_NAMES", "game-a$")
+    a, b, _ua, _ub = _connected_direct(backend, dolphin, gpu_backend, "hold-start", ("hola", "holb"), stocks=4)
+    from ppharness.recomp import RecompInstance
+    assert isinstance(a.inst, RecompInstance) and not isinstance(b.inst, RecompInstance)
+    online_set.wait(lambda: all(online_set.gstatus(g.c)["phase"] == "running" for g in (a, b)), 240,
+                    "the match to run on both")
+    a.steps("wait 200")
+    series = {}
+    for g in (a, b):
+        series[g.name] = _hold_series(g)
+        g.steps("wait 30")
+    peaks = {}
+    for name, rows in series.items():
+        frames = [f for f, _ in rows]
+        timers = [t for _, t in rows]
+        # The match ran on (no pause: START never reached the game) ...
+        assert frames[-1] >= len(rows) - 5, (name, "the match stopped: paused?", rows)
+        # ... the timer counted one a match frame while START was held (the samples are read
+        # between polls of a running game, so a sample may come a frame early or late) ...
+        peak = timers.index(max(timers))
+        for (f0, t0), (f1, t1) in zip(rows[:peak], rows[1:peak + 1]):
+            assert 0 <= t1 - t0 <= max(f1 - f0, 0) + 1, (name, rows)
+        # ... up to the 40 frames held, short of P+'s 50, then 0 once START is up.
+        assert 38 <= max(timers) <= 40 and timers[-1] == 0, (name, rows)
+        peaks[name] = max(timers)
+    assert abs(peaks[a.name] - peaks[b.name]) <= 1, series
+

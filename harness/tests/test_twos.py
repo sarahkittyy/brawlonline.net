@@ -15,6 +15,7 @@ from typing import Any, Callable
 
 import pytest
 
+from ppharness import crossplay
 from ppharness import flows as F
 from ppharness.backend import OnlineBackend
 from ppharness.client import PadInput
@@ -452,3 +453,24 @@ def test_twos_partner_didnt_ready_party_kept(backend: OnlineBackend, dolphin: Ca
     _wait(lambda: b.scene() == CSS, 30, "B on the party's CSS")
     _search(b)
     _lobby(gs, 1)
+
+
+
+# Crossplay (docs/design/brawl-online-core.md §10.2): the 2v2 queue with EmissaryRecomp players,
+# against a Dolphin (vs_dolphin) and against each other (vs_recomp). PPHARNESS_RECOMP names the build.
+@pytest.mark.slow
+@crossplay.VARIANTS
+def test_twos_crossplay(variant: str, backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
+                        gpu_backend: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Four alone: two recomps and two Dolphins (B and D), then four recomps."""
+    crossplay.run(variant, "twos-[bd]$", "twos-[a-d]$", monkeypatch, backend, dolphin,
+                  lambda d: test_twos_four_alone(backend, d, gpu_backend), game_reports=False)
+
+
+@pytest.mark.slow
+@crossplay.VARIANTS
+def test_twos_pair_crossplay(variant: str, backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
+                             gpu_backend: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A pair (A+B) and two alone."""
+    crossplay.run(variant, "twos-[bc]$", "twos-[a-d]$", monkeypatch, backend, dolphin,
+                  lambda d: test_twos_pair_and_two_alone(backend, d, gpu_backend), game_reports=False)

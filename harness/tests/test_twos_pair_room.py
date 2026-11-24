@@ -16,6 +16,7 @@ from typing import Any, Callable
 
 import pytest
 
+from ppharness import crossplay
 from ppharness import flows as F
 from ppharness.backend import OnlineBackend
 from ppharness.instance import DolphinInstance
@@ -235,3 +236,15 @@ def test_pair_room_stays_in_sync_under_play(backend: OnlineBackend, dolphin: Cal
     assert len(common) > 60 * 60 and not bad, (len(common), bad[:5])
     for g in (a, b):
         g.shot("01-after-play")
+
+
+
+# Crossplay (docs/design/brawl-online-core.md §10.2): the 2v2 pair room with EmissaryRecomp players,
+# against a Dolphin (vs_dolphin) and against each other (vs_recomp). PPHARNESS_RECOMP names the build.
+@pytest.mark.slow
+@crossplay.VARIANTS
+def test_pair_room_crossplay(variant: str, backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
+                             gpu_backend: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The pair's waiting room together, then held START."""
+    crossplay.run(variant, "twos-b$", "twos-[ab]$", monkeypatch, backend, dolphin,
+                  lambda d: test_pair_room_both_in_then_hold_start(backend, d, gpu_backend), game_reports=False, mm_engines=False)

@@ -211,6 +211,62 @@ Frames ahead is each machine's own reading (the windows after each game's first)
 
 Not done: the audio clock's waits for re-runs in the recomp (its audio DMA follows the deterministic clock, which re-runs move on; what that sounds like was not looked at), the mtRand trace for the recomp's desync logs, and the window message pump on the recomp's game thread (a pump that blocks for seconds holds the game; seen twice under load). No new UI text.
 
+### 10.3 Every online mode with recomp players (2026-11-23)
+
+Board card 759 (Sarah, 2026-11-23: "definitely need ... matchmaking + rooms"): before she tries EmissaryRecomp on staging, every online mode has to work with a recomp player in it, against Dolphin players and against other recomps. Branches: this one's `emissary-modes` (harness), EmissaryRecomp `brawlonline/modes` (the recomp's fixes; it has brawlonline/windows-build merged up to 733667d). The core needed no change: every mode's server and session code already ran in the recomp; what failed was in the recomp's own runtime and in the harness.
+
+**How it is tested.** Each mode's test file has crossplay variants of its own tests (`harness/ppharness/crossplay.py`): `vs_dolphin` makes the players a pattern names recomps and leaves the rest Dolphins, `vs_recomp` makes every player a recomp, then the mode's own test runs unchanged and, on top of its own checks, the variant requires that a recomp really played (a session started on it), that no machine logged a desync (the core's checksum exchange covers every confirmed frame), that mm logged the recomp's engine for the match (`matched ... engines=[...]`, `room match engines`) and that accounts logged and stored `engine=emissary` for the recomp's game reports (`game reported ... engine=emissary dev`, `game_reports.engine`, through `OnlineBackend.query`). Run them with `PPHARNESS_RECOMP=<native build>` and `PPHARNESS_RECOMP_NAMES='^none$'` (so the plain tests stay Dolphin) and `-k crossplay`; without PPHARNESS_RECOMP they skip. Instances: Dolphin NoGUI of emissary-recomp 7def62772, the recomp of brawlonline/modes, servers of emissary-recomp, the plugin of main's game-code (= this branch's), everything on one PC at below-normal priority.
+
+| Mode | What runs | Recomp vs Dolphin | Recomp vs recomp |
+|---|---|---|---|
+| Unranked | `test_unranked_crossplay`: search from the menus, paired, a two-game set on the server's stages, both games reported | pass | pass |
+| Unranked | `test_unranked_quit_crossplay`: no pause on a held START, then L+R+A+START (the recomp quits) and P+'s runback | pass | pass |
+| Waiting room | `test_waiting_room_crossplay`: the training room while searching, ending into Unranked's set | pass | pass |
+| Waiting room | `test_ranked_waiting_room_crossplay`: Ranked's game 1 from the waiting room (blind pick, strikes) | pass | pass |
+| Rematch hold | `test_rematch_hold_crossplay` (mm's hold at 20 s): searched again after a set, held, paired again, played | pass | pass |
+| Ranked | `test_ranked_crossplay`: a rated set (blind game 1, strikes, the winner's bans, the loser's pick), reports, ratings, speed rows and `pp-admin speed summary` by engine (`dolphin+emissary`) | pass | pass |
+| Ranked | `test_ranked_random_crossplay`: RANDOM in every game's strikes and picks | pass | pass |
+| Ranked | `test_ranked_desync_crossplay`: a desync (the recomp's memory changed) restarts the set's game from the last agreed frame, counted | pass | pass |
+| Ranked | `test_ranked_crossplay_window_close[window, x]`: no pause on START, then the recomp closed (the harness's stop, the window's X): the set abandoned at once by its leave | pass | pass |
+| Ranked | `test_ping_check_crossplay`: the high-ping popup (100 ms through netsim), both play | pass | pass |
+| Ranked, rooms | `test_hold_start_to_pause_on_both_engines` (new): P+'s Hold Start to Pause counts the same series on both engines | pass | (one of each) |
+| 2v2 queue | `test_twos_crossplay`: four alone, matched, rainbow teams on all four | pass (two of each) | pass |
+| 2v2 queue | `test_twos_pair_crossplay`: a party (keypad code) and two alone | pass | pass |
+| 2v2 pair room | `test_pair_room_crossplay`: the pair's waiting room together, checksums, held START out | pass | pass |
+| Rooms | `test_room_crossplay`: create, join by code, ready, the game and the next | pass | pass |
+| Rooms | `test_room_teams_crossplay`: three players, Teams, costumes, joins by code | pass | pass |
+| Rooms | `test_room_lras_crossplay`: three in a free-for-all, the recomp quits with L+R+A+START, the others play on | pass | pass |
+| Room sets | `test_room_set_crossplay`: a Bo3 from a published ruleset (character first, strikes, bans, counterpicks) | pass | pass |
+| Room sets | `test_room_set_stage_page_crossplay`: a ruleset bigger than one page (P+'s pages, the page button in every step) | pass | pass |
+| Room sets | `test_room_set_desync_crossplay`: a set game's desync restarts it | pass | pass |
+| Room sets | `test_room_2v2_set_crossplay`: a 2v2 set from a ruleset | pass | pass once, then once the harness's cursor could not reach Battlefield (below) |
+| Room sets | `test_room_set_quit_crossplay`: a set's quit (as if never played) and runback | fails (with two Dolphins too, below) | fails (the same) |
+| Sit-out | `test_room_open_slot_crossplay`: two start with an open slot, a joiner waits and plays the next game | pass | pass |
+| Sit-out | `test_room_sit_out_crossplay`: SIT OUT and the stage pick going to a player who plays | pass | pass |
+| Anyone picks | `test_room_anyone_picks_crossplay`: both cursors on the stage select, either one's pick | pass | pass |
+| Room chat | `test_chat_in_a_room_crossplay`: both directions, hostile text, ignore, report, leaving | pass | pass |
+| Launcher | `test_room_launcher_jump_crossplay`: the launcher's room join handed to a running game | pass | pass |
+| Launcher | `test_direct_invite_crossplay`: the launcher's Direct invite handed to both games (the "record" backend) | pass | pass |
+| Launcher | `test_play_buttons_recomp`: Home's Play ranked / Play unranked handed to a running recomp (its answers within the launcher's 5 s) | pass (one player) | |
+| The window | `test_recomp_window.py` (new): minimized and restored; the display scale changing 65 times | pass (one player) | |
+
+All on the final build (brawlonline/modes e84faa8 with this branch's harness), each variant at least once; the ones the PC's load broke (below) were run again on the same build and passed. In the runs of that build the tests compared 78,686 confirmed-frame checksums over 59 games, 0 mismatches, and the recomps ended 234 sessions without a desync other than the deliberate ones of the desync tests; mm logged `engines=[...]` with `emissary dev` for every match and room match with a recomp, accounts `engine=emissary dev` on its reports, and game_reports stored the engine. On brawlonline/modes 2815719 (windows-build up to 733667d merged in: the room CSS labels, the scissor fix) the Unranked and two-player room variants, the Ranked window X, the hold test (three times) and the window tests pass again.
+
+`test_room_set_quit_and_runback` fails with two Dolphins as well (run alone, the same build): after the quit, game 1's strikes again, and the harness's stage select recipe cannot reach Battlefield (P+'s page 0, position 17: "could not pick stage 0x1"). That is the test or the set's stage page after a quit (d636e50b3), not the engine; not looked into on this card. The same miss came once in a 2v2 set with recomps.
+
+**Found and fixed in the recomp** (brawlonline/modes):
+- **P+'s Gecko codes in the SDK's SI path never ran** (0653d13). The recomp replaces PADRead, so the SDK's SI response handling (fn_801E6C38) never runs, nor the C2 codes P+ hooks into it: "Hold Start to Pause" (0x801E6D24: while 0x80584084 is 2, in a match whose pause is off, START reaches the game only once held 50 frames) and the non-debug part of 0x801E6D1C. A START press paused a recomp at once in every match whose pause is off, Ranked included (Ranked's no-pause sets those timers back to 0 every frame, so it relies on the code). PADRead now does what those two codes do, only while guest memory holds them (the handler's branch to a payload identical to P+'s); P+'s debug-mode code at 0x801E6CD8 is still not run (logged once). `test_hold_start_to_pause_on_both_engines`: the same timer series on both engines; the Ranked no-pause tests with the recomp holding START.
+- **Closing the recomp's window bypassed the core** (64c274a). The window's X called TerminateProcess at once, so a Ranked set left that way waited for the opponent's report and the 2-minute grace instead of being abandoned at once, the replay was not finished and Online/game-status.json stayed behind for the launcher. The window close now runs the core's stop first (at most 4 s), and the core's stop ends with Online::Client::Shutdown, as Dolphin's ~MainWindow does. `test_ranked_crossplay_window_close[...-x]` closes the window with WM_CLOSE (`RecompInstance.close_window`).
+- **A display scale change crashed the render thread** (e84faa8). ImGui 1.92.2b's SDL_GPU backend frees its texture transfer buffer in DestroyDeviceObjects but keeps its size, and aurora recreates ImGui's device objects on every display scale change, so the font atlas's next upload memcpy'd into a null mapping (0xc0000005 in ucrtbase under ImGui_ImplSDLGPU3_UpdateTexture). Seen in a three-player room after SDL reported a display scale of 0; moving the window to a monitor of another DPI does the same for a player. aurora patches imgui where it fetches it (cmake/imgui-sdlgpu3-transfer-buffer.cmake). `test_recomp_display_scale_changes` (aurora's AURORA_TEST_SCALE_FLIP test hook): crashed at the first change before, 65 changes after.
+- **The recomp outranked the Dolphins it played** (cd14c54). The harness starts every game below normal; the recomp raised itself above normal, and its waits for the other machines' inputs (the core's host wait polls every 100 us) starved them on a busy PC (a pair room's Dolphin got 1% of a processor for 8 s and GekkoNet dropped the pair). It now keeps a below-normal start; started at normal (the launcher) it still runs above normal.
+- **The harness protocol** (6bb1d6d): rooms_request, game_setup_act, replay_recording, log_mark, emu_stop, and Dolphin's "record" session backend (the launcher's Direct invite tests).
+
+**Found in the harness**: tests that took every game for a Dolphin (test_ranked_set_is_rated's engine counts and the summary's engine pair, the waiting room's OSReport lines, which a recomp prints on stdout: `recomp.game_output`), and a desync test that counted every set's reports on its module's backend.
+
+**Not engine faults, seen while testing** (this PC, with three other EmissaryRecomp cards' builds and harness runs at once): the Postgres the backends used, on a C: that other runs filled to 9 MB free, stalled for minutes (8 s to get a pool connection), so accounts' requests and the harness's own psql timed out; 127.0.0.1 connects that stalled for a minute or two (memory reference-ipv4-loopback-stalls); once two recomps in one room both lost their mm connection during a 9.6 s match load (ENet's peer timeout is 5-10 s; the load is 2 s when the PC is not loaded) and the room was gone when they reconnected, and the same happened to two Dolphins in a sit-out room. Each passed when run again with Postgres on D:.
+
+Strings: none added (no UI changed).
+
 ### Which engine (2026-11-19)
 
 Sarah: "make sure logging and stats in mm show what engine the player is on, so we can get metrics for them." (The plan was brawl-recompiled.md §7.4; the name is `emissary`, the product EmissaryRecomp.)
