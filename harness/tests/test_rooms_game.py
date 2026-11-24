@@ -462,10 +462,23 @@ def _u32(g: Game, a: int) -> int:
     return int.from_bytes(g.c.read_mem(a, 4), "big")
 
 
-def css_area(g: Game) -> int:
-    """The local player's area (muSelCharPlayerArea): +0x1A8 the hand, +0x1BC the costume."""
-    task = _u32(g, _u32(g, _u32(g, 0x805A0060) + 4) + 0x400)
-    return _u32(g, task + 0x44)
+def css_area(g: Game, timeout: float = 10.0) -> int:
+    """The local player's area (muSelCharPlayerArea): +0x1A8 the hand, +0x1BC the costume. A CSS
+    still being built after a game has no area yet (a null pointer on the way, seen with a recomp,
+    whose scene loads take longer): waited for, up to `timeout`."""
+    def ptr(p: int) -> bool:
+        return 0x80000000 <= p < 0x81800000 or 0x90000000 <= p < 0x94000000
+
+    deadline = time.monotonic() + timeout
+    while True:
+        scene = _u32(g, _u32(g, 0x805A0060) + 4)
+        task = _u32(g, scene + 0x400) if ptr(scene) else 0
+        area = _u32(g, task + 0x44) if ptr(task) else 0
+        if ptr(area) and ptr(_u32(g, area + 0x1A8)):
+            return area
+        if time.monotonic() > deadline:
+            raise AssertionError(f"{g.name}: no CSS player area (scene {scene:#x}, task {task:#x}, area {area:#x})")
+        time.sleep(0.1)
 
 
 def hand(g: Game) -> tuple[float, float]:
@@ -2105,9 +2118,11 @@ def test_direct_invite_crossplay(variant: str, backend: OnlineBackend, dolphin: 
 @crossplay.VARIANTS
 def test_room_lras_crossplay(variant: str, backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
                              gpu_backend: str, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Three in a free-for-all, P2 (the recomp) quits with L+R+A+START, the others play on."""
+    """Three in a free-for-all, P2 (the recomp) quits with L+R+A+START, the others play on. The
+    quitter reports no game, so against Dolphins no report names the recomp."""
     crossplay.run(variant, "roomlras1-b$", "roomlras1-[abc]$", monkeypatch, backend, dolphin,
-                  lambda d: test_room_player_quits_with_lras(backend, d, gpu_backend, (1,)))
+                  lambda d: test_room_player_quits_with_lras(backend, d, gpu_backend, (1,)),
+                  game_reports=variant == "vs_recomp")
 
 
 @pytest.mark.slow

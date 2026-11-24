@@ -1118,9 +1118,10 @@ def test_room_set_crossplay(variant: str, backend: OnlineBackend, dolphin: Calla
 @crossplay.VARIANTS
 def test_room_set_stage_page_crossplay(variant: str, backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
                                        gpu_backend: str, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A set whose stage list is more than one page."""
+    """A set whose stage list is more than one page (it stops in game 1: no report)."""
     crossplay.run(variant, "set-b$", "set-[ab]$", monkeypatch, backend, dolphin,
-                  lambda d: test_room_set_with_more_stages_than_a_page(backend, d, gpu_backend))
+                  lambda d: test_room_set_with_more_stages_than_a_page(backend, d, gpu_backend),
+                  game_reports=False)
 
 
 @pytest.mark.slow

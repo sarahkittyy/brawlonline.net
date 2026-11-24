@@ -161,8 +161,8 @@ class RecompInstance(DolphinInstance):
 
 def game_output(inst: DolphinInstance) -> str:
     """What the game printed (P+'s OSReport lines among it) and the core logged: Dolphin's log
-    (OSREPORT lines), and for an EmissaryRecomp also its stderr, where it prints OSReport
-    ("[OSReport] ...") and its runtime's own lines."""
+    (OSREPORT lines), and for an EmissaryRecomp also its stdout, where it prints OSReport
+    ("[OSReport] ..."), and its stderr (its runtime's own lines)."""
     d = inst.user_dir
     if d is None:
         return ""
@@ -171,7 +171,8 @@ def game_output(inst: DolphinInstance) -> str:
     if log.exists():
         text = log.read_text(encoding="utf-8", errors="replace")
     if isinstance(inst, RecompInstance):
-        err = d / "harness-stderr.txt"
-        if err.exists():
-            text += "\n" + err.read_text(encoding="utf-8", errors="replace")
+        for name in ("harness-stdout.txt", "harness-stderr.txt"):
+            f = d / name
+            if f.exists():
+                text += "\n" + f.read_text(encoding="utf-8", errors="replace")
     return text

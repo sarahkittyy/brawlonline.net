@@ -275,9 +275,11 @@ def test_p2_and_p3_that_cannot_connect_while_p1_sits_out(backend: OnlineBackend,
 @crossplay.VARIANTS
 def test_room_open_slot_crossplay(variant: str, backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
                                   gpu_backend: str, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Two start with an open slot, a joiner waits and plays the next game (the joiner a recomp)."""
+    """Two start with an open slot, a joiner waits and plays the next game (the joiner a recomp: the
+    test ends in that game, so its report is not there yet)."""
     crossplay.run(variant, "sox-c$", "sox-[abc]$", monkeypatch, backend, dolphin,
-                  lambda d: test_two_players_start_with_an_open_slot_and_a_joiner_waits(backend, d, gpu_backend))
+                  lambda d: test_two_players_start_with_an_open_slot_and_a_joiner_waits(backend, d, gpu_backend),
+                  game_reports=variant == "vs_recomp")
 
 
 @pytest.mark.slow

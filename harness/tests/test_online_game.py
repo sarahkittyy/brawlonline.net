@@ -1617,7 +1617,7 @@ def test_hold_start_to_pause_on_both_engines(backend: OnlineBackend, dolphin: Ca
                                              gpu_backend: str, monkeypatch: pytest.MonkeyPatch) -> None:
     """A Direct match between an EmissaryRecomp (A) and a Dolphin (B). Each holds START for 40
     frames with P+'s hold word at 2: on both, START is held back (the match runs on, no pause) and
-    the hold timer counts one a frame, the same series on both engines."""
+    the hold timer counts one a frame to the same count on both engines."""
     if not os.environ.get("PPHARNESS_RECOMP"):
         pytest.skip("PPHARNESS_RECOMP is not set")
     monkeypatch.setenv("PPHARNESS_RECOMP_NAMES", "game-a$")
@@ -1631,12 +1631,19 @@ def test_hold_start_to_pause_on_both_engines(backend: OnlineBackend, dolphin: Ca
     for g in (a, b):
         series[g.name] = _hold_series(g)
         g.steps("wait 30")
+    peaks = {}
     for name, rows in series.items():
         frames = [f for f, _ in rows]
         timers = [t for _, t in rows]
         # The match ran on (no pause: START never reached the game) ...
         assert frames[-1] >= len(rows) - 5, (name, "the match stopped: paused?", rows)
-        # ... and the timer counted the held frames up to 40, then 0 once START is up.
-        assert max(timers) in (39, 40) and timers[-1] == 0, (name, rows)
-    assert [t for _, t in series[a.name]] == [t for _, t in series[b.name]], series
+        # ... the timer counted one a match frame while START was held (the samples are read
+        # between polls of a running game, so a sample may come a frame early or late) ...
+        peak = timers.index(max(timers))
+        for (f0, t0), (f1, t1) in zip(rows[:peak], rows[1:peak + 1]):
+            assert 0 <= t1 - t0 <= max(f1 - f0, 0) + 1, (name, rows)
+        # ... up to the 40 frames held, short of P+'s 50, then 0 once START is up.
+        assert 38 <= max(timers) <= 40 and timers[-1] == 0, (name, rows)
+        peaks[name] = max(timers)
+    assert abs(peaks[a.name] - peaks[b.name]) <= 1, series
 
