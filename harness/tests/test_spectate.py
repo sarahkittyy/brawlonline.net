@@ -14,6 +14,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import re
 import struct
 import sys
 import threading
@@ -285,6 +286,14 @@ def _viewer(be: OnlineBackend, dolphin: Callable[..., DolphinInstance], gpu_back
     return Game(inst, types.SimpleNamespace(display_name="viewer"), out / "viewer")
 
 
+
+def _viewer_log(v: Game) -> str:
+    try:
+        return v.inst.log_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+
+
 class Sampler:
     """The viewer's playback status twice a second, kept (what it went through). Once the set's
     second game has played 5 s, it presses Go Live once (the harness client is this thread's)."""
@@ -456,16 +465,26 @@ def test_a_spectator_joins_a_set_mid_game_and_watches_it_live(
         if s.get("started"):
             by_index[s["file"].get("index", -1)] = s
     assert set(by_index) >= {0, 1}, sorted(by_index)
+    # The samples are 0.5 s apart, and a viewer behind live takes the next queued game within
+    # ~0.1 s of the last one's end, so a game's last sample can be up to 30 frames short of its
+    # end. The viewer's own end-of-playback line ("replay: playback ended (...), N frames
+    # checked, no desync"), one per game in order, has the whole count.
+    ended = [(int(m.group(1)), m.group(2)) for m in re.finditer(
+        r"replay: playback ended \([^)]*\), (\d+) frames checked, ([^\r\n]*)", _viewer_log(v))]
     for i, path in enumerate(writer.paths[:2]):
         rep = R.read(path)
         s = by_index[i]
         assert s["desync_frame"] == -1, s
+        checked = s["frames_checked"]
+        if i < len(ended):
+            assert ended[i][1].startswith("no desync"), ended[i]
+            checked = max(checked, ended[i][0])
         if path in writer.cut:
             print(f"game {i + 1} was cut after {len(rep.slots)} frames")
-            assert s["frames_checked"] >= len(rep.slots) - 1, (i, s)
+            assert checked >= len(rep.slots) - 1, (i, s)
         else:
             assert rep.trailer, f"{path}: the writer's file is a whole replay"
-            assert s["frames_checked"] >= rep.endg["finalFrame"] - rep.first_frame - 1, (i, s, rep.endg)
+            assert checked >= rep.endg["finalFrame"] - rep.first_frame - 1, (i, checked, s, rep.endg)
 
 
 @pytest.mark.slow
