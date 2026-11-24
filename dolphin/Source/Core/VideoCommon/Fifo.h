@@ -69,16 +69,25 @@ public:
   // In deterministic GPU thread mode this waits for the GPU to be done with pending work.
   void SyncGPU(SyncGPUReason reason, bool may_move_read_ptr = true);
 
-  // Deterministic dual core, CPU thread: waits until the GPU thread has finished every
-  // preprocessed command that reads guest RAM (draws, display lists, indexed XF loads, TLUTs, EFB
-  // copies) without blocking behind Presenter's present-hold sleep. Used by PixelEngine draw sync
-  // in whole-machine sessions so the game can safely reuse vertex/texture buffers (bug #151)
-  // without stalling behind present pacing.
+  // Deterministic dual core, CPU thread: waits until the GPU thread has reached the sync point
+  // recorded by the latest preprocessed draw done or token (m_pp_pending_sync_seq), without
+  // blocking behind Presenter's present sleep or commands preprocessed after that sync. Used by
+  // PixelEngine draw sync in whole-machine sessions so the game can safely reuse vertex/texture
+  // buffers (bug #151) without stalling behind present pacing.
   void WaitForGpuReads();
-  void AdvancePreprocessReadSeq() { ++m_pp_read_seq; }
-  void AdvanceGpuReadSeq();
-  // GPU thread, right before Present's hold sleep: publishes that the EFB->XFB copy in progress has
-  // already finished reading guest RAM (its commands are done; only the present sleep remains).
+  // Deterministic dual core, CPU thread (preprocess): notes a command that reads guest RAM
+  // (primitive/display list, indexed XF load, TLUT load, TMEM preload) since the last sync BP.
+  void NotePreprocessRead() { m_pp_dirty = true; }
+  // Deterministic dual core, CPU thread (preprocess): records one of the four sync BPs
+  // (BPMEM_TRIGGER_EFB_COPY, BPMEM_SETDRAWDONE, BPMEM_PE_TOKEN_ID, BPMEM_PE_TOKEN_INT_ID) that
+  // run 1-for-1 with OnGpuSyncBP() on the GPU thread.
+  void OnPreprocessSyncBP(bool flushes_always, bool raises_sync, bool in_display_list);
+  // Deterministic dual core, GPU thread (LoadBPReg): publishes completion of one of the four
+  // sync BPs.
+  void OnGpuSyncBP();
+  // GPU thread, right before Present's hold sleep / swap: publishes that the EFB->XFB copy in
+  // progress has already finished reading guest RAM (its commands are done; only the present
+  // sleep and swap remain).
   void PublishGpuReadSeqAhead();
 
   // Deterministic dual core, CPU thread: aborts unexecuted GPU commands from the rolled-back
@@ -191,14 +200,18 @@ private:
   std::vector<u8> m_rollback_fifo_tail;
   bool m_rollback_fifo_pending = false;
 
-  // Deterministic dual core read-sync (WaitForGpuReads): top-level commands that read guest RAM
-  // increment m_pp_read_seq on the CPU thread and m_gpu_read_seq_local on the GPU thread.
+  // Deterministic dual core read-sync (WaitForGpuReads): only the four sync BPs (EFB copy, draw
+  // done, PE tokens) advance m_pp_sync_seq on the CPU thread and m_gpu_sync_seq_local on the GPU
+  // thread 1-for-1; m_pp_dirty is CPU-only.
   void PublishGpuReadSeq(u64 seq);
-  // The read sequence, with the video FIFO emptied (GPU thread idle).
+  // The sync sequence, with the video FIFO emptied (GPU thread idle).
   void ResetGpuSyncState();
-  u64 m_pp_read_seq = 0;
-  u64 m_gpu_read_seq_local = 0;
-  std::atomic<u64> m_gpu_read_seq{0};
+  u64 m_pp_sync_seq = 0;
+  u64 m_pp_last_flush_seq = 0;
+  u64 m_pp_pending_sync_seq = 0;
+  bool m_pp_dirty = false;
+  u64 m_gpu_sync_seq_local = 0;
+  std::atomic<u64> m_gpu_sync_seq{0};
   std::atomic<bool> m_read_seq_waiting{false};
   std::mutex m_read_seq_mutex;
   std::condition_variable m_read_seq_cv;

@@ -30,6 +30,7 @@
 #include "Core/CoreTiming.h"
 #include "Core/Rollback/GameplaySession.h"
 #include "Core/Rollback/InputTrace.h"
+#include "Core/Rollback/MachineSession.h"
 #include "Core/System.h"
 #include "VideoCommon/VideoConfig.h"
 
@@ -477,7 +478,8 @@ std::optional<double> HoldOffsetMs(const double* arrivals_ms, size_t n, double s
 
 TimePoint PresentHoldUntil(TimePoint now)
 {
-  if (!std::exchange(s_gpu_copy_pending, false) || !s_gpu_copy.paced)
+  if (!std::exchange(s_gpu_copy_pending, false) || !s_gpu_copy.paced ||
+      Machine::PacedAtBoundary())
   {
     s_hold_count = 0;
     return now;

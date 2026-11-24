@@ -21,8 +21,6 @@ namespace OpcodeDecoder
 // The deterministic GPU thread's display-list cache: called on the CPU thread when the aux FIFO is
 // empty (the GPU thread has read every list it was given), to free replaced copies.
 void DisplayListCacheOnGpuIdle();
-// GPU thread: true while OpcodeDecoder::RunFifo<false> is inside a display list.
-bool IsGpuInDisplayList();
 
 // Global flag to signal if FifoRecorder is active.
 extern bool g_record_fifo_data;

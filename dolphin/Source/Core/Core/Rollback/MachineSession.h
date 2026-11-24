@@ -241,6 +241,9 @@ bool IsArmed();
 bool JoinsRunningSession();
 // The session is past its start barrier (GekkoNet runs).
 bool IsRunning();
+// The session runs and paces each frame at its boundary (the throttle's reserve and the boundary
+// sleep); the presenter holds no frames then (any thread).
+bool PacedAtBoundary();
 
 // A machine image is being saved or loaded (both sides): Dolphin's savestate code leaves out the
 // host-only video state and refuses a change of device type (docs/brawl-mods-security.md).

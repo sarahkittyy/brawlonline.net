@@ -1527,7 +1527,7 @@ FMA alone did not desync, as expected: for single-precision inputs the product i
 
 Rollbacks and their depth were the same in every arm; the lead averaged 5.3-5.7 ms (cross_country) and 4.1-4.3 ms (typical) and ran 88-96% of the rollbacks in the sleep, with no early wake without a rollback. 0 checksum, pad and trace mismatches in all 19 sessions. Screen hitches did not improve here (the reporter's Linux runs halved them). `test_online_game.py` `test_direct_set_under_the_gameplay_session`, `test_opponent_leaves_in_the_middle_of_a_game`, `test_desync_ends_the_game_on_both[lan]` and `test_pause_quit_in_a_direct_match[bad_wifi]` pass on that build (scratch DolphinNoGUI linked against build/quality's libs, the plugin from HEAD). Not tested: macOS, the reporter's Linux with these slices, a slow PC (the reporter: a PC that never sleeps is unaffected), 3-4 players.
 
-**Not done.** `BoundarySleep` (Other Games) sleeps in 2 ms slices of the same `SleepUntil`, so it spins about half of its sleep. The reporter's next step, presenting each pass's own picture at its end-of-render token (about a field less latency, or one more frame of delay per profile for shallower rollbacks), is a proposal only.
+**Not done.** `BoundarySleep` (Other Games) sleeps in 2 ms slices of the same `SleepUntil`, so it spins about half of its sleep (since 2026-11-23 1 ms OS sleeps: `docs/design/brawl-mods.md` 6.2). The reporter's next step, presenting each pass's own picture at its end-of-render token (about a field less latency, or one more frame of delay per profile for shallower rollbacks), is a proposal only.
 
 ## A game that stops coming back to its loop top is logged (bug report #218, 2026-11-02)
 

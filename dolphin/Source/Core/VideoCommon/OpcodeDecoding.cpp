@@ -138,19 +138,6 @@ bool PreprocessedBP(u8 reg)
          reg == BPMEM_SETDRAWDONE || reg == BPMEM_PE_TOKEN_ID || reg == BPMEM_PE_TOKEN_INT_ID ||
          reg == BPMEM_TRIGGER_EFB_COPY;
 }
-
-// Top-level BP commands that FifoManager's CPU/GPU read-sync sequence counts (1-for-1 on both
-// threads): those that read guest RAM (TLUTs, preloads, EFB/XFB copies), and the draw done and
-// tokens a draw sync waits on. A primitive's textures are read only when the vertex manager
-// flushes, which these BPs do (BPWritten) before they are counted: counting only the primitives
-// let the game refill a texture buffer before the batch that reads it was drawn (bug #151).
-bool IsRamReadingBP(u8 reg)
-{
-  return reg == BPMEM_LOADTLUT1 || reg == BPMEM_PRELOAD_MODE || reg == BPMEM_TRIGGER_EFB_COPY ||
-         reg == BPMEM_SETDRAWDONE || reg == BPMEM_PE_TOKEN_ID || reg == BPMEM_PE_TOKEN_INT_ID;
-}
-
-thread_local bool s_gpu_in_display_list = false;
 }  // namespace
 
 void DisplayListCacheOnGpuIdle()
@@ -158,11 +145,6 @@ void DisplayListCacheOnGpuIdle()
   // Only retired copies: SyncGPU also runs inside PushFifoAuxBuffer (AuxSpace), so this can be
   // called in the middle of PreprocessCachedList, which still uses its slot and entry.
   s_dl_retired.clear();
-}
-
-bool IsGpuInDisplayList()
-{
-  return s_gpu_in_display_list;
 }
 
 template <bool is_preprocess>
@@ -259,21 +241,17 @@ public:
 
     if constexpr (is_preprocess)
     {
-      LoadBPRegPreprocess(command, value, m_cycles);
+      LoadBPRegPreprocess(command, value, m_cycles, m_in_display_list);
       if (m_rec && PreprocessedBP(command))
       {
         m_rec->effects.push_back({1, command, 0, value, 0, rec_gap});
         m_rec_last = m_cycles;
       }
-      if (!m_in_display_list && m_det && IsRamReadingBP(command))
-        m_fifo.AdvancePreprocessReadSeq();
     }
     else
     {
       LoadBPReg(command, value, m_cycles);
       INCSTAT(g_stats.this_frame.num_bp_loads);
-      if (!m_in_display_list && m_det && IsRamReadingBP(command))
-        m_fifo.AdvanceGpuReadSeq();
     }
   }
   OPCODE_CALLBACK(void OnIndexedLoad(CPArray array, u32 index, u16 address, u8 size))
@@ -289,14 +267,11 @@ public:
         m_rec->effects.push_back({2, static_cast<u8>(array), address, index, size, rec_gap});
         m_rec_last = m_cycles;
       }
-      if (!m_in_display_list && m_det)
-        m_fifo.AdvancePreprocessReadSeq();
+      m_fifo.NotePreprocessRead();
     }
     else
     {
       LoadIndexedXF(array, index, address, size);
-      if (!m_in_display_list && m_det)
-        m_fifo.AdvanceGpuReadSeq();
     }
   }
   OPCODE_CALLBACK(void OnPrimitiveCommand(OpcodeDecoder::Primitive primitive, u8 vat,
@@ -320,13 +295,8 @@ public:
 
     // 4 GPU ticks per vertex, 3 CPU ticks per GPU tick
     m_cycles += num_vertices * 4 * 3 + 6;
-    if (!m_in_display_list && m_det)
-    {
-      if constexpr (is_preprocess)
-        m_fifo.AdvancePreprocessReadSeq();
-      else
-        m_fifo.AdvanceGpuReadSeq();
-    }
+    if constexpr (is_preprocess)
+      m_fifo.NotePreprocessRead();
   }
   // This can't be inlined since it calls Run, which makes it recursive
   // m_in_display_list prevents it from actually recursing infinitely, but there's no real benefit
@@ -393,10 +363,8 @@ public:
         {
           // temporarily swap dl and non-dl (small "hack" for the stats)
           g_stats.SwapDL();
-          s_gpu_in_display_list = true;
 
           Run(start_address, size, *this);
-          s_gpu_in_display_list = false;
           INCSTAT(g_stats.this_frame.num_dlists_called);
 
           // un-swap
@@ -405,13 +373,8 @@ public:
       }
 
       m_in_display_list = false;
-      if (m_det)
-      {
-        if constexpr (is_preprocess)
-          m_fifo.AdvancePreprocessReadSeq();
-        else
-          m_fifo.AdvanceGpuReadSeq();
-      }
+      if constexpr (is_preprocess)
+        m_fifo.NotePreprocessRead();
     }
   }
   OPCODE_CALLBACK(void OnNop(u32 count))

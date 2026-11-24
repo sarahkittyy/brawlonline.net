@@ -3,8 +3,10 @@
 
 #include "VideoCommon/Fifo.h"
 
+#include <algorithm>
 #include <atomic>
 #include <cstring>
+#include <utility>
 
 #include "Common/Assert.h"
 #include "Common/BlockingLoop.h"
@@ -509,15 +511,43 @@ void FifoManager::ResetVideoBuffer()
 
 void FifoManager::ResetGpuSyncState()
 {
-  m_pp_read_seq = 0;
-  m_gpu_read_seq_local = 0;
-  m_gpu_read_seq.store(0, std::memory_order_release);
+  m_pp_sync_seq = 0;
+  m_pp_last_flush_seq = 0;
+  m_pp_pending_sync_seq = 0;
+  m_pp_dirty = false;
+  m_gpu_sync_seq_local = 0;
+  m_gpu_sync_seq.store(0, std::memory_order_release);
+}
+
+void FifoManager::OnPreprocessSyncBP(bool flushes_always, bool raises_sync, bool in_display_list)
+{
+  if (!m_use_deterministic_gpu_thread)
+    return;
+  ++m_pp_sync_seq;
+  // A draw done or token with no RAM-reading command since the last sync BP (e.g. right after an
+  // EFB->XFB copy in SoulCalibur II / Tatsunoko vs. Capcom) has nothing left to flush: waiting for
+  // m_pp_last_flush_seq lets the CPU pass once the copy has flushed, without waiting behind the
+  // GPU's Present() sleep/swap. Inside a display list stay conservative because cached display
+  // lists do not replay draws between BPs.
+  if (flushes_always || m_pp_dirty || in_display_list)
+  {
+    m_pp_last_flush_seq = m_pp_sync_seq;
+    m_pp_dirty = false;
+  }
+  if (raises_sync)
+    m_pp_pending_sync_seq = std::max(m_pp_pending_sync_seq, m_pp_last_flush_seq);
+}
+
+void FifoManager::OnGpuSyncBP()
+{
+  if (m_use_deterministic_gpu_thread)
+    PublishGpuReadSeq(++m_gpu_sync_seq_local);
 }
 
 void FifoManager::PublishGpuReadSeq(u64 seq)
 {
-  if (seq > m_gpu_read_seq.load(std::memory_order_relaxed))
-    m_gpu_read_seq.store(seq, std::memory_order_seq_cst);
+  if (seq > m_gpu_sync_seq.load(std::memory_order_relaxed))
+    m_gpu_sync_seq.store(seq, std::memory_order_seq_cst);
   if (m_read_seq_waiting.load(std::memory_order_seq_cst))
   {
     std::lock_guard lk(m_read_seq_mutex);
@@ -525,24 +555,18 @@ void FifoManager::PublishGpuReadSeq(u64 seq)
   }
 }
 
-void FifoManager::AdvanceGpuReadSeq()
-{
-  ++m_gpu_read_seq_local;
-  PublishGpuReadSeq(m_gpu_read_seq_local);
-}
-
 void FifoManager::PublishGpuReadSeqAhead()
 {
   if (m_use_deterministic_gpu_thread)
-    PublishGpuReadSeq(m_gpu_read_seq_local + 1);
+    PublishGpuReadSeq(m_gpu_sync_seq_local + 1);
 }
 
 void FifoManager::WaitForGpuReads()
 {
   if (!m_use_deterministic_gpu_thread)
     return;
-  const u64 target = m_pp_read_seq;
-  if (m_gpu_read_seq.load(std::memory_order_acquire) >= target)
+  const u64 target = m_pp_pending_sync_seq;
+  if (m_gpu_sync_seq.load(std::memory_order_acquire) >= target)
     return;
   if (!m_gpu_mainloop.IsRunning() || !m_emu_running_state.IsSet())
     return;
@@ -554,7 +578,7 @@ void FifoManager::WaitForGpuReads()
     std::unique_lock lk(m_read_seq_mutex);
     m_read_seq_waiting.store(true, std::memory_order_seq_cst);
     m_read_seq_cv.wait(lk, [&] {
-      return m_gpu_read_seq.load(std::memory_order_acquire) >= target ||
+      return m_gpu_sync_seq.load(std::memory_order_acquire) >= target ||
              !m_gpu_mainloop.IsRunning() || !m_emu_running_state.IsSet();
     });
     m_read_seq_waiting.store(false, std::memory_order_relaxed);

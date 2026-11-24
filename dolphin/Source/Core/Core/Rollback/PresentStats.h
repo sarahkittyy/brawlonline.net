@@ -68,7 +68,9 @@ void OnPresent(bool duplicate);
 // late. So the presenter holds each paced frame until its copy's due time on the throttle's clock
 // plus the 95th percentile of the recent frames' arrivals after theirs: the presents stay one field
 // apart and only the rare slower frame is shown late, at the cost of a few milliseconds.
-// Video thread, before the present: the time to present at, or `now` when not held.
+// Video thread, before the present: the time to present at, or `now` when not held. A
+// whole-machine session holds nothing: its rollbacks run in the frame's boundary sleep, and the
+// copy's own time is the one to keep (Machine::PacedAtBoundary).
 TimePoint PresentHoldUntil(TimePoint now);
 
 // Video thread, before Present()'s hold sleep: publishes when it ends. CPU thread: whether the video

@@ -903,6 +903,12 @@ void LoadBPReg(u8 reg, u32 value, int cycles_into_future)
 
   BPWritten(system.GetPixelShaderManager(), system.GetXFStateManager(),
             system.GetGeometryShaderManager(), bp, cycles_into_future);
+
+  if (reg == BPMEM_TRIGGER_EFB_COPY || reg == BPMEM_SETDRAWDONE || reg == BPMEM_PE_TOKEN_ID ||
+      reg == BPMEM_PE_TOKEN_INT_ID)
+  {
+    system.GetFifo().OnGpuSyncBP();
+  }
 }
 
 // The EFB copy registers as the CPU thread's preprocessing of the FIFO sees them, for marking
@@ -911,7 +917,7 @@ static u32 s_pp_efb_wh = 0;
 static u32 s_pp_efb_addr = 0;
 static u32 s_pp_efb_stride = 0;
 
-void LoadBPRegPreprocess(u8 reg, u32 value, int cycles_into_future)
+void LoadBPRegPreprocess(u8 reg, u32 value, int cycles_into_future, bool in_display_list)
 {
   auto& system = Core::System::GetInstance();
 
@@ -928,17 +934,27 @@ void LoadBPRegPreprocess(u8 reg, u32 value, int cycles_into_future)
   case BPMEM_EFB_STRIDE:
     s_pp_efb_stride = newval;
     break;
-  case BPMEM_SETDRAWDONE:
-    if ((newval & 0xff) == 0x02)
-      system.GetPixelEngine().SetFinish(cycles_into_future);
+  case BPMEM_LOADTLUT1:
+  case BPMEM_PRELOAD_MODE:
+    system.GetFifo().NotePreprocessRead();
     break;
+  case BPMEM_SETDRAWDONE:
+  {
+    const bool finish = (newval & 0xff) == 0x02;
+    if (finish)
+      system.GetPixelEngine().SetFinish(cycles_into_future);
+    system.GetFifo().OnPreprocessSyncBP(false, finish, in_display_list);
+    break;
+  }
   case BPMEM_PE_TOKEN_ID:
     system.GetPixelEngine().SetToken(newval & 0xffff, false, cycles_into_future);
     Rollback::PresentStats::TraceToken(newval & 0xffff);
+    system.GetFifo().OnPreprocessSyncBP(false, true, in_display_list);
     break;
   case BPMEM_PE_TOKEN_INT_ID:  // Pixel Engine Interrupt Token ID
     system.GetPixelEngine().SetToken(newval & 0xffff, true, cycles_into_future);
     Rollback::PresentStats::TraceToken(newval & 0xffff);
+    system.GetFifo().OnPreprocessSyncBP(false, true, in_display_list);
     break;
   case BPMEM_TRIGGER_EFB_COPY:
   {
@@ -947,6 +963,7 @@ void LoadBPRegPreprocess(u8 reg, u32 value, int cycles_into_future)
     UPE_Copy copy;
     copy.Hex = newval;
     Rollback::PresentStats::OnEFBCopyPreprocess(copy.copy_to_xfb != 0);
+    system.GetFifo().OnPreprocessSyncBP(true, false, in_display_list);
     // Mark where the copy will write guest RAM, here in emulated time, so the game-independent
     // desync checksum skips the same bytes on every machine (the GPU thread marks them too, but
     // when depends on the host). An over-estimate: a copy writes at most one stride per source
