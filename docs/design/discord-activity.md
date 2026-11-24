@@ -26,9 +26,9 @@ Neither Dolphin nor EmissaryRecomp shows one of their own: every released Dolphi
 |---|---|---|---|
 | Launcher only | In the launcher | | logo |
 | Searching | Ranked / Unranked / Direct / 2v2 | Searching | Ranked: rank badge |
-| A set | Ranked · vs Peachy (2v2: vs A & B) | [with partner ·] Game n [· a - b from game 2] [· Character Select / Stage Select] | stage name on the logo's hover; Ranked: rank badge |
-| A room | its name, or "host's room", or its mode when private | mode · ruleset, or mode · Game n; (3 of 4) | |
-| Spectating, a replay | Watching | A vs B | stage name on hover |
+| A set | Ranked · vs Peachy (2v2: vs A & B) | [with partner ·] Game n [· a - b from game 2] [· Character Select / Stage Select] | in a game: stage + own character; else Ranked: rank badge |
+| A room | its name, or "host's room", or its mode when private | mode · ruleset, or mode · Game n; (3 of 4) | in a game: stage + own character |
+| Spectating, a replay | Watching | A vs B | stage + eye (Spectate) or play icon (replay) |
 | Training (any single-player screen), Project Punch, Other Games | Training / Project Punch (Training) / Other Games | the game's name | |
 | The game's menus | (none: "Brawl Online" and the timer) | | |
 
@@ -40,6 +40,12 @@ Neither Dolphin nor EmissaryRecomp shows one of their own: every released Dolphi
 
 ## Pictures
 
-Only the launcher's logo and the rank badges, both already on brawlonline.net. Stage and character art
-would have to be uploaded somewhere (Discord art assets or the website): the launcher takes them from the
-player's own disc and never bundles or uploads them (renderer/lib/utils.ts). Open question for Sarah.
+- In a game (a set, a room's game, a spectated game, a replay): the stage as the big picture (its name on hover)
+  and the player's character as the small one (Spectate: an eye, replays: a play icon).
+- Ranked while searching and between games: the rank badge (brawlonline.net/assets/ranks). Otherwise the logo
+  (brawlonline.net/assets/icon-512.png).
+- Stage and character pictures are the Discord application's art assets, which Sarah uploads by hand
+  (2026-11-24, her choice over hosting them on the website): `stage_<P+ stage id>` (61), `char_<stock key>`
+  (42, not Giga Bowser or Wario-Man), `watching`, `replay`, made by tools/discord-assets/make.py from a
+  launcher's extracted stage select and stock icons (512x512; stocks on a light disc, as Discord crops small
+  pictures round). A stage P+ does not list (common/stages.ts) shows the logo.

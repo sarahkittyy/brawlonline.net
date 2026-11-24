@@ -87,6 +87,8 @@ describe("buildDiscordActivity", () => {
       input({ game: gameState({ screen: "online-css", scene: "scSelCharacter" }), queue: rankedSet() }),
     );
     expect([css.details, css.state]).toEqual(["Ranked · vs Peachy", "Game 1 · Character Select"]);
+    // Between games: the logo and the rank badge.
+    expect([css.largeImage, css.smallImage]).toEqual([LOGO_IMAGE, "https://brawlonline.net/assets/ranks/gold-1.png"]);
 
     const inGame = buildDiscordActivity(
       input({
@@ -101,6 +103,12 @@ describe("buildDiscordActivity", () => {
       "Battlefield",
     ]);
     expect(inGame.startedAt).toBe(Date.parse("2026-11-24T10:00:00.000Z"));
+    // In a game: the stage and the player's character (Discord art assets).
+    expect([inGame.largeImage, inGame.smallImage, inGame.smallText]).toEqual([
+      "stage_1",
+      "char_mr_game_and_watch",
+      "Mr. Game & Watch",
+    ]);
     expect(inGame.buttons).toEqual([{ label: "Watch their game", url: "https://brawlonline.net/?watch=0123456789ab" }]);
 
     const sss = buildDiscordActivity(
@@ -136,7 +144,11 @@ describe("buildDiscordActivity", () => {
       }),
     );
     expect([a.details, a.state]).toEqual(["2v2 · vs Lucas & Peachy", "with Knuckles · Game 2 · 0 - 1"]);
-    expect(a.smallImage).toBeUndefined();
+    expect([a.largeImage, a.smallImage, a.smallText]).toEqual([
+      "stage_1",
+      "char_mr_game_and_watch",
+      "Mr. Game & Watch",
+    ]);
   });
 
   it("shows a room with its name, ruleset, players and Join button", () => {
@@ -220,6 +232,11 @@ describe("buildDiscordActivity", () => {
       "Peachy vs Knuckles",
       "Dream Land",
     ]);
+    expect([watching.largeImage, watching.smallImage, watching.smallText]).toEqual([
+      "stage_45",
+      "watching",
+      "Spectate",
+    ]);
 
     const replay = buildDiscordActivity(
       input({
@@ -237,6 +254,7 @@ describe("buildDiscordActivity", () => {
       }),
     );
     expect([replay.details, replay.state]).toEqual(["Watching", "sarahkitty vs Ferrum"]);
+    expect([replay.largeImage, replay.smallImage, replay.smallText]).toEqual(["stage_1", "replay", "Replays"]);
 
     expect(buildDiscordActivity(input({ game: gameState({ screen: "single-player" }) })).details).toBe("Training");
     expect(buildDiscordActivity(input({ game: gameState({ otherGame: "Project Punch" }) })).details).toBe(

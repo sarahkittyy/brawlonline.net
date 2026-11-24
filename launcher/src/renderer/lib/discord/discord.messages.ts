@@ -21,6 +21,9 @@ export const DiscordMessages = {
   /** The two players of a game watched: "Peachy vs Knuckles". */
   versus: (a: string, b: string) => `${a} vs ${b}`,
   watching: () => "Watching",
+  /** The small pictures' hover texts while watching (the launcher's tab names). */
+  spectate: () => "Spectate",
+  replays: () => "Replays",
   training: () => "Training",
   projectPunch: () => "Project Punch (Training)",
   otherGames: () => "Other Games",

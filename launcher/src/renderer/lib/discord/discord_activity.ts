@@ -1,10 +1,12 @@
 import type { RoomMode } from "@accounts/types";
+import { characterName } from "@common/profile";
 import { stageInfo } from "@common/stages";
 import type { DiscordActivity, DiscordGame, DiscordGameState } from "@social/discord/types";
 import type { QueueMode, QueueState, SocialPlayer, SocialRoom } from "@social/types";
 import type { SpectateState } from "@spectate/types";
 
 import { RankBadgeMessages } from "@/components/rank_badge/rank_badge.messages";
+import { characterStockKeys } from "@/lib/utils";
 import type { Rank } from "@/services/backend/types";
 
 import { DiscordMessages as Messages } from "./discord.messages";
@@ -14,9 +16,11 @@ import { DiscordMessages as Messages } from "./discord.messages";
  * launcher knows of the game, in two lines under "Brawl Online". Discord's member list shows the
  * first line ("Playing Ranked · vs Peachy").
  *
- * The pictures are the launcher's logo and the Ranked badge, both on brawlonline.net: stage and
- * character art would come from the player's disc, which the launcher never uploads anywhere
- * (renderer/lib/utils.ts), so the stage is the big picture's hover text.
+ * The pictures: the stage (big) and the player's character (small) in a game, the Ranked badge
+ * while searching and between games, the logo otherwise. Stage and character pictures are the
+ * Discord application's art assets (Sarah uploads them by hand: `stage_<P+ stage id>`,
+ * `char_<stock key>`, `watching`, `replay`; made from the extracted stage icons and stock icons,
+ * docs/design/discord-activity.md); the logo and the rank badges are links to brawlonline.net.
  */
 
 const SITE = "https://brawlonline.net";
@@ -25,6 +29,28 @@ export const LOGO_IMAGE = `${SITE}/assets/icon-512.png`;
 export function rankImage(rank: Rank): string {
   const file = rank.tier === "legendary" || !rank.division ? rank.tier : `${rank.tier}-${rank.division}`;
   return `${SITE}/assets/ranks/${file}.png`;
+}
+
+/** The stage's art asset and its name, for the big picture; none for a stage P+ does not list. */
+function stagePicture(id: number | null | undefined): Pick<DiscordActivity, "largeImage" | "largeText"> {
+  const info = id != null ? stageInfo(id) : undefined;
+  return info ? { largeImage: `stage_${info.id}`, largeText: info.name } : { largeImage: LOGO_IMAGE };
+}
+
+/** Characters with no art asset: the transformations, never picked. */
+const NO_CHARACTER_ASSET = new Set(["giga_bowser", "wario_man"]);
+
+/** The player's own character in the game being played, for the small picture. */
+function ownCharacterPicture(
+  game: DiscordGame | null,
+  uid: string | undefined,
+): Pick<DiscordActivity, "smallImage" | "smallText"> {
+  const own = game?.players.find((p) => uid && p.uid === uid) ?? game?.players.find((p) => p.port === game.ownPort);
+  const key = own ? characterStockKeys[own.characterId] : undefined;
+  if (!key || NO_CHARACTER_ASSET.has(key)) {
+    return {};
+  }
+  return { smallImage: `char_${key}`, smallText: characterName(key) };
 }
 
 /** The buttons' links: the website hands them to the launcher (brawlonline://room/join, brawlonline://watch). */
@@ -80,8 +106,6 @@ function modeName(mode: QueueMode): string {
 function roomModeName(mode: RoomMode): string {
   return mode === "ffa" ? Messages.ffa() : mode === "teams" ? Messages.teams() : Messages.oneVsOne();
 }
-
-const stageName = (id: number | null | undefined) => (id != null ? stageInfo(id)?.name : undefined);
 
 const isoMs = (iso: string | null | undefined): number | undefined => {
   const ms = iso ? Date.parse(iso) : NaN;
@@ -175,7 +199,9 @@ export function buildDiscordActivity(input: ActivityInput): DiscordActivity {
         entry.players.map((p) => p.displayName),
         showPlayers,
       ),
-      largeText: stageName(entry.game.stageId),
+      ...stagePicture(entry.game.stageId),
+      smallImage: "watching",
+      smallText: Messages.spectate(),
       startedAt: isoMs(entry.game.startedAt) ?? input.phaseStartedAt,
     };
   }
@@ -202,10 +228,11 @@ export function buildDiscordActivity(input: ActivityInput): DiscordActivity {
         ...base,
         details: showPlayers && opponents.length > 0 ? Messages.modeVs(mode, joinNames(opponents)) : mode,
         state: setLine(queue.game, queue.wins, screen, showPlayers ? partner : null),
-        largeText: stageName(inGame?.stageId),
+        ...(inGame ? stagePicture(inGame.stageId) : {}),
+        ...(inGame ? ownCharacterPicture(inGame, input.you?.uid) : {}),
         startedAt: gameStart ?? input.phaseStartedAt,
       };
-      if (queue.mode === "ranked" && input.rank) {
+      if (!inGame && queue.mode === "ranked" && input.rank) {
         activity.smallImage = rankImage(input.rank);
         activity.smallText = RankBadgeMessages.rankName(input.rank);
       }
@@ -244,7 +271,8 @@ export function buildDiscordActivity(input: ActivityInput): DiscordActivity {
               .filter(Boolean)
               .join(" · ") || undefined
           : [name ? mode : null, room?.ruleset ?? null].filter(Boolean).join(" · ") || undefined,
-        largeText: stageName(inGame?.stageId),
+        ...(inGame ? stagePicture(inGame.stageId) : {}),
+        ...(inGame ? ownCharacterPicture(inGame, input.you?.uid) : {}),
         startedAt: gameStart ?? input.phaseStartedAt,
         party: { size: socialRoom.players, max: socialRoom.openSlots },
       };
@@ -271,7 +299,9 @@ export function buildDiscordActivity(input: ActivityInput): DiscordActivity {
         game.replay.players.map((p) => p.displayName),
         showPlayers,
       ),
-      largeText: stageName(game.replay.stageId),
+      ...stagePicture(game.replay.stageId),
+      smallImage: "replay",
+      smallText: Messages.replays(),
       startedAt: input.phaseStartedAt,
     };
   }
