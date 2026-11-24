@@ -1567,11 +1567,12 @@ bool RollbackManager::LoadFrame(Core::System& system, int frames_back)
     }
   }
 
-  // indexing + RAM restore happens on a worker thread so they overlap with DoState on the main
-  // thread
+  // indexing + RAM restore: in whole-machine mode both run on a worker thread so they overlap
+  // with State::LoadFromBuffer on the CPU thread; in region mode there is no DoState to overlap,
+  // so indexing runs directly on the CPU thread (keeping JITDirtyBitmap hot in L1/L2) and only
+  // the parallel granule restore fans out to workers.
   static std::vector<u32> live_dirty;
-  auto restore_ram = [&]() {
-    return job::KickRootJob(m_dispatch_thread, [&](job::JobTaskThread& w, job::Job& j) {
+  auto index_ram = [&]() -> bool {
     u32 remaining = 0;
     bool live_dirty_empty = true;
     const auto test_and_set = [](std::vector<u64>& bits, u32 idx) -> bool {
@@ -1706,133 +1707,152 @@ bool RollbackManager::LoadFrame(Core::System& system, int frames_back)
         }
       }
     }
+    return live_dirty_empty;
+  };
 
-    {
-      ROLLBACK_ZONE_N("ram page restore");
+  auto copy_ram = [&](job::JobTaskThread& w, job::Job& j, bool live_dirty_empty) {
+    ROLLBACK_ZONE_N("ram page restore");
 #if defined(ROLLBACK_PROFILE_TRACY)
-      auto x = StringFromFormat("Restored %u pages", static_cast<u32>(restore_keys.size()));
-      ZoneText(x.c_str(), x.size());
+    auto x = StringFromFormat("Restored %u pages", static_cast<u32>(restore_keys.size()));
+    ZoneText(x.c_str(), x.size());
 #endif
 
-      const u32 total = static_cast<u32>(restore_keys.size());
-      m_last_load_granules = total;
-      m_stat_load_gran_total.fetch_add(total, std::memory_order_relaxed);
-      if (total > m_stat_load_gran_max.load(std::memory_order_relaxed))
-        m_stat_load_gran_max.store(total, std::memory_order_relaxed);
-      const u32 chunk = (total + SAVESTATE_NUM_WORK_CHUNKS - 1) / SAVESTATE_NUM_WORK_CHUNKS;
+    const u32 total = static_cast<u32>(restore_keys.size());
+    m_last_load_granules = total;
+    m_stat_load_gran_total.fetch_add(total, std::memory_order_relaxed);
+    if (total > m_stat_load_gran_max.load(std::memory_order_relaxed))
+      m_stat_load_gran_max.store(total, std::memory_order_relaxed);
+    if (total == 0)
+      return;
+    const u32 chunk = (total + SAVESTATE_NUM_WORK_CHUNKS - 1) / SAVESTATE_NUM_WORK_CHUNKS;
+    const bool need_changed = !m_region_mode;
+    if (need_changed)
       restore_changed.resize(total);
-      const bool with_shadow = !m_region_mode && m_shadow_valid;
-      const std::array<u8*, 2> shadow_base{with_shadow ? m_shadow_mem1.get() : nullptr,
-                                           with_shadow ? m_shadow_mem2.get() : nullptr};
+    const bool with_shadow = !m_region_mode && m_shadow_valid;
+    const bool has_exclusions = !sorted_exclude_regions->empty();
+    const std::array<u8*, 2> shadow_base{with_shadow ? m_shadow_mem1.get() : nullptr,
+                                         with_shadow ? m_shadow_mem2.get() : nullptr};
 
-      // One job per granule would be millions of jobs, so each job restores a contiguous slice.
-      // Every granule is a distinct destination, so slices are safe to run concurrently.
-      std::vector<job::Job*> page_jobs;
-      page_jobs.reserve(SAVESTATE_NUM_WORK_CHUNKS);
+    // One job per granule would be millions of jobs, so each job restores a contiguous slice.
+    // Every granule is a distinct destination, so slices are safe to run concurrently.
+    std::vector<job::Job*> page_jobs;
+    page_jobs.reserve(SAVESTATE_NUM_WORK_CHUNKS);
 
-      for (u32 offset = 0; offset < total; offset += chunk)
-      {
-        const u32 count = std::min(chunk, total - offset);
-        page_jobs.push_back(w.create_job_as_child(
-            j, [this, sorted_exclude_regions, offset, count, shadow_base, live_dirty_empty](
-                   job::JobTaskThread&, job::Job&) {
-              for (u32 n = offset; n < offset + count; n++)
+    for (u32 offset = 0; offset < total; offset += chunk)
+    {
+      const u32 count = std::min(chunk, total - offset);
+      page_jobs.push_back(w.create_job_as_child(
+          j, [this, sorted_exclude_regions, offset, count, shadow_base, live_dirty_empty,
+              need_changed, has_exclusions](job::JobTaskThread&, job::Job&) {
+            for (u32 n = offset; n < offset + count; n++)
+            {
+              const u32 page_key = restore_keys[n];
+              const SourceEntry source_entry = restore_srcs[n];
+              const bool isMem2 = (page_key >= MEM2_FIRST_PAGE);
+              const u32 local_page = isMem2 ? (page_key - MEM2_FIRST_PAGE) : page_key;
+              uint8_t* const dst =
+                  (isMem2 ? m_mem2_ptr : m_mem1_ptr) + static_cast<size_t>(local_page) * ROLLBACK_PAGE_SIZE;
+              const uint32_t dst_phys =
+                  (isMem2 ? MEM2_BASE : 0u) + local_page * static_cast<uint32_t>(ROLLBACK_PAGE_SIZE);
+
+              const uint8_t* src;
+              if (source_entry.slot == BASE_SNAPSHOT_SENTINEL)
               {
-                const u32 page_key = restore_keys[n];
-                const SourceEntry source_entry = restore_srcs[n];
-                const bool isMem2 = (page_key >= MEM2_FIRST_PAGE);
-                const u32 local_page = isMem2 ? (page_key - MEM2_FIRST_PAGE) : page_key;
-                uint8_t* const dst =
-                    (isMem2 ? m_mem2_ptr : m_mem1_ptr) + static_cast<size_t>(local_page) * ROLLBACK_PAGE_SIZE;
-                const uint32_t dst_phys =
-                    (isMem2 ? MEM2_BASE : 0u) + local_page * static_cast<uint32_t>(ROLLBACK_PAGE_SIZE);
+                const uint8_t* const snap_base =
+                    isMem2 ? m_base_snapshot.mem2.get() : m_base_snapshot.mem1.get();
+                src = snap_base + static_cast<size_t>(local_page) * ROLLBACK_PAGE_SIZE;
+              }
+              else
+              {
+                const Rollback::RegionDelta& src_delta =
+                    isMem2 ? m_slots[source_entry.slot].m_mem2_delta :
+                             m_slots[source_entry.slot].m_mem1_delta;
+                src = src_delta.page_data.data() +
+                      static_cast<size_t>(source_entry.local_idx) * ROLLBACK_PAGE_SIZE;
+              }
 
-                const uint8_t* src;
-                if (source_entry.slot == BASE_SNAPSHOT_SENTINEL)
+              if (m_region_mode)
+              {
+                const size_t mask_idx =
+                    isMem2 ? m_mem1_size / ROLLBACK_PAGE_SIZE + local_page : local_page;
+                if (m_region_mask[mask_idx] == 2)
                 {
-                  const uint8_t* const snap_base =
-                      isMem2 ? m_base_snapshot.mem2.get() : m_base_snapshot.mem1.get();
-                  src = snap_base + static_cast<size_t>(local_page) * ROLLBACK_PAGE_SIZE;
-                }
-                else
-                {
-                  const Rollback::RegionDelta& src_delta =
-                      isMem2 ? m_slots[source_entry.slot].m_mem2_delta :
-                               m_slots[source_entry.slot].m_mem1_delta;
-                  src = src_delta.page_data.data() +
-                        static_cast<size_t>(source_entry.local_idx) * ROLLBACK_PAGE_SIZE;
-                }
-
-                if (m_region_mode)
-                {
-                  const size_t mask_idx =
-                      isMem2 ? m_mem1_size / ROLLBACK_PAGE_SIZE + local_page : local_page;
-                  if (m_region_mask[mask_idx] == 2)
+                  // Only the bytes inside the set: the rest of the granule is live memory
+                  // outside it (another heap, the GX FIFO, ...).
+                  const u64 bits = m_region_partial.at(page_key);
+                  bool outside_differs = false;
+                  for (u32 b = 0; b < ROLLBACK_PAGE_SIZE; ++b)
                   {
-                    // Only the bytes inside the set: the rest of the granule is live memory
-                    // outside it (another heap, the GX FIFO, ...).
-                    const u64 bits = m_region_partial.at(page_key);
-                    bool outside_differs = false;
-                    for (u32 b = 0; b < ROLLBACK_PAGE_SIZE; ++b)
-                    {
-                      if (bits & (1ULL << b))
-                        dst[b] = src[b];
-                      else if (dst[b] != src[b])
-                        outside_differs = true;
-                    }
-                    if (outside_differs)
-                    {
-                      // A whole-granule restore would have written stale bytes here (diagnostics).
-                      std::lock_guard lk(m_partial_stats_mutex);
-                      ++m_partial_skipped[dst_phys];
-                    }
-                    continue;
+                    if (bits & (1ULL << b))
+                      dst[b] = src[b];
+                    else if (dst[b] != src[b])
+                      outside_differs = true;
                   }
-                }
-                // The shadow follows the machine back: the restored granules hold the loaded
-                // frame's bytes.
-                u8* const shadow =
-                    shadow_base[isMem2] ?
-                        shadow_base[isMem2] + static_cast<size_t>(local_page) * ROLLBACK_PAGE_SIZE :
-                        nullptr;
-                // The shadow holds the newest save's bytes, which are RAM's unless a live mark
-                // named the granule.
-                if (std::memcmp(dst, src, ROLLBACK_PAGE_SIZE) == 0)
-                {
-                  restore_changed[n] = 0;
-                  if (shadow && !live_dirty_empty)
-                    std::memcpy(shadow, dst, ROLLBACK_PAGE_SIZE);
+                  if (outside_differs)
+                  {
+                    // A whole-granule restore would have written stale bytes here (diagnostics).
+                    std::lock_guard lk(m_partial_stats_mutex);
+                    ++m_partial_skipped[dst_phys];
+                  }
                   continue;
                 }
+              }
+              // The shadow follows the machine back: the restored granules hold the loaded
+              // frame's bytes.
+              u8* const shadow =
+                  shadow_base[isMem2] ?
+                      shadow_base[isMem2] + static_cast<size_t>(local_page) * ROLLBACK_PAGE_SIZE :
+                      nullptr;
+              // The shadow holds the newest save's bytes, which are RAM's unless a live mark
+              // named the granule.
+              if (std::memcmp(dst, src, ROLLBACK_PAGE_SIZE) == 0)
+              {
+                if (need_changed)
+                  restore_changed[n] = 0;
+                if (shadow && !live_dirty_empty)
+                  std::memcpy(shadow, dst, ROLLBACK_PAGE_SIZE);
+                continue;
+              }
+              if (need_changed)
+              {
                 u32 changed = 0;
-                for (u32 w = 0; w < ROLLBACK_PAGE_SIZE / 4; ++w)
+                for (u32 w_idx = 0; w_idx < ROLLBACK_PAGE_SIZE / 4; ++w_idx)
                 {
                   u32 live, saved;
-                  std::memcpy(&live, dst + w * 4, sizeof(live));
-                  std::memcpy(&saved, src + w * 4, sizeof(saved));
+                  std::memcpy(&live, dst + w_idx * 4, sizeof(live));
+                  std::memcpy(&saved, src + w_idx * 4, sizeof(saved));
                   if (live != saved)
-                    changed |= 1u << w;
+                    changed |= 1u << w_idx;
                 }
                 restore_changed[n] = static_cast<u16>(changed);
-                // A granule clear of every exclusion is copied whole: savestateMemcpy walks the
-                // exclusions for each byte range (GitHub issue #14).
-                bool excluded = false;
+              }
+              // A granule clear of every exclusion is copied whole: savestateMemcpy walks the
+              // exclusions for each byte range (GitHub issue #14).
+              bool excluded = false;
+              if (has_exclusions)
+              {
                 for (const MemoryRegion& r : *sorted_exclude_regions)
                   excluded |= dst_phys < r.phys_end && dst_phys + ROLLBACK_PAGE_SIZE > r.phys_start;
-                if (excluded)
-                  savestateMemcpy(dst, src, ROLLBACK_PAGE_SIZE, dst_phys, *sorted_exclude_regions);
-                else
-                  std::memcpy(dst, src, ROLLBACK_PAGE_SIZE);
-                if (shadow)
-                  std::memcpy(shadow, dst, ROLLBACK_PAGE_SIZE);
               }
-            }));
-      }
-
-      // Kick all page restore jobs
-      if (!page_jobs.empty())
-        w.do_work_and_kick_jobs(page_jobs.data(), static_cast<uint16_t>(page_jobs.size()));
+              if (excluded)
+                savestateMemcpy(dst, src, ROLLBACK_PAGE_SIZE, dst_phys, *sorted_exclude_regions);
+              else
+                std::memcpy(dst, src, ROLLBACK_PAGE_SIZE);
+              if (shadow)
+                std::memcpy(shadow, dst, ROLLBACK_PAGE_SIZE);
+            }
+          }));
     }
+
+    // Kick all page restore jobs
+    if (!page_jobs.empty())
+      w.do_work_and_kick_jobs(page_jobs.data(), static_cast<uint16_t>(page_jobs.size()));
+  };
+
+  auto restore_ram = [&]() {
+    return job::KickRootJob(m_dispatch_thread, [&](job::JobTaskThread& w, job::Job& j) {
+      const bool live_dirty_empty = index_ram();
+      copy_ram(w, j, live_dirty_empty);
     });
   };
 
@@ -1890,7 +1910,19 @@ bool RollbackManager::LoadFrame(Core::System& system, int frames_back)
   }
 
   if (m_region_mode)
-    ram_job = restore_ram();
+  {
+    const bool live_dirty_empty = index_ram();
+    if (!restore_keys.empty())
+    {
+      ram_job = job::KickRootJob(m_dispatch_thread, [&](job::JobTaskThread& w, job::Job& j) {
+        copy_ram(w, j, live_dirty_empty);
+      });
+    }
+    else
+    {
+      m_last_load_granules = 0;
+    }
+  }
 
   if (m_region_mode)
   {

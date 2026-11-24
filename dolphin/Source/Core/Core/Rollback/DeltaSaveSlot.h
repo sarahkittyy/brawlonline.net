@@ -329,7 +329,8 @@ public:
   std::vector<u32> m_mem2_scan;
 
   // Per-worker scratch for fused whole-machine scan + shadow compare + copy + change CRC.
-  // Cache-line aligned so workers never false-share adjacent chunk state.
+  // Cache-line aligned so workers never false-share adjacent chunk state. Allocated lazily only in
+  // whole-machine mode so region-mode DeltaSaveSlots stay compact in L1/L2 cache.
   struct Granule
   {
     u8 bytes[ROLLBACK_PAGE_SIZE];
@@ -341,8 +342,13 @@ public:
     u32 crc = 0;
     size_t crc_bytes = 0;
   };
-  std::array<ChunkScratch, SAVESTATE_NUM_WORK_CHUNKS> m_mem1_chunks;
-  std::array<ChunkScratch, SAVESTATE_NUM_WORK_CHUNKS> m_mem2_chunks;
+  struct WholeMachineScratch
+  {
+    std::array<ChunkScratch, SAVESTATE_NUM_WORK_CHUNKS> mem1_chunks;
+    std::array<ChunkScratch, SAVESTATE_NUM_WORK_CHUNKS> mem2_chunks;
+    VideoCommon::TmemSnapshot tmem;
+  };
+  std::unique_ptr<WholeMachineScratch> m_wm_scratch;
   u32 m_last_change_crc = 0;
   bool m_has_change_crc = false;
   bool m_has_full_state = false;
@@ -416,7 +422,7 @@ public:
   std::atomic<u32> m_video_restore_done{1};
   Common::UniqueBuffer<uint8_t> m_video_state;  // written by the video thread while Pending
   size_t m_video_state_size = 0;
-  VideoCommon::TmemSnapshot m_tmem;  // incremental 4 KiB TMEM snapshot (video thread)
+  WholeMachineScratch& EnsureWholeMachineScratch();
   // Video thread: serialize its part of the video state into m_video_state.
   void CaptureVideoState(bool run);
   // CPU thread, the video thread synced: restore video state. Begin queues the restore on the

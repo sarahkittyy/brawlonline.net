@@ -38,6 +38,13 @@ namespace Rollback
 uint8_t* JITDirtyBitmap::AllocateEntries()
 {
   const size_t size = ENTRY_COUNT + ENTRY_SLACK;
+#ifndef _WIN32
+  // On non-PIE executables (e.g. Linux), a static BSS buffer is already in the low 2 GB for
+  // disp32 addressing and gets hugepage-eligible backing without mmap(MAP_32BIT)'s 4 KiB TLB cost.
+  alignas(64) static uint8_t s_static_entries[ENTRY_COUNT + ENTRY_SLACK];
+  if (reinterpret_cast<uintptr_t>(s_static_entries) + size <= 0x7FFFFFFFULL)
+    return s_static_entries;
+#endif
   void* entries = nullptr;
 #ifdef _WIN32
   // Any free place in the low 2 GB, from 256 MB up (an address has to be asked for by number).
@@ -61,6 +68,10 @@ uint8_t* JITDirtyBitmap::AllocateEntries()
     if (entries == MAP_FAILED)
       entries = nullptr;
   }
+#ifdef MADV_HUGEPAGE
+  if (entries)
+    madvise(entries, size, MADV_HUGEPAGE);
+#endif
 #endif
   // Both give zeroed pages.
   if (!entries)
@@ -133,6 +144,13 @@ void savestateMemcpy(void* dst, const void* src, size_t size, uint32_t dst_phys,
 
 
 
+DeltaSaveSlot::WholeMachineScratch& DeltaSaveSlot::EnsureWholeMachineScratch()
+{
+  if (!m_wm_scratch)
+    m_wm_scratch = std::make_unique<WholeMachineScratch>();
+  return *m_wm_scratch;
+}
+
 void DeltaSaveSlot::Init(uint8_t* mem1_ptr, size_t mem1_size, uint8_t* mem2_ptr, size_t mem2_size,
                          uint8_t* l1_cache_ptr, size_t l1_cache_size)
 {
@@ -163,7 +181,8 @@ void DeltaSaveSlot::Reset()
   m_save_buffer.reset();
   m_aram.Reset();
   m_fake_vmem.Reset();
-  m_tmem.Reset();
+  if (m_wm_scratch)
+    m_wm_scratch->tmem.Reset();
 }
 
 // region_phys_base: Wii physical base of the region
@@ -193,7 +212,7 @@ struct KeptChunks
 // found) go to `scan`, and jobs copy them to `out`. `scan` and `kept` must outlive the jobs.
 // With a `shadow` (RollbackManager's, whole-machine mode), the jobs keep only the granules whose
 // bytes differ from it and bring it up to date with them (UpdateShadowAfterSave).
-void enqueueSubsectionJobs(u32 first_page, u32 page_count, const uint8_t* region_base,
+static void enqueueSubsectionJobs(u32 first_page, u32 page_count, const uint8_t* region_base,
                            Rollback::RegionDelta& out, RollbackManager& rbm,
                            job::JobTaskThread& w, job::Job& root, std::vector<job::Job*>& jar,
                            u32 num_work_chunks, std::vector<u32>& scan, u8* shadow,
@@ -356,8 +375,8 @@ void RestoreMachineRegisters(Core::System& system, const DeltaSaveSlot& slot)
 // compares each dirty granule against the rolling shadow, updates the shadow, stores changed
 // granules into `scratch`, and accumulates the chunk's change CRC32 while the bytes are hot in
 // registers.
-void RunFusedRegionChunk(u32 first_page, u32 slice_first, u32 slice_end, const u8* region_base,
-                         u8* shadow, const u8* gpu, std::span<const MemoryRegion> exclude_regions,
+static void RunFusedRegionChunk(u32 first_page, u32 slice_first, u32 slice_end,
+                                const u8* region_base, u8* shadow, const u8* gpu, std::span<const MemoryRegion> exclude_regions,
                          std::span<const MemoryRegion> checksum_masks,
                          DeltaSaveSlot::ChunkScratch& scratch)
 {
@@ -409,8 +428,9 @@ void RunFusedRegionChunk(u32 first_page, u32 slice_first, u32 slice_end, const u
   scratch.crc_bytes = chunk_crc.TotalBytes();
 }
 
-void AssembleRegionChunks(const std::array<DeltaSaveSlot::ChunkScratch, SAVESTATE_NUM_WORK_CHUNKS>& chunks,
-                          RegionDelta& out)
+static void AssembleRegionChunks(
+    const std::array<DeltaSaveSlot::ChunkScratch, SAVESTATE_NUM_WORK_CHUNKS>& chunks,
+    RegionDelta& out)
 {
   u32 total = 0;
   for (const auto& c : chunks)
@@ -536,14 +556,15 @@ void DeltaSaveSlot::Save(Core::System& system, bool full_state, s64 slice_frame,
           });
     }
 
-    for (auto& c : m_mem1_chunks)
+    auto& wm = EnsureWholeMachineScratch();
+    for (auto& c : wm.mem1_chunks)
     {
       c.indices.clear();
       c.data.clear();
       c.crc = Common::StartCRC32();
       c.crc_bytes = 0;
     }
-    for (auto& c : m_mem2_chunks)
+    for (auto& c : wm.mem2_chunks)
     {
       c.indices.clear();
       c.data.clear();
@@ -552,8 +573,8 @@ void DeltaSaveSlot::Save(Core::System& system, bool full_state, s64 slice_frame,
     }
 
     job::Job* ram_job = job::KickRootJob(
-        dt, [this, shadow1, shadow2, gpu, exclude_regions, checksum_masks](job::JobTaskThread& w,
-                                                                           job::Job& root) {
+        dt, [this, &wm, shadow1, shadow2, gpu, exclude_regions, checksum_masks](job::JobTaskThread& w,
+                                                                                job::Job& root) {
           ROLLBACK_ZONE_N("fused ram save dispatch");
           std::vector<job::Job*> jar;
           jar.reserve(SAVESTATE_NUM_WORK_CHUNKS * 2);
@@ -582,8 +603,8 @@ void DeltaSaveSlot::Save(Core::System& system, bool full_state, s64 slice_frame,
             }
           };
 
-          enqueue_region(0, m_mem1_page_count, m_mem1_ptr, shadow1, m_mem1_chunks);
-          enqueue_region(MEM2_FIRST_PAGE, m_mem2_page_count, m_mem2_ptr, shadow2, m_mem2_chunks);
+          enqueue_region(0, m_mem1_page_count, m_mem1_ptr, shadow1, wm.mem1_chunks);
+          enqueue_region(MEM2_FIRST_PAGE, m_mem2_page_count, m_mem2_ptr, shadow2, wm.mem2_chunks);
           ASSERT(jar.size() <= UINT16_MAX);
           if (!jar.empty())
             w.do_work_and_kick_jobs(jar.data(), static_cast<uint16_t>(jar.size()));
@@ -628,13 +649,13 @@ void DeltaSaveSlot::Save(Core::System& system, bool full_state, s64 slice_frame,
     if (slice_job)
       job::DrainJobsUntilComplete(dt, slice_job);
 
-    AssembleRegionChunks(m_mem1_chunks, m_mem1_delta);
-    AssembleRegionChunks(m_mem2_chunks, m_mem2_delta);
+    AssembleRegionChunks(wm.mem1_chunks, m_mem1_delta);
+    AssembleRegionChunks(wm.mem2_chunks, m_mem2_delta);
 
     u32 combined_crc = Common::StartCRC32();
-    for (const auto& c : m_mem1_chunks)
+    for (const auto& c : wm.mem1_chunks)
       combined_crc = Common::CombineCRC32(combined_crc, c.crc, c.crc_bytes);
-    for (const auto& c : m_mem2_chunks)
+    for (const auto& c : wm.mem2_chunks)
       combined_crc = Common::CombineCRC32(combined_crc, c.crc, c.crc_bytes);
     m_last_change_crc = combined_crc ? combined_crc : 1;
     m_has_change_crc = true;
@@ -701,13 +722,14 @@ void DeltaSaveSlot::Save(Core::System& system, bool full_state, s64 slice_frame,
   m_last_dostate_us = static_cast<u64>(
       std::chrono::duration_cast<std::chrono::microseconds>(ram_start - dostate_start).count());
 
-  job::Job* l1cachejob = job::KickRootJob(dt, [this, region_mask](job::JobTaskThread&, job::Job&) {
-    ROLLBACK_ZONE_N("L1 cache save");
-    Rollback::DeltaSaveSlot* slot = this;
-    if (!region_mask && slot->m_l1_cache_ptr && slot->m_l1_cache_size > 0 &&
-        slot->m_l1_cache_snapshot.data())
-      std::memcpy(slot->m_l1_cache_snapshot.data(), slot->m_l1_cache_ptr, slot->m_l1_cache_size);
-  });
+  job::Job* l1cachejob = nullptr;
+  if (!region_mask && m_l1_cache_ptr && m_l1_cache_size > 0 && m_l1_cache_snapshot.data())
+  {
+    l1cachejob = job::KickRootJob(dt, [this](job::JobTaskThread&, job::Job&) {
+      ROLLBACK_ZONE_N("L1 cache save");
+      std::memcpy(m_l1_cache_snapshot.data(), m_l1_cache_ptr, m_l1_cache_size);
+    });
+  }
 
   job::Job* root_mem1_job = job::KickRootJob(
       dt, [this, &rbm, shadow1, &kept1](job::JobTaskThread& w, job::Job& root) {
@@ -735,7 +757,8 @@ void DeltaSaveSlot::Save(Core::System& system, bool full_state, s64 slice_frame,
 
   job::DrainJobsUntilComplete(dt, root_mem1_job);
   job::DrainJobsUntilComplete(dt, root_mem2_job);
-  job::DrainJobsUntilComplete(dt, l1cachejob);
+  if (l1cachejob)
+    job::DrainJobsUntilComplete(dt, l1cachejob);
   for (const auto& [delta, kept] :
        {std::pair{&m_mem1_delta, &kept1}, std::pair{&m_mem2_delta, &kept2}})
   {
@@ -766,7 +789,7 @@ void DeltaSaveSlot::CaptureVideoState(bool run)
     if (p.IsWriteMode())
     {
       m_video_state_size = size;
-      VideoCommon_SaveTmemSnapshot(m_tmem);
+      VideoCommon_SaveTmemSnapshot(EnsureWholeMachineScratch().tmem);
       m_video_capture.store(VideoCapture::Ready, std::memory_order_release);
       return;
     }
@@ -789,7 +812,8 @@ bool DeltaSaveSlot::BeginRestoreVideoState()
     Core::System::GetInstance().GetFifo().ApplyRollbackFifo();
     if (ready)
     {
-      VideoCommon_LoadTmemSnapshot(m_tmem);
+      if (m_wm_scratch)
+        VideoCommon_LoadTmemSnapshot(m_wm_scratch->tmem);
       u8* ptr = m_video_state.data();
       PointerWrap p(&ptr, m_video_state_size, PointerWrap::Mode::Read);
       VideoCommon_DoStateRollbackGPU(p);
