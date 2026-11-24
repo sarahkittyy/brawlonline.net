@@ -1031,6 +1031,13 @@ export async function folderBytes(dir: string): Promise<number> {
   return total;
 }
 
+/**
+ * The system's tar. On Windows its own (bsdtar, in System32): a GNU tar earlier on the PATH, such
+ * as Git for Windows', takes the `C:` of a path for a remote host.
+ */
+export const systemTar = () =>
+  process.platform === "win32" ? path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "tar.exe") : "tar";
+
 /** A zip with node-stream-zip (it refuses entries outside `dir`), a .tar.gz with the system's tar. */
 export const unpackArchive: UnpackFn = async (archive, dir, signal) => {
   if (/\.zip$/i.test(archive)) {
@@ -1043,7 +1050,7 @@ export const unpackArchive: UnpackFn = async (archive, dir, signal) => {
     return;
   }
   await new Promise<void>((resolve, reject) => {
-    const child = spawn("tar", ["-xzf", archive, "-C", dir], { windowsHide: true, signal });
+    const child = spawn(systemTar(), ["-xzf", archive, "-C", dir], { windowsHide: true, signal });
     let stderr = "";
     child.stderr.on("data", (d) => (stderr += String(d)));
     child.on("error", reject);
