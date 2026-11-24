@@ -51,7 +51,8 @@ def _make_backend(**kw: Any) -> OnlineBackend:
 
 @pytest.fixture(scope="module")
 def backend() -> Iterator[OnlineBackend]:
-    be = _make_backend()
+    # PPHARNESS_KEEP_BACKEND=1: keep the servers' logs (run/backends/be-*) after a passing module too.
+    be = _make_backend(keep=bool(os.environ.get("PPHARNESS_KEEP_BACKEND")))
     try:
         yield be
     finally:
