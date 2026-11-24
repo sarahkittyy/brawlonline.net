@@ -7,7 +7,8 @@
  * as `open-url` (macOS). The Discord activity's buttons (renderer/lib/discord) go through the website
  * (`/?join=<code>`, `/?watch=<stream>`) to `brawlonline://room/join?code=<code>` (the launcher joins
  * the room, as Join their room does) and `brawlonline://watch?stream=<stream>` (it watches that live
- * game on the Spectate tab). Nothing else is acted on; anything else in the scheme is logged and dropped.
+ * game on the Spectate tab). `brawlonline://play` starts the game as the Play button does, with P+ booted (Theatre's
+ * Brawl Online button on a TV PC). Nothing else is acted on; anything else in the scheme is logged and dropped.
  */
 
 import { URL_SCHEME } from "@common/product";
@@ -25,6 +26,10 @@ export type BrawlLink =
       kind: "join-room";
       /** 4 letters, no vowels or Y. */
       code: string;
+    }
+  | {
+      /** Play, with the game booted. */
+      kind: "play";
     }
   | {
       kind: "watch";
@@ -58,6 +63,9 @@ export function parseBrawlLink(link: string): BrawlLink | null {
   if (target === "room/join") {
     const code = (url.searchParams.get("code") ?? "").toUpperCase();
     return /^[BCDFGHJKLMNPQRSTVWXZ]{4}$/.test(code) ? { kind: "join-room", code } : null;
+  }
+  if (target === "play") {
+    return { kind: "play" };
   }
   if (target === "watch") {
     const stream = (url.searchParams.get("stream") ?? "").toLowerCase();

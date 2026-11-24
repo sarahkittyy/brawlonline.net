@@ -16,7 +16,7 @@ import { useAppStore } from "@/lib/hooks/use_app_store";
 import { useLastPageTracker } from "@/lib/hooks/use_last_page";
 import { usePageRequestListeners } from "@/lib/hooks/use_page_request_listeners";
 import { usePageNavigationShortcuts } from "@/lib/hooks/use_shortcuts";
-import { useBrawlLinks } from "@/lib/rulesets/use_brawl_links";
+import { PlayLinks, useBrawlLinks } from "@/lib/rulesets/use_brawl_links";
 import { ModsTab } from "@/pages/home/mods/mods_tab";
 import { Spectate } from "@/pages/home/spectate/spectate";
 import { LeaderboardPage } from "@/pages/leaderboard/leaderboard_page";
@@ -104,7 +104,12 @@ export function createApp({ services }: { services: Services }): {
     // The player's Discord activity (Settings > Social).
     useDiscordPresence();
 
-    return <AppImpl menuItems={menuItems} />;
+    return (
+      <>
+        <PlayLinks />
+        <AppImpl menuItems={menuItems} />
+      </>
+    );
   });
 
   // Smart root redirect that checks if quick start is needed
