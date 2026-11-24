@@ -928,6 +928,39 @@ void Display(float scale)
       return best;
     };
     const float stars_y = track_y - 14.0f * scale;
+
+    // Clip mode: the clip's ends are grips on the bar, each its own button over the whole grip
+    // drawn (and a little past its sides), submitted first so it wins over the stars and the track
+    // under it. (Sarah's board, 2026-11-24: "i tried to clip something at the start of spectate and
+    // i couldn't drag the left hand scrubber ... it took me like a few tries": only the part of a
+    // grip over the seek area took the press, so a grip at the bar's end, as a clip's start is in a
+    // game's first 20 s, had its outer half and top dead.) Grips nearer each other than their reach
+    // share the space between them at its middle.
+    const float handle_grab = 9.0f * scale;
+    const float handle_reach_y = 15.0f * scale;
+    int handle_hovered = 0, handle_active = 0, handle_activated = 0;
+    if (s_clip_mode)
+    {
+      const float xs = x_of(s_clip_start);
+      const float xe = x_of(s_clip_end);
+      const float mid = (xs + xe) * 0.5f;
+      for (int h = 1; h <= 2; ++h)
+      {
+        const float x0 = h == 1 ? xs - handle_grab : std::max(xe - handle_grab, mid);
+        const float x1 = h == 1 ? std::min(xs + handle_grab, mid) : xe + handle_grab;
+        if (x1 - x0 < 1.0f)
+          continue;
+        ImGui::SetCursorScreenPos(ImVec2(x0, track_y - handle_reach_y));
+        ImGui::InvisibleButton(h == 1 ? "##clipstart" : "##clipend", ImVec2(x1 - x0, handle_reach_y * 2.0f));
+        if (ImGui::IsItemHovered())
+          handle_hovered = h;
+        if (ImGui::IsItemActive())
+          handle_active = h;
+        if (ImGui::IsItemActivated())
+          handle_activated = h;
+      }
+    }
+
     int mark_hovered = -1;
     if (!info.marks.empty())
     {
@@ -941,43 +974,32 @@ void Display(float scale)
         mark_hovered = mark_at(io.MousePos.x);
     }
 
-    // The seek area: the track and some height around it (click or drag to seek).
+    // The seek area: the track and some height around it, and the knob's reach past its ends
+    // (click or drag to seek; a press past an end goes to that end).
     const float seek_top = track_y - 8.0f * scale;
     const float seek_h = 18.0f * scale;
-    ImGui::SetCursorScreenPos(ImVec2(bar_x, seek_top));
-    ImGui::InvisibleButton("##replayseek", ImVec2(bar_w, seek_h));
-    const bool hovered = ImGui::IsItemHovered();
+    ImGui::SetCursorScreenPos(ImVec2(bar_x - handle_grab, seek_top));
+    ImGui::InvisibleButton("##replayseek", ImVec2(bar_w + handle_grab * 2.0f, seek_h));
+    const bool hovered = ImGui::IsItemHovered() || handle_hovered != 0;
     const bool active = ImGui::IsItemActive();
     const auto at = [&](float x) { return std::clamp((x - bar_x) / bar_w, 0.0f, 1.0f); };
-    // Clip mode: the clip's ends are handles on the bar (the nearer one within reach; a press
-    // elsewhere seeks as always). A handle let go shows its frame.
-    const float handle_grab = 9.0f * scale;
-    int handle_hovered = 0;
-    if (s_clip_mode && hovered && !s_dragging && s_clip_handle == 0)
-    {
-      const float ds = std::abs(x_of(s_clip_start) - io.MousePos.x);
-      const float de = std::abs(x_of(s_clip_end) - io.MousePos.x);
-      if (std::min(ds, de) <= handle_grab)
-        handle_hovered = de <= ds ? 2 : 1;
-    }
-    if (hovered && !s_dragging && mark_hovered < 0 && handle_hovered == 0 && s_clip_handle == 0)
+    if (ImGui::IsItemHovered() && !s_dragging && mark_hovered < 0 && s_clip_handle == 0)
       mark_hovered = mark_at(io.MousePos.x);
     // A press on a mark's start plays its highlight once released (no drag, no seek); on a clip's
-    // handle, it moves that end.
+    // grip, it moves that end (a grip let go shows its frame).
     if (ImGui::IsItemActivated())
+      s_mark_held = mark_hovered;
+    if (handle_activated)
     {
-      s_clip_handle = handle_hovered;
-      s_mark_held = handle_hovered ? -1 : mark_hovered;
-      if (handle_hovered)
-      {
-        s_handle_press_x = io.MousePos.x;
-        s_handle_press_frame = handle_hovered == 1 ? s_clip_start : s_clip_end;
-        s_handle_moved = false;
-      }
+      s_clip_handle = handle_activated;
+      s_mark_held = -1;
+      s_handle_press_x = io.MousePos.x;
+      s_handle_press_frame = handle_activated == 1 ? s_clip_start : s_clip_end;
+      s_handle_moved = false;
     }
     if (s_clip_mode && (handle_hovered || s_clip_handle))
       ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
-    if (active && s_clip_handle)
+    if (s_clip_handle && handle_active == s_clip_handle)
     {
       // Moved only once clearly dragged; then by the mouse's movement since the press.
       const float dx = io.MousePos.x - s_handle_press_x;
@@ -998,7 +1020,7 @@ void Display(float scale)
         }
       }
     }
-    else if (!active && s_clip_handle)
+    else if (s_clip_handle)
     {
       // A click on a handle goes there; a drag shows the frame it was left at.
       Control(Gprb::Session::PlaybackCommand::Seek,
