@@ -1,7 +1,8 @@
 // Settings > Game > "Play Project+ with": Dolphin or EmissaryRecomp (docs/design/brawl-recompiled.md
 // §4.2). It replaced "Play Button Action" (Launch Project+ / Launch Dolphin): Configure Dolphin in
 // Settings > Netplay Dolphin opens Dolphin without a game. EmissaryRecomp's line says where it
-// stands; picking it before it is set up opens Settings > Add-ons, and Play uses Dolphin until then.
+// stands; picking it before it is set up opens Settings > Add-ons, and Play opens its popup with Download until then
+// (emissary_dialog.tsx). The Add-ons card has the same choice as a switch.
 import { useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 

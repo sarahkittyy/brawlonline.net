@@ -4,14 +4,15 @@ export const AddonsSettingsMessages = {
   emissary: () => "EmissaryRecomp",
   beta: () => "BETA",
   by: () => "by",
+  // Sarah's words (board, 2026-11-24).
   emissaryDescription: () =>
-    "Brawl as a native PC program instead of Dolphin, with Brawl Online's rollback. It plays Project+ online with Dolphin players. Other Games and replays still use Dolphin.",
+    'Play P+ as a native PC program instead of Dolphin. Uses Brawl Online\'s netcode, you can cross-play with Dolphin players. "Other Games" rooms still use Dolphin.',
+  madeBy: () => "Made by",
+  // The card's switch: Settings > Game's "Play Project+ with", on = EmissaryRecomp.
+  playWithEmissaryOn: () => "Emissary",
+  playWithEmissaryOff: () => "Dolphin",
   installed: () => "Installed",
   latest: () => "Latest",
-  status: () => "Status",
-  program: () => "Program",
-  gameFiles: () => "Game files",
-  fromDisc: () => "from your disc image",
   notInstalled: () => "Not installed",
   unknown: () => "Unknown",
   download: (download: string, disk: string) => `Download (${download} download, ${disk} on disk)`,
@@ -22,8 +23,6 @@ export const AddonsSettingsMessages = {
   removeConfirm: () => "Remove EmissaryRecomp? Its program, game files, settings and saves are deleted. Replays stay.",
   openFolder: () => "Open folder",
   autoUpdate: () => "Keep up to date automatically",
-  autoUpdateDescription: () => "Newer releases download by themselves and play the next time the game starts.",
-  playWith: () => "Play with it in Settings > Game.",
   noOnline: () => "This release can't play online yet: Play uses Dolphin until an update can.",
   // Play with EmissaryRecomp chosen, but Dolphin played: why (its state, or its update's error).
   usingDolphin: (why: string) => `EmissaryRecomp: ${why} Using Dolphin.`,
@@ -32,6 +31,9 @@ export const AddonsSettingsMessages = {
   jobDownload: () => "Downloading",
   jobUnpack: () => "Unpacking",
   jobGameFiles: () => "Extracting the game files from your disc image",
+  // The sidebar's set-up status while it downloads (as "Downloading Project+").
+  downloadingEmissary: () => "Downloading EmissaryRecomp",
+  extractingGameFiles: () => "Extracting game files",
   statusText: (status: EmissaryStatus): string => {
     switch (status) {
       case "unavailable":

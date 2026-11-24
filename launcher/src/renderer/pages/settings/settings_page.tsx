@@ -14,6 +14,8 @@ import { Link, Route, Routes, useLocation, useMatch, useNavigate, useResolvedPat
 
 import { BuildInfo } from "@/components/build_info/build_info";
 import { DualPane } from "@/components/dual_pane";
+import hintStyles from "@/lib/emissary/emissary_hint.module.css";
+import { useEmissaryHintGlows } from "@/lib/emissary/use_emissary_hint";
 import { useMousetrap } from "@/lib/hooks/use_mousetrap";
 import { useSettingsModal } from "@/lib/hooks/use_settings_modal";
 import { useTabMemory } from "@/lib/hooks/use_tab_memory";
@@ -21,6 +23,7 @@ import type { SettingSection } from "@/pages/settings/types";
 import { platformTitleBarStyles } from "@/styles/platform_title_bar_styles";
 import { withThemeBackground } from "@/styles/with_theme_background";
 
+import { ADDONS_PATH } from "./addons_settings/paths";
 import { SettingsPageMessages as Messages } from "./settings_page.messages";
 
 const Outer = styled.div`
@@ -76,6 +79,8 @@ export const SettingsPage = React.memo(({ settings }: { settings: SettingSection
   const { close } = useSettingsModal();
   const setLastTab = useTabMemory((s) => s.setLastTab);
   const location = useLocation();
+  // Add-ons glows until it has been seen, the second step of EmissaryRecomp's hint (use_emissary_hint.ts).
+  const addonsGlows = useEmissaryHintGlows();
   useMousetrap("escape", close);
 
   // Sync current settings tab to memory
@@ -131,7 +136,10 @@ export const SettingsPage = React.memo(({ settings }: { settings: SettingSection
                     {sectionItems.map((item) => {
                       return (
                         <div key={item.name()}>
-                          <CustomLink to={item.path}>
+                          <CustomLink
+                            to={item.path}
+                            className={addonsGlows && item.path === ADDONS_PATH ? hintStyles.glow : undefined}
+                          >
                             {item.icon ? <ListItemIcon>{item.icon}</ListItemIcon> : null}
                             <ListItemText
                               primary={item.name()}

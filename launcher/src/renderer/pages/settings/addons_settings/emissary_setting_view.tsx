@@ -1,6 +1,7 @@
 // Settings > Add-ons' EmissaryRecomp card (addons_settings.tsx): what is installed and the latest,
-// the program's and the game files' sizes, Download / Update / Prepare game files / Remove, and
-// the auto-update switch (docs/design/brawl-recompiled.md §4.1).
+// Download / Update / Prepare game files / Remove, the switch that plays Project+ with it (Settings >
+// Game's "Play Project+ with", mirrored) and the auto-update switch (docs/design/brawl-recompiled.md
+// §4.1). Its words are Sarah's (board, 2026-11-24).
 import { formatBytes } from "@common/disk_space";
 import type { EmissaryState } from "@dolphin/emissary/types";
 import { EMISSARY_AUTHOR } from "@dolphin/emissary/types";
@@ -11,9 +12,11 @@ import GitHubIcon from "@mui/icons-material/GitHub";
 import Button from "@mui/material/Button";
 import LinearProgress from "@mui/material/LinearProgress";
 import Link from "@mui/material/Link";
+import Tooltip from "@mui/material/Tooltip";
 import React from "react";
 
 import { Toggle } from "@/components/form/toggle";
+import hintStyles from "@/lib/emissary/emissary_hint.module.css";
 import { emissaryAction, emissaryJobPercent } from "@/lib/emissary/use_emissary";
 
 import { SettingItem } from "../setting_item_section";
@@ -30,6 +33,13 @@ export type EmissarySettingViewProps = {
   onOpenRepo: () => void;
   onChooseDisc: () => void;
   onAutoUpdate: (value: boolean) => void;
+  /** Settings > Game's "Play Project+ with" is EmissaryRecomp. */
+  playWithEmissary: boolean;
+  /** The game is open: the engine can't change ("Close Dolphin to change this setting"). */
+  playWithDisabledReason?: string;
+  onPlayWithEmissary: (on: boolean) => void;
+  /** The first visit since it came (use_emissary_hint.ts): the card glows. */
+  glow?: boolean;
 };
 
 const Row = ({ label, children }: { label: string; children: React.ReactNode }) => (
@@ -57,11 +67,24 @@ export const EmissarySettingView = ({
   onOpenRepo,
   onChooseDisc,
   onAutoUpdate,
+  playWithEmissary,
+  playWithDisabledReason,
+  onPlayWithEmissary,
+  glow,
 }: EmissarySettingViewProps) => {
   const installed = state?.installed ?? null;
   const job = state?.job ?? null;
   const action = emissaryAction(state);
   const running = state?.running ?? false;
+  const supported = state?.supported !== false && state?.status !== "unavailable";
+  // A line only where the Installed row and the buttons don't already say it.
+  const note = !state
+    ? null
+    : state.status === "unavailable" || state.status === "needsDisc" || state.status === "needsFiles"
+    ? Messages.statusText(state.status)
+    : installed && !installed.playsOnline && state.status === "ready"
+    ? Messages.noOnline()
+    : null;
   return (
     <SettingItem
       name={
@@ -85,10 +108,11 @@ export const EmissarySettingView = ({
     >
       <div
         data-testid="emissary-card"
+        className={glow ? hintStyles.glow : undefined}
         style={{ padding: "12px 16px", borderRadius: 8, background: "rgba(0, 0, 0, 0.25)" }}
       >
         <div style={{ fontSize: 13, opacity: 0.75, marginBottom: 8 }}>
-          {Messages.emissaryDescription()} {Messages.by()}{" "}
+          {Messages.emissaryDescription()} {Messages.madeBy()}{" "}
           <Link
             component="button"
             onClick={onOpenRepo}
@@ -99,28 +123,30 @@ export const EmissarySettingView = ({
             {EMISSARY_AUTHOR}
           </Link>
         </div>
-        <Row label={Messages.status()}>
-          <span data-testid="emissary-status">{state ? Messages.statusText(state.status) : Messages.unknown()}</span>
-        </Row>
+        {supported && (
+          <Tooltip title={playWithDisabledReason ?? ""} placement="bottom-start">
+            <div style={{ marginBottom: 4 }} data-testid="emissary-play-with">
+              <Toggle
+                value={playWithEmissary}
+                onChange={onPlayWithEmissary}
+                disabled={playWithDisabledReason != null}
+                label={playWithEmissary ? Messages.playWithEmissaryOn() : Messages.playWithEmissaryOff()}
+              />
+            </div>
+          </Tooltip>
+        )}
         <Row label={Messages.installed()}>
-          <span style={{ fontWeight: installed ? 600 : undefined }}>
+          <span data-testid="emissary-installed" style={{ fontWeight: installed ? 600 : undefined }}>
             {installed ? installed.version : Messages.notInstalled()}
           </span>
         </Row>
         <Row label={Messages.latest()}>
           <span>{state?.latest?.version ?? Messages.unknown()}</span>
         </Row>
-        {installed && (
-          <Row label={Messages.program()}>
-            <span>{formatBytes(installed.programBytes)}</span>
-          </Row>
-        )}
-        {state?.gameFiles && (
-          <Row label={Messages.gameFiles()}>
-            <span>
-              {formatBytes(state.gameFiles.bytes)} {Messages.fromDisc()}
-            </span>
-          </Row>
+        {note && (
+          <div data-testid="emissary-status" style={{ marginTop: 8, fontSize: 13, opacity: 0.85 }}>
+            {note}
+          </div>
         )}
         {state?.staged && (
           <div style={{ marginTop: 8, fontSize: 13, opacity: 0.85 }}>{Messages.staged(state.staged)}</div>
@@ -198,19 +224,9 @@ export const EmissarySettingView = ({
             )}
           </div>
         )}
-        {state?.supported !== false && (
+        {supported && (
           <div style={{ marginTop: 12 }}>
-            <Toggle
-              value={autoUpdate}
-              onChange={onAutoUpdate}
-              label={Messages.autoUpdate()}
-              description={Messages.autoUpdateDescription()}
-            />
-          </div>
-        )}
-        {installed && state?.status === "ready" && (
-          <div style={{ marginTop: 8, fontSize: 13, opacity: 0.75 }}>
-            {installed.playsOnline ? Messages.playWith() : Messages.noOnline()}
+            <Toggle value={autoUpdate} onChange={onAutoUpdate} label={Messages.autoUpdate()} />
           </div>
         )}
       </div>

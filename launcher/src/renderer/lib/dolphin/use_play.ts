@@ -5,6 +5,8 @@ import { create } from "zustand";
 import { combine } from "zustand/middleware";
 
 import { HeaderMessages as Messages } from "@/app/header/header.messages";
+import { emissaryNeedsSetUp, useEmissary } from "@/lib/emissary/use_emissary";
+import { useEmissaryDialog } from "@/lib/emissary/use_emissary_dialog";
 import { useAccount } from "@/lib/hooks/use_account";
 import { useAppStore } from "@/lib/hooks/use_app_store";
 import { useIsoVerification } from "@/lib/hooks/use_iso_verification";
@@ -35,6 +37,7 @@ export const usePlay = () => {
   const userData = useAccount((store) => store.userData);
   const serverError = useAccount((store) => store.serverError);
   const isoPath = useSettings((store) => store.settings.isoPath) || undefined;
+  const playWith = useSettings((store) => store.settings.playProjectPlusWith);
   const isOnline = useAppStore((state) => state.isOnline);
   const { showError } = useToasts();
   const { launchNetplay } = useDolphinActions(dolphinService);
@@ -77,9 +80,16 @@ export const usePlay = () => {
         return false;
       }
 
+      // Play with EmissaryRecomp before it is set up: its popup, with Download (Project Punch's, on Home), not Dolphin.
+      if (playWith === "emissary" && emissaryNeedsSetUp(useEmissary.getState().state)) {
+        useEmissaryDialog.getState().openDialog();
+        return false;
+      }
+
       return await launchNetplay(bootGame);
     },
     [
+      playWith,
       currentUser,
       isOnline,
       launchNetplay,

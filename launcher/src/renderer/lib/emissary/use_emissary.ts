@@ -64,3 +64,22 @@ export function emissaryAction(state: EmissaryState | null): "download" | "updat
 
 export const emissaryJobPercent = (job: EmissaryState["job"]) =>
   job && job.total > 0 ? Math.min(100, (job.current / job.total) * 100) : 0;
+
+/**
+ * Play with EmissaryRecomp chosen can't start it until it is set up: nothing installed, or its game files not there
+ * (missing, or being extracted). Play then opens its popup (emissary_dialog.tsx) instead of falling back to Dolphin
+ * (Sarah's board, 2026-11-24: "the same exact popup you do when you click the project punch icon and don't have it
+ * installed"). An installed release downloading its update is not this: Play waits for that update in main.
+ */
+export function emissaryNeedsSetUp(state: EmissaryState | null): boolean {
+  switch (state?.status) {
+    case "notInstalled":
+    case "needsFiles":
+    case "preparingFiles":
+      return true;
+    case "downloading":
+      return state.installed == null;
+    default:
+      return false;
+  }
+}
