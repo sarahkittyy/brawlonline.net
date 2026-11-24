@@ -421,19 +421,20 @@
   }
 }
 
-/* The game above the list. */
+/* The game above the list; a little smaller since the Twitch row (Sarah's board: "maybe we can make the top game
+   smaller as well? just a little bit, so the list of live games gets some more room"). */
 .featured {
   display: flex;
   align-items: center;
-  gap: 18px;
-  padding: 16px 18px;
+  gap: 16px;
+  padding: 12px 16px;
   border-radius: 10px;
   background-color: var(--raised);
 }
 
 .featuredStage {
-  width: 112px;
-  height: 98px;
+  width: 96px;
+  height: 84px;
   border-radius: 6px;
   object-fit: cover;
   flex: none;
@@ -457,8 +458,8 @@
   align-items: center;
   flex-wrap: wrap;
   gap: 10px;
-  margin-top: 10px;
-  font-size: 22px;
+  margin-top: 8px;
+  font-size: 19px;
 }
 
 .featuredSide {
@@ -476,8 +477,8 @@
 }
 
 .featuredStock {
-  width: 32px;
-  height: 32px;
+  width: 28px;
+  height: 28px;
 }
 
 .sideP1 .name {
@@ -490,8 +491,8 @@
 
 .featuredWatch {
   flex: none;
-  min-width: 120px;
-  height: 46px;
+  min-width: 112px;
+  height: 42px;
   font-size: 16px !important;
   text-transform: none !important;
 }
@@ -541,4 +542,41 @@
 .players[data-stacked] .player {
   flex-shrink: 1;
   max-width: 100%;
+}
+
+/* Players live on Twitch while they play (docs/design/twitch-live.md): a row of their streams above the featured game,
+   only while there are any, most viewers first; Connect account at its right for a player who hasn't connected. */
+.twitch {
+  margin-bottom: 14px;
+}
+
+.twitchHead {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  margin-bottom: 8px;
+}
+
+.twitchCards {
+  display: flex;
+  gap: 14px;
+  overflow-x: auto;
+  padding: 3px 3px 4px;
+  margin: -3px -3px 0;
+  scrollbar-width: thin;
+}
+
+/* Twitch's logo after a live player's name (it opens the stream). */
+.twitchMark {
+  display: inline-flex;
+  flex: none;
+  padding: 1px;
+  margin-left: -3px;
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+.twitchMark:hover {
+  background-color: rgb(145 70 255 / 18%);
 }

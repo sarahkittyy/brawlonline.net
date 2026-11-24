@@ -25,6 +25,9 @@ export const ModsMessages = {
   editBuiltInTooltip: () => "Its save data.",
   builtInHelp: () =>
     "Built into Brawl Online: your Brawl disc from Settings with the launcher's own Project+ files. Rooms never change them. To use another Brawl disc, change it in Settings.",
+  // The built-in Brawl (ModBuild.builtInGame "brawl"): the Settings disc alone.
+  builtInBrawlHelp: () =>
+    "Built into Brawl Online: your Brawl disc from Settings. To use another Brawl disc, change it in Settings.",
   close: () => "Close",
   remove: () => "Remove",
   removeTooltip: () => "Remove this game from the list (your files stay where they are).",

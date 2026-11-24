@@ -19,6 +19,8 @@ import type {
   RulesetDraftRequest,
   RulesetPage,
   RulesetView,
+  TwitchLink,
+  TwitchStream,
 } from "@accounts/types";
 import { Preconditions } from "@common/preconditions";
 import type { DolphinService, PlayKey } from "@dolphin/types";
@@ -136,6 +138,22 @@ class AccountsBackendClient implements BackendService {
 
   async updateProfile(update: ProfileUpdate): Promise<PlayerProfile> {
     return await this._api.updateProfile(this._activeUid(), update);
+  }
+
+  async fetchTwitchLink(): Promise<TwitchLink> {
+    return await this._api.twitchLink(this._activeUid());
+  }
+
+  async twitchConnectUrl(): Promise<string> {
+    return (await this._api.twitchConnect(this._activeUid())).url;
+  }
+
+  async disconnectTwitch(): Promise<void> {
+    await this._api.twitchDisconnect(this._activeUid());
+  }
+
+  async fetchTwitchStreams(): Promise<TwitchStream[]> {
+    return await this._api.twitchStreams(this._activeUid());
   }
 
   async fetchTournamentsUrl(): Promise<string | null> {

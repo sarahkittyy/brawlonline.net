@@ -29,6 +29,8 @@ import type {
   RulesetPage,
   RulesetView,
   SignUpRequest,
+  TwitchLink,
+  TwitchStream,
 } from "./types";
 
 /** How long the answers asked for at start (prefetchAtStart) wait for the page's first call. */
@@ -161,6 +163,22 @@ export class AccountsManager {
 
   profile(id: string): Promise<AccountsResult<PlayerProfile>> {
     return wrap(() => this.client.profile(id));
+  }
+
+  twitchLink(uid: string): Promise<AccountsResult<TwitchLink>> {
+    return this._withSession(uid, (token) => this.client.twitchLink(token));
+  }
+
+  twitchConnect(uid: string): Promise<AccountsResult<{ url: string }>> {
+    return this._withSession(uid, (token) => this.client.twitchConnect(token));
+  }
+
+  twitchDisconnect(uid: string): Promise<AccountsResult<void>> {
+    return this._withSession(uid, (token) => this.client.twitchDisconnect(token));
+  }
+
+  twitchStreams(uid: string): Promise<AccountsResult<TwitchStream[]>> {
+    return this._withSession(uid, (token) => this.client.twitchStreams(token));
   }
 
   launcherSettings(): Promise<AccountsResult<LauncherSettings>> {

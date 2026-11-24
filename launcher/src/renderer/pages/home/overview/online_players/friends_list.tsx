@@ -17,6 +17,7 @@ import { AddFriendIcon } from "@/components/social/friend_icons";
 import { InviteButton, PlayerName } from "@/components/social/invite_button";
 import type { PlayerMenuTarget } from "@/components/social/player_menu";
 import { SocialMessages as Messages } from "@/components/social/social.messages";
+import { TwitchLiveMark } from "@/components/twitch/twitch";
 import { useLocalStorage } from "@/lib/hooks/use_local_storage";
 import { useToasts } from "@/lib/hooks/use_toasts";
 import type { FriendActivity } from "@/lib/social/friend_activity";
@@ -24,6 +25,7 @@ import { activityOf } from "@/lib/social/friend_activity";
 import { joinRoomByCode } from "@/lib/social/join_room";
 import { useFriendActions } from "@/lib/social/use_friends";
 import { useSocial } from "@/lib/social/use_social";
+import { useTwitchStreamMap } from "@/lib/twitch/use_twitch";
 
 import { MainSlot } from "./main_slot";
 import styles from "./online_players.module.css";
@@ -70,6 +72,7 @@ export const FriendsList = ({
   const lists = useSocial((s) => s.state.friends);
   const online = useSocial((s) => s.state.online);
   const ignored = useSocial((s) => s.state.ignored);
+  const streamOf = useTwitchStreamMap();
   const openTab = useSocial((s) => s.openTab);
   const actions = useFriendActions();
   const [offlineOpen, setOfflineOpen] = useLocalStorage(OFFLINE_OPEN_KEY, true);
@@ -206,12 +209,16 @@ export const FriendsList = ({
               <ActivityLine activity={activityOf(player.uid, rooms?.rooms, rooms?.yourRoom?.code, live)} />
             </div>
             <ActivityAction activity={activityOf(player.uid, rooms?.rooms, rooms?.yourRoom?.code, live)} />
+            <TwitchLiveMark stream={streamOf.get(player.uid)} className={styles.twitch} />
             {player.country && (
               <span className={styles.flag}>
                 <Flag code={player.country} height={12} title={countryName(player.country)} />
               </span>
             )}
-            <InviteButton player={player} className={player.country ? styles.afterFlag : undefined} />
+            <InviteButton
+              player={player}
+              className={player.country || streamOf.has(player.uid) ? styles.afterFlag : undefined}
+            />
           </div>
         </li>
       ))}

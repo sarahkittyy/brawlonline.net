@@ -33,7 +33,8 @@ export type AddBuildInitial = {
   /** The field a room pointed at (its disc or SD card differs from the room's): it pulses gold
    * until it is clicked. */
   highlight?: "disc" | "sd";
-  /** Brawl Online's own P+ being edited: its files are not the player's to change, only its save. */
+  /** A built-in game being edited (Brawl Online's own P+, or Brawl): its files are not the player's
+   * to change, only its save. */
   builtIn?: boolean;
 };
 
@@ -170,7 +171,9 @@ export const AddBuildDialog = ({
       <Dialog open={open} onClose={onClose} fullWidth={true} maxWidth="sm">
         <DialogTitle>{initial.name}</DialogTitle>
         <DialogContent sx={{ display: "flex", flexDirection: "column", gap: 2, pt: 1 }}>
-          <div className={styles.saveHelp}>{Messages.builtInHelp()}</div>
+          <div className={styles.saveHelp}>
+            {initial.launcherPath ? Messages.builtInHelp() : Messages.builtInBrawlHelp()}
+          </div>
           {save && (
             <>
               <Divider />

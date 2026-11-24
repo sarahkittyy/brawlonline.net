@@ -191,7 +191,8 @@ async fn players_set_their_mains_country_and_socials() {
     assert_eq!((&p["mains"], &p["country"], &p["socials"]), (&json!([]), &Value::Null, &json!([])));
 
     // Everything at once: mains in order (the primary first), a country in any case, socials as
-    // usernames, @names and links.
+    // usernames, @names and links. A typed Twitch handle is kept but never shown: only a connected
+    // Twitch account is (docs/design/twitch-live.md, tests/twitch.rs).
     let body = json!({
         "mains": ["marth", "random", "sheik"],
         "country": "GB-ENG",
@@ -205,26 +206,23 @@ async fn players_set_their_mains_country_and_socials() {
         p["socials"],
         json!([
             {"platform": "discord", "handle": "sarahkittyy", "display": "sarahkittyy", "url": null},
-            {"platform": "twitch", "handle": "sarahkitty", "display": "@sarahkitty", "url": "https://twitch.tv/sarahkitty"},
             {"platform": "youtube", "handle": "@sarah", "display": "@sarah", "url": "https://youtube.com/@sarah"},
         ])
     );
     assert_eq!(profile(&stack, &a.uid).await.1, p, "the public profile has the same");
+    assert_eq!(stack.get("/v1/me/twitch", Some(&session)).await.1["handle"], "sarahkitty", "the hint to connect");
 
     // A field left out stays; null clears the country; a blank social removes it.
     let (st, p) = stack.put("/v1/me/profile", Some(&session), json!({"mains": ["fox"]})).await;
     assert_eq!(st, 200, "{p}");
     assert_eq!((p["mains"].clone(), p["country"].clone()), (json!(["fox"]), json!("gb-eng")));
-    assert_eq!(p["socials"].as_array().unwrap().len(), 3);
+    assert_eq!(p["socials"].as_array().unwrap().len(), 2);
     let (st, p) = stack
         .put("/v1/me/profile", Some(&session), json!({"country": null, "socials": {"discord": "", "youtube": null}}))
         .await;
     assert_eq!(st, 200, "{p}");
     assert!(p["country"].is_null());
-    assert_eq!(
-        p["socials"].as_array().unwrap().iter().map(|s| s["platform"].clone()).collect::<Vec<_>>(),
-        [json!("twitch")]
-    );
+    assert_eq!(p["socials"], json!([]));
 
     // Refused, with a message for the player, and nothing changed.
     for bad in [
@@ -247,7 +245,7 @@ async fn players_set_their_mains_country_and_socials() {
     let slug = a.connect_code.replace('#', "-").to_lowercase();
     let html = stack.http.get(stack.url(&format!("/profile/{slug}"))).send().await.unwrap().text().await.unwrap();
     assert!(html.contains("<li class=\"main primary\" title=\"Primary\">Fox</li>"), "{html}");
-    assert!(html.contains("href=\"https://twitch.tv/sarahkitty\""));
+    assert!(!html.contains("twitch.tv"), "a typed Twitch handle is never shown");
     stack.shutdown().await;
 }
 

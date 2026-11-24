@@ -252,16 +252,28 @@ describe("ModsView", () => {
         yours: [],
       },
     };
-    const builtIn: ModBuild = { ...minus, id: "pplus", name: "Project+", builtIn: true, launcherPath: null };
+    const builtIn: ModBuild = { ...minus, id: "pplus", name: "Project+", builtIn: true };
+    // The built-in Brawl is its disc alone: it has them.
+    const brawl: ModBuild = {
+      ...nsmbw,
+      id: "brawl",
+      name: "Super Smash Bros. Brawl (USA)",
+      gameId: "RSBE01",
+      builtIn: true,
+      builtInGame: "brawl",
+    };
     const onCodes = vi.fn();
-    const p = props({ builds: [withCodes, minus, builtIn], running: false, status: null }, { onCodes });
+    const p = props({ builds: [builtIn, brawl, withCodes, minus], running: false, status: null }, { onCodes });
     const { getAllByLabelText } = render(<ModsView {...p} />);
-    // Not for a mod's launcher (its own Gecko code handler) nor Brawl Online's P+.
-    const buttons = getAllByLabelText(CodesMessages.codes());
-    expect(buttons).toHaveLength(1);
-    expect(buttons[0].textContent).toBe(CodesMessages.codesCount(1));
-    fireEvent.click(buttons[0]);
+    // Not for a mod's launcher (its own Gecko code handler) nor Brawl Online's P+. (A game with none
+    // on has its button greyed, inside its tooltip's span of the same label.)
+    const buttons = getAllByLabelText(CodesMessages.codes()).filter((e) => e.tagName === "BUTTON");
+    expect(buttons).toHaveLength(2);
+    expect(buttons[1].textContent).toBe(CodesMessages.codesCount(1));
+    fireEvent.click(buttons[1]);
     expect(onCodes).toHaveBeenCalledWith(withCodes);
+    fireEvent.click(buttons[0]);
+    expect(onCodes).toHaveBeenCalledWith(brawl);
   });
 
   it("shows a room's codes beside its disc, in the list and in the room", () => {
@@ -613,6 +625,20 @@ describe("ModsView", () => {
     expect(queryByLabelText(Messages.remove())).toBeNull();
     fireEvent.click(getByLabelText(Messages.edit()));
     expect(p.onEditBuild).toHaveBeenCalledWith(pplus);
+  });
+
+  it("shows the built-in Brawl as its disc alone, with no trash can", () => {
+    const brawl: ModBuild = {
+      ...nsmbw,
+      id: "brawl",
+      discPath: "C:/Games/Brawl.iso",
+      builtIn: true,
+      builtInGame: "brawl",
+    };
+    const p = props({ builds: [brawl], running: false, status: null });
+    const { getByText, queryByLabelText } = render(<ModsView {...p} />);
+    expect(getByText(Messages.parts("Brawl.iso", null, null))).toBeTruthy();
+    expect(queryByLabelText(Messages.remove())).toBeNull();
   });
 
   it("says nothing about versions for a small SD card difference", () => {

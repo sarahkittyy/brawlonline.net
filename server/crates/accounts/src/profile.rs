@@ -284,7 +284,16 @@ async fn profile_of(pool: &PgPool, user: &UserRow, base_url: &str) -> sqlx::Resu
     // Only what the lists still know (a character or flag dropped from them since is left out).
     let mains = stored.mains.into_iter().filter(|m| character_name(m).is_some()).collect();
     let country = stored.country.filter(|c| country_name(c).is_some());
-    let socials = Platform::ALL.into_iter().zip(stored.handles).filter_map(|(p, h)| Some(Social::of(p, h?))).collect();
+    // Twitch is the connected account only (docs/design/twitch-live.md): anyone can type anyone's handle, so a typed
+    // one is kept only as the launcher's hint to connect and never shown.
+    let mut handles = stored.handles;
+    if let Some(i) = Platform::ALL.iter().position(|p| *p == Platform::Twitch) {
+        handles[i] = sqlx::query_scalar("SELECT login FROM twitch_links WHERE uid = $1")
+            .bind(user.uid)
+            .fetch_optional(pool)
+            .await?;
+    }
+    let socials = Platform::ALL.into_iter().zip(handles).filter_map(|(p, h)| Some(Social::of(p, h?))).collect();
     let tag = name_tags(pool, &[user.uid]).await?.remove(&user.uid).unwrap_or_default();
     Ok(Profile {
         uid: user.uid,

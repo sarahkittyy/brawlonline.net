@@ -851,7 +851,7 @@ const BuildRow = ({
         </div>
         <div className={styles.parts}>
           {build.gameId && <span className={styles.gameId}>{build.gameId}</span>}
-          {build.builtIn
+          {build.builtIn && build.launcherPath
             ? Messages.parts(fileName(build.discPath)!, Messages.builtInFiles(), null)
             : Messages.parts(fileName(build.discPath)!, fileName(build.launcherPath), fileName(build.sdPath))}
         </div>

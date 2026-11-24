@@ -3,6 +3,7 @@ import { countryName, SOCIAL_PLATFORMS } from "@common/profile";
 import ContentCopyIcon from "@mui/icons-material/ContentCopy";
 import EditOutlinedIcon from "@mui/icons-material/EditOutlined";
 import OpenInNewIcon from "@mui/icons-material/OpenInNew";
+import CircularProgress from "@mui/material/CircularProgress";
 import IconButton from "@mui/material/IconButton";
 import Popover from "@mui/material/Popover";
 import Tooltip from "@mui/material/Tooltip";
@@ -13,9 +14,18 @@ import { Flag, NoFlag } from "@/components/flag/flag";
 import { MainIcon, NameBadges } from "@/components/name_badges/name_badges";
 import { RankBadge } from "@/components/rank_badge/rank_badge";
 import { RankBadgeMessages } from "@/components/rank_badge/rank_badge.messages";
+import { TwitchStreamPanel } from "@/components/twitch/twitch";
+import { TwitchMessages } from "@/components/twitch/twitch.messages";
 import { formatPosition, formatRating, HIDDEN_RATING } from "@/lib/ranked_format";
+import { useTwitchActions, useTwitchLink } from "@/lib/twitch/use_twitch";
 import { validateDisplayName } from "@/lib/validate/validate";
-import type { PlayerProfile, ProfileSocial, ProfileUpdate, SocialPlatform } from "@/services/backend/types";
+import type {
+  PlayerProfile,
+  ProfileSocial,
+  ProfileUpdate,
+  SocialPlatform,
+  TwitchStream,
+} from "@/services/backend/types";
 
 import { CharacterIcon, useHasStockIcons } from "./character_icon";
 import { CountryPicker, MainsPicker } from "./pickers";
@@ -32,6 +42,8 @@ export type ProfileEditing = {
   rename: (name: string) => Promise<void>;
   /** Mains, country or social media accounts. */
   save: (update: ProfileUpdate) => Promise<void>;
+  /** Connect account glows: the last step of the Twitch hint (lib/twitch/use_twitch.ts). */
+  twitchGlow?: boolean;
 };
 
 /**
@@ -50,6 +62,7 @@ export const ProfileView = React.memo(function ProfileView({
   onCopyText,
   editing = null,
   nameExtra,
+  stream = null,
 }: {
   profile: PlayerProfile;
   actions?: React.ReactNode;
@@ -59,6 +72,8 @@ export const ProfileView = React.memo(function ProfileView({
   /** Copies a Discord username (it has no page to open). */
   onCopyText?: (text: string) => void;
   editing?: ProfileEditing | null;
+  /** The player's Twitch stream while they're live (docs/design/twitch-live.md): under the mains, opens it. */
+  stream?: TwitchStream | null;
 }) {
   const r = profile.ranked;
   const mains = profile.mains ?? [];
@@ -124,6 +139,12 @@ export const ProfileView = React.memo(function ProfileView({
         </div>
       )}
 
+      {stream && (
+        <div className={styles.stream}>
+          <TwitchStreamPanel stream={stream} size="big" />
+        </div>
+      )}
+
       <div className={styles.section}>
         <div className={styles.sectionTitle}>{Messages.ranked()}</div>
         <dl className={styles.stats}>
@@ -140,7 +161,7 @@ export const ProfileView = React.memo(function ProfileView({
         <div className={styles.section}>
           <div className={styles.sectionTitle}>{Messages.socials()}</div>
           {editing ? (
-            <SocialsEditor socials={socials} save={editing.save} />
+            <SocialsEditor socials={socials} save={editing.save} twitchGlow={editing.twitchGlow ?? false} />
           ) : (
             <SocialsRow socials={socials} onCopyText={onCopyText} />
           )}
@@ -418,21 +439,28 @@ const SocialsRow = ({ socials, onCopyText }: { socials: ProfileSocial[]; onCopyT
 const SocialsEditor = ({
   socials,
   save,
+  twitchGlow,
 }: {
   socials: ProfileSocial[];
   save: (update: ProfileUpdate) => Promise<void>;
+  twitchGlow: boolean;
 }) => (
   <div className={styles.socialsEditor} data-testid="profile-socials-editor">
-    {SOCIAL_PLATFORMS.map(({ platform, name, placeholder }) => (
-      <SocialField
-        key={platform}
-        platform={platform}
-        name={name}
-        placeholder={placeholder}
-        value={socials.find((s) => s.platform === platform)?.handle ?? ""}
-        save={save}
-      />
-    ))}
+    {SOCIAL_PLATFORMS.map(({ platform, name, placeholder }) =>
+      // Twitch is connected, never typed (docs/design/twitch-live.md): anyone could type anyone's.
+      platform === "twitch" ? (
+        <TwitchField key={platform} name={name} glow={twitchGlow} />
+      ) : (
+        <SocialField
+          key={platform}
+          platform={platform}
+          name={name}
+          placeholder={placeholder}
+          value={socials.find((s) => s.platform === platform)?.handle ?? ""}
+          save={save}
+        />
+      ),
+    )}
   </div>
 );
 
@@ -480,6 +508,42 @@ const SocialField = ({
         }}
       />
     </label>
+  );
+};
+
+/**
+ * Edit mode's Twitch row, in the other rows' shape (the logo, then a box as wide as their text boxes): Connect account,
+ * which opens Twitch's sign-in, or the connected account with Disconnect. No row while the server can't connect one.
+ */
+const TwitchField = ({ name, glow }: { name: string; glow: boolean }) => {
+  const link = useTwitchLink();
+  const { connect, disconnect, waiting } = useTwitchActions();
+  if (!link?.available) {
+    return null;
+  }
+  return (
+    <div className={styles.socialField} title={name}>
+      <SocialIcon platform="twitch" size={18} />
+      {link.linked ? (
+        <div className={clsx(styles.socialInput, styles.socialLinked)} data-testid="twitch-connected">
+          <span className={styles.socialLinkedName}>{link.linked.login}</span>
+          <button type="button" className={styles.socialBoxAction} onClick={() => void disconnect()}>
+            {TwitchMessages.disconnect()}
+          </button>
+        </div>
+      ) : (
+        <button
+          type="button"
+          className={clsx(styles.socialInput, styles.socialConnect, glow && styles.socialConnectGlow)}
+          onClick={() => void connect()}
+          disabled={waiting}
+          data-testid="twitch-connect"
+        >
+          {waiting && <CircularProgress size={11} color="inherit" />}
+          {TwitchMessages.connectAccount()}
+        </button>
+      )}
+    </div>
   );
 };
 

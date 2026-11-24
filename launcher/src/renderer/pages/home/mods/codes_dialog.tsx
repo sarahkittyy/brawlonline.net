@@ -33,10 +33,9 @@ const ON_SWITCH = {
   "& .MuiSwitch-switchBase.Mui-checked.Mui-disabled + .MuiSwitch-track": { backgroundColor: "#b98ce0", opacity: 0.3 },
 };
 
-/** A game whose rooms can run codes: a disc booted as it is (a mod's launcher, P+'s too, puts its own
- * Gecko code handler where Dolphin's goes). */
-export const hasRoomCodes = (build: Pick<ModBuild, "builtIn" | "launcherPath">) =>
-  !build.builtIn && !build.launcherPath;
+/** A game whose rooms can run codes: a disc booted as it is, the built-in Brawl too (a mod's
+ * launcher, P+'s too, puts its own Gecko code handler where Dolphin's goes). */
+export const hasRoomCodes = (build: Pick<ModBuild, "launcherPath">) => !build.launcherPath;
 
 /** A tooltip's list of code names: 8, then "+N more". */
 export const CodeNames = ({ names }: { names: string[] }) => (

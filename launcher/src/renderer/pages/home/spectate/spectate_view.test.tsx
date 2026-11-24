@@ -83,6 +83,45 @@ describe("SpectateView", () => {
   // (Menus and tooltips render into the body: one view at a time.)
   afterEach(cleanup);
 
+  const stream = (uid: string, viewers: number) => ({
+    uid,
+    displayName: uid,
+    connectCode: null,
+    main: null,
+    login: `${uid}_tv`,
+    twitchName: `${uid}_tv`,
+    title: `${uid} title`,
+    game: "Super Smash Bros. Brawl",
+    viewers,
+    thumbnail: "",
+    startedAt: "2026-10-14T02:00:00Z",
+  });
+
+  it("has no Twitch row without streams", () => {
+    view({ kind: "ready", games }, { twitchAction: <button type="button">connect</button> });
+    expect(screen.queryByTestId("twitch-row")).toBeNull();
+    expect(screen.queryByText("connect")).toBeNull();
+  });
+
+  it("lists the streams in the order given, with the action, and marks live players in the list", () => {
+    view(
+      { kind: "ready", games },
+      {
+        streams: [stream("aaaaaaaaaaaa-b", 40), stream("zed", 3)],
+        twitchAction: <button type="button">connect</button>,
+      },
+    );
+    const row = screen.getByTestId("twitch-row");
+    expect(row.textContent).toContain("Twitch");
+    expect(screen.getByText("connect")).toBeTruthy();
+    const cards = screen.getAllByTestId("twitch-card");
+    expect(cards.map((c) => c.getAttribute("title"))).toEqual(["Twitch: @aaaaaaaaaaaa-b_tv", "Twitch: @zed_tv"]);
+    // bob of the first game is live: one logo beside his name; nobody else's.
+    const marks = document.querySelectorAll('[data-stream="aaaaaaaaaaaa"] [data-testid="twitch-live"]');
+    expect(marks.length).toBe(1);
+    expect(document.querySelectorAll('[data-stream="bbbbbbbbbbbb"] [data-testid="twitch-live"]').length).toBe(0);
+  });
+
   it("shows the highest-rated game the player can watch above the list, and not in it", () => {
     const rated = [
       game("aaaaaaaaaaaa", "2026-10-14T02:00:00Z", {

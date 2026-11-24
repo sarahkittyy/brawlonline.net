@@ -184,6 +184,35 @@ export type ProfileUpdate = {
   socials?: Partial<Record<SocialPlatform, string | null>>;
 };
 
+/** `GET /v1/me/twitch` (docs/design/twitch-live.md). */
+export type TwitchLink = {
+  /** The server can connect Twitch accounts (it has Twitch's keys). */
+  available: boolean;
+  /** The Twitch account connected through Twitch's sign-in; null without one. */
+  linked: { login: string; displayName: string } | null;
+  /** The profile's typed Twitch handle (a link only: it shows nothing as live). */
+  handle: string | null;
+};
+
+/** One live stream of `GET /v1/twitch/streams`: a connected player streaming while they play. */
+export type TwitchStream = {
+  uid: string;
+  displayName: string;
+  connectCode: string | null;
+  /** Their primary main, when they show it beside their name. */
+  main: string | null;
+  /** twitch.tv/<login>. */
+  login: string;
+  twitchName: string;
+  title: string;
+  /** Twitch's category. */
+  game: string;
+  viewers: number;
+  /** The stream's picture. */
+  thumbnail: string;
+  startedAt: string;
+};
+
 /** `GET /v1/launcher`: settings production changes with an env var and a restart (docs/trophy-button.md). */
 export type LauncherSettings = {
   /** The header's gold trophy opens this page; null: no trophy (`TOURNAMENTS_URL` empty). */
@@ -504,6 +533,14 @@ export interface AccountsApi {
   updateProfile(uid: string, update: ProfileUpdate): Promise<PlayerProfile>;
   /** Settings from the server (public): whether the header shows the tournaments trophy. */
   launcherSettings(): Promise<LauncherSettings>;
+  /** This account's Twitch connection and its profile's typed Twitch handle. */
+  twitchLink(uid: string): Promise<TwitchLink>;
+  /** The Twitch sign-in address that connects this account (opened in the browser). */
+  twitchConnect(uid: string): Promise<{ url: string }>;
+  /** Disconnects this account's Twitch account. */
+  twitchDisconnect(uid: string): Promise<void>;
+  /** The live streams of players playing Brawl Online, most viewers first. */
+  twitchStreams(uid: string): Promise<TwitchStream[]>;
   /** One leaderboard page (public); `q` searches names and connect codes. */
   leaderboard(query: { limit?: number; after?: string; q?: string }): Promise<LeaderboardPage>;
   /** Players this account has played with whose name or code contains `q` (Match history's player filter). */

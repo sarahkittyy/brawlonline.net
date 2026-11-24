@@ -1,0 +1,321 @@
+/* Twitch around the launcher (twitch.tsx). Twitch's purple is Twitch's, whatever the theme colour. */
+
+.glyph {
+  display: block;
+  flex: none;
+  fill: #9146ff;
+}
+
+/* A live player's mark: just the logo, a button. */
+.mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  padding: 2px;
+  margin: 0;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  cursor: pointer;
+}
+
+.mark:hover,
+.mark:focus-visible {
+  background-color: rgb(145 70 255 / 18%);
+  outline: none;
+}
+
+/* Over a picture's top-right corner (the folded rail), outlined in the page's colour so it reads on any main. */
+.corner {
+  position: absolute;
+  top: -6px;
+  right: -7px;
+  padding: 0;
+  filter: drop-shadow(0 0 1px var(--page, #1b1d2b)) drop-shadow(0 0 1px var(--page, #1b1d2b));
+}
+
+.corner:hover,
+.corner:focus-visible {
+  background: none;
+}
+
+/* Over a stream's picture: the live dot, the eye and the viewers. */
+.viewers {
+  position: absolute;
+  left: 5px;
+  top: 5px;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background-color: rgb(0 0 0 / 72%);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 16px;
+}
+
+.liveDot {
+  width: 6px;
+  height: 6px;
+  margin-right: 1px;
+  border-radius: 50%;
+  background-color: #e5534b;
+}
+
+/* A player's stream in their hover card and their profile. */
+.panel {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  box-sizing: border-box;
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid rgb(145 70 255 / 45%);
+  border-radius: 7px;
+  background-color: rgb(145 70 255 / 14%);
+  color: var(--text-primary, #fff);
+  font: inherit;
+  text-align: left;
+}
+
+button.panel {
+  cursor: pointer;
+}
+
+button.panel:hover,
+button.panel:focus-visible {
+  background-color: rgb(145 70 255 / 24%);
+  outline: none;
+}
+
+.mini {
+  margin-top: 10px;
+}
+
+/* The hover card keeps its width (its name and mains set it): the text takes what is left and clamps. */
+.mini .panelText {
+  flex: 1;
+  width: 0;
+}
+
+.mini .panelPicture img {
+  width: 84px;
+}
+
+.big {
+  gap: 14px;
+  padding: 10px;
+}
+
+.panelPicture {
+  position: relative;
+  flex: none;
+  line-height: 0;
+}
+
+.panelPicture img {
+  display: block;
+  width: 96px;
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
+  border-radius: 4px;
+  background-color: rgb(0 0 0 / 30%);
+}
+
+.big .panelPicture img {
+  width: 160px;
+  border-radius: 5px;
+}
+
+.panelText {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.panelName {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.big .panelName {
+  font-size: 14px;
+  gap: 6px;
+}
+
+.panelTitle {
+  display: -webkit-box;
+  overflow: hidden;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.big .panelTitle {
+  font-size: 13px;
+}
+
+.panelGame {
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: 11px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.big .panelGame {
+  font-size: 12px;
+}
+
+/* Spectate's Twitch row. */
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 0 1 168px;
+  min-width: 128px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text-primary, #fff);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.cardPicture {
+  position: relative;
+  display: block;
+  line-height: 0;
+  border-radius: 6px;
+  outline: 2px solid transparent;
+  outline-offset: 1px;
+  transition: outline-color 0.12s;
+}
+
+.card:hover .cardPicture,
+.card:focus-visible .cardPicture {
+  outline-color: #9146ff;
+}
+
+.card:focus-visible {
+  outline: none;
+}
+
+.cardPicture img {
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
+  border-radius: 6px;
+  background-color: rgb(0 0 0 / 30%);
+}
+
+.cardLogo {
+  position: absolute;
+  right: 5px;
+  bottom: 5px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  background-color: #9146ff;
+  fill: #fff;
+}
+
+.cardName {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  margin-top: 2px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.cardNameText,
+.cardTitle {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.cardTitle {
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+/* Connect account, and the connected account with Disconnect. */
+.connect {
+  flex: none;
+  white-space: nowrap;
+}
+
+/* The profile hint's last step (use_twitch.ts): gold, as the pencil before it (profile.module.css .pencilGlow). */
+.glow {
+  --profile-glow: 255 205 70;
+
+  box-shadow: 0 0 0 2px rgb(var(--profile-glow) / 85%);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .glow {
+    animation: connectGlow 3.6s ease-in-out;
+  }
+}
+
+@keyframes connectGlow {
+  0%,
+  50% {
+    box-shadow:
+      0 0 0 1px rgb(var(--profile-glow) / 55%),
+      0 0 4px 1px rgb(var(--profile-glow) / 20%);
+  }
+
+  25%,
+  75% {
+    box-shadow:
+      0 0 0 2px rgb(var(--profile-glow) / 90%),
+      0 0 12px 3px rgb(var(--profile-glow) / 45%);
+  }
+
+  100% {
+    box-shadow: 0 0 0 2px rgb(var(--profile-glow) / 85%);
+  }
+}
+
+.connected {
+  display: inline-flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+}
+
+.connectedName {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.connectedName:hover {
+  text-decoration: underline;
+}

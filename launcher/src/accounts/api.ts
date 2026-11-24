@@ -37,6 +37,10 @@ import {
   ipc_accountsSetRoomName,
   ipc_accountsSetRulesetHidden,
   ipc_accountsSignUp,
+  ipc_accountsTwitchConnect,
+  ipc_accountsTwitchDisconnect,
+  ipc_accountsTwitchLink,
+  ipc_accountsTwitchStreams,
   ipc_accountsUpdateProfile,
   ipc_accountsUpdateRulesetDraft,
 } from "./ipc";
@@ -93,6 +97,18 @@ const accountsApi: AccountsApi = {
   },
   async launcherSettings() {
     return unwrap(await ipc_accountsLauncherSettings.renderer!.trigger({}));
+  },
+  async twitchLink(uid) {
+    return unwrap(await ipc_accountsTwitchLink.renderer!.trigger({ uid }));
+  },
+  async twitchConnect(uid) {
+    return unwrap(await ipc_accountsTwitchConnect.renderer!.trigger({ uid }));
+  },
+  async twitchDisconnect(uid) {
+    unwrap(await ipc_accountsTwitchDisconnect.renderer!.trigger({ uid }));
+  },
+  async twitchStreams(uid) {
+    return unwrap(await ipc_accountsTwitchStreams.renderer!.trigger({ uid }));
   },
   async leaderboard(query) {
     return unwrap(await ipc_accountsLeaderboard.renderer!.trigger(query));

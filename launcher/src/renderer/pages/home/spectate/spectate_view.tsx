@@ -1,3 +1,4 @@
+import type { TwitchStream } from "@accounts/types";
 import { stageInfo } from "@common/stages";
 import ChevronRightIcon from "@mui/icons-material/ChevronRight";
 import CloseIcon from "@mui/icons-material/Close";
@@ -20,11 +21,14 @@ import type { TooltipProps } from "@mui/material/Tooltip";
 import Tooltip from "@mui/material/Tooltip";
 import type { LiveGameEntry, LiveMode, LivePlayer, SpectateState } from "@spectate/types";
 import { clsx } from "clsx";
-import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { ShellMessages } from "@/app/shell/shell.messages";
 import { MiniProfileTooltip } from "@/components/profile/mini_profile";
+import { TwitchGlyph, TwitchStreamCard } from "@/components/twitch/twitch";
+import { TwitchMessages } from "@/components/twitch/twitch.messages";
 import { usePlayerMenuOpener } from "@/lib/social/use_player_menu";
+import { openTwitch } from "@/lib/twitch/use_twitch";
 import { getCharacterIcon } from "@/lib/utils";
 import { useStageIcon } from "@/pages/rulesets/stages_section";
 
@@ -61,7 +65,16 @@ export type SpectateViewProps = {
   onSortChange?: (sort: LiveSort) => void;
   /** The highest-rated game above the list, out of it (the Spectate page; off in tests of the list). */
   showFeatured?: boolean;
+  /** Players live on Twitch while they play, most viewers first (docs/design/twitch-live.md): the Twitch row on top
+   * (only while there are any) and the logo beside their names. */
+  streams?: readonly TwitchStream[];
+  /** At the Twitch row's right: Connect account, for a player who hasn't connected theirs. */
+  twitchAction?: React.ReactNode;
 };
+
+const NO_STREAMS: ReadonlyMap<string, TwitchStream> = new Map();
+/** The live streams by player uid, for the names in the list and the featured game. */
+const StreamsContext = React.createContext<ReadonlyMap<string, TwitchStream>>(NO_STREAMS);
 
 /**
  * By how long the game being played has been going, as each row's clock shows it, newest first (the user,
@@ -161,54 +174,73 @@ export const SpectateView = ({
   sort = "newest",
   onSortChange,
   showFeatured = false,
+  streams = [],
+  twitchAction,
 }: SpectateViewProps) => {
   const status = watchingStatus(watching);
+  const streamOf = useMemo(() => new Map(streams.map((s) => [s.uid, s])), [streams]);
   const [search, setSearch] = useState("");
   const featured =
     showFeatured && state.kind === "ready" && search.trim() === "" ? pickFeatured(state.games, uid) : null;
   const watchedId = watching && watching.status !== "idle" && watching.status !== "error" ? watching.stream : null;
   return (
-    <div className={styles.block}>
-      <div className={styles.head}>
-        <h1 className={styles.title}>{ShellMessages.spectate()}</h1>
-        {status && <div className={styles.watchStatus}>{status}</div>}
-        <span className={styles.grow} />
-        {state.kind !== "logged-out" && (
-          <Tooltip title={Messages.autoPlayTooltip()} placement="top" enterDelay={400} disableInteractive={true}>
-            <FormControlLabel
-              className={styles.autoPlay}
-              sx={{ "& .MuiFormControlLabel-label": { fontSize: 13 } }}
-              control={
-                <Switch
-                  size="small"
-                  color="secondary"
-                  checked={autoPlay}
-                  onChange={(e) => onAutoPlayChange(e.target.checked)}
-                  inputProps={{ "aria-label": Messages.autoPlay() }}
-                  data-testid="auto-play"
-                />
-              }
-              label={Messages.autoPlay()}
-            />
-          </Tooltip>
+    <StreamsContext.Provider value={streamOf}>
+      <div className={styles.block}>
+        <div className={styles.head}>
+          <h1 className={styles.title}>{ShellMessages.spectate()}</h1>
+          {status && <div className={styles.watchStatus}>{status}</div>}
+          <span className={styles.grow} />
+          {state.kind !== "logged-out" && (
+            <Tooltip title={Messages.autoPlayTooltip()} placement="top" enterDelay={400} disableInteractive={true}>
+              <FormControlLabel
+                className={styles.autoPlay}
+                sx={{ "& .MuiFormControlLabel-label": { fontSize: 13 } }}
+                control={
+                  <Switch
+                    size="small"
+                    color="secondary"
+                    checked={autoPlay}
+                    onChange={(e) => onAutoPlayChange(e.target.checked)}
+                    inputProps={{ "aria-label": Messages.autoPlay() }}
+                    data-testid="auto-play"
+                  />
+                }
+                label={Messages.autoPlay()}
+              />
+            </Tooltip>
+          )}
+        </div>
+        {streams.length > 0 && (
+          <section className={styles.twitch} data-testid="twitch-row">
+            <div className={styles.twitchHead}>
+              <TwitchGlyph size={18} />
+              <h2 className={styles.heading}>{TwitchMessages.twitch()}</h2>
+              {twitchAction}
+            </div>
+            <div className={styles.twitchCards}>
+              {streams.map((s) => (
+                <TwitchStreamCard key={s.uid} stream={s} />
+              ))}
+            </div>
+          </section>
         )}
+        {featured && (
+          <FeaturedGame
+            game={featured}
+            now={now}
+            watching={watchedId === featured.id}
+            starting={startingId === featured.id}
+            busy={startingId != null}
+            onWatch={onWatch}
+          />
+        )}
+        <div className={styles.bar}>
+          <h2 className={styles.heading}>{Messages.liveGames()}</h2>
+          {state.kind === "ready" && renderListControls()}
+        </div>
+        <div className={styles.body}>{renderBody(featured?.id)}</div>
       </div>
-      {featured && (
-        <FeaturedGame
-          game={featured}
-          now={now}
-          watching={watchedId === featured.id}
-          starting={startingId === featured.id}
-          busy={startingId != null}
-          onWatch={onWatch}
-        />
-      )}
-      <div className={styles.bar}>
-        <h2 className={styles.heading}>{Messages.liveGames()}</h2>
-        {state.kind === "ready" && renderListControls()}
-      </div>
-      <div className={styles.body}>{renderBody(featured?.id)}</div>
-    </div>
+    </StreamsContext.Provider>
   );
 
   function renderListControls() {
@@ -358,15 +390,33 @@ function RowTooltip(props: Omit<TooltipProps, "open" | "onOpen" | "onClose">) {
   return <Tooltip {...props} open={open} onOpen={() => setOpen(true)} onClose={() => setOpen(false)} />;
 }
 
-/** A live game's player: their hover card, and the player menu on a right click. */
+/** A live game's player: their hover card, and the player menu on a right click; Twitch's logo after it while they're
+ * live (it opens the stream; the row is a button, so the logo is not one). */
 const LivePlayerName = ({ player }: { player: LivePlayer }) => {
   const onContextMenu = usePlayerMenuOpener(player);
+  const stream = React.useContext(StreamsContext).get(player.uid);
   return (
-    <MiniProfileTooltip uid={player.uid}>
-      <span className={styles.name} onContextMenu={onContextMenu}>
-        {player.displayName}
-      </span>
-    </MiniProfileTooltip>
+    <>
+      <MiniProfileTooltip uid={player.uid}>
+        <span className={styles.name} onContextMenu={onContextMenu}>
+          {player.displayName}
+        </span>
+      </MiniProfileTooltip>
+      {stream && (
+        <Tooltip title={TwitchMessages.account(stream.login)} disableInteractive={true}>
+          <span
+            className={styles.twitchMark}
+            data-testid="twitch-live"
+            onClick={(e) => {
+              e.stopPropagation();
+              openTwitch(stream.login);
+            }}
+          >
+            <TwitchGlyph size={13} />
+          </span>
+        </Tooltip>
+      )}
+    </>
   );
 };
 
