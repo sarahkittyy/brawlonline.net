@@ -3,6 +3,7 @@
 
 #include "Core/Online/Rooms.h"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdio>
@@ -1078,6 +1079,12 @@ void DecideLaunch(const DolphinBusy& busy, bool logged_in, const std::string& ow
   ++s.serial;
 }
 
+// SetScene / SetGame: their own lock, taken last (inside s_mutex here, alone from the CPU thread),
+// so the session's callers never wait on the rooms thread.
+std::mutex s_activity_mutex;
+std::string s_scene;
+picojson::value s_game;
+
 void WriteGameStatus(const DolphinBusy& busy, Clock::time_point now, bool force)
 {
   picojson::object o;
@@ -1135,6 +1142,11 @@ void WriteGameStatus(const DolphinBusy& busy, Clock::time_point now, bool force)
     delay["current"] = current >= 0 ? picojson::value(static_cast<double>(current)) : picojson::value();
     delay["request"] = s.delay_request.empty() ? picojson::value() : picojson::value(s.delay_request);
     o["inputDelay"] = picojson::value(delay);
+    {
+      std::lock_guard alk(s_activity_mutex);
+      o["scene"] = s_scene.empty() ? picojson::value() : picojson::value(s_scene);
+      o["game"] = busy.in_match ? s_game : picojson::value();
+    }
     content_key = picojson::value(o).serialize();
     if (!force && content_key == s.status_written && now - s.status_at < STATUS_EVERY)
       return;
@@ -1883,10 +1895,15 @@ void Start()
 
 void OnBoot()
 {
-  std::lock_guard lk(s_mutex);
-  s.reached_menus = false;
-  s.screen = static_cast<u8>(Screen::Unknown);
-  s.away_since.reset();
+  {
+    std::lock_guard lk(s_mutex);
+    s.reached_menus = false;
+    s.screen = static_cast<u8>(Screen::Unknown);
+    s.away_since.reset();
+  }
+  std::lock_guard alk(s_activity_mutex);
+  s_scene.clear();
+  s_game = picojson::value();
 }
 
 void Shutdown()
@@ -1907,6 +1924,24 @@ void SetSetSession(bool set)
   std::lock_guard lk(s_mutex);
   if (s.rg.active)
     s.rg.set = set;
+}
+
+void SetScene(const std::string& scene)
+{
+  // A scene's name is an identifier ("scSelCharacter"); anything else is a read mid-change.
+  const bool ok = scene.size() <= 32 && std::all_of(scene.begin(), scene.end(), [](char c) {
+                    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_';
+                  });
+  std::lock_guard lk(s_activity_mutex);
+  s_scene = ok ? scene : std::string();
+}
+
+void SetGame(const std::string& info_json)
+{
+  picojson::value v;
+  const std::string err = picojson::parse(v, info_json);
+  std::lock_guard lk(s_activity_mutex);
+  s_game = err.empty() && v.is<picojson::object>() ? v : picojson::value();
 }
 
 void ReportSetGame(u32 set_game, u8 winner_side, u16 stage)

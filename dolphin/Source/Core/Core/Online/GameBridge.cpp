@@ -2518,9 +2518,10 @@ void OnFrameEnd(const Core::CPUThreadGuard& guard)
     s_draws_for_screen.store(s_told_screen, std::memory_order_relaxed);
   });
   std::optional<Located> located;
+  u64 frame = 0;
   {
     std::lock_guard lk(s_mutex);
-    ++s_frames;
+    frame = ++s_frames;
     located = s_located;
   }
 
@@ -2562,6 +2563,11 @@ void OnFrameEnd(const Core::CPUThreadGuard& guard)
     std::lock_guard lk(s_mutex);
     s_located = located;
   }
+
+  // The scene, twice a second, for the launcher's Discord activity (Rooms::SetScene): only with
+  // the plugin's block found, so only in P+ (another game's memory has no Brawl scene).
+  if (frame % 30 == 0)
+    Rooms::SetScene(Gprb::CurrentSceneName(Gprb::Guest(guard.GetSystem().GetMemory())));
 
   // Never during a netplay session: what Dolphin would answer differs between the machines.
   const bool netplay = NetPlay::IsNetPlayRunning();

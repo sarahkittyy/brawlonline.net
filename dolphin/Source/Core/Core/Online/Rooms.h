@@ -65,6 +65,12 @@ void Submit(const Request& request);
 void SetSetSession(bool set);
 // A game of the room's set ended: sent to the server as room-result.
 void ReportSetGame(u32 set_game, u8 winner_side, u16 stage);
+// For the launcher's Discord activity (game-status.json `scene` and `game`): the game's current
+// scene (scSelCharacter, scSelStage, scMelee, ...; GameBridge samples it), and the game that
+// starts (the replay's INFO JSON: mode, stage, players, characters, the recorder's port; set at
+// every online game's barrier, shown while it is played).
+void SetScene(const std::string& scene);
+void SetGame(const std::string& info_json);
 // The player's rulesets for the game's Ruleset line (room-rulesets / ruleset-list): asks mm again
 // when the list is older than a few seconds, and returns what it has.
 enum class ListState : u8
