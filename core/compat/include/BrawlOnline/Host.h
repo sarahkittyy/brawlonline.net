@@ -39,7 +39,9 @@ public:
   // thread: a room's game watched that stands still (buffering) stands the game's pad thread still
   // with it, so its pad memory is from before (BrawlOnline/Online/RoomWatch.h). The default reads
   // LocalPad on the calling thread; an engine whose controllers may only be read on its game's
-  // thread answers from its own newest read.
+  // thread answers from its own newest read. (BRAWL_ONLINE_HOST_LEAVE_BUTTONS_HELD: a host built against
+  // older cores can leave its override out.)
+#define BRAWL_ONLINE_HOST_LEAVE_BUTTONS_HELD 1
   virtual bool LeaveButtonsHeld()
   {
     for (int chan = 0; chan < 4; ++chan)

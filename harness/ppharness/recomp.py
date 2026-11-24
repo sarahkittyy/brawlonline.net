@@ -145,6 +145,11 @@ class RecompInstance(DolphinInstance):
             "SDL_JOYSTICK_HIDAPI_GAMECUBE": "0",
             "SDL_JOYSTICK_HIDAPI": "0",
         })
+        # A playback instance's comm file (Dolphin's `-i <comm.json>`, the launcher's playback Dolphin):
+        # the recomp follows it from BRAWL_ONLINE_REPLAY_COMM.
+        extra = list(self.config.extra_args)
+        if "-i" in extra and extra.index("-i") + 1 < len(extra):
+            self.env["BRAWL_ONLINE_REPLAY_COMM"] = extra[extra.index("-i") + 1]
         # PPHARNESS_RECOMP_ENV: "NAME=value;NAME=value" for the recomp instances only (a test hook
         # such as PPR_GPRB_TEST_STALL_AT on the recomp side of a crossplay set).
         for item in os.environ.get("PPHARNESS_RECOMP_ENV", "").split(";"):
