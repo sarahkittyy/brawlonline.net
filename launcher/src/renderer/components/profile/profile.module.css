@@ -695,14 +695,75 @@
   display: flex;
 }
 
-/* Edit mode's Twitch handle with Connect account (or the connected account) beside it. */
-.socialWithAction {
+/* Edit mode's Twitch row (profile_view.tsx TwitchField): a box shaped as the text boxes above and below it. Not
+   connected, the whole box is Connect account; connected, the account with Disconnect at its right. */
+.socialConnect,
+.socialLinked {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
+  line-height: normal;
+  text-align: left;
 }
 
-.socialWithAction > :first-child {
+.socialConnect {
+  color: var(--accent-primary);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.socialConnect:hover,
+.socialConnect:focus-visible {
+  border-color: var(--accent-primary);
+  outline: none;
+}
+
+.socialConnect:disabled {
+  cursor: default;
+  opacity: 0.7;
+}
+
+/* The Twitch hint's last step (lib/twitch/use_twitch.ts): gold, as the pencil before it. */
+.socialConnectGlow {
+  --profile-glow: 255 205 70;
+
+  box-shadow: 0 0 0 2px rgb(var(--profile-glow) / 85%);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .socialConnectGlow {
+    animation: pencilGlow 3.6s ease-in-out;
+  }
+}
+
+/* Not a text box: the same outline without its fill (a dashed one here means empty, as the missing flag's). */
+.socialLinked {
+  background: none;
+}
+
+.socialLinkedName {
   flex: 1;
   min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.socialBoxAction {
+  flex: none;
+  padding: 0 2px;
+  border: 0;
+  background: none;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 12px;
+  line-height: inherit;
+  cursor: pointer;
+}
+
+.socialBoxAction:hover,
+.socialBoxAction:focus-visible {
+  color: var(--text-primary);
+  text-decoration: underline;
+  outline: none;
 }

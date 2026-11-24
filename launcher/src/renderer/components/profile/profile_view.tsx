@@ -3,6 +3,7 @@ import { countryName, SOCIAL_PLATFORMS } from "@common/profile";
 import ContentCopyIcon from "@mui/icons-material/ContentCopy";
 import EditOutlinedIcon from "@mui/icons-material/EditOutlined";
 import OpenInNewIcon from "@mui/icons-material/OpenInNew";
+import CircularProgress from "@mui/material/CircularProgress";
 import IconButton from "@mui/material/IconButton";
 import Popover from "@mui/material/Popover";
 import Tooltip from "@mui/material/Tooltip";
@@ -13,8 +14,10 @@ import { Flag, NoFlag } from "@/components/flag/flag";
 import { MainIcon, NameBadges } from "@/components/name_badges/name_badges";
 import { RankBadge } from "@/components/rank_badge/rank_badge";
 import { RankBadgeMessages } from "@/components/rank_badge/rank_badge.messages";
-import { TwitchConnection, TwitchStreamPanel } from "@/components/twitch/twitch";
+import { TwitchStreamPanel } from "@/components/twitch/twitch";
+import { TwitchMessages } from "@/components/twitch/twitch.messages";
 import { formatPosition, formatRating, HIDDEN_RATING } from "@/lib/ranked_format";
+import { useTwitchActions, useTwitchLink } from "@/lib/twitch/use_twitch";
 import { validateDisplayName } from "@/lib/validate/validate";
 import type {
   PlayerProfile,
@@ -443,8 +446,11 @@ const SocialsEditor = ({
   twitchGlow: boolean;
 }) => (
   <div className={styles.socialsEditor} data-testid="profile-socials-editor">
-    {SOCIAL_PLATFORMS.map(({ platform, name, placeholder }) => {
-      const field = (
+    {SOCIAL_PLATFORMS.map(({ platform, name, placeholder }) =>
+      // Twitch is connected, never typed (docs/design/twitch-live.md): anyone could type anyone's.
+      platform === "twitch" ? (
+        <TwitchField key={platform} name={name} glow={twitchGlow} />
+      ) : (
         <SocialField
           key={platform}
           platform={platform}
@@ -453,17 +459,8 @@ const SocialsEditor = ({
           value={socials.find((s) => s.platform === platform)?.handle ?? ""}
           save={save}
         />
-      );
-      // Twitch: Connect account beside the handle (docs/design/twitch-live.md); a typed handle never shows as live.
-      return platform === "twitch" ? (
-        <div key={platform} className={styles.socialWithAction}>
-          {field}
-          <TwitchConnection glow={twitchGlow} />
-        </div>
-      ) : (
-        field
-      );
-    })}
+      ),
+    )}
   </div>
 );
 
@@ -511,6 +508,42 @@ const SocialField = ({
         }}
       />
     </label>
+  );
+};
+
+/**
+ * Edit mode's Twitch row, in the other rows' shape (the logo, then a box as wide as their text boxes): Connect account,
+ * which opens Twitch's sign-in, or the connected account with Disconnect. No row while the server can't connect one.
+ */
+const TwitchField = ({ name, glow }: { name: string; glow: boolean }) => {
+  const link = useTwitchLink();
+  const { connect, disconnect, waiting } = useTwitchActions();
+  if (!link?.available) {
+    return null;
+  }
+  return (
+    <div className={styles.socialField} title={name}>
+      <SocialIcon platform="twitch" size={18} />
+      {link.linked ? (
+        <div className={clsx(styles.socialInput, styles.socialLinked)} data-testid="twitch-connected">
+          <span className={styles.socialLinkedName}>{link.linked.login}</span>
+          <button type="button" className={styles.socialBoxAction} onClick={() => void disconnect()}>
+            {TwitchMessages.disconnect()}
+          </button>
+        </div>
+      ) : (
+        <button
+          type="button"
+          className={clsx(styles.socialInput, styles.socialConnect, glow && styles.socialConnectGlow)}
+          onClick={() => void connect()}
+          disabled={waiting}
+          data-testid="twitch-connect"
+        >
+          {waiting && <CircularProgress size={11} color="inherit" />}
+          {TwitchMessages.connectAccount()}
+        </button>
+      )}
+    </div>
   );
 };
 

@@ -5,8 +5,10 @@ in `run/design/twitch-live`, round 1 and her notes on it).
 
 ## Who is live
 
-**Connected, not typed.** A Twitch handle typed into the profile is a link only: anyone can type anyone's, so it
-never shows as live. A player connects their Twitch account through Twitch's own sign-in (OAuth authorization
+**Connected, not typed** (Sarah's board: "make the profile connect only"). Anyone can type anyone's handle, so a
+profile shows Twitch only for a connected account, and edit mode has no Twitch text box. A handle typed before (64
+of 1,237 profiles on 2026-11-24) stays stored but is never shown: it only gives that player the hint to connect
+(below); an old launcher can still store one the same way. A player connects their Twitch account through Twitch's own sign-in (OAuth authorization
 code, no scope): the launcher asks `POST /v1/me/twitch/connect` for the address and opens it in the browser;
 Twitch sends the player back to `GET /v1/twitch/callback` (`<PUBLIC_BASE_URL>/v1/twitch/callback`, a plain page:
 "You're connected!" or "Not connected."); accounts trades the code for a token, reads who signed in
@@ -40,8 +42,10 @@ without Twitch (the typed handle, or the name, becomes the account).
   viewers first; "(logo) Twitch" on the left and Connect account on the right for a player who hasn't connected.
   The logo after live players' names in the list and the featured game. The featured game is a little smaller.
 - **Sidebar:** Twitch's logo before Spectate's live count while there are streams (not when folded).
-- **Connect account** is also in Settings > Social (Twitch, connected account and Disconnect) and in the
-  profile's edit mode beside the Twitch handle.
+- **Connect account** is also in Settings > Social ("Twitch", then Connect account or the account and Disconnect,
+  as the other settings' small outlined buttons) and in the profile's edit mode, where the Twitch row keeps the
+  other rows' shape: the logo, then a box the size of their text boxes that is Connect account, or the connected
+  account with Disconnect at its right.
 - **The hint:** a player with a typed Twitch handle who never connected gets the profile glow back on this
   client: the sidebar's card, then the pencil, then Connect account. Clicking the pencil ends it, connected or
   not (`TWITCH_CONNECT_HINT_DONE`).

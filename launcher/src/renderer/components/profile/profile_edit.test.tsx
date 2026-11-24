@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { UserName } from "@/components/user_name/user_name";
 import { useProfileView } from "@/lib/hooks/use_profile_view";
-import type { PlayerProfile, ProfileUpdate } from "@/services/backend/types";
+import type { PlayerProfile, ProfileUpdate, TwitchLink } from "@/services/backend/types";
 import { useGameAssets } from "@/styles/game_theme";
 
 import { ProfileDialog } from "./profile_dialog";
@@ -47,8 +47,25 @@ const updateProfile = vi.fn(async (u: ProfileUpdate) => {
 const changeDisplayName = vi.fn(async (name: string) => {
   stored = { ...stored, displayName: name };
 });
+let twitch: TwitchLink = { available: true, linked: null, handle: "sarahkitty" };
+const fetchTwitchLink = vi.fn(async () => twitch);
+const twitchConnectUrl = vi.fn(async () => "https://id.twitch.tv/oauth2/authorize?state=x");
+const disconnectTwitch = vi.fn(async () => {
+  twitch = { ...twitch, linked: null };
+});
+const fetchTwitchStreams = vi.fn(async () => []);
 vi.mock("@/services", () => ({
-  useServices: () => ({ backendService: { fetchProfile, updateProfile, changeDisplayName } }),
+  useServices: () => ({
+    backendService: {
+      fetchProfile,
+      updateProfile,
+      changeDisplayName,
+      fetchTwitchLink,
+      twitchConnectUrl,
+      disconnectTwitch,
+      fetchTwitchStreams,
+    },
+  }),
 }));
 
 const setDisplayName = vi.fn();
@@ -210,16 +227,33 @@ describe("profile edit mode", () => {
   it("saves a social account when its box loses focus; the profile shows its logo", async () => {
     const view = open();
     fireEvent.click(await view.findByTestId("profile-edit"));
-    const twitch = view.getByTestId("social-input-twitch");
-    fireEvent.change(twitch, { target: { value: "twitch.tv/sarahkitty" } });
-    fireEvent.blur(twitch);
-    await waitFor(() => expect(updateProfile).toHaveBeenCalledWith({ socials: { twitch: "twitch.tv/sarahkitty" } }));
+    const youtube = view.getByTestId("social-input-youtube");
+    fireEvent.change(youtube, { target: { value: "sarahkitty" } });
+    fireEvent.blur(youtube);
+    await waitFor(() => expect(updateProfile).toHaveBeenCalledWith({ socials: { youtube: "sarahkitty" } }));
     // Leaving edit mode: the row of logos; Discord-like accounts without a page copy the name.
     fireEvent.click(view.getByTestId("profile-edit"));
     const row = await view.findByTestId("profile-socials");
     const button = row.querySelector("button")!;
-    expect(button.getAttribute("aria-label")).toBe("Twitch: @twitch.tv/sarahkitty");
+    expect(button.getAttribute("aria-label")).toBe("YouTube: @sarahkitty");
     fireEvent.click(button);
-    await waitFor(() => expect(copied).toEqual(["twitch.tv/sarahkitty"]));
+    await waitFor(() => expect(copied).toEqual(["sarahkitty"]));
+  });
+
+  it("connects Twitch rather than typing it: Connect account, then the account with Disconnect", async () => {
+    twitch = { available: true, linked: null, handle: "sarahkitty" };
+    const view = open();
+    fireEvent.click(await view.findByTestId("profile-edit"));
+    expect(view.queryByTestId("social-input-twitch")).toBeNull();
+    fireEvent.click(await view.findByTestId("twitch-connect"));
+    await waitFor(() => expect(openExternal).toHaveBeenCalledWith("https://id.twitch.tv/oauth2/authorize?state=x"));
+    cleanup();
+    twitch = { available: true, linked: { login: "sarahkitty", displayName: "SarahKitty" }, handle: "sarahkitty" };
+    const again = open();
+    fireEvent.click(await again.findByTestId("profile-edit"));
+    const connected = await again.findByTestId("twitch-connected");
+    expect(connected.textContent).toContain("sarahkitty");
+    fireEvent.click(again.getByText("Disconnect"));
+    await waitFor(() => expect(disconnectTwitch).toHaveBeenCalled());
   });
 });

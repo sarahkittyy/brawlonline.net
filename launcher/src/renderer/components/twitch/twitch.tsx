@@ -174,8 +174,8 @@ export const TwitchConnectButton = ({
 };
 
 /**
- * The player's own Twitch connection, for Settings > Social and the profile's edit mode: Connect account, or the
- * connected account (its page) and Disconnect.
+ * The player's own Twitch connection, for Settings > Social: Connect account, or the connected account (its page) and
+ * Disconnect, as the other settings' small outlined buttons.
  */
 export const TwitchConnection = ({ glow = false }: { glow?: boolean }) => {
   const link = useTwitchLink();
@@ -191,9 +191,9 @@ export const TwitchConnection = ({ glow = false }: { glow?: boolean }) => {
     <span className={styles.connected} data-testid="twitch-connected">
       <button type="button" className={styles.connectedName} onClick={() => openTwitch(login)}>
         <TwitchGlyph size={14} />
-        {link.linked.displayName || login}
+        {login}
       </button>
-      <Button size="small" className={styles.disconnect} onClick={() => void disconnect()}>
+      <Button variant="outlined" color="secondary" size="small" onClick={() => void disconnect()}>
         {Messages.disconnect()}
       </Button>
     </span>

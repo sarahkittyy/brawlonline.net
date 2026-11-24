@@ -4,7 +4,7 @@ import { css } from "@emotion/react";
 import React from "react";
 
 import { Toggle } from "@/components/form/toggle";
-import { TwitchConnection, TwitchGlyph } from "@/components/twitch/twitch";
+import { TwitchConnection } from "@/components/twitch/twitch";
 import { TwitchMessages } from "@/components/twitch/twitch.messages";
 import { useDiscordActivity, useDiscordButtons, useDiscordShowPlayers } from "@/lib/hooks/use_settings";
 import { useTwitchLink } from "@/lib/twitch/use_twitch";
@@ -51,21 +51,7 @@ export const SocialSettings = React.memo(function SocialSettings() {
         </div>
       </SettingItem>
       {twitchAvailable && (
-        <SettingItem
-          inline={true}
-          name={
-            <span
-              css={css`
-                display: inline-flex;
-                align-items: center;
-                gap: 8px;
-              `}
-            >
-              <TwitchGlyph size={18} />
-              {TwitchMessages.twitch()}
-            </span>
-          }
-        >
+        <SettingItem inline={true} name={TwitchMessages.twitch()}>
           <TwitchConnection />
         </SettingItem>
       )}
