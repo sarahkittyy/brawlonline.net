@@ -1104,6 +1104,8 @@ impl RoomBook {
             .map(|_| rooms::random_room_code(&mut rng))
             .find(|c| !self.rooms.contains_key(c))
             .ok_or(msg::NO_ROOMS_LEFT)?;
+        // (A 2v2 party has no game to watch.)
+        let watch = !twos && self.wants_watch(conn);
         if let Some(old) = self.member_of.get(&conn).cloned() {
             self.leave(now, &old, conn, None, true, out);
         }
@@ -1122,7 +1124,7 @@ impl RoomBook {
             hp: None,
             in_game: false,
             sitting_out: false,
-            watch: false,
+            watch,
             watching: None,
             search: None,
             pair: None,
@@ -1243,6 +1245,7 @@ impl RoomBook {
                 .find(|&i| room.open[i] && room.slots[i].is_none() && !reserved.iter().any(|(k, _)| *k == i))
                 .ok_or(msg::ROOM_FULL)?,
         };
+        let watch = !room.twos && self.wants_watch(conn);
         if let Some(old) = self.member_of.get(&conn).cloned() {
             let alone_in_party = self.rooms.get(&old).is_some_and(|r| r.twos && r.player_count() == 1);
             self.leave(now, &old, conn, None, true, out);
@@ -1271,7 +1274,7 @@ impl RoomBook {
             in_game: false,
             // Joiners play (the user's, 2026-10-18): the next game waits for them to ready.
             sitting_out: false,
-            watch: false,
+            watch,
             watching: None,
             search: None,
             pair: None,
@@ -2168,6 +2171,16 @@ impl RoomBook {
     /// Members whose watch stopped (`want: false`, or they left the room) since the last call.
     pub fn take_watch_stops(&mut self) -> Vec<ConnId> {
         std::mem::take(&mut self.watch_stops)
+    }
+
+    /// The connection's `room-watch` `want` in the room it is in now. A member who goes straight
+    /// from one room to another keeps it: the game sends `want` once per connection, so a new
+    /// member's `false` left a player who joined a room from inside another never watching its
+    /// games (Sarah's board, 2026-11-24: "im sitting out in a room, and im not automatically
+    /// brought in to spectate when their game starts?").
+    fn wants_watch(&self, conn: ConnId) -> bool {
+        let Some(room) = self.member_of.get(&conn).and_then(|c| self.rooms.get(c)) else { return false };
+        room.slot_of(conn).and_then(|i| room.slots[i].as_ref()).is_some_and(|m| m.watch)
     }
 
     /// Starts the game once two or more play and all of them are ready.
@@ -3720,6 +3733,34 @@ mod tests {
         t.req(3, RoomRequest::Watch { want: Some(true), watching: None });
         t.req(3, RoomRequest::Leave);
         assert_eq!(t.book.take_watch_stops(), vec![3]);
+    }
+
+    /// The game sends `want` once per connection: one who goes straight from one room to another
+    /// (a join or a create from inside a room) still watches the new room's games (Sarah's board,
+    /// 2026-11-24: sitting out in a room joined from her own, she never watched its games).
+    #[test]
+    fn the_watch_want_moves_with_the_member() {
+        let mut t = T::new();
+        let first = create(&mut t, 3);
+        t.req(3, RoomRequest::Watch { want: Some(true), watching: None });
+        let code = create(&mut t, 1);
+        join(&mut t, 2, &code);
+        t.req(1, RoomRequest::Slot { slot: 3, open: true });
+        join(&mut t, 3, &code);
+        assert!(!t.book.rooms.contains_key(&first), "its own room is gone");
+        sit(&mut t, 3, 3, true);
+        ready_all(&mut t, &[1, 2]);
+        tickets(&mut t, &code, &[1, 2]);
+        let targets = t.book.watch_targets();
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].0, 3);
+        // A room made from inside one keeps it too.
+        let second = create(&mut t, 3);
+        assert!(t.book.rooms[&second].slots[0].as_ref().is_some_and(|m| m.watch));
+        // One who never wanted it does not get it by moving.
+        join(&mut t, 4, &code);
+        let fourth = create(&mut t, 4);
+        assert!(t.book.rooms[&fourth].slots[0].as_ref().is_some_and(|m| !m.watch));
     }
 
     /// A member still marked watching 30 s after the room's game is over (their game never said it
