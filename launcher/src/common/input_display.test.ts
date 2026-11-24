@@ -22,12 +22,11 @@ describe("normalizeInputDisplay", () => {
     // 300 wide: its height is 300 * 0.5 * 16/9 = 267 per mille of the picture's height.
     expect(normalizeInputDisplay({ x: 900, y: 900, width: 300 })).toMatchObject({ x: 700, y: 733, width: 300 });
     expect(normalizeInputDisplay({ x: -40, y: -1, width: 200.4 })).toMatchObject({ x: 0, y: 0, width: 200 });
-    expect(normalizeInputDisplay({ enabled: true, x: 10, y: 20, width: 250, everyone: true })).toEqual({
+    expect(normalizeInputDisplay({ enabled: true, x: 10, y: 20, width: 250 })).toEqual({
       enabled: true,
       x: 10,
       y: 20,
       width: 250,
-      everyone: true,
     });
   });
 });

@@ -88,7 +88,6 @@ export async function setOnlineSettings(iniFile: IniFile, options: Partial<Synce
     section.set("InputDisplayX", String(options.inputDisplay.x));
     section.set("InputDisplayY", String(options.inputDisplay.y));
     section.set("InputDisplayWidth", String(options.inputDisplay.width));
-    section.set("InputDisplayEveryone", convertBooleanToIniVal(options.inputDisplay.everyone));
   }
   if (options.netplayNetwork) {
     section.set("ForceLanIP", "True");

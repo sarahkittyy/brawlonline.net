@@ -4,8 +4,9 @@
  *
  * Dolphin.ini `[Online] InputDisplay`, `InputDisplayX`, `InputDisplayY`, `InputDisplayWidth`: the
  * box's top-left corner and width in per mille of the game's picture; its height is half its
- * width. `InputDisplayEveryone`: online games show every player's controller, side by side (else
- * the player's own; replays and spectated games always show every player's). The game draws it with core/ui InputDisplayUI.cpp, whose layouts the preview below draws
+ * width. Online games show the player's own controller; replays and spectated games every
+ * player's. (Dolphin.ini's `InputDisplayEveryone`, not set by the launcher, shows every player's
+ * online too: the harness's.) The game draws it with core/ui InputDisplayUI.cpp, whose layouts the preview below draws
  * too (the same 200 x 100 canvas and numbers): change both together.
  */
 
@@ -17,8 +18,6 @@ export type InputDisplaySettings = {
   y: number;
   /** The box's width, per mille of the game's width. */
   width: number;
-  /** Online games show every player's controller, not only the player's own. */
-  everyone: boolean;
 };
 
 /** core/ui's defaults (OnlineSettings.cpp): bottom left, a little over a fifth of the width. */
@@ -27,7 +26,6 @@ export const DEFAULT_INPUT_DISPLAY: InputDisplaySettings = {
   x: 20,
   y: 760,
   width: 220,
-  everyone: false,
 };
 export const INPUT_DISPLAY_MIN_WIDTH = 60;
 export const INPUT_DISPLAY_MAX_WIDTH = 600;
@@ -48,12 +46,11 @@ export function normalizeInputDisplay(s: Partial<InputDisplaySettings> | null | 
   const x = Math.min(1000 - width, Math.max(0, num(s?.x, d.x)));
   const y = Math.min(Math.max(0, 1000 - height), Math.max(0, num(s?.y, d.y)));
   const bool = (v: unknown, def: boolean) => (typeof v === "boolean" ? v : def);
-  return { enabled: bool(s?.enabled, d.enabled), x, y, width, everyone: bool(s?.everyone, d.everyone) };
+  return { enabled: bool(s?.enabled, d.enabled), x, y, width };
 }
 
 /** The controllers the display draws (gfPadType). */
 export type InputDisplayController = "gc" | "classic" | "wiimote" | "nunchuk";
-export const INPUT_DISPLAY_CONTROLLERS: readonly InputDisplayController[] = ["gc", "wiimote", "nunchuk", "classic"];
 
 /** One part of a controller's drawing on the 200 x 100 canvas (InputDisplayUI.cpp's Element). */
 export type InputDisplayElement =
