@@ -9,14 +9,25 @@ drives Dolphin, and a test can pair one with a Dolphin instance (crossplay).
 The recomp build (PPHARNESS_RECOMP: its native build folder, with WiiCompiled.exe and UserData/)
 is used through hard links in ``<user dir>/recomp`` (a portable layout of its own per instance);
 the card is linked read-only (BRAWL_SD_VOLATILE_WRITES).
+
+The Linux build plays from Windows through WSL (PPHARNESS_RECOMP_WSL=<distro>:<its native build
+folder in the distro>): the instance's program folder is made in the distro (hard links on its own
+disk: a program on /mnt pages in slowly), the core reads the instance's user folder through /mnt,
+and the harness, the servers and the other game reach it on 127.0.0.1, which needs WSL's mirrored
+networking (.wslconfig ``[wsl2] networkingMode=mirrored``). PPHARNESS_RECOMP_WSL_NAMES picks which
+recomp instances play there (all by default), so one test can pair a Windows recomp
+(PPHARNESS_RECOMP) with a Linux one. WSL renders with llvmpipe: give the tests time, judge them by
+their checksums.
 """
 
 from __future__ import annotations
 
 import os
+import re
+import shlex
 import shutil
 import subprocess
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any
 
 from .instance import DolphinInstance, InstanceError
@@ -31,14 +42,43 @@ def recomp_build() -> Path | None:
     return Path(p) if p else None
 
 
+def wsl_build() -> tuple[str, str] | None:
+    """PPHARNESS_RECOMP_WSL=<distro>:<Linux build folder> (WiiCompiled, and UserData/ with Config.toml,
+    NAND and Codes, as PPHARNESS_RECOMP's), or None."""
+    v = os.environ.get("PPHARNESS_RECOMP_WSL", "")
+    if not v:
+        return None
+    distro, sep, folder = v.partition(":")
+    if not sep or not distro or not folder.startswith("/"):
+        raise InstanceError(f"PPHARNESS_RECOMP_WSL={v!r}: expected <distro>:</linux/build/folder>")
+    return distro, folder.rstrip("/")
+
+
 def wants_recomp(name: str) -> bool:
-    """PPHARNESS_RECOMP set and the instance's name matches PPHARNESS_RECOMP_NAMES (a regex, all by
-    default)."""
-    import re
-    if not recomp_build():
+    """PPHARNESS_RECOMP (or PPHARNESS_RECOMP_WSL) set and the instance's name matches
+    PPHARNESS_RECOMP_NAMES (a regex, all by default)."""
+    if not recomp_build() and not wsl_build():
         return False
     pattern = os.environ.get("PPHARNESS_RECOMP_NAMES", "")
     return not pattern or re.search(pattern, name) is not None
+
+
+def runs_in_wsl(name: str) -> bool:
+    """A recomp instance that plays the Linux build in WSL: PPHARNESS_RECOMP_WSL set and the name
+    matches PPHARNESS_RECOMP_WSL_NAMES (all recomp instances by default)."""
+    if not wsl_build():
+        return False
+    pattern = os.environ.get("PPHARNESS_RECOMP_WSL_NAMES", "")
+    return not pattern or re.search(pattern, name) is not None
+
+
+def wsl_path(path: Path) -> str:
+    """A Windows path as WSL sees it (/mnt/<drive>/...)."""
+    p = PureWindowsPath(os.path.abspath(path))
+    drive = p.drive.rstrip(":").lower()
+    if len(drive) != 1:
+        raise InstanceError(f"{path}: WSL reaches only drive-letter paths")
+    return f"/mnt/{drive}/" + "/".join(p.parts[1:])
 
 
 def _link(src: Path, dst: Path) -> None:
@@ -50,15 +90,41 @@ def _link(src: Path, dst: Path) -> None:
         shutil.copyfile(src, dst)
 
 
+def set_toml(text: str, settings: dict[str, dict[str, str]]) -> str:
+    """Each `key = value` set in its [section] (the section added when missing); other lines kept."""
+    lines = text.splitlines()
+    for section, kv in settings.items():
+        out, current = [], ""
+        for ln in lines:
+            if ln.strip().startswith("["):
+                current = ln.strip()
+            name = ln.split("=", 1)[0].strip() if "=" in ln else None
+            if current == f"[{section}]" and name in kv:
+                continue
+            out.append(ln)
+        if f"[{section}]" not in (ln.strip() for ln in out):
+            out.append(f"[{section}]")
+        i = [ln.strip() for ln in out].index(f"[{section}]")
+        out[i + 1:i + 1] = [f"{k} = {v}" for k, v in kv.items()]
+        lines = out
+    return "\n".join(lines) + "\n"
+
+
+def test_config(text: str) -> str:
+    """Test runs are silent, as Dolphin's (InstanceConfig.audio): [audio] muted, volume 0. Plus
+    PPHARNESS_RECOMP_TOML ("section.key=value;..."), such as video.resolution_multiplier=0.5 for
+    WSL's software renderer."""
+    settings: dict[str, dict[str, str]] = {"audio": {"muted": "true", "volume": "0.0"}}
+    for item in os.environ.get("PPHARNESS_RECOMP_TOML", "").split(";"):
+        key, sep, value = item.partition("=")
+        section, dot, name = key.strip().partition(".")
+        if sep and dot and section and name:
+            settings.setdefault(section, {})[name] = value.strip()
+    return set_toml(text, settings)
+
+
 def _mute(config: Path) -> None:
-    """Test runs are silent, as Dolphin's (InstanceConfig.audio): [audio] muted, volume 0."""
-    lines = config.read_text(encoding="utf-8").splitlines()
-    keep = [ln for ln in lines if not ln.strip().startswith(("muted", "volume ", "volume="))]
-    if "[audio]" not in (ln.strip() for ln in keep):
-        keep.append("[audio]")
-    i = [ln.strip() for ln in keep].index("[audio]")
-    keep[i + 1:i + 1] = ["muted = true", "volume = 0.0"]
-    config.write_text("\n".join(keep) + "\n", encoding="utf-8")
+    config.write_text(test_config(config.read_text(encoding="utf-8")), encoding="utf-8")
 
 
 class RecompInstance(DolphinInstance):
@@ -68,8 +134,9 @@ class RecompInstance(DolphinInstance):
         kw.pop("exe", None)
         kw.setdefault("boot", None)
         super().__init__(name, exe=os.devnull, **kw)
+        self.wsl = wsl_build() if runs_in_wsl(name) else None
         self.build = recomp_build()
-        if self.build is None:
+        if self.build is None and self.wsl is None:
             raise InstanceError("PPHARNESS_RECOMP is not set")
 
     @property
@@ -99,7 +166,76 @@ class RecompInstance(DolphinInstance):
             _link(card, ud / "sd.raw")
         return d
 
+    def _wsl(self, *command: str, timeout: float = 60.0) -> subprocess.CompletedProcess[bytes]:
+        assert self.wsl is not None
+        return subprocess.run(["wsl.exe", "-d", self.wsl[0], "-u", "root", "--", *command],
+                              capture_output=True, timeout=timeout, check=False)
+
+    def _prepare_wsl(self) -> Path:
+        """<user dir>/recomp/launch.sh, which makes the instance's program folder in the distro as
+        it starts (the program hard-linked from the Linux build; the build's Sys, wii_bootstrap,
+        NAND and Codes copied; the test's Config.toml; the instance's card linked; portable.txt),
+        then execs the program (its pid in recomp/wsl.pid, for _wsl_reap)."""
+        assert self.wsl is not None
+        distro, build = self.wsl
+        d = self.recomp_dir
+        d.mkdir(exist_ok=True)
+        # The first command may start the distro (its VM stops when idle): give it time.
+        got = self._wsl("cat", f"{build}/UserData/Config.toml", timeout=300)
+        if got.returncode != 0:
+            raise InstanceError(f"{distro}:{build}/UserData/Config.toml: {got.stderr.decode(errors='replace')}")
+        (d / "Config.toml").write_text(test_config(got.stdout.decode("utf-8")), encoding="utf-8", newline="\n")
+        user = wsl_path(self._need_dir())
+        root = os.environ.get("PPHARNESS_RECOMP_WSL_WORK", "/root/ppharness-recomp").rstrip("/")
+        work = f"{root}/{re.sub(r'[^A-Za-z0-9_.-]', '_', self._need_dir().name)}"
+        env = dict(self.env, BRAWL_ONLINE_CORE=user)
+        q = shlex.quote
+        script = [
+            "#!/usr/bin/env bash",
+            "# ppharness/recomp.py: this instance's EmissaryRecomp, the Linux build, in WSL.",
+            "set -euo pipefail",
+            f"build={q(build)} work={q(work)} user={q(user)}",
+            'rm -rf "$work" && mkdir -p "$work/UserData"',
+            'for f in "$build"/*; do',
+            '  [[ -f $f ]] || continue',
+            '  case ${f##*/} in WiiCompiled|cacert.pem|dsp_coef.bin|*.db|*.so*) ;; *) continue ;; esac',
+            '  ln "$f" "$work/" 2>/dev/null || cp "$f" "$work/"',
+            "done",
+            'for sub in Sys wii_bootstrap; do [[ ! -d $build/$sub ]] || cp -r "$build/$sub" "$work/"; done',
+            'for sub in NAND Codes; do [[ ! -d $build/UserData/$sub ]] || cp -r "$build/UserData/$sub" "$work/UserData/"; done',
+            'cp "$user/recomp/Config.toml" "$work/UserData/Config.toml"',
+            '[[ ! -e $user/Wii/sd.raw ]] || ln -s "$user/Wii/sd.raw" "$work/UserData/sd.raw"',
+            'echo "Settings, saves and logs stay in the UserData folder next to this file." > "$work/portable.txt"',
+            'echo $$ > "$user/recomp/wsl.pid"',
+            'cd "$work"',
+            *(f"export {k}={q(v)}" for k, v in sorted(env.items())),
+            "exec nice -n 5 ./WiiCompiled",
+        ]
+        (d / "launch.sh").write_text("\n".join(script) + "\n", encoding="utf-8", newline="\n")
+        (d / "wsl.pid").unlink(missing_ok=True)
+        return d
+
+    def _wsl_reap(self) -> None:
+        """Ends the program in WSL when it outlived its wsl.exe (killing wsl.exe leaves it running)."""
+        pid_file = self.recomp_dir / "wsl.pid"
+        pid = pid_file.read_text().strip() if pid_file.is_file() else ""
+        if self.wsl is not None and pid.isdigit():
+            self._wsl("bash", "-c", f"[ ! -e /proc/{pid}/exe ] || kill -9 {pid}", timeout=30)
+
+    def game_path(self, path: Path) -> str:
+        """A path of the instance's folders as the game names it (in WSL: /mnt/<drive>/...)."""
+        return wsl_path(path) if self.wsl is not None else str(path)
+
+    def stop(self, timeout: float | None = None) -> int | None:
+        code = super().stop(timeout)
+        if self.wsl is not None and self.user_dir is not None:
+            self._wsl_reap()
+        return code
+
     def build_args(self) -> list[str]:
+        if self.wsl is not None:
+            return ["wsl.exe", "-d", self.wsl[0], "-u", "root", "--", "bash",
+                    wsl_path(self.recomp_dir / "launch.sh")]
         exe = self.recomp_dir / ("WiiCompiled.exe" if os.name == "nt" else "WiiCompiled")
         # PPHARNESS_RECOMP_LLDB: run it under lldb, which prints every thread's stack when it stops
         # on an exception (a crash that leaves no trace otherwise).
@@ -113,7 +249,8 @@ class RecompInstance(DolphinInstance):
         if self.process is not None:
             raise InstanceError("already launched")
         d = self.create()
-        self._prepare_recomp()
+        if self.wsl is None:
+            self._prepare_recomp()
         self.env.update({
             "BRAWL_ONLINE_CORE": str(d),
             "BRAWL_SD_VOLATILE_WRITES": "1",
@@ -130,6 +267,8 @@ class RecompInstance(DolphinInstance):
             from .instance import find_free_port
             self.port = find_free_port()
         self.env["BRAWL_ONLINE_HARNESS_PORT"] = str(self.port)
+        if self.wsl is not None:
+            self._prepare_wsl()
         # DolphinInstance.launch with the recomp's command line and folder.
         self.command_prefix = [str(self.build_args()[0])]
         return super().launch()

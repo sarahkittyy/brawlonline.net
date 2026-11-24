@@ -23,6 +23,7 @@ Each player is any object with ``name``, ``c`` (a HarnessClient), ``shot(name)``
 from __future__ import annotations
 
 import contextlib
+import os
 import sys
 import threading
 import time
@@ -54,6 +55,7 @@ ASL_LOADED = 0x8053EFBA
 
 
 def wait(pred: Callable[[], Any], timeout: float, what: str, every: float = 0.25) -> Any:
+    timeout *= float(os.environ.get("PPHARNESS_TIMEOUT_SCALE") or 1)  # tests/test_online.py _wait
     deadline = time.monotonic() + timeout
     last: Optional[BaseException] = None
     while time.monotonic() < deadline:

@@ -1,3 +1,4 @@
+import { execFile } from "child_process";
 import { createHash } from "crypto";
 import fs from "fs";
 import os from "os";
@@ -16,6 +17,7 @@ import {
   parseManifest,
   parseRelease,
   releaseFeatures,
+  systemTar,
   unpackArchive,
 } from "./emissary";
 import { configIniOverrides, emissaryConfig, setTomlValue } from "./launch";
@@ -542,6 +544,72 @@ describe("local releases (PPO_EMISSARY_RELEASES)", () => {
       expect(await (await f(release.manifestUrl!)).json()).toMatchObject({ version: "v0.7.10" });
       expect(parseRelease(await (await f(`${EMISSARY_API}/tags/v0.7.0`)).json(), "win32").version).toBe("v0.7.0");
       expect((await f(`${EMISSARY_API}/tags/v9`)).status).toBe(404);
+    } finally {
+      await fs.promises.rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("a Linux release", () => {
+  // EmissaryRecomp's Linux download as its tools/release.py makes it (EmissaryRecomp-<tag>-Linux.tar.gz:
+  // one top folder EmissaryRecomp/ with WiiCompiled, Sys/, wii_bootstrap/), unpacked by the system's tar.
+  it("installs and plays EmissaryRecomp/WiiCompiled", async () => {
+    const dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "emissary-linux-"));
+    try {
+      const tag = "v0.7.0";
+      await fs.promises.writeFile(path.join(dir, "brawl.iso"), "disc");
+      const top = path.join(dir, "src", "EmissaryRecomp");
+      const files: Record<string, string> = {
+        WiiCompiled: "elf BRAWL_SD_VOLATILE_WRITES BRAWL_ONLINE_CORE",
+        "cacert.pem": "roots",
+        "dsp_coef.bin": "dsp",
+        "Sys/Rollback/gp-v1.json": "{}",
+        "Sys/Resources/OSD_Font.ttf": "font",
+        "wii_bootstrap/shared2/x": "x",
+        "release.json": "{}",
+      };
+      for (const [name, data] of Object.entries(files)) {
+        await fs.promises.mkdir(path.dirname(path.join(top, name)), { recursive: true });
+        await fs.promises.writeFile(path.join(top, name), data);
+      }
+      const releases = path.join(dir, "releases", tag);
+      await fs.promises.mkdir(releases, { recursive: true });
+      const archive = path.join(releases, `EmissaryRecomp-${tag}-Linux.tar.gz`);
+      await new Promise<void>((resolve, reject) =>
+        execFile(systemTar(), ["-czf", archive, "-C", path.join(dir, "src"), "EmissaryRecomp"], (err) =>
+          err ? reject(err) : resolve(),
+        ),
+      );
+      await fs.promises.writeFile(
+        path.join(releases, "manifest.json"),
+        JSON.stringify({ version: tag, brawlOnline: "0.2.8", protocol: EMISSARY_PROTOCOL }),
+      );
+      const em = new EmissaryRecomp({
+        root: path.join(dir, "emissary-recomp"),
+        platform: "linux",
+        isoPath: () => path.join(dir, "brawl.iso"),
+        isoValid: () => true,
+        dolphinTool: () => "dolphin-tool",
+        fetch: localReleasesFetch(path.join(dir, "releases")),
+        unpack: unpackArchive,
+        extract: async (_tool, _iso, out, onPercent) => {
+          await fs.promises.mkdir(path.join(out, "DATA", "sys"), { recursive: true });
+          await fs.promises.writeFile(path.join(out, "DATA", "sys", "main.dol"), "dol");
+          onPercent(100);
+        },
+      });
+      const s = await em.install();
+      expect(s.installed).toMatchObject({ version: tag, playsOnline: true, brawlOnline: "0.2.8" });
+      const version = path.join(em.root, "versions", tag);
+      const exe = path.join(version, "WiiCompiled");
+      expect(await em.engineForPlay()).toBe(exe);
+      expect(fs.existsSync(path.join(version, "Sys", "Rollback", "gp-v1.json"))).toBe(true);
+      expect(fs.existsSync(path.join(version, "wii_bootstrap", "shared2", "x"))).toBe(true);
+      if (process.platform !== "win32") {
+        expect(fs.statSync(exe).mode & 0o111).toBe(0o111);
+      }
+      // The program's portable root (portable.txt up to 4 folders above it) is ours.
+      expect(fs.existsSync(path.join(em.root, "portable.txt"))).toBe(true);
     } finally {
       await fs.promises.rm(dir, { recursive: true, force: true });
     }
