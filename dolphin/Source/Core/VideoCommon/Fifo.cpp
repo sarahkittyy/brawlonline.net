@@ -23,6 +23,7 @@
 #include "Core/Rollback/FrameProfile.h"
 #include "Core/Rollback/MachineSession.h"
 #include "Core/Rollback/PresentStats.h"
+#include "Core/Rollback/RollbackManager.h"
 #include "Core/System.h"
 
 #include "VideoCommon/AsyncRequests.h"
@@ -90,6 +91,7 @@ void FifoManager::DoState(PointerWrap& p)
   {
     // We're good and paused, right?
     m_video_buffer_seen_ptr = m_video_buffer_pp_read_ptr = m_video_buffer_read_ptr;
+    ResetGpuSyncState();
   }
 
   p.Do(m_sync_ticks);
@@ -143,6 +145,7 @@ void FifoManager::ApplyRollbackFifo()
   m_video_buffer_pp_read_ptr = m_video_buffer;
   m_video_buffer_write_ptr = m_video_buffer + tail;
   m_video_buffer_seen_ptr = m_video_buffer;
+  ResetGpuSyncState();
 }
 
 void FifoManager::QueueVideoThreadCapture(Common::MoveOnlyFunction<void(bool)> capture)
@@ -202,6 +205,11 @@ void FifoManager::RunVideoThreadCaptures(const u8* write_ptr)
     {
       m_video_buffer_read_ptr =
           OpcodeDecoder::RunFifo(DataReader(m_video_buffer_read_ptr, c.position), nullptr);
+    }
+    if (m_abort_for_rollback.load(std::memory_order_acquire))
+    {
+      c.capture(false);
+      return;
     }
     if (m_video_buffer_read_ptr != c.position)
     {
@@ -289,21 +297,37 @@ void FifoManager::ExitGpuLoop()
   // Terminate GPU thread loop
   m_emu_running_state.Set();
   m_gpu_mainloop.Stop(Common::BlockingLoop::StopMode::NonBlock);
+  {
+    std::lock_guard lk(m_read_seq_mutex);
+    m_read_seq_cv.notify_all();
+  }
 }
 
 void FifoManager::EmulatorState(bool running)
 {
   m_emu_running_state.Set(running);
   if (running)
+  {
     m_gpu_mainloop.Wakeup();
+  }
   else
+  {
     m_gpu_mainloop.AllowSleep();
+    std::lock_guard lk(m_read_seq_mutex);
+    m_read_seq_cv.notify_all();
+  }
 }
 
 void FifoManager::SyncGPU(SyncGPUReason reason, bool may_move_read_ptr)
 {
   if (m_use_deterministic_gpu_thread)
   {
+    // RunGpuOnCpu publishes the write pointer chunk by chunk and wakes the GPU thread once, at the
+    // end of its batch, and the GPU loop's busy wait runs the FIFO while still marked done. Without
+    // a wake here, a sync inside a batch (wraparound, aux space) would return while the GPU thread
+    // still reads the buffers it then moves.
+    if (m_gpu_mainloop.IsRunning())
+      m_gpu_mainloop.Wakeup();
     if (Rollback::PresentStats::PresentTraceEnabled() || Rollback::FrameProfile::Enabled())
     {
       const auto t0 = Clock::now();
@@ -486,6 +510,109 @@ void FifoManager::ResetVideoBuffer()
   m_video_buffer_pp_read_ptr = m_video_buffer;
   m_fifo_aux_write_ptr = m_fifo_aux_data;
   m_fifo_aux_read_ptr = m_fifo_aux_data;
+  ResetGpuSyncState();
+}
+
+void FifoManager::ResetGpuSyncState()
+{
+  m_pp_read_seq = 0;
+  m_gpu_read_seq_local = 0;
+  m_gpu_read_seq.store(0, std::memory_order_release);
+}
+
+void FifoManager::PublishGpuReadSeq(u64 seq)
+{
+  if (seq > m_gpu_read_seq.load(std::memory_order_relaxed))
+    m_gpu_read_seq.store(seq, std::memory_order_seq_cst);
+  if (m_read_seq_waiting.load(std::memory_order_seq_cst))
+  {
+    std::lock_guard lk(m_read_seq_mutex);
+    m_read_seq_cv.notify_all();
+  }
+}
+
+void FifoManager::AdvanceGpuReadSeq()
+{
+  ++m_gpu_read_seq_local;
+  PublishGpuReadSeq(m_gpu_read_seq_local);
+}
+
+void FifoManager::PublishGpuReadSeqAhead()
+{
+  if (m_use_deterministic_gpu_thread)
+    PublishGpuReadSeq(m_gpu_read_seq_local + 1);
+}
+
+void FifoManager::WaitForGpuReads()
+{
+  if (!m_use_deterministic_gpu_thread)
+    return;
+  const u64 target = m_pp_read_seq;
+  if (m_gpu_read_seq.load(std::memory_order_acquire) >= target)
+    return;
+  if (!m_gpu_mainloop.IsRunning() || !m_emu_running_state.IsSet())
+    return;
+  const bool trace =
+      Rollback::PresentStats::PresentTraceEnabled() || Rollback::FrameProfile::Enabled();
+  const auto t0 = trace ? Clock::now() : TimePoint{};
+  m_gpu_mainloop.Wakeup();
+  {
+    std::unique_lock lk(m_read_seq_mutex);
+    m_read_seq_waiting.store(true, std::memory_order_seq_cst);
+    m_read_seq_cv.wait(lk, [&] {
+      return m_gpu_read_seq.load(std::memory_order_acquire) >= target ||
+             !m_gpu_mainloop.IsRunning() || !m_emu_running_state.IsSet();
+    });
+    m_read_seq_waiting.store(false, std::memory_order_relaxed);
+  }
+  if (trace)
+  {
+    const auto t1 = Clock::now();
+    if (Rollback::PresentStats::PresentTraceEnabled())
+    {
+      Rollback::PresentStats::TraceCpuWaitForGpu(
+          std::chrono::duration<double, std::milli>(t1 - t0).count());
+    }
+    Rollback::FrameProfile::AddGpuWait(
+        static_cast<size_t>(SyncGPUReason::Other),
+        static_cast<u64>(std::chrono::duration_cast<std::chrono::nanoseconds>(t1 - t0).count()));
+  }
+}
+
+u64 FifoManager::SyncGPUForRollbackLoad()
+{
+  if (!m_system.IsDualCoreMode())
+    return 0;
+  if (!m_use_deterministic_gpu_thread || !m_emu_running_state.IsSet())
+    return Rollback::RollbackManager::SyncGPUForDoState(m_system);
+
+  const auto t0 = Clock::now();
+  m_abort_for_rollback.store(true, std::memory_order_release);
+  if (m_gpu_mainloop.IsRunning())
+    m_gpu_mainloop.Wakeup();  // as in SyncGPU
+  m_gpu_mainloop.Wait();
+  DropVideoThreadCaptures();
+  const auto t1 = Clock::now();
+  const u64 ns =
+      static_cast<u64>(std::chrono::duration_cast<std::chrono::nanoseconds>(t1 - t0).count());
+  if (Rollback::PresentStats::PresentTraceEnabled())
+    Rollback::PresentStats::TraceCpuWaitForGpu(ns / 1e6);
+  Rollback::FrameProfile::AddGpuWait(static_cast<size_t>(SyncGPUReason::Other), ns);
+
+  if (m_gpu_mainloop.IsRunning())
+  {
+    m_fifo_aux_write_ptr = m_fifo_aux_data;
+    m_fifo_aux_read_ptr = m_fifo_aux_data;
+    OpcodeDecoder::DisplayListCacheOnGpuIdle();
+    Rollback::PresentStats::ClearPendingCopyDecisions();
+    m_video_buffer_read_ptr = m_video_buffer;
+    m_video_buffer_pp_read_ptr = m_video_buffer;
+    m_video_buffer_write_ptr = m_video_buffer;
+    m_video_buffer_seen_ptr = m_video_buffer;
+    ResetGpuSyncState();
+  }
+  m_abort_for_rollback.store(false, std::memory_order_release);
+  return ns / 1000;
 }
 
 // Description: Main FIFO update loop
@@ -510,6 +637,14 @@ void FifoManager::RunGpuLoop()
           // load of write_ptr above is either at or before it, or waits for the next iteration.
           if (m_captures_pending.load(std::memory_order_acquire))
             RunVideoThreadCaptures(write_ptr);
+          // A rollback load drops the rest (SyncGPUForRollbackLoad).
+          if (m_abort_for_rollback.load(std::memory_order_acquire))
+          {
+            if (g_vertex_manager)
+              g_vertex_manager->Flush();
+            m_video_buffer_seen_ptr = write_ptr;
+            return;
+          }
           // See comment in SyncGPU
           if (write_ptr > seen_ptr)
           {
@@ -517,6 +652,8 @@ void FifoManager::RunGpuLoop()
             m_video_buffer_read_ptr =
                 OpcodeDecoder::RunFifo(DataReader(m_video_buffer_read_ptr, write_ptr), nullptr);
             m_video_buffer_seen_ptr = write_ptr;
+            if (m_abort_for_rollback.load(std::memory_order_acquire) && g_vertex_manager)
+              g_vertex_manager->Flush();
           }
         }
         else
@@ -658,16 +795,79 @@ int FifoManager::RunGpuOnCpu(int ticks)
   auto& fifo = command_processor.GetFifo();
   bool reset_simd_state = false;
   int available_ticks = int(ticks * m_config_sync_gpu_overclock) + m_sync_ticks.load();
-  while (fifo.bFF_GPReadEnable.load(std::memory_order_relaxed) &&
-         fifo.CPReadWriteDistance.load(std::memory_order_relaxed) && !AtBreakpoint(m_system) &&
-         available_ticks >= 0)
+  if (m_use_deterministic_gpu_thread)
   {
-    if (m_use_deterministic_gpu_thread)
+    auto& memory = m_system.GetMemory();
+    bool pushed_any = false;
+    while (fifo.bFF_GPReadEnable.load(std::memory_order_relaxed) &&
+           fifo.CPReadWriteDistance.load(std::memory_order_relaxed) && !AtBreakpoint(m_system) &&
+           available_ticks >= 0)
     {
-      ReadDataFromFifoOnCPU(fifo.CPReadPointer.load(std::memory_order_relaxed));
-      m_gpu_mainloop.Wakeup();
+      const u32 read_ptr = fifo.CPReadPointer.load(std::memory_order_relaxed);
+      const u32 cp_end = fifo.CPEnd.load(std::memory_order_relaxed);
+      const u32 cp_base = fifo.CPBase.load(std::memory_order_relaxed);
+      const u32 dist = fifo.CPReadWriteDistance.load(std::memory_order_relaxed);
+      const bool bp_enabled = fifo.bFF_BPEnable.load(std::memory_order_relaxed);
+      const u32 bp = fifo.CPBreakpoint.load(std::memory_order_relaxed);
+
+      u8* write_ptr = m_video_buffer_write_ptr;
+      if (GPFifo::GATHER_PIPE_SIZE > static_cast<size_t>(m_video_buffer + FIFO_SIZE - write_ptr))
+      {
+        SyncGPU(SyncGPUReason::Wraparound);
+        if (!m_gpu_mainloop.IsRunning())
+          break;
+        if (m_video_buffer_pp_read_ptr < m_video_buffer_read_ptr)
+        {
+          PanicAlertFmt("Desynced read pointers");
+          break;
+        }
+        write_ptr = m_video_buffer_write_ptr;
+        const size_t existing_len = write_ptr - m_video_buffer_read_ptr;
+        if (GPFifo::GATHER_PIPE_SIZE > static_cast<size_t>(FIFO_SIZE - existing_len))
+        {
+          PanicAlertFmt("FIFO out of bounds (existing {} + new {} > {})", existing_len,
+                        GPFifo::GATHER_PIPE_SIZE, FIFO_SIZE);
+          break;
+        }
+      }
+
+      // Copy the largest contiguous span of 32-byte gather-pipe chunks in one CopyFromEmu and
+      // update CP pointers + wake the GPU thread once per batch instead of per 32 bytes.
+      constexpr u32 CHUNK = GPFifo::GATHER_PIPE_SIZE;
+      u32 max_bytes = dist & ~(CHUNK - 1);
+      if (max_bytes < CHUNK)
+        max_bytes = CHUNK;
+      const bool aligned_to_end =
+          read_ptr <= cp_end && ((cp_end - read_ptr) & (CHUNK - 1)) == 0;
+      const u32 to_wrap = aligned_to_end ? (cp_end - read_ptr) + CHUNK : CHUNK;
+      max_bytes = std::min(max_bytes, to_wrap);
+      if (bp_enabled && bp > read_ptr && ((bp - read_ptr) & (CHUNK - 1)) == 0)
+        max_bytes = std::min(max_bytes, bp - read_ptr);
+      const size_t buf_avail =
+          static_cast<size_t>(m_video_buffer + FIFO_SIZE - write_ptr) & ~static_cast<size_t>(CHUNK - 1);
+      max_bytes = static_cast<u32>(std::min<size_t>(max_bytes, buf_avail));
+      if (max_bytes < CHUNK)
+        max_bytes = CHUNK;
+
+      memory.CopyFromEmu(write_ptr, read_ptr, max_bytes);
+      m_video_buffer_pp_read_ptr = OpcodeDecoder::RunFifoPreprocessChunks(
+          m_video_buffer_pp_read_ptr, write_ptr, max_bytes, m_video_buffer_write_ptr);
+
+      const u32 next_read_ptr =
+          (aligned_to_end && max_bytes == to_wrap) ? cp_base : read_ptr + max_bytes;
+      fifo.CPReadPointer.store(next_read_ptr, std::memory_order_relaxed);
+      fifo.CPReadWriteDistance.fetch_sub(max_bytes, std::memory_order_relaxed);
+      fifo.SafeCPReadPointer.store(next_read_ptr, std::memory_order_relaxed);
+      pushed_any = true;
     }
-    else
+    if (pushed_any)
+      m_gpu_mainloop.Wakeup();
+  }
+  else
+  {
+    while (fifo.bFF_GPReadEnable.load(std::memory_order_relaxed) &&
+           fifo.CPReadWriteDistance.load(std::memory_order_relaxed) && !AtBreakpoint(m_system) &&
+           available_ticks >= 0)
     {
       if (!reset_simd_state)
       {
@@ -680,34 +880,34 @@ int FifoManager::RunGpuOnCpu(int ticks)
       m_video_buffer_read_ptr = OpcodeDecoder::RunFifo(
           DataReader(m_video_buffer_read_ptr, m_video_buffer_write_ptr), &cycles);
       available_ticks -= cycles;
-    }
 
-    if (fifo.CPReadPointer.load(std::memory_order_relaxed) ==
-        fifo.CPEnd.load(std::memory_order_relaxed))
-    {
-      fifo.CPReadPointer.store(fifo.CPBase.load(std::memory_order_relaxed),
-                               std::memory_order_relaxed);
-    }
-    else
-    {
-      fifo.CPReadPointer.fetch_add(GPFifo::GATHER_PIPE_SIZE, std::memory_order_relaxed);
-    }
-
-    fifo.CPReadWriteDistance.fetch_sub(GPFifo::GATHER_PIPE_SIZE, std::memory_order_relaxed);
-    // In dual core the game reads the read pointer and the read-write distance from
-    // SafeCPReadPointer, which only the non-deterministic GPU loop moved, so with the
-    // deterministic GPU thread (every rollback session) the GPU never seemed to read anything.
-    // Super Monkey Ball 2, which switches between two GP FIFOs and waits for the GPU through them,
-    // waited forever ("GP WAIT Timeout"), reset its FIFOs and handed the GPU garbage, and both
-    // machines crashed in LoadIndexedXF. The bytes up to CPReadPointer are already copied to the
-    // video buffer, so the guest may reuse them.
-    // In single core too, where the game reads CPReadPointer and nothing reads this one: it is in
-    // the savestate, so a single-core player's stale copy differed from a dual-core player's in
-    // the machine image's digest, and that player never vouched for the dual-core host's image
-    // (bug report #200, "player 2 does not vouch for this machine"); a dual-core joiner of a
-    // single-core host also got the stale pointer as the GPU's read pointer.
-    fifo.SafeCPReadPointer.store(fifo.CPReadPointer.load(std::memory_order_relaxed),
+      if (fifo.CPReadPointer.load(std::memory_order_relaxed) ==
+          fifo.CPEnd.load(std::memory_order_relaxed))
+      {
+        fifo.CPReadPointer.store(fifo.CPBase.load(std::memory_order_relaxed),
                                  std::memory_order_relaxed);
+      }
+      else
+      {
+        fifo.CPReadPointer.fetch_add(GPFifo::GATHER_PIPE_SIZE, std::memory_order_relaxed);
+      }
+
+      fifo.CPReadWriteDistance.fetch_sub(GPFifo::GATHER_PIPE_SIZE, std::memory_order_relaxed);
+      // In dual core the game reads the read pointer and the read-write distance from
+      // SafeCPReadPointer, which only the non-deterministic GPU loop moved, so with the
+      // deterministic GPU thread (every rollback session) the GPU never seemed to read anything.
+      // Super Monkey Ball 2, which switches between two GP FIFOs and waits for the GPU through them,
+      // waited forever ("GP WAIT Timeout"), reset its FIFOs and handed the GPU garbage, and both
+      // machines crashed in LoadIndexedXF. The bytes up to CPReadPointer are already copied to the
+      // video buffer, so the guest may reuse them.
+      // In single core too, where the game reads CPReadPointer and nothing reads this one: it is in
+      // the savestate, so a single-core player's stale copy differed from a dual-core player's in
+      // the machine image's digest, and that player never vouched for the dual-core host's image
+      // (bug report #200, "player 2 does not vouch for this machine"); a dual-core joiner of a
+      // single-core host also got the stale pointer as the GPU's read pointer.
+      fifo.SafeCPReadPointer.store(fifo.CPReadPointer.load(std::memory_order_relaxed),
+                                   std::memory_order_relaxed);
+    }
   }
 
   command_processor.SetCPStatusFromGPU();
@@ -758,6 +958,7 @@ void FifoManager::UpdateWantDeterminism(bool want)
     {
       // These haven't been updated in non-deterministic mode.
       m_video_buffer_seen_ptr = m_video_buffer_pp_read_ptr = m_video_buffer_read_ptr;
+      ResetGpuSyncState();
       CopyPreprocessCPStateFromMain();
       VertexLoaderManager::MarkAllDirty();
     }

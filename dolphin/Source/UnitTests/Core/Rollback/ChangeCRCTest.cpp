@@ -409,3 +409,36 @@ TEST(FeedCountedGranules, LeavesOutWhatThePerGranuleLoopLeftOut)
     EXPECT_EQ(got.gpu_skipped, want.gpu_skipped);
   }
 }
+
+TEST(CombineCRC32, ParallelChunksAndSliceMatchSerial)
+{
+  // Parallel chunk CRCs combined in order must equal a single serial BatchedChangeCRC, and
+  // combining that with an independent slice RunCRC(0) must equal RunCRC(change_crc).
+  for (const u32 granules : {0u, 1u, 7u, 128u, 513u, 4096u})
+  {
+    const Stream s = MakeStream(granules, granules + 19);
+    constexpr size_t CHUNKS = 5;
+    const size_t split = (s.pages.size() + CHUNKS - 1) / CHUNKS;
+    u32 combined = Common::StartCRC32();
+    for (size_t c = 0; c < CHUNKS; ++c)
+    {
+      BatchedChangeCRC chunk;
+      const size_t begin = std::min(c * split, s.pages.size());
+      const size_t end = std::min(begin + split, s.pages.size());
+      for (size_t g = begin; g < end; ++g)
+        chunk.Feed(s.pages[g], s.bytes.data() + g * GRANULE);
+      combined = Common::CombineCRC32(combined, chunk.Finish(), chunk.TotalBytes());
+    }
+    const u32 expected_change = Serial(s);
+    EXPECT_EQ(combined, expected_change) << "granules " << granules;
+
+    const u32 nonzero_change = combined ? combined : 1;
+    const Guest guest = MakeGuest(granules + 77, 40, 3, 5);
+    RunCRC serial_slice(nonzero_change);
+    RunCRC independent_slice;
+    Rollback::FeedCountedGranules(guest.Ram(), 300, 1200, serial_slice, &independent_slice, nullptr);
+    const u32 combined_with_slice = Common::CombineCRC32(
+        nonzero_change, independent_slice.Finish(), independent_slice.TotalBytes());
+    EXPECT_EQ(combined_with_slice, serial_slice.Finish()) << "granules " << granules;
+  }
+}

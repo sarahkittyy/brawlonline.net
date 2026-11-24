@@ -138,6 +138,20 @@ bool PreprocessedBP(u8 reg)
          reg == BPMEM_SETDRAWDONE || reg == BPMEM_PE_TOKEN_ID || reg == BPMEM_PE_TOKEN_INT_ID ||
          reg == BPMEM_TRIGGER_EFB_COPY;
 }
+
+// Top-level BP commands that FifoManager's CPU/GPU read-sync sequence counts (1-for-1 on both
+// threads): those that read guest RAM (TLUTs, preloads, EFB/XFB copies), and the draw done and
+// tokens a draw sync waits on. A primitive's textures are read only when the vertex manager
+// flushes, which these BPs do (BPWritten) before they are counted: counting only the primitives
+// let the game refill a texture buffer before the batch that reads it was drawn (bug #151).
+bool IsRamReadingBP(u8 reg)
+{
+  return reg == BPMEM_LOADTLUT1 || reg == BPMEM_PRELOAD_MODE || reg == BPMEM_TRIGGER_EFB_COPY ||
+         reg == BPMEM_SETDRAWDONE || reg == BPMEM_PE_TOKEN_ID || reg == BPMEM_PE_TOKEN_INT_ID;
+}
+
+thread_local bool s_gpu_in_display_list = false;
+std::array<u32, CP_NUM_VAT_REG> s_preprocess_vtx_sizes{};
 }  // namespace
 
 void DisplayListCacheOnGpuIdle()
@@ -147,10 +161,27 @@ void DisplayListCacheOnGpuIdle()
   s_dl_retired.clear();
 }
 
+bool IsGpuInDisplayList()
+{
+  return s_gpu_in_display_list;
+}
+
 template <bool is_preprocess>
 class RunCallback final : public Callback
 {
 public:
+  RunCallback()
+      : m_fifo(Core::System::GetInstance().GetFifo()), m_det(m_fifo.UseDeterministicGPUThread())
+  {
+  }
+
+  OPCODE_CALLBACK(bool ShouldAbort() const)
+  {
+    if constexpr (is_preprocess)
+      return false;
+    else
+      return !m_in_display_list && m_det && m_fifo.AbortForRollback();
+  }
   OPCODE_CALLBACK(void OnXF(u16 address, u8 count, const u8* data))
   {
     m_cycles += 18 + 6 * count;
@@ -235,11 +266,15 @@ public:
         m_rec->effects.push_back({1, command, 0, value, 0, rec_gap});
         m_rec_last = m_cycles;
       }
+      if (!m_in_display_list && m_det && IsRamReadingBP(command))
+        m_fifo.AdvancePreprocessReadSeq();
     }
     else
     {
       LoadBPReg(command, value, m_cycles);
       INCSTAT(g_stats.this_frame.num_bp_loads);
+      if (!m_in_display_list && m_det && IsRamReadingBP(command))
+        m_fifo.AdvanceGpuReadSeq();
     }
   }
   OPCODE_CALLBACK(void OnIndexedLoad(CPArray array, u32 index, u16 address, u8 size))
@@ -255,9 +290,15 @@ public:
         m_rec->effects.push_back({2, static_cast<u8>(array), address, index, size, rec_gap});
         m_rec_last = m_cycles;
       }
+      if (!m_in_display_list && m_det)
+        m_fifo.AdvancePreprocessReadSeq();
     }
     else
+    {
       LoadIndexedXF(array, index, address, size);
+      if (!m_in_display_list && m_det)
+        m_fifo.AdvanceGpuReadSeq();
+    }
   }
   OPCODE_CALLBACK(void OnPrimitiveCommand(OpcodeDecoder::Primitive primitive, u8 vat,
                                           u32 vertex_size, u16 num_vertices, const u8* vertex_data))
@@ -271,15 +312,25 @@ public:
       }
     }
     // load vertices
-    const u32 size = vertex_size * num_vertices;
+    if constexpr (!is_preprocess)
+    {
+      const u32 size = vertex_size * num_vertices;
 
-    const u32 bytes =
-        VertexLoaderManager::RunVertices<is_preprocess>(vat, primitive, num_vertices, vertex_data);
+      const u32 bytes =
+          VertexLoaderManager::RunVertices<false>(vat, primitive, num_vertices, vertex_data);
 
-    ASSERT(bytes == size);
+      ASSERT(bytes == size);
+    }
 
     // 4 GPU ticks per vertex, 3 CPU ticks per GPU tick
     m_cycles += num_vertices * 4 * 3 + 6;
+    if (!m_in_display_list && m_det)
+    {
+      if constexpr (is_preprocess)
+        m_fifo.AdvancePreprocessReadSeq();
+      else
+        m_fifo.AdvanceGpuReadSeq();
+    }
   }
   // This can't be inlined since it calls Run, which makes it recursive
   // m_in_display_list prevents it from actually recursing infinitely, but there's no real benefit
@@ -346,8 +397,10 @@ public:
         {
           // temporarily swap dl and non-dl (small "hack" for the stats)
           g_stats.SwapDL();
+          s_gpu_in_display_list = true;
 
           Run(start_address, size, *this);
+          s_gpu_in_display_list = false;
           INCSTAT(g_stats.this_frame.num_dlists_called);
 
           // un-swap
@@ -356,6 +409,13 @@ public:
       }
 
       m_in_display_list = false;
+      if (m_det)
+      {
+        if constexpr (is_preprocess)
+          m_fifo.AdvancePreprocessReadSeq();
+        else
+          m_fifo.AdvanceGpuReadSeq();
+      }
     }
   }
   OPCODE_CALLBACK(void OnNop(u32 count))
@@ -420,9 +480,19 @@ public:
         m_rec->uses_format = true;
         m_rec->vat_mask |= static_cast<u8>(1u << (vat & 7));
       }
+      if (VertexLoaderManager::g_preprocess_vat_dirty[vat]) [[unlikely]]
+      {
+        s_preprocess_vtx_sizes[vat] = VertexLoaderBase::GetVertexSize(
+            g_preprocess_cp_state.vtx_desc, g_preprocess_cp_state.vtx_attr[vat]);
+        VertexLoaderManager::g_preprocess_vat_dirty[vat] = false;
+      }
+      return s_preprocess_vtx_sizes[vat];
     }
-    VertexLoaderBase* loader = VertexLoaderManager::RefreshLoader<is_preprocess>(vat);
-    return loader->m_vertex_size;
+    else
+    {
+      VertexLoaderBase* loader = VertexLoaderManager::RefreshLoader<false>(vat);
+      return loader->m_vertex_size;
+    }
   }
 
   // Preprocesses a display list with the cache (see DlEntry). The aux FIFO gets a DlHeader per
@@ -513,6 +583,8 @@ public:
     slot.entry = std::move(entry);
   }
 
+  Fifo::FifoManager& m_fifo;
+  bool m_det = false;
   u32 m_cycles = 0;
   bool m_in_display_list = false;
   DlEntry* m_rec = nullptr;  // the display list whose parse is being recorded
@@ -535,5 +607,91 @@ u8* RunFifo(DataReader src, u32* cycles)
 
 template u8* RunFifo<true>(DataReader src, u32* cycles);
 template u8* RunFifo<false>(DataReader src, u32* cycles);
+
+u8* RunFifoPreprocessChunks(u8* pp_read_ptr, u8* batch_start, u32 batch_bytes,
+                            std::atomic<u8*>& write_ptr_ref)
+{
+  constexpr u32 CHUNK = 32;
+  ASSERT(batch_bytes >= CHUNK && (batch_bytes & (CHUNK - 1)) == 0);
+  RunCallback<true> callback{};
+  u8* p = pp_read_ptr;
+  u8* chunk_end = batch_start + CHUNK;
+  u8* const batch_end = batch_start + batch_bytes;
+
+  while (chunk_end <= batch_end)
+  {
+    while (p < chunk_end)
+    {
+      const u32 avail = static_cast<u32>(chunk_end - p);
+      const u32 cmd_size = RunCommand(p, avail, callback);
+      if (cmd_size == 0)
+        break;
+      p += cmd_size;
+    }
+
+    if (p == chunk_end)
+    {
+      write_ptr_ref.store(chunk_end, std::memory_order_release);
+      chunk_end += CHUNK;
+      callback.m_cycles = 0;
+      continue;
+    }
+
+    // Command starting at `p` spans past `chunk_end`. Compute its required length (when its header
+    // is already available) so we jump straight to the 32-byte chunk that completes it without
+    // re-parsing its header on every intermediate 32-byte boundary.
+    const u32 avail = static_cast<u32>(chunk_end - p);
+    u32 needed = avail + 1;
+    const Opcode cmd = static_cast<Opcode>(p[0]);
+    if (cmd >= Opcode::GX_PRIMITIVE_START && cmd <= Opcode::GX_PRIMITIVE_END)
+    {
+      if (avail >= 3)
+      {
+        const u8 vat = static_cast<u8>(cmd) & GX_VAT_MASK;
+        const u16 num_vertices = Common::swap16(&p[1]);
+        needed = 3u + static_cast<u32>(num_vertices) * callback.GetVertexSize(vat);
+      }
+    }
+    else if (cmd == Opcode::GX_LOAD_XF_REG)
+    {
+      if (avail >= 5)
+      {
+        const u32 cmd2 = Common::swap32(&p[1]);
+        const u8 stream_size = ((cmd2 >> 16) & 0xf) + 1;
+        needed = 5u + static_cast<u32>(stream_size) * 4u;
+      }
+    }
+    else if (cmd == Opcode::GX_CMD_CALL_DL)
+    {
+      needed = 9;
+    }
+    else if (cmd == Opcode::GX_LOAD_CP_REG)
+    {
+      needed = 6;
+    }
+    else if (cmd == Opcode::GX_LOAD_BP_REG || cmd == Opcode::GX_LOAD_INDX_A ||
+             cmd == Opcode::GX_LOAD_INDX_B || cmd == Opcode::GX_LOAD_INDX_C ||
+             cmd == Opcode::GX_LOAD_INDX_D)
+    {
+      needed = 5;
+    }
+
+    if (p + needed > batch_end)
+    {
+      write_ptr_ref.store(batch_end, std::memory_order_release);
+      break;
+    }
+
+    const size_t end_off = static_cast<size_t>((p + needed) - batch_start);
+    u8* next_end = batch_start + ((end_off + (CHUNK - 1)) & ~static_cast<size_t>(CHUNK - 1));
+    if (next_end <= chunk_end)
+      next_end = chunk_end + CHUNK;
+    write_ptr_ref.store(next_end - CHUNK, std::memory_order_release);
+    chunk_end = next_end;
+    callback.m_cycles = 0;
+  }
+
+  return p;
+}
 
 }  // namespace OpcodeDecoder

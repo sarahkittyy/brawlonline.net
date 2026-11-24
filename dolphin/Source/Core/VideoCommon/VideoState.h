@@ -3,12 +3,41 @@
 
 #pragma once
 
+#include <array>
+#include <cstddef>
+#include <memory>
+
+#include "Common/CommonTypes.h"
+
 class PointerWrap;
 
+namespace VideoCommon
+{
+static constexpr size_t TMEM_SNAPSHOT_PAGE_SIZE = 4096;
+static constexpr size_t TMEM_SNAPSHOT_PAGE_COUNT = (1024 * 1024) / TMEM_SNAPSHOT_PAGE_SIZE;
+
+// Incremental TMEM snapshot for rollback slots: each 4 KiB page carries a version number, so both
+// captures (saves) and restores (loads) copy only the pages written since that slot's copy was
+// last updated (typically 1-2 pages = 4-8 KiB instead of 1 MiB).
+struct TmemSnapshot
+{
+  std::unique_ptr<u8[]> data;
+  std::array<u64, TMEM_SNAPSHOT_PAGE_COUNT> versions{};
+
+  void Reset()
+  {
+    data.reset();
+    versions.fill(0);
+  }
+};
+}  // namespace VideoCommon
+
 void VideoCommon_DoState(PointerWrap& p);
-// TMEM (s_tex_mem) was written at [offset, offset + size): every writer says so, so that a
-// rollback load copies back those pages only (VideoCommon_DoStateRollbackGPU).
+// TMEM (s_tex_mem) was written at [offset, offset + size): every writer says so, so that rollback
+// saves and loads copy only those pages (VideoCommon_SaveTmemSnapshot / LoadTmemSnapshot).
 void VideoCommon_TmemWritten(unsigned int offset, unsigned int size);
+size_t VideoCommon_SaveTmemSnapshot(VideoCommon::TmemSnapshot& snapshot);
+size_t VideoCommon_LoadTmemSnapshot(const VideoCommon::TmemSnapshot& snapshot);
 
 // A whole-machine session's machine image: what only drawing uses and the image's digest leaves
 // out (each machine's GPU has its own): the TEV colour registers' both halves

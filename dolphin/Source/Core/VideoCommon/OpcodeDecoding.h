@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <atomic>
 #include <concepts>
 
 #include "Common/Assert.h"
@@ -21,6 +22,8 @@ namespace OpcodeDecoder
 // The deterministic GPU thread's display-list cache: called on the CPU thread when the aux FIFO is
 // empty (the GPU thread has read every list it was given), to free replaced copies.
 void DisplayListCacheOnGpuIdle();
+// GPU thread: true while OpcodeDecoder::RunFifo<false> is inside a display list.
+bool IsGpuInDisplayList();
 
 // Global flag to signal if FifoRecorder is active.
 extern bool g_record_fifo_data;
@@ -120,6 +123,8 @@ public:
     const CPState& cpmem = GetCPState();
     return VertexLoaderBase::GetVertexSize(cpmem.vtx_desc, cpmem.vtx_attr[vat]);
   }
+
+  virtual bool ShouldAbort() const { return false; }
 #endif
 };
 
@@ -274,6 +279,8 @@ DOLPHIN_FORCE_INLINE u32 Run(const u8* data, u32 available,
   u32 size = 0;
   while (size < available)
   {
+    if (callback.ShouldAbort())
+      break;
     const u32 command_size = RunCommand(&data[size], available - size, callback);
     if (command_size == 0)
       break;
@@ -284,6 +291,13 @@ DOLPHIN_FORCE_INLINE u32 Run(const u8* data, u32 available,
 
 template <bool is_preprocess = false>
 u8* RunFifo(DataReader src, u32* cycles);
+
+// Deterministic GPU thread fast path: preprocesses a contiguous batch of 32-byte gather-pipe
+// chunks in one RunCallback<true> pass, resetting m_cycles at each 32-byte boundary (identical
+// cycles_into_future for LoadBPRegPreprocess) while skipping redundant header re-parses for
+// multi-chunk commands. Updates write_ptr_ref as chunks complete.
+u8* RunFifoPreprocessChunks(u8* pp_read_ptr, u8* batch_start, u32 batch_bytes,
+                            std::atomic<u8*>& write_ptr_ref);
 
 }  // namespace OpcodeDecoder
 

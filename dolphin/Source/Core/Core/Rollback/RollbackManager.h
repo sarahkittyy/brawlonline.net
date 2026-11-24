@@ -34,7 +34,6 @@ namespace Rollback
 struct CountedRAM;
 static constexpr int NUM_SAVE_SLOTS = MAX_ROLLBACK_FRAMES + 1;  // MAX_ROLLBACK_FRAMES + 1
 static constexpr int ROLLBACK_NUM_HELPER_THREADS = 5 + 1;  // plus one extra for eviction job
-static constexpr u32 SAVESTATE_NUM_WORK_CHUNKS = 5;
 class RollbackManager
 {
 public:
@@ -53,8 +52,14 @@ public:
 
   // `tag` names the saved state for SlotsBackForTag (gameplay sessions: the GekkoNet frame whose
   // end it holds); NO_TAG for callers that load by count.
+  // `full_state=false` (whole-machine confirmed frames that can never be loaded again) skips
+  // non-RAM state, GPU capture, L1 cache, ARAM and FakeVMEM while still recording the RAM delta,
+  // updating the shadow and computing the exact same desync checksum.
+  // `slice_frame >= 0` overlaps that frame's slice checksum with the save so
+  // SaveChecksumWithSlice(slice_frame) returns immediately.
   static constexpr s64 NO_TAG = INT64_MIN;
-  void SaveFrame(Core::System& system, s64 tag = NO_TAG);
+  void SaveFrame(Core::System& system, s64 tag = NO_TAG, bool full_state = true,
+                 s64 slice_frame = -1);
   bool LoadFrame(Core::System& system, int frames_back = 1);
   // The frames_back LoadFrame takes to load the newest slot saved with `tag`, or -1 when no slot
   // a load can reach holds it (the newest slot itself is not a load target). Equals the frame
@@ -93,7 +98,15 @@ public:
     u32 slice_crc = 0;           // the slice's counted bytes alone
     std::vector<u32> slice_gpu;  // the slice's granules skipped as GPU-written
   };
-  void SetCollectChecksumParts(bool on) { m_collect_parts = on; }
+  void SetCollectChecksumParts(bool on)
+  {
+    m_collect_parts = on;
+    if (on)
+      m_last_slice_frame = -1;
+  }
+  // Called by HW::DoState right before IOS::DoState in read mode so parallel RAM restore overlaps
+  // with all non-IOS device state loads while still completing before IOS reads guest RAM.
+  void WaitForRamRestoreBeforeIOS();
   const ChecksumParts& LastChecksumParts() const { return m_parts; }
   // Whole-machine snapshots exclude Brawl's framebuffer region (Init). Other games: nothing.
   void SetBrawlExclusions(bool brawl);
@@ -288,6 +301,8 @@ public:
   std::unique_ptr<uint8_t[]> m_shadow_mem2;
   bool m_shadow_valid = false;
   u32 m_last_change_crc = 0;
+  s64 m_last_slice_frame = -1;
+  u32 m_last_slice_crc = 0;
   bool m_collect_parts = false;
   mutable ChecksumParts m_parts;
   void UpdateShadowAfterSave(int slot);
@@ -303,6 +318,8 @@ public:
   // The oldest slot's deltas being merged into m_base_snapshot (kicked by SaveFrame). Every reader
   // of the base snapshot (LoadFrame) and the next eviction wait for it: WaitForEviction().
   job::Job* m_eviction_job = nullptr;
+  // In-flight RAM restore job during LoadFrame, drained by HW::DoState before IOS::DoState.
+  job::Job* m_pending_ram_restore_job = nullptr;
   // Returns the microseconds spent waiting (0 if there was no job or it had finished).
   u64 WaitForEviction(bool* was_pending = nullptr);
 
@@ -311,9 +328,9 @@ public:
   std::vector<std::pair<u32, u32>> m_scan_runs;
   std::vector<std::pair<u32, u32>> AllRamScanRuns() const;
 
-  // one byte per page, 1 = needs a source, 0 = satisfied.
-  std::vector<u8> m_needs_source_mem1;
-  std::vector<u8> m_needs_source_mem2;
+  // 1-bit bitset per granule (176 KB total vs 1.4 MB byte arrays): 1 = needs a source, 0 = done.
+  std::vector<u64> m_needs_source_mem1;
+  std::vector<u64> m_needs_source_mem2;
 
   void CaptureFullRamSnapshot(RollbackSnapshot& snap);
 

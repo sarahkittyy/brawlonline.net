@@ -435,6 +435,13 @@ u32 UpdateCRC32(u32 crc, const u8* data, size_t len)
   return crc32_z(crc, data, len);
 }
 
+u32 CombineCRC32(u32 crc1, u32 crc2, size_t len2)
+{
+  if (len2 == 0)
+    return crc1;
+  return static_cast<u32>(crc32_combine(crc1, crc2, static_cast<z_off_t>(len2)));
+}
+
 u32 ComputeCRC32(const u8* data, size_t len)
 {
   return UpdateCRC32(StartCRC32(), data, len);
