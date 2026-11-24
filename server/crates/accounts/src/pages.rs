@@ -20,7 +20,7 @@ pub(crate) fn esc(s: &str) -> String {
     s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
 }
 
-fn page(title: &str, body: &str) -> Html<String> {
+pub(crate) fn page(title: &str, body: &str) -> Html<String> {
     Html(format!(
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">\
          <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\

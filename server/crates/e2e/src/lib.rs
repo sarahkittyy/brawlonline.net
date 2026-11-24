@@ -131,6 +131,9 @@ pub struct StackOptions {
     pub slur_filter_url: Option<String>,
     /// `TOURNAMENTS_URL` (default: none, no trophy).
     pub tournaments_url: Option<String>,
+    /// A stand-in for Twitch at this base (`<url>/oauth2`, `<url>/helix`), with test keys and the
+    /// shortest poll (10 s); default off.
+    pub twitch_url: Option<String>,
 }
 
 /// accounts + mm + a database, all for one test.
@@ -192,6 +195,13 @@ impl Stack {
         }
         if let Some(url) = opts.tournaments_url {
             cfg.tournaments_url = url;
+        }
+        if let Some(url) = opts.twitch_url {
+            cfg.twitch.twitch_client_id = Some("e2e-client".into());
+            cfg.twitch.twitch_client_secret = Some(accounts::config::Secret::new("e2e-secret"));
+            cfg.twitch.twitch_auth_url = format!("{url}/oauth2");
+            cfg.twitch.twitch_api_url = format!("{url}/helix");
+            cfg.twitch.twitch_poll_secs = 10;
         }
         let bug_reports_dir = std::env::temp_dir().join(format!("pp-e2e-bug-reports-{db_name}"));
         cfg.bug_reports_dir = bug_reports_dir.clone();

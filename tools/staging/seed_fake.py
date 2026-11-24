@@ -13,9 +13,9 @@ follows the server's Elo rules and `admin ranked recompute` gives the ranks from
 rebuild` rates the Unranked games. `queue_searches` gets two weeks of searches, so each queue's wait
 by hour of day is a few tens of seconds most hours and long or "never" late at night.
 
-It also writes `run/staging/fake-state.json`: the fakes online, their public rooms, Brawl Mods rooms
-and live games, which accounts adds to what it serves while `STAGING_FAKE_STATE` names the file
-(staging.py sets it for the staging server; accounts/src/staging_fake.rs).
+It also writes `run/staging/fake-state.json`: the fakes online, their public rooms, Brawl Mods rooms,
+live games and Twitch streams, which accounts adds to what it serves while `STAGING_FAKE_STATE` names
+the file (staging.py sets it for the staging server; accounts/src/staging_fake.rs).
 
 Running it again replaces every fake row; `--remove` deletes the fake accounts and every row that
 names one, puts back the real accounts' ratings as they were without the fake sets, and deletes the
@@ -188,6 +188,13 @@ LIVE = [
     ("twos", ["CerealKiD69", "SorryInAdvance", "Fritze107", "MatzoBallin"], 1, (0, 0), 0x1F, "playing", 12, 0),
 ]
 IN_LAUNCHER = ["Lucas", "Mr. Mario", "tomato"]
+# Live Twitch streams (GET /v1/twitch/streams): (player, Twitch login, title, Twitch category, viewers,
+# minutes live). The picture is the stage of the player's live game, from the launcher's own cache.
+TWITCH = [
+    ("Veka", "veka_ssb", "road to master 1", "Super Smash Bros. Brawl", 41, 95),
+    ("Knuckles", "knuxplays", "brawl online ranked grind | !discord", "Super Smash Bros. Brawl", 23, 40),
+    ("MayoTayo1", "mayotayo", "p+ netplay w/ chat", "Super Smash Bros. Melee", 8, 12),
+]
 # Brawl Mods rooms: (host, game name, build hash, disc, disc label, SD card, codes, players, open, name)
 MOD_ROOMS = [
     ("zenkraken", "REX Release 0.5 Hotfix 1", BRAWL_DISC, "RSBE01 Rev 1", True,
@@ -780,6 +787,10 @@ def live_state(fakes: dict[str, Fake], rulesets: dict, rng: random.Random, now: 
         if p.show_main and p.mains:
             tag["main"] = p.mains[0]
         players.append({"uid": str(p.uid), "displayName": p.name, "connectCode": p.code, **tag})
+    stage_of = {n: g[4] for g in LIVE for n in g[1]}
+    twitch = [{"uid": str(fakes[n].uid), "login": login, "title": title, "game": game, "viewers": viewers,
+               "minutes": minutes, "thumbnail": f"game-asset://cache/stages/{stage_of.get(n, 1)}.png"}
+              for n, login, title, game, viewers, minutes in TWITCH]
     in_game = len({n for r in ROOMS for n in [r[0], *r[1]]} | {n for g in LIVE for n in g[1]}) + sum(m[7] for m in MOD_ROOMS)
     return {
         "_comment": "Staging only: written by tools/staging/seed_fake.py, read by accounts (STAGING_FAKE_STATE).",
@@ -787,7 +798,7 @@ def live_state(fakes: dict[str, Fake], rulesets: dict, rng: random.Random, now: 
         "queues": {"unranked": 2, "ranked": 1, "twos": 0},
         "playing": {"unranked": 4, "ranked": 4, "twos": 4},
         "rooms": rooms, "friendRooms": friend_rooms, "modRooms": mod_rooms,
-        "members": members, "modMembers": mod_members, "live": live, "players": players,
+        "members": members, "modMembers": mod_members, "live": live, "players": players, "twitch": twitch,
     }
 
 

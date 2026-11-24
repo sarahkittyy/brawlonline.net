@@ -48,6 +48,30 @@ struct File {
     live: Vec<FakeLive>,
     /// The social stream's online list.
     players: Vec<FakePlayer>,
+    /// Live Twitch streams (`GET /v1/twitch/streams`), listed whatever their player is doing.
+    twitch: Vec<FakeStream>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FakeStream {
+    uid: String,
+    login: String,
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    title: String,
+    #[serde(default)]
+    game: String,
+    #[serde(default)]
+    viewers: u32,
+    /// Any address the launcher can show (the seed uses the player's own stage pictures,
+    /// `game-asset://cache/stages/<id>.png`).
+    #[serde(default)]
+    thumbnail: String,
+    /// Minutes the stream has been going when the file was read.
+    #[serde(default)]
+    minutes: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -111,6 +135,7 @@ fn current() -> Option<(Arc<File>, Arc<Vec<Member>>, Instant)> {
         mod_rooms = file.mod_rooms.len(),
         live = file.live.len(),
         players = file.players.len(),
+        twitch = file.twitch.len(),
         "staging fake state loaded"
     );
     let members = Arc::new(file.players.iter().map(member).collect());
@@ -197,6 +222,34 @@ pub fn status(mut s: MmStatus) -> MmStatus {
 /// The fake players online, for the social stream's `welcome` (empty when off).
 pub fn members() -> Arc<Vec<Member>> {
     current().map(|(_, m, _)| m).unwrap_or_default()
+}
+
+/// Whether a fake state file is in use (staging). Twitch connects without Twitch only then.
+pub fn active() -> bool {
+    current().is_some()
+}
+
+/// The fake live Twitch streams, by player uid (empty when off).
+pub fn twitch_streams() -> Vec<(String, crate::twitch::HelixStream)> {
+    let Some((f, _, at)) = current() else { return Vec::new() };
+    let read_at = Utc::now() - chrono::Duration::seconds(at.elapsed().as_secs() as i64);
+    f.twitch
+        .iter()
+        .map(|t| {
+            let started = read_at - chrono::Duration::minutes(t.minutes as i64);
+            let stream = crate::twitch::HelixStream {
+                user_id: format!("staging-{}", t.uid),
+                user_login: t.login.clone(),
+                user_name: if t.name.is_empty() { t.login.clone() } else { t.name.clone() },
+                game_name: t.game.clone(),
+                title: t.title.clone(),
+                viewer_count: t.viewers,
+                started_at: rfc3339(started),
+                thumbnail_url: t.thumbnail.clone(),
+            };
+            (t.uid.clone(), stream)
+        })
+        .collect()
 }
 
 /// Adds the fake games' spectators to the counts `GET /v1/live` filled in.

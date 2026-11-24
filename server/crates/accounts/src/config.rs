@@ -203,6 +203,44 @@ impl Default for SlurFilterConfig {
     }
 }
 
+/// Twitch (`crate::twitch`, docs/design/twitch-live.md): connecting accounts and live streams. Off
+/// while TWITCH_CLIENT_ID or TWITCH_CLIENT_SECRET is unset.
+#[derive(Debug, Clone, Args)]
+pub struct TwitchConfig {
+    /// The Twitch application's Client ID (dev.twitch.tv/console). Its OAuth Redirect URL must be
+    /// `<PUBLIC_BASE_URL>/v1/twitch/callback`.
+    #[arg(long, env = "TWITCH_CLIENT_ID")]
+    pub twitch_client_id: Option<String>,
+
+    /// The Twitch application's Client Secret.
+    #[arg(long, env = "TWITCH_CLIENT_SECRET", hide_env_values = true)]
+    pub twitch_client_secret: Option<Secret>,
+
+    /// Twitch's OAuth endpoints (`/authorize`, `/token`, `/revoke`; overridable for tests).
+    #[arg(long, env = "TWITCH_AUTH_URL", default_value = "https://id.twitch.tv/oauth2")]
+    pub twitch_auth_url: String,
+
+    /// Twitch's Helix API (`/users`, `/streams`; overridable for tests).
+    #[arg(long, env = "TWITCH_API_URL", default_value = "https://api.twitch.tv/helix")]
+    pub twitch_api_url: String,
+
+    /// Seconds between asking Twitch who is live.
+    #[arg(long, env = "TWITCH_POLL_SECS", default_value_t = 60)]
+    pub twitch_poll_secs: u64,
+}
+
+impl Default for TwitchConfig {
+    fn default() -> Self {
+        TwitchConfig {
+            twitch_client_id: None,
+            twitch_client_secret: None,
+            twitch_auth_url: "http://127.0.0.1:9/never".into(),
+            twitch_api_url: "http://127.0.0.1:9/never".into(),
+            twitch_poll_secs: 60,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Parser)]
 #[command(name = "accounts", about = "Accounts web service", version)]
 pub struct Config {
@@ -228,6 +266,9 @@ pub struct Config {
 
     #[command(flatten)]
     pub slur_filter: SlurFilterConfig,
+
+    #[command(flatten)]
+    pub twitch: TwitchConfig,
 
     /// Require a verified email before a connect code and play key are issued.
     #[arg(long, env = "REQUIRE_EMAIL_VERIFICATION", default_value_t = true, action = clap::ArgAction::Set)]
@@ -350,6 +391,7 @@ impl Config {
             public_base_url: "http://127.0.0.1:0".into(),
             mail: MailConfig::for_tests(),
             slur_filter: SlurFilterConfig::default(),
+            twitch: TwitchConfig::default(),
             require_email_verification: true,
             latest_version: "0.1.0".into(),
             tournaments_url: String::new(),

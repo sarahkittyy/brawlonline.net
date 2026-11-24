@@ -28,6 +28,7 @@ pub mod slur_filter;
 pub mod social;
 pub mod staging_fake;
 pub mod store;
+pub mod twitch;
 pub mod twos;
 pub mod unranked;
 
@@ -71,6 +72,8 @@ pub struct AppState {
     pub slur_filter: Arc<slur_filter::SlurFilter>,
     /// `GET /v1/rooms`' `queueEta`, refreshed by [`queue_stats::eta_watcher`].
     pub queue_eta: Arc<queue_stats::EtaCache>,
+    /// Twitch connects and the live streams (`/v1/twitch/streams`), refreshed by [`twitch::poller`].
+    pub twitch: Arc<twitch::TwitchHub>,
 }
 
 impl AppState {
@@ -91,6 +94,7 @@ impl AppState {
             friend_cache: Arc::new(friends::FriendCache::default()),
             slur_filter,
             queue_eta: Arc::new(queue_stats::EtaCache::default()),
+            twitch: Arc::new(twitch::TwitchHub::default()),
             cfg: Arc::new(cfg),
         })
     }
@@ -281,6 +285,10 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/social/dm", post(social::dm))
         .route("/v1/social/invite", post(social::invite))
         .route("/v1/social/invite/answer", post(social::answer))
+        .route("/v1/me/twitch", get(twitch::me).delete(twitch::disconnect))
+        .route("/v1/me/twitch/connect", post(twitch::connect))
+        .route("/v1/twitch/callback", get(twitch::callback))
+        .route("/v1/twitch/streams", get(twitch::streams))
         .route("/v1/live", get(live::list))
         .route("/v1/live/{id}/watch", get(live::watch))
         .route("/v1/live/{id}/chat", post(live::chat))
@@ -315,6 +323,7 @@ pub async fn serve(listener: tokio::net::TcpListener, state: AppState) -> anyhow
     let account_watcher = social::account_watcher(state.clone());
     let live_ticker = live::ticker(state.live.clone());
     let eta_watcher = queue_stats::eta_watcher(state.pool.clone(), state.queue_eta.clone());
+    let twitch_poller = twitch::poller(state.clone());
     let app = router(state).into_make_service_with_connect_info::<SocketAddr>();
     tokio::select! {
         r = axum::serve(listener, app) => r?,
@@ -323,6 +332,7 @@ pub async fn serve(listener: tokio::net::TcpListener, state: AppState) -> anyhow
         () = account_watcher => {}
         () = live_ticker => {}
         () = eta_watcher => {}
+        () = twitch_poller => {}
     }
     Ok(())
 }
