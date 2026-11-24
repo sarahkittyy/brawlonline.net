@@ -29,6 +29,7 @@
 #include "Core/NetPlayClient.h"
 #include "BrawlOnline/Online/Chat.h"
 #include "BrawlOnline/Online/GameSetup.h"
+#include "BrawlOnline/Online/InputView.h"
 #include "BrawlOnline/Online/Ipv6.h"
 #include "BrawlOnline/Online/MatchRules.h"
 #include "BrawlOnline/Online/OnlineClient.h"
@@ -2509,6 +2510,8 @@ bool DrawsForScreen()
 
 void OnFrameEnd(const Core::CPUThreadGuard& guard)
 {
+  // The input display (a session's countdown comes here too: its ports then).
+  InputView::SampleGuest(Gprb::Session::InputDisplayPorts());
   // What this frame's LOCAL write told the game (PutAspect); none (no plugin, a pre-v12 one, a
   // netplay session): not for the window.
   s_told_window = false;
@@ -2582,6 +2585,7 @@ void OnFrameEnd(const Core::CPUThreadGuard& guard)
 
 void Reset()
 {
+  InputView::Reset();
   s_draws_for_window.store(false, std::memory_order_relaxed);
   s_draws_for_screen.store(false, std::memory_order_relaxed);
   // Start watching for user.json at boot, as Slippi does when its EXI device is created: the

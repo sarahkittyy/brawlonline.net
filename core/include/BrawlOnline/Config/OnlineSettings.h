@@ -86,6 +86,18 @@ extern const Info<std::string> ONLINE_CHAT_KEY;
 // hotkey opens nothing.
 extern const Info<bool> ONLINE_DISABLE_CHAT;
 
+// The input display (core/ui InputDisplayUI, the launcher's Settings > Game > Input Display): the
+// controller drawn over the game with what it holds. Off by default. Where: the box's top-left
+// corner and width in per mille of the game's picture (its height is half its width).
+extern const Info<bool> ONLINE_INPUT_DISPLAY;
+extern const Info<int> ONLINE_INPUT_DISPLAY_X;
+extern const Info<int> ONLINE_INPUT_DISPLAY_Y;
+extern const Info<int> ONLINE_INPUT_DISPLAY_WIDTH;
+// Online games show every player's controller too (a replay or a spectated game always does).
+extern const Info<bool> ONLINE_INPUT_DISPLAY_EVERYONE;
+constexpr int INPUT_DISPLAY_MIN_WIDTH = 60;
+constexpr int INPUT_DISPLAY_MAX_WIDTH = 600;
+
 // Replays (docs/design/replays.md §4.5; the launcher's Settings > Replays writes them): every online
 // game is saved into ReplayDir (empty: <User>/Replays), in a folder per month (YYYY-MM) when
 // ReplayMonthlyFolders is on.

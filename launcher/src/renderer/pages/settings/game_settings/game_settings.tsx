@@ -26,6 +26,7 @@ import { SettingItem } from "../setting_item_section";
 import { ChatKeySetting } from "./chat_key_setting";
 import { GameSettingsMessages as Messages } from "./game_settings.messages";
 import { InputDelaySetting } from "./input_delay_setting";
+import { InputDisplaySetting } from "./input_display_setting";
 import { NetplayNetworkSetting } from "./netplay_network_setting";
 import { PlayProjectPlusWithSetting } from "./play_project_plus_with_setting";
 
@@ -178,6 +179,7 @@ export const GameSettings = React.memo(() => {
         />
       </SettingItem>
       <ChatKeySetting />
+      <InputDisplaySetting />
     </div>
   );
 });

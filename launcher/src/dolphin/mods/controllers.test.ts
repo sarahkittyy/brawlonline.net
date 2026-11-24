@@ -50,7 +50,7 @@ describe("readDolphinControllers", () => {
     ]);
     expect(c.wiimote).toEqual([
       { index: 1, device: "", label: "Real Wii Remote", real: true },
-      { index: 2, device: "DInput/0/Keyboard Mouse", label: "Keyboard + Nunchuk" },
+      { index: 2, device: "DInput/0/Keyboard Mouse", label: "Keyboard + Nunchuk", extension: "nunchuk" },
     ]);
   });
 

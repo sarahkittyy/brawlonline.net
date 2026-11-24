@@ -12,6 +12,7 @@ add_library(brawl_online_core STATIC
   include/BrawlOnline/Online/GameAlive.h
   include/BrawlOnline/Online/GameBridge.h
   include/BrawlOnline/Online/GameSetup.h
+  include/BrawlOnline/Online/InputView.h
   include/BrawlOnline/Online/Ipv6.h
   include/BrawlOnline/Online/MatchRules.h
   include/BrawlOnline/Online/Matchmaking.h
@@ -39,6 +40,7 @@ add_library(brawl_online_core STATIC
   src/Online/ChatCrypto.cpp
   src/Online/ChatText.cpp
   src/Online/GameAlive.cpp
+  src/Online/InputView.cpp
   src/Online/GameBridge.cpp
   src/Online/GameSetup.cpp
   src/Online/Ipv6.cpp

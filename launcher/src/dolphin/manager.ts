@@ -1,5 +1,7 @@
 import type { ClipResolution } from "@common/clip_resolution";
 import { clipResolution } from "@common/clip_resolution";
+import type { InputDisplaySettings } from "@common/input_display";
+import { INPUT_DISPLAY_REQUEST_FILE } from "@common/input_display";
 import { pplusReleaseLabel } from "@common/pplus_releases";
 import { Preconditions } from "@common/preconditions";
 import { DOLPHIN_ONLINE_DIR, PPLUS_OFFLINE_LAUNCHER_DOL, PRODUCT_NAME } from "@common/product";
@@ -8,11 +10,12 @@ import { readReplayHeader } from "@replays/replay_format";
 import { defaultAppSettings } from "@settings/default_settings";
 import type { SettingsManager } from "@settings/settings_manager";
 import { Mutex } from "async-mutex";
+import { randomUUID } from "crypto";
 import type { MessageBoxOptions } from "electron";
 import { app, BrowserWindow, dialog } from "electron";
 import electronLog from "electron-log";
 import { existsSync } from "fs";
-import { mkdir, readdir, rmdir } from "fs/promises";
+import { mkdir, readdir, rename, rmdir, writeFile } from "fs/promises";
 import { Observable, Subject } from "observable-fns";
 import path from "path";
 import { fileExists } from "utils/file_exists";
@@ -384,6 +387,29 @@ export class DolphinManager {
     log.info(`Input delay ${inputDelay} sent to the running game (request ${req.id})`);
   }
 
+  /**
+   * The Input Display setting changed (common/input_display.ts): a running game (Play, a room, a
+   * replay or a spectated game) moves its box at once. Each one's Dolphin.ini has it already.
+   */
+  async sendInputDisplayToGame(inputDisplay: InputDisplaySettings): Promise<void> {
+    const dirs: string[] = [];
+    if (this.netplayDolphinInstance) {
+      dirs.push(this.netplayOnlineDir());
+    }
+    if (this.playbackDolphinInstances.size > 0) {
+      dirs.push(path.join(this.getInstallation(DolphinLaunchType.PLAYBACK).userFolder, DOLPHIN_ONLINE_DIR));
+    }
+    await Promise.all(
+      dirs.map(async (dir) => {
+        await mkdir(dir, { recursive: true });
+        const file = path.join(dir, INPUT_DISPLAY_REQUEST_FILE);
+        const tmp = `${file}.${randomUUID()}.tmp`;
+        await writeFile(tmp, JSON.stringify({ version: 1, ...inputDisplay }));
+        await rename(tmp, file);
+      }),
+    );
+  }
+
   /** The netplay User folder (its `Config` has the controller settings). */
   netplayUserFolder(): string {
     return this.getInstallation(DolphinLaunchType.NETPLAY).userFolder;
@@ -671,6 +697,8 @@ export class DolphinManager {
         await playbackInstallation.updateSettings({
           enableMusic: this.settingsManager.getEnableMusic(),
           disableChat: this.settingsManager.getDisableChat(),
+          // Replays and spectated games show every player's controller.
+          inputDisplay: this.settingsManager.getInputDisplay(),
         });
         const chatKey = await netplayInstallation.getChatKey().catch(() => "");
         if (chatKey) {
@@ -2157,6 +2185,7 @@ export class DolphinManager {
       enableStreamGames: this.settingsManager.getEnableStreamGames(),
       netplayNetwork: this.settingsManager.getNetplayNetwork(),
       pplusRelease: this.pplusVersions().currentRelease,
+      inputDisplay: this.settingsManager.getInputDisplay(),
     });
     if (launchType === DolphinLaunchType.NETPLAY && !this.netplayDolphinInstance) {
       // A change the last Dolphin never took is in Dolphin.ini now.

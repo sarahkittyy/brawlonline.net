@@ -31,6 +31,8 @@
 #include "Core/Rollback/UdpSocket6.h"
 #include <fmt/format.h>
 #include <fmt/ranges.h>
+#include "BrawlOnline/Config/OnlineSettings.h"
+#include "BrawlOnline/Online/InputView.h"
 #include "BrawlOnline/Online/Timeouts.h"
 #include <xxhash.h>
 
@@ -11515,6 +11517,10 @@ bool OnFrameEnd(const Core::CPUThreadGuard& guard)
   FrameTraceOnFrameEnd(system, engine.Gpr(24), s.resim_pass);
   CpuTraceOnFrameEnd(system);
   std::lock_guard<std::recursive_timed_mutex> lk(s.mutex);
+  // The input display (Online/InputView.h), at the frames that are shown: online this player's own
+  // port; a replay or a spectated game every player's.
+  if (!s.resim_pass)
+    Online::InputView::SampleGuest(InputDisplayPorts());
   const int i = s.iteration;
   if (i >= 0 && i < s.ops.adv_count && s.ops.save_after[i])
   {
@@ -11619,6 +11625,20 @@ bool IsResimulationPass()
 bool IsRunning()
 {
   return s.phase == Phase::Running;
+}
+
+u32 InputDisplayPorts()
+{
+  if (s.phase != Phase::Countdown && s.phase != Phase::StartBarrier && s.phase != Phase::Running)
+    return 0;
+  if (s.mode == Mode::Network)
+  {
+    return Config::Get(Config::ONLINE_INPUT_DISPLAY_EVERYONE) && s.match_ports != 0 ? s.match_ports :
+                                                                                      1u << s.local_slot;
+  }
+  if (s.mode == Mode::Playback)
+    return s.match_ports != 0 ? s.match_ports : 0xFu;
+  return 0;
 }
 
 bool IsPlayback()

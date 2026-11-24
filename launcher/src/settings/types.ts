@@ -1,4 +1,5 @@
 import type { ClipHotkey } from "@common/clip_hotkey";
+import type { InputDisplaySettings } from "@common/input_display";
 import type { ModBuild, ModsController } from "@dolphin/mods/types";
 import type { ManualClip } from "@replays/highlights/types";
 
@@ -76,6 +77,11 @@ export interface SettingsSchema {
   // Spectating: "Close Dolphin after a spectated game ends" (docs/design/spectating.md §6.2): at a stream's end the
   // playback Dolphin holds the last frame for 5 s, then closes. Auto play overrides it.
   closeDolphinAfterSpectating: boolean;
+
+  // "Input Display" (common/input_display.ts, card 775): the player's controller drawn over the
+  // game, where the preview put it. Synced to Dolphin.ini `[Online] InputDisplay*` (netplay and
+  // playback: replays and spectated games show every player's), and to a running game at once.
+  inputDisplay: InputDisplaySettings;
 
   // Clips (DESIGN.md, the user 2026-10-20): "Manual Clip Hotkey" (Project Clippi's button-input
   // highlights, found after the game in the replay's recorded pads; L+R+Z until 2026-11-03's

@@ -104,6 +104,18 @@ function setupSettingsSubscriptions(settingsManager: SettingsManager, dolphinMan
     await installation.updateSettings({ potatoMode });
   });
 
+  // The input display: the game and the playback Dolphin draw it (replays and spectated games:
+  // every player's), and a running one moves it at once.
+  settingsManager.onSettingChange("inputDisplay", async () => {
+    const inputDisplay = settingsManager.getInputDisplay();
+    await Promise.all(
+      [DolphinLaunchType.NETPLAY, DolphinLaunchType.PLAYBACK].map((launchType) =>
+        dolphinManager.getInstallation(launchType).updateSettings({ inputDisplay }),
+      ),
+    );
+    await dolphinManager.sendInputDisplayToGame(inputDisplay);
+  });
+
   settingsManager.onSettingChange("disableChat", async (disableChat) => {
     const installation = dolphinManager.getInstallation(DolphinLaunchType.NETPLAY);
     await installation.updateSettings({ disableChat });

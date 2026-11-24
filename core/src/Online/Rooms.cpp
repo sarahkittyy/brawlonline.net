@@ -28,6 +28,7 @@
 #include "BrawlOnline/Online/Chat.h"
 #include "BrawlOnline/Online/GameAlive.h"
 #include "BrawlOnline/Online/GameSetup.h"
+#include "BrawlOnline/Online/InputView.h"
 #include "BrawlOnline/Online/Matchmaking.h"
 #include "Core/Online/ModsRoom.h"
 #include "BrawlOnline/Online/OnlineClient.h"
@@ -1832,6 +1833,7 @@ void Thread()
       next_file = now + FILE_POLL;
       PollJoinRequest();
       PollInputDelayRequest();
+      InputView::PollLauncherFile(OnlineDir());
       ModsRoom::Files(OnlineDir());
       const DolphinBusy busy = QueryBusy();
       {

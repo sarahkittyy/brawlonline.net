@@ -19,6 +19,8 @@ export type SetUpController = {
   /** What a player calls it ("Xbox controller", "Real Wii Remote", "Keyboard + Nunchuk"). */
   label: string;
   real?: boolean;
+  /** An emulated Wii Remote's extension (`[WiimoteN] Extension`), when it has one. */
+  extension?: "nunchuk" | "classic";
 };
 
 /** The controllers set up in Dolphin, folded by kind. */

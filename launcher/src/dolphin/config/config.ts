@@ -1,5 +1,6 @@
 import { DEFAULT_CHAT_KEY } from "@common/chat_key";
 import { normalizeInputDelay } from "@common/input_delay";
+import type { InputDisplaySettings } from "@common/input_display";
 import { DOLPHIN_INI_SECTION } from "@common/product";
 import { defaultAppSettings } from "@settings/default_settings";
 
@@ -27,6 +28,8 @@ export type SyncedDolphinSettings = {
   netplayNetwork?: string;
   /** The Project+ release on the card (`[Online] PPlusRelease`): replays record it. Written only. */
   pplusRelease?: string;
+  /** The input display (`[Online] InputDisplay`, `InputDisplayX/Y/Width`; common/input_display.ts). Written only. */
+  inputDisplay?: InputDisplaySettings;
 };
 
 export async function addGamePath(iniFile: IniFile, gameDir: string): Promise<void> {
@@ -79,6 +82,12 @@ export async function setOnlineSettings(iniFile: IniFile, options: Partial<Synce
   }
   if (options.pplusRelease !== undefined) {
     section.set("PPlusRelease", options.pplusRelease);
+  }
+  if (options.inputDisplay !== undefined) {
+    section.set("InputDisplay", convertBooleanToIniVal(options.inputDisplay.enabled));
+    section.set("InputDisplayX", String(options.inputDisplay.x));
+    section.set("InputDisplayY", String(options.inputDisplay.y));
+    section.set("InputDisplayWidth", String(options.inputDisplay.width));
   }
   if (options.netplayNetwork) {
     section.set("ForceLanIP", "True");
