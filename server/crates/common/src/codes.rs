@@ -194,9 +194,11 @@ pub fn encode_search_code_fullwidth(code: &str) -> Vec<u8> {
 }
 
 /// A character a display name (or a ruleset's name) may have: printable ASCII, Hiragana or
-/// Katakana, without `\` or `` ` `` (what the game's font draws).
+/// Katakana (with ・ and ー), without `\` or `` ` `` (what the game's fonts draw).
 pub fn is_name_char(c: char) -> bool {
-    matches!(c, ' '..='~' | '\u{3041}'..='\u{3093}' | '\u{30A1}'..='\u{30F4}') && c != '\\' && c != '`'
+    matches!(c, ' '..='~' | '\u{3041}'..='\u{3093}' | '\u{30A1}'..='\u{30F4}' | '\u{30FB}' | '\u{30FC}')
+        && c != '\\'
+        && c != '`'
 }
 
 /// Validates a display name with the launcher's rule. Also rejects names that
@@ -329,6 +331,8 @@ mod tests {
         assert!(validate_display_name("ひらがなカタカナ").is_ok());
         assert!(validate_display_name("ヴァン").is_ok()); // ヴ: every font of the game draws it
         assert_eq!(validate_display_name("ゔ"), Err(NameError::InvalidCharacters)); // no font has it
+        assert!(validate_display_name("スーパー・マリオ").is_ok()); // ー and ・: every font has them
+        assert_eq!(validate_display_name("ヽ"), Err(NameError::InvalidCharacters)); // only one font has it
         assert_eq!(validate_display_name(""), Err(NameError::TooShort));
         assert_eq!(validate_display_name("   "), Err(NameError::TooShort));
         assert_eq!(validate_display_name("a\\b"), Err(NameError::InvalidCharacters));

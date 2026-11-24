@@ -11,9 +11,11 @@ describe("when validating display names", () => {
     expect(validateDisplayName("ゔ")).not.toEqual(true);
   });
 
-  it("should accept Hiragana, Katakana and ヴ", () => {
+  it("should accept Hiragana, Katakana, ヴ, ・ and ー", () => {
     expect(validateDisplayName("ひらがなカタカナ")).toEqual(true);
     expect(validateDisplayName("ヴァン")).toEqual(true);
+    expect(validateDisplayName("スーパー・マリオ")).toEqual(true);
+    expect(validateDisplayName("ヽ")).not.toEqual(true);
   });
 
   it("should reject names that are longer than 15 characters", () => {

@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { arrivedRoom, frontTab, inviteBlocked, useSocial, waitsForRoom } from "@/lib/social/use_social";
 import { volumeOf } from "@/lib/social/volume";
 
-import { deleteWordBefore } from "./chat_dock";
+import { chatSegments, deleteWordBefore } from "./chat_dock";
 
 describe("chat box", () => {
   it("Ctrl+W deletes the word before the caret", () => {
@@ -11,6 +11,30 @@ describe("chat box", () => {
     expect(deleteWordBefore("hello there ", 12)).toEqual({ text: "hello ", caret: 6 });
     expect(deleteWordBefore("hello there", 5)).toEqual({ text: " there", caret: 0 });
     expect(deleteWordBefore("", 0)).toEqual({ text: "", caret: 0 });
+  });
+
+  it("links in a message: http(s), www. and discord.gg, without the sentence's punctuation", () => {
+    expect(chatSegments("add me")).toEqual([{ text: "add me" }]);
+    expect(chatSegments("")).toEqual([{ text: "" }]);
+    expect(chatSegments("join discord.gg/abc123.")).toEqual([
+      { text: "join " },
+      { text: "discord.gg/abc123", url: "https://discord.gg/abc123" },
+      { text: "." },
+    ]);
+    expect(chatSegments("(see https://x.com/a_b?c=1) ok")).toEqual([
+      { text: "(see " },
+      { text: "https://x.com/a_b?c=1", url: "https://x.com/a_b?c=1" },
+      { text: ") ok" },
+    ]);
+    expect(chatSegments("https://en.wikipedia.org/wiki/Brawl_(game)!")[0]).toEqual({
+      text: "https://en.wikipedia.org/wiki/Brawl_(game)",
+      url: "https://en.wikipedia.org/wiki/Brawl_(game)",
+    });
+    expect(chatSegments("www.twitch.tv/me")).toEqual([{ text: "www.twitch.tv/me", url: "https://www.twitch.tv/me" }]);
+    // Not links: inside a word, no dotted host, other schemes.
+    expect(chatSegments("awww.cute")).toEqual([{ text: "awww.cute" }]);
+    expect(chatSegments("http://localhost")).toEqual([{ text: "http://localhost" }]);
+    expect(chatSegments("javascript:alert(1) file:///c:/x")).toEqual([{ text: "javascript:alert(1) file:///c:/x" }]);
   });
 
   it("invites are greyed out only in a full room", () => {

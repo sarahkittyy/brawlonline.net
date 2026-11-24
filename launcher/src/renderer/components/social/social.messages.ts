@@ -89,7 +89,7 @@ export const SocialMessages = {
   removedFriend: (name: string) => `${name} is no longer your friend.`,
   acceptedYourRequest: (name: string) => `${name} accepted your friend request.`,
   sentYouRequest: (name: string) => `${name} sent you a friend request.`,
-  friendsOnlyRoom: () => "Friends only: listed to the friends of the players in it",
+  friendsOnlyRoom: () => "Friends Only",
   // Hand-off to the game (as a room click, docs/rooms-protocol.md §5).
   goingToRoom: () => "Your game is going to the room.",
   creatingRoom: () => "Your game is creating a room.",

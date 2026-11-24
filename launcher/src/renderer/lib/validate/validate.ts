@@ -45,7 +45,7 @@ export const validateConnectCodeStart = (codeStart: string): string | true => {
 
 export const validateDisplayName = (displayName: string): string | true => {
   // these characters are confirmed to work in game
-  if (!/^((?![\\`])[ぁ-んァ-ヴ -~])+$/u.test(displayName)) {
+  if (!/^((?![\\`])[ぁ-んァ-ヴ・ー -~])+$/u.test(displayName)) {
     return Messages.displayNamesCanOnlyContain();
   }
 

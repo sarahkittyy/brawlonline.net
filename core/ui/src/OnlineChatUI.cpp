@@ -638,7 +638,8 @@ float WidestSpectatorRow()
   };
   constexpr int NAME_CHARS = 15;
   const float name_char =
-      std::max({widest(0x20, 0x7E), widest(0x3041, 0x3093), widest(0x30A1, 0x30F4)});
+      std::max({widest(0x20, 0x7E), widest(0x3041, 0x3093), widest(0x30A1, 0x30F4),
+                widest(0x30FB, 0x30FC)});
   const float letter = widest('A', 'Z');
   const float digit = widest('0', '9');
   const float code =
