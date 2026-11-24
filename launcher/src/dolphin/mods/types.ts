@@ -63,8 +63,11 @@ export type ModBuild = {
   sdHashKey?: string | null;
   /** Brawl Online's own Project+ (ModsManager.refreshBuiltIn): the Brawl disc set in Settings and
    * the launcher's P+ files. Always in the list, its files not the player's to change, and its SD
-   * card never overwritten by a room's. */
+   * card never overwritten by a room's. Or, with `builtInGame` "brawl", Brawl itself: the Settings
+   * disc alone, which runs room codes (the recommended ones first). */
   builtIn?: boolean;
+  /** Which built-in game (absent: P+). */
+  builtInGame?: "brawl";
   /** The codes the player's rooms of this game run (docs/design/room-codes.md); absent until the
    * launcher first looked (it starts with the ones on in the player's own Dolphin). */
   codes?: ModBuildCodes;

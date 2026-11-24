@@ -8,6 +8,7 @@ import os from "os";
 import path from "path";
 import { throttleProgress } from "utils/copy_file";
 
+import { BRAWL_NTSC_U_DISC } from "../brawl_disc";
 import { PPLUS_RELEASE } from "../install/pplus_release";
 import type { DolphinManager } from "../manager";
 import { DolphinLaunchType } from "../types";
@@ -198,6 +199,16 @@ export function roomBuild(build: ModBuild): ModRoomBuild {
   }
   return out;
 }
+
+/** Which built-in game a build is (`ModBuild.builtInGame`; absent on P+, the first one), or null. */
+type BuiltInGame = NonNullable<ModBuild["builtInGame"]> | "pplus";
+function builtInGame(build: ModBuild): BuiltInGame | null {
+  return build.builtIn ? build.builtInGame ?? "pplus" : null;
+}
+
+/** A hash key's version and disc part (`buildHashKey`): two games with the same one on the same
+ * file have the same disc part. */
+const discKeyOf = (hashKey: string) => hashKey.split("|").slice(0, 2).join("|");
 
 /** `matchRoom`'s `discAlone`: the build hash of a disc played alone. */
 const discAloneHash = (disc: string) => combineBuildHash({ disc, launcher: null, sd: false });
@@ -401,36 +412,59 @@ export class ModsManager {
    */
   refreshBuiltIn(): Promise<void> {
     this.builtInRefresh = this.builtInRefresh
-      .then(() => this.doRefreshBuiltIn())
-      .catch((err) => log.warn(`Project+ in Other Games: ${err}`));
+      .then(() => this.doRefreshBuiltIn("pplus"))
+      .catch((err) => log.warn(`Project+ in Other Games: ${err}`))
+      .then(() => this.doRefreshBuiltIn("brawl"))
+      .catch((err) => log.warn(`Brawl in Other Games: ${err}`));
     return this.builtInRefresh;
   }
 
-  private async doRefreshBuiltIn(): Promise<void> {
+  /**
+   * One of the built-in games: Brawl Online's own P+ (above), or Brawl itself (`builtInGame`
+   * "brawl"; Sarah's board, 2026-11-24: "we include P+ by default as a game in "Other Games",
+   * right? i feel like we should do the same for vanilla brawl"): the Brawl disc set in Settings
+   * alone, no launcher and no SD card, which plays with Dolphin's Gecko codes (the recommended
+   * ones: recommended_codes.json). A disc-only game of Brawl the player added (that file, or
+   * another of the same disc once checked) becomes it, with its codes and its save.
+   */
+  private async doRefreshBuiltIn(kind: BuiltInGame): Promise<void> {
     if (this.running) {
       return;
     }
     const user = this.dolphin.netplayUserFolder();
-    const launcherPath = path.join(user, "Launcher", PPLUS_NETPLAY_LAUNCHER_DOL);
-    const sdPath = path.join(user, "Wii", "sd.raw");
     const discPath = this.settings.get().settings?.isoPath || null;
-    const ready = !!discPath && (await isFile(discPath)) && (await isFile(launcherPath)) && (await isFile(sdPath));
+    const launcherPath = kind === "pplus" ? path.join(user, "Launcher", PPLUS_NETPLAY_LAUNCHER_DOL) : null;
+    const sdPath = kind === "pplus" ? path.join(user, "Wii", "sd.raw") : null;
+    const label = kind === "pplus" ? "Project+" : "Brawl";
+    const ready =
+      !!discPath &&
+      (await isFile(discPath)) &&
+      (!launcherPath || (await isFile(launcherPath))) &&
+      (!sdPath || (await isFile(sdPath)));
     const builds = this.builds();
+    const playerGames = builds.filter((b) => !b.builtIn);
     const current =
-      builds.find((b) => b.builtIn) ??
-      builds.find((b) => samePath(b.launcherPath, launcherPath) && samePath(b.sdPath, sdPath)) ??
+      builds.find((b) => builtInGame(b) === kind) ??
+      (kind === "pplus"
+        ? playerGames.find((b) => samePath(b.launcherPath, launcherPath) && samePath(b.sdPath, sdPath))
+        : playerGames.find(
+            (b) =>
+              !b.launcherPath &&
+              !b.sdPath &&
+              ((!!discPath && samePath(b.discPath, discPath)) || b.parts?.disc === BRAWL_NTSC_U_DISC),
+          )) ??
       null;
     if (current && this.hashing.has(current.id)) {
       return;
     }
     if (!ready) {
       if (current?.builtIn) {
-        log.info(`Project+ leaves Other Games: ${discPath ? "its files are not there" : "no Brawl disc is set"}`);
+        log.info(`${label} leaves Other Games: ${discPath ? "its files are not there" : "no Brawl disc is set"}`);
         await this.saveBuilds(builds.filter((b) => b.id !== current.id));
       }
       return;
     }
-    const name = `Project+ ${PPLUS_RELEASE.version}`;
+    const name = kind === "pplus" ? `Project+ ${PPLUS_RELEASE.version}` : knownDiscName(BRAWL_NTSC_U_DISC) ?? "Brawl";
     const filesChanged =
       !current ||
       !samePath(current.discPath, discPath) ||
@@ -440,13 +474,25 @@ export class ModsManager {
       this.checkBuiltIn(current);
       return;
     }
+    const builtIn = {
+      builtIn: true,
+      ...(kind === "brawl" ? { builtInGame: kind } : {}),
+    } as const;
     let build: ModBuild = current
-      ? { ...current, name, autoName: false, builtIn: true, discPath, launcherPath, sdPath }
+      ? {
+          ...current,
+          name,
+          autoName: false,
+          ...builtIn,
+          discPath,
+          launcherPath,
+          sdPath,
+        }
       : {
           id: randomUUID(),
           name,
           autoName: false,
-          builtIn: true,
+          ...builtIn,
           discPath,
           launcherPath,
           sdPath,
@@ -467,8 +513,11 @@ export class ModsManager {
         };
       }
     }
-    // First in the list. (Rooms take it last of the games on its disc: room_match.ts.)
-    await this.saveBuilds([build, ...this.builds().filter((b) => b.id !== build.id)]);
+    // First in the list, P+ then Brawl. (Rooms take them last of the games on their disc:
+    // room_match.ts.)
+    const rest = this.builds().filter((b) => b.id !== build.id);
+    const pplus = kind === "brawl" ? rest.filter((b) => builtInGame(b) === "pplus") : [];
+    await this.saveBuilds([...pplus, build, ...rest.filter((b) => !pplus.includes(b))]);
     log.info(`${name} is in Other Games${current ? ` (was ${current.name})` : ""}: ${discPath}, ${user}`);
     this.checkBuiltIn(build);
   }
@@ -648,8 +697,9 @@ export class ModsManager {
   }
 
   async removeBuild(id: string): Promise<void> {
-    if (this.builds().find((b) => b.id === id)?.builtIn) {
-      throw new Error("Project+ is built into Brawl Online, so it stays in the list.");
+    const build = this.builds().find((b) => b.id === id);
+    if (build?.builtIn) {
+      throw new Error(`${build.name} is built into Brawl Online, so it stays in the list.`);
     }
     await this.saveBuilds(this.builds().filter((b) => b.id !== id));
   }
@@ -910,7 +960,7 @@ export class ModsManager {
   async codeLists(id: string): Promise<{ codes: ModBuildCodes; lists: ModCodeLists }> {
     const codes = await this.buildCodes(id);
     const build = this.findBuild(id);
-    if (!build.gameId || build.builtIn || build.launcherPath) {
+    if (!build.gameId || build.launcherPath) {
       return { codes, lists: { own: [], ownFiles: [], recommended: [], dolphin: [] } };
     }
     const own = await ownDolphinCodes(this.codeFolders(), build.gameId, build.revision);
@@ -922,7 +972,7 @@ export class ModsManager {
    * room is open: that room's games already run the codes it started with. */
   async setCodes(id: string, codes: ModBuildCodes): Promise<ModBuildCodes> {
     const build = this.findBuild(id);
-    if (build.builtIn || build.launcherPath) {
+    if (build.launcherPath) {
       throw new Error(`${build.name} runs its own codes.`);
     }
     if (this.running && this.runningBuildId === id) {
@@ -944,7 +994,7 @@ export class ModsManager {
   /** The code database's codes for the game (none for a game it doesn't have). */
   async databaseCodes(id: string): Promise<ModCode[]> {
     const build = this.findBuild(id);
-    if (!build.gameId || build.builtIn) {
+    if (!build.gameId || build.launcherPath) {
       return [];
     }
     const text = await this.codeDatabase(build.gameId);
@@ -956,7 +1006,7 @@ export class ModsManager {
    * changed takes this launcher's recommended ones, so its Codes button shows them. */
   async seedCodes(): Promise<void> {
     for (const build of this.builds()) {
-      if (!build.builtIn && !build.launcherPath && build.gameId) {
+      if (!build.launcherPath && build.gameId) {
         await this.buildCodes(build.id).catch((err) => log.warn(`codes of ${build.name}: ${err}`));
       }
     }
@@ -972,8 +1022,8 @@ export class ModsManager {
   private async buildCodes(id: string): Promise<ModBuildCodes> {
     const build = this.findBuild(id);
     // A mod booted by its launcher (P+'s too) has its own Gecko code handler where Dolphin's goes:
-    // its codes are the mod's.
-    if (build.builtIn || build.launcherPath) {
+    // its codes are the mod's. (The built-in Brawl is its disc alone: it runs room codes.)
+    if (build.launcherPath) {
       return { on: [], yours: [] };
     }
     const recommended = build.gameId ? recommendedCodes(build.gameId) : [];
@@ -1148,13 +1198,32 @@ export class ModsManager {
         build.sdPath ?? "no SD card"
       }`,
     );
+    // Another game on the same disc file, checked as it is now (the built-in P+ and Brawl are on
+    // the Settings disc): its disc part, not the whole disc read again. One being checked is
+    // waited for (the two built-in games are checked at once at the launcher's first start), if it
+    // started before this one: two never wait for each other.
+    const sameDisc = () => this.builds().filter((b) => b.id !== id && samePath(b.discPath, build.discPath));
+    const order = [...this.hashing.keys()];
+    const before = new Set(order.slice(0, Math.max(0, order.indexOf(id))));
+    await Promise.all(
+      sameDisc()
+        .filter((b) => before.has(b.id))
+        .map((b) => this.hashing.get(b.id)?.catch(() => null)),
+    );
+    const knownDisc = sameDisc().find((b) => b.parts?.disc && b.hashKey && discKeyOf(b.hashKey) === discKeyOf(key))
+      ?.parts?.disc;
+    if (knownDisc) {
+      log.info(`${build.name}'s disc is the one checked for another game: ${knownDisc.slice(0, 8)}`);
+    }
     const parts = await computeBuildParts(
       build,
       (disc, onDisc) =>
-        discIdentity(tool, disc, (done, of) => {
-          discReports = true;
-          onDisc?.(done, of);
-        }),
+        knownDisc
+          ? Promise.resolve(knownDisc)
+          : discIdentity(tool, disc, (done, of) => {
+              discReports = true;
+              onDisc?.(done, of);
+            }),
       progress,
     );
     // The SD card's root, which rooms compare (docs/design/brawl-mods.md §6.5).

@@ -46,6 +46,8 @@ afterEach(async () => {
   await rm(tmp, { recursive: true, force: true });
 });
 
+const hostArg = (arg: ModsRoomArg) => arg as Extract<ModsRoomArg, { host: true }>;
+
 const OLD_DISC = "0e95949ac585f357e79fcd34b20670b5dca97ac2";
 
 /** A game hashed by a launcher before 82db6b5e (build hash v3, the disc's contents' SHA-1). */
@@ -377,11 +379,10 @@ describe("Brawl Online's own Project+", () => {
     return iso;
   }
 
-  /** The list once refreshed, with the check it started done. */
+  /** The list once refreshed, with the checks it started done. */
   async function refreshed(m: ReturnType<typeof manager>): Promise<ModBuild[]> {
     await m.mods.refreshBuiltIn();
-    const builtIn = m.builds().find((b) => b.builtIn);
-    if (builtIn) {
+    for (const builtIn of m.builds().filter((b) => b.builtIn)) {
       await m.mods.hashBuild(builtIn.id);
     }
     return m.builds();
@@ -396,7 +397,7 @@ describe("Brawl Online's own Project+", () => {
     const iso = await installPPlus();
     expect(await refreshed(m)).toEqual([other]);
     (m.settings.settings as Record<string, unknown>).isoPath = iso;
-    const [pplus, ...rest] = await refreshed(m);
+    const [pplus, brawl, ...rest] = await refreshed(m);
     expect(rest).toEqual([other]);
     expect(pplus).toMatchObject({
       name: "Project+ v3.2.1",
@@ -409,10 +410,23 @@ describe("Brawl Online's own Project+", () => {
       titleId: "0001000052534245",
     });
     expect(pplus.parts).toMatchObject({ disc: BRAWL_NTSC_U_DISC, sd: true, sdCard: "card" });
+    expect(pplus.builtInGame).toBeUndefined();
+    // Brawl itself after it: the disc alone, its part P+'s (the disc read once).
+    expect(brawl).toMatchObject({
+      name: "Super Smash Bros. Brawl (USA)",
+      builtIn: true,
+      builtInGame: "brawl",
+      discPath: iso,
+      launcherPath: null,
+      sdPath: null,
+      gameId: "RSBE01",
+      hash: combineBuildHash({ disc: BRAWL_NTSC_U_DISC, launcher: null, sd: false }),
+    });
+    expect(discIdentity).toHaveBeenCalledTimes(1);
 
     // Nothing changed: left as it is.
     readDiscInfo.mockClear();
-    expect(await refreshed(m)).toEqual([pplus, other]);
+    expect(await refreshed(m)).toEqual([pplus, brawl, other]);
     expect(readDiscInfo).not.toHaveBeenCalled();
   });
 
@@ -470,7 +484,7 @@ describe("Brawl Online's own Project+", () => {
     };
     const m = manager([added], { modBuilds: [added], settings: { isoPath: iso } });
     const builds = await refreshed(m);
-    expect(builds).toHaveLength(1);
+    expect(builds).toHaveLength(2);
     expect(builds[0]).toMatchObject({ id: "added", name: "Project+ v3.2.1", builtIn: true });
   });
 
@@ -482,7 +496,7 @@ describe("Brawl Online's own Project+", () => {
     await writeFile(path.join(elsewhere, "Launcher", "Project+ Netplay Launcher.dol"), "launcher");
     await writeFile(path.join(elsewhere, "Wii", "sd.raw"), "card");
     const m = manager([], { modBuilds: [], settings: { isoPath: iso } });
-    const [pplus] = await refreshed(m);
+    const [pplus, brawl] = await refreshed(m);
     const copy = await m.mods.addBuild({
       name: "",
       discPath: iso,
@@ -491,7 +505,7 @@ describe("Brawl Online's own Project+", () => {
     });
     // The player's copy is the duplicate: it goes, P+ stays.
     await expect(m.mods.hashBuild(copy.id)).rejects.toThrow(/already have this game: Project\+ v3.2.1/);
-    expect(m.builds().map((b) => b.id)).toEqual([pplus.id]);
+    expect(m.builds().map((b) => b.id)).toEqual([pplus.id, brawl.id]);
   });
 
   it("keeps a copy of P+ the player added from elsewhere with another SD card", async () => {
@@ -516,16 +530,18 @@ describe("Brawl Online's own Project+", () => {
     const hashed = await m.mods.hashBuild(copy.id);
     expect(hashed.hash).toBe(pplus.hash);
     expect(hashed.parts?.sdCard).toBe("my music");
-    expect(m.builds().map((b) => b.name)).toEqual(["Project+ v3.2.1", "My P+"]);
+    expect(m.builds().map((b) => b.name)).toEqual(["Project+ v3.2.1", "Super Smash Bros. Brawl (USA)", "My P+"]);
   });
 
   it("cannot be removed or have its files changed", async () => {
     const iso = await installPPlus();
     const m = manager([], { modBuilds: [], settings: { isoPath: iso } });
-    const [pplus] = await refreshed(m);
-    await expect(m.mods.removeBuild(pplus.id)).rejects.toThrow(/built into Brawl Online/);
+    const [pplus, brawl] = await refreshed(m);
+    await expect(m.mods.removeBuild(pplus.id)).rejects.toThrow(/Project\+ v3.2.1 is built into Brawl Online/);
     await expect(m.mods.updateBuild(pplus.id, { sdPath: null })).rejects.toThrow(/Brawl Online's own/);
-    expect(m.builds()).toEqual([pplus]);
+    await expect(m.mods.removeBuild(brawl.id)).rejects.toThrow(/Brawl \(USA\) is built into Brawl Online/);
+    await expect(m.mods.updateBuild(brawl.id, { name: "Mine" })).rejects.toThrow(/Brawl Online's own/);
+    expect(m.builds()).toEqual([pplus, brawl]);
   });
 
   it("never has its SD card overwritten by a room's", async () => {
@@ -544,9 +560,10 @@ describe("Brawl Online's own Project+", () => {
     await m.closeAll();
   });
 
-  it("plays a room of the plain Brawl disc with its disc alone, added as its own game", async () => {
+  it("plays a room of the plain Brawl disc with the built-in Brawl", async () => {
     // Sarah's board, 2026-10-30: a plain Brawl room showed "SD card: - x" to a player whose only
-    // game on the disc was P+ ("if there's no sd card, can't we just turn it off?").
+    // game on the disc was P+ ("if there's no sd card, can't we just turn it off?"). Since
+    // 2026-11-24 Brawl itself is built in, so no game is added for it.
     const iso = await installPPlus();
     const hash = combineBuildHash({ disc: BRAWL_NTSC_U_DISC, launcher: null, sd: false });
     const room: PublicModRoom = {
@@ -557,19 +574,54 @@ describe("Brawl Online's own Project+", () => {
       open: 4,
     };
     const m = manager([], { modBuilds: [], settings: { isoPath: iso } }, room);
-    const [pplus] = await refreshed(m);
-    expect(m.mods.getState().discAlone).toEqual({ [BRAWL_NTSC_U_DISC]: hash });
+    const [, brawl] = await refreshed(m);
+    expect(brawl).toMatchObject({ builtInGame: "brawl", hash });
     discIdentity.mockClear();
     expect(await m.mods.joinByCode({ uid: "u", code: "BKSD" })).toEqual({ outcome: "joining" });
-    const plain = m.builds().find((b) => !b.builtIn)!;
-    expect(plain).toMatchObject({ discPath: iso, launcherPath: null, sdPath: null, hash, gameId: "RSBE01" });
+    expect(m.builds()).toHaveLength(2);
     expect(m.launches).toEqual([expect.objectContaining({ join: "BKSD", build: expect.objectContaining({ hash }) })]);
-    // The disc's hash was P+'s: not read again.
     expect(discIdentity).not.toHaveBeenCalled();
     await m.closeAll();
-    // The next join plays it with that game, not another copy.
-    await m.mods.join({ buildId: pplus.id, code: "BKSD", uid: "u", discOnly: true });
-    expect(m.builds()).toHaveLength(2);
+  });
+
+  it("is the disc-only Brawl the player added, with its codes", async () => {
+    const iso = await installPPlus();
+    const codes = {
+      on: [{ name: "Mine", kind: "gecko" as const, lines: ["04001234 00000001"], source: "yours" as const }],
+      yours: [],
+      changed: true,
+    };
+    // Another file of the disc, checked: it becomes the built-in Brawl, on the Settings disc.
+    const mine = await oldBuild("mine", {
+      name: "My Brawl",
+      parts: { disc: BRAWL_NTSC_U_DISC, launcher: null, sd: false, sdCard: null },
+      codes,
+    });
+    const nsmb = await oldBuild("nsmb", { gameId: "SMNE01" });
+    const m = manager([nsmb, mine], { modBuilds: [nsmb, mine], settings: { isoPath: iso } });
+    const builds = await refreshed(m);
+    expect(builds.map((b) => b.id)).toEqual([expect.any(String), "mine", "nsmb"]);
+    expect(builds[1]).toMatchObject({
+      name: "Super Smash Bros. Brawl (USA)",
+      builtInGame: "brawl",
+      discPath: iso,
+      codes,
+    });
+  });
+
+  it("runs the recommended codes in its rooms", async () => {
+    const iso = await installPPlus();
+    const m = manager([], { modBuilds: [], settings: { isoPath: iso } });
+    const [pplus, brawl] = await refreshed(m);
+    await m.mods.host({ buildId: brawl.id, public: true });
+    const names = (hostArg(m.launches[0]).codes ?? []).map((c) => c.name);
+    expect(names).toContain("Global Brawl Netplay Settings V1");
+    expect(names).toContain("Global Brawl Netplay Settings V2");
+    expect(m.builds()[1].codes).toMatchObject({ changed: false });
+    await m.closeAll();
+    // P+ runs its own (its launcher's code handler).
+    await m.mods.host({ buildId: pplus.id, public: true });
+    expect(m.launches[1]).not.toHaveProperty("codes");
     await m.closeAll();
   });
 
@@ -652,8 +704,6 @@ describe("room codes", () => {
   }
   const own = () => path.join(tmp, "own Dolphin");
   const netplay = () => path.join(tmp, "netplay", "User");
-  const hostArg = (arg: ModsRoomArg) => arg as Extract<ModsRoomArg, { host: true }>;
-
   async function marioParty(over: Partial<ModBuild> = {}): Promise<ModBuild> {
     return oldBuild("mp6", { gameId: "GP6E01", revision: 0, platform: "gamecube", ...over });
   }
@@ -695,12 +745,14 @@ describe("room codes", () => {
     await m.closeAll();
   });
 
-  it("starts a Brawl game with none (its inis are an old P+ netplay setup's)", async () => {
+  it("starts a Brawl game with the recommended ones only (its inis are an old P+ netplay setup's)", async () => {
     await gameIni(own(), "RSBE01", ["[Gecko]", "+$Netplay Code", "04001234 00000001"]);
     const m = manager([await oldBuild("rex")]);
     await m.mods.host({ buildId: "rex", public: true });
-    expect(m.launches[0]).not.toHaveProperty("codes");
-    expect(m.builds()[0].codes).toEqual({ on: [], yours: [], changed: false });
+    const codes = m.builds()[0].codes!;
+    expect(codes.on.length).toBeGreaterThan(0);
+    expect(codes.on.every((c) => c.source === "recommended")).toBe(true);
+    expect(hostArg(m.launches[0]).codes?.map((c) => c.name)).toEqual(codes.on.map((c) => c.name));
     await m.closeAll();
   });
 
