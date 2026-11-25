@@ -1736,8 +1736,9 @@ def sss_pick_stage(drv: Driver, stage_kind: int, port: int = 0, timeout_frames: 
     ``css_pick_character``; positions seen are cached in ``LEARNED_SSS``.
 
     ``button`` other than "A" (e.g. "X", P+'s stage strike): press it on the stage instead and
-    return at once, without waiting for the screen to take anything. ``held`` (e.g. ["L"], P+'s
-    alternate stages) is held together with A.
+    return at once, without waiting for the screen to take anything; "" presses nothing (the
+    cursor is left on the stage). ``held`` (e.g. ["L"], P+'s alternate stages) is held together
+    with A.
 
     The pages are read once the stage select has settled: a set's stage select (Ranked's, a
     room's) writes its own page as it sets its pages up, a few frames after the scene changes, so
@@ -1799,6 +1800,8 @@ def sss_pick_stage(drv: Driver, stage_kind: int, port: int = 0, timeout_frames: 
             _settle(drv, cursor_xy, still_frames=still)
             v2 = read_sss(drv.read_mem)
             if v2 is not None and is_target(v2):
+                if not button:
+                    return v2
                 if button != "A":
                     tap(drv, port, [button], hold=3, release=3)
                     return v2
@@ -1874,6 +1877,70 @@ def sss_hover_item(drv: Driver, item: int, port: int = 0, timeout_frames: int = 
         step(drv, 1)
     neutral(drv, port)
     raise RecipeError(f"could not hover SSS item {item:#x}", read_sss(drv.read_mem))
+
+
+# P+'s secret stage lists (Net-StageFiles.asm "SSS Stage Lists and Alt Stage Display"): L or R held
+# on a stage loads its list (stagelist/<kind>_L or _R/ on the card), START with it opens the list
+# on Brawl's custom page (task+0x228 = 2, +0x605A the page it came from), and the entry taken plays
+# the stage with ASL 0x8000 + index (L) or 0x4000 + index (R). On that page the hovered item is
+# 0x29 + the entry's index and +0x24C the entry (-1 none) (verified live, P+ v3.2.1).
+SSS_LIST_FIRST_ITEM = 0x29
+SSS_LIST_PAGE = 2
+SSS_FROM_PAGE = 0x605A
+
+
+def sss_open_secret_list(drv: Driver, stage_kind: int, held: str, port: int = 0,
+                         timeout_frames: int = 600) -> SssView:
+    """Put the cursor on ``stage_kind`` without pressing, hold ``held`` ("L" or "R") until P+ has
+    listed the stage's secret list, then START with it: the list's page. Raises if it does not open."""
+    sss_pick_stage(drv, stage_kind, port, button="")
+    drv.pad_script(port, [{"buttons": [held], "hold": 60}, {"buttons": [held, "START"], "hold": 4},
+                          {"buttons": [held], "hold": 4}, {"buttons": [], "hold": 4}])
+    start = polls(drv)
+    while polls(drv) - start < timeout_frames:
+        step(drv, 4)
+        v = read_sss(drv.read_mem)
+        if v is None:
+            raise RecipeError(f"left the stage select instead of opening {stage_kind:#x}'s {held} list",
+                              read_scene(drv.read_mem))
+        if v.page == SSS_LIST_PAGE and drv.read_mem(v.task + SSS_FROM_PAGE, 1)[0] != 0xFF and                 drv.read_mem(STAGELIST_TYPE_ADDR, 1)[0] == ord(held) and polls(drv) - start > 80:
+            return v
+    raise RecipeError(f"{stage_kind:#x}'s {held} list did not open", read_sss(drv.read_mem))
+
+
+STAGELIST_TYPE_ADDR = 0x8042C842   # P+: the list loaded, 'L' / 'R' (0: the stage builder's)
+
+
+def sss_pick_secret(drv: Driver, stage_kind: int, held: str, index: int, port: int = 0,
+                    timeout_frames: int = 1200) -> int:
+    """Open ``stage_kind``'s ``held`` secret list (sss_open_secret_list), steer to entry ``index``
+    and press A. Returns the ASL value P+ plays it with (0x8000 / 0x4000 + index)."""
+    sss_open_secret_list(drv, stage_kind, held, port)
+    want = SSS_LIST_FIRST_ITEM + index
+    route = _serpentine((-24.0, 24.0), (14.0, 10.0, 6.0, 2.0, -2.0, -6.0, -10.0, -14.0))
+    wp = 0
+    start = polls(drv)
+    while polls(drv) - start < timeout_frames:
+        v = read_sss(drv.read_mem)
+        if v is None:
+            raise RecipeError("left the stage select on the secret list", read_scene(drv.read_mem))
+        if v.hovered_item == want:
+            neutral(drv, port)
+            step(drv, 10)
+            v = read_sss(drv.read_mem)
+            if v is not None and v.hovered_item == want:
+                tap(drv, port, ["A"], hold=3, release=3)
+                return (0x8000 if held == "L" else 0x4000) + index
+            continue
+        tx, ty = route[wp % len(route)]
+        if math.hypot(tx - v.cursor_x, ty - v.cursor_y) < 2.5:
+            wp += 1
+            if wp >= 2 * len(route):
+                break
+        drv.pad_set(port, buttons=(), main=steer_toward(v.cursor_x, v.cursor_y, tx, ty, full_tilt_at=2.0))
+        step(drv, 1)
+    neutral(drv, port)
+    raise RecipeError(f"entry {index} of {stage_kind:#x}'s {held} list not found", read_sss(drv.read_mem))
 
 
 def _confirm_stage(drv: Driver, stage_kind: int, view: Optional[SssView]) -> Optional[SssView]:

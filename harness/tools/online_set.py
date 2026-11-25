@@ -54,6 +54,12 @@ ASL_VALUE = {"L": 0x40, "R": 0x20, "Z": 0x10}
 ASL_LOADED = 0x8053EFBA
 
 
+def secret_asl(held: str, index: int) -> int:
+    """The asl byte of a pick from P+'s secret stage list (game-code ppom.h ASL_SECRET): 0x80, 0x40
+    for an L list, the entry's index."""
+    return 0x80 | (0x40 if held == "L" else 0) | index
+
+
 def wait(pred: Callable[[], Any], timeout: float, what: str, every: float = 0.25) -> Any:
     timeout *= float(os.environ.get("PPHARNESS_TIMEOUT_SCALE") or 1)  # tests/test_online.py _wait
     deadline = time.monotonic() + timeout
@@ -318,7 +324,8 @@ def lock_in_next(players: Sequence[Any], game: int, mode: str = "direct",
                  log: Callable[[str], None] = print,
                  panels: Optional[Dict[str, Dict[str, int]]] = None,
                  random_stage: bool = False,
-                 stage_picks: Optional[Dict[int, str]] = None) -> Dict[str, Any]:
+                 stage_picks: Optional[Dict[int, str]] = None,
+                 secret_picks: Optional[Dict[int, tuple]] = None) -> Dict[str, Any]:
     """START on both CSSs. Every player locks in with the character first, and until their own
     START the character can change (the CSS is not locked). Direct: then the loser of the last
     game (SESSION picks_stage; a draw: the lower port) goes to P+'s stage select by itself, picks
@@ -327,10 +334,12 @@ def lock_in_next(players: Sequence[Any], game: int, mode: str = "direct",
     2 the loser first leaves the stage select with B: back on the CSS unlocked, the character still
     selected, and START again opens the stage select again. `random_stage` (where everyone
     picks): the loser's pick is A on the stage select's RANDOM instead. `stage_picks` (where
-    everyone picks): the loser's pick by game instead of STAGE_PICKS, with no button held."""
+    everyone picks): the loser's pick by game instead of STAGE_PICKS, with no button held.
+    `secret_picks` (where everyone picks): {game: (stage, "L" / "R", index)}, the loser's pick is
+    that entry of the stage's secret list (L / R + START on the stage)."""
     info: Dict[str, Any] = {}
     if mode == "direct" and anyone_picks(players):
-        return _lock_in_anyone_picks(players, game, log, panels, random_stage, stage_picks)
+        return _lock_in_anyone_picks(players, game, log, panels, random_stage, stage_picks, secret_picks)
     se = session(players[0].c)
     # (Between games SESSION's `present` is 0: Dolphin fills the players in with the setup.)
     picker = next((i for i, pl in enumerate(se["players"]) if pl.get("picks_stage")), None)         if mode == "direct" else None
@@ -386,7 +395,8 @@ def lock_in_next(players: Sequence[Any], game: int, mode: str = "direct",
 def _lock_in_anyone_picks(players: Sequence[Any], game: int, log: Callable[[str], None],
                           panels: Optional[Dict[str, Dict[str, int]]],
                           random_stage: bool = False,
-                          stage_picks: Optional[Dict[int, str]] = None) -> Dict[str, Any]:
+                          stage_picks: Optional[Dict[int, str]] = None,
+                          secret_picks: Optional[Dict[int, tuple]] = None) -> Dict[str, Any]:
     """Direct since 2026-10-29: every player's START opens their stage select once all are locked
     in; the last game's loser picks STAGE_PICKS[game] there (holding STAGE_PICK_HELD[game]), and
     the others' stage selects leave by themselves with it. In game 2 the picker's B first does
@@ -421,6 +431,14 @@ def _lock_in_anyone_picks(players: Sequence[Any], game: int, log: Callable[[str]
         info["random"] = True
         log(f"game {game}: {picker.name} (the last game's loser) picked RANDOM on the stage select")
         return info
+    if secret_picks and game in secret_picks:
+        stage, held_list, index = secret_picks[game]
+        loaded = B.sss_pick_secret(picker.c, B.STAGE_KIND[stage], held_list, index, 0)
+        for p in players:
+            wait(lambda p=p: scene(p.c) != "scSelStage", 60, f"{p.name}: the stage select left with the pick")
+        info.update(picked_by=picker.name, picked=stage, asl=secret_asl(held_list, index), asl_loaded=loaded)
+        log(f"game {game}: {picker.name} picked entry {index} of {stage}'s {held_list} list ({loaded:#x})")
+        return info
     stage = (stage_picks or STAGE_PICKS).get(game, STAGE_PICK)
     held = [] if stage_picks else STAGE_PICK_HELD.get(game, [])
     B.sss_pick_stage(picker.c, B.STAGE_KIND[stage], 0, held=held)
@@ -437,11 +455,13 @@ def play_set(players: Sequence[Any], games: int = 2, mode: str = "direct",
              log: Callable[[str], None] = print,
              panels: Optional[Dict[str, Dict[str, int]]] = None,
              random_stage: bool = False,
-             stage_picks: Optional[Dict[int, str]] = None) -> Dict[str, Any]:
+             stage_picks: Optional[Dict[int, str]] = None,
+             secret_picks: Optional[Dict[int, tuple]] = None) -> Dict[str, Any]:
     """Games 1..`games` on the session the players are connected in; returns the report.
     Raises AssertionError / TimeoutError on the first thing that is not as expected.
     `random_stage`: games 2.. are picked with A on the stage select's RANDOM (where everyone picks).
-    `stage_picks`: the stage the loser picks by game (2..), instead of STAGE_PICKS."""
+    `stage_picks`: the stage the loser picks by game (2..), instead of STAGE_PICKS.
+    `secret_picks`: {game: (stage, "L" / "R", index)}, an entry of the stage's secret list instead."""
     rep: Dict[str, Any] = {"games": []}
     marks = {p.name: boot_marks(p.c) for p in players}
     # What each player's panel showed before game 1 (css_panel after picking): the CSS must show
@@ -452,7 +472,7 @@ def play_set(players: Sequence[Any], games: int = 2, mode: str = "direct",
     for game in range(1, games + 1):
         if game > 1:
             rep.setdefault("lock_ins", []).append(lock_in_next(players, game, mode, log, panels, random_stage,
-                                                               stage_picks))
+                                                               stage_picks, secret_picks))
         g = play_game(players, game, log=log)
         rep["games"].append(g)
         assert g["checksums"]["mismatches"] == 0 and g["checksums"]["compared"] > 300, g
@@ -464,8 +484,9 @@ def play_set(players: Sequence[Any], games: int = 2, mode: str = "direct",
             want = B.STAGE_KIND[rep["lock_ins"][-1]["picked"]]
             assert g["stage"] == want, ("the loser's pick was not played", g)
             asl = rep["lock_ins"][-1]["asl"]
-            assert g["asl"] == [asl, asl] and g["asl_loaded"] == [asl, asl], (
-                "the loser's alternate stage was not played", g["asl"], g["asl_loaded"], asl)
+            loaded = rep["lock_ins"][-1].get("asl_loaded", asl)   # (a secret stage: 0x8000 / 0x4000 + index)
+            assert g["asl"] == [asl, asl] and g["asl_loaded"] == [loaded, loaded], (
+                "the loser's alternate stage was not played", g["asl"], g["asl_loaded"], asl, loaded)
     for p in players:
         m = boot_marks(p.c)
         check_no_reboot(marks[p.name], m, p.name)

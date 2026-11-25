@@ -164,6 +164,7 @@ namespace OnlineMatch {
     void clearPickedStage();
     void noteSssButtons(u32 held, u32 pressed);   // each frame of the online stage select
     u8 sssAsl();                      // the buttons held at the last A/START there (P+'s ASL byte)
+    void setSssAsl(u8 asl);           // a secret stage list's entry taken there (PPOM::ASL_SECRET)
 }
 
 namespace MatchHud {

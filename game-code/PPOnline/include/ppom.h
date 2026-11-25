@@ -445,9 +445,22 @@ namespace PPOM {
         u8 costume;       // colour number (0-0x1F), | COSTUME_ALT_Z / COSTUME_ALT_R
         u16 stagePick;    // stage kind picked on the stage select (Direct loser), 0xFFFF none,
                           // STAGE_PENDING: the loser locked in, its stage select still to come
-        u8 asl;           // P+ alternate-stage buttons held for that pick
+        u8 asl;           // P+ alternate-stage buttons held for that pick (or ASL_SECRET)
         u8 game;          // game number (1-based) this lock-in is for
     };                    // 0x0C
+
+    // The asl byte (lock-in, SESSION, a set's pick, replays) is the GameCube buttons held on the
+    // pick (L 0x40, R 0x20, Z 0x10, the D-pad below), which never have 0x80. With ASL_SECRET it is
+    // an entry of P+'s secret stage lists instead (stage_legal.cpp, bug report #338): ASL_SECRET_L
+    // for the stage's L list, else its R list, and the entry's index below. P+'s stage loader takes
+    // them as 0x8000 + index (L) and 0x4000 + index (R) at 0x800B9EA2 (aslButtons). Dolphin carries
+    // the byte as it is.
+    const u8 ASL_SECRET = 0x80, ASL_SECRET_L = 0x40, ASL_SECRET_INDEX = 0x3F;
+    inline u16 aslButtons(u8 asl)
+    {
+        if (!(asl & ASL_SECRET)) return asl;
+        return (u16)(((asl & ASL_SECRET_L) ? 0x8000 : 0x4000) + (asl & ASL_SECRET_INDEX));
+    }
 
     enum LocalState { LS_NONE = 0, LS_CONNECTING = 1, LS_CONNECTED = 2, LS_IN_MATCH = 3 };
 

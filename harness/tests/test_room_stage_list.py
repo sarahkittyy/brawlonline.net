@@ -198,6 +198,24 @@ def test_room_alternate_stages_on(backend: OnlineBackend, dolphin: Callable[...,
     assert rep["asl_loaded"][0] == rep["asl_loaded"][1] == 0x40, ("P+ did not load the L layout", rep)
 
 
+@pytest.mark.slow
+def test_room_secret_stage(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
+                           gpu_backend: str) -> None:
+    """Bug report #338: with alternate stages on, the loser's R + START on Smashville opens P+'s
+    secret list and its third entry is the pick: the stage select leaves with it, and both machines
+    play Smashville with that entry (asl byte 0x82, P+'s stage file entry 0x4002)."""
+    a, b = room_with(backend, dolphin, gpu_backend, "secret", "loser-picks", alternates=True)
+    game = play_first_game(a, b)
+    loser = to_losers_stage_select(a, b, game)
+    loaded = B.sss_pick_secret(loser.c, B.STAGE_KIND["smashville"], "R", 2, 0)
+    _wait(lambda: online_set.gstatus(loser.c)["phase"] in ("running", "error", "ended"), 90,
+          "game 2 to start after the pick")
+    rep = online_set.play_game([a, b], game)
+    assert rep["checksums"]["mismatches"] == 0, rep
+    assert rep["stage"] == B.STAGE_KIND["smashville"] and rep["asl"] == [0x82, 0x82], ("the secret pick", rep)
+    assert loaded == 0x4002 and rep["asl_loaded"] == [0x4002, 0x4002], ("P+ did not load the secret stage", rep)
+
+
 @pytest.fixture(scope="module")
 def one_stock_backend(tmp_path_factory: pytest.TempPathFactory) -> Iterator[OnlineBackend]:
     """The server with Direct's rules (a room's P+ default takes them) at 1 stock and 2 minutes."""

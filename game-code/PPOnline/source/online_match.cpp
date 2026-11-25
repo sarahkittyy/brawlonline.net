@@ -338,6 +338,9 @@ namespace OnlineMatch {
         if (g_onlineCss && g_onlinePickStage && (pressed & (0x100u | 0x1000u))) s_sssAsl = (u8)held;
     }
     u8 sssAsl() { return s_sssAsl; }
+    // An entry of P+'s secret stage list taken on the stage select (stage_legal.cpp): the pick's
+    // asl (PPOM::ASL_SECRET), noted after this frame's buttons.
+    void setSssAsl(u8 asl) { s_sssAsl = asl; }
 
     // P+'s slot colours for the match (online_menu.cpp, PortValues.slotColour), the same on every
     // machine: each player's pick on their port, a player without one their port's own colour,
@@ -474,7 +477,7 @@ namespace OnlineMatch {
         se.quitBy = 0;
         se.quitRunback = 0;
         s_seen = 0;
-        *(u16*)ASL_BUTTONS = se.asl;
+        *(u16*)ASL_BUTTONS = PPOM::aslButtons(se.asl);   // (a secret stage: 0x8000 / 0x4000 + its index)
         keepPortValues(se);
         PPOM::g_block.local.hudDisconnected = 0;
         // The online ruleset, written again right before the setup reads it: nothing set on this

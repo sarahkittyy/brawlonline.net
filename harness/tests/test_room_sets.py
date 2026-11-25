@@ -60,23 +60,31 @@ def strike(g: Game, kind: int) -> None:
     B.sss_pick_stage(g.c, kind, 0, button="X")
 
 
-def play_steps(players: list[Game], game: int, pick_held: tuple[str, ...] = (), random_pick: bool = False) -> None:
+def play_steps(players: list[Game], game: int, pick_held: tuple[str, ...] = (), random_pick: bool = False,
+               secret_picks: tuple[tuple[int, str, int], ...] = ()) -> dict[str, Any]:
     """Whoever's turn it is strikes or bans the first selectable stage, or picks one (holding
     `pick_held`, P+'s alternate stages; with `random_pick` A on RANDOM), until the stage is decided
-    (both machines see every step)."""
+    (both machines see every step). `secret_picks`: (stage kind, "L" / "R", index), the pick is
+    that entry of the first of these stages still selectable (P+'s secret stage list). Returns the
+    secret pick made: {kind, held, index, loaded} (empty without one)."""
+    made: dict[str, Any] = {}
     for _ in range(12):
         views = {g.name: setup_view(g) for g in players}
         mover = next((g for g in players if views[g.name]["active"] and views[g.name]["my_turn"] and
                       views[g.name]["type"] in (1, 2)), None)
         if mover is None:
             if all(not v["active"] or v["type"] >= 3 for v in views.values()):
-                return
+                return made
             players[0].steps("wait 20")
             continue
         v = views[mover.name]
         assert v["game"] >= 1 and v["selectable"], v
         kind = v["selectable"][0]
-        if v["type"] == 2 and random_pick:
+        secret = next((s for s in secret_picks if s[0] in v["selectable"]), None)
+        if v["type"] == 2 and secret:
+            loaded = B.sss_pick_secret(mover.c, secret[0], secret[1], secret[2], 0)
+            made = {"kind": secret[0], "held": secret[1], "index": secret[2], "loaded": loaded}
+        elif v["type"] == 2 and random_pick:
             B.sss_hover_item(mover.c, B.SSS_ITEM_RANDOM)
             mover.steps("tap A 8")
         elif v["type"] == 2:
@@ -153,6 +161,37 @@ def test_room_set_alternate_stages(backend: OnlineBackend, dolphin: Callable[...
     g2 = online_set.play_game(players, 2)
     assert g2["checksums"]["mismatches"] == 0, g2
     assert g2["asl"] == [0x40, 0x40], ("the counterpick's L layout was not played", g2)
+
+
+@pytest.mark.slow
+def test_room_set_secret_stage(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
+                               gpu_backend: str) -> None:
+    """Bug report #338: a Bo3 with alternate stages on, game 2's counterpick is an entry of P+'s
+    secret stage list (L / R + START on the stage, then the entry on the set's stage select): it
+    goes out with GP_COMPLETE_STEP's asl byte (ppom.h ASL_SECRET) and both machines play it."""
+    a, b, _code = bo3_room(backend, dolphin, gpu_backend, "ssec", BO3_ALTS)
+    players = [a, b]
+    a.steps("tap START 8", "wait 40")
+    _wait(lambda: ppom.read_room(b.c, ppom.find_block(b.c))["slots"][0]["bits"] & ppom.SLOT_READY, 20, "B sees A ready")
+    b.steps("tap START 8", "wait 10")
+    online_set.wait(lambda: all(online_set.scene(g.c) == SSS for g in players), 120, "game 1: both on the stage select")
+    play_steps(players, 1)
+    g1 = online_set.play_game(players, 1)
+    assert g1["checksums"]["mismatches"] == 0, g1
+    _wait(lambda: (rooms(a).get("set") or {}).get("score") and sum(rooms(a)["set"]["score"]) >= 1, 30,
+          "game 1 counted by the server")
+    until_setup(a, lambda v: v["game"] == 2 and v["type"] == 3, "game 2's character step")
+    pick_characters(players, 2)
+    online_set.wait(lambda: all(online_set.scene(g.c) == SSS for g in players), 120, "game 2: both on the stage select")
+    made = play_steps(players, 2, secret_picks=((B.STAGE_KIND["final_destination"], "L", 1),
+                                                (B.STAGE_KIND["smashville"], "R", 2),
+                                                (B.STAGE_KIND["battlefield"], "R", 0)))
+    assert made, "no stage with a secret list was left to counterpick"
+    g2 = online_set.play_game(players, 2)
+    assert g2["checksums"]["mismatches"] == 0, g2
+    asl = online_set.secret_asl(made["held"], made["index"])
+    assert g2["stage"] == made["kind"] and g2["asl"] == [asl, asl], ("the secret counterpick was not played", g2, made)
+    assert g2["asl_loaded"] == [made["loaded"]] * 2, ("P+ did not load the secret stage", g2, made)
 
 
 @pytest.mark.slow

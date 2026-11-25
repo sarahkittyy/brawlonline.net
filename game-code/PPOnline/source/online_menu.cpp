@@ -4491,6 +4491,11 @@ namespace OnlineMenu {
             // (+0x0): the held field (+0x8) is built from the last frame's, from which Z was
             // taken out, so it never has Z.
             OnlineMatch::noteSssButtons(padButtons(0x0), padButtons(0xC));
+            // P+'s secret stages (bug report #338): START with L / R held on a stage that has a
+            // list opens it, wherever this player picks (not Ranked), as offline; on the list, B
+            // goes back to the stage's page (P+'s), and A takes an entry (stage_legal.cpp).
+            const bool secret = StageLegal::noteSecretStart(padButtons(0x0), padButtons(0xC));
+            const bool onList = StageLegal::onSecretList();
             u32 mask = BTN_Z;
             if ((s.mode == PPOM::MODE_RANKED || s.roomStepSss) && g_onlinePickStage) mask |= BTN_START | BTN_B;
             if (roomCss() && g_onlinePickStage) mask |= BTN_B;
@@ -4498,8 +4503,10 @@ namespace OnlineMenu {
             // stage select with its own draw before the host took the first pick).
             if (anyoneSss() != ANY_NONE) {
                 mask |= BTN_START | BTN_B;   // (Direct's loser may go back; not where anyone picks)
-                if (padButtons(0xC) & BTN_START) StageLegal::anyoneRandom();
+                if ((padButtons(0xC) & BTN_START) && !secret && !onList) StageLegal::anyoneRandom();
             }
+            if (secret) mask &= ~BTN_START;
+            if (onList) mask &= ~BTN_B;
             maskButtons(mask);
             blockCodeMenu();
         }

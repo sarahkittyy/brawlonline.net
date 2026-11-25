@@ -840,6 +840,42 @@ def test_direct_set_under_the_gameplay_session(backend: OnlineBackend,
         g.c.mm_cancel()
 
 
+def test_direct_set_on_secret_stages(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
+                                    gpu_backend: str) -> None:
+    """P+'s secret stages online (bug report #338: "Secret Stages are hidden in some stages behind
+    the SSS, you can access them by pressing L+Start or R+Start ... they don't load"). Before, START
+    on Direct's stage select was always a random stage, so L / R + START picked one. Now L + START
+    on Final Destination opens its L list (64 Destination, Brawl Destination), B goes back to the
+    stage's page, and when the other player picks first while it is open, it leaves with their
+    pick (game 1). Game 2 is the list's second entry; game 3 is the fifth entry of Smashville's
+    R list (nine). Both machines play them: SESSION's asl is the secret byte (ppom.h ASL_SECRET)
+    and P+'s stage loader took the .asl entry 0x8001 / 0x4004; checksums agree to game set.
+    Screenshots: run/artifacts/game-bridge/secret-stages/."""
+    a, b, _ua, _ub = _connected_direct(backend, dolphin, gpu_backend, "secret-stages", ("iris", "jack"),
+                                       pick_game_1=False)
+    online_set.wait(lambda: all(g.scene() == "scSelStage" for g in (a, b)), 60, "game 1: both on the stage select")
+    a.steps("wait 40")
+    # Game 1: the list opens, and its B goes back to the stage's page without a pick (P+'s; START
+    # with L there was a random pick before).
+    B.sss_open_secret_list(a.c, B.STAGE_KIND["final_destination"], "L")
+    a.shot("fd-l-list")
+    a.steps("tap B 8", "wait 30")
+    v = B.read_sss(a.c.read_mem)
+    assert v is not None and v.page == 0 and a.c.read_mem(v.task + B.SSS_FROM_PAGE, 1)[0] == 0xFF, v
+    assert all(online_set.session(g.c)["state"] != 2 for g in (a, b)), "B on the list picked a stage"
+    # A opens the list again and stays on it; B's START (a random stage) is the first pick: A's
+    # stage select leaves from the list too, and both play B's.
+    B.sss_open_secret_list(a.c, B.STAGE_KIND["final_destination"], "L")
+    b.steps("wait 20", "tap START 8")
+    online_set.wait(lambda: all(g.scene() != "scSelStage" for g in (a, b)), 60, "game 1: both stage selects left")
+    picks = {2: ("final_destination", "L", 1), 3: ("smashville", "R", 4)}
+    rep = online_set.play_set([a, b], games=3, mode="direct", secret_picks=picks)
+    assert [g["stage"] for g in rep["games"][1:]] == [B.STAGE_KIND["final_destination"], B.STAGE_KIND["smashville"]]
+    assert [g["asl_loaded"] for g in rep["games"][1:]] == [[0x8001, 0x8001], [0x4004, 0x4004]], rep["games"]
+    for g in (a, b):
+        g.c.mm_cancel()
+
+
 def _engines_reported(backend: OnlineBackend, n: int) -> None:
     """accounts logged `n` game reports, each naming its game's engine: `dolphin` with its version,
     or `emissary` where PPHARNESS_RECOMP (or PPHARNESS_RECOMP_WSL) runs a recomp."""

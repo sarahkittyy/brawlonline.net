@@ -26,7 +26,8 @@
 //    a struck icon: setHover (+0x5C00, run before buttonProc) sets +0x248 and an A on that same
 //    frame took the struck stage (verified live). With -1, A does nothing and START picks random.
 //  - H3 sel_stage+0x54C0 (`lwz r3,0x24C(r29)`, A/START on the stage-builder / custom-list page,
-//    where P+ draws no strikes): no selection.
+//    where P+ draws no strikes): no selection, except an entry of P+'s secret stage lists (below,
+//    secretPick), which is a pick of its stage as A on the stage is.
 //  - H4 sel_stage+0x4CF4 (`lis r3,0x805A`, B leaves the stage select): P+ (StageFiles.asm
 //    0x806B5684) does not leave while anything is struck; clear the table first so B still goes
 //    back to the CSS.
@@ -234,6 +235,102 @@ namespace StageLegal {
         return *(const u8*)(SLOT_KINDS + 2 * p[1 + pos]);
     }
 
+    // P+'s secret stages (bug report #338, P+ v3.2 Net-StageFiles.asm "SSS Stage Lists and Alt
+    // Stage Display"): holding L or R on a stage loads that stage's list (pointPointer:
+    // g_muSelectStageFileTask lists `stagelist/<kind>_L/` or `_R/` on the card, STAGELIST_KIND /
+    // STAGELIST_TYPE say which, the file task's +0x58 bit 0x40 once listed, +0x60 its entries), and
+    // START with L / R on that stage opens it on the custom page (buttonProc hook at 0x806B5C60,
+    // task+0x605A the page it came from, 0xFF on no list). An entry taken there plays the stage
+    // with ASL 0x8000 + its index (an L list) or 0x4000 + index (R): scSelStage::process (hook at
+    // 0x806C8F9C) writes that to ASL_BUTTON, and the stage loader takes the .asl entry with exactly
+    // that value (Final Destination's L list: _ML_00, _ML_01; Smashville's R list nine). Online,
+    // START is a random pick (anyone picks) or taken out (a set's steps), and the custom page's
+    // picks were refused, so every list showed but none could be played (55 stages in P+ v3.2.1).
+    static const u32 FILE_TASK = 0x806BB388;       // g_muSelectStageFileTask (0 outside the SSS)
+    static const u32 STAGELIST_KIND = 0x8042C841;  // the srStageKind of the list loaded
+    static const u32 STAGELIST_TYPE = 0x8042C842;  // its type: 'L', 'R', 0 the stage builder's
+    static const u8 LIST_L = 0x4C, LIST_R = 0x52;
+    static bool s_secretStart = false;   // this frame's START opens a list (H1, for H2)
+
+    static bool isPtr(u32 p) { return (p >= 0x80000000 && p < 0x81800000) || (p >= 0x90000000 && p < 0x94000000); }
+
+    static u8* sssTask()   // the stage select's muSelectStageTask (scSelStage+0x3AC)
+    {
+        u32 mgr = *(u32*)0x805A0060;
+        if (!isPtr(mgr)) return NULL;
+        u32 scene = *(u32*)(mgr + 4);
+        if (!isPtr(scene)) return NULL;
+        u32 task = *(u32*)(scene + 0x3AC);
+        return isPtr(task) ? (u8*)task : NULL;
+    }
+
+    bool onSecretList()
+    {
+        u8* task = Online::inScene("scSelStage") ? sssTask() : NULL;
+        if (!task || *(u8*)(task + 0x605A) == 0xFF) return false;
+        const u8 type = *(u8*)STAGELIST_TYPE;
+        return type == LIST_L || type == LIST_R;
+    }
+
+    // The list held L / R opens on the hovered stage now: P+'s own test (the list loaded is this
+    // stage's, of this type, with entries), and this player may pick (never Ranked, which plays no
+    // alternate; in a set only their own pick; where anyone picks, before the host took one).
+    static bool secretListHere(u8* task, u32 held)
+    {
+        if (!task || OnlineMenu::currentMode() == PPOM::MODE_RANKED) return false;
+        const PPOM::GameStep* st = ranked();
+        if (st && !(st->active && st->myTurn && st->type == PPOM::STEP_PICK)) return false;
+        const int any = OnlineMenu::anyoneSss();
+        if (any != OnlineMenu::ANY_NONE && any != OnlineMenu::ANY_PICKING) return false;
+        const u32 hovered = *(u32*)(task + 0x244);
+        if (hovered < 2 || hovered >= 0x35 || *(u32*)(task + 0x228) == 2) return false;
+        const u8 type = (held & 0x40u) ? LIST_L : (held & 0x20u) ? LIST_R : 0;   // P+ takes L first
+        const u32 ft = *(u32*)FILE_TASK;
+        if (!type || !isPtr(ft)) return false;
+        if (!(*(u8*)(ft + 0x58) & 0x40) || *(u32*)(ft + 0x60) == 0) return false;
+        const int kind = kindAt(*(u8*)CURRENT_PAGE, *(int*)(task + 0x248));
+        return kind > 0 && *(u8*)STAGELIST_KIND == kind && *(u8*)STAGELIST_TYPE == type;
+    }
+
+    bool noteSecretStart(u32 held, u32 pressed)
+    {
+        s_secretStart = (pressed & 0x1000u) && Online::inScene("scSelStage") && secretListHere(sssTask(), held);
+        return s_secretStart;
+    }
+
+    // The lock-in's asl byte for a list entry (PPOM::ASL_SECRET): 0 for an index it cannot carry.
+    static u8 secretAsl(u8 type, int index)
+    {
+        if (index < 0 || index > PPOM::ASL_SECRET_INDEX) return 0;
+        return (u8)(PPOM::ASL_SECRET | (type == LIST_L ? PPOM::ASL_SECRET_L : 0) | index);
+    }
+
+    // A / START on entry `sel` of the secret list shown: this player's pick of the list's stage
+    // with that entry, as A on a stage is on the stage's page (H2). True: the stage select takes
+    // it (and leaves); false: it stays.
+    static bool secretPick(int sel, u8 type)
+    {
+        const int kind = *(u8*)STAGELIST_KIND;
+        const u8 asl = secretAsl(type, sel);
+        if (kind <= 0 || !asl) return false;
+        if (OnlineMenu::anyoneSss() != OnlineMenu::ANY_NONE) {
+            OnlineMenu::anyonePick((u16)kind, asl);   // sent in the lock-in; the stage select stays
+            return false;
+        }
+        const PPOM::GameStep* st = ranked();
+        if (st) {
+            if (!(st->active && st->myTurn && st->type == PPOM::STEP_PICK) || !allowedKind(kind) ||
+                OnlineMenu::currentMode() == PPOM::MODE_RANKED)
+                return false;
+            u8 k[2] = {(u8)kind, asl};
+            PPOM::post(PPOM::CMD_GP_COMPLETE_STEP, k, 2);
+            return true;
+        }
+        if (active() && !allowedKind(kind)) return false;   // a room's loser picking from its list
+        OnlineMatch::setSssAsl(asl);   // the loser's pick (OnlineMatch::afterSelStage)
+        return true;
+    }
+
     // A set's stage select (Ranked's and a room's) shows only the set's stages, not P+'s pages
     // with the rest struck (the user's, 2026-10-16 for Ranked; Sarah's board 2026-11-22 for rooms:
     // in a set the page could not be turned, so a ruleset's page 2 / 3 stages could be neither
@@ -428,7 +525,9 @@ extern "C" {
             // only), START (online_menu.cpp: random) or Z. Once the host took the first pick, or
             // the session is gone, the stage select leaves as Ranked's does (an A, nothing
             // hovered: H2 gives the stage).
-            u32 out = pressed & ~(0x200u | 0x400u | 0x80000u | 0x1000u | 0x10u);
+            // (START with L / R on a stage with a secret list: P+ opens the list, stage_legal's
+            // noteSecretStart)
+            u32 out = pressed & ~(0x200u | 0x400u | 0x80000u | 0x10u | (StageLegal::s_secretStart ? 0 : 0x1000u));
             u32* hovered = (u32*)(task + 0x244);
             StageLegal::showTurn(OnlineMenu::anyoneText());
             s_anyLeave = any == OnlineMenu::ANY_DECIDED || any == OnlineMenu::ANY_GONE;
@@ -439,8 +538,9 @@ extern "C" {
             // One page for everyone (Sarah's board, 2026-10-29): another player turned the page,
             // so this stage select turns too, with P+'s own page button (an A on it, as when the
             // cursor is there: P+ turns one page an A), until it shows theirs (sss_cursors.cpp).
+            // (Not from a secret list: its page button and B go back to the page it came from.)
             const int follow = SssCursors::pageToFollow();
-            if (follow >= 0 && follow != *(u8*)StageLegal::CURRENT_PAGE) {
+            if (follow >= 0 && follow != *(u8*)StageLegal::CURRENT_PAGE && !StageLegal::onSecretList()) {
                 static u32 s_turnAt = 0;
                 const u32 now = PPOM::g_block.debug.frames;
                 if (now - s_turnAt >= 8) {
@@ -473,7 +573,9 @@ extern "C" {
         bool online = st || StageLegal::roomPicksFromList();
         if (online && mgr >= 0x80000000 && mgr < 0x81800000) *(int*)(mgr + 0x284) = 1;
         if (!st) return out;
-        out &= ~(0x1000u | 0x10u);   // START (random), Z (hazards: the online rules set them)
+        // START (random; with L / R the pick's secret list, noteSecretStart), Z (hazards: the
+        // online rules set them)
+        out &= ~((StageLegal::s_secretStart ? 0 : 0x1000u) | 0x10u);
         // The set's page is the only one: A on P+'s page button would show its next page. On
         // P+'s pages (a set of more stages than one page holds) it turns the page in every step,
         // whoever's turn it is: the strikes are on every page (apply).
@@ -529,11 +631,14 @@ extern "C" {
                 }
                 return pos;
             }
+            // START with L / R: P+ opens the stage's secret list (a pick from it is H3's).
+            if (StageLegal::s_secretStart) return pos;
             // A pick: sent in the lock-in; the stage select stays until the host took one.
             int kind = StageLegal::kindAt(page, pos);
             if (pos >= 0 && kind > 0) OnlineMenu::anyonePick((u16)kind, OnlineMatch::sssAsl());
             return -1;
         }
+        if (StageLegal::s_secretStart) return pos;   // P+ opens the secret list (only on a pick)
         if (!StageLegal::active()) return pos;
         int page = *(u8*)StageLegal::CURRENT_PAGE;
         if (StageLegal::ranked() && s_autoLeave) {
@@ -613,24 +718,18 @@ namespace StageLegal {
             "bctr\n\t");
     }
 
-    // sel_stage+0x54C0 (0x806B5E44): `lwz r3,0x24C(r29)` (stage-builder / custom-list page).
-    // Back to +0x54C4 `cmpwi r3,0`.
+    // sel_stage+0x54C0 (0x806B5E44): `lwz r3,0x24C(r29)` (stage-builder / custom-list page: the
+    // entry A / START takes, -1 none). Volatile registers are dead here, as before the first
+    // version of this hook (it called out the same way). Back to +0x54C4 `cmpwi r3,0`.
     __attribute__((naked)) void hookCustomPos()
     {
         asm volatile(
             "lwz 3, 0x24C(29)\n\t"
-            "stwu 1, -0x20(1)\n\t"
-            "stw 3, 0x8(1)\n\t"
-            "lis 12, pponline_sssCustomAllowed@ha\n\t"
-            "addi 12, 12, pponline_sssCustomAllowed@l\n\t"
+            "mr 4, 29\n\t"
+            "lis 12, pponline_sssCustomPos@ha\n\t"
+            "addi 12, 12, pponline_sssCustomPos@l\n\t"
             "mtctr 12\n\t"
             "bctrl\n\t"
-            "cmpwi 3, 0\n\t"
-            "lwz 3, 0x8(1)\n\t"
-            "addi 1, 1, 0x20\n\t"
-            "bne 1f\n\t"
-            "li 3, -1\n\t"
-            "1:\n\t"
             "lis 12, 0x806B\n\t"
             "ori 12, 12, 0x5E48\n\t"
             "mtctr 12\n\t"
@@ -698,16 +797,21 @@ extern "C" {
         if (StageLegal::active()) memset((void*)StageLegal::STRIKE_TABLE_ADDR, 0, 30);
     }
 
-    // H3: 1 if a stage-builder / custom-list stage may be taken.
-    __attribute__((used)) int pponline_sssCustomAllowed()
+    // H3: the entry A / START takes on the custom page (`sel`, -1 none), or -1.
+    __attribute__((used)) int pponline_sssCustomPos(int sel, u8* task)
     {
-        // (anyone picks: a pick never leaves the stage select by itself, and a custom stage is not
-        // a stage kind the lock-in can carry)
-        // (once it leaves, any stage it takes does: the match plays SESSION's)
         const int any = OnlineMenu::anyoneSss();
-        if (any == OnlineMenu::ANY_DECIDED || any == OnlineMenu::ANY_GONE) return 1;
-        if (!StageLegal::active() && any == OnlineMenu::ANY_NONE) return 1;
+        const u8 type = *(u8*)StageLegal::STAGELIST_TYPE;
+        const bool secret = (type == StageLegal::LIST_L || type == StageLegal::LIST_R) &&
+                            *(u8*)(task + 0x605A) != 0xFF;
+        // Once it leaves (anyone picks: the host took a pick, or the session is gone), any entry it
+        // takes does, the first one where the cursor is on none: the match plays SESSION's.
+        if (any == OnlineMenu::ANY_DECIDED || any == OnlineMenu::ANY_GONE) return sel < 0 && secret ? 0 : sel;
+        // P+'s secret list of a stage: the stage with that entry is the pick.
+        if (secret) return sel >= 0 && StageLegal::secretPick(sel, type) ? sel : -1;
+        // (a stage builder stage is not a stage kind the lock-in can carry)
+        if (!StageLegal::active() && any == OnlineMenu::ANY_NONE) return sel;
         PPOM::g_block.debug.scratch[13]++;
-        return 0;
+        return -1;
     }
 }
