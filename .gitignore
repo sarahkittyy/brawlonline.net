@@ -5,6 +5,8 @@
 /toolchains/
 /research/
 /MONOREPO.md
+# Sarah's video and marketing assets (promo cuts, launcher shots, Emissary art, overlays)
+/.marketing/
 *.iso
 *.raw
 *.rvz
