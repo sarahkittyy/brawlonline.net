@@ -788,7 +788,7 @@ bool EmuCodeBlock::WriteClobbersRegValue(int accessSize, bool swap)
 }
 
 bool EmuCodeBlock::WriteToConstAddress(int accessSize, OpArg arg, u32 address,
-                                       BitSet32 registersInUse)
+                                       BitSet32 registersInUse, bool swap)
 {
   arg = FixImmediate(accessSize, arg);
 
@@ -798,8 +798,9 @@ bool EmuCodeBlock::WriteToConstAddress(int accessSize, OpArg arg, u32 address,
   {
     X64Reg arg_reg = RSCRATCH;
 
-    // With movbe, we can store inplace without temporary register
-    if (arg.IsSimpleReg() && cpu_info.bMOVBE)
+    // With movbe (or when the value is already byteswapped), we can store inplace without a
+    // temporary register
+    if (arg.IsSimpleReg() && (!swap || cpu_info.bMOVBE))
       arg_reg = arg.GetSimpleReg();
 
     if (!arg.IsSimpleReg(arg_reg))
@@ -807,7 +808,10 @@ bool EmuCodeBlock::WriteToConstAddress(int accessSize, OpArg arg, u32 address,
 
     // And store it in the gather pipe
     MOV(64, R(RSCRATCH2), PPCSTATE(gather_pipe_ptr));
-    SwapAndStore(accessSize, MatR(RSCRATCH2), arg_reg);
+    if (swap)
+      SwapAndStore(accessSize, MatR(RSCRATCH2), arg_reg);
+    else
+      MOV(accessSize, MatR(RSCRATCH2), R(arg_reg));
     ADD(64, R(RSCRATCH2), Imm8(accessSize >> 3));
     MOV(64, PPCSTATE(gather_pipe_ptr), R(RSCRATCH2));
 
@@ -816,7 +820,7 @@ bool EmuCodeBlock::WriteToConstAddress(int accessSize, OpArg arg, u32 address,
   }
   else if (m_jit.jo.fastmem_arena && m_jit.m_mmu.IsOptimizableRAMAddress(address, accessSize))
   {
-    WriteToConstRamAddress(accessSize, arg, address);
+    WriteToConstRamAddress(accessSize, arg, address, swap);
     return false;
   }
   else
@@ -827,13 +831,16 @@ bool EmuCodeBlock::WriteToConstAddress(int accessSize, OpArg arg, u32 address,
     switch (accessSize)
     {
     case 64:
-      ABI_CallFunctionPAC(64, PowerPC::WriteFromJit<u64>, &m_jit.m_mmu, arg, address);
+      ABI_CallFunctionPAC(64, swap ? PowerPC::WriteFromJit<u64> : PowerPC::WriteU64SwapFromJit,
+                          &m_jit.m_mmu, arg, address);
       break;
     case 32:
-      ABI_CallFunctionPAC(32, PowerPC::WriteFromJit<u32>, &m_jit.m_mmu, arg, address);
+      ABI_CallFunctionPAC(32, swap ? PowerPC::WriteFromJit<u32> : PowerPC::WriteU32SwapFromJit,
+                          &m_jit.m_mmu, arg, address);
       break;
     case 16:
-      ABI_CallFunctionPAC(16, PowerPC::WriteFromJit<u16>, &m_jit.m_mmu, arg, address);
+      ABI_CallFunctionPAC(16, swap ? PowerPC::WriteFromJit<u16> : PowerPC::WriteU16SwapFromJit,
+                          &m_jit.m_mmu, arg, address);
       break;
     case 8:
       ABI_CallFunctionPAC(8, PowerPC::WriteFromJit<u8>, &m_jit.m_mmu, arg, address);

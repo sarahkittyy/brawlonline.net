@@ -5,6 +5,7 @@
 
 #include <optional>
 
+#include "Common/CPUDetect.h"
 #include "Common/MsgHandler.h"
 #include "Common/x64Emitter.h"
 #include "Core/PowerPC/Jit64/RegCache/JitRegCache.h"
@@ -23,6 +24,19 @@ void Jit64::ps_mr(UGeckoInstruction inst)
   if (d == b)
     return;
 
+  if (fpr.IsSingle(b))
+  {
+    const bool is_pair = fpr.IsSinglePair(b);
+    const bool may_be_snan = fpr.MayBeSNaN(b);
+    const bool raw_load = fpr.IsRawSingleLoad(b);
+    RCX64Reg Rb = fpr.BindSingle(b, RCMode::Read, is_pair);
+    RCX64Reg Rd = fpr.BindSingle(d, RCMode::Write, is_pair);
+    RegCache::Realize(Rb, Rd);
+    MOVAPS(X64Reg(Rd), OpArg(Rb));
+    fpr.SetSingle(d, is_pair && !may_be_snan, may_be_snan, raw_load);
+    return;
+  }
+
   RCOpArg Rb = fpr.Use(b, RCMode::Read);
   RCX64Reg Rd = fpr.Bind(d, RCMode::Write);
   RegCache::Realize(Rb, Rd);
@@ -40,6 +54,41 @@ void Jit64::ps_sum(UGeckoInstruction inst)
   int a = inst.FA;
   int b = inst.FB;
   int c = inst.FC;
+
+  if (jo.accurateSinglePrecision && cpu_info.bSSE4_1 && fpr.IsSingle(a) && fpr.IsSingle(b) &&
+      fpr.IsSingle(c) && !fpr.IsRawSingleLoad(c))
+  {
+    RCX64Reg Ra = fpr.BindSingle(a, RCMode::Read, /*want_pair=*/false);
+    RCX64Reg Rb = fpr.BindSingle(b, RCMode::Read, /*want_pair=*/true);
+    RCX64Reg Rc = fpr.BindSingle(c, RCMode::Read, /*want_pair=*/true);
+    RCX64Reg Rd = fpr.BindSingle(d, RCMode::Write, /*want_pair=*/true);
+    RegCache::Realize(Ra, Rb, Rc, Rd);
+
+    MOVSHDUP(XMM1, Rb);  // {b.ps1, b.ps1}
+    ADDSS(XMM1, Ra);     // {a.ps0 + b.ps1, ...}
+    switch (inst.SUBOP5)
+    {
+    case 10:  // ps_sum0: {a.ps0 + b.ps1, c.ps1}
+      if (d == c)
+        MOVSS(Rd, R(XMM1));
+      else if (cpu_info.bAVX)
+        VBLENDPS(Rd, XMM1, Rc, 0b0010);
+      else
+      {
+        MOVAPS(Rd, R(XMM1));
+        BLENDPS(Rd, Rc, 0b0010);
+      }
+      break;
+    case 11:  // ps_sum1: {c.ps0, a.ps0 + b.ps1}
+      avx_op(&XEmitter::VUNPCKLPS, &XEmitter::UNPCKLPS, Rd, Rc, R(XMM1));
+      break;
+    default:
+      PanicAlertFmt("ps_sum WTF!!!");
+    }
+    SetFPRFIfNeeded(R(Rd), true);
+    fpr.SetSingle(d, /*is_pair=*/true, /*may_be_snan=*/false);
+    return;
+  }
 
   RCOpArg Ra = fpr.Use(a, RCMode::Read);
   RCOpArg Rb = fpr.Use(b, RCMode::Read);
@@ -66,7 +115,7 @@ void Jit64::ps_sum(UGeckoInstruction inst)
   }
   // We're intentionally not calling HandleNaNs here.
   // For addition and subtraction specifically, x86's NaN behavior matches PPC's.
-  FinalizeSingleResult(Rd, R(tmp));
+  FinalizeSingleResult(d, Rd, R(tmp));
 }
 
 void Jit64::ps_muls(UGeckoInstruction inst)
@@ -79,6 +128,66 @@ void Jit64::ps_muls(UGeckoInstruction inst)
   int d = inst.FD;
   int a = inst.FA;
   int c = inst.FC;
+
+  if (jo.accurateSinglePrecision && cpu_info.bSSE3 && fpr.IsSingle(a) && fpr.IsSingle(c))
+  {
+    const bool preserve_d = m_accurate_nans && (a == d || c == d);
+    RCX64Reg Ra = fpr.BindSingle(a, RCMode::Read, /*want_pair=*/true);
+    RCX64Reg Rc = fpr.BindSingle(c, RCMode::Read, /*want_pair=*/true);
+    RCX64Reg Rd = fpr.BindSingle(d, RCMode::Write, /*want_pair=*/true);
+    RegCache::Realize(Ra, Rc, Rd);
+
+    const X64Reg result_xmm = preserve_d ? XMM1 : X64Reg(Rd);
+    RCX64Reg Rc_dup_guard;
+    X64Reg dup_reg = XMM1;
+    if (preserve_d)
+    {
+      Rc_dup_guard = fpr.Scratch();
+      RegCache::Realize(Rc_dup_guard);
+      dup_reg = X64Reg(Rc_dup_guard);
+    }
+
+    switch (inst.SUBOP5)
+    {
+    case 12:  // ps_muls0
+      MOVSLDUP(dup_reg, Rc);
+      break;
+    case 13:  // ps_muls1
+      MOVSHDUP(dup_reg, Rc);
+      break;
+    default:
+      PanicAlertFmt("ps_muls WTF!!!");
+    }
+
+    if (cpu_info.bAVX)
+    {
+      VMULPS(result_xmm, dup_reg, Ra);
+    }
+    else if (result_xmm == X64Reg(Ra))
+    {
+      MULPS(result_xmm, R(dup_reg));
+    }
+    else
+    {
+      if (result_xmm != dup_reg)
+        MOVAPS(result_xmm, R(dup_reg));
+      MULPS(result_xmm, Ra);
+    }
+
+    if (m_accurate_nans)
+    {
+      const FixupBranch handled_nans =
+          HandleNaNsSingle(inst, result_xmm, XMM0, Ra, std::nullopt, R(dup_reg));
+      SetJumpTarget(handled_nans);
+    }
+
+    if (result_xmm != X64Reg(Rd))
+      MOVAPS(Rd, R(result_xmm));
+    SetFPRFIfNeeded(R(Rd), true);
+    fpr.SetSingle(d, /*is_pair=*/true, /*may_be_snan=*/false);
+    return;
+  }
+
   bool round_input = !js.op->fprIsSingle[c];
 
   RCOpArg Ra = fpr.Use(a, RCMode::Read);
@@ -111,7 +220,7 @@ void Jit64::ps_muls(UGeckoInstruction inst)
     SetJumpTarget(handled_nans);
   }
 
-  FinalizeSingleResult(Rd, R(XMM1));
+  FinalizeSingleResult(d, Rd, R(XMM1));
 }
 
 void Jit64::ps_mergeXX(UGeckoInstruction inst)
@@ -175,7 +284,7 @@ void Jit64::ps_rsqrte(UGeckoInstruction inst)
   CALL(asm_routines.frsqrte);
   MOVLHPS(Rd, XMM0);
 
-  FinalizeSingleResult(Rd, Rd);
+  FinalizeSingleResult(d, Rd, Rd);
 }
 
 void Jit64::ps_res(UGeckoInstruction inst)
@@ -200,7 +309,7 @@ void Jit64::ps_res(UGeckoInstruction inst)
   CALL(asm_routines.fres);
   MOVLHPS(Rd, XMM0);
 
-  FinalizeSingleResult(Rd, Rd);
+  FinalizeSingleResult(d, Rd, Rd);
 }
 
 void Jit64::ps_cmpXX(UGeckoInstruction inst)

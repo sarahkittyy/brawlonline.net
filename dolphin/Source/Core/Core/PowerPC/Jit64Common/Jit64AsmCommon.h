@@ -3,6 +3,9 @@
 
 #pragma once
 
+#include <optional>
+
+#include "Common/BitSet.h"
 #include "Common/CommonTypes.h"
 #include "Core/PowerPC/Jit64Common/EmuCodeBlock.h"
 #include "Core/PowerPC/JitCommon/JitAsmCommon.h"
@@ -16,7 +19,9 @@ class QuantizedMemoryRoutines : public EmuCodeBlock
 public:
   explicit QuantizedMemoryRoutines(Jit64& jit) : EmuCodeBlock(jit) {}
   void GenQuantizedLoad(bool single, EQuantizeType type, int quantize);
-  void GenQuantizedStore(bool single, EQuantizeType type, int quantize);
+  bool GenQuantizedStore(bool single, EQuantizeType type, int quantize,
+                         std::optional<u32> const_addr = std::nullopt,
+                         BitSet32 const_registers_in_use = {});
 
 private:
   void GenQuantizedLoadFloat(bool single, bool isInline);

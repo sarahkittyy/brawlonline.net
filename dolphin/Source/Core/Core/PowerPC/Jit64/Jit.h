@@ -186,13 +186,18 @@ public:
   // PPR_JIT_FPRF_EAGER is set; FlushLazyFPRF makes FPSCR current ahead of code that reads it.
   bool m_fprf_lazy = true;
   void FlushLazyFPRF();
-  void FinalizeSingleResult(Gen::X64Reg output, const Gen::OpArg& input, bool packed = true,
-                            bool duplicate = false);
+  void WidenSingleToDouble(Gen::X64Reg dst, Gen::X64Reg src, bool is_pair, bool may_be_snan);
+  void FinalizeSingleResult(preg_t d, Gen::X64Reg output, const Gen::OpArg& input,
+                            bool packed = true, bool duplicate = false);
   void FinalizeDoubleResult(Gen::X64Reg output, const Gen::OpArg& input);
   [[nodiscard]] Gen::FixupBranch HandleNaNs(UGeckoInstruction inst, Gen::X64Reg xmm,
                                             Gen::X64Reg clobber, std::optional<Gen::OpArg> Ra,
                                             std::optional<Gen::OpArg> Rb,
                                             std::optional<Gen::OpArg> Rc);
+  [[nodiscard]] Gen::FixupBranch HandleNaNsSingle(UGeckoInstruction inst, Gen::X64Reg xmm,
+                                                  Gen::X64Reg clobber, std::optional<Gen::OpArg> Ra,
+                                                  std::optional<Gen::OpArg> Rb,
+                                                  std::optional<Gen::OpArg> Rc);
 
   void MultiplyImmediate(u32 imm, int a, int d, bool overflow);
 

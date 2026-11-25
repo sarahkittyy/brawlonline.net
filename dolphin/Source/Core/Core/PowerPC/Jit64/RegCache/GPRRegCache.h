@@ -18,6 +18,15 @@ public:
 
   void SetImmediate32(preg_t preg, u32 imm_value, bool dirty = true);
 
+  std::span<const PinnedReg> GetPinnedRegisters() const override;
+  BitSetGuest GetPinnedGuestRegisters() const override;
+  Gen::X64Reg GetPinnedHostRegister(preg_t preg) const override;
+
+  static void StorePinnedToPPCState(Gen::XEmitter& emitter,
+                                    BitSetGuest mask = BitSetGuest::AllTrue());
+  static void LoadPinnedFromPPCState(Gen::XEmitter& emitter,
+                                     BitSetGuest mask = BitSetGuest::AllTrue());
+
 protected:
   Gen::OpArg R(preg_t preg) const override;
   Gen::OpArg GetPPCStateLocation(preg_t preg) const override;

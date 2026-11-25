@@ -857,6 +857,7 @@ public:
   void VMULPD(X64Reg regOp1, X64Reg regOp2, const OpArg& arg);
   void VDIVPD(X64Reg regOp1, X64Reg regOp2, const OpArg& arg);
   void VSQRTSD(X64Reg regOp1, X64Reg regOp2, const OpArg& arg);
+  void VCMPPS(X64Reg regOp1, X64Reg regOp2, const OpArg& arg, u8 compare);
   void VCMPPD(X64Reg regOp1, X64Reg regOp2, const OpArg& arg, u8 compare);
   void VSHUFPS(X64Reg regOp1, X64Reg regOp2, const OpArg& arg, u8 shuffle);
   void VSHUFPD(X64Reg regOp1, X64Reg regOp2, const OpArg& arg, u8 shuffle);

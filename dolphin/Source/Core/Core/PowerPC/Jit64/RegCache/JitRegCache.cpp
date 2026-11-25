@@ -234,6 +234,14 @@ RegCache::RegCache(Jit64& jit, XEmitter& emitter) : m_jit{jit}, m_emitter(emitte
 void RegCache::Start()
 {
   m_state = {};
+  for (const auto& [guest, host] : GetPinnedRegisters())
+  {
+    m_state.m_guests_in_host_register[guest] = true;
+    m_state.m_guests_host_register[guest] = host;
+    m_state.m_hosts_in_guest_register[host] = true;
+    m_state.m_hosts_guest_register[host] = guest;
+    m_state.m_guests_in_ppc_state[guest] = false;
+  }
 }
 
 bool RegCache::SanityCheck() const
@@ -271,6 +279,10 @@ RCForkGuard RegCache::Fork()
 
 void RegCache::Discard(BitSetGuest pregs)
 {
+  pregs &= ~GetPinnedGuestRegisters();
+  if (!pregs)
+    return;
+
   ASSERT_MSG(DYNA_REC, !m_state.m_hosts_is_locked, "Someone forgot to unlock a X64 reg");
   const BitSetGuest locked_pregs = pregs & m_state.m_guests_is_locked;
   ASSERT_MSG(DYNA_REC, !locked_pregs, "Someone forgot to unlock the following PPC regs {:b}.",
@@ -288,6 +300,10 @@ void RegCache::Discard(BitSetGuest pregs)
 
   m_state.m_guests_in_ppc_state &= ~pregs;
   m_state.m_guests_in_host_register &= ~pregs;
+  m_state.m_guests_single_pair &= ~pregs;
+  m_state.m_guests_single_duplicated &= ~pregs;
+  m_state.m_guests_single_may_be_snan &= ~pregs;
+  m_state.m_guests_single_raw_load &= ~pregs;
 }
 
 void RegCache::Flush(BitSetGuest pregs, FlushMode mode,
@@ -297,6 +313,40 @@ void RegCache::Flush(BitSetGuest pregs, FlushMode mode,
   ASSERT_MSG(DYNA_REC, !revertable_pregs,
              "Register transaction is in progress for the following PPC regs {:b}.",
              revertable_pregs.m_val);
+
+  const BitSetGuest pinned_pregs = pregs & GetPinnedGuestRegisters();
+  if (pinned_pregs && mode == FlushMode::Full)
+  {
+    const BitSetGuest locked_pinned = pinned_pregs & m_state.m_guests_is_locked;
+    ASSERT_MSG(DYNA_REC, !locked_pinned, "Someone forgot to unlock the following PPC regs {:b}.",
+               locked_pinned.m_val);
+
+    // Pinned registers live permanently in their dedicated host registers across blocks.
+    // Materialize deferred immediates back into their pinned host register and normalize
+    // any single-precision pinned FPRs back to canonical double format.
+    for (const preg_t i : (pinned_pregs & ~m_state.m_guests_in_host_register))
+    {
+      const X64Reg host = GetPinnedHostRegister(i);
+      ASSERT_MSG(DYNA_REC, !m_state.m_hosts_is_locked[host],
+                 "Someone forgot to unlock pinned X64 reg {} (PPC reg {}).",
+                 std::to_underlying(host), i);
+      StoreRegister(i, ::Gen::R(host), ignore_discarded_registers);
+      m_state.m_guests_in_host_register[i] = true;
+      m_state.m_guests_host_register[i] = host;
+      m_state.m_hosts_in_guest_register[host] = true;
+      m_state.m_hosts_guest_register[host] = i;
+    }
+
+    for (const preg_t i :
+         (pinned_pregs & (m_state.m_guests_single_pair | m_state.m_guests_single_duplicated)))
+    {
+      NormalizePinnedRegister(i);
+    }
+  }
+
+  pregs &= ~pinned_pregs;
+  if (!pregs)
+    return;
 
   for (const preg_t i : (pregs & ~m_state.m_guests_in_ppc_state))
   {
@@ -318,6 +368,10 @@ void RegCache::Flush(BitSetGuest pregs, FlushMode mode,
     }
 
     m_state.m_guests_in_host_register &= ~pregs;
+    m_state.m_guests_single_pair &= ~pregs;
+    m_state.m_guests_single_duplicated &= ~pregs;
+    m_state.m_guests_single_may_be_snan &= ~pregs;
+    m_state.m_guests_single_raw_load &= ~pregs;
   }
 
   m_state.m_guests_in_ppc_state |= pregs;
@@ -325,6 +379,10 @@ void RegCache::Flush(BitSetGuest pregs, FlushMode mode,
 
 void RegCache::Reset(BitSetGuest pregs)
 {
+  pregs &= ~GetPinnedGuestRegisters();
+  if (!pregs)
+    return;
+
   const BitSetGuest in_host_register_pregs = pregs & m_state.m_guests_in_host_register;
   ASSERT_MSG(DYNA_REC, !in_host_register_pregs,
              "Attempted to reset the loaded registers {:b} (did you mean to flush them?)",
@@ -385,13 +443,18 @@ void RegCache::DiscardRegister(preg_t preg)
 
   m_state.m_guests_in_ppc_state[preg] = false;
   m_state.m_guests_in_host_register[preg] = false;
+  m_state.m_guests_single_pair[preg] = false;
+  m_state.m_guests_single_duplicated[preg] = false;
+  m_state.m_guests_single_may_be_snan[preg] = false;
+  m_state.m_guests_single_raw_load[preg] = false;
 }
 
 void RegCache::BindToRegister(preg_t i, bool doLoad, bool makeDirty)
 {
   if (!m_state.m_guests_in_host_register[i])
   {
-    const X64Reg xr = GetFreeXReg();
+    const X64Reg pinned = GetPinnedHostRegister(i);
+    const X64Reg xr = pinned != INVALID_REG ? pinned : GetFreeXReg();
 
     ASSERT_MSG(DYNA_REC, !m_state.m_hosts_is_locked[xr], "GetFreeXReg returned locked register");
     ASSERT_MSG(DYNA_REC, !m_state.m_guests_revertable[i], "Invalid transaction state");
@@ -424,6 +487,8 @@ void RegCache::BindToRegister(preg_t i, bool doLoad, bool makeDirty)
 void RegCache::StoreFromRegister(preg_t i, FlushMode mode,
                                  IgnoreDiscardedRegisters ignore_discarded_registers)
 {
+  ASSERT_MSG(DYNA_REC, GetPinnedHostRegister(i) == INVALID_REG,
+             "Attempted to evict pinned PPC reg {}", i);
   // When a transaction is in progress, allowing the store would overwrite the old value.
   ASSERT_MSG(DYNA_REC, !m_state.m_guests_revertable[i],
              "Register transaction on {} is in progress!", i);
@@ -435,6 +500,10 @@ void RegCache::StoreFromRegister(preg_t i, FlushMode mode,
   {
     m_state.m_guests_in_host_register[i] = false;
     m_state.m_hosts_in_guest_register[m_state.m_guests_host_register[i]] = false;
+    m_state.m_guests_single_pair[i] = false;
+    m_state.m_guests_single_duplicated[i] = false;
+    m_state.m_guests_single_may_be_snan[i] = false;
+    m_state.m_guests_single_raw_load[i] = false;
   }
 
   m_state.m_guests_in_ppc_state[i] = true;
@@ -569,6 +638,8 @@ void RegCache::Realize(preg_t preg)
   const bool dirty = m_guests_constraints.ShouldDirty(preg);
   const bool kill_imm = m_guests_constraints.ShouldKillImmediate(preg);
   const bool kill_mem = m_guests_constraints.ShouldKillMemory(preg);
+  const bool require_double = m_guests_constraints.ShouldRequireDouble(preg);
+  const bool want_single_pair = m_guests_constraints.ShouldWantSinglePair(preg);
 
   const auto do_bind = [&] {
     BindToRegister(preg, load, dirty);
@@ -577,11 +648,21 @@ void RegCache::Realize(preg_t preg)
 
   if (m_guests_constraints.ShouldBeRevertable(preg))
   {
-    StoreFromRegister(preg, FlushMode::Undirty);
+    if (GetPinnedHostRegister(preg) != INVALID_REG)
+    {
+      StoreRegister(preg, GetPPCStateLocation(preg), IgnoreDiscardedRegisters::No);
+    }
+    else
+    {
+      StoreFromRegister(preg, FlushMode::Undirty);
+    }
+    OnRealize(preg, load, dirty, require_double, want_single_pair);
     do_bind();
     m_state.m_guests_revertable[preg] = true;
     return;
   }
+
+  OnRealize(preg, load, dirty, require_double, want_single_pair);
 
   if (IsImm(preg))
   {

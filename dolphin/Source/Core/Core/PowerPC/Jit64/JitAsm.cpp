@@ -81,6 +81,9 @@ void Jit64AsmRoutineManager::Generate()
   CMP(32, MatR(RSCRATCH), Imm32(std::to_underlying(CPU::State::Running)));
   FixupBranch advance_exit = J_CC(CC_NE, Jump::Near);
 
+  GPRRegCache::LoadPinnedFromPPCState(*this);
+  FPURegCache::LoadPinnedFromPPCState(*this);
+
   // skip the sync and compare first time
   FixupBranch skipToRealDispatch = J(enable_debugging ? Jump::Near : Jump::Short);
 
@@ -195,10 +198,11 @@ void Jit64AsmRoutineManager::Generate()
   if (!assembly_dispatcher || !m_jit.GetBlockCache()->GetEntryPoints())
   {
     // Ok, no block, let's call the slow dispatcher
-    ABI_PushRegistersAndAdjustStack({}, 0);
+    const BitSet32 pinned_fp_caller_saved = FPURegCache::GetPinnedCallerSavedHostRegisters();
+    ABI_PushRegistersAndAdjustStack(pinned_fp_caller_saved, 0);
     MOV(64, R(ABI_PARAM1), Imm64(reinterpret_cast<u64>(&m_jit)));
     ABI_CallFunction(JitBase::Dispatch);
-    ABI_PopRegistersAndAdjustStack({}, 0);
+    ABI_PopRegistersAndAdjustStack(pinned_fp_caller_saved, 0);
 
     TEST(64, R(ABI_RETURN), R(ABI_RETURN));
     FixupBranch no_block_available = J_CC(CC_Z);
@@ -215,11 +219,15 @@ void Jit64AsmRoutineManager::Generate()
   // otherwise we will generate a second stack overflow exception during DoJit()
   ResetStack(*this);
 
+  GPRRegCache::StorePinnedToPPCState(*this);
+  FPURegCache::StorePinnedToPPCState(*this);
   ABI_PushRegistersAndAdjustStack({}, 0);
   MOV(64, R(ABI_PARAM1), Imm64(reinterpret_cast<u64>(&m_jit)));
   MOV(32, R(ABI_PARAM2), PPCSTATE(pc));
   ABI_CallFunction(JitTrampoline);
   ABI_PopRegistersAndAdjustStack({}, 0);
+  GPRRegCache::LoadPinnedFromPPCState(*this);
+  FPURegCache::LoadPinnedFromPPCState(*this);
 
   // If jitting triggered an ISI exception, MSR.DR may have changed
   MOV(64, R(RMEM), PPCSTATE(mem_ptr));
@@ -228,6 +236,9 @@ void Jit64AsmRoutineManager::Generate()
 
   SetJumpTarget(bail);
   do_timing = GetCodePtr();
+
+  GPRRegCache::StorePinnedToPPCState(*this);
+  FPURegCache::StorePinnedToPPCState(*this);
 
   // make sure npc contains the next pc (needed for exception checking in CoreTiming::Advance)
   MOV(32, R(RSCRATCH), PPCSTATE(pc));
@@ -238,11 +249,16 @@ void Jit64AsmRoutineManager::Generate()
   MOV(64, R(RSCRATCH), ImmPtr(system.GetCPU().GetStatePtr()));
   CMP(32, MatR(RSCRATCH), Imm32(std::to_underlying(CPU::State::Running)));
   J_CC(CC_E, outerLoop);
+  FixupBranch timing_exit = J(Jump::Short);
 
   // Landing pad for drec space
   dispatcher_exit = GetCodePtr();
   if (enable_debugging)
     SetJumpTarget(dbg_exit);
+  GPRRegCache::StorePinnedToPPCState(*this);
+  FPURegCache::StorePinnedToPPCState(*this);
+
+  SetJumpTarget(timing_exit);
   SetJumpTarget(advance_exit);
 
   // Reset the stack pointer, since the BLR optimization may have pushed things onto the stack
