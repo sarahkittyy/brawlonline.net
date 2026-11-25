@@ -17,6 +17,9 @@ export const useSettingsStore = create(
     {
       settings: initialState.settings as SettingsSchema,
       previousVersion: initialState.previousVersion,
+      // The changelog popup's (lib/changelog): read once as the page starts.
+      changelogPending: initialState.changelogPending,
+      changelogSeenAt: initialState.changelogSeenAt,
     },
     (set) => ({
       /**

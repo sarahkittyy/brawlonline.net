@@ -21,6 +21,7 @@ import {
   ipc_accountsFriendsLeaderboard,
   ipc_accountsHasSession,
   ipc_accountsInitNetplay,
+  ipc_accountsLatestChangelog,
   ipc_accountsLauncherSettings,
   ipc_accountsLeaderboard,
   ipc_accountsLogin,
@@ -106,6 +107,7 @@ export default function setupAccountsIpc() {
     async ({ uid, code, name }) => await manager.adminRenameRoom(uid, code, name),
   );
   ipc_accountsRuleset.main!.handle(async ({ code }) => await manager.ruleset(code));
+  ipc_accountsLatestChangelog.main!.handle(async () => await manager.latestChangelog());
   ipc_accountsBrowseRulesets.main!.handle(
     async ({ q, limit, after }) => await manager.browseRulesets({ q, limit, after }),
   );

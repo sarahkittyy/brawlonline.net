@@ -9,6 +9,7 @@ Disallow: /verify-email
 Disallow: /reset-password
 Disallow: /login/
 Disallow: /blog/write/
+Disallow: /changelog/write/
 
 Sitemap: https://brawlonline.net/sitemap.xml
 Sitemap: https://brawlonline.net/blog/sitemap.xml

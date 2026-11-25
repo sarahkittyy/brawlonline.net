@@ -56,13 +56,16 @@ export class SettingsManager extends EventEmitter {
   // This only stores the actually modified settings
   private appSettings: Partial<AppSettings>;
   private setMutex: Mutex;
+  /** No settings were stored when the launcher started: a new install (or a reset one). */
+  readonly freshInstall: boolean;
 
   constructor() {
     super();
     // One listener per subscribing module (onSettingChange), more than Node's warning limit of 10.
     this.setMaxListeners(50);
     this.setMutex = new Mutex();
-    const restoredSettings = electronSettings.getSync() as Partial<AppSettings>;
+    const restoredSettings = (electronSettings.getSync() ?? {}) as Partial<AppSettings>;
+    this.freshInstall = Object.keys(restoredSettings).length === 0;
 
     // If the ISO file no longer exists, don't restore it
     if (restoredSettings.settings?.isoPath) {

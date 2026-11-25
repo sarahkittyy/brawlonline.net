@@ -14,6 +14,7 @@ import {
   ipc_accountsFriendsLeaderboard,
   ipc_accountsHasSession,
   ipc_accountsInitNetplay,
+  ipc_accountsLatestChangelog,
   ipc_accountsLauncherSettings,
   ipc_accountsLeaderboard,
   ipc_accountsLogin,
@@ -151,6 +152,9 @@ const accountsApi: AccountsApi = {
   },
   async ruleset(code) {
     return unwrap(await ipc_accountsRuleset.renderer!.trigger({ code }));
+  },
+  async latestChangelog() {
+    return unwrap(await ipc_accountsLatestChangelog.renderer!.trigger({}));
   },
   async browseRulesets(query) {
     return unwrap(await ipc_accountsBrowseRulesets.renderer!.trigger(query));

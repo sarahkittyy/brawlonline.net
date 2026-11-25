@@ -510,6 +510,15 @@ export type AccountsErrorBody = { code: string; message: string; status?: number
 export type AccountsResult<T> = { ok: true; value: T } | { ok: false; error: AccountsErrorBody };
 
 /** The renderer-facing API exposed through the preload script as `window.electron.accounts`. */
+/** The newest published launcher changelog (`GET /v1/changelogs/latest`, docs/design/changelog.md). */
+export type LatestChangelog = {
+  id: number;
+  /** The blog's renderer's HTML; its images and videos are on the accounts server, relative (`/blog/media/...`). */
+  html: string;
+  /** ISO time of its first publish. */
+  publishedAt: string;
+};
+
 export interface AccountsApi {
   /** Creates the account, stores its session and returns the user. */
   signUp(req: SignUpRequest): Promise<AccountsMe>;
@@ -571,6 +580,8 @@ export interface AccountsApi {
   adminRenameRoom(uid: string, code: string, name: string | null): Promise<string | null>;
   /** A published ruleset by code (public). */
   ruleset(code: string): Promise<RulesetView>;
+  /** The newest published launcher changelog (public); null when there is none. */
+  latestChangelog(): Promise<LatestChangelog | null>;
   /** A page of the public list (`q` searches the name, publisher and code). */
   browseRulesets(query: { q?: string; limit?: number; after?: string }): Promise<RulesetPage>;
   myRulesets(uid: string): Promise<MyRulesets>;

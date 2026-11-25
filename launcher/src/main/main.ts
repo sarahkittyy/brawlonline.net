@@ -28,6 +28,7 @@ import path from "path";
 import { fileExists } from "utils/file_exists";
 
 import { handleAppScheme, LegacyLocalStorage, registerPrivilegedSchemes } from "./app_scheme";
+import { noteLaunchVersion } from "./changelog_version";
 import { getConfigFlags } from "./flags/flags";
 import { installModules } from "./install_modules";
 import { attachInterfaceZoom } from "./interface_zoom";
@@ -489,6 +490,7 @@ const main = async () => {
   }
 
   await appUpdater.verifyPendingUpdate();
+  await noteLaunchVersion(settingsManager, app.getVersion());
   void registerUrlScheme({ packaged: app.isPackaged, testMode: testMode.active });
   await createWindow();
   // The renderer checks once as it starts (initialize_app); a launcher left open keeps checking.

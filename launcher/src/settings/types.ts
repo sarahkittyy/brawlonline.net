@@ -149,6 +149,13 @@ export interface RootSettingsSchema {
   modsHashVersion?: string;
   previousVersion?: string;
   pendingUpdateVersion?: string;
+  // The launcher version that ran last (main/changelog_version.ts); absent before the release with changelogs.
+  lastRunVersion?: string;
+  // This start is the first since an update: the page shows the newest changelog once, if it has one
+  // it hasn't shown (lib/changelog); cleared once it has looked.
+  changelogPending?: boolean;
+  // The publish time (ISO) of the last changelog shown and closed: only newer ones show.
+  changelogSeenAt?: string;
   // The page's localStorage was moved from file:// to app://launcher (main/app_scheme.ts); absent before.
   rendererStorageMoved?: boolean;
 }

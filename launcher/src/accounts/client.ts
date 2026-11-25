@@ -10,6 +10,7 @@ import type {
   AdminUserUpdate,
   BugReportCreated,
   BugReportRequest,
+  LatestChangelog,
   LauncherSettings,
   LeaderboardPage,
   MatchHistoryFilter,
@@ -226,6 +227,11 @@ export class AccountsHttpClient {
 
   ruleset(code: string): Promise<RulesetView> {
     return this._request("GET", `/v1/rulesets/${encodeURIComponent(code)}`, {});
+  }
+
+  async latestChangelog(): Promise<LatestChangelog | null> {
+    const res = await this._request<{ changelog: LatestChangelog | null }>("GET", "/v1/changelogs/latest", {});
+    return res.changelog ?? null;
   }
 
   browseRulesets(query: { q?: string; limit?: number; after?: string }): Promise<RulesetPage> {

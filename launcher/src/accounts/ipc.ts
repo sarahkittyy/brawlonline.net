@@ -9,6 +9,7 @@ import type {
   AdminPlayer,
   AdminUser,
   AdminUserUpdate,
+  LatestChangelog,
   LauncherSettings,
   LeaderboardPage,
   MatchHistoryFilter,
@@ -191,6 +192,12 @@ export const ipc_accountsAdminRenameRoom = makeEndpoint.main(
 );
 
 export const ipc_accountsRuleset = makeEndpoint.main("accounts_ruleset", <{ code: string }>_, <R<RulesetView>>_);
+
+export const ipc_accountsLatestChangelog = makeEndpoint.main(
+  "accounts_latestChangelog",
+  <Record<never, never>>_,
+  <R<LatestChangelog | null>>_,
+);
 
 export const ipc_accountsBrowseRulesets = makeEndpoint.main(
   "accounts_browseRulesets",
