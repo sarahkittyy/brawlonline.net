@@ -3,6 +3,7 @@
 //! the mail settings) from the environment or `server/.env`.
 
 mod badges;
+mod changelog;
 mod filter;
 
 use std::time::Duration as StdDuration;
@@ -74,6 +75,10 @@ enum Cmd {
     /// Bug reports from the launcher's bug button, with their logs zips.
     #[command(subcommand)]
     Bug(BugCmd),
+    /// The launcher's changelogs, shown once after an update (docs/design/changelog.md). The agent
+    /// board publishes them.
+    #[command(subcommand)]
+    Changelog(changelog::ChangelogCmd),
     /// Ranked: ranks and placement (docs/design/ranked-tiers.md).
     #[command(subcommand)]
     Ranked(RankedCmd),
@@ -573,6 +578,9 @@ async fn main() -> anyhow::Result<()> {
         println!("{}", common::playkey::PlayKeySecret::generate_hex());
         return Ok(());
     }
+    if let Cmd::Changelog(changelog::ChangelogCmd::Render) = cli.cmd {
+        return changelog::render();
+    }
     let url = cli.database_url.ok_or_else(|| anyhow::anyhow!("DATABASE_URL is not set"))?;
     let pool = sqlx::postgres::PgPoolOptions::new()
         .max_connections(2)
@@ -705,6 +713,7 @@ async fn main() -> anyhow::Result<()> {
         }
         Cmd::Filter(cmd) => filter::run(&pool, &actor, cmd).await?,
         Cmd::Icon(cmd) => badges::icon(&pool, &actor, cmd).await?,
+        Cmd::Changelog(cmd) => changelog::run(&pool, &actor, cmd).await?,
         Cmd::Badge(cmd) => badges::badge(&pool, &actor, cmd).await?,
         Cmd::MainIcon(cmd) => badges::main_icon(&pool, &actor, cmd).await?,
         Cmd::Stats { days, offset, mm_status_url } => {

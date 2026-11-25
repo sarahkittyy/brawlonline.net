@@ -207,14 +207,6 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/blog/posts/{id}/unpublish", post(blog::unpublish_post))
         .route("/v1/blog/render", post(blog::render_preview))
         .layer(RequestBodyLimitLayer::new(blog::MAX_POST_BYTES + 64 * 1024));
-    // The changelog editor's calls (docs/design/changelog.md): a changelog's Markdown, more than
-    // the 16 KiB below and less than prod nginx's 64 KiB.
-    let changelogs = Router::new()
-        .route("/v1/changelogs", get(changelog::list).post(changelog::create))
-        .route("/v1/changelogs/{id}", get(changelog::get_one).put(changelog::update).delete(changelog::delete))
-        .route("/v1/changelogs/{id}/publish", post(changelog::publish))
-        .route("/v1/changelogs/{id}/unpublish", post(changelog::unpublish))
-        .layer(RequestBodyLimitLayer::new(changelog::BODY_LIMIT));
     let media_limit = usize::try_from(state.cfg.blog_media_max_bytes.saturating_add(1024 * 1024)).unwrap_or(usize::MAX);
     let blog_media =
         Router::new().route("/v1/blog/media", put(blog::upload_media)).layer(RequestBodyLimitLayer::new(media_limit));
@@ -252,8 +244,6 @@ pub fn router(state: AppState) -> Router {
         .route("/blog/write/", get(profile::site_file))
         .route("/blog/write/{file}", get(profile::site_file))
         .route("/v1/changelogs/latest", get(changelog::latest))
-        .route("/changelog/write/", get(profile::site_file))
-        .route("/changelog/write/{file}", get(profile::site_file))
         .route("/login", get(blog::login_redirect))
         .route("/login/", get(profile::site_file))
         .route("/login/{file}", get(profile::site_file))
@@ -316,7 +306,6 @@ pub fn router(state: AppState) -> Router {
         .merge(listings)
         .merge(blog_posts)
         .merge(blog_media)
-        .merge(changelogs)
         .layer(TraceLayer::new_for_http())
         .with_state(state)
 }

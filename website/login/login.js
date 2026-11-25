@@ -12,7 +12,6 @@
     $("done").hidden = false;
     $("done-who").textContent = `${s.user.displayName}${s.user.connectCode ? ` (${s.user.connectCode})` : ""}, ${s.user.email}`;
     $("done-blog").hidden = !BrawlAuth.hasRole(s, "admin");
-    $("done-changelog").hidden = !BrawlAuth.hasRole(s, "admin");
   }
 
   function showForm() {

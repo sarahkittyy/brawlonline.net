@@ -515,8 +515,10 @@ export type LatestChangelog = {
   id: number;
   /** The blog's renderer's HTML; its images and videos are on the accounts server, relative (`/blog/media/...`). */
   html: string;
-  /** ISO time of its first publish. */
+  /** ISO time it was published. */
   publishedAt: string;
+  /** Staging only (the agent board's "show on staging"): shown at every start of a test-mode launcher. */
+  everyStart?: boolean;
 };
 
 export interface AccountsApi {

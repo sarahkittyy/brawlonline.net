@@ -15,6 +15,7 @@ path = "src/main.rs"
 common.workspace = true
 accounts.workspace = true
 anyhow.workspace = true
+base64.workspace = true
 chrono.workspace = true
 clap.workspace = true
 dotenvy = "0.15"

@@ -49,6 +49,7 @@ dependencies = [
  "accounts",
  "anyhow",
  "axum",
+ "base64 0.22.1",
  "chrono",
  "clap",
  "common",

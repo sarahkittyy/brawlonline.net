@@ -1,7 +1,5 @@
-/* The blog editor (/blog/write/, docs/design/blog.md §3), and the launcher's changelog editor
-   (/changelog/write/, <body data-kind="changelog">, docs/design/changelog.md: the text only, no
-   title, address, byline or summary). Admins only. No hash: the list; #<id>: that post or
-   changelog, Markdown on the left, accounts' own rendering of it on the right.
+/* The blog editor (/blog/write/, docs/design/blog.md §3). Admins only. No hash: the list of posts;
+   #<id>: that post, Markdown on the left, accounts' own rendering of it on the right.
 
    - Drafts save themselves 1.5 s after the last change. A published post's changes wait for
      Update (Ctrl+S saves either), so half-typed sentences never go live.
@@ -19,30 +17,7 @@
   const PREVIEW_MS = 300;
   const MAX_UPLOAD = 95 * 1024 * 1024; // accounts' BLOG_MEDIA_MAX_BYTES default (Cloudflare caps at 100 MB)
   const WEBP_MAX_WIDTH = 2400;
-  // What this page edits: blog posts, or the launcher's changelogs.
-  const CHANGELOG = document.body.dataset.kind === "changelog";
-  const KIND = CHANGELOG
-    ? {
-        api: "/v1/changelogs",
-        fields: ["body"],
-        editor: "Changelog editor",
-        backup: "brawlonline.changelog.unsaved",
-        publishQuestion: () => "Publish this changelog? Launchers released after now show it once, after they update.",
-        published: "Published. The next launcher release shows it.",
-        updated: "Updated.",
-        unpublishQuestion: "Take this changelog back? It goes back to being a draft.",
-      }
-    : {
-        api: "/v1/blog/posts",
-        fields: ["title", "slug", "summary", "author", "body"],
-        editor: "Blog editor",
-        backup: "brawlonline.blog.unsaved",
-        publishQuestion: (p) => `Publish "${p.title || "Untitled"}" on the blog now?`,
-        published: "Published. It's on brawlonline.net/blog now.",
-        updated: "Updated. The post shows the changes now.",
-        unpublishQuestion: "Take this post off the blog? It goes back to being a draft.",
-      };
-  const FIELDS = KIND.fields;
+  const FIELDS = ["title", "slug", "summary", "author", "body"];
 
   let post = null; // the server's copy of the open post
   let saving = null; // the save in flight (a Promise)
@@ -93,9 +68,9 @@
     return f;
   }
 
-  /** The fields as typed differ from the server's copy: the body exactly, the rest trimmed. */
   function differs(f, p) {
-    return FIELDS.some((k) => (k === "body" ? f.body !== p.body : (f[k] || "").trim() !== p[k]));
+    return f.title.trim() !== p.title || f.slug.trim() !== p.slug || f.summary.trim() !== p.summary ||
+      f.author.trim() !== p.author || f.body !== p.body;
   }
 
   function dirty() {
@@ -103,7 +78,7 @@
   }
 
   function backupKey(id) {
-    return `${KIND.backup}.${id}`;
+    return `brawlonline.blog.unsaved.${id}`;
   }
 
   // ---------------------------------------------------------------- start
@@ -113,7 +88,7 @@
     BrawlAuth.mountAccount($("account"));
     if (!BrawlAuth.hasRole(session, "admin")) {
       $("gate-text").textContent =
-        `${session.user.displayName} can't write ${CHANGELOG ? "changelogs" : "the blog"}. Log out and in with an admin account (pp-admin user role <email> admin).`;
+        `${session.user.displayName} can't write the blog. Log out and in with an admin account (pp-admin user role <email> admin).`;
       return;
     }
     // Logged out in another tab: back to the login page (with this page to come back to).
@@ -133,10 +108,10 @@
   async function route() {
     const hash = decodeURIComponent(location.hash.slice(1));
     let id = Number(hash);
-    if (hash && !CHANGELOG && !(Number.isInteger(id) && id > 0)) {
+    if (hash && !(Number.isInteger(id) && id > 0)) {
       // #<address> (e.g. /blog/write/#progress-report-1): that post, by its link's last part.
       try {
-        const found = (await api(KIND.api)).find((p) => p.slug === hash.toLowerCase());
+        const found = (await api("/v1/blog/posts")).find((p) => p.slug === hash.toLowerCase());
         if (!found) throw new BrawlAuth.ApiError(404, "not_found", `No post has the address "${hash}".`);
         id = found.id;
         history.replaceState(null, "", `#${id}`);
@@ -158,12 +133,12 @@
 
   async function openList() {
     post = null;
-    document.title = `${KIND.editor} · Brawl Online`;
+    document.title = "Blog editor · Brawl Online";
     show("list");
     const rows = $("post-rows");
     $("list-error").hidden = true;
     try {
-      const posts = await api(KIND.api);
+      const posts = await api("/v1/blog/posts");
       rows.replaceChildren(
         ...posts.map((p) => {
           const li = document.createElement("li");
@@ -202,7 +177,7 @@
   $("new-post").addEventListener("click", async () => {
     $("new-post").disabled = true;
     try {
-      const p = await api(KIND.api, { method: "POST", json: {} });
+      const p = await api("/v1/blog/posts", { method: "POST", json: {} });
       location.hash = String(p.id);
     } catch (e) {
       toast(e.message, true);
@@ -218,25 +193,23 @@
     hideBanner();
     let p;
     try {
-      p = await api(`${KIND.api}/${id}`);
+      p = await api(`/v1/blog/posts/${id}`);
     } catch (e) {
-      toast(e.status === 404 ? `That ${CHANGELOG ? "changelog" : "post"} doesn't exist (any more).` : e.message, true);
+      toast(e.status === 404 ? "That post doesn't exist (any more)." : e.message, true);
       location.hash = "";
       return;
     }
     post = p;
     problem = "";
     FIELDS.forEach((k) => ($(k).value = p[k]));
-    if (!CHANGELOG) {
-      slugFollowsTitle = !p.publishedAt && (p.slug === slugify(p.title) || /^untitled(-\d+)?$/.test(p.slug));
-      lockSlug(!!p.publishedAt);
-      $("slug").closest(".slug-field").classList.remove("bad");
-      $("slug-prefix").textContent = `${location.host}/blog/`;
-    }
+    slugFollowsTitle = !p.publishedAt && (p.slug === slugify(p.title) || /^untitled(-\d+)?$/.test(p.slug));
+    lockSlug(!!p.publishedAt);
+    $("slug").closest(".slug-field").classList.remove("bad");
+    $("slug-prefix").textContent = `${location.host}/blog/`;
     renderStatus();
     renderPreviewNow();
     offerBackup();
-    if (!CHANGELOG && !p.title) $("title").focus();
+    if (!p.title) $("title").focus();
     else $("body").focus();
   }
 
@@ -246,11 +219,9 @@
     const isDirty = dirty();
     $("status").textContent = published ? "Published" : "Draft";
     $("status").className = `status ${post.status}`;
-    if (!CHANGELOG) {
-      $("view").textContent = published ? "View post" : "Preview link";
-      $("view").href = post.viewUrl;
-      $("view").title = published ? "" : "Anyone with this link can read the draft";
-    }
+    $("view").textContent = published ? "View post" : "Preview link";
+    $("view").href = post.viewUrl;
+    $("view").title = published ? "" : "Anyone with this link can read the draft";
     $("publish").textContent = published ? "Update" : "Publish";
     $("publish").disabled = published && !isDirty && !saving;
     $("unpublish").hidden = !published;
@@ -267,7 +238,7 @@
     } else {
       state.textContent = `Saved ${timeText(post.updatedAt)}`;
     }
-    document.title = `${post.title || "Untitled"} · ${KIND.editor}`;
+    document.title = `${post.title || "Untitled"} · Blog editor`;
   }
 
   /** Saves the open post. Resolves once the server has the fields as they were when called. */
@@ -283,25 +254,23 @@
     const id = post.id;
     saving = (async () => {
       try {
-        const p = await api(`${KIND.api}/${id}`, {
+        const p = await api(`/v1/blog/posts/${id}`, {
           method: "PUT",
           json: { ...f, expectedUpdatedAt: post.updatedAt },
         });
         if (!post || post.id !== id) return;
         post = p;
         problem = "";
-        if (!CHANGELOG) {
-          $("slug").closest(".slug-field").classList.remove("bad");
-          $("view").href = p.viewUrl;
-        }
+        $("slug").closest(".slug-field").classList.remove("bad");
+        $("view").href = p.viewUrl;
         if (!dirty()) localStorage.removeItem(backupKey(id));
       } catch (e) {
         problem = e.message;
-        if (!CHANGELOG && (e.code === "bad_slug" || e.code === "slug_taken")) $("slug").closest(".slug-field").classList.add("bad");
+        if (e.code === "bad_slug" || e.code === "slug_taken") $("slug").closest(".slug-field").classList.add("bad");
         if (e.code === "changed_elsewhere") {
           showBanner(e.message, "Load that version", () => openPost(id), "Keep mine", () => {
             // Take the server's current version as the base, then save ours over it.
-            api(`${KIND.api}/${id}`).then((p) => {
+            api(`/v1/blog/posts/${id}`).then((p) => {
               post = p;
               problem = "";
               hideBanner();
@@ -355,14 +324,12 @@
 
   FIELDS.forEach((k) => $(k).addEventListener("input", changed));
 
-  if (!CHANGELOG) {
-    $("title").addEventListener("input", () => {
-      if (slugFollowsTitle) $("slug").value = slugify($("title").value);
-    });
-    $("slug").addEventListener("input", () => {
-      slugFollowsTitle = false;
-    });
-  }
+  $("title").addEventListener("input", () => {
+    if (slugFollowsTitle) $("slug").value = slugify($("title").value);
+  });
+  $("slug").addEventListener("input", () => {
+    slugFollowsTitle = false;
+  });
 
   // A post that was ever published keeps its address: links to it are out there. Edits and
   // Update keep the same post, link and id; only "change" (after a warning) unlocks the address.
@@ -372,7 +339,7 @@
     $("slug-change").hidden = !locked;
   }
 
-  $("slug-change")?.addEventListener("click", () => {
+  $("slug-change").addEventListener("click", () => {
     if (!post) return;
     const ok = confirm(
       `Change this post's address?\n\nLinks people already shared, and search results, point at /blog/${post.slug}. ` +
@@ -392,7 +359,7 @@
     } catch {
       b = null;
     }
-    if (!b || !differs({ ...b, body: b.body || "" }, post)) {
+    if (!b || !differs({ ...b, title: b.title || "", summary: b.summary || "", author: b.author || "" }, post)) {
       localStorage.removeItem(backupKey(post.id));
       return;
     }
@@ -439,15 +406,13 @@
     try {
       await save();
       if (post.status !== "published") {
-        if (!confirm(KIND.publishQuestion(post))) return;
-        post = await api(`${KIND.api}/${post.id}/publish`, { method: "POST" });
-        if (!CHANGELOG) {
-          slugFollowsTitle = false;
-          lockSlug(true);
-        }
-        toast(KIND.published);
+        if (!confirm(`Publish "${post.title || "Untitled"}" on the blog now?`)) return;
+        post = await api(`/v1/blog/posts/${post.id}/publish`, { method: "POST" });
+        slugFollowsTitle = false;
+        lockSlug(true);
+        toast("Published. It's on brawlonline.net/blog now.");
       } else {
-        toast(KIND.updated);
+        toast("Updated. The post shows the changes now.");
       }
     } catch (e) {
       toast(e.message, true);
@@ -457,10 +422,10 @@
   });
 
   $("unpublish").addEventListener("click", async () => {
-    if (!post || !confirm(KIND.unpublishQuestion)) return;
+    if (!post || !confirm("Take this post off the blog? It goes back to being a draft.")) return;
     try {
       await save();
-      post = await api(`${KIND.api}/${post.id}/unpublish`, { method: "POST" });
+      post = await api(`/v1/blog/posts/${post.id}/unpublish`, { method: "POST" });
       toast("Unpublished: it's a draft again.");
     } catch (e) {
       toast(e.message, true);
@@ -471,7 +436,7 @@
   $("delete").addEventListener("click", async () => {
     if (!post || !confirm(`Delete "${post.title || "Untitled"}" for good?`)) return;
     try {
-      await api(`${KIND.api}/${post.id}`, { method: "DELETE" });
+      await api(`/v1/blog/posts/${post.id}`, { method: "DELETE" });
       localStorage.removeItem(backupKey(post.id));
       post = null;
       toast("Deleted.");
@@ -505,31 +470,24 @@
   async function renderPreviewNow() {
     clearTimeout(previewTimer);
     const f = fields();
-    if (!CHANGELOG) {
-      const title = f.title.trim();
-      $("p-title").textContent = title || "Untitled";
-      $("p-title").classList.toggle("empty", !title);
-    }
+    const title = f.title.trim();
+    $("p-title").textContent = title || "Untitled";
+    $("p-title").classList.toggle("empty", !title);
     const seq = ++previewSeq;
     try {
       const r = await api("/v1/blog/render", { method: "POST", json: { markdown: f.body } });
       if (seq !== previewSeq) return;
-      if (!CHANGELOG) {
-        const parts = [post && post.publishedAt ? dateText(post.publishedAt) : "Not published yet"];
-        if (f.author.trim()) parts.push(`by ${f.author.trim()}`);
-        parts.push(`${r.readingMinutes} min read`);
-        $("p-byline").textContent = parts.join(" · ");
-      }
+      const parts = [post && post.publishedAt ? dateText(post.publishedAt) : "Not published yet"];
+      if (f.author.trim()) parts.push(`by ${f.author.trim()}`);
+      parts.push(`${r.readingMinutes} min read`);
+      $("p-byline").textContent = parts.join(" · ");
       // accounts' renderer: raw HTML in the Markdown comes back as text.
       patchPreview(r.html);
       blockLines = Array.isArray(r.blocks) ? r.blocks : [];
       lineTops = null;
       syncPreview();
     } catch (e) {
-      if (seq === previewSeq) {
-        if (CHANGELOG) toast(`Preview failed: ${e.message}`, true);
-        else $("p-byline").textContent = `Preview failed: ${e.message}`;
-      }
+      if (seq === previewSeq) $("p-byline").textContent = `Preview failed: ${e.message}`;
     }
   }
 
@@ -690,7 +648,7 @@
     // A whole post pasted into an empty one: its "# Title" line becomes the title.
     const text = e.clipboardData?.getData("text/plain") || "";
     const m = /^# +(.+)\r?\n/.exec(text);
-    if (m && !CHANGELOG && !$("body").value.trim() && !$("title").value.trim()) {
+    if (m && !$("body").value.trim() && !$("title").value.trim()) {
       e.preventDefault();
       $("title").value = m[1].trim();
       $("title").dispatchEvent(new Event("input"));
