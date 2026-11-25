@@ -1488,8 +1488,14 @@ def mac_run(args: argparse.Namespace) -> None:
     if args.engine:
         if args.engine == "emissary" and not tag:
             die("this stage has no EmissaryRecomp build on the Mac: `emissary build --mac` (after `mac build`)")
+        # Edited there (macOS's python3), not sent: a used profile's Settings file is too big for a command line
+        # (Windows cuts it, and the Mac's shell then saw an unmatched quote).
         settings = f"{profile}/Settings"
-        engine = write(settings, with_play_with(read(settings), args.engine))
+        engine = ('/usr/bin/python3 -c "import json, os, sys; p = sys.argv[1]; '
+                  'd = json.load(open(p)) if os.path.exists(p) and os.path.getsize(p) else {}; '
+                  "d.setdefault('settings', {})['playProjectPlusWith'] = sys.argv[2]; "
+                  'os.makedirs(os.path.dirname(p), exist_ok=True); json.dump(d, open(p, \'w\'), indent=2)" '
+                  f'"{settings}" {args.engine}\n')
         say(f"Play plays Project+ with {'EmissaryRecomp ' + tag if args.engine == 'emissary' else 'Dolphin'}")
     mac(cfg, f'[ -d "{MAC_APP}" ] || {{ echo "no macOS staging build yet: mac build" >&2; exit 1; }}; '
              f'mkdir -p "{profile}"; {mac_seed_pplus(rel, profile) if rel else ""}\n{controls}{engine}'
