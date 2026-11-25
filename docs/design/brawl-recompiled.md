@@ -58,7 +58,7 @@ ADD-ONS
 └──────────────────────────────────────────────────────────────────┘
 ```
 
-What the Brawl Recompiled card shows per state (§5): `Not installed` → **Download (101 MB download, 7.1 GB on disk)**; downloading `43 / 101 MB` with Cancel; `Preparing game files 1,204 / 3,869` with Cancel; `Update available: v0.6.1 (101 MB)` → **Update**; `Update ready, applies when the game closes`; `Needs your Brawl disc` → **Choose disc image**; `Not available on this computer` (macOS until it has a release, a CPU without SSE4.2) with no buttons; errors with **Retry**.
+What the Brawl Recompiled card shows per state (§5): `Not installed` → **Download (101 MB download, 7.1 GB on disk)**; downloading `43 / 101 MB` with Cancel; `Preparing game files 1,204 / 3,869` with Cancel; `Update available: v0.6.1 (101 MB)` → **Update**; `Update ready, applies when the game closes`; `Needs your Brawl disc` → **Choose disc image**; `Not available on this computer` (an Intel Mac: the macOS build is Apple silicon only; a CPU without SSE4.2) with no buttons; errors with **Retry**.
 
 The download figure is the real one for this PC: the AVX2 or the v2 engine only, not both (§7.3).
 
@@ -94,7 +94,7 @@ State is computed in main (`dolphin/recomp/recomp.ts`, like `project_punch.ts`) 
 
 | State | Card shows | Events → next state |
 |---|---|---|
-| `Unavailable` | "Not available on this computer" (macOS until released; CPU without SSE4.2) | none (terminal) |
+| `Unavailable` | "Not available on this computer" (an Intel Mac; CPU without SSE4.2) | none (terminal) |
 | `NeedsDisc` | "Needs your Brawl disc" + **Choose disc image** | valid ISO set → `NotInstalled` (no program) or `PreparingFiles` (program installed, files missing/other disc) |
 | `NotInstalled` | **Download** (`101 MB download, 7.1 GB on disk`) | Download → `Downloading`; ISO cleared/invalid → `NeedsDisc` |
 | `Downloading` | `43 / 101 MB`, Cancel | verified → `PreparingFiles` (or `Ready` if the game files are current); Cancel → previous state, partial file deleted; error → previous state + `error` |
@@ -139,7 +139,7 @@ brawl-recompiled/
 
 ### 7.1 Where they come from
 
-`https://api.github.com/repos/kalomaze/EmissaryRecomp/releases/latest`, as Project Punch's (`PPO_EMISSARY_TAG` installs another tag, to test updates). v0.6.0 (2026-11-12) has `BrawlRecompiled-v0.6.0-Windows.zip` (208 MB: the upstream launcher, `engine/brawl-engine.exe`, `engine_usa.dll` and `engine_usa_v2.dll` for CPUs without AVX2, the loader picks one) and `BrawlRecompiled-v0.6.0-Linux.tar.gz` (118 MB; glibc 2.38+, e.g. Ubuntu 24.04), each with a sha256 digest. macOS has no release yet: the add-on is `unavailable` there.
+`https://api.github.com/repos/kalomaze/EmissaryRecomp/releases/latest`, as Project Punch's (`PPO_EMISSARY_TAG` installs another tag, to test updates). v0.6.0 (2026-11-12) has `BrawlRecompiled-v0.6.0-Windows.zip` (208 MB: the upstream launcher, `engine/brawl-engine.exe`, `engine_usa.dll` and `engine_usa_v2.dll` for CPUs without AVX2, the loader picks one) and `BrawlRecompiled-v0.6.0-Linux.tar.gz` (118 MB; glibc 2.38+, e.g. Ubuntu 24.04), each with a sha256 digest. macOS had no release then. Since card 805 (2026-11-25) a release can carry `EmissaryRecomp-<tag>-macOS.tar.gz` (Apple silicon, built on a Mac by the recomp's `tools/release-macos.sh`), whose program is `Emissary.app/Contents/MacOS/Emissary` (the Dock and Cmd-Tab show "Emissary" and its icon); an Intel Mac stays `unavailable`.
 
 v0.6.0 has no rollback yet (that is PR #2), and no release has the live online companion (§8.2).
 
@@ -314,7 +314,7 @@ Sarah's board, after the UX pass of the whole flow: the Add-ons card in her word
 
 **Progress** (`sidebar.tsx` `EmissarySetupStatus`): while Play is set to it, its download or extraction shows in the sidebar's set-up slot, as P+'s first set-up does: "Downloading EmissaryRecomp N%" by the bytes that came over the network (unpacking stays full), then "Extracting game files N%". The card and the popup show the same job.
 
-**The way there glows once** (`use_emissary_hint.ts`, localStorage `EMISSARY_ADDONS_SEEN`): until Settings > Add-ons has been opened on this computer, the sidebar's Settings button (or the folded tools' menu button), then Settings' Add-ons entry, then the card (on that first visit) glow in the profile hint's gold; a new install or an update to this launcher starts with it unseen. Not on a computer without releases (macOS).
+**The way there glows once** (`use_emissary_hint.ts`, localStorage `EMISSARY_ADDONS_SEEN`): until Settings > Add-ons has been opened on this computer, the sidebar's Settings button (or the folded tools' menu button), then Settings' Add-ons entry, then the card (on that first visit) glow in the profile hint's gold; a new install or an update to this launcher starts with it unseen. Not on a computer without releases (an Intel Mac).
 
 **In the recomp** (EmissaryRecomp `brawlonline/ux`): in the build with Brawl Online's core, F10's options menu has Resume, Graphics, Audio, Controls and Quit Game only: the recomp's own Online, Gameplay (fast-forward, fast menus, save states), Cheats, Mods and System (its updater and restart) are left out, and nothing restarts the program in game (a restart was a new process the launcher didn't know, started without the core's stop). The game always runs at its own speed there (fast menus off). The title card never says "Press Enter to start!" (no press was needed or read: it lifts by itself once the boot shaders are ready); while they compile it says "Compiling shaders... N to go". The game always boots widescreen with the core (SCGetAspectRatio = 1): F10's "Original 4:3" is the plugin's picture shape as on Dolphin, and a 4:3 aspect_mode saved in game can no longer boot the game's Wii aspect at 4:3 (the screen KO desync of 18e14c7a); the "after a restart" note is gone with it. ImGui's display-scale crash fix (e84faa8 from `brawlonline/modes`) is in.
 

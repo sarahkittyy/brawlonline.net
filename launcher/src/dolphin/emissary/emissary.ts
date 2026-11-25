@@ -304,7 +304,8 @@ export async function releaseFeatures(programDir: string): Promise<EmissaryFeatu
   const found: EmissaryFeatures = { readOnlyCard: false, core: false };
   const names = await fs.promises.readdir(programDir).catch(() => [] as string[]);
   const targets = names.filter((n) =>
-    /^(WiiCompiled(\.exe)?|engine_usa.*\.dll|brawl-engine(\.exe)?|libengine.*\.so)$/i.test(n),
+    // Emissary: the macOS program, in Emissary.app/Contents/MacOS.
+    /^(WiiCompiled(\.exe)?|Emissary|engine_usa.*\.dll|brawl-engine(\.exe)?|libengine.*\.so)$/i.test(n),
   );
   const keys = Object.keys(FEATURE_MARKERS) as (keyof EmissaryFeatures)[];
   for (const name of targets) {

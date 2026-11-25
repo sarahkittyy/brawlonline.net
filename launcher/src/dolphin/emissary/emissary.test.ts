@@ -547,6 +547,11 @@ describe("release manifest and features", () => {
       expect(await releaseFeatures(dir)).toEqual({ readOnlyCard: true, core: true });
       await fs.promises.writeFile(path.join(dir, "WiiCompiled.exe"), "BRAWL_ONLINE_IPC BRAWL_SD_VOLATILE_WRITES");
       expect(await releaseFeatures(dir)).toEqual({ readOnlyCard: true, core: false });
+      // macOS: Emissary.app/Contents/MacOS/Emissary.
+      const macos = path.join(dir, "MacOS");
+      await fs.promises.mkdir(macos);
+      await fs.promises.writeFile(path.join(macos, "Emissary"), "BRAWL_ONLINE_CORE BRAWL_SD_VOLATILE_WRITES");
+      expect(await releaseFeatures(macos)).toEqual({ readOnlyCard: true, core: true });
     } finally {
       await fs.promises.rm(dir, { recursive: true, force: true });
     }
