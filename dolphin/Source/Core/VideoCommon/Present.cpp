@@ -19,6 +19,7 @@
 
 #include "Present.h"
 #include "VideoCommon/AbstractGfx.h"
+#include "VideoCommon/Fifo.h"
 #include "VideoCommon/FrameDumper.h"
 #include "VideoCommon/FramebufferManager.h"
 #include "VideoCommon/OnScreenUI.h"
@@ -1040,6 +1041,15 @@ void Presenter::Present(PresentInfo* present_info)
           std::max(GetUpdatedPresentationTime(present_info->intended_present_time),
                    Rollback::PresentStats::PresentHoldUntil(Clock::now()));
       Rollback::PresentStats::TracePresentTarget(present_info->intended_present_time, present_time);
+
+      if (present_info->reason == PresentInfo::PresentReason::Immediate)
+      {
+        // All draws and the EFB->XFB copy for this frame have already finished reading guest RAM;
+        // release any CPU draw-sync wait before sleeping in the present hold / swap.
+        Core::System::GetInstance().GetFifo().PublishGpuReadSeqAhead();
+      }
+
+      Rollback::PresentStats::SetGpuPresentHoldUntil(present_time);
 
       Core::System::GetInstance().GetCoreTiming().SleepUntil(present_time);
 

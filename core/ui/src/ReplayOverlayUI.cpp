@@ -93,8 +93,13 @@ constexpr ImU32 GOLD = IM_COL32(255, 200, 60, 255);
 constexpr ImU32 GOLD_LIT = IM_COL32(255, 226, 122, 255);
 constexpr ImU32 GOLD_SPAN = IM_COL32(255, 200, 60, 115);
 constexpr ImU32 GOLD_SPAN_LIT = IM_COL32(255, 200, 60, 217);
-constexpr ImU32 CLIP_BLUE = IM_COL32(61, 139, 255, 255);
-constexpr ImU32 CLIP_BLUE_HOVER = IM_COL32(90, 160, 255, 255);
+// Clip mode's colour (the clip on the bar, Render, the star being watched): the launcher's, the
+// colour opposite its own (Sarah's board, 2026-11-24: "should use color theory to be the
+// complimentary color to the launcher color that's used as the scrubber"), this blue without it.
+constexpr ImU32 DEFAULT_CLIP = IM_COL32(61, 139, 255, 255);
+constexpr ImU32 DEFAULT_CLIP_HOVER = IM_COL32(90, 160, 255, 255);
+ImU32 s_clip_col = DEFAULT_CLIP;
+ImU32 s_clip_hover = DEFAULT_CLIP_HOVER;
 constexpr ImU32 LIVE_RED = IM_COL32(210, 44, 44, 255);
 constexpr ImU32 DESYNC_RED = IM_COL32(255, 77, 77, 255);
 constexpr ImU32 PANEL = IM_COL32(15, 15, 15, 222);
@@ -353,7 +358,7 @@ bool TextButton(const char* id, const char* label, ImVec2 p, float h, ButtonLook
   const bool pressed = ImGui::InvisibleButton(id, ImVec2(w, h));
   const bool over = ImGui::IsItemHovered();
   ImDrawList* dl = ImGui::GetWindowDrawList();
-  const ImU32 bg = look == ButtonLook::Solid ? (over ? CLIP_BLUE_HOVER : CLIP_BLUE) : (over ? GHOST_HOVER : GHOST_BG);
+  const ImU32 bg = look == ButtonLook::Solid ? (over ? s_clip_hover : s_clip_col) : (over ? GHOST_HOVER : GHOST_BG);
   dl->AddRectFilled(p, ImVec2(p.x + w, p.y + h), bg, 7.0f * scale, round);
   float x = p.x + 12.0f * scale;
   if (icon)
@@ -378,7 +383,7 @@ float RenderSplit(float right, float top, float h, float scale, const std::funct
   ImGui::SetCursorScreenPos(caret0);
   const bool caret = ImGui::InvisibleButton("##replayrendermenu", ImVec2(caret_w, h));
   const bool caret_over = ImGui::IsItemHovered();
-  dl->AddRectFilled(caret0, ImVec2(caret0.x + caret_w, caret0.y + h), caret_over ? CLIP_BLUE_HOVER : CLIP_BLUE,
+  dl->AddRectFilled(caret0, ImVec2(caret0.x + caret_w, caret0.y + h), caret_over ? s_clip_hover : s_clip_col,
                     7.0f * scale, ImDrawFlags_RoundCornersRight);
   dl->AddRectFilled(ImVec2(caret0.x - 1.0f, caret0.y), ImVec2(caret0.x, caret0.y + h), IM_COL32(0, 0, 0, 90));
   IconChevron(dl, ImVec2(caret0.x + caret_w * 0.5f, caret0.y + h * 0.5f), 14.0f * scale, TEXT, false);
@@ -429,7 +434,7 @@ float RenderState(float right, float top, float h, float scale, const std::strin
   const float fs = folder_id.empty() ? 0.0f : h;
   const float w = pad + ts.x + (fs > 0 ? 6.0f * scale + fs : pad);
   const float left = right - w;
-  dl->AddRectFilled(ImVec2(left, top), ImVec2(right, top + h), WithAlpha(CLIP_BLUE, 60), 7.0f * scale);
+  dl->AddRectFilled(ImVec2(left, top), ImVec2(right, top + h), WithAlpha(s_clip_col, 60), 7.0f * scale);
   dl->AddText(ImVec2(left + pad, top + (h - ts.y) * 0.5f), TEXT, text.c_str());
   if (fs > 0)
   {
@@ -722,6 +727,10 @@ void Display(float scale)
   const auto view = Gprb::Replay::Playback::GetOverlayView();
   const ImU32 accent =
       view.has_accent ? IM_COL32(view.accent[0], view.accent[1], view.accent[2], 255) : DEFAULT_ACCENT;
+  // (Hovered: a fifth of the way to white.)
+  const auto lighter = [&view](int i) { return view.clip[i] + (255 - view.clip[i]) / 5; };
+  s_clip_col = view.has_clip ? IM_COL32(view.clip[0], view.clip[1], view.clip[2], 255) : DEFAULT_CLIP;
+  s_clip_hover = view.has_clip ? IM_COL32(lighter(0), lighter(1), lighter(2), 255) : DEFAULT_CLIP_HOVER;
   if (s_hidden)
     return;
 
@@ -919,6 +928,39 @@ void Display(float scale)
       return best;
     };
     const float stars_y = track_y - 14.0f * scale;
+
+    // Clip mode: the clip's ends are grips on the bar, each its own button over the whole grip
+    // drawn (and a little past its sides), submitted first so it wins over the stars and the track
+    // under it. (Sarah's board, 2026-11-24: "i tried to clip something at the start of spectate and
+    // i couldn't drag the left hand scrubber ... it took me like a few tries": only the part of a
+    // grip over the seek area took the press, so a grip at the bar's end, as a clip's start is in a
+    // game's first 20 s, had its outer half and top dead.) Grips nearer each other than their reach
+    // share the space between them at its middle.
+    const float handle_grab = 9.0f * scale;
+    const float handle_reach_y = 15.0f * scale;
+    int handle_hovered = 0, handle_active = 0, handle_activated = 0;
+    if (s_clip_mode)
+    {
+      const float xs = x_of(s_clip_start);
+      const float xe = x_of(s_clip_end);
+      const float mid = (xs + xe) * 0.5f;
+      for (int h = 1; h <= 2; ++h)
+      {
+        const float x0 = h == 1 ? xs - handle_grab : std::max(xe - handle_grab, mid);
+        const float x1 = h == 1 ? std::min(xs + handle_grab, mid) : xe + handle_grab;
+        if (x1 - x0 < 1.0f)
+          continue;
+        ImGui::SetCursorScreenPos(ImVec2(x0, track_y - handle_reach_y));
+        ImGui::InvisibleButton(h == 1 ? "##clipstart" : "##clipend", ImVec2(x1 - x0, handle_reach_y * 2.0f));
+        if (ImGui::IsItemHovered())
+          handle_hovered = h;
+        if (ImGui::IsItemActive())
+          handle_active = h;
+        if (ImGui::IsItemActivated())
+          handle_activated = h;
+      }
+    }
+
     int mark_hovered = -1;
     if (!info.marks.empty())
     {
@@ -932,43 +974,32 @@ void Display(float scale)
         mark_hovered = mark_at(io.MousePos.x);
     }
 
-    // The seek area: the track and some height around it (click or drag to seek).
+    // The seek area: the track and some height around it, and the knob's reach past its ends
+    // (click or drag to seek; a press past an end goes to that end).
     const float seek_top = track_y - 8.0f * scale;
     const float seek_h = 18.0f * scale;
-    ImGui::SetCursorScreenPos(ImVec2(bar_x, seek_top));
-    ImGui::InvisibleButton("##replayseek", ImVec2(bar_w, seek_h));
-    const bool hovered = ImGui::IsItemHovered();
+    ImGui::SetCursorScreenPos(ImVec2(bar_x - handle_grab, seek_top));
+    ImGui::InvisibleButton("##replayseek", ImVec2(bar_w + handle_grab * 2.0f, seek_h));
+    const bool hovered = ImGui::IsItemHovered() || handle_hovered != 0;
     const bool active = ImGui::IsItemActive();
     const auto at = [&](float x) { return std::clamp((x - bar_x) / bar_w, 0.0f, 1.0f); };
-    // Clip mode: the clip's ends are handles on the bar (the nearer one within reach; a press
-    // elsewhere seeks as always). A handle let go shows its frame.
-    const float handle_grab = 9.0f * scale;
-    int handle_hovered = 0;
-    if (s_clip_mode && hovered && !s_dragging && s_clip_handle == 0)
-    {
-      const float ds = std::abs(x_of(s_clip_start) - io.MousePos.x);
-      const float de = std::abs(x_of(s_clip_end) - io.MousePos.x);
-      if (std::min(ds, de) <= handle_grab)
-        handle_hovered = de <= ds ? 2 : 1;
-    }
-    if (hovered && !s_dragging && mark_hovered < 0 && handle_hovered == 0 && s_clip_handle == 0)
+    if (ImGui::IsItemHovered() && !s_dragging && mark_hovered < 0 && s_clip_handle == 0)
       mark_hovered = mark_at(io.MousePos.x);
     // A press on a mark's start plays its highlight once released (no drag, no seek); on a clip's
-    // handle, it moves that end.
+    // grip, it moves that end (a grip let go shows its frame).
     if (ImGui::IsItemActivated())
+      s_mark_held = mark_hovered;
+    if (handle_activated)
     {
-      s_clip_handle = handle_hovered;
-      s_mark_held = handle_hovered ? -1 : mark_hovered;
-      if (handle_hovered)
-      {
-        s_handle_press_x = io.MousePos.x;
-        s_handle_press_frame = handle_hovered == 1 ? s_clip_start : s_clip_end;
-        s_handle_moved = false;
-      }
+      s_clip_handle = handle_activated;
+      s_mark_held = -1;
+      s_handle_press_x = io.MousePos.x;
+      s_handle_press_frame = handle_activated == 1 ? s_clip_start : s_clip_end;
+      s_handle_moved = false;
     }
     if (s_clip_mode && (handle_hovered || s_clip_handle))
       ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
-    if (active && s_clip_handle)
+    if (s_clip_handle && handle_active == s_clip_handle)
     {
       // Moved only once clearly dragged; then by the mouse's movement since the press.
       const float dx = io.MousePos.x - s_handle_press_x;
@@ -989,7 +1020,7 @@ void Display(float scale)
         }
       }
     }
-    else if (!active && s_clip_handle)
+    else if (s_clip_handle)
     {
       // A click on a handle goes there; a drag shows the frame it was left at.
       Control(Gprb::Session::PlaybackCommand::Seek,
@@ -1059,9 +1090,9 @@ void Display(float scale)
       const float bt = std::max(1.0f, std::round(2.0f * scale));
       const ImVec2 b0(xs, track_y - std::round(9.0f * scale));
       const ImVec2 b1(xe, track_y + std::round(9.0f * scale));
-      dl->AddRectFilled(b0, b1, WithAlpha(CLIP_BLUE, 56));
-      dl->AddRectFilled(b0, ImVec2(b1.x, b0.y + bt), CLIP_BLUE);
-      dl->AddRectFilled(ImVec2(b0.x, b1.y - bt), b1, CLIP_BLUE);
+      dl->AddRectFilled(b0, b1, WithAlpha(s_clip_col, 56));
+      dl->AddRectFilled(b0, ImVec2(b1.x, b0.y + bt), s_clip_col);
+      dl->AddRectFilled(ImVec2(b0.x, b1.y - bt), b1, s_clip_col);
       for (int h = 1; h <= 2; ++h)
       {
         const float x = h == 1 ? xs : xe;
@@ -1071,7 +1102,7 @@ void Display(float scale)
         const ImVec2 a(x - hw, track_y - hh);
         const ImVec2 z(x + hw, track_y + hh);
         dl->AddRectFilled(ImVec2(a.x - 2.0f * scale, a.y - 2.0f * scale), ImVec2(z.x + 2.0f * scale, z.y + 2.0f * scale),
-                          CLIP_BLUE, 5.0f * scale);
+                          s_clip_col, 5.0f * scale);
         dl->AddRectFilled(a, z, IM_COL32(255, 255, 255, 255), 4.0f * scale);
         for (float gx : {-1.5f, 1.5f})
         {
@@ -1087,12 +1118,12 @@ void Display(float scale)
       const float r = lit ? mark_r * 1.3f : mark_r;
       const ImVec2 c(x_of(mark.start), stars_y);
       // (Sarah's board, 2026-11-20: "a blue outline on the star on the last clip you selected
-      // that you're currently on / rendering".)
+      // that you're currently on / rendering"; clip mode's colour since.)
       const auto* job = render_of(mark.start, mark.end);
       const bool outlined =
           static_cast<int>(i) == watching || (job && (job->state == "queued" || job->state == "rendering"));
       if (outlined)
-        Star(dl, c, r * 1.45f, CLIP_BLUE);
+        Star(dl, c, r * 1.45f, s_clip_col);
       else
         Star(dl, ImVec2(c.x, c.y + 1.0f * scale), r * 1.12f, IM_COL32(0, 0, 0, 140));
       Star(dl, c, r, lit ? GOLD_LIT : GOLD);

@@ -151,6 +151,18 @@ template <bool is_preprocess>
 class RunCallback final : public Callback
 {
 public:
+  RunCallback()
+      : m_fifo(Core::System::GetInstance().GetFifo()), m_det(m_fifo.UseDeterministicGPUThread())
+  {
+  }
+
+  OPCODE_CALLBACK(bool ShouldAbort() const)
+  {
+    if constexpr (is_preprocess)
+      return false;
+    else
+      return !m_in_display_list && m_det && m_fifo.AbortForRollback();
+  }
   OPCODE_CALLBACK(void OnXF(u16 address, u8 count, const u8* data))
   {
     m_cycles += 18 + 6 * count;
@@ -229,7 +241,7 @@ public:
 
     if constexpr (is_preprocess)
     {
-      LoadBPRegPreprocess(command, value, m_cycles);
+      LoadBPRegPreprocess(command, value, m_cycles, m_in_display_list);
       if (m_rec && PreprocessedBP(command))
       {
         m_rec->effects.push_back({1, command, 0, value, 0, rec_gap});
@@ -255,9 +267,12 @@ public:
         m_rec->effects.push_back({2, static_cast<u8>(array), address, index, size, rec_gap});
         m_rec_last = m_cycles;
       }
+      m_fifo.NotePreprocessRead();
     }
     else
+    {
       LoadIndexedXF(array, index, address, size);
+    }
   }
   OPCODE_CALLBACK(void OnPrimitiveCommand(OpcodeDecoder::Primitive primitive, u8 vat,
                                           u32 vertex_size, u16 num_vertices, const u8* vertex_data))
@@ -280,6 +295,8 @@ public:
 
     // 4 GPU ticks per vertex, 3 CPU ticks per GPU tick
     m_cycles += num_vertices * 4 * 3 + 6;
+    if constexpr (is_preprocess)
+      m_fifo.NotePreprocessRead();
   }
   // This can't be inlined since it calls Run, which makes it recursive
   // m_in_display_list prevents it from actually recursing infinitely, but there's no real benefit
@@ -356,6 +373,8 @@ public:
       }
 
       m_in_display_list = false;
+      if constexpr (is_preprocess)
+        m_fifo.NotePreprocessRead();
     }
   }
   OPCODE_CALLBACK(void OnNop(u32 count))
@@ -513,6 +532,8 @@ public:
     slot.entry = std::move(entry);
   }
 
+  Fifo::FifoManager& m_fifo;
+  bool m_det = false;
   u32 m_cycles = 0;
   bool m_in_display_list = false;
   DlEntry* m_rec = nullptr;  // the display list whose parse is being recorded

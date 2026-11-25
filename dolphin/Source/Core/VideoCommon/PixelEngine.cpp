@@ -192,9 +192,18 @@ void PixelEngineManager::SetTokenFinish_OnMainThread(u64 userdata, s64 cycles_la
     const char* v = std::getenv("PPR_MACHINE_GPU_DRAW_SYNC");
     return !v || std::string_view(v) != "0";
   }();
+  static const bool read_wait = [] {
+    const char* v = std::getenv("PPR_MACHINE_GPU_READ_WAIT");
+    return !v || std::string_view(v) != "0";
+  }();
   auto& fifo = m_system.GetFifo();
   if (draw_sync && fifo.UseDeterministicGPUThread() && Machine::IsArmed())
-    fifo.SyncGPU(Fifo::SyncGPUReason::Other, false);
+  {
+    if (read_wait)
+      fifo.WaitForGpuReads();
+    else
+      fifo.SyncGPU(Fifo::SyncGPUReason::Other, false);
+  }
 
   std::unique_lock lk(m_token_finish_mutex);
   m_event_raised = false;

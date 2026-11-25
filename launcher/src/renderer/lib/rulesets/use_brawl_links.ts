@@ -3,7 +3,10 @@ import { useQueryClient } from "@tanstack/react-query";
 import log from "electron-log";
 import { useCallback, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
+import { create as createStore } from "zustand";
 
+import { DolphinStatus, useDolphinStore } from "@/lib/dolphin/use_dolphin_store";
+import { usePlay } from "@/lib/dolphin/use_play";
 import { useAccount } from "@/lib/hooks/use_account";
 import { useLoginModal } from "@/lib/hooks/use_login_modal";
 import { useToasts } from "@/lib/hooks/use_toasts";
@@ -19,8 +22,8 @@ import { rememberedRulesetKey, rulesetTitle } from "./use_remembered_ruleset";
  * Acts on `brawlonline://` links (src/common/brawl_link.ts) while the main page is up:
  * `room/create?ruleset=<code>` makes the code the account's remembered ruleset (Home's box shows
  * it from then on) and creates a room with it, as Create room does; `&private=1`: a private room. `room/join?code=` joins
- * the room as Join their room does, and `watch?stream=` watches that live game (the Discord activity's buttons). Links
- * that came in before the page was up are taken when it mounts.
+ * the room as Join their room does, and `watch?stream=` watches that live game (the Discord activity's buttons). `play`
+ * is Play with the game booted (PlayLinks). Links that came in before the page was up are taken when it mounts.
  */
 export const useBrawlLinks = () => {
   const { backendService } = useServices();
@@ -33,6 +36,11 @@ export const useBrawlLinks = () => {
   const handle = useCallback(
     async (link: BrawlLink) => {
       const uid = useAccount.getState().user?.uid;
+      if (link.kind === "play") {
+        navigate("/main/play");
+        usePlayLink.setState({ at: Date.now() });
+        return;
+      }
       if (!uid) {
         if (link.kind === "create-room") {
           showWarning(Messages.logInFirst());
@@ -95,4 +103,36 @@ export const useBrawlLinks = () => {
     take();
     return window.electron.common.onBrawlLink(take);
   }, [handle]);
+};
+
+/** When a `brawlonline://play` link came in, until PlayLinks runs it; 0: none. */
+const usePlayLink = createStore<{ at: number }>(() => ({ at: 0 }));
+
+/** A play link older than this when Dolphin gets ready is dropped. */
+const PLAY_LINK_WAIT_MS = 3 * 60_000;
+
+/**
+ * Runs `brawlonline://play`: Play with the game booted, offline when nobody is logged in, once Dolphin is ready (a
+ * launcher the link just started may still be checking it). Its own component, so Play's hooks re-render it alone.
+ */
+export const PlayLinks = () => {
+  const play = usePlay();
+  const status = useDolphinStore((s) => s.netplayStatus);
+  const at = usePlayLink((s) => s.at);
+  useEffect(() => {
+    if (!at) {
+      return;
+    }
+    if (Date.now() - at > PLAY_LINK_WAIT_MS) {
+      log.warn("brawlonline://play: Dolphin was not ready in time");
+      usePlayLink.setState({ at: 0 });
+      return;
+    }
+    if (status !== DolphinStatus.READY) {
+      return;
+    }
+    usePlayLink.setState({ at: 0 });
+    void play({ bootGame: true, offlineOnly: !useAccount.getState().user?.uid });
+  }, [at, status, play]);
+  return null;
 };

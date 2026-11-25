@@ -19,6 +19,7 @@ import { HighlightListMessages as Messages } from "@/pages/replays/replay_file_s
 import { renderStatusText } from "@/pages/replays/replay_file_stats/highlights/render_jobs";
 import { clipVideoName, replayDateOf } from "@/pages/replays/replay_file_stats/highlights/render_names";
 import { useServices } from "@/services";
+import { clipColorOf } from "@/styles/theme_color";
 
 import type { RenderAsk } from "./playback_overlay";
 import { clipLength, cssColorToHex, findClip, findHighlight } from "./playback_overlay";
@@ -96,7 +97,10 @@ export const usePlaybackOverlay = () => {
           toasts.push(toastOf(t.job, t.ask, t.label, t.doneAt == null || now - t.doneAt < DONE_SHOWN_MS));
         }
       }
-      const overlay: PlaybackOverlayFile = { ...(accent ? { accent } : {}), toasts: toasts.slice(-MAX_KEPT) };
+      const overlay: PlaybackOverlayFile = {
+        ...(accent ? { accent, clip: clipColorOf(accent) } : {}),
+        toasts: toasts.slice(-MAX_KEPT),
+      };
       const text = JSON.stringify(overlay);
       if (text !== lastSent) {
         lastSent = text;

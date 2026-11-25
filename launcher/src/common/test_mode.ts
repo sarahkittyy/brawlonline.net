@@ -9,6 +9,9 @@
 //   PPO_PPLUS_RELEASE          JSON {version, url, size, sha256}: the P+ release zip to install instead
 //                              of the pinned one (a small zip served from localhost)
 //
+// On macOS, test mode also runs with Chromium's use-mock-keychain (main.ts): no keychain prompts
+// for a staging build's new ad hoc signature, and the real install's keychain item is left alone.
+//
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 export type TestModeOptions = {

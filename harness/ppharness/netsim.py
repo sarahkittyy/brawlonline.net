@@ -35,6 +35,10 @@ Timing model (per direction, per client)::
 * ``max_datagram``: a datagram with more payload bytes is dropped ("fragment"), as on a
   path that drops IP fragments (some routers, CGNATs and ISPs do): on a 1500-byte MTU
   anything over 1472 bytes of UDP payload goes as fragments.
+* ``train_pass``: of the large datagrams (TRAIN_MIN_SIZE bytes or more) that arrive back to
+  back (each less than TRAIN_GAP_S after the one before), only the first N pass ("train"), as
+  on a path with a tiny queue or a burst policer for the class they are marked with (bug report
+  #336: no host state message of 4-6 pieces reached the far joiners, while 1-2 pieces did).
 
 Scheduling: a heap of (deadline, packet) served by one thread using
 ``time.perf_counter`` (QPC on Windows). It waits on a Condition until ~2 ms before the
@@ -127,6 +131,7 @@ class LinkProfile:
     queue_ms: float = 250.0            # max queueing delay before tail drop (with rate_kbps)
     order: str = "fifo"                # fifo | none (see module docstring)
     max_datagram: int | None = None    # larger datagrams are dropped (a path that drops fragments)
+    train_pass: int | None = None      # of large back-to-back datagrams only the first N pass
 
     def __post_init__(self) -> None:
         if self.jitter_dist not in ("normal", "uniform", "pareto"):
@@ -161,6 +166,8 @@ class LinkProfile:
             parts.append(f"{self.rate_kbps:g} kbit/s")
         if self.max_datagram:
             parts.append(f"drops datagrams over {self.max_datagram} bytes")
+        if self.train_pass:
+            parts.append(f"passes {self.train_pass} large datagrams of a back-to-back train")
         return ", ".join(parts)
 
 
@@ -407,6 +414,9 @@ class LinkModel:
     """Fate of packets on one direction of one client's link. Pure apart from its RNG."""
 
     UNIFORMS_PER_PACKET = 6
+    # train_pass: what counts as a large datagram and as back to back.
+    TRAIN_MIN_SIZE = 1000
+    TRAIN_GAP_S = 0.003
 
     def __init__(self, rng: random.Random):
         self.rng = rng
@@ -415,6 +425,8 @@ class LinkModel:
         self.last_arrival: float | None = None
         self.link_free_at = 0.0
         self.last_delivery = 0.0
+        self.train_at: float | None = None  # the last large datagram's arrival
+        self.train_len = 0
 
     def _jitter(self, prof: LinkProfile, jitter_ms: float, u: float, now: float) -> float:
         if jitter_ms <= 0:
@@ -473,6 +485,12 @@ class LinkModel:
 
         if prof.max_datagram and size > prof.max_datagram:
             return Decision([], "fragment")
+        if prof.train_pass and size >= self.TRAIN_MIN_SIZE:
+            back_to_back = self.train_at is not None and now - self.train_at < self.TRAIN_GAP_S
+            self.train_at = now
+            self.train_len = self.train_len + 1 if back_to_back else 1
+            if self.train_len > prof.train_pass:
+                return Decision([], "train")
         if u_loss < prof.loss:
             return Decision([], "loss")
         if burst_drop:
@@ -979,6 +997,7 @@ _LINK_FLAGS: list[tuple[str, str, type, str]] = [
     ("rate-kbps", "rate_kbps", float, "bandwidth cap, kbit/s"),
     ("queue-ms", "queue_ms", float, "max queueing delay before tail drop, ms"),
     ("max-datagram", "max_datagram", int, "drop datagrams over N payload bytes (1472: a path that drops IP fragments)"),
+    ("train-pass", "train_pass", int, "of large back-to-back datagrams only the first N pass (a tiny queue)"),
 ]
 
 

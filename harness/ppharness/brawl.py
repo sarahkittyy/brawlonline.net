@@ -1404,7 +1404,7 @@ class _Learned(dict):
 
 
 LEARNED_CSS: _Learned = _Learned()   # MuSelchkind -> hand (x, y) inside its icon
-LEARNED_SSS: _Learned = _Learned()   # (page, position) -> cursor (x, y)
+LEARNED_SSS: _Learned = _Learned()   # (page, its stage count, position) -> cursor (x, y)
 
 
 def _serpentine(xs: Tuple[float, float], ys: Sequence[float]) -> List[Tuple[float, float]]:
@@ -1737,16 +1737,25 @@ def sss_pick_stage(drv: Driver, stage_kind: int, port: int = 0, timeout_frames: 
 
     ``button`` other than "A" (e.g. "X", P+'s stage strike): press it on the stage instead and
     return at once, without waiting for the screen to take anything. ``held`` (e.g. ["L"], P+'s
-    alternate stages) is held together with A."""
-    targets = stage_positions(stage_kind, drv.read_mem)
-    if not targets:
-        raise RecipeError(f"stage kind {stage_kind:#x} is not on any P+ stage page")
+    alternate stages) is held together with A.
+
+    The pages are read once the stage select has settled: a set's stage select (Ranked's, a
+    room's) writes its own page as it sets its pages up, a few frames after the scene changes, so
+    pages read on arrival can still be P+'s (Battlefield at page 0 position 17 instead of the set
+    page's bottom row). Learned cursor spots are kept per page layout (its stage count)."""
     start = polls(drv)
     while polls(drv) - start < 300:
         v = read_sss(drv.read_mem)
         if v is not None and v.clock >= 40:
             break
         step(drv, 2)
+    pages = read_stage_pages(drv.read_mem)
+    targets = [(p, i) for p, page in enumerate(pages) for i, k in enumerate(page) if k == stage_kind]
+    if not targets:
+        raise RecipeError(f"stage kind {stage_kind:#x} is not on any P+ stage page")
+
+    def learned_key(page: int, pos: int) -> Tuple[int, int, int]:
+        return (page, len(pages[page]) if 0 <= page < len(pages) else -1, pos)
     route = _serpentine(SSS_SCAN_X, SSS_SCAN_Y)
     wp, stuck = 0, 0
     wp_deadline: Optional[int] = None
@@ -1783,7 +1792,7 @@ def sss_pick_stage(drv: Driver, stage_kind: int, port: int = 0, timeout_frames: 
         x, y = v.cursor_x, v.cursor_y
         pos = sss_position_under_cursor(v)
         if pos >= 0:
-            LEARNED_SSS.add((v.page, pos), x, y)
+            LEARNED_SSS.add(learned_key(v.page, pos), x, y)
         page_targets = [t for t in targets if t[0] == v.page] or targets
         if is_target(v):
             neutral(drv, port)
@@ -1802,7 +1811,7 @@ def sss_pick_stage(drv: Driver, stage_kind: int, port: int = 0, timeout_frames: 
                     step(drv, 1)
             prev = None
             continue
-        known = [LEARNED_SSS[t] for t in page_targets if t in LEARNED_SSS]
+        known = [LEARNED_SSS[k] for k in (learned_key(*t) for t in page_targets) if k in LEARNED_SSS]
         log.debug("sss want %#x: cursor (%.2f, %.2f) page %d hovered %d state %d known=%s r=%.1f wp=%d",
                   stage_kind, x, y, v.page, v.hovered_item, v.state, known[:1], radius, wp)
         if known:

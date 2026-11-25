@@ -159,6 +159,9 @@ struct OverlayView
 {
   bool has_accent = false;
   u8 accent[3] = {0, 0, 0};
+  // Clip mode's colour (the launcher's opposite).
+  bool has_clip = false;
+  u8 clip[3] = {0, 0, 0};
   std::vector<OverlayToast> toasts;
 };
 OverlayView GetOverlayView();

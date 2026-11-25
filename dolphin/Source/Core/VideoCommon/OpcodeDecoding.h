@@ -120,6 +120,8 @@ public:
     const CPState& cpmem = GetCPState();
     return VertexLoaderBase::GetVertexSize(cpmem.vtx_desc, cpmem.vtx_attr[vat]);
   }
+
+  virtual bool ShouldAbort() const { return false; }
 #endif
 };
 
@@ -274,6 +276,8 @@ DOLPHIN_FORCE_INLINE u32 Run(const u8* data, u32 available,
   u32 size = 0;
   while (size < available)
   {
+    if (callback.ShouldAbort())
+      break;
     const u32 command_size = RunCommand(&data[size], available - size, callback);
     if (command_size == 0)
       break;

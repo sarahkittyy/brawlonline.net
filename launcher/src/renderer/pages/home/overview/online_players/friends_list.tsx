@@ -312,13 +312,17 @@ const ActivityLine = ({ activity }: { activity: FriendActivity }) => {
   }
 };
 
-/** JOIN a friend's room (FULL when it has no empty slot), WATCH their game. */
+/**
+ * JOIN a friend's room, WATCH their game: a full room's game too (FULL only when the room has no empty
+ * slot and no game to watch).
+ */
 const ActivityAction = ({ activity }: { activity: FriendActivity }) => {
-  const uid = useSocial((s) => s.state.you);
-  const { showError } = useToasts();
   const [busy, setBusy] = useState(false);
   if (activity.kind === "room" && !activity.yours) {
     const room = activity.room;
+    if (!room.joinable && activity.game) {
+      return <WatchPill game={activity.game} />;
+    }
     return (
       <Tooltip title={room.joinable ? Messages.joinTooltip() : ""} placement="top" disableInteractive={true}>
         <span>
@@ -339,32 +343,43 @@ const ActivityAction = ({ activity }: { activity: FriendActivity }) => {
       </Tooltip>
     );
   }
-  if (activity.kind === "game" && uid) {
-    const game = activity.game;
-    return (
-      <Tooltip title={Messages.watchTooltip()} placement="top" disableInteractive={true}>
-        <button
-          type="button"
-          className={styles.pill}
-          disabled={busy}
-          onClick={(e) => {
-            e.stopPropagation();
-            setBusy(true);
-            void window.electron.spectate
-              .watch(uid, game.id)
-              .then((r) => {
-                if (!r.ok) {
-                  showError(r.message);
-                }
-              })
-              .catch((err) => showError(err))
-              .finally(() => setBusy(false));
-          }}
-        >
-          {Messages.watchShort()}
-        </button>
-      </Tooltip>
-    );
+  if (activity.kind === "game") {
+    return <WatchPill game={activity.game} />;
   }
   return null;
+};
+
+/** WATCH a friend's game in the playback Dolphin, as Spectate's Watch does. */
+const WatchPill = ({ game }: { game: LiveGameEntry }) => {
+  const uid = useSocial((s) => s.state.you);
+  const { showError } = useToasts();
+  const [busy, setBusy] = useState(false);
+  if (!uid) {
+    return null;
+  }
+  return (
+    <Tooltip title={Messages.watchTooltip()} placement="top" disableInteractive={true}>
+      <button
+        type="button"
+        className={styles.pill}
+        disabled={busy}
+        data-testid={`friend-watch-${game.id}`}
+        onClick={(e) => {
+          e.stopPropagation();
+          setBusy(true);
+          void window.electron.spectate
+            .watch(uid, game.id)
+            .then((r) => {
+              if (!r.ok) {
+                showError(r.message);
+              }
+            })
+            .catch((err) => showError(err))
+            .finally(() => setBusy(false));
+        }}
+      >
+        {Messages.watchShort()}
+      </button>
+    </Tooltip>
+  );
 };

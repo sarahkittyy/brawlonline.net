@@ -1096,17 +1096,22 @@ void FollowOverlay()
   if (!text.empty() && picojson::parse(root, text).empty() && root.is<picojson::object>())
   {
     const auto& o = root.get<picojson::object>();
-    if (const auto a = o.find("accent"); a != o.end() && a->second.is<std::string>())
-    {
+    // "#rrggbb" colours: the launcher's, and clip mode's (the one opposite it).
+    const auto color = [&o](const char* key, bool* has, u8* rgb) {
+      const auto a = o.find(key);
+      if (a == o.end() || !a->second.is<std::string>())
+        return;
       const std::string& hex = a->second.get<std::string>();
       if (hex.size() == 7 && hex[0] == '#' &&
           std::all_of(hex.begin() + 1, hex.end(), [](char c) { return std::isxdigit(static_cast<unsigned char>(c)); }))
       {
-        v.has_accent = true;
+        *has = true;
         for (int i = 0; i < 3; ++i)
-          v.accent[i] = static_cast<u8>(std::stoi(hex.substr(1 + i * 2, 2), nullptr, 16));
+          rgb[i] = static_cast<u8>(std::stoi(hex.substr(1 + i * 2, 2), nullptr, 16));
       }
-    }
+    };
+    color("accent", &v.has_accent, v.accent);
+    color("clip", &v.has_clip, v.clip);
     if (const auto t = o.find("toasts"); t != o.end() && t->second.is<picojson::array>())
     {
       for (const auto& item : t->second.get<picojson::array>())

@@ -234,6 +234,15 @@ public:
   // while a network session runs.
   using PacedSleepLead = DT (*)();
   void SetPacedSleepLead(PacedSleepLead lead) { m_paced_sleep_lead = lead; }
+  // Every throttle sleep ends `reserve` before its target, so the CPU thread runs that far ahead
+  // of schedule. A whole-machine session sets it to a rollback's expected time: the CPU then comes
+  // to the frame's boundary that early, and the session's boundary sleep has that time for a
+  // rollback's load and re-runs (or sleeps it out), where without it a game whose throttle slept
+  // at a poll after its copy came to the boundary with nothing left. Any thread; zero: none.
+  void SetThrottleReserve(DT reserve)
+  {
+    m_throttle_reserve.store(reserve, std::memory_order_relaxed);
+  }
   // Gameplay-only rollback leaves the sound system out of the snapshot, so a sound keeps playing
   // through a rollback. With this mode set (for the whole session), the audio clock waits for the
   // resimulated passes: the session adds the fields each one takes to a pause that the audio DMA
@@ -343,6 +352,7 @@ private:
 
   std::atomic<bool> m_pace_on{false};  // SetPresentPacing
   PacedSleepLead m_paced_sleep_lead = nullptr;
+  std::atomic<DT> m_throttle_reserve{DT{}};  // SetThrottleReserve
 
   s64 m_throttle_reference_cycle = 0;
   TimePoint m_throttle_reference_time = Clock::now();

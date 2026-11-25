@@ -1341,6 +1341,42 @@ def test_direct_match_on_a_path_that_drops_ip_fragments(backend: OnlineBackend,
             sim.stop()
 
 
+def test_direct_match_on_a_path_that_passes_only_two_datagrams_of_a_burst(
+        backend: OnlineBackend, dolphin: Callable[..., DolphinInstance], gpu_backend: str) -> None:
+    """Bug report #336 (2026-11-24): every game one player hosted against far players ended at
+    the barrier "peer timed out", while the games they joined, and those they hosted for a
+    nearby friend, worked. At the barrier the host's state is 4-6 'F' pieces sent back to back,
+    and none of its copies reached those joiners whole (1-2 piece messages did), so the joiner
+    dropped the host 7.2 s after the host got there: a copy was lost with any of its pieces.
+    Here netsim passes only the first two large datagrams of a back-to-back train (train_pass 2,
+    both ways): the match starts on both, as the joiner puts the host's state together from the
+    pieces of several copies (one id while the text stays the same, each copy starting a piece
+    further on)."""
+    sims, inis = _p2p_through_netsim(LinkProfile(train_pass=2))
+    try:
+        a, b, _, _ = _connected_direct(backend, dolphin, gpu_backend, "gameplay-burst-train",
+                                       ("otis", "pia"), dolphin_ini=inis)
+        try:
+            online_set.wait(lambda: all(online_set.gstatus(g.c)["phase"] == "running"
+                                        for g in (a, b)), 120, "the match to run on both")
+        finally:
+            print(sims[0].format_stats())
+            for g in (a, b):
+                st = online_set.gstatus(g.c)
+                print(g.name, st["phase"], st.get("error"), st.get("end_reason"))
+        a.steps("wait 120")
+        assert all(online_set.gstatus(g.c)["phase"] == "running" for g in (a, b))
+        # The path did drop pieces (else this would pass without the fix).
+        stats = sims[0].stats()
+        assert sum(stats[d]["dropped_by_reason"].get("train", 0) for d in ("up", "down")) > 0, \
+            sims[0].format_stats()
+        for g in (a, b):
+            g.c.mm_cancel()
+    finally:
+        for sim in sims:
+            sim.stop()
+
+
 _PEER_WAIT = re.compile(r"gprb: waited (\d+) ms at frame (\d+) for the other players' inputs; "
                         r"nothing came for up to: P(\d) (\S*) (\d+) ms")
 

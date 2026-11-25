@@ -691,22 +691,25 @@ void CoreTimingManager::Throttle(const s64 target_cycle)
 
   UpdateVISkip(time, target_time);
 
+  // The sleep's end: the target less the session's reserve (SetThrottleReserve).
+  const TimePoint sleep_until = target_time - m_throttle_reserve.load(std::memory_order_relaxed);
+
   // The paced sleep (the first throttle after a presented copy) with a rollback session's lead.
   const bool paced_lead = !already_throttled && m_paced_sleep_lead && PresentPacingActive();
-  if (!paced_lead && target_time > time)
-    m_throttle_sleep += target_time - time;
+  if (!paced_lead && sleep_until > time)
+    m_throttle_sleep += sleep_until - time;
   {
     Rollback::FrameProfile::Scope sleep_scope{Rollback::FrameProfile::AddThrottle};
     if (paced_lead)
     {
       // The CPU's slack is what it slept: a rollback run in the rest of the sleep is not slack.
-      const TimePoint woke = std::min(PacedSleepUntil(target_time), target_time);
+      const TimePoint woke = std::min(PacedSleepUntil(sleep_until), sleep_until);
       if (woke > time)
         m_throttle_sleep += woke - time;
     }
     else
     {
-      SleepUntil(target_time);
+      SleepUntil(sleep_until);
     }
   }
   if (Rollback::PresentStats::PresentTraceEnabled())

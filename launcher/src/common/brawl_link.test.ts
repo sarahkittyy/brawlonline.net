@@ -66,6 +66,12 @@ describe("brawlonline:// links", () => {
     });
   });
 
+  it("reads play", () => {
+    expect(parseBrawlLink("brawlonline://play")).toEqual({ kind: "play" });
+    expect(parseBrawlLink("brawlonline://play/")).toEqual({ kind: "play" });
+    expect(parseBrawlLink("brawlonline://play/now")).toBeNull();
+  });
+
   it("finds a link on a command line", () => {
     expect(findBrawlLink(["Brawl Online.exe", "--flag", "brawlonline://room/create?ruleset=KFQBTR"])).toBe(
       "brawlonline://room/create?ruleset=KFQBTR",

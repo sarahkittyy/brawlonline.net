@@ -1,4 +1,5 @@
 import type { SocialPlayer, SocialState } from "@social/types";
+import type { LiveGameEntry } from "@spectate/types";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -189,8 +190,11 @@ describe("OnlinePlayers friends (docs/design/friends.md)", () => {
   const since = "2026-11-14T00:00:00Z";
   const friend = (p: SocialPlayer) => ({ ...p, since });
   const sendFriendRequest = vi.fn();
+  const watch = vi.fn(async () => ({ ok: true }));
 
-  function renderFriends(opts: { disc?: boolean; tab?: "online" | "friends" } = {}) {
+  function renderFriends(
+    opts: { disc?: boolean; tab?: "online" | "friends"; fullRoom?: boolean; live?: LiveGameEntry[] } = {},
+  ) {
     localStorage.setItem("ONLINE_PANEL_TAB", JSON.stringify(opts.tab ?? "online"));
     useGameAssets.getState().setState({
       manifest: { stocks: opts.disc === false ? {} : { marth: { file: "theme/stocks/marth.png" } } },
@@ -199,7 +203,7 @@ describe("OnlinePlayers friends (docs/design/friends.md)", () => {
     (window as any).electron = {
       ...(window as any).electron,
       social: { sendFriendRequest, acceptFriend: vi.fn(), declineFriend: vi.fn(), cancelFriendRequest: vi.fn() },
-      spectate: { list: async () => ({ games: [] }) },
+      spectate: { list: async () => ({ games: opts.live ?? [] }), watch },
     };
     const state: SocialState = {
       status: "online",
@@ -226,13 +230,13 @@ describe("OnlinePlayers friends (docs/design/friends.md)", () => {
     const room = {
       code: "KFQB",
       host: "Lucas",
-      players: 1,
+      players: opts.fullRoom ? 2 : 1,
       openSlots: 2,
       mode: "1v1",
-      status: "waiting",
-      names: ["Lucas"],
-      uids: ["a"],
-      joinable: true,
+      status: opts.fullRoom ? "playing" : "waiting",
+      names: opts.fullRoom ? ["Lucas", "Xan"] : ["Lucas"],
+      uids: opts.fullRoom ? ["a", "x"] : ["a"],
+      joinable: !opts.fullRoom,
       name: "friday netplay",
       friends: true,
     };
@@ -284,6 +288,39 @@ describe("OnlinePlayers friends (docs/design/friends.md)", () => {
     // The offline ones fold.
     fireEvent.click(screen.getByTestId("friends-offline-toggle"));
     expect(screen.queryByTestId("friend-offline-z")).toBeNull();
+  });
+
+  it("offers WATCH, not FULL, for a full room's live game", async () => {
+    const game: LiveGameEntry = {
+      id: "room-KFQB-1",
+      mode: "room",
+      room: "KFQB",
+      isTeams: false,
+      startedAt: since,
+      game: { number: 1, startedAt: since, stageId: 1, state: "playing" },
+      players: ["a", "x"].map((uid) => ({
+        uid,
+        displayName: uid,
+        connectCode: `${uid}#1`,
+        characterId: 0,
+        costume: 0,
+        teamId: null,
+        wins: 0,
+      })),
+    };
+    renderFriends({ tab: "friends", fullRoom: true, live: [game] });
+    await screen.findByText("friday netplay · 2/2");
+    const pill = await screen.findByTestId("friend-watch-room-KFQB-1");
+    expect(pill.textContent).toBe("WATCH");
+    expect(screen.queryByTestId("friend-join-KFQB")).toBeNull();
+    fireEvent.click(pill);
+    expect(watch).toHaveBeenCalledWith("me", "room-KFQB-1");
+  });
+
+  it("says FULL for a full room with no game to watch", async () => {
+    renderFriends({ tab: "friends", fullRoom: true });
+    await screen.findByText("friday netplay · 2/2");
+    expect(screen.getByTestId("friend-join-KFQB").textContent).toBe("FULL");
   });
 
   it("sends a request from the code box, says what happened, and closes", async () => {

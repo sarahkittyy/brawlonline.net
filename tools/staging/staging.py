@@ -10,6 +10,20 @@ macOS clients built from one commit, set up like fresh installs that talk only t
     python tools/staging/staging.py server mail          # sign-up verification links
     python tools/staging/staging.py down                 # stop everything (the database stays)
 
+A second staging beside the first, for a branch whose server the first's database cannot go back
+from (a new migration): `--stage NAME` before the command, or STAGING_STAGE=NAME. It has its own
+folder (run/staging-NAME: database, server binaries, client build, profiles), its own ports (the
+first's + 100) and its own Mac folder, and shares only P+'s release zip.
+
+EmissaryRecomp on a stage (docs/staging.md "EmissaryRecomp"): `emissary build` builds the recomp
+with the core of the stage's `win build` and keeps it as a release the stage's launchers install;
+`win run --engine emissary` plays Project+ with it. `--controls pad|keyboard` on `win run` and
+`mac run` puts port 1 on the controller or the keyboard.
+
+    python tools/staging/staging.py --stage emissary win build --ref emissary-recomp
+    python tools/staging/staging.py --stage emissary emissary build
+    python tools/staging/staging.py --stage emissary win run --profile a --engine emissary --controls pad
+
 Everything lives in run/staging/ on this PC (gitignored) and on the Mac in
 ~/code/brawlonline.net/brawl-staging/:
 
@@ -42,6 +56,7 @@ networks, or the Mac cannot reach the server (docs/staging.md).
 from __future__ import annotations
 
 import argparse
+import base64
 import ctypes
 import hashlib
 import json
@@ -57,10 +72,31 @@ import sys
 import tarfile
 import time
 import urllib.request
+import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-STAGE = ROOT / "run" / "staging"
+
+
+def _stage_name() -> str:
+    """`--stage NAME` (taken out of the arguments here, before anything is named after it), else
+    STAGING_STAGE; empty: the first staging, run/staging."""
+    name = os.environ.get("STAGING_STAGE", "")
+    if "--stage" in sys.argv:
+        at = sys.argv.index("--stage")
+        if at + 1 >= len(sys.argv):
+            sys.exit("--stage needs a name")
+        name = sys.argv[at + 1]
+        del sys.argv[at:at + 2]
+    if name and not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,30}", name):
+        sys.exit("a stage's name is lower-case letters, digits and dashes")
+    return name
+
+
+STAGE_NAME = _stage_name()
+# The first staging: where a named stage finds P+'s zip.
+FIRST_STAGE = ROOT / "run" / "staging"
+STAGE = FIRST_STAGE if not STAGE_NAME else ROOT / "run" / f"staging-{STAGE_NAME}"
 CONFIG = STAGE / "config.json"
 LOGS = STAGE / "logs"
 PIDS = STAGE / "pids.json"
@@ -68,7 +104,11 @@ FAKE_STATE = STAGE / "fake-state.json"
 SRC = STAGE / "src"
 CARGO_TARGET = STAGE / "cargo-target"
 WIN = STAGE / "win"
-PPLUS_CACHE = STAGE / "pplus"
+PPLUS_CACHE = FIRST_STAGE / "pplus"
+# EmissaryRecomp built for this stage (`emissary build`): its worktree, its build, and the release
+# feed the stage's launchers install from (PPO_EMISSARY_RELEASES).
+EMISSARY = STAGE / "emissary"
+EMISSARY_RELEASES = EMISSARY / "releases"
 # The launcher's pinned P+ release (PPLUS_RELEASE), in the commit a build is made from.
 PPLUS_RELEASE_TS = Path("launcher") / "src" / "dolphin" / "install" / "pplus_release.ts"
 PG_BIN = ROOT / "run" / "postgres-portable" / "pgsql" / "bin"
@@ -86,16 +126,29 @@ DEFAULTS = {
     "mac_key": "~/.ssh/brawlmac",
     "mac_qt": "~/code/brawlonline.net/brawl-dev/qt/6.8.3/macos",
     "mac_ssh": "",  # the ssh to use; scp is the one next to it. Empty: Git's on Windows, else PATH's
+    # `emissary build`: the EmissaryRecomp checkout (its toolchain/ is used as it is), the branch
+    # built, and the extracted disc it translates.
+    "emissary_repo": "E:/emissary/src",
+    "emissary_ref": "brawlonline/windows-build",
+    "emissary_game": "D:/code/pm_rollback/game/rev1-extract/DATA",
 }
-# Inside double quotes on the Mac ("~" would not expand there).
-MAC_HOME = "$HOME/code/brawlonline.net/brawl-staging"
+if STAGE_NAME:
+    # A named stage's own ports, so both servers run at once: the first's + 100.
+    for _port in ("accounts_port", "mm_port", "mm_status_port", "pg_port"):
+        DEFAULTS[_port] += 100
+# The Mac's staging folder, from its home (scp and git paths) and inside double quotes there ("~"
+# would not expand).
+MAC_DIR = "code/brawlonline.net/brawl-staging" + (f"-{STAGE_NAME}" if STAGE_NAME else "")
+MAC_HOME = f"$HOME/{MAC_DIR}"
+# The ccache shim from `mac setup`, one for every stage.
+MAC_BIN = "$HOME/code/brawlonline.net/brawl-staging/bin"
 # Its own folder name. The bundle ID stays the real one: Electron's helper apps carry IDs derived
 # from it, and a changed main ID made Electron stop at start-up (EXC_BREAKPOINT in ElectronMain).
 # What keeps a Dock or Finder start on staging is the staging-env.json inside the app.
 MAC_APP = f"{MAC_HOME}/app/Brawl Online Staging.app"
 # pgrep/pkill pattern for the staging app and the Dolphin a staging profile installed. The
 # bracket keeps it from matching the command line of the shell that runs it (or a build).
-MAC_PROC = "brawl-stagin[g]/(app|profiles)/"
+MAC_PROC = "brawl-stagin[g]" + (f"-{STAGE_NAME}" if STAGE_NAME else "") + "/(app|profiles)/"
 
 
 # --------------------------------------------------------------------------- helpers
@@ -133,6 +186,11 @@ def run(cmd: list[str] | str, *, cwd: Path | None = None, env: dict[str, str] | 
 
 def load_config() -> dict:
     cfg = dict(DEFAULTS)
+    first = FIRST_STAGE / "config.json"
+    if STAGE_NAME and not CONFIG.exists() and first.exists():
+        # A new named stage starts from the first stage's Mac and LAN settings, never its ports or secrets.
+        theirs = json.loads(first.read_text())
+        cfg.update({k: v for k, v in theirs.items() if k.startswith("mac_") or k in ("lan_ip", "latest_version")})
     if CONFIG.exists():
         cfg.update(json.loads(CONFIG.read_text()))
     changed = False
@@ -515,6 +573,79 @@ def client_env(cfg: dict, profile: Path) -> dict[str, str]:
         "PPO_UPDATES_URL": u["updates"],
         "PPO_DOLPHIN_EXTRA_ARGS": json.dumps(dolphin_args),
     }
+
+
+# Port 1 of a client (`run --controls`). Written into its netplay Dolphin's own Dolphin.ini, not
+# given as -C: this Dolphin defaults every port to the adapter and opens the adapter while any
+# config layer names it, so a keyboard client given only -C would still take the adapter from the
+# other one. EmissaryRecomp's keyboard switch is in its Config.toml.
+SI_GC_CONTROLLER = 6  # a standard controller: GCPadNew.ini's [GCPad1], the keyboard as Dolphin sets it up
+SI_ADAPTER = 12
+CONTROLS = {"pad": SI_ADAPTER, "keyboard": SI_GC_CONTROLLER}
+DOLPHIN_INI = Path("netplay") / "User" / "Config" / "Dolphin.ini"
+EMISSARY_CONFIG = Path("netplay") / "emissary-recomp" / "UserData" / "Config.toml"  # the launcher's EMISSARY_FOLDER
+
+
+def with_si_devices(ini: str, si: int) -> str:
+    """Dolphin.ini with [Core] SIDevice0 = si and SIDevice1-3 = 0 (Dolphin plays the first port set up)."""
+    rest = re.sub(r"^SIDevice\d\s*=.*(\r?\n|$)", "", ini, flags=re.M)
+    ports = "".join(f"SIDevice{i} = {v}\n" for i, v in enumerate([si, 0, 0, 0]))
+    if re.search(r"^\[Core\]\r?\n", rest, flags=re.M):
+        return re.sub(r"^\[Core\]\r?\n", lambda m: m.group(0) + ports, rest, count=1, flags=re.M)
+    return f"[Core]\n{ports}{rest}"
+
+
+def set_toml_value(text: str, section: str, key: str, value: str) -> str:
+    """`key = value` in `[section]` of a TOML text (either added), every other line as it was (the
+    launcher's setTomlValue)."""
+    lines = text.splitlines()
+    start = next((i for i, line in enumerate(lines) if line.strip() == f"[{section}]"), -1)
+    entry = f"{key} = {value}"
+    if start < 0:
+        while lines and not lines[-1].strip():
+            lines.pop()
+        return "\n".join([*lines, *([""] if lines else []), f"[{section}]", entry]) + "\n"
+    end = next((i for i in range(start + 1, len(lines)) if lines[i].lstrip().startswith("[")), len(lines))
+    for i in range(start + 1, end):
+        if re.match(rf"^\s*{re.escape(key)}\s*=", lines[i]):
+            lines[i] = entry
+            return "\n".join(lines) + "\n"
+    at = end
+    while at > start + 1 and not lines[at - 1].strip():
+        at -= 1
+    lines.insert(at, entry)
+    return "\n".join(lines) + "\n"
+
+
+def set_win_controls(profile: Path, controls: str) -> None:
+    """Port 1 of a Windows profile: its netplay Dolphin's and its EmissaryRecomp's (written before
+    the first start too: the launcher's installs keep both files)."""
+    ini = profile / DOLPHIN_INI
+    ini.parent.mkdir(parents=True, exist_ok=True)
+    text = ini.read_text(encoding="utf-8", errors="replace") if ini.exists() else ""
+    ini.write_text(with_si_devices(text, CONTROLS[controls]), encoding="utf-8", newline="\n")
+    toml = profile / EMISSARY_CONFIG
+    toml.parent.mkdir(parents=True, exist_ok=True)
+    text = toml.read_text(encoding="utf-8", errors="replace") if toml.exists() else ""
+    toml.write_text(set_toml_value(text, "gc_keyboard", "enabled", "true" if controls == "keyboard" else "false"),
+                    encoding="utf-8", newline="\n")
+    say(f"port 1: {'the GameCube adapter (EmissaryRecomp: a controller)' if controls == 'pad' else 'the keyboard'}")
+
+
+def set_play_with(profile: Path, engine: str) -> None:
+    """The launcher's Settings > Add-ons choice (playProjectPlusWith) in the profile's Settings file."""
+    f = profile / "Settings"
+    data = json.loads(f.read_text(encoding="utf-8")) if f.exists() else {}
+    data.setdefault("settings", {})["playProjectPlusWith"] = engine
+    f.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+
+def emissary_release() -> str | None:
+    """The tag `emissary build` last kept for this stage."""
+    if not EMISSARY_RELEASES.exists():
+        return None
+    tags = sorted(d.name for d in EMISSARY_RELEASES.glob("v*") if (d / "manifest.json").exists())
+    return tags[-1] if tags else None
 
 
 def staging_env_json(cfg: dict, profile: str) -> str:
@@ -960,6 +1091,17 @@ def win_run(args: argparse.Namespace) -> None:
     profile.mkdir(parents=True, exist_ok=True)
     seed_pplus_win(profile)
     env = dict(os.environ, **client_env(cfg, profile))
+    if args.controls:
+        set_win_controls(profile, args.controls)
+    tag = emissary_release()
+    if tag:
+        # The stage's own EmissaryRecomp, as the launcher's feed (its latest release).
+        env["PPO_EMISSARY_RELEASES"] = str(EMISSARY_RELEASES)
+    if args.engine:
+        if args.engine == "emissary" and not tag:
+            die("this stage has no EmissaryRecomp build: `emissary build` (after `win build`)")
+        set_play_with(profile, args.engine)
+        say(f"Play plays Project+ with {'EmissaryRecomp ' + tag if args.engine == 'emissary' else 'Dolphin'}")
     flags = 0x00000008 | 0x00000200  # detached, own process group
     subprocess.Popen([str(exe)], cwd=exe.parent, env=env, creationflags=flags,
                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -976,6 +1118,83 @@ def win_reset(args: argparse.Namespace) -> None:
     if profile.exists():
         shutil.rmtree(profile)
         say(f"deleted profile {profile} (the next start is a fresh install)")
+
+
+# --------------------------------------------------------------------------- EmissaryRecomp
+
+
+# What a release's Windows archive holds (EmissaryRecomp's docs/releases.md): the program, the
+# libraries beside it, and its data folders. A local build is one program with the engine inside.
+EMISSARY_FILES = ["WiiCompiled.exe", "cacert.pem", "dsp_coef.bin", "initial_pipeline_cache.db"]
+EMISSARY_DIRS = ["Sys", "wii_bootstrap"]
+EMISSARY_PROTOCOL = 1  # the launcher's EMISSARY_PROTOCOL
+
+
+def emissary_build(args: argparse.Namespace) -> None:
+    """EmissaryRecomp with the core of this stage's `win build` (its src/ worktree), kept as a release
+    in emissary/releases/ for the stage's launchers to install (PPO_EMISSARY_RELEASES): the same
+    core as the stage's Dolphin, server and launcher. Windows only."""
+    if not IS_WINDOWS:
+        die("`emissary build` runs on Windows")
+    cfg = load_config()
+    built = json.loads((WIN / "build.json").read_text()) if (WIN / "build.json").exists() else {}
+    if not built.get("sha") or not (SRC / "core" / "standalone" / "CMakeLists.txt").exists():
+        die("no core to build with: `win build --ref <a branch with core/>` first")
+    if git("rev-parse", "HEAD", cwd=SRC) != built["sha"]:
+        die(f"{SRC} is not at the built commit {built['sha'][:10]}: run `win build` again")
+    repo = Path(cfg["emissary_repo"])
+    ref = args.ref or cfg["emissary_ref"]
+    rsha = git("rev-parse", "--verify", f"{ref}^{{commit}}", cwd=repo)
+    toolchain = repo / "toolchain"
+    cmake = toolchain / "CMake" / "bin" / "cmake.exe"
+    if not cmake.exists():
+        die(f"no EmissaryRecomp toolchain in {toolchain}")
+    game = Path(cfg["emissary_game"])
+    if not (game / "sys" / "main.dol").exists():
+        die(f"{game} is not an extracted disc's DATA folder (config.json emissary_game)")
+    log = LOGS / "emissary-build.log"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    log.write_text(f"emissary build {ref} {rsha} with core {built['sha']}\n")
+    below_normal_priority()
+    wt = EMISSARY / "src"
+    if not wt.exists():
+        EMISSARY.mkdir(parents=True, exist_ok=True)
+        run(["git", "-C", str(repo), "worktree", "add", "--detach", str(wt), rsha], log=log)
+    else:
+        run(["git", "-C", str(wt), "checkout", "--detach", "--force", "--quiet", rsha], log=log)
+    version = (wt / "VERSION").read_text().strip()
+    tag = f"v{version}-staging.{time.strftime('%Y%m%d%H%M%S')}"
+    env = dict(os.environ)
+    env["PATH"] = os.pathsep.join([str(toolchain / "llvm-mingw" / "bin"), str(toolchain / "Ninja"),
+                                   str(toolchain / "CMake" / "bin"), env.get("PATH", "")])
+    build = EMISSARY / "build"
+    run([str(cmake), f"-DGAME={game.as_posix()}", f"-DBUILD_DIR={build.as_posix()}", f"-DJOBS={args.jobs}",
+         f"-DBRAWL_ONLINE={SRC.as_posix()}", f"-DRELEASE_VERSION={tag}", "-P", str(wt / "build.cmake")],
+        cwd=wt, env=env, log=log)
+    native = build / "native"
+    exe = native / "WiiCompiled.exe"
+    if b"BRAWL_ONLINE_CORE" not in exe.read_bytes():
+        die(f"{exe} has no Brawl Online core (the launcher would not play it)")
+    # The release the launchers install, alone in the feed (its latest).
+    shutil.rmtree(EMISSARY_RELEASES, ignore_errors=True)
+    dest = EMISSARY_RELEASES / tag
+    dest.mkdir(parents=True)
+    archive = dest / f"EmissaryRecomp-{tag}-Windows.zip"
+    say(f"packing {archive}")
+    with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED, compresslevel=1) as z:
+        for name in [*EMISSARY_FILES, *sorted(f.name for f in native.glob("*.dll"))]:
+            if (native / name).exists():
+                z.write(native / name, f"EmissaryRecomp/{name}")
+        for d in EMISSARY_DIRS:
+            for f in sorted((native / d).rglob("*")):
+                if f.is_file():
+                    z.write(f, f"EmissaryRecomp/{f.relative_to(native).as_posix()}")
+    (dest / "manifest.json").write_text(json.dumps(
+        {"version": tag, "brawlOnline": cfg["latest_version"], "protocol": EMISSARY_PROTOCOL}, indent=2) + "\n")
+    (EMISSARY / "build.json").write_text(json.dumps(
+        {"tag": tag, "ref": ref, "sha": rsha, "core": built["sha"], "built": time.ctime()}) + "\n")
+    say(f"EmissaryRecomp {tag} ready ({ref} {rsha[:10]}, core {built['sha'][:10]}): "
+        f"`win run --engine emissary` plays with it; a running launcher takes it before its next game")
 
 
 # --------------------------------------------------------------------------- macOS client
@@ -1006,7 +1225,7 @@ def mac_target(cfg: dict) -> list[str]:
 
 # The Mac's shell for every command: Homebrew's tools, the user's nvm Node (CI uses Node 24), and
 # ~/code/brawlonline.net/brawl-staging/bin (the ccache shim from `mac setup`).
-MAC_PRELUDE = ('export PATH="$HOME/code/brawlonline.net/brawl-staging/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"; '
+MAC_PRELUDE = (f'export PATH="{MAC_BIN}:/opt/homebrew/bin:/usr/local/bin:$PATH"; '
                'export NVM_DIR="$HOME/.nvm"; [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh" && '
                'nvm use --silent 24 >/dev/null; set -euo pipefail; ')
 
@@ -1048,11 +1267,11 @@ def mac_setup(_args: argparse.Namespace) -> None:
     """Checks the Mac's tools; installs nothing (Node comes from the user's nvm). Without a real
     ccache, writes the pass-through shim."""
     cfg = load_config()
-    mac(cfg, f"""mkdir -p {MAC_HOME}/bin
+    mac(cfg, f"""mkdir -p {MAC_BIN}
 command -v node >/dev/null || {{ echo 'no Node: install 24 with nvm (nvm install 24)' >&2; exit 1; }}
 echo "node $(node -v)"
-if ! command -v ccache >/dev/null || [ -f {MAC_HOME}/bin/ccache ]; then
-  printf '%s' {shlex.quote(CCACHE_SHIM)} > {MAC_HOME}/bin/ccache && chmod +x {MAC_HOME}/bin/ccache
+if ! command -v ccache >/dev/null || [ -f {MAC_BIN}/ccache ]; then
+  printf '%s' {shlex.quote(CCACHE_SHIM)} > {MAC_BIN}/ccache && chmod +x {MAC_BIN}/ccache
   echo "ccache: pass-through shim in ~/code/brawlonline.net/brawl-staging/bin"
 fi
 for t in git cmake ninja xcrun; do command -v $t >/dev/null || {{ echo "missing $t" >&2; exit 1; }}; done
@@ -1074,7 +1293,7 @@ def mac_build(args: argparse.Namespace) -> None:
     ssh = ssh_tool(cfg, "ssh").replace("\\", "/")
     env = dict(os.environ, GIT_SSH_COMMAND=f'"{ssh}" -i "{key}" -o BatchMode=yes')
     run(["git", "push", "--quiet", "--force",
-         f"ssh://{cfg['mac_user']}@{cfg['mac_host']}/~/code/brawlonline.net/brawl-staging/repo.git", f"{sha}:refs/heads/staging"],
+         f"ssh://{cfg['mac_user']}@{cfg['mac_host']}/~/{MAC_DIR}/repo.git", f"{sha}:refs/heads/staging"],
         env=env, log=log)
     # 2. The plugin: built here from the same commit (the Mac has no PowerPC toolchain).
     plugin = SRC / "game-code" / "PPOnline" / "PPOnline.rel"
@@ -1085,14 +1304,14 @@ def mac_build(args: argparse.Namespace) -> None:
         prepare_worktree(sha)
         run([bash(), "./build.sh"], cwd=SRC / "game-code", log=log)
     run([ssh_tool(cfg, "scp"), "-q", "-i", key, "-o", "BatchMode=yes", str(plugin),
-         f"{cfg['mac_user']}@{cfg['mac_host']}:code/brawlonline.net/brawl-staging/PPOnline.rel"], log=log)
+         f"{cfg['mac_user']}@{cfg['mac_host']}:{MAC_DIR}/PPOnline.rel"], log=log)
     rank_badges_here(log)
     badges = STAGE / "rank-badges.tar"
     with tarfile.open(badges, "w") as tar:
         for d in RANK_BADGE_DIRS:
             tar.add(ROOT / d, arcname=d)
     run([ssh_tool(cfg, "scp"), "-q", "-i", key, "-o", "BatchMode=yes", str(badges),
-         f"{cfg['mac_user']}@{cfg['mac_host']}:code/brawlonline.net/brawl-staging/rank-badges.tar"], log=log)
+         f"{cfg['mac_user']}@{cfg['mac_host']}:{MAC_DIR}/rank-badges.tar"], log=log)
     # 3. Dolphin and the launcher with CI's own scripts, ad-hoc signed (no identity, no notary).
     h = MAC_HOME
     script = f"""
@@ -1108,7 +1327,7 @@ mkdir -p {h}/dolphin-bin
 printf '%s' {shlex.quote(CMAKE_SHIM)} > {h}/dolphin-bin/cmake && chmod +x {h}/dolphin-bin/cmake
 B={h}/cache/dolphin-build-macos-arm64
 if grep -q /opt/homebrew "$B/CMakeCache.txt" 2>/dev/null; then rm -rf "$B"; fi
-env -u HOMEBREW_PREFIX -u HOMEBREW_CELLAR -u HOMEBREW_REPOSITORY -u PKG_CONFIG_PATH   PATH="{h}/dolphin-bin:{h}/bin:$HOME/code/brawlonline.net/brawl-dev/venv/bin:$(dirname "$(command -v node)"):/usr/bin:/bin:/usr/sbin:/sbin"   nice -n 10 .github/scripts/build-dolphin-macos.sh 0.1.0-staging.{sha[:10]} launcher/release/dolphin arm64
+env -u HOMEBREW_PREFIX -u HOMEBREW_CELLAR -u HOMEBREW_REPOSITORY -u PKG_CONFIG_PATH   PATH="{h}/dolphin-bin:{MAC_BIN}:$HOME/code/brawlonline.net/brawl-dev/venv/bin:$(dirname "$(command -v node)"):/usr/bin:/bin:/usr/sbin:/sbin"   nice -n 10 .github/scripts/build-dolphin-macos.sh 0.1.0-staging.{sha[:10]} launcher/release/dolphin arm64
 D=launcher/release/dolphin/Dolphin.app/Contents/MacOS/Dolphin
 if otool -l "$D" | grep -q /opt/homebrew || otool -L "$D" | grep -q /opt/homebrew; then
   echo "the staging Dolphin still refers to Homebrew (/opt/homebrew): not shipping it" >&2; exit 1
@@ -1130,7 +1349,7 @@ done
 mkdir -p {h}/app
 ditto "release/build/mac-arm64/Brawl Online.app" "{MAC_APP}"
 # Its staging settings inside it (applied however it is started), then re-signed ad hoc.
-printf '%s' {shlex.quote(staging_env_json(cfg, "__HOME__/code/brawlonline.net/brawl-staging/profiles/a"))}   | sed "s|__HOME__|$HOME|g" > "{MAC_APP}/Contents/Resources/staging-env.json"
+printf '%s' {shlex.quote(staging_env_json(cfg, f"__HOME__/{MAC_DIR}/profiles/a"))}   | sed "s|__HOME__|$HOME|g" > "{MAC_APP}/Contents/Resources/staging-env.json"
 codesign --force --deep --sign - "{MAC_APP}"
 "$LSREG" -f "{MAC_APP}"
 echo '{{"sha": "{sha}"}}' > {h}/app/build.json
@@ -1152,10 +1371,19 @@ def mac_run(args: argparse.Namespace) -> None:
     rel = pinned_pplus(ts)
     if not rel:
         say("warning: no PPLUS_RELEASE in the Mac's src/: the launcher downloads P+ itself")
+    controls = ""
+    if args.controls:
+        # As set_win_controls, for the netplay Dolphin (the Mac has no EmissaryRecomp).
+        ini = f"{profile}/{DOLPHIN_INI.as_posix()}"
+        text = subprocess.run([*mac_target(cfg), f'cat "{ini}" 2>/dev/null || true'], capture_output=True,
+                              text=True, encoding="utf-8", errors="replace", timeout=60).stdout
+        new = base64.b64encode(with_si_devices(text, CONTROLS[args.controls]).encode()).decode()
+        controls = f'mkdir -p "$(dirname "{ini}")"; echo {new} | base64 -D > "{ini}"\n'
+        say(f"port 1: {'the GameCube adapter' if args.controls == 'pad' else 'the keyboard'}")
     mac(cfg, f'[ -d "{MAC_APP}" ] || {{ echo "no macOS staging build yet: mac build" >&2; exit 1; }}; '
-             f'mkdir -p "{profile}"; {mac_seed_pplus(rel, profile) if rel else ""}\n'
+             f'mkdir -p "{profile}"; {mac_seed_pplus(rel, profile) if rel else ""}\n{controls}'
              f'open -n {envs} --env "PPO_USER_DATA_DIR={profile}" "{MAC_APP}"')
-    say(f"started the macOS client on {cfg['mac_host']}, profile ~/code/brawlonline.net/brawl-staging/profiles/{args.profile}")
+    say(f"started the macOS client on {cfg['mac_host']}, profile ~/{MAC_DIR}/profiles/{args.profile}")
 
 
 def mac_stop(_args: argparse.Namespace | None) -> None:
@@ -1183,6 +1411,9 @@ def status(args: argparse.Namespace) -> None:
         print(f"  running {Path(exe).name} ({pid})")
     profiles = sorted(p.name for p in (WIN / "profiles").iterdir()) if (WIN / "profiles").exists() else []
     print(f"  profiles: {', '.join(profiles) or 'none'}")
+    if (EMISSARY / "build.json").exists():
+        e = json.loads((EMISSARY / "build.json").read_text())
+        print(f"emissary: {e['tag']} ({e['ref']} {e['sha'][:10]}, core {e['core'][:10]}, {e['built']})")
     print(f"mac client ({cfg['mac_host']}):")
     mac(cfg, f"cat {MAC_HOME}/app/build.json 2>/dev/null || echo '  not built'; "
              f"ls {MAC_HOME}/profiles 2>/dev/null | sed 's/^/  profile /'; "
@@ -1201,12 +1432,14 @@ def down(args: argparse.Namespace) -> None:
 def destroy(args: argparse.Namespace) -> None:
     """Everything staging made: processes, the worktree (its links first), builds, the database."""
     if not args.yes:
-        die("this deletes run/staging (database included) and ~/code/brawlonline.net/brawl-staging on the Mac; pass --yes")
+        die(f"this deletes {STAGE.relative_to(ROOT)} (database included) and ~/{MAC_DIR} on the Mac; pass --yes")
     down(args)
     if SRC.exists():
         n = unlink_junctions(SRC)
         say(f"unlinked {n} junctions in the staging worktree")
         run(["git", "worktree", "remove", "--force", str(SRC)], check=False)
+    if (EMISSARY / "src").exists():
+        run(["git", "-C", str(EMISSARY / "src"), "worktree", "remove", "--force", str(EMISSARY / "src")], check=False)
     shutil.rmtree(STAGE, ignore_errors=True)
     if args.mac:
         cfg_mac = dict(DEFAULTS)
@@ -1251,6 +1484,11 @@ def main() -> None:
         p = cs.add_parser("run", help="start the client against the staging server")
         p.add_argument("--fresh", action="store_true", help="delete the profile first (a fresh install)")
         p.add_argument("--profile", default="a", help="profile name (a second account: --profile b)")
+        p.add_argument("--controls", choices=sorted(CONTROLS),
+                       help="port 1: the GameCube adapter (EmissaryRecomp: a controller) or the keyboard")
+        if area == "win":
+            p.add_argument("--engine", choices=["dolphin", "emissary"],
+                           help="what Play plays Project+ with (emissary: the stage's `emissary build`)")
         p.set_defaults(func=run_)
         cs.add_parser("stop").set_defaults(func=stop)
         p = cs.add_parser("reset", help="delete a profile (fresh install on the next run)")
@@ -1259,6 +1497,13 @@ def main() -> None:
         if area == "mac":
             cs.add_parser("setup", help="check the Mac's tools (nvm Node 24, Qt) and add the ccache shim"
                           ).set_defaults(func=mac_setup)
+
+    c = sub.add_parser("emissary", help="EmissaryRecomp for this stage's launchers (Windows)")
+    cs = c.add_subparsers(dest="cmd", required=True)
+    p = cs.add_parser("build", help="build it with the core of the stage's `win build`, kept as the stage's release")
+    p.add_argument("--ref", default="", help="EmissaryRecomp commit (default: config.json emissary_ref)")
+    p.add_argument("--jobs", type=int, default=6)
+    p.set_defaults(func=emissary_build)
 
     sub.add_parser("status", help="server, builds, profiles, running clients").set_defaults(func=status)
     sub.add_parser("down", help="stop the clients and the server (the database stays)").set_defaults(func=down)
