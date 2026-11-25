@@ -53,6 +53,65 @@ real install. Releases never contain that file.
 
 A second account on the same machine: `win run --profile b` (or `mac run --profile b`).
 
+`--controls pad|keyboard` on `win run` / `mac run` sets port 1 for that profile before it starts:
+`pad` is the GameCube adapter (`[Core] SIDevice0 = 12`), `keyboard` a standard controller
+(`SIDevice0 = 6`, which Dolphin sets up on the keyboard in `GCPadNew.ini`), the other ports empty.
+It is written into the profile's own `netplay/User/Config/Dolphin.ini` (made if the profile is new:
+the launcher's installs keep it), not given as `-C`: this Dolphin defaults every port to the adapter
+and opens it while any config layer names it, so a keyboard window with only `-C` would still take
+the adapter from the other one. On Windows it also sets EmissaryRecomp's `[gc_keyboard] enabled`
+in the profile's `netplay/emissary-recomp/UserData/Config.toml` (`pad`: port 1 is the first
+controller SDL finds; `keyboard`: the keyboard, while its window has focus).
+
+## Stages
+
+`--stage NAME` before the command (or `STAGING_STAGE=NAME`) is a second staging beside the first,
+for a branch whose server the first's database can't go back from: its own folder
+`run/staging-NAME` (database, server binaries, client build, profiles), its own ports (the first's
++ 100, unless its `config.json` says otherwise; a new stage takes the first's Mac and LAN settings)
+and its own Mac folder `~/code/brawlonline.net/brawl-staging-NAME`. Only P+'s release zip and the
+Mac's `ccache` shim are shared.
+
+## EmissaryRecomp
+
+The `emissary` stage (`run/staging-emissary`, a junction to
+`C:\Users\sarah\brawl-staging\staging-emissary`; ports in its `config.json`) is built from the
+`emissary-recomp` branch, whose launcher can play Project+ with EmissaryRecomp:
+
+```
+python tools/staging/staging.py --stage emissary win build --ref emissary-recomp
+python tools/staging/staging.py --stage emissary emissary build
+python tools/staging/staging.py --stage emissary server up
+python tools/staging/staging.py --stage emissary win run --profile a --engine emissary --controls pad
+```
+
+- `emissary build` builds EmissaryRecomp (`config.json` `emissary_repo`, default `E:/emissary/src`,
+  at `emissary_ref`, default `brawlonline/windows-build`, or `--ref`) in a worktree in the stage's
+  `emissary/src`, with the stage's `src/` as its Brawl Online core (`-DBRAWL_ONLINE=<src>`): the
+  same core as the stage's Dolphin, server and launcher, whatever the recomp's `brawl_online.lock`
+  pins. It uses that checkout's `toolchain/` and translates the extracted disc in `emissary_game`.
+  The build is packed as a release `v<VERSION>-staging.<time>` in `emissary/releases/`, alone (a
+  CI-style `EmissaryRecomp-<tag>-Windows.zip` + `manifest.json`, appVersion = the stage's
+  `latest_version`, protocol 1). Full builds take ~15 min at 6 jobs; later ones are incremental.
+- `win run` gives the launcher that folder as its release feed (`PPO_EMISSARY_RELEASES`) whenever
+  the stage has a build, so Settings > Add-ons installs and updates EmissaryRecomp from it (a running
+  launcher takes a new build before its next game). `--engine emissary` sets the profile's "Play
+  Project+ with" to EmissaryRecomp (`--engine dolphin` back); a profile that hasn't installed it yet
+  is asked to on its first Play.
+- The Mac has no EmissaryRecomp build: a Mac client on this stage plays with Dolphin (crossplay
+  against the Windows recomps).
+- Accounts: `recomp@staging.test` and `dolphin@staging.test` (password `staging-pass`), made by
+  `run\emissary-test\seed.py`.
+
+## The agent board's staging buttons
+
+The board's header (D:\code\agent-board) has a Dolphin | Recomp switch in front of its staging
+buttons. Dolphin builds `main` on the first staging; Recomp builds `emissary-recomp` on the
+`emissary` stage (Build staging Windows then also runs `emissary build`, and Run staging Windows
+plays with EmissaryRecomp). Each Run on a machine gets the other controls: the controller while no
+staging client running on that machine (either stage) has it, else the keyboard. Run staging 2v2
+puts profile a on the controller and b on the keyboard on each machine.
+
 ## Builds
 
 `--ref` is a commit, branch or tag (default `main`); only committed work is built.
@@ -63,7 +122,7 @@ A second account on the same machine: `win run --profile b` (or `mac run --profi
   then stages Dolphin as `build-dolphin-windows.ps1` does and runs `electron-builder --win dir`
   (no installer). Builds run at below-normal priority. The first build is a full Dolphin build;
   later ones are incremental.
-- **Mac** (`mac build`): pushes the commit to `~/code/brawlonline.net/brawl-staging/repo.git` over
+- **Mac** (`mac build`): pushes the commit to `~/code/brawlonline.net/brawl-staging/repo.git` (a stage's own folder) over
   SSH, copies the plugin built here, and runs CI's `build-dolphin-macos.sh` and
   `package-launcher-macos.sh` on the Mac without a signing identity (ad-hoc signed, not notarized).
   Qt comes from `~/code/brawlonline.net/brawl-dev/qt/6.8.3/macos`, and Node 24 from your nvm.
