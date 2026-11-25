@@ -239,6 +239,76 @@ else()
   target_compile_definitions(brawl_online_core_standalone PRIVATE BRAWL_ONLINE_NO_UI=1)
 endif()
 
+# ---- Dolphin's controller settings for the engine's pads (BrawlOnline/DolphinPads.h) ----------
+# Dolphin's own input code, as it is: GCPadNew.ini through Core/HW/GCPadEmu.cpp, InputCommon's
+# expressions and control groups, and its Windows devices (DInput, XInput). A parent with SDL 3 passes
+# its target in BRAWL_ONLINE_SDL3_TARGET for Dolphin's SDL gamepads over the parent's SDL. Needs the
+# sparse checkout's dolphin/Source/Core/InputCommon and Core/HW/GCPadEmu.*.
+option(BRAWL_ONLINE_DOLPHIN_INPUT "Build Dolphin's controller settings for the engine's pads" ${WIN32})
+set(BRAWL_ONLINE_SDL3_TARGET "" CACHE STRING "The parent's SDL 3 target, for SDL gamepads")
+if(BRAWL_ONLINE_DOLPHIN_INPUT)
+  set(BO_IC "${BO_DOLPHIN}/Source/Core/InputCommon")
+  file(GLOB_RECURSE BO_IC_HEADERS CONFIGURE_DEPENDS RELATIVE "${BO_IC}" "${BO_IC}/*.h")
+  foreach(h IN LISTS BO_IC_HEADERS)
+    configure_file("${BO_IC}/${h}" "${BO_INC}/InputCommon/${h}" COPYONLY)
+  endforeach()
+  configure_file("${BO_DOLPHIN}/Source/Core/Core/HW/GCPadEmu.h" "${BO_INC}/Core/HW/GCPadEmu.h" COPYONLY)
+  set(BO_INPUT_SOURCES
+    ControlReference/ControlReference.cpp
+    ControlReference/ExpressionParser.cpp
+    ControlReference/FunctionExpression.cpp
+    ControllerEmu/ControllerEmu.cpp
+    ControllerEmu/StickGate.cpp
+    ControllerEmu/Control/Control.cpp
+    ControllerEmu/Control/Input.cpp
+    ControllerEmu/Control/Output.cpp
+    ControllerEmu/ControlGroup/AnalogStick.cpp
+    ControllerEmu/ControlGroup/Buttons.cpp
+    ControllerEmu/ControlGroup/ControlGroup.cpp
+    ControllerEmu/ControlGroup/MixedTriggers.cpp
+    ControllerEmu/Setting/NumericSetting.cpp
+    ControllerInterface/ControllerInterface.cpp
+    ControllerInterface/CoreDevice.cpp
+    ControllerInterface/InputBackend.cpp
+  )
+  if(WIN32)
+    list(APPEND BO_INPUT_SOURCES
+      ControllerInterface/Win32/Win32.cpp
+      ControllerInterface/DInput/DInput.cpp
+      ControllerInterface/DInput/DInputJoystick.cpp
+      ControllerInterface/DInput/DInputKeyboardMouse.cpp
+      ControllerInterface/DInput/XInputFilter.cpp
+      ControllerInterface/ForceFeedback/ForceFeedbackDevice.cpp
+      ControllerInterface/XInput/XInput.cpp
+    )
+  endif()
+  if(BRAWL_ONLINE_SDL3_TARGET)
+    list(APPEND BO_INPUT_SOURCES ControllerInterface/SDL/SDLGamepad.cpp)
+  endif()
+  list(TRANSFORM BO_INPUT_SOURCES PREPEND "${BO_IC}/")
+  list(APPEND BO_INPUT_SOURCES
+    "${BO_DOLPHIN}/Source/Core/Core/HW/GCPadEmu.cpp"
+    "${BO_CORE}/compat/input/DolphinPads.cpp"
+    "${BO_CORE}/compat/input/Stubs.cpp"
+  )
+  if(BRAWL_ONLINE_SDL3_TARGET)
+    list(APPEND BO_INPUT_SOURCES "${BO_CORE}/compat/input/SdlDevices.cpp")
+  endif()
+  add_library(brawl_online_dolphin_input STATIC ${BO_INPUT_SOURCES})
+  target_compile_features(brawl_online_dolphin_input PUBLIC cxx_std_23)
+  target_link_libraries(brawl_online_dolphin_input PUBLIC brawl_online_common)
+  if(WIN32)
+    target_link_libraries(brawl_online_dolphin_input PUBLIC dinput8 dxguid cfgmgr32 setupapi)
+    # MSVC's xinput.h names the DLL (Windows 8 and later); MinGW's does not.
+    set_source_files_properties("${BO_IC}/ControllerInterface/XInput/XInput.cpp" PROPERTIES
+      COMPILE_DEFINITIONS "XINPUT_DLL=L\"xinput1_4.dll\"")
+  endif()
+  if(BRAWL_ONLINE_SDL3_TARGET)
+    target_link_libraries(brawl_online_dolphin_input PUBLIC ${BRAWL_ONLINE_SDL3_TARGET})
+    target_compile_definitions(brawl_online_dolphin_input PRIVATE BRAWL_ONLINE_DOLPHIN_INPUT_SDL=1)
+  endif()
+endif()
+
 # ---- A smoke test: the core links and runs its start-up with a do-nothing engine --------------
 if(PROJECT_IS_TOP_LEVEL)
   add_executable(brawl_online_core_smoke "${CMAKE_CURRENT_LIST_DIR}/smoke.cpp")
@@ -247,4 +317,9 @@ if(PROJECT_IS_TOP_LEVEL)
   target_link_libraries(brawl_online_core_smoke PRIVATE
     -Wl,--whole-archive $<TARGET_FILE:brawl_online_core_standalone> -Wl,--no-whole-archive
     brawl_online_core_standalone)
+  if(TARGET brawl_online_dolphin_input)
+    # Loads a User folder's GCPadNew.ini and prints each port's pad (dolphin_pads_probe.cpp).
+    add_executable(brawl_online_dolphin_pads_probe "${CMAKE_CURRENT_LIST_DIR}/dolphin_pads_probe.cpp")
+    target_link_libraries(brawl_online_dolphin_pads_probe PRIVATE brawl_online_dolphin_input)
+  endif()
 endif()

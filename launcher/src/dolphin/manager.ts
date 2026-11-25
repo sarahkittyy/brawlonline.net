@@ -1025,6 +1025,15 @@ export class DolphinManager {
       netplaySave: netplaySaveStore(projectPlusStoreFolder(this.netplayFolder())),
       onlineUserFolder: installation.userFolder,
     });
+    // Dolphin's Controllers window, which the recomp opens over the game (its Controls menu): the
+    // netplay Dolphin, on the same User folder, as configureDolphin starts it.
+    const dolphinExe = await installation.findDolphinExecutable().catch((err) => {
+      log.warn(`EmissaryRecomp: no netplay Dolphin for its Controllers window: ${err}`);
+      return null;
+    });
+    if (dolphinExe) {
+      env.BRAWL_ONLINE_DOLPHIN = dolphinExe;
+    }
     const exe = prepared.exe;
     log.info(
       `Launching EmissaryRecomp ${prepared.version} at path: ${exe} (BRAWL_ONLINE_CORE=${env.BRAWL_ONLINE_CORE})`,
