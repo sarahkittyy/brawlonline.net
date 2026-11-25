@@ -15,7 +15,7 @@
 
 #include "Common/IOFile.h"
 #include "Common/Logging/Log.h"
-#include "Core/Rollback/MachineSDCard.h"
+#include "Core/Rollback/CardFat.h"
 
 namespace Online::SpecialAssets
 {

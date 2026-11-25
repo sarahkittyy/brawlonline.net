@@ -137,7 +137,8 @@ The 24 moved files still include 33 Dolphin headers. Each goes one of three ways
 | VideoCommon/Fifo.h, AsyncRequests.h, Present.h, Rollback/PresentStats.h, FrameProfile.h, ClipRecorder.h | GPU determinism and sync, redraw while paused, Dolphin's frame diagnostics, clips | Engine (no-ops or the recomp's own where it has them) |
 | AudioCommon/*.h, HW/GCPad.h, InputCommon/GCAdapter.h | audio during re-runs and the fast playbacks' mute, local pad reads | Engine (the mute: `SetPlaybackMuted`, 2026-11-24, §10.4; the core no longer includes AudioCommon) |
 | Core/PowerPC/PowerPC.h, Debugger/OSThread.h, Harness/Harness.h | the loop-stall diagnostic, guest backtraces, harness hooks | Engine (diagnostics), harness out of the core |
-| Core/Rollback/MachineSession.h, ReplayKeyframes.h, NetPlayClient.h, Online/RoomWatch.h, SpeedCheck.h, ModsRoom.h, SpecialAssets.h | Other Games (whole-machine sessions, mods rooms), replay keyframes, room watching, the speed check | out of the core: a hook Dolphin sets, none in the recomp (P+ only) until those move too |
+| Core/Rollback/MachineSession.h, ReplayKeyframes.h, NetPlayClient.h, Online/RoomWatch.h, SpeedCheck.h, ModsRoom.h | Other Games (whole-machine sessions, mods rooms), replay keyframes, room watching, the speed check | out of the core: a hook Dolphin sets, none in the recomp (P+ only) until those move too |
+| Core/Online/SpecialAssets.h, Core/Rollback/CardFat.h | the room rules menu's Special Versus box, read from the player's SD card image | core/standalone reuses both as they are (2026-11-25, board card 806: "on the recomp, special versus never loads": its stand-in answered Unavailable, so the SPECIAL page said "Loading Special Versus..." for good); the recomp gives the core its card's image as F_WIISDCARDIMAGE_IDX (its UserData/sd.raw) |
 
 ## 10. EmissaryRecomp in-process (2026-11-15)
 

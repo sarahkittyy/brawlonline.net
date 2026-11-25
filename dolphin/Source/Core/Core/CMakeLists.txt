@@ -517,6 +517,8 @@ add_library(core
   NetPlayClient.h
   NetPlayCommon.cpp
   NetPlayCommon.h
+  Rollback/CardFat.cpp
+  Rollback/CardFat.h
   Rollback/MachineSDCard.cpp
   Rollback/MachineSDCard.h
   NetPlayServer.cpp
