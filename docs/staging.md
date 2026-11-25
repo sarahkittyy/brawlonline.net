@@ -59,9 +59,9 @@ A second account on the same machine: `win run --profile b` (or `mac run --profi
 It is written into the profile's own `netplay/User/Config/Dolphin.ini` (made if the profile is new:
 the launcher's installs keep it), not given as `-C`: this Dolphin defaults every port to the adapter
 and opens it while any config layer names it, so a keyboard window with only `-C` would still take
-the adapter from the other one. On Windows it also sets EmissaryRecomp's `[gc_keyboard] enabled`
-in the profile's `netplay/emissary-recomp/UserData/Config.toml` (`pad`: port 1 is the first
-controller SDL finds; `keyboard`: the keyboard, while its window has focus).
+the adapter from the other one. It also sets EmissaryRecomp's `[gc_keyboard] enabled` in the
+profile's `netplay/emissary-recomp/UserData/Config.toml` (`pad`: port 1 is the first controller SDL
+finds; `keyboard`: the keyboard, while its window has focus).
 
 ## Stages
 
@@ -100,8 +100,18 @@ python tools/staging/staging.py win run --profile a --engine emissary --controls
   Project+ with" to EmissaryRecomp (`--engine dolphin` back); without `--engine` the profile keeps
   what was picked in its launcher. A profile that hasn't installed it yet is asked to on its first
   Play.
-- `emissary build --mac` is where the Mac's build goes (board card 805); until then it stops with
-  an error and a Mac client plays with Dolphin (crossplay against the Windows recomps).
+- `emissary build --mac` builds it on the Mac (Apple silicon) for the stage's Mac clients: the same
+  `emissary_ref` (or `--ref`), pushed into `<Mac stage>/emissary/repo.git`, checked out in
+  `emissary/src` and built by the recomp's own `tools/release-macos.sh` with the Mac's `src/` (the
+  commit of its `mac build`, which must be 5310e80fa or newer) as its core. The disc is extracted
+  once from `mac_emissary_disc` (default `~/Games/SSBB_NTSC.iso`) into `mac_emissary_game`
+  (default `~/code/brawlonline.net/emissary-game/DATA`, shared by every stage). The release
+  (`EmissaryRecomp-<tag>-macOS.tar.gz` + `manifest.json`) goes to the Mac's `emissary/releases/`.
+  A full build takes ~40 min there; later ones are incremental. The recomp ref needs EmissaryRecomp's
+  macOS build (`brawlonline/macos`, c02d7a0).
+- `mac run` gives the Mac's launcher that folder as its feed in the same way; `--engine` there sets
+  the Mac profile's "Play Project+ with". `PPO_REMOTE_DEBUGGING_PORT=<port>` before `mac run` opens
+  DevTools on the Mac's launcher (127.0.0.1 there: tunnel it with `ssh -L`).
 - The `emissary` stage (`run/staging-emissary`, a junction to
   `C:\Users\sarah\brawl-staging\staging-emissary`, its own server and the accounts
   `recomp@staging.test` / `dolphin@staging.test`, password `staging-pass`, from
