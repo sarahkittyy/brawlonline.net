@@ -74,15 +74,14 @@ Mac's `ccache` shim are shared.
 
 ## EmissaryRecomp
 
-The `emissary` stage (`run/staging-emissary`, a junction to
-`C:\Users\sarah\brawl-staging\staging-emissary`; ports in its `config.json`) is built from the
-`emissary-recomp` branch, whose launcher can play Project+ with EmissaryRecomp:
+Since the merge of `emissary-recomp` (439552bb4), main's launcher can play Project+ with
+EmissaryRecomp, so any stage built from main can have it too:
 
 ```
-python tools/staging/staging.py --stage emissary win build --ref emissary-recomp
-python tools/staging/staging.py --stage emissary emissary build
-python tools/staging/staging.py --stage emissary server up
-python tools/staging/staging.py --stage emissary win run --profile a --engine emissary --controls pad
+python tools/staging/staging.py win build
+python tools/staging/staging.py emissary build
+python tools/staging/staging.py server up
+python tools/staging/staging.py win run --profile a --engine emissary --controls pad
 ```
 
 - `emissary build` builds EmissaryRecomp (`config.json` `emissary_repo`, default `E:/emissary/src`,
@@ -93,24 +92,32 @@ python tools/staging/staging.py --stage emissary win run --profile a --engine em
   The build is packed as a release `v<VERSION>-staging.<time>` in `emissary/releases/`, alone (a
   CI-style `EmissaryRecomp-<tag>-Windows.zip` + `manifest.json`, appVersion = the stage's
   `latest_version`, protocol 1). Full builds take ~15 min at 6 jobs; later ones are incremental.
+  A change to the recomp alone needs only this, not `win build`; a change to `core/` needs
+  `win build` first (the recomp takes its core from the stage's `src/`).
 - `win run` gives the launcher that folder as its release feed (`PPO_EMISSARY_RELEASES`) whenever
   the stage has a build, so Settings > Add-ons installs and updates EmissaryRecomp from it (a running
   launcher takes a new build before its next game). `--engine emissary` sets the profile's "Play
-  Project+ with" to EmissaryRecomp (`--engine dolphin` back); a profile that hasn't installed it yet
-  is asked to on its first Play.
-- The Mac has no EmissaryRecomp build: a Mac client on this stage plays with Dolphin (crossplay
-  against the Windows recomps).
-- Accounts: `recomp@staging.test` and `dolphin@staging.test` (password `staging-pass`), made by
-  `run\emissary-test\seed.py`.
+  Project+ with" to EmissaryRecomp (`--engine dolphin` back); without `--engine` the profile keeps
+  what was picked in its launcher. A profile that hasn't installed it yet is asked to on its first
+  Play.
+- `emissary build --mac` is where the Mac's build goes (board card 805); until then it stops with
+  an error and a Mac client plays with Dolphin (crossplay against the Windows recomps).
+- The `emissary` stage (`run/staging-emissary`, a junction to
+  `C:\Users\sarah\brawl-staging\staging-emissary`, its own server and the accounts
+  `recomp@staging.test` / `dolphin@staging.test`, password `staging-pass`, from
+  `run\emissary-test\seed.py`) was the branch's staging before the merge. Nothing builds it any
+  more; `--stage emissary destroy --yes` removes it once its accounts aren't wanted.
 
 ## The agent board's staging buttons
 
-The board's header (D:\code\agent-board) has a Dolphin | Recomp switch in front of its staging
-buttons. Dolphin builds `main` on the first staging; Recomp builds `emissary-recomp` on the
-`emissary` stage (Build staging Windows then also runs `emissary build`, and Run staging Windows
-plays with EmissaryRecomp). Each Run on a machine gets the other controls: the controller while no
-staging client running on that machine (either stage) has it, else the keyboard. Run staging 2v2
-puts profile a on the controller and b on the keyboard on each machine.
+The board's header (D:\code\agent-board) has Run Windows and Run Mac (a client on the next free
+profile of the first staging, built from `main`) and a Staging panel: what each build holds (its
+commit, how far behind `main` it is, the recomp's core), whether the server is up, and the builds:
+Windows, Windows recomp (`emissary build`), Mac, Mac recomp (`emissary build --mac`), Build
+everything (Windows, its recomp, then the Mac) and Run 2v2. Each Run on a machine gets the other
+controls: the controller while no staging client running on that machine (any stage) has it, else
+the keyboard. Run 2v2 puts profile a on the controller and b on the keyboard on each machine. The
+engine a client plays with is its profile's Settings > Game "Play Project+ with".
 
 ## Builds
 

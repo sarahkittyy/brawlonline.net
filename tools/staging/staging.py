@@ -1133,7 +1133,13 @@ EMISSARY_PROTOCOL = 1  # the launcher's EMISSARY_PROTOCOL
 def emissary_build(args: argparse.Namespace) -> None:
     """EmissaryRecomp with the core of this stage's `win build` (its src/ worktree), kept as a release
     in emissary/releases/ for the stage's launchers to install (PPO_EMISSARY_RELEASES): the same
-    core as the stage's Dolphin, server and launcher. Windows only."""
+    core as the stage's Dolphin, server and launcher. `--mac`: the Mac's build, for `mac run`."""
+    if args.mac:
+        # The agent board's "Build Mac recomp" runs this. EmissaryRecomp has no macOS build in
+        # staging yet (board card 805 is making one): it goes here, built on the Mac from the same
+        # recomp ref and the core of the stage's `mac build`, kept as a -macOS.tar.gz release in the
+        # Mac's stage folder (emissary/releases) that `mac run` gives the launcher.
+        die("EmissaryRecomp has no macOS staging build yet (board card 805): the Mac plays with Dolphin")
     if not IS_WINDOWS:
         die("`emissary build` runs on Windows")
     cfg = load_config()
@@ -1498,11 +1504,12 @@ def main() -> None:
             cs.add_parser("setup", help="check the Mac's tools (nvm Node 24, Qt) and add the ccache shim"
                           ).set_defaults(func=mac_setup)
 
-    c = sub.add_parser("emissary", help="EmissaryRecomp for this stage's launchers (Windows)")
+    c = sub.add_parser("emissary", help="EmissaryRecomp for this stage's launchers")
     cs = c.add_subparsers(dest="cmd", required=True)
     p = cs.add_parser("build", help="build it with the core of the stage's `win build`, kept as the stage's release")
     p.add_argument("--ref", default="", help="EmissaryRecomp commit (default: config.json emissary_ref)")
     p.add_argument("--jobs", type=int, default=6)
+    p.add_argument("--mac", action="store_true", help="build it on the Mac, for `mac run` (not there yet)")
     p.set_defaults(func=emissary_build)
 
     sub.add_parser("status", help="server, builds, profiles, running clients").set_defaults(func=status)
