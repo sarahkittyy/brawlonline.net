@@ -14,7 +14,9 @@
 // - BRAWL_ONLINE_CORE: the netplay Dolphin's User folder (Config/Dolphin.ini with the [Online]
 //   settings, Online/ with the account and the room hand-off files, Logs/, the replays), which the
 //   recomp's in-process Brawl Online core reads as Dolphin does (docs/design/brawl-online-core.md
-//   §10). Without it the recomp plays no one online.
+//   §10). Without it the recomp plays no one online. Its Config/GCPadNew.ini is the recomp's
+//   controls too, and the launcher adds BRAWL_ONLINE_DOLPHIN (the netplay Dolphin's executable) for
+//   Dolphin's Controllers window over the game (manager.ts).
 //
 // SPDX-License-Identifier: GPL-3.0-or-later
 
