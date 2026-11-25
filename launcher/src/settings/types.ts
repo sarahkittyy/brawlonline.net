@@ -39,7 +39,7 @@ export interface SettingsSchema {
   // "Play Project+ with": the netplay Dolphin, or EmissaryRecomp (dolphin/emissary, a native Brawl
   // with Brawl Online's rollback) once it is installed. Other Games always play in Dolphin.
   playProjectPlusWith: "dolphin" | "emissary";
-  // Settings > Add-ons > EmissaryRecomp: "Keep up to date automatically".
+  // Settings > Add-ons > EmissaryRecomp: "Update automatically".
   emissaryAutoUpdate: boolean;
   autoUpdateLauncher: boolean;
 

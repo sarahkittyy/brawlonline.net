@@ -22,7 +22,7 @@ export const AddonsSettingsMessages = {
   remove: () => "Remove",
   removeConfirm: () => "Remove EmissaryRecomp? Its program, game files, settings and saves are deleted. Replays stay.",
   openFolder: () => "Open folder",
-  autoUpdate: () => "Keep up to date automatically",
+  autoUpdate: () => "Update automatically",
   noOnline: () => "This release can't play online yet: Play uses Dolphin until an update can.",
   // Play with EmissaryRecomp chosen, but Dolphin played: why (its state, or its update's error).
   usingDolphin: (why: string) => `EmissaryRecomp: ${why} Using Dolphin.`,

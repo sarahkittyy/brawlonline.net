@@ -114,7 +114,7 @@ export default function setupEmissaryIpc({
     return { success: true };
   });
 
-  // "Keep up to date automatically": a newer release downloads by itself (staged while the game is
+  // "Update automatically": a newer release downloads by itself (staged while the game is
   // open, emissary.ts; a room, Direct or queue click then starts it once the game is idle,
   // DolphinManager.closeEmissaryForUpdate). Only once installed; never the first download. Every
   // 30 minutes while Play plays with it, else every 6 hours. Play itself downloads a newer release

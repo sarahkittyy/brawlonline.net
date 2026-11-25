@@ -1,7 +1,7 @@
 // Settings > Add-ons' EmissaryRecomp card (addons_settings.tsx): what is installed and the latest,
 // Download / Update / Prepare game files / Remove, the switch that plays Project+ with it (Settings >
-// Game's "Play Project+ with", mirrored) and the auto-update switch (docs/design/brawl-recompiled.md
-// §4.1). Its words are Sarah's (board, 2026-11-24).
+// Game's "Play Project+ with", mirrored) and the auto-update switch, those two on one line over the
+// buttons (docs/design/brawl-recompiled.md §4.1). Its words are Sarah's (board, 2026-11-24).
 import { formatBytes } from "@common/disk_space";
 import type { EmissaryState } from "@dolphin/emissary/types";
 import { EMISSARY_AUTHOR } from "@dolphin/emissary/types";
@@ -123,18 +123,6 @@ export const EmissarySettingView = ({
             {EMISSARY_AUTHOR}
           </Link>
         </div>
-        {supported && (
-          <Tooltip title={playWithDisabledReason ?? ""} placement="bottom-start">
-            <div style={{ marginBottom: 4 }} data-testid="emissary-play-with">
-              <Toggle
-                value={playWithEmissary}
-                onChange={onPlayWithEmissary}
-                disabled={playWithDisabledReason != null}
-                label={playWithEmissary ? Messages.playWithEmissaryOn() : Messages.playWithEmissaryOff()}
-              />
-            </div>
-          </Tooltip>
-        )}
         <Row label={Messages.installed()}>
           <span data-testid="emissary-installed" style={{ fontWeight: installed ? 600 : undefined }}>
             {installed ? installed.version : Messages.notInstalled()}
@@ -153,6 +141,25 @@ export const EmissarySettingView = ({
         )}
 
         {state?.error && !job && <div style={{ marginTop: 8, color: "#f48a8a", fontSize: 13 }}>{state.error}</div>}
+
+        {/* The two switches on one line, over the buttons (Sarah's board, card 797). */}
+        {supported && (
+          <div style={{ display: "flex", alignItems: "center", gap: 32, marginTop: 12, flexWrap: "wrap" }}>
+            <Tooltip title={playWithDisabledReason ?? ""} placement="bottom-start">
+              <div data-testid="emissary-play-with">
+                <Toggle
+                  value={playWithEmissary}
+                  onChange={onPlayWithEmissary}
+                  disabled={playWithDisabledReason != null}
+                  label={playWithEmissary ? Messages.playWithEmissaryOn() : Messages.playWithEmissaryOff()}
+                />
+              </div>
+            </Tooltip>
+            <div data-testid="emissary-auto-update">
+              <Toggle value={autoUpdate} onChange={onAutoUpdate} label={Messages.autoUpdate()} />
+            </div>
+          </div>
+        )}
 
         {job ? (
           <div style={{ marginTop: 12 }}>
@@ -222,11 +229,6 @@ export const EmissarySettingView = ({
                 </Button>
               </>
             )}
-          </div>
-        )}
-        {supported && (
-          <div style={{ marginTop: 12 }}>
-            <Toggle value={autoUpdate} onChange={onAutoUpdate} label={Messages.autoUpdate()} />
           </div>
         )}
       </div>
