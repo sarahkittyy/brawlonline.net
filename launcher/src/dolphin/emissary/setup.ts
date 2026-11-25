@@ -68,6 +68,8 @@ export default function setupEmissaryIpc({
       }
       store = new EmissaryRecomp({
         root,
+        // Apple silicon also when this launcher is the x64 build under Rosetta: the recomp runs natively.
+        arch: app.runningUnderARM64Translation ? "arm64" : process.arch,
         isoPath,
         isoValid: () => discValid,
         checkDisc: recheckDisc,

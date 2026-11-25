@@ -75,6 +75,11 @@ if(NOT TARGET CURL::libcurl)
     macro(dolphin_find_optional_system_library)
     endmacro()
   endif()
+  if(APPLE)
+    # The macOS 27 SDK declares pipe2, but only from macOS 27: curl would call it on the older macOS
+    # the build targets (CMAKE_OSX_DEPLOYMENT_TARGET), which fails the compile.
+    set(HAVE_PIPE2 OFF CACHE INTERNAL "")
+  endif()
   add_subdirectory("${BO_EXT}/curl" "${CMAKE_CURRENT_BINARY_DIR}/ext/curl" EXCLUDE_FROM_ALL)
 endif()
 
@@ -119,6 +124,10 @@ elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64|ARM64")
   list(APPEND BO_COMMON_SOURCES ArmCPUDetect.cpp)
 else()
   list(APPEND BO_COMMON_SOURCES GenericCPUDetect.cpp)
+endif()
+if(APPLE)
+  # FileUtil.cpp finds the app bundle through DynamicLibrary on macOS.
+  list(APPEND BO_COMMON_SOURCES DynamicLibrary.cpp)
 endif()
 if(WIN32)
   list(APPEND BO_COMMON_SOURCES Logging/ConsoleListenerWin.cpp)
@@ -190,6 +199,10 @@ if(WIN32)
   target_link_libraries(brawl_online_common PUBLIC ws2_32 iphlpapi winmm shlwapi bcrypt qwave)
 else()
   target_link_libraries(brawl_online_common PUBLIC pthread ${CMAKE_DL_LIBS})
+endif()
+if(APPLE)
+  # StringUtil.cpp converts text with iconv: its own library on macOS (glibc has it built in).
+  target_link_libraries(brawl_online_common PUBLIC iconv)
 endif()
 
 # ---- GekkoNet (Brawl Online's, as Dolphin builds it) ------------------------------------------

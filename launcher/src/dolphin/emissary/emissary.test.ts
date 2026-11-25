@@ -75,6 +75,7 @@ function githubRelease(tag: string, zip: Buffer, digest = true, manifest = false
         browser_download_url: `${DL}${tag}/BrawlRecompiled-${tag}-Windows.zip`,
         digest: digest ? `sha256:${sha256(zip)}` : undefined,
       },
+      { name: `BrawlRecompiled-${tag}-macOS.tar.gz`, size: 12, browser_download_url: `${DL}${tag}/m.tar.gz` },
     ],
   };
 }
@@ -91,8 +92,15 @@ describe("parseRelease", () => {
     expect(parseRelease(githubRelease("v0.6.0", zip), "linux").assetName).toBe("BrawlRecompiled-v0.6.0-Linux.tar.gz");
   });
 
-  it("refuses macOS (no release yet) and downloads from elsewhere", () => {
-    expect(() => parseRelease(githubRelease("v0.6.0", zip), "darwin")).toThrow(/no release for this computer/);
+  it("takes the macOS archive on Apple silicon only", () => {
+    expect(parseRelease(githubRelease("v0.6.0", zip), "darwin", "arm64").assetName).toBe(
+      "BrawlRecompiled-v0.6.0-macOS.tar.gz",
+    );
+    expect(() => parseRelease(githubRelease("v0.6.0", zip), "darwin", "x64")).toThrow(/no release for this computer/);
+  });
+
+  it("refuses a computer with no release and downloads from elsewhere", () => {
+    expect(() => parseRelease(githubRelease("v0.6.0", zip), "freebsd")).toThrow(/no release for this computer/);
     const r = githubRelease("v0.6.0", zip);
     r.assets[1].browser_download_url = "https://example.com/evil.zip";
     expect(() => parseRelease(r, "win32")).toThrow(/no download for this computer/);
@@ -470,10 +478,11 @@ describe("EmissaryRecomp", () => {
     expect((await em.state()).status).toBe("running");
   });
 
-  it("is unavailable on macOS", async () => {
+  it("is unavailable on an Intel Mac", async () => {
     const em = new EmissaryRecomp({
       root: path.join(dir, "emissary-recomp"),
       platform: "darwin",
+      arch: "x64",
       isoPath: () => iso,
       isoValid: () => true,
       dolphinTool: () => "x",

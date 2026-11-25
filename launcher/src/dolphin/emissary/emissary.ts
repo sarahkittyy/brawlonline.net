@@ -65,13 +65,18 @@ const PORTABLE_TEXT =
 
 export type Platform = "win32" | "linux" | "darwin" | string;
 
-/** The release archive for `platform`, or null (none for macOS yet). */
-export function assetPattern(platform: Platform): RegExp | null {
+/**
+ * The release archive for `platform`, or null. `arch` is the machine's (an x64 launcher on Apple
+ * silicon runs under Rosetta): the macOS build is for Apple silicon only, so an Intel Mac has none.
+ */
+export function assetPattern(platform: Platform, arch: string = process.arch): RegExp | null {
   switch (platform) {
     case "win32":
       return /-Windows\.zip$/i;
     case "linux":
       return /-Linux\.tar\.gz$/i;
+    case "darwin":
+      return arch === "arm64" ? /-macOS\.tar\.gz$/i : null;
     default:
       return null;
   }
@@ -118,12 +123,12 @@ export class EmissaryCancelled extends EmissaryError {
 }
 
 /** A release as GitHub's API describes it (`/releases/latest`, `/releases/tags/<tag>`), its archive for `platform`. */
-export function parseRelease(v: unknown, platform: Platform): EmissaryRelease {
+export function parseRelease(v: unknown, platform: Platform, arch: string = process.arch): EmissaryRelease {
   const r = v as { tag_name?: unknown; assets?: unknown };
   if (!r || typeof r.tag_name !== "string" || !/^[\w.+-]{1,40}$/.test(r.tag_name) || !Array.isArray(r.assets)) {
     throw new EmissaryError("GitHub sent no EmissaryRecomp release.");
   }
-  const pattern = assetPattern(platform);
+  const pattern = assetPattern(platform, arch);
   if (!pattern) {
     throw new EmissaryError("EmissaryRecomp has no release for this computer yet.");
   }
@@ -325,6 +330,8 @@ export type EmissaryOptions = {
   /** `<netplay>/emissary-recomp`. */
   root: string;
   platform?: Platform;
+  /** The machine's architecture (default process.arch; arm64 for an x64 launcher under Rosetta). */
+  arch?: string;
   /** The Settings disc image, or null. */
   isoPath: () => string | null;
   /** The Settings disc is a valid NTSC-U Brawl image. */
@@ -351,6 +358,7 @@ export class EmissaryRecomp {
   private readonly fetchImpl: Fetch;
   private readonly log: (message: string) => void;
   private readonly platform: Platform;
+  private readonly arch: string;
   private release: EmissaryRelease | null = null;
   private releaseAt = 0;
   private releaseError: string | null = null;
@@ -367,6 +375,7 @@ export class EmissaryRecomp {
     this.fetchImpl = opts.fetch ?? ((url, init) => fetch(url, init));
     this.log = opts.log ?? (() => undefined);
     this.platform = opts.platform ?? process.platform;
+    this.arch = opts.arch ?? process.arch;
   }
 
   get root(): string {
@@ -374,7 +383,7 @@ export class EmissaryRecomp {
   }
 
   get supported(): boolean {
-    return assetPattern(this.platform) != null;
+    return assetPattern(this.platform, this.arch) != null;
   }
 
   /** The runtime's settings, saves and logs. */
@@ -465,7 +474,7 @@ export class EmissaryRecomp {
       if (!res.ok) {
         throw new EmissaryError(`GitHub answered HTTP ${res.status}`);
       }
-      const release = parseRelease(await res.json(), this.platform);
+      const release = parseRelease(await res.json(), this.platform, this.arch);
       release.manifest = await this.readManifest(release);
       this.release = release;
       this.releaseAt = Date.now();

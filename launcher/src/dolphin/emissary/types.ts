@@ -61,7 +61,7 @@ export type EmissaryJob = {
  * `installed`, `gameFiles`, `job`, `staged`, `running`; the renderer only shows it.
  */
 export type EmissaryStatus =
-  | "unavailable" // no release for this platform (macOS for now)
+  | "unavailable" // no release for this platform (an Intel Mac)
   | "needsDisc" // no valid Brawl disc in Settings > Game
   | "notInstalled"
   | "downloading" // download or unpack (job)
