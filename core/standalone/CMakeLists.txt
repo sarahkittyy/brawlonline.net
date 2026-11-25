@@ -150,6 +150,8 @@ set(BO_REUSED_HEADERS
   Core/Rollback/GameplayOnlineBackend.h
   Core/Rollback/InputTrace.h
   Core/Online/MatchQoS.h
+  Core/Online/SpecialAssets.h
+  Core/Rollback/CardFat.h
 )
 foreach(h IN LISTS BO_REUSED_HEADERS)
   configure_file("${BO_DOLPHIN}/Source/Core/${h}" "${BO_INC}/${h}" COPYONLY)
@@ -161,6 +163,8 @@ set(BO_REUSED_SOURCES
   "${BO_DOLPHIN}/Source/Core/Core/Rollback/GameplayOnlineBackend.cpp"
   "${BO_DOLPHIN}/Source/Core/Core/Rollback/InputTrace.cpp"
   "${BO_DOLPHIN}/Source/Core/Core/Online/MatchQoS.cpp"
+  "${BO_DOLPHIN}/Source/Core/Core/Online/SpecialAssets.cpp"
+  "${BO_DOLPHIN}/Source/Core/Core/Rollback/CardFat.cpp"
 )
 
 add_library(brawl_online_common STATIC ${BO_COMMON_SOURCES})
