@@ -16,6 +16,7 @@ import Tooltip from "@mui/material/Tooltip";
 import React from "react";
 
 import { Toggle } from "@/components/form/toggle";
+import { TwoWayToggle } from "@/components/form/two_way_toggle";
 import hintStyles from "@/lib/emissary/emissary_hint.module.css";
 import { emissaryAction, emissaryJobPercent } from "@/lib/emissary/use_emissary";
 
@@ -142,16 +143,17 @@ export const EmissarySettingView = ({
 
         {state?.error && !job && <div style={{ marginTop: 8, color: "#f48a8a", fontSize: 13 }}>{state.error}</div>}
 
-        {/* The two switches on one line, over the buttons (Sarah's board, card 797). */}
+        {/* Dolphin | Emissary and auto-update on one line, over the buttons (Sarah's board, card 797). */}
         {supported && (
           <div style={{ display: "flex", alignItems: "center", gap: 32, marginTop: 12, flexWrap: "wrap" }}>
             <Tooltip title={playWithDisabledReason ?? ""} placement="bottom-start">
               <div data-testid="emissary-play-with">
-                <Toggle
+                <TwoWayToggle
+                  left={Messages.playWithEmissaryOff()}
+                  right={Messages.playWithEmissaryOn()}
                   value={playWithEmissary}
                   onChange={onPlayWithEmissary}
                   disabled={playWithDisabledReason != null}
-                  label={playWithEmissary ? Messages.playWithEmissaryOn() : Messages.playWithEmissaryOff()}
                 />
               </div>
             </Tooltip>
