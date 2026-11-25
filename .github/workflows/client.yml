@@ -53,6 +53,7 @@ on:
     branches: [main]
     paths:
       - "dolphin/**"
+      - "core/**"
       - "launcher/**"
       - "game-code/**"
       - "tools/gamecode/**"
@@ -475,7 +476,7 @@ jobs:
           path: |
             dolphin/build/release/x64/CMakeCache.txt
             dolphin/build/release/x64/CMakeFiles/[0-9]*
-          key: win-cmake-${{ steps.cmake-key.outputs.image }}-${{ hashFiles('.github/scripts/build-dolphin-windows.ps1', 'dolphin/CMakePresets.json', 'dolphin/**/CMakeLists.txt', 'dolphin/**/*.cmake') }}
+          key: win-cmake-${{ steps.cmake-key.outputs.image }}-${{ hashFiles('.github/scripts/build-dolphin-windows.ps1', 'dolphin/CMakePresets.json', 'dolphin/**/CMakeLists.txt', 'dolphin/**/*.cmake', 'core/**/CMakeLists.txt') }}
       - name: Dolphin
         id: dolphin
         shell: pwsh
