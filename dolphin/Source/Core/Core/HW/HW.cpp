@@ -119,6 +119,8 @@ void DoState(Core::System& system, PointerWrap& p)
     p.DoMarker("IOS");
     if (!Rollback::RollbackManager::Get().m_skip_ios_in_dostate.load(std::memory_order_relaxed))
     {
+      if (p.IsReadMode())
+        Rollback::RollbackManager::Get().WaitForRamRestoreBeforeIOS();
       system.GetIOS()->DoState(p);
     }
     else

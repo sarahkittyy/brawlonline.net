@@ -501,7 +501,9 @@ const u8* CommonAsmRoutines::GenQuantizedLoadRuntime(bool single, EQuantizeType 
   return load;
 }
 
-void QuantizedMemoryRoutines::GenQuantizedStore(bool single, EQuantizeType type, int quantize)
+bool QuantizedMemoryRoutines::GenQuantizedStore(bool single, EQuantizeType type, int quantize,
+                                                std::optional<u32> const_addr,
+                                                BitSet32 const_registers_in_use)
 {
   // In: one or two single floats in XMM0, if quantize is -1, a quantization factor in RSCRATCH2
 
@@ -512,7 +514,7 @@ void QuantizedMemoryRoutines::GenQuantizedStore(bool single, EQuantizeType type,
   if (type == QUANTIZE_INVALID1 || type == QUANTIZE_INVALID2 || type == QUANTIZE_INVALID3)
   {
     UD2();
-    return;
+    return false;
   }
 
   if (type == QUANTIZE_FLOAT)
@@ -631,6 +633,12 @@ void QuantizedMemoryRoutines::GenQuantizedStore(bool single, EQuantizeType type,
     }
   }
 
+  if (const_addr.has_value())
+  {
+    return WriteToConstAddress(size, R(RSCRATCH), *const_addr, const_registers_in_use,
+                               /*swap=*/single);
+  }
+
   int flags = isInline ? 0 :
                          SAFE_LOADSTORE_NO_FASTMEM | SAFE_LOADSTORE_NO_PROLOG |
                              SAFE_LOADSTORE_DR_ON | SAFE_LOADSTORE_NO_UPDATE_PC;
@@ -638,6 +646,7 @@ void QuantizedMemoryRoutines::GenQuantizedStore(bool single, EQuantizeType type,
     flags |= SAFE_LOADSTORE_NO_SWAP;
 
   SafeWriteRegToReg(RSCRATCH, RSCRATCH_EXTRA, size, 0, QUANTIZED_REGS_TO_SAVE, flags);
+  return false;
 }
 
 void QuantizedMemoryRoutines::GenQuantizedStoreFloat(bool single, bool isInline)

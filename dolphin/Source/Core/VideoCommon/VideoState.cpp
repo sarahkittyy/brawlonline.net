@@ -3,11 +3,13 @@
 
 #include "VideoCommon/VideoState.h"
 
+#include <algorithm>
+#include <array>
 #include <cstring>
+#include <memory>
 
 #include "Common/ChunkFile.h"
 #include "Core/Rollback/MachineSession.h"
-#include "Core/Rollback/WrittenPages.h"
 #include "Core/System.h"
 #include "VideoCommon/AsyncRequests.h"
 #include "VideoCommon/BPMemory.h"
@@ -61,15 +63,91 @@ void VideoCommon_DoStateRollbackCPU(PointerWrap& p)
 
 namespace
 {
-// TMEM's pages written since each rollback snapshot's capture. Used where TMEM is: on the video
-// thread in dual core (its writers are BP commands; captures and loads run there too).
-constexpr size_t TMEM_PAGE_SIZE = 4096;
-Rollback::WrittenPages<TMEM_SIZE / TMEM_PAGE_SIZE, TMEM_PAGE_SIZE> s_tmem_written;
+// TMEM's 4 KiB page versions for incremental rollback saves and loads. Used where TMEM lives:
+// on the video thread in dual core (its writers are BP commands; captures and loads run there too).
+constexpr size_t TMEM_PAGE_SIZE = VideoCommon::TMEM_SNAPSHOT_PAGE_SIZE;
+constexpr size_t TMEM_PAGE_COUNT = VideoCommon::TMEM_SNAPSHOT_PAGE_COUNT;
+static_assert(TMEM_PAGE_COUNT * TMEM_PAGE_SIZE == TMEM_SIZE);
+
+std::array<u8, TMEM_PAGE_COUNT> s_tmem_dirty = [] {
+  std::array<u8, TMEM_PAGE_COUNT> a{};
+  a.fill(1);
+  return a;
+}();
+bool s_tmem_any_dirty = true;
+std::array<u64, TMEM_PAGE_COUNT> s_tmem_versions{};
+u64 s_tmem_next_version = 1;
+
+void FlushTmemWrites()
+{
+  if (!s_tmem_any_dirty)
+    return;
+  for (size_t p = 0; p < TMEM_PAGE_COUNT; ++p)
+  {
+    if (s_tmem_dirty[p])
+    {
+      s_tmem_versions[p] = s_tmem_next_version++;
+      s_tmem_dirty[p] = 0;
+    }
+  }
+  s_tmem_any_dirty = false;
+}
+
+void MarkAllTmemWritten()
+{
+  s_tmem_dirty.fill(1);
+  s_tmem_any_dirty = true;
+}
 }  // namespace
 
 void VideoCommon_TmemWritten(unsigned int offset, unsigned int size)
 {
-  s_tmem_written.Mark(offset, size);
+  if (size == 0 || offset >= TMEM_SIZE)
+    return;
+  const size_t last = std::min<size_t>(static_cast<size_t>(offset) + size - 1, TMEM_SIZE - 1) /
+                      TMEM_PAGE_SIZE;
+  for (size_t page = offset / TMEM_PAGE_SIZE; page <= last; ++page)
+    s_tmem_dirty[page] = 1;
+  s_tmem_any_dirty = true;
+}
+
+size_t VideoCommon_SaveTmemSnapshot(VideoCommon::TmemSnapshot& snapshot)
+{
+  FlushTmemWrites();
+  if (!snapshot.data)
+  {
+    snapshot.data = std::make_unique<u8[]>(TMEM_SIZE);
+    snapshot.versions.fill(0);
+  }
+  size_t copied = 0;
+  for (size_t p = 0; p < TMEM_PAGE_COUNT; ++p)
+  {
+    if (snapshot.versions[p] == s_tmem_versions[p])
+      continue;
+    std::memcpy(snapshot.data.get() + p * TMEM_PAGE_SIZE, s_tex_mem.data() + p * TMEM_PAGE_SIZE,
+                TMEM_PAGE_SIZE);
+    snapshot.versions[p] = s_tmem_versions[p];
+    copied += TMEM_PAGE_SIZE;
+  }
+  return copied;
+}
+
+size_t VideoCommon_LoadTmemSnapshot(const VideoCommon::TmemSnapshot& snapshot)
+{
+  if (!snapshot.data)
+    return 0;
+  FlushTmemWrites();
+  size_t copied = 0;
+  for (size_t p = 0; p < TMEM_PAGE_COUNT; ++p)
+  {
+    if (s_tmem_versions[p] == snapshot.versions[p])
+      continue;
+    std::memcpy(s_tex_mem.data() + p * TMEM_PAGE_SIZE, snapshot.data.get() + p * TMEM_PAGE_SIZE,
+                TMEM_PAGE_SIZE);
+    s_tmem_versions[p] = snapshot.versions[p];
+    copied += TMEM_PAGE_SIZE;
+  }
+  return copied;
 }
 
 void VideoCommon_DoStateRollbackGPU(PointerWrap& p)
@@ -87,24 +165,8 @@ void VideoCommon_DoStateRollbackGPU(PointerWrap& p)
   p.Do(xfmem);
   p.DoMarker("XF Memory");
 
-  // TMEM is 1 MiB and games seldom write it (Brawl: the same two pages, with the same bytes): a
-  // load copies back the pages written since this capture, not all of it.
-  u64 tmem_capture = p.IsReadMode() ? 0 : s_tmem_written.Capture();
-  p.Do(tmem_capture);
-  u32 tmem_size = TMEM_SIZE;
-  u8* const tmem = p.DoExternal(tmem_size);
-  if (p.IsWriteMode())
-  {
-    std::memcpy(tmem, s_tex_mem.data(), TMEM_SIZE);
-  }
-  else if (p.IsReadMode() && tmem_size == TMEM_SIZE)
-  {
-    s_tmem_written.RestoreTo(tmem_capture, [tmem](size_t page) {
-      std::memcpy(s_tex_mem.data() + page * TMEM_PAGE_SIZE, tmem + page * TMEM_PAGE_SIZE,
-                  TMEM_PAGE_SIZE);
-    });
-  }
-  p.DoMarker("texMem");
+  // TMEM is kept incrementally per slot (VideoCommon_SaveTmemSnapshot / LoadTmemSnapshot) so
+  // neither saves nor loads copy all 1 MiB when only 1-2 pages changed.
 
   TMEM::DoState(p);
   p.DoMarker("TMEM");
@@ -204,7 +266,7 @@ void VideoCommon_DoState(PointerWrap& p)
   p.DoArray(s_tex_mem);
   p.DoMarker("texMem");
   if (p.IsReadMode())
-    s_tmem_written.MarkAll();
+    MarkAllTmemWritten();
 
   // TMEM
   TMEM::DoState(p);

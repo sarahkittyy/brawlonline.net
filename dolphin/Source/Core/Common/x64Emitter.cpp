@@ -2951,6 +2951,11 @@ void XEmitter::VSQRTSD(X64Reg regOp1, X64Reg regOp2, const OpArg& arg)
 {
   WriteAVXOp(0xF2, sseSQRT, regOp1, regOp2, arg);
 }
+void XEmitter::VCMPPS(X64Reg regOp1, X64Reg regOp2, const OpArg& arg, u8 compare)
+{
+  WriteAVXOp(0x00, sseCMP, regOp1, regOp2, arg, 0, 1);
+  Write8(compare);
+}
 void XEmitter::VCMPPD(X64Reg regOp1, X64Reg regOp2, const OpArg& arg, u8 compare)
 {
   WriteAVXOp(0x66, sseCMP, regOp1, regOp2, arg, 0, 1);

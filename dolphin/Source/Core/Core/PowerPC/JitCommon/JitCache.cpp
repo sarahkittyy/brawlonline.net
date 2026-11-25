@@ -352,8 +352,16 @@ void JitBaseBlockCache::DropBlocksOfEntry(u32 physical_address, u32 effective_ad
 bool JitBaseBlockCache::HasCodeAt(u32 physical_address, u32 length) const
 {
   bool any = false;
-  for (u32 line = physical_address / 32; line < (physical_address + length + 31) / 32; ++line)
-    any = any || valid_block.Test(line);
+  const u32 first_line = physical_address / 32;
+  const u32 end_line = (physical_address + length + 31) / 32;
+  for (u32 line = first_line; line < end_line; ++line)
+  {
+    if (valid_block.TestCoarse(line) && valid_block.Test(line))
+    {
+      any = true;
+      break;
+    }
+  }
   if (!any)
     return false;
   auto start = block_range_map.lower_bound(physical_address & BLOCK_RANGE_MAP_MASK);

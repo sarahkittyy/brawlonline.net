@@ -118,7 +118,8 @@ public:
   bool WriteClobbersRegValue(int accessSize, bool swap);
 
   // returns true if an exception could have been caused
-  bool WriteToConstAddress(int accessSize, Gen::OpArg arg, u32 address, BitSet32 registersInUse);
+  bool WriteToConstAddress(int accessSize, Gen::OpArg arg, u32 address, BitSet32 registersInUse,
+                           bool swap = true);
   void WriteToConstRamAddress(int accessSize, Gen::OpArg arg, u32 address, bool swap = true);
 
   void JitGetAndClearCAOV(bool oe);

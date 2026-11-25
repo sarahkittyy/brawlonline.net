@@ -73,7 +73,8 @@ void Jit64::WriteBranchWatch(u32 origin, u32 destination, UGeckoInstruction inst
 {
   if (IsBranchWatchEnabled())
   {
-    ABI_PushRegistersAndAdjustStack(caller_save, 0);
+    const BitSet32 regs = caller_save | FPURegCache::GetPinnedCallerSavedHostRegisters();
+    ABI_PushRegistersAndAdjustStack(regs, 0);
     MOV(64, R(ABI_PARAM1), ImmPtr(&m_branch_watch));
     MOV(64, R(ABI_PARAM2), Imm64(Core::FakeBranchWatchCollectionKey{origin, destination}));
     MOV(32, R(ABI_PARAM3), Imm32(inst.hex));
@@ -81,7 +82,7 @@ void Jit64::WriteBranchWatch(u32 origin, u32 destination, UGeckoInstruction inst
                                                        &Core::BranchWatch::HitVirtualFalse_fk) :
                                           (condition ? &Core::BranchWatch::HitPhysicalTrue_fk :
                                                        &Core::BranchWatch::HitPhysicalFalse_fk));
-    ABI_PopRegistersAndAdjustStack(caller_save, 0);
+    ABI_PopRegistersAndAdjustStack(regs, 0);
   }
 }
 
@@ -95,14 +96,15 @@ void Jit64::WriteBranchWatchDestInRSCRATCH(u32 origin, UGeckoInstruction inst, B
     // Assert RSCRATCH won't be clobbered before it is moved from.
     static_assert(ABI_PARAM1 != RSCRATCH);
 
-    ABI_PushRegistersAndAdjustStack(caller_save, 0);
+    const BitSet32 regs = caller_save | FPURegCache::GetPinnedCallerSavedHostRegisters();
+    ABI_PushRegistersAndAdjustStack(regs, 0);
     MOV(64, R(ABI_PARAM1), ImmPtr(&m_branch_watch));
     MOV(32, R(ABI_PARAM3), R(RSCRATCH));
     MOV(32, R(ABI_PARAM2), Imm32(origin));
     MOV(32, R(ABI_PARAM4), Imm32(inst.hex));
     ABI_CallFunction(m_ppc_state.msr.IR ? &Core::BranchWatch::HitVirtualTrue :
                                           &Core::BranchWatch::HitPhysicalTrue);
-    ABI_PopRegistersAndAdjustStack(caller_save, 0);
+    ABI_PopRegistersAndAdjustStack(regs, 0);
   }
 }
 

@@ -375,9 +375,13 @@ void Jit64::FallBackToInterpreter(UGeckoInstruction inst)
     FlushLazyFPRF();
 
   Interpreter::Instruction instr = Interpreter::GetInterpreterOp(inst);
+  GPRRegCache::StorePinnedToPPCState(*this);
+  FPURegCache::StorePinnedToPPCState(*this);
   ABI_PushRegistersAndAdjustStack({}, 0);
   ABI_CallFunctionPC(instr, &m_system.GetInterpreter(), inst.hex);
   ABI_PopRegistersAndAdjustStack({}, 0);
+  GPRRegCache::LoadPinnedFromPPCState(*this);
+  FPURegCache::LoadPinnedFromPPCState(*this);
 
   // If the instruction wrote to any registers which were marked as discarded,
   // we must mark them as no longer discarded
@@ -432,9 +436,13 @@ void Jit64::HLEFunction(u32 hook_index)
 {
   gpr.Flush();
   fpr.Flush();
+  GPRRegCache::StorePinnedToPPCState(*this);
+  FPURegCache::StorePinnedToPPCState(*this);
   ABI_PushRegistersAndAdjustStack({}, 0);
   ABI_CallFunctionCCP(HLE::ExecuteFromJIT, js.compilerPC, hook_index, &m_system);
   ABI_PopRegistersAndAdjustStack({}, 0);
+  GPRRegCache::LoadPinnedFromPPCState(*this);
+  FPURegCache::LoadPinnedFromPPCState(*this);
 }
 
 void Jit64::DoNothing(UGeckoInstruction _inst)
@@ -468,6 +476,7 @@ void Jit64::ImHere(Jit64& jit)
 bool Jit64::Cleanup()
 {
   bool did_something = false;
+  const BitSet32 pinned_fp_caller_saved = FPURegCache::GetPinnedCallerSavedHostRegisters();
 
   if (jo.optimizeGatherPipe && js.fifoBytesSinceCheck > 0)
   {
@@ -475,28 +484,28 @@ bool Jit64::Cleanup()
     SUB(64, R(RSCRATCH), PPCSTATE(gather_pipe_base_ptr));
     CMP(64, R(RSCRATCH), Imm32(GPFifo::GATHER_PIPE_SIZE));
     FixupBranch exit = J_CC(CC_L);
-    ABI_PushRegistersAndAdjustStack({}, 0);
+    ABI_PushRegistersAndAdjustStack(pinned_fp_caller_saved, 0);
     ABI_CallFunctionP(GPFifo::UpdateGatherPipe, &m_system.GetGPFifo());
-    ABI_PopRegistersAndAdjustStack({}, 0);
+    ABI_PopRegistersAndAdjustStack(pinned_fp_caller_saved, 0);
     SetJumpTarget(exit);
     did_something = true;
   }
 
   if (m_ppc_state.feature_flags & FEATURE_FLAG_PERFMON)
   {
-    ABI_PushRegistersAndAdjustStack({}, 0);
+    ABI_PushRegistersAndAdjustStack(pinned_fp_caller_saved, 0);
     ABI_CallFunctionCCCP(PowerPC::UpdatePerformanceMonitor, js.downcountAmount, js.numLoadStoreInst,
                          js.numFloatingPointInst, &m_ppc_state);
-    ABI_PopRegistersAndAdjustStack({}, 0);
+    ABI_PopRegistersAndAdjustStack(pinned_fp_caller_saved, 0);
     did_something = true;
   }
 
   if (IsProfilingEnabled())
   {
-    ABI_PushRegistersAndAdjustStack({}, 0);
+    ABI_PushRegistersAndAdjustStack(pinned_fp_caller_saved, 0);
     ABI_CallFunctionPC(&JitBlock::ProfileData::EndProfiling, js.curBlock->profile_data.get(),
                        js.downcountAmount);
-    ABI_PopRegistersAndAdjustStack({}, 0);
+    ABI_PopRegistersAndAdjustStack(pinned_fp_caller_saved, 0);
     did_something = true;
   }
 
@@ -578,7 +587,10 @@ void Jit64::MSRUpdated(const OpArg& msr, X64Reg scratch_reg)
     }
     CMP(8, PPCSTATE(pagetable_update_pending), Imm8(0));
     FixupBranch update_not_pending = J_CC(CC_E);
+    const BitSet32 pinned_fp_caller_saved = FPURegCache::GetPinnedCallerSavedHostRegisters();
+    ABI_PushRegistersAndAdjustStack(pinned_fp_caller_saved, 0);
     ABI_CallFunctionP(&PowerPC::MMU::PageTableUpdatedFromJit, &m_system.GetMMU());
+    ABI_PopRegistersAndAdjustStack(pinned_fp_caller_saved, 0);
     SetJumpTarget(update_not_pending);
     if (!msr.IsImm())
       SetJumpTarget(dr_unset);
@@ -704,13 +716,14 @@ void Jit64::WriteIndirectExit(bool bl, u32 after)
   WriteExitDestInRSCRATCH(bl, after);
 
   SetJumpTarget(miss);
-  ABI_PushRegistersAndAdjustStack({}, 0);
+  const BitSet32 pinned_fp_caller_saved = FPURegCache::GetPinnedCallerSavedHostRegisters();
+  ABI_PushRegistersAndAdjustStack(pinned_fp_caller_saved, 0);
   MOV(64, R(ABI_PARAM1), ImmPtr(this));
   MOV(64, R(ABI_PARAM2), ImmPtr(cached_target));
   MOV(64, R(ABI_PARAM3), ImmPtr(slow));
   MOV(32, R(ABI_PARAM4), Imm32(js.blockStart));
   ABI_CallFunction(&Jit64::RetargetIndirectExit);
-  ABI_PopRegistersAndAdjustStack({}, 0);
+  ABI_PopRegistersAndAdjustStack(pinned_fp_caller_saved, 0);
   TEST(8, R(ABI_RETURN), R(ABI_RETURN));
   MOV(32, R(RSCRATCH), PPCSTATE(pc));
   J_CC(CC_Z, slow);
@@ -780,9 +793,13 @@ void Jit64::WriteRfiExitDestInRSCRATCH()
   MOV(32, PPCSTATE(pc), R(RSCRATCH));
   MOV(32, PPCSTATE(npc), R(RSCRATCH));
   Cleanup();
+  GPRRegCache::StorePinnedToPPCState(*this);
+  FPURegCache::StorePinnedToPPCState(*this);
   ABI_PushRegistersAndAdjustStack({}, 0);
   ABI_CallFunctionP(PowerPC::CheckExceptionsFromJIT, &m_system.GetPowerPC());
   ABI_PopRegistersAndAdjustStack({}, 0);
+  GPRRegCache::LoadPinnedFromPPCState(*this);
+  FPURegCache::LoadPinnedFromPPCState(*this);
   EmitUpdateMembase();
   SUB(32, PPCSTATE(downcount), Imm32(js.downcountAmount));
   JMP(asm_routines.dispatcher);
@@ -790,9 +807,13 @@ void Jit64::WriteRfiExitDestInRSCRATCH()
 
 void Jit64::WriteIdleExit(u32 destination)
 {
+  GPRRegCache::StorePinnedToPPCState(*this);
+  FPURegCache::StorePinnedToPPCState(*this);
   ABI_PushRegistersAndAdjustStack({}, 0);
   ABI_CallFunction(CoreTiming::GlobalIdle);
   ABI_PopRegistersAndAdjustStack({}, 0);
+  GPRRegCache::LoadPinnedFromPPCState(*this);
+  FPURegCache::LoadPinnedFromPPCState(*this);
   MOV(32, PPCSTATE(pc), Imm32(destination));
   WriteExceptionExit();
 }
@@ -802,9 +823,13 @@ void Jit64::WriteExceptionExit()
   Cleanup();
   MOV(32, R(RSCRATCH), PPCSTATE(pc));
   MOV(32, PPCSTATE(npc), R(RSCRATCH));
+  GPRRegCache::StorePinnedToPPCState(*this);
+  FPURegCache::StorePinnedToPPCState(*this);
   ABI_PushRegistersAndAdjustStack({}, 0);
   ABI_CallFunctionP(PowerPC::CheckExceptionsFromJIT, &m_system.GetPowerPC());
   ABI_PopRegistersAndAdjustStack({}, 0);
+  GPRRegCache::LoadPinnedFromPPCState(*this);
+  FPURegCache::LoadPinnedFromPPCState(*this);
   EmitUpdateMembase();
   SUB(32, PPCSTATE(downcount), Imm32(js.downcountAmount));
   JMP(asm_routines.dispatcher);
@@ -815,9 +840,13 @@ void Jit64::WriteExternalExceptionExit()
   Cleanup();
   MOV(32, R(RSCRATCH), PPCSTATE(pc));
   MOV(32, PPCSTATE(npc), R(RSCRATCH));
+  GPRRegCache::StorePinnedToPPCState(*this);
+  FPURegCache::StorePinnedToPPCState(*this);
   ABI_PushRegistersAndAdjustStack({}, 0);
   ABI_CallFunctionP(PowerPC::CheckExternalExceptionsFromJIT, &m_system.GetPowerPC());
   ABI_PopRegistersAndAdjustStack({}, 0);
+  GPRRegCache::LoadPinnedFromPPCState(*this);
+  FPURegCache::LoadPinnedFromPPCState(*this);
   EmitUpdateMembase();
   SUB(32, PPCSTATE(downcount), Imm32(js.downcountAmount));
   JMP(asm_routines.dispatcher);
@@ -1022,24 +1051,31 @@ bool Jit64::DoJit(u32 em_address, JitBlock* b, u32 nextPC)
 
   // TODO: Test if this or AlignCode16 make a difference from GetCodePtr
   b->normalEntry = AlignCode4();
+  const BitSet32 pinned_fp_caller_saved = FPURegCache::GetPinnedCallerSavedHostRegisters();
   // Used to get a trace of the last few blocks before a crash, sometimes VERY useful
   if (m_im_here_debug)
   {
-    ABI_PushRegistersAndAdjustStack({}, 0);
+    ABI_PushRegistersAndAdjustStack(pinned_fp_caller_saved, 0);
     ABI_CallFunctionP(ImHere, this);
-    ABI_PopRegistersAndAdjustStack({}, 0);
+    ABI_PopRegistersAndAdjustStack(pinned_fp_caller_saved, 0);
   }
 
   // Conditionally add profiling code.
   if (IsProfilingEnabled())
+  {
+    ABI_PushRegistersAndAdjustStack(pinned_fp_caller_saved, 0);
     ABI_CallFunctionP(&JitBlock::ProfileData::BeginProfiling, b->profile_data.get());
+    ABI_PopRegistersAndAdjustStack(pinned_fp_caller_saved, 0);
+  }
 
   // Diagnostics (Machine::IoLogBlocks): every register is in ppcState at a block's entry.
   if (Machine::IoLogBlocks())
   {
-    ABI_PushRegistersAndAdjustStack({}, 0);
+    GPRRegCache::StorePinnedToPPCState(*this);
+    FPURegCache::StorePinnedToPPCState(*this);
+    ABI_PushRegistersAndAdjustStack(pinned_fp_caller_saved, 0);
     ABI_CallFunctionC(&Machine::IoLogBlock, js.blockStart);
-    ABI_PopRegistersAndAdjustStack({}, 0);
+    ABI_PopRegistersAndAdjustStack(pinned_fp_caller_saved, 0);
   }
 
 #if defined(_DEBUG) || defined(DEBUGFAST) || defined(NAN_CHECK)
@@ -1071,10 +1107,10 @@ bool Jit64::DoJit(u32 em_address, JitBlock* b, u32 nextPC)
       SwitchToFarCode();
       const u8* target = GetCodePtr();
       MOV(32, PPCSTATE(pc), Imm32(js.blockStart));
-      ABI_PushRegistersAndAdjustStack({}, 0);
+      ABI_PushRegistersAndAdjustStack(pinned_fp_caller_saved, 0);
       ABI_CallFunctionPC(JitInterface::CompileExceptionCheckFromJIT, &m_system.GetJitInterface(),
                          static_cast<u32>(JitInterface::ExceptionType::PairedQuantize));
-      ABI_PopRegistersAndAdjustStack({}, 0);
+      ABI_PopRegistersAndAdjustStack(pinned_fp_caller_saved, 0);
       JMP(asm_routines.dispatcher_no_check);
       SwitchToNearCode();
 
@@ -1199,9 +1235,13 @@ bool Jit64::DoJit(u32 em_address, JitBlock* b, u32 nextPC)
         fpr.Flush();
 
         MOV(32, PPCSTATE(pc), Imm32(op.address));
+        GPRRegCache::StorePinnedToPPCState(*this);
+        FPURegCache::StorePinnedToPPCState(*this);
         ABI_PushRegistersAndAdjustStack({}, 0);
         ABI_CallFunctionP(PowerPC::CheckAndHandleBreakPointsFromJIT, &power_pc);
         ABI_PopRegistersAndAdjustStack({}, 0);
+        GPRRegCache::LoadPinnedFromPPCState(*this);
+        FPURegCache::LoadPinnedFromPPCState(*this);
         MOV(64, R(RSCRATCH), ImmPtr(cpu.GetStatePtr()));
         CMP(32, MatR(RSCRATCH), Imm32(std::to_underlying(CPU::State::Running)));
         FixupBranch noBreakpoint = J_CC(CC_E);
@@ -1336,7 +1376,9 @@ bool Jit64::DoJit(u32 em_address, JitBlock* b, u32 nextPC)
         BitSet32 gpr_revertable = gpr.RegistersRevertable();
         BitSet32 fpr_revertable = fpr.RegistersRevertable();
         gpr.Flush(~gpr_revertable);
+        GPRRegCache::LoadPinnedFromPPCState(*this, gpr_revertable);
         fpr.Flush(~fpr_revertable);
+        FPURegCache::LoadPinnedFromPPCState(*this, fpr_revertable);
 
         MOV(32, PPCSTATE(pc), Imm32(op.address));
         WriteExceptionExit();
@@ -1458,9 +1500,11 @@ void Jit64::PlanDirtyMarks(std::span<const PPCAnalyst::CodeOp> ops,
     s32 leader = -1;
     s32 first = 0;
     s32 last = 0;
+    s32 delta = 0;  // current (base - base_at_leader) from updating stores and addi rA, rA, imm
     u32 stores = 0;
     bool multiple = false;  // led by an stmw, which shares its marks across its registers
   };
+  constexpr s64 MAX_DISP = 0x40000000;
   std::array<Group, 32> groups{};
   const auto close = [&](u32 base) {
     Group& group = groups[base];
@@ -1482,47 +1526,99 @@ void Jit64::PlanDirtyMarks(std::span<const PPCAnalyst::CodeOp> ops,
         close(base);
     }
 
-    // D-form stores without update, through a base register: the bytes [base + d, + size).
+    // D-form stores (with or without update) through a base register: [base + d, + size).
     s32 size = 0;
+    s32 disp = static_cast<s16>(inst.SIMM_16);
+    bool update = false;
     switch (inst.OPCD)
     {
     case 36:  // stw
     case 52:  // stfs
       size = 4;
       break;
+    case 37:  // stwu
+    case 53:  // stfsu
+      size = 4;
+      update = true;
+      break;
     case 38:  // stb
       size = 1;
+      break;
+    case 39:  // stbu
+      size = 1;
+      update = true;
       break;
     case 44:  // sth
       size = 2;
       break;
+    case 45:  // sthu
+      size = 2;
+      update = true;
+      break;
     case 54:  // stfd
       size = 8;
+      break;
+    case 55:  // stfdu
+      size = 8;
+      update = true;
       break;
     case 47:  // stmw
       size = (32 - static_cast<s32>(inst.RS)) * 4;
       break;
+    case 60:  // psq_st (at most 4 bytes if W=1, 8 bytes if W=0 across all GQR types)
+      size = inst.W ? 4 : 8;
+      disp = static_cast<s32>(inst.SIMM_12);
+      break;
+    case 61:  // psq_stu
+      size = inst.W ? 4 : 8;
+      disp = static_cast<s32>(inst.SIMM_12);
+      update = true;
+      break;
     default:
       break;
     }
+
+    u32 tracked_base = 32;
     if (size != 0 && inst.RA != 0 && !op.skip)
     {
       const u32 base = inst.RA;
-      const s32 first = static_cast<s16>(inst.SIMM_16);
-      const s32 last = first + size - 1;
       Group& group = groups[base];
-      if (group.leader >= 0 && std::max(last, group.last) - std::min(first, group.first) <
-                                   static_cast<s32>(ROLLBACK_PAGE_SIZE))
+      const s64 cur_delta = group.leader >= 0 ? static_cast<s64>(group.delta) : 0;
+      const s64 first = cur_delta + disp;
+      const s64 last = first + size - 1;
+      const s64 new_first = group.leader >= 0 ? std::min<s64>(first, group.first) : first;
+      const s64 new_last = group.leader >= 0 ? std::max<s64>(last, group.last) : last;
+      const s64 next_delta = cur_delta + (update ? disp : 0);
+      if (group.leader >= 0 && new_last - new_first < static_cast<s64>(ROLLBACK_PAGE_SIZE) &&
+          new_first >= -MAX_DISP && new_last <= MAX_DISP && next_delta >= -MAX_DISP &&
+          next_delta <= MAX_DISP)
       {
-        group.first = std::min(first, group.first);
-        group.last = std::max(last, group.last);
+        group.first = static_cast<s32>(new_first);
+        group.last = static_cast<s32>(new_last);
+        group.delta = static_cast<s32>(next_delta);
         ++group.stores;
         plan[i].kind = DirtyMarkPlan::Kind::Covered;
       }
       else
       {
         close(base);
-        group = {static_cast<s32>(i), first, last, 1, inst.OPCD == 47};
+        group = {static_cast<s32>(i), disp, disp + size - 1, update ? disp : 0, 1, inst.OPCD == 47};
+      }
+      if (update)
+        tracked_base = base;
+    }
+    else if (inst.OPCD == 14 && inst.RD == inst.RA && inst.RA != 0 && !op.skip)
+    {
+      // addi rA, rA, SIMM_16: advance the base offset without ending the active store group.
+      Group& group = groups[inst.RA];
+      if (group.leader >= 0)
+      {
+        const s64 next_delta = static_cast<s64>(group.delta) + static_cast<s16>(inst.SIMM_16);
+        if (next_delta >= -MAX_DISP && next_delta <= MAX_DISP)
+        {
+          group.delta = static_cast<s32>(next_delta);
+          tracked_base = inst.RA;
+        }
       }
     }
 
@@ -1534,7 +1630,10 @@ void Jit64::PlanDirtyMarks(std::span<const PPCAnalyst::CodeOp> ops,
         close(base);
     }
     for (const int reg : op.regsOut)
-      close(static_cast<u32>(reg));
+    {
+      if (static_cast<u32>(reg) != tracked_base)
+        close(static_cast<u32>(reg));
+    }
   }
   for (u32 base = 0; base < 32; ++base)
     close(base);
@@ -1605,16 +1704,26 @@ void Jit64::IntializeSpeculativeConstants()
         SwitchToFarCode();
         target = GetCodePtr();
         MOV(32, PPCSTATE(pc), Imm32(js.blockStart));
-        ABI_PushRegistersAndAdjustStack({}, 0);
+        const BitSet32 pinned_fp_caller_saved = FPURegCache::GetPinnedCallerSavedHostRegisters();
+        ABI_PushRegistersAndAdjustStack(pinned_fp_caller_saved, 0);
         ABI_CallFunctionPC(JitInterface::CompileExceptionCheckFromJIT, &m_system.GetJitInterface(),
                            static_cast<u32>(JitInterface::ExceptionType::SpeculativeConstants));
-        ABI_PopRegistersAndAdjustStack({}, 0);
+        ABI_PopRegistersAndAdjustStack(pinned_fp_caller_saved, 0);
         JMP(asm_routines.dispatcher_no_check);
         SwitchToNearCode();
       }
-      CMP(32, PPCSTATE_GPR(i), Imm32(compileTimeValue));
-      J_CC(CC_NZ, target);
-      gpr.SetImmediate32(i, compileTimeValue, false);
+      if (const X64Reg pinned = gpr.GetPinnedHostRegister(i); pinned != INVALID_REG)
+      {
+        CMP(32, R(pinned), Imm32(compileTimeValue));
+        J_CC(CC_NZ, target);
+        gpr.SetImmediate32(i, compileTimeValue, true);
+      }
+      else
+      {
+        CMP(32, PPCSTATE_GPR(i), Imm32(compileTimeValue));
+        J_CC(CC_NZ, target);
+        gpr.SetImmediate32(i, compileTimeValue, false);
+      }
     }
   }
 }
@@ -1633,7 +1742,9 @@ void Jit64::FlushRegistersBeforeSlowAccess()
       RCForkGuard fpr_guard = fpr.Fork();
 
       gpr.Flush(gprs);
-      fpr.Flush(fprs);
+      GPRRegCache::StorePinnedToPPCState(*this, gprs);
+      fpr.Flush(fprs & ~fpr.GetPinnedGuestRegisters());
+      fpr.StorePinnedToPPCStateNoMutate(fprs);
     }
   }
 }
@@ -1651,9 +1762,10 @@ bool Jit64::HandleFunctionHooking(u32 address)
 
   // A whole-machine session's loop top gave the CPU back (Machine::TakeHookYield): leave for the
   // CPU loop without counting this block's cycles; it comes back here at the same emulated time.
-  ABI_PushRegistersAndAdjustStack({}, 0);
+  const BitSet32 pinned_fp_caller_saved = FPURegCache::GetPinnedCallerSavedHostRegisters();
+  ABI_PushRegistersAndAdjustStack(pinned_fp_caller_saved, 0);
   ABI_CallFunction(&Machine::TakeHookYield);
-  ABI_PopRegistersAndAdjustStack({}, 0);
+  ABI_PopRegistersAndAdjustStack(pinned_fp_caller_saved, 0);
   TEST(8, R(ABI_RETURN), R(ABI_RETURN));
   FixupBranch no_yield = J_CC(CC_Z, Jump::Near);
   // Only the instructions before the hook in this block ran (the hook's own cycles are counted).

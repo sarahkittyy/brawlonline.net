@@ -36,6 +36,11 @@ bool OnXFBField(bool resimulating);
 // CPU thread, deterministic dual core: the FIFO preprocessor saw an EFB copy trigger.
 void OnEFBCopyPreprocess(bool to_xfb);
 
+// CPU thread, deterministic dual core (video thread idle during a rollback load abort): drops any
+// preprocessed copy decisions and trace stamps for commands that the rollback discarded before the
+// video thread executed them.
+void ClearPendingCopyDecisions();
+
 // The EFB copy trigger is executed (GPU thread in dual core, CPU thread in single core).
 // `preprocessed`: the decision was made by OnEFBCopyPreprocess. Returns whether an immediate-XFB
 // present of this copy may happen.
@@ -65,6 +70,11 @@ void OnPresent(bool duplicate);
 // apart and only the rare slower frame is shown late, at the cost of a few milliseconds.
 // Video thread, before the present: the time to present at, or `now` when not held.
 TimePoint PresentHoldUntil(TimePoint now);
+
+// Video thread, before Present()'s hold sleep: publishes when it ends. CPU thread: whether the video
+// thread is still in it, so the rollback lead does not wake early into a LoadFrame wait behind it.
+void SetGpuPresentHoldUntil(TimePoint until);
+bool IsGpuInPresentHold();
 
 // The hold's window and its longest hold.
 static constexpr size_t HOLD_WINDOW = 120;

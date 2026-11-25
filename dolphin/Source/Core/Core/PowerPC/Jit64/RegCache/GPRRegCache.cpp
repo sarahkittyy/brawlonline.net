@@ -91,15 +91,61 @@ OpArg GPRRegCache::GetPPCStateLocation(preg_t preg) const
   return PPCSTATE_GPR(preg);
 }
 
-static constexpr std::array<X64Reg, 11> ALLOCATION_ORDER = {
-#ifdef _WIN32
-    RSI, RDI, R13, R14, R15, R8,
-    R9,  R10, R11, R12, RCX
-#else
-    R12, R13, R14, R15, RSI, RDI,
-    R8,  R9,  R10, R11, RCX
-#endif
+// Callee-saved on both System V x86-64 and Windows x64, so C++ helpers preserve them for free.
+static constexpr std::array<RegCache::PinnedReg, 4> PINNED_GPRS = {{
+    {1, R12},
+    {3, R13},
+    {4, R14},
+    {31, R15},
+}};
+
+static constexpr std::array<X64Reg, 7> ALLOCATION_ORDER = {
+    RSI, RDI, R8, R9, R10, R11, RCX,
 };
+
+std::span<const RegCache::PinnedReg> GPRRegCache::GetPinnedRegisters() const
+{
+  return PINNED_GPRS;
+}
+
+BitSetGuest GPRRegCache::GetPinnedGuestRegisters() const
+{
+  constexpr auto result = [&]() {
+    BitSetGuest gregs;
+    for (const auto& [guest, host] : PINNED_GPRS)
+      gregs[guest] = true;
+    return gregs;
+  }();
+  return result;
+}
+
+Gen::X64Reg GPRRegCache::GetPinnedHostRegister(preg_t preg) const
+{
+  for (const auto& [guest, host] : PINNED_GPRS)
+  {
+    if (guest == preg)
+      return host;
+  }
+  return INVALID_REG;
+}
+
+void GPRRegCache::StorePinnedToPPCState(XEmitter& emitter, BitSetGuest mask)
+{
+  for (const auto& [guest, host] : PINNED_GPRS)
+  {
+    if (mask[guest])
+      emitter.MOV(32, PPCSTATE_GPR(guest), ::Gen::R(host));
+  }
+}
+
+void GPRRegCache::LoadPinnedFromPPCState(XEmitter& emitter, BitSetGuest mask)
+{
+  for (const auto& [guest, host] : PINNED_GPRS)
+  {
+    if (mask[guest])
+      emitter.MOV(32, ::Gen::R(host), PPCSTATE_GPR(guest));
+  }
+}
 
 std::span<const X64Reg> GPRRegCache::GetAllocationOrder() const
 {

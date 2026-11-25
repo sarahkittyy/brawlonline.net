@@ -89,6 +89,7 @@ public:
 
 private:
   friend class RegCache;
+  friend class FPURegCache;
   friend class RCOpArg;
 
   RCX64Reg(RegCache* rc_, preg_t preg);
@@ -120,6 +121,20 @@ struct RegsState
   // As for the host registers: m_guests_is_locked[preg] is m_guests_lock_count[preg] != 0.
   std::array<u8, NUM_GUEST_REGS> m_guests_lock_count{};
   BitSetGuest m_guests_is_locked;
+
+  // For FPURegCache: a bound host XMM register can hold native 32-bit float(s) instead of
+  // widened 64-bit double(s):
+  //   m_guests_single_pair[p]       : XMM holds [ps0_f32, ps1_f32, ?, ?]
+  //   m_guests_single_duplicated[p] : XMM holds [ps0_f32, ?, ?, ?] (ps1 == ps0)
+  //   m_guests_single_may_be_snan[p]: bit-exact load/copy (may hold unquieted SNaN, only valid on
+  //                                   duplicated single)
+  //   m_guests_single_raw_load[p]   : value came from a raw load (lfs/psq_l) or bit-copy/sign-flip
+  //                                   of one without passing through FP rounding/FTZ
+  // Neither pair nor duplicated set => standard [ps0_f64, ps1_f64].
+  BitSetGuest m_guests_single_pair;
+  BitSetGuest m_guests_single_duplicated;
+  BitSetGuest m_guests_single_may_be_snan;
+  BitSetGuest m_guests_single_raw_load;
 };
 
 class RCForkGuard
@@ -157,7 +172,8 @@ public:
     static_assert(std::to_underlying(RealizedLoc::Invalid) == 0);
     const auto chunks = std::bit_cast<std::array<std::uint64_t, 4>>(m_realized);
     return (chunks[0] | chunks[1] | chunks[2] | chunks[3]) != 0 ||
-           (m_write | m_read | m_kill_imm | m_kill_mem | m_revertable);
+           (m_write | m_read | m_kill_imm | m_kill_mem | m_revertable | m_require_double |
+            m_want_single_pair);
   }
 
   bool ShouldLoad(preg_t preg) const { return m_read[preg]; }
@@ -165,6 +181,8 @@ public:
   bool ShouldBeRevertable(preg_t preg) const { return m_revertable[preg]; }
   bool ShouldKillImmediate(preg_t preg) const { return m_kill_imm[preg]; }
   bool ShouldKillMemory(preg_t preg) const { return m_kill_mem[preg]; }
+  bool ShouldRequireDouble(preg_t preg) const { return m_require_double[preg]; }
+  bool ShouldWantSinglePair(preg_t preg) const { return m_want_single_pair[preg]; }
 
   enum class RealizedLoc : u8
   {
@@ -188,19 +206,34 @@ public:
     Any,
   };
 
-  void AddUse(preg_t preg, RCMode mode) { AddConstraint(preg, mode, ConstraintLoc::Any, false); }
+  void AddUse(preg_t preg, RCMode mode)
+  {
+    AddConstraint(preg, mode, ConstraintLoc::Any, false, mode != RCMode::Write, false);
+  }
   void AddUseNoImm(preg_t preg, RCMode mode)
   {
-    AddConstraint(preg, mode, ConstraintLoc::BoundOrMem, false);
+    AddConstraint(preg, mode, ConstraintLoc::BoundOrMem, false, mode != RCMode::Write, false);
   }
   void AddBindOrImm(preg_t preg, RCMode mode)
   {
-    AddConstraint(preg, mode, ConstraintLoc::BoundOrImm, false);
+    AddConstraint(preg, mode, ConstraintLoc::BoundOrImm, false, mode != RCMode::Write, false);
   }
-  void AddBind(preg_t preg, RCMode mode) { AddConstraint(preg, mode, ConstraintLoc::Bound, false); }
+  void AddBind(preg_t preg, RCMode mode)
+  {
+    AddConstraint(preg, mode, ConstraintLoc::Bound, false, mode != RCMode::Write, false);
+  }
   void AddRevertableBind(preg_t preg, RCMode mode)
   {
-    AddConstraint(preg, mode, ConstraintLoc::Bound, true);
+    AddConstraint(preg, mode, ConstraintLoc::Bound, true, mode != RCMode::Write, false);
+  }
+  void AddBindSingle(preg_t preg, RCMode mode, bool want_pair)
+  {
+    AddConstraint(preg, mode, ConstraintLoc::Bound, false, false,
+                  mode != RCMode::Write && want_pair);
+  }
+  void AddRevertableBindSingle(preg_t preg, RCMode mode)
+  {
+    AddConstraint(preg, mode, ConstraintLoc::Bound, true, false, false);
   }
 
   void Reset(preg_t preg)
@@ -211,10 +244,13 @@ public:
     m_kill_imm[preg] = false;
     m_kill_mem[preg] = false;
     m_revertable[preg] = false;
+    m_require_double[preg] = false;
+    m_want_single_pair[preg] = false;
   }
 
 private:
-  void AddConstraint(preg_t preg, RCMode mode, ConstraintLoc loc, bool should_revertable)
+  void AddConstraint(preg_t preg, RCMode mode, ConstraintLoc loc, bool should_revertable,
+                     bool require_double, bool want_single_pair)
   {
     if (IsRealized(preg))
     {
@@ -224,6 +260,10 @@ private:
 
     if (should_revertable)
       m_revertable[preg] = true;
+    if (require_double)
+      m_require_double[preg] = true;
+    if (want_single_pair)
+      m_want_single_pair[preg] = true;
 
     switch (loc)
     {
@@ -303,6 +343,8 @@ private:
   BitSetGuest m_kill_imm;
   BitSetGuest m_kill_mem;
   BitSetGuest m_revertable;
+  BitSetGuest m_require_double;
+  BitSetGuest m_want_single_pair;
 };
 
 class RegCache
@@ -398,8 +440,19 @@ public:
 
   bool IsAllUnlocked() const;
 
+  struct PinnedReg
+  {
+    preg_t guest;
+    Gen::X64Reg host;
+  };
+
   void PreloadRegisters(BitSetGuest to_preload);
   BitSetHost HostRegistersInUse() const;
+
+  virtual std::span<const PinnedReg> GetPinnedRegisters() const { return {}; }
+  virtual BitSetGuest GetPinnedGuestRegisters() const { return {}; }
+  virtual Gen::X64Reg GetPinnedHostRegister(preg_t preg) const { return Gen::INVALID_REG; }
+  bool IsPinned(preg_t preg) const { return GetPinnedGuestRegisters()[preg]; }
 
 protected:
   friend class RCOpArg;
@@ -411,6 +464,11 @@ protected:
                              IgnoreDiscardedRegisters ignore_discarded_registers) = 0;
   virtual void LoadRegister(preg_t preg, Gen::X64Reg new_loc) = 0;
   virtual void DiscardImm(preg_t preg) = 0;
+  virtual void OnRealize(preg_t preg, bool load, bool dirty, bool require_double,
+                         bool want_single_pair)
+  {
+  }
+  virtual void NormalizePinnedRegister(preg_t preg) {}
 
   virtual std::span<const Gen::X64Reg> GetAllocationOrder() const = 0;
   virtual BitSetHost GetAllocatableRegisters() const = 0;

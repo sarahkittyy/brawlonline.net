@@ -36,10 +36,56 @@ void Jit64::psq_stXX(UGeckoInstruction inst)
 
   FlushRegistersBeforeSlowAccess();
 
+  const bool gqrIsConstant = js.constantGqrValid[i];
+  if (gqrIsConstant && !indexed && gpr.IsImm(a))
+  {
+    const u32 gqrValue = js.constantGqr[i] & 0xffff;
+    const int type = gqrValue & 0x7;
+    const u32 addr = gpr.Imm32(a) + offset;
+
+    {
+      // Skip CVTPD2PS/CVTSD2SS only when s was produced by FP arithmetic (already quieted and
+      // FTZ-flushed under MXCSR.FTZ). Raw loads (psq_l/lfs) may hold SNaNs or subnormals that
+      // psq_st must quiet/flush to match the double path and Interpreter's ConvertToSingleFTZ.
+      const bool rs_single = fpr.IsSingle(s) && !fpr.IsRawSingleLoad(s);
+      RCOpArg Rs = rs_single ? RCOpArg(fpr.BindSingle(s, RCMode::Read, /*want_pair=*/!w)) :
+                               fpr.Use(s, RCMode::Read);
+      RegCache::Realize(Rs);
+
+      if (rs_single)
+        MOVAPS(XMM0, Rs);
+      else if (w)
+        CVTSD2SS(XMM0, Rs);  // one
+      else
+        CVTPD2PS(XMM0, Rs);  // pair
+    }
+
+    const bool exception =
+        GenQuantizedStore(w != 0, static_cast<EQuantizeType>(type), (gqrValue & 0x3F00) >> 8, addr,
+                          CallerSavedRegistersInUse());
+    if (update)
+    {
+      if (!jo.memcheck || !exception)
+      {
+        gpr.SetImmediate32(a, addr);
+      }
+      else
+      {
+        RCOpArg Ra = gpr.RevertableBind(a, RCMode::Write);
+        RegCache::Realize(Ra);
+        MemoryExceptionCheck();
+        MOV(32, Ra, Imm32(addr));
+      }
+    }
+    return;
+  }
+
+  const bool rs_single = fpr.IsSingle(s) && !fpr.IsRawSingleLoad(s);
   RCX64Reg scratch_guard = gpr.Scratch(RSCRATCH_EXTRA);
   RCOpArg Ra = update ? gpr.Bind(a, RCMode::ReadWrite) : gpr.Use(a, RCMode::Read);
   RCOpArg Rb = indexed ? gpr.Use(b, RCMode::Read) : RCOpArg::Imm32((u32)offset);
-  RCOpArg Rs = fpr.Use(s, RCMode::Read);
+  RCOpArg Rs = rs_single ? RCOpArg(fpr.BindSingle(s, RCMode::Read, /*want_pair=*/!w)) :
+                           fpr.Use(s, RCMode::Read);
   RegCache::Realize(scratch_guard, Ra, Rb, Rs);
 
   MOV_sum(32, RSCRATCH_EXTRA, Ra, Rb);
@@ -48,39 +94,18 @@ void Jit64::psq_stXX(UGeckoInstruction inst)
   if (update && !jo.memcheck)
     MOV(32, Ra, R(RSCRATCH_EXTRA));
 
-  if (w)
+  if (rs_single)
+    MOVAPS(XMM0, Rs);
+  else if (w)
     CVTSD2SS(XMM0, Rs);  // one
   else
     CVTPD2PS(XMM0, Rs);  // pair
 
-  const bool gqrIsConstant = js.constantGqrValid[i];
   if (gqrIsConstant)
   {
     const u32 gqrValue = js.constantGqr[i] & 0xffff;
-    int type = gqrValue & 0x7;
-
-    // Paired stores (other than w/type zero) don't yield any real change in
-    // performance right now, but if we can improve fastmem support this might change
-    if (gqrValue == 0)
-    {
-      if (w)
-        GenQuantizedStore(true, static_cast<EQuantizeType>(type), (gqrValue & 0x3F00) >> 8);
-      else
-        GenQuantizedStore(false, static_cast<EQuantizeType>(type), (gqrValue & 0x3F00) >> 8);
-    }
-    else
-    {
-      FlushPCBeforeSlowAccess();
-
-      // We know what GQR is here, so we can load RSCRATCH2 and call into the store method directly
-      // with just the scale bits.
-      MOV(32, R(RSCRATCH2), Imm32(gqrValue & 0x3F00));
-
-      if (w)
-        CALL(asm_routines.single_store_quantized[type]);
-      else
-        CALL(asm_routines.paired_store_quantized[type]);
-    }
+    const int type = gqrValue & 0x7;
+    GenQuantizedStore(w != 0, static_cast<EQuantizeType>(type), (gqrValue & 0x3F00) >> 8);
   }
   else
   {
@@ -130,7 +155,7 @@ void Jit64::psq_lXX(UGeckoInstruction inst)
   RCX64Reg scratch_guard = gpr.Scratch(RSCRATCH_EXTRA);
   RCX64Reg Ra = gpr.Bind(a, update ? RCMode::ReadWrite : RCMode::Read);
   RCOpArg Rb = indexed ? gpr.Use(b, RCMode::Read) : RCOpArg::Imm32((u32)offset);
-  RCX64Reg Rs = fpr.Bind(s, RCMode::Write);
+  RCX64Reg Rs = fpr.BindSingle(s, RCMode::Write, /*want_pair=*/true);
   RegCache::Realize(scratch_guard, Ra, Rb, Rs);
 
   MOV_sum(32, RSCRATCH_EXTRA, Ra, Rb);
@@ -163,7 +188,8 @@ void Jit64::psq_lXX(UGeckoInstruction inst)
     CALLptr(MatR(RSCRATCH));
   }
 
-  CVTPS2PD(Rs, R(XMM0));
+  MOVAPS(Rs, R(XMM0));
+  fpr.SetSingle(s, /*is_pair=*/true, /*may_be_snan=*/false, /*raw_load=*/true);
   if (update && jo.memcheck)
   {
     ADD(32, Ra, Rb);

@@ -68,6 +68,9 @@ CopyDecision s_gpu_copy{};
 bool s_gpu_copy_pending = false;
 double s_last_hold_ms = 0;  // video thread: the hold of the frame being presented
 std::atomic<u64> s_copy_decision_misses{0};
+// Video thread: the deadline of the latest Present()'s present hold (0 before the first). The CPU
+// thread checks it so PacedSleepLead does not wake early into a LoadFrame wait behind that hold.
+std::atomic<s64> s_gpu_present_hold_until_ns{0};
 
 // PPR_PRESENT_LOG
 struct CpuStamp
@@ -182,6 +185,31 @@ void OnEFBCopyPreprocess(bool to_xfb)
   }
   std::lock_guard lk(s_copy_decisions_mutex);
   s_copy_decisions.push_back(decision);
+}
+
+void ClearPendingCopyDecisions()
+{
+  {
+    std::lock_guard lk(s_copy_decisions_mutex);
+    s_copy_decisions.clear();
+  }
+  {
+    std::lock_guard lk(s_trace_mutex);
+    s_cpu_stamps.clear();
+  }
+}
+
+void SetGpuPresentHoldUntil(TimePoint until)
+{
+  const s64 ns =
+      std::chrono::duration_cast<std::chrono::nanoseconds>(until.time_since_epoch()).count();
+  s_gpu_present_hold_until_ns.store(ns, std::memory_order_release);
+}
+
+bool IsGpuInPresentHold()
+{
+  const s64 ns = s_gpu_present_hold_until_ns.load(std::memory_order_acquire);
+  return Clock::now().time_since_epoch() < std::chrono::nanoseconds(ns);
 }
 
 bool OnEFBCopy(bool to_xfb, bool preprocessed, bool* redraw)
