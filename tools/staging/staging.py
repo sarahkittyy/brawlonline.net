@@ -920,13 +920,16 @@ def clean_after_toolchain_update(build_dir: Path, log: Path) -> None:
     stamp_file.write_text(stamp)
 
 
-def msvc_env() -> dict[str, str]:
-    """This environment with each PATH folder once, for cmd running vcvars64.bat.
+def dedupe_path() -> None:
+    """Lists each of this process's PATH folders once, for every command it starts.
 
-    vcvars64.bat puts its folders in front of PATH in one `set` line, and cmd refuses a line over
-    8191 characters: "The input line is too long." then "The syntax of the command is incorrect.",
-    exit 255 (Sarah's board, card 818: this PC's machine and user PATHs list many folders twice,
-    about 7,700 characters together, 4,900 without the repeats)."""
+    cmd refuses a line over 8191 characters and can't search a PATH that long, and this PC's
+    machine and user PATHs list many folders twice, about 7,700 characters together (4,900 without
+    the repeats). Anything that adds to PATH went over (Sarah's board, card 818: ""build everything"
+    failed"): vcvars64.bat puts its folders in front in one `set` line ("The input line is too
+    long." then "The syntax of the command is incorrect.", exit 255, at `cmake --build`), and
+    `npm run` puts node_modules/.bin folders in front ("'node' is not recognized", at
+    `npm run stage:plugin`)."""
     seen: set[str] = set()
     folders = []
     for p in os.environ.get("PATH", "").split(os.pathsep):
@@ -934,19 +937,19 @@ def msvc_env() -> dict[str, str]:
         if key and key not in seen:
             seen.add(key)
             folders.append(p)
-    return {**os.environ, "PATH": os.pathsep.join(folders)}
+    os.environ["PATH"] = os.pathsep.join(folders)
 
 
 def msvc(cmd: str, cwd: Path, log: Path, build_dir: Path | None = None) -> None:
     """Runs `cmd` with the MSVC environment of the compiler the build dir was configured with."""
-    run(f'call "{build_vcvars(build_dir)}" >nul && {cmd}', cwd=cwd, env=msvc_env(), log=log, shell=True)
+    run(f'call "{build_vcvars(build_dir)}" >nul && {cmd}', cwd=cwd, log=log, shell=True)
 
 
 def vc_runtime_dir(build_dir: Path) -> Path:
     """The x64 Visual C++ runtime DLLs (msvcp140.dll, vcruntime140.dll, ...) of the build's compiler."""
     # `set`, not `echo %VCToolsRedistDir%`: cmd expands %...% before vcvars runs.
     out = subprocess.run(f'call "{build_vcvars(build_dir)}" >nul && set VCToolsRedistDir',
-                         shell=True, env=msvc_env(), capture_output=True, text=True).stdout
+                         shell=True, capture_output=True, text=True).stdout
     m = re.search(r"^VCToolsRedistDir=(.+?)\s*$", out, re.M)
     crt = sorted((Path(m.group(1)) / "x64").glob("Microsoft.VC*.CRT")) if m else []
     if not crt:
@@ -1650,6 +1653,7 @@ def main() -> None:
     p.set_defaults(func=destroy)
 
     args = ap.parse_args()
+    dedupe_path()
     args.func(args)
 
 
