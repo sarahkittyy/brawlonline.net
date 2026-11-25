@@ -107,7 +107,8 @@ class OnlineBackend:
         self.ticket_ttl_secs = ticket_ttl_secs
         # mm's per-mode rules (stage lists); None: the built-in server/config/rulesets.json.
         self.rulesets_file = Path(rulesets_file) if rulesets_file else None
-        self.keep = keep
+        # PPHARNESS_KEEP_BACKEND=1: keep every backend's run dir (its servers' logs) after the tests.
+        self.keep = keep or os.environ.get("PPHARNESS_KEEP_BACKEND") == "1"
         # The address mm listens on. Dolphin skips its UPnP mapping for a server on 127.0.0.1, so
         # a test of the mapping puts mm on the machine's LAN address.
         self.mm_host = mm_host
@@ -262,6 +263,19 @@ class OnlineBackend:
             # The URL as -d, before the other options: psql on Windows stops parsing options at
             # the first non-option argument and ignores the rest (with only a warning).
             _run([psql, "-d", url, "-v", "ON_ERROR_STOP=1", "-c", sql])
+
+    def query(self, sql: str) -> list[list[str]]:
+        """Rows of a query on this backend's database (psql, tab-separated text)."""
+        if self.pg_mode == "docker":
+            res = _run(["docker", "compose", "exec", "-T", "postgres", "psql", "-U", "pp", "-d", self.db_name,
+                        "-t", "-A", "-F", "	", "-v", "ON_ERROR_STOP=1", "-c", sql], cwd=server_dir())
+        else:
+            psql = str(portable_pg_bin() / _platform.exe_name("psql"))
+            if not Path(psql).exists():
+                psql = shutil.which("psql") or psql
+            res = _run([psql, "-d", self.database_url, "-t", "-A", "-F", "	", "-v", "ON_ERROR_STOP=1", "-c", sql],
+                       env=dict(os.environ, PGPASSWORD="pp-dev-password"))
+        return [line.split("	") for line in res.stdout.splitlines() if line.strip()]
 
     def _stop_postgres(self) -> None:
         if self.db_name and self.pg_mode in ("external", "docker"):

@@ -8,7 +8,7 @@
 
 #include <gtest/gtest.h>
 
-#include "Core/Online/GameSetup.h"
+#include "BrawlOnline/Online/GameSetup.h"
 
 using namespace Online::GameSetup;
 

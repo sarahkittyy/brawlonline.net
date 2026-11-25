@@ -18,6 +18,7 @@ Needs the real Dolphin build, a working video backend for screenshots, the built
 from __future__ import annotations
 
 import concurrent.futures
+import json
 import os
 import re
 import shutil
@@ -34,7 +35,9 @@ from ppharness import paths
 from ppharness.backend import OnlineBackend, OnlineUser
 from ppharness.client import HarnessClient, PadInput
 from ppharness.instance import DolphinInstance, InstanceConfig
-from ppharness.netsim import LinkProfile, NetSim, Spike
+from ppharness.netsim import LinkProfile, NetProfile, NetSim, Spike
+from ppharness import crossplay
+from ppharness.recomp import wants_recomp
 
 from test_online import _logged_in, _make_backend, _wait
 
@@ -830,8 +833,395 @@ def test_direct_set_under_the_gameplay_session(backend: OnlineBackend,
         assert g.bridge()["lost"] == 0
         # No reboot: the GameBridge found the plugin's block once and never lost it.
         assert "is gone" not in (g.inst.user_dir / "Logs" / "dolphin.log").read_text(errors="replace")
+    # Each game reported each game with the engine that ran it (docs/design/brawl-online-core.md
+    # §10, "Which engine"): our Dolphin here, EmissaryRecomp for a recomp instance.
+    _engines_reported(backend, 2 * len(rep["games"]))
     for g in (a, b):
         g.c.mm_cancel()
+
+
+def _engines_reported(backend: OnlineBackend, n: int) -> None:
+    """accounts logged `n` game reports, each naming its game's engine: `dolphin` with its version,
+    or `emissary` where PPHARNESS_RECOMP (or PPHARNESS_RECOMP_WSL) runs a recomp."""
+    def reported() -> list[str]:
+        log = re.sub(r"\x1b\[[0-9;]*m", "", backend.log_text("accounts"))
+        return [l for l in log.splitlines() if " game reported" in l]
+    lines = _wait(lambda: (lambda ls: ls if len(ls) >= n else None)(reported()), 30, f"{n} game reports")
+    engines = [m.group(1) if (m := re.search(r"engine=(\w+)", l)) else None for l in lines]
+    recomp = os.environ.get("PPHARNESS_RECOMP") or os.environ.get("PPHARNESS_RECOMP_WSL")
+    allowed = {"dolphin", "emissary"} if recomp else {"dolphin"}
+    assert set(engines) <= allowed, lines
+    if recomp:
+        # A recomp player names itself (RecompEngine::Identity), never "unknown" or "dolphin".
+        assert "emissary" in engines, lines
+    assert all(re.search(r"engine=dolphin v?\S+", l) for l in lines if "engine=dolphin" in l), lines
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("preset", ["bad_wifi"])
+def test_direct_set_through_netsim(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
+                                   gpu_backend: str, preset: str) -> None:
+    """test_direct_set_under_the_gameplay_session's three games with the P2P traffic through
+    netsim (_p2p_through_netsim; bad_wifi: 60 ms round trip, 25 ms jitter, 2% burst loss), so the
+    games roll back all the time: the confirmed checksums and the frame traces agree on every game.
+    With PPHARNESS_RECOMP, an EmissaryRecomp instance's own rollbacks (docs/design/brawl-online-core.md
+    §10), against another or against Dolphin."""
+    sims, inis = _p2p_through_netsim(preset)
+    try:
+        a, b, ua, ub = _connected_direct(backend, dolphin, gpu_backend, f"gameplay-set-{preset}",
+                                         ("iris", "jack"), dolphin_ini=inis)
+        rep = online_set.play_set([a, b], games=3, mode="direct")
+        # Rolled back: both games where they run at the same speed; against a slower game (an
+        # EmissaryRecomp that cannot hold 60 fps) only the faster one predicts, so only it rolls back.
+        for g in rep["games"]:
+            assert max(g["rollbacks"]) > 0, ("rolled back", g["rollbacks"])
+        for g in (a, b):
+            g.c.mm_cancel()
+    finally:
+        for sim in sims:
+            sim.stop()
+
+
+
+@pytest.mark.slow
+def test_direct_set_on_random(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
+                              gpu_backend: str) -> None:
+    """Both players on RANDOM for a three-game Direct set, and every stage at random: game 1 by
+    START on the stage select (a random stage of the server's list, drawn by the host's session),
+    games 2 and 3 by the loser's A on the stage select's RANDOM (drawn by P+ on that machine and
+    sent as the pick). Each RANDOM character is drawn on its player's own machine at lock-in
+    (g_mtRand, which the session seeds) and sent with the lock-in, so nothing random has to come
+    out the same on two machines by itself; both must still set up the same match (play_game:
+    characters, costumes and stage, the setup hash) and keep the same confirmed checksums. With
+    PPHARNESS_RECOMP: an EmissaryRecomp against Dolphin or another recomp
+    (docs/design/brawl-online-core.md §10.2: the srand/srandi hooks Dolphin has are for Dolphin's
+    own netplay only). Screenshots: run/artifacts/game-bridge/gameplay-random/."""
+    def on_random(g: Game) -> None:
+        B.css_pick_character(g.c, 0, B.CSS_RANDOM)
+        g.steps("wait 30")
+        assert online_set.css_panel(g.c)["char"] == B.CSS_RANDOM, online_set.css_panel(g.c)
+        g.shot("03b-css-random")
+
+    a, b, ua, ub = _connected_direct(backend, dolphin, gpu_backend, "gameplay-random", ("rosa", "ravi"),
+                                     on_css=(on_random, on_random))
+    for g in (a, b):
+        lock = online_set.local(g.c)["lock"]
+        assert lock["game"] == 1 and lock["css"] == B.CSS_RANDOM and lock["char_kind"] not in (0xFF, None), (
+            g.inst.name, lock)
+    rep = online_set.play_set([a, b], games=3, mode="direct", random_stage=True)
+    print("random set:", [(g["stage"], g["setup"]) for g in rep["games"]], flush=True)
+    assert all(li.get("random") for li in rep["lock_ins"]), rep["lock_ins"]
+    for g in rep["games"]:
+        assert g["stage"] is not None and g["checksums"]["mismatches"] == 0, g
+    for g in (a, b):
+        assert g.bridge()["lost"] == 0
+        g.c.mm_cancel()
+
+
+@pytest.mark.slow
+def test_direct_set_on_sound_stages(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
+                                    gpu_backend: str) -> None:
+    """A three-game Direct set through netsim's bad_wifi (rollbacks all the time) on the stages with
+    the most sound of their own: Smashville (game 1, its music and its stage sounds; the stage of
+    the 'Invalid read 0x4a97f255' crash), Pokemon Stadium 2, Fountain of Dreams (four looping
+    stage sounds). Every rollback runs frames again that start sounds; the session's sound
+    bookkeeping (the sound hooks in detail_SetupSound and BasicSound::Stop: Gprb::Session::
+    OnSoundAlloc / OnSoundAttached / OnSoundStop) attaches a re-run's sound to the one its first
+    run started instead of starting a second, and stops what the corrected run no longer starts.
+    Both machines must play the stages picked, keep the same confirmed checksums, and every machine
+    that rolled back must show the bookkeeping at work (re-run sound starts, reattached). With
+    PPHARNESS_RECOMP: an EmissaryRecomp (docs/design/brawl-online-core.md §10.2), which had none of
+    these hooks before (its sound counters were all 0)."""
+    sims, inis = _p2p_through_netsim("bad_wifi")
+    try:
+        a, b, ua, ub = _connected_direct(backend, dolphin, gpu_backend, "gameplay-sound-stages", ("sana", "sid"),
+                                         stocks=3, dolphin_ini=inis, pick_game_1=False)
+        online_set.wait(lambda: all(online_set.scene(g.c) == "scSelStage" for g in (a, b)), 120,
+                        "game 1: both on the stage select")
+        a.steps("wait 40")
+        B.sss_pick_stage(a.c, B.STAGE_KIND["smashville"], 0)
+        rep = online_set.play_set([a, b], games=3, mode="direct",
+                                  stage_picks={2: "pokemon_stadium_2", 3: "fountain_of_dreams"})
+        for g in (a, b):
+            g.c.mm_cancel()
+    finally:
+        for sim in sims:
+            sim.stop()
+    assert [g["stage"] for g in rep["games"]] == [B.STAGE_KIND[s] for s in (
+        "smashville", "pokemon_stadium_2", "fountain_of_dreams")], [g["stage"] for g in rep["games"]]
+    for g in rep["games"]:
+        print(f"game {g['game']} stage {g['stage']:#x} rollbacks {g['rollbacks']}: sound {g['sound']}", flush=True)
+    for i, name in enumerate(("host", "join")):
+        snd = [g["sound"][i] for g in rep["games"]]
+        rolled = sum(g["rollbacks"][i] for g in rep["games"])
+        assert all(s["sound_allocs"] > 0 for s in snd), (name, "no sound allocations seen", snd)
+        if rolled >= 50:
+            assert sum(s["resim_sound_allocs"] for s in snd) > 0, (name, rolled, snd)
+            assert sum(s["sound_reattached"] for s in snd) > 0, (name, rolled, snd)
+
+
+# Time sync (docs/design/brawl-online-core.md §10.2): the links and the machine differences a set is
+# played through. "asymmetric": one way slow, the other fast (a congested uplink); "skew": game-b's
+# match runs 0.4% fast (Dolphin: its emulation speed; EmissaryRecomp: BRAWL_TEST_CLOCK_SKEW);
+# "stall": game-b's game thread is held 2.5 s at frame 900 of every game (PPR_GPRB_TEST_STALL_AT).
+ASYMMETRIC = NetProfile(up=LinkProfile(latency_ms=70, jitter_ms=4), down=LinkProfile(latency_ms=10, jitter_ms=2),
+                        name="asymmetric")
+TIME_SYNC_CASES = {
+    "bad_wifi": ("bad_wifi", None, None),
+    "asymmetric": (ASYMMETRIC, None, None),
+    "skew": ("lan", {"Core": {"EmulationSpeed": 1.004}}, {"BRAWL_TEST_CLOCK_SKEW": "1.004"}),
+    "stall": ("lan", None, {"PPR_GPRB_TEST_STALL_AT": "900:2500"}),
+}
+STALL_FRAME, STALL_MS = 900, 2500
+NET_WINDOW = re.compile(
+    r"gprb net: frames (-?\d+)-(\d+): (\d+) frames.*?late frames (\d+) .*?waits for the peer (\d+) "
+    r"\((\d+) ms, max ([\d.]+) ms\), frames ahead avg (-?[\d.]+) \[(-?[\d.]+), (-?[\d.]+)\], "
+    r"speed \[([\d.]+), ([\d.]+)\], catch-up frames (\d+)")
+PACING_LINE = re.compile(r"recomp pacing: emulated ([\d.]+) s in ([\d.]+) s real \(([\d.]+)%.*?re-anchored (\d+)")
+
+
+def _time_sync_windows(g: Game) -> dict[str, Any]:
+    """The session's time sync as its log tells it (both engines log the same lines): per game, the
+    10-second windows (`gprb net: frames A-B`) with frames ahead, speed, catch-up frames, waits for
+    the peer and late frames; an EmissaryRecomp also its pacing line per game (`recomp pacing`)."""
+    text = (g.inst.user_dir / "Logs" / "dolphin.log").read_text(errors="replace")
+    games: list[list[dict[str, Any]]] = []
+    last_first = None
+    for m in NET_WINDOW.finditer(text):
+        first, last = int(m.group(1)), int(m.group(2))
+        if last_first is None or first < last_first:
+            games.append([])
+        last_first = first
+        games[-1].append({"first": first, "last": last, "frames": int(m.group(3)), "late": int(m.group(4)),
+                          "waits": int(m.group(5)), "wait_ms": int(m.group(6)), "wait_max_ms": float(m.group(7)),
+                          "ahead": float(m.group(8)), "ahead_min": float(m.group(9)),
+                          "ahead_max": float(m.group(10)), "speed_min": float(m.group(11)),
+                          "speed_max": float(m.group(12)), "catch_up": int(m.group(13))})
+    pacing = [{"emulated_s": float(m.group(1)), "real_s": float(m.group(2)), "percent": float(m.group(3)),
+               "reanchors": int(m.group(4))} for m in PACING_LINE.finditer(text)]
+    return {"games": games, "pacing": pacing}
+
+
+def _check_time_sync(name: str, sync: dict[str, Any], case: str) -> list[str]:
+    """What a converged time sync looks like on one machine; returns the problems found. Per game,
+    the windows after the first (the start's hard sync) and, with the stall, after the window it
+    fell in and the one after (the catch-up): frames ahead on average within 1.5 frames of even in
+    every window and within 0.75 over the game (no lasting lead; 1.25 with the skew, where time
+    sync's proportional correction settles at a lead), the first and second half of the game within
+    1 frame of each other (no drift), waits for the other player under 2% of the time, and an
+    EmissaryRecomp's timeline at 100% +- 1% of real time over a game (the held one: short of it by
+    the hold)."""
+    problems = []
+    checked = 0
+    for i, ws in enumerate(sync["games"]):
+        steady = ws[1:]
+        if case == "stall":
+            steady = [w for w in steady if w["last"] < STALL_FRAME or w["first"] > STALL_FRAME + 1200]
+        if len(steady) < 2:
+            continue  # a game that ended early (KOs): too short to tell; two games of the three must be
+        checked += 1
+        for w in steady:
+            if abs(w["ahead"]) > 1.5:
+                problems.append(f"{name} game {i + 1} frames {w['first']}-{w['last']}: {w['ahead']:+.2f} frames ahead")
+        mean = sum(w["ahead"] for w in steady) / len(steady)
+        # A machine that runs fast settles where time sync's correction (up to 0.5% slower for the one
+        # ahead, 1% faster for the one behind, in proportion to the gap over 3 frames) makes up for it:
+        # 0.4% needs about 0.8 frames (Dolphin against Dolphin: +-0.77..0.86), steady, not drifting.
+        if abs(mean) > (1.25 if case == "skew" else 0.75):
+            problems.append(f"{name} game {i + 1}: {mean:+.2f} frames ahead over the game")
+        half = len(steady) // 2
+        h1 = sum(w["ahead"] for w in steady[:half]) / half
+        h2 = sum(w["ahead"] for w in steady[half:]) / (len(steady) - half)
+        if abs(h2 - h1) > 1.0:
+            problems.append(f"{name} game {i + 1}: frames ahead drifted {h1:+.2f} -> {h2:+.2f}")
+        frames = sum(w["frames"] for w in steady)
+        wait_ms = sum(w["wait_ms"] for w in steady)
+        if wait_ms > 0.02 * frames * 1000 / 60:
+            problems.append(f"{name} game {i + 1}: waited {wait_ms} ms for the other player in {frames} frames")
+    if checked < 2:
+        problems.append(f"{name}: only {checked} games long enough to check ({[len(ws) for ws in sync['games']]} windows)")
+    for i, p in enumerate(sync["pacing"]):
+        if case == "stall":
+            # Both timelines stand still for the hold: the held game's in the hold, the other's while it
+            # waits for the held one's inputs (an EmissaryRecomp on either side). That much short of
+            # real time, no more.
+            short = p["real_s"] - p["emulated_s"]
+            if abs(short - STALL_MS / 1000) > 1.0:
+                problems.append(f"{name} game {i + 1}: the timeline was {short:.2f} s short of real time "
+                                f"(the hold was {STALL_MS / 1000:.1f} s)")
+        elif abs(p["percent"] - 100) > 1.0 and case != "skew":
+            problems.append(f"{name} game {i + 1}: the timeline ran at {p['percent']:.2f}% of real time")
+    return problems
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("case", list(TIME_SYNC_CASES))
+def test_direct_set_time_sync(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
+                              gpu_backend: str, case: str) -> None:
+    """Time sync over a whole three-game Direct set (docs/design/brawl-online-core.md §10.2): the
+    session slows the machine that runs ahead a little, speeds up the one behind and lets it catch
+    up a frame at a time, so both stay level and neither keeps waiting or rolling back. Played
+    through netsim (TIME_SYNC_CASES: bad_wifi, an asymmetric link, a 0.4% fast game-b, a 2.5 s
+    stall of game-b in every game); both machines' logs must show the frames-ahead figure staying
+    near 0 with no drift from the start of a game to its end (_check_time_sync). The windows of
+    both machines go to run/artifacts/game-bridge/time-sync-<case>/sync.json. With PPHARNESS_RECOMP:
+    an EmissaryRecomp's own pacing (its deterministic clock's schedule) against Dolphin or another
+    recomp."""
+    link, ini_b, env_b = TIME_SYNC_CASES[case]
+    sims, inis = _p2p_through_netsim(link)
+    if ini_b:
+        inis = (inis[0], {**inis[1], **ini_b})
+    try:
+        # 5 stocks: the games run to their 2-minute limit (12 windows each), so a drift has time to show.
+        a, b, ua, ub = _connected_direct(backend, dolphin, gpu_backend, f"time-sync-{case}", ("tara", "theo"),
+                                         stocks=5, dolphin_ini=inis, env=(None, env_b))
+        rep = online_set.play_set([a, b], games=3, mode="direct")
+        for g in (a, b):
+            g.c.mm_cancel()
+    finally:
+        for sim in sims:
+            sim.stop()
+    sync = {g.inst.name: _time_sync_windows(g) for g in (a, b)}
+    out = ARTIFACTS / f"time-sync-{case}"
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "sync.json").write_text(json.dumps({
+        "case": case, "recomp": os.environ.get("PPHARNESS_RECOMP_NAMES") if os.environ.get("PPHARNESS_RECOMP") else None,
+        "rollbacks": [g["rollbacks"] for g in rep["games"]], "sync": sync}, indent=1))
+    for name, s in sync.items():
+        assert len(s["games"]) == 3, (name, "net windows per game", [len(w) for w in s["games"]])
+        for i, ws in enumerate(s["games"]):
+            print(f"{name} game {i + 1}: frames ahead " +
+                  " ".join(f"{w['ahead']:+.2f}" for w in ws) + f"; catch-up {sum(w['catch_up'] for w in ws)}, "
+                  f"waits {sum(w['wait_ms'] for w in ws)} ms, speed [{min(w['speed_min'] for w in ws):.4f}, "
+                  f"{max(w['speed_max'] for w in ws):.4f}]", flush=True)
+        for p in s["pacing"]:
+            print(f"{name} pacing: {p}", flush=True)
+    problems = [p for name, s in sync.items() for p in _check_time_sync(name, s, case)]
+    assert not problems, problems
+
+
+# An EmissaryRecomp's audio per match (docs/design/brawl-online-core.md §10.4): its AI DMA blocks played against the
+# shown timeline, those held for rollback re-runs against the re-runs' own time, those played while a re-run ran, and
+# its output queue.
+AUDIO_LINE = re.compile(
+    r"recomp audio: played (\d+) blocks \(([\d.]+) s\) for (-?[\d.]+) s shown \((-?[\d.]+)%\), held (\d+) for "
+    r"re-runs \(([\d.]+) s; re-runs ([\d.]+) s\), (\d+) in load waits, (\d+) played during re-runs, (\d+) muted; "
+    r"output queue avg ([\d.]+) ms, max ([\d.]+) ms, (\d+) of (\d+) blocks dropped")
+AUDIO_BLOCK_S = 0x180 / (32000 * 4)  # one AI DMA block: 0x180 bytes of 32 kHz stereo, 3 ms
+
+
+def recomp_audio(g: Game) -> list[dict[str, Any]]:
+    """An EmissaryRecomp's `recomp audio` lines, one per match."""
+    text = (g.inst.user_dir / "Logs" / "dolphin.log").read_text(errors="replace")
+    keys = ("played", "played_s", "shown_s", "percent", "held", "held_s", "reruns_s", "load_held", "played_in_reruns",
+            "muted", "queue_avg_ms", "queue_max_ms", "dropped", "offered")
+    return [{k: (float(v) if "." in v else int(v)) for k, v in zip(keys, m.groups())} for m in AUDIO_LINE.finditer(text)]
+
+
+def _pcm_to_wav(pcm: Path) -> Path | None:
+    """WIICOMPILED_AUDIO_DUMP's raw 32 kHz stereo 16-bit PCM as a WAV beside it."""
+    import wave
+    if not pcm.exists() or pcm.stat().st_size == 0:
+        return None
+    out = pcm.with_suffix(".wav")
+    with wave.open(str(out), "wb") as w:
+        w.setnchannels(2)
+        w.setsampwidth(2)
+        w.setframerate(32000)
+        w.writeframes(pcm.read_bytes())
+    pcm.unlink()
+    return out
+
+
+@pytest.mark.slow
+@crossplay.VARIANTS
+@pytest.mark.parametrize("rerun_audio", ["waits", "advance"])
+def test_direct_set_recomp_audio_follows_the_shown_frames(backend: OnlineBackend,
+                                                           dolphin: Callable[..., DolphinInstance],
+                                                           gpu_backend: str, variant: str, rerun_audio: str,
+                                                           monkeypatch: pytest.MonkeyPatch) -> None:
+    """The audio clock waits for rollback re-runs on an EmissaryRecomp, as on Dolphin (CoreTiming's
+    SetRollbackAudioWaits; the recomp's AI DMA, hle_stubs.h Audio_HLE_SetRollbackWaits): a three-game Direct set
+    over bad_wifi (a rollback every few frames), a recomp against Dolphin or against a recomp. Per match, each recomp's
+    `recomp audio` line must show its audio played for the shown timeline only (100% +- 1% of it: the timeline less
+    the re-runs and load waits), the blocks it held for re-runs as long as the re-runs (+-5%), next to none played
+    while a re-run ran (under 10% of the re-runs' blocks), and its output queue dropping under 1% of its blocks.
+    `advance` (PPR_GPRB_RESIM_AUDIO=advance on the recomps: the waits off, the audio as it was before them) is the
+    A side: the re-runs' audio played too, at once, so the audio ran ahead of the shown timeline by the re-runs. The
+    recomps' sound goes to run/artifacts/game-bridge/recomp-audio-<variant>-<rerun_audio>/: <instance>-ai-set.wav
+    (WIICOMPILED_AUDIO_DUMP: what the AI DMA sent to the output) and <instance>-heard-set.wav
+    (WIICOMPILED_AUDIO_DUMP_OUTPUT: what the output queue took, as it was played)."""
+    out = ARTIFACTS / f"recomp-audio-{variant}-{rerun_audio}"
+    shutil.rmtree(out, ignore_errors=True)
+    out.mkdir(parents=True, exist_ok=True)
+    rep: dict[str, Any] = {}
+    games: list[Game] = []
+
+    def body(factory: Callable[..., DolphinInstance]) -> None:
+        sims, inis = _p2p_through_netsim("bad_wifi")
+        env: list[dict[str, str] | None] = []
+        for name in ("game-a", "game-b"):
+            e: dict[str, str] | None = None
+            if wants_recomp(name):
+                e = {"WIICOMPILED_AUDIO_DUMP": str(out / f"{name}-ai.pcm"),
+                     "WIICOMPILED_AUDIO_DUMP_OUTPUT": str(out / f"{name}-heard.pcm")}
+                if rerun_audio == "advance":
+                    e["PPR_GPRB_RESIM_AUDIO"] = "advance"
+            env.append(e)
+        try:
+            a, b, ua, ub = _connected_direct(backend, factory, gpu_backend, f"recomp-audio-{rerun_audio}",
+                                             ("aura", "audi"), stocks=5, dolphin_ini=inis, env=(env[0], env[1]))
+            games.extend((a, b))
+            rep.update(online_set.play_set([a, b], games=3, mode="direct"))
+            for g in (a, b):
+                g.c.mm_cancel()
+        finally:
+            for sim in sims:
+                sim.stop()
+
+    crossplay.run(variant, "b$", "[ab]$", monkeypatch, backend, dolphin, body)
+    from ppharness.recomp import RecompInstance
+    lines = {g.inst.name: recomp_audio(g) for g in games if isinstance(g.inst, RecompInstance)}
+    wavs = {}
+    for pcm in sorted(out.glob("*.pcm")):
+        # (The dump is flushed per block; the recomp may still be running: the copy is what it played so far.)
+        copy = out / f"{pcm.stem}-set.pcm"
+        shutil.copyfile(pcm, copy)
+        wavs[pcm.stem] = str(_pcm_to_wav(copy))
+    (out / "audio.json").write_text(json.dumps({"variant": variant, "rerun_audio": rerun_audio, "audio": lines,
+                                                "rollbacks": [g["rollbacks"] for g in rep["games"]],
+                                                "wav": wavs}, indent=1))
+    problems = []
+    for name, ls in lines.items():
+        for i, l in enumerate(ls):
+            print(f"{name} match {i + 1}: {l}", flush=True)
+        if len(ls) < 3:
+            problems.append(f"{name}: {len(ls)} recomp audio lines for 3 games")
+        reruns = sum(l["reruns_s"] for l in ls)
+        if reruns < 1.0:
+            problems.append(f"{name}: only {reruns:.2f} s of re-runs over the set: too few rollbacks to tell")
+        for i, l in enumerate(ls):
+            rerun_blocks = l["reruns_s"] / AUDIO_BLOCK_S
+            if rerun_audio == "waits":
+                if abs(l["percent"] - 100) > 1.0:
+                    problems.append(f"{name} match {i + 1}: audio {l['percent']:.2f}% of the shown timeline")
+                if abs(l["held_s"] - l["reruns_s"]) > max(0.05 * l["reruns_s"], 0.05):
+                    problems.append(f"{name} match {i + 1}: held {l['held_s']:.3f} s for {l['reruns_s']:.3f} s of re-runs")
+                if l["played_in_reruns"] > 0.1 * rerun_blocks + 2:
+                    problems.append(f"{name} match {i + 1}: {l['played_in_reruns']} blocks played during re-runs "
+                                    f"({rerun_blocks:.0f} blocks of re-runs)")
+                if l["dropped"] > 0.01 * l["offered"]:
+                    problems.append(f"{name} match {i + 1}: the output queue dropped {l['dropped']} of {l['offered']}")
+            else:
+                if l["held"] or l["load_held"]:
+                    problems.append(f"{name} match {i + 1}: held {l['held']} + {l['load_held']} blocks with the waits off")
+                if l["played_in_reruns"] < 0.8 * rerun_blocks:
+                    problems.append(f"{name} match {i + 1}: {l['played_in_reruns']} blocks during {rerun_blocks:.0f} of re-runs")
+                if l["reruns_s"] > 0.2 and l["percent"] < 100 + 50 * l["reruns_s"] / max(l["shown_s"], 1):
+                    problems.append(f"{name} match {i + 1}: audio {l['percent']:.2f}% of the shown timeline "
+                                    f"with {l['reruns_s']:.2f} s of re-runs played")
+    assert lines, "no recomp played"
+    assert not problems, problems
 
 
 @pytest.mark.slow
@@ -1576,3 +1966,66 @@ def test_online_menus_match_the_modes(backend: OnlineBackend, dolphin: Callable[
     g.steps("wait 60")
     g.shot("24-ranked-css-searching")
     g.c.mm_cancel()
+
+
+# P+'s "Hold Start to Pause" (its NETPLAY codes: a C2 hook at 0x801E6D24 in the SDK's SI response
+# handling, with the word at 0x80584084 = 2 in a match whose pause is off): START reaches the game
+# once held 50 frames, a timer per channel at 0x80584080 + 8 * chan. Ranked's no-pause sets the
+# timers back to 0 every frame (the plugin's noPause). EmissaryRecomp replaces the SDK's PADRead, so
+# the hook never ran there and START paused at once (Ranked too); it runs the code itself now
+# (EmissaryRecomp runtime/include/pplus_si_codes.h).
+PPLUS_HOLD_TIMERS = 0x80584080
+PPLUS_PAUSE_OFF_WORD = 0x80584084
+MATCH_FRAME = 0x901812A4   # g_GameFrame's frame counter
+
+
+def _hold_series(g: Game, polls: int = 60, held: int = 40) -> list[tuple[int, int]]:
+    """START held `held` polls with P+'s word forced to 2 on this machine: per poll, the frames the
+    match ran since the press and this channel's hold timer."""
+    g.c.write_mem(PPLUS_PAUSE_OFF_WORD, bytes.fromhex("00000002"))
+    p0 = g.c.status().input_polls
+    f0 = g.c.read_u32(MATCH_FRAME)
+    g.c.pad_script(0, [PadInput(buttons=["START"], hold=held), PadInput(hold=polls - held)])
+    rows = []
+    for k in range(1, polls + 1):
+        g.c.wait_frame(input_polls=p0 + k, timeout_ms=10000)
+        g.c.write_mem(PPLUS_PAUSE_OFF_WORD, bytes.fromhex("00000002"))
+        rows.append((g.c.read_u32(MATCH_FRAME) - f0, g.c.read_u32(PPLUS_HOLD_TIMERS)))
+    return rows
+
+
+@pytest.mark.slow
+def test_hold_start_to_pause_on_both_engines(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
+                                             gpu_backend: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A Direct match between an EmissaryRecomp (A) and a Dolphin (B). Each holds START for 40
+    frames with P+'s hold word at 2: on both, START is held back (the match runs on, no pause) and
+    the hold timer counts one a frame to the same count on both engines."""
+    if not os.environ.get("PPHARNESS_RECOMP"):
+        pytest.skip("PPHARNESS_RECOMP is not set")
+    monkeypatch.setenv("PPHARNESS_RECOMP_NAMES", "game-a$")
+    a, b, _ua, _ub = _connected_direct(backend, dolphin, gpu_backend, "hold-start", ("hola", "holb"), stocks=4)
+    from ppharness.recomp import RecompInstance
+    assert isinstance(a.inst, RecompInstance) and not isinstance(b.inst, RecompInstance)
+    online_set.wait(lambda: all(online_set.gstatus(g.c)["phase"] == "running" for g in (a, b)), 240,
+                    "the match to run on both")
+    a.steps("wait 200")
+    series = {}
+    for g in (a, b):
+        series[g.name] = _hold_series(g)
+        g.steps("wait 30")
+    peaks = {}
+    for name, rows in series.items():
+        frames = [f for f, _ in rows]
+        timers = [t for _, t in rows]
+        # The match ran on (no pause: START never reached the game) ...
+        assert frames[-1] >= len(rows) - 5, (name, "the match stopped: paused?", rows)
+        # ... the timer counted one a match frame while START was held (the samples are read
+        # between polls of a running game, so a sample may come a frame early or late) ...
+        peak = timers.index(max(timers))
+        for (f0, t0), (f1, t1) in zip(rows[:peak], rows[1:peak + 1]):
+            assert 0 <= t1 - t0 <= max(f1 - f0, 0) + 1, (name, rows)
+        # ... up to the 40 frames held, short of P+'s 50, then 0 once START is up.
+        assert 38 <= max(timers) <= 40 and timers[-1] == 0, (name, rows)
+        peaks[name] = max(timers)
+    assert abs(peaks[a.name] - peaks[b.name]) <= 1, series
+

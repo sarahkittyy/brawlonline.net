@@ -78,9 +78,15 @@ export async function readDolphinControllers(userFolder: string): Promise<Dolphi
       wiimote.push({ index: i + 1, device: "", label: "Real Wii Remote", real: true });
     } else if (source === WIIMOTE_EMULATED) {
       const device = section?.get("Device", "") ?? "";
-      const extension = extensionLabel(section?.get("Extension", "") ?? "");
+      const kind = (section?.get("Extension", "") ?? "").trim().toLowerCase();
+      const extension = extensionLabel(kind);
       const label = deviceLabel(device);
-      wiimote.push({ index: i + 1, device, label: extension ? `${label} + ${extension}` : label });
+      wiimote.push({
+        index: i + 1,
+        device,
+        label: extension ? `${label} + ${extension}` : label,
+        ...(kind === "nunchuk" || kind === "classic" ? { extension: kind } : {}),
+      });
     }
   }
   return { gc, wiimote };

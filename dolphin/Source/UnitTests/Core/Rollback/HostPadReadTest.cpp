@@ -19,7 +19,7 @@
 #include "Core/HW/Memmap.h"
 #include "Core/Harness/HarnessInternal.h"
 #include "Core/PowerPC/PowerPC.h"
-#include "Core/Rollback/GameplayRollback.h"
+#include "BrawlOnline/Rollback/GameplayRollback.h"
 #include "Core/System.h"
 #include "InputCommon/GCPadStatus.h"
 #include "UICommon/UICommon.h"

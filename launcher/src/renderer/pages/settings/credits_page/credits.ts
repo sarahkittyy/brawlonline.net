@@ -16,6 +16,11 @@ export const BRAWLBACK_CONTRIBUTORS: Credit[] = [
   { name: "WHellhaus", url: "https://github.com/WHellhaus" },
 ];
 
+export const THANKS: Credit[] = [
+  { name: "kalomaze", url: "https://github.com/kalomaze", note: "recomp help" },
+  { name: "Bella", url: "https://github.com/AlephZeroChill", note: "optimization PRs" },
+];
+
 export const BUILT_ON: Credit[] = [
   {
     name: "Nyx",
@@ -36,6 +41,21 @@ export const BUILT_ON: Credit[] = [
     name: "GekkoNet",
     url: "https://github.com/HeatXD/GekkoNet",
     note: "HeatXD",
+  },
+  {
+    name: "EmissaryRecomp",
+    url: "https://github.com/kalomaze/EmissaryRecomp",
+    note: "kalomaze",
+  },
+  {
+    name: "BrawlRecompiled",
+    url: "https://github.com/josiahg2502-glitch/BrawlRecompiled",
+    note: "JosiahG",
+  },
+  {
+    name: "WiiCompiled",
+    url: "https://github.com/patchzyy/Wiicompiled",
+    note: "patchzyy",
   },
   {
     name: "Slippi Launcher",

@@ -22,12 +22,12 @@
 #include "Common/Thread.h"
 #include "Core/Config/GraphicsSettings.h"
 #include "Core/ConfigManager.h"
-#include "Core/Online/GameBridge.h"
-#include "Core/Online/SpectatorChat.h"
+#include "BrawlOnline/Online/GameBridge.h"
+#include "BrawlOnline/Online/SpectatorChat.h"
 #include "Core/Rollback/ClipRecorder.h"
-#include "Core/Rollback/GameplaySession.h"
-#include "Core/Rollback/PeerData.h"
-#include "Core/Rollback/ReplayFile.h"
+#include "BrawlOnline/Rollback/GameplaySession.h"
+#include "BrawlOnline/Rollback/PeerData.h"
+#include "BrawlOnline/Rollback/ReplayFile.h"
 #include "VideoCommon/OnScreenDisplay.h"
 
 namespace Gprb::Replay::Playback

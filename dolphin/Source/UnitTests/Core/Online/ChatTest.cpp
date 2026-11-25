@@ -15,8 +15,8 @@
 
 #include "Common/CommonPaths.h"
 #include "Common/FileUtil.h"
-#include "Core/Online/Chat.h"
-#include "Core/Online/ChatCrypto.h"
+#include "BrawlOnline/Online/Chat.h"
+#include "BrawlOnline/Online/ChatCrypto.h"
 
 namespace CC = Online::ChatCrypto;
 namespace Chat = Online::Chat;

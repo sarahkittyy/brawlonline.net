@@ -1,0 +1,162 @@
+// Copyright 2026 Dolphin Emulator Project
+// SPDX-License-Identifier: GPL-2.0-or-later
+
+#include "BrawlOnline/Config/OnlineSettings.h"
+
+#include <algorithm>
+
+#include "Common/StringUtil.h"
+
+namespace Config
+{
+namespace
+{
+constexpr char DEV_HOST[] = "127.0.0.1";
+
+bool IsAsciiDigit(char c)
+{
+  return c >= '0' && c <= '9';
+}
+
+bool AllDigits(const std::string& text, size_t max_size)
+{
+  return !text.empty() && text.size() <= max_size &&
+         std::all_of(text.begin(), text.end(), IsAsciiDigit);
+}
+}  // namespace
+
+const Info<std::string> ONLINE_MM_HOST{{System::Main, "Online", "MatchmakingHost"},
+                                       "mm.brawlonline.net"};
+const Info<int> ONLINE_MM_PORT{{System::Main, "Online", "MatchmakingPort"}, 43113};
+const Info<bool> ONLINE_USE_DEV_SERVER{{System::Main, "Online", "UseDevServer"}, false};
+const Info<std::string> ONLINE_ACCOUNTS_URL{{System::Main, "Online", "AccountsUrl"},
+                                            "https://brawlonline.net"};
+const Info<std::string> ONLINE_DEV_ACCOUNTS_URL{{System::Main, "Online", "DevAccountsUrl"},
+                                                "http://127.0.0.1:8080"};
+
+const Info<bool> ONLINE_FORCE_NETPLAY_PORT{{System::Main, "Online", "ForceNetplayPort"}, false};
+const Info<int> ONLINE_NETPLAY_PORT{{System::Main, "Online", "NetplayPort"}, 2626};
+const Info<bool> ONLINE_FORCE_LAN_IP{{System::Main, "Online", "ForceLanIP"}, false};
+const Info<std::string> ONLINE_LAN_IP{{System::Main, "Online", "LanIP"}, ""};
+const Info<bool> ONLINE_UPNP{{System::Main, "Online", "UPnP"}, true};
+const Info<bool> ONLINE_IPV6{{System::Main, "Online", "IPv6"}, true};
+const Info<std::string> ONLINE_MM_HOST6{{System::Main, "Online", "MatchmakingHost6"}, ""};
+
+// "gameplay": the gameplay-only (Slippi-style) session; "netplay": the whole-machine netplay
+// session (synchronized reboot), kept as a fallback.
+const Info<std::string> ONLINE_SESSION_BACKEND{{System::Main, "Online", "SessionBackend"},
+                                               "gameplay"};
+const Info<int> ONLINE_INPUT_DELAY{{System::Main, "Online", "InputDelay"}, 0};
+const Info<bool> ONLINE_MUSIC{{System::Main, "Online", "Music"}, true};
+const Info<bool> ONLINE_POTATO_MODE{{System::Main, "Online", "PotatoMode"}, false};
+const Info<bool> ONLINE_LOAD_FAST_FORWARD{{System::Main, "Online", "LoadFastForward"}, true};
+const Info<bool> ONLINE_CHAT_IN_MATCHES{{System::Main, "Online", "ChatInMatches"}, true};
+const Info<std::string> ONLINE_CHAT_WINDOW{{System::Main, "Online", "ChatWindow"}, ""};
+const Info<int> ONLINE_CHAT_TEXT_SIZE{{System::Main, "Online", "ChatTextSize"}, 100};
+const Info<std::string> ONLINE_CHAT_KEY{{System::Main, "Online", "ChatKey"}, ""};
+const Info<bool> ONLINE_DISABLE_CHAT{{System::Main, "Online", "DisableChat"}, false};
+const Info<bool> ONLINE_INPUT_DISPLAY{{System::Main, "Online", "InputDisplay"}, false};
+const Info<int> ONLINE_INPUT_DISPLAY_X{{System::Main, "Online", "InputDisplayX"}, 20};
+const Info<int> ONLINE_INPUT_DISPLAY_Y{{System::Main, "Online", "InputDisplayY"}, 760};
+const Info<int> ONLINE_INPUT_DISPLAY_WIDTH{{System::Main, "Online", "InputDisplayWidth"}, 220};
+const Info<bool> ONLINE_INPUT_DISPLAY_EVERYONE{{System::Main, "Online", "InputDisplayEveryone"}, false};
+const Info<bool> ONLINE_SAVE_REPLAYS{{System::Main, "Online", "SaveReplays"}, true};
+const Info<std::string> ONLINE_REPLAY_DIR{{System::Main, "Online", "ReplayDir"}, ""};
+const Info<bool> ONLINE_STREAM_GAMES{{System::Main, "Online", "StreamGames"}, true};
+const Info<std::string> ONLINE_PPLUS_RELEASE{{System::Main, "Online", "PPlusRelease"}, ""};
+const Info<bool> ONLINE_REPLAY_MONTHLY_FOLDERS{{System::Main, "Online", "ReplayMonthlyFolders"},
+                                              true};
+const Info<bool> ONLINE_SEEK_BAR_COLLAPSED{{System::Main, "Online", "SeekBarCollapsed"}, false};
+
+std::string GetMatchmakingHost()
+{
+  return Get(ONLINE_USE_DEV_SERVER) ? std::string(DEV_HOST) : Get(ONLINE_MM_HOST);
+}
+
+int GetMatchmakingPort()
+{
+  return Get(ONLINE_MM_PORT);
+}
+
+std::string GetMatchmakingHost6()
+{
+  if (!Get(ONLINE_IPV6))
+    return {};
+  const std::string set = Get(ONLINE_MM_HOST6);
+  if (!set.empty())
+    return set;
+  if (Get(ONLINE_USE_DEV_SERVER))
+    return "::1";
+  const std::string host = Get(ONLINE_MM_HOST);
+  if (host == "mm.brawlonline.net")
+    return "mm6.brawlonline.net";
+  // An IPv4 address has no IPv6 one (a LAN server: staging).
+  if (ParseIpv4(host))
+    return {};
+  return host;
+}
+
+std::string GetAccountsUrl()
+{
+  std::string url =
+      Get(ONLINE_USE_DEV_SERVER) ? Get(ONLINE_DEV_ACCOUNTS_URL) : Get(ONLINE_ACCOUNTS_URL);
+  while (!url.empty() && url.back() == '/')
+    url.pop_back();
+  return url;
+}
+
+std::optional<u32> ParseIpv4(const std::string& text)
+{
+  const auto parts = SplitString(text, '.');
+  if (parts.size() != 4)
+    return std::nullopt;
+  u32 v = 0;
+  for (const auto& p : parts)
+  {
+    if (!AllDigits(p, 3) || std::stoi(p) > 255)
+      return std::nullopt;
+    v = (v << 8) | static_cast<u32>(std::stoi(p));
+  }
+  return v;
+}
+
+bool ChosenNetwork::Contains(const std::string& ip) const
+{
+  const std::optional<u32> v = ParseIpv4(ip);
+  return mask != 0 && v && (*v & mask) == network;
+}
+
+ChosenNetwork GetChosenNetwork()
+{
+  ChosenNetwork n;
+  if (!Get(ONLINE_FORCE_LAN_IP))
+    return n;
+  const auto parts = SplitString(Get(ONLINE_LAN_IP), '/');
+  n.address = parts.empty() ? std::string() : parts[0];
+  const std::optional<u32> ip = ParseIpv4(n.address);
+  if (parts.size() != 2 || !ip || !AllDigits(parts[1], 2))
+    return n;
+  int prefix = std::stoi(parts[1]);
+  // Tailscale's adapter has a /32 address out of 100.64.0.0/10, the range all its peers get.
+  if (prefix == 32 && (*ip & 0xFFC00000) == 0x64400000)
+    prefix = 10;
+  // No network of one address, nor one as wide as the internet.
+  if (prefix < 8 || prefix > 30)
+    return n;
+  n.mask = ~u32{0} << (32 - prefix);
+  n.network = *ip & n.mask;
+  return n;
+}
+
+ChosenNetwork GetChosenNetwork(const std::string& internet_address)
+{
+  ChosenNetwork n = GetChosenNetwork();
+  if (n.mask != 0 && n.address == internet_address)
+  {
+    n.network = 0;
+    n.mask = 0;
+  }
+  return n;
+}
+
+}  // namespace Config

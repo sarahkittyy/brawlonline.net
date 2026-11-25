@@ -20,7 +20,7 @@
 #include "Core/Movie.h"
 #include "Core/NetPlayClient.h"
 #include "Core/NetPlayProto.h"
-#include "Core/Rollback/GameplayRollback.h"
+#include "BrawlOnline/Rollback/GameplayRollback.h"
 #include "Core/Rollback/MachineSession.h"
 #include "Core/Rollback/ReplayPlayback.h"
 #include "Core/System.h"

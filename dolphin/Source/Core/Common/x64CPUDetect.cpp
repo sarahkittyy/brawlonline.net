@@ -22,7 +22,7 @@
 #include "Common/MsgHandler.h"
 #endif
 
-#ifndef _WIN32
+#if !defined(_MSC_VER)  // GCC and Clang, MinGW's included
 
 #ifdef __FreeBSD__
 #include <unistd.h>
@@ -86,7 +86,7 @@ static void WarnIfRunningUnderEmulation()
                  "Please run the ARM64 build of Dolphin for a better experience.");
 }
 
-#endif  // ifdef _WIN32
+#endif  // if !defined(_MSC_VER)
 
 struct CPUIDResult
 {
@@ -110,7 +110,7 @@ CPUInfo::CPUInfo()
 
 void CPUInfo::Detect()
 {
-#ifdef _WIN32
+#ifdef _MSC_VER
   WarnIfRunningUnderEmulation();
 #endif
 

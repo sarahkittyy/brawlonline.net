@@ -70,9 +70,10 @@
 #include "Core/Movie.h"
 #include "Core/NetPlayClient.h"
 #include "Core/NetPlayProto.h"
-#include "Core/Online/GameAlive.h"
+#include "BrawlOnline/Online/GameAlive.h"
+#include "Core/Rollback/DolphinEngine.h"
 #include "Core/Rollback/MachineSDCard.h"
-#include "Core/Rollback/GameplaySession.h"
+#include "BrawlOnline/Rollback/GameplaySession.h"
 #include "Core/Rollback/MachineSession.h"
 #include "Core/PatchEngine.h"
 #include "Core/PowerPC/GDBStub.h"
@@ -231,6 +232,9 @@ bool Init(Core::System& system, std::unique_ptr<BootParameters> boot, const Wind
 
   // The host's thread that starts the emulation (its UI thread), for the stall tracer.
   StallTracer::RegisterThread(StallTracer::Role::UI);
+
+  // The online core runs the session's hooks through Dolphin's CPU.
+  Rollback::RegisterDolphinEngine();
 
   if (s_emu_thread.joinable())
   {

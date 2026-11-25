@@ -20,6 +20,12 @@ export default function setupSettingsIpc({
   // NEW: Subscribe to setting changes for side effects
   // This inverts the dependency - SettingsManager doesn't need to know about DolphinManager
   setupSettingsSubscriptions(settingsManager, dolphinManager);
+  // "Play Button Action" (Launch Project+ / Launch Dolphin) is gone: Play always boots the game
+  // (Settings > Game > "Play Project+ with" picks the engine), and Configure Dolphin opens Dolphin
+  // without one. Whoever had Launch Dolphin gets Play's game again.
+  if (!settingsManager.get().settings.launchGameOnPlay) {
+    void settingsManager.updateSetting("launchGameOnPlay", true);
+  }
   listOwnReplayFolder(settingsManager, dolphinManager);
 
   // Synchronous getter
@@ -96,6 +102,18 @@ function setupSettingsSubscriptions(settingsManager: SettingsManager, dolphinMan
   settingsManager.onSettingChange("potatoMode", async (potatoMode) => {
     const installation = dolphinManager.getInstallation(DolphinLaunchType.NETPLAY);
     await installation.updateSettings({ potatoMode });
+  });
+
+  // The input display: the game and the playback Dolphin draw it (replays and spectated games:
+  // every player's), and a running one moves it at once.
+  settingsManager.onSettingChange("inputDisplay", async () => {
+    const inputDisplay = settingsManager.getInputDisplay();
+    await Promise.all(
+      [DolphinLaunchType.NETPLAY, DolphinLaunchType.PLAYBACK].map((launchType) =>
+        dolphinManager.getInstallation(launchType).updateSettings({ inputDisplay }),
+      ),
+    );
+    await dolphinManager.sendInputDisplayToGame(inputDisplay);
   });
 
   settingsManager.onSettingChange("disableChat", async (disableChat) => {

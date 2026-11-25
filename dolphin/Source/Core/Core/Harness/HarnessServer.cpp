@@ -45,7 +45,7 @@
 #include "Common/Thread.h"
 #include "Core/Config/GraphicsSettings.h"
 #include "Core/Config/MainSettings.h"
-#include "Core/Config/OnlineSettings.h"
+#include "BrawlOnline/Config/OnlineSettings.h"
 #include "Core/ConfigManager.h"
 #include "Core/Core.h"
 #include "Core/HW/CPU.h"
@@ -63,28 +63,29 @@
 #include "Core/Harness/HarnessInternal.h"
 #include "Core/Host.h"
 #include "Core/NetPlayClient.h"
-#include "Core/Online/Chat.h"
-#include "Core/Online/GameBridge.h"
-#include "Core/Online/GameSetup.h"
-#include "Core/Online/Matchmaking.h"
+#include "BrawlOnline/Online/Chat.h"
+#include "BrawlOnline/Online/GameBridge.h"
+#include "BrawlOnline/Online/GameSetup.h"
+#include "BrawlOnline/Online/Matchmaking.h"
 #include "Core/Online/ModsRoom.h"
-#include "Core/Online/OnlineClient.h"
-#include "Core/Online/OnlineSession.h"
-#include "Core/Online/RecentCodes.h"
-#include "Core/Online/Rooms.h"
-#include "Core/Online/Spectate.h"
-#include "Core/Online/User.h"
+#include "BrawlOnline/Online/OnlineClient.h"
+#include "BrawlOnline/Online/OnlineSession.h"
+#include "BrawlOnline/Online/RecentCodes.h"
+#include "BrawlOnline/Online/Rooms.h"
+#include "BrawlOnline/Online/Spectate.h"
+#include "BrawlOnline/Online/User.h"
 #include "Core/PowerPC/MMU.h"
 #include "Core/PowerPC/PowerPC.h"
 #include "Core/PowerPC/JitInterface.h"
-#include "Core/Rollback/GameplayRollback.h"
-#include "Core/Rollback/GameplaySession.h"
+#include "BrawlOnline/Rollback/GameplayRollback.h"
+#include "BrawlOnline/Rollback/GameplaySession.h"
 #include "Core/Rollback/MachineSession.h"
 #include "Core/Rollback/GameplayOnlineBackend.h"
 #include "Core/Rollback/PresentStats.h"
 #include "Core/Rollback/ReplayPlayback.h"
 #include "VideoCommon/OnScreenDisplay.h"
-#include "VideoCommon/OnlineChatUI.h"
+#include "BrawlOnline/UI/InputDisplayUI.h"
+#include "BrawlOnline/UI/OnlineChatUI.h"
 #include "VideoCommon/Present.h"
 #include "Core/Rollback/RollbackManager.h"
 #include "Core/State.h"
@@ -2272,6 +2273,17 @@ Result CmdChatLeave(const Args& args)
   return ChatRequest("chat_leave", args);
 }
 
+// The input display as its last frame drew it (core/ui InputDisplayUI): whether it is on, the
+// frames sampled, and each box (window pixels) with the controller and what it holds.
+Result CmdInputDisplay(const Args&)
+{
+  picojson::value v;
+  const std::string err = picojson::parse(v, BrawlOnline::UI::InputDisplay::Status());
+  if (!err.empty() || !v.is<picojson::object>())
+    Fail("input display status: " + err);
+  return v.get<picojson::object>();
+}
+
 // The chat window as ImGui drew it (VideoCommon/OnlineChatUI): `record` (default true) starts or
 // stops recording each frame, `activate` presses the "Activate NetPlay Chat" hotkey; returns the
 // frames recorded since the last call (at most 600).
@@ -2498,6 +2510,7 @@ const std::vector<std::pair<std::string_view, Handler>>& Handlers()
       {"chat_report", CmdChatReport},
       {"chat_leave", CmdChatLeave},
       {"chat_ui", CmdChatUi},
+      {"input_display", CmdInputDisplay},
       {"osd_mouse", CmdOsdMouse},
       {"osd_messages", CmdOsdMessages},
       {"online_recent_codes", CmdOnlineRecentCodes},

@@ -19,10 +19,10 @@
 #include "Common/HookableEvent.h"
 #include "Common/Logging/Log.h"
 #include "Core/Core.h"
-#include "Core/Config/OnlineSettings.h"
-#include "Core/Online/Ipv6.h"
-#include "Core/Online/OnlineClient.h"
-#include "Core/Online/User.h"
+#include "BrawlOnline/Config/OnlineSettings.h"
+#include "BrawlOnline/Online/Ipv6.h"
+#include "BrawlOnline/Online/OnlineClient.h"
+#include "BrawlOnline/Online/User.h"
 #include "Core/Rollback/MachineSession.h"
 
 #ifdef _WIN32

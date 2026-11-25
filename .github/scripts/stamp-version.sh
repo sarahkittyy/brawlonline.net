@@ -2,7 +2,8 @@
 # Stamps the release version into this CI checkout (never committed):
 #   - an annotated tag v<version> at HEAD, so Dolphin's ScmRevGen (git describe) reports
 #     "Project+ Dolphin v<version>" and the build counts as a tagged release;
-#   - Dolphin's Online::APP_VERSION (matchmaking appVersion, compared with user.json's latestVersion);
+#   - the online core's Online::APP_VERSION (matchmaking appVersion, compared with user.json's
+#     latestVersion);
 #   - the launcher's release/app/package.json version (electron-builder and the update feed).
 #
 #   .github/scripts/stamp-version.sh 0.1.42
@@ -14,14 +15,20 @@ cd "$(dirname "$0")/../.."
 git -c user.name=ci -c user.email=ci@brawlonline.net tag -a -f -m "v$version" "v$version" HEAD >/dev/null
 echo "git describe: $(git describe --always --long)"
 
-user_h=dolphin/Source/Core/Core/Online/User.h
-if [ -f "$user_h" ]; then
+# The online code's User.h: in core/ since the shared core (docs/design/brawl-online-core.md), in
+# Dolphin's tree before. One of them must be there: a build that sent the unstamped appVersion
+# would be refused by mm as out of date.
+stamped=0
+for user_h in core/include/BrawlOnline/Online/User.h dolphin/Source/Core/Core/Online/User.h; do
+  [ -f "$user_h" ] || continue
   # Not `sed -i`: GNU and BSD (macOS) sed take its argument differently.
   sed -E "s/^(constexpr char APP_VERSION\[\] = )\"[^\"]*\";/\1\"$version\";/" "$user_h" >"$user_h.tmp"
   mv "$user_h.tmp" "$user_h"
   grep -q "APP_VERSION\[\] = \"$version\";" "$user_h" || { echo "could not stamp $user_h" >&2; exit 1; }
   echo "$user_h: APP_VERSION $version"
-fi
+  stamped=1
+done
+[ "$stamped" = 1 ] || { echo "no User.h to stamp APP_VERSION into" >&2; exit 1; }
 
 app_pkg=launcher/release/app/package.json
 if [ -f "$app_pkg" ]; then

@@ -563,7 +563,7 @@ export class ModsManager {
       await writeModRoomRequest(this.dolphin.netplayOnlineDir(), { op: "configure" });
       return;
     }
-    if (this.dolphin.isNetplayRunning() && !(await this.dolphin.closeNetplayIfIdle())) {
+    if (this.dolphin.isNetplayRunning() && !(await this.dolphin.closeNetplayForOtherGame())) {
       throw new Error("Dolphin is already open with a game. Close it first.");
     }
     await this.dolphin.configureDolphin(DolphinLaunchType.NETPLAY, {
@@ -1345,7 +1345,7 @@ export class ModsManager {
       throw new Error("Dolphin is already open. Close it first.");
     }
     // An open Dolphin without a game (Play's, or Configure's) closes first.
-    if (this.dolphin.isNetplayRunning() && !(await this.dolphin.closeNetplayIfIdle())) {
+    if (this.dolphin.isNetplayRunning() && !(await this.dolphin.closeNetplayForOtherGame())) {
       throw new Error("Dolphin is already open with a game. Close it first.");
     }
     await this.dolphin.launchModsDolphin(build, room, () => this.onDolphinClosed());

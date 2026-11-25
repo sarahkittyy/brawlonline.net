@@ -9,7 +9,7 @@
 
 #include <gtest/gtest.h>
 
-#include "Core/Online/ChatText.h"
+#include "BrawlOnline/Online/ChatText.h"
 
 using namespace Online::ChatText;
 

@@ -11,16 +11,19 @@ from __future__ import annotations
 import json
 import re
 import struct
+import time
 from pathlib import Path
 from typing import Callable, Iterator
 
 import pytest
 
 from ppharness import brawl as B
+from ppharness import crossplay
 from ppharness import paths
 from ppharness.backend import OnlineBackend
 from ppharness.client import PadInput
 from ppharness.instance import DolphinInstance
+from ppharness.recomp import game_output
 
 from test_online import _make_backend, _wait
 from test_online_game import NOTAP_TAG, Game, _boot, _both, _find_logged, _peer_shown, online_set, ppom
@@ -142,7 +145,7 @@ def _check_room(g: Game, shot: str, mode: str = "UNRANKED") -> None:
     # Brawl's own waiting room song, whatever P+'s tracklist drew (Sarah, 2026-10-24): X07
     # streams from the disc, so P+'s SD stream open of it fails (the log's last song).
     assert _room(g) & ROOM_SONG, hex(_room(g))
-    text = (g.inst.user_dir / "Logs" / "dolphin.log").read_text(errors="replace")
+    text = game_output(g.inst)   # Dolphin's OSREPORT lines, or a recomp's "[OSReport]" ones
     songs = re.findall(r"SDStreamOpen[^\n]*/strm/([^\n]*)\.brstm", text)
     assert songs and songs[-1] == "X07", songs[-3:]
     x0 = _fighter_x(g)
@@ -265,8 +268,7 @@ def _x07_tracklist() -> bytes:
 
 
 def _x07_streams(g: Game) -> int:
-    text = (g.inst.user_dir / "Logs" / "dolphin.log").read_text(errors="replace")
-    return len(re.findall(r"SDStreamOpen[^\n]*/strm/X07\.brstm", text))
+    return len(re.findall(r"SDStreamOpen[^\n]*/strm/X07\.brstm", game_output(g.inst)))
 
 
 @pytest.mark.slow
@@ -603,3 +605,112 @@ def test_ranked_game_1_alt_costumes(backend: OnlineBackend, dolphin: Callable[..
     _check_match(a, b, {port_a: ALT_Z, port_b: ALT_R})
     for g in (a, b):
         _logs_clean(g)
+
+
+# The rematch hold (mm engine rematch_hold, docs: project-rematch-hold): two players who just played
+# each other pair again only once both have searched this long. 60 s on the servers; short here.
+REMATCH_HOLD_SECS = 20
+
+
+@pytest.fixture(scope="module")
+def hold_backend(tmp_path_factory: pytest.TempPathFactory) -> Iterator[OnlineBackend]:
+    rules = json.loads((ROOT / "server" / "config" / "rulesets.json").read_text(encoding="utf-8"))
+    rules["unranked"]["stages"] = UNRANKED_STAGES
+    path = tmp_path_factory.mktemp("rulesets-hold") / "rulesets.json"
+    path.write_text(json.dumps(rules), encoding="utf-8")
+    be = _make_backend(rulesets_file=path, ticket_ttl_secs=120, rematch_hold_secs=REMATCH_HOLD_SECS)
+    try:
+        yield be
+    finally:
+        be.stop()
+
+
+def _unranked_again(g: Game) -> None:
+    """Out of the CSS after a set (the session ends; back on WITH ANYONE's page, UNRANKED
+    highlighted), Unranked again."""
+    g.steps("hold B 90", "until muMenuMain 600", "wait 90")
+    g.steps("tap A", "wait 400", "until scSelctCharacter 600", "wait 30")
+    g.steps("stick up 30", "wait 5", "tap A 8", "wait 30")
+
+
+def _rematch_held(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance], gpu_backend: str) -> None:
+    test = "rematch-hold"
+    ua, ub = backend.create_user("hana", "HANA"), backend.create_user("hugo", "HUGO")
+    a = _boot(dolphin, "wr-ha", backend, ua, gpu_backend, test, "gameplay")
+    b = _boot(dolphin, "wr-hb", backend, ub, gpu_backend, test, "gameplay")
+    players = [a, b]
+    _both(a.to_main_menu, b.to_main_menu)
+    _both(a.to_online_page, b.to_online_page)
+    _both(lambda: a.to_css("unranked"), lambda: b.to_css("unranked"))
+    for g in players:
+        B.write_rules(g.c, stocks=1, minutes=2, items_off=True)
+        ppom.allow_test_rules(g.c)
+    _search(a, 1)
+    _search(b, 1)
+    _peer_shown(a, ub)
+    _peer_shown(b, ua)
+    first = a.c.mm_status()["match"]["match_id"]
+    online_set.play_set(players, games=1, mode="unranked")
+
+    # Both search again: the same two are the only ones searching, and the hold keeps them apart
+    # until both have searched REMATCH_HOLD_SECS, then pairs them, and the rematch plays.
+    _both(lambda: _unranked_again(a), lambda: _unranked_again(b))
+    for g in players:
+        B.write_rules(g.c, stocks=1, minutes=2, items_off=True)
+        ppom.allow_test_rules(g.c)
+    _search(a, 1)
+    _search(b, 1)
+    searched = time.monotonic()
+
+    def rematched(g: Game) -> str | None:
+        st = g.c.mm_status()
+        m = st.get("match") or {}
+        return m.get("match_id") if st["state"] == "connection_success" and m.get("match_id") != first else None
+
+    a.steps("wait 300")
+    for g in players:
+        assert rematched(g) is None, (g.inst.name, "paired again inside the hold", g.c.mm_status())
+        assert _in_room(g), (g.inst.name, "not in the waiting room while held")
+    second = _wait(lambda: rematched(a), REMATCH_HOLD_SECS + 40, "the rematch after the hold")
+    took = time.monotonic() - searched
+    assert took >= REMATCH_HOLD_SECS - 2, f"paired again after {took:.1f} s, inside the {REMATCH_HOLD_SECS} s hold"
+    assert _wait(lambda: rematched(b), 20, "B in the rematch") == second
+    online_set.play_set(players, games=1, mode="unranked")
+    for g in players:
+        _logs_clean(g)
+
+
+@pytest.mark.slow
+def test_rematch_hold(hold_backend: OnlineBackend, dolphin: Callable[..., DolphinInstance], gpu_backend: str) -> None:
+    """After an Unranked set the same two players search again and nobody else does: they wait in
+    the training room through the rematch hold, then pair again and play."""
+    _rematch_held(hold_backend, dolphin, gpu_backend)
+
+
+# Crossplay (docs/design/brawl-online-core.md §10.2): EmissaryRecomp players in the waiting room,
+# against a Dolphin (vs_dolphin) and against each other (vs_recomp).
+@pytest.mark.slow
+@crossplay.VARIANTS
+def test_waiting_room_crossplay(variant: str, backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
+                                gpu_backend: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The training room while searching, ending into Unranked's set."""
+    crossplay.run(variant, "wr-b$", "wr-[ab]$", monkeypatch, backend, dolphin,
+                  lambda d: test_unranked_set_from_the_waiting_room(backend, d, gpu_backend))
+
+
+@pytest.mark.slow
+@crossplay.VARIANTS
+def test_ranked_waiting_room_crossplay(variant: str, backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
+                                       gpu_backend: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Ranked's game 1 from the waiting room (blind pick, strikes)."""
+    crossplay.run(variant, "wr-rb$", "wr-r[ab]$", monkeypatch, backend, dolphin,
+                  lambda d: test_ranked_game_1_from_the_waiting_room(backend, d, gpu_backend), game_reports=False)
+
+
+@pytest.mark.slow
+@crossplay.VARIANTS
+def test_rematch_hold_crossplay(variant: str, hold_backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
+                                gpu_backend: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The rematch hold with a recomp: searched again after a set, held, paired, played."""
+    crossplay.run(variant, "wr-hb$", "wr-h[ab]$", monkeypatch, hold_backend, dolphin,
+                  lambda d: _rematch_held(hold_backend, d, gpu_backend))

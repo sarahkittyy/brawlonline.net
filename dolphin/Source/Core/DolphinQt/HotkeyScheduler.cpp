@@ -26,7 +26,7 @@
 #include "Core/FreeLookManager.h"
 #include "Core/HotkeyManager.h"
 #include "Core/IOS/IOS.h"
-#include "Core/Rollback/GameplaySession.h"
+#include "BrawlOnline/Rollback/GameplaySession.h"
 #include "Core/State.h"
 #include "Core/System.h"
 #include "Core/WiiUtils.h"
@@ -41,7 +41,7 @@
 #include "InputCommon/ControllerInterface/ControllerInterface.h"
 
 #include "VideoCommon/OnScreenDisplay.h"
-#include "VideoCommon/ReplayOverlayUI.h"
+#include "BrawlOnline/UI/ReplayOverlayUI.h"
 #include "VideoCommon/VideoConfig.h"
 
 constexpr const char* DUBOIS_ALGORITHM_SHADER = "dubois";

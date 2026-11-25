@@ -51,6 +51,11 @@ project for Brawl and its mods. Thank you to everyone who built it:
 - [rapito](https://github.com/rapito)
 - [WHellhaus](https://github.com/WHellhaus)
 
+Thanks to:
+
+- [kalomaze](https://github.com/kalomaze): recomp help
+- [Bella](https://github.com/AlephZeroChill): optimization PRs
+
 Also built on:
 
 - [Nyx](https://github.com/NyxTheShield)'s fork of Brawlback's Project+ Dolphin (its rollback work,
@@ -58,6 +63,9 @@ Also built on:
 - [Syriinge](https://github.com/Sammi-Husky/Syriinge) by Sammi Husky, which Brawlback's game code
   is based on
 - [GekkoNet](https://github.com/HeatXD/GekkoNet) by HeatXD
+- [EmissaryRecomp](https://github.com/kalomaze/EmissaryRecomp) by kalomaze, a fork of
+  [BrawlRecompiled](https://github.com/josiahg2502-glitch/BrawlRecompiled) by JosiahG, which is
+  built on [WiiCompiled](https://github.com/patchzyy/Wiicompiled) by patchzyy
 - [Slippi Launcher](https://github.com/project-slippi/slippi-launcher) by Project Slippi: our
   launcher is a fork of it
 - [Dolphin](https://github.com/dolphin-emu/dolphin)

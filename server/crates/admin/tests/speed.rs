@@ -22,16 +22,35 @@ fn perf(fps: f64, own_late: f64) -> GamePerf {
 }
 
 async fn game(pool: &sqlx::PgPool, uid: uuid::Uuid, mode: &str, n: u32, perf: GamePerf, minutes_ago: i32) {
+    let game_uid = format!("{:032x}", n as u128 + ((uid.as_u128() >> 64) << 32));
+    game_on(pool, uid, mode, n, perf, minutes_ago, &game_uid, "game", ("dolphin", "")).await
+}
+
+/// [`game`] of `game_uid` (shared by the game's players), ended by `end_method`, on `engine`.
+#[allow(clippy::too_many_arguments)]
+async fn game_on(
+    pool: &sqlx::PgPool,
+    uid: uuid::Uuid,
+    mode: &str,
+    n: u32,
+    perf: GamePerf,
+    minutes_ago: i32,
+    game_uid: &str,
+    end_method: &str,
+    (engine, engine_version): (&str, &str),
+) {
     let r = SpeedReportRecord {
         uid,
-        match_id: format!("mode.{mode}-{uid}-{n}"),
+        match_id: format!("mode.{mode}-{game_uid}-{n}"),
         mode: mode.into(),
-        game_uid: format!("{:032x}", n as u128 + ((uid.as_u128() >> 64) << 32)),
+        game_uid: game_uid.into(),
         set_game: (mode == "ranked").then_some(n),
-        end_method: "game".into(),
+        end_method: end_method.into(),
         perf,
         app_version: "0.1.95".into(),
         platform: "win32".into(),
+        engine: engine.into(),
+        engine_version: engine_version.into(),
     };
     db::record_speed_report(pool, &r).await.unwrap();
     // A second word on the same game changes nothing.
@@ -46,9 +65,15 @@ async fn game(pool: &sqlx::PgPool, uid: uuid::Uuid, mode: &str, n: u32, perf: Ga
 
 async fn check(pool: &sqlx::PgPool, uid: uuid::Uuid, windows: &[f64], minutes_ago: i32) {
     let c = SpeedCheck { mode: "ranked".into(), windows: windows.to_vec(), gaps: 0, backend: "D3D12".into() };
-    db::record_speed_check(pool, &SpeedCheckRecord { uid, check: c, app_version: "0.1.95".into(), platform: "win32".into() })
-        .await
-        .unwrap();
+    let r = SpeedCheckRecord {
+        uid,
+        check: c,
+        app_version: "0.1.95".into(),
+        platform: "win32".into(),
+        engine: "dolphin".into(),
+        engine_version: String::new(),
+    };
+    db::record_speed_check(pool, &r).await.unwrap();
     sqlx::query(
         "UPDATE speed_checks SET created_at = now() - make_interval(mins => $1)
           WHERE id = (SELECT max(id) FROM speed_checks WHERE uid = $2)",
@@ -110,11 +135,11 @@ async fn summary_locked_and_show() {
 
     let (ok, text) = run(&url, &["speed", "summary"]).await;
     assert!(ok, "{text}");
-    // Ranked: 7 games, 4 slow (alice 2, bob 2), 2 players; unranked: 1 of 1.
-    assert!(text.contains("ranked           7       4       2"), "{text}");
-    assert!(text.contains("unranked         1       1       1"), "{text}");
+    // Ranked: 7 games, 4 slow (alice 2, bob 2), 2 players, none desynced; unranked: 1 of 1.
+    assert!(text.contains("ranked     dolphin          7       4       2       0"), "{text}");
+    assert!(text.contains("unranked   dolphin          1       1       1       0"), "{text}");
     // Checks: one slow (alice), one unsure (carol's single window).
-    assert!(text.contains("win32      D3D12            0       1       1       2"), "{text}");
+    assert!(text.contains("win32      dolphin    D3D12            0       1       1       2"), "{text}");
     assert!(text.contains("would lock 1 player(s)"), "{text}");
 
     let (ok, text) = run(&url, &["speed", "show", "zz-speed-a@example.test"]).await;
@@ -136,4 +161,50 @@ async fn summary_locked_and_show() {
     assert!(text.contains("0 slow Ranked game(s) in a row: the rule would not lock them"), "{text}");
     let (_, text) = run(&url, &["speed", "locked"]).await;
     assert!(text.contains("nobody"), "{text}");
+}
+
+/// Speed and desync numbers split by engine (docs/design/brawl-online-core.md §10, "Which
+/// engine"): per mode and engine, and per game by the engines of its players.
+#[tokio::test]
+async fn summary_splits_by_engine() {
+    let (pool, name) = e2e::fresh_db().await.expect("postgres (see server/README.md)");
+    let url = e2e::db_url(&name).await.unwrap();
+    let alice = store::create_user(&pool, "zz-engine-a@example.test", "x", "alice").await.unwrap();
+    let bob = store::create_user(&pool, "zz-engine-b@example.test", "x", "bob").await.unwrap();
+    let carol = store::create_user(&pool, "zz-engine-c@example.test", "x", "carol").await.unwrap();
+    let dolphin = ("dolphin", "v0.2.5");
+    let emissary = ("emissary", "0.7.0");
+    let ok = perf(59.9, 0.01);
+    // Alice (Dolphin) against Bob (the recomp): desynced (each side says so), then clean.
+    for (uid, engine) in [(alice.uid, dolphin), (bob.uid, emissary)] {
+        game_on(&pool, uid, "ranked", 1, ok.clone(), 50, "g1", "desync", engine).await;
+        game_on(&pool, uid, "ranked", 2, ok.clone(), 40, "g2", "game", engine).await;
+    }
+    // Alice against Carol (both Dolphin): clean; Bob against Carol (only Bob reported it): slow.
+    game_on(&pool, alice.uid, "unranked", 1, ok.clone(), 30, "g3", "game", dolphin).await;
+    game_on(&pool, carol.uid, "unranked", 1, ok.clone(), 30, "g3", "game", dolphin).await;
+    game_on(&pool, bob.uid, "unranked", 2, perf(44.0, 0.9), 20, "g4", "game", emissary).await;
+
+    let (ok, text) = run(&url, &["speed", "summary"]).await;
+    assert!(ok, "{text}");
+    assert!(text.contains("ranked     dolphin          2       0       0       1"), "{text}");
+    assert!(text.contains("ranked     emissary         2       0       0       1"), "{text}");
+    assert!(text.contains("unranked   dolphin          2       0       0       0"), "{text}");
+    assert!(text.contains("unranked   emissary         1       1       1       0"), "{text}");
+    // Games each side reported: the recomp's pair 1 of 2 desynced, Dolphin's 0 of 1; g4 (one
+    // report) is not counted.
+    assert!(text.contains("dolphin+emissary           2       1  50.00%"), "{text}");
+    assert!(text.contains("dolphin+dolphin            1       0   0.00%"), "{text}");
+
+    let (ok, text) = run(&url, &["speed", "summary", "--engine", "Emissary"]).await;
+    assert!(ok, "{text}");
+    assert!(text.contains("engine emissary only"), "{text}");
+    assert!(text.contains("ranked     emissary         2       0       0       1"), "{text}");
+    assert!(!text.contains("dolphin          "), "{text}");
+    assert!(text.contains("dolphin+emissary           2       1  50.00%"), "{text}");
+    assert!(!text.contains("dolphin+dolphin"), "{text}");
+
+    let (ok, text) = run(&url, &["speed", "show", "zz-engine-b@example.test"]).await;
+    assert!(ok, "{text}");
+    assert_eq!(text.matches("emissary 0.7.0").count(), 3, "{text}");
 }

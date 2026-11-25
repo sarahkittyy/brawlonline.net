@@ -101,6 +101,7 @@ static void SetCurrentThreadNameViaException(const char* name)
   info.dwThreadID = static_cast<DWORD>(-1);
   info.dwFlags = 0;
 
+#if defined(_MSC_VER)  // MinGW has no SEH keywords: the API below names the thread
   __try
   {
     RaiseException(MS_VC_EXCEPTION, 0, sizeof(info) / sizeof(ULONG_PTR), (ULONG_PTR*)&info);
@@ -108,6 +109,7 @@ static void SetCurrentThreadNameViaException(const char* name)
   __except (EXCEPTION_CONTINUE_EXECUTION)
   {
   }
+#endif
 }
 
 static void SetCurrentThreadNameViaApi(const char* name)

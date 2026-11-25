@@ -23,6 +23,7 @@ from typing import Any, Callable
 
 import pytest
 
+from ppharness import crossplay
 from ppharness.backend import OnlineBackend
 from ppharness.instance import DolphinInstance
 
@@ -265,3 +266,26 @@ def test_p2_and_p3_that_cannot_connect_while_p1_sits_out(backend: OnlineBackend,
     assert f"Test: no packets from {users[2].connect_code}" in log, "B blocked nobody"
     assert f"No connection to P3 sgzc ({users[2].connect_code})" in log, "B did not name C"
     assert "No connection to P2" not in log, "B named itself"
+
+
+
+# Crossplay (docs/design/brawl-online-core.md §10.2): sit-out and open slots with EmissaryRecomp players,
+# against a Dolphin (vs_dolphin) and against each other (vs_recomp). PPHARNESS_RECOMP names the build.
+@pytest.mark.slow
+@crossplay.VARIANTS
+def test_room_open_slot_crossplay(variant: str, backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
+                                  gpu_backend: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Two start with an open slot, a joiner waits and plays the next game (the joiner a recomp: the
+    test ends in that game, so its report is not there yet)."""
+    crossplay.run(variant, "sox-c$", "sox-[abc]$", monkeypatch, backend, dolphin,
+                  lambda d: test_two_players_start_with_an_open_slot_and_a_joiner_waits(backend, d, gpu_backend),
+                  game_reports=variant == "vs_recomp")
+
+
+@pytest.mark.slow
+@crossplay.VARIANTS
+def test_room_sit_out_crossplay(variant: str, backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
+                                gpu_backend: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Sitting out and the stage pick (B the recomp)."""
+    crossplay.run(variant, "soy-b$", "soy-[abc]$", monkeypatch, backend, dolphin,
+                  lambda d: test_sitting_out_and_the_stage_pick(backend, d, gpu_backend))

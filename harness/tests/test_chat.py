@@ -20,6 +20,7 @@ from typing import Any, Callable
 
 import pytest
 
+from ppharness import crossplay
 from ppharness.backend import OnlineBackend, OnlineUser
 from ppharness.instance import DolphinInstance
 
@@ -197,3 +198,15 @@ def test_chat_in_a_direct_match(backend: OnlineBackend,
     assert chat(b)["kind"] == "none"
     for p in (a, b):
         p.c.mm_cancel()
+
+
+# Crossplay (docs/design/brawl-online-core.md §10.2): room chat with EmissaryRecomp players, against
+# a Dolphin (vs_dolphin) and between two recomps (vs_recomp). PPHARNESS_RECOMP names the build.
+@crossplay.VARIANTS
+def test_chat_in_a_room_crossplay(variant: str, backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
+                                  tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """test_chat_in_a_room with otto a recomp. No game is played."""
+    crossplay.run(variant, "chat-otto$", "chat-(ines|otto)$", monkeypatch, backend, dolphin,
+                  lambda d: test_chat_in_a_room(backend, d, tmp_path), game_reports=False, mm_engines=False,
+                  sessions=False)
+

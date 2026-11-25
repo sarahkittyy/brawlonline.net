@@ -72,10 +72,13 @@ export function setupPhaseLabel(phase: DolphinSetupPhase | undefined): string {
 type UpdatingButtonProps = Omit<MainButtonProps, "children" | "dimWhenDisabled"> & {
   /** The step that is running. Without one the button says "Updating", as Slippi's does. */
   phase?: DolphinSetupPhase;
+  /** A step that is not the Dolphin's (EmissaryRecomp's download), named by its caller. */
+  label?: string;
 };
 
-export const UpdatingButton = React.memo(({ phase, ...props }: UpdatingButtonProps) => {
-  if (!phase) {
+export const UpdatingButton = React.memo(({ phase, label, ...props }: UpdatingButtonProps) => {
+  const name = label ?? (phase ? setupPhaseLabel(phase) : undefined);
+  if (!name) {
     return (
       <MainButton disabled={true} {...props}>
         <span
@@ -115,7 +118,7 @@ export const UpdatingButton = React.memo(({ phase, ...props }: UpdatingButtonPro
             text-overflow: ellipsis;
           `}
         >
-          {setupPhaseLabel(phase)}
+          {name}
         </span>
         <span
           css={css`

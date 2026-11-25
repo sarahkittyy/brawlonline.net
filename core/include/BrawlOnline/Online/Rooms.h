@@ -1,0 +1,129 @@
+// Copyright 2026 Dolphin Emulator Project
+// SPDX-License-Identifier: GPL-2.0-or-later
+
+// Rooms (docs/rooms-protocol.md, docs/rooms-game-interface.md), Dolphin's side:
+// - the online connection to mm (ENet, `hello`), opened once user.json is read and the game is
+//   logged in, kept while Dolphin runs (reconnected with backoff), closed on logout and exit. It
+//   is what counts the player online, and carries the room's requests and pushed state;
+// - the room as the game sees it (GameBridge writes it into the PPOM block): the server's
+//   validated view, the status line, the room's game number and the next stage pickers;
+// - a room's game: on `room-start`, the mode-3 ticket from the P2P port (Client::FindMatch) while
+//   the online connection stays open, the gameplay session with ports = slots and the room's
+//   host deciding, `room-back` once the match is over (or the start failed);
+// - the launcher hand-off: <User>/Online/join-room.json in (a room to join, a new room to create,
+//   or a Direct invite naming the other player's connect code), game-status.json out.
+//
+// One background thread owns the connection and the files. Every function is thread-safe.
+
+#pragma once
+
+#include <optional>
+#include <string>
+#include <vector>
+
+#include <picojson.h>
+
+#include "Common/CommonTypes.h"
+#include "BrawlOnline/Online/RoomMessages.h"
+
+namespace Online::Rooms
+{
+// LOCAL.room / RoomStatus.phase (ppom.h RoomPhase).
+enum class Phase : u8
+{
+  None = 0,
+  Joining = 1,
+  In = 2,
+};
+
+// LOCAL.screen (ppom.h Screen).
+enum class Screen : u8
+{
+  Unknown = 0,
+  Menus = 1,
+  OnlineCss = 2,
+  Room = 3,
+  OnlineBusy = 4,
+  Match = 5,
+  Offline = 6,
+  Other = 7,
+};
+
+// Starts the thread (idempotent). GameBridge::Reset calls it at every boot.
+void Start();
+// A new boot (GameBridge::Reset): the game has not shown its menus yet, so a launcher request
+// is held (accepted) until it does instead of being refused by the boot's scenes.
+void OnBoot();
+// Leaves politely, closes the connection, stops the thread, removes game-status.json.
+void Shutdown();
+
+// ---- From the game (GameBridge, CPU thread) ----
+// A CMD_ROOM op (Create, Join, Leave, Slot, Teams, Public, Team). Poll does nothing.
+void Submit(const Request& request);
+// The room game's session plays a set (several games, docs/design/room-rules.md §5): it ends when
+// GameSetup says the set is won, not after its first game.
+void SetSetSession(bool set);
+// A game of the room's set ended: sent to the server as room-result.
+void ReportSetGame(u32 set_game, u8 winner_side, u16 stage);
+// For the launcher's Discord activity (game-status.json `scene` and `game`): the game's current
+// scene (scSelCharacter, scSelStage, scMelee, ...; GameBridge samples it), and the game that
+// starts (the replay's INFO JSON: mode, stage, players, characters, the recorder's port; set at
+// every online game's barrier, shown while it is played).
+void SetScene(const std::string& scene);
+void SetGame(const std::string& info_json);
+// The player's rulesets for the game's Ruleset line (room-rulesets / ruleset-list): asks mm again
+// when the list is older than a few seconds, and returns what it has.
+enum class ListState : u8
+{
+  None = 0,
+  Loading = 1,
+  Ready = 2,
+  Failed = 3,
+};
+struct RulesetListSnapshot
+{
+  ListState state = ListState::None;
+  u32 serial = 0;
+  std::vector<RulesetEntry> rulesets;
+};
+RulesetListSnapshot RulesetList();
+// LOCAL.screen, every frame.
+void SetScreen(u8 screen);
+// The game's lock-in, every frame: ready for `game` with the character and costume, the stock
+// count picked on the panel (stock control; 0 none) and the HP picked on it (a stamina match;
+// 0 none; docs/design/special-rules.md).
+void SetLocalLock(bool ready, u32 game, u8 char_kind, u8 costume, u8 stocks, u16 hp = 0);
+
+// What GameBridge writes into the PPOM block.
+struct Snapshot
+{
+  Phase phase = Phase::None;
+  std::optional<View> view;   // in a room
+  u32 game = 1;               // the room's next game number (lock in with it)
+  u8 pickers = 0;             // ports (bits) that pick the next room game's stage
+  u8 join_seq = 0;            // bumped on every accepted launcher join
+  // The launcher's Direct invite (join-room.json kind "direct"): bumped on every accepted one,
+  // with the other player's connect code (canonical, NormalizeConnectCode; "" before the first).
+  u8 direct_seq = 0;
+  std::string direct_code;
+  // Or the launcher's Play unranked / Play ranked (kind "queue"), bumping direct_seq with no
+  // code: 1 the Unranked CSS, 2 the Ranked CSS; 0 for a Direct invite.
+  u8 direct_queue = 0;
+  // The launcher's create (join-room.json kind "create"): bumped when Dolphin accepted one and
+  // sent room-create itself; the game goes to the room CSS as Create Room without sending one.
+  u8 create_seq = 0;
+  std::string text;           // the status line ("" = the game's own)
+  bool error = false;
+  u32 serial = 0;             // changes with text, error, phase or the view
+  bool game_active = false;   // a room game runs (room-start .. room-back)
+};
+Snapshot GetSnapshot();
+// The screen the game reports (LOCAL.screen, Screen), for the chat window: Match while a match runs.
+Screen GetScreen();
+
+// Harness (`rooms_status`, `rooms_request`).
+picojson::object Status();
+// Tests without the game plugin: the ops a game would send, plus `ready` (with character and
+// costume) standing in for the lock-in, and `screen`.
+std::optional<std::string> HarnessRequest(const picojson::object& args);
+}  // namespace Online::Rooms

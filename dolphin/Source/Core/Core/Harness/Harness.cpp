@@ -25,8 +25,8 @@
 #include "Core/HW/CPU.h"
 #include "Core/Harness/HarnessInternal.h"
 #include "Core/Online/NetPlaySession.h"
-#include "Core/Online/OnlineClient.h"
-#include "Core/Online/OnlineSession.h"
+#include "BrawlOnline/Online/OnlineClient.h"
+#include "BrawlOnline/Online/OnlineSession.h"
 #include "Core/System.h"
 #include "InputCommon/GCPadStatus.h"
 

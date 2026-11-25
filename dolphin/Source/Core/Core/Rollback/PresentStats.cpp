@@ -28,7 +28,7 @@
 #include "Core/HW/Memmap.h"
 
 #include "Core/CoreTiming.h"
-#include "Core/Rollback/GameplaySession.h"
+#include "BrawlOnline/Rollback/GameplaySession.h"
 #include "Core/Rollback/InputTrace.h"
 #include "Core/Rollback/MachineSession.h"
 #include "Core/System.h"

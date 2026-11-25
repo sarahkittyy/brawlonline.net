@@ -11,8 +11,8 @@
 #include <gtest/gtest.h>
 #include <picojson.h>
 
-#include "Core/Online/Chat.h"
-#include "Core/Online/SpectatorChat.h"
+#include "BrawlOnline/Online/Chat.h"
+#include "BrawlOnline/Online/SpectatorChat.h"
 
 namespace Chat = Online::Chat;
 namespace SC = Online::SpectatorChat;

@@ -24,7 +24,7 @@
 #include "Core/HW/VideoInterface.h"
 #include "Core/HW/WII_IPC.h"
 #include "Core/IOS/IOS.h"
-#include "Core/Online/GameBridge.h"
+#include "BrawlOnline/Online/GameBridge.h"
 #include "Core/State.h"
 #include "Core/System.h"
 #include <Core/Rollback/RollbackManager.h>

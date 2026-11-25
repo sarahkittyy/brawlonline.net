@@ -16,6 +16,7 @@ Screenshots: run/artifacts/game-code/rooms/<test>/<player>/.
 
 from __future__ import annotations
 
+import re
 import threading
 import time
 from typing import Any, Callable, Iterator
@@ -68,6 +69,16 @@ def _play(players: list[Game], game: int, out: dict[str, Any]) -> threading.Thre
     t = threading.Thread(target=run, daemon=True)
     t.start()
     return t
+
+
+def _recomp_mutes(g: Game) -> list[float] | None:
+    """An EmissaryRecomp's fast playbacks muted so far: the seconds of sound each dropped (its `recomp audio: unmuted`
+    lines); None for a Dolphin."""
+    from ppharness.recomp import RecompInstance
+    if not isinstance(g.inst, RecompInstance):
+        return None
+    text = (g.inst.user_dir / "Logs" / "dolphin.log").read_text(errors="replace")
+    return [float(m.group(1)) for m in re.finditer(r"recomp audio: unmuted, ([\d.]+) s of sound dropped", text)]
 
 
 def _pick_stage_if_asked(picker: Game, others: list[Game]) -> None:
@@ -271,6 +282,13 @@ def test_a_player_who_joins_during_the_game_watches_it(watch_backend: OnlineBack
     w = _watch(c)
     r1 = w["results"][0]
     assert r1["catch_up"] and r1["finished"] and r1["desync_frame"] == -1, w
+    muted = _recomp_mutes(c)
+    if muted is not None:
+        # An EmissaryRecomp watcher's catch-up runs muted, as Dolphin's does (Engine::SetPlaybackMuted): its output
+        # dropped until normal play.
+        assert muted, "the recomp's catch-up was not muted"
+        assert max(muted) > 0, ("the catch-up to live (some 20 s of the game) dropped nothing", muted)
+        print(f"C's muted catch-up: {muted} s of sound dropped", flush=True)
     _wait(lambda: c.scene() == CSS and not _watch(c)["armed"], 60, "C back on the room's CSS")
     # Back: the next game waits for C.
     for g in gs:

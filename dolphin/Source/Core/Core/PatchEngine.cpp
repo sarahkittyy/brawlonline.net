@@ -27,7 +27,7 @@
 #include "Core/ActionReplay.h"
 #include "Core/CheatCodes.h"
 #include "Core/Config/SessionSettings.h"
-#include "Core/Config/OnlineSettings.h"
+#include "BrawlOnline/Config/OnlineSettings.h"
 #include "Core/ConfigManager.h"
 #include "Core/Core.h"
 #include "Core/Debugger/PPCDebugInterface.h"

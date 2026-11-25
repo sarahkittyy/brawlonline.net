@@ -51,7 +51,16 @@ export class DolphinInstance extends EventEmitter {
    * Unlike Slippi we do not pass `-b`: P+'s launcher DOL hands over to the disc, and batch mode
    * must not treat that hand-over as the end of emulation.
    */
-  constructor(execPath: string, baseParams: string[] = []) {
+  constructor(
+    execPath: string,
+    baseParams: string[] = [],
+    private readonly spawnOptions: {
+      env?: Record<string, string>;
+      cwd?: string;
+      /** No pipes for its output (EmissaryRecomp keeps its own console.log, and writes a lot). */
+      ignoreOutput?: boolean;
+    } = {},
+  ) {
     super();
     this.baseParams = [...baseParams];
     this.executablePath = execPath;
@@ -90,6 +99,11 @@ export class DolphinInstance extends EventEmitter {
     });
   }
 
+  /** The process id, while it runs. */
+  get pid(): number | undefined {
+    return this.process?.pid;
+  }
+
   /** Ends the Dolphin process (a spectated stream's end, docs/design/spectating.md §6.2). */
   stop() {
     this.process?.kill();
@@ -113,10 +127,14 @@ export class DolphinInstance extends EventEmitter {
           child = execFile(executablePath, params, {
             // 100MB
             maxBuffer: 1000 * 1000 * 100,
+            ...(this.spawnOptions.env ? { env: { ...process.env, ...this.spawnOptions.env } } : {}),
+            ...(this.spawnOptions.cwd ? { cwd: this.spawnOptions.cwd } : {}),
           });
         } else {
           child = spawn(executablePath, params, {
-            env: sanitizeAppImageEnv(),
+            env: { ...sanitizeAppImageEnv(), ...this.spawnOptions.env },
+            ...(this.spawnOptions.cwd ? { cwd: this.spawnOptions.cwd } : {}),
+            ...(this.spawnOptions.ignoreOutput ? { stdio: "ignore" as const } : {}),
           });
         }
 

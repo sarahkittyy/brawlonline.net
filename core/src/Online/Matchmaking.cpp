@@ -1,0 +1,1986 @@
+// Copyright 2026 Dolphin Emulator Project
+// SPDX-License-Identifier: GPL-2.0-or-later
+
+// Port of Slippi's SlippiMatchmaking.cpp (and the connect phase of SlippiNetplay.cpp). Comments
+// marked "Slippi:" quote what the original does where this file has to differ or explain.
+
+#include "BrawlOnline/Online/Matchmaking.h"
+
+#include <atomic>
+#include <chrono>
+#include <cmath>
+#include <cstdlib>
+#include <optional>
+#include <thread>
+#include <utility>
+
+#include <enet/enet.h>
+#include <fmt/format.h>
+#include <fmt/ranges.h>
+
+#include "Common/ENet.h"
+#include "Common/Logging/Log.h"
+#include "Common/StringUtil.h"
+#include "Common/Thread.h"
+#include "Common/Timer.h"
+#include "Common/UPnP.h"
+#include "BrawlOnline/Config/OnlineSettings.h"
+#include "BrawlOnline/Engine.h"
+#include "BrawlOnline/Online/Ipv6.h"
+#include "BrawlOnline/Online/Timeouts.h"
+#include "BrawlOnline/Online/User.h"
+#include "BrawlOnline/Rollback/PeerData.h"
+
+#ifdef _WIN32
+#include <winsock2.h>
+#else
+#include <unistd.h>
+#endif
+
+namespace Online
+{
+namespace
+{
+constexpr char CREATE_TICKET[] = "create-ticket";
+constexpr char CREATE_TICKET_RESP[] = "create-ticket-resp";
+constexpr char GET_TICKET_RESP[] = "get-ticket-resp";
+
+constexpr int MM_CHANNELS = 3;
+// Not in Slippi (its netplay client keeps servicing the same ENet host after the connect window):
+// a backend that binds its own socket releases the link right away, so give the peer's side of
+// the handshake time to finish before our disconnect can overtake it.
+constexpr u64 P2P_SETTLE_MS = 500;
+// How long a search waits for the router's UPnP service to be found (GameBridge starts looking
+// at boot, so this only matters for a search right after it; no router answers in about 2 s).
+constexpr std::chrono::milliseconds UPNP_WAIT{2500};
+
+// Tests (the harness): PPR_TEST_P2P_BLOCK=<connect code>[,<connect code>...] drops every packet
+// of the P2P connect from those players, as two NATs that cannot reach each other do (prod
+// 2026-10-14: a VPN's player and the host of a 4-player room). Set on both players of the pair.
+// Matchmaking thread only.
+std::vector<ENetAddress> s_test_blocked;
+
+// Every datagram that reached the P2P port during the connect, by sender: a failed connect logs
+// whether anything came from the peer, and from which port (HandleConnecting). Matchmaking
+// thread only.
+struct Heard
+{
+  ENetAddress from;
+  u32 packets;
+};
+std::vector<Heard> s_heard;
+constexpr size_t MAX_HEARD = 16;
+
+// The data of a player's P2P connect (ENet's connect data, which Slippi leaves 0): the match and
+// the player's port and address as the server saw them, which both sides have from the
+// get-ticket-resp. A NAT that gives each destination its own public address (some carriers' NAT;
+// bug report #109: five searches, five addresses in 170.83.118.0/24) connects from an address
+// the server never saw, so the peer cannot tell it by address; it can by this. Never 0.
+u32 ConnectToken(const std::string& match_id, const PlayerInfo& player)
+{
+  u32 h = 2166136261u;  // FNV-1a
+  for (const char c : fmt::format("{}|{}|{}", match_id, player.port, player.ip_address))
+  {
+    h ^= static_cast<u8>(c);
+    h *= 16777619u;
+  }
+  return h != 0 ? h : 1;
+}
+
+// The `players` entry of remote player i (`remotes` and the P2P peers follow `players` without
+// the local one). By the local player's place in `players`, not its port: a room's slots can
+// have gaps, and before 2026-10-31 a P2 whose room had no P1 took its own entry for P3's (bug
+// report #202), so it named itself in its connect log, checked P3's connect token against its
+// own, did not punch P3's low ports and told the room it could not reach slot 2.
+size_t RemotePlayer(const Match& match, size_t i)
+{
+  for (size_t j = 0; j < match.players.size(); j++)
+  {
+    if (match.players[j].port - 1 == match.local_player_index)
+      return i >= j ? i + 1 : i;
+  }
+  return i;
+}
+
+// How often a peer that has not connected gets Common::ENet::PunchLowPorts.
+constexpr u64 PUNCH_INTERVAL_MS = 1000;
+
+// IPv6 (Online/Ipv6.h): a player reached over IPv6 is used only if IPv4 has not connected to it
+// this long into the connect. Prod's IPv4 connects (1680 in bug reports up to #276): half within
+// 72 ms, 99% within 552 ms, 4 over 1.5 s (the longest 4.1 s); an IPv4 path that comes up later
+// is still taken by the session (GameplaySession's path check), which prefers IPv4 too.
+constexpr u64 IPV4_FIRST_MS = 2000;
+// How often a waiting search sends its IPv6 probe again (mm forgets one after 15 minutes).
+constexpr u64 PROBE6_RESEND_MS = 20 * 1000;
+
+// The IPv6 host's PPR_TEST_P2P_BLOCK6 and its senders, as s_test_blocked and s_heard for IPv4.
+std::vector<ENetAddress> s_test_blocked6;
+std::vector<Heard> s_heard6;
+
+int ENET_CALLBACK OnP2PReceive6(ENetHost* host, ENetEvent*)
+{
+  const ENetAddress& from = host->receivedAddress;
+  for (const ENetAddress& a : s_test_blocked6)
+  {
+    if (a.host == from.host)
+      return 1;
+  }
+  for (Heard& h : s_heard6)
+  {
+    if (h.from.host == from.host && h.from.port == from.port)
+    {
+      h.packets++;
+      return 0;
+    }
+  }
+  if (s_heard6.size() < MAX_HEARD)
+    s_heard6.push_back({from, 1});
+  return 0;
+}
+
+int ENET_CALLBACK OnP2PReceive(ENetHost* host, ENetEvent*)
+{
+  const ENetAddress& from = host->receivedAddress;
+  for (const ENetAddress& a : s_test_blocked)
+  {
+    if (a.host == from.host && a.port == from.port)
+      return 1;
+  }
+  for (Heard& h : s_heard)
+  {
+    if (h.from.host == from.host && h.from.port == from.port)
+    {
+      h.packets++;
+      return 0;
+    }
+  }
+  if (s_heard.size() < MAX_HEARD)
+    s_heard.push_back({from, 1});
+  return 0;
+}
+
+// How far an ENet handshake got. Both sides connect at once, so there are two: ours (we send
+// CONNECT, they answer VERIFY_CONNECT) and theirs (they send CONNECT, we answer and wait for the
+// acknowledgement).
+const char* PeerStateName(ENetPeerState state)
+{
+  switch (state)
+  {
+  case ENET_PEER_STATE_DISCONNECTED:
+    return "disconnected";
+  case ENET_PEER_STATE_CONNECTING:
+    return "our connect unanswered";
+  case ENET_PEER_STATE_ACKNOWLEDGING_CONNECT:
+    return "their connect arrived, our answer unacknowledged";
+  case ENET_PEER_STATE_CONNECTION_PENDING:
+  case ENET_PEER_STATE_CONNECTION_SUCCEEDED:
+    return "connected, not yet reported";
+  case ENET_PEER_STATE_CONNECTED:
+    return "connected";
+  default:
+    return "disconnecting";
+  }
+}
+
+std::string IpToString(enet_uint32 host)
+{
+  // ENetAddress::host is in network byte order: the bytes in memory are a.b.c.d.
+  const auto* b = reinterpret_cast<const u8*>(&host);
+  return fmt::format("{}.{}.{}.{}", b[0], b[1], b[2], b[3]);
+}
+
+std::string GetStr(const picojson::object& o, const char* key, const std::string& def = "")
+{
+  const auto it = o.find(key);
+  return it != o.end() && it->second.is<std::string>() ? it->second.get<std::string>() : def;
+}
+
+double GetNum(const picojson::object& o, const char* key, double def = 0)
+{
+  const auto it = o.find(key);
+  return it != o.end() && it->second.is<double>() ? it->second.get<double>() : def;
+}
+
+// A whole number in [lo, hi] (the server's numbers are not trusted to be in range; casting a
+// double outside the target type's range is undefined behaviour), else nullopt.
+std::optional<s64> GetInt(const picojson::object& o, const char* key, s64 lo, s64 hi)
+{
+  const auto it = o.find(key);
+  if (it == o.end() || !it->second.is<double>())
+    return std::nullopt;
+  const double d = it->second.get<double>();
+  if (!std::isfinite(d) || std::floor(d) != d || d < static_cast<double>(lo) ||
+      d > static_cast<double>(hi))
+  {
+    return std::nullopt;
+  }
+  return static_cast<s64>(d);
+}
+
+// The host part of "a.b.c.d:port" ("" for anything else; SplitString("") is empty).
+std::string HostPart(const std::string& addr)
+{
+  const auto parts = SplitString(addr, ':');
+  return parts.empty() ? std::string() : parts[0];
+}
+
+bool GetBool(const picojson::object& o, const char* key, bool def = false)
+{
+  const auto it = o.find(key);
+  return it != o.end() && it->second.is<bool>() ? it->second.get<bool>() : def;
+}
+
+// ENet's defaults accept 32 MiB packets and 32 MiB of queued data per peer, and up to 32
+// connections from one address. Our messages (mm JSON, the P2P handshake) are a few KiB.
+void LimitHost(ENetHost* host)
+{
+  host->maximumPacketSize = 64 * 1024;
+  host->maximumWaitingData = 256 * 1024;
+  host->duplicatePeers = 4;  // Teams: players behind one NAT share an address
+}
+
+// "a.b.c.d:port" -> Endpoint. False if it does not have that shape.
+bool ParseEndpoint(const std::string& text, Endpoint* out)
+{
+  const auto parts = SplitString(text, ':');
+  if (parts.size() != 2 || parts[0].empty() || parts[1].empty())
+    return false;
+  char* end = nullptr;
+  const long port = std::strtol(parts[1].c_str(), &end, 10);
+  if (*end != '\0' || port <= 0 || port > 0xFFFF)
+    return false;
+  out->ip = parts[0];
+  out->port = static_cast<u16>(port);
+  return true;
+}
+
+// Slippi: getLocalAddress. "Set up and connect a socket (UDP, so "connect" doesn't actually send
+// any packets) so that the OS will determine what device/local IP address we will actually use."
+enet_uint32 GetLocalAddress(const ENetAddress* mm_address)
+{
+  ENetSocket socket = enet_socket_create(ENET_SOCKET_TYPE_DATAGRAM);
+  if (socket == ENET_SOCKET_NULL)
+  {
+    ERROR_LOG_FMT(NETPLAY, "[Matchmaking] Failed to get local address: socket create");
+    return 0;
+  }
+  if (enet_socket_connect(socket, mm_address) == -1)
+  {
+    ERROR_LOG_FMT(NETPLAY, "[Matchmaking] Failed to get local address: socket connect");
+    enet_socket_destroy(socket);
+    return 0;
+  }
+  ENetAddress address;
+  if (enet_socket_get_address(socket, &address) == -1)
+  {
+    ERROR_LOG_FMT(NETPLAY, "[Matchmaking] Failed to get local address: socket get address");
+    enet_socket_destroy(socket);
+    return 0;
+  }
+  enet_socket_destroy(socket);
+  return address.host;
+}
+
+// Slippi: getLocalAddressFallback (the host name's address).
+enet_uint32 GetLocalAddressFallback()
+{
+  char host[256]{};
+  if (gethostname(host, sizeof(host) - 1) != 0)
+  {
+    ERROR_LOG_FMT(NETPLAY, "[Matchmaking] Error finding LAN address");
+    return 0;
+  }
+  ENetAddress address{};
+  if (enet_address_set_host(&address, host) != 0)
+  {
+    ERROR_LOG_FMT(NETPLAY, "[Matchmaking] Error finding LAN host");
+    return 0;
+  }
+  return address.host;
+}
+
+// After a P2P connect timed out: our side, then one line per player it failed on with what came
+// from their address, how far each handshake got and the likely reason, so a bug report says why.
+void LogFailedConnect(const Match& match, const ENetHost* client,
+                      const std::vector<ENetPeer*>& servers,
+                      const std::vector<ENetAddress>& remote_addrs,
+                      const std::vector<bool>& connections, bool router_changed_port,
+                      bool upnp_mapped)
+{
+  WARN_LOG_FMT(NETPLAY,
+               "[Matchmaking] Our side: UDP port {}, {} by our router{}; {} packets sent, {} "
+               "received",
+               match.local_port, router_changed_port ? "changed" : "kept",
+               upnp_mapped ? ", UPnP-mapped" : "", client->totalSentPackets,
+               client->totalReceivedPackets);
+
+  for (size_t i = 0; i < servers.size(); i++)
+  {
+    if (connections[i])
+      continue;
+    const ENetAddress& to = remote_addrs[i];
+    const size_t p = RemotePlayer(match, i);
+    const std::string who =
+        p < match.players.size() ?
+            fmt::format("P{} {} ({})", match.players[p].port, match.players[p].display_name,
+                        match.players[p].connect_code) :
+            "?";
+
+    // From their address, but not from another player's (players behind one public address, or
+    // on one PC, differ only by port).
+    const auto other_player = [&](const ENetAddress& a) {
+      for (size_t j = 0; j < remote_addrs.size(); j++)
+      {
+        if (j != i && remote_addrs[j].host == a.host && remote_addrs[j].port == a.port)
+          return true;
+      }
+      return false;
+    };
+    std::vector<std::string> heard;
+    bool heard_exact = false;
+    for (const Heard& h : s_heard)
+    {
+      if (h.from.host != to.host || other_player(h.from))
+        continue;
+      heard.push_back(fmt::format("{} from port {}", h.packets, h.from.port));
+      heard_exact |= h.from.port == to.port;
+    }
+
+    // Ours, and theirs if their connect got here (ENet keeps it as a peer of its own).
+    std::vector<std::string> handshakes;
+    for (size_t k = 0; k < client->peerCount; k++)
+    {
+      const ENetPeer& peer = client->peers[k];
+      if (peer.state == ENET_PEER_STATE_DISCONNECTED || peer.address.host != to.host ||
+          (&peer != servers[i] && other_player(peer.address)))
+      {
+        continue;
+      }
+      handshakes.push_back(fmt::format("{} port {}: {}, {} sent",
+                                       &peer == servers[i] ? "ours to" : "theirs from",
+                                       peer.address.port,
+                                       PeerStateName(static_cast<ENetPeerState>(peer.state)),
+                                       peer.packetsSent));
+    }
+
+    const char* reason;
+    if (heard.empty())
+    {
+      reason = "nothing came from their address: our router or firewall dropped it, or it never "
+               "left their network (UDP blocked, carrier NAT)";
+    }
+    else if (!heard_exact)
+    {
+      reason = "their packets came from another port than the server saw: their router picks a "
+               "port per destination";
+    }
+    else if (router_changed_port)
+    {
+      reason = "theirs arrive but ours do not reach them: our router changed our port, and theirs "
+               "lets in only the one the server saw";
+    }
+    else
+    {
+      reason = "theirs arrive but ours do not reach them: their router or firewall drops them";
+    }
+    WARN_LOG_FMT(NETPLAY,
+                 "[Matchmaking] No connection to {} at {}:{}. Heard: {}. Handshakes: {}. "
+                 "Likely: {}",
+                 who, IpToString(to.host), to.port,
+                 heard.empty() ? "nothing" : fmt::to_string(fmt::join(heard, ", ")),
+                 handshakes.empty() ? "none" : fmt::to_string(fmt::join(handshakes, "; ")),
+                 reason);
+  }
+}
+}  // namespace
+
+Matchmaking::Matchmaking(User* user, ConnectedCallback on_connected)
+    : m_user(user), m_on_connected(std::move(on_connected)),
+      m_generator(static_cast<unsigned>(Common::Timer::NowMs())),
+      m_probe6(std::make_unique<Ipv6::Probe>())
+{
+}
+
+Matchmaking::~Matchmaking()
+{
+  m_is_mm_terminated = true;
+  m_state = State::ErrorEncountered;
+  SetError(ErrorSource::Client, "Matchmaking shut down");
+
+  if (m_matchmake_thread.joinable())
+    m_matchmake_thread.join();
+
+  TerminateMmConnection();
+  m_probe6->Close();
+}
+
+const char* Matchmaking::ModeName(Mode mode)
+{
+  switch (mode)
+  {
+  case Mode::Ranked:
+    return "ranked";
+  case Mode::Unranked:
+    return "unranked";
+  case Mode::Direct:
+    return "direct";
+  case Mode::Teams:
+    return "teams";
+  case Mode::Party:
+    return "party";
+  case Mode::Twos:
+    return "twos";
+  }
+  return "?";
+}
+
+const char* Matchmaking::StateName(State state)
+{
+  switch (state)
+  {
+  case State::Idle:
+    return "idle";
+  case State::Initializing:
+    return "initializing";
+  case State::Matchmaking:
+    return "matchmaking";
+  case State::OpponentConnecting:
+    return "opponent_connecting";
+  case State::ConnectionSuccess:
+    return "connection_success";
+  case State::ErrorEncountered:
+    return "error";
+  }
+  return "?";
+}
+
+const char* Matchmaking::ErrorSourceName(ErrorSource source)
+{
+  switch (source)
+  {
+  case ErrorSource::None:
+    return "";
+  case ErrorSource::Client:
+    return "client";
+  case ErrorSource::CreateTicket:
+    return "create_ticket";
+  case ErrorSource::GetTicket:
+    return "get_ticket";
+  case ErrorSource::Connection:
+    return "connection";
+  }
+  return "?";
+}
+
+bool Matchmaking::IsFixedRulesMode(Mode mode)
+{
+  return mode == Mode::Unranked || mode == Mode::Ranked || mode == Mode::Party ||
+         mode == Mode::Twos;
+}
+
+std::vector<u8> Matchmaking::EncodeConnectCode(const std::string& code)
+{
+  // JIS X 0208 row 3 (0x824F-0x829A) holds the full-width digits and Latin letters; '#' is
+  // 0x8194. Anything else is sent as is.
+  std::vector<u8> out;
+  for (const char ch : code)
+  {
+    const u8 c = static_cast<u8>(ch);
+    if (c >= '0' && c <= '9')
+      out.insert(out.end(), {0x82, static_cast<u8>(0x4F + (c - '0'))});
+    else if (c >= 'A' && c <= 'Z')
+      out.insert(out.end(), {0x82, static_cast<u8>(0x60 + (c - 'A'))});
+    else if (c >= 'a' && c <= 'z')
+      out.insert(out.end(), {0x82, static_cast<u8>(0x81 + (c - 'a'))});
+    else if (c == '#')
+      out.insert(out.end(), {0x81, 0x94});
+    else
+      out.push_back(c);
+  }
+  return out;
+}
+
+void Matchmaking::FindMatch(const SearchSettings& settings)
+{
+  if (IsSearching())
+    return;
+  if (m_matchmake_thread.joinable())
+    m_matchmake_thread.join();
+
+  m_is_mm_connected = false;
+  m_is_mm_terminated = false;
+
+  INFO_LOG_FMT(NETPLAY, "[Matchmaking] Starting matchmaking...");
+
+  m_search_settings = settings;
+  {
+    std::lock_guard lk(m_mutex);
+    m_error_msg.clear();
+    m_match.reset();
+    m_last_ticket_response = picojson::value();
+  }
+  m_error_source = ErrorSource::None;
+  m_ticket_count = 0;
+  m_connect_attempts = 0;
+  m_state = State::Initializing;
+  m_matchmake_thread = std::thread(&Matchmaking::MatchmakeThread, this);
+}
+
+bool Matchmaking::IsSearching() const
+{
+  const State s = m_state.load();
+  return s == State::Initializing || s == State::Matchmaking || s == State::OpponentConnecting;
+}
+
+std::string Matchmaking::GetErrorMessage() const
+{
+  std::lock_guard lk(m_mutex);
+  return m_error_msg;
+}
+
+std::optional<Match> Matchmaking::GetMatch() const
+{
+  std::lock_guard lk(m_mutex);
+  return m_match;
+}
+
+int Matchmaking::LocalPlayerIndex() const
+{
+  std::lock_guard lk(m_mutex);
+  return m_match ? m_match->local_player_index : 0;
+}
+
+u8 Matchmaking::RemotePlayerCount() const
+{
+  std::lock_guard lk(m_mutex);
+  if (!m_match || m_match->players.empty())
+    return 0;
+  return static_cast<u8>(m_match->players.size() - 1);
+}
+
+P2PLink Matchmaking::TakeLink()
+{
+  std::lock_guard lk(m_mutex);
+  return std::move(m_link);
+}
+
+std::string Matchmaking::GetLanAddress() const
+{
+  std::lock_guard lk(m_mutex);
+  return m_lan_address;
+}
+
+std::string Matchmaking::GetServerAddress() const
+{
+  std::lock_guard lk(m_mutex);
+  return m_server_address;
+}
+
+picojson::value Matchmaking::GetLastTicketResponse() const
+{
+  std::lock_guard lk(m_mutex);
+  return m_last_ticket_response;
+}
+
+void Matchmaking::SetError(ErrorSource source, std::string message)
+{
+  {
+    std::lock_guard lk(m_mutex);
+    m_error_msg = std::move(message);
+  }
+  m_error_source = source;
+}
+
+void Matchmaking::SendMmMessage(const picojson::value& msg)
+{
+  const std::string contents = msg.serialize();
+  ENetPacket* packet =
+      enet_packet_create(contents.c_str(), contents.length(), ENET_PACKET_FLAG_RELIABLE);
+  enet_peer_send(m_server, 0, packet);
+}
+
+int Matchmaking::ReceiveMmMessage(picojson::value& msg, int timeout_ms)
+{
+  constexpr int host_service_timeout_ms = 250;
+
+  // Make sure loop runs at least once
+  if (timeout_ms < host_service_timeout_ms)
+    timeout_ms = host_service_timeout_ms;
+
+  // Slippi: "This is not a perfect way to timeout but hopefully it's close enough?"
+  const int max_attempts = timeout_ms / host_service_timeout_ms;
+
+  for (int i = 0; i < max_attempts; i++)
+  {
+    if (m_is_mm_terminated)
+      return -1;
+
+    ENetEvent net_event;
+    const int net = enet_host_service(m_client, &net_event, host_service_timeout_ms);
+    if (net <= 0)
+      continue;
+
+    switch (net_event.type)
+    {
+    case ENET_EVENT_TYPE_RECEIVE:
+    {
+      const std::string str(reinterpret_cast<const char*>(net_event.packet->data),
+                            net_event.packet->dataLength);
+      enet_packet_destroy(net_event.packet);
+      msg = picojson::value();
+      // picojson recurses without a depth limit: a deeply nested message would overflow the
+      // stack, so the depth is checked first.
+      if (!Gprb::PeerData::JsonSafeToParse(str, 16) || !picojson::parse(msg, str).empty())
+        msg = picojson::value();
+      return 0;
+    }
+    case ENET_EVENT_TYPE_DISCONNECT:
+      // Return -2 code to indicate we have lost connection to the server
+      return -2;
+    default:
+      break;
+    }
+  }
+
+  return -1;
+}
+
+void Matchmaking::MatchmakeThread()
+{
+  Common::SetCurrentThreadName("Online matchmaking");
+  while (IsSearching())
+  {
+    if (m_is_mm_terminated)
+      break;
+
+    switch (m_state.load())
+    {
+    case State::Initializing:
+      StartMatchmaking();
+      break;
+    case State::Matchmaking:
+      HandleMatchmaking();
+      break;
+    case State::OpponentConnecting:
+      HandleConnecting();
+      break;
+    default:
+      break;
+    }
+  }
+
+  // Clean up ENET connections
+  TerminateMmConnection();
+  m_probe6->Close();
+}
+
+void Matchmaking::DisconnectFromServer()
+{
+  m_is_mm_connected = false;
+
+  if (!m_server)
+    return;
+  enet_peer_disconnect(m_server, 0);
+
+  ENetEvent net_event;
+  while (enet_host_service(m_client, &net_event, 3000) > 0)
+  {
+    switch (net_event.type)
+    {
+    case ENET_EVENT_TYPE_RECEIVE:
+      enet_packet_destroy(net_event.packet);
+      break;
+    case ENET_EVENT_TYPE_DISCONNECT:
+      m_server = nullptr;
+      return;
+    default:
+      break;
+    }
+  }
+
+  // didn't disconnect gracefully force disconnect
+  enet_peer_reset(m_server);
+  m_server = nullptr;
+}
+
+void Matchmaking::TerminateMmConnection()
+{
+  // Disconnect from server
+  DisconnectFromServer();
+
+  // Destroy client
+  if (m_client)
+  {
+    enet_host_destroy(m_client);
+    m_client = nullptr;
+  }
+}
+
+void Matchmaking::StartMatchmaking()
+{
+  m_client = nullptr;
+  int retry_count = 0;
+
+  // Slippi: fixed-rules modes first require the ISO MD5 check ("Cannot queue for this mode with a
+  // modded ISO known to desync"). Our build/codeset hash check is a later phase (backend-design 6);
+  // the server refuses those modes for now anyway.
+
+  const UserInfo user_info = m_user->GetUserInfo();
+  while (m_client == nullptr && retry_count < 15)
+  {
+    if (Config::Get(Config::ONLINE_FORCE_NETPLAY_PORT))
+      m_host_port = static_cast<u16>(Config::Get(Config::ONLINE_NETPLAY_PORT) +
+                                     (m_search_settings.pair_room ? 1 : 0));
+    else
+      m_host_port = static_cast<u16>(41000 + (m_generator() % 10000));
+    INFO_LOG_FMT(NETPLAY, "[Matchmaking] Port to use: {}...", m_host_port.load());
+
+    // Slippi: "We are explicitly setting the client address because we are trying to utilize our
+    // connection to the matchmaking service in order to hole punch. This port will end up being
+    // the port we listen on when we start our server"
+    ENetAddress client_addr;
+    client_addr.host = ENET_HOST_ANY;
+    client_addr.port = m_host_port;
+
+    m_client = enet_host_create(&client_addr, 1, MM_CHANNELS, 0, 0);
+    retry_count++;
+  }
+  if (m_client)
+    LimitHost(m_client);
+
+  if (m_client == nullptr)
+  {
+    m_state = State::ErrorEncountered;
+    SetError(ErrorSource::Client, "Failed to create mm client");
+    ERROR_LOG_FMT(NETPLAY, "[Matchmaking] Failed to create client...");
+    return;
+  }
+
+  const std::string mm_host = Config::GetMatchmakingHost();
+  const int mm_port = Config::GetMatchmakingPort();
+  {
+    std::lock_guard lk(m_mutex);
+    m_server_address = fmt::format("{}:{}", mm_host, mm_port);
+  }
+
+  ENetAddress addr{};
+  if (enet_address_set_host(&addr, mm_host.c_str()) != 0)
+  {
+    // Slippi does not check this; enet_host_connect to 0.0.0.0 then fails the 10 s connect.
+    m_state = State::ErrorEncountered;
+    SetError(ErrorSource::Client, "Failed to connect to mm server");
+    ERROR_LOG_FMT(NETPLAY, "[Matchmaking] Cannot resolve mm server {}", mm_host);
+    return;
+  }
+  addr.port = static_cast<enet_uint16>(mm_port);
+
+  // Not in Slippi: a UPnP mapping of the port, made before anything is sent from it so that the
+  // router uses the mapped port for the server too (Common::UPnP::MapUdpPort). Without it, a
+  // router that gives every destination its own port (2026-10-12: a player whose 50590 became
+  // 42831, 46463 became 62131) reaches nobody whose router checks the sender's port. Skipped for
+  // a server on this machine (the tests), where it would only add mappings to the router.
+  m_upnp_mapped = false;
+#ifdef USE_UPNP
+  if (Config::Get(Config::ONLINE_UPNP) && reinterpret_cast<const u8*>(&addr.host)[0] != 127)
+    m_upnp_mapped =
+        Common::UPnP::MapUdpPort(m_host_port, UPNP_WAIT, m_search_settings.pair_room ? 1 : 0);
+#endif
+
+  // Not in Slippi: IPv6 beside IPv4 (Online/Ipv6.h). Sent now, before mm's ENet connect, so the
+  // probe is there well before the ticket. Nothing of the IPv4 search changes.
+  StartIpv6();
+
+  m_server = enet_host_connect(m_client, &addr, MM_CHANNELS, 0);
+  if (m_server == nullptr)
+  {
+    m_state = State::ErrorEncountered;
+    SetError(ErrorSource::Client, "Failed to start connection to mm server");
+    ERROR_LOG_FMT(NETPLAY, "[Matchmaking] Failed to start connection to mm server...");
+    return;
+  }
+
+  // Before we can request a ticket, we must wait for connection to be successful
+  int connect_attempt_count = 0;
+  const u64 mm_connect_start = Common::Timer::NowMs();
+  while (!m_is_mm_connected)
+  {
+    if (m_is_mm_terminated)
+      return;
+
+    ENetEvent net_event;
+    const int net = enet_host_service(m_client, &net_event, 500);
+    if (net <= 0 || net_event.type != ENET_EVENT_TYPE_CONNECT)
+    {
+      if (net > 0 && net_event.type == ENET_EVENT_TYPE_RECEIVE)
+        enet_packet_destroy(net_event.packet);
+
+      // Not yet connected, will retry
+      connect_attempt_count++;
+      if (connect_attempt_count >= 20)
+      {
+        // Nothing received: the server's answers never reached us (a firewall or network that
+        // blocks UDP, or the server is down). Something received but no connect: they arrive,
+        // ours are lost or refused.
+        ERROR_LOG_FMT(NETPLAY,
+                      "[Matchmaking] Failed to connect to mm server {} ({}:{}) from UDP port {}: "
+                      "{} packets sent, {} received",
+                      mm_host, IpToString(addr.host), mm_port, m_host_port.load(),
+                      m_client->totalSentPackets, m_client->totalReceivedPackets);
+        m_state = State::ErrorEncountered;
+        SetError(ErrorSource::Client, "Failed to connect to mm server");
+        return;
+      }
+      continue;
+    }
+
+    m_is_mm_connected = true;
+    INFO_LOG_FMT(NETPLAY, "[Matchmaking] Connected to mm server {} ({}:{}) in {} ms", mm_host,
+                 IpToString(addr.host), mm_port, Common::Timer::NowMs() - mm_connect_start);
+  }
+
+  INFO_LOG_FMT(NETPLAY, "[Matchmaking] Trying to find match...");
+
+  // Slippi: "Determine local IP address. We can attempt to connect to our opponent via local IP
+  // address if we have the same external IP address. The following scenarios can cause us to have
+  // the same external IP address:
+  // - we are connected to the same LAN
+  // - we are connected to the same VPN node
+  // - we are behind the same CGNAT"
+  std::string lan_addr;
+  m_chosen_network = Config::GetChosenNetwork();
+  if (Config::Get(Config::ONLINE_FORCE_LAN_IP))
+  {
+    bool home_lan = false;
+    if (m_chosen_network.mask != 0)
+    {
+      // The adapter toward the internet (the home LAN) chosen: as Automatic (bug report #133).
+      const enet_uint32 internet = GetLocalAddress(&addr);
+      m_chosen_network = Config::GetChosenNetwork(internet ? IpToString(internet) : std::string());
+      home_lan = m_chosen_network.mask == 0;
+    }
+    if (home_lan)
+    {
+      INFO_LOG_FMT(NETPLAY,
+                   "[Matchmaking] Network chosen in the launcher: {}, the adapter toward the "
+                   "internet: players are reached as with Automatic",
+                   Config::Get(Config::ONLINE_LAN_IP));
+    }
+    else if (m_chosen_network.mask != 0)
+    {
+      INFO_LOG_FMT(NETPLAY,
+                   "[Matchmaking] Network chosen in the launcher: {} (Direct and room players on "
+                   "it are reached there)",
+                   Config::Get(Config::ONLINE_LAN_IP));
+    }
+    else
+    {
+      WARN_LOG_FMT(NETPLAY, "[Matchmaking] Overwriting LAN IP sent with configured address");
+    }
+    lan_addr = fmt::format("{}:{}", m_chosen_network.address, m_host_port.load());
+  }
+  else
+  {
+    enet_uint32 local_address = GetLocalAddress(&addr);
+    if (local_address == 0)
+      local_address = GetLocalAddressFallback();
+    if (local_address != 0)
+      lan_addr = fmt::format("{}:{}", IpToString(local_address), m_host_port.load());
+  }
+  {
+    std::lock_guard lk(m_mutex);
+    m_lan_address = lan_addr;
+  }
+  INFO_LOG_FMT(NETPLAY, "[Matchmaking] Sending LAN address: {}", lan_addr);
+
+  picojson::array connect_code_buf;
+  for (const u8 b : EncodeConnectCode(m_search_settings.connect_code))
+    connect_code_buf.emplace_back(static_cast<double>(b));
+
+  // Send message to server to create ticket. Same fields as Slippi's create-ticket.
+  picojson::object user;
+  user["uid"] = picojson::value(user_info.uid);
+  user["playKey"] = picojson::value(user_info.play_key);
+  user["connectCode"] = picojson::value(user_info.connect_code);
+  user["displayName"] = picojson::value(user_info.display_name);
+  picojson::object search;
+  search["mode"] = picojson::value(static_cast<double>(m_search_settings.mode));
+  search["connectCode"] = picojson::value(std::move(connect_code_buf));
+  if (m_search_settings.mode == Mode::Twos || m_search_settings.mode == Mode::Ranked)
+  {
+    // docs/design/2v2.md: a search started again by itself goes first; players the last match
+    // could not connect to are kept out of the next groups. Ranked: the opponent of a set that
+    // ended in its ping check (GameSetup.h), kept apart for a while.
+    if (m_search_settings.requeue)
+      search["requeue"] = picojson::value(true);
+    if (!m_search_settings.avoid.empty())
+    {
+      picojson::array avoid;
+      for (const auto& uid : m_search_settings.avoid)
+        avoid.emplace_back(uid);
+      search["avoid"] = picojson::value(std::move(avoid));
+      search["after"] = picojson::value(m_search_settings.after);
+    }
+  }
+  picojson::object request;
+  request["type"] = picojson::value(CREATE_TICKET);
+  request["user"] = picojson::value(std::move(user));
+  request["search"] = picojson::value(std::move(search));
+  request["appVersion"] = picojson::value(APP_VERSION);
+  request["platform"] = picojson::value(APP_PLATFORM);
+  // Which engine runs the game (Dolphin or EmissaryRecomp), for mm's logs and numbers.
+  const BrawlOnline::EngineIdentity engine = BrawlOnline::ThisEngine();
+  request["engine"] = picojson::value(engine.name);
+  request["engineVersion"] = picojson::value(engine.version);
+  request["ipAddressLan"] = picojson::value(lan_addr);
+  if (!m_ipv6_token.empty())
+  {
+    request["ipv6Token"] = picojson::value(m_ipv6_token);
+    m_probe6->Send();
+    m_probe6_sent_ms = Common::Timer::NowMs();
+  }
+  // mm takes one ticket per account every 2 s (engine `ticket_interval`, "Searching too often.
+  // Wait a moment."): a search started again at once (cancelled, then START) waits for its turn
+  // instead of failing. A 2v2 player was left ready with nothing searching that way (the user's,
+  // 2026-11-03: a cancel and a new search 70 ms apart).
+  {
+    static std::atomic<u64> s_last_ticket_ms{0};
+    constexpr u64 TICKET_INTERVAL_MS = 2100;
+    const u64 last = s_last_ticket_ms.load();
+    if (last && Common::Timer::NowMs() - last < TICKET_INTERVAL_MS)
+    {
+      INFO_LOG_FMT(NETPLAY, "[Matchmaking] the last ticket was {} ms ago: waiting for mm's interval",
+                   Common::Timer::NowMs() - last);
+      while (Common::Timer::NowMs() - last < TICKET_INTERVAL_MS)
+      {
+        if (m_is_mm_terminated)
+          return;
+        Common::SleepCurrentThread(20);
+      }
+    }
+    s_last_ticket_ms = Common::Timer::NowMs();
+  }
+  SendMmMessage(picojson::value(std::move(request)));
+  m_ticket_count++;
+  m_ticket_sent_ms = Common::Timer::NowMs();
+
+  // Get response from server
+  picojson::value response;
+  const int rcv_res = ReceiveMmMessage(response, 5000);
+  if (m_is_mm_terminated)
+    return;
+  if (rcv_res != 0)
+  {
+    ERROR_LOG_FMT(NETPLAY,
+                  "[Matchmaking] Did not receive response from server for create ticket ({} after "
+                  "{} ms; ticket {} of this search)",
+                  rcv_res == -2 ? "the server disconnected" : "no answer",
+                  Common::Timer::NowMs() - m_ticket_sent_ms, m_ticket_count.load());
+    m_state = State::ErrorEncountered;
+    SetError(ErrorSource::Client, "Failed to join mm queue");
+    return;
+  }
+
+  const picojson::object empty;
+  const auto& resp = response.is<picojson::object>() ? response.get<picojson::object>() : empty;
+  if (GetStr(resp, "type") != CREATE_TICKET_RESP)
+  {
+    ERROR_LOG_FMT(NETPLAY, "[Matchmaking] Received incorrect response for create ticket");
+    ERROR_LOG_FMT(NETPLAY, "{}", response.serialize());
+    m_state = State::ErrorEncountered;
+    SetError(ErrorSource::Client, "Invalid response when joining mm queue");
+    return;
+  }
+
+  const std::string err = GetStr(resp, "error");
+  if (!err.empty())
+  {
+    ERROR_LOG_FMT(NETPLAY, "[Matchmaking] Received error from server for create ticket: {}", err);
+    m_state = State::ErrorEncountered;
+    SetError(ErrorSource::CreateTicket, err);
+    return;
+  }
+
+  m_state = State::Matchmaking;
+  INFO_LOG_FMT(NETPLAY, "[Matchmaking] Request ticket success");
+}
+
+void Matchmaking::StartIpv6()
+{
+  m_probe6->Close();
+  m_ipv6_token.clear();
+  m_probe6_answered = false;
+  if (!Ipv6::Enabled())
+    return;
+  // Only the sessions that can play over IPv6 (the gameplay session, and the harness's record
+  // backend); the whole-machine netplay fallback stays on IPv4.
+  const std::string backend = Session::BackendName();
+  if (backend != "gameplay" && backend != "record")
+  {
+    INFO_LOG_FMT(NETPLAY, "[Matchmaking] IPv6: not with the '{}' session backend", backend);
+    return;
+  }
+  // GameBridge started the lookup at boot: this waits only for a search right after it.
+  const std::optional<ENetAddress> server = Ipv6::Server(std::chrono::milliseconds(250));
+  if (!server)
+  {
+    INFO_LOG_FMT(NETPLAY, "[Matchmaking] IPv6: no address for the server's IPv6 listener ({}); "
+                          "IPv4 only",
+                 Config::GetMatchmakingHost6());
+    return;
+  }
+  std::string why;
+  std::optional<ENetAddress> local = Ipv6::LocalAddressToward(*server, &why);
+  if (!local)
+  {
+    INFO_LOG_FMT(NETPLAY, "[Matchmaking] IPv6: not used ({}); IPv4 only", why);
+    return;
+  }
+  local->port = m_host_port;
+  const std::string token = Ipv6::NewToken();
+  if (!m_probe6->Open(*local, *server, token, &why))
+  {
+    INFO_LOG_FMT(NETPLAY, "[Matchmaking] IPv6: not used ({}); IPv4 only", why);
+    return;
+  }
+  m_ipv6_token = token;
+  m_probe6_sent_ms = Common::Timer::NowMs();
+  INFO_LOG_FMT(NETPLAY, "[Matchmaking] IPv6: probing the server at {} from {}",
+               Common::ENet::EndpointText(*server), Common::ENet::EndpointText(*local));
+}
+
+void Matchmaking::HandleMatchmaking()
+{
+  // Deal with class shut down
+  if (m_state != State::Matchmaking)
+    return;
+
+  if (m_probe6->IsOpen())
+  {
+    if (const auto seen = m_probe6->Reply())
+    {
+      m_probe6_answered = true;
+      INFO_LOG_FMT(NETPLAY, "[Matchmaking] IPv6: the server sees us at {}",
+                   Common::ENet::EndpointText(*seen));
+    }
+    if (Common::Timer::NowMs() - m_probe6_sent_ms >= PROBE6_RESEND_MS)
+    {
+      m_probe6->Send();
+      m_probe6_sent_ms = Common::Timer::NowMs();
+    }
+  }
+
+  // Get response from server
+  picojson::value get_resp_value;
+  const int rcv_res = ReceiveMmMessage(get_resp_value, 2000);
+  if (m_is_mm_terminated || m_state != State::Matchmaking)
+    return;
+  if (rcv_res == -1)
+  {
+    DEBUG_LOG_FMT(NETPLAY, "[Matchmaking] Have not yet received assignment");
+    return;
+  }
+  if (rcv_res != 0)
+  {
+    // Right now the only other code is -2 meaning the server died probably?
+    // ENet drops a peer it has not heard from for 5-10 s, so this is either the server going away
+    // or the network losing everything for that long.
+    ERROR_LOG_FMT(NETPLAY, "[Matchmaking] Lost connection to the mm server {} s into the search",
+                  (Common::Timer::NowMs() - m_ticket_sent_ms) / 1000);
+    m_state = State::ErrorEncountered;
+    SetError(ErrorSource::Connection, "Lost connection to the mm server");
+    return;
+  }
+
+  const picojson::object empty;
+  const auto& get_resp =
+      get_resp_value.is<picojson::object>() ? get_resp_value.get<picojson::object>() : empty;
+  {
+    std::lock_guard lk(m_mutex);
+    m_last_ticket_response = get_resp_value;
+  }
+  if (GetStr(get_resp, "type") != GET_TICKET_RESP)
+  {
+    ERROR_LOG_FMT(NETPLAY, "[Matchmaking] Received incorrect response for get ticket");
+    m_state = State::ErrorEncountered;
+    SetError(ErrorSource::Client, "Invalid response when getting mm status");
+    return;
+  }
+
+  const std::string err = GetStr(get_resp, "error");
+  const std::string latest_version = GetStr(get_resp, "latestVersion");
+  if (!err.empty())
+  {
+    if (!latest_version.empty())
+    {
+      // Slippi: "Update version number when the mm server tells us our version is outdated for
+      // people whose file updates dont work"
+      m_user->OverwriteLatestVersion(latest_version);
+    }
+
+    ERROR_LOG_FMT(NETPLAY, "[Matchmaking] Received error from server for get ticket: {}", err);
+    m_state = State::ErrorEncountered;
+    SetError(ErrorSource::GetTicket, err);
+    return;
+  }
+
+  Match match;
+  match.match_id = GetStr(get_resp, "matchId");
+  match.mode = static_cast<int>(m_search_settings.mode);
+  match.local_port = m_host_port;
+  INFO_LOG_FMT(NETPLAY, "[Matchmaking] Match ID: {}", match.match_id);
+
+  std::vector<std::string> remote_ips;
+  const auto players_it = get_resp.find("players");
+  if (players_it != get_resp.end() && players_it->second.is<picojson::array>())
+  {
+    const auto& queue = players_it->second.get<picojson::array>();
+    std::string local_external_ip;
+
+    for (const auto& v : queue)
+    {
+      const auto& el = v.is<picojson::object>() ? v.get<picojson::object>() : empty;
+      PlayerInfo player;
+      player.is_local = GetBool(el, "isLocalPlayer");
+      player.uid = GetStr(el, "uid");
+      player.display_name = GetStr(el, "displayName");
+      player.connect_code = GetStr(el, "connectCode");
+      // In-game port 1-4 (it becomes an index); anything else makes the response unusable.
+      player.port = static_cast<int>(GetInt(el, "port", 1, 4).value_or(0));
+      player.is_bot = GetBool(el, "isBot");
+      player.ip_address = GetStr(el, "ipAddress", "1.1.1.1:123");
+      player.ip_address_lan = GetStr(el, "ipAddressLan", "1.1.1.1:123");
+      // IPv6 (Online/Ipv6.h): kept only if it is a usable "[ip]:port".
+      player.ip_address6 = GetStr(el, "ipAddress6");
+      if (!player.ip_address6.empty() && !Ipv6::ParseEndpoint(player.ip_address6))
+      {
+        WARN_LOG_FMT(NETPLAY, "[Matchmaking] P{} has an unusable IPv6 address '{}'", player.port,
+                     player.ip_address6);
+        player.ip_address6.clear();
+      }
+      player.chat_messages = User::GetDefaultChatMessages();
+      const auto chat = el.find("chatMessages");
+      if (chat != el.end() && chat->second.is<picojson::array>() &&
+          chat->second.get<picojson::array>().size() == 16)
+      {
+        player.chat_messages.clear();
+        for (const auto& m : chat->second.get<picojson::array>())
+          player.chat_messages.push_back(m.is<std::string>() ? m.get<std::string>() : "");
+      }
+      if (player.port == 0)
+      {
+        ERROR_LOG_FMT(NETPLAY, "[Matchmaking] A player without a valid port in get-ticket-resp");
+        m_state = State::ErrorEncountered;
+        SetError(ErrorSource::Client, "Invalid response when getting mm status");
+        return;
+      }
+      match.players.push_back(player);
+
+      if (player.is_local)
+      {
+        local_external_ip = HostPart(player.ip_address);
+        match.local_player_index = player.port - 1;
+        // The address the peers punch to. A port other than ours means the router changes it,
+        // and only peers whose router lets in any port of an address it sent to can reach us.
+        const auto parts = SplitString(player.ip_address, ':');
+        const bool same_port =
+            parts.size() == 2 && parts[1] == std::to_string(m_host_port.load());
+        m_router_changed_port = !same_port;
+        INFO_LOG_FMT(NETPLAY, "[Matchmaking] The server sees us at {} (port {}{}{})",
+                     player.ip_address, m_host_port.load(), m_upnp_mapped ? ", UPnP-mapped" : "",
+                     same_port ? "" : "; the router changed the port");
+#ifdef USE_UPNP
+        // The router's own internet address, if it answered UPnP. Another one than the server
+        // sees means our traffic leaves through something else too (the ISP's NAT, a second
+        // router, a VPN), whose ports the router's mapping does not open.
+        const std::string router_ip = Common::UPnP::ExternalAddress();
+        if (!router_ip.empty() && router_ip != local_external_ip)
+        {
+          WARN_LOG_FMT(NETPLAY,
+                       "[Matchmaking] The router's internet address is {}, the server sees {}: "
+                       "another NAT or a VPN is between them, and UPnP does not open it",
+                       router_ip, local_external_ip);
+        }
+#endif
+      }
+    }
+
+    // IPv6: only if mm has ours too (our probe got there) and the probe socket is still ours.
+    std::string local_ip6;
+    for (const auto& player : match.players)
+    {
+      if (player.is_local && !player.ip_address6.empty() && m_probe6->IsOpen())
+        local_ip6 = Common::ENet::HostText(m_probe6->Local());
+    }
+    if (!local_ip6.empty())
+      match.local_ip6 = local_ip6;
+
+    // Loop a second time to get the correct remote IPs
+    for (const auto& player : match.players)
+    {
+      if (player.port - 1 == match.local_player_index)
+        continue;
+
+      // IPv6, beside whatever IPv4 address Slippi's rule picks below.
+      {
+        Endpoint e6;
+        if (!match.local_ip6.empty())
+        {
+          if (const auto a6 = Ipv6::ParseEndpoint(player.ip_address6))
+            e6 = {Common::ENet::HostText(*a6), a6->port};
+        }
+        match.remotes6.push_back(e6);
+        if (!e6.ip.empty())
+        {
+          INFO_LOG_FMT(NETPLAY, "[Matchmaking] P{} {} ({}): IPv6 {} (tried beside IPv4)",
+                       player.port, player.display_name, player.connect_code, e6.ToString());
+        }
+        else if (match.local_ip6.empty() && !player.ip_address6.empty())
+        {
+          // Bug #298: the friend had IPv6 and the reporter's PC had none, which only the
+          // server's web log showed. A pair IPv4 can't connect would connect over IPv6 here.
+          INFO_LOG_FMT(NETPLAY,
+                       "[Matchmaking] P{} {} ({}) has IPv6 but this PC has none (or the server "
+                       "never got our IPv6 probe): IPv4 only",
+                       player.port, player.display_name, player.connect_code);
+        }
+      }
+
+      const std::string& ext_ip = player.ip_address;
+      const std::string& lan_ip = player.ip_address_lan;
+
+      // A friend on the network we chose (a VPN such as ZeroTier, for players whose NAT lets no
+      // one in): only in Direct and rooms, where players pick each other, as strangers' VPNs
+      // can number their networks alike. They chose theirs too, or their LAN address (the one
+      // toward the server) would not be on it, so each side picks the other's.
+      if (m_chosen_network.Contains(HostPart(lan_ip)) &&
+          (m_search_settings.mode == Mode::Direct || m_search_settings.mode == Mode::Teams))
+      {
+        INFO_LOG_FMT(NETPLAY,
+                     "[Matchmaking] P{} {} ({}): internet {}, LAN {}; using LAN (on the network "
+                     "chosen in the launcher)",
+                     player.port, player.display_name, player.connect_code, ext_ip, lan_ip);
+        remote_ips.push_back(lan_ip);
+        continue;
+      }
+
+      if (HostPart(ext_ip) != local_external_ip || lan_ip.empty())
+      {
+        // If external IPs are different, just use that address
+        INFO_LOG_FMT(NETPLAY, "[Matchmaking] P{} {} ({}): internet {}, LAN {}; using internet",
+                     player.port, player.display_name, player.connect_code, ext_ip, lan_ip);
+        remote_ips.push_back(ext_ip);
+        continue;
+      }
+
+      // Slippi: "TODO: Instead of using one or the other, it might be better to try both"
+      // If external IPs are the same, try using LAN IPs
+      INFO_LOG_FMT(NETPLAY,
+                   "[Matchmaking] P{} {} ({}): internet {}, LAN {}; using LAN (same internet "
+                   "address as ours)",
+                   player.port, player.display_name, player.connect_code, ext_ip, lan_ip);
+      remote_ips.push_back(lan_ip);
+    }
+  }
+  match.is_host = GetBool(get_resp, "isHost");
+
+  // Allowed stages (srStageKind ids): the server's list for the mode (server/config/
+  // rulesets.json). Slippi falls back to a default Melee list when `stages` is missing; ours is
+  // in the session (Gprb::Session::DefaultStages(), P+'s legal list), which draws the random
+  // stages from this list (Unranked's games, Direct's game 1). Stage picks are not restricted,
+  // except in a room whose loser picks from the list (`pickFromStages`).
+  const auto stages_it = get_resp.find("stages");
+  if (stages_it != get_resp.end() && stages_it->second.is<picojson::array>())
+  {
+    // Only stage kinds a versus match can be played on (Gprb::PeerData::ValidStageKind): the
+    // host draws random stages from this list and its pick reaches the game.
+    picojson::object probe;
+    for (const auto& s : stages_it->second.get<picojson::array>())
+    {
+      probe["s"] = s;
+      const auto kind = GetInt(probe, "s", 0, 0xFFFF);
+      if (kind && Gprb::PeerData::ValidStageKind(static_cast<u32>(*kind)) && match.stages.size() < 256)
+        match.stages.push_back(static_cast<u16>(*kind));
+    }
+  }
+  const auto starters_it = get_resp.find("starters");
+  if (starters_it != get_resp.end() && starters_it->second.is<picojson::array>())
+  {
+    picojson::object probe;
+    for (const auto& s : starters_it->second.get<picojson::array>())
+    {
+      probe["s"] = s;
+      const auto kind = GetInt(probe, "s", 0, 0xFFFF);
+      if (kind && Gprb::PeerData::ValidStageKind(static_cast<u32>(*kind)) && match.starters.size() < 16)
+        match.starters.push_back(static_cast<u16>(*kind));
+    }
+  }
+  // 2v2 (docs/design/2v2.md): the team splits, each a team (0 or 1) per in-game port with two
+  // players on each; anything else in the list is dropped, and a 2v2 match without one usable
+  // split is refused.
+  if (m_search_settings.mode == Mode::Twos)
+  {
+    const auto splits_it = get_resp.find("splits");
+    if (splits_it != get_resp.end() && splits_it->second.is<picojson::array>())
+    {
+      for (const auto& sv : splits_it->second.get<picojson::array>())
+      {
+        if (!sv.is<picojson::array>() || sv.get<picojson::array>().size() != 4 ||
+            match.twos_splits.size() >= 3)
+        {
+          continue;
+        }
+        std::array<u8, 4> split{};
+        int ones = 0;
+        bool ok = true;
+        picojson::object probe;
+        for (size_t i = 0; i < 4; ++i)
+        {
+          probe["t"] = sv.get<picojson::array>()[i];
+          const auto t = GetInt(probe, "t", 0, 1);
+          ok = ok && t.has_value();
+          split[i] = static_cast<u8>(t.value_or(0));
+          ones += split[i];
+        }
+        if (ok && ones == 2)
+          match.twos_splits.push_back(split);
+      }
+    }
+    if (match.twos_splits.empty() || match.players.size() != 4)
+    {
+      ERROR_LOG_FMT(NETPLAY, "[Matchmaking] A 2v2 match without four players or a team split");
+      m_state = State::ErrorEncountered;
+      SetError(ErrorSource::Client, "Invalid response when getting mm status");
+      return;
+    }
+  }
+  match.pick_from_stages = GetBool(get_resp, "pickFromStages");
+  match.alternate_stages = GetBool(get_resp, "alternateStages");
+  match.anyone_picks = GetBool(get_resp, "anyonePicks");
+  match.items = static_cast<u32>(GetInt(get_resp, "items", 0, 0xFFFFFFFF).value_or(0));
+  // The match's rules (MatchRules.h). Rules that are there but unusable refuse the match: playing
+  // under other rules than the server set up is worse than not playing.
+  const ParsedRules rules = ParseRules(get_resp);
+  if (!rules.error.empty())
+  {
+    ERROR_LOG_FMT(NETPLAY, "[Matchmaking] Unusable rules in get-ticket-resp: {}", rules.detail);
+    m_state = State::ErrorEncountered;
+    SetError(ErrorSource::Client, rules.error);
+    return;
+  }
+  match.rules = rules.rules;
+  // A room's set (SetFormat.h): refused like the rules when it cannot be played.
+  const GameSetup::ParsedSet set = GameSetup::ParseSetTicket(get_resp);
+  if (!set.error.empty())
+  {
+    ERROR_LOG_FMT(NETPLAY, "[Matchmaking] Unusable set in get-ticket-resp: {}", set.detail);
+    m_state = State::ErrorEncountered;
+    SetError(ErrorSource::Client, set.error);
+    return;
+  }
+  match.set = set.set;
+  if (match.rules)
+    INFO_LOG_FMT(NETPLAY, "[Matchmaking] Rules: {}", picojson::value(ToJson(*match.rules)).serialize());
+  INFO_LOG_FMT(NETPLAY, "[Matchmaking] Stages from the server: {}", fmt::join(match.stages, ","));
+
+  for (const auto& ip : remote_ips)
+  {
+    Endpoint ep;
+    if (!ParseEndpoint(ip, &ep))
+    {
+      // Slippi would throw from std::stoi here; refuse the match instead.
+      ERROR_LOG_FMT(NETPLAY, "[Matchmaking] Unusable peer address '{}'", ip);
+      m_state = State::ErrorEncountered;
+      SetError(ErrorSource::Client, "Invalid response when getting mm status");
+      return;
+    }
+    match.remotes.push_back(ep);
+  }
+
+  {
+    std::lock_guard lk(m_mutex);
+    m_match = match;
+  }
+
+  if (const auto seen = m_probe6->Reply())
+  {
+    m_probe6_answered = true;
+    INFO_LOG_FMT(NETPLAY, "[Matchmaking] IPv6: the server sees us at {}",
+                 Common::ENet::EndpointText(*seen));
+  }
+  else if (m_probe6->IsOpen() && !m_probe6_answered)
+  {
+    // Without a reply mm has no IPv6 address for us: this match is IPv4 only.
+    WARN_LOG_FMT(NETPLAY, "[Matchmaking] IPv6: the server never answered our probe; IPv4 only");
+  }
+
+  // Not in Slippi: open our router toward every peer now, from the port the P2P connect uses, with
+  // a datagram that stops short of their router (Common::ENet::OpenOurRouter). The disconnect
+  // below waits a round trip to mm before either side's connect leaves, and the side whose round
+  // trip is shorter starts first: a router that shuts a pair of ports when the peer's packet comes
+  // in before its own went out lost 20 of one pair's 23 room games to that race (bug report
+  // #325). Not to this machine (the tests), where nothing is in the way.
+  if (m_client)
+  {
+    size_t opened = 0;
+    for (const auto& r : match.remotes)
+    {
+      ENetAddress addr{};
+      if (enet_address_set_host(&addr, r.ip.c_str()) != 0 ||
+          reinterpret_cast<const u8*>(&addr.host)[0] == 127)
+      {
+        continue;
+      }
+      addr.port = r.port;
+      Common::ENet::OpenOurRouter(m_client->socket, addr);
+      opened++;
+    }
+    if (opened > 0)
+    {
+      INFO_LOG_FMT(NETPLAY, "[Matchmaking] Opened our router toward {} player(s) before the connect",
+                   opened);
+    }
+  }
+
+  // Disconnect and destroy enet client to mm server
+  TerminateMmConnection();
+
+  // Slippi reports "connecting" to its backend for ranked here (reportOnlineMatchStatus). Ranked
+  // reporting is a later phase.
+
+  m_state = State::OpponentConnecting;
+  INFO_LOG_FMT(NETPLAY, "[Matchmaking] Opponent found. is_decider: {}", match.is_host);
+}
+
+void Matchmaking::HandleConnecting()
+{
+  std::optional<Match> match_opt = GetMatch();
+  if (!match_opt)
+  {
+    m_state = State::Initializing;
+    return;
+  }
+  Match match = *match_opt;
+  m_connect_attempts++;
+
+  // Tests (PPR_TEST_PAIR_NO_P2P=1): a 2v2 party's pair room never connects, as two players whose
+  // NATs let nothing through (its connect times out the same way).
+  if (m_search_settings.pair_room && std::getenv("PPR_TEST_PAIR_NO_P2P"))
+  {
+    WARN_LOG_FMT(NETPLAY, "[Matchmaking] PPR_TEST_PAIR_NO_P2P: the pair room's connect times out");
+    const u64 until = Common::Timer::NowMs() + P2P_CONNECT_TIMEOUT_MS;
+    while (Common::Timer::NowMs() < until && m_state == State::OpponentConnecting &&
+           !m_is_mm_terminated)
+      std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    if (m_state != State::OpponentConnecting || m_is_mm_terminated)
+      return;
+    m_state = State::ErrorEncountered;
+    SetError(ErrorSource::Connection, "Timed out waiting for other players to connect");
+    return;
+  }
+
+  const size_t remote_player_count = match.remotes.size();
+  std::string ip_log;
+  for (const auto& r : match.remotes)
+    ip_log += r.ToString() + ", ";
+  INFO_LOG_FMT(NETPLAY, "[Matchmaking] My port: {} || Remote player IPs: {} (connect attempt {})",
+               m_host_port.load(), ip_log, m_connect_attempts.load());
+
+  // --- SlippiNetplayClient constructor ---
+  // Slippi: "It is important to be able to set the local port to listen on even in a client
+  // connection because not doing so will break hole punching, the host is expecting traffic to
+  // come from a specific ip/port and if the port does not match what it is expecting, it will not
+  // get through the NAT on some routers"
+  ENetAddress local_addr;
+  local_addr.host = ENET_HOST_ANY;
+  local_addr.port = m_host_port;
+  P2PLink::HostPtr client{enet_host_create(&local_addr, 10, MM_CHANNELS, 0, 0)};
+  if (client)
+    LimitHost(client.get());
+  if (!client)
+  {
+    // Slippi: PanicAlert("Couldn't Create Client").
+    ERROR_LOG_FMT(NETPLAY, "[Matchmaking] Couldn't create the P2P client on port {}",
+                  m_host_port.load());
+    m_state = State::ErrorEncountered;
+    SetError(ErrorSource::Client, "Couldn't Create Client");
+    return;
+  }
+
+  u32 own_token = 0;
+  for (const auto& p : match.players)
+  {
+    if (p.is_local)
+      own_token = ConnectToken(match.match_id, p);
+  }
+
+  std::vector<ENetPeer*> servers;
+  std::vector<ENetAddress> remote_addrs;
+  for (const auto& r : match.remotes)
+  {
+    ENetAddress addr{};
+    enet_address_set_host(&addr, r.ip.c_str());
+    addr.port = r.port;
+    ENetPeer* peer = enet_host_connect(client.get(), &addr, MM_CHANNELS, own_token);
+    if (!peer)
+    {
+      ERROR_LOG_FMT(NETPLAY, "[Matchmaking] Couldn't create peer for {}", r.ToString());
+      m_state = State::ErrorEncountered;
+      SetError(ErrorSource::Client, "Couldn't create peer.");
+      return;
+    }
+    servers.push_back(peer);
+    remote_addrs.push_back(addr);
+  }
+
+  s_test_blocked.clear();
+  s_heard.clear();
+  client->intercept = OnP2PReceive;
+  if (const char* env = std::getenv("PPR_TEST_P2P_BLOCK"))
+  {
+    const std::string blocked = fmt::format(",{},", env);
+    for (size_t i = 0; i < remote_addrs.size(); ++i)
+    {
+      const size_t p = RemotePlayer(match, i);
+      // "*": every player.
+      if (p < match.players.size() &&
+          (blocked.find(",*,") != std::string::npos ||
+           blocked.find(fmt::format(",{},", match.players[p].connect_code)) != std::string::npos))
+      {
+        WARN_LOG_FMT(NETPLAY, "[Matchmaking] Test: no packets from {} ({})",
+                     match.players[p].connect_code, match.remotes[i].ToString());
+        s_test_blocked.push_back(remote_addrs[i]);
+      }
+    }
+  }
+
+  // IPv6 (Online/Ipv6.h): a second host on this machine's IPv6 address and the same port, and a
+  // connect to every player that has an IPv6 address too, at the same time as the IPv4 ones. The
+  // IPv4 connects above and below are as they were; without IPv6 nothing else runs.
+  P2PLink::HostPtr client6;
+  std::vector<ENetPeer*> servers6(remote_player_count, nullptr);
+  std::vector<ENetAddress> remote_addrs6(remote_player_count);
+  std::vector<bool> has6(remote_player_count, false);
+  if (m_probe6->IsOpen())
+  {
+    const ENetAddress local6 = m_probe6->Local();
+    m_probe6->Close();  // its address and port are the host's now
+    bool any = false;
+    for (size_t i = 0; i < remote_player_count && i < match.remotes6.size(); i++)
+      any |= !match.remotes6[i].ip.empty();
+    if (any)
+    {
+#ifdef ENET_BRAWL_IPV6
+      client6.reset(enet_host_create_ipv6(&local6, 10, MM_CHANNELS, 0, 0));
+#endif
+      if (!client6)
+      {
+        WARN_LOG_FMT(NETPLAY, "[Matchmaking] IPv6: cannot bind {}; IPv4 only",
+                     Common::ENet::EndpointText(local6));
+      }
+    }
+    if (client6)
+    {
+      LimitHost(client6.get());
+      s_test_blocked6.clear();
+      s_heard6.clear();
+      client6->intercept = OnP2PReceive6;
+      const char* block6 = std::getenv("PPR_TEST_P2P_BLOCK6");
+      const std::string blocked6 = block6 ? fmt::format(",{},", block6) : std::string();
+      for (size_t i = 0; i < remote_player_count && i < match.remotes6.size(); i++)
+      {
+        const auto a6 = match.remotes6[i].ip.empty() ?
+                            std::nullopt :
+                            Ipv6::ParseEndpoint(match.remotes6[i].ToString());
+        if (!a6)
+          continue;
+        servers6[i] = enet_host_connect(client6.get(), &*a6, MM_CHANNELS, own_token);
+        remote_addrs6[i] = *a6;
+        has6[i] = servers6[i] != nullptr;
+        const size_t p = RemotePlayer(match, i);
+        if (block6 && p < match.players.size() &&
+            (blocked6.find(",*,") != std::string::npos ||
+             blocked6.find(fmt::format(",{},", match.players[p].connect_code)) != std::string::npos))
+        {
+          WARN_LOG_FMT(NETPLAY, "[Matchmaking] Test: no IPv6 packets from {} ({})",
+                       match.players[p].connect_code, match.remotes6[i].ToString());
+          s_test_blocked6.push_back(*a6);
+        }
+      }
+    }
+  }
+  const bool dual = client6 != nullptr;
+  std::vector<bool> connections6(remote_player_count, false);
+
+  // Not in Slippi: the low ports of a peer at its internet address (PunchLowPorts), until it
+  // connects. Not to a LAN or chosen-network address, where no carrier NAT is in the way, nor to
+  // this machine (a server here: the tests).
+  std::vector<bool> punch(remote_player_count, false);
+  for (size_t i = 0; i < remote_player_count; i++)
+  {
+    const size_t p = RemotePlayer(match, i);
+    punch[i] = p < match.players.size() &&
+               match.remotes[i].ToString() == match.players[p].ip_address &&
+               reinterpret_cast<const u8*>(&remote_addrs[i].host)[0] != 127;
+  }
+
+  // --- SlippiNetplayClient::ThreadFunc, connect phase ---
+  const u64 start_time = Common::Timer::NowMs();
+  u64 next_punch = start_time;
+  std::vector<bool> connections(remote_player_count, false);
+  bool connected = false;
+  while (!connected)
+  {
+    // Deal with class shut down
+    if (m_state != State::OpponentConnecting || m_is_mm_terminated)
+      return;
+
+    if (Common::Timer::NowMs() >= next_punch)
+    {
+      next_punch = Common::Timer::NowMs() + PUNCH_INTERVAL_MS;
+      for (size_t i = 0; i < remote_player_count; i++)
+      {
+        if (punch[i] && !connections[i])
+          Common::ENet::PunchLowPorts(client.get(), remote_addrs[i]);
+      }
+    }
+
+    // This will confirm that connection went through successfully
+    ENetEvent net_event;
+    const int net = enet_host_service(client.get(), &net_event, dual ? 0 : 500);
+    if (net > 0)
+    {
+      switch (net_event.type)
+      {
+      case ENET_EVENT_TYPE_RECEIVE:
+        enet_packet_destroy(net_event.packet);
+        break;
+
+      case ENET_EVENT_TYPE_DISCONNECT:
+        INFO_LOG_FMT(NETPLAY, "[Netplay] got disconnect event with peer addr {}:{}",
+                     IpToString(net_event.peer->address.host), net_event.peer->address.port);
+        break;
+
+      case ENET_EVENT_TYPE_CONNECT:
+      {
+        INFO_LOG_FMT(NETPLAY, "[Netplay] got connect event with peer addr {}:{}",
+                     IpToString(net_event.peer->address.host), net_event.peer->address.port);
+        bool is_already_connected = false;
+        for (size_t i = 0; i < servers.size(); i++)
+        {
+          if (connections[i] && net_event.peer->address.host == servers[i]->address.host &&
+              net_event.peer->address.port == servers[i]->address.port)
+          {
+            servers[i] = net_event.peer;
+            is_already_connected = true;
+            break;
+          }
+        }
+
+        if (is_already_connected)
+        {
+          // Slippi: "Don't add this person again if they are already connected."
+          INFO_LOG_FMT(NETPLAY, "[Netplay] Already connected!");
+          break;
+        }
+
+        bool matched = false;
+        // The player at exactly this address first: players behind one public address (or on
+        // one PC) differ only by port, and the first one by address alone took the other's
+        // place, so the one whose connect timed out was named wrong.
+        int exact = -1;
+        for (size_t i = 0; i < servers.size(); i++)
+        {
+          if (!connections[i] && remote_addrs[i].host == net_event.peer->address.host &&
+              remote_addrs[i].port == net_event.peer->address.port)
+          {
+            exact = static_cast<int>(i);
+            break;
+          }
+        }
+        for (size_t i = 0; i < servers.size(); i++)
+        {
+          // Slippi matches the host only, not the port: "for some people, their internet will
+          // switch the port they're sending from".
+          if (exact >= 0 && static_cast<int>(i) != exact)
+            continue;
+          if (remote_addrs[i].host == net_event.peer->address.host && !connections[i])
+          {
+            INFO_LOG_FMT(NETPLAY, "[Netplay] Overwriting ENetPeer for address: {}:{}",
+                         IpToString(net_event.peer->address.host), net_event.peer->address.port);
+            servers[i] = net_event.peer;
+            connections[i] = true;
+            matched = true;
+            break;
+          }
+        }
+        // Their connect from an address the server did not see them at: theirs if it carries
+        // their token (ConnectToken; an older build sends 0, and our own connects' events have
+        // 0). Before 2026-10-22 it was dropped, while their side had its connect answered and
+        // went on alone (bug report #109).
+        for (size_t i = 0; !matched && net_event.data != 0 && i < servers.size(); i++)
+        {
+          const size_t p = RemotePlayer(match, i);
+          if (connections[i] || p >= match.players.size() ||
+              ConnectToken(match.match_id, match.players[p]) != net_event.data)
+          {
+            continue;
+          }
+          INFO_LOG_FMT(NETPLAY,
+                       "[Matchmaking] P{} {} connects from {}:{}, not the {} the server saw "
+                       "(their NAT gives each destination its own address); their token matches",
+                       match.players[p].port, match.players[p].connect_code,
+                       IpToString(net_event.peer->address.host), net_event.peer->address.port,
+                       match.players[p].ip_address);
+          servers[i] = net_event.peer;
+          connections[i] = true;
+          matched = true;
+        }
+        if (!matched)
+        {
+          // Not one of the players the server matched us with: nobody else gets a connection.
+          WARN_LOG_FMT(NETPLAY, "[Netplay] Dropping a connection from an unknown address {}:{}",
+                       IpToString(net_event.peer->address.host), net_event.peer->address.port);
+          enet_peer_reset(net_event.peer);
+        }
+        break;
+      }
+      default:
+        break;
+      }
+    }
+
+    if (dual)
+    {
+      ENetEvent ev6;
+      while (enet_host_service(client6.get(), &ev6, 0) > 0)
+      {
+        if (ev6.type == ENET_EVENT_TYPE_RECEIVE)
+        {
+          enet_packet_destroy(ev6.packet);
+          continue;
+        }
+        if (ev6.type == ENET_EVENT_TYPE_DISCONNECT)
+        {
+          for (size_t i = 0; i < remote_player_count; i++)
+          {
+            if (connections6[i] && servers6[i] == ev6.peer)
+            {
+              INFO_LOG_FMT(NETPLAY, "[Matchmaking] IPv6: lost the connection to {}",
+                           Common::ENet::EndpointText(remote_addrs6[i]));
+              connections6[i] = false;
+            }
+          }
+          continue;
+        }
+        if (ev6.type != ENET_EVENT_TYPE_CONNECT)
+          continue;
+        // No NAT on IPv6: a player connects from the address mm saw (any port, as Slippi).
+        bool matched6 = false;
+        for (size_t i = 0; i < remote_player_count && !matched6; i++)
+        {
+          if (!has6[i] || remote_addrs6[i].host != ev6.peer->address.host)
+            continue;
+          if (!connections6[i])
+          {
+            INFO_LOG_FMT(NETPLAY, "[Matchmaking] IPv6: connected to {} after {} ms",
+                         Common::ENet::EndpointText(ev6.peer->address),
+                         Common::Timer::NowMs() - start_time);
+          }
+          servers6[i] = ev6.peer;
+          connections6[i] = true;
+          matched6 = true;
+        }
+        if (!matched6)
+        {
+          WARN_LOG_FMT(NETPLAY, "[Matchmaking] IPv6: dropping a connection from an unknown "
+                                "address {}",
+                       Common::ENet::EndpointText(ev6.peer->address));
+          enet_peer_reset(ev6.peer);
+        }
+      }
+      if (net <= 0)
+      {
+        // Nothing came on IPv4 this turn: wait for either socket (as the 500 ms service did).
+        ENetSocketSet set;
+        ENET_SOCKETSET_EMPTY(set);
+        ENET_SOCKETSET_ADD(set, client->socket);
+        ENET_SOCKETSET_ADD(set, client6->socket);
+        enet_socketset_select(std::max(client->socket, client6->socket), &set, nullptr, 20);
+      }
+    }
+
+    // IPv4 whenever it connects; IPv6 for a player IPv4 has not reached in IPV4_FIRST_MS.
+    const bool ipv4_had_its_time = Common::Timer::NowMs() - start_time >= IPV4_FIRST_MS;
+    bool all_connected = true;
+    for (size_t i = 0; i < remote_player_count; i++)
+    {
+      if (!connections[i] && !(connections6[i] && ipv4_had_its_time))
+        all_connected = false;
+    }
+
+    if (all_connected)
+    {
+      INFO_LOG_FMT(NETPLAY, "Online connection successful!");
+      connected = true;
+      break;
+    }
+
+    // Time out after enough time has passed
+    if (Common::Timer::NowMs() - start_time >= P2P_CONNECT_TIMEOUT_MS)
+    {
+      std::vector<int> failed_connections;
+      for (size_t i = 0; i < remote_player_count; i++)
+      {
+        if (!connections[i] && !connections6[i])
+          failed_connections.push_back(static_cast<int>(i));
+      }
+      INFO_LOG_FMT(NETPLAY, "Online connection failed");
+      LogFailedConnect(match, client.get(), servers, remote_addrs, connections,
+                       m_router_changed_port, m_upnp_mapped);
+      for (size_t i = 0; dual && i < remote_player_count; i++)
+      {
+        if (connections[i] || connections6[i] || !has6[i])
+          continue;
+        u32 heard6 = 0;
+        for (const Heard& h : s_heard6)
+        {
+          if (h.from.host == remote_addrs6[i].host)
+            heard6 += h.packets;
+        }
+        WARN_LOG_FMT(NETPLAY, "[Matchmaking] IPv6: no connection to {} either: {} packets heard "
+                              "from it; our connect: {}",
+                     Common::ENet::EndpointText(remote_addrs6[i]), heard6,
+                     servers6[i] ? PeerStateName(static_cast<ENetPeerState>(servers6[i]->state)) :
+                                   "none");
+      }
+
+      // Which players: by port (a room's slot), for the room's server.
+      for (const int i : failed_connections)
+      {
+        const size_t p = RemotePlayer(match, static_cast<size_t>(i));
+        if (p < match.players.size())
+        {
+          match.unreachable_ports.push_back(match.players[p].port);
+        }
+      }
+      {
+        std::lock_guard lk(m_mutex);
+        m_match = match;
+      }
+
+      if (m_search_settings.mode == Mode::Teams)
+      {
+        // Slippi: "If we failed setting up a connection in teams mode, show a detailed error about
+        // who we had issues connecting to."
+        ERROR_LOG_FMT(NETPLAY, "[Matchmaking] Failed to connect to players");
+        std::string err = "Timed out waiting for other players to connect";
+        if (!failed_connections.empty())
+        {
+          err = "Could not connect to players: ";
+          for (size_t i = 0; i < failed_connections.size(); i++)
+          {
+            const size_t p = RemotePlayer(match, static_cast<size_t>(failed_connections[i]));
+            if (p < match.players.size())
+              err += match.players[p].display_name;
+            if (i < failed_connections.size() - 1)
+              err += ", ";
+          }
+        }
+        m_state = State::ErrorEncountered;
+        SetError(ErrorSource::Connection, err);
+        return;
+      }
+
+      ERROR_LOG_FMT(NETPLAY, "[Matchmaking] Connection attempt failed, looking for someone else.");
+      if (m_search_settings.mode == Mode::Twos)
+      {
+        // 2v2: the players it could not reach are kept out of the next groups (and the others of
+        // this match are told it is off, so their games search again too); the new search goes
+        // first in the queue.
+        m_search_settings.requeue = true;
+        m_search_settings.avoid.clear();
+        for (const int i : failed_connections)
+        {
+          const size_t p = RemotePlayer(match, static_cast<size_t>(i));
+          if (p < match.players.size() && !match.players[p].uid.empty())
+            m_search_settings.avoid.push_back(match.players[p].uid);
+        }
+        m_search_settings.after = match.match_id;
+      }
+      // Return to the start to get a new ticket to find someone else we can hopefully connect with
+      m_state = State::Initializing;
+      return;
+    }
+  }
+
+  match.connect_ms = Common::Timer::NowMs() - start_time;
+
+  // Let the peer's side of the handshake finish (see P2P_SETTLE_MS).
+  const u64 settle_start = Common::Timer::NowMs();
+  while (Common::Timer::NowMs() - settle_start < P2P_SETTLE_MS)
+  {
+    if (m_state != State::OpponentConnecting || m_is_mm_terminated)
+      return;
+    ENetEvent net_event;
+    if (enet_host_service(client.get(), &net_event, dual ? 10 : 20) > 0 &&
+        net_event.type == ENET_EVENT_TYPE_RECEIVE)
+    {
+      enet_packet_destroy(net_event.packet);
+    }
+    if (dual && enet_host_service(client6.get(), &net_event, 10) > 0 &&
+        net_event.type == ENET_EVENT_TYPE_RECEIVE)
+    {
+      enet_packet_destroy(net_event.packet);
+    }
+  }
+
+  for (size_t i = 0; i < servers.size(); i++)
+  {
+    if (!connections[i])
+    {
+      // Over IPv6: IPv4 did not connect to this player in IPV4_FIRST_MS.
+      const ENetPeer* peer6 = servers6[i];
+      match.connected.push_back({Common::ENet::HostText(peer6->address), peer6->address.port});
+      const size_t p = RemotePlayer(match, i);
+      INFO_LOG_FMT(NETPLAY, "[Matchmaking] Connected to P{} {} at {} (IPv6: IPv4 did not connect)",
+                   p < match.players.size() ? match.players[p].port : 0,
+                   p < match.players.size() ? match.players[p].connect_code : std::string("?"),
+                   Common::ENet::EndpointText(peer6->address));
+      continue;
+    }
+    const ENetPeer* peer = servers[i];
+    match.connected.push_back({IpToString(peer->address.host), peer->address.port});
+    // Which of the peer's addresses worked, and whether its router changed the port on the way.
+    const size_t p = RemotePlayer(match, i);
+    if (p < match.players.size())
+    {
+      const std::string& lan = match.players[p].ip_address_lan;
+      const std::string tried = match.remotes[i].ToString();
+      INFO_LOG_FMT(NETPLAY, "[Matchmaking] Connected to P{} {} at {}:{} ({}{})",
+                   match.players[p].port, match.players[p].connect_code,
+                   IpToString(peer->address.host), peer->address.port,
+                   tried == lan ? "LAN" : "internet",
+                   peer->address.port == remote_addrs[i].port ?
+                       "" :
+                       fmt::format("; the server gave port {}", remote_addrs[i].port));
+    }
+  }
+  {
+    std::lock_guard lk(m_mutex);
+    m_match = match;
+  }
+
+  INFO_LOG_FMT(NETPLAY, "[Matchmaking] Connection success! ({} ms)", match.connect_ms);
+  P2PLink link(std::move(client), servers, std::move(client6), servers6);
+
+  // Connection success, our work is done
+  m_state = State::ConnectionSuccess;
+  if (m_on_connected)
+    m_on_connected(match, link);
+  if (link.IsOpen())
+  {
+    std::lock_guard lk(m_mutex);
+    m_link = std::move(link);
+  }
+}
+}  // namespace Online

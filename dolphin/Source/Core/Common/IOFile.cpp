@@ -8,6 +8,9 @@
 
 #ifdef _WIN32
 #include <io.h>
+#if defined(_WIN32) && !defined(_MSC_VER)  // MinGW (the core's standalone build)
+#include <share.h>
+#endif
 
 #include "Common/CommonFuncs.h"
 #include "Common/StringUtil.h"

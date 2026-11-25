@@ -23,6 +23,7 @@ Each player is any object with ``name``, ``c`` (a HarnessClient), ``shot(name)``
 from __future__ import annotations
 
 import contextlib
+import os
 import sys
 import threading
 import time
@@ -54,6 +55,7 @@ ASL_LOADED = 0x8053EFBA
 
 
 def wait(pred: Callable[[], Any], timeout: float, what: str, every: float = 0.25) -> Any:
+    timeout *= float(os.environ.get("PPHARNESS_TIMEOUT_SCALE") or 1)  # tests/test_online.py _wait
     deadline = time.monotonic() + timeout
     last: Optional[BaseException] = None
     while time.monotonic() < deadline:
@@ -262,6 +264,8 @@ def play_game(players: Sequence[Any], game: int, timeout: float = 900,
     st = [gstatus(p.c) for p in (host, join)]
     rep.update(frames=[s["current_frame"] for s in st], end=[s["end_reason"] for s in st],
                rollbacks=[s["rollbacks"] for s in st], max_rollback=[s["max_rollback_frames"] for s in st])
+    # The sound bookkeeping of the match (the sound hooks: Gprb::Session::OnSoundAlloc and the rest).
+    rep["sound"] = [{k: s.get(k) for k in SOUND_COUNTERS} for s in st]
     limit = min(s["current_frame"] for s in st) - CONFIRM_MARGIN
     cks = [p.c.call("gprb_checksums", since=0)["rows"] for p in (host, join)]
     ma = {r[0]: r[1] for r in cks[0] if r[0] <= limit}
@@ -276,6 +280,10 @@ def play_game(players: Sequence[Any], game: int, timeout: float = 900,
     log(f"game {game}: {rep['frames']} frames, end {rep['end']}, rollbacks {rep['rollbacks']}, "
         f"confirmed checksums {rep['checksums']}, trace diverged at {rep['trace'].get('diverged_at')}")
     return rep
+
+
+SOUND_COUNTERS = ("sound_allocs", "resim_sound_allocs", "suppressed_sound_allocs", "sound_reattached",
+                  "sound_reattach_gone", "sound_stopped", "sound_stop_gone", "sound_moved", "sound_stops_ignored")
 
 
 def _gentle_macro():
@@ -308,17 +316,21 @@ def back_on_css(players: Sequence[Any], game: int,
 
 def lock_in_next(players: Sequence[Any], game: int, mode: str = "direct",
                  log: Callable[[str], None] = print,
-                 panels: Optional[Dict[str, Dict[str, int]]] = None) -> Dict[str, Any]:
+                 panels: Optional[Dict[str, Dict[str, int]]] = None,
+                 random_stage: bool = False,
+                 stage_picks: Optional[Dict[int, str]] = None) -> Dict[str, Any]:
     """START on both CSSs. Every player locks in with the character first, and until their own
     START the character can change (the CSS is not locked). Direct: then the loser of the last
     game (SESSION picks_stage; a draw: the lower port) goes to P+'s stage select by itself, picks
     STAGE_PICKS[game] and comes back to the CSS locked in with it (the match then starts at once).
     The winner locks in first here, so the loser's lock-in is what opens the stage select. In game
     2 the loser first leaves the stage select with B: back on the CSS unlocked, the character still
-    selected, and START again opens the stage select again."""
+    selected, and START again opens the stage select again. `random_stage` (where everyone
+    picks): the loser's pick is A on the stage select's RANDOM instead. `stage_picks` (where
+    everyone picks): the loser's pick by game instead of STAGE_PICKS, with no button held."""
     info: Dict[str, Any] = {}
     if mode == "direct" and anyone_picks(players):
-        return _lock_in_anyone_picks(players, game, log, panels)
+        return _lock_in_anyone_picks(players, game, log, panels, random_stage, stage_picks)
     se = session(players[0].c)
     # (Between games SESSION's `present` is 0: Dolphin fills the players in with the setup.)
     picker = next((i for i, pl in enumerate(se["players"]) if pl.get("picks_stage")), None)         if mode == "direct" else None
@@ -372,7 +384,9 @@ def lock_in_next(players: Sequence[Any], game: int, mode: str = "direct",
 
 
 def _lock_in_anyone_picks(players: Sequence[Any], game: int, log: Callable[[str], None],
-                          panels: Optional[Dict[str, Dict[str, int]]]) -> Dict[str, Any]:
+                          panels: Optional[Dict[str, Dict[str, int]]],
+                          random_stage: bool = False,
+                          stage_picks: Optional[Dict[int, str]] = None) -> Dict[str, Any]:
     """Direct since 2026-10-29: every player's START opens their stage select once all are locked
     in; the last game's loser picks STAGE_PICKS[game] there (holding STAGE_PICK_HELD[game]), and
     the others' stage selects leave by themselves with it. In game 2 the picker's B first does
@@ -397,8 +411,18 @@ def _lock_in_anyone_picks(players: Sequence[Any], game: int, log: Callable[[str]
             picker.name, "B left the stage select where everyone picks", scene(picker.c), local(picker.c)["lock"])
     picker.shot(f"g{game}-stage-select")
     assert picker.c.read_mem(STRIKE_TABLE, 30) == bytes(30), (picker.name, "stages struck on the SSS")
-    stage = STAGE_PICKS.get(game, STAGE_PICK)
-    held = STAGE_PICK_HELD.get(game, [])
+    if random_stage:
+        # A on the stage select's RANDOM: P+ draws a stage on the picker's machine, sent as the pick.
+        B.sss_hover_item(picker.c, B.SSS_ITEM_RANDOM)
+        picker.steps("wait 10", "tap A 8")
+        for p in players:
+            wait(lambda p=p: scene(p.c) != "scSelStage", 60, f"{p.name}: the stage select left with the pick")
+        info["picked_by"] = picker.name
+        info["random"] = True
+        log(f"game {game}: {picker.name} (the last game's loser) picked RANDOM on the stage select")
+        return info
+    stage = (stage_picks or STAGE_PICKS).get(game, STAGE_PICK)
+    held = [] if stage_picks else STAGE_PICK_HELD.get(game, [])
     B.sss_pick_stage(picker.c, B.STAGE_KIND[stage], 0, held=held)
     for p in players:
         wait(lambda p=p: scene(p.c) != "scSelStage", 60, f"{p.name}: the stage select left with the pick")
@@ -411,9 +435,13 @@ def _lock_in_anyone_picks(players: Sequence[Any], game: int, log: Callable[[str]
 
 def play_set(players: Sequence[Any], games: int = 2, mode: str = "direct",
              log: Callable[[str], None] = print,
-             panels: Optional[Dict[str, Dict[str, int]]] = None) -> Dict[str, Any]:
+             panels: Optional[Dict[str, Dict[str, int]]] = None,
+             random_stage: bool = False,
+             stage_picks: Optional[Dict[int, str]] = None) -> Dict[str, Any]:
     """Games 1..`games` on the session the players are connected in; returns the report.
-    Raises AssertionError / TimeoutError on the first thing that is not as expected."""
+    Raises AssertionError / TimeoutError on the first thing that is not as expected.
+    `random_stage`: games 2.. are picked with A on the stage select's RANDOM (where everyone picks).
+    `stage_picks`: the stage the loser picks by game (2..), instead of STAGE_PICKS."""
     rep: Dict[str, Any] = {"games": []}
     marks = {p.name: boot_marks(p.c) for p in players}
     # What each player's panel showed before game 1 (css_panel after picking): the CSS must show
@@ -423,14 +451,16 @@ def play_set(players: Sequence[Any], games: int = 2, mode: str = "direct",
     rep["marks_start"] = marks
     for game in range(1, games + 1):
         if game > 1:
-            rep.setdefault("lock_ins", []).append(lock_in_next(players, game, mode, log, panels))
+            rep.setdefault("lock_ins", []).append(lock_in_next(players, game, mode, log, panels, random_stage,
+                                                               stage_picks))
         g = play_game(players, game, log=log)
         rep["games"].append(g)
         assert g["checksums"]["mismatches"] == 0 and g["checksums"]["compared"] > 300, g
         assert g["trace"].get("diverged_at") is None, g["trace"]
         assert all(e == "game set" for e in g["end"]), g
         g["after"] = back_on_css(players, game, panels)
-        if game > 1 and mode == "direct" and rep["lock_ins"][-1].get("picked_by"):
+        if game > 1 and mode == "direct" and rep["lock_ins"][-1].get("picked_by") and \
+                not rep["lock_ins"][-1].get("random"):
             want = B.STAGE_KIND[rep["lock_ins"][-1]["picked"]]
             assert g["stage"] == want, ("the loser's pick was not played", g)
             asl = rep["lock_ins"][-1]["asl"]

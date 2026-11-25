@@ -719,6 +719,9 @@ pub struct SpeedEventRow {
     pub backend: Option<String>,
     pub platform: String,
     pub app_version: String,
+    /// The engine that ran the game (`dolphin`, `emissary`; `common::client_engine`) and its version.
+    pub engine: String,
+    pub engine_version: String,
     // The game's input delay and what it cost on this screen (`common::speed::GameDelay`; games
     // of builds before 2026-10-22 have none).
     pub delay: Option<i16>,
@@ -795,13 +798,13 @@ impl SpeedEventRow {
 pub async fn speed_events(pool: &PgPool, uid: uuid::Uuid, days: i64) -> anyhow::Result<Vec<SpeedEventRow>> {
     Ok(sqlx::query_as::<_, SpeedEventRow>(
         "SELECT created_at AS at, 'game' AS kind, mode, match_id, frames, fps, own_late, followed, peer_fps,
-                NULL::real[] AS windows, NULL::text AS backend, platform, app_version,
+                NULL::real[] AS windows, NULL::text AS backend, platform, app_version, engine, engine_version,
                 delay, delay_profile, delay_asked, delay_fixed, rtt_start, ping, jitter, rollbacks, depth,
                 rollback_ms, late_after_rollback, hitches, waits, wait_ms, resim_ms
            FROM speed_reports WHERE uid = $1 AND created_at > now() - make_interval(days => $2::int)
          UNION ALL
          SELECT created_at, 'check', mode, NULL, NULL, NULL, NULL, NULL, NULL, windows, backend, platform, app_version,
-                NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL
+                engine, engine_version, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL
            FROM speed_checks WHERE uid = $1 AND created_at > now() - make_interval(days => $2::int)
          ORDER BY at",
     )
@@ -824,19 +827,22 @@ pub struct SpeedLocked {
 }
 
 /// Everyone with a slow Ranked game in the last `days` days whom the rule would lock now, by
-/// their history over those days, latest first.
-pub async fn speed_locked(pool: &PgPool, days: i64) -> anyhow::Result<Vec<SpeedLocked>> {
+/// their history over those days, latest first. `engine`: only players with a slow Ranked game
+/// on that engine (the rule still reads all their games).
+pub async fn speed_locked(pool: &PgPool, days: i64, engine: Option<&str>) -> anyhow::Result<Vec<SpeedLocked>> {
     use common::speed::{MIN_GAME_FRAMES, SLOW_FPS, SLOW_OWN_LATE};
     let candidates: Vec<(uuid::Uuid, Option<String>, Option<String>)> = sqlx::query_as(
         "SELECT DISTINCT r.uid, u.connect_code, u.display_name
            FROM speed_reports r LEFT JOIN users u ON u.uid = r.uid
           WHERE r.mode = 'ranked' AND r.frames >= $1 AND r.fps < $2 AND r.own_late > $3
-            AND r.created_at > now() - make_interval(days => $4::int)",
+            AND r.created_at > now() - make_interval(days => $4::int)
+            AND ($5::text IS NULL OR r.engine = $5)",
     )
     .bind(MIN_GAME_FRAMES as i32)
     .bind(SLOW_FPS as f32)
     .bind(SLOW_OWN_LATE as f32)
     .bind(days as i32)
+    .bind(engine)
     .fetch_all(pool)
     .await?;
     let mut out = Vec::new();
@@ -855,10 +861,11 @@ pub async fn speed_locked(pool: &PgPool, days: i64) -> anyhow::Result<Vec<SpeedL
     Ok(out)
 }
 
-/// Waiting-room checks of one platform and video backend.
+/// Waiting-room checks of one platform, engine and video backend.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct SpeedCheckCounts {
     pub platform: String,
+    pub engine: String,
     pub backend: String,
     pub pass: i64,
     pub slow: i64,
@@ -866,44 +873,88 @@ pub struct SpeedCheckCounts {
     pub players: i64,
 }
 
+/// Games of one mode on one engine (each player's own report of a game).
+#[derive(Debug, Clone, Default, PartialEq, sqlx::FromRow)]
+pub struct SpeedGameCounts {
+    pub mode: String,
+    pub engine: String,
+    pub reported: i64,
+    /// This PC's own slowness.
+    pub slow: i64,
+    /// Players with a slow one.
+    pub slow_players: i64,
+    /// Reports that ended in a desync.
+    pub desynced: i64,
+}
+
+/// Games by the engines of their players (each side reported it): `dolphin+emissary`.
+#[derive(Debug, Clone, Default, PartialEq, sqlx::FromRow)]
+pub struct SpeedPairCounts {
+    pub engines: String,
+    pub games: i64,
+    /// Games a player's report says desynced.
+    pub desynced: i64,
+}
+
 /// The numbers over the last `days` days.
 #[derive(Debug, Clone, Default)]
 pub struct SpeedSummary {
-    /// Per mode: games reported, slow ones (this PC's own), players with a slow one.
-    pub games: Vec<(String, i64, i64, i64)>,
+    /// Per mode and engine, most reported first.
+    pub games: Vec<SpeedGameCounts>,
+    /// Games with a report from two or more players, by their engines.
+    pub pairs: Vec<SpeedPairCounts>,
     pub checks: Vec<SpeedCheckCounts>,
     /// Players the Ranked rule would lock now.
     pub locked: usize,
 }
 
-pub async fn speed_summary(pool: &PgPool, days: i64) -> anyhow::Result<SpeedSummary> {
+/// `engine`: only that engine's reports and checks, and only games one of whose players ran it.
+pub async fn speed_summary(pool: &PgPool, days: i64, engine: Option<&str>) -> anyhow::Result<SpeedSummary> {
     use common::speed::{Check, MIN_GAME_FRAMES, SLOW_FPS, SLOW_OWN_LATE};
-    let games: Vec<(String, i64, i64, i64)> = sqlx::query_as(
-        "SELECT mode, count(*),
-                count(*) FILTER (WHERE frames >= $1 AND fps < $2 AND own_late > $3),
-                count(DISTINCT uid) FILTER (WHERE frames >= $1 AND fps < $2 AND own_late > $3)
+    let games: Vec<SpeedGameCounts> = sqlx::query_as(
+        "SELECT mode, engine, count(*) AS reported,
+                count(*) FILTER (WHERE frames >= $1 AND fps < $2 AND own_late > $3) AS slow,
+                count(DISTINCT uid) FILTER (WHERE frames >= $1 AND fps < $2 AND own_late > $3) AS slow_players,
+                count(*) FILTER (WHERE end_method = 'desync') AS desynced
            FROM speed_reports WHERE created_at > now() - make_interval(days => $4::int)
-          GROUP BY mode ORDER BY count(*) DESC",
+            AND ($5::text IS NULL OR engine = $5)
+          GROUP BY mode, engine ORDER BY count(*) DESC, mode, engine",
     )
     .bind(MIN_GAME_FRAMES as i32)
     .bind(SLOW_FPS as f32)
     .bind(SLOW_OWN_LATE as f32)
     .bind(days as i32)
+    .bind(engine)
     .fetch_all(pool)
     .await?;
-    let rows: Vec<(uuid::Uuid, String, String, Vec<f32>)> = sqlx::query_as(
-        "SELECT uid, platform, backend, windows FROM speed_checks
-          WHERE created_at > now() - make_interval(days => $1::int)",
+    let pairs: Vec<SpeedPairCounts> = sqlx::query_as(
+        "SELECT engines, count(*) AS games, count(*) FILTER (WHERE desynced) AS desynced
+           FROM (SELECT string_agg(engine, '+' ORDER BY engine) AS engines,
+                        bool_or(end_method = 'desync') AS desynced,
+                        bool_or($2::text IS NULL OR engine = $2) AS wanted
+                   FROM speed_reports WHERE created_at > now() - make_interval(days => $1::int)
+                  GROUP BY game_uid HAVING count(*) >= 2) g
+          WHERE wanted
+          GROUP BY engines ORDER BY count(*) DESC, engines",
     )
     .bind(days as i32)
+    .bind(engine)
+    .fetch_all(pool)
+    .await?;
+    let rows: Vec<(uuid::Uuid, String, String, String, Vec<f32>)> = sqlx::query_as(
+        "SELECT uid, platform, engine, backend, windows FROM speed_checks
+          WHERE created_at > now() - make_interval(days => $1::int) AND ($2::text IS NULL OR engine = $2)",
+    )
+    .bind(days as i32)
+    .bind(engine)
     .fetch_all(pool)
     .await?;
     type Counts = (SpeedCheckCounts, std::collections::HashSet<uuid::Uuid>);
-    let mut by: std::collections::BTreeMap<(String, String), Counts> = Default::default();
-    for (uid, platform, backend, windows) in rows {
+    let mut by: std::collections::BTreeMap<(String, String, String), Counts> = Default::default();
+    for (uid, platform, engine, backend, windows) in rows {
         let w: Vec<f64> = windows.iter().map(|w| *w as f64).collect();
-        let (c, who) = by.entry((platform.clone(), backend.clone())).or_insert_with(|| {
-            (SpeedCheckCounts { platform, backend, ..Default::default() }, Default::default())
+        let (c, who) = by.entry((platform.clone(), engine.clone(), backend.clone())).or_insert_with(|| {
+            (SpeedCheckCounts { platform, engine, backend, ..Default::default() }, Default::default())
         });
         match common::speed::check_verdict(&w) {
             Check::Pass => c.pass += 1,
@@ -913,7 +964,7 @@ pub async fn speed_summary(pool: &PgPool, days: i64) -> anyhow::Result<SpeedSumm
         who.insert(uid);
     }
     let checks = by.into_values().map(|(c, who)| SpeedCheckCounts { players: who.len() as i64, ..c }).collect();
-    Ok(SpeedSummary { games, checks, locked: speed_locked(pool, days).await?.len() })
+    Ok(SpeedSummary { games, pairs, checks, locked: speed_locked(pool, days, engine).await?.len() })
 }
 /// The searches and waits `stats` prints (shared with accounts' `queueEta`).
 pub use accounts::queue_stats::{

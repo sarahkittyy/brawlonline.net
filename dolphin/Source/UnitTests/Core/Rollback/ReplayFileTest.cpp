@@ -12,7 +12,7 @@
 #include <gtest/gtest.h>
 
 #include "Common/FileUtil.h"
-#include "Core/Rollback/ReplayFile.h"
+#include "BrawlOnline/Rollback/ReplayFile.h"
 
 using namespace Gprb::Replay;
 

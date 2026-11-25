@@ -3,9 +3,23 @@ import React from "react";
 
 import { ExternalLink as A } from "@/components/external_link";
 
-import { BRAWLBACK_CONTRIBUTORS, BRAWLBACK_URL, BUILT_ON } from "./credits";
+import type { Credit } from "./credits";
+import { BRAWLBACK_CONTRIBUTORS, BRAWLBACK_URL, BUILT_ON, THANKS } from "./credits";
 import { CreditsPageMessages as Messages } from "./credits_page.messages";
 import styles from "./credits_page.module.css";
+
+const CreditList = ({ credits }: { credits: Credit[] }) => (
+  <ul className={styles.list}>
+    {credits.map((c) => (
+      <li key={c.name}>
+        <A className={styles.link} href={c.url}>
+          {c.name}
+        </A>
+        {c.note && <span className={styles.note}> ({c.note})</span>}
+      </li>
+    ))}
+  </ul>
+);
 
 export const CreditsPage = React.memo(() => {
   return (
@@ -27,17 +41,10 @@ export const CreditsPage = React.memo(() => {
           github.com/Brawlback-Team
         </A>
       </div>
+      <h3 className={styles.subheading}>{Messages.thanksTo()}</h3>
+      <CreditList credits={THANKS} />
       <h3 className={styles.subheading}>{Messages.alsoBuiltOn()}</h3>
-      <ul className={styles.list}>
-        {BUILT_ON.map((c) => (
-          <li key={c.name}>
-            <A className={styles.link} href={c.url}>
-              {c.name}
-            </A>
-            {c.note && <span className={styles.note}> ({c.note})</span>}
-          </li>
-        ))}
-      </ul>
+      <CreditList credits={BUILT_ON} />
     </div>
   );
 });

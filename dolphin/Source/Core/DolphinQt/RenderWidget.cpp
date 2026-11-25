@@ -36,7 +36,7 @@
 #include "InputCommon/ControllerInterface/ControllerInterface.h"
 
 #include "VideoCommon/OnScreenUIKeyMap.h"
-#include "VideoCommon/OnlineChatUI.h"
+#include "BrawlOnline/UI/OnlineChatUI.h"
 #include "VideoCommon/Present.h"
 
 #ifdef _WIN32

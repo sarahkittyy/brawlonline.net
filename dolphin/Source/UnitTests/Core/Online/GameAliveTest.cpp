@@ -8,7 +8,7 @@
 
 #include <gtest/gtest.h>
 
-#include "Core/Online/GameAlive.h"
+#include "BrawlOnline/Online/GameAlive.h"
 
 using namespace Online::GameAlive;
 using namespace std::chrono_literals;

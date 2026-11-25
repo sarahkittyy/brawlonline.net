@@ -1,4 +1,4 @@
-// Project Punch (project_punch.ts): what Home's lab button, its dialog and Settings > Training show.
+// Project Punch (project_punch.ts): what Home's lab button, its dialog and Settings > Add-ons show.
 
 export const PROJECT_PUNCH_REPO_URL = "https://github.com/WispSSBM/ProjectPunch";
 export const PROJECT_PUNCH_AUTHOR = "WispSSBM";

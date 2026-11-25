@@ -12,7 +12,7 @@
 #include "Core/Rollback/FrameProfile.h"
 #include "Core/Rollback/PresentStats.h"
 #include "Core/Host.h"
-#include "Core/Online/GameBridge.h"
+#include "BrawlOnline/Online/GameBridge.h"
 #include "Core/System.h"
 
 #include "InputCommon/ControllerInterface/ControllerInterface.h"

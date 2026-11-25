@@ -499,6 +499,8 @@ fn run() -> anyhow::Result<i32> {
                 },
                 app_version,
                 platform: String::new(),
+                engine: String::new(),
+                engine_version: String::new(),
                 local_port: port,
                 lan_ip,
                 match_timeout: (timeout_secs > 0).then(|| Duration::from_secs(timeout_secs)),

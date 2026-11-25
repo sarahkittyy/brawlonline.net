@@ -34,6 +34,7 @@ from typing import Any, Callable
 
 import pytest
 
+from ppharness import crossplay
 from ppharness import brawl as B
 from ppharness.backend import OnlineBackend
 from ppharness.instance import DolphinInstance
@@ -414,3 +415,14 @@ def test_direct_anyone_picks(backend, dolphin: Callable[..., DolphinInstance], g
     assert rep["stage"] in starters, ("START left Direct's stages", rep, starters)
     cursors_gone(gs)
 
+
+
+# Crossplay (docs/design/brawl-online-core.md §10.2): anyone picks with EmissaryRecomp players,
+# against a Dolphin (vs_dolphin) and against each other (vs_recomp). PPHARNESS_RECOMP names the build.
+@pytest.mark.slow
+@crossplay.VARIANTS
+def test_room_anyone_picks_crossplay(variant: str, backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
+                                     gpu_backend: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Anyone picks: both cursors on the stage select, either player's pick."""
+    crossplay.run(variant, "list-b$", "list-[ab]$", monkeypatch, backend, dolphin,
+                  lambda d: test_room_anyone_picks(backend, d, gpu_backend))

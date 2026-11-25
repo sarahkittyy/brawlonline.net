@@ -35,8 +35,6 @@ add_library(core
   Config/MainSettings.h
   Config/NetplaySettings.cpp
   Config/NetplaySettings.h
-  Config/OnlineSettings.cpp
-  Config/OnlineSettings.h
   Config/SessionSettings.cpp
   Config/SessionSettings.h
   Config/SYSCONFSettings.cpp
@@ -588,73 +586,32 @@ add_library(core
   PowerPC/SignatureDB/MEGASignatureDB.h
   PowerPC/SignatureDB/SignatureDB.cpp
   PowerPC/SignatureDB/SignatureDB.h
-  Online/Chat.cpp
-  Online/Chat.h
-  Online/ChatCrypto.cpp
-  Online/ChatCrypto.h
-  Online/ChatText.cpp
-  Online/ChatText.h
-  Online/SpectatorChat.cpp
-  Online/SpectatorChat.h
-  Online/GameAlive.cpp
-  Online/GameAlive.h
-  Online/Ipv6.cpp
-  Online/Ipv6.h
-  Online/GameBridge.cpp
-  Online/GameBridge.h
-  Online/GameSetup.cpp
-  Online/GameSetup.h
-  Online/Matchmaking.cpp
-  Online/Matchmaking.h
   Online/MatchQoS.cpp
   Online/MatchQoS.h
-  Online/MatchRules.cpp
-  Online/MatchRules.h
   Online/SpecialAssets.cpp
   Online/SpecialAssets.h
   Online/NetPlaySession.cpp
   Online/NetPlaySession.h
-  Online/OnlineClient.cpp
-  Online/OnlineClient.h
-  Online/OnlineSession.cpp
-  Online/OnlineSession.h
-  Online/Ranked.cpp
-  Online/Ranked.h
-  Online/RecentCodes.cpp
-  Online/RecentCodes.h
-  Online/RoomMessages.cpp
-  Online/RoomMessages.h
-  Online/SetFormat.cpp
-  Online/SetFormat.h
   Online/ModsRoom.cpp
   Online/ModsRoom.h
-  Online/Rooms.cpp
-  Online/Rooms.h
-  Online/RoomWatch.cpp
-  Online/RoomWatch.h
-  Online/Spectate.cpp
-  Online/Spectate.h
+  Online/RoomWatchInput.cpp
+  Online/RoomWatchInput.h
   Online/LoadFastForward.cpp
   Online/LoadFastForward.h
   Online/SpeedCheck.cpp
   Online/SpeedCheck.h
-  Online/Timeouts.h
-  Online/User.cpp
-  Online/User.h
   Rollback/ChangeCRC.h
   Rollback/KeptGranules.h
   Rollback/WrittenPages.h
   Rollback/DeltaSaveSlot.cpp
   Rollback/DeltaSaveSlot.h
+  Rollback/DolphinEngine.cpp
+  Rollback/DolphinEngine.h
   Rollback/FullMemcpySaveSlot.cpp
-  Rollback/GameplayRollback.cpp
-  Rollback/GameplayRollback.h
   Rollback/InputSuggest.cpp
   Rollback/InputSuggest.h
   Rollback/GameplayOnlineBackend.cpp
   Rollback/GameplayOnlineBackend.h
-  Rollback/GameplaySession.cpp
-  Rollback/GameplaySession.h
   Rollback/UdpSocket6.cpp
   Rollback/UdpSocket6.h
   Rollback/GprbCpuTrace.cpp
@@ -664,8 +621,6 @@ add_library(core
   Rollback/InputTrace.h
   Rollback/MachineSession.cpp
   Rollback/MachineSession.h
-  Rollback/PeerData.cpp
-  Rollback/PeerData.h
   Rollback/Perf.cpp
   Rollback/Perf.h
   Rollback/FrameProfile.cpp
@@ -674,8 +629,6 @@ add_library(core
   Rollback/PresentStats.h
   Rollback/RollbackManager.cpp
   Rollback/RollbackManager.h
-  Rollback/ReplayFile.cpp
-  Rollback/ReplayFile.h
   Rollback/ReplayKeyframes.cpp
   Rollback/ReplayKeyframes.h
   Rollback/ReplayPlayback.cpp
@@ -685,8 +638,6 @@ add_library(core
   Rollback/ClipRecorder.cpp
   Rollback/ClipRecorder.h
   Rollback/ReplayPlayback.h
-  Rollback/ReplayRecorder.cpp
-  Rollback/ReplayRecorder.h
   Brawlback/include/gekkonet/GekkoLib/src/backend.cpp
   Brawlback/include/gekkonet/GekkoLib/src/event.cpp
   Brawlback/include/gekkonet/GekkoLib/src/game_session.cpp
@@ -815,6 +766,7 @@ endif()
 
 target_link_libraries(core
 PUBLIC
+  brawl_online_core
   audiocommon
   common
   discio
