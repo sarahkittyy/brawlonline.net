@@ -1271,7 +1271,8 @@ if [ ! -f "{game}/sys/main.dol" ]; then
 fi
 EMISSARY_RELEASE_IN_PLACE=1 EMISSARY_RELEASE_WORK="{m}" EMISSARY_RELEASE_CORE="{MAC_HOME}/src" \\
   nice -n 10 bash src/tools/release-macos.sh "{m}/src" "{game}" "{m}/program" {args.jobs} {tag} {rsha}
-grep -q BRAWL_ONLINE_CORE program/WiiCompiled || {{ echo "program/WiiCompiled has no Brawl Online core" >&2; exit 1; }}
+P=program/Emissary.app/Contents/MacOS/Emissary; [ -f "$P" ] || P=program/WiiCompiled
+grep -q BRAWL_ONLINE_CORE "$P" || {{ echo "$P has no Brawl Online core" >&2; exit 1; }}
 rm -rf stage releases && mkdir -p stage releases/{tag}
 ditto program stage/EmissaryRecomp
 COPYFILE_DISABLE=1 tar -C stage -czf "releases/{tag}/{name}" EmissaryRecomp

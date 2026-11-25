@@ -87,14 +87,29 @@ export function engineRelativePath(platform: Platform): string {
   return path.join("engine", platform === "win32" ? "brawl-engine.exe" : "brawl-engine");
 }
 
-/** The program inside a version folder of CI's builds (with Brawl Online's core). */
+/**
+ * The program inside a version folder of CI's builds (with Brawl Online's core). On macOS it is
+ * inside Emissary.app (the Dock, the menu bar and Cmd-Tab show "Emissary" and its icon), whose
+ * program uses the files beside the bundle.
+ */
 export function wiiCompiledRelativePath(platform: Platform): string {
-  return platform === "win32" ? "WiiCompiled.exe" : "WiiCompiled";
+  switch (platform) {
+    case "win32":
+      return "WiiCompiled.exe";
+    case "darwin":
+      return path.join("Emissary.app", "Contents", "MacOS", "Emissary");
+    default:
+      return "WiiCompiled";
+  }
 }
 
-/** Where a release's program may be, the newer layout first. */
+/** Where a release's program may be, the newer layout first (a macOS build without its app bundle: WiiCompiled). */
 export function programRelativePaths(platform: Platform): string[] {
-  return [wiiCompiledRelativePath(platform), engineRelativePath(platform)];
+  return [
+    wiiCompiledRelativePath(platform),
+    ...(platform === "darwin" ? ["WiiCompiled"] : []),
+    engineRelativePath(platform),
+  ];
 }
 
 /** `manifest.json` (EmissaryManifest), or null when it is not one. */

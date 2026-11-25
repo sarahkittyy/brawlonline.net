@@ -12,6 +12,7 @@ import {
   EmissaryCancelled,
   EmissaryRecomp,
   engineRelativePath,
+  findProgramRoot,
   localReleasesFetch,
   parseExtractProgress,
   parseManifest,
@@ -492,6 +493,28 @@ describe("EmissaryRecomp", () => {
     expect(s.status).toBe("unavailable");
     expect(s.supported).toBe(false);
     await expect(em.install()).rejects.toThrow(/no release for this computer/);
+  });
+});
+
+describe("the program in a release", () => {
+  it("is Emissary.app's on macOS, or a plain WiiCompiled", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "emissary-program-"));
+    try {
+      const top = path.join(dir, "EmissaryRecomp");
+      const bundled = path.join(top, "Emissary.app", "Contents", "MacOS");
+      fs.mkdirSync(bundled, { recursive: true });
+      fs.writeFileSync(path.join(bundled, "Emissary"), "");
+      fs.writeFileSync(path.join(top, "WiiCompiled"), "");
+      expect(await findProgramRoot(dir, "darwin")).toEqual({
+        top,
+        program: path.join("Emissary.app", "Contents", "MacOS", "Emissary"),
+      });
+      expect(await findProgramRoot(dir, "linux")).toEqual({ top, program: "WiiCompiled" });
+      fs.rmSync(path.join(top, "Emissary.app"), { recursive: true });
+      expect(await findProgramRoot(dir, "darwin")).toEqual({ top, program: "WiiCompiled" });
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

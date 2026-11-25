@@ -771,7 +771,30 @@ static std::string CreateSysDirectoryPath()
 
   std::string sys_directory;
 
-#if defined(__APPLE__)
+#if defined(__APPLE__) && defined(BRAWL_ONLINE_STANDALONE)
+  // Brawl Online's core in EmissaryRecomp: Sys/ is beside the program as on Windows and Linux, or
+  // beside the Emissary.app it runs from (<dir>/Emissary.app/Contents/MacOS/Emissary). Dolphin's
+  // bundle path (Contents/Resources/Sys) found nothing there: no region sets (Sys/Rollback), so no
+  // online game, and no chat font.
+  {
+    uint32_t size = 0;
+    _NSGetExecutablePath(nullptr, &size);
+    std::string exe(size, '\0');
+    if (size == 0 || _NSGetExecutablePath(exe.data(), &size) != 0)
+      exe.clear();
+    exe.resize(std::strlen(exe.c_str()));
+    std::error_code error;
+    fs::path dir = fs::weakly_canonical(StringToPath(exe), error).parent_path();
+    if (error)
+      dir = StringToPath(exe).parent_path();
+    if (dir.filename() == "MacOS" && dir.parent_path().filename() == "Contents" &&
+        dir.parent_path().parent_path().extension() == ".app")
+    {
+      dir = dir.parent_path().parent_path().parent_path();
+    }
+    sys_directory = PathToString(dir) + DIR_SEP SYS_FOLDER_NAME DIR_SEP;
+  }
+#elif defined(__APPLE__)
   sys_directory = GetBundleDirectory() + DIR_SEP SYSDATA_DIR DIR_SEP;
 #elif defined ANDROID
   sys_directory = s_android_sys_directory + DIR_SEP;

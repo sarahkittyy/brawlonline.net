@@ -258,10 +258,15 @@ endif()
 
 # ---- Dolphin's controller settings for the engine's pads (BrawlOnline/DolphinPads.h) ----------
 # Dolphin's own input code, as it is: GCPadNew.ini through Core/HW/GCPadEmu.cpp, InputCommon's
-# expressions and control groups, and its Windows devices (DInput, XInput). A parent with SDL 3 passes
+# expressions and control groups, its Windows devices (DInput, XInput) and its macOS keyboard and
+# mouse (Quartz; the parent passes the window's NSView). A parent with SDL 3 passes
 # its target in BRAWL_ONLINE_SDL3_TARGET for Dolphin's SDL gamepads over the parent's SDL. Needs the
 # sparse checkout's dolphin/Source/Core/InputCommon and Core/HW/GCPadEmu.*.
-option(BRAWL_ONLINE_DOLPHIN_INPUT "Build Dolphin's controller settings for the engine's pads" ${WIN32})
+set(BO_DOLPHIN_INPUT_DEFAULT OFF)
+if(WIN32 OR APPLE)
+  set(BO_DOLPHIN_INPUT_DEFAULT ON)
+endif()
+option(BRAWL_ONLINE_DOLPHIN_INPUT "Build Dolphin's controller settings for the engine's pads" ${BO_DOLPHIN_INPUT_DEFAULT})
 set(BRAWL_ONLINE_SDL3_TARGET "" CACHE STRING "The parent's SDL 3 target, for SDL gamepads")
 if(BRAWL_ONLINE_DOLPHIN_INPUT)
   set(BO_IC "${BO_DOLPHIN}/Source/Core/InputCommon")
@@ -298,6 +303,12 @@ if(BRAWL_ONLINE_DOLPHIN_INPUT)
       ControllerInterface/ForceFeedback/ForceFeedbackDevice.cpp
       ControllerInterface/XInput/XInput.cpp
     )
+  elseif(APPLE)
+    # Dolphin's macOS keyboard and mouse ("Quartz/0/Keyboard & Mouse" in GCPadNew.ini), Objective-C++.
+    list(APPEND BO_INPUT_SOURCES
+      ControllerInterface/Quartz/Quartz.mm
+      ControllerInterface/Quartz/QuartzKeyboardAndMouse.mm
+    )
   endif()
   if(BRAWL_ONLINE_SDL3_TARGET)
     list(APPEND BO_INPUT_SOURCES ControllerInterface/SDL/SDLGamepad.cpp)
@@ -319,6 +330,14 @@ if(BRAWL_ONLINE_DOLPHIN_INPUT)
     # MSVC's xinput.h names the DLL (Windows 8 and later); MinGW's does not.
     set_source_files_properties("${BO_IC}/ControllerInterface/XInput/XInput.cpp" PROPERTIES
       COMPILE_DEFINITIONS "XINPUT_DLL=L\"xinput1_4.dll\"")
+  elseif(APPLE)
+    # Compiled as C++ told it is Objective-C++: enabling the OBJCXX language here, inside a parent's build, made
+    # CMake compile the parent's SDL Objective-C files with C++ options.
+    set_source_files_properties("${BO_IC}/ControllerInterface/Quartz/Quartz.mm"
+      "${BO_IC}/ControllerInterface/Quartz/QuartzKeyboardAndMouse.mm" PROPERTIES
+      LANGUAGE CXX COMPILE_OPTIONS "-xobjective-c++;-fobjc-arc")
+    target_link_libraries(brawl_online_dolphin_input PUBLIC
+      "-framework Cocoa" "-framework Carbon" "-framework CoreFoundation" "-framework QuartzCore")
   endif()
   if(BRAWL_ONLINE_SDL3_TARGET)
     target_link_libraries(brawl_online_dolphin_input PUBLIC ${BRAWL_ONLINE_SDL3_TARGET})

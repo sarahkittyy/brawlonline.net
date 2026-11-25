@@ -123,7 +123,9 @@ export class DolphinInstance extends EventEmitter {
       // tl;dr: for macOS, pass through execFile and set a massively high buffer for performance reasons. The returned
       // child process is ultimately the same, or close enough for now, and keeps the rest of the codebase intact.
       try {
-        if (isMac) {
+        // A program whose output is ignored (EmissaryRecomp) gets no pipes on macOS either: execFile keeps all of a
+        // child's output, and ends the child once it passes maxBuffer (the recomp writes that much in a long session).
+        if (isMac && !this.spawnOptions.ignoreOutput) {
           child = execFile(executablePath, params, {
             // 100MB
             maxBuffer: 1000 * 1000 * 100,

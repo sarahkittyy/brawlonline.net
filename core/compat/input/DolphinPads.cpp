@@ -108,6 +108,9 @@ bool Load(const std::string& user_folder, void* window)
     s_initialized = true;
 #ifdef _WIN32
     const WindowSystemInfo wsi(WindowSystemType::Windows, nullptr, window, window);
+#elif defined(__APPLE__)
+    // The game window's NSView: Quartz's keyboard and mouse.
+    const WindowSystemInfo wsi(WindowSystemType::MacOS, nullptr, window, window);
 #else
     const WindowSystemInfo wsi(WindowSystemType::Headless, nullptr, window, window);
 #endif
