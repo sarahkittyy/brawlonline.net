@@ -1,6 +1,6 @@
 # Brawl Online core: one online implementation for Dolphin and EmissaryRecomp (design)
 
-Status: being built on branch `emissary-recomp` (steps 0, 1 and 2a done, §8). Decisions 2026-11-13 (§7). The user's request (Sarah's board, 2026-11-13): "we need to get rid of the companion app. i know dolphin and the recomp are both c++(?) so maybe it would make sense to have one submodule that both depend on??? it would also require a lot of tests to make sure nothing at all changed when we modularize it out."
+Status: merged into main (439552bb4, 2026-11-25; the last fix left on its branch came in with 4dd5e98c2). **EmissaryRecomp work in this repository is committed to main now**, like any other change; `emissary-recomp` and the other `emissary-*` branches are retired, so don't start new branches for it (Sarah's board, card 810). The recomp's own side goes on EmissaryRecomp's `brawlonline/windows-build`, the branch staging builds. Built on branch `emissary-recomp` from 2026-11-13 (steps, §8). Decisions 2026-11-13 (§7). The user's request (Sarah's board, 2026-11-13): "we need to get rid of the companion app. i know dolphin and the recomp are both c++(?) so maybe it would make sense to have one submodule that both depend on??? it would also require a lot of tests to make sure nothing at all changed when we modularize it out."
 
 ## 1. Today
 
@@ -94,7 +94,7 @@ Steps 0-4 change only Dolphin and leave the recomp alone; step 5 is the recomp's
 
 ## 6. Where the work lands
 
-Everything is on the `emissary-recomp` branch (based on main, which stays quiet meanwhile, 2026-11-13), and on our own branch on top of kalomaze's PR #2 (`rollback-support`) for the recomp side.
+Everything is on the `emissary-recomp` branch (based on main, which stays quiet meanwhile, 2026-11-13), and on our own branch on top of kalomaze's PR #2 (`rollback-support`) for the recomp side. Since 2026-11-25 (439552bb4), main: new work is committed there, not on `emissary-recomp`.
 
 ## 7. Decisions (2026-11-13)
 
