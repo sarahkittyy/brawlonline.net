@@ -128,19 +128,13 @@ void CommonAsmRoutines::GenFrsqrte()
   CMP(32, R(RSCRATCH2), Imm32(0x7FE));
   FixupBranch complex = J_CC(CC_AE, Jump::Near);
 
-  SUB(32, R(RSCRATCH_EXTRA), Imm32(0x3FD));
-  SAR(32, R(RSCRATCH_EXTRA), Imm8(1));
-  MOV(32, R(RSCRATCH2), Imm32(0x3FF));
-  SUB(32, R(RSCRATCH2), R(RSCRATCH_EXTRA));
-  SHL(64, R(RSCRATCH2), Imm8(52));  // exponent = ((0x3FFLL << 52) - ((exponent - (0x3FELL << 52)) /
-                                    // 2)) & (0x7FFLL << 52);
-
+  // Compute mantissa first so XMM0 retains the original input for exponent extraction (no stack
+  // spill/reload).
   MOV(64, R(RSCRATCH_EXTRA), R(RSCRATCH));
   SHR(64, R(RSCRATCH_EXTRA), Imm8(48));
   AND(32, R(RSCRATCH_EXTRA), Imm8(0x1F));
 
-  PUSH(RSCRATCH2);
-  MOV(64, R(RSCRATCH2), ImmPtr(GetConstantFromPool(Common::frsqrte_expected)));
+  LEA(64, RSCRATCH2, M(GetConstantFromPool(Common::frsqrte_expected)));
   static_assert(sizeof(Common::BaseAndDec) == 8, "Unable to use SCALE_8; incorrect size");
 
   SHR(64, R(RSCRATCH), Imm8(37));
@@ -151,7 +145,15 @@ void CommonAsmRoutines::GenFrsqrte()
       MComplex(RSCRATCH2, RSCRATCH_EXTRA, SCALE_8, offsetof(Common::BaseAndDec, m_base)));
   SHL(64, R(RSCRATCH), Imm8(26));
 
-  POP(RSCRATCH2);
+  MOVQ_xmm(R(RSCRATCH_EXTRA), XMM0);
+  SHR(64, R(RSCRATCH_EXTRA), Imm8(52));
+  SUB(32, R(RSCRATCH_EXTRA), Imm32(0x3FD));
+  SAR(32, R(RSCRATCH_EXTRA), Imm8(1));
+  MOV(32, R(RSCRATCH2), Imm32(0x3FF));
+  SUB(32, R(RSCRATCH2), R(RSCRATCH_EXTRA));
+  SHL(64, R(RSCRATCH2), Imm8(52));  // exponent = ((0x3FFLL << 52) - ((exponent - (0x3FELL << 52)) /
+                                    // 2)) & (0x7FFLL << 52);
+
   OR(64, R(RSCRATCH2), R(RSCRATCH));  // vali |= (s64)(frsqrte_expected_base[index] +
                                       // frsqrte_expected_dec[index] * (i % 2048)) << 26;
   MOVQ_xmm(XMM0, R(RSCRATCH2));
@@ -234,19 +236,15 @@ void CommonAsmRoutines::GenFres()
   // Take the complex path for very large/small exponents.
   FixupBranch complex = J_CC(CC_AE);  // if (exp < 895 || exp >= 1149)
 
-  SUB(32, R(RSCRATCH_EXTRA), Imm32(0x7FD - 895));
-  NEG(32, R(RSCRATCH_EXTRA));
-  OR(32, R(RSCRATCH_EXTRA), R(RSCRATCH2));
-  SHL(64, R(RSCRATCH_EXTRA), Imm8(52));  // vali = sign | exponent
-
+  // Compute mantissa first so XMM0 retains the original input for sign/exponent extraction (no
+  // stack spill/reload).
   MOV(64, R(RSCRATCH2), R(RSCRATCH));
   SHR(64, R(RSCRATCH), Imm8(37));
   SHR(64, R(RSCRATCH2), Imm8(47));
   AND(32, R(RSCRATCH), Imm32(0x3FF));  // i % 1024
-  AND(32, R(RSCRATCH2), Imm8(0x1F));   // i / 1024
+  AND(32, R(RSCRATCH2), Imm32(0x1F));   // i / 1024
 
-  PUSH(RSCRATCH_EXTRA);
-  MOV(64, R(RSCRATCH_EXTRA), ImmPtr(GetConstantFromPool(Common::fres_expected)));
+  LEA(64, RSCRATCH_EXTRA, M(GetConstantFromPool(Common::fres_expected)));
   static_assert(sizeof(Common::BaseAndDec) == 8, "Unable to use SCALE_8; incorrect size");
 
   IMUL(32, RSCRATCH,
@@ -259,7 +257,15 @@ void CommonAsmRoutines::GenFres()
   SUB(32, R(RSCRATCH2), R(RSCRATCH));
   SHL(64, R(RSCRATCH2), Imm8(29));
 
-  POP(RSCRATCH_EXTRA);
+  MOVQ_xmm(R(RSCRATCH_EXTRA), XMM0);
+  SHR(64, R(RSCRATCH_EXTRA), Imm8(52));
+  MOV(32, R(RSCRATCH), R(RSCRATCH_EXTRA));
+  AND(32, R(RSCRATCH_EXTRA), Imm32(0x7FF));  // exp
+  AND(32, R(RSCRATCH), Imm32(0x800));        // sign
+  SUB(32, R(RSCRATCH_EXTRA), Imm32(0x7FD));
+  NEG(32, R(RSCRATCH_EXTRA));
+  OR(32, R(RSCRATCH_EXTRA), R(RSCRATCH));
+  SHL(64, R(RSCRATCH_EXTRA), Imm8(52));  // vali = sign | exponent
 
   OR(64, R(RSCRATCH2), R(RSCRATCH_EXTRA));  // vali |= (s64)(fres_expected_base[i / 1024] -
                                             // (fres_expected_dec[i / 1024] * (i % 1024) + 1) / 2)
@@ -501,7 +507,9 @@ const u8* CommonAsmRoutines::GenQuantizedLoadRuntime(bool single, EQuantizeType 
   return load;
 }
 
-void QuantizedMemoryRoutines::GenQuantizedStore(bool single, EQuantizeType type, int quantize)
+bool QuantizedMemoryRoutines::GenQuantizedStore(bool single, EQuantizeType type, int quantize,
+                                                std::optional<u32> const_addr,
+                                                BitSet32 const_registers_in_use)
 {
   // In: one or two single floats in XMM0, if quantize is -1, a quantization factor in RSCRATCH2
 
@@ -512,7 +520,7 @@ void QuantizedMemoryRoutines::GenQuantizedStore(bool single, EQuantizeType type,
   if (type == QUANTIZE_INVALID1 || type == QUANTIZE_INVALID2 || type == QUANTIZE_INVALID3)
   {
     UD2();
-    return;
+    return false;
   }
 
   if (type == QUANTIZE_FLOAT)
@@ -631,6 +639,12 @@ void QuantizedMemoryRoutines::GenQuantizedStore(bool single, EQuantizeType type,
     }
   }
 
+  if (const_addr.has_value())
+  {
+    return WriteToConstAddress(size, R(RSCRATCH), *const_addr, const_registers_in_use,
+                               /*swap=*/single);
+  }
+
   int flags = isInline ? 0 :
                          SAFE_LOADSTORE_NO_FASTMEM | SAFE_LOADSTORE_NO_PROLOG |
                              SAFE_LOADSTORE_DR_ON | SAFE_LOADSTORE_NO_UPDATE_PC;
@@ -638,6 +652,7 @@ void QuantizedMemoryRoutines::GenQuantizedStore(bool single, EQuantizeType type,
     flags |= SAFE_LOADSTORE_NO_SWAP;
 
   SafeWriteRegToReg(RSCRATCH, RSCRATCH_EXTRA, size, 0, QUANTIZED_REGS_TO_SAVE, flags);
+  return false;
 }
 
 void QuantizedMemoryRoutines::GenQuantizedStoreFloat(bool single, bool isInline)

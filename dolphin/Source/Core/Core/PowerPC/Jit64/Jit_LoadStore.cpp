@@ -25,6 +25,7 @@
 #include "Core/PowerPC/JitInterface.h"
 #include "Core/PowerPC/MMU.h"
 #include "Core/PowerPC/PowerPC.h"
+#include "Core/Rollback/RollbackManager.h"
 #include "Core/System.h"
 
 using namespace Gen;
@@ -469,8 +470,10 @@ void Jit64::dcbz(UGeckoInstruction inst)
     FixupBranch slow = J_CC(CC_Z, Jump::Near);
 
     // Fast path: compute full address, then zero out 32 bytes of memory.
-    // A 32-byte cache line can cross a 64-byte rollback granule boundary.
-    EmitJITDirtyBitmapUpdate(RSCRATCH, 0, 32);
+    // RSCRATCH is 32-byte aligned, and 32 divides ROLLBACK_PAGE_SIZE (64), so the cache line
+    // always lies inside a single rollback granule.
+    static_assert(ROLLBACK_PAGE_SIZE % 32 == 0);
+    EmitJITDirtyBitmapUpdate(RSCRATCH, 0, 1);
     if (cpu_info.bAVX)
     {
       VXORPS(XMM0, XMM0, R(XMM0));
@@ -534,6 +537,9 @@ void Jit64::stX(UGeckoInstruction inst)
     ASSERT_MSG(DYNA_REC, 0, "stX: Invalid access size.");
     return;
   }
+
+  if (!update && a != 0 && !gpr.IsImm(a) && TryCompileBranchlessStoreOverwrite(inst, accessSize))
+    return;
 
   FlushRegistersBeforeSlowAccess();
 

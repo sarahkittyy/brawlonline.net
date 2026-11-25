@@ -520,6 +520,35 @@ void Jit64::mfcr(UGeckoInstruction inst)
   JITDISABLE(bJITSystemRegistersOff);
   int d = inst.RD;
 
+  // Fuse `mfcr rD; rlwinm rA, rD, SH, MB, ME` (single CR bit extraction, MB == ME, Rc == 0)
+  // when rD is overwritten or dead after the rlwinm.
+  if (CanMergeNextInstructions(1))
+  {
+    const UGeckoInstruction& next = js.op[1].inst;
+    if (next.OPCD == 21 && !next.Rc && next.RS == static_cast<u32>(d) && next.MB == next.ME &&
+        (next.RA == static_cast<u32>(d) || js.op[1].gprDiscardable[d]))
+    {
+      const int ppc_bit = (next.SH + next.MB) & 31;
+      const int crf = ppc_bit >> 2;
+      const int cr_bit = 3 - (ppc_bit & 3);
+      js.downcountAmount++;
+      js.skipInstructions = 1;
+
+      RCX64Reg Ra = gpr.Bind(next.RA, RCMode::Write);
+      RegCache::Realize(Ra);
+      GetCRFieldBit(crf, cr_bit, Ra, false);
+      MOVZX(32, 8, Ra, Ra);
+      if (next.MB != 31)
+        SHL(32, Ra, Imm8(31 - next.MB));
+      if (next.RA != static_cast<u32>(d))
+      {
+        Ra.Unlock();
+        gpr.Discard(BitSet32{d});
+      }
+      return;
+    }
+  }
+
   RCX64Reg scratch_guard = gpr.Scratch(RSCRATCH_EXTRA);
   CALL(asm_routines.mfcr);
 
@@ -750,7 +779,7 @@ void Jit64::mffsx(UGeckoInstruction inst)
   MOV(32, R(RSCRATCH), PPCSTATE(fpscr));
 
   int d = inst.FD;
-  RCX64Reg Rd = fpr.Bind(d, RCMode::Write);
+  RCX64Reg Rd = fpr.Bind(d, RCMode::ReadWrite);
   RegCache::Realize(Rd);
   MOV(64, R(RSCRATCH2), Imm64(0xFFF8000000000000));
   OR(64, R(RSCRATCH), R(RSCRATCH2));

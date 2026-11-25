@@ -354,15 +354,15 @@ void Jit64::reg_imm(UGeckoInstruction inst)
   }
 }
 
-bool Jit64::CheckMergedBranch(u32 crf) const
+bool Jit64::CheckMergedBranch(u32 crf, int branch_offset) const
 {
   if (!analyzer.HasOption(PPCAnalyst::PPCAnalyzer::OPTION_BRANCH_MERGE))
     return false;
 
-  if (!CanMergeNextInstructions(1))
+  if (!CanMergeNextInstructions(branch_offset))
     return false;
 
-  const UGeckoInstruction& next = js.op[1].inst;
+  const UGeckoInstruction& next = js.op[branch_offset].inst;
   return (((next.OPCD == 16 /* bcx */) ||
            ((next.OPCD == 19) && (next.SUBOP10 == 528) /* bcctrx */) ||
            ((next.OPCD == 19) && (next.SUBOP10 == 16) /* bclrx */)) &&
@@ -370,18 +370,19 @@ bool Jit64::CheckMergedBranch(u32 crf) const
           static_cast<u32>(next.BI >> 2) == crf);
 }
 
-void Jit64::DoMergedBranch()
+void Jit64::DoMergedBranch(int branch_offset)
 {
   // Code that handles successful PPC branching.
-  const UGeckoInstruction& next = js.op[1].inst;
-  const u32 nextPC = js.op[1].address;
+  const PPCAnalyst::CodeOp& branch_op = js.op[branch_offset];
+  const UGeckoInstruction& next = branch_op.inst;
+  const u32 nextPC = branch_op.address;
 
-  if (js.op[1].branchIsIdleLoop)
+  if (branch_op.branchIsIdleLoop)
   {
     if (next.LK)
       MOV(32, PPCSTATE_SPR(SPR_LR), Imm32(nextPC + 4));
 
-    const u32 destination = js.op[1].branchTo;
+    const u32 destination = branch_op.branchTo;
     WriteBranchWatch<true>(nextPC, destination, next, {});
     WriteIdleExit(destination);
   }
@@ -390,7 +391,7 @@ void Jit64::DoMergedBranch()
     if (next.LK)
       MOV(32, PPCSTATE_SPR(SPR_LR), Imm32(nextPC + 4));
 
-    const u32 destination = js.op[1].branchTo;
+    const u32 destination = branch_op.branchTo;
     WriteBranchWatch<true>(nextPC, destination, next, {});
     WriteExit(destination, next.LK, nextPC + 4);
   }
@@ -423,6 +424,8 @@ void Jit64::DoMergedBranchCondition()
 {
   js.downcountAmount++;
   js.skipInstructions = 1;
+  if (TryCompileBranchlessDiamond(1))
+    return;
   const UGeckoInstruction& next = js.op[1].inst;
   int test_bit = 3 - (next.BI & 3);
   bool condition = !!(next.BO & BO_BRANCH_IF_TRUE);
