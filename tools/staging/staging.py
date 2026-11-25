@@ -920,16 +920,33 @@ def clean_after_toolchain_update(build_dir: Path, log: Path) -> None:
     stamp_file.write_text(stamp)
 
 
+def msvc_env() -> dict[str, str]:
+    """This environment with each PATH folder once, for cmd running vcvars64.bat.
+
+    vcvars64.bat puts its folders in front of PATH in one `set` line, and cmd refuses a line over
+    8191 characters: "The input line is too long." then "The syntax of the command is incorrect.",
+    exit 255 (Sarah's board, card 818: this PC's machine and user PATHs list many folders twice,
+    about 7,700 characters together, 4,900 without the repeats)."""
+    seen: set[str] = set()
+    folders = []
+    for p in os.environ.get("PATH", "").split(os.pathsep):
+        key = os.path.normcase(os.path.normpath(p.strip())) if p.strip() else ""
+        if key and key not in seen:
+            seen.add(key)
+            folders.append(p)
+    return {**os.environ, "PATH": os.pathsep.join(folders)}
+
+
 def msvc(cmd: str, cwd: Path, log: Path, build_dir: Path | None = None) -> None:
     """Runs `cmd` with the MSVC environment of the compiler the build dir was configured with."""
-    run(f'call "{build_vcvars(build_dir)}" >nul && {cmd}', cwd=cwd, log=log, shell=True)
+    run(f'call "{build_vcvars(build_dir)}" >nul && {cmd}', cwd=cwd, env=msvc_env(), log=log, shell=True)
 
 
 def vc_runtime_dir(build_dir: Path) -> Path:
     """The x64 Visual C++ runtime DLLs (msvcp140.dll, vcruntime140.dll, ...) of the build's compiler."""
     # `set`, not `echo %VCToolsRedistDir%`: cmd expands %...% before vcvars runs.
     out = subprocess.run(f'call "{build_vcvars(build_dir)}" >nul && set VCToolsRedistDir',
-                         shell=True, capture_output=True, text=True).stdout
+                         shell=True, env=msvc_env(), capture_output=True, text=True).stdout
     m = re.search(r"^VCToolsRedistDir=(.+?)\s*$", out, re.M)
     crt = sorted((Path(m.group(1)) / "x64").glob("Microsoft.VC*.CRT")) if m else []
     if not crt:
