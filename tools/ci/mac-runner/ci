@@ -84,9 +84,12 @@ case "$cmd" in
     for x in "$R"/*/; do [ -f "$x/.runner" ] && { src="${x%/}"; break; }; done
     [ -n "$src" ] || { echo "No runner to copy the program from"; exit 1; }
     mkdir -p "$d"
-    rsync -a --exclude '.runner' --exclude '.credentials*' --exclude '.env' --exclude '.path' \
-      --exclude '_work' --exclude '_diag' --exclude 'ci-cache' --exclude 'runner.log*' \
-      --exclude '.supervisor-pid' "$src/" "$d/"
+    # The program only: the runner writes more state files over time (.runner_migrated, which
+    # config.sh also takes for "already configured"), so nothing else is copied.
+    for f in bin externals config.sh env.sh run.sh safe_sleep.sh run-helper.sh.template \
+        run-helper.cmd.template; do
+      rsync -a "$src/$f" "$d/"
+    done
     (cd "$d" && ./config.sh --unattended --url "https://github.com/$repo" --token "$token" \
       --name "sarah-mac" --labels brawlmac --work _work)
     "$R/setup.sh" env "$d"

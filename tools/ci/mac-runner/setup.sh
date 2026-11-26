@@ -58,6 +58,10 @@ if [ ! -x "$R/tools/bin/cmake" ]; then
   "$R/tools/bin/pip" install -q "cmake>=4,<5" ninja
 fi
 for t in cmake ctest cpack ninja; do ln -sf "$R/tools/bin/$t" "$R/bin/$t"; done
+# Python 3.12+ as python and python3 (EmissaryRecomp's release.yml skips setup-python here; macOS's
+# own /usr/bin/python3 is 3.9): Homebrew's.
+[ -x /opt/homebrew/bin/python3 ] || HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_INSTALL_UPGRADE=1 "/opt/homebrew/bin/brew" install python
+for t in python python3; do ln -sf /opt/homebrew/bin/python3 "$R/bin/$t"; done
 # ccache for Dolphin, gpg for the recomp's game code: Homebrew's, linked one by one (programs
 # only; nothing searches their prefix). Missing ones are installed without touching the rest.
 brew=/opt/homebrew/bin/brew
