@@ -5,10 +5,11 @@
   overflow: hidden;
 }
 
-/* Wider than 1200px the columns would drift apart: the list stays 1200px wide, centered. Clipped 3px out from its
-   edges, not at them: the Twitch row's cards reach 3px past the page's left edge for their hover outline (.twitchCards),
-   and clipped at the edge the first card's outline lost its left side (Sarah's board: "left highlight edge is cut
-   off"). The page's 20px padding has room for it. */
+/* Wider than 1200px the columns would drift apart: the list stays 1200px wide, centered. Clipped 10px out from its
+   edges, not at them: the Twitch row's cards reach 3px past the page's left edge for their hover outline (.twitchCards)
+   and its collapse arrow's button 10px (its arrow lines up with the edge), and clipped at the edge the first card's
+   outline and the button's hover circle lost their left side (Sarah's board: "left highlight edge is cut off", "the
+   collapse circle being cut off too"). The page's 20px padding has room for it. */
 .block {
   --live-red: #e5534b;
 
@@ -18,7 +19,7 @@
   min-height: 0;
   height: 100%;
   overflow: clip;
-  overflow-clip-margin: 3px;
+  overflow-clip-margin: 10px;
   display: flex;
   flex-direction: column;
 }
