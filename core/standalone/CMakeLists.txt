@@ -158,6 +158,8 @@ set(BO_REUSED_HEADERS
   Core/Rollback/ReplayPlayback.h
   Core/Rollback/GameplayOnlineBackend.h
   Core/Rollback/InputTrace.h
+  Core/Rollback/InputSuggest.h
+  Core/Rollback/InputSuggestSource.h
   Core/Online/MatchQoS.h
   Core/Online/SpecialAssets.h
   Core/Rollback/CardFat.h
@@ -171,6 +173,7 @@ set(BO_REUSED_SOURCES
   "${BO_DOLPHIN}/Source/Core/Core/Rollback/ReplayPlayback.cpp"
   "${BO_DOLPHIN}/Source/Core/Core/Rollback/GameplayOnlineBackend.cpp"
   "${BO_DOLPHIN}/Source/Core/Core/Rollback/InputTrace.cpp"
+  "${BO_DOLPHIN}/Source/Core/Core/Rollback/InputSuggest.cpp"
   "${BO_DOLPHIN}/Source/Core/Core/Online/MatchQoS.cpp"
   "${BO_DOLPHIN}/Source/Core/Core/Online/SpecialAssets.cpp"
   "${BO_DOLPHIN}/Source/Core/Core/Rollback/CardFat.cpp"
@@ -241,8 +244,10 @@ if(BRAWL_ONLINE_APP_VERSION)
   target_compile_definitions(brawl_online_core_standalone PUBLIC
     BRAWL_ONLINE_APP_VERSION="${BRAWL_ONLINE_APP_VERSION}")
 endif()
-target_link_libraries(brawl_online_core_standalone PUBLIC brawl_online_common ${BO_GEKKO_TARGET}
-  PRIVATE monocypher xxhash::xxhash ZLIB::ZLIB mbedtls sfml-network sfml-system)
+# SFML's network part is public: Core/Rollback/InputSuggest.h names its addresses, and the engine's
+# side calls input suggestions (Gprb::Suggest::Sample).
+target_link_libraries(brawl_online_core_standalone PUBLIC brawl_online_common ${BO_GEKKO_TARGET} sfml-network
+  PRIVATE monocypher xxhash::xxhash ZLIB::ZLIB mbedtls sfml-system)
 # The UI's headers (core/ui): the on-screen messages' (VideoCommon/OnScreenDisplay.h's stand-in).
 target_include_directories(brawl_online_core_standalone PUBLIC "${BO_CORE}/ui/include")
 

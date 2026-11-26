@@ -17,15 +17,14 @@
 
 #ifdef _WIN32
 #include <Windows.h>
+#ifndef CREATE_WAITABLE_TIMER_HIGH_RESOLUTION  // older MinGW headers
+#define CREATE_WAITABLE_TIMER_HIGH_RESOLUTION 0x00000002
+#endif
 #endif
 
 #include "Common/Thread.h"
-#include "Core/Config/MainSettings.h"
-#include "Core/Core.h"
-#include "Core/HW/GCPad.h"
 #include "BrawlOnline/Rollback/GameplayRollback.h"
-#include "InputCommon/ControllerInterface/ControllerInterface.h"
-#include "InputCommon/GCAdapter.h"
+#include "Core/Rollback/InputSuggestSource.h"
 #include "InputCommon/GCPadStatus.h"
 
 namespace Gprb::Suggest
@@ -122,6 +121,8 @@ struct Sender
   Clock::time_point last_sent{};
   u32 lie_rng = 0x2545F491;
   u32 seq = 0;
+  // The start of an engine's newest sample (Sample) while it samples, for the gaps between them.
+  Clock::time_point engine_sample{};
   SenderStats stats;
 };
 std::mutex s_mutex;
@@ -280,14 +281,40 @@ private:
 #endif
 };
 
+// A sample that took from `start` to `end`; `last`: the previous one's start while sampling (none:
+// {}), for the gaps between them. Under s_mutex.
+void NoteSampleLocked(Clock::time_point start, Clock::time_point end, Clock::time_point last)
+{
+  SenderStats& c = s_sender.stats;
+  const u64 us = std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
+  ++c.samples;
+  c.sample_us += us;
+  c.sample_us_max = std::max(c.sample_us_max, us);
+  if (last != Clock::time_point{} && start > last)
+  {
+    const u64 gap = std::chrono::duration_cast<std::chrono::microseconds>(start - last).count();
+    ++c.sample_gaps;
+    c.sample_gap_us += gap;
+    c.sample_gap_us_sq += gap * gap;
+    c.sample_gap_us_max = std::max(c.sample_gap_us_max, gap);
+  }
+}
+
+// The channel a sample of mapped controllers would be used for now, or -1. Under s_mutex.
+int SampleChannelLocked()
+{
+  const Sender& x = s_sender;
+  if (!x.armed || !Enabled() || !HasPeers(x) || x.chan < 0 ||
+      !x.format->reads(x.chan, HostPadSource::Mapped))
+    return -1;
+  return x.chan;
+}
+
 void SamplerLoop()
 {
   Common::SetCurrentThreadName("GPRB suggest sampler");
-  // Its own input channel: a relative input (a mouse's motion) gives each channel the motion since
-  // that channel's last update, so the SI poll's is left alone.
-  g_controller_interface.SetCurrentInputChannel(ciface::InputChannel::Suggestions);
-  const auto period = std::chrono::duration_cast<Clock::duration>(
-      std::chrono::duration<double>(1.0 / SampleHz()));
+  Source::SamplerThreadStarts();
+  const auto period = SamplePeriod();
   SamplerSleep waiter;
   // Samples are due on a grid of periods, so a sleep that ends late doesn't push the later ones
   // back; they also wait for `earliest` (the devices' share, SAMPLE_IDLE_PER_BUSY).
@@ -304,55 +331,59 @@ void SamplerLoop()
     // skipped, not sampled in a burst.
     if (start - next >= period)
       next += period * ((start - next) / period);
-    bool any_peer;
     int chan;
-    const Format* fmt;
     {
       std::lock_guard lk(s_mutex);
-      any_peer = HasPeers(s_sender);
-      chan = s_sender.chan;
-      fmt = s_sender.format;
+      chan = SampleChannelLocked();
     }
     // The game reads the adapter (its reports come on their own) or nothing yet, or no peer takes
-    // suggestions.
-    if (!any_peer || chan < 0 || !fmt->reads(chan, HostPadSource::Mapped) ||
-        !g_controller_interface.IsInit() || !Pad::IsInitialized())
+    // suggestions, or the controllers cannot be read yet.
+    const std::optional<GCPadStatus> st = chan < 0 ? std::nullopt : Source::SampleMapped(chan);
+    if (!st)
     {
       next = start + std::chrono::milliseconds(50);
       last = {};
       continue;
     }
-    g_controller_interface.UpdateInput();
-    // As the CPU thread before an SI poll: the controllers count only while the game window has
-    // focus, unless background input is on.
-    Core::UpdateInputGate(!Config::Get(Config::MAIN_INPUT_BACKGROUND_INPUT),
-                          Config::Get(Config::MAIN_LOCK_CURSOR));
-    const GCPadStatus st = Pad::GetStatus(chan);
     const auto now = Clock::now();
     const auto busy = now - start;
     {
       std::lock_guard lk(s_mutex);
-      SenderStats& c = s_sender.stats;
-      const u64 us = std::chrono::duration_cast<std::chrono::microseconds>(busy).count();
-      ++c.samples;
-      c.sample_us += us;
-      c.sample_us_max = std::max(c.sample_us_max, us);
-      if (last != Clock::time_point{})
-      {
-        const u64 gap = std::chrono::duration_cast<std::chrono::microseconds>(start - last).count();
-        ++c.sample_gaps;
-        c.sample_gap_us += gap;
-        c.sample_gap_us_sq += gap * gap;
-        c.sample_gap_us_max = std::max(c.sample_gap_us_max, gap);
-      }
+      NoteSampleLocked(start, now, last);
     }
     last = start;
     // Stamped after the read: a later time can only tag a later frame, which the change is in too.
-    OnReport(chan, HostPadSource::Mapped, st, now);
+    OnReport(chan, HostPadSource::Mapped, *st, now);
     earliest = now + SAMPLE_IDLE_PER_BUSY * busy;
   }
 }
 }  // namespace
+
+Clock::duration SamplePeriod()
+{
+  return std::chrono::duration_cast<Clock::duration>(std::chrono::duration<double>(1.0 / SampleHz()));
+}
+
+int SampleChannel()
+{
+  std::lock_guard lk(s_mutex);
+  const int chan = SampleChannelLocked();
+  if (chan < 0)
+    s_sender.engine_sample = {};
+  return chan;
+}
+
+void Sample(int chan, const GCPadStatus& st, Clock::time_point start, Clock::time_point end)
+{
+  {
+    std::lock_guard lk(s_mutex);
+    if (SampleChannelLocked() != chan || chan < 0)
+      return;
+    NoteSampleLocked(start, end, s_sender.engine_sample);
+    s_sender.engine_sample = start;
+  }
+  OnReport(chan, HostPadSource::Mapped, st, end);
+}
 
 namespace
 {
@@ -696,9 +727,12 @@ void ArmWith(const Format& format, sf::UdpSocket* socket,
   }
   if (!Enabled())
     return;
-  GCAdapter::SetReportHook(OnAdapterReport);
-  s_sampler_run = true;
-  s_sampler = std::thread(SamplerLoop);
+  Source::SetAdapterReportHook(OnAdapterReport);
+  if (Source::HasSamplerThread())
+  {
+    s_sampler_run = true;
+    s_sampler = std::thread(SamplerLoop);
+  }
 }
 }  // namespace
 
@@ -717,7 +751,7 @@ void Arm(const Format& format, void (*send)(const u8* data, std::size_t size), i
 
 void Disarm()
 {
-  GCAdapter::SetReportHook(nullptr);
+  Source::SetAdapterReportHook(nullptr);
   s_sampler_run = false;
   if (s_sampler.joinable())
     s_sampler.join();

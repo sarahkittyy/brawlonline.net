@@ -1114,8 +1114,13 @@ std::array<Clock::time_point, 4> TakePassReadInstants()
   return h.pass_instant;
 }
 
+// EngineHostPadRead's read while it runs ReadHostPad: the controller "now". CPU thread.
+const GCPadStatus* s_engine_read = nullptr;
+
 GCPadStatus ReadHostPadNow(int chan, HostPadSource source)
 {
+  if (s_engine_read)
+    return *s_engine_read;
   if (source == HostPadSource::Adapter)
   {
     GCPadStatus status = GCAdapter::Input(chan);
@@ -1270,6 +1275,15 @@ GCPadStatus ReadHostPad(Core::System& system, int chan, HostPadSource source)
   HostDecodeKeep(system.GetMemory(), chan, source, status, instant);
   LogRead(chan, now, due, false, kind, status, instant);
   return status;
+}
+
+GCPadStatus EngineHostPadRead(Core::System& system, int chan, HostPadSource source,
+                              const GCPadStatus& st)
+{
+  s_engine_read = &st;
+  const GCPadStatus out = ReadHostPad(system, chan, source);
+  s_engine_read = nullptr;
+  return out;
 }
 
 namespace

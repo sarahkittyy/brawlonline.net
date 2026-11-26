@@ -1688,6 +1688,10 @@ design as Slippi 3.7's input suggestions and Melee Unlocked's early inputs.
   input format and game-independent rules (`docs/design/brawl-mods.md` §6.2): their own copy of
   the 16 lines, every button, and `follow` by default, so P+'s whole map (PR #70) changes nothing
   there.
+- **EmissaryRecomp** (2026-11-26, `docs/design/brawl-online-core.md` §10.5): a recomp player sends
+  and uses them too. The recomp hands the core every read the game gets (`EngineHostPadRead`: the
+  instant, the host decode) and looks at its controllers on its game thread while it waits for
+  the next field (`Suggest::Sample`), about 550 looks a second over a whole game.
 
 ## A PC that hitches no longer holds every frame 8 ms (bug report #314, 2026-11-18)
 

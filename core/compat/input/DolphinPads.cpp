@@ -155,7 +155,14 @@ int SiDevice(int port)
   return port >= 0 && port < 4 ? s_si_devices[port] : SI_NONE;
 }
 
-void UpdateInput(bool window_has_focus)
+// The game's reads, or input suggestions' looks between them (relative inputs keep each channel's
+// motion apart).
+static ciface::InputChannel Channel(bool suggestions)
+{
+  return suggestions ? ciface::InputChannel::Suggestions : ciface::InputChannel::SerialInterface;
+}
+
+void UpdateInput(bool window_has_focus, bool suggestions)
 {
   {
     std::lock_guard lk(s_mutex);
@@ -164,17 +171,20 @@ void UpdateInput(bool window_has_focus)
     // Core::UpdateInputGate(!BackgroundInput): the controls count only with the game in front.
     ControlReference::SetInputGate(window_has_focus || s_background_input);
   }
-  ControllerInterface::SetCurrentInputChannel(ciface::InputChannel::SerialInterface);
+  ControllerInterface::SetCurrentInputChannel(Channel(suggestions));
   g_controller_interface.UpdateInput();
+  ControllerInterface::SetCurrentInputChannel(ciface::InputChannel::SerialInterface);
 }
 
-GCPadStatus GetStatus(int port)
+GCPadStatus GetStatus(int port, bool suggestions)
 {
   std::lock_guard lk(s_mutex);
   if (!s_active || port < 0 || port >= 4 || !s_pads[port])
     return {};
+  ControllerInterface::SetCurrentInputChannel(Channel(suggestions));
+  const GCPadStatus status = s_pads[port]->GetInput();
   ControllerInterface::SetCurrentInputChannel(ciface::InputChannel::SerialInterface);
-  return s_pads[port]->GetInput();
+  return status;
 }
 
 void SetRumble(int port, double strength)

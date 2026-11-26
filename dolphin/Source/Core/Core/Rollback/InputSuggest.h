@@ -5,7 +5,8 @@
 
 // Input suggestions (Slippi's, after Arte's "subframe rollback", Slippi Ishiiruka PR #481): the
 // game reads the local controller once a frame, but the controller can be looked at more often (a
-// Wii U adapter reports every 1-8 ms; a controller mapped in Dolphin is sampled by a thread). When
+// Wii U adapter reports every 1-8 ms; a controller mapped in Dolphin is sampled by a thread; an
+// engine that is not Dolphin samples its own: InputSuggestSource.h). When
 // a look changes what the local input of the next frame would be, the session sends it at once to
 // the other players, tagged with the GekkoNet frame its change will first be in. A machine that has
 // to predict that player's input for that frame or a later one predicts with it instead of the
@@ -116,6 +117,18 @@ void SetChannel(int chan);
 // GekkoNet took the local input of `frame`, read at `instant` (the instant its controller read
 // stands for); `field_us` is a field at the game's speed now.
 void NoteLocalInput(int frame, Clock::time_point instant, const u8* input, double field_us);
+
+// An engine that looks at its controllers itself (InputSuggestSource.h: core/standalone has no
+// sampler thread; EmissaryRecomp samples on its game thread, which owns them, while it waits for
+// the next field): the SI channel whose controller to look at now, or -1 when no look would be
+// used (not armed, no peer takes suggestions, no GameCube controller, or the game reads that
+// channel from another source than Mapped).
+int SampleChannel();
+// Its look at channel `chan`'s controller, `st` (as the game would get it if it read it now),
+// read from `start` to `end`: handled as a sample of Dolphin's sampler thread is.
+void Sample(int chan, const GCPadStatus& st, Clock::time_point start, Clock::time_point end);
+// How often to look (PPR_GPRB_SUGGEST_SAMPLE_HZ, 1000 by default).
+Clock::duration SamplePeriod();
 
 // Whether `next` (a gfPadStatus) can start an action that `prev` could not, or end one: a press
 // or release of A, B, X, Y, Z, L, R, Start or the D-pad (P+'s taunts), an analog trigger crossing

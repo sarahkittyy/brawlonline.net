@@ -6,12 +6,15 @@
 // last input, and every prediction is still checked against the real input.
 
 #include <array>
+#include <chrono>
 #include <cstdlib>
 #include <cstring>
+#include <vector>
 
 #include <gtest/gtest.h>
 
 #include "Common/CommonTypes.h"
+#include "BrawlOnline/Rollback/GameplayRollback.h"
 #include "Core/Rollback/InputSuggest.h"
 #include "Core/Rollback/MachineSession.h"
 #include "InputCommon/GCPadStatus.h"
@@ -443,6 +446,88 @@ TEST(InputSuggest, DatagramOfAnyInputSize)
   const auto full = Gprb::Suggest::Encode(5, 1, std::array<u8, 0x40>{}.data());
   EXPECT_FALSE(Gprb::Suggest::Decode(full.data(), full.size(), in.size(), &frame, &seq, &got));
   EXPECT_TRUE(Gprb::Suggest::Decode(full.data(), full.size(), &frame, &seq, &got));
+}
+
+namespace
+{
+// An engine's own looks (Suggest::Sample, EmissaryRecomp's): datagrams as its transport would send
+// them, and a format that sends the pad's buttons whenever they change.
+std::vector<std::vector<u8>> s_sent;
+void Capture(const u8* data, std::size_t size)
+{
+  s_sent.emplace_back(data, data + size);
+}
+constexpr std::size_t ENGINE_BYTES = 2;
+const Gprb::Suggest::Format ENGINE_FORMAT{
+    ENGINE_BYTES,
+    [](int, Gprb::HostPadSource source) { return source == Gprb::HostPadSource::Mapped; },
+    [](int, Gprb::HostPadSource, const GCPadStatus& st, const u8*, u8* out) {
+      out[0] = static_cast<u8>(st.button >> 8);
+      out[1] = static_cast<u8>(st.button);
+      return true;
+    },
+    [](const u8* a, const u8* b) { return std::memcmp(a, b, ENGINE_BYTES) != 0; },
+    [](const u8* a, const u8* b) { return std::memcmp(a, b, ENGINE_BYTES) != 0; },
+    [](u8*, u32) {},
+};
+s32 SentFrame(std::size_t i)
+{
+  s32 frame = -1;
+  u32 seq;
+  const u8* in;
+  EXPECT_TRUE(Gprb::Suggest::Decode(s_sent.at(i).data(), s_sent.at(i).size(), ENGINE_BYTES, &frame,
+                                    &seq, &in));
+  return frame;
+}
+}  // namespace
+
+TEST(InputSuggest, AnEngineLooksBetweenReadsAsTheSamplerThreadDoes)
+{
+  if (!Gprb::Suggest::Enabled() || std::getenv("PPR_GPRB_SUGGEST_RULES") ||
+      std::getenv("PPR_GPRB_SUGGEST_LIE"))
+  {
+    GTEST_SKIP() << "PPR_GPRB_SUGGEST* is set";
+  }
+  using namespace std::chrono_literals;
+  s_sent.clear();
+  EXPECT_EQ(Gprb::Suggest::SampleChannel(), -1);  // not armed
+  Gprb::Suggest::Arm(ENGINE_FORMAT, Capture, 1);
+  EXPECT_EQ(Gprb::Suggest::SampleChannel(), -1);  // no peer takes them
+  Gprb::Suggest::SetHasPeers(true);
+  ASSERT_EQ(Gprb::Suggest::SampleChannel(), 1);
+  const auto t0 = Clock::now();
+  const double field_us = 1e6 * 1001.0 / 60000.0;
+  const u8 none[ENGINE_BYTES]{};
+  Gprb::Suggest::NoteLocalInput(10, t0, none, field_us);
+  GCPadStatus st{};
+  st.button = PAD_BUTTON_A;
+  // Before the next read: the next frame's.
+  Gprb::Suggest::Sample(1, st, t0 + 4ms, t0 + 5ms);
+  ASSERT_EQ(s_sent.size(), 1u);
+  EXPECT_EQ(SentFrame(0), 11);
+  // The same again: nothing new to say. Another channel's: not the player's controller.
+  Gprb::Suggest::Sample(1, st, t0 + 6ms, t0 + 7ms);
+  Gprb::Suggest::Sample(0, GCPadStatus{}, t0 + 7ms, t0 + 8ms);
+  EXPECT_EQ(s_sent.size(), 1u);
+  // After the next read's instant, before the one after: the frame after.
+  st.button = PAD_BUTTON_B;
+  Gprb::Suggest::Sample(1, st, t0 + 20ms, t0 + 21ms);
+  ASSERT_EQ(s_sent.size(), 2u);
+  EXPECT_EQ(SentFrame(1), 12);
+  // More than two fields after the newest local input's read: too late to tag.
+  st.button = PAD_BUTTON_X;
+  Gprb::Suggest::Sample(1, st, t0 + 40ms, t0 + 41ms);
+  EXPECT_EQ(s_sent.size(), 2u);
+  const Gprb::Suggest::SenderStats stats = Gprb::Suggest::Stats();
+  EXPECT_EQ(stats.samples, 4u);
+  EXPECT_EQ(stats.sent, 2u);
+  EXPECT_EQ(stats.too_late, 1u);
+  EXPECT_EQ(stats.sample_gaps, 3u);
+  EXPECT_EQ(stats.sample_us, 4000u);
+  Gprb::Suggest::Disarm();
+  EXPECT_EQ(Gprb::Suggest::SampleChannel(), -1);
+  Gprb::Suggest::Sample(1, GCPadStatus{}, t0 + 42ms, t0 + 43ms);
+  EXPECT_EQ(s_sent.size(), 2u);
 }
 
 // Profile (run with --gtest_also_run_disabled_tests --gtest_filter=*InputSuggestBench*): the cost

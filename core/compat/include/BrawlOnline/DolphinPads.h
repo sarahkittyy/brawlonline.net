@@ -45,9 +45,12 @@ int SiDevice(int port);
 
 // Reads every device once (Dolphin's ControllerInterface::UpdateInput), with the input gate as
 // Dolphin sets it at each field: open when the game window has focus or BackgroundInput is on.
-void UpdateInput(bool window_has_focus);
-// Dolphin's GCPad::GetInput for `port` (a standard controller), as of the last UpdateInput.
-GCPadStatus GetStatus(int port);
+// `suggestions`: for a look between the game's reads (input suggestions, Gprb::Suggest::Sample), on
+// Dolphin's input channel for them, so a relative input's motion (a mouse's) stays the game's.
+void UpdateInput(bool window_has_focus, bool suggestions = false);
+// Dolphin's GCPad::GetInput for `port` (a standard controller), as of the last UpdateInput of the
+// same channel.
+GCPadStatus GetStatus(int port, bool suggestions = false);
 // Dolphin's GCPad::SetOutput: the port's Rumble/Motor expression.
 void SetRumble(int port, double strength);
 

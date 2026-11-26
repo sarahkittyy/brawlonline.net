@@ -357,6 +357,13 @@ void SetHostPadsScheduled(bool scheduled);
 bool HostPadsScheduled();
 // CPU thread: SI channel `chan`'s host controller, as above.
 GCPadStatus ReadHostPad(Core::System& system, int chan, HostPadSource source);
+// An engine that reads its controllers itself and hands the game what it read (EmissaryRecomp: at
+// each retrace, for the frame the retrace starts): its read `st` of SI channel `chan`, made now,
+// taken as ReadHostPad takes a read of its own (the instant it stands for on the schedule, the host
+// decode, the instants of the pad thread's next pass; in a re-run, the read latched before it).
+// Returns what the game gets: `st`, or in a re-run the latched read. CPU thread.
+GCPadStatus EngineHostPadRead(Core::System& system, int chan, HostPadSource source,
+                              const GCPadStatus& st);
 
 struct HostPadReadStats
 {

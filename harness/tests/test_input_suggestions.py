@@ -10,6 +10,9 @@ whose pad scripts step with the host clock from a random point between two reads
   untrustworthy, and every confirmed frame's checksum agrees.
 - One off (PPR_GPRB_SUGGEST=0, as a build without suggestions): it never says it takes them, so the
   other sends it none, and neither uses any.
+- Crossplay (PPHARNESS_RECOMP): the same with EmissaryRecomp players, against a Dolphin and against
+  each other. A recomp looks at its controller on its game thread while it waits for the next field
+  (Suggest::Sample), so its suggestions go out and it uses the other's.
 """
 
 from __future__ import annotations
@@ -20,6 +23,7 @@ from typing import Any, Callable
 
 import pytest
 
+from ppharness import crossplay
 from ppharness import flows as F
 from ppharness.instance import DolphinInstance
 from ppharness.netsim import LinkProfile
@@ -88,3 +92,24 @@ def test_a_player_without_suggestions_gets_none_and_sends_none(backend, dolphin:
     assert sug[0]["enabled"] and not sug[1]["enabled"], sug
     assert sug[0]["sent"] == 0 and sug[1]["sent"] == 0, sug
     assert sug[0]["received"] == 0 and sug[1]["received"] == 0, sug
+
+
+def _both_on(sug: list[dict[str, Any]], cmp: dict[str, Any]) -> None:
+    assert cmp["compared"] > 1000 and cmp["mismatches"] == 0, cmp
+    for s in sug:
+        assert s["enabled"]
+        assert s["sent"] > 20 and s["received"] > 20, sug
+        assert s["ignored"] == 0, sug
+    assert sum(s["helped"] for s in sug) > 0, sug
+
+
+@crossplay.VARIANTS
+def test_suggestions_crossplay(variant: str, backend, dolphin: Callable[..., DolphinInstance],  # noqa: F811
+                               gpu_backend: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    got: dict[str, Any] = {}
+
+    def body(factory: Callable[..., DolphinInstance]) -> None:
+        got["sug"], got["cmp"] = _play(backend, factory, gpu_backend, f"sugg-{variant}", {})
+
+    crossplay.run(variant, "b$", "[ab]$", monkeypatch, backend, dolphin, body, game_reports=False)
+    _both_on(got["sug"], got["cmp"])

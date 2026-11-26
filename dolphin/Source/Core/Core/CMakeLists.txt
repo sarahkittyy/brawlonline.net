@@ -612,6 +612,8 @@ add_library(core
   Rollback/FullMemcpySaveSlot.cpp
   Rollback/InputSuggest.cpp
   Rollback/InputSuggest.h
+  Rollback/InputSuggestSource.cpp
+  Rollback/InputSuggestSource.h
   Rollback/GameplayOnlineBackend.cpp
   Rollback/GameplayOnlineBackend.h
   Rollback/UdpSocket6.cpp
