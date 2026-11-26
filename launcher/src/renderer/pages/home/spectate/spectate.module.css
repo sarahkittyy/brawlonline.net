@@ -580,8 +580,11 @@
   scrollbar-width: thin;
 }
 
-/* Twitch's logo after a live player's name (it opens the stream). */
+/* Twitch's logo after a live player's name (it opens the stream). 1.5 px lower than the name's line box centre, where
+   the menu font's letters sit (twitch.module.css .mark). */
 .twitchMark {
+  position: relative;
+  top: 1.5px;
   display: inline-flex;
   flex: none;
   padding: 1px;

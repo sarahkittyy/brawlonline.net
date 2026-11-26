@@ -6,8 +6,12 @@
   fill: #9146ff;
 }
 
-/* A live player's mark: just the logo, a button. */
+/* A live player's mark: just the logo, a button. 1.5 px lower than the name's line box centre: the menu font's letters
+   sit low in their line (ascent 0.875 em, descent 0.125 em) and the logo's tail makes it top-heavy, so centred it
+   stood above the name (Sarah's board: "this does not seem vertically aligned"). */
 .mark {
+  position: relative;
+  top: 1.5px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
