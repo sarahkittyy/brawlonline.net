@@ -29,6 +29,10 @@ pub enum ChangelogCmd {
         /// Where accounts serves /blog/media/ from (as accounts reads it; relative to here).
         #[arg(long, env = "BLOG_MEDIA_DIR", default_value = "blog-media")]
         media_dir: PathBuf,
+        /// Date it then (RFC 3339, at most 2 days ago) instead of now: the board's first push with
+        /// patch notes publishes after that push deployed this command, dated just before it.
+        #[arg(long)]
+        published_at: Option<String>,
     },
     /// Remove the --every-start one (staging's "show on staging" turned off).
     ClearEveryStart,
@@ -65,7 +69,14 @@ pub fn render() -> anyhow::Result<()> {
 
 pub async fn run(pool: &PgPool, actor: &str, cmd: ChangelogCmd) -> anyhow::Result<()> {
     match cmd {
-        ChangelogCmd::Publish { every_start, media_dir } => {
+        ChangelogCmd::Publish { every_start, media_dir, published_at } => {
+            let at = published_at
+                .map(|s| {
+                    chrono::DateTime::parse_from_rfc3339(s.trim())
+                        .map(|t| t.with_timezone(&chrono::Utc))
+                        .with_context(|| format!("--published-at {s:?}: not an RFC 3339 time"))
+                })
+                .transpose()?;
             let bundle: Bundle = serde_json::from_str(&read_stdin()?).context("stdin is not a changelog bundle")?;
             let media = bundle
                 .media
@@ -77,7 +88,7 @@ pub async fn run(pool: &PgPool, actor: &str, cmd: ChangelogCmd) -> anyhow::Resul
                     Ok(MediaFile { name: m.name, data })
                 })
                 .collect::<anyhow::Result<Vec<_>>>()?;
-            let p = changelog::publish(pool, &media_dir, &bundle.markdown, &media, every_start).await?;
+            let p = changelog::publish_at(pool, &media_dir, &bundle.markdown, &media, every_start, at).await?;
             let action = if every_start { "changelog.publish_every_start" } else { "changelog.publish" };
             store::audit(
                 pool,

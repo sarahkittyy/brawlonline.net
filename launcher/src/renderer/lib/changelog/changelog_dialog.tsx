@@ -46,7 +46,13 @@ export const ChangelogDialog = React.memo(function ChangelogDialog() {
         if (!everyStart && !pending) {
           return;
         }
-        if (!latest || (!everyStart && !isNewChangelog(latest.publishedAt, seenAt, __DATE__))) {
+        if (!latest) {
+          // None published yet: asked again at the next start (changelogPending stays). The first
+          // push with patch notes publishes them only once its server deploy is done, dated
+          // before the push, so a launcher updated sooner still shows them at its next start.
+          return;
+        }
+        if (!everyStart && !isNewChangelog(latest.publishedAt, seenAt, __DATE__)) {
           void markShown();
           return;
         }

@@ -69,5 +69,20 @@ async fn changelogs_publish_and_latest() {
     assert_eq!(latest["changelog"]["id"].as_i64(), Some(p2.id));
     assert_eq!(latest["changelog"]["everyStart"], false);
 
+    // The board's first push with patch notes: published once that push has deployed pp-admin,
+    // dated just before it (so the launchers it builds show them); never ahead, at most 2 days back.
+    let before_push = chrono::Utc::now() - chrono::Duration::minutes(9);
+    let p3 =
+        changelog::publish_at(&s.pool, &media_dir, "# Launcher 0.3.1", &[], false, Some(before_push)).await.unwrap();
+    assert!((p3.published_at - before_push).num_milliseconds().abs() < 5, "{} vs {before_push}", p3.published_at);
+    // Latest is by date: here the one published a moment ago is newer (on prod it is the only one).
+    let (_, latest) = s.get("/v1/changelogs/latest", None).await;
+    assert_eq!(latest["changelog"]["id"].as_i64(), Some(p2.id), "{latest}");
+    assert!(changelog::list(&s.pool).await.unwrap().iter().any(|r| r.id == p3.id && r.published_at == p3.published_at));
+    let ahead = chrono::Utc::now() + chrono::Duration::minutes(10);
+    assert!(err(changelog::publish_at(&s.pool, &media_dir, "x", &[], false, Some(ahead)).await).contains("future"));
+    let old = chrono::Utc::now() - chrono::Duration::days(3);
+    assert!(err(changelog::publish_at(&s.pool, &media_dir, "x", &[], false, Some(old)).await).contains("2 days"));
+
     let _ = std::fs::remove_dir_all(&media_dir);
 }

@@ -81,6 +81,29 @@ pub async fn publish(
     media: &[MediaFile],
     every_start: bool,
 ) -> anyhow::Result<Published> {
+    publish_at(pool, media_dir, markdown, media, every_start, None).await
+}
+
+/// How far back [`publish_at`] may date a changelog.
+pub const MAX_BACKDATE: chrono::Duration = chrono::Duration::days(2);
+
+/// [`publish`], dated `at` instead of now (at most [`MAX_BACKDATE`] ago, never ahead): for the
+/// first push that brings patch notes, which prod's pp-admin can publish only once that push has
+/// deployed it, dated just before the push so the launchers built from it show them
+/// (docs/design/changelog.md, "The first push").
+pub async fn publish_at(
+    pool: &PgPool,
+    media_dir: &Path,
+    markdown: &str,
+    media: &[MediaFile],
+    every_start: bool,
+    at: Option<DateTime<Utc>>,
+) -> anyhow::Result<Published> {
+    if let Some(at) = at {
+        let now = Utc::now();
+        anyhow::ensure!(at <= now + chrono::Duration::minutes(1), "--published-at {at} is in the future");
+        anyhow::ensure!(at >= now - MAX_BACKDATE, "--published-at {at} is more than 2 days ago");
+    }
     anyhow::ensure!(!markdown.trim().is_empty(), "the changelog is empty");
     anyhow::ensure!(markdown.len() <= MAX_CHANGELOG_BYTES, "a changelog is at most 1 MB of text");
     let mut md = markdown.to_string();
@@ -128,12 +151,15 @@ pub async fn publish(
     if every_start {
         sqlx::query("DELETE FROM changelogs WHERE every_start").execute(&mut *tx).await?;
     }
-    let (id, published_at): (i64, DateTime<Utc>) =
-        sqlx::query_as("INSERT INTO changelogs (body_md, every_start) VALUES ($1, $2) RETURNING id, published_at")
-            .bind(&md)
-            .bind(every_start)
-            .fetch_one(&mut *tx)
-            .await?;
+    let (id, published_at): (i64, DateTime<Utc>) = sqlx::query_as(
+        "INSERT INTO changelogs (body_md, every_start, published_at) VALUES ($1, $2, COALESCE($3, now()))
+             RETURNING id, published_at",
+    )
+    .bind(&md)
+    .bind(every_start)
+    .bind(at)
+    .fetch_one(&mut *tx)
+    .await?;
     tx.commit().await?;
     Ok(Published { id, published_at, written })
 }
