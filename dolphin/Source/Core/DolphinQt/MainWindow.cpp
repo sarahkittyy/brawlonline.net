@@ -1091,9 +1091,9 @@ bool MainWindow::RequestStop(bool ask)
   else
     FullScreen();
 
-  // Brawl Online: an Esc or a click that would end the game asks first, so a stray Esc isn't
-  // taken for a crash (staging 2026-11-25: the game "crashed" = the Stop hotkey). Not in the
-  // playback Dolphin, where closing a replay's window is how a replay ends.
+  // Brawl Online: with Confirm on Stop turned on (off by default: bug #347, the box read as an
+  // error and the window as one that won't close), only an Esc or a click that would end the
+  // game asks. Not in the playback Dolphin, where closing a replay's window ends the replay.
   bool confirm_on_stop =
       ask && Config::Get(Config::MAIN_CONFIRM_ON_STOP) && !Gprb::Replay::Playback::Following();
 #ifdef RC_CLIENT_SUPPORTS_RAINTEGRATION
