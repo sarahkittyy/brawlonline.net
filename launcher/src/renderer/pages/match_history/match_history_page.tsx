@@ -332,32 +332,37 @@ const PlayerCell = ({
   const team = player.team;
   return (
     <div>
-      {team != null && TEAM_COLORS[team] && (
-        <span
-          title={teamName(team)}
-          aria-label={teamName(team)}
-          style={{
-            display: "inline-block",
-            width: 8,
-            height: 8,
-            borderRadius: "50%",
-            marginRight: 6,
-            verticalAlign: "middle",
-            backgroundColor: TEAM_COLORS[team],
-          }}
+      {/* One flex row, centred: an inline dot beside the name's inline-flex box sat on the text's baseline,
+          lower than the name (the rank badge sets that box's baseline). */}
+      <div style={{ display: "flex", alignItems: "center", minWidth: 0 }}>
+        {team != null && TEAM_COLORS[team] && (
+          <span
+            title={teamName(team)}
+            aria-label={teamName(team)}
+            style={{
+              flexShrink: 0,
+              width: 8,
+              height: 8,
+              borderRadius: "50%",
+              marginRight: 6,
+              backgroundColor: TEAM_COLORS[team],
+            }}
+          />
+        )}
+        <UserName
+          user={{ ...player, displayName: playerName(player) }}
+          showBadge={true}
+          profileLink={player.displayName !== ""}
         />
-      )}
-      <UserName
-        user={{ ...player, displayName: playerName(player) }}
-        showBadge={true}
-        profileLink={player.displayName !== ""}
-      />
-      {showPlace && player.place != null && (
-        <span style={{ marginLeft: 8, fontWeight: "bold" }}>{formatPlace(player.place)}</span>
-      )}
-      {showWins && (
-        <span style={{ marginLeft: 8, color: "var(--text-secondary)" }}>{Messages.twosWins(player.wins)}</span>
-      )}
+        {showPlace && player.place != null && (
+          <span style={{ marginLeft: 8, fontWeight: "bold", whiteSpace: "nowrap" }}>{formatPlace(player.place)}</span>
+        )}
+        {showWins && (
+          <span style={{ marginLeft: 8, color: "var(--text-secondary)", whiteSpace: "nowrap" }}>
+            {Messages.twosWins(player.wins)}
+          </span>
+        )}
+      </div>
       {player.ratingHidden && (
         <div style={{ fontSize: 12, color: "var(--text-secondary)" }} title={Messages.ratingHidden()}>
           {HIDDEN_RATING}
