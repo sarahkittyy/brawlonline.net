@@ -1,0 +1,21 @@
+# Asks whether Sarah's Mac runner is there: client.yml's mac-runner job starts this and waits up to
+# 90 s for its one job to start on the Mac (labels as the macos job's). Not started by then: the
+# run is cancelled and the macOS build goes to Namespace. docs/ci.md "Sarah's Mac".
+name: mac-ping
+run-name: mac ping ${{ inputs.nonce }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      nonce:
+        description: "The asking run (run id-attempt), to find this run again"
+        required: true
+
+permissions: {}
+
+jobs:
+  ping:
+    runs-on: [self-hosted, macOS, ARM64, brawlmac]
+    timeout-minutes: 2
+    steps:
+      - run: echo "here"

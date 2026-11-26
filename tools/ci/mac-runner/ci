@@ -1,0 +1,97 @@
+#!/bin/bash
+# ~/runners/ci: the GitHub Actions runners on this Mac. docs/ci.md "Sarah's Mac".
+# bash 3.2 (macOS's own).
+set -euo pipefail
+R="$HOME/runners"
+S="$R/state"
+mkdir -p "$S"
+
+usage() {
+  cat <<'EOF'
+ci status              what runs now, and why
+ci on                  run the runners (only on a home network)
+ci off                 stop them (a job they are running fails)
+ci awake on|off        keep the Mac awake on AC power while the runners run (default on)
+ci home                count the network the Mac is on now as home
+ci add <owner/repo> <registration token>
+                       one more repository's runner (the token: that repository's
+                       Settings > Actions > Runners > New self-hosted runner, valid 1 hour)
+ci log                 the supervisor's log
+EOF
+}
+
+router_mac() {
+  local gw mac
+  gw="$(route -n get default 2>/dev/null | awk '/gateway:/ { print $2 }')"
+  [ -n "$gw" ] || return 0
+  ping -c 1 -t 1 "$gw" >/dev/null 2>&1 || true
+  arp -n "$gw" 2>/dev/null | awk '$4 ~ /:/ { print $4; exit }'
+}
+
+wait_applied() { # the supervisor looks every 10 s; stopping a runner takes up to 15 s more
+  local i
+  sleep 11
+  for i in $(seq 1 20); do
+    [ -f "$S/enabled" ] && break
+    pgrep -f "$R/.*/bin/Runner.Listener" >/dev/null 2>&1 || break
+    sleep 1
+  done
+  status
+}
+
+status() {
+  local d repo state job
+  if launchctl print "gui/$(id -u)/net.brawlonline.runners" >/dev/null 2>&1; then :; else
+    echo "The supervisor (LaunchAgent net.brawlonline.runners) is not loaded: run ~/runners/setup.sh"
+  fi
+  echo "Switched: $([ -f "$S/enabled" ] && echo on || echo off)    keep awake on AC: $([ -f "$S/awake" ] && echo on || echo off)"
+  echo "Now: $(cat "$S/now" 2>/dev/null || echo '?')"
+  for d in "$R"/*/; do
+    d="${d%/}"
+    [ -f "$d/.runner" ] || continue
+    repo="$(sed -n 's/.*"gitHubUrl": *"https:\/\/github.com\/\([^"]*\)".*/\1/p' "$d/.runner")"
+    state=stopped
+    if p="$(cat "$d/.supervisor-pid" 2>/dev/null)" && kill -0 "$p" 2>/dev/null; then state=running; fi
+    job=""
+    pgrep -f "$d/bin/Runner.Worker" >/dev/null 2>&1 && job=", building"
+    printf '  %-16s %-34s %s%s  (%s)\n' "$(basename "$d")" "$repo" "$state" "$job" "$(du -sh "$d" 2>/dev/null | cut -f1)"
+  done
+}
+
+cmd="${1:-status}"
+case "$cmd" in
+  status) status ;;
+  on) touch "$S/enabled"; echo "On (applies within 10 s)"; wait_applied ;;
+  off) rm -f "$S/enabled"; echo "Off (applies within 10 s)"; wait_applied ;;
+  awake)
+    case "${2:-}" in
+      on) touch "$S/awake" ;;
+      off) rm -f "$S/awake" ;;
+      *) usage; exit 1 ;;
+    esac
+    status ;;
+  home)
+    mac="$(router_mac)"
+    [ -n "$mac" ] || { echo "No router found (no network?)"; exit 1; }
+    grep -qixF "$mac" "$S/home-routers" 2>/dev/null || echo "$mac" >>"$S/home-routers"
+    echo "Home routers:"; sed 's/^/  /' "$S/home-routers" ;;
+  add)
+    repo="${2:?owner/repo}"; token="${3:?registration token}"
+    name="$(basename "$repo" | tr '[:upper:]' '[:lower:]')"
+    d="$R/$name"
+    [ ! -e "$d/.runner" ] || { echo "$d already has a runner"; exit 1; }
+    src=""
+    for x in "$R"/*/; do [ -f "$x/.runner" ] && { src="${x%/}"; break; }; done
+    [ -n "$src" ] || { echo "No runner to copy the program from"; exit 1; }
+    mkdir -p "$d"
+    rsync -a --exclude '.runner' --exclude '.credentials*' --exclude '.env' --exclude '.path' \
+      --exclude '_work' --exclude '_diag' --exclude 'ci-cache' --exclude 'runner.log*' \
+      --exclude '.supervisor-pid' "$src/" "$d/"
+    (cd "$d" && ./config.sh --unattended --url "https://github.com/$repo" --token "$token" \
+      --name "sarah-mac" --labels brawlmac --work _work)
+    "$R/setup.sh" env "$d"
+    echo "Added $repo in $d (starts within 10 s if on)" ;;
+  log) tail -n 40 "$R/supervise.log" ;;
+  -h|--help|help) usage ;;
+  *) usage; exit 1 ;;
+esac

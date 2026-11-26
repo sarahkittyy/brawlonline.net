@@ -56,9 +56,11 @@
   display: inline-flex;
 }
 
+/* One line box filling the head's 16px margin, so the text sits centred between the button and the panel below
+   (Sarah's board: it sat 3px down in a 13px line, about 2px low). */
 .emissaryVersion {
   position: absolute;
-  top: calc(100% + 3px);
+  top: 100%;
   left: 0;
   right: 0;
   padding: 0;
@@ -66,7 +68,7 @@
   background: none;
   font: inherit;
   font-size: 11px;
-  line-height: 13px;
+  line-height: 16px;
   color: var(--text-secondary);
   text-align: center;
   white-space: nowrap;
