@@ -169,14 +169,19 @@ export const Unreachable = () => (
   </Frame>
 );
 
-const stream = (uid: string, displayName: string, viewers: number): TwitchStream => ({
+const stream = (
+  uid: string,
+  displayName: string,
+  viewers: number,
+  title = `${displayName} ranked grind`,
+): TwitchStream => ({
   uid,
   displayName,
   connectCode: null,
   main: null,
   login: displayName.toLowerCase(),
   twitchName: displayName,
-  title: `${displayName} ranked grind`,
+  title,
   game: "Super Smash Bros. Brawl",
   viewers,
   thumbnail: "",
@@ -192,7 +197,10 @@ const TwitchRow = ({ collapsed: initial }: { collapsed: boolean }) => {
         {...props(
           { kind: "ready", games: mockGames },
           {
-            streams: [stream("a1", "Drsmsh", 40), stream("b1", "Sarah", 3)],
+            streams: [
+              stream("a1", "Drsmsh", 40, "the great ranked climb of 2026 / !projectpool"),
+              stream("b1", "Sarah", 3),
+            ],
             twitchAction: (
               <Button
                 size="small"

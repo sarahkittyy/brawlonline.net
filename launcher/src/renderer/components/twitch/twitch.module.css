@@ -176,10 +176,13 @@ button.panel:focus-visible {
   font-size: 12px;
 }
 
-/* Spectate's Twitch row. */
+/* Spectate's Twitch row. align-items: stretch is not the default here: in the launcher's Electron (Chromium 132) a
+   <button>'s flex items are as wide as their content, so a long title was wider than its card, never ellipsized,
+   and ran into the next card's (newer Chrome stretches them). */
 .card {
   display: flex;
   flex-direction: column;
+  align-items: stretch;
   gap: 4px;
   flex: 0 1 168px;
   min-width: 128px;
