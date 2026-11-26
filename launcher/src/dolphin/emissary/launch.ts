@@ -6,9 +6,15 @@
 //   in memory, as Dolphin's WiiSDCardAllowWrites=False);
 // - P+'s netplay codeset from that card (`/Project+/NETPLAY.GCT` + `gc.txt`) as
 //   `UserData/Codes/RSBE01.gct`: the recomp installs codes itself, there is no launcher DOL;
-// - the Brawl save template (`<netplay>/pplus/NetplaySave`, the one Dolphin's netplay NAND gets) as
-//   `UserData/NAND`, fresh each start: unlocks and rules are part of the match setup both
-//   engines compare;
+// - the Brawl save template (`<netplay>/pplus/NetplaySave`) as `UserData/NAND`, fresh each start,
+//   with the netplay Dolphin's own Brawl save in it: `title/00010000/52534245/data` is a link
+//   (a junction on Windows) to that folder of the netplay NAND, so the name tags, rules and records
+//   are the same in both engines and what either game writes is in the other's next start (Sarah's
+//   board: "the recomp should share the sd card or whatever as dolphin, so the name tags are on
+//   both"). Dolphin plays online on that save too (only Other Games' whole-machine sessions run on a
+//   temporary NAND), and nothing online reads the save beyond what the session syncs
+//   (docs/game-code.md, "Online determinism"). Without a save P+ boots with there, the template's
+//   own copy plays, as before;
 // - Config.toml: the extracted disc, and the game's own 16:9 mode (Dolphin pins SYSCONF IPL.AR on;
 //   the game frames its camera, and screen KOs, by it), whatever the player chose in F10;
 // - BRAWL_ONLINE_CORE: the netplay Dolphin's User folder (Config/Dolphin.ini with the [Online]
@@ -25,6 +31,8 @@ import fs from "fs";
 import path from "path";
 import { removeTree } from "utils/remove_tree";
 
+import { brawlSaveDir, isUsableBrawlSave, listBrawlSaveFiles } from "../install/brawl_save";
+
 export const NETPLAY_CODESET = "/Project+/NETPLAY.GCT";
 export const NETPLAY_GECKO_CONFIG = "/Project+/gc.txt";
 
@@ -37,6 +45,8 @@ export type EmissaryLaunchInput = {
   sdCardImage: string;
   /** The Brawl save template folder (`<netplay>/pplus/NetplaySave`), holding `title/...`. */
   netplaySave: string;
+  /** The netplay Dolphin's NAND root (`<User>/Wii`, or its NANDRootPath): its Brawl save is the recomp's. */
+  netplayNand: string;
   /** The netplay Dolphin's User folder: the core's (BRAWL_ONLINE_CORE). */
   onlineUserFolder: string;
 };
@@ -137,8 +147,43 @@ async function linkOrReplace(target: string, link: string) {
   }
 }
 
+/**
+ * Takes away the link `linkBrawlSave` made in `nand` (never the folder it points to). Node's
+ * recursive rm doesn't follow a link either; this keeps the player's save out of every delete of
+ * the recomp's folder whatever does it.
+ */
+export async function unlinkBrawlSave(nand: string): Promise<void> {
+  const link = brawlSaveDir(nand);
+  const st = await fs.promises.lstat(link).catch(() => null);
+  if (st?.isSymbolicLink()) {
+    await fs.promises.unlink(link);
+  }
+}
+
+/**
+ * Makes `nand`'s Brawl save folder a link to the one in `netplayNand` when that one is a save P+
+ * boots with (the launcher seeds it before Play); returns whether it did. Otherwise `nand` keeps
+ * what it has (the template's copy).
+ */
+export async function linkBrawlSave(nand: string, netplayNand: string): Promise<boolean> {
+  const own = path.resolve(brawlSaveDir(netplayNand));
+  const files = await listBrawlSaveFiles(own);
+  if (!files || !isUsableBrawlSave(files)) {
+    return false;
+  }
+  await unlinkBrawlSave(nand);
+  const link = brawlSaveDir(nand);
+  await removeTree(link);
+  await fs.promises.mkdir(path.dirname(link), { recursive: true });
+  await fs.promises.symlink(own, link, "junction");
+  return true;
+}
+
 /** Prepares `input.userData` for a start; returns the environment the program needs. */
-export async function prepareEmissaryLaunch(input: EmissaryLaunchInput): Promise<Record<string, string>> {
+export async function prepareEmissaryLaunch(
+  input: EmissaryLaunchInput,
+  log?: (message: string) => void,
+): Promise<Record<string, string>> {
   const { userData } = input;
   await fs.promises.mkdir(path.join(userData, "Codes"), { recursive: true });
 
@@ -157,8 +202,15 @@ export async function prepareEmissaryLaunch(input: EmissaryLaunchInput): Promise
   }
 
   const nand = path.join(userData, "NAND");
+  await unlinkBrawlSave(nand);
   await removeTree(nand);
   await fs.promises.cp(input.netplaySave, nand, { recursive: true });
+  const shared = await linkBrawlSave(nand, input.netplayNand);
+  log?.(
+    shared
+      ? `EmissaryRecomp plays with the netplay Dolphin's Brawl save (${brawlSaveDir(input.netplayNand)})`
+      : `EmissaryRecomp: no Brawl save in ${brawlSaveDir(input.netplayNand)}; it plays with P+'s template`,
+  );
 
   return { BRAWL_SD_VOLATILE_WRITES: "1", BRAWL_ONLINE_CORE: path.resolve(input.onlineUserFolder) };
 }

@@ -158,7 +158,7 @@ The recomp and Dolphin must simulate identically and speak the same protocol, so
 
 ### 7.5 What the launcher needs from EmissaryRecomp
 
-Done already (2026-11-12): the read-only SD card (`BRAWL_SD_VOLATILE_WRITES=1` in PR #2: the image is opened read-only, the game's writes stay in memory); the stage-start hook (fixed differently in PR #2); the launcher's `join-room.json` / `game-status.json` (kalomaze's companion speaks them, Direct and Unranked only). The launcher sets up the rest itself (`dolphin/emissary/launch.ts`): the card as `UserData/sd.raw` (a hard link), `NETPLAY.GCT` + `gc.txt` from the card as `UserData/Codes/`, the netplay save as `UserData/NAND`, `dvd_root` and the 16:9 mode in `Config.toml`.
+Done already (2026-11-12): the read-only SD card (`BRAWL_SD_VOLATILE_WRITES=1` in PR #2: the image is opened read-only, the game's writes stay in memory); the stage-start hook (fixed differently in PR #2); the launcher's `join-room.json` / `game-status.json` (kalomaze's companion speaks them, Direct and Unranked only). The launcher sets up the rest itself (`dolphin/emissary/launch.ts`): the card as `UserData/sd.raw` (a hard link), `NETPLAY.GCT` + `gc.txt` from the card as `UserData/Codes/`, the netplay save as `UserData/NAND` with the netplay Dolphin's own Brawl save linked in (below), `dvd_root` and the 16:9 mode in `Config.toml`.
 
 Still needed:
 
@@ -193,7 +193,7 @@ At most one online client runs. `netplayOpened` in the store becomes `onlineClie
 | `-u <netplay>/User`, `User/Online/user.json` (account) | the same `User/Online` folder as its online dir (the account, the handoff files) |
 | `pponline-sd/sd.raw` (P+ card + `PPOnline.rel`), read-only | the same image, read-only, codes from its `NETPLAY.GCT` |
 | `Project+ Netplay Launcher.dol` boot | not needed: the runtime installs the codes itself |
-| `NetplaySave` copied into the Wii NAND at boot | the same template copied into `user/NAND` at each launch (the save decides unlocks and rules, which the setup key compares) |
+| `NetplaySave` copied into the Wii NAND at boot | the same template copied into `user/NAND` at each launch, its `title/00010000/52534245/data` a link (a junction on Windows) to the netplay Dolphin's own Brawl save (`<User>/Wii` or NANDRootPath), so name tags, rules and records are the same in both and what either writes the other reads next (Sarah's board, 2026-11-25: "the recomp should share the sd card or whatever as dolphin, so the name tags are on both"). Dolphin plays P+ online on that save too, and nothing online reads the save beyond what the session syncs (game-code.md, "Online determinism"). Without a save P+ boots with there, the template's copy plays. Removing the add-on takes the link away first; Node's recursive delete doesn't follow it either. Checked: a recomp on a save linked across drives listed its tags, wrote a new tag (autosv0/1) through the link, and a Dolphin on that save listed it |
 | `-C` overrides: mm/accounts URLs, music, input delay profile, potato mode, SYSCONF | the config file (§7.5.1): URLs, music, input delay profile; potato mode maps to resolution 1x + no interpolation |
 | `game-status.json` written by Dolphin | written by the recomp side, same schema |
 

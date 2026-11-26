@@ -31,6 +31,7 @@ import { throttleProgress } from "utils/copy_file";
 import { removeTree } from "utils/remove_tree";
 
 import { asDiskSpaceError, ensureFreeSpace } from "../install/disk_space";
+import { unlinkBrawlSave } from "./launch";
 import type {
   EmissaryFallback,
   EmissaryJob,
@@ -1004,6 +1005,8 @@ export class EmissaryRecomp {
       throw new EmissaryError("EmissaryRecomp is being downloaded. Cancel that first.");
     }
     await this.lock.runExclusive(async () => {
+      // Its Brawl save is a link to the netplay Dolphin's (launch.ts): the link goes, the save stays
+      await unlinkBrawlSave(path.join(this.userData, "NAND"));
       await removeTree(this.opts.root);
     });
     this.lastError = null;

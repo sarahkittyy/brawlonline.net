@@ -6,6 +6,7 @@ import path from "path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ZipFile } from "yazl";
 
+import { BRAWL_BANNER_SIZE, brawlSaveDir } from "../install/brawl_save";
 import {
   compareTags,
   EMISSARY_API,
@@ -21,7 +22,7 @@ import {
   systemTar,
   unpackArchive,
 } from "./emissary";
-import { configIniOverrides, emissaryConfig, setTomlValue } from "./launch";
+import { configIniOverrides, emissaryConfig, linkBrawlSave, setTomlValue, unlinkBrawlSave } from "./launch";
 import type { EmissaryJob, EmissaryManifest, EmissaryState } from "./types";
 import { EMISSARY_PROTOCOL } from "./types";
 
@@ -134,6 +135,68 @@ describe("launch config", () => {
 
   it("keeps a wide aspect the player chose", () => {
     expect(emissaryConfig("[video]\naspect_mode = 2\n", "/g")).toContain("aspect_mode = 2");
+  });
+});
+
+describe("the Brawl save", () => {
+  let tmp: string;
+  beforeEach(async () => {
+    tmp = await fs.promises.mkdtemp(path.join(os.tmpdir(), "emissary-save-"));
+  });
+  afterEach(async () => {
+    await fs.promises.rm(tmp, { recursive: true, force: true });
+  });
+
+  /** A NAND root with a Brawl save of `files` (banner.bin of the game's size unless given). */
+  async function nandWith(name: string, files: Record<string, string | Buffer>): Promise<string> {
+    const root = path.join(tmp, name);
+    const dir = brawlSaveDir(root);
+    await fs.promises.mkdir(dir, { recursive: true });
+    for (const [file, data] of Object.entries(files)) {
+      await fs.promises.writeFile(path.join(dir, file), data);
+    }
+    return root;
+  }
+  const banner = Buffer.alloc(BRAWL_BANNER_SIZE);
+
+  it("is the netplay Dolphin's: what either game writes is the other's", async () => {
+    const netplay = await nandWith("netplay", { "banner.bin": banner, "autosv0.bin": "dolphin's tags" });
+    const nand = await nandWith("recomp", { "banner.bin": banner, "autosv0.bin": "template" });
+    expect(await linkBrawlSave(nand, netplay)).toBe(true);
+    const save = brawlSaveDir(nand);
+    expect((await fs.promises.lstat(save)).isSymbolicLink()).toBe(true);
+    expect(await fs.promises.readFile(path.join(save, "autosv0.bin"), "utf8")).toBe("dolphin's tags");
+    await fs.promises.writeFile(path.join(save, "autosv1.bin"), "the recomp's new tag");
+    expect(await fs.promises.readFile(path.join(brawlSaveDir(netplay), "autosv1.bin"), "utf8")).toBe(
+      "the recomp's new tag",
+    );
+    // Linked again at the next start
+    expect(await linkBrawlSave(nand, netplay)).toBe(true);
+    expect(await fs.promises.readFile(path.join(save, "autosv1.bin"), "utf8")).toBe("the recomp's new tag");
+  });
+
+  it("stays when the recomp's NAND or its whole folder is deleted", async () => {
+    const netplay = await nandWith("netplay", { "banner.bin": banner, "autosv0.bin": "tags" });
+    const nand = await nandWith("recomp", {});
+    expect(await linkBrawlSave(nand, netplay)).toBe(true);
+    await fs.promises.rm(nand, { recursive: true, force: true });
+    expect((await fs.promises.readdir(brawlSaveDir(netplay))).sort()).toEqual(["autosv0.bin", "banner.bin"]);
+
+    const nand2 = await nandWith("recomp2", {});
+    expect(await linkBrawlSave(nand2, netplay)).toBe(true);
+    await unlinkBrawlSave(nand2);
+    expect(fs.existsSync(brawlSaveDir(nand2))).toBe(false);
+    expect((await fs.promises.readdir(brawlSaveDir(netplay))).sort()).toEqual(["autosv0.bin", "banner.bin"]);
+  });
+
+  it("is the template's when the netplay NAND has no save P+ boots with", async () => {
+    const nand = await nandWith("recomp", { "banner.bin": banner, "autosv0.bin": "template" });
+    expect(await linkBrawlSave(nand, path.join(tmp, "none"))).toBe(false);
+    const broken = await nandWith("broken", { "banner.bin": "short", "autosv0.bin": "x" });
+    expect(await linkBrawlSave(nand, broken)).toBe(false);
+    const save = brawlSaveDir(nand);
+    expect((await fs.promises.lstat(save)).isSymbolicLink()).toBe(false);
+    expect(await fs.promises.readFile(path.join(save, "autosv0.bin"), "utf8")).toBe("template");
   });
 });
 

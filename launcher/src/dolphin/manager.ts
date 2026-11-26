@@ -1018,13 +1018,17 @@ export class DolphinManager {
         `EmissaryRecomp (test mode): Config gets ${overrides.map((o) => `${o.file} ${o.section}.${o.key}`).join(", ")}`,
       );
     }
-    const env = await prepareEmissaryLaunch({
-      userData: emissary.userData,
-      gameFolder: emissary.gameFolder,
-      sdCardImage,
-      netplaySave: netplaySaveStore(projectPlusStoreFolder(this.netplayFolder())),
-      onlineUserFolder: installation.userFolder,
-    });
+    const env = await prepareEmissaryLaunch(
+      {
+        userData: emissary.userData,
+        gameFolder: emissary.gameFolder,
+        sdCardImage,
+        netplaySave: netplaySaveStore(projectPlusStoreFolder(this.netplayFolder())),
+        netplayNand: await installation.nandRoot(),
+        onlineUserFolder: installation.userFolder,
+      },
+      (message) => log.info(message),
+    );
     // Dolphin's Controllers window, which the recomp opens over the game (its Controls menu): the
     // netplay Dolphin, on the same User folder, as configureDolphin starts it.
     const dolphinExe = await installation.findDolphinExecutable().catch((err) => {
