@@ -10,6 +10,7 @@
 
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <optional>
@@ -311,15 +312,35 @@ void SanitizePortValues(std::array<u8, N>& pv)
   pv[0x3B] &= 0x01;
 }
 
-// A player's special-mode picks (ppom.h PortExtra, 0x48 bytes; docs/design/special-rules.md) from
-// the peer: hp (u16 at +0) above MAX_PICKED_HP is none; the All-Star roster (count at +2, then
-// ROSTER_MAX entries of {gmCharacterKind, P+'s colour, the CSS's costume, CSS id} from +8, P+'s
-// All-Star table's bytes) keeps its entries up to the first one the game cannot load (a
+// A player's special-mode picks (Session::PortExtra, 0xD0 bytes; docs/design/special-rules.md)
+// from the peer: hp (u16 at +0) above MAX_PICKED_HP is none; the All-Star roster (count at +2,
+// then ROSTER_MAX entries of {gmCharacterKind, P+'s colour, the CSS's costume, CSS id} from +8,
+// P+'s All-Star table's bytes) keeps its entries up to the first one the game cannot load (a
 // character, colour, costume or CSS id out of range), its count at most that, and every other
 // byte zero.
+// ROSTER_MAX is P+'s own: its CSS appends to the table (0xA0 bytes a port, 3 a character, an 0xCC
+// after the last, 0xFF at +0x99) until the next would reach +0x99, 50 characters. Until bug #351
+// 16 went online (ROSTER_V9, PPOM v9-v12's PortExtra, 0x48 bytes): a 42-stock All-Star of the whole
+// cast came back to the first character after the 16th.
 constexpr u16 MAX_PICKED_HP = 999;
-constexpr size_t ROSTER_MAX = 16;
+constexpr size_t ROSTER_MAX = 50;
+constexpr size_t ROSTER_V9 = 16;
 constexpr size_t PX_HP = 0, PX_ROSTER_COUNT = 2, PX_ROSTER = 8, PX_ENTRY = 4;
+constexpr size_t PX_V9_SIZE = PX_ROSTER + ROSTER_V9 * PX_ENTRY;  // 0x48
+// The bytes of a PortExtra that are sent (a lock-in's or the host's session `px`): v9's 0x48 while
+// the roster fits in them, so that a roster of up to 16 is sent as before, else up to its last
+// entry. GameplaySession.cpp PortExtraFromHex takes any of those sizes (zero after them).
+template <size_t N>
+size_t PortExtraSentSize(const std::array<u8, N>& px)
+{
+  static_assert(N == PX_ROSTER + ROSTER_MAX * PX_ENTRY);
+  const size_t count = std::min<size_t>(px[PX_ROSTER_COUNT], ROSTER_MAX);
+  return count <= ROSTER_V9 ? PX_V9_SIZE : PX_ROSTER + count * PX_ENTRY;
+}
+constexpr bool PortExtraSizeOk(size_t n)
+{
+  return n >= PX_V9_SIZE && n <= PX_ROSTER + ROSTER_MAX * PX_ENTRY && (n - PX_ROSTER) % PX_ENTRY == 0;
+}
 // An entry's colour byte: the costume's file, FitX<NN>.pac (P+'s costume list gives it: not the
 // costume number, Falcon's costume 17 is file 44, bug #184), or P+'s AltZ / AltR mark (0x3D /
 // 0x3E). Up to 99, the files' two digits.

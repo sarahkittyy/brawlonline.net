@@ -31,7 +31,8 @@ namespace AllStar {
             int n = present ? ex.rosterCount : 0;
             if (n > PPOM::ROSTER_MAX) n = PPOM::ROSTER_MAX;
             for (int k = 0; k < n; k++) {
-                const PPOM::RosterEntry& e = ex.roster[k];
+                const PPOM::RosterEntry& e =
+                    k < PPOM::ROSTER_BASE ? ex.roster[k] : se.more[i].roster[k - PPOM::ROSTER_BASE];
                 a[3 * k] = e.charKind;
                 a[3 * k + 1] = e.colour;
                 a[3 * k + 2] = e.costume;

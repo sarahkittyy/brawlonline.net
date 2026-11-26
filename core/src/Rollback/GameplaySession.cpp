@@ -1438,6 +1438,13 @@ std::string Hex(const std::vector<u8>& v)
   return out;
 }
 
+// A player's special-mode picks as sent (PeerData::PortExtraSentSize: a roster of up to 16 as
+// before bug #351).
+std::string PortExtraHex(const PortExtra& px)
+{
+  return Hex({px.begin(), px.begin() + PeerData::PortExtraSentSize(px)});
+}
+
 // gfTaskScheduler lists (see docs: category lists +0x14 next +8 prev +4; group lists +0x58 next
 // +0x10 prev +0xC; priority lists +0xF8 next +0x18 prev +0x14). Task name pointer at +0.
 struct TaskListKind
@@ -2183,20 +2190,28 @@ picojson::value LockJson(const LockIn& l)
   // The special-mode picks (docs/design/special-rules.md), only when there are any: every other
   // lock-in is as before.
   if (std::any_of(l.port_extra.begin(), l.port_extra.end(), [](u8 b) { return b != 0; }))
-    o["px"] = picojson::value(Hex({l.port_extra.begin(), l.port_extra.end()}));
+    o["px"] = picojson::value(PortExtraHex(l.port_extra));
   return picojson::value(o);
 }
 
-// Special-mode picks from the peer: exactly PORT_EXTRA_SIZE bytes of hex, else none.
+// Special-mode picks from the peer: PeerData::PortExtraSentSize's bytes as hex (v9's 0x48, an
+// older build's always, or up to the roster's last entry), zero after them; else none.
 PortExtra PortExtraFromHex(const picojson::value* v)
 {
   PortExtra px{};
   if (!v || !v->is<std::string>())
     return px;
-  const auto bytes = PeerData::ParseHex(v->get<std::string>(), px.size());
+  const std::string& hex = v->get<std::string>();
+  if (hex.size() % 2 != 0 || !PeerData::PortExtraSizeOk(hex.size() / 2))
+    return px;
+  const auto bytes = PeerData::ParseHex(hex, hex.size() / 2);
   if (!bytes)
     return px;
   std::copy(bytes->begin(), bytes->end(), px.begin());
+  // (A count past the entries sent would play the zero bytes after them: Mario.)
+  const size_t sent = (bytes->size() - PeerData::PX_ROSTER) / PeerData::PX_ENTRY;
+  if (px[PeerData::PX_ROSTER_COUNT] > sent)
+    px[PeerData::PX_ROSTER_COUNT] = static_cast<u8>(sent);
   PeerData::SanitizePortExtra(px);
   return px;
 }
@@ -2301,7 +2316,7 @@ picojson::value SetupJson(const MatchSetup& st)
   {
     const auto& pl = st.players[port];
     if (pl.present && std::any_of(pl.port_extra.begin(), pl.port_extra.end(), [](u8 b) { return b != 0; }))
-      extra[std::to_string(port)] = picojson::value(Hex({pl.port_extra.begin(), pl.port_extra.end()}));
+      extra[std::to_string(port)] = picojson::value(PortExtraHex(pl.port_extra));
   }
   if (!extra.empty())
     o["px"] = picojson::value(extra);
@@ -9295,7 +9310,8 @@ std::optional<std::string> ArmPlayback(std::shared_ptr<const Replay::File> file,
   };
   const auto init = hex("init", PeerData::INIT_BLOCK_SIZE, PeerData::INIT_BLOCK_SIZE);
   const auto key = hex("setup_key", 1, 16 * 1024);
-  // (Any plugin's SESSION: v9's 0x420 bytes since 2026-10-27, PlaybackSession takes each size.)
+  // (Any plugin's SESSION: v9's 0x420 bytes since 2026-10-27, v13's 0x640 since bug #351,
+  // PlaybackSession takes each size.)
   const auto session =
       hex("session", Online::GameBridge::SESSION_MIN_SIZE, Online::GameBridge::SESSION_MAX_SIZE);
   const auto sync = get("sync") ? SyncBlockFromJson(*get("sync")) : std::nullopt;

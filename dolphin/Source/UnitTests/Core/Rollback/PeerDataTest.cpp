@@ -402,10 +402,10 @@ TEST(PeerData, PortValuesAndNames)
 // up to its first entry the game could not load, every other byte zero.
 TEST(PeerData, PortExtra)
 {
-  std::array<u8, 0x48> px;
+  std::array<u8, 0xD0> px;
   px.fill(0xFF);
   SanitizePortExtra(px);
-  EXPECT_EQ(px, (std::array<u8, 0x48>{}));
+  EXPECT_EQ(px, (std::array<u8, 0xD0>{}));
   px[PX_HP] = 0x01;
   px[PX_HP + 1] = 0x2C;  // 300
   px[PX_ROSTER_COUNT] = 4;
@@ -447,6 +447,35 @@ TEST(PeerData, PortExtra)
   px[PX_ROSTER + 1 * PX_ENTRY + 3] = 0x40;
   SanitizePortExtra(px);
   EXPECT_EQ(px[PX_ROSTER_COUNT], 1);
+}
+
+// Bug #351: a roster of the whole cast (42) goes online whole, up to P+'s own 50; sent as before
+// (0x48 bytes) while it has 16 at most, so that older builds read it as they did.
+TEST(PeerData, PortExtraLongRoster)
+{
+  EXPECT_EQ(ROSTER_MAX, 50u);
+  std::array<u8, 0xD0> px{};
+  px[PX_ROSTER_COUNT] = 42;
+  for (size_t i = 0; i < 42; ++i)
+  {
+    px[PX_ROSTER + i * PX_ENTRY] = static_cast<u8>(i < 0x12 ? i : i + 1);  // a fighter each
+    px[PX_ROSTER + i * PX_ENTRY + 3] = static_cast<u8>(i % 0x2A);
+  }
+  SanitizePortExtra(px);
+  EXPECT_EQ(px[PX_ROSTER_COUNT], 42);
+  EXPECT_EQ(PortExtraSentSize(px), PX_ROSTER + 42 * PX_ENTRY);
+  px[PX_ROSTER_COUNT] = 16;
+  EXPECT_EQ(PortExtraSentSize(px), 0x48u);
+  px[PX_ROSTER_COUNT] = 0;
+  EXPECT_EQ(PortExtraSentSize(px), 0x48u);
+  px[PX_ROSTER_COUNT] = 200;
+  EXPECT_EQ(PortExtraSentSize(px), 0xD0u);
+  EXPECT_TRUE(PortExtraSizeOk(0x48));
+  EXPECT_TRUE(PortExtraSizeOk(0x4C));
+  EXPECT_TRUE(PortExtraSizeOk(0xD0));
+  EXPECT_FALSE(PortExtraSizeOk(0x44));
+  EXPECT_FALSE(PortExtraSizeOk(0x4A));
+  EXPECT_FALSE(PortExtraSizeOk(0xD4));
 }
 
 TEST(PeerData, LeaveReasons)

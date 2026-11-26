@@ -84,7 +84,11 @@ constexpr u32 MAGIC = 0x50504F4D;  // "PPOM"
 // 12: any screen shape (docs/game-code.md, Any screen shape): LOCAL grows to 0xF8 with the shape
 // this machine shows the picture at (width / height, f32) at +0xF4, Dolphin-written every frame. A
 // v4-v11 plugin still works (it draws for 16:9, as before).
-constexpr u16 VERSION = 12;
+// 13: All-Star rosters of up to 50, P+'s own limit (bug #351: 16 went online, and a 42-stock
+// All-Star of the whole cast came back to the first character after the 16th): LOCAL grows to
+// 0x180 with the player's roster entries 16-49 (ppom.h RosterMore) at +0xF8, SESSION to 0x640 with
+// every player's at +0x420. A v4-v12 plugin still works (16 a player, as before).
+constexpr u16 VERSION = 13;
 constexpr u16 MIN_VERSION = 4;
 constexpr u32 HEADER_SIZE = 0x24;
 
@@ -107,7 +111,8 @@ constexpr u32 LOCAL_SIZE_V8 = 0x80;
 constexpr u32 LOCAL_SIZE_V9 = 0xC8;
 constexpr u32 LOCAL_SIZE_V10 = 0xF0;
 constexpr u32 LOCAL_SIZE_V11 = 0xF4;
-constexpr u32 LOCAL_SIZE = 0xF8;
+constexpr u32 LOCAL_SIZE_V12 = 0xF8;
+constexpr u32 LOCAL_SIZE = 0x180;
 // v9: the player's special-mode picks (ppom.h PortExtra), game-written with the lock-in.
 constexpr u32 L_OWN_EXTRA = 0x80;
 // v10: ppom.h SssCursor {state, page, pad[2], x s16, y s16}: the player's own (game) and the
@@ -123,9 +128,15 @@ constexpr u32 L_READY_SECONDS = 0xF1, L_READY_PORTS = 0xF2;
 // v12: the shape this machine shows the picture at, width / height (f32, big-endian): 0 = as the
 // game draws it (ppom.h Local.aspect).
 constexpr u32 L_ASPECT = 0xF4;
+// v13: ppom.h RosterMore, the player's All-Star roster entries 16-49 (Gprb::Session::PortExtra's
+// bytes from PORT_EXTRA_V9_SIZE on), game-written with the lock-in as L_OWN_EXTRA.
+constexpr u32 L_OWN_MORE = 0xF8;
+constexpr u32 PX_V9 = static_cast<u32>(Gprb::Session::PORT_EXTRA_V9_SIZE);
+constexpr u32 PX_MORE = static_cast<u32>(Gprb::Session::PORT_EXTRA_SIZE) - PX_V9;
 constexpr u32 LocalSize(u16 version)
 {
-  return version >= 12 ? LOCAL_SIZE :
+  return version >= 13 ? LOCAL_SIZE :
+         version >= 12 ? LOCAL_SIZE_V12 :
          version >= 11 ? LOCAL_SIZE_V11 :
          version >= 10 ? LOCAL_SIZE_V10 :
          version >= 9  ? LOCAL_SIZE_V9 :
@@ -155,6 +166,7 @@ constexpr u32 L_LOCK_TEAM = 0x34;
 constexpr u32 SESSION_SIZE_V5 = SESSION_MIN_SIZE;
 constexpr u32 SESSION_SIZE_V6 = 0x280;
 constexpr u32 SESSION_SIZE_V7 = 0x2C0;
+constexpr u32 SESSION_SIZE_V9 = 0x420;
 constexpr u32 SESSION_SIZE = SESSION_MAX_SIZE;
 constexpr u32 S_RULES = 0x220;  // v6: ppom.h Rules
 // v6: ppom.h RoomPlay: valid, bestOf, stageChoice, custom, code[8], name[32], setOn, setGame,
@@ -180,15 +192,21 @@ static_assert(S_STAGES == SESSION_SIZE_V6 && S_STAGES + 2 * STAGE_MASK_BYTES == 
 constexpr u32 S_SPECIAL = 0x2C0, SPX_ROWS = 0, SPX_BANS = 0x09, SPX_DSR = 0x0A,
               SPX_STRIKE_COUNT = 0x0B, SPX_STRIKES = 0x0C, SPX_MAX_STRIKES = 16, SPX_ROOM_HP = 0x1C,
               SPX_ALTERNATES = 0x24, SPECIAL_SIZE = 0x40;
-// v9: ppom.h PortExtra per in-game port (Gprb::Session::PortExtra).
+// v9: ppom.h PortExtra per in-game port (Gprb::Session::PortExtra's first PX_V9 bytes).
 constexpr u32 S_EXTRA = 0x300;
+// v13: ppom.h RosterMore per in-game port (the rest of Gprb::Session::PortExtra).
+constexpr u32 S_MORE = 0x420;
 static_assert(SPX_ROWS + SPECIAL_RULES_SIZE <= SPX_BANS && SPX_STRIKES + SPX_MAX_STRIKES == SPX_ROOM_HP &&
               SPX_ROOM_HP + 8 <= SPX_ALTERNATES && SPX_ALTERNATES < SPECIAL_SIZE);
 static_assert(S_SPECIAL == SESSION_SIZE_V7 && S_SPECIAL + SPECIAL_SIZE == S_EXTRA &&
-              S_EXTRA + 4 * Gprb::Session::PORT_EXTRA_SIZE == SESSION_SIZE);
+              S_EXTRA + 4 * PX_V9 == SESSION_SIZE_V9 && S_MORE == SESSION_SIZE_V9 &&
+              S_MORE + 4 * PX_MORE == SESSION_SIZE);
+static_assert(PX_V9 == Gprb::PeerData::PX_V9_SIZE &&
+              PX_V9 + PX_MORE == Gprb::PeerData::PX_ROSTER + Gprb::PeerData::ROSTER_MAX * Gprb::PeerData::PX_ENTRY);
 constexpr u32 SessionSize(u16 version)
 {
-  return version >= 9 ? SESSION_SIZE :
+  return version >= 13 ? SESSION_SIZE :
+         version >= 9  ? SESSION_SIZE_V9 :
          version >= 7 ? SESSION_SIZE_V7 :
          version >= 6 ? SESSION_SIZE_V6 :
                         SESSION_SIZE_V5;
@@ -249,11 +267,12 @@ constexpr u8 MODE_PAIR = 6;
 constexpr u8 TEAMS_LEGACY = 1, TEAMS_RAINBOW = 2, TEAMS_COLORS = 3;
 static_assert(L_ROOM_CREATE == L_DESYNCED + 1 && L_QUIT_LEFT == L_ROOM_CREATE + 1 &&
               L_QUIT_LEFT < LOCAL_SIZE_V8 && L_OWN_EXTRA == LOCAL_SIZE_V8 &&
-              L_OWN_EXTRA + Gprb::Session::PORT_EXTRA_SIZE == LOCAL_SIZE_V9 &&
+              L_OWN_EXTRA + PX_V9 == LOCAL_SIZE_V9 &&
               L_OWN_CURSOR == LOCAL_SIZE_V9 && L_CURSORS == L_OWN_CURSOR + CURSOR_SIZE &&
               L_CURSORS + 4 * CURSOR_SIZE == LOCAL_SIZE_V10 && L_POTATO == LOCAL_SIZE_V10 &&
               L_POTATO + 4 == LOCAL_SIZE_V11 && L_ASPECT == LOCAL_SIZE_V11 &&
-              L_ASPECT + 4 == LOCAL_SIZE);
+              L_ASPECT + 4 == LOCAL_SIZE_V12 && L_OWN_MORE == LOCAL_SIZE_V12 &&
+              L_OWN_MORE + PX_MORE == LOCAL_SIZE);
 static_assert(L_ROOM < L_DIRECT_JOIN && L_DIRECT_NUMBER + 2 == L_OWN &&
               L_DIRECT_PREFIX + DIRECT_PREFIX_LEN == L_DIRECT_NUMBER);
 static_assert(L_ROOM < L_OWN && S_ROOM_MODE < SESSION_SIZE && SP_ROOM_COSTUME < SP_PORT_VALUES &&
@@ -1768,6 +1787,21 @@ void PutRestore(std::vector<u8>& session, const Gprb::Session::Restore& r)
   PutU32(session, SESSION_RESTORE_FRAMES, std::min(r.frames_left, Gprb::Session::MAX_RESTORE_FRAMES));
 }
 
+// A player's special-mode picks into SESSION (`out`, SessionSize(version) bytes) at in-game port
+// `i`: v9's PortExtra and, for a v13 plugin, the roster's entries 16-49 in RosterMore. A v9-v12
+// plugin's PortExtra holds 16: a longer roster is cut there, as that plugin's lock-ins are.
+void PutPortExtra(std::vector<u8>& out, int i, Gprb::Session::PortExtra px, u16 version)
+{
+  if (version < 13)
+  {
+    px[Gprb::PeerData::PX_ROSTER_COUNT] =
+        std::min<u8>(px[Gprb::PeerData::PX_ROSTER_COUNT], Gprb::PeerData::ROSTER_V9);
+  }
+  std::copy_n(px.begin(), PX_V9, out.begin() + S_EXTRA + i * PX_V9);
+  if (version >= 13)
+    std::copy_n(px.begin() + PX_V9, PX_MORE, out.begin() + S_MORE + i * PX_MORE);
+}
+
 // The recorded SESSION, rebuilt from its fields: a replay is a stranger's file, so every field
 // the game reads is range-checked as GameBridge's own writes are, text is cleaned, and everything
 // else (the reserved bytes, the elimination order and quits of the match) is zero.
@@ -1886,7 +1920,7 @@ std::vector<u8> PlaybackSession(const std::vector<u8>& rec, u16 version)
   if (version >= 7 && rec.size() >= SESSION_SIZE_V7)
     std::copy(rec.begin() + S_STAGES, rec.begin() + SESSION_SIZE_V7, out.begin() + S_STAGES);
   // v9: the special rows (each 0-2) and stamina type (1-5), and every present player's picks.
-  if (version >= 9 && rec.size() >= SESSION_SIZE)
+  if (version >= 9 && rec.size() >= SESSION_SIZE_V9)
   {
     for (u32 k = 0; k < 8; ++k)
       out[S_SPECIAL + SPX_ROWS + k] = rec[S_SPECIAL + SPX_ROWS + k] <= 2 ? rec[S_SPECIAL + SPX_ROWS + k] : 0;
@@ -1896,11 +1930,16 @@ std::vector<u8> PlaybackSession(const std::vector<u8>& rec, u16 version)
     {
       if (!out[S_PLAYERS + i * SP_SIZE + SP_PRESENT])
         continue;
-      Gprb::Session::PortExtra px;
-      const u32 at = S_EXTRA + i * Gprb::Session::PORT_EXTRA_SIZE;
-      std::copy(rec.begin() + at, rec.begin() + at + px.size(), px.begin());
+      Gprb::Session::PortExtra px{};
+      const u32 at = S_EXTRA + i * PX_V9;
+      std::copy(rec.begin() + at, rec.begin() + at + PX_V9, px.begin());
+      // (A replay recorded with a v9-v12 plugin has 16 at most.)
+      if (rec.size() >= SESSION_SIZE)
+        std::copy_n(rec.begin() + S_MORE + i * PX_MORE, PX_MORE, px.begin() + PX_V9);
+      else
+        px[Gprb::PeerData::PX_ROSTER_COUNT] = std::min<u8>(px[Gprb::PeerData::PX_ROSTER_COUNT], Gprb::PeerData::ROSTER_V9);
       Gprb::PeerData::SanitizePortExtra(px);
-      std::copy(px.begin(), px.end(), out.begin() + at);
+      PutPortExtra(out, i, px, version);
     }
   }
   // A desynced game played again: the restored values, in the ranges the session takes from a
@@ -2084,8 +2123,11 @@ void SyncSession(const Core::CPUThreadGuard& guard, const Located& loc)
     // v9: the special-mode picks (the stamina HP, the All-Star roster), checked as a peer's are.
     if (loc.version >= 9)
     {
-      for (u32 i = 0; i < l.port_extra.size(); ++i)
+      for (u32 i = 0; i < PX_V9; ++i)
         l.port_extra[i] = R8(guard, loc.local + L_OWN_EXTRA + i);
+      // v13: the roster's entries 16-49 (a v9-v12 plugin has 16 at most).
+      for (u32 i = 0; loc.version >= 13 && i < PX_MORE; ++i)
+        l.port_extra[PX_V9 + i] = R8(guard, loc.local + L_OWN_MORE + i);
       Gprb::PeerData::SanitizePortExtra(l.port_extra);
     }
     const u16 hp = static_cast<u16>(l.port_extra[Gprb::PeerData::PX_HP] << 8 |
@@ -2385,10 +2427,7 @@ void SyncSession(const Core::CPUThreadGuard& guard, const Located& loc)
         std::copy(pl.port_values.begin(), pl.port_values.end(), session.begin() + p + SP_PORT_VALUES);
       // v9: their special-mode picks (sanitised on receipt, PeerData::SanitizePortExtra).
       if (pl.present && loc.version >= 9)
-      {
-        std::copy(pl.port_extra.begin(), pl.port_extra.end(),
-                  session.begin() + S_EXTRA + i * Gprb::Session::PORT_EXTRA_SIZE);
-      }
+        PutPortExtra(session, i, pl.port_extra, loc.version);
     }
   }
   else

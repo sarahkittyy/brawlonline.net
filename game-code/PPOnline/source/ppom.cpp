@@ -21,14 +21,16 @@ namespace PPOM {
     static_assert(sizeof(Mailbox) == 0x410, "mailbox");
     static_assert(sizeof(LockIn) == 0x0C, "lock-in");
     static_assert(sizeof(PortValues) == 0x3C, "port values");
-    static_assert(sizeof(Local) == 0xF8 && __builtin_offsetof(Local, ownExtra) == 0x80 &&
+    static_assert(sizeof(Local) == 0x180 && __builtin_offsetof(Local, ownExtra) == 0x80 &&
+                  __builtin_offsetof(Local, ownMore) == 0xF8 &&
                   __builtin_offsetof(Local, aspect) == 0xF4 &&
                   __builtin_offsetof(Local, potato) == 0xF0 &&
                   __builtin_offsetof(Local, readySeconds) == 0xF1 && __builtin_offsetof(Local, readyPorts) == 0xF2,
                   "local");
     static_assert(sizeof(SssCursor) == 8 && __builtin_offsetof(Local, ownCursor) == 0xC8 &&
                   __builtin_offsetof(Local, cursors) == 0xD0, "local cursors");
-    static_assert(sizeof(PortExtra) == 0x48 && __builtin_offsetof(PortExtra, roster) == 8, "port extra");
+    static_assert(sizeof(PortExtra) == 0x48 && __builtin_offsetof(PortExtra, roster) == 8 &&
+                  sizeof(RosterMore) == 0x88 && __builtin_offsetof(Session, more) == 0x420, "port extra");
     static_assert(sizeof(Special) == 0x40 && __builtin_offsetof(Special, bans) == 9 &&
                   __builtin_offsetof(Special, strikes) == 0x0C && __builtin_offsetof(Special, roomHp) == 0x1C &&
                   __builtin_offsetof(Special, alternates) == 0x24, "special");
@@ -36,7 +38,7 @@ namespace PPOM {
     static_assert(sizeof(RoomFormatRequest) == 0x18 && __builtin_offsetof(RoomRulesRequest, special) == 0x24, "room format");
     static_assert(__builtin_offsetof(Local, lockPad) == 0x35, "lock pad");
     static_assert(sizeof(SessionPlayer) == 0x80, "session player");
-    static_assert(sizeof(Session) == 0x420, "session");
+    static_assert(sizeof(Session) == 0x640, "session");
     static_assert(sizeof(RoomStages) == 0x40 && __builtin_offsetof(Session, stages) == 0x280, "session room stages");
     static_assert(sizeof(RoomPlay) == 0x40 && __builtin_offsetof(Session, play) == 0x240, "session room play");
     static_assert(__builtin_offsetof(RoomPlay, setOn) == 0x2C && __builtin_offsetof(RoomPlay, anyonePicks) == 0x36 &&
@@ -140,14 +142,16 @@ namespace PPOM {
     }
 
     void writeLockIn(bool ready, u8 cssChar, u8 charKind, u8 costume, u16 stagePick, u8 asl, u8 game,
-                     const PortValues* pv, u8 pad, const PortExtra* ex)
+                     const PortValues* pv, u8 pad, const Picks* ex)
     {
         LockIn& l = g_block.local.lockIn;
         PortValues& own = g_block.local.own;
         PortExtra& ownExtra = g_block.local.ownExtra;
+        RosterMore& ownMore = g_block.local.ownMore;
         if (l.seq && l.ready == (ready ? 1 : 0) && l.cssChar == cssChar && l.charKind == charKind &&
             l.costume == costume && l.stagePick == stagePick && l.asl == asl && l.game == game &&
-            samePv(own, pv) && sameBytes(&ownExtra, ex, sizeof(ownExtra)) && g_block.local.lockPad == pad) {
+            samePv(own, pv) && sameBytes(&ownExtra, ex ? &ex->ex : NULL, sizeof(ownExtra)) &&
+            sameBytes(&ownMore, ex ? &ex->more : NULL, sizeof(ownMore)) && g_block.local.lockPad == pad) {
             return;
         }
         g_block.local.lockPad = pad;
@@ -155,9 +159,12 @@ namespace PPOM {
         if (pv) memcpy(&own, (void*)pv, sizeof(own));
         else memset(&own, 0, sizeof(own));
         flushRange(&own, sizeof(own));
-        if (ex) memcpy(&ownExtra, (void*)ex, sizeof(ownExtra));
+        if (ex) memcpy(&ownExtra, (void*)&ex->ex, sizeof(ownExtra));
         else memset(&ownExtra, 0, sizeof(ownExtra));
         flushRange(&ownExtra, sizeof(ownExtra));
+        if (ex) memcpy(&ownMore, (void*)&ex->more, sizeof(ownMore));
+        else memset(&ownMore, 0, sizeof(ownMore));
+        flushRange(&ownMore, sizeof(ownMore));
         l.ready = ready ? 1 : 0;
         l.cssChar = cssChar;
         l.charKind = charKind;

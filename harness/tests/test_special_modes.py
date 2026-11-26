@@ -296,6 +296,68 @@ def test_all_star_costume_files(backend: OnlineBackend, dolphin: Callable[..., D
     assert rep["checksums"]["mismatches"] == 0, rep
 
 
+def test_all_star_whole_cast(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
+                             gpu_backend: str) -> None:
+    """All-Star with a roster of the whole cast (bug report #351: "42 stock All Star mode to play a
+    one stock full cast ironman ... once we'd go through about 15~ characters, they would reset at
+    the first chosen character"). Until then 16 went online (PortExtra's room), so the match's
+    tables ended after the 16th and P+'s respawn went back to the first. Now P+'s own limit, 50:
+    A's 42 (P+'s CSS order) reach both SESSIONs and tables whole, and in an 18-stock game where A
+    walks off every stock, A's port plays the roster's first 18 in order on both machines (the
+    17th and 18th never came before), with no mismatch."""
+    stocks = 18
+    a, b, _code = special_room(backend, dolphin, gpu_backend, "sp-allstar-cast",
+                               ruleset_with("All-Star cast", stocks=stocks, special={"other": "all-star"}))
+    cast = [c for c in B.PPLUS_CSS_ROSTER if c != B.CSS_RANDOM]
+    assert len(cast) == 42, len(cast)
+    roster_a = [(B.CSS_TO_CHAR_KIND[c], costume_files(a, c)[0], 0, c) for c in cast]
+    roster_b = [(0x07, 0, 0, 0x07), (0x15, 0, 0, 0x13)]   # Fox, Marth
+    all_star_roster(a, roster_a)
+    all_star_roster(b, roster_b)
+    players = [a, b]
+    a.steps("tap START 8", "wait 40")
+    _wait(lambda: ppom.read_room(b.c, ppom.find_block(b.c))["slots"][0]["bits"] & ppom.SLOT_READY, 20, "B sees A ready")
+    b.steps("tap START 8", "wait 10")
+    online_set.wait(lambda: all(online_set.gstatus(g.c)["phase"] == "running" for g in players), 240,
+                    "both in the match")
+    a.steps("wait 100")
+    for g in players:
+        se = ppom.read_session(g.c, ppom.find_block(g.c))
+        assert [x["roster"] for x in se["extra"][:2]] == [roster_a, roster_b], (g.name, se["extra"][:2])
+    tables = [g.c.read_mem(ALL_STAR_TABLE, 0x280) for g in players]
+    assert tables[0] == tables[1], "the All-Star tables differ"
+    want = b"".join(bytes(e[:3]) for e in roster_a) + b"\xCC"
+    assert tables[0][:len(want)] == want, tables[0][:0xA0].hex()
+    # A's port's character through the match, in order, on both machines.
+    seen: dict[str, list[int]] = {g.name: [] for g in players}
+    done = threading.Event()
+
+    def sample() -> None:
+        while not done.is_set():
+            for g in players:
+                try:
+                    if online_set.gstatus(g.c)["phase"] != "running":
+                        continue
+                    kind = g.c.read_mem(u32(g, u32(g, GG) + MODE_MELEE) + MM_PLAYERS, 1)[0]
+                except Exception:   # noqa: BLE001 (the match ending under the read)
+                    continue
+                if not seen[g.name] or seen[g.name][-1] != kind:
+                    seen[g.name].append(kind)
+            time.sleep(0.25)
+    t = threading.Thread(target=sample, daemon=True)
+    t.start()
+    try:
+        rep = online_set.play_game(players, 1, winner=b, timeout=1200)
+    finally:
+        done.set()
+        t.join(5)
+    print("A's characters", {k: [hex(c) for c in v] for k, v in seen.items()})
+    assert rep["checksums"]["mismatches"] == 0, rep
+    first = [e[0] for e in roster_a[:stocks]]
+    for g in players:
+        assert seen[g.name][:stocks] == first, (g.name, [hex(c) for c in seen[g.name]], [hex(c) for c in first])
+
+
 def css_fps(g: Game, secs: float = 4.0) -> float:
     """The game loops a second (gfApplication's counter over `secs` of wall time)."""
     f0 = B.read_frame_counters(g.c.read_mem)["app"]

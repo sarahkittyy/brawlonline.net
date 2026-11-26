@@ -113,7 +113,7 @@ def _parse_block(c: HarnessClient, a: int):
     if hdr[:4] != MAGIC:
         return None
     ver, sz, mbo, mbs, so, ss, lo, ls, dbo, dbs = struct.unpack_from(">HHHHHHHHHH", hdr, 4)
-    if ver in (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12) and 0x100 < sz < 0x4000 and mbo and dbo:
+    if ver in (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13) and 0x100 < sz < 0x4000 and mbo and dbo:
         return Block(a, ver, sz, a + mbo, mbs, a + dbo, dbs, a + so if ss else 0, ss,
                      a + lo if ls else 0, ls)
     return None
@@ -404,7 +404,10 @@ def read_session(c: HarnessClient, b: Block) -> dict:
         se["stages"] = read_room_stages(d[S_STAGES:S_STAGES + 0x40])
     if len(d) >= S_EXTRA + 4 * PORT_EXTRA_SIZE:   # v9: the special modes
         se["special"] = read_special(d[S_SPECIAL:S_SPECIAL + SPECIAL_SIZE])
-        se["extra"] = [read_port_extra(d[S_EXTRA + i * PORT_EXTRA_SIZE:S_EXTRA + (i + 1) * PORT_EXTRA_SIZE])
+        more = len(d) >= S_MORE + 4 * ROSTER_MORE_SIZE   # v13: rosters past 16
+        se["extra"] = [read_port_extra(d[S_EXTRA + i * PORT_EXTRA_SIZE:S_EXTRA + (i + 1) * PORT_EXTRA_SIZE],
+                                       d[S_MORE + i * ROSTER_MORE_SIZE:S_MORE + (i + 1) * ROSTER_MORE_SIZE]
+                                       if more else b"")
                        for i in range(4)]
     return se
 
@@ -413,6 +416,10 @@ def read_session(c: HarnessClient, b: Block) -> dict:
 S_SPECIAL, SPECIAL_SIZE = 0x2C0, 0x40
 S_EXTRA, PORT_EXTRA_SIZE = 0x300, 0x48
 L_OWN_EXTRA = 0x80
+# v13 (bug #351): a roster's entries 16-49 (ppom.h RosterMore), SESSION's by port and LOCAL's own.
+ROSTER_BASE, ROSTER_MAX = 16, 50
+S_MORE, ROSTER_MORE_SIZE = 0x420, 0x88
+L_OWN_MORE = 0xF8
 # The Special Versus rows in the set rule's order and their values as the server names them.
 SPECIAL_ROWS = [("stamina", ("300", "stamina")), ("size", ("mega", "mini")), ("attack", ("element", "regen")),
                 ("body", ("metal", "clear")), ("status", ("turbo", "bunny")), ("gravity", ("light", "heavy")),
@@ -428,23 +435,26 @@ def read_special(d: bytes) -> dict:
             "room_hp": list(struct.unpack_from(">4H", d, 0x1C)), "alternates": bool(d[0x24])}
 
 
-def read_port_extra(d: bytes) -> dict:
+def read_port_extra(d: bytes, more: bytes = b"") -> dict:
     """PortExtra (v9): a player's picked HP and All-Star roster, entries (character, P+'s colour,
-    the CSS's costume, CSS id)."""
-    n = min(d[2], 16)
+    the CSS's costume, CSS id); with `more` (v13's RosterMore) entries 16-49 too."""
+    r = d[8:PORT_EXTRA_SIZE] + more
+    n = min(d[2], len(r) // 4)
     return {"hp": struct.unpack_from(">H", d, 0)[0],
-            "roster": [tuple(d[8 + 4 * i:8 + 4 * i + 4]) for i in range(n)]}
+            "roster": [tuple(r[4 * i:4 * i + 4]) for i in range(n)]}
 
 
 def write_own_extra(c: HarnessClient, b: Block, hp: int = 0, roster: list | None = None) -> None:
     """Tests: LOCAL's PortExtra (v9) as the game writes it with the lock-in (the lock-in's seq is
     not bumped). Roster entries (character, colour, costume[, CSS id])."""
-    d = bytearray(PORT_EXTRA_SIZE)
+    d = bytearray(8 + 4 * ROSTER_MAX)
     struct.pack_into(">H", d, 0, hp)
     for i, e in enumerate(roster or []):
         d[8 + 4 * i:8 + 4 * i + len(e)] = bytes(e)
     d[2] = len(roster or [])
-    c.write_mem(b.local + L_OWN_EXTRA, bytes(d))
+    c.write_mem(b.local + L_OWN_EXTRA, bytes(d[:PORT_EXTRA_SIZE]))
+    if b.version >= 13:
+        c.write_mem(b.local + L_OWN_MORE, bytes(d[PORT_EXTRA_SIZE:]))
 
 
 # ---- v6: the match's rules (ppom.h Rules, docs/design/room-rules.md section 3) ----

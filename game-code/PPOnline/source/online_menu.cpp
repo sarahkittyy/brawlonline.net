@@ -556,13 +556,14 @@ namespace OnlineMenu {
     // 0x80588300 + 0x70 * port has the CSS ids), each placed coin one character. A RANDOM coin's
     // entry (0x3D) is drawn here, as the lock-in's own: P+ would draw it in the match setup with
     // the game's random numbers. None placed since All-Star came on: the locked-in character.
-    static void allStarRoster(PPOM::PortExtra& ex, int css, int costume)
+    static void allStarRoster(PPOM::Picks& p, int css, int costume)
     {
         const u8* a = (const u8*)(0x80588000 + LOCAL_PORT * 0xA0);
         const u8* b = (const u8*)(0x80588300 + LOCAL_PORT * 0x70);
+        PPOM::PortExtra& ex = p.ex;
         int n = 0;
         for (; n < PPOM::ROSTER_MAX && a[3 * n] != 0xCC; n++) {
-            PPOM::RosterEntry& e = ex.roster[n];
+            PPOM::RosterEntry& e = p.entry(n);
             if (a[3 * n] == 0x3D) {
                 int c = resolveCss(0x29);
                 e.charKind = charKindOf(c);
@@ -700,12 +701,12 @@ namespace OnlineMenu {
         // The coin's CSS id (RANDOM's when on it, which Dolphin shows the others instead of the
         // character drawn: COSTUME_RANDOM), the character drawn.
         // The special modes' picks (v9): the panel's stamina HP, the All-Star roster.
-        PPOM::PortExtra ex;
+        PPOM::Picks ex;
         memset(&ex, 0, sizeof(ex));
         const PPOM::Session& se = PPOM::g_block.session;
         if (roomCss() && staminaOn()) {
-            ex.hp = RoomCss::myHp();
-            s.lockedStocks = (u8)(ex.hp / 10);   // the HP box's count
+            ex.ex.hp = RoomCss::myHp();
+            s.lockedStocks = (u8)(ex.ex.hp / 10);   // the HP box's count
         }
         const bool allStar = roomCss() && se.rules.valid && se.special.rows[PPOM::SR_OTHER] == 2;
         if (allStar) allStarRoster(ex, css, costume);

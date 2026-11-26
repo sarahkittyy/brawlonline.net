@@ -54,7 +54,10 @@ namespace PPOM {
     // at +0xF0 (the launcher's setting).
     // 12: any screen shape (docs/game-code.md, Any screen shape): LOCAL grows to 0xF8 with the shape
     // this machine shows the picture at (width / height) at +0xF4.
-    const u16 VERSION = 12;
+    // 13: All-Star rosters of up to 50, P+'s own limit (bug #351): LOCAL grows to 0x180 with the
+    // player's roster entries 16-49 (RosterMore) at +0xF8, SESSION to 0x640 with every player's at
+    // +0x420.
+    const u16 VERSION = 13;
 
     // Slippi command bytes (EXI_DeviceSlippi.h), kept for familiarity (design 5.3).
     enum Cmd {
@@ -391,7 +394,12 @@ namespace PPOM {
     // v9 (docs/design/special-rules.md): a player's picks for P+'s special modes, written with the
     // lock-in (LOCAL.ownExtra) and carried into every machine's SESSION (Session.extra) as the port
     // values are. All zero for any other game. Dolphin checks a peer's (PeerData::SanitizePortExtra).
-    const int ROSTER_MAX = 16;
+    // ROSTER_MAX: P+'s own, its CSS appends to its table until the next entry would reach +0x99
+    // (AllStarVs.asm), 50 characters. PortExtra has the first ROSTER_BASE (v9), RosterMore the
+    // rest (v13; bug #351: until then 16 went online, and a 42-stock All-Star of the whole cast
+    // came back to the first character after the 16th).
+    const int ROSTER_MAX = 50;
+    const int ROSTER_BASE = 16;
     const u16 MAX_PICKED_HP = 999;
     // A roster entry: P+'s All-Star table's 3 bytes as its CSS writes them (AllStarVs.asm, each
     // placed coin; X / Y rewrite the last), which its match setup puts into the player's +0x00,
@@ -406,8 +414,19 @@ namespace PPOM {
         u16 hp;           // a stamina match: the HP picked on the panel's STAMINA box, 0 none (150)
         u8 rosterCount;   // All-Star: the characters picked, in order (each placed coin adds one)
         u8 _pad[5];
-        RosterEntry roster[ROSTER_MAX];
+        RosterEntry roster[ROSTER_BASE];
     };                    // 0x48
+    // v13: a roster's entries ROSTER_BASE to ROSTER_MAX - 1, beside its PortExtra (rosterCount
+    // counts them too).
+    struct RosterMore {
+        RosterEntry roster[ROSTER_MAX - ROSTER_BASE];
+    };                    // 0x88
+    // A player's picks whole: what the CSS makes and the lock-in writes.
+    struct Picks {
+        PortExtra ex;
+        RosterMore more;
+        RosterEntry& entry(int k) { return k < ROSTER_BASE ? ex.roster[k] : more.roster[k - ROSTER_BASE]; }
+    };
 
     // ---- LOCAL ----
 
@@ -526,7 +545,8 @@ namespace PPOM {
         // that shape (local_aspect.cpp): only what this machine draws changes, the cameras the
         // match is played with stay the 16:9 ones on every machine.
         f32 aspect;
-    };                    // 0xF8
+        RosterMore ownMore;   // v13, game: the rest of ownExtra's roster, written with the lock-in
+    };                    // 0x180
 
     // ---- SESSION ----
 
@@ -790,7 +810,8 @@ namespace PPOM {
         RoomStages stages;// 0x280 (v7)
         Special special;  // 0x2C0 (v9)
         PortExtra extra[SESSION_PLAYERS];   // 0x300 (v9): by in-game port, each player's picks
-    };                    // 0x420
+        RosterMore more[SESSION_PLAYERS];   // 0x420 (v13): the rest of each extra's roster
+    };                    // 0x640
 
     // The last MuMsg::printIndex calls (a ring). 16, not 32: the plugin's Syringe heap block has
     // no room for more (docs/game-code.md, heap budget).
@@ -856,9 +877,9 @@ namespace PPOM {
     };
 
     // The lock-in (LOCAL): write it and bump its sequence.
-    // `ex`: the special-mode picks (LOCAL.ownExtra, v9), NULL none.
+    // `ex`: the special-mode picks (LOCAL.ownExtra, v9, and ownMore, v13), NULL none.
     void writeLockIn(bool ready, u8 cssChar, u8 charKind, u8 costume, u16 stagePick, u8 asl, u8 game,
-                     const PortValues* pv, u8 pad, const PortExtra* ex = NULL);
+                     const PortValues* pv, u8 pad, const Picks* ex = NULL);
     // The lock-in as it is with another stage pick (anyone picks: the pick from the stage select).
     void setLockInStage(u16 stagePick, u8 asl);
 

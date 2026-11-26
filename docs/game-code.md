@@ -218,6 +218,7 @@ Notes:
 - **Version 10** (2026-10-29, anyone picks and the stage select's cursors): LOCAL grows to 0xF0 with `ownCursor` at +0xC8 and `cursors[4]` at +0xD0 (`docs/rooms-game-interface.md`).
 - **Version 11** (2026-11-01, potato mode, §11 Potato mode): LOCAL grows to 0xF4 with `potato` at +0xF0 (Dolphin, every frame: 1 = the launcher's potato mode, `[Online] PotatoMode`). A v4–v10 plugin still works (it draws everything).
 - **Version 12** (2026-11-13, any screen shape, §11 Any screen shape): LOCAL grows to 0xF8 with `aspect` at +0xF4 (f32; Dolphin, every frame: the shape it shows the picture at, width / height; 0 = as the game draws it). A v4–v11 plugin still works (it draws for 16:9, as before).
+- **Version 13** (2026-11-26, bug #351, All-Star rosters of up to 50): LOCAL grows to 0x180 with `ownMore` at +0xF8 and SESSION to 0x640 with `more[4]` at +0x420 (`RosterMore`: a roster's entries 16-49; `docs/design/special-rules.md`). A v4–v12 plugin still works (16 a player).
 - **Version 3** (2026-10-07): each player's port values (name tag and its controls, `PortValues`, 0x3C bytes) in LOCAL (`own`, game-written with the lock-in) and in SESSION (`players[i].pv`); LOCAL grows to 0x80 (with `hudDisconnected` at +0x7C), a SESSION player to 0x80 and SESSION to 0x210. Dolphin and the plugin must speak the same version: GameBridge refuses another (`PPHARNESS_PLUGIN` in the tests picks a plugin build for an older Dolphin).
 
 **Mailbox.**

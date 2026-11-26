@@ -343,7 +343,10 @@ using PortValues = std::array<u8, PORT_VALUES_SIZE>;
 // A player's picks for P+'s special modes (docs/design/special-rules.md; ppom.h PortExtra, PPOM
 // v9): the stamina HP picked on their panel and their All-Star roster. Opaque to the session as
 // the port values are (PeerData::SanitizePortExtra checks a peer's); all zero for every other game.
-constexpr size_t PORT_EXTRA_SIZE = 0x48;
+// The layout of PeerData.h's PX_*: v9's 0x48 bytes (16 roster entries) and since PPOM v13 the
+// roster's entries 16-49 after them (ppom.h RosterMore, which the game keeps apart; bug #351).
+constexpr size_t PORT_EXTRA_SIZE = 0xD0;
+constexpr size_t PORT_EXTRA_V9_SIZE = 0x48;
 using PortExtra = std::array<u8, PORT_EXTRA_SIZE>;
 
 struct LockIn
